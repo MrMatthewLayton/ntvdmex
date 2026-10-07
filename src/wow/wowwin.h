@@ -592,14 +592,14 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             if (g_WowWinPaintsLogged < WOWWIN_PAINT_LOG_MAX) {     /* s92: what the OS reported, and how it went */
                 CHAR paintLog[WOWWIN_LOG_LINE_MAX], *paintCursor = paintLog;
                 ++g_WowWinPaintsLogged;
-                paintCursor = zput(paintCursor, "WOWWIN: WM_PAINT h16=0x"); paintCursor = zhex(paintCursor, window16);
-                paintCursor = zput(paintCursor, " rc="); paintCursor = zhex(paintCursor, (DWORD)paint.rcPaint.left);
-                paintCursor = zput(paintCursor, ","); paintCursor = zhex(paintCursor, (DWORD)paint.rcPaint.top);
-                paintCursor = zput(paintCursor, ","); paintCursor = zhex(paintCursor, (DWORD)paint.rcPaint.right);
-                paintCursor = zput(paintCursor, ","); paintCursor = zhex(paintCursor, (DWORD)paint.rcPaint.bottom);
-                paintCursor = zput(paintCursor, paint.fErase ? " erase" : " noerase");
-                paintCursor = zput(paintCursor, g_WowWinSizeMove ? " SENT\r\n" : " posted\r\n");
-                log_append(LOG_PATH, paintLog, paintCursor);
+                paintCursor = LogPut(paintCursor, "WOWWIN: WM_PAINT h16=0x"); paintCursor = LogHex(paintCursor, window16);
+                paintCursor = LogPut(paintCursor, " rc="); paintCursor = LogHex(paintCursor, (DWORD)paint.rcPaint.left);
+                paintCursor = LogPut(paintCursor, ","); paintCursor = LogHex(paintCursor, (DWORD)paint.rcPaint.top);
+                paintCursor = LogPut(paintCursor, ","); paintCursor = LogHex(paintCursor, (DWORD)paint.rcPaint.right);
+                paintCursor = LogPut(paintCursor, ","); paintCursor = LogHex(paintCursor, (DWORD)paint.rcPaint.bottom);
+                paintCursor = LogPut(paintCursor, paint.fErase ? " erase" : " noerase");
+                paintCursor = LogPut(paintCursor, g_WowWinSizeMove ? " SENT\r\n" : " posted\r\n");
+                LogAppend(LOG_PATH, paintLog, paintCursor);
             }
             if (g_WowWinSizeMove) WowWinSendOrPost(window16, WM_PAINT16, 0, 0, pointX, pointY);
             else               WowMsgPost(window16, WM_PAINT16, 0, 0, GetTickCount(), pointX, pointY);
@@ -657,11 +657,11 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             if (g_WowWinMultimediaLogged < WOWWIN_MM_LOG_MAX) {
                 CHAR buffer[WOWWIN_LOG_LINE_MAX], *bufferCursor = buffer;
                 ++g_WowWinMultimediaLogged;
-                bufferCursor = zput(bufferCursor, "WOWWIN: MM notification 0x"); bufferCursor = zhex(bufferCursor, message);
-                bufferCursor = zput(bufferCursor, " -> hwnd16 0x"); bufferCursor = zhex(bufferCursor, window16);
-                bufferCursor = zput(bufferCursor, " wp=0x"); bufferCursor = zhex(bufferCursor, (DWORD)wParam);
-                bufferCursor = zput(bufferCursor, " lp=0x"); bufferCursor = zhex(bufferCursor, (DWORD)lParam); bufferCursor = zput(bufferCursor, "\r\n");
-                log_append(LOG_PATH, buffer, bufferCursor);
+                bufferCursor = LogPut(bufferCursor, "WOWWIN: MM notification 0x"); bufferCursor = LogHex(bufferCursor, message);
+                bufferCursor = LogPut(bufferCursor, " -> hwnd16 0x"); bufferCursor = LogHex(bufferCursor, window16);
+                bufferCursor = LogPut(bufferCursor, " wp=0x"); bufferCursor = LogHex(bufferCursor, (DWORD)wParam);
+                bufferCursor = LogPut(bufferCursor, " lp=0x"); bufferCursor = LogHex(bufferCursor, (DWORD)lParam); bufferCursor = LogPut(bufferCursor, "\r\n");
+                LogAppend(LOG_PATH, buffer, bufferCursor);
             }
             WowMsgPost(window16, (WORD)message, (WORD)wParam, (DWORD)lParam, GetTickCount(), pointX, pointY);
             ++g_WowWinMessages;
@@ -694,11 +694,11 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
              whether this case ran at all or whether h16 resolved. An absence in the
              report means nothing; say which branch was taken. */
         {   CHAR closeLog[WOWWIN_LOG_LINE_MAX], *closeCursor = closeLog;
-            closeCursor = zput(closeCursor, "WOWWIN: WM_CLOSE on hwnd=0x"); closeCursor = zhex(closeCursor, (DWORD)(ULONG_PTR)window);
-            closeCursor = zput(closeCursor, " -> h16=0x"); closeCursor = zhex(closeCursor, window16);
-            closeCursor = zput(closeCursor, window16 ? " -- posted to the guest\r\n"
+            closeCursor = LogPut(closeCursor, "WOWWIN: WM_CLOSE on hwnd=0x"); closeCursor = LogHex(closeCursor, (DWORD)(ULONG_PTR)window);
+            closeCursor = LogPut(closeCursor, " -> h16=0x"); closeCursor = LogHex(closeCursor, window16);
+            closeCursor = LogPut(closeCursor, window16 ? " -- posted to the guest\r\n"
                               : " -- NO Win16 window for it, falling through to DefWindowProc\r\n");
-            log_append(LOG_PATH, closeLog, closeCursor); }
+            LogAppend(LOG_PATH, closeLog, closeCursor); }
         if (window16) { WowMsgPost(window16, (WORD)message, 0, 0, GetTickCount(), pointX, pointY);
                    ++g_WowWinMessages; return 0; }
         break;
@@ -709,11 +709,11 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             CHAR reason[WOWWIN_REASON_MAX], dropLog[WOWWIN_DROP_LOG_MAX], *dropCursor = dropLog;
             WORD drop16 = WowWinDrop16((HDROP)wParam, reason, sizeof reason);
             DragFinish((HDROP)wParam);
-            dropCursor = zput(dropCursor, "WOWWIN: WM_DROPFILES on h16=0x"); dropCursor = zhex(dropCursor, window16);
-            dropCursor = zput(dropCursor, drop16 ? " -> HDROP16 0x" : " -- ★ NOT DELIVERED: ");
-            if (drop16) { dropCursor = zhex(dropCursor, drop16); dropCursor = zput(dropCursor, " "); }
-            dropCursor = zput(dropCursor, reason); dropCursor = zput(dropCursor, "\r\n");
-            log_append(LOG_PATH, dropLog, dropCursor);
+            dropCursor = LogPut(dropCursor, "WOWWIN: WM_DROPFILES on h16=0x"); dropCursor = LogHex(dropCursor, window16);
+            dropCursor = LogPut(dropCursor, drop16 ? " -> HDROP16 0x" : " -- ★ NOT DELIVERED: ");
+            if (drop16) { dropCursor = LogHex(dropCursor, drop16); dropCursor = LogPut(dropCursor, " "); }
+            dropCursor = LogPut(dropCursor, reason); dropCursor = LogPut(dropCursor, "\r\n");
+            LogAppend(LOG_PATH, dropLog, dropCursor);
             if (drop16) { WowMsgPost(window16, WM_DROPFILES16, drop16, 0, GetTickCount(), pointX, pointY); ++g_WowWinMessages; }
             return 0;
         }

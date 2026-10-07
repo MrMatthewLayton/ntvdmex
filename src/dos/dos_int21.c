@@ -6,7 +6,7 @@
 #include "dos_sysvars.h"  /* #48: AH=1Fh/32h build their DPB with the chain's builder */
 #include "dos_fh.h"      /* the handle table's two rules -- allocation + classification */
 #include "dos_err.h"      /* AH=59h class/action/locus, measured on the oracle */
-#include "log.h"          /* zput / zhex */
+#include "log.h"          /* LogPut / LogHex */
 #include "dos_ctab.h"     /* CP437 tables dumped from the 6.22 oracle */
 #include "dos_auxprn.h"   /* #251: the AUX/PRN driver entries (guest code) */
 #include "dos_lfn.h"      /* #210: the long-filename API's pure half */
@@ -1199,17 +1199,17 @@ static PSTR DosInt21CallSite(PSTR trace, INT isFramed, DWORD segment, DWORD offs
 {
     DWORD base, site, low, count, index;
     const volatile BYTE *bytes;
-    if (!isFramed) return zput(trace, " from=<PM: no pushed frame>");
-    trace = zput(trace, " from=0x"); trace = zhex(trace, segment);
-    trace = zput(trace, ":0x");      trace = zhex(trace, offset);
+    if (!isFramed) return LogPut(trace, " from=<PM: no pushed frame>");
+    trace = LogPut(trace, " from=0x"); trace = LogHex(trace, segment);
+    trace = LogPut(trace, ":0x");      trace = LogHex(trace, offset);
     site = (offset >= DOS_INT21_INT_LENGTH) ? offset - DOS_INT21_INT_LENGTH : 0;      /* the CD 21 itself */
-    trace = zput(trace, " site=0x");  trace = zhex(trace, site);
+    trace = LogPut(trace, " site=0x");  trace = LogHex(trace, site);
     base = (segment & DOS_INT21_WORD_MASK) << DOS_INT21_PARAGRAPH_SHIFT;
     low   = (site >= DOS_INT21_CALLSITE_BEFORE) ? site - DOS_INT21_CALLSITE_BEFORE : 0;
     bytes    = (const volatile BYTE *)(ULONG_PTR)(base + low);
     count    = (site - low) + DOS_INT21_CALLSITE_AFTER;
-    trace = zput(trace, " bytes@0x"); trace = zhex(trace, low); trace = zput(trace, "=");
-    for (index = 0; index < count && index < DOS_INT21_CALLSITE_MAX; ++index) { trace = zhexb(trace, bytes[index]); trace = zput(trace, " "); }
+    trace = LogPut(trace, " bytes@0x"); trace = LogHex(trace, low); trace = LogPut(trace, "=");
+    for (index = 0; index < count && index < DOS_INT21_CALLSITE_MAX; ++index) { trace = LogHexByte(trace, bytes[index]); trace = LogPut(trace, " "); }
     return trace;
 }
 
@@ -1323,22 +1323,22 @@ INT DosInt21(PDOS_MACHINE machine)
          first 4000 calls are where the answer is. */
     if (machine->IsTraceAll && function != DOS_FN_BUFFERED_INPUT && machine->TraceCount <= DOS_TRACE_MAX) {
         if (++machine->TraceCount > DOS_TRACE_MAX) {
-            trace = zput(trace, "  21: ... TRACE CAPPED at ");
-            trace = zhex(trace, DOS_TRACE_MAX);
-            trace = zput(trace, " calls -- the guest is looping; totals are in the summary\r\n");
+            trace = LogPut(trace, "  21: ... TRACE CAPPED at ");
+            trace = LogHex(trace, DOS_TRACE_MAX);
+            trace = LogPut(trace, " calls -- the guest is looping; totals are in the summary\r\n");
         } else {
-        trace = zput(trace, "  21:"); trace = zhexb(trace, (UINT)function);
-        trace = zput(trace, "/");     trace = zhexb(trace, (UINT)(R_AX & DOS_INT21_BYTE_MASK));
-        trace = zput(trace, " bx="); trace = zhexb(trace, (UINT)((R_BX >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK));
-        trace = zhexb(trace, (UINT)(R_BX & DOS_INT21_BYTE_MASK));
-        trace = zput(trace, " dx="); trace = zhexb(trace, (UINT)((R_DX >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK));
-        trace = zhexb(trace, (UINT)(R_DX & DOS_INT21_BYTE_MASK));
+        trace = LogPut(trace, "  21:"); trace = LogHexByte(trace, (UINT)function);
+        trace = LogPut(trace, "/");     trace = LogHexByte(trace, (UINT)(R_AX & DOS_INT21_BYTE_MASK));
+        trace = LogPut(trace, " bx="); trace = LogHexByte(trace, (UINT)((R_BX >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK));
+        trace = LogHexByte(trace, (UINT)(R_BX & DOS_INT21_BYTE_MASK));
+        trace = LogPut(trace, " dx="); trace = LogHexByte(trace, (UINT)((R_DX >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK));
+        trace = LogHexByte(trace, (UINT)(R_DX & DOS_INT21_BYTE_MASK));
         /* The call site, so a trace of 31 calls says WHERE the guest is, not only
            what it wanted. Two calls from the same offset are a loop; a run of
            rising offsets is start-up walking forward. */
-        if (isCallFramed) { trace = zput(trace, " @"); trace = zhex(trace, callSegment);
-                     trace = zput(trace, ":"); trace = zhex(trace, callOffset); }
-        trace = zput(trace, "\r\n");
+        if (isCallFramed) { trace = LogPut(trace, " @"); trace = LogHex(trace, callSegment);
+                     trace = LogPut(trace, ":"); trace = LogHex(trace, callOffset); }
+        trace = LogPut(trace, "\r\n");
         }
     }
 
@@ -1366,10 +1366,10 @@ INT DosInt21(PDOS_MACHINE machine)
 
     if (function == DOS_FN_EXIT) {                     /* terminate */
         machine->ExitCode = (INT)(R_AX & DOS_INT21_BYTE_MASK);  /* DOS errorlevel */
-        trace = zput(trace, "  ==> DOS terminate (AH=4Ch), exit code AL=0x");
-        trace = zhex(trace, R_AX & DOS_INT21_BYTE_MASK);
+        trace = LogPut(trace, "  ==> DOS terminate (AH=4Ch), exit code AL=0x");
+        trace = LogHex(trace, R_AX & DOS_INT21_BYTE_MASK);
         trace = DosInt21CallSite(trace, isCallFramed, callSegment, callOffset);
-        trace = zput(trace, "\r\n");
+        trace = LogPut(trace, "\r\n");
         shouldContinue = 0;
     } else if (function == DOS_FN_TERMINATE) {              /* terminate (CP/M style, = INT 20h) */
         /* Skyroads exits through this one, so "unhandled" was both wrong and misleading:
@@ -1378,18 +1378,18 @@ INT DosInt21(PDOS_MACHINE machine)
            question, and the CS tells you whether it was the program or something we
            vectored it into. */
         machine->ExitCode = 0;
-        trace = zput(trace, "  ==> DOS terminate (AH=00h) from CS:IP=0x");
-        trace = zhex(trace, VDM_REG(tib, VTIB_CS) & DOS_INT21_WORD_MASK); trace = zput(trace, ":0x");
-        trace = zhex(trace, VDM_REG(tib, VTIB_EIP) & DOS_INT21_WORD_MASK);
-        trace = zput(trace, " ivt8=0x");
+        trace = LogPut(trace, "  ==> DOS terminate (AH=00h) from CS:IP=0x");
+        trace = LogHex(trace, VDM_REG(tib, VTIB_CS) & DOS_INT21_WORD_MASK); trace = LogPut(trace, ":0x");
+        trace = LogHex(trace, VDM_REG(tib, VTIB_EIP) & DOS_INT21_WORD_MASK);
+        trace = LogPut(trace, " ivt8=0x");
         { const volatile BYTE *ivt = (const volatile BYTE *)0;
           DWORD timerSegment = (DWORD)ivt[DOS_INT21_IVT_TIMER + 2] | ((DWORD)ivt[DOS_INT21_IVT_TIMER + 3] << DOS_INT21_BYTE_SHIFT);
           DWORD timerOffset = (DWORD)ivt[DOS_INT21_IVT_TIMER] | ((DWORD)ivt[DOS_INT21_IVT_TIMER + 1] << DOS_INT21_BYTE_SHIFT);
           DWORD tickSegment = (DWORD)ivt[DOS_INT21_IVT_USER_TICK + 2] | ((DWORD)ivt[DOS_INT21_IVT_USER_TICK + 3] << DOS_INT21_BYTE_SHIFT);
           DWORD tickOffset = (DWORD)ivt[DOS_INT21_IVT_USER_TICK] | ((DWORD)ivt[DOS_INT21_IVT_USER_TICK + 1] << DOS_INT21_BYTE_SHIFT);
-          trace = zhex(trace, timerSegment); trace = zput(trace, ":0x"); trace = zhex(trace, timerOffset);
-          trace = zput(trace, " ivt1C=0x"); trace = zhex(trace, tickSegment);
-          trace = zput(trace, ":0x"); trace = zhex(trace, tickOffset); }
+          trace = LogHex(trace, timerSegment); trace = LogPut(trace, ":0x"); trace = LogHex(trace, timerOffset);
+          trace = LogPut(trace, " ivt1C=0x"); trace = LogHex(trace, tickSegment);
+          trace = LogPut(trace, ":0x"); trace = LogHex(trace, tickOffset); }
         /* ── AND THE BYTES THAT LED HERE -- AT THE GUEST'S ADDRESS, NOT OURS.
              "SILENT VDM DEATH -> GET THE BYTES" is a standing rule here, and the
              first cut of this obeyed the letter of it while dumping from
@@ -1398,7 +1398,7 @@ INT DosInt21(PDOS_MACHINE machine)
              session later. The guest's own call site is the pushed return address
              on its stack; DosInt21CallSite() dumps around that. */
         trace = DosInt21CallSite(trace, isCallFramed, callSegment, callOffset);
-        trace = zput(trace, "\r\n");
+        trace = LogPut(trace, "\r\n");
         shouldContinue = 0;
     } else if (function == DOS_FN_CHAR_OUTPUT) {              /* print char DL */
         OUTC(R_DX & DOS_INT21_BYTE_MASK); OKCF();
@@ -1519,13 +1519,13 @@ INT DosInt21(PDOS_MACHINE machine)
                at our terminator. That points straight at these bytes, so print them
                rather than reason about them. */
             if (machine->IsTraceAll) { INT index;
-              trace = zput(trace, "  INT21 AH=0A line max="); trace = zhexb(trace, (UINT)maximumLength);
-              trace = zput(trace, " n="); trace = zhexb(trace, (UINT)machine->LineLength);
-              trace = zput(trace, " [");
+              trace = LogPut(trace, "  INT21 AH=0A line max="); trace = LogHexByte(trace, (UINT)maximumLength);
+              trace = LogPut(trace, " n="); trace = LogHexByte(trace, (UINT)machine->LineLength);
+              trace = LogPut(trace, " [");
               for (index = 0; index < machine->LineLength + 1 && index < DOS_INT21_TRACE_LINE_MAX; ++index) {
-                  trace = zhexb(trace, buffer[DOS_INT21_LINE_TEXT + index]); trace = zput(trace, " ");
+                  trace = LogHexByte(trace, buffer[DOS_INT21_LINE_TEXT + index]); trace = LogPut(trace, " ");
               }
-              trace = zput(trace, "]\r\n"); }
+              trace = LogPut(trace, "]\r\n"); }
             OKCF();
         }
     } else if (function == DOS_FN_INPUT_STATUS) {              /* check input status */
@@ -1574,13 +1574,13 @@ INT DosInt21(PDOS_MACHINE machine)
             if (win32Error && DosErrFromWin32((unsigned long)win32Error, &dosError) && DosCritIsHardwareError(dosError)) {
                 g_DosReadWriteDrive = DosHandleDrive(machine->FileHandles[handle]);
                 SETAX(dosError); ERRCF();
-                trace = zput(trace, "  INT21 AH=40 h="); trace = zhex(trace, handle);
-                trace = zput(trace, " cnt=0x"); trace = zhex(trace, count);
-                trace = zput(trace, " FAILED win32=0x"); trace = zhex(trace, win32Error);
-                trace = zput(trace, " (hardware) drive=");
-                if (g_DosReadWriteDrive >= 0) { CHAR driveText[DOS_INT21_DRIVE_ROOT_SIZE] = { (CHAR)('A' + g_DosReadWriteDrive), ':', 0 }; trace = zput(trace, driveText); }
-                else trace = zput(trace, "?");
-                trace = zput(trace, "\r\n");
+                trace = LogPut(trace, "  INT21 AH=40 h="); trace = LogHex(trace, handle);
+                trace = LogPut(trace, " cnt=0x"); trace = LogHex(trace, count);
+                trace = LogPut(trace, " FAILED win32=0x"); trace = LogHex(trace, win32Error);
+                trace = LogPut(trace, " (hardware) drive=");
+                if (g_DosReadWriteDrive >= 0) { CHAR driveText[DOS_INT21_DRIVE_ROOT_SIZE] = { (CHAR)('A' + g_DosReadWriteDrive), ':', 0 }; trace = LogPut(trace, driveText); }
+                else trace = LogPut(trace, "?");
+                trace = LogPut(trace, "\r\n");
             } else { SETAX(written); OKCF(); DosStampVdmNow(machine->FileHandles[handle]); /* #263 */ }
         }
         /* ── #251: AN UNREDIRECTED 3 IS AUX AND 4 IS PRN, and they go to the BIOS
@@ -1645,15 +1645,15 @@ INT DosInt21(PDOS_MACHINE machine)
             DWORD win32Error = GetLastError(); WORD dosError;
             INT isMapped = DosErrFromWin32((unsigned long)win32Error, &dosError);
             SETAX(dosError); ERRCF();
-            trace = zput(trace, "  INT21 AH=0x"); trace = zhex(trace, function);
-            trace = zput(trace, " ["); trace = zput(trace, fileName); trace = zput(trace, "] FAILED win32=0x");
-            trace = zhex(trace, win32Error);
-            trace = zput(trace, isMapped ? " -> AX=0x" : " UNMAPPED, kept -> AX=0x");
-            trace = zhex(trace, dosError); trace = zput(trace, "\r\n");
+            trace = LogPut(trace, "  INT21 AH=0x"); trace = LogHex(trace, function);
+            trace = LogPut(trace, " ["); trace = LogPut(trace, fileName); trace = LogPut(trace, "] FAILED win32=0x");
+            trace = LogHex(trace, win32Error);
+            trace = LogPut(trace, isMapped ? " -> AX=0x" : " UNMAPPED, kept -> AX=0x");
+            trace = LogHex(trace, dosError); trace = LogPut(trace, "\r\n");
         }
-        trace = zput(trace, "  INT21 AH=0x"); trace = zhex(trace, function);
-        trace = zput(trace, " ["); trace = zput(trace, fileName); trace = zput(trace, "] -> AX=0x");
-        trace = zhex(trace, R_AX & DOS_INT21_WORD_MASK); trace = zput(trace, (*guestFlags & 1) ? " (err)\r\n" : "\r\n");
+        trace = LogPut(trace, "  INT21 AH=0x"); trace = LogHex(trace, function);
+        trace = LogPut(trace, " ["); trace = LogPut(trace, fileName); trace = LogPut(trace, "] -> AX=0x");
+        trace = LogHex(trace, R_AX & DOS_INT21_WORD_MASK); trace = LogPut(trace, (*guestFlags & 1) ? " (err)\r\n" : "\r\n");
     } else if (function == DOS_FN_CLOSE) {              /* close: BX=handle */
         DWORD handle = R_BX & DOS_INT21_WORD_MASK;
         /* Any BOUND handle closes, including a low one the shell redirected -- see
@@ -1680,19 +1680,19 @@ INT DosInt21(PDOS_MACHINE machine)
             if (win32Error && DosErrFromWin32((unsigned long)win32Error, &dosError) && DosCritIsHardwareError(dosError)) {
                 g_DosReadWriteDrive = DosHandleDrive(machine->FileHandles[handle]);
                 SETAX(dosError); ERRCF();
-                trace = zput(trace, "  INT21 AH=3F FAILED win32=0x"); trace = zhex(trace, win32Error);
-                trace = zput(trace, " (hardware) drive=");
-                if (g_DosReadWriteDrive >= 0) { CHAR driveText[DOS_INT21_DRIVE_ROOT_SIZE] = { (CHAR)('A' + g_DosReadWriteDrive), ':', 0 }; trace = zput(trace, driveText); }
-                else trace = zput(trace, "?");
-                trace = zput(trace, "\r\n");
+                trace = LogPut(trace, "  INT21 AH=3F FAILED win32=0x"); trace = LogHex(trace, win32Error);
+                trace = LogPut(trace, " (hardware) drive=");
+                if (g_DosReadWriteDrive >= 0) { CHAR driveText[DOS_INT21_DRIVE_ROOT_SIZE] = { (CHAR)('A' + g_DosReadWriteDrive), ':', 0 }; trace = LogPut(trace, driveText); }
+                else trace = LogPut(trace, "?");
+                trace = LogPut(trace, "\r\n");
             } else { SETAX(read); OKCF(); }
-            trace = zput(trace, "  INT21 AH=3F h="); trace = zhex(trace, handle);
-            trace = zput(trace, " pos=0x"); trace = zhex(trace, position);
-            trace = zput(trace, " cnt=0x"); trace = zhex(trace, count);
-            trace = zput(trace, " got=0x"); trace = zhex(trace, read);
-            trace = zput(trace, " -> 0x"); trace = zhex(trace, (DWORD)(ULONG_PTR)buffer);
-            trace = zput(trace, " first="); trace = zdump(trace, (PCBYTE)buffer, (read >= DOS_INT21_TRACE_FIRST_BYTES) ? DOS_INT21_TRACE_FIRST_BYTES : 0);
-            trace = zput(trace, "\r\n");
+            trace = LogPut(trace, "  INT21 AH=3F h="); trace = LogHex(trace, handle);
+            trace = LogPut(trace, " pos=0x"); trace = LogHex(trace, position);
+            trace = LogPut(trace, " cnt=0x"); trace = LogHex(trace, count);
+            trace = LogPut(trace, " got=0x"); trace = LogHex(trace, read);
+            trace = LogPut(trace, " -> 0x"); trace = LogHex(trace, (DWORD)(ULONG_PTR)buffer);
+            trace = LogPut(trace, " first="); trace = LogDump(trace, (PCBYTE)buffer, (read >= DOS_INT21_TRACE_FIRST_BYTES) ? DOS_INT21_TRACE_FIRST_BYTES : 0);
+            trace = LogPut(trace, "\r\n");
         }
         else if (handle == 0 && DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle)) {
             /* ── #251: STDIN IS THE KEYBOARD, AND DOS READS A LINE FROM IT. ──────────
@@ -1778,10 +1778,10 @@ INT DosInt21(PDOS_MACHINE machine)
               HANDLE find;
               DosFindSplit(pattern, directoryPattern, sizeof directoryPattern, nameTemplate);  /* DOS matching: see DosFindMatches */
               find = DosFindFirst(directoryPattern, nameTemplate, mask, &findData, &isNoDirectory);
-              if (machine->IsTraceAll) { trace = zput(trace, "  INT21 AH=4E ["); trace = zput(trace, pattern);
-                                  trace = zput(trace, "] attr=0x"); trace = zhex(trace, mask);
-                                  trace = zput(trace, find == INVALID_HANDLE_VALUE ? " -> none" : " -> found");
-                                  trace = zput(trace, isNoDirectory ? " (no such directory)\r\n" : "\r\n"); }
+              if (machine->IsTraceAll) { trace = LogPut(trace, "  INT21 AH=4E ["); trace = LogPut(trace, pattern);
+                                  trace = LogPut(trace, "] attr=0x"); trace = LogHex(trace, mask);
+                                  trace = LogPut(trace, find == INVALID_HANDLE_VALUE ? " -> none" : " -> found");
+                                  trace = LogPut(trace, isNoDirectory ? " (no such directory)\r\n" : "\r\n"); }
               if (find == INVALID_HANDLE_VALUE) {
                   /* ORACLE-CONFIRMED, and not what memory suggests: a pattern
                      that matches nothing inside an EXISTING directory is
@@ -1828,13 +1828,13 @@ INT DosInt21(PDOS_MACHINE machine)
                date -- i.e. it is reading fields we did not put where it looks. Print
                the DTA we hand back, whole, and let the bytes settle it. */
             if (machine->IsTraceAll) { INT position;
-              trace = zput(trace, "  INT21 AH=4E/4F dta="); trace = zhexb(trace, (UINT)((machine->DtaSegment >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK));
-              trace = zhexb(trace, (UINT)(machine->DtaSegment & DOS_INT21_BYTE_MASK)); trace = zput(trace, ":");
-              trace = zhexb(trace, (UINT)((machine->DtaOffset >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK));
-              trace = zhexb(trace, (UINT)(machine->DtaOffset & DOS_INT21_BYTE_MASK));
-              trace = zput(trace, " [");
-              for (position = 0; position < DOS_INT21_TRACE_DTA_BYTES; ++position) { trace = zhexb(trace, (UINT)dta[position]); trace = zput(trace, " "); }
-              trace = zput(trace, "]\r\n"); }
+              trace = LogPut(trace, "  INT21 AH=4E/4F dta="); trace = LogHexByte(trace, (UINT)((machine->DtaSegment >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK));
+              trace = LogHexByte(trace, (UINT)(machine->DtaSegment & DOS_INT21_BYTE_MASK)); trace = LogPut(trace, ":");
+              trace = LogHexByte(trace, (UINT)((machine->DtaOffset >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK));
+              trace = LogHexByte(trace, (UINT)(machine->DtaOffset & DOS_INT21_BYTE_MASK));
+              trace = LogPut(trace, " [");
+              for (position = 0; position < DOS_INT21_TRACE_DTA_BYTES; ++position) { trace = LogHexByte(trace, (UINT)dta[position]); trace = LogPut(trace, " "); }
+              trace = LogPut(trace, "]\r\n"); }
             SETAX(0); OKCF();                                /* oracle: AX=0000 */
         } else if (slot >= 0 && machine->FindHandles[slot] && !isOk) {
             FindClose(machine->FindHandles[slot]); machine->FindHandles[slot] = 0;
@@ -1946,11 +1946,11 @@ INT DosInt21(PDOS_MACHINE machine)
                 if (find != INVALID_HANDLE_VALUE) { machine->FcbFind = find; received = 1; }
                 if (machine->IsTraceAll) { CHAR currentDirectory[MAX_PATH]; INT position;
                     GetCurrentDirectoryA(sizeof currentDirectory, currentDirectory);
-                    trace = zput(trace, "  INT21 AH=11 ["); trace = zput(trace, allPattern);
-                    trace = zput(trace, "] in ["); trace = zput(trace, currentDirectory); trace = zput(trace, "] tmpl=[");
-                    for (position = 0; position < DOS_FCB_NAME_SIZE; ++position) { CHAR pair[2]; pair[0] = (CHAR)machine->FcbTemplate[position]; pair[1] = 0; trace = zput(trace, pair); }
-                    trace = zput(trace, "] mask=0x"); trace = zhex(trace, mask);
-                    trace = zput(trace, received ? " -> found\r\n" : " -> none\r\n"); }
+                    trace = LogPut(trace, "  INT21 AH=11 ["); trace = LogPut(trace, allPattern);
+                    trace = LogPut(trace, "] in ["); trace = LogPut(trace, currentDirectory); trace = LogPut(trace, "] tmpl=[");
+                    for (position = 0; position < DOS_FCB_NAME_SIZE; ++position) { CHAR pair[2]; pair[0] = (CHAR)machine->FcbTemplate[position]; pair[1] = 0; trace = LogPut(trace, pair); }
+                    trace = LogPut(trace, "] mask=0x"); trace = LogHex(trace, mask);
+                    trace = LogPut(trace, received ? " -> found\r\n" : " -> none\r\n"); }
             } else if (machine->FcbFind) {
                 received = DosFindNext(machine->FcbFind, machine->FcbTemplate, mask, &findData);
                 if (!received) { FindClose(machine->FcbFind); machine->FcbFind = 0; }
@@ -2141,16 +2141,16 @@ INT DosInt21(PDOS_MACHINE machine)
                about it from the handler's source has already produced two wrong
                models this session. */
             if (machine->IsTraceAll) { INT position;
-              trace = zput(trace, "  INT21 AH=29 al="); trace = zhexb(trace, (UINT)(R_AX & DOS_INT21_BYTE_MASK));
-              trace = zput(trace, " ds:si="); trace = zhexb(trace, (UINT)((R_DS >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK));
-              trace = zhexb(trace, (UINT)(R_DS & DOS_INT21_BYTE_MASK)); trace = zput(trace, ":");
-              trace = zhexb(trace, (UINT)(((R_SI & DOS_INT21_WORD_MASK) >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK));
-              trace = zhexb(trace, (UINT)(R_SI & DOS_INT21_BYTE_MASK));
-              trace = zput(trace, " in=[");
-              for (position = 0; position < DOS_INT21_FCB_DRIVE_AND_NAME && input[position]; ++position) trace = zhexb(trace, (UINT)(BYTE)input[position]), trace = zput(trace, " ");
-              trace = zput(trace, "] fcb=[");
-              for (position = 0; position < DOS_INT21_FCB_DRIVE_AND_NAME; ++position) trace = zhexb(trace, (UINT)destination[position]), trace = zput(trace, " ");
-              trace = zput(trace, "]\r\n"); }
+              trace = LogPut(trace, "  INT21 AH=29 al="); trace = LogHexByte(trace, (UINT)(R_AX & DOS_INT21_BYTE_MASK));
+              trace = LogPut(trace, " ds:si="); trace = LogHexByte(trace, (UINT)((R_DS >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK));
+              trace = LogHexByte(trace, (UINT)(R_DS & DOS_INT21_BYTE_MASK)); trace = LogPut(trace, ":");
+              trace = LogHexByte(trace, (UINT)(((R_SI & DOS_INT21_WORD_MASK) >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK));
+              trace = LogHexByte(trace, (UINT)(R_SI & DOS_INT21_BYTE_MASK));
+              trace = LogPut(trace, " in=[");
+              for (position = 0; position < DOS_INT21_FCB_DRIVE_AND_NAME && input[position]; ++position) trace = LogHexByte(trace, (UINT)(BYTE)input[position]), trace = LogPut(trace, " ");
+              trace = LogPut(trace, "] fcb=[");
+              for (position = 0; position < DOS_INT21_FCB_DRIVE_AND_NAME; ++position) trace = LogHexByte(trace, (UINT)destination[position]), trace = LogPut(trace, " ");
+              trace = LogPut(trace, "]\r\n"); }
         } else FCB_FAIL();
         #undef FCB_OK
         #undef FCB_FAIL
@@ -2198,12 +2198,12 @@ INT DosInt21(PDOS_MACHINE machine)
                  version; we keep no SETVER table, so there is nothing else to do.
                  DOSBox-X refuses it (CF=1 AX=000B): an emulator without the call,
                  not a different DOS. */
-            trace = zput(trace, "  INT21 AX=4B05 set execution state -- accepted\r\n");
+            trace = LogPut(trace, "  INT21 AX=4B05 set execution state -- accepted\r\n");
             SETAX(0); OKCF();
         } else {
             /* AL=02/04 are not DOS 6.22 functions we have measured. */
-            trace = zput(trace, "  INT21 AH=4B AL=0x"); trace = zhexb(trace, subfunction);
-            trace = zput(trace, " UNIMPLEMENTED (overlay load)\r\n");
+            trace = LogPut(trace, "  INT21 AH=4B AL=0x"); trace = LogHexByte(trace, subfunction);
+            trace = LogPut(trace, " UNIMPLEMENTED (overlay load)\r\n");
             machine->Unimplemented[DOS_FN_EXEC >> DOS_INT21_BYTE_INDEX_SHIFT] |= (BYTE)(1u << (DOS_FN_EXEC & DOS_INT21_BIT_INDEX_MASK));
             SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
@@ -2306,8 +2306,8 @@ INT DosInt21(PDOS_MACHINE machine)
              silent failure #27 exists to remove. */
         machine->TsrKeep = (WORD)(R_DX & DOS_INT21_WORD_MASK);
         machine->IsTsrPending = 1;
-        trace = zput(trace, "  INT21 AH=31 TSR: keep 0x"); trace = zhex(trace, machine->TsrKeep);
-        trace = zput(trace, " paragraphs, vectors LEFT INSTALLED\r\n");
+        trace = LogPut(trace, "  INT21 AH=31 TSR: keep 0x"); trace = LogHex(trace, machine->TsrKeep);
+        trace = LogPut(trace, " paragraphs, vectors LEFT INSTALLED\r\n");
         machine->ExitCode = (INT)(R_AX & DOS_INT21_BYTE_MASK);
         shouldContinue = 0;
     } else if (function == DOS_FN_BPB_TO_DPB) {              /* translate a BPB into a DPB */
@@ -2329,7 +2329,7 @@ INT DosInt21(PDOS_MACHINE machine)
              Say it once; `unimpl21[]` already carries the fact for the summary. */
         { static INT isSaid = 0;
           if (!isSaid) { isSaid = 1;
-              trace = zput(trace, "  INT21 AH=53 BPB->DPB UNIMPLEMENTED (no installable "
+              trace = LogPut(trace, "  INT21 AH=53 BPB->DPB UNIMPLEMENTED (no installable "
                             "block drivers) -- said once per run\r\n"); } }
         machine->Unimplemented[DOS_FN_BPB_TO_DPB >> DOS_INT21_BYTE_INDEX_SHIFT] |= (BYTE)(1u << (DOS_FN_BPB_TO_DPB & DOS_INT21_BIT_INDEX_MASK));
         /* ── ★★★ MEASURED AGAINST STOCK NTVDM, 2026-09-25. ───────────────────
@@ -2392,7 +2392,7 @@ INT DosInt21(PDOS_MACHINE machine)
             SETAX(0); SET16(R_CX, 0); OKCF();
         } else { SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF(); }
     } else if (function == DOS_FN_REDIRECTION) {              /* network redirection list */
-        trace = zput(trace, "  INT21 AH=5F network redirection: no redirector present\r\n");
+        trace = LogPut(trace, "  INT21 AH=5F network redirection: no redirector present\r\n");
         SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();                      /* invalid function */
     } else if (function == DOS_FN_SET_LOOKAHEAD) {              /* set device driver lookahead */
         OKCF();                                 /* internal; accepted, no effect */
@@ -2440,7 +2440,7 @@ INT DosInt21(PDOS_MACHINE machine)
     } else if (function == DOS_FN_SERVER && (R_AX & DOS_INT21_BYTE_MASK) == DOS_INT21_SERVER_SWAPPABLE_AREA) {  /* get swappable data area */
         SET16(R_DS, DOS_SDA_SEG); SET16(R_SI, DOS_SDA_OFF);
         SET16(R_CX, DOS_SDA_LEN); SET16(R_DX, DOS_SDA_LEN);
-        trace = zput(trace, "  INT21 AH=5D06 SDA (minimal: crit-err + InDOS only)\r\n");
+        trace = LogPut(trace, "  INT21 AH=5D06 SDA (minimal: crit-err + InDOS only)\r\n");
         OKCF();
     } else if (function == DOS_FN_MKDIR || function == DOS_FN_RMDIR) {  /* mkdir / rmdir */
         CHAR fileName[DOS_INT21_PATH_SIZE];
@@ -2491,9 +2491,9 @@ INT DosInt21(PDOS_MACHINE machine)
             if (SetFileAttributesA(fileName, attributes)) OKCF();
             else { SETAX(DOS_ERR_FILE_NOT_FOUND); ERRCF(); }
         } else {
-            trace = zput(trace, "  INT21 AH=43 AL=0x"); trace = zhexb(trace, subfunction);
+            trace = LogPut(trace, "  INT21 AH=43 AL=0x"); trace = LogHexByte(trace, subfunction);
             /* Not a gap: 6.22 and PCem answer AX=1 CF=1 too (p_subfn int21.4302). */
-            trace = zput(trace, " not a 6.22 subfunction -> AX=1 CF=1 (matches DOS)\r\n");
+            trace = LogPut(trace, " not a 6.22 subfunction -> AX=1 CF=1 (matches DOS)\r\n");
             SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
     } else if (function == DOS_FN_DUP || function == DOS_FN_DUP2) {  /* dup / dup2 */
@@ -2527,16 +2527,16 @@ INT DosInt21(PDOS_MACHINE machine)
                 } else if (isSourceDevice && !DosHandleSetDevice(&machine->StdOpen, targetHandle, 1)) {
                     /* Past the device mask. Refuse LOUDLY rather than hand back a
                        slot that would read as a file -- see DOS_DEV_SLOTS. */
-                    trace = zput(trace, "  INT21 AH=45 device dup past slot 0x");
-                    trace = zhex(trace, DOS_DEV_SLOTS); trace = zput(trace, " -- refused\r\n");
+                    trace = LogPut(trace, "  INT21 AH=45 device dup past slot 0x");
+                    trace = LogHex(trace, DOS_DEV_SLOTS); trace = LogPut(trace, " -- refused\r\n");
                     SETAX(DOS_ERR_TOO_MANY_OPEN_FILES); ERRCF();
                 } else { machine->FileHandles[targetHandle] = newHandle; SETAX(targetHandle); OKCF(); }
             } else {
                 targetHandle = R_CX & DOS_INT21_WORD_MASK;
                 if (targetHandle >= DOS_MAX_FILES) { if (newHandle) CloseHandle(newHandle); SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
                 else if (isSourceDevice && !DosHandleSetDevice(&machine->StdOpen, targetHandle, 1)) {
-                    trace = zput(trace, "  INT21 AH=46 device dup2 past slot 0x");
-                    trace = zhex(trace, DOS_DEV_SLOTS); trace = zput(trace, " -- refused\r\n");
+                    trace = LogPut(trace, "  INT21 AH=46 device dup2 past slot 0x");
+                    trace = LogHex(trace, DOS_DEV_SLOTS); trace = LogPut(trace, " -- refused\r\n");
                     SETAX(DOS_ERR_TOO_MANY_OPEN_FILES); ERRCF();
                 }
                 else { DosHandleRelease(machine, targetHandle);
@@ -2657,12 +2657,12 @@ INT DosInt21(PDOS_MACHINE machine)
             DWORD win32Error = GetLastError(); WORD dosError;
             INT isMapped = DosErrFromWin32((unsigned long)win32Error, &dosError);
             SETAX(dosError); ERRCF();
-            trace = zput(trace, isLfnAlias ? "  INT21 AX=71" : "  INT21 AH=6C");
-            if (isLfnAlias) trace = zhexb(trace, isLfnAlias);
-            trace = zput(trace, " ["); trace = zput(trace, fileName);
-            trace = zput(trace, "] FAILED win32=0x"); trace = zhex(trace, win32Error);
-            trace = zput(trace, isMapped ? " -> AX=0x" : " UNMAPPED, kept -> AX=0x");
-            trace = zhex(trace, dosError); trace = zput(trace, "\r\n");
+            trace = LogPut(trace, isLfnAlias ? "  INT21 AX=71" : "  INT21 AH=6C");
+            if (isLfnAlias) trace = LogHexByte(trace, isLfnAlias);
+            trace = LogPut(trace, " ["); trace = LogPut(trace, fileName);
+            trace = LogPut(trace, "] FAILED win32=0x"); trace = LogHex(trace, win32Error);
+            trace = LogPut(trace, isMapped ? " -> AX=0x" : " UNMAPPED, kept -> AX=0x");
+            trace = LogHex(trace, dosError); trace = LogPut(trace, "\r\n");
         }
         else {
             WORD action = (WORD)DosExtOpenActionTaken((UINT)disposition,
@@ -2691,8 +2691,8 @@ INT DosInt21(PDOS_MACHINE machine)
         if (!DosErrClassify(error, &classAndAction, &locus)) {
             /* Rather than fabricate a class for a code we have not provoked on
                real DOS, say so. Extend p_err.asm and dos_err.h together. */
-            trace = zput(trace, "  INT21 AH=59 class/action/locus UNMEASURED for code 0x");
-            trace = zhex(trace, error); trace = zput(trace, "\r\n");
+            trace = LogPut(trace, "  INT21 AH=59 class/action/locus UNMEASURED for code 0x");
+            trace = LogHex(trace, error); trace = LogPut(trace, "\r\n");
         }
         SETAX(error);
         SET16(R_BX, classAndAction);
@@ -2782,9 +2782,9 @@ INT DosInt21(PDOS_MACHINE machine)
             BYTE character = DosCtabUpcase437((BYTE)(R_DX & DOS_INT21_BYTE_MASK));
             SETAX(character == 'Y' ? DOS_INT21_YES : character == 'N' ? DOS_INT21_NO : DOS_INT21_NEITHER); OKCF();
         } else {
-            trace = zput(trace, "  INT21 AH=65 AL=0x"); trace = zhex(trace, subfunction);
+            trace = LogPut(trace, "  INT21 AH=65 AL=0x"); trace = LogHex(trace, subfunction);
             /* Not a gap: 6.22 and PCem answer AX=1 CF=1 too (p_subfn int21.6508). */
-            trace = zput(trace, " not a 6.22 subfunction -> AX=1 CF=1 (matches DOS)\r\n");
+            trace = LogPut(trace, " not a 6.22 subfunction -> AX=1 CF=1 (matches DOS)\r\n");
             SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
     } else if (function == DOS_FN_DISK_SERIAL) {              /* get/set volume serial number */
@@ -2825,12 +2825,12 @@ INT DosInt21(PDOS_MACHINE machine)
             if (drive < DOS_INT21_DRIVES) {
                 for (index = 0; index < DOS_INT21_SERIAL_INFO_SIZE; ++index) g_DosSerialInfo[drive][index] = source[DOS_INT21_SERIAL_INFO + index];
                 g_DosSerialIsSet[drive] = 1;
-                trace = zput(trace, "  INT21 AX=6901 set serial -- kept for this session only\r\n");
+                trace = LogPut(trace, "  INT21 AX=6901 set serial -- kept for this session only\r\n");
                 OKCF();
             } else { SETAX(DOS_ERR_INVALID_DRIVE); ERRCF(); }
         } else {
-            trace = zput(trace, "  INT21 AH=69 AL=0x"); trace = zhex(trace, subfunction);
-            trace = zput(trace, " UNIMPLEMENTED\r\n");
+            trace = LogPut(trace, "  INT21 AH=69 AL=0x"); trace = LogHex(trace, subfunction);
+            trace = LogPut(trace, " UNIMPLEMENTED\r\n");
             machine->Unimplemented[DOS_FN_DISK_SERIAL >> DOS_INT21_BYTE_INDEX_SHIFT] |= (BYTE)(1u << (DOS_FN_DISK_SERIAL & DOS_INT21_BIT_INDEX_MASK));
             SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
@@ -2861,7 +2861,7 @@ INT DosInt21(PDOS_MACHINE machine)
              passes garbage in DL still gets the error DOS gives it -- turning that
              into a plausible answer would be the "runs but lies" class. */
         if (driveNumber == DOS_INT21_WOW_CURRENT_DRIVE) {
-            trace = zput(trace, "  INT21 AH=47 drive 0xF0 (WOW sentinel) -> current drive\r\n");
+            trace = LogPut(trace, "  INT21 AH=47 drive 0xF0 (WOW sentinel) -> current drive\r\n");
             driveNumber = 0;
         }
         /* ── ★ AND PER-DRIVE CURRENT DIRECTORIES ARE REAL DOS BEHAVIOUR. ─────────
@@ -2880,8 +2880,8 @@ INT DosInt21(PDOS_MACHINE machine)
             } else count = 0;
         }
         if (count == 0 || count >= sizeof(currentDirectory)) {
-            trace = zput(trace, "  INT21 AH=47 drive 0x"); trace = zhex(trace, driveNumber);
-            trace = zput(trace, " -> invalid drive\r\n");
+            trace = LogPut(trace, "  INT21 AH=47 drive 0x"); trace = LogHex(trace, driveNumber);
+            trace = LogPut(trace, " -> invalid drive\r\n");
             SETAX(DOS_ERR_INVALID_DRIVE); ERRCF();
         } else {
             volatile BYTE *destination = (volatile BYTE *)((R_DS << DOS_INT21_PARAGRAPH_SHIFT) + (R_SI & DOS_INT21_WORD_MASK));
@@ -2919,26 +2919,26 @@ INT DosInt21(PDOS_MACHINE machine)
         DWORD count;
         BYTE target;
         DosGuestPath(machine, R_DS, R_DX, fileName, sizeof(fileName));
-        trace = zput(trace, "  INT21 AH=3B chdir ["); trace = zput(trace, fileName); trace = zput(trace, "]");
-        if (fileName[0] && fileName[1] == ':' && !fileName[DOS_INT21_DRIVE_PREFIX_LENGTH]) { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); trace = zput(trace, " -> 3 (drive only)\r\n"); }
+        trace = LogPut(trace, "  INT21 AH=3B chdir ["); trace = LogPut(trace, fileName); trace = LogPut(trace, "]");
+        if (fileName[0] && fileName[1] == ':' && !fileName[DOS_INT21_DRIVE_PREFIX_LENGTH]) { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); trace = LogPut(trace, " -> 3 (drive only)\r\n"); }
         else if ((count = GetFullPathNameA(fileName, sizeof(fullPath), fullPath, NULL)) == 0 || count >= sizeof(fullPath)
-                 || fullPath[1] != ':') { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); trace = zput(trace, " -> 3\r\n"); }
+                 || fullPath[1] != ':') { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); trace = LogPut(trace, " -> 3\r\n"); }
         else {
             target = (BYTE)((fullPath[0] | DOS_INT21_CASE_BIT) - 'a');
             if (target == DosCurrentDrive(machine)) {
                 if (SetCurrentDirectoryA(fullPath)) {
                     machine->VirtualDrive = -1;  /* it can be stood on after all */
                     DosNoteDriveDirectory(fullPath);
-                    OKCF(); trace = zput(trace, " -> ok\r\n");
-                } else { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); trace = zput(trace, " -> 3 (0x"); trace = zhex(trace, GetLastError());
-                         trace = zput(trace, ")\r\n"); }  /* oracle: AX=0003, CF=1 */
+                    OKCF(); trace = LogPut(trace, " -> ok\r\n");
+                } else { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); trace = LogPut(trace, " -> 3 (0x"); trace = LogHex(trace, GetLastError());
+                         trace = LogPut(trace, ")\r\n"); }  /* oracle: AX=0003, CF=1 */
             } else {
                 DWORD attributes = GetFileAttributesA(fullPath);
                 if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
                     DosNoteDriveDirectory(fullPath);
-                    OKCF(); trace = zput(trace, " -> ok (another drive's directory; current drive unchanged)\r\n");
-                } else { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); trace = zput(trace, " -> 3 (other drive, 0x"); trace = zhex(trace, GetLastError());
-                         trace = zput(trace, ")\r\n"); }
+                    OKCF(); trace = LogPut(trace, " -> ok (another drive's directory; current drive unchanged)\r\n");
+                } else { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); trace = LogPut(trace, " -> 3 (other drive, 0x"); trace = LogHex(trace, GetLastError());
+                         trace = LogPut(trace, ")\r\n"); }
             }
         }
     } else if (function == DOS_FN_GET_FREE_SPACE) {              /* get free disk space: DL = drive */
@@ -2973,8 +2973,8 @@ INT DosInt21(PDOS_MACHINE machine)
             SETAX(1);
             if (wanted == 1) OKCF();
             else {
-                trace = zput(trace, "  INT21 AH=38 SET country 0x"); trace = zhex(trace, wanted);
-                trace = zput(trace, " refused: only country 1 is loaded (matches DOS without COUNTRY.SYS)\r\n");
+                trace = LogPut(trace, "  INT21 AH=38 SET country 0x"); trace = LogHex(trace, wanted);
+                trace = LogPut(trace, " refused: only country 1 is loaded (matches DOS without COUNTRY.SYS)\r\n");
                 ERRCF();
             }
         } else if (wanted == 1) {               /* USA -- the only block we have */
@@ -2992,8 +2992,8 @@ INT DosInt21(PDOS_MACHINE machine)
                programme forbids, so say so rather than fabricate one. */
             /* ...and 6.22 without COUNTRY.SYS answers exactly this: AX=1 CF=1
                (p_subfn int21.382C.get). It was AX=2. */
-            trace = zput(trace, "  INT21 AH=38 country 0x"); trace = zhex(trace, wanted);
-            trace = zput(trace, " refused: only country 1 is loaded (matches DOS without COUNTRY.SYS)\r\n");
+            trace = LogPut(trace, "  INT21 AH=38 country 0x"); trace = LogHex(trace, wanted);
+            trace = LogPut(trace, " refused: only country 1 is loaded (matches DOS without COUNTRY.SYS)\r\n");
             SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
     } else if (function == DOS_FN_ALLOCATION_STRATEGY) {              /* get/set memory allocation strategy */
@@ -3020,14 +3020,14 @@ INT DosInt21(PDOS_MACHINE machine)
                i.e. real DOS REFUSES, in both directions, with error 1. We
                provide no upper memory blocks at all, so refusing is not a
                limitation being papered over -- it is the true answer. */
-            trace = zput(trace, "  INT21 AH=5803 UMB link refused: no UMB provider "
+            trace = LogPut(trace, "  INT21 AH=5803 UMB link refused: no UMB provider "
                           "(oracle: AX=0001 CF=1)\r\n");
             SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
         else {
-            trace = zput(trace, "  INT21 AH=58 AL=0x"); trace = zhex(trace, subfunction);
+            trace = LogPut(trace, "  INT21 AH=58 AL=0x"); trace = LogHex(trace, subfunction);
             /* Not a gap: 6.22 and PCem answer AX=1 CF=1 too (p_subfn int21.5804). */
-            trace = zput(trace, " not a 6.22 subfunction -> AX=1 CF=1 (matches DOS)\r\n");
+            trace = LogPut(trace, " not a 6.22 subfunction -> AX=1 CF=1 (matches DOS)\r\n");
             SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
     } else if (function == DOS_FN_GET_LIST_OF_LISTS) {              /* get list of lists -> ES:BX */
@@ -3040,10 +3040,10 @@ INT DosInt21(PDOS_MACHINE machine)
         if (machine->SysvarsSegment) {
             SET16(R_ES, machine->SysvarsSegment);
             SET16(R_BX, machine->SysvarsOffset);
-            trace = zput(trace, "  INT21 AH=52 list-of-lists (MCB head only; rest stubbed)\r\n");
+            trace = LogPut(trace, "  INT21 AH=52 list-of-lists (MCB head only; rest stubbed)\r\n");
             OKCF();
         } else {
-            trace = zput(trace, "  INT21 AH=52 UNIMPLEMENTED (no SysVars planted)\r\n");
+            trace = LogPut(trace, "  INT21 AH=52 UNIMPLEMENTED (no SysVars planted)\r\n");
             machine->Unimplemented[DOS_FN_GET_LIST_OF_LISTS >> DOS_INT21_BYTE_INDEX_SHIFT] |= (BYTE)(1u << (DOS_FN_GET_LIST_OF_LISTS & DOS_INT21_BIT_INDEX_MASK));
             SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
@@ -3100,12 +3100,12 @@ INT DosInt21(PDOS_MACHINE machine)
                    true of every drive we can see (we do not emulate a SUBST). */
                 SETAX(R_AX & DOS_INT21_HIGH_BYTE_MASK); OKCF();
             }
-            trace = zput(trace, "  INT21 AH=44 AL=0x"); trace = zhex(trace, subfunction);
-            trace = zput(trace, " drive 0x"); trace = zhex(trace, drive);
-            trace = zput(trace, " type "); trace = zhex(trace, type);
-            trace = zput(trace, " -> AX=0x"); trace = zhex(trace, R_AX & DOS_INT21_WORD_MASK);
-            trace = zput(trace, " DX=0x"); trace = zhex(trace, R_DX & DOS_INT21_WORD_MASK);
-            trace = zput(trace, (*guestFlags & 1) ? " (err)\r\n" : "\r\n");
+            trace = LogPut(trace, "  INT21 AH=44 AL=0x"); trace = LogHex(trace, subfunction);
+            trace = LogPut(trace, " drive 0x"); trace = LogHex(trace, drive);
+            trace = LogPut(trace, " type "); trace = LogHex(trace, type);
+            trace = LogPut(trace, " -> AX=0x"); trace = LogHex(trace, R_AX & DOS_INT21_WORD_MASK);
+            trace = LogPut(trace, " DX=0x"); trace = LogHex(trace, R_DX & DOS_INT21_WORD_MASK);
+            trace = LogPut(trace, (*guestFlags & 1) ? " (err)\r\n" : "\r\n");
         }
         /* ── #251: WHAT DOS SUPPORTS SUCCEEDS; THE REST IS "INVALID FUNCTION". ───────
              Every other sub-function answered CF=0 -- success, with nothing done.
@@ -3120,13 +3120,13 @@ INT DosInt21(PDOS_MACHINE machine)
         else if (subfunction == DOS_INT21_IOCTL_QUERY_GENERIC) { SETAX(R_AX & DOS_INT21_HIGH_BYTE_MASK); OKCF(); }  /* AL=0: supported */
         else                 { SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF(); }
         if (subfunction != DOS_INT21_IOCTL_REMOVABLE && subfunction != DOS_INT21_IOCTL_REMOTE_DRIVE && subfunction != DOS_INT21_IOCTL_GET_DRIVE_MAP) {
-            trace = zput(trace, "  INT21 AH=44 ioctl AL=0x"); trace = zhex(trace, subfunction);
-            trace = zput(trace, " BX=0x"); trace = zhex(trace, handle); trace = zput(trace, "\r\n");
+            trace = LogPut(trace, "  INT21 AH=44 ioctl AL=0x"); trace = LogHex(trace, subfunction);
+            trace = LogPut(trace, " BX=0x"); trace = LogHex(trace, handle); trace = LogPut(trace, "\r\n");
         }
     } else if (function == DOS_FN_DBCS_TABLE) {              /* get DBCS lead-byte table */
         if ((R_AX & DOS_INT21_BYTE_MASK) == 0) { SET16(R_DS, DOS_HDLR_SEG); SET16(R_SI, DOS_DBCS_OFF); }
         SETAX(R_AX & DOS_INT21_HIGH_BYTE_MASK); OKCF();
-        trace = zput(trace, "  INT21 AH=63 DBCS lead-byte table\r\n");
+        trace = LogPut(trace, "  INT21 AH=63 DBCS lead-byte table\r\n");
     } else if (function == DOS_FN_SET_VECTOR) {              /* set interrupt vector: AL=int DS:DX */
         DWORD vectorOffset = (R_AX & DOS_INT21_BYTE_MASK) * DOS_INT21_VECTOR_SIZE;
         *(volatile WORD *)(vectorOffset)     = (WORD)(R_DX & DOS_INT21_WORD_MASK);
@@ -3151,9 +3151,9 @@ INT DosInt21(PDOS_MACHINE machine)
              outlived Doom, and the next `doom` loaded 85 KB higher. */
         if (!error && segment && machine->PspSegment)
             DosMcbWriteWord(DosMcbSegmentAddress(NULL, (WORD)(segment - 1)) + 1, machine->PspSegment);
-        trace = zput(trace, "  INT21 AH=48 alloc 0x"); trace = zhex(trace, wanted);
-        trace = zput(trace, (*guestFlags & 1) ? " -> err max=0x" : " -> seg=0x");
-        trace = zhex(trace, (*guestFlags & 1) ? maximum : (R_AX & DOS_INT21_WORD_MASK)); trace = zput(trace, "\r\n");
+        trace = LogPut(trace, "  INT21 AH=48 alloc 0x"); trace = LogHex(trace, wanted);
+        trace = LogPut(trace, (*guestFlags & 1) ? " -> err max=0x" : " -> seg=0x");
+        trace = LogHex(trace, (*guestFlags & 1) ? maximum : (R_AX & DOS_INT21_WORD_MASK)); trace = LogPut(trace, "\r\n");
     } else if (function == DOS_FN_FREE) {              /* free block: ES=segment */
         INT error = DosMcbFree(NULL, (WORD)(R_ES & DOS_INT21_WORD_MASK));
         /* ── #258: AND A SUCCESSFUL FREE LEAVES AX = THE BLOCK'S MCB. ────────────────
@@ -3162,27 +3162,27 @@ INT DosInt21(PDOS_MACHINE machine)
              kernel is the authority. We left AX as the caller's 49xx. */
         if (error) { SET16(R_AX, error); ERRCF(); }
         else { SET16(R_AX, (WORD)((R_ES & DOS_INT21_WORD_MASK) - 1)); OKCF(); }
-        trace = zput(trace, "  INT21 AH=49 free seg=0x"); trace = zhex(trace, R_ES & DOS_INT21_WORD_MASK);
-        trace = zput(trace, (*guestFlags & 1) ? " (err)\r\n" : "\r\n");
+        trace = LogPut(trace, "  INT21 AH=49 free seg=0x"); trace = LogHex(trace, R_ES & DOS_INT21_WORD_MASK);
+        trace = LogPut(trace, (*guestFlags & 1) ? " (err)\r\n" : "\r\n");
         /* A refused free names a block the caller believes in and we do not: show
            what is actually at seg-1, and the chain, so the two can be compared. */
         if (error) {
             const volatile BYTE *mcb = (const volatile BYTE *)(((R_ES & DOS_INT21_WORD_MASK) - 1u) << DOS_INT21_PARAGRAPH_SHIFT);
             WORD segment;
             INT index, count = 0;
-            trace = zput(trace, "    at seg-1: ");
-            for (index = 0; index < DOS_PARAGRAPH_BYTES; ++index) { trace = zhexb(trace, mcb[index]); trace = zput(trace, " "); }
-            trace = zput(trace, "\r\n    chain:");
+            trace = LogPut(trace, "    at seg-1: ");
+            for (index = 0; index < DOS_PARAGRAPH_BYTES; ++index) { trace = LogHexByte(trace, mcb[index]); trace = LogPut(trace, " "); }
+            trace = LogPut(trace, "\r\n    chain:");
             segment = machine->FirstMcb;
             while (segment && count++ < DOS_INT21_TRACE_MCB_MAX) {
                 const volatile BYTE *chainBlock = (const volatile BYTE *)((DWORD)segment << DOS_INT21_PARAGRAPH_SHIFT);
                 WORD owner = (WORD)(chainBlock[DOS_MCB_OWNER] | (chainBlock[DOS_MCB_OWNER + 1] << DOS_INT21_BYTE_SHIFT)), size = (WORD)(chainBlock[DOS_MCB_SIZE] | (chainBlock[DOS_MCB_SIZE + 1] << DOS_INT21_BYTE_SHIFT));
-                trace = zput(trace, " "); trace = zhex(trace, segment); trace = zput(trace, chainBlock[0] == 'Z' ? "Z" : chainBlock[0] == 'M' ? "M" : "?");
-                trace = zput(trace, "/"); trace = zhex(trace, owner); trace = zput(trace, "/"); trace = zhex(trace, size);
+                trace = LogPut(trace, " "); trace = LogHex(trace, segment); trace = LogPut(trace, chainBlock[0] == 'Z' ? "Z" : chainBlock[0] == 'M' ? "M" : "?");
+                trace = LogPut(trace, "/"); trace = LogHex(trace, owner); trace = LogPut(trace, "/"); trace = LogHex(trace, size);
                 if (chainBlock[0] != 'M') break;
                 segment = (WORD)(segment + 1 + size);
             }
-            trace = zput(trace, "\r\n");
+            trace = LogPut(trace, "\r\n");
         }
     } else if (function == DOS_FN_RESIZE) {              /* resize: ES=block BX=new paras */
         WORD wanted = (WORD)(R_BX & DOS_INT21_WORD_MASK), maximum = 0;
@@ -3197,9 +3197,9 @@ INT DosInt21(PDOS_MACHINE machine)
              return AX = ES for a shrink, a grow and a same-size resize. */
         if (error) { SET16(R_AX, error); if (error == DOS_ERR_INSUFFICIENT_MEMORY) SET16(R_BX, maximum); ERRCF(); }
         else { SET16(R_AX, (WORD)(R_ES & DOS_INT21_WORD_MASK)); OKCF(); }
-        trace = zput(trace, "  INT21 AH=4A resize seg=0x"); trace = zhex(trace, R_ES & DOS_INT21_WORD_MASK);
-        trace = zput(trace, " -> 0x"); trace = zhex(trace, wanted);
-        trace = zput(trace, (*guestFlags & 1) ? " (err)\r\n" : "\r\n");
+        trace = LogPut(trace, "  INT21 AH=4A resize seg=0x"); trace = LogHex(trace, R_ES & DOS_INT21_WORD_MASK);
+        trace = LogPut(trace, " -> 0x"); trace = LogHex(trace, wanted);
+        trace = LogPut(trace, (*guestFlags & 1) ? " (err)\r\n" : "\r\n");
     } else if (function == DOS_FN_GET_PSP_UNDOCUMENTED || function == DOS_FN_GET_PSP) {  /* get current PSP -> BX */
         SET16(R_BX, machine->PspSegment); OKCF();
     } else if (function == DOS_FN_SET_PSP) {              /* set current PSP */
@@ -3243,10 +3243,10 @@ INT DosInt21(PDOS_MACHINE machine)
                 if (SetCurrentDirectoryA(root)) machine->VirtualDrive = -1;
                 else {
                     machine->VirtualDrive = driveNumber;
-                    trace = zput(trace, "  INT21 AH=0E drive "); *trace++ = driveSpec[0];
-                    trace = zput(trace, ": exists but is not ready (Win32 error 0x");
-                    trace = zhex(trace, GetLastError());
-                    trace = zput(trace, ") -> selected as the DOS current drive anyway\r\n");
+                    trace = LogPut(trace, "  INT21 AH=0E drive "); *trace++ = driveSpec[0];
+                    trace = LogPut(trace, ": exists but is not ready (Win32 error 0x");
+                    trace = LogHex(trace, GetLastError());
+                    trace = LogPut(trace, ") -> selected as the DOS current drive anyway\r\n");
                 }
             }
         }
@@ -3283,8 +3283,8 @@ INT DosInt21(PDOS_MACHINE machine)
         } else {                                               /* not a 6.22 subfn */
             /* Not a gap: 6.22 and PCem both answer AL=FFh (p_subfn int21.3307) and
                leave the carry alone, so we do exactly that. */
-            trace = zput(trace, "  INT21 AH=33 AL=0x"); trace = zhex(trace, subfunction);
-            trace = zput(trace, " not a 6.22 subfunction -> AL=FF (matches DOS)\r\n");
+            trace = LogPut(trace, "  INT21 AH=33 AL=0x"); trace = LogHex(trace, subfunction);
+            trace = LogPut(trace, " not a 6.22 subfunction -> AL=FF (matches DOS)\r\n");
             SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | DOS_INT21_SUBFUNCTION_INVALID_AL);
         }
     } else if (function == DOS_FN_GET_DATE) {              /* get date: CX=yr DH=mon DL=day AL=dow */
@@ -3333,8 +3333,8 @@ INT DosInt21(PDOS_MACHINE machine)
             }
         }
         if (isOk) g_DosClock.RtcOffset = g_DosClock.DosOffset;
-        trace = zput(trace, "  INT21 AH=0x"); trace = zhexb(trace, (UINT)function);
-        trace = zput(trace, isOk ? " VDM clock set (host clock untouched)\r\n"
+        trace = LogPut(trace, "  INT21 AH=0x"); trace = LogHexByte(trace, (UINT)function);
+        trace = LogPut(trace, isOk ? " VDM clock set (host clock untouched)\r\n"
                          : " refused: invalid -> AL=FF, clock unchanged\r\n");
         SETAX((R_AX & DOS_INT21_HIGH_BYTE_MASK) | (isOk ? DOS_INT21_CLOCK_SET : DOS_INT21_CLOCK_INVALID));
         OKCF();
@@ -3506,8 +3506,8 @@ INT DosInt21(PDOS_MACHINE machine)
                         if (slot >= DOS_LFN_FIND_SLOTS) {            /* full: recycle, round robin */
                             slot = g_DosLfnNext++ % DOS_LFN_FIND_SLOTS;
                             FindClose(g_DosLfnFinds[slot]);
-                            trace = zput(trace, "  INT21 AX=714E search table full -- recycled handle 0x");
-                            trace = zhex(trace, slot + 1); trace = zput(trace, "\r\n");
+                            trace = LogPut(trace, "  INT21 AX=714E search table full -- recycled handle 0x");
+                            trace = LogHex(trace, slot + 1); trace = LogPut(trace, "\r\n");
                         }
                         g_DosLfnFinds[slot] = find; g_DosLfnAllow[slot] = allowedAttributes; g_DosLfnNeed[slot] = requiredAttributes;
                         DosLfnFindFill(buffer, &findData, isDosFormat);
@@ -3515,8 +3515,8 @@ INT DosInt21(PDOS_MACHINE machine)
                         OKCF();
                     }
                 }
-                if (machine->IsTraceAll) { trace = zput(trace, "  INT21 AX=714E ["); trace = zput(trace, pattern);
-                                    trace = zput(trace, (*guestFlags & 1) ? "] -> none\r\n" : "] -> found\r\n"); }
+                if (machine->IsTraceAll) { trace = LogPut(trace, "  INT21 AX=714E ["); trace = LogPut(trace, pattern);
+                                    trace = LogPut(trace, (*guestFlags & 1) ? "] -> none\r\n" : "] -> found\r\n"); }
             } else {
                 UINT slot = (UINT)(R_BX & DOS_INT21_WORD_MASK) - 1u;
                 if (slot >= DOS_LFN_FIND_SLOTS || !g_DosLfnFinds[slot]) { SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
@@ -3584,9 +3584,9 @@ INT DosInt21(PDOS_MACHINE machine)
                 SET16(R_DX, MAX_PATH);
                 OKCF();
             }
-            trace = zput(trace, "  INT21 AX=71A0 ["); trace = zput(trace, root);
-            trace = zput(trace, "] fs="); trace = zput(trace, fileSystem); trace = zput(trace, " flags=0x"); trace = zhex(trace, flags);
-            trace = zput(trace, (*guestFlags & 1) ? " (err)\r\n" : "\r\n");
+            trace = LogPut(trace, "  INT21 AX=71A0 ["); trace = LogPut(trace, root);
+            trace = LogPut(trace, "] fs="); trace = LogPut(trace, fileSystem); trace = LogPut(trace, " flags=0x"); trace = LogHex(trace, flags);
+            trace = LogPut(trace, (*guestFlags & 1) ? " (err)\r\n" : "\r\n");
         } else if (subfunction == DOS_INT21_LFN_HANDLE_INFO) {       /* file info by handle: BX -> DS:DX */
             /* BY_HANDLE_FILE_INFORMATION, 52 bytes, exactly as Win32 lays it out (times
                UTC, as a FILETIME is). */
@@ -3671,8 +3671,8 @@ INT DosInt21(PDOS_MACHINE machine)
                 else if (count == 0 || count >= sizeof(fullPath)) { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); }
                 else if (DefineDosDeviceA(0, driveSpec, fullPath)) {
                     OKCF();
-                    trace = zput(trace, "  INT21 AX=71AA SUBST "); trace = zput(trace, driveSpec);
-                    trace = zput(trace, " = "); trace = zput(trace, fullPath); trace = zput(trace, " (a host drive)\r\n");
+                    trace = LogPut(trace, "  INT21 AX=71AA SUBST "); trace = LogPut(trace, driveSpec);
+                    trace = LogPut(trace, " = "); trace = LogPut(trace, fullPath); trace = LogPut(trace, " (a host drive)\r\n");
                 } else { SETAX(DosLfnError(GetLastError())); ERRCF(); }
             } else {
                 DWORD length = QueryDosDeviceA(driveSpec, target, sizeof(target));
@@ -3690,8 +3690,8 @@ INT DosInt21(PDOS_MACHINE machine)
                 }
             }
         } else {
-            trace = zput(trace, "  INT21 AX=71"); trace = zhexb(trace, subfunction);
-            trace = zput(trace, " not an LFN function stock provides -> AX=0001 CF=1\r\n");
+            trace = LogPut(trace, "  INT21 AX=71"); trace = LogHexByte(trace, subfunction);
+            trace = LogPut(trace, " not an LFN function stock provides -> AX=0001 CF=1\r\n");
             /* s92, MEASURED (dospair p_lfn): stock answers an unknown 71xxh -- and 710Dh,
                which it does not provide -- with AX=0001 CF=1, "invalid function", NOT the
                7100h this arm assumed. */
@@ -3699,9 +3699,9 @@ INT DosInt21(PDOS_MACHINE machine)
             ERRCF();
         }
         if (machine->IsTraceAll) {
-            trace = zput(trace, "  INT21 AX=71"); trace = zhexb(trace, subfunction);
-            trace = zput(trace, " -> AX=0x"); trace = zhex(trace, R_AX & DOS_INT21_WORD_MASK);
-            trace = zput(trace, (*guestFlags & 1) ? " (err)\r\n" : "\r\n");
+            trace = LogPut(trace, "  INT21 AX=71"); trace = LogHexByte(trace, subfunction);
+            trace = LogPut(trace, " -> AX=0x"); trace = LogHex(trace, R_AX & DOS_INT21_WORD_MASK);
+            trace = LogPut(trace, (*guestFlags & 1) ? " (err)\r\n" : "\r\n");
         }
     } else if (!DosIsDefinedBy622(function)) {
         /* MS-DOS 6.22 has nothing here, and what IT does is the specification:
@@ -3718,8 +3718,8 @@ INT DosInt21(PDOS_MACHINE machine)
              filename client learns there is no LFN API -- XP's EDIT.COM took our
              unchanged 716Ch for a file handle and reported "Error 6" on EDIT.INI. */
         SETAX(R_AX & DOS_INT21_HIGH_BYTE_MASK);
-        trace = zput(trace, "  INT21 AH=0x"); trace = zhex(trace, function);
-        trace = zput(trace, " undefined on 6.22 -- AL=0, CF clear (matches DOS)\r\n");
+        trace = LogPut(trace, "  INT21 AH=0x"); trace = LogHex(trace, function);
+        trace = LogPut(trace, " undefined on 6.22 -- AL=0, CF clear (matches DOS)\r\n");
         machine->Undefined[(function & DOS_INT21_BYTE_MASK) >> DOS_INT21_BYTE_INDEX_SHIFT] |= (BYTE)(1u << (function & DOS_INT21_BIT_INDEX_MASK));
         OKCF();
     } else {                                    /* unhandled service */
@@ -3729,9 +3729,9 @@ INT DosInt21(PDOS_MACHINE machine)
            not written it yet.  CF=1 is right for that: a quiet "success" would
            tell the program its request worked when nothing happened.  Functions
            DOS does not define are handled above and stay silent, matching DOS. */
-        trace = zput(trace, "  INT21 AH=0x"); trace = zhexb(trace, (UINT)function);
-        trace = zput(trace, " AL=0x"); trace = zhexb(trace, (UINT)(R_AX & DOS_INT21_BYTE_MASK));
-        trace = zput(trace, " UNIMPLEMENTED\r\n");
+        trace = LogPut(trace, "  INT21 AH=0x"); trace = LogHexByte(trace, (UINT)function);
+        trace = LogPut(trace, " AL=0x"); trace = LogHexByte(trace, (UINT)(R_AX & DOS_INT21_BYTE_MASK));
+        trace = LogPut(trace, " UNIMPLEMENTED\r\n");
         machine->Unimplemented[(function & DOS_INT21_BYTE_MASK) >> DOS_INT21_BYTE_INDEX_SHIFT] |= (BYTE)(1u << (function & DOS_INT21_BIT_INDEX_MASK));
         ERRCF();
     }
@@ -3796,12 +3796,12 @@ INT DosInt21(PDOS_MACHINE machine)
         WORD code = (WORD)(R_AX & DOS_INT21_WORD_MASK);
         SETAX(DosCritFailAx((BYTE)function, (BYTE)(code - DOS_INT21_HARD_ERROR_FIRST)));
         machine->LastError = DOS_ERR_FAIL_I24;
-        trace = zput(trace, "  INT24 not raised (");
-        trace = zput(trace, machine->IsCritActive ? "inside the handler" : g_DosInt21IsProtectedMode ? "DPMI client"
+        trace = LogPut(trace, "  INT24 not raised (");
+        trace = LogPut(trace, machine->IsCritActive ? "inside the handler" : g_DosInt21IsProtectedMode ? "DPMI client"
                                      : "nested real-mode call");
-        trace = zput(trace, "): error 0x"); trace = zhexb(trace, (UINT)code);
-        trace = zput(trace, " answered as FAIL -> AX=0x"); trace = zhex(trace, R_AX & DOS_INT21_WORD_MASK);
-        trace = zput(trace, ", 59h=53h\r\n");
+        trace = LogPut(trace, "): error 0x"); trace = LogHexByte(trace, (UINT)code);
+        trace = LogPut(trace, " answered as FAIL -> AX=0x"); trace = LogHex(trace, R_AX & DOS_INT21_WORD_MASK);
+        trace = LogPut(trace, ", 59h=53h\r\n");
     }
 
     /* ── s91: KEEP THE PSP's JFT TRUTHFUL (see jft_known). V86 only: in protected mode
@@ -3828,10 +3828,10 @@ INT DosInt21(PDOS_MACHINE machine)
          has to be shared: capping only the inbound half would leave a file of orphaned
          results, which is worse than either. */
     if (machine->IsTraceAll && function != DOS_FN_BUFFERED_INPUT && machine->TraceCount <= DOS_TRACE_MAX) {
-        trace = zput(trace, "     -> ax="); trace = zhexb(trace, (UINT)((R_AX >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK));
-        trace = zhexb(trace, (UINT)(R_AX & DOS_INT21_BYTE_MASK));
-        trace = zput(trace, " cf="); trace = zhexb(trace, (UINT)(*guestFlags & 1));
-        trace = zput(trace, "\r\n");
+        trace = LogPut(trace, "     -> ax="); trace = LogHexByte(trace, (UINT)((R_AX >> DOS_INT21_BYTE_SHIFT) & DOS_INT21_BYTE_MASK));
+        trace = LogHexByte(trace, (UINT)(R_AX & DOS_INT21_BYTE_MASK));
+        trace = LogPut(trace, " cf="); trace = LogHexByte(trace, (UINT)(*guestFlags & 1));
+        trace = LogPut(trace, "\r\n");
     }
 
     machine->TraceCursor = trace;

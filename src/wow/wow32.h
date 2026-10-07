@@ -1235,7 +1235,7 @@ static INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
             for (position = 0; bodyText[position] && number < (INT)sizeof logLine - WOW32_MSGBOX_LOG_TAIL_ROOM; ++position)
                 logLine[number++] = (bodyText[position] == '\r' || bodyText[position] == '\n') ? ' ' : bodyText[position];
             for (cursor = "\"\r\n"; *cursor; ++cursor) logLine[number++] = *cursor;
-            log_append(LOG_PATH, logLine, logLine + number);
+            LogAppend(LOG_PATH, logLine, logLine + number);
         }
         MessageBoxA(NULL, body, caption,
                     (UINT)((type & WOW32_MSGBOX_ICON_MASK) | MB_OK | MB_SETFOREGROUND));

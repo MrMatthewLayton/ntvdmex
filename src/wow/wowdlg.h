@@ -188,15 +188,15 @@ static INT WowDlgPump(INT budget, PINT traceBudget)
             CHAR traceBuffer[WOWDLG_TRACE_LINE_MAX], *traceCursor = traceBuffer;
             WORD window16 = WowWinHwnd16(message.hwnd);
             --*traceBudget;
-            traceCursor = zput(traceCursor, "       WOWDLG/win32: msg=0x"); traceCursor = zhex(traceCursor, message.message);
-            traceCursor = zput(traceCursor, " hwnd=0x");   traceCursor = zhex(traceCursor, (DWORD)(ULONG_PTR)message.hwnd);
-            traceCursor = zput(traceCursor, " wp=0x");     traceCursor = zhex(traceCursor, (DWORD)message.wParam);
-            traceCursor = zput(traceCursor, " lp=0x");     traceCursor = zhex(traceCursor, (DWORD)message.lParam);
-            traceCursor = zput(traceCursor, " -> win16 0x"); traceCursor = zhex(traceCursor, window16);
-            if (!window16) traceCursor = zput(traceCursor, " (★ NOT ONE OF OURS -- nothing will be"
+            traceCursor = LogPut(traceCursor, "       WOWDLG/win32: msg=0x"); traceCursor = LogHex(traceCursor, message.message);
+            traceCursor = LogPut(traceCursor, " hwnd=0x");   traceCursor = LogHex(traceCursor, (DWORD)(ULONG_PTR)message.hwnd);
+            traceCursor = LogPut(traceCursor, " wp=0x");     traceCursor = LogHex(traceCursor, (DWORD)message.wParam);
+            traceCursor = LogPut(traceCursor, " lp=0x");     traceCursor = LogHex(traceCursor, (DWORD)message.lParam);
+            traceCursor = LogPut(traceCursor, " -> win16 0x"); traceCursor = LogHex(traceCursor, window16);
+            if (!window16) traceCursor = LogPut(traceCursor, " (★ NOT ONE OF OURS -- nothing will be"
                                     " posted for it)");
-            traceCursor = zput(traceCursor, "\r\n");
-            log_append(LOG_PATH, traceBuffer, traceCursor);
+            traceCursor = LogPut(traceCursor, "\r\n");
+            LogAppend(LOG_PATH, traceBuffer, traceCursor);
         }
         if (WowWinThreadTimerFire(&message)) { ++count; ++g_WowWinPumped; continue; }   /* s93 */
         /* #305 M11 (s91): THE DIALOG MANAGER'S KEYS. DialogBox's own loop gives a modal
@@ -519,16 +519,16 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                  goes out FIRST, and a heartbeat follows it, bounded so that a
                  dialog left up overnight cannot fill the disk. */
             {   CHAR waitBuffer[WOWDLG_WAIT_LINE_MAX], *waitCursor = waitBuffer;
-                waitCursor = zput(waitCursor, "     WOWDLG: modal 0x"); waitCursor = zhex(waitCursor, dialog->Window);
-                waitCursor = zput(waitCursor, " is WAITING for input -- the guest is parked"
+                waitCursor = LogPut(waitCursor, "     WOWDLG: modal 0x"); waitCursor = LogHex(waitCursor, dialog->Window);
+                waitCursor = LogPut(waitCursor, " is WAITING for input -- the guest is parked"
                               " inside DialogBox on purpose, ");
-                if (g_WowMsgWaitMs) { waitCursor = zput(waitCursor, "for at most 0x");
-                                        waitCursor = zhex(waitCursor, g_WowMsgWaitMs);
-                                        waitCursor = zput(waitCursor, " ms"); }
-                else                    waitCursor = zput(waitCursor, "for as long as it takes"
+                if (g_WowMsgWaitMs) { waitCursor = LogPut(waitCursor, "for at most 0x");
+                                        waitCursor = LogHex(waitCursor, g_WowMsgWaitMs);
+                                        waitCursor = LogPut(waitCursor, " ms"); }
+                else                    waitCursor = LogPut(waitCursor, "for as long as it takes"
                                                       " (wowidle.txt = 0)");
-                waitCursor = zput(waitCursor, "\r\n");
-                log_append(LOG_PATH, waitBuffer, waitCursor);
+                waitCursor = LogPut(waitCursor, "\r\n");
+                LogAppend(LOG_PATH, waitBuffer, waitCursor);
             }
             g_WowMsgInWait = 1;
             while ((!running || *running) && !g_WowMsgCount
@@ -556,24 +556,24 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                     if (GetTickCount() - lastBeat >= interval) {
                         CHAR beatBuffer[WOWDLG_BEAT_LINE_MAX], *beatCursor = beatBuffer;
                         lastBeat = GetTickCount(); ++beatCount;
-                        beatCursor = zput(beatCursor, "     WOWDLG: modal 0x"); beatCursor = zhex(beatCursor, dialog->Window);
-                        beatCursor = zput(beatCursor, " waiting 0x");   beatCursor = zhex(beatCursor, lastBeat - startTime);
-                        beatCursor = zput(beatCursor, " ms; pumped 0x"); beatCursor = zhex(beatCursor, g_WowWinPumped);
-                        beatCursor = zput(beatCursor, " (+0x");         beatCursor = zhex(beatCursor, g_WowWinPumped - pumpedAtStart);
-                        beatCursor = zput(beatCursor, " since blocking), Win16 queued 0x");
-                        beatCursor = zhex(beatCursor, (DWORD)g_WowMsgCount);
-                        beatCursor = zput(beatCursor, "; queue status 0x");
-                        beatCursor = zhex(beatCursor, GetQueueStatus(QS_ALLINPUT));
-                        beatCursor = zput(beatCursor, "; this thread 0x");
-                        beatCursor = zhex(beatCursor, GetCurrentThreadId());
-                        beatCursor = zput(beatCursor, ", the windows' thread 0x");
-                        beatCursor = zhex(beatCursor, g_WowWinThread);
+                        beatCursor = LogPut(beatCursor, "     WOWDLG: modal 0x"); beatCursor = LogHex(beatCursor, dialog->Window);
+                        beatCursor = LogPut(beatCursor, " waiting 0x");   beatCursor = LogHex(beatCursor, lastBeat - startTime);
+                        beatCursor = LogPut(beatCursor, " ms; pumped 0x"); beatCursor = LogHex(beatCursor, g_WowWinPumped);
+                        beatCursor = LogPut(beatCursor, " (+0x");         beatCursor = LogHex(beatCursor, g_WowWinPumped - pumpedAtStart);
+                        beatCursor = LogPut(beatCursor, " since blocking), Win16 queued 0x");
+                        beatCursor = LogHex(beatCursor, (DWORD)g_WowMsgCount);
+                        beatCursor = LogPut(beatCursor, "; queue status 0x");
+                        beatCursor = LogHex(beatCursor, GetQueueStatus(QS_ALLINPUT));
+                        beatCursor = LogPut(beatCursor, "; this thread 0x");
+                        beatCursor = LogHex(beatCursor, GetCurrentThreadId());
+                        beatCursor = LogPut(beatCursor, ", the windows' thread 0x");
+                        beatCursor = LogHex(beatCursor, g_WowWinThread);
                         if (g_WowWinThread && g_WowWinThread != GetCurrentThreadId())
-                            beatCursor = zput(beatCursor, " -- ★★ DIFFERENT: PeekMessage is"
+                            beatCursor = LogPut(beatCursor, " -- ★★ DIFFERENT: PeekMessage is"
                                           " PER-THREAD, so this loop can never see"
                                           " their input");
-                        beatCursor = zput(beatCursor, "\r\n");
-                        log_append(LOG_PATH, beatBuffer, beatCursor);
+                        beatCursor = LogPut(beatCursor, "\r\n");
+                        LogAppend(LOG_PATH, beatBuffer, beatCursor);
                     }
                 }
                 /* ⚠ AND WATCH THE DIALOG ITSELF, NOT ONLY THE QUEUE. A dialog

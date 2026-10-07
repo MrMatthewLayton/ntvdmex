@@ -444,7 +444,7 @@ typedef struct _VIDEO_STATE {
        ⚠⚠ `ring_on` GATES IT, AND DEFAULTS TO 0, because both halves are the kind of
          cost this project has been bitten by: the stores sit on 0x3DA, the single
          hottest path in the program (85 MILLION reads in a Lemmings run, and the
-         port trap is the measured ceiling), and the dump is ~43 log_append calls
+         port trap is the measured ceiling), and the dump is ~43 LogAppend calls
          made from iio_out -- i.e. FILE I/O UNDER g_lock from inside the planar
          interpreter. I shipped both to the user in s69 by default; a build a person
          plays on must not carry an instrument that heavy. `cfg\pitlatch.flag`. */

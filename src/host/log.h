@@ -1,6 +1,6 @@
 /* log.h -- tiny no-CRT logging helpers for the host.
  *
- * zput/zhex/zdump build text into a caller-owned buffer; log_write/log_append flush
+ * LogPut/LogHex/LogDump build text into a caller-owned buffer; LogWrite/LogAppend flush
  * it to a file. Header-only static-inline (no shared state); the writers take the
  * log path explicitly rather than hard-coding it (the spike hard-coded
  * C:\ntvdmex\vdmhost.log). Ported from tools/vdmhost/vdmhost.c. No CRT -- only
@@ -12,59 +12,59 @@
 #include <windows.h>
 
 /* Append the ASCIIZ string s to p; return the new end (NUL-terminated). */
-static inline char *zput(char *p, const char *s) {
-    while (*s) *p++ = *s++;
-    *p = 0;
-    return p;
+static inline PSTR LogPut(PSTR cursor, PCSTR text) {
+    while (*text) *cursor++ = *text++;
+    *cursor = 0;
+    return cursor;
 }
 
 /* Append v as 8 lowercase hex digits. */
-static inline char *zhex(char *p, unsigned v) {
-    int i; char t[9]; t[8] = 0;
-    for (i = 7; i >= 0; --i) { t[i] = "0123456789abcdef"[v & 0xf]; v >>= 4; }
-    return zput(p, t);
+static inline PSTR LogHex(PSTR cursor, UINT value) {
+    INT index; CHAR digits[9]; digits[8] = 0;
+    for (index = 7; index >= 0; --index) { digits[index] = "0123456789abcdef"[value & 0xf]; value >>= 4; }
+    return LogPut(cursor, digits);
 }
 
 /* Append v as 2 lowercase hex digits. For byte-sized things -- interrupt numbers,
-   AH values, mode numbers -- where zhex's 8 digits turn a list into a wall. */
-static inline char *zhexb(char *p, unsigned v) {
-    char t[3]; t[0] = "0123456789abcdef"[(v >> 4) & 0xf];
-    t[1] = "0123456789abcdef"[v & 0xf]; t[2] = 0;
-    return zput(p, t);
+   AH values, mode numbers -- where LogHex's 8 digits turn a list into a wall. */
+static inline PSTR LogHexByte(PSTR cursor, UINT value) {
+    CHAR digits[3]; digits[0] = "0123456789abcdef"[(value >> 4) & 0xf];
+    digits[1] = "0123456789abcdef"[value & 0xf]; digits[2] = 0;
+    return LogPut(cursor, digits);
 }
 
 /* Append a raw hex dump of n bytes at b (space-separated, newline every 16). */
 /* Plain decimal. Everything else here is hex because it is describing machine state,
    where hex is the readable form -- but a SCREEN RESOLUTION is not machine state, and
    "0xa00 x 0x640" is not a thing anyone can check against their display settings. */
-static inline char *zdec(char *p, unsigned v) {
-    char t[11]; int n = 0;
-    if (!v) { *p++ = '0'; *p = 0; return p; }
-    while (v && n < 10) { t[n++] = (char)('0' + v % 10); v /= 10; }
-    while (n) *p++ = t[--n];
-    *p = 0;
-    return p;
+static inline PSTR LogDecimal(PSTR cursor, UINT value) {
+    CHAR digits[11]; INT count = 0;
+    if (!value) { *cursor++ = '0'; *cursor = 0; return cursor; }
+    while (value && count < 10) { digits[count++] = (CHAR)('0' + value % 10); value /= 10; }
+    while (count) *cursor++ = digits[--count];
+    *cursor = 0;
+    return cursor;
 }
 
-static inline char *zdump(char *p, const void *b, unsigned n) {
-    const unsigned char *q = (const unsigned char *)b; unsigned i;
-    for (i = 0; i < n; ++i) {
-        *p++ = "0123456789abcdef"[q[i] >> 4];
-        *p++ = "0123456789abcdef"[q[i] & 0xf];
-        *p++ = ((i & 0xf) == 0xf) ? '\n' : ' ';
+static inline PSTR LogDump(PSTR cursor, LPCVOID bytes, UINT length) {
+    const BYTE *source = (const BYTE *)bytes; UINT index;
+    for (index = 0; index < length; ++index) {
+        *cursor++ = "0123456789abcdef"[source[index] >> 4];
+        *cursor++ = "0123456789abcdef"[source[index] & 0xf];
+        *cursor++ = ((index & 0xf) == 0xf) ? '\n' : ' ';
     }
-    *p = 0;
-    return p;
+    *cursor = 0;
+    return cursor;
 }
 
 /* Runaway-log guard. An infinite guest loop that logs each serviced INT can grow
    the log without bound -- a headless pm32irq (an infinite mode-13h animation demo)
    flooded 148 MB, thrashed the disk, and wedged the SMB result-copy. Cap the total
-   appended bytes; past the cap log_append silently drops (writing one truncation
-   marker). log_write (the STAGE0 truncate that starts a fresh run) resets the count. */
+   appended bytes; past the cap LogAppend silently drops (writing one truncation
+   marker). LogWrite (the STAGE0 truncate that starts a fresh run) resets the count. */
 /* ── THE LOG'S PATH LIVES WITH THE LOG. (session 56) ─────────────────────────
      It used to be defined in main.c AFTER the headers that want it, so anything
-     included earlier -- wow32.h, for one -- could call log_append but had no
+     included earlier -- wow32.h, for one -- could call LogAppend but had no
      name for the file to pass it. Two copies of a path is how one of them goes
      stale; one definition, beside the function that opens it. */
 #ifndef LOG_PATH
@@ -80,16 +80,16 @@ static inline char *zdump(char *p, const void *b, unsigned n) {
                                                  omission. On a silent VDM teardown nothing runs
                                                  afterwards, so anything not already flushed is
                                                  gone: the ceiling has to clear the whole run. */
-static unsigned long g_log_total  = 0;
-static int           g_log_capped = 0;
+static unsigned long g_LogTotal  = 0;
+static INT           g_LogIsCapped = 0;
 
 /* ── ★★★★ ONE HANDLE, KEPT OPEN -- AND THIS IS A PERFORMANCE FIX, NOT TIDYING.
-     log_append used to CreateFile + WriteFile + CloseHandle on EVERY line. An
+     LogAppend used to CreateFile + WriteFile + CloseHandle on EVERY line. An
      open/close pair is two kernel transitions plus filesystem metadata work, and
      it is the dominant cost of a log line by a wide margin -- the payload is
      usually under a hundred bytes.
    ★ THIS PROJECT HAS ALREADY PAID FOR THIS ONCE. See host_irq_sink's note in
-     main.c: per-line log_append under the device lock cost SKYROADS 24% OF ITS
+     main.c: per-line LogAppend under the device lock cost SKYROADS 24% OF ITS
      DELIVERED TIMER TICKS and 34% of its I/O, and only a player's ear caught it.
      It came back on the WOW path, where every WOW32 BOP writes a multi-line
      block -- a Solitaire startup is 2.7 MB of log -- and the symptom this time
@@ -100,30 +100,30 @@ static int           g_log_capped = 0;
      still leaves the trace-so-far on disk, which is the property the whole
      debugging method rests on. The share flags are unchanged too, so the log is
      still readable from outside while a run is in progress.
-   ⚠ The handle is keyed by PATH: log_write truncates and starts a new run, so it
+   ⚠ The handle is keyed by PATH: LogWrite truncates and starts a new run, so it
      must drop the cached handle rather than keep appending to the old file.
    ⚠⚠ KEYED BY A COPY OF THE PATH, NOT BY THE CALLER'S POINTER (s73). Since s71 every
      path is composed at the call site into one of ntvdmex_path()'s SIXTEEN ring
      slots, so a cached pointer names whatever that slot holds NOW. Measured on the
      Win16 path, which alternates LOG_PATH with LDTLOG_PATH: the slot cached for
-     ldtprobe.log was later refilled with ntvdmhost.log's text, log_path_eq said
+     ldtprobe.log was later refilled with ntvdmhost.log's text, LogIsSamePath said
      "same file", and every STAGE line of the run went into ldtprobe.log while
      ntvdmhost.log stayed empty. A DOS run never showed it -- it uses one path. */
-static HANDLE g_log_h = INVALID_HANDLE_VALUE;
-static char   g_log_h_path_buf[MAX_PATH + 96];
-static const char *g_log_h_path = 0;        /* -> g_log_h_path_buf when a handle is open */
+static HANDLE g_LogHandle = INVALID_HANDLE_VALUE;
+static CHAR   g_LogHandlePathBuffer[MAX_PATH + 96];
+static PCSTR g_LogHandlePath = 0;        /* -> g_LogHandlePathBuffer when a handle is open */
 
-static inline int log_path_eq(const char *a, const char *b) {
-    if (a == b) return 1;
-    if (!a || !b) return 0;
-    while (*a && *a == *b) { ++a; ++b; }
-    return *a == *b;
+static inline INT LogIsSamePath(PCSTR first, PCSTR second) {
+    if (first == second) return 1;
+    if (!first || !second) return 0;
+    while (*first && *first == *second) { ++first; ++second; }
+    return *first == *second;
 }
 
-static inline void log_close(void) {
-    if (g_log_h != INVALID_HANDLE_VALUE) CloseHandle(g_log_h);
-    g_log_h = INVALID_HANDLE_VALUE;
-    g_log_h_path = 0;
+static inline VOID LogClose(VOID) {
+    if (g_LogHandle != INVALID_HANDLE_VALUE) CloseHandle(g_LogHandle);
+    g_LogHandle = INVALID_HANDLE_VALUE;
+    g_LogHandlePath = 0;
 }
 
 /* Overwrite `path` with [buf..end). Resets the runaway guard -- a new run starts here. */
@@ -134,17 +134,17 @@ static inline void log_close(void) {
      pointer in the host. Measured on the Win16 path: a 66-byte log and a host that
      died in under a second, with no way to see where. Now the bad call is reported,
      in the file, with both pointers, and the run goes on logging. */
-static inline int log_badrange(const char *path, const char *buf, const char *end) {
-    HANDLE h; char m[128], *q = m; DWORD wr; unsigned v; int k;
-    if (end >= buf && (unsigned long)(end - buf) < (16u << 20)) return 0;
-    for (k = 0; "\r\n[log: BAD RANGE from a caller: buf=0x"[k]; ++k) *q++ = "\r\n[log: BAD RANGE from a caller: buf=0x"[k];
-    for (v = (unsigned)(ULONG_PTR)buf, k = 28; k >= 0; k -= 4) *q++ = "0123456789abcdef"[(v >> k) & 15];
-    for (k = 0; " end=0x"[k]; ++k) *q++ = " end=0x"[k];
-    for (v = (unsigned)(ULONG_PTR)end, k = 28; k >= 0; k -= 4) *q++ = "0123456789abcdef"[(v >> k) & 15];
-    for (k = 0; " -- line dropped, run continues]\r\n"[k]; ++k) *q++ = " -- line dropped, run continues]\r\n"[k];
-    h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+static inline INT LogIsBadRange(PCSTR path, PCSTR buffer, PCSTR end) {
+    HANDLE file; CHAR message[128], *cursor = message; DWORD written; UINT value; INT index;
+    if (end >= buffer && (unsigned long)(end - buffer) < (16u << 20)) return 0;
+    for (index = 0; "\r\n[log: BAD RANGE from a caller: buf=0x"[index]; ++index) *cursor++ = "\r\n[log: BAD RANGE from a caller: buf=0x"[index];
+    for (value = (UINT)(ULONG_PTR)buffer, index = 28; index >= 0; index -= 4) *cursor++ = "0123456789abcdef"[(value >> index) & 15];
+    for (index = 0; " end=0x"[index]; ++index) *cursor++ = " end=0x"[index];
+    for (value = (UINT)(ULONG_PTR)end, index = 28; index >= 0; index -= 4) *cursor++ = "0123456789abcdef"[(value >> index) & 15];
+    for (index = 0; " -- line dropped, run continues]\r\n"[index]; ++index) *cursor++ = " -- line dropped, run continues]\r\n"[index];
+    file = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                     NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h != INVALID_HANDLE_VALUE) { WriteFile(h, m, (DWORD)(q - m), &wr, NULL); CloseHandle(h); }
+    if (file != INVALID_HANDLE_VALUE) { WriteFile(file, message, (DWORD)(cursor - message), &written, NULL); CloseHandle(file); }
     return 1;
 }
 
@@ -157,7 +157,7 @@ static inline int log_badrange(const char *path, const char *buf, const char *en
      there: ntvdmhost.log -> ntvdmhost-1.log -> ... -> ntvdmhost-LOG_KEEP.log, the
      oldest dropped. A field machine then holds the last LOG_KEEP+1 runs for someone to
      copy back by hand; nothing here can read them for us.
-   ⚠ ONCE PER PROCESS. log_write is called more than once in a run (the STAGE0 line,
+   ⚠ ONCE PER PROCESS. LogWrite is called more than once in a run (the STAGE0 line,
      then the preamble re-truncates), and a rotation on each would shift one run into
      several files. The flag is per-process, which is per-run.
    ⚠ MoveFileEx over an existing target: on a share the target can be open elsewhere
@@ -165,49 +165,49 @@ static inline int log_badrange(const char *path, const char *buf, const char *en
      simply overwrites as it always did -- rotation is best-effort and must never
      stop the log itself from being written. */
 #define LOG_KEEP 5
-static int g_log_rotated = 0;
+static INT g_LogIsRotated = 0;
 
 /* "<stem>.log" + k -> "<stem>-k.log" (a name without .log gets the suffix at its end). */
-static inline void log_rot_name(char *out, const char *path, int n, int stem, int k) {
-    int i; char *q = out;
-    for (i = 0; i < stem; ++i) *q++ = path[i];
-    *q++ = '-'; *q++ = (char)('0' + k);
-    for (i = stem; i < n; ++i) *q++ = path[i];
-    *q = 0;
+static inline VOID LogRotationName(PSTR out, PCSTR path, INT length, INT stem, INT number) {
+    INT index; PSTR cursor = out;
+    for (index = 0; index < stem; ++index) *cursor++ = path[index];
+    *cursor++ = '-'; *cursor++ = (CHAR)('0' + number);
+    for (index = stem; index < length; ++index) *cursor++ = path[index];
+    *cursor = 0;
 }
 
-static inline void log_rotate_once(const char *path) {
-    char from[MAX_PATH + 16], to[MAX_PATH + 16];
-    int n = 0, stem, k;
-    if (g_log_rotated) return;
-    g_log_rotated = 1;
-    while (path[n]) ++n;
-    if (n < 4 || n + 8 >= (int)sizeof from) return;
+static inline VOID LogRotateOnce(PCSTR path) {
+    CHAR from[MAX_PATH + 16], to[MAX_PATH + 16];
+    INT length = 0, stem, number;
+    if (g_LogIsRotated) return;
+    g_LogIsRotated = 1;
+    while (path[length]) ++length;
+    if (length < 4 || length + 8 >= (INT)sizeof from) return;
     if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) return;   /* nothing to keep */
-    stem = n;
-    if (path[n-4] == '.' && (path[n-3] | 0x20) == 'l' && (path[n-2] | 0x20) == 'o'
-        && (path[n-1] | 0x20) == 'g') stem = n - 4;
-    log_rot_name(to, path, n, stem, LOG_KEEP);
+    stem = length;
+    if (path[length-4] == '.' && (path[length-3] | 0x20) == 'l' && (path[length-2] | 0x20) == 'o'
+        && (path[length-1] | 0x20) == 'g') stem = length - 4;
+    LogRotationName(to, path, length, stem, LOG_KEEP);
     DeleteFileA(to);                                        /* the oldest falls off */
-    for (k = LOG_KEEP - 1; k >= 1; --k) {
-        log_rot_name(from, path, n, stem, k);
-        log_rot_name(to,   path, n, stem, k + 1);
+    for (number = LOG_KEEP - 1; number >= 1; --number) {
+        LogRotationName(from, path, length, stem, number);
+        LogRotationName(to,   path, length, stem, number + 1);
         MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING);
     }
-    log_rot_name(to, path, n, stem, 1);
+    LogRotationName(to, path, length, stem, 1);
     MoveFileExA(path, to, MOVEFILE_REPLACE_EXISTING);       /* last run -> -1 */
 }
 
-static inline void log_write(const char *path, const char *buf, const char *end) {
-    HANDLE h;
-    if (log_badrange(path, buf, end)) return;
-    log_rotate_once(path);
-    log_close();                       /* the cached handle names the OLD file */
-    h = CreateFileA(path, GENERIC_WRITE, 0, NULL,
+static inline VOID LogWrite(PCSTR path, PCSTR buffer, PCSTR end) {
+    HANDLE file;
+    if (LogIsBadRange(path, buffer, end)) return;
+    LogRotateOnce(path);
+    LogClose();                       /* the cached handle names the OLD file */
+    file = CreateFileA(path, GENERIC_WRITE, 0, NULL,
                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    g_log_total = (unsigned long)(end - buf); g_log_capped = 0;
-    if (h != INVALID_HANDLE_VALUE) {
-        DWORD wr; WriteFile(h, buf, (DWORD)(end - buf), &wr, NULL); CloseHandle(h);
+    g_LogTotal = (unsigned long)(end - buffer); g_LogIsCapped = 0;
+    if (file != INVALID_HANDLE_VALUE) {
+        DWORD written; WriteFile(file, buffer, (DWORD)(end - buffer), &written, NULL); CloseHandle(file);
     }
 }
 
@@ -223,40 +223,40 @@ static inline void log_write(const char *path, const char *buf, const char *end)
      rests on the trace, so this is opt-in and off by default. If it turns out to
      be the whole difference, the ANSWER is not to ship it on -- it is to stop
      writing a kilobyte per BOP in the first place. */
-static int g_log_quiet = 0;
+static INT g_LogIsQuiet = 0;
 
 /* ── ★ THE COST OF THE INSTRUMENT, MEASURED BY THE INSTRUMENT. ───────────────
      Two sessions have now blamed the trace for the guests feeling slow, and both
      times it was a guess. These are the numbers that settle it: ticks spent
-     inside log_append, and how many calls and bytes that was. QPC, not
+     inside LogAppend, and how many calls and bytes that was. QPC, not
      GetTickCount -- a 15 ms clock cannot see a call that costs microseconds, and
      summing 15 ms quanta over 100k calls is how a measurement invents a
      bottleneck. */
-static LONGLONG g_log_qpc = 0;
-static DWORD    g_log_calls = 0, g_log_bytes = 0;
+static LONGLONG g_LogQpc = 0;
+static DWORD    g_LogCalls = 0, g_LogBytes = 0;
 
-static inline void log_append(const char *path, const char *buf, const char *end) {
-    DWORD n = (DWORD)(end - buf);
-    HANDLE h;
-    LARGE_INTEGER t0, t1;
-    if (g_log_quiet) return;
-    if (log_badrange(path, buf, end)) return;
-    QueryPerformanceCounter(&t0);
-    ++g_log_calls; g_log_bytes += n;
-    if (g_log_capped) return;
-    if (g_log_total + n > LOG_MAX_BYTES) {
-        static const char mark[] = "\r\n[log capped at LOG_MAX_BYTES: runaway guest output suppressed]\r\n";
-        h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+static inline VOID LogAppend(PCSTR path, PCSTR buffer, PCSTR end) {
+    DWORD length = (DWORD)(end - buffer);
+    HANDLE file;
+    LARGE_INTEGER start, stop;
+    if (g_LogIsQuiet) return;
+    if (LogIsBadRange(path, buffer, end)) return;
+    QueryPerformanceCounter(&start);
+    ++g_LogCalls; g_LogBytes += length;
+    if (g_LogIsCapped) return;
+    if (g_LogTotal + length > LOG_MAX_BYTES) {
+        static const CHAR mark[] = "\r\n[log capped at LOG_MAX_BYTES: runaway guest output suppressed]\r\n";
+        file = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                         NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (h != INVALID_HANDLE_VALUE) {
-            DWORD wr; WriteFile(h, mark, (DWORD)(sizeof(mark) - 1), &wr, NULL); CloseHandle(h);
+        if (file != INVALID_HANDLE_VALUE) {
+            DWORD written; WriteFile(file, mark, (DWORD)(sizeof(mark) - 1), &written, NULL); CloseHandle(file);
         }
-        g_log_capped = 1;
+        g_LogIsCapped = 1;
         return;
     }
-    g_log_total += n;
-    if (g_log_h == INVALID_HANDLE_VALUE || !log_path_eq(g_log_h_path, path)) {
-        log_close();
+    g_LogTotal += length;
+    if (g_LogHandle == INVALID_HANDLE_VALUE || !LogIsSamePath(g_LogHandlePath, path)) {
+        LogClose();
         /* ⚠ FILE_SHARE_DELETE IS LOAD-BEARING NOW THAT THE HANDLE IS HELD OPEN.
              The harness deletes this log between runs (`del C:\ntvdmex\
              ntvdmhost.log` in wowlive.bat) to guarantee a fresh trace. With an
@@ -264,18 +264,18 @@ static inline void log_append(const char *path, const char *buf, const char *end
              a batch file -- and the next run reads as an enormous log full of
              the previous guest's output. That is the `stale artefact worse than
              missing` trap, arriving by a new route. */
-        h = CreateFileA(path, FILE_APPEND_DATA,
+        file = CreateFileA(path, FILE_APPEND_DATA,
                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                         NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (h == INVALID_HANDLE_VALUE) return;
-        {   unsigned i = 0;
-            while (path[i] && i < sizeof g_log_h_path_buf - 1) { g_log_h_path_buf[i] = path[i]; ++i; }
-            g_log_h_path_buf[i] = 0; }
-        g_log_h = h; g_log_h_path = g_log_h_path_buf;
+        if (file == INVALID_HANDLE_VALUE) return;
+        {   UINT index = 0;
+            while (path[index] && index < sizeof g_LogHandlePathBuffer - 1) { g_LogHandlePathBuffer[index] = path[index]; ++index; }
+            g_LogHandlePathBuffer[index] = 0; }
+        g_LogHandle = file; g_LogHandlePath = g_LogHandlePathBuffer;
     }
-    {   DWORD wr; WriteFile(g_log_h, buf, n, &wr, NULL); }
-    QueryPerformanceCounter(&t1);
-    g_log_qpc += t1.QuadPart - t0.QuadPart;
+    {   DWORD written; WriteFile(g_LogHandle, buffer, length, &written, NULL); }
+    QueryPerformanceCounter(&stop);
+    g_LogQpc += stop.QuadPart - start.QuadPart;
 }
 
 #endif /* HOST_LOG_H */

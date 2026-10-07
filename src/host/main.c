@@ -355,7 +355,7 @@ static void hostprof_dump(void);
    ⇒ A breakpoint on the loader's per-module return answers the same question and DOES
      work -- it reads the loader's return code per module directly. See the session-36
      log. */
-/* A log NOTHING truncates. WinMain has three log_write calls and each wipes the file;
+/* A log NOTHING truncates. WinMain has three LogWrite calls and each wipes the file;
    diagnostics that need to survive the whole run belong here instead. */
 #define LDTLOG_PATH   OUT_("ldtprobe.log")
 /* ── ★ THE WATCHDOG WRITES HERE, AND NOWHERE ELSE. ────────────────────────────────
@@ -364,7 +364,7 @@ static void hostprof_dump(void);
      explanation alive for every silence it reports. On its own path, an empty file
      means the THREAD did not run and a populated one means it did -- which is the
      distinction session 32 could not make and spent four rig runs failing to settle.
-     log_append opens with FILE_SHARE_READ|FILE_SHARE_WRITE and appends, so this was
+     LogAppend opens with FILE_SHARE_READ|FILE_SHARE_WRITE and appends, so this was
      never likely; "never likely" is not the same as ruled out. */
 #define WDLOG_PATH    OUT_("wdprobe.log")
 /* Dev-only: capture the exact OPL register stream a game sends, with timestamps,
@@ -789,7 +789,7 @@ static const char *ntvdmex_root(void)
      Duke3D failed its sound-IRQ test ("Playback failed, possibly due to an invalid or
      conflicting IRQ"), heaven7 and ZAR ran with time stopped, and nothing said why:
      the file's CONTENTS were the only clue. A caller may legitimately hold a few paths
-     at once (LOG_PATH inside log_append while building another), so keep a small ring,
+     at once (LOG_PATH inside LogAppend while building another), so keep a small ring,
      but never let another thread's path land in it. */
 #define NTVDMEX_PATH_SLOTS 8
 #define NTVDMEX_PATH_SLOT  (MAX_PATH + 96)
@@ -942,27 +942,27 @@ static void gus_report(void)
     unsigned k, running = 0;
     if (done) return;
     done = 1;
-    if (!g_gus_on) { q = zput(q, "STAGE2: GUS off (nogus.flag)\r\n"); log_append(LOG_PATH, b, q); return; }
+    if (!g_gus_on) { q = LogPut(q, "STAGE2: GUS off (nogus.flag)\r\n"); LogAppend(LOG_PATH, b, q); return; }
     for (k = 0; k < GUS_VOICES; ++k) if (!(g_gus.Voices[k].Control & 3)) ++running;
-    q = zput(q, "STAGE2: GUS io_w=");  q = zhex(q, g_gus.IoWrites);
-    q = zput(q, " io_r=");            q = zhex(q, g_gus.IoReads);
-    q = zput(q, " reset=0x");         q = zhexb(q, g_gus.ResetRegister);
-    q = zput(q, " dram_pokes=");      q = zhex(q, g_gus.DramPokes);
-    q = zput(q, " dram_peeks=");      q = zhex(q, g_gus.DramPeeks);
-    q = zput(q, " dma_uploads=");     q = zhex(q, g_gus.DmaUploads);
-    q = zput(q, " dma_bytes=");       q = zhex(q, g_gus.DmaBytes);
-    q = zput(q, " active=");          q = zhex(q, g_gus.ActiveVoices);
-    q = zput(q, " voice_starts=");    q = zhex(q, g_gus.VoiceStarts);
-    q = zput(q, " running_now=");     q = zhex(q, running);
-    q = zput(q, " irqs=");            q = zhex(q, g_gus.IrqsRaised);
-    q = zput(q, " fifo_reads=");      q = zhex(q, g_gus.FifoReads);
-    q = zput(q, " latch_irq/dma=0x"); q = zhexb(q, g_gus.IrqLatch);
-    q = zput(q, "/0x");               q = zhexb(q, g_gus.DmaLatch);
-    q = zput(q, " locked_out=");      q = zhex(q, g_gus.LatchLockedOut);
-    q = zput(q, " samples_out=");     q = zhex(q, g_gus.SamplesOut);
-    q = zput(q, " nonzero=");         q = zhex(q, g_gus.OutputNonZero);
-    q = zput(q, " peak=");            q = zhex(q, g_gus.OutputPeak);
-    q = zput(q, "\r\n"); log_append(LOG_PATH, b, q);
+    q = LogPut(q, "STAGE2: GUS io_w=");  q = LogHex(q, g_gus.IoWrites);
+    q = LogPut(q, " io_r=");            q = LogHex(q, g_gus.IoReads);
+    q = LogPut(q, " reset=0x");         q = LogHexByte(q, g_gus.ResetRegister);
+    q = LogPut(q, " dram_pokes=");      q = LogHex(q, g_gus.DramPokes);
+    q = LogPut(q, " dram_peeks=");      q = LogHex(q, g_gus.DramPeeks);
+    q = LogPut(q, " dma_uploads=");     q = LogHex(q, g_gus.DmaUploads);
+    q = LogPut(q, " dma_bytes=");       q = LogHex(q, g_gus.DmaBytes);
+    q = LogPut(q, " active=");          q = LogHex(q, g_gus.ActiveVoices);
+    q = LogPut(q, " voice_starts=");    q = LogHex(q, g_gus.VoiceStarts);
+    q = LogPut(q, " running_now=");     q = LogHex(q, running);
+    q = LogPut(q, " irqs=");            q = LogHex(q, g_gus.IrqsRaised);
+    q = LogPut(q, " fifo_reads=");      q = LogHex(q, g_gus.FifoReads);
+    q = LogPut(q, " latch_irq/dma=0x"); q = LogHexByte(q, g_gus.IrqLatch);
+    q = LogPut(q, "/0x");               q = LogHexByte(q, g_gus.DmaLatch);
+    q = LogPut(q, " locked_out=");      q = LogHex(q, g_gus.LatchLockedOut);
+    q = LogPut(q, " samples_out=");     q = LogHex(q, g_gus.SamplesOut);
+    q = LogPut(q, " nonzero=");         q = LogHex(q, g_gus.OutputNonZero);
+    q = LogPut(q, " peak=");            q = LogHex(q, g_gus.OutputPeak);
+    q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, b, q);
 }
 
 /* Does a newline-separated NAME=VALUE block already set `name` (case-insensitive, at
@@ -1085,7 +1085,7 @@ static DWORD        g_hma_err;   /* why not, when g_hma == 0                    
    reaches as FFFF:0010 because in this design a guest linear IS a host VA.
    ⚠ Called ONCE and EARLY so the answer can ride the STAGE0 preamble, which is a
      single buffered flush. Logged as its own later append it simply VANISHED --
-     log_append caches one handle per path with no lock, so a concurrent writer can
+     LogAppend caches one handle per path with no lock, so a concurrent writer can
      lose or misplace a line. Chasing that cost a cycle here, and the same defect
      had already put a stray SysVars line at byte 0 of the log. */
 static DWORD g_hma_state, g_hma_prot;   /* what was already at 0x100000          */
@@ -2235,26 +2235,26 @@ static int exec_windows(DOS_MACHINE *m, int kind, unsigned subsys, char **pp)
     int n = tail[0] > 126 ? 126 : tail[0], k, wait = (kind == DOS_EXE_PE && subsys == 3);
     char *q = cmd;
     DWORD rc = 0;
-    *q++ = '"'; q = zput(q, m->ExecPath); *q++ = '"';
+    *q++ = '"'; q = LogPut(q, m->ExecPath); *q++ = '"';
     for (k = 0; k < n && tail[1 + k] != 0x0D; ++k) *q++ = (char)tail[1 + k];
     *q = 0;
     for (k = 0; k < (int)sizeof si; ++k) ((char *)&si)[k] = 0;
     si.cb = sizeof si;
     if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE,
                         wait ? CREATE_NEW_CONSOLE : 0, NULL, NULL, &si, &pi)) {
-        *pp = zput(*pp, "  EXEC: Windows would not start it (error 0x");
-        *pp = zhex(*pp, GetLastError());
-        *pp = zput(*pp, ") -- running its MZ stub, as DOS would\r\n");
+        *pp = LogPut(*pp, "  EXEC: Windows would not start it (error 0x");
+        *pp = LogHex(*pp, GetLastError());
+        *pp = LogPut(*pp, ") -- running its MZ stub, as DOS would\r\n");
         return 0;
     }
-    *pp = zput(*pp, kind == DOS_EXE_NE ? "  EXEC: a Windows (NE) program -> handed to Windows/WOW"
+    *pp = LogPut(*pp, kind == DOS_EXE_NE ? "  EXEC: a Windows (NE) program -> handed to Windows/WOW"
                                        : "  EXEC: a Win32 (PE) program -> handed to Windows");
-    *pp = zput(*pp, wait ? ", console: waiting for it\r\n" : ", started, not waited for\r\n");
+    *pp = LogPut(*pp, wait ? ", console: waiting for it\r\n" : ", started, not waited for\r\n");
     if (wait) {
         while (WaitForSingleObject(pi.hProcess, 100) == WAIT_TIMEOUT)
             if (!g_running || g_wound_down) break;       /* the host is closing */
         if (!GetExitCodeProcess(pi.hProcess, &rc) || rc == STILL_ACTIVE) rc = 0;
-        *pp = zput(*pp, "  EXEC: it exited, rc=0x"); *pp = zhex(*pp, rc); *pp = zput(*pp, "\r\n");
+        *pp = LogPut(*pp, "  EXEC: it exited, rc=0x"); *pp = LogHex(*pp, rc); *pp = LogPut(*pp, "\r\n");
     }
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
     m->ChildReturnCode = (uint16_t)(rc & 0xFF);                 /* AH=4Dh: AH=0 normal end */
@@ -2274,10 +2274,10 @@ static char *exec_begin(DOS_MACHINE *m, volatile BYTE *tib, char *p)
     pfl = (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
            + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
 
-    p = zput(p, "  EXEC: \""); p = zput(p, m->ExecPath); p = zput(p, "\"\r\n");
+    p = LogPut(p, "  EXEC: \""); p = LogPut(p, m->ExecPath); p = LogPut(p, "\"\r\n");
 
     if (d >= EXEC_MAX_DEPTH) {
-        p = zput(p, "  EXEC: nesting limit reached\r\n");
+        p = LogPut(p, "  EXEC: nesting limit reached\r\n");
         VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | 8;
         *pfl |= 1; VDM_REG(tib, VTIB_EIP) += 3;
         return p;
@@ -2285,7 +2285,7 @@ static char *exec_begin(DOS_MACHINE *m, volatile BYTE *tib, char *p)
     hf = CreateFileA(m->ExecPath, GENERIC_READ, FILE_SHARE_READ, NULL,
                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hf == INVALID_HANDLE_VALUE) {
-        p = zput(p, "  EXEC: file not found\r\n");
+        p = LogPut(p, "  EXEC: file not found\r\n");
         VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | 2;
         *pfl |= 1; VDM_REG(tib, VTIB_EIP) += 3;
         return p;
@@ -2315,9 +2315,9 @@ static char *exec_begin(DOS_MACHINE *m, volatile BYTE *tib, char *p)
     if (m->ExecMode == 0x03) {
         uint32_t n = DosLoadOverlay(NULL, exec_filebuf, nread,
                                       m->ExecOverlaySegment, m->ExecOverlayRelocation);
-        p = zput(p, "  EXEC: AL=03 overlay -> seg=0x"); p = zhex(p, m->ExecOverlaySegment);
-        p = zput(p, " reloc=0x"); p = zhex(p, m->ExecOverlayRelocation);
-        p = zput(p, " bytes=0x"); p = zhex(p, n); p = zput(p, "\r\n");
+        p = LogPut(p, "  EXEC: AL=03 overlay -> seg=0x"); p = LogHex(p, m->ExecOverlaySegment);
+        p = LogPut(p, " reloc=0x"); p = LogHex(p, m->ExecOverlayRelocation);
+        p = LogPut(p, " bytes=0x"); p = LogHex(p, n); p = LogPut(p, "\r\n");
         VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
         *pfl &= (WORD)~1;
         VDM_REG(tib, VTIB_EIP) += 3;
@@ -2372,15 +2372,15 @@ static char *exec_begin(DOS_MACHINE *m, volatile BYTE *tib, char *p)
             if (sl2 && sl2 < sizeof scwd && bs > ename
                 && (DWORD)(bs - ename - 1) == sl2 && CompareStringA(LOCALE_SYSTEM_DEFAULT,
                        NORM_IGNORECASE, ename, (int)sl2, scwd, (int)sl2) == CSTR_EQUAL) {
-                p = zput(p, "  EXEC: argv[0] is 64+ chars -- past DOS/4GW's buffer; the bare name ["); 
-                p = zput(p, bs); p = zput(p, "] (it is in the current directory)\r\n");
+                p = LogPut(p, "  EXEC: argv[0] is 64+ chars -- past DOS/4GW's buffer; the bare name ["); 
+                p = LogPut(p, bs); p = LogPut(p, "] (it is in the current directory)\r\n");
                 ename = bs;
                 for (nlen = 0; ename[nlen]; ++nlen) ;
             }
         }
         total = slen + 2 + nlen + 1;
         if (DosMcbAllocate(NULL, m->FirstMcb, (uint16_t)((total + 15) >> 4), &envblk, &maxpara) != 0) {
-            p = zput(p, "  EXEC: no memory for the environment copy\r\n");
+            p = LogPut(p, "  EXEC: no memory for the environment copy\r\n");
             VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | 8;
             *pfl |= 1; VDM_REG(tib, VTIB_EIP) += 3;
             return p;
@@ -2390,10 +2390,10 @@ static char *exec_begin(DOS_MACHINE *m, volatile BYTE *tib, char *p)
         ce[slen] = 1; ce[slen + 1] = 0;             /* count word 0001 */
         for (k = 0; k <= nlen; ++k) ce[slen + 2 + k] = (BYTE)ename[k];
         envseg = envblk;
-        p = zput(p, "  EXEC: env copied from 0x"); p = zhex(p, penv);
-        p = zput(p, " to 0x"); p = zhex(p, envblk);
-        p = zput(p, " ("); p = zhex(p, slen); p = zput(p, " bytes of strings) + name [");
-        p = zput(p, ename); p = zput(p, "]\r\n");
+        p = LogPut(p, "  EXEC: env copied from 0x"); p = LogHex(p, penv);
+        p = LogPut(p, " to 0x"); p = LogHex(p, envblk);
+        p = LogPut(p, " ("); p = LogHex(p, slen); p = LogPut(p, " bytes of strings) + name [");
+        p = LogPut(p, ename); p = LogPut(p, "]\r\n");
     }
 
     /* ── HOW MUCH: THE HEADER DECIDES, NOT "EVERYTHING". (GH #255) ─────────────
@@ -2407,12 +2407,12 @@ static char *exec_begin(DOS_MACHINE *m, volatile BYTE *tib, char *p)
     if (DosMcbAllocate(NULL, m->FirstMcb, 0xFFFF, &child, &maxpara) == 0) maxpara = 0;
     want = 0;
     if (maxpara && DosExecSize(exec_filebuf, nread, maxpara, &want, &load_high) != 0) {
-        p = zput(p, "  EXEC: e_minalloc does not fit -- largest block 0x"); p = zhex(p, maxpara);
-        p = zput(p, " paras -> error 8, not loaded\r\n");
+        p = LogPut(p, "  EXEC: e_minalloc does not fit -- largest block 0x"); p = LogHex(p, maxpara);
+        p = LogPut(p, " paras -> error 8, not loaded\r\n");
         want = 0;
     }
     if (!want || DosMcbAllocate(NULL, m->FirstMcb, want, &child, &maxpara) != 0) {
-        p = zput(p, "  EXEC: no memory\r\n");
+        p = LogPut(p, "  EXEC: no memory\r\n");
         if (envblk) DosMcbFree(NULL, envblk);
         VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | 8;
         *pfl |= 1; VDM_REG(tib, VTIB_EIP) += 3;
@@ -2465,7 +2465,7 @@ static char *exec_begin(DOS_MACHINE *m, volatile BYTE *tib, char *p)
                     && CompareStringA(LOCALE_SYSTEM_DEFAULT, NORM_IGNORECASE,
                                       m->ExecPath, (int)dl, ssd, (int)n2) == CSTR_EQUAL))) {
             DosInt21SetShellPsp(m, child, 1);
-            p = zput(p, "  EXEC: an XP DOS tool (Windows' system directory) -- told DOS 5.00, as SETVER would\r\n");
+            p = LogPut(p, "  EXEC: an XP DOS tool (Windows' system directory) -- told DOS 5.00, as SETVER would\r\n");
         } }
     /* The child gets the vectors as they stand NOW, so whatever it installs is
        unwound to the parent's when it exits -- that is the whole contract, and it
@@ -2483,8 +2483,8 @@ static char *exec_begin(DOS_MACHINE *m, volatile BYTE *tib, char *p)
     /* Load high puts the image at the top of the block; the PSP stays at the bottom. */
     img = DosLoadImageAt(NULL, exec_filebuf, nread, child,
                       load_high ? (uint16_t)(child + want - DosImageParagraphs(exec_filebuf, nread)) : 0);
-    if (load_high) { p = zput(p, "  EXEC: e_minalloc = e_maxalloc = 0 -> loaded HIGH at 0x");
-                     p = zhex(p, img.CodeSegment); p = zput(p, "\r\n"); }
+    if (load_high) { p = LogPut(p, "  EXEC: e_minalloc = e_maxalloc = 0 -> loaded HIGH at 0x");
+                     p = LogHex(p, img.CodeSegment); p = LogPut(p, "\r\n"); }
 
     if (m->ExecMode == 0x01) {
         /* ── LOAD WITHOUT EXECUTING. DOS builds the PSP and loads the image, then
@@ -2507,10 +2507,10 @@ static char *exec_begin(DOS_MACHINE *m, volatile BYTE *tib, char *p)
         pbo[0x10] = (BYTE)(img.StackSegment & 0xFF);     pbo[0x11] = (BYTE)(img.StackSegment >> 8);
         pbo[0x12] = (BYTE)(img.InstructionPointer & 0xFF);     pbo[0x13] = (BYTE)(img.InstructionPointer >> 8);
         pbo[0x14] = (BYTE)(img.CodeSegment & 0xFF);     pbo[0x15] = (BYTE)(img.CodeSegment >> 8);
-        p = zput(p, "  EXEC: AL=01 loaded, not run -- entry=");
-        p = zhex(p, img.CodeSegment); p = zput(p, ":"); p = zhex(p, img.InstructionPointer);
-        p = zput(p, " stack="); p = zhex(p, img.StackSegment); p = zput(p, ":");
-        p = zhex(p, sp01); p = zput(p, " (block KEPT)\r\n");
+        p = LogPut(p, "  EXEC: AL=01 loaded, not run -- entry=");
+        p = LogHex(p, img.CodeSegment); p = LogPut(p, ":"); p = LogHex(p, img.InstructionPointer);
+        p = LogPut(p, " stack="); p = LogHex(p, img.StackSegment); p = LogPut(p, ":");
+        p = LogHex(p, sp01); p = LogPut(p, " (block KEPT)\r\n");
         /* #165: AND THE CHILD IS NOW THE CURRENT PROCESS. Measured (p_4b05): after
            4B01h, AH=62h returns the child's PSP on 6.22, DOSBox-X and PCem alike --
            which is why a loader puts its own back with AH=50h, and why 4B05h then
@@ -2549,11 +2549,11 @@ static char *exec_begin(DOS_MACHINE *m, volatile BYTE *tib, char *p)
        IF in the VTIB after an event exit IS the virtual flag (s81, VME), so setting it
        here is what the child sees. TF off too: a trace flag must not follow into it. */
     VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & ~0x100u) | 0x200u;
-    p = zput(p, "  EXEC: child at seg=0x"); p = zhex(p, child);
-    p = zput(p, " entry="); p = zhex(p, img.CodeSegment); p = zput(p, ":"); p = zhex(p, img.InstructionPointer);
-    p = zput(p, img.IsExe ? " (EXE)" : " (COM)");
-    p = zput(p, " depth="); p = zhexb(p, (unsigned)g_exec_depth);
-    p = zput(p, "\r\n");
+    p = LogPut(p, "  EXEC: child at seg=0x"); p = LogHex(p, child);
+    p = LogPut(p, " entry="); p = LogHex(p, img.CodeSegment); p = LogPut(p, ":"); p = LogHex(p, img.InstructionPointer);
+    p = LogPut(p, img.IsExe ? " (EXE)" : " (COM)");
+    p = LogPut(p, " depth="); p = LogHexByte(p, (unsigned)g_exec_depth);
+    p = LogPut(p, "\r\n");
     return p;
 }
 /* ── ★ GH #34: INT 24h, THE CRITICAL-ERROR HANDLER. ───────────────────────────────
@@ -2604,12 +2604,12 @@ static void crit_raise(DOS_MACHINE *m, volatile BYTE *tib, char **pp)
     volatile BYTE *sda = (volatile BYTE *)(((DWORD)DOS_SDA_SEG << 4) + DOS_SDA_OFF);
     g_crit.ah = m->CritAh;
     g_crit.fn = (BYTE)(g_crit.eax >> 8);
-    *pp = zput(*pp, "  INT24 raised: fn=0x"); *pp = zhexb(*pp, g_crit.fn);
-    *pp = zput(*pp, " AH=0x"); *pp = zhexb(*pp, m->CritAh);
-    *pp = zput(*pp, " drive="); **pp = (char)('A' + m->CritAl); ++*pp;
-    *pp = zput(*pp, ": DI=0x"); *pp = zhexb(*pp, m->CritCode);
-    *pp = zput(*pp, " -> the guest's handler at 0x"); *pp = zhex(*pp, *(volatile WORD *)(0x24 * 4 + 2));
-    *pp = zput(*pp, ":0x"); *pp = zhex(*pp, *(volatile WORD *)(0x24 * 4)); *pp = zput(*pp, "\r\n");
+    *pp = LogPut(*pp, "  INT24 raised: fn=0x"); *pp = LogHexByte(*pp, g_crit.fn);
+    *pp = LogPut(*pp, " AH=0x"); *pp = LogHexByte(*pp, m->CritAh);
+    *pp = LogPut(*pp, " drive="); **pp = (char)('A' + m->CritAl); ++*pp;
+    *pp = LogPut(*pp, ": DI=0x"); *pp = LogHexByte(*pp, m->CritCode);
+    *pp = LogPut(*pp, " -> the guest's handler at 0x"); *pp = LogHex(*pp, *(volatile WORD *)(0x24 * 4 + 2));
+    *pp = LogPut(*pp, ":0x"); *pp = LogHex(*pp, *(volatile WORD *)(0x24 * 4)); *pp = LogPut(*pp, "\r\n");
     VDM_SET16(tib, VTIB_EAX, ((WORD)m->CritAh << 8) | m->CritAl);
     VDM_SET16(tib, VTIB_EDI, m->CritCode);
     /* BP:SI = the device header -- the one our DPBs name, which since #48 is the BLOCK
@@ -2637,10 +2637,10 @@ static int crit_return(DOS_MACHINE *m, volatile BYTE *tib, char **pp)
     if (act == 0 && !(ah & 0x20)) act = 3;               /* ignore not allowed -> fail */
     if (act == 1 && !(ah & 0x10)) act = 3;               /* retry not allowed  -> fail */
     if (act == 3 && !(ah & 0x08)) act = 2;               /* fail not allowed   -> abort */
-    *pp = zput(*pp, "  INT24 answered AL=0x"); *pp = zhexb(*pp, said);
-    *pp = zput(*pp, act == 0 ? " -> IGNORE" : act == 1 ? " -> RETRY"
+    *pp = LogPut(*pp, "  INT24 answered AL=0x"); *pp = LogHexByte(*pp, said);
+    *pp = LogPut(*pp, act == 0 ? " -> IGNORE" : act == 1 ? " -> RETRY"
                   : act == 2 ? " -> ABORT" : " -> FAIL");
-    *pp = zput(*pp, "\r\n");
+    *pp = LogPut(*pp, "\r\n");
     /* the INT 21h call's own registers, and CS:IP back ON its BOP */
     VDM_REG(tib, VTIB_EAX) = g_crit.eax; VDM_REG(tib, VTIB_EBX) = g_crit.ebx;
     VDM_REG(tib, VTIB_ECX) = g_crit.ecx; VDM_REG(tib, VTIB_EDX) = g_crit.edx;
@@ -2673,8 +2673,8 @@ static int crit_return(DOS_MACHINE *m, volatile BYTE *tib, char **pp)
         if (pos != INVALID_SET_FILE_POINTER) SetFilePointer(fh, (LONG)n, NULL, FILE_CURRENT);
         VDM_SET16(tib, VTIB_EAX, n);
         *pfl &= (WORD)~1u;
-        *pp = zput(*pp, "  INT24 IGNORE: the call reports 0x"); *pp = zhex(*pp, n);
-        *pp = zput(*pp, " bytes, CF=0\r\n");
+        *pp = LogPut(*pp, "  INT24 IGNORE: the call reports 0x"); *pp = LogHex(*pp, n);
+        *pp = LogPut(*pp, " bytes, CF=0\r\n");
         VDM_REG(tib, VTIB_EIP) += 3;                     /* past the BOP -> the IRET */
         return 0;
     }
@@ -2700,10 +2700,10 @@ static int pm_rw_hw_fail(DOS_MACHINE *m, volatile BYTE *tib, BYTE fn, DWORD we, 
     VDM_REG(tib, VTIB_EFLAGS) |= 1u;
     VDM_SET16(tib, VTIB_EAX, DosCritFailAx(fn, (BYTE)(de - 19)));
     m->LastError = DOS_ERR_FAIL_I24;
-    *pp = zput(*pp, "  INT24 not raised (DPMI client): AH=0x"); *pp = zhexb(*pp, fn);
-    *pp = zput(*pp, " error 0x"); *pp = zhexb(*pp, de);
-    *pp = zput(*pp, " answered as FAIL -> AX=0x"); *pp = zhex(*pp, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-    *pp = zput(*pp, ", 59h=53h\r\n");
+    *pp = LogPut(*pp, "  INT24 not raised (DPMI client): AH=0x"); *pp = LogHexByte(*pp, fn);
+    *pp = LogPut(*pp, " error 0x"); *pp = LogHexByte(*pp, de);
+    *pp = LogPut(*pp, " answered as FAIL -> AX=0x"); *pp = LogHex(*pp, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+    *pp = LogPut(*pp, ", 59h=53h\r\n");
     return 1;
 }
 
@@ -2923,10 +2923,10 @@ static void vdd_log_line(const char *msg)
 {
     char lb[512], *q = lb;
     unsigned i;
-    q = zput(q, "  VDD: ");
+    q = LogPut(q, "  VDD: ");
     for (i = 0; msg && msg[i] && i < 400; ++i) *q++ = msg[i];
-    q = zput(q, "\r\n");
-    log_append(LOG_PATH, lb, q); serial_out(lb, q);
+    q = LogPut(q, "\r\n");
+    LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
 }
 
 static const ntvdmex_vdd_api g_vdd_api = {
@@ -2967,45 +2967,45 @@ static void vdd_load_third_party(void)
             NtvdmexVddInitFn fn;
             int rc;
             if (!m) {
-                q = zput(q, "  VDD: LoadLibrary FAILED err=0x"); q = zhex(q, GetLastError());
-                q = zput(q, " for ["); q = zput(q, path); q = zput(q, "]\r\n");
-                log_append(LOG_PATH, lb, q); serial_out(lb, q);
+                q = LogPut(q, "  VDD: LoadLibrary FAILED err=0x"); q = LogHex(q, GetLastError());
+                q = LogPut(q, " for ["); q = LogPut(q, path); q = LogPut(q, "]\r\n");
+                LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
                 continue;
             }
             fn = (NtvdmexVddInitFn)(ULONG_PTR)GetProcAddress(m, NTVDMEX_VDD_INIT_NAME);
             if (!fn) {
-                q = zput(q, "  VDD: ["); q = zput(q, path);
-                q = zput(q, "] loaded but exports no "); q = zput(q, NTVDMEX_VDD_INIT_NAME);
-                q = zput(q, " -- not a VDD; unloaded\r\n");
-                log_append(LOG_PATH, lb, q); serial_out(lb, q);
+                q = LogPut(q, "  VDD: ["); q = LogPut(q, path);
+                q = LogPut(q, "] loaded but exports no "); q = LogPut(q, NTVDMEX_VDD_INIT_NAME);
+                q = LogPut(q, " -- not a VDD; unloaded\r\n");
+                LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
                 FreeLibrary(m);
                 continue;
             }
             rc = fn(&g_vdd_api, (ntvdmex_vdd_bus *)&g_bus);
             q = lb;
-            q = zput(q, "  VDD: ["); q = zput(q, path);
-            if (rc == 0) { q = zput(q, "] initialised\r\n"); ++loaded; }
+            q = LogPut(q, "  VDD: ["); q = LogPut(q, path);
+            if (rc == 0) { q = LogPut(q, "] initialised\r\n"); ++loaded; }
             else {
                 /* Unload a driver that refused. A half-armed device the guest
                    can still reach is worse than no device: it answers. */
-                q = zput(q, "] NtvdmexVddInit returned 0x"); q = zhex(q, (DWORD)rc);
-                q = zput(q, " -- REFUSED, unloading\r\n");
+                q = LogPut(q, "] NtvdmexVddInit returned 0x"); q = LogHex(q, (DWORD)rc);
+                q = LogPut(q, " -- REFUSED, unloading\r\n");
                 FreeLibrary(m);
             }
-            log_append(LOG_PATH, lb, q); serial_out(lb, q);
+            LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
         }
     }
     {   char lb[160], *q = lb;
-        q = zput(q, "  VDD: third-party list ["); q = zput(q, VDDLIST_PATH);
-        q = zput(q, "] -- 0x"); q = zhex(q, n); q = zput(q, " entr(ies), 0x");
-        q = zhex(q, loaded); q = zput(q, " initialised\r\n");
-        log_append(LOG_PATH, lb, q); serial_out(lb, q); }
+        q = LogPut(q, "  VDD: third-party list ["); q = LogPut(q, VDDLIST_PATH);
+        q = LogPut(q, "] -- 0x"); q = LogHex(q, n); q = LogPut(q, " entr(ies), 0x");
+        q = LogHex(q, loaded); q = LogPut(q, " initialised\r\n");
+        LogAppend(LOG_PATH, lb, q); serial_out(lb, q); }
 }
 
 /* ── THE WOW32 BOP BLOCK'S ONLY WAY OUT. (session 56) ────────────────────────
-     Identical to log_append + serial_out, except that it drops the buffer when
+     Identical to LogAppend + serial_out, except that it drops the buffer when
      the current call is a folded repeat. Deliberately NOT a change to
-     log_append itself, and deliberately used only by the sites inside the WOW32
+     LogAppend itself, and deliberately used only by the sites inside the WOW32
      BOP handler: g_wowfold_mute stays set for as long as a run continues, so a
      global mute would also swallow anything else logged BETWEEN those BOPs --
      a fault, a PM interrupt, an LDT sync -- and hiding one of those to save disk
@@ -3031,11 +3031,11 @@ static void wowlog_flush(char *base, char **pp)
         /* `ls` is now the start of the final line. If the block is one line
            already there is nothing to save, and emitting it is correct. */
         ++g_wowfold_dropped;
-        log_append(LOG_PATH, ls, e); serial_out(ls, e);
+        LogAppend(LOG_PATH, ls, e); serial_out(ls, e);
         *pp = base;
         return;
     }
-    log_append(LOG_PATH, base, e); serial_out(base, e); *pp = base;
+    LogAppend(LOG_PATH, base, e); serial_out(base, e); *pp = base;
 }
 /* One printer, reachable two ways. INT 17h and the 0x378 data/strobe registers
    are the SAME LPT1 -- a guest may use either, and some use both in one run --
@@ -3052,10 +3052,10 @@ static int lpt_spool_put(BYTE c)
         if (g_lpt == INVALID_HANDLE_VALUE) {
             char lb[128], *lq = lb;
             g_lpt_failed = 1;
-            lq = zput(lq, "  LPT1 spool OPEN FAILED err=0x");
-            lq = zhex(lq, GetLastError());
-            lq = zput(lq, " -> reporting I/O error, not ready\r\n");
-            log_append(LOG_PATH, lb, lq); serial_out(lb, lq);
+            lq = LogPut(lq, "  LPT1 spool OPEN FAILED err=0x");
+            lq = LogHex(lq, GetLastError());
+            lq = LogPut(lq, " -> reporting I/O error, not ready\r\n");
+            LogAppend(LOG_PATH, lb, lq); serial_out(lb, lq);
             return 0;
         }
     }
@@ -3514,7 +3514,7 @@ static int irq0_can_deliver(void)
                 static const char msg[] = "IRQ0-ISR: in service past the timeout 3x -- this guest "
                     "does not EOI its timer; auto-EOI fallback engaged for the rest of the run\r\n";
                 g_irq0_autoeoi = 1;
-                log_append(LOG_PATH, msg, msg + sizeof(msg) - 1);
+                LogAppend(LOG_PATH, msg, msg + sizeof(msg) - 1);
             }
             return VddPicCanDeliver(&g_pic, 0);
         }
@@ -3531,12 +3531,12 @@ static int irq0_can_deliver(void)
             if (ms >= (s_step + 1) * 50u && s_lines < 8) {
                 char b[160], *q = b;
                 s_step = ms / 50u; ++s_lines;
-                q = zput(q, "IRQ0-ISR-LONG in service ms=");  q = zdec(q, ms);
-                q = zput(q, " guest cs:ip=0x"); q = zhex(q, VDM_REG(g_tib_dbg, VTIB_CS) & 0xFFFF);
-                q = zput(q, ":0x");              q = zhex(q, VDM_REG(g_tib_dbg, VTIB_EIP) & 0xFFFF);
-                q = zput(q, " pending=");        q = zdec(q, (DWORD)g_irq0_pending);
-                q = zput(q, "\r\n");
-                log_append(LOG_PATH, b, q);
+                q = LogPut(q, "IRQ0-ISR-LONG in service ms=");  q = LogDecimal(q, ms);
+                q = LogPut(q, " guest cs:ip=0x"); q = LogHex(q, VDM_REG(g_tib_dbg, VTIB_CS) & 0xFFFF);
+                q = LogPut(q, ":0x");              q = LogHex(q, VDM_REG(g_tib_dbg, VTIB_EIP) & 0xFFFF);
+                q = LogPut(q, " pending=");        q = LogDecimal(q, (DWORD)g_irq0_pending);
+                q = LogPut(q, "\r\n");
+                LogAppend(LOG_PATH, b, q);
             }
         }
     }
@@ -3881,7 +3881,7 @@ static void async_early_bail(unsigned irq, unsigned why)
     if (irq == 0 && why == 20) ++g_irq0_nie_ct;
     /* ── ⚠⚠ THE CAP WAS 4000 AND IT COST SKYROADS A FIFTH OF ITS TIMER. ──────────────
          This log is reached from host_irq_sink, which runs inside host_pit_sync --
-         **while it holds g_lock**. Every line is a log_append (open/write/close) plus a
+         **while it holds g_lock**. Every line is a LogAppend (open/write/close) plus a
          serial_out, so a bail that fires at the PIT's rate is FILE I/O UNDER THE DEVICE
          LOCK at that rate. Session 23 raised the cap from 40 to 4000 and justified it on
          LOG SIZE ("~900KB, well inside LOG_MAX_BYTES") against a Doom run, where the
@@ -3899,10 +3899,10 @@ static void async_early_bail(unsigned irq, unsigned why)
          the early ones are) and let the histogram carry the totals. That is what the
          histogram was for; this is the first thing it pays for. */
     if (g_async_early_bail_logged++ >= ASYNC_EARLY_BAIL_LOG_MAX) return;
-    pq = zput(pq, "ASYNC-EARLY bail irq="); pq = zhexb(pq, irq);
-    pq = zput(pq, " why="); pq = zhex(pq, (DWORD)why);
-    pq = zput(pq, " ms="); pq = zhex(pq, GetTickCount());
-    pq = zput(pq, "\r\n"); log_append(LOG_PATH, pb, pq); serial_out(pb, pq);
+    pq = LogPut(pq, "ASYNC-EARLY bail irq="); pq = LogHexByte(pq, irq);
+    pq = LogPut(pq, " why="); pq = LogHex(pq, (DWORD)why);
+    pq = LogPut(pq, " ms="); pq = LogHex(pq, GetTickCount());
+    pq = LogPut(pq, "\r\n"); LogAppend(LOG_PATH, pb, pq); serial_out(pb, pq);
 }
 /* Paired with the InterlockedCompareExchange below; every path that resumed the guest
    must drop ownership. See g_async_ctxwr. */
@@ -4047,16 +4047,16 @@ static int async_inject_irq(unsigned irq)
         DWORD sblin = dpmi_sel_base((WORD)cs) + cx.Eip;
         ResumeThread(g_hcpu);                    /* NEVER log while the guest is held */
         ASYNC_CTX_RELEASE();
-        sq = zput(sq, "ASYNC-SITE #"); sq = zhex(sq, (DWORD)g_async_nsite);
-        sq = zput(sq, " irq="); sq = zhex(sq, irq);
-        sq = zput(sq, " cs:eip=0x"); sq = zhex(sq, cs);
-        sq = zput(sq, ":0x"); sq = zhex(sq, cx.Eip);
-        sq = zput(sq, " lin=0x"); sq = zhex(sq, sblin);
-        sq = zput(sq, " ss:esp=0x"); sq = zhex(sq, cx.SegSs & 0xFFFF);
-        sq = zput(sq, ":0x"); sq = zhex(sq, cx.Esp);
-        sq = zput(sq, " efl=0x"); sq = zhex(sq, efl);
-        sq = zput(sq, " ms="); sq = zhex(sq, GetTickCount());
-        sq = zput(sq, "\r\n"); log_append(LOG_PATH, sb2, sq); serial_out(sb2, sq);
+        sq = LogPut(sq, "ASYNC-SITE #"); sq = LogHex(sq, (DWORD)g_async_nsite);
+        sq = LogPut(sq, " irq="); sq = LogHex(sq, irq);
+        sq = LogPut(sq, " cs:eip=0x"); sq = LogHex(sq, cs);
+        sq = LogPut(sq, ":0x"); sq = LogHex(sq, cx.Eip);
+        sq = LogPut(sq, " lin=0x"); sq = LogHex(sq, sblin);
+        sq = LogPut(sq, " ss:esp=0x"); sq = LogHex(sq, cx.SegSs & 0xFFFF);
+        sq = LogPut(sq, ":0x"); sq = LogHex(sq, cx.Esp);
+        sq = LogPut(sq, " efl=0x"); sq = LogHex(sq, efl);
+        sq = LogPut(sq, " ms="); sq = LogHex(sq, GetTickCount());
+        sq = LogPut(sq, "\r\n"); LogAppend(LOG_PATH, sb2, sq); serial_out(sb2, sq);
         async_why_note(irq, 27);                 /* accounted for, so the histogram sums */
         return 0;                                /* observed only -- the next tick injects */
     }
@@ -4119,16 +4119,16 @@ static int async_inject_irq(unsigned irq)
             /* ► SAY WHICH LINE. This said "vec=0x08" literally, whatever interrupt it
                  had just delivered, so a run could not be asked "did any keyboard
                  interrupt reach the client?" -- every line claimed to be the timer. */
-            pq = zput(pq, "ASYNC-PM vec=0x"); pq = zhexb(pq, irq_pm_vec(irq));
-            pq = zput(pq, " ok=0x"); pq = zhex(pq, (DWORD)ok);
-            pq = zput(pq, " why="); pq = zhex(pq, (DWORD)g_async_why);
-            pq = zput(pq, " from=0x");   pq = zhex(pq, cs);
-            pq = zput(pq, ":0x");        pq = zhex(pq, g_async_pm_eip);
-            pq = zput(pq, " -> 0x");     pq = zhex(pq, (DWORD)DPMI_IRQ_TARGET_SEL(irq_pm_vec(irq)));
-            pq = zput(pq, ":0x");        pq = zhex(pq, DPMI_IRQ_TARGET_OFF(irq_pm_vec(irq)));
-            pq = zput(pq, " SS:ESP=0x"); pq = zhex(pq, (DWORD)g_async_pm_ss);
-            pq = zput(pq, ":0x");        pq = zhex(pq, g_async_pm_esp);
-            pq = zput(pq, " efl=0x");    pq = zhex(pq, g_async_pm_efl);
+            pq = LogPut(pq, "ASYNC-PM vec=0x"); pq = LogHexByte(pq, irq_pm_vec(irq));
+            pq = LogPut(pq, " ok=0x"); pq = LogHex(pq, (DWORD)ok);
+            pq = LogPut(pq, " why="); pq = LogHex(pq, (DWORD)g_async_why);
+            pq = LogPut(pq, " from=0x");   pq = LogHex(pq, cs);
+            pq = LogPut(pq, ":0x");        pq = LogHex(pq, g_async_pm_eip);
+            pq = LogPut(pq, " -> 0x");     pq = LogHex(pq, (DWORD)DPMI_IRQ_TARGET_SEL(irq_pm_vec(irq)));
+            pq = LogPut(pq, ":0x");        pq = LogHex(pq, DPMI_IRQ_TARGET_OFF(irq_pm_vec(irq)));
+            pq = LogPut(pq, " SS:ESP=0x"); pq = LogHex(pq, (DWORD)g_async_pm_ss);
+            pq = LogPut(pq, ":0x");        pq = LogHex(pq, g_async_pm_esp);
+            pq = LogPut(pq, " efl=0x");    pq = LogHex(pq, g_async_pm_efl);
             /* ── ★ WHAT CODE WAS INTERRUPTED. A timer injection reports WHERE the guest
                  was; when the guest is STUCK, where it was is the whole question, and the
                  address alone cannot answer it -- a spin on a memory flag, a spin on a
@@ -4138,10 +4138,10 @@ static int async_inject_irq(unsigned irq)
                  (ZAR, GH #23: it reaches "Game loading..." and then spins.) */
             {   DWORD ib = dpmi_sel_base((WORD)cs) + g_async_pm_eip;
                 const volatile BYTE *ip = (const volatile BYTE *)(ULONG_PTR)ib;
-                pq = zput(pq, " code@eip=");
-                if (mem_readable((ULONG_PTR)ib, 16)) pq = zdump(pq, (const void *)ip, 16);
-                else                                 pq = zput(pq, "<unreadable>"); }
-            pq = zput(pq, "\r\n"); log_append(LOG_PATH, pb, pq); serial_out(pb, pq);
+                pq = LogPut(pq, " code@eip=");
+                if (mem_readable((ULONG_PTR)ib, 16)) pq = LogDump(pq, (const void *)ip, 16);
+                else                                 pq = LogPut(pq, "<unreadable>"); }
+            pq = LogPut(pq, "\r\n"); LogAppend(LOG_PATH, pb, pq); serial_out(pb, pq);
             if (!ok) g_async_pm_bail2++;
         }
         return ok;
@@ -4243,18 +4243,18 @@ static int async_inject_irq(unsigned irq)
        the whole IRQ3-7 vector range shows which line the game is actually listening on. */
     if (g_async_inj + g_async_bail <= 4) {
         char ab[256], *aq = ab; int v;
-        aq = zput(aq, "ASYNC-INJ vec=0x");  aq = zhex(aq, (DWORD)VddPicVector(&g_pic, (uint8_t)irq));
-        aq = zput(aq, " ok=0x");            aq = zhex(aq, (DWORD)ok);
-        aq = zput(aq, " from=0x");          aq = zhex(aq, cs);
-        aq = zput(aq, ":0x");               aq = zhex(aq, ip);
-        aq = zput(aq, " ivt[0B..0F]=");
+        aq = LogPut(aq, "ASYNC-INJ vec=0x");  aq = LogHex(aq, (DWORD)VddPicVector(&g_pic, (uint8_t)irq));
+        aq = LogPut(aq, " ok=0x");            aq = LogHex(aq, (DWORD)ok);
+        aq = LogPut(aq, " from=0x");          aq = LogHex(aq, cs);
+        aq = LogPut(aq, ":0x");               aq = LogHex(aq, ip);
+        aq = LogPut(aq, " ivt[0B..0F]=");
         for (v = 0x0B; v <= 0x0F; ++v) {
-            aq = zput(aq, "0x");  aq = zhex(aq, peekw(v * 4 + 2));
-            aq = zput(aq, ":0x"); aq = zhex(aq, peekw(v * 4));
-            aq = zput(aq, " ");
+            aq = LogPut(aq, "0x");  aq = LogHex(aq, peekw(v * 4 + 2));
+            aq = LogPut(aq, ":0x"); aq = LogHex(aq, peekw(v * 4));
+            aq = LogPut(aq, " ");
         }
-        aq = zput(aq, "\r\n");
-        log_append(LOG_PATH, ab, aq); serial_out(ab, aq);
+        aq = LogPut(aq, "\r\n");
+        LogAppend(LOG_PATH, ab, aq); serial_out(ab, aq);
     }
     return ok;
 }
@@ -4446,14 +4446,14 @@ static void host_irq_sink(void *ctx, uint8_t irq)
                moment of the raise turns that into one line. */
           if (g_keyirq_logged++ < 64) {
               char kb[160], *kq = kb;
-              kq = zput(kq, "KEYIRQ raise gate="); kq = zhex(kq, (DWORD)gate);
-              kq = zput(kq, " ok=");        kq = zhex(kq, (DWORD)ok);
-              kq = zput(kq, " pm=");        kq = zhex(kq, (DWORD)g_dpmi_pm);
-              kq = zput(kq, " pmhook=");    kq = zhex(kq, (DWORD)g_pm_int[0x09].client);
-              kq = zput(kq, " in_exec=");   kq = zhex(kq, (DWORD)g_in_exec);
-              kq = zput(kq, " why=");       kq = zhex(kq, (DWORD)g_async_why);
-              kq = zput(kq, " ms=");        kq = zhex(kq, GetTickCount());
-              kq = zput(kq, "\r\n"); log_append(LOG_PATH, kb, kq); serial_out(kb, kq);
+              kq = LogPut(kq, "KEYIRQ raise gate="); kq = LogHex(kq, (DWORD)gate);
+              kq = LogPut(kq, " ok=");        kq = LogHex(kq, (DWORD)ok);
+              kq = LogPut(kq, " pm=");        kq = LogHex(kq, (DWORD)g_dpmi_pm);
+              kq = LogPut(kq, " pmhook=");    kq = LogHex(kq, (DWORD)g_pm_int[0x09].client);
+              kq = LogPut(kq, " in_exec=");   kq = LogHex(kq, (DWORD)g_in_exec);
+              kq = LogPut(kq, " why=");       kq = LogHex(kq, (DWORD)g_async_why);
+              kq = LogPut(kq, " ms=");        kq = LogHex(kq, GetTickCount());
+              kq = LogPut(kq, "\r\n"); LogAppend(LOG_PATH, kb, kq); serial_out(kb, kq);
           } }
     }
     else if (irq < 16) {
@@ -4577,14 +4577,14 @@ static void vdmstate_sample(const char *label, volatile BYTE *tib, int *budget)
     char b[128], *q = b;
     if (*budget <= 0) return;
     (*budget)--;
-    q = zput(q, "GH#18 vdmstate ");
-    q = zput(q, label);
-    q = zput(q, ": [0x714]=0x"); q = zhex(q, *(volatile DWORD *)(ULONG_PTR)0x714);
-    q = zput(q, " EFL=0x");      q = zhex(q, VDM_REG(tib, VTIB_EFLAGS));
-    q = zput(q, " CS:IP=0x");    q = zhex(q, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-    q = zput(q, ":0x");          q = zhex(q, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-    q = zput(q, "\r\n");
-    log_append(LOG_PATH, b, q); serial_out(b, q);
+    q = LogPut(q, "GH#18 vdmstate ");
+    q = LogPut(q, label);
+    q = LogPut(q, ": [0x714]=0x"); q = LogHex(q, *(volatile DWORD *)(ULONG_PTR)0x714);
+    q = LogPut(q, " EFL=0x");      q = LogHex(q, VDM_REG(tib, VTIB_EFLAGS));
+    q = LogPut(q, " CS:IP=0x");    q = LogHex(q, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+    q = LogPut(q, ":0x");          q = LogHex(q, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+    q = LogPut(q, "\r\n");
+    LogAppend(LOG_PATH, b, q); serial_out(b, q);
 }
 
 static void inject_int(volatile BYTE *tib, unsigned vec)
@@ -4641,7 +4641,7 @@ static int dos_terminate(DOS_MACHINE *m, void *tib, char **pp, char *base)
         m->ChildReturnCode = (WORD)(((WORD)m->TermType << 8) | (m->ExitCode & 0xFF));
         m->TermType = 0;
         if (g_exec_mach[d].progname[0])             /* the strip names the parent again */
-            zput(g_progname, g_exec_mach[d].progname);
+            LogPut(g_progname, g_exec_mach[d].progname);
         /* s81: the parent's handle table back, the child's leftover files closed (not
            a TSR's). Without this Doom's SETUP closed the shell's stdout for good. */
         DosHandlesPop(m, m->IsTsrPending);
@@ -4675,11 +4675,11 @@ static int dos_terminate(DOS_MACHINE *m, void *tib, char **pp, char *base)
                hand back a block that does not contain its own header. */
             WORD keep = m->TsrKeep < 0x10 ? 0x10 : m->TsrKeep, tmax = 0;
             int rrc = DosMcbResize(NULL, g_exec[d].child_seg, keep, &tmax);
-            *pp = zput(*pp, "  TSR: seg=0x"); *pp = zhex(*pp, g_exec[d].child_seg);
-            *pp = zput(*pp, " stays resident, 0x"); *pp = zhex(*pp, keep);
-            *pp = zput(*pp, " paras");
-            if (rrc) *pp = zput(*pp, " -- RESIZE FAILED, block kept whole");
-            *pp = zput(*pp, ", vectors left installed\r\n");
+            *pp = LogPut(*pp, "  TSR: seg=0x"); *pp = LogHex(*pp, g_exec[d].child_seg);
+            *pp = LogPut(*pp, " stays resident, 0x"); *pp = LogHex(*pp, keep);
+            *pp = LogPut(*pp, " paras");
+            if (rrc) *pp = LogPut(*pp, " -- RESIZE FAILED, block kept whole");
+            *pp = LogPut(*pp, ", vectors left installed\r\n");
             m->IsTsrPending = 0; m->TsrKeep = 0;
         } else {
         /* ── UNWIND THE CHILD'S INTERRUPT VECTORS. (GH #34) ───────────
@@ -4713,27 +4713,27 @@ static int dos_terminate(DOS_MACHINE *m, void *tib, char **pp, char *base)
                 ++nfree;
             }
             if (nfree) {
-                *pp = zput(*pp, "  EXEC: freed 0x"); *pp = zhex(*pp, (DWORD)nfree);
-                *pp = zput(*pp, " more block(s) the child still owned\r\n");
+                *pp = LogPut(*pp, "  EXEC: freed 0x"); *pp = LogHex(*pp, (DWORD)nfree);
+                *pp = LogPut(*pp, " more block(s) the child still owned\r\n");
             }
         }
         /* The chain as the parent will find it: what a child LEFT is exactly what the
            next program cannot have, and a leak is invisible in any one line above. */
         {   uint16_t mm = m->FirstMcb; int guard = 0;
-            *pp = zput(*pp, "  EXEC: chain after exit:");
+            *pp = LogPut(*pp, "  EXEC: chain after exit:");
             for (;;) {
                 volatile uint8_t *mc = DosMcbSegmentAddress(NULL, mm);
                 uint16_t own, sz;
-                if ((mc[0] != 'M' && mc[0] != 'Z') || ++guard > 48) { *pp = zput(*pp, " <broken>"); break; }
+                if ((mc[0] != 'M' && mc[0] != 'Z') || ++guard > 48) { *pp = LogPut(*pp, " <broken>"); break; }
                 own = DosMcbReadWord(mc + 1); sz = DosMcbReadWord(mc + 3);
-                *pp = zput(*pp, " "); *pp = zhex(*pp, mm);
-                *pp = zput(*pp, own ? "/own=" : "/FREE"); if (own) *pp = zhex(*pp, own);
-                *pp = zput(*pp, "/sz="); *pp = zhex(*pp, sz);
+                *pp = LogPut(*pp, " "); *pp = LogHex(*pp, mm);
+                *pp = LogPut(*pp, own ? "/own=" : "/FREE"); if (own) *pp = LogHex(*pp, own);
+                *pp = LogPut(*pp, "/sz="); *pp = LogHex(*pp, sz);
                 if (mc[0] == 'Z') break;
                 mm = (uint16_t)(mm + 1 + sz);
             }
-            *pp = zput(*pp, "\r\n");
-            log_append(LOG_PATH, base, *pp); *pp = base;
+            *pp = LogPut(*pp, "\r\n");
+            LogAppend(LOG_PATH, base, *pp); *pp = base;
         }
         /* And the environment copy EXEC made for it (s74). A TSR keeps its env
            block along with its PSP, which is why this is on the exit arm only. */
@@ -4756,14 +4756,14 @@ static int dos_terminate(DOS_MACHINE *m, void *tib, char **pp, char *base)
         VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
         VDM_REG(tib, VTIB_EIP) += 3;        /* past the BOP -> the IRET */
         m->ExitCode = 0;
-        *pp = zput(*pp, "  EXEC: child exited rc=0x"); *pp = zhexb(*pp, m->ChildReturnCode);
-        *pp = zput(*pp, ", parent resumed (depth="); *pp = zhexb(*pp, (unsigned)g_exec_depth);
-        *pp = zput(*pp, ")\r\n");
-        log_append(LOG_PATH, base, *pp); *pp = base;
+        *pp = LogPut(*pp, "  EXEC: child exited rc=0x"); *pp = LogHexByte(*pp, m->ChildReturnCode);
+        *pp = LogPut(*pp, ", parent resumed (depth="); *pp = LogHexByte(*pp, (unsigned)g_exec_depth);
+        *pp = LogPut(*pp, ")\r\n");
+        LogAppend(LOG_PATH, base, *pp); *pp = base;
         return 1;                    /* the parent is back: carry on */
     }
     VDM_REG(tib, VTIB_EIP) += 3;
-    log_append(LOG_PATH, base, *pp); *pp = base;
+    LogAppend(LOG_PATH, base, *pp); *pp = base;
     return 0;                        /* top-level program: the run is over */
 }
 
@@ -4879,8 +4879,8 @@ static int mru_load(char out[MRU_MAX][MAX_PATH])
     if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_QUERY_VALUE, &k) != ERROR_SUCCESS)
         return 0;
     for (i = 0; i < MRU_MAX; ++i) {
-        char name[16], *q = zput(name, "Recent"); DWORD ty = 0, cb = MAX_PATH;
-        q = zdec(q, (DWORD)(i + 1)); *q = 0;
+        char name[16], *q = LogPut(name, "Recent"); DWORD ty = 0, cb = MAX_PATH;
+        q = LogDecimal(q, (DWORD)(i + 1)); *q = 0;
         if (RegQueryValueExA(k, name, NULL, &ty, (LPBYTE)out[n], &cb) != ERROR_SUCCESS
             || ty != REG_SZ || cb < 2) continue;
         out[n][cb < MAX_PATH ? cb : MAX_PATH - 1] = 0;
@@ -4905,9 +4905,9 @@ static void mru_add(const char *path)
                         KEY_SET_VALUE, NULL, &k, &disp) != ERROR_SUCCESS) return;
     for (i = -1; i < n && w < MRU_MAX; ++i) {
         const char *v = (i < 0) ? path : list[i];
-        char name[16], *q = zput(name, "Recent");
+        char name[16], *q = LogPut(name, "Recent");
         if (i >= 0 && !lstrcmpiA(v, path)) continue;          /* moved to the front */
-        q = zdec(q, (DWORD)(++w)); *q = 0;
+        q = LogDecimal(q, (DWORD)(++w)); *q = 0;
         RegSetValueExA(k, name, 0, REG_SZ, (const BYTE *)v, (DWORD)lstrlenA(v) + 1);
     }
     RegCloseKey(k);
@@ -4977,13 +4977,13 @@ static int install_resident_vdms(void)
 static char *install_resident_text(char *p, int n)
 {
     if (n == 0) return p;
-    if (n < 0) return zput(p, "(Could not read the process list, so whether one of "
+    if (n < 0) return LogPut(p, "(Could not read the process list, so whether one of "
                               "Windows' own ntvdm.exe is still running is unknown.)\r\n");
-    p = zput(p, "\r\n!! ");
-    p = zdec(p, (unsigned)n);
-    p = zput(p, n == 1 ? " copy of Windows' own ntvdm.exe is still running."
+    p = LogPut(p, "\r\n!! ");
+    p = LogDecimal(p, (unsigned)n);
+    p = LogPut(p, n == 1 ? " copy of Windows' own ntvdm.exe is still running."
                        : " copies of Windows' own ntvdm.exe are still running.");
-    p = zput(p, "\r\n   Programs that are already running, and 16-bit Windows programs "
+    p = LogPut(p, "\r\n   Programs that are already running, and 16-bit Windows programs "
                 "started\r\n   from now on, keep using it: Windows only asks for NTVDMEX "
                 "when it starts a\r\n   NEW ntvdm.exe. Close every MS-DOS and 16-bit "
                 "Windows program (or reboot),\r\n   then run status.bat -- it should "
@@ -5019,19 +5019,19 @@ static int install_perform(int want, int force, char *msg, DWORD cap)
        setting to give back -- ignore it (and never save one, below). */
     if (have_prev && InstallNamesNtvdmex(prev)) have_prev = 0;
     st  = InstallClassify(cur[0] ? cur : NULL, self);
-    st0 = st; zput(cur0, cur);                      /* what was there, for the report */
+    st0 = st; LogPut(cur0, cur);                      /* what was there, for the report */
     act = InstallPlanEx(st, want, have_prev, InstallNamesNtvdmex(cur), force);
 
     switch (act) {
     case INSTALL_ACT_NOTHING:
-        p = zput(p, want ? "NTVDMEX is already installed as this machine's VDM.\r\n"
+        p = LogPut(p, want ? "NTVDMEX is already installed as this machine's VDM.\r\n"
                          : "NTVDMEX is not installed; nothing to remove.\r\n");
         break;
     case INSTALL_ACT_REFUSE:
-        p = zput(p, "REFUSED: the ntvdm.exe Debugger value points at another "
+        p = LogPut(p, "REFUSED: the ntvdm.exe Debugger value points at another "
                     "program, not at NTVDMEX:\r\n    ");
-        p = zput(p, cur);
-        p = zput(p, "\r\nRemoving it would break whatever that is. Nothing changed.\r\n"
+        p = LogPut(p, cur);
+        p = LogPut(p, "\r\nRemoving it would break whatever that is. Nothing changed.\r\n"
                     "If you are sure it should go, run:  ntvdmhost.exe /uninstall /force\r\n");
         return 0;
     case INSTALL_ACT_WRITE:
@@ -5051,12 +5051,12 @@ static int install_perform(int want, int force, char *msg, DWORD cap)
     }
 
     if (rc != ERROR_SUCCESS) {
-        p = zput(p, rc == ERROR_ACCESS_DENIED
+        p = LogPut(p, rc == ERROR_ACCESS_DENIED
             ? "FAILED: access denied writing HKEY_LOCAL_MACHINE.\r\n"
               "Installing changes a machine-wide setting, so it needs an "
               "Administrator account.\r\n"
             : "FAILED: could not write the registry (error 0x");
-        if (rc != ERROR_ACCESS_DENIED) { p = zhex(p, (DWORD)rc); p = zput(p, ").\r\n"); }
+        if (rc != ERROR_ACCESS_DENIED) { p = LogHex(p, (DWORD)rc); p = LogPut(p, ").\r\n"); }
         return 0;
     }
     if (act == INSTALL_ACT_NOTHING) return 1;
@@ -5065,29 +5065,29 @@ static int install_perform(int want, int force, char *msg, DWORD cap)
     install_read(cur, sizeof cur);
     st = InstallClassify(cur[0] ? cur : NULL, self);
     if (want && st != INSTALL_OURS) {
-        p = zput(p, "FAILED: the value was written but does not read back as ours.\r\n");
+        p = LogPut(p, "FAILED: the value was written but does not read back as ours.\r\n");
         return 0;
     }
     if (!want && st == INSTALL_OURS) {
-        p = zput(p, "FAILED: the value was removed but still reads back as ours.\r\n");
+        p = LogPut(p, "FAILED: the value was removed but still reads back as ours.\r\n");
         return 0;
     }
     if (want) {
-        p = zput(p, "INSTALLED. Every MS-DOS and 16-bit Windows launch on this "
+        p = LogPut(p, "INSTALLED. Every MS-DOS and 16-bit Windows launch on this "
                     "machine now runs through NTVDMEX:\r\n    ");
-        p = zput(p, self);
-        p = zput(p, "\r\nUninstall with:  ntvdmhost.exe /uninstall\r\n");
+        p = LogPut(p, self);
+        p = LogPut(p, "\r\nUninstall with:  ntvdmhost.exe /uninstall\r\n");
         p = install_resident_text(p, install_resident_vdms());
     } else {
-        p = zput(p, act == INSTALL_ACT_RESTORE
+        p = LogPut(p, act == INSTALL_ACT_RESTORE
             ? "UNINSTALLED, and the Debugger value we displaced has been put back:\r\n    "
             : "UNINSTALLED. This machine uses its own ntvdm.exe again.\r\n");
-        if (act == INSTALL_ACT_RESTORE) { p = zput(p, cur); p = zput(p, "\r\n"); }
+        if (act == INSTALL_ACT_RESTORE) { p = LogPut(p, cur); p = LogPut(p, "\r\n"); }
         if (st0 == INSTALL_OTHER) {                 /* #195: say what we removed */
-            p = zput(p, "Removed a Debugger value that named ");
-            p = zput(p, InstallNamesNtvdmex(cur0) ? "another copy of NTVDMEX:\r\n    "
+            p = LogPut(p, "Removed a Debugger value that named ");
+            p = LogPut(p, InstallNamesNtvdmex(cur0) ? "another copy of NTVDMEX:\r\n    "
                                                     : "another program (/force):\r\n    ");
-            p = zput(p, cur0); p = zput(p, "\r\n");
+            p = LogPut(p, cur0); p = LogPut(p, "\r\n");
         }
     }
     return 1;
@@ -5108,19 +5108,19 @@ static INSTALL_STATE install_status_text(char *msg, DWORD cap)
     install_self_path(self, sizeof self);
     install_read(cur, sizeof cur);
     st = InstallClassify(cur[0] ? cur : NULL, self);
-    p = zput(p, "This executable:\r\n    "); p = zput(p, self); p = zput(p, "\r\n\r\n");
+    p = LogPut(p, "This executable:\r\n    "); p = LogPut(p, self); p = LogPut(p, "\r\n\r\n");
     switch (st) {
     case INSTALL_OURS:
-        p = zput(p, "INSTALLED -- MS-DOS and 16-bit Windows launches on this machine "
+        p = LogPut(p, "INSTALLED -- MS-DOS and 16-bit Windows launches on this machine "
                     "run through NTVDMEX.\r\n");
         p = install_resident_text(p, install_resident_vdms());
         break;
     case INSTALL_OTHER:
-        p = zput(p, "NOT INSTALLED, and the ntvdm.exe Debugger value belongs to "
+        p = LogPut(p, "NOT INSTALLED, and the ntvdm.exe Debugger value belongs to "
                     "another program:\r\n    ");
-        p = zput(p, cur); p = zput(p, "\r\n"); break;
+        p = LogPut(p, cur); p = LogPut(p, "\r\n"); break;
     default:
-        p = zput(p, "NOT INSTALLED -- this machine uses its own ntvdm.exe.\r\n"); break;
+        p = LogPut(p, "NOT INSTALLED -- this machine uses its own ntvdm.exe.\r\n"); break;
     }
     return st;
 }
@@ -5201,7 +5201,7 @@ static int launch_shell_vdm(void)
     {   INSTALL_STATE st = install_status_text(msg, sizeof msg);
         if (st != INSTALL_OURS) {
             /* The status text says WHICH of the two it is; add what to do about it. */
-            zput(msg + lstrlenA(msg),
+            LogPut(msg + lstrlenA(msg),
                  "\r\n\r\nNTVDMEX has to be the machine's VDM before it can open a "
                  "DOS session of its own.\r\n\r\nRun:    ntvdmhost.exe /install\r\n"
                  "(as an administrator), then try again.");
@@ -5210,15 +5210,15 @@ static int launch_shell_vdm(void)
         } }
 
     n = GetTempPathA(MAX_PATH, stub);
-    if (!n || n > MAX_PATH) { zput(stub, "C:\\"); n = 3; }
+    if (!n || n > MAX_PATH) { LogPut(stub, "C:\\"); n = 3; }
     if (stub[n - 1] != '\\') { stub[n++] = '\\'; stub[n] = 0; }
-    zput(stub + n, LAUNCH_STUB_NAME);
+    LogPut(stub + n, LAUNCH_STUB_NAME);
 
     h = CreateFileA(stub, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                     FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) {
-        zput(msg, "NTVDMEX could not write its launch stub to:\r\n\r\n");
-        zput(msg + lstrlenA(msg), stub);
+        LogPut(msg, "NTVDMEX could not write its launch stub to:\r\n\r\n");
+        LogPut(msg + lstrlenA(msg), stub);
         install_report(msg, 0);
         return 1;
     }
@@ -5228,8 +5228,8 @@ static int launch_shell_vdm(void)
         /* ⚠ A SHORT WRITE IS NOT A SUCCESS. A truncated stub is not a DOS image and
              CreateProcess would report something unrelated to the real cause. */
         if (!wok || w != sizeof s4) {
-            zput(msg, "NTVDMEX wrote an incomplete launch stub to:\r\n\r\n");
-            zput(msg + lstrlenA(msg), stub);
+            LogPut(msg, "NTVDMEX wrote an incomplete launch stub to:\r\n\r\n");
+            LogPut(msg + lstrlenA(msg), stub);
             install_report(msg, 0);
             return 1;
         } }
@@ -5237,10 +5237,10 @@ static int launch_shell_vdm(void)
     { int i; for (i = 0; i < (int)sizeof si; ++i) ((char *)&si)[i] = 0; }
     si.cb = sizeof si;
     if (!CreateProcessA(stub, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-        zput(msg, "NTVDMEX could not start a DOS session.\r\n\r\nCreateProcess on:\r\n");
-        zput(msg + lstrlenA(msg), stub);
-        zput(msg + lstrlenA(msg), "\r\nfailed with error 0x");
-        { char *e = msg + lstrlenA(msg); e = zhex(e, GetLastError()); *e = 0; }
+        LogPut(msg, "NTVDMEX could not start a DOS session.\r\n\r\nCreateProcess on:\r\n");
+        LogPut(msg + lstrlenA(msg), stub);
+        LogPut(msg + lstrlenA(msg), "\r\nfailed with error 0x");
+        { char *e = msg + lstrlenA(msg); e = LogHex(e, GetLastError()); *e = 0; }
         install_report(msg, 0);
         return 1;
     }
@@ -5279,7 +5279,7 @@ static void recovery_uninstall(char **pp)
         rc = RegDeleteValueA(k, "Debugger");
         RegCloseKey(k);
     }
-    *pp = zput(*pp, rc == ERROR_SUCCESS
+    *pp = LogPut(*pp, rc == ERROR_SUCCESS
         ? "STAGE0: RECOVERY -- IFEO Debugger REMOVED, the machine's own ntvdm "
           "takes over. Re-install when the fault is fixed. (GH #132)\r\n"
         : "STAGE0: RECOVERY -- could NOT remove the IFEO Debugger value (no "
@@ -5354,19 +5354,19 @@ static PDOS_DISK_GEOMETRY disk_for(unsigned drive)
            guessed cylinder count returns the WRONG SECTOR and reports success,
            which is strictly worse than no drive. */
         char db[160], *dq = db;
-        dq = zput(dq, "  INT13 image present but its BPB is not usable -- "
+        dq = LogPut(dq, "  INT13 image present but its BPB is not usable -- "
                       "treating drive 0 as ABSENT (GH #44)\r\n");
-        log_append(LOG_PATH, db, dq); serial_out(db, dq);
+        LogAppend(LOG_PATH, db, dq); serial_out(db, dq);
         CloseHandle(g_disk_h[0]); g_disk_h[0] = INVALID_HANDLE_VALUE;
         return NULL;
     }
     { char db[200], *dq = db;
-      dq = zput(dq, "  INT13 drive 0 = "); dq = zput(dq, floppy_img_path()); dq = zput(dq, ", ");
-      dq = zhex(dq, g_disk_g[0].Cylinders); dq = zput(dq, " cyl x ");
-      dq = zhex(dq, g_disk_g[0].Heads);     dq = zput(dq, " head x ");
-      dq = zhex(dq, g_disk_g[0].SectorsPerTrack);   dq = zput(dq, " sec, type 0x");
-      dq = zhexb(dq, g_disk_g[0].DriveType); dq = zput(dq, "\r\n");
-      log_append(LOG_PATH, db, dq); serial_out(db, dq); }
+      dq = LogPut(dq, "  INT13 drive 0 = "); dq = LogPut(dq, floppy_img_path()); dq = LogPut(dq, ", ");
+      dq = LogHex(dq, g_disk_g[0].Cylinders); dq = LogPut(dq, " cyl x ");
+      dq = LogHex(dq, g_disk_g[0].Heads);     dq = LogPut(dq, " head x ");
+      dq = LogHex(dq, g_disk_g[0].SectorsPerTrack);   dq = LogPut(dq, " sec, type 0x");
+      dq = LogHexByte(dq, g_disk_g[0].DriveType); dq = LogPut(dq, "\r\n");
+      LogAppend(LOG_PATH, db, dq); serial_out(db, dq); }
     return &g_disk_g[0];
 }
 
@@ -5446,7 +5446,7 @@ static int disk_io(unsigned drive, uint32_t lba, unsigned count,
      turned four sessions of hypotheses into one located bug. */
 static HANDLE g_stdio = INVALID_HANDLE_VALUE;
 /* ⚠ Reported at EXIT, not at init. The early-startup log line was written
-   before a later log_write(LOG_PATH,...) TRUNCATES the file, so it never
+   before a later LogWrite(LOG_PATH,...) TRUNCATES the file, so it never
    survived to be read -- which looked exactly like the code not running. */
 static const char *g_stdio_how = "(not initialised)";
 static const char *g_stdio_src = "";   /* which channel it came down, if any */
@@ -5970,15 +5970,15 @@ static void opl_trace_dump(void)
                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
     { char *p = buf;
-      p = zput(p, "# opl2 register trace: us reg val (hex). writes=");
-      p = zhex(p, g_opltrace_n); p = zput(p, " dropped="); p = zhex(p, g_opltrace_drop);
-      p = zput(p, "\r\n");
+      p = LogPut(p, "# opl2 register trace: us reg val (hex). writes=");
+      p = LogHex(p, g_opltrace_n); p = LogPut(p, " dropped="); p = LogHex(p, g_opltrace_drop);
+      p = LogPut(p, "\r\n");
       WriteFile(h, buf, (DWORD)(p - buf), &wr, NULL); }
     for (i = 0; i < g_opltrace_n; ++i) {
         char *p = buf;
-        p = zhex(p, g_opltrace[i].us); p = zput(p, " ");
-        p = zhexb(p, g_opltrace[i].reg); p = zput(p, " ");
-        p = zhexb(p, g_opltrace[i].val); p = zput(p, "\r\n");
+        p = LogHex(p, g_opltrace[i].us); p = LogPut(p, " ");
+        p = LogHexByte(p, g_opltrace[i].reg); p = LogPut(p, " ");
+        p = LogHexByte(p, g_opltrace[i].val); p = LogPut(p, "\r\n");
         WriteFile(h, buf, (DWORD)(p - buf), &wr, NULL);
     }
     CloseHandle(h);
@@ -6610,7 +6610,7 @@ static void cpuspd_tl_dump(const char *tag)
     for (t = 0; t < IRQ0TL_SECS; ++t) if (g_ctl_exec_us[t] || g_ctl_hold_us[t]) last = t;
     for (c = 0; c < 7; ++c) {
         DWORD prev = 0;
-        q = b; q = zput(q, tag); q = zput(q, " "); q = zput(q, nm[c]); q = zput(q, "=");
+        q = b; q = LogPut(q, tag); q = LogPut(q, " "); q = LogPut(q, nm[c]); q = LogPut(q, "=");
         for (t = 0; t <= last; ++t) {
             DWORD v = 0;
             switch (c) {
@@ -6622,10 +6622,10 @@ static void cpuspd_tl_dump(const char *tag)
             case 5: v = g_ctl_raise[t] ? g_ctl_raise[t] - prev : 0; if (g_ctl_raise[t]) prev = g_ctl_raise[t]; break;
             case 6: v = g_ctl_run_us[t]; break;
             }
-            q = zput(q, t ? "," : ""); q = zdec(q, v);
+            q = LogPut(q, t ? "," : ""); q = LogDecimal(q, v);
         }
-        q = zput(q, "\r\n");
-        log_append(LOG_PATH, b, q);
+        q = LogPut(q, "\r\n");
+        LogAppend(LOG_PATH, b, q);
     }
 }
 
@@ -7066,13 +7066,13 @@ static void host_rec_toggle(void)
     static int seq = 0;
     char path[MAX_PATH], *q;
     if (AudioWaveIsRecording()) { host_rec_finish(); return; }
-    q = zput(path, NTVDMEX_OUT); q = zput(q, "capture_audio_");
+    q = LogPut(path, NTVDMEX_OUT); q = LogPut(q, "capture_audio_");
     *q++ = (char)('0' + (seq / 10) % 10); *q++ = (char)('0' + seq % 10);
-    q = zput(q, ".wav");
+    q = LogPut(q, ".wav");
     ++seq;
     if (AudioWaveRecordStart(path, g_wave.SampleHz) == 0) {
-        char lb[MAX_PATH + 64], *lq = zput(lb, "STAGE2: audio recording started -> ");
-        lq = zput(lq, path); lq = zput(lq, "\r\n"); log_append(LOG_PATH, lb, lq);
+        char lb[MAX_PATH + 64], *lq = LogPut(lb, "STAGE2: audio recording started -> ");
+        lq = LogPut(lq, path); lq = LogPut(lq, "\r\n"); LogAppend(LOG_PATH, lb, lq);
     }
 }
 
@@ -7082,7 +7082,7 @@ static void host_open_capture_folder(void)
 {
     char cmd[MAX_PATH + 32], *q;
     STARTUPINFOA si; PROCESS_INFORMATION pi; int i;
-    q = zput(cmd, "explorer.exe \""); q = zput(q, NTVDMEX_OUT); q = zput(q, "\"");
+    q = LogPut(cmd, "explorer.exe \""); q = LogPut(q, NTVDMEX_OUT); q = LogPut(q, "\"");
     for (i = 0; i < (int)sizeof si; ++i) ((char *)&si)[i] = 0;
     si.cb = sizeof si;
     if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
@@ -7372,16 +7372,16 @@ static DWORD WINAPI qirq_probe_thread(LPVOID pv)
         }
         if (n < 8) {
             char b[256], *q = b;
-            q = zput(q, "QIRQ: raise#0x");   q = zhex(q, (DWORD)n);
-            q = zput(q, " bits=0x");         q = zhex(q, g_qi_bits);
-            q = zput(q, " st=0x");           q = zhex(q, (DWORD)g_qi_status);
-            q = zput(q, " state 0x");        q = zhex(q, before);
-            q = zput(q, "->0x");             q = zhex(q, after);
-            q = zput(q, " after 0x");        q = zhex(q, (DWORD)k);
-            q = zput(q, "ms pend5=0x");      q = zhex(q, (DWORD)g_irqn_pending[5]);
-            q = zput(q, " ica=0x");          q = zhex(q, VdmIcaGetState(5));
-            q = zput(q, "\r\n");
-            log_append(LOG_PATH, b, q); serial_out(b, q);
+            q = LogPut(q, "QIRQ: raise#0x");   q = LogHex(q, (DWORD)n);
+            q = LogPut(q, " bits=0x");         q = LogHex(q, g_qi_bits);
+            q = LogPut(q, " st=0x");           q = LogHex(q, (DWORD)g_qi_status);
+            q = LogPut(q, " state 0x");        q = LogHex(q, before);
+            q = LogPut(q, "->0x");             q = LogHex(q, after);
+            q = LogPut(q, " after 0x");        q = LogHex(q, (DWORD)k);
+            q = LogPut(q, "ms pend5=0x");      q = LogHex(q, (DWORD)g_irqn_pending[5]);
+            q = LogPut(q, " ica=0x");          q = LogHex(q, VdmIcaGetState(5));
+            q = LogPut(q, "\r\n");
+            LogAppend(LOG_PATH, b, q); serial_out(b, q);
         }
         Sleep(250);
     }
@@ -7415,63 +7415,63 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
             efl = VDM_REG(g_tib_dbg, VTIB_EFLAGS);
             g_hb_ds = VDM_REG(g_tib_dbg, VTIB_DS) & 0xFFFF;   /* s69: for the fade dump */
         }
-        q = zput(q, "HB 0x");        q = zhex(q, (DWORD)n);
-        q = zput(q, " cs:ip=0x");    q = zhex(q, cs); q = zput(q, ":0x"); q = zhex(q, ip);
-        q = zput(q, " efl=0x");      q = zhex(q, efl);
-        q = zput(q, " state=0x");    q = zhex(q, *(volatile DWORD *)(ULONG_PTR)0x714);
-        q = zput(q, " io=0x");       q = zhex(q, g_ev_io);
-        q = zput(q, " irq0=0x");     q = zhex(q, g_irq0_inj);
-        q = zput(q, " irqn=0x");     q = zhex(q, g_irqn_inj);
+        q = LogPut(q, "HB 0x");        q = LogHex(q, (DWORD)n);
+        q = LogPut(q, " cs:ip=0x");    q = LogHex(q, cs); q = LogPut(q, ":0x"); q = LogHex(q, ip);
+        q = LogPut(q, " efl=0x");      q = LogHex(q, efl);
+        q = LogPut(q, " state=0x");    q = LogHex(q, *(volatile DWORD *)(ULONG_PTR)0x714);
+        q = LogPut(q, " io=0x");       q = LogHex(q, g_ev_io);
+        q = LogPut(q, " irq0=0x");     q = LogHex(q, g_irq0_inj);
+        q = LogPut(q, " irqn=0x");     q = LogHex(q, g_irqn_inj);
         /* ► THE HEARTBEAT IS THE ONLY INSTRUMENT THAT SURVIVES A WEDGE -- STAGE2 never
              prints when the watchdog kills the run, which is exactly the case being
              debugged. `r5` is raises on line 5 (the SB); `rtry` is the async retry
              offer/land pair. */
-        q = zput(q, " r5=0x");       q = zhex(q, g_irq_raised[5]);
-        q = zput(q, " rtry=0x");     q = zhex(q, g_irqn_retry_try);
-        q = zput(q, "/0x");          q = zhex(q, g_irqn_retry_ok);
-        q = zput(q, " why=0x");      q = zhex(q, g_irqn_retry_why);
-        q = zput(q, " intpend=0x");  q = zhex(q, g_ev_intpend);
+        q = LogPut(q, " r5=0x");       q = LogHex(q, g_irq_raised[5]);
+        q = LogPut(q, " rtry=0x");     q = LogHex(q, g_irqn_retry_try);
+        q = LogPut(q, "/0x");          q = LogHex(q, g_irqn_retry_ok);
+        q = LogPut(q, " why=0x");      q = LogHex(q, g_irqn_retry_why);
+        q = LogPut(q, " intpend=0x");  q = LogHex(q, g_ev_intpend);
         /* s81: WHY IS A RAISED LINE NOT DELIVERED? The PIC's own view (mask, request,
            in service, both chips), which lines we still hold pending, and where IRQ 5's
            real-mode vector points -- the three things that decide it. */
         { int k; DWORD pm = 0; WORD v5o = peekw(0x0D * 4), v5s = peekw(0x0D * 4 + 2);
           for (k = 0; k < 16; ++k) if (g_irqn_pending[k]) pm |= 1u << k;
-          q = zput(q, " pic{imr=");  q = zhexb(q, g_pic.Master.Imr); q = zput(q, "/"); q = zhexb(q, g_pic.Slave.Imr);
-          q = zput(q, " irr=");      q = zhexb(q, g_pic.Master.Irr); q = zput(q, "/"); q = zhexb(q, g_pic.Slave.Irr);
-          q = zput(q, " isr=");      q = zhexb(q, g_pic.Master.Isr); q = zput(q, "/"); q = zhexb(q, g_pic.Slave.Isr);
-          q = zput(q, "} pend=0x");  q = zhex(q, pm);
-          q = zput(q, " ivt0d=");    q = zhex(q, v5s); q = zput(q, ":"); q = zhex(q, v5o);
-          q = zput(q, " nested=");   q = zhex(q, (DWORD)g_nested_rm);
-          q = zput(q, " aw5{");
+          q = LogPut(q, " pic{imr=");  q = LogHexByte(q, g_pic.Master.Imr); q = LogPut(q, "/"); q = LogHexByte(q, g_pic.Slave.Imr);
+          q = LogPut(q, " irr=");      q = LogHexByte(q, g_pic.Master.Irr); q = LogPut(q, "/"); q = LogHexByte(q, g_pic.Slave.Irr);
+          q = LogPut(q, " isr=");      q = LogHexByte(q, g_pic.Master.Isr); q = LogPut(q, "/"); q = LogHexByte(q, g_pic.Slave.Isr);
+          q = LogPut(q, "} pend=0x");  q = LogHex(q, pm);
+          q = LogPut(q, " ivt0d=");    q = LogHex(q, v5s); q = LogPut(q, ":"); q = LogHex(q, v5o);
+          q = LogPut(q, " nested=");   q = LogHex(q, (DWORD)g_nested_rm);
+          q = LogPut(q, " aw5{");
           { int shown = 0;
             for (k = 0; k < ASYNC_WHY_MAX && shown < 6; ++k) if (g_async_why_hist[5][k]) {
-                q = zput(q, " "); q = zhex(q, (DWORD)k); q = zput(q, "=");
-                q = zhex(q, g_async_why_hist[5][k]); ++shown; } }
-          q = zput(q, " }"); }
+                q = LogPut(q, " "); q = LogHex(q, (DWORD)k); q = LogPut(q, "=");
+                q = LogHex(q, g_async_why_hist[5][k]); ++shown; } }
+          q = LogPut(q, " }"); }
         /* SB transfer state on the beat. irqn_refused=0 across 4.6M gate evaluations
            proves the completion IRQ was raised only AFTER the exec loop ended, so what
            matters now is WHEN the block starts and how fast it drains -- neither of which
            any counter shows after the fact. */
-        q = zput(q, " sb{mode=0x");  q = zhex(q, (DWORD)g_sb.TransferMode);
-        q = zput(q, " left=0x");     q = zhex(q, g_sb.BlockRemaining);
-        q = zput(q, " len=0x");      q = zhex(q, g_sb.BlockLength);
-        q = zput(q, " blocks=0x");   q = zhex(q, g_sb.Blocks);
-        q = zput(q, " rate=0x");     q = zhex(q, g_sb.RateHz);
-        q = zput(q, "} mixed=0x");   q = zhex(q, g_audio.FramesMixed);
+        q = LogPut(q, " sb{mode=0x");  q = LogHex(q, (DWORD)g_sb.TransferMode);
+        q = LogPut(q, " left=0x");     q = LogHex(q, g_sb.BlockRemaining);
+        q = LogPut(q, " len=0x");      q = LogHex(q, g_sb.BlockLength);
+        q = LogPut(q, " blocks=0x");   q = LogHex(q, g_sb.Blocks);
+        q = LogPut(q, " rate=0x");     q = LogHex(q, g_sb.RateHz);
+        q = LogPut(q, "} mixed=0x");   q = LogHex(q, g_audio.FramesMixed);
         /* ► THE 3DA VIEW: did the guest's vblank polls reach the VDD, and what was
              it told last? Mario spins >1s on `in al,3DA / test al,8 / jz` before
              the breakpoint kill; 700k reads with no edge is either "the reads
              never reach status_in" or "the model never asserts bit 3", and only
              these two numbers can tell them apart. (session 62) */
-        q = zput(q, " p3da=0x");     q = zhex(q, g_vid.Port3DaReads);
-        q = zput(q, "/edges=0x");    q = zhex(q, g_vid.VblEdges);
-        q = zput(q, "/last=0x");     q = zhexb(q, g_vid.Retrace);
+        q = LogPut(q, " p3da=0x");     q = LogHex(q, g_vid.Port3DaReads);
+        q = LogPut(q, "/edges=0x");    q = LogHex(q, g_vid.VblEdges);
+        q = LogPut(q, "/last=0x");     q = LogHexByte(q, g_vid.Retrace);
         /* ► THE LIVE DISPLAY START, so a VRAM watchpoint can be AIMED. The exit
              report prints it once, at exit, when the guest is back in text mode --
              useless for `offset = start + y*stride + x/8` during gameplay. (s68) */
-        q = zput(q, " crtc=0x");     q = zhex(q, g_vid.CrtcStartLive);
-        q = zput(q, "/flips=0x");    q = zhex(q, g_vid.CrtcStartWrites);
-        q = zput(q, "/ofs=0x");      q = zhexb(q, g_vid.CrtcOffset);
+        q = LogPut(q, " crtc=0x");     q = LogHex(q, g_vid.CrtcStartLive);
+        q = LogPut(q, "/flips=0x");    q = LogHex(q, g_vid.CrtcStartWrites);
+        q = LogPut(q, "/ofs=0x");      q = LogHexByte(q, g_vid.CrtcOffset);
         /* ► AND THE CLOCK THOSE TWO ARE RATES AGAINST. Without it the only time axis
              on this line is irq0, and irq0 is the PIT -- which a guest REPROGRAMS.
              Reading frames-per-second off a beat count that the guest itself can
@@ -7479,7 +7479,7 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
              the same run. This is the same microsecond clock the retrace model and
              the PIT sync derive from, so edges/ms on this line is a measurement and
              not a conversion. */
-        q = zput(q, " t_ms=0x");     q = zhex(q, (uint32_t)(host_time_us() / 1000u));
+        q = LogPut(q, " t_ms=0x");     q = LogHex(q, (uint32_t)(host_time_us() / 1000u));
         /* ► THE BYTES AT THE BEAT'S CS:IP. Mario's host dies between beats with
              exit 0x80000003 and NO user-mode dispatch, so the last heartbeat is
              the only witness -- and a bare cs:ip in a moving guest names nothing
@@ -7492,10 +7492,10 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
              RPM on our own process fails cleanly instead of faulting. */
         if (cs || ip) {
             BYTE cb8[8]; SIZE_T got = 0;
-            q = zput(q, " code@csip=");
+            q = LogPut(q, " code@csip=");
             if (ReadProcessMemory(GetCurrentProcess(), (LPCVOID)(ULONG_PTR)((cs << 4) + ip), cb8, 8, &got)
-                && got == 8) q = zdump(q, cb8, 8);
-            else q = zput(q, "<unreadable>");
+                && got == 8) q = LogDump(q, cb8, 8);
+            else q = LogPut(q, "<unreadable>");
         }
         /* ── s69: THE PALETTE FADE, ON THE BEAT. The blank-screen bug is a black
              per-frame palette buffer (ds:0x2668) while the colours are loaded; it is
@@ -7505,25 +7505,25 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
              selector (oracle=4). All zero here = the fade is stuck black. */
         if (g_hb_ds) {
             uint32_t dsb = (uint32_t)g_hb_ds << 4;
-            q = zput(q, " reload=0x"); q = zhex(q, (DWORD)g_pit.Reload);
-            q = zput(q, " dacrow[0-1,2-159,160+,vbl]="); q = zdec(q, g_vid.DacRowHistogram[0]);
-            q = zput(q, "/"); q = zdec(q, g_vid.DacRowHistogram[1]);
-            q = zput(q, "/"); q = zdec(q, g_vid.DacRowHistogram[2]);
-            q = zput(q, "/"); q = zdec(q, g_vid.DacRowHistogram[3]);
-            q = zput(q, " lastrow=0x"); q = zhex(q, (DWORD)g_vid.DacLastRow);
+            q = LogPut(q, " reload=0x"); q = LogHex(q, (DWORD)g_pit.Reload);
+            q = LogPut(q, " dacrow[0-1,2-159,160+,vbl]="); q = LogDecimal(q, g_vid.DacRowHistogram[0]);
+            q = LogPut(q, "/"); q = LogDecimal(q, g_vid.DacRowHistogram[1]);
+            q = LogPut(q, "/"); q = LogDecimal(q, g_vid.DacRowHistogram[2]);
+            q = LogPut(q, "/"); q = LogDecimal(q, g_vid.DacRowHistogram[3]);
+            q = LogPut(q, " lastrow=0x"); q = LogHex(q, (DWORD)g_vid.DacLastRow);
             BYTE pb6[6], pb1; SIZE_T got = 0;
-            q = zput(q, " pal2668=");
+            q = LogPut(q, " pal2668=");
             if (ReadProcessMemory(GetCurrentProcess(), (LPCVOID)(ULONG_PTR)(dsb + 0x2668), pb6, 6, &got)
                 && got == 6) {
-                int j; for (j = 0; j < 6; ++j) q = zhexb(q, pb6[j]);
-            } else q = zput(q, "??");
-            q = zput(q, " 1f7c=");
+                int j; for (j = 0; j < 6; ++j) q = LogHexByte(q, pb6[j]);
+            } else q = LogPut(q, "??");
+            q = LogPut(q, " 1f7c=");
             if (ReadProcessMemory(GetCurrentProcess(), (LPCVOID)(ULONG_PTR)(dsb + 0x1f7c), &pb1, 1, &got)
-                && got == 1) q = zhexb(q, pb1);
-            else q = zput(q, "??");
+                && got == 1) q = LogHexByte(q, pb1);
+            else q = LogPut(q, "??");
         }
-        q = zput(q, "\r\n");
-        log_append(LOG_PATH, b, q); serial_out(b, q);
+        q = LogPut(q, "\r\n");
+        LogAppend(LOG_PATH, b, q); serial_out(b, q);
         Sleep(500);
     }
     return 0;
@@ -7539,10 +7539,10 @@ static void host_rec_finish(void)
     if (!AudioWaveIsRecording()) return;
     dr = AudioWaveRecordDropped();
     n  = AudioWaveRecordStop();
-    rq = zput(rq, "STAGE2: audio recording closed: frames=0x"); rq = zhex(rq, n);   /* stereo L/R pairs (#189) */
-    rq = zput(rq, " dropped=0x"); rq = zhex(rq, dr);
-    rq = zput(rq, dr ? " (the ring filled -- the file has holes)\r\n" : "\r\n");
-    log_append(LOG_PATH, rb, rq); serial_out(rb, rq);
+    rq = LogPut(rq, "STAGE2: audio recording closed: frames=0x"); rq = LogHex(rq, n);   /* stereo L/R pairs (#189) */
+    rq = LogPut(rq, " dropped=0x"); rq = LogHex(rq, dr);
+    rq = LogPut(rq, dr ? " (the ring filled -- the file has holes)\r\n" : "\r\n");
+    LogAppend(LOG_PATH, rb, rq); serial_out(rb, rq);
 }
 
 /* ► WHICH CLAUSE SAID NO, PER LINE. `attempts` and `delivered` give the shortfall as one
@@ -7565,26 +7565,26 @@ static void async_why_report(void)
     /* NO SILENT CAPS: say how many ASYNC-EARLY lines were written and how many were
        suppressed, so the log's thinness is never read as "it stopped happening". The
        histogram below is the complete account either way. */
-    p = zput(p, "STAGE2: async early-bail lines logged=");
-    p = zhex(p, g_async_early_bail_logged < ASYNC_EARLY_BAIL_LOG_MAX
+    p = LogPut(p, "STAGE2: async early-bail lines logged=");
+    p = LogHex(p, g_async_early_bail_logged < ASYNC_EARLY_BAIL_LOG_MAX
                   ? g_async_early_bail_logged : ASYNC_EARLY_BAIL_LOG_MAX);
-    p = zput(p, " of ");   p = zhex(p, g_async_early_bail_logged);
-    p = zput(p, " (cap "); p = zhex(p, ASYNC_EARLY_BAIL_LOG_MAX);
-    p = zput(p, " -- these are FILE I/O UNDER g_lock; see async_early_bail)\r\n");
-    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+    p = LogPut(p, " of ");   p = LogHex(p, g_async_early_bail_logged);
+    p = LogPut(p, " (cap "); p = LogHex(p, ASYNC_EARLY_BAIL_LOG_MAX);
+    p = LogPut(p, " -- these are FILE I/O UNDER g_lock; see async_early_bail)\r\n");
+    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
     for (wl = 0; wl < 8; ++wl) {     /* one line per IRQ, flushed each: <= 32 x 24 chars */
         unsigned tot = 0;
         for (wc = 0; wc < ASYNC_WHY_MAX; ++wc) tot += g_async_why_hist[wl][wc];
         if (!tot) continue;
-        p = zput(p, "STAGE2: async why irq"); p = zhexb(p, (BYTE)wl);
-        p = zput(p, " total=");               p = zhex(p, tot);
+        p = LogPut(p, "STAGE2: async why irq"); p = LogHexByte(p, (BYTE)wl);
+        p = LogPut(p, " total=");               p = LogHex(p, tot);
         for (wc = 0; wc < ASYNC_WHY_MAX; ++wc) {
             if (!g_async_why_hist[wl][wc]) continue;
-            p = zput(p, " "); p = zput(p, whyname[wc]);
-            p = zput(p, "="); p = zhex(p, g_async_why_hist[wl][wc]);
+            p = LogPut(p, " "); p = LogPut(p, whyname[wc]);
+            p = LogPut(p, "="); p = LogHex(p, g_async_why_hist[wl][wc]);
         }
-        p = zput(p, "\r\n");
-        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+        p = LogPut(p, "\r\n");
+        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
     }
 }
 
@@ -7593,50 +7593,50 @@ static void exec_share_report(void)
 {
     char base[1024], *p = base;
     int e;
-    p = zput(p, "STAGE2: exec share (#238) v86_ms="); p = zdec(p, g_v86_us_total / 1000u);
-    p = zput(p, " host_ms_after_event[ev:ms/count]=");
+    p = LogPut(p, "STAGE2: exec share (#238) v86_ms="); p = LogDecimal(p, g_v86_us_total / 1000u);
+    p = LogPut(p, " host_ms_after_event[ev:ms/count]=");
     for (e = 0; e < EV_HIST_MAX; ++e) {
         if (!g_host_us_ev[e] && !g_ev_hist[e]) continue;
-        p = zput(p, " "); p = zhex(p, (DWORD)e); p = zput(p, ":");
-        p = zdec(p, g_host_us_ev[e] / 1000u); p = zput(p, "/"); p = zdec(p, g_ev_hist[e]);
+        p = LogPut(p, " "); p = LogHex(p, (DWORD)e); p = LogPut(p, ":");
+        p = LogDecimal(p, g_host_us_ev[e] / 1000u); p = LogPut(p, "/"); p = LogDecimal(p, g_ev_hist[e]);
     }
     {   /* the six busiest BOP numbers */
         DWORD seen[256]; int k, j;
         for (k = 0; k < 256; ++k) seen[k] = g_bop_hist[k];
-        p = zput(p, " bops:");
+        p = LogPut(p, " bops:");
         for (j = 0; j < 6; ++j) {
             int best = -1;
             for (k = 0; k < 256; ++k) if (seen[k] && (best < 0 || seen[k] > seen[best])) best = k;
             if (best < 0) break;
-            p = zput(p, " "); p = zhexb(p, (BYTE)best); p = zput(p, "="); p = zdec(p, seen[best]);
+            p = LogPut(p, " "); p = LogHexByte(p, (BYTE)best); p = LogPut(p, "="); p = LogDecimal(p, seen[best]);
             seen[best] = 0;
         }
     }
-    p = zput(p, "\r\nSTAGE2: irq0 coop skip="); p = zdec(p, g_irq0_skip);
-    p = zput(p, " if="); p = zdec(p, g_irq0_skip_if);
-    p = zput(p, " stub="); p = zdec(p, g_irq0_skip_stub);
-    p = zput(p, " inj="); p = zdec(p, g_irq0_inj);
-    p = zput(p, " if-off callers of our stubs:");
+    p = LogPut(p, "\r\nSTAGE2: irq0 coop skip="); p = LogDecimal(p, g_irq0_skip);
+    p = LogPut(p, " if="); p = LogDecimal(p, g_irq0_skip_if);
+    p = LogPut(p, " stub="); p = LogDecimal(p, g_irq0_skip_stub);
+    p = LogPut(p, " inj="); p = LogDecimal(p, g_irq0_inj);
+    p = LogPut(p, " if-off callers of our stubs:");
     for (e = 0; e < SKIPIF_SITES && g_skipif_site[e].n; ++e) {
-        p = zput(p, " "); p = zhex(p, g_skipif_site[e].cs); p = zput(p, ":");
-        p = zhex(p, g_skipif_site[e].ip); p = zput(p, "(stub+"); p = zhex(p, g_skipif_site[e].stub);
-        p = zput(p, ")x"); p = zdec(p, g_skipif_site[e].n);
+        p = LogPut(p, " "); p = LogHex(p, g_skipif_site[e].cs); p = LogPut(p, ":");
+        p = LogHex(p, g_skipif_site[e].ip); p = LogPut(p, "(stub+"); p = LogHex(p, g_skipif_site[e].stub);
+        p = LogPut(p, ")x"); p = LogDecimal(p, g_skipif_site[e].n);
     }
-    p = zput(p, "\r\n");
-    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+    p = LogPut(p, "\r\n");
+    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
     {   static const char *const xn[XS_N] = { "raise","async","coop","nie","bop","io","hostms","pace" };
         int c; DWORD sN;
         for (c = 0; c < XS_N; ++c) {
-            p = zput(p, "STAGE2: persec "); p = zput(p, xn[c]); p = zput(p, "=");
+            p = LogPut(p, "STAGE2: persec "); p = LogPut(p, xn[c]); p = LogPut(p, "=");
             for (sN = 1; sN < g_xs_sec; ++sN) {
-                p = zput(p, sN > 1 ? "," : "");
-                p = zdec(p, g_xs_snap[sN][c] - g_xs_snap[sN - 1][c]);
+                p = LogPut(p, sN > 1 ? "," : "");
+                p = LogDecimal(p, g_xs_snap[sN][c] - g_xs_snap[sN - 1][c]);
             }
-            p = zput(p, "\r\n");
-            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            p = LogPut(p, "\r\n");
+            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
         }
     }
-    log_append(LOG_PATH, base, p); serial_out(base, p);
+    LogAppend(LOG_PATH, base, p); serial_out(base, p);
 }
 
 /* The IF/VIF census (see ifv_note), on its own so the headless forced exit -- which
@@ -7648,43 +7648,43 @@ static void ifv_report(void)
     static const char *const stname[8] = { "000","001","010","011","100","101","110","111" };
     if (g_ifv_starve_open && GetTickCount() - g_ifv_starve_t0 > smax)
         smax = GetTickCount() - g_ifv_starve_t0;
-    p = zput(p, "STAGE2: IFV census (IF,VIF,S714)");
+    p = LogPut(p, "STAGE2: IFV census (IF,VIF,S714)");
     for (path = 0; path < 3; ++path) {
-        p = zput(p, path == 0 ? " live{" : path == 1 ? " vtib01{" : " vtibdev{");
+        p = LogPut(p, path == 0 ? " live{" : path == 1 ? " vtib01{" : " vtibdev{");
         for (st = 0; st < 8; ++st) {
             if (!g_ifv_census[path][st]) continue;
-            p = zput(p, " "); p = zput(p, stname[st]); p = zput(p, "=");
-            p = zhex(p, g_ifv_census[path][st]);
+            p = LogPut(p, " "); p = LogPut(p, stname[st]); p = LogPut(p, "=");
+            p = LogHex(p, g_ifv_census[path][st]);
         }
-        p = zput(p, " }");
+        p = LogPut(p, " }");
     }
-    p = zput(p, " starve_max_ms="); p = zhex(p, smax);
-    p = zput(p, " stretches=");     p = zhex(p, g_ifv_starve_n);
-    p = zput(p, " shadow{");
+    p = LogPut(p, " starve_max_ms="); p = LogHex(p, smax);
+    p = LogPut(p, " stretches=");     p = LogHex(p, g_ifv_starve_n);
+    p = LogPut(p, " shadow{");
     for (ln = 0; ln < 16; ++ln) {
         if (!g_ifv_shadow[ln]) continue;
-        p = zput(p, " irq"); p = zhexb(p, (BYTE)ln);
-        p = zput(p, "=");    p = zhex(p, g_ifv_shadow[ln]);
+        p = LogPut(p, " irq"); p = LogHexByte(p, (BYTE)ln);
+        p = LogPut(p, "=");    p = LogHex(p, g_ifv_shadow[ln]);
     }
-    p = zput(p, " } reenter{");
+    p = LogPut(p, " } reenter{");
     for (ln = 0; ln < 16; ++ln) {
         if (!g_ifv_reenter[ln]) continue;
-        p = zput(p, " irq"); p = zhexb(p, (BYTE)ln);
-        p = zput(p, "=");    p = zhex(p, g_ifv_reenter[ln]);
+        p = LogPut(p, " irq"); p = LogHexByte(p, (BYTE)ln);
+        p = LogPut(p, "=");    p = LogHex(p, g_ifv_reenter[ln]);
     }
-    p = zput(p, " }\r\n");
-    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+    p = LogPut(p, " }\r\n");
+    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
     { LONG i, n = g_ifv_ntrace < IFV_TRACE_MAX ? g_ifv_ntrace : IFV_TRACE_MAX;
       for (i = 0; i < n; ++i) {
-          p = zput(p, "STAGE2: IFV irq"); p = zhexb(p, g_ifv_trace[i].irq);
-          p = zput(p, g_ifv_trace[i].path == 0 ? " async" : " coop");
-          p = zput(p, " st=");  p = zput(p, stname[g_ifv_trace[i].st & 7]);
-          p = zput(p, " fl=0x"); p = zhex(p, g_ifv_trace[i].fl);
-          p = zput(p, " at ");   p = zhex(p, g_ifv_trace[i].cs);
-          p = zput(p, ":");      p = zhex(p, g_ifv_trace[i].ip);
-          p = zput(p, "\r\n");
+          p = LogPut(p, "STAGE2: IFV irq"); p = LogHexByte(p, g_ifv_trace[i].irq);
+          p = LogPut(p, g_ifv_trace[i].path == 0 ? " async" : " coop");
+          p = LogPut(p, " st=");  p = LogPut(p, stname[g_ifv_trace[i].st & 7]);
+          p = LogPut(p, " fl=0x"); p = LogHex(p, g_ifv_trace[i].fl);
+          p = LogPut(p, " at ");   p = LogHex(p, g_ifv_trace[i].cs);
+          p = LogPut(p, ":");      p = LogHex(p, g_ifv_trace[i].ip);
+          p = LogPut(p, "\r\n");
       }
-      log_append(LOG_PATH, base, p); serial_out(base, p); p = base; } }
+      LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base; } }
 }
 
 /* Headless deadline watchdog (session-9). A headless run must self-bound even when the
@@ -7721,8 +7721,8 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
     }
     InterlockedExchange(&g_running, 0);         /* stop exec loops + unblock key reads */
     if (g_key_event) SetEvent(g_key_event);     /* wake a blocked host_conin/INT16 wait */
-    q = zput(q, "HEADLESS: deadline reached -> g_running=0 (wind down)\r\n");
-    log_append(LOG_PATH, b, q); serial_out(b, q);
+    q = LogPut(q, "HEADLESS: deadline reached -> g_running=0 (wind down)\r\n");
+    LogAppend(LOG_PATH, b, q); serial_out(b, q);
     if (g_memdump_len) {                        /* MEMDUMP_FLAG: the guest is still mapped */
         HANDLE hd = CreateFileA(MEMDUMP_PATH, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
         DWORD done = 0, off = 0;
@@ -7736,9 +7736,9 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
             }
             CloseHandle(hd);
         }
-        q = b; q = zput(q, "HEADLESS: memdump 0x"); q = zhex(q, g_memdump_lin);
-        q = zput(q, " +0x"); q = zhex(q, g_memdump_len); q = zput(q, " -> memdump.bin, readable bytes 0x");
-        q = zhex(q, done); q = zput(q, "\r\n"); log_append(LOG_PATH, b, q); serial_out(b, q);
+        q = b; q = LogPut(q, "HEADLESS: memdump 0x"); q = LogHex(q, g_memdump_lin);
+        q = LogPut(q, " +0x"); q = LogHex(q, g_memdump_len); q = LogPut(q, " -> memdump.bin, readable bytes 0x");
+        q = LogHex(q, done); q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, b, q); serial_out(b, q);
     }
 
     /* HARD BACKSTOP. Clearing g_running only stops a loop that gets a turn, and the
@@ -7757,75 +7757,75 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         async_why_report();
         exec_share_report();
         ifv_report();
-        q = zput(q, "HEADLESS: exec loop never wound down (guest spinning in V86 with"
+        q = LogPut(q, "HEADLESS: exec loop never wound down (guest spinning in V86 with"
                     " no traps) -> forcing process exit\r\n");
         /* Report WHERE it froze and what the counters say. Without this the forced
            exit throws away the only evidence of why the guest stopped trapping,
            which is exactly what we need to disassemble the offending loop. */
         if (f_ok) {
-            q = zput(q, "  frozen at CS:IP=0x"); q = zhex(q, f_cs);
-            q = zput(q, ":0x"); q = zhex(q, f_ip);
-            q = zput(q, " EFL=0x"); q = zhex(q, f_efl);
-            q = zput(q, " tick=0x"); q = zhex(q, f_tick);
-            q = zput(q, "\r\n  bytes: "); q = zdump(q, f_bytes, 12);
-            q = zput(q, "\r\n");
+            q = LogPut(q, "  frozen at CS:IP=0x"); q = LogHex(q, f_cs);
+            q = LogPut(q, ":0x"); q = LogHex(q, f_ip);
+            q = LogPut(q, " EFL=0x"); q = LogHex(q, f_efl);
+            q = LogPut(q, " tick=0x"); q = LogHex(q, f_tick);
+            q = LogPut(q, "\r\n  bytes: "); q = LogDump(q, f_bytes, 12);
+            q = LogPut(q, "\r\n");
         }
-        log_append(LOG_PATH, b, q); serial_out(b, q); q = b;
-        q = zput(q, "  io_events=0x");  q = zhex(q, g_ev_io);
-        q = zput(q, " io_burst=0x");    q = zhex(q, g_io_extra);
-        q = zput(q, " iostr=0x");       q = zhex(q, g_ev_iostr);
-        q = zput(q, " irq0_inj=0x");    q = zhex(q, g_irq0_inj);
-        q = zput(q, " irq0_skip=0x");   q = zhex(q, g_irq0_skip);
-        q = zput(q, " intpend=0x");     q = zhex(q, g_ev_intpend);
-        q = zput(q, " irqn_inj=0x");    q = zhex(q, g_irqn_inj);
-        q = zput(q, " irqn_refused=0x"); q = zhex(q, g_irqn_refuse_total);
-        q = zput(q, " raised_any=0x"); q = zhex(q, g_irq_raised_any);
-        q = zput(q, " async_inj=0x");  q = zhex(q, g_async_inj);
-        q = zput(q, " async_bail=0x"); q = zhex(q, g_async_bail);
-        { int r; q = zput(q, " raised[0..15]=");
-          for (r = 0; r < 16; ++r) { q = zput(q, "0x"); q = zhex(q, g_irq_raised[r]); q = zput(q, " "); } }
-        q = zput(q, " sb_irq=0x"); q = zhex(q, (DWORD)g_sb.Irq);
-        q = zput(q, " qi_calls=0x");    q = zhex(q, g_qi_calls);
-        q = zput(q, " qi_st=0x");       q = zhex(q, (DWORD)g_qi_status);
-        q = zput(q, " state714=0x");    q = zhex(q, *(volatile DWORD *)(ULONG_PTR)0x714);
-        q = zput(q, "\r\n  audio: silent=0x"); q = zhex(q, (DWORD)g_wave.IsSilent);
-        q = zput(q, " mixed=0x");        q = zhex(q, g_audio.FramesMixed);
-        q = zput(q, " sb_dspwr=0x");     q = zhex(q, g_sb.DspWrites);
-        q = zput(q, " sb_blocks=0x");    q = zhex(q, g_sb.Blocks);
-        q = zput(q, " sb_mode=0x");      q = zhex(q, (DWORD)g_sb.TransferMode);
-        q = zput(q, " sb_rate=0x");      q = zhex(q, g_sb.RateHz);
+        LogAppend(LOG_PATH, b, q); serial_out(b, q); q = b;
+        q = LogPut(q, "  io_events=0x");  q = LogHex(q, g_ev_io);
+        q = LogPut(q, " io_burst=0x");    q = LogHex(q, g_io_extra);
+        q = LogPut(q, " iostr=0x");       q = LogHex(q, g_ev_iostr);
+        q = LogPut(q, " irq0_inj=0x");    q = LogHex(q, g_irq0_inj);
+        q = LogPut(q, " irq0_skip=0x");   q = LogHex(q, g_irq0_skip);
+        q = LogPut(q, " intpend=0x");     q = LogHex(q, g_ev_intpend);
+        q = LogPut(q, " irqn_inj=0x");    q = LogHex(q, g_irqn_inj);
+        q = LogPut(q, " irqn_refused=0x"); q = LogHex(q, g_irqn_refuse_total);
+        q = LogPut(q, " raised_any=0x"); q = LogHex(q, g_irq_raised_any);
+        q = LogPut(q, " async_inj=0x");  q = LogHex(q, g_async_inj);
+        q = LogPut(q, " async_bail=0x"); q = LogHex(q, g_async_bail);
+        { int r; q = LogPut(q, " raised[0..15]=");
+          for (r = 0; r < 16; ++r) { q = LogPut(q, "0x"); q = LogHex(q, g_irq_raised[r]); q = LogPut(q, " "); } }
+        q = LogPut(q, " sb_irq=0x"); q = LogHex(q, (DWORD)g_sb.Irq);
+        q = LogPut(q, " qi_calls=0x");    q = LogHex(q, g_qi_calls);
+        q = LogPut(q, " qi_st=0x");       q = LogHex(q, (DWORD)g_qi_status);
+        q = LogPut(q, " state714=0x");    q = LogHex(q, *(volatile DWORD *)(ULONG_PTR)0x714);
+        q = LogPut(q, "\r\n  audio: silent=0x"); q = LogHex(q, (DWORD)g_wave.IsSilent);
+        q = LogPut(q, " mixed=0x");        q = LogHex(q, g_audio.FramesMixed);
+        q = LogPut(q, " sb_dspwr=0x");     q = LogHex(q, g_sb.DspWrites);
+        q = LogPut(q, " sb_blocks=0x");    q = LogHex(q, g_sb.Blocks);
+        q = LogPut(q, " sb_mode=0x");      q = LogHex(q, (DWORD)g_sb.TransferMode);
+        q = LogPut(q, " sb_rate=0x");      q = LogHex(q, g_sb.RateHz);
         /* Is what it streamed SOUND? A forced exit never prints the sb OUTPUT block, and
            that was how ZAR's runs end (s81). Flat = no dynamic range (SB_FLAT_RANGE). */
-        q = zput(q, " sb_checked=0x");   q = zhex(q, g_sb.BlocksChecked);
-        q = zput(q, " sb_flat=0x");      q = zhex(q, g_sb.BlocksFlat);
-        q = zput(q, " bda_tick=0x");    q = zhex(q, ((DWORD)peekw(0x46E) << 16) | peekw(0x46C));
-        q = zput(q, "\r\n");
-        log_append(LOG_PATH, b, q); serial_out(b, q); q = b;
-        { int i; q = zput(q, "  hot ports:");
+        q = LogPut(q, " sb_checked=0x");   q = LogHex(q, g_sb.BlocksChecked);
+        q = LogPut(q, " sb_flat=0x");      q = LogHex(q, g_sb.BlocksFlat);
+        q = LogPut(q, " bda_tick=0x");    q = LogHex(q, ((DWORD)peekw(0x46E) << 16) | peekw(0x46C));
+        q = LogPut(q, "\r\n");
+        LogAppend(LOG_PATH, b, q); serial_out(b, q); q = b;
+        { int i; q = LogPut(q, "  hot ports:");
           for (i = 0; i < g_io_hot_n; ++i) {
-              q = zput(q, " 0x"); q = zhex(q, g_io_hot[i].port);
-              q = zput(q, "=0x"); q = zhex(q, g_io_hot[i].n);
+              q = LogPut(q, " 0x"); q = LogHex(q, g_io_hot[i].port);
+              q = LogPut(q, "=0x"); q = LogHex(q, g_io_hot[i].n);
           }
-          q = zput(q, "\r\n  pit_reload=0x"); q = zhex(q, (DWORD)g_pit.Reload);
-          q = zput(q, " pit_mode=0x");          q = zhex(q, (DWORD)g_pit.Mode);
-          q = zput(q, "\r\n");
-          log_append(LOG_PATH, b, q); serial_out(b, q); q = b; }
-        { int i; q = zput(q, "  unclaimed ports touched:");
-          for (i = 0; i < g_unclaimed_n; ++i) { q = zput(q, " 0x"); q = zhex(q, g_unclaimed[i]); }
-          q = zput(q, "\r\n"); }
+          q = LogPut(q, "\r\n  pit_reload=0x"); q = LogHex(q, (DWORD)g_pit.Reload);
+          q = LogPut(q, " pit_mode=0x");          q = LogHex(q, (DWORD)g_pit.Mode);
+          q = LogPut(q, "\r\n");
+          LogAppend(LOG_PATH, b, q); serial_out(b, q); q = b; }
+        { int i; q = LogPut(q, "  unclaimed ports touched:");
+          for (i = 0; i < g_unclaimed_n; ++i) { q = LogPut(q, " 0x"); q = LogHex(q, g_unclaimed[i]); }
+          q = LogPut(q, "\r\n"); }
         /* The VESA inventory too: a guest that spins at wind-down (Heretic, Hexen,
            ZAR) never reaches the STAGE2 summary, and the corpus sweep read "no line"
            as "no data" for exactly the three guests it most wanted. (s74b) */
-        { int i, any = 0; q = zput(q, "  VESA calls by sub-function:");
+        { int i, any = 0; q = LogPut(q, "  VESA calls by sub-function:");
           for (i = 0; i < 0x16; ++i) if (g_vid.VesaCalls[i]) {
-              any = 1; q = zput(q, " 4F"); q = zhexb(q, (unsigned)i); q = zput(q, "x"); q = zhex(q, g_vid.VesaCalls[i]); }
-          if (!any) q = zput(q, " none");
+              any = 1; q = LogPut(q, " 4F"); q = LogHexByte(q, (unsigned)i); q = LogPut(q, "x"); q = LogHex(q, g_vid.VesaCalls[i]); }
+          if (!any) q = LogPut(q, " none");
           if (g_vid.VbePmBankCount | g_vid.VbePmStartCount | g_vid.VbePmRejected) {   /* #53 */
-              q = zput(q, " | 4F0A-block banks=0x"); q = zhex(q, g_vid.VbePmBankCount);
-              q = zput(q, " starts=0x"); q = zhex(q, g_vid.VbePmStartCount);
-              q = zput(q, " refused=0x"); q = zhex(q, g_vid.VbePmRejected); }
-          q = zput(q, "\r\n"); }
-        log_append(LOG_PATH, b, q); serial_out(b, q);
+              q = LogPut(q, " | 4F0A-block banks=0x"); q = LogHex(q, g_vid.VbePmBankCount);
+              q = LogPut(q, " starts=0x"); q = LogHex(q, g_vid.VbePmStartCount);
+              q = LogPut(q, " refused=0x"); q = LogHex(q, g_vid.VbePmRejected); }
+          q = LogPut(q, "\r\n"); }
+        LogAppend(LOG_PATH, b, q); serial_out(b, q);
         /* ── ⛔ AND THE REGISTER FILE HERE TOO, NOT ONLY ON THE CLEAN PATH. ──────────
              The STAGE2 summary is printed by the wind-down path, and a guest that has
              to be forced out never reaches it -- Doom headless and ZAR both leave this
@@ -7836,7 +7836,7 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         gus_report();        /* north star 2: and so does heaven7 */
         {   static char vr2[2048];
             int n2 = VddVideoRegistersDump(&g_vid, vr2, (int)sizeof vr2);
-            if (n2 > 0) { log_append(LOG_PATH, vr2, vr2 + n2); serial_out(vr2, vr2 + n2); } }
+            if (n2 > 0) { LogAppend(LOG_PATH, vr2, vr2 + n2); serial_out(vr2, vr2 + n2); } }
         host_rec_finish();
         ExitProcess(3);
     }
@@ -8874,11 +8874,11 @@ out:
         static DWORD said_refused = 0;
         if (!rc || ++said_refused <= 16) {
             char b[160], *q = b;
-            q = zput(q, "  INT15 AH=87h move 0x"); q = zhex(q, n);
-            q = zput(q, " bytes src=0x"); q = zhex(q, gdt ? DosExtMemDescriptorBase(gdt + 0x10) : 0);
-            q = zput(q, " dst=0x");       q = zhex(q, gdt ? DosExtMemDescriptorBase(gdt + 0x18) : 0);
-            q = zput(q, rc ? " -> REFUSED (unresolvable range), AH=02\r\n" : " -> done\r\n");
-            log_append(LOG_PATH, b, q);
+            q = LogPut(q, "  INT15 AH=87h move 0x"); q = LogHex(q, n);
+            q = LogPut(q, " bytes src=0x"); q = LogHex(q, gdt ? DosExtMemDescriptorBase(gdt + 0x10) : 0);
+            q = LogPut(q, " dst=0x");       q = LogHex(q, gdt ? DosExtMemDescriptorBase(gdt + 0x18) : 0);
+            q = LogPut(q, rc ? " -> REFUSED (unresolvable range), AH=02\r\n" : " -> done\r\n");
+            LogAppend(LOG_PATH, b, q);
         }
     }
     return rc;
@@ -8935,9 +8935,9 @@ static void exec_mach_restore(int d, char **pp)
     g_ms_cb_active = 0;
     i33_reset_state();
     InterlockedExchange(&g_ms_want_capture, 0);
-    *pp = zput(*pp, "CLOSEPROG: machine restored to the parent's (IVT, PIC, PIT");
-    *pp = zput(*pp, remode ? ", video mode 0x" : ")\r\n");
-    if (remode) { *pp = zhexb(*pp, g_exec_mach[d].vmode); *pp = zput(*pp, ")\r\n"); }
+    *pp = LogPut(*pp, "CLOSEPROG: machine restored to the parent's (IVT, PIC, PIT");
+    *pp = LogPut(*pp, remode ? ", video mode 0x" : ")\r\n");
+    if (remode) { *pp = LogHexByte(*pp, g_exec_mach[d].vmode); *pp = LogPut(*pp, ")\r\n"); }
 }
 
 /* V86 loop: 1 = a child was ended and its parent resumed, 0 = the program we were
@@ -8945,16 +8945,16 @@ static void exec_mach_restore(int d, char **pp)
 static int close_prog_now(DOS_MACHINE *m, void *tib, char **pp, char *base)
 {
     if (g_exec_depth > 0) {
-        *pp = zput(*pp, "CLOSEPROG: ending the program at depth ");
-        *pp = zhexb(*pp, (unsigned)g_exec_depth); *pp = zput(*pp, " (File > Close Program)\r\n");
+        *pp = LogPut(*pp, "CLOSEPROG: ending the program at depth ");
+        *pp = LogHexByte(*pp, (unsigned)g_exec_depth); *pp = LogPut(*pp, " (File > Close Program)\r\n");
         exec_mach_restore(g_exec_depth - 1, pp);
         if (g_routed && g_exec_depth == 1) g_back_to_prompt = 1;   /* #208 */
         m->IsTsrPending = 0;
         m->ExitCode = 0;
         return dos_terminate(m, tib, pp, base);
     }
-    *pp = zput(*pp, "CLOSEPROG: ending the top-level program -- the run is over\r\n");
-    log_append(LOG_PATH, base, *pp); *pp = base;
+    *pp = LogPut(*pp, "CLOSEPROG: ending the top-level program -- the run is over\r\n");
+    LogAppend(LOG_PATH, base, *pp); *pp = base;
     m->ExitCode = 0;
     return 0;
 }
@@ -9609,10 +9609,10 @@ static void mouse_cb_try(volatile BYTE *tib)
         if (rs[0] != VDM_BOP0 || rs[1] != VDM_BOP1 || rs[2] != MS_CB_BOP) {
             if (g_ms_cb_why[5] < 4) {
                 char cb[160], *cq = cb;
-                cq = zput(cq, "MOUSECB REFUSED: return stub at 0050:");
-                cq = zhex(cq, MS_CB_RET_OFF); cq = zput(cq, " overwritten by the guest: ");
-                cq = zdump(cq, (const void *)rs, 4); cq = zput(cq, "\r\n");
-                log_append(LOG_PATH, cb, cq);
+                cq = LogPut(cq, "MOUSECB REFUSED: return stub at 0050:");
+                cq = LogHex(cq, MS_CB_RET_OFF); cq = LogPut(cq, " overwritten by the guest: ");
+                cq = LogDump(cq, (const void *)rs, 4); cq = LogPut(cq, "\r\n");
+                LogAppend(LOG_PATH, cb, cq);
             }
             ++g_ms_cb_why[5];
             g_ms_evq_tail = g_ms_evq_head; InterlockedExchange(&g_ms_evt_pend, 0);
@@ -9647,37 +9647,37 @@ static void mouse_cb_try(volatile BYTE *tib)
     if (g_ms_cb_inj <= 3) g_ms_cb_trace = 10;     /* see g_ms_cb_trace: the next VM events */
     if (g_ms_cb_inj <= 16) {                       /* the first few, with where from */
         char cb[384], *cq = cb;
-        cq = zput(cq, "MOUSECB inject #"); cq = zhex(cq, g_ms_cb_inj);
-        cq = zput(cq, " ev=0x");   cq = zhex(cq, (DWORD)pend);
-        cq = zput(cq, " from=0x"); cq = zhex(cq, g_ms_cb_saved.cs);
-        cq = zput(cq, ":0x");      cq = zhex(cq, g_ms_cb_saved.eip);
-        cq = zput(cq, " efl=0x");  cq = zhex(cq, g_ms_cb_saved.efl);
-        cq = zput(cq, " ss:sp=0x"); cq = zhex(cq, g_ms_cb_saved.ss);
-        cq = zput(cq, ":0x");      cq = zhex(cq, g_ms_cb_saved.esp);
-        cq = zput(cq, " -> 0x");   cq = zhex(cq, (DWORD)hseg);
-        cq = zput(cq, ":0x");      cq = zhex(cq, hoff & 0xFFFF);
+        cq = LogPut(cq, "MOUSECB inject #"); cq = LogHex(cq, g_ms_cb_inj);
+        cq = LogPut(cq, " ev=0x");   cq = LogHex(cq, (DWORD)pend);
+        cq = LogPut(cq, " from=0x"); cq = LogHex(cq, g_ms_cb_saved.cs);
+        cq = LogPut(cq, ":0x");      cq = LogHex(cq, g_ms_cb_saved.eip);
+        cq = LogPut(cq, " efl=0x");  cq = LogHex(cq, g_ms_cb_saved.efl);
+        cq = LogPut(cq, " ss:sp=0x"); cq = LogHex(cq, g_ms_cb_saved.ss);
+        cq = LogPut(cq, ":0x");      cq = LogHex(cq, g_ms_cb_saved.esp);
+        cq = LogPut(cq, " -> 0x");   cq = LogHex(cq, (DWORD)hseg);
+        cq = LogPut(cq, ":0x");      cq = LogHex(cq, hoff & 0xFFFF);
         /* The three things the handler's return depends on, read back from guest memory:
            the code at the handler, the return BOP at DOS_HDLR_SEG:MS_CB_RET_OFF, and the
            far-return frame just pushed. If any is not what was intended, the trace that
            follows is explained before it is read. */
-        cq = zput(cq, " code@hdl=");
-        cq = zdump(cq, (const void *)(ULONG_PTR)(((DWORD)hseg << 4) + (hoff & 0xFFFF)), 8);
-        cq = zput(cq, " ret@50:12=");
-        cq = zdump(cq, (const void *)(ULONG_PTR)((DOS_HDLR_SEG << 4) + MS_CB_RET_OFF), 4);
-        cq = zput(cq, " frame@sp=");
-        cq = zdump(cq, (const void *)(ULONG_PTR)((ss << 4) + sp), 4);
-        cq = zput(cq, "\r\n");
-        log_append(LOG_PATH, cb, cq);
+        cq = LogPut(cq, " code@hdl=");
+        cq = LogDump(cq, (const void *)(ULONG_PTR)(((DWORD)hseg << 4) + (hoff & 0xFFFF)), 8);
+        cq = LogPut(cq, " ret@50:12=");
+        cq = LogDump(cq, (const void *)(ULONG_PTR)((DOS_HDLR_SEG << 4) + MS_CB_RET_OFF), 4);
+        cq = LogPut(cq, " frame@sp=");
+        cq = LogDump(cq, (const void *)(ULONG_PTR)((ss << 4) + sp), 4);
+        cq = LogPut(cq, "\r\n");
+        LogAppend(LOG_PATH, cb, cq);
         /* Once: the DOS communication area as the guest has left it. This is how the
            BASIC slots were found (0050:0012 = the saved INT 1Ch vector) and it says
            whether anything else of ours below 0x40 -- the INT 10h stub at 0x20 sits
            right after BASIC's INT 24h slot at 0x1A..0x1D -- has been written over. */
         if (g_ms_cb_inj == 1) {
             char ab[256], *aq = ab;
-            aq = zput(aq, "MOUSECB area 0050:0000..003F=");
-            aq = zdump(aq, (const void *)(ULONG_PTR)(DOS_HDLR_SEG << 4), 0x40);
-            aq = zput(aq, "\r\n");
-            log_append(LOG_PATH, ab, aq);
+            aq = LogPut(aq, "MOUSECB area 0050:0000..003F=");
+            aq = LogDump(aq, (const void *)(ULONG_PTR)(DOS_HDLR_SEG << 4), 0x40);
+            aq = LogPut(aq, "\r\n");
+            LogAppend(LOG_PATH, ab, aq);
         }
     }
 }
@@ -9687,16 +9687,16 @@ static void mouse_cb_return(volatile BYTE *tib)
     if (!g_ms_cb_active) {                         /* not ours to unwind: step over  */
         char cb[160], *cq = cb;
         ++g_ms_cb_stray; VDM_REG(tib, VTIB_EIP) += 3;
-        cq = zput(cq, "MOUSECB STRAY return, nothing in flight: ss:sp=0x");
-        cq = zhex(cq, VDM_REG(tib, VTIB_SS) & 0xFFFF); cq = zput(cq, ":0x");
-        cq = zhex(cq, VDM_REG(tib, VTIB_ESP) & 0xFFFF); cq = zput(cq, "\r\n");
-        log_append(LOG_PATH, cb, cq);
+        cq = LogPut(cq, "MOUSECB STRAY return, nothing in flight: ss:sp=0x");
+        cq = LogHex(cq, VDM_REG(tib, VTIB_SS) & 0xFFFF); cq = LogPut(cq, ":0x");
+        cq = LogHex(cq, VDM_REG(tib, VTIB_ESP) & 0xFFFF); cq = LogPut(cq, "\r\n");
+        LogAppend(LOG_PATH, cb, cq);
         return;
     }
     if (g_ms_cb_done < 16) {
         char cb[96], *cq = cb;
-        cq = zput(cq, "MOUSECB return #"); cq = zhex(cq, g_ms_cb_done + 1);
-        cq = zput(cq, " ok\r\n"); log_append(LOG_PATH, cb, cq);
+        cq = LogPut(cq, "MOUSECB return #"); cq = LogHex(cq, g_ms_cb_done + 1);
+        cq = LogPut(cq, " ok\r\n"); LogAppend(LOG_PATH, cb, cq);
     }
     VDM_REG(tib, VTIB_EAX) = g_ms_cb_saved.eax; VDM_REG(tib, VTIB_EBX) = g_ms_cb_saved.ebx;
     VDM_REG(tib, VTIB_ECX) = g_ms_cb_saved.ecx; VDM_REG(tib, VTIB_EDX) = g_ms_cb_saved.edx;
@@ -10255,18 +10255,18 @@ static char *wow_psp_env_check(char *p, const char *where)
         WORD now;
         if (!lin || !host_readable((const void *)pe, 0x2e)) continue;
         if (lin != g_wow_psp_lin[z]) {
-            p = zput(p, "PSPENV REBASED: sel 0x"); p = zhex(p, g_wow_psp_sel[z]);
-            p = zput(p, " 0x"); p = zhex(p, g_wow_psp_lin[z]);
-            p = zput(p, " -> 0x"); p = zhex(p, lin);
-            p = zput(p, " (the PSP we built is at the OLD address)\r\n");
+            p = LogPut(p, "PSPENV REBASED: sel 0x"); p = LogHex(p, g_wow_psp_sel[z]);
+            p = LogPut(p, " 0x"); p = LogHex(p, g_wow_psp_lin[z]);
+            p = LogPut(p, " -> 0x"); p = LogHex(p, lin);
+            p = LogPut(p, " (the PSP we built is at the OLD address)\r\n");
             g_wow_psp_lin[z] = lin;
         }
         now = (WORD)(pe[0x2c] | (pe[0x2d] << 8));
         if (g_wow_psp_env[z] == now) continue;
-        p = zput(p, "PSPENV CHANGED: sel 0x"); p = zhex(p, g_wow_psp_sel[z]);
-        p = zput(p, " +0x2c 0x"); p = zhex(p, g_wow_psp_env[z]);
-        p = zput(p, " -> 0x"); p = zhex(p, now);
-        p = zput(p, " (seen at "); p = zput(p, where); p = zput(p, ")\r\n");
+        p = LogPut(p, "PSPENV CHANGED: sel 0x"); p = LogHex(p, g_wow_psp_sel[z]);
+        p = LogPut(p, " +0x2c 0x"); p = LogHex(p, g_wow_psp_env[z]);
+        p = LogPut(p, " -> 0x"); p = LogHex(p, now);
+        p = LogPut(p, " (seen at "); p = LogPut(p, where); p = LogPut(p, ")\r\n");
         g_wow_psp_env[z] = now;
     }
     return p;
@@ -10326,42 +10326,42 @@ static int wow_load_one(const char *path)
 
     f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
     if (f == INVALID_HANDLE_VALUE) {
-        q = m; q = zput(q, "WOWTRY: cannot open "); q = zput(q, path);
-        q = zput(q, " err=0x"); q = zhex(q, GetLastError());
-        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q); return -1;
+        q = m; q = LogPut(q, "WOWTRY: cannot open "); q = LogPut(q, path);
+        q = LogPut(q, " err=0x"); q = LogHex(q, GetLastError());
+        q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, m, q); return -1;
     }
     sz = GetFileSize(f, NULL);
     img = (uint8_t *)VirtualAlloc(NULL, sz, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!img || !ReadFile(f, img, sz, &got, NULL) || got != sz) {
         CloseHandle(f);
-        q = m; q = zput(q, "WOWTRY: read failed for "); q = zput(q, path);
-        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q); return -1;
+        q = m; q = LogPut(q, "WOWTRY: read failed for "); q = LogPut(q, path);
+        q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, m, q); return -1;
     }
     CloseHandle(f);
 
     if (NeParse(ne, img, sz) != 0) {
-        q = m; q = zput(q, "WOWTRY: ne_parse REJECTED "); q = zput(q, path);
-        q = zput(q, " at ne.h line "); q = zhex(q, (DWORD)ne->Error);
-        q = zput(q, "\r\n"); log_append(LOG_PATH, m, q); return -1;
+        q = m; q = LogPut(q, "WOWTRY: ne_parse REJECTED "); q = LogPut(q, path);
+        q = LogPut(q, " at ne.h line "); q = LogHex(q, (DWORD)ne->Error);
+        q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, m, q); return -1;
     }
     if (NeOwnName(ne, g_wow_name[slot], sizeof g_wow_name[slot]) != 0)
         g_wow_name[slot][0] = 0;
 
     q = m;
-    q = zput(q, "WOWTRY: "); q = zput(q, path);
-    q = zput(q, "\r\n  name=");                q = zput(q, g_wow_name[slot]);
-    q = zput(q, (ne->ProgramFlags & NE_PROG_LIBRARY) ? " LIBRARY" : " PROGRAM");
-    q = zput(q, " segs=");                     q = zhex(q, ne->SegmentCount);
-    q = zput(q, " imports-from=");             q = zhex(q, ne->ModuleCount);
-    q = zput(q, " movable=");                  q = zhex(q, ne->MovableCount);
-    q = zput(q, "\r\n  CS:IP=");               q = zhex(q, ne->CsIp >> 16);
-    q = zput(q, ":");                          q = zhex(q, ne->CsIp & 0xFFFF);
-    q = zput(q, "  SS:SP=");                   q = zhex(q, ne->SsSp >> 16);
-    q = zput(q, ":");                          q = zhex(q, ne->SsSp & 0xFFFF);
-    q = zput(q, "  autodata=");                q = zhex(q, ne->AutoData);
-    q = zput(q, "  heap=0x");                  q = zhex(q, ne->Heap);
-    q = zput(q, "  stack=0x");                 q = zhex(q, ne->Stack);
-    q = zput(q, "\r\n"); log_append(LOG_PATH, m, q);
+    q = LogPut(q, "WOWTRY: "); q = LogPut(q, path);
+    q = LogPut(q, "\r\n  name=");                q = LogPut(q, g_wow_name[slot]);
+    q = LogPut(q, (ne->ProgramFlags & NE_PROG_LIBRARY) ? " LIBRARY" : " PROGRAM");
+    q = LogPut(q, " segs=");                     q = LogHex(q, ne->SegmentCount);
+    q = LogPut(q, " imports-from=");             q = LogHex(q, ne->ModuleCount);
+    q = LogPut(q, " movable=");                  q = LogHex(q, ne->MovableCount);
+    q = LogPut(q, "\r\n  CS:IP=");               q = LogHex(q, ne->CsIp >> 16);
+    q = LogPut(q, ":");                          q = LogHex(q, ne->CsIp & 0xFFFF);
+    q = LogPut(q, "  SS:SP=");                   q = LogHex(q, ne->SsSp >> 16);
+    q = LogPut(q, ":");                          q = LogHex(q, ne->SsSp & 0xFFFF);
+    q = LogPut(q, "  autodata=");                q = LogHex(q, ne->AutoData);
+    q = LogPut(q, "  heap=0x");                  q = LogHex(q, ne->Heap);
+    q = LogPut(q, "  stack=0x");                 q = LogHex(q, ne->Stack);
+    q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, m, q);
 
     for (i = 0; i < (int)ne->SegmentCount; ++i) {
         NE_SEGMENT *s = &ne->Segments[i];
@@ -10370,8 +10370,8 @@ static int wow_load_one(const char *path)
                                          PAGE_READWRITE);
         s->Selector = 0;                          /* NO selector yet -- phase 2 assigns it */
         if (!s->Memory) {
-            q = m; q = zput(q, "WOWTRY: seg alloc failed\r\n");
-            log_append(LOG_PATH, m, q); return -1;
+            q = m; q = LogPut(q, "WOWTRY: seg alloc failed\r\n");
+            LogAppend(LOG_PATH, m, q); return -1;
         }
         if (s->Sector) for (k = 0; k < s->Length; ++k) s->Memory[k] = img[s->FileOffset + k];
     }
@@ -10407,11 +10407,11 @@ static void wow_probe_load(const char *cmd)
     char path[512], sib[512], m[700], *q;
     size_t j;
 
-    q = m; q = zput(q, "WOWTRY: probe begins\r\n"); log_append(LOG_PATH, m, q);
+    q = m; q = LogPut(q, "WOWTRY: probe begins\r\n"); LogAppend(LOG_PATH, m, q);
 
     if (wow_arg_a(cmd, path, sizeof path) != 0) {
-        q = m; q = zput(q, "WOWTRY: no -a argument on the command line\r\n");
-        log_append(LOG_PATH, m, q); return;
+        q = m; q = LogPut(q, "WOWTRY: no -a argument on the command line\r\n");
+        LogAppend(LOG_PATH, m, q); return;
     }
     {   int pi = 0;                       /* keep it: krnl386 needs its own path */
         while (path[pi] && pi < (int)sizeof g_wow_krnl_path - 1) {
@@ -10425,17 +10425,17 @@ static void wow_probe_load(const char *cmd)
         wow_load_one(sib);                    /* logs its own failure; keep going */
     }
 
-    q = m; q = zput(q, "WOWTRY: modules loaded=");  q = zhex(q, (DWORD)g_wow_nmod);
-    q = zput(q, "; NOT relocated yet (selectors first)\r\n");
-    log_append(LOG_PATH, m, q);
+    q = m; q = LogPut(q, "WOWTRY: modules loaded=");  q = LogHex(q, (DWORD)g_wow_nmod);
+    q = LogPut(q, "; NOT relocated yet (selectors first)\r\n");
+    LogAppend(LOG_PATH, m, q);
 }
 
 static int wow_refuse(const char *cmd)
 {
     char m[256], *q = m;
-    q = zput(q, "STAGE0: WIN16/WOW -- NOT SUPPORTED and cannot be handed back "
+    q = LogPut(q, "STAGE0: WIN16/WOW -- NOT SUPPORTED and cannot be handed back "
                 "(see GH #129). Refusing loudly.\r\n");
-    log_append(LOG_PATH, m, q);
+    LogAppend(LOG_PATH, m, q);
     MessageBoxA(NULL,
         "NTVDMEX cannot run 16-bit Windows programs.\n\n"
         "It replaces the DOS half of NTVDM only. Because Windows starts 16-bit "
@@ -10932,9 +10932,9 @@ static void status_speed_text(char *out)
 {
     unsigned mhz = ((unsigned)g_cpuspd_idx < CPUSPEED_COUNT) ? CPUSPEED_MHZ[g_cpuspd_idx] : 0u;
     char *q = out;
-    if (!mhz) { zput(out, "Unlimited"); return; }
-    if (mhz >= 1000u && mhz % 1000u == 0u) { q = zdec(q, mhz / 1000u); zput(q, " GHz"); }
-    else                                   { q = zdec(q, mhz);         zput(q, " MHz"); }
+    if (!mhz) { LogPut(out, "Unlimited"); return; }
+    if (mhz >= 1000u && mhz % 1000u == 0u) { q = LogDecimal(q, mhz / 1000u); LogPut(q, " GHz"); }
+    else                                   { q = LogDecimal(q, mhz);         LogPut(q, " MHz"); }
 }
 
 /* Compose the parts, and push them only when something CHANGES.
@@ -10960,13 +10960,13 @@ static void status_update(void)
         const char *m = (g_dpmi_pm && g_DpmiIsClient32) ? "32-bit Protected Mode"
                       : g_dpmi_pm                      ? "16-bit Protected Mode"
                                                        : "16-bit Real Mode";
-        char *q = zput(mode_txt, m);
+        char *q = LogPut(mode_txt, m);
         if (g_pd.IsSnapshotValid && g_pd.SnapshotWidth > 0 && g_pd.SnapshotHeight > 0 && g_pd.LastDestinationWidth > 0) {
             int sw = g_pd.SnapshotWidth, sh = g_pd.SnapshotHeight, dw = g_pd.LastDestinationWidth, dh = g_pd.LastDestinationHeight;
-            q = zput(q, ", ");  q = zdec(q, (unsigned)sw); q = zput(q, "x"); q = zdec(q, (unsigned)sh);
+            q = LogPut(q, ", ");  q = LogDecimal(q, (unsigned)sw); q = LogPut(q, "x"); q = LogDecimal(q, (unsigned)sh);
             if (dw % sw == 0 && dh % sh == 0 && dw / sw == dh / sh) {
-                q = zput(q, " at "); q = zdec(q, (unsigned)(dw / sw)); q = zput(q, "x");
-            } else q = zput(q, g_fit_down ? " (scaled to fit)" : " (scaled)");
+                q = LogPut(q, " at "); q = LogDecimal(q, (unsigned)(dw / sw)); q = LogPut(q, "x");
+            } else q = LogPut(q, g_fit_down ? " (scaled to fit)" : " (scaled)");
         }
         txt[1] = mode_txt;
     }
@@ -10981,8 +10981,8 @@ static void status_update(void)
     if (zsame(txt[0], g_status_l) && zsame(txt[1], g_status_m) &&
         zsame(txt[2], g_status_s) && zsame(txt[3], g_status_r)) return;
     status_set_parts(txt, n);
-    zput(g_status_l, txt[0]); zput(g_status_m, txt[1]);
-    zput(g_status_s, txt[2]); zput(g_status_r, txt[3]);
+    LogPut(g_status_l, txt[0]); LogPut(g_status_m, txt[1]);
+    LogPut(g_status_s, txt[2]); LogPut(g_status_r, txt[3]);
     SendMessageA(g_status, SB_SETTEXTA, 0, (LPARAM)txt[0]);
     SendMessageA(g_status, SB_SETTEXTA, 1, (LPARAM)txt[1]);
     SendMessageA(g_status, SB_SETTEXTA, 2, (LPARAM)txt[2]);
@@ -11483,9 +11483,9 @@ static int other_hosts_running(void)
 {
     int n; char nm[48];
     for (n = 1; n <= 16; ++n) {
-        HANDLE m; char *q = zput(nm, "Global\\ntvdmex_host_single");
+        HANDLE m; char *q = LogPut(nm, "Global\\ntvdmex_host_single");
         if (n == g_instance) continue;
-        if (n > 1) { *q++ = '_'; q = zdec(q, (unsigned)n); }
+        if (n > 1) { *q++ = '_'; q = LogDecimal(q, (unsigned)n); }
         m = OpenMutexA(SYNCHRONIZE, FALSE, nm);
         if (m) { CloseHandle(m); return 1; }
     }
@@ -11522,11 +11522,11 @@ static void bg_prio_tick(HWND h)
        audio pump (TIME_CRITICAL, 15 in any class) keeps its place. */
     SetPriorityClass(GetCurrentProcess(), bg ? IDLE_PRIORITY_CLASS : NORMAL_PRIORITY_CLASS);
     if (s_logged++ < 32) {
-        char b[128], *q = zput(b, "PRIO: guest thread -> ");
-        q = zput(q, bg ? "idle class (background, another host running)"
+        char b[128], *q = LogPut(b, "PRIO: guest thread -> ");
+        q = LogPut(q, bg ? "idle class (background, another host running)"
                        : "its own priority");
-        q = zput(q, " (#211)\r\n");
-        log_append(LOG_PATH, b, q);
+        q = LogPut(q, " (#211)\r\n");
+        LogAppend(LOG_PATH, b, q);
     }
 }
 
@@ -11567,7 +11567,7 @@ static int open_prompt_line(const char *sp, int rub, char *out, int cap)
     if (dl > 63 || n - slash - 1 > 12 || rub + n + 16 > cap) return 0;
     for (i = 0; i < rub; ++i) *q++ = 0x08;
     *q++ = sp[0]; *q++ = ':'; *q++ = '\r';
-    q = zput(q, "CD ");
+    q = LogPut(q, "CD ");
     for (i = 2; i < (slash == 2 ? 3 : slash); ++i) *q++ = sp[i];
     *q++ = '\r';
     for (i = slash + 1; i < n; ++i) *q++ = sp[i];
@@ -11584,8 +11584,8 @@ static void open_program(HWND h, const char *path)
     int i, cut = -1;
     STARTUPINFOA si; PROCESS_INFORMATION pi;
     if (a == INVALID_FILE_ATTRIBUTES || (a & FILE_ATTRIBUTE_DIRECTORY)) {
-        char m[MAX_PATH + 64], *q = zput(m, "This program could not be found:\n\n");
-        zput(q, path);
+        char m[MAX_PATH + 64], *q = LogPut(m, "This program could not be found:\n\n");
+        LogPut(q, path);
         MessageBoxA(h, m, "NTVDMEX", MB_OK | MB_ICONEXCLAMATION);
         return;
     }
@@ -11595,26 +11595,26 @@ static void open_program(HWND h, const char *path)
     if (open_at_prompt() && sl && sl < sizeof sp && open_is_dos_image(path)
         && open_prompt_line(sp, g_mach->LineLength, line, (int)sizeof line)
         && typein_push(line)) {
-        char lb[MAX_PATH + 64], *lq = zput(lb, "OPEN: typed at the prompt [");
-        lq = zput(lq, sp); lq = zput(lq, "]\r\n");
-        log_append(LOG_PATH, lb, lq);
+        char lb[MAX_PATH + 64], *lq = LogPut(lb, "OPEN: typed at the prompt [");
+        lq = LogPut(lq, sp); lq = LogPut(lq, "]\r\n");
+        LogAppend(LOG_PATH, lb, lq);
         return;
     }
     lstrcpynA(dir, path, sizeof dir);
     for (i = 0; dir[i]; ++i) if (dir[i] == '\\') cut = i;
     if (cut >= 0) dir[cut == 2 ? 3 : cut] = 0;
-    cmd[0] = '"'; lstrcpynA(cmd + 1, path, MAX_PATH); zput(cmd + lstrlenA(cmd), "\"");
+    cmd[0] = '"'; lstrcpynA(cmd + 1, path, MAX_PATH); LogPut(cmd + lstrlenA(cmd), "\"");
     for (i = 0; i < (int)sizeof si; ++i) ((char *)&si)[i] = 0;
     si.cb = sizeof si;
     if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL,
                        cut >= 0 ? dir : NULL, &si, &pi)) {
-        char lb[MAX_PATH + 64], *lq = zput(lb, "OPEN: started in a new window [");
-        lq = zput(lq, path); lq = zput(lq, "]\r\n");
-        log_append(LOG_PATH, lb, lq);
+        char lb[MAX_PATH + 64], *lq = LogPut(lb, "OPEN: started in a new window [");
+        lq = LogPut(lq, path); lq = LogPut(lq, "]\r\n");
+        LogAppend(LOG_PATH, lb, lq);
         CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
     } else {
-        char m[MAX_PATH + 96], *q = zput(m, "NTVDMEX could not start:\n\n");
-        q = zput(q, path); q = zput(q, "\n\nWindows error 0x"); q = zhex(q, GetLastError()); *q = 0;
+        char m[MAX_PATH + 96], *q = LogPut(m, "NTVDMEX could not start:\n\n");
+        q = LogPut(q, path); q = LogPut(q, "\n\nWindows error 0x"); q = LogHex(q, GetLastError()); *q = 0;
         MessageBoxA(h, m, "NTVDMEX", MB_OK | MB_ICONERROR);
     }
 }
@@ -11714,10 +11714,10 @@ static DWORD WINAPI capture_watchdog_thread(LPVOID pv)
             if (g_llkbd) { UnhookWindowsHookEx(g_llkbd); g_llkbd = NULL; }
             InterlockedExchange(&g_captured, 0);
             ++g_capwd_released;
-            wq = zput(wq, "CAPTURE-WATCHDOG: UI thread silent for ");
-            wq = zhex(wq, GetTickCount() - last_ms);
-            wq = zput(wq, " ms while captured -- cursor clip and keyboard hook RELEASED\r\n");
-            log_append(LOG_PATH, wb, wq); serial_out(wb, wq); }
+            wq = LogPut(wq, "CAPTURE-WATCHDOG: UI thread silent for ");
+            wq = LogHex(wq, GetTickCount() - last_ms);
+            wq = LogPut(wq, " ms while captured -- cursor clip and keyboard hook RELEASED\r\n");
+            LogAppend(LOG_PATH, wb, wq); serial_out(wb, wq); }
         last_ms = GetTickCount();
     }
     return 0;
@@ -11870,28 +11870,28 @@ static void host_fullscreen_toggle(HWND h)
         RECT cr;
         int cw = 0, chh = 0;
         if (GetClientRect(h, &cr)) { cw = cr.right; chh = cr.bottom; }
-        fq = zput(fq, "FULLSCREEN: path=");
-        fq = zput(fq, (g_pd.DirectDraw && g_pd.Back) ? "ddraw-exclusive" : "gdi-borderless");
-        fq = zput(fq, " client=");           fq = zdec(fq, (unsigned)cw);
-        fq = zput(fq, "x");                  fq = zdec(fq, (unsigned)chh);
-        fq = zput(fq, " frame=");            fq = zdec(fq, (unsigned)g_vid.Frame.Width);
-        fq = zput(fq, "x");                  fq = zdec(fq, (unsigned)g_vid.Frame.Height);
+        fq = LogPut(fq, "FULLSCREEN: path=");
+        fq = LogPut(fq, (g_pd.DirectDraw && g_pd.Back) ? "ddraw-exclusive" : "gdi-borderless");
+        fq = LogPut(fq, " client=");           fq = LogDecimal(fq, (unsigned)cw);
+        fq = LogPut(fq, "x");                  fq = LogDecimal(fq, (unsigned)chh);
+        fq = LogPut(fq, " frame=");            fq = LogDecimal(fq, (unsigned)g_vid.Frame.Width);
+        fq = LogPut(fq, "x");                  fq = LogDecimal(fq, (unsigned)g_vid.Frame.Height);
         if (g_vid.Frame.Width && g_vid.Frame.Height) {
             int fx, fy, fw, fh;
             PresentLayout(g_pd.Aspect, g_pd.Fit, 1, cw, chh, (int)g_vid.Frame.Width,
                            (int)g_vid.Frame.Height, &fx, &fy, &fw, &fh);   /* #325: what is drawn */
-            fq = zput(fq, " dest=");  fq = zdec(fq, (unsigned)fw);
-            fq = zput(fq, "x");       fq = zdec(fq, (unsigned)fh);
-            fq = zput(fq, " at ");    fq = zdec(fq, (unsigned)fx);
-            fq = zput(fq, ",");       fq = zdec(fq, (unsigned)fy);
-            fq = zput(fq, " scale="); fq = zdec(fq, (unsigned)(fw / (int)g_vid.Frame.Width));
-            fq = zput(fq, "x");       fq = zdec(fq, (unsigned)(fh / (int)g_vid.Frame.Height));
-            fq = zput(fq, " rem=");   fq = zdec(fq, (unsigned)(fw % (int)g_vid.Frame.Width));
-            fq = zput(fq, ",");       fq = zdec(fq, (unsigned)(fh % (int)g_vid.Frame.Height));
+            fq = LogPut(fq, " dest=");  fq = LogDecimal(fq, (unsigned)fw);
+            fq = LogPut(fq, "x");       fq = LogDecimal(fq, (unsigned)fh);
+            fq = LogPut(fq, " at ");    fq = LogDecimal(fq, (unsigned)fx);
+            fq = LogPut(fq, ",");       fq = LogDecimal(fq, (unsigned)fy);
+            fq = LogPut(fq, " scale="); fq = LogDecimal(fq, (unsigned)(fw / (int)g_vid.Frame.Width));
+            fq = LogPut(fq, "x");       fq = LogDecimal(fq, (unsigned)(fh / (int)g_vid.Frame.Height));
+            fq = LogPut(fq, " rem=");   fq = LogDecimal(fq, (unsigned)(fw % (int)g_vid.Frame.Width));
+            fq = LogPut(fq, ",");       fq = LogDecimal(fq, (unsigned)(fh % (int)g_vid.Frame.Height));
         }
-        fq = zput(fq, " aspect=");  fq = zdec(fq, (unsigned)g_pd.Aspect);
-        fq = zput(fq, "\r\n");
-        log_append(LOG_PATH, fb, fq); serial_out(fb, fq);
+        fq = LogPut(fq, " aspect=");  fq = LogDecimal(fq, (unsigned)g_pd.Aspect);
+        fq = LogPut(fq, "\r\n");
+        LogAppend(LOG_PATH, fb, fq); serial_out(fb, fq);
     }
 }
 
@@ -12115,36 +12115,36 @@ static void settings_log_sources(void)
     static char b[12288];            /* 41 rows + four 260-byte paths */
     char *q = b, item[64];
     int i;
-    q = zput(q, "STAGE2: settings -- value, source, and whether the host uses it (GH #144)\r\n");
+    q = LogPut(q, "STAGE2: settings -- value, source, and whether the host uses it (GH #144)\r\n");
     for (i = 0; i < SET_COUNT; ++i) {
         const set_def *d = &SET_DEFS[i];
-        q = zput(q, "  "); q = zput(q, d->reg); q = zput(q, " = ");
-        q = zdec(q, g_set.v[i]);
+        q = LogPut(q, "  "); q = LogPut(q, d->reg); q = LogPut(q, " = ");
+        q = LogDecimal(q, g_set.v[i]);
         if (d->kind == SK_COMBO && settings_item(d->items, (int)g_set.v[i], item, sizeof item)) {
-            q = zput(q, " \""); q = zput(q, item); q = zput(q, "\"");
+            q = LogPut(q, " \""); q = LogPut(q, item); q = LogPut(q, "\"");
         }
-        q = zput(q, " ["); q = zput(q, SRC[g_set.src[i] < 3 ? g_set.src[i] : 0]); q = zput(q, "]");
+        q = LogPut(q, " ["); q = LogPut(q, SRC[g_set.src[i] < 3 ? g_set.src[i] : 0]); q = LogPut(q, "]");
         if (g_set_ovr[i]) {
-            q = zput(q, " OVERRIDDEN by "); q = zput(q, g_set_ovr[i]);
-            q = zput(q, " -> "); q = zdec(q, g_set_ovr_v[i]);
+            q = LogPut(q, " OVERRIDDEN by "); q = LogPut(q, g_set_ovr[i]);
+            q = LogPut(q, " -> "); q = LogDecimal(q, g_set_ovr_v[i]);
         }
-        if (settings_is_live(i)) q = zput(q, "\r\n");
-        else { q = zput(q, " (stored only -- "); q = zput(q, settings_dead_why(i));
-               q = zput(q, ", GH #136)\r\n"); }
+        if (settings_is_live(i)) q = LogPut(q, "\r\n");
+        else { q = LogPut(q, " (stored only -- "); q = LogPut(q, settings_dead_why(i));
+               q = LogPut(q, ", GH #136)\r\n"); }
     }
     for (i = 0; i < SET_STR_COUNT; ++i) {
-        q = zput(q, "  "); q = zput(q, SET_STR_DEFS[i].reg); q = zput(q, " = \"");
-        q = zput(q, g_set.s[i]); q = zput(q, "\" [");
-        q = zput(q, SRC[g_set.src_s[i] < 3 ? g_set.src_s[i] : 0]); q = zput(q, "]");
+        q = LogPut(q, "  "); q = LogPut(q, SET_STR_DEFS[i].reg); q = LogPut(q, " = \"");
+        q = LogPut(q, g_set.s[i]); q = LogPut(q, "\" [");
+        q = LogPut(q, SRC[g_set.src_s[i] < 3 ? g_set.src_s[i] : 0]); q = LogPut(q, "]");
         if (i == SET_STR_SHELL && g_shell_ovr) {
-            q = zput(q, " OVERRIDDEN by "); q = zput(q, g_shell_ovr);
+            q = LogPut(q, " OVERRIDDEN by "); q = LogPut(q, g_shell_ovr);
         }
         if (i == SET_STR_FLOPPYA || i == SET_STR_SHELL || i == SET_STR_TEXTFONT)
-            q = zput(q, "\r\n");
-        else { q = zput(q, " (stored only -- "); q = zput(q, settings_dead_why_s(i));
-               q = zput(q, ", GH #136)\r\n"); }
+            q = LogPut(q, "\r\n");
+        else { q = LogPut(q, " (stored only -- "); q = LogPut(q, settings_dead_why_s(i));
+               q = LogPut(q, ", GH #136)\r\n"); }
     }
-    log_append(LOG_PATH, b, q);
+    LogAppend(LOG_PATH, b, q);
 }
 
 /* ── START FULLSCREEN (s68). One decision per process, on the UI thread, and it only
@@ -12591,10 +12591,10 @@ static void settings_apply_textfont(void)
     char lb[480], *lq = lb;
     if (!lstrcmpA(g_textfont_live, g_set.s[SET_STR_TEXTFONT])) return;
     lstrcpynA(g_textfont_live, g_set.s[SET_STR_TEXTFONT], sizeof g_textfont_live);
-    lq = zput(lq, "settings: text font changed -- ");
-    lq = zput(lq, sysfont_build(g_textfont_live, &g_sysfont_rep));
-    lq = zput(lq, "\r\n");
-    log_append(LOG_PATH, lb, lq);
+    lq = LogPut(lq, "settings: text font changed -- ");
+    lq = LogPut(lq, sysfont_build(g_textfont_live, &g_sysfont_rep));
+    lq = LogPut(lq, "\r\n");
+    LogAppend(LOG_PATH, lb, lq);
     VddVideoRefreshFonts(&g_vid);
 }
 
@@ -13372,10 +13372,10 @@ static void host_pause_set(int on)
         if (g_pause_susp) { g_pause_susp = 0; ResumeThread(g_hcpu); ASYNC_CTX_RELEASE(); }
         InterlockedExchange(&g_pause_want, 0);
         {   char b[160], *q = b;
-            q = zput(q, "PAUSE: resumed after "); q = zdec(q, GetTickCount() - g_pause_ms);
-            q = zput(q, " ms (pauses="); q = zdec(q, g_pause_n);
-            q = zput(q, " parked-in-loop="); q = zdec(q, g_pause_coop); q = zput(q, ")\r\n");
-            log_append(LOG_PATH, b, q); }
+            q = LogPut(q, "PAUSE: resumed after "); q = LogDecimal(q, GetTickCount() - g_pause_ms);
+            q = LogPut(q, " ms (pauses="); q = LogDecimal(q, g_pause_n);
+            q = LogPut(q, " parked-in-loop="); q = LogDecimal(q, g_pause_coop); q = LogPut(q, ")\r\n");
+            LogAppend(LOG_PATH, b, q); }
     }
 }
 
@@ -13467,41 +13467,41 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                    whose had. Leave room. */
                 char kb[1024], *kq = kb; unsigned i;
                 s_kl = nowt;
-                kq = zput(kq, "KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
-                for (i = 0; i < 8; ++i) { kq = zput(kq, i ? "," : ""); kq = zhex(kq, g_keymsg_hist[i]); }
-                kq = zput(kq, " n=");      kq = zhex(kq, g_keymsg_n);
-                kq = zput(kq, " max_ms="); kq = zhex(kq, g_keymsg_max_ms);
-                kq = zput(kq, " || deliver_ms=");
-                for (i = 0; i < 8; ++i) { kq = zput(kq, i ? "," : ""); kq = zhex(kq, g_keydel_hist[i]); }
-                kq = zput(kq, " n=");      kq = zhex(kq, g_keydel_n);
-                kq = zput(kq, " max_ms="); kq = zhex(kq, g_keydel_max_ms);
-                kq = zput(kq, " || MOUSE raw_ok="); kq = zhex(kq, (DWORD)g_ms_raw_ok);
-                kq = zput(kq, " wm_input=");  kq = zhex(kq, g_ms_wm_input);
-                kq = zput(kq, " abs_pkts=");  kq = zhex(kq, g_ms_raw_abs);
-                kq = zput(kq, " totx=");      kq = zhex(kq, (DWORD)g_ms_raw_tot_x);
-                kq = zput(kq, " toty=");      kq = zhex(kq, (DWORD)g_ms_raw_tot_y);
-                kq = zput(kq, " i33[0]=");    kq = zhex(kq, g_ms_i33[0]);
-                kq = zput(kq, " i33[3]=");    kq = zhex(kq, g_ms_i33[3]);
-                kq = zput(kq, " i33[B]=");    kq = zhex(kq, g_ms_i33[0xB]);
-                kq = zput(kq, " i33[1]=");    kq = zhex(kq, g_ms_i33[1]);
-                kq = zput(kq, " i33oth=");    kq = zhex(kq, g_ms_i33_other);
-                kq = zput(kq, " captured=");  kq = zhex(kq, (DWORD)g_captured);
-                kq = zput(kq, " simint_unh="); kq = zhex(kq, g_simint_unhandled);
+                kq = LogPut(kq, "KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
+                for (i = 0; i < 8; ++i) { kq = LogPut(kq, i ? "," : ""); kq = LogHex(kq, g_keymsg_hist[i]); }
+                kq = LogPut(kq, " n=");      kq = LogHex(kq, g_keymsg_n);
+                kq = LogPut(kq, " max_ms="); kq = LogHex(kq, g_keymsg_max_ms);
+                kq = LogPut(kq, " || deliver_ms=");
+                for (i = 0; i < 8; ++i) { kq = LogPut(kq, i ? "," : ""); kq = LogHex(kq, g_keydel_hist[i]); }
+                kq = LogPut(kq, " n=");      kq = LogHex(kq, g_keydel_n);
+                kq = LogPut(kq, " max_ms="); kq = LogHex(kq, g_keydel_max_ms);
+                kq = LogPut(kq, " || MOUSE raw_ok="); kq = LogHex(kq, (DWORD)g_ms_raw_ok);
+                kq = LogPut(kq, " wm_input=");  kq = LogHex(kq, g_ms_wm_input);
+                kq = LogPut(kq, " abs_pkts=");  kq = LogHex(kq, g_ms_raw_abs);
+                kq = LogPut(kq, " totx=");      kq = LogHex(kq, (DWORD)g_ms_raw_tot_x);
+                kq = LogPut(kq, " toty=");      kq = LogHex(kq, (DWORD)g_ms_raw_tot_y);
+                kq = LogPut(kq, " i33[0]=");    kq = LogHex(kq, g_ms_i33[0]);
+                kq = LogPut(kq, " i33[3]=");    kq = LogHex(kq, g_ms_i33[3]);
+                kq = LogPut(kq, " i33[B]=");    kq = LogHex(kq, g_ms_i33[0xB]);
+                kq = LogPut(kq, " i33[1]=");    kq = LogHex(kq, g_ms_i33[1]);
+                kq = LogPut(kq, " i33oth=");    kq = LogHex(kq, g_ms_i33_other);
+                kq = LogPut(kq, " captured=");  kq = LogHex(kq, (DWORD)g_captured);
+                kq = LogPut(kq, " simint_unh="); kq = LogHex(kq, g_simint_unhandled);
                 { unsigned sv; for (sv = 0; sv < 256; ++sv) if (g_simint_vec[sv]) {
-                      kq = zput(kq, " v"); kq = zhexb(kq, (BYTE)sv);
-                      kq = zput(kq, "x");  kq = zhex(kq, g_simint_vec[sv]); } }
-                kq = zput(kq, " || ui_gap_us="); kq = zhex(kq, g_ui_gap_us);
-                kq = zput(kq, " lk_wait_us="); kq = zhex(kq, g_lk_wait_us);
-                kq = zput(kq, " in_first="); kq = zhex(kq, g_ui_input_first);
-                kq = zput(kq, " || IRQ1GATE checks="); kq = zhex(kq, g_irq1_checks);
-                kq = zput(kq, " no_if=");   kq = zhex(kq, g_irq1_no_if);
-                kq = zput(kq, " in_08h=");  kq = zhex(kq, g_irq1_in_08);
-                kq = zput(kq, " in_09h=");  kq = zhex(kq, g_irq1_in_09);
-                kq = zput(kq, " injected="); kq = zhex(kq, g_irq1_inj);
-                kq = zput(kq, " async_inj="); kq = zhex(kq, g_irq1_async_inj);
-                kq = zput(kq, " retries=");   kq = zhex(kq, g_irq1_async_retry);
-                kq = zput(kq, "\r\n");
-                log_append(LOG_PATH, kb, kq);
+                      kq = LogPut(kq, " v"); kq = LogHexByte(kq, (BYTE)sv);
+                      kq = LogPut(kq, "x");  kq = LogHex(kq, g_simint_vec[sv]); } }
+                kq = LogPut(kq, " || ui_gap_us="); kq = LogHex(kq, g_ui_gap_us);
+                kq = LogPut(kq, " lk_wait_us="); kq = LogHex(kq, g_lk_wait_us);
+                kq = LogPut(kq, " in_first="); kq = LogHex(kq, g_ui_input_first);
+                kq = LogPut(kq, " || IRQ1GATE checks="); kq = LogHex(kq, g_irq1_checks);
+                kq = LogPut(kq, " no_if=");   kq = LogHex(kq, g_irq1_no_if);
+                kq = LogPut(kq, " in_08h=");  kq = LogHex(kq, g_irq1_in_08);
+                kq = LogPut(kq, " in_09h=");  kq = LogHex(kq, g_irq1_in_09);
+                kq = LogPut(kq, " injected="); kq = LogHex(kq, g_irq1_inj);
+                kq = LogPut(kq, " async_inj="); kq = LogHex(kq, g_irq1_async_inj);
+                kq = LogPut(kq, " retries=");   kq = LogHex(kq, g_irq1_async_retry);
+                kq = LogPut(kq, "\r\n");
+                LogAppend(LOG_PATH, kb, kq);
             } }
         /* ── THE INT 33h DETAIL, ON ITS OWN GATE AND ITS OWN LINES. ──────────────────
              Two rules learned the hard way, both of them here on purpose:
@@ -13518,20 +13518,20 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             if (g_ms_i33site_n && (DWORD)(nowt - s_md) >= 5000) {
                 char mb[768], *mq = mb; unsigned i;
                 s_md = nowt;
-                mq = zput(mq, "MOUSEI33 ax:");
+                mq = LogPut(mq, "MOUSEI33 ax:");
                 for (i = 0; i < I33_AXN && g_ms_i33ax[i].n; ++i) {
-                    mq = zput(mq, " "); mq = zhexb(mq, (g_ms_i33ax[i].ax >> 8) & 0xFF);
-                    mq = zhexb(mq, g_ms_i33ax[i].ax & 0xFF);
-                    mq = zput(mq, "x"); mq = zhex(mq, g_ms_i33ax[i].n);
+                    mq = LogPut(mq, " "); mq = LogHexByte(mq, (g_ms_i33ax[i].ax >> 8) & 0xFF);
+                    mq = LogHexByte(mq, g_ms_i33ax[i].ax & 0xFF);
+                    mq = LogPut(mq, "x"); mq = LogHex(mq, g_ms_i33ax[i].n);
                 }
-                mq = zput(mq, " ax_ovf="); mq = zhex(mq, g_ms_i33ax_ovf);
-                mq = zput(mq, " sites="); mq = zhex(mq, g_ms_i33site_n);
-                mq = zput(mq, " site_ovf="); mq = zhex(mq, g_ms_i33site_ovf);
+                mq = LogPut(mq, " ax_ovf="); mq = LogHex(mq, g_ms_i33ax_ovf);
+                mq = LogPut(mq, " sites="); mq = LogHex(mq, g_ms_i33site_n);
+                mq = LogPut(mq, " site_ovf="); mq = LogHex(mq, g_ms_i33site_ovf);
                 /* Auto-capture, so a headless run can show it. want=1 fired=0 is the
                    window not being in the foreground, which is deliberate. */
-                mq = zput(mq, " autocap_want="); mq = zhex(mq, (DWORD)g_ms_want_capture);
-                mq = zput(mq, " fired="); mq = zhex(mq, g_ms_autocap_fired);
-                mq = zput(mq, " captured="); mq = zhex(mq, (DWORD)g_captured);
+                mq = LogPut(mq, " autocap_want="); mq = LogHex(mq, (DWORD)g_ms_want_capture);
+                mq = LogPut(mq, " fired="); mq = LogHex(mq, g_ms_autocap_fired);
+                mq = LogPut(mq, " captured="); mq = LogHex(mq, (DWORD)g_captured);
                 /* ── ★ THE s64 EVIDENCE, AND EACH FIELD ANSWERS ONE QUESTION. ────
                      edges  -- did the HOST see any button transitions at all? 0 with
                                a user who was clicking means the fault is above INT
@@ -13549,55 +13549,55 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                                every documented function is handled; anything else
                                is either exotic or a mis-patched CD 33 site.
                      xsh    -- the virtual-coordinate shift (1 in a 320-wide mode).  */
-                mq = zput(mq, " edges="); mq = zhex(mq, g_ms_edges);
-                mq = zput(mq, " p0=");    mq = zhex(mq, (DWORD)g_ms_press_n[0]);
-                mq = zput(mq, " r0=");    mq = zhex(mq, (DWORD)g_ms_rel_n[0]);
-                mq = zput(mq, " evt=");   mq = zhex(mq, g_ms_evt_installs);
-                mq = zput(mq, " cb_inj=");  mq = zhex(mq, g_ms_cb_inj);
-                mq = zput(mq, " cb_done="); mq = zhex(mq, g_ms_cb_done);
-                mq = zput(mq, " cb_lost="); mq = zhex(mq, g_ms_cb_lost);
-                mq = zput(mq, " cb_pm=");   mq = zhex(mq, g_ms_cb_pm);
-                mq = zput(mq, " cb_stray="); mq = zhex(mq, g_ms_cb_stray);
-                mq = zput(mq, " cb_why[fly,none,nohdl,stub,if,clob]=");
-                { int w; for (w = 0; w < 6; ++w) { mq = zhex(mq, g_ms_cb_why[w]); mq = zput(mq, w < 5 ? "," : ""); } }
-                mq = zput(mq, " raised="); mq = zhex(mq, g_ms_evt_raised);
-                mq = zput(mq, " mask=0x");  mq = zhex(mq, (DWORD)g_ms_evt_mask);
-                mq = zput(mq, " hdl=0x");   mq = zhex(mq, (DWORD)g_ms_evt_seg);
-                mq = zput(mq, ":0x");       mq = zhex(mq, (DWORD)g_ms_evt_off);
-                mq = zput(mq, " shape="); mq = zhex(mq, g_ms_shape_sets);
+                mq = LogPut(mq, " edges="); mq = LogHex(mq, g_ms_edges);
+                mq = LogPut(mq, " p0=");    mq = LogHex(mq, (DWORD)g_ms_press_n[0]);
+                mq = LogPut(mq, " r0=");    mq = LogHex(mq, (DWORD)g_ms_rel_n[0]);
+                mq = LogPut(mq, " evt=");   mq = LogHex(mq, g_ms_evt_installs);
+                mq = LogPut(mq, " cb_inj=");  mq = LogHex(mq, g_ms_cb_inj);
+                mq = LogPut(mq, " cb_done="); mq = LogHex(mq, g_ms_cb_done);
+                mq = LogPut(mq, " cb_lost="); mq = LogHex(mq, g_ms_cb_lost);
+                mq = LogPut(mq, " cb_pm=");   mq = LogHex(mq, g_ms_cb_pm);
+                mq = LogPut(mq, " cb_stray="); mq = LogHex(mq, g_ms_cb_stray);
+                mq = LogPut(mq, " cb_why[fly,none,nohdl,stub,if,clob]=");
+                { int w; for (w = 0; w < 6; ++w) { mq = LogHex(mq, g_ms_cb_why[w]); mq = LogPut(mq, w < 5 ? "," : ""); } }
+                mq = LogPut(mq, " raised="); mq = LogHex(mq, g_ms_evt_raised);
+                mq = LogPut(mq, " mask=0x");  mq = LogHex(mq, (DWORD)g_ms_evt_mask);
+                mq = LogPut(mq, " hdl=0x");   mq = LogHex(mq, (DWORD)g_ms_evt_seg);
+                mq = LogPut(mq, ":0x");       mq = LogHex(mq, (DWORD)g_ms_evt_off);
+                mq = LogPut(mq, " shape="); mq = LogHex(mq, g_ms_shape_sets);
                 /* #264/#265: is a guest bitmap the pointer (gc=1), how many 09h pointers
                    were unreadable, events routed to an 18h handler, 2Bh-34h calls. */
-                mq = zput(mq, " gc=");    mq = zhex(mq, (DWORD)g_ms_gc_defined);
-                mq = zput(mq, " gcbad="); mq = zhex(mq, g_ms_gc_badptr);
-                mq = zput(mq, " alt=");   mq = zhex(mq, g_ms_alt_calls);
-                mq = zput(mq, " acc=");   mq = zhex(mq, g_ms_acc_calls);
-                mq = zput(mq, " badptr=");mq = zhex(mq, g_ms_state_badptr);
-                mq = zput(mq, " unimpl=");mq = zhex(mq, g_ms_i33_unimpl);
-                mq = zput(mq, " xsh=");   mq = zhex(mq, (DWORD)i33_xshift());
+                mq = LogPut(mq, " gc=");    mq = LogHex(mq, (DWORD)g_ms_gc_defined);
+                mq = LogPut(mq, " gcbad="); mq = LogHex(mq, g_ms_gc_badptr);
+                mq = LogPut(mq, " alt=");   mq = LogHex(mq, g_ms_alt_calls);
+                mq = LogPut(mq, " acc=");   mq = LogHex(mq, g_ms_acc_calls);
+                mq = LogPut(mq, " badptr=");mq = LogHex(mq, g_ms_state_badptr);
+                mq = LogPut(mq, " unimpl=");mq = LogHex(mq, g_ms_i33_unimpl);
+                mq = LogPut(mq, " xsh=");   mq = LogHex(mq, (DWORD)i33_xshift());
                 /* THE VIRTUAL SCREEN THIS DRIVER IS ACTUALLY USING. Without these,
                    a coordinate that comes back wrong is indistinguishable from a
                    text-mode test that quietly evaluated false, and the difference
                    is which file the bug is in. text= is i33_text()'s verdict, not
                    mkind, because that verdict is what every coordinate call uses. */
-                mq = zput(mq, " text=");  mq = zhex(mq, (DWORD)i33_text());
-                mq = zput(mq, " mkind="); mq = zhex(mq, (DWORD)g_vid.ModeKind);
-                mq = zput(mq, " vesa=");  mq = zhex(mq, (DWORD)g_vid.IsVesa);
-                mq = zput(mq, " fh=");    mq = zhex(mq, (DWORD)g_vid.Frame.Height);
-                mq = zput(mq, " vmaxy="); mq = zhex(mq, (DWORD)i33_vmaxy());
-                mq = zput(mq, " msy=");   mq = zhex(mq, (DWORD)g_ms_y);
-                mq = zput(mq, "\r\n");
-                log_append(LOG_PATH, mb, mq);
+                mq = LogPut(mq, " text=");  mq = LogHex(mq, (DWORD)i33_text());
+                mq = LogPut(mq, " mkind="); mq = LogHex(mq, (DWORD)g_vid.ModeKind);
+                mq = LogPut(mq, " vesa=");  mq = LogHex(mq, (DWORD)g_vid.IsVesa);
+                mq = LogPut(mq, " fh=");    mq = LogHex(mq, (DWORD)g_vid.Frame.Height);
+                mq = LogPut(mq, " vmaxy="); mq = LogHex(mq, (DWORD)i33_vmaxy());
+                mq = LogPut(mq, " msy=");   mq = LogHex(mq, (DWORD)g_ms_y);
+                mq = LogPut(mq, "\r\n");
+                LogAppend(LOG_PATH, mb, mq);
                 for (i = 0; i < g_ms_i33site_n && i < I33_SITEN; ++i) {
                     char sb[256], *sq = sb;
-                    sq = zput(sq, "MOUSEI33 site src=");  sq = zhexb(sq, g_ms_i33site[i].src);
-                    sq = zput(sq, " lin=0x");   sq = zhex(sq, g_ms_i33site[i].lin);
-                    sq = zput(sq, " cs=0x");    sq = zhex(sq, g_ms_i33site[i].cs);
-                    sq = zput(sq, " eip=0x");   sq = zhex(sq, g_ms_i33site[i].eip);
-                    sq = zput(sq, " ax0=0x");   sq = zhex(sq, g_ms_i33site[i].ax);
-                    sq = zput(sq, " n=");       sq = zhex(sq, g_ms_i33site[i].n);
-                    sq = zput(sq, " ctx[-4]="); sq = zdump(sq, g_ms_i33site[i].ctx, 12);
-                    sq = zput(sq, "\r\n");
-                    log_append(LOG_PATH, sb, sq);
+                    sq = LogPut(sq, "MOUSEI33 site src=");  sq = LogHexByte(sq, g_ms_i33site[i].src);
+                    sq = LogPut(sq, " lin=0x");   sq = LogHex(sq, g_ms_i33site[i].lin);
+                    sq = LogPut(sq, " cs=0x");    sq = LogHex(sq, g_ms_i33site[i].cs);
+                    sq = LogPut(sq, " eip=0x");   sq = LogHex(sq, g_ms_i33site[i].eip);
+                    sq = LogPut(sq, " ax0=0x");   sq = LogHex(sq, g_ms_i33site[i].ax);
+                    sq = LogPut(sq, " n=");       sq = LogHex(sq, g_ms_i33site[i].n);
+                    sq = LogPut(sq, " ctx[-4]="); sq = LogDump(sq, g_ms_i33site[i].ctx, 12);
+                    sq = LogPut(sq, "\r\n");
+                    LogAppend(LOG_PATH, sb, sq);
                 }
             } }
         /* ── ★ THE GUEST ASKED FOR THE MOUSE: TAKE IT. ───────────────────────────
@@ -13805,14 +13805,14 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 else if (!cap_failed) {
                     char eb[320], *eq = eb;
                     cap_failed = 1;
-                    eq = zput(eq, "CAPTURE: save_bmp FAILED for ");
-                    eq = zput(eq, path);
-                    eq = zput(eq, " -- snap_valid=");
-                    eq = zdec(eq, (unsigned)g_pd.IsSnapshotValid);
-                    eq = zput(eq, " w=");  eq = zdec(eq, (unsigned)g_pd.SnapshotWidth);
-                    eq = zput(eq, " h=");  eq = zdec(eq, (unsigned)g_pd.SnapshotHeight);
-                    eq = zput(eq, " (reported once)\r\n");
-                    log_append(LOG_PATH, eb, eq);
+                    eq = LogPut(eq, "CAPTURE: save_bmp FAILED for ");
+                    eq = LogPut(eq, path);
+                    eq = LogPut(eq, " -- snap_valid=");
+                    eq = LogDecimal(eq, (unsigned)g_pd.IsSnapshotValid);
+                    eq = LogPut(eq, " w=");  eq = LogDecimal(eq, (unsigned)g_pd.SnapshotWidth);
+                    eq = LogPut(eq, " h=");  eq = LogDecimal(eq, (unsigned)g_pd.SnapshotHeight);
+                    eq = LogPut(eq, " (reported once)\r\n");
+                    LogAppend(LOG_PATH, eb, eq);
                 }
             }
         }
@@ -14381,28 +14381,28 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            ⚠ Read `yld` against `raise-att`: they are equal by construction when the
              keyboard is stealing the timer's slot, which is the whole mechanism. */
         {   char cb[512], *cq = cb;
-            cq = zput(cq, "CLOSE: keyirq="); cq = zhex(cq, (DWORD)g_keyirq_retry);
-            cq = zput(cq, " courier=");      cq = zhex(cq, (DWORD)g_courier_on);
-            cq = zput(cq, " irq0_inj=");     cq = zhex(cq, g_irq0_inj);
-            cq = zput(cq, " anom_n=");       cq = zhex(cq, g_irq0_anom_n);
-            cq = zput(cq, " gen=");          cq = zhex(cq, g_irq0_anom_gen);
-            cq = zput(cq, " del=");          cq = zhex(cq, g_irq0_anom_del);
-            cq = zput(cq, " anom[raise,att,nie,yld]=");
-            cq = zhex(cq, g_irq0_anom_raise); cq = zput(cq, ",");
-            cq = zhex(cq, g_irq0_anom_att);   cq = zput(cq, ",");
-            cq = zhex(cq, g_irq0_anom_nie);   cq = zput(cq, ",");
-            cq = zhex(cq, g_irq0_anom_yld);
-            cq = zput(cq, " gap_ms[<1,1,2,4,8,16,32,64+]=");
+            cq = LogPut(cq, "CLOSE: keyirq="); cq = LogHex(cq, (DWORD)g_keyirq_retry);
+            cq = LogPut(cq, " courier=");      cq = LogHex(cq, (DWORD)g_courier_on);
+            cq = LogPut(cq, " irq0_inj=");     cq = LogHex(cq, g_irq0_inj);
+            cq = LogPut(cq, " anom_n=");       cq = LogHex(cq, g_irq0_anom_n);
+            cq = LogPut(cq, " gen=");          cq = LogHex(cq, g_irq0_anom_gen);
+            cq = LogPut(cq, " del=");          cq = LogHex(cq, g_irq0_anom_del);
+            cq = LogPut(cq, " anom[raise,att,nie,yld]=");
+            cq = LogHex(cq, g_irq0_anom_raise); cq = LogPut(cq, ",");
+            cq = LogHex(cq, g_irq0_anom_att);   cq = LogPut(cq, ",");
+            cq = LogHex(cq, g_irq0_anom_nie);   cq = LogPut(cq, ",");
+            cq = LogHex(cq, g_irq0_anom_yld);
+            cq = LogPut(cq, " gap_ms[<1,1,2,4,8,16,32,64+]=");
             { unsigned gb; for (gb = 0; gb < 8; ++gb) {
-                cq = zput(cq, gb ? "," : ""); cq = zhex(cq, g_irq0_gap_hist[gb]); } }
-            cq = zput(cq, " gap_max=");  cq = zhex(cq, g_irq0_gap_max_ms);
-            cq = zput(cq, " keydel_ms[0,1,2,4,8,16,32,64+]=");
+                cq = LogPut(cq, gb ? "," : ""); cq = LogHex(cq, g_irq0_gap_hist[gb]); } }
+            cq = LogPut(cq, " gap_max=");  cq = LogHex(cq, g_irq0_gap_max_ms);
+            cq = LogPut(cq, " keydel_ms[0,1,2,4,8,16,32,64+]=");
             { unsigned kb2; for (kb2 = 0; kb2 < 8; ++kb2) {
-                cq = zput(cq, kb2 ? "," : ""); cq = zhex(cq, g_keydel_hist[kb2]); } }
-            cq = zput(cq, " keydel_max="); cq = zhex(cq, g_keydel_max_ms);
-            cq = zput(cq, " cour_inj=");   cq = zhex(cq, g_courier_inj);
-            cq = zput(cq, " capwd=");      cq = zhex(cq, g_capwd_released);
-            cq = zput(cq, " pit_skip=");   cq = zhex(cq, g_pit_deliver_skipped);
+                cq = LogPut(cq, kb2 ? "," : ""); cq = LogHex(cq, g_keydel_hist[kb2]); } }
+            cq = LogPut(cq, " keydel_max="); cq = LogHex(cq, g_keydel_max_ms);
+            cq = LogPut(cq, " cour_inj=");   cq = LogHex(cq, g_courier_inj);
+            cq = LogPut(cq, " capwd=");      cq = LogHex(cq, g_capwd_released);
+            cq = LogPut(cq, " pit_skip=");   cq = LogHex(cq, g_pit_deliver_skipped);
             /* ── ★★★ NAME THE LOCK HOLDER. (s61, and it is the whole question now.) ──
                  The arm-4 close said 86% of the stalls are GENERATION -- the 8254 never
                  made the tick, because host_pit_sync could not run. Every caller of it
@@ -14412,38 +14412,38 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                ► hold@line is the answer: it is the __LINE__ of the outermost acquire
                  that held longest. Read it with wait@line (who was stuck behind it)
                  and ui_gap (whether the UI thread was running at all). */
-            cq = zput(cq, " lk_hold_us="); cq = zhex(cq, g_lk_hold_us);
-            cq = zput(cq, "@line ");       cq = zhex(cq, (DWORD)g_lk_hold_site);
-            cq = zput(cq, " lk_wait_us="); cq = zhex(cq, g_lk_wait_us);
-            cq = zput(cq, "@line ");       cq = zhex(cq, (DWORD)g_lk_wait_site);
-            cq = zput(cq, " ui_gap_us=");  cq = zhex(cq, g_ui_gap_us);
-            cq = zput(cq, "\r\n");
-            log_append(LOG_PATH, cb, cq); serial_out(cb, cq); }
+            cq = LogPut(cq, " lk_hold_us="); cq = LogHex(cq, g_lk_hold_us);
+            cq = LogPut(cq, "@line ");       cq = LogHex(cq, (DWORD)g_lk_hold_site);
+            cq = LogPut(cq, " lk_wait_us="); cq = LogHex(cq, g_lk_wait_us);
+            cq = LogPut(cq, "@line ");       cq = LogHex(cq, (DWORD)g_lk_wait_site);
+            cq = LogPut(cq, " ui_gap_us=");  cq = LogHex(cq, g_ui_gap_us);
+            cq = LogPut(cq, "\r\n");
+            LogAppend(LOG_PATH, cb, cq); serial_out(cb, cq); }
         /* #225: ...AND THE SPEED LIMIT'S, for the same reason. The user plays with the
              throttle on and closes the window, so "slow in-game" came back with no
              duty, no holds and no per-second clock. Second line, same rules. */
         {   char cb[2048], *cq = cb; unsigned t; DWORD last = 0;   /* 90 x 9 + ~350 */
-            cq = zput(cq, "CLOSE2: cpuspd idx="); cq = zhex(cq, (DWORD)g_cpuspd_idx);
-            cq = zput(cq, " duty_bp=");     cq = zhex(cq, (DWORD)g_cpuspd_duty);
-            cq = zput(cq, " duty_rm_bp=");  cq = zhex(cq, (DWORD)g_cpuspd_duty_rm);
-            cq = zput(cq, " pm=");          cq = zhex(cq, (DWORD)g_dpmi_pm);
-            cq = zput(cq, " delivered_bp="); cq = zhex(cq, cpuspeed_delivered_bp(g_cpuspd_run_ms, GetTickCount() - g_start_ms));
-            cq = zput(cq, " exec_ms=");     cq = zhex(cq, g_cpuspd_run_ms);
-            cq = zput(cq, " held_ms=");     cq = zhex(cq, g_cpuspd_held_ms);
-            cq = zput(cq, " periods=");     cq = zhex(cq, g_cpuspd_periods);
-            cq = zput(cq, " coop=");        cq = zhex(cq, g_cpuspd_coop_catches);
-            cq = zput(cq, " coop_to=");     cq = zhex(cq, g_cpuspd_coop_timeouts);
-            cq = zput(cq, " missed=");      cq = zhex(cq, g_cpuspd_missed);
-            cq = zput(cq, " hold_max_us="); cq = zhex(cq, g_cpuspd_hold_max_us);
-            cq = zput(cq, " vbl_edges=");   cq = zhex(cq, g_vid.VblEdges);
-            cq = zput(cq, " vbl_owed=");    cq = zhex(cq, g_vid.Port3DaVblOwed);
-            cq = zput(cq, " p3da=");        cq = zhex(cq, g_vid.Port3DaReads);
-            cq = zput(cq, " clip_repairs=");cq = zhex(cq, g_clip_repairs);
-            cq = zput(cq, " irq0tl=");
+            cq = LogPut(cq, "CLOSE2: cpuspd idx="); cq = LogHex(cq, (DWORD)g_cpuspd_idx);
+            cq = LogPut(cq, " duty_bp=");     cq = LogHex(cq, (DWORD)g_cpuspd_duty);
+            cq = LogPut(cq, " duty_rm_bp=");  cq = LogHex(cq, (DWORD)g_cpuspd_duty_rm);
+            cq = LogPut(cq, " pm=");          cq = LogHex(cq, (DWORD)g_dpmi_pm);
+            cq = LogPut(cq, " delivered_bp="); cq = LogHex(cq, cpuspeed_delivered_bp(g_cpuspd_run_ms, GetTickCount() - g_start_ms));
+            cq = LogPut(cq, " exec_ms=");     cq = LogHex(cq, g_cpuspd_run_ms);
+            cq = LogPut(cq, " held_ms=");     cq = LogHex(cq, g_cpuspd_held_ms);
+            cq = LogPut(cq, " periods=");     cq = LogHex(cq, g_cpuspd_periods);
+            cq = LogPut(cq, " coop=");        cq = LogHex(cq, g_cpuspd_coop_catches);
+            cq = LogPut(cq, " coop_to=");     cq = LogHex(cq, g_cpuspd_coop_timeouts);
+            cq = LogPut(cq, " missed=");      cq = LogHex(cq, g_cpuspd_missed);
+            cq = LogPut(cq, " hold_max_us="); cq = LogHex(cq, g_cpuspd_hold_max_us);
+            cq = LogPut(cq, " vbl_edges=");   cq = LogHex(cq, g_vid.VblEdges);
+            cq = LogPut(cq, " vbl_owed=");    cq = LogHex(cq, g_vid.Port3DaVblOwed);
+            cq = LogPut(cq, " p3da=");        cq = LogHex(cq, g_vid.Port3DaReads);
+            cq = LogPut(cq, " clip_repairs=");cq = LogHex(cq, g_clip_repairs);
+            cq = LogPut(cq, " irq0tl=");
             for (t = 0; t < IRQ0TL_SECS; ++t) if (g_irq0_tl[t]) last = t;
-            for (t = 0; t <= last && t < IRQ0TL_SECS; ++t) { cq = zput(cq, t ? "," : ""); cq = zhex(cq, g_irq0_tl[t]); }
-            cq = zput(cq, "\r\n");
-            log_append(LOG_PATH, cb, cq);
+            for (t = 0; t <= last && t < IRQ0TL_SECS; ++t) { cq = LogPut(cq, t ? "," : ""); cq = LogHex(cq, g_irq0_tl[t]); }
+            cq = LogPut(cq, "\r\n");
+            LogAppend(LOG_PATH, cb, cq);
             if (g_cpuspd_periods) cpuspd_tl_dump("CLOSE2:"); }
         /* PANIC-STOP THE SOUND, HERE, BEFORE ANYTHING ELSE UNWINDS.
            Closing the window used to leave notes sounding until the host was
@@ -14530,23 +14530,23 @@ static DWORD WINAPI ui_thread(LPVOID arg)
         for (pi = 0; pi < NTVDMEX_PAGE_COUNT; ++pi) {
             HWND pg = CreateDialogParamA(hinst, MAKEINTRESOURCEA(SETTINGS_PAGES[pi]),
                                          g_hwnd, settings_pageproc, 0);
-            cq = zput(cq, "DLGCHECK page="); cq = zhex(cq, (DWORD)SETTINGS_PAGES[pi]);
-            cq = zput(cq, pg ? " CREATED" : " **FAILED** err=");
-            if (!pg) cq = zhex(cq, GetLastError());
+            cq = LogPut(cq, "DLGCHECK page="); cq = LogHex(cq, (DWORD)SETTINGS_PAGES[pi]);
+            cq = LogPut(cq, pg ? " CREATED" : " **FAILED** err=");
+            if (!pg) cq = LogHex(cq, GetLastError());
             if (pg) {
                 /* A control that must exist on THIS page, by id, so "the page was
                    created" cannot be mistaken for "the controls I moved are on it".
                    Each is 0 on every page but the one that owns it -- which is the
                    point: it proves the pages hold what they should (s84: all four are on
                    Machine, and 0 on every other page). */
-                cq = zput(cq, " speed=");  cq = zhex(cq, GetDlgItem(pg, IDC_S_SPEEDMODE) ? 1u : 0u);
-                cq = zput(cq, " cpuinfo=");cq = zhex(cq, GetDlgItem(pg, IDC_S_CPUINFO) ? 1u : 0u);
-                cq = zput(cq, " convkb="); cq = zhex(cq, GetDlgItem(pg, IDC_S_CONVKB) ? 1u : 0u);
-                cq = zput(cq, " pitpace=");cq = zhex(cq, GetDlgItem(pg, IDC_S_PITPACE) ? 1u : 0u);
+                cq = LogPut(cq, " speed=");  cq = LogHex(cq, GetDlgItem(pg, IDC_S_SPEEDMODE) ? 1u : 0u);
+                cq = LogPut(cq, " cpuinfo=");cq = LogHex(cq, GetDlgItem(pg, IDC_S_CPUINFO) ? 1u : 0u);
+                cq = LogPut(cq, " convkb="); cq = LogHex(cq, GetDlgItem(pg, IDC_S_CONVKB) ? 1u : 0u);
+                cq = LogPut(cq, " pitpace=");cq = LogHex(cq, GetDlgItem(pg, IDC_S_PITPACE) ? 1u : 0u);
                 DestroyWindow(pg);
             }
-            cq = zput(cq, "\r\n");
-            log_append(LOG_PATH, cb, cq); cq = cb;
+            cq = LogPut(cq, "\r\n");
+            LogAppend(LOG_PATH, cb, cq); cq = cb;
         }
     }
     if (GetFileAttributesA(SETSHOT_PATH) != INVALID_FILE_ATTRIBUTES)   /* s84, test-only */
@@ -14583,8 +14583,8 @@ static DWORD WINAPI ui_thread(LPVOID arg)
          failed start, and three play-tests uninstalled the host. */
     recovery_ok();
     {   char sb[96], *sq = sb;
-        sq = zput(sq, "STAGE0: window up -> start counted as SUCCEEDED (GH #132)\r\n");
-        log_append(LOG_PATH, sb, sq); }
+        sq = LogPut(sq, "STAGE0: window up -> start counted as SUCCEEDED (GH #132)\r\n");
+        LogAppend(LOG_PATH, sb, sq); }
     host_autofs_consider(g_hwnd, g_vid.ModeKind != VIDEO_KIND_TEXT || g_vid.IsVesa);
     SetTimer(g_hwnd, 1, VID_PRESENT_TICK_MS, NULL);  /* fast tick; present is PHASE-gated */
     /* ── ⛔⛔ A POSTED PRESENT MUST NOT STARVE INPUT. (user, s86: Duke3D fullscreen) ──
@@ -14696,12 +14696,12 @@ sited:
           const volatile BYTE *cp = (const volatile BYTE *)((cs << 4) + ((ip - 6) & 0xFFFF));
           BYTE tmp[16]; unsigned j;
           for (j = 0; j < 16; ++j) tmp[j] = cp[j];
-          q = zput(q, "IO-SITE port=0x"); q = zhex(q, port);
-          q = zput(q, " cs:ip=0x");       q = zhex(q, cs);
-          q = zput(q, ":0x");             q = zhex(q, ip);
-          q = zput(q, " bytes[ip-6..]: "); q = zdump(q, tmp, 16);
-          q = zput(q, "\r\n");
-          log_append(LOG_PATH, b, q); serial_out(b, q); }
+          q = LogPut(q, "IO-SITE port=0x"); q = LogHex(q, port);
+          q = LogPut(q, " cs:ip=0x");       q = LogHex(q, cs);
+          q = LogPut(q, ":0x");             q = LogHex(q, ip);
+          q = LogPut(q, " bytes[ip-6..]: "); q = LogDump(q, tmp, 16);
+          q = LogPut(q, "\r\n");
+          LogAppend(LOG_PATH, b, q); serial_out(b, q); }
     }
 }
 
@@ -15072,7 +15072,7 @@ static void pit_latch_note(uint8_t cmd)
     uint32_t n, cnt, i0, base, i, col = 0;
     char b[1200], *q = b;
     /* ⚠ The ring is opt-in (cfg\pitlatch.flag) and so is this: the dump is ~43
-         log_append calls issued from iio_out, i.e. FILE I/O UNDER g_lock from inside
+         LogAppend calls issued from iio_out, i.e. FILE I/O UNDER g_lock from inside
          the planar interpreter. Fine for a debugging run, not for a build a person
          plays on -- shipping it enabled in s69 was a mistake, see vdd_video.h. */
     if (!g_vid.IsPort3DaRingOn) return;
@@ -15080,18 +15080,18 @@ static void pit_latch_note(uint8_t cmd)
     n = g_vid.Port3DaRingCount; cnt = n < VIDEO_PORT_3DA_RING ? n : VIDEO_PORT_3DA_RING;
     i0 = n - cnt; base = g_vid.Port3DaRingUs[i0 & (VIDEO_PORT_3DA_RING - 1)];
     g_pitlatch_dumps++;
-    q = zput(q, "PIT-LATCH #"); q = zdec(q, g_pitlatch_dumps);
-    q = zput(q, " reload=0x"); q = zhex(q, (DWORD)g_pit.Reload);
-    q = zput(q, " mode="); q = zdec(q, g_pit.Mode);
-    q = zput(q, " clocks_since_load="); q = zdec(q, (uint32_t)(g_pit.TotalClocks - g_pit.LoadClocks));
-    q = zput(q, " hbl_owed="); q = zdec(q, g_vid.Port3DaHblOwed);
-    q = zput(q, " last "); q = zdec(q, cnt); q = zput(q, " 0x3DA polls (us:val):\r\n");
+    q = LogPut(q, "PIT-LATCH #"); q = LogDecimal(q, g_pitlatch_dumps);
+    q = LogPut(q, " reload=0x"); q = LogHex(q, (DWORD)g_pit.Reload);
+    q = LogPut(q, " mode="); q = LogDecimal(q, g_pit.Mode);
+    q = LogPut(q, " clocks_since_load="); q = LogDecimal(q, (uint32_t)(g_pit.TotalClocks - g_pit.LoadClocks));
+    q = LogPut(q, " hbl_owed="); q = LogDecimal(q, g_vid.Port3DaHblOwed);
+    q = LogPut(q, " last "); q = LogDecimal(q, cnt); q = LogPut(q, " 0x3DA polls (us:val):\r\n");
     for (i = i0; i < n; ++i) {
         uint32_t k = i & (VIDEO_PORT_3DA_RING - 1);
-        q = zdec(q, g_vid.Port3DaRingUs[k] - base); q = zput(q, ":");
-        q = zhexb(q, g_vid.Port3DaRingValue[k]); q = zput(q, " ");
+        q = LogDecimal(q, g_vid.Port3DaRingUs[k] - base); q = LogPut(q, ":");
+        q = LogHexByte(q, g_vid.Port3DaRingValue[k]); q = LogPut(q, " ");
         if (++col == 24 || i + 1 == n) {
-            q = zput(q, "\r\n"); log_append(LOG_PATH, b, q); q = b; col = 0;
+            q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, b, q); q = b; col = 0;
         }
     }
 }
@@ -15123,11 +15123,11 @@ static void host_io_do(volatile BYTE *tib, VDD_BUS *bus, uint16_t port,
         if (g_pit.Reload != s_prev) {
             char b[128], *q = b;
             s_prev = g_pit.Reload; g_pit_reload_log++;
-            q = zput(q, "PIT-RELOAD 0x"); q = zhex(q, (DWORD)g_pit.Reload);
-            q = zput(q, " (hz=0x");
-            q = zhex(q, g_pit.Reload ? (PIT_INPUT_HZ / g_pit.Reload) : 18u);
-            q = zput(q, ")\r\n");
-            log_append(LOG_PATH, b, q); serial_out(b, q);
+            q = LogPut(q, "PIT-RELOAD 0x"); q = LogHex(q, (DWORD)g_pit.Reload);
+            q = LogPut(q, " (hz=0x");
+            q = LogHex(q, g_pit.Reload ? (PIT_INPUT_HZ / g_pit.Reload) : 18u);
+            q = LogPut(q, ")\r\n");
+            LogAppend(LOG_PATH, b, q); serial_out(b, q);
         }
     }
     /* Reached from BOTH port paths (this reflected one and the interpreter's
@@ -15169,13 +15169,13 @@ static void host_io_do(volatile BYTE *tib, VDD_BUS *bus, uint16_t port,
          || (port >= 0x330 && port <= 0x331))) {  /* MPU-401 MIDI             */
         char sb2[128], *sq = sb2;
         ++g_sndio_logged;
-        sq = zput(sq, "SNDIO "); sq = zput(sq, is_in ? "in  0x" : "out 0x");
-        sq = zhex(sq, port);
-        sq = zput(sq, is_in ? " -> 0x" : " <- 0x");
-        sq = zhex(sq, val);
-        sq = zput(sq, " w="); sq = zhexb(sq, (unsigned)width);
-        sq = zput(sq, " ms="); sq = zhex(sq, GetTickCount());
-        sq = zput(sq, "\r\n"); log_append(LOG_PATH, sb2, sq); serial_out(sb2, sq);
+        sq = LogPut(sq, "SNDIO "); sq = LogPut(sq, is_in ? "in  0x" : "out 0x");
+        sq = LogHex(sq, port);
+        sq = LogPut(sq, is_in ? " -> 0x" : " <- 0x");
+        sq = LogHex(sq, val);
+        sq = LogPut(sq, " w="); sq = LogHexByte(sq, (unsigned)width);
+        sq = LogPut(sq, " ms="); sq = LogHex(sq, GetTickCount());
+        sq = LogPut(sq, "\r\n"); LogAppend(LOG_PATH, sb2, sq); serial_out(sb2, sq);
     }
 }
 
@@ -15890,24 +15890,24 @@ static void modey_remap_probe(const char *when, DWORD addr)
 {
     MEMORY_BASIC_INFORMATION mbi;
     char b[200], *q = b;
-    q = zput(q, "MODEY-REMAP probe "); q = zput(q, when);
-    q = zput(q, " @0x"); q = zhex(q, addr);
+    q = LogPut(q, "MODEY-REMAP probe "); q = LogPut(q, when);
+    q = LogPut(q, " @0x"); q = LogHex(q, addr);
     if (VirtualQuery((LPCVOID)(ULONG_PTR)addr, &mbi, sizeof mbi) == sizeof mbi) {
-        q = zput(q, " allocbase=0x"); q = zhex(q, (DWORD)(ULONG_PTR)mbi.AllocationBase);
-        q = zput(q, " base=0x");      q = zhex(q, (DWORD)(ULONG_PTR)mbi.BaseAddress);
-        q = zput(q, " size=0x");      q = zhex(q, (DWORD)mbi.RegionSize);
-        q = zput(q, " state=0x");     q = zhex(q, mbi.State);
-        q = zput(q, " type=0x");      q = zhex(q, mbi.Type);
-        q = zput(q, mbi.State == MEM_FREE     ? " (FREE)"
+        q = LogPut(q, " allocbase=0x"); q = LogHex(q, (DWORD)(ULONG_PTR)mbi.AllocationBase);
+        q = LogPut(q, " base=0x");      q = LogHex(q, (DWORD)(ULONG_PTR)mbi.BaseAddress);
+        q = LogPut(q, " size=0x");      q = LogHex(q, (DWORD)mbi.RegionSize);
+        q = LogPut(q, " state=0x");     q = LogHex(q, mbi.State);
+        q = LogPut(q, " type=0x");      q = LogHex(q, mbi.Type);
+        q = LogPut(q, mbi.State == MEM_FREE     ? " (FREE)"
                   : mbi.State == MEM_RESERVE  ? " (RESERVED)" : " (COMMIT)");
-    } else q = zput(q, " <VirtualQuery failed>");
-    q = zput(q, "\r\n"); log_append(LOG_PATH, b, q); serial_out(b, q);
+    } else q = LogPut(q, " <VirtualQuery failed>");
+    q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, b, q); serial_out(b, q);
 }
 
 /* ► THE REPORT IS BUFFERED, BECAUSE THIS RUNS BEFORE THE PREAMBLE. The remap has to
      happen before the UI thread exists -- the renderer dereferences the A0000 window
      every few milliseconds and there is an instant during the swap when it is unmapped
-     -- and every log_write() before the preamble TRUNCATES the file. Two separate
+     -- and every LogWrite() before the preamble TRUNCATES the file. Two separate
      reports have already been lost to that. */
 static char  g_remap_rep[2048];
 static char *g_remap_repq = g_remap_rep;
@@ -15919,16 +15919,16 @@ static void modey_remap_emit(const char *b, const char *e)
 static void modey_remap_flush_report(void)
 {
     if (g_remap_repq == g_remap_rep) return;
-    log_append(LOG_PATH, g_remap_rep, g_remap_repq);
+    LogAppend(LOG_PATH, g_remap_rep, g_remap_repq);
     serial_out(g_remap_rep, g_remap_repq);
     g_remap_repq = g_remap_rep;
 }
 static void modey_remap_log(const char *what, DWORD err)
 {
     char b[160], *q = b;
-    q = zput(q, "MODEY-REMAP "); q = zput(q, what);
-    if (err) { q = zput(q, " err=0x"); q = zhex(q, err); }
-    q = zput(q, "\r\n"); modey_remap_emit(b, q);
+    q = LogPut(q, "MODEY-REMAP "); q = LogPut(q, what);
+    if (err) { q = LogPut(q, " err=0x"); q = LogHex(q, err); }
+    q = LogPut(q, "\r\n"); modey_remap_emit(b, q);
 }
 
 /* Take ownership of the A0000 window. Returns 0 and leaves everything as it was if any
@@ -16153,46 +16153,46 @@ static void modey_tl_report(void)
     us_run = qpc_us(qn.QuadPart - g_ytl_qpc0);
     cpu = us_run ? (ytl_rdtsc() - g_ytl_tsc0) / us_run : 0;    /* cycles per us */
     for (t = 0; t < YTL_SECS; ++t) if (g_ytl_sel[t]) last = t;
-    p = zput(p, "STAGE2: MODEYTL cyc_per_us="); p = zdec(p, (DWORD)cpu);
-    p = zput(p, " secs="); p = zdec(p, last + 1);
-    p = zput(p, " fanB_total="); p = zdec(p, g_yfan_bytes);
-    p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b;
-    p = zput(p, "STAGE2: MODEY-INTERP "); p = zput(p, g_my_interp_off ? "OFF (knob)" : "on");
-    p = zput(p, " slices="); p = zdec(p, g_my_slices);
-    p = zput(p, " instrs="); p = zdec(p, g_my_instrs);
-    p = zput(p, " bails="); p = zdec(p, g_my_bails);
-    p = zput(p, " bails_under_multiplane="); p = zdec(p, g_my_bail_mp);
-    p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b;
-    p = zput(p, "STAGE2: MODEY-PM "); p = zput(p, (g_my_pm_off || g_my_interp_off) ? "OFF (knob)" : "on");
-    p = zput(p, g_my_pm_detect ? " DETECT" : "");
-    p = zput(p, " runs="); p = zdec(p, g_mypm_runs);
-    p = zput(p, " instrs="); p = zdec(p, g_mypm_instrs);
-    p = zput(p, " stop[returned,closed,declined,cap,not32,irq]=");
-    { int k2; for (k2 = 0; k2 < 6; ++k2) { p = zput(p, k2 ? "," : ""); p = zdec(p, g_mypm_stop[k2]); } }
-    p = zput(p, " bails_under_multiplane="); p = zdec(p, g_mypm_bail_mp);
-    p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b;
+    p = LogPut(p, "STAGE2: MODEYTL cyc_per_us="); p = LogDecimal(p, (DWORD)cpu);
+    p = LogPut(p, " secs="); p = LogDecimal(p, last + 1);
+    p = LogPut(p, " fanB_total="); p = LogDecimal(p, g_yfan_bytes);
+    p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p); serial_out(b, p); p = b;
+    p = LogPut(p, "STAGE2: MODEY-INTERP "); p = LogPut(p, g_my_interp_off ? "OFF (knob)" : "on");
+    p = LogPut(p, " slices="); p = LogDecimal(p, g_my_slices);
+    p = LogPut(p, " instrs="); p = LogDecimal(p, g_my_instrs);
+    p = LogPut(p, " bails="); p = LogDecimal(p, g_my_bails);
+    p = LogPut(p, " bails_under_multiplane="); p = LogDecimal(p, g_my_bail_mp);
+    p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p); serial_out(b, p); p = b;
+    p = LogPut(p, "STAGE2: MODEY-PM "); p = LogPut(p, (g_my_pm_off || g_my_interp_off) ? "OFF (knob)" : "on");
+    p = LogPut(p, g_my_pm_detect ? " DETECT" : "");
+    p = LogPut(p, " runs="); p = LogDecimal(p, g_mypm_runs);
+    p = LogPut(p, " instrs="); p = LogDecimal(p, g_mypm_instrs);
+    p = LogPut(p, " stop[returned,closed,declined,cap,not32,irq]=");
+    { int k2; for (k2 = 0; k2 < 6; ++k2) { p = LogPut(p, k2 ? "," : ""); p = LogDecimal(p, g_mypm_stop[k2]); } }
+    p = LogPut(p, " bails_under_multiplane="); p = LogDecimal(p, g_mypm_bail_mp);
+    p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p); serial_out(b, p); p = b;
     { unsigned k, j;
       for (k = 0; k < g_ypm_n; ++k) {
-          p = zput(p, "  MODEY-PM site lin=0x"); p = zhex(p, g_ypm_site[k].lin);
-          p = zput(p, " n="); p = zdec(p, g_ypm_site[k].n);
-          p = zput(p, " multi="); p = zdec(p, g_ypm_site[k].multi);
-          p = zput(p, " masks=0x"); p = zhex(p, g_ypm_site[k].masks);
-          p = zput(p, " bytes[-32..+16]:");
-          for (j = 0; j < 48; ++j) { p = zput(p, " "); p = zhexb(p, g_ypm_site[k].b[j]); }
-          p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b;
+          p = LogPut(p, "  MODEY-PM site lin=0x"); p = LogHex(p, g_ypm_site[k].lin);
+          p = LogPut(p, " n="); p = LogDecimal(p, g_ypm_site[k].n);
+          p = LogPut(p, " multi="); p = LogDecimal(p, g_ypm_site[k].multi);
+          p = LogPut(p, " masks=0x"); p = LogHex(p, g_ypm_site[k].masks);
+          p = LogPut(p, " bytes[-32..+16]:");
+          for (j = 0; j < 48; ++j) { p = LogPut(p, " "); p = LogHexByte(p, g_ypm_site[k].b[j]); }
+          p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p); serial_out(b, p); p = b;
       }
-      if (g_ypm_lost) { p = zput(p, "  MODEY-PM sites lost="); p = zdec(p, g_ypm_lost);
-                        p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b; }
+      if (g_ypm_lost) { p = LogPut(p, "  MODEY-PM sites lost="); p = LogDecimal(p, g_ypm_lost);
+                        p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p); serial_out(b, p); p = b; }
       for (k = 0; k < g_my_site_n; ++k) {
-          p = zput(p, "  MODEY-INTERP bail cs:ip="); p = zhex(p, g_my_site[k].cs);
-          p = zput(p, ":"); p = zhex(p, g_my_site[k].ip);
-          p = zput(p, " n="); p = zdec(p, g_my_site[k].n); p = zput(p, " bytes:");
-          for (j = 0; j < 8; ++j) { p = zput(p, " "); p = zhexb(p, g_my_site[k].b[j]); }
-          p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b;
+          p = LogPut(p, "  MODEY-INTERP bail cs:ip="); p = LogHex(p, g_my_site[k].cs);
+          p = LogPut(p, ":"); p = LogHex(p, g_my_site[k].ip);
+          p = LogPut(p, " n="); p = LogDecimal(p, g_my_site[k].n); p = LogPut(p, " bytes:");
+          for (j = 0; j < 8; ++j) { p = LogPut(p, " "); p = LogHexByte(p, g_my_site[k].b[j]); }
+          p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p); serial_out(b, p); p = b;
       } }
     for (row = 0; row < 9; ++row) {
         DWORD prevflip = 0;
-        p = zput(p, "STAGE2: MODEYTL "); p = zput(p, nm[row]); p = zput(p, "=");
+        p = LogPut(p, "STAGE2: MODEYTL "); p = LogPut(p, nm[row]); p = LogPut(p, "=");
         for (t = 0; t <= last; ++t) {
             DWORD v = 0;
             switch (row) {
@@ -16207,9 +16207,9 @@ static void modey_tl_report(void)
             case 7: v = g_ytl_ins[t];  break;
             case 8: v = cpu ? (DWORD)(g_ytl_icyc[t] / cpu) : 0; break;
             }
-            p = zput(p, t ? "," : ""); p = zdec(p, v);
+            p = LogPut(p, t ? "," : ""); p = LogDecimal(p, v);
         }
-        p = zput(p, "\r\n"); log_append(LOG_PATH, b, p); serial_out(b, p); p = b;
+        p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p); serial_out(b, p); p = b;
     }
 }
 
@@ -16505,20 +16505,20 @@ static void modey_remap_wmode(void *ctx, int wm)
             (void)uniq;
             { char lb2[224], *lq = lb2;
               ++g_ylatch_desc;
-              lq = zput(lq, "MODEY-LATCH burst changed="); lq = zhex(lq, n);
-              lq = zput(lq, " span=0x"); lq = zhex(lq, lo);
-              lq = zput(lq, "..0x"); lq = zhex(lq, hi);
+              lq = LogPut(lq, "MODEY-LATCH burst changed="); lq = LogHex(lq, n);
+              lq = LogPut(lq, " span=0x"); lq = LogHex(lq, lo);
+              lq = LogPut(lq, "..0x"); lq = LogHex(lq, hi);
               /* ► IN THE UNITS OF THE CLAIM. A plane offset is row*80 + x/4, so a span
                    in hex says nothing about which rows a burst reaches -- and reading
                    0x3a1c..0x3e7f as "the status bar" without converting it is exactly
                    how the wrong cause survived. Print the rows next to the offsets. */
-              lq = zput(lq, " rows="); lq = zhex(lq, n ? (lo % 0x4000u) / 80u : 0);
-              lq = zput(lq, "..");     lq = zhex(lq, n ? (hi % 0x4000u) / 80u : 0);
-              lq = zput(lq, " barbytes="); lq = zhex(lq, nbar);
-              lq = zput(lq, constant ? " DEST IS CONSTANT 0x" : " dest varies, first=0x");
-              lq = zhexb(lq, first);
-              lq = zput(lq, " mask=0x"); lq = zhexb(lq, (unsigned)g_yprev_mask);
-              lq = zput(lq, "\r\n"); log_append(LOG_PATH, lb2, lq); serial_out(lb2, lq); }
+              lq = LogPut(lq, " rows="); lq = LogHex(lq, n ? (lo % 0x4000u) / 80u : 0);
+              lq = LogPut(lq, "..");     lq = LogHex(lq, n ? (hi % 0x4000u) / 80u : 0);
+              lq = LogPut(lq, " barbytes="); lq = LogHex(lq, nbar);
+              lq = LogPut(lq, constant ? " DEST IS CONSTANT 0x" : " dest varies, first=0x");
+              lq = LogHexByte(lq, first);
+              lq = LogPut(lq, " mask=0x"); lq = LogHexByte(lq, (unsigned)g_yprev_mask);
+              lq = LogPut(lq, "\r\n"); LogAppend(LOG_PATH, lb2, lq); serial_out(lb2, lq); }
         }
         for (k = 0; k < MODEY_WIN; ++k) g_yseed[k] = sc[k];   /* re-seed for the byte diff */
         g_ylatch = 0;
@@ -16878,14 +16878,14 @@ static void imem_bad_note(uint32_t lin, int write)
     char b[224], *q = b;
     if (g_imem_bad_logged >= 12) return;
     g_imem_bad_logged++;
-    q = zput(q, "IMEM-OOR "); q = zput(q, write ? "W" : "R"); q = zput(q, " lin=0x"); q = zhex(q, lin);
-    q = zput(q, " guest cs:ip=0x"); q = zhex(q, g_ipc);
+    q = LogPut(q, "IMEM-OOR "); q = LogPut(q, write ? "W" : "R"); q = LogPut(q, " lin=0x"); q = LogHex(q, lin);
+    q = LogPut(q, " guest cs:ip=0x"); q = LogHex(q, g_ipc);
     if (g_interp_c) { const icpu *ic = g_interp_c;
-        q = zput(q, " es=0x"); q = zhex(q, ic->seg[0]);
-        q = zput(q, " ds=0x"); q = zhex(q, ic->seg[3]);
-        q = zput(q, " di=0x"); q = zhex(q, ic->r[7]);
-        q = zput(q, " si=0x"); q = zhex(q, ic->r[6]); }
-    q = zput(q, "\r\n"); log_append(LOG_PATH, b, q);
+        q = LogPut(q, " es=0x"); q = LogHex(q, ic->seg[0]);
+        q = LogPut(q, " ds=0x"); q = LogHex(q, ic->seg[3]);
+        q = LogPut(q, " di=0x"); q = LogHex(q, ic->r[7]);
+        q = LogPut(q, " si=0x"); q = LogHex(q, ic->r[6]); }
+    q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, b, q);
 }
 
 /* Where the guest was at the last interpreted instruction. Every planar VRAM write
@@ -16928,17 +16928,17 @@ static void my_ring_dump(const char *why)
     unsigned k, j;
     if (g_my_ring_dumped) return;
     g_my_ring_dumped = 1;
-    q = lb; q = zput(q, "MODEY-INTERP RING ("); q = zput(q, why); q = zput(q, "), oldest first:\r\n");
-    log_append(LOG_PATH, lb, q);
+    q = lb; q = LogPut(q, "MODEY-INTERP RING ("); q = LogPut(q, why); q = LogPut(q, "), oldest first:\r\n");
+    LogAppend(LOG_PATH, lb, q);
     for (k = 0; k < MY_RING; ++k) {
         unsigned i = (g_my_ring_pos + k) % MY_RING;
         if (!g_my_ring[i].cs && !g_my_ring[i].ip) continue;
         q = lb;
-        q = zput(q, "  "); q = zhex(q, g_my_ring[i].cs); q = zput(q, ":"); q = zhex(q, g_my_ring[i].ip);
-        q = zput(q, " ss:sp="); q = zhex(q, g_my_ring[i].ss); q = zput(q, ":"); q = zhex(q, g_my_ring[i].sp);
-        q = zput(q, "  ");
-        for (j = 0; j < 6; ++j) { q = zhexb(q, g_my_ring[i].b[j]); q = zput(q, " "); }
-        q = zput(q, "\r\n"); log_append(LOG_PATH, lb, q);
+        q = LogPut(q, "  "); q = LogHex(q, g_my_ring[i].cs); q = LogPut(q, ":"); q = LogHex(q, g_my_ring[i].ip);
+        q = LogPut(q, " ss:sp="); q = LogHex(q, g_my_ring[i].ss); q = LogPut(q, ":"); q = LogHex(q, g_my_ring[i].sp);
+        q = LogPut(q, "  ");
+        for (j = 0; j < 6; ++j) { q = LogHexByte(q, g_my_ring[i].b[j]); q = LogPut(q, " "); }
+        q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, lb, q);
     }
 }
 
@@ -17015,28 +17015,28 @@ static void hostprof_dump(void)
     int k;
     if (!g_hprof) return;
     g_hprof_on = 0; Sleep(5);
-    p = zput(b, "STAGE2: HOSTPROF samples="); p = zdec(p, g_hprof_samples);
-    p = zput(p, " in_host_image="); p = zdec(p, g_hprof_in);
-    p = zput(p, " image_base=0x"); p = zhex(p, g_hprof_base);
-    p = zput(p, " (RVA buckets of 16 bytes, hottest first)\r\n"); log_append(LOG_PATH, b, p);
-    p = zput(b, "STAGE2: HOSTPROF guest_v86="); p = zdec(p, g_hprof_v86);
-    p = zput(p, " kernel="); p = zdec(p, g_hprof_kern);
-    p = zput(p, " other_user="); p = zdec(p, g_hprof_other); p = zput(p, "\r\n");
-    log_append(LOG_PATH, b, p);
+    p = LogPut(b, "STAGE2: HOSTPROF samples="); p = LogDecimal(p, g_hprof_samples);
+    p = LogPut(p, " in_host_image="); p = LogDecimal(p, g_hprof_in);
+    p = LogPut(p, " image_base=0x"); p = LogHex(p, g_hprof_base);
+    p = LogPut(p, " (RVA buckets of 16 bytes, hottest first)\r\n"); LogAppend(LOG_PATH, b, p);
+    p = LogPut(b, "STAGE2: HOSTPROF guest_v86="); p = LogDecimal(p, g_hprof_v86);
+    p = LogPut(p, " kernel="); p = LogDecimal(p, g_hprof_kern);
+    p = LogPut(p, " other_user="); p = LogDecimal(p, g_hprof_other); p = LogPut(p, "\r\n");
+    LogAppend(LOG_PATH, b, p);
     for (k = 0; k < 12; ++k) {
         DWORD i, best = 0, bi = 0;
         for (i = 0; i < 0x8000; ++i) if (g_hprof_seg[i] > best) { best = g_hprof_seg[i]; bi = i; }
         if (!best) break;
-        p = zput(b, "  HOSTPROF other_user 64K@0x"); p = zhex(p, bi << 16);
-        p = zput(p, " n="); p = zdec(p, best); p = zput(p, "\r\n"); log_append(LOG_PATH, b, p);
+        p = LogPut(b, "  HOSTPROF other_user 64K@0x"); p = LogHex(p, bi << 16);
+        p = LogPut(p, " n="); p = LogDecimal(p, best); p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p);
         g_hprof_seg[bi] = 0;
     }
     for (k = 0; k < 400; ++k) {
         DWORD i, best = 0, bi = 0;
         for (i = 0; i < g_hprof_n; ++i) if (g_hprof[i] > best) { best = g_hprof[i]; bi = i; }
         if (!best) break;
-        p = zput(b, "  HOSTPROF rva=0x"); p = zhex(p, bi << HPROF_SHIFT);
-        p = zput(p, " n="); p = zdec(p, best); p = zput(p, "\r\n"); log_append(LOG_PATH, b, p);
+        p = LogPut(b, "  HOSTPROF rva=0x"); p = LogHex(p, bi << HPROF_SHIFT);
+        p = LogPut(p, " n="); p = LogDecimal(p, best); p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p);
         g_hprof[bi] = 0;
     }
 }
@@ -17276,26 +17276,26 @@ static void host_fatal_dump(EXCEPTION_RECORD *er, CONTEXT *cx)
 {
     static char cb[2048]; char *p = cb;
     InterlockedIncrement(&g_veh_fatal);                 /* run 52: a real fault WAS delivered */
-    p = zput(p, g_dpmi_pm ? "\r\nDPMI FATAL: exception code=0x"
+    p = LogPut(p, g_dpmi_pm ? "\r\nDPMI FATAL: exception code=0x"
                           : "\r\nHOST FATAL (real-mode guest): exception code=0x");
-    p = zhex(p, er->ExceptionCode);
-    p = zput(p, " at 0x"); p = zhex(p, (unsigned)(ULONG_PTR)er->ExceptionAddress);
+    p = LogHex(p, er->ExceptionCode);
+    p = LogPut(p, " at 0x"); p = LogHex(p, (unsigned)(ULONG_PTR)er->ExceptionAddress);
     if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2) {
-        p = zput(p, " av{op=0x");  p = zhex(p, (DWORD)er->ExceptionInformation[0]);
-        p = zput(p, " addr=0x");   p = zhex(p, (DWORD)er->ExceptionInformation[1]);
-        p = zput(p, "}");
+        p = LogPut(p, " av{op=0x");  p = LogHex(p, (DWORD)er->ExceptionInformation[0]);
+        p = LogPut(p, " addr=0x");   p = LogHex(p, (DWORD)er->ExceptionInformation[1]);
+        p = LogPut(p, "}");
     }
-    p = zput(p, "\r\n  CS:EIP=0x"); p = zhex(p, cx->SegCs); p = zput(p, ":0x"); p = zhex(p, cx->Eip);
-    p = zput(p, " SS:ESP=0x"); p = zhex(p, cx->SegSs); p = zput(p, ":0x"); p = zhex(p, cx->Esp);
-    p = zput(p, " EFL=0x"); p = zhex(p, cx->EFlags); p = zput(p, "\r\n");
-    p = zput(p, "  DS=0x"); p = zhex(p, cx->SegDs); p = zput(p, " ES=0x"); p = zhex(p, cx->SegEs);
-    p = zput(p, " FS=0x"); p = zhex(p, cx->SegFs); p = zput(p, " GS=0x"); p = zhex(p, cx->SegGs);
-    p = zput(p, "\r\n  EAX=0x"); p = zhex(p, cx->Eax); p = zput(p, " EBX=0x"); p = zhex(p, cx->Ebx);
-    p = zput(p, " ECX=0x"); p = zhex(p, cx->Ecx); p = zput(p, " EDX=0x"); p = zhex(p, cx->Edx);
-    p = zput(p, "\r\n");
+    p = LogPut(p, "\r\n  CS:EIP=0x"); p = LogHex(p, cx->SegCs); p = LogPut(p, ":0x"); p = LogHex(p, cx->Eip);
+    p = LogPut(p, " SS:ESP=0x"); p = LogHex(p, cx->SegSs); p = LogPut(p, ":0x"); p = LogHex(p, cx->Esp);
+    p = LogPut(p, " EFL=0x"); p = LogHex(p, cx->EFlags); p = LogPut(p, "\r\n");
+    p = LogPut(p, "  DS=0x"); p = LogHex(p, cx->SegDs); p = LogPut(p, " ES=0x"); p = LogHex(p, cx->SegEs);
+    p = LogPut(p, " FS=0x"); p = LogHex(p, cx->SegFs); p = LogPut(p, " GS=0x"); p = LogHex(p, cx->SegGs);
+    p = LogPut(p, "\r\n  EAX=0x"); p = LogHex(p, cx->Eax); p = LogPut(p, " EBX=0x"); p = LogHex(p, cx->Ebx);
+    p = LogPut(p, " ECX=0x"); p = LogHex(p, cx->Ecx); p = LogPut(p, " EDX=0x"); p = LogHex(p, cx->Edx);
+    p = LogPut(p, "\r\n");
     { const BYTE *fb = (const BYTE *)(ULONG_PTR)(er->ExceptionAddress);
-      p = zput(p, "  bytes@fault: ");
-      if (host_readable(fb, 16)) p = zdump(p, fb, 16); else p = zput(p, "<unreadable>");
+      p = LogPut(p, "  bytes@fault: ");
+      if (host_readable(fb, 16)) p = LogDump(p, fb, 16); else p = LogPut(p, "<unreadable>");
     }
     /* ★ THE INTERPRETER'S LIVE REGISTERS. When the fault is inside istep (a stray
          guest pointer, s69), the VDM context is a whole slice stale; THIS is the es/di
@@ -17303,24 +17303,24 @@ static void host_fatal_dump(EXCEPTION_RECORD *er, CONTEXT *cx)
          unmapped hole names the bug: a wrong SEGMENT vs an unmasked OFFSET. */
     if (g_interp_c) {
         const icpu *ic = g_interp_c;
-        p = zput(p, "\r\n  interp cs:ip=0x"); p = zhex(p, ic->seg[1]); p = zput(p, ":0x"); p = zhex(p, ic->ip);
-        p = zput(p, " es=0x"); p = zhex(p, ic->seg[0]); p = zput(p, " ds=0x"); p = zhex(p, ic->seg[3]);
-        p = zput(p, " ss=0x"); p = zhex(p, ic->seg[2]);
-        p = zput(p, "\r\n  interp di=0x"); p = zhex(p, ic->r[7]); p = zput(p, " si=0x"); p = zhex(p, ic->r[6]);
-        p = zput(p, " bx=0x"); p = zhex(p, ic->r[3]); p = zput(p, " bp=0x"); p = zhex(p, ic->r[5]);
-        p = zput(p, " ax=0x"); p = zhex(p, ic->r[0]); p = zput(p, " cx=0x"); p = zhex(p, ic->r[1]);
-        p = zput(p, "\r\n");
+        p = LogPut(p, "\r\n  interp cs:ip=0x"); p = LogHex(p, ic->seg[1]); p = LogPut(p, ":0x"); p = LogHex(p, ic->ip);
+        p = LogPut(p, " es=0x"); p = LogHex(p, ic->seg[0]); p = LogPut(p, " ds=0x"); p = LogHex(p, ic->seg[3]);
+        p = LogPut(p, " ss=0x"); p = LogHex(p, ic->seg[2]);
+        p = LogPut(p, "\r\n  interp di=0x"); p = LogHex(p, ic->r[7]); p = LogPut(p, " si=0x"); p = LogHex(p, ic->r[6]);
+        p = LogPut(p, " bx=0x"); p = LogHex(p, ic->r[3]); p = LogPut(p, " bp=0x"); p = LogHex(p, ic->r[5]);
+        p = LogPut(p, " ax=0x"); p = LogHex(p, ic->r[0]); p = LogPut(p, " cx=0x"); p = LogHex(p, ic->r[1]);
+        p = LogPut(p, "\r\n");
     }
     /* Where the GUEST was when the host died. For a real-mode crash this is the
        line that names the suspect -- e.g. a CLI poll of an unclaimed port. */
     if (g_tib_dbg) {
         volatile BYTE *t = g_tib_dbg;
-        p = zput(p, "\r\n  guest tib{cs:ip=0x"); p = zhex(p, VDM_REG(t, VTIB_CS) & 0xFFFF);
-        p = zput(p, ":0x"); p = zhex(p, VDM_REG(t, VTIB_EIP));
-        p = zput(p, " eax=0x"); p = zhex(p, VDM_REG(t, VTIB_EAX));
-        p = zput(p, " edx=0x"); p = zhex(p, VDM_REG(t, VTIB_EDX)); p = zput(p, "}");
+        p = LogPut(p, "\r\n  guest tib{cs:ip=0x"); p = LogHex(p, VDM_REG(t, VTIB_CS) & 0xFFFF);
+        p = LogPut(p, ":0x"); p = LogHex(p, VDM_REG(t, VTIB_EIP));
+        p = LogPut(p, " eax=0x"); p = LogHex(p, VDM_REG(t, VTIB_EAX));
+        p = LogPut(p, " edx=0x"); p = LogHex(p, VDM_REG(t, VTIB_EDX)); p = LogPut(p, "}");
     }
-    p = zput(p, "\r\n");
+    p = LogPut(p, "\r\n");
     /* ── ★★ WHO CALLED INTO THIS? (GH #128, session 38) ───────────────────────────
          A fault inside ntdll or kernel32 is OUR bug at one remove -- some host call
          passed a bad pointer -- and the registers name the *instruction* while saying
@@ -17331,27 +17331,27 @@ static void host_fatal_dump(EXCEPTION_RECORD *er, CONTEXT *cx)
          frame chain that does not ascend is not a frame chain, and we stop rather than
          printing plausible-looking rubbish -- an instrument that invents its own frame
          is this project's most expensive recurring mistake. */
-    p = zput(p, "  last WOW32 call ENTERED: id=0x"); p = zhex(p, g_wow_last_id);
+    p = LogPut(p, "  last WOW32 call ENTERED: id=0x"); p = LogHex(p, g_wow_last_id);
     { const char *nm = Wow32Name(g_wow_last_id);
-      if (nm) { p = zput(p, " "); p = zput(p, nm); } }
-    p = zput(p, " from=0x"); p = zhex(p, g_wow_last_from);
-    p = zput(p, " (it may have COMPLETED -- the log line is only written with the result,\r\n"
+      if (nm) { p = LogPut(p, " "); p = LogPut(p, nm); } }
+    p = LogPut(p, " from=0x"); p = LogHex(p, g_wow_last_from);
+    p = LogPut(p, " (it may have COMPLETED -- the log line is only written with the result,\r\n"
                 "    so a crash inside a service loses the header and the log ends one call short)\r\n");
-    p = zput(p, "  tid=0x"); p = zhex(p, GetCurrentThreadId());
-    p = zput(p, (GetCurrentThreadId() == g_guest_tid)
+    p = LogPut(p, "  tid=0x"); p = LogHex(p, GetCurrentThreadId());
+    p = LogPut(p, (GetCurrentThreadId() == g_guest_tid)
               ? " (THE GUEST THREAD)" : " (a WORKER thread, NOT the guest)");
-    p = zput(p, " ourbase=0x");
-    p = zhex(p, (DWORD)(ULONG_PTR)GetModuleHandleA(NULL));
-    p = zput(p, "\r\n  frames:");
+    p = LogPut(p, " ourbase=0x");
+    p = LogHex(p, (DWORD)(ULONG_PTR)GetModuleHandleA(NULL));
+    p = LogPut(p, "\r\n  frames:");
     {   DWORD fp = cx->Ebp; int k;
         for (k = 0; k < 12 && fp; ++k) {
             const DWORD *fr = (const DWORD *)(ULONG_PTR)fp;
-            if (!host_readable(fr, 8)) { p = zput(p, " <unreadable>"); break; }
-            p = zput(p, " 0x"); p = zhex(p, fr[1]);
-            if (fr[0] <= fp) { p = zput(p, " <chain ends>"); break; }
+            if (!host_readable(fr, 8)) { p = LogPut(p, " <unreadable>"); break; }
+            p = LogPut(p, " 0x"); p = LogHex(p, fr[1]);
+            if (fr[0] <= fp) { p = LogPut(p, " <chain ends>"); break; }
             fp = fr[0];
         }
-        p = zput(p, "\r\n");
+        p = LogPut(p, "\r\n");
     }
     /* ★ AND THE RAW STACK, because the frame chain is only as good as EBP. A leaf
          function that has not built a frame, or one compiled without one, breaks the
@@ -17359,14 +17359,14 @@ static void host_fatal_dump(EXCEPTION_RECORD *er, CONTEXT *cx)
          ESP will contain the return address whether EBP is trustworthy or not -- the
          reader looks for one near `ourbase`. */
     {   const DWORD *sp = (const DWORD *)(ULONG_PTR)cx->Esp; int k;
-        p = zput(p, "  @esp:");
+        p = LogPut(p, "  @esp:");
         for (k = 0; k < 24; ++k) {
-            if (!host_readable(sp + k, 4)) { p = zput(p, " <unreadable>"); break; }
-            p = zput(p, " 0x"); p = zhex(p, sp[k]);
+            if (!host_readable(sp + k, 4)) { p = LogPut(p, " <unreadable>"); break; }
+            p = LogPut(p, " 0x"); p = LogHex(p, sp[k]);
         }
-        p = zput(p, "\r\n");
+        p = LogPut(p, "\r\n");
     }
-    log_append(LOG_PATH, cb, p);
+    LogAppend(LOG_PATH, cb, p);
     serial_out(cb, p);
     tray_remove(g_hwnd);      /* the VEH exits without unwinding the UI thread */
     host_rec_finish();
@@ -17400,25 +17400,25 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
             || er->ExceptionCode == EXCEPTION_SINGLE_STEP) {
             LONG n = InterlockedIncrement(&s_rm_fault_seen);
             if (n <= 32) {
-                p = zput(p, "HOSTFAULT #"); p = zhex(p, (unsigned)n);
-                p = zput(p, ": exc=0x"); p = zhex(p, er->ExceptionCode);
-                p = zput(p, " at=0x"); p = zhex(p, (DWORD)(ULONG_PTR)er->ExceptionAddress);
+                p = LogPut(p, "HOSTFAULT #"); p = LogHex(p, (unsigned)n);
+                p = LogPut(p, ": exc=0x"); p = LogHex(p, er->ExceptionCode);
+                p = LogPut(p, " at=0x"); p = LogHex(p, (DWORD)(ULONG_PTR)er->ExceptionAddress);
                 if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2) {
-                    p = zput(p, " av{op=0x"); p = zhex(p, (DWORD)er->ExceptionInformation[0]);
-                    p = zput(p, " addr=0x"); p = zhex(p, (DWORD)er->ExceptionInformation[1]);
-                    p = zput(p, "}");
+                    p = LogPut(p, " av{op=0x"); p = LogHex(p, (DWORD)er->ExceptionInformation[0]);
+                    p = LogPut(p, " addr=0x"); p = LogHex(p, (DWORD)er->ExceptionInformation[1]);
+                    p = LogPut(p, "}");
                 }
-                p = zput(p, " cs:eip=0x"); p = zhex(p, cx->SegCs);
-                p = zput(p, ":0x"); p = zhex(p, cx->Eip);
-                p = zput(p, " tid=0x"); p = zhex(p, GetCurrentThreadId());
-                p = zput(p, (GetCurrentThreadId() == g_guest_tid) ? " (guest thread)" : " (worker)");
+                p = LogPut(p, " cs:eip=0x"); p = LogHex(p, cx->SegCs);
+                p = LogPut(p, ":0x"); p = LogHex(p, cx->Eip);
+                p = LogPut(p, " tid=0x"); p = LogHex(p, GetCurrentThreadId());
+                p = LogPut(p, (GetCurrentThreadId() == g_guest_tid) ? " (guest thread)" : " (worker)");
                 if (g_tib_dbg) {
                     volatile BYTE *t = g_tib_dbg;
-                    p = zput(p, " tib{cs:ip=0x"); p = zhex(p, VDM_REG(t, VTIB_CS) & 0xFFFF);
-                    p = zput(p, ":0x"); p = zhex(p, VDM_REG(t, VTIB_EIP)); p = zput(p, "}");
+                    p = LogPut(p, " tib{cs:ip=0x"); p = LogHex(p, VDM_REG(t, VTIB_CS) & 0xFFFF);
+                    p = LogPut(p, ":0x"); p = LogHex(p, VDM_REG(t, VTIB_EIP)); p = LogPut(p, "}");
                 }
-                p = zput(p, "\r\n");
-                log_append(LOG_PATH, cb, p); serial_out(cb, p);
+                p = LogPut(p, "\r\n");
+                LogAppend(LOG_PATH, cb, p); serial_out(cb, p);
             }
         }
         return EXCEPTION_CONTINUE_SEARCH;
@@ -17460,15 +17460,15 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
         DWORD func = cx->Eax & 0xFFFF;
         BYTE  vec  = (ib[0] == 0xCD) ? ib[1] : 0x31;    /* CD nn -> vector; default 31h    */
         ++s_veh_count;
-        p = zput(p, "DPMI INT"); p = zhex(p, vec); p = zput(p, "h #"); p = zhex(p, (unsigned)s_veh_count);
-        p = zput(p, ": AX=0x"); p = zhex(p, func);
-        p = zput(p, " BX=0x"); p = zhex(p, cx->Ebx & 0xFFFF);
-        p = zput(p, " CX=0x"); p = zhex(p, cx->Ecx & 0xFFFF);
-        p = zput(p, " [site EDX=0x"); p = zhex(p, cx->Edx & 0xFFFF);
-        p = zput(p, " EIP=0x"); p = zhex(p, cx->Eip);
-        p = zput(p, " b@site="); p = zdump(p, ib, 4); p = zput(p, "]");
+        p = LogPut(p, "DPMI INT"); p = LogHex(p, vec); p = LogPut(p, "h #"); p = LogHex(p, (unsigned)s_veh_count);
+        p = LogPut(p, ": AX=0x"); p = LogHex(p, func);
+        p = LogPut(p, " BX=0x"); p = LogHex(p, cx->Ebx & 0xFFFF);
+        p = LogPut(p, " CX=0x"); p = LogHex(p, cx->Ecx & 0xFFFF);
+        p = LogPut(p, " [site EDX=0x"); p = LogHex(p, cx->Edx & 0xFFFF);
+        p = LogPut(p, " EIP=0x"); p = LogHex(p, cx->Eip);
+        p = LogPut(p, " b@site="); p = LogDump(p, ib, 4); p = LogPut(p, "]");
         { const BYTE *sent = (const BYTE *)(ULONG_PTR)0x1600;   /* guest sentinel DS:0x600 */
-          p = zput(p, " sentinel@0x1600="); p = zdump(p, sent, 4); }
+          p = LogPut(p, " sentinel@0x1600="); p = LogDump(p, sent, 4); }
         /* ── WHAT ACTUALLY FAULTED. THIS ARM NEVER SAID, AND THAT IS THE WHOLE GAP. ──
              Everything above is an INTERPRETATION: it ASSUMES the fault is a kernel-
              reflected `INT nn`, reads the vector from [code_base+EDX] and answers it as
@@ -17483,24 +17483,24 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
              parameters, the bytes at the faulting EIP, and the TIB's own idea of where
              the guest is -- because a CONTEXT that disagrees with the TIB is not the
              guest's CONTEXT at all. Cheap: one line, on a path that already logs. */
-        p = zput(p, " exc=0x"); p = zhex(p, er->ExceptionCode);
-        p = zput(p, " at=0x"); p = zhex(p, (DWORD)(ULONG_PTR)er->ExceptionAddress);
+        p = LogPut(p, " exc=0x"); p = LogHex(p, er->ExceptionCode);
+        p = LogPut(p, " at=0x"); p = LogHex(p, (DWORD)(ULONG_PTR)er->ExceptionAddress);
         if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2) {
-            p = zput(p, " av{op=0x");  p = zhex(p, (DWORD)er->ExceptionInformation[0]);
-            p = zput(p, " addr=0x");   p = zhex(p, (DWORD)er->ExceptionInformation[1]);
-            p = zput(p, "}");
+            p = LogPut(p, " av{op=0x");  p = LogHex(p, (DWORD)er->ExceptionInformation[0]);
+            p = LogPut(p, " addr=0x");   p = LogHex(p, (DWORD)er->ExceptionInformation[1]);
+            p = LogPut(p, "}");
         }
         { const BYTE *fb = (const BYTE *)(ULONG_PTR)(g_dpmi_code_base + (cx->Eip & 0xFFFF));
-          p = zput(p, " b@eip="); p = zdump(p, fb, 6); }
-        p = zput(p, " ctx{ss:esp=0x"); p = zhex(p, cx->SegSs); p = zput(p, ":0x"); p = zhex(p, cx->Esp);
-        p = zput(p, " ds=0x"); p = zhex(p, cx->SegDs); p = zput(p, " es=0x"); p = zhex(p, cx->SegEs);
-        p = zput(p, " edi=0x"); p = zhex(p, cx->Edi); p = zput(p, "}");
+          p = LogPut(p, " b@eip="); p = LogDump(p, fb, 6); }
+        p = LogPut(p, " ctx{ss:esp=0x"); p = LogHex(p, cx->SegSs); p = LogPut(p, ":0x"); p = LogHex(p, cx->Esp);
+        p = LogPut(p, " ds=0x"); p = LogHex(p, cx->SegDs); p = LogPut(p, " es=0x"); p = LogHex(p, cx->SegEs);
+        p = LogPut(p, " edi=0x"); p = LogHex(p, cx->Edi); p = LogPut(p, "}");
         if (g_tib_dbg) {
             volatile BYTE *t = g_tib_dbg;
-            p = zput(p, " tib{cs:eip=0x"); p = zhex(p, VDM_REG(t, VTIB_CS) & 0xFFFF);
-            p = zput(p, ":0x"); p = zhex(p, VDM_REG(t, VTIB_EIP));
-            p = zput(p, " eax=0x"); p = zhex(p, VDM_REG(t, VTIB_EAX));
-            p = zput(p, " edx=0x"); p = zhex(p, VDM_REG(t, VTIB_EDX)); p = zput(p, "}");
+            p = LogPut(p, " tib{cs:eip=0x"); p = LogHex(p, VDM_REG(t, VTIB_CS) & 0xFFFF);
+            p = LogPut(p, ":0x"); p = LogHex(p, VDM_REG(t, VTIB_EIP));
+            p = LogPut(p, " eax=0x"); p = LogHex(p, VDM_REG(t, VTIB_EAX));
+            p = LogPut(p, " edx=0x"); p = LogHex(p, VDM_REG(t, VTIB_EDX)); p = LogPut(p, "}");
         }
         /* ── IS THIS A REFLECTED `INT nn` AT ALL? ASK THE INSTRUCTION, NOT THE ARM. ──
              Measured under `pmkernel.flag` (build/pmk5.log, 8 hits, one per PM entry):
@@ -17532,9 +17532,9 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
                    through and see whether VdmStartExecution returns an event instead.
                    Absent file = the behaviour above, unchanged. */
               if (g_pm_veh_pass) {
-                  p = zput(p, " -> FAULT, not an INT: PASSING IT THROUGH (pmvehpass)");
-                  p = zput(p, "\r\n");
-                  log_append(LOG_PATH, cb, p); serial_out(cb, p);
+                  p = LogPut(p, " -> FAULT, not an INT: PASSING IT THROUGH (pmvehpass)");
+                  p = LogPut(p, "\r\n");
+                  LogAppend(LOG_PATH, cb, p); serial_out(cb, p);
                   return EXCEPTION_CONTINUE_SEARCH;
               }
               /* ── RESUME WHERE THE GUEST ACTUALLY IS, NOT WHERE THE RECORD SAYS. ──
@@ -17574,19 +17574,19 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
                      not the guest's own EDX (here EDX=0x20b, the entry, while the
                      guest's real EDX was 0x2c2d). So ask that. */
               if ((DWORD)cx->Edx != (DWORD)g_pm_entry_eip || g_pm_entry_eip < 0) {
-                  p = zput(p, " -> REAL fault (EDX is not the entry EIP): FATAL dump");
-                  p = zput(p, "\r\n");
+                  p = LogPut(p, " -> REAL fault (EDX is not the entry EIP): FATAL dump");
+                  p = LogPut(p, "\r\n");
                   goto veh_fatal;                       /* the label flushes cb */
               }
               if (g_pm_entry_eip >= 0 && (DWORD)g_pm_entry_eip != cx->Eip) {
-                  p = zput(p, " -> FAULT, not an INT: resuming at ENTRY 0x");
-                  p = zhex(p, (DWORD)g_pm_entry_eip);
+                  p = LogPut(p, " -> FAULT, not an INT: resuming at ENTRY 0x");
+                  p = LogHex(p, (DWORD)g_pm_entry_eip);
                   cx->Eip = (DWORD)g_pm_entry_eip;
               } else {
-                  p = zput(p, " -> FAULT, not an INT: resuming untouched");
+                  p = LogPut(p, " -> FAULT, not an INT: resuming untouched");
               }
-              p = zput(p, "\r\n");
-              log_append(LOG_PATH, cb, p); serial_out(cb, p);
+              p = LogPut(p, "\r\n");
+              LogAppend(LOG_PATH, cb, p); serial_out(cb, p);
               cx->SegCs = 0x0F; cx->SegSs = 0x17;       /* guest selectors back; regs intact */
               return EXCEPTION_CONTINUE_EXECUTION;
           } }
@@ -17599,26 +17599,26 @@ static LONG CALLBACK dpmi_crash_veh(EXCEPTION_POINTERS *ep)
             cx->Ebx = (cx->Ebx & 0xFFFF0000) | DPMI_VER_BX;
             cx->Ecx = (cx->Ecx & 0xFFFF0000) | DPMI_CPU_CLASS;
             cx->Edx = (cx->Edx & 0xFFFF0000) | DPMI_VER_DX;
-            p = zput(p, " -> DPMI 0.90");
+            p = LogPut(p, " -> DPMI 0.90");
             break;
         case 0x0000:                                    /* allocate LDT descriptors (CX=count) */
             cx->Eax = (cx->Eax & 0xFFFF0000) | 0x001F;  /* base selector 0x1F (spike stub)    */
-            p = zput(p, " -> alloc base sel 0x1F");
+            p = LogPut(p, " -> alloc base sel 0x1F");
             break;
         default:
             cx->EFlags |= 1u;                           /* CF=1: unsupported function        */
-            p = zput(p, " -> UNSUPPORTED (CF=1)");
+            p = LogPut(p, " -> UNSUPPORTED (CF=1)");
             break;
         }
-        p = zput(p, "\r\n");
-        log_append(LOG_PATH, cb, p); serial_out(cb, p);
+        p = LogPut(p, "\r\n");
+        LogAppend(LOG_PATH, cb, p); serial_out(cb, p);
         cx->SegCs = 0x0F; cx->SegSs = 0x17;             /* restore the guest's LDT selectors  */
         return EXCEPTION_CONTINUE_EXECUTION;            /* resume the guest past the INT      */
     }
 
     /* --- genuine (non-reflected) PM fault: full dump + clean exit -------------------- */
 veh_fatal:
-    log_append(LOG_PATH, cb, p); serial_out(cb, p);     /* flush the arm's context first;   */
+    LogAppend(LOG_PATH, cb, p); serial_out(cb, p);     /* flush the arm's context first;   */
     host_fatal_dump(er, cx);                            /* the dump has its own buffer. The */
     return EXCEPTION_CONTINUE_SEARCH;                   /* old inline dump overflowed cb.   */
 }
@@ -17642,8 +17642,8 @@ static LONG WINAPI host_unhandled_filter(EXCEPTION_POINTERS *ep)
         /* dpmi_crash_veh's fatal arm has already dumped and exited when it applies;
            anything that falls out of it is the real-mode/host case below. */
     }
-    p = zput(p, "\r\nHOST UNHANDLED EXCEPTION (last chance; no SEH claimed it):\r\n");
-    log_append(LOG_PATH, ub, p); serial_out(ub, p);
+    p = LogPut(p, "\r\nHOST UNHANDLED EXCEPTION (last chance; no SEH claimed it):\r\n");
+    LogAppend(LOG_PATH, ub, p); serial_out(ub, p);
     host_fatal_dump(ep->ExceptionRecord, ep->ContextRecord);
     return EXCEPTION_EXECUTE_HANDLER;                   /* not reached */
 }
@@ -17669,14 +17669,14 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
        HIGHEST beats the guest at either execprio setting. Safe because this thread
          sleeps 250 ms out of every 250 ms; it can never starve the guest back. */
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
-    q = zput(q, "STAGE3-DPMI: watchdog started at THREAD_PRIORITY_HIGHEST; sampling host PM-loop heartbeat\r\n");
+    q = LogPut(q, "STAGE3-DPMI: watchdog started at THREAD_PRIORITY_HIGHEST; sampling host PM-loop heartbeat\r\n");
     /* ► LOG, don't just serial. serial_out writes COM1, which exists on the QEMU dev VM
          and NOT on the bare-metal box -- so on the rig these lines went nowhere. That
          cost us a wrong conclusion about Doom (session 15): the absence of wd[] samples
          in result_doom.log was read as "it died before the first 250 ms sample", when in
          fact the samples were never written anywhere. Every diagnostic must reach the
          file log or it does not exist on the machine we actually test on. */
-    log_append(WDLOG_PATH, wb, q); serial_out(wb, q); q = wb;
+    LogAppend(WDLOG_PATH, wb, q); serial_out(wb, q); q = wb;
     /* Sample the host PM loop concurrently while the main thread is (possibly) blocked
        inside DpmiEnterProtectedMode(). Each line answers the run-51 wall question:
          iter ADVANCING  -> the `for steps` loop is cycling; last ev/cs/eip/vec show WHICH
@@ -17699,13 +17699,13 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
         LONG iter; DWORD en_cs, en_eip, base; const BYTE *ib;
         Sleep(250);
         if (g_dpmi_done) {                              /* client exited cleanly -> keep the window */
-            q = zput(q, "STAGE3-DPMI: watchdog stand-down (client done)\r\n");
-            log_append(WDLOG_PATH, wb, q); serial_out(wb, q);
+            q = LogPut(q, "STAGE3-DPMI: watchdog stand-down (client done)\r\n");
+            LogAppend(WDLOG_PATH, wb, q); serial_out(wb, q);
             return 0;
         }
         if (g_dpmi_wd_gen != my_gen) {                  /* its client went back to a parent */
-            q = zput(q, "STAGE3-DPMI: watchdog stand-down (client returned to its parent)\r\n");
-            log_append(WDLOG_PATH, wb, q); log_append(LOG_PATH, wb, q);
+            q = LogPut(q, "STAGE3-DPMI: watchdog stand-down (client returned to its parent)\r\n");
+            LogAppend(WDLOG_PATH, wb, q); LogAppend(LOG_PATH, wb, q);
             return 0;
         }
         /* ⚠ A TICK MARKER, so "no samples" can be told apart from "never woke up".
@@ -17715,8 +17715,8 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
              different bug with a different fix, and the two were indistinguishable in
              every log so far. Cheap and self-retiring. */
         if (n < 24) {
-            q = zput(q, "  wdtick "); q = zhex(q, n); q = zput(q, "\r\n");
-            log_append(WDLOG_PATH, wb, q); q = wb;
+            q = LogPut(q, "  wdtick "); q = LogHex(q, n); q = LogPut(q, "\r\n");
+            LogAppend(WDLOG_PATH, wb, q); q = wb;
         }
         iter   = g_dpmi_iter;
         frozen = (iter == prev) ? (frozen + 1) : 0;
@@ -17736,24 +17736,24 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
         if (g_WowMsgInWait && frozen) {
             if (!wd_said_wait) {
                 wd_said_wait = 1;
-                q = zput(q, "  wd: the guest is PARKED IN Win16 GetMessage -- waiting"
+                q = LogPut(q, "  wd: the guest is PARKED IN Win16 GetMessage -- waiting"
                             " for input, not wedged; the freeze counter is held at 0"
                             " for as long as it waits\r\n");
-                log_append(WDLOG_PATH, wb, q); serial_out(wb, q); q = wb;
+                LogAppend(WDLOG_PATH, wb, q); serial_out(wb, q); q = wb;
             }
             frozen = 0;
         }
         if (n < 12 || frozen) {                         /* diagnostic window + any freeze */
             en_cs  = g_dpmi_enter_cs;  en_eip = g_dpmi_enter_eip;
-            q = zput(q, "  wd["); q = zhex(q, n);
-            q = zput(q, "] iter="); q = zhex(q, (unsigned)iter);
-            q = zput(q, frozen ? " FROZEN" : " advancing");
-            q = zput(q, " enter="); q = zhex(q, en_cs); q = zput(q, ":"); q = zhex(q, en_eip);
-            q = zput(q, " last{ev="); q = zhex(q, g_dpmi_last_ev);
-            q = zput(q, " cs:eip="); q = zhex(q, g_dpmi_last_cs); q = zput(q, ":"); q = zhex(q, g_dpmi_last_eip);
-            q = zput(q, " vec="); q = zhex(q, g_dpmi_last_vec); q = zput(q, "}");
-            q = zput(q, " veh{any="); q = zhex(q, (unsigned)g_veh_any);
-            q = zput(q, " fatal="); q = zhex(q, (unsigned)g_veh_fatal); q = zput(q, "}");
+            q = LogPut(q, "  wd["); q = LogHex(q, n);
+            q = LogPut(q, "] iter="); q = LogHex(q, (unsigned)iter);
+            q = LogPut(q, frozen ? " FROZEN" : " advancing");
+            q = LogPut(q, " enter="); q = LogHex(q, en_cs); q = LogPut(q, ":"); q = LogHex(q, en_eip);
+            q = LogPut(q, " last{ev="); q = LogHex(q, g_dpmi_last_ev);
+            q = LogPut(q, " cs:eip="); q = LogHex(q, g_dpmi_last_cs); q = LogPut(q, ":"); q = LogHex(q, g_dpmi_last_eip);
+            q = LogPut(q, " vec="); q = LogHex(q, g_dpmi_last_vec); q = LogPut(q, "}");
+            q = LogPut(q, " veh{any="); q = LogHex(q, (unsigned)g_veh_any);
+            q = LogPut(q, " fatal="); q = LogHex(q, (unsigned)g_veh_fatal); q = LogPut(q, "}");
 
             /* ── ★ FLUSH THE CHEAP READING BEFORE ATTEMPTING THE EXPENSIVE ONE. ────
                  Everything above is loads of our own globals and cannot fault. What
@@ -17769,8 +17769,8 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
                  line is what makes the NEXT run diagnostic instead of ambiguous: basic
                  samples appearing without enrichment localises the fault to the
                  enrichment; basic samples stopping too localises it to Sleep/log. */
-            q = zput(q, "\r\n");
-            log_append(WDLOG_PATH, wb, q); q = wb;
+            q = LogPut(q, "\r\n");
+            LogAppend(WDLOG_PATH, wb, q); q = wb;
 
             /* ⚠ AND NO serial_out IN THIS LOOP. FlushFileBuffers on a comm handle has
                  no timeout (only WriteFile does), so it is the one unbounded call on
@@ -17779,7 +17779,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
                  the thread it instruments is worse than no sink. */
 
             if (frozen) {
-              q = zput(q, "  wd["); q = zhex(q, n); q = zput(q, "]+");
+              q = LogPut(q, "  wd["); q = LogHex(q, n); q = LogPut(q, "]+");
               if (g_dpmi_pm) {                           /* wedged: dump the guest bytes there */
                 base = dpmi_sel_base((WORD)en_cs);
                 ib = (const BYTE *)(ULONG_PTR)(base + (en_eip & 0xFFFF));
@@ -17795,10 +17795,10 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
                      stuck?") went unanswered while looking like "nothing was wrong".
                    mem_readable() is already in this file for this reason. */
                 if (base && mem_readable((ULONG_PTR)ib, 8)) {
-                    q = zput(q, " b@enter="); q = zdump(q, ib, 8);
+                    q = LogPut(q, " b@enter="); q = LogDump(q, ib, 8);
                 } else {
-                    q = zput(q, " b@enter=<cs 0x"); q = zhex(q, en_cs);
-                    q = zput(q, " does not resolve>");
+                    q = LogPut(q, " b@enter=<cs 0x"); q = LogHex(q, en_cs);
+                    q = LogPut(q, " does not resolve>");
                 }
               }
             /* ── ★ AND WHERE IT ACTUALLY IS, NOT WHERE IT WENT IN. ─────────────────
@@ -17812,7 +17812,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
                  SuspendThread / GetThreadContext round trip the async IRQ injector
                  already does on g_hcpu.
                ⚠ SAMPLE HELD, LOG RELEASED. Nothing is written to the log between
-                 SuspendThread and ResumeThread: log_append opens a file, and blocking
+                 SuspendThread and ResumeThread: LogAppend opens a file, and blocking
                  there with the guest frozen is how a diagnostic becomes a deadlock. */
               if (g_hcpu) {
                 CONTEXT cx;
@@ -17827,18 +17827,18 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
                     ResumeThread(g_hcpu);
                 }
                 if (!got) {
-                    q = zput(q, " LIVE=<thread sample failed>");
+                    q = LogPut(q, " LIVE=<thread sample failed>");
                 } else {
                     DWORD lb = dpmi_sel_base((WORD)gcs);
                     const BYTE *lp = (const BYTE *)(ULONG_PTR)(lb + (geip & 0xFFFF));
-                    q = zput(q, " LIVE cs:eip=");  q = zhex(q, gcs);
-                    q = zput(q, ":");              q = zhex(q, geip);
-                    q = zput(q, " ss:esp=");       q = zhex(q, gss);
-                    q = zput(q, ":");              q = zhex(q, gesp);
-                    q = zput(q, " efl=");          q = zhex(q, gfl);
-                    q = zput(q, " csbase=");       q = zhex(q, lb);
+                    q = LogPut(q, " LIVE cs:eip=");  q = LogHex(q, gcs);
+                    q = LogPut(q, ":");              q = LogHex(q, geip);
+                    q = LogPut(q, " ss:esp=");       q = LogHex(q, gss);
+                    q = LogPut(q, ":");              q = LogHex(q, gesp);
+                    q = LogPut(q, " efl=");          q = LogHex(q, gfl);
+                    q = LogPut(q, " csbase=");       q = LogHex(q, lb);
                     if (lb && mem_readable((ULONG_PTR)lp, 8)) {
-                        q = zput(q, " b@live="); q = zdump(q, lp, 8);
+                        q = LogPut(q, " b@live="); q = LogDump(q, lp, 8);
                     }
                     /* ── ★ A GUEST THAT IS MOVING IS NOT WEDGED. (s74c, Duke3D's SETUP)
                          `iter` counts PM ENTRIES, so a flat client that runs natively
@@ -17854,13 +17854,13 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
                     { static DWORD wd_live_prev = 0;
                       if ((gcs & 4) && geip != wd_live_prev) {
                           frozen = 0;
-                          q = zput(q, " (moving -> not wedged)");
+                          q = LogPut(q, " (moving -> not wedged)");
                       }
                       wd_live_prev = geip; }
                 }
               }
-              q = zput(q, "\r\n");
-              log_append(WDLOG_PATH, wb, q); q = wb;    /* the enrichment, as its own line */
+              q = LogPut(q, "\r\n");
+              LogAppend(WDLOG_PATH, wb, q); q = wb;    /* the enrichment, as its own line */
             }
         }
         prev = iter; ++n;
@@ -17875,30 +17875,30 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
             && g_dpmi_wd_gen == my_gen) break;           /* ...and only while its client lives */
       }
     }
-    q = zput(q, "STAGE3-DPMI: watchdog terminating (wedged)\r\n");
-    log_append(WDLOG_PATH, wb, q);
+    q = LogPut(q, "STAGE3-DPMI: watchdog terminating (wedged)\r\n");
+    LogAppend(WDLOG_PATH, wb, q);
     /* ⚠ AND SAY IT IN THE MAIN LOG TOO. This used to go only to wdprobe.log, so a
          host killed here left `ntvdmhost.log` ending mid-sentence with no reason --
          indistinguishable from a crash, and it cost a wrong diagnosis. Whoever
          reads the log the run was writing must be told what stopped it. */
-    log_append(LOG_PATH, wb, q);
+    LogAppend(LOG_PATH, wb, q);
     serial_out(wb, q);
     /* ► FLUSH WHAT THE PROGRAM PRINTED BEFORE KILLING IT. Same text the clean
          wind-down emits, in the one path that used to lose it. Written in bounded
          slices because the accumulator is far larger than this thread's buffer. */
     if (g_mach && g_mach->OutputLength > 0) {
         DWORD off = 0, total = (DWORD)g_mach->OutputLength;
-        q = wb; q = zput(q, "  ==> DOS OUTPUT (wedged): [\r\n");
-        log_append(WDLOG_PATH, wb, q);
+        q = wb; q = LogPut(q, "  ==> DOS OUTPUT (wedged): [\r\n");
+        LogAppend(WDLOG_PATH, wb, q);
         while (off < total) {
             DWORD n2 = total - off; char sl[257];
             if (n2 > 256) n2 = 256;
             { DWORD k; for (k = 0; k < n2; ++k) sl[k] = g_mach->Output[off + k]; }
-            log_append(WDLOG_PATH, sl, sl + n2);
+            LogAppend(WDLOG_PATH, sl, sl + n2);
             off += n2;
         }
-        q = wb; q = zput(q, "\r\n]\r\n");
-        log_append(WDLOG_PATH, wb, q);
+        q = wb; q = LogPut(q, "\r\n]\r\n");
+        LogAppend(WDLOG_PATH, wb, q);
     }
     /* ⚠ TAKE THE TRAY ICON WITH US. TerminateProcess runs NO cleanup at all, so
          an icon left installed here becomes a genuine GHOST -- it sits in the
@@ -18092,11 +18092,11 @@ static void wow_probe_ldt_matrix(const char *tag)
         DpmiBuildDescriptor(T[t].base, T[t].limit, T[t].acc, T[t].fl, &lo, &hi);
         st = VdmInstallLdtEntries(sel, lo, hi, sel, lo, hi);
         q = m;
-        q = zput(q, "LDTPROBE["); q = zput(q, tag);
-        q = zput(q, "] ");       q = zput(q, T[t].what);
-        q = zput(q, " sel=0x");  q = zhex(q, sel);
-        q = zput(q, " -> st=0x");q = zhex(q, (DWORD)st);
-        q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
+        q = LogPut(q, "LDTPROBE["); q = LogPut(q, tag);
+        q = LogPut(q, "] ");       q = LogPut(q, T[t].what);
+        q = LogPut(q, " sel=0x");  q = LogHex(q, sel);
+        q = LogPut(q, " -> st=0x");q = LogHex(q, (DWORD)st);
+        q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
     }
 }
 
@@ -18211,15 +18211,15 @@ static DWORD wow_find_ldt_base(void)
         __asm__ __volatile__("lar %2, %0\n\tsetz %1" : "=r"(a1), "=q"(z1) : "r"(s1) : "cc");
         __asm__ __volatile__("lar %2, %0\n\tsetz %1" : "=r"(a2), "=q"(z2) : "r"(s2) : "cc");
         q = m;
-        q = zput(q, "WOWLDT: probes idx 0x"); q = zhex(q, (DWORD)i1);
-        q = zput(q, z1 ? " LAR ok ar=0x" : " LAR FAILED ar=0x"); q = zhex(q, a1);
-        q = zput(q, " | idx 0x"); q = zhex(q, (DWORD)i2);
-        q = zput(q, z2 ? " LAR ok ar=0x" : " LAR FAILED ar=0x"); q = zhex(q, a2);
-        q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
+        q = LogPut(q, "WOWLDT: probes idx 0x"); q = LogHex(q, (DWORD)i1);
+        q = LogPut(q, z1 ? " LAR ok ar=0x" : " LAR FAILED ar=0x"); q = LogHex(q, a1);
+        q = LogPut(q, " | idx 0x"); q = LogHex(q, (DWORD)i2);
+        q = LogPut(q, z2 ? " LAR ok ar=0x" : " LAR FAILED ar=0x"); q = LogHex(q, a2);
+        q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
         if (!z1 || !z2) {
-            q = m; q = zput(q, "WOWLDT: a probe did NOT install -- search skipped, a "
+            q = m; q = LogPut(q, "WOWLDT: a probe did NOT install -- search skipped, a "
                                "'not found' would have meant nothing\r\n");
-            log_append(LDTLOG_PATH, m, q);
+            LogAppend(LDTLOG_PATH, m, q);
             return 0;
         }
     }
@@ -18241,13 +18241,13 @@ static DWORD wow_find_ldt_base(void)
                     if (!wow_ldt_peek(other, lo2, hi2)) continue;   /* one hit is chance */
                     g_wow_ldt_base = tbase;
                     q = m;
-                    q = zput(q, "WOWLDT: descriptor table FOUND at linear 0x");
-                    q = zhex(q, tbase);
-                    q = zput(q, " (idx 0x"); q = zhex(q, (DWORD)i1);
-                    q = zput(q, " at 0x"); q = zhex(q, cand);
-                    q = zput(q, ", confirmed idx 0x"); q = zhex(q, (DWORD)i2);
-                    q = zput(q, " at 0x"); q = zhex(q, other);
-                    q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
+                    q = LogPut(q, "WOWLDT: descriptor table FOUND at linear 0x");
+                    q = LogHex(q, tbase);
+                    q = LogPut(q, " (idx 0x"); q = LogHex(q, (DWORD)i1);
+                    q = LogPut(q, " at 0x"); q = LogHex(q, cand);
+                    q = LogPut(q, ", confirmed idx 0x"); q = LogHex(q, (DWORD)i2);
+                    q = LogPut(q, " at 0x"); q = LogHex(q, other);
+                    q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
                     return tbase;
                 }
             }
@@ -18255,10 +18255,10 @@ static DWORD wow_find_ldt_base(void)
         addr = (BYTE *)mbi.BaseAddress + mbi.RegionSize;
         if ((DWORD)(ULONG_PTR)addr >= 0x7FFF0000u) break;
     }
-    q = m; q = zput(q, "WOWLDT: descriptor table NOT in our own address space "
+    q = m; q = LogPut(q, "WOWLDT: descriptor table NOT in our own address space "
                        "(probes verified installed) -- a real LDT window is not "
                        "available this way\r\n");
-    log_append(LDTLOG_PATH, m, q);
+    LogAppend(LDTLOG_PATH, m, q);
     return 0;
 }
 
@@ -18374,9 +18374,9 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
     {   WORD rmax = 0;
         int rr = DosMcbResize(NULL, DOS_PSP_SEG, 0x40, &rmax);
         q = m;
-        q = zput(q, "WOWV86: shrink PSP block to 0x40 paras -> rc=");
-        q = zhex(q, (DWORD)rr); q = zput(q, " max=0x"); q = zhex(q, rmax);
-        q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
+        q = LogPut(q, "WOWV86: shrink PSP block to 0x40 paras -> rc=");
+        q = LogHex(q, (DWORD)rr); q = LogPut(q, " max=0x"); q = LogHex(q, rmax);
+        q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
     }
 
     /* ── THE PM->V86 TRANSFER BUFFER, BEFORE krnl386 TAKES THE REST. ───────────────
@@ -18396,11 +18396,11 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
     {   WORD hseg = 0, hmax = 0;
         if (DosMcbAllocate(NULL, mp->FirstMcb, WOW_HOSTPOOL_PARAS, &hseg, &hmax) == 0 && hseg)
             g_wow_pool_seg = hseg;
-        q = m; q = zput(q, "WOWV86: host pool reserved at para 0x");
-        q = zhex(q, g_wow_pool_seg); q = zput(q, " size 0x");
-        q = zhex(q, (DWORD)WOW_HOSTPOOL_PARAS);
-        q = zput(q, " paras (see wow_host_alloc)\r\n");
-        log_append(LDTLOG_PATH, m, q);
+        q = m; q = LogPut(q, "WOWV86: host pool reserved at para 0x");
+        q = LogHex(q, g_wow_pool_seg); q = LogPut(q, " size 0x");
+        q = LogHex(q, (DWORD)WOW_HOSTPOOL_PARAS);
+        q = LogPut(q, " paras (see wow_host_alloc)\r\n");
+        LogAppend(LDTLOG_PATH, m, q);
     }
     /* ── ★ THE SFT CHAIN, OR krnl386 WALKS THE IVT FOREVER. (GH #128) ─────────────
          See the DOS_SFT_* block in dos_layout.h for what this is built against.
@@ -18415,9 +18415,9 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
     {   WORD sft = wow_host_alloc(DOS_SFT_PARAS);
         volatile BYTE *sv = (volatile BYTE *)(ULONG_PTR)
                             (((DWORD)DOS_SYSVARS_SEG << 4) + DOS_SYSVARS_OFF);
-        q = m; q = zput(q, "WOWV86: SFT ");
+        q = m; q = LogPut(q, "WOWV86: SFT ");
         if (!sft) {
-            q = zput(q, "NOT ALLOCATED -- host pool exhausted; krnl386 will spin on "
+            q = LogPut(q, "NOT ALLOCATED -- host pool exhausted; krnl386 will spin on "
                         "SysVars+4 = 0000:0000\r\n");
         } else {
             volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)((DWORD)sft << 4);
@@ -18428,21 +18428,21 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
             *(volatile WORD *)(b + 4) = DOS_SFT_ENTRIES;     /* entries in this block   */
             *(volatile WORD *)(sv + 4) = 0;                  /* SysVars+4 = offset      */
             *(volatile WORD *)(sv + 6) = sft;                /* SysVars+6 = segment     */
-            q = zput(q, "at 0x"); q = zhex(q, sft);
-            q = zput(q, ":0000, "); q = zhex(q, (DWORD)DOS_SFT_ENTRIES);
-            q = zput(q, " entries, next=FFFF:FFFF -> SysVars+4\r\n");
+            q = LogPut(q, "at 0x"); q = LogHex(q, sft);
+            q = LogPut(q, ":0000, "); q = LogHex(q, (DWORD)DOS_SFT_ENTRIES);
+            q = LogPut(q, " entries, next=FFFF:FFFF -> SysVars+4\r\n");
         }
-        log_append(LDTLOG_PATH, m, q);
+        LogAppend(LDTLOG_PATH, m, q);
     }
     {   WORD xseg = 0, xmax = 0;
         if (DosMcbAllocate(NULL, mp->FirstMcb, 0x400, &xseg, &xmax) == 0 && xseg) {
             g_pm_xfer_seg = xseg; g_pm_xfer_para = 0x400;
         }
         q = m;
-        q = zput(q, "WOWV86: PM->V86 transfer buffer at para 0x"); q = zhex(q, g_pm_xfer_seg);
-        q = zput(q, " (0x"); q = zhex(q, (DWORD)g_pm_xfer_para * 16u);
-        q = zput(q, " bytes; largest free was 0x"); q = zhex(q, xmax);
-        q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
+        q = LogPut(q, "WOWV86: PM->V86 transfer buffer at para 0x"); q = LogHex(q, g_pm_xfer_seg);
+        q = LogPut(q, " (0x"); q = LogHex(q, (DWORD)g_pm_xfer_para * 16u);
+        q = LogPut(q, " bytes; largest free was 0x"); q = LogHex(q, xmax);
+        q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
     }
     /* ── ★ A SEPARATE PARAGRAPH FOR RESOLVED MODULE PATHS (WOW32 0xc5). ─────────
          Deliberately NOT the transfer buffer above. 0xc5 hands krnl386 a far
@@ -18455,9 +18455,9 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
         if (DosMcbAllocate(NULL, mp->FirstMcb, 0x20, &pseg, &pmax) == 0 && pseg)
             g_wow_path_seg = pseg;
         q = m;
-        q = zput(q, "WOWV86: module-path scratch at para 0x"); q = zhex(q, g_wow_path_seg);
-        q = zput(q, " (0x200 bytes; largest free was 0x"); q = zhex(q, pmax);
-        q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
+        q = LogPut(q, "WOWV86: module-path scratch at para 0x"); q = LogHex(q, g_wow_path_seg);
+        q = LogPut(q, " (0x200 bytes; largest free was 0x"); q = LogHex(q, pmax);
+        q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
     }
     /* ── ★ AND ONE FOR A LAUNCHED TASK'S ENVIRONMENT (WOW32 seg2 0xd1). ────────
          Allocated here, with the others, because after this function hands the
@@ -18468,10 +18468,10 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
         if (DosMcbAllocate(NULL, mp->FirstMcb, WOW_ENV_PARAS, &eseg, &emax) == 0 && eseg)
             g_wow_env_seg = eseg;
         q = m;
-        q = zput(q, "WOWV86: task-environment block at para 0x"); q = zhex(q, g_wow_env_seg);
-        q = zput(q, " (0x"); q = zhex(q, (DWORD)WOW_ENV_PARAS * 16u);
-        q = zput(q, " bytes; largest free was 0x"); q = zhex(q, emax);
-        q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
+        q = LogPut(q, "WOWV86: task-environment block at para 0x"); q = LogHex(q, g_wow_env_seg);
+        q = LogPut(q, " (0x"); q = LogHex(q, (DWORD)WOW_ENV_PARAS * 16u);
+        q = LogPut(q, " bytes; largest free was 0x"); q = LogHex(q, emax);
+        q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
     }
     /* ── ★★★ THREE BYTES THAT LET THE HOST CALL 16-BIT CODE. (session 40) ──────
          The whole of the return path is `C4 C4 57`: we push its address as the
@@ -18497,11 +18497,11 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
             cb[WOWCALL_RETF_OFF] = WOWCALL_RETF_BYTE;
         }
         q = m;
-        q = zput(q, "WOWV86: 16-bit callback return stub at para 0x");
-        q = zhex(q, g_wow_cbk_seg);
-        q = zput(q, " (C4 C4 "); q = zhexb(q, WOWCALL_BOP_CODE);
-        q = zput(q, "; largest free was 0x"); q = zhex(q, cmax);
-        q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
+        q = LogPut(q, "WOWV86: 16-bit callback return stub at para 0x");
+        q = LogHex(q, g_wow_cbk_seg);
+        q = LogPut(q, " (C4 C4 "); q = LogHexByte(q, WOWCALL_BOP_CODE);
+        q = LogPut(q, "; largest free was 0x"); q = LogHex(q, cmax);
+        q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
     }
 
     for (i = 0; i < (int)ne->SegmentCount; ++i) {
@@ -18531,19 +18531,19 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
             if (dg > 0x10000u) dg = 0x10000u;
             if (dg > need) {
                 q = m;
-                q = zput(q, "WOWV86: DGROUP (seg "); q = zhex(q, (DWORD)(i + 1));
-                q = zput(q, ") 0x");        q = zhex(q, need);
-                q = zput(q, " + heap 0x");  q = zhex(q, ne->Heap);
-                q = zput(q, " + stack 0x"); q = zhex(q, ne->Stack);
-                q = zput(q, " = 0x");       q = zhex(q, dg);
-                q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
+                q = LogPut(q, "WOWV86: DGROUP (seg "); q = LogHex(q, (DWORD)(i + 1));
+                q = LogPut(q, ") 0x");        q = LogHex(q, need);
+                q = LogPut(q, " + heap 0x");  q = LogHex(q, ne->Heap);
+                q = LogPut(q, " + stack 0x"); q = LogHex(q, ne->Stack);
+                q = LogPut(q, " = 0x");       q = LogHex(q, dg);
+                q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
                 need = dg;
             }
         }
         if (DosMcbAllocate(NULL, mp->FirstMcb, (WORD)((need + 15) >> 4), &seg, &max) || !seg) {
-            q = m; q = zput(q, "WOWV86: no conventional memory for seg ");
-            q = zhex(q, (DWORD)(i + 1)); q = zput(q, ", largest free 0x"); q = zhex(q, max);
-            q = zput(q, " paras\r\n"); log_append(LDTLOG_PATH, m, q);
+            q = m; q = LogPut(q, "WOWV86: no conventional memory for seg ");
+            q = LogHex(q, (DWORD)(i + 1)); q = LogPut(q, ", largest free 0x"); q = LogHex(q, max);
+            q = LogPut(q, " paras\r\n"); LogAppend(LDTLOG_PATH, m, q);
             return -1;
         }
         dst = (volatile BYTE *)(ULONG_PTR)((DWORD)seg << 4);
@@ -18569,25 +18569,25 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
                 if (ro + rb <= ne->ImageLength && s->Length + rb <= need)
                     for (k = 0; k < rb; ++k) dst[s->Length + k] = img[ro + k];
                 q = m;
-                q = zput(q, "WOWV86:   + "); q = zhex(q, nrel);
-                q = zput(q, " relocation records ("); q = zhex(q, rb);
-                q = zput(q, " bytes) at segment offset 0x"); q = zhex(q, s->Length);
-                q = zput(q, (s->Length + rb <= need) ? "\r\n"
+                q = LogPut(q, "WOWV86:   + "); q = LogHex(q, nrel);
+                q = LogPut(q, " relocation records ("); q = LogHex(q, rb);
+                q = LogPut(q, " bytes) at segment offset 0x"); q = LogHex(q, s->Length);
+                q = LogPut(q, (s->Length + rb <= need) ? "\r\n"
                                                      : " -- ⚠ DOES NOT FIT\r\n");
-                log_append(LDTLOG_PATH, m, q);
+                LogAppend(LDTLOG_PATH, m, q);
             }
         }
         s->Memory = (uint8_t *)(ULONG_PTR)((DWORD)seg << 4);   /* relocate in place */
         s->Selector = seg;                                        /* a PARAGRAPH now     */
 
         q = m;
-        q = zput(q, "WOWV86: seg ");   q = zhex(q, (DWORD)(i + 1));
-        q = zput(q, (s->Flags & NE_SEG_DATA) ? " DATA" : " CODE");
-        q = zput(q, " len=0x");        q = zhex(q, s->Length);
-        q = zput(q, " alloc=0x");      q = zhex(q, need);
-        q = zput(q, " -> para 0x");    q = zhex(q, seg);
-        q = zput(q, " (linear 0x");    q = zhex(q, (DWORD)seg << 4);
-        q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
+        q = LogPut(q, "WOWV86: seg ");   q = LogHex(q, (DWORD)(i + 1));
+        q = LogPut(q, (s->Flags & NE_SEG_DATA) ? " DATA" : " CODE");
+        q = LogPut(q, " len=0x");        q = LogHex(q, s->Length);
+        q = LogPut(q, " alloc=0x");      q = LogHex(q, need);
+        q = LogPut(q, " -> para 0x");    q = LogHex(q, seg);
+        q = LogPut(q, " (linear 0x");    q = LogHex(q, (DWORD)seg << 4);
+        q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
     }
 
     /* ── ★★★ WE DO NOT RELOCATE krnl386. IT RELOCATES ITSELF, AND ONLY IT CAN. ──────
@@ -18628,9 +18628,9 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
          all 209 NE checks; it is only this V86 entry stage that must not run it. */
     ne->Sites = 0;
     q = m;
-    q = zput(q, "WOWV86: NOT relocating -- the chains are left intact for krnl386's own "
+    q = LogPut(q, "WOWV86: NOT relocating -- the chains are left intact for krnl386's own "
                 "LoadSegment pass, which resolves to SELECTORS (see the note here)\r\n");
-    log_append(LDTLOG_PATH, m, q);
+    LogAppend(LDTLOG_PATH, m, q);
 
     /* ⚠ ONE BLOCK FOR BOTH, because DOS puts a one-paragraph MCB header between any
          two allocations and krnl386 needs the header image to be EXACTLY at
@@ -18664,10 +18664,10 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
                allocation fails outright ("no memory for the stack + header image"). */
             WORD fill = (WORD)(fmax - want - 1);
             if (DosMcbAllocate(NULL, mp->FirstMcb, fill, &fseg, &fmax) == 0 && fseg) {
-                q = m; q = zput(q, "WOWV86: filler 0x"); q = zhex(q, fill);
-                q = zput(q, " paras at 0x"); q = zhex(q, fseg);
-                q = zput(q, " so the stack+window lands HIGH (freed again below)\r\n");
-                log_append(LDTLOG_PATH, m, q);
+                q = m; q = LogPut(q, "WOWV86: filler 0x"); q = LogHex(q, fill);
+                q = LogPut(q, " paras at 0x"); q = LogHex(q, fseg);
+                q = LogPut(q, " so the stack+window lands HIGH (freed again below)\r\n");
+                LogAppend(LDTLOG_PATH, m, q);
             } else fseg = 0;
         } else fseg = 0;
         if (DosMcbAllocate(NULL, mp->FirstMcb, (WORD)(WOW_STACK_PARAS + window_paras),
@@ -18675,8 +18675,8 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
         if (fseg) DosMcbFree(NULL, fseg);          /* give the low region back */
     }
     if (!sseg) {
-        q = m; q = zput(q, "WOWV86: no memory for the stack + header image\r\n");
-        log_append(LDTLOG_PATH, m, q); return -1;
+        q = m; q = LogPut(q, "WOWV86: no memory for the stack + header image\r\n");
+        LogAppend(LDTLOG_PATH, m, q); return -1;
     }
     /* ZERO IT. A loader hands out clean memory, and here it is load-bearing rather
        than tidy: krnl386's scratch selector starts inside this block, and whatever
@@ -18747,17 +18747,17 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
              above NeApplyRelocations's call site. Recorded so it is not re-tried. */
 
         q = m;
-        q = zput(q, "WOWV86: NE header image at para 0x"); q = zhex(q, hseg);
-        q = zput(q, " = SS 0x");  q = zhex(q, sseg);
-        q = zput(q, " + 0x1000 (0x"); q = zhex(q, hlen);
-        q = zput(q, " bytes from file offset 0x"); q = zhex(q, ne->Header);
-        q = zput(q, ", ne_cseg=0x"); q = zhex(q, ne->SegmentCount);
-        q = zput(q, ")\r\n  staged 0x"); q = zhex(q, hlen);
-        q = zput(q, " of 0x");            q = zhex(q, imglen);
-        q = zput(q, " bytes = 0x");       q = zhex(q, (DWORD)window_paras);
-        q = zput(q, " paras");
-        q = zput(q, hlen == imglen ? " (WHOLE FILE)\r\n" : " -- ⚠ STILL TRUNCATED\r\n");
-        log_append(LDTLOG_PATH, m, q);
+        q = LogPut(q, "WOWV86: NE header image at para 0x"); q = LogHex(q, hseg);
+        q = LogPut(q, " = SS 0x");  q = LogHex(q, sseg);
+        q = LogPut(q, " + 0x1000 (0x"); q = LogHex(q, hlen);
+        q = LogPut(q, " bytes from file offset 0x"); q = LogHex(q, ne->Header);
+        q = LogPut(q, ", ne_cseg=0x"); q = LogHex(q, ne->SegmentCount);
+        q = LogPut(q, ")\r\n  staged 0x"); q = LogHex(q, hlen);
+        q = LogPut(q, " of 0x");            q = LogHex(q, imglen);
+        q = LogPut(q, " bytes = 0x");       q = LogHex(q, (DWORD)window_paras);
+        q = LogPut(q, " paras");
+        q = LogPut(q, hlen == imglen ? " (WHOLE FILE)\r\n" : " -- ⚠ STILL TRUNCATED\r\n");
+        LogAppend(LDTLOG_PATH, m, q);
 
         /* Say where each segment's image landed inside the staged copy: that is the
            address krnl386's own LoadSegment has to be able to reach, and the old
@@ -18768,12 +18768,12 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
             uint32_t fo = ne->Segments[i].FileOffset;
             int resident = fo >= ne->Header && (DWORD)(fo - ne->Header) < hlen;
             q = m;
-            q = zput(q, "WOWV86:   seg "); q = zhex(q, (DWORD)(i + 1));
-            q = zput(q, " file 0x");       q = zhex(q, fo);
-            q = zput(q, " -> staged linear 0x");
-            q = zhex(q, ((DWORD)hseg << 4) + (fo - ne->Header));
-            q = zput(q, resident ? " RESIDENT\r\n" : " ⚠ NOT RESIDENT\r\n");
-            log_append(LDTLOG_PATH, m, q);
+            q = LogPut(q, "WOWV86:   seg "); q = LogHex(q, (DWORD)(i + 1));
+            q = LogPut(q, " file 0x");       q = LogHex(q, fo);
+            q = LogPut(q, " -> staged linear 0x");
+            q = LogHex(q, ((DWORD)hseg << 4) + (fo - ne->Header));
+            q = LogPut(q, resident ? " RESIDENT\r\n" : " ⚠ NOT RESIDENT\r\n");
+            LogAppend(LDTLOG_PATH, m, q);
         }
 
         q = m;
@@ -18840,30 +18840,30 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
             DWORD gap   = (first > ne->Header) ? ((first - ne->Header) + 15u) & ~15u : 0;
             DWORD full  = 0xF880u;
             g_wow_entry_cx = (WORD)(gap < full ? full - gap : full);
-            q = zput(q, "WOWV86: arena gap = 0x"); q = zhex(q, gap);
-            q = zput(q, " bytes (the header and tables, header+0x0 .. +0x");
-            q = zhex(q, first - ne->Header);
-            q = zput(q, ") -- the first reclaim discards them so segment 1 lands at "
+            q = LogPut(q, "WOWV86: arena gap = 0x"); q = LogHex(q, gap);
+            q = LogPut(q, " bytes (the header and tables, header+0x0 .. +0x");
+            q = LogHex(q, first - ne->Header);
+            q = LogPut(q, ") -- the first reclaim discards them so segment 1 lands at "
                         "offset 0\r\n");
-            log_append(LDTLOG_PATH, m, q);
+            LogAppend(LDTLOG_PATH, m, q);
             q = m;
         }
-        q = zput(q, "WOWV86: arena declared to krnl386 = 0x"); q = zhex(q, g_wow_entry_cx);
-        q = zput(q, " bytes -> CX at entry");
+        q = LogPut(q, "WOWV86: arena declared to krnl386 = 0x"); q = LogHex(q, g_wow_entry_cx);
+        q = LogPut(q, " bytes -> CX at entry");
         /* ⚠ UNCHANGED WHILE THE STAGED IMAGE GREW, DELIBERATELY -- one change per run.
              It is now a claim about memory the staged image also occupies (the image is
              0x16440 bytes and this declares 0xf880 of scratch above the header), so if
              the run gets past LoadSegment and then dies in the arena, THIS is the next
              thing to look at, not a new mystery. Stock's arena is a separate block
              below its staged image (session 33 part 7). */
-        q = zput(q, (DWORD)g_wow_entry_cx > hlen ? "\r\n"
+        q = LogPut(q, (DWORD)g_wow_entry_cx > hlen ? "\r\n"
                                                  : " -- ⚠ OVERLAPS THE STAGED IMAGE\r\n");
-        log_append(LDTLOG_PATH, m, q);
+        LogAppend(LDTLOG_PATH, m, q);
     }
 
     if (!ne->AutoData || ne->AutoData > ne->SegmentCount) {
-        q = m; q = zput(q, "WOWV86: autodata segment out of range\r\n");
-        log_append(LDTLOG_PATH, m, q); return -1;
+        q = m; q = LogPut(q, "WOWV86: autodata segment out of range\r\n");
+        LogAppend(LDTLOG_PATH, m, q); return -1;
     }
 
     /* ── ★ krnl386 CARVES FROM `ES + 0x10` AND NEVER ASKS DOS. ────────────────────
@@ -18891,8 +18891,8 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
     {   WORD pseg = 0, pmax = 0;
         (void)DosMcbAllocate(NULL, mp->FirstMcb, 0xFFFF, &pseg, &pmax);  /* ask -> get max */
         if (!pmax || DosMcbAllocate(NULL, mp->FirstMcb, pmax, &pseg, &pmax) || !pseg) {
-            q = m; q = zput(q, "WOWV86: no arena left for krnl386's PSP block\r\n");
-            log_append(LDTLOG_PATH, m, q); return -1;
+            q = m; q = LogPut(q, "WOWV86: no arena left for krnl386's PSP block\r\n");
+            LogAppend(LDTLOG_PATH, m, q); return -1;
         }
         /* ── ★ ZERO THE ARENA. The same rule the header-image block already states,
              applied where it was measurably needed: krnl386 carves everything from
@@ -18923,8 +18923,8 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
         {   volatile BYTE *ab = (volatile BYTE *)(ULONG_PTR)((DWORD)pseg << 4);
             DWORD nb = (DWORD)pmax * 16u, k2;
             for (k2 = 0x100; k2 < nb; ++k2) ab[k2] = 0;
-            q = m; q = zput(q, "WOWV86: arena zeroed, 0x"); q = zhex(q, nb - 0x100);
-            q = zput(q, " bytes above the PSP\r\n"); log_append(LDTLOG_PATH, m, q);
+            q = m; q = LogPut(q, "WOWV86: arena zeroed, 0x"); q = LogHex(q, nb - 0x100);
+            q = LogPut(q, " bytes above the PSP\r\n"); LogAppend(LDTLOG_PATH, m, q);
         }
         DosPspBuild(NULL, pseg, DOS_ENV_SEG, (WORD)(pseg + pmax));
         /* ★ AND REBUILD THE ENVIRONMENT, because DosPspBuild ZEROES ITS FIRST
@@ -18969,19 +18969,19 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
                                              : "C:\\WINDOWS\\SYSTEM32\\KRNL386.EXE",
                           pv[0] ? pv : "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS", &g_sbcfg,
                           wowroot[0] ? wowroot : NULL);
-            q = m; q = zput(q, "WOWV86: env rebuilt, PATH=");
-            q = zput(q, pv[0] ? pv : "(fallback)");
-            q = zput(q, " program path = ");
-            q = zput(q, g_wow_krnl_path[0] ? g_wow_krnl_path : "(default)");
-            q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
+            q = m; q = LogPut(q, "WOWV86: env rebuilt, PATH=");
+            q = LogPut(q, pv[0] ? pv : "(fallback)");
+            q = LogPut(q, " program path = ");
+            q = LogPut(q, g_wow_krnl_path[0] ? g_wow_krnl_path : "(default)");
+            q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
         }
         g_wow_psp_seg = pseg;
         q = m;
-        q = zput(q, "WOWV86: krnl386 PSP/arena block at para 0x"); q = zhex(q, pseg);
-        q = zput(q, " size 0x");        q = zhex(q, pmax);
-        q = zput(q, " paras -> it will carve from 0x"); q = zhex(q, (DWORD)(pseg + 0x10));
-        q = zput(q, " upward (top 0x");  q = zhex(q, (DWORD)(pseg + pmax));
-        q = zput(q, ")\r\n"); log_append(LDTLOG_PATH, m, q);
+        q = LogPut(q, "WOWV86: krnl386 PSP/arena block at para 0x"); q = LogHex(q, pseg);
+        q = LogPut(q, " size 0x");        q = LogHex(q, pmax);
+        q = LogPut(q, " paras -> it will carve from 0x"); q = LogHex(q, (DWORD)(pseg + 0x10));
+        q = LogPut(q, " upward (top 0x");  q = LogHex(q, (DWORD)(pseg + pmax));
+        q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
     }
 
     *ecs = ne->Segments[(ne->CsIp >> 16) - 1].Selector;
@@ -18996,12 +18996,12 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
     *esp = (WORD)(WOW_STACK_PARAS << 4);
 
     q = m;
-    q = zput(q, "WOWV86: relocated to paragraphs, sites=0x"); q = zhex(q, ne->Sites);
-    q = zput(q, "\r\n  ENTRY CS:IP=");  q = zhex(q, *ecs); q = zput(q, ":"); q = zhex(q, *eip);
-    q = zput(q, "  DS=");               q = zhex(q, *eds);
-    q = zput(q, "  SS:SP=");            q = zhex(q, *ess); q = zput(q, ":"); q = zhex(q, *esp);
-    q = zput(q, "  AX=4b4f ('OK')\r\n");
-    log_append(LDTLOG_PATH, m, q);
+    q = LogPut(q, "WOWV86: relocated to paragraphs, sites=0x"); q = LogHex(q, ne->Sites);
+    q = LogPut(q, "\r\n  ENTRY CS:IP=");  q = LogHex(q, *ecs); q = LogPut(q, ":"); q = LogHex(q, *eip);
+    q = LogPut(q, "  DS=");               q = LogHex(q, *eds);
+    q = LogPut(q, "  SS:SP=");            q = LogHex(q, *ess); q = LogPut(q, ":"); q = LogHex(q, *esp);
+    q = LogPut(q, "  AX=4b4f ('OK')\r\n");
+    LogAppend(LDTLOG_PATH, m, q);
     return 0;
 }
 
@@ -19010,8 +19010,8 @@ static void wow_probe_selectors(void)
     char m[600], *q;
     int k, i;
     if (!g_wow_nmod) return;
-    q = m; q = zput(q, "WOWTRY: selector stage, modules="); q = zhex(q, (DWORD)g_wow_nmod);
-    q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
+    q = m; q = LogPut(q, "WOWTRY: selector stage, modules="); q = LogHex(q, (DWORD)g_wow_nmod);
+    q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
     wow_probe_ldt_matrix("wow-late");
 
     /* ── STEP PAST THE RESERVED LDT INDICES BEFORE ALLOCATING ANYTHING. ─────────────
@@ -19033,12 +19033,12 @@ static void wow_probe_selectors(void)
          private pool, so a client allocation can never land on a selector the host
          has handed out and the guest is holding forever. */
     if (g_ldt_next < DPMI_LDT_FIRSTFREE) {
-        q = m; q = zput(q, "  skipping reserved + host-pool LDT indices, next 0x");
-        q = zhex(q, (DWORD)g_ldt_next); q = zput(q, " -> 0x");
+        q = m; q = LogPut(q, "  skipping reserved + host-pool LDT indices, next 0x");
+        q = LogHex(q, (DWORD)g_ldt_next); q = LogPut(q, " -> 0x");
         g_ldt_next = DPMI_LDT_FIRSTFREE;
-        q = zhex(q, (DWORD)g_ldt_next);
-        q = zput(q, " (2 and 3 are forced to data by dpmi_install)\r\n");
-        log_append(LDTLOG_PATH, m, q);
+        q = LogHex(q, (DWORD)g_ldt_next);
+        q = LogPut(q, " (2 and 3 are forced to data by dpmi_install)\r\n");
+        LogAppend(LDTLOG_PATH, m, q);
     }
 
     /* Can krnl386 be given a real descriptor-table window? Asked AFTER the reserved
@@ -19058,8 +19058,8 @@ static void wow_probe_selectors(void)
             uint32_t need = NeSegmentAllocSize(sg);
             int idx;
             if (g_ldt_next >= DPMI_LDT_MAX) {
-                q = m; q = zput(q, "  LDT POOL EXHAUSTED\r\n");
-                log_append(LDTLOG_PATH, m, q); return;
+                q = m; q = LogPut(q, "  LDT POOL EXHAUSTED\r\n");
+                LogAppend(LDTLOG_PATH, m, q); return;
             }
             idx = g_ldt_next++;
             g_ldt[idx].base   = (DWORD)(ULONG_PTR)sg->Memory;
@@ -19070,22 +19070,22 @@ static void wow_probe_selectors(void)
             sg->Selector = (WORD)((idx << 3) | 7);            /* the REAL selector now */
 
             q = m;
-            q = zput(q, "  "); q = zput(q, g_wow_name[k]);
-            q = zput(q, " seg ");      q = zhex(q, (DWORD)(i + 1));
-            q = zput(q, is_code ? " CODE" : " DATA");
-            q = zput(q, " base=0x");   q = zhex(q, g_ldt[idx].base);
-            q = zput(q, " limit=0x");  q = zhex(q, g_ldt[idx].limit);
-            q = zput(q, " -> sel 0x"); q = zhex(q, sg->Selector);
+            q = LogPut(q, "  "); q = LogPut(q, g_wow_name[k]);
+            q = LogPut(q, " seg ");      q = LogHex(q, (DWORD)(i + 1));
+            q = LogPut(q, is_code ? " CODE" : " DATA");
+            q = LogPut(q, " base=0x");   q = LogHex(q, g_ldt[idx].base);
+            q = LogPut(q, " limit=0x");  q = LogHex(q, g_ldt[idx].limit);
+            q = LogPut(q, " -> sel 0x"); q = LogHex(q, sg->Selector);
             /* Read the descriptor back through the CPU. LAR only succeeds on a
                selector the processor can actually see, so this is the hardware
                confirming the install rather than us believing our own bookkeeping. */
             {   DWORD ar = 0; unsigned char zf = 0; WORD sel = sg->Selector;
                 __asm__ __volatile__("lar %2, %0\n\tsetz %1"
                                      : "=r"(ar), "=q"(zf) : "r"(sel) : "cc");
-                q = zput(q, zf ? "  LAR ok ar=0x" : "  LAR FAILED ar=0x");
-                q = zhex(q, zf ? ar : 0);
+                q = LogPut(q, zf ? "  LAR ok ar=0x" : "  LAR FAILED ar=0x");
+                q = LogHex(q, zf ? ar : 0);
             }
-            q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
+            q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
         }
         NeRegistryAdd(&g_wow_reg, ne);
     }
@@ -19102,26 +19102,26 @@ static void wow_probe_selectors(void)
         for (i = 0; i < (int)ne->SegmentCount && rc == 0; ++i)
             rc = NeApplyRelocations(ne, i, NeRegistryResolve, &g_wow_reg);
         q = m;
-        q = zput(q, "  RELOC "); q = zput(q, g_wow_name[k]);
+        q = LogPut(q, "  RELOC "); q = LogPut(q, g_wow_name[k]);
         if (rc == 0) {
-            q = zput(q, " ALL RESOLVED sites=0x"); q = zhex(q, ne->Sites);
+            q = LogPut(q, " ALL RESOLVED sites=0x"); q = LogHex(q, ne->Sites);
         } else {
-            q = zput(q, " STOPPED after 0x");     q = zhex(q, ne->Sites);
-            q = zput(q, " sites, at ne.h line "); q = zhex(q, (DWORD)ne->Error);
-            q = zput(q, ", needed ");             q = zput(q, g_wow_reg.FailedModule);
-            q = zput(q, ".");
-            if (g_wow_reg.FailedFunction[0]) q = zput(q, g_wow_reg.FailedFunction);
-            else                    { q = zput(q, "@"); q = zhex(q, g_wow_reg.FailedOrdinal); }
+            q = LogPut(q, " STOPPED after 0x");     q = LogHex(q, ne->Sites);
+            q = LogPut(q, " sites, at ne.h line "); q = LogHex(q, (DWORD)ne->Error);
+            q = LogPut(q, ", needed ");             q = LogPut(q, g_wow_reg.FailedModule);
+            q = LogPut(q, ".");
+            if (g_wow_reg.FailedFunction[0]) q = LogPut(q, g_wow_reg.FailedFunction);
+            else                    { q = LogPut(q, "@"); q = LogHex(q, g_wow_reg.FailedOrdinal); }
         }
-        q = zput(q, "\r\n"); log_append(LDTLOG_PATH, m, q);
+        q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
     }
 
     q = m;
-    q = zput(q, "WOWTRY: bind stage done.\r\n  KERNEL init entry would be CS:IP = sel 0x");
-    q = zhex(q, g_wow_mod[0].Segments[(g_wow_mod[0].CsIp >> 16) - 1].Selector);
-    q = zput(q, ":0x"); q = zhex(q, g_wow_mod[0].CsIp & 0xFFFF);
-    q = zput(q, "\r\nWOWTRY: NOT entering PM yet -- next step.\r\n");
-    log_append(LDTLOG_PATH, m, q);
+    q = LogPut(q, "WOWTRY: bind stage done.\r\n  KERNEL init entry would be CS:IP = sel 0x");
+    q = LogHex(q, g_wow_mod[0].Segments[(g_wow_mod[0].CsIp >> 16) - 1].Selector);
+    q = LogPut(q, ":0x"); q = LogHex(q, g_wow_mod[0].CsIp & 0xFFFF);
+    q = LogPut(q, "\r\nWOWTRY: NOT entering PM yet -- next step.\r\n");
+    LogAppend(LDTLOG_PATH, m, q);
 }
 
 /* Plant the default PM interrupt handlers and point every vector at them. See the
@@ -19143,9 +19143,9 @@ static void dpmi_install_default_pm_handlers(DOS_MACHINE *mp)
             g_pm_int[v].off = (DWORD)v * DPMI_PMDEF_STRIDE;
             g_pm_int[v].client = 0;
         }
-        q = zput(q, "DPMI: default PM handlers reused at 0x"); q = zhex(q, g_pm_defsel);
-        q = zput(q, " (a previous client's table)\r\n");
-        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+        q = LogPut(q, "DPMI: default PM handlers reused at 0x"); q = LogHex(q, g_pm_defsel);
+        q = LogPut(q, " (a previous client's table)\r\n");
+        LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
         return;
     }
     /* 256 vectors x 3 bytes = 768; one 0x40-paragraph block covers it with room over.
@@ -19160,15 +19160,15 @@ static void dpmi_install_default_pm_handlers(DOS_MACHINE *mp)
     seg = wow_host_alloc(0x40);
     g_pm_def_from_dos = !seg;
     if (!seg && (DosMcbAllocate(NULL, mp->FirstMcb, 0x40, &seg, &max) || !seg)) {
-        q = zput(q, "DPMI: NO MEMORY for the 256-vector default PM handler table "
+        q = LogPut(q, "DPMI: NO MEMORY for the 256-vector default PM handler table "
                     "(host pool exhausted AND dos_alloc failed) -- every PM vector will "
                     "read back 0000:0000\r\n");
-        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+        LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
         return;
     }
     if (g_pm_defidx < 0 && g_ldt_next >= DPMI_LDT_MAX) {
-        q = zput(q, "DPMI: NO LDT SLOT for the default PM handler table\r\n");
-        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+        q = LogPut(q, "DPMI: NO LDT SLOT for the default PM handler table\r\n");
+        LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
         return;
     }
     g_pm_defbase = (DWORD)seg << 4;
@@ -19190,10 +19190,10 @@ static void dpmi_install_default_pm_handlers(DOS_MACHINE *mp)
         g_pm_int[v].client = 0;
     }
     g_pm_defidx = idx;      /* so the width can be corrected once the client declares it */
-    q = zput(q, "DPMI: default PM handlers at 0x"); q = zhex(q, g_pm_defsel);
-    q = zput(q, ":0 (linear 0x"); q = zhex(q, g_pm_defbase);
-    q = zput(q, ", 256 vectors)\r\n");
-    log_append(LOG_PATH, lb, q); serial_out(lb, q);
+    q = LogPut(q, "DPMI: default PM handlers at 0x"); q = LogHex(q, g_pm_defsel);
+    q = LogPut(q, ":0 (linear 0x"); q = LogHex(q, g_pm_defbase);
+    q = LogPut(q, ", 256 vectors)\r\n");
+    LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
 }
 
 /* (Re)build g_ldt[idx]'s descriptor and install it in the process LDT via svc 10. */
@@ -19269,17 +19269,17 @@ static void dpmi_install(int idx)
             }
             {
                 char lb[256], *p = lb;
-                p = zput(p, "DPMI-LDT: install REJECTED sel 0x"); p = zhex(p, sel);
-                p = zput(p, " base 0x"); p = zhex(p, g_ldt[idx].base);
-                p = zput(p, " limit 0x"); p = zhex(p, want);
-                p = zput(p, " g="); p = zhex(p, (DWORD)((fl >> 3) & 1));
-                p = zput(p, " status 0x"); p = zhex(p, (DWORD)st);
-                if (st2 == 0) { p = zput(p, " -> CLAMPED to limit 0x"); p = zhex(p, cl);
-                                p = zput(p, " (XP LDT cap) and installed"); }
-                else          { p = zput(p, " -> clamp ALSO refused, status 0x");
-                                p = zhex(p, (DWORD)st2); }
-                p = zput(p, "\r\n");
-                log_append(LOG_PATH, lb, p); serial_out(lb, p);
+                p = LogPut(p, "DPMI-LDT: install REJECTED sel 0x"); p = LogHex(p, sel);
+                p = LogPut(p, " base 0x"); p = LogHex(p, g_ldt[idx].base);
+                p = LogPut(p, " limit 0x"); p = LogHex(p, want);
+                p = LogPut(p, " g="); p = LogHex(p, (DWORD)((fl >> 3) & 1));
+                p = LogPut(p, " status 0x"); p = LogHex(p, (DWORD)st);
+                if (st2 == 0) { p = LogPut(p, " -> CLAMPED to limit 0x"); p = LogHex(p, cl);
+                                p = LogPut(p, " (XP LDT cap) and installed"); }
+                else          { p = LogPut(p, " -> clamp ALSO refused, status 0x");
+                                p = LogHex(p, (DWORD)st2); }
+                p = LogPut(p, "\r\n");
+                LogAppend(LOG_PATH, lb, p); serial_out(lb, p);
             }
         }
     }
@@ -19546,13 +19546,13 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
          client's code. Start the scan above it. */
     end = base + limit;                              /* limit is the LAST valid byte */
     if (g_no_pmpatch && (!g_no_pmpatch_min || (end - base) >= g_no_pmpatch_min)) {
-        q = zput(q, "DPMI: code region 0x"); q = zhex(q, base);      /* see NOPMPATCH_FLAG */
-        q = zput(q, "..0x"); q = zhex(q, end);
-        q = zput(q, " size=0x"); q = zhex(q, end - base);
-        q = zput(q, " -- NOT SCANNED (nopmpatch.flag");
-        if (g_no_pmpatch_min) { q = zput(q, " min=0x"); q = zhex(q, g_no_pmpatch_min); }
-        q = zput(q, ")\r\n");
-        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+        q = LogPut(q, "DPMI: code region 0x"); q = LogHex(q, base);      /* see NOPMPATCH_FLAG */
+        q = LogPut(q, "..0x"); q = LogHex(q, end);
+        q = LogPut(q, " size=0x"); q = LogHex(q, end - base);
+        q = LogPut(q, " -- NOT SCANNED (nopmpatch.flag");
+        if (g_no_pmpatch_min) { q = LogPut(q, " min=0x"); q = LogHex(q, g_no_pmpatch_min); }
+        q = LogPut(q, ")\r\n");
+        LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
         return;
     }
     DWORD ptr_lo = base, ptr_hi = end;               /* a near-pointer table INTO this region is DATA -- see the loop */
@@ -19611,12 +19611,12 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                flag, but we DO see every window descriptor it builds over each object
                (0006 + 000C) while relocating -- that is the shape of the answer.
              g_dpmi_blk[] is recorded and ready for whoever takes this on. */
-        q = zput(q, "DPMI: FLAT code region 0x"); q = zhex(q, base);
-        q = zput(q, "..0x"); q = zhex(q, end);
-        q = zput(q, " -- not scanned as a range (");
-        q = zhex(q, (DWORD)g_dpmi_nblk); q = zput(q, " blocks known, ");
-        q = zhex(q, (DWORD)g_le_ncode); q = zput(q, " LE code sizes)\r\n");
-        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+        q = LogPut(q, "DPMI: FLAT code region 0x"); q = LogHex(q, base);
+        q = LogPut(q, "..0x"); q = LogHex(q, end);
+        q = LogPut(q, " -- not scanned as a range (");
+        q = LogHex(q, (DWORD)g_dpmi_nblk); q = LogPut(q, " blocks known, ");
+        q = LogHex(q, (DWORD)g_le_ncode); q = LogPut(q, " LE code sizes)\r\n");
+        LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
         return;
     }
     /* ► WALK THE COMMITTED REGIONS, DO NOT WALK THE ADDRESS RANGE. A declared code
@@ -19727,11 +19727,11 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                                 ++ntbl;
                                 if (ntbl <= 8) {
                                     char tb[192], *tq = tb;
-                                    tq = zput(tq, "DPMI: NOT patching 0x"); tq = zhex(tq, lin);
-                                    tq = zput(tq, " vec=0x"); tq = zhexb(tq, mem[i+1]);
-                                    tq = zput(tq, " -- inside aligned pointer 0x"); tq = zhex(tq, w);
-                                    tq = zput(tq, " into this code region: a jump-table entry, DATA\r\n");
-                                    log_append(LOG_PATH, tb, tq); serial_out(tb, tq);
+                                    tq = LogPut(tq, "DPMI: NOT patching 0x"); tq = LogHex(tq, lin);
+                                    tq = LogPut(tq, " vec=0x"); tq = LogHexByte(tq, mem[i+1]);
+                                    tq = LogPut(tq, " -- inside aligned pointer 0x"); tq = LogHex(tq, w);
+                                    tq = LogPut(tq, " into this code region: a jump-table entry, DATA\r\n");
+                                    LogAppend(LOG_PATH, tb, tq); serial_out(tb, tq);
                                 }
                                 continue;
                             }
@@ -19768,12 +19768,12 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                       if (mem[i+1] >= 0x34 && mem[i+1] <= 0x3F) {
                           if (rej < 16) {
                               char fb[160], *fq = fb;
-                              fq = zput(fq, "DPMI: NOT patching 0x"); fq = zhex(fq, lin);
-                              fq = zput(fq, " vec=0x"); fq = zhexb(fq, mem[i+1]);
-                              fq = zput(fq, " -- FP EMULATOR / fixup range 34..3F,"
+                              fq = LogPut(fq, "DPMI: NOT patching 0x"); fq = LogHex(fq, lin);
+                              fq = LogPut(fq, " vec=0x"); fq = LogHexByte(fq, mem[i+1]);
+                              fq = LogPut(fq, " -- FP EMULATOR / fixup range 34..3F,"
                                             " this is an x87 instruction not an"
                                             " interrupt\r\n");
-                              log_append(LOG_PATH, fb, fq); serial_out(fb, fq);
+                              LogAppend(LOG_PATH, fb, fq); serial_out(fb, fq);
                           }
                           continue;
                       }
@@ -19814,11 +19814,11 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                         if (!serviced) {
                             if (rej++ < 16) {
                                 char nb[176], *nq = nb;
-                                nq = zput(nq, "DPMI: NOT patching 0x"); nq = zhex(nq, lin);
-                                nq = zput(nq, " vec=0x"); nq = zhexb(nq, pv);
-                                nq = zput(nq, " -- no PM service arm for it, so a BOP here"
+                                nq = LogPut(nq, "DPMI: NOT patching 0x"); nq = LogHex(nq, lin);
+                                nq = LogPut(nq, " vec=0x"); nq = LogHexByte(nq, pv);
+                                nq = LogPut(nq, " -- no PM service arm for it, so a BOP here"
                                               " could only ever lose an instruction\r\n");
-                                log_append(LOG_PATH, nb, nq); serial_out(nb, nq);
+                                LogAppend(LOG_PATH, nb, nq); serial_out(nb, nq);
                             }
                             continue;
                         } }
@@ -19846,13 +19846,13 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                                                 rend - a, d32)) {
                           if (rej++ < 16) {
                               char rb[128], *rq = rb;
-                              rq = zput(rq, "DPMI: NOT an INT site (mid-instruction) 0x");
-                              rq = zhex(rq, lin);
-                              rq = zput(rq, " vec=0x"); rq = zhexb(rq, mem[i+1]);
-                              rq = zput(rq, d32 ? " d32=1" : " d32=0");
-                              rq = zput(rq, " ctx="); rq = zdump(rq, (const BYTE *)(ULONG_PTR)(lin - 4), 10);
-                              rq = zput(rq, "\r\n");
-                              log_append(LOG_PATH, rb, rq); serial_out(rb, rq);
+                              rq = LogPut(rq, "DPMI: NOT an INT site (mid-instruction) 0x");
+                              rq = LogHex(rq, lin);
+                              rq = LogPut(rq, " vec=0x"); rq = LogHexByte(rq, mem[i+1]);
+                              rq = LogPut(rq, d32 ? " d32=1" : " d32=0");
+                              rq = LogPut(rq, " ctx="); rq = LogDump(rq, (const BYTE *)(ULONG_PTR)(lin - 4), 10);
+                              rq = LogPut(rq, "\r\n");
+                              LogAppend(LOG_PATH, rb, rq); serial_out(rb, rq);
                           }
                           continue;
                       }
@@ -19877,14 +19877,14 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                       if (nlog < 24) {              /* its OWN counter: npo saturates at 12 */
                           char sb2[192], *sq = sb2;
                           ++nlog;
-                          sq = zput(sq, dry ? "DPMI: WOULD PATCH 0x" : "DPMI: PATCHING 0x"); sq = zhex(sq, lin);
-                          sq = zput(sq, " (+0x"); sq = zhex(sq, lin - base);
-                          sq = zput(sq, ") vec=0x"); sq = zhexb(sq, mem[i+1]);
-                          sq = zput(sq, dry ? " (32-bit region: left for the #GP(IDT) arm)  bytes="
+                          sq = LogPut(sq, dry ? "DPMI: WOULD PATCH 0x" : "DPMI: PATCHING 0x"); sq = LogHex(sq, lin);
+                          sq = LogPut(sq, " (+0x"); sq = LogHex(sq, lin - base);
+                          sq = LogPut(sq, ") vec=0x"); sq = LogHexByte(sq, mem[i+1]);
+                          sq = LogPut(sq, dry ? " (32-bit region: left for the #GP(IDT) arm)  bytes="
                                             : " -> C4 C4  was=");
-                          sq = zdump(sq, (const BYTE *)(ULONG_PTR)(lin - 6), 16);
-                          sq = zput(sq, "\r\n");
-                          log_append(LOG_PATH, sb2, sq); serial_out(sb2, sq);
+                          sq = LogDump(sq, (const BYTE *)(ULONG_PTR)(lin - 6), 16);
+                          sq = LogPut(sq, "\r\n");
+                          LogAppend(LOG_PATH, sb2, sq); serial_out(sb2, sq);
                       }
                       if (!dry) {
                           pmap_set(lin, mem[i+1]);
@@ -19896,19 +19896,19 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
           }
           a = rend;
       } }
-    q = zput(q, "DPMI: code region 0x"); q = zhex(q, base);
-    q = zput(q, "..0x"); q = zhex(q, end);
-    q = zput(q, dry ? " -> 32-bit, NOT WRITTEN: would patch " : " -> patched ");
-    q = zhex(q, n); q = zput(q, " INT sites, rejected ");
-    q = zhex(q, rej); q = zput(q, " mid-instruction byte pairs, ");
-    q = zhex(q, ntbl); q = zput(q, " jump-table entries");
+    q = LogPut(q, "DPMI: code region 0x"); q = LogHex(q, base);
+    q = LogPut(q, "..0x"); q = LogHex(q, end);
+    q = LogPut(q, dry ? " -> 32-bit, NOT WRITTEN: would patch " : " -> patched ");
+    q = LogHex(q, n); q = LogPut(q, " INT sites, rejected ");
+    q = LogHex(q, rej); q = LogPut(q, " mid-instruction byte pairs, ");
+    q = LogHex(q, ntbl); q = LogPut(q, " jump-table entries");
     if (npo) {
         DWORD z;
-        q = zput(q, " at +0x");
-        for (z = 0; z < npo; ++z) { if (z) q = zput(q, " +0x"); q = zhex(q, po[z]); }
+        q = LogPut(q, " at +0x");
+        for (z = 0; z < npo; ++z) { if (z) q = LogPut(q, " +0x"); q = LogHex(q, po[z]); }
     }
-    q = zput(q, "\r\n");
-    log_append(LOG_PATH, lb, q); serial_out(lb, q);
+    q = LogPut(q, "\r\n");
+    LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
     dpmi_bp_arm();          /* a module that has just appeared may hold a requested BP */
 }
 
@@ -19940,26 +19940,26 @@ static void dpmi_le_learn(const BYTE *buf, DWORD n)
         objoff = LE32(i + 0x40);
         if (nobj < 1 || nobj > 64) continue;
         if (objoff < 0x50 || i + objoff + nobj * 24 > n) continue;
-        q = lb; q = zput(q, "DPMI: LE image at file 0x"); q = zhex(q, i);
-        q = zput(q, ", "); q = zhex(q, nobj); q = zput(q, " objects\r\n");
-        log_append(LOG_PATH, lb, q);
+        q = lb; q = LogPut(q, "DPMI: LE image at file 0x"); q = LogHex(q, i);
+        q = LogPut(q, ", "); q = LogHex(q, nobj); q = LogPut(q, " objects\r\n");
+        LogAppend(LOG_PATH, lb, q);
         for (k = 0; k < nobj; ++k) {
             DWORD o     = i + objoff + k * 24;
             DWORD vsize = LE32(o + 0x00), flags = LE32(o + 0x08);
             DWORD pr    = (vsize + 0xFFFu) & ~0xFFFu;          /* what 0501 will ask for */
             int   exec  = (flags & 0x0004u) != 0;
-            q = lb; q = zput(q, "DPMI:   obj"); q = zhex(q, k + 1);
-            q = zput(q, " vsize 0x"); q = zhex(q, vsize);
-            q = zput(q, " flags 0x"); q = zhex(q, flags);
-            q = zput(q, exec ? " EXEC" : " data");
+            q = lb; q = LogPut(q, "DPMI:   obj"); q = LogHex(q, k + 1);
+            q = LogPut(q, " vsize 0x"); q = LogHex(q, vsize);
+            q = LogPut(q, " flags 0x"); q = LogHex(q, flags);
+            q = LogPut(q, exec ? " EXEC" : " data");
             if (exec && pr >= 0x10000u && g_le_ncode < DPMI_LE_MAX) {
                 g_le_code_sz[g_le_ncode++] = pr;
-                q = zput(q, " -- code block size 0x"); q = zhex(q, pr);
+                q = LogPut(q, " -- code block size 0x"); q = LogHex(q, pr);
             } else if (exec) {
-                q = zput(q, " -- too small to key on (a based descriptor will reach it)");
+                q = LogPut(q, " -- too small to key on (a based descriptor will reach it)");
             }
-            q = zput(q, "\r\n");
-            log_append(LOG_PATH, lb, q);
+            q = LogPut(q, "\r\n");
+            LogAppend(LOG_PATH, lb, q);
         }
         return;                                                /* first valid LE wins */
     }
@@ -20057,15 +20057,15 @@ static void dpmi_bp_load(void)
             ++g_bp_n;
         }
     }
-    q = zput(q, "DPMI-BP: pmbp.txt read 0x"); q = zhex(q, rd);
-    q = zput(q, " bytes, loaded "); q = zhex(q, (DWORD)(g_bp_n - n0));
-    q = zput(q, " entries (total "); q = zhex(q, (DWORD)g_bp_n); q = zput(q, ")");
+    q = LogPut(q, "DPMI-BP: pmbp.txt read 0x"); q = LogHex(q, rd);
+    q = LogPut(q, " bytes, loaded "); q = LogHex(q, (DWORD)(g_bp_n - n0));
+    q = LogPut(q, " entries (total "); q = LogHex(q, (DWORD)g_bp_n); q = LogPut(q, ")");
     if (rd >= sizeof buf - 1)
-        q = zput(q, "  !! FILE TRUNCATED AT THE BUFFER -- ENTRIES WERE DROPPED");
+        q = LogPut(q, "  !! FILE TRUNCATED AT THE BUFFER -- ENTRIES WERE DROPPED");
     if (g_bp_n >= DPMI_BP_MAX && i < rd)
-        q = zput(q, "  !! DPMI_BP_MAX REACHED -- REMAINING LINES IGNORED");
-    q = zput(q, "\r\n");
-    log_append(LOG_PATH, lb, q); serial_out(lb, q);
+        q = LogPut(q, "  !! DPMI_BP_MAX REACHED -- REMAINING LINES IGNORED");
+    q = LogPut(q, "\r\n");
+    LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
 }
 
 /* Turn `seg1:0xNNNN` breakpoints into linear ones, now that we know where krnl386 put
@@ -20111,11 +20111,11 @@ static void dpmi_bp_resolve_codebase(DWORD base)
         g_bp_lin[k]   = base + off;
         g_bp_mode[k] &= ~8u;
         q = lb;
-        q = zput(q, "DPMI-BP: codebase+0x"); q = zhex(q, off);
-        q = zput(q, " -> linear 0x");        q = zhex(q, g_bp_lin[k]);
-        q = zput(q, " (the client's LE code object is at 0x"); q = zhex(q, base);
-        q = zput(q, ")\r\n");
-        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+        q = LogPut(q, "DPMI-BP: codebase+0x"); q = LogHex(q, off);
+        q = LogPut(q, " -> linear 0x");        q = LogHex(q, g_bp_lin[k]);
+        q = LogPut(q, " (the client's LE code object is at 0x"); q = LogHex(q, base);
+        q = LogPut(q, ")\r\n");
+        LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
     }
 }
 
@@ -20134,13 +20134,13 @@ static void dpmi_bp_resolve_seg(unsigned segno, DWORD base)
         g_bp_lin[k]   = base + off;
         g_bp_mode[k] &= ~2u;
         q = lb;
-        q = zput(q, "DPMI-BP: seg");    q = zhex(q, (DWORD)segno);
-        q = zput(q, ":0x");             q = zhex(q, off);
-        q = zput(q, " -> linear 0x");   q = zhex(q, g_bp_lin[k]);
-        q = zput(q, " (krnl386's PM copy of segment "); q = zhex(q, (DWORD)segno);
-        q = zput(q, " is at 0x"); q = zhex(q, base);
-        q = zput(q, ")\r\n");
-        log_append(LOG_PATH, lb, q);
+        q = LogPut(q, "DPMI-BP: seg");    q = LogHex(q, (DWORD)segno);
+        q = LogPut(q, ":0x");             q = LogHex(q, off);
+        q = LogPut(q, " -> linear 0x");   q = LogHex(q, g_bp_lin[k]);
+        q = LogPut(q, " (krnl386's PM copy of segment "); q = LogHex(q, (DWORD)segno);
+        q = LogPut(q, " is at 0x"); q = LogHex(q, base);
+        q = LogPut(q, ")\r\n");
+        LogAppend(LOG_PATH, lb, q);
     }
 }
 
@@ -20237,12 +20237,12 @@ static void dpmi_bp_arm(void)
             if (g_bp_mode[k] != 1 && b[0] == 0xC4 && g_bp_orig[k][0] != 0xC4) {
                 g_bp_orig[k][1] = b[1];                    /* the guest's new byte 1 */
                 b[1] = 0xC4;                               /* re-plant the lost half */
-                q = zput(q, "DPMI-BP: 0x"); q = zhex(q, lin);
-                q = zput(q, " half-clobbered (a fixup rewrote the byte under our BOP);"
+                q = LogPut(q, "DPMI-BP: 0x"); q = LogHex(q, lin);
+                q = LogPut(q, " half-clobbered (a fixup rewrote the byte under our BOP);"
                             " byte 1 re-planted, saved original now ");
-                q = zdump(q, (const BYTE *)g_bp_orig[k], 2);
-                q = zput(q, "\r\n");
-                log_append(LOG_PATH, lb, q); serial_out(lb, q);
+                q = LogDump(q, (const BYTE *)g_bp_orig[k], 2);
+                q = LogPut(q, "\r\n");
+                LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
                 continue;
             }
             g_bp_armed[k] = 0; pmap_clear(lin);            /* clobbered -> re-arm below */
@@ -20276,10 +20276,10 @@ static void dpmi_bp_arm(void)
           if (clash) {
               if (!g_bp_refused[k]) {
                   g_bp_refused[k] = 1;
-                  q = zput(q, "DPMI-BP: REFUSED 0x"); q = zhex(q, lin);
-                  q = zput(q, " -- its 2-byte footprint overlaps another breakpoint"
+                  q = LogPut(q, "DPMI-BP: REFUSED 0x"); q = LogHex(q, lin);
+                  q = LogPut(q, " -- its 2-byte footprint overlaps another breakpoint"
                               " (said once; re-checked every PM entry)\r\n");
-                  log_append(LOG_PATH, lb, q); serial_out(lb, q);
+                  LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
               }
               continue;
           } }
@@ -20289,13 +20289,13 @@ static void dpmi_bp_arm(void)
             if (ilen == 1) {
                 if (!g_bp_refused[k]) {
                     g_bp_refused[k] = 1;
-                    q = zput(q, "DPMI-BP: REFUSED 0x"); q = zhex(q, lin);
-                    q = zput(q, " -- ONE-BYTE instruction (");
-                    q = zdump(q, (const BYTE *)(ULONG_PTR)lin, 1);
-                    q = zput(q, "); a 2-byte BOP would eat the NEXT instruction and "
+                    q = LogPut(q, "DPMI-BP: REFUSED 0x"); q = LogHex(q, lin);
+                    q = LogPut(q, " -- ONE-BYTE instruction (");
+                    q = LogDump(q, (const BYTE *)(ULONG_PTR)lin, 1);
+                    q = LogPut(q, "); a 2-byte BOP would eat the NEXT instruction and "
                                 "silently change what the guest does. Use mode 1 (int3) "
                                 "or move it. (said once; re-checked every PM entry)\r\n");
-                    log_append(LOG_PATH, lb, q); serial_out(lb, q);
+                    LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
                 }
                 continue;
             }
@@ -20309,11 +20309,11 @@ static void dpmi_bp_arm(void)
             pmap_set(lin, DPMI_BP_VEC);       /* only a BOP is resolvable by vector  */
         }
         g_bp_armed[k] = 1; g_bp_pending[k] = 0;
-        q = zput(q, "DPMI-BP: armed at linear 0x"); q = zhex(q, lin);
-        q = zput(q, "..0x"); q = zhex(q, lin + 1);       /* say the 2-byte footprint */
-        q = zput(q, " (displaced "); q = zdump(q, (const BYTE *)g_bp_orig[k], 2);
-        q = zput(q, ")\r\n");
-        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+        q = LogPut(q, "DPMI-BP: armed at linear 0x"); q = LogHex(q, lin);
+        q = LogPut(q, "..0x"); q = LogHex(q, lin + 1);       /* say the 2-byte footprint */
+        q = LogPut(q, " (displaced "); q = LogDump(q, (const BYTE *)g_bp_orig[k], 2);
+        q = LogPut(q, ")\r\n");
+        LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
     }
 }
 
@@ -20477,8 +20477,8 @@ static void wow32_mode_load(void)
     ReadFile(h, buf, sizeof buf - 1, &rd, NULL);
     CloseHandle(h);
     if (rd >= sizeof buf - 1) {
-        q = zput(q, "WOWMODE: !! wowmode.txt TRUNCATED AT THE BUFFER -- LINES DROPPED\r\n");
-        log_append(LOG_PATH, lb, q); serial_out(lb, q); q = lb;
+        q = LogPut(q, "WOWMODE: !! wowmode.txt TRUNCATED AT THE BUFFER -- LINES DROPPED\r\n");
+        LogAppend(LOG_PATH, lb, q); serial_out(lb, q); q = lb;
     }
     while (i < rd && g_w32mode_n < WOWMODE_MAX) {
         DWORD v[2] = { 0, 0 }; int col = 0;
@@ -20508,13 +20508,13 @@ static void wow32_mode_load(void)
     }
     if (g_w32mode_n) {
         int k;
-        q = zput(q, "WOWMODE: ** EXPERIMENT ** returning");
+        q = LogPut(q, "WOWMODE: ** EXPERIMENT ** returning");
         for (k = 0; k < g_w32mode_n; ++k) {
-            q = zput(q, " 0x"); q = zhexb(q, (BYTE)g_w32mode_id[k]);
-            q = zput(q, " through epilogue mode "); q = zhex(q, g_w32mode_val[k]);
+            q = LogPut(q, " 0x"); q = LogHexByte(q, (BYTE)g_w32mode_id[k]);
+            q = LogPut(q, " through epilogue mode "); q = LogHex(q, g_w32mode_val[k]);
         }
-        q = zput(q, "\r\n");
-        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+        q = LogPut(q, "\r\n");
+        LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
     }
 }
 
@@ -20536,8 +20536,8 @@ static void wow32_ret_load(void)
     ReadFile(h, buf, sizeof buf - 1, &rd, NULL);
     CloseHandle(h);
     if (rd >= sizeof buf - 1) {
-        q = zput(q, "WOW32RET: !! wow32ret.txt TRUNCATED AT THE BUFFER -- LINES DROPPED\r\n");
-        log_append(LOG_PATH, lb, q); serial_out(lb, q); q = lb;
+        q = LogPut(q, "WOW32RET: !! wow32ret.txt TRUNCATED AT THE BUFFER -- LINES DROPPED\r\n");
+        LogAppend(LOG_PATH, lb, q); serial_out(lb, q); q = lb;
     }
     while (i < rd && g_w32ret_n < WOW32RET_MAX) {
         DWORD v[2] = { 0, 0 }; int col = 0;
@@ -20567,13 +20567,13 @@ static void wow32_ret_load(void)
     }
     if (g_w32ret_n) {
         int k;
-        q = zput(q, "WOW32RET: ** EXPERIMENT ** overriding");
+        q = LogPut(q, "WOW32RET: ** EXPERIMENT ** overriding");
         for (k = 0; k < g_w32ret_n; ++k) {
-            q = zput(q, " 0x"); q = zhexb(q, (BYTE)g_w32ret_id[k]);
-            q = zput(q, "->0x"); q = zhex(q, g_w32ret_val[k]);
+            q = LogPut(q, " 0x"); q = LogHexByte(q, (BYTE)g_w32ret_id[k]);
+            q = LogPut(q, "->0x"); q = LogHex(q, g_w32ret_val[k]);
         }
-        q = zput(q, "\r\n");
-        log_append(LOG_PATH, lb, q); serial_out(lb, q);
+        q = LogPut(q, "\r\n");
+        LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
     }
 }
 
@@ -20700,9 +20700,9 @@ static void wow_task_chdir(WORD task, char **pp)
     {   int ok = SetCurrentDirectoryA(g_wow_task_dir[k].dir) != 0;
         if (s_logged < 12) {
             ++s_logged;
-            *pp = zput(*pp, "  WOWSCHED: task 0x"); *pp = zhex(*pp, task);
-            *pp = zput(*pp, " resumes in ["); *pp = zput(*pp, g_wow_task_dir[k].dir);
-            *pp = zput(*pp, ok ? "]\r\n" : "] -- SetCurrentDirectory FAILED\r\n");
+            *pp = LogPut(*pp, "  WOWSCHED: task 0x"); *pp = LogHex(*pp, task);
+            *pp = LogPut(*pp, " resumes in ["); *pp = LogPut(*pp, g_wow_task_dir[k].dir);
+            *pp = LogPut(*pp, ok ? "]\r\n" : "] -- SetCurrentDirectory FAILED\r\n");
         }
     }
 }
@@ -20789,7 +20789,7 @@ static int ws_intertask_live(void)
      Session 51, from a user report that both Win16 games feel "laggy, like an
      early 486" and that GDI redraw is visibly slow when windows overlap.
    ★ THE SUSPECT IS THE INSTRUMENT, AND THIS PROJECT HAS ALREADY BEEN HERE ONCE:
-     per-line log_append under the device lock cost SKYROADS 24% of its delivered
+     per-line LogAppend under the device lock cost SKYROADS 24% of its delivered
      timer ticks, and only a player's ear caught it (see host_irq_sink). On the
      WOW path every BOP writes a multi-line block -- a Solitaire startup is 2.7 MB
      -- so the same shape is back, on a path nobody has costed.
@@ -20827,11 +20827,11 @@ static void wowquiet_load(void)
     CloseHandle(h);
     /* Say so BEFORE going quiet, or the run leaves no evidence of why it is
        silent -- a log that just stops looks like a crash. */
-    q = zput(q, "WOWQUIET: ** ON ** -- the trace is SILENCED from here for an A/B "
+    q = LogPut(q, "WOWQUIET: ** ON ** -- the trace is SILENCED from here for an A/B "
                 "measurement. This is not a product mode; delete wowquiet.txt to "
                 "get the instrumented run back.\r\n");
-    log_append(LOG_PATH, lb, q); serial_out(lb, q);
-    g_log_quiet = 1;
+    LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
+    g_LogIsQuiet = 1;
 }
 
 static void wowsched_load(void)
@@ -20842,10 +20842,10 @@ static void wowsched_load(void)
     if (h == INVALID_HANDLE_VALUE) return;
     CloseHandle(h);
     g_wowsched_on = 1;
-    q = zput(q, "WOWSCHED: ** ON ** -- Win16 tasks will be interleaved by the host "
+    q = LogPut(q, "WOWSCHED: ** ON ** -- Win16 tasks will be interleaved by the host "
                 "(0x74 saves the launch frame, WaitEvent hands the creator back "
                 "through epilogue mode 25, [0x228]==0 starts the parked task)\r\n");
-    log_append(LOG_PATH, lb, q); serial_out(lb, q);
+    LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
 }
 
 /* ── ★★★★★ CALLING 16-BIT CODE: THE SWITCH. (GH #128, session 40) ─────────────
@@ -20865,10 +20865,10 @@ static void wowcall_load(void)
     if (h == INVALID_HANDLE_VALUE) return;
     CloseHandle(h);
     g_wowcall_on = 1;
-    q = zput(q, "WOWCALL: ** ON ** -- the host will CALL 16-bit code: CreateWindow "
+    q = LogPut(q, "WOWCALL: ** ON ** -- the host will CALL 16-bit code: CreateWindow "
                 "sends WM_CREATE to the window's own procedure and waits for it to "
                 "return through the C4 C4 stub\r\n");
-    log_append(LOG_PATH, lb, q); serial_out(lb, q);
+    LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
 }
 
 static int dpmi_service_pm_int(DOS_MACHINE *mp, volatile BYTE *tib, DWORD vec, unsigned steps);
@@ -20898,10 +20898,10 @@ static void dpmi_invoke_callback(DOS_MACHINE *m, volatile BYTE *tib, int slot)
     *(volatile WORD*)(rc+0x24)=VDM_REG(tib,VTIB_DS);  *(volatile WORD*)(rc+0x20)=(WORD)VDM_REG(tib,VTIB_EFLAGS);
     *(volatile WORD*)(rc+0x2A)=retIP; *(volatile WORD*)(rc+0x2C)=retCS;   /* CS:IP = far-call return */
     *(volatile WORD*)(rc+0x2E)=newSP; *(volatile WORD*)(rc+0x30)=rss;     /* SS:SP after popping it */
-    lp = zput(lp, "  0303-cb slot "); lp = zhex(lp, slot); lp = zput(lp, " ret=0x"); lp = zhex(lp, retCS);
-    lp = zput(lp, ":0x"); lp = zhex(lp, retIP); lp = zput(lp, " -> PM handler 0x"); lp = zhex(lp, g_cb[slot].pm_sel);
-    lp = zput(lp, ":0x"); lp = zhex(lp, g_cb[slot].pm_off); lp = zput(lp, "\r\n");
-    log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+    lp = LogPut(lp, "  0303-cb slot "); lp = LogHex(lp, slot); lp = LogPut(lp, " ret=0x"); lp = LogHex(lp, retCS);
+    lp = LogPut(lp, ":0x"); lp = LogHex(lp, retIP); lp = LogPut(lp, " -> PM handler 0x"); lp = LogHex(lp, g_cb[slot].pm_sel);
+    lp = LogPut(lp, ":0x"); lp = LogHex(lp, g_cb[slot].pm_off); lp = LogPut(lp, "\r\n");
+    LogAppend(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
     /* re-arm the BOP patch (the PM handler is protected-mode code), enter PM */
     dpmi_repatch();
     *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(vMsw | MSW_PE_BIT);
@@ -20940,10 +20940,10 @@ static void dpmi_invoke_callback(DOS_MACHINE *m, volatile BYTE *tib, int slot)
             if (dpmi_service_pm_int(m, tib, vec, ph) > 0) continue;   /* serviced -> resume handler */
             cbdone = 1; break;   /* client-exit or unexpected from inside a callback: end the loop */
         }
-        lp = zput(lp, "  0303-cb: unexpected PM stop ev=0x"); lp = zhex(lp, ev);
-        lp = zput(lp, " CS:IP=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-        lp = zput(lp, ":0x"); lp = zhex(lp, eip); lp = zput(lp, "\r\n");
-        log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+        lp = LogPut(lp, "  0303-cb: unexpected PM stop ev=0x"); lp = LogHex(lp, ev);
+        lp = LogPut(lp, " CS:IP=0x"); lp = LogHex(lp, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+        lp = LogPut(lp, ":0x"); lp = LogHex(lp, eip); lp = LogPut(lp, "\r\n");
+        LogAppend(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
         break;
     }
     /* handler done: un-patch again and resume the RM proc in V86 at the RMCS CS:IP */
@@ -20958,8 +20958,8 @@ static void dpmi_invoke_callback(DOS_MACHINE *m, volatile BYTE *tib, int slot)
     VDM_SET16(tib,VTIB_CS,*(volatile WORD*)(rc+0x2C)); VDM_REG(tib,VTIB_EIP)=*(volatile WORD*)(rc+0x2A);
     VDM_SET16(tib,VTIB_SS,*(volatile WORD*)(rc+0x30)); VDM_REG(tib,VTIB_ESP)=*(volatile WORD*)(rc+0x2E);
     VDM_SET16(tib,VTIB_FS,*(volatile WORD*)(rc+0x30)); VDM_SET16(tib,VTIB_GS,*(volatile WORD*)(rc+0x30));
-    lp = zput(lp, cbdone ? "  0303-cb: PM handler returned (OK)\r\n" : "  0303-cb: PM handler NO-RET\r\n");
-    log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+    lp = LogPut(lp, cbdone ? "  0303-cb: PM handler returned (OK)\r\n" : "  0303-cb: PM handler NO-RET\r\n");
+    LogAppend(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
 }
 
 /* Service one protected-mode interrupt the DPMI client raised (a patched INT nn
@@ -21007,7 +21007,7 @@ static void dpmi_invoke_callback(DOS_MACHINE *m, volatile BYTE *tib, int slot)
 static BYTE g_pm_disp[256];                 /* 1 while inside vec's client handler */
 
 /* ── ★★★★ A REFLECTED INTERRUPT IS THE ONE TRACE THAT CAN OUTRUN THE GUEST. ────────
-     Every dispatch below writes two log_append lines (~350 bytes) and does two
+     Every dispatch below writes two LogAppend lines (~350 bytes) and does two
      host_readable() probes to print the caller's pointer. That is the right amount of
      detail for a handler called a dozen times, and a firehose for one the guest POLLS.
    ★ MEASURED ON ZAR (GH #23), and it is most of why "Game loading..." crawls: while it
@@ -21015,7 +21015,7 @@ static BYTE g_pm_disp[256];                 /* 1 while inside vec's client handl
      times a second. A 45 s run is ~170,000 reflected dispatches, ~340,000 WriteFile
      calls and 53 MB of log -- and a histogram of that log is 100% one line, one vector,
      one AX value, repeated. The reads it is there to explain are 501 lines of it.
-   ★ THIS PROJECT HAS PAID FOR THIS EXACT SHAPE TWICE. Per-line log_append under the
+   ★ THIS PROJECT HAS PAID FOR THIS EXACT SHAPE TWICE. Per-line LogAppend under the
      device lock cost SKYROADS 24% of its delivered timer ticks and only a player's ear
      caught it (see host_irq_sink); the same argument is written out again over
      wowquiet.txt. Both times the lesson was "stop writing a kilobyte per event". This
@@ -21038,7 +21038,7 @@ static BYTE g_pm_disp[256];                 /* 1 while inside vec's client handl
    ⚠ NOTHING IS LOST, only un-written: every pair is COUNTED whether logged or not and
      the totals are reported at STAGE2. And a pair says so when it crosses into the
      rate-limited regime, because a trace that simply stops reads as a crash (the rule
-     log_append's own cap follows). */
+     LogAppend's own cap follows). */
 #define PM_DISP_LOG_MAX   24        /* always-loud lines per (vec, AH) */
 #define PM_DISP_QUIET_MS  100u      /* ...then at most one more per pair per this */
 static BYTE  g_pm_disp_logged[256][256];    /* always-loud lines emitted for (vec, AH) */
@@ -21119,10 +21119,10 @@ static int dpmi_dispatch_to_pm_handler(DOS_MACHINE *mp, volatile BYTE *tib,
 
     if (!loud) goto quiet_entry;
     if (dfirst) ++g_pm_disp_logged[dvec][dah];
-    lp = zput(lp, "PM INT 0x"); lp = zhex(lp, vec);
-    lp = zput(lp, " -> CLIENT handler 0x"); lp = zhex(lp, g_pm_int[vec].sel);
-    lp = zput(lp, ":0x"); lp = zhex(lp, g_pm_int[vec].off);
-    lp = zput(lp, " AX=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+    lp = LogPut(lp, "PM INT 0x"); lp = LogHex(lp, vec);
+    lp = LogPut(lp, " -> CLIENT handler 0x"); lp = LogHex(lp, g_pm_int[vec].sel);
+    lp = LogPut(lp, ":0x"); lp = LogHex(lp, g_pm_int[vec].off);
+    lp = LogPut(lp, " AX=0x"); lp = LogHex(lp, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
     /* ► ...AND WHO ASKED. The interrupted CS:EIP is already saved right here (it has to
          be, to resume the client past its INT) and was never printed -- so a reflected
          call named the HANDLER and never the CALLER, and "which of the guest's own code
@@ -21130,9 +21130,9 @@ static int dpmi_dispatch_to_pm_handler(DOS_MACHINE *mp, volatile BYTE *tib,
          handoff left open for ZAR ("catch the last AH=3F read's caller"), and the answer
          was two saved registers away. Linear too: a flat client's CS base is 0, but a
          16-bit one's is not, and the file image is only comparable in linear terms. */
-    lp = zput(lp, " from 0x"); lp = zhex(lp, sCS);
-    lp = zput(lp, ":0x"); lp = zhex(lp, sEIP);
-    lp = zput(lp, " lin=0x"); lp = zhex(lp, dpmi_sel_base(sCS) + sEIP);
+    lp = LogPut(lp, " from 0x"); lp = LogHex(lp, sCS);
+    lp = LogPut(lp, ":0x"); lp = LogHex(lp, sEIP);
+    lp = LogPut(lp, " lin=0x"); lp = LogHex(lp, dpmi_sel_base(sCS) + sEIP);
     /* ► WHAT THE CALLER ACTUALLY PASSED. A DOS call that takes a pointer takes it in
          DS:(E)DX, and when one fails the FIRST question is whether the caller's pointer
          was good -- i.e. whether the fault is the client's or ours. Print the selector,
@@ -21143,10 +21143,10 @@ static int dpmi_dispatch_to_pm_handler(DOS_MACHINE *mp, volatile BYTE *tib,
       DWORD off = dpmi_sel_is32((WORD)dsv) ? edx : (edx & 0xFFFF);
       DWORD lin = dpmi_sel_base((WORD)dsv) + off;
       const BYTE *sb = (const BYTE *)(ULONG_PTR)lin;
-      lp = zput(lp, " DS:EDX=0x"); lp = zhex(lp, dsv); lp = zput(lp, ":0x"); lp = zhex(lp, edx);
-      lp = zput(lp, " lin=0x"); lp = zhex(lp, lin); lp = zput(lp, " @=");
-      if (!host_readable(sb, 16)) lp = zput(lp, "<unreadable>");
-      else                        lp = zdump(lp, sb, 16);
+      lp = LogPut(lp, " DS:EDX=0x"); lp = LogHex(lp, dsv); lp = LogPut(lp, ":0x"); lp = LogHex(lp, edx);
+      lp = LogPut(lp, " lin=0x"); lp = LogHex(lp, lin); lp = LogPut(lp, " @=");
+      if (!host_readable(sb, 16)) lp = LogPut(lp, "<unreadable>");
+      else                        lp = LogDump(lp, sb, 16);
       /* ► AND THE CALLER'S STACK WIDTH, because that is what the client's dispatcher
            ASKS. DOS/4GW's common handler (mod:0x550) begins `LAR eax,SS` + `bt eax,22`
            -- it reads the D/B bit of the interrupted SS descriptor to decide whether the
@@ -21154,21 +21154,21 @@ static int dpmi_dispatch_to_pm_handler(DOS_MACHINE *mp, volatile BYTE *tib,
            or a dword. If that bit is wrong, the extender truncates a flat pointer to its
            low 16 bits, which is exactly the failure being chased here. */
       { WORD ssv = (WORD)VDM_REG(tib, VTIB_SS);
-        lp = zput(lp, " SS=0x"); lp = zhex(lp, ssv);
-        lp = zput(lp, dpmi_sel_is32(ssv) ? " (SS D/B=1)" : " (SS D/B=0)");
-        lp = zput(lp, " ESP=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_ESP));
-        lp = zput(lp, " CS=0x"); lp = zhex(lp, (WORD)VDM_REG(tib, VTIB_CS));
-        lp = zput(lp, dpmi_sel_is32((WORD)VDM_REG(tib, VTIB_CS)) ? " (CS D/B=1)" : " (CS D/B=0)");
-        lp = zput(lp, " h32="); lp = zhex(lp, (DWORD)h32); } }
-    lp = zput(lp, "\r\n"); log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+        lp = LogPut(lp, " SS=0x"); lp = LogHex(lp, ssv);
+        lp = LogPut(lp, dpmi_sel_is32(ssv) ? " (SS D/B=1)" : " (SS D/B=0)");
+        lp = LogPut(lp, " ESP=0x"); lp = LogHex(lp, VDM_REG(tib, VTIB_ESP));
+        lp = LogPut(lp, " CS=0x"); lp = LogHex(lp, (WORD)VDM_REG(tib, VTIB_CS));
+        lp = LogPut(lp, dpmi_sel_is32((WORD)VDM_REG(tib, VTIB_CS)) ? " (CS D/B=1)" : " (CS D/B=0)");
+        lp = LogPut(lp, " h32="); lp = LogHex(lp, (DWORD)h32); } }
+    lp = LogPut(lp, "\r\n"); LogAppend(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
     /* Say so on the last always-loud one, not silently on the first suppressed one. */
     if (dfirst && g_pm_disp_logged[dvec][dah] >= PM_DISP_LOG_MAX) {
-        lp = zput(lp, "PM INT 0x"); lp = zhex(lp, vec);
-        lp = zput(lp, " AH=0x"); lp = zhexb(lp, (BYTE)dah);
-        lp = zput(lp, ": reflected-dispatch trace RATE-LIMITED from here (this vector/AH"
+        lp = LogPut(lp, "PM INT 0x"); lp = LogHex(lp, vec);
+        lp = LogPut(lp, " AH=0x"); lp = LogHexByte(lp, (BYTE)dah);
+        lp = LogPut(lp, ": reflected-dispatch trace RATE-LIMITED from here (this vector/AH"
                       " pair only, one line per 100 ms; every one is still counted --"
                       " total at STAGE2)\r\n");
-        log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+        LogAppend(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
     }
 quiet_entry:
 
@@ -21184,19 +21184,19 @@ quiet_entry:
             DWORD ccs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
             DWORD cb  = dpmi_sel_base((WORD)ccs), cip = VDM_REG(tib, VTIB_EIP);
             const BYTE *ib = (const BYTE *)(ULONG_PTR)(cb + cip);
-            lp = zput(lp, "  PMH["); lp = zhex(lp, ph);
-            lp = zput(lp, "] cs:eip=0x"); lp = zhex(lp, ccs);
-            lp = zput(lp, ":0x"); lp = zhex(lp, cip);
-            lp = zput(lp, " ss:esp=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_SS) & 0xFFFF);
-            lp = zput(lp, ":0x"); lp = zhex(lp, VDM_REG(tib, VTIB_ESP));
-            lp = zput(lp, " EAX=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_EAX));
-            lp = zput(lp, " DS=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_DS) & 0xFFFF);
-            lp = zput(lp, " ES=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_ES) & 0xFFFF);
-            lp = zput(lp, " b=");
-            if (!host_readable(ib, 16)) lp = zput(lp, "<unreadable>");
-            else                        lp = zdump(lp, ib, 16);
-            lp = zput(lp, "\r\n");
-            log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+            lp = LogPut(lp, "  PMH["); lp = LogHex(lp, ph);
+            lp = LogPut(lp, "] cs:eip=0x"); lp = LogHex(lp, ccs);
+            lp = LogPut(lp, ":0x"); lp = LogHex(lp, cip);
+            lp = LogPut(lp, " ss:esp=0x"); lp = LogHex(lp, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+            lp = LogPut(lp, ":0x"); lp = LogHex(lp, VDM_REG(tib, VTIB_ESP));
+            lp = LogPut(lp, " EAX=0x"); lp = LogHex(lp, VDM_REG(tib, VTIB_EAX));
+            lp = LogPut(lp, " DS=0x"); lp = LogHex(lp, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+            lp = LogPut(lp, " ES=0x"); lp = LogHex(lp, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+            lp = LogPut(lp, " b=");
+            if (!host_readable(ib, 16)) lp = LogPut(lp, "<unreadable>");
+            else                        lp = LogDump(lp, ib, 16);
+            lp = LogPut(lp, "\r\n");
+            LogAppend(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
         }
         dpmi_arm_fault_trampoline(tib, 0);
         DpmiEnterProtectedMode(tib);
@@ -21239,11 +21239,11 @@ quiet_entry:
                 || (eip >= DPMI_FAULT_SITE(0)
                     && eip <  DPMI_FAULT_SITE(DOS_FLTSITE_N)
                     && ((eip - DPMI_FAULT_SITE(0)) & 3) == 0))) {
-            lp = zput(lp, "  PM INT 0x"); lp = zhex(lp, vec);
-            lp = zput(lp, " handler FAULTED at fault-site eip=0x"); lp = zhex(lp, eip);
-            lp = zput(lp, " -- returning to the main loop so the exception is DELIVERED"
+            lp = LogPut(lp, "  PM INT 0x"); lp = LogHex(lp, vec);
+            lp = LogPut(lp, " handler FAULTED at fault-site eip=0x"); lp = LogHex(lp, eip);
+            lp = LogPut(lp, " -- returning to the main loop so the exception is DELIVERED"
                           " (this loop has no fault arm of its own)\r\n");
-            log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+            LogAppend(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
             g_pm_disp[vec] = 0;
             return 1;
         }
@@ -21267,11 +21267,11 @@ quiet_entry:
          re-entrancy bug. A NO-RET is a different matter and is never suppressed: it means
          the handler did not come back, which is a fault report, not a trace line. */
     if (loud || !done) {
-        lp = zput(lp, "PM INT 0x"); lp = zhex(lp, vec);
-        lp = zput(lp, done ? " <- handler IRET, AX=0x" : " <- handler NO-RET, AX=0x");
-        lp = zhex(lp, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-        lp = zput(lp, " CF="); lp = zhex(lp, VDM_REG(tib, VTIB_EFLAGS) & 1u);
-        lp = zput(lp, "\r\n"); log_append(LOG_PATH, lb, lp); serial_out(lb, lp);
+        lp = LogPut(lp, "PM INT 0x"); lp = LogHex(lp, vec);
+        lp = LogPut(lp, done ? " <- handler IRET, AX=0x" : " <- handler NO-RET, AX=0x");
+        lp = LogHex(lp, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+        lp = LogPut(lp, " CF="); lp = LogHex(lp, VDM_REG(tib, VTIB_EFLAGS) & 1u);
+        lp = LogPut(lp, "\r\n"); LogAppend(LOG_PATH, lb, lp); serial_out(lb, lp);
     }
     return 1;
 }
@@ -21365,30 +21365,30 @@ static void dpmi_rmcs_probe(volatile BYTE *tib, DWORD esb, unsigned slot, DWORD 
     if (slot > 4 || intno > 255) return;
     if (s_seen[slot][intno] >= 3) return;
     ++s_seen[slot][intno];
-    q = zput(q, "RMCS ");     q = zput(q, TAG[slot]);
-    q = zput(q, " int=0x");   q = zhexb(q, intno);
-    q = zput(q, " es=0x");    q = zhex(q, es);
-    q = zput(q, " edi=0x");   q = zhex(q, edi);
-    q = zput(q, " esb=0x");   q = zhex(q, esb);
-    q = zput(q, " cl32=");    q = zhex(q, (DWORD)g_DpmiIsClient32);
+    q = LogPut(q, "RMCS ");     q = LogPut(q, TAG[slot]);
+    q = LogPut(q, " int=0x");   q = LogHexByte(q, intno);
+    q = LogPut(q, " es=0x");    q = LogHex(q, es);
+    q = LogPut(q, " edi=0x");   q = LogHex(q, edi);
+    q = LogPut(q, " esb=0x");   q = LogHex(q, esb);
+    q = LogPut(q, " cl32=");    q = LogHex(q, (DWORD)g_DpmiIsClient32);
     /* The RMCS fields that name the CALL: EAX (+0x1C) is the function number, and
        EBX/ECX/EDX (+0x10/+0x18/+0x14) are where an INT 33h answer goes back. */
-    q = zput(q, " masked@0x"); q = zhex(q, ma);
+    q = LogPut(q, " masked@0x"); q = LogHex(q, ma);
     if (mem_readable((ULONG_PTR)ma, 0x20)) {
         volatile DWORD *m = (volatile DWORD *)(ULONG_PTR)ma;
-        q = zput(q, " eax=0x"); q = zhex(q, m[0x1C/4]);
-        q = zput(q, " ebx=0x"); q = zhex(q, m[0x10/4]);
-        q = zput(q, " d0=0x");  q = zhex(q, m[0]);
-    } else q = zput(q, " unreadable");
-    q = zput(q, " || full@0x"); q = zhex(q, fa);
+        q = LogPut(q, " eax=0x"); q = LogHex(q, m[0x1C/4]);
+        q = LogPut(q, " ebx=0x"); q = LogHex(q, m[0x10/4]);
+        q = LogPut(q, " d0=0x");  q = LogHex(q, m[0]);
+    } else q = LogPut(q, " unreadable");
+    q = LogPut(q, " || full@0x"); q = LogHex(q, fa);
     if (mem_readable((ULONG_PTR)fa, 0x20)) {
         volatile DWORD *f = (volatile DWORD *)(ULONG_PTR)fa;
-        q = zput(q, " eax=0x"); q = zhex(q, f[0x1C/4]);
-        q = zput(q, " ebx=0x"); q = zhex(q, f[0x10/4]);
-        q = zput(q, " d0=0x");  q = zhex(q, f[0]);
-    } else q = zput(q, " unreadable");
-    q = zput(q, "\r\n");
-    log_append(LOG_PATH, b, q);
+        q = LogPut(q, " eax=0x"); q = LogHex(q, f[0x1C/4]);
+        q = LogPut(q, " ebx=0x"); q = LogHex(q, f[0x10/4]);
+        q = LogPut(q, " d0=0x");  q = LogHex(q, f[0]);
+    } else q = LogPut(q, " unreadable");
+    q = LogPut(q, "\r\n");
+    LogAppend(LOG_PATH, b, q);
 }
 
 /* ── THE "MS-DOS" VENDOR-SPECIFIC DPMI API (INT 2Fh 168A). GH #128. ─────────────────
@@ -21573,13 +21573,13 @@ static int wow_shadow_sync(char **pp)
             }
             ++n; ++g_wow_sync_writes;
             if (p && n <= 6) {
-                p = zput(p, "  LDTSYNC idx 0x"); p = zhex(p, (DWORD)idx);
-                p = zput(p, " <- guest wrote base=0x"); p = zhex(p, dbase);
-                p = zput(p, " limit=0x");               p = zhex(p, dlim);
-                p = zput(p, " acc=0x");                 p = zhexb(p, (BYTE)((nhi >> 8) & 0xFF));
-                p = zput(p, st ? " INSTALL FAILED (g_ldt NOT updated) st=0x" : " ok st=0x");
-                p = zhex(p, (DWORD)st);
-                p = zput(p, "\r\n");
+                p = LogPut(p, "  LDTSYNC idx 0x"); p = LogHex(p, (DWORD)idx);
+                p = LogPut(p, " <- guest wrote base=0x"); p = LogHex(p, dbase);
+                p = LogPut(p, " limit=0x");               p = LogHex(p, dlim);
+                p = LogPut(p, " acc=0x");                 p = LogHexByte(p, (BYTE)((nhi >> 8) & 0xFF));
+                p = LogPut(p, st ? " INSTALL FAILED (g_ldt NOT updated) st=0x" : " ok st=0x");
+                p = LogHex(p, (DWORD)st);
+                p = LogPut(p, "\r\n");
             }
         }
     }
@@ -21731,9 +21731,9 @@ static char *pm_int21_xfer(DOS_MACHINE *mp, volatile BYTE *tib, DWORD ah, char *
     DWORD cap = (DWORD)g_pm_xfer_para * 16u;
     int rc = 0;
 
-    p = zput(p, "INT21h AH=0x"); p = zhex(p, ah);
-    p = zput(p, " (PM->V86 via xfer buf 0x"); p = zhex(p, g_pm_xfer_seg);
-    p = zput(p, ") ds:dx=0x"); p = zhex(p, dsv); p = zput(p, ":0x"); p = zhex(p, dxv);
+    p = LogPut(p, "INT21h AH=0x"); p = LogHex(p, ah);
+    p = LogPut(p, " (PM->V86 via xfer buf 0x"); p = LogHex(p, g_pm_xfer_seg);
+    p = LogPut(p, ") ds:dx=0x"); p = LogHex(p, dsv); p = LogPut(p, ":0x"); p = LogHex(p, dxv);
 
     switch (ah) {
     /* A FILENAME IN. 3Dh open, 41h delete, 43h get/set attributes, 4Eh find-first,
@@ -21744,7 +21744,7 @@ static char *pm_int21_xfer(DOS_MACHINE *mp, volatile BYTE *tib, DWORD ah, char *
         rc = pm_xfer_in(dsv, dxv, n);
         if (!rc) {
             const char *nm = (const char *)(ULONG_PTR)((DWORD)g_pm_xfer_seg << 4);
-            p = zput(p, " name=\""); p = zput(p, nm); p = zput(p, "\"");
+            p = LogPut(p, " name=\""); p = LogPut(p, nm); p = LogPut(p, "\"");
         }
         break; }
     /* A BUFFER OUT. 3Fh read CX bytes into DS:DX -- nothing to copy in. */
@@ -21752,9 +21752,9 @@ static char *pm_int21_xfer(DOS_MACHINE *mp, volatile BYTE *tib, DWORD ah, char *
         if (cxv > cap) {
             /* Say so rather than silently short-reading: a caller that asked for
                0x4000 and got 0x1000 with CF=0 would believe it had the whole file. */
-            p = zput(p, " READ 0x"); p = zhex(p, cxv);
-            p = zput(p, " EXCEEDS xfer buffer 0x"); p = zhex(p, cap);
-            p = zput(p, " -- CLAMPED (see wow_place_v86)");
+            p = LogPut(p, " READ 0x"); p = LogHex(p, cxv);
+            p = LogPut(p, " EXCEEDS xfer buffer 0x"); p = LogHex(p, cap);
+            p = LogPut(p, " -- CLAMPED (see wow_place_v86)");
             cxv = cap;
             VDM_SET16(tib, VTIB_ECX, (WORD)cxv);
         }
@@ -21772,7 +21772,7 @@ static char *pm_int21_xfer(DOS_MACHINE *mp, volatile BYTE *tib, DWORD ah, char *
     if (rc) {
         VDM_REG(tib, VTIB_EFLAGS) |= 1u;              /* CF=1 */
         VDM_SET16(tib, VTIB_EAX, 0x0005);             /* access denied */
-        p = zput(p, " -> XFER FAILED (unreadable pointer or oversize) CF=1\r\n");
+        p = LogPut(p, " -> XFER FAILED (unreadable pointer or oversize) CF=1\r\n");
         return p;
     }
 
@@ -21787,12 +21787,12 @@ static char *pm_int21_xfer(DOS_MACHINE *mp, volatile BYTE *tib, DWORD ah, char *
         DWORD got = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
         if (got > cxv) got = cxv;
         if (got) pm_xfer_out(dsv, dxv, got);
-        p = zput(p, " read=0x"); p = zhex(p, got);
+        p = LogPut(p, " read=0x"); p = LogHex(p, got);
     }
-    p = zput(p, " -> AX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-    p = zput(p, " CX=0x");    p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
-    p = zput(p, " CF=");      p = zhex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
-    p = zput(p, "\r\n");
+    p = LogPut(p, " -> AX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+    p = LogPut(p, " CX=0x");    p = LogHex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+    p = LogPut(p, " CF=");      p = LogHex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
+    p = LogPut(p, "\r\n");
     return p;
 #undef m
 }
@@ -21875,8 +21875,8 @@ static char *pm_int21_lfn(DOS_MACHINE *mp, volatile BYTE *tib, char *p)
                       else { di_k = 4; di_len = 13; } }
     if (al == 0xA0) { di_k = 4; di_len = VDM_REG(tib, VTIB_ECX) & 0xFFFF; if (di_len > 0x400) di_len = 0x400; }
 
-    p = zput(p, "INT21h AX=71"); p = zhexb(p, (BYTE)al);
-    p = zput(p, " (PM LFN -> V86 via xfer buf 0x"); p = zhex(p, g_pm_xfer_seg); p = zput(p, ")");
+    p = LogPut(p, "INT21h AX=71"); p = LogHexByte(p, (BYTE)al);
+    p = LogPut(p, " (PM LFN -> V86 via xfer buf 0x"); p = LogHex(p, g_pm_xfer_seg); p = LogPut(p, ")");
 
     /* In. A string's length is found first (bounded, never past what is readable). */
     if (dx_k == 1) { dx_len = pm_xfer_strlen(dsv, dxo, 0x3FF); rc |= pm_lfn_copy(dsv, dxo, 0x000, dx_len, 1); }
@@ -21886,13 +21886,13 @@ static char *pm_int21_lfn(DOS_MACHINE *mp, volatile BYTE *tib, char *p)
     if (rc) {
         VDM_REG(tib, VTIB_EFLAGS) |= 1u;
         VDM_SET16(tib, VTIB_EAX, 0x0005);
-        p = zput(p, " -> XFER FAILED (unreadable pointer) CF=1\r\n");
+        p = LogPut(p, " -> XFER FAILED (unreadable pointer) CF=1\r\n");
         return p;
     }
     if (dx_k == 1 || si_k == 1 || di_k == 1) {
         const char *nm = (const char *)(ULONG_PTR)(((DWORD)g_pm_xfer_seg << 4)
                                                    + (dx_k == 1 ? 0x000 : si_k == 1 ? 0x400 : 0x800));
-        p = zput(p, " name=\""); p = zput(p, nm); p = zput(p, "\"");
+        p = LogPut(p, " name=\""); p = LogPut(p, nm); p = LogPut(p, "\"");
     }
 
     VDM_SET16(tib, VTIB_DS, g_pm_xfer_seg);
@@ -21913,9 +21913,9 @@ static char *pm_int21_lfn(DOS_MACHINE *mp, volatile BYTE *tib, char *p)
         if (si_k == 2 || si_k == 4) pm_lfn_copy(dsv, sio, 0x400, pm_lfn_outlen(0x400, si_k, si_len), 0);
         if (di_k == 2 || di_k == 4) pm_lfn_copy(esv, dio, 0x800, pm_lfn_outlen(0x800, di_k, di_len), 0);
     }
-    p = zput(p, " -> AX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-    p = zput(p, " CF=");      p = zhex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
-    p = zput(p, "\r\n");
+    p = LogPut(p, " -> AX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+    p = LogPut(p, " CF=");      p = LogHex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
+    p = LogPut(p, "\r\n");
     return p;
 #undef m
 }
@@ -21995,12 +21995,12 @@ static int dpmi_reflect_irq_to_rm(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
             if (h) continue;
         }
         if (g_pm_irq_rm_fail < 16) {
-            lp = zput(lp, "PM IRQ reflect vec=0x"); lp = zhexb(lp, (BYTE)vec);
-            lp = zput(lp, " -> RM ISR: unexpected event=0x"); lp = zhex(lp, rev);
-            lp = zput(lp, " info=0x"); lp = zhex(lp, info);
-            lp = zput(lp, " CS:IP=0x"); lp = zhex(lp, VDM_REG(tib,VTIB_CS)&0xFFFF);
-            lp = zput(lp, ":0x"); lp = zhex(lp, VDM_REG(tib,VTIB_EIP)&0xFFFF);
-            lp = zput(lp, "\r\n"); log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+            lp = LogPut(lp, "PM IRQ reflect vec=0x"); lp = LogHexByte(lp, (BYTE)vec);
+            lp = LogPut(lp, " -> RM ISR: unexpected event=0x"); lp = LogHex(lp, rev);
+            lp = LogPut(lp, " info=0x"); lp = LogHex(lp, info);
+            lp = LogPut(lp, " CS:IP=0x"); lp = LogHex(lp, VDM_REG(tib,VTIB_CS)&0xFFFF);
+            lp = LogPut(lp, ":0x"); lp = LogHex(lp, VDM_REG(tib,VTIB_EIP)&0xFFFF);
+            lp = LogPut(lp, "\r\n"); LogAppend(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
         }
         break;
     }
@@ -22046,10 +22046,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
         g_pmwatch_seg <= WOW_PMBASE_MAX && g_wow_pmbase[g_pmwatch_seg - 1]) {
         char wb[160], *wq = wb;
         g_pmwatch_lin = g_wow_pmbase[g_pmwatch_seg - 1] + g_pmwatch_off;
-        wq = zput(wq, "PMWATCH armed: seg "); wq = zhex(wq, g_pmwatch_seg);
-        wq = zput(wq, " + 0x"); wq = zhex(wq, g_pmwatch_off);
-        wq = zput(wq, " = linear 0x"); wq = zhex(wq, g_pmwatch_lin);
-        wq = zput(wq, "\r\n"); log_append(LOG_PATH, wb, wq); serial_out(wb, wq);
+        wq = LogPut(wq, "PMWATCH armed: seg "); wq = LogHex(wq, g_pmwatch_seg);
+        wq = LogPut(wq, " + 0x"); wq = LogHex(wq, g_pmwatch_off);
+        wq = LogPut(wq, " = linear 0x"); wq = LogHex(wq, g_pmwatch_lin);
+        wq = LogPut(wq, "\r\n"); LogAppend(LOG_PATH, wb, wq); serial_out(wb, wq);
     }
     if (g_pmwatch_lin) {
         const volatile BYTE *w = (const volatile BYTE *)(ULONG_PTR)g_pmwatch_lin;
@@ -22058,16 +22058,16 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
             if (!g_pmwatch_have) { g_pmwatch_have = 1; g_pmwatch_last = now; }
             else if (now != g_pmwatch_last) {
                 char wb[200], *wq = wb;
-                wq = zput(wq, "PMWATCH linear 0x"); wq = zhex(wq, g_pmwatch_lin);
-                wq = zput(wq, " CHANGED 0x"); wq = zhexb(wq, g_pmwatch_last);
-                wq = zput(wq, " -> 0x"); wq = zhexb(wq, now);
-                wq = zput(wq, " -- first seen at cs:eip=0x");
-                wq = zhex(wq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                wq = zput(wq, ":0x"); wq = zhex(wq, eip);
-                wq = zput(wq, " ev=0x"); wq = zhex(wq, ev);
-                wq = zput(wq, " ax=0x"); wq = zhex(wq, ax);
-                wq = zput(wq, "\r\n");
-                log_append(LOG_PATH, wb, wq); serial_out(wb, wq);
+                wq = LogPut(wq, "PMWATCH linear 0x"); wq = LogHex(wq, g_pmwatch_lin);
+                wq = LogPut(wq, " CHANGED 0x"); wq = LogHexByte(wq, g_pmwatch_last);
+                wq = LogPut(wq, " -> 0x"); wq = LogHexByte(wq, now);
+                wq = LogPut(wq, " -- first seen at cs:eip=0x");
+                wq = LogHex(wq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                wq = LogPut(wq, ":0x"); wq = LogHex(wq, eip);
+                wq = LogPut(wq, " ev=0x"); wq = LogHex(wq, ev);
+                wq = LogPut(wq, " ax=0x"); wq = LogHex(wq, ax);
+                wq = LogPut(wq, "\r\n");
+                LogAppend(LOG_PATH, wb, wq); serial_out(wb, wq);
                 g_pmwatch_last = now;
             }
         }
@@ -22113,13 +22113,13 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
             WOWCALL_FRAME *fr = WowCallLeave(tib, res);
             int  act = WOWCALL_ACT_NONE;   /* copied out of fr -- see below */
             WORD actarg = 0;
-            p = zput(p, "WOWCALL: <- returned 0x"); p = zhex(p, res);
+            p = LogPut(p, "WOWCALL: <- returned 0x"); p = LogHex(p, res);
             if (!fr) {
-                p = zput(p, " -- ★ NOTHING WAS IN FLIGHT. Something reached the "
+                p = LogPut(p, " -- ★ NOTHING WAS IN FLIGHT. Something reached the "
                             "callback return stub that this host did not send "
                             "there; ending the run rather than resuming a context "
                             "we did not park.\r\n");
-                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                 return -1;
             }
             /* ── ⚠⚠ COPY THE ACTION OUT BEFORE ACTING ON IT. ──────────────────
@@ -22157,32 +22157,32 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         h[0] = (BYTE)v; h[1] = (BYTE)(v >> 8);
                         h[2] = (BYTE)(v >> 16); h[3] = (BYTE)(v >> 24);
                     }
-                    p = zput(p, " -- DLGPROC said FALSE; DefDlgProc default:");
-                    p = zput(p, dn);
+                    p = LogPut(p, " -- DLGPROC said FALSE; DefDlgProc default:");
+                    p = LogPut(p, dn);
                 } else {
-                    p = zput(p, " -- DLGPROC handled it");
+                    p = LogPut(p, " -- DLGPROC handled it");
                 }
                 act = WOWCALL_ACT_NONE;
             }
-            p = zput(p, " from 0x");  p = zhex(p, fr->Procedure >> 16);
-            p = zput(p, ":0x");       p = zhex(p, fr->Procedure & 0xFFFF);
-            p = zput(p, " (hwnd=0x"); p = zhex(p, fr->Window);
-            p = zput(p, " msg=0x");   p = zhex(p, fr->Message);
-            p = zput(p, ", depth now "); p = zhex(p, (DWORD)g_WowCallDepth);
-            p = zput(p, ")");
+            p = LogPut(p, " from 0x");  p = LogHex(p, fr->Procedure >> 16);
+            p = LogPut(p, ":0x");       p = LogHex(p, fr->Procedure & 0xFFFF);
+            p = LogPut(p, " (hwnd=0x"); p = LogHex(p, fr->Window);
+            p = LogPut(p, " msg=0x");   p = LogHex(p, fr->Message);
+            p = LogPut(p, ", depth now "); p = LogHex(p, (DWORD)g_WowCallDepth);
+            p = LogPut(p, ")");
             if (fr->ReturnMode == WOWCALL_RET_RESULT
                 || fr->ReturnMode == WOWCALL_RET_RESULTW) {
-                p = zput(p, " -- ★ the caller returns 0x");
-                p = zhex(p, fr->Written);
+                p = LogPut(p, " -- ★ the caller returns 0x");
+                p = LogHex(p, fr->Written);
                 /* ⚠ Say when DX was DISCARDED. A WORD-returning Win16 function
                      leaves DX holding whatever it happened to hold, and printing
                      the raw DX:AX made LocalAlloc's handle read as 0x00422502 --
                      a 32-bit number that was not a value. */
                 if (fr->ReturnMode == WOWCALL_RET_RESULTW && (res >> 16))
-                    p = zput(p, " (WORD result; DX was litter and is discarded)");
+                    p = LogPut(p, " (WORD result; DX was litter and is discarded)");
             }
             else if (fr->ReturnLinear && fr->Message == WM_CREATE16 && (WORD)res == 0xFFFF)
-                p = zput(p, " -- ★ WM_CREATE REFUSED: the call that made the window"
+                p = LogPut(p, " -- ★ WM_CREATE REFUSED: the call that made the window"
                             " now returns 0");
             /* ── ★★★★★ FOLLOW THE POINTER THE GUEST JUST HANDED BACK. ─────────
                  `LocalLock` answered with a near offset into the application's own
@@ -22202,10 +22202,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                 WOWUSER_WINDOW *ew = WowUserFindWindow(actarg);
                 DWORD off = res & 0xFFFF;
                 DWORD dgb = ew ? dpmi_sel_base(ew->Instance) : 0;
-                p = zput(p, " -- EDIT text at 0x"); p = zhex(p, ew ? ew->Instance : 0);
-                p = zput(p, ":0x"); p = zhex(p, off);
+                p = LogPut(p, " -- EDIT text at 0x"); p = LogHex(p, ew ? ew->Instance : 0);
+                p = LogPut(p, ":0x"); p = LogHex(p, off);
                 if (!ew || !ew->Window32 || !dgb || !off) {
-                    p = zput(p, " -- ★ UNREADABLE, the control keeps no text");
+                    p = LogPut(p, " -- ★ UNREADABLE, the control keeps no text");
                 } else {
                     static char etext[16384];
                     const volatile BYTE *s =
@@ -22216,10 +22216,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         { etext[n] = (char)s[n]; ++n; }
                     etext[n] = 0;
                     SetWindowTextA(ew->Window32, etext);
-                    p = zput(p, " -> 0x"); p = zhex(p, (DWORD)n);
-                    p = zput(p, " bytes into the real control");
+                    p = LogPut(p, " -> 0x"); p = LogHex(p, (DWORD)n);
+                    p = LogPut(p, " bytes into the real control");
                     if (n == (int)sizeof etext - 1)
-                        p = zput(p, " (★ TRUNCATED at the host's buffer)");
+                        p = LogPut(p, " (★ TRUNCATED at the host's buffer)");
                 }
                 /* Release the lock we took, whatever came of the read. */
                 if (ew && ew->Memory16 && g_WowUserKernelSegment) {
@@ -22234,9 +22234,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                          ew->Instance, &uarg, 1, 0,
                                          WOWCALL_RET_KEEP, NULL, ew->Window16, 0,
                                          NULL, 0, -1, 0))
-                        p = zput(p, "; LocalUnlock in flight");
+                        p = LogPut(p, "; LocalUnlock in flight");
                     else
-                        p = zput(p, "; ★ LocalUnlock REFUSED -- the block stays"
+                        p = LogPut(p, "; ★ LocalUnlock REFUSED -- the block stays"
                                     " locked");
                 }
             }
@@ -22248,9 +22248,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                  do it -- the same call, in the same DGROUP, as the load path. */
             if (act == WOWCALL_ACT_EDITLOCK) {
                 WOWUSER_WINDOW *ew = WowUserFindWindow(actarg);
-                p = zput(p, " -- EDIT block 0x"); p = zhex(p, ew ? ew->Memory16 : 0);
+                p = LogPut(p, " -- EDIT block 0x"); p = LogHex(p, ew ? ew->Memory16 : 0);
                 if (!ew || !ew->Memory16 || !ew->Window32 || !g_WowUserKernelSegment) {
-                    p = zput(p, " -- ★ NOT USABLE; the control's text is NOT saved");
+                    p = LogPut(p, " -- ★ NOT USABLE; the control's text is NOT saved");
                 } else {
                     WORD  rsel2 = wow_callback_selector();
                     DWORD ssb4  = dpmi_sel_base(
@@ -22267,9 +22267,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_EDITFILL;
                             g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = ew->Window16;
                         }
-                        p = zput(p, "; LocalLock in flight, then fill");
+                        p = LogPut(p, "; LocalLock in flight, then fill");
                     } else {
-                        p = zput(p, "; ★ LocalLock REFUSED -- text NOT saved");
+                        p = LogPut(p, "; ★ LocalLock REFUSED -- text NOT saved");
                     }
                 }
             }
@@ -22288,10 +22288,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                 WOWUSER_WINDOW *ew = WowUserFindWindow(actarg);
                 DWORD off = res & 0xFFFF;
                 DWORD dgb = ew ? dpmi_sel_base(ew->Instance) : 0;
-                p = zput(p, " -- EDIT block at 0x"); p = zhex(p, ew ? ew->Instance : 0);
-                p = zput(p, ":0x"); p = zhex(p, off);
+                p = LogPut(p, " -- EDIT block at 0x"); p = LogHex(p, ew ? ew->Instance : 0);
+                p = LogPut(p, ":0x"); p = LogHex(p, off);
                 if (!ew || !ew->Window32 || !dgb || !off) {
-                    p = zput(p, " -- ★ UNWRITABLE; the control's text is NOT saved");
+                    p = LogPut(p, " -- ★ UNWRITABLE; the control's text is NOT saved");
                 } else {
                     static char stext[16384];
                     volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)(dgb + off);
@@ -22300,10 +22300,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     if (cap > (int)sizeof stext) cap = (int)sizeof stext;
                     n = GetWindowTextA(ew->Window32, stext, cap);
                     for (i = 0; i <= n; ++i) d[i] = (BYTE)stext[i];
-                    p = zput(p, " <- 0x"); p = zhex(p, (DWORD)n);
-                    p = zput(p, " byte(s) from the real control");
+                    p = LogPut(p, " <- 0x"); p = LogHex(p, (DWORD)n);
+                    p = LogPut(p, " byte(s) from the real control");
                     if (n == cap - 1 && cap == (int)sizeof stext)
-                        p = zput(p, " (★ TRUNCATED at the host's buffer)");
+                        p = LogPut(p, " (★ TRUNCATED at the host's buffer)");
                 }
                 if (ew && ew->Memory16 && g_WowUserKernelSegment) {
                     WORD  rsel2 = wow_callback_selector();
@@ -22317,9 +22317,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                          ew->Instance, &uarg, 1, 0,
                                          WOWCALL_RET_KEEP, NULL, ew->Window16, 0,
                                          NULL, 0, -1, 0))
-                        p = zput(p, "; LocalUnlock in flight");
+                        p = LogPut(p, "; LocalUnlock in flight");
                     else
-                        p = zput(p, "; ★ LocalUnlock REFUSED -- the block stays"
+                        p = LogPut(p, "; ★ LocalUnlock REFUSED -- the block stays"
                                     " locked");
                 }
             }
@@ -22336,22 +22336,22 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                 if (act != WOWCALL_ACT_CLIPLOCK && (res >> 16))
                     fplin = dpmi_sel_base((WORD)(res >> 16)) + (res & 0xFFFF);
                 if (act == WOWCALL_ACT_CLIPLOCK) {
-                    p = zput(p, " -- CLIP GlobalAlloc -> 0x"); p = zhex(p, harg);
+                    p = LogPut(p, " -- CLIP GlobalAlloc -> 0x"); p = LogHex(p, harg);
                 } else if (act == WOWCALL_ACT_CLIPFILL) {
                     /* GlobalAlloc was sized n+1, so the copy is bounded by what was
                        asked for; the NUL goes in with it. */
                     int i;
-                    p = zput(p, " -- CLIP fill 0x"); p = zhex(p, (DWORD)g_WowUserClipboardLength);
-                    p = zput(p, " byte(s) at 0x"); p = zhex(p, res);
+                    p = LogPut(p, " -- CLIP fill 0x"); p = LogHex(p, (DWORD)g_WowUserClipboardLength);
+                    p = LogPut(p, " byte(s) at 0x"); p = LogHex(p, res);
                     if (fplin && mem_readable((ULONG_PTR)fplin, (DWORD)g_WowUserClipboardLength + 1)) {
                         volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)fplin;
                         for (i = 0; i <= g_WowUserClipboardLength; ++i) d[i] = (BYTE)g_WowUserClipboard[i];
-                    } else p = zput(p, " -- ★ GlobalLock gave no usable pointer; the"
+                    } else p = LogPut(p, " -- ★ GlobalLock gave no usable pointer; the"
                                        " block stays EMPTY");
                 } else {
                     /* The guest's text, to a block the HOST clipboard will own. */
                     int n = 0;
-                    p = zput(p, " -- CLIP put from 0x"); p = zhex(p, res);
+                    p = LogPut(p, " -- CLIP put from 0x"); p = LogHex(p, res);
                     if (fplin) {
                         const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)fplin;
                         while (n < (int)sizeof g_WowUserClipboard - 1
@@ -22368,13 +22368,13 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             GlobalUnlock(hg);
                         }
                         if (hp && SetClipboardData(g_WowUserClipboardFormat, hg)) {
-                            p = zput(p, " -> 0x"); p = zhex(p, (DWORD)n);
-                            p = zput(p, " byte(s) on the host's clipboard");
+                            p = LogPut(p, " -> 0x"); p = LogHex(p, (DWORD)n);
+                            p = LogPut(p, " byte(s) on the host's clipboard");
                         } else {
                             if (hg) GlobalFree(hg);
-                            p = zput(p, " -- ★ the host clipboard REFUSED it (not open?)");
+                            p = LogPut(p, " -- ★ the host clipboard REFUSED it (not open?)");
                         }
-                    } else p = zput(p, " -- ★ GlobalLock gave no usable pointer; nothing"
+                    } else p = LogPut(p, " -- ★ GlobalLock gave no usable pointer; nothing"
                                        " was copied");
                 }
                 /* Next link: Alloc -> Lock, and Lock -> Unlock once the bytes moved. */
@@ -22389,9 +22389,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_CLIPFILL;
                             g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = harg;
                         }
-                        p = zput(p, act == WOWCALL_ACT_CLIPLOCK ? "; GlobalLock in flight"
+                        p = LogPut(p, act == WOWCALL_ACT_CLIPLOCK ? "; GlobalLock in flight"
                                                                 : "; GlobalUnlock in flight");
-                    } else p = zput(p, "; ★ the next KERNEL call was REFUSED");
+                    } else p = LogPut(p, "; ★ the next KERNEL call was REFUSED");
                 }
             }
             /* ── ★★★★★ THE MODAL LOOP'S NEXT TURN. (session 57) ───────────────
@@ -22418,7 +22418,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                 enote[0] = 0;
                 WowEnumStep(tib, essb, ersel, 0, res, enote, sizeof enote);
-                p = zput(p, " -- "); p = zput(p, enote);
+                p = LogPut(p, " -- "); p = LogPut(p, enote);
             }
             if (act == WOWCALL_ACT_MODALPUMP) {
                 char mnote[512];
@@ -22443,18 +22443,18 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                         g_WowUserDlgDefaults[g_WowCallDepth].LParam,
                                         dn, (int)sizeof dn, &dk);
                     dn[dk < (int)sizeof dn ? dk : (int)sizeof dn - 1] = 0;
-                    p = zput(p, " -- DLGPROC said FALSE; DefDlgProc default:");
-                    p = zput(p, dn);
+                    p = LogPut(p, " -- DLGPROC said FALSE; DefDlgProc default:");
+                    p = LogPut(p, dn);
                 }
                 g_WowDlgIsDialogCall[g_WowCallDepth] = 0;
                 mnote[0] = 0;
-                p = zput(p, "\r\n");
-                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                p = LogPut(p, "\r\n");
+                LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                 WowDlgStep(tib, mssb, mrsel, &g_running, mnote, sizeof mnote);
-                p = zput(p, "WOWDLG: "); p = zput(p, mnote);
+                p = LogPut(p, "WOWDLG: "); p = LogPut(p, mnote);
             }
-            p = zput(p, "\r\n");
-            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            p = LogPut(p, "\r\n");
+            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
             return 1;
         }
         if (bb[0] == 0xC4 && bb[1] == 0xC4) {
@@ -22486,24 +22486,24 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                 DWORD now = GetTickCount();
                 LARGE_INTEGER fq;
                 QueryPerformanceFrequency(&fq);
-                p = zput(p, "WOWPERF: bops=0x");      p = zhex(p, g_wow_bops);
-                p = zput(p, " ms_since_last=0x");     p = zhex(p, now - g_wow_perf_ms);
-                p = zput(p, " log_calls=0x");         p = zhex(p, g_log_calls);
-                p = zput(p, " log_kb=0x");            p = zhex(p, g_log_bytes >> 10);
-                p = zput(p, " log_ms=0x");
-                p = zhex(p, fq.QuadPart ? (DWORD)(g_log_qpc * 1000 / fq.QuadPart) : 0);
-                p = zput(p, " pump_calls=0x");        p = zhex(p, g_WowWinPumpCalls);
-                p = zput(p, " pump_ms=0x");
-                p = zhex(p, fq.QuadPart ? (DWORD)(g_WowWinPumpTicks * 1000 / fq.QuadPart) : 0);
+                p = LogPut(p, "WOWPERF: bops=0x");      p = LogHex(p, g_wow_bops);
+                p = LogPut(p, " ms_since_last=0x");     p = LogHex(p, now - g_wow_perf_ms);
+                p = LogPut(p, " log_calls=0x");         p = LogHex(p, g_LogCalls);
+                p = LogPut(p, " log_kb=0x");            p = LogHex(p, g_LogBytes >> 10);
+                p = LogPut(p, " log_ms=0x");
+                p = LogHex(p, fq.QuadPart ? (DWORD)(g_LogQpc * 1000 / fq.QuadPart) : 0);
+                p = LogPut(p, " pump_calls=0x");        p = LogHex(p, g_WowWinPumpCalls);
+                p = LogPut(p, " pump_ms=0x");
+                p = LogHex(p, fq.QuadPart ? (DWORD)(g_WowWinPumpTicks * 1000 / fq.QuadPart) : 0);
                 /* ★ AND HOW MUCH THE FOLD SAVED, because a suppression that is
                      not counted is indistinguishable from a call that never
                      happened -- which is the whole reason this line exists. */
-                p = zput(p, " folded=0x");            p = zhex(p, g_wowfold_dropped);
-                p = zput(p, "\r\n");
+                p = LogPut(p, " folded=0x");            p = LogHex(p, g_wowfold_dropped);
+                p = LogPut(p, "\r\n");
                 g_wow_perf_ms = now;
             }
             /* ── ★★★★ STOP WRITING A KILOBYTE PER BOP. (session 56) ──────────
-                 The note on g_log_quiet in log.h prescribes exactly this: the
+                 The note on g_LogIsQuiet in log.h prescribes exactly this: the
                  answer to "is the trace the bottleneck" is not to ship the
                  silencer on, it is to stop producing the volume. TERMINAL made
                  the case unanswerable -- 155,626 GetCurrentTime calls in a
@@ -22544,31 +22544,31 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     DWORD slot = ffid & (WOWFOLD_SLOTS - 1u);
                     if (g_wowfold_seen[slot] < 0xFFFFFFFFu) ++g_wowfold_seen[slot];
                     if (g_wowfold_seen[slot] == WOWFOLD_KEEP) {
-                        p = zput(p, "WOWFOLD: FUNC=0x"); p = zhex(p, ffid);
-                        p = zput(p, " has now been traced 0x");
-                        p = zhex(p, (DWORD)WOWFOLD_KEEP);
-                        p = zput(p, " times; from here its REGISTER AND STACK DUMP"
+                        p = LogPut(p, "WOWFOLD: FUNC=0x"); p = LogHex(p, ffid);
+                        p = LogPut(p, " has now been traced 0x");
+                        p = LogHex(p, (DWORD)WOWFOLD_KEEP);
+                        p = LogPut(p, " times; from here its REGISTER AND STACK DUMP"
                                     " is dropped and only the verdict line is kept."
                                     " Nothing about what is serviced changes.\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                     }
                     if (g_wowfold_seen[slot] == WOWFOLD_HARD) {
-                        p = zput(p, "WOWFOLD: FUNC=0x"); p = zhex(p, ffid);
-                        p = zput(p, " has now been seen 0x"); p = zhex(p, (DWORD)WOWFOLD_HARD);
-                        p = zput(p, " times; from here it is COUNTED AND NOT TRACED AT"
+                        p = LogPut(p, "WOWFOLD: FUNC=0x"); p = LogHex(p, ffid);
+                        p = LogPut(p, " has now been seen 0x"); p = LogHex(p, (DWORD)WOWFOLD_HARD);
+                        p = LogPut(p, " times; from here it is COUNTED AND NOT TRACED AT"
                                     " ALL. Line counts taken from this log past this"
                                     " point are a floor, not a total.\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                     }
                     if (g_wowfold_seen[slot] > WOWFOLD_KEEP) g_wowfold_mute = 1;
                     if (g_wowfold_seen[slot] > WOWFOLD_HARD) g_wowfold_mute = 2;
                 }
             }
-            p = zput(p, "WOWBOP 0x"); p = zhexb(p, bcode);
+            p = LogPut(p, "WOWBOP 0x"); p = LogHexByte(p, bcode);
             /* Only 0x53 carries a sub-function byte. Printing bb[3] for the others
                shows the first byte of the NEXT instruction and reads like data. */
-            if (bcode == 0x53) { p = zput(p, " sub=0x"); p = zhexb(p, bsub); }
-            p = zput(p, " at 0x");    p = zhex(p, eip);
+            if (bcode == 0x53) { p = LogPut(p, " sub=0x"); p = LogHexByte(p, bsub); }
+            p = LogPut(p, " at 0x");    p = LogHex(p, eip);
             /* ── ★★ ASK pmap FIRST, BECAUSE IT ANSWERS FOR EVERY GUEST. ───────────────
                  The file-image check below is the WOW one and needs g_wow_nmod, so for a
                  DOS or DPMI guest -- ZAR, GH #23 -- it cannot run at all, and the question
@@ -22580,14 +22580,14 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
             {   DWORD cb3 = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
                 DWORD lin3 = cb3 + eip;
                 BYTE  pv3 = pmap_get(lin3);
-                p = zput(p, " cs=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                p = zput(p, " fltsel=0x"); p = zhex(p, g_dpmi_flt_code_sel);
-                p = zput(p, " lin=0x"); p = zhex(p, lin3);
+                p = LogPut(p, " cs=0x"); p = LogHex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                p = LogPut(p, " fltsel=0x"); p = LogHex(p, g_dpmi_flt_code_sel);
+                p = LogPut(p, " lin=0x"); p = LogHex(p, lin3);
                 if (pv3) {
-                    p = zput(p, " [pmap: ★ THIS IS A SITE WE PATCHED, it was INT 0x");
-                    p = zhexb(p, pv3); p = zput(p, "]");
+                    p = LogPut(p, " [pmap: ★ THIS IS A SITE WE PATCHED, it was INT 0x");
+                    p = LogHexByte(p, pv3); p = LogPut(p, "]");
                 } else {
-                    p = zput(p, " [pmap: not ours -- the guest's own C4 C4]");
+                    p = LogPut(p, " [pmap: not ours -- the guest's own C4 C4]");
                 }
             }
             /* ── ★ IS THIS ACTUALLY A PATCHED `INT nn` WHOSE VECTOR WE LOST? ───────────
@@ -22613,13 +22613,13 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         csb != (DWORD)sg->Selector << 4) continue;
                     if (mi != 0 && csb != (DWORD)sg->Selector << 4) continue;
                     {   const BYTE *f = g_wow_img[0] + sg->FileOffset + eip;
-                        p = zput(p, " [file seg"); p = zhex(p, (DWORD)(mi + 1));
-                        p = zput(p, "+0x"); p = zhex(p, eip);
-                        p = zput(p, " = "); p = zhexb(p, f[0]);
-                        p = zput(p, " "); p = zhexb(p, f[1]);
+                        p = LogPut(p, " [file seg"); p = LogHex(p, (DWORD)(mi + 1));
+                        p = LogPut(p, "+0x"); p = LogHex(p, eip);
+                        p = LogPut(p, " = "); p = LogHexByte(p, f[0]);
+                        p = LogPut(p, " "); p = LogHexByte(p, f[1]);
                         if (f[0] == 0xCD)
-                            p = zput(p, " -- ★ A PATCHED INT, NOT A BOP; vector lost");
-                        p = zput(p, "]");
+                            p = LogPut(p, " -- ★ A PATCHED INT, NOT A BOP; vector lost");
+                        p = LogPut(p, "]");
                     }
                     break;
                 }
@@ -22636,22 +22636,22 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                 DWORD sp16 = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
                 const volatile BYTE *st = (const volatile BYTE *)(ULONG_PTR)(ssb + sp16);
                 int w;
-                p = zput(p, " ax=0x");  p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-                p = zput(p, " bx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                p = zput(p, " cx=0x");  p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
-                p = zput(p, " dx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                p = zput(p, " si=0x");  p = zhex(p, VDM_REG(tib, VTIB_ESI) & 0xFFFF);
-                p = zput(p, " di=0x");  p = zhex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
-                p = zput(p, " bp=0x");  p = zhex(p, VDM_REG(tib, VTIB_EBP) & 0xFFFF);
-                p = zput(p, " ds=0x");  p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                p = LogPut(p, " ax=0x");  p = LogHex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                p = LogPut(p, " bx=0x");  p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                p = LogPut(p, " cx=0x");  p = LogHex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+                p = LogPut(p, " dx=0x");  p = LogHex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                p = LogPut(p, " si=0x");  p = LogHex(p, VDM_REG(tib, VTIB_ESI) & 0xFFFF);
+                p = LogPut(p, " di=0x");  p = LogHex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+                p = LogPut(p, " bp=0x");  p = LogHex(p, VDM_REG(tib, VTIB_EBP) & 0xFFFF);
+                p = LogPut(p, " ds=0x");  p = LogHex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
                 /* SP-relative lands in the thunk's saved-register block. The CALLER's
                    arguments are above the frame, so dump from BP too -- and for the
                    inline 0x56 sites, which have no such prologue, SP is the right
                    end. Both, rather than choosing wrong. */
-                p = zput(p, "\r\n    @ss:sp");
+                p = LogPut(p, "\r\n    @ss:sp");
                 for (w = 0; w < 10; ++w) {
-                    p = zput(p, " ");
-                    p = zhex(p, (DWORD)(st[w * 2] | (st[w * 2 + 1] << 8)));
+                    p = LogPut(p, " ");
+                    p = LogHex(p, (DWORD)(st[w * 2] | (st[w * 2 + 1] << 8)));
                 }
                 {   DWORD bp16 = VDM_REG(tib, VTIB_EBP) & 0xFFFF;
                     const volatile BYTE *fb =
@@ -22691,12 +22691,12 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         DWORD sseg = (DWORD)(fb[4] | (fb[5] << 8));
                         int   kt   = sseg == (VDM_REG(tib, VTIB_CS) & 0xFFFF);
                         const char *nm = kt ? Wow32Name((WORD)fid) : NULL;
-                        p = zput(p, " FUNC=0x"); p = zhex(p, fid);
-                        if (nm) { p = zput(p, " "); p = zput(p, nm); }
-                        if (kt) p = zput(p, " [krnl]");
+                        p = LogPut(p, " FUNC=0x"); p = LogHex(p, fid);
+                        if (nm) { p = LogPut(p, " "); p = LogPut(p, nm); }
+                        if (kt) p = LogPut(p, " [krnl]");
                         else {
                             int mk = wow_module_of_sel((WORD)sseg);
-                            p = zput(p, " [");
+                            p = LogPut(p, " [");
                             /* ⚠ `?` MEANT TWO DIFFERENT THINGS AND THAT COST A
                                  READING. wow_module_of_sel is a BIND-STAGE table:
                                  it cannot name a selector krnl386 allocated at run
@@ -22707,18 +22707,18 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  the host knows is an instrument lying quietly.
                                  The two tables we HAVE identified say so by name. */
                             if (g_wow_user_seg && sseg == g_wow_user_seg)
-                                p = zput(p, "USER");
+                                p = LogPut(p, "USER");
                             else if (g_wow_krnl2_seg && sseg == g_wow_krnl2_seg)
-                                p = zput(p, "krnl386 seg2");
+                                p = LogPut(p, "krnl386 seg2");
                             else if (g_wow_sound_seg && sseg == g_wow_sound_seg)
-                                p = zput(p, "SOUND");
+                                p = LogPut(p, "SOUND");
                             else if (g_wow_mmedia_seg && sseg == g_wow_mmedia_seg)
-                                p = zput(p, "MMSYSTEM");
+                                p = LogPut(p, "MMSYSTEM");
                             else
-                                p = zput(p, mk >= 0 ? g_wow_name[mk] : "?");
-                            p = zput(p, "'s table -- a DIFFERENT id space]");
+                                p = LogPut(p, mk >= 0 ? g_wow_name[mk] : "?");
+                            p = LogPut(p, "'s table -- a DIFFERENT id space]");
                         }
-                        p = zput(p, " stub=0x"); p = zhex(p, sseg);
+                        p = LogPut(p, " stub=0x"); p = LogHex(p, sseg);
                         /* ── ★ WHICH TASK IS CALLING. (GH #128, session 38) ───────────
                              krnl386 keeps the current task's TDB selector in its DGROUP
                              at offset 0x228 (observed), and at EVERY WOW32 call the
@@ -22744,8 +22744,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             if (dgb) {
                                 const volatile BYTE *dg =
                                     (const volatile BYTE *)(ULONG_PTR)dgb;
-                                p = zput(p, " task=0x");
-                                p = zhex(p, (DWORD)(dg[0x228] | (dg[0x229] << 8)));
+                                p = LogPut(p, " task=0x");
+                                p = LogHex(p, (DWORD)(dg[0x228] | (dg[0x229] << 8)));
                                 /* ★ And keep it where USER's GetWindowTask can
                                      see it -- the same word, read once. */
                                 g_WowUserCurrentTask = (WORD)(dg[0x228] | (dg[0x229] << 8));
@@ -22758,12 +22758,12 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                              every line -- and the day something writes it, the log
                              says so instead of the guest quietly returning
                              somewhere else. Predict the number before the run. */
-                        p = zput(p, " mode=");
-                        p = zhex(p, (DWORD)(fb[WOW32_OFF_MODE]
+                        p = LogPut(p, " mode=");
+                        p = LogHex(p, (DWORD)(fb[WOW32_OFF_MODE]
                                             | (fb[WOW32_OFF_MODE + 1] << 8)));
-                        p = zput(p, " args=");   p = zhex(p, nby);
-                        p = zput(p, "b retstub=0x");
-                        p = zhex(p, (DWORD)(fb[2] | (fb[3] << 8)));
+                        p = LogPut(p, " args=");   p = LogHex(p, nby);
+                        p = LogPut(p, "b retstub=0x");
+                        p = LogHex(p, (DWORD)(fb[2] | (fb[3] << 8)));
                         /* ⚠ A CALL SITE IS A SEGMENT AND AN OFFSET. This printed the
                              offset alone, and every reader (including this session)
                              assumed segment 1 -- krnl386's main segment, where most of
@@ -22772,18 +22772,18 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                              frame word above it: the caller was 0x01d7, a DIFFERENT
                              segment of krnl386. An instrument that names half an address
                              invites looking in the wrong module. */
-                        p = zput(p, " from=0x");
-                        p = zhex(p, (DWORD)(fb[14] | (fb[15] << 8)));
-                        p = zput(p, ":0x");
-                        p = zhex(p, (DWORD)(fb[12] | (fb[13] << 8)));
+                        p = LogPut(p, " from=0x");
+                        p = LogHex(p, (DWORD)(fb[14] | (fb[15] << 8)));
+                        p = LogPut(p, ":0x");
+                        p = LogHex(p, (DWORD)(fb[12] | (fb[13] << 8)));
                         if (na && na <= 16) {
-                            p = zput(p, " (");
+                            p = LogPut(p, " (");
                             for (k = 0; k < na; ++k) {
-                                if (k) p = zput(p, " ");
-                                p = zhex(p, (DWORD)(fb[WOW32_OFF_ARGS + k * 2]
+                                if (k) p = LogPut(p, " ");
+                                p = LogHex(p, (DWORD)(fb[WOW32_OFF_ARGS + k * 2]
                                              | (fb[WOW32_OFF_ARGS + k * 2 + 1] << 8)));
                             }
-                            p = zput(p, ")");
+                            p = LogPut(p, ")");
                             /* ── ★★ krnl386 SAYS WHY IT IS GIVING UP, AND WE NEVER READ IT. ──
                                  Its last act before ExitKernelThunk is WOW32 0xc4 -- the fatal
                                  error box -- and two of the words in this frame are a far
@@ -22846,10 +22846,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                        instrument that corrupts its own stack to print one more
                                        message is worse than one that prints fewer. */
                                     if ((size_t)(p - base) > sizeof(report) - 400) break;
-                                    p = zput(p, "\r\n    ★ arg["); p = zhex(p, k);
-                                    p = zput(p, "] 0x"); p = zhex(p, asel);
-                                    p = zput(p, ":0x"); p = zhex(p, aoff);
-                                    p = zput(p, " = \"");
+                                    p = LogPut(p, "\r\n    ★ arg["); p = LogHex(p, k);
+                                    p = LogPut(p, "] 0x"); p = LogHex(p, asel);
+                                    p = LogPut(p, ":0x"); p = LogHex(p, aoff);
+                                    p = LogPut(p, " = \"");
                                     { unsigned j;
                                       for (j = 0; j < n2; ++j) {
                                           BYTE c2 = s[j];
@@ -22858,25 +22858,25 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                           else if (c2 == '\n') { *p++ = '\\'; *p++ = 'n'; }
                                           else                   *p++ = (char)c2;
                                       } }
-                                    p = zput(p, "\"");
+                                    p = LogPut(p, "\"");
                                 }
                             }
                         }
                     }
-                    p = zput(p, "\r\n    @ss:bp");
+                    p = LogPut(p, "\r\n    @ss:bp");
                     for (w = 0; w < 12; ++w) {
-                        p = zput(p, " ");
-                        p = zhex(p, (DWORD)(fb[w * 2] | (fb[w * 2 + 1] << 8)));
+                        p = LogPut(p, " ");
+                        p = LogHex(p, (DWORD)(fb[w * 2] | (fb[w * 2 + 1] << 8)));
                     }
                 }
-                p = zput(p, "\r\n   ");
+                p = LogPut(p, "\r\n   ");
             }
             if (bcode == 0x53 && bsub == 0x03) {
                 VDM_SET16(tib, VTIB_EBX, 0);
                 VDM_SET16(tib, VTIB_EDX, 0);
                 VDM_SET16(tib, VTIB_ES,  0);
                 VDM_REG(tib, VTIB_EIP) += 4;
-                p = zput(p, " -> no 32-bit companion (BX:DX=0) => it will use the "
+                p = LogPut(p, " -> no 32-bit companion (BX:DX=0) => it will use the "
                             "per-call BOP path\r\n");
                 wowlog_flush(base, &p);
                 return 1;
@@ -22956,10 +22956,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                 {   int md = wow32_mode_override((WORD)f.Id);
                     if (md >= 0) {
                         Wow32PokeWord(f.FrameBase + WOW32_OFF_MODE, (WORD)md);
-                        p = zput(p, "\n     ** wowmode.txt OVERRIDE: returning"
+                        p = LogPut(p, "\n     ** wowmode.txt OVERRIDE: returning"
                                     " through epilogue mode ");
-                        p = zhex(p, (DWORD)md);
-                        p = zput(p, " -- an EXPERIMENT, not a service **");
+                        p = LogHex(p, (DWORD)md);
+                        p = LogPut(p, " -- an EXPERIMENT, not a service **");
                     }
                 }
                 /* ── ★★★ THE SCHEDULER'S TWO BOP HOOKS. See src/wow/wowsched.h. ──
@@ -23007,12 +23007,12 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             wowsched_setcur(child);
                             wow_task_chdir(child, &p);
                             ++g_ws_switches;
-                            p = zput(p, "\n     WOWSCHED: task 0x"); p = zhex(p, fcur);
-                            p = zput(p, " launched task 0x"); p = zhex(p, child);
-                            p = zput(p, " -- LAUNCH-FIRST at depth 0x"); p = zhex(p, (DWORD)g_WowCallDepth);
-                            p = zput(p, ": the child runs to its first yield before the"
+                            p = LogPut(p, "\n     WOWSCHED: task 0x"); p = LogHex(p, fcur);
+                            p = LogPut(p, " launched task 0x"); p = LogHex(p, child);
+                            p = LogPut(p, " -- LAUNCH-FIRST at depth 0x"); p = LogHex(p, (DWORD)g_WowCallDepth);
+                            p = LogPut(p, ": the child runs to its first yield before the"
                                         " parent's call (id 0x");
-                            p = zhex(p, f.Id); p = zput(p, ") is serviced (#306)\r\n");
+                            p = LogHex(p, f.Id); p = LogPut(p, ") is serviced (#306)\r\n");
                             wowlog_flush(base, &p);
                             return 1;
                         }
@@ -23061,13 +23061,13 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         Wow32SetReturn(&f, hinst);
                         Wow32PokeWord(f.FrameBase + WOW32_OFF_MODE, WOW32_MODE_SWITCHBACK);
                         ++g_ws_switches;
-                        p = zput(p, "\n     WOWSCHED: task 0x"); p = zhex(p, cur);
-                        p = zput(p, " parked at its launch; creator sent home through"
+                        p = LogPut(p, "\n     WOWSCHED: task 0x"); p = LogHex(p, cur);
+                        p = LogPut(p, " parked at its launch; creator sent home through"
                                     " epilogue mode 25 with LoadModule result 0x");
-                        p = zhex(p, hinst);
-                        p = zput(p, fromtdb ? " (TDB+0x1c)" : " (SS&~1 -- verified at the"
+                        p = LogHex(p, hinst);
+                        p = LogPut(p, fromtdb ? " (TDB+0x1c)" : " (SS&~1 -- verified at the"
                                                               " resume)");
-                        p = zput(p, "\r\n");
+                        p = LogPut(p, "\r\n");
                         wowlog_flush(base, &p);
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                         return 1;
@@ -23118,10 +23118,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         wowsched_setcur(to);
                         wow_task_chdir(to, &p);           /* #164 */
                         ++g_ws_switches;
-                        p = zput(p, "\n     WOWSCHED: task 0x"); p = zhex(p, cur);
-                        p = zput(p, " waited for a message -- YIELDING to parked task 0x");
-                        p = zhex(p, to);
-                        p = zput(p, " ([0x228] follows the context)\r\n");
+                        p = LogPut(p, "\n     WOWSCHED: task 0x"); p = LogHex(p, cur);
+                        p = LogPut(p, " waited for a message -- YIELDING to parked task 0x");
+                        p = LogHex(p, to);
+                        p = LogPut(p, " ([0x228] follows the context)\r\n");
                         wowlog_flush(base, &p);
                         /* EIP is NOT advanced here: the whole context has been
                            replaced, and the resumed one already points where it
@@ -23149,7 +23149,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     ++g_wow_idlewaits;
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                     if (g_wow_idlewaits <= 4) {
-                        p = zput(p, " -> SERVICED: idle wait (no parked task to yield to),"
+                        p = LogPut(p, " -> SERVICED: idle wait (no parked task to yield to),"
                                     " answered 0 after up to 50 ms\r\n");
                         wowlog_flush(base, &p);
                     } else p = base;
@@ -23191,22 +23191,22 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     DWORD bbase = dpmi_sel_base(bsel);
                     DWORD rd = 0;
                     int ok = 0;
-                    p = zput(p, "\n     WOW32 0x97 read (site 0x"); p = zhex(p, f.CallSite);
-                    p = zput(p, ", may NOT decline) h="); p = zhex(p, h);
-                    p = zput(p, " cnt=0x"); p = zhex(p, cnt);
-                    p = zput(p, " -> 0x"); p = zhex(p, bsel);
-                    p = zput(p, ":0x"); p = zhex(p, boff);
-                    p = zput(p, " lin=0x"); p = zhex(p, bbase + boff);
+                    p = LogPut(p, "\n     WOW32 0x97 read (site 0x"); p = LogHex(p, f.CallSite);
+                    p = LogPut(p, ", may NOT decline) h="); p = LogHex(p, h);
+                    p = LogPut(p, " cnt=0x"); p = LogHex(p, cnt);
+                    p = LogPut(p, " -> 0x"); p = LogHex(p, bsel);
+                    p = LogPut(p, ":0x"); p = LogHex(p, boff);
+                    p = LogPut(p, " lin=0x"); p = LogHex(p, bbase + boff);
                     if (h < DOS_MAX_FILES && m.FileHandles[h] && bbase
                         && host_writable((void *)(ULONG_PTR)(bbase + boff), cnt)) {
                         ok = ReadFile(m.FileHandles[h], (void *)(ULONG_PTR)(bbase + boff),
                                       cnt, &rd, NULL) ? 1 : 0;
                     }
                     if (ok) { Wow32SetReturn(&f, rd); ++g_wow32_serviced;
-                              p = zput(p, " -> read 0x"); p = zhex(p, rd); p = zput(p, "b"); }
+                              p = LogPut(p, " -> read 0x"); p = LogHex(p, rd); p = LogPut(p, "b"); }
                     else    { Wow32SetReturn(&f, 0xFFFFFFFFu); ++g_wow32_unimpl;
-                              p = zput(p, " -> FAILED (bad handle/selector/buffer)"); }
-                    p = zput(p, "\r\n");
+                              p = LogPut(p, " -> FAILED (bad handle/selector/buffer)"); }
+                    p = LogPut(p, "\r\n");
                     wowlog_flush(base, &p);
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                     return 1;
@@ -23230,25 +23230,25 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     {   DWORD cf = VDM_REG(tib, VTIB_EFLAGS) & 1u;
                         VDM_REG(tib, VTIB_EAX) = sax; VDM_REG(tib, VTIB_EDX) = sdx;
                         VDM_REG(tib, VTIB_DS)  = sds; VDM_REG(tib, VTIB_ESI) = ssi;
-                        p = zput(p, "  WOW32 0xc9 GetCurrentDirectory drive=0x");
-                        p = zhex(p, drv);
-                        p = zput(p, " -> \""); p = zput(p, (const char *)xb);
-                        p = zput(p, "\" cf="); p = zhex(p, cf);
+                        p = LogPut(p, "  WOW32 0xc9 GetCurrentDirectory drive=0x");
+                        p = LogHex(p, drv);
+                        p = LogPut(p, " -> \""); p = LogPut(p, (const char *)xb);
+                        p = LogPut(p, "\" cf="); p = LogHex(p, cf);
                         if (!cf && gbase) {
                             volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)(gbase + gsi);
                             if (mem_readable((ULONG_PTR)d, 68))
                                 for (k = 0; k < 68; ++k) d[k] = xb[k];
-                            else { cf = 1; p = zput(p, " (BUFFER UNREACHABLE)"); }
+                            else { cf = 1; p = LogPut(p, " (BUFFER UNREACHABLE)"); }
                         }
                         /* DX must not come back 0xFFFF -- that is this call site's
                            failure sentinel, and it is checked before AX. */
                         Wow32SetReturn(&f, cf ? 0x0000000Fu : 0u);
-                        p = zput(p, "\r\n");
+                        p = LogPut(p, "\r\n");
                     }
                     ++g_wow32_serviced;
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
-                    p = zput(p, " -> SERVICED (DOS-backed), returned 0x");
-                    p = zhex(p, f.Result); p = zput(p, "\r\n");
+                    p = LogPut(p, " -> SERVICED (DOS-backed), returned 0x");
+                    p = LogHex(p, f.Result); p = LogPut(p, "\r\n");
                     wowlog_flush(base, &p);
                     return 1;
                 }
@@ -23283,20 +23283,20 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     volatile BYTE *dst = Wow32ArgPointer(&f, 0);
                     char name[300], full[300];
                     int k;
-                    p = zput(p, "  WOW32 0xc5 ResolveModulePath ");
+                    p = LogPut(p, "  WOW32 0xc5 ResolveModulePath ");
                     if (!src) {
                         /* (dst, NULL) is the RELEASE half of the pair. Nothing to
                            free -- the scratch is a fixed paragraph -- but it must
                            still be answered, and it must say so in the log rather
                            than look like a resolve that found nothing. */
-                        p = zput(p, "RELEASE");
+                        p = LogPut(p, "RELEASE");
                         Wow32SetReturn(&f, 1);
                     } else {
                         DWORD n = 0; char *fp = 0;
                         for (k = 0; k < (int)sizeof name - 1 && src[k]; ++k)
                             name[k] = (char)src[k];
                         name[k] = 0;
-                        p = zput(p, "\""); p = zput(p, name); p = zput(p, "\" -> ");
+                        p = LogPut(p, "\""); p = LogPut(p, name); p = LogPut(p, "\" -> ");
                         if (name[0])
                             n = SearchPathA(NULL, name, NULL, sizeof full, full, &fp);
                         if (n && n < sizeof full) {       /* krnl386 opens this via DOS: 8.3 only */
@@ -23304,7 +23304,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             for (n = 0; full[n]; ++n) ;
                         }
                         if (!n || n >= sizeof full || !dst) {
-                            p = zput(p, "NOT FOUND (krnl386 will fall back to its own"
+                            p = LogPut(p, "NOT FOUND (krnl386 will fall back to its own"
                                         " name, as it does today)");
                             Wow32SetReturn(&f, 0);
                         } else {
@@ -23315,23 +23315,23 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 pb[k] = (BYTE)full[k];
                             pb[k < 0x1FF ? k : 0x1FF] = 0;
                             if (!sel) {
-                                p = zput(p, "NO SELECTOR (LDT full)");
+                                p = LogPut(p, "NO SELECTOR (LDT full)");
                                 Wow32SetReturn(&f, 0);
                             } else {
                                 Wow32PokeWord(dst,     0);        /* offset  */
                                 Wow32PokeWord(dst + 2, sel);      /* segment */
-                                p = zput(p, "\""); p = zput(p, full);
-                                p = zput(p, "\" at 0x"); p = zhex(p, sel);
-                                p = zput(p, ":0000");
+                                p = LogPut(p, "\""); p = LogPut(p, full);
+                                p = LogPut(p, "\" at 0x"); p = LogHex(p, sel);
+                                p = LogPut(p, ":0000");
                                 Wow32SetReturn(&f, 1);
                             }
                         }
                     }
-                    p = zput(p, "\r\n");
+                    p = LogPut(p, "\r\n");
                     ++g_wow32_serviced;
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
-                    p = zput(p, " -> SERVICED (host path search), returned 0x");
-                    p = zhex(p, f.Result); p = zput(p, "\r\n");
+                    p = LogPut(p, " -> SERVICED (host path search), returned 0x");
+                    p = LogHex(p, f.Result); p = LogPut(p, "\r\n");
                     wowlog_flush(base, &p);
                     return 1;
                 }
@@ -23344,9 +23344,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                      one of those bytes is after the last thing that happened.
                    ⇒ End the run where the guest ended it, and say which code. */
                 if (f.IsKernel && f.Id == WOW32_EXITKERNELTHUNK) {
-                    p = zput(p, "\n     ★ ExitKernelThunk(0x");
-                    p = zhex(p, Wow32ArgWord(&f, 0));
-                    p = zput(p, ") -- krnl386 is shutting the VDM down; ending the run"
+                    p = LogPut(p, "\n     ★ ExitKernelThunk(0x");
+                    p = LogHex(p, Wow32ArgWord(&f, 0));
+                    p = LogPut(p, ") -- krnl386 is shutting the VDM down; ending the run"
                                 " here rather than looping on the UD0 behind it\r\n");
                     wowlog_flush(base, &p);
                     return -1;
@@ -23358,10 +23358,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                 if (!f.IsKernel && !g_wow_krnl2_seg && f.StubSegment != g_wow_user_seg
                     && wow_krnl2_stub(f.Id, Wow32PeekWord(f.FrameBase + 2))) {
                     g_wow_krnl2_seg = f.StubSegment;
-                    p = zput(p, "\n     WOWKRNL2: krnl386's SECOND stub table is in"
+                    p = LogPut(p, "\n     WOWKRNL2: krnl386's SECOND stub table is in"
                                 " segment 0x");
-                    p = zhex(p, g_wow_krnl2_seg);
-                    p = zput(p, " (learned from the stub's own bytes in the file)");
+                    p = LogHex(p, g_wow_krnl2_seg);
+                    p = LogPut(p, " (learned from the stub's own bytes in the file)");
                 }
                 /* ── ★★★★ seg2 0xd1: THE NEW TASK'S ENVIRONMENT. ───────────────
                      ★ WHAT IT IS, AND HOW THAT IS KNOWN. It is called once per task
@@ -23426,8 +23426,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     DWORD pblin = pbsel ? dpmi_sel_base(pbsel) : 0;
                     WORD  env = 0;
                     const char *src = "";
-                    p = zput(p, "\n     WOW32 seg2 0xd1 task environment: parmblock 0x");
-                    p = zhex(p, pbsel); p = zput(p, ":0x"); p = zhex(p, pboff);
+                    p = LogPut(p, "\n     WOW32 seg2 0xd1 task environment: parmblock 0x");
+                    p = LogHex(p, pbsel); p = LogPut(p, ":0x"); p = LogHex(p, pboff);
                     if (pblin && host_readable((const void *)(ULONG_PTR)(pblin + pboff), 2)) {
                         const volatile BYTE *pb =
                             (const volatile BYTE *)(ULONG_PTR)(pblin + pboff);
@@ -23437,8 +23437,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     if (!env && g_wow_psp_n > 0) {
                         WORD  psel = g_wow_psp_sel[g_wow_psp_n - 1];
                         DWORD plin = dpmi_sel_base(psel);
-                        p = zput(p, " segEnv=0 (inherit) parent PSP 0x");
-                        p = zhex(p, psel);
+                        p = LogPut(p, " segEnv=0 (inherit) parent PSP 0x");
+                        p = LogHex(p, psel);
                         if (plin && host_readable((const void *)(ULONG_PTR)plin, 0x2e)) {
                             const volatile BYTE *pe =
                                 (const volatile BYTE *)(ULONG_PTR)plin;
@@ -23448,9 +23448,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     }
                     {   DWORD elin = env ? dpmi_sel_base(env) : 0;
                         DWORD cap  = (DWORD)WOW_ENV_PARAS * 16u;
-                        p = zput(p, " src 0x"); p = zhex(p, env);
-                        p = zput(p, " ("); p = zput(p, src[0] ? src : "nothing");
-                        p = zput(p, ")");
+                        p = LogPut(p, " src 0x"); p = LogHex(p, env);
+                        p = LogPut(p, " ("); p = LogPut(p, src[0] ? src : "nothing");
+                        p = LogPut(p, ")");
                         if (elin && g_wow_env_seg &&
                             host_readable((const void *)(ULONG_PTR)elin, cap)) {
                             const volatile BYTE *s =
@@ -23477,23 +23477,23 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             if (i > cap) i = cap;
                             for (k = 0; k < i; ++k) d[k] = s[k];
                             sel = dpmi_seg_to_desc(g_wow_env_seg);
-                            p = zput(p, " -> copied 0x"); p = zhex(p, i);
-                            p = zput(p, " bytes to 0x"); p = zhex(p, g_wow_env_seg);
-                            p = zput(p, ":0000 as sel 0x"); p = zhex(p, sel);
+                            p = LogPut(p, " -> copied 0x"); p = LogHex(p, i);
+                            p = LogPut(p, " bytes to 0x"); p = LogHex(p, g_wow_env_seg);
+                            p = LogPut(p, ":0000 as sel 0x"); p = LogHex(p, sel);
                             if (sel) {
                                 Wow32SetReturn(&f, sel);
                                 ++g_wow32_serviced;
                                 VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
-                                p = zput(p, "\r\n -> SERVICED (task environment),"
+                                p = LogPut(p, "\r\n -> SERVICED (task environment),"
                                             " returned 0x");
-                                p = zhex(p, f.Result); p = zput(p, "\r\n");
+                                p = LogHex(p, f.Result); p = LogPut(p, "\r\n");
                                 wowlog_flush(base, &p);
                                 p = base;
                                 return 1;
                             }
-                            p = zput(p, " -- NO SELECTOR (LDT full)");
+                            p = LogPut(p, " -- NO SELECTOR (LDT full)");
                         }
-                        p = zput(p, " -> NO ENVIRONMENT TO COPY -- left unimplemented"
+                        p = LogPut(p, " -> NO ENVIRONMENT TO COPY -- left unimplemented"
                                     " rather than invented");
                     }
                 }
@@ -23505,9 +23505,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                 if (!f.IsKernel && !g_wow_user_seg
                     && wow_user_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
                     g_wow_user_seg = f.StubSegment;
-                    p = zput(p, "\n     WOWUSER: USER's code segment is 0x");
-                    p = zhex(p, g_wow_user_seg);
-                    p = zput(p, " (learned from its own stub, not from the module table)");
+                    p = LogPut(p, "\n     WOWUSER: USER's code segment is 0x");
+                    p = LogHex(p, g_wow_user_seg);
+                    p = LogPut(p, " (learned from its own stub, not from the module table)");
                 }
                 if (!f.IsKernel && f.StubSegment == g_wow_user_seg && g_wow_user_seg) {
                     char note[224];
@@ -23557,10 +23557,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             wowsched_setcur(yto);
                             wow_task_chdir(yto, &p);
                             ++g_ws_switches;
-                            p = zput(p, "\n     WOWSCHED: task 0x"); p = zhex(p, ycur);
-                            p = zput(p, " has an empty GetMessage -- YIELDING to task 0x");
-                            p = zhex(p, yto);
-                            p = zput(p, ", launched and never run or parked mid-work (#306); its GetMessage"
+                            p = LogPut(p, "\n     WOWSCHED: task 0x"); p = LogHex(p, ycur);
+                            p = LogPut(p, " has an empty GetMessage -- YIELDING to task 0x");
+                            p = LogHex(p, yto);
+                            p = LogPut(p, ", launched and never run or parked mid-work (#306); its GetMessage"
                                         " is re-issued when it resumes\r\n");
                             wowlog_flush(base, &p);
                             return 1;
@@ -23595,13 +23595,13 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         if (!g_WowMsgIsWaitAnnounced) {
                             char sb2[128], *sq = sb2;
                             g_WowMsgIsWaitAnnounced = 1;
-                            sq = zput(sq, "\n     WOWMSG: a blocked GetMessage waits ");
-                            if (g_WowMsgWaitMs) { sq = zhex(sq, g_WowMsgWaitMs);
-                                                    sq = zput(sq, " ms then answers"
+                            sq = LogPut(sq, "\n     WOWMSG: a blocked GetMessage waits ");
+                            if (g_WowMsgWaitMs) { sq = LogHex(sq, g_WowMsgWaitMs);
+                                                    sq = LogPut(sq, " ms then answers"
                                                                   " WM_QUIT"); }
-                            else sq = zput(sq, "FOREVER (wowidle.txt = 0)");
-                            sq = zput(sq, "\r\n");
-                            log_append(LOG_PATH, sb2, sq); serial_out(sb2, sq);
+                            else sq = LogPut(sq, "FOREVER (wowidle.txt = 0)");
+                            sq = LogPut(sq, "\r\n");
+                            LogAppend(LOG_PATH, sb2, sq); serial_out(sb2, sq);
                         }
                         /* ── ★★★ A BLOCKED Win16 TASK IS A Win32 MESSAGE PUMP.
                              (session 42, replacing session 41's keyboard-event
@@ -23673,30 +23673,30 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 if (beats < 20 && GetTickCount() - beat >= 2000) {
                                     char hb[160], *hq = hb;
                                     beat = GetTickCount(); ++beats;
-                                    hq = zput(hq, "     WOWMSG: blocked 0x");
-                                    hq = zhex(hq, beat - t0);
-                                    hq = zput(hq, " ms; Win32 messages dispatched on"
+                                    hq = LogPut(hq, "     WOWMSG: blocked 0x");
+                                    hq = LogHex(hq, beat - t0);
+                                    hq = LogPut(hq, " ms; Win32 messages dispatched on"
                                                   " this thread since blocking 0x");
-                                    hq = zhex(hq, g_WowWinPumped - pumped0);
-                                    hq = zput(hq, " (total 0x");
-                                    hq = zhex(hq, g_WowWinPumped);
-                                    hq = zput(hq, "), Win16 queued 0x");
-                                    hq = zhex(hq, (DWORD)g_WowMsgCount);
-                                    hq = zput(hq, "\r\n");
-                                    log_append(LOG_PATH, hb, hq); serial_out(hb, hq);
+                                    hq = LogHex(hq, g_WowWinPumped - pumped0);
+                                    hq = LogPut(hq, " (total 0x");
+                                    hq = LogHex(hq, g_WowWinPumped);
+                                    hq = LogPut(hq, "), Win16 queued 0x");
+                                    hq = LogHex(hq, (DWORD)g_WowMsgCount);
+                                    hq = LogPut(hq, "\r\n");
+                                    LogAppend(LOG_PATH, hb, hq); serial_out(hb, hq);
                                 }
                             }
                             g_WowMsgInWait = 0;
                         }
                         waited = GetTickCount() - t0;
-                        p = zput(p, "\n     WOWMSG: GetMessage with an empty queue"
+                        p = LogPut(p, "\n     WOWMSG: GetMessage with an empty queue"
                                     " -- BLOCKED for 0x");
-                        p = zhex(p, waited);
-                        p = zput(p, " ms; ");
-                        p = zhex(p, (DWORD)g_WowMsgCount);
-                        p = zput(p, " message(s) arrived\r\n");
+                        p = LogHex(p, waited);
+                        p = LogPut(p, " ms; ");
+                        p = LogHex(p, (DWORD)g_WowMsgCount);
+                        p = LogPut(p, " message(s) arrived\r\n");
                         if (ewoke) {
-                            p = zput(p, "     WOWSCHED: a parked task's message arrived"
+                            p = LogPut(p, "     WOWSCHED: a parked task's message arrived"
                                         " -- yielding to it\r\n");
                             wowlog_flush(base, &p);
                             goto ws_again_e;
@@ -23710,7 +23710,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                          the box is up stops dead at the call before it -- which
                          has already misled a reading twice this session. */
                     if (f.Id == WOWUSER_MESSAGEBOX) {
-                        p = zput(p, "\n     WOWUSER: MessageBox is MODAL -- the VDM"
+                        p = LogPut(p, "\n     WOWUSER: MessageBox is MODAL -- the VDM"
                                     " stops here until it is dismissed; the"
                                     " SERVICED line carries its TEXT and follows"
                                     " when it is\r\n");
@@ -23719,10 +23719,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     if (WowUserCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
-                        p = zput(p, " -> SERVICED (USER), returned 0x");
-                        p = zhex(p, f.Result);
-                        if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
-                        p = zput(p, "\r\n");
+                        p = LogPut(p, " -> SERVICED (USER), returned 0x");
+                        p = LogHex(p, f.Result);
+                        if (note[0]) { p = LogPut(p, " -- "); p = LogPut(p, note); }
+                        p = LogPut(p, "\r\n");
                         /* ── ★★★★★ AND NOW THE OTHER DIRECTION. (session 40) ────
                              The answer is already in the return hole and EIP is
                              already past the BOP, so what gets parked here is the
@@ -23735,36 +23735,36 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             DWORD ssb3 = dpmi_sel_base(
                                 (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                             int ai, cbabsent = 0;
-                            p = zput(p, "WOWCALL: -> 0x");
-                            p = zhex(p, f.CallbackProcedure >> 16);
-                            p = zput(p, ":0x"); p = zhex(p, f.CallbackProcedure & 0xFFFF);
-                            p = zput(p, "(");
+                            p = LogPut(p, "WOWCALL: -> 0x");
+                            p = LogHex(p, f.CallbackProcedure >> 16);
+                            p = LogPut(p, ":0x"); p = LogHex(p, f.CallbackProcedure & 0xFFFF);
+                            p = LogPut(p, "(");
                             for (ai = 0; ai < f.CallbackArgumentCount; ++ai) {
-                                if (ai) p = zput(p, " ");
-                                p = zhex(p, f.CallbackArguments[ai]);
+                                if (ai) p = LogPut(p, " ");
+                                p = LogHex(p, f.CallbackArguments[ai]);
                             }
-                            p = zput(p, ") ds=0x"); p = zhex(p, f.CallbackDataSelector);
+                            p = LogPut(p, ") ds=0x"); p = LogHex(p, f.CallbackDataSelector);
                             if (f.CallbackMessage) {
-                                p = zput(p, " [hwnd=0x"); p = zhex(p, f.CallbackWindow);
-                                p = zput(p, " msg=0x"); p = zhex(p, f.CallbackMessage);
-                                p = zput(p, "]");
+                                p = LogPut(p, " [hwnd=0x"); p = LogHex(p, f.CallbackWindow);
+                                p = LogPut(p, " msg=0x"); p = LogHex(p, f.CallbackMessage);
+                                p = LogPut(p, "]");
                             }
-                            p = zput(p, " ss=0x");
-                            p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
-                            p = zput(p, ":0x");
-                            p = zhex(p, VDM_REG(tib, VTIB_ESP) & 0xFFFF);
-                            p = zput(p, " ret=0x"); p = zhex(p, rsel);
-                            p = zput(p, ":0000");
+                            p = LogPut(p, " ss=0x");
+                            p = LogHex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+                            p = LogPut(p, ":0x");
+                            p = LogHex(p, VDM_REG(tib, VTIB_ESP) & 0xFFFF);
+                            p = LogPut(p, " ret=0x"); p = LogHex(p, rsel);
+                            p = LogPut(p, ":0000");
                             /* ⚠ lParam is 0 and that is a NAMED GAP, not an
                                  oversight -- WM_CREATE's lParam is an
                                  LPCREATESTRUCT and this host has never built one.
                                  Saying so on the line is what stops a later reader
                                  taking the zero for a measurement. */
                             if (f.CallbackMessage == WM_CREATE16 && f.CallbackBlobLength)
-                                p = zput(p, " [lParam -> a CREATESTRUCT on the"
+                                p = LogPut(p, " [lParam -> a CREATESTRUCT on the"
                                             " guest's own stack]");
                             else if (f.CallbackMessage == WM_CREATE16)
-                                p = zput(p, " [lParam=0: NO CREATESTRUCT -- a"
+                                p = LogPut(p, " [lParam=0: NO CREATESTRUCT -- a"
                                             " procedure that reads it will fault]");
                             /* ── ★ IS THE PROCEDURE'S SEGMENT ACTUALLY LOADED? ──
                                  A Win16 code segment is loaded on demand, and
@@ -23779,11 +23779,11 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                               cbabsent = (pix && pix < DPMI_LDT_MAX
                                           && !(g_ldt[pix].access & 0x80));
                               if (cbabsent)
-                                  p = zput(p, " [code segment NOT PRESENT --"
+                                  p = LogPut(p, " [code segment NOT PRESENT --"
                                               " entering via the RETF trampoline"
                                               " so krnl386 loads it]"); }
                             if (!rsel)
-                                p = zput(p, " -- NO RETURN SELECTOR (LDT full);"
+                                p = LogPut(p, " -- NO RETURN SELECTOR (LDT full);"
                                             " the call was NOT made");
                             else if (!WowCallEnter(tib, ssb3, rsel, f.CallbackProcedure,
                                                     f.CallbackDataSelector, f.CallbackArguments, f.CallbackArgumentCount,
@@ -23793,7 +23793,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                                     f.CallbackWindow, f.CallbackMessage,
                                                     f.CallbackBlob, f.CallbackBlobLength,
                                                     f.CallbackBlobArgument, cbabsent))
-                                p = zput(p, " -- REFUSED (depth, or an unusable"
+                                p = LogPut(p, " -- REFUSED (depth, or an unusable"
                                             " stack/procedure); the call was NOT"
                                             " made and the guest keeps the answer"
                                             " above");
@@ -23806,17 +23806,17 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                     g_WowCallFrames[g_WowCallDepth - 1].Action = f.CallbackAction;
                                     g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = f.CallbackActionArgument;
                                 }
-                                p = zput(p, " -- ENTERED, depth ");
-                                p = zhex(p, (DWORD)g_WowCallDepth);
+                                p = LogPut(p, " -- ENTERED, depth ");
+                                p = LogHex(p, (DWORD)g_WowCallDepth);
                                 if (g_WowCallDepth > 0 && g_WowCallFrames[g_WowCallDepth - 1].PreviousTask) {
-                                    p = zput(p, " [INTER-TASK: runs as task 0x");
-                                    p = zhex(p, wowsched_curtask());
-                                    p = zput(p, " on its own stack, from task 0x");
-                                    p = zhex(p, g_WowCallFrames[g_WowCallDepth - 1].PreviousTask);
-                                    p = zput(p, "]");
+                                    p = LogPut(p, " [INTER-TASK: runs as task 0x");
+                                    p = LogHex(p, wowsched_curtask());
+                                    p = LogPut(p, " on its own stack, from task 0x");
+                                    p = LogHex(p, g_WowCallFrames[g_WowCallDepth - 1].PreviousTask);
+                                    p = LogPut(p, "]");
                                 }
                             }
-                            p = zput(p, "\r\n");
+                            p = LogPut(p, "\r\n");
                         }
                         /* ── ★★★★★ OR THE CALLER DOES NOT RESUME AT ALL. ───────
                              (session 57) DialogBox is defined as not returning
@@ -23842,8 +23842,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             enote[0] = 0;
                             WowEnumStep(tib, essb, ersel, 1, 0,
                                          enote, sizeof enote);
-                            p = zput(p, "WOWENUM: "); p = zput(p, enote);
-                            p = zput(p, "\r\n");
+                            p = LogPut(p, "WOWENUM: "); p = LogPut(p, enote);
+                            p = LogPut(p, "\r\n");
                         }
                         else if (f.IsModalDialog) {
                             char mnote[512];
@@ -23851,13 +23851,13 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             DWORD mssb  = dpmi_sel_base(
                                 (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                             mnote[0] = 0;
-                            p = zput(p, "WOWDLG: the caller is PARKED inside"
+                            p = LogPut(p, "WOWDLG: the caller is PARKED inside"
                                         " DialogBox; the modal loop has it\r\n");
                             wowlog_flush(base, &p);
                             WowDlgStep(tib, mssb, mrsel, &g_running,
                                         mnote, sizeof mnote);
-                            p = zput(p, "WOWDLG: "); p = zput(p, mnote);
-                            p = zput(p, "\r\n");
+                            p = LogPut(p, "WOWDLG: "); p = LogPut(p, mnote);
+                            p = LogPut(p, "\r\n");
                         }
                         wowlog_flush(base, &p);
                         return 1;
@@ -23873,9 +23873,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     && f.StubSegment != g_wow_user_seg && f.StubSegment != g_wow_krnl2_seg
                     && wow_shell_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
                     g_wow_shell_seg = f.StubSegment;
-                    p = zput(p, "\n     WOWSHELL: SHELL.DLL's code segment is 0x");
-                    p = zhex(p, g_wow_shell_seg);
-                    p = zput(p, " (learned from its own stub, not from the module"
+                    p = LogPut(p, "\n     WOWSHELL: SHELL.DLL's code segment is 0x");
+                    p = LogHex(p, g_wow_shell_seg);
+                    p = LogPut(p, " (learned from its own stub, not from the module"
                                 " table)");
                 }
                 if (!f.IsKernel && g_wow_shell_seg && f.StubSegment == g_wow_shell_seg) {
@@ -23894,7 +23894,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                          one. This line is written and flushed first, so the log
                          says what the host is waiting for while it waits. */
                     if (f.Id == WOWSHELL_SHELLABOUT) {
-                        p = zput(p, "\n     WOWSHELL: ShellAbout is MODAL -- the VDM"
+                        p = LogPut(p, "\n     WOWSHELL: ShellAbout is MODAL -- the VDM"
                                     " stops here until the box is dismissed; the"
                                     " SERVICED line follows when it is\r\n");
                         wowlog_flush(base, &p);
@@ -23902,10 +23902,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     if (WowShellCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
-                        p = zput(p, " -> SERVICED (SHELL), returned 0x");
-                        p = zhex(p, f.Result);
-                        if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
-                        p = zput(p, "\r\n");
+                        p = LogPut(p, " -> SERVICED (SHELL), returned 0x");
+                        p = LogHex(p, f.Result);
+                        if (note[0]) { p = LogPut(p, " -- "); p = LogPut(p, note); }
+                        p = LogPut(p, "\r\n");
                         wowlog_flush(base, &p);
                         return 1;
                     }
@@ -23919,9 +23919,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     && f.StubSegment != g_wow_shell_seg
                     && wow_cdlg_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
                     g_wow_cdlg_seg = f.StubSegment;
-                    p = zput(p, "\n     WOWCOMMDLG: COMMDLG.DLL's code segment is 0x");
-                    p = zhex(p, g_wow_cdlg_seg);
-                    p = zput(p, " (learned from its own stub, not from the module"
+                    p = LogPut(p, "\n     WOWCOMMDLG: COMMDLG.DLL's code segment is 0x");
+                    p = LogHex(p, g_wow_cdlg_seg);
+                    p = LogPut(p, " (learned from its own stub, not from the module"
                                 " table)");
                 }
                 if (!f.IsKernel && g_wow_cdlg_seg && f.StubSegment == g_wow_cdlg_seg) {
@@ -23935,7 +23935,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         || f.Id == WOWCDLG_GETSAVEFILENAME
                         || f.Id == WOWCDLG_CHOOSEFONT
                         || f.Id == WOWCDLG_CHOOSECOLOR) {
-                        p = zput(p, "\n     WOWCOMMDLG: this common dialog is MODAL --"
+                        p = LogPut(p, "\n     WOWCOMMDLG: this common dialog is MODAL --"
                                     " the VDM stops here until it is dismissed;"
                                     " the SERVICED line follows when it is\r\n");
                         wowlog_flush(base, &p);
@@ -23943,10 +23943,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     if (WowCommdlgCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
-                        p = zput(p, " -> SERVICED (COMMDLG), returned 0x");
-                        p = zhex(p, f.Result);
-                        if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
-                        p = zput(p, "\r\n");
+                        p = LogPut(p, " -> SERVICED (COMMDLG), returned 0x");
+                        p = LogHex(p, f.Result);
+                        if (note[0]) { p = LogPut(p, " -- "); p = LogPut(p, note); }
+                        p = LogPut(p, "\r\n");
                         wowlog_flush(base, &p);
                         return 1;
                     }
@@ -23959,9 +23959,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     && f.StubSegment != g_wow_shell_seg && f.StubSegment != g_wow_cdlg_seg
                     && wow_kbd_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
                     g_wow_kbd_seg = f.StubSegment;
-                    p = zput(p, "\n     WOWKBD: KEYBOARD.DRV's code segment is 0x");
-                    p = zhex(p, g_wow_kbd_seg);
-                    p = zput(p, " (learned from its own stub, not from the module"
+                    p = LogPut(p, "\n     WOWKBD: KEYBOARD.DRV's code segment is 0x");
+                    p = LogHex(p, g_wow_kbd_seg);
+                    p = LogPut(p, " (learned from its own stub, not from the module"
                                 " table)");
                 }
                 if (!f.IsKernel && g_wow_kbd_seg && f.StubSegment == g_wow_kbd_seg) {
@@ -23969,10 +23969,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     if (WowKeyboardCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
-                        p = zput(p, " -> SERVICED (KEYBOARD), returned 0x");
-                        p = zhex(p, f.Result);
-                        if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
-                        p = zput(p, "\r\n");
+                        p = LogPut(p, " -> SERVICED (KEYBOARD), returned 0x");
+                        p = LogHex(p, f.Result);
+                        if (note[0]) { p = LogPut(p, " -- "); p = LogPut(p, note); }
+                        p = LogPut(p, "\r\n");
                         wowlog_flush(base, &p);
                         return 1;
                     }
@@ -23985,9 +23985,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     && f.StubSegment != g_wow_kbd_seg
                     && wow_gdi_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
                     g_wow_gdi_seg = f.StubSegment;
-                    p = zput(p, "\n     WOWGDI: GDI.EXE's code segment is 0x");
-                    p = zhex(p, g_wow_gdi_seg);
-                    p = zput(p, " (learned from its own stub, not from the module"
+                    p = LogPut(p, "\n     WOWGDI: GDI.EXE's code segment is 0x");
+                    p = LogHex(p, g_wow_gdi_seg);
+                    p = LogPut(p, " (learned from its own stub, not from the module"
                                 " table)");
                 }
                 if (!f.IsKernel && g_wow_gdi_seg && f.StubSegment == g_wow_gdi_seg) {
@@ -23995,10 +23995,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     if (WowGdiCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
-                        p = zput(p, " -> SERVICED (GDI), returned 0x");
-                        p = zhex(p, f.Result);
-                        if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
-                        p = zput(p, "\r\n");
+                        p = LogPut(p, " -> SERVICED (GDI), returned 0x");
+                        p = LogHex(p, f.Result);
+                        if (note[0]) { p = LogPut(p, " -- "); p = LogPut(p, note); }
+                        p = LogPut(p, "\r\n");
                         /* ⛔ s89: AND GDI'S ENUMERATIONS RUN. This branch never acted on
                              f.enumreq -- only USER's did -- so LineDDA and
                              EnumFontFamilies armed a walk that never started: Charmap
@@ -24011,8 +24011,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                             enote[0] = 0;
                             WowEnumStep(tib, essb, ersel, 1, 0, enote, sizeof enote);
-                            p = zput(p, "WOWENUM: "); p = zput(p, enote);
-                            p = zput(p, "\r\n");
+                            p = LogPut(p, "WOWENUM: "); p = LogPut(p, enote);
+                            p = LogPut(p, "\r\n");
                         }
                         wowlog_flush(base, &p);
                         return 1;
@@ -24025,9 +24025,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     && f.StubSegment != g_wow_kbd_seg && f.StubSegment != g_wow_gdi_seg
                     && wow_sound_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
                     g_wow_sound_seg = f.StubSegment;
-                    p = zput(p, "\n     WOWSOUND: SOUND.DRV's code segment is 0x");
-                    p = zhex(p, g_wow_sound_seg);
-                    p = zput(p, " (learned from its own stub, not from the module"
+                    p = LogPut(p, "\n     WOWSOUND: SOUND.DRV's code segment is 0x");
+                    p = LogHex(p, g_wow_sound_seg);
+                    p = LogPut(p, " (learned from its own stub, not from the module"
                                 " table)");
                 }
                 if (!f.IsKernel && g_wow_sound_seg && f.StubSegment == g_wow_sound_seg) {
@@ -24035,10 +24035,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     if (WowSoundCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
-                        p = zput(p, " -> SERVICED (SOUND), returned 0x");
-                        p = zhex(p, f.Result);
-                        if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
-                        p = zput(p, "\r\n");
+                        p = LogPut(p, " -> SERVICED (SOUND), returned 0x");
+                        p = LogHex(p, f.Result);
+                        if (note[0]) { p = LogPut(p, " -- "); p = LogPut(p, note); }
+                        p = LogPut(p, "\r\n");
                         wowlog_flush(base, &p);
                         return 1;
                     }
@@ -24053,18 +24053,18 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                       (int)(sizeof g_WowMmediaAnchors / sizeof g_WowMmediaAnchors[0]),
                                       f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
                     g_wow_mmedia_seg = f.StubSegment;
-                    p = zput(p, "\n     WOWMMEDIA: MMSYSTEM's stub segment is 0x");
-                    p = zhex(p, g_wow_mmedia_seg);
+                    p = LogPut(p, "\n     WOWMMEDIA: MMSYSTEM's stub segment is 0x");
+                    p = LogHex(p, g_wow_mmedia_seg);
                 }
                 if (!f.IsKernel && g_wow_mmedia_seg && f.StubSegment == g_wow_mmedia_seg) {
                     char note[200];
                     if (WowMultimediaCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
-                        p = zput(p, " -> SERVICED (MMSYSTEM), returned 0x");
-                        p = zhex(p, f.Result);
-                        if (note[0]) { p = zput(p, " -- "); p = zput(p, note); }
-                        p = zput(p, "\r\n");
+                        p = LogPut(p, " -> SERVICED (MMSYSTEM), returned 0x");
+                        p = LogHex(p, f.Result);
+                        if (note[0]) { p = LogPut(p, " -- "); p = LogPut(p, note); }
+                        p = LogPut(p, "\r\n");
                         wowlog_flush(base, &p);
                         return 1;
                     }
@@ -24083,12 +24083,12 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 && Wow32MayDecline(f.Id, f.CallSite));
                     if (decl) ++g_wow32_declined; else ++g_wow32_serviced;
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
-                    p = zput(p, decl ? " -> DECLINED (krnl386 will chain to real"
+                    p = LogPut(p, decl ? " -> DECLINED (krnl386 will chain to real"
                                        " DOS) 0x" : " -> SERVICED, returned 0x");
-                    p = zhex(p, f.Result);
+                    p = LogHex(p, f.Result);
                     if (f.Id == WOW32_REGISTERDOSDATA) {
-                        p = zput(p, " (DOS data area at 0x");
-                        p = zhex(p, g_wow_dosdata.FarPointer); p = zput(p, ")");
+                        p = LogPut(p, " (DOS data area at 0x");
+                        p = LogHex(p, g_wow_dosdata.FarPointer); p = LogPut(p, ")");
                     }
                     /* ★ SAY WHAT WAS HANDED OVER, not just that something was.
                          This one call decides which program the VDM runs, and a
@@ -24096,19 +24096,19 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                          important fact of the run unrecorded. */
                     if (f.Id == WOW32_WOWGETNEXTVDMCOMMAND) {
                         if (g_WowCommandProgram[0]) {
-                            p = zput(p, " -- LAUNCH ["); p = zput(p, g_WowCommandProgram);
+                            p = LogPut(p, " -- LAUNCH ["); p = LogPut(p, g_WowCommandProgram);
                             if (g_WowCommandArguments[0]) {
-                                p = zput(p, "] args["); p = zput(p, g_WowCommandArguments);
+                                p = LogPut(p, "] args["); p = LogPut(p, g_WowCommandArguments);
                             }
-                            p = zput(p, "]");
-                            if (cmd_taken_before) p = zput(p, " -- ALREADY DELIVERED,"
+                            p = LogPut(p, "]");
+                            if (cmd_taken_before) p = LogPut(p, " -- ALREADY DELIVERED,"
                                                               " answered \"nothing more\"");
                         } else {
-                            p = zput(p, " -- no command (this VDM was not told what"
+                            p = LogPut(p, " -- no command (this VDM was not told what"
                                         " Win16 program to run)");
                         }
                     }
-                    p = zput(p, "\r\n");
+                    p = LogPut(p, "\r\n");
                     wowlog_flush(base, &p);
                     return 1;
                 }
@@ -24130,7 +24130,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                  BOP are suspect, and the log is what lets a reader tell. All the
                  non-0x53 sites are 3 bytes -- see the length note above. */
             VDM_REG(tib, VTIB_EIP) += 3;
-            p = zput(p, " -> UNIMPLEMENTED, STEPPED OVER (the call did NOT happen)");
+            p = LogPut(p, " -> UNIMPLEMENTED, STEPPED OVER (the call did NOT happen)");
             /* ⚠ BUT IT IS STILL ANSWERED, because krnl386 pops the hole into AX:DX and
                  BRANCHES on it whether we wrote it or not. Print BOTH numbers: what was
                  lying in the hole, and what we put there instead. The first is what
@@ -24138,15 +24138,15 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                  run actually decided on, and a reader must be able to tell them apart.
                  They are only equal by coincidence. */
             if (wow_stale_ok) {
-                p = zput(p, "; hole held 0x");
-                p = zhex(p, wow_stale);
-                p = zput(p, ", ANSWERED 0x");
-                p = zhex(p, wow_ans);
-                p = zput(p, (wow_ans == (DWORD)WOW32_UNIMPL_RET)
+                p = LogPut(p, "; hole held 0x");
+                p = LogHex(p, wow_stale);
+                p = LogPut(p, ", ANSWERED 0x");
+                p = LogHex(p, wow_ans);
+                p = LogPut(p, (wow_ans == (DWORD)WOW32_UNIMPL_RET)
                           ? " (harness sentinel, NOT krnl386's answer)"
                           : " (** wow32ret.txt OVERRIDE -- an EXPERIMENT, not a service **)");
             }
-            p = zput(p, "\r\n");
+            p = LogPut(p, "\r\n");
             wowlog_flush(base, &p);
             return 1;
         }
@@ -24163,10 +24163,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
         int nsync = wow_shadow_sync(&sp);
         if (nsync) {
             p = sp;
-            p = zput(p, "  LDTSYNC: "); p = zhex(p, (DWORD)nsync);
-            p = zput(p, " descriptor(s) pushed from the shadow (total 0x");
-            p = zhex(p, g_wow_sync_writes); p = zput(p, ")\r\n");
-            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            p = LogPut(p, "  LDTSYNC: "); p = LogHex(p, (DWORD)nsync);
+            p = LogPut(p, " descriptor(s) pushed from the shadow (total 0x");
+            p = LogHex(p, g_wow_sync_writes); p = LogPut(p, ")\r\n");
+            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
         }
     }
                     /* ── THE CLIENT'S OWN PM HANDLER WINS, IF IT INSTALLED ONE. ──────
@@ -24221,9 +24221,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                                     g_pm_app_timer_sel = hs;
                                                     g_pm_app_timer_off = g_pm_int[al25].off;
                                                     g_pm_vec8_armed_ms = GetTickCount(); }
-                                p = zput(p, "PM INT 21h AH=25 (host-owned IRQ vector) 0x");
-                                p = zhex(p, al25); p = zput(p, " = 0x"); p = zhex(p, hs);
-                                p = zput(p, ":0x"); p = zhex(p, g_pm_int[al25].off);
+                                p = LogPut(p, "PM INT 21h AH=25 (host-owned IRQ vector) 0x");
+                                p = LogHex(p, al25); p = LogPut(p, " = 0x"); p = LogHex(p, hs);
+                                p = LogPut(p, ":0x"); p = LogHex(p, g_pm_int[al25].off);
                             } else {
                                 /* ── WHAT THE CALLER CHAINS TO MUST BE SAFE TO CHAIN TO. ────
                                      A game saves the "old" handler here and far-jumps to it
@@ -24248,13 +24248,13 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 }
                                 VDM_SET16(tib, VTIB_ES, osel);
                                 VDM_REG(tib, VTIB_EBX) = ooff;                 /* client is 32-bit */
-                                p = zput(p, "PM INT 21h AH=35 (host-owned IRQ vector) 0x");
-                                p = zhex(p, al25); p = zput(p, " -> 0x"); p = zhex(p, osel);
-                                p = zput(p, ":0x"); p = zhex(p, ooff);
+                                p = LogPut(p, "PM INT 21h AH=35 (host-owned IRQ vector) 0x");
+                                p = LogHex(p, al25); p = LogPut(p, " -> 0x"); p = LogHex(p, osel);
+                                p = LogPut(p, ":0x"); p = LogHex(p, ooff);
                             }
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;          /* success */
-                            p = zput(p, "\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            p = LogPut(p, "\r\n");
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
@@ -24288,10 +24288,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         DWORD sb  = dpmi_sel_base(ss);
                         DWORD sp  = dpmi_sel_is32(ss) ? VDM_REG(tib, VTIB_ESP)
                                                       : (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
-                        p = zput(p, "DPMI-BP HIT linear 0x"); p = zhex(p, lin);
-                        p = zput(p, " cs:eip=0x"); p = zhex(p, cs);
-                        p = zput(p, ":0x"); p = zhex(p, eip);
-                        p = zput(p, " after "); p = zhex(p, steps); p = zput(p, " svc");
+                        p = LogPut(p, "DPMI-BP HIT linear 0x"); p = LogHex(p, lin);
+                        p = LogPut(p, " cs:eip=0x"); p = LogHex(p, cs);
+                        p = LogPut(p, ":0x"); p = LogHex(p, eip);
+                        p = LogPut(p, " after "); p = LogHex(p, steps); p = LogPut(p, " svc");
                         /* ► A CLOCK, NOT JUST A SERVICE COUNT. Session 20 could bracket the
                              R_ExecuteSetViewSize death in INSTRUCTIONS but not in TIME, and
                              those two answers point at different culprits: a threshold in
@@ -24299,25 +24299,25 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                              milliseconds is the kernel's timer. `svc` counts host services,
                              which stop entirely inside a BOP-free stretch -- so it is exactly
                              the wrong unit for the question. GetTickCount is free. */
-                        p = zput(p, " ms="); p = zhex(p, GetTickCount());
-                        p = zput(p, " EAX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX));
-                        p = zput(p, " EBX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX));
-                        p = zput(p, " ECX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX));
-                        p = zput(p, " EDX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX));
-                        p = zput(p, " ESI=0x"); p = zhex(p, VDM_REG(tib, VTIB_ESI));
-                        p = zput(p, " EDI=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDI));
-                        p = zput(p, " EBP=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBP));
-                        p = zput(p, " DS=0x"); p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
-                        p = zput(p, " ES=0x"); p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
-                        p = zput(p, " SS:SP=0x"); p = zhex(p, ss); p = zput(p, ":0x"); p = zhex(p, sp);
-                        p = zput(p, " efl=0x"); p = zhex(p, VDM_REG(tib, VTIB_EFLAGS));
-                        p = zput(p, " stack=");
+                        p = LogPut(p, " ms="); p = LogHex(p, GetTickCount());
+                        p = LogPut(p, " EAX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EAX));
+                        p = LogPut(p, " EBX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX));
+                        p = LogPut(p, " ECX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ECX));
+                        p = LogPut(p, " EDX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EDX));
+                        p = LogPut(p, " ESI=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ESI));
+                        p = LogPut(p, " EDI=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EDI));
+                        p = LogPut(p, " EBP=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBP));
+                        p = LogPut(p, " DS=0x"); p = LogHex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                        p = LogPut(p, " ES=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                        p = LogPut(p, " SS:SP=0x"); p = LogHex(p, ss); p = LogPut(p, ":0x"); p = LogHex(p, sp);
+                        p = LogPut(p, " efl=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EFLAGS));
+                        p = LogPut(p, " stack=");
                         /* 64 bytes, not 16: when a breakpoint sits inside a leaf routine the
                            question is almost always "who called this", and one frame is never
                            enough -- the whole return CHAIN is what names the decision. */
                         { const BYTE *sk = (const BYTE *)(ULONG_PTR)(sb + sp);
-                          if (!host_readable(sk, 64)) p = zput(p, "<unreadable>");
-                          else                        p = zdump(p, sk, 64); }
+                          if (!host_readable(sk, 64)) p = LogPut(p, "<unreadable>");
+                          else                        p = LogDump(p, sk, 64); }
                         /* ★ RESOLVE THE SELECTORS, and show what the instruction is
                              about to touch. pmbp.txt's dump column takes a fixed
                              LINEAR address, which cannot follow a segment register --
@@ -24333,15 +24333,15 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             DWORD dsb = dpmi_sel_base(dsv), esb = dpmi_sel_base(esv);
                             DWORD siv = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
                             DWORD div = VDM_REG(tib, VTIB_EDI) & 0xFFFF;
-                            p = zput(p, "\r\n  dsbase=0x"); p = zhex(p, dsb);
-                            p = zput(p, " esbase=0x");      p = zhex(p, esb);
+                            p = LogPut(p, "\r\n  dsbase=0x"); p = LogHex(p, dsb);
+                            p = LogPut(p, " esbase=0x");      p = LogHex(p, esb);
                             if (dsb && mem_readable((ULONG_PTR)(dsb + siv), 32)) {
-                                p = zput(p, "\r\n  @ds:si=");
-                                p = zdump(p, (const BYTE *)(ULONG_PTR)(dsb + siv), 32);
+                                p = LogPut(p, "\r\n  @ds:si=");
+                                p = LogDump(p, (const BYTE *)(ULONG_PTR)(dsb + siv), 32);
                             }
                             if (esb && mem_readable((ULONG_PTR)(esb + div), 32)) {
-                                p = zput(p, "\r\n  @es:di=");
-                                p = zdump(p, (const BYTE *)(ULONG_PTR)(esb + div), 32);
+                                p = LogPut(p, "\r\n  @es:di=");
+                                p = LogDump(p, (const BYTE *)(ULONG_PTR)(esb + div), 32);
                             }
                             /* ★ AND THE OTHER TWO PAIRINGS. ds:si/es:di is the string-move
                                  convention, and it is the wrong pair for the code this is
@@ -24351,12 +24351,12 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  table at the hit). Dumping only ds:si and es:di answered a question
                                  nobody had while hiding the one on the screen. */
                             if (esb && mem_readable((ULONG_PTR)(esb + siv), 32)) {
-                                p = zput(p, "\r\n  @es:si=");
-                                p = zdump(p, (const BYTE *)(ULONG_PTR)(esb + siv), 32);
+                                p = LogPut(p, "\r\n  @es:si=");
+                                p = LogDump(p, (const BYTE *)(ULONG_PTR)(esb + siv), 32);
                             }
                             if (dsb && mem_readable((ULONG_PTR)(dsb + div), 32)) {
-                                p = zput(p, "\r\n  @ds:di=");
-                                p = zdump(p, (const BYTE *)(ULONG_PTR)(dsb + div), 32);
+                                p = LogPut(p, "\r\n  @ds:di=");
+                                p = LogDump(p, (const BYTE *)(ULONG_PTR)(dsb + div), 32);
                             }
                         }
                         { int bk = dpmi_bp_disarm(lin);
@@ -24377,8 +24377,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  already restored, so advancing EIP lands on whatever follows
                                  the skipped instruction -- the caller states its length. */
                               VDM_REG(tib, VTIB_EIP) += g_bp_skip[bk];
-                              p = zput(p, " [SKIPPED "); p = zhex(p, g_bp_skip[bk]);
-                              p = zput(p, " byte(s)]");
+                              p = LogPut(p, " [SKIPPED "); p = LogHex(p, g_bp_skip[bk]);
+                              p = LogPut(p, " byte(s)]");
                               /* A skipped site is usually in a loop or a shared wrapper, so
                                  one-shot is useless there. We cannot re-plant NOW -- EIP is
                                  inside the two-byte footprint we just restored -- so mark it
@@ -24386,7 +24386,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  moved on. */
                               g_bp_pending[bk] = 1;
                           }
-                          if (bk < 0) p = zput(p, " [WARN: no BP record here]");
+                          if (bk < 0) p = LogPut(p, " [WARN: no BP record here]");
                           else if (g_bp_dump[bk]) {
                               /* ★ mode bit 2 (4): the dump column is an offset from DS's
                                    BASE, not a linear address. The variables worth watching
@@ -24402,19 +24402,19 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                               if (g_bp_mode[bk] & 4) {
                                   DWORD dsb2 = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_DS)
                                                                     & 0xFFFF));
-                                  p = zput(p, "\r\n  dump@ds:0x"); p = zhex(p, da);
+                                  p = LogPut(p, "\r\n  dump@ds:0x"); p = LogHex(p, da);
                                   da += dsb2;
-                                  p = zput(p, " (linear 0x"); p = zhex(p, da); p = zput(p, ")");
+                                  p = LogPut(p, " (linear 0x"); p = LogHex(p, da); p = LogPut(p, ")");
                               } else {
-                                  p = zput(p, "\r\n  dump@0x"); p = zhex(p, da);
+                                  p = LogPut(p, "\r\n  dump@0x"); p = LogHex(p, da);
                               }
                               dm = (const BYTE *)(ULONG_PTR)da;
-                              p = zput(p, "=");
-                              if (!host_readable(dm, 64)) p = zput(p, "<unreadable from host>");
-                              else                        p = zdump(p, dm, 64);
+                              p = LogPut(p, "=");
+                              if (!host_readable(dm, 64)) p = LogPut(p, "<unreadable from host>");
+                              else                        p = LogDump(p, dm, 64);
                           } }
-                        p = zput(p, "\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        p = LogPut(p, "\r\n");
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                         return 1;                                  /* EIP unchanged on purpose */
                     }
                     if (vec == 0x10) {                             /* video BIOS in PM -> VDD */
@@ -24427,8 +24427,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         video_trap_sync();          /* mode 12h: interpret (GH #55); no-op in 13h */
                         VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                         VDM_REG(tib, VTIB_EIP) += 2;              /* past the 2-byte PM BOP */
-                        p = zput(p, "INT10h (PM) -> video VDD AX=0x"); p = zhex(p, ax);
-                        p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        p = LogPut(p, "INT10h (PM) -> video VDD AX=0x"); p = LogHex(p, ax);
+                        p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                         return 1;
                     }
                     if (vec == 0x16) {                             /* keyboard BIOS in PM -> VDD */
@@ -24507,9 +24507,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         HOST_UNLOCK();
                         if (g_pm_irq_reflect_logged < 16) {
                             ++g_pm_irq_reflect_logged;
-                            p = zput(p, "PM INT 0x"); p = zhexb(p, (BYTE)vec);
-                            p = zput(p, " default handler -> reflected to the BIOS (IVT is ours): consume+EOI\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            p = LogPut(p, "PM INT 0x"); p = LogHexByte(p, (BYTE)vec);
+                            p = LogPut(p, " default handler -> reflected to the BIOS (IVT is ours): consume+EOI\r\n");
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                         }
                         ++g_pm_irq_reflects;
                         VDM_REG(tib, VTIB_EIP) += 2;               /* past the BOP -> the stub's IRET */
@@ -24520,11 +24520,11 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     if ((vec >= 0x09 && vec <= 0x0F) || (vec >= 0x70 && vec <= 0x77)) {
                         if (dpmi_reflect_irq_to_rm(mp, tib, (unsigned)vec)) {
                             if (g_pm_irq_rm_reflects <= 8) {
-                                p = zput(p, "PM INT 0x"); p = zhexb(p, (BYTE)vec);
-                                p = zput(p, " default handler -> reflected to the guest's real-mode ISR 0x");
-                                p = zhex(p, peekw(vec * 4 + 2)); p = zput(p, ":0x"); p = zhex(p, peekw(vec * 4));
-                                p = zput(p, "\r\n");
-                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                p = LogPut(p, "PM INT 0x"); p = LogHexByte(p, (BYTE)vec);
+                                p = LogPut(p, " default handler -> reflected to the guest's real-mode ISR 0x");
+                                p = LogHex(p, peekw(vec * 4 + 2)); p = LogPut(p, ":0x"); p = LogHex(p, peekw(vec * 4));
+                                p = LogPut(p, "\r\n");
+                                LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             }
                             VDM_REG(tib, VTIB_EIP) += 2;           /* past the BOP -> the stub's IRET */
                             return 1;
@@ -24538,9 +24538,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                            asserted in a comment that was wrong at both sites. */
                         WORD eqw = bios_equipment_word();
                         VDM_SET16(tib, VTIB_EAX, eqw);
-                        p = zput(p, "INT11h(PM) equipment -> 0x"); p = zhex(p, eqw);
-                        p = zput(p, "\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        p = LogPut(p, "INT11h(PM) equipment -> 0x"); p = LogHex(p, eqw);
+                        p = LogPut(p, "\r\n");
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
                     }
@@ -24682,11 +24682,11 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                              exact defect and printed its own write-back as the guest's
                              request. `ax` was read at function entry, so it is already the
                              guest's; use it and not VTIB_EAX. */
-                          p = zput(p, "INT15h(PM) ax=0x"); p = zhex(p, ax);
-                          p = zput(p, " -> ax=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-                          p = zput(p, " cf="); p = zhex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
-                          p = zput(p, "\r\n");
-                          log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
+                          p = LogPut(p, "INT15h(PM) ax=0x"); p = LogHex(p, ax);
+                          p = LogPut(p, " -> ax=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                          p = LogPut(p, " cf="); p = LogHex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
+                          p = LogPut(p, "\r\n");
+                          LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base; }
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
                     }
@@ -24703,9 +24703,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                            which does not reflect: it terminates the VDM with no
                            exception and no log line. Doing nothing, visibly, beats
                            doing nothing invisibly. */
-                        p = zput(p, "INT41h(PM) kernel-debugger AX=0x"); p = zhex(p, ax);
-                        p = zput(p, " -> no debugger (registers untouched)\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        p = LogPut(p, "INT41h(PM) kernel-debugger AX=0x"); p = LogHex(p, ax);
+                        p = LogPut(p, " -> no debugger (registers untouched)\r\n");
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
                     }
@@ -24720,8 +24720,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                            supported" (documented). 1689 (the kernel idle call) has no
                            return registers at all. 1684 must return ES:DI = 0:0
                            because it returns a POINTER the caller far-calls. */
-                        p = zput(p, "INT2Fh(PM) AX=0x"); p = zhex(p, ax);
-                        p = zput(p, " BX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                        p = LogPut(p, "INT2Fh(PM) AX=0x"); p = LogHex(p, ax);
+                        p = LogPut(p, " BX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                         if (ax == 0x1687) {
                             /* A DPMI client asking, from inside protected mode, whether
                                a DPMI host exists. It does -- it is us, and it is already
@@ -24733,11 +24733,11 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             VDM_SET16(tib, VTIB_ESI, 0);
                             VDM_SET16(tib, VTIB_ES,  DOS_HDLR_SEG);
                             VDM_SET16(tib, VTIB_EDI, DPMI_ENTRY_OFF);
-                            p = zput(p, " -> DPMI present");
+                            p = LogPut(p, " -> DPMI present");
                         } else if (ax == 0x1684) {
                             VDM_SET16(tib, VTIB_ES, 0);
                             VDM_REG(tib, VTIB_EDI) = 0;
-                            p = zput(p, " -> no device API (ES:DI=0)");
+                            p = LogPut(p, " -> no device API (ES:DI=0)");
                         } else if (ax == 0x168A) {
                             /* DS:SI names the vendor. Match it rather than answering
                                every caller: the entry we hand back is specific to the
@@ -24749,38 +24749,38 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             int k = 0, same = 1;
                             for (k = 0; k < (int)sizeof want; ++k)
                                 if (v[k] != (BYTE)want[k]) { same = 0; break; }
-                            p = zput(p, " vendor=[");
+                            p = LogPut(p, " vendor=[");
                             for (k = 0; k < 8 && v[k] >= 0x20 && v[k] < 0x7F; ++k) {
-                                char c[2]; c[0] = (char)v[k]; c[1] = 0; p = zput(p, c);
+                                char c[2]; c[0] = (char)v[k]; c[1] = 0; p = LogPut(p, c);
                             }
-                            p = zput(p, "]");
+                            p = LogPut(p, "]");
                             if (same) {
                                 WORD vs = 0, vo = 0;
                                 if (wow_vendor_api_entry(mp, &vs, &vo) == 0) {
                                     VDM_SET16(tib, VTIB_EAX, (WORD)(ax & 0xFF00));  /* AL=0 */
                                     VDM_SET16(tib, VTIB_ES, vs);
                                     VDM_REG(tib, VTIB_EDI) = vo;
-                                    p = zput(p, " -> SUPPORTED, entry 0x"); p = zhex(p, vs);
-                                    p = zput(p, ":0x"); p = zhex(p, vo);
+                                    p = LogPut(p, " -> SUPPORTED, entry 0x"); p = LogHex(p, vs);
+                                    p = LogPut(p, ":0x"); p = LogHex(p, vo);
                                 } else {
-                                    p = zput(p, " -> wanted, but no memory for the stub");
+                                    p = LogPut(p, " -> wanted, but no memory for the stub");
                                 }
                             } else {
-                                p = zput(p, " -> not ours (AL unchanged = no)");
+                                p = LogPut(p, " -> not ours (AL unchanged = no)");
                             }
                         } else {
-                            p = zput(p, " -> untouched (unchanged AX is the 'no' answer)");
+                            p = LogPut(p, " -> untouched (unchanged AX is the 'no' answer)");
                         }
-                        p = zput(p, "\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        p = LogPut(p, "\r\n");
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                         VDM_REG(tib, VTIB_EIP) += 2;               /* past the BOP */
                         return 1;
                     }
                     if (vec == 0x31) {                             /* DPMI INT 31h */
                         int need_scan = 0;   /* deferred: scanning logs, so do it after the flush */
-                        p = zput(p, "INT31h AX=0x"); p = zhex(p, ax);
-                        p = zput(p, " BX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                        p = zput(p, " CX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+                        p = LogPut(p, "INT31h AX=0x"); p = LogHex(p, ax);
+                        p = LogPut(p, " BX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                        p = LogPut(p, " CX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
                         VDM_REG(tib, VTIB_EFLAGS) &= ~1u;          /* default CF=0 (success) */
                         /* ── ★★★★ 0300 MUST INVOKE THE GUEST'S OWN REAL-MODE HANDLER. ─────
                              DPMI 0300 is specified as "simulate a real-mode interrupt": take
@@ -24862,11 +24862,11 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             WORD hs = peekw(iv * 4 + 2), ho = peekw(iv * 4);
                             if (RmcsSimIntRoute(iv, hs, ho, g_simint_reflect, DOS_HDLR_SEG) == SIMINT_RUN) {
                                 simint_vec = (int)iv; simint_cs = hs; simint_ip = ho;
-                                p = zput(p, " [simInt 0x"); p = zhexb(p, (BYTE)iv);
-                                p = zput(p, (hs == DOS_HDLR_SEG || hs == DOS_CTAB_SEG)
+                                p = LogPut(p, " [simInt 0x"); p = LogHexByte(p, (BYTE)iv);
+                                p = LogPut(p, (hs == DOS_HDLR_SEG || hs == DOS_CTAB_SEG)
                                             ? " -> our real-mode stub 0x"
                                             : " -> the guest's OWN real-mode handler 0x");
-                                p = zhex(p, hs); p = zput(p, ":0x"); p = zhex(p, ho); p = zput(p, "]");
+                                p = LogHex(p, hs); p = LogPut(p, ":0x"); p = LogHex(p, ho); p = LogPut(p, "]");
                                 ax = 0x0302;      /* ...which is a real-mode call with an IRET frame */
                             }
                         }
@@ -24879,7 +24879,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             VDM_SET16(tib, VTIB_EBX, DPMI_VER_BX);
                             VDM_SET16(tib, VTIB_ECX, DPMI_CPU_CLASS);
                             VDM_SET16(tib, VTIB_EDX, DPMI_VER_DX);
-                            p = zput(p, " -> ver 0.90 cpu "); p = zhexb(p, DPMI_CPU_CLASS);
+                            p = LogPut(p, " -> ver 0.90 cpu "); p = LogHexByte(p, DPMI_CPU_CLASS);
                             break;
                         case 0x0000: {                             /* allocate CX descriptors */
                             DWORD cx = VDM_REG(tib, VTIB_ECX) & 0xFFFF, i; WORD basesel;
@@ -24894,13 +24894,13 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 g_ldt[idx].access = 0xF2; g_ldt[idx].flags = 0;
                                 dpmi_install(idx);
                                 VDM_SET16(tib, VTIB_EAX, (WORD)((idx << 3) | 7));
-                                p = zput(p, " -> sel 0x"); p = zhex(p, (idx << 3) | 7);
-                                p = zput(p, " (recycled)");
+                                p = LogPut(p, " -> sel 0x"); p = LogHex(p, (idx << 3) | 7);
+                                p = LogPut(p, " (recycled)");
                                 break;
                             }
                             if (g_ldt_next + (int)cx > DPMI_LDT_MAX) {      /* out of descriptors */
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8011);
-                                p = zput(p, " -> ENOMEM"); break;
+                                p = LogPut(p, " -> ENOMEM"); break;
                             }
                             basesel = (WORD)((g_ldt_next << 3) | 7);
                             for (i = 0; i < cx; ++i) {
@@ -24910,7 +24910,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 dpmi_install(idx);
                             }
                             VDM_SET16(tib, VTIB_EAX, basesel);
-                            p = zput(p, " -> sel 0x"); p = zhex(p, basesel);
+                            p = LogPut(p, " -> sel 0x"); p = LogHex(p, basesel);
                             break; }
                         case 0x0001: {                             /* free descriptor BX */
                             WORD fsel = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
@@ -24939,7 +24939,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             if (!reserved && !dpmi_client_sel_ok(fsel)) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_SEL);
-                                p = zput(p, " -> free REFUSED: invalid selector (8022h)");
+                                p = LogPut(p, " -> free REFUSED: invalid selector (8022h)");
                                 break;
                             }
                             if (idx >= 1 && idx < DPMI_LDT_MAX && !reserved
@@ -24951,13 +24951,13 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                     dpmi_ldt_release(idx);          /* not present, on the free list */
                                     /* If this was a 0002 mapping, stop claiming it. */
                                     dpmi_s2d_forget(fsel);
-                                    p = zput(p, " -> freed sel 0x"); p = zhex(p, fsel);
-                                    p = zput(p, " ("); p = zhex(p, (DWORD)g_ldt_nfree);
-                                    p = zput(p, " on the free list)");
+                                    p = LogPut(p, " -> freed sel 0x"); p = LogHex(p, fsel);
+                                    p = LogPut(p, " ("); p = LogHex(p, (DWORD)g_ldt_nfree);
+                                    p = LogPut(p, " on the free list)");
                                     break;
                                 }
                             }
-                            p = zput(p, " -> free (kept: reserved or not allocated)");
+                            p = LogPut(p, " -> free (kept: reserved or not allocated)");
                             break; }
                         case 0x04F1: {                             /* NTVDM-private: allocate */
                             /* Private twin of 0000. Observed: krnl386's descriptor
@@ -24974,7 +24974,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             if (g_ldt_next + (int)cx4 > DPMI_LDT_MAX) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, 0x8011);
-                                p = zput(p, " -> ENOMEM"); break;
+                                p = LogPut(p, " -> ENOMEM"); break;
                             }
                             bs = (WORD)((g_ldt_next << 3) | 7);
                             for (k4 = 0; k4 < cx4; ++k4) {
@@ -24985,8 +24985,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             }
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                             VDM_SET16(tib, VTIB_EAX, bs);
-                            p = zput(p, " -> private-alloc "); p = zhex(p, cx4);
-                            p = zput(p, " sel 0x"); p = zhex(p, bs);
+                            p = LogPut(p, " -> private-alloc "); p = LogHex(p, cx4);
+                            p = LogPut(p, " sel 0x"); p = LogHex(p, bs);
                             break; }
                         case 0x04F2: {                             /* NTVDM-private: COMMIT */
                             /* ★ THE SYNC POINT, AND IT IS THE GUEST TELLING US.
@@ -25006,8 +25006,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             DWORD fcnt = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
                             int fidx = fsel >> 3, done = 0;
                             if (!fcnt) fcnt = 1;
-                            p = zput(p, " commit "); p = zhex(p, fcnt);
-                            p = zput(p, " from sel 0x"); p = zhex(p, fsel);
+                            p = LogPut(p, " commit "); p = LogHex(p, fcnt);
+                            p = LogPut(p, " from sel 0x"); p = LogHex(p, fsel);
                             if (g_wow_shadow) {
                                 DWORD j;
                                 for (j = 0; j < fcnt; ++j) {
@@ -25068,12 +25068,12 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 }
                             }
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            p = zput(p, " -> installed "); p = zhex(p, (DWORD)done);
+                            p = LogPut(p, " -> installed "); p = LogHex(p, (DWORD)done);
                             if (done) {
-                                p = zput(p, " (idx 0x"); p = zhex(p, (DWORD)fidx);
-                                p = zput(p, " base=0x"); p = zhex(p, g_ldt[fidx].base);
-                                p = zput(p, " acc=0x");  p = zhexb(p, g_ldt[fidx].access);
-                                p = zput(p, ")");
+                                p = LogPut(p, " (idx 0x"); p = LogHex(p, (DWORD)fidx);
+                                p = LogPut(p, " base=0x"); p = LogHex(p, g_ldt[fidx].base);
+                                p = LogPut(p, " acc=0x");  p = LogHexByte(p, g_ldt[fidx].access);
+                                p = LogPut(p, ")");
                             }
                             /* ── ★★★ AND PATCH ITS INT SITES, EXACTLY AS 0009 AND 000C DO. ──
                                  Those two apply the rule "the client naming a region CODE is
@@ -25117,10 +25117,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                     dpmi_patch_code_region(g_ldt[a].base, g_ldt[a].limit,
                                                            (g_ldt[a].flags & 0x4) != 0);
                                     need_scan = 1;
-                                    p = zput(p, " [CODE sel 0x"); p = zhex(p, (DWORD)((a << 3) | 7));
-                                    p = zput(p, " base=0x");   p = zhex(p, g_ldt[a].base);
-                                    p = zput(p, " limit=0x");  p = zhex(p, g_ldt[a].limit);
-                                    p = zput(p, " -> INT sites patched]");
+                                    p = LogPut(p, " [CODE sel 0x"); p = LogHex(p, (DWORD)((a << 3) | 7));
+                                    p = LogPut(p, " base=0x");   p = LogHex(p, g_ldt[a].base);
+                                    p = LogPut(p, " limit=0x");  p = LogHex(p, g_ldt[a].limit);
+                                    p = LogPut(p, " -> INT sites patched]");
                                     /* ★ Is this one of krnl386's OWN segments? Match the
                                          LIMIT against the segment's length rounded up, and
                                          hand the base to any seg-relative breakpoint
@@ -25154,12 +25154,12 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                                                     g_ldt[a].base);
                                             }
                                             if (sg == 0) g_wow_pmseg1_base = g_ldt[a].base;
-                                            p = zput(p, " [= krnl386 seg ");
-                                            p = zhex(p, (DWORD)(sg + 1));
-                                            p = zput(p, " len=0x"); p = zhex(p, ln);
-                                            p = zput(p, " limit-len=0x");
-                                            p = zhex(p, g_ldt[a].limit - ln);
-                                            p = zput(p, "]");
+                                            p = LogPut(p, " [= krnl386 seg ");
+                                            p = LogHex(p, (DWORD)(sg + 1));
+                                            p = LogPut(p, " len=0x"); p = LogHex(p, ln);
+                                            p = LogPut(p, " limit-len=0x");
+                                            p = LogHex(p, g_ldt[a].limit - ln);
+                                            p = LogPut(p, "]");
                                             break;
                                         }
                                     }
@@ -25183,14 +25183,14 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 || g_ldt[widx].access != 0) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, 0x8022);   /* invalid selector */
-                                p = zput(p, " -> REFUSED (reserved, out of range, or in use)");
+                                p = LogPut(p, " -> REFUSED (reserved, out of range, or in use)");
                             } else {
                                 g_ldt[widx].base = 0; g_ldt[widx].limit = 0;
                                 g_ldt[widx].access = 0xF2; g_ldt[widx].flags = 0;
                                 dpmi_install(widx);
                                 if (widx >= g_ldt_next) g_ldt_next = widx + 1;
                                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                                p = zput(p, " -> allocated specific sel 0x"); p = zhex(p, want);
+                                p = LogPut(p, " -> allocated specific sel 0x"); p = LogHex(p, want);
                             }
                             break; }
                         case 0x0100: {                             /* allocate DOS memory: BX paras -> AX=seg, DX=sel */
@@ -25201,14 +25201,14 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 DosMcbFree(NULL, seg);
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, DPMI_E_DESC_UNAVAIL);
-                                p = zput(p, " -> DOSmem: no descriptor (8011h)");
+                                p = LogPut(p, " -> DOSmem: no descriptor (8011h)");
                                 break;
                             }
                             if (err) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, err ? err : 0x0008);   /* 8 = insufficient memory */
                                 VDM_SET16(tib, VTIB_EBX, max);                  /* largest available (paras) */
-                                p = zput(p, " -> DOSmem ENOMEM max=0x"); p = zhex(p, max);
+                                p = LogPut(p, " -> DOSmem ENOMEM max=0x"); p = LogHex(p, max);
                                 /* ⚠ AND SAY WHO HAS THE MEMORY. (s73) Heretic dies here
                                      -- "I_AllocLow: DOS alloc of 1024 failed, 256 free" --
                                      and "insufficient memory" on its own cannot be told
@@ -25217,7 +25217,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                      coalesced looks completely different from a guest
                                      that really did take everything. */
                                 {   uint16_t mm = m.FirstMcb; int guard2 = 0;
-                                    p = zput(p, " chain:");
+                                    p = LogPut(p, " chain:");
                                     for (;;) {
                                         volatile BYTE *mc = (volatile BYTE *)((DWORD)mm << 4);
                                         BYTE sig = mc[0];
@@ -25228,7 +25228,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                              chain, hit ENOMEM, and the host died with an AV at
                                              an EIP made of ASCII (runs/s87_dpmi). Stop with room
                                              to spare and say so. */
-                                        if (p - base > 1600) { p = zput(p, " ...(chain dump truncated)"); break; }
+                                        if (p - base > 1600) { p = LogPut(p, " ...(chain dump truncated)"); break; }
                                         WORD own = (WORD)(mc[1] | (mc[2] << 8));
                                         WORD sz  = (WORD)(mc[3] | (mc[4] << 8));
                                         if ((sig != 'M' && sig != 'Z') || ++guard2 > 48) {
@@ -25238,18 +25238,18 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                                  guest data, zeros, or -- as with Heretic --
                                                  our own text. The theory comes after the bytes. */
                                             int bi;
-                                            p = zput(p, " STOP@0x"); p = zhex(p, mm); p = zput(p, " bytes=[");
-                                            for (bi = 0; bi < 16; ++bi) { p = zhexb(p, mc[bi]); p = zput(p, bi < 15 ? " " : "]"); }
+                                            p = LogPut(p, " STOP@0x"); p = LogHex(p, mm); p = LogPut(p, " bytes=[");
+                                            for (bi = 0; bi < 16; ++bi) { p = LogHexByte(p, mc[bi]); p = LogPut(p, bi < 15 ? " " : "]"); }
                                             break;
                                         }
-                                        p = zput(p, " 0x");   p = zhex(p, mm);
-                                        p = zput(p, ":");     p = zput(p, own ? "own=0x" : "FREE sz=0x");
-                                        if (own) { p = zhex(p, own); p = zput(p, "/sz=0x"); }
-                                        p = zhex(p, sz);
+                                        p = LogPut(p, " 0x");   p = LogHex(p, mm);
+                                        p = LogPut(p, ":");     p = LogPut(p, own ? "own=0x" : "FREE sz=0x");
+                                        if (own) { p = LogHex(p, own); p = LogPut(p, "/sz=0x"); }
+                                        p = LogHex(p, sz);
                                         if (sig == 'Z') break;
                                         mm = (uint16_t)(mm + 1 + sz);
                                     }
-                                    p = zput(p, "\r\n"); }
+                                    p = LogPut(p, "\r\n"); }
                             } else {
                                 g_ldt[idx].base = (DWORD)seg << 4;
                                 g_ldt[idx].limit = want ? ((DWORD)want << 4) - 1 : 0;
@@ -25258,8 +25258,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 if (g_dpmi_ndosblk < DPMI_DOSBLK_MAX) g_dpmi_dosblk[g_dpmi_ndosblk++] = seg;
                                 VDM_SET16(tib, VTIB_EAX, seg);
                                 VDM_SET16(tib, VTIB_EDX, (WORD)((idx << 3) | 7));
-                                p = zput(p, " -> DOSmem seg=0x"); p = zhex(p, seg);
-                                p = zput(p, " sel=0x"); p = zhex(p, (idx << 3) | 7);
+                                p = LogPut(p, " -> DOSmem seg=0x"); p = LogHex(p, seg);
+                                p = LogPut(p, " sel=0x"); p = LogHex(p, (idx << 3) | 7);
                             }
                             break; }
                         case 0x0101: {                             /* free DOS memory: DX = selector */
@@ -25286,20 +25286,20 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             if (known < 0 && !(g_dpmi_ndosblk >= DPMI_DOSBLK_MAX && seg)) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_SEL);
-                                p = zput(p, " -> DOSfree REFUSED: not a 0100h selector (8022h)");
+                                p = LogPut(p, " -> DOSfree REFUSED: not a 0100h selector (8022h)");
                                 break;
                             }
                             derr = DosMcbFree(NULL, (uint16_t)seg);
                             if (derr) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, (WORD)derr);
-                                p = zput(p, " -> DOSfree FAILED, DOS error "); p = zhex(p, (DWORD)derr);
+                                p = LogPut(p, " -> DOSfree FAILED, DOS error "); p = LogHex(p, (DWORD)derr);
                                 break;
                             }
                             if (known >= 0) g_dpmi_dosblk[known] = g_dpmi_dosblk[--g_dpmi_ndosblk];
                             dpmi_ldt_release(idx);
-                            p = zput(p, " -> DOSfree seg=0x"); p = zhex(p, seg);
-                            p = zput(p, " sel 0x"); p = zhex(p, dsel); p = zput(p, " released");
+                            p = LogPut(p, " -> DOSfree seg=0x"); p = LogHex(p, seg);
+                            p = LogPut(p, " sel 0x"); p = LogHex(p, dsel); p = LogPut(p, " released");
                             break; }
                         case 0x0102: {                             /* resize DOS memory block: BX=new paras, DX=sel */
                             int idx = (VDM_REG(tib, VTIB_EDX) & 0xFFFF) >> 3;
@@ -25311,16 +25311,16 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                     VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                     VDM_SET16(tib, VTIB_EAX, err);       /* DOS error (7/8/9) */
                                     VDM_SET16(tib, VTIB_EBX, max);       /* largest available (paras) */
-                                    p = zput(p, " -> resize FAIL max=0x"); p = zhex(p, max);
+                                    p = LogPut(p, " -> resize FAIL max=0x"); p = LogHex(p, max);
                                 } else {
                                     g_ldt[idx].limit = want ? ((DWORD)want << 4) - 1 : 0;
                                     dpmi_install(idx);
-                                    p = zput(p, " -> resize seg=0x"); p = zhex(p, seg);
-                                    p = zput(p, " to 0x"); p = zhex(p, want); p = zput(p, " paras");
+                                    p = LogPut(p, " -> resize seg=0x"); p = LogHex(p, seg);
+                                    p = LogPut(p, " to 0x"); p = LogHex(p, want); p = LogPut(p, " paras");
                                 }
                             } else {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8022);  /* invalid sel */
-                                p = zput(p, " -> resize bad sel");
+                                p = LogPut(p, " -> resize bad sel");
                             }
                             break; }
                         /* ── ★★★★ THE REAL-MODE VECTOR PAIR. DPMI 0.9 CORE, AND WE HAD
@@ -25353,9 +25353,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             VDM_SET16(tib, VTIB_EDX, iv[0]);       /* offset  */
                             VDM_SET16(tib, VTIB_ECX, iv[1]);       /* segment */
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            p = zput(p, " -> getRMvec int 0x"); p = zhex(p, bl);
-                            p = zput(p, " = 0x"); p = zhex(p, iv[1]);
-                            p = zput(p, ":0x"); p = zhex(p, iv[0]);
+                            p = LogPut(p, " -> getRMvec int 0x"); p = LogHex(p, bl);
+                            p = LogPut(p, " = 0x"); p = LogHex(p, iv[1]);
+                            p = LogPut(p, ":0x"); p = LogHex(p, iv[0]);
                             break; }
                         case 0x0201: {                             /* set real-mode vector: BL = CX:DX */
                             DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
@@ -25364,11 +25364,11 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             iv[0] = (WORD)(VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                             iv[1] = (WORD)(VDM_REG(tib, VTIB_ECX) & 0xFFFF);
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            p = zput(p, " -> setRMvec int 0x"); p = zhex(p, bl);
-                            p = zput(p, " = 0x"); p = zhex(p, iv[1]);
-                            p = zput(p, ":0x"); p = zhex(p, iv[0]);
-                            p = zput(p, " (was 0x"); p = zhex(p, oseg);
-                            p = zput(p, ":0x"); p = zhex(p, ooff); p = zput(p, ")");
+                            p = LogPut(p, " -> setRMvec int 0x"); p = LogHex(p, bl);
+                            p = LogPut(p, " = 0x"); p = LogHex(p, iv[1]);
+                            p = LogPut(p, ":0x"); p = LogHex(p, iv[0]);
+                            p = LogPut(p, " (was 0x"); p = LogHex(p, oseg);
+                            p = LogPut(p, ":0x"); p = LogHex(p, ooff); p = LogPut(p, ")");
                             break; }
                         case 0x0204: {                             /* get PM interrupt vector: BL -> CX:(E)DX */
                             DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
@@ -25391,7 +25391,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 VDM_REG(tib, VTIB_EDX) = g_pm_int[bl].off;
                             else
                                 VDM_SET16(tib, VTIB_EDX, g_pm_int[bl].off & 0xFFFF);
-                            p = zput(p, " -> getPMvec int 0x"); p = zhex(p, bl);
+                            p = LogPut(p, " -> getPMvec int 0x"); p = LogHex(p, bl);
                             break; }
                         case 0x0205: {                             /* set PM interrupt vector: BL = CX:(E)DX */
                             DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
@@ -25417,9 +25417,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  there -- which is why `pmnoirq.flag` had to exist at all.
                                  Record when the vector was armed and let a tick period pass. */
                             if (bl == 0x08) g_pm_vec8_armed_ms = GetTickCount();
-                            p = zput(p, " -> setPMvec int 0x"); p = zhex(p, bl);
-                            p = zput(p, " = 0x"); p = zhex(p, g_pm_int[bl].sel);
-                            p = zput(p, ":0x"); p = zhex(p, g_pm_int[bl].off);
+                            p = LogPut(p, " -> setPMvec int 0x"); p = LogHex(p, bl);
+                            p = LogPut(p, " = 0x"); p = LogHex(p, g_pm_int[bl].sel);
+                            p = LogPut(p, ":0x"); p = LogHex(p, g_pm_int[bl].off);
                             break; }
                         /* ── 0202/0203 GET/SET PROTECTED-MODE EXCEPTION HANDLER ──────────
                            DPMI 0.9: BL = exception 00h..1Fh; CX:(E)DX = handler sel:off.
@@ -25442,7 +25442,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
                             if (bl > 0x1F) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8021);
-                                p = zput(p, " -> getEXC bad exception 0x"); p = zhex(p, bl); break;
+                                p = LogPut(p, " -> getEXC bad exception 0x"); p = LogHex(p, bl); break;
                             }
                             if (!g_pm_exc[bl].set) {
                                 g_pm_exc[bl].sel = dpmi_hdlr_code_sel();
@@ -25451,16 +25451,16 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             VDM_SET16(tib, VTIB_ECX, g_pm_exc[bl].sel);
                             if (dpmi_sel_is32(g_pm_exc[bl].sel)) VDM_REG(tib, VTIB_EDX) = g_pm_exc[bl].off;
                             else VDM_SET16(tib, VTIB_EDX, g_pm_exc[bl].off & 0xFFFF);
-                            p = zput(p, " -> getEXC 0x"); p = zhex(p, bl);
-                            p = zput(p, " = 0x"); p = zhex(p, g_pm_exc[bl].sel);
-                            p = zput(p, ":0x"); p = zhex(p, g_pm_exc[bl].off);
+                            p = LogPut(p, " -> getEXC 0x"); p = LogHex(p, bl);
+                            p = LogPut(p, " = 0x"); p = LogHex(p, g_pm_exc[bl].sel);
+                            p = LogPut(p, ":0x"); p = LogHex(p, g_pm_exc[bl].off);
                             break; }
                         case 0x0203: {                             /* set PM exception handler: BL = CX:(E)DX */
                             DWORD bl = VDM_REG(tib, VTIB_EBX) & 0xFF;
                             WORD hsel = (WORD)VDM_REG(tib, VTIB_ECX);
                             if (bl > 0x1F) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8021);
-                                p = zput(p, " -> setEXC bad exception 0x"); p = zhex(p, bl); break;
+                                p = LogPut(p, " -> setEXC bad exception 0x"); p = LogHex(p, bl); break;
                             }
                             g_pm_exc[bl].sel = hsel;
                             /* same 16/32 offset rule as 0205: a 32-bit handler selector means
@@ -25468,9 +25468,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             g_pm_exc[bl].off = dpmi_sel_is32(hsel) ? VDM_REG(tib, VTIB_EDX)
                                                                    : (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                             g_pm_exc[bl].set = 1;
-                            p = zput(p, " -> setEXC 0x"); p = zhex(p, bl);
-                            p = zput(p, " = 0x"); p = zhex(p, g_pm_exc[bl].sel);
-                            p = zput(p, ":0x"); p = zhex(p, g_pm_exc[bl].off);
+                            p = LogPut(p, " -> setEXC 0x"); p = LogHex(p, bl);
+                            p = LogPut(p, " = 0x"); p = LogHex(p, g_pm_exc[bl].sel);
+                            p = LogPut(p, ":0x"); p = LogHex(p, g_pm_exc[bl].off);
                             break; }
                         /* ── 06xx PAGE LOCKING / 07xx DEMAND-PAGING HINTS ────────────────
                            These are all trivially satisfiable here, and that is a FACT about
@@ -25495,31 +25495,31 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                            guest something failed when nothing did. */
                         case 0x0703:                               /* discard page contents, DPMI 1.0 (advisory) */
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            p = zput(p, " -> paging no-op (no virtual memory here)");
+                            p = LogPut(p, " -> paging no-op (no virtual memory here)");
                             break;
                         case 0x0604:                               /* get page size -> BX:CX */
                             VDM_SET16(tib, VTIB_EBX, 0);
                             VDM_SET16(tib, VTIB_ECX, 0x1000);
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            p = zput(p, " -> page size 4096");
+                            p = LogPut(p, " -> page size 4096");
                             break;
                         case 0x0900:                               /* get + disable virtual interrupt state */
                             VDM_SET16(tib, VTIB_EAX, 0x0900 | (g_dpmi_vi & 1));
-                            g_dpmi_vi = 0; p = zput(p, " -> cli");
+                            g_dpmi_vi = 0; p = LogPut(p, " -> cli");
                             break;
                         case 0x0901:                               /* get + enable virtual interrupt state */
                             VDM_SET16(tib, VTIB_EAX, 0x0900 | (g_dpmi_vi & 1));
-                            g_dpmi_vi = 1; p = zput(p, " -> sti");
+                            g_dpmi_vi = 1; p = LogPut(p, " -> sti");
                             break;
                         case 0x0902:                               /* get virtual interrupt state -> AL */
                             VDM_SET16(tib, VTIB_EAX, 0x0900 | (g_dpmi_vi & 1));
-                            p = zput(p, " -> getIF ");  p = zhex(p, g_dpmi_vi);
+                            p = LogPut(p, " -> getIF ");  p = LogHex(p, g_dpmi_vi);
                             break;
                         case 0x0006: {                             /* get base of sel BX -> CX:DX */
                             DWORD b = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_EBX)));
                             VDM_SET16(tib, VTIB_ECX, b >> 16); VDM_SET16(tib, VTIB_EDX, b & 0xFFFF);
-                            p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                            p = zput(p, " -> base 0x"); p = zhex(p, b);
+                            p = LogPut(p, " sel 0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            p = LogPut(p, " -> base 0x"); p = LogHex(p, b);
                             break; }
                         /* 0007/0008/0009 now act on idx>=1: since run 48 records the switch's
                            code/data/stack selectors (0x0F/0x17/0x1F) in g_ldt[1..3], a client that
@@ -25534,16 +25534,16 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             if (!dpmi_client_sel_ok((WORD)VDM_REG(tib, VTIB_EBX))) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_SEL);
-                                p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                                p = zput(p, " -> REFUSED: invalid selector (8022h)");
+                                p = LogPut(p, " sel 0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                                p = LogPut(p, " -> REFUSED: invalid selector (8022h)");
                                 break;
                             }
                             if (ax == 0x0007) {                    /* set base of sel BX = CX:DX */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
                             DWORD b = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                             if (idx >= 1 && idx < DPMI_LDT_MAX) { g_ldt[idx].base = b; dpmi_install(idx); }
-                            p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                            p = zput(p, " -> setbase 0x"); p = zhex(p, b);
+                            p = LogPut(p, " sel 0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            p = LogPut(p, " -> setbase 0x"); p = LogHex(p, b);
                             break; }
                             if (ax == 0x0008) {                    /* set limit of sel BX = CX:DX */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
@@ -25557,8 +25557,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 g_ldt[idx].limit = l; g_ldt[idx].flags &= (BYTE)~0x8;
                                 dpmi_install(idx);
                             }
-                            p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                            p = zput(p, " -> setlimit 0x"); p = zhex(p, l);
+                            p = LogPut(p, " sel 0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            p = LogPut(p, " -> setlimit 0x"); p = LogHex(p, l);
                             break; }
                             {                                      /* 0009: set access rights of sel BX (CX) */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
@@ -25586,8 +25586,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                     need_scan = 1;
                                 }
                             }
-                            p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                            p = zput(p, " -> setaccess 0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+                            p = LogPut(p, " sel 0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            p = LogPut(p, " -> setaccess 0x"); p = LogHex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
                             break; }
                         case 0x000A: {                             /* create data alias of sel BX */
                             int src = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3, idx;
@@ -25596,18 +25596,18 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             if (!dpmi_client_sel_ok((WORD)VDM_REG(tib, VTIB_EBX))) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_SEL);
-                                p = zput(p, " -> alias REFUSED: invalid selector (8022h)");
+                                p = LogPut(p, " -> alias REFUSED: invalid selector (8022h)");
                                 break;
                             }
                             if (g_ldt_next >= DPMI_LDT_MAX) { VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, DPMI_E_DESC_UNAVAIL);
-                                p = zput(p, " -> ENOMEM"); break; }
+                                p = LogPut(p, " -> ENOMEM"); break; }
                             idx = g_ldt_next++;
                             g_ldt[idx] = g_ldt[src];
                             g_ldt[idx].access = 0xF2;              /* data alias */
                             dpmi_install(idx);
                             VDM_SET16(tib, VTIB_EAX, (WORD)((idx << 3) | 7));
-                            p = zput(p, " -> alias sel 0x"); p = zhex(p, (idx << 3) | 7);
+                            p = LogPut(p, " -> alias sel 0x"); p = LogHex(p, (idx << 3) | 7);
                             break; }
                         /* 000B/000C GET/SET DESCRIPTOR -- the raw 8-byte descriptor form of
                            0006-0009. DOS/4GW (Doom) is the client that needs them, and the
@@ -25625,19 +25625,19 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             if (!s2d) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, 0x8011);  /* descriptor unavailable */
-                                p = zput(p, " -> seg2desc ENOMEM");
+                                p = LogPut(p, " -> seg2desc ENOMEM");
                                 break;
                             }
                             VDM_SET16(tib, VTIB_EAX, s2d);
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            p = zput(p, " -> seg 0x");  p = zhex(p, rseg);
-                            p = zput(p, " = sel 0x");   p = zhex(p, s2d);
+                            p = LogPut(p, " -> seg 0x");  p = LogHex(p, rseg);
+                            p = LogPut(p, " = sel 0x");   p = LogHex(p, s2d);
                             /* ⚠ Say so the moment the host-private pool overflows:
                                  past that point host selectors come from the client's
                                  arena again and the collision this pool exists to
                                  prevent is back, silently. */
                             if (g_hostpool_spill)
-                                p = zput(p, " ** HOST LDT POOL EXHAUSTED -- minting from"
+                                p = LogPut(p, " ** HOST LDT POOL EXHAUSTED -- minting from"
                                             " the client arena, collisions possible **");
                             break; }
                         case 0x0003:                               /* get selector increment value */
@@ -25645,14 +25645,14 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                allocated by 0000. Our selectors are LDT entries, so 8. */
                             VDM_SET16(tib, VTIB_EAX, 8);
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            p = zput(p, " -> sel increment 8");
+                            p = LogPut(p, " -> sel increment 8");
                             break;
                         case 0x0A00:                               /* get vendor-specific API entry */
                             /* Correct answer is "no such vendor API": CF=1. The default arm
                                already does that, but naming it here stops it reading as a gap
                                in the Doom trace -- DOS/4GW asks, is refused, and carries on. */
                             VDM_REG(tib, VTIB_EFLAGS) |= 1u;
-                            p = zput(p, " -> no vendor API (CF=1, correct)");
+                            p = LogPut(p, " -> no vendor API (CF=1, correct)");
                             break;
                         case 0x000B: {                             /* get descriptor of sel BX -> ES:(E)DI */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
@@ -25666,11 +25666,11 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             if (idx >= 1 && idx < DPMI_LDT_MAX)
                                 DpmiBuildDescriptor(g_ldt[idx].base, g_ldt[idx].limit,
                                                 g_ldt[idx].access, g_ldt[idx].flags, &lo, &hi);
-                            else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; p = zput(p, " -> bad sel"); break; }
+                            else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; p = LogPut(p, " -> bad sel"); break; }
                             d[0] = lo; d[1] = hi;
-                            p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                            p = zput(p, " -> desc 0x"); p = zhex(p, lo);
-                            p = zput(p, ":0x"); p = zhex(p, hi);
+                            p = LogPut(p, " sel 0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            p = LogPut(p, " -> desc 0x"); p = LogHex(p, lo);
+                            p = LogPut(p, ":0x"); p = LogHex(p, hi);
                             break; }
                         case 0x000C: {                             /* set descriptor of sel BX from ES:(E)DI */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
@@ -25679,7 +25679,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             DWORD lo, hi;
                             dpmi_rmcs_probe(tib, esb, 4, 0);       /* observation only */
                             if (idx < 1 || idx >= 512) { VDM_REG(tib, VTIB_EFLAGS) |= 1u;
-                                                         p = zput(p, " -> bad sel"); break; }
+                                                         p = LogPut(p, " -> bad sel"); break; }
                             lo = d[0]; hi = d[1];
                             /* Exact inverse of DpmiBuildDescriptor(). */
                             g_ldt[idx].limit  = (lo & 0xFFFF) | (((hi >> 16) & 0xF) << 16);
@@ -25693,13 +25693,13 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                                        (g_ldt[idx].flags & 0x4) != 0);
                                 need_scan = 1;
                             }
-                            p = zput(p, " sel 0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                            p = zput(p, " <- desc 0x"); p = zhex(p, lo);
-                            p = zput(p, ":0x"); p = zhex(p, hi);
-                            p = zput(p, " (base 0x"); p = zhex(p, g_ldt[idx].base);
-                            p = zput(p, " limit 0x"); p = zhex(p, g_ldt[idx].limit);
-                            p = zput(p, " acc 0x"); p = zhexb(p, g_ldt[idx].access);
-                            p = zput(p, " flg 0x"); p = zhexb(p, g_ldt[idx].flags); p = zput(p, ")");
+                            p = LogPut(p, " sel 0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            p = LogPut(p, " <- desc 0x"); p = LogHex(p, lo);
+                            p = LogPut(p, ":0x"); p = LogHex(p, hi);
+                            p = LogPut(p, " (base 0x"); p = LogHex(p, g_ldt[idx].base);
+                            p = LogPut(p, " limit 0x"); p = LogHex(p, g_ldt[idx].limit);
+                            p = LogPut(p, " acc 0x"); p = LogHexByte(p, g_ldt[idx].access);
+                            p = LogPut(p, " flg 0x"); p = LogHexByte(p, g_ldt[idx].flags); p = LogPut(p, ")");
                             break; }
                         case 0x0305: {                             /* get state save/restore addresses */
                             /* AX = buffer size, BX:CX = real-mode routine, SI:(E)DI = PM routine.
@@ -25714,11 +25714,11 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             VDM_SET16(tib, VTIB_ESI, sel);
                             VDM_REG  (tib, VTIB_EDI) = DPMI_SSR_OFF;
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;      /* CF=0: always succeeds */
-                            p = zput(p, " -> saverestore rm=0x"); p = zhex(p, DOS_HDLR_SEG);
-                            p = zput(p, ":0x"); p = zhex(p, DPMI_SSR_OFF);
-                            p = zput(p, " pm=0x"); p = zhex(p, sel);
-                            p = zput(p, ":0x"); p = zhex(p, DPMI_SSR_OFF);
-                            p = zput(p, " size=0x40");
+                            p = LogPut(p, " -> saverestore rm=0x"); p = LogHex(p, DOS_HDLR_SEG);
+                            p = LogPut(p, ":0x"); p = LogHex(p, DPMI_SSR_OFF);
+                            p = LogPut(p, " pm=0x"); p = LogHex(p, sel);
+                            p = LogPut(p, ":0x"); p = LogHex(p, DPMI_SSR_OFF);
+                            p = LogPut(p, " size=0x40");
                             break; }
                         case 0x0306: {                             /* get raw mode switch addresses */
                             /* THE CALL DOOM DIES ON. Its code right after this BOP is
@@ -25731,10 +25731,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             VDM_SET16(tib, VTIB_ESI, sel);                 /* prot->real sel   */
                             VDM_REG  (tib, VTIB_EDI) = DPMI_RAW2RM_OFF;    /* prot->real off   */
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;              /* CF=0             */
-                            p = zput(p, " -> rawswitch r2p=0x"); p = zhex(p, DOS_HDLR_SEG);
-                            p = zput(p, ":0x"); p = zhex(p, DPMI_RAW2PM_OFF);
-                            p = zput(p, " p2r=0x"); p = zhex(p, sel);
-                            p = zput(p, ":0x"); p = zhex(p, DPMI_RAW2RM_OFF);
+                            p = LogPut(p, " -> rawswitch r2p=0x"); p = LogHex(p, DOS_HDLR_SEG);
+                            p = LogPut(p, ":0x"); p = LogHex(p, DPMI_RAW2PM_OFF);
+                            p = LogPut(p, " p2r=0x"); p = LogHex(p, sel);
+                            p = LogPut(p, ":0x"); p = LogHex(p, DPMI_RAW2RM_OFF);
                             break; }
                         case 0x0500: {                             /* get free memory info -> ES:DI */
                             /* ── REPORT COHERENT NUMBERS, NOT A FIELD OF -1s. ───────────────
@@ -25764,8 +25764,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             int i;
                             if (!mem_readable((ULONG_PTR)ia, 0x30)) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8021);
-                                p = zput(p, " -> meminfo REFUSED: ES:EDI 0x"); p = zhex(p, ia);
-                                p = zput(p, " unreadable"); break;
+                                p = LogPut(p, " -> meminfo REFUSED: ES:EDI 0x"); p = LogHex(p, ia);
+                                p = LogPut(p, " unreadable"); break;
                             }
                             for (i = 0; i < 12; ++i) info[i] = 0xFFFFFFFFu;
                             info[0] = pool_bytes;                  /* largest free block, bytes */
@@ -25777,7 +25777,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             info[6] = pool_pages;                  /* total physical pages      */
                             info[7] = pool_pages;                  /* free linear address space */
                             info[8] = 0;                           /* no paging file            */
-                            p = zput(p, " -> meminfo 64MB/0x4000 pages");
+                            p = LogPut(p, " -> meminfo 64MB/0x4000 pages");
                             break; }
                         /* ── ★★★ 0800: MAP A PHYSICAL ADDRESS INTO THE LINEAR SPACE. (s74)
                              The other half of the VESA linear framebuffer. 4F01 reports
@@ -25801,18 +25801,18 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                      |  (VDM_REG(tib, VTIB_ECX) & 0xFFFF);
                             DWORD sz = ((VDM_REG(tib, VTIB_ESI) & 0xFFFF) << 16)
                                      |  (VDM_REG(tib, VTIB_EDI) & 0xFFFF);
-                            p = zput(p, " phys=0x"); p = zhex(p, ph);
-                            p = zput(p, " size=0x"); p = zhex(p, sz);
+                            p = LogPut(p, " phys=0x"); p = LogHex(p, ph);
+                            p = LogPut(p, " size=0x"); p = LogHex(p, sz);
                             if (ph == VIDEO_VESA_LFB_PHYSICAL && sz <= VIDEO_VESA_VRAM) {
                                 DWORD lin = (DWORD)(ULONG_PTR)&g_vid.VesaVram[0];
                                 VDM_SET16(tib, VTIB_EBX, (WORD)(lin >> 16));
                                 VDM_SET16(tib, VTIB_ECX, (WORD)(lin & 0xFFFF));
                                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                                p = zput(p, " -> VESA LFB linear=0x"); p = zhex(p, lin);
+                                p = LogPut(p, " -> VESA LFB linear=0x"); p = LogHex(p, lin);
                             } else {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, 0x8021);   /* invalid value */
-                                p = zput(p, " -> REFUSED (not our aperture)");
+                                p = LogPut(p, " -> REFUSED (not our aperture)");
                             }
                             break; }
                         case 0x0801:                               /* free physical mapping */
@@ -25820,17 +25820,17 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                outlives the client. Succeeding is honest; failing would
                                make a tidy client think it had leaked something. */
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            p = zput(p, " -> free physical mapping (no-op, buffer is ours)");
+                            p = LogPut(p, " -> free physical mapping (no-op, buffer is ours)");
                             break;
                         case 0x0501: {                             /* allocate memory block BX:CX bytes */
                             DWORD sz = ((VDM_REG(tib, VTIB_EBX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_ECX) & 0xFFFF);
                             void *mem;
                             if (g_dpmi_nowned >= DPMI_OWNED_MAX) {  /* #248: no handle to give */
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, DPMI_E_HANDLE_UNAVAIL);
-                                p = zput(p, " -> no handle (8016h)"); break; }
+                                p = LogPut(p, " -> no handle (8016h)"); break; }
                             mem = VirtualAlloc(NULL, sz ? sz : 1, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
                             if (!mem) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 0x8013);
-                                        p = zput(p, " -> ENOMEM"); break; }
+                                        p = LogPut(p, " -> ENOMEM"); break; }
                             g_dpmi_owned[g_dpmi_nowned++] = (DWORD)(ULONG_PTR)mem;   /* the client's until 0502 or exit */
                             if (g_dpmi_nblk < DPMI_MEMBLK_MAX) {   /* remember it: see the flat-selector case */
                                 int c; BYTE iscode = 0;
@@ -25844,15 +25844,15 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 g_dpmi_blk[g_dpmi_nblk].size = sz ? sz : 1;
                                 g_dpmi_blk[g_dpmi_nblk].code = iscode;
                                 ++g_dpmi_nblk;
-                                if (iscode) { p = zput(p, " [LE CODE OBJECT]");
+                                if (iscode) { p = LogPut(p, " [LE CODE OBJECT]");
                                     /* The FIRST one is the image base every offset in a
                                        disassembly is relative to. See pm_watch_addr(). */
                                     if (!g_le_load_base) {
                                         g_le_load_base = (DWORD)(ULONG_PTR)mem;
                                         /* Flush the pending line before the resolver
                                            writes its own, or the two interleave. */
-                                        p = zput(p, "\r\n");
-                                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                        p = LogPut(p, "\r\n");
+                                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                                         dpmi_bp_resolve_codebase(g_le_load_base);
                                         dpmi_bp_arm();   /* it may now be plantable */
                                     } }
@@ -25860,7 +25860,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             { DWORD lin = (DWORD)(ULONG_PTR)mem;   /* in-process: linear = host ptr */
                               VDM_SET16(tib, VTIB_EBX, lin >> 16); VDM_SET16(tib, VTIB_ECX, lin & 0xFFFF);
                               VDM_SET16(tib, VTIB_ESI, lin >> 16); VDM_SET16(tib, VTIB_EDI, lin & 0xFFFF); /* handle=addr */
-                              p = zput(p, " -> mem 0x"); p = zhex(p, lin); }
+                              p = LogPut(p, " -> mem 0x"); p = LogHex(p, lin); }
                             /* A new block may be the one the image is being read into, and an
                                EARLIER code block may have finished filling since we last looked. */
                             need_scan = 1;
@@ -25872,8 +25872,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  corrupt handle would have released the HOST's memory. 8023h. */
                             if (dpmi_owned_find(h) < 0) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_HANDLE);
-                                p = zput(p, " handle 0x"); p = zhex(p, h);
-                                p = zput(p, " -> REFUSED: not a live 0501h handle (8023h)");
+                                p = LogPut(p, " handle 0x"); p = LogHex(p, h);
+                                p = LogPut(p, " -> REFUSED: not a live 0501h handle (8023h)");
                                 break;
                             }
                             /* ── THE PATCH MAP MUST FORGET THE BLOCK TOO. (s80) pmap holds
@@ -25901,7 +25901,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                   if (g_dpmi_owned[i] == h) { g_dpmi_owned[i] = g_dpmi_owned[--g_dpmi_nowned]; break; }
                               for (i = 0; i < g_dpmi_nblk; ++i)
                                   if (g_dpmi_blk[i].base == h) { g_dpmi_blk[i] = g_dpmi_blk[--g_dpmi_nblk]; break; } }
-                            p = zput(p, " -> freed");
+                            p = LogPut(p, " -> freed");
                             break; }
                         case 0x0503: {                             /* resize memory block: BX:CX = size, SI:DI = handle */
                             /* ── ★ #248: DPMI 0.9 CORE, AND IT WAS UNSUP. A client that grows its
@@ -25921,10 +25921,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             int oi = dpmi_owned_find(h), plan, bi;
                             DWORD end = h, committed, nh; uint32_t copy = 0;
                             MEMORY_BASIC_INFORMATION mb;
-                            p = zput(p, " handle 0x"); p = zhex(p, h); p = zput(p, " size 0x"); p = zhex(p, nsz);
+                            p = LogPut(p, " handle 0x"); p = LogHex(p, h); p = LogPut(p, " size 0x"); p = LogHex(p, nsz);
                             if (oi < 0) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_HANDLE);
-                                p = zput(p, " -> REFUSED: not a live 0501h handle (8023h)"); break;
+                                p = LogPut(p, " -> REFUSED: not a live 0501h handle (8023h)"); break;
                             }
                             while (VirtualQuery((LPCVOID)(ULONG_PTR)end, &mb, sizeof mb) == sizeof mb
                                    && (DWORD)(ULONG_PTR)mb.AllocationBase == h && mb.RegionSize
@@ -25934,7 +25934,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             plan = DpmiResizePlan(nsz, committed, &copy);
                             if (plan == DPMI_RESIZE_BAD) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_VALUE);
-                                p = zput(p, " -> REFUSED: size 0 (8021h)"); break;
+                                p = LogPut(p, " -> REFUSED: size 0 (8021h)"); break;
                             }
                             nh = h;
                             if (plan == DPMI_RESIZE_MOVE) {
@@ -25942,7 +25942,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 DWORD sl, delta, moved = 0;
                                 if (!mem) {
                                     VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, DPMI_E_PHYS_UNAVAIL);
-                                    p = zput(p, " -> ENOMEM (block unchanged)"); break;
+                                    p = LogPut(p, " -> ENOMEM (block unchanged)"); break;
                                 }
                                 nh = (DWORD)(ULONG_PTR)mem;
                                 memcpy(mem, (const void *)(ULONG_PTR)h, copy);
@@ -25956,12 +25956,12 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 VirtualFree((void *)(ULONG_PTR)h, 0, MEM_RELEASE);
                                 g_dpmi_owned[oi] = nh;
                                 if (g_le_load_base == h) g_le_load_base = nh;
-                                p = zput(p, " -> MOVED to 0x"); p = zhex(p, nh);
-                                p = zput(p, " (copied 0x"); p = zhex(p, copy);
-                                p = zput(p, ", 0x"); p = zhex(p, moved); p = zput(p, " patch sites re-keyed)");
+                                p = LogPut(p, " -> MOVED to 0x"); p = LogHex(p, nh);
+                                p = LogPut(p, " (copied 0x"); p = LogHex(p, copy);
+                                p = LogPut(p, ", 0x"); p = LogHex(p, moved); p = LogPut(p, " patch sites re-keyed)");
                                 need_scan = 1;
                             } else {
-                                p = zput(p, " -> in place (committed 0x"); p = zhex(p, committed); p = zput(p, ")");
+                                p = LogPut(p, " -> in place (committed 0x"); p = LogHex(p, committed); p = LogPut(p, ")");
                             }
                             for (bi = 0; bi < g_dpmi_nblk; ++bi)
                                 if (g_dpmi_blk[bi].base == h) { g_dpmi_blk[bi].base = nh; g_dpmi_blk[bi].size = nsz; break; }
@@ -25983,8 +25983,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                               if (RmcsSimIntRoute(intno, hs, ho, g_simint_reflect, DOS_HDLR_SEG) != SIMINT_FAST) {
                                   g_simint_unhandled++;
                                   if (intno < 256) g_simint_vec[intno]++;
-                                  p = zput(p, " -> simInt 0x"); p = zhex(p, intno);
-                                  p = zput(p, (hs | ho) ? " NOT RUN (simintrefl_off.flag)" : " NOT RUN (null vector)");
+                                  p = LogPut(p, " -> simInt 0x"); p = LogHex(p, intno);
+                                  p = LogPut(p, (hs | ho) ? " NOT RUN (simintrefl_off.flag)" : " NOT RUN (null vector)");
                                   break;
                               } }
                             InterlockedExchange(&g_simint_busy, 1);  /* no async injection in here */
@@ -26082,18 +26082,18 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                     static int s_vbe_logged;
                                     if (s_vbe_logged++ < 48) {
                                         char vb[160], *vq = vb;
-                                        vq = zput(vq, "SIMINT10 VBE in=0x"); vq = zhex(vq, in_ax);
-                                        vq = zput(vq, " cx=0x"); vq = zhex(vq, in_cx);
-                                        vq = zput(vq, " -> ax=0x"); vq = zhex(vq, (WORD)vr.Eax);
+                                        vq = LogPut(vq, "SIMINT10 VBE in=0x"); vq = LogHex(vq, in_ax);
+                                        vq = LogPut(vq, " cx=0x"); vq = LogHex(vq, in_cx);
+                                        vq = LogPut(vq, " -> ax=0x"); vq = LogHex(vq, (WORD)vr.Eax);
                                         if (in_ax == 0x4F01 || in_ax == 0x4F00) {
                                             DWORD lin = ((DWORD)(WORD)vr.Es << 4) + (WORD)vr.Edi;
                                             if (host_readable((const void *)(ULONG_PTR)lin, 8)) {
-                                                vq = zput(vq, in_ax == 0x4F01 ? " attr=0x" : " sig/ver=");
-                                                vq = zhex(vq, *(volatile DWORD *)(ULONG_PTR)lin);
-                                                if (in_ax == 0x4F00) { vq = zput(vq, "/0x"); vq = zhex(vq, *(volatile WORD *)(ULONG_PTR)(lin + 4)); }
+                                                vq = LogPut(vq, in_ax == 0x4F01 ? " attr=0x" : " sig/ver=");
+                                                vq = LogHex(vq, *(volatile DWORD *)(ULONG_PTR)lin);
+                                                if (in_ax == 0x4F00) { vq = LogPut(vq, "/0x"); vq = LogHex(vq, *(volatile WORD *)(ULONG_PTR)(lin + 4)); }
                                             }
                                         }
-                                        vq = zput(vq, "\r\n"); log_append(LOG_PATH, vb, vq);
+                                        vq = LogPut(vq, "\r\n"); LogAppend(LOG_PATH, vb, vq);
                                     }
                                 }
                                 regs_store(&vr, tib);
@@ -26117,7 +26117,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             VDM_REG(tib,VTIB_SS)=sSs;VDM_REG(tib,VTIB_ESP)=sSp;VDM_REG(tib,VTIB_EFLAGS)=sFl;
                             VDM_REG(tib,VTIB_EFLAGS) &= ~1u;       /* 0300 succeeds */
                             InterlockedExchange(&g_simint_busy, 0);
-                            p = zput(p, " -> simInt 0x"); p = zhex(p, intno);
+                            p = LogPut(p, " -> simInt 0x"); p = LogHex(p, intno);
                             break; }
                         case 0x0302:                               /* ...with an IRET frame */
                         case 0x0301: {                             /* call real-mode FAR proc: ES:DI=RMCS, CX=stack words */
@@ -26167,9 +26167,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                the SAME window as 0300h and share its guard -- see g_simint_busy. */
                             InterlockedExchange(&g_simint_busy, 1);
                             if (rss == 0) { rss = (WORD)(g_dpmi_code_base >> 4); rsp = 0xFF00; }
-                            p = zput(p, (ax == 0x0302) ? " -> callRM(iret) 0x" : " -> callRM 0x");
-                            p = zhex(p, rcs); p = zput(p, ":0x"); p = zhex(p, rip);
-                            p = zput(p, " SS:SP=0x"); p = zhex(p, rss); p = zput(p, ":0x"); p = zhex(p, rsp);
+                            p = LogPut(p, (ax == 0x0302) ? " -> callRM(iret) 0x" : " -> callRM 0x");
+                            p = LogHex(p, rcs); p = LogPut(p, ":0x"); p = LogHex(p, rip);
+                            p = LogPut(p, " SS:SP=0x"); p = LogHex(p, rss); p = LogPut(p, ":0x"); p = LogHex(p, rsp);
                             /* ── #247: CX WORDS OF THE PROTECTED-MODE STACK. All three services take
                                  them, and all three ignored them -- a real-mode procedure that reads
                                  its arguments off its stack read whatever was below our frame.
@@ -26185,16 +26185,16 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 WORD nsp; WORD pss = (WORD)(pSs & 0xFFFF);
                                 DWORD poff = dpmi_sel_is32(pss) ? pSp : (pSp & 0xFFFF);
                                 const BYTE *src = (const BYTE *)(ULONG_PTR)(dpmi_sel_base(pss) + poff);
-                                p = zput(p, " copy=0x"); p = zhex(p, cxw);
+                                p = LogPut(p, " copy=0x"); p = LogHex(p, cxw);
                                 if (RmcsStackPlan(rsp, (unsigned)cxw, (ax == 0x0302) ? 6u : 4u, &nsp)
                                     && host_readable(src, cxw * 2u)) {
                                     DWORD k;
                                     for (k = 0; k < cxw * 2u; ++k)
                                         *(volatile BYTE *)(ULONG_PTR)(((DWORD)rss << 4) + (WORD)(nsp + k)) = src[k];
                                     rsp = nsp;
-                                    p = zput(p, " words");
+                                    p = LogPut(p, " words");
                                 } else {
-                                    p = zput(p, " words NOT COPIED (do not fit below SP, or PM stack unreadable)");
+                                    p = LogPut(p, " words NOT COPIED (do not fit below SP, or PM stack unreadable)");
                                 }
                             }
                             /* ► THE POINTER ARGUMENT, BECAUSE THAT IS WHAT GOES WRONG HERE.
@@ -26207,21 +26207,21 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             { WORD rds = *(volatile WORD*)(r+0x24), rdx = *(volatile WORD*)(r+0x14);
                               DWORD lin = ((DWORD)rds << 4) + rdx;
                               const BYTE *sb = (const BYTE *)(ULONG_PTR)lin;
-                              p = zput(p, " AX=0x"); p = zhex(p, *(volatile WORD*)(r+0x1C));
-                              p = zput(p, " BX=0x"); p = zhex(p, *(volatile WORD*)(r+0x10));
-                              p = zput(p, " CX=0x"); p = zhex(p, *(volatile WORD*)(r+0x18));
-                              p = zput(p, " DS:DX=0x"); p = zhex(p, rds); p = zput(p, ":0x"); p = zhex(p, rdx);
+                              p = LogPut(p, " AX=0x"); p = LogHex(p, *(volatile WORD*)(r+0x1C));
+                              p = LogPut(p, " BX=0x"); p = LogHex(p, *(volatile WORD*)(r+0x10));
+                              p = LogPut(p, " CX=0x"); p = LogHex(p, *(volatile WORD*)(r+0x18));
+                              p = LogPut(p, " DS:DX=0x"); p = LogHex(p, rds); p = LogPut(p, ":0x"); p = LogHex(p, rdx);
                               /* And WHERE we read the RMCS from -- ES:EDI, full width. The
                                  offset is masked to 16 bits below, which is right only while
                                  the caller is 16-bit code; print it so a garbage RMCS can be
                                  told apart from a correctly-read one that says something odd. */
-                              p = zput(p, " [RMCS ES:EDI=0x"); p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
-                              p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EDI));
-                              p = zput(p, " @0x"); p = zhex(p, (DWORD)(ULONG_PTR)r); p = zput(p, "]");
-                              p = zput(p, " @=");
-                              if (!host_readable(sb, 16)) p = zput(p, "<unreadable>");
-                              else                        p = zdump(p, sb, 16); }
-                            p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                              p = LogPut(p, " [RMCS ES:EDI=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                              p = LogPut(p, ":0x"); p = LogHex(p, VDM_REG(tib, VTIB_EDI));
+                              p = LogPut(p, " @0x"); p = LogHex(p, (DWORD)(ULONG_PTR)r); p = LogPut(p, "]");
+                              p = LogPut(p, " @=");
+                              if (!host_readable(sb, 16)) p = LogPut(p, "<unreadable>");
+                              else                        p = LogDump(p, sb, 16); }
+                            p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             /* push the return frame on the RM stack: [FLAGS] CS IP, with FLAGS
                                present only for 0302 (the procedure will IRET, not RETF). */
                             if (ax == 0x0302) {
@@ -26290,7 +26290,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                         m.Trampoline = 0;
                                     } else
                                     VDM_REG(tib, VTIB_EIP) += 3;    /* past the BOP -> the stub IRET */
-                                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                                     continue;
                                 }
                                 if (rev == VDM_EVENT_BOP && info == DPMI_CB_BOP) {  /* proc far-called a 0303 callback */
@@ -26300,7 +26300,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                         dpmi_invoke_callback(mp, tib, cbslot);   /* V86->PM handler->V86; sets CS:IP to the return */
                                         continue;
                                     }
-                                    p = zput(p, "0301: bad cb slot\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                    p = LogPut(p, "0301: bad cb slot\r\n"); LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                                     break;
                                 }
                                 /* ── #247: OUR STUBS' BOPS, through the exec loop's own code. This is
@@ -26320,7 +26320,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                     DWORD bcs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
                                     if ((bcs == DOS_HDLR_SEG || bcs == DOS_CTAB_SEG)
                                         && v86_bios_bop(tib, info, &p, base) != V86BOP_NONE) {
-                                        if (p != base) { log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
+                                        if (p != base) { LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base; }
                                         continue;
                                     }
                                 }
@@ -26329,11 +26329,11 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                     h = host_try_io(tib, &g_bus); HOST_UNLOCK();
                                     if (h) continue;
                                 }
-                                p = zput(p, "0301: unexpected RM event=0x"); p = zhex(p, rev);
-                                p = zput(p, " info=0x"); p = zhex(p, info);
-                                p = zput(p, " CS:IP=0x"); p = zhex(p, VDM_REG(tib,VTIB_CS)&0xFFFF);
-                                p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib,VTIB_EIP)&0xFFFF); p = zput(p, "\r\n");
-                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                p = LogPut(p, "0301: unexpected RM event=0x"); p = LogHex(p, rev);
+                                p = LogPut(p, " info=0x"); p = LogHex(p, info);
+                                p = LogPut(p, " CS:IP=0x"); p = LogHex(p, VDM_REG(tib,VTIB_CS)&0xFFFF);
+                                p = LogPut(p, ":0x"); p = LogHex(p, VDM_REG(tib,VTIB_EIP)&0xFFFF); p = LogPut(p, "\r\n");
+                                LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                                 break;
                             }
                             dpmi_repatch();   /* re-arm the BOP patch before the PM client resumes */
@@ -26372,11 +26372,11 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 /* A 0300h that did not come back is a vector we did not service:
                                    it belongs in the same STAGE2 count the unrun ones go to. */
                                 if (!done) { g_simint_unhandled++; g_simint_vec[simint_vec & 0xFF]++; }
-                                p = zput(p, "0300 -> simInt 0x"); p = zhexb(p, (BYTE)simint_vec);
-                                p = zput(p, " RM handler returned after ");
-                            } else p = zput(p, "0301 -> RM proc returned after ");
-                            p = zhex(p, rt);
-                            p = zput(p, done ? " steps (OK)" : " steps (NO-RET)");
+                                p = LogPut(p, "0300 -> simInt 0x"); p = LogHexByte(p, (BYTE)simint_vec);
+                                p = LogPut(p, " RM handler returned after ");
+                            } else p = LogPut(p, "0301 -> RM proc returned after ");
+                            p = LogHex(p, rt);
+                            p = LogPut(p, done ? " steps (OK)" : " steps (NO-RET)");
                             break; }
                         case 0x0303: {                             /* allocate real-mode callback: DS:SI=handler, ES:DI=RMCS -> CX:DX */
                             int s;
@@ -26384,7 +26384,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             for (s = 0; s < DPMI_CB_SLOTS && g_cb[s].used; ++s) {}
                             if (s >= DPMI_CB_SLOTS || g_pmret_sel == 0) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, DPMI_E_CB_UNAVAIL);
-                                p = zput(p, " -> cb ENOMEM"); break;
+                                p = LogPut(p, " -> cb ENOMEM"); break;
                             }
                             g_cb[s].used = 1;
                             /* #248: the entry address comes from DpmiCallbackEntry(), the same
@@ -26395,9 +26395,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             g_cb[s].rm_es  = (WORD)VDM_REG(tib, VTIB_ES); g_cb[s].rm_di  = dpmi_caller_off(tib, VDM_REG(tib, VTIB_EDI));
                             VDM_SET16(tib, VTIB_ECX, DOS_HDLR_SEG);
                             VDM_SET16(tib, VTIB_EDX, DpmiCallbackEntry(DPMI_CB_BASE_OFF, s));
-                            p = zput(p, " -> cb slot "); p = zhex(p, s); p = zput(p, " = 0x");
-                            p = zhex(p, DOS_HDLR_SEG); p = zput(p, ":0x"); p = zhex(p, DpmiCallbackEntry(DPMI_CB_BASE_OFF, s));
-                            p = zput(p, " handler 0x"); p = zhex(p, g_cb[s].pm_sel); p = zput(p, ":0x"); p = zhex(p, g_cb[s].pm_off);
+                            p = LogPut(p, " -> cb slot "); p = LogHex(p, s); p = LogPut(p, " = 0x");
+                            p = LogHex(p, DOS_HDLR_SEG); p = LogPut(p, ":0x"); p = LogHex(p, DpmiCallbackEntry(DPMI_CB_BASE_OFF, s));
+                            p = LogPut(p, " handler 0x"); p = LogHex(p, g_cb[s].pm_sel); p = LogPut(p, ":0x"); p = LogHex(p, g_cb[s].pm_off);
                             break; }
                         case 0x0304: {                             /* free real-mode callback CX:DX */
                             /* ── #248: DPMI 0.9 CORE, AND IT WAS UNSUP. A callback, once
@@ -26407,22 +26407,22 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  and still live; anything else is 8024h. */
                             WORD fcs = (WORD)VDM_REG(tib, VTIB_ECX), fdx = (WORD)VDM_REG(tib, VTIB_EDX);
                             int s = DpmiCallbackSlotOf(DPMI_CB_BASE_OFF, fcs, DOS_HDLR_SEG, fdx);
-                            p = zput(p, " cb 0x"); p = zhex(p, fcs); p = zput(p, ":0x"); p = zhex(p, fdx);
+                            p = LogPut(p, " cb 0x"); p = LogHex(p, fcs); p = LogPut(p, ":0x"); p = LogHex(p, fdx);
                             if (s < 0 || !g_cb[s].used) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_CB);
-                                p = zput(p, " -> free REFUSED: not a live callback (8024h)");
+                                p = LogPut(p, " -> free REFUSED: not a live callback (8024h)");
                                 break;
                             }
                             g_cb[s].used = 0;
-                            p = zput(p, " -> cb slot "); p = zhex(p, s); p = zput(p, " freed");
+                            p = LogPut(p, " -> cb slot "); p = LogHex(p, s); p = LogPut(p, " freed");
                             break; }
                         default:
                             VDM_REG(tib, VTIB_EFLAGS) |= 1u;       /* CF=1: unsupported */
-                            p = zput(p, " -> UNSUP");
+                            p = LogPut(p, " -> UNSUP");
                             break;
                         }
-                        p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                         if (need_scan) dpmi_scan_code_blocks();
                         VDM_REG(tib, VTIB_EIP) += 2;               /* past the 2-byte INT */
                         return 1;
@@ -26435,11 +26435,11 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                it printed "MISMATCH" on every real client's exit.) */
                             g_pm_client_exited = 1;
                             g_pm_exit_code = (int)(ax & 0xFF);
-                            p = zput(p, "INT21h AH=4Ch -> client EXIT after "); p = zhex(p, steps);
-                            p = zput(p, " svc, code=0x"); p = zhexb(p, (BYTE)(ax & 0xFF));
-                            p = zput(p, g_in_pm_irq ? " (INSIDE an injected interrupt handler)\r\n"
+                            p = LogPut(p, "INT21h AH=4Ch -> client EXIT after "); p = LogHex(p, steps);
+                            p = LogPut(p, " svc, code=0x"); p = LogHexByte(p, (BYTE)(ax & 0xFF));
+                            p = LogPut(p, g_in_pm_irq ? " (INSIDE an injected interrupt handler)\r\n"
                                                     : "\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             return 0;
                         }
                         if (ah == 0x09) {                          /* print $-string DS:DX */
@@ -26449,7 +26449,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)
                                 (dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
                             char ob[256]; char *op = ob; int k;
-                            op = zput(op, "INT21h AH=09 print: \"");
+                            op = LogPut(op, "INT21h AH=09 print: \"");
                             for (k = 0; k < 200 && *s != '$'; ++k, ++s) {
                                 BYTE sc = *s;
                                 if (sc >= 0x20) *op++ = (char)sc;   /* printable -> serial echo */
@@ -26461,8 +26461,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 if (m.OutputLength < m.OutputCapacity - 1) m.Output[m.OutputLength++] = (char)sc;
                                 else m.IsOutputTruncated = 1;
                             }
-                            op = zput(op, "\"\r\n");
-                            log_append(LOG_PATH, ob, op); serial_out(ob, op);
+                            op = LogPut(op, "\"\r\n");
+                            LogAppend(LOG_PATH, ob, op); serial_out(ob, op);
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
@@ -26505,15 +26505,15 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 VDM_SET16(tib, VTIB_EAX, cnt);
                             } else if (dev) {                      /* the console */
                                 char ob[300]; char *op = ob; DWORD k;
-                                op = zput(op, "INT21h AH=40 write: \"");
+                                op = LogPut(op, "INT21h AH=40 write: \"");
                                 for (k = 0; k < cnt && k < 250; ++k) {
                                     if (b[k] >= 0x20 && op < ob + 270) *op++ = (char)b[k];
                                     if (m.ConsoleOut) m.ConsoleOut(m.ConsoleOutContext, b[k]);
                                     if (m.OutputLength < m.OutputCapacity - 1) m.Output[m.OutputLength++] = (char)b[k];
                                     else m.IsOutputTruncated = 1;
                                 }
-                                op = zput(op, "\"\r\n");
-                                log_append(LOG_PATH, ob, op); serial_out(ob, op);
+                                op = LogPut(op, "\"\r\n");
+                                LogAppend(LOG_PATH, ob, op); serial_out(ob, op);
                                 VDM_SET16(tib, VTIB_EAX, cnt);     /* AX = bytes written */
                             } else if (bound) {                     /* file handle */
                                 DWORD w = 0, we = 0;
@@ -26522,8 +26522,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                     VDM_SET16(tib, VTIB_EAX, w);
                                     DosStampVdmNow(m.FileHandles[bh]);   /* #263, as the V86 AH=40h */
                                 }
-                                p = zput(p, "INT21h AH=40 file write "); p = zhex(p, w); p = zput(p, "b\r\n");
-                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                p = LogPut(p, "INT21h AH=40 file write "); p = LogHex(p, w); p = LogPut(p, "b\r\n");
+                                LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             } else { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 6); }
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
@@ -26604,12 +26604,12 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  line. Print the REQUEST (AL carries the access mode AND the
                                  DOS sharing mode), the VERDICT (CF), and, when it failed,
                                  the Win32 error, which is the only thing that says WHY. */
-                            p = zput(p, "INT21h AH="); p = zhex(p, ah); p = zput(p, " open \"");
-                            p = zput(p, fn); p = zput(p, "\" al=0x"); p = zhexb(p, (BYTE)(ax & 0xFF));
-                            p = zput(p, " -> AX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-                            p = zput(p, " CF="); p = zhex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
-                            if (gle) { p = zput(p, " FAILED gle="); p = zhex(p, gle); }
-                            p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            p = LogPut(p, "INT21h AH="); p = LogHex(p, ah); p = LogPut(p, " open \"");
+                            p = LogPut(p, fn); p = LogPut(p, "\" al=0x"); p = LogHexByte(p, (BYTE)(ax & 0xFF));
+                            p = LogPut(p, " -> AX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                            p = LogPut(p, " CF="); p = LogHex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
+                            if (gle) { p = LogPut(p, " FAILED gle="); p = LogHex(p, gle); }
+                            p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2; return 1;
                         }
                         if (ah == 0x3E) {                          /* close: BX=handle */
@@ -26621,9 +26621,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                was still open when the NEXT open of the same file failed --
                                "who still holds it" is unanswerable from a trace that logs
                                every open and no close. */
-                            p = zput(p, "INT21h AH=3E close h=0x"); p = zhex(p, h);
-                            p = zput(p, was ? " (was open)\r\n" : " (was NOT open)\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            p = LogPut(p, "INT21h AH=3E close h=0x"); p = LogHex(p, h);
+                            p = LogPut(p, was ? " (was open)\r\n" : " (was NOT open)\r\n");
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2; return 1;
                         }
                         if (ah == 0x3F) {                          /* read: BX=handle CX=cnt -> DS:DX */
@@ -26655,23 +26655,23 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  came back with. `rd` and `AX` are the same number
                                  today and printing only one of them is a claim that
                                  they always will be. */
-                            p = zput(p, "INT21h AH=3F read "); p = zhex(p, rd);
-                            p = zput(p, "b of "); p = zhex(p, cnt);
-                            p = zput(p, " -> AX=0x");
-                            p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-                            p = zput(p, " CF="); p = zhex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
-                            p = zput(p, " h="); p = zhex(p, h);
-                            p = zput(p, " -> 0x"); p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
-                            p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                            p = zput(p, " lin=0x"); p = zhex(p, (DWORD)(ULONG_PTR)b);
-                            p = zput(p, " pos=0x");
-                            p = zhex(p, (h < DOS_MAX_FILES && m.FileHandles[h])
+                            p = LogPut(p, "INT21h AH=3F read "); p = LogHex(p, rd);
+                            p = LogPut(p, "b of "); p = LogHex(p, cnt);
+                            p = LogPut(p, " -> AX=0x");
+                            p = LogHex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                            p = LogPut(p, " CF="); p = LogHex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
+                            p = LogPut(p, " h="); p = LogHex(p, h);
+                            p = LogPut(p, " -> 0x"); p = LogHex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                            p = LogPut(p, ":0x"); p = LogHex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                            p = LogPut(p, " lin=0x"); p = LogHex(p, (DWORD)(ULONG_PTR)b);
+                            p = LogPut(p, " pos=0x");
+                            p = LogHex(p, (h < DOS_MAX_FILES && m.FileHandles[h])
                                         ? SetFilePointer(m.FileHandles[h], 0, NULL, FILE_CURRENT) : 0);
-                            p = zput(p, " first=");
-                            if (rd && host_readable(b, 8)) p = zdump(p, b, 8);
-                            else                           p = zput(p, "-");
-                            p = zput(p, "\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            p = LogPut(p, " first=");
+                            if (rd && host_readable(b, 8)) p = LogDump(p, b, 8);
+                            else                           p = LogPut(p, "-");
+                            p = LogPut(p, "\r\n");
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2; return 1;
                         }
                         if (ah == 0x42) {                          /* lseek: AL=org BX=h CX:DX=off */
@@ -26681,19 +26681,19 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             if (h >= 5 && h < DOS_MAX_FILES && m.FileHandles[h]) {
                                 DWORD np = SetFilePointer(m.FileHandles[h], dist, NULL, meth);
                                 VDM_SET16(tib, VTIB_EDX, np >> 16); VDM_SET16(tib, VTIB_EAX, np & 0xFFFF);
-                                p = zput(p, "INT21h AH=42 seek h="); p = zhex(p, h);
-                                p = zput(p, " org="); p = zhex(p, meth);
-                                p = zput(p, " dist=0x"); p = zhex(p, (DWORD)dist);
-                                p = zput(p, " -> pos=0x"); p = zhex(p, np);
+                                p = LogPut(p, "INT21h AH=42 seek h="); p = LogHex(p, h);
+                                p = LogPut(p, " org="); p = LogHex(p, meth);
+                                p = LogPut(p, " dist=0x"); p = LogHex(p, (DWORD)dist);
+                                p = LogPut(p, " -> pos=0x"); p = LogHex(p, np);
                             } else { VDM_REG(tib, VTIB_EFLAGS) |= 1u;
-                                p = zput(p, "INT21h AH=42 seek BAD HANDLE "); p = zhex(p, h); }
+                                p = LogPut(p, "INT21h AH=42 seek BAD HANDLE "); p = LogHex(p, h); }
                             /* ⚠ THIS ARM LOGGED NOTHING AT ALL, and that cost a run: the
                                  seek WAS being serviced and the log's silence read exactly
                                  like it never happened, which sent the search after the
                                  chain-to-DOS path instead of after the real blocker. Every
                                  other file arm here prints; this one did not. */
-                            p = zput(p, "\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            p = LogPut(p, "\r\n");
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2; return 1;
                         }
                         /* ── REGISTER-ONLY INT 21h: DELEGATE TO THE V86 DOS IMPLEMENTATION ──
@@ -26759,14 +26759,14 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  corruption of the caller's state. Return what DOS returns. */
                             DWORD want = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
                             m.TraceCursor = p; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); p = m.TraceCursor;
-                            p = zput(p, "INT21h AH=48 (PM) alloc 0x"); p = zhex(p, want);
+                            p = LogPut(p, "INT21h AH=48 (PM) alloc 0x"); p = LogHex(p, want);
                             if (VDM_REG(tib, VTIB_EFLAGS) & 1u) {
-                                p = zput(p, " -> FAILED, largest 0x");
-                                p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                                p = LogPut(p, " -> FAILED, largest 0x");
+                                p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             } else if (g_ldt_next >= DPMI_LDT_MAX) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, 8);       /* insufficient memory */
-                                p = zput(p, " -> no free LDT slot");
+                                p = LogPut(p, " -> no free LDT slot");
                             } else {
                                 DWORD seg = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
                                 int idx = g_ldt_next++;
@@ -26778,12 +26778,12 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 dpmi_install(idx);
                                 sel = (WORD)((idx << 3) | 7);
                                 VDM_SET16(tib, VTIB_EAX, sel);   /* AX only -- see above */
-                                p = zput(p, " -> seg 0x"); p = zhex(p, seg);
-                                p = zput(p, " as sel 0x"); p = zhex(p, sel);
-                                p = zput(p, " limit 0x"); p = zhex(p, g_ldt[idx].limit);
+                                p = LogPut(p, " -> seg 0x"); p = LogHex(p, seg);
+                                p = LogPut(p, " as sel 0x"); p = LogHex(p, sel);
+                                p = LogPut(p, " limit 0x"); p = LogHex(p, g_ldt[idx].limit);
                             }
-                            p = zput(p, "\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            p = LogPut(p, "\r\n");
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
@@ -26805,25 +26805,25 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             int idx = sel >> 3;
                             DWORD segbase = dpmi_sel_base(sel);
                             int err;
-                            p = zput(p, "INT21h AH=49 (PM) free sel 0x"); p = zhex(p, sel);
-                            p = zput(p, " base 0x"); p = zhex(p, segbase);
+                            p = LogPut(p, "INT21h AH=49 (PM) free sel 0x"); p = LogHex(p, sel);
+                            p = LogPut(p, " base 0x"); p = LogHex(p, segbase);
                             if ((segbase & 0xF) || segbase > 0xFFFFFu) {
                                 /* Not a paragraph-aligned conventional-memory base: this is not
                                    a block DOS ever handed out, so refuse LOUDLY rather than
                                    corrupt the MCB chain guessing. */
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, 9);       /* invalid memory block address */
-                                p = zput(p, " -> REFUSED (not a DOS paragraph)");
+                                p = LogPut(p, " -> REFUSED (not a DOS paragraph)");
                             } else {
                                 err = DosMcbFree(NULL, (uint16_t)(segbase >> 4));
                                 if (err) { VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, err);
-                                           p = zput(p, " -> err 0x"); p = zhex(p, err); }
+                                           p = LogPut(p, " -> err 0x"); p = LogHex(p, err); }
                                 else { VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                                        if (idx >= 3 && idx < DPMI_LDT_MAX) { g_ldt[idx].base = g_ldt[idx].limit = 0; }
-                                       p = zput(p, " -> freed seg 0x"); p = zhex(p, segbase >> 4); }
+                                       p = LogPut(p, " -> freed seg 0x"); p = LogHex(p, segbase >> 4); }
                             }
-                            p = zput(p, "\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            p = LogPut(p, "\r\n");
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
@@ -26858,20 +26858,20 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 g_pm_int[al].off = dpmi_sel_is32(hsel) ? VDM_REG(tib, VTIB_EDX)
                                                                        : (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                                 g_pm_int[al].client = 1;
-                                p = zput(p, "INT21h AH=25 (PM) set PM vector 0x"); p = zhex(p, al);
-                                p = zput(p, " = 0x"); p = zhex(p, g_pm_int[al].sel);
-                                p = zput(p, ":0x"); p = zhex(p, g_pm_int[al].off);
+                                p = LogPut(p, "INT21h AH=25 (PM) set PM vector 0x"); p = LogHex(p, al);
+                                p = LogPut(p, " = 0x"); p = LogHex(p, g_pm_int[al].sel);
+                                p = LogPut(p, ":0x"); p = LogHex(p, g_pm_int[al].off);
                             } else {
                                 VDM_SET16(tib, VTIB_ES, g_pm_int[al].sel);
                                 if (dpmi_sel_is32(g_pm_int[al].sel)) VDM_REG(tib, VTIB_EBX) = g_pm_int[al].off;
                                 else VDM_SET16(tib, VTIB_EBX, g_pm_int[al].off & 0xFFFF);
-                                p = zput(p, "INT21h AH=35 (PM) get PM vector 0x"); p = zhex(p, al);
-                                p = zput(p, " -> 0x"); p = zhex(p, g_pm_int[al].sel);
-                                p = zput(p, ":0x"); p = zhex(p, g_pm_int[al].off);
+                                p = LogPut(p, "INT21h AH=35 (PM) get PM vector 0x"); p = LogHex(p, al);
+                                p = LogPut(p, " -> 0x"); p = LogHex(p, g_pm_int[al].sel);
+                                p = LogPut(p, ":0x"); p = LogHex(p, g_pm_int[al].off);
                             }
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
-                            p = zput(p, "\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            p = LogPut(p, "\r\n");
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
@@ -26894,13 +26894,13 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             DWORD segbase = dpmi_sel_base(sel);
                             DWORD want = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
                             uint16_t max = 0;
-                            p = zput(p, "INT21h AH=4A (PM) resize sel 0x"); p = zhex(p, sel);
-                            p = zput(p, " base 0x"); p = zhex(p, segbase);
-                            p = zput(p, " to 0x"); p = zhex(p, want); p = zput(p, " paras");
+                            p = LogPut(p, "INT21h AH=4A (PM) resize sel 0x"); p = LogHex(p, sel);
+                            p = LogPut(p, " base 0x"); p = LogHex(p, segbase);
+                            p = LogPut(p, " to 0x"); p = LogHex(p, want); p = LogPut(p, " paras");
                             if ((segbase & 0xF) || segbase > 0xFFFFFu) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, 9);   /* invalid memory block address */
-                                p = zput(p, " -> REFUSED (not a DOS paragraph)");
+                                p = LogPut(p, " -> REFUSED (not a DOS paragraph)");
                             } else {
                                 int err = DosMcbResize(NULL, (uint16_t)(segbase >> 4),
                                                      (uint16_t)want, &max);
@@ -26908,20 +26908,20 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                     VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                     VDM_SET16(tib, VTIB_EAX, err);
                                     if (err == 8) VDM_SET16(tib, VTIB_EBX, max);
-                                    p = zput(p, " -> err 0x"); p = zhex(p, err);
-                                    p = zput(p, " max 0x"); p = zhex(p, max);
+                                    p = LogPut(p, " -> err 0x"); p = LogHex(p, err);
+                                    p = LogPut(p, " max 0x"); p = LogHex(p, max);
                                 } else {
                                     VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                                     if (idx >= 1 && idx < DPMI_LDT_MAX) {
                                         g_ldt[idx].limit = want ? (want * 16u - 1u) : 0;
                                         dpmi_install(idx);
-                                        p = zput(p, " -> ok, sel limit now 0x");
-                                        p = zhex(p, g_ldt[idx].limit);
-                                    } else p = zput(p, " -> ok (no descriptor to update)");
+                                        p = LogPut(p, " -> ok, sel limit now 0x");
+                                        p = LogHex(p, g_ldt[idx].limit);
+                                    } else p = LogPut(p, " -> ok (no descriptor to update)");
                                 }
                             }
-                            p = zput(p, "\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            p = LogPut(p, "\r\n");
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
@@ -26970,10 +26970,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             else {
                                 VDM_SET16(tib, VTIB_EAX, 0x7100);
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
-                                p = zput(p, "INT21h AX=71xx (PM, no xfer buffer) -> AX=7100 CF=1"
+                                p = LogPut(p, "INT21h AX=71xx (PM, no xfer buffer) -> AX=7100 CF=1"
                                             " (no LFN API for this client)\r\n");
                             }
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
@@ -26981,7 +26981,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                               ah == 0x41 || ah == 0x43 || ah == 0x4E ||
                                               ah == 0x39 || ah == 0x3A || ah == 0x3B)) {
                             m.TraceCursor = p; p = pm_int21_xfer(&m, tib, ah, p);
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
@@ -27004,16 +27004,16 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             WORD sel34;
                             m.TraceCursor = p; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); p = m.TraceCursor;
                             sel34 = dpmi_seg_to_desc((WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF));
-                            p = zput(p, "INT21h AH=0x"); p = zhex(p, ah);
-                            p = zput(p, " (PM) far pointer at V86 0x");
-                            p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
-                            p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            p = LogPut(p, "INT21h AH=0x"); p = LogHex(p, ah);
+                            p = LogPut(p, " (PM) far pointer at V86 0x");
+                            p = LogHex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                            p = LogPut(p, ":0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             if (sel34) {
                                 VDM_SET16(tib, VTIB_ES, sel34);
-                                p = zput(p, " -> sel 0x"); p = zhex(p, sel34);
-                            } else p = zput(p, " -> NO DESCRIPTOR AVAILABLE (left as a segment)");
-                            p = zput(p, "\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                p = LogPut(p, " -> sel 0x"); p = LogHex(p, sel34);
+                            } else p = LogPut(p, " -> NO DESCRIPTOR AVAILABLE (left as a segment)");
+                            p = LogPut(p, "\r\n");
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
@@ -27044,13 +27044,13 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             ah == 0x5C || ah == 0x66 || ah == 0x67 || ah == 0x68 ||
                             ah == 0x6A) {
                             m.TraceCursor = p; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); p = m.TraceCursor;
-                            p = zput(p, "INT21h AH=0x"); p = zhex(p, ah);
-                            p = zput(p, " (PM, register-only -> V86 DOS) -> AX=0x");
-                            p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-                            p = zput(p, " BX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                            p = zput(p, " CF="); p = zhex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
-                            p = zput(p, "\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            p = LogPut(p, "INT21h AH=0x"); p = LogHex(p, ah);
+                            p = LogPut(p, " (PM, register-only -> V86 DOS) -> AX=0x");
+                            p = LogHex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                            p = LogPut(p, " BX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                            p = LogPut(p, " CF="); p = LogHex(p, VDM_REG(tib, VTIB_EFLAGS) & 1u);
+                            p = LogPut(p, "\r\n");
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
@@ -27087,10 +27087,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             const volatile BYTE *src =
                                 (const volatile BYTE *)(ULONG_PTR)((DWORD)DOS_PSP_SEG << 4);
                             WORD esel = dpmi_seg_to_desc((WORD)DOS_ENV_SEG);
-                            p = zput(p, "INT21h AH=0x"); p = zhex(p, ah);
-                            p = zput(p, " (PM) create PSP at sel 0x"); p = zhex(p, dsel);
+                            p = LogPut(p, "INT21h AH=0x"); p = LogHex(p, ah);
+                            p = LogPut(p, " (PM) create PSP at sel 0x"); p = LogHex(p, dsel);
                             if (!dlin || !host_writable((void *)(ULONG_PTR)dlin, 256)) {
-                                p = zput(p, " -- NO/UNWRITABLE BASE, refusing");
+                                p = LogPut(p, " -- NO/UNWRITABLE BASE, refusing");
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;          /* CF = failure */
                             } else {
                                 volatile BYTE *dst = (volatile BYTE *)(ULONG_PTR)dlin;
@@ -27106,9 +27106,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 /* What was there BEFORE we wrote -- if krnl386 had
                                    already filled the field, overwriting it would be
                                    the defect rather than the fix. */
-                                p = zput(p, " (+0x2c was 0x");
-                                p = zhex(p, (DWORD)(dst[0x2c] | (dst[0x2d] << 8)));
-                                p = zput(p, ")");
+                                p = LogPut(p, " (+0x2c was 0x");
+                                p = LogHex(p, (DWORD)(dst[0x2c] | (dst[0x2d] << 8)));
+                                p = LogPut(p, ")");
                                 dst[0x2c] = (BYTE)(esel & 0xFF);           /* env SELECTOR */
                                 dst[0x2d] = (BYTE)(esel >> 8);
                                 if (g_wow_psp_n < WOW_PSP_TRACK) {
@@ -27118,12 +27118,12 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                     ++g_wow_psp_n;
                                 }
                                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;          /* CF = ok      */
-                                p = zput(p, " lin=0x"); p = zhex(p, dlin);
-                                p = zput(p, " env sel=0x"); p = zhex(p, esel);
-                                if (!esel) p = zput(p, " (NO DESCRIPTOR -- env unusable)");
+                                p = LogPut(p, " lin=0x"); p = LogHex(p, dlin);
+                                p = LogPut(p, " env sel=0x"); p = LogHex(p, esel);
+                                if (!esel) p = LogPut(p, " (NO DESCRIPTOR -- env unusable)");
                             }
-                            p = zput(p, "\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            p = LogPut(p, "\r\n");
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
@@ -27151,9 +27151,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                              dump, which is what names the next one. */
                         if ((VDM_REG(tib, VTIB_EAX) & 0xFFFF) == 0xFF80) {
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;      /* CF=0 -- locked */
-                            p = zput(p, "INT21h AX=FF80h lock region -> CF=0 (guest memory is"
+                            p = LogPut(p, "INT21h AX=FF80h lock region -> CF=0 (guest memory is"
                                         " never paged here, so it is already locked)\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
@@ -27169,23 +27169,23 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         { DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
                           DWORD cb = dpmi_sel_base((WORD)cs);
                           DWORD ip = VDM_REG(tib, VTIB_EIP);
-                          p = zput(p, "INT21h AH=0x"); p = zhex(p, ah); p = zput(p, " (PM thunk TODO)");
-                          p = zput(p, " EAX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX));
-                          p = zput(p, " EBX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX));
-                          p = zput(p, " ECX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX));
-                          p = zput(p, " EDX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX));
-                          p = zput(p, " DS=0x");  p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
-                          p = zput(p, " ES=0x");  p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
-                          p = zput(p, " cs:eip=0x"); p = zhex(p, cs);
-                          p = zput(p, ":0x"); p = zhex(p, ip);
-                          p = zput(p, " bytes@int=");
+                          p = LogPut(p, "INT21h AH=0x"); p = LogHex(p, ah); p = LogPut(p, " (PM thunk TODO)");
+                          p = LogPut(p, " EAX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EAX));
+                          p = LogPut(p, " EBX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX));
+                          p = LogPut(p, " ECX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ECX));
+                          p = LogPut(p, " EDX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EDX));
+                          p = LogPut(p, " DS=0x");  p = LogHex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                          p = LogPut(p, " ES=0x");  p = LogHex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                          p = LogPut(p, " cs:eip=0x"); p = LogHex(p, cs);
+                          p = LogPut(p, ":0x"); p = LogHex(p, ip);
+                          p = LogPut(p, " bytes@int=");
                           /* Same guard as the checkpoint dump, and for the same reason it
                              must be host_readable() and never IsBadReadPtr: a probe that
                              faults on purpose is caught by our own VEH mid-PM-run. */
                           { const BYTE *ib = (const BYTE *)(ULONG_PTR)(cb + ip - 2);
-                            if (!host_readable(ib, 16)) p = zput(p, "<unreadable from host>");
-                            else                        p = zdump(p, ib, 16); }
-                          p = zput(p, "\r\n"); }
+                            if (!host_readable(ib, 16)) p = LogPut(p, "<unreadable from host>");
+                            else                        p = LogDump(p, ib, 16); }
+                          p = LogPut(p, "\r\n"); }
                         /* ── AND ANSWER IT THE WAY OUR OWN DOS ANSWERS AN UNHANDLED
                               SERVICE: CF=1. ──────────────────────────────────────────
                            This arm used to return with the flags exactly as the client
@@ -27200,7 +27200,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                            same as ERRCF() in DosInt21 -- CF is the answer, not a code we
                            would be inventing. */
                         VDM_REG(tib, VTIB_EFLAGS) |= 1u;
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
                     }
@@ -27214,25 +27214,25 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                        breakpoint sweep to re-find it. */
                     { DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
                       DWORD lin = dpmi_sel_base((WORD)csv) + eip;
-                      p = zput(p, "DPMI: unexpected PM stop event=0x"); p = zhex(p, ev);
-                      p = zput(p, " CS:EIP=0x"); p = zhex(p, csv);
-                      p = zput(p, ":0x"); p = zhex(p, eip);
-                      p = zput(p, " linear=0x"); p = zhex(p, lin);
-                      p = zput(p, (csv && dpmi_sel_is32((WORD)csv)) ? " (32-bit CS)" : " (16-bit CS)");
-                      p = zput(p, " EAX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX));
-                      p = zput(p, " EBX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX));
-                      p = zput(p, " ECX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX));
-                      p = zput(p, " EDX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX));
-                      p = zput(p, " DS=0x");  p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
-                      p = zput(p, " SS:ESP=0x"); p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
-                      p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_ESP));
+                      p = LogPut(p, "DPMI: unexpected PM stop event=0x"); p = LogHex(p, ev);
+                      p = LogPut(p, " CS:EIP=0x"); p = LogHex(p, csv);
+                      p = LogPut(p, ":0x"); p = LogHex(p, eip);
+                      p = LogPut(p, " linear=0x"); p = LogHex(p, lin);
+                      p = LogPut(p, (csv && dpmi_sel_is32((WORD)csv)) ? " (32-bit CS)" : " (16-bit CS)");
+                      p = LogPut(p, " EAX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EAX));
+                      p = LogPut(p, " EBX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX));
+                      p = LogPut(p, " ECX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ECX));
+                      p = LogPut(p, " EDX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EDX));
+                      p = LogPut(p, " DS=0x");  p = LogHex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                      p = LogPut(p, " SS:ESP=0x"); p = LogHex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+                      p = LogPut(p, ":0x"); p = LogHex(p, VDM_REG(tib, VTIB_ESP));
                       /* Two bytes back is the BOP/INT itself, on the same +2 convention
                          the patched-INT path uses. host_readable(), never IsBadReadPtr:
                          a probe that faults on purpose kills the run it exists to watch. */
-                      p = zput(p, " bytes@eip-2=");
+                      p = LogPut(p, " bytes@eip-2=");
                       { const BYTE *ib = (const BYTE *)(ULONG_PTR)(lin - 2);
-                        if (lin < 2 || !host_readable(ib, 16)) p = zput(p, "<unreadable from host>");
-                        else                                   p = zdump(p, ib, 16); }
+                        if (lin < 2 || !host_readable(ib, 16)) p = LogPut(p, "<unreadable from host>");
+                        else                                   p = LogDump(p, ib, 16); }
                       /* ── ★ WAS THAT `C4 C4` OURS? SAY SO, RATHER THAN LEAVING
                            IT AMBIGUOUS. (session 55) When a run dies on a byte
                            pair that looks like a BOP, the log has always left
@@ -27249,19 +27249,19 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                            name their blocker on the next run rather than after
                            another session of reading disassembly. */
                       { BYTE v0 = pmap_get(lin), v2 = pmap_get(lin - 2);
-                        p = zput(p, " pmap[eip]=");
-                        if (v0) { p = zput(p, "INT 0x"); p = zhexb(p, v0);
-                                  p = zput(p, " ★ THIS IS A SITE WE PATCHED"); }
-                        else      p = zput(p, "none");
-                        p = zput(p, " pmap[eip-2]=");
-                        if (v2) { p = zput(p, "INT 0x"); p = zhexb(p, v2);
-                                  p = zput(p, " ★ THIS IS A SITE WE PATCHED"); }
-                        else      p = zput(p, "none");
+                        p = LogPut(p, " pmap[eip]=");
+                        if (v0) { p = LogPut(p, "INT 0x"); p = LogHexByte(p, v0);
+                                  p = LogPut(p, " ★ THIS IS A SITE WE PATCHED"); }
+                        else      p = LogPut(p, "none");
+                        p = LogPut(p, " pmap[eip-2]=");
+                        if (v2) { p = LogPut(p, "INT 0x"); p = LogHexByte(p, v2);
+                                  p = LogPut(p, " ★ THIS IS A SITE WE PATCHED"); }
+                        else      p = LogPut(p, "none");
                         if (!v0 && !v2)
-                            p = zput(p, "  => NOT one of our patches: either a"
+                            p = LogPut(p, "  => NOT one of our patches: either a"
                                         " real BOP or data being executed"); }
-                      p = zput(p, "\r\n"); }
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                      p = LogPut(p, "\r\n"); }
+                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                     return -1;
 #undef m
 }
@@ -27341,10 +27341,10 @@ static void dpmi_pm_cf_to_frame(volatile BYTE *tib)
     if (now == img) return;                    /* the frame already says what we do */
     fl[0] = (BYTE)(now & 0xFF); fl[1] = (BYTE)((now >> 8) & 0xFF);
     {   char lb[192], *q = lb;
-        q = zput(q, "PM CF -> IRET frame at 0x"); q = zhex(q, lin);
-        q = zput(q, ": 0x"); q = zhex(q, img); q = zput(q, " -> 0x"); q = zhex(q, now);
-        q = zput(q, " (the stub's IRET would have restored the caller's CF)\r\n");
-        log_append(LOG_PATH, lb, q); serial_out(lb, q); }
+        q = LogPut(q, "PM CF -> IRET frame at 0x"); q = LogHex(q, lin);
+        q = LogPut(q, ": 0x"); q = LogHex(q, img); q = LogPut(q, " -> 0x"); q = LogHex(q, now);
+        q = LogPut(q, " (the stub's IRET would have restored the caller's CF)\r\n");
+        LogAppend(LOG_PATH, lb, q); serial_out(lb, q); }
 }
 
 /* The service, and then the one thing it cannot say in a register. Kept as a wrapper
@@ -27566,8 +27566,8 @@ typedef struct {
 static void shim_log(const char *what)
 {
     char b[200], *q = b;
-    q = zput(q, "WOWSHIM: "); q = zput(q, what); q = zput(q, "\r\n");
-    log_append(LOG_PATH, b, q);
+    q = LogPut(q, "WOWSHIM: "); q = LogPut(q, what); q = LogPut(q, "\r\n");
+    LogAppend(LOG_PATH, b, q);
 }
 /* WOWGetVDMPointer(vp, cb, fProtectedMode): a 16:16 PM address through our LDT, or
    seg:off in real mode (which sits at linear 0 of this process, as in NTVDM). */
@@ -27615,10 +27615,10 @@ static void shim_ica(int ms, BYTE line, int count)
     InterlockedOr(&g_ica_pending, (LONG)(1u << ((ms ? 8 : 0) + line)));
     if (++g_ica_raised <= 8) {
         char b[96], *q = b;
-        q = zput(q, "WOWSHIM: call_ica_hw_interrupt ms="); q = zhex(q, (DWORD)ms);
-        q = zput(q, " line="); q = zhex(q, line); q = zput(q, " tid=0x");
-        q = zhex(q, GetCurrentThreadId()); q = zput(q, "\r\n");
-        log_append(LOG_PATH, b, q);
+        q = LogPut(q, "WOWSHIM: call_ica_hw_interrupt ms="); q = LogHex(q, (DWORD)ms);
+        q = LogPut(q, " line="); q = LogHex(q, line); q = LogPut(q, " tid=0x");
+        q = LogHex(q, GetCurrentThreadId()); q = LogPut(q, "\r\n");
+        LogAppend(LOG_PATH, b, q);
     }
     /* wake a GetMessage wait parked in MsgWaitForMultipleObjects */
     if (g_guest_tid && GetCurrentThreadId() != g_guest_tid)
@@ -27768,9 +27768,9 @@ static BOOL shim_io_hook(HANDLE hvdd, WORD n, const void *ranges, const void *ha
         g_isv_hook[slot].first = rg[k * 2]; g_isv_hook[slot].last = rg[k * 2 + 1];
         g_isv_hook[slot].h = *(const isv_iohandlers_t *)handlers;
         g_isv_hook[slot].live = 1;
-        q = b; q = zput(q, "ISVVDD: I/O hook 0x"); q = zhex(q, rg[k * 2]);
-        q = zput(q, "-0x"); q = zhex(q, rg[k * 2 + 1]); q = zput(q, " installed\r\n");
-        log_append(LOG_PATH, b, q);
+        q = b; q = LogPut(q, "ISVVDD: I/O hook 0x"); q = LogHex(q, rg[k * 2]);
+        q = LogPut(q, "-0x"); q = LogHex(q, rg[k * 2 + 1]); q = LogPut(q, " installed\r\n");
+        LogAppend(LOG_PATH, b, q);
     }
     return TRUE;
 }
@@ -27813,15 +27813,15 @@ static void wow_shims_load(void)
         h = LoadLibraryExA(path, NULL, 0);
         init = h ? (BOOL (WINAPI *)(const ntvdmex_shim_api_t *))GetProcAddress(h, "NtvdmexShimInit")
                  : NULL;
-        q = b; q = zput(q, "WOWSHIM: "); q = zput(q, names[i]);
+        q = b; q = LogPut(q, "WOWSHIM: "); q = LogPut(q, names[i]);
         if (!h) { g_shim_state[i] = 2; g_shim_err[i] = GetLastError();
-                  q = zput(q, " NOT LOADED from ["); q = zput(q, path);
-                  q = zput(q, "] err=0x"); q = zhex(q, g_shim_err[i]); }
+                  q = LogPut(q, " NOT LOADED from ["); q = LogPut(q, path);
+                  q = LogPut(q, "] err=0x"); q = LogHex(q, g_shim_err[i]); }
         else if (!init || !init(&api)) { g_shim_state[i] = 3;
-                  q = zput(q, " loaded but its init REFUSED the table"); }
-        else { g_shim_state[i] = 1; q = zput(q, " loaded at 0x"); q = zhex(q, (DWORD)(ULONG_PTR)h); }
-        q = zput(q, "\r\n");
-        log_append(LOG_PATH, b, q);
+                  q = LogPut(q, " loaded but its init REFUSED the table"); }
+        else { g_shim_state[i] = 1; q = LogPut(q, " loaded at 0x"); q = LogHex(q, (DWORD)(ULONG_PTR)h); }
+        q = LogPut(q, "\r\n");
+        LogAppend(LOG_PATH, b, q);
     }
 }
 
@@ -27859,17 +27859,17 @@ static void isv_bop(volatile BYTE *tib, DWORD sub, char **pp)
         else if (!dll || !dll[0] || !(m = LoadLibraryA(dll))) err = 1;
         else if (!dsp || !dsp[0] || !(fd = GetProcAddress(m, dsp))) err = 2;
         else if (ini && ini[0] && !(fi = GetProcAddress(m, ini))) err = 3;
-        p = zput(p, "  ISVVDD: RegisterModule ["); p = zput(p, dll ? dll : "?");
-        p = zput(p, "] init ["); p = zput(p, ini ? ini : ""); p = zput(p, "] dispatch [");
-        p = zput(p, dsp ? dsp : ""); p = zput(p, "]");
+        p = LogPut(p, "  ISVVDD: RegisterModule ["); p = LogPut(p, dll ? dll : "?");
+        p = LogPut(p, "] init ["); p = LogPut(p, ini ? ini : ""); p = LogPut(p, "] dispatch [");
+        p = LogPut(p, dsp ? dsp : ""); p = LogPut(p, "]");
         if (err) {
             if (m) FreeLibrary(m);
-            p = zput(p, " -> ERROR "); p = zhex(p, err);
-            p = zput(p, " gle=0x"); p = zhex(p, GetLastError()); p = zput(p, "\r\n");
+            p = LogPut(p, " -> ERROR "); p = LogHex(p, err);
+            p = LogPut(p, " gle=0x"); p = LogHex(p, GetLastError()); p = LogPut(p, "\r\n");
         } else {
             g_isv_mod[i].dll = m; g_isv_mod[i].dispatch = fd;
             h = (WORD)(i + 1);
-            p = zput(p, " -> handle "); p = zhex(p, h); p = zput(p, "\r\n");
+            p = LogPut(p, " -> handle "); p = LogHex(p, h); p = LogPut(p, "\r\n");
             *pp = p;
             if (fi) ((void (*)(void))fi)();          /* the init routine, in context */
             p = *pp;
@@ -27878,7 +27878,7 @@ static void isv_bop(volatile BYTE *tib, DWORD sub, char **pp)
         WORD ax = (WORD)(VDM_REG(tib, VTIB_EAX) & 0xFFFF);
         if (!ax || ax > ISV_MAX_MODS || !g_isv_mod[ax - 1].dll) {
             err = 1;
-            p = zput(p, "  ISVVDD: bad handle 0x"); p = zhex(p, ax); p = zput(p, "\r\n");
+            p = LogPut(p, "  ISVVDD: bad handle 0x"); p = LogHex(p, ax); p = LogPut(p, "\r\n");
         } else if (sub == 2) {
             ((void (*)(void))g_isv_mod[ax - 1].dispatch)();
             *pp = p;
@@ -27941,9 +27941,9 @@ static int dpmi_nested_fault(volatile BYTE *tib, DWORD ev, DWORD eip)
         VDM_SET16(tib, VTIB_SS, fr[5]); VDM_REG(tib, VTIB_ESP) = fr[4];
         VDM_SET16(tib, VTIB_CS, fr[2]); VDM_REG(tib, VTIB_EIP) = fr[1];
         VDM_SET16(tib, VTIB_EFLAGS, fr[3]);
-        lp = zput(lp, "NESTED EXC RETURN -> resume 0x"); lp = zhex(lp, fr[2]);
-        lp = zput(lp, ":0x"); lp = zhex(lp, fr[1]); lp = zput(lp, "\r\n");
-        log_append(LOG_PATH, lb, lp);
+        lp = LogPut(lp, "NESTED EXC RETURN -> resume 0x"); lp = LogHex(lp, fr[2]);
+        lp = LogPut(lp, ":0x"); lp = LogHex(lp, fr[1]); lp = LogPut(lp, "\r\n");
+        LogAppend(LOG_PATH, lb, lp);
         return 1;
     }
     if (eip >= DPMI_FAULT_SITE(0) && eip < DPMI_FAULT_SITE(DOS_FLTSITE_N)
@@ -27977,10 +27977,10 @@ static int dpmi_nested_fault(volatile BYTE *tib, DWORD ev, DWORD eip)
             VDM_SET16(tib, VTIB_EFLAGS, fr[5]);
             gi[0] = VDM_BOP0; gi[1] = VDM_BOP1;
             pmap_set(gcb + fr[3], (BYTE)gvec);
-            lp = zput(lp, "NESTED #GP(IDT): a raw INT 0x"); lp = zhex(lp, gvec);
-            lp = zput(lp, " at 0x"); lp = zhex(lp, fr[4]); lp = zput(lp, ":0x"); lp = zhex(lp, fr[3]);
-            lp = zput(lp, " -- patched; serviced on the next turn\r\n");
-            log_append(LOG_PATH, lb, lp);
+            lp = LogPut(lp, "NESTED #GP(IDT): a raw INT 0x"); lp = LogHex(lp, gvec);
+            lp = LogPut(lp, " at 0x"); lp = LogHex(lp, fr[4]); lp = LogPut(lp, ":0x"); lp = LogHex(lp, fr[3]);
+            lp = LogPut(lp, " -- patched; serviced on the next turn\r\n");
+            LogAppend(LOG_PATH, lb, lp);
             return 1;
         }
         if (exc < 0 || exc >= 32 || !g_pm_exc[exc].set || (fr[2] & 0x2)) return 0;
@@ -27988,25 +27988,25 @@ static int dpmi_nested_fault(volatile BYTE *tib, DWORD ev, DWORD eip)
         fr[1] = g_dpmi_flt_code_sel;
         VDM_SET16(tib, VTIB_CS, g_pm_exc[exc].sel);
         VDM_REG(tib, VTIB_EIP) = g_pm_exc[exc].off;
-        lp = zput(lp, "NESTED EXC 0x"); lp = zhex(lp, (DWORD)exc);
-        lp = zput(lp, " err=0x"); lp = zhex(lp, fr[2]);
-        lp = zput(lp, " at 0x"); lp = zhex(lp, fr[4]); lp = zput(lp, ":0x"); lp = zhex(lp, fr[3]);
-        lp = zput(lp, " -> client handler 0x"); lp = zhex(lp, g_pm_exc[exc].sel);
-        lp = zput(lp, ":0x"); lp = zhex(lp, g_pm_exc[exc].off);
+        lp = LogPut(lp, "NESTED EXC 0x"); lp = LogHex(lp, (DWORD)exc);
+        lp = LogPut(lp, " err=0x"); lp = LogHex(lp, fr[2]);
+        lp = LogPut(lp, " at 0x"); lp = LogHex(lp, fr[4]); lp = LogPut(lp, ":0x"); lp = LogHex(lp, fr[3]);
+        lp = LogPut(lp, " -> client handler 0x"); lp = LogHex(lp, g_pm_exc[exc].sel);
+        lp = LogPut(lp, ":0x"); lp = LogHex(lp, g_pm_exc[exc].off);
         /* s93: a stack fault is about SS:SP -- say them, and the limit, and which
            nested call was running (Terminal and Program Manager both took #SS here). */
-        lp = zput(lp, " ss:sp=0x"); lp = zhex(lp, fr[7]); lp = zput(lp, ":0x"); lp = zhex(lp, fr[6]);
+        lp = LogPut(lp, " ss:sp=0x"); lp = LogHex(lp, fr[7]); lp = LogPut(lp, ":0x"); lp = LogHex(lp, fr[6]);
         if ((fr[7] >> 3) < DPMI_LDT_MAX) {
-            lp = zput(lp, " ss.limit=0x"); lp = zhex(lp, g_ldt[fr[7] >> 3].limit);
+            lp = LogPut(lp, " ss.limit=0x"); lp = LogHex(lp, g_ldt[fr[7] >> 3].limit);
         }
         if (g_WowCallDepth > 0) {
-            lp = zput(lp, " call hwnd=0x"); lp = zhex(lp, g_WowCallFrames[g_WowCallDepth - 1].Window);
-            lp = zput(lp, " msg=0x"); lp = zhex(lp, g_WowCallFrames[g_WowCallDepth - 1].Message);
-            lp = zput(lp, " depth=0x"); lp = zhex(lp, (DWORD)g_WowCallDepth);
+            lp = LogPut(lp, " call hwnd=0x"); lp = LogHex(lp, g_WowCallFrames[g_WowCallDepth - 1].Window);
+            lp = LogPut(lp, " msg=0x"); lp = LogHex(lp, g_WowCallFrames[g_WowCallDepth - 1].Message);
+            lp = LogPut(lp, " depth=0x"); lp = LogHex(lp, (DWORD)g_WowCallDepth);
         }
-        lp = zput(lp, " nested=0x"); lp = zhex(lp, (DWORD)g_ww_nested);
-        lp = zput(lp, "\r\n");
-        log_append(LOG_PATH, lb, lp);
+        lp = LogPut(lp, " nested=0x"); lp = LogHex(lp, (DWORD)g_ww_nested);
+        lp = LogPut(lp, "\r\n");
+        LogAppend(LOG_PATH, lb, lp);
         return 1;
     }
     return 0;
@@ -28071,10 +28071,10 @@ static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
     if (!ok) {
         char b[160], *q = b;
         while (g_WowCallDepth > depth0) WowCallLeave(tib, 0);
-        q = zput(q, "WOWNEST: ★ the nested call to 0x"); q = zhex(q, proc);
-        q = zput(q, " (msg 0x"); q = zhex(q, msg);
-        q = zput(q, ") did not return -- frame unwound, Windows' default used\r\n");
-        log_append(LOG_PATH, b, q);
+        q = LogPut(q, "WOWNEST: ★ the nested call to 0x"); q = LogHex(q, proc);
+        q = LogPut(q, " (msg 0x"); q = LogHex(q, msg);
+        q = LogPut(q, ") did not return -- frame unwound, Windows' default used\r\n");
+        LogAppend(LOG_PATH, b, q);
     }
     if (ok && blob && blobn > 0) {
         int i;
@@ -28326,26 +28326,26 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
     VDM_SET16(tib, VTIB_CS, DPMI_IRQ_TARGET_SEL(iv));
     VDM_REG(tib, VTIB_EIP) = h32 ? DPMI_IRQ_TARGET_OFF(iv) : (DPMI_IRQ_TARGET_OFF(iv) & 0xFFFF);
 
-    lp = zput(lp, "  IRQ0->PM INT 0x"); lp = zhex(lp, iv);
-    lp = zput(lp, " handler 0x"); lp = zhex(lp, DPMI_IRQ_TARGET_SEL(iv));
-    lp = zput(lp, ":0x"); lp = zhex(lp, DPMI_IRQ_TARGET_OFF(iv));
+    lp = LogPut(lp, "  IRQ0->PM INT 0x"); lp = LogHex(lp, iv);
+    lp = LogPut(lp, " handler 0x"); lp = LogHex(lp, DPMI_IRQ_TARGET_SEL(iv));
+    lp = LogPut(lp, ":0x"); lp = LogHex(lp, DPMI_IRQ_TARGET_OFF(iv));
     /* What we are about to RUN, and the stack we are about to run it on. This path dies
        with no further output, so anything not printed here is unrecoverable afterwards. */
     { WORD hs = DPMI_IRQ_TARGET_SEL(iv);
       DWORD hl = dpmi_sel_base(hs) + (g_DpmiIsClient32 ? DPMI_IRQ_TARGET_OFF(iv) : (DPMI_IRQ_TARGET_OFF(iv) & 0xFFFF));
       const BYTE *hb = (const BYTE *)(ULONG_PTR)hl;
-      lp = zput(lp, " lin=0x"); lp = zhex(lp, hl);
-      lp = zput(lp, dpmi_sel_is32(hs) ? " (h CS D/B=1)" : " (h CS D/B=0)");
-      lp = zput(lp, " h32="); lp = zhex(lp, (DWORD)h32);
-      lp = zput(lp, " SS:ESP=0x"); lp = zhex(lp, VDM_REG(tib, VTIB_SS) & 0xFFFF);
-      lp = zput(lp, ":0x"); lp = zhex(lp, VDM_REG(tib, VTIB_ESP));
-      lp = zput(lp, dpmi_sel_is32(sSS) ? " (SS D/B=1)" : " (SS D/B=0)");
-      lp = zput(lp, " from 0x"); lp = zhex(lp, sCS); lp = zput(lp, ":0x"); lp = zhex(lp, sEIP);
-      lp = zput(lp, " bytes@handler=");
-      if (!host_readable(hb, 16)) lp = zput(lp, "<unreadable>");
-      else                        lp = zdump(lp, hb, 16); }
-    lp = zput(lp, "\r\n");
-    log_append(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
+      lp = LogPut(lp, " lin=0x"); lp = LogHex(lp, hl);
+      lp = LogPut(lp, dpmi_sel_is32(hs) ? " (h CS D/B=1)" : " (h CS D/B=0)");
+      lp = LogPut(lp, " h32="); lp = LogHex(lp, (DWORD)h32);
+      lp = LogPut(lp, " SS:ESP=0x"); lp = LogHex(lp, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+      lp = LogPut(lp, ":0x"); lp = LogHex(lp, VDM_REG(tib, VTIB_ESP));
+      lp = LogPut(lp, dpmi_sel_is32(sSS) ? " (SS D/B=1)" : " (SS D/B=0)");
+      lp = LogPut(lp, " from 0x"); lp = LogHex(lp, sCS); lp = LogPut(lp, ":0x"); lp = LogHex(lp, sEIP);
+      lp = LogPut(lp, " bytes@handler=");
+      if (!host_readable(hb, 16)) lp = LogPut(lp, "<unreadable>");
+      else                        lp = LogDump(lp, hb, 16); }
+    lp = LogPut(lp, "\r\n");
+    LogAppend(LOG_PATH, lb, lp); serial_out(lb, lp); lp = lb;
 
     /* ── GIVING UP HALFWAY THROUGH SOMEONE ELSE'S INTERRUPT HANDLER CORRUPTS THEM. ──
          This loop used to stop after 64 phases and then restore the interrupted context
@@ -28378,17 +28378,17 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
              the fatal one can be DIFFED against its five healthy predecessors. */
         if (g_pm_irq0_done < 12) {
             char eb[192], *eq = eb;
-            eq = zput(eq, "   PMENT tick="); eq = zhex(eq, (DWORD)g_pm_irq0_done);
-            eq = zput(eq, " ph="); eq = zhex(eq, (DWORD)ph);
-            eq = zput(eq, " cs:eip=0x"); eq = zhex(eq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-            eq = zput(eq, ":0x"); eq = zhex(eq, VDM_REG(tib, VTIB_EIP));
-            eq = zput(eq, " ss:esp=0x"); eq = zhex(eq, VDM_REG(tib, VTIB_SS) & 0xFFFF);
-            eq = zput(eq, ":0x"); eq = zhex(eq, VDM_REG(tib, VTIB_ESP));
-            eq = zput(eq, " efl=0x"); eq = zhex(eq, VDM_REG(tib, VTIB_EFLAGS));
-            eq = zput(eq, " [714]=0x"); eq = zhex(eq, *(volatile DWORD *)(ULONG_PTR)0x714);
-            eq = zput(eq, " vi="); eq = zhex(eq, (DWORD)g_dpmi_vi);
-            eq = zput(eq, " apa="); eq = zhex(eq, (DWORD)g_async_pm_active);
-            eq = zput(eq, "\r\n"); log_append(LOG_PATH, eb, eq); serial_out(eb, eq);
+            eq = LogPut(eq, "   PMENT tick="); eq = LogHex(eq, (DWORD)g_pm_irq0_done);
+            eq = LogPut(eq, " ph="); eq = LogHex(eq, (DWORD)ph);
+            eq = LogPut(eq, " cs:eip=0x"); eq = LogHex(eq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+            eq = LogPut(eq, ":0x"); eq = LogHex(eq, VDM_REG(tib, VTIB_EIP));
+            eq = LogPut(eq, " ss:esp=0x"); eq = LogHex(eq, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+            eq = LogPut(eq, ":0x"); eq = LogHex(eq, VDM_REG(tib, VTIB_ESP));
+            eq = LogPut(eq, " efl=0x"); eq = LogHex(eq, VDM_REG(tib, VTIB_EFLAGS));
+            eq = LogPut(eq, " [714]=0x"); eq = LogHex(eq, *(volatile DWORD *)(ULONG_PTR)0x714);
+            eq = LogPut(eq, " vi="); eq = LogHex(eq, (DWORD)g_dpmi_vi);
+            eq = LogPut(eq, " apa="); eq = LogHex(eq, (DWORD)g_async_pm_active);
+            eq = LogPut(eq, "\r\n"); LogAppend(LOG_PATH, eb, eq); serial_out(eb, eq);
         }
         DpmiEnterProtectedMode(tib);
         ev  = VDM_REG(tib, VTIB_EVENT);
@@ -28419,20 +28419,20 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
          be readable as a routine "done=0". */
     if (!done && g_pm_client_exited) {
         char ab2[128], *aq = ab2;
-        aq = zput(aq, "DPMI: the client EXITED inside its vec 0x"); aq = zhexb(aq, iv);
-        aq = zput(aq, " handler after "); aq = zhex(aq, (DWORD)ph);
-        aq = zput(aq, " phases -- not resuming it\r\n");
-        log_append(LOG_PATH, ab2, aq); serial_out(ab2, aq);
+        aq = LogPut(aq, "DPMI: the client EXITED inside its vec 0x"); aq = LogHexByte(aq, iv);
+        aq = LogPut(aq, " handler after "); aq = LogHex(aq, (DWORD)ph);
+        aq = LogPut(aq, " phases -- not resuming it\r\n");
+        LogAppend(LOG_PATH, ab2, aq); serial_out(ab2, aq);
     } else if (!done) {
         char ab2[192], *aq = ab2;
-        aq = zput(aq, "DPMI: *** PM ISR ABANDONED after "); aq = zhex(aq, (DWORD)ph);
-        aq = zput(aq, " phases / "); aq = zhex(aq, GetTickCount() - t_isr0);
-        aq = zput(aq, " ms -- the client's interrupt state is now INCONSISTENT"
-                      " (vec 0x"); aq = zhexb(aq, iv);
-        aq = zput(aq, ", last cs:eip=0x"); aq = zhex(aq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-        aq = zput(aq, ":0x"); aq = zhex(aq, dpmi_pm_eip(tib));
-        aq = zput(aq, ")\r\n");
-        log_append(LOG_PATH, ab2, aq); serial_out(ab2, aq);
+        aq = LogPut(aq, "DPMI: *** PM ISR ABANDONED after "); aq = LogHex(aq, (DWORD)ph);
+        aq = LogPut(aq, " phases / "); aq = LogHex(aq, GetTickCount() - t_isr0);
+        aq = LogPut(aq, " ms -- the client's interrupt state is now INCONSISTENT"
+                      " (vec 0x"); aq = LogHexByte(aq, iv);
+        aq = LogPut(aq, ", last cs:eip=0x"); aq = LogHex(aq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+        aq = LogPut(aq, ":0x"); aq = LogHex(aq, dpmi_pm_eip(tib));
+        aq = LogPut(aq, ")\r\n");
+        LogAppend(LOG_PATH, ab2, aq); serial_out(ab2, aq);
     }
     /* ► NAME THE VECTOR. This line said "IRQ0" whatever it had just injected, and since
          session 23 gave the DEVICE lines a cooperative path it is used for IRQ5 too --
@@ -28442,19 +28442,19 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
     if (iv <= 0x0F) { g_pm_coop_line[iv & 7]++;
                       if (iv == 0x08) tick_delivered_note(); }
     { char cb2[128], *cq = cb2;
-      cq = zput(cq, "  PMIRQ vec=0x"); cq = zhexb(cq, iv);
-      cq = zput(cq, " done="); cq = zhex(cq, (DWORD)done);
-      cq = zput(cq, " phases="); cq = zhex(cq, (DWORD)ph);
-      cq = zput(cq, " ticks="); cq = zhex(cq, ++g_pm_irq0_done);
+      cq = LogPut(cq, "  PMIRQ vec=0x"); cq = LogHexByte(cq, iv);
+      cq = LogPut(cq, " done="); cq = LogHex(cq, (DWORD)done);
+      cq = LogPut(cq, " phases="); cq = LogHex(cq, (DWORD)ph);
+      cq = LogPut(cq, " ticks="); cq = LogHex(cq, ++g_pm_irq0_done);
       for (wi = 0; wi < g_pm_nwatch; ++wi) {
           DWORD wa = pm_watch_addr(wi);
           const BYTE *wp = (const BYTE *)(ULONG_PTR)wa;
-          cq = zput(cq, " ["); cq = zhex(cq, wa); cq = zput(cq, "]=0x");
-          if (!wa || !host_readable(wp, 4)) cq = zput(cq, "????????");
-          else cq = zhex(cq, *(const DWORD *)wp);
-          cq = zput(cq, "<-0x"); cq = zhex(cq, wpre[wi]);
+          cq = LogPut(cq, " ["); cq = LogHex(cq, wa); cq = LogPut(cq, "]=0x");
+          if (!wa || !host_readable(wp, 4)) cq = LogPut(cq, "????????");
+          else cq = LogHex(cq, *(const DWORD *)wp);
+          cq = LogPut(cq, "<-0x"); cq = LogHex(cq, wpre[wi]);
       }
-      cq = zput(cq, "\r\n"); log_append(LOG_PATH, cb2, cq); serial_out(cb2, cq); }
+      cq = LogPut(cq, "\r\n"); LogAppend(LOG_PATH, cb2, cq); serial_out(cb2, cq); }
     /* restore the interrupted PM context verbatim + unmask */
     VDM_REG(tib,VTIB_EAX)=sEAX; VDM_REG(tib,VTIB_EBX)=sEBX; VDM_REG(tib,VTIB_ECX)=sECX;
     VDM_REG(tib,VTIB_EDX)=sEDX; VDM_REG(tib,VTIB_ESI)=sESI; VDM_REG(tib,VTIB_EDI)=sEDI;
@@ -28556,14 +28556,14 @@ static int dpmi_inject_pm_mousecb(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
     ++g_ms_cb_inj;
     if (g_ms_cb_inj <= 16) {
         char lb[256], *lp = lb;
-        lp = zput(lp, "  MOUSECB->PM #"); lp = zhex(lp, g_ms_cb_inj);
-        lp = zput(lp, " ev=0x"); lp = zhex(lp, (DWORD)pend);
-        lp = zput(lp, " btn=0x"); lp = zhex(lp, (DWORD)ev.btn);
-        lp = zput(lp, " handler 0x"); lp = zhex(lp, hsel); lp = zput(lp, ":0x"); lp = zhex(lp, hoff);
-        lp = zput(lp, " from 0x"); lp = zhex(lp, sCS); lp = zput(lp, ":0x"); lp = zhex(lp, sEIP);
-        lp = zput(lp, " ss:esp=0x"); lp = zhex(lp, sSS); lp = zput(lp, ":0x"); lp = zhex(lp, VDM_REG(tib, VTIB_ESP));
-        lp = zput(lp, " h32="); lp = zhex(lp, (DWORD)h32);
-        lp = zput(lp, "\r\n"); log_append(LOG_PATH, lb, lp); serial_out(lb, lp);
+        lp = LogPut(lp, "  MOUSECB->PM #"); lp = LogHex(lp, g_ms_cb_inj);
+        lp = LogPut(lp, " ev=0x"); lp = LogHex(lp, (DWORD)pend);
+        lp = LogPut(lp, " btn=0x"); lp = LogHex(lp, (DWORD)ev.btn);
+        lp = LogPut(lp, " handler 0x"); lp = LogHex(lp, hsel); lp = LogPut(lp, ":0x"); lp = LogHex(lp, hoff);
+        lp = LogPut(lp, " from 0x"); lp = LogHex(lp, sCS); lp = LogPut(lp, ":0x"); lp = LogHex(lp, sEIP);
+        lp = LogPut(lp, " ss:esp=0x"); lp = LogHex(lp, sSS); lp = LogPut(lp, ":0x"); lp = LogHex(lp, VDM_REG(tib, VTIB_ESP));
+        lp = LogPut(lp, " h32="); lp = LogHex(lp, (DWORD)h32);
+        lp = LogPut(lp, "\r\n"); LogAppend(LOG_PATH, lb, lp); serial_out(lb, lp);
     }
     for (ph = 0; ph < DPMI_IRQ0_PHASE_MAX && !done; ++ph) {
         DWORD e, eip, vec; int rc;
@@ -28591,10 +28591,10 @@ static int dpmi_inject_pm_mousecb(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
     if (done) ++g_ms_cb_done; else ++g_ms_cb_lost;
     if (!done) {
         char ab[192], *aq = ab;
-        aq = zput(aq, "DPMI: *** PM MOUSE CALLBACK ABANDONED after "); aq = zhex(aq, (DWORD)ph);
-        aq = zput(aq, " phases (last cs:eip=0x"); aq = zhex(aq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-        aq = zput(aq, ":0x"); aq = zhex(aq, dpmi_pm_eip(tib)); aq = zput(aq, ")\r\n");
-        log_append(LOG_PATH, ab, aq); serial_out(ab, aq);
+        aq = LogPut(aq, "DPMI: *** PM MOUSE CALLBACK ABANDONED after "); aq = LogHex(aq, (DWORD)ph);
+        aq = LogPut(aq, " phases (last cs:eip=0x"); aq = LogHex(aq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+        aq = LogPut(aq, ":0x"); aq = LogHex(aq, dpmi_pm_eip(tib)); aq = LogPut(aq, ")\r\n");
+        LogAppend(LOG_PATH, ab, aq); serial_out(ab, aq);
     }
     VDM_REG(tib,VTIB_EAX)=sEAX; VDM_REG(tib,VTIB_EBX)=sEBX; VDM_REG(tib,VTIB_ECX)=sECX;
     VDM_REG(tib,VTIB_EDX)=sEDX; VDM_REG(tib,VTIB_ESI)=sESI; VDM_REG(tib,VTIB_EDI)=sEDI;
@@ -28730,13 +28730,13 @@ static void dpmi_client_teardown(void)
     g_dpmi_pm = 0;
     g_pm_client_exited = 0;
 
-    q = zput(q, "DPMI: client teardown -- released 0x"); q = zhex(q, (DWORD)freed_mem);
-    q = zput(q, " memory blocks, 0x"); q = zhex(q, (DWORD)freed_dos);
-    q = zput(q, " DOS blocks, 0x"); q = zhex(q, (DWORD)freed_ldt);
-    q = zput(q, " LDT slots (next=0x"); q = zhex(q, (DWORD)g_ldt_next);
-    q = zput(q, ", free-list 0x"); q = zhex(q, (DWORD)g_ldt_nfree);
-    q = zput(q, ")\r\n");
-    log_append(LOG_PATH, lb, q); serial_out(lb, q);
+    q = LogPut(q, "DPMI: client teardown -- released 0x"); q = LogHex(q, (DWORD)freed_mem);
+    q = LogPut(q, " memory blocks, 0x"); q = LogHex(q, (DWORD)freed_dos);
+    q = LogPut(q, " DOS blocks, 0x"); q = LogHex(q, (DWORD)freed_ldt);
+    q = LogPut(q, " LDT slots (next=0x"); q = LogHex(q, (DWORD)g_ldt_next);
+    q = LogPut(q, ", free-list 0x"); q = LogHex(q, (DWORD)g_ldt_nfree);
+    q = LogPut(q, ")\r\n");
+    LogAppend(LOG_PATH, lb, q); serial_out(lb, q);
 }
 
 /* ================================================================================ *
@@ -28798,10 +28798,10 @@ static int dpmi_run_pm_interp(DOS_MACHINE *mp, volatile BYTE *tib)
     g_sel_desc = dpmi_sel_desc;               /* ...and answers LAR/LSL from g_ldt[] (run 55) */
     dpmi_icpu_load(&c, tib);
     r = rb;
-    r = zput(r, "DPMI-INTERP: run 53 host PM begins CS:IP=0x"); r = zhex(r, c.seg[1]);
-    r = zput(r, ":0x"); r = zhex(r, c.ip);
-    r = zput(r, " DS=0x"); r = zhex(r, c.seg[3]); r = zput(r, " SS=0x"); r = zhex(r, c.seg[2]);
-    r = zput(r, "\r\n"); log_append(LOG_PATH, rb, r); serial_out(rb, r);
+    r = LogPut(r, "DPMI-INTERP: run 53 host PM begins CS:IP=0x"); r = LogHex(r, c.seg[1]);
+    r = LogPut(r, ":0x"); r = LogHex(r, c.ip);
+    r = LogPut(r, " DS=0x"); r = LogHex(r, c.seg[3]); r = LogPut(r, " SS=0x"); r = LogHex(r, c.seg[2]);
+    r = LogPut(r, "\r\n"); LogAppend(LOG_PATH, rb, r); serial_out(rb, r);
     for (;;) {
         if (istep(&c)) { if (++guard > 20000000L) break; continue; }   /* modeled step */
         { uint32_t site = seg_base(c.seg[1]) + c.ip;
@@ -28816,18 +28816,18 @@ static int dpmi_run_pm_interp(DOS_MACHINE *mp, volatile BYTE *tib)
               continue;
           }
           r = rb;                             /* the spike's to-do signal */
-          r = zput(r, "DPMI-INTERP: unmodeled opcode at CS:IP=0x"); r = zhex(r, c.seg[1]);
-          r = zput(r, ":0x"); r = zhex(r, c.ip);
-          r = zput(r, " bytes="); r = zdump(r, (const BYTE*)(ULONG_PTR)site, 8);
-          r = zput(r, " (steps=0x"); r = zhex(r, (unsigned)guard); r = zput(r, ")\r\n");
-          log_append(LOG_PATH, rb, r); serial_out(rb, r);
+          r = LogPut(r, "DPMI-INTERP: unmodeled opcode at CS:IP=0x"); r = LogHex(r, c.seg[1]);
+          r = LogPut(r, ":0x"); r = LogHex(r, c.ip);
+          r = LogPut(r, " bytes="); r = LogDump(r, (const BYTE*)(ULONG_PTR)site, 8);
+          r = LogPut(r, " (steps=0x"); r = LogHex(r, (unsigned)guard); r = LogPut(r, ")\r\n");
+          LogAppend(LOG_PATH, rb, r); serial_out(rb, r);
           dpmi_icpu_store(&c, tib);
           return -1;
         }
     }
     dpmi_icpu_store(&c, tib);                 /* guard cap hit (possible infinite loop) */
-    r = rb; r = zput(r, "DPMI-INTERP: guard cap hit (spin?)\r\n");
-    log_append(LOG_PATH, rb, r); serial_out(rb, r);
+    r = rb; r = LogPut(r, "DPMI-INTERP: guard cap hit (spin?)\r\n");
+    LogAppend(LOG_PATH, rb, r); serial_out(rb, r);
     return -1;
 }
 
@@ -29015,17 +29015,17 @@ static int v86_deliver_dev_irq(volatile BYTE *tib)
           char rb[256], *rq = rb;
           DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
           g_irqn_refuse_log++;
-          rq = zput(rq, "IRQN-REFUSE irq=0x");  rq = zhex(rq, (DWORD)pend);
-          rq = zput(rq, " cs:ip=0x");           rq = zhex(rq, qcs);
-          rq = zput(rq, ":0x");                 rq = zhex(rq, qip);
-          rq = zput(rq, " efl=0x");             rq = zhex(rq, VDM_REG(tib, VTIB_EFLAGS));
-          rq = zput(rq, " ss:sp=0x");           rq = zhex(rq, ss);
-          rq = zput(rq, ":0x");                 rq = zhex(rq, sp);
-          rq = zput(rq, " stkflags=0x");
-          rq = zhex(rq, peekw((ss << 4) + ((sp + 4) & 0xFFFF)));
-          rq = zput(rq, in_bop ? " why=in_bop" : " why=if_gate");
-          rq = zput(rq, "\r\n");
-          log_append(LOG_PATH, rb, rq); serial_out(rb, rq);
+          rq = LogPut(rq, "IRQN-REFUSE irq=0x");  rq = LogHex(rq, (DWORD)pend);
+          rq = LogPut(rq, " cs:ip=0x");           rq = LogHex(rq, qcs);
+          rq = LogPut(rq, ":0x");                 rq = LogHex(rq, qip);
+          rq = LogPut(rq, " efl=0x");             rq = LogHex(rq, VDM_REG(tib, VTIB_EFLAGS));
+          rq = LogPut(rq, " ss:sp=0x");           rq = LogHex(rq, ss);
+          rq = LogPut(rq, ":0x");                 rq = LogHex(rq, sp);
+          rq = LogPut(rq, " stkflags=0x");
+          rq = LogHex(rq, peekw((ss << 4) + ((sp + 4) & 0xFFFF)));
+          rq = LogPut(rq, in_bop ? " why=in_bop" : " why=if_gate");
+          rq = LogPut(rq, "\r\n");
+          LogAppend(LOG_PATH, rb, rq); serial_out(rb, rq);
       }
   } }
 
@@ -29207,8 +29207,8 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                 BSETAX((WORD)CMOS_EXTENDED_KB);     /* 15 MB -- the machine, not the XMS pool */
                 BCF_CLR();
                 { char x8[128], *x8q = x8;
-                  x8q = zput(x8q, "  INT15 AH=88h extended memory -> 0x3C00 KB\r\n");
-                  log_append(LOG_PATH, x8, x8q); serial_out(x8, x8q); }
+                  x8q = LogPut(x8q, "  INT15 AH=88h extended memory -> 0x3C00 KB\r\n");
+                  LogAppend(LOG_PATH, x8, x8q); serial_out(x8, x8q); }
             } else if (ah15 == 0x86) {         /* wait CX:DX microseconds (#206) */
                 DWORD us = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                 LARGE_INTEGER n;
@@ -29279,10 +29279,10 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                 { static int said = 0;
                   if (!said) { said = 1;
                     char jb[64], *jq = jb;
-                    jq = zput(jq, "  INT15 AH=84h joystick, dx=0x");
-                    jq = zhex(jq, dx84);
-                    jq = zput(jq, VddJoystickIsLive(&g_joy) ? " (live)\r\n" : " (absent)\r\n");
-                    log_append(LOG_PATH, jb, jq); serial_out(jb, jq); } }
+                    jq = LogPut(jq, "  INT15 AH=84h joystick, dx=0x");
+                    jq = LogHex(jq, dx84);
+                    jq = LogPut(jq, VddJoystickIsLive(&g_joy) ? " (live)\r\n" : " (absent)\r\n");
+                    LogAppend(LOG_PATH, jb, jq); serial_out(jb, jq); } }
                 if (!VddJoystickIsLive(&g_joy)) {
                     BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
                     BCF_SET();
@@ -29325,13 +29325,13 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                      "ax=0x86de" and only AL was the guest's -- the instrument
                      reporting its own write back as the guest's request. */
                 { char xb[96], *xq = xb;
-                  xq = zput(xq, "  INT15 UNIMPL ax=0x");
-                  xq = zhex(xq, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-                  xq = zput(xq, " bx=0x"); xq = zhex(xq, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                  xq = zput(xq, " cx=0x"); xq = zhex(xq, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
-                  xq = zput(xq, " dx=0x"); xq = zhex(xq, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                  xq = zput(xq, " es=0x"); xq = zhex(xq, VDM_REG(tib, VTIB_ES) & 0xFFFF);
-                  xq = zput(xq, "\r\n"); log_append(LOG_PATH, xb, xq); serial_out(xb, xq); }
+                  xq = LogPut(xq, "  INT15 UNIMPL ax=0x");
+                  xq = LogHex(xq, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                  xq = LogPut(xq, " bx=0x"); xq = LogHex(xq, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                  xq = LogPut(xq, " cx=0x"); xq = LogHex(xq, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+                  xq = LogPut(xq, " dx=0x"); xq = LogHex(xq, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                  xq = LogPut(xq, " es=0x"); xq = LogHex(xq, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                  xq = LogPut(xq, "\r\n"); LogAppend(LOG_PATH, xb, xq); serial_out(xb, xq); }
                 BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
                 BCF_SET();                     /* AH=86h: unsupported fn */
                 g_bios_unimpl[0x15] = 1;
@@ -29524,22 +29524,22 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
              INT 2Fh answer worth reading is. */
         { static DWORD n2f = 0;
           if (++n2f == 513) {
-              p = zput(p, "STAGE2: BOP2F ... CAPPED at 512 lines (guest is looping)\r\n");
-              log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+              p = LogPut(p, "STAGE2: BOP2F ... CAPPED at 512 lines (guest is looping)\r\n");
+              LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
           }
           if (n2f > 512) goto bop2f_serviced; }
-        p = zput(p, "STAGE2: BOP2F ax=0x"); p = zhex(p, ax);
-        p = zput(p, " bx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-        p = zput(p, " cx=0x");  p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
-        p = zput(p, " dx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-        p = zput(p, " ds:si=0x"); p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
-        p = zput(p, ":0x");     p = zhex(p, VDM_REG(tib, VTIB_ESI) & 0xFFFF);
-        p = zput(p, " es:di=0x"); p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
-        p = zput(p, ":0x");     p = zhex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
-        p = zput(p, " from=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-        p = zput(p, ":0x");     p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-        p = zput(p, "\r\n");
-        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+        p = LogPut(p, "STAGE2: BOP2F ax=0x"); p = LogHex(p, ax);
+        p = LogPut(p, " bx=0x");  p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+        p = LogPut(p, " cx=0x");  p = LogHex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+        p = LogPut(p, " dx=0x");  p = LogHex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+        p = LogPut(p, " ds:si=0x"); p = LogHex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+        p = LogPut(p, ":0x");     p = LogHex(p, VDM_REG(tib, VTIB_ESI) & 0xFFFF);
+        p = LogPut(p, " es:di=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+        p = LogPut(p, ":0x");     p = LogHex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+        p = LogPut(p, " from=0x"); p = LogHex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+        p = LogPut(p, ":0x");     p = LogHex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+        p = LogPut(p, "\r\n");
+        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
     bop2f_serviced:
         /* ── "NO XMS" MEANS NOT ANSWERING, NOT ANSWERING BADLY. ────────────
              A machine with no HIMEM.SYS does not reply to 4300 at all, so AL
@@ -29564,9 +29564,9 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
             VDM_SET16(tib, VTIB_ESI, 0);
             VDM_SET16(tib, VTIB_ES,  DOS_HDLR_SEG);
             VDM_SET16(tib, VTIB_EDI, DPMI_ENTRY_OFF);
-            p = zput(p, "STAGE2: DPMI 1687 -> AX=0 ES:DI=0x"); p = zhex(p, DOS_HDLR_SEG);
-            p = zput(p, ":0x"); p = zhex(p, DPMI_ENTRY_OFF); p = zput(p, " (guest must far-call this)\r\n");
-            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            p = LogPut(p, "STAGE2: DPMI 1687 -> AX=0 ES:DI=0x"); p = LogHex(p, DOS_HDLR_SEG);
+            p = LogPut(p, ":0x"); p = LogHex(p, DPMI_ENTRY_OFF); p = LogPut(p, " (guest must far-call this)\r\n");
+            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
         } else if (ax == 0x122E) {
             /* ── THE TABLES XP's COMMAND.COM ASKS FOR BEFORE IT PRINTS. ────
                  DL selects; ES:DI comes back as a far pointer. It zeroes
@@ -29601,11 +29601,11 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                 VDM_SET16(tib, VTIB_ES,  0);      /* DL=6, and anything else */
                 VDM_SET16(tib, VTIB_EDI, 0);
             }
-            p = zput(p, "STAGE2: 2F/122E dl="); p = zhexb(p, (unsigned)dl2e);
-            p = zput(p, " -> ES:DI=0x"); p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
-            p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
-            p = zput(p, "\r\n");
-            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            p = LogPut(p, "STAGE2: 2F/122E dl="); p = LogHexByte(p, (unsigned)dl2e);
+            p = LogPut(p, " -> ES:DI=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+            p = LogPut(p, ":0x"); p = LogHex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+            p = LogPut(p, "\r\n");
+            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
         } else if (ax == 0x1684) {                          /* get device API entry point */
             /* ES:DI = 0:0 means "no API for that device ID", and we have none.
                ⚠ Leaving the registers alone would be a POINTER-RETURNING call
@@ -29616,8 +29616,8 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                  not something to rely on from other callers. */
             VDM_SET16(tib, VTIB_ES, 0);
             VDM_SET16(tib, VTIB_EDI, 0);
-            p = zput(p, "STAGE2: 2F/1684 device API -> none (ES:DI=0)\r\n");
-            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            p = LogPut(p, "STAGE2: 2F/1684 device API -> none (ES:DI=0)\r\n");
+            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
         }
         /* ── The rest of what krnl386 asks INT 2Fh (as logged), and why leaving
              it alone is the RIGHT answer rather than merely the easy one:
@@ -29648,23 +29648,23 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
         {   DWORD sp43 = ((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
                        + (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
             const volatile BYTE *st43 = (const volatile BYTE *)(ULONG_PTR)sp43;
-            p = zput(p, " XMS AH=0x");
-            p = zhexb(p, (unsigned)((VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF));
-            p = zput(p, " BL=0x"); p = zhexb(p, (unsigned)(VDM_REG(tib, VTIB_EBX) & 0xFF));
-            p = zput(p, " DX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-            p = zput(p, " <- caller ");
-            p = zhex(p, (DWORD)(st43[2] | (st43[3] << 8)));   /* return CS */
-            p = zput(p, ":");
-            p = zhex(p, (DWORD)(st43[0] | (st43[1] << 8)));   /* return IP */
-            p = zput(p, "\r\n"); }
-        log_append(LOG_PATH, base, p); p = base;
+            p = LogPut(p, " XMS AH=0x");
+            p = LogHexByte(p, (unsigned)((VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF));
+            p = LogPut(p, " BL=0x"); p = LogHexByte(p, (unsigned)(VDM_REG(tib, VTIB_EBX) & 0xFF));
+            p = LogPut(p, " DX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+            p = LogPut(p, " <- caller ");
+            p = LogHex(p, (DWORD)(st43[2] | (st43[3] << 8)));   /* return CS */
+            p = LogPut(p, ":");
+            p = LogHex(p, (DWORD)(st43[0] | (st43[1] << 8)));   /* return IP */
+            p = LogPut(p, "\r\n"); }
+        LogAppend(LOG_PATH, base, p); p = base;
         host_xms(tib);
         VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the RETF      */
         V86BOP_RET(V86BOP_DONE);
     }
     if (bn == 0x67) {   /* INT 67h EMM (EMS) */
-        p = zput(p, " EMS AH=0x"); p = zhex(p, (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF); p = zput(p, "\r\n");
-        log_append(LOG_PATH, base, p); p = base;
+        p = LogPut(p, " EMS AH=0x"); p = LogHex(p, (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF); p = LogPut(p, "\r\n");
+        LogAppend(LOG_PATH, base, p); p = base;
         HOST_LOCK();
         host_ems(tib);
         HOST_UNLOCK();
@@ -29690,7 +29690,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     unsigned i; int guard;
     g_guest_tid = GetCurrentThreadId();
     oscompat_bind();                    /* the four XP-only imports, or their absence */
-    /* cfg\ and debug\out\ before ANYTHING logs. A missing out\ makes every log_append
+    /* cfg\ and debug\out\ before ANYTHING logs. A missing out\ makes every LogAppend
        fail silently, and the log is what explains every other failure. Idempotent;
        debug\ first because CreateDirectoryA does not create intermediate levels. */
     CreateDirectoryA(NTVDMEX_CFG, NULL);
@@ -29808,8 +29808,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     {   int n; char nm[48];
         for (n = 1; n <= 16 && !g_once_mutex; ++n) {
             HANDLE once; DWORD gle, w = WAIT_OBJECT_0;
-            char *q = zput(nm, "Global\\ntvdmex_host_single");
-            if (n > 1) { *q++ = '_'; q = zdec(q, (unsigned)n); }
+            char *q = LogPut(nm, "Global\\ntvdmex_host_single");
+            if (n > 1) { *q++ = '_'; q = LogDecimal(q, (unsigned)n); }
             /* ⚠⚠ GetLastError() IS ONLY MEANINGFUL IMMEDIATELY AFTER THE CALL -- clear
                  it first; CreateMutexA does not clear it on success. (The first cut of
                  the guard read CreateDirectoryA's ERROR_ALREADY_EXISTS and refused.) */
@@ -29823,15 +29823,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             }
             g_once_mutex = once;
             if (n > 1) {
-                char *o = zput(g_out_sub, "debug\\out\\");
-                o = zdec(o, (unsigned)n); zput(o, "\\");
+                char *o = LogPut(g_out_sub, "debug\\out\\");
+                o = LogDecimal(o, (unsigned)n); LogPut(o, "\\");
                 CreateDirectoryA(NTVDMEX_OUT, NULL);
             }
             g_instance = n; g_instance_abandoned = (w == WAIT_ABANDONED);   /* reported at STAGE0 */
         }
         if (!g_once_mutex) {
             static const char msg[] = "REFUSED: 16 NTVDMEX hosts are already running -- this instance is exiting\r\n";
-            log_append(LOG_PATH, msg, msg + sizeof(msg) - 1);
+            LogAppend(LOG_PATH, msg, msg + sizeof(msg) - 1);
             return 0;
         } }
     static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, 0x20, 0xCF };  /* BOP 0x20 ; iret */
@@ -29888,27 +29888,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          (INT 21h AH=0Eh, 47h, 4Eh...), the mode must cover every call, not just
          the two sites that wrapped it. The errors still come back as errors. */
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
-    p = zput(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v180]\r\n");
-    log_write(LOG_PATH, report, p);
+    p = LogPut(p, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v180]\r\n");
+    LogWrite(LOG_PATH, report, p);
     serial_init();                                      /* DPMI harness: COM1 log sink */
     g_stdio_how = stdio_init();                         /* GH #131; reported at exit */
     {   unsigned fails = recovery_read();               /* GH #132 */
         g_start_mode = DosRecoveryDecideStartMode(fails);
         recovery_write(fails + 1);                      /* cleared only on a clean exit */
-        p = zput(p, "STAGE0: consecutive failed starts = "); p = zhexb(p, fails);
-        p = zput(p, g_start_mode == DOS_START_UNINSTALL ? " -> UNINSTALL\r\n"
+        p = LogPut(p, "STAGE0: consecutive failed starts = "); p = LogHexByte(p, fails);
+        p = LogPut(p, g_start_mode == DOS_START_UNINSTALL ? " -> UNINSTALL\r\n"
                   : g_start_mode == DOS_START_SAFE      ? " -> SAFE MODE\r\n"
                                                         : " -> normal\r\n");
         if (g_start_mode == DOS_START_UNINSTALL) recovery_uninstall(&p);
         g_safe = DosRecoveryGetSafeSkips(g_start_mode);
         if (g_start_mode == DOS_START_SAFE)
-            p = zput(p, "STAGE0: SAFE MODE skips: third-party VDDs, audio output (silent"
+            p = LogPut(p, "STAGE0: SAFE MODE skips: third-party VDDs, audio output (silent"
                         " pump), the real PC speaker, the joystick thread, the WOW"
                         " shims, fullscreen -- the next clean exit clears it\r\n");
-        /* s90: NOT `p = report` -- the next log_write TRUNCATES the file and re-writes
+        /* s90: NOT `p = report` -- the next LogWrite TRUNCATES the file and re-writes
            the report buffer, so a line dropped from the buffer here was lost from
            EVERY log: "consecutive failed starts" never survived since #132 landed. */
-        log_append(LOG_PATH, report, p); serial_out(report, p); }
+        LogAppend(LOG_PATH, report, p); serial_out(report, p); }
     serial_out(report, p);
 
     /* ── IS THIS A WIN16 (WOW) LAUNCH? IF SO, HAND IT STRAIGHT BACK. (GH #129) ──
@@ -29932,17 +29932,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              thread -- which decides whether to show a window -- is started later.
              See the note by tray_add for why a Win16 guest gets no window. */
         g_wow_launch = 1;
-        p = zput(p, "STAGE0: WIN16/WOW launch detected -> refusing (see GH #129)\r\n");
-        p = zput(p, "STAGE0: root=["); p = zput(p, NTVDMEX_DIR); p = zput(p, "] (derived from the host's own path)\r\n");
+        p = LogPut(p, "STAGE0: WIN16/WOW launch detected -> refusing (see GH #129)\r\n");
+        p = LogPut(p, "STAGE0: root=["); p = LogPut(p, NTVDMEX_DIR); p = LogPut(p, "] (derived from the host's own path)\r\n");
         hma_try();
-        p = zput(p, "STAGE0: HMA ");
-        if (g_hma) p = zput(p, "committed at 0x100000 -- FFFF:0010 is real");
-        else { p = zput(p, "UNAVAILABLE err=0x"); p = zhex(p, g_hma_err);
-       p = zput(p, " state=0x"); p = zhex(p, g_hma_state);
-       p = zput(p, " prot=0x");  p = zhex(p, g_hma_prot); }
-        p = zput(p, "\r\n");
-        p = zput(p, "STAGE0: cmdline=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
-        log_append(LOG_PATH, report, p); serial_out(report, p);
+        p = LogPut(p, "STAGE0: HMA ");
+        if (g_hma) p = LogPut(p, "committed at 0x100000 -- FFFF:0010 is real");
+        else { p = LogPut(p, "UNAVAILABLE err=0x"); p = LogHex(p, g_hma_err);
+       p = LogPut(p, " state=0x"); p = LogHex(p, g_hma_state);
+       p = LogPut(p, " prot=0x");  p = LogHex(p, g_hma_prot); }
+        p = LogPut(p, "\r\n");
+        p = LogPut(p, "STAGE0: cmdline=["); p = LogPut(p, GetCommandLineA()); p = LogPut(p, "]\r\n");
+        LogAppend(LOG_PATH, report, p); serial_out(report, p);
         if (GetFileAttributesA(WOWTRY_FLAG) == INVALID_FILE_ATTRIBUTES)
             return wow_refuse(GetCommandLineA());
         /* Experiment opted in: load now, then fall through so the selector stage can
@@ -29967,31 +29967,31 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        push into the machine. The stored-but-not-yet-honoured ones would make this
        line four times longer and every value in it would be a claim the run cannot
        support. Two lines because there are now enough of them to wrap. */
-    p = zput(p, "STAGE0: settings hidecur=retired(#218)");
-    p = zput(p, " blink=");   p = zhex(p, g_set.v[SET_BLINKCURSOR]);
-    p = zput(p, " msens=");   p = zhex(p, g_set.v[SET_MSENS]);
-    p = zput(p, " dosver=");  p = zhex(p, g_set.v[SET_DOSMAJ]);
-    p = zput(p, ".");         p = zhex(p, g_set.v[SET_DOSMIN]);
-    p = zput(p, " pitpace="); p = zhex(p, g_set.v[SET_PITPACE]);
-    p = zput(p, " uitick=");  p = zhex(p, g_set.v[SET_UITICK]);
-    p = zput(p, "\r\n");
-    p = zput(p, "STAGE0: settings vol=");  p = zhex(p, g_set.v[SET_VOLUME]);
-    p = zput(p, " mute=");      p = zhex(p, g_set.v[SET_MUTE]);
-    p = zput(p, " spk=");       p = zhex(p, g_set.v[SET_SPEAKER]);
-    p = zput(p, " outhz=");     p = zhex(p, settings_out_hz(&g_set));
-    p = zput(p, " sb=A");       p = zhex(p, g_sbcfg.IoBase);
-    p = zput(p, " I");          p = zhex(p, g_sbcfg.Irq);
-    p = zput(p, " D");          p = zhex(p, g_sbcfg.Dma8Channel);
-    p = zput(p, " H");          p = zhex(p, g_sbcfg.Dma16Channel);
-    p = zput(p, " xms=");       p = zhex(p, (DWORD)g_xms_on);
-    p = zput(p, " ems=");       p = zhex(p, (DWORD)g_ems_on);
-    p = zput(p, " winsize=");   p = zhex(p, g_set.v[SET_WINSIZE]);
-    p = zput(p, " scaler=");    p = zhex(p, g_set.v[SET_SCALER]);
-    p = zput(p, " aspect=");    p = zhex(p, g_set.v[SET_ASPECT]);
-    p = zput(p, " filter=");    p = zhex(p, g_set.v[SET_FILTER]);
-    p = zput(p, " vsync=");     p = zhex(p, g_set.v[SET_VSYNC]);
-    p = zput(p, " frameskip="); p = zhex(p, g_set.v[SET_FRAMESKIP]);
-    p = zput(p, "\r\n");
+    p = LogPut(p, "STAGE0: settings hidecur=retired(#218)");
+    p = LogPut(p, " blink=");   p = LogHex(p, g_set.v[SET_BLINKCURSOR]);
+    p = LogPut(p, " msens=");   p = LogHex(p, g_set.v[SET_MSENS]);
+    p = LogPut(p, " dosver=");  p = LogHex(p, g_set.v[SET_DOSMAJ]);
+    p = LogPut(p, ".");         p = LogHex(p, g_set.v[SET_DOSMIN]);
+    p = LogPut(p, " pitpace="); p = LogHex(p, g_set.v[SET_PITPACE]);
+    p = LogPut(p, " uitick=");  p = LogHex(p, g_set.v[SET_UITICK]);
+    p = LogPut(p, "\r\n");
+    p = LogPut(p, "STAGE0: settings vol=");  p = LogHex(p, g_set.v[SET_VOLUME]);
+    p = LogPut(p, " mute=");      p = LogHex(p, g_set.v[SET_MUTE]);
+    p = LogPut(p, " spk=");       p = LogHex(p, g_set.v[SET_SPEAKER]);
+    p = LogPut(p, " outhz=");     p = LogHex(p, settings_out_hz(&g_set));
+    p = LogPut(p, " sb=A");       p = LogHex(p, g_sbcfg.IoBase);
+    p = LogPut(p, " I");          p = LogHex(p, g_sbcfg.Irq);
+    p = LogPut(p, " D");          p = LogHex(p, g_sbcfg.Dma8Channel);
+    p = LogPut(p, " H");          p = LogHex(p, g_sbcfg.Dma16Channel);
+    p = LogPut(p, " xms=");       p = LogHex(p, (DWORD)g_xms_on);
+    p = LogPut(p, " ems=");       p = LogHex(p, (DWORD)g_ems_on);
+    p = LogPut(p, " winsize=");   p = LogHex(p, g_set.v[SET_WINSIZE]);
+    p = LogPut(p, " scaler=");    p = LogHex(p, g_set.v[SET_SCALER]);
+    p = LogPut(p, " aspect=");    p = LogHex(p, g_set.v[SET_ASPECT]);
+    p = LogPut(p, " filter=");    p = LogHex(p, g_set.v[SET_FILTER]);
+    p = LogPut(p, " vsync=");     p = LogHex(p, g_set.v[SET_VSYNC]);
+    p = LogPut(p, " frameskip="); p = LogHex(p, g_set.v[SET_FRAMESKIP]);
+    p = LogPut(p, "\r\n");
     /* ── ★★★ THE TIMING LANDSCAPE, IN EVERY LOG. (s63) ──────────────────────────────
          Skyroads' frame pacing is fragile on a 2-core box and has regressed THREE
          times, each time because a change quietly added background work or moved a
@@ -30003,10 +30003,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          the first twenty lines of every run, not two months later on a user's
          screen. (Priority constants: NORMAL=0, ABOVE_NORMAL=1, HIGHEST=2,
          BELOW_NORMAL=-1=0xffffffff, LOWEST=-2.) */
-    p = zput(p, "STAGE0: timing: pacer_prio="); p = zhex(p, (DWORD)g_pitpace_prio);
-    p = zput(p, " (want 0x0=NORMAL) joytype=");  p = zhex(p, (DWORD)g_joy.Type);
-    p = zput(p, " joy_thread=");  p = zhex(p, (DWORD)g_joy_thread_started);
-    p = zput(p, " (want 0x0 when joytype=0x0) pit_split=1\r\n");
+    p = LogPut(p, "STAGE0: timing: pacer_prio="); p = LogHex(p, (DWORD)g_pitpace_prio);
+    p = LogPut(p, " (want 0x0=NORMAL) joytype=");  p = LogHex(p, (DWORD)g_joy.Type);
+    p = LogPut(p, " joy_thread=");  p = LogHex(p, (DWORD)g_joy_thread_started);
+    p = LogPut(p, " (want 0x0 when joytype=0x0) pit_split=1\r\n");
 
     g_headless = (GetFileAttributesA(AUTOEXIT_PATH) != INVALID_FILE_ATTRIBUTES);
     /* Self-screenshot only when explicitly requested (graphical tests) AND headless, so
@@ -30020,8 +30020,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           if (got && v4 <= 65536u) {
               char lb4[96], *lq = lb4;
               g_vid.ModeYGap = v4;
-              lq = zput(lq, "STAGE0: modey.txt -> gap="); lq = zhex(lq, v4);
-              lq = zput(lq, " dwords\r\n"); log_append(LOG_PATH, lb4, lq); serial_out(lb4, lq);
+              lq = LogPut(lq, "STAGE0: modey.txt -> gap="); lq = LogHex(lq, v4);
+              lq = LogPut(lq, " dwords\r\n"); LogAppend(LOG_PATH, lb4, lq); serial_out(lb4, lq);
           }
       } }
     g_capture  = g_headless && (GetFileAttributesA(CAPTURE_FLAG) != INVALID_FILE_ATTRIBUTES);
@@ -30223,18 +30223,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            two are the same vector and the qirq2 probe cannot attribute a delivery. */
         VdmIcaSetBase(0x60);
     }
-    p = zput(p, "STAGE0: qi_bits=0x"); p = zhex(p, g_qi_bits);
-    p = zput(p, " qi_raise=0x");       p = zhex(p, (DWORD)g_qi_raise);
-    p = zput(p, " qi_vif=0x");         p = zhex(p, (DWORD)g_qi_vif);
-    p = zput(p, " qi_susp=0x");        p = zhex(p, (DWORD)g_qi_susp);
-    p = zput(p, " hcpu=0x");           p = zhex(p, (DWORD)(ULONG_PTR)g_hcpu);
-    p = zput(p, "\r\n");
-    p = zput(p, "STAGE0: os=0x"); p = zhex(p, ((g_os_ver & 0xff) << 8) | ((g_os_ver >> 8) & 0xff));
-    p = zput(p, " build="); p = zdec(p, (g_os_ver < 0x80000000u) ? (g_os_ver >> 16) : 0);
-    p = zput(p, " veh="); p = zdec(p, g_pfn_addveh != 0);
-    p = zput(p, " attachconsole="); p = zdec(p, g_pfn_attachconsole != 0);
-    p = zput(p, " rawinput="); p = zdec(p, g_pfn_regrawinput && g_pfn_getrawinput);
-    p = zput(p, g_pfn_addveh ? "\r\n" : "  (no VEH: the unhandled filter runs the PM-fault arms)\r\n");
+    p = LogPut(p, "STAGE0: qi_bits=0x"); p = LogHex(p, g_qi_bits);
+    p = LogPut(p, " qi_raise=0x");       p = LogHex(p, (DWORD)g_qi_raise);
+    p = LogPut(p, " qi_vif=0x");         p = LogHex(p, (DWORD)g_qi_vif);
+    p = LogPut(p, " qi_susp=0x");        p = LogHex(p, (DWORD)g_qi_susp);
+    p = LogPut(p, " hcpu=0x");           p = LogHex(p, (DWORD)(ULONG_PTR)g_hcpu);
+    p = LogPut(p, "\r\n");
+    p = LogPut(p, "STAGE0: os=0x"); p = LogHex(p, ((g_os_ver & 0xff) << 8) | ((g_os_ver >> 8) & 0xff));
+    p = LogPut(p, " build="); p = LogDecimal(p, (g_os_ver < 0x80000000u) ? (g_os_ver >> 16) : 0);
+    p = LogPut(p, " veh="); p = LogDecimal(p, g_pfn_addveh != 0);
+    p = LogPut(p, " attachconsole="); p = LogDecimal(p, g_pfn_attachconsole != 0);
+    p = LogPut(p, " rawinput="); p = LogDecimal(p, g_pfn_regrawinput && g_pfn_getrawinput);
+    p = LogPut(p, g_pfn_addveh ? "\r\n" : "  (no VEH: the unhandled filter runs the PM-fault arms)\r\n");
     if (g_pfn_addveh) g_pfn_addveh(1, dpmi_crash_veh);  /* DPMI spike crash diagnostic; XP+ */
     SetUnhandledExceptionFilter(host_unhandled_filter); /* real-mode runs: full dump, not WER */
 
@@ -30261,20 +30261,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          been bitten repeatedly by building on a documented claim instead of a
          measured one. Log the raw string; diff a DOS launch against a Win16 launch
          on the rig; write the detector against what the diff actually shows. */
-    p = zput(p, "STAGE0: root=["); p = zput(p, NTVDMEX_DIR); p = zput(p, "] (derived from the host's own path)\r\n");
+    p = LogPut(p, "STAGE0: root=["); p = LogPut(p, NTVDMEX_DIR); p = LogPut(p, "] (derived from the host's own path)\r\n");
     hma_try();
-    p = zput(p, "STAGE0: HMA ");
-    if (g_hma) p = zput(p, "committed at 0x100000 -- FFFF:0010 is real");
-    else { p = zput(p, "UNAVAILABLE err=0x"); p = zhex(p, g_hma_err);
-       p = zput(p, " state=0x"); p = zhex(p, g_hma_state);
-       p = zput(p, " prot=0x");  p = zhex(p, g_hma_prot); }
-    p = zput(p, "\r\n");
-        p = zput(p, "STAGE0: cmdline=["); p = zput(p, GetCommandLineA()); p = zput(p, "]\r\n");
+    p = LogPut(p, "STAGE0: HMA ");
+    if (g_hma) p = LogPut(p, "committed at 0x100000 -- FFFF:0010 is real");
+    else { p = LogPut(p, "UNAVAILABLE err=0x"); p = LogHex(p, g_hma_err);
+       p = LogPut(p, " state=0x"); p = LogHex(p, g_hma_state);
+       p = LogPut(p, " prot=0x");  p = LogHex(p, g_hma_prot); }
+    p = LogPut(p, "\r\n");
+        p = LogPut(p, "STAGE0: cmdline=["); p = LogPut(p, GetCommandLineA()); p = LogPut(p, "]\r\n");
 
     /* V86 address space, then register as a VDM with the kernel (order matters). */
     VdmSetupMemory();
     st = VdmRegisterWithKernel();
-    p = zput(p, "STAGE1: v86_init NTSTATUS=0x"); p = zhex(p, (unsigned)st); p = zput(p, "\r\n");
+    p = LogPut(p, "STAGE1: v86_init NTSTATUS=0x"); p = LogHex(p, (unsigned)st); p = LogPut(p, "\r\n");
     /* ── ⛔⛔⛔ FIXED_NTVDMSTATE ([0x714]) IS INHERITED GARBAGE UNTIL SOMEONE WRITES IT.
          (2026-09-12: "no DOS app runs on the rig" after a REBOOT, host gone in <1 s.)
          VdmInitialize does not define this word; it holds whatever the machine's
@@ -30308,9 +30308,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             }
         }
         *vs = want;
-        p = zput(p, "STAGE1: FIXED_NTVDMSTATE [0x714] inherited=0x"); p = zhex(p, inherited);
-        p = zput(p, " -> set 0x"); p = zhex(p, want);
-        p = zput(p, h != INVALID_HANDLE_VALUE ? " (cfg\\vdmstate.txt)\r\n" : "\r\n");
+        p = LogPut(p, "STAGE1: FIXED_NTVDMSTATE [0x714] inherited=0x"); p = LogHex(p, inherited);
+        p = LogPut(p, " -> set 0x"); p = LogHex(p, want);
+        p = LogPut(p, h != INVALID_HANDLE_VALUE ? " (cfg\\vdmstate.txt)\r\n" : "\r\n");
     }
     /* ── THE CLEAN 2x2. ─────────────────────────────────────────────────────────────
          The first differential compared a WOW probe HERE against a DOS probe placed
@@ -30322,24 +30322,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         wow_probe_ldt_matrix(g_wow_nmod ? "wow-early" : "dos-early");
     if (g_wow_nmod) {                        /* GH #128: WOW selector stage */
         /* ⛔ NO FLUSH HERE, AND NEVER THROUGH `base`. (s73) This read
-             `log_append(LOG_PATH, base, p); p = base;` from e595c91 (s68), which turned
+             `LogAppend(LOG_PATH, base, p); p = base;` from e595c91 (s68), which turned
              every `report` flush into a `base` flush mechanically -- right for the exit
              report, where base marks the end of the preamble, and WRONG here, 1,500
-             lines before `base = p` is ever executed. So: log_append(NULL, p) -- a bad
+             lines before `base = p` is ever executed. So: LogAppend(NULL, p) -- a bad
              range -- then p = NULL, then every STAGE1 line was zput FROM ADDRESS 0, which
              in a VDM process is the guest's IVT and BDA. krnl386 then ran on a trashed
              interrupt table and the VDM died silently at PMHB 0x85. Win16 was dead from
              s68 to s73 and nothing noticed: no Win16 program was launched after the wipe.
            There is nothing to flush anyway -- the probes below log through LDTLOG_PATH,
              and report[] has ~5 KB of headroom at this point; the preamble goes to disk
-             as one piece at the log_write after the command fetch. */
+             as one piece at the LogWrite after the command fetch. */
         /* The DOS bisection puts the flip between CsrssGetCommand() and
            VdmGetTib(). The latter is one call and costs nothing to try here, so
            try it BEFORE concluding the blocker is the command fetch. */
         {   void *t = VdmGetTib();
             char m3[120], *q3 = m3;
-            q3 = zput(q3, "WOWTRY: v86_get_tib -> 0x"); q3 = zhex(q3, (DWORD)(ULONG_PTR)t);
-            q3 = zput(q3, "\r\n"); log_append(LDTLOG_PATH, m3, q3); }
+            q3 = LogPut(q3, "WOWTRY: v86_get_tib -> 0x"); q3 = LogHex(q3, (DWORD)(ULONG_PTR)t);
+            q3 = LogPut(q3, "\r\n"); LogAppend(LDTLOG_PATH, m3, q3); }
         wow_probe_ldt_matrix("wow-after-get-tib");
         wow_probe_selectors();
         /* ⚠ NO EARLY RETURN ANY MORE. This used to `return wow_refuse(...)` here,
@@ -30355,8 +30355,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* EMS page frame must be mapped AFTER VdmInitialize (see VdmMapEmsFrame). */
     g_ems_frame_lin = VdmMapEmsFrame();
     if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) wow_probe_ldt_matrix("B-after-emsframe");
-    p = zput(p, "STAGE1: ems_frame lin=0x"); p = zhex(p, g_ems_frame_lin);
-    p = zput(p, " seg=0x"); p = zhex(p, g_ems_frame_lin >> 4); p = zput(p, "\r\n");
+    p = LogPut(p, "STAGE1: ems_frame lin=0x"); p = LogHex(p, g_ems_frame_lin);
+    p = LogPut(p, " seg=0x"); p = LogHex(p, g_ems_frame_lin >> 4); p = LogPut(p, "\r\n");
 
     /* CSRSS: register as the console VDM, then fetch the program to run. */
     CsrssRegisterConsole();
@@ -30367,25 +30367,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              for a title that was already absolute -- a path that cannot exist,
              in the one line a reader checks first. An instrument that composes a
              string the loader does not use is an instrument that lies. */
-        p = zput(p, "STAGE1: program ");
+        p = LogPut(p, "STAGE1: program ");
         if (g_title[0] == '\\' || (g_title[1] == ':' && g_title[2] == '\\'))
-            p = zput(p, g_title);
-        else { p = zput(p, g_cur); p = zput(p, "\\"); p = zput(p, g_title); } p = zput(p, "\r\n");
+            p = LogPut(p, g_title);
+        else { p = LogPut(p, g_cur); p = LogPut(p, "\\"); p = LogPut(p, g_title); } p = LogPut(p, "\r\n");
         /* #129: the OTHER half of the launch shape. CSRSS hands back the app name,
            the command tail, the PIF and a set of flags -- any of which may be what
            actually distinguishes a WOW launch from a DOS one. Print them all rather
            than guessing which one matters; a trace that prints the request but not
            the answer is half an instrument. */
-        p = zput(p, "STAGE1: vdm app=[");   p = zput(p, g_app);
-        p = zput(p, "] cmd=[");             p = zput(p, g_cmd);
-        p = zput(p, "] pif=[");             p = zput(p, g_pif);
-        p = zput(p, "] title=[");           p = zput(p, g_title);
-        p = zput(p, "]\r\n");
-        p = zput(p, "STAGE1: vdm flags=0x");   p = zhex(p, g_ci.CreationFlags);
-        p = zput(p, " state=0x");              p = zhex(p, g_ci.VDMState);
-        p = zput(p, " taskid=0x");             p = zhex(p, g_ci.TaskId);
-        p = zput(p, " codepage=0x");           p = zhex(p, g_ci.CodePage);
-        p = zput(p, "\r\n");
+        p = LogPut(p, "STAGE1: vdm app=[");   p = LogPut(p, g_app);
+        p = LogPut(p, "] cmd=[");             p = LogPut(p, g_cmd);
+        p = LogPut(p, "] pif=[");             p = LogPut(p, g_pif);
+        p = LogPut(p, "] title=[");           p = LogPut(p, g_title);
+        p = LogPut(p, "]\r\n");
+        p = LogPut(p, "STAGE1: vdm flags=0x");   p = LogHex(p, g_ci.CreationFlags);
+        p = LogPut(p, " state=0x");              p = LogHex(p, g_ci.VDMState);
+        p = LogPut(p, " taskid=0x");             p = LogHex(p, g_ci.TaskId);
+        p = LogPut(p, " codepage=0x");           p = LogHex(p, g_ci.CodePage);
+        p = LogPut(p, "\r\n");
         /* ── ★ THE VDM'S STANDARD HANDLES COME FROM CSRSS, NOT FROM INHERITANCE.
              (GH #131) Measured on the rig: an IFEO-substituted process gets NO
              inherited handles at all -- GetStdHandle reports FILE_TYPE_UNKNOWN
@@ -30408,23 +30408,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             nms[2] = "vdm.StdErr";  hs[2] = g_ci.StdErr;
             nms[3] = "si.hStdOut";  hs[3] = g_ci.StartupInfo.hStdOutput;
             nms[4] = "si.hStdIn";   hs[4] = g_ci.StartupInfo.hStdInput;
-            p = zput(p, "STAGE1: vdm handles");
+            p = LogPut(p, "STAGE1: vdm handles");
             for (k = 0; k < 5; ++k) {
                 DWORD ty3 = (hs[k] && hs[k] != INVALID_HANDLE_VALUE)
                             ? GetFileType(hs[k]) : 0xFFFFFFFFu;
-                p = zput(p, " "); p = zput(p, nms[k]);
-                p = zput(p, "=0x"); p = zhex(p, (DWORD)(ULONG_PTR)hs[k]);
-                p = zput(p, "/t"); p = zhex(p, ty3);
+                p = LogPut(p, " "); p = LogPut(p, nms[k]);
+                p = LogPut(p, "=0x"); p = LogHex(p, (DWORD)(ULONG_PTR)hs[k]);
+                p = LogPut(p, "/t"); p = LogHex(p, ty3);
             }
-            p = zput(p, " sf=0x"); p = zhex(p, g_ci.StartupInfo.dwFlags);
-            p = zput(p, "\r\n"); }
+            p = LogPut(p, " sf=0x"); p = LogHex(p, g_ci.StartupInfo.dwFlags);
+            p = LogPut(p, "\r\n"); }
         g_stdio_how = stdio_init_vdm();
-        p = zput(p, "STAGE1: stdout -> ");
-        if (g_stdio_src[0]) { p = zput(p, g_stdio_src); p = zput(p, " -> "); }
-        p = zput(p, g_stdio_how);
-        p = zput(p, "\r\n");
+        p = LogPut(p, "STAGE1: stdout -> ");
+        if (g_stdio_src[0]) { p = LogPut(p, g_stdio_src); p = LogPut(p, " -> "); }
+        p = LogPut(p, g_stdio_how);
+        p = LogPut(p, "\r\n");
     } else {
-        p = zput(p, "STAGE1: GetNextVDMCommand FALSE err=0x"); p = zhex(p, err); p = zput(p, "\r\n");
+        p = LogPut(p, "STAGE1: GetNextVDMCommand FALSE err=0x"); p = LogHex(p, err); p = LogPut(p, "\r\n");
     }
     /* ── ★★★★★ THE SECOND FETCH: THE COMMAND ITSELF. (s72, the package smoke test) ──
          The call above is stock ntvdm's `cmdGetStartInfo` shape (VDM_GET_FIRST_COMMAND):
@@ -30462,15 +30462,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* the tail ends in CR LF; the PSP wants neither */
         for (k = 0; g_cmd2[k]; ++k) if (g_cmd2[k] == '\r' || g_cmd2[k] == '\n') { g_cmd2[k] = 0; break; }
         g_fetch2_ok = ok2 && ci2.AppLen > 1 && g_app2[0];
-        p = zput(p, "STAGE1: command fetch (DOS|FIRST|DONT_WAIT) -> "); p = zput(p, ok2 ? "TRUE" : "FALSE");
-        p = zput(p, " err=0x"); p = zhex(p, err2);
-        p = zput(p, " app=["); p = zput(p, g_app2); p = zput(p, "] args=["); p = zput(p, g_cmd2);
-        p = zput(p, "] cur=["); p = zput(p, g_cur2); p = zput(p, "] bat=0x"); p = zhex(p, ci2.ComingFromBat);
-        p = zput(p, " drive=0x"); p = zhex(p, ci2.CurrentDrive); p = zput(p, " envlen=0x"); p = zhex(p, ci2.EnvLen);
-        p = zput(p, " flags=0x"); p = zhex(p, ci2.CreationFlags);
-        p = zput(p, " std=0x"); p = zhex(p, (DWORD)(ULONG_PTR)ci2.StdIn); p = zput(p, "/0x"); p = zhex(p, (DWORD)(ULONG_PTR)ci2.StdOut);
-        p = zput(p, "/0x"); p = zhex(p, (DWORD)(ULONG_PTR)ci2.StdErr);
-        p = zput(p, "\r\n");
+        p = LogPut(p, "STAGE1: command fetch (DOS|FIRST|DONT_WAIT) -> "); p = LogPut(p, ok2 ? "TRUE" : "FALSE");
+        p = LogPut(p, " err=0x"); p = LogHex(p, err2);
+        p = LogPut(p, " app=["); p = LogPut(p, g_app2); p = LogPut(p, "] args=["); p = LogPut(p, g_cmd2);
+        p = LogPut(p, "] cur=["); p = LogPut(p, g_cur2); p = LogPut(p, "] bat=0x"); p = LogHex(p, ci2.ComingFromBat);
+        p = LogPut(p, " drive=0x"); p = LogHex(p, ci2.CurrentDrive); p = LogPut(p, " envlen=0x"); p = LogHex(p, ci2.EnvLen);
+        p = LogPut(p, " flags=0x"); p = LogHex(p, ci2.CreationFlags);
+        p = LogPut(p, " std=0x"); p = LogHex(p, (DWORD)(ULONG_PTR)ci2.StdIn); p = LogPut(p, "/0x"); p = LogHex(p, (DWORD)(ULONG_PTR)ci2.StdOut);
+        p = LogPut(p, "/0x"); p = LogHex(p, (DWORD)(ULONG_PTR)ci2.StdErr);
+        p = LogPut(p, "\r\n");
     } else if (g_wow_launch) {
         /* ── ★★★★ THE WIN16 PROGRAM, FROM CSRSS. (s73) ──────────────────────────
              A WOW launch never carried its program: the VDM starts as
@@ -30522,14 +30522,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 named = ok2 && !SH[si].handshake
                         && ((g_app2[0] >= 'A' && (g_app2[0] | 0x20) <= 'z' && g_app2[1] == ':' && g_app2[2] == '\\')
                             || (g_app2[0] == '\\' && g_app2[1] == '\\'));
-                p = zput(p, "STAGE1: WOW command fetch ["); p = zput(p, SH[si].what); p = zput(p, "] -> ");
-                p = zput(p, ok2 ? "TRUE" : "FALSE");
-                p = zput(p, " err=0x"); p = zhex(p, err2);
-                p = zput(p, " app=["); if (named) p = zput(p, g_app2); else if (g_app2[0]) p = zput(p, "<not a path>");
-                p = zput(p, "] args=["); if (named) p = zput(p, g_cmd2);
-                p = zput(p, "] cur=["); p = zput(p, g_cur2); p = zput(p, "] show=0x"); p = zhex(p, ci2.StartupInfo.wShowWindow);
-                p = zput(p, " taskid=0x"); p = zhex(p, ci2.TaskId);
-                p = zput(p, "\r\n");
+                p = LogPut(p, "STAGE1: WOW command fetch ["); p = LogPut(p, SH[si].what); p = LogPut(p, "] -> ");
+                p = LogPut(p, ok2 ? "TRUE" : "FALSE");
+                p = LogPut(p, " err=0x"); p = LogHex(p, err2);
+                p = LogPut(p, " app=["); if (named) p = LogPut(p, g_app2); else if (g_app2[0]) p = LogPut(p, "<not a path>");
+                p = LogPut(p, "] args=["); if (named) p = LogPut(p, g_cmd2);
+                p = LogPut(p, "] cur=["); p = LogPut(p, g_cur2); p = LogPut(p, "] show=0x"); p = LogHex(p, ci2.StartupInfo.wShowWindow);
+                p = LogPut(p, " taskid=0x"); p = LogHex(p, ci2.TaskId);
+                p = LogPut(p, "\r\n");
             }
             ok2 = named;
         }
@@ -30543,10 +30543,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                Measured, first cut. The image read here is discarded by wow_place_v86;
                the NAME and the byte count are what the stage keys on. */
             HANDLE hw;
-            zput(g_WowCommandProgram, g_app2); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
+            LogPut(g_WowCommandProgram, g_app2); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
             /* the tail arrives with its leading space, as a DOS tail does; 0x70 adds its own */
-            { const char *a = g_cmd2; while (*a == ' ') ++a; zput(g_WowCommandArguments, a); zput(args, a); }
-            zput(progpath, g_WowCommandProgram);
+            { const char *a = g_cmd2; while (*a == ' ') ++a; LogPut(g_WowCommandArguments, a); LogPut(args, a); }
+            LogPut(progpath, g_WowCommandProgram);
             hw = CreateFileA(g_WowCommandProgram, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
             if (hw != INVALID_HANDLE_VALUE) { ReadFile(hw, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hw); }
             if (g_cur2[0]) {
@@ -30557,13 +30557,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     || lstrlenA(g_WowCommandDirectory) >= 0x10C)
                     g_WowCommandDirectory[0] = 0;
             }
-            p = zput(p, "STAGE2: Win16 program from CSRSS -- LAUNCH ["); p = zput(p, g_WowCommandProgram);
-            p = zput(p, "] loaded 0x"); p = zhex(p, nread); p = zput(p, " (target.txt NOT consulted)\r\n");
+            p = LogPut(p, "STAGE2: Win16 program from CSRSS -- LAUNCH ["); p = LogPut(p, g_WowCommandProgram);
+            p = LogPut(p, "] loaded 0x"); p = LogHex(p, nread); p = LogPut(p, " (target.txt NOT consulted)\r\n");
             if (!nread) wow_cmd_from_csrss = 0;          /* unreadable: fall back as before */
         }
     }
-    log_write(LOG_PATH, report, p);
-    /* ⚠ AFTER the log_write, not before: log_write TRUNCATES. The first cut of this
+    LogWrite(LOG_PATH, report, p);
+    /* ⚠ AFTER the LogWrite, not before: LogWrite TRUNCATES. The first cut of this
          ran the probe earlier and its output was silently erased by this very line,
          which looked exactly like "the probe never ran". Same stale/truncated-artefact
          trap this project keeps paying for, in a new costume. */
@@ -30573,7 +30573,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) wow_probe_ldt_matrix("E-after-get-tib");
     g_tib_dbg = tib;                                    /* let the crash VEH dump guest state */
     if (!tib) {
-        p = zput(p, "STAGE1: no VDM_TIB -- abort\r\n"); log_append(LOG_PATH, report, p);
+        p = LogPut(p, "STAGE1: no VDM_TIB -- abort\r\n"); LogAppend(LOG_PATH, report, p);
         return 1;
     }
 
@@ -30611,24 +30611,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (lstrcmpiA(bn, LAUNCH_STUB_NAME) == 0) { is_stub = 1; want_shell = 1; } }
         if (is_stub) {
             if (hf != INVALID_HANDLE_VALUE) CloseHandle(hf);
-            p = zput(p, want_shell
+            p = LogPut(p, want_shell
                      ? "STAGE2: launched with no program -- the user opened NTVDMEX; going straight to a SHELL\r\n"
                      : "STAGE2: CSRSS queued dosstub.com -- the harness stub; target.txt names the program\r\n");
             g_title[0] = 0;                              /* and the title must not either */
         } else if (hf != INVALID_HANDLE_VALUE) {
             ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hf);
-            zput(progpath, g_app2);
-            zput(args, g_cmd2);
-            zput(g_WowCommandProgram, g_app2); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
-            zput(g_WowCommandArguments, g_cmd2);
-            p = zput(p, "STAGE2: loaded 0x"); p = zhex(p, nread);
-            p = zput(p, " from "); p = zput(p, g_app2);
-            p = zput(p, " args=["); p = zput(p, args); p = zput(p, "] (CSRSS AppName + CmdLine; target.txt and the title NOT consulted)\r\n");
+            LogPut(progpath, g_app2);
+            LogPut(args, g_cmd2);
+            LogPut(g_WowCommandProgram, g_app2); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
+            LogPut(g_WowCommandArguments, g_cmd2);
+            p = LogPut(p, "STAGE2: loaded 0x"); p = LogHex(p, nread);
+            p = LogPut(p, " from "); p = LogPut(p, g_app2);
+            p = LogPut(p, " args=["); p = LogPut(p, args); p = LogPut(p, "] (CSRSS AppName + CmdLine; target.txt and the title NOT consulted)\r\n");
             g_title[0] = 0;                              /* the title chain below must not re-load */
         } else {
-            p = zput(p, "STAGE2: CSRSS AppName ["); p = zput(p, g_app2);
-            p = zput(p, "] cannot be opened (0x"); p = zhex(p, GetLastError());
-            p = zput(p, ") -- falling back to the title / target.txt\r\n");
+            p = LogPut(p, "STAGE2: CSRSS AppName ["); p = LogPut(p, g_app2);
+            p = LogPut(p, "] cannot be opened (0x"); p = LogHex(p, GetLastError());
+            p = LogPut(p, ") -- falling back to the title / target.txt\r\n");
         }
     }
     {
@@ -30640,7 +30640,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   : CreateFileA(TARGET_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
                                 OPEN_EXISTING, 0, NULL);
         if (csrss_named && !nread) {
-            p = zput(p, "STAGE2: CSRSS named a program -- target.txt NOT consulted "
+            p = LogPut(p, "STAGE2: CSRSS named a program -- target.txt NOT consulted "
                         "(GH #130)\r\n");
         }
         if (ht != INVALID_HANDLE_VALUE) {
@@ -30688,19 +30688,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 HANDLE hf = CreateFileA(tpath, GENERIC_READ, FILE_SHARE_READ, NULL,
                                         OPEN_EXISTING, 0, NULL);
                 if (hf != INVALID_HANDLE_VALUE) { ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hf); }
-                zput(progpath, tpath);                  /* env argv[0] */
-                if (a) zput(args, a);                   /* PSP command tail */
+                LogPut(progpath, tpath);                  /* env argv[0] */
+                if (a) LogPut(args, a);                   /* PSP command tail */
                 /* ★ GH #128: on a WOW launch this same path is the WIN16 program,
                      and WOW32 0x70 is how WOWEXEC asks for it. The DOS image
                      loaded just below is discarded there (see wow_place_v86), but
                      the NAME is the one thing the WOW path still needs -- Windows
                      does not put it on the VDM's command line. */
-                zput(g_WowCommandProgram, tpath); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
-                if (a) zput(g_WowCommandArguments, a);
-                p = zput(p, "STAGE2: target.txt loaded 0x"); p = zhex(p, nread);
-                p = zput(p, " from "); p = zput(p, tpath);
-                if (a && a[0]) { p = zput(p, " args=["); p = zput(p, a); p = zput(p, "]"); }
-                p = zput(p, "\r\n");
+                LogPut(g_WowCommandProgram, tpath); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
+                if (a) LogPut(g_WowCommandArguments, a);
+                p = LogPut(p, "STAGE2: target.txt loaded 0x"); p = LogHex(p, nread);
+                p = LogPut(p, " from "); p = LogPut(p, tpath);
+                if (a && a[0]) { p = LogPut(p, " args=["); p = LogPut(p, a); p = LogPut(p, "]"); }
+                p = LogPut(p, "\r\n");
             }
         }
     }
@@ -30725,7 +30725,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (!nread && g_title[0]
         && (g_title[0] == '\\' || (g_title[1] == ':' && g_title[2] == '\\'))) {
         char path[768]; HANDLE hf; int tn; char *targs = NULL;
-        zput(path, g_title);
+        LogPut(path, g_title);
         /* ⚠ AND THE TITLE ARRIVES WITH A TRAILING SPACE -- measured:
              `title=[C:\test\hello.com ]`. CreateFileA's treatment of one is not
              something to rely on, and a path is not a place to leave whitespace
@@ -30734,32 +30734,32 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         while (tn > 0 && (path[tn - 1] == ' ' || path[tn - 1] == '\t')) path[--tn] = 0;
         hf = csrss_open_split(path, &targs);        /* "program [args]" -- see the helper */
         if (hf != INVALID_HANDLE_VALUE) { ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hf); }
-        zput(progpath, path);
+        LogPut(progpath, path);
         /* The title's own arguments beat CSRSS's CmdLine field, which arrives as
            junk on this path (measured: `cmd=[\]` for a `ZAR.EXE -Help` launch) and
            was only ever a best-effort guess. */
-        if (targs)         zput(args, targs);
-        else if (g_cmd[0]) zput(args, g_cmd);
-        p = zput(p, "STAGE2: loaded 0x"); p = zhex(p, nread);
-        p = zput(p, " from "); p = zput(p, path);
-        if (targs) { p = zput(p, " args=["); p = zput(p, targs); p = zput(p, "]"); }
-        p = zput(p, " [the title is ALREADY ABSOLUTE -- not joined to the"
+        if (targs)         LogPut(args, targs);
+        else if (g_cmd[0]) LogPut(args, g_cmd);
+        p = LogPut(p, "STAGE2: loaded 0x"); p = LogHex(p, nread);
+        p = LogPut(p, " from "); p = LogPut(p, path);
+        if (targs) { p = LogPut(p, " args=["); p = LogPut(p, targs); p = LogPut(p, "]"); }
+        p = LogPut(p, " [the title is ALREADY ABSOLUTE -- not joined to the"
                     " current directory]\r\n");
     }
     if (!nread && g_cur[0] && g_title[0]) {
         char path[768]; char *pp = path; HANDLE hf; int tn; char *targs = NULL;
-        pp = zput(pp, g_cur); pp = zput(pp, "\\"); pp = zput(pp, g_title);
+        pp = LogPut(pp, g_cur); pp = LogPut(pp, "\\"); pp = LogPut(pp, g_title);
         for (tn = 0; path[tn]; ++tn) ;              /* same trailing-space trim as above */
         while (tn > 0 && (path[tn - 1] == ' ' || path[tn - 1] == '\t')) path[--tn] = 0;
         hf = csrss_open_split(path, &targs);        /* a RELATIVE title carries args too */
         if (hf != INVALID_HANDLE_VALUE) { ReadFile(hf, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hf); }
-        zput(progpath, path);                       /* env argv[0] */
-        if (targs)         zput(args, targs);
-        else if (g_cmd[0]) zput(args, g_cmd);       /* best-effort: CmdLine if CSRSS populated it */
-        p = zput(p, "STAGE2: loaded 0x"); p = zhex(p, nread);
-        p = zput(p, " from "); p = zput(p, path);
-        if (targs) { p = zput(p, " args=["); p = zput(p, targs); p = zput(p, "]"); }
-        p = zput(p, "\r\n");
+        LogPut(progpath, path);                       /* env argv[0] */
+        if (targs)         LogPut(args, targs);
+        else if (g_cmd[0]) LogPut(args, g_cmd);       /* best-effort: CmdLine if CSRSS populated it */
+        p = LogPut(p, "STAGE2: loaded 0x"); p = LogHex(p, nread);
+        p = LogPut(p, " from "); p = LogPut(p, path);
+        if (targs) { p = LogPut(p, " args=["); p = LogPut(p, targs); p = LogPut(p, "]"); }
+        p = LogPut(p, "\r\n");
     }
     /* ── ★★★★★ NOTHING NAMED A PROGRAM ⇒ RUN A SHELL. (s78) ──────────────────────
          The user's question was *"do you actually need to build a shell, or simply load
@@ -30839,8 +30839,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             for (k = lstrlenA(pifdir); k > 0 && pifdir[k - 1] != '\\'; --k) ;
             pifdir[k > 0 ? k - 1 : 0] = 0;
             if (dir[0] && GetFileAttributesA(dir) == INVALID_FILE_ATTRIBUTES) {
-                p = zput(p, "STAGE2: PIF start directory ["); p = zput(p, dir);
-                p = zput(p, "] does not exist -- ignored\r\n");
+                p = LogPut(p, "STAGE2: PIF start directory ["); p = LogPut(p, dir);
+                p = LogPut(p, "] does not exist -- ignored\r\n");
                 dir[0] = 0;
             }
             if (prog[0] == '\\' || (prog[0] && prog[1] == ':')) {
@@ -30852,36 +30852,36 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 for (r = 0; r < 2 && hp == INVALID_HANDLE_VALUE; ++r) {
                     char *w;
                     if (!roots[r][0]) continue;
-                    w = zput(cand, roots[r]); w = zput(w, "\\"); zput(w, prog);
+                    w = LogPut(cand, roots[r]); w = LogPut(w, "\\"); LogPut(w, prog);
                     hp = CreateFileA(cand, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
                 }
                 if (hp == INVALID_HANDLE_VALUE && SearchPathA(NULL, prog, NULL, sizeof cand, cand, NULL))
                     hp = CreateFileA(cand, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
             }
             lstrcpynA(extra, args, sizeof extra);
-            p = zput(p, "STAGE2: PIF ["); p = zput(p, progpath);
-            p = zput(p, "] -> program ["); p = zput(p, prog);
-            p = zput(p, "] dir=["); p = zput(p, dir);
-            p = zput(p, "] params=["); p = zput(p, pi.Parameters);
-            p = zput(p, pi.IsParametersFrom386 ? "] (WINDOWS 386 section)" : "] (basic section)");
+            p = LogPut(p, "STAGE2: PIF ["); p = LogPut(p, progpath);
+            p = LogPut(p, "] -> program ["); p = LogPut(p, prog);
+            p = LogPut(p, "] dir=["); p = LogPut(p, dir);
+            p = LogPut(p, "] params=["); p = LogPut(p, pi.Parameters);
+            p = LogPut(p, pi.IsParametersFrom386 ? "] (WINDOWS 386 section)" : "] (basic section)");
             if (hp == INVALID_HANDLE_VALUE) {
                 /* Not found: do NOT run the PIF's bytes. A shell is the honest answer. */
                 nread = 0; progpath[0] = 0; args[0] = 0;
-                p = zput(p, " -- PROGRAM NOT FOUND, starting a shell instead\r\n");
+                p = LogPut(p, " -- PROGRAM NOT FOUND, starting a shell instead\r\n");
             } else {
                 char *w;
                 nread = 0;
                 ReadFile(hp, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hp);
                 lstrcpynA(progpath, cand, sizeof progpath);
                 /* "?" asks Windows to prompt for parameters; there is no one to ask here. */
-                w = zput(args, (pi.Parameters[0] == '?' && !pi.Parameters[1]) ? "" : pi.Parameters);
-                if (extra[0]) { if (args[0]) w = zput(w, " "); zput(w, extra); }
-                zput(g_WowCommandProgram, progpath); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
-                zput(g_WowCommandArguments, args);
+                w = LogPut(args, (pi.Parameters[0] == '?' && !pi.Parameters[1]) ? "" : pi.Parameters);
+                if (extra[0]) { if (args[0]) w = LogPut(w, " "); LogPut(w, extra); }
+                LogPut(g_WowCommandProgram, progpath); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
+                LogPut(g_WowCommandArguments, args);
                 if (dir[0]) { lstrcpynA(g_cur, dir, sizeof g_cur); SetCurrentDirectoryA(g_cur); }
-                p = zput(p, " -- loaded 0x"); p = zhex(p, nread);
-                p = zput(p, " from ["); p = zput(p, progpath);
-                p = zput(p, "] args=["); p = zput(p, args); p = zput(p, "]\r\n");
+                p = LogPut(p, " -- loaded 0x"); p = LogHex(p, nread);
+                p = LogPut(p, " from ["); p = LogPut(p, progpath);
+                p = LogPut(p, "] args=["); p = LogPut(p, args); p = LogPut(p, "]\r\n");
             }
         }
     }
@@ -30905,14 +30905,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             g_routed = 1;
             nread = 0;                               /* -> the shell block below */
             args[0] = 0;                             /* they are the program's, not the shell's */
-            p = zput(p, "STAGE2: #208 routing [");  p = zput(p, g_first_prog);
-            p = zput(p, "] args=[");                p = zput(p, g_first_tail);
-            p = zput(p, "] through XP's COMMAND.COM (BOP 54 sub 01), as stock does\r\n");
+            p = LogPut(p, "STAGE2: #208 routing [");  p = LogPut(p, g_first_prog);
+            p = LogPut(p, "] args=[");                p = LogPut(p, g_first_tail);
+            p = LogPut(p, "] through XP's COMMAND.COM (BOP 54 sub 01), as stock does\r\n");
         } else {
-            p = zput(p, "STAGE2: #208 NOT routed (");
-            p = zput(p, is_cmd ? "it is a COMMAND.COM" : is_newexe ? "not a DOS image"
+            p = LogPut(p, "STAGE2: #208 NOT routed (");
+            p = LogPut(p, is_cmd ? "it is a COMMAND.COM" : is_newexe ? "not a DOS image"
                               : "8.3 path + arguments too long for a DOS command line");
-            p = zput(p, ") -- loading it directly\r\n");
+            p = LogPut(p, ") -- loading it directly\r\n");
         }
     }
     if (!nread) {
@@ -30925,7 +30925,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              OPEN_EXISTING, 0, NULL);
             why = shell_src;
             if (hs == INVALID_HANDLE_VALUE) {
-                zput(zput(whybuf, shell_src), " NAMES A FILE THAT WILL NOT OPEN");
+                LogPut(LogPut(whybuf, shell_src), " NAMES A FILE THAT WILL NOT OPEN");
                 why = whybuf;
             } else {
                 /* ⛔ A Windows program is not a DOS shell. The Browse filter allows *.exe
@@ -30939,7 +30939,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         && ReadFile(hs, sg, 2, &gn, NULL) && gn == 2
                         && ((sg[0] == 'N' && sg[1] == 'E') || (sg[0] == 'P' && sg[1] == 'E'))) {
                         CloseHandle(hs); hs = INVALID_HANDLE_VALUE;
-                        zput(zput(whybuf, shell_src), " NAMES A WINDOWS PROGRAM, NOT A DOS SHELL");
+                        LogPut(LogPut(whybuf, shell_src), " NAMES A WINDOWS PROGRAM, NOT A DOS SHELL");
                         why = whybuf;
                     }
                 }
@@ -30947,18 +30947,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             }
         }
         if (hs == INVALID_HANDLE_VALUE) {
-            zput(shell, "C:\\WINDOWS\\SYSTEM32\\COMMAND.COM");
+            LogPut(shell, "C:\\WINDOWS\\SYSTEM32\\COMMAND.COM");
             hs = CreateFileA(shell, GENERIC_READ, FILE_SHARE_READ, NULL,
                              OPEN_EXISTING, 0, NULL);
             if (hs != INVALID_HANDLE_VALUE && !why) why = "the system's own COMMAND.COM";
         }
         if (hs != INVALID_HANDLE_VALUE) {
             ReadFile(hs, filebuf, sizeof(filebuf), &nread, NULL); CloseHandle(hs);
-            zput(progpath, shell);
+            LogPut(progpath, shell);
             was_shell = 1;
-            p = zput(p, "STAGE2: no program was named -> loading a SHELL, 0x");
-            p = zhex(p, nread); p = zput(p, " from "); p = zput(p, shell);
-            p = zput(p, " ("); p = zput(p, why ? why : "default"); p = zput(p, ")\r\n");
+            p = LogPut(p, "STAGE2: no program was named -> loading a SHELL, 0x");
+            p = LogHex(p, nread); p = LogPut(p, " from "); p = LogPut(p, shell);
+            p = LogPut(p, " ("); p = LogPut(p, why ? why : "default"); p = LogPut(p, ")\r\n");
         }
     }
     if (!nread) {
@@ -30968,7 +30968,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* ⚠ SAY WHY, not just that. This printed "embedded fallback" and nothing else,
              and it is reached when a path was wrong as well as when nothing was named --
              GH #131 spent a session on a run that looked clean and wrote nothing. */
-        p = zput(p, "STAGE2: embedded fallback -- nothing named a program AND no shell "
+        p = LogPut(p, "STAGE2: embedded fallback -- nothing named a program AND no shell "
                     "could be opened (cfg\\shell.txt, C:\\WINDOWS\\SYSTEM32\\COMMAND.COM)"
                     "\r\n");
     }
@@ -31018,15 +31018,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         for (dn = 0; progpath[dn] && dn < (int)sizeof dir - 1; ++dn) {
             dir[dn] = progpath[dn]; if (progpath[dn] == '\\') cut = dn; }
         dir[cut ? cut : dn] = 0;
-        if (!GetShortPathNameA(dir, sdir, sizeof sdir)) zput(sdir, dir);
+        if (!GetShortPathNameA(dir, sdir, sizeof sdir)) LogPut(sdir, dir);
         wsprintfA(args, "/P %s", sdir);
-        if (!GetShortPathNameA(progpath, g_shell_path, sizeof g_shell_path)) zput(g_shell_path, progpath);
-        p = zput(p, "STAGE2: NTVDM-aware shell -> command tail [");
-        p = zput(p, args); p = zput(p, "] (permanent, as stock launches it)\r\n");
+        if (!GetShortPathNameA(progpath, g_shell_path, sizeof g_shell_path)) LogPut(g_shell_path, progpath);
+        p = LogPut(p, "STAGE2: NTVDM-aware shell -> command tail [");
+        p = LogPut(p, args); p = LogPut(p, "] (permanent, as stock launches it)\r\n");
     }
-    p = zput(p, "STAGE2: guest NTVDM BOP sites (C4 C4 54) = ");
-    p = zdec(p, g_guest_ntvdm_bops);
-    p = zput(p, g_guest_ntaware
+    p = LogPut(p, "STAGE2: guest NTVDM BOP sites (C4 C4 54) = ");
+    p = LogDecimal(p, g_guest_ntvdm_bops);
+    p = LogPut(p, g_guest_ntaware
              ? " -> NTVDM-AWARE SHELL: DOS 5.00 and the private AH=53h answers apply\r\n"
              : (was_shell ? " -> an ordinary DOS shell\r\n" : " (not loaded as a shell)\r\n"));
 
@@ -31057,14 +31057,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             fits = DosExecSize(filebuf, nread, avail, &alloc, &high) == 0;
         else                                /* .COM: PSP + the image + a 256-byte stack */
             fits = (uint32_t)0x10u + ((nread + 0x100u + 15u) >> 4) <= (uint32_t)avail;
-        p = zput(p, "STAGE2: ConventionalKB=");  p = zdec(p, g_conv_kb_want);
+        p = LogPut(p, "STAGE2: ConventionalKB=");  p = LogDecimal(p, g_conv_kb_want);
         if (fits) {
             g_dos_mem_top = top;
-            p = zput(p, " -> INT 12h ");       p = zdec(p, BiosBaseKbOfTop(top));
-            p = zput(p, " KB, EBDA + MCB top 0x"); p = zhex(p, top);
-            p = zput(p, " (#136)\r\n");
+            p = LogPut(p, " -> INT 12h ");       p = LogDecimal(p, BiosBaseKbOfTop(top));
+            p = LogPut(p, " KB, EBDA + MCB top 0x"); p = LogHex(p, top);
+            p = LogPut(p, " (#136)\r\n");
         } else {
-            p = zput(p, " REFUSED: this program does not fit under it -- the machine stays at "
+            p = LogPut(p, " REFUSED: this program does not fit under it -- the machine stays at "
                         "640 KB (#136)\r\n");
             settings_note_override(SET_CONVKB, "a program too big for it", BIOS_CONV_KB_MAX);
         }
@@ -31254,7 +31254,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        "success", which is the very failure mode this issue exists to remove. So
        fill only the genuinely null ones, and name them in the log. */
     { int v, n = 0, start = -1;
-      p = zput(p, "STAGE0: null IVT vectors -> IRET stub:");
+      p = LogPut(p, "STAGE0: null IVT vectors -> IRET stub:");
       for (v = 0; v <= 256; ++v) {                  /* 256 flushes a trailing run */
           int isnull = (v < 256) && (*(volatile DWORD *)(v * 4) == 0);
           if (isnull) {
@@ -31263,13 +31263,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               if (start < 0) start = v;
               ++n;
           } else if (start >= 0) {                  /* emit as ranges, not 133 items */
-              p = zput(p, " 0x"); p = zhexb(p, (unsigned)start);
-              if (v - 1 > start) { p = zput(p, "-0x"); p = zhexb(p, (unsigned)(v - 1)); }
+              p = LogPut(p, " 0x"); p = LogHexByte(p, (unsigned)start);
+              if (v - 1 > start) { p = LogPut(p, "-0x"); p = LogHexByte(p, (unsigned)(v - 1)); }
               start = -1;
           }
       }
-      if (!n) p = zput(p, " none");
-      p = zput(p, "\r\n"); }
+      if (!n) p = LogPut(p, " none");
+      p = LogPut(p, "\r\n"); }
 
     DosPspBuild(NULL, DOS_PSP_SEG, DOS_ENV_SEG, g_dos_mem_top);   /* #136 */
     /* AFTER the vectors above are planted, never before: saving a vector that is
@@ -31290,8 +31290,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           CloseHandle(h);
           dosenv[rd < sizeof dosenv ? rd : sizeof dosenv - 1] = 0;
           if (dosenv[0]) {
-              p = zput(p, "STAGE2: dosenv.txt -> extra guest environment [");
-              p = zput(p, dosenv); p = zput(p, "]\r\n");
+              p = LogPut(p, "STAGE2: dosenv.txt -> extra guest environment [");
+              p = LogPut(p, dosenv); p = LogPut(p, "]\r\n");
           }
       }
       /* ── ★★★★ argv[0] MUST BE 8.3, BECAUSE A DOS EXTENDER RE-OPENS IT. (s73) ─────
@@ -31312,8 +31312,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           char before[768]; lstrcpynA(before, progpath, sizeof before);
           WowShorten(progpath, sizeof progpath);
           if (lstrcmpA(before, progpath) != 0) {
-              p = zput(p, "STAGE2: argv[0] shortened for the guest: ["); p = zput(p, before);
-              p = zput(p, "] -> ["); p = zput(p, progpath); p = zput(p, "]\r\n");
+              p = LogPut(p, "STAGE2: argv[0] shortened for the guest: ["); p = LogPut(p, before);
+              p = LogPut(p, "] -> ["); p = LogPut(p, progpath); p = LogPut(p, "]\r\n");
           }
           /* ── ★★★★★ AND IF IT IS STILL TOO LONG, HAND OVER THE BARE NAME. ──────────
                DOS/4GW 1.97 copies argv[0] into a **64-BYTE BUFFER** and does not bound
@@ -31337,10 +31337,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               const char *bn = progpath, *q;
               for (q = progpath; *q; ++q) if (*q == '\\' || *q == '/') bn = q + 1;
               if (bn != progpath && *bn) {
-                  p = zput(p, "STAGE2: argv[0] is "); p = zhex(p, (DWORD)lstrlenA(progpath));
-                  p = zput(p, " chars -- past DOS/4GW's 64-byte buffer; handing over the bare name [");
-                  p = zput(p, bn); p = zput(p, "] (cwd is the program's own directory)\r\n");
-                  { char bcopy[64]; lstrcpynA(bcopy, bn, sizeof bcopy); zput(progpath, bcopy); }
+                  p = LogPut(p, "STAGE2: argv[0] is "); p = LogHex(p, (DWORD)lstrlenA(progpath));
+                  p = LogPut(p, " chars -- past DOS/4GW's 64-byte buffer; handing over the bare name [");
+                  p = LogPut(p, bn); p = LogPut(p, "] (cwd is the program's own directory)\r\n");
+                  { char bcopy[64]; lstrcpynA(bcopy, bn, sizeof bcopy); LogPut(progpath, bcopy); }
               }
           }
       }
@@ -31363,8 +31363,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (g_fetch2_ok) {
             unsigned nv = launcher_compiler_vars(g_env2, sizeof g_env2, envextra + eo,
                                                  (DWORD)sizeof envextra - eo);
-            if (nv) { p = zput(p, "STAGE2: launcher compiler vars -> "); p = zhex(p, nv);
-                      p = zput(p, " (LIB/INCLUDE into the 0x60 block; memory map unmoved)\r\n"); }
+            if (nv) { p = LogPut(p, "STAGE2: launcher compiler vars -> "); p = LogHex(p, nv);
+                      p = LogPut(p, " (LIB/INCLUDE into the 0x60 block; memory map unmoved)\r\n"); }
         }
         DosEnvBuildWithCard(NULL, DOS_ENV_SEG, progpath[0] ? progpath : "C:\\PROGRAM.COM",
                            "C:\\", &g_sbcfg, envextra[0] ? envextra : NULL);        /* M2.5: env */
@@ -31387,8 +31387,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       { const volatile BYTE *eb = (const volatile BYTE *)((DWORD)DOS_ENV_SEG << 4);
         char ev[288], *evq = ev;
         unsigned ei, zeros = 0;
-        evq = zput(evq, "STAGE2: guest environment block @0x");
-        evq = zhex(evq, (DWORD)DOS_ENV_SEG << 4); evq = zput(evq, " = [");
+        evq = LogPut(evq, "STAGE2: guest environment block @0x");
+        evq = LogHex(evq, (DWORD)DOS_ENV_SEG << 4); evq = LogPut(evq, " = [");
         for (ei = 0; ei < 0xC0 && evq < ev + 264; ++ei) {
             BYTE c = eb[ei];
             if (c == 0) { *evq++ = '.'; *evq = 0;
@@ -31397,13 +31397,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             zeros = 0;
             *evq++ = (char)((c >= 0x20 && c < 0x7F) ? c : '?'); *evq = 0;
         }
-        evq = zput(evq, "]\r\n");
+        evq = LogPut(evq, "]\r\n");
         (void)evq;
         /* Into the running report, the same way every neighbouring line goes: a
-           direct log_append here produced NOTHING in the file while the zput three
+           direct LogAppend here produced NOTHING in the file while the zput three
            statements above appeared, and an instrument that silently writes nowhere
            is not worth debugging twice. */
-        p = zput(p, ev); }
+        p = LogPut(p, ev); }
     }
     DosPspBuildCommandTail(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
     /* ► DUMP THE TAIL AS THE GUEST WILL SEE IT. Passing ANY argument makes DOS/4GW
@@ -31412,10 +31412,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          MEMORY, and this is the memory. Length byte, the bytes, and the terminator. */
     { volatile BYTE *pspb = (volatile BYTE *)((DWORD)DOS_PSP_SEG << 4);
       unsigned ti;
-      p = zput(p, "STAGE2: cmdtail len=0x"); p = zhexb(p, pspb[0x80]);
-      p = zput(p, " [");
-      for (ti = 0; ti < 16; ++ti) { p = zhexb(p, pspb[0x81 + ti]); p = zput(p, " "); }
-      p = zput(p, "]\r\n"); }
+      p = LogPut(p, "STAGE2: cmdtail len=0x"); p = LogHexByte(p, pspb[0x80]);
+      p = LogPut(p, " [");
+      for (ti = 0; ti < 16; ++ti) { p = LogHexByte(p, pspb[0x81 + ti]); p = LogPut(p, " "); }
+      p = LogPut(p, "]\r\n"); }
     {   uint16_t first_mcb = DosMcbInitializeWithTop(NULL, g_dos_mem_top);   /* #136 */
         DosInt21Initialize(&m, first_mcb);
         /* The program's name in its MCB, as DOS 4+ writes it (#47: MEM /D). After
@@ -31541,11 +31541,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          the wrong units is not a measurement, and this line exists precisely so nobody
          has to decode it. Minor is zero-padded to two digits: "6.2" and "6.20" are
          different DOS versions. */
-    p = zput(p, "STAGE2: DOS version reported = ");
-    p = zdec(p, m.VersionMajor); p = zput(p, ".");
-    if (m.VersionMinor < 10) p = zput(p, "0");
-    p = zdec(p, m.VersionMinor);
-    p = zput(p, " (source: "); p = zput(p, dosver_src); p = zput(p, ")\r\n");
+    p = LogPut(p, "STAGE2: DOS version reported = ");
+    p = LogDecimal(p, m.VersionMajor); p = LogPut(p, ".");
+    if (m.VersionMinor < 10) p = LogPut(p, "0");
+    p = LogDecimal(p, m.VersionMinor);
+    p = LogPut(p, " (source: "); p = LogPut(p, dosver_src); p = LogPut(p, ")\r\n");
     /* ── INT 21h AH=53h's PRIVATE SUB-FUNCTIONS, AS A KNOB. (s79) ────────────────────
          XP's COMMAND.COM asks AH=53h with AL as a selector, and AL=5's answer decides
          whether it ever reads the keyboard: answered 1, it never does (observed: no
@@ -31619,15 +31619,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               if (i < rd) ++i;
           }
       }
-      p = zput(p, "STAGE2: INT 21h AH=53h answers (source: ");
-      p = zput(p, i53_src); p = zput(p, ")");
+      p = LogPut(p, "STAGE2: INT 21h AH=53h answers (source: ");
+      p = LogPut(p, i53_src); p = LogPut(p, ")");
       { unsigned k;
         for (k = 0; k < DOS_INT53_COUNT; ++k) {
-            p = zput(p, " "); p = zhexb(p, (BYTE)k); p = zput(p, "=");
-            p = zhex(p, g_DosInt53Answers[k].Ax);
-            p = zput(p, g_DosInt53Answers[k].IsCarry ? "/C" : "/c");
+            p = LogPut(p, " "); p = LogHexByte(p, (BYTE)k); p = LogPut(p, "=");
+            p = LogHex(p, g_DosInt53Answers[k].Ax);
+            p = LogPut(p, g_DosInt53Answers[k].IsCarry ? "/C" : "/c");
         } }
-      p = zput(p, "\r\n"); }
+      p = LogPut(p, "\r\n"); }
     /* GH #38: plant the AH=65h character tables in the DOS-resident block. */
     { volatile BYTE *ct = (volatile BYTE *)(DOS_CTAB_SEG << 4); unsigned k;
       for (k = 0; k < sizeof(g_DosCtabUpper);   ++k) ct[DOS_CTAB_UPPER   + k] = g_DosCtabUpper[k];
@@ -31869,30 +31869,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_SFT)     = 0xFFFF;
             *(volatile WORD *)(svs + DOS_SYSVARS_OFF + DOS_SYSVARS_SFT + 2) = 0xFFFF;
         }
-        q = zput(q, "DOS: SysVars ");     q = zhex(q, nd);
-        q = zput(q, " DPBs at 0x");       q = zhex(q, DOS_CTAB_SEG);
-        q = zput(q, ":");                 q = zhex(q, DOS_DPBCHAIN_OFF);
-        q = zput(q, " (terminated), NUL inline -> CON..COM4 at 0x"); q = zhex(q, DOS_DEV_SEG);
-        q = zput(q, ":0 (terminated), first MCB 0x"); q = zhex(q, m.FirstMcb);
-        q = zput(q, " above SysVars 0x"); q = zhex(q, DOS_SYSVARS_SEG);
-        q = zput(q, " (#207), "); q = zhex(q, DOS_LASTDRIVE);
-        q = zput(q, " CDS entries at 0x"); q = zhex(q, g_cds_seg);
-        q = zput(q, ":0, SFT ");
-        if (g_sft_seg) { q = zput(q, "at 0x"); q = zhex(q, g_sft_seg);
-                         q = zput(q, ":0 x"); q = zhex(q, (DWORD)DOS_SFT_ENTRIES);
-                         q = zput(q, " entries (terminated)"); }
-        else             q = zput(q, "ABSENT -- chain head terminated FFFF:FFFF");
-        q = zput(q, ", drives=");
+        q = LogPut(q, "DOS: SysVars ");     q = LogHex(q, nd);
+        q = LogPut(q, " DPBs at 0x");       q = LogHex(q, DOS_CTAB_SEG);
+        q = LogPut(q, ":");                 q = LogHex(q, DOS_DPBCHAIN_OFF);
+        q = LogPut(q, " (terminated), NUL inline -> CON..COM4 at 0x"); q = LogHex(q, DOS_DEV_SEG);
+        q = LogPut(q, ":0 (terminated), first MCB 0x"); q = LogHex(q, m.FirstMcb);
+        q = LogPut(q, " above SysVars 0x"); q = LogHex(q, DOS_SYSVARS_SEG);
+        q = LogPut(q, " (#207), "); q = LogHex(q, DOS_LASTDRIVE);
+        q = LogPut(q, " CDS entries at 0x"); q = LogHex(q, g_cds_seg);
+        q = LogPut(q, ":0, SFT ");
+        if (g_sft_seg) { q = LogPut(q, "at 0x"); q = LogHex(q, g_sft_seg);
+                         q = LogPut(q, ":0 x"); q = LogHex(q, (DWORD)DOS_SFT_ENTRIES);
+                         q = LogPut(q, " entries (terminated)"); }
+        else             q = LogPut(q, "ABSENT -- chain head terminated FFFF:FFFF");
+        q = LogPut(q, ", drives=");
         for (d = 0; d < 26; ++d) {
             if (!(drives & (1u << d))) continue;
-            q = zput(q, dtype[d] == DRIVE_FIXED ? " " : dtype[d] == DRIVE_REMOVABLE ? " ~"
+            q = LogPut(q, dtype[d] == DRIVE_FIXED ? " " : dtype[d] == DRIVE_REMOVABLE ? " ~"
                        : dtype[d] == DRIVE_CDROM ? " cd:" : dtype[d] == DRIVE_REMOTE ? " net:"
                        : dtype[d] == DRIVE_RAMDISK ? " ram:" : " ?");
-            { char dl[2]; dl[0] = (char)('A' + d); dl[1] = 0; q = zput(q, dl); }
+            { char dl[2]; dl[0] = (char)('A' + d); dl[1] = 0; q = LogPut(q, dl); }
         }
-        q = zput(q, " (GH #48)\r\n");
+        q = LogPut(q, " (GH #48)\r\n");
         SetErrorMode(oldmode);
-        log_append(LOG_PATH, report, q); serial_out(report, q);
+        LogAppend(LOG_PATH, report, q); serial_out(report, q);
     }
     /* GH #128: and the WOW extension krnl386 reads before it does anything else. */
     dos_wow_publish(hdlr, (volatile BYTE *)(DOS_CTAB_SEG << 4), 2 /* C: */);
@@ -31997,7 +31997,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     *(volatile BYTE *)(ULONG_PTR)0x475 = 0;
     g_vid.VideoMemory = (uint8_t *)VIDEO_APERTURE_BASE;  /* the mapped A0000 aperture (RAM) */
     /* (per-plane backing is taken later, once the preamble is on disk -- every
-       log_write() before that point TRUNCATES the file and would eat its report.) */
+       LogWrite() before that point TRUNCATES the file and would eat its report.) */
     g_vid.TimeUs = host_time_us;               /* real CRT timebase for 0x3DA (#55) */
     g_vid.PresentHook = host_present_hook;     /* Auto: the guest's frame raises the present (s73) */
     /* Opt-in only: the ring costs two stores on the hottest path in the program and
@@ -32029,20 +32029,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           if (gotw) {
               char lb5[96], *lq5 = lb5;
               g_vid.WatchOffset = vw;
-              lq5 = zput(lq5, "STAGE0: vwatch.txt -> planar watchpoint at VRAM offset 0x");
-              lq5 = zhex(lq5, vw); lq5 = zput(lq5, "\r\n");
-              log_append(LOG_PATH, lb5, lq5); serial_out(lb5, lq5);
+              lq5 = LogPut(lq5, "STAGE0: vwatch.txt -> planar watchpoint at VRAM offset 0x");
+              lq5 = LogHex(lq5, vw); lq5 = LogPut(lq5, "\r\n");
+              LogAppend(LOG_PATH, lb5, lq5); serial_out(lb5, lq5);
           }
       } }
     /* AFTER the video VDD is on the bus (it needs st->bus to resolve a guest address). */
     /* #322: no font data ships -- the tables come from the system's fonts. Into the
-       report buffer: a log_append here would be erased when the report is rewritten. */
+       report buffer: a LogAppend here would be erased when the report is rewritten. */
     /* #321: the TextFont setting is laid over the default; g_set is loaded by now. */
-    p = zput(p, "STAGE1: ");
-    p = zput(p, sysfont_build(g_set.s[SET_STR_TEXTFONT], &g_sysfont_rep));
-    p = zput(p, "\r\n");
+    p = LogPut(p, "STAGE1: ");
+    p = LogPut(p, sysfont_build(g_set.s[SET_STR_TEXTFONT], &g_sysfont_rep));
+    p = LogPut(p, "\r\n");
     if (sysfont_default_degraded(&g_sysfont_rep))
-        p = zput(p, "STAGE1: sysfont: THE DEFAULT IS DEGRADED -- a code page 437 font file "
+        p = LogPut(p, "STAGE1: sysfont: THE DEFAULT IS DEGRADED -- a code page 437 font file "
                     "is missing, so box drawing may show accented letters (#321)\r\n");
     lstrcpynA(g_textfont_live, g_set.s[SET_STR_TEXTFONT], sizeof g_textfont_live);
     VddVideoInstallFonts(&g_vid);            /* real glyph data behind INT 10h 1130h */
@@ -32193,7 +32193,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          A device that cannot get on the bus is not a detail to discover by diffing
          port traces against a working run. */
     /* (the bus health line is emitted after the preamble is written -- see below;
-       every log_write() before then TRUNCATES the file.) */
+       every LogWrite() before then TRUNCATES the file.) */
     /* Start the mixer + audio thread. This is also the TRANSPORT: it is what
        walks the SB's DMA buffer and raises the block-completion IRQ, so it must
        run even if no sound device opens (AUDIO_WAVE falls back to silent
@@ -32316,11 +32316,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           if (rd && c[0] >= '0' && c[0] <= '9') {
               char wb[160], *wq = wb;
               g_WowMsgWaitMs = v;
-              wq = zput(wq, "WOWMSG: GetMessage idle wait = ");
-              if (v) { wq = zhex(wq, v); wq = zput(wq, " ms"); }
-              else     wq = zput(wq, "FOREVER (interactive: the guest is waiting "
+              wq = LogPut(wq, "WOWMSG: GetMessage idle wait = ");
+              if (v) { wq = LogHex(wq, v); wq = LogPut(wq, " ms"); }
+              else     wq = LogPut(wq, "FOREVER (interactive: the guest is waiting "
                                      "for the user, not stuck)");
-              wq = zput(wq, "\r\n"); log_append(LOG_PATH, wb, wq); serial_out(wb, wq);
+              wq = LogPut(wq, "\r\n"); LogAppend(LOG_PATH, wb, wq); serial_out(wb, wq);
           }
       } }
     /* keyirq.txt -- the knob 5b6a4a6's message promises. It was lost in that session's
@@ -32471,33 +32471,33 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* ── #136: SAY WHICH SYNTH THE MPU-401 PLAYS THROUGH, but only when it was chosen.
          Host GM (the default) opens device 0 as it always did and logs nothing new. */
     if (g_wave.MidiChoice != MIDI_ROUTE_GM) {
-        char mb[200], *mq = zput(mb, "STAGE2: MIDI = ");
-        mq = zput(mq, g_wave.MidiChoice == MIDI_ROUTE_MT32 ? "MT-32" : "SoundFont");
+        char mb[200], *mq = LogPut(mb, "STAGE2: MIDI = ");
+        mq = LogPut(mq, g_wave.MidiChoice == MIDI_ROUTE_MT32 ? "MT-32" : "SoundFont");
         if (g_wave.IsMidiExternal) {
-            mq = zput(mq, " -> device "); mq = zdec(mq, (unsigned)g_wave.MidiDevice);
-            mq = zput(mq, " \""); mq = zput(mq, g_wave.MidiName); mq = zput(mq, "\", SysEx passed through");
+            mq = LogPut(mq, " -> device "); mq = LogDecimal(mq, (unsigned)g_wave.MidiDevice);
+            mq = LogPut(mq, " \""); mq = LogPut(mq, g_wave.MidiName); mq = LogPut(mq, "\", SysEx passed through");
             g_mpu.SysExSink = host_midi_sysex;     /* the MPU is on the bus already; no */
             g_gusmidi.SysExSink = host_midi_sysex; /* guest code has run yet            */
         } else {
-            mq = zput(mq, " asked for, NO such device among "); mq = zdec(mq, g_wave.MidiDeviceCount);
-            mq = zput(mq, " -> Host GM (device 0");
-            if (g_wave.MidiName[0]) { mq = zput(mq, " \""); mq = zput(mq, g_wave.MidiName); mq = zput(mq, "\""); }
-            mq = zput(mq, g_wave.MidiDevice < 0 ? ", would not open)" : ")");
+            mq = LogPut(mq, " asked for, NO such device among "); mq = LogDecimal(mq, g_wave.MidiDeviceCount);
+            mq = LogPut(mq, " -> Host GM (device 0");
+            if (g_wave.MidiName[0]) { mq = LogPut(mq, " \""); mq = LogPut(mq, g_wave.MidiName); mq = LogPut(mq, "\""); }
+            mq = LogPut(mq, g_wave.MidiDevice < 0 ? ", would not open)" : ")");
         }
         if (g_wave.MidiChoice == MIDI_ROUTE_SF2)
-            mq = zput(mq, "; SoundFontPath is not passed on -- the driver keeps its own list");
-        mq = zput(mq, " (#136)\r\n"); log_append(LOG_PATH, mb, mq);
+            mq = LogPut(mq, "; SoundFontPath is not passed on -- the driver keeps its own list");
+        mq = LogPut(mq, " (#136)\r\n"); LogAppend(LOG_PATH, mb, mq);
     }
-    {   char ab[128], *aq = zput(ab, "STAGE2: audio output = ");
-        aq = zput(aq, g_wave.IsUsingDirectSound ? "DirectSound" : g_wave.IsSilent ? "none (silent pump)" : "WinMM");
-        if (g_wave.WantsDirectSound && !g_wave.IsUsingDirectSound) aq = zput(aq, " (DirectSound asked for, would not open)");
-        aq = zput(aq, "\r\n"); log_append(LOG_PATH, ab, aq); }
+    {   char ab[128], *aq = LogPut(ab, "STAGE2: audio output = ");
+        aq = LogPut(aq, g_wave.IsUsingDirectSound ? "DirectSound" : g_wave.IsSilent ? "none (silent pump)" : "WinMM");
+        if (g_wave.WantsDirectSound && !g_wave.IsUsingDirectSound) aq = LogPut(aq, " (DirectSound asked for, would not open)");
+        aq = LogPut(aq, "\r\n"); LogAppend(LOG_PATH, ab, aq); }
     /* cfg\wavrec.flag: record the whole run's audio -- see host_rec_finish. */
     if (GetFileAttributesA(WAVREC_FLAG) != INVALID_FILE_ATTRIBUTES) {
         int rr = AudioWaveRecordStart(WAVREC_PATH, g_wave.SampleHz);
-        p = zput(p, rr == 0 ? "STAGE1: wavrec.flag -- recording the audio output to debug\\out\\capture_audio.wav at "
+        p = LogPut(p, rr == 0 ? "STAGE1: wavrec.flag -- recording the audio output to debug\\out\\capture_audio.wav at "
                             : "STAGE1: wavrec.flag -- COULD NOT start the recording at ");
-        p = zdec(p, g_wave.SampleHz); p = zput(p, " Hz\r\n");
+        p = LogDecimal(p, g_wave.SampleHz); p = LogPut(p, " Hz\r\n");
     }
     m.ConsoleOut = host_conout; m.ConsoleOutContext = NULL;    /* DOS console out -> video      */
     m.ConsoleIn  = host_conin;  m.ConsoleInContext = NULL;    /* DOS console in  <- keyboard   */
@@ -32511,10 +32511,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_simint_reflect = (GetFileAttributesA(SIMINTREFL_OFF_FLAG) == INVALID_FILE_ATTRIBUTES);
     if (!g_simint_reflect) {
         char sb2[224], *sq = sb2;
-        sq = zput(sq, "STAGE1: simintrefl_off.flag -- DPMI 0300 is the pre-#247 shape: INT 21h/"
+        sq = LogPut(sq, "STAGE1: simintrefl_off.flag -- DPMI 0300 is the pre-#247 shape: INT 21h/"
                       "33h/10h host-side, EVERY other vector NOT RUN (ZAR: silent). See "
                       "simint_route().\r\n");
-        log_append(LOG_PATH, sb2, sq); serial_out(sb2, sq);
+        LogAppend(LOG_PATH, sb2, sq); serial_out(sb2, sq);
     }
     m.ConsoleInNoWait = host_coninnb;                   /* AH=06 DL=FF non-blocking read */
     m.ConsolePeek = host_conpeek;                   /* AH=0B/06 non-blocking status  */
@@ -32544,8 +32544,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (g_headless) { HANDLE hd = CreateThread(NULL, 0, headless_deadline_thread, NULL, 0, NULL);
                       if (hd) CloseHandle(hd);
                       /* appended to the preamble, which is flushed further down */
-                      p = zput(p, "HEADLESS: cap=0x"); p = zhex(p, g_headless_ms);
-                      p = zput(p, " ms\r\n"); }
+                      p = LogPut(p, "HEADLESS: cap=0x"); p = LogHex(p, g_headless_ms);
+                      p = LogPut(p, " ms\r\n"); }
     /* cfg\livehb.flag: the heartbeat on a LIVE (by-hand) run too. A host that dies
        with no exit report leaves nothing else that says where the guest was. (s68) */
     if (g_headless || GetFileAttributesA(CFG_("livehb.flag")) != INVALID_FILE_ATTRIBUTES) {
@@ -32597,13 +32597,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            image we place at its base. Nothing else names this quantity to the guest. */
         VDM_SET16(tib, VTIB_ECX, (WORD)g_wow_entry_cx);
         VDM_REG(tib, VTIB_EAX) = 0x4B4F;
-        p = zput(p, "STAGE2: WOW entry -- krnl386 in V86 at 0x");
-        p = zhex(p, img.CodeSegment); p = zput(p, ":0x"); p = zhex(p, img.InstructionPointer);
-        p = zput(p, " DS=0x"); p = zhex(p, g_wow_entry_ds);
-        p = zput(p, " ES=0x"); p = zhex(p, g_wow_psp_seg);
-        p = zput(p, " CX=0x"); p = zhex(p, g_wow_entry_cx);
-        p = zput(p, " (it will carve from 0x"); p = zhex(p, (DWORD)(g_wow_psp_seg + 0x10));
-        p = zput(p, ") AX=0x4b4f\r\n");
+        p = LogPut(p, "STAGE2: WOW entry -- krnl386 in V86 at 0x");
+        p = LogHex(p, img.CodeSegment); p = LogPut(p, ":0x"); p = LogHex(p, img.InstructionPointer);
+        p = LogPut(p, " DS=0x"); p = LogHex(p, g_wow_entry_ds);
+        p = LogPut(p, " ES=0x"); p = LogHex(p, g_wow_psp_seg);
+        p = LogPut(p, " CX=0x"); p = LogHex(p, g_wow_entry_cx);
+        p = LogPut(p, " (it will carve from 0x"); p = LogHex(p, (DWORD)(g_wow_psp_seg + 0x10));
+        p = LogPut(p, ") AX=0x4b4f\r\n");
     }
     /* ENTRY TRAMPOLINE: `STI` then a far jump to the program's real entry point.
        Under VME the CPU sets EFLAGS.VIF only when the guest EXECUTES sti -- and the
@@ -32664,22 +32664,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     {   volatile BYTE *hs = (volatile BYTE *)(DOS_HDLR_SEG << 4);
         if (hs[MS_CB_RET_OFF] != VDM_BOP0 || hs[MS_CB_RET_OFF + 1] != VDM_BOP1
             || hs[MS_CB_RET_OFF + 2] != MS_CB_BOP) {
-            p = zput(p, "STAGE2: *** STUB OVERWRITTEN at DOS_HDLR_SEG:0x");
-            p = zhex(p, MS_CB_RET_OFF); p = zput(p, " (mouse callback return): bytes ");
-            p = zdump(p, (const void *)(hs + MS_CB_RET_OFF), 4); p = zput(p, "\r\n");
+            p = LogPut(p, "STAGE2: *** STUB OVERWRITTEN at DOS_HDLR_SEG:0x");
+            p = LogHex(p, MS_CB_RET_OFF); p = LogPut(p, " (mouse callback return): bytes ");
+            p = LogDump(p, (const void *)(hs + MS_CB_RET_OFF), 4); p = LogPut(p, "\r\n");
         }
     }
-    p = zput(p, img.IsExe ? "STAGE2: running .EXE (entry 0x"
+    p = LogPut(p, img.IsExe ? "STAGE2: running .EXE (entry 0x"
                            : "STAGE2: running .COM (entry 0x");
-    p = zhex(p, img.CodeSegment); p = zput(p, ":0x"); p = zhex(p, img.InstructionPointer); p = zput(p, ")...\r\n");
-    log_write(LOG_PATH, report, p);
+    p = LogHex(p, img.CodeSegment); p = LogPut(p, ":0x"); p = LogHex(p, img.InstructionPointer); p = LogPut(p, ")...\r\n");
+    LogWrite(LOG_PATH, report, p);
     base = p;                       /* preamble is on disk; the loop appends from here */
     {   /* #211. After the last truncating write, for the same reason as #144 below. */
-        char ib[200], *iq = zput(ib, "STAGE2: instance "); iq = zdec(iq, (unsigned)g_instance);
-        if (g_instance > 1) { iq = zput(iq, " (another NTVDMEX was running) -> output in "); iq = zput(iq, g_out_sub); }
-        if (g_instance_abandoned) iq = zput(iq, " -- prior holder ABANDONED (zombie thread died)");
-        iq = zput(iq, " (#211)\r\n");
-        log_append(LOG_PATH, ib, iq); }
+        char ib[200], *iq = LogPut(ib, "STAGE2: instance "); iq = LogDecimal(iq, (unsigned)g_instance);
+        if (g_instance > 1) { iq = LogPut(iq, " (another NTVDMEX was running) -> output in "); iq = LogPut(iq, g_out_sub); }
+        if (g_instance_abandoned) iq = LogPut(iq, " -- prior holder ABANDONED (zombie thread died)");
+        iq = LogPut(iq, " (#211)\r\n");
+        LogAppend(LOG_PATH, ib, iq); }
     /* #144. HERE, not with the other STAGE0 lines: this is the last truncating write
        (an append before it is wiped -- the first cut of this was), and the ~7 KB table
        would overflow the 8 KB preamble buffer. Every file override has been read. */
@@ -32689,7 +32689,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          (1) AFTER every built-in device is on the bus, so a third-party claim
              that collides with our own video or UART is REFUSED honestly rather
              than silently shadowing it;
-         (2) AFTER THE LAST log_write, which TRUNCATES. The first cut put this
+         (2) AFTER THE LAST LogWrite, which TRUNCATES. The first cut put this
              beside the built-in devices, ~350 lines up -- the driver may well
              have loaded and every line it logged was erased before anyone could
              read it, which reads exactly like "the code never ran". The warning
@@ -32714,9 +32714,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         || (v >= 0x78 && v <= 0xFE);
             char gb[120], *gq = gb;
             if (!g_bus.Interrupts[v].Service || wired) continue;
-            gq = zput(gq, "  VDD: claim_int 0x"); gq = zhex(gq, v);
+            gq = LogPut(gq, "  VDD: claim_int 0x"); gq = LogHex(gq, v);
             if (!user || n >= DOS_GENSTUB_N) {
-                gq = zput(gq, user ? " -- no generic stub left; NOT delivered\r\n"
+                gq = LogPut(gq, user ? " -- no generic stub left; NOT delivered\r\n"
                                    : " -- a system vector; NOT delivered (user vectors only)\r\n");
             } else {
                 unsigned off = DOS_GENSTUB_OFF + n * 4;
@@ -32726,22 +32726,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 *(volatile WORD *)(ULONG_PTR)(v * 4)     = (WORD)off;
                 *(volatile WORD *)(ULONG_PTR)(v * 4 + 2) = DOS_CTAB_SEG;
                 ++n;
-                gq = zput(gq, " -> generic stub 0090:0x"); gq = zhex(gq, off); gq = zput(gq, "\r\n");
+                gq = LogPut(gq, " -> generic stub 0090:0x"); gq = LogHex(gq, off); gq = LogPut(gq, "\r\n");
             }
-            log_append(LOG_PATH, gb, gq);
+            LogAppend(LOG_PATH, gb, gq);
         }
     }
-    /* ⚠⚠ AFTER THE **LAST** log_write. There are THREE of them in WinMain and every one
+    /* ⚠⚠ AFTER THE **LAST** LogWrite. There are THREE of them in WinMain and every one
          TRUNCATES. This probe was placed after the first, then after the second, and
          both times its output was silently erased by the next one -- which reads
          exactly like "the code never ran", and cost three rounds of looking in the
          wrong place. If you add diagnostics to WinMain, append AFTER line ~9941 or put
-         them in `p` so a log_write carries them. */
+         them in `p` so a LogWrite carries them. */
     {   DWORD fa = GetFileAttributesA(WOWTRY_FLAG);
         char m2[200], *q2 = m2;
-        q2 = zput(q2, "LDTARM: wow_mods="); q2 = zhex(q2, (DWORD)g_wow_nmod);
-        q2 = zput(q2, " flag_attr=0x");      q2 = zhex(q2, fa);
-        q2 = zput(q2, "\r\n"); log_append(LOG_PATH, m2, q2);
+        q2 = LogPut(q2, "LDTARM: wow_mods="); q2 = LogHex(q2, (DWORD)g_wow_nmod);
+        q2 = LogPut(q2, " flag_attr=0x");      q2 = LogHex(q2, fa);
+        q2 = LogPut(q2, "\r\n"); LogAppend(LOG_PATH, m2, q2);
         if (!g_wow_nmod && fa != INVALID_FILE_ATTRIBUTES)
             wow_probe_ldt_matrix("dos-late");  /* the other corner of the 2x2 */
     }
@@ -32761,29 +32761,29 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          line, and it is worth far more than another guess at a heuristic. */
     { MEMORY_BASIC_INFORMATION mbi;
       if (VirtualQuery((LPCVOID)(ULONG_PTR)0xA0000, &mbi, sizeof mbi) == sizeof mbi) {
-          p = zput(p, "STAGE2: A0000 region: alloc_base=0x");
-          p = zhex(p, (DWORD)(ULONG_PTR)mbi.AllocationBase);
-          p = zput(p, " base=0x");   p = zhex(p, (DWORD)(ULONG_PTR)mbi.BaseAddress);
-          p = zput(p, " size=0x");   p = zhex(p, (DWORD)mbi.RegionSize);
-          p = zput(p, " state=0x");  p = zhex(p, mbi.State);
-          p = zput(p, " type=0x");   p = zhex(p, mbi.Type);
-          p = zput(p, " prot=0x");   p = zhex(p, mbi.Protect);
-          p = zput(p, " allocprot=0x"); p = zhex(p, mbi.AllocationProtect);
-          p = zput(p, (mbi.AllocationBase == (LPVOID)(ULONG_PTR)0xA0000)
+          p = LogPut(p, "STAGE2: A0000 region: alloc_base=0x");
+          p = LogHex(p, (DWORD)(ULONG_PTR)mbi.AllocationBase);
+          p = LogPut(p, " base=0x");   p = LogHex(p, (DWORD)(ULONG_PTR)mbi.BaseAddress);
+          p = LogPut(p, " size=0x");   p = LogHex(p, (DWORD)mbi.RegionSize);
+          p = LogPut(p, " state=0x");  p = LogHex(p, mbi.State);
+          p = LogPut(p, " type=0x");   p = LogHex(p, mbi.Type);
+          p = LogPut(p, " prot=0x");   p = LogHex(p, mbi.Protect);
+          p = LogPut(p, " allocprot=0x"); p = LogHex(p, mbi.AllocationProtect);
+          p = LogPut(p, (mbi.AllocationBase == (LPVOID)(ULONG_PTR)0xA0000)
                         ? "  -> OWN ALLOCATION: remappable\r\n"
                         : "  -> inside a larger reservation: NOT remappable in place\r\n");
-          log_append(LOG_PATH, base, p); p = base;
+          LogAppend(LOG_PATH, base, p); p = base;
       } }
     { char bb2[160], *bq = bb2;
-      bq = zput(bq, g_bus.ClaimFailures ? "STAGE2: *** BUS CLAIMS REFUSED: " : "STAGE2: bus ok: ");
-      bq = zhex(bq, (DWORD)g_bus.ClaimFailures);
-      bq = zput(bq, " refused, ports="); bq = zhex(bq, (DWORD)g_bus.PortCount);
-      bq = zput(bq, "/"); bq = zhex(bq, (DWORD)VDD_MAX_PORT_RANGES);
-      bq = zput(bq, " mem="); bq = zhex(bq, (DWORD)g_bus.MemoryCount);
-      bq = zput(bq, "/"); bq = zhex(bq, (DWORD)VDD_MAX_MEMORY_WINDOWS);
-      bq = zput(bq, " dev="); bq = zhex(bq, (DWORD)g_bus.DeviceCount);
-      bq = zput(bq, "/"); bq = zhex(bq, (DWORD)VDD_MAX_DEVICES);
-      bq = zput(bq, "\r\n"); log_append(LOG_PATH, bb2, bq); serial_out(bb2, bq); }
+      bq = LogPut(bq, g_bus.ClaimFailures ? "STAGE2: *** BUS CLAIMS REFUSED: " : "STAGE2: bus ok: ");
+      bq = LogHex(bq, (DWORD)g_bus.ClaimFailures);
+      bq = LogPut(bq, " refused, ports="); bq = LogHex(bq, (DWORD)g_bus.PortCount);
+      bq = LogPut(bq, "/"); bq = LogHex(bq, (DWORD)VDD_MAX_PORT_RANGES);
+      bq = LogPut(bq, " mem="); bq = LogHex(bq, (DWORD)g_bus.MemoryCount);
+      bq = LogPut(bq, "/"); bq = LogHex(bq, (DWORD)VDD_MAX_MEMORY_WINDOWS);
+      bq = LogPut(bq, " dev="); bq = LogHex(bq, (DWORD)g_bus.DeviceCount);
+      bq = LogPut(bq, "/"); bq = LogHex(bq, (DWORD)VDD_MAX_DEVICES);
+      bq = LogPut(bq, "\r\n"); LogAppend(LOG_PATH, bb2, bq); serial_out(bb2, bq); }
 
     SetCurrentDirectoryA(g_cur);    /* DOS relative paths resolve against CurDir */
 
@@ -32806,10 +32806,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            too -- a real-mode hang was the one path that could still permanently wedge the
            rig.) GetTickCount per iteration is cheap; the loop runs once per event/BOP. */
         if (g_headless && GetTickCount() - rm_start_tick > PM_HEADLESS_MS) {
-            p = zput(p, "STAGE2: headless time cap (");
-            p = zhex(p, PM_HEADLESS_MS); p = zput(p, " ms) reached -> exiting"
+            p = LogPut(p, "STAGE2: headless time cap (");
+            p = LogHex(p, PM_HEADLESS_MS); p = LogPut(p, " ms) reached -> exiting"
                      " (long/hung real-mode run; screenshots captured if graphical)\r\n");
-            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
             break;
         }
         /* File > Close Program (#152). Here, not mid-dispatch: the guest is stopped at
@@ -33022,11 +33022,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     int k;
                     for (k = 0; k < 6; ++k) tr[k] = g_tramp_save[k];
                     g_tramp_saved = 0;
-                    {   char tb[200], *tq = zput(tb, "STAGE2: entry trampoline done -- first exit ev=0x");
-                        tq = zhex(tq, (DWORD)ev); tq = zput(tq, " at 0x"); tq = zhex(tq, tcs);
-                        tq = zput(tq, ":0x"); tq = zhex(tq, tip); tq = zput(tq, " VTIB EFLAGS=0x");
-                        tq = zhex(tq, VDM_REG(tib, VTIB_EFLAGS)); tq = zput(tq, " (IF=bit 9, VIF=bit 19, VIP=bit 20)\r\n");
-                        log_append(LOG_PATH, tb, tq); }
+                    {   char tb[200], *tq = LogPut(tb, "STAGE2: entry trampoline done -- first exit ev=0x");
+                        tq = LogHex(tq, (DWORD)ev); tq = LogPut(tq, " at 0x"); tq = LogHex(tq, tcs);
+                        tq = LogPut(tq, ":0x"); tq = LogHex(tq, tip); tq = LogPut(tq, " VTIB EFLAGS=0x");
+                        tq = LogHex(tq, VDM_REG(tib, VTIB_EFLAGS)); tq = LogPut(tq, " (IF=bit 9, VIF=bit 19, VIP=bit 20)\r\n");
+                        LogAppend(LOG_PATH, tb, tq); }
                 }
             }
             /* ── ★ HOW LONG DID ONE V86 RUN LAST WITHOUT GIVING US A TURN? (Skyroads
@@ -33057,19 +33057,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             DWORD tcs = VDM_REG(tib, VTIB_CS) & 0xFFFF, tip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
             DWORD tss = VDM_REG(tib, VTIB_SS) & 0xFFFF, tsp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
             --g_ms_cb_trace;
-            tq = zput(tq, "MOUSECB-TRACE ev=0x"); tq = zhex(tq, ev);
-            tq = zput(tq, " info=0x"); tq = zhex(tq, VDM_REG(tib, VTIB_EVENT_INFO));
-            tq = zput(tq, " st=0x");   tq = zhex(tq, (DWORD)st);
-            tq = zput(tq, " cs:ip=0x"); tq = zhex(tq, tcs); tq = zput(tq, ":0x"); tq = zhex(tq, tip);
-            tq = zput(tq, " efl=0x");  tq = zhex(tq, VDM_REG(tib, VTIB_EFLAGS));
-            tq = zput(tq, " ss:sp=0x"); tq = zhex(tq, tss); tq = zput(tq, ":0x"); tq = zhex(tq, tsp);
-            tq = zput(tq, " ax=0x");   tq = zhex(tq, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-            tq = zput(tq, " [714]=0x"); tq = zhex(tq, *(volatile DWORD *)(ULONG_PTR)0x714);
-            tq = zput(tq, " active="); tq = zhex(tq, (DWORD)g_ms_cb_active);
-            tq = zput(tq, " code=");   tq = zdump(tq, (const void *)(ULONG_PTR)((tcs << 4) + tip), 8);
-            tq = zput(tq, " stack=");  tq = zdump(tq, (const void *)(ULONG_PTR)((tss << 4) + tsp), 12);
-            tq = zput(tq, "\r\n");
-            log_append(LOG_PATH, tb, tq);
+            tq = LogPut(tq, "MOUSECB-TRACE ev=0x"); tq = LogHex(tq, ev);
+            tq = LogPut(tq, " info=0x"); tq = LogHex(tq, VDM_REG(tib, VTIB_EVENT_INFO));
+            tq = LogPut(tq, " st=0x");   tq = LogHex(tq, (DWORD)st);
+            tq = LogPut(tq, " cs:ip=0x"); tq = LogHex(tq, tcs); tq = LogPut(tq, ":0x"); tq = LogHex(tq, tip);
+            tq = LogPut(tq, " efl=0x");  tq = LogHex(tq, VDM_REG(tib, VTIB_EFLAGS));
+            tq = LogPut(tq, " ss:sp=0x"); tq = LogHex(tq, tss); tq = LogPut(tq, ":0x"); tq = LogHex(tq, tsp);
+            tq = LogPut(tq, " ax=0x");   tq = LogHex(tq, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+            tq = LogPut(tq, " [714]=0x"); tq = LogHex(tq, *(volatile DWORD *)(ULONG_PTR)0x714);
+            tq = LogPut(tq, " active="); tq = LogHex(tq, (DWORD)g_ms_cb_active);
+            tq = LogPut(tq, " code=");   tq = LogDump(tq, (const void *)(ULONG_PTR)((tcs << 4) + tip), 8);
+            tq = LogPut(tq, " stack=");  tq = LogDump(tq, (const void *)(ULONG_PTR)((tss << 4) + tsp), 12);
+            tq = LogPut(tq, "\r\n");
+            LogAppend(LOG_PATH, tb, tq);
         }
         /* ── WHEN VdmStartExecution RETURNS A FAILURE STATUS, SAY SO. (session 62) ──
              The V86 path ignored `st` entirely -- only the DPMI branch below ever
@@ -33088,13 +33088,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 const volatile BYTE *sp3 = (const volatile BYTE *)((sc << 4) + si);
                 unsigned k7;
                 --s_bud_st;
-                p = zput(p, "V86-STATUS 0x"); p = zhex(p, (unsigned)st);
-                p = zput(p, " ev=0x"); p = zhex(p, ev);
-                p = zput(p, " at 0x"); p = zhex(p, sc); p = zput(p, ":0x"); p = zhex(p, si);
-                p = zput(p, " bytes:");
-                for (k7 = 0; k7 < 8; ++k7) { p = zput(p, " "); p = zhexb(p, sp3[k7]); }
-                p = zput(p, "\r\n");
-                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                p = LogPut(p, "V86-STATUS 0x"); p = LogHex(p, (unsigned)st);
+                p = LogPut(p, " ev=0x"); p = LogHex(p, ev);
+                p = LogPut(p, " at 0x"); p = LogHex(p, sc); p = LogPut(p, ":0x"); p = LogHex(p, si);
+                p = LogPut(p, " bytes:");
+                for (k7 = 0; k7 < 8; ++k7) { p = LogPut(p, " "); p = LogHexByte(p, sp3[k7]); }
+                p = LogPut(p, "\r\n");
+                LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
             }
         }
         /* SPIKE: once in protected mode, stop at the FIRST PM event and dump the raw
@@ -33103,16 +33103,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            a real INT 31h dispatch. */
         if (g_dpmi_pm) {
             DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF, ipv = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
-            p = zput(p, "STAGE3-DPMI: PM stop event=0x"); p = zhex(p, ev);
-            p = zput(p, " status=0x"); p = zhex(p, (unsigned)st);
-            p = zput(p, " info=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT_INFO));
-            p = zput(p, " CS:IP=0x"); p = zhex(p, csv); p = zput(p, ":0x"); p = zhex(p, ipv);
-            p = zput(p, " EFL=0x"); p = zhex(p, VDM_REG(tib, VTIB_EFLAGS));
-            p = zput(p, " SS:SP=0x"); p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
-            p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_ESP) & 0xFFFF);
-            p = zput(p, "\r\n  VTIB[5A8..]: "); p = zdump(p, (const void *)(tib + 0x5A8), 0x20);
-            p = zput(p, "\r\n");
-            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            p = LogPut(p, "STAGE3-DPMI: PM stop event=0x"); p = LogHex(p, ev);
+            p = LogPut(p, " status=0x"); p = LogHex(p, (unsigned)st);
+            p = LogPut(p, " info=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EVENT_INFO));
+            p = LogPut(p, " CS:IP=0x"); p = LogHex(p, csv); p = LogPut(p, ":0x"); p = LogHex(p, ipv);
+            p = LogPut(p, " EFL=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EFLAGS));
+            p = LogPut(p, " SS:SP=0x"); p = LogHex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+            p = LogPut(p, ":0x"); p = LogHex(p, VDM_REG(tib, VTIB_ESP) & 0xFFFF);
+            p = LogPut(p, "\r\n  VTIB[5A8..]: "); p = LogDump(p, (const void *)(tib + 0x5A8), 0x20);
+            p = LogPut(p, "\r\n");
+            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
             break;
         }
         /* I/O port trap (event 0; VM-confirmed) or a generic GP fault (event 2):
@@ -33147,12 +33147,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     static int s_bud_bat = 10;
                     if (s_bud_bat > 0) {            /* is the batch ADVANCING the guest? */
                         --s_bud_bat;
-                        p = zput(p, "BATCH ran="); p = zhex(p, (DWORD)ran);
-                        p = zput(p, " from 0x"); p = zhex(p, bc); p = zput(p, ":0x"); p = zhex(p, bi);
-                        p = zput(p, " to 0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                        p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-                        p = zput(p, "\r\n");
-                        log_append(LOG_PATH, base, p); p = base;
+                        p = LogPut(p, "BATCH ran="); p = LogHex(p, (DWORD)ran);
+                        p = LogPut(p, " from 0x"); p = LogHex(p, bc); p = LogPut(p, ":0x"); p = LogHex(p, bi);
+                        p = LogPut(p, " to 0x"); p = LogHex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                        p = LogPut(p, ":0x"); p = LogHex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+                        p = LogPut(p, "\r\n");
+                        LogAppend(LOG_PATH, base, p); p = base;
                     }
                     continue;                       /* batched the hot loop            */
                 }
@@ -33185,11 +33185,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     const volatile BYTE *ip2 = (const volatile BYTE *)((c2 << 4) + i2);
                     unsigned k4;
                     --s_bud_dec;
-                    p = zput(p, "INTERP-REFUSED at 0x"); p = zhex(p, c2);
-                    p = zput(p, ":0x"); p = zhex(p, i2); p = zput(p, " bytes:");
-                    for (k4 = 0; k4 < 8; ++k4) { p = zput(p, " "); p = zhexb(p, ip2[k4]); }
-                    p = zput(p, "\r\n");
-                    log_append(LOG_PATH, base, p); p = base;
+                    p = LogPut(p, "INTERP-REFUSED at 0x"); p = LogHex(p, c2);
+                    p = LogPut(p, ":0x"); p = LogHex(p, i2); p = LogPut(p, " bytes:");
+                    for (k4 = 0; k4 < 8; ++k4) { p = LogPut(p, " "); p = LogHexByte(p, ip2[k4]); }
+                    p = LogPut(p, "\r\n");
+                    LogAppend(LOG_PATH, base, p); p = base;
                 }
                 g_interp_refused++;
             }
@@ -33223,15 +33223,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             BYTE ib[8], pb[8]; unsigned k;
             for (k = 0; k < 8; ++k) ib[k] = cp[k];
             for (k = 0; k < 8; ++k) pb[k] = (ipv >= 8) ? cp[(int)k - 8] : 0;  /* 8 bytes BEFORE CS:IP */
-            p = zput(p, "STAGE2: stop event=0x"); p = zhex(p, ev);
-            p = zput(p, " status=0x"); p = zhex(p, (unsigned)st);
-            p = zput(p, " info=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT_INFO));
-            p = zput(p, " CS:IP=0x"); p = zhex(p, csv);
-            p = zput(p, ":0x"); p = zhex(p, ipv); p = zput(p, "\r\n");
-            p = zput(p, "  bytes[CS:IP-8]: "); p = zdump(p, pb, 8);
-            p = zput(p, "  bytes@CS:IP: "); p = zdump(p, ib, 8);
-            p = zput(p, "  VTIB[5A8..]: "); p = zdump(p, (const void *)(tib + 0x5A8), 0x20);
-            log_append(LOG_PATH, base, p); p = base;
+            p = LogPut(p, "STAGE2: stop event=0x"); p = LogHex(p, ev);
+            p = LogPut(p, " status=0x"); p = LogHex(p, (unsigned)st);
+            p = LogPut(p, " info=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EVENT_INFO));
+            p = LogPut(p, " CS:IP=0x"); p = LogHex(p, csv);
+            p = LogPut(p, ":0x"); p = LogHex(p, ipv); p = LogPut(p, "\r\n");
+            p = LogPut(p, "  bytes[CS:IP-8]: "); p = LogDump(p, pb, 8);
+            p = LogPut(p, "  bytes@CS:IP: "); p = LogDump(p, ib, 8);
+            p = LogPut(p, "  VTIB[5A8..]: "); p = LogDump(p, (const void *)(tib + 0x5A8), 0x20);
+            LogAppend(LOG_PATH, base, p); p = base;
             break;
         }
         { static int s_bud_bop = 6; vdmstate_sample("bop", tib, &s_bud_bop); }
@@ -33387,9 +33387,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 DWORD dx27 = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
                 m.TsrKeep = (WORD)((dx27 + 15) >> 4);
                 m.IsTsrPending = 1;
-                p = zput(p, "  INT27 TSR: keep 0x"); p = zhex(p, m.TsrKeep);
-                p = zput(p, " paras (DX=0x"); p = zhex(p, dx27);
-                p = zput(p, " bytes), vectors LEFT INSTALLED\r\n");
+                p = LogPut(p, "  INT27 TSR: keep 0x"); p = LogHex(p, m.TsrKeep);
+                p = LogPut(p, " paras (DX=0x"); p = LogHex(p, dx27);
+                p = LogPut(p, " bytes), vectors LEFT INSTALLED\r\n");
                 VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;
                 m.TraceCursor = p; DosInt21(&m); p = m.TraceCursor;
                 handled = dos_terminate(&m, tib, &p, base) ? 3 : 2;
@@ -33409,17 +33409,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                Logged and recorded, but it does NOT set the initial selectors' D/B --
                see DpmiSwitchToProtectedMode(); doing so ran DOS/4GW's 16-bit stub as 32-bit. */
             int is32 = (int)(VDM_REG(tib, VTIB_EAX) & 1);
-            p = zput(p, "STAGE3: DPMI_BOP far-call LANDED @ 0x"); p = zhex(p, csv);
-            p = zput(p, ":0x"); p = zhex(p, ipv);
-            p = zput(p, is32 ? " -- switching to PM (32-bit client)\r\n"
+            p = LogPut(p, "STAGE3: DPMI_BOP far-call LANDED @ 0x"); p = LogHex(p, csv);
+            p = LogPut(p, ":0x"); p = LogHex(p, ipv);
+            p = LogPut(p, is32 ? " -- switching to PM (32-bit client)\r\n"
                              : " -- switching to PM (16-bit client)\r\n");
-            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
             sw = DpmiSwitchToProtectedMode(tib, is32, &reg_st, &set_st);
-            p = zput(p, " [svc11=0x"); p = zhex(p, (unsigned)reg_st);
-            p = zput(p, " svc10=0x"); p = zhex(p, (unsigned)set_st); p = zput(p, "]");
-            p = zput(p, " retcs=0x"); p = zhex(p, g_DpmiDebug[0]);
-            p = zput(p, " clo=0x"); p = zhex(p, g_DpmiDebug[2]);
-            p = zput(p, " chi=0x"); p = zhex(p, g_DpmiDebug[3]);
+            p = LogPut(p, " [svc11=0x"); p = LogHex(p, (unsigned)reg_st);
+            p = LogPut(p, " svc10=0x"); p = LogHex(p, (unsigned)set_st); p = LogPut(p, "]");
+            p = LogPut(p, " retcs=0x"); p = LogHex(p, g_DpmiDebug[0]);
+            p = LogPut(p, " clo=0x"); p = LogHex(p, g_DpmiDebug[2]);
+            p = LogPut(p, " chi=0x"); p = LogHex(p, g_DpmiDebug[3]);
             if (sw == 0) {
                 unsigned steps;
                 g_dpmi_pm = 1;
@@ -33499,25 +33499,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     }
                   }
                   dpmi_install_default_pm_handlers(&m);
-                  p = zput(p, " PSP 0x"); p = zhex(p, psp);
-                  p = zput(p, " -> ES=0x"); p = zhex(p, psp_sel);
-                  p = zput(p, " env -> sel 0x"); p = zhex(p, env_sel);
+                  p = LogPut(p, " PSP 0x"); p = LogHex(p, psp);
+                  p = LogPut(p, " -> ES=0x"); p = LogHex(p, psp_sel);
+                  p = LogPut(p, " env -> sel 0x"); p = LogHex(p, env_sel);
                 }
-                p = zput(p, " segbase C=0x"); p = zhex(p, g_DpmiSegmentBase[0]);
-                p = zput(p, " D=0x"); p = zhex(p, g_DpmiSegmentBase[1]);
-                p = zput(p, " S=0x"); p = zhex(p, g_DpmiSegmentBase[2]);
-                p = zput(p, " -> PM ok (CS=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-                p = zput(p, ") -> DPMI PM loop\r\n");
-                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                p = LogPut(p, " segbase C=0x"); p = LogHex(p, g_DpmiSegmentBase[0]);
+                p = LogPut(p, " D=0x"); p = LogHex(p, g_DpmiSegmentBase[1]);
+                p = LogPut(p, " S=0x"); p = LogHex(p, g_DpmiSegmentBase[2]);
+                p = LogPut(p, " -> PM ok (CS=0x"); p = LogHex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                p = LogPut(p, ":0x"); p = LogHex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+                p = LogPut(p, ") -> DPMI PM loop\r\n");
+                LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                 /* run 53: the emulation path -- execute PM in the host interpreter instead of
                    the kernel (which deadlocks on a PM #GP, run 52). No BOP patch: the interpreter
                    reads the raw CD nn and stops on it, and we service through the same dispatch.
                    No kernel watchdog here either -- the interpreter has its own guard cap, and the
                    watchdog's 3s TerminateProcess would guillotine a long (millions-of-insn) run. */
                 if (g_dpmi_use_interp) {
-                    p = zput(p, "DPMI: run 53 -- PM in host interpreter (no kernel, no BOP patch)\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    p = LogPut(p, "DPMI: run 53 -- PM in host interpreter (no kernel, no BOP patch)\r\n");
+                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                     dpmi_run_pm_interp(&m, tib);
                     break;
                 }
@@ -33531,9 +33531,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                      distinguish "thread never created" from "created but the process was
                      killed before it was ever scheduled". Doom's log shows neither that
                      line nor any sample, so we need the difference. */
-                  p = zput(p, "STAGE3-DPMI: watchdog thread created h="); p = zhex(p, (DWORD)(ULONG_PTR)wd);
-                  p = zput(p, "\r\n");
-                  log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
+                  p = LogPut(p, "STAGE3-DPMI: watchdog thread created h="); p = LogHex(p, (DWORD)(ULONG_PTR)wd);
+                  p = LogPut(p, "\r\n");
+                  LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base; }
                 /* Patch the client's PM `INT nn` (CD nn) -> BOP (C4 C4), recording the original
                    vector per CS offset. Same 2 bytes, so a real unmodified client's INT 31h/21h
                    now reflect to us as BOPs.
@@ -33625,11 +33625,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                           pmap_set(lin, v); cs[o] = 0xC4; cs[o+1] = 0xC4; ++n; last = o;
                       }
                   }
-                  p = zput(p, "DPMI: patched "); p = zhex(p, n);
-                  p = zput(p, " INT sites -> BOP (full 64K scan, last off 0x"); p = zhex(p, last);
-                  p = zput(p, "), of which "); p = zhex(p, nvoted);
-                  p = zput(p, " were UNLISTED vectors vouched for by the x86len vote\r\n");
-                  log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                  p = LogPut(p, "DPMI: patched "); p = LogHex(p, n);
+                  p = LogPut(p, " INT sites -> BOP (full 64K scan, last off 0x"); p = LogHex(p, last);
+                  p = LogPut(p, "), of which "); p = LogHex(p, nvoted);
+                  p = LogPut(p, " were UNLISTED vectors vouched for by the x86len vote\r\n");
+                  LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                   /* ── WHAT DID THE PATCH LEAVE BEHIND? ────────────────────────────
                        Every `CD nn` still in this region is a vector we did not claim,
                        and a PM guest cannot reach the IVT -- so if the guest executes
@@ -33660,24 +33660,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            addresses so the next one is a breakpoint away instead of a
                            disassembly session. Bounded so a data-heavy region cannot flood. */
                       {   DWORD shown = 0;
-                          p = zput(p, "DPMI: residual CD nn SITES (linear, first 24):");
+                          p = LogPut(p, "DPMI: residual CD nn SITES (linear, first 24):");
                           for (o2 = 0; o2 < 0xFFFF && shown < 24; ++o2)
                               if (cs[o2] == 0xCD) {
-                                  p = zput(p, " 0x"); p = zhex(p, (DWORD)(ULONG_PTR)(cs + o2));
-                                  p = zput(p, "="); p = zhexb(p, cs[o2 + 1]);
+                                  p = LogPut(p, " 0x"); p = LogHex(p, (DWORD)(ULONG_PTR)(cs + o2));
+                                  p = LogPut(p, "="); p = LogHexByte(p, cs[o2 + 1]);
                                   ++shown;
                               }
-                          p = zput(p, "\r\n");
-                          log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                          p = LogPut(p, "\r\n");
+                          LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                       }
-                      p = zput(p, "DPMI: residual CD nn in the region: "); p = zhex(p, tot);
-                      p = zput(p, " (unclaimed vectors, upper bound)");
+                      p = LogPut(p, "DPMI: residual CD nn in the region: "); p = LogHex(p, tot);
+                      p = LogPut(p, " (unclaimed vectors, upper bound)");
                       for (v = 0; v < 256; ++v) if (hist[v]) {
-                          p = zput(p, " "); p = zhexb(p, (BYTE)v);
-                          p = zput(p, "h x"); p = zhex(p, hist[v]);
+                          p = LogPut(p, " "); p = LogHexByte(p, (BYTE)v);
+                          p = LogPut(p, "h x"); p = LogHex(p, hist[v]);
                       }
-                      p = zput(p, "\r\n");
-                      log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                      p = LogPut(p, "\r\n");
+                      LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                   }
                 }
                 /* Guest breakpoints (PMBP_PATH). Loaded here rather than at WinMain entry
@@ -33718,10 +33718,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                           g_pmwatch_off = v[0];
                           if (col >= 2 && v[1] <= WOW_PMBASE_MAX)
                               g_pmwatch_seg = (unsigned)v[1];   /* 0 = already linear */
-                          p = zput(p, "PMWATCH: watching seg "); p = zhex(p, g_pmwatch_seg);
-                          p = zput(p, " + 0x"); p = zhex(p, g_pmwatch_off);
-                          p = zput(p, " for changes\r\n");
-                          log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                          p = LogPut(p, "PMWATCH: watching seg "); p = LogHex(p, g_pmwatch_seg);
+                          p = LogPut(p, " + 0x"); p = LogHex(p, g_pmwatch_off);
+                          p = LogPut(p, " for changes\r\n");
+                          LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                       }
                   }
                 }
@@ -33748,50 +33748,50 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      g_pm_watch[g_pm_nwatch++] = v; }
                           else ++k2;
                       }
-                      p = zput(p, "DPMI: pmwatch.txt -> ");
+                      p = LogPut(p, "DPMI: pmwatch.txt -> ");
                       { int wi; for (wi = 0; wi < g_pm_nwatch; ++wi) {
-                            p = zput(p, g_pm_watch_rel[wi] ? "codebase+0x" : "0x");
-                            p = zhex(p, g_pm_watch[wi]); p = zput(p, " "); } }
-                      p = zput(p, "\r\n");
-                      log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            p = LogPut(p, g_pm_watch_rel[wi] ? "codebase+0x" : "0x");
+                            p = LogHex(p, g_pm_watch[wi]); p = LogPut(p, " "); } }
+                      p = LogPut(p, "\r\n");
+                      LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                   } }
                 g_dpmi_use_kernel = (GetFileAttributesA(PMKERNEL_PATH) != INVALID_FILE_ATTRIBUTES);
                 if (g_dpmi_use_kernel) {
-                    p = zput(p, "DPMI: pmkernel.flag -- PM will run under VdmStartExecution\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    p = LogPut(p, "DPMI: pmkernel.flag -- PM will run under VdmStartExecution\r\n");
+                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 if (g_mouse_absent) {
-                    p = zput(p, "MOUSE: nomouse.flag -- INT 33h reports NO driver installed\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    p = LogPut(p, "MOUSE: nomouse.flag -- INT 33h reports NO driver installed\r\n");
+                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 g_SbAbsent = (GetFileAttributesA(NOSB_PATH) != INVALID_FILE_ATTRIBUTES);
                 g_OplAbsent = g_SbAbsent;      /* one knob, both devices unfitted */
                 if (g_SbAbsent) {
-                    p = zput(p, "SB: nosb.flag -- DSP reset will NOT answer; no Sound Blaster fitted\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    p = LogPut(p, "SB: nosb.flag -- DSP reset will NOT answer; no Sound Blaster fitted\r\n");
+                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 g_pm_veh_pass = (GetFileAttributesA(PMVEHPASS_PATH) != INVALID_FILE_ATTRIBUTES);
                 if (g_pm_veh_pass) {
-                    p = zput(p, "DPMI: pmvehpass.flag -- non-INT PM faults will NOT be swallowed by the VEH\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    p = LogPut(p, "DPMI: pmvehpass.flag -- non-INT PM faults will NOT be swallowed by the VEH\r\n");
+                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 g_pm_noirq = (GetFileAttributesA(PMNOIRQ_PATH) != INVALID_FILE_ATTRIBUTES);
                 if (g_pm_noirq) {
-                    p = zput(p, "DPMI: pmnoirq.flag present -- IRQ0->PM injection SUPPRESSED\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    p = LogPut(p, "DPMI: pmnoirq.flag present -- IRQ0->PM injection SUPPRESSED\r\n");
+                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 /* GH #18 (run 67): install the PM-fault reflect machinery, so a RAW (non-BOP)
                    PM #GP -- an SS-retype, HLT, or privileged op the INT->BOP scan cannot
                    pre-patch -- is reflected by the kernel to our handler (code sel : BOP) on a
                    scratch stack, instead of silently terminating the VDM (runs 20-34). */
                 dpmi_install_fault_trampoline();
-                p = zput(p, "DPMI: PM-fault reflect stkSel=0x"); p = zhex(p, g_dpmi_fault_sel);
-                p = zput(p, " codeSel=0x"); p = zhex(p, g_dpmi_flt_code_sel);
-                p = zput(p, " bop@code:0x"); p = zhex(p, DPMI_FAULT_COFF);
-                p = zput(p, " tbl@0x"); p = zhex(p, (DWORD)(ULONG_PTR)g_flt_tbl);
-                p = zput(p, " class="); p = zhex(p, DPMI_FLT_CLASS_GP);
-                p = zput(p, "\r\n");
-                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                p = LogPut(p, "DPMI: PM-fault reflect stkSel=0x"); p = LogHex(p, g_dpmi_fault_sel);
+                p = LogPut(p, " codeSel=0x"); p = LogHex(p, g_dpmi_flt_code_sel);
+                p = LogPut(p, " bop@code:0x"); p = LogHex(p, DPMI_FAULT_COFF);
+                p = LogPut(p, " tbl@0x"); p = LogHex(p, (DWORD)(ULONG_PTR)g_flt_tbl);
+                p = LogPut(p, " class="); p = LogHex(p, DPMI_FLT_CLASS_GP);
+                p = LogPut(p, "\r\n");
+                LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
 
                 /* --- DPMI protected-mode execution loop -----------------------------------
                    DpmiEnterProtectedMode runs the client in PM until it stops. Two stop kinds:
@@ -33811,8 +33811,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         InterlockedExchange(&g_close_req, 0);
                         g_close_forced = 1;
                         g_pm_client_exited = 1; g_pm_exit_code = 0;
-                        p = zput(p, "CLOSEPROG: ending the DPMI client (File > Close Program)\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        p = LogPut(p, "CLOSEPROG: ending the DPMI client (File > Close Program)\r\n");
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                     }
                     if (g_pm_client_exited) break;   /* exited inside a nested run -- see the flag */
                     /* Headless safety (session-9): an infinite visual demo (pm32irq/animate)
@@ -33823,11 +33823,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        marker) are unbounded, as before -- the user closes the window. */
                     if (g_headless && (steps & 0xFFF) == 0 && steps
                         && GetTickCount() - pm_start_tick > PM_HEADLESS_MS) {
-                        p = zput(p, "STAGE3-DPMI: headless time cap (");
-                        p = zhex(p, PM_HEADLESS_MS); p = zput(p, " ms) reached after 0x");
-                        p = zhex(p, (unsigned)steps);
-                        p = zput(p, " steps -> exiting (infinite/visual demo; watch it on the monitor)\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        p = LogPut(p, "STAGE3-DPMI: headless time cap (");
+                        p = LogHex(p, PM_HEADLESS_MS); p = LogPut(p, " ms) reached after 0x");
+                        p = LogHex(p, (unsigned)steps);
+                        p = LogPut(p, " steps -> exiting (infinite/visual demo; watch it on the monitor)\r\n");
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                         break;
                     }
                     /* ── HEARTBEAT FROM THE THREAD THAT IS DEMONSTRABLY ALIVE. (GH #128)
@@ -33859,16 +33859,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              had. A heartbeat that cannot say WHEN forces that reconstruction
                              every time, and only works while some other instrument happens
                              to be printing timestamps. */
-                        p = zput(p, "PMHB ms=0x");     p = zhex(p, GetTickCount());
-                        p = zput(p, " steps=0x");      p = zhex(p, (DWORD)steps);
-                        p = zput(p, " cs:eip=0x");     p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                        p = zput(p, ":0x");            p = zhex(p, dpmi_pm_eip(tib));
-                        p = zput(p, " lastev=0x");     p = zhex(p, g_dpmi_last_ev);
-                        p = zput(p, " lastvec=0x");    p = zhex(p, g_dpmi_last_vec);
-                        p = zput(p, " wow32{ok=0x");   p = zhex(p, g_wow32_serviced);
-                        p = zput(p, " decl=0x");       p = zhex(p, g_wow32_declined);
-                        p = zput(p, " unimpl=0x");     p = zhex(p, g_wow32_unimpl);
-                        p = zput(p, "}");
+                        p = LogPut(p, "PMHB ms=0x");     p = LogHex(p, GetTickCount());
+                        p = LogPut(p, " steps=0x");      p = LogHex(p, (DWORD)steps);
+                        p = LogPut(p, " cs:eip=0x");     p = LogHex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                        p = LogPut(p, ":0x");            p = LogHex(p, dpmi_pm_eip(tib));
+                        p = LogPut(p, " lastev=0x");     p = LogHex(p, g_dpmi_last_ev);
+                        p = LogPut(p, " lastvec=0x");    p = LogHex(p, g_dpmi_last_vec);
+                        p = LogPut(p, " wow32{ok=0x");   p = LogHex(p, g_wow32_serviced);
+                        p = LogPut(p, " decl=0x");       p = LogHex(p, g_wow32_declined);
+                        p = LogPut(p, " unimpl=0x");     p = LogHex(p, g_wow32_unimpl);
+                        p = LogPut(p, "}");
                         /* ── ★ THE COUNTERS THAT MATTER TO A CRASH MUST NOT LIVE ONLY IN THE
                              EXIT REPORT. (s72) The async why-histogram was printed at exit
                              and nowhere else -- so for a guest that is KILLED, which is the
@@ -33876,10 +33876,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              asked the user for a run whose whole purpose was to produce a
                              counter the run could not produce. Emit the three that bear on
                              the DPMI mode-switch race on every PM heartbeat instead. */
-                        p = zput(p, " why{simint_rm=0x"); p = zhex(p, g_async_why_hist[0][30]);
-                        p = zput(p, " hostcs=0x");        p = zhex(p, g_async_why_hist[0][14]);
-                        p = zput(p, " inflight=0x");      p = zhex(p, g_async_why_hist[0][10]);
-                        p = zput(p, "}");
+                        p = LogPut(p, " why{simint_rm=0x"); p = LogHex(p, g_async_why_hist[0][30]);
+                        p = LogPut(p, " hostcs=0x");        p = LogHex(p, g_async_why_hist[0][14]);
+                        p = LogPut(p, " inflight=0x");      p = LogHex(p, g_async_why_hist[0][10]);
+                        p = LogPut(p, "}");
                         /* ★ WHERE IS IT ABOUT TO GO, AND WHAT IS IT ABOUT TO RUN.
                              The resume point alone is not enough. When we hand the
                              guest back at one of our default PM stubs it is sitting on
@@ -33896,8 +33896,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             DWORD spv   = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
                             ULONG_PTR cp = (ULONG_PTR)(cbase + dpmi_pm_eip(tib));
                             ULONG_PTR sp2 = (ULONG_PTR)(sbase + spv);
-                            p = zput(p, " ss:sp=0x"); p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
-                            p = zput(p, ":0x");       p = zhex(p, spv);
+                            p = LogPut(p, " ss:sp=0x"); p = LogHex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+                            p = LogPut(p, ":0x");       p = LogHex(p, spv);
                             /* ⚠ THE SELECTOR BASE, because a breakpoint is a LINEAR
                                  address and guessing which copy of a module is the
                                  executing one is how three runs got spent. The bind
@@ -33906,31 +33906,31 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                  and breakpoints armed against the wrong copy arm
                                  SUCCESSFULLY (same bytes, real memory) and never fire.
                                  Print it rather than infer it. */
-                            p = zput(p, " csbase=0x"); p = zhex(p, cbase);
+                            p = LogPut(p, " csbase=0x"); p = LogHex(p, cbase);
                             if (cbase && mem_readable(cp, 8)) {
-                                p = zput(p, " code="); p = zdump(p, (const BYTE *)cp, 8);
+                                p = LogPut(p, " code="); p = LogDump(p, (const BYTE *)cp, 8);
                             }
                             if (sbase && mem_readable(sp2, 24)) {
                                 const BYTE *s = (const BYTE *)sp2;
                                 int w;
-                                p = zput(p, " iret->0x");
-                                p = zhex(p, (DWORD)(s[2] | (s[3] << 8)));   /* CS  */
-                                p = zput(p, ":0x");
-                                p = zhex(p, (DWORD)(s[0] | (s[1] << 8)));   /* IP  */
+                                p = LogPut(p, " iret->0x");
+                                p = LogHex(p, (DWORD)(s[2] | (s[3] << 8)));   /* CS  */
+                                p = LogPut(p, ":0x");
+                                p = LogHex(p, (DWORD)(s[0] | (s[1] << 8)));   /* IP  */
                                 /* ...and the frames ABOVE it. The IRET target turned out
                                    to be a bare `ret` (krnl386 chains INT 31h to us through
                                    an interrupt-style far call from a small helper, so the
                                    interesting address is one frame further up). Print the whole
                                    top of the
                                    stack rather than coming back for it a third time. */
-                                p = zput(p, " stk");
+                                p = LogPut(p, " stk");
                                 for (w = 0; w < 12; ++w) {
-                                    p = zput(p, " "); p = zhex(p, (DWORD)(s[w*2] | (s[w*2+1] << 8)));
+                                    p = LogPut(p, " "); p = LogHex(p, (DWORD)(s[w*2] | (s[w*2+1] << 8)));
                                 }
                             }
                         }
-                        p = zput(p, "\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        p = LogPut(p, "\r\n");
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                     }
                     /* run 52 heartbeat: publish where we're about to hand off + bump the
                        iteration counter BEFORE entering, so a watchdog sample taken while
@@ -33943,13 +33943,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        a #GP the kernel uses class 6, which reaches the generic reflect body. */
                     if (steps == 0) {
                         DWORD st714 = *(volatile DWORD *)(ULONG_PTR)0x714;
-                        p = zput(p, "GH#18: [0x714]=0x"); p = zhex(p, st714);
-                        p = zput(p, " bit3="); p = zhex(p, (st714 >> 3) & 1);
-                        p = zput(p, " bit4="); p = zhex(p, (st714 >> 4) & 1);
-                        p = zput(p, " bit14="); p = zhex(p, (st714 >> 14) & 1);
-                        p = zput(p, " tib8=0x"); p = zhex(p, *(volatile DWORD *)(tib + DPMI_TIB_FLTTBL));
-                        p = zput(p, "\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        p = LogPut(p, "GH#18: [0x714]=0x"); p = LogHex(p, st714);
+                        p = LogPut(p, " bit3="); p = LogHex(p, (st714 >> 3) & 1);
+                        p = LogPut(p, " bit4="); p = LogHex(p, (st714 >> 4) & 1);
+                        p = LogPut(p, " bit14="); p = LogHex(p, (st714 >> 14) & 1);
+                        p = LogPut(p, " tib8=0x"); p = LogHex(p, *(volatile DWORD *)(tib + DPMI_TIB_FLTTBL));
+                        p = LogPut(p, "\r\n");
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                     }
                     /* Timing in PM (polled): the host PIT (UI thread) raises IRQ0 at the 8254
                        rate; here we consume it and run the BIOS tick handler so 0040:006C and
@@ -34075,15 +34075,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             && (!done1 || g_keypm_logged < 8)) {
                             char kb2[176], *kq = kb2;
                             ++g_keypm_logged;
-                            kq = zput(kq, "KEYPM pend=");  kq = zhex(kq, (DWORD)g_irq1_pending);
-                            kq = zput(kq, " vi=");         kq = zhex(kq, (DWORD)vi);
-                            kq = zput(kq, " busy=");       kq = zhex(kq, (DWORD)busy);
-                            kq = zput(kq, " pic=");        kq = zhex(kq, (DWORD)pic);
-                            kq = zput(kq, " app32=");      kq = zhex(kq, (DWORD)app);
-                            kq = zput(kq, " done=");       kq = zhex(kq, (DWORD)done1);
-                            kq = zput(kq, " cs=0x");       kq = zhex(kq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                            kq = zput(kq, " scleft=");     kq = zhex(kq, (DWORD)VddInputScanCodesQueued(&g_in));
-                            kq = zput(kq, "\r\n"); log_append(LOG_PATH, kb2, kq); serial_out(kb2, kq);
+                            kq = LogPut(kq, "KEYPM pend=");  kq = LogHex(kq, (DWORD)g_irq1_pending);
+                            kq = LogPut(kq, " vi=");         kq = LogHex(kq, (DWORD)vi);
+                            kq = LogPut(kq, " busy=");       kq = LogHex(kq, (DWORD)busy);
+                            kq = LogPut(kq, " pic=");        kq = LogHex(kq, (DWORD)pic);
+                            kq = LogPut(kq, " app32=");      kq = LogHex(kq, (DWORD)app);
+                            kq = LogPut(kq, " done=");       kq = LogHex(kq, (DWORD)done1);
+                            kq = LogPut(kq, " cs=0x");       kq = LogHex(kq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                            kq = LogPut(kq, " scleft=");     kq = LogHex(kq, (DWORD)VddInputScanCodesQueued(&g_in));
+                            kq = LogPut(kq, "\r\n"); LogAppend(LOG_PATH, kb2, kq); serial_out(kb2, kq);
                         }
                     }
                     /* ── AND THE DEVICE LINES, WHICH HAD NO COOPERATIVE PATH EITHER. ─────
@@ -34193,13 +34193,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            thing that can tell a bad mode switch from a specific offending
                            instruction is knowing which instruction it was. Cheap: 4 iterations. */
                         DWORD cbase = dpmi_sel_base((WORD)g_dpmi_enter_cs);
-                        p = zput(p, "DPMI-CP["); p = zhex(p, (unsigned)steps);
-                        p = zput(p, "] pre-arm cs:eip=0x"); p = zhex(p, g_dpmi_enter_cs);
-                        p = zput(p, ":0x"); p = zhex(p, g_dpmi_enter_eip);
-                        p = zput(p, " csbase=0x"); p = zhex(p, cbase);
-                        p = zput(p, " ss:esp=0x"); p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
-                        p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_ESP));
-                        p = zput(p, " bytes@cs:eip=");
+                        p = LogPut(p, "DPMI-CP["); p = LogHex(p, (unsigned)steps);
+                        p = LogPut(p, "] pre-arm cs:eip=0x"); p = LogHex(p, g_dpmi_enter_cs);
+                        p = LogPut(p, ":0x"); p = LogHex(p, g_dpmi_enter_eip);
+                        p = LogPut(p, " csbase=0x"); p = LogHex(p, cbase);
+                        p = LogPut(p, " ss:esp=0x"); p = LogHex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+                        p = LogPut(p, ":0x"); p = LogHex(p, VDM_REG(tib, VTIB_ESP));
+                        p = LogPut(p, " bytes@cs:eip=");
                         /* GUARD THE INSTRUMENT -- with host_readable(), NOT IsBadReadPtr.
                            csbase+eip need not be readable from the host's flat address
                            space, and an unguarded read would fault in our own diagnostic
@@ -34207,10 +34207,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            the guard for that but IS the same bug wearing a coat: it faults
                            on purpose, and dpmi_crash_veh sees the fault first. */
                         { const BYTE *ib = (const BYTE *)(ULONG_PTR)(cbase + g_dpmi_enter_eip);
-                          if (!host_readable(ib, 16)) p = zput(p, "<unreadable from host>");
-                          else                        p = zdump(p, ib, 16); }
-                        p = zput(p, "\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                          if (!host_readable(ib, 16)) p = LogPut(p, "<unreadable from host>");
+                          else                        p = LogDump(p, ib, 16); }
+                        p = LogPut(p, "\r\n");
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                         /* ── WHERE DOES CONTROL GO NEXT? ────────────────────────────────
                            Session 17: Doom now clears every service it asks for and STILL
                            stops at the same instruction (0x0F:0x6644, a `xchg ax,cx / cbw /
@@ -34232,24 +34232,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                           DWORD sp = dpmi_sel_is32(ss) ? VDM_REG(tib, VTIB_ESP)
                                                        : (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
                           const BYTE *sk = (const BYTE *)(ULONG_PTR)(sb + sp);
-                          p = zput(p, "DPMI-CP["); p = zhex(p, (unsigned)steps);
-                          p = zput(p, "] regs EAX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX));
-                          p = zput(p, " EBX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX));
-                          p = zput(p, " ECX=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX));
-                          p = zput(p, " EDX=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX));
-                          p = zput(p, " ESI=0x"); p = zhex(p, VDM_REG(tib, VTIB_ESI));
-                          p = zput(p, " EDI=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDI));
-                          p = zput(p, " EBP=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBP));
-                          p = zput(p, " DS=0x"); p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
-                          p = zput(p, " ES=0x"); p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
-                          p = zput(p, " FS=0x"); p = zhex(p, VDM_REG(tib, VTIB_FS) & 0xFFFF);
-                          p = zput(p, " GS=0x"); p = zhex(p, VDM_REG(tib, VTIB_GS) & 0xFFFF);
-                          p = zput(p, " efl=0x"); p = zhex(p, VDM_REG(tib, VTIB_EFLAGS));
-                          p = zput(p, " ssbase=0x"); p = zhex(p, sb);
-                          p = zput(p, " sp=0x"); p = zhex(p, sp);
-                          p = zput(p, " stack@ss:sp=");
-                          if (!host_readable(sk, 32)) p = zput(p, "<unreadable from host>");
-                          else                        p = zdump(p, sk, 32);
+                          p = LogPut(p, "DPMI-CP["); p = LogHex(p, (unsigned)steps);
+                          p = LogPut(p, "] regs EAX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EAX));
+                          p = LogPut(p, " EBX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX));
+                          p = LogPut(p, " ECX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ECX));
+                          p = LogPut(p, " EDX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EDX));
+                          p = LogPut(p, " ESI=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ESI));
+                          p = LogPut(p, " EDI=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EDI));
+                          p = LogPut(p, " EBP=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBP));
+                          p = LogPut(p, " DS=0x"); p = LogHex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                          p = LogPut(p, " ES=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                          p = LogPut(p, " FS=0x"); p = LogHex(p, VDM_REG(tib, VTIB_FS) & 0xFFFF);
+                          p = LogPut(p, " GS=0x"); p = LogHex(p, VDM_REG(tib, VTIB_GS) & 0xFFFF);
+                          p = LogPut(p, " efl=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EFLAGS));
+                          p = LogPut(p, " ssbase=0x"); p = LogHex(p, sb);
+                          p = LogPut(p, " sp=0x"); p = LogHex(p, sp);
+                          p = LogPut(p, " stack@ss:sp=");
+                          if (!host_readable(sk, 32)) p = LogPut(p, "<unreadable from host>");
+                          else                        p = LogDump(p, sk, 32);
                           /* ── AND THE FRAME AT SS:BP ──────────────────────────────────
                              The client dies in DOS/4GW's HANDOFF to the application,
                              just past the last checkpoint: it loads its segment registers
@@ -34262,10 +34262,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              against the descriptor calls already in this log. */
                           { const BYTE *fr = (const BYTE *)(ULONG_PTR)
                                 (sb + (VDM_REG(tib, VTIB_EBP) & 0xFFFF));
-                            p = zput(p, " frame@ss:bp=");
-                            if (!host_readable(fr, 0x30)) p = zput(p, "<unreadable from host>");
+                            p = LogPut(p, " frame@ss:bp=");
+                            if (!host_readable(fr, 0x30)) p = LogPut(p, "<unreadable from host>");
                             else {
-                                p = zdump(p, fr, 0x30);
+                                p = LogDump(p, fr, 0x30);
                                 /* ► AND THE CODE IT IS ABOUT TO JUMP TO. This half IS
                                      DOS/4GW-frame-specific and says so: [bp+0x22]:[bp+0x1e]
                                      is the far entry the handoff's IRET takes (as observed
@@ -34284,20 +34284,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                   WORD fip = *(const WORD *)(fr + 0x1e);
                                   const BYTE *ep = (const BYTE *)(ULONG_PTR)
                                       (dpmi_sel_base(fcs) + fip);
-                                  p = zput(p, " entry=0x"); p = zhex(p, fcs);
-                                  p = zput(p, ":0x"); p = zhex(p, fip);
-                                  p = zput(p, " base=0x"); p = zhex(p, dpmi_sel_base(fcs));
-                                  p = zput(p, " code@entry=");
-                                  if (!host_readable(ep, 64)) p = zput(p, "<unreadable from host>");
-                                  else                        p = zdump(p, ep, 64); } } }
-                          p = zput(p, "\r\n");
-                          log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
+                                  p = LogPut(p, " entry=0x"); p = LogHex(p, fcs);
+                                  p = LogPut(p, ":0x"); p = LogHex(p, fip);
+                                  p = LogPut(p, " base=0x"); p = LogHex(p, dpmi_sel_base(fcs));
+                                  p = LogPut(p, " code@entry=");
+                                  if (!host_readable(ep, 64)) p = LogPut(p, "<unreadable from host>");
+                                  else                        p = LogDump(p, ep, 64); } } }
+                          p = LogPut(p, "\r\n");
+                          LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base; }
                     }
                     dpmi_arm_fault_trampoline(tib, 0);   /* re-arm nest/flag/[0x638]/[TIB+8] */
                     if (steps < g_dpmi_cp_max) {
-                        p = zput(p, "DPMI-CP["); p = zhex(p, (unsigned)steps);
-                        p = zput(p, "] armed -> entering PM\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        p = LogPut(p, "DPMI-CP["); p = LogHex(p, (unsigned)steps);
+                        p = LogPut(p, "] armed -> entering PM\r\n");
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                     }
                     /* Give the watchdog a guaranteed turn before the FIRST entry only. If it
                        has logged a sample by the time we hand off, then its silence afterwards
@@ -34357,29 +34357,29 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             VDM_REG(tib, VTIB_ESP) &= 0xFFFFu;
                         if (steps < 400) {      /* BEFORE the call: an entry that never
                                                   returns leaves no other trace at all */
-                            p = zput(p, "PMKERNEL[");   p = zhex(p, (unsigned)steps);
-                            p = zput(p, "] enter cs:eip=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                            p = zput(p, ":0x");         p = zhex(p, VDM_REG(tib, VTIB_EIP));
-                            p = zput(p, " ss:esp=0x");  p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
-                            p = zput(p, ":0x");         p = zhex(p, VDM_REG(tib, VTIB_ESP));
-                            p = zput(p, " efl=0x");     p = zhex(p, VDM_REG(tib, VTIB_EFLAGS));
-                            p = zput(p, " msw=0x");     p = zhex(p, *(volatile WORD *)(tib + VTIB_MSW));
-                            p = zput(p, " [0x714]=0x"); p = zhex(p, *(volatile DWORD *)(ULONG_PTR)0x714);
-                            p = zput(p, "\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            p = LogPut(p, "PMKERNEL[");   p = LogHex(p, (unsigned)steps);
+                            p = LogPut(p, "] enter cs:eip=0x"); p = LogHex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                            p = LogPut(p, ":0x");         p = LogHex(p, VDM_REG(tib, VTIB_EIP));
+                            p = LogPut(p, " ss:esp=0x");  p = LogHex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+                            p = LogPut(p, ":0x");         p = LogHex(p, VDM_REG(tib, VTIB_ESP));
+                            p = LogPut(p, " efl=0x");     p = LogHex(p, VDM_REG(tib, VTIB_EFLAGS));
+                            p = LogPut(p, " msw=0x");     p = LogHex(p, *(volatile WORD *)(tib + VTIB_MSW));
+                            p = LogPut(p, " [0x714]=0x"); p = LogHex(p, *(volatile DWORD *)(ULONG_PTR)0x714);
+                            p = LogPut(p, "\r\n");
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                         }
                         g_pm_entry_eip = (LONG)VDM_REG(tib, VTIB_EIP);
                         kev = VdmRunGuest(tib, &kst);
                         g_pm_entry_eip = -1;
                         if (steps < 400) {
-                            p = zput(p, "PMKERNEL[");     p = zhex(p, (unsigned)steps);
-                            p = zput(p, "] VdmStartExecution -> st=0x"); p = zhex(p, (DWORD)kst);
-                            p = zput(p, " ev=0x");        p = zhex(p, kev);
-                            p = zput(p, " cs:eip=0x");    p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                            p = zput(p, ":0x");           p = zhex(p, VDM_REG(tib, VTIB_EIP));
-                            p = zput(p, " efl=0x");       p = zhex(p, VDM_REG(tib, VTIB_EFLAGS));
-                            p = zput(p, "\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            p = LogPut(p, "PMKERNEL[");     p = LogHex(p, (unsigned)steps);
+                            p = LogPut(p, "] VdmStartExecution -> st=0x"); p = LogHex(p, (DWORD)kst);
+                            p = LogPut(p, " ev=0x");        p = LogHex(p, kev);
+                            p = LogPut(p, " cs:eip=0x");    p = LogHex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                            p = LogPut(p, ":0x");           p = LogHex(p, VDM_REG(tib, VTIB_EIP));
+                            p = LogPut(p, " efl=0x");       p = LogHex(p, VDM_REG(tib, VTIB_EFLAGS));
+                            p = LogPut(p, "\r\n");
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                         }
                     } else {
                         /* ── HOW LONG DOES THE GUEST RUN WITHOUT GIVING US A TURN? ───────
@@ -34426,18 +34426,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             if (us > g_pm_stretch_max_us) {
                                 g_pm_stretch_max_us = us;
                                 if (us >= PM_STRETCH_LOG_US && g_pm_stretch_logged++ < 256) {
-                                    p = zput(p, "PMSTRETCH us="); p = zhex(p, us);
-                                    p = zput(p, " entry=0x"); p = zhex(p, s_cs);
-                                    p = zput(p, ":0x"); p = zhex(p, s_eip);
-                                    p = zput(p, " lin=0x");
-                                    p = zhex(p, dpmi_sel_base((WORD)s_cs) + s_eip);
-                                    p = zput(p, " exit=0x");
-                                    p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                                    p = zput(p, ":0x"); p = zhex(p, dpmi_pm_eip(tib));
-                                    p = zput(p, " ev=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT));
-                                    p = zput(p, " ms="); p = zhex(p, GetTickCount());
-                                    p = zput(p, "\r\n");
-                                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                    p = LogPut(p, "PMSTRETCH us="); p = LogHex(p, us);
+                                    p = LogPut(p, " entry=0x"); p = LogHex(p, s_cs);
+                                    p = LogPut(p, ":0x"); p = LogHex(p, s_eip);
+                                    p = LogPut(p, " lin=0x");
+                                    p = LogHex(p, dpmi_sel_base((WORD)s_cs) + s_eip);
+                                    p = LogPut(p, " exit=0x");
+                                    p = LogHex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                                    p = LogPut(p, ":0x"); p = LogHex(p, dpmi_pm_eip(tib));
+                                    p = LogPut(p, " ev=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EVENT));
+                                    p = LogPut(p, " ms="); p = LogHex(p, GetTickCount());
+                                    p = LogPut(p, "\r\n");
+                                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                                 }
                             }
                         }
@@ -34445,12 +34445,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     exec_leave_mark();   /* ...and stops. Our servicing is not its   */
                     InterlockedExchange(&g_in_exec, 0);
                     if (steps < g_dpmi_cp_max) {
-                        p = zput(p, "DPMI-CP["); p = zhex(p, (unsigned)steps);
-                        p = zput(p, "] returned ev=0x"); p = zhex(p, VDM_REG(tib, VTIB_EVENT));
-                        p = zput(p, " cs:eip=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                        p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-                        p = zput(p, "\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        p = LogPut(p, "DPMI-CP["); p = LogHex(p, (unsigned)steps);
+                        p = LogPut(p, "] returned ev=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EVENT));
+                        p = LogPut(p, " cs:eip=0x"); p = LogHex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                        p = LogPut(p, ":0x"); p = LogHex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+                        p = LogPut(p, "\r\n");
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                     }
                     ev  = VDM_REG(tib, VTIB_EVENT);
                     eip = dpmi_pm_eip(tib);
@@ -34532,12 +34532,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                           }
                           g_coop_dma_polls += g_dma.ChannelCountReads[1] - preb;
                           { char bb[160], *bq = bb;
-                            bq = zput(bq, "  BATCH gate="); bq = zhex(bq, (DWORD)gate);
-                            bq = zput(bq, " k="); bq = zhex(bq, (DWORD)k);
-                            bq = zput(bq, " c32="); bq = zhex(bq, (DWORD)g_DpmiIsClient32);
-                            bq = zput(bq, " hooked="); bq = zhex(bq, (DWORD)g_pm_app_hooked_timer);
-                            bq = zput(bq, " cs=0x"); bq = zhex(bq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                            bq = zput(bq, "\r\n"); log_append(LOG_PATH, bb, bq); serial_out(bb, bq); } }
+                            bq = LogPut(bq, "  BATCH gate="); bq = LogHex(bq, (DWORD)gate);
+                            bq = LogPut(bq, " k="); bq = LogHex(bq, (DWORD)k);
+                            bq = LogPut(bq, " c32="); bq = LogHex(bq, (DWORD)g_DpmiIsClient32);
+                            bq = LogPut(bq, " hooked="); bq = LogHex(bq, (DWORD)g_pm_app_hooked_timer);
+                            bq = LogPut(bq, " cs=0x"); bq = LogHex(bq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                            bq = LogPut(bq, "\r\n"); LogAppend(LOG_PATH, bb, bq); serial_out(bb, bq); } }
                         continue;
                     }
                     /* GH#18 (bare-metal crack, 2026-08-18): dpmi_enter.S reports event 3 when it
@@ -34555,12 +34555,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     if (ev == 3) {
                         if (++ev3_retries <= 0x10000) {
                             if (ev3_retries <= 3) {
-                                p = zput(p, "GH#18: event3 pending-int guard at CS:EIP=0x");
-                                p = zhex(p, csv); p = zput(p, ":0x"); p = zhex(p, eip);
-                                p = zput(p, " [0x714]=0x");
-                                p = zhex(p, *(volatile DWORD *)(ULONG_PTR)0x714);
-                                p = zput(p, " -> clear stale pending + re-enter\r\n");
-                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                p = LogPut(p, "GH#18: event3 pending-int guard at CS:EIP=0x");
+                                p = LogHex(p, csv); p = LogPut(p, ":0x"); p = LogHex(p, eip);
+                                p = LogPut(p, " [0x714]=0x");
+                                p = LogHex(p, *(volatile DWORD *)(ULONG_PTR)0x714);
+                                p = LogPut(p, " -> clear stale pending + re-enter\r\n");
+                                LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             }
                             *(volatile DWORD *)(ULONG_PTR)0x714 &= ~3u;
                             continue;
@@ -34593,13 +34593,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              the slots are calibrated against a fault at a KNOWN address --
                              pmfault's HLT/INT3 cannot do it (they die without reflecting),
                              so that needs a new variant that loads a bad selector. */
-                        p = zput(p, "GH#18: PM-FAULT REFLECTED class=");
-                        if (fclass < 0) p = zput(p, "SHARED-SITE");
-                        else            p = zhex(p, (DWORD)fclass);
-                        p = zput(p, " -- savSS:savESP=0x");
-                        p = zhex(p, fcs); p = zput(p, ":0x"); p = zhex(p, feip);
-                        p = zput(p, " (MISNAMED VTIB_FLT_SAVCS/SAVEIP) sav3=0x"); p = zhex(p, fss3);
-                        p = zput(p, " nest=0x"); p = zhex(p, *(volatile WORD *)(tib + VTIB_FLT_NEST));
+                        p = LogPut(p, "GH#18: PM-FAULT REFLECTED class=");
+                        if (fclass < 0) p = LogPut(p, "SHARED-SITE");
+                        else            p = LogHex(p, (DWORD)fclass);
+                        p = LogPut(p, " -- savSS:savESP=0x");
+                        p = LogHex(p, fcs); p = LogPut(p, ":0x"); p = LogHex(p, feip);
+                        p = LogPut(p, " (MISNAMED VTIB_FLT_SAVCS/SAVEIP) sav3=0x"); p = LogHex(p, fss3);
+                        p = LogPut(p, " nest=0x"); p = LogHex(p, *(volatile WORD *)(tib + VTIB_FLT_NEST));
                         /* ── ★ THE KERNEL BUILDS A FRAME AND WE HAVE NEVER LOOKED AT IT. ──
                              The reflect sets SS:ESP = [TIB+0x638]:0x1000 and then PUSHES:
                              session 33's run came out of it with liveESP = ...0x0fd0, i.e.
@@ -34618,16 +34618,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         { DWORD stkb = (DWORD)(ULONG_PTR)g_flt_stack;
                           const volatile DWORD *fr = (const volatile DWORD *)(ULONG_PTR)(stkb + 0x0FC0);
                           int fi;
-                          p = zput(p, "\r\n  FLTSTK sel=0x"); p = zhex(p, g_dpmi_fault_sel);
-                          p = zput(p, " lin=0x"); p = zhex(p, stkb);
-                          p = zput(p, " top=0x1000 espNOW=0x");
-                          p = zhex(p, VDM_REG(tib, VTIB_ESP));
-                          if (!host_readable((const void *)fr, 0x40)) p = zput(p, " <unreadable>");
+                          p = LogPut(p, "\r\n  FLTSTK sel=0x"); p = LogHex(p, g_dpmi_fault_sel);
+                          p = LogPut(p, " lin=0x"); p = LogHex(p, stkb);
+                          p = LogPut(p, " top=0x1000 espNOW=0x");
+                          p = LogHex(p, VDM_REG(tib, VTIB_ESP));
+                          if (!host_readable((const void *)fr, 0x40)) p = LogPut(p, " <unreadable>");
                           else for (fi = 0; fi < 16; ++fi) {
-                              p = zput(p, "\r\n    +0x"); p = zhex(p, 0x0FC0 + fi * 4);
-                              p = zput(p, " = 0x"); p = zhex(p, fr[fi]);
+                              p = LogPut(p, "\r\n    +0x"); p = LogHex(p, 0x0FC0 + fi * 4);
+                              p = LogPut(p, " = 0x"); p = LogHex(p, fr[fi]);
                           }
-                          p = zput(p, "\r\n "); }
+                          p = LogPut(p, "\r\n "); }
                         /* ► READ THE LAYOUT OFF THE TIB INSTEAD OF TRUSTING THE OFFSETS.
                              VTIB_FLT_SAVCS/SAVEIP were reverse-engineered in an earlier
                              session, and what they return does not look like a code
@@ -34637,14 +34637,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              real slots can be identified by looking for the KNOWN CS and a
                              plausible EIP, rather than by guessing a frame shape. */
                         { const BYTE *fw = (const BYTE *)(ULONG_PTR)(tib + 0x630);
-                          p = zput(p, " tib[630..64f]=");
-                          if (!host_readable(fw, 0x20)) p = zput(p, "<unreadable>");
-                          else                          p = zdump(p, fw, 0x20); }
-                        p = zput(p, " liveCS=0x"); p = zhex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                        p = zput(p, " liveSS=0x"); p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
-                        p = zput(p, " liveESP=0x"); p = zhex(p, VDM_REG(tib, VTIB_ESP));
-                        p = zput(p, " -- REAL-CPU PM fault reflect WORKS\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                          p = LogPut(p, " tib[630..64f]=");
+                          if (!host_readable(fw, 0x20)) p = LogPut(p, "<unreadable>");
+                          else                          p = LogDump(p, fw, 0x20); }
+                        p = LogPut(p, " liveCS=0x"); p = LogHex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+                        p = LogPut(p, " liveSS=0x"); p = LogHex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+                        p = LogPut(p, " liveESP=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ESP));
+                        p = LogPut(p, " -- REAL-CPU PM fault reflect WORKS\r\n");
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                         /* ── ★★ DELIVER IT TO THE CLIENT'S INT 31h 0203 HANDLER. ────────────
                              This `break` used to end the run here, which is why "DOS/4GW quits
                              on a command-line argument": ANY real PM fault produced a tidy
@@ -34804,30 +34804,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     if (!glin && !g_flt32_warned) {
                                         char wb[288], *wq = wb;
                                         g_flt32_warned = 1;
-                                        wq = zput(wq, "  EXC: #GP(IDT) vec=0x"); wq = zhex(wq, gvec);
-                                        wq = zput(wq, " in a FLAT base-0 32-bit CS 0x");
-                                        wq = zhex(wq, fr[4]);
-                                        wq = zput(wq, ": NT's frame is 16-bit so the EIP arrived"
-                                                      " truncated (0x"); wq = zhex(wq, fr[3]);
-                                        wq = zput(wq, "); TIB sav3=0x"); wq = zhex(wq, fss3);
-                                        wq = zput(wq, " does not hold CD "); wq = zhexb(wq, (unsigned)gvec);
-                                        wq = zput(wq, ", and reconstruction from the client's"
-                                                      " 0501 blocks found "); wq = zhex(wq, (DWORD)gcand);
-                                        wq = zput(wq, " candidates -- need exactly 1. Reflecting instead.\r\n");
-                                        log_append(LOG_PATH, wb, wq); serial_out(wb, wq);
+                                        wq = LogPut(wq, "  EXC: #GP(IDT) vec=0x"); wq = LogHex(wq, gvec);
+                                        wq = LogPut(wq, " in a FLAT base-0 32-bit CS 0x");
+                                        wq = LogHex(wq, fr[4]);
+                                        wq = LogPut(wq, ": NT's frame is 16-bit so the EIP arrived"
+                                                      " truncated (0x"); wq = LogHex(wq, fr[3]);
+                                        wq = LogPut(wq, "); TIB sav3=0x"); wq = LogHex(wq, fss3);
+                                        wq = LogPut(wq, " does not hold CD "); wq = LogHexByte(wq, (unsigned)gvec);
+                                        wq = LogPut(wq, ", and reconstruction from the client's"
+                                                      " 0501 blocks found "); wq = LogHex(wq, (DWORD)gcand);
+                                        wq = LogPut(wq, " candidates -- need exactly 1. Reflecting instead.\r\n");
+                                        LogAppend(LOG_PATH, wb, wq); serial_out(wb, wq);
                                     }
                                 }
                                 if (gss32 && !gespok && !g_flt32_warned) {
                                     char wb[224], *wq = wb;
                                     g_flt32_warned = 1;
-                                    wq = zput(wq, "  EXC: #GP(IDT) vec=0x"); wq = zhex(wq, gvec);
-                                    wq = zput(wq, " with a 32-bit SS 0x"); wq = zhex(wq, fr[7]);
-                                    wq = zput(wq, ": TIB savSS:savESP=0x"); wq = zhex(wq, fcs);
-                                    wq = zput(wq, ":0x"); wq = zhex(wq, feip);
-                                    wq = zput(wq, " does not match the frame's 0x"); wq = zhex(wq, fr[7]);
-                                    wq = zput(wq, ":0x"); wq = zhex(wq, fr[6]);
-                                    wq = zput(wq, " -- cannot restore a full ESP. Reflecting instead.\r\n");
-                                    log_append(LOG_PATH, wb, wq); serial_out(wb, wq);
+                                    wq = LogPut(wq, "  EXC: #GP(IDT) vec=0x"); wq = LogHex(wq, gvec);
+                                    wq = LogPut(wq, " with a 32-bit SS 0x"); wq = LogHex(wq, fr[7]);
+                                    wq = LogPut(wq, ": TIB savSS:savESP=0x"); wq = LogHex(wq, fcs);
+                                    wq = LogPut(wq, ":0x"); wq = LogHex(wq, feip);
+                                    wq = LogPut(wq, " does not match the frame's 0x"); wq = LogHex(wq, fr[7]);
+                                    wq = LogPut(wq, ":0x"); wq = LogHex(wq, fr[6]);
+                                    wq = LogPut(wq, " -- cannot restore a full ESP. Reflecting instead.\r\n");
+                                    LogAppend(LOG_PATH, wb, wq); serial_out(wb, wq);
                                 }
                                 if (gpresent && glin && gespok
                                     && host_readable((const void *)gi, 2)
@@ -34854,38 +34854,38 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     int grc;
                                     int fpr = (gvec >= 0x34 && gvec <= 0x3F);
                                     int fpref = fpr && g_pm_int[gvec].client;
-                                    p = zput(p, "  EXC: #GP(IDT) is a RAW INT 0x"); p = zhex(p, gvec);
-                                    p = zput(p, " at 0x"); p = zhex(p, fr[4]);
-                                    p = zput(p, ":0x"); p = zhex(p, fr[3]);
-                                    p = zput(p, " lin=0x"); p = zhex(p, glin);
+                                    p = LogPut(p, "  EXC: #GP(IDT) is a RAW INT 0x"); p = LogHex(p, gvec);
+                                    p = LogPut(p, " at 0x"); p = LogHex(p, fr[4]);
+                                    p = LogPut(p, ":0x"); p = LogHex(p, fr[3]);
+                                    p = LogPut(p, " lin=0x"); p = LogHex(p, glin);
                                     if (gtrunc) {
-                                        p = zput(p, gsrc == 1 ? " (flat base-0 CS: EIP from TIB sav3,"
+                                        p = LogPut(p, gsrc == 1 ? " (flat base-0 CS: EIP from TIB sav3,"
                                                                 " blocks cross-check "
                                                               : " (flat base-0 CS: EIP RECONSTRUCTED"
                                                                 " from blocks, TIB sav3=0x");
                                         if (gsrc == 1) {
-                                            if (!grec)             { p = zput(p, "ambiguous n="); p = zhex(p, (DWORD)gcand); }
-                                            else if (grec == glin)   p = zput(p, "AGREE");
-                                            else                   { p = zput(p, "DISAGREE 0x"); p = zhex(p, grec); }
-                                        } else p = zhex(p, fss3);
-                                        p = zput(p, ")");
+                                            if (!grec)             { p = LogPut(p, "ambiguous n="); p = LogHex(p, (DWORD)gcand); }
+                                            else if (grec == glin)   p = LogPut(p, "AGREE");
+                                            else                   { p = LogPut(p, "DISAGREE 0x"); p = LogHex(p, grec); }
+                                        } else p = LogHex(p, fss3);
+                                        p = LogPut(p, ")");
                                     }
                                     if (gss32) {
-                                        p = zput(p, " SS32 esp=0x"); p = zhex(p, feip);
-                                        if ((feip & 0xFFFFu) != fr[6]) p = zput(p, " ⚠ slot/frame DISAGREE");
+                                        p = LogPut(p, " SS32 esp=0x"); p = LogHex(p, feip);
+                                        if ((feip & 0xFFFFu) != fr[6]) p = LogPut(p, " ⚠ slot/frame DISAGREE");
                                     }
                                     if (fpref) {
-                                        p = zput(p, " -- FP EMULATOR RANGE: reflecting to the"
+                                        p = LogPut(p, " -- FP EMULATOR RANGE: reflecting to the"
                                                     " handler the guest installed, 0x");
-                                        p = zhex(p, g_pm_int[gvec].sel);
-                                        p = zput(p, ":0x"); p = zhex(p, g_pm_int[gvec].off);
-                                        p = zput(p, " (not patched, not serviced)\r\n");
+                                        p = LogHex(p, g_pm_int[gvec].sel);
+                                        p = LogPut(p, ":0x"); p = LogHex(p, g_pm_int[gvec].off);
+                                        p = LogPut(p, " (not patched, not serviced)\r\n");
                                     } else {
-                                        p = zput(p, fpr ? " -- FP EMULATOR RANGE but NO handler"
+                                        p = LogPut(p, fpr ? " -- FP EMULATOR RANGE but NO handler"
                                                           " installed; servicing without patching\r\n"
                                                         : " -- servicing + patching\r\n");
                                     }
-                                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                                     /* put the guest back where it faulted, EIP ON the INT.
                                        ⚠ For the flat base-0 case the frame's IP is TRUNCATED, so
                                          resume on the full linear address (TIB slot, or the block
@@ -34963,24 +34963,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                  the log. */
                             if (g_wow_psp_n) {
                                 int z;
-                                p = zput(p, "  PSPENV:");
+                                p = LogPut(p, "  PSPENV:");
                                 for (z = 0; z < g_wow_psp_n; ++z) {
                                     const volatile BYTE *pe = (const volatile BYTE *)
                                         (ULONG_PTR)dpmi_sel_base(g_wow_psp_sel[z]);
-                                    p = zput(p, " sel 0x"); p = zhex(p, g_wow_psp_sel[z]);
-                                    p = zput(p, "->+0x2c=0x");
+                                    p = LogPut(p, " sel 0x"); p = LogHex(p, g_wow_psp_sel[z]);
+                                    p = LogPut(p, "->+0x2c=0x");
                                     if (host_readable((const void *)pe, 0x2e))
-                                        p = zhex(p, (DWORD)(pe[0x2c] | (pe[0x2d] << 8)));
-                                    else p = zput(p, "??unreadable");
+                                        p = LogHex(p, (DWORD)(pe[0x2c] | (pe[0x2d] << 8)));
+                                    else p = LogPut(p, "??unreadable");
                                 }
-                                p = zput(p, "\r\n");
+                                p = LogPut(p, "\r\n");
                             }
                             int wsc = g_wowsched_on ? ws_pick(0) : -1;
                             if (wsc >= 0 && wowsched_curtask() == 0) {
-                                p = zput(p, "  WOWSCHED: [0x228]==0 -- the creator retired "
+                                p = LogPut(p, "  WOWSCHED: [0x228]==0 -- the creator retired "
                                             "and task 0x");
-                                p = zhex(p, g_ws_slots[wsc].Task);
-                                p = zput(p, " is parked. Resuming it INSTEAD of reflecting this "
+                                p = LogHex(p, g_ws_slots[wsc].Task);
+                                p = LogPut(p, " is parked. Resuming it INSTEAD of reflecting this "
                                             "fault; the creator's remaining teardown is "
                                             "ABANDONED (selectors leak).\r\n");
                                 /* ★ VERIFY THE LAUNCH RESULT WE INVENTED AT (A). By now
@@ -34995,12 +34995,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                         const volatile BYTE *t =
                                             (const volatile BYTE *)(ULONG_PTR)tb;
                                         WORD h = (WORD)(t[0x1c] | (t[0x1d] << 8));
-                                        p = zput(p, "  WOWSCHED: TDB+0x1c now reads 0x");
-                                        p = zhex(p, h);
-                                        p = zput(p, " (0 = InitTask has not run yet)\r\n");
+                                        p = LogPut(p, "  WOWSCHED: TDB+0x1c now reads 0x");
+                                        p = LogHex(p, h);
+                                        p = LogPut(p, " (0 = InitTask has not run yet)\r\n");
                                     }
                                 }
-                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                                 WowSchedPoke(g_ws_slots[wsc].ModeLinear, WOW32_MODE_ORDINARY);
                                 {   WORD to = g_ws_slots[wsc].Task;
                                     int crb = ws_toplevel(&g_ws_slots[wsc]);
@@ -35023,13 +35023,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 continue;
                             }
                             if (exc < 0 || exc > 0x1F) {
-                                p = zput(p, "  EXC: no class (shared site) -- cannot name the "
+                                p = LogPut(p, "  EXC: no class (shared site) -- cannot name the "
                                             "exception, stopping\r\n");
                             } else if (!host_readable((const void *)fr, 0x10)) {
-                                p = zput(p, "  EXC: frame at SS:SP is not readable, stopping\r\n");
+                                p = LogPut(p, "  EXC: frame at SS:SP is not readable, stopping\r\n");
                             } else if (!g_pm_exc[exc].set) {
-                                p = zput(p, "  EXC: exception 0x"); p = zhex(p, (DWORD)exc);
-                                p = zput(p, " has NO client handler (INT 31h 0203 never called "
+                                p = LogPut(p, "  EXC: exception 0x"); p = LogHex(p, (DWORD)exc);
+                                p = LogPut(p, " has NO client handler (INT 31h 0203 never called "
                                             "for it) -- stopping rather than guessing\r\n");
                             } else {
                                 /* ── ★★★★★ THE EXCEPTION FRAME'S WIDTH FOLLOWS THE CLIENT'S
@@ -35079,9 +35079,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                         VDM_REG(tib, VTIB_ESP) =
                                             (VDM_REG(tib, VTIB_ESP) & 0xFFFF0000u) | nsp;
                                     } else {
-                                        p = zput(p, "  EXC: !! 32-bit frame site unreadable at 0x");
-                                        p = zhex(p, sb + nsp);
-                                        p = zput(p, " -- delivering the KERNEL'S 16-bit frame, which"
+                                        p = LogPut(p, "  EXC: !! 32-bit frame site unreadable at 0x");
+                                        p = LogHex(p, sb + nsp);
+                                        p = LogPut(p, " -- delivering the KERNEL'S 16-bit frame, which"
                                                     " a 32-bit client will misread\r\n");
                                         fr[0] = (WORD)DPMI_FLTRET_COFF;
                                         fr[1] = g_dpmi_flt_code_sel;
@@ -35092,17 +35092,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 }
                                 VDM_SET16(tib, VTIB_CS,  g_pm_exc[exc].sel);
                                 VDM_REG(tib, VTIB_EIP) = g_pm_exc[exc].off;
-                                p = zput(p, "  EXC: -> client handler for 0x"); p = zhex(p, (DWORD)exc);
-                                p = zput(p, " at 0x"); p = zhex(p, g_pm_exc[exc].sel);
-                                p = zput(p, ":0x"); p = zhex(p, g_pm_exc[exc].off);
-                                p = zput(p, " frame{err=0x"); p = zhex(p, fr[2]);
-                                p = zput(p, " cs:ip=0x"); p = zhex(p, fr[4]);
-                                p = zput(p, ":0x"); p = zhex(p, fr[3]);
-                                p = zput(p, " fl=0x"); p = zhex(p, fr[5]);
-                                p = zput(p, " ss:sp=0x"); p = zhex(p, fr[7]);
-                                p = zput(p, ":0x"); p = zhex(p, fr[6]);
-                                p = zput(p, "} retf-> 0x"); p = zhex(p, g_dpmi_flt_code_sel);
-                                p = zput(p, ":0x"); p = zhex(p, (DWORD)DPMI_FLTRET_COFF);
+                                p = LogPut(p, "  EXC: -> client handler for 0x"); p = LogHex(p, (DWORD)exc);
+                                p = LogPut(p, " at 0x"); p = LogHex(p, g_pm_exc[exc].sel);
+                                p = LogPut(p, ":0x"); p = LogHex(p, g_pm_exc[exc].off);
+                                p = LogPut(p, " frame{err=0x"); p = LogHex(p, fr[2]);
+                                p = LogPut(p, " cs:ip=0x"); p = LogHex(p, fr[4]);
+                                p = LogPut(p, ":0x"); p = LogHex(p, fr[3]);
+                                p = LogPut(p, " fl=0x"); p = LogHex(p, fr[5]);
+                                p = LogPut(p, " ss:sp=0x"); p = LogHex(p, fr[7]);
+                                p = LogPut(p, ":0x"); p = LogHex(p, fr[6]);
+                                p = LogPut(p, "} retf-> 0x"); p = LogHex(p, g_dpmi_flt_code_sel);
+                                p = LogPut(p, ":0x"); p = LogHex(p, (DWORD)DPMI_FLTRET_COFF);
                                 /* ── ★ WHAT THE FAULTING INSTRUCTION WAS LOOKING AT. ─────
                                      The frame says WHERE it faulted; on a #GP that is half
                                      the question, because the other half is always "which
@@ -35114,24 +35114,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      and DS/ES alone (only CS/SS/ESP move), so this is free.
                                      Print the bytes at the fault too: a fault you can decode
                                      is a fault you can attribute without a second run. */
-                                p = zput(p, "\r\n       fault regs: eax=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX));
-                                p = zput(p, " ebx=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX));
-                                p = zput(p, " ecx=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX));
-                                p = zput(p, " edx=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX));
-                                p = zput(p, " esi=0x"); p = zhex(p, VDM_REG(tib, VTIB_ESI));
-                                p = zput(p, " edi=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDI));
-                                p = zput(p, " ebp=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBP));
+                                p = LogPut(p, "\r\n       fault regs: eax=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EAX));
+                                p = LogPut(p, " ebx=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX));
+                                p = LogPut(p, " ecx=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ECX));
+                                p = LogPut(p, " edx=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EDX));
+                                p = LogPut(p, " esi=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ESI));
+                                p = LogPut(p, " edi=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EDI));
+                                p = LogPut(p, " ebp=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBP));
                                 { WORD sels[2]; const char *nm[2] = { " ds", " es" }; int si2;
                                   sels[0] = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
                                   sels[1] = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF);
                                   for (si2 = 0; si2 < 2; ++si2) {
                                       uint32_t ar = 0, lim = 0;
-                                      p = zput(p, nm[si2]); p = zput(p, "=0x"); p = zhex(p, sels[si2]);
+                                      p = LogPut(p, nm[si2]); p = LogPut(p, "=0x"); p = LogHex(p, sels[si2]);
                                       if (dpmi_sel_desc(sels[si2], &ar, &lim)) {
-                                          p = zput(p, "{base=0x"); p = zhex(p, dpmi_sel_base(sels[si2]));
-                                          p = zput(p, " lim=0x"); p = zhex(p, lim);
-                                          p = zput(p, " ar=0x"); p = zhex(p, ar); p = zput(p, "}");
-                                      } else p = zput(p, "{NO DESCRIPTOR}");
+                                          p = LogPut(p, "{base=0x"); p = LogHex(p, dpmi_sel_base(sels[si2]));
+                                          p = LogPut(p, " lim=0x"); p = LogHex(p, lim);
+                                          p = LogPut(p, " ar=0x"); p = LogHex(p, ar); p = LogPut(p, "}");
+                                      } else p = LogPut(p, "{NO DESCRIPTOR}");
                                   } }
                                 /* ── AND WHAT ES POINTS AT. On a #GP through a selector,
                                      the object is the evidence. Session 34's fault reads
@@ -35142,10 +35142,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      the bytes. 0x40 of them is the whole NE header. */
                                 { DWORD eb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF));
                                   const volatile BYTE *eo = (const volatile BYTE *)(ULONG_PTR)eb;
-                                  p = zput(p, "\r\n       @es:0000 = ");
+                                  p = LogPut(p, "\r\n       @es:0000 = ");
                                   if (eb && host_readable((const void *)eo, 0x40))
-                                       p = zdump(p, (const void *)eo, 0x40);
-                                  else p = zput(p, "<unreadable>"); }
+                                       p = LogDump(p, (const void *)eo, 0x40);
+                                  else p = LogPut(p, "<unreadable>"); }
                                 /* ── ★ AND THE SAME FOR DS, for the same reason. ES is dumped
                                      because a #GP is usually ABOUT a selector; DS is dumped
                                      because the bottom of a guest's data segment is where its
@@ -35158,23 +35158,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      that faults. One dump says which we are on.) */
                                 { DWORD db = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF));
                                   const volatile BYTE *do_ = (const volatile BYTE *)(ULONG_PTR)db;
-                                  p = zput(p, "\r\n       @ds:0000 = ");
+                                  p = LogPut(p, "\r\n       @ds:0000 = ");
                                   if (db && host_readable((const void *)do_, 0x40))
-                                       p = zdump(p, (const void *)do_, 0x40);
-                                  else p = zput(p, "<unreadable>");
+                                       p = LogDump(p, (const void *)do_, 0x40);
+                                  else p = LogPut(p, "<unreadable>");
                                   /* The named offsets from dsprobe.txt -- see the knob's
                                      note. Four bytes each, so a WORD and the word after it
                                      (a far pointer's two halves) both read in one line. */
                                   if (g_dsprobe_n && db) {
                                       int dq;
-                                      p = zput(p, "\r\n       dsprobe:");
+                                      p = LogPut(p, "\r\n       dsprobe:");
                                       for (dq = 0; dq < g_dsprobe_n; ++dq) {
                                           const volatile BYTE *dp = do_ + g_dsprobe[dq];
-                                          p = zput(p, " ds[0x"); p = zhex(p, g_dsprobe[dq]);
-                                          p = zput(p, "]=");
+                                          p = LogPut(p, " ds[0x"); p = LogHex(p, g_dsprobe[dq]);
+                                          p = LogPut(p, "]=");
                                           if (host_readable((const void *)dp, 4))
-                                               p = zdump(p, (const void *)dp, 4);
-                                          else p = zput(p, "?? ");
+                                               p = LogDump(p, (const void *)dp, 4);
+                                          else p = LogPut(p, "?? ");
                                       }
                                   }
                                   /* csprobe: the same against the FAULTING CODE SEGMENT, six
@@ -35185,22 +35185,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                       const volatile BYTE *co =
                                           (const volatile BYTE *)(ULONG_PTR)cb2;
                                       int cq;
-                                      p = zput(p, "\r\n       csprobe:");
+                                      p = LogPut(p, "\r\n       csprobe:");
                                       for (cq = 0; cq < g_csprobe_n; ++cq) {
                                           const volatile BYTE *cp = co + g_csprobe[cq];
-                                          p = zput(p, " cs[0x"); p = zhex(p, g_csprobe[cq]);
-                                          p = zput(p, "]=");
+                                          p = LogPut(p, " cs[0x"); p = LogHex(p, g_csprobe[cq]);
+                                          p = LogPut(p, "]=");
                                           if (cb2 && host_readable((const void *)cp, 6))
-                                               p = zdump(p, (const void *)cp, 6);
-                                          else p = zput(p, "?? ");
+                                               p = LogDump(p, (const void *)cp, 6);
+                                          else p = LogPut(p, "?? ");
                                       }
                                   } }
                                 { DWORD fb2 = dpmi_sel_base(fr[4]);
                                   const volatile BYTE *fi2 =
                                       (const volatile BYTE *)(ULONG_PTR)(fb2 + fr[3]);
-                                  p = zput(p, " bytes@fault=");
-                                  if (host_readable((const void *)fi2, 8)) p = zdump(p, (const void *)fi2, 8);
-                                  else                                     p = zput(p, "<unreadable>");
+                                  p = LogPut(p, " bytes@fault=");
+                                  if (host_readable((const void *)fi2, 8)) p = LogDump(p, (const void *)fi2, 8);
+                                  else                                     p = LogPut(p, "<unreadable>");
                                   /* ── ★ THE CODE AROUND THE FAULT, AND THE SELECTOR'S BASE.
                                        Eight bytes AT the fault identify the instruction; they
                                        do not identify WHERE IN THE GUEST'S IMAGE it came from,
@@ -35212,13 +35212,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                        on a mapping derived from a single 8-byte match.
                                        The base is printed for the same reason: it is what turns
                                        a selector:offset into the linear address pmbp.txt wants. */
-                                  p = zput(p, "\r\n       csbase=0x"); p = zhex(p, fb2);
-                                  p = zput(p, " code[ip-0x20..ip+0x20]=");
+                                  p = LogPut(p, "\r\n       csbase=0x"); p = LogHex(p, fb2);
+                                  p = LogPut(p, " code[ip-0x20..ip+0x20]=");
                                   { const volatile BYTE *cw =
                                         (const volatile BYTE *)(ULONG_PTR)(fb2 + ((fr[3] - 0x20) & 0xFFFF));
                                     if (fr[3] >= 0x20 && host_readable((const void *)cw, 0x40))
-                                         p = zdump(p, (const void *)cw, 0x40);
-                                    else p = zput(p, "<unreadable>"); } }
+                                         p = LogDump(p, (const void *)cw, 0x40);
+                                    else p = LogPut(p, "<unreadable>"); } }
                                 /* ── ★ AND WHO CALLED. The frame says WHERE it faulted; on a
                                      #GP inside a subroutine that is only half the question,
                                      because the other half is always "how did the guest get
@@ -35231,15 +35231,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 { DWORD sb2 = dpmi_sel_base(fr[7]);
                                   const volatile BYTE *st2 =
                                       (const volatile BYTE *)(ULONG_PTR)(sb2 + fr[6]);
-                                  p = zput(p, "\r\n       @ss:sp = ");
+                                  p = LogPut(p, "\r\n       @ss:sp = ");
                                   if (sb2 && host_readable((const void *)st2, 0x20))
-                                       p = zdump(p, (const void *)st2, 0x20);
-                                  else p = zput(p, "<unreadable>"); }
-                                p = zput(p, "\r\n");
-                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                       p = LogDump(p, (const void *)st2, 0x20);
+                                  else p = LogPut(p, "<unreadable>"); }
+                                p = LogPut(p, "\r\n");
+                                LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                                 continue;                 /* re-arm + re-enter, now in the handler */
                             }
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                         }
                         break;
                     }
@@ -35261,9 +35261,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         DWORD esp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
                         volatile WORD *fr = (volatile WORD *)(ULONG_PTR)(sb + esp);
                         if (!host_readable((const void *)fr, 0x0C)) {
-                            p = zput(p, "GH#128: EXC RETURN but the frame at SS:SP is unreadable "
+                            p = LogPut(p, "GH#128: EXC RETURN but the frame at SS:SP is unreadable "
                                         "-- stopping\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             break;
                         }
                         /* ── ★ AND THE RETURN IS THE SAME QUESTION, SO IT GETS THE SAME
@@ -35282,19 +35282,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         if (g_DpmiIsClient32) {
                             volatile DWORD *d32 = (volatile DWORD *)(ULONG_PTR)(sb + esp);
                             if (!host_readable((const void *)d32, 0x18)) {
-                                p = zput(p, "GH#128: EXC RETURN (32) but the frame at SS:ESP is "
+                                p = LogPut(p, "GH#128: EXC RETURN (32) but the frame at SS:ESP is "
                                             "unreadable -- stopping\r\n");
-                                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                                LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                                 break;
                             }
-                            p = zput(p, "GH#128: EXC RETURN(32) -> resume 0x"); p = zhex(p, d32[2]);
-                            p = zput(p, ":0x"); p = zhex(p, d32[1]);
-                            p = zput(p, " fl=0x"); p = zhex(p, d32[3]);
-                            p = zput(p, " ss:esp=0x"); p = zhex(p, d32[5]);
-                            p = zput(p, ":0x"); p = zhex(p, d32[4]);
-                            p = zput(p, " err=0x"); p = zhex(p, d32[0]);
-                            p = zput(p, "\r\n");
-                            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                            p = LogPut(p, "GH#128: EXC RETURN(32) -> resume 0x"); p = LogHex(p, d32[2]);
+                            p = LogPut(p, ":0x"); p = LogHex(p, d32[1]);
+                            p = LogPut(p, " fl=0x"); p = LogHex(p, d32[3]);
+                            p = LogPut(p, " ss:esp=0x"); p = LogHex(p, d32[5]);
+                            p = LogPut(p, ":0x"); p = LogHex(p, d32[4]);
+                            p = LogPut(p, " err=0x"); p = LogHex(p, d32[0]);
+                            p = LogPut(p, "\r\n");
+                            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                             VDM_SET16(tib, VTIB_SS,  (WORD)d32[5]);
                             VDM_REG(tib, VTIB_ESP) = d32[4];
                             VDM_SET16(tib, VTIB_CS,  (WORD)d32[2]);
@@ -35305,14 +35305,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             VDM_SET16(tib, VTIB_EFLAGS, (WORD)d32[3]);
                             continue;
                         }
-                        p = zput(p, "GH#128: EXC RETURN -> resume 0x"); p = zhex(p, fr[2]);
-                        p = zput(p, ":0x"); p = zhex(p, fr[1]);
-                        p = zput(p, " fl=0x"); p = zhex(p, fr[3]);
-                        p = zput(p, " ss:sp=0x"); p = zhex(p, fr[5]);
-                        p = zput(p, ":0x"); p = zhex(p, fr[4]);
-                        p = zput(p, " err=0x"); p = zhex(p, fr[0]);
-                        p = zput(p, "\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        p = LogPut(p, "GH#128: EXC RETURN -> resume 0x"); p = LogHex(p, fr[2]);
+                        p = LogPut(p, ":0x"); p = LogHex(p, fr[1]);
+                        p = LogPut(p, " fl=0x"); p = LogHex(p, fr[3]);
+                        p = LogPut(p, " ss:sp=0x"); p = LogHex(p, fr[5]);
+                        p = LogPut(p, ":0x"); p = LogHex(p, fr[4]);
+                        p = LogPut(p, " err=0x"); p = LogHex(p, fr[0]);
+                        p = LogPut(p, "\r\n");
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                         VDM_SET16(tib, VTIB_SS,  fr[5]); VDM_REG(tib, VTIB_ESP) = fr[4];
                         VDM_SET16(tib, VTIB_CS,  fr[2]); VDM_REG(tib, VTIB_EIP) = fr[1];
                         VDM_SET16(tib, VTIB_EFLAGS, fr[3]);
@@ -35345,12 +35345,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         ++g_pmfault_dumps;
                         const volatile BYTE *fi = (const volatile BYTE *)(ULONG_PTR)(fb + eip);
                         uint32_t sel_ar = 0, sel_lim = 0; dpmi_sel_desc((WORD)csv, &sel_ar, &sel_lim);
-                        p = zput(p, "GH#18 PM-FAULT ev=0x"); p = zhex(p, ev);
-                        p = zput(p, " CS:EIP=0x"); p = zhex(p, csv); p = zput(p, ":0x"); p = zhex(p, eip);
-                        p = zput(p, " base=0x"); p = zhex(p, fb); p = zput(p, " AR=0x"); p = zhex(p, sel_ar);
-                        p = zput(p, " lim=0x"); p = zhex(p, sel_lim); p = zput(p, " bytes=");
-                        p = zdump(p, (const void *)fi, 12); p = zput(p, "\r\n");
-                        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                        p = LogPut(p, "GH#18 PM-FAULT ev=0x"); p = LogHex(p, ev);
+                        p = LogPut(p, " CS:EIP=0x"); p = LogHex(p, csv); p = LogPut(p, ":0x"); p = LogHex(p, eip);
+                        p = LogPut(p, " base=0x"); p = LogHex(p, fb); p = LogPut(p, " AR=0x"); p = LogHex(p, sel_ar);
+                        p = LogPut(p, " lim=0x"); p = LogHex(p, sel_lim); p = LogPut(p, " bytes=");
+                        p = LogDump(p, (const void *)fi, 12); p = LogPut(p, "\r\n");
+                        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                     }
                     vec = (ev == VDM_EVENT_BOP) ? dpmi_bop_vec(csv, eip) : 0;
                     g_dpmi_last_vec = vec;
@@ -35375,10 +35375,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     *(volatile WORD *)(tib + VTIB_MSW) &= (WORD)~MSW_PE_BIT;   /* leave PM */
                     VDM_SET16(tib, VTIB_FS, 0); VDM_SET16(tib, VTIB_GS, 0);
                     m.ExitCode = g_pm_exit_code;
-                    p = zput(p, "DPMI: client exited with a parent waiting (depth=");
-                    p = zhexb(p, (unsigned)g_exec_depth);
-                    p = zput(p, ") -- back to real mode, terminating the child there\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    p = LogPut(p, "DPMI: client exited with a parent waiting (depth=");
+                    p = LogHexByte(p, (unsigned)g_exec_depth);
+                    p = LogPut(p, ") -- back to real mode, terminating the child there\r\n");
+                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                     if (g_close_forced) {           /* #152: it did not unhook itself */
                         g_close_forced = 0;
                         if (g_routed && g_exec_depth == 1) g_back_to_prompt = 1;   /* #208 */
@@ -35391,8 +35391,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 g_dpmi_done = 1;            /* PM run finished -> watchdog stands down, window persists */
                 break;
             }
-            p = zput(p, " -> SWITCH FAILED (staying real mode, CF=1)\r\n");
-            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            p = LogPut(p, " -> SWITCH FAILED (staying real mode, CF=1)\r\n");
+            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
             VDM_REG(tib, VTIB_EFLAGS) |= 1;         /* CF=1 signals failure to the client */
             VDM_REG(tib, VTIB_EIP) += 3;            /* -> the RETF, returns real mode     */
             continue;
@@ -35509,24 +35509,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 quiet = (g_ntvdm_bop_n > 64) || (g_ntvdm_bop_n > 16 && !novel);
             }
             if (quiet) goto ntvdm_bop_dispatch;
-            p = zput(p, "STAGE2: NTVDM BOP from guest: bop=0x"); p = zhexb(p, bn);
-            p = zput(p, " sub=0x"); p = zhexb(p, sub);
-            p = zput(p, " at 0x"); p = zhex(p, cs_); p = zput(p, ":0x"); p = zhex(p, ip_);
-            p = zput(p, " ax=0x"); p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-            p = zput(p, " bx=0x"); p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-            p = zput(p, " cx=0x"); p = zhex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
-            p = zput(p, " dx=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-            p = zput(p, " si=0x"); p = zhex(p, VDM_REG(tib, VTIB_ESI) & 0xFFFF);
-            p = zput(p, " di=0x"); p = zhex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
-            p = zput(p, " ds=0x"); p = zhex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
-            p = zput(p, " es=0x"); p = zhex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
-            p = zput(p, " ss:sp=0x"); p = zhex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
-            p = zput(p, ":0x"); p = zhex(p, VDM_REG(tib, VTIB_ESP) & 0xFFFF);
-            p = zput(p, " -> UNIMPLEMENTED, answering CF="); p = zdec(p, (unsigned)cf_pol);
-            p = zput(p, "\r\n");
+            p = LogPut(p, "STAGE2: NTVDM BOP from guest: bop=0x"); p = LogHexByte(p, bn);
+            p = LogPut(p, " sub=0x"); p = LogHexByte(p, sub);
+            p = LogPut(p, " at 0x"); p = LogHex(p, cs_); p = LogPut(p, ":0x"); p = LogHex(p, ip_);
+            p = LogPut(p, " ax=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+            p = LogPut(p, " bx=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+            p = LogPut(p, " cx=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+            p = LogPut(p, " dx=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+            p = LogPut(p, " si=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ESI) & 0xFFFF);
+            p = LogPut(p, " di=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+            p = LogPut(p, " ds=0x"); p = LogHex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+            p = LogPut(p, " es=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+            p = LogPut(p, " ss:sp=0x"); p = LogHex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
+            p = LogPut(p, ":0x"); p = LogHex(p, VDM_REG(tib, VTIB_ESP) & 0xFFFF);
+            p = LogPut(p, " -> UNIMPLEMENTED, answering CF="); p = LogDecimal(p, (unsigned)cf_pol);
+            p = LogPut(p, "\r\n");
             /* And the bytes it is about to run either way -- the branch is right there,
                and which way it goes is the whole question. */
-            p = zput(p, "         next="); p = zdump(p, (const void *)(bq + 4), 12);
+            p = LogPut(p, "         next="); p = LogDump(p, (const void *)(bq + 4), 12);
             /* ── ★ COMMAND.COM's STATE BLOCK, WHOLE, RATHER THAN ONE BYTE AT A TIME.
                  Its decisions about being a shell follow a handful of bytes in its
                  RESIDENT data -- around 0x2B0 and 0x320..0x333 of the
@@ -35539,20 +35539,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                  ever loaded elsewhere these rows are somebody else's memory -- the
                  `@0100:` in the trace's call sites is the check that it is not. */
             { const volatile BYTE *st = (const volatile BYTE *)(ULONG_PTR)(0x0100u << 4);
-              p = zput(p, "\r\n         cc[0x2B0..0x2BF]="); p = zdump(p, (const void *)(st + 0x2B0), 16);
-              p = zput(p, "\r\n         cc[0x320..0x333]="); p = zdump(p, (const void *)(st + 0x320), 20);
+              p = LogPut(p, "\r\n         cc[0x2B0..0x2BF]="); p = LogDump(p, (const void *)(st + 0x2B0), 16);
+              p = LogPut(p, "\r\n         cc[0x320..0x333]="); p = LogDump(p, (const void *)(st + 0x320), 20);
               /* s81: the environment the shell ACTUALLY has (PSP:2Ch), as text -- the
                  prompt came up `C>` under /P, i.e. without the PROMPT we passed. */
               { WORD es2 = *(const volatile WORD *)(st + 0x2C); int q;
                 const volatile BYTE *e2 = (const volatile BYTE *)(ULONG_PTR)((DWORD)es2 << 4);
-                p = zput(p, "\r\n         shell env seg=0x"); p = zhex(p, es2); p = zput(p, " [");
+                p = LogPut(p, "\r\n         shell env seg=0x"); p = LogHex(p, es2); p = LogPut(p, " [");
                 for (q = 0; q < 160 && !(e2[q] == 0 && e2[q + 1] == 0); ++q) {
                     char c1[2]; c1[0] = e2[q] ? (char)e2[q] : '|'; c1[1] = 0;
                     if (c1[0] < 0x20 || c1[0] > 0x7e) c1[0] = '.';
-                    p = zput(p, c1); }
-                p = zput(p, "]"); } }
-            p = zput(p, "\r\n");
-            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    p = LogPut(p, c1); }
+                p = LogPut(p, "]"); } }
+            p = LogPut(p, "\r\n");
+            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
         ntvdm_bop_dispatch:
             /* ── ★ sub 01 = "WHAT SHOULD I RUN NEXT?" -- ANSWER "NOTHING". ───────────
                  On XP this is answered from CSRSS's GetNextVDMCommand (VDM_COMMAND_INFO).
@@ -35596,14 +35596,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 if (g_guest_ntaware && g_back_to_prompt && g_shell_getnext_n >= 1) {
                     g_back_to_prompt = 0;
                     g_DosInt53Answers[0x02].IsCarry = 1;
-                    p = zput(p, "         sub 01 after Close Program: back to the prompt (#208)\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    p = LogPut(p, "         sub 01 after Close Program: back to the prompt (#208)\r\n");
+                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                 } else
                 if (g_guest_ntaware && ++g_shell_getnext_n > 1) {
-                    p = zput(p, "         sub 01 again: the shell is handing back control (EXIT)"
+                    p = LogPut(p, "         sub 01 again: the shell is handing back control (EXIT)"
                                 " -- ending the VDM, rc=0x");
-                    p = zhex(p, *(volatile WORD *)(b + 0x0E)); p = zput(p, "\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    p = LogHex(p, *(volatile WORD *)(b + 0x0E)); p = LogPut(p, "\r\n");
+                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                     m.ExitCode = *(volatile WORD *)(b + 0x0E) & 0xFF;
                     break;
                 }
@@ -35612,12 +35612,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                      would show our own zeros back and read as the guest's input --
                      which is the whole class of mistake this file keeps catching. */
                 if (quiet) goto blk_written;
-                p = zput(p, "         blk in="); p = zdump(p, (const void *)b, 0x28);
-                p = zput(p, "\r\n         +1C:1E=0x");
-                p = zhex(p, *(volatile WORD *)(b + 0x1C)); p = zput(p, ":0x");
-                p = zhex(p, *(volatile WORD *)(b + 0x1E));
-                p = zput(p, " +20=0x"); p = zhex(p, *(volatile WORD *)(b + 0x20));
-                p = zput(p, "\r\n");
+                p = LogPut(p, "         blk in="); p = LogDump(p, (const void *)b, 0x28);
+                p = LogPut(p, "\r\n         +1C:1E=0x");
+                p = LogHex(p, *(volatile WORD *)(b + 0x1C)); p = LogPut(p, ":0x");
+                p = LogHex(p, *(volatile WORD *)(b + 0x1E));
+                p = LogPut(p, " +20=0x"); p = LogHex(p, *(volatile WORD *)(b + 0x20));
+                p = LogPut(p, "\r\n");
                 blk_written: ;
                 /* ── ★★ TOUCH AS LITTLE AS POSSIBLE. ────────────────────────────────
                      The first cut zeroed every field that XP's handler writes. One of
@@ -35719,13 +35719,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     } else {
                         c[1] = 0; c[2] = 0x0D;          /* ditto: [0] is NOT ours */
                     }
-                    if (!quiet) { p = zput(p, "         cmdline buf 0x"); p = zhex(p, cb);
-                                  if (cn) { p = zput(p, " <- ["); 
+                    if (!quiet) { p = LogPut(p, "         cmdline buf 0x"); p = LogHex(p, cb);
+                                  if (cn) { p = LogPut(p, " <- ["); 
                                             { DWORD k; for (k = 0; k < cn; ++k)
-                                                  { char t[2]; t[0]=cmdbuf[k]; t[1]=0; p = zput(p, t); } }
-                                            p = zput(p, "] ONE SHOT"); }
-                                  else      p = zput(p, " <- empty tail (len=0, CR)");
-                                  p = zput(p, "\r\n"); }
+                                                  { char t[2]; t[0]=cmdbuf[k]; t[1]=0; p = LogPut(p, t); } }
+                                            p = LogPut(p, "] ONE SHOT"); }
+                                  else      p = LogPut(p, " <- empty tail (len=0, CR)");
+                                  p = LogPut(p, "\r\n"); }
                 }
                 BW(0x10, 0);                       /* flags: nothing was redirected */
                 /* ── ★ AND THE OTHER TWO HALVES OF THE ANSWER. ──────────────────────
@@ -35790,9 +35790,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                      takes it AWAY from the prompt. Zero. */
                 BW(0x1A, 0);
                     if (!quiet) {
-                        p = zput(p, "         prog name <- ["); 
-                        { DWORD k; for (k = 0; k < al; ++k) { char t[2]; t[0]=ap[k]; t[1]=0; p = zput(p, t); } }
-                        p = zput(p, "] type="); p = zdec(p, ty); p = zput(p, "\r\n");
+                        p = LogPut(p, "         prog name <- ["); 
+                        { DWORD k; for (k = 0; k < al; ++k) { char t[2]; t[0]=ap[k]; t[1]=0; p = LogPut(p, t); } }
+                        p = LogPut(p, "] type="); p = LogDecimal(p, ty); p = LogPut(p, "\r\n");
                     }
                 }
                 #undef BW
@@ -35818,10 +35818,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    unchanged right one. Revisit each as its meaning is earned. */
                 VDM_REG(tib, VTIB_EAX) &= 0xFFFF0000u;   /* AX = 0 */
                 if (!quiet) {
-                    p = zput(p, "         sub 01 answered: no command (flags=0, cookie and "
-                                "the guest's own fields left alone), blk=0x"); p = zhex(p, blk);
-                    p = zput(p, "\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    p = LogPut(p, "         sub 01 answered: no command (flags=0, cookie and "
+                                "the guest's own fields left alone), blk=0x"); p = LogHex(p, blk);
+                    p = LogPut(p, "\r\n");
+                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;  /* success */
                 VDM_REG(tib, VTIB_EIP) += 4;
@@ -35869,7 +35869,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                             char wp[2048], sh[MAX_PATH]; DWORD wn, start = o0, n0 = 0;
                             char *q0 = wp, *e;
                             wn = GetEnvironmentVariableA("PATH", wp, sizeof wp);
-                            o0 = (DWORD)(zput(envsnap + o0, "PATH=") - envsnap);
+                            o0 = (DWORD)(LogPut(envsnap + o0, "PATH=") - envsnap);
                             if (wn && wn < sizeof wp) {
                                 while (*q0) {
                                     DWORD sl;
@@ -35878,17 +35878,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     sl = *q0 ? GetShortPathNameA(q0, sh, sizeof sh) : 0;
                                     if (sl && sl < sizeof sh && (o0 - start) + sl + 1 < 250) {
                                         if (n0++) envsnap[o0++] = ';';
-                                        o0 = (DWORD)(zput(envsnap + o0, sh) - envsnap);
+                                        o0 = (DWORD)(LogPut(envsnap + o0, sh) - envsnap);
                                     }
                                     q0 = e;
                                 }
                             }
-                            if (!n0) o0 = (DWORD)(zput(envsnap + o0, "C:\\") - envsnap);
+                            if (!n0) o0 = (DWORD)(LogPut(envsnap + o0, "C:\\") - envsnap);
                         } else
                         if ((e0[st0] | 0x20) == 'c' && e0[st0 + 7] == '=' &&
                             (e0[st0 + 1] | 0x20) == 'o' && (e0[st0 + 2] | 0x20) == 'm') {
-                            o0 = (DWORD)(zput(envsnap + o0, "COMSPEC=") - envsnap);
-                            o0 = (DWORD)(zput(envsnap + o0, g_shell_path[0] ? g_shell_path
+                            o0 = (DWORD)(LogPut(envsnap + o0, "COMSPEC=") - envsnap);
+                            o0 = (DWORD)(LogPut(envsnap + o0, g_shell_path[0] ? g_shell_path
                                                            : "C:\\WINDOWS\\SYSTEM32\\COMMAND.COM") - envsnap);
                         } else {
                             DWORD k0; for (k0 = st0; k0 < i0; ++k0) envsnap[o0++] = (char)e0[k0];
@@ -35908,10 +35908,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     } else VDM_SET16(tib, VTIB_EBX, 0);
                 }
                 if (!quiet) {
-                    p = zput(p, bx0 ? "         sub 0F (2/2): environment written, paras=0x"
+                    p = LogPut(p, bx0 ? "         sub 0F (2/2): environment written, paras=0x"
                                     : "         sub 0F (1/2): environment needs extra paras=0x");
-                    p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF); p = zput(p, "\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF); p = LogPut(p, "\r\n");
+                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                 VDM_REG(tib, VTIB_EIP) += 4;
@@ -35986,10 +35986,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 for (k = 0; k < an; ++k) nm[k] = (BYTE)ab[k];
                 nm[an] = 0;
                 if (!quiet) {
-                    p = zput(p, "         sub 0D answered: startup batch [");
-                    for (k = 0; k < an; ++k) { char t[2]; t[0]=ab[k]; t[1]=0; p = zput(p, t); }
-                    p = zput(p, "] at 0x"); p = zhex(p, nb); p = zput(p, "\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    p = LogPut(p, "         sub 0D answered: startup batch [");
+                    for (k = 0; k < an; ++k) { char t[2]; t[0]=ab[k]; t[1]=0; p = LogPut(p, t); }
+                    p = LogPut(p, "] at 0x"); p = LogHex(p, nb); p = LogPut(p, "\r\n");
+                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                 VDM_REG(tib, VTIB_EIP) += 4;
@@ -36009,8 +36009,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (bn == NTVDM_BOP_CMD && sub == 0x10) {
                 VDM_REG(tib, VTIB_EAX) &= 0xFFFFFF00u;   /* AL = 0 */
                 if (!quiet) {
-                    p = zput(p, "         sub 10 answered: AL=0\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    p = LogPut(p, "         sub 10 answered: AL=0\r\n");
+                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                 VDM_REG(tib, VTIB_EIP) += 4;
@@ -36036,16 +36036,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                  It had no arm, so it fell to the generic "skip the BOP" below and EXIT
                  did nothing. End the run exactly as a top-level AH=4Ch does. */
             if (bn == NTVDM_BOP_CMD && sub == 0x00) {
-                p = zput(p, "         sub 00: the shell asked to END THE VDM (EXIT) -- ending the run\r\n");
-                log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                p = LogPut(p, "         sub 00: the shell asked to END THE VDM (EXIT) -- ending the run\r\n");
+                LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                 m.ExitCode = 0;
                 break;
             }
             if (bn == NTVDM_BOP_CMD && sub == 0x0E) {
                 VDM_REG(tib, VTIB_EDX) &= 0xFFFF0000u;   /* DX = 0: no KEYB to run */
                 if (!quiet) {
-                    p = zput(p, "         sub 0E answered: no keyboard driver (DX=0)\r\n");
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    p = LogPut(p, "         sub 0E answered: no keyboard driver (DX=0)\r\n");
+                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                 VDM_REG(tib, VTIB_EIP) += 4;
@@ -36059,15 +36059,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) != 0x20) {
             DWORD cs_ = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip_ = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
             const volatile BYTE *bq = (const volatile BYTE *)(ULONG_PTR)((cs_ << 4) + ip_);
-            p = zput(p, "STAGE2: UNIMPLEMENTED BOP -- refusing (NOT an INT 21h call): bop=0x");
-            p = zhexb(p, VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF);
-            p = zput(p, " next=0x"); p = zhexb(p, bq[3]);   /* the sub-function byte */
-            p = zput(p, " at 0x");  p = zhex(p, cs_); p = zput(p, ":0x"); p = zhex(p, ip_);
-            p = zput(p, " ax=0x");  p = zhex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-            p = zput(p, " bx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-            p = zput(p, " dx=0x");  p = zhex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-            p = zput(p, "\r\n         see docs/inventory/bop.md -- the C4 C4 number space is NTVDM's\r\n");
-            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            p = LogPut(p, "STAGE2: UNIMPLEMENTED BOP -- refusing (NOT an INT 21h call): bop=0x");
+            p = LogHexByte(p, VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF);
+            p = LogPut(p, " next=0x"); p = LogHexByte(p, bq[3]);   /* the sub-function byte */
+            p = LogPut(p, " at 0x");  p = LogHex(p, cs_); p = LogPut(p, ":0x"); p = LogHex(p, ip_);
+            p = LogPut(p, " ax=0x");  p = LogHex(p, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+            p = LogPut(p, " bx=0x");  p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+            p = LogPut(p, " dx=0x");  p = LogHex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+            p = LogPut(p, "\r\n         see docs/inventory/bop.md -- the C4 C4 number space is NTVDM's\r\n");
+            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
             /* A DISTINCT, NON-ZERO exit code. The whole defect this closes was a guest
                killed by an unimplemented call and reported as a clean exit 0; reusing 0
                here would leave the lie in place with better logging on top of it. */
@@ -36080,7 +36080,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (!g_bop_from_guest && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG
             && (VDM_REG(tib, VTIB_EIP) & 0xFFFF) == DOS_CRIT_RETURN) {
             int ab = crit_return(&m, tib, &p);
-            log_append(LOG_PATH, base, p); p = base;
+            LogAppend(LOG_PATH, base, p); p = base;
             if (ab) {                                /* ABORT: end the program, as 4Ch */
                 if (dos_terminate(&m, tib, &p, base)) continue;
                 break;
@@ -36106,32 +36106,32 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
             VDM_REG(tib, VTIB_EIP) = m.Trampoline;
             m.Trampoline = 0;
-            log_append(LOG_PATH, base, p); p = base;
+            LogAppend(LOG_PATH, base, p); p = base;
             continue;
         }
         if (m.IsCritPending) {                       /* #34: call the guest's INT 24h */
             crit_raise(&m, tib, &p);
-            log_append(LOG_PATH, base, p); p = base;
+            LogAppend(LOG_PATH, base, p); p = base;
             continue;                               /* CS:IP is now the INT 24h site */
         }
         if (m.IsExecPending) {                       /* GH #30: AH=4Bh */
             m.IsExecPending = 0;
             p = exec_begin(&m, tib, p);
-            log_append(LOG_PATH, base, p); p = base;
+            LogAppend(LOG_PATH, base, p); p = base;
             continue;                               /* CS:IP now points at the child */
         }
         /* A blocking read with nothing to return leaves EIP ON the BOP, so the guest
            re-executes the INT and keeps running -- and keeps taking timer interrupts, so
            its music and animation carry on while it waits for a key, as on real hardware. */
         if (!m.IsRetry) VDM_REG(tib, VTIB_EIP) += 3;  /* past the 3-byte BOP -> the IRET */
-        log_append(LOG_PATH, base, p); p = base;
+        LogAppend(LOG_PATH, base, p); p = base;
     }
     }   /* storm-state block */
 
     /* Log the exec-loop exit before any flushing, so a hang or fault during
        shutdown is distinguishable from the loop never exiting at all. */
-    p = zput(p, "STAGE2: exec loop exited -> flushing\r\n");
-    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+    p = LogPut(p, "STAGE2: exec loop exited -> flushing\r\n");
+    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
 
     /* The exec loop is out: tell the headless backstop a clean shutdown is under
        way so it does not force-exit us mid-flush and lose the DOS output. */
@@ -36158,24 +36158,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          DOS program typed into the same window was queued to a host that had gone). */
     if (g_fetch2_ok) {
         HANDLE th; DWORD tid = 0, w;
-        p = zput(p, "STAGE2: task done -> reporting exit code 0x"); p = zhex(p, (DWORD)m.ExitCode);
-        p = zput(p, " to CSRSS (helper thread)...\r\n");
-        log_append(LOG_PATH, base, p); p = base;
+        p = LogPut(p, "STAGE2: task done -> reporting exit code 0x"); p = LogHex(p, (DWORD)m.ExitCode);
+        p = LogPut(p, " to CSRSS (helper thread)...\r\n");
+        LogAppend(LOG_PATH, base, p); p = base;
         th = CreateThread(NULL, 0, csrss_report_thread, (LPVOID)(ULONG_PTR)m.ExitCode, 0, &tid);
         /* A short grace so the report's LPC is processed (launcher released) before
            ExitVDM's is. The wait normally times out: the call is blocked for the
            console's next command, which is stock ntvdm's idle state, not ours. */
         w = th ? WaitForSingleObject(th, 50) : WAIT_FAILED;
         if (th) CloseHandle(th);
-        p = zput(p, "STAGE2: task done -> report thread ");
-        p = zput(p, w == WAIT_OBJECT_0 ? "returned" : w == WAIT_TIMEOUT ? "blocked for the console's next command (expected)" : "could not start");
-        p = zput(p, "; ExitVDM...\r\n");
-        log_append(LOG_PATH, base, p); p = base;
+        p = LogPut(p, "STAGE2: task done -> report thread ");
+        p = LogPut(p, w == WAIT_OBJECT_0 ? "returned" : w == WAIT_TIMEOUT ? "blocked for the console's next command (expected)" : "could not start");
+        p = LogPut(p, "; ExitVDM...\r\n");
+        LogAppend(LOG_PATH, base, p); p = base;
         {   BOOL ev = CsrssExitVdm(); DWORD ee = GetLastError();
-            p = zput(p, "STAGE2: task done -> ExitVDM = "); p = zput(p, ev ? "TRUE" : "FALSE");
-            p = zput(p, " err=0x"); p = zhex(p, ee); p = zput(p, " got_next="); p = zhex(p, (DWORD)g_report_got_next);
-            p = zput(p, " next_app=["); p = zput(p, g_CsrssNextApp); p = zput(p, "]\r\n");
-            log_append(LOG_PATH, base, p); p = base; }
+            p = LogPut(p, "STAGE2: task done -> ExitVDM = "); p = LogPut(p, ev ? "TRUE" : "FALSE");
+            p = LogPut(p, " err=0x"); p = LogHex(p, ee); p = LogPut(p, " got_next="); p = LogHex(p, (DWORD)g_report_got_next);
+            p = LogPut(p, " next_app=["); p = LogPut(p, g_CsrssNextApp); p = LogPut(p, "]\r\n");
+            LogAppend(LOG_PATH, base, p); p = base; }
         /* ── A COMMAND ARRIVED IN THE WINDOW. The launcher queued its next DOS program
              to THIS console's VDM (us) between the report and ExitVDM; CSRSS handed it
              to the blocked report call. We are not going to run it in this process, and
@@ -36184,8 +36184,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              run and the launcher saw exit code 0.) */
         if (g_report_got_next && g_CsrssNextApp[0]) {
             char cl[2300]; char *q = cl; STARTUPINFOA si; PROCESS_INFORMATION pi;
-            q = zput(q, "\""); q = zput(q, g_CsrssNextApp); q = zput(q, "\"");
-            if (g_CsrssNextCommand[0]) { q = zput(q, " "); q = zput(q, g_CsrssNextCommand); }
+            q = LogPut(q, "\""); q = LogPut(q, g_CsrssNextApp); q = LogPut(q, "\"");
+            if (g_CsrssNextCommand[0]) { q = LogPut(q, " "); q = LogPut(q, g_CsrssNextCommand); }
             *q = 0;
             ZeroMemory(&si, sizeof si); si.cb = sizeof si; ZeroMemory(&pi, sizeof pi);
             /* ⛔ HAND OVER THE SINGLE-INSTANCE MUTEX FIRST. (s73) The relaunched host is a
@@ -36229,42 +36229,42 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     si.hStdOutput = hs[1] ? hs[1] : GetStdHandle(STD_OUTPUT_HANDLE);
                     si.hStdError  = hs[2] ? hs[2] : (hs[1] ? hs[1] : GetStdHandle(STD_ERROR_HANDLE));
                 }
-                p = zput(p, "STAGE2: task done -> next command's std handles in=0x"); p = zhex(p, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[0]);
-                p = zput(p, " out=0x"); p = zhex(p, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[1]);
-                p = zput(p, " err=0x"); p = zhex(p, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[2]);
-                p = zput(p, any ? " -> handed to the child (redirect)\r\n" : " -> not a redirect, child finds its own\r\n"); }
-            p = zput(p, "STAGE2: task done -> a command was queued to this VDM in the window: relaunching [");
-            p = zput(p, cl); p = zput(p, "] in [");  p = zput(p, g_CsrssNextDirectory); p = zput(p, "] (single-instance mutex released)");
+                p = LogPut(p, "STAGE2: task done -> next command's std handles in=0x"); p = LogHex(p, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[0]);
+                p = LogPut(p, " out=0x"); p = LogHex(p, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[1]);
+                p = LogPut(p, " err=0x"); p = LogHex(p, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[2]);
+                p = LogPut(p, any ? " -> handed to the child (redirect)\r\n" : " -> not a redirect, child finds its own\r\n"); }
+            p = LogPut(p, "STAGE2: task done -> a command was queued to this VDM in the window: relaunching [");
+            p = LogPut(p, cl); p = LogPut(p, "] in [");  p = LogPut(p, g_CsrssNextDirectory); p = LogPut(p, "] (single-instance mutex released)");
             if (CreateProcessA(NULL, cl, NULL, NULL, TRUE, 0, NULL,
                                g_CsrssNextDirectory[0] ? g_CsrssNextDirectory : NULL, &si, &pi)) {
-                p = zput(p, " -> pid 0x"); p = zhex(p, pi.dwProcessId); p = zput(p, ", waiting\r\n");
-                log_append(LOG_PATH, base, p); p = base;
+                p = LogPut(p, " -> pid 0x"); p = LogHex(p, pi.dwProcessId); p = LogPut(p, ", waiting\r\n");
+                LogAppend(LOG_PATH, base, p); p = base;
                 WaitForSingleObject(pi.hProcess, INFINITE);
                 CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-                p = zput(p, "STAGE2: task done -> relaunched command finished\r\n");
-            } else { p = zput(p, " -> CreateProcess FAILED 0x"); p = zhex(p, GetLastError()); p = zput(p, "\r\n"); }
-            log_append(LOG_PATH, base, p); p = base;
+                p = LogPut(p, "STAGE2: task done -> relaunched command finished\r\n");
+            } else { p = LogPut(p, " -> CreateProcess FAILED 0x"); p = LogHex(p, GetLastError()); p = LogPut(p, "\r\n"); }
+            LogAppend(LOG_PATH, base, p); p = base;
         }
     }
     /* ⚠ REPORTED AT EXIT, not at startup. The startup line is written before a
-       later log_write(LOG_PATH,...) TRUNCATES the file, so it never survived to
+       later LogWrite(LOG_PATH,...) TRUNCATES the file, so it never survived to
        be read -- exactly as #131's stdout line did not. Same trap, same day. */
-    p = zput(p, "STAGE2: start mode was ");
-    p = zput(p, g_start_mode == DOS_START_UNINSTALL ? "UNINSTALL"
+    p = LogPut(p, "STAGE2: start mode was ");
+    p = LogPut(p, g_start_mode == DOS_START_UNINSTALL ? "UNINSTALL"
              : g_start_mode == DOS_START_SAFE       ? "SAFE (skipped: VDD plugins, audio"
                                                        " output, real speaker, joystick, WOW"
                                                        " shims, fullscreen)" : "normal");
-    p = zput(p, g_wave.IsUsingDirectSound ? " [audio: DirectSound]" : g_wave.IsSilent ? " [audio: no device, silent pump]"
+    p = LogPut(p, g_wave.IsUsingDirectSound ? " [audio: DirectSound]" : g_wave.IsSilent ? " [audio: no device, silent pump]"
                                                                           : " [audio: WinMM]");
-    p = zput(p, "; clean exit -> failure counter cleared (GH #132)\r\n");
+    p = LogPut(p, "; clean exit -> failure counter cleared (GH #132)\r\n");
     PcSpeakerClose(&g_pcspk);               /* ⚠ a headless run never sees WM_DESTROY,
                                             and Beep.sys outlives the process */
     recovery_ok();                       /* GH #132: this run ended cleanly */
-    p = zput(p, "STAGE2: stdout -> ");
-    if (g_stdio_src[0]) { p = zput(p, g_stdio_src); p = zput(p, " -> "); }
-    p = zput(p, g_stdio_how);
-    p = zput(p, g_stdio != INVALID_HANDLE_VALUE ? " [LIVE]" : " [buffered only]");
-    p = zput(p, " ppid=0x"); p = zhex(p, g_stdio_ppid); p = zput(p, "\r\n");
+    p = LogPut(p, "STAGE2: stdout -> ");
+    if (g_stdio_src[0]) { p = LogPut(p, g_stdio_src); p = LogPut(p, " -> "); }
+    p = LogPut(p, g_stdio_how);
+    p = LogPut(p, g_stdio != INVALID_HANDLE_VALUE ? " [LIVE]" : " [buffered only]");
+    p = LogPut(p, " ppid=0x"); p = LogHex(p, g_stdio_ppid); p = LogPut(p, "\r\n");
     {
         HANDLE hcon = (g_stdio == INVALID_HANDLE_VALUE)
             ? CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
@@ -36273,9 +36273,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (m.OutputLength > 0) {
             m.Output[m.OutputLength] = 0;
             if (hcon != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(hcon, m.Output, m.OutputLength, &w, NULL); }
-            p = zput(p, "  ==> DOS OUTPUT: ["); p = zput(p, m.Output);
-            if (m.IsOutputTruncated) p = zput(p, "\r\n<<<OUTPUT TRUNCATED>>>");
-            p = zput(p, "]\r\n");
+            p = LogPut(p, "  ==> DOS OUTPUT: ["); p = LogPut(p, m.Output);
+            if (m.IsOutputTruncated) p = LogPut(p, "\r\n<<<OUTPUT TRUNCATED>>>");
+            p = LogPut(p, "]\r\n");
         }
         if (hcon != INVALID_HANDLE_VALUE) CloseHandle(hcon);
     }
@@ -36284,86 +36284,86 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* The count the rate-limit above hides. An absence here means no guest issued one;
        a large number means a guest is POLLING a call we have not implemented. */
     if (g_ntvdm_bop_n) {
-        p = zput(p, "STAGE2: NTVDM BOPs from guest = "); p = zdec(p, g_ntvdm_bop_n);
-        p = zput(p, " (see docs/inventory/bop.md)\r\n");
+        p = LogPut(p, "STAGE2: NTVDM BOPs from guest = "); p = LogDecimal(p, g_ntvdm_bop_n);
+        p = LogPut(p, " (see docs/inventory/bop.md)\r\n");
     }
-    { int i; p = zput(p, "STAGE2: hot ports:");
+    { int i; p = LogPut(p, "STAGE2: hot ports:");
       for (i = 0; i < g_io_hot_n; ++i) {
-          p = zput(p, " 0x"); p = zhex(p, g_io_hot[i].port);
-          p = zput(p, "=0x"); p = zhex(p, g_io_hot[i].n);
+          p = LogPut(p, " 0x"); p = LogHex(p, g_io_hot[i].port);
+          p = LogPut(p, "=0x"); p = LogHex(p, g_io_hot[i].n);
       }
-      p = zput(p, "\r\nSTAGE2: pit_reload=0x"); p = zhex(p, (DWORD)g_pit.Reload);
-      p = zput(p, " oneshot_loads=0x"); p = zhex(p, g_pit.OneShotLoads);   /* #175 */
-      p = zput(p, " skip_if=0x");   p = zhex(p, g_irq0_skip_if);
-      p = zput(p, " skip_stub=0x"); p = zhex(p, g_irq0_skip_stub);
-      p = zput(p, " async_inj=0x"); p = zhex(p, g_async_inj);
-      p = zput(p, " async_pm=0x"); p = zhex(p, g_async_pm_inj);
-      p = zput(p, " async_bail=0x"); p = zhex(p, g_async_bail);
-      p = zput(p, " async_nest=0x"); p = zhex(p, g_async_nest_blocked);
+      p = LogPut(p, "\r\nSTAGE2: pit_reload=0x"); p = LogHex(p, (DWORD)g_pit.Reload);
+      p = LogPut(p, " oneshot_loads=0x"); p = LogHex(p, g_pit.OneShotLoads);   /* #175 */
+      p = LogPut(p, " skip_if=0x");   p = LogHex(p, g_irq0_skip_if);
+      p = LogPut(p, " skip_stub=0x"); p = LogHex(p, g_irq0_skip_stub);
+      p = LogPut(p, " async_inj=0x"); p = LogHex(p, g_async_inj);
+      p = LogPut(p, " async_pm=0x"); p = LogHex(p, g_async_pm_inj);
+      p = LogPut(p, " async_bail=0x"); p = LogHex(p, g_async_bail);
+      p = LogPut(p, " async_nest=0x"); p = LogHex(p, g_async_nest_blocked);
       /* s70: IRQ0 in-service accounting (see irq0_ack). strict = acknowledges that held
          the line, auto = stub/fallback, blocks = deliveries refused while in service,
          timeouts = releases by the safety net, fallback = the auto-EOI regime engaged. */
-      p = zput(p, " irq0_isr[strict,auto,blocks,timeouts,fallback,resync_drop]=0x"); p = zhex(p, g_irq0_isr_strict);
-      p = zput(p, ",0x"); p = zhex(p, g_irq0_isr_auto);
-      p = zput(p, ",0x"); p = zhex(p, g_irq0_isr_blocks);
-      p = zput(p, ",0x"); p = zhex(p, g_irq0_isr_timeouts);
-      p = zput(p, ",0x"); p = zhex(p, (DWORD)g_irq0_autoeoi);
-      p = zput(p, ",0x"); p = zhex(p, g_irq0_resync_drop);
-      p = zput(p, " irq1_inj=0x");   p = zhex(p, g_irq1_inj);
-      p = zput(p, " int16=[");
-      { int k; for (k = 0; k < 4; ++k) { p = zput(p, "0x"); p = zhex(p, g_in.Int16Calls[k]); p = zput(p, " "); } }
-      p = zput(p, "] p60=0x");       p = zhex(p, g_in.Port60Reads);
-      p = zput(p, " owed=0x");       p = zhex(p, g_in.OwedScanCodesServed);   /* keys the BIOS arm served after a hook's port read */
-      p = zput(p, " sc_left=0x");    p = zhex(p, (DWORD)VddInputScanCodesQueued(&g_in));
-      p = zput(p, " sc_held=0x");    p = zhex(p, g_in.ScanCodeHeldReads);   /* re-reads inside the transfer hold */
-      p = zput(p, " sc_push=0x");    p = zhex(p, g_in.ScanCodesPushed);
-      p = zput(p, " sc_drop=0x");    p = zhex(p, g_in.ScanCodesDropped);
+      p = LogPut(p, " irq0_isr[strict,auto,blocks,timeouts,fallback,resync_drop]=0x"); p = LogHex(p, g_irq0_isr_strict);
+      p = LogPut(p, ",0x"); p = LogHex(p, g_irq0_isr_auto);
+      p = LogPut(p, ",0x"); p = LogHex(p, g_irq0_isr_blocks);
+      p = LogPut(p, ",0x"); p = LogHex(p, g_irq0_isr_timeouts);
+      p = LogPut(p, ",0x"); p = LogHex(p, (DWORD)g_irq0_autoeoi);
+      p = LogPut(p, ",0x"); p = LogHex(p, g_irq0_resync_drop);
+      p = LogPut(p, " irq1_inj=0x");   p = LogHex(p, g_irq1_inj);
+      p = LogPut(p, " int16=[");
+      { int k; for (k = 0; k < 4; ++k) { p = LogPut(p, "0x"); p = LogHex(p, g_in.Int16Calls[k]); p = LogPut(p, " "); } }
+      p = LogPut(p, "] p60=0x");       p = LogHex(p, g_in.Port60Reads);
+      p = LogPut(p, " owed=0x");       p = LogHex(p, g_in.OwedScanCodesServed);   /* keys the BIOS arm served after a hook's port read */
+      p = LogPut(p, " sc_left=0x");    p = LogHex(p, (DWORD)VddInputScanCodesQueued(&g_in));
+      p = LogPut(p, " sc_held=0x");    p = LogHex(p, g_in.ScanCodeHeldReads);   /* re-reads inside the transfer hold */
+      p = LogPut(p, " sc_push=0x");    p = LogHex(p, g_in.ScanCodesPushed);
+      p = LogPut(p, " sc_drop=0x");    p = LogHex(p, g_in.ScanCodesDropped);
       /* #244/#274: INT 15h AH=4Fh calls made / bytes handed back (the difference is what
          a hook swallowed); default INT 05h jobs / printer errors / last status. */
-      p = zput(p, " kb4f=0x");       p = zhex(p, g_kb4f_calls);
-      p = zput(p, "/0x");            p = zhex(p, g_kb4f_xlat);
-      p = zput(p, " prtsc=0x");      p = zhex(p, g_prtsc_jobs);
-      p = zput(p, "/0x");            p = zhex(p, g_prtsc_errs);
-      p = zput(p, "/0x");            p = zhex(p, g_prtsc_status);
+      p = LogPut(p, " kb4f=0x");       p = LogHex(p, g_kb4f_calls);
+      p = LogPut(p, "/0x");            p = LogHex(p, g_kb4f_xlat);
+      p = LogPut(p, " prtsc=0x");      p = LogHex(p, g_prtsc_jobs);
+      p = LogPut(p, "/0x");            p = LogHex(p, g_prtsc_errs);
+      p = LogPut(p, "/0x");            p = LogHex(p, g_prtsc_status);
       /* sc_hi is the deepest the 32-byte FIFO ever got; pit_clamp counts catch-up
          bursts the PIT refused to replay. Together these say whether a held key was
          starved of exec-loop turns and whether the guest's clock ever lurched. */
-      p = zput(p, " sc_hi=0x");      p = zhex(p, g_in.ScanCodeHighWater);
+      p = LogPut(p, " sc_hi=0x");      p = LogHex(p, g_in.ScanCodeHighWater);
       /* pit_gaps = syncs more than 10 ms apart; pit_gapmax = the worst, in 8254
          clocks (1193182 = 1 s). NOTHING is clamped to these -- they exist so the
          catch-up burst can be fixed from a measured gap distribution instead of an
          assumed one, which is precisely the mistake that made it worse. */
-      p = zput(p, " pit_gaps=0x");   p = zhex(p, g_pit_catchup_clamped);
-      p = zput(p, " pit_gapmax=0x"); p = zhex(p, g_pit_gap_max);
+      p = LogPut(p, " pit_gaps=0x");   p = LogHex(p, g_pit_catchup_clamped);
+      p = LogPut(p, " pit_gapmax=0x"); p = LogHex(p, g_pit_gap_max);
       /* s84 (user): the cost of drawing the picture, per present, by path -- the number
          that decides whether a windowed DirectDraw renderer is worth building. Decimal
          microseconds: mean and worst. `win` = GDI (window or borderless fullscreen). */
-      p = zput(p, "\r\nSTAGE2: present us win n="); p = zdec(p, (DWORD)g_pd.PresentWindowCount);
-      p = zput(p, " mean="); p = zdec(p, g_pd.PresentWindowCount ? (DWORD)(g_pd.PresentWindowUs / g_pd.PresentWindowCount) : 0);
-      p = zput(p, " max=");  p = zdec(p, (DWORD)g_pd.PresentWindowMax);
-      p = zput(p, " | fs(ddraw) n="); p = zdec(p, (DWORD)g_pd.PresentFullscreenCount);
-      p = zput(p, " mean="); p = zdec(p, g_pd.PresentFullscreenCount ? (DWORD)(g_pd.PresentFullscreenUs / g_pd.PresentFullscreenCount) : 0);
-      p = zput(p, " max=");  p = zdec(p, (DWORD)g_pd.PresentFullscreenMax);
-      p = zput(p, " flips{done="); p = zdec(p, (DWORD)g_pd.FlipDone);   /* s86 */
-      p = zput(p, " pend=");       p = zdec(p, (DWORD)g_pd.FlipPending);
-      p = zput(p, " mid=");        p = zdec(p, (DWORD)g_pd.FlipMidScreen);
-      p = zput(p, " drop=");       p = zdec(p, (DWORD)g_pd.FlipDropped);
-      p = zput(p, " bufs=");       p = zdec(p, (DWORD)g_pd.FlipBuffers);
-      p = zput(p, " ourwait=");    p = zdec(p, (DWORD)g_pd.IsFlipOurWait);
-      p = zput(p, g_pd.IsFlipDriverTimed ? " path=driverflag}" : " path=triple}");
-      p = zput(p, " winsize="); p = zdec(p, g_set.v[SET_WINSIZE] + 1);
-      p = zput(p, "x scaler="); p = zdec(p, g_set.v[SET_SCALER]);
-      p = zput(p, "\r\nSTAGE2: pitpace=");  p = zhex(p, (DWORD)g_pitpace_ms);
-      p = zput(p, " calls="); p = zhex(p, g_pitpace_calls);
-      p = zput(p, " prio="); p = zhex(p, (DWORD)g_pitpace_prio);
-      p = zput(p, " inject="); p = zhex(p, (DWORD)g_pitpace_inject);
-      p = zput(p, " uitick_min_ms="); p = zhex(p, (DWORD)g_ui_tick_min_ms);
-      p = zput(p, g_ui_tick_min_ms == UITICK_AUTO ? " (AUTO)" : " (fixed)");
-      p = zput(p, " presents{hook="); p = zhex(p, g_ui_hook_presents);
-      p = zput(p, " timer="); p = zhex(p, g_ui_timer_presents);
-      p = zput(p, " hook_fires="); p = zhex(p, g_vid.PresentHookFires);
-      p = zput(p, " of_which_after_draw="); p = zhex(p, g_vid.PresentHookGap); p = zput(p, "}");
-      p = zput(p, " uitick_skipped="); p = zhex(p, g_ui_tick_skips);
+      p = LogPut(p, "\r\nSTAGE2: present us win n="); p = LogDecimal(p, (DWORD)g_pd.PresentWindowCount);
+      p = LogPut(p, " mean="); p = LogDecimal(p, g_pd.PresentWindowCount ? (DWORD)(g_pd.PresentWindowUs / g_pd.PresentWindowCount) : 0);
+      p = LogPut(p, " max=");  p = LogDecimal(p, (DWORD)g_pd.PresentWindowMax);
+      p = LogPut(p, " | fs(ddraw) n="); p = LogDecimal(p, (DWORD)g_pd.PresentFullscreenCount);
+      p = LogPut(p, " mean="); p = LogDecimal(p, g_pd.PresentFullscreenCount ? (DWORD)(g_pd.PresentFullscreenUs / g_pd.PresentFullscreenCount) : 0);
+      p = LogPut(p, " max=");  p = LogDecimal(p, (DWORD)g_pd.PresentFullscreenMax);
+      p = LogPut(p, " flips{done="); p = LogDecimal(p, (DWORD)g_pd.FlipDone);   /* s86 */
+      p = LogPut(p, " pend=");       p = LogDecimal(p, (DWORD)g_pd.FlipPending);
+      p = LogPut(p, " mid=");        p = LogDecimal(p, (DWORD)g_pd.FlipMidScreen);
+      p = LogPut(p, " drop=");       p = LogDecimal(p, (DWORD)g_pd.FlipDropped);
+      p = LogPut(p, " bufs=");       p = LogDecimal(p, (DWORD)g_pd.FlipBuffers);
+      p = LogPut(p, " ourwait=");    p = LogDecimal(p, (DWORD)g_pd.IsFlipOurWait);
+      p = LogPut(p, g_pd.IsFlipDriverTimed ? " path=driverflag}" : " path=triple}");
+      p = LogPut(p, " winsize="); p = LogDecimal(p, g_set.v[SET_WINSIZE] + 1);
+      p = LogPut(p, "x scaler="); p = LogDecimal(p, g_set.v[SET_SCALER]);
+      p = LogPut(p, "\r\nSTAGE2: pitpace=");  p = LogHex(p, (DWORD)g_pitpace_ms);
+      p = LogPut(p, " calls="); p = LogHex(p, g_pitpace_calls);
+      p = LogPut(p, " prio="); p = LogHex(p, (DWORD)g_pitpace_prio);
+      p = LogPut(p, " inject="); p = LogHex(p, (DWORD)g_pitpace_inject);
+      p = LogPut(p, " uitick_min_ms="); p = LogHex(p, (DWORD)g_ui_tick_min_ms);
+      p = LogPut(p, g_ui_tick_min_ms == UITICK_AUTO ? " (AUTO)" : " (fixed)");
+      p = LogPut(p, " presents{hook="); p = LogHex(p, g_ui_hook_presents);
+      p = LogPut(p, " timer="); p = LogHex(p, g_ui_timer_presents);
+      p = LogPut(p, " hook_fires="); p = LogHex(p, g_vid.PresentHookFires);
+      p = LogPut(p, " of_which_after_draw="); p = LogHex(p, g_vid.PresentHookGap); p = LogPut(p, "}");
+      p = LogPut(p, " uitick_skipped="); p = LogHex(p, g_ui_tick_skips);
       /* ── GH #56: DID THE THROTTLE ACTUALLY BITE? ──────────────────────────────
            run/held are the milliseconds the Bresenham handed out, and held/(run+
            held) must come out at 1 - duty or the mechanism is not doing what the
@@ -36373,7 +36373,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            -- our own service calls -- and the throttle is reaching a fraction of
            its execution. That is a real limit of the mechanism and it should be
            legible in the log rather than inferred from a stopwatch. */
-      p = zput(p, "\r\nSTAGE2: retrace-wait idles (1 ms sleeps)="); p = zdec(p, g_rt_idles);  /* #183 */
+      p = LogPut(p, "\r\nSTAGE2: retrace-wait idles (1 ms sleeps)="); p = LogDecimal(p, g_rt_idles);  /* #183 */
       /* #183 (user, 2026-09-28: the concern is host CPU AND frame rate): what the host
          actually spent, from Windows' own accounting -- the process, and the thread that
          runs the guest -- so a cheaper wait shows up as a number, not an impression. */
@@ -36384,23 +36384,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           if (g_hcpu && GetThreadTimes(g_hcpu, &c0, &e0, &k0, &u0)) {
               tk = ((ULONGLONG)k0.dwHighDateTime << 32 | k0.dwLowDateTime) / 10000u;
               tu = ((ULONGLONG)u0.dwHighDateTime << 32 | u0.dwLowDateTime) / 10000u; }
-          p = zput(p, "\r\nSTAGE2: host cpu ms: process user="); p = zdec(p, (DWORD)pu);
-          p = zput(p, " kernel="); p = zdec(p, (DWORD)pk);
-          p = zput(p, " | guest thread user="); p = zdec(p, (DWORD)tu);
-          p = zput(p, " kernel="); p = zdec(p, (DWORD)tk);
-          p = zput(p, " | run_ms="); p = zdec(p, GetTickCount() - g_run_start_tick); }
-      p = zput(p, "\r\nSTAGE2: VBE 4F07h retrace waits="); p = zdec(p, g_vbe_waits);           /* #226 */
+          p = LogPut(p, "\r\nSTAGE2: host cpu ms: process user="); p = LogDecimal(p, (DWORD)pu);
+          p = LogPut(p, " kernel="); p = LogDecimal(p, (DWORD)pk);
+          p = LogPut(p, " | guest thread user="); p = LogDecimal(p, (DWORD)tu);
+          p = LogPut(p, " kernel="); p = LogDecimal(p, (DWORD)tk);
+          p = LogPut(p, " | run_ms="); p = LogDecimal(p, GetTickCount() - g_run_start_tick); }
+      p = LogPut(p, "\r\nSTAGE2: VBE 4F07h retrace waits="); p = LogDecimal(p, g_vbe_waits);           /* #226 */
       {   int k;
           for (k = 0; k < RT_SITES && g_rt_site[k].n; ++k) {
-              p = zput(p, "\r\nSTAGE2: 3DAh site "); p = zhex(p, g_rt_site[k].cs); p = zput(p, ":");
-              p = zhex(p, g_rt_site[k].ip); p = zput(p, " n="); p = zdec(p, g_rt_site[k].n);
-              p = zput(p, " next="); p = zdump(p, (const void *)g_rt_site[k].b, 10);
+              p = LogPut(p, "\r\nSTAGE2: 3DAh site "); p = LogHex(p, g_rt_site[k].cs); p = LogPut(p, ":");
+              p = LogHex(p, g_rt_site[k].ip); p = LogPut(p, " n="); p = LogDecimal(p, g_rt_site[k].n);
+              p = LogPut(p, " next="); p = LogDump(p, (const void *)g_rt_site[k].b, 10);
           } }
-      p = zput(p, "\r\nSTAGE2: host cpu ~MHz="); p = zdec(p, host_cpu_mhz());   /* #224 */
-      p = zput(p, "\r\nSTAGE2: cpuspeed idx="); p = zhex(p, (DWORD)g_cpuspd_idx);
-      p = zput(p, " mhz="); p = zhex(p, g_cpuspd_idx < CPUSPEED_COUNT
+      p = LogPut(p, "\r\nSTAGE2: host cpu ~MHz="); p = LogDecimal(p, host_cpu_mhz());   /* #224 */
+      p = LogPut(p, "\r\nSTAGE2: cpuspeed idx="); p = LogHex(p, (DWORD)g_cpuspd_idx);
+      p = LogPut(p, " mhz="); p = LogHex(p, g_cpuspd_idx < CPUSPEED_COUNT
                                         ? CPUSPEED_MHZ[g_cpuspd_idx] : 0u);
-      p = zput(p, " ref_mhz="); p = zhex(p, g_cpuspd_ref_mhz);
+      p = LogPut(p, " ref_mhz="); p = LogHex(p, g_cpuspd_ref_mhz);
       /* ── ★ REQUESTED vs DELIVERED, BOTH MEASURED, AND NOW THEY AGREE BY DESIGN.
            The throttle's contract is that guest execution is `duty` of wall time.
            `delivered_bp` is that ratio as it actually came out -- lifetime guest
@@ -36414,128 +36414,128 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            holds (before the resume) and host-servicing (outside VdmRunGuest) are already
            out of it. That is why the old execnet/held-subtraction dance is gone --
            the number is clean at the source instead of patched at the report. */
-      p = zput(p, " duty_bp="); p = zhex(p, (DWORD)g_cpuspd_duty);
-      p = zput(p, " duty_rm_bp="); p = zhex(p, (DWORD)g_cpuspd_duty_rm);   /* #225 */
+      p = LogPut(p, " duty_bp="); p = LogHex(p, (DWORD)g_cpuspd_duty);
+      p = LogPut(p, " duty_rm_bp="); p = LogHex(p, (DWORD)g_cpuspd_duty_rm);   /* #225 */
       { DWORD wall_ms = GetTickCount() - g_start_ms;
         /* Units cancel in the ratio, so ms goes straight in. */
-        p = zput(p, " delivered_bp=");
-        p = zhex(p, cpuspeed_delivered_bp(g_cpuspd_run_ms, wall_ms));
-        p = zput(p, " exec_ms="); p = zhex(p, g_cpuspd_run_ms);
-        p = zput(p, " wall_ms="); p = zhex(p, wall_ms); }
-      p = zput(p, " held_ms="); p = zhex(p, g_cpuspd_held_ms);
-      p = zput(p, " hold_max_us="); p = zhex(p, g_cpuspd_hold_max_us);   /* #225 */
-      p = zput(p, " debt_max_us="); p = zhex(p, g_cpuspd_debt_max_us);
-      p = zput(p, " coop="); p = zhex(p, g_cpuspd_coop_catches);        /* #225 */
-      p = zput(p, " coop_to="); p = zhex(p, g_cpuspd_coop_timeouts);
-      p = zput(p, " ran_us="); p = zhex(p, g_cpuspd_ran_us);
-      p = zput(p, " win_wall_us="); p = zhex(p, g_cpuspd_wall_us);
-      p = zput(p, " missed="); p = zhex(p, g_cpuspd_missed);
+        p = LogPut(p, " delivered_bp=");
+        p = LogHex(p, cpuspeed_delivered_bp(g_cpuspd_run_ms, wall_ms));
+        p = LogPut(p, " exec_ms="); p = LogHex(p, g_cpuspd_run_ms);
+        p = LogPut(p, " wall_ms="); p = LogHex(p, wall_ms); }
+      p = LogPut(p, " held_ms="); p = LogHex(p, g_cpuspd_held_ms);
+      p = LogPut(p, " hold_max_us="); p = LogHex(p, g_cpuspd_hold_max_us);   /* #225 */
+      p = LogPut(p, " debt_max_us="); p = LogHex(p, g_cpuspd_debt_max_us);
+      p = LogPut(p, " coop="); p = LogHex(p, g_cpuspd_coop_catches);        /* #225 */
+      p = LogPut(p, " coop_to="); p = LogHex(p, g_cpuspd_coop_timeouts);
+      p = LogPut(p, " ran_us="); p = LogHex(p, g_cpuspd_ran_us);
+      p = LogPut(p, " win_wall_us="); p = LogHex(p, g_cpuspd_wall_us);
+      p = LogPut(p, " missed="); p = LogHex(p, g_cpuspd_missed);
       /* ── GRANULARITY = BURST SIZE = playable vs slideshow. `periods` over the run's
            seconds is how many bursts a second the guest advanced in; seven was the
            "still unplayable" number. gran=0 means auto chose period_ms from rt_us. */
-      p = zput(p, " gran_ms="); p = zhex(p, g_cpuspd_gran_ms);
-      p = zput(p, " period_ms="); p = zhex(p, g_cpuspd_period_ms);
-      p = zput(p, " rt_us="); p = zhex(p, g_cpuspd_rt_us);
-      p = zput(p, " periods="); p = zhex(p, g_cpuspd_periods);
-      p = zput(p, " aff="); p = zhex(p, (DWORD)g_cpuaff_on);
-      p = zput(p, " ncpu="); p = zhex(p, g_cpuaff_ncpu);
+      p = LogPut(p, " gran_ms="); p = LogHex(p, g_cpuspd_gran_ms);
+      p = LogPut(p, " period_ms="); p = LogHex(p, g_cpuspd_period_ms);
+      p = LogPut(p, " rt_us="); p = LogHex(p, g_cpuspd_rt_us);
+      p = LogPut(p, " periods="); p = LogHex(p, g_cpuspd_periods);
+      p = LogPut(p, " aff="); p = LogHex(p, (DWORD)g_cpuaff_on);
+      p = LogPut(p, " ncpu="); p = LogHex(p, g_cpuaff_ncpu);
       /* The INT 33h callback path, at EXIT (the heartbeat's copy is a snapshot). */
-      p = zput(p, "\r\nSTAGE2: MOUSECB inj="); p = zhex(p, g_ms_cb_inj);
-      p = zput(p, " done=");  p = zhex(p, g_ms_cb_done);
-      p = zput(p, " lost=");  p = zhex(p, g_ms_cb_lost);
-      p = zput(p, " stray="); p = zhex(p, g_ms_cb_stray);
-      p = zput(p, " pm=");    p = zhex(p, g_ms_cb_pm);
-      p = zput(p, " active="); p = zhex(p, (DWORD)g_ms_cb_active);
-      p = zput(p, " raised="); p = zhex(p, g_ms_evt_raised);
-      p = zput(p, " why[fly,none,nohdl,stub,if]=");
-      { int w; for (w = 0; w < 6; ++w) { p = zhex(p, g_ms_cb_why[w]); p = zput(p, w < 5 ? "," : ""); } }
-      p = zput(p, " mask=0x"); p = zhex(p, (DWORD)g_ms_evt_mask);
-      p = zput(p, " hdl=0x");  p = zhex(p, (DWORD)g_ms_evt_seg);
-      p = zput(p, ":0x");      p = zhex(p, (DWORD)g_ms_evt_off);
+      p = LogPut(p, "\r\nSTAGE2: MOUSECB inj="); p = LogHex(p, g_ms_cb_inj);
+      p = LogPut(p, " done=");  p = LogHex(p, g_ms_cb_done);
+      p = LogPut(p, " lost=");  p = LogHex(p, g_ms_cb_lost);
+      p = LogPut(p, " stray="); p = LogHex(p, g_ms_cb_stray);
+      p = LogPut(p, " pm=");    p = LogHex(p, g_ms_cb_pm);
+      p = LogPut(p, " active="); p = LogHex(p, (DWORD)g_ms_cb_active);
+      p = LogPut(p, " raised="); p = LogHex(p, g_ms_evt_raised);
+      p = LogPut(p, " why[fly,none,nohdl,stub,if]=");
+      { int w; for (w = 0; w < 6; ++w) { p = LogHex(p, g_ms_cb_why[w]); p = LogPut(p, w < 5 ? "," : ""); } }
+      p = LogPut(p, " mask=0x"); p = LogHex(p, (DWORD)g_ms_evt_mask);
+      p = LogPut(p, " hdl=0x");  p = LogHex(p, (DWORD)g_ms_evt_seg);
+      p = LogPut(p, ":0x");      p = LogHex(p, (DWORD)g_ms_evt_off);
       /* THE KEYSTROKE ITSELF, both halves. ms buckets [0,1,2,4,8,16,32,64+]. */
-      p = zput(p, "\r\nSTAGE2: KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
-      { unsigned kb; for (kb = 0; kb < 8; ++kb) { p = zput(p, kb ? "," : "");
-                                                  p = zhex(p, g_keymsg_hist[kb]); } }
-      p = zput(p, " n="); p = zhex(p, g_keymsg_n);
-      p = zput(p, " max_ms="); p = zhex(p, g_keymsg_max_ms);
-      p = zput(p, " || deliver_ms[0,1,2,4,8,16,32,64+]=");
-      { unsigned kb; for (kb = 0; kb < 8; ++kb) { p = zput(p, kb ? "," : "");
-                                                  p = zhex(p, g_keydel_hist[kb]); } }
-      p = zput(p, " n="); p = zhex(p, g_keydel_n);
-      p = zput(p, " max_ms="); p = zhex(p, g_keydel_max_ms);
-      p = zput(p, "\r\nSTAGE2: TICKGAP us[<.5k,1k,2k,4k,8k,16k,32k,64k,128k,256k,512k,+]=");
-      { unsigned tb; for (tb = 0; tb < 12; ++tb) { p = zput(p, tb ? "," : "");
-                                                   p = zhex(p, g_tickgap[tb]); } }
-      p = zput(p, " max_us="); p = zhex(p, g_tickgap_max_us);
-      p = zput(p, " OVER_11600us="); p = zhex(p, g_tickgap_over);
-      p = zput(p, "\r\nSTAGE2: DMXTASK: ok="); p = zhex(p, g_dmx_mixer_ok);
-      p = zput(p, " samples="); p = zhex(p, g_dmx_samples);
-      p = zput(p, " any_busy="); p = zhex(p, g_dmx_anybusy);
-      p = zput(p, " mixer_OVERDUE="); p = zhex(p, g_dmx_overdue);
-      p = zput(p, " max_late_ticks="); p = zhex(p, g_dmx_overdue_max);
-      p = zput(p, " busy_by_task=");
-      { unsigned dt; for (dt = 0; dt < 12; ++dt) { p = zput(p, dt ? "," : "");
-                                                   p = zhex(p, g_dmx_busy[dt]); } }
-      p = zput(p, "\r\nSTAGE2: ica (shim-raised IRQs, #278) raised="); p = zhex(p, g_ica_raised);
-      p = zput(p, " delivered="); p = zhex(p, g_ica_delivered);
-      p = zput(p, " nohandler="); p = zhex(p, g_ica_nohandler);
-      p = zput(p, " idlewaits(#306)="); p = zhex(p, g_wow_idlewaits);
-      p = zput(p, " shims[WOW32.DLL,NTVDM.EXE]=["); p = zhex(p, g_shim_state[0]);
-      p = zput(p, ","); p = zhex(p, g_shim_state[1]); p = zput(p, "] err=[");
-      p = zhex(p, g_shim_err[0]); p = zput(p, ","); p = zhex(p, g_shim_err[1]); p = zput(p, "]");
-      p = zput(p, " (1 loaded, 2 not found, 3 init refused)");
-      p = zput(p, "\r\nSTAGE2: dspver="); p = zhex(p, (DWORD)g_SbVersionMajor);
-      p = zput(p, "."); p = zhex(p, (DWORD)g_SbVersionMinor);
-      p = zput(p, " execprio="); p = zhex(p, g_exec_prio);
-      p = zput(p, "\r\nSTAGE2: lock: wait_us=0x");  p = zhex(p, g_lk_wait_us);
-      p = zput(p, "@line ");                        p = zhex(p, (DWORD)g_lk_wait_site);
-      p = zput(p, " hold_us=0x");                   p = zhex(p, g_lk_hold_us);
-      p = zput(p, "@line ");                        p = zhex(p, (DWORD)g_lk_hold_site);
-      p = zput(p, " ui_gap_us=0x");                 p = zhex(p, g_ui_gap_us);
+      p = LogPut(p, "\r\nSTAGE2: KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
+      { unsigned kb; for (kb = 0; kb < 8; ++kb) { p = LogPut(p, kb ? "," : "");
+                                                  p = LogHex(p, g_keymsg_hist[kb]); } }
+      p = LogPut(p, " n="); p = LogHex(p, g_keymsg_n);
+      p = LogPut(p, " max_ms="); p = LogHex(p, g_keymsg_max_ms);
+      p = LogPut(p, " || deliver_ms[0,1,2,4,8,16,32,64+]=");
+      { unsigned kb; for (kb = 0; kb < 8; ++kb) { p = LogPut(p, kb ? "," : "");
+                                                  p = LogHex(p, g_keydel_hist[kb]); } }
+      p = LogPut(p, " n="); p = LogHex(p, g_keydel_n);
+      p = LogPut(p, " max_ms="); p = LogHex(p, g_keydel_max_ms);
+      p = LogPut(p, "\r\nSTAGE2: TICKGAP us[<.5k,1k,2k,4k,8k,16k,32k,64k,128k,256k,512k,+]=");
+      { unsigned tb; for (tb = 0; tb < 12; ++tb) { p = LogPut(p, tb ? "," : "");
+                                                   p = LogHex(p, g_tickgap[tb]); } }
+      p = LogPut(p, " max_us="); p = LogHex(p, g_tickgap_max_us);
+      p = LogPut(p, " OVER_11600us="); p = LogHex(p, g_tickgap_over);
+      p = LogPut(p, "\r\nSTAGE2: DMXTASK: ok="); p = LogHex(p, g_dmx_mixer_ok);
+      p = LogPut(p, " samples="); p = LogHex(p, g_dmx_samples);
+      p = LogPut(p, " any_busy="); p = LogHex(p, g_dmx_anybusy);
+      p = LogPut(p, " mixer_OVERDUE="); p = LogHex(p, g_dmx_overdue);
+      p = LogPut(p, " max_late_ticks="); p = LogHex(p, g_dmx_overdue_max);
+      p = LogPut(p, " busy_by_task=");
+      { unsigned dt; for (dt = 0; dt < 12; ++dt) { p = LogPut(p, dt ? "," : "");
+                                                   p = LogHex(p, g_dmx_busy[dt]); } }
+      p = LogPut(p, "\r\nSTAGE2: ica (shim-raised IRQs, #278) raised="); p = LogHex(p, g_ica_raised);
+      p = LogPut(p, " delivered="); p = LogHex(p, g_ica_delivered);
+      p = LogPut(p, " nohandler="); p = LogHex(p, g_ica_nohandler);
+      p = LogPut(p, " idlewaits(#306)="); p = LogHex(p, g_wow_idlewaits);
+      p = LogPut(p, " shims[WOW32.DLL,NTVDM.EXE]=["); p = LogHex(p, g_shim_state[0]);
+      p = LogPut(p, ","); p = LogHex(p, g_shim_state[1]); p = LogPut(p, "] err=[");
+      p = LogHex(p, g_shim_err[0]); p = LogPut(p, ","); p = LogHex(p, g_shim_err[1]); p = LogPut(p, "]");
+      p = LogPut(p, " (1 loaded, 2 not found, 3 init refused)");
+      p = LogPut(p, "\r\nSTAGE2: dspver="); p = LogHex(p, (DWORD)g_SbVersionMajor);
+      p = LogPut(p, "."); p = LogHex(p, (DWORD)g_SbVersionMinor);
+      p = LogPut(p, " execprio="); p = LogHex(p, g_exec_prio);
+      p = LogPut(p, "\r\nSTAGE2: lock: wait_us=0x");  p = LogHex(p, g_lk_wait_us);
+      p = LogPut(p, "@line ");                        p = LogHex(p, (DWORD)g_lk_wait_site);
+      p = LogPut(p, " hold_us=0x");                   p = LogHex(p, g_lk_hold_us);
+      p = LogPut(p, "@line ");                        p = LogHex(p, (DWORD)g_lk_hold_site);
+      p = LogPut(p, " ui_gap_us=0x");                 p = LogHex(p, g_ui_gap_us);
       /* ty_sent = typematic repeats WE generated; ty_os = OS auto-repeats we
          suppressed because we generate our own. If ty_os is large and ty_sent is
          small, the pump is not running; if both are small while a key was held,
          the OS was not delivering repeats either -- which is what started this. */
-      p = zput(p, " ty_sent=0x");                   p = zhex(p, g_ty_sent);
-      p = zput(p, " ty_os=0x");                     p = zhex(p, g_ty_os_repeats);
+      p = LogPut(p, " ty_sent=0x");                   p = LogHex(p, g_ty_sent);
+      p = LogPut(p, " ty_os=0x");                     p = LogHex(p, g_ty_os_repeats);
       /* The XP setting we derived the rate from, raw and in microseconds, so a run
          says WHY it repeats at the speed it does. Verify against stock ntvdm with
          tests/probes/dos/tymat.asm: the target is delay 7 ticks / 102 repeats. */
-      p = zput(p, " spi_delay=0x");                 p = zhex(p, g_ty_spi_delay);
-      p = zput(p, " spi_speed=0x");                 p = zhex(p, g_ty_spi_speed);
-      p = zput(p, " ty_delay_us=0x");               p = zhex(p, g_ty_delay_us);
-      p = zput(p, " ty_period_us=0x");              p = zhex(p, g_ty_period_us);
+      p = LogPut(p, " spi_delay=0x");                 p = LogHex(p, g_ty_spi_delay);
+      p = LogPut(p, " spi_speed=0x");                 p = LogHex(p, g_ty_spi_speed);
+      p = LogPut(p, " ty_delay_us=0x");               p = LogHex(p, g_ty_delay_us);
+      p = LogPut(p, " ty_period_us=0x");              p = LogHex(p, g_ty_period_us);
       /* Does the guest set its OWN typematic rate? If it does, ours is a guess and
          should be taken from its 0xF3 byte instead (bits 0-4 rate, 5-6 delay). */
-      p = zput(p, "\r\nSTAGE2: kbd 8042: writes=0x"); p = zhex(p, g_in.KeyboardPortWrites);
-      p = zput(p, " typematic_set=0x");               p = zhexb(p, g_in.IsTypematicSet);
-      p = zput(p, " rate_byte=0x");                   p = zhexb(p, g_in.TypematicByte);
-      p = zput(p, " seq=");
+      p = LogPut(p, "\r\nSTAGE2: kbd 8042: writes=0x"); p = LogHex(p, g_in.KeyboardPortWrites);
+      p = LogPut(p, " typematic_set=0x");               p = LogHexByte(p, g_in.IsTypematicSet);
+      p = LogPut(p, " rate_byte=0x");                   p = LogHexByte(p, g_in.TypematicByte);
+      p = LogPut(p, " seq=");
       { unsigned k; for (k = 0; k < g_in.KeyboardPortLogCount; ++k) {
-            p = zput(p, k ? "," : ""); p = zhexb(p, g_in.KeyboardPortLog[k][0]);
-            p = zput(p, ":");          p = zhexb(p, g_in.KeyboardPortLog[k][1]); } }
-      p = zput(p, " int10_11=0x");   p = zhex(p, g_vid.Int10Ah11Calls);
+            p = LogPut(p, k ? "," : ""); p = LogHexByte(p, g_in.KeyboardPortLog[k][0]);
+            p = LogPut(p, ":");          p = LogHexByte(p, g_in.KeyboardPortLog[k][1]); } }
+      p = LogPut(p, " int10_11=0x");   p = LogHex(p, g_vid.Int10Ah11Calls);
       /* Each font request, its answer, and the BYTES actually sitting at the address we
          handed back -- read from guest memory, so a wiped or misaligned table is visible
          rather than inferred. A glyph is mostly zeros with a few set rows; all-zero or
          all-FF here means the caller is drawing from the wrong place. */
       { int fi; for (fi = 0; fi < g_vid.FontQueryCount; ++fi) {
           const volatile BYTE *fp;
-          p = zput(p, "\r\n  font_q: AL=0x"); p = zhex(p, g_vid.FontQueries[fi].Al);
-          p = zput(p, " BH=0x");   p = zhex(p, g_vid.FontQueries[fi].Bh);
-          p = zput(p, " -> ES:BP=0x"); p = zhex(p, g_vid.FontQueries[fi].Segment);
-          p = zput(p, ":0x");      p = zhex(p, g_vid.FontQueries[fi].Offset);
-          p = zput(p, " CX=0x");   p = zhex(p, g_vid.FontQueries[fi].Cx);
+          p = LogPut(p, "\r\n  font_q: AL=0x"); p = LogHex(p, g_vid.FontQueries[fi].Al);
+          p = LogPut(p, " BH=0x");   p = LogHex(p, g_vid.FontQueries[fi].Bh);
+          p = LogPut(p, " -> ES:BP=0x"); p = LogHex(p, g_vid.FontQueries[fi].Segment);
+          p = LogPut(p, ":0x");      p = LogHex(p, g_vid.FontQueries[fi].Offset);
+          p = LogPut(p, " CX=0x");   p = LogHex(p, g_vid.FontQueries[fi].Cx);
           fp = (const volatile BYTE *)(((DWORD)g_vid.FontQueries[fi].Segment << 4)
                                        + g_vid.FontQueries[fi].Offset);
           { BYTE fb[16]; unsigned k; for (k = 0; k < 16; ++k) fb[k] = fp[k];
-            p = zput(p, " bytes: "); p = zdump(p, fb, 16); }
+            p = LogPut(p, " bytes: "); p = LogDump(p, fb, 16); }
       } }
-      p = zput(p, "\r\n");
-      log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
-    p = zput(p, "STAGE2: io_events=0x");  p = zhex(p, g_ev_io);
-    p = zput(p, " io_burst=0x");          p = zhex(p, g_io_extra);
-    p = zput(p, " irq0_inj=0x");          p = zhex(p, g_irq0_inj);
+      p = LogPut(p, "\r\n");
+      LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base; }
+    p = LogPut(p, "STAGE2: io_events=0x");  p = LogHex(p, g_ev_io);
+    p = LogPut(p, " io_burst=0x");          p = LogHex(p, g_io_extra);
+    p = LogPut(p, " irq0_inj=0x");          p = LogHex(p, g_irq0_inj);
     /* ── THE GUEST'S CLOCK AS A SHAPE, NOT A TOTAL. See irq0_delivered_note.
          IRQ0TL is deliveries in each whole second: read it as a sequence and a
          slow-down/speed-up is the sequence moving. IRQ0GAP is the inter-delivery
@@ -36543,16 +36543,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          DECIMAL-in-hex like every other counter here. */
     {   unsigned t; DWORD last = 0;
         for (t = 0; t < IRQ0TL_SECS; ++t) if (g_irq0_tl[t]) last = t;
-        p = zput(p, "\r\nSTAGE2: IRQ0TL persec=");
+        p = LogPut(p, "\r\nSTAGE2: IRQ0TL persec=");
         for (t = 0; t <= last && t < IRQ0TL_SECS; ++t) {
-            p = zput(p, t ? "," : ""); p = zhex(p, g_irq0_tl[t]);
-            if (p - base > 3600) { log_append(LOG_PATH, base, p); p = base; }
+            p = LogPut(p, t ? "," : ""); p = LogHex(p, g_irq0_tl[t]);
+            if (p - base > 3600) { LogAppend(LOG_PATH, base, p); p = base; }
         }
-        p = zput(p, "\r\nSTAGE2: IRQ0GAP ms[<1,1,2,4,8,16,32,64+]=");
-        for (t = 0; t < 8; ++t) { p = zput(p, t ? "," : "");
-                                  p = zhex(p, g_irq0_gap_hist[t]); }
-        p = zput(p, " n="); p = zhex(p, g_irq0_gap_n);
-        p = zput(p, " max_ms="); p = zhex(p, g_irq0_gap_max_ms);
+        p = LogPut(p, "\r\nSTAGE2: IRQ0GAP ms[<1,1,2,4,8,16,32,64+]=");
+        for (t = 0; t < 8; ++t) { p = LogPut(p, t ? "," : "");
+                                  p = LogHex(p, g_irq0_gap_hist[t]); }
+        p = LogPut(p, " n="); p = LogHex(p, g_irq0_gap_n);
+        p = LogPut(p, " max_ms="); p = LogHex(p, g_irq0_gap_max_ms);
         /* ── ★ IS THE MUSIC ISR THE CULPRIT? io-per-MILLISECOND, anomalous vs normal.
              A RATE, because a longer gap collects more I/O whatever the guest is
              doing -- comparing io-per-GAP across populations of different length is
@@ -36561,19 +36561,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              ports (a trapped-I/O overrun) and the fix is the port cost; if they are
              similar the search moves on. worst = the single biggest gap, its I/O, and
              the CS:IP where the guest re-opened interrupts (cs=0xffff means async). */
-        p = zput(p, " anom_n="); p = zhex(p, g_irq0_anom_n);
-        p = zput(p, " anom_ms="); p = zhex(p, g_irq0_anom_us / 1000u);
-        p = zput(p, " anom_io_pms=");
-        p = zhex(p, g_irq0_anom_us ? g_irq0_anom_io / (g_irq0_anom_us / 1000u ? g_irq0_anom_us / 1000u : 1u) : 0u);
-        p = zput(p, " norm_n="); p = zhex(p, g_irq0_norm_n);
-        p = zput(p, " norm_ms="); p = zhex(p, g_irq0_norm_us / 1000u);
-        p = zput(p, " norm_io_pms=");
-        p = zhex(p, g_irq0_norm_us ? g_irq0_norm_io / (g_irq0_norm_us / 1000u ? g_irq0_norm_us / 1000u : 1u) : 0u);
-        p = zput(p, " worst_ms="); p = zhex(p, g_irq0_worstgap_ms);
-        p = zput(p, " worst_io="); p = zhex(p, g_irq0_worstgap_io);
-        p = zput(p, " worst_per_us="); p = zhex(p, g_irq0_wst_per_us);
-        p = zput(p, " worst_cs="); p = zhex(p, g_irq0_worst_cs);
-        p = zput(p, " worst_ip="); p = zhex(p, g_irq0_worst_ip);
+        p = LogPut(p, " anom_n="); p = LogHex(p, g_irq0_anom_n);
+        p = LogPut(p, " anom_ms="); p = LogHex(p, g_irq0_anom_us / 1000u);
+        p = LogPut(p, " anom_io_pms=");
+        p = LogHex(p, g_irq0_anom_us ? g_irq0_anom_io / (g_irq0_anom_us / 1000u ? g_irq0_anom_us / 1000u : 1u) : 0u);
+        p = LogPut(p, " norm_n="); p = LogHex(p, g_irq0_norm_n);
+        p = LogPut(p, " norm_ms="); p = LogHex(p, g_irq0_norm_us / 1000u);
+        p = LogPut(p, " norm_io_pms=");
+        p = LogHex(p, g_irq0_norm_us ? g_irq0_norm_io / (g_irq0_norm_us / 1000u ? g_irq0_norm_us / 1000u : 1u) : 0u);
+        p = LogPut(p, " worst_ms="); p = LogHex(p, g_irq0_worstgap_ms);
+        p = LogPut(p, " worst_io="); p = LogHex(p, g_irq0_worstgap_io);
+        p = LogPut(p, " worst_per_us="); p = LogHex(p, g_irq0_wst_per_us);
+        p = LogPut(p, " worst_cs="); p = LogHex(p, g_irq0_worst_cs);
+        p = LogPut(p, " worst_ip="); p = LogHex(p, g_irq0_worst_ip);
         /* ── ★★ THE A/B/C DISCRIMINATOR. See irq0_delivered_note for how to read it.
              Deltas summed over ANOMALOUS gaps only (>= 2 of the period the guest
              itself programmed), so they are meaningful divided by anom_n above.
@@ -36586,31 +36586,31 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              A), `gen` counts those that did not (the clock itself stalled -- B).
              Whichever dominates names the fix. wst_* are the same four for the single
              worst gap, beside the period that was in force for it. */
-        p = zput(p, "\r\nSTAGE2: IRQ0WHY gen="); p = zhex(p, g_irq0_anom_gen);
-        p = zput(p, " del="); p = zhex(p, g_irq0_anom_del);
-        p = zput(p, " anom[raise,att,nie,yld]=");
-        p = zhex(p, g_irq0_anom_raise); p = zput(p, ",");
-        p = zhex(p, g_irq0_anom_att);   p = zput(p, ",");
-        p = zhex(p, g_irq0_anom_nie);   p = zput(p, ",");
-        p = zhex(p, g_irq0_anom_yld);
-        p = zput(p, " wst[raise,att,nie,yld]=");
-        p = zhex(p, g_irq0_wst_raise); p = zput(p, ",");
-        p = zhex(p, g_irq0_wst_att);   p = zput(p, ",");
-        p = zhex(p, g_irq0_wst_nie);   p = zput(p, ",");
-        p = zhex(p, g_irq0_wst_yield);
+        p = LogPut(p, "\r\nSTAGE2: IRQ0WHY gen="); p = LogHex(p, g_irq0_anom_gen);
+        p = LogPut(p, " del="); p = LogHex(p, g_irq0_anom_del);
+        p = LogPut(p, " anom[raise,att,nie,yld]=");
+        p = LogHex(p, g_irq0_anom_raise); p = LogPut(p, ",");
+        p = LogHex(p, g_irq0_anom_att);   p = LogPut(p, ",");
+        p = LogHex(p, g_irq0_anom_nie);   p = LogPut(p, ",");
+        p = LogHex(p, g_irq0_anom_yld);
+        p = LogPut(p, " wst[raise,att,nie,yld]=");
+        p = LogHex(p, g_irq0_wst_raise); p = LogPut(p, ",");
+        p = LogHex(p, g_irq0_wst_att);   p = LogPut(p, ",");
+        p = LogHex(p, g_irq0_wst_nie);   p = LogPut(p, ",");
+        p = LogHex(p, g_irq0_wst_yield);
         /* #172: see g_pm_coop_gate for the ten columns. */
-        p = zput(p, "\r\nSTAGE2: PMCOOP owed>=2 gate[latch,vif,hook,inirq,noirq,async,armed,tried,claim,decl]=");
-        { int gi; for (gi = 0; gi < 10; ++gi) { p = zput(p, gi ? "," : ""); p = zhex(p, g_pm_coop_gate[gi]); } }
-        p = zput(p, "\r\nSTAGE2: PMINJ decl[cs16,nohook]="); p = zhex(p, g_pminj_decl[0]);
-        p = zput(p, ","); p = zhex(p, g_pminj_decl[1]);
+        p = LogPut(p, "\r\nSTAGE2: PMCOOP owed>=2 gate[latch,vif,hook,inirq,noirq,async,armed,tried,claim,decl]=");
+        { int gi; for (gi = 0; gi < 10; ++gi) { p = LogPut(p, gi ? "," : ""); p = LogHex(p, g_pm_coop_gate[gi]); } }
+        p = LogPut(p, "\r\nSTAGE2: PMINJ decl[cs16,nohook]="); p = LogHex(p, g_pminj_decl[0]);
+        p = LogPut(p, ","); p = LogHex(p, g_pminj_decl[1]);
         { int t, last = -1;
           for (t = 0; t < IRQ0TL_SECS; ++t) if (g_pminj_decl_tl[t]) last = t;
-          p = zput(p, " persec=");
-          for (t = 0; t <= last; ++t) { p = zput(p, t ? "," : ""); p = zhex(p, g_pminj_decl_tl[t]); } }
-        { int k; p = zput(p, " cs16 sites:");
+          p = LogPut(p, " persec=");
+          for (t = 0; t <= last; ++t) { p = LogPut(p, t ? "," : ""); p = LogHex(p, g_pminj_decl_tl[t]); } }
+        { int k; p = LogPut(p, " cs16 sites:");
           for (k = 0; k < PMINJ_SITES && g_pminj_site[k].n; ++k) {
-              p = zput(p, " "); p = zhex(p, g_pminj_site[k].cs); p = zput(p, ":");
-              p = zhex(p, g_pminj_site[k].eip); p = zput(p, "x"); p = zhex(p, g_pminj_site[k].n); } }
+              p = LogPut(p, " "); p = LogHex(p, g_pminj_site[k].cs); p = LogPut(p, ":");
+              p = LogHex(p, g_pminj_site[k].eip); p = LogPut(p, "x"); p = LogHex(p, g_pminj_site[k].n); } }
         /* ── ★ WHAT THE TICK COURIER DID. `inj` is the whole point: ticks placed that
              the raise site had already given away to a key. Read it against IRQ0WHY's
              yld -- if inj is a large fraction of yld the courier is collecting exactly
@@ -36618,56 +36618,56 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              `giveup` the passes that spent their whole budget without placing, which
              is the guest legitimately holding interrupts off. courier=0 means the
              knob turned it off, and every other field here must then read zero. */
-        p = zput(p, "\r\nSTAGE2: COURIER on="); p = zhex(p, (DWORD)g_courier_on);
-        p = zput(p, " wakes="); p = zhex(p, g_courier_wakes);
-        p = zput(p, " inj=");   p = zhex(p, g_courier_inj);
-        p = zput(p, " tries="); p = zhex(p, g_courier_tries);
-        p = zput(p, " giveup="); p = zhex(p, g_courier_giveup);
+        p = LogPut(p, "\r\nSTAGE2: COURIER on="); p = LogHex(p, (DWORD)g_courier_on);
+        p = LogPut(p, " wakes="); p = LogHex(p, g_courier_wakes);
+        p = LogPut(p, " inj=");   p = LogHex(p, g_courier_inj);
+        p = LogPut(p, " tries="); p = LogHex(p, g_courier_tries);
+        p = LogPut(p, " giveup="); p = LogHex(p, g_courier_giveup);
     }
     /* ── ★ V86 STRETCHES: the duration of single VdmRunGuest calls, ms buckets. A big
          timer gap IS a big stretch here; str_max names where it started (cs:ip) and
          how it ended (ev). ev 2=I/O, others per the event taxonomy. */
-    p = zput(p, "\r\nSTAGE2: V86STR ms[<1,1,2,4,8,16,32,64+]=");
-    { unsigned t; for (t = 0; t < 8; ++t) { p = zput(p, t ? "," : "");
-                                            p = zhex(p, g_v86str_hist[t]); } }
-    p = zput(p, " n8="); p = zhex(p, g_v86str_n8);
-    p = zput(p, " max_ms="); p = zhex(p, g_v86str_max_ms);
-    p = zput(p, " max_cs="); p = zhex(p, g_v86str_max_cs);
-    p = zput(p, " max_ip="); p = zhex(p, g_v86str_max_ip);
-    p = zput(p, " max_ev="); p = zhex(p, g_v86str_max_ev);
-    p = zput(p, " irq0_skip=0x");         p = zhex(p, g_irq0_skip);
-    p = zput(p, " intpend=0x");           p = zhex(p, g_ev_intpend);
-    p = zput(p, " iostr=0x");             p = zhex(p, g_ev_iostr);
-    p = zput(p, " bda_tick=0x");          p = zhex(p, ((DWORD)peekw(0x46E) << 16) | peekw(0x46C));
-    p = zput(p, "\r\n");
-    { int i; p = zput(p, "STAGE2: unclaimed ports touched:");
-      for (i = 0; i < g_unclaimed_n; ++i) { p = zput(p, " 0x"); p = zhex(p, g_unclaimed[i]); }
-      p = zput(p, "\r\n"); }
+    p = LogPut(p, "\r\nSTAGE2: V86STR ms[<1,1,2,4,8,16,32,64+]=");
+    { unsigned t; for (t = 0; t < 8; ++t) { p = LogPut(p, t ? "," : "");
+                                            p = LogHex(p, g_v86str_hist[t]); } }
+    p = LogPut(p, " n8="); p = LogHex(p, g_v86str_n8);
+    p = LogPut(p, " max_ms="); p = LogHex(p, g_v86str_max_ms);
+    p = LogPut(p, " max_cs="); p = LogHex(p, g_v86str_max_cs);
+    p = LogPut(p, " max_ip="); p = LogHex(p, g_v86str_max_ip);
+    p = LogPut(p, " max_ev="); p = LogHex(p, g_v86str_max_ev);
+    p = LogPut(p, " irq0_skip=0x");         p = LogHex(p, g_irq0_skip);
+    p = LogPut(p, " intpend=0x");           p = LogHex(p, g_ev_intpend);
+    p = LogPut(p, " iostr=0x");             p = LogHex(p, g_ev_iostr);
+    p = LogPut(p, " bda_tick=0x");          p = LogHex(p, ((DWORD)peekw(0x46E) << 16) | peekw(0x46C));
+    p = LogPut(p, "\r\n");
+    { int i; p = LogPut(p, "STAGE2: unclaimed ports touched:");
+      for (i = 0; i < g_unclaimed_n; ++i) { p = LogPut(p, " 0x"); p = LogHex(p, g_unclaimed[i]); }
+      p = LogPut(p, "\r\n"); }
     /* GH #27: one line per class of unimplemented thing the run actually reached,
        so a run yields a to-do list instead of "the screen looked wrong". Empty
        lines are printed too -- "INT21 unimplemented:" with nothing after it is a
        positive statement that nothing was missing, which a suppressed line is not. */
     { int i, n;
-      p = zput(p, "STAGE2: INT21 unimplemented:");
+      p = LogPut(p, "STAGE2: INT21 unimplemented:");
       for (i = 0, n = 0; i < 256; ++i)
-          if ((m.Unimplemented[i >> 3] >> (i & 7)) & 1u) { p = zput(p, " AH=0x"); p = zhexb(p, (unsigned)i); ++n; }
-      if (!n) p = zput(p, " none");
-      p = zput(p, "\r\n");
-      p = zput(p, "STAGE2: INT21 undefined-on-6.22 (no-op, matches DOS):");
+          if ((m.Unimplemented[i >> 3] >> (i & 7)) & 1u) { p = LogPut(p, " AH=0x"); p = LogHexByte(p, (unsigned)i); ++n; }
+      if (!n) p = LogPut(p, " none");
+      p = LogPut(p, "\r\n");
+      p = LogPut(p, "STAGE2: INT21 undefined-on-6.22 (no-op, matches DOS):");
       for (i = 0, n = 0; i < 256; ++i)
-          if ((m.Undefined[i >> 3] >> (i & 7)) & 1u) { p = zput(p, " AH=0x"); p = zhexb(p, (unsigned)i); ++n; }
-      if (!n) p = zput(p, " none");
-      p = zput(p, "\r\n");
-      p = zput(p, "STAGE2: BIOS partial/unimplemented:");
+          if ((m.Undefined[i >> 3] >> (i & 7)) & 1u) { p = LogPut(p, " AH=0x"); p = LogHexByte(p, (unsigned)i); ++n; }
+      if (!n) p = LogPut(p, " none");
+      p = LogPut(p, "\r\n");
+      p = LogPut(p, "STAGE2: BIOS partial/unimplemented:");
       for (i = 0, n = 0; i < 256; ++i)
-          if (g_bios_unimpl[i]) { p = zput(p, " INT"); p = zhexb(p, (unsigned)i); ++n; }
-      if (!n) p = zput(p, " none");
-      p = zput(p, "\r\n");
-      p = zput(p, "STAGE2: INT10 unimplemented:");
+          if (g_bios_unimpl[i]) { p = LogPut(p, " INT"); p = LogHexByte(p, (unsigned)i); ++n; }
+      if (!n) p = LogPut(p, " none");
+      p = LogPut(p, "\r\n");
+      p = LogPut(p, "STAGE2: INT10 unimplemented:");
       for (i = 0, n = 0; i < 256; ++i)
-          if (VIDEO_UNIMPLEMENTED_GET(g_vid.UnimplementedFunctions, i)) { p = zput(p, " AH=0x"); p = zhexb(p, (unsigned)i); ++n; }
-      if (!n) p = zput(p, " none");
-      p = zput(p, "\r\n");
+          if (VIDEO_UNIMPLEMENTED_GET(g_vid.UnimplementedFunctions, i)) { p = LogPut(p, " AH=0x"); p = LogHexByte(p, (unsigned)i); ++n; }
+      if (!n) p = LogPut(p, " none");
+      p = LogPut(p, "\r\n");
       { unsigned pl, nz[4]; 
         for (pl = 0; pl < 4; ++pl) { unsigned k2, c2 = 0;
             { const uint8_t *pb = g_vid.YMapPlane ? g_vid.YMapPlane(g_vid.YMapContext, pl) : g_vid.Planes[pl];
@@ -36689,20 +36689,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           if (hc != INVALID_HANDLE_VALUE) {
               DWORD wr = 0; WriteFile(hc, g_sb.CaptureBuffer, g_sb.CaptureLength, &wr, NULL); CloseHandle(hc);
           }
-          p = zput(p, "STAGE2: sound: raw PCM capture -> sb.raw, "); p = zhex(p, g_sb.CaptureLength);
-          p = zput(p, " bytes\r\n");
+          p = LogPut(p, "STAGE2: sound: raw PCM capture -> sb.raw, "); p = LogHex(p, g_sb.CaptureLength);
+          p = LogPut(p, " bytes\r\n");
       }
       gus_report();
-      p = zput(p, "STAGE2: sound: sb_blocks="); p = zhex(p, g_sb.Blocks);
-        p = zput(p, " sb_rate=");                 p = zhex(p, g_sb.RateHz);
-        p = zput(p, " sb_mode=");                 p = zhex(p, (DWORD)g_sb.TransferMode);
-        p = zput(p, " sb_dspwr=");                p = zhex(p, g_sb.DspWrites);
-        p = zput(p, " midi_msgs=");               p = zhex(p, g_mpu.MessagesSent);
-        p = zput(p, "\r\n");
-        p = zput(p, "STAGE2: async per IRQ:");
+      p = LogPut(p, "STAGE2: sound: sb_blocks="); p = LogHex(p, g_sb.Blocks);
+        p = LogPut(p, " sb_rate=");                 p = LogHex(p, g_sb.RateHz);
+        p = LogPut(p, " sb_mode=");                 p = LogHex(p, (DWORD)g_sb.TransferMode);
+        p = LogPut(p, " sb_dspwr=");                p = LogHex(p, g_sb.DspWrites);
+        p = LogPut(p, " midi_msgs=");               p = LogHex(p, g_mpu.MessagesSent);
+        p = LogPut(p, "\r\n");
+        p = LogPut(p, "STAGE2: async per IRQ:");
         { unsigned li; for (li = 0; li < 8; ++li) {
-            p = zput(p, " irq"); p = zhexb(p, li); p = zput(p, "=");
-            p = zhex(p, g_async_inj_line[li]); } }
+            p = LogPut(p, " irq"); p = LogHexByte(p, li); p = LogPut(p, "=");
+            p = LogHex(p, g_async_inj_line[li]); } }
         /* The retry that did not exist before: every one of these is a block-completion
            IRQ that would previously have been dropped, and so a 256-byte refill DMX would
            never have made. Compare `devirq_inj` against the shortfall between sb_blocks
@@ -36719,36 +36719,36 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              like "the code did not run" and cost a wasted pair of rig runs to tell apart
              from a stale binary. Two counters in the same basic block cannot disagree
              about whether they executed; when they appear to, suspect the transport. */
-        p = zput(p, "\r\n");
-        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-        p = zput(p, "STAGE2: sb replay: blocks_checked="); p = zhex(p, g_sb.BlocksChecked);
-        p = zput(p, " REPLAYED=");   p = zhex(p, g_sb.BlocksReplayed);
+        p = LogPut(p, "\r\n");
+        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
+        p = LogPut(p, "STAGE2: sb replay: blocks_checked="); p = LogHex(p, g_sb.BlocksChecked);
+        p = LogPut(p, " REPLAYED=");   p = LogHex(p, g_sb.BlocksReplayed);
         if (g_sb.BlocksChecked) {
-            p = zput(p, " (");
-            p = zhex(p, g_sb.BlocksReplayed * 100u / g_sb.BlocksChecked);
-            p = zput(p, "% of blocks, decimal-in-hex)");
+            p = LogPut(p, " (");
+            p = LogHex(p, g_sb.BlocksReplayed * 100u / g_sb.BlocksChecked);
+            p = LogPut(p, "% of blocks, decimal-in-hex)");
         }
         /* ► ...AND HOW MANY OF THOSE BLOCKS CARRIED ANY AUDIO. A silent block is
              identical to the previous lap when the guest refills it CORRECTLY, so
              `REPLAYED` on its own cannot support "DMX never refilled it". Only
              REPLAYED_LOUD can, and its denominator is the non-flat blocks. */
-        p = zput(p, " flat=");          p = zhex(p, g_sb.BlocksFlat);
-        p = zput(p, " REPLAYED_LOUD="); p = zhex(p, g_sb.BlocksReplayedLoud);
+        p = LogPut(p, " flat=");          p = LogHex(p, g_sb.BlocksFlat);
+        p = LogPut(p, " REPLAYED_LOUD="); p = LogHex(p, g_sb.BlocksReplayedLoud);
         if (g_sb.BlocksChecked > g_sb.BlocksFlat) {
-            p = zput(p, " (");
-            p = zhex(p, g_sb.BlocksReplayedLoud * 100u
+            p = LogPut(p, " (");
+            p = LogHex(p, g_sb.BlocksReplayedLoud * 100u
                         / (g_sb.BlocksChecked - g_sb.BlocksFlat));
-            p = zput(p, "% of NON-FLAT blocks, decimal-in-hex)");
+            p = LogPut(p, "% of NON-FLAT blocks, decimal-in-hex)");
         }
-        p = zput(p, " runs[1,2,3,4-7,8-15,16-31,32-63,64+]=");
+        p = LogPut(p, " runs[1,2,3,4-7,8-15,16-31,32-63,64+]=");
         { unsigned rb; for (rb = 0; rb < 8; ++rb)
-            { p = zput(p, rb ? "," : ""); p = zhex(p, g_sb.ReplayRuns[rb]); } }
-        p = zput(p, " run_max="); p = zhex(p, g_sb.ReplayRunMax);
-        p = zput(p, " byte_lap_same="); p = zhex(p, g_sb.LapSame);
-        p = zput(p, "/");              p = zhex(p, g_sb.LapTotal);
-        p = zput(p, " ring=");         p = zhex(p, g_sb.LapLength);
-        p = zput(p, " toobig=");       p = zhex(p, g_sb.LapTooBig);
-        p = zput(p, " lead_buffers=");  p = zhex(p, g_wave.BufferCount);
+            { p = LogPut(p, rb ? "," : ""); p = LogHex(p, g_sb.ReplayRuns[rb]); } }
+        p = LogPut(p, " run_max="); p = LogHex(p, g_sb.ReplayRunMax);
+        p = LogPut(p, " byte_lap_same="); p = LogHex(p, g_sb.LapSame);
+        p = LogPut(p, "/");              p = LogHex(p, g_sb.LapTotal);
+        p = LogPut(p, " ring=");         p = LogHex(p, g_sb.LapLength);
+        p = LogPut(p, " toobig=");       p = LogHex(p, g_sb.LapTooBig);
+        p = LogPut(p, " lead_buffers=");  p = LogHex(p, g_wave.BufferCount);
         /* ► WHAT THE BOUNDED REFLECTED-DISPATCH TRACE STOPPED WRITING DOWN. Every INT
              reflected to a client's own PM handler is counted per (vector, AH) even once
              the per-pair line budget is spent, and this is where the counts come back.
@@ -36765,37 +36765,37 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              sessions with nothing to show it. A service that silently does nothing and
              reports success is this project's most expensive bug shape; the counter for
              it belongs where the evidence is read. */
-        p = zput(p, "\r\nSTAGE2: simInt (DPMI 0300) UNHANDLED: total=");
-        p = zhex(p, g_simint_unhandled);
+        p = LogPut(p, "\r\nSTAGE2: simInt (DPMI 0300) UNHANDLED: total=");
+        p = LogHex(p, g_simint_unhandled);
         { unsigned sv, any = 0;
           for (sv = 0; sv < 256; ++sv) if (g_simint_vec[sv]) {
-              p = zput(p, " int"); p = zhexb(p, (BYTE)sv);
-              p = zput(p, "h x"); p = zhex(p, g_simint_vec[sv]); any = 1; }
-          if (!any) p = zput(p, " (none -- every simulated interrupt was serviced)"); }
-        p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-        p = zput(p, "STAGE2: PM default IRQ handler reflected to the BIOS: ");
-        p = zhex(p, g_pm_irq_reflects);
-        p = zput(p, "  -> the guest's real-mode ISR: "); p = zhex(p, g_pm_irq_rm_reflects);
-        p = zput(p, " (failed "); p = zhex(p, g_pm_irq_rm_fail); p = zput(p, ")");
-        p = zput(p, "\r\n"); log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
-        p = zput(p, "STAGE2: PM reflected dispatches (vec/AH=count):");
+              p = LogPut(p, " int"); p = LogHexByte(p, (BYTE)sv);
+              p = LogPut(p, "h x"); p = LogHex(p, g_simint_vec[sv]); any = 1; }
+          if (!any) p = LogPut(p, " (none -- every simulated interrupt was serviced)"); }
+        p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
+        p = LogPut(p, "STAGE2: PM default IRQ handler reflected to the BIOS: ");
+        p = LogHex(p, g_pm_irq_reflects);
+        p = LogPut(p, "  -> the guest's real-mode ISR: "); p = LogHex(p, g_pm_irq_rm_reflects);
+        p = LogPut(p, " (failed "); p = LogHex(p, g_pm_irq_rm_fail); p = LogPut(p, ")");
+        p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
+        p = LogPut(p, "STAGE2: PM reflected dispatches (vec/AH=count):");
         { unsigned dv, da, shown = 0;
           for (dv = 0; dv < 256 && shown < 24; ++dv)
             for (da = 0; da < 256 && shown < 24; ++da) {
                 if (!g_pm_disp_count[dv][da]) continue;
-                p = zput(p, " "); p = zhexb(p, (BYTE)dv);
-                p = zput(p, "/");  p = zhexb(p, (BYTE)da);
-                p = zput(p, "=");  p = zhex(p, g_pm_disp_count[dv][da]);
+                p = LogPut(p, " "); p = LogHexByte(p, (BYTE)dv);
+                p = LogPut(p, "/");  p = LogHexByte(p, (BYTE)da);
+                p = LogPut(p, "=");  p = LogHex(p, g_pm_disp_count[dv][da]);
                 ++shown;
             }
-          if (!shown) p = zput(p, " none"); }
-        p = zput(p, "\r\nSTAGE2: pit budget: syncs="); p = zhex(p, g_pit_syncs);
-        p = zput(p, " raises=");    p = zhex(p, g_irq_raised[0]);
-        p = zput(p, " attempts=");  p = zhex(p, g_pit_async_attempts);
-        p = zput(p, " delivered="); p = zhex(p, g_async_inj_line[0]);
-        p = zput(p, " owed_max=");  p = zhex(p, (DWORD)g_pm_tick_owed_max);
-        p = zput(p, " ui_gap_us="); p = zhex(p, g_ui_gap_us);
-        p = zput(p, "\r\n");
+          if (!shown) p = LogPut(p, " none"); }
+        p = LogPut(p, "\r\nSTAGE2: pit budget: syncs="); p = LogHex(p, g_pit_syncs);
+        p = LogPut(p, " raises=");    p = LogHex(p, g_irq_raised[0]);
+        p = LogPut(p, " attempts=");  p = LogHex(p, g_pit_async_attempts);
+        p = LogPut(p, " delivered="); p = LogHex(p, g_async_inj_line[0]);
+        p = LogPut(p, " owed_max=");  p = LogHex(p, (DWORD)g_pm_tick_owed_max);
+        p = LogPut(p, " ui_gap_us="); p = LogHex(p, g_ui_gap_us);
+        p = LogPut(p, "\r\n");
         /* ► THE WHOLE DELIVERY ACCOUNT, IN ONE LINE, IN THE UNITS OF THE CLAIM. `raises`
              is what the 8254 generated; `async` is the SuspendThread arm; `coop` is the
              PM loop's own injections (the #2b latch plus the catch-up batch). Only the
@@ -36803,28 +36803,28 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              the first of the two -- which is how "we deliver 39% of the ticks Doom asked
              for" was read off an async-only counter. owed_now is the live depth, and the
              histogram behind it says how often the backlog was actually deep. */
-        p = zput(p, "STAGE2: isr08 delivery: raises=");  p = zhex(p, g_irq_raised[0]);
-        p = zput(p, " async=");   p = zhex(p, g_async_inj_line[0]);
-        p = zput(p, " coop=");    p = zhex(p, g_pm_coop_line[0]);
-        p = zput(p, " TOTAL=");   p = zhex(p, g_async_inj_line[0] + g_pm_coop_line[0]);
+        p = LogPut(p, "STAGE2: isr08 delivery: raises=");  p = LogHex(p, g_irq_raised[0]);
+        p = LogPut(p, " async=");   p = LogHex(p, g_async_inj_line[0]);
+        p = LogPut(p, " coop=");    p = LogHex(p, g_pm_coop_line[0]);
+        p = LogPut(p, " TOTAL=");   p = LogHex(p, g_async_inj_line[0] + g_pm_coop_line[0]);
         if (g_irq_raised[0])
-            { p = zput(p, " (");
-              p = zhex(p, (g_async_inj_line[0] + g_pm_coop_line[0]) * 100u / g_irq_raised[0]);
-              p = zput(p, "% of raises, decimal-in-hex)"); }
-        p = zput(p, " owed_now="); p = zhex(p, (DWORD)g_pm_tick_owed);
-        p = zput(p, " owed_depth_at_sync[0,1,2,3,4-7,8-15,16-31,32-63,64]=");
+            { p = LogPut(p, " (");
+              p = LogHex(p, (g_async_inj_line[0] + g_pm_coop_line[0]) * 100u / g_irq_raised[0]);
+              p = LogPut(p, "% of raises, decimal-in-hex)"); }
+        p = LogPut(p, " owed_now="); p = LogHex(p, (DWORD)g_pm_tick_owed);
+        p = LogPut(p, " owed_depth_at_sync[0,1,2,3,4-7,8-15,16-31,32-63,64]=");
         { unsigned ob; for (ob = 0; ob < 9; ++ob)
-            { p = zput(p, ob ? "," : ""); p = zhex(p, g_pm_owed_hist[ob]); } }
-        p = zput(p, "\r\nSTAGE2: coop per IRQ:");
+            { p = LogPut(p, ob ? "," : ""); p = LogHex(p, g_pm_owed_hist[ob]); } }
+        p = LogPut(p, "\r\nSTAGE2: coop per IRQ:");
         { unsigned cl; for (cl = 0; cl < 8; ++cl)
             { if (!g_pm_coop_line[cl]) continue;
-              p = zput(p, " irq"); p = zhexb(p, cl);
-              p = zput(p, "=");    p = zhex(p, g_pm_coop_line[cl]); } }
-        p = zput(p, "\r\n");
+              p = LogPut(p, " irq"); p = LogHexByte(p, cl);
+              p = LogPut(p, "=");    p = LogHex(p, g_pm_coop_line[cl]); } }
+        p = LogPut(p, "\r\n");
         /* Flushed first, deliberately: `base` points past the preamble, so report[] has
            well under 8 KB of headroom and the sbblk ledger below eats most of what is
            left. Then which clause said no, per line (async_why_report). */
-        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
         async_why_report();
         exec_share_report();
         ifv_report();   /* IF/VIF census -- see ifv_note */
@@ -36833,79 +36833,79 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              makes is downstream of our cur_addr, which advances on the audio thread in
              whatever chunk size waveOut asked for. Zero means that whole family of
              causes is dead and the refill is driven by the IRQ count alone. */
-        p = zput(p, "STAGE2: 8237 guest reads: ch1_addr="); p = zhex(p, g_dma.AddressReads[1]);
-        p = zput(p, " ch1_count=");  p = zhex(p, g_dma.ChannelCountReads[1]);
-        p = zput(p, " ch5_addr=");   p = zhex(p, g_dma.AddressReads[5]);
-        p = zput(p, " ch5_count=");  p = zhex(p, g_dma.ChannelCountReads[5]);
-        p = zput(p, " status0=");    p = zhex(p, g_dma.StatusReads[0]);
-        p = zput(p, " status1=");    p = zhex(p, g_dma.StatusReads[1]);
+        p = LogPut(p, "STAGE2: 8237 guest reads: ch1_addr="); p = LogHex(p, g_dma.AddressReads[1]);
+        p = LogPut(p, " ch1_count=");  p = LogHex(p, g_dma.ChannelCountReads[1]);
+        p = LogPut(p, " ch5_addr=");   p = LogHex(p, g_dma.AddressReads[5]);
+        p = LogPut(p, " ch5_count=");  p = LogHex(p, g_dma.ChannelCountReads[5]);
+        p = LogPut(p, " status0=");    p = LogHex(p, g_dma.StatusReads[0]);
+        p = LogPut(p, " status1=");    p = LogHex(p, g_dma.StatusReads[1]);
         /* ► THE OUTPUT SIDE. See vdd_sb.h: everything else here measures the RING.
              `idle` is silence WE inserted because the DSP was un-armed; the run-length
              buckets say whether that is a scatter of single samples or a gap once per
              block. `cmd` names which transfer command the guest used -- 0x14 single
              (stops every block) vs 0x1C/0xBx auto-init (streams). */
-        p = zput(p, "\r\nSTAGE2: sb OUTPUT: active="); p = zhex(p, g_sb.OutputActive);
-        p = zput(p, " idle=");   p = zhex(p, g_sb.OutputIdle);
-        p = zput(p, " paused="); p = zhex(p, g_sb.OutputPaused);
+        p = LogPut(p, "\r\nSTAGE2: sb OUTPUT: active="); p = LogHex(p, g_sb.OutputActive);
+        p = LogPut(p, " idle=");   p = LogHex(p, g_sb.OutputIdle);
+        p = LogPut(p, " paused="); p = LogHex(p, g_sb.OutputPaused);
         { uint32_t tot = g_sb.OutputActive + g_sb.OutputIdle + g_sb.OutputPaused;
-          if (tot) { p = zput(p, " (");
-                     p = zhex(p, (g_sb.OutputIdle + g_sb.OutputPaused) * 100u / tot);
-                     p = zput(p, "% of output is inserted silence)"); } }
-        p = zput(p, " gap_runs[1,2,4,8,16,32,64,128+]=");
-        { int gb; for (gb = 0; gb < 8; ++gb) { p = zput(p, gb ? "," : "");
-                                               p = zhex(p, g_sb.IdleRuns[gb]); } }
+          if (tot) { p = LogPut(p, " (");
+                     p = LogHex(p, (g_sb.OutputIdle + g_sb.OutputPaused) * 100u / tot);
+                     p = LogPut(p, "% of output is inserted silence)"); } }
+        p = LogPut(p, " gap_runs[1,2,4,8,16,32,64,128+]=");
+        { int gb; for (gb = 0; gb < 8; ++gb) { p = LogPut(p, gb ? "," : "");
+                                               p = LogHex(p, g_sb.IdleRuns[gb]); } }
         /* ► ISOLATED silent blocks are the dropouts; long runs are real silence. */
-        p = zput(p, " flat_runs[1,2,3,4-7,8-15,16-31,32-63,64+]=");
-        { int fb; for (fb = 0; fb < 8; ++fb) { p = zput(p, fb ? "," : "");
-                                               p = zhex(p, g_sb.FlatRuns[fb]); } }
+        p = LogPut(p, " flat_runs[1,2,3,4-7,8-15,16-31,32-63,64+]=");
+        { int fb; for (fb = 0; fb < 8; ++fb) { p = LogPut(p, fb ? "," : "");
+                                               p = LogHex(p, g_sb.FlatRuns[fb]); } }
         /* ► THE QUEUE, WHICH IS WHAT THE SPEAKER ACTUALLY SEES. STARVED>0 means the
              driver ran out of data and played silence -- an audible gap that no
              ring-side counter can show. `drain` is the margin: its mass sitting at
              nbufs-1 is one buffer from silence even when starved reads 0. */
-        p = zput(p, " QUEUE: starved="); p = zhex(p, g_wave.Starved);
-        p = zput(p, " drain_max=");      p = zhex(p, g_wave.DrainMax);
-        p = zput(p, " wr_fail=");        p = zhex(p, g_wave.Underruns);
-        p = zput(p, " drain_hist=");
+        p = LogPut(p, " QUEUE: starved="); p = LogHex(p, g_wave.Starved);
+        p = LogPut(p, " drain_max=");      p = LogHex(p, g_wave.DrainMax);
+        p = LogPut(p, " wr_fail=");        p = LogHex(p, g_wave.Underruns);
+        p = LogPut(p, " drain_hist=");
         { uint32_t db; for (db = 0; db <= g_wave.BufferCount && db <= AUDIO_WAVE_BUFFERS; ++db) {
-              p = zput(p, db ? "," : ""); p = zhex(p, g_wave.DrainHistogram[db]); } }
-        p = zput(p, " geom: nbufs="); p = zhex(p, g_wave.BufferCount);
-        p = zput(p, " nframes=");     p = zhex(p, g_wave.FrameCount);
-        p = zput(p, " GATE: on="); p = zhex(p, (DWORD)g_sb.GateMode);
-        p = zput(p, " stalled_samples="); p = zhex(p, g_sb.GateStalled);
-        p = zput(p, " FORCED="); p = zhex(p, g_sb.GateForced);
-        if (g_sb.OutputActive) { p = zput(p, "(stall=");
-            p = zhex(p, g_sb.GateStalled * 1000u / g_sb.OutputActive);
-            p = zput(p, " per mille of output)"); }
-        p = zput(p, " mix82=");   p = zhex(p, g_sb.Mixer82Reads);
-        p = zput(p, " ANSWERED_NO="); p = zhex(p, g_sb.Mixer82Zero);
-        if (g_sb.Mixer82Reads) { p = zput(p, "(");
-            p = zhex(p, g_sb.Mixer82Zero * 100u / g_sb.Mixer82Reads);
-            p = zput(p, "% turned away)"); }
-        p = zput(p, " rate_hz="); p = zhex(p, g_sb.RateHz);
-        p = zput(p, " blk_len="); p = zhex(p, g_sb.BlockLength);
-        p = zput(p, " dsp_cmds:");
+              p = LogPut(p, db ? "," : ""); p = LogHex(p, g_wave.DrainHistogram[db]); } }
+        p = LogPut(p, " geom: nbufs="); p = LogHex(p, g_wave.BufferCount);
+        p = LogPut(p, " nframes=");     p = LogHex(p, g_wave.FrameCount);
+        p = LogPut(p, " GATE: on="); p = LogHex(p, (DWORD)g_sb.GateMode);
+        p = LogPut(p, " stalled_samples="); p = LogHex(p, g_sb.GateStalled);
+        p = LogPut(p, " FORCED="); p = LogHex(p, g_sb.GateForced);
+        if (g_sb.OutputActive) { p = LogPut(p, "(stall=");
+            p = LogHex(p, g_sb.GateStalled * 1000u / g_sb.OutputActive);
+            p = LogPut(p, " per mille of output)"); }
+        p = LogPut(p, " mix82=");   p = LogHex(p, g_sb.Mixer82Reads);
+        p = LogPut(p, " ANSWERED_NO="); p = LogHex(p, g_sb.Mixer82Zero);
+        if (g_sb.Mixer82Reads) { p = LogPut(p, "(");
+            p = LogHex(p, g_sb.Mixer82Zero * 100u / g_sb.Mixer82Reads);
+            p = LogPut(p, "% turned away)"); }
+        p = LogPut(p, " rate_hz="); p = LogHex(p, g_sb.RateHz);
+        p = LogPut(p, " blk_len="); p = LogHex(p, g_sb.BlockLength);
+        p = LogPut(p, " dsp_cmds:");
         { unsigned cc; for (cc = 0; cc < 256; ++cc)
-            if (g_sb.CommandHistogram[cc]) { p = zput(p, " "); p = zhexb(p, cc);
-                                     p = zput(p, "x"); p = zhex(p, g_sb.CommandHistogram[cc]); } }
-        p = zput(p, "\r\nSTAGE2: sb ");
+            if (g_sb.CommandHistogram[cc]) { p = LogPut(p, " "); p = LogHexByte(p, cc);
+                                     p = LogPut(p, "x"); p = LogHex(p, g_sb.CommandHistogram[cc]); } }
+        p = LogPut(p, "\r\nSTAGE2: sb ");
         /* ► THE GUEST ADDRESS OF EVERY DMA-COUNT POLL. Subtract 0x03AEDFEC for the
              DOOM.EXE file offset and disassemble it. */
-        p = zput(p, " dma_poll_sites=");
+        p = LogPut(p, " dma_poll_sites=");
         { unsigned s; for (s = 0; s < g_dmapoll_n; ++s) {
-              p = zput(p, s ? " " : ""); p = zput(p, "0x"); p = zhex(p, g_dmapoll_eip[s]);
-              p = zput(p, "x"); p = zhex(p, g_dmapoll_hits[s]); } }
-        p = zput(p, " overflow="); p = zhex(p, (DWORD)g_dmapoll_overflow);
+              p = LogPut(p, s ? " " : ""); p = LogPut(p, "0x"); p = LogHex(p, g_dmapoll_eip[s]);
+              p = LogPut(p, "x"); p = LogHex(p, g_dmapoll_hits[s]); } }
+        p = LogPut(p, " overflow="); p = LogHex(p, (DWORD)g_dmapoll_overflow);
         /* ► THE CALL CHAIN. Subtract 0x03AEDFEC for the DOOM.EXE file offset. */
-        p = zput(p, " poll_stack=");
+        p = LogPut(p, " poll_stack=");
         { unsigned s; for (s = 0; s < g_pollstk_n; ++s) {
-              p = zput(p, s ? " " : ""); p = zput(p, "0x"); p = zhex(p, g_pollstk[s]);
-              p = zput(p, "x"); p = zhex(p, g_pollstk_hits[s]); } }
-        p = zput(p, " stkovf="); p = zhex(p, (DWORD)g_pollstk_overflow);
+              p = LogPut(p, s ? " " : ""); p = LogPut(p, "0x"); p = LogHex(p, g_pollstk[s]);
+              p = LogPut(p, "x"); p = LogHex(p, g_pollstk_hits[s]); } }
+        p = LogPut(p, " stkovf="); p = LogHex(p, (DWORD)g_pollstk_overflow);
         /* ► WHY ONLY 56 MIXER RUNS/s: long overruns (a) or bunching (b)? */
-        p = zput(p, " poll_gap_us[<1k,2k,4k,8k,16k,32k,64k,128k,256k,+]=");
-        { unsigned gb; for (gb = 0; gb < 10; ++gb) { p = zput(p, gb ? "," : "");
-                                                     p = zhex(p, g_pollgap[gb]); } }
-        p = zput(p, " gap_max_us="); p = zhex(p, g_pollgap_max_us);
+        p = LogPut(p, " poll_gap_us[<1k,2k,4k,8k,16k,32k,64k,128k,256k,+]=");
+        { unsigned gb; for (gb = 0; gb < 10; ++gb) { p = LogPut(p, gb ? "," : "");
+                                                     p = LogHex(p, g_pollgap[gb]); } }
+        p = LogPut(p, " gap_max_us="); p = LogHex(p, g_pollgap_max_us);
         /* ── READ DMX'S TASK PERIOD OUT OF THE LIVE GUEST. ──────────────────────────
              Everything about the refill rate is inferred from how often the mixer polls:
              "period 1 tick, overrunning" and "period 2 ticks, working as designed" both
@@ -36934,12 +36934,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                killed the host mid-summary: Skyroads crashed on exit four times over
                and truncated its own STAGE2 log at `async why irq00`. A Doom-shaped
                instrument must be inert everywhere else, so ASK FIRST. */
-          p = zput(p, " DMXCHK=");
+          p = LogPut(p, " DMXCHK=");
           if (mem_readable((ULONG_PTR)stub, 5))
-              for (t = 0; t < 5; ++t) p = zhexb(p, stub[t]);   /* expect 601e060fa0 */
+              for (t = 0; t < 5; ++t) p = LogHexByte(p, stub[t]);   /* expect 601e060fa0 */
           else
-              p = zput(p, "unmapped");   /* not Doom: the probe has nothing to say */
-          p = zput(p, " mixer=0x"); p = zhex(p, mixer);
+              p = LogPut(p, "unmapped");   /* not Doom: the probe has nothing to say */
+          p = LogPut(p, " mixer=0x"); p = LogHex(p, mixer);
           while (a < lim && found < 3) {
               ULONG_PTR base, end, q;
               int readable;
@@ -36976,19 +36976,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                       unsigned iq;
                       if (q + 16u * 36u > end) continue;   /* table must fit */
                       ++found;
-                      p = zput(p, " IRQTAB@0x"); p = zhex(p, (DWORD)q);
+                      p = LogPut(p, " IRQTAB@0x"); p = LogHex(p, (DWORD)q);
                       for (iq = 0; iq < 16; ++iq) {
                           DWORD h = *(const volatile DWORD *)(q + iq * 36u);
                           if (!h) continue;
-                          p = zput(p, " i"); p = zhexb(p, iq);
-                          p = zput(p, "=0x"); p = zhex(p, h);
+                          p = LogPut(p, " i"); p = LogHexByte(p, iq);
+                          p = LogPut(p, "=0x"); p = LogHex(p, h);
                       }
                   }
               }
               if (end <= base) break;
               a = end;
           }
-          if (!found) p = zput(p, " IRQTAB-NOT-FOUND");
+          if (!found) p = LogPut(p, " IRQTAB-NOT-FOUND");
           /* ── THE CALLBACK BETWEEN THE SB ISR AND THE MIXER. ─────────────────────
                DMX's SB handler ends by calling through a pointer stored at data 0x584
                (the value read back there is a code address), and that callback is
@@ -37007,39 +37007,39 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             MEMORY_BASIC_INFORMATION mq;
             if (VirtualQuery((LPCVOID)cb, &mq, sizeof mq) == sizeof mq && mq.State == MEM_COMMIT) {
                 DWORD v = *cb;
-                p = zput(p, " CB[0x584]=0x"); p = zhex(p, v);
+                p = LogPut(p, " CB[0x584]=0x"); p = LogHex(p, v);
                 if (v > 0x03AEDFECu && v < 0x03AEDFECu + 0x45000u) {
-                    p = zput(p, "=file0x"); p = zhex(p, v - 0x03AEDFECu);
-                } else p = zput(p, "(not a linear code addr)");
+                    p = LogPut(p, "=file0x"); p = LogHex(p, v - 0x03AEDFECu);
+                } else p = LogPut(p, "(not a linear code addr)");
             }
             if (VirtualQuery((LPCVOID)stt, &mq, sizeof mq) == sizeof mq && mq.State == MEM_COMMIT) {
-                p = zput(p, " STATE[0x26370]="); p = zhex(p, *stt);
+                p = LogPut(p, " STATE[0x26370]="); p = LogHex(p, *stt);
             } } }
-        p = zput(p, " count_rd_by_width w1="); p = zhex(p, g_dma.CountReadsByte);
-        p = zput(p, " w2=");                   p = zhex(p, g_dma.CountReadsWord);
-        p = zput(p, " w4=");                   p = zhex(p, g_dma.CountReadsDword);
+        p = LogPut(p, " count_rd_by_width w1="); p = LogHex(p, g_dma.CountReadsByte);
+        p = LogPut(p, " w2=");                   p = LogHex(p, g_dma.CountReadsWord);
+        p = LogPut(p, " w4=");                   p = LogHex(p, g_dma.CountReadsDword);
         /* ...and how many of those reads DMX made from inside a COOPERATIVE tick. */
-        p = zput(p, " from_coop_isr08=");      p = zhex(p, g_coop_dma_polls);
+        p = LogPut(p, " from_coop_isr08=");      p = LogHex(p, g_coop_dma_polls);
         { unsigned dq; for (dq = 2; dq < 8; ++dq)
             { if (!g_coop_dma_polls_dev[dq]) continue;
-              p = zput(p, " from_coop_irq"); p = zhexb(p, dq);
-              p = zput(p, "=");              p = zhex(p, g_coop_dma_polls_dev[dq]); } }
-        p = zput(p, " in_async_isr=");  p = zhex(p, g_dmapoll_in_async);
-        p = zput(p, " mainline=");      p = zhex(p, g_dmapoll_mainline);
-        p = zput(p, "\r\nSTAGE2: devirq async retry (one per sync): try=");
-        p = zhex(p, g_irqn_retry_try);
-        p = zput(p, " ok="); p = zhex(p, g_irqn_retry_ok);
-        p = zput(p, " (0/0 = every device IRQ landed at its raise instant)");
-        p = zput(p, "\r\nSTAGE2: devirq (cooperative PM retry): inj=");
-        p = zhex(p, g_pm_devirq_inj);
-        p = zput(p, " fail=");  p = zhex(p, g_pm_devirq_fail);
-        p = zput(p, " dropped_unhooked="); p = zhex(p, g_pm_devirq_drop);
-        p = zput(p, "\r\nSTAGE2: sound2: ");
-        p = zput(p, " mpu_uart=");                p = zhex(p, (DWORD)g_mpu.IsUartMode);
-        p = zput(p, " host_wave=");               p = zput(p, g_wave.IsSilent ? "SILENT" : "open");
-        p = zput(p, " host_midi=");               p = zput(p, g_wave.MidiOut ? "open" : "NONE");
-        p = zput(p, " underruns=");               p = zhex(p, g_wave.Underruns);
-        p = zput(p, "\r\n");
+              p = LogPut(p, " from_coop_irq"); p = LogHexByte(p, dq);
+              p = LogPut(p, "=");              p = LogHex(p, g_coop_dma_polls_dev[dq]); } }
+        p = LogPut(p, " in_async_isr=");  p = LogHex(p, g_dmapoll_in_async);
+        p = LogPut(p, " mainline=");      p = LogHex(p, g_dmapoll_mainline);
+        p = LogPut(p, "\r\nSTAGE2: devirq async retry (one per sync): try=");
+        p = LogHex(p, g_irqn_retry_try);
+        p = LogPut(p, " ok="); p = LogHex(p, g_irqn_retry_ok);
+        p = LogPut(p, " (0/0 = every device IRQ landed at its raise instant)");
+        p = LogPut(p, "\r\nSTAGE2: devirq (cooperative PM retry): inj=");
+        p = LogHex(p, g_pm_devirq_inj);
+        p = LogPut(p, " fail=");  p = LogHex(p, g_pm_devirq_fail);
+        p = LogPut(p, " dropped_unhooked="); p = LogHex(p, g_pm_devirq_drop);
+        p = LogPut(p, "\r\nSTAGE2: sound2: ");
+        p = LogPut(p, " mpu_uart=");                p = LogHex(p, (DWORD)g_mpu.IsUartMode);
+        p = LogPut(p, " host_wave=");               p = LogPut(p, g_wave.IsSilent ? "SILENT" : "open");
+        p = LogPut(p, " host_midi=");               p = LogPut(p, g_wave.MidiOut ? "open" : "NONE");
+        p = LogPut(p, " underruns=");               p = LogHex(p, g_wave.Underruns);
+        p = LogPut(p, "\r\n");
         /* ► THE BLOCK-BOUNDARY LEDGER (see the SB_BLOCK_RECORD comment in vdd_sb.h). One line
              per completed block for the first few: where the capture stood, what the
              8237 held, and whether it had wrapped. cap_off is the load-bearing column --
@@ -37048,105 +37048,105 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              our own guess at where a block starts. */
         if (g_sb.BlockLogCount) {
             uint32_t bi;
-            p = zput(p, "STAGE2: sound blocks: n="); p = zhex(p, g_sb.Blocks);
-            p = zput(p, " logged="); p = zhex(p, g_sb.BlockLogCount);
-            p = zput(p, " (cap_off block_len phys count base_addr base_count page mode)\r\n");
+            p = LogPut(p, "STAGE2: sound blocks: n="); p = LogHex(p, g_sb.Blocks);
+            p = LogPut(p, " logged="); p = LogHex(p, g_sb.BlockLogCount);
+            p = LogPut(p, " (cap_off block_len phys count base_addr base_count page mode)\r\n");
             for (bi = 0; bi < g_sb.BlockLogCount && bi < SB_BLOCK_LOG_MAX; ++bi) {
                 const SB_BLOCK_RECORD *b = &g_sb.BlockLog[bi];
-                p = zput(p, "STAGE2: sbblk "); p = zhexb(p, bi);
-                p = zput(p, " cap_off=");    p = zhex(p, b->CaptureOffset);
-                p = zput(p, " blk_len=");    p = zhex(p, b->BlockLength);
-                p = zput(p, " phys=");       p = zhex(p, b->Physical);
-                p = zput(p, " count=");      p = zhex(p, b->CurrentCount);
-                p = zput(p, " base=");       p = zhex(p, b->BaseAddress);
-                p = zput(p, "/");            p = zhex(p, b->BaseCount);
-                p = zput(p, " page=");       p = zhexb(p, b->Page);
-                p = zput(p, " mode=");       p = zhexb(p, b->Mode);
-                p = zput(p, b->Reloaded ? " WRAPPED" : " mid-ring");
-                if (b->Ended) p = zput(p, " ENDED");
-                p = zput(p, "\r\n");
+                p = LogPut(p, "STAGE2: sbblk "); p = LogHexByte(p, bi);
+                p = LogPut(p, " cap_off=");    p = LogHex(p, b->CaptureOffset);
+                p = LogPut(p, " blk_len=");    p = LogHex(p, b->BlockLength);
+                p = LogPut(p, " phys=");       p = LogHex(p, b->Physical);
+                p = LogPut(p, " count=");      p = LogHex(p, b->CurrentCount);
+                p = LogPut(p, " base=");       p = LogHex(p, b->BaseAddress);
+                p = LogPut(p, "/");            p = LogHex(p, b->BaseCount);
+                p = LogPut(p, " page=");       p = LogHexByte(p, b->Page);
+                p = LogPut(p, " mode=");       p = LogHexByte(p, b->Mode);
+                p = LogPut(p, b->Reloaded ? " WRAPPED" : " mid-ring");
+                if (b->Ended) p = LogPut(p, " ENDED");
+                p = LogPut(p, "\r\n");
                 /* `base` points PAST the preamble, not at report[0], so bound against
                    the array itself -- p - base would let this overrun by the preamble's
                    length. */
                 if (p > report + sizeof report - 512) {
-                    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+                    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
                 }
             }
             /* Hand the rest of STAGE2 an empty buffer: the ledger is the biggest single
                block in this report and everything after it was running on fumes. */
-            log_append(LOG_PATH, base, p); serial_out(base, p); p = base;
+            LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;
         }
-        p = zput(p, "STAGE2: opl: trace=");   p = zhex(p, g_opltrace_n);
-        p = zput(p, " tdrop=");               p = zhex(p, g_opltrace_drop);
-        p = zput(p, "\r\n");
+        p = LogPut(p, "STAGE2: opl: trace=");   p = LogHex(p, g_opltrace_n);
+        p = LogPut(p, " tdrop=");               p = LogHex(p, g_opltrace_drop);
+        p = LogPut(p, "\r\n");
         /* ── THE SPEAKER PATH, END TO END, IN ONE LINE. "I heard nothing" has four
          causes and until now no log told them apart: the guest's port writes not
          reaching the VDD, the mixer not fitted to it, a frequency it refuses, or
          a fault downstream of the mixer entirely. Each counter is taken where the
          decision is made, so the first zero names the stage. */
-    { int e; p = zput(p, "STAGE2: events: direct_io="); p = zhex(p, g_io_via_direct);
-      p = zput(p, " retro_io=");  p = zhex(p, g_io_via_retro);
-      p = zput(p, " by_event=");
+    { int e; p = LogPut(p, "STAGE2: events: direct_io="); p = LogHex(p, g_io_via_direct);
+      p = LogPut(p, " retro_io=");  p = LogHex(p, g_io_via_retro);
+      p = LogPut(p, " by_event=");
       for (e = 0; e < EV_HIST_MAX; ++e) {
           if (!g_ev_hist[e]) continue;
-          p = zput(p, " "); p = zhex(p, (DWORD)e); p = zput(p, ":"); p = zhex(p, g_ev_hist[e]);
+          p = LogPut(p, " "); p = LogHex(p, (DWORD)e); p = LogPut(p, ":"); p = LogHex(p, g_ev_hist[e]);
       }
-      p = zput(p, "\r\n"); }
-    p = zput(p, "STAGE2: pcspk: want=");   p = zhex(p, (DWORD)g_spk_real);
-    p = zput(p, " opened=");               p = zhex(p, (DWORD)g_pcspk.OpenState);
-    p = zput(p, " open_err=");             p = zhex(p, g_pcspk.OpenError);
-    p = zput(p, " via=");                  p = zhex(p, (DWORD)g_pcspk.OpenPath);
-    p = zput(p, " ioctls=");               p = zhex(p, g_pcspk.IoctlCount);
-    p = zput(p, " refused=");              p = zhex(p, g_pcspk.FailedCount);
-    p = zput(p, " last_hz=");              p = zhex(p, g_pcspk.CurrentHz);
-    p = zput(p, "\r\n");
-    p = zput(p, "STAGE2: wave: dev_volume_ok="); p = zhex(p, (DWORD)g_wave.IsDeviceVolumeKnown);
-    p = zput(p, " dev_volume=0x");               p = zhex(p, g_wave.DeviceVolume);
-    p = zput(p, " silent=");                     p = zhex(p, (DWORD)g_wave.IsSilent);
-    p = zput(p, "\r\n");
-    p = zput(p, "STAGE2: spk: fitted=");    p = zhex(p, (DWORD)(g_audio.Speaker ? 1 : 0));
-    p = zput(p, " level=");                 p = zhex(p, (DWORD)g_audio.SpeakerLevel);
-    p = zput(p, " port61=0x");              p = zhex(p, (DWORD)g_spk.Port61);
-    p = zput(p, " ch2_reload=");            p = zhex(p, (DWORD)g_pit.Counter2Reload);
-    p = zput(p, " gated_frames=");          p = zhex(p, g_audio.SpeakerGated);
-    p = zput(p, " emitted_frames=");        p = zhex(p, g_audio.SpeakerFrames);
-    p = zput(p, " last_hz=");               p = zhex(p, g_audio.SpeakerHz);
-    p = zput(p, " mixed_frames=");          p = zhex(p, g_audio.FramesMixed);
-    p = zput(p, " master=");                p = zhex(p, g_audio.Master);
-    p = zput(p, " muted=");                 p = zhex(p, (DWORD)g_audio.IsMuted);
-    p = zput(p, "\r\n");
-    p = zput(p, "STAGE2: opl: writes=");  p = zhex(p, g_opl.ProfileWrites);
-        p = zput(p, " keyons=");              p = zhex(p, g_opl.ProfileKeyOns);
-        p = zput(p, " bd_writes=");           p = zhex(p, g_opl.ProfileBdWrites);
-        p = zput(p, " bd_or=");               p = zhexb(p, g_opl.ProfileBdOr);
-        p = zput(p, " keyon_am=");            p = zhex(p, g_opl.ProfileKeyOnAm);
-        p = zput(p, " keyon_vib=");           p = zhex(p, g_opl.ProfileKeyOnVibrato);
-        p = zput(p, " am_ops=");              p = zhex(p, g_opl.ProfileAmOperators);
-        p = zput(p, " vib_ops=");             p = zhex(p, g_opl.ProfileVibratoOperators);
-        p = zput(p, " waves=");               p = zhexb(p, g_opl.ProfileWaveMask);
-        p = zput(p, " wse=");                 p = zhexb(p, g_opl.ProfileWaveformSelect);
-        p = zput(p, "\r\n");
+      p = LogPut(p, "\r\n"); }
+    p = LogPut(p, "STAGE2: pcspk: want=");   p = LogHex(p, (DWORD)g_spk_real);
+    p = LogPut(p, " opened=");               p = LogHex(p, (DWORD)g_pcspk.OpenState);
+    p = LogPut(p, " open_err=");             p = LogHex(p, g_pcspk.OpenError);
+    p = LogPut(p, " via=");                  p = LogHex(p, (DWORD)g_pcspk.OpenPath);
+    p = LogPut(p, " ioctls=");               p = LogHex(p, g_pcspk.IoctlCount);
+    p = LogPut(p, " refused=");              p = LogHex(p, g_pcspk.FailedCount);
+    p = LogPut(p, " last_hz=");              p = LogHex(p, g_pcspk.CurrentHz);
+    p = LogPut(p, "\r\n");
+    p = LogPut(p, "STAGE2: wave: dev_volume_ok="); p = LogHex(p, (DWORD)g_wave.IsDeviceVolumeKnown);
+    p = LogPut(p, " dev_volume=0x");               p = LogHex(p, g_wave.DeviceVolume);
+    p = LogPut(p, " silent=");                     p = LogHex(p, (DWORD)g_wave.IsSilent);
+    p = LogPut(p, "\r\n");
+    p = LogPut(p, "STAGE2: spk: fitted=");    p = LogHex(p, (DWORD)(g_audio.Speaker ? 1 : 0));
+    p = LogPut(p, " level=");                 p = LogHex(p, (DWORD)g_audio.SpeakerLevel);
+    p = LogPut(p, " port61=0x");              p = LogHex(p, (DWORD)g_spk.Port61);
+    p = LogPut(p, " ch2_reload=");            p = LogHex(p, (DWORD)g_pit.Counter2Reload);
+    p = LogPut(p, " gated_frames=");          p = LogHex(p, g_audio.SpeakerGated);
+    p = LogPut(p, " emitted_frames=");        p = LogHex(p, g_audio.SpeakerFrames);
+    p = LogPut(p, " last_hz=");               p = LogHex(p, g_audio.SpeakerHz);
+    p = LogPut(p, " mixed_frames=");          p = LogHex(p, g_audio.FramesMixed);
+    p = LogPut(p, " master=");                p = LogHex(p, g_audio.Master);
+    p = LogPut(p, " muted=");                 p = LogHex(p, (DWORD)g_audio.IsMuted);
+    p = LogPut(p, "\r\n");
+    p = LogPut(p, "STAGE2: opl: writes=");  p = LogHex(p, g_opl.ProfileWrites);
+        p = LogPut(p, " keyons=");              p = LogHex(p, g_opl.ProfileKeyOns);
+        p = LogPut(p, " bd_writes=");           p = LogHex(p, g_opl.ProfileBdWrites);
+        p = LogPut(p, " bd_or=");               p = LogHexByte(p, g_opl.ProfileBdOr);
+        p = LogPut(p, " keyon_am=");            p = LogHex(p, g_opl.ProfileKeyOnAm);
+        p = LogPut(p, " keyon_vib=");           p = LogHex(p, g_opl.ProfileKeyOnVibrato);
+        p = LogPut(p, " am_ops=");              p = LogHex(p, g_opl.ProfileAmOperators);
+        p = LogPut(p, " vib_ops=");             p = LogHex(p, g_opl.ProfileVibratoOperators);
+        p = LogPut(p, " waves=");               p = LogHexByte(p, g_opl.ProfileWaveMask);
+        p = LogPut(p, " wse=");                 p = LogHexByte(p, g_opl.ProfileWaveformSelect);
+        p = LogPut(p, "\r\n");
         /* PERCUSSION, BY EDGE COUNT. bd_or above is an OR over the whole run and
            cannot tell "set once at init" from "drums play throughout" -- it once
            produced a confident wrong answer about exactly this register. These are
            key-on edges per voice. All five are synthesised since #139 (hi-hat,
            snare and cymbal were silent before it and this line said so); the counts
            stay because they say how much percussion a game actually uses. */
-        p = zput(p, "STAGE2: opl rhythm: bassdrum="); p = zhex(p, g_opl.ProfileRhythmHits[4]);
-        p = zput(p, " tomtom=");                      p = zhex(p, g_opl.ProfileRhythmHits[2]);
-        p = zput(p, " hihat=");                       p = zhex(p, g_opl.ProfileRhythmHits[0]);
-        p = zput(p, " snare=");                       p = zhex(p, g_opl.ProfileRhythmHits[3]);
-        p = zput(p, " cymbal=");                      p = zhex(p, g_opl.ProfileRhythmHits[1]);
-        p = zput(p, "\r\n");
-        p = zput(p, "STAGE2: vsync: vbl_edges="); p = zhex(p, g_vid.VblEdges);
-        p = zput(p, " p3da_reads=");             p = zhex(p, g_vid.Port3DaReads);
-        p = zput(p, " hbl_owed=");               p = zhex(p, g_vid.Port3DaHblOwed);
-        p = zput(p, " vbl_owed=");               p = zhex(p, g_vid.Port3DaVblOwed);   /* #225 */
-        p = zput(p, " run_ms=");                 p = zhex(p, GetTickCount() - g_run_start_tick);
-        p = zput(p, "\r\n");
-        p = zput(p, "STAGE2: imem out-of-range (guarded, would have CRASHED the host): bad_reads=");
-        p = zhex(p, g_imem_bad_reads); p = zput(p, " bad_writes="); p = zhex(p, g_imem_bad_writes);
-        p = zput(p, " logged="); p = zhex(p, g_imem_bad_logged); p = zput(p, "\r\n");
+        p = LogPut(p, "STAGE2: opl rhythm: bassdrum="); p = LogHex(p, g_opl.ProfileRhythmHits[4]);
+        p = LogPut(p, " tomtom=");                      p = LogHex(p, g_opl.ProfileRhythmHits[2]);
+        p = LogPut(p, " hihat=");                       p = LogHex(p, g_opl.ProfileRhythmHits[0]);
+        p = LogPut(p, " snare=");                       p = LogHex(p, g_opl.ProfileRhythmHits[3]);
+        p = LogPut(p, " cymbal=");                      p = LogHex(p, g_opl.ProfileRhythmHits[1]);
+        p = LogPut(p, "\r\n");
+        p = LogPut(p, "STAGE2: vsync: vbl_edges="); p = LogHex(p, g_vid.VblEdges);
+        p = LogPut(p, " p3da_reads=");             p = LogHex(p, g_vid.Port3DaReads);
+        p = LogPut(p, " hbl_owed=");               p = LogHex(p, g_vid.Port3DaHblOwed);
+        p = LogPut(p, " vbl_owed=");               p = LogHex(p, g_vid.Port3DaVblOwed);   /* #225 */
+        p = LogPut(p, " run_ms=");                 p = LogHex(p, GetTickCount() - g_run_start_tick);
+        p = LogPut(p, "\r\n");
+        p = LogPut(p, "STAGE2: imem out-of-range (guarded, would have CRASHED the host): bad_reads=");
+        p = LogHex(p, g_imem_bad_reads); p = LogPut(p, " bad_writes="); p = LogHex(p, g_imem_bad_writes);
+        p = LogPut(p, " logged="); p = LogHex(p, g_imem_bad_logged); p = LogPut(p, "\r\n");
         /* ► Is mode Y actually in use? The whole unchained theory rests on Doom
              clearing Sequencer reg 4 bit 3, which was INFERRED from a pixel pattern
              (80-px period, 50 rows) and never observed directly. Print the register. */
@@ -37155,40 +37155,40 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              of these, so a wrong picture has to be able to name which register is
              responsible instead of being guessed at. */
         {   unsigned i;
-            p = zput(p, "STAGE2: planar w0: ensr@write");
+            p = LogPut(p, "STAGE2: planar w0: ensr@write");
             for (i = 0; i < 16; ++i) if (g_vid.WriteEnableSetResetHistogram[i]) {
-                p = zput(p, " 0x"); p = zhexb(p, i);
-                p = zput(p, "="); p = zdec(p, g_vid.WriteEnableSetResetHistogram[i]); }
-            p = zput(p, " | alu");
+                p = LogPut(p, " 0x"); p = LogHexByte(p, i);
+                p = LogPut(p, "="); p = LogDecimal(p, g_vid.WriteEnableSetResetHistogram[i]); }
+            p = LogPut(p, " | alu");
             for (i = 0; i < 4; ++i) if (g_vid.WriteAluHistogram[i]) {
-                p = zput(p, " "); p = zdec(p, i);
-                p = zput(p, "="); p = zdec(p, g_vid.WriteAluHistogram[i]); }
-            p = zput(p, " | p3_from_sr=");  p = zdec(p, g_vid.WritePlane3SetReset);
-            p = zput(p, " of_which_nonzero="); p = zdec(p, g_vid.WritePlane3NonZero);
-            p = zput(p, " p3_from_cpu=");   p = zdec(p, g_vid.WritePlane3Data);
-            p = zput(p, "\r\n"); }
+                p = LogPut(p, " "); p = LogDecimal(p, i);
+                p = LogPut(p, "="); p = LogDecimal(p, g_vid.WriteAluHistogram[i]); }
+            p = LogPut(p, " | p3_from_sr=");  p = LogDecimal(p, g_vid.WritePlane3SetReset);
+            p = LogPut(p, " of_which_nonzero="); p = LogDecimal(p, g_vid.WritePlane3NonZero);
+            p = LogPut(p, " p3_from_cpu=");   p = LogDecimal(p, g_vid.WritePlane3Data);
+            p = LogPut(p, "\r\n"); }
         {   unsigned i;
-            p = zput(p, "STAGE2: attr: acport="); p = zdec(p, g_vid.AcPortWrites);
-            p = zput(p, " acbios=");              p = zdec(p, g_vid.AcBiosWrites);
-            p = zput(p, " dacw=");                p = zdec(p, g_vid.DacWrites);
-            p = zput(p, " palresets="); p = zdec(p, g_vid.PaletteResets);
-            p = zput(p, " hi_since_reset="); p = zdec(p, g_vid.DacHighSinceReset);
+            p = LogPut(p, "STAGE2: attr: acport="); p = LogDecimal(p, g_vid.AcPortWrites);
+            p = LogPut(p, " acbios=");              p = LogDecimal(p, g_vid.AcBiosWrites);
+            p = LogPut(p, " dacw=");                p = LogDecimal(p, g_vid.DacWrites);
+            p = LogPut(p, " palresets="); p = LogDecimal(p, g_vid.PaletteResets);
+            p = LogPut(p, " hi_since_reset="); p = LogDecimal(p, g_vid.DacHighSinceReset);
             /* The one that can actually be non-zero: this report is written after
                the guest has exited through a mode set back to text. */
-            p = zput(p, " hi_max="); p = zdec(p, g_vid.DacHighMax);
-            p = zput(p, " dacblk[16s]=");
-            for (i = 0; i < 16; ++i) { p = zdec(p, g_vid.DacBlock[i]); p = zput(p, ","); }
-            p = zput(p, " vpal=[");
-            for (i = 0; i < 16; ++i) { p = zhexb(p, g_vid.PaletteRegisters[i]); p = zput(p, " "); }
-            p = zput(p, "] dac@vpal=[");
+            p = LogPut(p, " hi_max="); p = LogDecimal(p, g_vid.DacHighMax);
+            p = LogPut(p, " dacblk[16s]=");
+            for (i = 0; i < 16; ++i) { p = LogDecimal(p, g_vid.DacBlock[i]); p = LogPut(p, ","); }
+            p = LogPut(p, " vpal=[");
+            for (i = 0; i < 16; ++i) { p = LogHexByte(p, g_vid.PaletteRegisters[i]); p = LogPut(p, " "); }
+            p = LogPut(p, "] dac@vpal=[");
             /* The DAC entries the DEFAULT AC palette actually points at. If these are
                the seeded EGA64 values the guest never wrote them; if they hold its
                colours, the write landed and the fault is downstream. */
             for (i = 0; i < 16; ++i) {
                 uint32_t v = g_vid.Dac[g_vid.PaletteRegisters[i] & 0x3F];
-                p = zhexb(p, (v >> 16) & 0xFF); p = zhexb(p, (v >> 8) & 0xFF);
-                p = zhexb(p, v & 0xFF); p = zput(p, " "); }
-            p = zput(p, "]\r\n"); }
+                p = LogHexByte(p, (v >> 16) & 0xFF); p = LogHexByte(p, (v >> 8) & 0xFF);
+                p = LogHexByte(p, v & 0xFF); p = LogPut(p, " "); }
+            p = LogPut(p, "]\r\n"); }
         /* ── s69: IS THE LEVEL PALETTE EVEN LOADED? ────────────────────────────────
              The gameplay screen renders black because dac@vpal is all-zero. That is
              either "the game never loaded its colours" or "the fade multiplied them
@@ -37207,11 +37207,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     if (ok) { if (found == 0xFFFFFFFFu) found = a; hits++; }
                 }
             }
-            p = zput(p, "STAGE2: level-palette signature: ");
-            if (found != 0xFFFFFFFFu) { p = zput(p, "FOUND at lin=0x"); p = zhex(p, found);
-                p = zput(p, " (hits="); p = zdec(p, hits);
-                p = zput(p, ") -> colours ARE loaded; fade/DAC path is the fault\r\n"); }
-            else p = zput(p, "ABSENT -> the level palette was never loaded into guest RAM\r\n");
+            p = LogPut(p, "STAGE2: level-palette signature: ");
+            if (found != 0xFFFFFFFFu) { p = LogPut(p, "FOUND at lin=0x"); p = LogHex(p, found);
+                p = LogPut(p, " (hits="); p = LogDecimal(p, hits);
+                p = LogPut(p, ") -> colours ARE loaded; fade/DAC path is the fault\r\n"); }
+            else p = LogPut(p, "ABSENT -> the level palette was never loaded into guest RAM\r\n");
         }
         /* ── s69: THE FADED PALETTE BUFFER + THE FADE STATE, from the guest DS the
              heartbeat last sampled. The per-frame palette routine feeds the DAC from
@@ -37220,73 +37220,73 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              (oracle=4). Reads go through imem_page_ok so an unmapped DS cannot fault. */
         if (g_hb_ds) {
             uint32_t dsb = (uint32_t)g_hb_ds << 4, i;
-            p = zput(p, "STAGE2: fade dump ds=0x"); p = zhex(p, g_hb_ds);
+            p = LogPut(p, "STAGE2: fade dump ds=0x"); p = LogHex(p, g_hb_ds);
             if (imem_page_ok(dsb + 0x1f7c)) {
-                p = zput(p, " [1f7c]=0x"); p = zhexb(p, *(volatile BYTE *)(dsb + 0x1f7c));
+                p = LogPut(p, " [1f7c]=0x"); p = LogHexByte(p, *(volatile BYTE *)(dsb + 0x1f7c));
             }
-            p = zput(p, " buf@2668=[");
+            p = LogPut(p, " buf@2668=[");
             if (imem_page_ok(dsb + 0x2668)) {
-                for (i = 0; i < 24; ++i) { p = zhexb(p, *(volatile BYTE *)(dsb + 0x2668 + i)); p = zput(p, " "); }
-            } else p = zput(p, "<ds:2668 unmapped>");
-            p = zput(p, "]\r\n");
+                for (i = 0; i < 24; ++i) { p = LogHexByte(p, *(volatile BYTE *)(dsb + 0x2668 + i)); p = LogPut(p, " "); }
+            } else p = LogPut(p, "<ds:2668 unmapped>");
+            p = LogPut(p, "]\r\n");
         }
         /* The VRAM watchpoint. Silent unless cfg/vwatch.txt armed it. */
         if (g_vid.WatchOffset != 0xFFFFFFFFu) {
             unsigned wi, wn = g_vid.WatchCount < VIDEO_WATCH_MAX ? g_vid.WatchCount : VIDEO_WATCH_MAX;
-            p = zput(p, "STAGE2: vwatch off=0x"); p = zhex(p, g_vid.WatchOffset);
-            p = zput(p, " writes="); p = zdec(p, g_vid.WatchCount); p = zput(p, "\r\n");
+            p = LogPut(p, "STAGE2: vwatch off=0x"); p = LogHex(p, g_vid.WatchOffset);
+            p = LogPut(p, " writes="); p = LogDecimal(p, g_vid.WatchCount); p = LogPut(p, "\r\n");
             for (wi = 0; wi <= wn; ++wi) {
                 const VIDEO_WATCH_RECORD *w = (wi < wn) ? &g_vid.Watch[wi] : &g_vid.WatchLast;
                 int k;
-                if (wi == wn) { if (!g_vid.WatchCount) break; p = zput(p, "  LAST "); }
-                else          { p = zput(p, "  #"); p = zdec(p, wi); p = zput(p, " "); }
-                p = zput(p, "pc="); p = zhex(p, w->Pc);
-                p = zput(p, " wm="); p = zdec(p, w->WriteMode);
-                p = zput(p, " mm="); p = zhexb(p, w->MapMask);
-                p = zput(p, " ensr="); p = zhexb(p, w->EnableSetReset);
-                p = zput(p, " sr="); p = zhexb(p, w->SetReset);
-                p = zput(p, " frot="); p = zhexb(p, w->FunctionRotate);
-                p = zput(p, " bm="); p = zhexb(p, w->BitMask);
-                p = zput(p, " cpu="); p = zhexb(p, w->Cpu);
-                p = zput(p, " lat=");
-                for (k = 0; k < 4; ++k) p = zhexb(p, w->Latch[k]);
-                p = zput(p, " after=");
-                for (k = 0; k < 4; ++k) p = zhexb(p, w->After[k]);
-                p = zput(p, "\r\n");
+                if (wi == wn) { if (!g_vid.WatchCount) break; p = LogPut(p, "  LAST "); }
+                else          { p = LogPut(p, "  #"); p = LogDecimal(p, wi); p = LogPut(p, " "); }
+                p = LogPut(p, "pc="); p = LogHex(p, w->Pc);
+                p = LogPut(p, " wm="); p = LogDecimal(p, w->WriteMode);
+                p = LogPut(p, " mm="); p = LogHexByte(p, w->MapMask);
+                p = LogPut(p, " ensr="); p = LogHexByte(p, w->EnableSetReset);
+                p = LogPut(p, " sr="); p = LogHexByte(p, w->SetReset);
+                p = LogPut(p, " frot="); p = LogHexByte(p, w->FunctionRotate);
+                p = LogPut(p, " bm="); p = LogHexByte(p, w->BitMask);
+                p = LogPut(p, " cpu="); p = LogHexByte(p, w->Cpu);
+                p = LogPut(p, " lat=");
+                for (k = 0; k < 4; ++k) p = LogHexByte(p, w->Latch[k]);
+                p = LogPut(p, " after=");
+                for (k = 0; k < 4; ++k) p = LogHexByte(p, w->After[k]);
+                p = LogPut(p, "\r\n");
                 if (p > report + sizeof report - 256) break;
             }
         }
         /* ► Does this guest use OFF-SCREEN VRAM? Above 38400 used to read back as
              0xFF, so the answer used to be invisible. */
-        p = zput(p, "STAGE2: planar hi_water=0x"); p = zhex(p, g_vid.PlanarHighWater);
-        p = zput(p, " plane_size=0x"); p = zhex(p, (DWORD)VIDEO_PLANE_SIZE);
-        p = zput(p, " wsite_lost="); p = zdec(p, g_vid.WriteSitesLost);
+        p = LogPut(p, "STAGE2: planar hi_water=0x"); p = LogHex(p, g_vid.PlanarHighWater);
+        p = LogPut(p, " plane_size=0x"); p = LogHex(p, (DWORD)VIDEO_PLANE_SIZE);
+        p = LogPut(p, " wsite_lost="); p = LogDecimal(p, g_vid.WriteSitesLost);
         /* ► DOES THIS GUEST USE COLOUR COMPARE? Read mode 1 is pixel-perfect terrain
              collision in one instruction; until it was implemented, every such read
              returned a raw plane byte and the guest acted on it. */
-        p = zput(p, " reads[mode0/mode1]="); p = zdec(p, g_vid.ReadModeHistogram[0]);
-        p = zput(p, "/"); p = zdec(p, g_vid.ReadModeHistogram[1]);
-        p = zput(p, " cc="); p = zhexb(p, g_vid.ColorCompare);
-        p = zput(p, " cdc="); p = zhexb(p, g_vid.ColorDontCare);
-        p = zput(p, "\r\n");
+        p = LogPut(p, " reads[mode0/mode1]="); p = LogDecimal(p, g_vid.ReadModeHistogram[0]);
+        p = LogPut(p, "/"); p = LogDecimal(p, g_vid.ReadModeHistogram[1]);
+        p = LogPut(p, " cc="); p = LogHexByte(p, g_vid.ColorCompare);
+        p = LogPut(p, " cdc="); p = LogHexByte(p, g_vid.ColorDontCare);
+        p = LogPut(p, "\r\n");
         {   unsigned k;
             /* ► And, whatever their rank, every site that touched DEEP off-screen
                  VRAM. That region was unreachable until a plane became 64KB, so
                  "who is up there" is the question worth answering unprompted -- and
                  a one-shot blit of a status panel will never be in a top-N list. */
-        { log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
-            p = zput(p, "STAGE2: planar sites touching off-screen (>=0xC000):\r\n");
+        { LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base; }
+            p = LogPut(p, "STAGE2: planar sites touching off-screen (>=0xC000):\r\n");
             for (k = 0; k < VIDEO_SITES; ++k) {
                 int which;
                 for (which = 0; which < 2; ++which) {
                     const VIDEO_SITE *s2 = which ? &g_vid.ReadSites[k] : &g_vid.WriteSites[k];
                     if (!s2->Count || s2->High < 0xC000u) continue;
-                    p = zput(p, which ? "  READ  pc=" : "  WRITE pc=");
-                    p = zhex(p, s2->Pc);
-                    p = zput(p, " n=");     p = zdec(p, s2->Count);
-                    p = zput(p, " off=0x"); p = zhex(p, s2->Low);
-                    p = zput(p, "..0x");    p = zhex(p, s2->High);
-                    p = zput(p, "\r\n");
+                    p = LogPut(p, which ? "  READ  pc=" : "  WRITE pc=");
+                    p = LogHex(p, s2->Pc);
+                    p = LogPut(p, " n=");     p = LogDecimal(p, s2->Count);
+                    p = LogPut(p, " off=0x"); p = LogHex(p, s2->Low);
+                    p = LogPut(p, "..0x");    p = LogHex(p, s2->High);
+                    p = LogPut(p, "\r\n");
                 }
                 if (p > report + sizeof report - 256) break;
             }         }
@@ -37306,33 +37306,33 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              entry counts and 12800 did not add up to 19984; without that cross-check
              the truncated list reads as a complete one, which is the worst shape a
              report can fail in. A fixed buffer is a silent budget: spend it here. */
-        { log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
+        { LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base; }
         {   unsigned k;
-            p = zput(p, "STAGE2: off-screen cache sites (>=0x"); p = zhex(p, VIDEO_CACHE_LOW);
-            p = zput(p, "), lost="); p = zdec(p, g_vid.CacheSitesLost);
-            p = zput(p, " seq=");    p = zdec(p, g_vid.CacheSequence);
-            p = zput(p, "\r\n");
+            p = LogPut(p, "STAGE2: off-screen cache sites (>=0x"); p = LogHex(p, VIDEO_CACHE_LOW);
+            p = LogPut(p, "), lost="); p = LogDecimal(p, g_vid.CacheSitesLost);
+            p = LogPut(p, " seq=");    p = LogDecimal(p, g_vid.CacheSequence);
+            p = LogPut(p, "\r\n");
             {   uint32_t acct = 0;
                 for (k = 0; k < VIDEO_CACHE_SITES; ++k) {
                     const VIDEO_CACHE_SITE *c = &g_vid.CacheSites[k];
                     if (!c->Count) continue;
                     acct += c->Count;
-                    p = zput(p, c->IsWrite ? "  cache WRITE pc=" : "  cache READ  pc=");
-                    p = zhex(p, c->Pc);
-                    p = zput(p, " n=");      p = zdec(p, c->Count);
-                    p = zput(p, " off=0x");  p = zhex(p, c->Low);
-                    p = zput(p, "..0x");     p = zhex(p, c->High);
-                    p = zput(p, " first=");  p = zdec(p, c->First);
-                    p = zput(p, " last=");   p = zdec(p, c->Last);
-                    p = zput(p, "\r\n");
+                    p = LogPut(p, c->IsWrite ? "  cache WRITE pc=" : "  cache READ  pc=");
+                    p = LogHex(p, c->Pc);
+                    p = LogPut(p, " n=");      p = LogDecimal(p, c->Count);
+                    p = LogPut(p, " off=0x");  p = LogHex(p, c->Low);
+                    p = LogPut(p, "..0x");     p = LogHex(p, c->High);
+                    p = LogPut(p, " first=");  p = LogDecimal(p, c->First);
+                    p = LogPut(p, " last=");   p = LogDecimal(p, c->Last);
+                    p = LogPut(p, "\r\n");
                     if (p > report + sizeof report - 512) break;
                 }
                 /* ► THE LIST MUST ACCOUNT FOR EVERY ACCESS IT COUNTED. n's + lost has
                      to equal seq; if it does not, lines are MISSING and the absence of
                      a pc above means nothing. Said out loud so it cannot be read past. */
-                p = zput(p, "  cache accounted="); p = zdec(p, acct + g_vid.CacheSitesLost);
-                p = zput(p, " of seq=");           p = zdec(p, g_vid.CacheSequence);
-                p = zput(p, (acct + g_vid.CacheSitesLost == g_vid.CacheSequence)
+                p = LogPut(p, "  cache accounted="); p = LogDecimal(p, acct + g_vid.CacheSitesLost);
+                p = LogPut(p, " of seq=");           p = LogDecimal(p, g_vid.CacheSequence);
+                p = LogPut(p, (acct + g_vid.CacheSitesLost == g_vid.CacheSequence)
                               ? " COMPLETE\r\n" : " !! TRUNCATED -- absence proves NOTHING\r\n");
             }
         }
@@ -37343,31 +37343,31 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 for (k = 0; k < VIDEO_SITES; ++k)
                     if (g_vid.WriteSites[k].Count > bn) { bn = g_vid.WriteSites[k].Count; best = k; }
                 if (best == VIDEO_SITES) break;
-                p = zput(p, "  wsite pc="); p = zhex(p, g_vid.WriteSites[best].Pc);
-                p = zput(p, " n=");   p = zdec(p, g_vid.WriteSites[best].Count);
-                p = zput(p, " off=0x"); p = zhex(p, g_vid.WriteSites[best].Low);
-                p = zput(p, "..0x");    p = zhex(p, g_vid.WriteSites[best].High);
-                p = zput(p, "\r\n");
+                p = LogPut(p, "  wsite pc="); p = LogHex(p, g_vid.WriteSites[best].Pc);
+                p = LogPut(p, " n=");   p = LogDecimal(p, g_vid.WriteSites[best].Count);
+                p = LogPut(p, " off=0x"); p = LogHex(p, g_vid.WriteSites[best].Low);
+                p = LogPut(p, "..0x");    p = LogHex(p, g_vid.WriteSites[best].High);
+                p = LogPut(p, "\r\n");
                 g_vid.WriteSites[best].Count = 0;            /* report is the last use of it */
                 if (p > report + sizeof report - 512) break;
             }
             /* ► THE COLOUR-COMPARE READ SITES: a guest asking "where is the ground". */
-        { log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
-            p = zput(p, "STAGE2: planar COLOUR-COMPARE read sites, lost=");
-            p = zdec(p, g_vid.CompareSitesLost); p = zput(p, "\r\n");
+        { LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base; }
+            p = LogPut(p, "STAGE2: planar COLOUR-COMPARE read sites, lost=");
+            p = LogDecimal(p, g_vid.CompareSitesLost); p = LogPut(p, "\r\n");
             for (shown = 0; shown < 10; ++shown) {
                 unsigned best = VIDEO_SITES; uint32_t bn = 0;
                 for (k = 0; k < VIDEO_SITES; ++k)
                     if (g_vid.CompareSites[k].Count > bn) { bn = g_vid.CompareSites[k].Count; best = k; }
                 if (best == VIDEO_SITES) break;
-                p = zput(p, "  cc-read pc="); p = zhex(p, g_vid.CompareSites[best].Pc);
-                p = zput(p, " n=");   p = zdec(p, g_vid.CompareSites[best].Count);
-                p = zput(p, " off=0x"); p = zhex(p, g_vid.CompareSites[best].Low);
-                p = zput(p, "..0x");    p = zhex(p, g_vid.CompareSites[best].High);
+                p = LogPut(p, "  cc-read pc="); p = LogHex(p, g_vid.CompareSites[best].Pc);
+                p = LogPut(p, " n=");   p = LogDecimal(p, g_vid.CompareSites[best].Count);
+                p = LogPut(p, " off=0x"); p = LogHex(p, g_vid.CompareSites[best].Low);
+                p = LogPut(p, "..0x");    p = LogHex(p, g_vid.CompareSites[best].High);
                 /* ► AND WHAT IT ANSWERED. all-zero means the guest saw no terrain. */
-                p = zput(p, " zero="); p = zdec(p, g_vid.CompareSitesZero[best]);
-                p = zput(p, " ones="); p = zdec(p, g_vid.CompareSitesOnes[best]);
-                p = zput(p, "\r\n");
+                p = LogPut(p, " zero="); p = LogDecimal(p, g_vid.CompareSitesZero[best]);
+                p = LogPut(p, " ones="); p = LogDecimal(p, g_vid.CompareSitesOnes[best]);
+                p = LogPut(p, "\r\n");
                 g_vid.CompareSites[best].Count = 0;
                 if (p > report + sizeof report - 512) break;
             }
@@ -37376,22 +37376,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                  here" becomes an argument it cannot support. */
             {   unsigned more = 0;
                 for (k = 0; k < VIDEO_SITES; ++k) if (g_vid.CompareSites[k].Count) ++more;
-                p = zput(p, "  (cc-read: "); p = zdec(p, more);
-                p = zput(p, " further sites not shown)\r\n");
+                p = LogPut(p, "  (cc-read: "); p = LogDecimal(p, more);
+                p = LogPut(p, " further sites not shown)\r\n");
             }
-        { log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
-            p = zput(p, "STAGE2: planar read sites, rsite_lost=");
-            p = zdec(p, g_vid.ReadSitesLost); p = zput(p, "\r\n");
+        { LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base; }
+            p = LogPut(p, "STAGE2: planar read sites, rsite_lost=");
+            p = LogDecimal(p, g_vid.ReadSitesLost); p = LogPut(p, "\r\n");
             for (shown = 0; shown < 14; ++shown) {
                 unsigned best = VIDEO_SITES; uint32_t bn = 0;
                 for (k = 0; k < VIDEO_SITES; ++k)
                     if (g_vid.ReadSites[k].Count > bn) { bn = g_vid.ReadSites[k].Count; best = k; }
                 if (best == VIDEO_SITES) break;
-                p = zput(p, "  rsite pc="); p = zhex(p, g_vid.ReadSites[best].Pc);
-                p = zput(p, " n=");   p = zdec(p, g_vid.ReadSites[best].Count);
-                p = zput(p, " off=0x"); p = zhex(p, g_vid.ReadSites[best].Low);
-                p = zput(p, "..0x");    p = zhex(p, g_vid.ReadSites[best].High);
-                p = zput(p, "\r\n");
+                p = LogPut(p, "  rsite pc="); p = LogHex(p, g_vid.ReadSites[best].Pc);
+                p = LogPut(p, " n=");   p = LogDecimal(p, g_vid.ReadSites[best].Count);
+                p = LogPut(p, " off=0x"); p = LogHex(p, g_vid.ReadSites[best].Low);
+                p = LogPut(p, "..0x");    p = LogHex(p, g_vid.ReadSites[best].High);
+                p = LogPut(p, "\r\n");
                 g_vid.ReadSites[best].Count = 0;
                 if (p > report + sizeof report - 512) break;
             }
@@ -37400,8 +37400,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                  here" becomes an argument it cannot support. */
             {   unsigned more = 0;
                 for (k = 0; k < VIDEO_SITES; ++k) if (g_vid.ReadSites[k].Count) ++more;
-                p = zput(p, "  (rsite: "); p = zdec(p, more);
-                p = zput(p, " further sites not shown)\r\n");
+                p = LogPut(p, "  (rsite: "); p = LogDecimal(p, more);
+                p = LogPut(p, " further sites not shown)\r\n");
             }
 }
         /* ► Does this guest scroll or page-flip, and how often would a frame have
@@ -37413,110 +37413,110 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              slow, and the vblank geometry is not on trial. dtmax is the longest the
              guest went between polls -- it can only miss a vblank if that exceeds the
              blanking interval. */
-        p = zput(p, "STAGE2: 3da clock: span_ms="); p = zdec(p, (uint32_t)((g_vid.Time3DaLast - g_vid.Time3DaFirst) / 1000u));
-        p = zput(p, " reads=");  p = zdec(p, g_vid.Port3DaReads);
-        p = zput(p, " edges=");  p = zdec(p, g_vid.VblEdges);
-        p = zput(p, " pal_splits="); p = zdec(p, g_vid.PaletteSplitNotes);
-        p = zput(p, " dacrow[0-1,2-159,160+,vbl]="); p = zdec(p, g_vid.DacRowHistogram[0]);
-        p = zput(p, "/"); p = zdec(p, g_vid.DacRowHistogram[1]);
-        p = zput(p, "/"); p = zdec(p, g_vid.DacRowHistogram[2]);
-        p = zput(p, "/"); p = zdec(p, g_vid.DacRowHistogram[3]);
-        p = zput(p, " dtmax_us="); p = zdec(p, g_vid.Dt3DaMax);
-        p = zput(p, " dtzero=");   p = zdec(p, g_vid.Dt3DaZero);
-        p = zput(p, " dthist[1,4,16,64,256,1k,4k,16k+us]=");
-        { unsigned bi; for (bi = 0; bi < 8; ++bi) { if (bi) p = zput(p, "/"); p = zdec(p, g_vid.Dt3DaHistogram[bi]); } }
-        p = zput(p, "\r\n");
-        p = zput(p, "STAGE2: crtc start: pairs="); p = zdec(p, g_vid.CrtcStartWrites);
-        p = zput(p, " torn_avoided="); p = zdec(p, g_vid.CrtcStartHalf);
-        p = zput(p, " live="); p = zdec(p, g_vid.CrtcStartLive);
-        p = zput(p, " gap_frames[0,1,2,3,4+]=");         /* #221: guest pacing */
-        { int gi; for (gi = 0; gi < 5; ++gi) { if (gi) p = zput(p, "/"); p = zdec(p, g_vid.StartGapHistogram[gi]); } }
-        p = zput(p, "\r\n");
-        p = zput(p, "STAGE2: crtc: start=");   p = zdec(p, g_vid.CrtcStart);
-        p = zput(p, " offset=");               p = zdec(p, g_vid.CrtcOffset);
-        p = zput(p, " off_seen=");             p = zdec(p, g_vid.IsCrtcOffsetSeen);
-        p = zput(p, " linecmp=");              p = zdec(p, g_vid.CrtcLineCompare);
-        p = zput(p, " (0x18=");                p = zdec(p, g_vid.CrtcLineCompareLow);
-        p = zput(p, " ovf=");                  p = zdec(p, g_vid.CrtcOverflow);
-        p = zput(p, " maxscan=");              p = zdec(p, g_vid.CrtcMaxScan);
-        p = zput(p, ")\r\n");
+        p = LogPut(p, "STAGE2: 3da clock: span_ms="); p = LogDecimal(p, (uint32_t)((g_vid.Time3DaLast - g_vid.Time3DaFirst) / 1000u));
+        p = LogPut(p, " reads=");  p = LogDecimal(p, g_vid.Port3DaReads);
+        p = LogPut(p, " edges=");  p = LogDecimal(p, g_vid.VblEdges);
+        p = LogPut(p, " pal_splits="); p = LogDecimal(p, g_vid.PaletteSplitNotes);
+        p = LogPut(p, " dacrow[0-1,2-159,160+,vbl]="); p = LogDecimal(p, g_vid.DacRowHistogram[0]);
+        p = LogPut(p, "/"); p = LogDecimal(p, g_vid.DacRowHistogram[1]);
+        p = LogPut(p, "/"); p = LogDecimal(p, g_vid.DacRowHistogram[2]);
+        p = LogPut(p, "/"); p = LogDecimal(p, g_vid.DacRowHistogram[3]);
+        p = LogPut(p, " dtmax_us="); p = LogDecimal(p, g_vid.Dt3DaMax);
+        p = LogPut(p, " dtzero=");   p = LogDecimal(p, g_vid.Dt3DaZero);
+        p = LogPut(p, " dthist[1,4,16,64,256,1k,4k,16k+us]=");
+        { unsigned bi; for (bi = 0; bi < 8; ++bi) { if (bi) p = LogPut(p, "/"); p = LogDecimal(p, g_vid.Dt3DaHistogram[bi]); } }
+        p = LogPut(p, "\r\n");
+        p = LogPut(p, "STAGE2: crtc start: pairs="); p = LogDecimal(p, g_vid.CrtcStartWrites);
+        p = LogPut(p, " torn_avoided="); p = LogDecimal(p, g_vid.CrtcStartHalf);
+        p = LogPut(p, " live="); p = LogDecimal(p, g_vid.CrtcStartLive);
+        p = LogPut(p, " gap_frames[0,1,2,3,4+]=");         /* #221: guest pacing */
+        { int gi; for (gi = 0; gi < 5; ++gi) { if (gi) p = LogPut(p, "/"); p = LogDecimal(p, g_vid.StartGapHistogram[gi]); } }
+        p = LogPut(p, "\r\n");
+        p = LogPut(p, "STAGE2: crtc: start=");   p = LogDecimal(p, g_vid.CrtcStart);
+        p = LogPut(p, " offset=");               p = LogDecimal(p, g_vid.CrtcOffset);
+        p = LogPut(p, " off_seen=");             p = LogDecimal(p, g_vid.IsCrtcOffsetSeen);
+        p = LogPut(p, " linecmp=");              p = LogDecimal(p, g_vid.CrtcLineCompare);
+        p = LogPut(p, " (0x18=");                p = LogDecimal(p, g_vid.CrtcLineCompareLow);
+        p = LogPut(p, " ovf=");                  p = LogDecimal(p, g_vid.CrtcOverflow);
+        p = LogPut(p, " maxscan=");              p = LogDecimal(p, g_vid.CrtcMaxScan);
+        p = LogPut(p, ")\r\n");
         /* ── THE VGA REGISTER FILE. (docs/inventory/vga.md, step 1) ─────────────────
              Its own buffer and its own flush: the block is ~1.2 KB and `report` is
              shared with everything else in this summary. */
         {   static char vr[2048];
             int n = VddVideoRegistersDump(&g_vid, vr, (int)sizeof vr);
-            if (n > 0) { log_append(LOG_PATH, vr, vr + n); serial_out(vr, vr + n); } }
-        p = zput(p, "STAGE2: video now: chain4="); p = zhexb(p, g_vid.IsChain4);
-        p = zput(p, " ymask="); p = zhexb(p, g_vid.YMask);
-        p = zput(p, " mkind="); p = zhexb(p, g_vid.ModeKind);
-        p = zput(p, " gw="); p = zhex(p, g_vid.GraphicsWidth); p = zput(p, " gh="); p = zhex(p, g_vid.GraphicsHeight);
-        p = zput(p, " mapmask="); p = zhexb(p, g_vid.MapMask);
-        p = zput(p, " setreset="); p = zhexb(p, g_vid.SetReset);
-        p = zput(p, " ensr="); p = zhexb(p, g_vid.EnableSetReset);
-        p = zput(p, " wmode="); p = zhexb(p, g_vid.WriteMode);
-        p = zput(p, " plane-nonzero=");
-        for (pl = 0; pl < 4; ++pl) { p = zhex(p, nz[pl]); p = zput(p, pl<3?"/":""); }
-        p = zput(p, "\r\n"); }
+            if (n > 0) { LogAppend(LOG_PATH, vr, vr + n); serial_out(vr, vr + n); } }
+        p = LogPut(p, "STAGE2: video now: chain4="); p = LogHexByte(p, g_vid.IsChain4);
+        p = LogPut(p, " ymask="); p = LogHexByte(p, g_vid.YMask);
+        p = LogPut(p, " mkind="); p = LogHexByte(p, g_vid.ModeKind);
+        p = LogPut(p, " gw="); p = LogHex(p, g_vid.GraphicsWidth); p = LogPut(p, " gh="); p = LogHex(p, g_vid.GraphicsHeight);
+        p = LogPut(p, " mapmask="); p = LogHexByte(p, g_vid.MapMask);
+        p = LogPut(p, " setreset="); p = LogHexByte(p, g_vid.SetReset);
+        p = LogPut(p, " ensr="); p = LogHexByte(p, g_vid.EnableSetReset);
+        p = LogPut(p, " wmode="); p = LogHexByte(p, g_vid.WriteMode);
+        p = LogPut(p, " plane-nonzero=");
+        for (pl = 0; pl < 4; ++pl) { p = LogHex(p, nz[pl]); p = LogPut(p, pl<3?"/":""); }
+        p = LogPut(p, "\r\n"); }
       /* ⚠ FLUSH FIRST. The rsite/crtc/video-now block above can fill the 8 KB report
-           on its own, and log_append writes [buf,end) UNCLAMPED: the ivt08 line was
+           on its own, and LogAppend writes [buf,end) UNCLAMPED: the ivt08 line was
            cut at `bail=000`, the next two blocks vanished, and the overrun went onto
            the stack. (s68 -- the third truncation of this report in two sessions.) */
-      log_append(LOG_PATH, base, p); p = base;
+      LogAppend(LOG_PATH, base, p); p = base;
       { const volatile BYTE *z0 = (const volatile BYTE *)0;
         DWORD cs2 = VDM_REG(tib, VTIB_CS) & 0xFFFF, ip2 = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
         const volatile BYTE *cd = (const volatile BYTE *)((cs2 << 4) + ip2);
         unsigned k3;
-        p = zput(p, "STAGE2: ivt08="); p = zhex(p, (DWORD)z0[0x22] | ((DWORD)z0[0x23] << 8));
-        p = zput(p, ":"); p = zhex(p, (DWORD)z0[0x20] | ((DWORD)z0[0x21] << 8));
-        p = zput(p, " ivt1C="); p = zhex(p, (DWORD)z0[0x72] | ((DWORD)z0[0x73] << 8));
-        p = zput(p, ":"); p = zhex(p, (DWORD)z0[0x70] | ((DWORD)z0[0x71] << 8));
-        p = zput(p, " at-cs:ip=");
-        for (k3 = 0; k3 < 8; ++k3) { p = zhexb(p, cd[k3]); p = zput(p, " "); }
-        p = zput(p, " asyncinj="); p = zhex(p, g_async_inj);
-        p = zput(p, " interp-refused="); p = zhex(p, g_interp_refused);
-        p = zput(p, " p12-batches="); p = zhex(p, g_p12_batches);
-        p = zput(p, " p12-instrs=");  p = zhex(p, g_p12_instrs);
-        p = zput(p, " p12-bails=");   p = zhex(p, g_p12_bails);
-        p = zput(p, " bail="); p = zhex(p, g_async_bail);
-        p = zput(p, " nestblk="); p = zhex(p, g_async_nest_blocked);
-        p = zput(p, " asyncsites="); p = zhex(p, (DWORD)g_async_nsite);
-        p = zput(p, (g_async_site_full ? "(FULL)" : ""));
-        p = zput(p, " pmstretch_max_us="); p = zhex(p, g_pm_stretch_max_us);
-        p = zput(p, "\r\n"); }
+        p = LogPut(p, "STAGE2: ivt08="); p = LogHex(p, (DWORD)z0[0x22] | ((DWORD)z0[0x23] << 8));
+        p = LogPut(p, ":"); p = LogHex(p, (DWORD)z0[0x20] | ((DWORD)z0[0x21] << 8));
+        p = LogPut(p, " ivt1C="); p = LogHex(p, (DWORD)z0[0x72] | ((DWORD)z0[0x73] << 8));
+        p = LogPut(p, ":"); p = LogHex(p, (DWORD)z0[0x70] | ((DWORD)z0[0x71] << 8));
+        p = LogPut(p, " at-cs:ip=");
+        for (k3 = 0; k3 < 8; ++k3) { p = LogHexByte(p, cd[k3]); p = LogPut(p, " "); }
+        p = LogPut(p, " asyncinj="); p = LogHex(p, g_async_inj);
+        p = LogPut(p, " interp-refused="); p = LogHex(p, g_interp_refused);
+        p = LogPut(p, " p12-batches="); p = LogHex(p, g_p12_batches);
+        p = LogPut(p, " p12-instrs=");  p = LogHex(p, g_p12_instrs);
+        p = LogPut(p, " p12-bails=");   p = LogHex(p, g_p12_bails);
+        p = LogPut(p, " bail="); p = LogHex(p, g_async_bail);
+        p = LogPut(p, " nestblk="); p = LogHex(p, g_async_nest_blocked);
+        p = LogPut(p, " asyncsites="); p = LogHex(p, (DWORD)g_async_nsite);
+        p = LogPut(p, (g_async_site_full ? "(FULL)" : ""));
+        p = LogPut(p, " pmstretch_max_us="); p = LogHex(p, g_pm_stretch_max_us);
+        p = LogPut(p, "\r\n"); }
       /* The interpreter's to-do list: every non-BOP site it declined, with the bytes. */
       { unsigned k4;
-        log_append(LOG_PATH, base, p); p = base;      /* flush: the table may be long */
-        p = zput(p, "STAGE2: P12 non-BOP bail sites="); p = zdec(p, g_p12_site_n);
-        p = zput(p, " lost="); p = zdec(p, g_p12_site_lost); p = zput(p, "\r\n");
+        LogAppend(LOG_PATH, base, p); p = base;      /* flush: the table may be long */
+        p = LogPut(p, "STAGE2: P12 non-BOP bail sites="); p = LogDecimal(p, g_p12_site_n);
+        p = LogPut(p, " lost="); p = LogDecimal(p, g_p12_site_lost); p = LogPut(p, "\r\n");
         for (k4 = 0; k4 < g_p12_site_n; ++k4) {
             unsigned k5;
-            p = zput(p, "  bail cs:ip="); p = zhex(p, g_p12_site[k4].cs);
-            p = zput(p, ":"); p = zhex(p, g_p12_site[k4].ip);
-            p = zput(p, " n="); p = zdec(p, g_p12_site[k4].n); p = zput(p, " bytes:");
-            for (k5 = 0; k5 < 8; ++k5) { p = zput(p, " "); p = zhexb(p, g_p12_site[k4].b[k5]); }
-            p = zput(p, "\r\n");
-            if (p > report + sizeof report - 256) { log_append(LOG_PATH, base, p); p = base; }
+            p = LogPut(p, "  bail cs:ip="); p = LogHex(p, g_p12_site[k4].cs);
+            p = LogPut(p, ":"); p = LogHex(p, g_p12_site[k4].ip);
+            p = LogPut(p, " n="); p = LogDecimal(p, g_p12_site[k4].n); p = LogPut(p, " bytes:");
+            for (k5 = 0; k5 < 8; ++k5) { p = LogPut(p, " "); p = LogHexByte(p, g_p12_site[k4].b[k5]); }
+            p = LogPut(p, "\r\n");
+            if (p > report + sizeof report - 256) { LogAppend(LOG_PATH, base, p); p = base; }
         } }
-      log_append(LOG_PATH, base, p); p = base;
-      p = zput(p, "STAGE2: mode sets:");
+      LogAppend(LOG_PATH, base, p); p = base;
+      p = LogPut(p, "STAGE2: mode sets:");
       for (i = 0; i < g_vid.ModeQueryCount; ++i) {
-          p = zput(p, " mode=0x"); p = zhexb(p, g_vid.ModeQueries[i].Mode);
-          p = zput(p, "/kind="); p = zhexb(p, g_vid.ModeQueries[i].Kind);
-          p = zput(p, "/"); p = zhex(p, g_vid.ModeQueries[i].Width);
-          p = zput(p, "x"); p = zhex(p, g_vid.ModeQueries[i].Height);
+          p = LogPut(p, " mode=0x"); p = LogHexByte(p, g_vid.ModeQueries[i].Mode);
+          p = LogPut(p, "/kind="); p = LogHexByte(p, g_vid.ModeQueries[i].Kind);
+          p = LogPut(p, "/"); p = LogHex(p, g_vid.ModeQueries[i].Width);
+          p = LogPut(p, "x"); p = LogHex(p, g_vid.ModeQueries[i].Height);
       }
-      if (!g_vid.ModeQueryCount) p = zput(p, " none");
-      p = zput(p, "\r\n");
+      if (!g_vid.ModeQueryCount) p = LogPut(p, " none");
+      p = LogPut(p, "\r\n");
       /* ► THE MODE-Y ARRAYS, NOT THE PLANAR ONES. "plane-nonzero" above counts
            g_vid.plane[] -- the 16-colour planar buffer, which an unchained 256-colour
            mode never touches -- so it has reported four zeroes for every mode-Y run
            ever made and told us nothing. These are the arrays a mode-Y frame is
            actually built from, plus the map-mask values the program really used. */
       modey_tl_report();   /* NORTH STAR 1's measurement -- see g_ytl_* */
-      p = zput(p, "STAGE2: modeY remap="); p = zhex(p, (DWORD)g_yremap);
-      p = zput(p, " swaps="); p = zhex(p, g_yswaps);
-      p = zput(p, " fanouts="); p = zhex(p, g_yfanouts);
-      p = zput(p, " failed="); p = zhex(p, g_yfail);
+      p = LogPut(p, "STAGE2: modeY remap="); p = LogHex(p, (DWORD)g_yremap);
+      p = LogPut(p, " swaps="); p = LogHex(p, g_yswaps);
+      p = LogPut(p, " fanouts="); p = LogHex(p, g_yfanouts);
+      p = LogPut(p, " failed="); p = LogHex(p, g_yfail);
       /* ► ARE THE PLANES COLLAPSED, OR DOES THE RENDER COLLAPSE THEM? The oracle says
            62% of the status bar's four-pixel groups hold one value where the reference
            holds four. That can only come from the four PLANES agreeing, or from the
@@ -37529,7 +37529,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                0x8000; if one page's bar is intact and the one the CRTC points at is not,
                the fault is in following the page flip, not in the writes. */
           uint32_t pg;
-          p = zput(p, " bar_planes_equal_per_page:");
+          p = LogPut(p, " bar_planes_equal_per_page:");
           for (pg = 0; pg < 3; ++pg) {
               uint32_t o, eq = 0, tot = 0, base = pg * 0x4000u;
               for (o = base + 168u * 80u; o < base + 200u * 80u; ++o) {
@@ -37538,8 +37538,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   BYTE c = ((BYTE *)g_yview[2])[m], d2 = ((BYTE *)g_yview[3])[m];
                   ++tot; if (a == b && b == c && c == d2) ++eq;
               }
-              p = zput(p, " p"); p = zhexb(p, pg); p = zput(p, "=");
-              p = zhex(p, eq); p = zput(p, "/"); p = zhex(p, tot);
+              p = LogPut(p, " p"); p = LogHexByte(p, pg); p = LogPut(p, "=");
+              p = LogHex(p, eq); p = LogPut(p, "/"); p = LogHex(p, tot);
           }
       }
       /* ► THE FAN-OUT'S OWN CONTRIBUTION TO THE COLLAPSE, by row band. Compare
@@ -37547,14 +37547,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            four-way collapse; near zero exonerates it properly. Band A is rows 168-183,
            which no write-mode-1 burst ever reaches and which session 23 measured as the
            WORSE half; band B is 184-199, where every burst lands. */
-      p = zput(p, " fanout_bar[A=rows168-183,B=184-199]: writes=");
-      p = zhex(p, g_yfan_bar_writes[0]); p = zput(p, "/"); p = zhex(p, g_yfan_bar_writes[1]);
-      p = zput(p, " distinct=");
-      p = zhex(p, g_yfan_bar_distinct[0]); p = zput(p, "/"); p = zhex(p, g_yfan_bar_distinct[1]);
-      p = zput(p, " of "); p = zhex(p, YBAR_OFF_MID - YBAR_OFF_LO);
-      p = zput(p, "/");    p = zhex(p, YBAR_OFF_HI - YBAR_OFF_MID);
-      p = zput(p, " per page, 4way=");
-      p = zhex(p, g_yfan_bar_4way[0]); p = zput(p, "/"); p = zhex(p, g_yfan_bar_4way[1]);
+      p = LogPut(p, " fanout_bar[A=rows168-183,B=184-199]: writes=");
+      p = LogHex(p, g_yfan_bar_writes[0]); p = LogPut(p, "/"); p = LogHex(p, g_yfan_bar_writes[1]);
+      p = LogPut(p, " distinct=");
+      p = LogHex(p, g_yfan_bar_distinct[0]); p = LogPut(p, "/"); p = LogHex(p, g_yfan_bar_distinct[1]);
+      p = LogPut(p, " of "); p = LogHex(p, YBAR_OFF_MID - YBAR_OFF_LO);
+      p = LogPut(p, "/");    p = LogHex(p, YBAR_OFF_HI - YBAR_OFF_MID);
+      p = LogPut(p, " per page, 4way=");
+      p = LogHex(p, g_yfan_bar_4way[0]); p = LogPut(p, "/"); p = LogHex(p, g_yfan_bar_4way[1]);
       /* ► DOES THE GUEST WRITE THE SAME BYTES TO DIFFERENT PLANES? See ysmp_check().
            Read `eqb` (PER-BYTE agreement), not `cross_same` (per-window, kept only so
            the old number stays comparable and visibly useless). Compare eqb against the
@@ -37570,39 +37570,39 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            not. All rates are percent, printed in hex. */
       { int bnd; for (bnd = 0; bnd < 2; ++bnd) {
           int pq;
-          p = zput(p, bnd ? " ysmpB[184-199]:" : " ysmpA[168-183]:");
-          p = zput(p, " writes="); p = zhex(p, g_ysmp_writes[bnd]);
-          p = zput(p, " cross_same="); p = zhex(p, g_ysmp_cross_same[bnd]);
-          p = zput(p, " cross_diff="); p = zhex(p, g_ysmp_cross_diff[bnd]);
-          p = zput(p, " cross_eqb=");
-          p = zhex(p, g_ysmp_cross_eqb[bnd]); p = zput(p, "/");
-          p = zhex(p, g_ysmp_cross_totb[bnd]);
+          p = LogPut(p, bnd ? " ysmpB[184-199]:" : " ysmpA[168-183]:");
+          p = LogPut(p, " writes="); p = LogHex(p, g_ysmp_writes[bnd]);
+          p = LogPut(p, " cross_same="); p = LogHex(p, g_ysmp_cross_same[bnd]);
+          p = LogPut(p, " cross_diff="); p = LogHex(p, g_ysmp_cross_diff[bnd]);
+          p = LogPut(p, " cross_eqb=");
+          p = LogHex(p, g_ysmp_cross_eqb[bnd]); p = LogPut(p, "/");
+          p = LogHex(p, g_ysmp_cross_totb[bnd]);
           if (g_ysmp_cross_totb[bnd]) {
-              p = zput(p, "(");
-              p = zhex(p, g_ysmp_cross_eqb[bnd] * 100u / g_ysmp_cross_totb[bnd]);
-              p = zput(p, "% STATE-not-delivery)");
+              p = LogPut(p, "(");
+              p = LogHex(p, g_ysmp_cross_eqb[bnd] * 100u / g_ysmp_cross_totb[bnd]);
+              p = LogPut(p, "% STATE-not-delivery)");
           }
           /* ► THE DELIVERY RATE -- CHANGED BYTES ONLY. This is the one to read:
                high => the guest handed the same byte to two different planes. */
-          p = zput(p, " delivered_eq=");
-          p = zhex(p, g_ysmp_dlv_eq[bnd]); p = zput(p, "/");
-          p = zhex(p, g_ysmp_dlv_tot[bnd]);
+          p = LogPut(p, " delivered_eq=");
+          p = LogHex(p, g_ysmp_dlv_eq[bnd]); p = LogPut(p, "/");
+          p = LogHex(p, g_ysmp_dlv_tot[bnd]);
           if (g_ysmp_dlv_tot[bnd]) {
-              p = zput(p, "(");
-              p = zhex(p, g_ysmp_dlv_eq[bnd] * 100u / g_ysmp_dlv_tot[bnd]);
-              p = zput(p, "%)");
+              p = LogPut(p, "(");
+              p = LogHex(p, g_ysmp_dlv_eq[bnd] * 100u / g_ysmp_dlv_tot[bnd]);
+              p = LogPut(p, "%)");
           }
-          p = zput(p, " p1eq=");
+          p = LogPut(p, " p1eq=");
           for (pq = 0; pq < 4; ++pq) {
-              p = zput(p, pq ? "/" : "");
+              p = LogPut(p, pq ? "/" : "");
               if (g_ysmp_p1_tot[bnd][pq])
-                  p = zhex(p, g_ysmp_p1_eq[bnd][pq] * 100u / g_ysmp_p1_tot[bnd][pq]);
-              else p = zput(p, "-");
+                  p = LogHex(p, g_ysmp_p1_eq[bnd][pq] * 100u / g_ysmp_p1_tot[bnd][pq]);
+              else p = LogPut(p, "-");
           }
-          p = zput(p, "% n=");
+          p = LogPut(p, "% n=");
           for (pq = 0; pq < 4; ++pq) {
-              p = zput(p, pq ? "/" : "");
-              p = zhex(p, g_ysmp_p1_tot[bnd][pq] / YSMP_LEN);
+              p = LogPut(p, pq ? "/" : "");
+              p = LogHex(p, g_ysmp_p1_tot[bnd][pq] / YSMP_LEN);
           } } }
       /* ► THE MAP-MASK IDENTITY. See g_ysel_calls. Both lines must balance exactly;
            a residual is a path nobody has accounted for. */
@@ -37614,23 +37614,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              ACCOUNTS for a write, just a note about how many writes were redundant.
              Leaving it in the sum printed a **UNACCOUNTED** residual of exactly
              -skip_same, which is a counter describing the code as it used to be. */
-        p = zput(p, " maskacct: writes="); p = zhex(p, mw);
-        p = zput(p, " = sel_calls="); p = zhex(p, g_ysel_calls);
-        p = zput(p, " - c4sel="); p = zhex(p, g_vid.Chain4Selects);
-        p = zput(p, " c4xfer="); p = zhex(p, g_vid.Chain4Transfers);
-        p = zput(p, " + skip_chain4="); p = zhex(p, g_vid.MaskSkipChain4);
-        p = zput(p, " [redundant_same="); p = zhex(p, g_vid.MaskSkipSame);
-        p = zput(p, ", informational]");
+        p = LogPut(p, " maskacct: writes="); p = LogHex(p, mw);
+        p = LogPut(p, " = sel_calls="); p = LogHex(p, g_ysel_calls);
+        p = LogPut(p, " - c4sel="); p = LogHex(p, g_vid.Chain4Selects);
+        p = LogPut(p, " c4xfer="); p = LogHex(p, g_vid.Chain4Transfers);
+        p = LogPut(p, " + skip_chain4="); p = LogHex(p, g_vid.MaskSkipChain4);
+        p = LogPut(p, " [redundant_same="); p = LogHex(p, g_vid.MaskSkipSame);
+        p = LogPut(p, ", informational]");
         resid = mw - (g_ysel_calls - g_vid.Chain4Selects) - g_vid.MaskSkipChain4;
-        p = zput(p, " residual="); p = zhex(p, resid);
-        p = zput(p, resid ? " **UNACCOUNTED**" : " (balanced)");
-        p = zput(p, " | sel_calls = swaps="); p = zhex(p, g_yswaps);
-        p = zput(p, " + sel_same="); p = zhex(p, g_ysel_same);
-        p = zput(p, " + sel_zero="); p = zhex(p, g_ysel_zero);
-        p = zput(p, " + failed="); p = zhex(p, g_yfail);
+        p = LogPut(p, " residual="); p = LogHex(p, resid);
+        p = LogPut(p, resid ? " **UNACCOUNTED**" : " (balanced)");
+        p = LogPut(p, " | sel_calls = swaps="); p = LogHex(p, g_yswaps);
+        p = LogPut(p, " + sel_same="); p = LogHex(p, g_ysel_same);
+        p = LogPut(p, " + sel_zero="); p = LogHex(p, g_ysel_zero);
+        p = LogPut(p, " + failed="); p = LogHex(p, g_yfail);
         resid = g_ysel_calls - g_yswaps - g_ysel_same - g_ysel_zero - g_yfail;
-        p = zput(p, " residual="); p = zhex(p, resid);
-        p = zput(p, resid ? " **UNACCOUNTED**" : " (balanced)"); }
+        p = LogPut(p, " residual="); p = LogHex(p, resid);
+        p = LogPut(p, resid ? " **UNACCOUNTED**" : " (balanced)"); }
       /* ► THE READ PLANE. See modey_remap_readmap(). `mismatch` counts GR4 writes that
            named a plane other than the one mapped at A0000 -- every guest read between
            such a write and the next mask change returns the WRONG PLANE'S BYTES, and no
@@ -37638,28 +37638,28 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            mismatch can be attributed rather than just counted: a column concentrated on
            one mapped plane means the guest cycled GR4 while the window sat still, which
            is exactly the I_ReadScreen shape. Section 4 is linear, 5 is the scratch. */
-      p = zput(p, " gr4: writes="); p = zhex(p, g_ygr4_calls);
-      p = zput(p, " mismatch="); p = zhex(p, g_ygr4_mismatch);
-      p = zput(p, " WINDOW_MOVES="); p = zhex(p, g_ygr4_moves);
-      p = zput(p, " hist=");
-      for (i = 0; i < 4; ++i) { p = zput(p, i ? "/" : ""); p = zhex(p, g_vid.Gr4Histogram[i]); }
-      p = zput(p, " pair[gr4->mapped]:");
+      p = LogPut(p, " gr4: writes="); p = LogHex(p, g_ygr4_calls);
+      p = LogPut(p, " mismatch="); p = LogHex(p, g_ygr4_mismatch);
+      p = LogPut(p, " WINDOW_MOVES="); p = LogHex(p, g_ygr4_moves);
+      p = LogPut(p, " hist=");
+      for (i = 0; i < 4; ++i) { p = LogPut(p, i ? "/" : ""); p = LogHex(p, g_vid.Gr4Histogram[i]); }
+      p = LogPut(p, " pair[gr4->mapped]:");
       { unsigned a2, b2;
         for (a2 = 0; a2 < 4; ++a2)
           for (b2 = 0; b2 < 6; ++b2)
             if (g_ygr4_pair[a2][b2]) {
-                p = zput(p, " r"); p = zhexb(p, a2);
-                p = zput(p, "->m"); p = zhexb(p, b2);
-                p = zput(p, "="); p = zhex(p, g_ygr4_pair[a2][b2]); } }
+                p = LogPut(p, " r"); p = LogHexByte(p, a2);
+                p = LogPut(p, "->m"); p = LogHexByte(p, b2);
+                p = LogPut(p, "="); p = LogHex(p, g_ygr4_pair[a2][b2]); } }
       /* ► THE ONE THAT DECIDES IT. GR4 writes between consecutive mask changes:
            1 = the ordinary blit (window moves before any read -- harmless)
            4 = a PURE READ PASS with the window stranded (the collapse)          */
-      p = zput(p, " gr4_runs[n GR4 per select]:");
+      p = LogPut(p, " gr4_runs[n GR4 per select]:");
       { unsigned r2; for (r2 = 1; r2 < 10; ++r2)
-          if (g_ygr4_runs[r2]) { p = zput(p, " "); p = zhexb(p, r2);
-                                 p = zput(p, "x"); p = zhex(p, g_ygr4_runs[r2]); } }
-      p = zput(p, " stranded_on_plane=");
-      for (i = 0; i < 4; ++i) { p = zput(p, i ? "/" : ""); p = zhex(p, g_ygr4_run_planes[i]); }
+          if (g_ygr4_runs[r2]) { p = LogPut(p, " "); p = LogHexByte(p, r2);
+                                 p = LogPut(p, "x"); p = LogHex(p, g_ygr4_runs[r2]); } }
+      p = LogPut(p, " stranded_on_plane=");
+      for (i = 0; i < 4; ++i) { p = LogPut(p, i ? "/" : ""); p = LogHex(p, g_ygr4_run_planes[i]); }
       /* ► IS THE LINEAR SECTION EVEN OCCUPIED? One number, ahead of the dump: how many
            of the bar region's 10240 linear bytes are non-zero. Zero means nothing was
            ever written to A0000 while the window pointed at the linear section, and the
@@ -37667,96 +37667,96 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       { uint32_t o2, nz = 0; const BYTE *lv = (const BYTE *)g_yview[4];
         for (o2 = 168u * 320u; o2 < 200u * 320u; ++o2)
             if (lv[o2 & (MODEY_WIN - 1u)]) ++nz;
-        p = zput(p, " linear_bar_nonzero="); p = zhex(p, nz);
-        p = zput(p, "/"); p = zhex(p, 32u * 320u); }
-      p = zput(p, " latch_solved="); p = zhex(p, g_ylatch_ok);
-      p = zput(p, " latch_UNSOLVED="); p = zhex(p, g_ylatch_unsolved);
-      p = zput(p, " gap="); p = zhex(p, g_vid.ModeYGap);
-      p = zput(p, " attributed="); p = zhex(p, g_vid.YNonZero[0]);
-      p = zput(p, " crtc_seen="); p = zhexb(p, g_vid.IsCrtcSeen);
-      p = zput(p, " crtc_start=0x"); p = zhex(p, g_vid.CrtcStart);
-      p = zput(p, "\r\n");
-      p = zput(p, "STAGE2: modeY snaps:");
+        p = LogPut(p, " linear_bar_nonzero="); p = LogHex(p, nz);
+        p = LogPut(p, "/"); p = LogHex(p, 32u * 320u); }
+      p = LogPut(p, " latch_solved="); p = LogHex(p, g_ylatch_ok);
+      p = LogPut(p, " latch_UNSOLVED="); p = LogHex(p, g_ylatch_unsolved);
+      p = LogPut(p, " gap="); p = LogHex(p, g_vid.ModeYGap);
+      p = LogPut(p, " attributed="); p = LogHex(p, g_vid.YNonZero[0]);
+      p = LogPut(p, " crtc_seen="); p = LogHexByte(p, g_vid.IsCrtcSeen);
+      p = LogPut(p, " crtc_start=0x"); p = LogHex(p, g_vid.CrtcStart);
+      p = LogPut(p, "\r\n");
+      p = LogPut(p, "STAGE2: modeY snaps:");
       for (i = 0; i < 4; ++i) {
-          p = zput(p, " p"); p = zhexb(p, (unsigned)i);
-          p = zput(p, "="); p = zhex(p, g_vid.YSnapshots[i]);
-          p = zput(p, "/nz="); p = zhex(p, g_vid.YNonZero[i]);
+          p = LogPut(p, " p"); p = LogHexByte(p, (unsigned)i);
+          p = LogPut(p, "="); p = LogHex(p, g_vid.YSnapshots[i]);
+          p = LogPut(p, "/nz="); p = LogHex(p, g_vid.YNonZero[i]);
       }
-      p = zput(p, " wmode hist:");
-      for (i = 0; i < 4; ++i) { p = zput(p, " "); p = zhexb(p, (unsigned)i);
-                                p = zput(p, "x"); p = zhex(p, g_vid.WriteModeHistogram[i]); }
-      p = zput(p, "\r\nSTAGE2: modeY (wmode,mask) pairs:");
+      p = LogPut(p, " wmode hist:");
+      for (i = 0; i < 4; ++i) { p = LogPut(p, " "); p = LogHexByte(p, (unsigned)i);
+                                p = LogPut(p, "x"); p = LogHex(p, g_vid.WriteModeHistogram[i]); }
+      p = LogPut(p, "\r\nSTAGE2: modeY (wmode,mask) pairs:");
       { unsigned wm, mk;
         for (wm = 0; wm < 4; ++wm)
           for (mk = 0; mk < 16; ++mk)
             if (g_vid.ModeMaskHistogram[wm * 16 + mk]) {
-                p = zput(p, " w"); p = zhexb(p, wm);
-                p = zput(p, "/m"); p = zhexb(p, mk);
-                p = zput(p, "="); p = zhex(p, g_vid.ModeMaskHistogram[wm * 16 + mk]); } }
-      p = zput(p, "\r\nSTAGE2: modeY mapmask hist:");
+                p = LogPut(p, " w"); p = LogHexByte(p, wm);
+                p = LogPut(p, "/m"); p = LogHexByte(p, mk);
+                p = LogPut(p, "="); p = LogHex(p, g_vid.ModeMaskHistogram[wm * 16 + mk]); } }
+      p = LogPut(p, "\r\nSTAGE2: modeY mapmask hist:");
       for (i = 0; i < 16; ++i)
-          if (g_vid.MaskHistogram[i]) { p = zput(p, " 0x"); p = zhexb(p, (unsigned)i);
-                                    p = zput(p, "x"); p = zhex(p, g_vid.MaskHistogram[i]); }
-      p = zput(p, "\r\n");
+          if (g_vid.MaskHistogram[i]) { p = LogPut(p, " 0x"); p = LogHexByte(p, (unsigned)i);
+                                    p = LogPut(p, "x"); p = LogHex(p, g_vid.MaskHistogram[i]); }
+      p = LogPut(p, "\r\n");
       if (g_vid.VramNonZero) {
           uint32_t pitch = g_vid.VesaStride ? g_vid.VesaStride : 1;
-          p = zput(p, "STAGE2: VESA framebuffer WRITTEN: lo=0x"); p = zhex(p, g_vid.VramLow);
-          p = zput(p, " hi=0x"); p = zhex(p, g_vid.VramHigh);
-          p = zput(p, " nonzero=0x"); p = zhex(p, g_vid.VramNonZero);
-          p = zput(p, "  => row "); p = zhex(p, g_vid.VramLow / pitch);
-          p = zput(p, " col "); p = zhex(p, (g_vid.VramLow % pitch) / (pitch / (g_vid.VesaWidth ? g_vid.VesaWidth : 1)));
-          p = zput(p, " .. row "); p = zhex(p, g_vid.VramHigh / pitch);
-          p = zput(p, "\r\n");
+          p = LogPut(p, "STAGE2: VESA framebuffer WRITTEN: lo=0x"); p = LogHex(p, g_vid.VramLow);
+          p = LogPut(p, " hi=0x"); p = LogHex(p, g_vid.VramHigh);
+          p = LogPut(p, " nonzero=0x"); p = LogHex(p, g_vid.VramNonZero);
+          p = LogPut(p, "  => row "); p = LogHex(p, g_vid.VramLow / pitch);
+          p = LogPut(p, " col "); p = LogHex(p, (g_vid.VramLow % pitch) / (pitch / (g_vid.VesaWidth ? g_vid.VesaWidth : 1)));
+          p = LogPut(p, " .. row "); p = LogHex(p, g_vid.VramHigh / pitch);
+          p = LogPut(p, "\r\n");
       }
-      p = zput(p, "STAGE2: VESA mode SET (4F02): ");
-      if (!g_vid.IsVesaSetSeen) p = zput(p, "never called");
-      else { p = zput(p, "BX=0x"); p = zhex(p, (DWORD)g_vid.VesaSetBx);
-             p = zput(p, g_vid.IsVesaSetOk ? " ACCEPTED" : " REFUSED");
-             p = zput(p, (g_vid.VesaSetBx & 0x4000) ? " [LFB]" : " [banked]");
-             p = zput(p, " -> "); p = zhex(p, (DWORD)g_vid.VesaWidth);
-             p = zput(p, "x"); p = zhex(p, (DWORD)g_vid.VesaHeight);
-             p = zput(p, "x"); p = zhex(p, (DWORD)g_vid.VesaBpp);
-             p = zput(p, " stride=0x"); p = zhex(p, g_vid.VesaStride); }
-      p = zput(p, "\r\n");
-      p = zput(p, "STAGE2: VESA calls by sub-function:");
+      p = LogPut(p, "STAGE2: VESA mode SET (4F02): ");
+      if (!g_vid.IsVesaSetSeen) p = LogPut(p, "never called");
+      else { p = LogPut(p, "BX=0x"); p = LogHex(p, (DWORD)g_vid.VesaSetBx);
+             p = LogPut(p, g_vid.IsVesaSetOk ? " ACCEPTED" : " REFUSED");
+             p = LogPut(p, (g_vid.VesaSetBx & 0x4000) ? " [LFB]" : " [banked]");
+             p = LogPut(p, " -> "); p = LogHex(p, (DWORD)g_vid.VesaWidth);
+             p = LogPut(p, "x"); p = LogHex(p, (DWORD)g_vid.VesaHeight);
+             p = LogPut(p, "x"); p = LogHex(p, (DWORD)g_vid.VesaBpp);
+             p = LogPut(p, " stride=0x"); p = LogHex(p, g_vid.VesaStride); }
+      p = LogPut(p, "\r\n");
+      p = LogPut(p, "STAGE2: VESA calls by sub-function:");
       { int any = 0;
         for (i = 0; i < 0x16; ++i) if (g_vid.VesaCalls[i]) {
             unsigned bb; any = 1;
-            p = zput(p, " 4F"); p = zhexb(p, (unsigned)i); p = zput(p, "x"); p = zhex(p, g_vid.VesaCalls[i]);
+            p = LogPut(p, " 4F"); p = LogHexByte(p, (unsigned)i); p = LogPut(p, "x"); p = LogHex(p, g_vid.VesaCalls[i]);
             if (g_vid.VesaBl[i]) {
-                p = zput(p, "(bl:");
-                for (bb = 0; bb < 16; ++bb) if (g_vid.VesaBl[i] & (1u << bb)) { p = zhexb(p, bb == 15 ? 0x80u : bb); p = zput(p, ","); }
-                p = zput(p, ")");
+                p = LogPut(p, "(bl:");
+                for (bb = 0; bb < 16; ++bb) if (g_vid.VesaBl[i] & (1u << bb)) { p = LogHexByte(p, bb == 15 ? 0x80u : bb); p = LogPut(p, ","); }
+                p = LogPut(p, ")");
             }
         }
-        if (!any) p = zput(p, " none");
+        if (!any) p = LogPut(p, " none");
         if (g_vid.VesaCalls[7]) {
-            p = zput(p, " | 4F07 max start=("); p = zhex(p, (DWORD)g_vid.Vesa07MaxX);
-            p = zput(p, ","); p = zhex(p, (DWORD)g_vid.Vesa07MaxY);
-            p = zput(p, ") refused="); p = zhex(p, g_vid.Vesa07Rejected);
+            p = LogPut(p, " | 4F07 max start=("); p = LogHex(p, (DWORD)g_vid.Vesa07MaxX);
+            p = LogPut(p, ","); p = LogHex(p, (DWORD)g_vid.Vesa07MaxY);
+            p = LogPut(p, ") refused="); p = LogHex(p, g_vid.Vesa07Rejected);
         }
         /* #53: the 4F0Ah block's port writes -- a client switching banks without INT 10h
            shows here and NOT in the 4F05 count above. */
         if (g_vid.VbePmBankCount | g_vid.VbePmStartCount | g_vid.VbePmRejected) {
-            p = zput(p, " | 4F0A-block banks=0x"); p = zhex(p, g_vid.VbePmBankCount);
-            p = zput(p, " starts=0x"); p = zhex(p, g_vid.VbePmStartCount);
-            p = zput(p, " refused=0x"); p = zhex(p, g_vid.VbePmRejected);
+            p = LogPut(p, " | 4F0A-block banks=0x"); p = LogHex(p, g_vid.VbePmBankCount);
+            p = LogPut(p, " starts=0x"); p = LogHex(p, g_vid.VbePmStartCount);
+            p = LogPut(p, " refused=0x"); p = LogHex(p, g_vid.VbePmRejected);
         }
-        p = zput(p, "\r\n");
-        log_append(LOG_PATH, base, p); serial_out(base, p); p = base; }
-      p = zput(p, "STAGE2: VESA mode queries (4F01/4F02):");
-      if (!g_vid.VesaQueryCount) p = zput(p, " none");
+        p = LogPut(p, "\r\n");
+        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base; }
+      p = LogPut(p, "STAGE2: VESA mode queries (4F01/4F02):");
+      if (!g_vid.VesaQueryCount) p = LogPut(p, " none");
       else for (i = 0; i < g_vid.VesaQueryCount; ++i) {
-          p = zput(p, " 4F"); p = zhexb(p, (unsigned)g_vid.VesaQueryFunction[i]);
-          p = zput(p, ":0x"); p = zhex(p, (DWORD)g_vid.VesaQueries[i]);
-          p = zput(p, g_vid.VesaQueryOk[i] ? "=OK" : "=UNSUPPORTED");
+          p = LogPut(p, " 4F"); p = LogHexByte(p, (unsigned)g_vid.VesaQueryFunction[i]);
+          p = LogPut(p, ":0x"); p = LogHex(p, (DWORD)g_vid.VesaQueries[i]);
+          p = LogPut(p, g_vid.VesaQueryOk[i] ? "=OK" : "=UNSUPPORTED");
       }
-      p = zput(p, "\r\n");
-      p = zput(p, "STAGE2: video modes unsupported:");
+      p = LogPut(p, "\r\n");
+      p = LogPut(p, "STAGE2: video modes unsupported:");
       for (i = 0, n = 0; i < 256; ++i)
-          if (VIDEO_UNIMPLEMENTED_GET(g_vid.UnimplementedModes, i)) { p = zput(p, " 0x"); p = zhexb(p, (unsigned)i); ++n; }
-      if (!n) p = zput(p, " none");
-      p = zput(p, "\r\n"); }
+          if (VIDEO_UNIMPLEMENTED_GET(g_vid.UnimplementedModes, i)) { p = LogPut(p, " 0x"); p = LogHexByte(p, (unsigned)i); ++n; }
+      if (!n) p = LogPut(p, " none");
+      p = LogPut(p, "\r\n"); }
     /* ── DUMP THE BAR'S FOUR PLANES SO THE WAD CAN JUDGE THEM. ──────────────────────
          Everything measured so far describes the SCREEN, and the screen is planes plus
          a render. The oracle can only say "this pixel is wrong"; it cannot say which
@@ -37779,25 +37779,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (g_yremap && g_vid.ModeKind == VIDEO_KIND_LINEAR8 && !g_vid.IsChain4) {
         uint32_t pg, pl, row;
         char lb[220], *lq;
-        log_append(LOG_PATH, base, p); serial_out(base, p); p = base;  /* keep the log in order */
-        lq = lb; lq = zput(lq, "MODEYBAR dump: 3 pages x 4 planes x rows 168..199, "
+        LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;  /* keep the log in order */
+        lq = lb; lq = LogPut(lq, "MODEYBAR dump: 3 pages x 4 planes x rows 168..199, "
                                "80 bytes/row (plane offset = row*80 + x/4)\r\n");
-        log_append(LOG_PATH, lb, lq); serial_out(lb, lq);
+        LogAppend(LOG_PATH, lb, lq); serial_out(lb, lq);
         for (pg = 0; pg < 3; ++pg)
             for (pl = 0; pl < 4; ++pl)
                 for (row = 168; row < 200; ++row) {
                     uint32_t o = (pg * 0x4000u + row * 80u) & (MODEY_WIN - 1u), x;
                     const BYTE *src = (const BYTE *)g_yview[pl];
                     lq = lb;
-                    lq = zput(lq, "MODEYBAR pg"); lq = zhexb(lq, pg);
-                    lq = zput(lq, " pl");         lq = zhexb(lq, pl);
-                    lq = zput(lq, " y");          lq = zhexb(lq, row);
-                    lq = zput(lq, " ");
-                    for (x = 0; x < 80; ++x) lq = zhexb(lq, src[(o + x) & (MODEY_WIN - 1u)]);
-                    lq = zput(lq, "\r\n");
+                    lq = LogPut(lq, "MODEYBAR pg"); lq = LogHexByte(lq, pg);
+                    lq = LogPut(lq, " pl");         lq = LogHexByte(lq, pl);
+                    lq = LogPut(lq, " y");          lq = LogHexByte(lq, row);
+                    lq = LogPut(lq, " ");
+                    for (x = 0; x < 80; ++x) lq = LogHexByte(lq, src[(o + x) & (MODEY_WIN - 1u)]);
+                    lq = LogPut(lq, "\r\n");
                     /* File only: 67 KB down a 115200 COM1 is ~6 s of wind-down for a
                        dump nobody reads off the serial line. */
-                    log_append(LOG_PATH, lb, lq);
+                    LogAppend(LOG_PATH, lb, lq);
                 }
         /* ── AND THE LINEAR SECTION, WHICH IS THE ONE PLACE NOBODY HAS LOOKED. ────────
              modey_remap_init() sets g_ycur = 4 and a chain4 change selects 4, so A0000
@@ -37813,27 +37813,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              region is rows 168..199 at 320 bytes a row -- no plane stride. Score it
              against STBAR directly: a good score means Doom drew the bar while the
              window pointed here and the planes never received it. */
-        lq = lb; lq = zput(lq, "MODEYLIN dump: linear section, rows 168..199, "
+        lq = lb; lq = LogPut(lq, "MODEYLIN dump: linear section, rows 168..199, "
                                "320 bytes/row in 4 chunks (offset = row*320 + x)\r\n");
-        log_append(LOG_PATH, lb, lq); serial_out(lb, lq);
+        LogAppend(LOG_PATH, lb, lq); serial_out(lb, lq);
         for (row = 168; row < 200; ++row) {
             uint32_t q4, x;
             for (q4 = 0; q4 < 4; ++q4) {
                 uint32_t o = (row * 320u + q4 * 80u) & (MODEY_WIN - 1u);
                 const BYTE *src = (const BYTE *)g_yview[4];
                 lq = lb;
-                lq = zput(lq, "MODEYLIN y"); lq = zhexb(lq, row);
-                lq = zput(lq, " q");         lq = zhexb(lq, q4);
-                lq = zput(lq, " ");
-                for (x = 0; x < 80; ++x) lq = zhexb(lq, src[(o + x) & (MODEY_WIN - 1u)]);
-                lq = zput(lq, "\r\n");
-                log_append(LOG_PATH, lb, lq);
+                lq = LogPut(lq, "MODEYLIN y"); lq = LogHexByte(lq, row);
+                lq = LogPut(lq, " q");         lq = LogHexByte(lq, q4);
+                lq = LogPut(lq, " ");
+                for (x = 0; x < 80; ++x) lq = LogHexByte(lq, src[(o + x) & (MODEY_WIN - 1u)]);
+                lq = LogPut(lq, "\r\n");
+                LogAppend(LOG_PATH, lb, lq);
             }
         }
     }
     if (g_cpuspd_periods) cpuspd_tl_dump("STAGE2: CTL");                 /* #225 */
-    p = zput(p, "STAGE2: complete\r\n");
-    log_append(LOG_PATH, base, p); serial_out(base, p); p = base;   /* headless: mirror the DOS-output flush + completion to COM1 */
+    p = LogPut(p, "STAGE2: complete\r\n");
+    LogAppend(LOG_PATH, base, p); serial_out(base, p); p = base;   /* headless: mirror the DOS-output flush + completion to COM1 */
 
     /* Headless test mode: the guest has just terminated (or the PM loop hit its
        headless time cap), so exit immediately (no window-close needed) -- this lets a
