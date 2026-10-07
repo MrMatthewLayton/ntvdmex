@@ -3,7 +3,8 @@
  * that header, and this struct must not depend on either. */
 #ifndef INTERP_XCPU_H
 #define INTERP_XCPU_H
-#include <stdint.h>
+#include "../../src/ntvdmex_types.h"
 #define XMEM_SIZE 0x110000u
-typedef struct { uint32_t r[8]; uint16_t seg[6]; uint16_t ip; uint32_t flags; } xcpu;
+typedef struct _INTERP_XCPU { UINT32 Registers[8]; UINT16 Segments[6]; UINT16 Ip; UINT32 Flags; } INTERP_XCPU, *PINTERP_XCPU;
+typedef const INTERP_XCPU *PCINTERP_XCPU;
 #endif

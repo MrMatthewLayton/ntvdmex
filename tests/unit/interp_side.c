@@ -11,37 +11,36 @@
 #include <string.h>
 #include "interp_xcpu.h"
 
-typedef unsigned char BYTE;
 
 #ifndef SIDE
 #error "define SIDE (ref_ or new_)"
 #endif
-#define CAT2(a, b) a##b
-#define CAT(a, b) CAT2(a, b)
-#define FN(n) CAT(SIDE, n)
+#define CAT2(first, second) first##second
+#define CAT(first, second) CAT2(first, second)
+#define FN(name) CAT(SIDE, name)
 
-static BYTE MEM[XMEM_SIZE];
-static uint64_t g_fx;                                 /* this step's effects, hashed */
-static void fx(uint64_t v)
-{ int i; for (i = 0; i < 8; ++i) { g_fx ^= (BYTE)(v >> (i * 8)); g_fx *= 1099511628211ULL; } }
+static BYTE g_Memory[XMEM_SIZE];
+static UINT64 g_Effects;                                 /* this step's effects, hashed */
+static VOID InterpSideEffect(UINT64 value)
+{ INT index; for (index = 0; index < 8; ++index) { g_Effects ^= (BYTE)(value >> (index * 8)); g_Effects *= 1099511628211ULL; } }
 
 /* An undo log, so a step the OTHER side did not take can be rolled back. */
 #define UNDO_MAX (1u << 20)
-static uint32_t g_ulin[UNDO_MAX]; static BYTE g_uold[UNDO_MAX];
-static uint32_t g_un; static int g_uon, g_uover;
+static UINT32 g_UndoLinear[UNDO_MAX]; static BYTE g_UndoOld[UNDO_MAX];
+static UINT32 g_UndoCount; static INT g_IsUndoOn, g_IsUndoOverflow;
 
-static uint8_t V86HostRead8(uint32_t lin) { return (lin < sizeof MEM) ? MEM[lin] : 0xFF; }
-static void V86HostWrite8(uint32_t lin, uint8_t v)
+static BYTE V86HostRead8(UINT32 linear) { return (linear < sizeof g_Memory) ? g_Memory[linear] : 0xFF; }
+static VOID V86HostWrite8(UINT32 linear, BYTE value)
 {
-    fx(((uint64_t)lin << 8) | v);
-    if (lin >= sizeof MEM) return;
-    if (g_uon) { if (g_un < UNDO_MAX) { g_ulin[g_un] = lin; g_uold[g_un] = MEM[lin]; ++g_un; } else g_uover = 1; }
-    MEM[lin] = v;
+    InterpSideEffect(((UINT64)linear << 8) | value);
+    if (linear >= sizeof g_Memory) return;
+    if (g_IsUndoOn) { if (g_UndoCount < UNDO_MAX) { g_UndoLinear[g_UndoCount] = linear; g_UndoOld[g_UndoCount] = g_Memory[linear]; ++g_UndoCount; } else g_IsUndoOverflow = 1; }
+    g_Memory[linear] = value;
 }
-static uint32_t V86HostIn(uint16_t port, int width)
-{ fx(0x1000000ULL | port | ((uint64_t)width << 16)); return (uint32_t)port * 2654435761u; }
-static void V86HostOut(uint16_t port, int width, uint32_t val)
-{ fx(0x2000000ULL | port | ((uint64_t)width << 16) | ((uint64_t)val << 32)); }
+static UINT32 V86HostIn(WORD port, INT width)
+{ InterpSideEffect(0x1000000ULL | port | ((UINT64)width << 16)); return (UINT32)port * 2654435761u; }
+static VOID V86HostOut(WORD port, INT width, UINT32 value)
+{ InterpSideEffect(0x2000000ULL | port | ((UINT64)width << 16) | ((UINT64)value << 32)); }
 
 #ifndef INTERP_H
 #define INTERP_H "../../src/host/v86interp.h"
@@ -51,50 +50,50 @@ static void V86HostOut(uint16_t port, int width, uint32_t val)
 /* A FAKE descriptor table for the protected-mode run -- identical on both sides, so any
    difference is the interpreter's. Index mod 4: 16-bit code / data / 32-bit code /
    not present; limits alternate 64 KB and 32 KB; bases are spread over the low 1 MB. */
-static uint32_t fake_seg2lin(uint16_t sel) { return ((uint32_t)(sel >> 3) * 0x1230u) & 0xFFFF0u; }
-static int fake_sel_desc(uint16_t sel, uint32_t *ar, uint32_t *limit)
+static UINT32 InterpSideSegmentToLinear(WORD selector) { return ((UINT32)(selector >> 3) * 0x1230u) & 0xFFFF0u; }
+static INT InterpSideSelectorDescriptor(WORD selector, UINT32 *accessRights, UINT32 *limit)
 {
-    unsigned idx = sel >> 3, k = idx & 3;
-    if (!(sel & 4) || idx == 0 || k == 3) return 0;
-    *ar = (k == 1 ? 0xF2u : 0xFAu) << 8;
-    if (k == 2) *ar |= 0x4u << 20;                    /* D = 1 */
-    *limit = (idx & 4) ? 0x7FFFu : 0xFFFFu;
+    UINT index = selector >> 3, kind = index & 3;
+    if (!(selector & 4) || index == 0 || kind == 3) return 0;
+    *accessRights = (kind == 1 ? 0xF2u : 0xFAu) << 8;
+    if (kind == 2) *accessRights |= 0x4u << 20;                    /* D = 1 */
+    *limit = (index & 4) ? 0x7FFFu : 0xFFFFu;
     return 1;
 }
 
-void FN(init)(const uint8_t *img, int pm)
+VOID FN(Initialize)(PCBYTE image, INT isProtectedMode)
 {
-    memcpy(MEM, img, sizeof MEM);
-    g_V86SegmentToLinear  = pm ? fake_seg2lin : 0;
-    g_V86SelectorDescriptor = pm ? fake_sel_desc : 0;
+    memcpy(g_Memory, image, sizeof g_Memory);
+    g_V86SegmentToLinear  = isProtectedMode ? InterpSideSegmentToLinear : 0;
+    g_V86SelectorDescriptor = isProtectedMode ? InterpSideSelectorDescriptor : 0;
 }
-void FN(poke)(uint32_t lin, uint8_t v) { if (lin < sizeof MEM) MEM[lin] = v; }
-const uint8_t *FN(mem)(void) { return MEM; }
-void FN(sync)(const uint8_t *img) { memcpy(MEM, img, sizeof MEM); }
+VOID FN(Poke)(UINT32 linear, BYTE value) { if (linear < sizeof g_Memory) g_Memory[linear] = value; }
+PCBYTE FN(Memory)(VOID) { return g_Memory; }
+VOID FN(Sync)(PCBYTE image) { memcpy(g_Memory, image, sizeof g_Memory); }
 
-int FN(step)(xcpu *x, uint64_t *effects)
+INT FN(Step)(PINTERP_XCPU state, UINT64 *effects)
 {
-    V86_CPU c; int ok, i;
-    for (i = 0; i < 8; ++i) c.Registers[i] = x->r[i];
-    for (i = 0; i < 6; ++i) c.Segments[i] = x->seg[i];
-    c.Ip = x->ip; c.Flags = x->flags;
-    g_fx = 1469598103934665603ULL;
-    ok = V86Step(&c);
-    for (i = 0; i < 8; ++i) x->r[i] = c.Registers[i];
-    for (i = 0; i < 6; ++i) x->seg[i] = c.Segments[i];
-    x->ip = c.Ip; x->flags = c.Flags;
-    *effects = g_fx;
-    return ok;
+    V86_CPU cpu; INT isOk, index;
+    for (index = 0; index < 8; ++index) cpu.Registers[index] = state->Registers[index];
+    for (index = 0; index < 6; ++index) cpu.Segments[index] = state->Segments[index];
+    cpu.Ip = state->Ip; cpu.Flags = state->Flags;
+    g_Effects = 1469598103934665603ULL;
+    isOk = V86Step(&cpu);
+    for (index = 0; index < 8; ++index) state->Registers[index] = cpu.Registers[index];
+    for (index = 0; index < 6; ++index) state->Segments[index] = cpu.Segments[index];
+    state->Ip = cpu.Ip; state->Flags = cpu.Flags;
+    *effects = g_Effects;
+    return isOk;
 }
 
-void FN(undo_begin)(void) { g_un = 0; g_uover = 0; g_uon = 1; }
+VOID FN(UndoBegin)(VOID) { g_UndoCount = 0; g_IsUndoOverflow = 0; g_IsUndoOn = 1; }
 /* Roll back every write since undo_begin. Returns 0 if the log overflowed (the caller
    must then resync the whole image). */
-int FN(undo_rollback)(void)
+INT FN(UndoRollback)(VOID)
 {
-    uint32_t i = g_un;
-    g_uon = 0;
-    while (i) { --i; MEM[g_ulin[i]] = g_uold[i]; }
-    return !g_uover;
+    UINT32 index = g_UndoCount;
+    g_IsUndoOn = 0;
+    while (index) { --index; g_Memory[g_UndoLinear[index]] = g_UndoOld[index]; }
+    return !g_IsUndoOverflow;
 }
-void FN(undo_end)(void) { g_uon = 0; }
+VOID FN(UndoEnd)(VOID) { g_IsUndoOn = 0; }
