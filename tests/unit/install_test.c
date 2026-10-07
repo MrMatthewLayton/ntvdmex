@@ -15,43 +15,43 @@
 #include <string.h>
 #include "install.h"
 
-static int total = 0, fails = 0;
-#define CHECK(c,m) do{ total++; if(c){printf("  PASS  %s\n",(m));} \
-    else{printf("  FAIL  %s\n",(m)); fails++;} }while(0)
+static INT g_Total = 0, g_Failures = 0;
+#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
+    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
-int main(void)
+INT main(VOID)
 {
-    static const char *SELF = "C:\\ntvdmex\\ntvdmhost.exe";
+    static PCSTR hostPath = "C:\\ntvdmex\\ntvdmhost.exe";
 
     printf("== install: is that value ours? (install.h) ==\n");
 
-    CHECK(InstallClassify(NULL, SELF) == INSTALL_ABSENT,
+    CHECK(InstallClassify(NULL, hostPath) == INSTALL_ABSENT,
           "no value at all is ABSENT -- the machine uses its own ntvdm");
-    CHECK(InstallClassify("", SELF) == INSTALL_ABSENT,
+    CHECK(InstallClassify("", hostPath) == INSTALL_ABSENT,
           "an EMPTY value is absent too, not an install pointing at nothing");
-    CHECK(InstallClassify("   ", SELF) == INSTALL_ABSENT,
+    CHECK(InstallClassify("   ", hostPath) == INSTALL_ABSENT,
           "...and neither is whitespace");
 
-    CHECK(InstallClassify("C:\\ntvdmex\\ntvdmhost.exe", SELF) == INSTALL_OURS,
+    CHECK(InstallClassify("C:\\ntvdmex\\ntvdmhost.exe", hostPath) == INSTALL_OURS,
           "the exact path is OURS");
 
     /* ⚠ THE FOUR WAYS A HAND-WRITTEN VALUE DIFFERS FROM OURS. Every one of these is
          what a person actually types, and getting any of them wrong means uninstall
          refuses to remove a value we put there. */
-    CHECK(InstallClassify("\"C:\\ntvdmex\\ntvdmhost.exe\"", SELF) == INSTALL_OURS,
+    CHECK(InstallClassify("\"C:\\ntvdmex\\ntvdmhost.exe\"", hostPath) == INSTALL_OURS,
           "QUOTED is ours -- reg add with a quoted path is the documented form");
-    CHECK(InstallClassify("C:\\NTVDMEX\\NTVDMHOST.EXE", SELF) == INSTALL_OURS,
+    CHECK(InstallClassify("C:\\NTVDMEX\\NTVDMHOST.EXE", hostPath) == INSTALL_OURS,
           "CASE does not matter: Windows paths are case-insensitive");
-    CHECK(InstallClassify("  C:\\ntvdmex\\ntvdmhost.exe  ", SELF) == INSTALL_OURS,
+    CHECK(InstallClassify("  C:\\ntvdmex\\ntvdmhost.exe  ", hostPath) == INSTALL_OURS,
           "SURROUNDING SPACE does not matter -- a typed value usually has some");
-    CHECK(InstallClassify("C:/ntvdmex/ntvdmhost.exe", SELF) == INSTALL_OURS,
+    CHECK(InstallClassify("C:/ntvdmex/ntvdmhost.exe", hostPath) == INSTALL_OURS,
           "FORWARD SLASHES name the same file, and Win32 accepts them");
 
-    CHECK(InstallClassify("C:\\other\\debugger.exe", SELF) == INSTALL_OTHER,
+    CHECK(InstallClassify("C:\\other\\debugger.exe", hostPath) == INSTALL_OTHER,
           "a different program is OTHER, and is not ours to touch");
-    CHECK(InstallClassify("C:\\ntvdmex\\ntvdmhost.exe.bak", SELF) == INSTALL_OTHER,
+    CHECK(InstallClassify("C:\\ntvdmex\\ntvdmhost.exe.bak", hostPath) == INSTALL_OTHER,
           "a path that merely STARTS with ours is not ours -- compare whole, not prefix");
-    CHECK(InstallClassify("C:\\ntvdmex\\ntvdmhos.exe", SELF) == INSTALL_OTHER,
+    CHECK(InstallClassify("C:\\ntvdmex\\ntvdmhos.exe", hostPath) == INSTALL_OTHER,
           "...and a shorter near-miss is not ours either");
 
     printf("== install: what to do about it ==\n");
@@ -98,9 +98,9 @@ int main(void)
           "the IFEO key path is exactly the one Windows reads");
     CHECK(strcmp(INSTALL_VAL, "Debugger") == 0, "the value is named Debugger");
 
-    printf("\n%s: %d/%d\n", fails ? "FAILURES" : "ALL PASS", total - fails, total);
+    printf("\n%s: %d/%d\n", g_Failures ? "FAILURES" : "ALL PASS", g_Total - g_Failures, g_Total);
     /* The runner (scripts/offvm.sh) reads this dialect; without it the battery counted
        this whole test as 0 checks, which reads as a pass that asserted nothing. (s81) */
-    printf("== %d checks, %d failed\n", total, fails);
-    return fails ? 1 : 0;
+    printf("== %d checks, %d failed\n", g_Total, g_Failures);
+    return g_Failures ? 1 : 0;
 }
