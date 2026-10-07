@@ -683,7 +683,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
          window manager enforces, and ours is the OS's. A guest that asks for it
          and then gets no WM_DROPFILES would be a lie one level down.
        ★ s92: AND THE DROP NOW ARRIVES -- WM_DROPFILES is relayed with a Win16 HDROP
-         (a real global block; wowwin.h wowwin_drop16), read by DragQueryFile below
+         (a real global block; wowwin.h WowWinDrop16), read by DragQueryFile below
          and by SHELL.DLL's own 16-bit DragQueryPoint and DragFinish. */
     case WOWSHELL_DRAGACCEPTFILES: {
         WORD window16 = wow32_argw(frame, WOWSHELL_DRAGACCEPTFILES_ARG_HWND);
@@ -705,7 +705,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
     }
 
     /* ── ★ 0x0b DragQueryFile(hDrop, iFile, lpszFile, cch) ──────────────────
-       s92 (#305 M12): the HDROP is the global block wowwin_drop16 built (wowwin.h),
+       s92 (#305 M12): the HDROP is the global block WowWinDrop16 built (wowwin.h),
        read here the way SHELL.DLL's own DragQueryPoint reads it: locked through
        krnl386, pFiles at +0, the names from there. iFile 0xFFFF answers the count;
        a NULL buffer answers the length a name needs (without its NUL); otherwise at
@@ -717,7 +717,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
         WORD itemIndex   = wow32_argw(frame, WOWSHELL_DRAGQUERYFILE_ARG_INDEX);
         WORD bufferSize   = wow32_argw(frame, WOWSHELL_DRAGQUERYFILE_ARG_CCH);
         volatile BYTE *output = wow32_argptr(frame, WOWSHELL_DRAGQUERYFILE_ARG_BUF);
-        DWORD farPointer = g_ww_global16 ? g_ww_global16(WOWWIN_GLOBAL16_LOCK, drop16, 0) : 0;
+        DWORD farPointer = g_WowWinGlobal16 ? g_WowWinGlobal16(WOWWIN_GLOBAL16_LOCK, drop16, 0) : 0;
         DWORD segmentBase = (farPointer >> WOW_WORD_SHIFT) ? dpmi_sel_base((WORD)(farPointer >> WOW_WORD_SHIFT)) : 0;
         volatile BYTE *dropBytes = segmentBase ? (volatile BYTE *)(ULONG_PTR)(segmentBase + (farPointer & WOW_WORD_MASK)) : NULL;
         DWORD result = 0;
@@ -756,7 +756,7 @@ static INT WowShellCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
             }
             if (itemIndex == WOWSHELL_DRAGQUERYFILE_COUNT) result = count;
         }
-        g_ww_global16(WOWWIN_GLOBAL16_UNLOCK, drop16, 0);
+        g_WowWinGlobal16(WOWWIN_GLOBAL16_UNLOCK, drop16, 0);
         wu_puts(note, noteCapacity, &noteLength, " = 0x");
         wu_puthex(note, noteCapacity, &noteLength, result, WOW_HEX_WORD_DIGITS);
         wow32_setret(frame, result);

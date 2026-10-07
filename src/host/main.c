@@ -7127,7 +7127,7 @@ static void planes_dump_beside(const char *bmp_path)
    have one path. That was right about the DOS path and wrong about the other one:
    a Win16 window is a REAL Win32 window now, so its keyboard input arrives as real
    Win32 messages addressed to it, with the OS's own focus deciding which window
-   gets them -- see wowwin_proc. Feeding the Win16 queue from the 8042 as well
+   gets them -- see WowWinProc. Feeding the Win16 queue from the 8042 as well
    would deliver every key twice and to a window the OS had not focused. */
 static void host_key_scancode(uint8_t rawsc, int ext, int is_break)
 {
@@ -20805,7 +20805,7 @@ static int ws_intertask_live(void)
      "still slow". So the FILE trace is not the cost, and the remaining suspects
      are the per-BOP work that happens either way: this flag gates the WRITE, not
      the ~1.3 KB of string FORMATTING each BOP still does, nor wow_psp_env_check
-     reading guest memory on every one, nor wowwin_pump's PeekMessage, nor the
+     reading guest memory on every one, nor WowWinPump's PeekMessage, nor the
      BOP round trip itself.
    ── ⚠ ALSO REFUTED, same round: `serial_out` does WriteFile + FlushFileBuffers
      per line at 115200 baud, which would block until the bytes were physically
@@ -22492,9 +22492,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 p = zput(p, " log_kb=0x");            p = zhex(p, g_log_bytes >> 10);
                 p = zput(p, " log_ms=0x");
                 p = zhex(p, fq.QuadPart ? (DWORD)(g_log_qpc * 1000 / fq.QuadPart) : 0);
-                p = zput(p, " pump_calls=0x");        p = zhex(p, g_ww_pumpcalls);
+                p = zput(p, " pump_calls=0x");        p = zhex(p, g_WowWinPumpCalls);
                 p = zput(p, " pump_ms=0x");
-                p = zhex(p, fq.QuadPart ? (DWORD)(g_ww_qpc * 1000 / fq.QuadPart) : 0);
+                p = zhex(p, fq.QuadPart ? (DWORD)(g_WowWinPumpTicks * 1000 / fq.QuadPart) : 0);
                 /* ★ AND HOW MUCH THE FOLD SAVED, because a suppression that is
                      not counted is indistinguishable from a call that never
                      happened -- which is the whole reason this line exists. */
@@ -23141,7 +23141,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                      50 ms of waiting for input -- the same bound and reasoning as the
                      GetMessage wait -- and any IRQ a 32-bit component raised. */
                 if (f.krnl && f.id == WOW32_WOWWAITFORMSGANDEVENT) {
-                    if (!g_WowMsgCount && !wowwin_pump(64))
+                    if (!g_WowMsgCount && !WowWinPump(64))
                         MsgWaitForMultipleObjects(0, NULL, FALSE, 50, QS_ALLINPUT);
                     if (g_ica_pending) wow_ica_deliver(g_dosm, tib, 0);
                     wow32_setret(&f, 0);
@@ -23518,7 +23518,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                          regular moment it is not inside the guest. Bounded, so a
                          flood of mouse moves cannot starve the thing we are here
                          to run. */
-                    wowwin_pump(32);
+                    WowWinPump(32);
                     /* ── (E) s92 (#306): GetMessage WITH NOTHING TO GET, AND A TASK THAT HAS
                          NEVER RUN. The idle yield (D) is krnl386's WowWaitForMsgAndEvent --
                          which only WOWEXEC's loop calls. An APPLICATION idles here, in our
@@ -23626,7 +23626,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                  which, and a bounded count keeps a long idle from
                                  filling the log. */
                             DWORD beat = t0; unsigned beats = 0;
-                            DWORD pumped0 = g_ww_pumped;
+                            DWORD pumped0 = g_WowWinPumped;
                             /* ★ Tell the freeze watchdog this stall is deliberate --
                                  see g_WowMsgInWait in wowmsg.h. Set BEFORE the loop and
                                  cleared after it on every exit path, because the
@@ -23667,7 +23667,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                      on the grounds that it "should" help. */
                                 if (g_ica_pending)         /* s90 #278 */
                                     wow_ica_deliver(g_dosm, tib, 0);
-                                if (!wowwin_pump(64))
+                                if (!WowWinPump(64))
                                     MsgWaitForMultipleObjects(0, NULL, FALSE, 50,
                                                               QS_ALLINPUT);
                                 if (beats < 20 && GetTickCount() - beat >= 2000) {
@@ -23677,9 +23677,9 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                                     hq = zhex(hq, beat - t0);
                                     hq = zput(hq, " ms; Win32 messages dispatched on"
                                                   " this thread since blocking 0x");
-                                    hq = zhex(hq, g_ww_pumped - pumped0);
+                                    hq = zhex(hq, g_WowWinPumped - pumped0);
                                     hq = zput(hq, " (total 0x");
-                                    hq = zhex(hq, g_ww_pumped);
+                                    hq = zhex(hq, g_WowWinPumped);
                                     hq = zput(hq, "), Win16 queued 0x");
                                     hq = zhex(hq, (DWORD)g_WowMsgCount);
                                     hq = zput(hq, "\r\n");
@@ -23883,7 +23883,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                     /* The About box runs a modal loop on this thread, so drain
                        what is already queued for the guest's windows first --
                        same reason the USER branch pumps. */
-                    wowwin_pump(32);
+                    WowWinPump(32);
                     /* ── ⚠ SAY IT BEFORE IT BLOCKS, NOT AFTER. ────────────────
                          A modal service does not return until a human dismisses
                          it, and the "SERVICED" line is written afterwards -- so
@@ -23926,7 +23926,7 @@ static int dpmi_service_pm_int_body(dos_machine_t *mp, volatile BYTE *tib, DWORD
                 }
                 if (!f.krnl && g_wow_cdlg_seg && f.stubseg == g_wow_cdlg_seg) {
                     char note[416];
-                    wowwin_pump(32);
+                    WowWinPump(32);
                     /* ⚠ Same reason as ShellAbout: a modal service does not return
                          until a human dismisses it, and the SERVICED line is
                          written afterwards. Say it before it blocks, or the log
@@ -27600,7 +27600,7 @@ static WORD shim_handle16(HANDLE h, DWORD type)
 {
     if (!h) return 0;
     switch (type) {
-    case 0: case 14: return wowwin_hwnd16((HWND)h);
+    case 0: case 14: return WowWinHwnd16((HWND)h);
     case 4: return wowgdi_h16((HGDIOBJ)h, WOWGDI_KIND_DC);
     case 5: case 6: case 7: case 8: case 9: case 10: case 11:
         return wowgdi_h16((HGDIOBJ)h, WOWGDI_KIND_OBJ);
@@ -28101,7 +28101,7 @@ static LRESULT wow_ctlcolor(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, in
     HGDIOBJ br;
     *handled = 0;
     if (!proc) return 0;
-    child = wowwin_hwnd16((HWND)lp);
+    child = WowWinHwnd16((HWND)lp);
     dtok  = wowgdi_h16((HGDIOBJ)wp, WOWGDI_KIND_DC);
     if (!dtok) return 0;
     /* A Win32 read-only edit reports WM_CTLCOLORSTATIC; a Win16 edit is always
@@ -28172,7 +28172,7 @@ static LRESULT wow_ownerdraw(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, i
         od_w(b, 0, (WORD)d->CtlType); od_w(b, 2, (WORD)d->CtlID);
         od_w(b, 4, (WORD)d->itemID);  od_w(b, 6, (WORD)d->itemAction);
         od_w(b, 8, (WORD)(d->itemState & 0x1F));
-        od_w(b, 10, wowwin_hwnd16(d->hwndItem)); od_w(b, 12, dtok);
+        od_w(b, 10, WowWinHwnd16(d->hwndItem)); od_w(b, 12, dtok);
         od_w(b, 14, (WORD)d->rcItem.left);  od_w(b, 16, (WORD)d->rcItem.top);
         od_w(b, 18, (WORD)d->rcItem.right); od_w(b, 20, (WORD)d->rcItem.bottom);
         od_d(b, 22, (DWORD)d->itemData);
@@ -28188,14 +28188,14 @@ static LRESULT wow_ownerdraw(HWND h, WORD h16, UINT msg, WPARAM wp, LPARAM lp, i
     case WM_DELETEITEM: {
         const DELETEITEMSTRUCT *d = (const DELETEITEMSTRUCT *)lp;
         od_w(b, 0, (WORD)d->CtlType); od_w(b, 2, (WORD)d->CtlID);
-        od_w(b, 4, (WORD)d->itemID);  od_w(b, 6, wowwin_hwnd16(d->hwndItem));
+        od_w(b, 4, (WORD)d->itemID);  od_w(b, 6, WowWinHwnd16(d->hwndItem));
         od_d(b, 8, (DWORD)d->itemData);
         n = 12; break;
     }
     case WM_COMPAREITEM: {
         const COMPAREITEMSTRUCT *c = (const COMPAREITEMSTRUCT *)lp;
         od_w(b, 0, (WORD)c->CtlType); od_w(b, 2, (WORD)c->CtlID);
-        od_w(b, 4, wowwin_hwnd16(c->hwndItem));
+        od_w(b, 4, WowWinHwnd16(c->hwndItem));
         od_w(b, 6, (WORD)c->itemID1); od_d(b, 8, (DWORD)c->itemData1);
         od_w(b, 12, (WORD)c->itemID2); od_d(b, 14, (DWORD)c->itemData2);
         n = 18; break;
@@ -31959,14 +31959,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_cmos.RtcNow = host_rtc_now;
     g_cmos.RtcContext = NULL;
     g_cmos.RtcSet = host_rtc_set;              /* GH #261: CMOS 00h-09h + 32h writes */
-    g_ww_ctlcolor  = wow_ctlcolor;              /* s89: WM_CTLCOLOR via the nested run */
+    g_WowWinCtlColor  = wow_ctlcolor;              /* s89: WM_CTLCOLOR via the nested run */
     g_wu_send16    = wow_send16_now;            /* s89 #305: WM_DESTROY sent, not posted */
-    g_ww_send16    = wow_send16_now;            /* s89 #300: WM_H/VSCROLL sent from the tracking loop */
+    g_WowWinSend16    = wow_send16_now;            /* s89 #300: WM_H/VSCROLL sent from the tracking loop */
     g_wu_call16    = wow_call16_sync;           /* s91 #308: a subclassed control's messages */
-    g_ww_ownerdraw = wow_ownerdraw;             /* s89 #302: owner-draw via the nested run */
-    g_ww_global16  = shim_global16;             /* s92 #305 M12: a Win16 HDROP is a krnl386 block */
+    g_WowWinOwnerDraw = wow_ownerdraw;             /* s89 #302: owner-draw via the nested run */
+    g_WowWinGlobal16  = shim_global16;             /* s92 #305 M12: a Win16 HDROP is a krnl386 block */
     g_wu_send16b   = wow_send16_blob;           /* s89 #302: WM_CREATE to template controls */
-    g_ww_send16b   = wow_send16_blob;           /* s91 #305 M9: WM_GETMINMAXINFO */
+    g_WowWinSend16Blob   = wow_send16_blob;           /* s91 #305 M9: WM_GETMINMAXINFO */
     g_cmos.BaseKb = (uint16_t)(BiosBaseKbOfTop(g_dos_mem_top) + BIOS_EBDA_KB);  /* #136 */
     g_cmos_dev = VddCmosDevice(&g_cmos);
     VddBusAdd(&g_bus, &g_cmos_dev);           /* MC146818: ports 0x70/0x71    */

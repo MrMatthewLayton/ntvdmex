@@ -116,7 +116,7 @@
    the callback is what makes them meaningful. */
 #define WM_CREATE16       0x0001
 /* ★ Win16 and Win32 agree on the number, as they do for the keyboard messages.
-   Relayed from wowwin_proc since session 45; see the long note there for why the
+   Relayed from WowWinProc since session 45; see the long note there for why the
    OS's update region has to be consumed before it is handed on. */
 #define WM_PAINT16        0x000f
 

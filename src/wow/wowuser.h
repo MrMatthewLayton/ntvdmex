@@ -1471,7 +1471,7 @@ static const char *wowuser_res_prog(void)
        64 with LONGs, so this is a conversion like every other structure here.
 
    ⚠⚠ THE UPDATE REGION HAS ALREADY BEEN CONSUMED by the time the guest gets
-     here -- wowwin_proc had to validate it to stop Win32 re-synthesising
+     here -- WowWinProc had to validate it to stop Win32 re-synthesising
      WM_PAINT forever. So the rectangle comes out of the pending-paint record
      that kept it. A window with no record still gets a DC and its whole client
      rectangle, which is correct-but-wasteful rather than wrong. */
@@ -1992,7 +1992,7 @@ static const WORD g_dwp_forward[] = {
      turned out not to be a better number but a better question: the window is a
      REAL Win32 window on the real desktop, so `CW_USEDEFAULT` is handed to the
      OS's own window manager, which is what it means. ⚠ The two constants are NOT
-     the same value (`0x8000` here, `0x80000000` there); see wowwin_coord.
+     the same value (`0x8000` here, `0x80000000` there); see WowWinCoordinate.
    The DESK_* numbers survive only as the fallback for a rectangle asked about
    before a window exists. */
 /* ⚠ CW_USEDEFAULT16 lives in wowwin.h, beside the Win32 value it is NOT. */
@@ -2150,7 +2150,7 @@ static void wowuser_ensure_sysclasses(void)
                  with a click is call the window's DLGPROC. Ours is 16-BIT code,
                  and there is no way to put a 16-bit procedure in a Win32
                  window's DWLP_DLGPROC slot. So a dialog built on the real class
-                 is INERT: `DefDlgProc` handles everything and `wowwin_proc`
+                 is INERT: `DefDlgProc` handles everything and `WowWinProc`
                  never runs, which means no WM_COMMAND is ever relayed, no
                  WM_PAINT reaches the guest, and the modal loop below waits
                  forever for a message the OS quietly consumed.
@@ -2179,7 +2179,7 @@ static void wowuser_ensure_sysclasses(void)
              a brush it only uses for windows it created itself. Stock ntvdm is
              the oracle for the exact colour and has not been asked yet. */
         if (c->name[0] == '#') {
-            c->reg32 = wowwin_register(c->name, c->cls32, sizeof c->cls32,
+            c->reg32 = WowWinRegister(c->name, c->cls32, sizeof c->cls32,
                                        LoadCursorA(NULL, IDC_ARROW), NULL, NULL,
                                        NULL, (HBRUSH)(COLOR_BTNFACE + 1));
             continue;
@@ -2454,7 +2454,7 @@ static wowuser_win_t *wowuser_findwin(WORD hwnd)
    to say which Win16 window that is. Declared in wowwin.h, defined here because
    this is where the table lives. 0 means "not one of ours", which is not an error
    -- DefWindowProc gets it, as it should. */
-static WORD wowwin_hwnd16(HWND h)
+static WORD WowWinHwnd16(HWND h)
 {
     int i;
     if (!h) return 0;
@@ -2538,7 +2538,7 @@ static WORD wowuser_inst_of(const wowuser_win_t *w)
 /* The Win32 procedure of a subclassed system control. */
 static LRESULT CALLBACK wowuser_subproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
-    WORD h16 = wowwin_hwnd16(h);
+    WORD h16 = WowWinHwnd16(h);
     wowuser_win_t *w = h16 ? wowuser_findwin(h16) : NULL;
     WNDPROC orig = w ? w->orig32 : NULL;
     if (!orig) return DefWindowProcA(h, msg, wp, lp);   /* cannot happen: we set both */
@@ -2546,7 +2546,7 @@ static LRESULT CALLBACK wowuser_subproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         WORD args[5], res = 0, wp16 = (WORD)wp, ds = wowuser_inst_of(w);
         DWORD lp16 = (DWORD)lp;
         if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS || msg == WM_SETCURSOR)
-            wp16 = wowwin_hwnd16((HWND)wp);    /* a real HWND -> the guest's, or 0 */
+            wp16 = WowWinHwnd16((HWND)wp);    /* a real HWND -> the guest's, or 0 */
         else if (msg == WM_GETDLGCODE || msg == WM_TIMER)
             lp16 = 0;                          /* Win32: an LPMSG / a TIMERPROC   */
         args[0] = h16; args[1] = (WORD)msg; args[2] = wp16;
@@ -2561,7 +2561,7 @@ static LRESULT CALLBACK wowuser_subproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 }
 
 /* Is this window's parent an MDI client? Decides which default procedure the OS
-   should run for it -- see wowwin_proc. */
+   should run for it -- see WowWinProc. */
 static int wowuser_is_mdichild(const wowuser_win_t *w)
 {
     const wowuser_win_t *p = w->parent ? wowuser_findwin(w->parent) : NULL;
@@ -2779,7 +2779,7 @@ static WORD wowuser_alias16(HWND h)
     wowuser_win_t *w;
     int i, n = 0;
     if (!h) return 0;
-    h16 = wowwin_hwnd16(h);
+    h16 = WowWinHwnd16(h);
     if (h16) return h16;
     for (i = 0; i < g_wu_nwin; ++i) {
         wowuser_win_t *a = &g_wu_win[i];
@@ -3265,9 +3265,9 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
            ⚠ The Win32 MDICREATESTRUCT is NOT the Win16 one -- different field
              widths and a different `lParam` -- so it is BUILT here from the
              fields read above rather than passed through.
-           ⚠ Win32 sends its own WM_CREATE to `wowwin_proc` from inside this
+           ⚠ Win32 sends its own WM_CREATE to `WowWinProc` from inside this
              SendMessage, before `ch->hwnd32` is set, so the child is momentarily
-             unknown to `wowwin_hwnd16`. That is correct and harmless: an unknown
+             unknown to `WowWinHwnd16`. That is correct and harmless: an unknown
              HWND falls through to DefWindowProc, and the message that matters to
              the guest is the WIN16 WM_CREATE requested below. */
         if (c->reg32 && w->hwnd32) {
@@ -3277,16 +3277,16 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
             mcs.szClass = c->cls32;
             mcs.szTitle = ch->text;
             mcs.hOwner  = GetModuleHandleA(NULL);
-            mcs.x       = wowwin_coord(wowuser_peek(m, MCS_X));
-            mcs.y       = wowwin_coord(wowuser_peek(m, MCS_Y));
-            mcs.cx      = wowwin_coord(wowuser_peek(m, MCS_CX));
-            mcs.cy      = wowwin_coord(wowuser_peek(m, MCS_CY));
+            mcs.x       = WowWinCoordinate(wowuser_peek(m, MCS_X));
+            mcs.y       = WowWinCoordinate(wowuser_peek(m, MCS_Y));
+            mcs.cx      = WowWinCoordinate(wowuser_peek(m, MCS_CX));
+            mcs.cy      = WowWinCoordinate(wowuser_peek(m, MCS_CY));
             mcs.style   = ch->style;
             ch->hwnd32  = (HWND)(ULONG_PTR)SendMessageA(w->hwnd32, WM_MDICREATE16,
                                                         0, (LPARAM)&mcs);
             if (ch->hwnd32) {
                 RECT r;
-                ++g_ww_created;
+                ++g_WowWinCreated;
                 /* Take the rectangle back FROM the MDI client rather than keeping
                    the one we asked for: it chose, and every later answer this
                    host gives about this window has to agree with the screen. */
@@ -3309,7 +3309,7 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
                      WM_CREATE; SYSEDIT enables File > Save only for an active file, so
                      without this it was greyed for good. Posted, so WM_CREATE (armed
                      below) runs first. */
-                {   WORD prev16 = prev32 ? wowwin_hwnd16(prev32) : 0;
+                {   WORD prev16 = prev32 ? WowWinHwnd16(prev32) : 0;
                     DWORD lpa = ((DWORD)prev16 << 16) | ch->hwnd;
                     if (prev16) WowMsgPost(prev16, 0x0222, 0, lpa, GetTickCount(), 0, 0);
                     WowMsgPost(ch->hwnd, 0x0222, 1, lpa, GetTickCount(), 0, 0);
@@ -3420,7 +3420,7 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
         case 0x0229: {
             BOOL mx = FALSE;
             HWND a = (HWND)SendMessageA(w->hwnd32, WM_MDIGETACTIVE, 0, (LPARAM)&mx);
-            WORD a16 = wowwin_hwnd16(a);
+            WORD a16 = WowWinHwnd16(a);
             wu_puts(note, notecap, &k, "WM_MDIGETACTIVE -> 0x");
             wu_puthex(note, notecap, &k, a16, 4);
             return (LONG)(((DWORD)(mx ? 1 : 0) << 16) | a16);
@@ -3789,7 +3789,7 @@ static LONG wowuser_defproc(wow32_frame_t *f, wowuser_win_t *w, WORD msg,
            a subclass is sent -- go to the real control, whose answer it is. A 16-bit
            program SendMessage-ing WM_CHAR to its EDIT typed nothing before (w_subcl:
            stock's text grows, ours did not). Not for a 16-bit class: there the real
-           window's procedure is wowwin_proc, which would post it straight back. */
+           window's procedure is WowWinProc, which would post it straight back. */
         if (w && w->hwnd32 && g_wu_class[w->cls].sysclass && wowuser_sub_relays(msg)) {
             WPARAM wp32 = wparam;
             LPARAM lp32 = (LPARAM)lparam;
@@ -4012,7 +4012,7 @@ static void wowuser_default_paint(wowuser_win_t *w, int isdlg)
     RECT r; int erase = 0;
     HDC dc;
     if (!w || !w->hwnd32) return;
-    if (!wowwin_paint_take(w->hwnd, &r, &erase) || !erase) return;
+    if (!WowWinPaintTake(w->hwnd, &r, &erase) || !erase) return;
     dc = GetDCEx(w->hwnd32, NULL, DCX_CACHE | DCX_CLIPCHILDREN);
     if (!dc) return;
     if (isdlg) FillRect(dc, &r, GetSysColorBrush(COLOR_BTNFACE));
@@ -4074,7 +4074,7 @@ static LRESULT wowuser_dlg_default(wowuser_win_t *w, WORD hdlg, WORD msg, WORD w
                             *kp = k; return 0; }
     if (msg == 0x0010) {
         HWND cb = GetDlgItem(w->hwnd32, 2 /* IDCANCEL */);
-        WORD c16 = cb ? wowwin_hwnd16(cb) : 0;
+        WORD c16 = cb ? WowWinHwnd16(cb) : 0;
         WowMsgPost(hdlg, 0x0111 /* WM_COMMAND */, 2 /* IDCANCEL */,
                     (DWORD)c16 | (0u /* BN_CLICKED */ << 16), GetTickCount(), 0, 0);
         wu_puts(note, notecap, &k, " -> WM_CLOSE: WM_COMMAND IDCANCEL posted to the"
@@ -4252,7 +4252,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                 break; }
             }
             if (!c->reg32)
-                c->reg32 = wowwin_register(c->name, c->cls32, sizeof c->cls32,
+                c->reg32 = WowWinRegister(c->name, c->cls32, sizeof c->cls32,
                                            hcur, hico, hsm, &fell, hbrcls);
             c->curord = curord; c->icoord = icoord; c->curfell = fell;
             c->icobits = bits; c->icokind = icokind;
@@ -4430,14 +4430,14 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             }
             if (cc->reg32) {
                 w->hwnd32 = CreateWindowExA(exstyle, cc->cls32, w->text, w->style,
-                                            wowwin_coord(wow32_argw(f, CW_ARG_X)),
-                                            wowwin_coord(wow32_argw(f, CW_ARG_Y)),
-                                            wowwin_coord(wow32_argw(f, CW_ARG_WIDTH)),
-                                            wowwin_coord(wow32_argw(f, CW_ARG_HEIGHT)),
+                                            WowWinCoordinate(wow32_argw(f, CW_ARG_X)),
+                                            WowWinCoordinate(wow32_argw(f, CW_ARG_Y)),
+                                            WowWinCoordinate(wow32_argw(f, CW_ARG_WIDTH)),
+                                            WowWinCoordinate(wow32_argw(f, CW_ARG_HEIGHT)),
                                             parent32, hm, GetModuleHandleA(NULL),
                                             param);
-                if (w->hwnd32) { ++g_ww_created;
-                                 if (!g_ww_thread) g_ww_thread = GetCurrentThreadId(); }
+                if (w->hwnd32) { ++g_WowWinCreated;
+                                 if (!g_WowWinThread) g_WowWinThread = GetCurrentThreadId(); }
             }
         }
 
@@ -4628,7 +4628,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         /* ── ⚠ -32768 IN A TEMPLATE'S x IS "YOU PLACE IT", NOT A COORDINATE.
              (session 55) A DLGTEMPLATE says "put this where you like" with
              0x8000 in dtX -- the same CW_USEDEFAULT value CreateWindow uses,
-             which is why wowwin_coord() already knows it. Scaling it as a
+             which is why WowWinCoordinate() already knows it. Scaling it as a
              number instead gives MulDiv(-32768, 8, 4) = -65536, and
              AdjustWindowRect then shifts it by the border to -65539.
            ★ MEASURED, and it is what SOUND RECORDER did: its DIALOG 1 is
@@ -4750,8 +4750,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                             rc.bottom - rc.top,
                                             parent32, hm,
                                             GetModuleHandleA(NULL), NULL);
-                if (w->hwnd32) { ++g_ww_created;
-                                 if (!g_ww_thread) g_ww_thread = GetCurrentThreadId(); }
+                if (w->hwnd32) { ++g_WowWinCreated;
+                                 if (!g_WowWinThread) g_WowWinThread = GetCurrentThreadId(); }
             }
         }
 
@@ -4823,7 +4823,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                                              w->hwnd32,
                                              (HMENU)(ULONG_PTR)iid,
                                              GetModuleHandleA(NULL), NULL);
-                if (cw->hwnd32) { ++made; ++g_ww_created;
+                if (cw->hwnd32) { ++made; ++g_WowWinCreated;
                     if (!firstfocus && (istyle & 0x00010000u)) firstfocus = cw->hwnd;  /* WS_TABSTOP */
                     /* #283: the template's font, as the dialog manager gives it */
                     /* ⚠ SYSTEM CONTROLS ONLY. An application class is 16-bit code:
@@ -5303,7 +5303,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             HWND  h = NULL;
             WORD  h16 = 0;
             if (wowuser_farstr(f, fp, cls, sizeof cls)) h = wowuser_find_class(cls, NULL);
-            h16 = h ? wowwin_hwnd16(h) : 0;
+            h16 = h ? WowWinHwnd16(h) : 0;
             wu_puts(note, notecap, &k, "NotifyWow(6, find class \"");
             wu_puts(note, notecap, &k, cls);
             wu_puts(note, notecap, &k, h16 ? "\") -> 0x" : "\") -> not found");
@@ -5373,7 +5373,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                 g_WowMsgIsReplayDue = 0;
                 if (got && (rem & PM_REMOVE16) == 0) got = 0;   /* re-peek after */
                 if (!got) {
-                    wowwin_menu_replay(&r);
+                    WowWinMenuReplay(&r);
                     got = WowMsgTake(hwndf, minf, maxf, (rem & PM_REMOVE16) != 0, &m);
                     /* ⚠ An EMPTY queue after the menu closed must not read as the
                          expired wait that means WM_QUIT: hand back a WM_NULL, which
@@ -5779,9 +5779,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         if (lp) { WowMsgRead(lp, &m); wu_puthex(note, notecap, &k, m.Message, 4); }
         else      wu_puts(note, notecap, &k, "?");
         /* s93: the characters Win32 already made for this key are HELD (wowwin.h,
-           wowwin_hold_char) and released here -- the OS's own translation, with the
+           WowWinHoldChar) and released here -- the OS's own translation, with the
            keyboard state it keeps, delivered only when the program asks. */
-        if (lp && m.Message == 0x0100) n = wowwin_release_chars(m.Window, m.LParam);
+        if (lp && m.Message == 0x0100) n = WowWinReleaseChars(m.Window, m.LParam);
         wu_puts(note, notecap, &k, n ? " -> 1: the OS's WM_CHAR for this key released"
                                          " into the queue"
                                        : " -> 0: no character for this key");
@@ -6366,8 +6366,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              the real SetFocus creates one -- a window the OS has not focused is a
              window with no cursor blinking in it, however right our own table is. */
         if (w && w->hwnd32) SetFocus(w->hwnd32);
-        ++g_ww_setfocus_n;                     /* s93: see WM_ACTIVATE in wowwin.h */
-        g_ww_setfocus_h32 = w ? w->hwnd32 : NULL;
+        ++g_WowWinSetFocusCount;                     /* s93: see WM_ACTIVATE in wowwin.h */
+        g_WowWinSetFocusWindow = w ? w->hwnd32 : NULL;
         wu_puts(note, notecap, &k, " (was 0x");
         wu_puthex(note, notecap, &k, prev, 4);
         wu_puts(note, notecap, &k, ") -- keyboard messages now go here");
@@ -6550,7 +6550,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         WORD out = 0;
         if (w && w->hwnd32) {
             HWND n = GetWindow(w->hwnd32, (UINT)fl);
-            if (n) out = wowwin_hwnd16(n);
+            if (n) out = WowWinHwnd16(n);
         }
         wu_puts(note, notecap, &k, "GetNextWindow(0x");
         wu_puthex(note, notecap, &k, hwnd, 4);
@@ -6891,7 +6891,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
 
     case WOWUSER_GETACTIVEWINDOW: {
         HWND a = GetActiveWindow();
-        WORD h16 = a ? wowwin_hwnd16(a) : 0;
+        WORD h16 = a ? WowWinHwnd16(a) : 0;
         int  k = 0;
         wu_puts(note, notecap, &k, "GetActiveWindow -> 0x");
         wu_puthex(note, notecap, &k, h16, 4);
@@ -6930,8 +6930,8 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         }
         prev = SetCapture(w->hwnd32);
         wu_puts(note, notecap, &k, " -> the OS's; previous 0x");
-        wu_puthex(note, notecap, &k, prev ? wowwin_hwnd16(prev) : 0, 4);
-        wow32_setret(f, (DWORD)(prev ? wowwin_hwnd16(prev) : 0));
+        wu_puthex(note, notecap, &k, prev ? WowWinHwnd16(prev) : 0, 4);
+        wow32_setret(f, (DWORD)(prev ? WowWinHwnd16(prev) : 0));
         return 1;
     }
 
@@ -7077,7 +7077,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
          ⚠ IsDialogMessage DISPATCHES what it handles, into our own window procedure,
            which relays to the guest queue. For a message the dialog manager GENERATES
            that is right; for the one the guest just handed us it was a loop (#162) --
-           see g_ww_isdlg in wowwin.h. */
+           see g_WowWinInDialogMessage in wowwin.h. */
     case WOWUSER_ISDIALOGMESSAGE: {
         WORD hdlg = wow32_argw(f, IDM_ARG_HDLG);
         volatile BYTE *m16 = wow32_argptr(f, IDM_ARG_MSG);
@@ -7100,12 +7100,12 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         m32.time    = GetTickCount();
         m32.pt.x = 0; m32.pt.y = 0;
         wu_puts(note, notecap, &k, " msg=0x"); wu_puthex(note, notecap, &k, m32.message, 4);
-        /* #162: see g_ww_isdlg in wowwin.h -- a bounce is answered FALSE. */
-        g_ww_isdlg = 1; g_ww_isdlg_bounced = 0;
-        g_ww_isdlg_hwnd = m32.hwnd; g_ww_isdlg_msg = m32.message;
+        /* #162: see g_WowWinInDialogMessage in wowwin.h -- a bounce is answered FALSE. */
+        g_WowWinInDialogMessage = 1; g_WowWinIsDialogBounced = 0;
+        g_WowWinDialogWindow = m32.hwnd; g_WowWinDialogMessage = m32.message;
         r = IsDialogMessageA(w->hwnd32, &m32) ? 1 : 0;
-        g_ww_isdlg = 0;
-        if (g_ww_isdlg_bounced) {
+        g_WowWinInDialogMessage = 0;
+        if (g_WowWinIsDialogBounced) {
             r = 0;
             wu_puts(note, notecap, &k, " -> FALSE (would have come straight back to the"
                                        " guest's queue; its own loop dispatches it)");
@@ -7306,7 +7306,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
 
     case WOWUSER_GETCAPTURE: {
         HWND c = GetCapture();
-        WORD h16 = c ? wowwin_hwnd16(c) : 0;
+        WORD h16 = c ? WowWinHwnd16(c) : 0;
         int k = 0;
         wu_puts(note, notecap, &k, "GetCapture -> 0x");
         wu_puthex(note, notecap, &k, h16, 4);
@@ -7326,7 +7326,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         pt.x = (int)(short)wow32_argw(f, WFP_ARG_X);
         pt.y = (int)(short)wow32_argw(f, WFP_ARG_Y);
         hw   = WindowFromPoint(pt);
-        h16  = hw ? wowwin_hwnd16(hw) : 0;
+        h16  = hw ? WowWinHwnd16(hw) : 0;
         wu_puts(note, notecap, &k, "WindowFromPoint ");
         wu_puthex(note, notecap, &k, (DWORD)pt.x, 4); wu_puts(note, notecap, &k, ",");
         wu_puthex(note, notecap, &k, (DWORD)pt.y, 4);
@@ -7437,7 +7437,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, ")");
         if (w && w->hwnd32) {
             r = ChildWindowFromPoint(w->hwnd32, pt);
-            h16 = !r ? 0 : (r == w->hwnd32 ? hp : wowwin_hwnd16(r));
+            h16 = !r ? 0 : (r == w->hwnd32 ? hp : WowWinHwnd16(r));
         }
         wu_puts(note, notecap, &k, " -> 0x"); wu_puthex(note, notecap, &k, h16, 4);
         wow32_setret(f, h16);
@@ -7681,7 +7681,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window; 0");
                                 wow32_setret(f, 0); return 1; }
         n = GetNextDlgTabItem(w->hwnd32, c ? c->hwnd32 : NULL, prev ? TRUE : FALSE);
-        h16 = n ? wowwin_hwnd16(n) : 0;
+        h16 = n ? WowWinHwnd16(n) : 0;
         wu_puts(note, notecap, &k, " -> 0x"); wu_puthex(note, notecap, &k, h16, 4);
         wow32_setret(f, (DWORD)h16);
         return 1;
@@ -8072,7 +8072,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
 
     case WOWUSER_GETCLIPBOARDOWNER: {
         HWND o = GetClipboardOwner();
-        WORD h16 = o ? wowwin_hwnd16(o) : 0;
+        WORD h16 = o ? WowWinHwnd16(o) : 0;
         int k = 0;
         wu_puts(note, notecap, &k, "GetClipboardOwner -> 0x");
         wu_puthex(note, notecap, &k, h16, 4);
@@ -8094,7 +8094,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         WORD hwnd = wow32_argw(f, W1_ARG_HWND);
         wowuser_win_t *w = hwnd ? wowuser_findwin(hwnd) : NULL;
         HWND t = GetTopWindow(w ? w->hwnd32 : NULL);
-        WORD h16 = t ? wowwin_hwnd16(t) : 0;
+        WORD h16 = t ? WowWinHwnd16(t) : 0;
         int k = 0;
         wu_puts(note, notecap, &k, "GetTopWindow 0x");
         wu_puthex(note, notecap, &k, hwnd, 4);
@@ -8807,7 +8807,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              it. Large numbers mean the redraw is LATE, not slow; small ones mean
              any remaining sluggishness is in the drawing, which is measured
              separately by WOWPERF. */
-        DWORD wu_paint_lat = g_ww_paint_ms ? (GetTickCount() - g_ww_paint_ms) : 0;
+        DWORD wu_paint_lat = g_WowWinPaintMs ? (GetTickCount() - g_WowWinPaintMs) : 0;
         WORD hwnd = wow32_argw(f, BP_ARG_HWND);
         volatile BYTE *ps = wow32_argptr(f, BP_ARG_PS);
         wowuser_win_t *w = wowuser_findwin(hwnd);
@@ -8826,7 +8826,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, 0);
             return 1;
         }
-        have = wowwin_paint_take(hwnd, &r, &erase);
+        have = WowWinPaintTake(hwnd, &r, &erase);
         /* ── ⛔⛔ BeginPaint VALIDATES, OR A GUEST THAT INVALIDATES IN ITS OWN WM_PAINT
              NEVER STOPS PAINTING. (user, s88: "Clock flickers") Clock's WM_PAINT opens
              with `InvalidateRect(hwnd, NULL, TRUE)` and only then calls BeginPaint.
@@ -8840,12 +8840,12 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              pending part was not erased by anyone (ValidateRect does not erase), so
              it is reported with fErase set and the guest erases it, as it would.
            ⛔ AND THAT ALONE MEASURED NO CHANGE (36,609 paints): the exec loop pumps
-             the real windows BETWEEN guest calls (wowwin_pump), so the real WM_PAINT
+             the real windows BETWEEN guest calls (WowWinPump), so the real WM_PAINT
              is usually handled before the guest's BeginPaint arrives -- the relay
              validated the region itself and QUEUED a WM_PAINT16 behind the one being
              answered. The real BeginPaint consumes that: the window's paint is THIS
              paint. So any WM_PAINT16 already queued for this window goes too (its
-             rectangle is in the paint record, which wowwin_paint_take just took). */
+             rectangle is in the paint record, which WowWinPaintTake just took). */
         {   RECT ur; WOWMSG pm; int dropped = 0;
             if (GetUpdateRect(w->hwnd32, &ur, FALSE)) {
                 if (have) UnionRect(&r, &r, &ur); else r = ur;
@@ -9057,7 +9057,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
          worth seeing rather than papering over -- so the OS answers, and a
          mismatch is printed instead of being silently preferred either way. */
     case WOWUSER_GETFOCUS: {
-        WORD h = wowwin_hwnd16(GetFocus());
+        WORD h = WowWinHwnd16(GetFocus());
         int k = 0;
         wu_puts(note, notecap, &k, "GetFocus -> 0x");
         wu_puthex(note, notecap, &k, h, 4);
@@ -9112,7 +9112,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puthex(note, notecap, &k, hwnd, 4);
         if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window");
                                wow32_setret(f, 0); return 1; }
-        prev = wowwin_hwnd16(SetActiveWindow(w->hwnd32));
+        prev = WowWinHwnd16(SetActiveWindow(w->hwnd32));
         wu_puts(note, notecap, &k, " (was 0x");
         wu_puthex(note, notecap, &k, prev, 4);
         wu_puts(note, notecap, &k, ")");
@@ -9305,7 +9305,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puthex(note, notecap, &k, id, 4);
         if (!w || !w->hwnd32) { wu_puts(note, notecap, &k, " -- no real window");
                                 wow32_setret(f, 0); return 1; }
-        h16 = wowwin_hwnd16(GetDlgItem(w->hwnd32, (int)(short)id));
+        h16 = WowWinHwnd16(GetDlgItem(w->hwnd32, (int)(short)id));
         wu_puts(note, notecap, &k, h16 ? " -> 0x" : " -- NOT FOUND (or not a window"
                                                     " this host made) 0x");
         wu_puthex(note, notecap, &k, h16, 4);
@@ -9386,7 +9386,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              it into (hwnd16, msg, wParam, lParam) and reusing the machinery that
              already decides between those two worlds is the only answer that is
              right in both. */
-        ch16 = wowwin_hwnd16(GetDlgItem(w->hwnd32, (int)(short)id));
+        ch16 = WowWinHwnd16(GetDlgItem(w->hwnd32, (int)(short)id));
         if (!ch16) {
             wu_puts(note, notecap, &k, " -- NO SUCH ITEM; answered 0");
             wow32_setret(f, 0);
@@ -10164,9 +10164,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
                             && GetAncestor(h, GA_PARENT) == GetDesktopWindow());
             if (toplevel && h2) out = wowuser_alias16(h2);
             else {
-                while (h2 && step && !wowwin_hwnd16(h2) && guard++ < 4096)
+                while (h2 && step && !WowWinHwnd16(h2) && guard++ < 4096)
                     h2 = GetWindow(h2, step);
-                out = wowwin_hwnd16(h2);
+                out = WowWinHwnd16(h2);
             }
         }
         wu_puts(note, notecap, &k, " -> 0x");
@@ -10415,9 +10415,9 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         }
         wu_puts(note, notecap, &k, ")");
         if (!hwnd && proc) {
-            /* s93: a windowless timer -- see wowwin_tt_fire. Win16 picks the id. */
+            /* s93: a windowless timer -- see WowWinThreadTimerFire. Win16 picks the id. */
             r = SetTimer(NULL, 0, (UINT)ms, NULL);
-            if (r && !wowwin_tt_add(r, proc)) { KillTimer(NULL, r); r = 0; }
+            if (r && !WowWinThreadTimerAdd(r, proc)) { KillTimer(NULL, r); r = 0; }
             wu_puts(note, notecap, &k, r ? " -> a THREAD timer, id 0x" : " -> ★ OS REFUSED");
             if (r) wu_puthex(note, notecap, &k, (DWORD)r, 4);
             wow32_setret(f, r ? (DWORD)(WORD)r : 0);
@@ -10452,7 +10452,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
         wu_puts(note, notecap, &k, ", id ");
         wu_puthex(note, notecap, &k, id, 4);
         wu_puts(note, notecap, &k, ")");
-        if (!hwnd && wowwin_tt_kill((UINT_PTR)id)) {      /* s93: a thread timer */
+        if (!hwnd && WowWinThreadTimerKill((UINT_PTR)id)) {      /* s93: a thread timer */
             r = KillTimer(NULL, (UINT_PTR)id) ? 1 : 0;
             wu_puts(note, notecap, &k, " -- a thread timer, killed");
             wow32_setret(f, (DWORD)r);
@@ -10533,7 +10533,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
             wow32_setret(f, (DWORD)hwnd);
             return 1;
         }
-        out = wowwin_hwnd16(GetLastActivePopup(h));
+        out = WowWinHwnd16(GetLastActivePopup(h));
         if (!out) out = hwnd;
         wu_puts(note, notecap, &k, " -> 0x");
         wu_puthex(note, notecap, &k, out, 4);
@@ -10562,7 +10562,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
              instance of itself; a stale 32-bit window of ours cannot match its
              class name, so the extra scope costs nothing measurable. */
         h = wowuser_find_class(hascls ? cls : NULL, hasnam ? nam : NULL);
-        out = h ? wowwin_hwnd16(h) : 0;
+        out = h ? WowWinHwnd16(h) : 0;
         if (h && !out) {
             /* Found something that is not a guest window: the guest cannot be
                handed a handle it has no token for, and saying so beats inventing
@@ -10682,7 +10682,7 @@ static int wowuser_call(wow32_frame_t *f, char *note, int notecap)
            only the relay -- Sound Recorder's "noflickertext" Position readout was set
            to "1.98 sec." 37 times during playback and kept showing "0.00 sec." */
         {   HWND ci = GetDlgItem(h, (int)(short)id);
-            WORD c16 = ci ? wowwin_hwnd16(ci) : 0;
+            WORD c16 = ci ? WowWinHwnd16(ci) : 0;
             wowuser_win_t *cw = c16 ? wowuser_findwin(c16) : NULL;
             if (cw && cw->wndproc) {
                 static int s_sdit = 0;

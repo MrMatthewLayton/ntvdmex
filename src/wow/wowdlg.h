@@ -160,7 +160,7 @@ static INT WowDlgIsSelectorAbsent(WORD sel);
  * turned into a Win16 message. Those are two different facts and the totals
  * cannot tell them apart:
  *     the click never reached this queue          -> an input problem
- *     it arrived and wowwin_proc did not post it  -> a translation problem
+ *     it arrived and WowWinProc did not post it  -> a translation problem
  * So the pump says what it dispatched, to which window, and whether that window
  * is one of ours. `h16 == 0` is the whole answer if it is 0.
  * ⚠ BOUNDED, and the bound is the instrument's own discipline: a modal dialog
@@ -186,7 +186,7 @@ static INT WowDlgPump(INT budget, PINT traceBudget)
     while (count < budget && PeekMessageA(&message, NULL, 0, 0, PM_REMOVE)) {
         if (traceBudget && *traceBudget > 0) {
             CHAR traceBuffer[WOWDLG_TRACE_LINE_MAX], *traceCursor = traceBuffer;
-            WORD window16 = wowwin_hwnd16(message.hwnd);
+            WORD window16 = WowWinHwnd16(message.hwnd);
             --*traceBudget;
             traceCursor = zput(traceCursor, "       WOWDLG/win32: msg=0x"); traceCursor = zhex(traceCursor, message.message);
             traceCursor = zput(traceCursor, " hwnd=0x");   traceCursor = zhex(traceCursor, (DWORD)(ULONG_PTR)message.hwnd);
@@ -198,13 +198,13 @@ static INT WowDlgPump(INT budget, PINT traceBudget)
             traceCursor = zput(traceCursor, "\r\n");
             log_append(LOG_PATH, traceBuffer, traceCursor);
         }
-        if (wowwin_tt_fire(&message)) { ++count; ++g_ww_pumped; continue; }   /* s93 */
+        if (WowWinThreadTimerFire(&message)) { ++count; ++g_WowWinPumped; continue; }   /* s93 */
         /* #305 M11 (s91): THE DIALOG MANAGER'S KEYS. DialogBox's own loop gives a modal
              dialog Tab / Shift+Tab between its controls, Enter = the default button and
              Esc = IDCANCEL -- without the program asking. This loop dispatched keys raw,
              so Esc did nothing in TASKMAN's Task List (runs/s91/chain25). The controls are
              real windows, so the OS's IsDialogMessage does the work; what it generates
-             (WM_COMMAND IDCANCEL/IDOK) reaches the dialog procedure through wowwin_proc
+             (WM_COMMAND IDCANCEL/IDOK) reaches the dialog procedure through WowWinProc
              like a click does. Keyboard messages only, and only for the topmost modal
              dialog or one of its children. */
         if (message.message >= WM_KEYFIRST && message.message <= WM_KEYLAST && g_WowDlgDepth > 0) {
@@ -222,13 +222,13 @@ static INT WowDlgPump(INT budget, PINT traceBudget)
             }
             if (dialog && IsWindow(dialog) && (message.hwnd == dialog || IsChild(dialog, message.hwnd))
                 && IsDialogMessageA(dialog, &message)) {
-                ++count; ++g_ww_pumped;
+                ++count; ++g_WowWinPumped;
                 continue;
             }
         }
         TranslateMessage(&message);
         DispatchMessageA(&message);
-        ++count; ++g_ww_pumped;
+        ++count; ++g_WowWinPumped;
     }
     return count;
 }
@@ -275,7 +275,7 @@ static INT WowDlgPush(WORD window, DWORD returnLinear, DWORD dialogProcedure, DW
          Without it the main window's X stayed live under Terminal's first-run
          "Default Serial Port" dialog and took WM_CLOSE. Disabling the REAL
          window is the whole fix: Windows itself then ignores clicks on it,
-         its X included, so nothing reaches wowwin_proc to be posted. The
+         its X included, so nothing reaches WowWinProc to be posted. The
          owner is the top-level window: a dialog owned by a child control
          disables the frame around it, as USER's does. */
     dialog->Owner32 = NULL;
@@ -501,7 +501,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
             }
             /* ── ★★ WAIT FOR SOMETHING TO HAPPEN, WHICH IS WHAT MODAL MEANS.
                  The dialog's controls are real Win32 windows on this thread, so
-                 a click on one becomes a Win32 message here, which wowwin_proc
+                 a click on one becomes a Win32 message here, which WowWinProc
                  turns into a Win16 WM_COMMAND for the dialog. Pumping and
                  waiting is therefore the same statement as "wait for the user",
                  and it is the identical loop a blocked GetMessage already runs
@@ -509,7 +509,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                  sharing the code: a modal dialog and an idle message loop are
                  the same kind of wait and a user who set one meant both. */
             DWORD startTime = GetTickCount(), lastBeat = startTime;
-            DWORD pumpedAtStart = g_ww_pumped;
+            DWORD pumpedAtStart = g_WowWinPumped;
             UINT beatCount = 0;
             /* ── ★★ AND IT SAYS SO BEFORE IT BLOCKS, NOT AFTER. ───────────────
                  A log that goes silent at the moment a modal dialog appears is
@@ -558,8 +558,8 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                         lastBeat = GetTickCount(); ++beatCount;
                         beatCursor = zput(beatCursor, "     WOWDLG: modal 0x"); beatCursor = zhex(beatCursor, dialog->Window);
                         beatCursor = zput(beatCursor, " waiting 0x");   beatCursor = zhex(beatCursor, lastBeat - startTime);
-                        beatCursor = zput(beatCursor, " ms; pumped 0x"); beatCursor = zhex(beatCursor, g_ww_pumped);
-                        beatCursor = zput(beatCursor, " (+0x");         beatCursor = zhex(beatCursor, g_ww_pumped - pumpedAtStart);
+                        beatCursor = zput(beatCursor, " ms; pumped 0x"); beatCursor = zhex(beatCursor, g_WowWinPumped);
+                        beatCursor = zput(beatCursor, " (+0x");         beatCursor = zhex(beatCursor, g_WowWinPumped - pumpedAtStart);
                         beatCursor = zput(beatCursor, " since blocking), Win16 queued 0x");
                         beatCursor = zhex(beatCursor, (DWORD)g_WowMsgCount);
                         beatCursor = zput(beatCursor, "; queue status 0x");
@@ -567,8 +567,8 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                         beatCursor = zput(beatCursor, "; this thread 0x");
                         beatCursor = zhex(beatCursor, GetCurrentThreadId());
                         beatCursor = zput(beatCursor, ", the windows' thread 0x");
-                        beatCursor = zhex(beatCursor, g_ww_thread);
-                        if (g_ww_thread && g_ww_thread != GetCurrentThreadId())
+                        beatCursor = zhex(beatCursor, g_WowWinThread);
+                        if (g_WowWinThread && g_WowWinThread != GetCurrentThreadId())
                             beatCursor = zput(beatCursor, " -- ★★ DIFFERENT: PeekMessage is"
                                           " PER-THREAD, so this loop can never see"
                                           " their input");

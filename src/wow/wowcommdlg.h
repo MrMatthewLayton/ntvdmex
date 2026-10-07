@@ -236,7 +236,7 @@ typedef struct _WOWCDLG_FIND {
 static WOWCDLG_FIND g_WowCdlgFinds[WOWCDLG_MAX_FIND];
 static UINT         g_WowCdlgFindMessage = 0;     /* "commdlg_FindReplace" */
 
-/* Called by wowwin_proc for every message to a guest window it would otherwise
+/* Called by WowWinProc for every message to a guest window it would otherwise
    not relay. Returns 1 if it was a Find/Replace notification and was posted to
    the guest. The dialog SENDS it (on this thread, from the pump); posting is
    enough because the program reads everything from its own FINDREPLACE, which
@@ -262,7 +262,7 @@ static INT WowCdlgRelay(UINT message, LPARAM lParam)
     return 0;
 }
 
-/* Called by wowwin_pump for every Win32 message it drains: an open Find/Replace
+/* Called by WowWinPump for every Win32 message it drains: an open Find/Replace
    dialog gets its keyboard (Tab, Enter, Esc) the way any modeless dialog does. */
 static INT WowCdlgIsDialogMessage(PMSG message)
 {
@@ -539,7 +539,7 @@ static INT WowCommdlgCall(wow32_frame_t *frame, PSTR note, INT noteCapacity)
            2. the dialog gets a Win16 handle (a window record with no 16-bit
               procedure), because the program keeps it and passes it to
               IsDialogMessage in its message loop, and tests it for 0;
-           3. the notification is relayed by wowwin_proc (WowCdlgRelay) to the
+           3. the notification is relayed by WowWinProc (WowCdlgRelay) to the
               guest's owner window with lParam = the GUEST's own 16:16 pointer,
               after copying the flags Win32 set back into the guest's struct.
          The message number needs no translation: the guest's
