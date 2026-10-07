@@ -135,7 +135,7 @@ typedef char bios_kbdact_fits[(sizeof(g_BiosKeyboardActionCode) <= DOS_KBDACT_LE
 #include "vdd_video.h"
 #include "sysfont.h"        /* #322: the VGA tables from the system fonts */
 /* #321: what the last font build did (Settings shows it) and the TextFont it was for. */
-static sysfont_report_t g_sysfont_rep;
+static SYSFONT_REPORT g_sysfont_rep;
 static char             g_textfont_live[NTVDMEX_PATH_MAX];
 #include "vdd_input.h"
 #include "vdd_speaker.h"
@@ -12592,7 +12592,7 @@ static void settings_apply_textfont(void)
     if (!lstrcmpA(g_textfont_live, g_set.s[SET_STR_TEXTFONT])) return;
     lstrcpynA(g_textfont_live, g_set.s[SET_STR_TEXTFONT], sizeof g_textfont_live);
     lq = LogPut(lq, "settings: text font changed -- ");
-    lq = LogPut(lq, sysfont_build(g_textfont_live, &g_sysfont_rep));
+    lq = LogPut(lq, SysFontBuild(g_textfont_live, &g_sysfont_rep));
     lq = LogPut(lq, "\r\n");
     LogAppend(LOG_PATH, lb, lq);
     VddVideoRefreshFonts(&g_vid);
@@ -12744,8 +12744,8 @@ static void settings_cd_radios(int phys)
      copy: a line of text and a line of the DOS graphics characters, plus how many
      characters the font supplied and whether the default itself is degraded. */
 #define TEXTFONT_DEFAULT_ITEM "(Default: Fixedsys and Terminal)"
-static sysfont_tables_t g_tf_prev;
-static sysfont_report_t g_tf_prev_rep;
+static SYSFONT_TABLES g_tf_prev;
+static SYSFONT_REPORT g_tf_prev_rep;
 
 static int CALLBACK settings_font_enum(const LOGFONTA *lf, const TEXTMETRICA *tm,
                                        DWORD type, LPARAM lp)
@@ -12791,20 +12791,20 @@ static void settings_textfont_preview(void)
     char face[NTVDMEX_PATH_MAX], t[200];
     HWND info = settings_ctl(IDC_S_TEXTFONT_INFO), view = settings_ctl(IDC_S_TEXTFONT_VIEW);
     settings_textfont_get(face, sizeof face);
-    sysfont_build_into(face, &g_tf_prev, &g_tf_prev_rep);
+    SysFontBuildInto(face, &g_tf_prev, &g_tf_prev_rep);
     if (!face[0])
         lstrcpyA(t, "Fixedsys for text and Terminal (code page 437) for line drawing.");
-    else if (g_tf_prev_rep.user == SYSFONT_USER_OK && g_tf_prev_rep.user_cp)
+    else if (g_tf_prev_rep.User == SYSFONT_USER_OK && g_tf_prev_rep.UserCodePage)
         wsprintfA(t, "This font draws code page %d, not 437: some line-drawing characters "
-                  "will show as letters.", g_tf_prev_rep.user_cp);
-    else if (g_tf_prev_rep.user == SYSFONT_USER_OK)
+                  "will show as letters.", g_tf_prev_rep.UserCodePage);
+    else if (g_tf_prev_rep.User == SYSFONT_USER_OK)
         wsprintfA(t, "%d of 253 characters come from this font; the rest from the default.",
-                  g_tf_prev_rep.user_n[2]);
-    else if (g_tf_prev_rep.user == SYSFONT_USER_NOSIZE)
+                  g_tf_prev_rep.UserGlyphs[2]);
+    else if (g_tf_prev_rep.User == SYSFONT_USER_NOSIZE)
         lstrcpyA(t, "This font has no 8-pixel-wide size, so the default is used.");
     else
         lstrcpyA(t, "This font is not installed on this computer, so the default is used.");
-    if (sysfont_default_degraded(&g_tf_prev_rep))
+    if (SysFontIsDefaultDegraded(&g_tf_prev_rep))
         lstrcatA(t, " Warning: a code page 437 font file is missing; line drawing may be wrong.");
     if (info) SetWindowTextA(info, t);
     if (view) InvalidateRect(view, NULL, TRUE);
@@ -12837,7 +12837,7 @@ static void settings_textfont_draw(const DRAWITEMSTRUCT *di)
         row[1][i] = (unsigned char)(i < 48 ? 0xB0 + i : 0xE0 + (i - 48));
     }
     for (y = 0; y < 32; ++y)
-        for (i = 0; i < 64; ++i) px[y][i] = g_tf_prev.t16[row[y / 16][i]][y % 16];
+        for (i = 0; i < 64; ++i) px[y][i] = g_tf_prev.Table16[row[y / 16][i]][y % 16];
     ZeroMemory(&bi, sizeof bi);
     bi.h.biSize = sizeof bi.h; bi.h.biWidth = 512; bi.h.biHeight = -32;
     bi.h.biPlanes = 1; bi.h.biBitCount = 1; bi.h.biCompression = BI_RGB;
@@ -32039,9 +32039,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        report buffer: a LogAppend here would be erased when the report is rewritten. */
     /* #321: the TextFont setting is laid over the default; g_set is loaded by now. */
     p = LogPut(p, "STAGE1: ");
-    p = LogPut(p, sysfont_build(g_set.s[SET_STR_TEXTFONT], &g_sysfont_rep));
+    p = LogPut(p, SysFontBuild(g_set.s[SET_STR_TEXTFONT], &g_sysfont_rep));
     p = LogPut(p, "\r\n");
-    if (sysfont_default_degraded(&g_sysfont_rep))
+    if (SysFontIsDefaultDegraded(&g_sysfont_rep))
         p = LogPut(p, "STAGE1: sysfont: THE DEFAULT IS DEGRADED -- a code page 437 font file "
                     "is missing, so box drawing may show accented letters (#321)\r\n");
     lstrcpynA(g_textfont_live, g_set.s[SET_STR_TEXTFONT], sizeof g_textfont_live);
