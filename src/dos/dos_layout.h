@@ -158,6 +158,7 @@
    clears it with room to spare and still ends well below the next MCB header at
    0xFF0. */
 #define DOS_CTAB_SEG      0x0090
+#define DOS_CTAB_END      0x06F0   /* the block's last offset + 1 (linear 0xFF0)  */
 #define DOS_CTAB_UPPER    0x0000   /* 130 bytes */
 #define DOS_CTAB_FNUPPER  0x0090   /* 130 bytes */
 #define DOS_CTAB_FNTERM   0x0120   /*  24 bytes */

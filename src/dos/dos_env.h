@@ -91,6 +91,7 @@ typedef const DOS_SB_CONFIG *PCDOS_SB_CONFIG;
 
 /* Writing numbers into the string. */
 #define DOS_ENV_DECIMAL_DIGITS_MAX  12
+#define DOS_ENV_SCAN_MAX            0x7FFE  /* an environment block is under 32 KB          */
 #define DOS_ENV_HEX_FIRST_SHIFT     8   /* three hex digits: bits 11-8 first         */
 
 /* The block's fixed text. */

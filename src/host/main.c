@@ -115,7 +115,7 @@ typedef CHAR DOS_AUXPRN_FITS[(sizeof(g_DosAuxPrnCode) <= DOS_AUXPRN_LEN) ? 1 : -
 typedef CHAR BIOS_KBDACT_FITS[(sizeof(g_BiosKeyboardActionCode) <= DOS_KBDACT_LEN
                                && DOS_AUXPRN_OFF + DOS_AUXPRN_LEN <= DOS_KBDACT_OFF
                                && DOS_KBDACT_OFF + DOS_KBDACT_LEN <= DOS_GENSTUB_OFF
-                               && DOS_GENSTUB_OFF + DOS_GENSTUB_N * 4 <= 0x6F0) ? 1 : -1];
+                               && DOS_GENSTUB_OFF + DOS_GENSTUB_N * DOS_GENSTUB_SIZE <= DOS_CTAB_END) ? 1 : -1];
 #include "dos_layout.h"
 #include "dos_disk.h"       /* GH #44: image geometry + CHS<->LBA */
 #include <tlhelp32.h>
@@ -321,7 +321,7 @@ static BOOL OsCompatAttachConsole(DWORD processId)
 #define MYINTERP_OFF_FLAG CFG_("modeyinterp_off.flag")
 /* Present = record the last 64 mode-Y interpreted instructions (s80's crash finder). */
 #define MYRING_FLAG CFG_("myring.flag")
-static BYTE g_TrampolineSave[6];
+static BYTE g_TrampolineSave[DOS_HDLR_TRAMPOLINE_SIZE];
 static INT  g_TrampolineSaved;
 /* #183: present = sample the exec thread's host EIP ~1 kHz and log the hottest 16-byte
    buckets at exit (STAGE2: HOSTPROF). Map them with `i686-w64-mingw32-nm -n`. */
@@ -848,7 +848,7 @@ static INT DosEnvironmentNameIs(PCSTR name, UINT length, PCSTR literal)
 {
     UINT index;
     for (index = 0; index < length; ++index) {
-        CHAR character = name[index]; if (character >= 'a' && character <= 'z') character = (CHAR)(character - 32);
+        CHAR character = name[index]; if (character >= 'a' && character <= 'z') character = (CHAR)(character - ASCII_CASE_BIT);
         if (character != literal[index]) return 0;
     }
     return literal[length] == 0;
@@ -943,7 +943,7 @@ static VOID GusReport(VOID)
     if (done) return;
     done = 1;
     if (!g_GusOn) { cursor = LogPut(cursor, "STAGE2: GUS off (nogus.flag)\r\n"); LogAppend(LOG_PATH, buffer, cursor); return; }
-    for (voice = 0; voice < GUS_VOICES; ++voice) if (!(g_Gus.Voices[voice].Control & 3)) ++running;
+    for (voice = 0; voice < GUS_VOICES; ++voice) if (!(g_Gus.Voices[voice].Control & GUS_VOICE_STOPPED_MASK)) ++running;
     cursor = LogPut(cursor, "STAGE2: GUS io_w=");  cursor = LogHex(cursor, g_Gus.IoWrites);
     cursor = LogPut(cursor, " io_r=");            cursor = LogHex(cursor, g_Gus.IoReads);
     cursor = LogPut(cursor, " reset=0x");         cursor = LogHexByte(cursor, g_Gus.ResetRegister);
@@ -1378,7 +1378,7 @@ static VOID HostLockEnter(INT site)
     }
     g_LockDepth++;
 }
-
+enum { PATCH_MAP_HASH_SHIFT = 8, PATCH_MAP_HEADROOM = 16 };   /* PatchMapHash / PatchMapSet */
 static VOID HostLockLeave(VOID)
 {
     if (g_LockDepth && --g_LockDepth == 0) {
@@ -1474,8 +1474,8 @@ static DWORD g_DpmiCodeBase = 0;          /* linear base of the guest PM code se
 static DWORD g_PatchMapLinear[DPMI_PMAP_SLOTS];      /* 0 = empty (linear 0 is never a site) */
 static BYTE  g_PatchMapVector[DPMI_PMAP_SLOTS];
 static DWORD g_PatchMapCount;
-
-static DWORD PatchMapHash(DWORD linear) { return ((linear * 2654435761u) >> 8) & DPMI_PMAP_MASK; }
+#define PATCH_MAP_HASH_MULTIPLIER_U 2654435761u   /* Knuth's multiplicative hash: 2^32 / the golden ratio */
+static DWORD PatchMapHash(DWORD linear) { return ((linear * PATCH_MAP_HASH_MULTIPLIER_U) >> PATCH_MAP_HASH_SHIFT) & DPMI_PMAP_MASK; }
 
 static BYTE PatchMapGet(DWORD linear)
 {
@@ -1492,7 +1492,7 @@ static BYTE PatchMapGet(DWORD linear)
 static VOID PatchMapSet(DWORD linear, BYTE vector)
 {
     DWORD start = PatchMapHash(linear), probe;
-    if (!linear || g_PatchMapCount >= DPMI_PMAP_SLOTS - 16) return;   /* leave headroom, never fill */
+    if (!linear || g_PatchMapCount >= DPMI_PMAP_SLOTS - PATCH_MAP_HEADROOM) return;   /* leave headroom, never fill */
     for (probe = 0; probe < DPMI_PMAP_SLOTS; ++probe) {
         DWORD slot = (start + probe) & DPMI_PMAP_MASK;
         if (!g_PatchMapLinear[slot]) { g_PatchMapLinear[slot] = linear; g_PatchMapVector[slot] = vector; ++g_PatchMapCount; return; }
@@ -1660,7 +1660,7 @@ static BYTE  g_BreakpointPending[DPMI_BP_MAX];  /* skipped -> needs re-arming on
    it back. Put at least TWO repeating breakpoints in a loop and they alternate, which
    gives a register dump per iteration. */
 static DWORD g_BreakpointReport[DPMI_BP_MAX];
-static BYTE  g_BreakpointOriginal[DPMI_BP_MAX][2]; /* the two bytes we displaced                  */
+static BYTE  g_BreakpointOriginal[DPMI_BP_MAX][DPMI_PM_BOP_LENGTH]; /* the two bytes we displaced                  */
 static BYTE  g_BreakpointArmed[DPMI_BP_MAX];
 /* ── ⚠⚠ A REFUSAL IS A STANDING CONDITION, NOT AN EVENT. (session 59) ───────────────
      DpmiBreakpointArm() runs before EVERY PM entry, and both REFUSED arms below `continue`
@@ -1694,7 +1694,7 @@ static DWORD g_BreakpointArms[DPMI_BP_MAX];
      The two were conflated, and the conflation is what let a one-shot loop. */
 static BYTE  g_BreakpointDone[DPMI_BP_MAX];
 static INT   g_BreakpointCount = 0;
-
+enum { CAPTURE_MS_DEFAULT = 300 };   /* capture.flag empty: a shot this often */
 /* --- run 52 hang-diagnostic telemetry (GH #2) ---------------------------------------
    The PM loop can stop advancing in three indistinguishable-in-the-log ways: (a) the
    main thread wedges INSIDE one DpmiEnterProtectedMode() because the kernel silently swallowed a
@@ -1953,7 +1953,7 @@ static DWORD g_IoSiteLogged = 0;
 static WORD g_Unclaimed[IO_UNCLAIMED_MAX];
 static INT      g_UnclaimedCount = 0;
 enum { MYPM_STOP_RETURNED, MYPM_STOP_WINDOW_CLOSED, MYPM_STOP_DECLINED, MYPM_STOP_CAP, MYPM_STOP_NOT_FLAT, MYPM_STOP_IRQ_WAITING, MYPM_STOP_REASONS, MYPM_CHECK_MASK = 0x3F };
-static UINT       g_CaptureMs    = 300; /* CAPTURE_FLAG contents: ms between shots */
+static UINT       g_CaptureMs    = CAPTURE_MS_DEFAULT; /* CAPTURE_FLAG contents: ms between shots */
 /* #58: an optional SECOND number in capture.flag -- ms to wait before the first shot --
    so the 40-shot budget can be spent on one moment (Doom's melt) instead of the start. */
 static DWORD          g_CaptureDelayMs, g_CaptureStart;
@@ -2152,7 +2152,7 @@ static INT   g_PmDefaultFromDos = 0; /* the block came from the DOS arena, not t
    collapsing them into one table would make each silently overwrite the other.
    Doom's DOS/4GW makes 45 of these calls -- the biggest single block of UNSUP in the
    session-16 trace -- installing its own fault handlers before it runs the game. */
-static struct { WORD Selector; DWORD Offset; INT IsSet; } g_PmException[32];
+static struct { WORD Selector; DWORD Offset; INT IsSet; } g_PmException[X86_EXCEPTIONS];
 static INT   g_DpmiVi = 1;                 /* DPMI virtual interrupt flag (INT 31h 0900/0901/0902) */
 /* DPMI 0303 real-mode callbacks: each slot records the client's PM handler (sel:off)
    and the RMCS buffer (sel:off) to marshal register state through. g_PmReturnSelector is a
@@ -2351,7 +2351,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
         DWORD environmentLength, nameLength = 0, total, index;
         volatile BYTE *childEnvironment;
         if (parentEnvironment[0] == 0) environmentLength = 1;                   /* empty: one NUL ends the list */
-        else { for (environmentLength = 0; environmentLength < 0x7FFE && !(parentEnvironment[environmentLength] == 0 && parentEnvironment[environmentLength + 1] == 0); ++environmentLength) ; environmentLength += 2; }
+        else { for (environmentLength = 0; environmentLength < DOS_ENV_SCAN_MAX && !(parentEnvironment[environmentLength] == 0 && parentEnvironment[environmentLength + 1] == 0); ++environmentLength) ; environmentLength += 2; }
         PCSTR executableName = machine->ExecName;
         /* ── ★ THE 64-BYTE argv[0] RULE, AT EXEC TOO. (s81, #208) ─────────────────
              DOS/4GW 1.97 copies its own path into a 64-byte buffer (see the start-up
@@ -2845,7 +2845,7 @@ static WORD BiosEquipmentWord(VOID)
     if (g_Joystick.Type != JOYSTICK_TYPE_NONE) equipment |= BIOS_EQUIPMENT_GAMEPORT;
     return equipment;
 }
-
+enum { SERIAL_WRITE_TIMEOUT_MS = 250 };   /* SerialInitialize: per write */
 /* ── ★ AND 0040:0010 SAYS THE SAME THING. (GH #253) ───────────────────────────────
      A real BIOS's INT 11h is a read of 0040:0010; ours computes, so the BDA copy has to
      be WRITTEN from this function or the two doors disagree (see bios_bda.h). Written
@@ -2868,7 +2868,7 @@ static VOID SerialInitialize(VOID)
     { UINT index; PSTR cursor = (PSTR)&deviceControlBlock; for (index = 0; index < sizeof deviceControlBlock; ++index) cursor[index] = 0; }
     deviceControlBlock.DCBlength = sizeof deviceControlBlock;
     if (GetCommState(g_Serial, &deviceControlBlock)) {
-        deviceControlBlock.BaudRate = 115200; deviceControlBlock.ByteSize = 8; deviceControlBlock.Parity = 0; deviceControlBlock.StopBits = 0;
+        deviceControlBlock.BaudRate = CBR_115200; deviceControlBlock.ByteSize = BITS_PER_BYTE; deviceControlBlock.Parity = NOPARITY; deviceControlBlock.StopBits = ONESTOPBIT;
         /* ⚠ TURN FLOW CONTROL OFF EXPLICITLY. This used to keep whatever the driver's
              default DCB said, and on a REAL serial port with no cable a handshake line
              that never asserts makes WriteFile wait for a peer that does not exist.
@@ -2885,7 +2885,7 @@ static VOID SerialInitialize(VOID)
     /* And a hard write deadline, because the default comm timeouts are all zero,
        which means "wait forever". */
     { UINT index; PSTR cursor = (PSTR)&timeouts; for (index = 0; index < sizeof timeouts; ++index) cursor[index] = 0; }
-    timeouts.WriteTotalTimeoutConstant = 250;          /* ms, per write */
+    timeouts.WriteTotalTimeoutConstant = SERIAL_WRITE_TIMEOUT_MS;          /* ms, per write */
     SetCommTimeouts(g_Serial, &timeouts);
 }
 /* Write [buf..end) to COM1 (and it's already in the file log via log_*). */

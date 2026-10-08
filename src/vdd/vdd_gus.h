@@ -17,6 +17,7 @@
 #define GUS_DEFAULT_BASE 0x240      /* 220h is the Sound Blaster's (ref §1)          */
 #define GUS_DEFAULT_IRQ  11         /* user decision 2026-09-25; slave delivery s80  */
 #define GUS_DEFAULT_DMA  3
+#define GUS_VOICE_STOPPED_MASK 3   /* Control bits 0-1: stopped, stop */
 #define GUS_BASE_FIRST   0x210      /* the Audio page's base choices: 210h-260h       */
 #define GUS_BASE_STEP    0x10
 #define GUS_BASE_LAST_CHOICE    5
