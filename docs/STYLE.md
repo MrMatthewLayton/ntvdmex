@@ -142,6 +142,11 @@ case EMU8K_POINTER_PORT_OFFSET: state->Pointer = value; break;
   EXE header), a protocol limit, or a size two places must agree on. A one-off scratch buffer
   (`CHAR lineBuffer[160]`) keeps its literal -- the declaration says it is a size, and the code
   bounds it with `sizeof`.
+- **Diagnostic display choices stay literal, like scratch buffers**: how many bytes a log line
+  dumps (`LogDump(cursor, code, 8)`), how many times a message may be logged
+  (`static INT ioBudget = 6`), how many histogram buckets a report prints. They are choices
+  about the log, not facts about the machine. When the value IS a real size -- a stub, a
+  frame, a table's length -- it uses that size's name.
 - **A repeated idiom gets an accessor**, not just a named constant: a 16-bit register out of
   the VDM state is `VDM_REG16(tib, VTIB_CS)`, not `VDM_REG(tib, VTIB_CS) & WORD_MASK`.
 - **Hardware values cite their source** — the datasheet section, the specification, or the

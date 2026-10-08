@@ -3584,14 +3584,14 @@ static VOID Irq0PmUnclaim(VOID)
     g_Irq0IsrStrict--;
 }
 
-
+enum { ASYNC_WHY_NOT_IN_EXEC = 20, ASYNC_WHY_PIC_REFUSE = 21, ASYNC_WHY_UNHOOKED = 22, ASYNC_WHY_SUSPEND_FAIL = 23, ASYNC_WHY_GETCTX_FAIL = 24, ASYNC_WHY_V86_IF_OFF = 25, ASYNC_WHY_IN_OUR_HANDLER = 26, ASYNC_WHY_OBSERVED = 27, ASYNC_WHY_CTX_BUSY = 28, ASYNC_WHY_LEFT_EXEC = 29, ASYNC_WHY_SIMINT_RM = 30, ASYNC_WHY_NESTED_TICK = 31, ASYNC_WHY_PM_ONLY_LINE = 32, ASYNC_WHY_BAD_IRQ = 40 };   /* 20+: AsyncInjectIrq's early exits; 32 and 40 are past the histogram */
 static VOID PokeWord(DWORD linear, WORD value);        /* fwd: guest-memory helpers, defined below */
 static WORD PeekWord(DWORD linear);
 static VOID HostPitSync(VOID);             /* fwd: the guest's clock, driven by both threads */
 static VOID HostPitGenerate(VOID);         /* fwd: the crystal half (g_PitCs only)  */
 static VOID HostPitDeliver(VOID);          /* fwd: the attempt half (g_Lock, by TRY) */
 static INT  V86DeliverDeviceIrq(volatile BYTE *tib);  /* fwd: shared by the main and nested V86 loops */
-
+enum { ASYNC_DELIVERED = 0, ASYNC_WHY_BAD_VECTOR = 1, ASYNC_WHY_IN_PM_IRQ = 2, ASYNC_WHY_PM_NO_IRQ = 3, ASYNC_WHY_NO_CATCHER = 4, ASYNC_WHY_UNHOOKED_PM = 5, ASYNC_WHY_NO_APP_TIMER = 6, ASYNC_WHY_VIF_OFF = 7, ASYNC_WHY_IF_OFF = 8, ASYNC_WHY_ARM_QUIET = 9, ASYNC_WHY_IN_FLIGHT = 10, ASYNC_WHY_HOST_STACK = 11, ASYNC_WHY_NOT_32 = 12, ASYNC_WHY_SETCTX_FAIL = 13, ASYNC_WHY_HOST_CS = 14 };   /* g_AsyncWhy: AsyncWhyReport's whyNames, 0-14 */
 /* ── ASYNCHRONOUS DELIVERY INTO **PROTECTED MODE**. ───────────────────────────────
    The V86 arm below has always bailed when the guest is not in V86, and that hole is
    exactly where a DOS/4GW game lives. It is not a detail: a protected-mode guest that
@@ -3778,7 +3778,7 @@ static VOID PmInjectDeclineNote(INT why, WORD cs, DWORD eip)
         { DWORD seconds = QpcMicroseconds(now.QuadPart - g_Irq0Start) / MICROSECONDS_PER_SECOND_U;
           if (seconds < IRQ0TL_SECS) g_PmInjectDeclTl[seconds]++; }
     }
-    if (why == 0) {
+    if (why == ASYNC_DELIVERED) {
         INT index;
         for (index = 0; index < PMINJ_SITES; ++index) {
             if (g_PmInjectSite[index].Count && g_PmInjectSite[index].Cs == cs && g_PmInjectSite[index].Eip == eip) { g_PmInjectSite[index].Count++; return; }
@@ -3878,7 +3878,7 @@ static VOID AsyncEarlyBail(UINT irq, UINT why)
     AsyncWhyNote(irq, why);
     /* A/B/C discriminator: "the tick was raised and we could not place it". 20 is
        not_in_exec, the bail the s60 note measured at 75%. See Irq0DeliveredNote. */
-    if (irq == 0 && why == 20) ++g_Irq0NieCount;
+    if (irq == 0 && why == ASYNC_WHY_NOT_IN_EXEC) ++g_Irq0NieCount;
     /* ── ⚠⚠ THE CAP WAS 4000 AND IT COST SKYROADS A FIFTH OF ITS TIMER. ──────────────
          This log is reached from HostIrqSink, which runs inside HostPitSync --
          **while it holds g_Lock**. Every line is a LogAppend (open/write/close) plus a
@@ -3943,7 +3943,7 @@ static volatile LONG g_NestedRm = 0;
 
 static INT AsyncInjectIrq(UINT irq)
 {
-    if (irq >= 16) { AsyncEarlyBail(irq, 40); return 0; }
+    if (irq >= 16) { AsyncEarlyBail(irq, ASYNC_WHY_BAD_IRQ); return 0; }
     CONTEXT context;
     DWORD eflags, ss, sp, cs, ip;
     WORD flags;
@@ -3960,8 +3960,8 @@ static INT AsyncInjectIrq(UINT irq)
          can leave the thread stopped forever, and a process with a suspended thread
          does not finish exiting -- which strands the system-wide hook and cursor clip
          (see HostPanicRelease). g_Running is cleared first thing in WM_DESTROY. */
-    if (!g_Running) { AsyncEarlyBail(irq, 20); return 0; }
-    if (!g_HostCpu || g_InExec == 0) { AsyncEarlyBail(irq, 20); return 0; }
+    if (!g_Running) { AsyncEarlyBail(irq, ASYNC_WHY_NOT_IN_EXEC); return 0; }
+    if (!g_HostCpu || g_InExec == 0) { AsyncEarlyBail(irq, ASYNC_WHY_NOT_IN_EXEC); return 0; }
     /* Mid real-mode simulation: the guest's mode is being rewritten under us. See
        g_SimIntBusy -- this is the Doom E1M1 crash. */
     if (g_SimIntBusy) {
@@ -3981,16 +3981,16 @@ static INT AsyncInjectIrq(UINT irq)
                               (volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_MIDNIGHT_FLAG));
                 if (g_Irq0Pending > 0) InterlockedDecrement(&g_Irq0Pending);
             }
-            AsyncEarlyBail(irq, 31); return 0;
+            AsyncEarlyBail(irq, ASYNC_WHY_NESTED_TICK); return 0;
         }
         if (!(g_NestedRm && irq >= 2 && PeekWord(IVT_SEGMENT_ADDRESS(vectorN)) != DOS_HDLR_SEG)) {
-            AsyncEarlyBail(irq, 30); return 0; }
+            AsyncEarlyBail(irq, ASYNC_WHY_SIMINT_RM); return 0; }
     }
     /* Ask the PIC, exactly as the hardware would: is this line unmasked, and is nothing of
        equal or higher priority still in service? That is what stops us re-entering a handler
        that has not EOI'd yet -- the fault behind "press a key and everything hangs". */
     if (irq == 0 ? !Irq0CanDeliver() : !VddPicCanDeliver(&g_Pic, (BYTE)irq)) {
-        g_AsyncNestBlocked++; AsyncEarlyBail(irq, 21); return 0; }
+        g_AsyncNestBlocked++; AsyncEarlyBail(irq, ASYNC_WHY_PIC_REFUSE); return 0; }
     /* Never deliver a line the guest has not hooked. Its vector still points at our default
        IRET stub, which means no ISR is installed -- and on a real PC an unused line sits
        masked in the PIC, so nothing would arrive at all. Delivering anyway is not harmless:
@@ -4011,16 +4011,16 @@ static INT AsyncInjectIrq(UINT irq)
       INT rmHooked = !(PeekWord(IVT_SEGMENT_ADDRESS(vector0)) == DOS_HDLR_SEG
                         && PeekWord(IVT_OFFSET_ADDRESS(vector0)) == DOS_IRET_STUB_OFF);
       INT pmHooked = g_DpmiPm && g_PmInt[IrqPmVector(irq)].Client;
-      if (irq >= 2 && !rmHooked && !pmHooked) { AsyncEarlyBail(irq, 22); return 0; } }
+      if (irq >= 2 && !rmHooked && !pmHooked) { AsyncEarlyBail(irq, ASYNC_WHY_UNHOOKED); return 0; } }
     /* Exclusive ownership of the guest's context for the whole suspend/rewrite/resume.
        See g_AsyncContextWrite. Declining is free -- the other owner is placing an interrupt
        right now, so this line simply takes the next opportunity. */
-    if (InterlockedCompareExchange(&g_AsyncContextWrite, 1, 0) != 0) { AsyncEarlyBail(irq, 28); return 0; }
-    if (SuspendThread(g_HostCpu) == (DWORD)-1) { ASYNC_CTX_RELEASE(); AsyncEarlyBail(irq, 23); return 0; }
+    if (InterlockedCompareExchange(&g_AsyncContextWrite, 1, 0) != 0) { AsyncEarlyBail(irq, ASYNC_WHY_CTX_BUSY); return 0; }
+    if (SuspendThread(g_HostCpu) == (DWORD)-1) { ASYNC_CTX_RELEASE(); AsyncEarlyBail(irq, ASYNC_WHY_SUSPEND_FAIL); return 0; }
     { UINT index; PSTR bytes = (PSTR)&context; for (index = 0; index < sizeof context; ++index) bytes[index] = 0; }
     context.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
     if (!GetThreadContext(g_HostCpu, &context)) { ResumeThread(g_HostCpu); ASYNC_CTX_RELEASE();
-                                          AsyncEarlyBail(irq, 24); return 0; }
+                                          AsyncEarlyBail(irq, ASYNC_WHY_GETCTX_FAIL); return 0; }
     /* ── ⚠⚠ RE-READ g_InExec NOW THAT THE SUSPEND HAS LANDED. ────────────────────
          The check at the top of this function is a sample: the guest can trap between
          it and the suspend taking effect, leaving the thread inside HOST code -- and
@@ -4035,7 +4035,7 @@ static INT AsyncInjectIrq(UINT irq)
        ► Resuming instantly on a 0 is the correct trade: a microsecond probe of a
          thread that MIGHT hold a lock is harmless, holding one is the catastrophe. */
     if (g_InExec == 0) { ResumeThread(g_HostCpu); ASYNC_CTX_RELEASE();
-                          AsyncEarlyBail(irq, 29); return 0; }
+                          AsyncEarlyBail(irq, ASYNC_WHY_LEFT_EXEC); return 0; }
 
     eflags = context.EFlags;
     cs  = context.SegCs & WORD_MASK;
@@ -4057,7 +4057,7 @@ static INT AsyncInjectIrq(UINT irq)
         lineCursor = LogPut(lineCursor, " efl=0x"); lineCursor = LogHex(lineCursor, eflags);
         lineCursor = LogPut(lineCursor, " ms="); lineCursor = LogHex(lineCursor, GetTickCount());
         lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
-        AsyncWhyNote(irq, 27);                 /* accounted for, so the histogram sums */
+        AsyncWhyNote(irq, ASYNC_WHY_OBSERVED);                 /* accounted for, so the histogram sums */
         return 0;                                /* observed only -- the next tick injects */
     }
     /* ► PROTECTED MODE IS A DIFFERENT FRAME AND A DIFFERENT VECTOR TABLE, so it gets its
@@ -4067,14 +4067,14 @@ static INT AsyncInjectIrq(UINT irq)
          separates "the thread is executing client PM code" from "the thread is in our own
          code between entries" exactly, with nothing to keep in sync. */
     if (!(eflags & EFLAGS_VM)) {
-        g_AsyncWhy = 0;
+        g_AsyncWhy = ASYNC_DELIVERED;
         /* ► TWO EXITS USED TO LEAVE why=0, WHICH IS THE CODE FOR SUCCESS. A thread found
              in PM on a GDT selector (we are inside the HOST, not the client) and a failed
              SetThreadContext both returned ok=0 with why untouched, so a histogram keyed
              on it would have booked them as deliveries. Give each its own code: 14 is the
              one to watch, because "the CPU thread was in host code when the clock asked"
              is exactly what g_Lock starvation looks like from this side. */
-        if (!(cs & 4)) AsyncWhyNote(irq, 14);
+        if (!(cs & DPMI_SELECTOR_TI)) AsyncWhyNote(irq, ASYNC_WHY_HOST_CS);
         else if (DpmiAsyncInjectPm(irq, &context)) {
             context.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
             isOk = SetThreadContext(g_HostCpu, &context) ? 1 : 0;
@@ -4084,7 +4084,7 @@ static INT AsyncInjectIrq(UINT irq)
                       else if (AsyncVectorIsOurStub(irq)) VddPicAcknowledgeAutoEoi(&g_Pic, (BYTE)irq);
                       else                                 VddPicAcknowledge(&g_Pic, (BYTE)irq); }
             else    { g_AsyncPmActive = 0; }     /* never leave the flag set on failure */
-            AsyncWhyNote(irq, isOk ? 0u : 13u);
+            AsyncWhyNote(irq, isOk ? ASYNC_DELIVERED : ASYNC_WHY_SETCTX_FAIL);
         }
         else AsyncWhyNote(irq, (UINT)g_AsyncWhy);   /* the clause that said no */
         ResumeThread(g_HostCpu);
@@ -4174,7 +4174,7 @@ static INT AsyncInjectIrq(UINT irq)
         || cs == DOS_HDLR_SEG) {
         ResumeThread(g_HostCpu);
         ASYNC_CTX_RELEASE();
-        AsyncEarlyBail(irq, (cs == DOS_HDLR_SEG) ? 26 : 25);
+        AsyncEarlyBail(irq, (cs == DOS_HDLR_SEG) ? ASYNC_WHY_IN_OUR_HANDLER : ASYNC_WHY_V86_IF_OFF);
         return 0;
     }
     /* s92 (#239): a line only a PROTECTED-MODE handler wants is not delivered into V86
@@ -4185,7 +4185,7 @@ static INT AsyncInjectIrq(UINT irq)
         if (PeekWord(IVT_SEGMENT_ADDRESS(vector1)) == DOS_HDLR_SEG && PeekWord(IVT_OFFSET_ADDRESS(vector1)) == DOS_IRET_STUB_OFF) {
             ResumeThread(g_HostCpu);
             ASYNC_CTX_RELEASE();
-            AsyncEarlyBail(irq, 32);
+            AsyncEarlyBail(irq, ASYNC_WHY_PM_ONLY_LINE);
             return 0;
         }
     }
@@ -4236,7 +4236,7 @@ static INT AsyncInjectIrq(UINT irq)
     ResumeThread(g_HostCpu);
     ASYNC_CTX_RELEASE();
     if (isOk) g_AsyncInjected++; else g_AsyncBail++;
-    AsyncWhyNote(irq, isOk ? 0u : 13u);     /* the V86 arm's only failure is SetThreadContext */
+    AsyncWhyNote(irq, isOk ? ASYNC_DELIVERED : ASYNC_WHY_SETCTX_FAIL);     /* the V86 arm's only failure is SetThreadContext */
     /* Log AFTER the resume (never hold the guest suspended across file I/O). The IVT dump
        is the point: vectoring an IRQ the guest never hooked lands it in unowned ROM, which
        is exactly what happened first time out -- Skyroads ended up at F000:A390. Printing
@@ -27421,10 +27421,10 @@ static INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context)
     UINT interruptVector = IrqPmVector(irq);               /* 08h-0Fh, or 70h-77h for the slave */
     DWORD eflags = context->EFlags;
     WORD  ss;
-    if (irq >= 16) { g_AsyncWhy = 1; return 0; }
-    if (g_PmNoIrq || g_InPmIrq) { g_AsyncWhy = g_InPmIrq ? 2 : 3; return 0; }     /* knob off, or a sync injection is running */
-    if (g_PmReturnSelector == 0) { g_AsyncWhy = 4; return 0; }              /* no catcher yet -> no way back */
-    if (!g_PmInt[interruptVector].Client) { g_AsyncWhy = 5; return 0; }          /* the client has not hooked this line */
+    if (irq >= 16) { g_AsyncWhy = ASYNC_WHY_BAD_VECTOR; return 0; }
+    if (g_PmNoIrq || g_InPmIrq) { g_AsyncWhy = g_InPmIrq ? ASYNC_WHY_IN_PM_IRQ : ASYNC_WHY_PM_NO_IRQ; return 0; }     /* knob off, or a sync injection is running */
+    if (g_PmReturnSelector == 0) { g_AsyncWhy = ASYNC_WHY_NO_CATCHER; return 0; }              /* no catcher yet -> no way back */
+    if (!g_PmInt[interruptVector].Client) { g_AsyncWhy = ASYNC_WHY_UNHOOKED_PM; return 0; }          /* the client has not hooked this line */
     /* Not before the application has an ISR; see DpmiInjectPmIrq(). */
     if (g_DpmiIsClient32 && interruptVector == VECTOR_TIMER && !g_PmAppHookedTimer) {
         /* ── BUT THE BIOS TICK STILL HAS TO ADVANCE. (s74c, Duke3D's SETUP) ────────
@@ -27442,21 +27442,21 @@ static INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context)
                           (volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_MIDNIGHT_FLAG));
             if (g_Irq0Pending > 0) InterlockedDecrement(&g_Irq0Pending);
         }
-        g_AsyncWhy = 6; return 0;
+        g_AsyncWhy = ASYNC_WHY_NO_APP_TIMER; return 0;
     }
-    if (!g_DpmiVi) { g_AsyncWhy = 7; return 0; }                    /* the client has interrupts masked */
-    if (!(eflags & (EFLAGS_IF_U | EFLAGS_VIF))) { g_AsyncWhy = 8; return 0; }      /* ...and the CPU agrees */
+    if (!g_DpmiVi) { g_AsyncWhy = ASYNC_WHY_VIF_OFF; return 0; }                    /* the client has interrupts masked */
+    if (!(eflags & (EFLAGS_IF_U | EFLAGS_VIF))) { g_AsyncWhy = ASYNC_WHY_IF_OFF; return 0; }      /* ...and the CPU agrees */
     /* Same hold-off the cooperative path uses: a vector installed microseconds ago is an
        arming pass, and real IRQ0 could not have arrived yet. See INT 31h 0205. */
-    if ((GetTickCount() - g_PmVector8ArmedMs) < DPMI_IRQ0_ARM_QUIET_MS) { g_AsyncWhy = 9; return 0; }
-    if (InterlockedCompareExchange(&g_AsyncPmActive, 1, 0) != 0) { g_AsyncWhy = 10; return 0; }
+    if ((GetTickCount() - g_PmVector8ArmedMs) < DPMI_IRQ0_ARM_QUIET_MS) { g_AsyncWhy = ASYNC_WHY_ARM_QUIET; return 0; }
+    if (InterlockedCompareExchange(&g_AsyncPmActive, 1, 0) != 0) { g_AsyncWhy = ASYNC_WHY_IN_FLIGHT; return 0; }
 
     ss = (WORD)(context->SegSs & WORD_MASK);
-    if (!(ss & 4)) { g_AsyncPmActive = 0; g_AsyncWhy = 11; return 0; }    /* not a client stack -> not safe */
+    if (!(ss & DPMI_SELECTOR_TI)) { g_AsyncPmActive = 0; g_AsyncWhy = ASYNC_WHY_HOST_STACK; return 0; }    /* not a client stack -> not safe */
     /* Same rule as the cooperative path: interrupt the APPLICATION, never the extender
        mid-service. See DpmiInjectPmIrq() for what that cost to learn. */
     if (g_DpmiIsClient32 && !DpmiSelectorIs32((WORD)(context->SegCs & WORD_MASK))) {
-        g_AsyncPmActive = 0; g_AsyncWhy = 12; return 0;
+        g_AsyncPmActive = 0; g_AsyncWhy = ASYNC_WHY_NOT_32; return 0;
     }
 
     /* Save what we are interrupting; the catcher BOP is where it gets put back. */
@@ -33007,7 +33007,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     DWORD *snapshot = g_XsSnapshot[g_XsSeconds++], hostUs = 0; INT eventIndex;
                     for (eventIndex = 0; eventIndex < EV_HIST_MAX; ++eventIndex) hostUs += g_HostMicrosecondsEvent[eventIndex] / MICROSECONDS_PER_MILLISECOND_U;
                     snapshot[XS_RAISE] = g_IrqRaised[0]; snapshot[XS_ASYNC] = g_AsyncInjected;
-                    snapshot[XS_COOP] = g_Irq0Injected;       snapshot[XS_NIE] = g_AsyncWhyHistogram[0][20];
+                    snapshot[XS_COOP] = g_Irq0Injected;       snapshot[XS_NIE] = g_AsyncWhyHistogram[0][ASYNC_WHY_NOT_IN_EXEC];
                     snapshot[XS_BOP] = g_EventHistogram[4];      snapshot[XS_IO] = g_EventHistogram[0];
                     snapshot[XS_HOSTMS] = hostUs;     snapshot[XS_PACE] = g_PitPaceCalls;
                 } }
@@ -33876,9 +33876,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                              asked the user for a run whose whole purpose was to produce a
                              counter the run could not produce. Emit the three that bear on
                              the DPMI mode-switch race on every PM heartbeat instead. */
-                        cursor = LogPut(cursor, " why{simint_rm=0x"); cursor = LogHex(cursor, g_AsyncWhyHistogram[0][30]);
-                        cursor = LogPut(cursor, " hostcs=0x");        cursor = LogHex(cursor, g_AsyncWhyHistogram[0][14]);
-                        cursor = LogPut(cursor, " inflight=0x");      cursor = LogHex(cursor, g_AsyncWhyHistogram[0][10]);
+                        cursor = LogPut(cursor, " why{simint_rm=0x"); cursor = LogHex(cursor, g_AsyncWhyHistogram[0][ASYNC_WHY_SIMINT_RM]);
+                        cursor = LogPut(cursor, " hostcs=0x");        cursor = LogHex(cursor, g_AsyncWhyHistogram[0][ASYNC_WHY_HOST_CS]);
+                        cursor = LogPut(cursor, " inflight=0x");      cursor = LogHex(cursor, g_AsyncWhyHistogram[0][ASYNC_WHY_IN_FLIGHT]);
                         cursor = LogPut(cursor, "}");
                         /* ★ WHERE IS IT ABOUT TO GO, AND WHAT IS IT ABOUT TO RUN.
                              The resume point alone is not enough. When we hand the
