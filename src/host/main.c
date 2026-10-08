@@ -3583,7 +3583,7 @@ static VOID Irq0PmUnclaim(VOID)
     g_Irq0IsrSince = 0;
     g_Irq0IsrStrict--;
 }
-
+enum { PM_GATE_NO_LATCH = 0, PM_GATE_VIF_OFF = 1, PM_GATE_NO_HOOK = 2, PM_GATE_IN_PM_IRQ = 3, PM_GATE_NO_IRQ = 4, PM_GATE_ASYNC_IN_FLIGHT = 5, PM_GATE_ARMED = 6, PM_GATE_TRIED = 7, PM_GATE_CLAIM_REFUSED = 8, PM_GATE_DECLINED = 9, PM_GATES = 10 };   /* g_PmCooperativeGate's columns */
 enum { ASYNC_WHY_NOT_IN_EXEC = 20, ASYNC_WHY_PIC_REFUSE = 21, ASYNC_WHY_UNHOOKED = 22, ASYNC_WHY_SUSPEND_FAIL = 23, ASYNC_WHY_GETCTX_FAIL = 24, ASYNC_WHY_V86_IF_OFF = 25, ASYNC_WHY_IN_OUR_HANDLER = 26, ASYNC_WHY_OBSERVED = 27, ASYNC_WHY_CTX_BUSY = 28, ASYNC_WHY_LEFT_EXEC = 29, ASYNC_WHY_SIMINT_RM = 30, ASYNC_WHY_NESTED_TICK = 31, ASYNC_WHY_PM_ONLY_LINE = 32, ASYNC_WHY_BAD_IRQ = 40 };   /* 20+: AsyncInjectIrq's early exits; 32 and 40 are past the histogram */
 static VOID PokeWord(DWORD linear, WORD value);        /* fwd: guest-memory helpers, defined below */
 static WORD PeekWord(DWORD linear);
@@ -3762,7 +3762,7 @@ static DWORD g_PmCooperativeLine[8];
        7 all gates open (the pass tried)   8 claim refused (IRQ0 masked/in service)
        9 the injector declined (guest in the extender's 16-bit code)
      7 counts the pass; 8/9 are that pass's failures, so 7 - 8 - 9 = delivered. */
-static DWORD g_PmCooperativeGate[10];
+static DWORD g_PmCooperativeGate[PM_GATES];
 /* ...and when `decl` dominates (it did once the latch was fixed: tried=0x171c decl=0x169d),
    WHICH refusal inside DpmiInjectPmIrq: [0] the interrupted CS is 16-bit (the
    extender's code), [1] the application has no timer hook. Per second on IRQ0TL's clock,
@@ -28218,7 +28218,7 @@ static LRESULT WowOwnerDraw(HWND window, WORD window16, UINT message, WPARAM wPa
     if (message == WM_COMPAREITEM) return (LRESULT)(INT16)result;
     return (LRESULT)(result ? TRUE : FALSE);
 }
-
+enum { PAUSE_POLL_MS = 20, PMWATCH_COLUMNS = 2, PM_HEADLESS_CHECK_MASK = 0xFFF, PM_STEPS_MAX = 100000000 };   /* WinMain's exec loops */
 /* s89 (#305 M10): a message SENT to a guest window, now -- its own procedure and
    instance chosen exactly as DispatchMessage chooses them. WowUserDestroy uses it
    so WM_DESTROY arrives while the window and its children still exist. */
@@ -32859,7 +32859,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 g_Irq0Injected++;
                 g_Irq0NoteCs = cs; g_Irq0NoteIp = ip;   /* where IF re-opened */
                 Irq0DeliveredNote();          /* the guest's clock, as a timeline */
-                InjectInt(tib, 0x08);
+                InjectInt(tib, VECTOR_TIMER);
             } else {
                 static INT skipBudget = 6;
                 g_Irq0Skip++;                  /* IF=0 or inside our own INT 08h */
@@ -32904,7 +32904,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 VddPicAcknowledge(&g_Pic, 1);
                 if (AsyncVectorIsOurStub(1)) VddPicEndOfInterrupt(&g_Pic, 1);
                 g_Irq1Injected++;
-                InjectInt(tib, 0x09);
+                InjectInt(tib, VECTOR_KEYBOARD);
                 KeyLatencyPop();               /* the guest is now IN its INT 09h */
             }
         }
@@ -32981,13 +32981,13 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             { DWORD codeSegment3 = VDM_REG16(tib, VTIB_CS), eip3 = VDM_REG16(tib, VTIB_EIP);
               const volatile BYTE *ip3 = (const volatile BYTE *)((codeSegment3 << PARAGRAPH_SHIFT) + eip3);
               if (!(ip3[0] == VDM_BOP0 && ip3[1] == VDM_BOP1)) {
-                  BYTE mapMask = (BYTE)(g_Video.MapMask & 0x0F);
+                  BYTE mapMask = (BYTE)(g_Video.MapMask & VIDEO_ALL_PLANES);
                   ++g_ModeYBails;
                   if (mapMask & (BYTE)(mapMask - 1)) ++g_ModeYBailMp;
                   ModeYBailNote(codeSegment3, eip3, ip3);
               } }
         }
-        while (g_PauseWant && g_Running) { ++g_PauseCooperative; Sleep(20); }   /* #219 */
+        while (g_PauseWant && g_Running) { ++g_PauseCooperative; Sleep(PAUSE_POLL_MS); }   /* #219 */
         CpuSpeedCooperativePark();                                                  /* #225 */
         InterlockedExchange(&g_InExec, 1);
         ExecEnterMark();               /* guest-execution clock starts (throttle) */
@@ -33008,7 +33008,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     for (eventIndex = 0; eventIndex < EV_HIST_MAX; ++eventIndex) hostUs += g_HostMicrosecondsEvent[eventIndex] / MICROSECONDS_PER_MILLISECOND_U;
                     snapshot[XS_RAISE] = g_IrqRaised[0]; snapshot[XS_ASYNC] = g_AsyncInjected;
                     snapshot[XS_COOP] = g_Irq0Injected;       snapshot[XS_NIE] = g_AsyncWhyHistogram[0][ASYNC_WHY_NOT_IN_EXEC];
-                    snapshot[XS_BOP] = g_EventHistogram[4];      snapshot[XS_IO] = g_EventHistogram[0];
+                    snapshot[XS_BOP] = g_EventHistogram[VDM_EVENT_BOP];      snapshot[XS_IO] = g_EventHistogram[VDM_EVENT_IO];
                     snapshot[XS_HOSTMS] = hostUs;     snapshot[XS_PACE] = g_PitPaceCalls;
                 } }
             /* s82: the entry trampoline borrowed DPMI callback slot 0/1's bytes (#248: the
@@ -33017,10 +33017,10 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                have allocated, let alone called, a callback. */
             if (g_TrampolineSaved) {
                 DWORD trampolineCs = VDM_REG16(tib, VTIB_CS), trampolineIp = VDM_REG16(tib, VTIB_EIP);
-                if (!(trampolineCs == DOS_HDLR_SEG && trampolineIp >= 0x60 && trampolineIp < 0x66)) {
-                    volatile BYTE *trampoline = (volatile BYTE *)(ULONG_PTR)(((DWORD)DOS_HDLR_SEG << PARAGRAPH_SHIFT) + 0x60);
+                if (!(trampolineCs == DOS_HDLR_SEG && trampolineIp >= DOS_HDLR_TRAMPOLINE_OFF && trampolineIp < DOS_HDLR_TRAMPOLINE_OFF + DOS_HDLR_TRAMPOLINE_SIZE)) {
+                    volatile BYTE *trampoline = (volatile BYTE *)(ULONG_PTR)(((DWORD)DOS_HDLR_SEG << PARAGRAPH_SHIFT) + DOS_HDLR_TRAMPOLINE_OFF);
                     INT item;
-                    for (item = 0; item < 6; ++item) trampoline[item] = g_TrampolineSave[item];
+                    for (item = 0; item < DOS_HDLR_TRAMPOLINE_SIZE; ++item) trampoline[item] = g_TrampolineSave[item];
                     g_TrampolineSaved = 0;
                     {   CHAR trampolineLine[200], *trampolineCursor = LogPut(trampolineLine, "STAGE2: entry trampoline done -- first exit ev=0x");
                         trampolineCursor = LogHex(trampolineCursor, (DWORD)event); trampolineCursor = LogPut(trampolineCursor, " at 0x"); trampolineCursor = LogHex(trampolineCursor, trampolineCs);
@@ -33081,7 +33081,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
              poll, with the last heartbeat the only witness. Name the guest cs:ip
              and the bytes there so the INT3's origin is visible. Bounded; the top
              bit of an NTSTATUS is set for both warning (0x8...) and error (0xC...). */
-        if ((UINT)vdmStatus & 0x80000000u) {
+        if ((UINT)vdmStatus & NT_STATUS_NOT_SUCCESS_BIT_U) {
             static INT stateBudget = 16;
             if (stateBudget > 0) {
                 DWORD stateCs = VDM_REG16(tib, VTIB_CS), si = VDM_REG16(tib, VTIB_EIP);
@@ -33554,7 +33554,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                    map is the mitigation, and an unexpected-BOP path below logs any surprise. */
                 { volatile BYTE *cs = (volatile BYTE *)(ULONG_PTR)g_DpmiCodeBase;
                   DWORD position, count = 0, last = 0, votedCount = 0;
-                  for (position = 0; position < 0xFFFF; ++position) {
+                  for (position = 0; position < X86_SEGMENT_LIMIT_64K; ++position) {
                       /* ⚠ 0x2F IS HERE BECAUSE krnl386 DIED WITHOUT IT (GH #128).
                            A PM guest cannot reach the IVT, so an INT this list does not
                            name stays a raw `CD nn`, and executing it in protected mode
@@ -33619,7 +33619,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                               /* Initial mode-switch selectors are 16-bit even for a 32-bit
                                  client (the RETF-on-failure proof, session 16), so d32=0. */
                               if (!X86IsIntSiteReal((const BYTE *)(ULONG_PTR)cs,
-                                                        position, 0xFFFF, 0)) continue;
+                                                        position, X86_SEGMENT_LIMIT_64K, 0)) continue;
                               ++votedCount;
                           }
                           PatchMapSet(linear, siteVector); cs[position] = VDM_BOP0; cs[position+1] = VDM_BOP1; ++count; last = position;
@@ -33643,9 +33643,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                      but a vector that is ABSENT here cannot kill the guest, which
                      makes the list a genuine shortlist of suspects rather than a
                      guess. Cheap, and it turns the next silent death into a lookup. */
-                  {   DWORD hist[256], offset2, total = 0; INT number;
-                      for (number = 0; number < 256; ++number) hist[number] = 0;
-                      for (offset2 = 0; offset2 < 0xFFFF; ++offset2)
+                  {   DWORD hist[BYTE_VALUES], offset2, total = 0; INT number;
+                      for (number = 0; number < BYTE_VALUES; ++number) hist[number] = 0;
+                      for (offset2 = 0; offset2 < X86_SEGMENT_LIMIT_64K; ++offset2)
                           if (cs[offset2] == X86_OP_INT) { ++hist[cs[offset2 + 1]]; ++total; }
                       /* ── ★★ AND THE OFFSETS, NOT JUST THE HISTOGRAM. ──────────────────
                            A histogram says a vector is a suspect; it does not say WHERE,
@@ -33661,7 +33661,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                            disassembly session. Bounded so a data-heavy region cannot flood. */
                       {   DWORD shown = 0;
                           cursor = LogPut(cursor, "DPMI: residual CD nn SITES (linear, first 24):");
-                          for (offset2 = 0; offset2 < 0xFFFF && shown < 24; ++offset2)
+                          for (offset2 = 0; offset2 < X86_SEGMENT_LIMIT_64K && shown < 24; ++offset2)
                               if (cs[offset2] == X86_OP_INT) {
                                   cursor = LogPut(cursor, " 0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)(cs + offset2));
                                   cursor = LogPut(cursor, "="); cursor = LogHexByte(cursor, cs[offset2 + 1]);
@@ -33672,7 +33672,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                       }
                       cursor = LogPut(cursor, "DPMI: residual CD nn in the region: "); cursor = LogHex(cursor, total);
                       cursor = LogPut(cursor, " (unclaimed vectors, upper bound)");
-                      for (number = 0; number < 256; ++number) if (hist[number]) {
+                      for (number = 0; number < BYTE_VALUES; ++number) if (hist[number]) {
                           cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, (BYTE)number);
                           cursor = LogPut(cursor, "h x"); cursor = LogHex(cursor, hist[number]);
                       }
@@ -33699,9 +33699,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                                           OPEN_EXISTING, 0, NULL);
                   if (configHandle != INVALID_HANDLE_VALUE) {
-                      CHAR pmChangeText[128]; DWORD commandLength = 0, pmTextIndex = 0, values[2] = { 0, 0 }; INT column = 0;
+                      CHAR pmChangeText[128]; DWORD commandLength = 0, pmTextIndex = 0, values[PMWATCH_COLUMNS] = { 0, 0 }; INT column = 0;
                       ReadFile(configHandle, pmChangeText, sizeof pmChangeText - 1, &commandLength, NULL); CloseHandle(configHandle);
-                      while (pmTextIndex < commandLength && column < 2) {
+                      while (pmTextIndex < commandLength && column < PMWATCH_COLUMNS) {
                           INT digits = 0;
                           while (pmTextIndex < commandLength && (pmChangeText[pmTextIndex] == ' ' || pmChangeText[pmTextIndex] == '\t')) ++pmTextIndex;
                           while (pmTextIndex < commandLength) {
@@ -33716,7 +33716,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                       }
                       if (column >= 1) {
                           g_PmWatchOffset = values[0];
-                          if (column >= 2 && values[1] <= WOW_PMBASE_MAX)
+                          if (column >= PMWATCH_COLUMNS && values[1] <= WOW_PMBASE_MAX)
                               g_PmWatchSegment = (UINT)values[1];   /* 0 = already linear */
                           cursor = LogPut(cursor, "PMWATCH: watching seg "); cursor = LogHex(cursor, g_PmWatchSegment);
                           cursor = LogPut(cursor, " + 0x"); cursor = LogHex(cursor, g_PmWatchOffset);
@@ -33803,7 +33803,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 DWORD event3Retries = 0;   /* GH#18: bounded event-3 (pending-int guard) re-entries */
                 DWORD pmFaultDumps = 0;              /* rate-limit the PM-fault byte dump (anti-flood) */
                 DWORD pmStartTick = GetTickCount();   /* headless wall-clock cap origin */
-                for (steps = 0; g_Running && steps < 100000000; ++steps) {  /* run until window close (animation) */
+                for (steps = 0; g_Running && steps < PM_STEPS_MAX; ++steps) {  /* run until window close (animation) */
                     DWORD event, eip, currentCs, vector; INT status;
                     /* #152: Close Program ends a PM client exactly as its own AH=4Ch
                        would; the child-with-a-parent path below does the rest. */
@@ -33821,7 +33821,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                        so the host self-exits and the watcher survives. Sampled sparsely (every
                        4096 steps) to keep GetTickCount off the hot path. Interactive runs (no
                        marker) are unbounded, as before -- the user closes the window. */
-                    if (g_Headless && (steps & 0xFFF) == 0 && steps
+                    if (g_Headless && (steps & PM_HEADLESS_CHECK_MASK) == 0 && steps
                         && GetTickCount() - pmStartTick > PM_HEADLESS_MS) {
                         cursor = LogPut(cursor, "STAGE3-DPMI: headless time cap (");
                         cursor = LogHex(cursor, PM_HEADLESS_MS); cursor = LogPut(cursor, " ms) reached after 0x");
@@ -33914,7 +33914,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                 const BYTE *stackBytes = (const BYTE *)stackLinear;
                                 INT wordIndex;
                                 cursor = LogPut(cursor, " iret->0x");
-                                cursor = LogHex(cursor, (DWORD)(stackBytes[2] | (stackBytes[3] << BYTE_SHIFT)));   /* CS  */
+                                cursor = LogHex(cursor, (DWORD)(stackBytes[X86_FRAME16_CS] | (stackBytes[X86_FRAME16_CS + 1] << BYTE_SHIFT)));   /* CS  */
                                 cursor = LogPut(cursor, ":0x");
                                 cursor = LogHex(cursor, (DWORD)(stackBytes[0] | (stackBytes[1] << BYTE_SHIFT)));   /* IP  */
                                 /* ...and the frames ABOVE it. The IRET target turned out
@@ -33978,11 +33978,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     /* #172: which gate turned an OWED tick away. See g_PmCooperativeGate. */
                     INT twoTicksOwed = (g_PmTickOwed >= 2);
                     if (twoTicksOwed) {
-                        UINT gateIndex = !(g_PmIrq0Latch || g_PmTickOwed > 0) ? 0 : !g_DpmiVi ? 1
-                                    : !g_PmInt[VECTOR_TIMER].Client ? 2 : g_InPmIrq ? 3
-                                    : g_PmNoIrq ? 4 : g_AsyncPmActive ? 5
-                                    : (GetTickCount() - g_PmVector8ArmedMs) < DPMI_IRQ0_ARM_QUIET_MS ? 6
-                                    : 7;
+                        UINT gateIndex = !(g_PmIrq0Latch || g_PmTickOwed > 0) ? PM_GATE_NO_LATCH : !g_DpmiVi ? PM_GATE_VIF_OFF
+                                    : !g_PmInt[VECTOR_TIMER].Client ? PM_GATE_NO_HOOK : g_InPmIrq ? PM_GATE_IN_PM_IRQ
+                                    : g_PmNoIrq ? PM_GATE_NO_IRQ : g_AsyncPmActive ? PM_GATE_ASYNC_IN_FLIGHT
+                                    : (GetTickCount() - g_PmVector8ArmedMs) < DPMI_IRQ0_ARM_QUIET_MS ? PM_GATE_ARMED
+                                    : PM_GATE_TRIED;
                         g_PmCooperativeGate[gateIndex]++;
                     }
                     /* ── #172: THE LATCH OPENS THIS, NOT THE OWED COUNT. (s85) ────────────
@@ -33997,16 +33997,16 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                         && g_DpmiVi && g_PmInt[VECTOR_TIMER].Client && !g_InPmIrq
                         && !g_PmNoIrq && !g_AsyncPmActive
                         && (GetTickCount() - g_PmVector8ArmedMs) >= DPMI_IRQ0_ARM_QUIET_MS) {
-                        UINT32 dmaReadsBefore = g_Dma.ChannelCountReads[1];
+                        UINT32 dmaReadsBefore = g_Dma.ChannelCountReads[SB_DEFAULT_DMA8];
                         g_PmIrq0Latch = 0;
                         g_InPmIrq = 1;
                         if (g_PmTickOwed > 0 && Irq0PmClaim()) {
                             if (DpmiInjectPmIrq(&machine, tib, VECTOR_TIMER, steps))
                                 InterlockedDecrement(&g_PmTickOwed);
-                            else { Irq0PmUnclaim(); if (twoTicksOwed) g_PmCooperativeGate[9]++; }
-                        } else if (twoTicksOwed) g_PmCooperativeGate[8]++;
+                            else { Irq0PmUnclaim(); if (twoTicksOwed) g_PmCooperativeGate[PM_GATE_DECLINED]++; }
+                        } else if (twoTicksOwed) g_PmCooperativeGate[PM_GATE_CLAIM_REFUSED]++;
                         g_InPmIrq = 0;
-                        g_CooperativeDmaPolls += g_Dma.ChannelCountReads[1] - dmaReadsBefore;
+                        g_CooperativeDmaPolls += g_Dma.ChannelCountReads[SB_DEFAULT_DMA8] - dmaReadsBefore;
                     }
                     /* ── s90 (#278): IRQs RAISED BY A 32-BIT COMPONENT (call_ica_hw_interrupt,
                          through bin\wowshim\NTVDM.EXE) -- winmm raises IRQ 10 to tell
@@ -34158,7 +34158,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                  properly, ZAR's IRQ5 went dead after its first SB block.
                                  Same acknowledge/EOI rule as the async path: in service, and
                                  released at once when the vector is still our own stub. */
-                            UINT32 dmaReadsBeforeDevice = g_Dma.ChannelCountReads[1];
+                            UINT32 dmaReadsBeforeDevice = g_Dma.ChannelCountReads[SB_DEFAULT_DMA8];
                             InterlockedExchange(&g_IrqNPending[scan], 0);
                             if (AsyncVectorIsOurStub((UINT)scan))
                                 VddPicAcknowledgeAutoEoi(&g_Pic, (BYTE)scan);
@@ -34174,7 +34174,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                 ++g_PmDeviceIrqFail;
                             }
                             g_InPmIrq = 0;
-                            g_CooperativeDmaPollsDevice[scan & 7] += g_Dma.ChannelCountReads[1] - dmaReadsBeforeDevice;
+                            g_CooperativeDmaPollsDevice[scan & 7] += g_Dma.ChannelCountReads[SB_DEFAULT_DMA8] - dmaReadsBeforeDevice;
                             break;                  /* one per pass: let it IRET first */
                         }
                     }
@@ -34331,7 +34331,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                            while SS is 16-bit. Do not read this as the argument fix. */
                     if (!DpmiSelectorIs32((WORD)VDM_REG16(tib, VTIB_SS)))
                         VDM_REG(tib, VTIB_ESP) &= WORD_MASK_U;
-                    while (g_PauseWant && g_Running) { ++g_PauseCooperative; Sleep(20); }   /* #219 */
+                    while (g_PauseWant && g_Running) { ++g_PauseCooperative; Sleep(PAUSE_POLL_MS); }   /* #219 */
                     CpuSpeedCooperativePark();                                                  /* #225 */
                     InterlockedExchange(&g_InExec, 1);
                     ExecEnterMark();   /* guest-execution clock starts (throttle) */
@@ -36600,7 +36600,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         cursor = LogHex(cursor, g_Irq0WorstYield);
         /* #172: see g_PmCooperativeGate for the ten columns. */
         cursor = LogPut(cursor, "\r\nSTAGE2: PMCOOP owed>=2 gate[latch,vif,hook,inirq,noirq,async,armed,tried,claim,decl]=");
-        { INT gateIndex; for (gateIndex = 0; gateIndex < 10; ++gateIndex) { cursor = LogPut(cursor, gateIndex ? "," : ""); cursor = LogHex(cursor, g_PmCooperativeGate[gateIndex]); } }
+        { INT gateIndex; for (gateIndex = 0; gateIndex < PM_GATES; ++gateIndex) { cursor = LogPut(cursor, gateIndex ? "," : ""); cursor = LogHex(cursor, g_PmCooperativeGate[gateIndex]); } }
         cursor = LogPut(cursor, "\r\nSTAGE2: PMINJ decl[cs16,nohook]="); cursor = LogHex(cursor, g_PmInjectDecl[0]);
         cursor = LogPut(cursor, ","); cursor = LogHex(cursor, g_PmInjectDecl[1]);
         { INT timelineSecond, last = -1;

@@ -265,6 +265,7 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
    and user mode runs on GDT selector 1Bh. */
 #define NT_STATUS_SEVERITY_MASK   0xF0000000u
 #define NT_STATUS_SEVERITY_ERROR  0xC0000000u
+#define NT_STATUS_NOT_SUCCESS_BIT_U 0x80000000u   /* set for both warning (8...) and error (C...) */
 #define NT_USER_CODE_SELECTOR     0x1B
 #define VDM_REG(tib, off)      (*(volatile DWORD *)((volatile BYTE *)(tib) + (off)))
 /* The low 16 bits of such a field: a 16-bit register (CS, IP, DS...) or AX/BX/CX/DX. */
