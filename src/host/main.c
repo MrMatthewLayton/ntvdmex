@@ -8162,7 +8162,7 @@ static VOID HostEms(volatile BYTE *tib)
 
 /* --- menu + status bar (scaffold; most items are stubs for now) ------------ */
 static CHAR g_ProgramName[64] = "(none)";      /* first part of the status strip    */
-
+#define I33_SITE_CONTEXT_BEFORE 4   /* g_MouseI33Site: bytes kept from before the INT */
 /* Mouse state shared UI thread -> V86 thread (INT 33h). Position is in guest
    pixels (mapped from the window client); buttons: bit0 L, bit1 R, bit2 M. */
 static volatile LONG g_MouseX = 320, g_MouseY = 240, g_MouseButtons = 0;
@@ -9030,7 +9030,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
 {
     DWORD ax = VDM_REG16(tib, VTIB_EAX);
     LONG positionX = g_MouseX, positionY = g_MouseY, buttons = g_MouseButtons;
-    if (ax < 16) g_MouseI33[ax]++; else g_MouseI33Other++;
+    if (ax < ARRAYSIZE(g_MouseI33)) g_MouseI33[ax]++; else g_MouseI33Other++;
     /* The real histogram, and the caller. See the commentary on g_MouseI33Ax. */
     {   DWORD cs  = VDM_REG16(tib, VTIB_CS);
         DWORD eip = VDM_REG(tib, VTIB_EIP);
@@ -9052,10 +9052,10 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
                 /* The bytes AROUND the site, so the diff against DOOM.EXE needs no
                    second run. Guarded: an address derived from a guest register is
                    not an address we may dereference on trust. */
-                if (MemoryReadable((ULONG_PTR)(linear - 4), sizeof g_MouseI33Site[index].Context)) {
+                if (MemoryReadable((ULONG_PTR)(linear - I33_SITE_CONTEXT_BEFORE), sizeof g_MouseI33Site[index].Context)) {
                     UINT byteIndex;
                     for (byteIndex = 0; byteIndex < sizeof g_MouseI33Site[index].Context; ++byteIndex)
-                        g_MouseI33Site[index].Context[byteIndex] = ((volatile BYTE *)(ULONG_PTR)(linear - 4))[byteIndex];
+                        g_MouseI33Site[index].Context[byteIndex] = ((volatile BYTE *)(ULONG_PTR)(linear - I33_SITE_CONTEXT_BEFORE))[byteIndex];
                 }
                 ++g_MouseI33SiteCount;
             }
@@ -9078,8 +9078,8 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
     switch (ax) {
     case I33_FN_RESET:                                        /* reset + get status      */
         if (g_MouseAbsent) { VDM_SET16(tib, VTIB_EAX, 0x0000); break; }  /* no driver */
-        VDM_SET16(tib, VTIB_EAX, 0xFFFF);               /* driver installed        */
-        VDM_SET16(tib, VTIB_EBX, 0x0002);               /* 2 buttons               */
+        VDM_SET16(tib, VTIB_EAX, I33_INSTALLED);               /* driver installed        */
+        VDM_SET16(tib, VTIB_EBX, I33_BUTTON_COUNT);               /* 2 buttons               */
         I33ResetState();
         break;
     case I33_FN_SHOW_CURSOR:                                        /* show cursor (dec count) */
@@ -9115,7 +9115,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         pressX  = isRelease ? &g_MouseReleaseX[button]   : &g_MousePressX[button];
         pressY  = isRelease ? &g_MouseReleaseY[button]   : &g_MousePressY[button];
         count   = InterlockedExchange(counter, 0);
-        if (count > 0x7FFF) count = 0x7FFF;
+        if (count > MAXSHORT) count = MAXSHORT;
         VDM_SET16(tib, VTIB_EAX, (WORD)buttons);
         VDM_SET16(tib, VTIB_EBX, (WORD)count);
         /* No transition yet: the documented answer is the CURRENT position, not a
@@ -9145,15 +9145,15 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
            than the previous one. */
         volatile BYTE *guest = I33GuestPointer(tib, source, (WORD)VDM_REG16(tib, VTIB_ES),
                                          MouseI33Offset(tib, source, VDM_REG(tib, VTIB_EDX)),
-                                         2 * 2 * I33_GC_ROWS, 0);
+                                         I33_GC_DEFINITION_SIZE, 0);
         InterlockedExchange(&g_MouseHotX, (LONG)(SHORT)VDM_REG16(tib, VTIB_EBX));
         InterlockedExchange(&g_MouseHotY, (LONG)(SHORT)VDM_REG16(tib, VTIB_ECX));
         ++g_MouseShapeSets;
         if (!guest) { ++g_MouseGraphicsCursorBadPointer; break; }
         {   WORD screen[I33_GC_ROWS], current[I33_GC_ROWS]; INT row;
             for (row = 0; row < I33_GC_ROWS; ++row) {
-                screen[row] = (WORD)(guest[2 * row] | (guest[2 * row + 1] << BYTE_SHIFT));
-                current[row] = (WORD)(guest[32 + 2 * row] | (guest[32 + 2 * row + 1] << BYTE_SHIFT));
+                screen[row] = (WORD)(guest[X86_WORD_SIZE * row] | (guest[X86_WORD_SIZE * row + 1] << BYTE_SHIFT));
+                current[row] = (WORD)(guest[I33_GC_CURSOR_MASK_OFFSET + X86_WORD_SIZE * row] | (guest[I33_GC_CURSOR_MASK_OFFSET + X86_WORD_SIZE * row + 1] << BYTE_SHIFT));
             }
             I33GraphicsCursorDefine(screen, current);
             InterlockedExchange(&g_MouseGraphicsCursorDefined, 1); }
@@ -9250,7 +9250,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
          not translated -- the same answer the US MOUSE.COM gives whatever it was told. */
     case I33_FN_SET_INTERRUPT_RATE:                                        /* set interrupt rate      */
         {   LONG rate = (LONG)VDM_REG16(tib, VTIB_EBX);
-            if (rate <= 4) InterlockedExchange(&g_MouseRate, rate); }
+            if (rate <= I33_RATE_MAX) InterlockedExchange(&g_MouseRate, rate); }
         break;
     case I33_FN_SET_DISPLAY_PAGE:                                        /* set display page        */
         InterlockedExchange(&g_MousePage, (LONG)VDM_REG16(tib, VTIB_EBX));
@@ -9280,9 +9280,9 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         if (I33AlternateSet(g_MouseAlt, (WORD)VDM_REG16(tib, VTIB_ECX),
                         (WORD)VDM_REG16(tib, VTIB_ES),
                         (UINT32)MouseI33Offset(tib, source, VDM_REG(tib, VTIB_EDX)))) {
-            VDM_SET16(tib, VTIB_EAX, 0x0018);
+            VDM_SET16(tib, VTIB_EAX, I33_FN_SET_ALTERNATE_HANDLER);
             ++g_MouseEventInstalls;
-        } else VDM_SET16(tib, VTIB_EAX, 0xFFFF);
+        } else VDM_SET16(tib, VTIB_EAX, I33_FAILED);
         break;
     case I33_FN_GET_ALTERNATE_HANDLER: {
         INT byteIndex = I33AlternateFind(g_MouseAlt, (WORD)VDM_REG16(tib, VTIB_ECX));
@@ -9304,8 +9304,8 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
            AX/BX the same way. We have no hardware to re-probe, so the two are the
            same action here -- but say so, rather than letting 21h fall through to a
            `default:` that would leave AX holding 0x21. */
-        VDM_SET16(tib, VTIB_EAX, 0xFFFF);
-        VDM_SET16(tib, VTIB_EBX, 0x0002);
+        VDM_SET16(tib, VTIB_EAX, I33_INSTALLED);
+        VDM_SET16(tib, VTIB_EBX, I33_BUTTON_COUNT);
         I33ResetState();
         break;
     /* ── 1Fh DISABLE DRIVER: WE REFUSE, AND THAT IS THE SAFE ANSWER. ────────────
@@ -9317,13 +9317,13 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
          jump to the interrupt table. AX=FFFFh (failure) is both true and harmless --
          a guest that cannot disable the driver simply carries on using it. */
     case I33_FN_DISABLE_DRIVER:
-        VDM_SET16(tib, VTIB_EAX, 0xFFFF);
+        VDM_SET16(tib, VTIB_EAX, I33_FAILED);
         break;
     case I33_FN_GET_DRIVER_VERSION:                                        /* driver version / type   */
-        VDM_SET16(tib, VTIB_EBX, 0x0800);               /* report 8.00             */
+        VDM_SET16(tib, VTIB_EBX, I33_DRIVER_VERSION);               /* report 8.00             */
         /* CH=04 PS/2. CL is the IRQ, and the real driver answers FF for a PS/2
            mouse rather than 0 -- measured, p_mouse.asm i33.24.version. */
-        VDM_SET16(tib, VTIB_ECX, 0x04FF);
+        VDM_SET16(tib, VTIB_ECX, (I33_MOUSE_TYPE_PS2 << BYTE_SHIFT) | I33_PS2_IRQ);
         break;
     case I33_FN_GET_MAXIMUM_VIRTUAL:                                        /* max virtual coordinates */
         VDM_SET16(tib, VTIB_EBX, 0x0000);               /* driver not disabled     */
@@ -9341,9 +9341,9 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
            graphics), 11-8 = 1Ch's interrupt rate, 7-0 = Mouse Display Drivers loaded
            (none). BX/CX/DX = cursor lock / in mouse code / mouse busy: all 0 -- the
            driver is host code and is never "busy" from the guest's side. */
-        WORD cursorType = (WORD)(g_Video.ModeKind != VIDEO_KIND_TEXT || g_Video.IsVesa ? 2
-                            : g_MouseTcHardware ? 1 : 0);
-        VDM_SET16(tib, VTIB_EAX, (WORD)(0x4000u | (cursorType << 12) | ((g_MouseRate & 0x0F) << BYTE_SHIFT)));
+        WORD cursorType = (WORD)(g_Video.ModeKind != VIDEO_KIND_TEXT || g_Video.IsVesa ? I33_CURSOR_GRAPHICS
+                            : g_MouseTcHardware ? I33_CURSOR_HARDWARE_TEXT : I33_CURSOR_SOFTWARE_TEXT);
+        VDM_SET16(tib, VTIB_EAX, (WORD)(I33_INFO_INTEGRATED_DRIVER | (cursorType << I33_INFO_CURSOR_TYPE_SHIFT) | ((g_MouseRate & I33_INFO_RATE_MASK) << BYTE_SHIFT)));
         VDM_SET16(tib, VTIB_EBX, 0x0000);
         VDM_SET16(tib, VTIB_ECX, 0x0000);
         VDM_SET16(tib, VTIB_EDX, 0x0000);
@@ -9362,7 +9362,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
     case I33_FN_SET_VIDEO_MODE:                                        /* set video mode          */
         /* The driver sets modes only from its own list (29h), and it has none: the
            mode set belongs to INT 10h. CL != 0 = failed. */
-        VDM_SET16(tib, VTIB_ECX, (WORD)((VDM_REG(tib, VTIB_ECX) & HIGH_BYTE_MASK) | 0x00FF));
+        VDM_SET16(tib, VTIB_ECX, (WORD)((VDM_REG(tib, VTIB_ECX) & HIGH_BYTE_MASK) | I33_VIDEO_MODE_FAILED));
         break;
     case I33_FN_ENUMERATE_VIDEO_MODES:                                        /* enumerate video modes   */
         /* CX = 0: the end of the list, at once. (DS:DX would name the mode; DX = 0 and
@@ -9378,7 +9378,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         VDM_SET16(tib, VTIB_EAX, (WORD)(SHORT)(-g_MouseHidden));
         VDM_SET16(tib, VTIB_EBX, (WORD)(SHORT)g_MouseHotX);
         VDM_SET16(tib, VTIB_ECX, (WORD)(SHORT)g_MouseHotY);
-        VDM_SET16(tib, VTIB_EDX, 0x0004);
+        VDM_SET16(tib, VTIB_EDX, I33_MOUSE_TYPE_PS2);
         break;
     /* ══ 2Bh-2Eh, 33h, 34h: THE PROFILES, THE SETTINGS BLOCK, THE .INI NAME. (#265) ══
          All reached `default:` (and 32h said so). The register contracts are RBIL's; the
@@ -9391,16 +9391,16 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
            ES:SI -> a 144h-byte block (not read for FFFFh). */
         WORD bx = (WORD)VDM_REG16(tib, VTIB_EBX);
         ++g_MouseAccelerationCalls; I33AccelerationReady();
-        if (bx == 0xFFFF) { I33AccelerationDefaults(g_MouseAcceleration); g_MouseAccelerationCurrent = I33_ACC_DEFAULT; }
+        if (bx == I33_ACCELERATION_RESTORE_DEFAULTS) { I33AccelerationDefaults(g_MouseAcceleration); g_MouseAccelerationCurrent = I33_ACC_DEFAULT; }
         else if (bx >= 1 && bx <= I33_ACC_N) {
             volatile BYTE *guest = I33GuestPointer(tib, source, (WORD)VDM_REG16(tib, VTIB_ES),
                                              MouseI33Offset(tib, source, VDM_REG(tib, VTIB_ESI)),
                                              I33_ACC_LEN, 0);
             UINT index;
-            if (!guest) { ++g_MouseStateBadPointer; VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
+            if (!guest) { ++g_MouseStateBadPointer; VDM_SET16(tib, VTIB_EAX, I33_ACCELERATION_ERROR); break; }
             for (index = 0; index < I33_ACC_LEN; ++index) g_MouseAcceleration[index] = guest[index];
             g_MouseAccelerationCurrent = bx;
-        } else { VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
+        } else { VDM_SET16(tib, VTIB_EAX, I33_ACCELERATION_ERROR); break; }
         VDM_SET16(tib, VTIB_EAX, 0x0000);
         break; }
     case I33_FN_GET_ACCELERATION_PROFILES: {                                      /* get acceleration profiles  */
@@ -9420,12 +9420,12 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         WORD bx = (WORD)VDM_REG16(tib, VTIB_EBX);
         volatile BYTE *driverData = I33DriverData(); UINT index;
         ++g_MouseAccelerationCalls; I33AccelerationReady();
-        if (bx != 0xFFFF && (bx < 1 || bx > I33_ACC_N)) {
-            VDM_SET16(tib, VTIB_EAX, 0xFFFE);
+        if (bx != I33_ACCELERATION_QUERY && (bx < 1 || bx > I33_ACC_N)) {
+            VDM_SET16(tib, VTIB_EAX, I33_ACCELERATION_ERROR);
             VDM_SET16(tib, VTIB_EBX, (WORD)g_MouseAccelerationCurrent);
             break;
         }
-        if (bx != 0xFFFF) g_MouseAccelerationCurrent = bx;
+        if (bx != I33_ACCELERATION_QUERY) g_MouseAccelerationCurrent = bx;
         for (index = 0; index < I33_ACC_LEN; ++index) driverData[VDD_MOUSE_ACC + index] = g_MouseAcceleration[index];
         VDM_SET16(tib, VTIB_EAX, 0x0000);
         VDM_SET16(tib, VTIB_EBX, (WORD)g_MouseAccelerationCurrent);
@@ -9443,7 +9443,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
                                          I33_ACC_N * I33_ACC_NAMELEN, fill);
         UINT index;
         ++g_MouseAccelerationCalls; I33AccelerationReady();
-        if (!guest) { ++g_MouseStateBadPointer; VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
+        if (!guest) { ++g_MouseStateBadPointer; VDM_SET16(tib, VTIB_EAX, I33_ACCELERATION_ERROR); break; }
         if (fill) {
             I33AccelerationDefaultNames(g_MouseAcceleration + I33_ACC_NAMES);
             for (index = 0; index < I33_ACC_N * I33_ACC_NAMELEN; ++index) guest[index] = g_MouseAcceleration[I33_ACC_NAMES + index];
@@ -9464,7 +9464,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         if (cap) guest = I33GuestPointer(tib, source, (WORD)VDM_REG16(tib, VTIB_ES),
                                    MouseI33Offset(tib, source, VDM_REG(tib, VTIB_EDX)), cap, 1);
         if (!guest) { if (cap) ++g_MouseStateBadPointer; cap = 0; }
-        settings.Type = 4; settings.Language = 0;
+        settings.Type = I33_MOUSE_TYPE_PS2; settings.Language = I33_LANGUAGE_ENGLISH;
         settings.HorizontalSpeed = (BYTE)g_MouseSpeedX; settings.VerticalSpeed = (BYTE)g_MouseSpeedY;
         settings.DoubleSpeed = (BYTE)g_MouseSpeedDouble; settings.Curve = (BYTE)g_MouseAccelerationCurrent;
         settings.Rate = (BYTE)g_MouseRate;
@@ -9488,10 +9488,10 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
     case I33_FN_HARDWARE_RESET:                                        /* mouse hardware reset    */
         /* FFFFh = done. There is no device under us to re-initialise; the driver's
            own state is untouched, as the call documents (00h/21h reset that). */
-        VDM_SET16(tib, VTIB_EAX, 0xFFFF);
+        VDM_SET16(tib, VTIB_EAX, I33_HARDWARE_RESET_DONE);
         break;
     case I33_FN_BALLPOINT_INFO:                                        /* BallPoint information   */
-        VDM_SET16(tib, VTIB_EAX, 0xFFFF);               /* FFFFh = no BallPoint    */
+        VDM_SET16(tib, VTIB_EAX, I33_NO_BALLPOINT);               /* FFFFh = no BallPoint    */
         break;
     case I33_FN_GET_CURRENT_VIRTUAL:                                        /* current min/max virtual */
         VDM_SET16(tib, VTIB_EAX, (WORD)I33RangeXMinimum());

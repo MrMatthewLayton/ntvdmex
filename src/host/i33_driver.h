@@ -49,6 +49,32 @@
      `i33.09.13h.hot.*` rows read where the oracle put the bitmap. */
 #define I33_GC_ROWS 16
 
+/* What MouseInt33 answers with, as its comments name them. */
+#define I33_INSTALLED                   0xFFFF  /* 00h AX: a driver is present          */
+#define I33_FAILED                      0xFFFF  /* 18h / 1Fh AX                         */
+#define I33_NO_BALLPOINT                0xFFFF  /* 30h AX                               */
+#define I33_HARDWARE_RESET_DONE         0xFFFF  /* 2Fh AX                               */
+#define I33_BUTTON_COUNT                0x0002
+#define I33_DRIVER_VERSION              0x0800  /* 24h BX: 8.00                         */
+#define I33_MOUSE_TYPE_PS2              0x04    /* 24h CH, 2Ah DX, 33h's type           */
+#define I33_PS2_IRQ                     0xFF    /* 24h CL: what a real driver says for PS/2 */
+#define I33_LANGUAGE_ENGLISH            0
+#define I33_VIDEO_MODE_FAILED           0xFF    /* 28h CL: nonzero = failed             */
+#define I33_RATE_MAX                    4       /* 1Ch's rate codes, 0-4                */
+#define I33_ACCELERATION_RESTORE_DEFAULTS 0xFFFF  /* 2Bh BX                             */
+#define I33_ACCELERATION_QUERY          0xFFFF  /* 2Dh BX: only ask                     */
+#define I33_ACCELERATION_ERROR          0xFFFE  /* 2Bh-2Eh AX                           */
+/* 25h AX: bit 14 = the integrated driver, 13-12 = the cursor type, 11-8 = 1Ch's rate. */
+#define I33_INFO_INTEGRATED_DRIVER      0x4000u
+#define I33_INFO_CURSOR_TYPE_SHIFT      12
+#define I33_INFO_RATE_MASK              0x0F
+#define I33_CURSOR_SOFTWARE_TEXT        0
+#define I33_CURSOR_HARDWARE_TEXT        1
+#define I33_CURSOR_GRAPHICS             2
+/* 09h's ES:DX: the screen mask, then the cursor mask, one WORD per row. */
+#define I33_GC_CURSOR_MASK_OFFSET       (I33_GC_ROWS * X86_WORD_SIZE)
+#define I33_GC_DEFINITION_SIZE          (2 * I33_GC_CURSOR_MASK_OFFSET)
+
 /* INT 33h functions (AX), as MouseInt33's comments name them. */
 #define I33_FN_RESET                          0x0000
 #define I33_FN_SHOW_CURSOR                    0x0001
