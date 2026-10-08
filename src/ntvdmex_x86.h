@@ -290,6 +290,7 @@
 
 #define VECTOR_NMI                  0x02
 #define VECTOR_PRINT_SCREEN         0x05
+#define VECTOR_CTRL_BREAK           0x1B    /* the BIOS's Ctrl-Break hook              */
 #define VECTOR_TIMER                0x08    /* IRQ 0                                    */
 #define VECTOR_KEYBOARD             0x09    /* IRQ 1                                    */
 #define VECTOR_VIDEO                0x10    /* video BIOS                               */

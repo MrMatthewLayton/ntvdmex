@@ -3078,8 +3078,8 @@ static INT KeyboardActionEntry(INT keyboardAction)
 {
     UINT vector;
     switch (keyboardAction) {
-    case INPUT_ACTION_BREAK:  vector = 0x1B; break;
-    case INPUT_ACTION_PRINT_SCREEN:  vector = 0x05; break;
+    case INPUT_ACTION_BREAK:  vector = VECTOR_CTRL_BREAK; break;
+    case INPUT_ACTION_PRINT_SCREEN:  vector = VECTOR_PRINT_SCREEN; break;
     case INPUT_ACTION_SYSREQ_DOWN: return BIOS_KEYBOARD_ACTION_SYSREQ_DOWN;
     case INPUT_ACTION_SYSREQ_UP: return BIOS_KEYBOARD_ACTION_SYSREQ_UP;
     case INPUT_ACTION_PAUSE:  return BIOS_KEYBOARD_ACTION_PAUSE;
@@ -3094,7 +3094,7 @@ static INT KeyboardActionEntry(INT keyboardAction)
            target is not ours to vouch for, so the VDM's ROM is never entered from
            here: the call is made only once a guest, a TSR or a DOS has hooked the
            vector -- which is the case Ctrl-Break / Print Screen handling exists for. */
-        if (segment >= 0xF000) return -1;
+        if (segment >= BIOS_ROM_SEGMENT) return -1;
         if (target[0] == VDM_BOP0 && target[1] == VDM_BOP1 && segment != DOS_HDLR_SEG && segment != DOS_CTAB_SEG) return -1;
     }
     return keyboardAction == INPUT_ACTION_BREAK ? BIOS_KEYBOARD_ACTION_BREAK : BIOS_KEYBOARD_ACTION_PRINT_SCREEN;
@@ -3146,9 +3146,9 @@ static BYTE PrintScreenReadCharacter(PVOID context, BYTE row, BYTE column)
     NTVDD_REGISTERS registers;
     (VOID)context;
     ZeroMemory(&registers, sizeof registers);
-    registers.Eax = 0x0200; registers.Ebx = (DWORD)g_PrintScreen.Page << BYTE_SHIFT; registers.Edx = ((DWORD)row << BYTE_SHIFT) | column;
+    registers.Eax = VIDEO_FUNCTION_SET_CURSOR << BYTE_SHIFT; registers.Ebx = (DWORD)g_PrintScreen.Page << BYTE_SHIFT; registers.Edx = ((DWORD)row << BYTE_SHIFT) | column;
     PrintScreenInt10(&registers);                                   /* set cursor  */
-    registers.Eax = 0x0800; registers.Ebx = (DWORD)g_PrintScreen.Page << BYTE_SHIFT;
+    registers.Eax = VIDEO_FUNCTION_READ_CHARACTER << BYTE_SHIFT; registers.Ebx = (DWORD)g_PrintScreen.Page << BYTE_SHIFT;
     PrintScreenInt10(&registers);                                   /* read cell   */
     return (BYTE)registers.Eax;
 }
@@ -3196,11 +3196,11 @@ static VOID DosAuxOut(PVOID context, BYTE character)
 {
     NTVDD_REGISTERS registers;
     (VOID)context;
-    registers.Eax = 0x0100u | character;                         /* INT 14h AH=01h, COM1 (DX=0) */
+    registers.Eax = (BIOS_SERIAL_SEND << BYTE_SHIFT) | character;                         /* INT 14h AH=01h, COM1 (DX=0) */
     registers.Ebx = registers.Ecx = registers.Edx = registers.Esi = registers.Edi = registers.Ebp = 0;
     registers.Ds = registers.Es = 0; registers.CarryFlag = registers.ZeroFlag = 0;
     HOST_LOCK();
-    VddBusDeliverInterrupt(&g_Bus, 0x14, &registers);
+    VddBusDeliverInterrupt(&g_Bus, VECTOR_SERIAL, &registers);
     HOST_UNLOCK();
 }
 
@@ -3239,11 +3239,11 @@ INT WowCommOpen(PCSTR device)
 static INT WowCommValid(INT port)
 { return port >= 0 && port < WOWCOMM_MAX && g_WowCommOpen[port]; }
 INT WowCommClose(INT port)
-{ if (!WowCommValid(port)) return -2; g_WowCommOpen[port] = 0; return 0; }
+{ if (!WowCommValid(port)) return WOWUSER_COMM_FAILED; g_WowCommOpen[port] = 0; return 0; }
 INT WowCommRead(INT port, BYTE *buffer, INT count)
 {
     INT got = 0;
-    if (!WowCommValid(port)) return -2;
+    if (!WowCommValid(port)) return WOWUSER_COMM_FAILED;
     /* Straight off the same receive ring the guest would see through RBR. */
     while (got < count && g_Comm.Ports[port].ReceiveLength) {
         UINT32 value = 0;
@@ -3255,7 +3255,7 @@ INT WowCommRead(INT port, BYTE *buffer, INT count)
 INT WowCommWrite(INT port, const BYTE *buffer, INT count)
 {
     INT index;
-    if (!WowCommValid(port)) return -2;
+    if (!WowCommValid(port)) return WOWUSER_COMM_FAILED;
     for (index = 0; index < count; ++index) {
         UINT32 value = buffer[index];
         VddBusIo(&g_Bus, (WORD)(g_Comm.Ports[port].BasePort + COMM_RBR), 1, 0, &value);
@@ -3320,17 +3320,17 @@ static HMENU        g_FsMenu;
      The ASYNCHRONOUS injector covers the slave too: a latch that only waits for the
      next trap delivers once per timer tick to a guest that spins -- measured with
      p_irq8.com, 5 RTC interrupts in 5 BIOS ticks against ~280 on three real machines. */
-static volatile LONG  g_IrqNPending[16];
+static volatile LONG  g_IrqNPending[PIC_LINES];
 static const BYTE  g_IrqOrder[14] = { 2, 8, 9, 10, 11, 12, 13, 14, 15, 3, 4, 5, 6, 7 };
 /* The PROTECTED-mode vector a DPMI client hooks for a line: DPMI 0.9 reflects hardware
    interrupts at the PIC's own vector numbers, 08h-0Fh and 70h-77h. */
-static UINT IrqPmVector(UINT irq) { return irq < 8 ? 0x08u + irq : 0x70u + (irq - 8u); }
+static UINT IrqPmVector(UINT irq) { return irq < PIC_LINES_PER_CHIP ? PIC_MASTER_VECTOR_BASE + irq : PIC_SLAVE_VECTOR_BASE + (irq - PIC_LINES_PER_CHIP); }
 /* Retry accounting for the one-attempt-per-sync device-IRQ offer in HostPitSync.
    `try` counts syncs where something was pending and we spent a round trip on it;
    `ok` counts the ones that landed. try==ok==0 is the healthy steady state -- it
    means every device IRQ was placed at its raise instant and this cost nothing. */
 static DWORD g_IrqNRetryTry = 0, g_IrqNRetryOk = 0, g_IrqNRetryWhy = 0;
-static DWORD          g_IrqRaised[16];     /* VddRaiseIrq calls, per line */
+static DWORD          g_IrqRaised[PIC_LINES];     /* VddRaiseIrq calls, per line */
 static DWORD          g_IrqRaisedAny = 0;
 /* Async preemption (session 11). g_HostCpu is a handle to the thread that runs the guest
    -- VdmQueueInterrupt's ServiceData -- duplicated once from the exec thread itself.
@@ -3488,7 +3488,7 @@ static VOID HostPitResyncCheck(VOID)
         }
     }
 }
-
+enum { IRQ0_ISR_GAP_RESET_MS = 100 };   /* Irq0CanDeliver: a stall this long restarts the ISR clock */
 /* Can IRQ0 be delivered now? The PIC's answer, plus safety net 1. Called at both
    delivery sites (cooperative exec loop and the async courier). */
 static DWORD g_Irq0LastAttempt = 0;   /* GetTickCount()|1 at the last delivery attempt */
@@ -3506,7 +3506,7 @@ static INT Irq0CanDeliver(VOID)
              share under the device lock), the guest's handler included. Time the guest
              did not get cannot count against it. If this is the first attempt after a
              gap longer than the timeout's own resolution, restart the clock instead. */
-        if (since && gap > 100u) { g_Irq0IsrSince = now; since = now; }
+        if (since && gap > IRQ0_ISR_GAP_RESET_MS) { g_Irq0IsrSince = now; since = now; }
         if (since && (now - since) > IRQ0_ISR_TIMEOUT_MS) {
             VddPicEndOfInterrupt(&g_Pic, 0);
             g_Irq0IsrSince = 0;
@@ -3635,11 +3635,11 @@ static LONG g_AsyncWhy = 0;
      timer/UI thread is the only writer; a torn count would cost a unit, not a wrong
      conclusion) and no I/O, so it costs nothing at the PIT's rate. */
 #define ASYNC_WHY_MAX 32
-static DWORD g_AsyncWhyHistogram[8][ASYNC_WHY_MAX];
+static DWORD g_AsyncWhyHistogram[PIC_LINES_PER_CHIP][ASYNC_WHY_MAX];
 static VOID AsyncWhyNote(UINT irq, UINT why)
 {
     g_AsyncWhy = (LONG)why;
-    if (why < ASYNC_WHY_MAX) g_AsyncWhyHistogram[irq & 7][why]++;
+    if (why < ASYNC_WHY_MAX) g_AsyncWhyHistogram[irq & (PIC_LINES_PER_CHIP - 1)][why]++;
 }
 /* ── THE IF/VIF CENSUS (s81). MEASURES; DECIDES NOTHING. ─────────────────────────────
      `irq8.nested` (4 vs 0 on three oracles) is the gate asking "IF **or** VIF": a handler
@@ -3662,7 +3662,7 @@ static VOID AsyncWhyNote(UINT irq, UINT why)
      s81 run 1 (p_irq8): live IF was 1 in every sample; the nested IRQ 8s came through
      path 2, which the first cut did not count -- hence S and the delivery trace. */
 static DWORD g_IfvCensus[3][8];
-static DWORD g_IfvShadow[16];
+static DWORD g_IfvShadow[PIC_LINES];
 static DWORD g_IfvStarveT0, g_IfvStarveMaximumMs, g_IfvStarveCount;
 static INT   g_IfvStarveOpen;
 static INT   g_VifLiveSeen;   /* a live V86 frame has shown VIF set: VME is keeping it */
@@ -3691,13 +3691,13 @@ static VOID IfvNote(INT path, DWORD flags)
 #define IFV_TRACE_MAX 40
 static struct { BYTE Irq, Path, State; WORD Cs, Ip; DWORD Flags; } g_IfvTrace[IFV_TRACE_MAX];
 static LONG g_IfvTraceCount;
-static DWORD g_IfvReenter[16];
+static DWORD g_IfvReenter[PIC_LINES];
 static VOID IfvTrace(UINT irq, INT path, DWORD flags, DWORD codeSegment, DWORD instructionPointer)
 {
     LONG index;
     UINT vector = VddPicVector(&g_Pic, (BYTE)irq);
     INT isReentry = (codeSegment == PeekWord(IVT_SEGMENT_ADDRESS(vector))) && ((WORD)(instructionPointer - PeekWord(IVT_OFFSET_ADDRESS(vector))) < 0x60);
-    if (isReentry) ++g_IfvReenter[irq & 15];
+    if (isReentry) ++g_IfvReenter[irq & (PIC_LINES - 1)];
     if (!isReentry && g_IfvTraceCount >= 8) return;
     index = InterlockedIncrement(&g_IfvTraceCount) - 1;
     if (index >= IFV_TRACE_MAX) return;
@@ -3709,7 +3709,7 @@ static volatile LONG g_AsyncPmActive = 0;  /* an async PM interrupt is in flight
 static DWORD g_AsyncPmEip = 0, g_AsyncPmEsp = 0, g_AsyncPmEflags = 0;
 static WORD  g_AsyncPmCs  = 0, g_AsyncPmSs  = 0;
 static DWORD g_AsyncPmInjected = 0;             /* delivered                              */
-static DWORD g_AsyncInjectedLine[16];            /* ...and which IRQ line each one was      */
+static DWORD g_AsyncInjectedLine[PIC_LINES];            /* ...and which IRQ line each one was      */
 static DWORD g_AsyncPmBail2 = 0;           /* PM async attempts that did not commit  */
 #define DPMI_WATCH_MAX 4
 static DWORD g_PmWatch[DPMI_WATCH_MAX];     /* linear addresses to watch (whitespace-separated) */
@@ -3748,7 +3748,7 @@ static DWORD g_PmIrq0Done   = 0;           /* cooperative injections that reache
      units error of exactly the kind that has cost this project rig runs before.
      Count the cooperative arm per VECTOR and print both arms against `raises`, so the
      line answers the question it appears to answer. */
-static DWORD g_PmCooperativeLine[8];
+static DWORD g_PmCooperativeLine[PIC_LINES_PER_CHIP];
 /* ── #172: WHY THE PER-PASS TIMER LATCH LEFT A BACKLOG STANDING. ─────────────────
      Doom's quit wait (I_WaitVBL, a PM 3DAh poll) drops IRQ0 to ~25/s, and s81 filed it
      as ticks never RAISED. The same run's IRQ0WHY says otherwise -- gen=0 del=0x9e: every
@@ -3802,7 +3802,7 @@ static VOID PmInjectDeclineNote(INT why, WORD cs, DWORD eip)
      DpmiInjectPmIrq(), so a before/after snapshot of the counter brackets it exactly,
      with no new plumbing into the device model. Near zero here confirms it. */
 static UINT32 g_CooperativeDmaPolls;
-static UINT32 g_CooperativeDmaPollsDevice[8];   /* ...and the same, per DEVICE line */
+static UINT32 g_CooperativeDmaPollsDevice[PIC_LINES_PER_CHIP];   /* ...and the same, per DEVICE line */
 /* Count-register reads split by whether an ASYNC injection was in flight. Note the
    pair does NOT have to sum to the device's own rd_count[1]: this sees only reads
    dispatched through HostIoDo, and a gap between the two is itself informative. */
@@ -3940,7 +3940,7 @@ static volatile LONG g_SimIntBusy = 0;
      has left. Only DEVICE lines whose real-mode vector is the guest's own code are let
      through: our stubs in DOS_HDLR_SEG BOP, and the nested loop services no such BOP. */
 static volatile LONG g_NestedRm = 0;
-
+enum { ASYNC_FIRST_DEVICE_IRQ = 2 };   /* IRQ 0 and 1 (timer, keyboard) have their own paths */
 static INT AsyncInjectIrq(UINT irq)
 {
     if (irq >= PIC_LINES) { AsyncEarlyBail(irq, ASYNC_WHY_BAD_IRQ); return 0; }
@@ -3983,7 +3983,7 @@ static INT AsyncInjectIrq(UINT irq)
             }
             AsyncEarlyBail(irq, ASYNC_WHY_NESTED_TICK); return 0;
         }
-        if (!(g_NestedRm && irq >= 2 && PeekWord(IVT_SEGMENT_ADDRESS(vectorN)) != DOS_HDLR_SEG)) {
+        if (!(g_NestedRm && irq >= ASYNC_FIRST_DEVICE_IRQ && PeekWord(IVT_SEGMENT_ADDRESS(vectorN)) != DOS_HDLR_SEG)) {
             AsyncEarlyBail(irq, ASYNC_WHY_SIMINT_RM); return 0; }
     }
     /* Ask the PIC, exactly as the hardware would: is this line unmasked, and is nothing of
@@ -4011,7 +4011,7 @@ static INT AsyncInjectIrq(UINT irq)
       INT rmHooked = !(PeekWord(IVT_SEGMENT_ADDRESS(vector0)) == DOS_HDLR_SEG
                         && PeekWord(IVT_OFFSET_ADDRESS(vector0)) == DOS_IRET_STUB_OFF);
       INT pmHooked = g_DpmiPm && g_PmInt[IrqPmVector(irq)].Client;
-      if (irq >= 2 && !rmHooked && !pmHooked) { AsyncEarlyBail(irq, ASYNC_WHY_UNHOOKED); return 0; } }
+      if (irq >= ASYNC_FIRST_DEVICE_IRQ && !rmHooked && !pmHooked) { AsyncEarlyBail(irq, ASYNC_WHY_UNHOOKED); return 0; } }
     /* Exclusive ownership of the guest's context for the whole suspend/rewrite/resume.
        See g_AsyncContextWrite. Declining is free -- the other owner is placing an interrupt
        right now, so this line simply takes the next opportunity. */
@@ -4180,7 +4180,7 @@ static INT AsyncInjectIrq(UINT irq)
     /* s92 (#239): a line only a PROTECTED-MODE handler wants is not delivered into V86
          through the IVT -- whose entry is our IRET stub, where it would be acknowledged
          and lost. Left pending (return 0) for the PM path; see V86DeliverDeviceIrq. */
-    if (irq >= 2 && g_DpmiPm && g_PmInt[IrqPmVector(irq)].Client) {
+    if (irq >= ASYNC_FIRST_DEVICE_IRQ && g_DpmiPm && g_PmInt[IrqPmVector(irq)].Client) {
         UINT vector1 = VddPicVector(&g_Pic, (BYTE)irq);
         if (PeekWord(IVT_SEGMENT_ADDRESS(vector1)) == DOS_HDLR_SEG && PeekWord(IVT_OFFSET_ADDRESS(vector1)) == DOS_IRET_STUB_OFF) {
             ResumeThread(g_HostCpu);
@@ -4540,7 +4540,7 @@ static INT IfOrVif(DWORD flags) { return (flags & (EFLAGS_IF_U | EFLAGS_VIF)) !=
 static INT IsOurStubCsIp(DWORD cs, DWORD ip)
 {
     if (cs == DOS_HDLR_SEG) return 1;
-    return cs == DOS_CTAB_SEG && ip >= DOS_BIOS_STUBS && ip < DOS_BIOS_STUBS + DOS_BIOS_STUB_N * 4;
+    return cs == DOS_CTAB_SEG && ip >= DOS_BIOS_STUBS && ip < DOS_BIOS_STUBS + DOS_BIOS_STUB_N * DOS_BIOS_STUB_SIZE;
 }
 static INT GuestIfEnabled(volatile BYTE *tib)
 {
@@ -4556,12 +4556,12 @@ static INT GuestIfEnabled(volatile BYTE *tib)
 static DWORD PeekWidth(DWORD linear, INT width)
 { const volatile BYTE *memory = (const volatile BYTE *)0;
   if (width == 1) return memory[linear];
-  if (width == 2) return PeekWord(linear);
-  return (DWORD)PeekWord(linear) | ((DWORD)PeekWord(linear + 2) << WORD_SHIFT); }
+  if (width == X86_WORD_SIZE) return PeekWord(linear);
+  return (DWORD)PeekWord(linear) | ((DWORD)PeekWord(linear + X86_WORD_SIZE) << WORD_SHIFT); }
 static VOID PokeWidth(DWORD linear, DWORD value, INT width)
 { volatile BYTE *memory = (volatile BYTE *)0;
   if (width == 1) { memory[linear] = (BYTE)value; return; }
-  if (width == 2) { PokeWord(linear, (WORD)value); return; }
+  if (width == X86_WORD_SIZE) { PokeWord(linear, (WORD)value); return; }
   PokeDword(linear, value); }
 
 /* GH #18 / sound epic: sample the kernel's FIXED_NTVDMSTATE word next to the
@@ -4803,8 +4803,8 @@ static VOID RecoveryWrite(UINT value)
     HANDLE handle = CreateFileA(STARTFAIL_PATH, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (handle == INVALID_HANDLE_VALUE) return;
-    if (value >= 10) buffer[index++] = (CHAR)('0' + (value / 10) % 10);
-    buffer[index++] = (CHAR)('0' + value % 10);
+    if (value >= DECIMAL_RADIX) buffer[index++] = (CHAR)('0' + (value / DECIMAL_RADIX) % DECIMAL_RADIX);
+    buffer[index++] = (CHAR)('0' + value % DECIMAL_RADIX);
     buffer[index++] = '\r'; buffer[index++] = '\n';
     WriteFile(handle, buffer, (DWORD)index, &bytesWritten, NULL);
     FlushFileBuffers(handle);                /* the next start may be after a crash */
@@ -5319,7 +5319,7 @@ static INT HostHasFloppy(VOID)
 static INT HostHasCdrom(VOID)
 {
     DWORD drives = GetLogicalDrives(); CHAR root[4] = "C:\\"; INT drive;
-    for (drive = 2; drive < 26; ++drive) {
+    for (drive = DOS_DRIVE_C; drive < DOS_DRIVE_LETTERS; ++drive) {
         if (!(drives & (1u << drive))) continue;
         root[0] = (CHAR)('A' + drive);
         if (GetDriveTypeA(root) == DRIVE_CDROM) return 1;
@@ -5494,10 +5494,10 @@ static INT StdinReadByte(VOID)
 {
     BYTE byteValue; DWORD got = 0;
     if (!g_StdinHandle) return -1;
-    if (g_StdinEof) return 0x1A;
+    if (g_StdinEof) return ASCII_END_OF_FILE;
     if (!ReadFile(g_StdinHandle, &byteValue, 1, &got, NULL) || got != 1) {
         g_StdinEof = 1;
-        return 0x1A;
+        return ASCII_END_OF_FILE;
     }
     ++g_StdinBytes;
     return byteValue;
@@ -5644,8 +5644,8 @@ static INT StdioParentIs(HANDLE proc, DWORD parentProcessId)
         if (nameLength < wantLength) return 0;
         for (index = 0; index < wantLength; ++index) {
             CHAR tailCharacter = tail[index], wantCharacter = want[index];
-            if (tailCharacter >= 'A' && tailCharacter <= 'Z') tailCharacter = (CHAR)(tailCharacter + 32);
-            if (wantCharacter >= 'A' && wantCharacter <= 'Z') wantCharacter = (CHAR)(wantCharacter + 32);
+            if (tailCharacter >= 'A' && tailCharacter <= 'Z') tailCharacter = (CHAR)(tailCharacter + ASCII_CASE_BIT);
+            if (wantCharacter >= 'A' && wantCharacter <= 'Z') wantCharacter = (CHAR)(wantCharacter + ASCII_CASE_BIT);
             if (tailCharacter != wantCharacter) return 0;
         }
         }
@@ -5869,7 +5869,7 @@ static INT HostConsoleIn(PVOID context)
         WaitForSingleObject(g_KeyEvent, INPUT_KEY_WAIT_MS);
     }
 }
-
+#define TSC_RESYNC_INTERVAL_ULL 2000ull   /* ~2 ms of ticks between re-anchors */
 /* Advance the OPL timers from the real clock. The AdLib detect measures an 80us
    timer and games pace music on timer overflow, so the ~16ms bus frame tick is far
    too coarse -- the status register has to be current the moment the guest reads
@@ -5894,7 +5894,7 @@ static UINT64 HostTimeMicrosecondsQpc(VOID)
     QueryPerformanceCounter(&now);
     return (UINT64)(((now.QuadPart - base.QuadPart) * MICROSECONDS_PER_SECOND) / frequency.QuadPart);
 }
-
+enum { TSC_RESYNC_MIN_US = 500 };   /* HostTimeMicroseconds: an interval long enough to re-derive the rate */
 /* ── #183: THE BEAM CLOCK WITHOUT A SYSCALL PER READ. Every 3DAh status read asks this
      for the time, and a retrace-wait loop reads 3DAh flat out: s82's profiler put 40%
      of Wolf3D's exec-thread samples in ntdll, i.e. QueryPerformanceCounter, which is a
@@ -5932,13 +5932,13 @@ static UINT64 HostTimeMicroseconds(VOID)
         UINT64 qpcMicroseconds = HostTimeMicrosecondsQpc();
         if (clock->TscBase && qpcMicroseconds > clock->MicrosecondsBase && tsc > clock->TscBase) {
             UINT64 tscDelta = tsc - clock->TscBase, microsecondsDelta = qpcMicroseconds - clock->MicrosecondsBase;
-            if (microsecondsDelta >= 500) {                       /* a usable interval: re-derive rate */
+            if (microsecondsDelta >= TSC_RESYNC_MIN_US) {                       /* a usable interval: re-derive rate */
                 UINT64 multiplier = (microsecondsDelta << DWORD_SHIFT) / tscDelta;
-                clock->Multiplier = (UINT32)(multiplier > 0xFFFFFFFFull ? 0xFFFFFFFFull : multiplier);
-                if (clock->Multiplier) clock->Resync = (2000ull << DWORD_SHIFT) / clock->Multiplier;   /* ~2 ms of ticks */
+                clock->Multiplier = (UINT32)(multiplier > MAXDWORD ? MAXDWORD : multiplier);
+                if (clock->Multiplier) clock->Resync = (TSC_RESYNC_INTERVAL_ULL << DWORD_SHIFT) / clock->Multiplier;   /* ~2 ms of ticks */
             }
         }
-        if (!clock->Multiplier || !clock->TscBase || qpcMicroseconds - clock->MicrosecondsBase >= 500) { clock->TscBase = tsc; clock->MicrosecondsBase = qpcMicroseconds; }
+        if (!clock->Multiplier || !clock->TscBase || qpcMicroseconds - clock->MicrosecondsBase >= TSC_RESYNC_MIN_US) { clock->TscBase = tsc; clock->MicrosecondsBase = qpcMicroseconds; }
         if (!clock->Multiplier) { if (qpcMicroseconds > clock->Last) clock->Last = qpcMicroseconds; return clock->Last; }
     }
     microseconds = clock->MicrosecondsBase + (((tsc - clock->TscBase) * (UINT64)clock->Multiplier) >> DWORD_SHIFT);
@@ -5958,7 +5958,7 @@ static VOID OplTraceWrite(BYTE registerIndex, BYTE value)
     g_OplTrace[g_OplTraceCount].Value = value;
     g_OplTraceCount++;
 }
-
+enum { PIT_PACE_WAIT_PERIODS = 4 };   /* PitPacerThread: the event wait, in pacer periods */
 /* Write the trace out as text: one `us reg val` triple per line, hex. Text so it
    is diffable and survives the SMB round trip; a long run is well under a MB. */
 static VOID OplTraceDump(VOID)
@@ -5983,7 +5983,7 @@ static VOID OplTraceDump(VOID)
     }
     CloseHandle(handle);
 }
-
+enum { OPL_PUMP_QUANTUM_US = 20 };   /* OplPumpTime: shorter is carried to the next pump */
 static VOID OplPumpTime(VOID)
 {
     static LARGE_INTEGER frequency, last;
@@ -6000,7 +6000,7 @@ static VOID OplPumpTime(VOID)
     if (delta <= 0) return;
     if (delta > frequency.QuadPart) delta = frequency.QuadPart;       /* clamp a long stall to 1s */
     microseconds = (DWORD)((delta * MICROSECONDS_PER_SECOND) / frequency.QuadPart);
-    if (microseconds < 20) return;                                /* carry sub-quantum time   */
+    if (microseconds < OPL_PUMP_QUANTUM_US) return;                                /* carry sub-quantum time   */
     last = now;
     HOST_LOCK();
     VddOplAddMicroseconds(&g_Opl, microseconds);
@@ -6202,7 +6202,7 @@ static DWORD WINAPI PitPacerThread(LPVOID param)
         Int15EventPoll();                                    /* #206 */
         ++g_PitPaceCalls;
         /* The timeout only matters if the timer stops: then this is the Sleep loop. */
-        if (g_PitPaceTimer) WaitForSingleObject(g_PitPaceEvent, (DWORD)g_PitPaceMs * 4u);
+        if (g_PitPaceTimer) WaitForSingleObject(g_PitPaceEvent, (DWORD)g_PitPaceMs * PIT_PACE_WAIT_PERIODS);
         else                 Sleep((DWORD)g_PitPaceMs);
     }
     return 0;
@@ -6926,7 +6926,7 @@ static VOID HostAudioFill(PVOID context, INT16 *out, UINT32 frames)
        the same sample on resume. */
     if (g_PauseWant) {
         UINT32 index;
-        for (index = 0; index < frames * 2u; ++index) out[index] = 0;
+        for (index = 0; index < frames * AUDIO_STEREO_CHANNELS; ++index) out[index] = 0;
         return;
     }
     DmxSample();
