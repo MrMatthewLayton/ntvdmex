@@ -23,6 +23,8 @@
 #define PIT_PORT_CONTROL  0x43         /* the mode/command register             */
 #define PIT_FULL_COUNT_U  65536u        /* a reload of 0 counts the full 65536   */
 #define PIT_CONTROL_CHANNEL0_SQUARE 0x36 /* channel 0, low then high byte, mode 3, binary */
+#define PIT_CONTROL_SELECT_ACCESS_MASK 0xF0 /* channel and access bits; 00h = latch channel 0 */
+#define PIT_CONTROL_LATCH_COUNTER0  0x00
 #define PIT_COUNTERS      3              /* counters 0, 1 and 2                   */
 #define PIT_BINARY_WRAP   0x10000u       /* a count of 0 means 65536 in binary... */
 #define PIT_BCD_WRAP      10000u         /* ...and 10000 in four-decade BCD       */

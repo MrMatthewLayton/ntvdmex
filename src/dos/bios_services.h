@@ -39,6 +39,7 @@
 #define BIOS_SYSTEM_STATUS_BUSY         0x83    /* a wait is already counting      */
 #define BIOS_SYSTEM_STATUS_UNSUPPORTED  0x86
 #define BIOS_EVENT_WAIT_CANCEL          0x01    /* AH=83h AL                       */
+#define BIOS_EVENT_WAIT_POSTED          0x80    /* AH=83h: set in the caller's flag byte when time is up */
 #define BIOS_JOYSTICK_READ_BUTTONS      0x0000  /* AH=84h DX                       */
 #define BIOS_JOYSTICK_READ_AXES         0x0001
 

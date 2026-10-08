@@ -13,6 +13,8 @@
 #define ASCII_SPACE         0x20    /* and the first printable character         */
 #define ASCII_CASE_BIT      0x20    /* 'a' - 'A'                                 */
 #define ASCII_DELETE        0x7F    /* one past the last printable character     */
+#define ASCII_ESCAPE        0x1B
+#define ASCII_HIGH_FIRST    0x80    /* the first byte that is not 7-bit ASCII    */
 
 /* Reading a number from text, one digit at a time. */
 #define DECIMAL_RADIX       10

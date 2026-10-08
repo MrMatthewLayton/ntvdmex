@@ -972,7 +972,7 @@ static INT StrStrNoCase(PCSTR block, PCSTR name)
     PCSTR line = block;
     while (*line) {
         PCSTR cursor = line, nameCursor = name;
-        while (*nameCursor && *cursor && ((*cursor | 0x20) == (*nameCursor | 0x20) || (*cursor == *nameCursor))) { ++cursor; ++nameCursor; }
+        while (*nameCursor && *cursor && ((*cursor | ASCII_CASE_BIT) == (*nameCursor | ASCII_CASE_BIT) || (*cursor == *nameCursor))) { ++cursor; ++nameCursor; }
         if (!*nameCursor) return 1;
         while (*line && *line != '\n') ++line;
         if (*line) ++line;
@@ -3138,7 +3138,7 @@ static BYTE       g_PrintScreenStatus = BIOS_PRINT_SCREEN_STATUS_OK;   /* what 0
 static VOID PrintScreenInt10(NTVDD_REGISTERS *registers)
 {
     HOST_LOCK();
-    VddBusDeliverInterrupt(&g_Bus, 0x10, registers);
+    VddBusDeliverInterrupt(&g_Bus, VECTOR_VIDEO, registers);
     HOST_UNLOCK();
 }
 static BYTE PrintScreenReadCharacter(PVOID context, BYTE row, BYTE column)
@@ -5156,8 +5156,8 @@ static INT CommandLineHasForce(PCSTR command)
     PCSTR cursor;
     if (!command) return 0;
     for (cursor = command; *cursor; ++cursor)
-        if ((*cursor == '/' || *cursor == '-') && (cursor[1]|0x20) == 'f' && (cursor[2]|0x20) == 'o'
-            && (cursor[3]|0x20) == 'r' && (cursor[4]|0x20) == 'c' && (cursor[5]|0x20) == 'e'
+        if ((*cursor == '/' || *cursor == '-') && (cursor[1]|ASCII_CASE_BIT) == 'f' && (cursor[2]|ASCII_CASE_BIT) == 'o'
+            && (cursor[3]|ASCII_CASE_BIT) == 'r' && (cursor[4]|ASCII_CASE_BIT) == 'c' && (cursor[5]|ASCII_CASE_BIT) == 'e'
             && (!cursor[6] || cursor[6] == ' ' || cursor[6] == '\t' || cursor[6] == '"')) return 1;
     return 0;
 }
@@ -5631,7 +5631,7 @@ static INT StdioParentIs(HANDLE proc, DWORD parentProcessId)
     length = (INT)(imagePath.Length / sizeof(WCHAR));
     if (length >= MAX_PATH) length = MAX_PATH - 1;
     for (index = 0; index < length; ++index)
-        narrow[index] = (path[index] < 0x80) ? (CHAR)path[index] : '?';
+        narrow[index] = (path[index] < ASCII_HIGH_FIRST) ? (CHAR)path[index] : '?';
     narrow[length] = 0;
     /* Compare the FILE NAME, case-insensitively: the list gives a name, the PEB
        gives a full path, and it is the tail that has to agree. */
@@ -5846,7 +5846,7 @@ static VOID HostConsoleOut(PVOID context, BYTE ch)
    (measured: the guest parks at DOS_HDLR_SEG:0000, the INT 21h BOP, for the whole run).
    g_ConsoleInPending holds that second byte between the two calls. */
 static INT g_ConsoleInPending = -1;                /* scancode owed to the next read, or -1 */
-
+enum { INPUT_KEY_WAIT_MS = 50 };   /* a blocking key read's wait for the next key */
 static INT HostConsoleIn(PVOID context)
 {
     WORD key; INT got;
@@ -5862,11 +5862,11 @@ static INT HostConsoleIn(PVOID context)
         HOST_UNLOCK();
         if (got) {
             key = VddInputDosKey(key);           /* #254: grey-key E0 forms -> 83-key */
-            if ((key & BYTE_MASK) == 0) { g_ConsoleInPending = (key >> BYTE_SHIFT) & BYTE_MASK; return 0x00; }
+            if ((key & BYTE_MASK) == 0) { g_ConsoleInPending = (key >> BYTE_SHIFT) & BYTE_MASK; return ASCII_NUL; }
             return key & BYTE_MASK;
         }
-        if (!g_Running) return 0x1B;            /* window gone -> unblock as ESC   */
-        WaitForSingleObject(g_KeyEvent, 50);
+        if (!g_Running) return ASCII_ESCAPE;            /* window gone -> unblock as ESC   */
+        WaitForSingleObject(g_KeyEvent, INPUT_KEY_WAIT_MS);
     }
 }
 
@@ -6170,8 +6170,8 @@ static VOID Int15EventPoll(VOID)            /* pacer thread */
     QueryPerformanceCounter(&now);
     if (now.QuadPart < end) return;
     g_Int15EventEnd = 0;
-    *(volatile BYTE *)(ULONG_PTR)g_Int15EventLinear |= 0x80;      /* the caller's flag: time is up */
-    *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_ACTIVE) = 0x00;               /* 40:A0 wait no longer active  */
+    *(volatile BYTE *)(ULONG_PTR)g_Int15EventLinear |= BIOS_EVENT_WAIT_POSTED;      /* the caller's flag: time is up */
+    *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_ACTIVE) = BIOS_BDA_WAIT_NONE;               /* 40:A0 wait no longer active  */
     ++g_Int15Posted;
 }
 typedef MMRESULT (WINAPI *PFN_TIME_SET_EVENT)(UINT, UINT, LPTIMECALLBACK, DWORD_PTR, UINT);
@@ -6552,7 +6552,7 @@ static LONG ExecMicrosecondsNow(VOID)
     if (enterMicroseconds) accumulated += (LONG)(ULONG)(ExecClockMicroseconds() - enterMicroseconds);
     return accumulated;
 }
-
+enum { CPUSPEED_RELEASE_WAIT_MS = 5, CPUSPEED_CATCH_GRACE_MS = 250 };   /* the cooperative park */
 /* ── ★★ #225: THE COOPERATIVE CATCH. (user, round 11: "slow at busy times -- the
      crossfade, keyboard input") The throttle catches the guest by suspending it
      INSIDE VdmRunGuest; a guest that is in OUR servicing (a port trap, a BOP) cannot be
@@ -6579,8 +6579,8 @@ static VOID CpuSpeedCooperativePark(VOID)
     start = GetTickCount();
     InterlockedExchange(&g_CpuSpeedParked, 1);
     while (g_CpuSpeedCatchRequest && g_Running && !g_PauseWant) {
-        if (GetTickCount() - start > CPUSPEED_MAX_OFF_MS + 250u) { ++g_CpuSpeedCooperativeTimeouts; break; }
-        if (g_CpuSpeedRelease) WaitForSingleObject(g_CpuSpeedRelease, 5);
+        if (GetTickCount() - start > CPUSPEED_MAX_OFF_MS + CPUSPEED_CATCH_GRACE_MS) { ++g_CpuSpeedCooperativeTimeouts; break; }
+        if (g_CpuSpeedRelease) WaitForSingleObject(g_CpuSpeedRelease, CPUSPEED_RELEASE_WAIT_MS);
         else Sleep(1);
     }
     InterlockedExchange(&g_CpuSpeedParked, 0);
@@ -7387,7 +7387,7 @@ static DWORD WINAPI QueueIrqProbeThread(LPVOID parameter)
     }
     return 0;
 }
-
+enum { HEARTBEAT_MS = 500 };   /* HeartbeatThread: one line this often */
 /* Headless heartbeat (session 11). Both qirq runs stopped logging mid-run and reached
    NO exit path -- not the guest's 4Ch flush, not the deadline backstop's report -- which
    means the process died without user-mode notice. A once-per-500ms beat carrying the
@@ -7524,7 +7524,7 @@ static DWORD WINAPI HeartbeatThread(LPVOID parameter)
         }
         cursor = LogPut(cursor, "\r\n");
         LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor);
-        Sleep(500);
+        Sleep(HEARTBEAT_MS);
     }
     return 0;
 }
@@ -7889,7 +7889,7 @@ static INT HostConsoleInNoBlock(PVOID context)
     HOST_UNLOCK();
     if (!got) return -1;
     key = VddInputDosKey(key);                   /* #254: grey-key E0 forms -> 83-key */
-    if ((key & BYTE_MASK) == 0) { g_ConsoleInPending = (key >> BYTE_SHIFT) & BYTE_MASK; return 0x00; }
+    if ((key & BYTE_MASK) == 0) { g_ConsoleInPending = (key >> BYTE_SHIFT) & BYTE_MASK; return ASCII_NUL; }
     return key & BYTE_MASK;
 }
 
@@ -8875,7 +8875,7 @@ out:
         if (!status || ++saidRefused <= 16) {
             CHAR buffer[160], *cursor = buffer;
             cursor = LogPut(cursor, "  INT15 AH=87h move 0x"); cursor = LogHex(cursor, length);
-            cursor = LogPut(cursor, " bytes src=0x"); cursor = LogHex(cursor, gdt ? DosExtMemDescriptorBase(gdt + 0x10) : 0);
+            cursor = LogPut(cursor, " bytes src=0x"); cursor = LogHex(cursor, gdt ? DosExtMemDescriptorBase(gdt + BIOS_MOVE_BLOCK_SOURCE) : 0);
             cursor = LogPut(cursor, " dst=0x");       cursor = LogHex(cursor, gdt ? DosExtMemDescriptorBase(gdt + 0x18) : 0);
             cursor = LogPut(cursor, status ? " -> REFUSED (unresolvable range), AH=02\r\n" : " -> done\r\n");
             LogAppend(LOG_PATH, buffer, cursor);
@@ -11682,7 +11682,7 @@ static VOID HostPanicRelease(VOID)
                                if (prev == (DWORD)-1 || prev <= 1) break; }
     }
 }
-
+enum { CAPTURE_WATCH_MS = 250 };   /* CaptureWatchdogThread */
 /* ── ⛔⛔ THE LAST LINE OF DEFENCE: HAND THE MACHINE BACK WITHOUT BEING ASKED. ─────
      HostPanicRelease covers the paths where we KNOW we are going away. This covers
      the one where we do not: the UI thread stops pumping while capture is held. That
@@ -11705,7 +11705,7 @@ static DWORD WINAPI CaptureWatchdogThread(LPVOID parameter)
     DWORD lastMs = GetTickCount();
     (VOID)parameter;
     while (g_Running) {
-        Sleep(250);
+        Sleep(CAPTURE_WATCH_MS);
         if (!g_Captured) { last = g_UiBeat; lastMs = GetTickCount(); continue; }
         if (g_UiBeat != last) { last = g_UiBeat; lastMs = GetTickCount(); continue; }
         if (GetTickCount() - lastMs < CAPWD_STALL_MS) continue;
@@ -12563,7 +12563,7 @@ static VOID HostApplyWindowSize(HWND window, DWORD index)
      business, which is the thing that makes people stop touching the menu. */
 static DWORD g_WindowSizeLive = WINDOW_SETTING_UNSET_U;   /* what the window is currently AT */
 static DWORD g_AspectLive  = WINDOW_SETTING_UNSET_U;   /* ...and the shape it is that size IN */
-
+enum { WINDOW_RESIZE_SETTLE_MS = 150 };   /* a frame-size change must hold this long before it is applied */
 /* ── #325: THE WINDOW FOLLOWS THE MODE. When the frame's size changes -- text to a
      320x200 game, a VESA mode, Mode X -- a normal (not maximised, not fullscreen)
      window is re-sized to the new picture at the scale it is at. Debounced: the new
@@ -12579,7 +12579,7 @@ static VOID HostFollowFrame(HWND window)
     HostFrameSize(&frameWidth, &frameHeight);
     if (frameWidth == g_WindowFrameWidth && frameHeight == g_WindowFrameHeight) { pendW = pendH = 0; return; }
     if (frameWidth != pendW || frameHeight != pendH) { pendW = frameWidth; pendH = frameHeight; pendT = GetTickCount(); return; }
-    if (GetTickCount() - pendT < 150u) return;
+    if (GetTickCount() - pendT < WINDOW_RESIZE_SETTLE_MS) return;
     HostApplyScale(window, g_ScaleWant ? g_ScaleWant : (INT)g_Settings.Values[SET_WINSIZE] + 1);
 }
 
@@ -15076,7 +15076,7 @@ static VOID PitLatchNote(BYTE command)
          the planar interpreter. Fine for a debugging run, not for a build a person
          plays on -- shipping it enabled in s69 was a mistake, see vdd_video.h. */
     if (!g_Video.IsPort3DaRingOn) return;
-    if ((command & 0xF0) != 0x00 || g_PitLatchDumps >= 2 || !g_Video.Port3DaRingCount) return;
+    if ((command & PIT_CONTROL_SELECT_ACCESS_MASK) != PIT_CONTROL_LATCH_COUNTER0 || g_PitLatchDumps >= 2 || !g_Video.Port3DaRingCount) return;
     total = g_Video.Port3DaRingCount; count = total < VIDEO_PORT_3DA_RING ? total : VIDEO_PORT_3DA_RING;
     first = total - count; base = g_Video.Port3DaRingUs[first & (VIDEO_PORT_3DA_RING - 1)];
     g_PitLatchDumps++;
@@ -15870,7 +15870,7 @@ static VOID ModeYFanoutBarNote(UINT linearOffset, INT mask)
         if (linearOffset < page * 0x4000u || offset < YBAR_OFF_LO || offset >= YBAR_OFF_HI) continue;
         band = (offset < YBAR_OFF_MID) ? 0u : 1u;
         g_ModeYFanoutBarWrites[band]++;
-        if ((mask & 0x0F) == 0x0F) g_ModeYFanoutBar4Way[band]++;
+        if ((mask & VIDEO_ALL_PLANES) == VIDEO_ALL_PLANES) g_ModeYFanoutBar4Way[band]++;
         index = page * YBAR_PER_PAGE + (offset - YBAR_OFF_LO);
         if (!(g_ModeYFanoutBarSeen[index >> BITMAP_BYTE_SHIFT] & (1u << (index & BITMAP_BIT_MASK)))) {
             g_ModeYFanoutBarSeen[index >> BITMAP_BYTE_SHIFT] |= (BYTE)(1u << (index & BITMAP_BIT_MASK));
@@ -16084,8 +16084,8 @@ static VOID ModeYPmSiteNote(INT mask)
     }
     g_ModeYPmSite[index].Count++;
     if (mask >= 0) {
-        g_ModeYPmSite[index].Masks |= (WORD)(1u << (mask & 0x0F));
-        if ((mask & 0x0F) & ((mask & 0x0F) - 1)) g_ModeYPmSite[index].Multi++;
+        g_ModeYPmSite[index].Masks |= (WORD)(1u << (mask & VIDEO_ALL_PLANES));
+        if ((mask & VIDEO_ALL_PLANES) & ((mask & VIDEO_ALL_PLANES) - 1)) g_ModeYPmSite[index].Multi++;
     }
 }
 
@@ -16601,7 +16601,7 @@ static INT ModeYNeedsInterp(VOID)
 {
     BYTE mask;
     if (!g_ModeYRemap || !ModeYInterpServes() || g_Video.IsChain4) return 0;
-    mask = (BYTE)(g_Video.MapMask & 0x0F);
+    mask = (BYTE)(g_Video.MapMask & VIDEO_ALL_PLANES);
     return (mask & (BYTE)(mask - 1)) != 0 || (g_Video.WriteMode & 3) != 0;
 }
 
@@ -16668,7 +16668,7 @@ static INT InterpreterMemoryPageOk(UINT32 linear)
    the slow path, which is the old function unchanged. */
 static __attribute__((noinline)) BYTE InterpreterMemoryRead8Slow(UINT32 linear)
 { if (linear >= VIDEO_APERTURE_BASE && linear < VIDEO_MONO_BASE) return VddVideoPlanarRead(&g_Video, linear - VIDEO_APERTURE_BASE);
-  if (!InterpreterMemoryPageOk(linear)) { g_InterpreterMemoryBadReads++; InterpreterMemoryBadNote(linear, 0); return 0xFF; }
+  if (!InterpreterMemoryPageOk(linear)) { g_InterpreterMemoryBadReads++; InterpreterMemoryBadNote(linear, 0); return VDD_UNCLAIMED_READ_BYTE; }
   return *(volatile BYTE *)linear; }
 static __attribute__((noinline)) VOID InterpreterMemoryWrite8Slow(UINT32 linear, BYTE value)
 { if (linear >= VIDEO_APERTURE_BASE && linear < VIDEO_MONO_BASE) { VddVideoPlanarWrite(&g_Video, linear - VIDEO_APERTURE_BASE, value); return; }
@@ -16706,14 +16706,14 @@ static inline __attribute__((always_inline)) const volatile BYTE *V86HostCodePoi
 static VOID HostPitGenerate(VOID);
 static UINT32 V86HostIn(WORD port, INT width)
 { UINT32 value = 0;
-  if (port >= 0x40 && port <= 0x43) HostPitGenerate();
+  if (port >= PIT_PORT_COUNTER0 && port <= PIT_PORT_CONTROL) HostPitGenerate();
   VddBusIo(&g_Bus, port, (BYTE)width, 1, &value); return value; }
 static VOID V86HostOut(WORD port, INT width, UINT32 byteValue)
 { UINT32 value = byteValue;
-  if (port >= 0x40 && port <= 0x43) HostPitGenerate();
+  if (port >= PIT_PORT_COUNTER0 && port <= PIT_PORT_CONTROL) HostPitGenerate();
   VddBusIo(&g_Bus, port, (BYTE)width, 0, &value);
   if (port == 0x43) PitLatchNote((BYTE)byteValue);     /* same instrument as the reflected path */
-  if (port == 0x40) HostPitResyncCheck(); }         /* and the same resync rule           */
+  if (port == PIT_PORT_COUNTER0) HostPitResyncCheck(); }         /* and the same resync rule           */
 
 #include "v86interp.h"
 
@@ -16772,7 +16772,7 @@ static INT ModeYPmNeedsInterp(VOID)
     BYTE mask;
     if (!g_DpmiPm || g_ModeYPmOffset || g_ModeYInterpOffset || !g_ModeYRemap) return 0;
     if (g_Video.ModeKind != VIDEO_KIND_LINEAR8 || g_Video.IsChain4) return 0;
-    mask = (BYTE)(g_Video.MapMask & 0x0F);
+    mask = (BYTE)(g_Video.MapMask & VIDEO_ALL_PLANES);
     return (mask & (BYTE)(mask - 1)) != 0 || (g_Video.WriteMode & 3) != 0;
 }
 
@@ -16954,7 +16954,7 @@ static VOID ModeYRingNoteIrq(UINT vector, WORD cs, WORD ip, WORD ss, WORD sp)
     g_ModeYRing[index].Ss = cs;     g_ModeYRing[index].Sp = ip;
     for (byteIndex = 0; byteIndex < 6; ++byteIndex) g_ModeYRing[index].Bytes[byteIndex] = 0;
 }
-
+enum { HOST_PROFILE_STOP_WAIT_MS = 5 };   /* let the sampler see the stop */
 /* ── #183: WHERE DOES THE HOST'S TIME GO? A SAMPLING PROFILER, OPT-IN. ──────────────
      The interpreter's cost was estimated from the outside (instructions/s, us/s), and a
      change aimed at the estimate -- a jump table for opcode dispatch, +42% off-VM --
@@ -17014,7 +17014,7 @@ static VOID HostProfileDump(VOID)
     CHAR buffer[160], *cursor;
     INT rank;
     if (!g_HostProfile) return;
-    g_HostProfileOn = 0; Sleep(5);
+    g_HostProfileOn = 0; Sleep(HOST_PROFILE_STOP_WAIT_MS);
     cursor = LogPut(buffer, "STAGE2: HOSTPROF samples="); cursor = LogDecimal(cursor, g_HostProfileSamples);
     cursor = LogPut(cursor, " in_host_image="); cursor = LogDecimal(cursor, g_HostProfileIn);
     cursor = LogPut(cursor, " image_base=0x"); cursor = LogHex(cursor, g_HostProfileBase);
@@ -18028,9 +18028,9 @@ static WORD DpmiSegmentToDescriptor(WORD segment)
 static INT WowDlgIsSelectorAbsent(WORD selector)
 {
     WORD index = (WORD)(DPMI_SELECTOR_INDEX(selector));
-    return index && index < DPMI_LDT_MAX && !(g_Ldt[index].Access & 0x80);
+    return index && index < DPMI_LDT_MAX && !(g_Ldt[index].Access & X86_DESCRIPTOR_PRESENT);
 }
-
+enum { WOW_CALLBACK_STUB_LIMIT = 0x0F };   /* the callback stub's 16-byte segment */
 /* ── ★★★ A 16-BIT CODE SELECTOR OVER THE CALLBACK RETURN STUB. (session 40) ────────
      Not `DpmiSegmentToDescriptor`: that builds a DATA descriptor, and the guest has to
      EXECUTE these three bytes. The limit is one paragraph on purpose -- the stub is
@@ -18044,7 +18044,7 @@ static WORD WowCallbackSelector(VOID)
     index = DpmiHostIndex();       /* host-private: the guest returns THROUGH this */
     if (index < 0) return 0;
     g_Ldt[index].Base   = g_WowCallbackLinear;
-    g_Ldt[index].Limit  = 0x0F;
+    g_Ldt[index].Limit  = WOW_CALLBACK_STUB_LIMIT;
     g_Ldt[index].Access = DPMI_ACCESS_CODE;                /* present, DPL3, code, readable */
     g_Ldt[index].Flags  = 0;                   /* 16-bit                        */
     DpmiInstall(index);
@@ -20891,13 +20891,13 @@ static VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slo
     WORD machineStatusWord = *(volatile WORD *)(tib + VTIB_MSW);
     UINT phase; INT callbackDone = 0;
     /* fill the callback's RMCS with the real-mode register file + the return CS:IP:SS:SP */
-    *(volatile WORD*)(callStructureBytes+0x00)=VDM_REG(tib,VTIB_EDI); *(volatile WORD*)(callStructureBytes+0x04)=VDM_REG(tib,VTIB_ESI);
-    *(volatile WORD*)(callStructureBytes+0x08)=VDM_REG(tib,VTIB_EBP); *(volatile WORD*)(callStructureBytes+0x10)=VDM_REG(tib,VTIB_EBX);
-    *(volatile WORD*)(callStructureBytes+0x14)=VDM_REG(tib,VTIB_EDX); *(volatile WORD*)(callStructureBytes+0x18)=VDM_REG(tib,VTIB_ECX);
-    *(volatile WORD*)(callStructureBytes+0x1C)=VDM_REG(tib,VTIB_EAX); *(volatile WORD*)(callStructureBytes+0x22)=VDM_REG(tib,VTIB_ES);
-    *(volatile WORD*)(callStructureBytes+0x24)=VDM_REG(tib,VTIB_DS);  *(volatile WORD*)(callStructureBytes+0x20)=(WORD)VDM_REG(tib,VTIB_EFLAGS);
-    *(volatile WORD*)(callStructureBytes+0x2A)=retIP; *(volatile WORD*)(callStructureBytes+0x2C)=retCS;   /* CS:IP = far-call return */
-    *(volatile WORD*)(callStructureBytes+0x2E)=newSP; *(volatile WORD*)(callStructureBytes+0x30)=realSs;     /* SS:SP after popping it */
+    *(volatile WORD*)(callStructureBytes+RMCS_EDI)=VDM_REG(tib,VTIB_EDI); *(volatile WORD*)(callStructureBytes+RMCS_ESI)=VDM_REG(tib,VTIB_ESI);
+    *(volatile WORD*)(callStructureBytes+RMCS_EBP)=VDM_REG(tib,VTIB_EBP); *(volatile WORD*)(callStructureBytes+RMCS_EBX)=VDM_REG(tib,VTIB_EBX);
+    *(volatile WORD*)(callStructureBytes+RMCS_EDX)=VDM_REG(tib,VTIB_EDX); *(volatile WORD*)(callStructureBytes+RMCS_ECX)=VDM_REG(tib,VTIB_ECX);
+    *(volatile WORD*)(callStructureBytes+RMCS_EAX)=VDM_REG(tib,VTIB_EAX); *(volatile WORD*)(callStructureBytes+RMCS_ES)=VDM_REG(tib,VTIB_ES);
+    *(volatile WORD*)(callStructureBytes+RMCS_DS)=VDM_REG(tib,VTIB_DS);  *(volatile WORD*)(callStructureBytes+RMCS_FLAGS)=(WORD)VDM_REG(tib,VTIB_EFLAGS);
+    *(volatile WORD*)(callStructureBytes+RMCS_IP)=retIP; *(volatile WORD*)(callStructureBytes+RMCS_CS)=retCS;   /* CS:IP = far-call return */
+    *(volatile WORD*)(callStructureBytes+RMCS_SP)=newSP; *(volatile WORD*)(callStructureBytes+RMCS_SS)=realSs;     /* SS:SP after popping it */
     lineCursor = LogPut(lineCursor, "  0303-cb slot "); lineCursor = LogHex(lineCursor, slot); lineCursor = LogPut(lineCursor, " ret=0x"); lineCursor = LogHex(lineCursor, retCS);
     lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, retIP); lineCursor = LogPut(lineCursor, " -> PM handler 0x"); lineCursor = LogHex(lineCursor, g_Callbacks[slot].PmSelector);
     lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, g_Callbacks[slot].PmOffset); lineCursor = LogPut(lineCursor, "\r\n");
@@ -20949,14 +20949,14 @@ static VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slo
     /* handler done: un-patch again and resume the RM proc in V86 at the RMCS CS:IP */
     DpmiUnpatch();
     *(volatile WORD *)(tib + VTIB_MSW) = machineStatusWord;
-    VDM_REG(tib, VTIB_EFLAGS) = 0x20202;
-    VDM_REG(tib,VTIB_EDI)=*(volatile WORD*)(callStructureBytes+0x00); VDM_REG(tib,VTIB_ESI)=*(volatile WORD*)(callStructureBytes+0x04);
-    VDM_REG(tib,VTIB_EBP)=*(volatile WORD*)(callStructureBytes+0x08); VDM_REG(tib,VTIB_EBX)=*(volatile WORD*)(callStructureBytes+0x10);
-    VDM_REG(tib,VTIB_EDX)=*(volatile WORD*)(callStructureBytes+0x14); VDM_REG(tib,VTIB_ECX)=*(volatile WORD*)(callStructureBytes+0x18);
-    VDM_REG(tib,VTIB_EAX)=*(volatile WORD*)(callStructureBytes+0x1C);
-    VDM_SET16(tib,VTIB_ES,*(volatile WORD*)(callStructureBytes+0x22)); VDM_SET16(tib,VTIB_DS,*(volatile WORD*)(callStructureBytes+0x24));
-    VDM_SET16(tib,VTIB_CS,*(volatile WORD*)(callStructureBytes+0x2C)); VDM_REG(tib,VTIB_EIP)=*(volatile WORD*)(callStructureBytes+0x2A);
-    VDM_SET16(tib,VTIB_SS,*(volatile WORD*)(callStructureBytes+0x30)); VDM_REG(tib,VTIB_ESP)=*(volatile WORD*)(callStructureBytes+0x2E);
+    VDM_REG(tib, VTIB_EFLAGS) = EFLAGS_VM | EFLAGS_IF | EFLAGS_RESERVED_ONE;
+    VDM_REG(tib,VTIB_EDI)=*(volatile WORD*)(callStructureBytes+RMCS_EDI); VDM_REG(tib,VTIB_ESI)=*(volatile WORD*)(callStructureBytes+RMCS_ESI);
+    VDM_REG(tib,VTIB_EBP)=*(volatile WORD*)(callStructureBytes+RMCS_EBP); VDM_REG(tib,VTIB_EBX)=*(volatile WORD*)(callStructureBytes+RMCS_EBX);
+    VDM_REG(tib,VTIB_EDX)=*(volatile WORD*)(callStructureBytes+RMCS_EDX); VDM_REG(tib,VTIB_ECX)=*(volatile WORD*)(callStructureBytes+RMCS_ECX);
+    VDM_REG(tib,VTIB_EAX)=*(volatile WORD*)(callStructureBytes+RMCS_EAX);
+    VDM_SET16(tib,VTIB_ES,*(volatile WORD*)(callStructureBytes+RMCS_ES)); VDM_SET16(tib,VTIB_DS,*(volatile WORD*)(callStructureBytes+RMCS_DS));
+    VDM_SET16(tib,VTIB_CS,*(volatile WORD*)(callStructureBytes+RMCS_CS)); VDM_REG(tib,VTIB_EIP)=*(volatile WORD*)(callStructureBytes+RMCS_IP);
+    VDM_SET16(tib,VTIB_SS,*(volatile WORD*)(callStructureBytes+RMCS_SS)); VDM_REG(tib,VTIB_ESP)=*(volatile WORD*)(callStructureBytes+RMCS_SP);
     VDM_SET16(tib,VTIB_FS,*(volatile WORD*)(callStructureBytes+0x30)); VDM_SET16(tib,VTIB_GS,*(volatile WORD*)(callStructureBytes+0x30));
     lineCursor = LogPut(lineCursor, callbackDone ? "  0303-cb: PM handler returned (OK)\r\n" : "  0303-cb: PM handler NO-RET\r\n");
     LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor); lineCursor = lineBuffer;
@@ -24439,7 +24439,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             HOST_UNLOCK();
                             if ((int16Ah != BIOS_KEYBOARD_READ && int16Ah != BIOS_KEYBOARD_READ_EXTENDED) || registers.ZeroFlag == 0 || !g_Running) break;
                             InterlockedIncrement(&g_DpmiIteration);    /* keep the watchdog happy while blocked */
-                            WaitForSingleObject(g_KeyEvent, 50);
+                            WaitForSingleObject(g_KeyEvent, INPUT_KEY_WAIT_MS);
                         }
                         RegistersStore(&registers, tib);
                         /* set CF/ZF directly in the PM eflags (no real-mode IRET frame in PM) */
@@ -26208,7 +26208,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                               DWORD linear = ((DWORD)realDs << PARAGRAPH_SHIFT) + realDx;
                               const BYTE *stackBytes = (const BYTE *)(ULONG_PTR)linear;
                               cursor = LogPut(cursor, " AX=0x"); cursor = LogHex(cursor, *(volatile WORD*)(registers+0x1C));
-                              cursor = LogPut(cursor, " BX=0x"); cursor = LogHex(cursor, *(volatile WORD*)(registers+0x10));
+                              cursor = LogPut(cursor, " BX=0x"); cursor = LogHex(cursor, *(volatile WORD*)(registers+RMCS_EBX));
                               cursor = LogPut(cursor, " CX=0x"); cursor = LogHex(cursor, *(volatile WORD*)(registers+0x18));
                               cursor = LogPut(cursor, " DS:DX=0x"); cursor = LogHex(cursor, realDs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, realDx);
                               /* And WHERE we read the RMCS from -- ES:EDI, full width. The
