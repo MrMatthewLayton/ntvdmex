@@ -26,8 +26,6 @@
 #define NETB_IMMEDIATE_ACCEPTED    0      /* AL for a no-wait command that was taken  */
 
 /* The interrupts and INT 2Ah's functions. */
-#define NETB_INT_NETBIOS           0x5C
-#define NETB_INT_NETWORK           0x2A
 #define NETB_2A_INSTALLATION_CHECK 0x00
 #define NETB_2A_EXECUTE_RETRY      0x01
 #define NETB_2A_EXECUTE            0x04
@@ -128,8 +126,8 @@ INT VddNetBiosInitialize(PVDD_BUS bus, PVOID context)
 {
     PNETBIOS_STATE state = (PNETBIOS_STATE)context;
     state->Bus = bus;
-    if (VddClaimInterrupt(bus, NETB_INT_NETBIOS, VddNetBiosInt5C, state) != NETB_OK) return NETB_FAILED;
-    return VddClaimInterrupt(bus, NETB_INT_NETWORK, VddNetBiosInt2A, state) != NETB_OK ? NETB_FAILED : NETB_OK;
+    if (VddClaimInterrupt(bus, VECTOR_NETBIOS, VddNetBiosInt5C, state) != NETB_OK) return NETB_FAILED;
+    return VddClaimInterrupt(bus, VECTOR_NETWORK, VddNetBiosInt2A, state) != NETB_OK ? NETB_FAILED : NETB_OK;
 }
 
 VOID VddNetBiosReset(PVOID context) { (VOID)context; }

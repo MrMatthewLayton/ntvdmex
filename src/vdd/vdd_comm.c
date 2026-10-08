@@ -29,7 +29,6 @@
 #define COMM_LOW_BYTE               0xFF
 #define COMM_DEFAULT_DIVISOR        12      /* 9600 baud, the POST value                 */
 /* INT 14h. */
-#define COMM_INT14_VECTOR           0x14
 #define COMM_INT14_INITIALIZE       0x00
 #define COMM_INT14_SEND             0x01
 #define COMM_INT14_RECEIVE          0x02
@@ -515,7 +514,7 @@ INT VddCommInitialize(PVDD_BUS bus, PVOID context)
     /* INT 14h is claimed even with no port fitted, so that "no such port"
        is answered by the part that knows, in one place, rather than by a
        fallback in the host that could disagree with it. */
-    if (VddClaimInterrupt(bus, COMM_INT14_VECTOR, CommInt14, state) != 0) return COMM_FAILED;
+    if (VddClaimInterrupt(bus, VECTOR_SERIAL, CommInt14, state) != 0) return COMM_FAILED;
     VddCommReset(state);
     return anyFitted ? 0 : 0;
 }

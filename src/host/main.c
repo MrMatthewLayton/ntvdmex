@@ -2608,8 +2608,8 @@ static VOID CriticalRaise(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCur
     *logCursor = LogPut(*logCursor, " AH=0x"); *logCursor = LogHexByte(*logCursor, machine->CritAh);
     *logCursor = LogPut(*logCursor, " drive="); **logCursor = (CHAR)('A' + machine->CritAl); ++*logCursor;
     *logCursor = LogPut(*logCursor, ": DI=0x"); *logCursor = LogHexByte(*logCursor, machine->CritCode);
-    *logCursor = LogPut(*logCursor, " -> the guest's handler at 0x"); *logCursor = LogHex(*logCursor, *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x24)));
-    *logCursor = LogPut(*logCursor, ":0x"); *logCursor = LogHex(*logCursor, *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x24))); *logCursor = LogPut(*logCursor, "\r\n");
+    *logCursor = LogPut(*logCursor, " -> the guest's handler at 0x"); *logCursor = LogHex(*logCursor, *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CRITICAL_ERROR)));
+    *logCursor = LogPut(*logCursor, ":0x"); *logCursor = LogHex(*logCursor, *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CRITICAL_ERROR))); *logCursor = LogPut(*logCursor, "\r\n");
     VDM_SET16(tib, VTIB_EAX, ((WORD)machine->CritAh << BYTE_SHIFT) | machine->CritAl);
     VDM_SET16(tib, VTIB_EDI, machine->CritCode);
     /* BP:SI = the device header -- the one our DPBs name, which since #48 is the BLOCK
@@ -3112,8 +3112,8 @@ static WORD  g_Int15StubOffset;
 static DWORD g_Kb4FCalls, g_Kb4FTranslate;         /* k4f entries / bytes it handed back */
 static INT Int15Hooked(VOID)
 {
-    return *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(0x15)) != DOS_CTAB_SEG
-        || *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(0x15)) != g_Int15StubOffset;
+    return *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(VECTOR_SYSTEM)) != DOS_CTAB_SEG
+        || *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(VECTOR_SYSTEM)) != g_Int15StubOffset;
 }
 
 /* ── #274: THE HOST HALF OF THE DEFAULT INT 05h (bios_kbdact.asm p5; bios_prtsc.h). ───
@@ -4248,7 +4248,7 @@ static INT AsyncInjectIrq(UINT irq)
         lineCursor = LogPut(lineCursor, " from=0x");          lineCursor = LogHex(lineCursor, cs);
         lineCursor = LogPut(lineCursor, ":0x");               lineCursor = LogHex(lineCursor, ip);
         lineCursor = LogPut(lineCursor, " ivt[0B..0F]=");
-        for (logVector = 0x0B; logVector <= 0x0F; ++logVector) {
+        for (logVector = VECTOR_IRQ3; logVector <= VECTOR_IRQ7; ++logVector) {
             lineCursor = LogPut(lineCursor, "0x");  lineCursor = LogHex(lineCursor, PeekWord(IVT_SEGMENT_ADDRESS(logVector)));
             lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, PeekWord(IVT_OFFSET_ADDRESS(logVector)));
             lineCursor = LogPut(lineCursor, " ");
@@ -7434,7 +7434,7 @@ static DWORD WINAPI HeartbeatThread(LPVOID parameter)
         /* s81: WHY IS A RAISED LINE NOT DELIVERED? The PIC's own view (mask, request,
            in service, both chips), which lines we still hold pending, and where IRQ 5's
            real-mode vector points -- the three things that decide it. */
-        { INT index; DWORD pendingMask = 0; WORD int0DOffset = PeekWord(IVT_OFFSET_ADDRESS(0x0D)), int0DSegment = PeekWord(IVT_SEGMENT_ADDRESS(0x0D));
+        { INT index; DWORD pendingMask = 0; WORD int0DOffset = PeekWord(IVT_OFFSET_ADDRESS(VECTOR_IRQ5)), int0DSegment = PeekWord(IVT_SEGMENT_ADDRESS(VECTOR_IRQ5));
           for (index = 0; index < 16; ++index) if (g_IrqNPending[index]) pendingMask |= 1u << index;
           cursor = LogPut(cursor, " pic{imr=");  cursor = LogHexByte(cursor, g_Pic.Master.Imr); cursor = LogPut(cursor, "/"); cursor = LogHexByte(cursor, g_Pic.Slave.Imr);
           cursor = LogPut(cursor, " irr=");      cursor = LogHexByte(cursor, g_Pic.Master.Irr); cursor = LogPut(cursor, "/"); cursor = LogHexByte(cursor, g_Pic.Slave.Irr);
@@ -19807,10 +19807,10 @@ static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
                          ⚠ 0x15 IS IN THE LIST, so this segment's other two sites (+0x1b3e
                            and +0x1b4a, both real `cd 15`) are patched exactly as before. */
                       { BYTE vector = memory[index+1];
-                        INT serviced = (vector == 0x31 || vector == 0x21 || vector == 0x10
-                                        || vector == 0x16 || vector == 0x33 || vector == 0x2F
-                                        || vector == 0x11 || vector == 0x41 || vector == 0x1A
-                                        || vector == 0x08 || vector == 0x15);
+                        INT serviced = (vector == VECTOR_DPMI || vector == VECTOR_DOS || vector == VECTOR_VIDEO
+                                        || vector == VECTOR_KEYBOARD_SERVICES || vector == VECTOR_MOUSE || vector == VECTOR_MULTIPLEX
+                                        || vector == VECTOR_EQUIPMENT || vector == VECTOR_KERNEL_DEBUGGER || vector == VECTOR_TIME
+                                        || vector == VECTOR_TIMER || vector == VECTOR_SYSTEM);
                         if (!serviced) {
                             if (rejected++ < 16) {
                                 CHAR unservicedLine[176], *unservicedCursor = unservicedLine;
@@ -20936,7 +20936,7 @@ static VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slo
             && VDM_REG16(tib, VTIB_CS) == g_PmReturnSelector) { callbackDone = 1; break; }
         if (event == 3) continue;   /* DpmiEnterProtectedMode reports "interrupt pending, not entered" -- retry */
         vector = (event == VDM_EVENT_BOP) ? DpmiBopVector(VDM_REG16(tib, VTIB_CS), eip) : 0;   /* a patched INT the handler issued */
-        if (vector == 0x31 || vector == 0x21) {
+        if (vector == VECTOR_DPMI || vector == VECTOR_DOS) {
             if (DpmiServicePmInt(machine, tib, vector, phase) > 0) continue;   /* serviced -> resume handler */
             callbackDone = 1; break;   /* client-exit or unexpected from inside a callback: end the loop */
         }
@@ -24208,9 +24208,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                        delivers -- answer 25h/35h ourselves against g_PmInt[], the table
                        injection reads. 21h and the rest still go to the client's handler,
                        untouched. Scoped to a 32-bit client so nothing 16-bit changes. */
-                    if (vector == 0x21 && g_DpmiIsClient32) {
+                    if (vector == VECTOR_DOS && g_DpmiIsClient32) {
                         DWORD requestAh = (ax >> BYTE_SHIFT) & BYTE_MASK, vectorNumber = ax & BYTE_MASK;
-                        if ((requestAh == 0x25 || requestAh == 0x35) && vectorNumber >= 0x08 && vectorNumber <= 0x0F) {
+                        if ((requestAh == 0x25 || requestAh == 0x35) && vectorNumber >= VECTOR_IRQ0 && vectorNumber <= VECTOR_IRQ7) {
                             if (requestAh == 0x25) {
                                 WORD handlerSegment = (WORD)VDM_REG16(tib, VTIB_DS);
                                 g_PmInt[vectorNumber].Selector = handlerSegment;
@@ -24417,7 +24417,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                         return 1;                                  /* EIP unchanged on purpose */
                     }
-                    if (vector == 0x10) {                             /* video BIOS in PM -> VDD */
+                    if (vector == VECTOR_VIDEO) {                             /* video BIOS in PM -> VDD */
                         NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
                         HOST_LOCK();
                         VddBusDeliverInterrupt(&g_Bus, 0x10, &registers);
@@ -24431,7 +24431,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                         return 1;
                     }
-                    if (vector == 0x16) {                             /* keyboard BIOS in PM -> VDD */
+                    if (vector == VECTOR_KEYBOARD_SERVICES) {                             /* keyboard BIOS in PM -> VDD */
                         NTVDD_REGISTERS registers; BYTE int16Ah; RegistersLoad(&registers, tib); int16Ah = VddGetAh(&registers);
                         for (;;) {                                 /* AH=00/10 block until a key */
                             HOST_LOCK();
@@ -24449,18 +24449,18 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         (VOID)base;                                 /* no per-poll logging (would flood) */
                         return 1;
                     }
-                    if (vector == 0x33) {                             /* mouse in PM -> INT 33h */
+                    if (vector == VECTOR_MOUSE) {                             /* mouse in PM -> INT 33h */
                         MouseInt33(tib, I33_SRC_PM);
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
                     }
-                    if (vector == 0x1A || vector == 0x08) {              /* BIOS time / timer tick in PM */
+                    if (vector == VECTOR_TIME || vector == VECTOR_TIMER) {              /* BIOS time / timer tick in PM */
                         NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
                         HOST_LOCK();
                         VddBusDeliverInterrupt(&g_Bus, (BYTE)vector, &registers);   /* INT 1Ah get/set tick, or INT 08h increment */
                         /* The BIOS timer ISR ends with its EOI; a PM handler that chains
                            here is relying on it, as in V86 (#173). */
-                        if (vector == 0x08) VddPicEndOfInterrupt(&g_Pic, 0);
+                        if (vector == VECTOR_TIMER) VddPicEndOfInterrupt(&g_Pic, 0);
                         HOST_UNLOCK();
                         RegistersStore(&registers, tib);
                         VDM_REG(tib, VTIB_EIP) += 2;
@@ -24494,9 +24494,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                          falling through to the loud stop below rather than being faked.
                          IRQ2-7 get the same treatment with no device work: their real-mode
                          default is a bare IRET that the host EOIs for (AsyncVectorIsOurStub). */
-                    if (((vector >= 0x09 && vector <= 0x0F && AsyncVectorIsOurStub(vector - 0x08))
-                         || (vector >= 0x70 && vector <= 0x77 && AsyncVectorIsOurStub(vector - 0x70 + 8)))) {
-                        BYTE line = (BYTE)(vector >= 0x70 ? vector - 0x70 + 8 : vector - 0x08);
+                    if (((vector >= VECTOR_IRQ1 && vector <= VECTOR_IRQ7 && AsyncVectorIsOurStub(vector - PIC_MASTER_VECTOR_BASE))
+                         || (vector >= VECTOR_IRQ8 && vector <= VECTOR_IRQ15 && AsyncVectorIsOurStub(vector - PIC_SLAVE_VECTOR_BASE + PIC_LINES_PER_CHIP)))) {
+                        BYTE line = (BYTE)(vector >= VECTOR_IRQ8 ? vector - PIC_SLAVE_VECTOR_BASE + PIC_LINES_PER_CHIP : vector - PIC_MASTER_VECTOR_BASE);
                         HOST_LOCK();
                         /* take the byte, re-arm if more queued. #254: no guest code runs from
                            here, so a Pause cannot spin -- drop its flag rather than let it
@@ -24517,7 +24517,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     }
                     /* ...and when the GUEST owns the real-mode vector, run its ISR there.
                        See DpmiReflectIrqToRm (s81, ZAR). */
-                    if ((vector >= 0x09 && vector <= 0x0F) || (vector >= 0x70 && vector <= 0x77)) {
+                    if ((vector >= VECTOR_IRQ1 && vector <= VECTOR_IRQ7) || (vector >= VECTOR_IRQ8 && vector <= VECTOR_IRQ15)) {
                         if (DpmiReflectIrqToRm(machine, tib, (UINT)vector)) {
                             if (g_PmIrqRmReflects <= 8) {
                                 cursor = LogPut(cursor, "PM INT 0x"); cursor = LogHexByte(cursor, (BYTE)vector);
@@ -24530,7 +24530,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             return 1;
                         }
                     }
-                    if (vector == 0x11) {                             /* BIOS equipment, in PM */
+                    if (vector == VECTOR_EQUIPMENT) {                             /* BIOS equipment, in PM */
                         /* Same answer as the V86 arm below, and now the SAME
                            FUNCTION rather than the same constant copied twice --
                            see BiosEquipmentWord(), which also explains why the
@@ -24544,7 +24544,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
                     }
-                    if (vector == 0x15) {                             /* BIOS misc/system, in PM */
+                    if (vector == VECTOR_SYSTEM) {                             /* BIOS misc/system, in PM */
                         /* ── ★★ THE SESSION-36 WALL, AND IT IS A MISSING ARM, NOT A BUG. ──
                              A Win16 driver segment runs `b4 c0 / cd 15` -- INT 15h AH=C0h,
                              "get system configuration table" -- in protected mode. Every
@@ -24690,7 +24690,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
                     }
-                    if (vector == 0x41) {                             /* Windows kernel debugger */
+                    if (vector == VECTOR_KERNEL_DEBUGGER) {                             /* Windows kernel debugger */
                         /* ⚠ THIS ARM EXISTS TO STOP A SILENT DEATH, NOT TO PROVIDE A
                              SERVICE. INT 41h is the WDEB386 kernel-debugger interface;
                              krnl386 calls it six times during init (AX=0001, 000F,
@@ -24709,7 +24709,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
                     }
-                    if (vector == 0x2F) {                             /* INT 2Fh, from PM */
+                    if (vector == VECTOR_MULTIPLEX) {                             /* INT 2Fh, from PM */
                         /* ── The PM twin of the V86 BOP2F arm. ──────────────────────
                              Answers exactly what the V86 side answers and no more, so
                              the two cannot drift into disagreeing about whether a DPMI
@@ -24776,7 +24776,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         VDM_REG(tib, VTIB_EIP) += 2;               /* past the BOP */
                         return 1;
                     }
-                    if (vector == 0x31) {                             /* DPMI INT 31h */
+                    if (vector == VECTOR_DPMI) {                             /* DPMI INT 31h */
                         INT needScan = 0;   /* deferred: scanning logs, so do it after the flush */
                         cursor = LogPut(cursor, "INT31h AX=0x"); cursor = LogHex(cursor, ax);
                         cursor = LogPut(cursor, " BX=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EBX));
@@ -26061,13 +26061,13 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                  DpmiServicePmIntBody), VideoTrapSync() included, so
                                  the two cannot drift into disagreeing about what a video
                                  BIOS call does depending on how the guest asked. */
-                            if (interruptNumber == 0x21) {
+                            if (interruptNumber == VECTOR_DOS) {
                                 /* CF/ZF into VTIB_EFLAGS, not into an IRET frame there is none of --
                                    see the #247 note above. */
                                 m.TraceCursor = cursor; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); cursor = m.TraceCursor;
                             }
-                            else if (interruptNumber == 0x33) MouseInt33(tib, I33_SRC_SIM);
-                            else if (interruptNumber == 0x10) {
+                            else if (interruptNumber == VECTOR_MOUSE) MouseInt33(tib, I33_SRC_SIM);
+                            else if (interruptNumber == VECTOR_VIDEO) {
                                 NTVDD_REGISTERS videoRegisters; RegistersLoad(&videoRegisters, tib);
                                 WORD inAx = (WORD)videoRegisters.Eax, inCx = (WORD)videoRegisters.Ecx;
                                 HOST_LOCK();
@@ -26427,7 +26427,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         VDM_REG(tib, VTIB_EIP) += 2;               /* past the 2-byte INT */
                         return 1;
                     }
-                    if (vector == 0x21) {                             /* DOS INT 21h (in PM) */
+                    if (vector == VECTOR_DOS) {                             /* DOS INT 21h (in PM) */
                         DWORD ah = (ax >> BYTE_SHIFT) & BYTE_MASK;
                         if (ah == 0x4C) {                          /* terminate */
                             /* (The `ver` canary that stood here read linear 0x1600 and
@@ -27426,7 +27426,7 @@ static INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context)
     if (g_PmReturnSelector == 0) { g_AsyncWhy = 4; return 0; }              /* no catcher yet -> no way back */
     if (!g_PmInt[interruptVector].Client) { g_AsyncWhy = 5; return 0; }          /* the client has not hooked this line */
     /* Not before the application has an ISR; see DpmiInjectPmIrq(). */
-    if (g_DpmiIsClient32 && interruptVector == 0x08 && !g_PmAppHookedTimer) {
+    if (g_DpmiIsClient32 && interruptVector == VECTOR_TIMER && !g_PmAppHookedTimer) {
         /* ── BUT THE BIOS TICK STILL HAS TO ADVANCE. (s74c, Duke3D's SETUP) ────────
              A flat application that never hooks INT 08h still reads 0040:006C: Watcom's
              delay()/clock() spin on it. The PM loop bumps it "polled", i.e. only when
@@ -27968,7 +27968,7 @@ static INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip)
             DWORD guestCodeBase  = DpmiSelectorBase(frame[4]);
             volatile BYTE *guestInstruction = (volatile BYTE *)(ULONG_PTR)(guestCodeBase + frame[3]);
             if (!guestCodeBase || DpmiSelectorIs32(frame[4]) || DpmiSelectorIs32(frame[7])
-                || (gateVector >= 0x34 && gateVector <= 0x3F)
+                || (gateVector >= VECTOR_FLOATING_POINT_FIRST && gateVector <= VECTOR_FLOATING_POINT_LAST)
                 || !HostReadable((const VOID *)guestInstruction, 2) || guestInstruction[0] != 0xCD || guestInstruction[1] != (BYTE)gateVector
                 || !HostWritable((VOID *)guestInstruction, 2))
                 return 0;
@@ -28270,7 +28270,7 @@ static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interr
     DpmiEnsurePmReturnSelector();
     if (g_PmReturnSelector == 0) return 0;
     /* #172 census: which of the two refusals below, when, and where the guest was. */
-    if (interruptVector == 0x08 && g_DpmiIsClient32 && (!DpmiSelectorIs32(savedCs) || !g_PmAppHookedTimer))
+    if (interruptVector == VECTOR_TIMER && g_DpmiIsClient32 && (!DpmiSelectorIs32(savedCs) || !g_PmAppHookedTimer))
         PmInjectDeclineNote(!DpmiSelectorIs32(savedCs) ? 0 : 1, savedCs, sEIP);
     /* ── DO NOT INTERRUPT THE EXTENDER, ONLY THE APPLICATION. ────────────────────────
          Measured: the first injection landed at mod:0x4b81 -- inside DOS/4GW's own INT
@@ -28290,7 +28290,7 @@ static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interr
     /* ...and not before the application actually has an ISR. Delivery still goes through
        the extender's stub, because the extender owns the IDT and must do the dispatching
        (bypassing it produced "fatal error (1001): error in interrupt chain"). */
-    if (g_DpmiIsClient32 && interruptVector == 0x08 && !g_PmAppHookedTimer) return 0;
+    if (g_DpmiIsClient32 && interruptVector == VECTOR_TIMER && !g_PmAppHookedTimer) return 0;
 
     /* push an INT frame (FLAGS/CS/IP) on the client's current PM stack so the handler's IRET
        lands on the catcher; keep the client's own SS so the handler has a valid stack. Frame
@@ -28439,8 +28439,8 @@ static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interr
          so counting these lines to measure the TIMER's delivery over-counts by however
          much the Sound Blaster contributed. Same fault as ASYNC-PM's hardcoded
          "vec=0x08", one function over, and the same fix. */
-    if (interruptVector <= 0x0F) { g_PmCooperativeLine[interruptVector & 7]++;
-                      if (interruptVector == 0x08) TickDeliveredNote(); }
+    if (interruptVector <= VECTOR_IRQ7) { g_PmCooperativeLine[interruptVector & 7]++;
+                      if (interruptVector == VECTOR_TIMER) TickDeliveredNote(); }
     { CHAR changeLine[128], *changeCursor = changeLine;
       changeCursor = LogPut(changeCursor, "  PMIRQ vec=0x"); changeCursor = LogHexByte(changeCursor, interruptVector);
       changeCursor = LogPut(changeCursor, " done="); changeCursor = LogHex(changeCursor, (DWORD)done);
@@ -31084,14 +31084,14 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     *(volatile WORD *)0x58 = 0x0028;                        /* IVT[0x16].offset    */
     *(volatile WORD *)0x5A = DOS_HDLR_SEG;                  /* IVT[0x16].segment   */
     for (index = 0; index < sizeof(bop33); ++index) handlerArea[0x30 + index] = bop33[index];  /* INT 33h stub */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x33))     = 0x0030;              /* IVT[0x33].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x33)) = DOS_HDLR_SEG;        /* IVT[0x33].segment   */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_MOUSE))     = 0x0030;              /* IVT[0x33].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_MOUSE)) = DOS_HDLR_SEG;        /* IVT[0x33].segment   */
     for (index = 0; index < sizeof(bop08); ++index) handlerArea[0x34 + index] = bop08[index];  /* INT 08h stub */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x08))     = 0x0034;              /* IVT[0x08].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x08)) = DOS_HDLR_SEG;        /* IVT[0x08].segment   */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TIMER))     = 0x0034;              /* IVT[0x08].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TIMER)) = DOS_HDLR_SEG;        /* IVT[0x08].segment   */
     for (index = 0; index < sizeof(bop1c); ++index) handlerArea[0x3A + index] = bop1c[index];  /* INT 1Ch iret */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x1C))     = 0x003A;              /* IVT[0x1C].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x1C)) = DOS_HDLR_SEG;        /* IVT[0x1C].segment   */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_USER_TICK))     = 0x003A;              /* IVT[0x1C].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_USER_TICK)) = DOS_HDLR_SEG;        /* IVT[0x1C].segment   */
     for (index = 0; index < sizeof(bop09); ++index) handlerArea[0x4C + index] = bop09[index];  /* INT 09h default iret (0x4C-0x4F) */
     /* INT 33h event-handler return: the guest's handler RETFs here (see MouseCallbackTry). */
     handlerArea[MS_CB_RET_OFF + 0] = VDM_BOP0; handlerArea[MS_CB_RET_OFF + 1] = VDM_BOP1;
@@ -31115,14 +31115,14 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         *(volatile WORD *)(IVT_OFFSET_ADDRESS(index))     = DOS_IRET_STUB_OFF;
         *(volatile WORD *)(IVT_SEGMENT_ADDRESS(index)) = DOS_HDLR_SEG;
     }
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x09))     = 0x004C;              /* IVT[0x09].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x09)) = DOS_HDLR_SEG;        /* IVT[0x09].segment   */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_KEYBOARD))     = 0x004C;              /* IVT[0x09].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_KEYBOARD)) = DOS_HDLR_SEG;        /* IVT[0x09].segment   */
     for (index = 0; index < sizeof(bop1a); ++index) handlerArea[0x3C + index] = bop1a[index];  /* INT 1Ah stub */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x1A))     = 0x003C;              /* IVT[0x1A].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x1A)) = DOS_HDLR_SEG;        /* IVT[0x1A].segment   */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TIME))     = 0x003C;              /* IVT[0x1A].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TIME)) = DOS_HDLR_SEG;        /* IVT[0x1A].segment   */
     for (index = 0; index < sizeof(bop2f); ++index) handlerArea[0x40 + index] = bop2f[index];  /* INT 2Fh stub */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x2F))     = 0x0040;              /* IVT[0x2F].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x2F)) = DOS_HDLR_SEG;        /* IVT[0x2F].segment   */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_MULTIPLEX))     = 0x0040;              /* IVT[0x2F].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_MULTIPLEX)) = DOS_HDLR_SEG;        /* IVT[0x2F].segment   */
     for (index = 0; index < sizeof(xmsBopStub); ++index) handlerArea[XMS_ENTRY_OFF + index] = xmsBopStub[index];  /* XMS far-call entry */
     /* ⚠ GH #47: a non-zero word at XMS_ENTRY_OFF+0x45 WAS TRIED AND REFUTED.
        MEM.EXE skips its whole extended-memory report on a zero word at +0x45 of
@@ -31135,11 +31135,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          header OR by opening the device; leaving one of them behind is a manager
          that half-exists, which is worse for a guest than one that does not. */
     if (g_EmsOn) {
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x67))     = 0x0048;          /* IVT[0x67].offset    */
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x67)) = DOS_HDLR_SEG;    /* IVT[0x67].segment   */
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_EMS))     = 0x0048;          /* IVT[0x67].offset    */
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_EMS)) = DOS_HDLR_SEG;    /* IVT[0x67].segment   */
     } else {
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x67))     = 0;
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x67)) = 0;
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_EMS))     = 0;
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_EMS)) = 0;
     }
     /* DPMI mode-switch entry (far-called): BOP 0x50 ; RETF. The host services the
        BOP by switching to PM; the RETF only executes if the switch fails. */
@@ -31214,14 +31214,14 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     {   volatile BYTE *controlBytes = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT);
         UINT position = DOS_CRIT_STUBS;
         controlBytes[position+0] = VDM_BOP0; controlBytes[position+1] = VDM_BOP1; controlBytes[position+2] = 0x30; controlBytes[position+3] = 0xCF;
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x22))     = (WORD)position;              /* INT 22h */
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x22)) = DOS_CTAB_SEG;
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TERMINATE_ADDRESS))     = (WORD)position;              /* INT 22h */
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TERMINATE_ADDRESS)) = DOS_CTAB_SEG;
         controlBytes[position+4] = 0xCF;                                          /* INT 23h: IRET */
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x23))     = (WORD)(position + 4);
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x23)) = DOS_CTAB_SEG;
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CTRL_C))     = (WORD)(position + 4);
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CTRL_C)) = DOS_CTAB_SEG;
         controlBytes[position+8] = 0xB0; controlBytes[position+9] = 0x03; controlBytes[position+10] = 0xCF;         /* mov al,3 ; iret */
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x24))     = (WORD)(position + 8);        /* INT 24h */
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x24)) = DOS_CTAB_SEG;
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CRITICAL_ERROR))     = (WORD)(position + 8);        /* INT 24h */
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CRITICAL_ERROR)) = DOS_CTAB_SEG;
         /* #34: the site DOS calls the guest's INT 24h from -- see CriticalRaise. */
         controlBytes[DOS_CRIT_RAISE + 0] = 0xCD; controlBytes[DOS_CRIT_RAISE + 1] = 0x24;   /* int 24h  */
         controlBytes[DOS_CRIT_RETURN + 0] = VDM_BOP0; controlBytes[DOS_CRIT_RETURN + 1] = VDM_BOP1;
@@ -31240,8 +31240,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
              and a program's own `int 5` went somewhere we cannot vouch for. Every BIOS
              since the PC has a routine here; ours prints the screen through INT 17h and
              keeps its status HOST-side -- see PrintScreenBop for why not at 0050:0000. */
-        *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(0x05))     = (WORD)(DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05);
-        *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(0x05)) = DOS_CTAB_SEG;
+        *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(VECTOR_PRINT_SCREEN))     = (WORD)(DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05);
+        *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(VECTOR_PRINT_SCREEN)) = DOS_CTAB_SEG;
     }
 
     /* GH #27 -- THE NULL-VECTOR LANDMINE. A vector left at 0000:0000 sends a guest
@@ -32708,10 +32708,10 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     {   UINT number, count = 0;
         volatile BYTE *controlBytes = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_CTAB_SEG << PARAGRAPH_SHIFT);
         for (number = 0; number < 256; ++number) {
-            INT wired = (number == 0x08 || number == 0x10 || number == 0x14 || number == 0x16 || number == 0x1A
-                         || number == 0x2A || number == 0x5C);
-            INT user  = (number >= 0x60 && number <= 0x66) || (number >= 0x68 && number <= 0x6F)
-                        || (number >= 0x78 && number <= 0xFE);
+            INT wired = (number == VECTOR_TIMER || number == VECTOR_VIDEO || number == VECTOR_SERIAL || number == VECTOR_KEYBOARD_SERVICES || number == VECTOR_TIME
+                         || number == VECTOR_NETWORK || number == VECTOR_NETBIOS);
+            INT user  = (number >= VECTOR_USER_RANGE1_FIRST && number <= VECTOR_USER_RANGE1_LAST) || (number >= VECTOR_USER_RANGE2_FIRST && number <= VECTOR_USER_RANGE2_LAST)
+                        || (number >= VECTOR_USER_RANGE3_FIRST && number <= VECTOR_USER_RANGE3_LAST);
             CHAR gateLine[120], *gateCursor = gateLine;
             if (!g_Bus.Interrupts[number].Service || wired) continue;
             gateCursor = LogPut(gateCursor, "  VDD: claim_int 0x"); gateCursor = LogHex(gateCursor, number);
@@ -33608,13 +33608,13 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                            next widening is measurable rather than asserted. */
                       if (cs[position] == 0xCD) {
                           BYTE siteVector = cs[position+1];
-                          INT listed = (siteVector == 0x31 || siteVector == 0x21 || siteVector == 0x10
-                                        || siteVector == 0x16 || siteVector == 0x33
-                                        || siteVector == 0x2F
-                                        || siteVector == 0x11 || siteVector == 0x41
-                                        || siteVector == 0x1A || siteVector == 0x08);
+                          INT listed = (siteVector == VECTOR_DPMI || siteVector == VECTOR_DOS || siteVector == VECTOR_VIDEO
+                                        || siteVector == VECTOR_KEYBOARD_SERVICES || siteVector == VECTOR_MOUSE
+                                        || siteVector == VECTOR_MULTIPLEX
+                                        || siteVector == VECTOR_EQUIPMENT || siteVector == VECTOR_KERNEL_DEBUGGER
+                                        || siteVector == VECTOR_TIME || siteVector == VECTOR_TIMER);
                           DWORD linear = g_DpmiCodeBase + position;      /* map is linear-keyed now */
-                          if (!listed && siteVector != 0x02) continue;    /* evidence only -- see above */
+                          if (!listed && siteVector != VECTOR_NMI) continue;    /* evidence only -- see above */
                           if (!listed) {
                               /* Initial mode-switch selectors are 16-bit even for a 32-bit
                                  client (the RETF-on-failure proof, session 16), so d32=0. */
@@ -34852,7 +34852,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                          -- which is exactly what the scanner was stopped from
                                          doing, by a guard this path did not have. */
                                     INT guestResult;
-                                    INT isFloatingPointVector = (gateVector >= 0x34 && gateVector <= 0x3F);
+                                    INT isFloatingPointVector = (gateVector >= VECTOR_FLOATING_POINT_FIRST && gateVector <= VECTOR_FLOATING_POINT_LAST);
                                     INT floatingPointHooked = isFloatingPointVector && g_PmInt[gateVector].Client;
                                     cursor = LogPut(cursor, "  EXC: #GP(IDT) is a RAW INT 0x"); cursor = LogHex(cursor, gateVector);
                                     cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, frame[4]);

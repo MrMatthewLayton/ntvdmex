@@ -2,7 +2,6 @@
 #include "vdd_pic.h"
 
 /* The 8259A's lines and the PC's two chips. */
-#define PIC_LINES_PER_CHIP      8
 #define PIC_LINE_MASK           7       /* a line number within one chip            */
 #define PIC_LINES               16      /* master IRQ0-7, slave IRQ8-15             */
 #define PIC_CASCADE_LINE        2       /* the master's IR2 carries the slave       */
@@ -10,8 +9,6 @@
 #define PIC_FIXED_LOWEST        7       /* IR7 lowest: the fixed order a BIOS leaves */
 #define PIC_NO_LINE             (-1)
 #define PIC_ALL_MASKED          0xFF
-#define PIC_MASTER_VECTOR_BASE  0x08    /* IRQ0-7  -> INT 08h..0Fh                  */
-#define PIC_SLAVE_VECTOR_BASE   0x70    /* IRQ8-15 -> INT 70h..77h                  */
 #define PIC_BIOS_MASTER_MASK    0xFC    /* IRQ0 + IRQ1 enabled                      */
 #define PIC_NO_VECTOR           0
 /* Ports. */
