@@ -4272,8 +4272,6 @@ static HWND WowUserFindWindowByClass(PCSTR className, PCSTR windowName)
 #define WOWUSER_ICONDIR_MAX_ENTRIES    64
 #define WOWUSER_NOTIFY_UI_BITS_MAX     0x100   /* the forward bitmap's largest size */
 #define WOWUSER_NOTIFY_FOUND           0x00010000u   /* DX non-zero: found          */
-#define WOWUSER_BYTE_INDEX_SHIFT       3     /* bit n of a bitmap: byte n >> 3     */
-#define WOWUSER_BIT_INDEX_MASK         7     /* ...bit n & 7                       */
 #define WOWUSER_TDB_HINSTANCE          0x1C  /* TDB: the task's instance           */
 #define WOWUSER_KEY_DOWN               0x8000  /* GetKeyState: the key is down     */
 #define WOWUSER_COMMAND_FROM_ACCELERATOR 0x00010000u   /* WM_COMMAND: HIWORD 1     */
@@ -5487,8 +5485,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             for (index = 0; index < bitsSize; ++index) bitsBytes[index] = 0;
             for (index = 0; index < sizeof g_WowUserDefWindowProcForwarded / sizeof g_WowUserDefWindowProcForwarded[0]; ++index) {
                 WORD message16 = g_WowUserDefWindowProcForwarded[index];
-                if ((UINT)(message16 >> WOWUSER_BYTE_INDEX_SHIFT) >= bitsSize) continue;
-                bitsBytes[message16 >> WOWUSER_BYTE_INDEX_SHIFT] = (BYTE)(bitsBytes[message16 >> WOWUSER_BYTE_INDEX_SHIFT] | (1u << (message16 & WOWUSER_BIT_INDEX_MASK)));
+                if ((UINT)(message16 >> BITMAP_BYTE_SHIFT) >= bitsSize) continue;
+                bitsBytes[message16 >> BITMAP_BYTE_SHIFT] = (BYTE)(bitsBytes[message16 >> BITMAP_BYTE_SHIFT] | (1u << (message16 & BITMAP_BIT_MASK)));
                 if (message16 > top) top = message16;
                 WowNotePut(note, noteCapacity, &noteLength, "0x"); WowNoteHex(note, noteCapacity, &noteLength, message16, WOW_HEX_WORD_DIGITS);
                 WowNotePut(note, noteCapacity, &noteLength, " ");

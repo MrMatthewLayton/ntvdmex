@@ -25,7 +25,14 @@
 #define DWORD_SHIFT         32              /* the high dword of a 64-bit value     */
 #define BITS_PER_BYTE       8
 
+/* Bit n of a bitmap of bytes: byte n >> BITMAP_BYTE_SHIFT, bit n & BITMAP_BIT_MASK. */
+#define BITMAP_BYTE_SHIFT   3
+#define BITMAP_BIT_MASK     7
+
 /* x86 real-mode addressing: linear = segment * 16 + offset. */
 #define PARAGRAPH_SHIFT     4
+
+/* x86 paging: a 4 KB page. */
+#define PAGE_SHIFT          12
 
 #endif /* NTVDMEX_BITS_H */

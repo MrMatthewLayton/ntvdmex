@@ -242,8 +242,6 @@
 /* A subfunction (AL) that gets or sets. */
 #define DOS_INT21_GET             0x00
 #define DOS_INT21_SET             0x01
-#define DOS_INT21_BYTE_INDEX_SHIFT 3      /* bit n of a bitmap: byte n >> 3            */
-#define DOS_INT21_BIT_INDEX_MASK  7       /* ...bit n & 7                              */
 #define DOS_INT21_HEX_DIGIT_BITS  4
 #define DOS_INT21_HEX_DIGIT_MASK  0xF
 #define DOS_INT21_END_OF_FILE     0x1A    /* ^Z                                        */
@@ -2195,7 +2193,7 @@ INT DosInt21(PDOS_MACHINE machine)
             /* AL=02/04 are not DOS 6.22 functions we have measured. */
             trace = LogPut(trace, "  INT21 AH=4B AL=0x"); trace = LogHexByte(trace, subfunction);
             trace = LogPut(trace, " UNIMPLEMENTED (overlay load)\r\n");
-            machine->Unimplemented[DOS_FN_EXEC >> DOS_INT21_BYTE_INDEX_SHIFT] |= (BYTE)(1u << (DOS_FN_EXEC & DOS_INT21_BIT_INDEX_MASK));
+            machine->Unimplemented[DOS_FN_EXEC >> BITMAP_BYTE_SHIFT] |= (BYTE)(1u << (DOS_FN_EXEC & BITMAP_BIT_MASK));
             SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
     } else if (function == DOS_FN_GET_DEFAULT_DRIVE_INFO || function == DOS_FN_GET_DRIVE_INFO) {  /* allocation info for a drive */
@@ -2322,7 +2320,7 @@ INT DosInt21(PDOS_MACHINE machine)
           if (!isSaid) { isSaid = 1;
               trace = LogPut(trace, "  INT21 AH=53 BPB->DPB UNIMPLEMENTED (no installable "
                             "block drivers) -- said once per run\r\n"); } }
-        machine->Unimplemented[DOS_FN_BPB_TO_DPB >> DOS_INT21_BYTE_INDEX_SHIFT] |= (BYTE)(1u << (DOS_FN_BPB_TO_DPB & DOS_INT21_BIT_INDEX_MASK));
+        machine->Unimplemented[DOS_FN_BPB_TO_DPB >> BITMAP_BYTE_SHIFT] |= (BYTE)(1u << (DOS_FN_BPB_TO_DPB & BITMAP_BIT_MASK));
         /* ── ★★★ MEASURED AGAINST STOCK NTVDM, 2026-09-25. ───────────────────
              Documented AH=53h is BPB->DPB and takes DS:SI / ES:BP with NO AL
              sub-function. XP's COMMAND.COM uses it as a PRIVATE QUERY with AL as a
@@ -2822,7 +2820,7 @@ INT DosInt21(PDOS_MACHINE machine)
         } else {
             trace = LogPut(trace, "  INT21 AH=69 AL=0x"); trace = LogHex(trace, subfunction);
             trace = LogPut(trace, " UNIMPLEMENTED\r\n");
-            machine->Unimplemented[DOS_FN_DISK_SERIAL >> DOS_INT21_BYTE_INDEX_SHIFT] |= (BYTE)(1u << (DOS_FN_DISK_SERIAL & DOS_INT21_BIT_INDEX_MASK));
+            machine->Unimplemented[DOS_FN_DISK_SERIAL >> BITMAP_BYTE_SHIFT] |= (BYTE)(1u << (DOS_FN_DISK_SERIAL & BITMAP_BIT_MASK));
             SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
     } else if (function == DOS_FN_GET_CURRENT_DIRECTORY) {              /* get current directory -> DS:SI */
@@ -3035,7 +3033,7 @@ INT DosInt21(PDOS_MACHINE machine)
             OKCF();
         } else {
             trace = LogPut(trace, "  INT21 AH=52 UNIMPLEMENTED (no SysVars planted)\r\n");
-            machine->Unimplemented[DOS_FN_GET_LIST_OF_LISTS >> DOS_INT21_BYTE_INDEX_SHIFT] |= (BYTE)(1u << (DOS_FN_GET_LIST_OF_LISTS & DOS_INT21_BIT_INDEX_MASK));
+            machine->Unimplemented[DOS_FN_GET_LIST_OF_LISTS >> BITMAP_BYTE_SHIFT] |= (BYTE)(1u << (DOS_FN_GET_LIST_OF_LISTS & BITMAP_BIT_MASK));
             SETAX(DOS_ERR_INVALID_FUNCTION); ERRCF();
         }
     } else if (function == DOS_FN_IOCTL) {              /* IOCTL (C-runtime isatty etc.) */
@@ -3711,7 +3709,7 @@ INT DosInt21(PDOS_MACHINE machine)
         SETAX(R_AX & HIGH_BYTE_MASK);
         trace = LogPut(trace, "  INT21 AH=0x"); trace = LogHex(trace, function);
         trace = LogPut(trace, " undefined on 6.22 -- AL=0, CF clear (matches DOS)\r\n");
-        machine->Undefined[(function & BYTE_MASK) >> DOS_INT21_BYTE_INDEX_SHIFT] |= (BYTE)(1u << (function & DOS_INT21_BIT_INDEX_MASK));
+        machine->Undefined[(function & BYTE_MASK) >> BITMAP_BYTE_SHIFT] |= (BYTE)(1u << (function & BITMAP_BIT_MASK));
         OKCF();
     } else {                                    /* unhandled service */
         /* GH #27. Recorded as well as logged, so the STAGE2 block can list every
@@ -3723,7 +3721,7 @@ INT DosInt21(PDOS_MACHINE machine)
         trace = LogPut(trace, "  INT21 AH=0x"); trace = LogHexByte(trace, (UINT)function);
         trace = LogPut(trace, " AL=0x"); trace = LogHexByte(trace, (UINT)(R_AX & BYTE_MASK));
         trace = LogPut(trace, " UNIMPLEMENTED\r\n");
-        machine->Unimplemented[(function & BYTE_MASK) >> DOS_INT21_BYTE_INDEX_SHIFT] |= (BYTE)(1u << (function & DOS_INT21_BIT_INDEX_MASK));
+        machine->Unimplemented[(function & BYTE_MASK) >> BITMAP_BYTE_SHIFT] |= (BYTE)(1u << (function & BITMAP_BIT_MASK));
         ERRCF();
     }
 

@@ -67,10 +67,17 @@
      allocation record is the guest's, not ours, and refusing would kill Win16 -- so in
      that mode only the range is checked. (`isGuestOwnedTable` = the shadow exists.) */
 #define DPMI_SELECTOR_TI          4    /* the table indicator: 1 = the LDT         */
+#define DPMI_SELECTOR_RPL_USER    3    /* requested privilege level 3: a client's  */
 #define DPMI_SELECTOR_INDEX_SHIFT 3
+/* A client's LDT selector for descriptor `index`, and the descriptor index of a selector. */
+#define DPMI_LDT_SELECTOR(index)      (((index) << DPMI_SELECTOR_INDEX_SHIFT) | (DPMI_SELECTOR_TI | DPMI_SELECTOR_RPL_USER))
+#define DPMI_SELECTOR_INDEX(selector) ((selector) >> DPMI_SELECTOR_INDEX_SHIFT)
+/* The flags nibble (G, D/B, L, AVL) is bits 20-23 of a descriptor's high dword. */
+#define DPMI_DESCRIPTOR_FLAGS_SHIFT 20
+#define DPMI_DESCRIPTOR_FLAGS_MASK  0x0F
 static INT DpmiIsSelectorValid(WORD selector, INT indexLimit, INT isAllocated, INT isGuestOwnedTable)
 {
-    INT index = selector >> DPMI_SELECTOR_INDEX_SHIFT;
+    INT index = DPMI_SELECTOR_INDEX(selector);
     if (!(selector & DPMI_SELECTOR_TI)) return 0;    /* TI = 0: GDT          */
     if (index < 1 || index >= indexLimit) return 0;  /* null, or off the end */
     if (!isAllocated && !isGuestOwnedTable) return 0;   /* never handed out     */
