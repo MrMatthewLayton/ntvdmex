@@ -224,6 +224,37 @@
 #define WOWUSER_MINUS_ONE16          0xFFFF  /* -1 as a Win16 WORD argument               */
 #define WOWUSER_WNDPROC_ARGUMENTS    5       /* hwnd, msg, wParam, lParam high, low       */
 #define WOWUSER_WNDPROC_ARG_LPARAM   3       /* lParam's high word: a blob's far pointer  */
+/* The Win16 owner-draw structures WM_DRAWITEM / MEASUREITEM / DELETEITEM / COMPAREITEM carry
+   (all WORD-sized handles and ids; itemState keeps only the first five ODS_ bits). */
+#define WOWUSER_OWNERDRAW16_CTLTYPE        0
+#define WOWUSER_OWNERDRAW16_CTLID          2
+#define WOWUSER_DRAWITEM16_ITEMID          4
+#define WOWUSER_DRAWITEM16_ITEMACTION      6
+#define WOWUSER_DRAWITEM16_ITEMSTATE       8
+#define WOWUSER_DRAWITEM16_HWNDITEM        10
+#define WOWUSER_DRAWITEM16_HDC             12
+#define WOWUSER_DRAWITEM16_RCITEM_LEFT     14
+#define WOWUSER_DRAWITEM16_RCITEM_TOP      16
+#define WOWUSER_DRAWITEM16_RCITEM_RIGHT    18
+#define WOWUSER_DRAWITEM16_RCITEM_BOTTOM   20
+#define WOWUSER_DRAWITEM16_ITEMDATA        22
+#define WOWUSER_DRAWITEM16_SIZE            26
+#define WOWUSER_ODS16_MASK                 0x1F
+#define WOWUSER_MEASUREITEM16_ITEMID       4
+#define WOWUSER_MEASUREITEM16_ITEMWIDTH    6
+#define WOWUSER_MEASUREITEM16_ITEMHEIGHT   8
+#define WOWUSER_MEASUREITEM16_ITEMDATA     10
+#define WOWUSER_MEASUREITEM16_SIZE         14
+#define WOWUSER_DELETEITEM16_ITEMID        4
+#define WOWUSER_DELETEITEM16_HWNDITEM      6
+#define WOWUSER_DELETEITEM16_ITEMDATA      8
+#define WOWUSER_DELETEITEM16_SIZE          12
+#define WOWUSER_COMPAREITEM16_HWNDITEM     4
+#define WOWUSER_COMPAREITEM16_ITEMID1      6
+#define WOWUSER_COMPAREITEM16_ITEMDATA1    8
+#define WOWUSER_COMPAREITEM16_ITEMID2      12
+#define WOWUSER_COMPAREITEM16_ITEMDATA2    14
+#define WOWUSER_COMPAREITEM16_SIZE         18
 #define WOWUSER_MAX_PARENT_DEPTH     8       /* how far an instance is looked for upward  */
 #define WOWUSER_MAX_ALIASES          48      /* other programs' windows given a handle    */
 #define WM_CTLCOLOR16                0x0019  /* Win16 only: Win32 split it per control    */

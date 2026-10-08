@@ -28169,50 +28169,50 @@ static LRESULT WowOwnerDraw(HWND window, WORD window16, UINT message, WPARAM wPa
         const DRAWITEMSTRUCT *drawItem = (const DRAWITEMSTRUCT *)lParam;
         deviceContext16 = WowGdiH16((HGDIOBJ)drawItem->hDC, WOWGDI_KIND_DC);
         if (!deviceContext16) return 0;
-        OwnerDrawPutWord(bytes, 0, (WORD)drawItem->CtlType); OwnerDrawPutWord(bytes, 2, (WORD)drawItem->CtlID);
-        OwnerDrawPutWord(bytes, 4, (WORD)drawItem->itemID);  OwnerDrawPutWord(bytes, 6, (WORD)drawItem->itemAction);
-        OwnerDrawPutWord(bytes, 8, (WORD)(drawItem->itemState & 0x1F));
-        OwnerDrawPutWord(bytes, 10, WowWinHwnd16(drawItem->hwndItem)); OwnerDrawPutWord(bytes, 12, deviceContext16);
-        OwnerDrawPutWord(bytes, 14, (WORD)drawItem->rcItem.left);  OwnerDrawPutWord(bytes, 16, (WORD)drawItem->rcItem.top);
-        OwnerDrawPutWord(bytes, 18, (WORD)drawItem->rcItem.right); OwnerDrawPutWord(bytes, 20, (WORD)drawItem->rcItem.bottom);
-        OwnerDrawPutDword(bytes, 22, (DWORD)drawItem->itemData);
-        length = 26; break;
+        OwnerDrawPutWord(bytes, WOWUSER_OWNERDRAW16_CTLTYPE, (WORD)drawItem->CtlType); OwnerDrawPutWord(bytes, WOWUSER_OWNERDRAW16_CTLID, (WORD)drawItem->CtlID);
+        OwnerDrawPutWord(bytes, WOWUSER_DRAWITEM16_ITEMID, (WORD)drawItem->itemID);  OwnerDrawPutWord(bytes, WOWUSER_DRAWITEM16_ITEMACTION, (WORD)drawItem->itemAction);
+        OwnerDrawPutWord(bytes, WOWUSER_DRAWITEM16_ITEMSTATE, (WORD)(drawItem->itemState & WOWUSER_ODS16_MASK));
+        OwnerDrawPutWord(bytes, WOWUSER_DRAWITEM16_HWNDITEM, WowWinHwnd16(drawItem->hwndItem)); OwnerDrawPutWord(bytes, WOWUSER_DRAWITEM16_HDC, deviceContext16);
+        OwnerDrawPutWord(bytes, WOWUSER_DRAWITEM16_RCITEM_LEFT, (WORD)drawItem->rcItem.left);  OwnerDrawPutWord(bytes, WOWUSER_DRAWITEM16_RCITEM_TOP, (WORD)drawItem->rcItem.top);
+        OwnerDrawPutWord(bytes, WOWUSER_DRAWITEM16_RCITEM_RIGHT, (WORD)drawItem->rcItem.right); OwnerDrawPutWord(bytes, WOWUSER_DRAWITEM16_RCITEM_BOTTOM, (WORD)drawItem->rcItem.bottom);
+        OwnerDrawPutDword(bytes, WOWUSER_DRAWITEM16_ITEMDATA, (DWORD)drawItem->itemData);
+        length = WOWUSER_DRAWITEM16_SIZE; break;
     }
     case WM_MEASUREITEM: {
         const MEASUREITEMSTRUCT *measureItem = (const MEASUREITEMSTRUCT *)lParam;
-        OwnerDrawPutWord(bytes, 0, (WORD)measureItem->CtlType); OwnerDrawPutWord(bytes, 2, (WORD)measureItem->CtlID);
-        OwnerDrawPutWord(bytes, 4, (WORD)measureItem->itemID);  OwnerDrawPutWord(bytes, 6, (WORD)measureItem->itemWidth);
-        OwnerDrawPutWord(bytes, 8, (WORD)measureItem->itemHeight); OwnerDrawPutDword(bytes, 10, (DWORD)measureItem->itemData);
-        length = 14; break;
+        OwnerDrawPutWord(bytes, WOWUSER_OWNERDRAW16_CTLTYPE, (WORD)measureItem->CtlType); OwnerDrawPutWord(bytes, WOWUSER_OWNERDRAW16_CTLID, (WORD)measureItem->CtlID);
+        OwnerDrawPutWord(bytes, WOWUSER_MEASUREITEM16_ITEMID, (WORD)measureItem->itemID);  OwnerDrawPutWord(bytes, WOWUSER_MEASUREITEM16_ITEMWIDTH, (WORD)measureItem->itemWidth);
+        OwnerDrawPutWord(bytes, WOWUSER_MEASUREITEM16_ITEMHEIGHT, (WORD)measureItem->itemHeight); OwnerDrawPutDword(bytes, WOWUSER_MEASUREITEM16_ITEMDATA, (DWORD)measureItem->itemData);
+        length = WOWUSER_MEASUREITEM16_SIZE; break;
     }
     case WM_DELETEITEM: {
         const DELETEITEMSTRUCT *drawItem = (const DELETEITEMSTRUCT *)lParam;
-        OwnerDrawPutWord(bytes, 0, (WORD)drawItem->CtlType); OwnerDrawPutWord(bytes, 2, (WORD)drawItem->CtlID);
-        OwnerDrawPutWord(bytes, 4, (WORD)drawItem->itemID);  OwnerDrawPutWord(bytes, 6, WowWinHwnd16(drawItem->hwndItem));
-        OwnerDrawPutDword(bytes, 8, (DWORD)drawItem->itemData);
-        length = 12; break;
+        OwnerDrawPutWord(bytes, WOWUSER_OWNERDRAW16_CTLTYPE, (WORD)drawItem->CtlType); OwnerDrawPutWord(bytes, WOWUSER_OWNERDRAW16_CTLID, (WORD)drawItem->CtlID);
+        OwnerDrawPutWord(bytes, WOWUSER_DELETEITEM16_ITEMID, (WORD)drawItem->itemID);  OwnerDrawPutWord(bytes, WOWUSER_DELETEITEM16_HWNDITEM, WowWinHwnd16(drawItem->hwndItem));
+        OwnerDrawPutDword(bytes, WOWUSER_DELETEITEM16_ITEMDATA, (DWORD)drawItem->itemData);
+        length = WOWUSER_DELETEITEM16_SIZE; break;
     }
     case WM_COMPAREITEM: {
         const COMPAREITEMSTRUCT *compareItem = (const COMPAREITEMSTRUCT *)lParam;
-        OwnerDrawPutWord(bytes, 0, (WORD)compareItem->CtlType); OwnerDrawPutWord(bytes, 2, (WORD)compareItem->CtlID);
-        OwnerDrawPutWord(bytes, 4, WowWinHwnd16(compareItem->hwndItem));
-        OwnerDrawPutWord(bytes, 6, (WORD)compareItem->itemID1); OwnerDrawPutDword(bytes, 8, (DWORD)compareItem->itemData1);
-        OwnerDrawPutWord(bytes, 12, (WORD)compareItem->itemID2); OwnerDrawPutDword(bytes, 14, (DWORD)compareItem->itemData2);
-        length = 18; break;
+        OwnerDrawPutWord(bytes, WOWUSER_OWNERDRAW16_CTLTYPE, (WORD)compareItem->CtlType); OwnerDrawPutWord(bytes, WOWUSER_OWNERDRAW16_CTLID, (WORD)compareItem->CtlID);
+        OwnerDrawPutWord(bytes, WOWUSER_COMPAREITEM16_HWNDITEM, WowWinHwnd16(compareItem->hwndItem));
+        OwnerDrawPutWord(bytes, WOWUSER_COMPAREITEM16_ITEMID1, (WORD)compareItem->itemID1); OwnerDrawPutDword(bytes, WOWUSER_COMPAREITEM16_ITEMDATA1, (DWORD)compareItem->itemData1);
+        OwnerDrawPutWord(bytes, WOWUSER_COMPAREITEM16_ITEMID2, (WORD)compareItem->itemID2); OwnerDrawPutDword(bytes, WOWUSER_COMPAREITEM16_ITEMDATA2, (DWORD)compareItem->itemData2);
+        length = WOWUSER_COMPAREITEM16_SIZE; break;
     }
     default: return 0;
     }
     args[0] = window16; args[1] = (WORD)message; args[2] = (WORD)wParam;
     args[3] = 0; args[4] = 0;                    /* lParam: the structure's far pointer */
     made = WowCall16SyncEx(proc, wowWindow->Instance ? wowWindow->Instance : g_WowUserClasses[wowWindow->Class].Instance,
-                              args, 5, window16, (WORD)message, &result, bytes, length, 3, NULL, 0);
+                              args, ARRAYSIZE(args), window16, (WORD)message, &result, bytes, length, WOWUSER_WNDPROC_ARG_LPARAM, NULL, 0);
     if (deviceContext16) WowGdiForget(deviceContext16);
     if (!made) return 0;
     *handled = 1;
     if (message == WM_MEASUREITEM) {
         MEASUREITEMSTRUCT *measureItem = (MEASUREITEMSTRUCT *)lParam;
-        measureItem->itemWidth  = OwnerDrawGetWord(bytes, 6);
-        measureItem->itemHeight = OwnerDrawGetWord(bytes, 8);
+        measureItem->itemWidth  = OwnerDrawGetWord(bytes, WOWUSER_MEASUREITEM16_ITEMWIDTH);
+        measureItem->itemHeight = OwnerDrawGetWord(bytes, WOWUSER_MEASUREITEM16_ITEMHEIGHT);
         return TRUE;
     }
     if (message == WM_COMPAREITEM) return (LRESULT)(INT16)result;
