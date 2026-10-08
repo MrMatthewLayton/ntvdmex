@@ -75,6 +75,57 @@
 /* The flags nibble (G, D/B, L, AVL) is bits 20-23 of a descriptor's high dword. */
 #define DPMI_DESCRIPTOR_FLAGS_SHIFT 20
 #define DPMI_DESCRIPTOR_FLAGS_MASK  0x0F
+
+/* INT 31h functions (AX), as the dispatcher's comments name them; 04F1h/04F2h are NTVDM's own. */
+#define DPMI_FN_ALLOCATE_DESCRIPTORS         0x0000
+#define DPMI_FN_FREE_DESCRIPTOR              0x0001
+#define DPMI_FN_SEGMENT_TO_DESCRIPTOR        0x0002
+#define DPMI_FN_GET_SELECTOR_INCREMENT       0x0003
+#define DPMI_FN_GET_SEGMENT_BASE             0x0006
+#define DPMI_FN_SET_SEGMENT_BASE             0x0007
+#define DPMI_FN_SET_SEGMENT_LIMIT            0x0008
+#define DPMI_FN_SET_ACCESS_RIGHTS            0x0009
+#define DPMI_FN_CREATE_ALIAS                 0x000A
+#define DPMI_FN_GET_DESCRIPTOR               0x000B
+#define DPMI_FN_SET_DESCRIPTOR               0x000C
+#define DPMI_FN_ALLOCATE_SPECIFIC_DESCRIPTOR 0x000D
+#define DPMI_FN_ALLOCATE_DOS_MEMORY          0x0100
+#define DPMI_FN_FREE_DOS_MEMORY              0x0101
+#define DPMI_FN_RESIZE_DOS_MEMORY            0x0102
+#define DPMI_FN_GET_REAL_MODE_VECTOR         0x0200
+#define DPMI_FN_SET_REAL_MODE_VECTOR         0x0201
+#define DPMI_FN_GET_EXCEPTION_HANDLER        0x0202
+#define DPMI_FN_SET_EXCEPTION_HANDLER        0x0203
+#define DPMI_FN_GET_PROTECTED_MODE_VECTOR    0x0204
+#define DPMI_FN_SET_PROTECTED_MODE_VECTOR    0x0205
+#define DPMI_FN_SIMULATE_REAL_MODE_INTERRUPT 0x0300
+#define DPMI_FN_CALL_REAL_MODE_FAR           0x0301
+#define DPMI_FN_CALL_REAL_MODE_IRET          0x0302
+#define DPMI_FN_ALLOCATE_CALLBACK            0x0303
+#define DPMI_FN_FREE_CALLBACK                0x0304
+#define DPMI_FN_GET_STATE_SAVE_ADDRESSES     0x0305
+#define DPMI_FN_GET_RAW_SWITCH_ADDRESSES     0x0306
+#define DPMI_FN_GET_VERSION                  0x0400
+#define DPMI_FN_NTVDM_ALLOCATE               0x04F1
+#define DPMI_FN_NTVDM_COMMIT                 0x04F2
+#define DPMI_FN_GET_FREE_MEMORY_INFO         0x0500
+#define DPMI_FN_ALLOCATE_MEMORY              0x0501
+#define DPMI_FN_FREE_MEMORY                  0x0502
+#define DPMI_FN_RESIZE_MEMORY                0x0503
+#define DPMI_FN_LOCK_LINEAR_REGION           0x0600
+#define DPMI_FN_UNLOCK_LINEAR_REGION         0x0601
+#define DPMI_FN_UNLOCK_REAL_MODE_REGION      0x0602
+#define DPMI_FN_RELOCK_REAL_MODE_REGION      0x0603
+#define DPMI_FN_GET_PAGE_SIZE                0x0604
+#define DPMI_FN_DISCARD_PAGES                0x0701
+#define DPMI_FN_MARK_DEMAND_PAGING           0x0702
+#define DPMI_FN_DISCARD_PAGE_CONTENTS        0x0703
+#define DPMI_FN_MAP_PHYSICAL_ADDRESS         0x0800
+#define DPMI_FN_FREE_PHYSICAL_MAPPING        0x0801
+#define DPMI_FN_GET_AND_DISABLE_VI           0x0900
+#define DPMI_FN_GET_AND_ENABLE_VI            0x0901
+#define DPMI_FN_GET_VI_STATE                 0x0902
+#define DPMI_FN_GET_VENDOR_API               0x0A00
 static INT DpmiIsSelectorValid(WORD selector, INT indexLimit, INT isAllocated, INT isGuestOwnedTable)
 {
     INT index = DPMI_SELECTOR_INDEX(selector);
