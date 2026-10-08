@@ -90,11 +90,8 @@ typedef const DOS_SB_CONFIG *PCDOS_SB_CONFIG;
 #define DOS_SB_NOT_ADVERTISED    0      /* a 0 port or channel is left out of the string */
 
 /* Writing numbers into the string. */
-#define DOS_ENV_DECIMAL_BASE        10
 #define DOS_ENV_DECIMAL_DIGITS_MAX  12
 #define DOS_ENV_HEX_FIRST_SHIFT     8   /* three hex digits: bits 11-8 first         */
-#define DOS_ENV_HEX_DIGIT_BITS      4
-#define DOS_ENV_HEX_DIGIT_MASK      0xF
 
 /* The block's fixed text. */
 #define DOS_ENV_COMSPEC             "COMSPEC=C:\\COMMAND.COM"
@@ -110,7 +107,7 @@ static inline volatile BYTE *DosEnvPutDecimal(_Out_ volatile BYTE *cursor, _In_ 
                                                _In_ UINT value) {
     CHAR digits[DOS_ENV_DECIMAL_DIGITS_MAX]; INT digitCount = 0;
     if (!value) { if (cursor < end) *cursor++ = '0'; return cursor; }
-    while (value && digitCount < (INT)sizeof digits) { digits[digitCount++] = (CHAR)('0' + value % DOS_ENV_DECIMAL_BASE); value /= DOS_ENV_DECIMAL_BASE; }
+    while (value && digitCount < (INT)sizeof digits) { digits[digitCount++] = (CHAR)('0' + value % DECIMAL_RADIX); value /= DECIMAL_RADIX; }
     while (digitCount-- > 0 && cursor < end) *cursor++ = (BYTE)digits[digitCount];
     return cursor;
 }
@@ -121,7 +118,7 @@ static inline volatile BYTE *DosEnvPutThreeHexDigits(_Out_ volatile BYTE *cursor
                                                      _In_ UINT value) {
     static const CHAR hexDigits[] = "0123456789ABCDEF";
     INT shift;
-    for (shift = DOS_ENV_HEX_FIRST_SHIFT; shift >= 0; shift -= DOS_ENV_HEX_DIGIT_BITS) if (cursor < end) *cursor++ = (BYTE)hexDigits[(value >> shift) & DOS_ENV_HEX_DIGIT_MASK];
+    for (shift = DOS_ENV_HEX_FIRST_SHIFT; shift >= 0; shift -= NIBBLE_SHIFT) if (cursor < end) *cursor++ = (BYTE)hexDigits[(value >> shift) & NIBBLE_MASK];
     return cursor;
 }
 

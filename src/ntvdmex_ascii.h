@@ -13,4 +13,11 @@
 #define ASCII_SPACE         0x20    /* and the first printable character         */
 #define ASCII_CASE_BIT      0x20    /* 'a' - 'A'                                 */
 
+/* Reading a number from text, one digit at a time. */
+#define DECIMAL_RADIX       10
+#define DECIMAL_RADIX_U     10u
+#define HEX_RADIX           16
+#define HEX_RADIX_U         16u
+#define HEX_DIGIT_A_VALUE   10      /* 'A'/'a': the first hex digit that is a letter */
+
 #endif /* NTVDMEX_ASCII_H */

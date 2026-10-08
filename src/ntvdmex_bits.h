@@ -20,6 +20,7 @@
 #define DWORD_MASK_U        0xFFFFFFFFu     /* all 32 bits                          */
 
 #define NIBBLE_SHIFT        4               /* one hex digit                        */
+#define NIBBLE_MASK         0xF             /* the low hex digit                    */
 #define BYTE_SHIFT          8               /* one byte up: bits 8-15               */
 #define WORD_SHIFT          16              /* the high word: bits 16-31            */
 #define TOP_BYTE_SHIFT      24              /* the top byte of a dword: bits 24-31  */

@@ -44,7 +44,6 @@
 
 #define NTVDMEX_REG_KEY "Software\\NTVDMEX"
 #define NTVDMEX_PATH_MAX 260
-#define SETTINGS_DECIMAL_BASE  10
 #define SETTINGS_DOS_MAJOR_MAX 255     /* "major.minor": a byte, then two digits */
 #define SETTINGS_DOS_MINOR_MAX 99
 #define SETTINGS_UNSIGNED_MAX  100000000u   /* an edit box's absurd value */
@@ -477,10 +476,10 @@ static VOID SettingsParseVersion(PCSTR text, DWORD *major, DWORD *minor)
 {
     DWORD majorValue = 0, minorValue = 0; INT index = 0, isSeen = 0;
     while (text[index] == ' ' || text[index] == '\t') ++index;
-    while (text[index] >= '0' && text[index] <= '9') { majorValue = majorValue * SETTINGS_DECIMAL_BASE + (DWORD)(text[index] - '0'); ++index; isSeen = 1; }
+    while (text[index] >= '0' && text[index] <= '9') { majorValue = majorValue * DECIMAL_RADIX + (DWORD)(text[index] - '0'); ++index; isSeen = 1; }
     if (text[index] == '.') {
         ++index;
-        while (text[index] >= '0' && text[index] <= '9') { minorValue = minorValue * SETTINGS_DECIMAL_BASE + (DWORD)(text[index] - '0'); ++index; }
+        while (text[index] >= '0' && text[index] <= '9') { minorValue = minorValue * DECIMAL_RADIX + (DWORD)(text[index] - '0'); ++index; }
     }
     if (!isSeen || majorValue < 1 || majorValue > SETTINGS_DOS_MAJOR_MAX || minorValue > SETTINGS_DOS_MINOR_MAX) return;   /* keep the previous value */
     *major = majorValue; *minor = minorValue;
@@ -494,7 +493,7 @@ static INT SettingsParseUnsigned(PCSTR text, DWORD *out)
     DWORD value = 0; INT index = 0, isSeen = 0;
     while (text[index] == ' ' || text[index] == '\t') ++index;
     while (text[index] >= '0' && text[index] <= '9') {
-        value = value * SETTINGS_DECIMAL_BASE + (DWORD)(text[index] - '0');
+        value = value * DECIMAL_RADIX + (DWORD)(text[index] - '0');
         if (value > SETTINGS_UNSIGNED_MAX) return 0;                /* absurd: reject, don't wrap */
         ++index; isSeen = 1;
     }

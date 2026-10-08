@@ -477,8 +477,8 @@ static VOID ProbeLoadInto(PCSTR path, WORD *out, INT *outCount)
         while (buffer[index]) {
             CHAR character = buffer[index];
             if      (character >= '0' && character <= '9') value = (value << NIBBLE_SHIFT) | (UINT)(character - '0');
-            else if (character >= 'a' && character <= 'f') value = (value << NIBBLE_SHIFT) | (UINT)(character - 'a' + 10);
-            else if (character >= 'A' && character <= 'F') value = (value << NIBBLE_SHIFT) | (UINT)(character - 'A' + 10);
+            else if (character >= 'a' && character <= 'f') value = (value << NIBBLE_SHIFT) | (UINT)(character - 'a' + HEX_DIGIT_A_VALUE);
+            else if (character >= 'A' && character <= 'F') value = (value << NIBBLE_SHIFT) | (UINT)(character - 'A' + HEX_DIGIT_A_VALUE);
             else break;
             ++got; ++index;
         }
@@ -504,8 +504,8 @@ static VOID DsProbeLoad(VOID)
         while (buffer[index]) {
             CHAR character = buffer[index];
             if      (character >= '0' && character <= '9') value = (value << NIBBLE_SHIFT) | (UINT)(character - '0');
-            else if (character >= 'a' && character <= 'f') value = (value << NIBBLE_SHIFT) | (UINT)(character - 'a' + 10);
-            else if (character >= 'A' && character <= 'F') value = (value << NIBBLE_SHIFT) | (UINT)(character - 'A' + 10);
+            else if (character >= 'a' && character <= 'f') value = (value << NIBBLE_SHIFT) | (UINT)(character - 'a' + HEX_DIGIT_A_VALUE);
+            else if (character >= 'A' && character <= 'F') value = (value << NIBBLE_SHIFT) | (UINT)(character - 'A' + HEX_DIGIT_A_VALUE);
             else break;
             ++got; ++index;
         }
@@ -7288,7 +7288,7 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
               }
               if (script[index] == 'w' || script[index] == 'W') {           /* w<decimal ms> */
                   ++index;
-                  while (index < bytesRead && script[index] >= '0' && script[index] <= '9') { value = value*10 + (DWORD)(script[index]-'0'); ++index; }
+                  while (index < bytesRead && script[index] >= '0' && script[index] <= '9') { value = value*DECIMAL_RADIX + (DWORD)(script[index]-'0'); ++index; }
                   { DWORD slept = 0;                       /* sleep in slices so a wind-down
                                                               is not stuck behind a long wait */
                     while (slept < value && g_Running) { Sleep(value - slept > SYNTHKEY_SLEEP_SLICE_MS ? SYNTHKEY_SLEEP_SLICE_MS : value - slept);
@@ -7309,8 +7309,8 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
                   while (index < bytesRead && digits < SYNTHKEY_HEX_DIGITS_MAX) {
                       CHAR character = script[index]; INT digit = -1;
                       if (character >= '0' && character <= '9') digit = character - '0';
-                      else if (character >= 'a' && character <= 'f') digit = character - 'a' + 10;
-                      else if (character >= 'A' && character <= 'F') digit = character - 'A' + 10;
+                      else if (character >= 'a' && character <= 'f') digit = character - 'a' + HEX_DIGIT_A_VALUE;
+                      else if (character >= 'A' && character <= 'F') digit = character - 'A' + HEX_DIGIT_A_VALUE;
                       if (digit < 0) break;
                       value = (value << NIBBLE_SHIFT) | (DWORD)digit; ++index; ++digits;
                   }
@@ -7323,8 +7323,8 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
               while (index < bytesRead && digits < SYNTHKEY_HEX_DIGITS_MAX) {               /* up to two hex digits */
                   CHAR character = script[index]; INT digit = -1;
                   if (character >= '0' && character <= '9') digit = character - '0';
-                  else if (character >= 'a' && character <= 'f') digit = character - 'a' + 10;
-                  else if (character >= 'A' && character <= 'F') digit = character - 'A' + 10;
+                  else if (character >= 'a' && character <= 'f') digit = character - 'a' + HEX_DIGIT_A_VALUE;
+                  else if (character >= 'A' && character <= 'F') digit = character - 'A' + HEX_DIGIT_A_VALUE;
                   if (digit < 0) break;
                   value = (value << NIBBLE_SHIFT) | (DWORD)digit; ++index; ++digits;
               }
@@ -20039,8 +20039,8 @@ static VOID DpmiBreakpointLoad(VOID)
             while (index < bytesRead) {
                 CHAR character = buffer[index];
                 INT digit = (character >= '0' && character <= '9') ? character - '0'
-                      : (character >= 'a' && character <= 'f') ? character - 'a' + 10
-                      : (character >= 'A' && character <= 'F') ? character - 'A' + 10 : -1;
+                      : (character >= 'a' && character <= 'f') ? character - 'a' + HEX_DIGIT_A_VALUE
+                      : (character >= 'A' && character <= 'F') ? character - 'A' + HEX_DIGIT_A_VALUE : -1;
                 if (digit < 0) break;
                 if (column < 5) values[column] = (values[column] << NIBBLE_SHIFT) | (DWORD)digit;
                 ++digits; ++index;
@@ -20492,8 +20492,8 @@ static VOID Wow32ModeLoad(VOID)
             while (index < bytesRead) {
                 CHAR character = buffer[index];
                 INT digit = (character >= '0' && character <= '9') ? character - '0'
-                      : (character >= 'a' && character <= 'f') ? character - 'a' + 10
-                      : (character >= 'A' && character <= 'F') ? character - 'A' + 10 : -1;
+                      : (character >= 'a' && character <= 'f') ? character - 'a' + HEX_DIGIT_A_VALUE
+                      : (character >= 'A' && character <= 'F') ? character - 'A' + HEX_DIGIT_A_VALUE : -1;
                 if (digit < 0) break;
                 values[column] = (values[column] << NIBBLE_SHIFT) | (DWORD)digit; ++digits; ++index;
             }
@@ -20551,8 +20551,8 @@ static VOID Wow32ReturnLoad(VOID)
             while (index < bytesRead) {
                 CHAR character = buffer[index];
                 INT digit = (character >= '0' && character <= '9') ? character - '0'
-                      : (character >= 'a' && character <= 'f') ? character - 'a' + 10
-                      : (character >= 'A' && character <= 'F') ? character - 'A' + 10 : -1;
+                      : (character >= 'a' && character <= 'f') ? character - 'a' + HEX_DIGIT_A_VALUE
+                      : (character >= 'A' && character <= 'F') ? character - 'A' + HEX_DIGIT_A_VALUE : -1;
                 if (digit < 0) break;
                 values[column] = (values[column] << NIBBLE_SHIFT) | (DWORD)digit; ++digits; ++index;
             }
@@ -30016,7 +30016,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
       if (modeHandle != INVALID_HANDLE_VALUE) {
           CHAR modeYText[32]; DWORD modeYRead = 0, modeYValue = 0, modeYIndex; INT got = 0;
           ReadFile(modeHandle, modeYText, sizeof modeYText - 1, &modeYRead, NULL); CloseHandle(modeHandle);
-          for (modeYIndex = 0; modeYIndex < modeYRead && modeYText[modeYIndex] >= '0' && modeYText[modeYIndex] <= '9'; ++modeYIndex) { modeYValue = modeYValue * 10 + (DWORD)(modeYText[modeYIndex] - '0'); got = 1; }
+          for (modeYIndex = 0; modeYIndex < modeYRead && modeYText[modeYIndex] >= '0' && modeYText[modeYIndex] <= '9'; ++modeYIndex) { modeYValue = modeYValue * DECIMAL_RADIX + (DWORD)(modeYText[modeYIndex] - '0'); got = 1; }
           if (got && modeYValue <= 65536u) {
               CHAR dwordsLine[96], *lineCursor = dwordsLine;
               g_Video.ModeYGap = modeYValue;
@@ -30032,12 +30032,12 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             CHAR captureText[32]; DWORD captureRead = 0, captureValue = 0, captureIndex;
             ReadFile(configHandle, captureText, sizeof captureText - 1, &captureRead, NULL); CloseHandle(configHandle);
             for (captureIndex = 0; captureIndex < captureRead && captureText[captureIndex] >= '0' && captureText[captureIndex] <= '9'; ++captureIndex)
-                captureValue = captureValue * 10 + (DWORD)(captureText[captureIndex] - '0');
+                captureValue = captureValue * DECIMAL_RADIX + (DWORD)(captureText[captureIndex] - '0');
             if (captureValue >= 50 && captureValue <= 60000) g_CaptureMs = captureValue;
             {   DWORD periodDelay = 0;                                 /* #58: "period delay" */
                 while (captureIndex < captureRead && captureText[captureIndex] == ' ') ++captureIndex;
                 for (; captureIndex < captureRead && captureText[captureIndex] >= '0' && captureText[captureIndex] <= '9'; ++captureIndex)
-                    periodDelay = periodDelay * 10 + (DWORD)(captureText[captureIndex] - '0');
+                    periodDelay = periodDelay * DECIMAL_RADIX + (DWORD)(captureText[captureIndex] - '0');
                 if (periodDelay <= 600000) g_CaptureDelayMs = periodDelay; }
             g_CaptureStart = GetTickCount();
         }
@@ -30059,8 +30059,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             ReadFile(noPatchHandle, noPatchText, sizeof noPatchText - 1, &noPatchBytesRead, NULL); CloseHandle(noPatchHandle);
             for (noPatchIndex = 0; noPatchIndex < noPatchBytesRead; ++noPatchIndex) {
                 INT hexDigit = (noPatchText[noPatchIndex] >= '0' && noPatchText[noPatchIndex] <= '9') ? noPatchText[noPatchIndex] - '0'
-                       : (noPatchText[noPatchIndex] >= 'a' && noPatchText[noPatchIndex] <= 'f') ? noPatchText[noPatchIndex] - 'a' + 10
-                       : (noPatchText[noPatchIndex] >= 'A' && noPatchText[noPatchIndex] <= 'F') ? noPatchText[noPatchIndex] - 'A' + 10 : -1;
+                       : (noPatchText[noPatchIndex] >= 'a' && noPatchText[noPatchIndex] <= 'f') ? noPatchText[noPatchIndex] - 'a' + HEX_DIGIT_A_VALUE
+                       : (noPatchText[noPatchIndex] >= 'A' && noPatchText[noPatchIndex] <= 'F') ? noPatchText[noPatchIndex] - 'A' + HEX_DIGIT_A_VALUE : -1;
                 if (hexDigit < 0) break;
                 noPatchValue = (noPatchValue << NIBBLE_SHIFT) | (DWORD)hexDigit;
             }
@@ -30074,8 +30074,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             ReadFile(modeHandle, memoryDumpText, sizeof memoryDumpText - 1, &memoryDumpBytesRead, NULL); CloseHandle(modeHandle);
             for (memoryDumpIndex = 0; memoryDumpIndex < memoryDumpBytesRead && width < 2; ++memoryDumpIndex) {
                 INT hexDigit = (memoryDumpText[memoryDumpIndex] >= '0' && memoryDumpText[memoryDumpIndex] <= '9') ? memoryDumpText[memoryDumpIndex] - '0'
-                       : (memoryDumpText[memoryDumpIndex] >= 'a' && memoryDumpText[memoryDumpIndex] <= 'f') ? memoryDumpText[memoryDumpIndex] - 'a' + 10
-                       : (memoryDumpText[memoryDumpIndex] >= 'A' && memoryDumpText[memoryDumpIndex] <= 'F') ? memoryDumpText[memoryDumpIndex] - 'A' + 10 : -1;
+                       : (memoryDumpText[memoryDumpIndex] >= 'a' && memoryDumpText[memoryDumpIndex] <= 'f') ? memoryDumpText[memoryDumpIndex] - 'a' + HEX_DIGIT_A_VALUE
+                       : (memoryDumpText[memoryDumpIndex] >= 'A' && memoryDumpText[memoryDumpIndex] <= 'F') ? memoryDumpText[memoryDumpIndex] - 'A' + HEX_DIGIT_A_VALUE : -1;
                 if (hexDigit < 0) { if (isIn) { ++width; isIn = 0; } continue; }
                 values[width] = (values[width] << NIBBLE_SHIFT) | (DWORD)hexDigit; isIn = 1;
             }
@@ -30124,7 +30124,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           CloseHandle(handle);
           for (index = 0; index < (INT)bytesRead; ++index) {
               if (text[index] < '0' || text[index] > '9') break;      /* stop at CR/LF/junk */
-              number = number * 10 + (DWORD)(text[index] - '0');
+              number = number * DECIMAL_RADIX + (DWORD)(text[index] - '0');
           }
           if (number > PM_HEADLESS_MS_DEFAULT && number <= 3600000) g_HeadlessMs = number;   /* s84: an hour, for slow-rung timedemos */
       } }
@@ -30140,8 +30140,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           for (index = 0; index < (INT)bytesRead; ++index) {          /* up to two hex digits */
               INT digit = -1;
               if (text[index] >= '0' && text[index] <= '9') digit = text[index] - '0';
-              else if (text[index] >= 'a' && text[index] <= 'f') digit = text[index] - 'a' + 10;
-              else if (text[index] >= 'A' && text[index] <= 'F') digit = text[index] - 'A' + 10;
+              else if (text[index] >= 'a' && text[index] <= 'f') digit = text[index] - 'a' + HEX_DIGIT_A_VALUE;
+              else if (text[index] >= 'A' && text[index] <= 'F') digit = text[index] - 'A' + HEX_DIGIT_A_VALUE;
               if (digit < 0) break;
               number = (number << NIBBLE_SHIFT) | digit;
           }
@@ -30187,9 +30187,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           CHAR text[16]; DWORD bytesRead = 0; INT index = 0, major = 0, minor = 0;
           ReadFile(versionHandle, text, sizeof text, &bytesRead, NULL);
           CloseHandle(versionHandle);
-          while (index < (INT)bytesRead && text[index] >= '0' && text[index] <= '9') major = major * 10 + (text[index++] - '0');
+          while (index < (INT)bytesRead && text[index] >= '0' && text[index] <= '9') major = major * DECIMAL_RADIX + (text[index++] - '0');
           while (index < (INT)bytesRead && (text[index] == ' ' || text[index] == '.')) ++index;
-          while (index < (INT)bytesRead && text[index] >= '0' && text[index] <= '9') minor = minor * 10 + (text[index++] - '0');
+          while (index < (INT)bytesRead && text[index] >= '0' && text[index] <= '9') minor = minor * DECIMAL_RADIX + (text[index++] - '0');
           if (major > 0 && major < 256) { g_SbVersionMajor = (BYTE)major; g_SbVersionMinor = (BYTE)minor;
                                     g_DspVersionForced = 1; }
       } }
@@ -30301,8 +30301,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             for (index = 0; index < (INT)bytesRead; ++index) {
                 INT digit = -1;
                 if (text[index] >= '0' && text[index] <= '9') digit = text[index] - '0';
-                else if (text[index] >= 'a' && text[index] <= 'f') digit = text[index] - 'a' + 10;
-                else if (text[index] >= 'A' && text[index] <= 'F') digit = text[index] - 'A' + 10;
+                else if (text[index] >= 'a' && text[index] <= 'f') digit = text[index] - 'a' + HEX_DIGIT_A_VALUE;
+                else if (text[index] >= 'A' && text[index] <= 'F') digit = text[index] - 'A' + HEX_DIGIT_A_VALUE;
                 if (digit < 0) break;
                 want = (want << NIBBLE_SHIFT) | (DWORD)digit;
             }
@@ -31510,10 +31510,10 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           CHAR text[16]; DWORD bytesRead = 0; UINT index = 0, major = 0, minor = 0;
           ReadFile(handle, text, sizeof text - 1, &bytesRead, NULL);
           CloseHandle(handle);
-          while (index < bytesRead && text[index] >= '0' && text[index] <= '9') { major = major*10 + (UINT)(text[index]-'0'); ++index; }
+          while (index < bytesRead && text[index] >= '0' && text[index] <= '9') { major = major*DECIMAL_RADIX + (UINT)(text[index]-'0'); ++index; }
           if (index < bytesRead && text[index] == '.') {
               ++index;
-              while (index < bytesRead && text[index] >= '0' && text[index] <= '9') { minor = minor*10 + (UINT)(text[index]-'0'); ++index; }
+              while (index < bytesRead && text[index] >= '0' && text[index] <= '9') { minor = minor*DECIMAL_RADIX + (UINT)(text[index]-'0'); ++index; }
           }
           if (major && major < 256 && minor < 256) {
               DosInt21SetVersion(&machine, (BYTE)major, (BYTE)minor);
@@ -31602,10 +31602,10 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                   while (index < bytesRead) {
                       CHAR digitCharacter = text[index];
                       INT digit = (digitCharacter >= '0' && digitCharacter <= '9') ? digitCharacter - '0'
-                            : (digitCharacter >= 'a' && digitCharacter <= 'f') ? digitCharacter - 'a' + 10
-                            : (digitCharacter >= 'A' && digitCharacter <= 'F') ? digitCharacter - 'A' + 10 : -1;
+                            : (digitCharacter >= 'a' && digitCharacter <= 'f') ? digitCharacter - 'a' + HEX_DIGIT_A_VALUE
+                            : (digitCharacter >= 'A' && digitCharacter <= 'F') ? digitCharacter - 'A' + HEX_DIGIT_A_VALUE : -1;
                       if (digit < 0) break;
-                      value = value * 16u + (UINT)digit; got = 1; ++index;
+                      value = value * HEX_RADIX_U + (UINT)digit; got = 1; ++index;
                   }
                   if (!got) break;
                   versions[fieldCount++] = value;
@@ -32021,8 +32021,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           for (watchIndex = 0; watchIndex < watchBytesRead; ++watchIndex) {
               INT digit = -1; CHAR digitCharacter = watchText[watchIndex];
               if (digitCharacter >= '0' && digitCharacter <= '9') digit = digitCharacter - '0';
-              else if (digitCharacter >= 'a' && digitCharacter <= 'f') digit = digitCharacter - 'a' + 10;
-              else if (digitCharacter >= 'A' && digitCharacter <= 'F') digit = digitCharacter - 'A' + 10;
+              else if (digitCharacter >= 'a' && digitCharacter <= 'f') digit = digitCharacter - 'a' + HEX_DIGIT_A_VALUE;
+              else if (digitCharacter >= 'A' && digitCharacter <= 'F') digit = digitCharacter - 'A' + HEX_DIGIT_A_VALUE;
               if (digit < 0) break;
               watchValue = (watchValue << NIBBLE_SHIFT) | (DWORD)digit; gotWatch = 1;
           }
@@ -32220,7 +32220,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           CloseHandle(handle);
           for (index = 0; index < (INT)bytesRead; ++index) {
               if (text[index] < '0' || text[index] > '9') break;
-              number = number * 10 + (DWORD)(text[index] - '0');
+              number = number * DECIMAL_RADIX + (DWORD)(text[index] - '0');
           }
           g_Wave.BufferCount = number;                   /* AudioWaveStart clamps to [2,AUDIO_WAVE_BUFFERS] */
       } }
@@ -32239,7 +32239,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           CloseHandle(handle);
           for (index = 0; index < (INT)bytesRead; ++index) {
               if (text[index] < '0' || text[index] > '9') break;
-              number = number * 10 + (DWORD)(text[index] - '0');
+              number = number * DECIMAL_RADIX + (DWORD)(text[index] - '0');
           }
           g_Wave.FrameCount = number;                 /* clamped to [AUDIO_WAVE_MIN_FRAMES,AUDIO_WAVE_FRAMES] */
       } }
@@ -32296,7 +32296,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           ReadFile(uiTickFile, text, sizeof text, &bytesRead, NULL); CloseHandle(uiTickFile);
           for (index = 0; index < (INT)bytesRead; ++index) {
               if (text[index] < '0' || text[index] > '9') break;
-              number = number * 10 + (text[index] - '0');
+              number = number * DECIMAL_RADIX + (text[index] - '0');
           }
           if (bytesRead && text[0] >= '0' && text[0] <= '9' && number <= 100) {
               g_UiTickMinimumMs = number;
@@ -32311,7 +32311,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           ReadFile(wowIdleFile, text, sizeof text, &bytesRead, NULL); CloseHandle(wowIdleFile);
           for (index = 0; index < (INT)bytesRead; ++index) {
               if (text[index] < '0' || text[index] > '9') break;
-              number = number * 10 + (DWORD)(text[index] - '0');
+              number = number * DECIMAL_RADIX + (DWORD)(text[index] - '0');
           }
           if (bytesRead && text[0] >= '0' && text[0] <= '9') {
               CHAR wowLine2[160], *wowCursor2 = wowLine2;
@@ -32342,7 +32342,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           CHAR text[8]; DWORD bytesRead = 0; INT value2 = 0, index2;
           ReadFile(mouseSensitivityFile, text, sizeof text, &bytesRead, NULL); CloseHandle(mouseSensitivityFile);
           for (index2 = 0; index2 < (INT)bytesRead; ++index2) { if (text[index2] < '0' || text[index2] > '9') break;
-                                          value2 = value2 * 10 + (text[index2] - '0'); }
+                                          value2 = value2 * DECIMAL_RADIX + (text[index2] - '0'); }
           if (value2 >= 10 && value2 <= 1000) {
               g_MouseSensitivity = value2;
               SettingsNoteOverride(SET_MSENS, "cfg\\msens.txt", (DWORD)value2);
@@ -32360,7 +32360,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           CHAR text[12]; DWORD bytesRead = 0; UINT sbValue = 0; INT index2;
           ReadFile(cpuReferenceFile, text, sizeof text, &bytesRead, NULL); CloseHandle(cpuReferenceFile);
           for (index2 = 0; index2 < (INT)bytesRead; ++index2) { if (text[index2] < '0' || text[index2] > '9') break;
-                                          sbValue = sbValue * 10u + (UINT)(text[index2] - '0'); }
+                                          sbValue = sbValue * DECIMAL_RADIX_U + (UINT)(text[index2] - '0'); }
           if (sbValue >= 1u && sbValue <= 100000u) g_CpuSpeedReferenceMhz = sbValue;
       } }
     { HANDLE cpuSpeedFile = CreateFileA(CPUSPD_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -32390,7 +32390,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           CHAR text[8]; DWORD bytesRead = 0; UINT value9 = 0; INT index9;
           ReadFile(cpuSpeedFile, text, sizeof text, &bytesRead, NULL); CloseHandle(cpuSpeedFile);
           for (index9 = 0; index9 < (INT)bytesRead; ++index9) { if (text[index9] < '0' || text[index9] > '9') break;
-                                             value9 = value9 * 10u + (UINT)(text[index9] - '0'); }
+                                             value9 = value9 * DECIMAL_RADIX_U + (UINT)(text[index9] - '0'); }
           if (index9 > 0 && value9 < (UINT)CPUSPEED_COUNT) {
               g_CpuSpeedIndex = (INT)value9;
               SettingsNoteOverride(SET_SPEEDMODE, "cfg\\cpuspd.txt", value9);
@@ -32408,7 +32408,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           CHAR text[12]; DWORD bytesRead = 0; UINT valueG = 0; INT indexG;
           ReadFile(cpuGranularityFile, text, sizeof text, &bytesRead, NULL); CloseHandle(cpuGranularityFile);
           for (indexG = 0; indexG < (INT)bytesRead; ++indexG) { if (text[indexG] < '0' || text[indexG] > '9') break;
-                                             valueG = valueG * 10u + (UINT)(text[indexG] - '0'); }
+                                             valueG = valueG * DECIMAL_RADIX_U + (UINT)(text[indexG] - '0'); }
           if (indexG > 0 && valueG <= CPUSPEED_GRAN_MAX_MS) g_CpuSpeedGranularityMs = valueG;
       } }
     /* cpuaff.txt = 1 -> give the guest a core of its own. See CpuAffinityApply. */
@@ -33707,8 +33707,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                           while (pmTextIndex < commandLength) {
                               CHAR character = pmChangeText[pmTextIndex];
                               INT pmDigit = (character >= '0' && character <= '9') ? character - '0'
-                                    : (character >= 'a' && character <= 'f') ? character - 'a' + 10
-                                    : (character >= 'A' && character <= 'F') ? character - 'A' + 10 : -1;
+                                    : (character >= 'a' && character <= 'f') ? character - 'a' + HEX_DIGIT_A_VALUE
+                                    : (character >= 'A' && character <= 'F') ? character - 'A' + HEX_DIGIT_A_VALUE : -1;
                               if (pmDigit < 0) break;
                               values[column] = (values[column] << NIBBLE_SHIFT) | (DWORD)pmDigit; ++digits; ++pmTextIndex;
                           }
@@ -33739,8 +33739,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                           while (index2b < watchLength) {
                               CHAR character = watchBuffer[index2b];
                               INT digit = (character >= '0' && character <= '9') ? character - '0'
-                                    : (character >= 'a' && character <= 'f') ? character - 'a' + 10
-                                    : (character >= 'A' && character <= 'F') ? character - 'A' + 10 : -1;
+                                    : (character >= 'a' && character <= 'f') ? character - 'a' + HEX_DIGIT_A_VALUE
+                                    : (character >= 'A' && character <= 'F') ? character - 'A' + HEX_DIGIT_A_VALUE : -1;
                               if (digit < 0) break;
                               number = (number << NIBBLE_SHIFT) | (DWORD)digit; ++dig; ++index2b;
                           }
