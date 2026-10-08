@@ -57,6 +57,7 @@
 #define MULTIPLEX_DOS_TABLES             0x122E  /* DL selects: see DOS_INT2F_TBL_* */
 #define MULTIPLEX_DEVICE_API_ENTRY       0x1684
 #define MULTIPLEX_DPMI_INSTALLATION_CHECK 0x1687
+#define MULTIPLEX_DPMI_VENDOR_API        0x168A
 #define MULTIPLEX_DPMI_32BIT_SUPPORTED   1       /* BX bit 0                        */
 
 #endif /* NTVDMEX_DOS_BIOS_SERVICES_H */

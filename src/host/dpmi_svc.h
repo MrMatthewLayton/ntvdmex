@@ -90,6 +90,8 @@
 #define DPMI_DESCRIPTOR_FLAGS_SHIFT 20
 #define DPMI_DESCRIPTOR_FLAGS_MASK  0x0F
 #define DPMI_DESCRIPTOR_FLAG_BIG    0x4    /* D/B: a 32-bit segment                 */
+#define DPMI_DESCRIPTOR_FLAG_GRANULARITY 0x8   /* G: the limit counts pages         */
+#define DPMI_SET_RIGHTS_FLAGS_SHIFT 12   /* 0009h: the flags are CH's high nibble     */
 
 /* A DPMI 0.9 exception frame, as entries (WORDs for a 16-bit client, DWORDs for a 32-bit
    one): the handler's return CS:IP, then the error code and the faulting CS:IP, FLAGS, SS:SP. */
@@ -181,6 +183,20 @@
 #define DPMI_FN_GET_AND_ENABLE_VI            0x0901
 #define DPMI_FN_GET_VI_STATE                 0x0902
 #define DPMI_FN_GET_VENDOR_API               0x0A00
+/* 0500h's buffer: twelve DWORDs, -1 = "not available" (DPMI 0.9). */
+#define DPMI_FREE_INFO_SIZE          0x30
+#define DPMI_FREE_INFO_DWORDS        12
+#define DPMI_FREE_INFO_UNAVAILABLE_U 0xFFFFFFFFu
+#define DPMI_FREE_INFO_LARGEST_BLOCK 0   /* bytes */
+#define DPMI_FREE_INFO_MAX_UNLOCKED  1   /* the rest in pages */
+#define DPMI_FREE_INFO_MAX_LOCKED    2
+#define DPMI_FREE_INFO_LINEAR_TOTAL  3
+#define DPMI_FREE_INFO_UNLOCKED      4
+#define DPMI_FREE_INFO_FREE          5
+#define DPMI_FREE_INFO_PHYSICAL      6
+#define DPMI_FREE_INFO_LINEAR_FREE   7
+#define DPMI_FREE_INFO_PAGING_FILE   8
+#define DPMI_STATE_SAVE_SIZE         0x0040  /* 0305h: nominal, see the handler */
 static INT DpmiIsSelectorValid(WORD selector, INT indexLimit, INT isAllocated, INT isGuestOwnedTable)
 {
     INT index = DPMI_SELECTOR_INDEX(selector);

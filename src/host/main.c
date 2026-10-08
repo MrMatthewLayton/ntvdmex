@@ -21919,14 +21919,14 @@ static PSTR PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     return cursor;
 #undef m
 }
-
+#define DPMI_REPORTED_POOL_BYTES_U 0x04000000u   /* 0500h's answer: 64 MB */
 /* Our BIOS/driver stub BOPs, serviced in one place for the exec loop AND the nested DPMI
    real-mode loop -- defined just above WinMain, where its arms used to live. (GH #247) */
 #define V86BOP_NONE  0      /* not one of V86BiosBop's numbers                         */
 #define V86BOP_DONE  1      /* serviced; EIP is past the BOP, onto the stub's IRET/RETF  */
 #define V86BOP_RERUN 4      /* serviced, still waiting; EIP left ON the BOP to re-execute */
 static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base);
-
+enum { WOW_SEGMENT_LIMIT_SLACK = 0x100, MCB_DUMP_CHAIN_GUARD = 48, DPMI_SET_DESCRIPTOR_INDEX_LIMIT = 512 };   /* DpmiServicePmIntBody */
 /* ── ★★★ THE DEFAULT PM HANDLER FOR A HARDWARE IRQ, WHEN THE GUEST OWNS THE REAL-MODE
      VECTOR: A TRUE NESTED-V86 REFLECTION. (s81, ZAR's streaming audio) ───────────────
      DPMI 0.9: a protected-mode interrupt nobody hooked in PM is reflected to the real-mode
@@ -22015,7 +22015,7 @@ static INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vec
     if (done) ++g_PmIrqRmReflects; else ++g_PmIrqRmFail;
     return done;
 }
-
+#define INT15_WAIT_SLEEP_MS     3       /* INT 15h AH=86h: sleep only while more than this is left */
 static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                                     UINT steps)
 {
@@ -24217,7 +24217,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 g_PmInt[vectorNumber].Offset = DpmiSelectorIs32(handlerSegment) ? VDM_REG(tib, VTIB_EDX)
                                                                        : VDM_REG16(tib, VTIB_EDX);
                                 g_PmInt[vectorNumber].Client = 1;
-                                if (vectorNumber == 0x08) { g_PmAppHookedTimer = 1;
+                                if (vectorNumber == VECTOR_TIMER) { g_PmAppHookedTimer = 1;
                                                     g_PmAppTimerSelector = handlerSegment;
                                                     g_PmAppTimerOffset = g_PmInt[vectorNumber].Offset;
                                                     g_PmVector8ArmedMs = GetTickCount(); }
@@ -24271,7 +24271,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                          The FP range is reflected as a REAL interrupt instead, on the
                          guest's own stack, where the handler's IRET is the thing that
                          decides where it returns to. See the #GP(IDT) arm. */
-                    if (vector == 0x21 && g_PmInt[vector].Client && !g_PmDispatch[vector]) {
+                    if (vector == VECTOR_DOS && g_PmInt[vector].Client && !g_PmDispatch[vector]) {
                         INT status = DpmiDispatchToPmHandler(machine, tib, vector, steps);
                         if (status != 0 || g_PmInt[vector].Selector) return status;
                         /* rc==0 with no handler means dispatch declined -> fall through */
@@ -24420,7 +24420,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     if (vector == VECTOR_VIDEO) {                             /* video BIOS in PM -> VDD */
                         NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
                         HOST_LOCK();
-                        VddBusDeliverInterrupt(&g_Bus, 0x10, &registers);
+                        VddBusDeliverInterrupt(&g_Bus, VECTOR_VIDEO, &registers);
                         HOST_UNLOCK();
                         Int10WaitAfter();                     /* #226: 4F07h BL=80h */
                         RegistersStore(&registers, tib);
@@ -24435,9 +24435,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         NTVDD_REGISTERS registers; BYTE int16Ah; RegistersLoad(&registers, tib); int16Ah = VddGetAh(&registers);
                         for (;;) {                                 /* AH=00/10 block until a key */
                             HOST_LOCK();
-                            VddBusDeliverInterrupt(&g_Bus, 0x16, &registers);
+                            VddBusDeliverInterrupt(&g_Bus, VECTOR_KEYBOARD_SERVICES, &registers);
                             HOST_UNLOCK();
-                            if ((int16Ah != 0x00 && int16Ah != 0x10) || registers.ZeroFlag == 0 || !g_Running) break;
+                            if ((int16Ah != BIOS_KEYBOARD_READ && int16Ah != BIOS_KEYBOARD_READ_EXTENDED) || registers.ZeroFlag == 0 || !g_Running) break;
                             InterlockedIncrement(&g_DpmiIteration);    /* keep the watchdog happy while blocked */
                             WaitForSingleObject(g_KeyEvent, 50);
                         }
@@ -24501,7 +24501,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         /* take the byte, re-arm if more queued. #254: no guest code runs from
                            here, so a Pause cannot spin -- drop its flag rather than let it
                            swallow the next key. (Ctrl-Break's ring/0071h part is done.) */
-                        if (vector == 0x09 && VddInputBiosConsume(&g_Input) == INPUT_ACTION_PAUSE)
+                        if (vector == VECTOR_KEYBOARD && VddInputBiosConsume(&g_Input) == INPUT_ACTION_PAUSE)
                             VddInputPauseCancel(&g_Input);
                         VddPicEndOfInterrupt(&g_Pic, line);   /* the slave's EOI also releases the cascade */
                         HOST_UNLOCK();
@@ -24603,22 +24603,22 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                Windows' DPMI host is said to translate C0h (that is what the
                                Win16 driver's `es:[bx+2]` read assumes) -- not measured here. */
                         { DWORD int15Ah = (VDM_REG(tib, VTIB_EAX) >> BYTE_SHIFT) & BYTE_MASK;
-                          if (int15Ah == 0x88) {
+                          if (int15Ah == BIOS_SYSTEM_EXTENDED_MEMORY) {
                               VDM_SET16(tib, VTIB_EAX, (WORD)CMOS_EXTENDED_KB);
                               VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                          } else if (int15Ah == 0xC0) {
+                          } else if (int15Ah == BIOS_SYSTEM_GET_CONFIGURATION) {
                               WORD controlTableSelector = DpmiSegmentToDescriptor(DOS_CTAB_SEG);
                               if (controlTableSelector) {
                                   VDM_SET16(tib, VTIB_ES, controlTableSelector);
                                   VDM_SET16(tib, VTIB_EBX, DOS_SYSCONF_OFF);
-                                  VDM_SET16(tib, VTIB_EAX, (WORD)(VDM_REG(tib, VTIB_EAX) & 0x00FF));
+                                  VDM_SET16(tib, VTIB_EAX, (WORD)(VDM_REG(tib, VTIB_EAX) & BYTE_MASK));
                                   VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
                               } else {                   /* no descriptor: say "unsupported" */
                                   VDM_SET16(tib, VTIB_EAX,
-                                            (WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | 0x8600));
+                                            (WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | (BIOS_SYSTEM_STATUS_UNSUPPORTED << BYTE_SHIFT)));
                                   VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
                               }
-                          } else if (int15Ah == 0x87) {
+                          } else if (int15Ah == BIOS_SYSTEM_MOVE_BLOCK) {
                               WORD  es87 = (WORD)VDM_REG16(tib, VTIB_ES);
                               DWORD offset  = DpmiSelectorIs32((WORD)VDM_REG16(tib, VTIB_CS))
                                            ? VDM_REG(tib, VTIB_ESI) : VDM_REG16(tib, VTIB_ESI);
@@ -24627,9 +24627,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                   (es87 && HostReadable((const VOID *)(ULONG_PTR)guestLinear, 0x30)) ? guestLinear : 0);
                               VDM_SET16(tib, VTIB_EAX, (WORD)((moveBlockResult << BYTE_SHIFT) | (VDM_REG(tib, VTIB_EAX) & BYTE_MASK)));
                               /* AT BIOS: success is AH=0 with CF=0 AND ZF=1 (as the V86 arm) */
-                              if (moveBlockResult) VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) | EFLAGS_CF_U) & ~0x40u;
-                              else      VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & ~EFLAGS_CF_U) | 0x40u;
-                          } else if (int15Ah == 0x86) {
+                              if (moveBlockResult) VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) | EFLAGS_CF_U) & ~EFLAGS_ZF_U;
+                              else      VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & ~EFLAGS_CF_U) | EFLAGS_ZF_U;
+                          } else if (int15Ah == BIOS_SYSTEM_WAIT) {
                               /* ── #256: WAIT CX:DX MICROSECONDS, AS THE V86 ARM DOES (#206). ──
                                    This answered CF=0 at once ("the PIT already paces us"), so a
                                    DPMI client delaying with it waited zero.
@@ -24648,14 +24648,14 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                               QueryPerformanceCounter(&waitNow); QueryPerformanceFrequency(&waitFrequency);
                               if (g_Int15EventEnd) {                   /* an 83h countdown runs */
                                   VDM_SET16(tib, VTIB_EAX,
-                                            (WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | 0x8300));
+                                            (WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | (BIOS_SYSTEM_STATUS_BUSY << BYTE_SHIFT)));
                                   VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; ++g_Int15Busy;
                               } else if (g_PmDispatchTop) {
                                   if (!g_Int15WaitEnd) {
                                       if (microseconds) { g_Int15WaitEnd = Int15QpcAfterMicroseconds(microseconds); ++g_Int15Waits; }
                                   } else if (waitNow.QuadPart >= g_Int15WaitEnd) g_Int15WaitEnd = 0;
                                   if (g_Int15WaitEnd) {              /* not yet: run it again */
-                                      if ((g_Int15WaitEnd - waitNow.QuadPart) * MILLISECONDS_PER_SECOND > 3 * waitFrequency.QuadPart) Sleep(1);
+                                      if ((g_Int15WaitEnd - waitNow.QuadPart) * MILLISECONDS_PER_SECOND > INT15_WAIT_SLEEP_MS * waitFrequency.QuadPart) Sleep(1);
                                       return 1;                      /* EIP stays on the BOP */
                                   }
                                   VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
@@ -24666,16 +24666,16 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                       QueryPerformanceCounter(&waitNow);
                                       if (waitNow.QuadPart >= end || !g_Running) break;
                                       InterlockedIncrement(&g_DpmiIteration);
-                                      if ((end - waitNow.QuadPart) * MILLISECONDS_PER_SECOND > 3 * waitFrequency.QuadPart) Sleep(1);
+                                      if ((end - waitNow.QuadPart) * MILLISECONDS_PER_SECOND > INT15_WAIT_SLEEP_MS * waitFrequency.QuadPart) Sleep(1);
                                       else Sleep(0);
                                   }
                                   VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
                               }
                           } else {
                               VDM_SET16(tib, VTIB_EAX,
-                                        (WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | 0x8600));
+                                        (WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | (BIOS_SYSTEM_STATUS_UNSUPPORTED << BYTE_SHIFT)));
                               VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
-                              g_BiosUnimplemented[0x15] = 1;
+                              g_BiosUnimplemented[VECTOR_SYSTEM] = 1;
                           }
                           /* Log the REQUEST as it arrived, which means capturing AX before
                              the arms above overwrite AH -- the V86 twin shipped with that
@@ -24722,7 +24722,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                            because it returns a POINTER the caller far-calls. */
                         cursor = LogPut(cursor, "INT2Fh(PM) AX=0x"); cursor = LogHex(cursor, ax);
                         cursor = LogPut(cursor, " BX=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EBX));
-                        if (ax == 0x1687) {
+                        if (ax == MULTIPLEX_DPMI_INSTALLATION_CHECK) {
                             /* A DPMI client asking, from inside protected mode, whether
                                a DPMI host exists. It does -- it is us, and it is already
                                running this guest. Answer identically to the V86 arm. */
@@ -24734,11 +24734,11 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             VDM_SET16(tib, VTIB_ES,  DOS_HDLR_SEG);
                             VDM_SET16(tib, VTIB_EDI, DPMI_ENTRY_OFF);
                             cursor = LogPut(cursor, " -> DPMI present");
-                        } else if (ax == 0x1684) {
+                        } else if (ax == MULTIPLEX_DEVICE_API_ENTRY) {
                             VDM_SET16(tib, VTIB_ES, 0);
                             VDM_REG(tib, VTIB_EDI) = 0;
                             cursor = LogPut(cursor, " -> no device API (ES:DI=0)");
-                        } else if (ax == 0x168A) {
+                        } else if (ax == MULTIPLEX_DPMI_VENDOR_API) {
                             /* DS:SI names the vendor. Match it rather than answering
                                every caller: the entry we hand back is specific to the
                                "MS-DOS" contract and means nothing to anyone else. */
@@ -24867,7 +24867,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                             ? " -> our real-mode stub 0x"
                                             : " -> the guest's OWN real-mode handler 0x");
                                 cursor = LogHex(cursor, handlerSegment); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, handlerOffset); cursor = LogPut(cursor, "]");
-                                ax = 0x0302;      /* ...which is a real-mode call with an IRET frame */
+                                ax = DPMI_FN_CALL_REAL_MODE_IRET;      /* ...which is a real-mode call with an IRET frame */
                             }
                         }
                         switch (ax) {
@@ -24891,7 +24891,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             if (cx == 1 && g_LdtFreeCount > 0) {
                                 INT ldtIndex = g_LdtFree[--g_LdtFreeCount];
                                 g_Ldt[ldtIndex].Base = 0; g_Ldt[ldtIndex].Limit = 0;
-                                g_Ldt[ldtIndex].Access = 0xF2; g_Ldt[ldtIndex].Flags = 0;
+                                g_Ldt[ldtIndex].Access = DPMI_ACCESS_DATA; g_Ldt[ldtIndex].Flags = 0;
                                 DpmiInstall(ldtIndex);
                                 VDM_SET16(tib, VTIB_EAX, (WORD)DPMI_LDT_SELECTOR(ldtIndex));
                                 cursor = LogPut(cursor, " -> sel 0x"); cursor = LogHex(cursor, DPMI_LDT_SELECTOR(ldtIndex));
@@ -24899,14 +24899,14 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 break;
                             }
                             if (g_LdtNext + (INT)cx > DPMI_LDT_MAX) {      /* out of descriptors */
-                                VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, 0x8011);
+                                VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, DPMI_E_DESC_UNAVAIL);
                                 cursor = LogPut(cursor, " -> ENOMEM"); break;
                             }
                             firstAllocatedSelector = (WORD)DPMI_LDT_SELECTOR(g_LdtNext);
                             for (index = 0; index < cx; ++index) {
                                 INT ldtIndex = g_LdtNext++;
                                 g_Ldt[ldtIndex].Base = 0; g_Ldt[ldtIndex].Limit = 0;
-                                g_Ldt[ldtIndex].Access = 0xF2; g_Ldt[ldtIndex].Flags = 0;  /* data, RPL3 */
+                                g_Ldt[ldtIndex].Access = DPMI_ACCESS_DATA; g_Ldt[ldtIndex].Flags = 0;  /* data, RPL3 */
                                 DpmiInstall(ldtIndex);
                             }
                             VDM_SET16(tib, VTIB_EAX, firstAllocatedSelector);
@@ -24973,14 +24973,14 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             if (!cxValue) cxValue = 1;
                             if (g_LdtNext + (INT)cxValue > DPMI_LDT_MAX) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
-                                VDM_SET16(tib, VTIB_EAX, 0x8011);
+                                VDM_SET16(tib, VTIB_EAX, DPMI_E_DESC_UNAVAIL);
                                 cursor = LogPut(cursor, " -> ENOMEM"); break;
                             }
                             baseSelector = (WORD)DPMI_LDT_SELECTOR(g_LdtNext);
                             for (descriptorIndex = 0; descriptorIndex < cxValue; ++descriptorIndex) {
                                 INT ldtEntry = g_LdtNext++;
                                 g_Ldt[ldtEntry].Base = 0; g_Ldt[ldtEntry].Limit = 0;
-                                g_Ldt[ldtEntry].Access = 0xF2; g_Ldt[ldtEntry].Flags = 0;
+                                g_Ldt[ldtEntry].Access = DPMI_ACCESS_DATA; g_Ldt[ldtEntry].Flags = 0;
                                 DpmiInstall(ldtEntry);
                             }
                             VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
@@ -25014,7 +25014,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                     INT ldtEntry = firstIndex + (INT)index2;
                                     const DWORD *entry;
                                     if (ldtEntry < 1 || ldtEntry >= WOW_SHADOW_ENTRIES) continue;
-                                    entry = (const DWORD *)(g_WowShadow + ldtEntry * 8);
+                                    entry = (const DWORD *)(g_WowShadow + ldtEntry * X86_DESCRIPTOR_SIZE);
                                     /* ── ★★ A RESERVED INDEX IS NOT A READ-ONLY ONE. ────────
                                          This used to `continue` for every index below
                                          DPMI_LDT_RESERVED, so a commit naming selector 0x17
@@ -25046,10 +25046,10 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                              krnl386 has written anything real. A blank entry is
                                              not the guest asking for anything; it is the guest
                                              having asked for a slot. Require the present bit. */
-                                        if (!(((entry[1] >> BYTE_SHIFT) & BYTE_MASK) & 0x80)) continue;
-                                        g_Ldt[ldtEntry].Base   = (entry[1] & 0xFF000000u)
+                                        if (!(((entry[1] >> BYTE_SHIFT) & BYTE_MASK) & X86_DESCRIPTOR_PRESENT)) continue;
+                                        g_Ldt[ldtEntry].Base   = (entry[1] & X86_DESCRIPTOR_BASE_HIGH_U)
                                                         | ((entry[1] & BYTE_MASK_U) << WORD_SHIFT) | (entry[0] >> WORD_SHIFT);
-                                        g_Ldt[ldtEntry].Limit  = (entry[0] & WORD_MASK_U) | (entry[1] & 0x000F0000u);
+                                        g_Ldt[ldtEntry].Limit  = (entry[0] & WORD_MASK_U) | (entry[1] & X86_DESCRIPTOR_LIMIT_HIGH_U);
                                         g_Ldt[ldtEntry].Access = (BYTE)((entry[1] >> BYTE_SHIFT) & BYTE_MASK);
                                         g_Ldt[ldtEntry].Flags  = (BYTE)((entry[1] >> DPMI_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK);
                                         DpmiInstall(ldtEntry);       /* force-types idx 2 and 3 */
@@ -25058,9 +25058,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                     }
                                     VdmInstallLdtEntries((WORD)DPMI_LDT_SELECTOR(ldtEntry), entry[0], entry[1],
                                                         (WORD)DPMI_LDT_SELECTOR(ldtEntry), entry[0], entry[1]);
-                                    g_Ldt[ldtEntry].Base   = (entry[1] & 0xFF000000u)
+                                    g_Ldt[ldtEntry].Base   = (entry[1] & X86_DESCRIPTOR_BASE_HIGH_U)
                                                     | ((entry[1] & BYTE_MASK_U) << WORD_SHIFT) | (entry[0] >> WORD_SHIFT);
-                                    g_Ldt[ldtEntry].Limit  = (entry[0] & WORD_MASK_U) | (entry[1] & 0x000F0000u);
+                                    g_Ldt[ldtEntry].Limit  = (entry[0] & WORD_MASK_U) | (entry[1] & X86_DESCRIPTOR_LIMIT_HIGH_U);
                                     g_Ldt[ldtEntry].Access = (BYTE)((entry[1] >> BYTE_SHIFT) & BYTE_MASK);
                                     g_Ldt[ldtEntry].Flags  = (BYTE)((entry[1] >> DPMI_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK);
                                     if (ldtEntry >= g_LdtNext) g_LdtNext = ldtEntry + 1;
@@ -25115,7 +25115,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                     if (ldtEntry < 1 || ldtEntry >= WOW_SHADOW_ENTRIES) continue;
                                     if (!DPMI_ACC_IS_CODE(g_Ldt[ldtEntry].Access)) continue;
                                     DpmiPatchCodeRegion(g_Ldt[ldtEntry].Base, g_Ldt[ldtEntry].Limit,
-                                                           (g_Ldt[ldtEntry].Flags & 0x4) != 0);
+                                                           (g_Ldt[ldtEntry].Flags & DPMI_DESCRIPTOR_FLAG_BIG) != 0);
                                     needScan = 1;
                                     cursor = LogPut(cursor, " [CODE sel 0x"); cursor = LogHex(cursor, (DWORD)DPMI_LDT_SELECTOR(ldtEntry));
                                     cursor = LogPut(cursor, " base=0x");   cursor = LogHex(cursor, g_Ldt[ldtEntry].Base);
@@ -25145,7 +25145,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                                      neSegment < WOW_PMBASE_MAX; ++neSegment) {
                                             DWORD segmentLength = g_WowModule[0].Segments[neSegment].Length;
                                             if (!segmentLength || g_Ldt[ldtEntry].Limit < segmentLength - 1 ||
-                                                g_Ldt[ldtEntry].Limit >= segmentLength + 0x100) continue;
+                                                g_Ldt[ldtEntry].Limit >= segmentLength + WOW_SEGMENT_LIMIT_SLACK) continue;
                                             if (g_WowPmBase[neSegment] != g_Ldt[ldtEntry].Base) {
                                                 g_WowPmBase[neSegment] = g_Ldt[ldtEntry].Base;
                                                 /* Every segment, not just seg 1 -- the
@@ -25182,11 +25182,11 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             if (wantedIndex < DPMI_LDT_RESERVED || wantedIndex >= DPMI_LDT_MAX
                                 || g_Ldt[wantedIndex].Access != 0) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
-                                VDM_SET16(tib, VTIB_EAX, 0x8022);   /* invalid selector */
+                                VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_SEL);   /* invalid selector */
                                 cursor = LogPut(cursor, " -> REFUSED (reserved, out of range, or in use)");
                             } else {
                                 g_Ldt[wantedIndex].Base = 0; g_Ldt[wantedIndex].Limit = 0;
-                                g_Ldt[wantedIndex].Access = 0xF2; g_Ldt[wantedIndex].Flags = 0;
+                                g_Ldt[wantedIndex].Access = DPMI_ACCESS_DATA; g_Ldt[wantedIndex].Flags = 0;
                                 DpmiInstall(wantedIndex);
                                 if (wantedIndex >= g_LdtNext) g_LdtNext = wantedIndex + 1;
                                 VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
@@ -25206,7 +25206,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             }
                             if (error) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
-                                VDM_SET16(tib, VTIB_EAX, error ? error : 0x0008);   /* 8 = insufficient memory */
+                                VDM_SET16(tib, VTIB_EAX, error ? error : DOS_ERR_INSUFFICIENT_MEMORY);   /* 8 = insufficient memory */
                                 VDM_SET16(tib, VTIB_EBX, maximum);                  /* largest available (paras) */
                                 cursor = LogPut(cursor, " -> DOSmem ENOMEM max=0x"); cursor = LogHex(cursor, maximum);
                                 /* ⚠ AND SAY WHO HAS THE MEMORY. (s73) Heretic dies here
@@ -25229,9 +25229,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                              an EIP made of ASCII (runs/s87_dpmi). Stop with room
                                              to spare and say so. */
                                         if (cursor - base > 1600) { cursor = LogPut(cursor, " ...(chain dump truncated)"); break; }
-                                        WORD owner = (WORD)(mcb[1] | (mcb[2] << BYTE_SHIFT));
-                                        WORD size  = (WORD)(mcb[3] | (mcb[4] << BYTE_SHIFT));
-                                        if ((signature != 'M' && signature != 'Z') || ++chainGuard > 48) {
+                                        WORD owner = (WORD)(mcb[DOS_MCB_OWNER] | (mcb[DOS_MCB_OWNER + 1] << BYTE_SHIFT));
+                                        WORD size  = (WORD)(mcb[DOS_MCB_SIZE] | (mcb[DOS_MCB_SIZE + 1] << BYTE_SHIFT));
+                                        if ((signature != DOS_MCB_MEMBER && signature != DOS_MCB_LAST) || ++chainGuard > MCB_DUMP_CHAIN_GUARD) {
                                             /* ⚠ AND SHOW THE BYTES WHERE THE WALK STOPPED. (s74)
                                                  A chain that ends without a 'Z' is a chain
                                                  somebody wrote over, and the 16 bytes say WHO:
@@ -25253,7 +25253,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             } else {
                                 g_Ldt[ldtIndex].Base = (DWORD)segment << PARAGRAPH_SHIFT;
                                 g_Ldt[ldtIndex].Limit = want ? ((DWORD)want << PARAGRAPH_SHIFT) - 1 : 0;
-                                g_Ldt[ldtIndex].Access = 0xF2; g_Ldt[ldtIndex].Flags = 0;  /* data, RPL3 */
+                                g_Ldt[ldtIndex].Access = DPMI_ACCESS_DATA; g_Ldt[ldtIndex].Flags = 0;  /* data, RPL3 */
                                 DpmiInstall(ldtIndex);
                                 if (g_DpmiDosBlockCount < DPMI_DOSBLK_MAX) g_DpmiDosBlock[g_DpmiDosBlockCount++] = segment;
                                 VDM_SET16(tib, VTIB_EAX, segment);
@@ -25279,7 +25279,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             if (DpmiClientSelectorOk(dxSelector)) {
                                 segment = (WORD)(g_Ldt[ldtIndex].Base >> PARAGRAPH_SHIFT);
                                 for (blockIndex = 0; blockIndex < g_DpmiDosBlockCount; ++blockIndex)
-                                    if (g_DpmiDosBlock[blockIndex] == segment && (g_Ldt[ldtIndex].Base & 0xF) == 0) { known = blockIndex; break; }
+                                    if (g_DpmiDosBlock[blockIndex] == segment && (g_Ldt[ldtIndex].Base & PARAGRAPH_LAST_BYTE) == 0) { known = blockIndex; break; }
                             }
                             /* The record is capped at DPMI_DOSBLK_MAX; past that a genuine block
                                may be unrecorded, so a full record cannot refuse -- DOS decides. */
@@ -25319,7 +25319,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                     cursor = LogPut(cursor, " to 0x"); cursor = LogHex(cursor, want); cursor = LogPut(cursor, " paras");
                                 }
                             } else {
-                                VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, 0x8022);  /* invalid sel */
+                                VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_SEL);  /* invalid sel */
                                 cursor = LogPut(cursor, " -> resize bad sel");
                             }
                             break; }
@@ -25416,7 +25416,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                  the real one much later, in I_StartupTimer), and the run ends
                                  there -- which is why `pmnoirq.flag` had to exist at all.
                                  Record when the vector was armed and let a tick period pass. */
-                            if (bl == 0x08) g_PmVector8ArmedMs = GetTickCount();
+                            if (bl == VECTOR_TIMER) g_PmVector8ArmedMs = GetTickCount();
                             cursor = LogPut(cursor, " -> setPMvec int 0x"); cursor = LogHex(cursor, bl);
                             cursor = LogPut(cursor, " = 0x"); cursor = LogHex(cursor, g_PmInt[bl].Selector);
                             cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, g_PmInt[bl].Offset);
@@ -25440,8 +25440,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              for a considered exception-delivery design: there isn't one yet. */
                         case DPMI_FN_GET_EXCEPTION_HANDLER: {                             /* get PM exception handler: BL -> CX:(E)DX */
                             DWORD bl = VDM_REG(tib, VTIB_EBX) & BYTE_MASK;
-                            if (bl > 0x1F) {
-                                VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, 0x8021);
+                            if (bl >= X86_EXCEPTIONS) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_VALUE);
                                 cursor = LogPut(cursor, " -> getEXC bad exception 0x"); cursor = LogHex(cursor, bl); break;
                             }
                             if (!g_PmException[bl].IsSet) {
@@ -25458,8 +25458,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         case DPMI_FN_SET_EXCEPTION_HANDLER: {                             /* set PM exception handler: BL = CX:(E)DX */
                             DWORD bl = VDM_REG(tib, VTIB_EBX) & BYTE_MASK;
                             WORD handlerSelector = (WORD)VDM_REG(tib, VTIB_ECX);
-                            if (bl > 0x1F) {
-                                VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, 0x8021);
+                            if (bl >= X86_EXCEPTIONS) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_VALUE);
                                 cursor = LogPut(cursor, " -> setEXC bad exception 0x"); cursor = LogHex(cursor, bl); break;
                             }
                             g_PmException[bl].Selector = handlerSelector;
@@ -25499,20 +25499,20 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             break;
                         case DPMI_FN_GET_PAGE_SIZE:                               /* get page size -> BX:CX */
                             VDM_SET16(tib, VTIB_EBX, 0);
-                            VDM_SET16(tib, VTIB_ECX, 0x1000);
+                            VDM_SET16(tib, VTIB_ECX, X86_PAGE_SIZE);
                             VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
                             cursor = LogPut(cursor, " -> page size 4096");
                             break;
                         case DPMI_FN_GET_AND_DISABLE_VI:                               /* get + disable virtual interrupt state */
-                            VDM_SET16(tib, VTIB_EAX, 0x0900 | (g_DpmiVi & 1));
+                            VDM_SET16(tib, VTIB_EAX, (DPMI_FN_GET_AND_DISABLE_VI & HIGH_BYTE_MASK) | (g_DpmiVi & 1));
                             g_DpmiVi = 0; cursor = LogPut(cursor, " -> cli");
                             break;
                         case DPMI_FN_GET_AND_ENABLE_VI:                               /* get + enable virtual interrupt state */
-                            VDM_SET16(tib, VTIB_EAX, 0x0900 | (g_DpmiVi & 1));
+                            VDM_SET16(tib, VTIB_EAX, (DPMI_FN_GET_AND_DISABLE_VI & HIGH_BYTE_MASK) | (g_DpmiVi & 1));
                             g_DpmiVi = 1; cursor = LogPut(cursor, " -> sti");
                             break;
                         case DPMI_FN_GET_VI_STATE:                               /* get virtual interrupt state -> AL */
-                            VDM_SET16(tib, VTIB_EAX, 0x0900 | (g_DpmiVi & 1));
+                            VDM_SET16(tib, VTIB_EAX, (DPMI_FN_GET_AND_DISABLE_VI & HIGH_BYTE_MASK) | (g_DpmiVi & 1));
                             cursor = LogPut(cursor, " -> getIF ");  cursor = LogHex(cursor, g_DpmiVi);
                             break;
                         case DPMI_FN_GET_SEGMENT_BASE: {                             /* get base of sel BX -> CX:DX */
@@ -25554,7 +25554,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                sets 8092 (G=1) first and 0x4afff bytes second, and G=1 over
                                a raw 0x4afff field is a 1.2 GB segment NT refuses. */
                             if (ldtIndex >= 1 && ldtIndex < DPMI_LDT_MAX) {
-                                g_Ldt[ldtIndex].Limit = limit; g_Ldt[ldtIndex].Flags &= (BYTE)~0x8;
+                                g_Ldt[ldtIndex].Limit = limit; g_Ldt[ldtIndex].Flags &= (BYTE)~DPMI_DESCRIPTOR_FLAG_GRANULARITY;
                                 DpmiInstall(ldtIndex);
                             }
                             cursor = LogPut(cursor, " sel 0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EBX));
@@ -25569,7 +25569,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                    #3 (DOS/4GW): a 32-bit code selector arrives here with CH bit6
                                    (D/B) set -> flags bit2 -> DpmiSelectorIs32() true. */
                                 g_Ldt[ldtIndex].Access = VDM_REG(tib, VTIB_ECX) & BYTE_MASK;
-                                g_Ldt[ldtIndex].Flags  = (VDM_REG(tib, VTIB_ECX) >> 12) & 0xF;  /* CH high nibble */
+                                g_Ldt[ldtIndex].Flags  = (VDM_REG(tib, VTIB_ECX) >> DPMI_SET_RIGHTS_FLAGS_SHIFT) & NIBBLE_MASK;  /* CH high nibble */
                                 DpmiInstall(ldtIndex);
                                 /* "This region is now code" is the client naming its own
                                    requirement -- and the only notice we get that a module
@@ -25577,7 +25577,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                    sites now; see DpmiPatchCodeRegion(). */
                                 if (DPMI_ACC_IS_CODE(g_Ldt[ldtIndex].Access)) {
                                     DpmiPatchCodeRegion(g_Ldt[ldtIndex].Base, g_Ldt[ldtIndex].Limit,
-                                                           (g_Ldt[ldtIndex].Flags & 0x4) != 0);
+                                                           (g_Ldt[ldtIndex].Flags & DPMI_DESCRIPTOR_FLAG_BIG) != 0);
                                     /* The client naming ANY region code means it has finished
                                        loading something -- a good moment to re-look at the
                                        blocks holding its EXEC objects. On DOOM.EXE this is the
@@ -25604,7 +25604,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 cursor = LogPut(cursor, " -> ENOMEM"); break; }
                             ldtIndex = g_LdtNext++;
                             g_Ldt[ldtIndex] = g_Ldt[source];
-                            g_Ldt[ldtIndex].Access = 0xF2;              /* data alias */
+                            g_Ldt[ldtIndex].Access = DPMI_ACCESS_DATA;              /* data alias */
                             DpmiInstall(ldtIndex);
                             VDM_SET16(tib, VTIB_EAX, (WORD)DPMI_LDT_SELECTOR(ldtIndex));
                             cursor = LogPut(cursor, " -> alias sel 0x"); cursor = LogHex(cursor, DPMI_LDT_SELECTOR(ldtIndex));
@@ -25624,7 +25624,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             WORD realSelector  = DpmiSegmentToDescriptor(realSegment);
                             if (!realSelector) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
-                                VDM_SET16(tib, VTIB_EAX, 0x8011);  /* descriptor unavailable */
+                                VDM_SET16(tib, VTIB_EAX, DPMI_E_DESC_UNAVAIL);  /* descriptor unavailable */
                                 cursor = LogPut(cursor, " -> seg2desc ENOMEM");
                                 break;
                             }
@@ -25643,7 +25643,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         case DPMI_FN_GET_SELECTOR_INCREMENT:                               /* get selector increment value */
                             /* The amount to add to a selector to reach the next one in a block
                                allocated by 0000. Our selectors are LDT entries, so 8. */
-                            VDM_SET16(tib, VTIB_EAX, 8);
+                            VDM_SET16(tib, VTIB_EAX, X86_DESCRIPTOR_SIZE);
                             VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
                             cursor = LogPut(cursor, " -> sel increment 8");
                             break;
@@ -25678,11 +25678,11 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             volatile DWORD *descriptor = (volatile DWORD *)(ULONG_PTR)DpmiRmcsPointer(tib, esBase);
                             DWORD low, high;
                             DpmiRmcsProbe(tib, esBase, 4, 0);       /* observation only */
-                            if (ldtIndex < 1 || ldtIndex >= 512) { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
+                            if (ldtIndex < 1 || ldtIndex >= DPMI_SET_DESCRIPTOR_INDEX_LIMIT) { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
                                                          cursor = LogPut(cursor, " -> bad sel"); break; }
                             low = descriptor[0]; high = descriptor[1];
                             /* Exact inverse of DpmiBuildDescriptor(). */
-                            g_Ldt[ldtIndex].Limit  = (low & WORD_MASK) | (((high >> WORD_SHIFT) & 0xF) << WORD_SHIFT);
+                            g_Ldt[ldtIndex].Limit  = (low & WORD_MASK) | (((high >> WORD_SHIFT) & NIBBLE_MASK) << WORD_SHIFT);
                             g_Ldt[ldtIndex].Base   = ((low >> WORD_SHIFT) & WORD_MASK) | ((high & BYTE_MASK) << WORD_SHIFT)
                                               | (((high >> TOP_BYTE_SHIFT) & BYTE_MASK) << TOP_BYTE_SHIFT);
                             g_Ldt[ldtIndex].Access = (BYTE)((high >> BYTE_SHIFT) & BYTE_MASK);
@@ -25690,7 +25690,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             DpmiInstall(ldtIndex);
                             if (DPMI_ACC_IS_CODE(g_Ldt[ldtIndex].Access)) { /* same rule as 0009 */
                                 DpmiPatchCodeRegion(g_Ldt[ldtIndex].Base, g_Ldt[ldtIndex].Limit,
-                                                       (g_Ldt[ldtIndex].Flags & 0x4) != 0);
+                                                       (g_Ldt[ldtIndex].Flags & DPMI_DESCRIPTOR_FLAG_BIG) != 0);
                                 needScan = 1;
                             }
                             cursor = LogPut(cursor, " sel 0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EBX));
@@ -25708,7 +25708,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                buffer, but a client that allocates AX bytes should not be handed
                                a zero-size allocation. */
                             WORD selector = DpmiHandlerCodeSelector();
-                            VDM_SET16(tib, VTIB_EAX, 0x0040);
+                            VDM_SET16(tib, VTIB_EAX, DPMI_STATE_SAVE_SIZE);
                             VDM_SET16(tib, VTIB_EBX, DOS_HDLR_SEG);
                             VDM_SET16(tib, VTIB_ECX, DPMI_SSR_OFF);
                             VDM_SET16(tib, VTIB_ESI, selector);
@@ -25759,24 +25759,24 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                buffer and refused to start. */
                             DWORD infoAddress = esBase + DpmiCallerOffset(tib, VDM_REG(tib, VTIB_EDI));
                             volatile DWORD *info = (volatile DWORD *)(ULONG_PTR)infoAddress;
-                            const DWORD poolBytes = 0x04000000u;          /* 64 MB            */
+                            const DWORD poolBytes = DPMI_REPORTED_POOL_BYTES_U;          /* 64 MB            */
                             const DWORD poolPages = poolBytes >> PAGE_SHIFT;     /* 0x4000 pages     */
                             INT index;
-                            if (!MemoryReadable((ULONG_PTR)infoAddress, 0x30)) {
-                                VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, 0x8021);
+                            if (!MemoryReadable((ULONG_PTR)infoAddress, DPMI_FREE_INFO_SIZE)) {
+                                VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_VALUE);
                                 cursor = LogPut(cursor, " -> meminfo REFUSED: ES:EDI 0x"); cursor = LogHex(cursor, infoAddress);
                                 cursor = LogPut(cursor, " unreadable"); break;
                             }
-                            for (index = 0; index < 12; ++index) info[index] = 0xFFFFFFFFu;
-                            info[0] = poolBytes;                  /* largest free block, bytes */
-                            info[1] = poolPages;                  /* max unlocked page alloc   */
-                            info[2] = poolPages;                  /* max locked page alloc     */
-                            info[3] = poolPages;                  /* total linear address space*/
-                            info[4] = poolPages;                  /* total unlocked pages      */
-                            info[5] = poolPages;                  /* free pages                */
-                            info[6] = poolPages;                  /* total physical pages      */
-                            info[7] = poolPages;                  /* free linear address space */
-                            info[8] = 0;                           /* no paging file            */
+                            for (index = 0; index < DPMI_FREE_INFO_DWORDS; ++index) info[index] = DPMI_FREE_INFO_UNAVAILABLE_U;
+                            info[DPMI_FREE_INFO_LARGEST_BLOCK] = poolBytes;                  /* largest free block, bytes */
+                            info[DPMI_FREE_INFO_MAX_UNLOCKED] = poolPages;                  /* max unlocked page alloc   */
+                            info[DPMI_FREE_INFO_MAX_LOCKED] = poolPages;                  /* max locked page alloc     */
+                            info[DPMI_FREE_INFO_LINEAR_TOTAL] = poolPages;                  /* total linear address space*/
+                            info[DPMI_FREE_INFO_UNLOCKED] = poolPages;                  /* total unlocked pages      */
+                            info[DPMI_FREE_INFO_FREE] = poolPages;                  /* free pages                */
+                            info[DPMI_FREE_INFO_PHYSICAL] = poolPages;                  /* total physical pages      */
+                            info[DPMI_FREE_INFO_LINEAR_FREE] = poolPages;                  /* free linear address space */
+                            info[DPMI_FREE_INFO_PAGING_FILE] = 0;                           /* no paging file            */
                             cursor = LogPut(cursor, " -> meminfo 64MB/0x4000 pages");
                             break; }
                         /* ── ★★★ 0800: MAP A PHYSICAL ADDRESS INTO THE LINEAR SPACE. (s74)
@@ -25811,7 +25811,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 cursor = LogPut(cursor, " -> VESA LFB linear=0x"); cursor = LogHex(cursor, linear);
                             } else {
                                 VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
-                                VDM_SET16(tib, VTIB_EAX, 0x8021);   /* invalid value */
+                                VDM_SET16(tib, VTIB_EAX, DPMI_E_INVALID_VALUE);   /* invalid value */
                                 cursor = LogPut(cursor, " -> REFUSED (not our aperture)");
                             }
                             break; }
@@ -25829,7 +25829,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, DPMI_E_HANDLE_UNAVAIL);
                                 cursor = LogPut(cursor, " -> no handle (8016h)"); break; }
                             memory = VirtualAlloc(NULL, size ? size : 1, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-                            if (!memory) { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, 0x8013);
+                            if (!memory) { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, DPMI_E_PHYS_UNAVAIL);
                                         cursor = LogPut(cursor, " -> ENOMEM"); break; }
                             g_DpmiOwned[g_DpmiOwnedCount++] = (DWORD)(ULONG_PTR)memory;   /* the client's until 0502 or exit */
                             if (g_DpmiBlockCount < DPMI_MEMBLK_MAX) {   /* remember it: see the flat-selector case */
@@ -25839,7 +25839,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                    size, so the size IS the client telling us "this block is
                                    about to hold my code". See DpmiLeLearn(). */
                                 for (codeIndex = 0; codeIndex < g_LeCodeCount; ++codeIndex)
-                                    if (g_LeCodeSize[codeIndex] == ((size + 0xFFFu) & ~0xFFFu)) { isCode = 1; break; }
+                                    if (g_LeCodeSize[codeIndex] == ((size + PAGE_LAST_BYTE_U) & ~PAGE_LAST_BYTE_U)) { isCode = 1; break; }
                                 g_DpmiBlock[g_DpmiBlockCount].Base = (DWORD)(ULONG_PTR)memory;
                                 g_DpmiBlock[g_DpmiBlockCount].Size = size ? size : 1;
                                 g_DpmiBlock[g_DpmiBlockCount].Code = isCode;
@@ -29031,7 +29031,7 @@ static INT V86DeliverDeviceIrq(volatile BYTE *tib)
 
     return injected;
 }
-#define V86BOP_WAIT_SLEEP_MS    3       /* sleep only while more than this is left    */
+
 /* ── ★★★ OUR BIOS AND DRIVER STUBS, SERVICED FROM ONE PLACE. (GH #247) ─────────────────
      Every stub we plant in the IVT is `BOP nn ; IRET` (or RETF), and until #247 the only
      code that knew what each `nn` MEANS was the body of WinMain's exec loop. So a stub
@@ -29228,7 +29228,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                        interrupts and the host's threads need -- a 1 ms nap is far
                        below any wait a program asks this for. */
                     LARGE_INTEGER frequency; QueryPerformanceFrequency(&frequency);
-                    if ((g_Int15WaitEnd - now.QuadPart) * MILLISECONDS_PER_SECOND > V86BOP_WAIT_SLEEP_MS * frequency.QuadPart) Sleep(1);
+                    if ((g_Int15WaitEnd - now.QuadPart) * MILLISECONDS_PER_SECOND > INT15_WAIT_SLEEP_MS * frequency.QuadPart) Sleep(1);
                     handled = V86BOP_RERUN;
                 }
             } else if (int15Ah == BIOS_SYSTEM_EVENT_WAIT) {         /* event wait (#206) */

@@ -28,6 +28,10 @@
 #define X86_WORD_SIZE       2
 #define X86_DWORD_SIZE      4
 #define X86_DESCRIPTOR_SIZE 8               /* a GDT/LDT/IDT entry                      */
+#define X86_DESCRIPTOR_PRESENT        0x80        /* the access byte's P bit             */
+#define X86_DESCRIPTOR_BASE_HIGH_U    0xFF000000u /* the high dword: base bits 24-31     */
+#define X86_DESCRIPTOR_LIMIT_HIGH_U   0x000F0000u /* the high dword: limit bits 16-19    */
+#define X86_PAGE_SIZE                 0x1000
 /* A 16-bit far frame on the stack: IP, then CS, then (an interrupt's) FLAGS. */
 #define X86_FRAME16_CS          2
 #define X86_FRAME16_FLAGS       4
