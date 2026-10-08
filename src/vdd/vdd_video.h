@@ -64,6 +64,9 @@
 #define VIDEO_VBE_CONTROLLER_INFO_AX 0x4F00
 #define VIDEO_VBE_MODE_INFO_AX       0x4F01
 #define VIDEO_PLANES                  4
+#define VIDEO_DAC_ENTRIES             256     /* the DAC's colour registers          */
+#define VIDEO_DAC_COMPONENTS          3       /* red, green, blue                    */
+#define VIDEO_PALETTE_REGISTER_FILE   17      /* the 16 EGA palette registers + border */
 #define VIDEO_ALL_PLANES              0x0F
 #define VIDEO_PLANE_INDEX_MASK        3
 #define VIDEO_Y_PLANE_SIZE       65536u                        /* mode-Y plane = full 64K */
@@ -103,8 +106,8 @@
 typedef struct _VIDEO_WATCH_RECORD {
     UINT32 Pc;                        /* guest (CS<<16)|IP at the write            */
     BYTE  WriteMode, MapMask, EnableSetReset, SetReset, FunctionRotate, BitMask, Cpu;
-    BYTE  Latch[4];                  /* the latches the write combined with       */
-    BYTE  After[4];                  /* the four plane bytes it left behind       */
+    BYTE  Latch[VIDEO_PLANES];                  /* the latches the write combined with       */
+    BYTE  After[VIDEO_PLANES];                  /* the four plane bytes it left behind       */
 } VIDEO_WATCH_RECORD, *PVIDEO_WATCH_RECORD;
 typedef const VIDEO_WATCH_RECORD *PCVIDEO_WATCH_RECORD;
 
@@ -175,7 +178,7 @@ typedef struct _VIDEO_STATE {
     BYTE  Overscan;                  /* AH=0Bh BH=0: border/background colour     */
     BYTE  IsBlink;                     /* AH=10h AL=03: blink vs bright background  */
     BYTE  DacPage;                  /* AH=10h AL=13: DAC page state              */
-    BYTE  PaletteRegisters[17];                  /* the 16 EGA palette registers + border     */
+    BYTE  PaletteRegisters[VIDEO_PALETTE_REGISTER_FILE];                  /* the 16 EGA palette registers + border     */
     WORD VesaStartX, VesaStartY;/* 4F07 display start (pixels, rows); the      */
                                         /* 4F06 logical pitch lives in VesaStride    */
     /* ── THE VESA DISPLAY START ON THE HARDWARE'S SCHEDULE (#226), the same three stages
@@ -220,19 +223,19 @@ typedef struct _VIDEO_STATE {
              pixel(4 bits) -> vpal[pixel] (Attribute Controller) -> DAC index -> dac[]
          so pal[0..15] is a DERIVED view of dac[], rebuilt by VideoPaletteRefresh(). In 13h
          the AC is bypassed and pal[] is simply dac[]. */
-    UINT32 Dac[256];                  /* the DAC as the guest programmed it      */
-    UINT32 Palette[256];                  /* ARGB palette the framebuffer indexes    */
+    UINT32 Dac[VIDEO_DAC_ENTRIES];                  /* the DAC as the guest programmed it      */
+    UINT32 Palette[VIDEO_DAC_ENTRIES];                  /* ARGB palette the framebuffer indexes    */
     /* Raster-split bookkeeping over pal[] (see NTVDD_FRAME and VideoPaletteSplitNote):
        what each entry was at the start of the current frame, what it was set to
        mid-frame and at which row, stamped with the frame number. */
-    UINT32 PaletteBase[256];
-    UINT32 PaletteSplit[256];
-    WORD PaletteSplitRow[256];
-    UINT32 PaletteSplitFrame[256];
+    UINT32 PaletteBase[VIDEO_DAC_ENTRIES];
+    UINT32 PaletteSplit[VIDEO_DAC_ENTRIES];
+    WORD PaletteSplitRow[VIDEO_DAC_ENTRIES];
+    UINT32 PaletteSplitFrame[VIDEO_DAC_ENTRIES];
     UINT32 PaletteFrameNumber;              /* frame the bookkeeping last rebased on   */
     UINT32 PaletteSplitNotes;           /* mid-frame palette writes seen (STAGE2)  */
     /* DAC (ports 3C7/3C8/3C9) write/read state */
-    BYTE  DacWriteIndex, DacReadIndex, DacComponent, DacLatch[3];
+    BYTE  DacWriteIndex, DacReadIndex, DacComponent, DacLatch[VIDEO_DAC_COMPONENTS];
     /* VESA VBE state */
     BYTE  IsVesa;                   /* a VESA mode is active                   */
     WORD VesaMode, VesaWidth, VesaHeight; /* current VESA mode + resolution          */
@@ -253,7 +256,7 @@ typedef struct _VIDEO_STATE {
        the guest's pixel format, so here is where it converts. */
     UINT32 VesaArgb[(UINT32)VIDEO_VESA_MAX_WIDTH * VIDEO_VESA_MAX_HEIGHT];
     BYTE  VesaVram[VIDEO_VESA_VRAM];  /* full packed-256 framebuffer             */
-    BYTE  Planes[4][VIDEO_PLANE_SIZE];  /* mode 12h: 4 bit-planes (640x480x16)     */
+    BYTE  Planes[VIDEO_PLANES][VIDEO_PLANE_SIZE];  /* mode 12h: 4 bit-planes (640x480x16)     */
     /* VGA planar write engine (Sequencer 3C4/3C5 + Graphics Controller 3CE/3CF) */
     BYTE  SequencerIndex, GcIndex;
     BYTE  MapMask;     /* SR2: planes enabled for writes (reset 0x0F)          */
@@ -329,7 +332,7 @@ typedef struct _VIDEO_STATE {
     BYTE  CrtcOffset;  /* CRTC 0x13: logical line width in 2-byte units        */
     WORD CrtcStart;   /* CRTC 0x0C/0x0D: display start -- the page-flip reg   */
     WORD CrtcCursor;  /* CRTC 0x0E/0x0F as last written by the guest          */
-    BYTE  YPlanes[4][VIDEO_Y_PLANE_SIZE];   /* de-interleaved mode-Y planes             */
+    BYTE  YPlanes[VIDEO_PLANES][VIDEO_Y_PLANE_SIZE];   /* de-interleaved mode-Y planes             */
     BYTE  YShadow[VIDEO_Y_PLANE_SIZE];     /* the aperture as of the last plane flush   */
     BYTE  IsCrtcSeen;                /* the guest has written a CRTC start address */
     /* ⚠ SEPARATE FROM IsCrtcSeen ON PURPOSE. CrtcOffset RESETS TO 40, which is the
@@ -395,7 +398,7 @@ typedef struct _VIDEO_STATE {
     BYTE *(*YMapPlane)(PVOID context, INT plane);
     BYTE  WriteMode;   /* GR5 bits0-1                                          */
     BYTE  BitMask;     /* GR8 (reset 0xFF)                                     */
-    BYTE  Latch[4];     /* per-plane read latches                               */
+    BYTE  Latch[VIDEO_PLANES];     /* per-plane read latches                               */
     BYTE  Retrace;      /* Input Status 1 (3DA): legacy toggle, used only if no clock */
     /* CRT TIMEBASE (GH #55 follow-up). Host sets this to a microsecond clock so
        0x3DA reports vertical retrace ON A REAL PERIOD instead of alternating per

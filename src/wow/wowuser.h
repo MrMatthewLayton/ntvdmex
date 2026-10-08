@@ -5879,21 +5879,21 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              the rest of this host uses, and it sign-extends -- a scroll
              rectangle with a negative top is ordinary. A NULL rectangle means
              "the whole DC" in both worlds and is passed through as NULL. */
-        if (scrollBytes) { scroll.left   = WowConvRect16Get((PCBYTE)scrollBytes, 0);
-                  scroll.top    = WowConvRect16Get((PCBYTE)scrollBytes, 1);
-                  scroll.right  = WowConvRect16Get((PCBYTE)scrollBytes, 2);
-                  scroll.bottom = WowConvRect16Get((PCBYTE)scrollBytes, 3); }
-        if (rectBytes) { clip.left   = WowConvRect16Get((PCBYTE)rectBytes, 0);
-                  clip.top    = WowConvRect16Get((PCBYTE)rectBytes, 1);
-                  clip.right  = WowConvRect16Get((PCBYTE)rectBytes, 2);
-                  clip.bottom = WowConvRect16Get((PCBYTE)rectBytes, 3); }
+        if (scrollBytes) { scroll.left   = WowConvRect16Get((PCBYTE)scrollBytes, WOWCONV_RECT16_LEFT);
+                  scroll.top    = WowConvRect16Get((PCBYTE)scrollBytes, WOWCONV_RECT16_TOP);
+                  scroll.right  = WowConvRect16Get((PCBYTE)scrollBytes, WOWCONV_RECT16_RIGHT);
+                  scroll.bottom = WowConvRect16Get((PCBYTE)scrollBytes, WOWCONV_RECT16_BOTTOM); }
+        if (rectBytes) { clip.left   = WowConvRect16Get((PCBYTE)rectBytes, WOWCONV_RECT16_LEFT);
+                  clip.top    = WowConvRect16Get((PCBYTE)rectBytes, WOWCONV_RECT16_TOP);
+                  clip.right  = WowConvRect16Get((PCBYTE)rectBytes, WOWCONV_RECT16_RIGHT);
+                  clip.bottom = WowConvRect16Get((PCBYTE)rectBytes, WOWCONV_RECT16_BOTTOM); }
         isOk = ScrollDC(dc, deltaX, deltaY, scrollBytes ? &scroll : NULL, rectBytes ? &clip : NULL,
                       region, updateBytes ? &update : NULL) ? 1 : 0;
         if (isOk && updateBytes) {
-            WowConvRect16Put((PBYTE)updateBytes, 0, (INT)update.left);
-            WowConvRect16Put((PBYTE)updateBytes, 1, (INT)update.top);
-            WowConvRect16Put((PBYTE)updateBytes, 2, (INT)update.right);
-            WowConvRect16Put((PBYTE)updateBytes, 3, (INT)update.bottom);
+            WowConvRect16Put((PBYTE)updateBytes, WOWCONV_RECT16_LEFT, (INT)update.left);
+            WowConvRect16Put((PBYTE)updateBytes, WOWCONV_RECT16_TOP, (INT)update.top);
+            WowConvRect16Put((PBYTE)updateBytes, WOWCONV_RECT16_RIGHT, (INT)update.right);
+            WowConvRect16Put((PBYTE)updateBytes, WOWCONV_RECT16_BOTTOM, (INT)update.bottom);
             WowNotePut(note, noteCapacity, &noteLength, " update=");
             WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(update.right - update.left), WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, "x");
@@ -7373,10 +7373,10 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0); return 1;
         }
         for (index = 0; index < WOWUSER_RECT16_SIZE; ++index) rect16[index] = (BYTE)rectBytes[index];
-        rect.left   = WowConvRect16Get(rect16, 0);
-        rect.top    = WowConvRect16Get(rect16, 1);
-        rect.right  = WowConvRect16Get(rect16, 2);
-        rect.bottom = WowConvRect16Get(rect16, 3);
+        rect.left   = WowConvRect16Get(rect16, WOWCONV_RECT16_LEFT);
+        rect.top    = WowConvRect16Get(rect16, WOWCONV_RECT16_TOP);
+        rect.right  = WowConvRect16Get(rect16, WOWCONV_RECT16_RIGHT);
+        rect.bottom = WowConvRect16Get(rect16, WOWCONV_RECT16_BOTTOM);
         /* ── #282: NOT WIN32's MapDialogRect. That only works on a window the OS
              built as a dialog, and none of ours is one -- every Win16 dialog here
              is CreateWindowEx'd (CALC's is its own `SciCalc` class) -- so it
@@ -7391,10 +7391,10 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             rect.right  = MulDiv(rect.right, baseUnitX, WOWDLG_UNITS_PER_BASE_X);
             rect.top    = MulDiv(rect.top, baseUnitY, WOWDLG_UNITS_PER_BASE_Y);
             rect.bottom = MulDiv(rect.bottom, baseUnitY, WOWDLG_UNITS_PER_BASE_Y); }
-        WowConvRect16Put(rect16, 0, (INT)rect.left);
-        WowConvRect16Put(rect16, 1, (INT)rect.top);
-        WowConvRect16Put(rect16, 2, (INT)rect.right);
-        WowConvRect16Put(rect16, 3, (INT)rect.bottom);
+        WowConvRect16Put(rect16, WOWCONV_RECT16_LEFT, (INT)rect.left);
+        WowConvRect16Put(rect16, WOWCONV_RECT16_TOP, (INT)rect.top);
+        WowConvRect16Put(rect16, WOWCONV_RECT16_RIGHT, (INT)rect.right);
+        WowConvRect16Put(rect16, WOWCONV_RECT16_BOTTOM, (INT)rect.bottom);
         for (index = 0; index < WOWUSER_RECT16_SIZE; ++index) rectBytes[index] = rect16[index];
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(rect.right - rect.left), WOW_HEX_WORD_DIGITS);
@@ -7721,7 +7721,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 WORD atom = 0;
                 for (index2 = 1; index2 < WOWUSER_ATOM_NAME_LENGTH; ++index2) {
                     CHAR nameChar = prop->Name[index2];
-                    atom = (WORD)((atom << WOW_HEX_DIGIT_BITS) | (nameChar >= 'a' ? nameChar - 'a' + WOWUSER_HEX_LETTER_VALUE : nameChar - '0'));
+                    atom = (WORD)((atom << NIBBLE_SHIFT) | (nameChar >= 'a' ? nameChar - 'a' + WOWUSER_HEX_LETTER_VALUE : nameChar - '0'));
                 }
                 CHAR atomName[WOWUSER_SHORT_NAME_SIZE];
                 INT  length = (INT)GlobalGetAtomNameA((ATOM)atom, atomName, (INT)sizeof atomName);
@@ -7903,8 +7903,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                 Wow32SetReturn(frame, 0); return 1; }
         hasAny = GetUpdateRect(window->Window32, &rect, erase ? TRUE : FALSE) ? 1 : 0;
         if (rectBytes) {
-            WowConvRect16Put(rect16, 0, (INT)rect.left);   WowConvRect16Put(rect16, 1, (INT)rect.top);
-            WowConvRect16Put(rect16, 2, (INT)rect.right);  WowConvRect16Put(rect16, 3, (INT)rect.bottom);
+            WowConvRect16Put(rect16, WOWCONV_RECT16_LEFT, (INT)rect.left);   WowConvRect16Put(rect16, WOWCONV_RECT16_TOP, (INT)rect.top);
+            WowConvRect16Put(rect16, WOWCONV_RECT16_RIGHT, (INT)rect.right);  WowConvRect16Put(rect16, WOWCONV_RECT16_BOTTOM, (INT)rect.bottom);
             for (index = 0; index < WOWUSER_RECT16_SIZE; ++index) rectBytes[index] = rect16[index];
         }
         WowNotePut(note, noteCapacity, &noteLength, hasAny ? " -> dirty" : " -> clean");
@@ -7960,8 +7960,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0); return 1;
         }
         for (index = 0; index < WOWUSER_RECT16_SIZE; ++index) rect16[index] = (BYTE)rectBytes[index];
-        rect.left   = WowConvRect16Get(rect16, 0); rect.top    = WowConvRect16Get(rect16, 1);
-        rect.right  = WowConvRect16Get(rect16, 2); rect.bottom = WowConvRect16Get(rect16, 3);
+        rect.left   = WowConvRect16Get(rect16, WOWCONV_RECT16_LEFT); rect.top    = WowConvRect16Get(rect16, WOWCONV_RECT16_TOP);
+        rect.right  = WowConvRect16Get(rect16, WOWCONV_RECT16_RIGHT); rect.bottom = WowConvRect16Get(rect16, WOWCONV_RECT16_BOTTOM);
         DrawFocusRect((HDC)dc, &rect);
         WowNotePut(note, noteCapacity, &noteLength, " -> drawn");
         Wow32SetReturn(frame, 1);
@@ -8128,8 +8128,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         if (action == SPI_GETWORKAREA && parameterBytes) {
             RECT workArea; BYTE rect16[WOWUSER_RECT16_SIZE]; INT index;
             if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &workArea, 0)) {
-                WowConvRect16Put(rect16, 0, (INT)workArea.left);  WowConvRect16Put(rect16, 1, (INT)workArea.top);
-                WowConvRect16Put(rect16, 2, (INT)workArea.right); WowConvRect16Put(rect16, 3, (INT)workArea.bottom);
+                WowConvRect16Put(rect16, WOWCONV_RECT16_LEFT, (INT)workArea.left);  WowConvRect16Put(rect16, WOWCONV_RECT16_TOP, (INT)workArea.top);
+                WowConvRect16Put(rect16, WOWCONV_RECT16_RIGHT, (INT)workArea.right); WowConvRect16Put(rect16, WOWCONV_RECT16_BOTTOM, (INT)workArea.bottom);
                 for (index = 0; index < WOWUSER_RECT16_SIZE; ++index) parameterBytes[index] = rect16[index];
                 WowNotePut(note, noteCapacity, &noteLength, " -> work area written");
                 Wow32SetReturn(frame, 1);
@@ -8538,12 +8538,12 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              scrolls the whole client area, and a null clip rect clips to none.
              Substituting an empty RECT would scroll nothing, silently. */
         if (rectBytes) { for (index = 0; index < WOWUSER_RECT16_SIZE; ++index) rect16[index] = (BYTE)rectBytes[index];
-                  rect.left = WowConvRect16Get(rect16,0); rect.top = WowConvRect16Get(rect16,1);
-                  rect.right = WowConvRect16Get(rect16,2); rect.bottom = WowConvRect16Get(rect16,3);
+                  rect.left = WowConvRect16Get(rect16,WOWCONV_RECT16_LEFT); rect.top = WowConvRect16Get(rect16,WOWCONV_RECT16_TOP);
+                  rect.right = WowConvRect16Get(rect16,WOWCONV_RECT16_RIGHT); rect.bottom = WowConvRect16Get(rect16,WOWCONV_RECT16_BOTTOM);
                   scrollRect = &rect; }
         if (clipBytes) { for (index = 0; index < WOWUSER_RECT16_SIZE; ++index) rect16[index] = (BYTE)clipBytes[index];
-                  clientRect.left = WowConvRect16Get(rect16,0); clientRect.top = WowConvRect16Get(rect16,1);
-                  clientRect.right = WowConvRect16Get(rect16,2); clientRect.bottom = WowConvRect16Get(rect16,3);
+                  clientRect.left = WowConvRect16Get(rect16,WOWCONV_RECT16_LEFT); clientRect.top = WowConvRect16Get(rect16,WOWCONV_RECT16_TOP);
+                  clientRect.right = WowConvRect16Get(rect16,WOWCONV_RECT16_RIGHT); clientRect.bottom = WowConvRect16Get(rect16,WOWCONV_RECT16_BOTTOM);
                   clipRect = &clientRect; }
         ScrollWindow(window->Window32, deltaX, deltaY, scrollRect, clipRect);
         WowNotePut(note, noteCapacity, &noteLength, " -> scrolled ");
@@ -10499,8 +10499,8 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WORD atom = (WORD)(namePointer & WORD_MASK);
             INT  index2 = 0, shift;
             key[index2++] = '#';
-            for (shift = WOWUSER_ATOM_TOP_DIGIT_SHIFT; shift >= 0; shift -= WOW_HEX_DIGIT_BITS) {
-                INT nibble = (atom >> shift) & WOW_HEX_DIGIT_MASK;
+            for (shift = WOWUSER_ATOM_TOP_DIGIT_SHIFT; shift >= 0; shift -= NIBBLE_SHIFT) {
+                INT nibble = (atom >> shift) & NIBBLE_MASK;
                 key[index2++] = (CHAR)(nibble < WOWUSER_HEX_LETTER_VALUE ? '0' + nibble : 'a' + nibble - WOWUSER_HEX_LETTER_VALUE);
             }
             key[index2] = 0;

@@ -1024,8 +1024,6 @@ static VOID WowGdiPut16(PBYTE bytes, INT offset, LONG value) { bytes[offset] = (
 #define WOWGDI_RECT16_TOP         2
 #define WOWGDI_RECT16_RIGHT       4
 #define WOWGDI_RECT16_BOTTOM      6
-#define WOWGDI_RECT16_RIGHT_FIELD  2   /* WowConvRect16Get's field numbers */
-#define WOWGDI_RECT16_BOTTOM_FIELD 3
 #define WOWGDI_PALETTEENTRY16_SIZE 4   /* red, green, blue, flags */
 #define WOWGDI_PE16_GREEN         1
 #define WOWGDI_PE16_BLUE          2
@@ -3627,8 +3625,8 @@ static INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0); return 1;
         }
         for (index = 0; index < WOWCONV_RECT16_SIZE; ++index) rect16[index] = (BYTE)rectBytes[index];
-        result.left  = WowConvRect16Get(rect16, 0); result.top    = WowConvRect16Get(rect16, 1);
-        result.right = WowConvRect16Get(rect16, WOWGDI_RECT16_RIGHT_FIELD); result.bottom = WowConvRect16Get(rect16, WOWGDI_RECT16_BOTTOM_FIELD);
+        result.left  = WowConvRect16Get(rect16, WOWCONV_RECT16_LEFT); result.top    = WowConvRect16Get(rect16, WOWCONV_RECT16_TOP);
+        result.right = WowConvRect16Get(rect16, WOWCONV_RECT16_RIGHT); result.bottom = WowConvRect16Get(rect16, WOWCONV_RECT16_BOTTOM);
         isVisible = RectVisible((HDC)object, &result) ? 1 : 0;
         WowNotePut(note, noteCapacity, &noteLength, isVisible ? ") -> VISIBLE" : ") -> not visible");
         Wow32SetReturn(frame, (DWORD)isVisible);
@@ -4006,10 +4004,10 @@ static INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         if (rectBytes) {
             BYTE rect16[WOWCONV_RECT16_SIZE];
             for (index = 0; index < WOWCONV_RECT16_SIZE; ++index) rect16[index] = (BYTE)rectBytes[index];
-            regionResult.left   = WowConvRect16Get(rect16, 0);
-            regionResult.top    = WowConvRect16Get(rect16, 1);
-            regionResult.right  = WowConvRect16Get(rect16, WOWGDI_RECT16_RIGHT_FIELD);
-            regionResult.bottom = WowConvRect16Get(rect16, WOWGDI_RECT16_BOTTOM_FIELD);
+            regionResult.left   = WowConvRect16Get(rect16, WOWCONV_RECT16_LEFT);
+            regionResult.top    = WowConvRect16Get(rect16, WOWCONV_RECT16_TOP);
+            regionResult.right  = WowConvRect16Get(rect16, WOWCONV_RECT16_RIGHT);
+            regionResult.bottom = WowConvRect16Get(rect16, WOWCONV_RECT16_BOTTOM);
             clipRect = &regionResult;
             WowNotePut(note, noteCapacity, &noteLength, " rect=");
             WowNoteHex(note, noteCapacity, &noteLength, (DWORD)regionResult.left, WOW_HEX_WORD_DIGITS);

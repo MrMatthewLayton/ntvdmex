@@ -221,8 +221,6 @@ static VOID WowNotePut(PSTR buffer, INT capacity, PINT length, PCSTR text)
 #define WOW_HEX_BYTE_DIGITS  2
 #define WOW_HEX_WORD_DIGITS  4
 #define WOW_HEX_DWORD_DIGITS 8
-#define WOW_HEX_DIGIT_BITS   4
-#define WOW_HEX_DIGIT_MASK   0xF
 /* Taking WORDs and DWORDs apart, and putting them back, as every Win16 structure needs. */
 #define WOW_WORD_BYTES       2
 static VOID WowNoteHex(PSTR buffer, INT capacity, PINT length, DWORD value, INT digits)
@@ -231,7 +229,7 @@ static VOID WowNoteHex(PSTR buffer, INT capacity, PINT length, DWORD value, INT 
     INT index;
     for (index = digits - 1; index >= 0; --index) {
         if (*length >= capacity - 1) break;
-        buffer[(*length)++] = hexDigits[(value >> (index * WOW_HEX_DIGIT_BITS)) & WOW_HEX_DIGIT_MASK];
+        buffer[(*length)++] = hexDigits[(value >> (index * NIBBLE_SHIFT)) & NIBBLE_MASK];
     }
     buffer[*length] = 0;
 }
@@ -1236,8 +1234,8 @@ static INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
             PCSTR hexDigits = "0123456789abcdef";
             PCSTR cursor; INT position;
             for (cursor = prefix; *cursor && number < (INT)sizeof logLine - WOW32_MSGBOX_LOG_LINE_END; ++cursor) logLine[number++] = *cursor;
-            logLine[number++] = hexDigits[(type >> (3 * WOW_HEX_DIGIT_BITS)) & WOW_HEX_DIGIT_MASK]; logLine[number++] = hexDigits[(type >> (2 * WOW_HEX_DIGIT_BITS)) & WOW_HEX_DIGIT_MASK];
-            logLine[number++] = hexDigits[(type >> WOW_HEX_DIGIT_BITS) & WOW_HEX_DIGIT_MASK];  logLine[number++] = hexDigits[type & WOW_HEX_DIGIT_MASK];
+            logLine[number++] = hexDigits[(type >> (3 * NIBBLE_SHIFT)) & NIBBLE_MASK]; logLine[number++] = hexDigits[(type >> (2 * NIBBLE_SHIFT)) & NIBBLE_MASK];
+            logLine[number++] = hexDigits[(type >> NIBBLE_SHIFT) & NIBBLE_MASK];  logLine[number++] = hexDigits[type & NIBBLE_MASK];
             for (cursor = " arg4=\""; *cursor; ++cursor) logLine[number++] = *cursor;
             for (position = 0; captionText[position] && number < (INT)sizeof logLine - WOW32_MSGBOX_LOG_HEAD_ROOM; ++position)
                 logLine[number++] = (captionText[position] == '\r' || captionText[position] == '\n') ? ' ' : captionText[position];

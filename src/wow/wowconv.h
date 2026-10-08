@@ -15,6 +15,10 @@
 #define WOWCONV_BPP_8             8
 #define WOWCONV_BPP_24            24
 #define WOWCONV_RECT16_FIELD_BYTES 2
+#define WOWCONV_RECT16_LEFT        0   /* WowConvRect16Get/Put's field numbers */
+#define WOWCONV_RECT16_TOP         1
+#define WOWCONV_RECT16_RIGHT       2
+#define WOWCONV_RECT16_BOTTOM      3
 #define WOWCONV_CORE_HEADER_SIZE  12     /* BITMAPCOREHEADER: bcSize */
 #define WOWCONV_CORE_WIDTH        4
 #define WOWCONV_CORE_HEIGHT       6

@@ -11,6 +11,7 @@
 
 /* Timing the blit near the vertical blank (PresentWaitVerticalBlank). */
 #define PRESENT_MONITOR_HZ_MIN        40
+#define PRESENT_ROP_PATAND            0x00A000C9L  /* DPa: destination AND pattern (no windows.h name) */
 #define PRESENT_MONITOR_HZ_MAX        240
 #define PRESENT_MONITOR_HZ_DEFAULT    60      /* when the driver will not say            */
 #define PRESENT_FRAME_LINES_NUMERATOR   21u   /* a frame is ~21/20 of the visible lines  */
@@ -331,7 +332,7 @@ static VOID PresentGdi(PPRESENT_DDRAW presenter)
         HBRUSH brush = PresentScanlineBrush();
         if (brush) {
             HGDIOBJ oldObject = SelectObject(dc, brush);
-            PatBlt(dc, destinationX, destinationY, destinationWidth, destinationHeight, 0x00A000C9L);    /* PATAND */
+            PatBlt(dc, destinationX, destinationY, destinationWidth, destinationHeight, PRESENT_ROP_PATAND);    /* PATAND */
             SelectObject(dc, oldObject);
         }
     }
@@ -631,7 +632,7 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
         HDC dc; HBRUSH brush = PresentScanlineBrush();
         if (brush && SUCCEEDED(IDirectDrawSurface7_GetDC(back, &dc))) {
             HGDIOBJ oldObject = SelectObject(dc, brush);
-            PatBlt(dc, fitX, fitY, fitWidth, fitHeight, 0x00A000C9L);      /* PATAND */
+            PatBlt(dc, fitX, fitY, fitWidth, fitHeight, PRESENT_ROP_PATAND);      /* PATAND */
             SelectObject(dc, oldObject);
             IDirectDrawSurface7_ReleaseDC(back, dc);
         }
@@ -838,8 +839,8 @@ VOID PresentDdrawFrame(PPRESENT_DDRAW presenter, PCNTVDD_FRAME frame)
    off the SMB share instead of via VNC or a physical monitor (VNC capture is dead on
    the real box). Call on the UI thread (which owns snap) or under the bus lock.
    Returns 0 on success, <0 if there's nothing valid to save or the write failed. */
-static VOID PresentStoreLe16(BYTE *bytes, UINT value) { bytes[0]=(BYTE)value; bytes[1]=(BYTE)(value>>8); }
-static VOID PresentStoreLe32(BYTE *bytes, DWORD value)    { bytes[0]=(BYTE)value; bytes[1]=(BYTE)(value>>8); bytes[2]=(BYTE)(value>>16); bytes[3]=(BYTE)(value>>24); }
+static VOID PresentStoreLe16(BYTE *bytes, UINT value) { bytes[0]=(BYTE)value; bytes[1]=(BYTE)(value>>BYTE_SHIFT); }
+static VOID PresentStoreLe32(BYTE *bytes, DWORD value)    { bytes[0]=(BYTE)value; bytes[1]=(BYTE)(value>>BYTE_SHIFT); bytes[2]=(BYTE)(value>>WORD_SHIFT); bytes[3]=(BYTE)(value>>TOP_BYTE_SHIFT); }
 
 INT PresentDdrawSaveBmp(PPRESENT_DDRAW presenter, PCSTR path)
 {
