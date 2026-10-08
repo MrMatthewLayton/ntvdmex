@@ -6,6 +6,24 @@
 #ifndef NTVDMEX_X86_H
 #define NTVDMEX_X86_H
 
+/* Register numbers, as the instruction encoding has them: (E)AX..(E)DI, and ES..GS. */
+#define X86_REG_AX              0
+#define X86_REG_CX              1
+#define X86_REG_DX              2
+#define X86_REG_BX              3
+#define X86_REG_SP              4
+#define X86_REG_BP              5
+#define X86_REG_SI              6
+#define X86_REG_DI              7
+#define X86_GENERAL_REGISTERS   8
+#define X86_SREG_ES             0
+#define X86_SREG_CS             1
+#define X86_SREG_SS             2
+#define X86_SREG_DS             3
+#define X86_SREG_FS             4
+#define X86_SREG_GS             5
+#define X86_SEGMENT_REGISTERS   6
+
 /* Operand and structure sizes, in bytes. */
 #define X86_WORD_SIZE       2
 #define X86_DWORD_SIZE      4

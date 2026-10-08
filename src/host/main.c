@@ -16815,30 +16815,30 @@ static VOID ModeYPmRun(volatile BYTE *tib)
 {
     PM32_CPU cpu; INT32 steps = 0, idleFrom = 0; UINT32 espStart; INT why;
     DWORD vgaSeen;
-    WORD selector[6];
+    WORD selector[X86_SEGMENT_REGISTERS];
     INT index;
     WORD cs = (WORD)VDM_REG16(tib, VTIB_CS), ss = (WORD)VDM_REG16(tib, VTIB_SS);
     if (!DpmiSelectorIs32(cs) || !DpmiSelectorIs32(ss)) { g_ModeYPmStop[4]++; return; }
-    selector[0] = (WORD)VDM_REG(tib, VTIB_ES); selector[1] = cs; selector[2] = ss;
-    selector[3] = (WORD)VDM_REG(tib, VTIB_DS); selector[4] = (WORD)VDM_REG(tib, VTIB_FS);
-    selector[5] = (WORD)VDM_REG(tib, VTIB_GS);
-    for (index = 0; index < 6; ++index) cpu.SegmentBases[index] = (selector[index] & 0xFFFC) ? DpmiSelectorBase(selector[index]) : 0;
-    cpu.Registers[0] = VDM_REG(tib, VTIB_EAX); cpu.Registers[1] = VDM_REG(tib, VTIB_ECX);
-    cpu.Registers[2] = VDM_REG(tib, VTIB_EDX); cpu.Registers[3] = VDM_REG(tib, VTIB_EBX);
-    cpu.Registers[4] = VDM_REG(tib, VTIB_ESP); cpu.Registers[5] = VDM_REG(tib, VTIB_EBP);
-    cpu.Registers[6] = VDM_REG(tib, VTIB_ESI); cpu.Registers[7] = VDM_REG(tib, VTIB_EDI);
+    selector[X86_SREG_ES] = (WORD)VDM_REG(tib, VTIB_ES); selector[X86_SREG_CS] = cs; selector[X86_SREG_SS] = ss;
+    selector[X86_SREG_DS] = (WORD)VDM_REG(tib, VTIB_DS); selector[X86_SREG_FS] = (WORD)VDM_REG(tib, VTIB_FS);
+    selector[X86_SREG_GS] = (WORD)VDM_REG(tib, VTIB_GS);
+    for (index = 0; index < X86_SEGMENT_REGISTERS; ++index) cpu.SegmentBases[index] = (selector[index] & 0xFFFC) ? DpmiSelectorBase(selector[index]) : 0;
+    cpu.Registers[X86_REG_AX] = VDM_REG(tib, VTIB_EAX); cpu.Registers[X86_REG_CX] = VDM_REG(tib, VTIB_ECX);
+    cpu.Registers[X86_REG_DX] = VDM_REG(tib, VTIB_EDX); cpu.Registers[X86_REG_BX] = VDM_REG(tib, VTIB_EBX);
+    cpu.Registers[X86_REG_SP] = VDM_REG(tib, VTIB_ESP); cpu.Registers[X86_REG_BP] = VDM_REG(tib, VTIB_EBP);
+    cpu.Registers[X86_REG_SI] = VDM_REG(tib, VTIB_ESI); cpu.Registers[X86_REG_DI] = VDM_REG(tib, VTIB_EDI);
     cpu.Eip = VDM_REG(tib, VTIB_EIP); cpu.Flags = VDM_REG(tib, VTIB_EFLAGS);
-    espStart = cpu.Registers[4];
+    espStart = cpu.Registers[X86_REG_SP];
     { DWORD vgaCountStart = g_Pm32VgaCount;
     vgaSeen = vgaCountStart;
     HOST_LOCK();
     for (;;) {
-        BYTE opcodeByte = Pm32HostRead8(cpu.SegmentBases[1] + cpu.Eip);
+        BYTE opcodeByte = Pm32HostRead8(cpu.SegmentBases[X86_SREG_CS] + cpu.Eip);
         INT wasResult = (opcodeByte == X86_OP_RET || opcodeByte == X86_OP_RET_IMM);
         if (steps >= MYPM_CAP) { why = 3; break; }
         if (!Pm32Step(&cpu)) { why = 2; break; }
         ++steps;
-        if (wasResult && cpu.Registers[4] > espStart && g_Pm32VgaCount != vgaCountStart) { why = 0; break; }
+        if (wasResult && cpu.Registers[X86_REG_SP] > espStart && g_Pm32VgaCount != vgaCountStart) { why = 0; break; }
         if ((steps & 0x3F) == 0) {
             if (!ModeYPmNeedsInterp()) { why = 1; break; }
             if (g_Pm32VgaCount != vgaSeen) { vgaSeen = g_Pm32VgaCount; idleFrom = steps; }
@@ -16852,13 +16852,13 @@ static VOID ModeYPmRun(volatile BYTE *tib)
         BYTE mapMask = (BYTE)(g_Video.MapMask & 0x0F);
         g_ModeYPmBails++;
         if (mapMask & (BYTE)(mapMask - 1)) g_ModeYPmBailMp++;
-        ModeYBailNote(cs, cpu.Eip, (const volatile BYTE *)(ULONG_PTR)(cpu.SegmentBases[1] + cpu.Eip));
+        ModeYBailNote(cs, cpu.Eip, (const volatile BYTE *)(ULONG_PTR)(cpu.SegmentBases[X86_SREG_CS] + cpu.Eip));
     }
     if (!steps) return;
-    VDM_REG(tib, VTIB_EAX) = cpu.Registers[0]; VDM_REG(tib, VTIB_ECX) = cpu.Registers[1];
-    VDM_REG(tib, VTIB_EDX) = cpu.Registers[2]; VDM_REG(tib, VTIB_EBX) = cpu.Registers[3];
-    VDM_REG(tib, VTIB_ESP) = cpu.Registers[4]; VDM_REG(tib, VTIB_EBP) = cpu.Registers[5];
-    VDM_REG(tib, VTIB_ESI) = cpu.Registers[6]; VDM_REG(tib, VTIB_EDI) = cpu.Registers[7];
+    VDM_REG(tib, VTIB_EAX) = cpu.Registers[X86_REG_AX]; VDM_REG(tib, VTIB_ECX) = cpu.Registers[X86_REG_CX];
+    VDM_REG(tib, VTIB_EDX) = cpu.Registers[X86_REG_DX]; VDM_REG(tib, VTIB_EBX) = cpu.Registers[X86_REG_BX];
+    VDM_REG(tib, VTIB_ESP) = cpu.Registers[X86_REG_SP]; VDM_REG(tib, VTIB_EBP) = cpu.Registers[X86_REG_BP];
+    VDM_REG(tib, VTIB_ESI) = cpu.Registers[X86_REG_SI]; VDM_REG(tib, VTIB_EDI) = cpu.Registers[X86_REG_DI];
     VDM_REG(tib, VTIB_EIP) = cpu.Eip;
     /* the arithmetic flags and DF only: IF, IOPL, VM and the rest are the monitor's */
     VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & ~EFLAGS_STATUS_DF_U) | (cpu.Flags & EFLAGS_STATUS_DF_U);
@@ -17055,13 +17055,13 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
          interpreter's own 8/16-bit writes (V86Set8/V86Set16) preserve the high halves, so
          carrying all 32 bits is transparent to 16-bit code and correct for 386 code.
          ESP keeps its own high word: V86 addresses the stack through SP only. */
-    cpu.Registers[0] = VDM_REG(tib, VTIB_EAX); cpu.Registers[1] = VDM_REG(tib, VTIB_ECX);
-    cpu.Registers[2] = VDM_REG(tib, VTIB_EDX); cpu.Registers[3] = VDM_REG(tib, VTIB_EBX);
-    cpu.Registers[4] = (WORD)VDM_REG(tib, VTIB_ESP); cpu.Registers[5] = VDM_REG(tib, VTIB_EBP);
-    cpu.Registers[6] = VDM_REG(tib, VTIB_ESI); cpu.Registers[7] = VDM_REG(tib, VTIB_EDI);
-    cpu.Segments[0] = (WORD)VDM_REG(tib, VTIB_ES); cpu.Segments[1] = (WORD)VDM_REG(tib, VTIB_CS);
-    cpu.Segments[2] = (WORD)VDM_REG(tib, VTIB_SS); cpu.Segments[3] = (WORD)VDM_REG(tib, VTIB_DS);
-    cpu.Segments[4] = (WORD)VDM_REG(tib, VTIB_FS); cpu.Segments[5] = (WORD)VDM_REG(tib, VTIB_GS);
+    cpu.Registers[X86_REG_AX] = VDM_REG(tib, VTIB_EAX); cpu.Registers[X86_REG_CX] = VDM_REG(tib, VTIB_ECX);
+    cpu.Registers[X86_REG_DX] = VDM_REG(tib, VTIB_EDX); cpu.Registers[X86_REG_BX] = VDM_REG(tib, VTIB_EBX);
+    cpu.Registers[X86_REG_SP] = (WORD)VDM_REG(tib, VTIB_ESP); cpu.Registers[X86_REG_BP] = VDM_REG(tib, VTIB_EBP);
+    cpu.Registers[X86_REG_SI] = VDM_REG(tib, VTIB_ESI); cpu.Registers[X86_REG_DI] = VDM_REG(tib, VTIB_EDI);
+    cpu.Segments[X86_SREG_ES] = (WORD)VDM_REG(tib, VTIB_ES); cpu.Segments[X86_SREG_CS] = (WORD)VDM_REG(tib, VTIB_CS);
+    cpu.Segments[X86_SREG_SS] = (WORD)VDM_REG(tib, VTIB_SS); cpu.Segments[X86_SREG_DS] = (WORD)VDM_REG(tib, VTIB_DS);
+    cpu.Segments[X86_SREG_FS] = (WORD)VDM_REG(tib, VTIB_FS); cpu.Segments[X86_SREG_GS] = (WORD)VDM_REG(tib, VTIB_GS);
     cpu.Ip = (WORD)VDM_REG(tib, VTIB_EIP); cpu.Flags = VDM_REG(tib, VTIB_EFLAGS);
     /* Mode Y (s80): the guest's interrupt flag is IF OR VIF -- a native STI under VME sets
        only VIF -- so give the interpreter the same answer the gate uses. See the
@@ -17109,13 +17109,13 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
         for (iters = 0; iters < cap; ++iters) {
             if (ring) {
                 UINT index = g_ModeYRingPosition++ % MY_RING, byteIndex;
-                const volatile BYTE *codeBytes = (const volatile BYTE *)(((UINT32)cpu.Segments[1] << PARAGRAPH_SHIFT) + cpu.Ip);
-                g_ModeYRing[index].Cs = cpu.Segments[1]; g_ModeYRing[index].Ip = cpu.Ip;
-                g_ModeYRing[index].Ss = cpu.Segments[2]; g_ModeYRing[index].Sp = (WORD)cpu.Registers[4];
+                const volatile BYTE *codeBytes = (const volatile BYTE *)(((UINT32)cpu.Segments[X86_SREG_CS] << PARAGRAPH_SHIFT) + cpu.Ip);
+                g_ModeYRing[index].Cs = cpu.Segments[X86_SREG_CS]; g_ModeYRing[index].Ip = cpu.Ip;
+                g_ModeYRing[index].Ss = cpu.Segments[X86_SREG_SS]; g_ModeYRing[index].Sp = (WORD)cpu.Registers[X86_REG_SP];
                 for (byteIndex = 0; byteIndex < 6; ++byteIndex) g_ModeYRing[index].Bytes[byteIndex] = codeBytes[byteIndex];
             }
             if (!V86Step(&cpu)) break;
-            if (cpu.Segments[1] == 0 && cpu.Ip < 0x400) { ++iters; ModeYRingDump("interpreter reached CS=0"); break; }
+            if (cpu.Segments[X86_SREG_CS] == 0 && cpu.Ip < 0x400) { ++iters; ModeYRingDump("interpreter reached CS=0"); break; }
             if ((iters & BYTE_MASK) == 0xFF) {
                 INT irq, pend = (g_Irq0Pending != 0);
                 for (irq = 0; !pend && irq < 16; ++irq) pend = (g_IrqNPending[irq] != 0);
@@ -17133,10 +17133,10 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
 
     if (iters == 0) return 0;                          /* first opcode unmodeled */
 
-    VDM_REG(tib, VTIB_EAX) = cpu.Registers[0]; VDM_REG(tib, VTIB_ECX) = cpu.Registers[1];
-    VDM_REG(tib, VTIB_EDX) = cpu.Registers[2]; VDM_REG(tib, VTIB_EBX) = cpu.Registers[3];
-    VDM_SET16(tib, VTIB_ESP, cpu.Registers[4]); VDM_REG(tib, VTIB_EBP) = cpu.Registers[5];
-    VDM_REG(tib, VTIB_ESI) = cpu.Registers[6]; VDM_REG(tib, VTIB_EDI) = cpu.Registers[7];
+    VDM_REG(tib, VTIB_EAX) = cpu.Registers[X86_REG_AX]; VDM_REG(tib, VTIB_ECX) = cpu.Registers[X86_REG_CX];
+    VDM_REG(tib, VTIB_EDX) = cpu.Registers[X86_REG_DX]; VDM_REG(tib, VTIB_EBX) = cpu.Registers[X86_REG_BX];
+    VDM_SET16(tib, VTIB_ESP, cpu.Registers[X86_REG_SP]); VDM_REG(tib, VTIB_EBP) = cpu.Registers[X86_REG_BP];
+    VDM_REG(tib, VTIB_ESI) = cpu.Registers[X86_REG_SI]; VDM_REG(tib, VTIB_EDI) = cpu.Registers[X86_REG_DI];
     VDM_SET16(tib, VTIB_EIP, cpu.Ip);
     /* SEGMENTS TOO. They were loaded but never stored, so every segment load the
        interpreter modelled (POP ES / MOV DS,AX / far CALL / INT / IRET) was thrown
@@ -17144,9 +17144,9 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
        it had before the batch and the OFFSET the batch had reached. Harmless while
        batching was confined to a fill loop that never reloads a segment; fatal for
        continuous interpretation, where CS changes on every interrupt. */
-    VDM_REG(tib, VTIB_ES) = cpu.Segments[0]; VDM_REG(tib, VTIB_CS) = cpu.Segments[1];
-    VDM_REG(tib, VTIB_SS) = cpu.Segments[2]; VDM_REG(tib, VTIB_DS) = cpu.Segments[3];
-    VDM_REG(tib, VTIB_FS) = cpu.Segments[4]; VDM_REG(tib, VTIB_GS) = cpu.Segments[5];
+    VDM_REG(tib, VTIB_ES) = cpu.Segments[X86_SREG_ES]; VDM_REG(tib, VTIB_CS) = cpu.Segments[X86_SREG_CS];
+    VDM_REG(tib, VTIB_SS) = cpu.Segments[X86_SREG_SS]; VDM_REG(tib, VTIB_DS) = cpu.Segments[X86_SREG_DS];
+    VDM_REG(tib, VTIB_FS) = cpu.Segments[X86_SREG_FS]; VDM_REG(tib, VTIB_GS) = cpu.Segments[X86_SREG_GS];
     /* update only the low 16 flag bits (arith + DF); keep VM/IOPL/IF etc. */
     VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & HIGH_WORD_MASK_U) | (cpu.Flags & WORD_MASK_U);
     /* ── ★ AND VIF WITH IT, FOR MODE Y. (s80) The loop's gate delivers when IF *or*
@@ -28798,13 +28798,13 @@ static INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib)
     g_V86SelectorDescriptor = DpmiSelectorDescriptor;               /* ...and answers LAR/LSL from g_Ldt[] (run 55) */
     DpmiInterpreterCpuLoad(&cpu, tib);
     lineCursor = lineBuffer;
-    lineCursor = LogPut(lineCursor, "DPMI-INTERP: run 53 host PM begins CS:IP=0x"); lineCursor = LogHex(lineCursor, cpu.Segments[1]);
+    lineCursor = LogPut(lineCursor, "DPMI-INTERP: run 53 host PM begins CS:IP=0x"); lineCursor = LogHex(lineCursor, cpu.Segments[X86_SREG_CS]);
     lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, cpu.Ip);
-    lineCursor = LogPut(lineCursor, " DS=0x"); lineCursor = LogHex(lineCursor, cpu.Segments[3]); lineCursor = LogPut(lineCursor, " SS=0x"); lineCursor = LogHex(lineCursor, cpu.Segments[2]);
+    lineCursor = LogPut(lineCursor, " DS=0x"); lineCursor = LogHex(lineCursor, cpu.Segments[X86_SREG_DS]); lineCursor = LogPut(lineCursor, " SS=0x"); lineCursor = LogHex(lineCursor, cpu.Segments[X86_SREG_SS]);
     lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
     for (;;) {
         if (V86Step(&cpu)) { if (++guard > 20000000L) break; continue; }   /* modeled step */
-        { UINT32 site = V86SegmentBase(cpu.Segments[1]) + cpu.Ip;
+        { UINT32 site = V86SegmentBase(cpu.Segments[X86_SREG_CS]) + cpu.Ip;
           BYTE opcode = V86HostRead8(site), nextByte = V86HostRead8(site+1);
           if (opcode == X86_OP_INT) {                   /* INT nn -> shared DPMI/DOS dispatch */
               INT status;
@@ -28816,7 +28816,7 @@ static INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib)
               continue;
           }
           lineCursor = lineBuffer;                             /* the spike's to-do signal */
-          lineCursor = LogPut(lineCursor, "DPMI-INTERP: unmodeled opcode at CS:IP=0x"); lineCursor = LogHex(lineCursor, cpu.Segments[1]);
+          lineCursor = LogPut(lineCursor, "DPMI-INTERP: unmodeled opcode at CS:IP=0x"); lineCursor = LogHex(lineCursor, cpu.Segments[X86_SREG_CS]);
           lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, cpu.Ip);
           lineCursor = LogPut(lineCursor, " bytes="); lineCursor = LogDump(lineCursor, (const BYTE*)(ULONG_PTR)site, 8);
           lineCursor = LogPut(lineCursor, " (steps=0x"); lineCursor = LogHex(lineCursor, (UINT)guard); lineCursor = LogPut(lineCursor, ")\r\n");
