@@ -42,6 +42,7 @@
 
 #include "../ntvdmex_types.h"
 #include "dos_mcb.h"            /* DOS_MEM_TOP -- where conventional memory ends */
+#include "bios_bda_fields.h"   /* the BDA's fields */
 
 /* The EBDA is the kilobyte between the end of DOS's memory and the 640 KB line. */
 #define BIOS_EBDA_SEG     DOS_MEM_TOP                              /* 0x9FC0          */
@@ -86,10 +87,6 @@ static inline WORD BiosBaseKbOfTop(_In_ WORD top) {
 }
 
 /* BDA offsets (from linear 0x400) this header owns. */
-#define BIOS_BDA_BASE          0x400u    /* the BDA's linear address                   */
-#define BIOS_BDA_EBDA_SEGMENT  0x0E      /* WORD: EBDA segment (AT and later)          */
-#define BIOS_BDA_EQUIPMENT     0x10      /* WORD: the equipment word, = INT 11h       */
-#define BIOS_BDA_MEMORY_KB     0x13      /* WORD: base memory in KB,  = INT 12h       */
 
 static inline volatile BYTE *BiosLinearAddress(_In_opt_ volatile BYTE *base, _In_ DWORD linear) {
     return (volatile BYTE *)((ULONG_PTR)base + linear);

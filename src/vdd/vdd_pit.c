@@ -1,6 +1,7 @@
 /* vdd_pit.c -- see vdd_pit.h.  Intel 8254 channel-0 model + BIOS INT 08h/1Ah,
  * on the VDD bus.  Pure C, no <windows.h>. */
 #include "vdd_pit.h"
+#include "../dos/bios_bda_fields.h"   /* the BDA's fields */
 
 /* The counter modes (Intel 8254, 231164-005). Modes 6 and 7 are aliases of 2 and 3. */
 #define PIT_MODE_0              0       /* interrupt on terminal count               */
@@ -55,8 +56,6 @@
 #define PIT_REFRESH_DIVISOR     18
 /* The BIOS: data area, vectors, INT 1Ah. */
 #define PIT_BIOS_DATA_SEGMENT   0x40
-#define PIT_BDA_TICK_COUNT      0x6C    /* 0040:006C, DWORD                          */
-#define PIT_BDA_MIDNIGHT_FLAG   0x70    /* 0040:0070, BYTE                           */
 #define PIT_TIMER_VECTOR        0x08
 #define PIT_TIME_OF_DAY_VECTOR  0x1A
 #define PIT_1A_GET_TICKS        0x00
@@ -618,7 +617,7 @@ static VOID PitInt08(PVOID context, PNTVDD_REGISTERS registers)
     PPIT_STATE state = (PPIT_STATE)context;
     BYTE *biosData = PitBiosDataArea(state);
     (VOID)registers;
-    VddPitBiosTick(state, (volatile UINT32 *)(biosData + PIT_BDA_TICK_COUNT), biosData + PIT_BDA_MIDNIGHT_FLAG);   /* + #262 witness */
+    VddPitBiosTick(state, (volatile UINT32 *)(biosData + BIOS_BDA_TICK_COUNT), biosData + BIOS_BDA_MIDNIGHT_FLAG);   /* + #262 witness */
 }
 
 /* INT 1Ah -- BIOS time-of-day. AH=00 get tick count (+ clear midnight flag),
@@ -652,9 +651,9 @@ INT VddPitSeedTimeOfDay(PPIT_STATE state)
     if (!state->Bus || !PitRtc(state, &reading)) return 0;
     if (reading.Hour > PIT_MAX_HOUR || reading.Minute > PIT_MAX_MINUTE || reading.Second > PIT_MAX_SECOND) return FALSE;
     biosData = PitBiosDataArea(state);
-    *(UINT32 *)(biosData + PIT_BDA_TICK_COUNT) = VddPitTicksSinceMidnight(reading.Hour, reading.Minute, reading.Second);
-    biosData[PIT_BDA_MIDNIGHT_FLAG] = 0;
-    VddPitTickOwned(state, *(UINT32 *)(biosData + PIT_BDA_TICK_COUNT));   /* the BIOS's own count (#262) */
+    *(UINT32 *)(biosData + BIOS_BDA_TICK_COUNT) = VddPitTicksSinceMidnight(reading.Hour, reading.Minute, reading.Second);
+    biosData[BIOS_BDA_MIDNIGHT_FLAG] = 0;
+    VddPitTickOwned(state, *(UINT32 *)(biosData + BIOS_BDA_TICK_COUNT));   /* the BIOS's own count (#262) */
     return 1;
 }
 
@@ -662,18 +661,18 @@ static VOID PitInt1A(PVOID context, PNTVDD_REGISTERS registers)
 {
     PPIT_STATE state = (PPIT_STATE)context;
     BYTE *biosData = PitBiosDataArea(state);
-    UINT32 *tickCount = (UINT32 *)(biosData + PIT_BDA_TICK_COUNT);
+    UINT32 *tickCount = (UINT32 *)(biosData + BIOS_BDA_TICK_COUNT);
     switch (VddGetAh(registers)) {
     case PIT_1A_GET_TICKS:
         VddSetCx(registers, (WORD)(*tickCount >> PIT_TICKS_HIGH_SHIFT));
         VddSetDx(registers, (WORD)(*tickCount & PIT_TICKS_LOW_MASK));
-        VddSetAl(registers, biosData[PIT_BDA_MIDNIGHT_FLAG]);
-        biosData[PIT_BDA_MIDNIGHT_FLAG] = 0;
+        VddSetAl(registers, biosData[BIOS_BDA_MIDNIGHT_FLAG]);
+        biosData[BIOS_BDA_MIDNIGHT_FLAG] = 0;
         registers->CarryFlag = 0;
         break;
     case PIT_1A_SET_TICKS:
         *tickCount = ((UINT32)VddGetCx(registers) << PIT_TICKS_HIGH_SHIFT) | VddGetDx(registers);
-        biosData[PIT_BDA_MIDNIGHT_FLAG] = 0;
+        biosData[BIOS_BDA_MIDNIGHT_FLAG] = 0;
         registers->CarryFlag = 0;
         /* #262: the host moves DOS's clock to the new count (and takes it as the
            BIOS's own through VddPitTickTake); with no host, it is simply owned. */

@@ -3168,7 +3168,7 @@ static VOID PrintScreenBop(volatile BYTE *tib, INT begin)
         {   BYTE cols = (BYTE)(registers.Eax >> BYTE_SHIFT), page = (BYTE)(registers.Ebx >> BYTE_SHIFT);
             ZeroMemory(&registers, sizeof registers);
             registers.Eax = 0x0300; registers.Ebx = (DWORD)page << BYTE_SHIFT; PrintScreenInt10(&registers);
-            BiosPrintScreenBegin(&g_PrintScreen, cols, *(volatile BYTE *)(ULONG_PTR)0x484, page,
+            BiosPrintScreenBegin(&g_PrintScreen, cols, *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_VIDEO_ROWS), page,
                              (WORD)registers.Edx); }
         ++g_PrintScreenJobs;
         status = BiosPrintScreenStep(&g_PrintScreen, 0, PrintScreenReadCharacter, 0, &character);
@@ -3977,8 +3977,8 @@ static INT AsyncInjectIrq(UINT irq)
         if (irq == 0 && g_NestedRm) {
             if (PmTickTake()) {
                 /* the one BIOS tick body, witness included (#262 -- vdd_pit.h) */
-                VddPitBiosTick(&g_Pit, (volatile UINT32 *)(ULONG_PTR)0x46C,
-                              (volatile BYTE *)(ULONG_PTR)0x470);
+                VddPitBiosTick(&g_Pit, (volatile UINT32 *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT),
+                              (volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_MIDNIGHT_FLAG));
                 if (g_Irq0Pending > 0) InterlockedDecrement(&g_Irq0Pending);
             }
             AsyncEarlyBail(irq, 31); return 0;
@@ -6171,7 +6171,7 @@ static VOID Int15EventPoll(VOID)            /* pacer thread */
     if (now.QuadPart < end) return;
     g_Int15EventEnd = 0;
     *(volatile BYTE *)(ULONG_PTR)g_Int15EventLinear |= 0x80;      /* the caller's flag: time is up */
-    *(volatile BYTE *)(ULONG_PTR)0x4A0 = 0x00;               /* 40:A0 wait no longer active  */
+    *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_ACTIVE) = 0x00;               /* 40:A0 wait no longer active  */
     ++g_Int15Posted;
 }
 typedef MMRESULT (WINAPI *PFN_TIME_SET_EVENT)(UINT, UINT, LPTIMECALLBACK, DWORD_PTR, UINT);
@@ -7716,7 +7716,7 @@ static DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
         snapshotEflags = VDM_REG(g_TibDebug, VTIB_EFLAGS);
         { const volatile BYTE *code = (const volatile BYTE *)((snapshotCs << PARAGRAPH_SHIFT) + snapshotIp);
           UINT byteIndex; for (byteIndex = 0; byteIndex < 12; ++byteIndex) snapshotBytes[byteIndex] = code[byteIndex]; }
-        snapshotTick = ((DWORD)PeekWord(0x46E) << WORD_SHIFT) | PeekWord(0x46C);
+        snapshotTick = ((DWORD)PeekWord(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT_HIGH) << WORD_SHIFT) | PeekWord(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT);
         snapshotOk = 1;
     }
     InterlockedExchange(&g_Running, 0);         /* stop exec loops + unblock key reads */
@@ -7798,7 +7798,7 @@ static DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
            that was how ZAR's runs end (s81). Flat = no dynamic range (SB_FLAT_RANGE). */
         cursor = LogPut(cursor, " sb_checked=0x");   cursor = LogHex(cursor, g_Sb.BlocksChecked);
         cursor = LogPut(cursor, " sb_flat=0x");      cursor = LogHex(cursor, g_Sb.BlocksFlat);
-        cursor = LogPut(cursor, " bda_tick=0x");    cursor = LogHex(cursor, ((DWORD)PeekWord(0x46E) << WORD_SHIFT) | PeekWord(0x46C));
+        cursor = LogPut(cursor, " bda_tick=0x");    cursor = LogHex(cursor, ((DWORD)PeekWord(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT_HIGH) << WORD_SHIFT) | PeekWord(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT));
         cursor = LogPut(cursor, "\r\n");
         LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer;
         { INT index; cursor = LogPut(cursor, "  hot ports:");
@@ -8895,7 +8895,7 @@ static VOID ExecMachineSave(INT depth)
     UINT index;
     for (index = 0; index < 512; ++index) g_ExecMachine[depth].Ivt[index] = PeekWord(index * 2);
     g_ExecMachine[depth].ImrMaster = g_Pic.Master.Imr; g_ExecMachine[depth].ImrSlave = g_Pic.Slave.Imr;
-    g_ExecMachine[depth].VideoMode = *(volatile BYTE *)(ULONG_PTR)0x449;   /* BDA current mode */
+    g_ExecMachine[depth].VideoMode = *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_VIDEO_MODE);   /* BDA current mode */
     g_ExecMachine[depth].Pit0  = VddPitEffectiveReload(&g_Pit);
 }
 
@@ -8921,7 +8921,7 @@ static VOID ExecMachineRestore(INT depth, PSTR *logCursor)
     VddSbReset(&g_Sb); VddOplReset(&g_Opl); VddGusReset(&g_Gus);
     if (g_AweOn) VddEmu8kReset(&g_Emu8K);    /* #233 */
     VddMpuReset(&g_Mpu); VddSpeakerReset(&g_Speaker);
-    needsModeSet = (*(volatile BYTE *)(ULONG_PTR)0x449 != g_ExecMachine[depth].VideoMode
+    needsModeSet = (*(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_VIDEO_MODE) != g_ExecMachine[depth].VideoMode
               || g_Video.ModeKind != VIDEO_KIND_TEXT);
     if (needsModeSet) {
         NTVDD_REGISTERS registers;
@@ -9541,7 +9541,7 @@ static INT MouseEventQueueTake(MOUSE_EVENT_ENTRY *event, LONG *outAx, WORD *segm
 {
     LONG tail; INT guard = 0;
     UINT mainMask = (g_MouseEventSegment | g_MouseEventOffset) ? (UINT)g_MouseEventMask : 0u;
-    BYTE shiftFlags = *(volatile BYTE *)(ULONG_PTR)(0x400 + INPUT_BDA_SHIFT_FLAGS);
+    BYTE shiftFlags = *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_SHIFT_FLAGS);
     while (g_MouseEventQueueTail != g_MouseEventQueueHead && guard++ < MS_EVQ) {
         UINT handlerAx; INT handlerChoice;
         tail = g_MouseEventQueueTail;
@@ -14817,10 +14817,10 @@ static INT HostTickTake(UINT32 *ticks, UINT32 *wraps, UINT32 *since)
          on every call would put each of them behind VddPitAddClocks. An unlocked look
          first: equal and not foreign = nothing to do (a tick racing this read leaves
          them equal again, or sends us to the locked re-check below, which decides). */
-    if (!g_Pit.IsTickForeign && *(volatile DWORD *)(ULONG_PTR)0x46C == g_Pit.TickWitness)
+    if (!g_Pit.IsTickForeign && *(volatile DWORD *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT) == g_Pit.TickWitness)
         return 0;
     EnterCriticalSection(&g_PitCs);
-    result = VddPitTickTake(&g_Pit, *(volatile DWORD *)(ULONG_PTR)0x46C, ticks, wraps, since);
+    result = VddPitTickTake(&g_Pit, *(volatile DWORD *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT), ticks, wraps, since);
     LeaveCriticalSection(&g_PitCs);
     return result;
 }
@@ -14845,8 +14845,8 @@ static VOID HostSetTicks(PVOID context, UINT32 ticks)
 {
     (VOID)context;
     EnterCriticalSection(&g_PitCs);
-    *(volatile DWORD *)(ULONG_PTR)0x46C = ticks;
-    *(volatile BYTE *)(ULONG_PTR)0x470 = 0;
+    *(volatile DWORD *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT) = ticks;
+    *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_MIDNIGHT_FLAG) = 0;
     VddPitTickOwned(&g_Pit, ticks);          /* DOS's own reload, not a store (#262) */
     LeaveCriticalSection(&g_PitCs);
 }
@@ -27438,8 +27438,8 @@ static INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context)
              pending flag is consumed so the polled path does not count it again. */
         if (PmTickTake()) {
             /* the one BIOS tick body, witness included (#262 -- vdd_pit.h) */
-            VddPitBiosTick(&g_Pit, (volatile UINT32 *)(ULONG_PTR)0x46C,
-                          (volatile BYTE *)(ULONG_PTR)0x470);
+            VddPitBiosTick(&g_Pit, (volatile UINT32 *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT),
+                          (volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_MIDNIGHT_FLAG));
             if (g_Irq0Pending > 0) InterlockedDecrement(&g_Irq0Pending);
         }
         g_AsyncWhy = 6; return 0;
@@ -29235,7 +29235,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                 UINT eventWaitAl = VDM_REG(tib, VTIB_EAX) & BYTE_MASK;
                 if (eventWaitAl == 0x01) {            /* cancel                            */
                     g_Int15EventEnd = 0;
-                    *(volatile BYTE *)(ULONG_PTR)0x4A0 = 0x00;
+                    *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_ACTIVE) = 0x00;
                     BCF_CLR();
                 } else if (g_Int15EventEnd || g_Int15WaitEnd) {
                     BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | 0x8300));
@@ -29244,10 +29244,10 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                     DWORD microseconds = (VDM_REG16(tib, VTIB_ECX) << WORD_SHIFT) | VDM_REG16(tib, VTIB_EDX);
                     WORD es = (WORD)VDM_REG16(tib, VTIB_ES), bx = (WORD)VDM_REG16(tib, VTIB_EBX);
                     g_Int15EventLinear = ((DWORD)es << PARAGRAPH_SHIFT) + bx;
-                    *(volatile WORD  *)(ULONG_PTR)0x498 = bx;    /* 40:98 flag pointer  */
-                    *(volatile WORD  *)(ULONG_PTR)0x49A = es;
-                    *(volatile DWORD *)(ULONG_PTR)0x49C = microseconds;    /* 40:9C count, us     */
-                    *(volatile BYTE  *)(ULONG_PTR)0x4A0 = 0x01;  /* 40:A0 wait active   */
+                    *(volatile WORD  *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_FLAG_POINTER) = bx;    /* 40:98 flag pointer  */
+                    *(volatile WORD  *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_FLAG_SEGMENT) = es;
+                    *(volatile DWORD *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_COUNT) = microseconds;    /* 40:9C count, us     */
+                    *(volatile BYTE  *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_ACTIVE) = 0x01;  /* 40:A0 wait active   */
                     ++g_Int15Events;
                     g_Int15EventEnd = Int15QpcAfterMicroseconds(microseconds ? microseconds : 1);
                     BCF_CLR();
@@ -29383,7 +29383,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                ► An unknown AH also leaves AX as passed (SeaBIOS, DOSBox-X). PCem's AMI
                  answers the status for it instead -- disputed, recorded in
                  oracle-rules.json; "ready" for a call that does nothing was neither. */
-            WORD base17 = (int17Dx < 3) ? *(volatile WORD *)(ULONG_PTR)(0x408 + 2 * int17Dx) : 0;
+            WORD base17 = (int17Dx < 3) ? *(volatile WORD *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_LPT_BASES + 2 * int17Dx) : 0;
             if (base17 != 0x0378 || !VddLptIsFitted(&g_Comm, 0)) {
                 /* absent printer: nothing, registers as passed */
             } else if (int17Ah == 0x00) {         /* print AL                 */
@@ -31994,7 +31994,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
        program reads before it calls INT 13h DL=80h, is WRITTEN 0 rather than left
        to whatever the page held (docs/inventory/bda.md 3). One fact, three doors:
        the BDA, INT 13h, and the adapter's empty channels. */
-    *(volatile BYTE *)(ULONG_PTR)0x475 = 0;
+    *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_FIXED_DISK_COUNT) = 0;
     g_Video.VideoMemory = (BYTE *)VIDEO_APERTURE_BASE;  /* the mapped A0000 aperture (RAM) */
     /* (per-plane backing is taken later, once the preamble is on disk -- every
        LogWrite() before that point TRUNCATES the file and would eat its report.) */
@@ -36638,7 +36638,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     cursor = LogPut(cursor, " irq0_skip=0x");         cursor = LogHex(cursor, g_Irq0Skip);
     cursor = LogPut(cursor, " intpend=0x");           cursor = LogHex(cursor, g_EventIntPending);
     cursor = LogPut(cursor, " iostr=0x");             cursor = LogHex(cursor, g_EventIoString);
-    cursor = LogPut(cursor, " bda_tick=0x");          cursor = LogHex(cursor, ((DWORD)PeekWord(0x46E) << WORD_SHIFT) | PeekWord(0x46C));
+    cursor = LogPut(cursor, " bda_tick=0x");          cursor = LogHex(cursor, ((DWORD)PeekWord(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT_HIGH) << WORD_SHIFT) | PeekWord(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT));
     cursor = LogPut(cursor, "\r\n");
     { INT index; cursor = LogPut(cursor, "STAGE2: unclaimed ports touched:");
       for (index = 0; index < g_UnclaimedCount; ++index) { cursor = LogPut(cursor, " 0x"); cursor = LogHex(cursor, g_Unclaimed[index]); }

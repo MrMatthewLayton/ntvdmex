@@ -11,6 +11,7 @@
 #define NTVDMEX_VDD_INPUT_H
 
 #include "vdd_bus.h"
+#include "../dos/bios_bda_fields.h"   /* the BDA's fields */
 
 #ifndef INPUT_SCANCODE_QUEUE_SIZE
 #define INPUT_SCANCODE_QUEUE_SIZE 32        /* ring capacity (power of two not required)      */
@@ -25,13 +26,6 @@
    exactly that buffer, which is why no arrow or Enter ever registered there while the same
    keys worked in-game (where the game installs its own INT 09h handler and reads port 60h).
    One buffer, in the place the hardware documentation says it is. */
-#define INPUT_BDA_KEYBOARD_HEAD   0x1A     /* offsets from 0040:0000 */
-#define INPUT_BDA_KEYBOARD_TAIL   0x1C
-#define INPUT_BDA_KEYBOARD_BUFFER  0x1E     /* 16 entries, 2 bytes each -- POST's bounds     */
-#define INPUT_BDA_KEYBOARD_BUFFER_END    0x3E     /* one past the last entry  -- POST's bounds     */
-#define INPUT_BDA_SHIFT_FLAGS  0x17     /* shift/ctrl/alt + lock state (INT 16h AH=02) */
-#define INPUT_BDA_SHIFT_FLAGS2 0x18     /* extended shift flags      (INT 16h AH=12) */
-#define INPUT_BDA_ALT_KEYPAD 0x19     /* #274: the Alt+keypad accumulator              */
 /* ── #274: THE RING'S BOUNDS ARE TWO BDA WORDS, NOT TWO CONSTANTS. ─────────────────────
      0040:0080 / 0040:0082 hold the ring's start and one-past-end OFFSETS within segment
      0040h (AT BIOS and later; IBM AT TR, RBIL MEMORY.LST "0040:0080"). POST sets them to
@@ -42,13 +36,11 @@
      writes POST's values, and push/pop/peek read the words on every call. A pair that is
      not usable (odd, start >= end, or room for fewer than two entries) falls back to the
      POST bounds rather than sending writes anywhere in guest memory. */
-#define INPUT_BDA_BUFFER_START_POINTER 0x80
 #define INPUT_INT16_FUNCTION_GROUPS 4   /* read, status, shift status, other     */
 #define INPUT_PORT_LOG_ENTRIES 16
 #define INPUT_PORT_LOG_FIELDS  2         /* (port low byte, value)                */
 #define INPUT_ACTION_KINDS     6
 #define INPUT_DEVICE_NAME      "input"
-#define INPUT_BDA_BUFFER_END_POINTER   0x82
 #define INPUT_HOST_KEY_BYTES_MAX 6         /* VddInputHostKeyBytes: the Pause sequence    */
 
 typedef struct _INPUT_STATE {

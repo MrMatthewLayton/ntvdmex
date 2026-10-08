@@ -90,13 +90,13 @@ INT main(VOID)
     /* T6: the guest's BDA is where the keys actually are ------------------ */
     { WORD head, tail;
       InputTestFresh(&input, &bus);
-      head = (WORD)(g_BiosDataArea[INPUT_BDA_KEYBOARD_HEAD] | (g_BiosDataArea[INPUT_BDA_KEYBOARD_HEAD+1] << 8));
-      tail = (WORD)(g_BiosDataArea[INPUT_BDA_KEYBOARD_TAIL] | (g_BiosDataArea[INPUT_BDA_KEYBOARD_TAIL+1] << 8));
-      CHECK(head == INPUT_BDA_KEYBOARD_BUFFER && tail == INPUT_BDA_KEYBOARD_BUFFER, "bda: reset leaves head==tail==001E");
+      head = (WORD)(g_BiosDataArea[BIOS_BDA_KEYBOARD_HEAD] | (g_BiosDataArea[BIOS_BDA_KEYBOARD_HEAD+1] << 8));
+      tail = (WORD)(g_BiosDataArea[BIOS_BDA_KEYBOARD_TAIL] | (g_BiosDataArea[BIOS_BDA_KEYBOARD_TAIL+1] << 8));
+      CHECK(head == BIOS_BDA_KEYBOARD_BUFFER && tail == BIOS_BDA_KEYBOARD_BUFFER, "bda: reset leaves head==tail==001E");
       VddInputPush(&input, 0x1C0D);
-      tail = (WORD)(g_BiosDataArea[INPUT_BDA_KEYBOARD_TAIL] | (g_BiosDataArea[INPUT_BDA_KEYBOARD_TAIL+1] << 8));
-      CHECK(tail == INPUT_BDA_KEYBOARD_BUFFER + 2, "bda: a key ADVANCES the tail (was frozen forever)");
-      CHECK((g_BiosDataArea[INPUT_BDA_KEYBOARD_BUFFER] | (g_BiosDataArea[INPUT_BDA_KEYBOARD_BUFFER+1] << 8)) == 0x1C0D,
+      tail = (WORD)(g_BiosDataArea[BIOS_BDA_KEYBOARD_TAIL] | (g_BiosDataArea[BIOS_BDA_KEYBOARD_TAIL+1] << 8));
+      CHECK(tail == BIOS_BDA_KEYBOARD_BUFFER + 2, "bda: a key ADVANCES the tail (was frozen forever)");
+      CHECK((g_BiosDataArea[BIOS_BDA_KEYBOARD_BUFFER] | (g_BiosDataArea[BIOS_BDA_KEYBOARD_BUFFER+1] << 8)) == 0x1C0D,
             "bda: the keycode is stored at 0040:001E where a DOS program reads it");
     }
 
@@ -111,11 +111,11 @@ INT main(VOID)
       CHECK(VddInputPop(&input, &key) == 0, "int09: break code stores nothing");
 
       VddInputPushScanCode(&input, 0x2A); VddInputBiosConsume(&input);      /* LShift down */
-      CHECK((g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x02) != 0, "int09: LShift sets 0040:0017 bit 1");
+      CHECK((g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x02) != 0, "int09: LShift sets 0040:0017 bit 1");
       VddInputPushScanCode(&input, 0x1E); VddInputBiosConsume(&input);
       CHECK(VddInputPop(&input, &key) == 1 && key == 0x1E41, "int09: shift+1E -> 'A'");
       VddInputPushScanCode(&input, 0xAA); VddInputBiosConsume(&input);      /* LShift up  */
-      CHECK((g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x02) == 0, "int09: LShift release clears the flag");
+      CHECK((g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x02) == 0, "int09: LShift release clears the flag");
 
       /* The whole point: an arrow is E0 + code, and must arrive as AL=0 so the guest can
          tell it from a character. This is the Skyroads menu case, end to end. */
@@ -229,7 +229,7 @@ INT main(VOID)
       EXPECT(0xE00D, "int09: keypad Enter (E0 1C) -> E00Dh (#254: AH=00h folds it to 1C0Dh)");
       KEY(0x57); KEY(0xD7);
       EXPECT(0x8500, "int09: F11 -> 8500h");
-      CHECK((g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x0F) == 0, "int09: no modifier left held after all that");
+      CHECK((g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x0F) == 0, "int09: no modifier left held after all that");
 #undef KEY
 #undef EXPECT
 #undef NOKEY
@@ -256,7 +256,7 @@ INT main(VOID)
       VddBusIo(&bus, 0x64, 1, 1, &value);
       CHECK((value & 1) == 0, "hold: OBF reads clear while the keyboard is still sending the next byte");
       VddInputBiosConsume(&input);                             /* BIOS chained        */
-      CHECK(VddInputPop(&input, &key) == 0 && (g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x08),
+      CHECK(VddInputPop(&input, &key) == 0 && (g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x08),
             "hold: the chained BIOS translates the owed 38 -> Alt flag set, no key, FIFO untouched");
       CHECK(VddInputScanCodesQueued(&input) == 3, "hold: three bytes still queued");
       irqsBefore = (INT)g_Irq1Count;
@@ -274,7 +274,7 @@ INT main(VOID)
       /* Drain the rest at the keyboard's pace. */
       g_FakeMicroseconds += INPUT_KEYBOARD_TRANSFER_US; VddInputPoll(&input); VddBusIo(&bus, 0x60, 1, 1, &value); VddInputBiosConsume(&input);
       g_FakeMicroseconds += INPUT_KEYBOARD_TRANSFER_US; VddInputPoll(&input); VddBusIo(&bus, 0x60, 1, 1, &value); VddInputBiosConsume(&input);
-      CHECK(value == 0xB8 && (g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x08) == 0 && VddInputScanCodesQueued(&input) == 0,
+      CHECK(value == 0xB8 && (g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x08) == 0 && VddInputScanCodesQueued(&input) == 0,
             "hold: Alt break arrives last, in order, and clears the flag");
       CHECK(g_Irq1Count == 4, "hold: exactly one interrupt per byte");
       input.TimeMicroseconds = 0; VddBusSetSinks(&bus, 0, 0, 0, 0);
@@ -488,27 +488,27 @@ INT main(VOID)
       /* AH=12h, and the left/right halves of Ctrl and Alt */
       CHECK(AH12() == 0x00, "12h: nothing held -> AH=00");
       KEY(0x1D);
-      CHECK(AH12() == 0x01 && (g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x04), "12h: left Ctrl -> AH bit 0, 0017 Ctrl");
+      CHECK(AH12() == 0x01 && (g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x04), "12h: left Ctrl -> AH bit 0, 0017 Ctrl");
       KEY(0xE0); KEY(0x1D);
       CHECK(AH12() == 0x05, "12h: + right Ctrl -> AH bits 0 and 2");
       KEY(0x9D);
-      CHECK(AH12() == 0x04 && (g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x04),
+      CHECK(AH12() == 0x04 && (g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x04),
             "12h: left released, right still held -> 0017 Ctrl STAYS set");
       KEY(0xE0); KEY(0x9D);
-      CHECK(AH12() == 0x00 && !(g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x04), "12h: both released -> Ctrl clear");
+      CHECK(AH12() == 0x00 && !(g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x04), "12h: both released -> Ctrl clear");
       KEY(0xE0); KEY(0x38);
       CHECK(AH12() == 0x08 && (g_BiosDataArea[0x96] & 0x08), "12h: right Alt -> AH bit 3, 0096 bit 3");
       KEY(0xE0); KEY(0xB8);
       KEY(0x3A);
-      CHECK(AH12() == 0x40 && (g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x40), "12h: Caps held -> AH bit 6, Caps on");
+      CHECK(AH12() == 0x40 && (g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x40), "12h: Caps held -> AH bit 6, Caps on");
       KEY(0x3A);                                           /* typematic repeat */
-      CHECK(g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x40, "lock: a held key's repeats do not re-toggle Caps");
+      CHECK(g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x40, "lock: a held key's repeats do not re-toggle Caps");
       KEY(0xBA); KEY(0x3A); KEY(0xBA);
-      CHECK(!(g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x40) && AH12() == 0x00, "lock: a second press toggles Caps off");
+      CHECK(!(g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x40) && AH12() == 0x00, "lock: a second press toggles Caps off");
 
       /* SysReq */
       action = KEY(0x54);
-      CHECK(action == INPUT_ACTION_SYSREQ_DOWN && AH12() == 0x80 && (g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS2] & 0x04),
+      CHECK(action == INPUT_ACTION_SYSREQ_DOWN && AH12() == 0x80 && (g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS2] & 0x04),
             "sysrq: press -> INT 15h 8500h, AH=12h bit 7, 0018 bit 2");
       action = KEY(0xD4);
       CHECK(action == INPUT_ACTION_SYSREQ_UP && AH12() == 0x00, "sysrq: release -> INT 15h 8501h");
@@ -533,39 +533,39 @@ INT main(VOID)
       EXPECT(0x0000, "break: the ring was emptied and 0000h stored");
       NOKEY("break: nothing else left in the ring");
       KEY(0xE0); KEY(0xC6); KEY(0x9D);
-      CHECK(!(g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x10), "break: Scroll Lock NOT toggled");
+      CHECK(!(g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x10), "break: Scroll Lock NOT toggled");
       KEY(0x46); KEY(0xC6);
-      CHECK(g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x10, "break: plain Scroll Lock still toggles");
+      CHECK(g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x10, "break: plain Scroll Lock still toggles");
       KEY(0x46); KEY(0xC6);
 
       /* Pause */
       action = KEY(0xE1); action = KEY(0x1D); action = KEY(0x45);
-      CHECK(action == INPUT_ACTION_PAUSE && (g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS2] & 0x08), "pause: E1 1D 45 -> pause, 0018 bit 3");
-      CHECK(!(g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x24), "pause: neither Ctrl nor NumLock changed");
+      CHECK(action == INPUT_ACTION_PAUSE && (g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS2] & 0x08), "pause: E1 1D 45 -> pause, 0018 bit 3");
+      CHECK(!(g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x24), "pause: neither Ctrl nor NumLock changed");
       KEY(0xE1); KEY(0x9D); KEY(0xC5);
-      CHECK(g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS2] & 0x08, "pause: its break sequence does not end it");
+      CHECK(g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS2] & 0x08, "pause: its break sequence does not end it");
       KEY(0x2A); KEY(0xAA);
-      CHECK(g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS2] & 0x08, "pause: a shift key does not end it");
+      CHECK(g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS2] & 0x08, "pause: a shift key does not end it");
       KEY(0x1E); KEY(0x9E);
-      CHECK(!(g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS2] & 0x08), "pause: the next keystroke ends it...");
+      CHECK(!(g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS2] & 0x08), "pause: the next keystroke ends it...");
       NOKEY("pause: ...and is thrown away");
       action = KEY(0xE1); action = KEY(0x1D); action = KEY(0x45);
       VddInputPauseCancel(&input);
-      CHECK(!(g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS2] & 0x08), "pause: cancel (a caller that cannot spin) clears it");
+      CHECK(!(g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS2] & 0x08), "pause: cancel (a caller that cannot spin) clears it");
       KEY(0xE1); KEY(0x9D); KEY(0xC5);
 
       /* Insert */
       KEY(0xE0); KEY(0x52);
-      CHECK((g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x80) && (g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS2] & 0x80), "ins: grey Insert toggles 0017 bit 7, held 0018 bit 7");
+      CHECK((g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x80) && (g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS2] & 0x80), "ins: grey Insert toggles 0017 bit 7, held 0018 bit 7");
       EXPECT(0x52E0, "ins: and is stored (52E0h)");
       KEY(0xE0); KEY(0x52);                                /* repeat */
-      CHECK(g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x80, "ins: a repeat does not toggle back");
+      CHECK(g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x80, "ins: a repeat does not toggle back");
       (VOID)VddInputPop(&input, &key);
       KEY(0xE0); KEY(0xD2);
-      CHECK(!(g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS2] & 0x80), "ins: release clears the held bit");
+      CHECK(!(g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS2] & 0x80), "ins: release clears the held bit");
       KEY(0x45); KEY(0xC5);                                /* NumLock on */
       KEY(0x52); KEY(0xD2);
-      CHECK(g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x80, "ins: keypad 0 with NumLock on is '0', no toggle");
+      CHECK(g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x80, "ins: keypad 0 with NumLock on is '0', no toggle");
       EXPECT(0x5230, "ins: ...stored as '0'");
 #undef KEY
 #undef EXPECT
@@ -596,17 +596,17 @@ INT main(VOID)
         CHECK(VddInputPush(&input, 0x1E61) && VddInputPush(&input, 0x3062) && VddInputPush(&input, 0x2E63),
               "bounds: a 4-slot ring (1E..26) takes three keys");
         CHECK(VddInputPush(&input, 0x2064) == 0, "bounds: ...and refuses the fourth (full = 3, not 15)");
-        CHECK(W16(INPUT_BDA_KEYBOARD_TAIL) == 0x0024, "bounds: tail at 0024h");
+        CHECK(W16(BIOS_BDA_KEYBOARD_TAIL) == 0x0024, "bounds: tail at 0024h");
         CHECK(VddInputPop(&input, &key) && key == 0x1E61 && VddInputPop(&input, &key) && key == 0x3062,
               "bounds: FIFO order holds");
-        CHECK(VddInputPush(&input, 0x2064) && W16(INPUT_BDA_KEYBOARD_TAIL) == 0x001E,
+        CHECK(VddInputPush(&input, 0x2064) && W16(BIOS_BDA_KEYBOARD_TAIL) == 0x001E,
               "bounds: the tail WRAPS at the relocated end 0026h, back to 001Eh (was: ran on to 003Eh)");
         CHECK(VddInputPop(&input, &key) && key == 0x2E63 && VddInputPop(&input, &key) && key == 0x2064
-              && W16(INPUT_BDA_KEYBOARD_HEAD) == 0x001E, "bounds: the head wraps the same way");
+              && W16(BIOS_BDA_KEYBOARD_HEAD) == 0x001E, "bounds: the head wraps the same way");
         CHECK(VddInputPop(&input, &key) == 0, "bounds: empty again");
         /* moved OUT of the BDA: a 64-slot ring at 0040:0200 */
         SET16(0x80, 0x0200); SET16(0x82, 0x0280);
-        SET16(INPUT_BDA_KEYBOARD_HEAD, 0x0200); SET16(INPUT_BDA_KEYBOARD_TAIL, 0x0200);
+        SET16(BIOS_BDA_KEYBOARD_HEAD, 0x0200); SET16(BIOS_BDA_KEYBOARD_TAIL, 0x0200);
         isOk = 1;
         for (index = 0; index < 63; ++index) isOk &= VddInputPush(&input, (WORD)(0x1E00 + index));
         CHECK(isOk && VddInputPush(&input, 0x1E61) == 0,
@@ -618,7 +618,7 @@ INT main(VOID)
         CHECK(isOk && VddInputPop(&input, &key) == 0, "bounds: ...and come back out in order");
         /* a pair that cannot describe a ring falls back to POST's */
         SET16(0x80, 0x0021); SET16(0x82, 0x0010);               /* odd and inverted       */
-        CHECK(VddInputPush(&input, 0x1E61) && W16(INPUT_BDA_KEYBOARD_HEAD) == 0x001E && W16(INPUT_BDA_KEYBOARD_TAIL) == 0x0020,
+        CHECK(VddInputPush(&input, 0x1E61) && W16(BIOS_BDA_KEYBOARD_HEAD) == 0x001E && W16(BIOS_BDA_KEYBOARD_TAIL) == 0x0020,
               "bounds: an odd / inverted pair is ignored -> the 001E..003E ring (head/tail reset into it)");
         CHECK(VddInputPop(&input, &key) && key == 0x1E61, "bounds: ...and the key is readable there");
         SET16(0x80, 0x001E); SET16(0x82, 0x0022);               /* 2 slots: one key        */
@@ -633,11 +633,11 @@ INT main(VOID)
         /* (b) */
         InputTestFresh(&input, &bus);
         KEY(0x38); KEY(0x52); KEY(0xD2); KEY(0x4D); KEY(0xCD); KEY(0x4C); KEY(0xCC);   /* Alt 0 6 5 */
-        CHECK(g_BiosDataArea[INPUT_BDA_ALT_KEYPAD] == 65, "altnum: Alt + keypad 0,6,5 accumulates 65 in 0040:0019");
+        CHECK(g_BiosDataArea[BIOS_BDA_ALT_KEYPAD] == 65, "altnum: Alt + keypad 0,6,5 accumulates 65 in 0040:0019");
         NOKEY("altnum: ...and stores nothing while Alt is held");
         KEY(0xB8);
         EXPECT(0x0041, "altnum: Alt released -> 0041h ('A', AH=0) stored");
-        CHECK(g_BiosDataArea[INPUT_BDA_ALT_KEYPAD] == 0, "altnum: ...and the accumulator is cleared");
+        CHECK(g_BiosDataArea[BIOS_BDA_ALT_KEYPAD] == 0, "altnum: ...and the accumulator is cleared");
         KEY(0x38); KEY(0x50); KEY(0xD0); KEY(0x4C); KEY(0xCC); KEY(0x52); KEY(0xD2); KEY(0xB8);   /* 2 5 0 */
         EXPECT(0x00FA, "altnum: Alt+2+5+0 -> 00FAh");
         KEY(0x38); KEY(0x51); KEY(0xD1); KEY(0x52); KEY(0xD2); KEY(0x52); KEY(0xD2); KEY(0xB8);   /* 3 0 0 */
@@ -710,7 +710,7 @@ INT main(VOID)
         count = VddInputHostKeyBytes(0x45, 0, 0, bytes, &noRepeat);
         action = INPUT_ACTION_NONE;
         for (index = 0; index < count; ++index) { INT keyAction = KEY(bytes[index]); if (keyAction != INPUT_ACTION_NONE) action = keyAction; }
-        CHECK(action == INPUT_ACTION_PAUSE && (g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS2] & 0x08) && !(g_BiosDataArea[INPUT_BDA_SHIFT_FLAGS] & 0x20),
+        CHECK(action == INPUT_ACTION_PAUSE && (g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS2] & 0x08) && !(g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x20),
               "host+bios: the Pause key now PAUSES (0018 bit 3) instead of toggling NumLock");
         VddInputPauseCancel(&input);
         KEY(0x1D);                                              /* Ctrl down           */

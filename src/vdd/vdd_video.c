@@ -10,6 +10,7 @@ BYTE g_VgaFont8x14[VGA_FONT_CHARACTERS][VGA_FONT14_HEIGHT];
 BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #include "vga_defaults.h"
 #include "vbe_pm.h"
+#include "../dos/bios_bda_fields.h"   /* the BDA's fields */
 
 /* ── NAMED VALUES (#333). The VGA's own register indices and bits, and this model's
      arithmetic; the mode tables below stay tables. */
@@ -90,27 +91,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_FONT_HIGH_FIRST         0x80
 
 /* The BIOS data area's video fields (offsets from 0040:0000). */
-#define VIDEO_BDA_MODE                0x49
-#define VIDEO_BDA_COLUMNS             0x4A
-#define VIDEO_BDA_COLUMNS_HIGH        0x4B
-#define VIDEO_BDA_PAGE_SIZE           0x4C
-#define VIDEO_BDA_PAGE_SIZE_HIGH      0x4D
-#define VIDEO_BDA_PAGE_OFFSET         0x4E
-#define VIDEO_BDA_PAGE_OFFSET_HIGH    0x4F
-#define VIDEO_BDA_CURSOR_COLUMN       0x50
-#define VIDEO_BDA_CURSOR_ROW          0x51
-#define VIDEO_BDA_CURSOR_ENTRY_BYTES  2
-#define VIDEO_BDA_CURSOR_SHAPE        0x60
-#define VIDEO_BDA_CURSOR_SHAPE_HIGH   0x61
-#define VIDEO_BDA_ACTIVE_PAGE         0x62
-#define VIDEO_BDA_CRTC_PORT           0x63
-#define VIDEO_BDA_CRTC_PORT_HIGH      0x64
-#define VIDEO_BDA_ROWS                0x84
-#define VIDEO_BDA_CHARACTER_HEIGHT    0x85
-#define VIDEO_BDA_CHARACTER_HEIGHT_HIGH 0x86
-#define VIDEO_BDA_EGA_INFO            0x87
-#define VIDEO_BDA_EGA_SWITCHES        0x88
-#define VIDEO_BDA_VGA_FLAGS           0x89
 #define VIDEO_EGA_INFO_BASE           0x60
 #define VIDEO_EGA_INFO_NO_CLEAR       0x80
 #define VIDEO_EGA_INFO_CURSOR_EMULATION_OFF 0x01
@@ -355,8 +335,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_MODE_NUMBER_MASK        0x7F
 #define VIDEO_MODE_CGA_640            0x06
 #define VIDEO_CURSOR_SHAPE_DEFAULT    0x0607
-#define VIDEO_BDA_CGA_MODE_SELECT     0x65
-#define VIDEO_BDA_CGA_PALETTE         0x66
 #define VIDEO_CGA_SELECT_DEFAULT      0x30
 #define VIDEO_CGA_SELECT_MODE_6       0x3F
 #define VIDEO_CGA_BUFFER_BYTES        16384
@@ -633,7 +611,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_DT3DA_BUCKET_SHIFT      2
 
 /* The BIOS video tables at VDD_VIDTAB_SEG (save pointer, secondary table, DCC). */
-#define VIDEO_BDA_SAVE_POINTER        0xA8
 #define VIDEO_FAR_SEGMENT             2      /* a far pointer: offset, then segment */
 #define VIDEO_SAVE_POINTER_PARAMETERS 0x00
 #define VIDEO_SAVE_POINTER_SECONDARY  0x10
@@ -1290,36 +1267,36 @@ VOID VddVideoBdaSync(PVIDEO_STATE state)
     BYTE *bda = state->BiosData;
     UINT pageSize;
     if (!bda) return;
-    bda[VIDEO_BDA_MODE] = state->Mode;
-    bda[VIDEO_BDA_COLUMNS] = state->Columns; bda[VIDEO_BDA_COLUMNS_HIGH] = 0;
+    bda[BIOS_BDA_VIDEO_MODE] = state->Mode;
+    bda[BIOS_BDA_VIDEO_COLUMNS] = state->Columns; bda[BIOS_BDA_VIDEO_COLUMNS_HIGH] = 0;
     pageSize = VideoPageSize(state);
-    bda[VIDEO_BDA_PAGE_SIZE] = (BYTE)pageSize; bda[VIDEO_BDA_PAGE_SIZE_HIGH] = (BYTE)(pageSize >> BYTE_SHIFT);
+    bda[BIOS_BDA_VIDEO_PAGE_SIZE] = (BYTE)pageSize; bda[BIOS_BDA_VIDEO_PAGE_SIZE_HIGH] = (BYTE)(pageSize >> BYTE_SHIFT);
     { UINT pageOffset = (UINT)state->Page * pageSize;
-      bda[VIDEO_BDA_PAGE_OFFSET] = (BYTE)pageOffset; bda[VIDEO_BDA_PAGE_OFFSET_HIGH] = (BYTE)(pageOffset >> BYTE_SHIFT); }
+      bda[BIOS_BDA_VIDEO_PAGE_OFFSET] = (BYTE)pageOffset; bda[BIOS_BDA_VIDEO_PAGE_OFFSET_HIGH] = (BYTE)(pageOffset >> BYTE_SHIFT); }
     /* All eight cursors (#252) -- the active page's from CursorRow/CursorColumn, the rest
        from the per-page store. Only the active slot used to be written, so a guest
        reading another page's cursor from the BDA read whatever was left there. */
     { UINT page;
       for (page = 0; page < VIDEO_PAGES; ++page) {
           INT isActive = (page == (UINT)(state->Page & VIDEO_PAGE_MASK));
-          bda[VIDEO_BDA_CURSOR_COLUMN + page * VIDEO_BDA_CURSOR_ENTRY_BYTES] = isActive ? state->CursorColumn : state->PageColumn[page];
-          bda[VIDEO_BDA_CURSOR_ROW + page * VIDEO_BDA_CURSOR_ENTRY_BYTES] = isActive ? state->CursorRow : state->PageRow[page];
+          bda[BIOS_BDA_CURSOR_COLUMN + page * BIOS_BDA_CURSOR_ENTRY_SIZE] = isActive ? state->CursorColumn : state->PageColumn[page];
+          bda[BIOS_BDA_CURSOR_ROW + page * BIOS_BDA_CURSOR_ENTRY_SIZE] = isActive ? state->CursorRow : state->PageRow[page];
       } }
     {   /* 0040:0060 follows the same rule as AH=03h: no text cursor in graphics. */
         WORD shape = (state->ModeKind == VIDEO_KIND_TEXT) ? state->CursorShape : 0;
-        bda[VIDEO_BDA_CURSOR_SHAPE] = (BYTE)shape; bda[VIDEO_BDA_CURSOR_SHAPE_HIGH] = (BYTE)(shape >> BYTE_SHIFT); }
-    bda[VIDEO_BDA_ACTIVE_PAGE] = state->Page;
+        bda[BIOS_BDA_CURSOR_SHAPE] = (BYTE)shape; bda[BIOS_BDA_CURSOR_SHAPE_HIGH] = (BYTE)(shape >> BYTE_SHIFT); }
+    bda[BIOS_BDA_ACTIVE_PAGE] = state->Page;
     { UINT crtc = (state->Mode == VIDEO_MODE_MDA) ? VIDEO_PORT_CRTC_MONO : VIDEO_PORT_CRTC_COLOUR;
-      bda[VIDEO_BDA_CRTC_PORT] = (BYTE)crtc; bda[VIDEO_BDA_CRTC_PORT_HIGH] = (BYTE)(crtc >> BYTE_SHIFT); }
-    bda[VIDEO_BDA_ROWS] = (BYTE)(state->Rows ? state->Rows - 1 : VIDEO_TEXT_DEFAULT_ROWS - 1);
-    bda[VIDEO_BDA_CHARACTER_HEIGHT] = state->CellHeight; bda[VIDEO_BDA_CHARACTER_HEIGHT_HIGH] = 0;
+      bda[BIOS_BDA_CRTC_PORT] = (BYTE)crtc; bda[BIOS_BDA_CRTC_PORT_HIGH] = (BYTE)(crtc >> BYTE_SHIFT); }
+    bda[BIOS_BDA_VIDEO_ROWS] = (BYTE)(state->Rows ? state->Rows - 1 : VIDEO_TEXT_DEFAULT_ROWS - 1);
+    bda[BIOS_BDA_CHARACTER_HEIGHT] = state->CellHeight; bda[BIOS_BDA_CHARACTER_HEIGHT_HIGH] = 0;
     /* 256K, EGA/VGA active, cursor emulation on; bit 7 = the last mode set (AH=00h AL
        bit 7, or 4F02h D15) did not clear memory -- see VideoInt10 AH=00h and vesa 4F02h. */
-    bda[VIDEO_BDA_EGA_INFO] = (BYTE)(VIDEO_EGA_INFO_BASE | (state->IsModeSetNoClear ? VIDEO_EGA_INFO_NO_CLEAR : 0x00)
+    bda[BIOS_BDA_EGA_INFO] = (BYTE)(VIDEO_EGA_INFO_BASE | (state->IsModeSetNoClear ? VIDEO_EGA_INFO_NO_CLEAR : 0x00)
                         | (state->IsCursorEmulationOff ? VIDEO_EGA_INFO_CURSOR_EMULATION_OFF : 0x00));      /* bit 0: 12h BL=34h (#252) */
-    bda[VIDEO_BDA_EGA_SWITCHES] = VIDEO_EGA_SWITCHES;                                    /* feature/switch bits: enhanced colour */
+    bda[BIOS_BDA_EGA_SWITCHES] = VIDEO_EGA_SWITCHES;                                    /* feature/switch bits: enhanced colour */
     /* 0089: bit 0 = VGA active; bits 7,4 = scan lines (0,0 = 350; 0,1 = 400; 1,0 = 200). */
-    bda[VIDEO_BDA_VGA_FLAGS] = (BYTE)((state->GraphicsHeight == VIDEO_LINES_200) ? VIDEO_VGA_FLAGS_200 : (state->GraphicsHeight == VIDEO_LINES_350) ? VIDEO_VGA_FLAGS_350 : VIDEO_VGA_FLAGS_400);
+    bda[BIOS_BDA_VGA_FLAGS] = (BYTE)((state->GraphicsHeight == VIDEO_LINES_200) ? VIDEO_VGA_FLAGS_200 : (state->GraphicsHeight == VIDEO_LINES_350) ? VIDEO_VGA_FLAGS_350 : VIDEO_VGA_FLAGS_400);
 }
 
 /* ══ #252: THE CHARACTER SERVICES IN A GRAPHICS MODE DRAW, IN THAT MODE'S LAYOUT. ══
@@ -2625,7 +2602,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         if (state->Mode <= VIDEO_MODE_MDA) {
             static const BYTE cgaModeSelect[VIDEO_MODE_MDA + 1] = { 0x2C, 0x28, 0x2D, 0x29, 0x2A, 0x2E, 0x1E, 0x29 };
             state->CgaSelect = (BYTE)(state->Mode == VIDEO_MODE_CGA_640 ? VIDEO_CGA_SELECT_MODE_6 : VIDEO_CGA_SELECT_DEFAULT);   /* AH=0Bh's shadow (#266) */
-            if (state->BiosData) { state->BiosData[VIDEO_BDA_CGA_MODE_SELECT] = cgaModeSelect[state->Mode]; state->BiosData[VIDEO_BDA_CGA_PALETTE] = state->CgaSelect; }
+            if (state->BiosData) { state->BiosData[BIOS_BDA_CGA_MODE_SELECT] = cgaModeSelect[state->Mode]; state->BiosData[BIOS_BDA_CGA_PALETTE] = state->CgaSelect; }
         }
         state->IsBlink = 1;                                /* ...and re-enables blink (AR10 bit 3) */
         state->AttributeMode = (BYTE)(state->AttributeMode | VIDEO_AR_MODE_BLINK);   /* the register agrees    */
@@ -2986,14 +2963,14 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
            06h foreground (taken from the CGA, the issue's reading); (c) 0066 in text. */
     case VIDEO_FUNCTION_CGA_PALETTE: {
         BYTE bh = (BYTE)(VddGetBx(registers) >> BYTE_SHIFT), bl = (BYTE)(VddGetBx(registers) & BYTE_MASK);
-        BYTE colourSelect = state->BiosData ? state->BiosData[VIDEO_BDA_CGA_PALETTE] : state->CgaSelect;
+        BYTE colourSelect = state->BiosData ? state->BiosData[BIOS_BDA_CGA_PALETTE] : state->CgaSelect;
         INT isGraphics = (state->ModeKind != VIDEO_KIND_TEXT) && !state->IsVesa;
         INT isCga4 = isGraphics && (state->Mode == VIDEO_MODE_CGA_320 || state->Mode == VIDEO_MODE_CGA_320_GREY);
         BYTE attributes[VIDEO_CGA_PALETTE_COLOURS];
         if (bh > 1) break;                             /* not a defined BH: nothing    */
         colourSelect = VddCgaColourSelect(colourSelect, bh, bl);
         state->CgaSelect = colourSelect;
-        if (state->BiosData) state->BiosData[VIDEO_BDA_CGA_PALETTE] = colourSelect;
+        if (state->BiosData) state->BiosData[BIOS_BDA_CGA_PALETTE] = colourSelect;
         if (bh == 0) {
             BYTE value = VddCgaBackgroundAr(bl);
             VideoAttributeBiosSet(state, VIDEO_AR_OVERSCAN, value);
@@ -4753,7 +4730,7 @@ VOID VddVideoInstallFonts(PVIDEO_STATE state)
             for (index = 0; index < VIDEO_DCC_ENTRIES; ++index) VideoWrite16(table + VDD_DCC_OFF + VIDEO_DCC_HEADER_BYTES + index * VIDEO_DCC_ENTRY_BYTES, displayCombination[index]);
             for (index = 0; index < VDD_VPARAM_N; ++index)
                 (VOID)VddVideoParameterEntry((BYTE)index, table + VDD_VPARAM_OFF + index * VIDEO_PARAMETER_ENTRY_BYTES);
-            if (state->BiosData) { VideoWrite16(state->BiosData + VIDEO_BDA_SAVE_POINTER, VDD_SAVEPTR_OFF); VideoWrite16(state->BiosData + VIDEO_BDA_SAVE_POINTER + VIDEO_FAR_SEGMENT, VDD_VIDTAB_SEG); }
+            if (state->BiosData) { VideoWrite16(state->BiosData + BIOS_BDA_VIDEO_SAVE_POINTER, VDD_SAVEPTR_OFF); VideoWrite16(state->BiosData + BIOS_BDA_VIDEO_SAVE_POINTER + VIDEO_FAR_SEGMENT, VDD_VIDTAB_SEG); }
         }
     }
     /* ...and the font vectors, which VddVideoReset set before the host's IVT was
