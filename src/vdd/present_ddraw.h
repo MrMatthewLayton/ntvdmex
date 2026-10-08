@@ -19,6 +19,7 @@
 
 #include <windows.h>
 #include "ntvdd.h"
+#include "bmp_format.h"      /* the BMP file format */
 
 /* Windowed mode presents via GDI StretchDIBits (cursor-friendly, expose-correct);
    exclusive fullscreen uses DirectDraw. The video blits into the client area

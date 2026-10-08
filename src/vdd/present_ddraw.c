@@ -48,28 +48,6 @@
 #define PRESENT_MID_SCREEN_MARGIN     32      /* lines from either edge                  */
 #define PRESENT_FLIP_STREAK_OUR_WAIT  30      /* flips that never waited, then we time them */
 /* The .bmp snapshot (PresentDdrawSaveBmp). */
-#define PRESENT_BMP_FILE_HEADER_BYTES 14
-#define PRESENT_BMP_INFO_HEADER_BYTES 40
-#define PRESENT_BMP_QUAD_BYTES        4       /* RGBQUAD                                 */
-#define PRESENT_BMP_ROW_SLACK         4
-#define PRESENT_BMP_ROW_PAD           3       /* rows are padded to 4 bytes              */
-#define PRESENT_BMP_ROW_ALIGN_MASK    3u
-#define PRESENT_BMP_PIXELS_PER_METRE  2835    /* ~72 dpi                                 */
-#define PRESENT_BMP_FILE_SIZE_OFFSET  2
-#define PRESENT_BMP_RESERVED1_OFFSET  6
-#define PRESENT_BMP_RESERVED2_OFFSET  8
-#define PRESENT_BMP_DATA_OFFSET_OFFSET 10
-#define PRESENT_BMP_INFO_SIZE_OFFSET  0
-#define PRESENT_BMP_WIDTH_OFFSET      4
-#define PRESENT_BMP_HEIGHT_OFFSET     8
-#define PRESENT_BMP_PLANES_OFFSET     12
-#define PRESENT_BMP_BPP_OFFSET        14
-#define PRESENT_BMP_COMPRESSION_OFFSET 16
-#define PRESENT_BMP_IMAGE_SIZE_OFFSET 20
-#define PRESENT_BMP_X_PPM_OFFSET      24
-#define PRESENT_BMP_Y_PPM_OFFSET      28
-#define PRESENT_BMP_COLOURS_USED_OFFSET 32
-#define PRESENT_BMP_COLOURS_IMPORTANT_OFFSET 36
 
 /* IID_IDirectDraw7 = 15e65ec0-3b9c-11d2-b92f-00609797ea5b (inline -> no dxguid). */
 static const GUID g_PresentIidDirectDraw7 =
@@ -868,48 +846,48 @@ INT PresentDdrawSaveBmp(PPRESENT_DDRAW presenter, PCSTR path)
     INT width = presenter->SnapshotWidth, height = presenter->SnapshotHeight, column, row;
     DWORD rowBytes, imageBytes, dataOffset, written;
     HANDLE file;
-    BYTE fileHeader[PRESENT_BMP_FILE_HEADER_BYTES], infoHeader[PRESENT_BMP_INFO_HEADER_BYTES];
-    static BYTE palette[NTVDD_PALETTE_ENTRIES * PRESENT_BMP_QUAD_BYTES];
-    static BYTE row8[NTVDD_FRAME_MAX_WIDTH + PRESENT_BMP_ROW_SLACK];
+    BYTE fileHeader[BMP_FILE_HEADER_BYTES], infoHeader[BMP_INFO_HEADER_BYTES];
+    static BYTE palette[NTVDD_PALETTE_ENTRIES * BMP_QUAD_BYTES];
+    static BYTE row8[NTVDD_FRAME_MAX_WIDTH + BMP_ROW_SLACK];
     /* 24bpp output is needed for a split palette AND for a direct-colour frame:
        neither can be described by one 256-entry BMP palette. */
     INT isTrueColour = presenter->IsSnapshotSplit || presenter->SnapshotBpp == PRESENT_BPP_DIRECT;
-    static BYTE row24[NTVDD_FRAME_MAX_WIDTH * PRESENT_BYTES_PER_PIXEL_24 + PRESENT_BMP_ROW_SLACK];
+    static BYTE row24[NTVDD_FRAME_MAX_WIDTH * PRESENT_BYTES_PER_PIXEL_24 + BMP_ROW_SLACK];
     /* #325: any frame up to the maximum (720x400 text, VESA) -- this was 640x480. */
     if (!presenter->IsSnapshotValid || width <= 0 || height <= 0 || width > NTVDD_FRAME_MAX_WIDTH || height > NTVDD_FRAME_MAX_HEIGHT) return -1;
     /* A raster-split frame cannot be an 8bpp BMP (one palette per file), so it is
        written as 24bpp with every row resolved. Ordinary frames stay 8bpp: the
        oracle tools compare palette INDICES and must keep them. */
-    rowBytes  = isTrueColour ? (((DWORD)width * PRESENT_BYTES_PER_PIXEL_24 + PRESENT_BMP_ROW_PAD) & ~PRESENT_BMP_ROW_ALIGN_MASK) : (((DWORD)width + PRESENT_BMP_ROW_PAD) & ~PRESENT_BMP_ROW_ALIGN_MASK);
+    rowBytes  = isTrueColour ? (((DWORD)width * PRESENT_BYTES_PER_PIXEL_24 + BMP_ROW_PAD) & ~BMP_ROW_ALIGN_MASK) : (((DWORD)width + BMP_ROW_PAD) & ~BMP_ROW_ALIGN_MASK);
     imageBytes = rowBytes * (DWORD)height;
-    dataOffset   = isTrueColour ? PRESENT_BMP_FILE_HEADER_BYTES + PRESENT_BMP_INFO_HEADER_BYTES : PRESENT_BMP_FILE_HEADER_BYTES + PRESENT_BMP_INFO_HEADER_BYTES + NTVDD_PALETTE_ENTRIES * PRESENT_BMP_QUAD_BYTES;
+    dataOffset   = isTrueColour ? BMP_FILE_HEADER_BYTES + BMP_INFO_HEADER_BYTES : BMP_FILE_HEADER_BYTES + BMP_INFO_HEADER_BYTES + NTVDD_PALETTE_ENTRIES * BMP_QUAD_BYTES;
 
     /* BITMAPFILEHEADER */
     fileHeader[0] = 'B'; fileHeader[1] = 'M';
-    PresentStoreLe32(fileHeader + PRESENT_BMP_FILE_SIZE_OFFSET, dataOffset + imageBytes);               /* whole file size                   */
-    PresentStoreLe16(fileHeader + PRESENT_BMP_RESERVED1_OFFSET, 0); PresentStoreLe16(fileHeader + PRESENT_BMP_RESERVED2_OFFSET, 0);
-    PresentStoreLe32(fileHeader + PRESENT_BMP_DATA_OFFSET_OFFSET, dataOffset);
+    PresentStoreLe32(fileHeader + BMP_FILE_SIZE_OFFSET, dataOffset + imageBytes);               /* whole file size                   */
+    PresentStoreLe16(fileHeader + BMP_RESERVED1_OFFSET, 0); PresentStoreLe16(fileHeader + BMP_RESERVED2_OFFSET, 0);
+    PresentStoreLe32(fileHeader + BMP_DATA_OFFSET_OFFSET, dataOffset);
     /* BITMAPINFOHEADER (positive height -> bottom-up rows) */
-    PresentStoreLe32(infoHeader + PRESENT_BMP_INFO_SIZE_OFFSET, PRESENT_BMP_INFO_HEADER_BYTES);
-    PresentStoreLe32(infoHeader + PRESENT_BMP_WIDTH_OFFSET, (DWORD)width);  PresentStoreLe32(infoHeader + PRESENT_BMP_HEIGHT_OFFSET, (DWORD)height);
-    PresentStoreLe16(infoHeader + PRESENT_BMP_PLANES_OFFSET, 1);        PresentStoreLe16(infoHeader + PRESENT_BMP_BPP_OFFSET, (WORD)(isTrueColour ? PRESENT_SURFACE_BPP_24 : PRESENT_BPP_INDEXED)); /* 1 plane */
+    PresentStoreLe32(infoHeader + BMP_INFO_SIZE_OFFSET, BMP_INFO_HEADER_BYTES);
+    PresentStoreLe32(infoHeader + BMP_WIDTH_OFFSET, (DWORD)width);  PresentStoreLe32(infoHeader + BMP_HEIGHT_OFFSET, (DWORD)height);
+    PresentStoreLe16(infoHeader + BMP_PLANES_OFFSET, 1);        PresentStoreLe16(infoHeader + BMP_BPP_OFFSET, (WORD)(isTrueColour ? PRESENT_SURFACE_BPP_24 : PRESENT_BPP_INDEXED)); /* 1 plane */
     /* `split` is computed by the caller as "needs 24bpp", which a direct-colour
        snapshot also does -- see the assignment below. */
-    PresentStoreLe32(infoHeader + PRESENT_BMP_COMPRESSION_OFFSET, 0);        PresentStoreLe32(infoHeader + PRESENT_BMP_IMAGE_SIZE_OFFSET, imageBytes);   /* BI_RGB                 */
-    PresentStoreLe32(infoHeader + PRESENT_BMP_X_PPM_OFFSET, PRESENT_BMP_PIXELS_PER_METRE);     PresentStoreLe32(infoHeader + PRESENT_BMP_Y_PPM_OFFSET, PRESENT_BMP_PIXELS_PER_METRE);    /* ~72 dpi                */
-    PresentStoreLe32(infoHeader + PRESENT_BMP_COLOURS_USED_OFFSET, isTrueColour ? 0 : NTVDD_PALETTE_ENTRIES); PresentStoreLe32(infoHeader + PRESENT_BMP_COLOURS_IMPORTANT_OFFSET, 0); /* colours used          */
+    PresentStoreLe32(infoHeader + BMP_COMPRESSION_OFFSET, 0);        PresentStoreLe32(infoHeader + BMP_IMAGE_SIZE_OFFSET, imageBytes);   /* BI_RGB                 */
+    PresentStoreLe32(infoHeader + BMP_X_PPM_OFFSET, BMP_PIXELS_PER_METRE);     PresentStoreLe32(infoHeader + BMP_Y_PPM_OFFSET, BMP_PIXELS_PER_METRE);    /* ~72 dpi                */
+    PresentStoreLe32(infoHeader + BMP_COLOURS_USED_OFFSET, isTrueColour ? 0 : NTVDD_PALETTE_ENTRIES); PresentStoreLe32(infoHeader + BMP_COLOURS_IMPORTANT_OFFSET, 0); /* colours used          */
     /* palette: SnapshotPalette is 0xAARRGGBB -> RGBQUAD {B,G,R,0} */
     for (column = 0; column < NTVDD_PALETTE_ENTRIES; ++column) {
         UINT32 argb = presenter->SnapshotPalette[column];
-        palette[column*PRESENT_BMP_QUAD_BYTES+0] = (BYTE)(argb & PRESENT_CHANNEL_MASK);
-        palette[column*PRESENT_BMP_QUAD_BYTES+1] = (BYTE)((argb >> PRESENT_GREEN_SHIFT) & PRESENT_CHANNEL_MASK);
-        palette[column*PRESENT_BMP_QUAD_BYTES+2] = (BYTE)((argb >> PRESENT_RED_SHIFT) & PRESENT_CHANNEL_MASK);
-        palette[column*PRESENT_BMP_QUAD_BYTES+3] = 0;
+        palette[column*BMP_QUAD_BYTES+0] = (BYTE)(argb & PRESENT_CHANNEL_MASK);
+        palette[column*BMP_QUAD_BYTES+1] = (BYTE)((argb >> PRESENT_GREEN_SHIFT) & PRESENT_CHANNEL_MASK);
+        palette[column*BMP_QUAD_BYTES+2] = (BYTE)((argb >> PRESENT_RED_SHIFT) & PRESENT_CHANNEL_MASK);
+        palette[column*BMP_QUAD_BYTES+3] = 0;
     }
     file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) return -1;
-    WriteFile(file, fileHeader, PRESENT_BMP_FILE_HEADER_BYTES, &written, NULL);
-    WriteFile(file, infoHeader, PRESENT_BMP_INFO_HEADER_BYTES, &written, NULL);
+    WriteFile(file, fileHeader, BMP_FILE_HEADER_BYTES, &written, NULL);
+    WriteFile(file, infoHeader, BMP_INFO_HEADER_BYTES, &written, NULL);
     if (!isTrueColour) WriteFile(file, palette, sizeof palette, &written, NULL);
     for (row = height - 1; row >= 0; --row) {   /* BMP is bottom-up                  */
         if (isTrueColour) {

@@ -6949,13 +6949,13 @@ static VOID HostMidiSysEx(PVOID context, const BYTE *message, UINT32 length)
     (VOID)context;
     AudioWaveMidiLong(&g_Wave, message, length);
 }
-
+#define SCREENSHOT_NAME_ROOM    24   /* path characters kept for "shot_manual_NN.bmp" */
 /* #190: the GUS's 6850 MIDI UART sends raw bytes; a PRIVATE message assembler (never on
    the bus) turns them into MIDI messages for the same synth. Its own, not g_Mpu's: two
    byte streams through one assembler would corrupt each other's running status. */
 static MPU_STATE g_GusMidi;
 static VOID GusMidiToSynth(PVOID context, BYTE byteValue) { (VOID)context; VddMpuFeed(&g_GusMidi, byteValue); }
-
+#define SCREENSHOT_NAME_DIGITS  12   /* where NN starts in that name               */
 /* Async-preemption probe driver (session 11, QIMODE_PATH bit 2). Raises IRQ 5 from a
    thread that is NOT the exec thread -- exactly how the audio thread raises the Sound
    Blaster's completion IRQ -- while the guest (qirq.com) spins in pure V86 code that
@@ -6989,11 +6989,11 @@ static VOID HostScreenshot(VOID)
     HOST_LOCK();
     width = g_Video.Frame.Width; height = g_Video.Frame.Height; bitsPerPixel = g_Video.Frame.BitsPerPixel;
     source = g_Video.Frame.Pixels;
-    if (!source || !width || !height || (bitsPerPixel != 8 && bitsPerPixel != 32)) { HOST_UNLOCK(); return; }
-    stride = (bitsPerPixel == 8) ? ((width + 3) & ~3u) : width * 4u;    /* DIB rows are 4-byte aligned */
-    palCount  = (bitsPerPixel == 8) ? 256 : 0;
+    if (!source || !width || !height || (bitsPerPixel != BMP_PALETTED_BPP && bitsPerPixel != BMP_XRGB_BPP)) { HOST_UNLOCK(); return; }
+    stride = (bitsPerPixel == BMP_PALETTED_BPP) ? ((width + BMP_ROW_PAD) & ~BMP_ROW_ALIGN_MASK) : width * BMP_XRGB_PIXEL_BYTES;    /* DIB rows are 4-byte aligned */
+    palCount  = (bitsPerPixel == BMP_PALETTED_BPP) ? BMP_PALETTE_ENTRIES : 0;
     imageSize = stride * height;
-    dibSize = sizeof(BITMAPINFOHEADER) + palCount * 4 + imageSize;
+    dibSize = sizeof(BITMAPINFOHEADER) + palCount * BMP_QUAD_BYTES + imageSize;
     memoryHandle = GlobalAlloc(GMEM_MOVEABLE, dibSize);
     if (!memoryHandle) { HOST_UNLOCK(); return; }
     dib = (BYTE *)GlobalLock(memoryHandle);
@@ -7007,18 +7007,18 @@ static VOID HostScreenshot(VOID)
     { DWORD index; BYTE *palette = dib + sizeof(BITMAPINFOHEADER);
       for (index = 0; index < palCount; ++index) {
           UINT32 colour = g_Video.Frame.Palette ? g_Video.Frame.Palette[index] : 0;
-          palette[index*4+0] = (BYTE)(colour & BYTE_MASK);          /* B */
-          palette[index*4+1] = (BYTE)((colour >> BYTE_SHIFT) & BYTE_MASK);   /* G */
-          palette[index*4+2] = (BYTE)((colour >> WORD_SHIFT) & BYTE_MASK);  /* R */
-          palette[index*4+3] = 0;
+          palette[index*BMP_QUAD_BYTES+0] = (BYTE)(colour & BYTE_MASK);          /* B */
+          palette[index*BMP_QUAD_BYTES+1] = (BYTE)((colour >> BYTE_SHIFT) & BYTE_MASK);   /* G */
+          palette[index*BMP_QUAD_BYTES+2] = (BYTE)((colour >> WORD_SHIFT) & BYTE_MASK);  /* R */
+          palette[index*BMP_QUAD_BYTES+3] = 0;
       } }
-    bits = dib + sizeof(BITMAPINFOHEADER) + palCount * 4;
-    { DWORD row, column, rowBytes = (bitsPerPixel == 8) ? width : width * 4u;
+    bits = dib + sizeof(BITMAPINFOHEADER) + palCount * BMP_QUAD_BYTES;
+    { DWORD row, column, rowBytes = (bitsPerPixel == BMP_PALETTED_BPP) ? width : width * BMP_XRGB_PIXEL_BYTES;
       for (row = 0; row < height; ++row) {                    /* flip: DIB row 0 is the bottom   */
           const BYTE *sourceRow = source + (SIZE_T)(height - 1 - row) * g_Video.Frame.Stride;
           BYTE *destinationRow = bits + (SIZE_T)row * stride;
           for (column = 0; column < rowBytes; ++column) destinationRow[column] = sourceRow[column];
-          if (bitsPerPixel == 32) for (column = 3; column < rowBytes; column += 4) destinationRow[column] = 0;   /* XRGB: no alpha */
+          if (bitsPerPixel == BMP_XRGB_BPP) for (column = BMP_XRGB_ALPHA_OFFSET; column < rowBytes; column += BMP_XRGB_PIXEL_BYTES) destinationRow[column] = 0;   /* XRGB: no alpha */
       } }
     HOST_UNLOCK();
 
@@ -7029,22 +7029,22 @@ static VOID HostScreenshot(VOID)
         CHAR path[MAX_PATH];
         PCSTR directory = NTVDMEX_OUT;   /* screenshots are output, not clutter in the root */
         INT index = 0, index2;
-        while (directory[index] && index < MAX_PATH - 24) { path[index] = directory[index]; ++index; }
+        while (directory[index] && index < MAX_PATH - SCREENSHOT_NAME_ROOM) { path[index] = directory[index]; ++index; }
         { PCSTR name = "shot_manual_00.bmp";
           for (index2 = 0; name[index2]; ++index2) path[index + index2] = name[index2];
-          path[index + 12] = (CHAR)('0' + (sequence / 10) % 10);
-          path[index + 13] = (CHAR)('0' + sequence % 10);
+          path[index + SCREENSHOT_NAME_DIGITS] = (CHAR)('0' + (sequence / 10) % 10);
+          path[index + SCREENSHOT_NAME_DIGITS + 1] = (CHAR)('0' + sequence % 10);
           path[index + index2] = 0; }
         ++sequence;
         { HANDLE file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
           if (file != INVALID_HANDLE_VALUE) {
-              BYTE fileHeader[14]; DWORD bytesWritten; DWORD offset = 14 + sizeof(BITMAPINFOHEADER) + palCount * 4;
-              DWORD fileSize = 14 + dibSize;
+              BYTE fileHeader[BMP_FILE_HEADER_BYTES]; DWORD bytesWritten; DWORD offset = BMP_FILE_HEADER_BYTES + sizeof(BITMAPINFOHEADER) + palCount * BMP_QUAD_BYTES;
+              DWORD fileSize = BMP_FILE_HEADER_BYTES + dibSize;
               fileHeader[0]='B'; fileHeader[1]='M';
-              fileHeader[2]=(BYTE)fileSize; fileHeader[3]=(BYTE)(fileSize>>BYTE_SHIFT); fileHeader[4]=(BYTE)(fileSize>>WORD_SHIFT); fileHeader[5]=(BYTE)(fileSize>>TOP_BYTE_SHIFT);
-              fileHeader[6]=fileHeader[7]=fileHeader[8]=fileHeader[9]=0;
-              fileHeader[10]=(BYTE)offset; fileHeader[11]=(BYTE)(offset>>BYTE_SHIFT); fileHeader[12]=(BYTE)(offset>>WORD_SHIFT); fileHeader[13]=(BYTE)(offset>>TOP_BYTE_SHIFT);
-              WriteFile(file, fileHeader, 14, &bytesWritten, NULL);
+              fileHeader[BMP_FILE_SIZE_OFFSET]=(BYTE)fileSize; fileHeader[BMP_FILE_SIZE_OFFSET + 1]=(BYTE)(fileSize>>BYTE_SHIFT); fileHeader[BMP_FILE_SIZE_OFFSET + 2]=(BYTE)(fileSize>>WORD_SHIFT); fileHeader[BMP_FILE_SIZE_OFFSET + 3]=(BYTE)(fileSize>>TOP_BYTE_SHIFT);
+              fileHeader[BMP_RESERVED1_OFFSET]=fileHeader[BMP_RESERVED1_OFFSET + 1]=fileHeader[BMP_RESERVED2_OFFSET]=fileHeader[BMP_RESERVED2_OFFSET + 1]=0;
+              fileHeader[BMP_DATA_OFFSET_OFFSET]=(BYTE)offset; fileHeader[BMP_DATA_OFFSET_OFFSET + 1]=(BYTE)(offset>>BYTE_SHIFT); fileHeader[BMP_DATA_OFFSET_OFFSET + 2]=(BYTE)(offset>>WORD_SHIFT); fileHeader[BMP_DATA_OFFSET_OFFSET + 3]=(BYTE)(offset>>TOP_BYTE_SHIFT);
+              WriteFile(file, fileHeader, BMP_FILE_HEADER_BYTES, &bytesWritten, NULL);
               WriteFile(file, dib, dibSize, &bytesWritten, NULL);
               CloseHandle(file);
           } }
