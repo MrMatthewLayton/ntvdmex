@@ -1282,7 +1282,7 @@ static WORD g_WowUserCurrentTask = 0;
 /* ── s93: THE HOOK BRIDGE (see SetWindowsHook). One entry per Win16 hook; the
      Win32 hook's callback finds its entry by kind and calls the 16-bit procedure
      through the nested run, with the procedure's own DS (its module's DGROUP). */
-static INT wow_call16_sync_ex(DWORD proc, WORD ds, PCWORD args, INT n,
+static INT WowCall16SyncEx(DWORD proc, WORD ds, PCWORD args, INT n,
                               WORD hwnd, WORD msg, PWORD res,
                               PBYTE blob, INT blobn, INT blobarg,
                               const INT *fix, INT nfix);
@@ -1312,7 +1312,7 @@ static INT WowUserHookCall(INT slot, INT code, WORD wParam, DWORD lParam, PBYTE 
     WORD arguments[WOWUSER_HOOK_ARGUMENTS];
     arguments[0] = (WORD)code; arguments[1] = wParam;
     arguments[2] = (WORD)(lParam >> WOW_WORD_SHIFT); arguments[3] = (WORD)lParam;
-    return wow_call16_sync_ex(g_WowUserHooks[slot].Procedure, g_WowUserHooks[slot].DataSelector, arguments, WOWUSER_HOOK_ARGUMENTS, 0, 0, result,
+    return WowCall16SyncEx(g_WowUserHooks[slot].Procedure, g_WowUserHooks[slot].DataSelector, arguments, WOWUSER_HOOK_ARGUMENTS, 0, 0, result,
                               eventBlob, eventBlob ? WOWUSER_EVENTMSG16_SIZE : 0, eventBlob ? WOWUSER_HOOK_ARG_LPARAM : -1, NULL, 0);
 }
 static VOID WowUserEventTo16(const EVENTMSG *eventMessage, PBYTE blob)
@@ -2395,7 +2395,7 @@ static const WOWUSER_SYSPROC g_WowUserSystemProcedures[] = {
     { "MDICLIENT", 0x4574, 11 },
 };
 #define WOWUSER_SYSPROC_COUNT ((INT)(sizeof g_WowUserSystemProcedures / sizeof g_WowUserSystemProcedures[0]))
-/* main.c: a 16-bit procedure, now, through the nested run (wow_call16_sync). */
+/* main.c: a 16-bit procedure, now, through the nested run (WowCall16Sync). */
 static INT (*g_WowUserCall16)(DWORD procedure, WORD dataSelector, PCWORD arguments, INT argumentCount,
                               WORD window16, WORD message, PWORD result);
 static HWND g_WowUserSubclassBypass;  /* CallWindowProc(thunk) in progress for this HWND */
@@ -3922,11 +3922,11 @@ static LONG WowUserDefProc(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD mess
    DefWindowProc's WM_CLOSE (#162) destroys a window the same way. Appends to `note`
    at *k; returns 0 if there is no such window. */
 /* s89 (#305 M10): send a message to a guest window NOW, through the nested run
-   (main.c wires this to wow_call16_sync with the window's own procedure and
+   (main.c wires this to WowCall16Sync with the window's own procedure and
    instance, exactly as DispatchMessage would choose them). 0 = could not. */
 static INT (*g_WowUserSend16)(WORD window16, WORD message, WORD wParam, DWORD lParam, PWORD result);
 /* ...and with a structure as lParam, placed on the guest's stack; `fix` lists the
-   far pointers inside it that point back into it (main.c: wow_send16_blob). */
+   far pointers inside it that point back into it (main.c: WowSend16Blob). */
 static INT (*g_WowUserSend16Blob)(WORD window16, WORD message, WORD wParam, PBYTE blob, INT blobLength,
                                   const INT *fix, INT fixCount, PWORD result);
 /* s89 (#302): the modeless dialog whose WM_INITDIALOG is running right now, and
@@ -4072,10 +4072,10 @@ static WPARAM WowUserWParam32(WORD message, WORD wParam16)
 }
 
 /* s92 (#314): WM_CTLCOLOR's DEFAULT, AS A BRUSH TOKEN. The default procedures
-   answered 0, which the host's own path (main.c wow_ctlcolor) turns into the
+   answered 0, which the host's own path (main.c WowControlColour) turns into the
    stock-measured 3.x default -- but a GUEST that sends WM_CTLCOLOR itself gets the
    0. Media Player's SScrollBar does: it selected "brush 0" and painted its trough
-   with whatever the DC held (solid blue). Same rules as wow_ctlcolor: edit and list
+   with whatever the DC held (solid blue). Same rules as WowControlColour: edit and list
    box, and static/button outside a 3-D dialog, are the window colour; the rest is
    Win32's DefWindowProc (what stock's WOW forwards to). The text and background
    colours are set on the DC, as Windows' default does. 0 if the DC is not ours. */
@@ -5026,7 +5026,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             if (itemClass && itemClass->IsRegistered32 && window->Window32) {
                 /* s89: an owner-drawn list/combo box used to be made a plain one here,
                    because WM_DRAWITEM could not reach a 16-bit dialog and Charmap's
-                   font list came up blank. It can now (#302, wow_ownerdraw in main.c),
+                   font list came up blank. It can now (#302, WowOwnerDraw in main.c),
                    so the control is created with the style the template asked for and
                    the program draws its own items -- Charmap's TrueType marks included. */
                 DWORD controlStyle32 = itemStyle;
