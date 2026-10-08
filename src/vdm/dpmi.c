@@ -3,6 +3,7 @@
 #include "ntvdm.h"
 #include "v86.h"
 #include "../ntvdmex_bits.h"
+#include "../ntvdmex_x86.h"
 
 /* Diagnostic snapshot of the last switch (read by the host log): ret_cs, ret_ip,
    code descriptor lo, code descriptor hi. Localises base-0 faults (my descriptor

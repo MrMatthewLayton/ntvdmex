@@ -85,7 +85,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_PORT_CRTC_COLOUR        0x3D4u
 
 /* The font vectors in the IVT, and the upper half of the 8x8 font. */
-#define VIDEO_IVT_ENTRY_BYTES         4u
 #define VIDEO_VECTOR_FONT_HIGH        0x1F
 #define VIDEO_VECTOR_GRAPHICS_FONT    0x43
 #define VIDEO_FONT_HIGH_FIRST         0x80
@@ -1225,7 +1224,7 @@ static VOID VideoSetVector(PVIDEO_STATE state, BYTE vector, WORD segment, WORD o
 {
     BYTE *value;
     if (!state->Bus) return;
-    value = (BYTE *)VddMapFlat(state->Bus, 0, (WORD)(vector * VIDEO_IVT_ENTRY_BYTES));
+    value = (BYTE *)VddMapFlat(state->Bus, 0, (WORD)(vector * IVT_ENTRY_SIZE_U));
     if (!value) return;
     value[0] = (BYTE)offset; value[1] = (BYTE)(offset >> BYTE_SHIFT);
     value[2] = (BYTE)segment; value[3] = (BYTE)(segment >> BYTE_SHIFT);

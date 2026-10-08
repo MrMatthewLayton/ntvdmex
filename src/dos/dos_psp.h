@@ -49,8 +49,6 @@
 #define DOS_PSP_INT23_VECTOR         0x23
 #define DOS_PSP_INT24_VECTOR         0x24
 #define DOS_PSP_SAVED_VECTORS        3
-#define DOS_IVT_SEGMENT              0
-#define DOS_IVT_ENTRY_BYTES          4
 
 /* Build a PSP at pspSegment:0 that points at the environment at environmentSegment:0.
  * topSegment is the top-of-conventional-memory segment (0xA000 = 640KB). The command tail
@@ -115,11 +113,11 @@ static inline VOID DosPspSaveVectors(_In_opt_ volatile BYTE *base, _In_ WORD psp
     static const BYTE vectors[DOS_PSP_SAVED_VECTORS] = { DOS_PSP_INT22_VECTOR, DOS_PSP_INT23_VECTOR, DOS_PSP_INT24_VECTOR };
     static const BYTE copyOffsets[DOS_PSP_SAVED_VECTORS]  = { DOS_PSP_INT22_COPY, DOS_PSP_INT23_COPY, DOS_PSP_INT24_COPY };
     volatile BYTE *psp = DosMcbSegmentAddress(base, pspSegment);
-    volatile BYTE *ivt = DosMcbSegmentAddress(base, DOS_IVT_SEGMENT);
+    volatile BYTE *ivt = DosMcbSegmentAddress(base, IVT_BASE_SEGMENT);
     UINT vectorIndex, byteIndex;
     for (vectorIndex = 0; vectorIndex < DOS_PSP_SAVED_VECTORS; ++vectorIndex)
-        for (byteIndex = 0; byteIndex < DOS_IVT_ENTRY_BYTES; ++byteIndex)
-            psp[copyOffsets[vectorIndex] + byteIndex] = ivt[vectors[vectorIndex] * DOS_IVT_ENTRY_BYTES + byteIndex];
+        for (byteIndex = 0; byteIndex < IVT_ENTRY_SIZE; ++byteIndex)
+            psp[copyOffsets[vectorIndex] + byteIndex] = ivt[vectors[vectorIndex] * IVT_ENTRY_SIZE + byteIndex];
     DosMcbWriteWord(psp + DOS_PSP_PARENT, parentPsp);          /* the parent's PSP segment */
 }
 
@@ -130,11 +128,11 @@ static inline VOID DosPspRestoreVectors(_In_opt_ volatile BYTE *base, _In_ WORD 
     static const BYTE vectors[DOS_PSP_SAVED_VECTORS] = { DOS_PSP_INT22_VECTOR, DOS_PSP_INT23_VECTOR, DOS_PSP_INT24_VECTOR };
     static const BYTE copyOffsets[DOS_PSP_SAVED_VECTORS]  = { DOS_PSP_INT22_COPY, DOS_PSP_INT23_COPY, DOS_PSP_INT24_COPY };
     volatile BYTE *psp = DosMcbSegmentAddress(base, pspSegment);
-    volatile BYTE *ivt = DosMcbSegmentAddress(base, DOS_IVT_SEGMENT);
+    volatile BYTE *ivt = DosMcbSegmentAddress(base, IVT_BASE_SEGMENT);
     UINT vectorIndex, byteIndex;
     for (vectorIndex = 0; vectorIndex < DOS_PSP_SAVED_VECTORS; ++vectorIndex)
-        for (byteIndex = 0; byteIndex < DOS_IVT_ENTRY_BYTES; ++byteIndex)
-            ivt[vectors[vectorIndex] * DOS_IVT_ENTRY_BYTES + byteIndex] = psp[copyOffsets[vectorIndex] + byteIndex];
+        for (byteIndex = 0; byteIndex < IVT_ENTRY_SIZE; ++byteIndex)
+            ivt[vectors[vectorIndex] * IVT_ENTRY_SIZE + byteIndex] = psp[copyOffsets[vectorIndex] + byteIndex];
 }
 
 #endif /* NTVDMEX_DOS_PSP_H */

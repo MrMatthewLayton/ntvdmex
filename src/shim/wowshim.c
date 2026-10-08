@@ -26,6 +26,7 @@
  */
 #include <windows.h>
 #include "../ntvdmex_bits.h"
+#include "../ntvdmex_x86.h"
 
 #define SHIM_API_VERSION        3       /* host + bin\wowshim\ must agree (STYLE.md §7)   */
 

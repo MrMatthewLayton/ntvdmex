@@ -315,8 +315,6 @@
 #define DOS_INT21_CARRY_FLAG      0x0001
 #define DOS_INT21_ZERO_FLAG       0x0040
 #define DOS_INT21_DWORD_BYTES     4
-#define DOS_INT21_VECTOR_SIZE     4       /* an IVT entry: offset, segment             */
-#define DOS_INT21_VECTOR_SEGMENT  2
 #define DOS_INT21_TRACE_MCB_MAX   40
 #define DOS_INT21_INVALID_DRIVE_AX 0xFFFF /* AH=36h: no such drive                     */
 #define DOS_INT21_COUNTRY_IN_BX   0xFF    /* AH=38h AL=FFh: the country code is in BX  */
@@ -3117,14 +3115,14 @@ INT DosInt21(PDOS_MACHINE machine)
         SETAX(R_AX & HIGH_BYTE_MASK); OKCF();
         trace = LogPut(trace, "  INT21 AH=63 DBCS lead-byte table\r\n");
     } else if (function == DOS_FN_SET_VECTOR) {              /* set interrupt vector: AL=int DS:DX */
-        DWORD vectorOffset = (R_AX & BYTE_MASK) * DOS_INT21_VECTOR_SIZE;
+        DWORD vectorOffset = (R_AX & BYTE_MASK) * IVT_ENTRY_SIZE;
         *(volatile WORD *)(vectorOffset)     = (WORD)(R_DX & WORD_MASK);
-        *(volatile WORD *)(vectorOffset + DOS_INT21_VECTOR_SEGMENT) = (WORD)(R_DS & WORD_MASK);
+        *(volatile WORD *)(vectorOffset + IVT_SEGMENT_OFFSET) = (WORD)(R_DS & WORD_MASK);
         OKCF();
     } else if (function == DOS_FN_GET_VECTOR) {              /* get interrupt vector: AL=int -> ES:BX */
-        DWORD vectorOffset = (R_AX & BYTE_MASK) * DOS_INT21_VECTOR_SIZE;
+        DWORD vectorOffset = (R_AX & BYTE_MASK) * IVT_ENTRY_SIZE;
         SET16(R_BX, *(volatile WORD *)(vectorOffset));
-        SET16(R_ES, *(volatile WORD *)(vectorOffset + DOS_INT21_VECTOR_SEGMENT));
+        SET16(R_ES, *(volatile WORD *)(vectorOffset + IVT_SEGMENT_OFFSET));
         OKCF();
     } else if (function == DOS_FN_ALLOCATE) {              /* allocate BX paras -> AX=seg (err: BX=max) */
         WORD wanted = (WORD)(R_BX & WORD_MASK), segment = 0, maximum = 0;

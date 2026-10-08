@@ -170,7 +170,6 @@
 #define V86_IRET_FRAME16   6      /* IP, CS, FLAGS      */
 #define V86_IRET_FRAME32   12     /* EIP, CS, EFLAGS    */
 #define V86_FAR_POINTER32  6      /* ptr16:32: offset dword, then the segment */
-#define V86_IVT_ENTRY_SIZE 4
 #define V86_INT3_VECTOR    3
 #define V86_BOP_SECOND_BYTE 0xC4  /* the VDM BOP is C4 C4 nn */
 #define V86_ENTER_LEVEL_MASK 0x1F
@@ -1492,8 +1491,8 @@ static int V86Step(V86_CPU *cpu)
         stackPointer = (WORD)(stackPointer - V86_WORD);      V86WriteMemory(stackBase + stackPointer, V86_WORD, nextIp);
         cpu->Registers[V86_SP]   = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | stackPointer;
         cpu->Flags &= ~(V86_IF | V86_TF);                          /* IF/TF cleared on entry         */
-        cpu->Ip     = (WORD)V86ReadMemory((UINT32)vector * V86_IVT_ENTRY_SIZE, V86_WORD);
-        cpu->Segments[V86_CS] = (WORD)V86ReadMemory((UINT32)vector * V86_IVT_ENTRY_SIZE + V86_WORD, V86_WORD);
+        cpu->Ip     = (WORD)V86ReadMemory((UINT32)vector * IVT_ENTRY_SIZE, V86_WORD);
+        cpu->Segments[V86_CS] = (WORD)V86ReadMemory((UINT32)vector * IVT_ENTRY_SIZE + V86_WORD, V86_WORD);
         return 1;
     }
     if (opcode == V86_OP_IRET) {                                  /* IRET */

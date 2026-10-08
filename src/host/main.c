@@ -2608,8 +2608,8 @@ static VOID CriticalRaise(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCur
     *logCursor = LogPut(*logCursor, " AH=0x"); *logCursor = LogHexByte(*logCursor, machine->CritAh);
     *logCursor = LogPut(*logCursor, " drive="); **logCursor = (CHAR)('A' + machine->CritAl); ++*logCursor;
     *logCursor = LogPut(*logCursor, ": DI=0x"); *logCursor = LogHexByte(*logCursor, machine->CritCode);
-    *logCursor = LogPut(*logCursor, " -> the guest's handler at 0x"); *logCursor = LogHex(*logCursor, *(volatile WORD *)(0x24 * 4 + 2));
-    *logCursor = LogPut(*logCursor, ":0x"); *logCursor = LogHex(*logCursor, *(volatile WORD *)(0x24 * 4)); *logCursor = LogPut(*logCursor, "\r\n");
+    *logCursor = LogPut(*logCursor, " -> the guest's handler at 0x"); *logCursor = LogHex(*logCursor, *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x24)));
+    *logCursor = LogPut(*logCursor, ":0x"); *logCursor = LogHex(*logCursor, *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x24))); *logCursor = LogPut(*logCursor, "\r\n");
     VDM_SET16(tib, VTIB_EAX, ((WORD)machine->CritAh << BYTE_SHIFT) | machine->CritAl);
     VDM_SET16(tib, VTIB_EDI, machine->CritCode);
     /* BP:SI = the device header -- the one our DPBs name, which since #48 is the BLOCK
@@ -3085,8 +3085,8 @@ static INT KeyboardActionEntry(INT keyboardAction)
     case INPUT_ACTION_PAUSE:  return BIOS_KEYBOARD_ACTION_PAUSE;
     default:            return -1;
     }
-    {   WORD offset = *(volatile WORD *)(ULONG_PTR)(vector * 4);
-        WORD segment = *(volatile WORD *)(ULONG_PTR)(vector * 4 + 2);
+    {   WORD offset = *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(vector));
+        WORD segment = *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(vector));
         const volatile BYTE *target = (const volatile BYTE *)(ULONG_PTR)(((DWORD)segment << PARAGRAPH_SHIFT) + offset);
         if ((segment | offset) == 0) return -1;
         /* MEASURED (p_ivtkbd, rig): a fresh VDM has IVT[05h] = F000:FF54 (`E9 3D A4`, a
@@ -3112,8 +3112,8 @@ static WORD  g_Int15StubOffset;
 static DWORD g_Kb4FCalls, g_Kb4FTranslate;         /* k4f entries / bytes it handed back */
 static INT Int15Hooked(VOID)
 {
-    return *(volatile WORD *)(ULONG_PTR)(0x15 * 4 + 2) != DOS_CTAB_SEG
-        || *(volatile WORD *)(ULONG_PTR)(0x15 * 4) != g_Int15StubOffset;
+    return *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(0x15)) != DOS_CTAB_SEG
+        || *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(0x15)) != g_Int15StubOffset;
 }
 
 /* ── #274: THE HOST HALF OF THE DEFAULT INT 05h (bios_kbdact.asm p5; bios_prtsc.h). ───
@@ -3696,7 +3696,7 @@ static VOID IfvTrace(UINT irq, INT path, DWORD flags, DWORD codeSegment, DWORD i
 {
     LONG index;
     UINT vector = VddPicVector(&g_Pic, (BYTE)irq);
-    INT isReentry = (codeSegment == PeekWord(vector * 4 + 2)) && ((WORD)(instructionPointer - PeekWord(vector * 4)) < 0x60);
+    INT isReentry = (codeSegment == PeekWord(IVT_SEGMENT_ADDRESS(vector))) && ((WORD)(instructionPointer - PeekWord(IVT_OFFSET_ADDRESS(vector))) < 0x60);
     if (isReentry) ++g_IfvReenter[irq & 15];
     if (!isReentry && g_IfvTraceCount >= 8) return;
     index = InterlockedIncrement(&g_IfvTraceCount) - 1;
@@ -3983,7 +3983,7 @@ static INT AsyncInjectIrq(UINT irq)
             }
             AsyncEarlyBail(irq, 31); return 0;
         }
-        if (!(g_NestedRm && irq >= 2 && PeekWord(vectorN * 4 + 2) != DOS_HDLR_SEG)) {
+        if (!(g_NestedRm && irq >= 2 && PeekWord(IVT_SEGMENT_ADDRESS(vectorN)) != DOS_HDLR_SEG)) {
             AsyncEarlyBail(irq, 30); return 0; }
     }
     /* Ask the PIC, exactly as the hardware would: is this line unmasked, and is nothing of
@@ -4008,8 +4008,8 @@ static INT AsyncInjectIrq(UINT irq)
          Ask both tables: the client has hooked the line if EITHER the real-mode vector
          has moved off our IRET stub or it has installed a protected-mode handler. */
     { UINT vector0 = VddPicVector(&g_Pic, (BYTE)irq);
-      INT rmHooked = !(PeekWord(vector0 * 4 + 2) == DOS_HDLR_SEG
-                        && PeekWord(vector0 * 4) == DOS_IRET_STUB_OFF);
+      INT rmHooked = !(PeekWord(IVT_SEGMENT_ADDRESS(vector0)) == DOS_HDLR_SEG
+                        && PeekWord(IVT_OFFSET_ADDRESS(vector0)) == DOS_IRET_STUB_OFF);
       INT pmHooked = g_DpmiPm && g_PmInt[IrqPmVector(irq)].Client;
       if (irq >= 2 && !rmHooked && !pmHooked) { AsyncEarlyBail(irq, 22); return 0; } }
     /* Exclusive ownership of the guest's context for the whole suspend/rewrite/resume.
@@ -4182,7 +4182,7 @@ static INT AsyncInjectIrq(UINT irq)
          and lost. Left pending (return 0) for the PM path; see V86DeliverDeviceIrq. */
     if (irq >= 2 && g_DpmiPm && g_PmInt[IrqPmVector(irq)].Client) {
         UINT vector1 = VddPicVector(&g_Pic, (BYTE)irq);
-        if (PeekWord(vector1 * 4 + 2) == DOS_HDLR_SEG && PeekWord(vector1 * 4) == DOS_IRET_STUB_OFF) {
+        if (PeekWord(IVT_SEGMENT_ADDRESS(vector1)) == DOS_HDLR_SEG && PeekWord(IVT_OFFSET_ADDRESS(vector1)) == DOS_IRET_STUB_OFF) {
             ResumeThread(g_HostCpu);
             ASYNC_CTX_RELEASE();
             AsyncEarlyBail(irq, 32);
@@ -4198,8 +4198,8 @@ static INT AsyncInjectIrq(UINT irq)
     sp = (sp - 2) & WORD_MASK; PokeWord((ss << PARAGRAPH_SHIFT) + sp, (WORD)ip);
     context.Esp    = sp;
     { UINT vector = VddPicVector(&g_Pic, (BYTE)irq);
-      context.Eip   = PeekWord(vector * 4);
-      context.SegCs = PeekWord(vector * 4 + 2); }
+      context.Eip   = PeekWord(IVT_OFFSET_ADDRESS(vector));
+      context.SegCs = PeekWord(IVT_SEGMENT_ADDRESS(vector)); }
     context.EFlags = eflags & ~(0x300u | EFLAGS_VIF_BIT);
     context.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
     isOk = SetThreadContext(g_HostCpu, &context) ? 1 : 0;
@@ -4249,8 +4249,8 @@ static INT AsyncInjectIrq(UINT irq)
         lineCursor = LogPut(lineCursor, ":0x");               lineCursor = LogHex(lineCursor, ip);
         lineCursor = LogPut(lineCursor, " ivt[0B..0F]=");
         for (logVector = 0x0B; logVector <= 0x0F; ++logVector) {
-            lineCursor = LogPut(lineCursor, "0x");  lineCursor = LogHex(lineCursor, PeekWord(logVector * 4 + 2));
-            lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, PeekWord(logVector * 4));
+            lineCursor = LogPut(lineCursor, "0x");  lineCursor = LogHex(lineCursor, PeekWord(IVT_SEGMENT_ADDRESS(logVector)));
+            lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, PeekWord(IVT_OFFSET_ADDRESS(logVector)));
             lineCursor = LogPut(lineCursor, " ");
         }
         lineCursor = LogPut(lineCursor, "\r\n");
@@ -4262,7 +4262,7 @@ static INT AsyncInjectIrq(UINT irq)
 static INT AsyncVectorIsOurStub(UINT irq)
 {
     UINT vector = VddPicVector(&g_Pic, (BYTE)irq);
-    WORD segment = PeekWord(vector * 4 + 2), offset = PeekWord(vector * 4);
+    WORD segment = PeekWord(IVT_SEGMENT_ADDRESS(vector)), offset = PeekWord(IVT_OFFSET_ADDRESS(vector));
     return segment == DOS_HDLR_SEG && (offset == DOS_IRET_STUB_OFF || offset == 0x004C);
 }
 
@@ -4611,8 +4611,8 @@ static VOID InjectInt(volatile BYTE *tib, UINT vector)
     /* Clear IF + TF, and VIF with them: vectoring an interrupt disables the guest's
        interrupts, and under VME "the guest's interrupts" means VIF. */
     VDM_REG(tib, VTIB_EFLAGS) &= ~(0x300u | EFLAGS_VIF_BIT);
-    VDM_SET16(tib, VTIB_EIP, PeekWord(vector * 4));      /* IVT[vec].offset */
-    VDM_SET16(tib, VTIB_CS,  PeekWord(vector * 4 + 2));  /* IVT[vec].segment */
+    VDM_SET16(tib, VTIB_EIP, PeekWord(IVT_OFFSET_ADDRESS(vector)));      /* IVT[vec].offset */
+    VDM_SET16(tib, VTIB_CS,  PeekWord(IVT_SEGMENT_ADDRESS(vector)));  /* IVT[vec].segment */
 }
 
 /* ── A GUEST ASKED TO TERMINATE. FOUR DOORS, ONE ANSWER. (GH #134) ───────────
@@ -7434,7 +7434,7 @@ static DWORD WINAPI HeartbeatThread(LPVOID parameter)
         /* s81: WHY IS A RAISED LINE NOT DELIVERED? The PIC's own view (mask, request,
            in service, both chips), which lines we still hold pending, and where IRQ 5's
            real-mode vector points -- the three things that decide it. */
-        { INT index; DWORD pendingMask = 0; WORD int0DOffset = PeekWord(0x0D * 4), int0DSegment = PeekWord(0x0D * 4 + 2);
+        { INT index; DWORD pendingMask = 0; WORD int0DOffset = PeekWord(IVT_OFFSET_ADDRESS(0x0D)), int0DSegment = PeekWord(IVT_SEGMENT_ADDRESS(0x0D));
           for (index = 0; index < 16; ++index) if (g_IrqNPending[index]) pendingMask |= 1u << index;
           cursor = LogPut(cursor, " pic{imr=");  cursor = LogHexByte(cursor, g_Pic.Master.Imr); cursor = LogPut(cursor, "/"); cursor = LogHexByte(cursor, g_Pic.Slave.Imr);
           cursor = LogPut(cursor, " irr=");      cursor = LogHexByte(cursor, g_Pic.Master.Irr); cursor = LogPut(cursor, "/"); cursor = LogHexByte(cursor, g_Pic.Slave.Irr);
@@ -21955,7 +21955,7 @@ static INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vec
           pFlags=VDM_REG(tib,VTIB_EFLAGS);
     WORD machineStatusWord = *(volatile WORD *)(tib + VTIB_MSW);
     WORD realSs = (WORD)(g_DpmiCodeBase >> PARAGRAPH_SHIFT), realSp = 0xFB00;
-    WORD realCs = PeekWord(vector * 4 + 2), rip = PeekWord(vector * 4);
+    WORD realCs = PeekWord(IVT_SEGMENT_ADDRESS(vector)), rip = PeekWord(IVT_OFFSET_ADDRESS(vector));
     UINT round; INT done = 0;
     InterlockedExchange(&g_SimIntBusy, 1);
     realSp -= 2; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp, 0x0202);          /* FLAGS: IF set, restored by IRET */
@@ -24522,7 +24522,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             if (g_PmIrqRmReflects <= 8) {
                                 cursor = LogPut(cursor, "PM INT 0x"); cursor = LogHexByte(cursor, (BYTE)vector);
                                 cursor = LogPut(cursor, " default handler -> reflected to the guest's real-mode ISR 0x");
-                                cursor = LogHex(cursor, PeekWord(vector * 4 + 2)); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, PeekWord(vector * 4));
+                                cursor = LogHex(cursor, PeekWord(IVT_SEGMENT_ADDRESS(vector))); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, PeekWord(IVT_OFFSET_ADDRESS(vector)));
                                 cursor = LogPut(cursor, "\r\n");
                                 LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                             }
@@ -24859,7 +24859,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         INT simulatedVector = -1; WORD simulatedCs = 0, simulatedIp = 0;
                         if (ax == 0x0300) {
                             DWORD interruptVector = VDM_REG(tib, VTIB_EBX) & BYTE_MASK;
-                            WORD handlerSegment = PeekWord(interruptVector * 4 + 2), handlerOffset = PeekWord(interruptVector * 4);
+                            WORD handlerSegment = PeekWord(IVT_SEGMENT_ADDRESS(interruptVector)), handlerOffset = PeekWord(IVT_OFFSET_ADDRESS(interruptVector));
                             if (RmcsSimIntRoute(interruptVector, handlerSegment, handlerOffset, g_SimIntReflect, DOS_HDLR_SEG) == SIMINT_RUN) {
                                 simulatedVector = (INT)interruptVector; simulatedCs = handlerSegment; simulatedIp = handlerOffset;
                                 cursor = LogPut(cursor, " [simInt 0x"); cursor = LogHexByte(cursor, (BYTE)interruptVector);
@@ -25349,7 +25349,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              refusing it is how a host lies about whose machine it is. */
                         case 0x0200: {                             /* get real-mode vector: BL -> CX:DX */
                             DWORD bl = VDM_REG(tib, VTIB_EBX) & BYTE_MASK;
-                            const volatile WORD *interruptVector = (const volatile WORD *)(ULONG_PTR)(bl * 4);
+                            const volatile WORD *interruptVector = (const volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(bl));
                             VDM_SET16(tib, VTIB_EDX, interruptVector[0]);       /* offset  */
                             VDM_SET16(tib, VTIB_ECX, interruptVector[1]);       /* segment */
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
@@ -25359,7 +25359,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             break; }
                         case 0x0201: {                             /* set real-mode vector: BL = CX:DX */
                             DWORD bl = VDM_REG(tib, VTIB_EBX) & BYTE_MASK;
-                            volatile WORD *interruptVector = (volatile WORD *)(ULONG_PTR)(bl * 4);
+                            volatile WORD *interruptVector = (volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(bl));
                             WORD previousSegment = interruptVector[1], previousOffset = interruptVector[0];
                             interruptVector[0] = (WORD)VDM_REG16(tib, VTIB_EDX);
                             interruptVector[1] = (WORD)VDM_REG16(tib, VTIB_ECX);
@@ -25979,7 +25979,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                  and SIMINT_NONE (a null vector, or simintrefl_off.flag), which
                                  runs nothing and is counted below, as every vector but three
                                  used to be. */
-                            { WORD handlerSegment = PeekWord(interruptNumber * 4 + 2), handlerOffset = PeekWord(interruptNumber * 4);
+                            { WORD handlerSegment = PeekWord(IVT_SEGMENT_ADDRESS(interruptNumber)), handlerOffset = PeekWord(IVT_OFFSET_ADDRESS(interruptNumber));
                               if (RmcsSimIntRoute(interruptNumber, handlerSegment, handlerOffset, g_SimIntReflect, DOS_HDLR_SEG) != SIMINT_FAST) {
                                   g_SimIntUnhandled++;
                                   if (interruptNumber < 256) g_SimIntVector[interruptNumber]++;
@@ -28971,8 +28971,8 @@ static INT V86DeliverDeviceIrq(volatile BYTE *tib)
           irq = g_IrqOrder[index];
           vector = VddPicVector(&g_Pic, (BYTE)irq);        /* 08h+q or 70h+(q-8), as programmed */
           if (!g_IrqNPending[irq]) continue;
-          if (PeekWord(vector * 4 + 2) == DOS_HDLR_SEG
-              && PeekWord(vector * 4) == DOS_IRET_STUB_OFF) {
+          if (PeekWord(IVT_SEGMENT_ADDRESS(vector)) == DOS_HDLR_SEG
+              && PeekWord(IVT_OFFSET_ADDRESS(vector)) == DOS_IRET_STUB_OFF) {
               /* ── s92 (#239): UNHOOKED IN REAL MODE IS NOT UNHOOKED. A DPMI client that
                    installed a PROTECTED-MODE handler for the line owns it whatever mode
                    the CPU is in (DPMI 0.9: a hardware interrupt is passed to the PM
@@ -31084,14 +31084,14 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     *(volatile WORD *)0x58 = 0x0028;                        /* IVT[0x16].offset    */
     *(volatile WORD *)0x5A = DOS_HDLR_SEG;                  /* IVT[0x16].segment   */
     for (index = 0; index < sizeof(bop33); ++index) handlerArea[0x30 + index] = bop33[index];  /* INT 33h stub */
-    *(volatile WORD *)(0x33 * 4)     = 0x0030;              /* IVT[0x33].offset    */
-    *(volatile WORD *)(0x33 * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x33].segment   */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x33))     = 0x0030;              /* IVT[0x33].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x33)) = DOS_HDLR_SEG;        /* IVT[0x33].segment   */
     for (index = 0; index < sizeof(bop08); ++index) handlerArea[0x34 + index] = bop08[index];  /* INT 08h stub */
-    *(volatile WORD *)(0x08 * 4)     = 0x0034;              /* IVT[0x08].offset    */
-    *(volatile WORD *)(0x08 * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x08].segment   */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x08))     = 0x0034;              /* IVT[0x08].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x08)) = DOS_HDLR_SEG;        /* IVT[0x08].segment   */
     for (index = 0; index < sizeof(bop1c); ++index) handlerArea[0x3A + index] = bop1c[index];  /* INT 1Ch iret */
-    *(volatile WORD *)(0x1C * 4)     = 0x003A;              /* IVT[0x1C].offset    */
-    *(volatile WORD *)(0x1C * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x1C].segment   */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x1C))     = 0x003A;              /* IVT[0x1C].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x1C)) = DOS_HDLR_SEG;        /* IVT[0x1C].segment   */
     for (index = 0; index < sizeof(bop09); ++index) handlerArea[0x4C + index] = bop09[index];  /* INT 09h default iret (0x4C-0x4F) */
     /* INT 33h event-handler return: the guest's handler RETFs here (see MouseCallbackTry). */
     handlerArea[MS_CB_RET_OFF + 0] = VDM_BOP0; handlerArea[MS_CB_RET_OFF + 1] = VDM_BOP1;
@@ -31108,21 +31108,21 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     { volatile BYTE *swappableDataArea = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_SDA_SEG << PARAGRAPH_SHIFT);   /* AH=34h/5D06h */
       INT item; for (item = 0; item < DOS_SDA_LEN; ++item) swappableDataArea[DOS_SDA_OFF + item] = 0; }
     for (index = 0x0A; index <= 0x0F; ++index) {
-        *(volatile WORD *)(index * 4)     = DOS_IRET_STUB_OFF;
-        *(volatile WORD *)(index * 4 + 2) = DOS_HDLR_SEG;
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(index))     = DOS_IRET_STUB_OFF;
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(index)) = DOS_HDLR_SEG;
     }
     for (index = 0x70; index <= 0x77; ++index) {
-        *(volatile WORD *)(index * 4)     = DOS_IRET_STUB_OFF;
-        *(volatile WORD *)(index * 4 + 2) = DOS_HDLR_SEG;
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(index))     = DOS_IRET_STUB_OFF;
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(index)) = DOS_HDLR_SEG;
     }
-    *(volatile WORD *)(0x09 * 4)     = 0x004C;              /* IVT[0x09].offset    */
-    *(volatile WORD *)(0x09 * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x09].segment   */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x09))     = 0x004C;              /* IVT[0x09].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x09)) = DOS_HDLR_SEG;        /* IVT[0x09].segment   */
     for (index = 0; index < sizeof(bop1a); ++index) handlerArea[0x3C + index] = bop1a[index];  /* INT 1Ah stub */
-    *(volatile WORD *)(0x1A * 4)     = 0x003C;              /* IVT[0x1A].offset    */
-    *(volatile WORD *)(0x1A * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x1A].segment   */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x1A))     = 0x003C;              /* IVT[0x1A].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x1A)) = DOS_HDLR_SEG;        /* IVT[0x1A].segment   */
     for (index = 0; index < sizeof(bop2f); ++index) handlerArea[0x40 + index] = bop2f[index];  /* INT 2Fh stub */
-    *(volatile WORD *)(0x2F * 4)     = 0x0040;              /* IVT[0x2F].offset    */
-    *(volatile WORD *)(0x2F * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x2F].segment   */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x2F))     = 0x0040;              /* IVT[0x2F].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x2F)) = DOS_HDLR_SEG;        /* IVT[0x2F].segment   */
     for (index = 0; index < sizeof(xmsBopStub); ++index) handlerArea[XMS_ENTRY_OFF + index] = xmsBopStub[index];  /* XMS far-call entry */
     /* ⚠ GH #47: a non-zero word at XMS_ENTRY_OFF+0x45 WAS TRIED AND REFUTED.
        MEM.EXE skips its whole extended-memory report on a zero word at +0x45 of
@@ -31135,11 +31135,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          header OR by opening the device; leaving one of them behind is a manager
          that half-exists, which is worse for a guest than one that does not. */
     if (g_EmsOn) {
-        *(volatile WORD *)(0x67 * 4)     = 0x0048;          /* IVT[0x67].offset    */
-        *(volatile WORD *)(0x67 * 4 + 2) = DOS_HDLR_SEG;    /* IVT[0x67].segment   */
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x67))     = 0x0048;          /* IVT[0x67].offset    */
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x67)) = DOS_HDLR_SEG;    /* IVT[0x67].segment   */
     } else {
-        *(volatile WORD *)(0x67 * 4)     = 0;
-        *(volatile WORD *)(0x67 * 4 + 2) = 0;
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x67))     = 0;
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x67)) = 0;
     }
     /* DPMI mode-switch entry (far-called): BOP 0x50 ; RETF. The host services the
        BOP by switching to PM; the RETF only executes if the switch fails. */
@@ -31192,8 +31192,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           controlBytes[offset + 3] = (biosInts[byteIndex][0] == 0x25 || biosInts[byteIndex][0] == 0x26)
                         ? 0xCB   /* RETF */
                         : 0xCF;  /* IRET */
-          *(volatile WORD *)(biosInts[byteIndex][0] * 4)     = (WORD)offset;
-          *(volatile WORD *)(biosInts[byteIndex][0] * 4 + 2) = DOS_CTAB_SEG;
+          *(volatile WORD *)(IVT_OFFSET_ADDRESS(biosInts[byteIndex][0]))     = (WORD)offset;
+          *(volatile WORD *)(IVT_SEGMENT_ADDRESS(biosInts[byteIndex][0])) = DOS_CTAB_SEG;
           if (biosInts[byteIndex][0] == 0x15) g_Int15StubOffset = (WORD)offset;   /* #244 */
       } }
 
@@ -31214,14 +31214,14 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     {   volatile BYTE *controlBytes = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT);
         UINT position = DOS_CRIT_STUBS;
         controlBytes[position+0] = VDM_BOP0; controlBytes[position+1] = VDM_BOP1; controlBytes[position+2] = 0x30; controlBytes[position+3] = 0xCF;
-        *(volatile WORD *)(0x22 * 4)     = (WORD)position;              /* INT 22h */
-        *(volatile WORD *)(0x22 * 4 + 2) = DOS_CTAB_SEG;
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x22))     = (WORD)position;              /* INT 22h */
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x22)) = DOS_CTAB_SEG;
         controlBytes[position+4] = 0xCF;                                          /* INT 23h: IRET */
-        *(volatile WORD *)(0x23 * 4)     = (WORD)(position + 4);
-        *(volatile WORD *)(0x23 * 4 + 2) = DOS_CTAB_SEG;
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x23))     = (WORD)(position + 4);
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x23)) = DOS_CTAB_SEG;
         controlBytes[position+8] = 0xB0; controlBytes[position+9] = 0x03; controlBytes[position+10] = 0xCF;         /* mov al,3 ; iret */
-        *(volatile WORD *)(0x24 * 4)     = (WORD)(position + 8);        /* INT 24h */
-        *(volatile WORD *)(0x24 * 4 + 2) = DOS_CTAB_SEG;
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(0x24))     = (WORD)(position + 8);        /* INT 24h */
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(0x24)) = DOS_CTAB_SEG;
         /* #34: the site DOS calls the guest's INT 24h from -- see CriticalRaise. */
         controlBytes[DOS_CRIT_RAISE + 0] = 0xCD; controlBytes[DOS_CRIT_RAISE + 1] = 0x24;   /* int 24h  */
         controlBytes[DOS_CRIT_RETURN + 0] = VDM_BOP0; controlBytes[DOS_CRIT_RETURN + 1] = VDM_BOP1;
@@ -31240,8 +31240,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
              and a program's own `int 5` went somewhere we cannot vouch for. Every BIOS
              since the PC has a routine here; ours prints the screen through INT 17h and
              keeps its status HOST-side -- see PrintScreenBop for why not at 0050:0000. */
-        *(volatile WORD *)(ULONG_PTR)(0x05 * 4)     = (WORD)(DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05);
-        *(volatile WORD *)(ULONG_PTR)(0x05 * 4 + 2) = DOS_CTAB_SEG;
+        *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(0x05))     = (WORD)(DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05);
+        *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(0x05)) = DOS_CTAB_SEG;
     }
 
     /* GH #27 -- THE NULL-VECTOR LANDMINE. A vector left at 0000:0000 sends a guest
@@ -31256,10 +31256,10 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     { INT number, count = 0, start = -1;
       cursor = LogPut(cursor, "STAGE0: null IVT vectors -> IRET stub:");
       for (number = 0; number <= 256; ++number) {                  /* 256 flushes a trailing run */
-          INT isNullVector = (number < 256) && (*(volatile DWORD *)(number * 4) == 0);
+          INT isNullVector = (number < 256) && (*(volatile DWORD *)(IVT_OFFSET_ADDRESS(number)) == 0);
           if (isNullVector) {
-              *(volatile WORD *)(number * 4)     = DOS_IRET_STUB_OFF;
-              *(volatile WORD *)(number * 4 + 2) = DOS_HDLR_SEG;
+              *(volatile WORD *)(IVT_OFFSET_ADDRESS(number))     = DOS_IRET_STUB_OFF;
+              *(volatile WORD *)(IVT_SEGMENT_ADDRESS(number)) = DOS_HDLR_SEG;
               if (start < 0) start = number;
               ++count;
           } else if (start >= 0) {                  /* emit as ranges, not 133 items */
@@ -32723,8 +32723,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 controlBytes[offset + 0] = VDM_BOP0; controlBytes[offset + 1] = VDM_BOP1;
                 controlBytes[offset + 2] = DOS_GENSTUB_BOP; controlBytes[offset + 3] = 0xCF;            /* IRET */
                 g_GenericStubVector[count] = (BYTE)number;
-                *(volatile WORD *)(ULONG_PTR)(number * 4)     = (WORD)offset;
-                *(volatile WORD *)(ULONG_PTR)(number * 4 + 2) = DOS_CTAB_SEG;
+                *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(number))     = (WORD)offset;
+                *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(number)) = DOS_CTAB_SEG;
                 ++count;
                 gateCursor = LogPut(gateCursor, " -> generic stub 0090:0x"); gateCursor = LogHex(gateCursor, offset); gateCursor = LogPut(gateCursor, "\r\n");
             }

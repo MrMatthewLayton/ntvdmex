@@ -29,10 +29,4 @@
 #define BITMAP_BYTE_SHIFT   3
 #define BITMAP_BIT_MASK     7
 
-/* x86 real-mode addressing: linear = segment * 16 + offset. */
-#define PARAGRAPH_SHIFT     4
-
-/* x86 paging: a 4 KB page. */
-#define PAGE_SHIFT          12
-
 #endif /* NTVDMEX_BITS_H */
