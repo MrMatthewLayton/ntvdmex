@@ -9077,7 +9077,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         InterlockedExchange(&g_MouseWantCapture, 1);
     switch (ax) {
     case I33_FN_RESET:                                        /* reset + get status      */
-        if (g_MouseAbsent) { VDM_SET16(tib, VTIB_EAX, 0x0000); break; }  /* no driver */
+        if (g_MouseAbsent) { VDM_SET16(tib, VTIB_EAX, I33_NOT_INSTALLED); break; }  /* no driver */
         VDM_SET16(tib, VTIB_EAX, I33_INSTALLED);               /* driver installed        */
         VDM_SET16(tib, VTIB_EBX, I33_BUTTON_COUNT);               /* 2 buttons               */
         I33ResetState();
@@ -9261,7 +9261,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
     case I33_FN_SET_LANGUAGE:                                        /* set language            */
         break;
     case I33_FN_GET_LANGUAGE:                                        /* get language: English   */
-        VDM_SET16(tib, VTIB_EBX, 0x0000);
+        VDM_SET16(tib, VTIB_EBX, I33_LANGUAGE_ENGLISH);
         break;
     /* 0Dh/0Eh light-pen emulation on/off: no outputs, and there is no light pen for
        INT 10h AH=04h to report -- nothing to switch. Named so it is not counted as
@@ -9286,7 +9286,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         break;
     case I33_FN_GET_ALTERNATE_HANDLER: {
         INT byteIndex = I33AlternateFind(g_MouseAlt, (WORD)VDM_REG16(tib, VTIB_ECX));
-        if (byteIndex < 0) { VDM_SET16(tib, VTIB_ECX, 0x0000); break; }
+        if (byteIndex < 0) { VDM_SET16(tib, VTIB_ECX, I33_NO_ALTERNATE_HANDLER); break; }
         VDM_SET16(tib, VTIB_ECX, g_MouseAlt[byteIndex].Mask);
         VDM_SET16(tib, VTIB_EBX, g_MouseAlt[byteIndex].Segment);
         if (source == I33_SRC_PM) VDM_REG(tib, VTIB_EDX) = g_MouseAlt[byteIndex].Offset;
@@ -9326,7 +9326,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         VDM_SET16(tib, VTIB_ECX, (I33_MOUSE_TYPE_PS2 << BYTE_SHIFT) | I33_PS2_IRQ);
         break;
     case I33_FN_GET_MAXIMUM_VIRTUAL:                                        /* max virtual coordinates */
-        VDM_SET16(tib, VTIB_EBX, 0x0000);               /* driver not disabled     */
+        VDM_SET16(tib, VTIB_EBX, I33_DRIVER_ENABLED);               /* driver not disabled     */
         VDM_SET16(tib, VTIB_ECX, (WORD)I33RangeXMaximum());
         VDM_SET16(tib, VTIB_EDX, (WORD)I33RangeYMaximum());
         break;
@@ -9344,9 +9344,9 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         WORD cursorType = (WORD)(g_Video.ModeKind != VIDEO_KIND_TEXT || g_Video.IsVesa ? I33_CURSOR_GRAPHICS
                             : g_MouseTcHardware ? I33_CURSOR_HARDWARE_TEXT : I33_CURSOR_SOFTWARE_TEXT);
         VDM_SET16(tib, VTIB_EAX, (WORD)(I33_INFO_INTEGRATED_DRIVER | (cursorType << I33_INFO_CURSOR_TYPE_SHIFT) | ((g_MouseRate & I33_INFO_RATE_MASK) << BYTE_SHIFT)));
-        VDM_SET16(tib, VTIB_EBX, 0x0000);
-        VDM_SET16(tib, VTIB_ECX, 0x0000);
-        VDM_SET16(tib, VTIB_EDX, 0x0000);
+        VDM_SET16(tib, VTIB_EBX, I33_NOT_BUSY);
+        VDM_SET16(tib, VTIB_ECX, I33_NOT_BUSY);
+        VDM_SET16(tib, VTIB_EDX, I33_NOT_BUSY);
         break; }
     case I33_FN_GET_MASKS_AND_MICKEYS: {                                      /* masks + mickey counts   */
         /* AX/BX = the text cursor's screen/cursor masks, or the hardware cursor's scan
@@ -9368,8 +9368,8 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         /* CX = 0: the end of the list, at once. (DS:DX would name the mode; DX = 0 and
            DS is left alone -- writing DS from here would be loaded into a PM caller's
            selector too.) */
-        VDM_SET16(tib, VTIB_ECX, 0x0000);
-        VDM_SET16(tib, VTIB_EDX, 0x0000);
+        VDM_SET16(tib, VTIB_ECX, I33_MODE_LIST_END);
+        VDM_SET16(tib, VTIB_EDX, I33_MODE_LIST_END);
         break;
     case I33_FN_GET_HOT_SPOT:                                        /* cursor hot spot         */
         /* AX = the visibility counter as the MS driver keeps it: 0 shown, negative
@@ -9401,7 +9401,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
             for (index = 0; index < I33_ACC_LEN; ++index) g_MouseAcceleration[index] = guest[index];
             g_MouseAccelerationCurrent = bx;
         } else { VDM_SET16(tib, VTIB_EAX, I33_ACCELERATION_ERROR); break; }
-        VDM_SET16(tib, VTIB_EAX, 0x0000);
+        VDM_SET16(tib, VTIB_EAX, I33_SUCCESS);
         break; }
     case I33_FN_GET_ACCELERATION_PROFILES: {                                      /* get acceleration profiles  */
         /* AX=0, BX = the active profile, ES:SI -> the block -- written out fresh on every
@@ -9409,7 +9409,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         volatile BYTE *driverData = I33DriverData(); UINT index;
         ++g_MouseAccelerationCalls; I33AccelerationReady();
         for (index = 0; index < I33_ACC_LEN; ++index) driverData[VDD_MOUSE_ACC + index] = g_MouseAcceleration[index];
-        VDM_SET16(tib, VTIB_EAX, 0x0000);
+        VDM_SET16(tib, VTIB_EAX, I33_SUCCESS);
         VDM_SET16(tib, VTIB_EBX, (WORD)g_MouseAccelerationCurrent);
         I33ResultPointer(tib, source, VTIB_ESI, VDD_MOUSE_ACC);
         break; }
@@ -9427,7 +9427,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         }
         if (bx != I33_ACCELERATION_QUERY) g_MouseAccelerationCurrent = bx;
         for (index = 0; index < I33_ACC_LEN; ++index) driverData[VDD_MOUSE_ACC + index] = g_MouseAcceleration[index];
-        VDM_SET16(tib, VTIB_EAX, 0x0000);
+        VDM_SET16(tib, VTIB_EAX, I33_SUCCESS);
         VDM_SET16(tib, VTIB_EBX, (WORD)g_MouseAccelerationCurrent);
         I33ResultPointer(tib, source, VTIB_ESI,
                     (WORD)(VDD_MOUSE_ACC + I33_ACC_NAMES + (g_MouseAccelerationCurrent - 1) * I33_ACC_NAMELEN));
@@ -9449,7 +9449,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
             for (index = 0; index < I33_ACC_N * I33_ACC_NAMELEN; ++index) guest[index] = g_MouseAcceleration[I33_ACC_NAMES + index];
         } else
             for (index = 0; index < I33_ACC_N * I33_ACC_NAMELEN; ++index) g_MouseAcceleration[I33_ACC_NAMES + index] = guest[index];
-        VDM_SET16(tib, VTIB_EAX, 0x0000);
+        VDM_SET16(tib, VTIB_EAX, I33_SUCCESS);
         break; }
     case I33_FN_SWITCH_SETTINGS: {                                      /* switch settings + profiles */
         /* CX = the buffer's size, ES:DX -> it. AX=0, CX = bytes written (at most 154h);
@@ -9470,7 +9470,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         settings.Rate = (BYTE)g_MouseRate;
         count = I33SettingsBlock(block, cap, &settings, g_MouseAcceleration);
         for (index = 0; index < count; ++index) guest[index] = block[index];
-        VDM_SET16(tib, VTIB_EAX, 0x0000);
+        VDM_SET16(tib, VTIB_EAX, I33_SUCCESS);
         VDM_SET16(tib, VTIB_ECX, (WORD)count);
         break; }
     case I33_FN_GET_INI_FILE_NAME: {                                      /* initialization file name */
@@ -9482,7 +9482,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         volatile BYTE *driverData = I33DriverData(); UINT index;
         ++g_MouseAccelerationCalls;
         for (index = 0; index < sizeof iniName; ++index) driverData[VDD_MOUSE_INI + index] = (BYTE)iniName[index];
-        VDM_SET16(tib, VTIB_EAX, 0x0000);
+        VDM_SET16(tib, VTIB_EAX, I33_SUCCESS);
         I33ResultPointer(tib, source, VTIB_EDX, VDD_MOUSE_INI);
         break; }
     case I33_FN_HARDWARE_RESET:                                        /* mouse hardware reset    */
@@ -9501,16 +9501,16 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         break;
     case I33_FN_GET_ACTIVE_ADVANCED:                                        /* active advanced fns     */
         VDM_SET16(tib, VTIB_EAX, (WORD)I33_ACTIVE_FNS);
-        VDM_SET16(tib, VTIB_EBX, 0x0000);               /* BX/CX/DX reserved = 0   */
-        VDM_SET16(tib, VTIB_ECX, 0x0000);
-        VDM_SET16(tib, VTIB_EDX, 0x0000);
+        VDM_SET16(tib, VTIB_EBX, I33_RESERVED);               /* BX/CX/DX reserved = 0   */
+        VDM_SET16(tib, VTIB_ECX, I33_RESERVED);
+        VDM_SET16(tib, VTIB_EDX, I33_RESERVED);
         break;
     /* Logitech CyberMan / SWIFT probe. Doom makes it once and PRINTS the answer, so
        this is the one unimplemented call whose behaviour was already measured: the
        documented "no SWIFT support" reply is AX = 0, and leaving AX holding 0x53C1
        only happened to read as a refusal. Say no on purpose. */
     case I33_FN_SWIFT_SUPPORT:
-        VDM_SET16(tib, VTIB_EAX, 0x0000);
+        VDM_SET16(tib, VTIB_EAX, I33_NO_SWIFT);
         break;
     /* ── ⚠ `default:` IS THE BUG SHAPE THIS FILE HAS PAID FOR SIX TIMES. ─────────
          It returns with the guest's registers untouched, which is not "unsupported",

@@ -54,6 +54,14 @@
 #define I33_FAILED                      0xFFFF  /* 18h / 1Fh AX                         */
 #define I33_NO_BALLPOINT                0xFFFF  /* 30h AX                               */
 #define I33_HARDWARE_RESET_DONE         0xFFFF  /* 2Fh AX                               */
+#define I33_NOT_INSTALLED               0x0000  /* 00h AX: no driver                    */
+#define I33_SUCCESS                     0x0000  /* 2Bh-2Eh, 33h, 34h AX                 */
+#define I33_NO_ALTERNATE_HANDLER        0x0000  /* 19h CX                               */
+#define I33_DRIVER_ENABLED              0x0000  /* 26h BX: the driver is not disabled   */
+#define I33_NOT_BUSY                    0x0000  /* 25h BX/CX/DX: lock, in-driver, busy  */
+#define I33_MODE_LIST_END               0x0000  /* 29h CX (DX: no name)                 */
+#define I33_RESERVED                    0x0000  /* 32h BX/CX/DX                         */
+#define I33_NO_SWIFT                    0x0000  /* 53C1h AX: no SWIFT/CyberMan support  */
 #define I33_BUTTON_COUNT                0x0002
 #define I33_BUTTON_LEFT_BIT             1       /* the button-state bits (03h BX)        */
 #define I33_BUTTON_RIGHT_BIT            2
