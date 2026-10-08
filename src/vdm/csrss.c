@@ -87,7 +87,6 @@ HANDLE g_CsrssNextStandardHandles[CSRSS_STANDARD_HANDLES];   /* the next command
 #define CSRSS_STD_IN                 0
 #define CSRSS_STD_OUT                1
 #define CSRSS_STD_ERR                2
-#define CSRSS_VDM_FLAG_DOS           0x04    /* VDMState: a DOS VDM reporting its exit    */
 #define CSRSS_EXIT_VDM_FLAGS         0       /* ExitVDM's second argument                 */
 #define CSRSS_END_OF_STRING          0
 #define CSRSS_CARRIAGE_RETURN        '\r'
@@ -123,7 +122,7 @@ BOOL CsrssTaskDone(ULONG taskId, ULONG exitCode, DWORD *lastError, BOOL *didExit
        0xf00ac1e: `or byte [VDMState], 4`, ExitCode from the DOS block). This call
        releases the launcher and then WAITS for the console's next command -- there
        is no non-blocking form of the report (DONT_WAIT was tried: it blocked too). */
-    commandInfo.VDMState = CSRSS_VDM_FLAG_DOS;
+    commandInfo.VDMState = VDM_FLAG_DOS;
     succeeded = GetNextVDMCommand(&commandInfo);
     if (lastError) *lastError = GetLastError();
     g_CsrssNextApp[sizeof g_CsrssNextApp - CSRSS_LAST_CHAR_OFFSET] = CSRSS_END_OF_STRING; g_CsrssNextCommand[sizeof g_CsrssNextCommand - CSRSS_LAST_CHAR_OFFSET] = CSRSS_END_OF_STRING;

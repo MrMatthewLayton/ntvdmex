@@ -34,6 +34,7 @@ typedef const DOS_IMAGE *PCDOS_IMAGE;
 #define DOS_MZ_NEW_HEADER          0x3C   /* e_lfanew: a DWORD                          */
 #define DOS_MZ_HEADER_MIN          0x1C   /* shorter than this is not an MZ header      */
 #define DOS_MZ_NEW_HEADER_MIN      0x40   /* an e_lfanew below 40h is an old DOS .EXE   */
+#define DOS_EXE_SIGNATURE_SIZE     2      /* "MZ", and the new header's "NE" / "PE"    */
 #define DOS_MZ_PAGE_BYTES          512
 #define DOS_MZ_PAGE_PARAGRAPHS     32u    /* 512 / 16                                   */
 #define DOS_MZ_RELOCATION_ENTRY    4      /* each: WORD offset, then WORD segment       */

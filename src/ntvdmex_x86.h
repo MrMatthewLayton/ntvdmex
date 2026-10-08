@@ -221,6 +221,7 @@
 #define VDM_BOP1 0xC4
 #define VDM_BOP_LENGTH              3   /* C4 C4 nn                                 */
 #define VDM_BOP_SUBFUNCTION_LENGTH  4   /* C4 C4 nn sub                             */
+#define VDM_BOP_NUMBER_OFFSET       2   /* nn: the byte after C4 C4                 */
 
 /* EFLAGS. The plain names are `int` literals, the _U names `unsigned` (see ntvdmex_bits.h). */
 #define EFLAGS_CF           0x0001
@@ -259,6 +260,7 @@
 #define PIC_SLAVE_VECTOR_BASE       0x70
 #define VECTOR_IRQ0                 0x08
 #define VECTOR_IRQ1                 0x09
+#define VECTOR_IRQ2                 0x0A
 #define VECTOR_IRQ3                 0x0B
 #define VECTOR_IRQ5                 0x0D
 #define VECTOR_IRQ7                 0x0F

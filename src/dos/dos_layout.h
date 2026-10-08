@@ -196,6 +196,7 @@
 #define DOS_FLTSITE_N     32
 #define DOS_FLTRET_OFF    0x02E0   /* the client handler's far-return catcher   */
 #define DOS_BIOS_STUBS    0x0300
+#define DOS_BIOS_STUB_SIZE 4       /* BOP nn ; IRET or RETF                    */
 #define DOS_DPB_OFF       0x0340   /* AH=1Fh/32h drive parameter block, 33 bytes */
 #define DOS_MEDIA_OFF     0x0364   /* AH=1Bh/1Ch media descriptor byte           */
 
@@ -286,6 +287,9 @@
    Oracle, MS-DOS 6.22: all three match (SI=1) and INT 24h lives at 03E7:0155,
    inside COMMAND.COM. */
 #define DOS_CRIT_STUBS    0x04D0   /* 3 stubs x 4 bytes: INT 22h, 23h, 24h */
+#define DOS_CRIT_STUB_INT22  0      /* BOP 30h ; IRET                     */
+#define DOS_CRIT_STUB_INT23  4      /* IRET                               */
+#define DOS_CRIT_STUB_INT24  8      /* MOV AL,3 ; IRET                    */
 /* ── GH #34: WHERE DOS CALLS THE GUEST'S INT 24h FROM. `CD 24 / C4 C4 20` -- INT 24h,
      then BOP 20h at +2, which the exec loop recognises by its ADDRESS (not its
      number: 20h is the INT 21h BOP) and takes as "the handler answered in AL".

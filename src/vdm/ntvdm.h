@@ -38,6 +38,12 @@ typedef struct {
 
 #define VDM_GET_FIRST_COMMAND  0x100
 #define VDM_GET_ENVIRONMENT    0x400
+/* VDMState flags, as the code's own call shapes name them (rig, s73). */
+#define VDM_FLAG_FIRST_TASK    0x01
+#define VDM_FLAG_WOW           0x02
+#define VDM_FLAG_DOS           0x04    /* also: a DOS VDM reporting its exit */
+#define VDM_FLAG_RETRY         0x08
+#define VDM_FLAG_DONT_WAIT     0x20
 
 typedef BOOL (WINAPI *PFN_GetNextVDMCommand)(VDM_COMMAND_INFO *);
 

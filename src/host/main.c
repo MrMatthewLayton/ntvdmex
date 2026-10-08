@@ -2188,7 +2188,7 @@ static struct {
     WORD  EnvironmentSegment;                    /* the env COPY we made for it, if any; freed with it */
 } g_Exec[EXEC_MAX_DEPTH];
 static INT g_ExecDepth;
-
+#define PROGRAM_NAME_SIZE 64
 /* ── FILE > CLOSE PROGRAM ENDS A CHILD THAT NEVER ASKED TO END. (GH #152) ────────
      A program that exits unhooks what it hooked; one we END does not. Its INT 08h/09h
      would go on pointing into the block DosTerminate frees, and the shell would die
@@ -2206,7 +2206,7 @@ static volatile LONG g_CloseRequest;     /* UI -> exec thread: end the innermost
 static INT  g_CloseForced;           /* the exit in progress is ours, not the guest's */
 static INT  g_TopIsShell;           /* depth 0 is a shell: nothing to close there */
 static VOID ExecMachineSave(INT depth);    /* fwd: defined with CloseProgramNow */
-static CHAR g_ProgramName[64];           /* fwd: the status strip's name (defined below) */
+static CHAR g_ProgramName[PROGRAM_NAME_SIZE];           /* fwd: the status strip's name (defined below) */
 
 static BYTE g_ExecFileBuffer[0x80000];    /* child image; separate from the parent's */
 
@@ -19307,7 +19307,7 @@ static VOID DpmiInstallFaultTrampoline(VOID)
     g_DpmiFaultCodeSelector = (WORD)DPMI_LDT_SELECTOR(codeIndex);
     handlerArea[DPMI_FAULT_COFF + 0] = VDM_BOP0;          /* plant C4 C4 57 at code:COFF (0x580) */
     handlerArea[DPMI_FAULT_COFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_FAULT_COFF + 2] = DPMI_FAULT_BOP;
+    handlerArea[DPMI_FAULT_COFF + VDM_BOP_NUMBER_OFFSET] = DPMI_FAULT_BOP;
     /* the handler STACK selector (writable-data) */
     stackIndex = g_LdtNext++;
     g_Ldt[stackIndex].Base   = (DWORD)(ULONG_PTR)g_FaultStack;   /* #205: not guest memory */
@@ -19345,15 +19345,15 @@ static VOID DpmiInstallFaultTrampoline(VOID)
          Give class i its own 4-byte BOP; the reflected EIP then names it. */
     { volatile BYTE *sites = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_CTAB_SEG << PARAGRAPH_SHIFT);
       for (index = 0; index < DOS_FLTSITE_N; ++index) {
-          sites[DOS_FLTSITE_OFF + index * 4 + 0] = VDM_BOP0;
-          sites[DOS_FLTSITE_OFF + index * 4 + 1] = VDM_BOP1;
-          sites[DOS_FLTSITE_OFF + index * 4 + 2] = DPMI_FAULT_BOP;
-          sites[DOS_FLTSITE_OFF + index * 4 + 3] = X86_OP_RETF;      /* RETF, never reached  */
+          sites[DOS_FLTSITE_OFF + index * DOS_FLTSITE_SIZE + 0] = VDM_BOP0;
+          sites[DOS_FLTSITE_OFF + index * DOS_FLTSITE_SIZE + 1] = VDM_BOP1;
+          sites[DOS_FLTSITE_OFF + index * DOS_FLTSITE_SIZE + VDM_BOP_NUMBER_OFFSET] = DPMI_FAULT_BOP;
+          sites[DOS_FLTSITE_OFF + index * DOS_FLTSITE_SIZE + VDM_BOP_LENGTH] = X86_OP_RETF;      /* RETF, never reached  */
       }
       sites[DOS_FLTRET_OFF + 0] = VDM_BOP0;               /* the handler's retf lands here */
       sites[DOS_FLTRET_OFF + 1] = VDM_BOP1;
-      sites[DOS_FLTRET_OFF + 2] = DPMI_FLTRET_BOP;
-      sites[DOS_FLTRET_OFF + 3] = X86_OP_RETF; }
+      sites[DOS_FLTRET_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_FLTRET_BOP;
+      sites[DOS_FLTRET_OFF + VDM_BOP_LENGTH] = X86_OP_RETF; }
     for (index = 0; index * 0x10 < sizeof g_FaultTable; ++index) {
         *(WORD  *)(g_FaultTable + index * 0x10 + 0) = g_DpmiFaultCodeSelector;
         *(DWORD *)(g_FaultTable + index * 0x10 + 4) = (index < DOS_FLTSITE_N)
@@ -28606,7 +28606,7 @@ static INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, U
     g_DpmiVi = previousVi;
     return done;
 }
-
+#define FILE_TYPE_NOT_ASKED_U 0xFFFFFFFFu   /* the handle report: no handle to ask about */
 /* ── ★★★ THE CLIENT EXITED: GIVE BACK WHAT IT HAD AND LEAVE PROTECTED MODE. (s80) ───
      A DPMI client's `AH=4Ch` in protected mode ended the WHOLE VDM, because the switch
      into PM was one-way: DpmiSwitchToProtectedMode() builds global state and nothing ever took
@@ -28738,7 +28738,7 @@ static VOID DpmiClientTeardown(VOID)
     cursor = LogPut(cursor, ")\r\n");
     LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
 }
-
+enum { NT_AWARE_SHELL_BOPS_MIN = 8, ROUTED_PATH_MAX = 120, WOW_COMMAND_DIRECTORY_MAX = 0x10C, SHELL_HEADER_READ = 0x44, COMMAND_COM_LENGTH = 11, PIF_EXTENSION_LENGTH = 4, STD_HANDLE_REPORTS = 5 };   /* WinMain's launch path */
 /* ================================================================================ *
  *  run 53 (GH #2): host-interpreted protected mode -- the emulation path.           *
  *                                                                                    *
@@ -30402,16 +30402,16 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
              candidates actually WERE. A handle value with a file type beside it
              settles "is there a redirect on this VDM at all" in one line, for
              every one of the three streams, whether or not we end up using it. */
-        {   PCSTR handleNames[5]; HANDLE handles[5]; INT item;
+        {   PCSTR handleNames[STD_HANDLE_REPORTS]; HANDLE handles[STD_HANDLE_REPORTS]; INT item;
             handleNames[0] = "vdm.StdIn";   handles[0] = g_CommandInfo.StdIn;
             handleNames[1] = "vdm.StdOut";  handles[1] = g_CommandInfo.StdOut;
             handleNames[2] = "vdm.StdErr";  handles[2] = g_CommandInfo.StdErr;
             handleNames[3] = "si.hStdOut";  handles[3] = g_CommandInfo.StartupInfo.hStdOutput;
             handleNames[4] = "si.hStdIn";   handles[4] = g_CommandInfo.StartupInfo.hStdInput;
             cursor = LogPut(cursor, "STAGE1: vdm handles");
-            for (item = 0; item < 5; ++item) {
+            for (item = 0; item < STD_HANDLE_REPORTS; ++item) {
                 DWORD fileType = (handles[item] && handles[item] != INVALID_HANDLE_VALUE)
-                            ? GetFileType(handles[item]) : 0xFFFFFFFFu;
+                            ? GetFileType(handles[item]) : FILE_TYPE_NOT_ASKED_U;
                 cursor = LogPut(cursor, " "); cursor = LogPut(cursor, handleNames[item]);
                 cursor = LogPut(cursor, "=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)handles[item]);
                 cursor = LogPut(cursor, "/t"); cursor = LogHex(cursor, fileType);
@@ -30455,7 +30455,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         commandInfo2.Env = g_Environment2; commandInfo2.EnvLen = sizeof g_Environment2; commandInfo2.Desktop = desktop2; commandInfo2.DesktopLen = sizeof desktop2;
         commandInfo2.Title = title2; commandInfo2.TitleLen = sizeof title2; commandInfo2.Reserved = reservedBuffer2; commandInfo2.ReservedLen = sizeof reservedBuffer2;
         commandInfo2.StartupInfo.cb = sizeof(STARTUPINFOA);
-        commandInfo2.VDMState = 0x04 | 0x01 | 0x20;              /* VDM_FLAG_DOS | FIRST_TASK | DONT_WAIT */
+        commandInfo2.VDMState = VDM_FLAG_DOS | VDM_FLAG_FIRST_TASK | VDM_FLAG_DONT_WAIT;              /* VDM_FLAG_DOS | FIRST_TASK | DONT_WAIT */
         commandInfo2.TaskId = g_CommandInfo.TaskId;
         ok2 = CsrssGetCommand(&commandInfo2, &error2);
         g_Application2[sizeof g_Application2 - 1] = 0; g_CommandLine2[sizeof g_CommandLine2 - 1] = 0; g_CurrentDirectory2[sizeof g_CurrentDirectory2 - 1] = 0;
@@ -30503,11 +30503,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
              only believed when it is drive-qualified or UNC -- TRUE with junk is not
              a program. */
         {   static const struct { DWORD VdmState; INT IsOwnTask; INT IsHandshake; PCSTR Description; } vdmStates[] = {
-                { 0x100 | 0x02 | 0x20, 1, 1, "GET_FIRST|WOW|DONT_WAIT taskid=-i (handshake)" },
-                { 0x02 | 0x01 | 0x20,  1, 0, "WOW|FIRST|DONT_WAIT taskid=-i" },
-                { 0x02 | 0x01 | 0x20,  0, 0, "WOW|FIRST|DONT_WAIT taskid=0"  },
-                { 0x02 | 0x20,         1, 0, "WOW|DONT_WAIT taskid=-i"       },
-                { 0x02 | 0x01 | 0x08 | 0x20, 1, 0, "WOW|FIRST|RETRY|DONT_WAIT taskid=-i" },
+                { VDM_GET_FIRST_COMMAND | VDM_FLAG_WOW | VDM_FLAG_DONT_WAIT, 1, 1, "GET_FIRST|WOW|DONT_WAIT taskid=-i (handshake)" },
+                { VDM_FLAG_WOW | VDM_FLAG_FIRST_TASK | VDM_FLAG_DONT_WAIT, 1, 0, "WOW|FIRST|DONT_WAIT taskid=-i" },
+                { VDM_FLAG_WOW | VDM_FLAG_FIRST_TASK | VDM_FLAG_DONT_WAIT, 0, 0, "WOW|FIRST|DONT_WAIT taskid=0"  },
+                { VDM_FLAG_WOW | VDM_FLAG_DONT_WAIT, 1, 0, "WOW|DONT_WAIT taskid=-i"       },
+                { VDM_FLAG_WOW | VDM_FLAG_FIRST_TASK | VDM_FLAG_RETRY | VDM_FLAG_DONT_WAIT, 1, 0, "WOW|FIRST|RETRY|DONT_WAIT taskid=-i" },
             };
             UINT si; INT named = 0;
             for (si = 0; si < sizeof vdmStates / sizeof vdmStates[0] && !named; ++si) {
@@ -30520,7 +30520,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 ok2 = CsrssGetCommand(&commandInfo2, &error2);
                 g_Application2[sizeof g_Application2 - 1] = 0; g_CommandLine2[sizeof g_CommandLine2 - 1] = 0; g_CurrentDirectory2[sizeof g_CurrentDirectory2 - 1] = 0;
                 named = ok2 && !vdmStates[si].IsHandshake
-                        && ((g_Application2[0] >= 'A' && (g_Application2[0] | 0x20) <= 'z' && g_Application2[1] == ':' && g_Application2[2] == '\\')
+                        && ((g_Application2[0] >= 'A' && (g_Application2[0] | ASCII_CASE_BIT) <= 'z' && g_Application2[1] == ':' && g_Application2[2] == '\\')
                             || (g_Application2[0] == '\\' && g_Application2[1] == '\\'));
                 cursor = LogPut(cursor, "STAGE1: WOW command fetch ["); cursor = LogPut(cursor, vdmStates[si].Description); cursor = LogPut(cursor, "] -> ");
                 cursor = LogPut(cursor, ok2 ? "TRUE" : "FALSE");
@@ -30554,7 +30554,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 /* #164: WOWEXEC changes to this before LoadModule, so the task starts
                    in the folder it was launched from -- 8.3, as krnl386 sees paths. */
                 if (!GetShortPathNameA(g_CurrentDirectory2, g_WowCommandDirectory, sizeof g_WowCommandDirectory)
-                    || lstrlenA(g_WowCommandDirectory) >= 0x10C)
+                    || lstrlenA(g_WowCommandDirectory) >= WOW_COMMAND_DIRECTORY_MAX)
                     g_WowCommandDirectory[0] = 0;
             }
             cursor = LogPut(cursor, "STAGE2: Win16 program from CSRSS -- LAUNCH ["); cursor = LogPut(cursor, g_WowCommandProgram);
@@ -30828,7 +30828,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     if (readCount && !g_WowLaunch && programPathBuffer[0]) {
         INT pathLength = lstrlenA(programPathBuffer);
         PIF_INFO pif;
-        if (pathLength > 4 && !lstrcmpiA(programPathBuffer + pathLength - 4, ".PIF")
+        if (pathLength > PIF_EXTENSION_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - PIF_EXTENSION_LENGTH, ".PIF")
             && PifParse(g_FileBuffer, readCount, &pif)) {
             CHAR program[MAX_PATH], directory[MAX_PATH], pifDirectory[MAX_PATH], pifCandidate[MAX_PATH], extra[256];
             HANDLE pifHandle = INVALID_HANDLE_VALUE;
@@ -30891,15 +30891,15 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         && GetFileAttributesA(DIRECTLAUNCH_FLAG) == INVALID_FILE_ATTRIBUTES) {
         INT pathLength = lstrlenA(programPathBuffer), isCommand = 0, isNewExe = 0;
         CHAR shortPath[300]; DWORD shortLength;
-        isCommand = (pathLength >= 11 && !lstrcmpiA(programPathBuffer + pathLength - 11, "COMMAND.COM"));
-        if (readCount > 0x40 && g_FileBuffer[0] == 'M' && g_FileBuffer[1] == 'Z') {
-            DWORD newHeaderOffset = *(const DWORD *)(g_FileBuffer + 0x3C);
-            if (newHeaderOffset > 0x40 && newHeaderOffset + 2 < readCount
+        isCommand = (pathLength >= COMMAND_COM_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - COMMAND_COM_LENGTH, "COMMAND.COM"));
+        if (readCount > DOS_MZ_NEW_HEADER_MIN && g_FileBuffer[0] == 'M' && g_FileBuffer[1] == 'Z') {
+            DWORD newHeaderOffset = *(const DWORD *)(g_FileBuffer + DOS_MZ_NEW_HEADER);
+            if (newHeaderOffset > DOS_MZ_NEW_HEADER_MIN && newHeaderOffset + DOS_EXE_SIGNATURE_SIZE < readCount
                 && ((g_FileBuffer[newHeaderOffset] == 'N' && g_FileBuffer[newHeaderOffset + 1] == 'E')
                     || (g_FileBuffer[newHeaderOffset] == 'P' && g_FileBuffer[newHeaderOffset + 1] == 'E'))) isNewExe = 1;
         }
         shortLength = GetShortPathNameA(programPathBuffer, shortPath, sizeof shortPath);
-        if (!isCommand && !isNewExe && shortLength && shortLength < 120 && shortLength + 1 + (DWORD)lstrlenA(args) < 126) {
+        if (!isCommand && !isNewExe && shortLength && shortLength < ROUTED_PATH_MAX && shortLength + 1 + (DWORD)lstrlenA(args) < DOS_PSP_COMMAND_TAIL_MAX) {
             lstrcpynA(g_FirstProgram, shortPath, sizeof g_FirstProgram);
             lstrcpynA(g_FirstTail, args, sizeof g_FirstTail);
             g_Routed = 1;
@@ -30931,12 +30931,12 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 /* ⛔ A Windows program is not a DOS shell. The Browse filter allows *.exe
                      (a DOS shell can be one), so a user can pick cmd.exe; loaded as a DOS
                      guest a PE image just runs its stub or worse. Refuse it and fall back. */
-                BYTE header[0x44]; DWORD headerRead = 0;
+                BYTE header[SHELL_HEADER_READ]; DWORD headerRead = 0;
                 ReadFile(shellHandle, header, sizeof header, &headerRead, NULL);
                 if (headerRead == sizeof header && header[0] == 'M' && header[1] == 'Z') {
-                    DWORD newHeaderOffset = *(const DWORD *)(header + 0x3C); BYTE signatureBytes[2]; DWORD signatureRead = 0;
-                    if (newHeaderOffset >= 0x40 && SetFilePointer(shellHandle, (LONG)newHeaderOffset, NULL, FILE_BEGIN) == newHeaderOffset
-                        && ReadFile(shellHandle, signatureBytes, 2, &signatureRead, NULL) && signatureRead == 2
+                    DWORD newHeaderOffset = *(const DWORD *)(header + DOS_MZ_NEW_HEADER); BYTE signatureBytes[DOS_EXE_SIGNATURE_SIZE]; DWORD signatureRead = 0;
+                    if (newHeaderOffset >= DOS_MZ_NEW_HEADER_MIN && SetFilePointer(shellHandle, (LONG)newHeaderOffset, NULL, FILE_BEGIN) == newHeaderOffset
+                        && ReadFile(shellHandle, signatureBytes, DOS_EXE_SIGNATURE_SIZE, &signatureRead, NULL) && signatureRead == DOS_EXE_SIGNATURE_SIZE
                         && ((signatureBytes[0] == 'N' && signatureBytes[1] == 'E') || (signatureBytes[0] == 'P' && signatureBytes[1] == 'E'))) {
                         CloseHandle(shellHandle); shellHandle = INVALID_HANDLE_VALUE;
                         LogPut(LogPut(whyBuffer, shellSource), " NAMES A WINDOWS PROGRAM, NOT A DOS SHELL");
@@ -30994,18 +30994,18 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
        ⚠ It is only consulted for a program we loaded as THE SHELL. A DOS game that
          somehow tripped the count must not be told it is running on DOS 5. */
     g_GuestNtvdmBops = 0;
-    if (readCount > 4) {
+    if (readCount > VDM_BOP_SUBFUNCTION_LENGTH) {
         DWORD item;
-        for (item = 0; item + 3 < readCount; ++item)
+        for (item = 0; item + VDM_BOP_LENGTH < readCount; ++item)
             if (g_FileBuffer[item] == VDM_BOP0 && g_FileBuffer[item+1] == VDM_BOP1 && g_FileBuffer[item+2] == NTVDM_BOP_CMD)
                 ++g_GuestNtvdmBops;
     }
-    g_GuestNtAware = (wasShell && g_GuestNtvdmBops >= 8);
+    g_GuestNtAware = (wasShell && g_GuestNtvdmBops >= NT_AWARE_SHELL_BOPS_MIN);
     /* #152: Close Program has nothing to close at a shell's own prompt -- whether we
        chose the shell or something named COMMAND.COM explicitly. */
     {   INT pathLength = lstrlenA(programPathBuffer);
         g_TopIsShell = wasShell
-            || (pathLength >= 11 && !lstrcmpiA(programPathBuffer + pathLength - 11, "COMMAND.COM")); }
+            || (pathLength >= COMMAND_COM_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - COMMAND_COM_LENGTH, "COMMAND.COM")); }
     /* ── ★ THE NTVDM-AWARE SHELL IS LAUNCHED `/P <its own directory>`, AS STOCK DOES. ──
          ntvdm.exe carries `%s=%s%s /p %s\system32`; s79 found /P mattered and the bare
          launch later dropped every argument. Without /P, PERMCOM ([0x2B0]) stays 0, so
@@ -31033,7 +31033,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     /* status-bar program name = basename of programPathBuffer (if any) */
     { PCSTR baseName = programPathBuffer, scan; INT item = 0;
       for (scan = programPathBuffer; *scan; ++scan) if (*scan == '\\' || *scan == '/') baseName = scan + 1;
-      if (*baseName) { while (baseName[item] && item < 63) { g_ProgramName[item] = baseName[item]; ++item; } g_ProgramName[item] = 0; } }
+      if (*baseName) { while (baseName[item] && item < PROGRAM_NAME_SIZE - 1) { g_ProgramName[item] = baseName[item]; ++item; } g_ProgramName[item] = 0; } }
     /* No flag to raise: the UI tick polls g_ProgramName and repaints the strip when it
        changes. See StatusUpdate. */
 
@@ -31053,7 +31053,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         WORD top = BiosConventionalTopParagraph(g_ConventionalKbWant), alloc = 0;
         WORD avail = (WORD)(top - DOS_PSP_SEG);
         INT high = 0, fits;
-        if (readCount >= 2 && g_FileBuffer[0] == 'M' && g_FileBuffer[1] == 'Z')
+        if (readCount >= DOS_EXE_SIGNATURE_SIZE && g_FileBuffer[0] == 'M' && g_FileBuffer[1] == 'Z')
             fits = DosExecSize(g_FileBuffer, readCount, avail, &alloc, &high) == 0;
         else                                /* .COM: PSP + the image + a 256-byte stack */
             fits = (UINT32)DOS_PSP_PARAGRAPHS + ((readCount + DOS_PSP_SIZE + PARAGRAPH_LAST_BYTE_U) >> PARAGRAPH_SHIFT) <= (UINT32)avail;
@@ -31074,15 +31074,15 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
 
     handlerArea = (volatile BYTE *)(DOS_HDLR_SEG << PARAGRAPH_SHIFT);            /* INT 21h BOP handler */
     for (index = 0; index < sizeof(bop); ++index) handlerArea[DOS_HDLR_INT21_STUB_OFF + index] = bop[index];
-    *(volatile WORD *)0x84 = 0x0000;                        /* IVT[0x21].offset    */
-    *(volatile WORD *)0x86 = DOS_HDLR_SEG;                  /* IVT[0x21].segment   */
+    *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_DOS) = DOS_HDLR_INT21_STUB_OFF;                        /* IVT[0x21].offset    */
+    *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_DOS) = DOS_HDLR_SEG;                  /* IVT[0x21].segment   */
     handlerArea[DOS_DBCS_OFF] = 0; handlerArea[DOS_DBCS_OFF + 1] = 0;     /* empty DBCS table    */
     for (index = 0; index < sizeof(bop10); ++index) handlerArea[DOS_HDLR_INT10_STUB_OFF + index] = bop10[index];  /* INT 10h stub */
-    *(volatile WORD *)0x40 = 0x0020;                        /* IVT[0x10].offset    */
-    *(volatile WORD *)0x42 = DOS_HDLR_SEG;                  /* IVT[0x10].segment   */
+    *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_VIDEO) = DOS_HDLR_INT10_STUB_OFF;                        /* IVT[0x10].offset    */
+    *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_VIDEO) = DOS_HDLR_SEG;                  /* IVT[0x10].segment   */
     for (index = 0; index < sizeof(bop16); ++index) handlerArea[DOS_HDLR_INT16_STUB_OFF + index] = bop16[index];  /* INT 16h stub */
-    *(volatile WORD *)0x58 = 0x0028;                        /* IVT[0x16].offset    */
-    *(volatile WORD *)0x5A = DOS_HDLR_SEG;                  /* IVT[0x16].segment   */
+    *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_KEYBOARD_SERVICES) = DOS_HDLR_INT16_STUB_OFF;                        /* IVT[0x16].offset    */
+    *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_KEYBOARD_SERVICES) = DOS_HDLR_SEG;                  /* IVT[0x16].segment   */
     for (index = 0; index < sizeof(bop33); ++index) handlerArea[DOS_HDLR_INT33_STUB_OFF + index] = bop33[index];  /* INT 33h stub */
     *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_MOUSE))     = DOS_HDLR_INT33_STUB_OFF;              /* IVT[0x33].offset    */
     *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_MOUSE)) = DOS_HDLR_SEG;        /* IVT[0x33].segment   */
@@ -31095,7 +31095,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     for (index = 0; index < sizeof(bop09); ++index) handlerArea[DOS_HDLR_INT09_STUB_OFF + index] = bop09[index];  /* INT 09h default iret (0x4C-0x4F) */
     /* INT 33h event-handler return: the guest's handler RETFs here (see MouseCallbackTry). */
     handlerArea[MS_CB_RET_OFF + 0] = VDM_BOP0; handlerArea[MS_CB_RET_OFF + 1] = VDM_BOP1;
-    handlerArea[MS_CB_RET_OFF + 2] = MS_CB_BOP; handlerArea[MS_CB_RET_OFF + 3] = X86_OP_IRET;
+    handlerArea[MS_CB_RET_OFF + VDM_BOP_NUMBER_OFFSET] = MS_CB_BOP; handlerArea[MS_CB_RET_OFF + VDM_BOP_LENGTH] = X86_OP_IRET;
     /* DEFAULT DEVICE-IRQ HANDLERS. A real BIOS points the unused hardware vectors at a
        handler that just acknowledges and returns; we had them pointing at whatever junk was
        in the IVT, which on this box read F000:A390 -- unowned ROM. That was harmless only so
@@ -31107,11 +31107,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     handlerArea[DOS_CASEMAP_OFF]   = X86_OP_RETF;                                /* AH=38h case map: RETF */
     { volatile BYTE *swappableDataArea = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_SDA_SEG << PARAGRAPH_SHIFT);   /* AH=34h/5D06h */
       INT item; for (item = 0; item < DOS_SDA_LEN; ++item) swappableDataArea[DOS_SDA_OFF + item] = 0; }
-    for (index = 0x0A; index <= 0x0F; ++index) {
+    for (index = VECTOR_IRQ2; index <= VECTOR_IRQ7; ++index) {
         *(volatile WORD *)(IVT_OFFSET_ADDRESS(index))     = DOS_IRET_STUB_OFF;
         *(volatile WORD *)(IVT_SEGMENT_ADDRESS(index)) = DOS_HDLR_SEG;
     }
-    for (index = 0x70; index <= 0x77; ++index) {
+    for (index = VECTOR_IRQ8; index <= VECTOR_IRQ15; ++index) {
         *(volatile WORD *)(IVT_OFFSET_ADDRESS(index))     = DOS_IRET_STUB_OFF;
         *(volatile WORD *)(IVT_SEGMENT_ADDRESS(index)) = DOS_HDLR_SEG;
     }
@@ -31144,29 +31144,29 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     /* DPMI mode-switch entry (far-called): BOP 0x50 ; RETF. The host services the
        BOP by switching to PM; the RETF only executes if the switch fails. */
     handlerArea[DPMI_ENTRY_OFF + 0] = VDM_BOP0; handlerArea[DPMI_ENTRY_OFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_ENTRY_OFF + 2] = DPMI_BOP; handlerArea[DPMI_ENTRY_OFF + 3] = X86_OP_RETF; /* RETF */
+    handlerArea[DPMI_ENTRY_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_BOP; handlerArea[DPMI_ENTRY_OFF + VDM_BOP_LENGTH] = X86_OP_RETF; /* RETF */
     /* DPMI 0301 real-mode-call return catcher: BOP 0x54 (no IRET/RETF -- the 0301
        handler detects it and returns to PM, it never resumes past it). */
     handlerArea[DPMI_RMRET_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RMRET_OFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_RMRET_OFF + 2] = DPMI_RMRET_BOP;
+    handlerArea[DPMI_RMRET_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_RMRET_BOP;
     /* DPMI 0303 real-mode callback entries (one per slot) + the PM-return catcher. */
     { INT callbackSlot; for (callbackSlot = 0; callbackSlot < DPMI_CB_SLOTS; ++callbackSlot) {
         WORD entry = DpmiCallbackEntry(DPMI_CB_BASE_OFF, callbackSlot);
         handlerArea[entry + 0] = VDM_BOP0;
         handlerArea[entry + 1] = VDM_BOP1;
-        handlerArea[entry + 2] = DPMI_CB_BOP;
+        handlerArea[entry + VDM_BOP_NUMBER_OFFSET] = DPMI_CB_BOP;
     } }
     handlerArea[DPMI_PMRET_OFF + 0] = VDM_BOP0; handlerArea[DPMI_PMRET_OFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_PMRET_OFF + 2] = DPMI_PMRET_BOP;
+    handlerArea[DPMI_PMRET_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_PMRET_BOP;
     /* 0306 raw mode-switch entries. Both are bare BOPs: the host completes the switch
        by rewriting the CONTEXT, so control never resumes past the BOP and no RETF/IRET
        tail is wanted (the same shape as DPMI_RMRET_OFF). The protected-to-real entry
        lives in this segment too and is reached through a code selector based here --
        see the 0306 handler. */
     handlerArea[DPMI_RAW2PM_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RAW2PM_OFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_RAW2PM_OFF + 2] = DPMI_RAW2PM_BOP;
+    handlerArea[DPMI_RAW2PM_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_RAW2PM_BOP;
     handlerArea[DPMI_RAW2RM_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RAW2RM_OFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_RAW2RM_OFF + 2] = DPMI_RAW2RM_BOP;
+    handlerArea[DPMI_RAW2RM_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_RAW2RM_BOP;
     /* 0305 save/restore: a register-preserving no-op (see the define). */
     handlerArea[DPMI_SSR_OFF] = X86_OP_RETF;                               /* RETF */
     /* (GH #18 run 67: the PM-fault handler BOP is planted at the handler CODE selector's
@@ -31179,9 +31179,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     { UINT byteIndex;
       volatile BYTE *controlBytes = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT);
       for (byteIndex = 0; byteIndex < sizeof(biosInts)/sizeof(biosInts[0]); ++byteIndex) {
-          UINT offset = DOS_BIOS_STUBS + byteIndex * 4;
+          UINT offset = DOS_BIOS_STUBS + byteIndex * DOS_BIOS_STUB_SIZE;
           controlBytes[offset + 0] = VDM_BOP0; controlBytes[offset + 1] = VDM_BOP1;
-          controlBytes[offset + 2] = biosInts[byteIndex][1];
+          controlBytes[offset + VDM_BOP_NUMBER_OFFSET] = biosInts[byteIndex][1];
           /* ── INT 25h/26h RETURN WITH THE CALLER'S FLAGS STILL PUSHED. ───────
                Every other vector here ends in IRET. DOS's absolute disk read and
                write do NOT: they return by RETF, deliberately leaving the FLAGS
@@ -31189,12 +31189,12 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                discards itself (`add sp,2`). Ending them with IRET pops that word
                and the caller's `add sp,2` then eats its own return address --
                corruption that surfaces later, somewhere else. (GH #44) */
-          controlBytes[offset + 3] = (biosInts[byteIndex][0] == 0x25 || biosInts[byteIndex][0] == 0x26)
+          controlBytes[offset + VDM_BOP_LENGTH] = (biosInts[byteIndex][0] == VECTOR_ABSOLUTE_DISK_READ || biosInts[byteIndex][0] == VECTOR_ABSOLUTE_DISK_WRITE)
                         ? X86_OP_RETF   /* RETF */
                         : X86_OP_IRET;  /* IRET */
           *(volatile WORD *)(IVT_OFFSET_ADDRESS(biosInts[byteIndex][0]))     = (WORD)offset;
           *(volatile WORD *)(IVT_SEGMENT_ADDRESS(biosInts[byteIndex][0])) = DOS_CTAB_SEG;
-          if (biosInts[byteIndex][0] == 0x15) g_Int15StubOffset = (WORD)offset;   /* #244 */
+          if (biosInts[byteIndex][0] == VECTOR_SYSTEM) g_Int15StubOffset = (WORD)offset;   /* #244 */
       } }
 
     /* ── INT 22h / 23h / 24h: REAL VECTORS, SO THE PSP CAN SAVE SOMETHING. (#34) ──
@@ -31213,19 +31213,19 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          that jumps there actually exits instead of falling through the IVT. */
     {   volatile BYTE *controlBytes = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT);
         UINT position = DOS_CRIT_STUBS;
-        controlBytes[position+0] = VDM_BOP0; controlBytes[position+1] = VDM_BOP1; controlBytes[position+2] = DOS_BOP_INT20; controlBytes[position+3] = X86_OP_IRET;
+        controlBytes[position+0] = VDM_BOP0; controlBytes[position+1] = VDM_BOP1; controlBytes[position+VDM_BOP_NUMBER_OFFSET] = DOS_BOP_INT20; controlBytes[position+VDM_BOP_LENGTH] = X86_OP_IRET;
         *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TERMINATE_ADDRESS))     = (WORD)position;              /* INT 22h */
         *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TERMINATE_ADDRESS)) = DOS_CTAB_SEG;
-        controlBytes[position+4] = X86_OP_IRET;                                          /* INT 23h: IRET */
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CTRL_C))     = (WORD)(position + 4);
+        controlBytes[position+DOS_CRIT_STUB_INT23] = X86_OP_IRET;                                          /* INT 23h: IRET */
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CTRL_C))     = (WORD)(position + DOS_CRIT_STUB_INT23);
         *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CTRL_C)) = DOS_CTAB_SEG;
-        controlBytes[position+8] = X86_OP_MOV_IMM_BYTE_FIRST; controlBytes[position+9] = 0x03; controlBytes[position+10] = X86_OP_IRET;         /* mov al,3 ; iret */
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CRITICAL_ERROR))     = (WORD)(position + 8);        /* INT 24h */
+        controlBytes[position+DOS_CRIT_STUB_INT24] = X86_OP_MOV_IMM_BYTE_FIRST; controlBytes[position+DOS_CRIT_STUB_INT24+1] = DOS_CRITICAL_ERROR_FAIL; controlBytes[position+DOS_CRIT_STUB_INT24+2] = X86_OP_IRET;         /* mov al,3 ; iret */
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CRITICAL_ERROR))     = (WORD)(position + DOS_CRIT_STUB_INT24);        /* INT 24h */
         *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CRITICAL_ERROR)) = DOS_CTAB_SEG;
         /* #34: the site DOS calls the guest's INT 24h from -- see CriticalRaise. */
-        controlBytes[DOS_CRIT_RAISE + 0] = X86_OP_INT; controlBytes[DOS_CRIT_RAISE + 1] = 0x24;   /* int 24h  */
+        controlBytes[DOS_CRIT_RAISE + 0] = X86_OP_INT; controlBytes[DOS_CRIT_RAISE + 1] = VECTOR_CRITICAL_ERROR;   /* int 24h  */
         controlBytes[DOS_CRIT_RETURN + 0] = VDM_BOP0; controlBytes[DOS_CRIT_RETURN + 1] = VDM_BOP1;
-        controlBytes[DOS_CRIT_RETURN + 2] = DOS_BOP_INT21;                                 /* bop 20h  */
+        controlBytes[DOS_CRIT_RETURN + VDM_BOP_NUMBER_OFFSET] = DOS_BOP_INT21;                                 /* bop 20h  */
     }
     /* #251: DOS's AUX/PRN driver code, which INT 21h resumes the guest in -- see
        dos_auxprn.asm for why it is guest code and what it was measured against. */
@@ -31255,8 +31255,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
        fill only the genuinely null ones, and name them in the log. */
     { INT number, count = 0, start = -1;
       cursor = LogPut(cursor, "STAGE0: null IVT vectors -> IRET stub:");
-      for (number = 0; number <= 256; ++number) {                  /* 256 flushes a trailing run */
-          INT isNullVector = (number < 256) && (*(volatile DWORD *)(IVT_OFFSET_ADDRESS(number)) == 0);
+      for (number = 0; number <= IVT_VECTORS; ++number) {                  /* 256 flushes a trailing run */
+          INT isNullVector = (number < IVT_VECTORS) && (*(volatile DWORD *)(IVT_OFFSET_ADDRESS(number)) == 0);
           if (isNullVector) {
               *(volatile WORD *)(IVT_OFFSET_ADDRESS(number))     = DOS_IRET_STUB_OFF;
               *(volatile WORD *)(IVT_SEGMENT_ADDRESS(number)) = DOS_HDLR_SEG;
@@ -31492,7 +31492,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         DosInt21SetShellPsp(&machine, DOS_PSP_SEG, 1);
         dosVersionSource = "the setting -- the NTVDM-aware shell ITSELF is told 5.00 (per process, SETVER-style)";
         g_DosVersionShell = 1;
-    } else if (g_GuestNtvdmBops >= 8 && g_TopIsShell) {
+    } else if (g_GuestNtvdmBops >= NT_AWARE_SHELL_BOPS_MIN && g_TopIsShell) {
         /* s91: XP's COMMAND.COM launched AS THE PROGRAM -- `command.com /c prog > file`
              from cmd.exe, or a user typing `command` there. It is not "the shell we
              chose", so the rule above did not apply, and on the default 6.22 it said
@@ -32721,7 +32721,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             } else {
                 UINT offset = DOS_GENSTUB_OFF + count * 4;
                 controlBytes[offset + 0] = VDM_BOP0; controlBytes[offset + 1] = VDM_BOP1;
-                controlBytes[offset + 2] = DOS_GENSTUB_BOP; controlBytes[offset + 3] = X86_OP_IRET;            /* IRET */
+                controlBytes[offset + VDM_BOP_NUMBER_OFFSET] = DOS_GENSTUB_BOP; controlBytes[offset + VDM_BOP_LENGTH] = X86_OP_IRET;            /* IRET */
                 g_GenericStubVector[count] = (BYTE)number;
                 *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(number))     = (WORD)offset;
                 *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(number)) = DOS_CTAB_SEG;
