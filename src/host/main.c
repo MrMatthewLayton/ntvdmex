@@ -725,7 +725,7 @@ static INT   g_BackToPrompt;          /* Close Program ended it: next sub 01 = p
    why the class has to be distinguishable at all. The handler segment cannot host them:
    it is 256 bytes with 16 free, and eight 3-byte BOPs do not fit. */
 #define DPMI_FAULT_SITE(i) (((DOS_CTAB_SEG << 4) - (DOS_HDLR_SEG << 4)) \
-                            + DOS_FLTSITE_OFF + (i) * 4)
+                            + DOS_FLTSITE_OFF + (i) * DOS_FLTSITE_SIZE)
 /* Where the client's exception handler's FAR RETURN lands. DPMI 0.9 puts a return CS:IP
    at the bottom of the exception frame and the handler exits through it with a `retf`
    -- krnl386's handler exits exactly that way (observed), having first rewritten the
@@ -27935,20 +27935,20 @@ static INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip)
     stackBase  = DpmiSelectorBase(g_DpmiFaultSelector);
     esp = VDM_REG16(tib, VTIB_ESP);
     frame  = (volatile WORD *)(ULONG_PTR)(stackBase + esp);
-    if (!stackBase || !HostReadable((const VOID *)frame, 0x10)) return 0;
+    if (!stackBase || !HostReadable((const VOID *)frame, DPMI_FRAME16_SIZE)) return 0;
     if (eip == DPMI_FLTRET_COFF) {
         /* the handler's RETF popped the two return words: SP is on the error code */
-        VDM_SET16(tib, VTIB_SS, frame[5]); VDM_REG(tib, VTIB_ESP) = frame[4];
-        VDM_SET16(tib, VTIB_CS, frame[2]); VDM_REG(tib, VTIB_EIP) = frame[1];
-        VDM_SET16(tib, VTIB_EFLAGS, frame[3]);
-        lineCursor = LogPut(lineCursor, "NESTED EXC RETURN -> resume 0x"); lineCursor = LogHex(lineCursor, frame[2]);
-        lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, frame[1]); lineCursor = LogPut(lineCursor, "\r\n");
+        VDM_SET16(tib, VTIB_SS, frame[DPMI_RETURNED_SS]); VDM_REG(tib, VTIB_ESP) = frame[DPMI_RETURNED_SP];
+        VDM_SET16(tib, VTIB_CS, frame[DPMI_RETURNED_CS]); VDM_REG(tib, VTIB_EIP) = frame[DPMI_RETURNED_IP];
+        VDM_SET16(tib, VTIB_EFLAGS, frame[DPMI_RETURNED_FLAGS]);
+        lineCursor = LogPut(lineCursor, "NESTED EXC RETURN -> resume 0x"); lineCursor = LogHex(lineCursor, frame[DPMI_RETURNED_CS]);
+        lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, frame[DPMI_RETURNED_IP]); lineCursor = LogPut(lineCursor, "\r\n");
         LogAppend(LOG_PATH, lineBuffer, lineCursor);
         return 1;
     }
     if (eip >= DPMI_FAULT_SITE(0) && eip < DPMI_FAULT_SITE(DOS_FLTSITE_N)
-        && ((eip - DPMI_FAULT_SITE(0)) & 3) == 0) {
-        INT exception = (INT)((eip - DPMI_FAULT_SITE(0)) / 4);
+        && ((eip - DPMI_FAULT_SITE(0)) & (DOS_FLTSITE_SIZE - 1)) == 0) {
+        INT exception = (INT)((eip - DPMI_FAULT_SITE(0)) / DOS_FLTSITE_SIZE);
         /* ── s92: A RAW `INT nn` INSIDE A NESTED RUN. A #GP through an IDT gate (error
              code bit 1, vector in bits 3..15) is an interrupt nobody intercepted -- the
              main loop's long arm services those (search "A #GP THROUGH AN IDT GATE").
@@ -27963,41 +27963,41 @@ static INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip)
              guest goes back ON the INT, the site is patched to our BOP with its vector in
              the map -- as the main loop does -- and the loop's ordinary BOP path services
              it on the next turn. Everything else is declined, as before. */
-        if (exception == 13 && (frame[2] & 0x2)) {
-            DWORD gateVector = (DPMI_SELECTOR_INDEX((DWORD)frame[2])) & BYTE_MASK;
-            DWORD guestCodeBase  = DpmiSelectorBase(frame[4]);
-            volatile BYTE *guestInstruction = (volatile BYTE *)(ULONG_PTR)(guestCodeBase + frame[3]);
-            if (!guestCodeBase || DpmiSelectorIs32(frame[4]) || DpmiSelectorIs32(frame[7])
+        if (exception == X86_EXCEPTION_GP && (frame[DPMI_FRAME_ERROR] & X86_ERROR_CODE_IDT)) {
+            DWORD gateVector = (DPMI_SELECTOR_INDEX((DWORD)frame[DPMI_FRAME_ERROR])) & BYTE_MASK;
+            DWORD guestCodeBase  = DpmiSelectorBase(frame[DPMI_FRAME_CS]);
+            volatile BYTE *guestInstruction = (volatile BYTE *)(ULONG_PTR)(guestCodeBase + frame[DPMI_FRAME_IP]);
+            if (!guestCodeBase || DpmiSelectorIs32(frame[DPMI_FRAME_CS]) || DpmiSelectorIs32(frame[DPMI_FRAME_SS])
                 || (gateVector >= VECTOR_FLOATING_POINT_FIRST && gateVector <= VECTOR_FLOATING_POINT_LAST)
-                || !HostReadable((const VOID *)guestInstruction, 2) || guestInstruction[0] != X86_OP_INT || guestInstruction[1] != (BYTE)gateVector
-                || !HostWritable((VOID *)guestInstruction, 2))
+                || !HostReadable((const VOID *)guestInstruction, X86_INT_LENGTH) || guestInstruction[0] != X86_OP_INT || guestInstruction[1] != (BYTE)gateVector
+                || !HostWritable((VOID *)guestInstruction, X86_INT_LENGTH))
                 return 0;
-            VDM_SET16(tib, VTIB_SS, frame[7]); VDM_REG(tib, VTIB_ESP) = frame[6];
-            VDM_SET16(tib, VTIB_CS, frame[4]); VDM_REG(tib, VTIB_EIP) = frame[3];
-            VDM_SET16(tib, VTIB_EFLAGS, frame[5]);
+            VDM_SET16(tib, VTIB_SS, frame[DPMI_FRAME_SS]); VDM_REG(tib, VTIB_ESP) = frame[DPMI_FRAME_SP];
+            VDM_SET16(tib, VTIB_CS, frame[DPMI_FRAME_CS]); VDM_REG(tib, VTIB_EIP) = frame[DPMI_FRAME_IP];
+            VDM_SET16(tib, VTIB_EFLAGS, frame[DPMI_FRAME_FLAGS]);
             guestInstruction[0] = VDM_BOP0; guestInstruction[1] = VDM_BOP1;
-            PatchMapSet(guestCodeBase + frame[3], (BYTE)gateVector);
+            PatchMapSet(guestCodeBase + frame[DPMI_FRAME_IP], (BYTE)gateVector);
             lineCursor = LogPut(lineCursor, "NESTED #GP(IDT): a raw INT 0x"); lineCursor = LogHex(lineCursor, gateVector);
-            lineCursor = LogPut(lineCursor, " at 0x"); lineCursor = LogHex(lineCursor, frame[4]); lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, frame[3]);
+            lineCursor = LogPut(lineCursor, " at 0x"); lineCursor = LogHex(lineCursor, frame[DPMI_FRAME_CS]); lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, frame[DPMI_FRAME_IP]);
             lineCursor = LogPut(lineCursor, " -- patched; serviced on the next turn\r\n");
             LogAppend(LOG_PATH, lineBuffer, lineCursor);
             return 1;
         }
-        if (exception < 0 || exception >= 32 || !g_PmException[exception].IsSet || (frame[2] & 0x2)) return 0;
-        frame[0] = (WORD)DPMI_FLTRET_COFF;
-        frame[1] = g_DpmiFaultCodeSelector;
+        if (exception < 0 || exception >= X86_EXCEPTIONS || !g_PmException[exception].IsSet || (frame[DPMI_FRAME_ERROR] & X86_ERROR_CODE_IDT)) return 0;
+        frame[DPMI_FRAME_RETURN_IP] = (WORD)DPMI_FLTRET_COFF;
+        frame[DPMI_FRAME_RETURN_CS] = g_DpmiFaultCodeSelector;
         VDM_SET16(tib, VTIB_CS, g_PmException[exception].Selector);
         VDM_REG(tib, VTIB_EIP) = g_PmException[exception].Offset;
         lineCursor = LogPut(lineCursor, "NESTED EXC 0x"); lineCursor = LogHex(lineCursor, (DWORD)exception);
-        lineCursor = LogPut(lineCursor, " err=0x"); lineCursor = LogHex(lineCursor, frame[2]);
-        lineCursor = LogPut(lineCursor, " at 0x"); lineCursor = LogHex(lineCursor, frame[4]); lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, frame[3]);
+        lineCursor = LogPut(lineCursor, " err=0x"); lineCursor = LogHex(lineCursor, frame[DPMI_FRAME_ERROR]);
+        lineCursor = LogPut(lineCursor, " at 0x"); lineCursor = LogHex(lineCursor, frame[DPMI_FRAME_CS]); lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, frame[DPMI_FRAME_IP]);
         lineCursor = LogPut(lineCursor, " -> client handler 0x"); lineCursor = LogHex(lineCursor, g_PmException[exception].Selector);
         lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, g_PmException[exception].Offset);
         /* s93: a stack fault is about SS:SP -- say them, and the limit, and which
            nested call was running (Terminal and Program Manager both took #SS here). */
-        lineCursor = LogPut(lineCursor, " ss:sp=0x"); lineCursor = LogHex(lineCursor, frame[7]); lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, frame[6]);
-        if (DPMI_SELECTOR_INDEX(frame[7]) < DPMI_LDT_MAX) {
-            lineCursor = LogPut(lineCursor, " ss.limit=0x"); lineCursor = LogHex(lineCursor, g_Ldt[DPMI_SELECTOR_INDEX(frame[7])].Limit);
+        lineCursor = LogPut(lineCursor, " ss:sp=0x"); lineCursor = LogHex(lineCursor, frame[DPMI_FRAME_SS]); lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, frame[DPMI_FRAME_SP]);
+        if (DPMI_SELECTOR_INDEX(frame[DPMI_FRAME_SS]) < DPMI_LDT_MAX) {
+            lineCursor = LogPut(lineCursor, " ss.limit=0x"); lineCursor = LogHex(lineCursor, g_Ldt[DPMI_SELECTOR_INDEX(frame[DPMI_FRAME_SS])].Limit);
         }
         if (g_WowCallDepth > 0) {
             lineCursor = LogPut(lineCursor, " call hwnd=0x"); lineCursor = LogHex(lineCursor, g_WowCallFrames[g_WowCallDepth - 1].Window);
@@ -34573,12 +34573,12 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                         && (eip == DPMI_FAULT_COFF
                             || (eip >= DPMI_FAULT_SITE(0)
                                 && eip <  DPMI_FAULT_SITE(DOS_FLTSITE_N)
-                                && ((eip - DPMI_FAULT_SITE(0)) & 3) == 0))) {
+                                && ((eip - DPMI_FAULT_SITE(0)) & (DOS_FLTSITE_SIZE - 1)) == 0))) {
                         /* Which class the kernel dispatched through -- the site it landed on
                            names it. -1 = the legacy shared site, which now means "a class we
                            did not fill", not "we do not know". */
                         INT faultClass = (eip == DPMI_FAULT_COFF)
-                                   ? -1 : (INT)((eip - DPMI_FAULT_SITE(0)) / 4);
+                                   ? -1 : (INT)((eip - DPMI_FAULT_SITE(0)) / DOS_FLTSITE_SIZE);
                         DWORD faultSs  = *(volatile WORD  *)(tib + VTIB_FLT_SAVCS);
                         DWORD faultEsp = *(volatile DWORD *)(tib + VTIB_FLT_SAVEIP);
                         DWORD faultEip = *(volatile DWORD *)(tib + VTIB_FLT_SAV3);
@@ -34723,10 +34723,10 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                  needs no length heuristic -- the CPU just executed these two
                                  bytes AS an interrupt, which is the strongest evidence the
                                  x86len vote was ever trying to approximate. */
-                            if ((frame[2] & 0x2) && HostReadable((const VOID *)frame, 0x10)) {
-                                DWORD gateVector = (DWORD)(DPMI_SELECTOR_INDEX(frame[2])) & BYTE_MASK;
-                                DWORD guestCodeBase  = DpmiSelectorBase(frame[4]);
-                                volatile BYTE *guestInstruction = (volatile BYTE *)(ULONG_PTR)(guestCodeBase + frame[3]);
+                            if ((frame[DPMI_FRAME_ERROR] & X86_ERROR_CODE_IDT) && HostReadable((const VOID *)frame, DPMI_FRAME16_SIZE)) {
+                                DWORD gateVector = (DWORD)(DPMI_SELECTOR_INDEX(frame[DPMI_FRAME_ERROR])) & BYTE_MASK;
+                                DWORD guestCodeBase  = DpmiSelectorBase(frame[DPMI_FRAME_CS]);
+                                volatile BYTE *guestInstruction = (volatile BYTE *)(ULONG_PTR)(guestCodeBase + frame[DPMI_FRAME_IP]);
                                 /* ── ⚠⚠⚠ WHAT MAKES THE FRAME'S IP TRUSTWORTHY IS THE
                                      SELECTOR'S BASE, NOT ITS WIDTH. (s74)
                                      This began as `if (guestCodeBase && ...)`. DpmiSelectorBase() returns
@@ -34754,17 +34754,17 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                      UNIQUE hit that actually holds `CD <vec>`. Unique-or-decline
                                      is evidence; picking the first match would be a guess. */
                                 UINT32 guestAccessRights = 0;
-                                INT guestPresent = DpmiSelectorDescriptor(frame[4], &guestAccessRights, NULL);
+                                INT guestPresent = DpmiSelectorDescriptor(frame[DPMI_FRAME_CS], &guestAccessRights, NULL);
                                 INT guestIs32    = guestPresent && (((guestAccessRights >> DPMI_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK) & 0x4);
                                 INT guestTruncated   = guestIs32 && guestCodeBase == 0;   /* EIP *is* the linear addr */
                                 INT guestCandidates    = 0;
-                                DWORD guestLinear   = guestCodeBase + frame[3];
+                                DWORD guestLinear   = guestCodeBase + frame[DPMI_FRAME_IP];
                                 DWORD guestRecovered   = 0;
                                 INT   guestSource   = 0;                   /* 0 frame, 1 TIB slot, 2 blocks */
-                                INT   guestSsIs32  = DpmiSelectorIs32(frame[7]);
+                                INT   guestSsIs32  = DpmiSelectorIs32(frame[DPMI_FRAME_SS]);
                                 /* the slot must agree with the frame's low halves, or it is not
                                    the slot we calibrated -- then we do not resume on it */
-                                INT   guestEspOk = !guestSsIs32 || ((faultEsp & WORD_MASK_U) == frame[6] && (faultSs & WORD_MASK_U) == frame[7]);
+                                INT   guestEspOk = !guestSsIs32 || ((faultEsp & WORD_MASK_U) == frame[DPMI_FRAME_SP] && (faultSs & WORD_MASK_U) == frame[DPMI_FRAME_SS]);
                                 /* ── ★★ THE FULL-WIDTH REGISTERS ARE IN THE TIB; THE FRAME IS
                                      THE TRUNCATED COPY. (s74, second pass) ─────────────────────
                                      The kernel saves the faulting SS:ESP and EIP at full width
@@ -34791,9 +34791,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                      if the slot and the frame disagree in the low half -- that is
                                      the one check that would catch a mis-identified slot. */
                                 if (guestTruncated) {
-                                    guestRecovered = DpmiRecoverFlatEip((DWORD)frame[3], (BYTE)gateVector, &guestCandidates);
-                                    if ((faultEip & WORD_MASK_U) == frame[3]
-                                        && HostReadable((const VOID *)(ULONG_PTR)faultEip, 2)
+                                    guestRecovered = DpmiRecoverFlatEip((DWORD)frame[DPMI_FRAME_IP], (BYTE)gateVector, &guestCandidates);
+                                    if ((faultEip & WORD_MASK_U) == frame[DPMI_FRAME_IP]
+                                        && HostReadable((const VOID *)(ULONG_PTR)faultEip, X86_INT_LENGTH)
                                         && ((const volatile BYTE *)(ULONG_PTR)faultEip)[0] == X86_OP_INT
                                         && ((const volatile BYTE *)(ULONG_PTR)faultEip)[1] == (BYTE)gateVector) {
                                         guestLinear = faultEip; guestSource = 1;
@@ -34806,9 +34806,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                         g_Fault32Warned = 1;
                                         wowCursor3 = LogPut(wowCursor3, "  EXC: #GP(IDT) vec=0x"); wowCursor3 = LogHex(wowCursor3, gateVector);
                                         wowCursor3 = LogPut(wowCursor3, " in a FLAT base-0 32-bit CS 0x");
-                                        wowCursor3 = LogHex(wowCursor3, frame[4]);
+                                        wowCursor3 = LogHex(wowCursor3, frame[DPMI_FRAME_CS]);
                                         wowCursor3 = LogPut(wowCursor3, ": NT's frame is 16-bit so the EIP arrived"
-                                                      " truncated (0x"); wowCursor3 = LogHex(wowCursor3, frame[3]);
+                                                      " truncated (0x"); wowCursor3 = LogHex(wowCursor3, frame[DPMI_FRAME_IP]);
                                         wowCursor3 = LogPut(wowCursor3, "); TIB sav3=0x"); wowCursor3 = LogHex(wowCursor3, faultEip);
                                         wowCursor3 = LogPut(wowCursor3, " does not hold CD "); wowCursor3 = LogHexByte(wowCursor3, (UINT)gateVector);
                                         wowCursor3 = LogPut(wowCursor3, ", and reconstruction from the client's"
@@ -34821,16 +34821,16 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                     CHAR wowLine4[224], *wowCursor4 = wowLine4;
                                     g_Fault32Warned = 1;
                                     wowCursor4 = LogPut(wowCursor4, "  EXC: #GP(IDT) vec=0x"); wowCursor4 = LogHex(wowCursor4, gateVector);
-                                    wowCursor4 = LogPut(wowCursor4, " with a 32-bit SS 0x"); wowCursor4 = LogHex(wowCursor4, frame[7]);
+                                    wowCursor4 = LogPut(wowCursor4, " with a 32-bit SS 0x"); wowCursor4 = LogHex(wowCursor4, frame[DPMI_FRAME_SS]);
                                     wowCursor4 = LogPut(wowCursor4, ": TIB savSS:savESP=0x"); wowCursor4 = LogHex(wowCursor4, faultSs);
                                     wowCursor4 = LogPut(wowCursor4, ":0x"); wowCursor4 = LogHex(wowCursor4, faultEsp);
-                                    wowCursor4 = LogPut(wowCursor4, " does not match the frame's 0x"); wowCursor4 = LogHex(wowCursor4, frame[7]);
-                                    wowCursor4 = LogPut(wowCursor4, ":0x"); wowCursor4 = LogHex(wowCursor4, frame[6]);
+                                    wowCursor4 = LogPut(wowCursor4, " does not match the frame's 0x"); wowCursor4 = LogHex(wowCursor4, frame[DPMI_FRAME_SS]);
+                                    wowCursor4 = LogPut(wowCursor4, ":0x"); wowCursor4 = LogHex(wowCursor4, frame[DPMI_FRAME_SP]);
                                     wowCursor4 = LogPut(wowCursor4, " -- cannot restore a full ESP. Reflecting instead.\r\n");
                                     LogAppend(LOG_PATH, wowLine4, wowCursor4); SerialOut(wowLine4, wowCursor4);
                                 }
                                 if (guestPresent && guestLinear && guestEspOk
-                                    && HostReadable((const VOID *)guestInstruction, 2)
+                                    && HostReadable((const VOID *)guestInstruction, X86_INT_LENGTH)
                                     && guestInstruction[0] == X86_OP_INT && guestInstruction[1] == (BYTE)gateVector) {
                                     /* ── ★★★★★ THIS IS THE PASS THAT RE-PATCHED CALC'S FP SITE.
                                          (session 56 -- the question session 55 left open.)
@@ -34855,8 +34855,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                     INT isFloatingPointVector = (gateVector >= VECTOR_FLOATING_POINT_FIRST && gateVector <= VECTOR_FLOATING_POINT_LAST);
                                     INT floatingPointHooked = isFloatingPointVector && g_PmInt[gateVector].Client;
                                     cursor = LogPut(cursor, "  EXC: #GP(IDT) is a RAW INT 0x"); cursor = LogHex(cursor, gateVector);
-                                    cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, frame[4]);
-                                    cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[3]);
+                                    cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_CS]);
+                                    cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_IP]);
                                     cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, guestLinear);
                                     if (guestTruncated) {
                                         cursor = LogPut(cursor, guestSource == 1 ? " (flat base-0 CS: EIP from TIB sav3,"
@@ -34872,7 +34872,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                     }
                                     if (guestSsIs32) {
                                         cursor = LogPut(cursor, " SS32 esp=0x"); cursor = LogHex(cursor, faultEsp);
-                                        if ((faultEsp & WORD_MASK_U) != frame[6]) cursor = LogPut(cursor, " ⚠ slot/frame DISAGREE");
+                                        if ((faultEsp & WORD_MASK_U) != frame[DPMI_FRAME_SP]) cursor = LogPut(cursor, " ⚠ slot/frame DISAGREE");
                                     }
                                     if (floatingPointHooked) {
                                         cursor = LogPut(cursor, " -- FP EMULATOR RANGE: reflecting to the"
@@ -34893,11 +34893,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                          wild jump into low memory. The frame's SP is truncated the
                                          same way: for a 32-bit SS take ESP from the TIB slot, which
                                          `guestEspOk` has just checked against the frame's low half. */
-                                    VDM_SET16(tib, VTIB_SS, frame[7]);
-                                    VDM_REG(tib, VTIB_ESP) = guestSsIs32 ? faultEsp : (DWORD)frame[6];
-                                    VDM_SET16(tib, VTIB_CS, frame[4]);
-                                    VDM_REG(tib, VTIB_EIP) = guestTruncated ? (guestLinear - guestCodeBase) : (DWORD)frame[3];
-                                    VDM_SET16(tib, VTIB_EFLAGS, frame[5]);
+                                    VDM_SET16(tib, VTIB_SS, frame[DPMI_FRAME_SS]);
+                                    VDM_REG(tib, VTIB_ESP) = guestSsIs32 ? faultEsp : (DWORD)frame[DPMI_FRAME_SP];
+                                    VDM_SET16(tib, VTIB_CS, frame[DPMI_FRAME_CS]);
+                                    VDM_REG(tib, VTIB_EIP) = guestTruncated ? (guestLinear - guestCodeBase) : (DWORD)frame[DPMI_FRAME_IP];
+                                    VDM_SET16(tib, VTIB_EFLAGS, frame[DPMI_FRAME_FLAGS]);
                                     /* ── ★★★★ REFLECT IT, DO NOT SERVICE IT. ─────────────────
                                          An FP `CD nn` is not a request to the host; it is the
                                          guest's own emulator being entered, and the ONLY thing
@@ -34916,22 +34916,22 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                          (see [[vme-vif-interrupt-gating]]). TF is cleared,
                                          which is what a gate does and costs nothing. */
                                     if (floatingPointHooked) {
-                                        DWORD stackBase   = DpmiSelectorBase(frame[7]);
+                                        DWORD stackBase   = DpmiSelectorBase(frame[DPMI_FRAME_SS]);
                                         INT   ss32 = guestSsIs32;
-                                        DWORD stackPointer   = ss32 ? faultEsp : (DWORD)frame[6];   /* full width, see guestEspOk */
+                                        DWORD stackPointer   = ss32 ? faultEsp : (DWORD)frame[DPMI_FRAME_SP];   /* full width, see guestEspOk */
                                         stackPointer = ss32 ? stackPointer - X86_WORD_SIZE : ((stackPointer - X86_WORD_SIZE) & WORD_MASK);
-                                        PokeWord(stackBase + stackPointer, frame[5]);                    /* FLAGS      */
+                                        PokeWord(stackBase + stackPointer, frame[DPMI_FRAME_FLAGS]);                    /* FLAGS      */
                                         stackPointer = ss32 ? stackPointer - X86_WORD_SIZE : ((stackPointer - X86_WORD_SIZE) & WORD_MASK);
-                                        PokeWord(stackBase + stackPointer, frame[4]);                    /* return CS  */
+                                        PokeWord(stackBase + stackPointer, frame[DPMI_FRAME_CS]);                    /* return CS  */
                                         stackPointer = ss32 ? stackPointer - X86_WORD_SIZE : ((stackPointer - X86_WORD_SIZE) & WORD_MASK);
-                                        PokeWord(stackBase + stackPointer, (WORD)(frame[3] + 2));        /* return IP  */
+                                        PokeWord(stackBase + stackPointer, (WORD)(frame[DPMI_FRAME_IP] + X86_INT_LENGTH));        /* return IP  */
                                         VDM_REG(tib, VTIB_ESP) = stackPointer;
                                         VDM_SET16(tib, VTIB_CS, g_PmInt[gateVector].Selector);
                                         VDM_REG(tib, VTIB_EIP) = g_PmInt[gateVector].Offset & WORD_MASK;
                                         VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_TF_U;     /* TF */
                                         continue;
                                     }
-                                    if (!isFloatingPointVector && HostWritable((VOID *)(ULONG_PTR)guestInstruction, 2)) {
+                                    if (!isFloatingPointVector && HostWritable((VOID *)(ULONG_PTR)guestInstruction, X86_INT_LENGTH)) {
                                         guestInstruction[0] = VDM_BOP0; guestInstruction[1] = VDM_BOP1;
                                         PatchMapSet(guestLinear, (BYTE)gateVector);   /* the REAL site (s74) */
                                     }
@@ -35022,10 +35022,10 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                 ++g_WowSchedSwitches;
                                 continue;
                             }
-                            if (exception < 0 || exception > 0x1F) {
+                            if (exception < 0 || exception > X86_EXCEPTIONS - 1) {
                                 cursor = LogPut(cursor, "  EXC: no class (shared site) -- cannot name the "
                                             "exception, stopping\r\n");
-                            } else if (!HostReadable((const VOID *)frame, 0x10)) {
+                            } else if (!HostReadable((const VOID *)frame, DPMI_FRAME16_SIZE)) {
                                 cursor = LogPut(cursor, "  EXC: frame at SS:SP is not readable, stopping\r\n");
                             } else if (!g_PmException[exception].IsSet) {
                                 cursor = LogPut(cursor, "  EXC: exception 0x"); cursor = LogHex(cursor, (DWORD)exception);
@@ -35064,18 +35064,18 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                      question does not arise; a 32-bit-CS fault that resumes
                                      wrongly should suspect this line first. */
                                 if (g_DpmiIsClient32) {
-                                    DWORD newSp = (esp - 0x20) & WORD_MASK;
+                                    DWORD newSp = (esp - DPMI_FRAME32_SIZE) & WORD_MASK;
                                     volatile DWORD *d32 =
                                         (volatile DWORD *)(ULONG_PTR)(stackBase + newSp);
-                                    if (HostReadable((const VOID *)d32, 0x20)) {
-                                        d32[0] = (DWORD)DPMI_FLTRET_COFF;  /* return EIP */
-                                        d32[1] = g_DpmiFaultCodeSelector;      /* return CS  */
-                                        d32[2] = frame[2];                    /* error code */
-                                        d32[3] = frame[3];                    /* fault EIP  */
-                                        d32[4] = frame[4];                    /* fault CS   */
-                                        d32[5] = frame[5];                    /* EFLAGS     */
-                                        d32[6] = frame[6];                    /* fault ESP  */
-                                        d32[7] = frame[7];                    /* fault SS   */
+                                    if (HostReadable((const VOID *)d32, DPMI_FRAME32_SIZE)) {
+                                        d32[DPMI_FRAME_RETURN_IP] = (DWORD)DPMI_FLTRET_COFF;  /* return EIP */
+                                        d32[DPMI_FRAME_RETURN_CS] = g_DpmiFaultCodeSelector;      /* return CS  */
+                                        d32[DPMI_FRAME_ERROR] = frame[DPMI_FRAME_ERROR];                    /* error code */
+                                        d32[DPMI_FRAME_IP] = frame[DPMI_FRAME_IP];                    /* fault EIP  */
+                                        d32[DPMI_FRAME_CS] = frame[DPMI_FRAME_CS];                    /* fault CS   */
+                                        d32[DPMI_FRAME_FLAGS] = frame[DPMI_FRAME_FLAGS];                    /* EFLAGS     */
+                                        d32[DPMI_FRAME_SP] = frame[DPMI_FRAME_SP];                    /* fault ESP  */
+                                        d32[DPMI_FRAME_SS] = frame[DPMI_FRAME_SS];                    /* fault SS   */
                                         VDM_REG(tib, VTIB_ESP) =
                                             (VDM_REG(tib, VTIB_ESP) & HIGH_WORD_MASK_U) | newSp;
                                     } else {
@@ -35083,24 +35083,24 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                         cursor = LogHex(cursor, stackBase + newSp);
                                         cursor = LogPut(cursor, " -- delivering the KERNEL'S 16-bit frame, which"
                                                     " a 32-bit client will misread\r\n");
-                                        frame[0] = (WORD)DPMI_FLTRET_COFF;
-                                        frame[1] = g_DpmiFaultCodeSelector;
+                                        frame[DPMI_FRAME_RETURN_IP] = (WORD)DPMI_FLTRET_COFF;
+                                        frame[DPMI_FRAME_RETURN_CS] = g_DpmiFaultCodeSelector;
                                     }
                                 } else {
-                                    frame[0] = (WORD)DPMI_FLTRET_COFF;      /* return IP */
-                                    frame[1] = g_DpmiFaultCodeSelector;         /* return CS */
+                                    frame[DPMI_FRAME_RETURN_IP] = (WORD)DPMI_FLTRET_COFF;      /* return IP */
+                                    frame[DPMI_FRAME_RETURN_CS] = g_DpmiFaultCodeSelector;         /* return CS */
                                 }
                                 VDM_SET16(tib, VTIB_CS,  g_PmException[exception].Selector);
                                 VDM_REG(tib, VTIB_EIP) = g_PmException[exception].Offset;
                                 cursor = LogPut(cursor, "  EXC: -> client handler for 0x"); cursor = LogHex(cursor, (DWORD)exception);
                                 cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, g_PmException[exception].Selector);
                                 cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, g_PmException[exception].Offset);
-                                cursor = LogPut(cursor, " frame{err=0x"); cursor = LogHex(cursor, frame[2]);
-                                cursor = LogPut(cursor, " cs:ip=0x"); cursor = LogHex(cursor, frame[4]);
-                                cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[3]);
-                                cursor = LogPut(cursor, " fl=0x"); cursor = LogHex(cursor, frame[5]);
-                                cursor = LogPut(cursor, " ss:sp=0x"); cursor = LogHex(cursor, frame[7]);
-                                cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[6]);
+                                cursor = LogPut(cursor, " frame{err=0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_ERROR]);
+                                cursor = LogPut(cursor, " cs:ip=0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_CS]);
+                                cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_IP]);
+                                cursor = LogPut(cursor, " fl=0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_FLAGS]);
+                                cursor = LogPut(cursor, " ss:sp=0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_SS]);
+                                cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_SP]);
                                 cursor = LogPut(cursor, "} retf-> 0x"); cursor = LogHex(cursor, g_DpmiFaultCodeSelector);
                                 cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, (DWORD)DPMI_FLTRET_COFF);
                                 /* ── ★ WHAT THE FAULTING INSTRUCTION WAS LOOKING AT. ─────
@@ -35181,7 +35181,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                      bytes each -- enough for `e8 rel16` plus what follows, which
                                      is the shape being checked against the file on disk. */
                                   if (g_CsProbeCount) {
-                                      DWORD codeBase2 = DpmiSelectorBase(frame[4]);
+                                      DWORD codeBase2 = DpmiSelectorBase(frame[DPMI_FRAME_CS]);
                                       const volatile BYTE *codeOrigin =
                                           (const volatile BYTE *)(ULONG_PTR)codeBase2;
                                       INT codeProbeIndex;
@@ -35195,9 +35195,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                           else cursor = LogPut(cursor, "?? ");
                                       }
                                   } }
-                                { DWORD frameCodeBase = DpmiSelectorBase(frame[4]);
+                                { DWORD frameCodeBase = DpmiSelectorBase(frame[DPMI_FRAME_CS]);
                                   const volatile BYTE *fi2 =
-                                      (const volatile BYTE *)(ULONG_PTR)(frameCodeBase + frame[3]);
+                                      (const volatile BYTE *)(ULONG_PTR)(frameCodeBase + frame[DPMI_FRAME_IP]);
                                   cursor = LogPut(cursor, " bytes@fault=");
                                   if (HostReadable((const VOID *)fi2, 8)) cursor = LogDump(cursor, (const VOID *)fi2, 8);
                                   else                                     cursor = LogPut(cursor, "<unreadable>");
@@ -35215,8 +35215,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                   cursor = LogPut(cursor, "\r\n       csbase=0x"); cursor = LogHex(cursor, frameCodeBase);
                                   cursor = LogPut(cursor, " code[ip-0x20..ip+0x20]=");
                                   { const volatile BYTE *codeWindow =
-                                        (const volatile BYTE *)(ULONG_PTR)(frameCodeBase + ((frame[3] - 0x20) & WORD_MASK));
-                                    if (frame[3] >= 0x20 && HostReadable((const VOID *)codeWindow, 0x40))
+                                        (const volatile BYTE *)(ULONG_PTR)(frameCodeBase + ((frame[DPMI_FRAME_IP] - 0x20) & WORD_MASK));
+                                    if (frame[DPMI_FRAME_IP] >= 0x20 && HostReadable((const VOID *)codeWindow, 0x40))
                                          cursor = LogDump(cursor, (const VOID *)codeWindow, 0x40);
                                     else cursor = LogPut(cursor, "<unreadable>"); } }
                                 /* ── ★ AND WHO CALLED. The frame says WHERE it faulted; on a
@@ -35228,9 +35228,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                      on the faulting stack, a few words up from SS:SP, and it
                                      costs one dump to have it instead of a second run and a
                                      breakpoint. (ZAR, GH #23: `push 8 / pop es` in DOS/16M.) */
-                                { DWORD sb2 = DpmiSelectorBase(frame[7]);
+                                { DWORD sb2 = DpmiSelectorBase(frame[DPMI_FRAME_SS]);
                                   const volatile BYTE *stackBytes2 =
-                                      (const volatile BYTE *)(ULONG_PTR)(sb2 + frame[6]);
+                                      (const volatile BYTE *)(ULONG_PTR)(sb2 + frame[DPMI_FRAME_SP]);
                                   cursor = LogPut(cursor, "\r\n       @ss:sp = ");
                                   if (sb2 && HostReadable((const VOID *)stackBytes2, 0x20))
                                        cursor = LogDump(cursor, (const VOID *)stackBytes2, 0x20);
@@ -35260,7 +35260,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                         DWORD stackBase  = DpmiSelectorBase(g_DpmiFaultSelector);
                         DWORD esp = VDM_REG16(tib, VTIB_ESP);
                         volatile WORD *frame = (volatile WORD *)(ULONG_PTR)(stackBase + esp);
-                        if (!HostReadable((const VOID *)frame, 0x0C)) {
+                        if (!HostReadable((const VOID *)frame, DPMI_RETURNED16_SIZE)) {
                             cursor = LogPut(cursor, "GH#128: EXC RETURN but the frame at SS:SP is unreadable "
                                         "-- stopping\r\n");
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
@@ -35281,41 +35281,41 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                              succeeds. Resuming from anywhere we cached would defeat it. */
                         if (g_DpmiIsClient32) {
                             volatile DWORD *d32 = (volatile DWORD *)(ULONG_PTR)(stackBase + esp);
-                            if (!HostReadable((const VOID *)d32, 0x18)) {
+                            if (!HostReadable((const VOID *)d32, DPMI_RETURNED32_SIZE)) {
                                 cursor = LogPut(cursor, "GH#128: EXC RETURN (32) but the frame at SS:ESP is "
                                             "unreadable -- stopping\r\n");
                                 LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                                 break;
                             }
-                            cursor = LogPut(cursor, "GH#128: EXC RETURN(32) -> resume 0x"); cursor = LogHex(cursor, d32[2]);
-                            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, d32[1]);
-                            cursor = LogPut(cursor, " fl=0x"); cursor = LogHex(cursor, d32[3]);
-                            cursor = LogPut(cursor, " ss:esp=0x"); cursor = LogHex(cursor, d32[5]);
-                            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, d32[4]);
-                            cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, d32[0]);
+                            cursor = LogPut(cursor, "GH#128: EXC RETURN(32) -> resume 0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_CS]);
+                            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_IP]);
+                            cursor = LogPut(cursor, " fl=0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_FLAGS]);
+                            cursor = LogPut(cursor, " ss:esp=0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_SS]);
+                            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_SP]);
+                            cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_ERROR]);
                             cursor = LogPut(cursor, "\r\n");
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_SET16(tib, VTIB_SS,  (WORD)d32[5]);
-                            VDM_REG(tib, VTIB_ESP) = d32[4];
-                            VDM_SET16(tib, VTIB_CS,  (WORD)d32[2]);
-                            VDM_REG(tib, VTIB_EIP) = d32[1];
+                            VDM_SET16(tib, VTIB_SS,  (WORD)d32[DPMI_RETURNED_SS]);
+                            VDM_REG(tib, VTIB_ESP) = d32[DPMI_RETURNED_SP];
+                            VDM_SET16(tib, VTIB_CS,  (WORD)d32[DPMI_RETURNED_CS]);
+                            VDM_REG(tib, VTIB_EIP) = d32[DPMI_RETURNED_IP];
                             /* ⚠ FLAGS: still merged as sixteen bits. The high half carries VM
                                  and IOPL's neighbours, and this frame's EFLAGS came from a
                                  kernel frame that only ever held a word. */
-                            VDM_SET16(tib, VTIB_EFLAGS, (WORD)d32[3]);
+                            VDM_SET16(tib, VTIB_EFLAGS, (WORD)d32[DPMI_RETURNED_FLAGS]);
                             continue;
                         }
-                        cursor = LogPut(cursor, "GH#128: EXC RETURN -> resume 0x"); cursor = LogHex(cursor, frame[2]);
-                        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[1]);
-                        cursor = LogPut(cursor, " fl=0x"); cursor = LogHex(cursor, frame[3]);
-                        cursor = LogPut(cursor, " ss:sp=0x"); cursor = LogHex(cursor, frame[5]);
-                        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[4]);
-                        cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, frame[0]);
+                        cursor = LogPut(cursor, "GH#128: EXC RETURN -> resume 0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_CS]);
+                        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_IP]);
+                        cursor = LogPut(cursor, " fl=0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_FLAGS]);
+                        cursor = LogPut(cursor, " ss:sp=0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_SS]);
+                        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_SP]);
+                        cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_ERROR]);
                         cursor = LogPut(cursor, "\r\n");
                         LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                        VDM_SET16(tib, VTIB_SS,  frame[5]); VDM_REG(tib, VTIB_ESP) = frame[4];
-                        VDM_SET16(tib, VTIB_CS,  frame[2]); VDM_REG(tib, VTIB_EIP) = frame[1];
-                        VDM_SET16(tib, VTIB_EFLAGS, frame[3]);
+                        VDM_SET16(tib, VTIB_SS,  frame[DPMI_RETURNED_SS]); VDM_REG(tib, VTIB_ESP) = frame[DPMI_RETURNED_SP];
+                        VDM_SET16(tib, VTIB_CS,  frame[DPMI_RETURNED_CS]); VDM_REG(tib, VTIB_EIP) = frame[DPMI_RETURNED_IP];
+                        VDM_SET16(tib, VTIB_EFLAGS, frame[DPMI_RETURNED_FLAGS]);
                         continue;
                     }
                     /* GH#18 run 72: a real-CPU PROTECTED-MODE I/O insn (IN/OUT) reflects as

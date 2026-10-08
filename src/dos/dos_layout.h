@@ -192,6 +192,7 @@
    actually registered a handler for that exception, so a wrong reading stops
    the run and says so rather than calling the wrong handler. */
 #define DOS_FLTSITE_OFF   0x0260   /* 32 sites x 4 bytes = 0x260..0x2DF */
+#define DOS_FLTSITE_SIZE  4
 #define DOS_FLTSITE_N     32
 #define DOS_FLTRET_OFF    0x02E0   /* the client handler's far-return catcher   */
 #define DOS_BIOS_STUBS    0x0300

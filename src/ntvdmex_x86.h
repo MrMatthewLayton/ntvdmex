@@ -16,6 +16,13 @@
 #define X86_FAR_RETURN16_SIZE   4           /* IP, CS                                   */
 #define X86_IRET16_SIZE         6           /* IP, CS, FLAGS                            */
 
+/* Exceptions: 32 reserved vectors; #GP is 13. An error code's bit 1 says the selector is an
+   IDT entry. INT n is two bytes, CD nn. */
+#define X86_EXCEPTIONS          32
+#define X86_EXCEPTION_GP        13
+#define X86_ERROR_CODE_IDT      0x2
+#define X86_INT_LENGTH          2
+
 /* Real-mode addressing: linear = segment * 16 + offset. */
 #define PARAGRAPH_SHIFT     4
 #define PARAGRAPH_SIZE      16

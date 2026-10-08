@@ -78,6 +78,28 @@
 #define DPMI_DESCRIPTOR_FLAGS_SHIFT 20
 #define DPMI_DESCRIPTOR_FLAGS_MASK  0x0F
 
+/* A DPMI 0.9 exception frame, as entries (WORDs for a 16-bit client, DWORDs for a 32-bit
+   one): the handler's return CS:IP, then the error code and the faulting CS:IP, FLAGS, SS:SP. */
+#define DPMI_FRAME_RETURN_IP     0
+#define DPMI_FRAME_RETURN_CS     1
+#define DPMI_FRAME_ERROR         2
+#define DPMI_FRAME_IP            3
+#define DPMI_FRAME_CS            4
+#define DPMI_FRAME_FLAGS         5
+#define DPMI_FRAME_SP            6
+#define DPMI_FRAME_SS            7
+#define DPMI_FRAME16_SIZE        0x10
+#define DPMI_FRAME32_SIZE        0x20
+/* ...and after the handler's far return has popped the two return entries. */
+#define DPMI_RETURNED_ERROR      0
+#define DPMI_RETURNED_IP         1
+#define DPMI_RETURNED_CS         2
+#define DPMI_RETURNED_FLAGS      3
+#define DPMI_RETURNED_SP         4
+#define DPMI_RETURNED_SS         5
+#define DPMI_RETURNED16_SIZE     0x0C
+#define DPMI_RETURNED32_SIZE     0x18
+
 /* A PM INT 21h's transfer buffer (WOW only): one 1 KB window per pointer register, so an LFN
    call can carry DS:DX, DS:SI and ES:DI at once (PmInt21Lfn). */
 #define PM_TRANSFER_PARAGRAPHS       0x400   /* the whole buffer: 16 KB                   */
