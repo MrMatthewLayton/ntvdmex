@@ -8191,7 +8191,7 @@ static DWORD g_MouseWmInput, g_MouseRawAbsolute, g_MouseI33[16], g_MouseI33Other
      A thousand INT 33h calls arrive with AX >= 0x10 and the histogram above lumps
      every one of them together, so it cannot tell the two live explanations apart --
      and they need OPPOSITE fixes:
-       (a) Doom calls driver functions we do not implement. `mouse_int33`'s
+       (a) Doom calls driver functions we do not implement. `MouseInt33`'s
            `default: break;` accepts them silently and returns nothing: the same
            "does nothing, reports success" shape as the 0300 bug below.
        (b) A MIS-PATCHED `CD 33` SITE. The DPMI host rewrites `CD nn` into BOPs, so a
@@ -8417,7 +8417,7 @@ static DWORD         g_MouseEventInstalls;
      0xE0 is the gap: past the sysvars block (0x8E..~0xD0) and below the env at 0x100,
      touched by no planting of ours (the next is DOS_FLTSITE_OFF at 0x260, in DPMI
      mode) and by nothing a DOS program documents. AND the bytes are re-verified at
-     every injection (mouse_cb_try), because segment 0x50 is guest-writable and a
+     every injection (MouseCallbackTry), because segment 0x50 is guest-writable and a
      fixed offset is a hope, not a guarantee -- the check turns a crash into a
      counted, named refusal. */
 #define MS_CB_RET_OFF   0x00E0          /* DOS_HDLR_SEG:00E0 = BOP MS_CB_BOP ; iret   */
@@ -8583,7 +8583,7 @@ static volatile LONG g_Captured = 0;
      than on "any INT 33h at all" means one stray call cannot take the user's mouse.
    ⚠ THE FLAG IS SET ON THE V86/EXEC THREAD AND ACTED ON BY THE UI THREAD. ClipCursor,
      SetWindowsHookEx and SetCursor all belong to the thread that owns the window, so
-     mouse_int33 may only ever raise a request; WM_TIMER performs it.
+     MouseInt33 may only ever raise a request; WM_TIMER performs it.
    ★ ONCE PER PROGRAM, AND THAT IS WHAT MAKES Win+F10 MEAN SOMETHING. The latch is
      set when we auto-capture and never cleared, so a user who escapes with Win+F10
      stays escaped -- the guest goes on polling INT 33h every frame, and without the
@@ -8658,9 +8658,9 @@ static LONG          g_MouseAccelerationCurrent = I33_ACC_DEFAULT;
 static int           g_MouseAccelerationOk;          /* g_MouseAcceleration holds the defaults or a 2Bh load  */
 static DWORD         g_MouseAccelerationCalls;       /* 2Bh-2Eh/33h/34h answered -- STAGE2 evidence */
 /* ── 18h/19h: THE SHIFT-QUALIFIED HANDLERS, AND NOW THEY ARE CALLED (#265). ────────────
-     They were refused (AX=FFFFh) because nothing delivered them. mouse_evq_take() now
+     They were refused (AX=FFFFh) because nothing delivered them. MouseEventQueueTake() now
      picks, per event, between these and 0Ch's handler by the BDA shift state -- the
-     one picker both delivery paths (V86 mouse_cb_try, PM dpmi_inject_pm_mousecb) use. */
+     one picker both delivery paths (V86 MouseCallbackTry, PM dpmi_inject_pm_mousecb) use. */
 static I33_ALTERNATE       g_MouseAlt[I33_ALT_N];
 static DWORD         g_MouseAltCalls;       /* events delivered to an alternate handler   */
 
@@ -9026,40 +9026,40 @@ static void I33AccelerationReady(void)
 /* INT 33h mouse driver (functions DOS apps actually use). The host draws the
    cursor (overlay in the present path) when the hide-count is 0, so apps that
    rely on the driver cursor (the common case) get a visible pointer. */
-static void mouse_int33(volatile BYTE *tib, int src)
+static void MouseInt33(volatile BYTE *tib, int source)
 {
     DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
-    LONG x = g_MouseX, y = g_MouseY, b = g_MouseButtons;
+    LONG positionX = g_MouseX, positionY = g_MouseY, buttons = g_MouseButtons;
     if (ax < 16) g_MouseI33[ax]++; else g_MouseI33Other++;
     /* The real histogram, and the caller. See the commentary on g_MouseI33Ax. */
     {   DWORD cs  = VDM_REG(tib, VTIB_CS) & 0xFFFF;
         DWORD eip = VDM_REG(tib, VTIB_EIP);
         /* An EIP is only 16 bits wide when its code selector is -- so mask it in V86
            and NEVER in PM, where a flat selector makes EIP the address itself. */
-        DWORD lin = (src == I33_SRC_V86) ? ((cs << 4) + (eip & 0xFFFF))
+        DWORD linear = (source == I33_SRC_V86) ? ((cs << 4) + (eip & 0xFFFF))
                                          : (dpmi_sel_base((WORD)cs) + eip);
-        unsigned i;
-        for (i = 0; i < I33_AXN && g_MouseI33Ax[i].Count; ++i)
-            if (g_MouseI33Ax[i].Ax == (WORD)ax) break;
-        if (i < I33_AXN) { g_MouseI33Ax[i].Ax = (WORD)ax; ++g_MouseI33Ax[i].Count; }
+        unsigned index;
+        for (index = 0; index < I33_AXN && g_MouseI33Ax[index].Count; ++index)
+            if (g_MouseI33Ax[index].Ax == (WORD)ax) break;
+        if (index < I33_AXN) { g_MouseI33Ax[index].Ax = (WORD)ax; ++g_MouseI33Ax[index].Count; }
         else ++g_MouseI33AxOverflow;
-        for (i = 0; i < g_MouseI33SiteCount; ++i) if (g_MouseI33Site[i].Linear == lin) break;
-        if (i < I33_SITEN) {
-            if (i == g_MouseI33SiteCount) {                  /* first call from this site */
-                g_MouseI33Site[i].Linear = lin; g_MouseI33Site[i].Cs = (WORD)cs;
-                g_MouseI33Site[i].Eip = eip; g_MouseI33Site[i].Ax = (WORD)ax;
-                g_MouseI33Site[i].Source = (BYTE)src;
+        for (index = 0; index < g_MouseI33SiteCount; ++index) if (g_MouseI33Site[index].Linear == linear) break;
+        if (index < I33_SITEN) {
+            if (index == g_MouseI33SiteCount) {                  /* first call from this site */
+                g_MouseI33Site[index].Linear = linear; g_MouseI33Site[index].Cs = (WORD)cs;
+                g_MouseI33Site[index].Eip = eip; g_MouseI33Site[index].Ax = (WORD)ax;
+                g_MouseI33Site[index].Source = (BYTE)source;
                 /* The bytes AROUND the site, so the diff against DOOM.EXE needs no
                    second run. Guarded: an address derived from a guest register is
                    not an address we may dereference on trust. */
-                if (MemoryReadable((ULONG_PTR)(lin - 4), sizeof g_MouseI33Site[i].Context)) {
-                    unsigned k;
-                    for (k = 0; k < sizeof g_MouseI33Site[i].Context; ++k)
-                        g_MouseI33Site[i].Context[k] = ((volatile BYTE *)(ULONG_PTR)(lin - 4))[k];
+                if (MemoryReadable((ULONG_PTR)(linear - 4), sizeof g_MouseI33Site[index].Context)) {
+                    unsigned byteIndex;
+                    for (byteIndex = 0; byteIndex < sizeof g_MouseI33Site[index].Context; ++byteIndex)
+                        g_MouseI33Site[index].Context[byteIndex] = ((volatile BYTE *)(ULONG_PTR)(linear - 4))[byteIndex];
                 }
                 ++g_MouseI33SiteCount;
             }
-            ++g_MouseI33Site[i].Count;
+            ++g_MouseI33Site[index].Count;
         } else ++g_MouseI33SiteOverflow;
     }
     /* The guest is USING the mouse, not merely asking whether one exists -- so take
@@ -9089,15 +9089,15 @@ static void mouse_int33(volatile BYTE *tib, int src)
         InterlockedIncrement(&g_MouseHidden);
         break;
     case 0x0003:                                        /* get position + buttons  */
-        VDM_SET16(tib, VTIB_ECX, (WORD)I33ClampX(I33Snapshot(I33VirtualX(x))));
-        VDM_SET16(tib, VTIB_EDX, (WORD)I33ClampY(I33Snapshot(I33VirtualY(y))));
-        VDM_SET16(tib, VTIB_EBX, (WORD)b);
+        VDM_SET16(tib, VTIB_ECX, (WORD)I33ClampX(I33Snapshot(I33VirtualX(positionX))));
+        VDM_SET16(tib, VTIB_EDX, (WORD)I33ClampY(I33Snapshot(I33VirtualY(positionY))));
+        VDM_SET16(tib, VTIB_EBX, (WORD)buttons);
         break;
     case 0x0004: {                                      /* set cursor position     */
-        LONG vx = I33ClampX(I33Snapshot((LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF)));
-        LONG vy = I33ClampY(I33Snapshot((LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF)));
-        InterlockedExchange(&g_MouseX, I33PixelX(vx));
-        InterlockedExchange(&g_MouseY, I33PixelY(vy));
+        LONG virtualX = I33ClampX(I33Snapshot((LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF)));
+        LONG virtualY = I33ClampY(I33Snapshot((LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF)));
+        InterlockedExchange(&g_MouseX, I33PixelX(virtualX));
+        InterlockedExchange(&g_MouseY, I33PixelY(virtualY));
         break; }
     /* ── 05h / 06h: THE COUNTS, AND THE POSITION AT THE TRANSITION. ──────────────
          BX on entry selects the button (0 L, 1 R, 2 M) and it is an INPUT we used to
@@ -9107,33 +9107,33 @@ static void mouse_int33(volatile BYTE *tib, int src)
          and a guest that polls in a loop must not see the same click twice. */
     case 0x0005: case 0x0006: {
         int      rel = (ax == 0x0006);
-        DWORD    bn  = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
-        volatile LONG *cnt, *px, *py;
-        LONG n;
-        if (bn >= MS_BTNS) bn = 0;                      /* driver clamps, not faults */
-        cnt = rel ? &g_MouseReleaseCount[bn]   : &g_MousePressCount[bn];
-        px  = rel ? &g_MouseReleaseX[bn]   : &g_MousePressX[bn];
-        py  = rel ? &g_MouseReleaseY[bn]   : &g_MousePressY[bn];
-        n   = InterlockedExchange(cnt, 0);
-        if (n > 0x7FFF) n = 0x7FFF;
-        VDM_SET16(tib, VTIB_EAX, (WORD)b);
-        VDM_SET16(tib, VTIB_EBX, (WORD)n);
+        DWORD    button  = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
+        volatile LONG *counter, *pressX, *pressY;
+        LONG count;
+        if (button >= MS_BTNS) button = 0;                      /* driver clamps, not faults */
+        counter = rel ? &g_MouseReleaseCount[button]   : &g_MousePressCount[button];
+        pressX  = rel ? &g_MouseReleaseX[button]   : &g_MousePressX[button];
+        pressY  = rel ? &g_MouseReleaseY[button]   : &g_MousePressY[button];
+        count   = InterlockedExchange(counter, 0);
+        if (count > 0x7FFF) count = 0x7FFF;
+        VDM_SET16(tib, VTIB_EAX, (WORD)buttons);
+        VDM_SET16(tib, VTIB_EBX, (WORD)count);
         /* No transition yet: the documented answer is the CURRENT position, not a
            stale zero -- a guest that plots at CX/DX would jump to the top-left. */
-        VDM_SET16(tib, VTIB_ECX, (WORD)I33ClampX(I33VirtualX(n ? *px : x)));
-        VDM_SET16(tib, VTIB_EDX, (WORD)I33ClampY(I33VirtualY(n ? *py : y)));
+        VDM_SET16(tib, VTIB_ECX, (WORD)I33ClampX(I33VirtualX(count ? *pressX : positionX)));
+        VDM_SET16(tib, VTIB_EDX, (WORD)I33ClampY(I33VirtualY(count ? *pressY : positionY)));
         break; }
     case 0x0007:                                        /* set X range (virtual)   */
         I33SetRange(&g_MouseMinimumX, &g_MouseMaximumX,
                       (LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
                       (LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
-        InterlockedExchange(&g_MouseX, I33PixelX(I33ClampX(I33VirtualX(x))));
+        InterlockedExchange(&g_MouseX, I33PixelX(I33ClampX(I33VirtualX(positionX))));
         break;
     case 0x0008:                                        /* set Y range (virtual)   */
         I33SetRange(&g_MouseMinimumY, &g_MouseMaximumY,
                       (LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
                       (LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
-        InterlockedExchange(&g_MouseY, I33PixelY(I33ClampY(I33VirtualY(y))));
+        InterlockedExchange(&g_MouseY, I33PixelY(I33ClampY(I33VirtualY(positionY))));
         break;
     case 0x0009: {                                      /* define graphics cursor  */
         /* ★ #264: THE BITMAP IS READ AND DRAWN. It was "accepted and ignored on
@@ -9143,19 +9143,19 @@ static void mouse_int33(volatile BYTE *tib, int src)
            bitmap by it. A pointer we may not read is refused and COUNTED, and the shape
            before it stays: a cursor made of whatever an unreadable address held is worse
            than the previous one. */
-        volatile BYTE *p = I33GuestPointer(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
-                                         MouseI33Offset(tib, src, VDM_REG(tib, VTIB_EDX)),
+        volatile BYTE *guest = I33GuestPointer(tib, source, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
+                                         MouseI33Offset(tib, source, VDM_REG(tib, VTIB_EDX)),
                                          2 * 2 * I33_GC_ROWS, 0);
         InterlockedExchange(&g_MouseHotX, (LONG)(SHORT)(VDM_REG(tib, VTIB_EBX) & 0xFFFF));
         InterlockedExchange(&g_MouseHotY, (LONG)(SHORT)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
         ++g_MouseShapeSets;
-        if (!p) { ++g_MouseGraphicsCursorBadPointer; break; }
-        {   WORD scr[I33_GC_ROWS], cur[I33_GC_ROWS]; int r;
-            for (r = 0; r < I33_GC_ROWS; ++r) {
-                scr[r] = (WORD)(p[2 * r] | (p[2 * r + 1] << 8));
-                cur[r] = (WORD)(p[32 + 2 * r] | (p[32 + 2 * r + 1] << 8));
+        if (!guest) { ++g_MouseGraphicsCursorBadPointer; break; }
+        {   WORD screen[I33_GC_ROWS], current[I33_GC_ROWS]; int row;
+            for (row = 0; row < I33_GC_ROWS; ++row) {
+                screen[row] = (WORD)(guest[2 * row] | (guest[2 * row + 1] << 8));
+                current[row] = (WORD)(guest[32 + 2 * row] | (guest[32 + 2 * row + 1] << 8));
             }
-            I33GraphicsCursorDefine(scr, cur);
+            I33GraphicsCursorDefine(screen, current);
             InterlockedExchange(&g_MouseGraphicsCursorDefined, 1); }
         break; }
     case 0x000A:                                        /* define text cursor      */
@@ -9177,10 +9177,10 @@ static void mouse_int33(volatile BYTE *tib, int src)
         }
         break;
     case 0x000B: {                                      /* read relative motion    */
-        LONG dx, dy;
-        I33TakeMotion(x, y, &dx, &dy);                /* SIGNED 16-bit, drained  */
-        VDM_SET16(tib, VTIB_ECX, (WORD)(SHORT)dx);
-        VDM_SET16(tib, VTIB_EDX, (WORD)(SHORT)dy);
+        LONG deltaX, deltaY;
+        I33TakeMotion(positionX, positionY, &deltaX, &deltaY);                /* SIGNED 16-bit, drained  */
+        VDM_SET16(tib, VTIB_ECX, (WORD)(SHORT)deltaX);
+        VDM_SET16(tib, VTIB_EDX, (WORD)(SHORT)deltaY);
         break; }
     /* ── 0Ch SET / 14h EXCHANGE the event handler. See the note on g_MouseEventMask:
          stored and reported, NOT yet invoked. 14h must return the PREVIOUS pair or a
@@ -9190,24 +9190,24 @@ static void mouse_int33(volatile BYTE *tib, int src)
     case 0x000C:
         InterlockedExchange(&g_MouseEventMask, (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
         InterlockedExchange(&g_MouseEventSegment,  (LONG)(VDM_REG(tib, VTIB_ES)  & 0xFFFF));
-        InterlockedExchange(&g_MouseEventOffset,  (LONG)MouseI33Offset(tib, src, VDM_REG(tib, VTIB_EDX)));
+        InterlockedExchange(&g_MouseEventOffset,  (LONG)MouseI33Offset(tib, source, VDM_REG(tib, VTIB_EDX)));
         ++g_MouseEventInstalls;
         break;
     case 0x0014: {                                      /* exchange event handler  */
-        LONG om = g_MouseEventMask, os = g_MouseEventSegment, oo = g_MouseEventOffset;
+        LONG oldMask = g_MouseEventMask, oldSegment = g_MouseEventSegment, oldOffset = g_MouseEventOffset;
         InterlockedExchange(&g_MouseEventMask, (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
         InterlockedExchange(&g_MouseEventSegment,  (LONG)(VDM_REG(tib, VTIB_ES)  & 0xFFFF));
-        InterlockedExchange(&g_MouseEventOffset,  (LONG)MouseI33Offset(tib, src, VDM_REG(tib, VTIB_EDX)));
+        InterlockedExchange(&g_MouseEventOffset,  (LONG)MouseI33Offset(tib, source, VDM_REG(tib, VTIB_EDX)));
         ++g_MouseEventInstalls;
-        VDM_SET16(tib, VTIB_ECX, (WORD)om);
-        VDM_SET16(tib, VTIB_EDX, (WORD)oo);
-        VDM_SET16(tib, VTIB_ES,  (WORD)os);
+        VDM_SET16(tib, VTIB_ECX, (WORD)oldMask);
+        VDM_SET16(tib, VTIB_EDX, (WORD)oldOffset);
+        VDM_SET16(tib, VTIB_ES,  (WORD)oldSegment);
         break; }
     case 0x000F:                                        /* mickeys per 8 pixels    */
-        {   LONG mx = (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF);
-            LONG my = (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-            if (mx > 0) InterlockedExchange(&g_MouseMickeyX, mx);
-            if (my > 0) InterlockedExchange(&g_MouseMickeyY, my); }
+        {   LONG mickeysX = (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+            LONG mickeysY = (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+            if (mickeysX > 0) InterlockedExchange(&g_MouseMickeyX, mickeysX);
+            if (mickeysY > 0) InterlockedExchange(&g_MouseMickeyY, mickeysY); }
         break;
     case 0x0010:                                        /* conditional-off region  */
         /* The region in which the driver hides its own cursor while the guest
@@ -9223,12 +9223,12 @@ static void mouse_int33(volatile BYTE *tib, int src)
         break;
     case 0x0016:                                        /* save state -> ES:DX     */
     case 0x0017: {                                      /* restore state <- ES:DX  */
-        volatile BYTE *p = I33GuestPointer(tib, src,
+        volatile BYTE *guest = I33GuestPointer(tib, source,
                                          (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
                                          (WORD)(VDM_REG(tib, VTIB_EDX) & 0xFFFF),
                                          sizeof(I33_STATE), ax == 0x0016);
-        if (!p) { ++g_MouseStateBadPointer; break; }          /* refuse, do not fault    */
-        if (ax == 0x0016) I33StateSave(p); else I33StateLoad(p);
+        if (!guest) { ++g_MouseStateBadPointer; break; }          /* refuse, do not fault    */
+        if (ax == 0x0016) I33StateSave(guest); else I33StateLoad(guest);
         break; }
     case 0x001A:                                        /* set sensitivity (SPEED) */
         /* The speeds, NOT 0Fh's mickey ratio -- see g_MouseSpeedX. */
@@ -9249,8 +9249,8 @@ static void mouse_int33(volatile BYTE *tib, int src)
          accepted and 23h says 0, English: this is the US driver, whose messages are
          not translated -- the same answer the US MOUSE.COM gives whatever it was told. */
     case 0x001C:                                        /* set interrupt rate      */
-        {   LONG rt = (LONG)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-            if (rt <= 4) InterlockedExchange(&g_MouseRate, rt); }
+        {   LONG rate = (LONG)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+            if (rate <= 4) InterlockedExchange(&g_MouseRate, rate); }
         break;
     case 0x001D:                                        /* set display page        */
         InterlockedExchange(&g_MousePage, (LONG)(VDM_REG(tib, VTIB_EBX) & 0xFFFF));
@@ -9271,7 +9271,7 @@ static void mouse_int33(volatile BYTE *tib, int src)
     /* ── 18h/19h ALTERNATE (SHIFT-QUALIFIED) HANDLERS. (#265) ──────────────────────
          18h answers AX=0018h on success, FFFFh on error. Through `default:` the
          caller's own 0018h came back -- "installed" -- for a handler nothing called;
-         #249 made that an honest FFFFh; now mouse_evq_take() delivers them, so they
+         #249 made that an honest FFFFh; now MouseEventQueueTake() delivers them, so they
          install. 18h refuses a mask with no Shift/Ctrl/Alt bit and a fourth
          combination. 19h: BX:DX = the handler for CX's shift combination, CX = its whole
          mask; CX=0 = none (BX/DX left alone). The rules, and which of them are our
@@ -9279,18 +9279,18 @@ static void mouse_int33(volatile BYTE *tib, int src)
     case 0x0018:
         if (I33AlternateSet(g_MouseAlt, (uint16_t)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
                         (uint16_t)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
-                        (uint32_t)MouseI33Offset(tib, src, VDM_REG(tib, VTIB_EDX)))) {
+                        (uint32_t)MouseI33Offset(tib, source, VDM_REG(tib, VTIB_EDX)))) {
             VDM_SET16(tib, VTIB_EAX, 0x0018);
             ++g_MouseEventInstalls;
         } else VDM_SET16(tib, VTIB_EAX, 0xFFFF);
         break;
     case 0x0019: {
-        int k = I33AlternateFind(g_MouseAlt, (uint16_t)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
-        if (k < 0) { VDM_SET16(tib, VTIB_ECX, 0x0000); break; }
-        VDM_SET16(tib, VTIB_ECX, g_MouseAlt[k].Mask);
-        VDM_SET16(tib, VTIB_EBX, g_MouseAlt[k].Segment);
-        if (src == I33_SRC_PM) VDM_REG(tib, VTIB_EDX) = g_MouseAlt[k].Offset;
-        else VDM_SET16(tib, VTIB_EDX, (WORD)g_MouseAlt[k].Offset);
+        int byteIndex = I33AlternateFind(g_MouseAlt, (uint16_t)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
+        if (byteIndex < 0) { VDM_SET16(tib, VTIB_ECX, 0x0000); break; }
+        VDM_SET16(tib, VTIB_ECX, g_MouseAlt[byteIndex].Mask);
+        VDM_SET16(tib, VTIB_EBX, g_MouseAlt[byteIndex].Segment);
+        if (source == I33_SRC_PM) VDM_REG(tib, VTIB_EDX) = g_MouseAlt[byteIndex].Offset;
+        else VDM_SET16(tib, VTIB_EDX, (WORD)g_MouseAlt[byteIndex].Offset);
         break; }
     /* ── 20h ENABLE IS NOT A RESET. (#249) It shared 21h's arm, so enabling the driver
          wiped the ranges, the handler and the counts, and answered AX=FFFFh. Measured
@@ -9352,12 +9352,12 @@ static void mouse_int33(volatile BYTE *tib, int src)
         /* AX/BX = the text cursor's screen/cursor masks, or the hardware cursor's scan
            lines when 0Ah BX=1 chose it; CX/DX = mickeys since the last read -- the SAME
            counters 0Bh drains (I33TakeMotion), signed. */
-        LONG dx, dy;
-        I33TakeMotion(x, y, &dx, &dy);
+        LONG deltaX, deltaY;
+        I33TakeMotion(positionX, positionY, &deltaX, &deltaY);
         VDM_SET16(tib, VTIB_EAX, (WORD)(g_MouseTcHardware ? g_MouseTcHardwareLow : g_MouseTextCursorAnd));
         VDM_SET16(tib, VTIB_EBX, (WORD)(g_MouseTcHardware ? g_MouseTcHardwareHigh : g_MouseTextCursorXor));
-        VDM_SET16(tib, VTIB_ECX, (WORD)(SHORT)dx);
-        VDM_SET16(tib, VTIB_EDX, (WORD)(SHORT)dy);
+        VDM_SET16(tib, VTIB_ECX, (WORD)(SHORT)deltaX);
+        VDM_SET16(tib, VTIB_EDX, (WORD)(SHORT)deltaY);
         break; }
     case 0x0028:                                        /* set video mode          */
         /* The driver sets modes only from its own list (29h), and it has none: the
@@ -9393,12 +9393,12 @@ static void mouse_int33(volatile BYTE *tib, int src)
         ++g_MouseAccelerationCalls; I33AccelerationReady();
         if (bx == 0xFFFF) { I33AccelerationDefaults(g_MouseAcceleration); g_MouseAccelerationCurrent = I33_ACC_DEFAULT; }
         else if (bx >= 1 && bx <= I33_ACC_N) {
-            volatile BYTE *p = I33GuestPointer(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
-                                             MouseI33Offset(tib, src, VDM_REG(tib, VTIB_ESI)),
+            volatile BYTE *guest = I33GuestPointer(tib, source, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
+                                             MouseI33Offset(tib, source, VDM_REG(tib, VTIB_ESI)),
                                              I33_ACC_LEN, 0);
-            unsigned i;
-            if (!p) { ++g_MouseStateBadPointer; VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
-            for (i = 0; i < I33_ACC_LEN; ++i) g_MouseAcceleration[i] = p[i];
+            unsigned index;
+            if (!guest) { ++g_MouseStateBadPointer; VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
+            for (index = 0; index < I33_ACC_LEN; ++index) g_MouseAcceleration[index] = guest[index];
             g_MouseAccelerationCurrent = bx;
         } else { VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
         VDM_SET16(tib, VTIB_EAX, 0x0000);
@@ -9406,19 +9406,19 @@ static void mouse_int33(volatile BYTE *tib, int src)
     case 0x002C: {                                      /* get acceleration profiles  */
         /* AX=0, BX = the active profile, ES:SI -> the block -- written out fresh on every
            call, so a guest that scribbled on the last copy reads a good one. */
-        volatile BYTE *d = I33DriverData(); unsigned i;
+        volatile BYTE *driverData = I33DriverData(); unsigned index;
         ++g_MouseAccelerationCalls; I33AccelerationReady();
-        for (i = 0; i < I33_ACC_LEN; ++i) d[VDD_MOUSE_ACC + i] = g_MouseAcceleration[i];
+        for (index = 0; index < I33_ACC_LEN; ++index) driverData[VDD_MOUSE_ACC + index] = g_MouseAcceleration[index];
         VDM_SET16(tib, VTIB_EAX, 0x0000);
         VDM_SET16(tib, VTIB_EBX, (WORD)g_MouseAccelerationCurrent);
-        I33ResultPointer(tib, src, VTIB_ESI, VDD_MOUSE_ACC);
+        I33ResultPointer(tib, source, VTIB_ESI, VDD_MOUSE_ACC);
         break; }
     case 0x002D: {                                      /* select acceleration profile */
         /* BX = 1-4 selects, FFFFh only asks. AX=0 with BX = the active profile and ES:SI
            -> its 16-byte name; an invalid BX is AX=FFFEh with BX = the (unchanged)
            active profile, and ES:SI -- "destroyed" per RBIL -- left as it was. */
         WORD bx = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-        volatile BYTE *d = I33DriverData(); unsigned i;
+        volatile BYTE *driverData = I33DriverData(); unsigned index;
         ++g_MouseAccelerationCalls; I33AccelerationReady();
         if (bx != 0xFFFF && (bx < 1 || bx > I33_ACC_N)) {
             VDM_SET16(tib, VTIB_EAX, 0xFFFE);
@@ -9426,10 +9426,10 @@ static void mouse_int33(volatile BYTE *tib, int src)
             break;
         }
         if (bx != 0xFFFF) g_MouseAccelerationCurrent = bx;
-        for (i = 0; i < I33_ACC_LEN; ++i) d[VDD_MOUSE_ACC + i] = g_MouseAcceleration[i];
+        for (index = 0; index < I33_ACC_LEN; ++index) driverData[VDD_MOUSE_ACC + index] = g_MouseAcceleration[index];
         VDM_SET16(tib, VTIB_EAX, 0x0000);
         VDM_SET16(tib, VTIB_EBX, (WORD)g_MouseAccelerationCurrent);
-        I33ResultPointer(tib, src, VTIB_ESI,
+        I33ResultPointer(tib, source, VTIB_ESI,
                     (WORD)(VDD_MOUSE_ACC + I33_ACC_NAMES + (g_MouseAccelerationCurrent - 1) * I33_ACC_NAMELEN));
         break; }
     case 0x002E: {                                      /* set acceleration profile names */
@@ -9438,40 +9438,40 @@ static void mouse_int33(volatile BYTE *tib, int src)
            default names and hand them back. ⚠ UNMEASURED (RBIL is the only voice; only an
            8.10+ driver has 2Eh at all). */
         int fill = (VDM_REG(tib, VTIB_EBX) & 0xFF) != 0;
-        volatile BYTE *p = I33GuestPointer(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
-                                         MouseI33Offset(tib, src, VDM_REG(tib, VTIB_ESI)),
+        volatile BYTE *guest = I33GuestPointer(tib, source, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
+                                         MouseI33Offset(tib, source, VDM_REG(tib, VTIB_ESI)),
                                          I33_ACC_N * I33_ACC_NAMELEN, fill);
-        unsigned i;
+        unsigned index;
         ++g_MouseAccelerationCalls; I33AccelerationReady();
-        if (!p) { ++g_MouseStateBadPointer; VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
+        if (!guest) { ++g_MouseStateBadPointer; VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
         if (fill) {
             I33AccelerationDefaultNames(g_MouseAcceleration + I33_ACC_NAMES);
-            for (i = 0; i < I33_ACC_N * I33_ACC_NAMELEN; ++i) p[i] = g_MouseAcceleration[I33_ACC_NAMES + i];
+            for (index = 0; index < I33_ACC_N * I33_ACC_NAMELEN; ++index) guest[index] = g_MouseAcceleration[I33_ACC_NAMES + index];
         } else
-            for (i = 0; i < I33_ACC_N * I33_ACC_NAMELEN; ++i) g_MouseAcceleration[I33_ACC_NAMES + i] = p[i];
+            for (index = 0; index < I33_ACC_N * I33_ACC_NAMELEN; ++index) g_MouseAcceleration[I33_ACC_NAMES + index] = guest[index];
         VDM_SET16(tib, VTIB_EAX, 0x0000);
         break; }
     case 0x0033: {                                      /* switch settings + profiles */
         /* CX = the buffer's size, ES:DX -> it. AX=0, CX = bytes written (at most 154h);
            a short buffer gets the head of the block (I33SettingsBlock). A buffer we
            may not write gets CX=0 -- "nothing returned" -- not a fault. */
-        unsigned cap = (unsigned)(VDM_REG(tib, VTIB_ECX) & 0xFFFF), n, i;
-        uint8_t blk[I33_SET_LEN];
-        I33_SETTINGS st;
-        volatile BYTE *p = NULL;
+        unsigned cap = (unsigned)(VDM_REG(tib, VTIB_ECX) & 0xFFFF), count, index;
+        uint8_t block[I33_SET_LEN];
+        I33_SETTINGS settings;
+        volatile BYTE *guest = NULL;
         ++g_MouseAccelerationCalls; I33AccelerationReady();
         if (cap > I33_SET_LEN) cap = I33_SET_LEN;
-        if (cap) p = I33GuestPointer(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
-                                   MouseI33Offset(tib, src, VDM_REG(tib, VTIB_EDX)), cap, 1);
-        if (!p) { if (cap) ++g_MouseStateBadPointer; cap = 0; }
-        st.Type = 4; st.Language = 0;
-        st.HorizontalSpeed = (uint8_t)g_MouseSpeedX; st.VerticalSpeed = (uint8_t)g_MouseSpeedY;
-        st.DoubleSpeed = (uint8_t)g_MouseSpeedDouble; st.Curve = (uint8_t)g_MouseAccelerationCurrent;
-        st.Rate = (uint8_t)g_MouseRate;
-        n = I33SettingsBlock(blk, cap, &st, g_MouseAcceleration);
-        for (i = 0; i < n; ++i) p[i] = blk[i];
+        if (cap) guest = I33GuestPointer(tib, source, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
+                                   MouseI33Offset(tib, source, VDM_REG(tib, VTIB_EDX)), cap, 1);
+        if (!guest) { if (cap) ++g_MouseStateBadPointer; cap = 0; }
+        settings.Type = 4; settings.Language = 0;
+        settings.HorizontalSpeed = (uint8_t)g_MouseSpeedX; settings.VerticalSpeed = (uint8_t)g_MouseSpeedY;
+        settings.DoubleSpeed = (uint8_t)g_MouseSpeedDouble; settings.Curve = (uint8_t)g_MouseAccelerationCurrent;
+        settings.Rate = (uint8_t)g_MouseRate;
+        count = I33SettingsBlock(block, cap, &settings, g_MouseAcceleration);
+        for (index = 0; index < count; ++index) guest[index] = block[index];
         VDM_SET16(tib, VTIB_EAX, 0x0000);
-        VDM_SET16(tib, VTIB_ECX, (WORD)n);
+        VDM_SET16(tib, VTIB_ECX, (WORD)count);
         break; }
     case 0x0034: {                                      /* initialization file name */
         /* AX=0, ES:DX -> "MOUSE.INI". There is no such file: a real driver names the one
@@ -9479,11 +9479,11 @@ static void mouse_int33(volatile BYTE *tib, int src)
            and opening it fails exactly as on a machine without one. The bare name (no
            path) is ours -- UNMEASURED. */
         static const char ini[] = "MOUSE.INI";
-        volatile BYTE *d = I33DriverData(); unsigned i;
+        volatile BYTE *driverData = I33DriverData(); unsigned index;
         ++g_MouseAccelerationCalls;
-        for (i = 0; i < sizeof ini; ++i) d[VDD_MOUSE_INI + i] = (BYTE)ini[i];
+        for (index = 0; index < sizeof ini; ++index) driverData[VDD_MOUSE_INI + index] = (BYTE)ini[index];
         VDM_SET16(tib, VTIB_EAX, 0x0000);
-        I33ResultPointer(tib, src, VTIB_EDX, VDD_MOUSE_INI);
+        I33ResultPointer(tib, source, VTIB_EDX, VDD_MOUSE_INI);
         break; }
     case 0x002F:                                        /* mouse hardware reset    */
         /* FFFFh = done. There is no device under us to re-initialise; the driver's
@@ -9525,7 +9525,7 @@ static void mouse_int33(volatile BYTE *tib, int src)
 
 /* Is there anyone to deliver an event TO -- 0Ch's handler (a mask and an address) or
    any 18h handler with event bits? */
-static int mouse_any_handler(void)
+static int MouseAnyHandler(void)
 {
     return (g_MouseEventMask && (g_MouseEventSegment | g_MouseEventOffset) != 0) || I33AlternateAny(g_MouseAlt);
 }
@@ -9537,22 +9537,22 @@ static int mouse_any_handler(void)
      from BDA 0040:0017 -- not at the event: the UI thread that queues events must not
      touch guest memory, and a key held for a click is still held a loop pass later.
      ⚠ A Shift released inside that window would route the click to 0Ch's handler. */
-static int mouse_evq_take(MOUSE_EVENT_ENTRY *ev, LONG *ax, WORD *seg, DWORD *off)
+static int MouseEventQueueTake(MOUSE_EVENT_ENTRY *event, LONG *outAx, WORD *segment, DWORD *offset)
 {
-    LONG t; int n = 0;
-    unsigned main_mask = (g_MouseEventSegment | g_MouseEventOffset) ? (unsigned)g_MouseEventMask : 0u;
-    uint8_t kb = *(volatile BYTE *)(ULONG_PTR)(0x400 + INPUT_BDA_SHIFT_FLAGS);
-    while (g_MouseEventQueueTail != g_MouseEventQueueHead && n++ < MS_EVQ) {
-        unsigned a; int who;
-        t = g_MouseEventQueueTail;
-        *ev = g_MouseEventQueue[t];
-        g_MouseEventQueueTail = (t + 1) % MS_EVQ;
-        who = I33PickHandler(g_MouseAlt, (unsigned)ev->Bits, kb, main_mask, &a);
+    LONG tail; int guard = 0;
+    unsigned mainMask = (g_MouseEventSegment | g_MouseEventOffset) ? (unsigned)g_MouseEventMask : 0u;
+    uint8_t shiftFlags = *(volatile BYTE *)(ULONG_PTR)(0x400 + INPUT_BDA_SHIFT_FLAGS);
+    while (g_MouseEventQueueTail != g_MouseEventQueueHead && guard++ < MS_EVQ) {
+        unsigned handlerAx; int who;
+        tail = g_MouseEventQueueTail;
+        *event = g_MouseEventQueue[tail];
+        g_MouseEventQueueTail = (tail + 1) % MS_EVQ;
+        who = I33PickHandler(g_MouseAlt, (unsigned)event->Bits, shiftFlags, mainMask, &handlerAx);
         if (who == -2) continue;
         if (g_MouseEventQueueTail == g_MouseEventQueueHead) InterlockedExchange(&g_MouseEventPend, 0);
-        *ax = (LONG)a;
-        if (who >= 0) { *seg = g_MouseAlt[who].Segment; *off = g_MouseAlt[who].Offset; ++g_MouseAltCalls; }
-        else          { *seg = (WORD)g_MouseEventSegment; *off = (DWORD)g_MouseEventOffset; }
+        *outAx = (LONG)handlerAx;
+        if (who >= 0) { *segment = g_MouseAlt[who].Segment; *offset = g_MouseAlt[who].Offset; ++g_MouseAltCalls; }
+        else          { *segment = (WORD)g_MouseEventSegment; *offset = (DWORD)g_MouseEventOffset; }
         return 1;
     }
     if (g_MouseEventQueueTail == g_MouseEventQueueHead) InterlockedExchange(&g_MouseEventPend, 0);
@@ -9561,12 +9561,12 @@ static int mouse_evq_take(MOUSE_EVENT_ENTRY *ev, LONG *ax, WORD *seg, DWORD *off
 
 /* Deliver pending mouse events to the guest's INT 33h handler -- see g_MouseEventPend.
    Called at the exec-loop boundary, right after the IRQ gates, V86 thread only. */
-static void mouse_cb_try(volatile BYTE *tib)
+static void MouseCallbackTry(volatile BYTE *tib)
 {
     LONG pend;
     WORD hseg; DWORD hoff;
-    DWORD cs, ip, fl, ss, sp;
-    MOUSE_EVENT_ENTRY ev = { 0, 0, 0, 0 };
+    DWORD cs, ip, flags, ss, sp;
+    MOUSE_EVENT_ENTRY event = { 0, 0, 0, 0 };
     if (g_MouseCallbackActive) {                          /* a handler that never came back */
         if ((DWORD)(GetTickCount() - (g_MouseCallbackSince & ~1u)) > MS_CB_TIMEOUT_MS) {
             g_MouseCallbackActive = 0; ++g_MouseCallbackLost;
@@ -9576,7 +9576,7 @@ static void mouse_cb_try(volatile BYTE *tib)
     /* 18h's handlers count as handlers (#265): a guest with only those still gets calls. */
     if ((!g_MouseEventMask && !I33AlternateAny(g_MouseAlt)) || g_MouseEventQueueHead == g_MouseEventQueueTail)
     { ++g_MouseCallbackWhy[1]; return; }
-    if (!mouse_any_handler()) { ++g_MouseCallbackWhy[2]; return; }
+    if (!MouseAnyHandler()) { ++g_MouseCallbackWhy[2]; return; }
     if (g_DpmiPm) {                               /* PM client: dpmi_inject_pm_mousecb()
                                                       delivers from the PM loop; leave the
                                                       queue for it (s74c -- it used to be
@@ -9598,29 +9598,29 @@ static void mouse_cb_try(volatile BYTE *tib)
              INT 09h stub's own BOP instruction (0x4C..0x4E, not yet executed) is kept
              out, so the byte it consumes is not disturbed. */
         if (ip >= 0x4C && ip < 0x4F) { ++g_MouseCallbackWhy[3]; return; }
-        if ((ip >= 0x34 && ip < 0x3A) || ip == 0x4F) fl = 0x200; /* stub about to IRET: deliver */
-        else fl = PeekWord((ss << 4) + ((sp + 4) & 0xFFFF));    /* the FLAGS the stub IRETs to  */
-    } else fl = VDM_REG(tib, VTIB_EFLAGS);
-    if (!IfOrVif(fl)) { ++g_MouseCallbackWhy[4]; return; } /* interrupts off: like an IRQ, wait */
+        if ((ip >= 0x34 && ip < 0x3A) || ip == 0x4F) flags = 0x200; /* stub about to IRET: deliver */
+        else flags = PeekWord((ss << 4) + ((sp + 4) & 0xFFFF));    /* the FLAGS the stub IRETs to  */
+    } else flags = VDM_REG(tib, VTIB_EFLAGS);
+    if (!IfOrVif(flags)) { ++g_MouseCallbackWhy[4]; return; } /* interrupts off: like an IRQ, wait */
     /* ── THE RETURN STUB, RE-VERIFIED EVERY TIME (see MS_CB_RET_OFF). A guest that has
          written over it would be sent into data by its own RETF; refusing is the
          lesser harm, and the refusal is counted and named. */
-    {   const volatile BYTE *rs = (const volatile BYTE *)(ULONG_PTR)((DOS_HDLR_SEG << 4) + MS_CB_RET_OFF);
-        if (rs[0] != VDM_BOP0 || rs[1] != VDM_BOP1 || rs[2] != MS_CB_BOP) {
+    {   const volatile BYTE *returnStub = (const volatile BYTE *)(ULONG_PTR)((DOS_HDLR_SEG << 4) + MS_CB_RET_OFF);
+        if (returnStub[0] != VDM_BOP0 || returnStub[1] != VDM_BOP1 || returnStub[2] != MS_CB_BOP) {
             if (g_MouseCallbackWhy[5] < 4) {
-                char cb[160], *cq = cb;
-                cq = LogPut(cq, "MOUSECB REFUSED: return stub at 0050:");
-                cq = LogHex(cq, MS_CB_RET_OFF); cq = LogPut(cq, " overwritten by the guest: ");
-                cq = LogDump(cq, (const void *)rs, 4); cq = LogPut(cq, "\r\n");
-                LogAppend(LOG_PATH, cb, cq);
+                char lineBuffer[160], *lineCursor = lineBuffer;
+                lineCursor = LogPut(lineCursor, "MOUSECB REFUSED: return stub at 0050:");
+                lineCursor = LogHex(lineCursor, MS_CB_RET_OFF); lineCursor = LogPut(lineCursor, " overwritten by the guest: ");
+                lineCursor = LogDump(lineCursor, (const void *)returnStub, 4); lineCursor = LogPut(lineCursor, "\r\n");
+                LogAppend(LOG_PATH, lineBuffer, lineCursor);
             }
             ++g_MouseCallbackWhy[5];
             g_MouseEventQueueTail = g_MouseEventQueueHead; InterlockedExchange(&g_MouseEventPend, 0);
             return;
         }
     }
-    /* The oldest queued event a handler asked for, and which handler (mouse_evq_take). */
-    if (!mouse_evq_take(&ev, &pend, &hseg, &hoff) || !pend) return;
+    /* The oldest queued event a handler asked for, and which handler (MouseEventQueueTake). */
+    if (!MouseEventQueueTake(&event, &pend, &hseg, &hoff) || !pend) return;
     /* Save the whole interrupted context host-side. */
     g_MouseCallbackSaved.Eax = VDM_REG(tib, VTIB_EAX); g_MouseCallbackSaved.Ebx = VDM_REG(tib, VTIB_EBX);
     g_MouseCallbackSaved.Ecx = VDM_REG(tib, VTIB_ECX); g_MouseCallbackSaved.Edx = VDM_REG(tib, VTIB_EDX);
@@ -9634,9 +9634,9 @@ static void mouse_cb_try(volatile BYTE *tib)
     sp = (sp - 2) & 0xFFFF; PokeWord((ss << 4) + sp, MS_CB_RET_OFF);
     VDM_SET16(tib, VTIB_ESP, (WORD)sp);
     VDM_SET16(tib, VTIB_EAX, (WORD)pend);
-    VDM_SET16(tib, VTIB_EBX, (WORD)ev.Buttons);          /* the state AT the event     */
-    VDM_SET16(tib, VTIB_ECX, (WORD)I33ClampX(I33VirtualX(ev.X)));
-    VDM_SET16(tib, VTIB_EDX, (WORD)I33ClampY(I33VirtualY(ev.Y)));
+    VDM_SET16(tib, VTIB_EBX, (WORD)event.Buttons);          /* the state AT the event     */
+    VDM_SET16(tib, VTIB_ECX, (WORD)I33ClampX(I33VirtualX(event.X)));
+    VDM_SET16(tib, VTIB_EDX, (WORD)I33ClampY(I33VirtualY(event.Y)));
     VDM_SET16(tib, VTIB_ESI, 0);
     VDM_SET16(tib, VTIB_EDI, 0);
     VDM_SET16(tib, VTIB_DS,  DOS_HDLR_SEG);        /* "the driver's DS"              */
@@ -9646,57 +9646,57 @@ static void mouse_cb_try(volatile BYTE *tib)
     ++g_MouseCallbackInjected;
     if (g_MouseCallbackInjected <= 3) g_MouseCallbackTrace = 10;     /* see g_MouseCallbackTrace: the next VM events */
     if (g_MouseCallbackInjected <= 16) {                       /* the first few, with where from */
-        char cb[384], *cq = cb;
-        cq = LogPut(cq, "MOUSECB inject #"); cq = LogHex(cq, g_MouseCallbackInjected);
-        cq = LogPut(cq, " ev=0x");   cq = LogHex(cq, (DWORD)pend);
-        cq = LogPut(cq, " from=0x"); cq = LogHex(cq, g_MouseCallbackSaved.Cs);
-        cq = LogPut(cq, ":0x");      cq = LogHex(cq, g_MouseCallbackSaved.Eip);
-        cq = LogPut(cq, " efl=0x");  cq = LogHex(cq, g_MouseCallbackSaved.Eflags);
-        cq = LogPut(cq, " ss:sp=0x"); cq = LogHex(cq, g_MouseCallbackSaved.Ss);
-        cq = LogPut(cq, ":0x");      cq = LogHex(cq, g_MouseCallbackSaved.Esp);
-        cq = LogPut(cq, " -> 0x");   cq = LogHex(cq, (DWORD)hseg);
-        cq = LogPut(cq, ":0x");      cq = LogHex(cq, hoff & 0xFFFF);
+        char lineBuffer[384], *lineCursor = lineBuffer;
+        lineCursor = LogPut(lineCursor, "MOUSECB inject #"); lineCursor = LogHex(lineCursor, g_MouseCallbackInjected);
+        lineCursor = LogPut(lineCursor, " ev=0x");   lineCursor = LogHex(lineCursor, (DWORD)pend);
+        lineCursor = LogPut(lineCursor, " from=0x"); lineCursor = LogHex(lineCursor, g_MouseCallbackSaved.Cs);
+        lineCursor = LogPut(lineCursor, ":0x");      lineCursor = LogHex(lineCursor, g_MouseCallbackSaved.Eip);
+        lineCursor = LogPut(lineCursor, " efl=0x");  lineCursor = LogHex(lineCursor, g_MouseCallbackSaved.Eflags);
+        lineCursor = LogPut(lineCursor, " ss:sp=0x"); lineCursor = LogHex(lineCursor, g_MouseCallbackSaved.Ss);
+        lineCursor = LogPut(lineCursor, ":0x");      lineCursor = LogHex(lineCursor, g_MouseCallbackSaved.Esp);
+        lineCursor = LogPut(lineCursor, " -> 0x");   lineCursor = LogHex(lineCursor, (DWORD)hseg);
+        lineCursor = LogPut(lineCursor, ":0x");      lineCursor = LogHex(lineCursor, hoff & 0xFFFF);
         /* The three things the handler's return depends on, read back from guest memory:
            the code at the handler, the return BOP at DOS_HDLR_SEG:MS_CB_RET_OFF, and the
            far-return frame just pushed. If any is not what was intended, the trace that
            follows is explained before it is read. */
-        cq = LogPut(cq, " code@hdl=");
-        cq = LogDump(cq, (const void *)(ULONG_PTR)(((DWORD)hseg << 4) + (hoff & 0xFFFF)), 8);
-        cq = LogPut(cq, " ret@50:12=");
-        cq = LogDump(cq, (const void *)(ULONG_PTR)((DOS_HDLR_SEG << 4) + MS_CB_RET_OFF), 4);
-        cq = LogPut(cq, " frame@sp=");
-        cq = LogDump(cq, (const void *)(ULONG_PTR)((ss << 4) + sp), 4);
-        cq = LogPut(cq, "\r\n");
-        LogAppend(LOG_PATH, cb, cq);
+        lineCursor = LogPut(lineCursor, " code@hdl=");
+        lineCursor = LogDump(lineCursor, (const void *)(ULONG_PTR)(((DWORD)hseg << 4) + (hoff & 0xFFFF)), 8);
+        lineCursor = LogPut(lineCursor, " ret@50:12=");
+        lineCursor = LogDump(lineCursor, (const void *)(ULONG_PTR)((DOS_HDLR_SEG << 4) + MS_CB_RET_OFF), 4);
+        lineCursor = LogPut(lineCursor, " frame@sp=");
+        lineCursor = LogDump(lineCursor, (const void *)(ULONG_PTR)((ss << 4) + sp), 4);
+        lineCursor = LogPut(lineCursor, "\r\n");
+        LogAppend(LOG_PATH, lineBuffer, lineCursor);
         /* Once: the DOS communication area as the guest has left it. This is how the
            BASIC slots were found (0050:0012 = the saved INT 1Ch vector) and it says
            whether anything else of ours below 0x40 -- the INT 10h stub at 0x20 sits
            right after BASIC's INT 24h slot at 0x1A..0x1D -- has been written over. */
         if (g_MouseCallbackInjected == 1) {
-            char ab[256], *aq = ab;
-            aq = LogPut(aq, "MOUSECB area 0050:0000..003F=");
-            aq = LogDump(aq, (const void *)(ULONG_PTR)(DOS_HDLR_SEG << 4), 0x40);
-            aq = LogPut(aq, "\r\n");
-            LogAppend(LOG_PATH, ab, aq);
+            char alternateBuffer[256], *alternateCursor = alternateBuffer;
+            alternateCursor = LogPut(alternateCursor, "MOUSECB area 0050:0000..003F=");
+            alternateCursor = LogDump(alternateCursor, (const void *)(ULONG_PTR)(DOS_HDLR_SEG << 4), 0x40);
+            alternateCursor = LogPut(alternateCursor, "\r\n");
+            LogAppend(LOG_PATH, alternateBuffer, alternateCursor);
         }
     }
 }
 /* The BOP at DOS_HDLR_SEG:MS_CB_RET_OFF: the handler RETF'd here, put everything back. */
-static void mouse_cb_return(volatile BYTE *tib)
+static void MouseCallbackReturn(volatile BYTE *tib)
 {
     if (!g_MouseCallbackActive) {                         /* not ours to unwind: step over  */
-        char cb[160], *cq = cb;
+        char lineBuffer[160], *lineCursor = lineBuffer;
         ++g_MouseCallbackStray; VDM_REG(tib, VTIB_EIP) += 3;
-        cq = LogPut(cq, "MOUSECB STRAY return, nothing in flight: ss:sp=0x");
-        cq = LogHex(cq, VDM_REG(tib, VTIB_SS) & 0xFFFF); cq = LogPut(cq, ":0x");
-        cq = LogHex(cq, VDM_REG(tib, VTIB_ESP) & 0xFFFF); cq = LogPut(cq, "\r\n");
-        LogAppend(LOG_PATH, cb, cq);
+        lineCursor = LogPut(lineCursor, "MOUSECB STRAY return, nothing in flight: ss:sp=0x");
+        lineCursor = LogHex(lineCursor, VDM_REG(tib, VTIB_SS) & 0xFFFF); lineCursor = LogPut(lineCursor, ":0x");
+        lineCursor = LogHex(lineCursor, VDM_REG(tib, VTIB_ESP) & 0xFFFF); lineCursor = LogPut(lineCursor, "\r\n");
+        LogAppend(LOG_PATH, lineBuffer, lineCursor);
         return;
     }
     if (g_MouseCallbackDone < 16) {
-        char cb[96], *cq = cb;
-        cq = LogPut(cq, "MOUSECB return #"); cq = LogHex(cq, g_MouseCallbackDone + 1);
-        cq = LogPut(cq, " ok\r\n"); LogAppend(LOG_PATH, cb, cq);
+        char lineBuffer[96], *lineCursor = lineBuffer;
+        lineCursor = LogPut(lineCursor, "MOUSECB return #"); lineCursor = LogHex(lineCursor, g_MouseCallbackDone + 1);
+        lineCursor = LogPut(lineCursor, " ok\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor);
     }
     VDM_REG(tib, VTIB_EAX) = g_MouseCallbackSaved.Eax; VDM_REG(tib, VTIB_EBX) = g_MouseCallbackSaved.Ebx;
     VDM_REG(tib, VTIB_ECX) = g_MouseCallbackSaved.Ecx; VDM_REG(tib, VTIB_EDX) = g_MouseCallbackSaved.Edx;
@@ -9716,11 +9716,11 @@ static void mouse_cb_return(volatile BYTE *tib)
    turned up its one cosmetic defect -- "the mouse cursor is not quite the right
    shape" -- so it is now DECODED FROM REAL ARTWORK and regenerated rather than
    remembered. 'o' = outline (palette index 0), 'X' = fill (index 15), ' ' =
-   transparent; only the data changed, overlay_cursor() is untouched.
+   transparent; only the data changed, OverlayCursor() is untouched.
    Regenerate with:  python3 tools/gen/mkcursor.py cursors/cursor-pointer.cur       */
 /* Generated by tools/gen/mkcursor.py from cursors/cursor-pointer.cur -- 16x16, hotspot (0,0).
    Do not hand-edit: regenerate from the artwork instead. */
-static const char *const MS_CURSOR[16] = {
+static const char *const g_MouseCursorShape[16] = {
     "oo",
     "oXo",
     "oXXo",
@@ -9738,16 +9738,16 @@ static const char *const MS_CURSOR[16] = {
     "     oXXo",
     "      oo",
 };
-static void overlay_cursor(uint8_t *px, int W, int H, int stride, int mx, int my)
+static void OverlayCursor(uint8_t *pixels, int width, int height, int stride, int cursorX, int cursorY)
 {
     int row;
     for (row = 0; row < 16; ++row) {
-        const char *s = MS_CURSOR[row]; int col, y = my + row;
-        if (y < 0 || y >= H) continue;
-        for (col = 0; s[col]; ++col) {
-            int x = mx + col; char c = s[col];
-            if (c == ' ' || x < 0 || x >= W) continue;
-            px[y * stride + x] = (c == 'o') ? 0 : 15;     /* black outline / white fill */
+        const char *shapeRow = g_MouseCursorShape[row]; int column, screenRow = cursorY + row;
+        if (screenRow < 0 || screenRow >= height) continue;
+        for (column = 0; shapeRow[column]; ++column) {
+            int screenColumn = cursorX + column; char shape = shapeRow[column];
+            if (shape == ' ' || screenColumn < 0 || screenColumn >= width) continue;
+            pixels[screenRow * stride + screenColumn] = (shape == 'o') ? 0 : 15;     /* black outline / white fill */
         }
     }
 }
@@ -9762,19 +9762,19 @@ static void overlay_cursor(uint8_t *px, int W, int H, int stride, int mx, int my
      first. ⚠ Mode 11h (and 0Fh) render all four planes while the attribute controller
      shows fewer; an XOR of 0Fh there sets planes the display would ignore. Cosmetic,
      unmeasured, and the renderer's question rather than the cursor's. */
-static void ms_draw_gfx_cursor(uint8_t *px, int W, int H, int stride)
+static void MouseDrawGraphicsCursor(uint8_t *pixels, int width, int height, int stride)
 {
-    int b;
+    int buffer;
     const uint8_t *map4 = NULL;
     /* #325: the pointer lives in the mode's extent (gw x gh); the snapshot may be the
        CRTC's real geometry (Mode X is 320x240 in a mode 13h extent of 320x200). */
-    int mx = (int)((LONG)g_MouseX * W / (LONG)I33Width()), my = (int)((LONG)g_MouseY * H / (LONG)I33Height());
-    if (!g_MouseGraphicsCursorDefined) { overlay_cursor(px, W, H, stride, mx, my); return; }
-    b = (int)(g_MouseGraphicsCursorBuffer & 1);
+    int cursorX = (int)((LONG)g_MouseX * width / (LONG)I33Width()), cursorY = (int)((LONG)g_MouseY * height / (LONG)I33Height());
+    if (!g_MouseGraphicsCursorDefined) { OverlayCursor(pixels, width, height, stride, cursorX, cursorY); return; }
+    buffer = (int)(g_MouseGraphicsCursorBuffer & 1);
     if (g_Video.ModeKind == VIDEO_KIND_CGA && !g_Video.IsVesa && g_Video.CgaBpp != 1)
         map4 = VddVideoCga4Map(&g_Video);
-    I33GraphicsCursorDraw(px, W, H, stride, mx, my, (int)g_MouseHotX, (int)g_MouseHotY,
-                g_MouseGraphicsCursorScreen[b], g_MouseGraphicsCursorCurrent[b], 0x0F, map4);
+    I33GraphicsCursorDraw(pixels, width, height, stride, cursorX, cursorY, (int)g_MouseHotX, (int)g_MouseHotY,
+                g_MouseGraphicsCursorScreen[buffer], g_MouseGraphicsCursorCurrent[buffer], 0x0F, map4);
 }
 
 enum {                                       /* wired command IDs                */
@@ -9813,12 +9813,12 @@ enum {                                       /* wired command IDs               
          run of ids `base + index`, so one handler serves all of them: find which
          range the id fell in, and the offset IS the setting's value. No per-item
          cases, and nothing to keep in step when a list gains an entry.
-       ⚠ THE ITEM TEXT IS NOT DUPLICATED HERE. menu_combo() below builds each
+       ⚠ THE ITEM TEXT IS NOT DUPLICATED HERE. MenuCombo() below builds each
          submenu by walking g_SetDefinitions' own `items` string -- the same string the
          dialog fills its combo from -- so the menu and the dialog cannot disagree
          about what the options are or which index each one means. Duplicating the
          list is how a menu ends up setting Scale2x when it says Scanlines.
-       ⚠ SPAN IS THE MOST ITEMS ANY ONE LIST MAY HAVE. menu_combo() stops at it, so
+       ⚠ SPAN IS THE MOST ITEMS ANY ONE LIST MAY HAVE. MenuCombo() stops at it, so
          overflowing collides with nothing -- the extra items simply do not appear,
          which is visible, rather than silently invoking the next setting along. */
 #define IDM_COMBO_SPAN 32
@@ -9836,38 +9836,38 @@ enum {                                       /* wired command IDs               
 };
 
 /* Which setting each range drives. The ONLY place the two are tied together. */
-static const struct { UINT Base; int IsSet; } MENU_COMBOS[] = {
+static const struct { UINT Base; int IsSet; } g_MenuCombos[] = {
     { IDM_SPEED_0,   SET_SPEEDMODE }, { IDM_WINSIZE_0, SET_WINSIZE   },
     { IDM_RENDER_0,  SET_RENDERER  }, { IDM_SCALER_0,  SET_SCALER    },
     { IDM_FILTER_0,  SET_FILTER    }, { IDM_FSKIP_0,   SET_FRAMESKIP },
     { IDM_ASPECT_0,  SET_ASPECT    }, { IDM_TINT_0,    SET_TINT      },
     { IDM_FIT_0,     SET_FIT       },
 };
-#define MENU_COMBO_N ((int)(sizeof MENU_COMBOS / sizeof MENU_COMBOS[0]))
+#define MENU_COMBO_N ((int)(sizeof g_MenuCombos / sizeof g_MenuCombos[0]))
 
 /* ...and the checkbox ones, same idea. */
-static const struct { UINT id; int IsSet; } MENU_CHECKS[] = {
+static const struct { UINT Id; int IsSet; } g_MenuChecks[] = {
     { IDM_VIEW_VSYNC, SET_VSYNC }, { IDM_VIEW_BLINK, SET_BLINKCURSOR },
 };
-#define MENU_CHECK_N ((int)(sizeof MENU_CHECKS / sizeof MENU_CHECKS[0]))
+#define MENU_CHECK_N ((int)(sizeof g_MenuChecks / sizeof g_MenuChecks[0]))
 
-static void mi (HMENU m, const char *s, UINT id) { AppendMenuA(m, MF_STRING, id, s); }
-static void msep(HMENU m) { AppendMenuA(m, MF_SEPARATOR, 0, NULL); }
-static void msub(HMENU p, const char *s, HMENU c) { AppendMenuA(p, MF_POPUP, (UINT_PTR)c, s); }
-static HMENU mpop(void) { return CreatePopupMenu(); }
+static void MenuItem (HMENU menu, const char *text, UINT thunkId) { AppendMenuA(menu, MF_STRING, thunkId, text); }
+static void MenuSeparator(HMENU menu) { AppendMenuA(menu, MF_SEPARATOR, 0, NULL); }
+static void MenuSubmenu(HMENU parent, const char *text, HMENU child) { AppendMenuA(parent, MF_POPUP, (UINT_PTR)child, text); }
+static HMENU MenuPopup(void) { return CreatePopupMenu(); }
 
 /* A submenu built FROM THE SETTING ITSELF: one item per entry of g_SetDefinitions[set]'s
    own '|'-separated list, at ids base+0, base+1, ... See the note by IDM_COMBO_BASE
    for why the text is taken from there rather than written out again here. */
-static void menu_combo(HMENU parent, const char *label, int set, UINT base)
+static void MenuCombo(HMENU parent, const char *label, int set, UINT base)
 {
-    HMENU s = mpop();
-    char it[64];
-    int n;
-    for (n = 0; n < IDM_COMBO_SPAN
-                && SettingsItem(g_SetDefinitions[set].Items, n, it, (int)sizeof it); ++n)
-        mi(s, it, base + (UINT)n);
-    msub(parent, label, s);
+    HMENU submenu = MenuPopup();
+    char item[64];
+    int index;
+    for (index = 0; index < IDM_COMBO_SPAN
+                && SettingsItem(g_SetDefinitions[set].Items, index, item, (int)sizeof item); ++index)
+        MenuItem(submenu, item, base + (UINT)index);
+    MenuSubmenu(parent, label, submenu);
 }
 
 /* ── WIN16 / WOW PASSTHROUGH (GH #129). ─────────────────────────────────────────
@@ -9877,27 +9877,27 @@ static void menu_combo(HMENU parent, const char *label, int set, UINT base)
 /* Step over argv[0] (which Windows may have quoted) and return the rest. Under an
    IFEO Debugger hook argv[0] is OUR exe, and what follows is the ORIGINAL command
    line, starting with the quoted path of the program really being launched. */
-static const char *cmdline_after_argv0(const char *a)
+static const char *CommandLineAfterArgv0(const char *cursor)
 {
-    if (*a == '"') { ++a; while (*a && *a != '"') ++a; if (*a) ++a; }
-    else           { while (*a && *a != ' ') ++a; }
-    while (*a == ' ') ++a;
-    return a;
+    if (*cursor == '"') { ++cursor; while (*cursor && *cursor != '"') ++cursor; if (*cursor) ++cursor; }
+    else           { while (*cursor && *cursor != ' ') ++cursor; }
+    while (*cursor == ' ') ++cursor;
+    return cursor;
 }
 
 /* Is `-w` present as a WHOLE TOKEN? Substring matching would be wrong: a DOS
    program's own path can contain "-w" (…\my-widget\game.exe) and would then be
    handed silently to stock ntvdm -- a worse failure than the one this guard exists
    to prevent, because the program WOULD run and we would never hear about it. */
-static int launch_is_wow(const char *cmd)
+static int LaunchIsWow(const char *command)
 {
-    const char *a = cmdline_after_argv0(cmd);
-    while (*a) {
-        if ((a[0] == '-' || a[0] == '/') && a[1] == 'w' && (a[2] == 0 || a[2] == ' '))
+    const char *cursor = CommandLineAfterArgv0(command);
+    while (*cursor) {
+        if ((cursor[0] == '-' || cursor[0] == '/') && cursor[1] == 'w' && (cursor[2] == 0 || cursor[2] == ' '))
             return 1;
-        if (*a == '"') { ++a; while (*a && *a != '"') ++a; if (*a) ++a; }
-        else           { while (*a && *a != ' ') ++a; }
-        while (*a == ' ') ++a;
+        if (*cursor == '"') { ++cursor; while (*cursor && *cursor != '"') ++cursor; if (*cursor) ++cursor; }
+        else           { while (*cursor && *cursor != ' ') ++cursor; }
+        while (*cursor == ' ') ++cursor;
     }
     return 0;
 }
@@ -9948,32 +9948,32 @@ static int launch_is_wow(const char *cmd)
         wow_load_modules()   -- parse, allocate, copy bytes.  NO relocation.
         wow_bind_modules()   -- selectors for everything, then relocate ONCE. */
 #define WOW_MAX_MOD 16       /* krnl386 + the ten siblings, with headroom */
-static NE_MODULE g_wow_mod[WOW_MAX_MOD];
-static uint8_t  *g_wow_img[WOW_MAX_MOD];
-static char      g_wow_name[WOW_MAX_MOD][16];
-static int       g_wow_nmod = 0;
+static NE_MODULE g_WowModule[WOW_MAX_MOD];
+static uint8_t  *g_WowImage[WOW_MAX_MOD];
+static char      g_WowName[WOW_MAX_MOD][16];
+static int       g_WowModuleCount = 0;
 
 /* ── ★ WHICH MODULE OWNS THIS SELECTOR? (GH #128, session 38) ─────────────────
      Needed because the WOW32 id space is per module: a call's stub segment names
      the table it belongs to, and the table decides whose numbering applies. The
      loader already records every module's runtime selectors, so this is a lookup
      rather than an inference. -1 = not one of ours. */
-static int wow_module_of_sel(WORD sel)
+static int WowModuleOfSelector(WORD selector)
 {
-    int k, i;
-    if (!sel) return -1;
-    for (k = 0; k < g_wow_nmod; ++k)
-        for (i = 0; i < (int)g_wow_mod[k].SegmentCount; ++i)
-            if (g_wow_mod[k].Segments[i].Selector == sel) return k;
+    int module, segment;
+    if (!selector) return -1;
+    for (module = 0; module < g_WowModuleCount; ++module)
+        for (segment = 0; segment < (int)g_WowModule[module].SegmentCount; ++segment)
+            if (g_WowModule[module].Segments[segment].Selector == selector) return module;
     return -1;
 }
 
 /* ── ★★ WHICH SELECTOR IS USER'S CODE SEGMENT? LEARN IT FROM A STUB. ──────────
-     wow_module_of_sel() cannot answer this. g_wow_mod[] is the BIND-STAGE view --
+     WowModuleOfSelector() cannot answer this. g_WowModule[] is the BIND-STAGE view --
      the host's own NE load, used to verify and relocate -- and the modules that
      matter at run time are loaded by krnl386 itself, which allocates their
      selectors through `INT 31h 0x0501`. USER's segment 1 is 0x0327 in the run and
-     appears nowhere in g_wow_mod[]. Measured: the first cut used the module lookup
+     appears nowhere in g_WowModule[]. Measured: the first cut used the module lookup
      and the dispatcher never fired once.
    ⇒ Identify the TABLE by a stub in it. Every thunk call arrives carrying an id, an
      argument byte count and the offset it returns to inside its 13-byte stub, at a
@@ -9988,23 +9988,23 @@ static int wow_module_of_sel(WORD sel)
      and note that a WRONG anchor cannot silently mis-fire: all three fields have
      to agree, and if none ever matches the dispatcher simply never engages and
      every USER call stays honestly unimplemented. */
-static WORD g_wow_user_seg = 0;
+static WORD g_WowUserSegment = 0;
 
 /* ⛔ s88: NotifyWow (0x217, 6 args, retstub 0x12ea) too -- USER's OWN INIT calls it
      (observed: wKind 4, the DefWindowProc forward table) BEFORE any RegisterClass,
      so with only the two anchors above that call was "?'s table" and stepped over,
      the table stayed empty, and DefWindowProc forwarded nothing for the whole run.
      The triple is USER's: later calls carrying it were already dispatched as USER. */
-static int wow_user_anchor(WORD id, WORD argb, WORD retstub)
+static int WowUserAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
 {
-    return (id == 0x190 && argb == 0 && retstub == 0x0659)
-        || (id == 0x039 && argb == 4 && retstub == 0x0c25)
-        || (id == 0x217 && argb == 6 && retstub == 0x12ea);
+    return (thunkId == 0x190 && argumentBytes == 0 && returnStub == 0x0659)
+        || (thunkId == 0x039 && argumentBytes == 4 && returnStub == 0x0c25)
+        || (thunkId == 0x217 && argumentBytes == 6 && returnStub == 0x12ea);
 }
 
 /* ── ★★★ SHELL.DLL's TABLE -- A FOURTH ID SPACE. See src/wow/wowshell.h. ──────
      Identified exactly the way USER's is, and for the same reason: krnl386 loads
-     SHELL.DLL itself through our DOS layer, so it is not in g_wow_mod[] and there
+     SHELL.DLL itself through our DOS layer, so it is not in g_WowModule[] and there
      is no file image on this side to check bytes against -- but the triple
      (id, argument bytes, return-into-stub offset) still pins one specific stub,
      because a stub is 13 fixed-shape bytes at a fixed offset in the module's own
@@ -10023,13 +10023,13 @@ static int wow_user_anchor(WORD id, WORD argb, WORD retstub)
    ⇒ The anchor is now the module's WHOLE stub table, generated from the file by
      `tools/ne/wowthunks.py --anchor`. See src/wow/wowanchors.h for why matching
      any row is still safe, and regenerate there if the box's SHELL.DLL differs. */
-static WORD g_wow_shell_seg = 0;
+static WORD g_WowShellSegment = 0;
 
-static int wow_shell_anchor(WORD id, WORD argb, WORD retstub)
+static int WowShellAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
 {
     return WowAnchorHit(g_WowShellAnchors,
                           (int)(sizeof g_WowShellAnchors / sizeof g_WowShellAnchors[0]),
-                          id, argb, retstub);
+                          thunkId, argumentBytes, returnStub);
 }
 
 /* ── ★★★ COMMDLG.DLL's TABLE -- A FIFTH ID SPACE. See src/wow/wowcommdlg.h. ───
@@ -10044,14 +10044,14 @@ static int wow_shell_anchor(WORD id, WORD argb, WORD retstub)
      the guard below excludes every table already identified.
    ⚠ Regenerate with `tools/ne/wowthunks.py guest/ne/commdlg.dll` if the box's
      COMMDLG ever differs. */
-static WORD g_wow_cdlg_seg = 0;
+static WORD g_WowCommonDialogSegment = 0;
 
-static int wow_cdlg_anchor(WORD id, WORD argb, WORD retstub)
+static int WowCommonDialogAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
 {
     /* s89: the whole table (wowanchors.h) -- two rows left FindText unidentified. */
     return WowAnchorHit(g_WowCommdlgAnchors,
                           (int)(sizeof g_WowCommdlgAnchors / sizeof g_WowCommdlgAnchors[0]),
-                          id, argb, retstub);
+                          thunkId, argumentBytes, returnStub);
 }
 
 /* ── ★★ KEYBOARD.DRV's TABLE -- A SIXTH ID SPACE. See src/wow/wowkbd.h. ──────
@@ -10061,28 +10061,28 @@ static int wow_cdlg_anchor(WORD id, WORD argb, WORD retstub)
    ⚠ `0x05` is CHOOSECOLOR in COMMDLG's numbering and something else again in
      USER's, which is why all three fields are matched and why the guard below
      excludes every table already identified. */
-static WORD g_wow_kbd_seg = 0;
+static WORD g_WowKeyboardSegment = 0;
 
-static int wow_kbd_anchor(WORD id, WORD argb, WORD retstub)
+static int WowKeyboardAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
 {
     /* s89: the whole table (wowanchors.h), for the same reason as COMMDLG's. */
     return WowAnchorHit(g_WowKeyboardAnchors,
                           (int)(sizeof g_WowKeyboardAnchors / sizeof g_WowKeyboardAnchors[0]),
-                          id, argb, retstub);
+                          thunkId, argumentBytes, returnStub);
 }
 
 /* ── ★ SOUND.DRV's TABLE (s90, #299). See src/wow/wowsound.h. Checked LAST of the
      anchored tables, after GDI's, and excluding every segment already identified:
      its ids are 1..0x11 with small argument counts, the shape most likely to
      collide with another module's stub before that module is learned. */
-static WORD g_wow_sound_seg = 0;
-static WORD g_wow_mmedia_seg = 0;   /* s90 #278: MMSYSTEM's stub segment */
+static WORD g_WowSoundSegment = 0;
+static WORD g_WowMultimediaSegment = 0;   /* s90 #278: MMSYSTEM's stub segment */
 
-static int wow_sound_anchor(WORD id, WORD argb, WORD retstub)
+static int WowSoundAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
 {
     return WowAnchorHit(g_WowSoundAnchors,
                           (int)(sizeof g_WowSoundAnchors / sizeof g_WowSoundAnchors[0]),
-                          id, argb, retstub);
+                          thunkId, argumentBytes, returnStub);
 }
 
 /* ── ★★ GDI.EXE's TABLE -- A SEVENTH ID SPACE. See src/wow/wowgdi.h. ─────────
@@ -10092,7 +10092,7 @@ static int wow_sound_anchor(WORD id, WORD argb, WORD retstub)
         id 0x045  2 args  retstub 0x0354   DELETEOBJECT
         id 0x050  4 args  retstub 0x05de   GETDEVICECAPS
    ⚠ Regenerate with `tools/ne/neneeds.py` if the box's GDI.EXE ever differs. */
-static WORD g_wow_gdi_seg = 0;
+static WORD g_WowGdiSegment = 0;
 
 /* ⚠ WIDENED FOR THE SAME REASON SHELL'S WAS, and before it could cost anything:
      this used to be the three calls wowgdi.h services (`GetDeviceCaps`,
@@ -10100,18 +10100,18 @@ static WORD g_wow_gdi_seg = 0;
      learned from a guest that happened to DESTROY something before it drew
      anything. Paint's first GDI calls are `CreateCompatibleDC`/`SelectObject`.
      The table is now all 367 stubs in GDI.EXE -- see src/wow/wowanchors.h. */
-static int wow_gdi_anchor(WORD id, WORD argb, WORD retstub)
+static int WowGdiAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
 {
     return WowAnchorHit(g_WowGdiAnchors,
                           (int)(sizeof g_WowGdiAnchors / sizeof g_WowGdiAnchors[0]),
-                          id, argb, retstub);
+                          thunkId, argumentBytes, returnStub);
 }
 
 /* ── ★★★ krnl386's SECOND TABLE -- A THIRD ID SPACE, AND NOW IDENTIFIED. ──────
      krnl386's segment 2 carries 121 stubs of its own, far-calling the same common
      thunk with their own numbering. `f.krnl` is false for every one of them (the
      stub is not in the segment the thunk executes in, which is what that flag
-     tests), and wow_module_of_sel() cannot name the selector either, because
+     tests), and WowModuleOfSelector() cannot name the selector either, because
      krnl386 loads its own segments at run time and allocates their selectors
      through `INT 31h 0501` -- so these calls have been logged as
      "?'s table -- a DIFFERENT id space" and answered by nobody.
@@ -10125,27 +10125,27 @@ static int wow_gdi_anchor(WORD id, WORD argb, WORD retstub)
      to hold a push of THIS id at exactly the offset this call returns to. And if
      it never matches, the dispatcher simply never engages and every seg2 call
      stays honestly unimplemented -- the same failure mode as USER's anchor. */
-static WORD g_wow_krnl2_seg = 0;
+static WORD g_WowKernel2Segment = 0;
 
-static int wow_krnl2_stub(WORD id, WORD retstub)
+static int WowKernel2Stub(WORD thunkId, WORD returnStub)
 {
-    const NE_SEGMENT *s;
-    const uint8_t *img;
-    DWORD o;
-    if (g_wow_nmod < 1 || !g_wow_img[0] || g_wow_mod[0].SegmentCount < 2) return 0;
-    s = &g_wow_mod[0].Segments[1];
-    if (!s->Sector || retstub < 8 || (DWORD)retstub > s->Length) return 0;
-    img = g_wow_img[0] + s->FileOffset;
-    o   = (DWORD)retstub - 8;
-    return img[o] == 0x68
-        && (WORD)(img[o + 1] | (img[o + 2] << 8)) == id
-        && img[o + 3] == 0x9A;
+    const NE_SEGMENT *segment;
+    const uint8_t *image;
+    DWORD offset;
+    if (g_WowModuleCount < 1 || !g_WowImage[0] || g_WowModule[0].SegmentCount < 2) return 0;
+    segment = &g_WowModule[0].Segments[1];
+    if (!segment->Sector || returnStub < 8 || (DWORD)returnStub > segment->Length) return 0;
+    image = g_WowImage[0] + segment->FileOffset;
+    offset   = (DWORD)returnStub - 8;
+    return image[offset] == 0x68
+        && (WORD)(image[offset + 1] | (image[offset + 2] << 8)) == thunkId
+        && image[offset + 3] == 0x9A;
 }
 
 /* seg2 ids. Numbered in THEIR OWN space -- 0xd1 here is not 0xd1 in wow32.h. */
 #define WOW32K2_TASKENV   0x00d1     /* the new task's environment; see the service */
-static WORD      g_wow_entry_ds = 0;   /* krnl386's autodata paragraph      */
-static int       g_wow_entering = 0;   /* the guest is krnl386, not DOS     */
+static WORD      g_WowEntryDs = 0;   /* krnl386's autodata paragraph      */
+static int       g_WowEntering = 0;   /* the guest is krnl386, not DOS     */
 /* The PM->V86 transfer buffer for pointer-taking INT 21h calls; allocated in
    wow_place_v86 and used by pm_int21_xfer. Declared here because the allocation
    site comes long before the use site. 0 = absent, and every arm checks. */
@@ -10166,39 +10166,39 @@ static int       g_wow_entering = 0;   /* the guest is krnl386, not DOS     */
      Both were found this way, one run apart. So: reserve a pool BEFORE the arena
      goes, and bump-allocate host structures out of it.
    ▸ THE RULE FOR ANYTHING ADDED LATER: on the WOW path, host memory comes from
-     wow_host_alloc(), not DosMcbAllocate(). A DosMcbAllocate() after wow_place_v86 will fail,
+     WowHostAllocate(), not DosMcbAllocate(). A DosMcbAllocate() after wow_place_v86 will fail,
      and the failure will look like the guest's fault. */
 /* 16 KB. Was 4 KB (0x100) with 0x41 in use, and the SFT block is 0x1D9 paragraphs on
    its own -- a 128-entry table of 59-byte entries. Sized at 0x200 first, and THAT IS
    THE REGRESSION THIS COMMENT EXISTS FOR: the SFT is claimed in wow_place_v86 and the
    256-vector handler table lazily at the mode switch, so the SFT fitted, the handler
-   table did not, and wow_host_alloc's failure is SILENT at that call site. The run
+   table did not, and WowHostAllocate's failure is SILENT at that call site. The run
    died at PM step 0x0d with no error -- precisely the failure the note above predicts,
    walked into one release after writing it down. Leave the slack. */
 #define WOW_HOSTPOOL_PARAS 0x400          /* 16 KB: SFT 0x1d9, handler table 0x40  */
-static WORD      g_wow_pool_seg  = 0;
-static WORD      g_wow_pool_next = 0;     /* paragraphs handed out so far          */
+static WORD      g_WowPoolSegment  = 0;
+static WORD      g_WowPoolNext = 0;     /* paragraphs handed out so far          */
 
-static WORD wow_host_alloc(WORD paras)
+static WORD WowHostAllocate(WORD paras)
 {
-    WORD seg;
-    if (!g_wow_pool_seg || g_wow_pool_next + paras > WOW_HOSTPOOL_PARAS) return 0;
-    seg = (WORD)(g_wow_pool_seg + g_wow_pool_next);
-    g_wow_pool_next = (WORD)(g_wow_pool_next + paras);
-    return seg;
+    WORD segment;
+    if (!g_WowPoolSegment || g_WowPoolNext + paras > WOW_HOSTPOOL_PARAS) return 0;
+    segment = (WORD)(g_WowPoolSegment + g_WowPoolNext);
+    g_WowPoolNext = (WORD)(g_WowPoolNext + paras);
+    return segment;
 }
 /* The `-a` argument of the WOW launch: the full path of krnl386.exe. krnl386 reads
    it back out of the DOS environment block to find its own file -- see wow_place_v86. */
-static char      g_wow_krnl_path[512];
+static char      g_WowKernelPath[512];
 /* Bytes of usable memory above krnl386's stack, handed to it in CX at entry. See
    the note at the entry setup and wow_place_v86. */
-static WORD      g_wow_entry_cx = 0;
-static WORD      g_wow_psp_seg  = 0;
-static WORD      g_pm_xfer_seg  = 0;
+static WORD      g_WowEntryCx = 0;
+static WORD      g_WowPspSegment  = 0;
+static WORD      g_PmTransferSegment  = 0;
 /* Where WOW32 0xc5 puts a resolved module path so the guest can point at it. Its own
    paragraph, and separate from the transfer buffer above on purpose -- see the
    allocation site and the 0xc5 service. */
-static WORD      g_wow_path_seg = 0;
+static WORD      g_WowPathSegment = 0;
 /* ── ★ WHERE A LAUNCHED TASK'S ENVIRONMENT LIVES. (seg2 0xd1, session 39 part 8) ──
      A COPY, and the copy is the whole point: the parent hands its child an
      environment through its own PSP and then FREES that block the moment
@@ -10208,7 +10208,7 @@ static WORD      g_wow_path_seg = 0;
      calls later, which is exactly the `#GP` the first cut of the service produced.
      Its own paragraph for the same reason as the path scratch: the child keeps this
      pointer for its whole life, so it cannot share a buffer anything else reuses. */
-static WORD      g_wow_env_seg  = 0;
+static WORD      g_WowEnvironmentSegment  = 0;
 #define WOW_ENV_PARAS  0x100                 /* 4 KB -- a DOS environment and then some */
 /* ── ★ THE WAY BACK OUT OF 16-BIT CODE. (GH #128, session 40) ─────────────────────
      One paragraph holding `C4 C4 57`, and a 16-bit CODE selector over it. It is the
@@ -10216,9 +10216,9 @@ static WORD      g_wow_env_seg  = 0;
      dispatched by its LINEAR ADDRESS rather than by the BOP code byte -- the byte is
      for the reader, the address is ours by construction and cannot be collided with
      by our own INT-site patcher, which also writes `C4 C4`. See src/wow/wowcall.h. */
-static WORD      g_wow_cbk_seg = 0;
-static DWORD     g_wow_cbk_lin = 0;
-static WORD      g_wow_cbk_sel = 0;          /* built at the first callback */
+static WORD      g_WowCallbackSegment = 0;
+static DWORD     g_WowCallbackLinear = 0;
+static WORD      g_WowCallbackSelector = 0;          /* built at the first callback */
 /* ── ★ EVERY PSP THIS HOST BUILDS, SO ITS ENVIRONMENT FIELD CAN BE RE-READ LATER.
      `PSP+0x2c` is the field two separate faults turned on, and the question that
      could not be answered from a fault dump is not "what is it now" but "who
@@ -10226,10 +10226,10 @@ static WORD      g_wow_cbk_sel = 0;          /* built at the first callback */
      enough to print the answer at every fault, which is the difference between
      watching the field and inferring it from the code that might write it. */
 #define WOW_PSP_TRACK 4
-static WORD      g_wow_psp_sel[WOW_PSP_TRACK];
-static DWORD     g_wow_psp_lin[WOW_PSP_TRACK];
-static WORD      g_wow_psp_env[WOW_PSP_TRACK];   /* last seen +0x2c, for the change log */
-static int       g_wow_psp_n = 0;
+static WORD      g_WowPspSelector[WOW_PSP_TRACK];
+static DWORD     g_WowPspLinear[WOW_PSP_TRACK];
+static WORD      g_WowPspEnvironment[WOW_PSP_TRACK];   /* last seen +0x2c, for the change log */
+static int       g_WowPspCount = 0;
 
 static int host_readable(const void *addr, SIZE_T len);   /* fwd: defined with the
                                                              other memory probes */
@@ -10239,10 +10239,10 @@ static int host_readable(const void *addr, SIZE_T len);   /* fwd: defined with t
    the spacing of the sampler: sampling only at WOW32 calls put the whole of WOWEXEC's
    launcher -- LoadModule included -- inside one window, which names a suspect rather
    than a writer. */
-static char *wow_psp_env_check(char *p, const char *where)
+static char *WowPspEnvironmentCheck(char *cursor, const char *where)
 {
-    int z;
-    for (z = 0; z < g_wow_psp_n; ++z) {
+    int index;
+    for (index = 0; index < g_WowPspCount; ++index) {
         /* ⚠⚠ RESOLVE THE SELECTOR EVERY TIME. A LINEAR ADDRESS IS NOT A PSP.
              krnl386 RE-BASES these selectors -- measured, twice in three log lines
              for 0x0adf (`INT31h 04F2 ... base=0x000297c0` then `base=0x000299e0`)
@@ -10250,49 +10250,49 @@ static char *wow_psp_env_check(char *p, const char *where)
              moment it moves, and this instrument would then report whatever now
              lives at the old address as if it were the field. Watch what the GUEST
              watches: the selector. */
-        DWORD lin = dpmi_sel_base(g_wow_psp_sel[z]);
-        const volatile BYTE *pe = (const volatile BYTE *)(ULONG_PTR)lin;
+        DWORD linear = dpmi_sel_base(g_WowPspSelector[index]);
+        const volatile BYTE *psp = (const volatile BYTE *)(ULONG_PTR)linear;
         WORD now;
-        if (!lin || !host_readable((const void *)pe, 0x2e)) continue;
-        if (lin != g_wow_psp_lin[z]) {
-            p = LogPut(p, "PSPENV REBASED: sel 0x"); p = LogHex(p, g_wow_psp_sel[z]);
-            p = LogPut(p, " 0x"); p = LogHex(p, g_wow_psp_lin[z]);
-            p = LogPut(p, " -> 0x"); p = LogHex(p, lin);
-            p = LogPut(p, " (the PSP we built is at the OLD address)\r\n");
-            g_wow_psp_lin[z] = lin;
+        if (!linear || !host_readable((const void *)psp, 0x2e)) continue;
+        if (linear != g_WowPspLinear[index]) {
+            cursor = LogPut(cursor, "PSPENV REBASED: sel 0x"); cursor = LogHex(cursor, g_WowPspSelector[index]);
+            cursor = LogPut(cursor, " 0x"); cursor = LogHex(cursor, g_WowPspLinear[index]);
+            cursor = LogPut(cursor, " -> 0x"); cursor = LogHex(cursor, linear);
+            cursor = LogPut(cursor, " (the PSP we built is at the OLD address)\r\n");
+            g_WowPspLinear[index] = linear;
         }
-        now = (WORD)(pe[0x2c] | (pe[0x2d] << 8));
-        if (g_wow_psp_env[z] == now) continue;
-        p = LogPut(p, "PSPENV CHANGED: sel 0x"); p = LogHex(p, g_wow_psp_sel[z]);
-        p = LogPut(p, " +0x2c 0x"); p = LogHex(p, g_wow_psp_env[z]);
-        p = LogPut(p, " -> 0x"); p = LogHex(p, now);
-        p = LogPut(p, " (seen at "); p = LogPut(p, where); p = LogPut(p, ")\r\n");
-        g_wow_psp_env[z] = now;
+        now = (WORD)(psp[0x2c] | (psp[0x2d] << 8));
+        if (g_WowPspEnvironment[index] == now) continue;
+        cursor = LogPut(cursor, "PSPENV CHANGED: sel 0x"); cursor = LogHex(cursor, g_WowPspSelector[index]);
+        cursor = LogPut(cursor, " +0x2c 0x"); cursor = LogHex(cursor, g_WowPspEnvironment[index]);
+        cursor = LogPut(cursor, " -> 0x"); cursor = LogHex(cursor, now);
+        cursor = LogPut(cursor, " (seen at "); cursor = LogPut(cursor, where); cursor = LogPut(cursor, ")\r\n");
+        g_WowPspEnvironment[index] = now;
     }
-    return p;
+    return cursor;
 }
-static WORD      g_pm_xfer_para = 0;
+static WORD      g_PmTransferParagraphs = 0;
 
 /* Pull the `-a <path>` argument out of a WOW command line. Measured shape:
      "…\ntvdm.exe" -f -i1 -w -a C:\WINDOWS\system32\krnl386.exe
    That path is the module WOW is asked to bootstrap, so it is the loader's input. */
-static int wow_arg_a(const char *cmd, char *out, int cap)
+static int WowArgumentA(const char *command, char *out, int cap)
 {
-    const char *a = cmdline_after_argv0(cmd);
-    int i = 0;
+    const char *cursor = CommandLineAfterArgv0(command);
+    int index = 0;
     out[0] = 0;
-    while (*a) {
-        if ((a[0] == '-' || a[0] == '/') && a[1] == 'a' && (a[2] == 0 || a[2] == ' ')) {
-            a += 2;
-            while (*a == ' ') ++a;
-            if (*a == '"') { ++a; while (*a && *a != '"' && i < cap - 1) out[i++] = *a++; }
-            else           { while (*a && *a != ' '  && i < cap - 1) out[i++] = *a++; }
-            out[i] = 0;
-            return i ? 0 : -1;
+    while (*cursor) {
+        if ((cursor[0] == '-' || cursor[0] == '/') && cursor[1] == 'a' && (cursor[2] == 0 || cursor[2] == ' ')) {
+            cursor += 2;
+            while (*cursor == ' ') ++cursor;
+            if (*cursor == '"') { ++cursor; while (*cursor && *cursor != '"' && index < cap - 1) out[index++] = *cursor++; }
+            else           { while (*cursor && *cursor != ' '  && index < cap - 1) out[index++] = *cursor++; }
+            out[index] = 0;
+            return index ? 0 : -1;
         }
-        if (*a == '"') { ++a; while (*a && *a != '"') ++a; if (*a) ++a; }
-        else           { while (*a && *a != ' ') ++a; }
-        while (*a == ' ') ++a;
+        if (*cursor == '"') { ++cursor; while (*cursor && *cursor != '"') ++cursor; if (*cursor) ++cursor; }
+        else           { while (*cursor && *cursor != ' ') ++cursor; }
+        while (*cursor == ' ') ++cursor;
     }
     return -1;
 }
@@ -10311,7 +10311,7 @@ static void wow_sibling(const char *path, const char *leaf, char *out, int cap)
 }
 
 /* Parse one module and give its segments memory. NO relocation -- see the two-phase
-   note above. Returns the g_wow_mod index, or -1. */
+   note above. Returns the g_WowModule index, or -1. */
 static int wow_load_one(const char *path)
 {
     char m[700], *q;
@@ -10319,10 +10319,10 @@ static int wow_load_one(const char *path)
     DWORD sz = 0, got = 0;
     uint8_t *img;
     NE_MODULE *ne;
-    int slot = g_wow_nmod, i;
+    int slot = g_WowModuleCount, i;
 
     if (slot >= WOW_MAX_MOD) return -1;
-    ne = &g_wow_mod[slot];
+    ne = &g_WowModule[slot];
 
     f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
     if (f == INVALID_HANDLE_VALUE) {
@@ -10344,12 +10344,12 @@ static int wow_load_one(const char *path)
         q = LogPut(q, " at ne.h line "); q = LogHex(q, (DWORD)ne->Error);
         q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, m, q); return -1;
     }
-    if (NeOwnName(ne, g_wow_name[slot], sizeof g_wow_name[slot]) != 0)
-        g_wow_name[slot][0] = 0;
+    if (NeOwnName(ne, g_WowName[slot], sizeof g_WowName[slot]) != 0)
+        g_WowName[slot][0] = 0;
 
     q = m;
     q = LogPut(q, "WOWTRY: "); q = LogPut(q, path);
-    q = LogPut(q, "\r\n  name=");                q = LogPut(q, g_wow_name[slot]);
+    q = LogPut(q, "\r\n  name=");                q = LogPut(q, g_WowName[slot]);
     q = LogPut(q, (ne->ProgramFlags & NE_PROG_LIBRARY) ? " LIBRARY" : " PROGRAM");
     q = LogPut(q, " segs=");                     q = LogHex(q, ne->SegmentCount);
     q = LogPut(q, " imports-from=");             q = LogHex(q, ne->ModuleCount);
@@ -10375,8 +10375,8 @@ static int wow_load_one(const char *path)
         }
         if (s->Sector) for (k = 0; k < s->Length; ++k) s->Memory[k] = img[s->FileOffset + k];
     }
-    g_wow_img[slot] = img;
-    ++g_wow_nmod;
+    g_WowImage[slot] = img;
+    ++g_WowModuleCount;
     return slot;
 }
 
@@ -10409,15 +10409,15 @@ static void wow_probe_load(const char *cmd)
 
     q = m; q = LogPut(q, "WOWTRY: probe begins\r\n"); LogAppend(LOG_PATH, m, q);
 
-    if (wow_arg_a(cmd, path, sizeof path) != 0) {
+    if (WowArgumentA(cmd, path, sizeof path) != 0) {
         q = m; q = LogPut(q, "WOWTRY: no -a argument on the command line\r\n");
         LogAppend(LOG_PATH, m, q); return;
     }
     {   int pi = 0;                       /* keep it: krnl386 needs its own path */
-        while (path[pi] && pi < (int)sizeof g_wow_krnl_path - 1) {
-            g_wow_krnl_path[pi] = path[pi]; ++pi;
+        while (path[pi] && pi < (int)sizeof g_WowKernelPath - 1) {
+            g_WowKernelPath[pi] = path[pi]; ++pi;
         }
-        g_wow_krnl_path[pi] = 0;
+        g_WowKernelPath[pi] = 0;
     }
     if (wow_load_one(path) < 0) return;
     for (j = 0; j < sizeof SIBLING / sizeof SIBLING[0]; ++j) {
@@ -10425,7 +10425,7 @@ static void wow_probe_load(const char *cmd)
         wow_load_one(sib);                    /* logs its own failure; keep going */
     }
 
-    q = m; q = LogPut(q, "WOWTRY: modules loaded=");  q = LogHex(q, (DWORD)g_wow_nmod);
+    q = m; q = LogPut(q, "WOWTRY: modules loaded=");  q = LogHex(q, (DWORD)g_WowModuleCount);
     q = LogPut(q, "; NOT relocated yet (selectors first)\r\n");
     LogAppend(LOG_PATH, m, q);
 }
@@ -10463,34 +10463,34 @@ static HMENU g_recent_menu;                  /* File > Open Recent (#153)       
 static HMENU build_menu(void)
 {
     HMENU bar = CreateMenu(), m, s, tools;
-    m = mpop();                                                   /* File         */
+    m = MenuPopup();                                                   /* File         */
     /* #153. No Ctrl+O: that chord belongs to the DOS program (WordStar's own menu). The
        Open Recent list is filled when it opens -- see menu_recent_fill. */
-    mi(m, "Open Executable...", IDM_FILE_OPEN);
-    g_recent_menu = mpop();
-    msub(m, "Open Recent", g_recent_menu);
+    MenuItem(m, "Open Executable...", IDM_FILE_OPEN);
+    g_recent_menu = MenuPopup();
+    MenuSubmenu(m, "Open Recent", g_recent_menu);
     /* Save State / Load State removed (s81, #145, user decision); what a real
        implementation would need is #146. */
-    msep(m);
+    MenuSeparator(m);
     /* The old "Configuration" submenu (Edit Config File, Open Config Folder, ...)
        described a config FILE that never existed; the store is HKCU and the dialog
        is how you edit it. One entry, and it is this one. */
-    mi(m, "Close Program", IDM_FILE_CLOSEPROG);
-    mi(m, "Exit\tAlt+F4", IDM_FILE_EXIT);
-    msub(bar, "File", m);
+    MenuItem(m, "Close Program", IDM_FILE_CLOSEPROG);
+    MenuItem(m, "Exit\tAlt+F4", IDM_FILE_EXIT);
+    MenuSubmenu(bar, "File", m);
 
     /* ── EDIT IS A TEXT-MODE MENU, AND menu_sync_modal() SAYS SO AT OPEN TIME. ───
          Every item here works on the character grid the text renderer maintains.
          In a graphics mode there is no grid to mark, copy or paste into, so they
          are greyed rather than left to fail silently -- see the note by
          IDM_EDIT_MARK for why that is not the scaffold-stub rule being bent. */
-    m = mpop();                                                   /* Edit         */
+    m = MenuPopup();                                                   /* Edit         */
     /* #154: no Ctrl+C / Ctrl+V labels -- those keys belong to the DOS program (Ctrl+C
        is Break), and a label naming a shortcut that does not exist is a small lie. */
-    mi(m,"Mark / Select Region",IDM_EDIT_MARK); mi(m,"Copy",IDM_EDIT_COPY);
-    mi(m,"Copy Whole Screen",IDM_EDIT_COPYSCREEN); mi(m,"Paste",IDM_EDIT_PASTE);
-    mi(m,"Select All",IDM_EDIT_SELECTALL);
-    msub(bar, "Edit", m);
+    MenuItem(m,"Mark / Select Region",IDM_EDIT_MARK); MenuItem(m,"Copy",IDM_EDIT_COPY);
+    MenuItem(m,"Copy Whole Screen",IDM_EDIT_COPYSCREEN); MenuItem(m,"Paste",IDM_EDIT_PASTE);
+    MenuItem(m,"Select All",IDM_EDIT_SELECTALL);
+    MenuSubmenu(bar, "Edit", m);
 
     /* ── ★ VIEW IS THE DISPLAY PAGE, AND IT IS SESSION-ONLY. ─────────────────────
          Every knob on the Settings dialog's Display tab is here too, because these
@@ -10505,29 +10505,29 @@ static HMENU build_menu(void)
        ► Renderer is GDI | DirectDraw and both are real (s81, #147): the window is
          always GDI, and DirectDraw makes FULLSCREEN the exclusive DirectDraw mode.
          The list comes from g_SetDefinitions so it says exactly what the dialog says. */
-    m = mpop();                                                   /* View         */
-    mi(m,"Fullscreen\tAlt+Enter",IDM_DISP_FULLSCREEN);
-    msep(m);
-    menu_combo(m, "Window Size", SET_WINSIZE,   IDM_WINSIZE_0);
-    menu_combo(m, "Renderer",    SET_RENDERER,  IDM_RENDER_0);
-    menu_combo(m, "Scaler",      SET_SCALER,    IDM_SCALER_0);
-    menu_combo(m, "Filtering",   SET_FILTER,    IDM_FILTER_0);
-    menu_combo(m, "Frame Skip",  SET_FRAMESKIP, IDM_FSKIP_0);
+    m = MenuPopup();                                                   /* View         */
+    MenuItem(m,"Fullscreen\tAlt+Enter",IDM_DISP_FULLSCREEN);
+    MenuSeparator(m);
+    MenuCombo(m, "Window Size", SET_WINSIZE,   IDM_WINSIZE_0);
+    MenuCombo(m, "Renderer",    SET_RENDERER,  IDM_RENDER_0);
+    MenuCombo(m, "Scaler",      SET_SCALER,    IDM_SCALER_0);
+    MenuCombo(m, "Filtering",   SET_FILTER,    IDM_FILTER_0);
+    MenuCombo(m, "Frame Skip",  SET_FRAMESKIP, IDM_FSKIP_0);
     /* ── ★ ASPECT RATIO IS A LOCK ON THE WINDOW, not just a letterbox. Picking a
          ratio constrains the window's shape as you drag it, so the picture fills the
          client and there are no bars at all -- letterboxing only reappears if the
          window ends up off-aspect anyway (maximised). "None" is a free resize. */
-    menu_combo(m, "Aspect Ratio", SET_ASPECT,    IDM_ASPECT_0);
-    menu_combo(m, "Full Screen Fit", SET_FIT,     IDM_FIT_0);       /* #325 */
+    MenuCombo(m, "Aspect Ratio", SET_ASPECT,    IDM_ASPECT_0);
+    MenuCombo(m, "Full Screen Fit", SET_FIT,     IDM_FIT_0);       /* #325 */
     /* #229 (user, s84): "Nice, working! Can you add these to the View menu as well." */
-    menu_combo(m, "Colour Filter", SET_TINT,     IDM_TINT_0);
+    MenuCombo(m, "Colour Filter", SET_TINT,     IDM_TINT_0);
     /* #230 (docs/EMULATION.md): "force vsync for programs that don't ask for it" is
        what this always did -- every blit is timed to the monitor's blank whether or
        not the guest waits for retrace -- so it is named for that. DirectDraw's
        fullscreen flip waits for the blank regardless. */
-    mi(m,"Force VSync",IDM_VIEW_VSYNC);              /* user, s81: with the picture group */
-    msep(m);
-    mi(m,"Blink Text Cursor",IDM_VIEW_BLINK);
+    MenuItem(m,"Force VSync",IDM_VIEW_VSYNC);              /* user, s81: with the picture group */
+    MenuSeparator(m);
+    MenuItem(m,"Blink Text Cursor",IDM_VIEW_BLINK);
     /* #218 (user, s83 sweep): "Show Host Cursor" (#157) is GONE AGAIN, for good -- it
          "feels jaggy". A program that does not use the mouse now keeps the pointer and
          it hides itself after 5 s still over the video; see CURSOR_IDLE_MS. */
@@ -10535,7 +10535,7 @@ static HMENU build_menu(void)
          The desktop pointer's visibility is not a knob of its own -- it is what
          exclusive mode looks like, and Win+F10 is the control for that. See the
          note on g_cursor_show. */
-    msub(bar, "View", m);
+    MenuSubmenu(bar, "View", m);
 
     /* ── ★ TOOLS: ONE MENU FOR EVERYTHING THAT IS NOT THE PICTURE. ───────────────
          The bar was File / Edit / View / Machine / Capture / Debug / Help -- seven
@@ -10554,7 +10554,7 @@ static HMENU build_menu(void)
          convention every Windows application of this era follows, and the install
          verbs sit above it because they are the destructive ones -- they should not
          be the thing your hand lands on. */
-    tools = mpop();                                               /* Tools        */
+    tools = MenuPopup();                                               /* Tools        */
 
     /* ── s81 (#148), user decision: every UNIMPLEMENTED item is removed -- Restart,
          Pause, Ctrl+Alt+Del, Key Mapper, the mount/boot/swap/drive items, the whole
@@ -10571,43 +10571,43 @@ static HMENU build_menu(void)
          while a scaler tried from the menu did not. One rule -- the menu is for
          trying things, the dialog is for keeping them. */
     /* user, s81: with only two items left, Machine is flattened into Tools itself. */
-    menu_combo(tools, "Limit Speed", SET_SPEEDMODE, IDM_SPEED_0);
+    MenuCombo(tools, "Limit Speed", SET_SPEEDMODE, IDM_SPEED_0);
     {   unsigned n;                                  /* #224: faster than this PC -> grey */
         for (n = 1; n < CPUSPEED_COUNT; ++n)
             if (!CpuSpeedIsAvailable(n, HostCpuMhz()))
                 EnableMenuItem(tools, IDM_SPEED_0 + n, MF_BYCOMMAND | MF_GRAYED); }
     /* The accelerator column names the RELEASE, because that is the one a captured
        user needs and cannot look up -- the menu is unreachable while capture is held. */
-    mi(tools,"Capture Mouse\tWin releases",IDM_INPUT_CAPTURE);
-    msep(tools);
+    MenuItem(tools,"Capture Mouse\tWin releases",IDM_INPUT_CAPTURE);
+    MenuSeparator(tools);
 
-    m = mpop();                                                   /* Tools>Capture*/
-    mi(m,"Take Screenshot\tCtrl+F5",IDM_CAP_SHOT);
-    msub(m,"Record Video (AVI)",(s=mpop(),mi(s,"Start / Stop",IDM_STUB),s));
-    mi(m,"Record Audio (WAV)",IDM_CAP_AUDIO);          /* #155: ticked while recording */
-    msub(m,"Record OPL / MIDI",(s=mpop(),mi(s,"Start / Stop",IDM_STUB),s)); msep(m);
-    mi(m,"Open Capture Folder",IDM_CAP_FOLDER); mi(m,"Capture Settings...",IDM_STUB);
-    msub(tools, "Capture", m);
+    m = MenuPopup();                                                   /* Tools>Capture*/
+    MenuItem(m,"Take Screenshot\tCtrl+F5",IDM_CAP_SHOT);
+    MenuSubmenu(m,"Record Video (AVI)",(s=MenuPopup(),MenuItem(s,"Start / Stop",IDM_STUB),s));
+    MenuItem(m,"Record Audio (WAV)",IDM_CAP_AUDIO);          /* #155: ticked while recording */
+    MenuSubmenu(m,"Record OPL / MIDI",(s=MenuPopup(),MenuItem(s,"Start / Stop",IDM_STUB),s)); MenuSeparator(m);
+    MenuItem(m,"Open Capture Folder",IDM_CAP_FOLDER); MenuItem(m,"Capture Settings...",IDM_STUB);
+    MenuSubmenu(tools, "Capture", m);
 
-    msep(tools);
+    MenuSeparator(tools);
     /* ── ★ INSTALLING IS AN ACTION, SO IT IS ON A MENU AND NOT A SETTINGS PAGE.
          It changes a machine-wide registry value, needs Administrator, and is the
          one thing here that outlives the process -- none of which belongs behind a
          tab of checkboxes. The same three verbs exist on the command line
          (/install, /uninstall, /status) for scripted use. */
-    mi(tools, "Install as System VDM...", IDM_FILE_INSTALL);
-    mi(tools, "Uninstall...", IDM_FILE_UNINSTALL);
-    mi(tools, "Installation Status...", IDM_FILE_STATUS);
-    msep(tools);
+    MenuItem(tools, "Install as System VDM...", IDM_FILE_INSTALL);
+    MenuItem(tools, "Uninstall...", IDM_FILE_UNINSTALL);
+    MenuItem(tools, "Installation Status...", IDM_FILE_STATUS);
+    MenuSeparator(tools);
     /* The old "Configuration" submenu (Edit Config File, Open Config Folder, ...)
        described a config FILE that never existed; the store is HKCU and the dialog
        is how you edit it. One entry, and it is this one. */
-    mi(tools, "Settings...", IDM_FILE_SETTINGS);
-    msub(bar, "Tools", tools);
+    MenuItem(tools, "Settings...", IDM_FILE_SETTINGS);
+    MenuSubmenu(bar, "Tools", tools);
 
-    m = mpop();                                                   /* Help         */
-    mi(m,"About",IDM_HELP_ABOUT);
-    msub(bar, "Help", m);
+    m = MenuPopup();                                                   /* Help         */
+    MenuItem(m,"About",IDM_HELP_ABOUT);
+    MenuSubmenu(bar, "Help", m);
     return bar;
 }
 
@@ -11282,7 +11282,7 @@ static LRESULT CALLBACK ll_kbd_proc(int code, WPARAM wp, LPARAM lp)
           no click takes the pointer -- it belongs to the Windows desktop and stays
           there. Skyroads is this case, and there is nothing capture could give it.
        2. A GUEST THAT HOOKS THE MOUSE CAPTURES IMMEDIATELY, at the moment it hooks.
-          That is g_MouseWantCapture, raised by mouse_int33 the first time the guest
+          That is g_MouseWantCapture, raised by MouseInt33 the first time the guest
           USES the driver, and performed on the UI tick.
        3. CAPTURED, THE POINTER DOES NOT EXIST. Not over the video, not over the status
           bar, not over the menu -- ClipCursor already confines it to our client, and
@@ -12463,15 +12463,15 @@ static void menu_view_sync(HWND h)
     if (!m) m = g_FsMenu;
     if (!m) return;
     for (i = 0; i < MENU_COMBO_N; ++i) {
-        UINT base = MENU_COMBOS[i].Base;
-        const SET_DEF *d = &g_SetDefinitions[MENU_COMBOS[i].IsSet];
-        DWORD v = g_set.Values[MENU_COMBOS[i].IsSet];
+        UINT base = g_MenuCombos[i].Base;
+        const SET_DEF *d = &g_SetDefinitions[g_MenuCombos[i].IsSet];
+        DWORD v = g_set.Values[g_MenuCombos[i].IsSet];
         if (v > d->High) v = d->Low;
         CheckMenuRadioItem(m, base, base + (UINT)d->High, base + (UINT)v, MF_BYCOMMAND);
     }
     for (i = 0; i < MENU_CHECK_N; ++i)
-        CheckMenuItem(m, MENU_CHECKS[i].id, MF_BYCOMMAND
-                      | (g_set.Values[MENU_CHECKS[i].IsSet] ? MF_CHECKED : MF_UNCHECKED));
+        CheckMenuItem(m, g_MenuChecks[i].Id, MF_BYCOMMAND
+                      | (g_set.Values[g_MenuChecks[i].IsSet] ? MF_CHECKED : MF_UNCHECKED));
     /* ── ★ A SCALE THAT CANNOT FIT THE DISPLAY IS GREYED, NOT SILENTLY SUBSTITUTED.
          host_apply_scale() steps down until the window fits, which is the right
          thing to DO and the wrong thing to say nothing about: picking 3x on a
@@ -13601,7 +13601,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 }
             } }
         /* ── ★ THE GUEST ASKED FOR THE MOUSE: TAKE IT. ───────────────────────────
-             Raised on the exec thread by mouse_int33 and performed here, because
+             Raised on the exec thread by MouseInt33 and performed here, because
              ClipCursor / SetWindowsHookEx / SetCursor belong to the window's own
              thread. Latched, so this fires once per program and Win+F10 stays the
              last word on it -- see the note on g_MouseWantCapture.
@@ -13702,7 +13702,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                      its screen back (a paint program's save-under, a GET) read our arrow.
                      The planar/CGA/mode-Y frames are host buffers (st->fb), which is why
                      only the linear modes ever showed it -- the comment above
-                     overlay_cursor said "the frame is re-rendered from VRAM every tick",
+                     OverlayCursor said "the frame is re-rendered from VRAM every tick",
                      true for those and not for 13h.
                    ► OVERLAY, NOT VRAM -- A DECISION, AND WHY. A real driver draws into
                      video memory (saving and restoring what was under it at every move),
@@ -13716,7 +13716,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                      measures whether the oracles' drivers write VRAM, so the gap is
                      recorded rather than assumed (docs/inventory/mouse.md, 09h). */
                 if (g_MouseHidden == 0 && !ms_text && g_PresentDdraw.IsSnapshotValid && g_PresentDdraw.SnapshotBpp == 8)
-                    ms_draw_gfx_cursor(g_PresentDdraw.Snapshot, g_PresentDdraw.SnapshotWidth, g_PresentDdraw.SnapshotHeight, g_PresentDdraw.SnapshotWidth);
+                    MouseDrawGraphicsCursor(g_PresentDdraw.Snapshot, g_PresentDdraw.SnapshotWidth, g_PresentDdraw.SnapshotHeight, g_PresentDdraw.SnapshotWidth);
                 HOST_UNLOCK();
                 host_follow_frame(h);                        /* #325: the window follows the mode */
                 /* ── FRAME SKIP DROPS THE BLIT, NOT THE SNAPSHOT. ────────────────
@@ -13946,19 +13946,19 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         {   UINT id = (UINT)LOWORD(wp);
             int k;
             for (k = 0; k < MENU_COMBO_N; ++k) {
-                UINT base = MENU_COMBOS[k].Base;
+                UINT base = g_MenuCombos[k].Base;
                 if (id >= base && id < base + IDM_COMBO_SPAN) {
                     DWORD v = (DWORD)(id - base);
-                    if (v <= g_SetDefinitions[MENU_COMBOS[k].IsSet].High) {
-                        g_set.Values[MENU_COMBOS[k].IsSet] = v;
+                    if (v <= g_SetDefinitions[g_MenuCombos[k].IsSet].High) {
+                        g_set.Values[g_MenuCombos[k].IsSet] = v;
                         settings_apply_live(h);
                     }
                     return 0;
                 }
             }
             for (k = 0; k < MENU_CHECK_N; ++k) {
-                if (id == MENU_CHECKS[k].id) {
-                    g_set.Values[MENU_CHECKS[k].IsSet] = g_set.Values[MENU_CHECKS[k].IsSet] ? 0u : 1u;
+                if (id == g_MenuChecks[k].Id) {
+                    g_set.Values[g_MenuChecks[k].IsSet] = g_set.Values[g_MenuChecks[k].IsSet] ? 0u : 1u;
                     settings_apply_live(h);
                     return 0;
                 }
@@ -17871,7 +17871,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
              3s throws away every later sample, i.e. the whole trace of where it sits.
              wowrun.bat already bounds the run (75s, then taskkill) and the headless
              deadline bounds the rest, so nothing here is unbounded. */
-        if (frozen >= (g_wow_nmod ? 600u : 12u)          /* 3s normally; 150s on a WOW run */
+        if (frozen >= (g_WowModuleCount ? 600u : 12u)          /* 3s normally; 150s on a WOW run */
             && g_DpmiWatchdogGeneration == my_gen) break;           /* ...and only while its client lives */
       }
     }
@@ -18039,17 +18039,17 @@ static int WowDlgIsSelectorAbsent(WORD sel)
 static WORD wow_callback_selector(void)
 {
     int idx;
-    if (g_wow_cbk_sel) return g_wow_cbk_sel;
-    if (!g_wow_cbk_seg) return 0;
+    if (g_WowCallbackSelector) return g_WowCallbackSelector;
+    if (!g_WowCallbackSegment) return 0;
     idx = dpmi_host_idx();       /* host-private: the guest returns THROUGH this */
     if (idx < 0) return 0;
-    g_Ldt[idx].Base   = g_wow_cbk_lin;
+    g_Ldt[idx].Base   = g_WowCallbackLinear;
     g_Ldt[idx].Limit  = 0x0F;
     g_Ldt[idx].Access = 0xFA;                /* present, DPL3, code, readable */
     g_Ldt[idx].Flags  = 0;                   /* 16-bit                        */
     dpmi_install(idx);
-    g_wow_cbk_sel = (WORD)((idx << 3) | 7);
-    return g_wow_cbk_sel;
+    g_WowCallbackSelector = (WORD)((idx << 3) | 7);
+    return g_WowCallbackSelector;
 }
 
 static void dpmi_s2d_forget(WORD sel)
@@ -18346,14 +18346,14 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
          and it is the thing that has to be real memory; the staged image may now be
          LARGER than it (krnl386's is 0x1644 paragraphs), in which case the image wins. */
     enum { WOW_SELECTOR_PARAS = 0x1000 };        /* 64 KB -- the whole scratch selector */
-    NE_MODULE *ne = &g_wow_mod[0];
-    uint8_t *img = g_wow_img[0];
+    NE_MODULE *ne = &g_WowModule[0];
+    uint8_t *img = g_WowImage[0];
     char m[400], *q;
     WORD sseg = 0, smax = 0;
     DWORD imglen;
     int i;
 
-    if (!g_wow_nmod || !img) return -1;
+    if (!g_WowModuleCount || !img) return -1;
 
     imglen        = ne->ImageLength > ne->Header ? ne->ImageLength - ne->Header : 0;
     hdrimg_paras  = (WORD)((imglen + 15u) >> 4);
@@ -18395,9 +18395,9 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
          memory belongs below the guest's, not in the middle of it. */
     {   WORD hseg = 0, hmax = 0;
         if (DosMcbAllocate(NULL, mp->FirstMcb, WOW_HOSTPOOL_PARAS, &hseg, &hmax) == 0 && hseg)
-            g_wow_pool_seg = hseg;
+            g_WowPoolSegment = hseg;
         q = m; q = LogPut(q, "WOWV86: host pool reserved at para 0x");
-        q = LogHex(q, g_wow_pool_seg); q = LogPut(q, " size 0x");
+        q = LogHex(q, g_WowPoolSegment); q = LogPut(q, " size 0x");
         q = LogHex(q, (DWORD)WOW_HOSTPOOL_PARAS);
         q = LogPut(q, " paras (see wow_host_alloc)\r\n");
         LogAppend(LDTLOG_PATH, m, q);
@@ -18409,10 +18409,10 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
          themselves are zeroed -- which is not a stub, it is what a free SFT entry
          looks like; nothing has been opened yet at this point in the bootstrap.
        ▸ WOW-only on purpose. It comes out of the host pool because by here krnl386
-         owns every remaining paragraph (see wow_host_alloc), and a DOS guest still
+         owns every remaining paragraph (see WowHostAllocate), and a DOS guest still
          gets SysVars+4 = 0 -- unchanged, and the reason no DOS guest has ever been
          affected by this. When a DOS program needs the SFT, this moves. */
-    {   WORD sft = wow_host_alloc(DOS_SFT_PARAS);
+    {   WORD sft = WowHostAllocate(DOS_SFT_PARAS);
         volatile BYTE *sv = (volatile BYTE *)(ULONG_PTR)
                             (((DWORD)DOS_SYSVARS_SEG << 4) + DOS_SYSVARS_OFF);
         q = m; q = LogPut(q, "WOWV86: SFT ");
@@ -18436,11 +18436,11 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
     }
     {   WORD xseg = 0, xmax = 0;
         if (DosMcbAllocate(NULL, mp->FirstMcb, 0x400, &xseg, &xmax) == 0 && xseg) {
-            g_pm_xfer_seg = xseg; g_pm_xfer_para = 0x400;
+            g_PmTransferSegment = xseg; g_PmTransferParagraphs = 0x400;
         }
         q = m;
-        q = LogPut(q, "WOWV86: PM->V86 transfer buffer at para 0x"); q = LogHex(q, g_pm_xfer_seg);
-        q = LogPut(q, " (0x"); q = LogHex(q, (DWORD)g_pm_xfer_para * 16u);
+        q = LogPut(q, "WOWV86: PM->V86 transfer buffer at para 0x"); q = LogHex(q, g_PmTransferSegment);
+        q = LogPut(q, " (0x"); q = LogHex(q, (DWORD)g_PmTransferParagraphs * 16u);
         q = LogPut(q, " bytes; largest free was 0x"); q = LogHex(q, xmax);
         q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
     }
@@ -18453,22 +18453,22 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
          a wrong filename somewhere far from here. One paragraph, one purpose. */
     {   WORD pseg = 0, pmax = 0;
         if (DosMcbAllocate(NULL, mp->FirstMcb, 0x20, &pseg, &pmax) == 0 && pseg)
-            g_wow_path_seg = pseg;
+            g_WowPathSegment = pseg;
         q = m;
-        q = LogPut(q, "WOWV86: module-path scratch at para 0x"); q = LogHex(q, g_wow_path_seg);
+        q = LogPut(q, "WOWV86: module-path scratch at para 0x"); q = LogHex(q, g_WowPathSegment);
         q = LogPut(q, " (0x200 bytes; largest free was 0x"); q = LogHex(q, pmax);
         q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
     }
     /* ── ★ AND ONE FOR A LAUNCHED TASK'S ENVIRONMENT (WOW32 seg2 0xd1). ────────
          Allocated here, with the others, because after this function hands the
          arena to krnl386 there is nothing left to allocate FROM -- see
-         wow_host_alloc. Separate again: this one is held by the child for its
+         WowHostAllocate. Separate again: this one is held by the child for its
          whole life, and both buffers above are reused on the very next call. */
     {   WORD eseg = 0, emax = 0;
         if (DosMcbAllocate(NULL, mp->FirstMcb, WOW_ENV_PARAS, &eseg, &emax) == 0 && eseg)
-            g_wow_env_seg = eseg;
+            g_WowEnvironmentSegment = eseg;
         q = m;
-        q = LogPut(q, "WOWV86: task-environment block at para 0x"); q = LogHex(q, g_wow_env_seg);
+        q = LogPut(q, "WOWV86: task-environment block at para 0x"); q = LogHex(q, g_WowEnvironmentSegment);
         q = LogPut(q, " (0x"); q = LogHex(q, (DWORD)WOW_ENV_PARAS * 16u);
         q = LogPut(q, " bytes; largest free was 0x"); q = LogHex(q, emax);
         q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
@@ -18487,8 +18487,8 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
     {   WORD cseg = 0, cmax = 0;
         if (DosMcbAllocate(NULL, mp->FirstMcb, 1, &cseg, &cmax) == 0 && cseg) {
             volatile BYTE *cb = (volatile BYTE *)(ULONG_PTR)((DWORD)cseg << 4);
-            g_wow_cbk_seg = cseg;
-            g_wow_cbk_lin = (DWORD)cseg << 4;
+            g_WowCallbackSegment = cseg;
+            g_WowCallbackLinear = (DWORD)cseg << 4;
             cb[0] = 0xC4; cb[1] = 0xC4; cb[2] = WOWCALL_BOP_CODE;
             /* ★ And the RETF trampoline, four bytes along -- the paragraph has
                  sixteen and we were using three. See WOWCALL_RETF_OFF: it is how
@@ -18498,7 +18498,7 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
         }
         q = m;
         q = LogPut(q, "WOWV86: 16-bit callback return stub at para 0x");
-        q = LogHex(q, g_wow_cbk_seg);
+        q = LogHex(q, g_WowCallbackSegment);
         q = LogPut(q, " (C4 C4 "); q = LogHexByte(q, WOWCALL_BOP_CODE);
         q = LogPut(q, "; largest free was 0x"); q = LogHex(q, cmax);
         q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
@@ -18839,7 +18839,7 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
                                         : ne->Segments[0].FileOffset;
             DWORD gap   = (first > ne->Header) ? ((first - ne->Header) + 15u) & ~15u : 0;
             DWORD full  = 0xF880u;
-            g_wow_entry_cx = (WORD)(gap < full ? full - gap : full);
+            g_WowEntryCx = (WORD)(gap < full ? full - gap : full);
             q = LogPut(q, "WOWV86: arena gap = 0x"); q = LogHex(q, gap);
             q = LogPut(q, " bytes (the header and tables, header+0x0 .. +0x");
             q = LogHex(q, first - ne->Header);
@@ -18848,7 +18848,7 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
             LogAppend(LDTLOG_PATH, m, q);
             q = m;
         }
-        q = LogPut(q, "WOWV86: arena declared to krnl386 = 0x"); q = LogHex(q, g_wow_entry_cx);
+        q = LogPut(q, "WOWV86: arena declared to krnl386 = 0x"); q = LogHex(q, g_WowEntryCx);
         q = LogPut(q, " bytes -> CX at entry");
         /* ⚠ UNCHANGED WHILE THE STAGED IMAGE GREW, DELIBERATELY -- one change per run.
              It is now a claim about memory the staged image also occupies (the image is
@@ -18856,7 +18856,7 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
              the run gets past LoadSegment and then dies in the arena, THIS is the next
              thing to look at, not a new mystery. Stock's arena is a separate block
              below its staged image (session 33 part 7). */
-        q = LogPut(q, (DWORD)g_wow_entry_cx > hlen ? "\r\n"
+        q = LogPut(q, (DWORD)g_WowEntryCx > hlen ? "\r\n"
                                                  : " -- ⚠ OVERLAPS THE STAGED IMAGE\r\n");
         LogAppend(LDTLOG_PATH, m, q);
     }
@@ -18939,7 +18939,7 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
              scan walked off into whatever followed and OpenFile got nothing, which is
              reported as "Unable to open KERNEL executable" -- error #3 of its table.
            ⚠ And the path must be KRNL386's, not the Win16 app's: this is krnl386
-             asking where IT lives. g_wow_krnl_path is the `-a` argument the WOW
+             asking where IT lives. g_WowKernelPath is the `-a` argument the WOW
              launch already carries. */
         /* ★★ AND THE PATH, because krnl386 SEARCHES IT for the Win16 program.
              `[boot] WOWSHELL` in SYSTEM.INI yields a bare "WOWEXEC.EXE" with no
@@ -18965,17 +18965,17 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
                  it fits: krnl386 finds its own executable by scanning past the strings
                  to the double NUL, so anything added here moves the tail it reads. */
             DosEnvBuildWithCard(NULL, DOS_ENV_SEG,
-                          g_wow_krnl_path[0] ? g_wow_krnl_path
+                          g_WowKernelPath[0] ? g_WowKernelPath
                                              : "C:\\WINDOWS\\SYSTEM32\\KRNL386.EXE",
                           pv[0] ? pv : "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS", &g_sbcfg,
                           wowroot[0] ? wowroot : NULL);
             q = m; q = LogPut(q, "WOWV86: env rebuilt, PATH=");
             q = LogPut(q, pv[0] ? pv : "(fallback)");
             q = LogPut(q, " program path = ");
-            q = LogPut(q, g_wow_krnl_path[0] ? g_wow_krnl_path : "(default)");
+            q = LogPut(q, g_WowKernelPath[0] ? g_WowKernelPath : "(default)");
             q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
         }
-        g_wow_psp_seg = pseg;
+        g_WowPspSegment = pseg;
         q = m;
         q = LogPut(q, "WOWV86: krnl386 PSP/arena block at para 0x"); q = LogHex(q, pseg);
         q = LogPut(q, " size 0x");        q = LogHex(q, pmax);
@@ -19009,8 +19009,8 @@ static void wow_probe_selectors(void)
 {
     char m[600], *q;
     int k, i;
-    if (!g_wow_nmod) return;
-    q = m; q = LogPut(q, "WOWTRY: selector stage, modules="); q = LogHex(q, (DWORD)g_wow_nmod);
+    if (!g_WowModuleCount) return;
+    q = m; q = LogPut(q, "WOWTRY: selector stage, modules="); q = LogHex(q, (DWORD)g_WowModuleCount);
     q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
     wow_probe_ldt_matrix("wow-late");
 
@@ -19050,8 +19050,8 @@ static void wow_probe_selectors(void)
     /* ── PHASE 2a: a selector for EVERY segment of EVERY module, before any
          relocation runs. NeRegistryResolve refuses a target whose selector is still
          0, so getting this order wrong fails loudly instead of writing 0000:xxxx. */
-    for (k = 0; k < g_wow_nmod; ++k) {
-        NE_MODULE *ne = &g_wow_mod[k];
+    for (k = 0; k < g_WowModuleCount; ++k) {
+        NE_MODULE *ne = &g_WowModule[k];
         for (i = 0; i < (int)ne->SegmentCount; ++i) {
             NE_SEGMENT *sg = &ne->Segments[i];
             int is_code = !(sg->Flags & NE_SEG_DATA);
@@ -19070,7 +19070,7 @@ static void wow_probe_selectors(void)
             sg->Selector = (WORD)((idx << 3) | 7);            /* the REAL selector now */
 
             q = m;
-            q = LogPut(q, "  "); q = LogPut(q, g_wow_name[k]);
+            q = LogPut(q, "  "); q = LogPut(q, g_WowName[k]);
             q = LogPut(q, " seg ");      q = LogHex(q, (DWORD)(i + 1));
             q = LogPut(q, is_code ? " CODE" : " DATA");
             q = LogPut(q, " base=0x");   q = LogHex(q, g_Ldt[idx].Base);
@@ -19095,14 +19095,14 @@ static void wow_probe_selectors(void)
          USER are the real test: every call they make into KERNEL is patched here.
          WOWEXEC is expected to STOP at KEYBOARD, which is simply not loaded yet --
          a stop that names its module is a to-do list, not a failure. */
-    for (k = 0; k < g_wow_nmod; ++k) {
-        NE_MODULE *ne = &g_wow_mod[k];
+    for (k = 0; k < g_WowModuleCount; ++k) {
+        NE_MODULE *ne = &g_WowModule[k];
         int rc = 0;
         ne->Sites = 0;
         for (i = 0; i < (int)ne->SegmentCount && rc == 0; ++i)
             rc = NeApplyRelocations(ne, i, NeRegistryResolve, &g_wow_reg);
         q = m;
-        q = LogPut(q, "  RELOC "); q = LogPut(q, g_wow_name[k]);
+        q = LogPut(q, "  RELOC "); q = LogPut(q, g_WowName[k]);
         if (rc == 0) {
             q = LogPut(q, " ALL RESOLVED sites=0x"); q = LogHex(q, ne->Sites);
         } else {
@@ -19118,8 +19118,8 @@ static void wow_probe_selectors(void)
 
     q = m;
     q = LogPut(q, "WOWTRY: bind stage done.\r\n  KERNEL init entry would be CS:IP = sel 0x");
-    q = LogHex(q, g_wow_mod[0].Segments[(g_wow_mod[0].CsIp >> 16) - 1].Selector);
-    q = LogPut(q, ":0x"); q = LogHex(q, g_wow_mod[0].CsIp & 0xFFFF);
+    q = LogHex(q, g_WowModule[0].Segments[(g_WowModule[0].CsIp >> 16) - 1].Selector);
+    q = LogPut(q, ":0x"); q = LogHex(q, g_WowModule[0].CsIp & 0xFFFF);
     q = LogPut(q, "\r\nWOWTRY: NOT entering PM yet -- next step.\r\n");
     LogAppend(LDTLOG_PATH, m, q);
 }
@@ -19157,7 +19157,7 @@ static void dpmi_install_default_pm_handlers(DOS_MACHINE *mp)
          pushed this allocation out, the table was never built, and the run died at PM
          step 0x0d with nothing in the log pointing here. A silent return from the
          function that installs 256 interrupt vectors is not a small omission. */
-    seg = wow_host_alloc(0x40);
+    seg = WowHostAllocate(0x40);
     g_PmDefaultFromDos = !seg;
     if (!seg && (DosMcbAllocate(NULL, mp->FirstMcb, 0x40, &seg, &max) || !seg)) {
         q = LogPut(q, "DPMI: NO MEMORY for the 256-vector default PM handler table "
@@ -19473,17 +19473,17 @@ static DWORD dpmi_bop_vec(DWORD csv, DWORD eip)
     int   sg;
 
     if (v) return v;
-    if (!g_wow_nmod || !g_wow_img[0]) return 0;
+    if (!g_WowModuleCount || !g_WowImage[0]) return 0;
     if (!host_readable((const void *)(ULONG_PTR)lin, 2)) return 0;
     {   const volatile BYTE *b = (const volatile BYTE *)(ULONG_PTR)lin;
         if (b[0] != 0xC4 || b[1] != 0xC4) return 0;
     }
-    for (sg = 0; sg < (int)g_wow_mod[0].SegmentCount && sg < WOW_PMBASE_MAX; ++sg) {
-        NE_SEGMENT *s = &g_wow_mod[0].Segments[sg];
+    for (sg = 0; sg < (int)g_WowModule[0].SegmentCount && sg < WOW_PMBASE_MAX; ++sg) {
+        NE_SEGMENT *s = &g_WowModule[0].Segments[sg];
         if (!s->Sector || eip + 1 >= s->Length) continue;
         if (base != g_WowPmBase[sg] && base != ((DWORD)s->Selector << 4)) continue;
-        if (s->FileOffset + eip + 1 >= g_wow_mod[0].ImageLength) continue;
-        {   const BYTE *f = g_wow_img[0] + s->FileOffset + eip;
+        if (s->FileOffset + eip + 1 >= g_WowModule[0].ImageLength) continue;
+        {   const BYTE *f = g_WowImage[0] + s->FileOffset + eip;
             if (f[0] != 0xCD) return 0;
             PatchMapSet(lin, f[1]);                     /* one lookup, once */
             return f[1];
@@ -20804,7 +20804,7 @@ static int ws_intertask_live(void)
      for a Solitaire run fell from 2.7 MB to 10 KB -- and reported the redraw
      "still slow". So the FILE trace is not the cost, and the remaining suspects
      are the per-BOP work that happens either way: this flag gates the WRITE, not
-     the ~1.3 KB of string FORMATTING each BOP still does, nor wow_psp_env_check
+     the ~1.3 KB of string FORMATTING each BOP still does, nor WowPspEnvironmentCheck
      reading guest memory on every one, nor WowWinPump's PeekMessage, nor the
      BOP round trip itself.
    ── ⚠ ALSO REFUTED, same round: `SerialOut` does WriteFile + FlushFileBuffers
@@ -21648,7 +21648,7 @@ static int wow_vendor_api_entry(DOS_MACHINE *mp, WORD *sel, WORD *off)
        every other free paragraph by the time this runs, so the fallback below can
        only succeed on a non-WOW path -- and failing here is not cosmetic: krnl386
        treats a missing vendor API as "Inadequate DPMI Server" and exits. */
-    seg = wow_host_alloc(1);
+    seg = WowHostAllocate(1);
     if (!seg && (DosMcbAllocate(NULL, mp->FirstMcb, 1, &seg, &max) || !seg)) return -1;
     b = (volatile BYTE *)(ULONG_PTR)((DWORD)seg << 4);
     for (i = 0; i < (int)sizeof stub; ++i) b[i] = stub[i];
@@ -21687,9 +21687,9 @@ static int pm_xfer_in(WORD sel, DWORD off, DWORD len)
 {
     DWORD b = dpmi_sel_base(sel);
     const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)(b + off);
-    volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)((DWORD)g_pm_xfer_seg << 4);
+    volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)((DWORD)g_PmTransferSegment << 4);
     DWORD k;
-    if (!b || len > (DWORD)g_pm_xfer_para * 16u) return -1;
+    if (!b || len > (DWORD)g_PmTransferParagraphs * 16u) return -1;
     if (!host_readable((const void *)s, len)) return -1;
     for (k = 0; k < len; ++k) d[k] = s[k];
     return 0;
@@ -21699,9 +21699,9 @@ static int pm_xfer_out(WORD sel, DWORD off, DWORD len)
 {
     DWORD b = dpmi_sel_base(sel);
     volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)(b + off);
-    const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)((DWORD)g_pm_xfer_seg << 4);
+    const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)((DWORD)g_PmTransferSegment << 4);
     DWORD k;
-    if (!b || len > (DWORD)g_pm_xfer_para * 16u) return -1;
+    if (!b || len > (DWORD)g_PmTransferParagraphs * 16u) return -1;
     if (!host_readable((const void *)d, len)) return -1;
     for (k = 0; k < len; ++k) d[k] = s[k];
     return 0;
@@ -21728,11 +21728,11 @@ static char *pm_int21_xfer(DOS_MACHINE *mp, volatile BYTE *tib, DWORD ah, char *
     DWORD dxv = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
     DWORD cxv = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
     DWORD sav_ds = VDM_REG(tib, VTIB_DS), sav_dx = VDM_REG(tib, VTIB_EDX);
-    DWORD cap = (DWORD)g_pm_xfer_para * 16u;
+    DWORD cap = (DWORD)g_PmTransferParagraphs * 16u;
     int rc = 0;
 
     p = LogPut(p, "INT21h AH=0x"); p = LogHex(p, ah);
-    p = LogPut(p, " (PM->V86 via xfer buf 0x"); p = LogHex(p, g_pm_xfer_seg);
+    p = LogPut(p, " (PM->V86 via xfer buf 0x"); p = LogHex(p, g_PmTransferSegment);
     p = LogPut(p, ") ds:dx=0x"); p = LogHex(p, dsv); p = LogPut(p, ":0x"); p = LogHex(p, dxv);
 
     switch (ah) {
@@ -21743,7 +21743,7 @@ static char *pm_int21_xfer(DOS_MACHINE *mp, volatile BYTE *tib, DWORD ah, char *
         DWORD n = pm_xfer_strlen(dsv, dxv, cap < 260 ? cap - 1 : 259);
         rc = pm_xfer_in(dsv, dxv, n);
         if (!rc) {
-            const char *nm = (const char *)(ULONG_PTR)((DWORD)g_pm_xfer_seg << 4);
+            const char *nm = (const char *)(ULONG_PTR)((DWORD)g_PmTransferSegment << 4);
             p = LogPut(p, " name=\""); p = LogPut(p, nm); p = LogPut(p, "\"");
         }
         break; }
@@ -21777,7 +21777,7 @@ static char *pm_int21_xfer(DOS_MACHINE *mp, volatile BYTE *tib, DWORD ah, char *
     }
 
     /* Point the DOS layer at the buffer, in the terms it understands. */
-    VDM_SET16(tib, VTIB_DS, g_pm_xfer_seg);
+    VDM_SET16(tib, VTIB_DS, g_PmTransferSegment);
     VDM_SET16(tib, VTIB_EDX, 0);
     m.TraceCursor = p; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); p = m.TraceCursor;
     VDM_REG(tib, VTIB_DS) = sav_ds; VDM_REG(tib, VTIB_EDX) = sav_dx;
@@ -21821,8 +21821,8 @@ static int pm_lfn_copy(WORD sel, DWORD off, DWORD xoff, DWORD len, int in)
 {
     DWORD b = dpmi_sel_base(sel), k;
     volatile BYTE *g = (volatile BYTE *)(ULONG_PTR)(b + off);
-    volatile BYTE *x = (volatile BYTE *)(ULONG_PTR)(((DWORD)g_pm_xfer_seg << 4) + xoff);
-    if (!b || xoff + len > (DWORD)g_pm_xfer_para * 16u || len > 0x400) return -1;
+    volatile BYTE *x = (volatile BYTE *)(ULONG_PTR)(((DWORD)g_PmTransferSegment << 4) + xoff);
+    if (!b || xoff + len > (DWORD)g_PmTransferParagraphs * 16u || len > 0x400) return -1;
     if (!len) return 0;
     if (!host_readable((const void *)g, len)) return -1;
     if (in) for (k = 0; k < len; ++k) x[k] = g[k];
@@ -21834,7 +21834,7 @@ static int pm_lfn_copy(WORD sel, DWORD off, DWORD xoff, DWORD len, int in)
    string's length + its NUL, never more than `len` (kind 4). */
 static DWORD pm_lfn_outlen(DWORD xoff, int kind, DWORD len)
 {
-    const volatile BYTE *x = (const volatile BYTE *)(ULONG_PTR)(((DWORD)g_pm_xfer_seg << 4) + xoff);
+    const volatile BYTE *x = (const volatile BYTE *)(ULONG_PTR)(((DWORD)g_PmTransferSegment << 4) + xoff);
     DWORD n = 0;
     if (kind != 4) return len;
     while (n < len && x[n]) ++n;
@@ -21876,7 +21876,7 @@ static char *pm_int21_lfn(DOS_MACHINE *mp, volatile BYTE *tib, char *p)
     if (al == 0xA0) { di_k = 4; di_len = VDM_REG(tib, VTIB_ECX) & 0xFFFF; if (di_len > 0x400) di_len = 0x400; }
 
     p = LogPut(p, "INT21h AX=71"); p = LogHexByte(p, (BYTE)al);
-    p = LogPut(p, " (PM LFN -> V86 via xfer buf 0x"); p = LogHex(p, g_pm_xfer_seg); p = LogPut(p, ")");
+    p = LogPut(p, " (PM LFN -> V86 via xfer buf 0x"); p = LogHex(p, g_PmTransferSegment); p = LogPut(p, ")");
 
     /* In. A string's length is found first (bounded, never past what is readable). */
     if (dx_k == 1) { dx_len = pm_xfer_strlen(dsv, dxo, 0x3FF); rc |= pm_lfn_copy(dsv, dxo, 0x000, dx_len, 1); }
@@ -21890,13 +21890,13 @@ static char *pm_int21_lfn(DOS_MACHINE *mp, volatile BYTE *tib, char *p)
         return p;
     }
     if (dx_k == 1 || si_k == 1 || di_k == 1) {
-        const char *nm = (const char *)(ULONG_PTR)(((DWORD)g_pm_xfer_seg << 4)
+        const char *nm = (const char *)(ULONG_PTR)(((DWORD)g_PmTransferSegment << 4)
                                                    + (dx_k == 1 ? 0x000 : si_k == 1 ? 0x400 : 0x800));
         p = LogPut(p, " name=\""); p = LogPut(p, nm); p = LogPut(p, "\"");
     }
 
-    VDM_SET16(tib, VTIB_DS, g_pm_xfer_seg);
-    VDM_SET16(tib, VTIB_ES, g_pm_xfer_seg);
+    VDM_SET16(tib, VTIB_DS, g_PmTransferSegment);
+    VDM_SET16(tib, VTIB_ES, g_PmTransferSegment);
     if (dx_k) VDM_SET16(tib, VTIB_EDX, 0x000);
     if (si_k) VDM_SET16(tib, VTIB_ESI, 0x400);
     if (di_k) VDM_SET16(tib, VTIB_EDI, 0x800);
@@ -22107,7 +22107,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
            ⚠ AN UNEXPECTED ARRIVAL IS NOT INERT. If nothing is in flight, some
              guest reached our stub on its own, and the honest thing is to say so
              and stop -- resuming would run whatever context happened to be live. */
-        if (bb[0] == 0xC4 && bb[1] == 0xC4 && g_wow_cbk_lin && blin == g_wow_cbk_lin) {
+        if (bb[0] == 0xC4 && bb[1] == 0xC4 && g_WowCallbackLinear && blin == g_WowCallbackLinear) {
             DWORD res = (VDM_REG(tib, VTIB_EAX) & 0xFFFF)
                       | ((VDM_REG(tib, VTIB_EDX) & 0xFFFF) << 16);
             WOWCALL_FRAME *fr = WowCallLeave(tib, res);
@@ -22471,7 +22471,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                  to the writer as a host-side instrument gets without single-stepping
                  -- and it is the same move `pmchg.txt` makes for module segments,
                  which cannot reach a selector krnl386 allocated at run time. */
-            p = wow_psp_env_check(p, "a WOW32 BOP");
+            p = WowPspEnvironmentCheck(p, "a WOW32 BOP");
             /* ── ★★★ WHERE THE TIME ACTUALLY GOES, EVERY 4096 BOPs. ─────────
                  The user has reported the Win16 guests as slow twice, and both
                  times the cause was GUESSED and both guesses were wrong (the
@@ -22570,7 +22570,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
             if (bcode == 0x53) { p = LogPut(p, " sub=0x"); p = LogHexByte(p, bsub); }
             p = LogPut(p, " at 0x");    p = LogHex(p, eip);
             /* ── ★★ ASK pmap FIRST, BECAUSE IT ANSWERS FOR EVERY GUEST. ───────────────
-                 The file-image check below is the WOW one and needs g_wow_nmod, so for a
+                 The file-image check below is the WOW one and needs g_WowModuleCount, so for a
                  DOS or DPMI guest -- ZAR, GH #23 -- it cannot run at all, and the question
                  "is this BOP OURS or the guest's own bytes" was left to inference twice.
                  pmap is keyed by LINEAR ADDRESS and is exactly the record of what we
@@ -22600,11 +22600,11 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                So ask the module's own file image what those bytes are. It is the one
                  source that cannot have been rewritten, and it turns "unimplemented BOP
                  0x1f" into "a swallowed INT 21h", which is a different bug entirely. */
-            if (g_wow_nmod && g_wow_img[0]) {
+            if (g_WowModuleCount && g_WowImage[0]) {
                 int mi;
                 DWORD csb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
-                for (mi = 0; mi < (int)g_wow_mod[0].SegmentCount; ++mi) {
-                    NE_SEGMENT *sg = &g_wow_mod[0].Segments[mi];
+                for (mi = 0; mi < (int)g_WowModule[0].SegmentCount; ++mi) {
+                    NE_SEGMENT *sg = &g_WowModule[0].Segments[mi];
                     if (!sg->Sector || eip + 1 >= sg->Length) continue;
                     /* Only the segment this CS actually is: match the PM copy's base
                        against the code selector we recognised for segment 1, and the
@@ -22612,7 +22612,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     if (mi == 0 && csb != g_WowPmSegment1Base &&
                         csb != (DWORD)sg->Selector << 4) continue;
                     if (mi != 0 && csb != (DWORD)sg->Selector << 4) continue;
-                    {   const BYTE *f = g_wow_img[0] + sg->FileOffset + eip;
+                    {   const BYTE *f = g_WowImage[0] + sg->FileOffset + eip;
                         p = LogPut(p, " [file seg"); p = LogHex(p, (DWORD)(mi + 1));
                         p = LogPut(p, "+0x"); p = LogHex(p, eip);
                         p = LogPut(p, " = "); p = LogHexByte(p, f[0]);
@@ -22695,10 +22695,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         if (nm) { p = LogPut(p, " "); p = LogPut(p, nm); }
                         if (kt) p = LogPut(p, " [krnl]");
                         else {
-                            int mk = wow_module_of_sel((WORD)sseg);
+                            int mk = WowModuleOfSelector((WORD)sseg);
                             p = LogPut(p, " [");
                             /* ⚠ `?` MEANT TWO DIFFERENT THINGS AND THAT COST A
-                                 READING. wow_module_of_sel is a BIND-STAGE table:
+                                 READING. WowModuleOfSelector is a BIND-STAGE table:
                                  it cannot name a selector krnl386 allocated at run
                                  time, so USER's own calls printed as "?'s table"
                                  even though the dispatcher had identified that very
@@ -22706,16 +22706,16 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  wowuser.h. A line saying "unknown" about something
                                  the host knows is an instrument lying quietly.
                                  The two tables we HAVE identified say so by name. */
-                            if (g_wow_user_seg && sseg == g_wow_user_seg)
+                            if (g_WowUserSegment && sseg == g_WowUserSegment)
                                 p = LogPut(p, "USER");
-                            else if (g_wow_krnl2_seg && sseg == g_wow_krnl2_seg)
+                            else if (g_WowKernel2Segment && sseg == g_WowKernel2Segment)
                                 p = LogPut(p, "krnl386 seg2");
-                            else if (g_wow_sound_seg && sseg == g_wow_sound_seg)
+                            else if (g_WowSoundSegment && sseg == g_WowSoundSegment)
                                 p = LogPut(p, "SOUND");
-                            else if (g_wow_mmedia_seg && sseg == g_wow_mmedia_seg)
+                            else if (g_WowMultimediaSegment && sseg == g_WowMultimediaSegment)
                                 p = LogPut(p, "MMSYSTEM");
                             else
-                                p = LogPut(p, mk >= 0 ? g_wow_name[mk] : "?");
+                                p = LogPut(p, mk >= 0 ? g_WowName[mk] : "?");
                             p = LogPut(p, "'s table -- a DIFFERENT id space]");
                         }
                         p = LogPut(p, " stub=0x"); p = LogHex(p, sseg);
@@ -23211,7 +23211,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
                     return 1;
                 }
-                if (f.IsKernel && f.Id == WOW32_GETCURDIR && g_pm_xfer_seg) {
+                if (f.IsKernel && f.Id == WOW32_GETCURDIR && g_PmTransferSegment) {
                     DWORD gsi  = Wow32ArgWord(&f, 0);
                     WORD  gsel = Wow32ArgWord(&f, 2);
                     DWORD drv  = Wow32ArgWord(&f, 4) & 0xFF;
@@ -23219,12 +23219,12 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     DWORD sds = VDM_REG(tib, VTIB_DS),  ssi = VDM_REG(tib, VTIB_ESI);
                     DWORD gbase = dpmi_sel_base(gsel);
                     volatile BYTE *xb = (volatile BYTE *)(ULONG_PTR)
-                                        ((DWORD)g_pm_xfer_seg << 4);
+                                        ((DWORD)g_PmTransferSegment << 4);
                     int k;
                     for (k = 0; k < 68; ++k) xb[k] = 0;
                     VDM_SET16(tib, VTIB_EAX, 0x4700);
                     VDM_SET16(tib, VTIB_EDX, (WORD)drv);
-                    VDM_SET16(tib, VTIB_DS,  g_pm_xfer_seg);
+                    VDM_SET16(tib, VTIB_DS,  g_PmTransferSegment);
                     VDM_SET16(tib, VTIB_ESI, 0);
                     m.TraceCursor = p; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); p = m.TraceCursor;
                     {   DWORD cf = VDM_REG(tib, VTIB_EFLAGS) & 1u;
@@ -23278,7 +23278,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                      rig's own WOWEXEC/KRNL386 were found there. It also consults
                      the current directory, which Win16 did too. Recorded as a
                      difference rather than claimed as equivalence. */
-                if (f.IsKernel && f.Id == WOW32_RESOLVEMODULEPATH && g_wow_path_seg) {
+                if (f.IsKernel && f.Id == WOW32_RESOLVEMODULEPATH && g_WowPathSegment) {
                     volatile BYTE *src = Wow32ArgPointer(&f, 4);
                     volatile BYTE *dst = Wow32ArgPointer(&f, 0);
                     char name[300], full[300];
@@ -23309,8 +23309,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             Wow32SetReturn(&f, 0);
                         } else {
                             volatile BYTE *pb = (volatile BYTE *)(ULONG_PTR)
-                                                ((DWORD)g_wow_path_seg << 4);
-                            WORD sel = dpmi_seg_to_desc(g_wow_path_seg);
+                                                ((DWORD)g_WowPathSegment << 4);
+                            WORD sel = dpmi_seg_to_desc(g_WowPathSegment);
                             for (k = 0; k <= (int)n && k < 0x1FF; ++k)
                                 pb[k] = (BYTE)full[k];
                             pb[k < 0x1FF ? k : 0x1FF] = 0;
@@ -23354,13 +23354,13 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                 /* ── ★★★ krnl386's SEGMENT-2 TABLE. Learn its selector from a stub.
                      Same shape as USER's anchor below, and for the same reason:
                      the id space is per TABLE, so nothing here may be answered
-                     until the table has identified itself. See wow_krnl2_stub. */
-                if (!f.IsKernel && !g_wow_krnl2_seg && f.StubSegment != g_wow_user_seg
-                    && wow_krnl2_stub(f.Id, Wow32PeekWord(f.FrameBase + 2))) {
-                    g_wow_krnl2_seg = f.StubSegment;
+                     until the table has identified itself. See WowKernel2Stub. */
+                if (!f.IsKernel && !g_WowKernel2Segment && f.StubSegment != g_WowUserSegment
+                    && WowKernel2Stub(f.Id, Wow32PeekWord(f.FrameBase + 2))) {
+                    g_WowKernel2Segment = f.StubSegment;
                     p = LogPut(p, "\n     WOWKRNL2: krnl386's SECOND stub table is in"
                                 " segment 0x");
-                    p = LogHex(p, g_wow_krnl2_seg);
+                    p = LogHex(p, g_WowKernel2Segment);
                     p = LogPut(p, " (learned from the stub's own bytes in the file)");
                 }
                 /* ── ★★★★ seg2 0xd1: THE NEW TASK'S ENVIRONMENT. ───────────────
@@ -23420,7 +23420,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                      ⚠ THE DIFFERENCE THAT LEAVES: the block is not in krnl386's
                        global arena, so krnl386's owner write for it (FarSetOwner)
                        will not find an arena entry. Recorded, not hidden. */
-                if (!f.IsKernel && g_wow_krnl2_seg && f.StubSegment == g_wow_krnl2_seg
+                if (!f.IsKernel && g_WowKernel2Segment && f.StubSegment == g_WowKernel2Segment
                     && f.Id == WOW32K2_TASKENV) {
                     WORD  pbsel = Wow32ArgWord(&f, 4), pboff = Wow32ArgWord(&f, 2);
                     DWORD pblin = pbsel ? dpmi_sel_base(pbsel) : 0;
@@ -23434,8 +23434,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         env = (WORD)(pb[0] | (pb[1] << 8));
                         src = "LOADPARMS.segEnv";
                     }
-                    if (!env && g_wow_psp_n > 0) {
-                        WORD  psel = g_wow_psp_sel[g_wow_psp_n - 1];
+                    if (!env && g_WowPspCount > 0) {
+                        WORD  psel = g_WowPspSelector[g_WowPspCount - 1];
                         DWORD plin = dpmi_sel_base(psel);
                         p = LogPut(p, " segEnv=0 (inherit) parent PSP 0x");
                         p = LogHex(p, psel);
@@ -23451,12 +23451,12 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         p = LogPut(p, " src 0x"); p = LogHex(p, env);
                         p = LogPut(p, " ("); p = LogPut(p, src[0] ? src : "nothing");
                         p = LogPut(p, ")");
-                        if (elin && g_wow_env_seg &&
+                        if (elin && g_WowEnvironmentSegment &&
                             host_readable((const void *)(ULONG_PTR)elin, cap)) {
                             const volatile BYTE *s =
                                 (const volatile BYTE *)(ULONG_PTR)elin;
                             volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)
-                                               ((DWORD)g_wow_env_seg << 4);
+                                               ((DWORD)g_WowEnvironmentSegment << 4);
                             DWORD i = 0, k;
                             WORD  sel;
                             /* The MS-DOS 3.0+ block: the strings, the empty string
@@ -23476,9 +23476,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             }
                             if (i > cap) i = cap;
                             for (k = 0; k < i; ++k) d[k] = s[k];
-                            sel = dpmi_seg_to_desc(g_wow_env_seg);
+                            sel = dpmi_seg_to_desc(g_WowEnvironmentSegment);
                             p = LogPut(p, " -> copied 0x"); p = LogHex(p, i);
-                            p = LogPut(p, " bytes to 0x"); p = LogHex(p, g_wow_env_seg);
+                            p = LogPut(p, " bytes to 0x"); p = LogHex(p, g_WowEnvironmentSegment);
                             p = LogPut(p, ":0000 as sel 0x"); p = LogHex(p, sel);
                             if (sel) {
                                 Wow32SetReturn(&f, sel);
@@ -23502,14 +23502,14 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                      `0x39` is GetProfileInt in krnl386's table and RegisterClass
                      in USER's, and one switch holding both id spaces is exactly
                      how this host came to answer the second with the first. */
-                if (!f.IsKernel && !g_wow_user_seg
-                    && wow_user_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
-                    g_wow_user_seg = f.StubSegment;
+                if (!f.IsKernel && !g_WowUserSegment
+                    && WowUserAnchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
+                    g_WowUserSegment = f.StubSegment;
                     p = LogPut(p, "\n     WOWUSER: USER's code segment is 0x");
-                    p = LogHex(p, g_wow_user_seg);
+                    p = LogHex(p, g_WowUserSegment);
                     p = LogPut(p, " (learned from its own stub, not from the module table)");
                 }
-                if (!f.IsKernel && f.StubSegment == g_wow_user_seg && g_wow_user_seg) {
+                if (!f.IsKernel && f.StubSegment == g_WowUserSegment && g_WowUserSegment) {
                     char note[224];
                     /* ── ★★ KEEP THE REAL WINDOWS ALIVE. (GH #128, session 42) ──
                          They belong to this thread, so nothing about them happens
@@ -23869,16 +23869,16 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                      ShellAbout in SHELL's, and the two must never meet. The
                      anchor and the service are the SAME call -- the table names
                      itself with the first thing we are asked to do out of it. */
-                if (!f.IsKernel && !g_wow_shell_seg
-                    && f.StubSegment != g_wow_user_seg && f.StubSegment != g_wow_krnl2_seg
-                    && wow_shell_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
-                    g_wow_shell_seg = f.StubSegment;
+                if (!f.IsKernel && !g_WowShellSegment
+                    && f.StubSegment != g_WowUserSegment && f.StubSegment != g_WowKernel2Segment
+                    && WowShellAnchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
+                    g_WowShellSegment = f.StubSegment;
                     p = LogPut(p, "\n     WOWSHELL: SHELL.DLL's code segment is 0x");
-                    p = LogHex(p, g_wow_shell_seg);
+                    p = LogHex(p, g_WowShellSegment);
                     p = LogPut(p, " (learned from its own stub, not from the module"
                                 " table)");
                 }
-                if (!f.IsKernel && g_wow_shell_seg && f.StubSegment == g_wow_shell_seg) {
+                if (!f.IsKernel && g_WowShellSegment && f.StubSegment == g_WowShellSegment) {
                     char note[320];
                     /* The About box runs a modal loop on this thread, so drain
                        what is already queued for the guest's windows first --
@@ -23914,17 +23914,17 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                      The fifth table, behind the fifth check. Same shape as
                      SHELL's: the anchor and the service are the same call, so
                      nothing is answered before the table has named itself. */
-                if (!f.IsKernel && !g_wow_cdlg_seg
-                    && f.StubSegment != g_wow_user_seg && f.StubSegment != g_wow_krnl2_seg
-                    && f.StubSegment != g_wow_shell_seg
-                    && wow_cdlg_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
-                    g_wow_cdlg_seg = f.StubSegment;
+                if (!f.IsKernel && !g_WowCommonDialogSegment
+                    && f.StubSegment != g_WowUserSegment && f.StubSegment != g_WowKernel2Segment
+                    && f.StubSegment != g_WowShellSegment
+                    && WowCommonDialogAnchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
+                    g_WowCommonDialogSegment = f.StubSegment;
                     p = LogPut(p, "\n     WOWCOMMDLG: COMMDLG.DLL's code segment is 0x");
-                    p = LogHex(p, g_wow_cdlg_seg);
+                    p = LogHex(p, g_WowCommonDialogSegment);
                     p = LogPut(p, " (learned from its own stub, not from the module"
                                 " table)");
                 }
-                if (!f.IsKernel && g_wow_cdlg_seg && f.StubSegment == g_wow_cdlg_seg) {
+                if (!f.IsKernel && g_WowCommonDialogSegment && f.StubSegment == g_WowCommonDialogSegment) {
                     char note[416];
                     WowWinPump(32);
                     /* ⚠ Same reason as ShellAbout: a modal service does not return
@@ -23954,17 +23954,17 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                 /* ── ★★ KEYBOARD.DRV'S OWN ID SPACE. See src/wow/wowkbd.h. ────
                      The sixth table, behind the sixth check, same shape as the
                      two before it. */
-                if (!f.IsKernel && !g_wow_kbd_seg
-                    && f.StubSegment != g_wow_user_seg && f.StubSegment != g_wow_krnl2_seg
-                    && f.StubSegment != g_wow_shell_seg && f.StubSegment != g_wow_cdlg_seg
-                    && wow_kbd_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
-                    g_wow_kbd_seg = f.StubSegment;
+                if (!f.IsKernel && !g_WowKeyboardSegment
+                    && f.StubSegment != g_WowUserSegment && f.StubSegment != g_WowKernel2Segment
+                    && f.StubSegment != g_WowShellSegment && f.StubSegment != g_WowCommonDialogSegment
+                    && WowKeyboardAnchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
+                    g_WowKeyboardSegment = f.StubSegment;
                     p = LogPut(p, "\n     WOWKBD: KEYBOARD.DRV's code segment is 0x");
-                    p = LogHex(p, g_wow_kbd_seg);
+                    p = LogHex(p, g_WowKeyboardSegment);
                     p = LogPut(p, " (learned from its own stub, not from the module"
                                 " table)");
                 }
-                if (!f.IsKernel && g_wow_kbd_seg && f.StubSegment == g_wow_kbd_seg) {
+                if (!f.IsKernel && g_WowKeyboardSegment && f.StubSegment == g_WowKeyboardSegment) {
                     char note[320];
                     if (WowKeyboardCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
@@ -23979,18 +23979,18 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                 }
                 /* ── ★★ GDI.EXE'S OWN ID SPACE. See src/wow/wowgdi.h. ────────
                      The seventh table, and the one MS Paint lives behind. */
-                if (!f.IsKernel && !g_wow_gdi_seg
-                    && f.StubSegment != g_wow_user_seg && f.StubSegment != g_wow_krnl2_seg
-                    && f.StubSegment != g_wow_shell_seg && f.StubSegment != g_wow_cdlg_seg
-                    && f.StubSegment != g_wow_kbd_seg
-                    && wow_gdi_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
-                    g_wow_gdi_seg = f.StubSegment;
+                if (!f.IsKernel && !g_WowGdiSegment
+                    && f.StubSegment != g_WowUserSegment && f.StubSegment != g_WowKernel2Segment
+                    && f.StubSegment != g_WowShellSegment && f.StubSegment != g_WowCommonDialogSegment
+                    && f.StubSegment != g_WowKeyboardSegment
+                    && WowGdiAnchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
+                    g_WowGdiSegment = f.StubSegment;
                     p = LogPut(p, "\n     WOWGDI: GDI.EXE's code segment is 0x");
-                    p = LogHex(p, g_wow_gdi_seg);
+                    p = LogHex(p, g_WowGdiSegment);
                     p = LogPut(p, " (learned from its own stub, not from the module"
                                 " table)");
                 }
-                if (!f.IsKernel && g_wow_gdi_seg && f.StubSegment == g_wow_gdi_seg) {
+                if (!f.IsKernel && g_WowGdiSegment && f.StubSegment == g_WowGdiSegment) {
                     char note[320];
                     if (WowGdiCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
@@ -24019,18 +24019,18 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     }
                 }
                 /* ── ★ SOUND.DRV'S OWN ID SPACE (s90, #299). See src/wow/wowsound.h. */
-                if (!f.IsKernel && !g_wow_sound_seg
-                    && f.StubSegment != g_wow_user_seg && f.StubSegment != g_wow_krnl2_seg
-                    && f.StubSegment != g_wow_shell_seg && f.StubSegment != g_wow_cdlg_seg
-                    && f.StubSegment != g_wow_kbd_seg && f.StubSegment != g_wow_gdi_seg
-                    && wow_sound_anchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
-                    g_wow_sound_seg = f.StubSegment;
+                if (!f.IsKernel && !g_WowSoundSegment
+                    && f.StubSegment != g_WowUserSegment && f.StubSegment != g_WowKernel2Segment
+                    && f.StubSegment != g_WowShellSegment && f.StubSegment != g_WowCommonDialogSegment
+                    && f.StubSegment != g_WowKeyboardSegment && f.StubSegment != g_WowGdiSegment
+                    && WowSoundAnchor(f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
+                    g_WowSoundSegment = f.StubSegment;
                     p = LogPut(p, "\n     WOWSOUND: SOUND.DRV's code segment is 0x");
-                    p = LogHex(p, g_wow_sound_seg);
+                    p = LogHex(p, g_WowSoundSegment);
                     p = LogPut(p, " (learned from its own stub, not from the module"
                                 " table)");
                 }
-                if (!f.IsKernel && g_wow_sound_seg && f.StubSegment == g_wow_sound_seg) {
+                if (!f.IsKernel && g_WowSoundSegment && f.StubSegment == g_WowSoundSegment) {
                     char note[160];
                     if (WowSoundCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
@@ -24044,19 +24044,19 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     }
                 }
                 /* ── ★ MMSYSTEM'S TWO IDS (s90, #278). See src/wow/wowmmedia.h. */
-                if (!f.IsKernel && !g_wow_mmedia_seg
-                    && f.StubSegment != g_wow_user_seg && f.StubSegment != g_wow_krnl2_seg
-                    && f.StubSegment != g_wow_shell_seg && f.StubSegment != g_wow_cdlg_seg
-                    && f.StubSegment != g_wow_kbd_seg && f.StubSegment != g_wow_gdi_seg
-                    && f.StubSegment != g_wow_sound_seg
+                if (!f.IsKernel && !g_WowMultimediaSegment
+                    && f.StubSegment != g_WowUserSegment && f.StubSegment != g_WowKernel2Segment
+                    && f.StubSegment != g_WowShellSegment && f.StubSegment != g_WowCommonDialogSegment
+                    && f.StubSegment != g_WowKeyboardSegment && f.StubSegment != g_WowGdiSegment
+                    && f.StubSegment != g_WowSoundSegment
                     && WowAnchorHit(g_WowMmediaAnchors,
                                       (int)(sizeof g_WowMmediaAnchors / sizeof g_WowMmediaAnchors[0]),
                                       f.Id, f.ArgumentBytes, Wow32PeekWord(f.FrameBase + 2))) {
-                    g_wow_mmedia_seg = f.StubSegment;
+                    g_WowMultimediaSegment = f.StubSegment;
                     p = LogPut(p, "\n     WOWMMEDIA: MMSYSTEM's stub segment is 0x");
-                    p = LogHex(p, g_wow_mmedia_seg);
+                    p = LogHex(p, g_WowMultimediaSegment);
                 }
-                if (!f.IsKernel && g_wow_mmedia_seg && f.StubSegment == g_wow_mmedia_seg) {
+                if (!f.IsKernel && g_WowMultimediaSegment && f.StubSegment == g_WowMultimediaSegment) {
                     char note[200];
                     if (WowMultimediaCall(&f, note, sizeof note)) {
                         ++g_wow32_serviced;
@@ -24450,7 +24450,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         return 1;
                     }
                     if (vec == 0x33) {                             /* mouse in PM -> INT 33h */
-                        mouse_int33(tib, I33_SRC_PM);
+                        MouseInt33(tib, I33_SRC_PM);
                         VDM_REG(tib, VTIB_EIP) += 2;
                         return 1;
                     }
@@ -25139,11 +25139,11 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                          windows [ln-1, ln+0x100) do not overlap. The delta
                                          is logged, so a fit that stops looking like a
                                          round-up is visible rather than assumed. */
-                                    if (g_wow_nmod) {
+                                    if (g_WowModuleCount) {
                                         int sg;
-                                        for (sg = 0; sg < (int)g_wow_mod[0].SegmentCount &&
+                                        for (sg = 0; sg < (int)g_WowModule[0].SegmentCount &&
                                                      sg < WOW_PMBASE_MAX; ++sg) {
-                                            DWORD ln = g_wow_mod[0].Segments[sg].Length;
+                                            DWORD ln = g_WowModule[0].Segments[sg].Length;
                                             if (!ln || g_Ldt[a].Limit < ln - 1 ||
                                                 g_Ldt[a].Limit >= ln + 0x100) continue;
                                             if (g_WowPmBase[sg] != g_Ldt[a].Base) {
@@ -26066,7 +26066,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                    see the #247 note above. */
                                 m.TraceCursor = p; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); p = m.TraceCursor;
                             }
-                            else if (intno == 0x33) mouse_int33(tib, I33_SRC_SIM);
+                            else if (intno == 0x33) MouseInt33(tib, I33_SRC_SIM);
                             else if (intno == 0x10) {
                                 NTVDD_REGISTERS vr; regs_load(&vr, tib);
                                 WORD in_ax = (WORD)vr.Eax, in_cx = (WORD)vr.Ecx;
@@ -26963,10 +26963,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                              guest pointer as `(DS << 4) + DX` -- correct for V86 and
                              meaningless for a selector. pm_int21_xfer() bridges that by
                              copying through a conventional-memory buffer. */
-                        p = wow_psp_env_check(p, "a PM INT 21h");
+                        p = WowPspEnvironmentCheck(p, "a PM INT 21h");
                         /* #210: the long-filename API -- pm_int21_lfn says how and why. */
                         if (ah == 0x71) {
-                            if (g_pm_xfer_seg) { m.TraceCursor = p; p = pm_int21_lfn(&m, tib, p); }
+                            if (g_PmTransferSegment) { m.TraceCursor = p; p = pm_int21_lfn(&m, tib, p); }
                             else {
                                 VDM_SET16(tib, VTIB_EAX, 0x7100);
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
@@ -26977,7 +26977,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
-                        if (g_pm_xfer_seg && (ah == 0x3D || ah == 0x3F || ah == 0x40 ||
+                        if (g_PmTransferSegment && (ah == 0x3D || ah == 0x3F || ah == 0x40 ||
                                               ah == 0x41 || ah == 0x43 || ah == 0x4E ||
                                               ah == 0x39 || ah == 0x3A || ah == 0x3B)) {
                             m.TraceCursor = p; p = pm_int21_xfer(&m, tib, ah, p);
@@ -27111,11 +27111,11 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 p = LogPut(p, ")");
                                 dst[0x2c] = (BYTE)(esel & 0xFF);           /* env SELECTOR */
                                 dst[0x2d] = (BYTE)(esel >> 8);
-                                if (g_wow_psp_n < WOW_PSP_TRACK) {
-                                    g_wow_psp_sel[g_wow_psp_n] = dsel;
-                                    g_wow_psp_lin[g_wow_psp_n] = dlin;
-                                    g_wow_psp_env[g_wow_psp_n] = esel;
-                                    ++g_wow_psp_n;
+                                if (g_WowPspCount < WOW_PSP_TRACK) {
+                                    g_WowPspSelector[g_WowPspCount] = dsel;
+                                    g_WowPspLinear[g_WowPspCount] = dlin;
+                                    g_WowPspEnvironment[g_WowPspCount] = esel;
+                                    ++g_WowPspCount;
                                 }
                                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;          /* CF = ok      */
                                 p = LogPut(p, " lin=0x"); p = LogHex(p, dlin);
@@ -28492,7 +28492,7 @@ static void wow_ica_deliver(DOS_MACHINE *mp, volatile BYTE *tib, unsigned steps)
 }
 
 /* ── THE INT 33h EVENT HANDLER, FOR A PROTECTED-MODE CLIENT. (s74c: ZAR's clicks) ───
-     mouse_cb_try() delivers 0Ch callbacks to V86 guests only; for a DPMI client it
+     MouseCallbackTry() delivers 0Ch callbacks to V86 guests only; for a DPMI client it
      DROPPED the queue ("not this path (yet)", counted as cb_pm). ZAR installs its
      handler from flat 32-bit code -- 0Ch with ES:EDX = 0x347:0x0044xxxx, mask 0x7e =
      button press/release only -- and polls motion with 0Bh. So aiming worked and no
@@ -28521,13 +28521,13 @@ static int dpmi_inject_pm_mousecb(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
     WORD hsel = 0; DWORD hoff = 0;
     int h32 = g_DpmiIsClient32;
 
-    if (!mouse_any_handler()) return 0;                          /* 0Ch's or 18h's (#265)   */
+    if (!MouseAnyHandler()) return 0;                          /* 0Ch's or 18h's (#265)   */
     dpmi_ensure_pmret_sel();
     if (g_PmReturnSelector == 0) return 0;
     if (g_DpmiIsClient32 && !dpmi_sel_is32(sCS)) return 0;      /* the extender mid-service */
     if (!(sSS & 4)) return 0;                                    /* not a client stack      */
-    /* The oldest queued event a handler asked for, and which handler (mouse_evq_take). */
-    if (!mouse_evq_take(&ev, &pend, &hsel, &hoff) || !pend) return 0;
+    /* The oldest queued event a handler asked for, and which handler (MouseEventQueueTake). */
+    if (!MouseEventQueueTake(&ev, &pend, &hsel, &hoff) || !pend) return 0;
     /* A far-return frame (CS:EIP) onto the catcher, on the client's own stack. Frame
        width is the CLIENT's; stack addressing is the SS descriptor's B bit. */
     { DWORD b = dpmi_sel_base(sSS);
@@ -29142,7 +29142,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
         V86BOP_RET(V86BOP_DONE);
     }
     if (bn == 0x33) {   /* INT 33h mouse  */
-        mouse_int33(tib, I33_SRC_V86);
+        MouseInt33(tib, I33_SRC_V86);
         VDM_REG(tib, VTIB_EIP) += 3;
         V86BOP_RET(V86BOP_DONE);
     }
@@ -29701,7 +29701,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          answer (0x76b616ec), and the host's own audio and timer code loads winmm early:
          loaded at the WOW branch below, the shims arrived after the question had been
          answered "no", and NotifyCallbackData kept returning 0 (runs/s90/sr4). */
-    if (launch_is_wow(GetCommandLineA())) wow_shims_load();
+    if (LaunchIsWow(GetCommandLineA())) wow_shims_load();
 
     /* ── ★ THE INSTALL VERBS, BEFORE ANYTHING ELSE EXISTS. (GH #13) ─────────────
          `ntvdmhost.exe /install`, `/uninstall`, `/status`. They run and exit without
@@ -29927,7 +29927,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          accurate, actionable failure rather than a DOS host chewing on an NE file.
        ► NOT a throwaway. When the WOW epic (#128) lands, this same detection becomes
          the dispatch point -- the `-w` arm routes to our WOW layer. */
-    if (launch_is_wow(GetCommandLineA())) {
+    if (LaunchIsWow(GetCommandLineA())) {
         /* ★ Latched HERE because this is where the answer is known, and the UI
              thread -- which decides whether to show a window -- is started later.
              See the note by tray_add for why a Win16 guest gets no window. */
@@ -30319,8 +30319,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          Probe BOTH launch types at BOTH points and let the 2x2 say whether it is the
          launch type or the amount of VDM setup that matters. */
     if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
-        wow_probe_ldt_matrix(g_wow_nmod ? "wow-early" : "dos-early");
-    if (g_wow_nmod) {                        /* GH #128: WOW selector stage */
+        wow_probe_ldt_matrix(g_WowModuleCount ? "wow-early" : "dos-early");
+    if (g_WowModuleCount) {                        /* GH #128: WOW selector stage */
         /* ⛔ NO FLUSH HERE, AND NEVER THROUGH `base`. (s73) This read
              `LogAppend(LOG_PATH, base, p); p = base;` from e595c91 (s68), which turned
              every `report` flush into a `base` flush mechanically -- right for the exit
@@ -30348,7 +30348,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              entry needs the whole DOS machine underneath it: conventional memory, an
              INT 21h that answers AH=52h, the IVT, INT 2Fh. All of that is built a few
              hundred lines below. So fall through and let it be built.
-           Everything WOW-specific past this point is gated on g_wow_nmod, which is 0
+           Everything WOW-specific past this point is gated on g_WowModuleCount, which is 0
            on a DOS launch -- so the DOS path, which is the half that WORKS, sees no
            change at all. That gating is deliberate and worth preserving. */
     }
@@ -31093,7 +31093,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     *(volatile WORD *)(0x1C * 4)     = 0x003A;              /* IVT[0x1C].offset    */
     *(volatile WORD *)(0x1C * 4 + 2) = DOS_HDLR_SEG;        /* IVT[0x1C].segment   */
     for (i = 0; i < sizeof(bop09); ++i) hdlr[0x4C + i] = bop09[i];  /* INT 09h default iret (0x4C-0x4F) */
-    /* INT 33h event-handler return: the guest's handler RETFs here (see mouse_cb_try). */
+    /* INT 33h event-handler return: the guest's handler RETFs here (see MouseCallbackTry). */
     hdlr[MS_CB_RET_OFF + 0] = VDM_BOP0; hdlr[MS_CB_RET_OFF + 1] = VDM_BOP1;
     hdlr[MS_CB_RET_OFF + 2] = MS_CB_BOP; hdlr[MS_CB_RET_OFF + 3] = 0xCF;
     /* DEFAULT DEVICE-IRQ HANDLERS. A real BIOS points the unused hardware vectors at a
@@ -32565,27 +32565,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          tolerant of a missing target and costs one wasted image. Overriding here
          rather than short-circuiting there keeps the DOS path's spine untouched. */
     {   WORD wcs = 0, wip = 0, wds = 0, wss = 0, wsp = 0;
-        if (g_wow_nmod && wow_place_v86(&m, &wcs, &wip, &wds, &wss, &wsp) == 0) {
+        if (g_WowModuleCount && wow_place_v86(&m, &wcs, &wip, &wds, &wss, &wsp) == 0) {
             img.CodeSegment = wcs; img.InstructionPointer = wip; img.StackSegment = wss; img.StackPointer = wsp;
-            g_wow_entry_ds = wds;
-            g_wow_entering = 1;
+            g_WowEntryDs = wds;
+            g_WowEntering = 1;
         }
     }
     VdmSetEntry(tib, img.CodeSegment, img.InstructionPointer, img.StackSegment, img.StackPointer, DOS_PSP_SEG);
-    if (g_wow_entering) {
+    if (g_WowEntering) {
         /* VdmSetEntry points DS/ES/FS/GS at the PSP and zeroes AX, which is right
            for a DOS program and wrong for this one. krnl386 wants DS = its automatic
            data segment, and it expects AX = 0x4b4f -- 'OK' -- at entry; with anything
            else it returns at once with AX=0. Get AX wrong and it returns instantly,
            which would read as "the entry did nothing" rather than "we failed a
            handshake". Measured at the entry breakpoint; see session 30 part 5. */
-        VDM_SET16(tib, VTIB_DS, g_wow_entry_ds);
+        VDM_SET16(tib, VTIB_DS, g_WowEntryDs);
         /* ★ AND ES, WHICH IS NOT COSMETIC: krnl386 takes ES+0x10 as the base of the
              DPMI host's private data and carves every later allocation upward from
              there without asking DOS. VdmSetEntry points ES at DOS_PSP_SEG, whose
              +0x10 is where the (discarded) DOS image sat and where DosMcbAllocate had
              already placed krnl386's own code. Point it at the arena block instead. */
-        if (g_wow_psp_seg) VDM_SET16(tib, VTIB_ES, g_wow_psp_seg);
+        if (g_WowPspSegment) VDM_SET16(tib, VTIB_ES, g_WowPspSegment);
         /* ★ CX = HOW MUCH MEMORY IS AVAILABLE ABOVE THE STACK, IN BYTES.
              krnl386 takes CX at entry, as a byte count, for the size of the block its
              selector over base(SS)+SP describes (observed: the arena it then uses is
@@ -32595,14 +32595,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              which is why it could not load its own segment 1 and exited.
            The selector has a 64 KB limit, so this is the whole of it minus the header
            image we place at its base. Nothing else names this quantity to the guest. */
-        VDM_SET16(tib, VTIB_ECX, (WORD)g_wow_entry_cx);
+        VDM_SET16(tib, VTIB_ECX, (WORD)g_WowEntryCx);
         VDM_REG(tib, VTIB_EAX) = 0x4B4F;
         p = LogPut(p, "STAGE2: WOW entry -- krnl386 in V86 at 0x");
         p = LogHex(p, img.CodeSegment); p = LogPut(p, ":0x"); p = LogHex(p, img.InstructionPointer);
-        p = LogPut(p, " DS=0x"); p = LogHex(p, g_wow_entry_ds);
-        p = LogPut(p, " ES=0x"); p = LogHex(p, g_wow_psp_seg);
-        p = LogPut(p, " CX=0x"); p = LogHex(p, g_wow_entry_cx);
-        p = LogPut(p, " (it will carve from 0x"); p = LogHex(p, (DWORD)(g_wow_psp_seg + 0x10));
+        p = LogPut(p, " DS=0x"); p = LogHex(p, g_WowEntryDs);
+        p = LogPut(p, " ES=0x"); p = LogHex(p, g_WowPspSegment);
+        p = LogPut(p, " CX=0x"); p = LogHex(p, g_WowEntryCx);
+        p = LogPut(p, " (it will carve from 0x"); p = LogHex(p, (DWORD)(g_WowPspSegment + 0x10));
         p = LogPut(p, ") AX=0x4b4f\r\n");
     }
     /* ENTRY TRAMPOLINE: `STI` then a far jump to the program's real entry point.
@@ -32739,10 +32739,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          them in `p` so a LogWrite carries them. */
     {   DWORD fa = GetFileAttributesA(WOWTRY_FLAG);
         char m2[200], *q2 = m2;
-        q2 = LogPut(q2, "LDTARM: wow_mods="); q2 = LogHex(q2, (DWORD)g_wow_nmod);
+        q2 = LogPut(q2, "LDTARM: wow_mods="); q2 = LogHex(q2, (DWORD)g_WowModuleCount);
         q2 = LogPut(q2, " flag_attr=0x");      q2 = LogHex(q2, fa);
         q2 = LogPut(q2, "\r\n"); LogAppend(LOG_PATH, m2, q2);
-        if (!g_wow_nmod && fa != INVALID_FILE_ATTRIBUTES)
+        if (!g_WowModuleCount && fa != INVALID_FILE_ATTRIBUTES)
             wow_probe_ldt_matrix("dos-late");  /* the other corner of the 2x2 */
     }
     modey_remap_flush_report();     /* whatever the A0000 remap had to say, now it fits */
@@ -32909,7 +32909,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             }
         }
         v86_deliver_dev_irq(tib);   /* see the helper: shared with the nested 0301/0302 loop */
-        mouse_cb_try(tib);          /* INT 33h 0Ch events, under the same gate as an IRQ */
+        MouseCallbackTry(tib);          /* INT 33h 0Ch events, under the same gate as an IRQ */
         /* Mirror the guest's IF into EFLAGS.VIF before handing the context back. On VME
            hardware the kernel's deliverability test reads VIF, and VIF is lost every time
            we synthesise an interrupt frame ourselves -- so a guest that has interrupts
@@ -33261,7 +33261,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             if (vb != V86BOP_NONE) continue;          /* DONE or RERUN: both resume the guest */
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == MS_CB_BOP) {   /* INT 33h handler returned */
-            mouse_cb_return(tib);
+            MouseCallbackReturn(tib);
             continue;
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == 0x09) {   /* INT 09h: BIOS keyboard */
@@ -34112,7 +34112,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          added latency is microseconds and no new thread is involved. */
                     /* ── AND THE MOUSE DRIVER'S OWN CALLBACK (INT 33h 0Ch), same gate.
                          (s74c) ZAR's buttons travel only through this. */
-                    if (g_MouseEventPend && mouse_any_handler()        /* 0Ch's or 18h's (#265) */
+                    if (g_MouseEventPend && MouseAnyHandler()        /* 0Ch's or 18h's (#265) */
                         && g_DpmiVi && !g_PmNoIrq && !g_InPmIrq && !g_AsyncPmActive) {
                         g_InPmIrq = 1;
                         dpmi_inject_pm_mousecb(&m, tib, steps);
@@ -34961,13 +34961,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                  printing it at the fault turns "who wrote 1 there"
                                  from a reading of candidate code into a reading of
                                  the log. */
-                            if (g_wow_psp_n) {
+                            if (g_WowPspCount) {
                                 int z;
                                 p = LogPut(p, "  PSPENV:");
-                                for (z = 0; z < g_wow_psp_n; ++z) {
+                                for (z = 0; z < g_WowPspCount; ++z) {
                                     const volatile BYTE *pe = (const volatile BYTE *)
-                                        (ULONG_PTR)dpmi_sel_base(g_wow_psp_sel[z]);
-                                    p = LogPut(p, " sel 0x"); p = LogHex(p, g_wow_psp_sel[z]);
+                                        (ULONG_PTR)dpmi_sel_base(g_WowPspSelector[z]);
+                                    p = LogPut(p, " sel 0x"); p = LogHex(p, g_WowPspSelector[z]);
                                     p = LogPut(p, "->+0x2c=0x");
                                     if (host_readable((const void *)pe, 0x2e))
                                         p = LogHex(p, (DWORD)(pe[0x2c] | (pe[0x2d] << 8)));
