@@ -167,6 +167,14 @@
 #define X86_OP_JZ_SHORT                0x74
 #define X86_OP_JNZ_SHORT               0x75
 #define X86_OP_MOV_AH_IMM              0xB4
+/* BOP (BIOS Operation): the 3-byte sequence C4 C4 nn is an invalid opcode the
+   kernel reflects back to the host as a VDM event, carrying the byte nn. The host
+   advances EIP past the 3 bytes and re-enters; a trailing IRET (CF) resumes the
+   guest. Real-mode INT 21h is vectored through the IVT to a handler that runs a
+   BOP, so every INT 21h surfaces to the host. */
+#define VDM_BOP0 0xC4
+#define VDM_BOP1 0xC4
+
 /* EFLAGS. The plain names are `int` literals, the _U names `unsigned` (see ntvdmex_bits.h). */
 #define EFLAGS_CF           0x0001
 #define EFLAGS_CF_U         0x0001u
@@ -218,6 +226,14 @@
 #define VECTOR_SERIAL               0x14    /* BIOS serial ports                        */
 #define VECTOR_SYSTEM               0x15    /* BIOS miscellaneous/system services       */
 #define VECTOR_KEYBOARD_SERVICES    0x16    /* keyboard BIOS                            */
+#define VECTOR_MEMORY_SIZE          0x12    /* BIOS base memory size                   */
+#define VECTOR_DISK                 0x13    /* BIOS disk services                      */
+#define VECTOR_PRINTER              0x17    /* BIOS printer                            */
+#define VECTOR_ABSOLUTE_DISK_READ   0x25
+#define VECTOR_ABSOLUTE_DISK_WRITE  0x26
+#define VECTOR_TERMINATE_RESIDENT   0x27    /* terminate and stay resident             */
+#define VECTOR_DOS_IDLE             0x28
+#define VECTOR_FAST_CONSOLE_OUTPUT  0x29
 #define VECTOR_TIME                 0x1A    /* BIOS time                                */
 #define VECTOR_USER_TICK            0x1C    /* called from the timer tick               */
 #define VECTOR_TERMINATE            0x20    /* program terminate                        */

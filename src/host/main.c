@@ -2447,7 +2447,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
        is -- the same image test as at start-up: >= 8 NTVDM `C4 C4 54` sites. */
     {   DWORD index, bopCount = 0;
         for (index = 0; index + 3 < bytesRead; ++index)
-            if (g_ExecFileBuffer[index] == VDM_BOP0 && g_ExecFileBuffer[index+1] == VDM_BOP1 && g_ExecFileBuffer[index+2] == 0x54) ++bopCount;
+            if (g_ExecFileBuffer[index] == VDM_BOP0 && g_ExecFileBuffer[index+1] == VDM_BOP1 && g_ExecFileBuffer[index+2] == NTVDM_BOP_CMD) ++bopCount;
         if (bopCount >= 8) DosInt21SetShellPsp(machine, child, 1); }
     /* ...and so is every program in Windows' own SYSTEM directory. (s81, user: `mem` ->
        "Incorrect DOS version".) Those are XP's DOS tools -- MEM, EDIT, DEBUG, EDLIN,
@@ -29083,7 +29083,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
          the exec loop's INT 09h arm because INT 05h is a SOFTWARE interrupt a program may
          issue from anywhere, including a DPMI 0300h -- so the nested loop must serve it
          too. Same number as the INT 09h stub's BOP, told apart by address. */
-    if (bopNumber == 0x09 && VDM_REG16(tib, VTIB_CS) == DOS_CTAB_SEG) {
+    if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD) && VDM_REG16(tib, VTIB_CS) == DOS_CTAB_SEG) {
         DWORD ip = VDM_REG16(tib, VTIB_EIP);
         if (ip == DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05_BEGIN || ip == DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05_NEXT) {
             PrintScreenBop(tib, ip == DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05_BEGIN);
@@ -29091,7 +29091,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
             V86BOP_RET(V86BOP_DONE);
         }
     }
-    if ((bopNumber == 0x2A || bopNumber == 0x5C) && VDM_REG16(tib, VTIB_CS) == DOS_CTAB_SEG) {
+    if ((bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_NETWORK) || bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_NETBIOS)) && VDM_REG16(tib, VTIB_CS) == DOS_CTAB_SEG) {
         NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
         HOST_LOCK();
         VddBusDeliverInterrupt(&g_Bus, (BYTE)bopNumber, &registers);
@@ -29114,7 +29114,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         }
         V86BOP_RET(V86BOP_DONE);
     }
-    if (bopNumber == 0x10) {
+    if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_VIDEO)) {
         NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
         HOST_LOCK();
         VddBusDeliverInterrupt(&g_Bus, 0x10, &registers);
@@ -29125,7 +29125,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         VDM_REG(tib, VTIB_EIP) += 3;
         V86BOP_RET(V86BOP_DONE);
     }
-    if (bopNumber == 0x16) {
+    if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD_SERVICES)) {
         NTVDD_REGISTERS registers; BYTE int16Ah; RegistersLoad(&registers, tib); int16Ah = VddGetAh(&registers);
         HOST_LOCK();
         VddBusDeliverInterrupt(&g_Bus, 0x16, &registers);
@@ -29141,7 +29141,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         VDM_REG(tib, VTIB_EIP) += 3;
         V86BOP_RET(V86BOP_DONE);
     }
-    if (bopNumber == 0x33) {   /* INT 33h mouse  */
+    if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_MOUSE)) {   /* INT 33h mouse  */
         MouseInt33(tib, I33_SRC_V86);
         VDM_REG(tib, VTIB_EIP) += 3;
         V86BOP_RET(V86BOP_DONE);
@@ -29162,13 +29162,13 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         #define BCF_CLR() (*flagsPointer &= (WORD)~EFLAGS_CF)
         #define BSETAX(v) (VDM_REG(tib, VTIB_EAX) = \
             (VDM_REG(tib, VTIB_EAX) & HIGH_WORD_MASK_U) | ((DWORD)(v) & WORD_MASK))
-        if (bopNumber == 0x11) {
+        if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_EQUIPMENT)) {
             /* Equipment word -- see BiosEquipmentWord(). The serial count
                comes from the VDD that claimed the ports, so this and the
                0040:0000 port base table cannot drift apart. */
             BSETAX(BiosEquipmentWord());
             BCF_CLR();
-        } else if (bopNumber == 0x12) {
+        } else if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_MEMORY_SIZE)) {
             /* KB of conventional memory. 640 CONTRADICTED OUR OWN MEMORY MAP
                once DOS_MEM_TOP moved to the real EBDA boundary: the MCB chain
                ends at 0x9FC0 and the PSP says 0x9FC0, which is 639K, while
@@ -29177,7 +29177,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                from the map rather than typed, so the two cannot drift. */
             BSETAX(BiosBaseKbOfTop(g_DosMemoryTop));   /* #253 EBDA; #136 the setting */
             BCF_CLR();
-        } else if (bopNumber == 0x15) {
+        } else if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_SYSTEM)) {
             UINT int15Ah = (VDM_REG(tib, VTIB_EAX) >> BYTE_SHIFT) & BYTE_MASK;
             if (int15Ah == 0x88) {                /* extended memory, KB */
                 /* ⚠ THIS ARM IS LOGGED BECAUSE ITS SILENCE COST A WRONG CONCLUSION.
@@ -29341,7 +29341,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                      until here, DOS/4GW takes this CF=1, and exits CLEANLY in 328 ms
                      (STAGE2: complete, run_ms=0x148) without printing a character. */
             }
-        } else if (bopNumber == 0x14) {               /* SERIAL.  GH #45, #9     */
+        } else if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_SERIAL)) {               /* SERIAL.  GH #45, #9     */
             /* ── ★★★ NOW ANSWERED BY THE PART, NOT BY THIS ARM. (GH #9) ──
                  What used to be here was a plausible set of status bits and
                  a transmit that wrote to g_Serial -- THE HOST'S OWN DEBUG
@@ -29365,7 +29365,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
             HOST_UNLOCK();
             RegistersStore(&int14Registers, tib);
             BCF_CLR();
-        } else if (bopNumber == 0x17) {               /* PRINTER, LPT1.  GH #45  */
+        } else if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_PRINTER)) {               /* PRINTER, LPT1.  GH #45  */
             /* Printed output goes to a SPOOL FILE, which is a real printer
                as far as a DOS program can tell and is inspectable afterwards
                -- the alternative was reporting "selected, out of paper"
@@ -29410,7 +29410,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
             } else {
                 g_BiosUnimplemented[0x17] = 1;       /* unknown AH: AX as passed */
             }
-        } else if (bopNumber == 0x13) {               /* disk services  GH #44   */
+        } else if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_DISK)) {               /* disk services  GH #44   */
             UINT int13Ah = (VDM_REG(tib, VTIB_EAX) >> BYTE_SHIFT) & BYTE_MASK;
             UINT int13Dl = VDM_REG(tib, VTIB_EDX) & BYTE_MASK;
             PDOS_DISK_GEOMETRY int13Geometry = DiskFor(int13Dl);
@@ -29463,14 +29463,14 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                 BSETAX(0x0100); BCF_SET();      /* bad command             */
                 g_BiosUnimplemented[0x13] = 1;
             }
-        } else if (bopNumber == 0x28) {               /* DOS idle                 */
+        } else if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_DOS_IDLE)) {               /* DOS idle                 */
             BCF_CLR();                         /* nothing to yield to      */
-        } else if (bopNumber == 0x29) {               /* fast console output      */
+        } else if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_FAST_CONSOLE_OUTPUT)) {               /* fast console output      */
             /* AL is the character. Programs that hook this expect it to
                PRINT; leaving it as an IRET swallowed the output silently. */
             VddVideoPutChar(&g_Video, (BYTE)(VDM_REG(tib, VTIB_EAX) & BYTE_MASK));
             BCF_CLR();
-        } else if (bopNumber == 0x25 || bopNumber == 0x26) { /* absolute disk read/write */
+        } else if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_ABSOLUTE_DISK_READ) || bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_ABSOLUTE_DISK_WRITE)) { /* absolute disk read/write */
             /* AL = drive (0 = A:), CX = sector count, DX = first sector,
                DS:BX = buffer. LBA directly -- no CHS, which is the whole
                point of this pair. The stub RETFs, leaving the caller's
@@ -29483,7 +29483,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                       + VDM_REG16(tib, VTIB_EBX);
             if (!int25Geometry) { BSETAX(0x0201); BCF_SET(); g_BiosUnimplemented[bopNumber] = 1; }
             else if (seconds + count > int25Geometry->TotalSectors) { BSETAX(0x0208); BCF_SET(); }
-            else if (DiskIo(drive, seconds, count, (BYTE *)(ULONG_PTR)linear, bopNumber == 0x26))
+            else if (DiskIo(drive, seconds, count, (BYTE *)(ULONG_PTR)linear, bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_ABSOLUTE_DISK_WRITE)))
                  { BSETAX(0); BCF_CLR(); }
             else { BSETAX(0x0208); BCF_SET(); }  /* AL=08 sector not found */
         } else handled = 0;
@@ -29493,7 +29493,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         if (handled == 4) V86BOP_RET(V86BOP_RERUN);   /* #206: still waiting -- re-run the BOP */
         if (handled) { VDM_REG(tib, VTIB_EIP) += 3; V86BOP_RET(V86BOP_DONE); }
     }
-    if (bopNumber == 0x1A) {   /* INT 1Ah BIOS time */
+    if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_TIME)) {   /* INT 1Ah BIOS time */
         NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
         HOST_LOCK();
         VddBusDeliverInterrupt(&g_Bus, 0x1A, &registers);
@@ -29503,7 +29503,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         VDM_REG(tib, VTIB_EIP) += 3;
         V86BOP_RET(V86BOP_DONE);
     }
-    if (bopNumber == 0x2F) {   /* INT 2Fh multiplex */
+    if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_MULTIPLEX)) {   /* INT 2Fh multiplex */
         DWORD ax = VDM_REG16(tib, VTIB_EAX);
         /* ── AX ALONE IS NOT THE CALL. ───────────────────────────────────────
              INT 2Fh is a multiplex: the function is AX, but the REQUEST is in
@@ -29634,7 +29634,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET (CF) */
         V86BOP_RET(V86BOP_DONE);
     }
-    if (bopNumber == 0x43) {   /* XMS API far-call entry */
+    if (bopNumber == DOS_BOP_XMS_ENTRY) {   /* XMS API far-call entry */
         /* ── LOG WHO CALLED, NOT JUST WHAT THEY ASKED. (GH #47) ───────────
              This printed AH and nothing else, so "MEM asks the version twice
              and stops" was all we could see -- not WHERE it stops, which is
@@ -29662,7 +29662,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the RETF      */
         V86BOP_RET(V86BOP_DONE);
     }
-    if (bopNumber == 0x67) {   /* INT 67h EMM (EMS) */
+    if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_EMS)) {   /* INT 67h EMM (EMS) */
         cursor = LogPut(cursor, " EMS AH=0x"); cursor = LogHex(cursor, (VDM_REG(tib, VTIB_EAX) >> BYTE_SHIFT) & BYTE_MASK); cursor = LogPut(cursor, "\r\n");
         LogAppend(LOG_PATH, base, cursor); cursor = base;
         HOST_LOCK();
@@ -29834,27 +29834,27 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             LogAppend(LOG_PATH, message, message + sizeof(message) - 1);
             return 0;
         } }
-    static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, 0x20, X86_OP_IRET };  /* BOP 0x20 ; iret */
-    static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, 0x10, X86_OP_IRET }; /* BOP 0x10 ; iret */
-    static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, 0x16, X86_OP_IRET }; /* BOP 0x16 ; iret */
-    static const BYTE bop33[] = { VDM_BOP0, VDM_BOP1, 0x33, X86_OP_IRET }; /* BOP 0x33 ; iret */
+    static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_INT21, X86_OP_IRET };  /* BOP 0x20 ; iret */
+    static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_VIDEO), X86_OP_IRET }; /* BOP 0x10 ; iret */
+    static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD_SERVICES), X86_OP_IRET }; /* BOP 0x16 ; iret */
+    static const BYTE bop33[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_MOUSE), X86_OP_IRET }; /* BOP 0x33 ; iret */
     /* INT 08h (timer): tick via BOP, then chain INT 1Ch, then iret. INT 1Ch is a
        bare iret by default (the user-timer hook a program may repoint). INT 1Ah
        (BIOS time-of-day) is a plain BOP. */
-    static const BYTE bop08[] = { VDM_BOP0, VDM_BOP1, 0x08, X86_OP_INT, VECTOR_USER_TICK, X86_OP_IRET };
+    static const BYTE bop08[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_TIMER), X86_OP_INT, VECTOR_USER_TICK, X86_OP_IRET };
     static const BYTE bop1c[] = { X86_OP_IRET };                           /* iret stub       */
     /* Default INT 09h = BOP 09 ; IRET. It must CONSUME the scancode, exactly as the BIOS
        handler does: a bare IRET left the byte in the controller forever, so with the 8042's
        proper one-byte-at-a-time pacing no further key could ever raise an interrupt (the
        whole keyboard died after one press). A game that installs its own INT 09h replaces
        this vector, so its handler still reads port 0x60 itself. */
-    static const BYTE bop09[] = { VDM_BOP0, VDM_BOP1, 0x09, X86_OP_IRET };
-    static const BYTE bop1a[] = { VDM_BOP0, VDM_BOP1, 0x1A, X86_OP_IRET }; /* BOP 0x1A ; iret */
-    static const BYTE bop2f[] = { VDM_BOP0, VDM_BOP1, 0x2F, X86_OP_IRET }; /* INT 2Fh ; iret  */
+    static const BYTE bop09[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD), X86_OP_IRET };
+    static const BYTE bop1a[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_TIME), X86_OP_IRET }; /* BOP 0x1A ; iret */
+    static const BYTE bop2f[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_MULTIPLEX), X86_OP_IRET }; /* INT 2Fh ; iret  */
     /* XMS API entry: reached by FAR CALL (INT 2Fh AX=4310 hands back ES:BX), so it
        ends in RETF (0xCB), not IRET. */
-    static const BYTE xmsBopStub[] = { VDM_BOP0, VDM_BOP1, 0x43, X86_OP_RETF };
-    static const BYTE bop67[] = { VDM_BOP0, VDM_BOP1, 0x67, X86_OP_IRET }; /* INT 67h ; iret  */
+    static const BYTE xmsBopStub[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_XMS_ENTRY, X86_OP_RETF };
+    static const BYTE bop67[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_EMS), X86_OP_IRET }; /* INT 67h ; iret  */
     /* GH #43/#44/#45: the BIOS interrupts we had never planted at all. Until now
        these vectors were filled by the null-vector sweep with a bare IRET, so a
        guest asking for the equipment list or the memory size got silence and
@@ -29865,11 +29865,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
        its first DOS call with no output. BOP numbers are a shared namespace with
        DPMI (0x50-0x57), XMS (0x43) and the rest; 0x30 is free. */
     static const BYTE biosInts[][2] = {
-        { 0x11, 0x11 }, { 0x12, 0x12 }, { 0x13, 0x13 }, { 0x14, 0x14 },
-        { 0x15, 0x15 }, { 0x17, 0x17 }, { 0x25, 0x25 }, { 0x26, 0x26 },
-        { 0x20, 0x30 },                                  /* GH #46: see above */
-        { 0x27, 0x27 }, { 0x28, 0x28 }, { 0x29, 0x29 },
-        { 0x2A, 0x2A }, { 0x5C, 0x5C },                  /* GH #8 (s91): NetBIOS, see V86BiosBop */
+        { VECTOR_EQUIPMENT, DOS_BOP_FOR_VECTOR(VECTOR_EQUIPMENT) }, { VECTOR_MEMORY_SIZE, DOS_BOP_FOR_VECTOR(VECTOR_MEMORY_SIZE) }, { VECTOR_DISK, DOS_BOP_FOR_VECTOR(VECTOR_DISK) }, { VECTOR_SERIAL, DOS_BOP_FOR_VECTOR(VECTOR_SERIAL) },
+        { VECTOR_SYSTEM, DOS_BOP_FOR_VECTOR(VECTOR_SYSTEM) }, { VECTOR_PRINTER, DOS_BOP_FOR_VECTOR(VECTOR_PRINTER) }, { VECTOR_ABSOLUTE_DISK_READ, DOS_BOP_FOR_VECTOR(VECTOR_ABSOLUTE_DISK_READ) }, { VECTOR_ABSOLUTE_DISK_WRITE, DOS_BOP_FOR_VECTOR(VECTOR_ABSOLUTE_DISK_WRITE) },
+        { VECTOR_TERMINATE, DOS_BOP_INT20 },                                  /* GH #46: see above */
+        { VECTOR_TERMINATE_RESIDENT, DOS_BOP_FOR_VECTOR(VECTOR_TERMINATE_RESIDENT) }, { VECTOR_DOS_IDLE, DOS_BOP_FOR_VECTOR(VECTOR_DOS_IDLE) }, { VECTOR_FAST_CONSOLE_OUTPUT, DOS_BOP_FOR_VECTOR(VECTOR_FAST_CONSOLE_OUTPUT) },
+        { VECTOR_NETWORK, DOS_BOP_FOR_VECTOR(VECTOR_NETWORK) }, { VECTOR_NETBIOS, DOS_BOP_FOR_VECTOR(VECTOR_NETBIOS) },                  /* GH #8 (s91): NetBIOS, see V86BiosBop */
     };
     static const BYTE emmDeviceName[] = { 'E','M','M','X','X','X','X','0' };  /* EMS device header name */
     HANDLE uiThread = NULL;
@@ -30997,7 +30997,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     if (readCount > 4) {
         DWORD item;
         for (item = 0; item + 3 < readCount; ++item)
-            if (g_FileBuffer[item] == VDM_BOP0 && g_FileBuffer[item+1] == VDM_BOP1 && g_FileBuffer[item+2] == 0x54)
+            if (g_FileBuffer[item] == VDM_BOP0 && g_FileBuffer[item+1] == VDM_BOP1 && g_FileBuffer[item+2] == NTVDM_BOP_CMD)
                 ++g_GuestNtvdmBops;
     }
     g_GuestNtAware = (wasShell && g_GuestNtvdmBops >= 8);
@@ -31213,7 +31213,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          that jumps there actually exits instead of falling through the IVT. */
     {   volatile BYTE *controlBytes = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT);
         UINT position = DOS_CRIT_STUBS;
-        controlBytes[position+0] = VDM_BOP0; controlBytes[position+1] = VDM_BOP1; controlBytes[position+2] = 0x30; controlBytes[position+3] = X86_OP_IRET;
+        controlBytes[position+0] = VDM_BOP0; controlBytes[position+1] = VDM_BOP1; controlBytes[position+2] = DOS_BOP_INT20; controlBytes[position+3] = X86_OP_IRET;
         *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TERMINATE_ADDRESS))     = (WORD)position;              /* INT 22h */
         *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TERMINATE_ADDRESS)) = DOS_CTAB_SEG;
         controlBytes[position+4] = X86_OP_IRET;                                          /* INT 23h: IRET */
@@ -31225,7 +31225,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         /* #34: the site DOS calls the guest's INT 24h from -- see CriticalRaise. */
         controlBytes[DOS_CRIT_RAISE + 0] = X86_OP_INT; controlBytes[DOS_CRIT_RAISE + 1] = 0x24;   /* int 24h  */
         controlBytes[DOS_CRIT_RETURN + 0] = VDM_BOP0; controlBytes[DOS_CRIT_RETURN + 1] = VDM_BOP1;
-        controlBytes[DOS_CRIT_RETURN + 2] = 0x20;                                 /* bop 20h  */
+        controlBytes[DOS_CRIT_RETURN + 2] = DOS_BOP_INT21;                                 /* bop 20h  */
     }
     /* #251: DOS's AUX/PRN driver code, which INT 21h resumes the guest in -- see
        dos_auxprn.asm for why it is guest code and what it was measured against. */
@@ -33366,7 +33366,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                The rest of the BIOS block moved to V86BiosBop() (GH #247). */
             UINT bopNumber = VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK;
             INT handled = 1;
-            if (bopNumber == 0x30) {               /* INT 20h: terminate       */
+            if (bopNumber == DOS_BOP_INT20) {               /* INT 20h: terminate       */
                 /* INT 20h is AH=4Ch with an exit code of 0. Routing it here
                    rather than leaving an IRET means a program that exits this
                    way actually exits, instead of returning into itself. */
@@ -33377,7 +33377,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                      and ends the whole VDM -- so a .COM child exiting the normal
                      .COM way took the host down with it. */
                 handled = DosTerminate(&machine, tib, &cursor, base) ? 3 : 2;
-            } else if (bopNumber == 0x27) {               /* TSR, CP/M style          */
+            } else if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_TERMINATE_RESIDENT)) {               /* TSR, CP/M style          */
                 /* ── THE OLD FORM OF AH=31h, AND IT KEEPS MEMORY TOO. (GH #49) ─
                      DX is a BYTE OFFSET past the PSP here, not a paragraph
                      count -- that is the one thing this call does differently

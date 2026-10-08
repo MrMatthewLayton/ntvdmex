@@ -202,13 +202,6 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 #define VTIB_MSW           0x668
 #define MSW_PE_BIT         0x0001     /* CR0.PE                                    */
 
-/* BOP (BIOS Operation): the 3-byte sequence C4 C4 nn is an invalid opcode the
-   kernel reflects back to the host as a VDM event, carrying the byte nn. The host
-   advances EIP past the 3 bytes and re-enters; a trailing IRET (CF) resumes the
-   guest. Real-mode INT 21h is vectored through the IVT to a handler that runs a
-   BOP, so every INT 21h surfaces to the host. */
-#define VDM_BOP0 0xC4
-#define VDM_BOP1 0xC4
 
 /* V86 stop/event reporting in the VDM_TIB, read after VdmStartExecution returns. */
 #define VTIB_EVENT       0x5A8       /* event code (VDM_EVENT_BOP = serviceable BOP) */

@@ -333,6 +333,12 @@
 #define DOS_GENSTUB_OFF   0x06B0
 #define DOS_GENSTUB_N     16
 #define DOS_GENSTUB_BOP   0x5B
+/* The host's own stubs issue BOP n for INT n -- except INT 21h's stub, which has BOP 20h, and
+   so INT 20h's, which has 30h; and the XMS far-call entry, which is BOP 43h. */
+#define DOS_BOP_FOR_VECTOR(vector)  (vector)
+#define DOS_BOP_INT21     0x20
+#define DOS_BOP_INT20     0x30
+#define DOS_BOP_XMS_ENTRY 0x43
 /* Which entries of the table krnl386 actually reads, and what each becomes.
    Only these six are consulted; the rest are present so the table has stock's
    shape rather than a shorter one that happens to be enough today. */

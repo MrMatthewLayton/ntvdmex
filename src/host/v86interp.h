@@ -158,7 +158,6 @@
 #define V86_IRET_FRAME32   12     /* EIP, CS, EFLAGS    */
 #define V86_FAR_POINTER32  6      /* ptr16:32: offset dword, then the segment */
 #define V86_INT3_VECTOR    3
-#define V86_BOP_SECOND_BYTE 0xC4  /* the VDM BOP is C4 C4 nn */
 #define V86_ENTER_LEVEL_MASK 0x1F
 #define V86_ENTER_OPERAND_LENGTH 3   /* imm16 frame size, imm8 nesting level */
 /* Opcodes. */
@@ -1290,7 +1289,7 @@ static int V86Step(V86_CPU *cpu)
         V86Set8(cpu, V86_AX, V86HostRead8(linear));
         cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
     }
-    if ((opcode == X86_OP_LES || opcode == X86_OP_LDS) && V86_CODE_BYTE(offset) != V86_BOP_SECOND_BYTE && (V86_CODE_BYTE(offset) >> V86_MODRM_MODE_SHIFT) != V86_MODE_REGISTER) {
+    if ((opcode == X86_OP_LES || opcode == X86_OP_LDS) && V86_CODE_BYTE(offset) != VDM_BOP1 && (V86_CODE_BYTE(offset) >> V86_MODRM_MODE_SHIFT) != V86_MODE_REGISTER) {
         V86_MODRM modrm;
         if (g_V86SegmentToLinear) return 0;                       /* PM: TODO */
         offset += V86DecodeModrm(cpu, codeLinear, codePointer, offset, segmentOverride, &modrm);
