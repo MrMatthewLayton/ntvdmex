@@ -2067,7 +2067,7 @@ static WORD  g_DpmiDosBlock[DPMI_DOSBLK_MAX]; /* live 0100 DOS blocks (segments)
 static INT   g_DpmiDosBlockCount = 0;
 static INT   g_LdtClientMark = 0;          /* g_LdtNext when the client switched in */
 static INT   g_PmExitCode = 0;             /* AL of the client's PM AH=4Ch           */
-
+#define DPMI_LE_MIN_CODE_SIZE 0x10000u   /* only code objects this big are matched (see g_LeCodeSize) */
 /* ── THE CLIENT'S EXECUTABLE DECLARES WHICH OF ITS MEMORY IS CODE. ────────────────
    A flat code selector (base 0, limit 4 GB) cannot be scanned for INT sites, so an
    application whose own code lives behind one -- every DOS/4GW game -- runs with its
@@ -19911,7 +19911,7 @@ static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
     LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
     DpmiBreakpointArm();          /* a module that has just appeared may hold a requested BP */
 }
-
+enum { LE_SCAN_FILE_MIN = 0x200, LE_SCAN_HEADER_ROOM = 0x100 };   /* DpmiLeLearn: shortest file searched; header room left at the end */
 /* Learn the program's EXECUTABLE object sizes from its own LE header. See the commentary
    on g_LeCodeSize. The image is already in `filebuf` -- the loader read it to run the
    MZ stub -- so this costs one pass over memory we are holding anyway and no file I/O.
@@ -19927,32 +19927,32 @@ static VOID DpmiLeLearn(const BYTE *buffer, DWORD length)
 {
     DWORD index;
     CHAR lineBuffer[192], *cursor;
-    if (!buffer || length < 0x200) return;
-#define LE32(o) ((DWORD)buffer[(o)] | ((DWORD)buffer[(o)+1] << 8) | ((DWORD)buffer[(o)+2] << 16) | ((DWORD)buffer[(o)+3] << 24))
-#define LE16(o) ((DWORD)buffer[(o)] | ((DWORD)buffer[(o)+1] << 8))
-    for (index = 0; index + 0x100 < length; ++index) {
+    if (!buffer || length < LE_SCAN_FILE_MIN) return;
+#define LE32(o) ((DWORD)buffer[(o)] | ((DWORD)buffer[(o)+1] << BYTE_SHIFT) | ((DWORD)buffer[(o)+2] << WORD_SHIFT) | ((DWORD)buffer[(o)+3] << TOP_BYTE_SHIFT))
+#define LE16(o) ((DWORD)buffer[(o)] | ((DWORD)buffer[(o)+1] << BYTE_SHIFT))
+    for (index = 0; index + LE_SCAN_HEADER_ROOM < length; ++index) {
         DWORD objectTableOffset, objectCount, object;
         if (buffer[index] != 'L' || buffer[index+1] != 'E' || buffer[index+2] || buffer[index+3]) continue;
-        if (LE32(index + 0x04) != 0) continue;                     /* format level      */
-        { DWORD cpu = LE16(index + 0x08), targetOs = LE16(index + 0x0A);
-          if (cpu < 1 || cpu > 4 || targetOs < 1 || targetOs > 4) continue; }
-        objectCount   = LE32(index + 0x44);
-        objectTableOffset = LE32(index + 0x40);
-        if (objectCount < 1 || objectCount > 64) continue;
-        if (objectTableOffset < 0x50 || index + objectTableOffset + objectCount * 24 > length) continue;
+        if (LE32(index + LE_FORMAT_LEVEL) != 0) continue;                     /* format level      */
+        { DWORD cpu = LE16(index + LE_CPU_TYPE), targetOs = LE16(index + LE_TARGET_OS);
+          if (cpu < LE_FIELD_TYPE_FIRST || cpu > LE_FIELD_TYPE_LAST || targetOs < LE_FIELD_TYPE_FIRST || targetOs > LE_FIELD_TYPE_LAST) continue; }
+        objectCount   = LE32(index + LE_OBJECT_COUNT);
+        objectTableOffset = LE32(index + LE_OBJECT_TABLE);
+        if (objectCount < 1 || objectCount > LE_OBJECTS_MAX) continue;
+        if (objectTableOffset < LE_HEADER_MIN || index + objectTableOffset + objectCount * LE_OBJECT_ENTRY_SIZE > length) continue;
         cursor = lineBuffer; cursor = LogPut(cursor, "DPMI: LE image at file 0x"); cursor = LogHex(cursor, index);
         cursor = LogPut(cursor, ", "); cursor = LogHex(cursor, objectCount); cursor = LogPut(cursor, " objects\r\n");
         LogAppend(LOG_PATH, lineBuffer, cursor);
         for (object = 0; object < objectCount; ++object) {
-            DWORD entry     = index + objectTableOffset + object * 24;
-            DWORD virtualSize = LE32(entry + 0x00), flags = LE32(entry + 0x08);
-            DWORD pageRounded    = (virtualSize + 0xFFFu) & ~0xFFFu;          /* what 0501 will ask for */
-            INT   isExecutable  = (flags & 0x0004u) != 0;
+            DWORD entry     = index + objectTableOffset + object * LE_OBJECT_ENTRY_SIZE;
+            DWORD virtualSize = LE32(entry + LE_OBJECT_VIRTUAL_SIZE), flags = LE32(entry + LE_OBJECT_FLAGS);
+            DWORD pageRounded    = (virtualSize + PAGE_LAST_BYTE_U) & ~PAGE_LAST_BYTE_U;          /* what 0501 will ask for */
+            INT   isExecutable  = (flags & LE_OBJECT_EXECUTABLE) != 0;
             cursor = lineBuffer; cursor = LogPut(cursor, "DPMI:   obj"); cursor = LogHex(cursor, object + 1);
             cursor = LogPut(cursor, " vsize 0x"); cursor = LogHex(cursor, virtualSize);
             cursor = LogPut(cursor, " flags 0x"); cursor = LogHex(cursor, flags);
             cursor = LogPut(cursor, isExecutable ? " EXEC" : " data");
-            if (isExecutable && pageRounded >= 0x10000u && g_LeCodeCount < DPMI_LE_MAX) {
+            if (isExecutable && pageRounded >= DPMI_LE_MIN_CODE_SIZE && g_LeCodeCount < DPMI_LE_MAX) {
                 g_LeCodeSize[g_LeCodeCount++] = pageRounded;
                 cursor = LogPut(cursor, " -- code block size 0x"); cursor = LogHex(cursor, pageRounded);
             } else if (isExecutable) {
@@ -21620,17 +21620,17 @@ static INT WowVendorApiEntry(DOS_MACHINE *machine, WORD *selector, WORD *offset)
        anything else -> CF=1, AX unchanged. Our own encoding of that contract; the
        immediate at +0x10 is patched with our shadow selector below. */
     static const BYTE stub[] = {
-        0x3D, 0x00, 0x01,        /* +00  cmp ax,0x0100            */
-        0x74, 0x0A,              /* +03  je   +0x0F               */
-        0x85, 0xC0,              /* +05  test ax,ax  (CF=0)       */
-        0xF9,                    /* +07  stc                      */
-        0x75, 0x04,              /* +08  jnz  +0x0E  -- not ours  */
-        0xB4, 0x01,              /* +0A  mov ah,1    (AX=0x0100)  */
-        0xF8,                    /* +0C  clc                      */
+        X86_OP_CMP_AX_IMM, 0x00, 0x01,        /* +00  cmp ax,0x0100            */
+        X86_OP_JZ_SHORT, 0x0A,              /* +03  je   +0x0F               */
+        X86_OP_TEST, 0xC0,              /* +05  test ax,ax  (CF=0)       */
+        X86_OP_STC,                    /* +07  stc                      */
+        X86_OP_JNZ_SHORT, 0x04,              /* +08  jnz  +0x0E  -- not ours  */
+        X86_OP_MOV_AH_IMM, 0x01,              /* +0A  mov ah,1    (AX=0x0100)  */
+        X86_OP_CLC,                    /* +0C  clc                      */
         X86_OP_RETF,                    /* +0D  retf                     */
         X86_OP_RETF,                    /* +0E  retf        (CF=1)       */
-        0xB8, 0x00, 0x00,        /* +0F  mov ax,<shadow selector> */
-        0xF8,                    /* +12  clc                      */
+        X86_OP_MOV_IMM_FIRST, 0x00, 0x00,        /* +0F  mov ax,<shadow selector> */
+        X86_OP_CLC,                    /* +12  clc                      */
         X86_OP_RETF                     /* +13  retf                     */
     };
     WORD segment = 0, maximum = 0, shadow;
@@ -21657,7 +21657,7 @@ static INT WowVendorApiEntry(DOS_MACHINE *machine, WORD *selector, WORD *offset)
     ldtIndex = g_LdtNext++;
     g_Ldt[ldtIndex].Base   = (DWORD)segment << PARAGRAPH_SHIFT;
     g_Ldt[ldtIndex].Limit  = 0x1F;
-    g_Ldt[ldtIndex].Access = 0xFA;            /* present, DPL3, code, readable */
+    g_Ldt[ldtIndex].Access = DPMI_ACCESS_CODE;            /* present, DPL3, code, readable */
     g_Ldt[ldtIndex].Flags  = 0;               /* 16-bit                        */
     DpmiInstall(ldtIndex);
     g_WowVendorSelector = (WORD)DPMI_LDT_SELECTOR(ldtIndex);
@@ -26773,7 +26773,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 WORD selector;
                                 g_Ldt[ldtIndex].Base   = segment << PARAGRAPH_SHIFT;
                                 g_Ldt[ldtIndex].Limit  = want ? (want * PARAGRAPH_SIZE_U - 1u) : 0xFFFF;
-                                g_Ldt[ldtIndex].Access = 0xF2;          /* present, DPL3, data R/W */
+                                g_Ldt[ldtIndex].Access = DPMI_ACCESS_DATA;          /* present, DPL3, data R/W */
                                 g_Ldt[ldtIndex].Flags  = 0;             /* 16-bit, byte granular   */
                                 DpmiInstall(ldtIndex);
                                 selector = (WORD)DPMI_LDT_SELECTOR(ldtIndex);

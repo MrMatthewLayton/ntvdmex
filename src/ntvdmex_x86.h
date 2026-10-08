@@ -59,6 +59,7 @@
 /* The real-mode interrupt vector table: at 0000:0000, one 4-byte entry per vector -- the
    handler's offset word, then its segment word. */
 #define IVT_BASE_SEGMENT    0
+#define PAGE_LAST_BYTE_U    0xFFFu          /* added before masking, to round up a page */
 #define IVT_SIZE            0x400           /* 256 vectors x 4 bytes                    */
 #define IVT_ENTRY_SIZE      4
 #define IVT_ENTRY_SIZE_U    4u
@@ -208,6 +209,7 @@
 #define X86_OP_JZ_SHORT                0x74
 #define X86_OP_JNZ_SHORT               0x75
 #define X86_OP_MOV_AH_IMM              0xB4
+#define X86_OP_CMP_AX_IMM              0x3D
 /* BOP (BIOS Operation): the 3-byte sequence C4 C4 nn is an invalid opcode the
    kernel reflects back to the host as a VDM event, carrying the byte nn. The host
    advances EIP past the 3 bytes and re-enters; a trailing IRET (CF) resumes the

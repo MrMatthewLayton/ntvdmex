@@ -19,6 +19,7 @@
 #define NTVDMEX_DPMI_SVC_H
 
 #include "../ntvdmex_types.h"
+#include "../dos/le_format.h"   /* DPMI clients' executables */
 
 /* ── ERROR CODES (DPMI 1.0 numbering; returned in AX with CF=1). ─────────────────────── */
 #define DPMI_E_DESC_UNAVAIL   0x8011   /* descriptor unavailable                        */
@@ -71,6 +72,9 @@
 #define DPMI_SELECTOR_TI          4    /* the table indicator: 1 = the LDT         */
 #define DPMI_SELECTOR_RPL_USER    3    /* requested privilege level 3: a client's  */
 #define DPMI_SELECTOR_INDEX_SHIFT 3
+/* Descriptor access bytes: present, DPL 3, and a readable code or a writable data segment. */
+#define DPMI_ACCESS_CODE  0xFA
+#define DPMI_ACCESS_DATA  0xF2
 /* The mode switch's code, data and stack selectors: LDT entries 1-3, RPL 3. */
 #define DPMI_INITIAL_CODE_SELECTOR  0x0F
 #define DPMI_INITIAL_DATA_SELECTOR  0x17
