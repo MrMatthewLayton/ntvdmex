@@ -4812,7 +4812,7 @@ static void RecoveryWrite(unsigned value)
 }
 
 /* The start SUCCEEDED: the host has a window (or tray icon) on the desktop. Called
-   from the UI thread right after ShowWindow/tray_add, and again from the clean-exit
+   from the UI thread right after ShowWindow/TrayAdd, and again from the clean-exit
    path so a headless run that never got that far still clears on its way out. */
 static void RecoveryOk(void) { DeleteFileA(STARTFAIL_PATH); }
 
@@ -8560,7 +8560,7 @@ static DWORD g_CursorMovedMs;         /* GetTickCount of the last real movement 
 static POINT g_CursorLastPoint = { -1, -1 };
 static int   g_CursorIdle;             /* hidden for stillness, until it next moves */
 /* Input capture ("exclusivity") -- see input_capture_set. Declared up here because
-   status_update, which is defined above it, reports the capture state and the chord
+   StatusUpdate, which is defined above it, reports the capture state and the chord
    that changes it on the right-hand half of the status strip. */
 static volatile LONG g_Captured = 0;
 
@@ -9789,7 +9789,7 @@ enum {                                       /* wired command IDs               
     IDM_TRAY_SHOW,                           /* bring the hidden host window back  */
     IDM_FILE_INSTALL, IDM_FILE_UNINSTALL, IDM_FILE_STATUS,   /* GH #13 */
     /* ── THE EDIT ITEMS HAVE REAL IDS PURELY SO THEY CAN BE ADDRESSED. ───────────
-         Implemented since s82 (#154 -- see g_mark_mode); they needed their own
+         Implemented since s82 (#154 -- see g_MarkMode); they needed their own
          ids first because "grey these five in a graphics mode" names them one at a
          time, and EnableMenuItem with MF_BYCOMMAND cannot distinguish five items
          that all carry IDM_STUB.
@@ -10299,83 +10299,83 @@ static int WowArgumentA(const char *command, char *out, int cap)
 
 /* Replace the file name in `path` with `leaf`, so the modules that live beside
    krnl386.exe can be found without hard-coding %SystemRoot%\system32. */
-static void wow_sibling(const char *path, const char *leaf, char *out, int cap)
+static void WowSibling(const char *path, const char *leaf, char *out, int cap)
 {
-    int i, cut = 0;
-    for (i = 0; path[i] && i < cap - 1; ++i) {
-        out[i] = path[i];
-        if (path[i] == '\\' || path[i] == '/') cut = i + 1;
+    int index, cut = 0;
+    for (index = 0; path[index] && index < cap - 1; ++index) {
+        out[index] = path[index];
+        if (path[index] == '\\' || path[index] == '/') cut = index + 1;
     }
-    for (i = 0; leaf[i] && cut < cap - 1; ++i) out[cut++] = leaf[i];
+    for (index = 0; leaf[index] && cut < cap - 1; ++index) out[cut++] = leaf[index];
     out[cut] = 0;
 }
 
 /* Parse one module and give its segments memory. NO relocation -- see the two-phase
    note above. Returns the g_WowModule index, or -1. */
-static int wow_load_one(const char *path)
+static int WowLoadOne(const char *path)
 {
-    char m[700], *q;
-    HANDLE f;
-    DWORD sz = 0, got = 0;
-    uint8_t *img;
-    NE_MODULE *ne;
-    int slot = g_WowModuleCount, i;
+    char message[700], *cursor;
+    HANDLE file;
+    DWORD size = 0, got = 0;
+    uint8_t *image;
+    NE_MODULE *module;
+    int slot = g_WowModuleCount, index;
 
     if (slot >= WOW_MAX_MOD) return -1;
-    ne = &g_WowModule[slot];
+    module = &g_WowModule[slot];
 
-    f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    if (f == INVALID_HANDLE_VALUE) {
-        q = m; q = LogPut(q, "WOWTRY: cannot open "); q = LogPut(q, path);
-        q = LogPut(q, " err=0x"); q = LogHex(q, GetLastError());
-        q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, m, q); return -1;
+    file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (file == INVALID_HANDLE_VALUE) {
+        cursor = message; cursor = LogPut(cursor, "WOWTRY: cannot open "); cursor = LogPut(cursor, path);
+        cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, GetLastError());
+        cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, message, cursor); return -1;
     }
-    sz = GetFileSize(f, NULL);
-    img = (uint8_t *)VirtualAlloc(NULL, sz, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (!img || !ReadFile(f, img, sz, &got, NULL) || got != sz) {
-        CloseHandle(f);
-        q = m; q = LogPut(q, "WOWTRY: read failed for "); q = LogPut(q, path);
-        q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, m, q); return -1;
+    size = GetFileSize(file, NULL);
+    image = (uint8_t *)VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!image || !ReadFile(file, image, size, &got, NULL) || got != size) {
+        CloseHandle(file);
+        cursor = message; cursor = LogPut(cursor, "WOWTRY: read failed for "); cursor = LogPut(cursor, path);
+        cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, message, cursor); return -1;
     }
-    CloseHandle(f);
+    CloseHandle(file);
 
-    if (NeParse(ne, img, sz) != 0) {
-        q = m; q = LogPut(q, "WOWTRY: ne_parse REJECTED "); q = LogPut(q, path);
-        q = LogPut(q, " at ne.h line "); q = LogHex(q, (DWORD)ne->Error);
-        q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, m, q); return -1;
+    if (NeParse(module, image, size) != 0) {
+        cursor = message; cursor = LogPut(cursor, "WOWTRY: ne_parse REJECTED "); cursor = LogPut(cursor, path);
+        cursor = LogPut(cursor, " at ne.h line "); cursor = LogHex(cursor, (DWORD)module->Error);
+        cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, message, cursor); return -1;
     }
-    if (NeOwnName(ne, g_WowName[slot], sizeof g_WowName[slot]) != 0)
+    if (NeOwnName(module, g_WowName[slot], sizeof g_WowName[slot]) != 0)
         g_WowName[slot][0] = 0;
 
-    q = m;
-    q = LogPut(q, "WOWTRY: "); q = LogPut(q, path);
-    q = LogPut(q, "\r\n  name=");                q = LogPut(q, g_WowName[slot]);
-    q = LogPut(q, (ne->ProgramFlags & NE_PROG_LIBRARY) ? " LIBRARY" : " PROGRAM");
-    q = LogPut(q, " segs=");                     q = LogHex(q, ne->SegmentCount);
-    q = LogPut(q, " imports-from=");             q = LogHex(q, ne->ModuleCount);
-    q = LogPut(q, " movable=");                  q = LogHex(q, ne->MovableCount);
-    q = LogPut(q, "\r\n  CS:IP=");               q = LogHex(q, ne->CsIp >> 16);
-    q = LogPut(q, ":");                          q = LogHex(q, ne->CsIp & 0xFFFF);
-    q = LogPut(q, "  SS:SP=");                   q = LogHex(q, ne->SsSp >> 16);
-    q = LogPut(q, ":");                          q = LogHex(q, ne->SsSp & 0xFFFF);
-    q = LogPut(q, "  autodata=");                q = LogHex(q, ne->AutoData);
-    q = LogPut(q, "  heap=0x");                  q = LogHex(q, ne->Heap);
-    q = LogPut(q, "  stack=0x");                 q = LogHex(q, ne->Stack);
-    q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, m, q);
+    cursor = message;
+    cursor = LogPut(cursor, "WOWTRY: "); cursor = LogPut(cursor, path);
+    cursor = LogPut(cursor, "\r\n  name=");                cursor = LogPut(cursor, g_WowName[slot]);
+    cursor = LogPut(cursor, (module->ProgramFlags & NE_PROG_LIBRARY) ? " LIBRARY" : " PROGRAM");
+    cursor = LogPut(cursor, " segs=");                     cursor = LogHex(cursor, module->SegmentCount);
+    cursor = LogPut(cursor, " imports-from=");             cursor = LogHex(cursor, module->ModuleCount);
+    cursor = LogPut(cursor, " movable=");                  cursor = LogHex(cursor, module->MovableCount);
+    cursor = LogPut(cursor, "\r\n  CS:IP=");               cursor = LogHex(cursor, module->CsIp >> 16);
+    cursor = LogPut(cursor, ":");                          cursor = LogHex(cursor, module->CsIp & 0xFFFF);
+    cursor = LogPut(cursor, "  SS:SP=");                   cursor = LogHex(cursor, module->SsSp >> 16);
+    cursor = LogPut(cursor, ":");                          cursor = LogHex(cursor, module->SsSp & 0xFFFF);
+    cursor = LogPut(cursor, "  autodata=");                cursor = LogHex(cursor, module->AutoData);
+    cursor = LogPut(cursor, "  heap=0x");                  cursor = LogHex(cursor, module->Heap);
+    cursor = LogPut(cursor, "  stack=0x");                 cursor = LogHex(cursor, module->Stack);
+    cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, message, cursor);
 
-    for (i = 0; i < (int)ne->SegmentCount; ++i) {
-        NE_SEGMENT *s = &ne->Segments[i];
-        uint32_t need = NeSegmentAllocSize(s), k;
-        s->Memory = (uint8_t *)VirtualAlloc(NULL, need, MEM_COMMIT | MEM_RESERVE,
+    for (index = 0; index < (int)module->SegmentCount; ++index) {
+        NE_SEGMENT *segment = &module->Segments[index];
+        uint32_t need = NeSegmentAllocSize(segment), byteIndex;
+        segment->Memory = (uint8_t *)VirtualAlloc(NULL, need, MEM_COMMIT | MEM_RESERVE,
                                          PAGE_READWRITE);
-        s->Selector = 0;                          /* NO selector yet -- phase 2 assigns it */
-        if (!s->Memory) {
-            q = m; q = LogPut(q, "WOWTRY: seg alloc failed\r\n");
-            LogAppend(LOG_PATH, m, q); return -1;
+        segment->Selector = 0;                          /* NO selector yet -- phase 2 assigns it */
+        if (!segment->Memory) {
+            cursor = message; cursor = LogPut(cursor, "WOWTRY: seg alloc failed\r\n");
+            LogAppend(LOG_PATH, message, cursor); return -1;
         }
-        if (s->Sector) for (k = 0; k < s->Length; ++k) s->Memory[k] = img[s->FileOffset + k];
+        if (segment->Sector) for (byteIndex = 0; byteIndex < segment->Length; ++byteIndex) segment->Memory[byteIndex] = image[segment->FileOffset + byteIndex];
     }
-    g_WowImage[slot] = img;
+    g_WowImage[slot] = image;
     ++g_WowModuleCount;
     return slot;
 }
@@ -10394,48 +10394,48 @@ static int wow_load_one(const char *path)
      will want them. See wow_probe_selectors() for the correction: krnl386's init entry
      runs in V86, so a real load puts its segments in CONVENTIONAL memory and relocates
      against real-mode paragraphs. */
-static void wow_probe_load(const char *cmd)
+static void WowProbeLoad(const char *command)
 {
     /* The whole graph, in dependency order. Everything imports from KERNEL, USER
        also needs SYSTEM, and wowexec needs KEYBOARD -- so the drivers come before
        the modules that bind to them. Measured: with these eleven present, every
        import in the set resolves and nothing is left dangling. */
-    static const char *SIBLING[] = {
+    static const char *sibling[] = {
         "system.drv", "keyboard.drv", "mouse.drv", "sound.drv", "comm.drv",
         "gdi.exe", "user.exe", "shell.dll", "toolhelp.dll", "wowexec.exe"
     };
-    char path[512], sib[512], m[700], *q;
-    size_t j;
+    char path[512], sib[512], message[700], *cursor;
+    size_t index;
 
-    q = m; q = LogPut(q, "WOWTRY: probe begins\r\n"); LogAppend(LOG_PATH, m, q);
+    cursor = message; cursor = LogPut(cursor, "WOWTRY: probe begins\r\n"); LogAppend(LOG_PATH, message, cursor);
 
-    if (WowArgumentA(cmd, path, sizeof path) != 0) {
-        q = m; q = LogPut(q, "WOWTRY: no -a argument on the command line\r\n");
-        LogAppend(LOG_PATH, m, q); return;
+    if (WowArgumentA(command, path, sizeof path) != 0) {
+        cursor = message; cursor = LogPut(cursor, "WOWTRY: no -a argument on the command line\r\n");
+        LogAppend(LOG_PATH, message, cursor); return;
     }
-    {   int pi = 0;                       /* keep it: krnl386 needs its own path */
-        while (path[pi] && pi < (int)sizeof g_WowKernelPath - 1) {
-            g_WowKernelPath[pi] = path[pi]; ++pi;
+    {   int length = 0;                       /* keep it: krnl386 needs its own path */
+        while (path[length] && length < (int)sizeof g_WowKernelPath - 1) {
+            g_WowKernelPath[length] = path[length]; ++length;
         }
-        g_WowKernelPath[pi] = 0;
+        g_WowKernelPath[length] = 0;
     }
-    if (wow_load_one(path) < 0) return;
-    for (j = 0; j < sizeof SIBLING / sizeof SIBLING[0]; ++j) {
-        wow_sibling(path, SIBLING[j], sib, sizeof sib);
-        wow_load_one(sib);                    /* logs its own failure; keep going */
+    if (WowLoadOne(path) < 0) return;
+    for (index = 0; index < sizeof sibling / sizeof sibling[0]; ++index) {
+        WowSibling(path, sibling[index], sib, sizeof sib);
+        WowLoadOne(sib);                    /* logs its own failure; keep going */
     }
 
-    q = m; q = LogPut(q, "WOWTRY: modules loaded=");  q = LogHex(q, (DWORD)g_WowModuleCount);
-    q = LogPut(q, "; NOT relocated yet (selectors first)\r\n");
-    LogAppend(LOG_PATH, m, q);
+    cursor = message; cursor = LogPut(cursor, "WOWTRY: modules loaded=");  cursor = LogHex(cursor, (DWORD)g_WowModuleCount);
+    cursor = LogPut(cursor, "; NOT relocated yet (selectors first)\r\n");
+    LogAppend(LOG_PATH, message, cursor);
 }
 
-static int wow_refuse(const char *cmd)
+static int WowRefuse(const char *command)
 {
-    char m[256], *q = m;
-    q = LogPut(q, "STAGE0: WIN16/WOW -- NOT SUPPORTED and cannot be handed back "
+    char message[256], *cursor = message;
+    cursor = LogPut(cursor, "STAGE0: WIN16/WOW -- NOT SUPPORTED and cannot be handed back "
                 "(see GH #129). Refusing loudly.\r\n");
-    LogAppend(LOG_PATH, m, q);
+    LogAppend(LOG_PATH, message, cursor);
     MessageBoxA(NULL,
         "NTVDMEX cannot run 16-bit Windows programs.\n\n"
         "It replaces the DOS half of NTVDM only. Because Windows starts 16-bit "
@@ -10459,38 +10459,38 @@ static int wow_refuse(const char *cmd)
      usually by keystroke. A command you reach for mid-game does not belong behind an
      OK button, so View and Machine keep them.
    The rest is still scaffold: items carrying IDM_STUB no-op until they are wired. */
-static HMENU g_recent_menu;                  /* File > Open Recent (#153)         */
-static HMENU build_menu(void)
+static HMENU g_RecentMenu;                  /* File > Open Recent (#153)         */
+static HMENU BuildMenu(void)
 {
-    HMENU bar = CreateMenu(), m, s, tools;
-    m = MenuPopup();                                                   /* File         */
+    HMENU bar = CreateMenu(), menu, submenu, tools;
+    menu = MenuPopup();                                                   /* File         */
     /* #153. No Ctrl+O: that chord belongs to the DOS program (WordStar's own menu). The
        Open Recent list is filled when it opens -- see menu_recent_fill. */
-    MenuItem(m, "Open Executable...", IDM_FILE_OPEN);
-    g_recent_menu = MenuPopup();
-    MenuSubmenu(m, "Open Recent", g_recent_menu);
+    MenuItem(menu, "Open Executable...", IDM_FILE_OPEN);
+    g_RecentMenu = MenuPopup();
+    MenuSubmenu(menu, "Open Recent", g_RecentMenu);
     /* Save State / Load State removed (s81, #145, user decision); what a real
        implementation would need is #146. */
-    MenuSeparator(m);
+    MenuSeparator(menu);
     /* The old "Configuration" submenu (Edit Config File, Open Config Folder, ...)
        described a config FILE that never existed; the store is HKCU and the dialog
        is how you edit it. One entry, and it is this one. */
-    MenuItem(m, "Close Program", IDM_FILE_CLOSEPROG);
-    MenuItem(m, "Exit\tAlt+F4", IDM_FILE_EXIT);
-    MenuSubmenu(bar, "File", m);
+    MenuItem(menu, "Close Program", IDM_FILE_CLOSEPROG);
+    MenuItem(menu, "Exit\tAlt+F4", IDM_FILE_EXIT);
+    MenuSubmenu(bar, "File", menu);
 
     /* ── EDIT IS A TEXT-MODE MENU, AND menu_sync_modal() SAYS SO AT OPEN TIME. ───
          Every item here works on the character grid the text renderer maintains.
          In a graphics mode there is no grid to mark, copy or paste into, so they
          are greyed rather than left to fail silently -- see the note by
          IDM_EDIT_MARK for why that is not the scaffold-stub rule being bent. */
-    m = MenuPopup();                                                   /* Edit         */
+    menu = MenuPopup();                                                   /* Edit         */
     /* #154: no Ctrl+C / Ctrl+V labels -- those keys belong to the DOS program (Ctrl+C
        is Break), and a label naming a shortcut that does not exist is a small lie. */
-    MenuItem(m,"Mark / Select Region",IDM_EDIT_MARK); MenuItem(m,"Copy",IDM_EDIT_COPY);
-    MenuItem(m,"Copy Whole Screen",IDM_EDIT_COPYSCREEN); MenuItem(m,"Paste",IDM_EDIT_PASTE);
-    MenuItem(m,"Select All",IDM_EDIT_SELECTALL);
-    MenuSubmenu(bar, "Edit", m);
+    MenuItem(menu,"Mark / Select Region",IDM_EDIT_MARK); MenuItem(menu,"Copy",IDM_EDIT_COPY);
+    MenuItem(menu,"Copy Whole Screen",IDM_EDIT_COPYSCREEN); MenuItem(menu,"Paste",IDM_EDIT_PASTE);
+    MenuItem(menu,"Select All",IDM_EDIT_SELECTALL);
+    MenuSubmenu(bar, "Edit", menu);
 
     /* ── ★ VIEW IS THE DISPLAY PAGE, AND IT IS SESSION-ONLY. ─────────────────────
          Every knob on the Settings dialog's Display tab is here too, because these
@@ -10505,29 +10505,29 @@ static HMENU build_menu(void)
        ► Renderer is GDI | DirectDraw and both are real (s81, #147): the window is
          always GDI, and DirectDraw makes FULLSCREEN the exclusive DirectDraw mode.
          The list comes from g_SetDefinitions so it says exactly what the dialog says. */
-    m = MenuPopup();                                                   /* View         */
-    MenuItem(m,"Fullscreen\tAlt+Enter",IDM_DISP_FULLSCREEN);
-    MenuSeparator(m);
-    MenuCombo(m, "Window Size", SET_WINSIZE,   IDM_WINSIZE_0);
-    MenuCombo(m, "Renderer",    SET_RENDERER,  IDM_RENDER_0);
-    MenuCombo(m, "Scaler",      SET_SCALER,    IDM_SCALER_0);
-    MenuCombo(m, "Filtering",   SET_FILTER,    IDM_FILTER_0);
-    MenuCombo(m, "Frame Skip",  SET_FRAMESKIP, IDM_FSKIP_0);
+    menu = MenuPopup();                                                   /* View         */
+    MenuItem(menu,"Fullscreen\tAlt+Enter",IDM_DISP_FULLSCREEN);
+    MenuSeparator(menu);
+    MenuCombo(menu, "Window Size", SET_WINSIZE,   IDM_WINSIZE_0);
+    MenuCombo(menu, "Renderer",    SET_RENDERER,  IDM_RENDER_0);
+    MenuCombo(menu, "Scaler",      SET_SCALER,    IDM_SCALER_0);
+    MenuCombo(menu, "Filtering",   SET_FILTER,    IDM_FILTER_0);
+    MenuCombo(menu, "Frame Skip",  SET_FRAMESKIP, IDM_FSKIP_0);
     /* ── ★ ASPECT RATIO IS A LOCK ON THE WINDOW, not just a letterbox. Picking a
          ratio constrains the window's shape as you drag it, so the picture fills the
          client and there are no bars at all -- letterboxing only reappears if the
          window ends up off-aspect anyway (maximised). "None" is a free resize. */
-    MenuCombo(m, "Aspect Ratio", SET_ASPECT,    IDM_ASPECT_0);
-    MenuCombo(m, "Full Screen Fit", SET_FIT,     IDM_FIT_0);       /* #325 */
+    MenuCombo(menu, "Aspect Ratio", SET_ASPECT,    IDM_ASPECT_0);
+    MenuCombo(menu, "Full Screen Fit", SET_FIT,     IDM_FIT_0);       /* #325 */
     /* #229 (user, s84): "Nice, working! Can you add these to the View menu as well." */
-    MenuCombo(m, "Colour Filter", SET_TINT,     IDM_TINT_0);
+    MenuCombo(menu, "Colour Filter", SET_TINT,     IDM_TINT_0);
     /* #230 (docs/EMULATION.md): "force vsync for programs that don't ask for it" is
        what this always did -- every blit is timed to the monitor's blank whether or
        not the guest waits for retrace -- so it is named for that. DirectDraw's
        fullscreen flip waits for the blank regardless. */
-    MenuItem(m,"Force VSync",IDM_VIEW_VSYNC);              /* user, s81: with the picture group */
-    MenuSeparator(m);
-    MenuItem(m,"Blink Text Cursor",IDM_VIEW_BLINK);
+    MenuItem(menu,"Force VSync",IDM_VIEW_VSYNC);              /* user, s81: with the picture group */
+    MenuSeparator(menu);
+    MenuItem(menu,"Blink Text Cursor",IDM_VIEW_BLINK);
     /* #218 (user, s83 sweep): "Show Host Cursor" (#157) is GONE AGAIN, for good -- it
          "feels jaggy". A program that does not use the mouse now keeps the pointer and
          it hides itself after 5 s still over the video; see CURSOR_IDLE_MS. */
@@ -10535,7 +10535,7 @@ static HMENU build_menu(void)
          The desktop pointer's visibility is not a knob of its own -- it is what
          exclusive mode looks like, and Win+F10 is the control for that. See the
          note on g_cursor_show. */
-    MenuSubmenu(bar, "View", m);
+    MenuSubmenu(bar, "View", menu);
 
     /* ── ★ TOOLS: ONE MENU FOR EVERYTHING THAT IS NOT THE PICTURE. ───────────────
          The bar was File / Edit / View / Machine / Capture / Debug / Help -- seven
@@ -10572,22 +10572,22 @@ static HMENU build_menu(void)
          trying things, the dialog is for keeping them. */
     /* user, s81: with only two items left, Machine is flattened into Tools itself. */
     MenuCombo(tools, "Limit Speed", SET_SPEEDMODE, IDM_SPEED_0);
-    {   unsigned n;                                  /* #224: faster than this PC -> grey */
-        for (n = 1; n < CPUSPEED_COUNT; ++n)
-            if (!CpuSpeedIsAvailable(n, HostCpuMhz()))
-                EnableMenuItem(tools, IDM_SPEED_0 + n, MF_BYCOMMAND | MF_GRAYED); }
+    {   unsigned speed;                                  /* #224: faster than this PC -> grey */
+        for (speed = 1; speed < CPUSPEED_COUNT; ++speed)
+            if (!CpuSpeedIsAvailable(speed, HostCpuMhz()))
+                EnableMenuItem(tools, IDM_SPEED_0 + speed, MF_BYCOMMAND | MF_GRAYED); }
     /* The accelerator column names the RELEASE, because that is the one a captured
        user needs and cannot look up -- the menu is unreachable while capture is held. */
     MenuItem(tools,"Capture Mouse\tWin releases",IDM_INPUT_CAPTURE);
     MenuSeparator(tools);
 
-    m = MenuPopup();                                                   /* Tools>Capture*/
-    MenuItem(m,"Take Screenshot\tCtrl+F5",IDM_CAP_SHOT);
-    MenuSubmenu(m,"Record Video (AVI)",(s=MenuPopup(),MenuItem(s,"Start / Stop",IDM_STUB),s));
-    MenuItem(m,"Record Audio (WAV)",IDM_CAP_AUDIO);          /* #155: ticked while recording */
-    MenuSubmenu(m,"Record OPL / MIDI",(s=MenuPopup(),MenuItem(s,"Start / Stop",IDM_STUB),s)); MenuSeparator(m);
-    MenuItem(m,"Open Capture Folder",IDM_CAP_FOLDER); MenuItem(m,"Capture Settings...",IDM_STUB);
-    MenuSubmenu(tools, "Capture", m);
+    menu = MenuPopup();                                                   /* Tools>Capture*/
+    MenuItem(menu,"Take Screenshot\tCtrl+F5",IDM_CAP_SHOT);
+    MenuSubmenu(menu,"Record Video (AVI)",(submenu=MenuPopup(),MenuItem(submenu,"Start / Stop",IDM_STUB),submenu));
+    MenuItem(menu,"Record Audio (WAV)",IDM_CAP_AUDIO);          /* #155: ticked while recording */
+    MenuSubmenu(menu,"Record OPL / MIDI",(submenu=MenuPopup(),MenuItem(submenu,"Start / Stop",IDM_STUB),submenu)); MenuSeparator(menu);
+    MenuItem(menu,"Open Capture Folder",IDM_CAP_FOLDER); MenuItem(menu,"Capture Settings...",IDM_STUB);
+    MenuSubmenu(tools, "Capture", menu);
 
     MenuSeparator(tools);
     /* ── ★ INSTALLING IS AN ACTION, SO IT IS ON A MENU AND NOT A SETTINGS PAGE.
@@ -10605,9 +10605,9 @@ static HMENU build_menu(void)
     MenuItem(tools, "Settings...", IDM_FILE_SETTINGS);
     MenuSubmenu(bar, "Tools", tools);
 
-    m = MenuPopup();                                                   /* Help         */
-    MenuItem(m,"About",IDM_HELP_ABOUT);
-    MenuSubmenu(bar, "Help", m);
+    menu = MenuPopup();                                                   /* Help         */
+    MenuItem(menu,"About",IDM_HELP_ABOUT);
+    MenuSubmenu(bar, "Help", menu);
     return bar;
 }
 
@@ -10636,44 +10636,44 @@ static HMENU build_menu(void)
 #define WM_APP_PRESENT (WM_APP + 2)   /* the guest finished a frame: present now (Auto) */
 /* Runs on the GUEST thread inside status_in, under the device lock: post and leave.
    One in flight at a time so a fast poller cannot flood the queue. */
-static void host_present_hook(void *ctx)
+static void HostPresentHook(void *context)
 {
-    (void)ctx;
+    (void)context;
     if (g_UiTickMinimumMs != UITICK_AUTO || !g_Window) return;
     if (InterlockedCompareExchange(&g_UiPresentPending, 1, 0) == 0)
         PostMessageA(g_Window, WM_APP_PRESENT, 0, 0);
 }
 #define TRAY_ID 1
-static int  g_wow_launch = 0;                /* `-w`: this VDM hosts Win16        */
-static int  g_tray_on    = 0;                /* the icon is currently installed   */
+static int  g_WowLaunch = 0;                /* `-w`: this VDM hosts Win16        */
+static int  g_TrayOn    = 0;                /* the icon is currently installed   */
 
-static void tray_add(HINSTANCE hi, HWND h)
+static void TrayAdd(HINSTANCE instance, HWND window)
 {
     NOTIFYICONDATAA nid;
     const char *tip = "NTVDMEX - 16-bit Windows";
-    int i;
-    if (g_tray_on) return;
+    int index;
+    if (g_TrayOn) return;
     ZeroMemory(&nid, sizeof nid);
     nid.cbSize           = sizeof nid;
-    nid.hWnd             = h;
+    nid.hWnd             = window;
     nid.uID              = TRAY_ID;
     nid.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     nid.uCallbackMessage = WM_TRAY;
-    nid.hIcon            = LoadIconA(hi, MAKEINTRESOURCEA(101));
+    nid.hIcon            = LoadIconA(instance, MAKEINTRESOURCEA(101));
     if (!nid.hIcon) nid.hIcon = LoadIconA(NULL, IDI_APPLICATION);
-    for (i = 0; tip[i] && i < (int)sizeof nid.szTip - 1; ++i) nid.szTip[i] = tip[i];
-    nid.szTip[i] = 0;
-    g_tray_on = Shell_NotifyIconA(NIM_ADD, &nid) ? 1 : 0;
+    for (index = 0; tip[index] && index < (int)sizeof nid.szTip - 1; ++index) nid.szTip[index] = tip[index];
+    nid.szTip[index] = 0;
+    g_TrayOn = Shell_NotifyIconA(NIM_ADD, &nid) ? 1 : 0;
 }
 
-static void tray_remove(HWND h)
+static void TrayRemove(HWND window)
 {
     NOTIFYICONDATAA nid;
-    if (!g_tray_on) return;
+    if (!g_TrayOn) return;
     ZeroMemory(&nid, sizeof nid);
-    nid.cbSize = sizeof nid; nid.hWnd = h; nid.uID = TRAY_ID;
+    nid.cbSize = sizeof nid; nid.hWnd = window; nid.uID = TRAY_ID;
     Shell_NotifyIconA(NIM_DELETE, &nid);
-    g_tray_on = 0;
+    g_TrayOn = 0;
 }
 
 /* ── ★★ THE NTVDMEX MANAGER: ONE TRAY ICON FOR EVERY PROGRAM. (GH #281, s88) ───
@@ -10684,11 +10684,11 @@ static void tray_remove(HWND h)
      seconds. Not the UI thread: a SendMessageTimeout on a frame tick is a stall
      Skyroads would feel, and the announcement has no deadline worth that.
    ⚠ IF ntvdmex.exe IS NOT BESIDE US, nothing changes: a Win16 host keeps its own
-     tray icon exactly as before (g_mgr_avail = 0), and a DOS host never had one. */
-static int   g_mgr_avail;                    /* ntvdmex.exe exists beside the host   */
-static UINT  g_mgr_cmdmsg;                   /* the registered manager->host message */
-static char  g_mgr_exe[MAX_PATH];
-static DWORD g_mgr_hellos, g_mgr_launches;   /* for the log                          */
+     tray icon exactly as before (g_ManagerAvailable = 0), and a DOS host never had one. */
+static int   g_ManagerAvailable;                    /* ntvdmex.exe exists beside the host   */
+static UINT  g_ManagerCommandMessage;                   /* the registered manager->host message */
+static char  g_ManagerExe[MAX_PATH];
+static DWORD g_ManagerHellos, g_ManagerLaunches;   /* for the log                          */
 typedef int (WINAPI *PFN_INTGETWT)(HWND, LPWSTR, int);
 
 /* What the menu calls this program. DOS: the running program's name ("Doom"), or
@@ -10697,138 +10697,138 @@ typedef int (WINAPI *PFN_INTGETWT)(HWND, LPWSTR, int);
    is read with InternalGetWindowText, which takes it from the window WITHOUT a
    message -- GetWindowText from this thread would wait on the exec thread, which is
    usually inside the guest. */
-static void mgr_name(char *out, HWND *show)
+static void ManagerName(char *out, HWND *show)
 {
-    char raw[MGR_NAME_SIZE]; int i, k = 0;
-    const char *src = NULL;
+    char raw[MGR_NAME_SIZE]; int index, length = 0;
+    const char *source = NULL;
     raw[0] = 0; *show = g_Window;
-    if (g_wow_launch) {
-        static PFN_INTGETWT igwt;
-        if (!igwt) igwt = (PFN_INTGETWT)(ULONG_PTR)GetProcAddress(GetModuleHandleA("user32.dll"),
+    if (g_WowLaunch) {
+        static PFN_INTGETWT internalGetWindowText;
+        if (!internalGetWindowText) internalGetWindowText = (PFN_INTGETWT)(ULONG_PTR)GetProcAddress(GetModuleHandleA("user32.dll"),
                                                                   "InternalGetWindowText");
         *show = NULL;
-        for (i = 0; i < WOWUSER_MAX_WIN; ++i) {
-            const WOWUSER_WINDOW *w = &g_WowUserWindows[i];
-            HWND h = w->Window32;
-            if (!w->Window16 || w->Parent || w->IsDying || w->IsForeign || !h || !IsWindowVisible(h)) continue;
-            *show = h;
-            if (igwt) {
-                WCHAR wb[MGR_NAME_SIZE]; int n = igwt(h, wb, MGR_NAME_SIZE);
-                if (n > 0) WideCharToMultiByte(CP_ACP, 0, wb, n + 1, raw, sizeof raw, NULL, NULL);
+        for (index = 0; index < WOWUSER_MAX_WIN; ++index) {
+            const WOWUSER_WINDOW *wowWindow = &g_WowUserWindows[index];
+            HWND window = wowWindow->Window32;
+            if (!wowWindow->Window16 || wowWindow->Parent || wowWindow->IsDying || wowWindow->IsForeign || !window || !IsWindowVisible(window)) continue;
+            *show = window;
+            if (internalGetWindowText) {
+                WCHAR wideBuffer[MGR_NAME_SIZE]; int length16 = internalGetWindowText(window, wideBuffer, MGR_NAME_SIZE);
+                if (length16 > 0) WideCharToMultiByte(CP_ACP, 0, wideBuffer, length16 + 1, raw, sizeof raw, NULL, NULL);
             }
             break;
         }
-        if (!raw[0]) src = g_WowCommandProgram;
+        if (!raw[0]) source = g_WowCommandProgram;
     } else {
-        src = g_ProgramName;
+        source = g_ProgramName;
     }
-    if (src) {
-        const char *bn = src, *q;
-        for (q = src; *q; ++q) if (*q == '\\' || *q == '/') bn = q + 1;
-        if (!*bn || !lstrcmpiA(bn, "COMMAND.COM") || !lstrcmpiA(bn, "CMD.EXE")
-            || !lstrcmpA(bn, "(none)")) {
-            lstrcpynA(out, g_wow_launch ? "16-bit Windows" : "MS-DOS Prompt", MGR_NAME_SIZE);
+    if (source) {
+        const char *baseName = source, *cursor;
+        for (cursor = source; *cursor; ++cursor) if (*cursor == '\\' || *cursor == '/') baseName = cursor + 1;
+        if (!*baseName || !lstrcmpiA(baseName, "COMMAND.COM") || !lstrcmpiA(baseName, "CMD.EXE")
+            || !lstrcmpA(baseName, "(none)")) {
+            lstrcpynA(out, g_WowLaunch ? "16-bit Windows" : "MS-DOS Prompt", MGR_NAME_SIZE);
             return;
         }
         /* "DOOM.EXE" -> "Doom": the base name, first letter up, the rest down. */
-        for (i = 0; bn[i] && bn[i] != '.' && k < MGR_NAME_SIZE - 1; ++i) {
-            char c = bn[i];
-            if (k == 0) { if (c >= 'a' && c <= 'z') c = (char)(c - 32); }
-            else        { if (c >= 'A' && c <= 'Z') c = (char)(c + 32); }
-            raw[k++] = c;
+        for (index = 0; baseName[index] && baseName[index] != '.' && length < MGR_NAME_SIZE - 1; ++index) {
+            char character = baseName[index];
+            if (length == 0) { if (character >= 'a' && character <= 'z') character = (char)(character - 32); }
+            else        { if (character >= 'A' && character <= 'Z') character = (char)(character + 32); }
+            raw[length++] = character;
         }
-        raw[k] = 0;
+        raw[length] = 0;
     }
     raw[MGR_NAME_SIZE - 1] = 0;
-    for (i = 0; raw[i]; ++i)                         /* "Notepad - (Untitled)" -> "Notepad" */
-        if (raw[i] == ' ' && raw[i + 1] == '-' && raw[i + 2] == ' ') { raw[i] = 0; break; }
+    for (index = 0; raw[index]; ++index)                         /* "Notepad - (Untitled)" -> "Notepad" */
+        if (raw[index] == ' ' && raw[index + 1] == '-' && raw[index + 2] == ' ') { raw[index] = 0; break; }
     lstrcpynA(out, raw[0] ? raw : "NTVDMEX", MGR_NAME_SIZE);
 }
 
-static DWORD WINAPI mgr_thread(LPVOID unused)
+static DWORD WINAPI ManagerThread(LPVOID unused)
 {
-    DWORD last_launch = 0;
+    DWORD lastLaunch = 0;
     (void)unused;
     while (g_Window && IsWindow(g_Window)) {
-        HWND m = FindWindowA(MGR_CLASS, NULL);
-        if (!m) {
+        HWND manager = FindWindowA(MGR_CLASS, NULL);
+        if (!manager) {
             DWORD now = GetTickCount();
-            if (!last_launch || now - last_launch >= 5000) {
-                STARTUPINFOA si; PROCESS_INFORMATION pi;
-                char cl[MAX_PATH + 4];
-                last_launch = now;
-                ZeroMemory(&si, sizeof si); si.cb = sizeof si;
-                cl[0] = '"'; lstrcpynA(cl + 1, g_mgr_exe, MAX_PATH); lstrcatA(cl, "\"");
-                if (CreateProcessA(g_mgr_exe, cl, NULL, NULL, FALSE, DETACHED_PROCESS,
-                                   NULL, NULL, &si, &pi)) {
-                    ++g_mgr_launches;
-                    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+            if (!lastLaunch || now - lastLaunch >= 5000) {
+                STARTUPINFOA startupInfo; PROCESS_INFORMATION processInfo;
+                char commandLine[MAX_PATH + 4];
+                lastLaunch = now;
+                ZeroMemory(&startupInfo, sizeof startupInfo); startupInfo.cb = sizeof startupInfo;
+                commandLine[0] = '"'; lstrcpynA(commandLine + 1, g_ManagerExe, MAX_PATH); lstrcatA(commandLine, "\"");
+                if (CreateProcessA(g_ManagerExe, commandLine, NULL, NULL, FALSE, DETACHED_PROCESS,
+                                   NULL, NULL, &startupInfo, &processInfo)) {
+                    ++g_ManagerLaunches;
+                    CloseHandle(processInfo.hThread); CloseHandle(processInfo.hProcess);
                 }
             }
             Sleep(500);                              /* give it a moment to appear */
             continue;
         }
-        {   MGR_MESSAGE mm; COPYDATASTRUCT cd; HWND show; DWORD_PTR r = 0;
-            ZeroMemory(&mm, sizeof mm);
-            mm.Magic = MGR_MAGIC; mm.Version = MGR_VERSION; mm.Size = sizeof mm;
-            mm.Operation = MGR_OP_HELLO; mm.ProcessId = GetCurrentProcessId();
-            mm.Kind = g_wow_launch ? MGR_KIND_WIN16 : MGR_KIND_DOS;
-            mgr_name(mm.Name, &show);
-            mm.CommandWindow = (DWORD)(ULONG_PTR)g_Window; mm.ShowTargetWindow = (DWORD)(ULONG_PTR)show;
-            cd.dwData = MGR_MAGIC; cd.cbData = sizeof mm; cd.lpData = &mm;
-            if (SendMessageTimeoutA(m, WM_COPYDATA, (WPARAM)g_Window, (LPARAM)&cd,
-                                    SMTO_ABORTIFHUNG, 500, &r) && r)
-                ++g_mgr_hellos;
+        {   MGR_MESSAGE message; COPYDATASTRUCT copyData; HWND show; DWORD_PTR result = 0;
+            ZeroMemory(&message, sizeof message);
+            message.Magic = MGR_MAGIC; message.Version = MGR_VERSION; message.Size = sizeof message;
+            message.Operation = MGR_OP_HELLO; message.ProcessId = GetCurrentProcessId();
+            message.Kind = g_WowLaunch ? MGR_KIND_WIN16 : MGR_KIND_DOS;
+            ManagerName(message.Name, &show);
+            message.CommandWindow = (DWORD)(ULONG_PTR)g_Window; message.ShowTargetWindow = (DWORD)(ULONG_PTR)show;
+            copyData.dwData = MGR_MAGIC; copyData.cbData = sizeof message; copyData.lpData = &message;
+            if (SendMessageTimeoutA(manager, WM_COPYDATA, (WPARAM)g_Window, (LPARAM)&copyData,
+                                    SMTO_ABORTIFHUNG, 500, &result) && result)
+                ++g_ManagerHellos;
         }
         Sleep(2000);
     }
     return 0;
 }
 
-static void mgr_start(void)
+static void ManagerStart(void)
 {
-    char *q; HANDLE t;
-    g_mgr_cmdmsg = RegisterWindowMessageA(MGR_CMD_MSGNAME);
-    if (!GetModuleFileNameA(NULL, g_mgr_exe, sizeof g_mgr_exe)) return;
-    for (q = g_mgr_exe + lstrlenA(g_mgr_exe); q > g_mgr_exe && q[-1] != '\\'; --q) ;
-    if (q - g_mgr_exe + lstrlenA(MGR_EXE) >= (int)sizeof g_mgr_exe) return;
-    lstrcpyA(q, MGR_EXE);
-    if (GetFileAttributesA(g_mgr_exe) == INVALID_FILE_ATTRIBUTES) return;
-    g_mgr_avail = 1;
-    t = CreateThread(NULL, 0, mgr_thread, NULL, 0, NULL);
-    if (t) { SetThreadPriority(t, THREAD_PRIORITY_LOWEST); CloseHandle(t); }
-    else g_mgr_avail = 0;
+    char *cursor; HANDLE thread;
+    g_ManagerCommandMessage = RegisterWindowMessageA(MGR_CMD_MSGNAME);
+    if (!GetModuleFileNameA(NULL, g_ManagerExe, sizeof g_ManagerExe)) return;
+    for (cursor = g_ManagerExe + lstrlenA(g_ManagerExe); cursor > g_ManagerExe && cursor[-1] != '\\'; --cursor) ;
+    if (cursor - g_ManagerExe + lstrlenA(MGR_EXE) >= (int)sizeof g_ManagerExe) return;
+    lstrcpyA(cursor, MGR_EXE);
+    if (GetFileAttributesA(g_ManagerExe) == INVALID_FILE_ATTRIBUTES) return;
+    g_ManagerAvailable = 1;
+    thread = CreateThread(NULL, 0, ManagerThread, NULL, 0, NULL);
+    if (thread) { SetThreadPriority(thread, THREAD_PRIORITY_LOWEST); CloseHandle(thread); }
+    else g_ManagerAvailable = 0;
 }
 
 /* The tray's context menu: the items from the menu bar that still MEAN something
    when there is no window to look at. Deliberately short -- a tray menu that
    mirrored the whole bar would offer Fullscreen and Capture Input for a machine
    with no screen and no focus. */
-static void tray_menu(HWND h)
+static void TrayMenu(HWND window)
 {
-    HMENU m = CreatePopupMenu();
-    POINT pt;
-    if (!m) return;
+    HMENU menu = CreatePopupMenu();
+    POINT point;
+    if (!menu) return;
     /* s88 (user): a Win16 host's machine window is never shown, so there is no
        "Show NTVDMEX Window" here any more (this menu only exists for Win16). */
-    AppendMenuA(m, MF_STRING, IDM_FILE_SETTINGS,  "Settings...");
-    AppendMenuA(m, MF_STRING, IDM_CAP_SHOT,       "Take Screenshot");
-    AppendMenuA(m, MF_STRING, IDM_HELP_ABOUT,     "About");
-    AppendMenuA(m, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(m, MF_STRING, IDM_FILE_CLOSEPROG, "Close Program");
-    AppendMenuA(m, MF_STRING, IDM_FILE_EXIT,      "Exit");
-    GetCursorPos(&pt);
+    AppendMenuA(menu, MF_STRING, IDM_FILE_SETTINGS,  "Settings...");
+    AppendMenuA(menu, MF_STRING, IDM_CAP_SHOT,       "Take Screenshot");
+    AppendMenuA(menu, MF_STRING, IDM_HELP_ABOUT,     "About");
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(menu, MF_STRING, IDM_FILE_CLOSEPROG, "Close Program");
+    AppendMenuA(menu, MF_STRING, IDM_FILE_EXIT,      "Exit");
+    GetCursorPos(&point);
     /* ⚠ SetForegroundWindow FIRST and a stray post AFTER: without them a tray
          menu does not dismiss when you click away from it. This is the documented
          dance and it is not optional -- a menu that will not close is worse than
          no menu. */
-    SetForegroundWindow(h);
-    TrackPopupMenu(m, TPM_RIGHTBUTTON, pt.x, pt.y, 0, h, NULL);
-    PostMessageA(h, WM_NULL, 0, 0);
-    DestroyMenu(m);
+    SetForegroundWindow(window);
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON, point.x, point.y, 0, window, NULL);
+    PostMessageA(window, WM_NULL, 0, 0);
+    DestroyMenu(menu);
 }
 
-static HWND g_status;                        /* the native comctl32 status bar    */
+static HWND g_Status;                        /* the native comctl32 status bar    */
 
 /* ── THE CAPTION IS A CONSTANT NOW. ──────────────────────────────────────────────
      It used to carry the running program's name and, while captured, the release
@@ -10870,71 +10870,71 @@ static HWND g_status;                        /* the native comctl32 status bar  
      which cut it off; it now follows the speed. A program that never used the mouse
      gets no fourth part at all -- there is nothing to say about capture. The speed is
      the clock alone ("66 MHz", "Unlimited"), never the CPU's name. */
-static char g_status_l[128], g_status_m[96], g_status_s[32], g_status_r[64];  /* ON it now */
+static char g_StatusLeft[128], g_StatusMode[96], g_StatusSpeed[32], g_StatusRight[64];  /* ON it now */
 /* #325: the window's whole scale (setting or drag), the frame size it was sized for, and
    whether 1x did not fit the screen and was scaled down. See host_apply_scale. */
-static int g_scale_k = 0;            /* the scale the window is AT (after fitting)          */
-static int g_scale_want = 0;         /* the scale ASKED for (setting or drag) -- every mode
+static int g_ScaleFactor = 0;            /* the scale the window is AT (after fitting)          */
+static int g_ScaleWant = 0;         /* the scale ASKED for (setting or drag) -- every mode
                                         change starts from this, so one mode too big for 2x
                                         does not leave the next one stuck at 1x            */
-static int g_win_frame_w, g_win_frame_h;
-static int g_fit_down;
+static int g_WindowFrameWidth, g_WindowFrameHeight;
+static int g_FitDown;
 
-static int zsame(const char *a, const char *b)
+static int StringsEqual(const char *first, const char *second)
 {
-    while (*a && *a == *b) { ++a; ++b; }
-    return *a == *b;
+    while (*first && *first == *second) { ++first; ++second; }
+    return *first == *second;
 }
 
 /* How wide a string renders IN THE STATUS BAR'S OWN FONT. Asking the control for
    its font matters: the strip is themed, so measuring with the stock system font
    would size the part for text of a different width than the one drawn in it. */
-static int status_text_w(const char *s)
+static int StatusTextWidth(const char *text)
 {
-    HDC dc;
-    HFONT f, old = NULL;
-    SIZE sz;
-    int n = 0, w = 0;
-    if (!g_status || !s) return 0;
-    while (s[n]) ++n;
-    dc = GetDC(g_status);
-    if (!dc) return 0;
-    f = (HFONT)SendMessageA(g_status, WM_GETFONT, 0, 0);
-    if (f) old = (HFONT)SelectObject(dc, f);
-    if (GetTextExtentPoint32A(dc, s, n, &sz)) w = sz.cx;
-    if (old) SelectObject(dc, old);
-    ReleaseDC(g_status, dc);
-    return w;
+    HDC deviceContext;
+    HFONT font, old = NULL;
+    SIZE extent;
+    int length = 0, width = 0;
+    if (!g_Status || !text) return 0;
+    while (text[length]) ++length;
+    deviceContext = GetDC(g_Status);
+    if (!deviceContext) return 0;
+    font = (HFONT)SendMessageA(g_Status, WM_GETFONT, 0, 0);
+    if (font) old = (HFONT)SelectObject(deviceContext, font);
+    if (GetTextExtentPoint32A(deviceContext, text, length, &extent)) width = extent.cx;
+    if (old) SelectObject(deviceContext, old);
+    ReleaseDC(g_Status, deviceContext);
+    return width;
 }
 
 /* ── ★ EACH PART HUGS ITS TEXT (s84: extended from the name to every part). ─────────
      Measure each string in the bar's own font, add the control's inset, and lay the
      parts out left to right; the LAST part runs to the edge (-1) so the size grip has
      somewhere to sit. Re-cut whenever any text changes: re-partitioning blanks every
-     part, so status_update re-pushes all of them after it.
+     part, so StatusUpdate re-pushes all of them after it.
    ⚠ CLAMPED: a 63-character program name must not push everything else off the strip. */
-static void status_set_parts(const char *const *txt, int n)
+static void StatusSetParts(const char *const *text, int count)
 {
-    int parts[4], i, x = 0;
-    if (!g_status || n < 1 || n > 4) return;
-    for (i = 0; i < n; ++i) {
-        int w = status_text_w(txt[i]) + 18;       /* the control's own left inset */
-        if (i == 0 && w > 260) w = 260;
-        if (w < 40) w = 40;
-        x += w;
-        parts[i] = (i == n - 1) ? -1 : x;
+    int parts[4], index, right = 0;
+    if (!g_Status || count < 1 || count > 4) return;
+    for (index = 0; index < count; ++index) {
+        int width = StatusTextWidth(text[index]) + 18;       /* the control's own left inset */
+        if (index == 0 && width > 260) width = 260;
+        if (width < 40) width = 40;
+        right += width;
+        parts[index] = (index == count - 1) ? -1 : right;
     }
-    SendMessageA(g_status, SB_SETPARTS, (WPARAM)n, (LPARAM)parts);
+    SendMessageA(g_Status, SB_SETPARTS, (WPARAM)count, (LPARAM)parts);
 }
 
 /* The CPU speed as the strip shows it: the clock only, no CPU name (user, s84). */
-static void status_speed_text(char *out)
+static void StatusSpeedText(char *out)
 {
     unsigned mhz = ((unsigned)g_CpuSpeedIndex < CPUSPEED_COUNT) ? g_CpuSpeedMhz[g_CpuSpeedIndex] : 0u;
-    char *q = out;
+    char *cursor = out;
     if (!mhz) { LogPut(out, "Unlimited"); return; }
-    if (mhz >= 1000u && mhz % 1000u == 0u) { q = LogDecimal(q, mhz / 1000u); LogPut(q, " GHz"); }
-    else                                   { q = LogDecimal(q, mhz);         LogPut(q, " MHz"); }
+    if (mhz >= 1000u && mhz % 1000u == 0u) { cursor = LogDecimal(cursor, mhz / 1000u); LogPut(cursor, " GHz"); }
+    else                                   { cursor = LogDecimal(cursor, mhz);         LogPut(cursor, " MHz"); }
 }
 
 /* Compose the parts, and push them only when something CHANGES.
@@ -10943,79 +10943,79 @@ static void status_speed_text(char *out)
      inside the DPMI mode switch, and a flag there would be one more thing every future
      site that changes mode has to remember. Comparing short strings once per frame
      costs nothing and cannot be forgotten. */
-static void status_update(void)
+static void StatusUpdate(void)
 {
-    const char *txt[4];
-    char spd[32];
-    int n;
-    if (!g_status) return;
-    txt[0] = g_ProgramName;
+    const char *text[4];
+    char speed[32];
+    int parts;
+    if (!g_Status) return;
+    text[0] = g_ProgramName;
     /* One field, because they are one fact: 32-bit only ever means a DPMI client in
        protected mode. Title case (user, s84). */
     {   /* #325: the picture's own resolution and how it is shown -- "at 2x" when the
              drawn rectangle is an exact whole multiple, "scaled" otherwise -- read
              from what PresentGdi actually drew, so it is true in a window, maximised
              and fullscreen alike. */
-        static char mode_txt[96];
-        const char *m = (g_DpmiPm && g_DpmiIsClient32) ? "32-bit Protected Mode"
+        static char modeText[96];
+        const char *mode = (g_DpmiPm && g_DpmiIsClient32) ? "32-bit Protected Mode"
                       : g_DpmiPm                      ? "16-bit Protected Mode"
                                                        : "16-bit Real Mode";
-        char *q = LogPut(mode_txt, m);
+        char *cursor = LogPut(modeText, mode);
         if (g_PresentDdraw.IsSnapshotValid && g_PresentDdraw.SnapshotWidth > 0 && g_PresentDdraw.SnapshotHeight > 0 && g_PresentDdraw.LastDestinationWidth > 0) {
-            int sw = g_PresentDdraw.SnapshotWidth, sh = g_PresentDdraw.SnapshotHeight, dw = g_PresentDdraw.LastDestinationWidth, dh = g_PresentDdraw.LastDestinationHeight;
-            q = LogPut(q, ", ");  q = LogDecimal(q, (unsigned)sw); q = LogPut(q, "x"); q = LogDecimal(q, (unsigned)sh);
-            if (dw % sw == 0 && dh % sh == 0 && dw / sw == dh / sh) {
-                q = LogPut(q, " at "); q = LogDecimal(q, (unsigned)(dw / sw)); q = LogPut(q, "x");
-            } else q = LogPut(q, g_fit_down ? " (scaled to fit)" : " (scaled)");
+            int snapshotWidth = g_PresentDdraw.SnapshotWidth, snapshotHeight = g_PresentDdraw.SnapshotHeight, destinationWidth = g_PresentDdraw.LastDestinationWidth, destinationHeight = g_PresentDdraw.LastDestinationHeight;
+            cursor = LogPut(cursor, ", ");  cursor = LogDecimal(cursor, (unsigned)snapshotWidth); cursor = LogPut(cursor, "x"); cursor = LogDecimal(cursor, (unsigned)snapshotHeight);
+            if (destinationWidth % snapshotWidth == 0 && destinationHeight % snapshotHeight == 0 && destinationWidth / snapshotWidth == destinationHeight / snapshotHeight) {
+                cursor = LogPut(cursor, " at "); cursor = LogDecimal(cursor, (unsigned)(destinationWidth / snapshotWidth)); cursor = LogPut(cursor, "x");
+            } else cursor = LogPut(cursor, g_FitDown ? " (scaled to fit)" : " (scaled)");
         }
-        txt[1] = mode_txt;
+        text[1] = modeText;
     }
-    status_speed_text(spd);
-    txt[2] = spd;
+    StatusSpeedText(speed);
+    text[2] = speed;
     /* Only a program that asked for the mouse has anything to say about capture
        (rule 1); exactly the user's wording. */
-    txt[3] = g_Captured        ? "Press WIN to release mouse"
+    text[3] = g_Captured        ? "Press WIN to release mouse"
            : CaptureAllowed() ? "Click video to capture mouse"
                                : "";
-    n = txt[3][0] ? 4 : 3;
-    if (zsame(txt[0], g_status_l) && zsame(txt[1], g_status_m) &&
-        zsame(txt[2], g_status_s) && zsame(txt[3], g_status_r)) return;
-    status_set_parts(txt, n);
-    LogPut(g_status_l, txt[0]); LogPut(g_status_m, txt[1]);
-    LogPut(g_status_s, txt[2]); LogPut(g_status_r, txt[3]);
-    SendMessageA(g_status, SB_SETTEXTA, 0, (LPARAM)txt[0]);
-    SendMessageA(g_status, SB_SETTEXTA, 1, (LPARAM)txt[1]);
-    SendMessageA(g_status, SB_SETTEXTA, 2, (LPARAM)txt[2]);
-    if (n == 4) SendMessageA(g_status, SB_SETTEXTA, 3, (LPARAM)txt[3]);
+    parts = text[3][0] ? 4 : 3;
+    if (StringsEqual(text[0], g_StatusLeft) && StringsEqual(text[1], g_StatusMode) &&
+        StringsEqual(text[2], g_StatusSpeed) && StringsEqual(text[3], g_StatusRight)) return;
+    StatusSetParts(text, parts);
+    LogPut(g_StatusLeft, text[0]); LogPut(g_StatusMode, text[1]);
+    LogPut(g_StatusSpeed, text[2]); LogPut(g_StatusRight, text[3]);
+    SendMessageA(g_Status, SB_SETTEXTA, 0, (LPARAM)text[0]);
+    SendMessageA(g_Status, SB_SETTEXTA, 1, (LPARAM)text[1]);
+    SendMessageA(g_Status, SB_SETTEXTA, 2, (LPARAM)text[2]);
+    if (parts == 4) SendMessageA(g_Status, SB_SETTEXTA, 3, (LPARAM)text[3]);
 }
 
 /* Create the native status bar child; record its height so the video blit reserves
    that strip. */
-static void make_status(HWND parent, HINSTANCE hi)
+static void MakeStatus(HWND parent, HINSTANCE instance)
 {
-    RECT sr;
-    g_status = CreateWindowExA(0, STATUSCLASSNAME, NULL,
+    RECT statusRect;
+    g_Status = CreateWindowExA(0, STATUSCLASSNAME, NULL,
                                WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
-                               0, 0, 0, 0, parent, NULL, hi, NULL);
-    if (!g_status) return;
+                               0, 0, 0, 0, parent, NULL, instance, NULL);
+    if (!g_Status) return;
     /* Dock it to the parent's width BEFORE cutting the parts: a status bar created
        at 0x0 has a zero client rect, so the split would be computed against nothing
        and would stay wrong until the first user resize. */
-    SendMessageA(g_status, WM_SIZE, 0, 0);
-    g_status_l[0] = 0;                       /* force the first cut + push */
-    status_update();
-    GetWindowRect(g_status, &sr);
-    if (sr.bottom > sr.top) g_PresentDdraw.StatusHeight = sr.bottom - sr.top;
+    SendMessageA(g_Status, WM_SIZE, 0, 0);
+    g_StatusLeft[0] = 0;                       /* force the first cut + push */
+    StatusUpdate();
+    GetWindowRect(g_Status, &statusRect);
+    if (statusRect.bottom > statusRect.top) g_PresentDdraw.StatusHeight = statusRect.bottom - statusRect.top;
 }
 
 /* Tick/untick a menu item BY COMMAND, through whichever menu is live: FULLSCREEN
    detaches the bar into g_FsMenu, and a toggle pressed by hotkey while it is
    detached must still be recorded there or the tick is stale when it returns. */
-static void menu_check(HWND h, UINT id, int on)
+static void MenuCheck(HWND window, UINT commandId, int isOn)
 {
-    HMENU m = GetMenu(h);
-    if (!m) m = g_FsMenu;
-    if (m) CheckMenuItem(m, id, MF_BYCOMMAND | (UINT)(on ? MF_CHECKED : MF_UNCHECKED));
+    HMENU menu = GetMenu(window);
+    if (!menu) menu = g_FsMenu;
+    if (menu) CheckMenuItem(menu, commandId, MF_BYCOMMAND | (UINT)(isOn ? MF_CHECKED : MF_UNCHECKED));
 }
 
 /* ── ★ ITEMS THAT ONLY MEAN SOMETHING IN A TEXT MODE. ────────────────────────────
@@ -11033,10 +11033,10 @@ static void menu_check(HWND h, UINT id, int on)
 /* #152: is there a program to close? Greyed at the shell's own prompt and once the
    run is over. In a Win16 VDM it is always there -- the user's rule (s81): Close
    Program on a Win16 program ends it AND NTVDMEX, since there is no shell under it. */
-static int close_prog_available(void)
+static int CloseProgramAvailable(void)
 {
     if (!g_Running || g_WoundDown) return 0;
-    if (g_wow_launch) return 1;
+    if (g_WowLaunch) return 1;
     if (g_DpmiDone) return 0;
     return g_ExecDepth > 0 || !g_TopIsShell;
 }
@@ -11053,125 +11053,125 @@ static int close_prog_available(void)
        Paste       the clipboard, TYPED: real scancodes through the same path as a
                    keypress, so a prompt, EDIT and a program reading port 60h all get it
    The selection is shown by the presenter inverting it after each frame. */
-static int g_mark_mode, g_mark_drag, g_sel_on;
-static int g_sel_c0, g_sel_r0, g_sel_c1, g_sel_r1;
-static volatile LONG g_paste_busy;
+static int g_MarkMode, g_MarkDrag, g_SelectionOn;
+static int g_SelectionColumn0, g_SelectionRow0, g_SelectionColumn1, g_SelectionRow1;
+static volatile LONG g_PasteBusy;
 
-static void sel_publish(void)
+static void SelectionPublish(void)
 {
     int cols = g_Video.Columns, rows = g_Video.Rows;
-    int c0 = g_sel_c0 < g_sel_c1 ? g_sel_c0 : g_sel_c1, c1 = g_sel_c0 < g_sel_c1 ? g_sel_c1 : g_sel_c0;
-    int r0 = g_sel_r0 < g_sel_r1 ? g_sel_r0 : g_sel_r1, r1 = g_sel_r0 < g_sel_r1 ? g_sel_r1 : g_sel_r0;
+    int column0 = g_SelectionColumn0 < g_SelectionColumn1 ? g_SelectionColumn0 : g_SelectionColumn1, column1 = g_SelectionColumn0 < g_SelectionColumn1 ? g_SelectionColumn1 : g_SelectionColumn0;
+    int row0 = g_SelectionRow0 < g_SelectionRow1 ? g_SelectionRow0 : g_SelectionRow1, row1 = g_SelectionRow0 < g_SelectionRow1 ? g_SelectionRow1 : g_SelectionRow0;
     if (cols < 1) cols = 1;
     if (rows < 1) rows = 1;
-    g_PresentDdraw.IsSelection = g_sel_on;
+    g_PresentDdraw.IsSelection = g_SelectionOn;
     {   /* in FRAME pixels: the live cell -- 9 dots wide (#324), and cell_h tall, which
            is 8 in a 50-line screen (this used VIDEO_CELL_HEIGHT, so a 50-line selection was
            drawn at twice its height). */
-        int cw = VddVideoTextCellWidth(&g_Video), chh = g_Video.CellHeight ? g_Video.CellHeight : VIDEO_CELL_HEIGHT;
-        g_PresentDdraw.SelectionX0 = c0 * cw;            g_PresentDdraw.SelectionX1 = (c1 + 1) * cw;
-        g_PresentDdraw.SelectionY0 = r0 * chh;           g_PresentDdraw.SelectionY1 = (r1 + 1) * chh;
+        int cellWidth = VddVideoTextCellWidth(&g_Video), cellHeight = g_Video.CellHeight ? g_Video.CellHeight : VIDEO_CELL_HEIGHT;
+        g_PresentDdraw.SelectionX0 = column0 * cellWidth;            g_PresentDdraw.SelectionX1 = (column1 + 1) * cellWidth;
+        g_PresentDdraw.SelectionY0 = row0 * cellHeight;           g_PresentDdraw.SelectionY1 = (row1 + 1) * cellHeight;
     }
     HOST_LOCK(); g_Video.IsDirty = 1; HOST_UNLOCK();
     if (g_PresentDdraw.Window) InvalidateRect(g_PresentDdraw.Window, NULL, FALSE);
 }
 
-static void sel_clear(void) { g_mark_mode = g_mark_drag = 0; g_sel_on = 0; sel_publish(); }
+static void SelectionClear(void) { g_MarkMode = g_MarkDrag = 0; g_SelectionOn = 0; SelectionPublish(); }
 
 /* Client pixel -> cell, through the rectangle the last frame was drawn into. */
-static int client_to_cell(int x, int y, int *c, int *r)
+static int ClientToCell(int clientX, int clientY, int *column, int *row)
 {
-    int sx, sy;
+    int sourceX, sourceY;
     if (g_PresentDdraw.LastDestinationWidth <= 0 || g_PresentDdraw.LastDestinationHeight <= 0 || g_Video.Columns < 1 || g_Video.Rows < 1) return 0;
-    sx = (x - g_PresentDdraw.LastDestinationX) * g_PresentDdraw.LastSourceWidth / g_PresentDdraw.LastDestinationWidth;
-    sy = (y - g_PresentDdraw.LastDestinationY) * g_PresentDdraw.LastSourceHeight / g_PresentDdraw.LastDestinationHeight;
-    *c = sx / VddVideoTextCellWidth(&g_Video);
-    *r = sy / (g_Video.CellHeight ? g_Video.CellHeight : VIDEO_CELL_HEIGHT);
-    if (*c < 0) *c = 0;
-    if (*r < 0) *r = 0;
-    if (*c >= g_Video.Columns) *c = g_Video.Columns - 1;
-    if (*r >= g_Video.Rows) *r = g_Video.Rows - 1;
+    sourceX = (clientX - g_PresentDdraw.LastDestinationX) * g_PresentDdraw.LastSourceWidth / g_PresentDdraw.LastDestinationWidth;
+    sourceY = (clientY - g_PresentDdraw.LastDestinationY) * g_PresentDdraw.LastSourceHeight / g_PresentDdraw.LastDestinationHeight;
+    *column = sourceX / VddVideoTextCellWidth(&g_Video);
+    *row = sourceY / (g_Video.CellHeight ? g_Video.CellHeight : VIDEO_CELL_HEIGHT);
+    if (*column < 0) *column = 0;
+    if (*row < 0) *row = 0;
+    if (*column >= g_Video.Columns) *column = g_Video.Columns - 1;
+    if (*row >= g_Video.Rows) *row = g_Video.Rows - 1;
     return 1;
 }
 
-static void text_copy(HWND h, int all)
+static void TextCopy(HWND window, int all)
 {
-    int c0, c1, r0, r1, r, c, n = 0;
-    static char t[132 * 60 * 2 + 256];
-    HGLOBAL g; char *d;
+    int column0, column1, row0, row1, row, column, length = 0;
+    static char text[132 * 60 * 2 + 256];
+    HGLOBAL memory; char *destination;
     if (g_Video.ModeKind != VIDEO_KIND_TEXT || !g_Video.VideoMemory) return;
-    if (all || !g_sel_on) { c0 = 0; r0 = 0; c1 = g_Video.Columns - 1; r1 = g_Video.Rows - 1; }
+    if (all || !g_SelectionOn) { column0 = 0; row0 = 0; column1 = g_Video.Columns - 1; row1 = g_Video.Rows - 1; }
     else {
-        c0 = g_sel_c0 < g_sel_c1 ? g_sel_c0 : g_sel_c1; c1 = g_sel_c0 < g_sel_c1 ? g_sel_c1 : g_sel_c0;
-        r0 = g_sel_r0 < g_sel_r1 ? g_sel_r0 : g_sel_r1; r1 = g_sel_r0 < g_sel_r1 ? g_sel_r1 : g_sel_r0;
+        column0 = g_SelectionColumn0 < g_SelectionColumn1 ? g_SelectionColumn0 : g_SelectionColumn1; column1 = g_SelectionColumn0 < g_SelectionColumn1 ? g_SelectionColumn1 : g_SelectionColumn0;
+        row0 = g_SelectionRow0 < g_SelectionRow1 ? g_SelectionRow0 : g_SelectionRow1; row1 = g_SelectionRow0 < g_SelectionRow1 ? g_SelectionRow1 : g_SelectionRow0;
     }
     HOST_LOCK();
-    for (r = r0; r <= r1 && n < (int)sizeof t - 140; ++r) {
-        int start = n;
-        for (c = c0; c <= c1; ++c) {
-            uint8_t ch = g_Video.VideoMemory[VIDEO_TEXT_OFFSET + ((g_Video.CrtcStartLive * 2u + (unsigned)(r * g_Video.Columns + c) * 2u) & 0x7FFFu)];   /* the DISPLAYED page (#252) */
-            t[n++] = (char)(ch ? ch : ' ');
+    for (row = row0; row <= row1 && length < (int)sizeof text - 140; ++row) {
+        int start = length;
+        for (column = column0; column <= column1; ++column) {
+            uint8_t ch = g_Video.VideoMemory[VIDEO_TEXT_OFFSET + ((g_Video.CrtcStartLive * 2u + (unsigned)(row * g_Video.Columns + column) * 2u) & 0x7FFFu)];   /* the DISPLAYED page (#252) */
+            text[length++] = (char)(ch ? ch : ' ');
         }
-        while (n > start && t[n - 1] == ' ') --n;          /* right-trim the line */
-        if (r < r1) { t[n++] = '\r'; t[n++] = '\n'; }
+        while (length > start && text[length - 1] == ' ') --length;          /* right-trim the line */
+        if (row < row1) { text[length++] = '\r'; text[length++] = '\n'; }
     }
     HOST_UNLOCK();
-    while (n >= 2 && t[n - 2] == '\r' && t[n - 1] == '\n') n -= 2;   /* the empty rows below */
-    t[n] = 0;
-    g = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)n + 1);
-    d = g ? (char *)GlobalLock(g) : NULL;
-    if (!d) { if (g) GlobalFree(g); return; }
-    for (c = 0; c <= n; ++c) d[c] = t[c];
-    GlobalUnlock(g);
-    if (OpenClipboard(h)) {
+    while (length >= 2 && text[length - 2] == '\r' && text[length - 1] == '\n') length -= 2;   /* the empty rows below */
+    text[length] = 0;
+    memory = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)length + 1);
+    destination = memory ? (char *)GlobalLock(memory) : NULL;
+    if (!destination) { if (memory) GlobalFree(memory); return; }
+    for (column = 0; column <= length; ++column) destination[column] = text[column];
+    GlobalUnlock(memory);
+    if (OpenClipboard(window)) {
         EmptyClipboard();
-        if (!SetClipboardData(CF_OEMTEXT, g)) GlobalFree(g);
+        if (!SetClipboardData(CF_OEMTEXT, memory)) GlobalFree(memory);
         CloseClipboard();
-    } else GlobalFree(g);
+    } else GlobalFree(memory);
 }
 
 
 /* Typed, not injected: ~30 characters a second, so a guest that reads slowly (or a
    BIOS ring of 15 keys) is not overrun. One paste at a time; a new one while typing
    is refused rather than interleaved. */
-static DWORD WINAPI paste_thread(LPVOID pv)
+static DWORD WINAPI PasteThread(LPVOID parameter)
 {
-    char *s = (char *)pv;
-    int i;
-    for (i = 0; s[i] && g_Running; ++i) {
-        BYTE ch = (BYTE)s[i], sc = 0, sh = 0;
-        if (ch == '\r') { sc = 0x1C; if (s[i + 1] == '\n') ++i; }
-        else if (ch == '\n') sc = 0x1C;
-        else if (ch == '\t') sc = 0x0F;
-        else { uint8_t k; int kk;                           /* #136: on the active layout */
-               if (VddInputCharToKey(&g_Input, ch, &k, &kk)) { sc = k; sh = (BYTE)kk; } }
-        if (!sc) continue;                                  /* not typeable: skipped */
-        if (sh) HostKeyScancode(0x2A, 0, 0);
-        HostKeyScancode(sc, 0, 0);
+    char *text = (char *)parameter;
+    int index;
+    for (index = 0; text[index] && g_Running; ++index) {
+        BYTE ch = (BYTE)text[index], scan = 0, isShifted = 0;
+        if (ch == '\r') { scan = 0x1C; if (text[index + 1] == '\n') ++index; }
+        else if (ch == '\n') scan = 0x1C;
+        else if (ch == '\t') scan = 0x0F;
+        else { uint8_t scanCode; int shift;                           /* #136: on the active layout */
+               if (VddInputCharToKey(&g_Input, ch, &scanCode, &shift)) { scan = scanCode; isShifted = (BYTE)shift; } }
+        if (!scan) continue;                                  /* not typeable: skipped */
+        if (isShifted) HostKeyScancode(0x2A, 0, 0);
+        HostKeyScancode(scan, 0, 0);
         Sleep(12);
-        HostKeyScancode(sc, 0, 1);
-        if (sh) HostKeyScancode(0x2A, 0, 1);
+        HostKeyScancode(scan, 0, 1);
+        if (isShifted) HostKeyScancode(0x2A, 0, 1);
         Sleep(20);
     }
-    HeapFree(GetProcessHeap(), 0, s);
-    InterlockedExchange(&g_paste_busy, 0);
+    HeapFree(GetProcessHeap(), 0, text);
+    InterlockedExchange(&g_PasteBusy, 0);
     return 0;
 }
 
 static void text_paste(HWND h)
 {
     HANDLE g; const char *src; char *s; int n = 0;
-    if (InterlockedExchange(&g_paste_busy, 1)) return;
-    if (!OpenClipboard(h)) { InterlockedExchange(&g_paste_busy, 0); return; }
+    if (InterlockedExchange(&g_PasteBusy, 1)) return;
+    if (!OpenClipboard(h)) { InterlockedExchange(&g_PasteBusy, 0); return; }
     g = GetClipboardData(CF_TEXT);
     src = g ? (const char *)GlobalLock(g) : NULL;
     s = src ? (char *)HeapAlloc(GetProcessHeap(), 0, 4097) : NULL;
     if (s) { while (n < 4096 && src[n]) { s[n] = src[n]; ++n; } s[n] = 0; }
     if (src) GlobalUnlock(g);
     CloseClipboard();
-    if (!s || !n) { if (s) HeapFree(GetProcessHeap(), 0, s); InterlockedExchange(&g_paste_busy, 0); return; }
-    { HANDLE t = CreateThread(NULL, 0, paste_thread, s, 0, NULL);
-      if (t) CloseHandle(t); else { HeapFree(GetProcessHeap(), 0, s); InterlockedExchange(&g_paste_busy, 0); } }
+    if (!s || !n) { if (s) HeapFree(GetProcessHeap(), 0, s); InterlockedExchange(&g_PasteBusy, 0); return; }
+    { HANDLE t = CreateThread(NULL, 0, PasteThread, s, 0, NULL);
+      if (t) CloseHandle(t); else { HeapFree(GetProcessHeap(), 0, s); InterlockedExchange(&g_PasteBusy, 0); } }
 }
 
 static void menu_sync_modal(HWND h, HMENU popup)
@@ -11183,19 +11183,19 @@ static void menu_sync_modal(HWND h, HMENU popup)
     unsigned i;
     /* The tray menu is its own popup, not a child of the menu bar: grey it directly. */
     if (popup) EnableMenuItem(popup, IDM_FILE_CLOSEPROG, MF_BYCOMMAND
-                              | (close_prog_available() ? MF_ENABLED : MF_GRAYED));
+                              | (CloseProgramAvailable() ? MF_ENABLED : MF_GRAYED));
     if (!m) m = g_FsMenu;
     if (!m) return;
     EnableMenuItem(m, IDM_FILE_CLOSEPROG, MF_BYCOMMAND
-                   | (close_prog_available() ? MF_ENABLED : MF_GRAYED));
+                   | (CloseProgramAvailable() ? MF_ENABLED : MF_GRAYED));
     flag = (g_Video.ModeKind == VIDEO_KIND_TEXT) ? MF_ENABLED : (MF_GRAYED | MF_DISABLED);
     for (i = 0; i < sizeof TEXT_ONLY / sizeof TEXT_ONLY[0]; ++i)
         EnableMenuItem(m, TEXT_ONLY[i], MF_BYCOMMAND | flag);
     CheckMenuItem(m, IDM_CAP_AUDIO, MF_BYCOMMAND | (AudioWaveIsRecording() ? MF_CHECKED : MF_UNCHECKED));
     /* #154: Copy needs a selection; Paste needs text, and not a paste already typing. */
     if (flag == MF_ENABLED) {
-        if (!g_sel_on) EnableMenuItem(m, IDM_EDIT_COPY, MF_BYCOMMAND | MF_GRAYED);
-        if (g_paste_busy || !IsClipboardFormatAvailable(CF_TEXT))
+        if (!g_SelectionOn) EnableMenuItem(m, IDM_EDIT_COPY, MF_BYCOMMAND | MF_GRAYED);
+        if (g_PasteBusy || !IsClipboardFormatAvailable(CF_TEXT))
             EnableMenuItem(m, IDM_EDIT_PASTE, MF_BYCOMMAND | MF_GRAYED);
     }
 }
@@ -11447,7 +11447,7 @@ static void input_capture_set(HWND h, int on)
         {   LONG prev = InterlockedExchange(&g_MouseButtons, 0);
             if (prev) MouseButtonEdges(prev, 0); }
     }
-    menu_check(h, IDM_INPUT_CAPTURE, on);
+    MenuCheck(h, IDM_INPUT_CAPTURE, on);
     host_cursor_refresh(h);              /* apply the pointer change now, not on next move */
     /* The status strip says how to get back out. It is repainted from the UI tick,
        which is where SendMessage to the control is safe -- input_capture_set is also
@@ -11532,7 +11532,7 @@ static void bg_prio_tick(HWND h)
 
 static int open_at_prompt(void)
 {
-    return g_Running && !g_WoundDown && !g_wow_launch && !g_DpmiDone
+    return g_Running && !g_WoundDown && !g_WowLaunch && !g_DpmiDone
         && g_ExecDepth == 0 && g_TopIsShell && g_Machine && g_Machine->IsLineActive;
 }
 
@@ -11641,16 +11641,16 @@ static void menu_recent_fill(void)
 {
     char list[MRU_MAX][MAX_PATH];
     int n, i;
-    if (!g_recent_menu) return;
-    while (GetMenuItemCount(g_recent_menu) > 0) DeleteMenu(g_recent_menu, 0, MF_BYPOSITION);
+    if (!g_RecentMenu) return;
+    while (GetMenuItemCount(g_RecentMenu) > 0) DeleteMenu(g_RecentMenu, 0, MF_BYPOSITION);
     n = MruLoad(list);
-    if (!n) { AppendMenuA(g_recent_menu, MF_STRING | MF_GRAYED, IDM_RECENT_0, "(empty)"); return; }
+    if (!n) { AppendMenuA(g_RecentMenu, MF_STRING | MF_GRAYED, IDM_RECENT_0, "(empty)"); return; }
     for (i = 0; i < n; ++i) {
         char t[2 * MAX_PATH + 8], *q = t; const char *s;
         *q++ = '&'; *q++ = (char)('1' + i); *q++ = ' ';
         for (s = list[i]; *s; ++s) { if (*s == '&') *q++ = '&'; *q++ = *s; }   /* a literal & */
         *q = 0;
-        AppendMenuA(g_recent_menu, MF_STRING, IDM_RECENT_0 + (UINT)i, t);
+        AppendMenuA(g_RecentMenu, MF_STRING, IDM_RECENT_0 + (UINT)i, t);
     }
 }
 
@@ -11790,8 +11790,8 @@ static int             g_fs_saved;
    fullscreen is a worse state than either end of the toggle. */
 static void host_fullscreen_toggle_restore(HWND h)
 {
-    if (g_status) { ShowWindow(g_status, SW_SHOW);
-                    SendMessageA(g_status, WM_SIZE, 0, 0); }   /* re-dock at the bottom */
+    if (g_Status) { ShowWindow(g_Status, SW_SHOW);
+                    SendMessageA(g_Status, WM_SIZE, 0, 0); }   /* re-dock at the bottom */
     if (g_FsMenu) { SetMenu(h, g_FsMenu); g_FsMenu = NULL; }
     if (g_fs_style)   SetWindowLongA(h, GWL_STYLE, g_fs_style);
     if (g_fs_exstyle) SetWindowLongA(h, GWL_EXSTYLE, g_fs_exstyle);
@@ -11830,7 +11830,7 @@ static void host_fullscreen_toggle(HWND h)
            not remove it -- it would sit on top of the picture at whatever size it
            last docked to. PresentGdi already stops reserving room for it in
            fullscreen; this stops it being drawn. */
-        if (g_status) ShowWindow(g_status, SW_HIDE);
+        if (g_Status) ShowWindow(g_Status, SW_HIDE);
         SetWindowPos(h, HWND_TOP, 0, 0,
                      GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
                      SWP_FRAMECHANGED | SWP_NOACTIVATE);
@@ -12155,7 +12155,7 @@ static int g_autofs_done = 0;
 static void host_autofs_consider(HWND h, int graphics)
 {
     DWORD mode = g_set.Values[SET_AUTOFS];
-    if (g_autofs_done || g_wow_launch || g_Headless) return;
+    if (g_autofs_done || g_WowLaunch || g_Headless) return;
     if (mode == AUTOFS_NEVER) { g_autofs_done = 1; return; }
     if (mode == AUTOFS_GRAPHICS && !graphics) return;
     g_autofs_done = 1;
@@ -12514,16 +12514,16 @@ static void host_apply_scale(HWND h, int k)
     if (!h || g_PresentDdraw.IsFullscreen) return;   /* fullscreen owns the size */
     if (IsZoomed(h)) ShowWindow(h, SW_RESTORE);
     if (k < 1) k = 1;
-    g_scale_want = k;
+    g_ScaleWant = k;
     while (k > 1 && !win_scale_fits(k)) --k;
-    g_scale_k = k;
+    g_ScaleFactor = k;
     host_picture(k, &pw, &ph);
     host_work_room(&rw, &rh);
-    g_fit_down = 0;
+    g_FitDown = 0;
     if (pw > rw || ph > rh) {
         int fx, fy;
         PresentFitRatio(rw, rh, pw, ph, &fx, &fy, &pw, &ph);
-        g_fit_down = 1;
+        g_FitDown = 1;
     }
     host_frame_extra(h, &ex, &ey);
     W = pw + ex; H = ph + ey;
@@ -12542,7 +12542,7 @@ static void host_apply_scale(HWND h, int k)
         W += dw; H += dh;
         SetWindowPos(h, NULL, 0, 0, W, H, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
-    host_frame_size(&g_win_frame_w, &g_win_frame_h);
+    host_frame_size(&g_WindowFrameWidth, &g_WindowFrameHeight);
 }
 static void host_apply_winsize(HWND h, DWORD idx)
 {
@@ -12577,10 +12577,10 @@ static void host_follow_frame(HWND h)
     int sw, sh;
     if (!h || g_PresentDdraw.IsFullscreen || IsZoomed(h) || IsIconic(h) || !g_PresentDdraw.IsSnapshotValid) return;
     host_frame_size(&sw, &sh);
-    if (sw == g_win_frame_w && sh == g_win_frame_h) { pend_w = pend_h = 0; return; }
+    if (sw == g_WindowFrameWidth && sh == g_WindowFrameHeight) { pend_w = pend_h = 0; return; }
     if (sw != pend_w || sh != pend_h) { pend_w = sw; pend_h = sh; pend_t = GetTickCount(); return; }
     if (GetTickCount() - pend_t < 150u) return;
-    host_apply_scale(h, g_scale_want ? g_scale_want : (int)g_set.Values[SET_WINSIZE] + 1);
+    host_apply_scale(h, g_ScaleWant ? g_ScaleWant : (int)g_set.Values[SET_WINSIZE] + 1);
 }
 
 /* #321: the text-mode font, live. Rebuilt only when the NAME changed -- a build draws
@@ -13351,7 +13351,7 @@ static void host_pause_set(int on)
 {
     if (on) {
         DWORD i;
-        if (g_PauseWant || g_Headless || g_wow_launch || !g_HostCpu) return;
+        if (g_PauseWant || g_Headless || g_WowLaunch || !g_HostCpu) return;
         InterlockedExchange(&g_PauseWant, 1);
         g_PauseMs = GetTickCount();
         ++g_PauseCount;
@@ -13385,10 +13385,10 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
        menu so each does exactly what the window's menu does. Show for a Win16 host
        is the manager's job (it brings the program's own window forward); this host's
        window is the hidden machine, which is not what anyone wants to see. */
-    if (g_mgr_cmdmsg && msg == g_mgr_cmdmsg) {
+    if (g_ManagerCommandMessage && msg == g_ManagerCommandMessage) {
         switch (wp) {
         case MGR_COMMAND_SHOW:
-            if (!g_wow_launch) { if (IsIconic(h)) ShowWindow(h, SW_RESTORE);
+            if (!g_WowLaunch) { if (IsIconic(h)) ShowWindow(h, SW_RESTORE);
                                  SetForegroundWindow(h); }
             return 0;
         case MGR_COMMAND_SETTINGS:  PostMessageA(h, WM_COMMAND, IDM_FILE_SETTINGS, 0);  return 0;
@@ -13617,7 +13617,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             ++g_MouseAutoCaptureFired;
             input_capture_set(h, 1);
         }
-        status_update();          /* program name / width / mode / capture, on the UI thread */
+        StatusUpdate();          /* program name / width / mode / capture, on the UI thread */
         /* Drive the PIT from REAL elapsed time so the BIOS tick (0040:006C) and
            INT 1Ah track wall-clock regardless of WM_TIMER jitter; clamp after a
            stall so we don't flood a catch-up burst of ticks. */
@@ -13874,7 +13874,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                                                               : (vw + sw / 2) / sw;
                 if (k < 1) k = 1;
                 PresentWindowPicture((int)g_set.Values[SET_ASPECT], sw, sh, k, &vw, &vh);
-                g_scale_k = g_scale_want = k; g_fit_down = 0;
+                g_ScaleFactor = g_ScaleWant = k; g_FitDown = 0;
             } else {
                 PresentTargetRatio((int)g_set.Values[SET_ASPECT], sw, sh, &n, &d);
                 switch (wp) {
@@ -13916,17 +13916,17 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         break;
 
     case WM_SIZE:
-        if (g_status) {
-            SendMessageA(g_status, WM_SIZE, 0, 0);            /* let it re-dock     */
-            g_status_l[0] = 0;       /* force a re-cut; the last part follows the width */
-            status_update();         /* re-partitioning blanks them; fill them again */
+        if (g_Status) {
+            SendMessageA(g_Status, WM_SIZE, 0, 0);            /* let it re-dock     */
+            g_StatusLeft[0] = 0;       /* force a re-cut; the last part follows the width */
+            StatusUpdate();         /* re-partitioning blanks them; fill them again */
         }
         return 0;
     /* The one moment a menu's enable state is guaranteed to be current: the guest
        can change video mode whenever it likes, so this is synced at open time
        rather than at mode-set time. */
     case WM_INITMENUPOPUP:
-        if ((HMENU)wp == g_recent_menu) menu_recent_fill();
+        if ((HMENU)wp == g_RecentMenu) menu_recent_fill();
         menu_sync_modal(h, (HMENU)wp);
         return 0;
     case WM_COMMAND:
@@ -13974,27 +13974,27 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         switch (LOWORD(wp)) {
         case IDM_FILE_EXIT: DestroyWindow(h); return 0;
         case IDM_FILE_OPEN: open_program_dialog(h); return 0;   /* #153 */
-        /* #154: the text-mode Edit menu -- see g_mark_mode. */
+        /* #154: the text-mode Edit menu -- see g_MarkMode. */
         case IDM_EDIT_MARK:
             if (g_Video.ModeKind == VIDEO_KIND_TEXT) {
                 if (g_Captured) input_capture_set(h, 0);   /* the drag needs the pointer */
-                g_mark_mode = 1; g_mark_drag = 0; g_sel_on = 0; sel_publish();
+                g_MarkMode = 1; g_MarkDrag = 0; g_SelectionOn = 0; SelectionPublish();
                 g_PresentDdraw.HintText  = "Mark: drag over the text, then Enter (or Edit > Copy). Esc cancels.";
                 g_PresentDdraw.HintUntil = GetTickCount() + 5000;
             }
             return 0;
         case IDM_EDIT_SELECTALL:
             if (g_Video.ModeKind == VIDEO_KIND_TEXT) {
-                g_sel_c0 = 0; g_sel_r0 = 0; g_sel_c1 = g_Video.Columns - 1; g_sel_r1 = g_Video.Rows - 1;
-                g_sel_on = 1; g_mark_mode = 1; g_mark_drag = 0; sel_publish();
+                g_SelectionColumn0 = 0; g_SelectionRow0 = 0; g_SelectionColumn1 = g_Video.Columns - 1; g_SelectionRow1 = g_Video.Rows - 1;
+                g_SelectionOn = 1; g_MarkMode = 1; g_MarkDrag = 0; SelectionPublish();
             }
             return 0;
-        case IDM_EDIT_COPY:       text_copy(h, 0); sel_clear(); return 0;
-        case IDM_EDIT_COPYSCREEN: text_copy(h, 1); return 0;
+        case IDM_EDIT_COPY:       TextCopy(h, 0); SelectionClear(); return 0;
+        case IDM_EDIT_COPYSCREEN: TextCopy(h, 1); return 0;
         case IDM_EDIT_PASTE:      text_paste(h); return 0;
         case IDM_FILE_CLOSEPROG:                       /* #152 -- see CloseProgramNow */
-            if (!close_prog_available()) return 0;     /* greyed; belt and braces */
-            if (g_wow_launch) { DestroyWindow(h); return 0; }   /* Win16: the same as Exit */
+            if (!CloseProgramAvailable()) return 0;     /* greyed; belt and braces */
+            if (g_WowLaunch) { DestroyWindow(h); return 0; }   /* Win16: the same as Exit */
             if (g_Captured) input_capture_set(h, 0);   /* the shell does not own the mouse */
             InterlockedExchange(&g_CloseRequest, 1);
             return 0;
@@ -14073,7 +14073,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          shows the window, which is what a tray icon is expected to do everywhere
          else on this desktop. */
     case WM_TRAY:
-        if (lp == WM_RBUTTONUP || lp == WM_CONTEXTMENU) { tray_menu(h); return 0; }
+        if (lp == WM_RBUTTONUP || lp == WM_CONTEXTMENU) { TrayMenu(h); return 0; }
         /* s88: double-click no longer shows the hidden Win16 machine window. */
         return 0;
     case WM_SYSKEYDOWN:                  /* F10 / Alt / Alt+key -- see input_capture_set */
@@ -14143,9 +14143,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (GetMessageExtraInfo() == (LPARAM)HOST_INJECT_TAG) return 0;
         /* #154: while marking, Esc cancels and Enter copies -- the Windows console's own
            keys -- and nothing typed reaches the guest until the mark is over. */
-        if (g_mark_mode) {
-            if (wp == VK_ESCAPE) sel_clear();
-            else if (wp == VK_RETURN) { if (g_sel_on) text_copy(h, 0); sel_clear(); }
+        if (g_MarkMode) {
+            if (wp == VK_ESCAPE) SelectionClear();
+            else if (wp == VK_RETURN) { if (g_SelectionOn) TextCopy(h, 0); SelectionClear(); }
             return 0;
         }
         key_msg_note();
@@ -14290,17 +14290,17 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         /* #154: Mark owns the mouse until the selection is copied or cancelled. The
            guest sees none of it -- a drag that also clicked in the program would do two
            things at once. A right click cancels, as in the console. */
-        if (g_mark_mode) {
+        if (g_MarkMode) {
             int mc, mr, mx = (short)LOWORD(lp), my = (short)HIWORD(lp);
-            if (msg == WM_RBUTTONDOWN) { sel_clear(); return 0; }
-            if (msg == WM_LBUTTONDOWN && client_to_cell(mx, my, &mc, &mr)) {
+            if (msg == WM_RBUTTONDOWN) { SelectionClear(); return 0; }
+            if (msg == WM_LBUTTONDOWN && ClientToCell(mx, my, &mc, &mr)) {
                 SetCapture(h);
-                g_mark_drag = 1; g_sel_on = 1;
-                g_sel_c0 = g_sel_c1 = mc; g_sel_r0 = g_sel_r1 = mr; sel_publish();
-            } else if (msg == WM_MOUSEMOVE && g_mark_drag && client_to_cell(mx, my, &mc, &mr)) {
-                if (mc != g_sel_c1 || mr != g_sel_r1) { g_sel_c1 = mc; g_sel_r1 = mr; sel_publish(); }
-            } else if (msg == WM_LBUTTONUP && g_mark_drag) {
-                g_mark_drag = 0; ReleaseCapture();
+                g_MarkDrag = 1; g_SelectionOn = 1;
+                g_SelectionColumn0 = g_SelectionColumn1 = mc; g_SelectionRow0 = g_SelectionRow1 = mr; SelectionPublish();
+            } else if (msg == WM_MOUSEMOVE && g_MarkDrag && ClientToCell(mx, my, &mc, &mr)) {
+                if (mc != g_SelectionColumn1 || mr != g_SelectionRow1) { g_SelectionColumn1 = mc; g_SelectionRow1 = mr; SelectionPublish(); }
+            } else if (msg == WM_LBUTTONUP && g_MarkDrag) {
+                g_MarkDrag = 0; ReleaseCapture();
             }
             return 0;
         }
@@ -14495,7 +14495,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
         g_winsize_live = g_set.Values[SET_WINSIZE];   /* the window is now AT this size */
         g_aspect_live  = g_set.Values[SET_ASPECT];    /* ...and in this shape            */
         while (scale > 1 && !win_scale_fits(scale)) --scale;
-        g_scale_k = scale; g_scale_want = (int)g_set.Values[SET_WINSIZE] + 1;
+        g_ScaleFactor = scale; g_ScaleWant = (int)g_set.Values[SET_WINSIZE] + 1;
         host_picture(scale, &pw, &ph);           /* #325: 720x400 text until a frame */
         rc.left = 0; rc.top = 0;
         rc.right = pw; rc.bottom = ph + PRESENT_STATUS_HEIGHT; }
@@ -14510,7 +14510,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
         rid.hwndTarget = g_Window;
         g_MouseRawOk = (g_PfnRegisterRawInput && g_PfnRegisterRawInput(&rid, 1, sizeof rid)) ? 1 : 0;
     }
-    SetMenu(g_Window, build_menu());
+    SetMenu(g_Window, BuildMenu());
     menu_view_sync(g_Window);                  /* View + CPU Speed reflect the state */
     /* ── ★ DOES THE SETTINGS DIALOG STILL BUILD? ─────────────────────────────────
          A malformed DIALOGEX template does not draw badly -- it FAILS TO CREATE, and
@@ -14554,7 +14554,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
     PresentDdrawInitialize(&g_PresentDdraw, g_Window);          /* GDI windowed; DDraw for fullscreen */
     settings_apply_present(&g_PresentDdraw, &g_set);      /* ...which zeroes its own struct     */
     g_PresentDdraw.IsFlipDriverTimed = GetFileAttributesA(DDFLIP_DRIVER_FLAG) != INVALID_FILE_ATTRIBUTES;
-    make_status(g_Window, hi);                     /* native themed status bar          */
+    MakeStatus(g_Window, hi);                     /* native themed status bar          */
     /* ── ★ AND NOW RE-SIZE TO THE STATUS BAR'S REAL HEIGHT. ─────────────────────
          The window was created against PRESENT_STATUS_HEIGHT, a compile-time GUESS at
          how tall a comctl32 status bar is. The real one measures 23 on the rig, not
@@ -14564,17 +14564,17 @@ static DWORD WINAPI ui_thread(LPVOID arg)
        ⚠ The theme decides that height, so it is not a constant to correct; ask the
          control after it exists and size the window to the answer. */
     host_apply_winsize(g_Window, g_set.Values[SET_WINSIZE]);
-    /* ★ A WIN16 GUEST GETS NO VDM WINDOW -- see the note by tray_add. The window
+    /* ★ A WIN16 GUEST GETS NO VDM WINDOW -- see the note by TrayAdd. The window
          is built either way (it owns the present surface, the raw input, the frame
          timer and the tray callbacks); only whether anyone sees it changes. */
     /* GH #281: with the manager present, IT owns the tray icon -- for this host and
        every other. Without it (ntvdmex.exe missing) a Win16 host keeps its own. */
-    mgr_start();
+    ManagerStart();
     /* ⛔ A Win16 host's window is NEVER shown (user, s88: "Win16 apps should not
          show an NTVDMEX host window ... at all"). 9b69fe1 folded the manager test
          into this condition and a Win16 launch WITH a manager fell into the else:
          every Win16 program came up with a black machine window beside it. */
-    if (g_wow_launch) { if (!g_mgr_avail) tray_add(hi, g_Window); }
+    if (g_WowLaunch) { if (!g_ManagerAvailable) TrayAdd(hi, g_Window); }
     else              { ShowWindow(g_Window, SW_SHOW); UpdateWindow(g_Window); }
     /* ★ THE START HAS SUCCEEDED -- say so NOW, not at exit. (GH #132, 2026-09-12)
          From here the user can close us, so the "no working VDM on the box" failure
@@ -14613,7 +14613,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
         }
         TranslateMessage(&msg); DispatchMessageA(&msg);
     }
-    tray_remove(g_Window);            /* or the icon outlives the process */
+    TrayRemove(g_Window);            /* or the icon outlives the process */
     PresentDdrawShutdown(&g_PresentDdraw);
     /* ── ⛔⛔ THE WINDOW CLOSING MUST KILL THE PROCESS, NOT JUST THIS THREAD. (s63) ──
          Reported by the user: launch a game, close the window, launch something else
@@ -17368,7 +17368,7 @@ static void host_fatal_dump(EXCEPTION_RECORD *er, CONTEXT *cx)
     }
     LogAppend(LOG_PATH, cb, p);
     SerialOut(cb, p);
-    tray_remove(g_Window);      /* the VEH exits without unwinding the UI thread */
+    TrayRemove(g_Window);      /* the VEH exits without unwinding the UI thread */
     HostRecordFinish();
     ExitProcess(0xDE0);                                 /* clean exit; batch dumps the log */
 }
@@ -17905,7 +17905,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
          tray pointing at a dead process until the user happens to mouse over it
          and Explorer reaps it. That is the second half of the user's "they are
          stacking up" report, and it is the half that survives the process. */
-    tray_remove(g_Window);
+    TrayRemove(g_Window);
     /* TerminateProcess (forceful) -- ExitProcess hangs trying to unwind the PM engine
        thread (un-terminable LDT context). */
     HostRecordFinish();
@@ -27929,7 +27929,7 @@ static int dpmi_nested_fault(volatile BYTE *tib, DWORD ev, DWORD eip)
     /* ⚠ WOW ONLY. The evidence is a WOW run; DOS clients (ZAR's DOS/16M, Doom's
          DOS/4GW) go through the IRQ injector too and keep their old behaviour until
          a DOS case is measured. */
-    if (!g_wow_launch) return 0;
+    if (!g_WowLaunch) return 0;
     if (ev != VDM_EVENT_BOP || csv != (g_DpmiFaultCodeSelector & 0xFFFF) || g_DpmiIsClient32)
         return 0;
     sb  = dpmi_sel_base(g_DpmiFaultSelector);
@@ -28022,7 +28022,7 @@ static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
     WORD sink = 0, rsel, blobsp = 0;
     DWORD ssb;
     unsigned ph;
-    if (!tib || !g_DpmiPm || !g_wow_launch || !g_dosm || !g_Running) return 0;
+    if (!tib || !g_DpmiPm || !g_WowLaunch || !g_dosm || !g_Running) return 0;
     if (GetCurrentThreadId() != g_guest_tid) return 0;
     if (g_WowCallDepth >= WOWCALL_MAX_DEPTH - 1 || g_ww_nested >= 6 || !(proc >> 16)) return 0;
     rsel = wow_callback_selector();
@@ -29923,15 +29923,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          independent tell: GetNextVDMCommand returns FALSE err=0x57 on a WOW launch,
          because a WOW VDM does not receive its program that way.
        ► WE CANNOT HAND IT BACK. Three routes measured and eliminated -- see
-         wow_refuse() below. So this refuses loudly instead, which is at least an
+         WowRefuse() below. So this refuses loudly instead, which is at least an
          accurate, actionable failure rather than a DOS host chewing on an NE file.
        ► NOT a throwaway. When the WOW epic (#128) lands, this same detection becomes
          the dispatch point -- the `-w` arm routes to our WOW layer. */
     if (LaunchIsWow(GetCommandLineA())) {
         /* ★ Latched HERE because this is where the answer is known, and the UI
              thread -- which decides whether to show a window -- is started later.
-             See the note by tray_add for why a Win16 guest gets no window. */
-        g_wow_launch = 1;
+             See the note by TrayAdd for why a Win16 guest gets no window. */
+        g_WowLaunch = 1;
         p = LogPut(p, "STAGE0: WIN16/WOW launch detected -> refusing (see GH #129)\r\n");
         p = LogPut(p, "STAGE0: root=["); p = LogPut(p, NTVDMEX_DIR); p = LogPut(p, "] (derived from the host's own path)\r\n");
         HmaTry();
@@ -29944,11 +29944,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = LogPut(p, "STAGE0: cmdline=["); p = LogPut(p, GetCommandLineA()); p = LogPut(p, "]\r\n");
         LogAppend(LOG_PATH, report, p); SerialOut(report, p);
         if (GetFileAttributesA(WOWTRY_FLAG) == INVALID_FILE_ATTRIBUTES)
-            return wow_refuse(GetCommandLineA());
+            return WowRefuse(GetCommandLineA());
         /* Experiment opted in: load now, then fall through so the selector stage can
            run once the VDM is registered. Still refuses at the end -- nothing here
            executes guest code yet. */
-        wow_probe_load(GetCommandLineA());
+        WowProbeLoad(GetCommandLineA());
     }
     /* Headless test mode = the SMB watcher dropped the AUTOEXIT marker. In that mode the
        host must self-exit on guest exit AND bound any infinite run (a visual demo like
@@ -30342,7 +30342,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             q3 = LogPut(q3, "\r\n"); LogAppend(LDTLOG_PATH, m3, q3); }
         wow_probe_ldt_matrix("wow-after-get-tib");
         wow_probe_selectors();
-        /* ⚠ NO EARLY RETURN ANY MORE. This used to `return wow_refuse(...)` here,
+        /* ⚠ NO EARLY RETURN ANY MORE. This used to `return WowRefuse(...)` here,
              which was correct while the plan was "enter in protected mode" -- there was
              nothing further to do. It is not, krnl386 is entered in V86, and a V86
              entry needs the whole DOS machine underneath it: conventional memory, an
@@ -30471,7 +30471,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = LogPut(p, " std=0x"); p = LogHex(p, (DWORD)(ULONG_PTR)ci2.StdIn); p = LogPut(p, "/0x"); p = LogHex(p, (DWORD)(ULONG_PTR)ci2.StdOut);
         p = LogPut(p, "/0x"); p = LogHex(p, (DWORD)(ULONG_PTR)ci2.StdErr);
         p = LogPut(p, "\r\n");
-    } else if (g_wow_launch) {
+    } else if (g_WowLaunch) {
         /* ── ★★★★ THE WIN16 PROGRAM, FROM CSRSS. (s73) ──────────────────────────
              A WOW launch never carried its program: the VDM starts as
              `ntvdm -f -i<n> -w -a krnl386.exe`, the first fetch above returns FALSE
@@ -30825,7 +30825,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          WINDOWS 386 section's copy when there is one) and its start directory. A
          relative program is looked for in the start directory, then beside the PIF,
          then on the PATH. Arguments typed after the PIF follow the PIF's own. */
-    if (nread && !g_wow_launch && progpath[0]) {
+    if (nread && !g_WowLaunch && progpath[0]) {
         int pl = lstrlenA(progpath);
         PIF_INFO pi;
         if (pl > 4 && !lstrcmpiA(progpath + pl - 4, ".PIF")
@@ -30886,8 +30886,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
     }
     /* #153: File > Open Recent lists every program this host was started with. */
-    if (nread && !g_wow_launch && progpath[0]) MruAdd(progpath);
-    if (nread && !g_wow_launch && !shell_cfg[0]
+    if (nread && !g_WowLaunch && progpath[0]) MruAdd(progpath);
+    if (nread && !g_WowLaunch && !shell_cfg[0]
         && GetFileAttributesA(DIRECTLAUNCH_FLAG) == INVALID_FILE_ATTRIBUTES) {
         int pl = lstrlenA(progpath), is_cmd = 0, is_newexe = 0;
         char sp[300]; DWORD sl;
@@ -31035,7 +31035,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       for (q = progpath; *q; ++q) if (*q == '\\' || *q == '/') bn = q + 1;
       if (*bn) { while (bn[k] && k < 63) { g_ProgramName[k] = bn[k]; ++k; } g_ProgramName[k] = 0; } }
     /* No flag to raise: the UI tick polls g_ProgramName and repaints the strip when it
-       changes. See status_update. */
+       changes. See StatusUpdate. */
 
     /* If this is a bound linear executable (every DOS/4GW game is one), learn which of
        its objects are code before it starts asking us for memory to load them into. */
@@ -31999,7 +31999,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* (per-plane backing is taken later, once the preamble is on disk -- every
        LogWrite() before that point TRUNCATES the file and would eat its report.) */
     g_Video.TimeUs = HostTimeMicroseconds;               /* real CRT timebase for 0x3DA (#55) */
-    g_Video.PresentHook = host_present_hook;     /* Auto: the guest's frame raises the present (s73) */
+    g_Video.PresentHook = HostPresentHook;     /* Auto: the guest's frame raises the present (s73) */
     /* Opt-in only: the ring costs two stores on the hottest path in the program and
        the dump does file I/O under g_Lock. See the note in vdd_video.h. */
     g_Video.IsPort3DaRingOn =
@@ -32814,7 +32814,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         /* File > Close Program (#152). Here, not mid-dispatch: the guest is stopped at
            an event boundary, which is also where every injected IRQ is delivered. */
-        if (g_CloseRequest && !g_wow_launch) {
+        if (g_CloseRequest && !g_WowLaunch) {
             InterlockedExchange(&g_CloseRequest, 0);
             if (g_ExecDepth > 0 || !g_TopIsShell) {
                 if (CloseProgramNow(&m, (void *)tib, &p, base)) continue;
@@ -33807,7 +33807,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     DWORD ev, eip, csv, vec; int rc;
                     /* #152: Close Program ends a PM client exactly as its own AH=4Ch
                        would; the child-with-a-parent path below does the rest. */
-                    if (g_CloseRequest && !g_wow_launch) {
+                    if (g_CloseRequest && !g_WowLaunch) {
                         InterlockedExchange(&g_CloseRequest, 0);
                         g_CloseForced = 1;
                         g_PmClientExited = 1; g_PmExitCode = 0;
@@ -34015,7 +34015,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          Delivered here, by the guest thread, on the same gates as IRQ0;
                          a line nobody hooked is counted and dropped (real hardware would
                          reach the default handler, which only EOIs). WOW only. */
-                    if (g_wow_launch && g_IcaPending && g_DpmiVi)
+                    if (g_WowLaunch && g_IcaPending && g_DpmiVi)
                         wow_ica_deliver(&m, tib, steps);
                     /* ── AND THE KEYBOARD, WHICH HAD NO COOPERATIVE PATH AT ALL. ─────────
                          IRQ0 has had one since #2b; IRQ1 had only the asynchronous
@@ -37841,7 +37841,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        so it's one-shot; interactive runs (no marker) keep the window open. */
     if (g_Headless) {
         DeleteFileA(AUTOEXIT_PATH);
-        tray_remove(g_Window);     /* ExitProcess runs no window cleanup -- see below */
+        TrayRemove(g_Window);     /* ExitProcess runs no window cleanup -- see below */
         HostRecordFinish();
         ExitProcess(0);
     }
@@ -37870,7 +37870,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          was written for and wrong for this one. "Keep the window open so the
          guest's final screen stays visible until the user closes it" assumes
          there IS a window and a final screen. A Win16 guest has NEITHER -- the
-         note by tray_add says so in as many words: it gets no VDM window, only a
+         note by TrayAdd says so in as many words: it gets no VDM window, only a
          tray icon. So there was nothing to look at and nothing to close, and the
          wait never ended. The user could only reach it through the tray menu's
          Exit, which is exactly the step they were never going to take twenty
@@ -37878,7 +37878,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        ⇒ For a Win16 host the guest exiting IS the end of the run. Ask the UI
          thread to close, and let it leave through its OWN path -- WM_CLOSE ->
          DestroyWindow -> WM_DESTROY -> PostQuitMessage -> the message loop
-         returns -> tray_remove + PresentDdrawShutdown. That is strictly better
+         returns -> TrayRemove + PresentDdrawShutdown. That is strictly better
          than ExitProcess here, because WM_DESTROY is also what stops the OPL and
          Beep.sys, and both of those have outlived a host before. */
     /* ── ★ AUTO-CLOSE ON GUEST TERMINATION, FOR EVERY GUEST. (s63, user ask) ────────
