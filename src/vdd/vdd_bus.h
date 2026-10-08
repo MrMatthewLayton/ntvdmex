@@ -17,6 +17,7 @@
 
 #ifndef VDD_MAX_PORT_RANGES
 #define VDD_MAX_PORT_RANGES  48       /* claimed port ranges (s80: 31 of 32 were in use, and the GUS needs two) */
+#define VDD_UNCLAIMED_READ_U 0xFFFFFFFFu   /* a port nobody claims floats high, as an open ISA bus */
 /* ⚠ THIS WAS 16, AND IT WAS EXACTLY FULL. Adding one CRTC range pushed the LAST
      device added -- the MPU-401 -- off the bus: VddClaimPorts() returned -1, nobody
      looked, and the guest's MIDI port read 0xFF like an empty ISA slot. Doom's music

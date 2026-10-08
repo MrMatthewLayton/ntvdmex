@@ -19,6 +19,8 @@
 #define PIT_INPUT_HZ     1193182u      /* 8254 input clock                      */
 #define PIT_INPUT_HZ_ULL 1193182ull
 #define PIT_TICKS_PER_DAY 0x1800B0u    /* 1,573,040 INT 8 ticks / 24h (BIOS)    */
+#define PIT_PORT_COUNTER0 0x40         /* channel 0's count                     */
+#define PIT_PORT_CONTROL  0x43         /* the mode/command register             */
 #define PIT_COUNTERS      3              /* counters 0, 1 and 2                   */
 #define PIT_BINARY_WRAP   0x10000u       /* a count of 0 means 65536 in binary... */
 #define PIT_BCD_WRAP      10000u         /* ...and 10000 in four-decade BCD       */

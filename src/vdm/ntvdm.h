@@ -282,6 +282,13 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 /* ── XP's COMMAND.COM AND ITS PRIVATE BOP 54h (docs/inventory/bop.md). `C4 C4 54 sub`;
      the names are the inventory's, from what each call was observed to do. */
 #define NTVDM_BOP_ISV                  0x58  /* a guest's third-party BOP, C4 C4 58 sub    */
+#define NTVDM_ISV_REGISTER_MODULE      0     /* its sub-functions (isvbop.inc)         */
+#define NTVDM_ISV_UNREGISTER_MODULE    1
+#define NTVDM_ISV_DISPATCH_CALL        2
+#define NTVDM_ISV_ERROR_DLL_NOT_FOUND  1     /* RegisterModule's AX on failure         */
+#define NTVDM_ISV_ERROR_NO_DISPATCH    2
+#define NTVDM_ISV_ERROR_NO_INIT        3
+#define NTVDM_ISV_ERROR_NO_MEMORY      4
 #define NTVDM_CMD_TERMINATE            0x00  /* ends the VDM, as VDDTerminateVDM          */
 #define NTVDM_CMD_NEXT_COMMAND         0x01  /* GetNextVDMCommand: what to run next       */
 #define NTVDM_CMD_STARTUP_BATCH        0x0D  /* a path to open: the startup batch file    */

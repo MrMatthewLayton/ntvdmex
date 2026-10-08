@@ -3943,7 +3943,7 @@ static volatile LONG g_NestedRm = 0;
 
 static INT AsyncInjectIrq(UINT irq)
 {
-    if (irq >= 16) { AsyncEarlyBail(irq, ASYNC_WHY_BAD_IRQ); return 0; }
+    if (irq >= PIC_LINES) { AsyncEarlyBail(irq, ASYNC_WHY_BAD_IRQ); return 0; }
     CONTEXT context;
     DWORD eflags, ss, sp, cs, ip;
     WORD flags;
@@ -4042,7 +4042,7 @@ static INT AsyncInjectIrq(UINT irq)
     /* ── THE OBSERVATION PASS. See AsyncSiteNew(). Protected mode only: in V86 the
          guest's EIP wanders over the whole real-mode image and would fill the table with
          noise, burying the one site this exists to catch. */
-    if (!(eflags & EFLAGS_VM) && (cs & 4) && AsyncSiteNew((WORD)cs, context.Eip)) {
+    if (!(eflags & EFLAGS_VM) && (cs & DPMI_SELECTOR_TI) && AsyncSiteNew((WORD)cs, context.Eip)) {
         CHAR lineBuffer[160], *lineCursor = lineBuffer;
         DWORD codeLinear = DpmiSelectorBase((WORD)cs) + context.Eip;
         ResumeThread(g_HostCpu);                    /* NEVER log while the guest is held */
@@ -4089,8 +4089,8 @@ static INT AsyncInjectIrq(UINT irq)
         else AsyncWhyNote(irq, (UINT)g_AsyncWhy);   /* the clause that said no */
         ResumeThread(g_HostCpu);
         ASYNC_CTX_RELEASE();
-        if (isOk) { g_AsyncInjected++; g_AsyncPmInjected++; g_AsyncInjectedLine[irq & 15]++;
-                  if (!(irq & 7)) TickDeliveredNote(); } else g_AsyncBail++;
+        if (isOk) { g_AsyncInjected++; g_AsyncPmInjected++; g_AsyncInjectedLine[irq & (PIC_LINES - 1)]++;
+                  if (!(irq & (PIC_LINES_PER_CHIP - 1))) TickDeliveredNote(); } else g_AsyncBail++;
         /* Log AFTER the resume, never while the guest is held -- and bounded, because this
            fires at the PIT's rate. Without it an async injection that kills the run is
            completely silent: the cooperative path prints its entry and exit, so a log that
@@ -4203,7 +4203,7 @@ static INT AsyncInjectIrq(UINT irq)
     context.EFlags = eflags & ~(EFLAGS_TF_U | EFLAGS_IF_U | EFLAGS_VIF);
     context.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
     isOk = SetThreadContext(g_HostCpu, &context) ? 1 : 0;
-    if (isOk && !(eflags & EFLAGS_VIF)) ++g_IfvShadow[irq & 15];   /* see IfvNote */
+    if (isOk && !(eflags & EFLAGS_VIF)) ++g_IfvShadow[irq & (PIC_LINES - 1)];   /* see IfvNote */
     if (isOk) IfvTrace(irq, 0, eflags, cs, ip);
     if (isOk) {
         /* Acknowledge: in service until the guest EOIs.
@@ -9774,7 +9774,7 @@ static VOID MouseDrawGraphicsCursor(BYTE *pixels, INT width, INT height, INT str
     if (g_Video.ModeKind == VIDEO_KIND_CGA && !g_Video.IsVesa && g_Video.CgaBpp != 1)
         cga4Map = VddVideoCga4Map(&g_Video);
     I33GraphicsCursorDraw(pixels, width, height, stride, cursorX, cursorY, (INT)g_MouseHotX, (INT)g_MouseHotY,
-                g_MouseGraphicsCursorScreen[buffer], g_MouseGraphicsCursorCurrent[buffer], 0x0F, cga4Map);
+                g_MouseGraphicsCursorScreen[buffer], g_MouseGraphicsCursorCurrent[buffer], I33_GC_ONES_COLOUR, cga4Map);
 }
 
 enum {                                       /* wired command IDs                */
@@ -15111,14 +15111,14 @@ static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port,
          the way the cooperative one was -- the guest runs it on its own thread -- but
          g_AsyncPmActive is set for exactly its duration, from the injection to the
          catcher. Read it here, where the port access is dispatched. */
-    if (port == 0x03) { if (g_AsyncPmActive) ++g_DmaPollInAsync;
+    if (port == DMA_PORT_CHANNEL1_COUNT) { if (g_AsyncPmActive) ++g_DmaPollInAsync;
                         else                   ++g_DmaPollMainline; }
     /* Sync the counter before the guest looks at it, so a poll always reads real time. */
-    if (port >= 0x40 && port <= 0x43) HostPitSync();
+    if (port >= PIT_PORT_COUNTER0 && port <= PIT_PORT_CONTROL) HostPitSync();
     /* Report the rate the guest programs. Skyroads divides its own fast timer down to the
        BIOS 18.2 Hz (519 injected IRQ0 vs 32 BIOS ticks last run => ~16:1), so the reload it
        writes is the tempo the music actually wants. */
-    if (port == 0x40 && !isIn && g_PitReloadLog < 8) {
+    if (port == PIT_PORT_COUNTER0 && !isIn && g_PitReloadLog < 8) {
         static WORD previous = 0;
         if (g_Pit.Reload != previous) {
             CHAR buffer[128], *cursor = buffer;
@@ -15132,7 +15132,7 @@ static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port,
     }
     /* Reached from BOTH port paths (this reflected one and the interpreter's
        V86HostOut); Lemmings' calibration latches from whichever the guest is in. */
-    if (port == 0x43 && !isIn) PitLatchNote((BYTE)eax);
+    if (port == PIT_PORT_CONTROL && !isIn) PitLatchNote((BYTE)eax);
     if (isIn) {
         /* An unclaimed ISA port floats high: real hardware reads 0xFF, not 0x00.
            This matters for device detection -- a probe that reads 0x00 from an
@@ -15140,16 +15140,16 @@ static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port,
            response that will never come. */
         value = 0;
         if (!VddBusIo(bus, port, (BYTE)width, 1, &value)) {
-            value = 0xFFFFFFFFu;
+            value = VDD_UNCLAIMED_READ_U;
             IoUnclaimedNote(port, 1);
         }
-        if (width == 1)      VDM_REG(tib, VTIB_EAX) = (eax & 0xFFFFFF00u) | (value & BYTE_MASK);
-        else if (width == 2) VDM_REG(tib, VTIB_EAX) = (eax & HIGH_WORD_MASK_U) | (value & WORD_MASK);
+        if (width == 1)      VDM_REG(tib, VTIB_EAX) = (eax & ~BYTE_MASK_U) | (value & BYTE_MASK);
+        else if (width == X86_WORD_SIZE) VDM_REG(tib, VTIB_EAX) = (eax & HIGH_WORD_MASK_U) | (value & WORD_MASK);
         else                 VDM_REG(tib, VTIB_EAX) = value;
     } else {
-        value = (width == 1) ? (eax & BYTE_MASK) : (width == 2) ? (eax & WORD_MASK) : eax;
+        value = (width == 1) ? (eax & BYTE_MASK) : (width == X86_WORD_SIZE) ? (eax & WORD_MASK) : eax;
         if (!VddBusIo(bus, port, (BYTE)width, 0, &value)) IoUnclaimedNote(port, 0);
-        if (port == 0x40) HostPitResyncCheck();   /* see HostPitResyncCheck */
+        if (port == PIT_PORT_COUNTER0) HostPitResyncCheck();   /* see HostPitResyncCheck */
     }
     /* ── THE SOUND-CARD HANDSHAKE, IN FULL, FOR AS LONG AS IT LASTS. ─────────────────
          "SB isn't responding at p=0x220, i=7, d=1" is Doom's verdict, not a
@@ -15521,12 +15521,12 @@ static INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
     INT is32 = DpmiSelectorIs32((WORD)csValue);
     DWORD eipOffset = is32 ? eip : (eip & WORD_MASK);
     volatile BYTE *code = (volatile BYTE *)(ULONG_PTR)(DpmiSelectorBase((WORD)csValue) + eipOffset);
-    INT index = 0, operandSize = is32 ? 4 : 2, isIn, width, usedDx, length;
+    INT index = 0, operandSize = is32 ? X86_DWORD_SIZE : X86_WORD_SIZE, isIn, width, usedDx, length;
     BYTE opcode; WORD port;
 
-    while (code[index] == 0x66 || code[index] == 0x67 ||
-           code[index] == 0xF2 || code[index] == 0xF3) {        /* prefixes            */
-        if (code[index] == 0x66) operandSize = is32 ? 2 : 4;     /* 0x66 flips the segment default */
+    while (code[index] == X86_PREFIX_OPERAND_SIZE || code[index] == X86_PREFIX_ADDRESS_SIZE ||
+           code[index] == X86_PREFIX_REPNE || code[index] == X86_PREFIX_REP) {        /* prefixes            */
+        if (code[index] == X86_PREFIX_OPERAND_SIZE) operandSize = is32 ? X86_WORD_SIZE : X86_DWORD_SIZE;     /* 0x66 flips the segment default */
         if (++index > 4) return 0;
     }
     opcode = code[index];
@@ -15555,7 +15555,7 @@ static INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
          port 3, and the map `guest = file + 0x03AEDFEC` (verified on DMX's IRQ0 stub
          and Doom's keyboard ISR) turns it straight into a file offset to disassemble.
          The overflow is counted, so a too-small table cannot pass as a complete answer. */
-    if (isIn && port == 0x03) {
+    if (isIn && port == DMA_PORT_CHANNEL1_COUNT) {
         DWORD site = DpmiSelectorBase((WORD)csValue) + eipOffset;
         UINT pollIndex;
         for (pollIndex = 0; pollIndex < g_DmaPollCount; ++pollIndex) if (g_DmaPollEip[pollIndex] == site) break;
@@ -27824,7 +27824,7 @@ static VOID WowShimsLoad(VOID)
         LogAppend(LOG_PATH, buffer, cursor);
     }
 }
-
+enum { ISV_STRING_DLL = 0, ISV_STRING_INIT = 1, ISV_STRING_DISPATCH = 2, ISV_STRINGS = 3 };   /* RegisterModule's three names: DS:SI, ES:DI, DS:BX */
 /* The third-party BOP's three calls (see "THIRD-PARTY VDDs" above). CF goes in the
    LIVE flags -- a BOP is not an INT, nothing was pushed. Handles are 1-based. */
 #define ISV_MAX_MODS 8
@@ -27844,21 +27844,21 @@ static VOID IsvBop(volatile BYTE *tib, DWORD subfunction, PSTR *logCursor)
         CHAR dllBuffer[MAX_PATH], iniBuffer[128], dispatchBuffer[128];
         PCSTR dllName = dllBuffer, iniName = iniBuffer, dispatchName = dispatchBuffer;
         HMODULE module = NULL; FARPROC initProcedure = NULL, dispatchProcedure = NULL;
-        {   PCSTR source[3]; PSTR destination[3]; INT cap[3], index2, length;
-            source[0] = ISV_STR(VTIB_ESI); source[1] = ISV_STR(VTIB_EDI); source[2] = ISV_STR(VTIB_EBX);
-            destination[0] = dllBuffer; destination[1] = iniBuffer; destination[2] = dispatchBuffer;
-            cap[0] = (INT)sizeof dllBuffer; cap[1] = (INT)sizeof iniBuffer; cap[2] = (INT)sizeof dispatchBuffer;
-            for (index2 = 0; index2 < 3; ++index2) {
+        {   PCSTR source[ISV_STRINGS]; PSTR destination[ISV_STRINGS]; INT cap[ISV_STRINGS], index2, length;
+            source[ISV_STRING_DLL] = ISV_STR(VTIB_ESI); source[ISV_STRING_INIT] = ISV_STR(VTIB_EDI); source[ISV_STRING_DISPATCH] = ISV_STR(VTIB_EBX);
+            destination[ISV_STRING_DLL] = dllBuffer; destination[ISV_STRING_INIT] = iniBuffer; destination[ISV_STRING_DISPATCH] = dispatchBuffer;
+            cap[ISV_STRING_DLL] = (INT)sizeof dllBuffer; cap[ISV_STRING_INIT] = (INT)sizeof iniBuffer; cap[ISV_STRING_DISPATCH] = (INT)sizeof dispatchBuffer;
+            for (index2 = 0; index2 < ISV_STRINGS; ++index2) {
                 for (length = 0; source[index2] && length < cap[index2] - 1 && source[index2][length]; ++length) destination[index2][length] = source[index2][length];
                 destination[index2][length] = 0;
             }
         }
         WowShimsLoad();          /* NTVDM.EXE must be in the process before the VDD */
         for (index = 0; index < ISV_MAX_MODS && g_IsvModules[index].Module; ++index) ;
-        if (index == ISV_MAX_MODS) error = 4;
-        else if (!dllName || !dllName[0] || !(module = LoadLibraryA(dllName))) error = 1;
-        else if (!dispatchName || !dispatchName[0] || !(dispatchProcedure = GetProcAddress(module, dispatchName))) error = 2;
-        else if (iniName && iniName[0] && !(initProcedure = GetProcAddress(module, iniName))) error = 3;
+        if (index == ISV_MAX_MODS) error = NTVDM_ISV_ERROR_NO_MEMORY;
+        else if (!dllName || !dllName[0] || !(module = LoadLibraryA(dllName))) error = NTVDM_ISV_ERROR_DLL_NOT_FOUND;
+        else if (!dispatchName || !dispatchName[0] || !(dispatchProcedure = GetProcAddress(module, dispatchName))) error = NTVDM_ISV_ERROR_NO_DISPATCH;
+        else if (iniName && iniName[0] && !(initProcedure = GetProcAddress(module, iniName))) error = NTVDM_ISV_ERROR_NO_INIT;
         cursor = LogPut(cursor, "  ISVVDD: RegisterModule ["); cursor = LogPut(cursor, dllName ? dllName : "?");
         cursor = LogPut(cursor, "] init ["); cursor = LogPut(cursor, iniName ? iniName : ""); cursor = LogPut(cursor, "] dispatch [");
         cursor = LogPut(cursor, dispatchName ? dispatchName : ""); cursor = LogPut(cursor, "]");
@@ -27874,12 +27874,12 @@ static VOID IsvBop(volatile BYTE *tib, DWORD subfunction, PSTR *logCursor)
             if (initProcedure) ((VOID (*)(VOID))initProcedure)();          /* the init routine, in context */
             cursor = *logCursor;
         }
-    } else if (subfunction == 1 || subfunction == 2) {                  /* UnRegisterModule / DispatchCall */
+    } else if (subfunction == NTVDM_ISV_UNREGISTER_MODULE || subfunction == NTVDM_ISV_DISPATCH_CALL) {                  /* UnRegisterModule / DispatchCall */
         WORD ax = (WORD)VDM_REG16(tib, VTIB_EAX);
         if (!ax || ax > ISV_MAX_MODS || !g_IsvModules[ax - 1].Module) {
             error = 1;
             cursor = LogPut(cursor, "  ISVVDD: bad handle 0x"); cursor = LogHex(cursor, ax); cursor = LogPut(cursor, "\r\n");
-        } else if (subfunction == 2) {
+        } else if (subfunction == NTVDM_ISV_DISPATCH_CALL) {
             ((VOID (*)(VOID))g_IsvModules[ax - 1].Dispatch)();
             *logCursor = cursor;
             return;                       /* the VDD owns the registers and CF now */
@@ -28011,7 +28011,7 @@ static INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip)
     }
     return 0;
 }
-
+enum { DPMI_HOST_SELECTORS = 4 };   /* DpmiClientTeardown: the host's own LDT entries it keeps */
 static INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCount,
                               WORD hwnd, WORD message, WORD *result,
                               BYTE *blob, INT blobLength, INT blobArgument,
@@ -28627,7 +28627,7 @@ static INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, U
 static VOID DpmiClientTeardown(VOID)
 {
     INT index, keepHigh = g_LdtClientMark, freedLdt = 0, freedMemory = 0, freedDos = 0;
-    INT hostIndex[4];
+    INT hostIndex[DPMI_HOST_SELECTORS];
     CHAR lineBuffer[256], *cursor = lineBuffer;
 
     /* ⛔ PUT EVERY PATCHED INT SITE BACK FIRST, while all of them are still mapped. The
@@ -28678,9 +28678,9 @@ static VOID DpmiClientTeardown(VOID)
         g_PmDefaultBase = 0; g_PmDefaultFromDos = 0;
     }
     if (g_PmDefaultBase)
-        for (index = 0; index < 256; ++index) {
+        for (index = 0; index < IVT_VECTORS; ++index) {
             volatile BYTE *stub = (volatile BYTE *)(ULONG_PTR)(g_PmDefaultBase + (DWORD)index * DPMI_PMDEF_STRIDE);
-            stub[0] = VDM_BOP0; stub[1] = VDM_BOP1; stub[2] = X86_OP_IRET;       /* BOP ; IRET, as installed */
+            stub[0] = VDM_BOP0; stub[1] = VDM_BOP1; stub[DPMI_PM_BOP_LENGTH] = X86_OP_IRET;       /* BOP ; IRET, as installed */
             PatchMapSet(g_PmDefaultBase + (DWORD)index * DPMI_PMDEF_STRIDE, (BYTE)index);
         }
 
@@ -28692,11 +28692,11 @@ static VOID DpmiClientTeardown(VOID)
     hostIndex[1] = g_PmReturnSelector ? (DPMI_SELECTOR_INDEX(g_PmReturnSelector)) : -1;
     hostIndex[2] = g_DpmiFaultSelector ? (DPMI_SELECTOR_INDEX(g_DpmiFaultSelector)) : -1;
     hostIndex[3] = g_DpmiFaultCodeSelector ? (DPMI_SELECTOR_INDEX(g_DpmiFaultCodeSelector)) : -1;
-    for (index = 0; index < 4; ++index) if (hostIndex[index] >= keepHigh) keepHigh = hostIndex[index] + 1;
+    for (index = 0; index < DPMI_HOST_SELECTORS; ++index) if (hostIndex[index] >= keepHigh) keepHigh = hostIndex[index] + 1;
     g_LdtFreeCount = 0;
     for (index = g_LdtClientMark; index < keepHigh; ++index) {
         INT isHostIndex = 0, index2;
-        for (index2 = 0; index2 < 4; ++index2) if (hostIndex[index2] == index) isHostIndex = 1;
+        for (index2 = 0; index2 < DPMI_HOST_SELECTORS; ++index2) if (hostIndex[index2] == index) isHostIndex = 1;
         if (isHostIndex) continue;
         g_Ldt[index].Base = g_Ldt[index].Limit = 0; g_Ldt[index].Access = 0; g_Ldt[index].Flags = 0;
         if (g_LdtFreeCount < DPMI_LDT_MAX) g_LdtFree[g_LdtFreeCount++] = (WORD)index;
@@ -28709,12 +28709,12 @@ static VOID DpmiClientTeardown(VOID)
     if (g_LdtClientMark > 0) g_LdtNext = keepHigh;
 
     /* The client's hooks and handlers. */
-    for (index = 0; index < 256; ++index) {
+    for (index = 0; index < IVT_VECTORS; ++index) {
         if (g_PmDefaultSelector) { g_PmInt[index].Selector = g_PmDefaultSelector; g_PmInt[index].Offset = (DWORD)index * DPMI_PMDEF_STRIDE; }
         g_PmInt[index].Client = 0;
         g_PmDispatch[index] = 0;
     }
-    for (index = 0; index < 32; ++index) g_PmException[index].IsSet = 0;
+    for (index = 0; index < X86_EXCEPTIONS; ++index) g_PmException[index].IsSet = 0;
     for (index = 0; index < DPMI_CB_SLOTS; ++index) g_Callbacks[index].IsUsed = 0;
     g_PmAppHookedTimer = 0; g_PmAppTimerSelector = 0; g_PmAppTimerOffset = 0;
     g_PmVector8ArmedMs = 0;

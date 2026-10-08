@@ -87,6 +87,7 @@ typedef BYTE (*PDMA_DREQ_ROUTINE)(PCVOID context);
 #define DMA_DREQ_MAX 4
 
 #define DMA_CHANNELS       8       /* two 8237s: channels 0-3 and 4-7            */
+#define DMA_PORT_CHANNEL1_COUNT 0x03   /* the 8-bit SB channel's count: the poll port */
 #define DMA_FIRST_16BIT_CHANNEL 4  /* channels 0-3 are 8-bit, 4-7 16-bit          */
 #define DMA_CONTROLLERS    2
 #define DMA_PAGE_PORTS     16      /* 80h-8Fh                                    */

@@ -143,6 +143,7 @@
 #define I33_GC_LEFT_BIT       0x8000u /* bit 15 is the leftmost pixel             */
 #define I33_GC_CGA_PIXELS     8       /* CGA 4-colour: eight 2-bit pixels a word  */
 #define I33_GC_CGA_BITS       2
+#define I33_GC_ONES_COLOUR    0x0F    /* a 16-colour cursor's set pixels: white  */
 #define I33_GC_CGA_LEFT_SHIFT 14      /* the leftmost pixel's pair: bits 15-14    */
 #define I33_GC_CGA_MASK       3u
 #define I33_GC_CGA_COLOURS    4
