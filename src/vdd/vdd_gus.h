@@ -27,6 +27,7 @@
 #define GUS_FALLBACK_BASE 0x260
 #define GUS_FALLBACK_IRQ  12
 #define GUS_FALLBACK_DMA  1
+#define GUS_SECOND_FALLBACK_DMA 6    /* when the SB holds DMA 1 as well */
 #define GUS_DRAM_SIZE    (1024u * 1024u)   /* 20 address bits (ref §3)               */
 #define GUS_VOICES       32
 #define GUS_STEREO_CHANNELS 2

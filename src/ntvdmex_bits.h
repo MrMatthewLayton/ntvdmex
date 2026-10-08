@@ -26,6 +26,8 @@
 #define TOP_BYTE_SHIFT      24              /* the top byte of a dword: bits 24-31  */
 #define DWORD_SHIFT         32              /* the high dword of a 64-bit value     */
 #define BITS_PER_BYTE       8
+#define BYTE_VALUES         256             /* the values a byte can hold           */
+#define DWORD_HEX_DIGITS    8
 
 /* Bit n of a bitmap of bytes: byte n >> BITMAP_BYTE_SHIFT, bit n & BITMAP_BIT_MASK. */
 #define BITMAP_BYTE_SHIFT   3

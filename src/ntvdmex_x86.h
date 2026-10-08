@@ -62,6 +62,7 @@
 #define IVT_BASE_SEGMENT    0
 #define PAGE_LAST_BYTE_U    0xFFFu          /* added before masking, to round up a page */
 #define IVT_SIZE            0x400           /* 256 vectors x 4 bytes                    */
+#define IVT_VECTORS         256
 #define IVT_ENTRY_SIZE      4
 #define IVT_ENTRY_SIZE_U    4u
 #define IVT_SEGMENT_OFFSET  2

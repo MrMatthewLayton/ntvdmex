@@ -5124,21 +5124,21 @@ static INSTALL_STATE InstallStatusText(PSTR message, DWORD cap)
     }
     return state;
 }
-
+enum { INSTALL_VERB_NONE = -1, INSTALL_VERB_INSTALL = 0, INSTALL_VERB_UNINSTALL = 1, INSTALL_VERB_STATUS = 2, INSTALL_VERBS = 3 };   /* InstallVerb: the verbs[] index */
 /* Which verb, if any, this command line asks for: 0 install, 1 uninstall,
    2 status, -1 none. The verb must be the FIRST argument -- see the call site. */
 static INT InstallVerb(PCSTR command)
 {
-    static PCSTR const verbs[3] = { "install", "uninstall", "status" };
+    static PCSTR const verbs[INSTALL_VERBS] = { "install", "uninstall", "status" };
     INT index, characterIndex;
-    if (!command) return -1;
+    if (!command) return INSTALL_VERB_NONE;
     /* Step over argv[0], quoted or not. */
     if (*command == '"') { ++command; while (*command && *command != '"') ++command; if (*command) ++command; }
     else             { while (*command && *command != ' ' && *command != '\t') ++command; }
     while (*command == ' ' || *command == '\t') ++command;
-    if (*command != '/' && *command != '-') return -1;
+    if (*command != '/' && *command != '-') return INSTALL_VERB_NONE;
     while (*command == '/' || *command == '-') ++command;
-    for (index = 0; index < 3; ++index) {
+    for (index = 0; index < INSTALL_VERBS; ++index) {
         for (characterIndex = 0; verbs[index][characterIndex]; ++characterIndex) {
             CHAR character = command[characterIndex];
             if (character >= 'A' && character <= 'Z') character = (CHAR)(character - 'A' + 'a');
@@ -5146,7 +5146,7 @@ static INT InstallVerb(PCSTR command)
         }
         if (!verbs[index][characterIndex] && (!command[characterIndex] || command[characterIndex] == ' ' || command[characterIndex] == '\t')) return index;
     }
-    return -1;
+    return INSTALL_VERB_NONE;
 }
 
 /* `/force` anywhere after the verb (#195): /uninstall /force removes a value that names
@@ -28761,9 +28761,9 @@ static INT g_DpmiUseInterp = 0;             /* run 53 toggle (1 = interp fallbac
                                                  run 59 (GH #18): 0 to exercise the real-CPU kernel path
                                                  WITH the +0x638 PM-fault trampoline. Flip to 1 to restore
                                                  the VM-confirmed interpreter runs (i310102/DPMIBACK). */
-
+#define MODEY_GAP_MAX_U     65536u
 static UINT32 DpmiSegmentToLinear(WORD selector) { return DpmiSelectorBase(selector); }
-
+#define OS_VERSION_NOT_NT_U 0x80000000u   /* GetVersion: the high bit is set on Windows 9x */
 static VOID DpmiInterpreterCpuLoad(V86_CPU *cpu, volatile BYTE *tib)
 {
     cpu->Registers[0]=(WORD)VDM_REG(tib,VTIB_EAX); cpu->Registers[1]=(WORD)VDM_REG(tib,VTIB_ECX);
@@ -28788,7 +28788,7 @@ static VOID DpmiInterpreterCpuStore(V86_CPU *cpu, volatile BYTE *tib)
     VDM_SET16(tib,VTIB_EIP,cpu->Ip);
     VDM_REG(tib,VTIB_EFLAGS) = (VDM_REG(tib,VTIB_EFLAGS) & HIGH_WORD_MASK_U) | (cpu->Flags & WORD_MASK_U);
 }
-
+enum { EXECPRIO_ABOVE_NORMAL = 1, EXECPRIO_HIGHEST = 2 };   /* execprio.txt: the exec thread's priority (0 = left alone) */
 /* Returns 0 = client exited (INT 21h AH=4Ch), -1 = stopped on an unmodeled/
    unserviceable opcode (already logged). Never touches the kernel PM path. */
 static INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib)
@@ -28830,7 +28830,7 @@ static INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib)
     LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
     return -1;
 }
-
+enum { QIMODE_DIGITS = 2, QIMODE_RAISE = 0x04, QIMODE_VIF = 0x08, QIMODE_KEYS = 0x20, QIMODE_NO_SUSPEND = 0x40, QIMODE_KEYS_ASYNC = 0x80, QIMODE_PIC_BASE = 0x60 };   /* qimode.txt bits (QIMODE_PATH) */
 /* ── PUBLISH THE TABLE krnl386 READS AT SysVars+0x6A.  GH #128 ───────────────
      Called with SysVars already planted. See the DOS_WOW_* block in
      dos_layout.h for the evidence -- this is the code half of it.
@@ -28888,7 +28888,7 @@ static VOID DosWowPublish(volatile BYTE *handlerArea, volatile BYTE *controlTabl
     (VOID)handlerArea;
     *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + 0x6A) = table;
 }
-
+enum { HOST_INSTANCES_MAX = 16, HOST_INSTANCE_WAIT_MS = 200, CAPTURE_MS_MIN = 50, CAPTURE_MS_MAX = 60000, CAPTURE_DELAY_MS_MAX = 600000, HEADLESS_MS_MAX = 3600000 };   /* startup limits: instance numbers, knob ranges */
 /* ── ★★★★★ A TITLE IS "PROGRAM [ARGUMENTS]", AND WE OPENED THE WHOLE THING AS A
      FILENAME. (session 59) `target.txt` has split `path [args]` since M2.5, but the
      CSRSS path -- which is EVERY REAL LAUNCH, because the IFEO hook is how a program
@@ -28933,7 +28933,7 @@ static HANDLE CsrssOpenSplit(PSTR path, PSTR *argumentsOut)
     return INVALID_HANDLE_VALUE;
 }
 #define V86BOP_2F_LOG_LINES_MAX 512     /* BOP 2Fh lines logged before the cap        */
-
+enum { INSTALL_EXIT_OK = 0, INSTALL_EXIT_FAILED = 1, INSTALL_STATUS_EXIT_OURS = 0, INSTALL_STATUS_EXIT_NONE = 1, INSTALL_STATUS_EXIT_OTHER = 2 };   /* the install verbs' exit codes */
 /* ── ★★★ COOPERATIVE DEVICE-IRQ DELIVERY IN V86, FACTORED SO IT HAS ONE HOME. ──────
      This was inline in the main exec loop, which meant it only ran when the guest
      reached that loop -- and a guest inside a NESTED real-mode call (DPMI 0301/0302)
@@ -29729,15 +29729,15 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          installer becomes "it did nothing". */
     {   CHAR installStatus[2048];
         INT verb = InstallVerb(GetCommandLineA());
-        if (verb >= 0) {
+        if (verb > INSTALL_VERB_NONE) {
             /* ⚠ `verb == 0`, NOT `verb != 2`. The first cut wrote the latter, which
                  makes INSTALL and UNINSTALL both ask to be installed -- and it
                  reported "INSTALLED" cheerfully while doing it, because the message
                  is composed from the same wrong flag. Caught on the rig by the
                  BEHAVIOURAL half of the gate, not by the registry read. */
-            INT isOk, want = (verb == 0);
+            INT isOk, want = (verb == INSTALL_VERB_INSTALL);
             installStatus[0] = 0;
-            if (verb == 2) {
+            if (verb == INSTALL_VERB_STATUS) {
                 /* ── /status ANSWERS IN ITS EXIT CODE, not only in English. ──────
                      0 = NTVDMEX is the machine's VDM, 1 = nobody is, 2 = another
                      program is. A script can branch on that without matching a
@@ -29745,11 +29745,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                      wrongly, grepping for text only /install ever prints. */
                 INSTALL_STATE installState = InstallStatusText(installStatus, sizeof installStatus);
                 InstallReport(installStatus, 1);
-                return installState == INSTALL_OURS ? 0 : (installState == INSTALL_OTHER ? 2 : 1);
+                return installState == INSTALL_OURS ? INSTALL_STATUS_EXIT_OURS : (installState == INSTALL_OTHER ? INSTALL_STATUS_EXIT_OTHER : INSTALL_STATUS_EXIT_NONE);
             }
             isOk = InstallPerform(want, CommandLineHasForce(GetCommandLineA()), installStatus, sizeof installStatus);
             InstallReport(installStatus, isOk);
-            return isOk ? 0 : 1;
+            return isOk ? INSTALL_EXIT_OK : INSTALL_EXIT_FAILED;
         } }
 
     /* ── ★★★★★ NOTHING ON THE COMMAND LINE = THE USER OPENED NTVDMEX. (s79) ──────────
@@ -29806,7 +29806,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          yields its mutex (the wait times out -> next number); a dead one's is released
          or ABANDONED (-> we take that number). */
     {   INT attempt; CHAR name[48];
-        for (attempt = 1; attempt <= 16 && !g_OnceMutex; ++attempt) {
+        for (attempt = 1; attempt <= HOST_INSTANCES_MAX && !g_OnceMutex; ++attempt) {
             HANDLE once; DWORD lastError, waitResult = WAIT_OBJECT_0;
             PSTR scan = LogPut(name, "Global\\ntvdmex_host_single");
             if (attempt > 1) { *scan++ = '_'; scan = LogDecimal(scan, (UINT)attempt); }
@@ -29818,7 +29818,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             lastError  = GetLastError();
             if (!once) continue;
             if (lastError == ERROR_ALREADY_EXISTS) {
-                waitResult = WaitForSingleObject(once, 200);   /* brief: a live host never yields it */
+                waitResult = WaitForSingleObject(once, HOST_INSTANCE_WAIT_MS);   /* brief: a live host never yields it */
                 if (waitResult == WAIT_TIMEOUT) { CloseHandle(once); continue; }
             }
             g_OnceMutex = once;
@@ -30017,7 +30017,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           CHAR modeYText[32]; DWORD modeYRead = 0, modeYValue = 0, modeYIndex; INT got = 0;
           ReadFile(modeHandle, modeYText, sizeof modeYText - 1, &modeYRead, NULL); CloseHandle(modeHandle);
           for (modeYIndex = 0; modeYIndex < modeYRead && modeYText[modeYIndex] >= '0' && modeYText[modeYIndex] <= '9'; ++modeYIndex) { modeYValue = modeYValue * DECIMAL_RADIX + (DWORD)(modeYText[modeYIndex] - '0'); got = 1; }
-          if (got && modeYValue <= 65536u) {
+          if (got && modeYValue <= MODEY_GAP_MAX_U) {
               CHAR dwordsLine[96], *lineCursor = dwordsLine;
               g_Video.ModeYGap = modeYValue;
               lineCursor = LogPut(lineCursor, "STAGE0: modey.txt -> gap="); lineCursor = LogHex(lineCursor, modeYValue);
@@ -30033,12 +30033,12 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             ReadFile(configHandle, captureText, sizeof captureText - 1, &captureRead, NULL); CloseHandle(configHandle);
             for (captureIndex = 0; captureIndex < captureRead && captureText[captureIndex] >= '0' && captureText[captureIndex] <= '9'; ++captureIndex)
                 captureValue = captureValue * DECIMAL_RADIX + (DWORD)(captureText[captureIndex] - '0');
-            if (captureValue >= 50 && captureValue <= 60000) g_CaptureMs = captureValue;
+            if (captureValue >= CAPTURE_MS_MIN && captureValue <= CAPTURE_MS_MAX) g_CaptureMs = captureValue;
             {   DWORD periodDelay = 0;                                 /* #58: "period delay" */
                 while (captureIndex < captureRead && captureText[captureIndex] == ' ') ++captureIndex;
                 for (; captureIndex < captureRead && captureText[captureIndex] >= '0' && captureText[captureIndex] <= '9'; ++captureIndex)
                     periodDelay = periodDelay * DECIMAL_RADIX + (DWORD)(captureText[captureIndex] - '0');
-                if (periodDelay <= 600000) g_CaptureDelayMs = periodDelay; }
+                if (periodDelay <= CAPTURE_DELAY_MS_MAX) g_CaptureDelayMs = periodDelay; }
             g_CaptureStart = GetTickCount();
         }
     }
@@ -30106,7 +30106,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     if (g_SbConfig.IoBase == g_Gus.BasePort) g_Gus.BasePort = GUS_FALLBACK_BASE;
     if (g_SbConfig.Irq == g_Gus.Irq)   g_Gus.Irq = GUS_FALLBACK_IRQ;
     if (g_SbConfig.Dma8Channel == g_Gus.DmaChannel || g_SbConfig.Dma16Channel == g_Gus.DmaChannel) g_Gus.DmaChannel = GUS_FALLBACK_DMA;
-    if (g_SbConfig.Dma8Channel == g_Gus.DmaChannel || g_SbConfig.Dma16Channel == g_Gus.DmaChannel) g_Gus.DmaChannel = 6;
+    if (g_SbConfig.Dma8Channel == g_Gus.DmaChannel || g_SbConfig.Dma16Channel == g_Gus.DmaChannel) g_Gus.DmaChannel = GUS_SECOND_FALLBACK_DMA;
     g_ModeYPmOffset     = (GetFileAttributesA(MYPM_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_ModeYPmDetect  = (GetFileAttributesA(MYPM_DETECT_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_P12Offset  = (GetFileAttributesA(P12OFF_FLAG)   != INVALID_FILE_ATTRIBUTES);
@@ -30126,7 +30126,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
               if (text[index] < '0' || text[index] > '9') break;      /* stop at CR/LF/junk */
               number = number * DECIMAL_RADIX + (DWORD)(text[index] - '0');
           }
-          if (number > PM_HEADLESS_MS_DEFAULT && number <= 3600000) g_HeadlessMs = number;   /* s84: an hour, for slow-rung timedemos */
+          if (number > PM_HEADLESS_MS_DEFAULT && number <= HEADLESS_MS_MAX) g_HeadlessMs = number;   /* s84: an hour, for slow-rung timedemos */
       } }
     /* Async-preemption mode (session 11). Read once; a handle to THIS thread is what
        VdmQueueInterrupt takes, and this thread is the one that will be running the
@@ -30135,7 +30135,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                              NULL, OPEN_EXISTING, 0, NULL);
       if (handle != INVALID_HANDLE_VALUE) {
           CHAR text[2] = { 0, 0 }; DWORD bytesRead = 0; INT number = 0, index;
-          ReadFile(handle, text, 2, &bytesRead, NULL);
+          ReadFile(handle, text, QIMODE_DIGITS, &bytesRead, NULL);
           CloseHandle(handle);
           for (index = 0; index < (INT)bytesRead; ++index) {          /* up to two hex digits */
               INT digit = -1;
@@ -30145,12 +30145,12 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
               if (digit < 0) break;
               number = (number << NIBBLE_SHIFT) | digit;
           }
-          if (number > 0) { g_QiBits  = (DWORD)number & 3;
-                       g_QiRaise = (number & 0x04) != 0;
-                       g_QiVif   = (number & 0x08) != 0;
-                       if (number & 0x40) g_QiSuspended = 0;      /* bit 6 disables async delivery */
-                       g_QiKeys  = (number & 0x20) != 0;
-                       g_QiKeysAsync = (number & 0x80) != 0; }
+          if (number > 0) { g_QiBits  = (DWORD)number & VDM_INT_PENDING;
+                       g_QiRaise = (number & QIMODE_RAISE) != 0;
+                       g_QiVif   = (number & QIMODE_VIF) != 0;
+                       if (number & QIMODE_NO_SUSPEND) g_QiSuspended = 0;      /* bit 6 disables async delivery */
+                       g_QiKeys  = (number & QIMODE_KEYS) != 0;
+                       g_QiKeysAsync = (number & QIMODE_KEYS_ASYNC) != 0; }
       } }
     if (g_QiBits || g_QiSuspended) {    /* async delivery needs a handle to the exec thread */
         DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
@@ -30190,7 +30190,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           while (index < (INT)bytesRead && text[index] >= '0' && text[index] <= '9') major = major * DECIMAL_RADIX + (text[index++] - '0');
           while (index < (INT)bytesRead && (text[index] == ' ' || text[index] == '.')) ++index;
           while (index < (INT)bytesRead && text[index] >= '0' && text[index] <= '9') minor = minor * DECIMAL_RADIX + (text[index++] - '0');
-          if (major > 0 && major < 256) { g_SbVersionMajor = (BYTE)major; g_SbVersionMinor = (BYTE)minor;
+          if (major > 0 && major < BYTE_VALUES) { g_SbVersionMajor = (BYTE)major; g_SbVersionMinor = (BYTE)minor;
                                     g_DspVersionForced = 1; }
       } }
     { HANDLE gateHandle = CreateFileA(SBGATE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -30200,7 +30200,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           ReadFile(gateHandle, text, sizeof text, &bytesRead, NULL); CloseHandle(gateHandle);
           g_SbGate = (bytesRead && text[0] >= '0' && text[0] <= '9') ? (text[0] - '0') : 1;
       } }
-    { DWORD priority = 1;
+    { DWORD priority = EXECPRIO_ABOVE_NORMAL;
       HANDLE priorityHandle = CreateFileA(EXECPRIO_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                               NULL, OPEN_EXISTING, 0, NULL);
       if (priorityHandle != INVALID_HANDLE_VALUE) {
@@ -30210,8 +30210,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           if (bytesRead && text[0] >= '0' && text[0] <= '9') priority = (DWORD)(text[0] - '0');
       }
       g_ExecPriority = priority;
-      if (priority == 1) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
-      else if (priority >= 2) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+      if (priority == EXECPRIO_ABOVE_NORMAL) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+      else if (priority >= EXECPRIO_HIGHEST) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
       g_ExecPriorityForeground = GetThreadPriority(GetCurrentThread());
       DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
                       &g_ExecThread, 0, FALSE, DUPLICATE_SAME_ACCESS);   /* #211: BackgroundPriorityTick */
@@ -30221,7 +30221,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         /* Experiment mode: retarget the kernel's PIC so a KERNEL-dispatched IRQ 5 arrives
            as INT 65h while our own injection still arrives as INT 0Dh. Without this the
            two are the same vector and the qirq2 probe cannot attribute a delivery. */
-        VdmIcaSetBase(0x60);
+        VdmIcaSetBase(QIMODE_PIC_BASE);
     }
     cursor = LogPut(cursor, "STAGE0: qi_bits=0x"); cursor = LogHex(cursor, g_QiBits);
     cursor = LogPut(cursor, " qi_raise=0x");       cursor = LogHex(cursor, (DWORD)g_QiRaise);
@@ -30230,7 +30230,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     cursor = LogPut(cursor, " hcpu=0x");           cursor = LogHex(cursor, (DWORD)(ULONG_PTR)g_HostCpu);
     cursor = LogPut(cursor, "\r\n");
     cursor = LogPut(cursor, "STAGE0: os=0x"); cursor = LogHex(cursor, ((g_OsVersion & BYTE_MASK) << BYTE_SHIFT) | ((g_OsVersion >> BYTE_SHIFT) & BYTE_MASK));
-    cursor = LogPut(cursor, " build="); cursor = LogDecimal(cursor, (g_OsVersion < 0x80000000u) ? (g_OsVersion >> WORD_SHIFT) : 0);
+    cursor = LogPut(cursor, " build="); cursor = LogDecimal(cursor, (g_OsVersion < OS_VERSION_NOT_NT_U) ? (g_OsVersion >> WORD_SHIFT) : 0);
     cursor = LogPut(cursor, " veh="); cursor = LogDecimal(cursor, g_PfnAddVeh != 0);
     cursor = LogPut(cursor, " attachconsole="); cursor = LogDecimal(cursor, g_PfnAttachConsole != 0);
     cursor = LogPut(cursor, " rawinput="); cursor = LogDecimal(cursor, g_PfnRegisterRawInput && g_PfnGetRawInput);
@@ -30296,7 +30296,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                NULL, OPEN_EXISTING, 0, NULL);
         if (handle != INVALID_HANDLE_VALUE) {
             CHAR text[9]; DWORD bytesRead = 0; INT index;
-            ReadFile(handle, text, 8, &bytesRead, NULL);
+            ReadFile(handle, text, DWORD_HEX_DIGITS, &bytesRead, NULL);
             CloseHandle(handle);
             for (index = 0; index < (INT)bytesRead; ++index) {
                 INT digit = -1;
