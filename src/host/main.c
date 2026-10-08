@@ -404,7 +404,7 @@ static DOS_SAFE_SKIPS g_Safe;           /* s90 #132: all zero unless SAFE MODE (
 /* courier.txt = 0 turns the tick courier off (see TickCourierThread). 1 = as shipped. */
 #define COURIER_PATH     CFG_("courier.txt")
 /* llkbd.txt = 1 re-enables the SYSTEM-WIDE low-level keyboard hook. OFF by default --
-   see input_capture_set for why it is the single most dangerous thing this host does. */
+   see InputCaptureSet for why it is the single most dangerous thing this host does. */
 #define LLKBD_PATH       CFG_("llkbd.txt")
 /* ── ★ HOW LONG A BLOCKED Win16 TASK WAITS. (GH #128, session 43) ────────────────
      Milliseconds, decimal; **0 means FOREVER**, which is what a real Win16 task
@@ -3959,7 +3959,7 @@ static int AsyncInjectIrq(unsigned irq)
     /* ⚠ NEVER SUSPEND ONCE WE ARE WINDING DOWN. A suspend that lands during teardown
          can leave the thread stopped forever, and a process with a suspended thread
          does not finish exiting -- which strands the system-wide hook and cursor clip
-         (see host_panic_release). g_Running is cleared first thing in WM_DESTROY. */
+         (see HostPanicRelease). g_Running is cleared first thing in WM_DESTROY. */
     if (!g_Running) { AsyncEarlyBail(irq, 20); return 0; }
     if (!g_HostCpu || g_InExec == 0) { AsyncEarlyBail(irq, 20); return 0; }
     /* Mid real-mode simulation: the guest's mode is being rewritten under us. See
@@ -7847,7 +7847,7 @@ static DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
      Characters queued here are read by the console input BEFORE the keyboard, so the
      shell's AH=0Ah line reader sees them exactly as if they had been typed -- echoed,
      with no length limit and no scancode translation. Only File > Open fills it, and
-     only while the top-level shell is sitting in that line read (open_at_prompt).
+     only while the top-level shell is sitting in that line read (OpenAtPrompt).
      Head/tail under g_Lock. */
 #define TYPEIN_CAP 512
 static char g_TypeIn[TYPEIN_CAP];
@@ -8559,7 +8559,7 @@ static int   g_HostCursorMode = HOSTCUR_SMART;
 static DWORD g_CursorMovedMs;         /* GetTickCount of the last real movement   */
 static POINT g_CursorLastPoint = { -1, -1 };
 static int   g_CursorIdle;             /* hidden for stillness, until it next moves */
-/* Input capture ("exclusivity") -- see input_capture_set. Declared up here because
+/* Input capture ("exclusivity") -- see InputCaptureSet. Declared up here because
    StatusUpdate, which is defined above it, reports the capture state and the chord
    that changes it on the right-hand half of the status strip. */
 static volatile LONG g_Captured = 0;
@@ -8612,8 +8612,8 @@ static DWORD         g_MouseAutoCaptureFired = 0;
 
 /* RULE 1 of the capture policy, and the ONE predicate for it -- "has this guest ever
    used the mouse". Defined here rather than beside the rules it serves because the
-   status strip, which is built long before input_capture_set, has to answer it too.
-   The full policy is written out above input_capture_set; do not add a second latch. */
+   status strip, which is built long before InputCaptureSet, has to answer it too.
+   The full policy is written out above InputCaptureSet; do not add a second latch. */
 /* ── #136: SEAMLESS MOUSE. Settings > Input: "In seamless mode the program's pointer
      follows Windows' own pointer, and no capture is needed." So it is the capture policy
      with rules 2 and 5 switched off: a guest that uses the mouse is treated exactly like
@@ -8631,7 +8631,7 @@ static DWORD         g_MouseAutoCaptureFired = 0;
      Live: OK in the dialog releases a held capture at once (settings_apply). */
 static volatile LONG g_MouseSeamless = 0;
 static int CaptureAllowed(void) { return g_MouseWantCapture != 0 && !g_MouseSeamless; }
-/* RULE 6 (see the capture rules above input_capture_set): does host mouse input reach
+/* RULE 6 (see the capture rules above InputCaptureSet): does host mouse input reach
    the guest right now? Captured: yes. Never used the mouse: yes (ordinary window).
    Uses the mouse but released: no. Read on the UI thread only. */
 static int MouseGoesToGuest(void) { return g_Captured || !CaptureAllowed(); }
@@ -9798,7 +9798,7 @@ enum {                                       /* wired command IDs               
          Greying them in a graphics mode is a different claim -- mark, copy and
          paste operate on a CHARACTER GRID, and in mode 13h there is no such thing
          to select -- so it is about what the item MEANS here, not about whether it
-         is finished. See menu_sync_modal(). */
+         is finished. See MenuSyncModal(). */
     IDM_EDIT_MARK, IDM_EDIT_COPY, IDM_EDIT_COPYSCREEN, IDM_EDIT_PASTE,
     IDM_EDIT_SELECTALL,
     /* The View menu's two CHECKBOX settings (the combos are ranges, below). */
@@ -10465,7 +10465,7 @@ static HMENU BuildMenu(void)
     HMENU bar = CreateMenu(), menu, submenu, tools;
     menu = MenuPopup();                                                   /* File         */
     /* #153. No Ctrl+O: that chord belongs to the DOS program (WordStar's own menu). The
-       Open Recent list is filled when it opens -- see menu_recent_fill. */
+       Open Recent list is filled when it opens -- see MenuRecentFill. */
     MenuItem(menu, "Open Executable...", IDM_FILE_OPEN);
     g_RecentMenu = MenuPopup();
     MenuSubmenu(menu, "Open Recent", g_RecentMenu);
@@ -10479,7 +10479,7 @@ static HMENU BuildMenu(void)
     MenuItem(menu, "Exit\tAlt+F4", IDM_FILE_EXIT);
     MenuSubmenu(bar, "File", menu);
 
-    /* ── EDIT IS A TEXT-MODE MENU, AND menu_sync_modal() SAYS SO AT OPEN TIME. ───
+    /* ── EDIT IS A TEXT-MODE MENU, AND MenuSyncModal() SAYS SO AT OPEN TIME. ───
          Every item here works on the character grid the text renderer maintains.
          In a graphics mode there is no grid to mark, copy or paste into, so they
          are greyed rather than left to fail silently -- see the note by
@@ -11158,45 +11158,45 @@ static DWORD WINAPI PasteThread(LPVOID parameter)
     return 0;
 }
 
-static void text_paste(HWND h)
+static void TextPaste(HWND window)
 {
-    HANDLE g; const char *src; char *s; int n = 0;
+    HANDLE clipboard; const char *source; char *copy; int length = 0;
     if (InterlockedExchange(&g_PasteBusy, 1)) return;
-    if (!OpenClipboard(h)) { InterlockedExchange(&g_PasteBusy, 0); return; }
-    g = GetClipboardData(CF_TEXT);
-    src = g ? (const char *)GlobalLock(g) : NULL;
-    s = src ? (char *)HeapAlloc(GetProcessHeap(), 0, 4097) : NULL;
-    if (s) { while (n < 4096 && src[n]) { s[n] = src[n]; ++n; } s[n] = 0; }
-    if (src) GlobalUnlock(g);
+    if (!OpenClipboard(window)) { InterlockedExchange(&g_PasteBusy, 0); return; }
+    clipboard = GetClipboardData(CF_TEXT);
+    source = clipboard ? (const char *)GlobalLock(clipboard) : NULL;
+    copy = source ? (char *)HeapAlloc(GetProcessHeap(), 0, 4097) : NULL;
+    if (copy) { while (length < 4096 && source[length]) { copy[length] = source[length]; ++length; } copy[length] = 0; }
+    if (source) GlobalUnlock(clipboard);
     CloseClipboard();
-    if (!s || !n) { if (s) HeapFree(GetProcessHeap(), 0, s); InterlockedExchange(&g_PasteBusy, 0); return; }
-    { HANDLE t = CreateThread(NULL, 0, PasteThread, s, 0, NULL);
-      if (t) CloseHandle(t); else { HeapFree(GetProcessHeap(), 0, s); InterlockedExchange(&g_PasteBusy, 0); } }
+    if (!copy || !length) { if (copy) HeapFree(GetProcessHeap(), 0, copy); InterlockedExchange(&g_PasteBusy, 0); return; }
+    { HANDLE thread = CreateThread(NULL, 0, PasteThread, copy, 0, NULL);
+      if (thread) CloseHandle(thread); else { HeapFree(GetProcessHeap(), 0, copy); InterlockedExchange(&g_PasteBusy, 0); } }
 }
 
-static void menu_sync_modal(HWND h, HMENU popup)
+static void MenuSyncModal(HWND window, HMENU popup)
 {
-    static const UINT TEXT_ONLY[] = { IDM_EDIT_MARK, IDM_EDIT_COPY, IDM_EDIT_COPYSCREEN,
+    static const UINT textOnly[] = { IDM_EDIT_MARK, IDM_EDIT_COPY, IDM_EDIT_COPYSCREEN,
                                       IDM_EDIT_PASTE, IDM_EDIT_SELECTALL };
-    HMENU m = GetMenu(h);
+    HMENU menu = GetMenu(window);
     UINT  flag;
-    unsigned i;
+    unsigned index;
     /* The tray menu is its own popup, not a child of the menu bar: grey it directly. */
     if (popup) EnableMenuItem(popup, IDM_FILE_CLOSEPROG, MF_BYCOMMAND
                               | (CloseProgramAvailable() ? MF_ENABLED : MF_GRAYED));
-    if (!m) m = g_FsMenu;
-    if (!m) return;
-    EnableMenuItem(m, IDM_FILE_CLOSEPROG, MF_BYCOMMAND
+    if (!menu) menu = g_FsMenu;
+    if (!menu) return;
+    EnableMenuItem(menu, IDM_FILE_CLOSEPROG, MF_BYCOMMAND
                    | (CloseProgramAvailable() ? MF_ENABLED : MF_GRAYED));
     flag = (g_Video.ModeKind == VIDEO_KIND_TEXT) ? MF_ENABLED : (MF_GRAYED | MF_DISABLED);
-    for (i = 0; i < sizeof TEXT_ONLY / sizeof TEXT_ONLY[0]; ++i)
-        EnableMenuItem(m, TEXT_ONLY[i], MF_BYCOMMAND | flag);
-    CheckMenuItem(m, IDM_CAP_AUDIO, MF_BYCOMMAND | (AudioWaveIsRecording() ? MF_CHECKED : MF_UNCHECKED));
+    for (index = 0; index < sizeof textOnly / sizeof textOnly[0]; ++index)
+        EnableMenuItem(menu, textOnly[index], MF_BYCOMMAND | flag);
+    CheckMenuItem(menu, IDM_CAP_AUDIO, MF_BYCOMMAND | (AudioWaveIsRecording() ? MF_CHECKED : MF_UNCHECKED));
     /* #154: Copy needs a selection; Paste needs text, and not a paste already typing. */
     if (flag == MF_ENABLED) {
-        if (!g_SelectionOn) EnableMenuItem(m, IDM_EDIT_COPY, MF_BYCOMMAND | MF_GRAYED);
+        if (!g_SelectionOn) EnableMenuItem(menu, IDM_EDIT_COPY, MF_BYCOMMAND | MF_GRAYED);
         if (g_PasteBusy || !IsClipboardFormatAvailable(CF_TEXT))
-            EnableMenuItem(m, IDM_EDIT_PASTE, MF_BYCOMMAND | MF_GRAYED);
+            EnableMenuItem(menu, IDM_EDIT_PASTE, MF_BYCOMMAND | MF_GRAYED);
     }
 }
 
@@ -11224,19 +11224,19 @@ static void menu_sync_modal(HWND h, HMENU popup)
      design in Windows and not a defect here.
    ⚠ Capture is dropped on WM_KILLFOCUS -- otherwise a clipped cursor and a swallowed
      Alt+Tab would strand the user in a window they cannot leave. */
-static HHOOK         g_llkbd;
-static int           g_llkbd_on = 0;     /* OFF by default; llkbd.txt = 1. See input_capture_set. */
-static volatile LONG g_ui_beat;          /* ++ per WM_TIMER: the UI thread is pumping   */
-static DWORD         g_capwd_released;   /* times the watchdog had to hand the box back */
-static volatile LONG g_win_down;         /* Win held -- maintained by the hook, see below */
+static HHOOK         g_LowLevelKeyboard;
+static int           g_LowLevelKeyboardOn = 0;     /* OFF by default; llkbd.txt = 1. See InputCaptureSet. */
+static volatile LONG g_UiBeat;          /* ++ per WM_TIMER: the UI thread is pumping   */
+static DWORD         g_CaptureWatchdogReleased;   /* times the watchdog had to hand the box back */
+static volatile LONG g_WindowsKeyDown;         /* Win held -- maintained by the hook, see below */
 
-static LRESULT CALLBACK ll_kbd_proc(int code, WPARAM wp, LPARAM lp)
+static LRESULT CALLBACK LowLevelKeyboardProcedure(int code, WPARAM wParam, LPARAM lParam)
 {
     if (code == HC_ACTION && g_Captured && GetForegroundWindow() == g_Window) {
-        KBDLLHOOKSTRUCT *k = (KBDLLHOOKSTRUCT *)lp;
-        int alt  = (k->flags & LLKHF_ALTDOWN) != 0;
+        KBDLLHOOKSTRUCT *hook = (KBDLLHOOKSTRUCT *)lParam;
+        int alt  = (hook->flags & LLKHF_ALTDOWN) != 0;
         int ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-        int down = (wp == WM_KEYDOWN || wp == WM_SYSKEYDOWN);
+        int down = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
         /* ⚠⚠ NEVER SWALLOW A KEY-UP. Capture is entered with Win+F10 while the hook is
              NOT yet installed, so Windows SEES the Win key go down; the hook is installed
              a moment later and used to eat the key-UP, leaving the system believing Win
@@ -11244,30 +11244,30 @@ static LRESULT CALLBACK ll_kbd_proc(int code, WPARAM wp, LPARAM lp)
              D minimised the window, because Win+D is Show Desktop (user-reported, and it
              is what pointed straight at this). Swallowing a down without its up is a
              stuck modifier; only downs may be eaten. */
-        if (!down) { if (k->vkCode == VK_LWIN || k->vkCode == VK_RWIN)
-                         InterlockedExchange(&g_win_down, 0);
-                     return CallNextHookEx(g_llkbd, code, wp, lp); }
+        if (!down) { if (hook->vkCode == VK_LWIN || hook->vkCode == VK_RWIN)
+                         InterlockedExchange(&g_WindowsKeyDown, 0);
+                     return CallNextHookEx(g_LowLevelKeyboard, code, wParam, lParam); }
         /* Swallow only, and deliberately do NOT push these to the guest from here: a
            low-level hook that blocks is torn down by Windows, and HostKeyScancode
            takes g_Lock. Losing Alt+Tab to the guest costs nothing; stalling the hook
            would cost every key. */
-        if (k->vkCode == VK_LWIN || k->vkCode == VK_RWIN) {
+        if (hook->vkCode == VK_LWIN || hook->vkCode == VK_RWIN) {
             /* Swallowing the down also stops the SYSTEM tracking it, so GetAsyncKeyState
                would report Win as up and the Win+F10 release chord could never fire while
                captured -- the exact state you need it in. Track it here instead. */
-            InterlockedExchange(&g_win_down, 1);
+            InterlockedExchange(&g_WindowsKeyDown, 1);
             return 1;
         }
-        if (k->vkCode == VK_TAB    && alt)  return 1;
-        if (k->vkCode == VK_ESCAPE && (ctrl || alt)) return 1;
+        if (hook->vkCode == VK_TAB    && alt)  return 1;
+        if (hook->vkCode == VK_ESCAPE && (ctrl || alt)) return 1;
     }
-    return CallNextHookEx(g_llkbd, code, wp, lp);
+    return CallNextHookEx(g_LowLevelKeyboard, code, wParam, lParam);
 }
 
 /* ⚠ host_key_held() WAS HERE AND IS GONE (s64). It answered "is a Windows key held",
    which only ever mattered to the Win+F10 and Win+Click CHORDS. The Windows key is now
    a release key in its own right (capture rule 4), so nothing needs to ask whether it
-   is held alongside something else. g_win_down stays: ll_kbd_proc swallows the Win DOWN
+   is held alongside something else. g_WindowsKeyDown stays: LowLevelKeyboardProcedure swallows the Win DOWN
    when the low-level hook is enabled, and must still track it so it cannot leave the
    system believing the key is stuck. */
 
@@ -11313,17 +11313,17 @@ static LRESULT CALLBACK ll_kbd_proc(int code, WPARAM wp, LPARAM lp)
 
 /* Is a point (client coords) over the VIDEO, as opposed to the status strip? The menu
    bar and the caption are not in client space at all, so they cannot reach here. */
-static int pt_over_video(HWND h, int cx, int cy)
+static int IsPointOverVideo(HWND window, int clientX, int clientY)
 {
-    RECT rc; int vh;
-    if (!GetClientRect(h, &rc)) return 0;
-    vh = rc.bottom - (g_PresentDdraw.StatusHeight ? g_PresentDdraw.StatusHeight : PRESENT_STATUS_HEIGHT);
-    return cx >= 0 && cx < rc.right && cy >= 0 && cy < vh;
+    RECT clientRect; int videoHeight;
+    if (!GetClientRect(window, &clientRect)) return 0;
+    videoHeight = clientRect.bottom - (g_PresentDdraw.StatusHeight ? g_PresentDdraw.StatusHeight : PRESENT_STATUS_HEIGHT);
+    return clientX >= 0 && clientX < clientRect.right && clientY >= 0 && clientY < videoHeight;
 }
 
 /* ── ONE DECISION, ONE PLACE: IS THE DESKTOP ARROW VISIBLE RIGHT NOW? ────────────────
-     There were four copies of this expression -- in input_capture_set, in
-     host_cursor_set, in host_fullscreen_toggle and in WM_SETCURSOR -- and they had
+     There were four copies of this expression -- in InputCaptureSet, in
+     host_cursor_set, in HostFullscreenToggle and in WM_SETCURSOR -- and they had
      already drifted: three of them tested `g_cursor_show` without asking whether the
      pointer was over the VIDEO or over the status bar, which is the only part of the
      window the setting was ever about.
@@ -11333,10 +11333,10 @@ static int pt_over_video(HWND h, int cx, int cy)
        fullscreen -> hidden everywhere. Exclusive mode has no chrome to point at.
        otherwise  -> the setting, and ONLY over the video. The status bar keeps its
                      arrow and its size grip whatever the checkbox says. */
-static int host_cursor_visible_at(int over_video)
+static int HostCursorVisibleAt(int overVideo)
 {
     if (g_Captured) return 0;
-    if (!over_video || g_HostCursorMode == HOSTCUR_ALWAYS) return 1;   /* s84 */
+    if (!overVideo || g_HostCursorMode == HOSTCUR_ALWAYS) return 1;   /* s84 */
     if (g_HostCursorMode == HOSTCUR_NEVER) return 0;
     /* #218: fullscreen no longer hides it outright -- a program that does not use the
        mouse keeps a usable pointer there too, and the idle rule applies to both. */
@@ -11348,37 +11348,37 @@ static int host_cursor_visible_at(int over_video)
    until you jiggle it. Guarded on the pointer actually being over us: SetCursor
    changes the shape there and then, and we have no business touching it while it is
    over someone else's window. The status bar is a CHILD, so accept it as ours. */
-static void host_cursor_refresh(HWND h)
+static void HostCursorRefresh(HWND window)
 {
-    POINT pt, c; HWND w;
-    if (!h || !GetCursorPos(&pt)) return;
-    w = WindowFromPoint(pt);
-    if (w != h && GetParent(w) != h) return;
-    c = pt; ScreenToClient(h, &c);
-    SetCursor(host_cursor_visible_at(pt_over_video(h, c.x, c.y))
+    POINT point, client; HWND under;
+    if (!window || !GetCursorPos(&point)) return;
+    under = WindowFromPoint(point);
+    if (under != window && GetParent(under) != window) return;
+    client = point; ScreenToClient(window, &client);
+    SetCursor(HostCursorVisibleAt(IsPointOverVideo(window, client.x, client.y))
               ? LoadCursorA(NULL, IDC_ARROW) : NULL);
 }
 
-/* Confine the pointer to our client area. Split out of input_capture_set because the
+/* Confine the pointer to our client area. Split out of InputCaptureSet because the
    rect is only true for the geometry it was computed from: go fullscreen (or resize)
    while captured and the clip is still the OLD window, so the mouse is fenced into a
    corner of the screen the picture no longer occupies. Anything that changes the
    window's shape must re-apply it. */
-static void capture_clip_rect(HWND h, RECT *rc)
+static void CaptureClipRect(HWND window, RECT *clip)
 {
-    POINT tl;
-    GetClientRect(h, rc);
-    tl.x = rc->left; tl.y = rc->top;
-    ClientToScreen(h, &tl);
-    rc->left = tl.x; rc->top = tl.y;
-    rc->right += tl.x; rc->bottom += tl.y;
+    POINT topLeft;
+    GetClientRect(window, clip);
+    topLeft.x = clip->left; topLeft.y = clip->top;
+    ClientToScreen(window, &topLeft);
+    clip->left = topLeft.x; clip->top = topLeft.y;
+    clip->right += topLeft.x; clip->bottom += topLeft.y;
 }
-static void capture_clip_apply(HWND h)
+static void CaptureClipApply(HWND window)
 {
-    RECT rc;
-    if (!h || !g_Captured) return;
-    capture_clip_rect(h, &rc);
-    ClipCursor(&rc);
+    RECT clip;
+    if (!window || !g_Captured) return;
+    CaptureClipRect(window, &clip);
+    ClipCursor(&clip);
 }
 /* ── ★ CAPTURED MEANS THE POINTER NEVER REACHES THE DESKTOP. (user, s84) ──────────
      Focusing the window from its TITLE BAR captured (WM_ACTIVATE, rule 5) -- and then
@@ -11388,37 +11388,37 @@ static void capture_clip_apply(HWND h)
      anyone can change, so re-applying it at WM_EXITSIZEMOVE is not enough on its own:
      from the UI tick, while captured and in front (and not mid-drag, where Windows owns
      the clip), check the clip is still OURS and restore it if not. Counted. */
-static int   g_in_sizemove;
-static DWORD g_clip_repairs;
-static void capture_clip_guard(HWND h)
+static int   g_InSizeMove;
+static DWORD g_ClipRepairs;
+static void CaptureClipGuard(HWND window)
 {
-    RECT want, cur;
-    if (!h || !g_Captured || g_in_sizemove || GetForegroundWindow() != h) return;
-    capture_clip_rect(h, &want);
-    if (!GetClipCursor(&cur)) return;
-    if (cur.left != want.left || cur.top != want.top ||
-        cur.right != want.right || cur.bottom != want.bottom) {
+    RECT want, current;
+    if (!window || !g_Captured || g_InSizeMove || GetForegroundWindow() != window) return;
+    CaptureClipRect(window, &want);
+    if (!GetClipCursor(&current)) return;
+    if (current.left != want.left || current.top != want.top ||
+        current.right != want.right || current.bottom != want.bottom) {
         ClipCursor(&want);
-        ++g_clip_repairs;
+        ++g_ClipRepairs;
     }
 }
 
 /* #138: in fullscreen there is no status strip, so say how to get the mouse back. */
-static void fs_release_hint(void)
+static void FullscreenReleaseHint(void)
 {
     g_PresentDdraw.HintText  = "Mouse captured -- press the Windows key to release it";
     g_PresentDdraw.HintUntil = GetTickCount() + 4000;
 }
-static void input_capture_set(HWND h, int on)
+static void InputCaptureSet(HWND window, int isOn)
 {
     /* RULE 1. Refuse rather than assert: this is reached from the menu, the click
        path and the UI tick, and "the guest never asked for the mouse" is a normal
        state, not an error. */
-    if (on && !CaptureAllowed()) return;
-    if (on == g_Captured) return;
-    InterlockedExchange(&g_Captured, on ? 1 : 0);
-    if (on && g_PresentDdraw.IsFullscreen) fs_release_hint();
-    if (on) {
+    if (isOn && !CaptureAllowed()) return;
+    if (isOn == g_Captured) return;
+    InterlockedExchange(&g_Captured, isOn ? 1 : 0);
+    if (isOn && g_PresentDdraw.IsFullscreen) FullscreenReleaseHint();
+    if (isOn) {
         /* ── ⛔⛔ THIS HOOK CAN JAM THE WHOLE MACHINE, SO IT IS OFF BY DEFAULT. ────────
              WH_KEYBOARD_LL is SYSTEM-WIDE: every keystroke on the box is routed through
              THIS process's UI thread. If that thread stalls -- and a VDM host has many
@@ -11433,24 +11433,24 @@ static void input_capture_set(HWND h, int on)
              ESCAPE ROUTE from a misbehaving guest, not a regression. The trade is not
              close: a stuck Alt+Tab costs a keystroke, a stuck hook costs the session.
            ⚠ ClipCursor stays, because it is released on capture exit, on WM_KILLFOCUS,
-             on WM_DESTROY (see host_panic_release) and by Windows on process death. The
+             on WM_DESTROY (see HostPanicRelease) and by Windows on process death. The
              hook is the one that outlives a wedge. */
-        if (!g_llkbd && g_llkbd_on)
-            g_llkbd = SetWindowsHookExA(WH_KEYBOARD_LL, ll_kbd_proc,
+        if (!g_LowLevelKeyboard && g_LowLevelKeyboardOn)
+            g_LowLevelKeyboard = SetWindowsHookExA(WH_KEYBOARD_LL, LowLevelKeyboardProcedure,
                                         GetModuleHandleA(NULL), 0);
-        capture_clip_apply(h);
+        CaptureClipApply(window);
     } else {
         ClipCursor(NULL);
-        if (g_llkbd) { UnhookWindowsHookEx(g_llkbd); g_llkbd = NULL; }
+        if (g_LowLevelKeyboard) { UnhookWindowsHookEx(g_LowLevelKeyboard); g_LowLevelKeyboard = NULL; }
         /* RULE 6: the UP that follows will not reach the guest, so report any held
            button as released NOW -- edges and all, so 06h sees it. */
         {   LONG prev = InterlockedExchange(&g_MouseButtons, 0);
             if (prev) MouseButtonEdges(prev, 0); }
     }
-    MenuCheck(h, IDM_INPUT_CAPTURE, on);
-    host_cursor_refresh(h);              /* apply the pointer change now, not on next move */
+    MenuCheck(window, IDM_INPUT_CAPTURE, isOn);
+    HostCursorRefresh(window);              /* apply the pointer change now, not on next move */
     /* The status strip says how to get back out. It is repainted from the UI tick,
-       which is where SendMessage to the control is safe -- input_capture_set is also
+       which is where SendMessage to the control is safe -- InputCaptureSet is also
        reached from the WM_KEYDOWN path, but the tick is the single writer. */
 }
 
@@ -11476,23 +11476,23 @@ static void input_capture_set(HWND h, int on)
      drops its guest to BELOW_NORMAL, and gets its own priority back when it is brought
      forward. A host running alone is never touched: its priority is exactly what it was,
      which is what the Skyroads timing guard and every rig measurement assume. */
-static HANDLE g_hexec;                        /* the exec (guest) thread               */
-static int    g_exec_prio_fg = THREAD_PRIORITY_NORMAL;
-static int    g_exec_prio_now = 0x7FFF;       /* what bg_prio_tick last set             */
-static int other_hosts_running(void)
+static HANDLE g_ExecThread;                        /* the exec (guest) thread               */
+static int    g_ExecPriorityForeground = THREAD_PRIORITY_NORMAL;
+static int    g_ExecPriorityNow = 0x7FFF;       /* what BackgroundPriorityTick last set             */
+static int OtherHostsRunning(void)
 {
-    int n; char nm[48];
-    for (n = 1; n <= 16; ++n) {
-        HANDLE m; char *q = LogPut(nm, "Global\\ntvdmex_host_single");
-        if (n == g_Instance) continue;
-        if (n > 1) { *q++ = '_'; q = LogDecimal(q, (unsigned)n); }
-        m = OpenMutexA(SYNCHRONIZE, FALSE, nm);
-        if (m) { CloseHandle(m); return 1; }
+    int instance; char name[48];
+    for (instance = 1; instance <= 16; ++instance) {
+        HANDLE mutex; char *cursor = LogPut(name, "Global\\ntvdmex_host_single");
+        if (instance == g_Instance) continue;
+        if (instance > 1) { *cursor++ = '_'; cursor = LogDecimal(cursor, (unsigned)instance); }
+        mutex = OpenMutexA(SYNCHRONIZE, FALSE, name);
+        if (mutex) { CloseHandle(mutex); return 1; }
     }
     return 0;
 }
 
-/* See other_hosts_running. From the UI timer, at most twice a second.
+/* See OtherHostsRunning. From the UI timer, at most twice a second.
    ► PRIORITY ALONE WAS MEASURED NOT TO BE ENOUGH (s81 rig, interleaved A/B): with QBasic
      idling in a background host at BELOW_NORMAL, the foreground Skyroads went from
      n8=0 max_ms=6 (alone, twice) to n8=0xb2/0xab with one 2.7 s stall -- and holding
@@ -11503,154 +11503,154 @@ static int other_hosts_running(void)
      max_ms 0x11/0xe/0x15. The idle class costs a background host nothing when the CPU
      is free (it runs at full speed); it only yields. A throttle would slow two DOS
      windows to a crawl the moment the user clicked on anything else. */
-static void bg_prio_tick(HWND h)
+static void BackgroundPriorityTick(HWND window)
 {
-    static DWORD s_last; static int s_logged;
+    static DWORD last; static int logged;
     DWORD now = GetTickCount();
-    HWND fg; int want, bg;
-    if (!g_hexec || now - s_last < 500) return;
-    s_last = now;
-    fg = GetForegroundWindow();
-    bg = !(fg && (fg == h || GetAncestor(fg, GA_ROOTOWNER) == h)) && other_hosts_running();
-    want = bg ? THREAD_PRIORITY_BELOW_NORMAL : g_exec_prio_fg;
-    if (want == g_exec_prio_now) return;
-    if (!SetThreadPriority(g_hexec, want)) return;
-    g_exec_prio_now = want;
+    HWND foreground; int want, isBackground;
+    if (!g_ExecThread || now - last < 500) return;
+    last = now;
+    foreground = GetForegroundWindow();
+    isBackground = !(foreground && (foreground == window || GetAncestor(foreground, GA_ROOTOWNER) == window)) && OtherHostsRunning();
+    want = isBackground ? THREAD_PRIORITY_BELOW_NORMAL : g_ExecPriorityForeground;
+    if (want == g_ExecPriorityNow) return;
+    if (!SetThreadPriority(g_ExecThread, want)) return;
+    g_ExecPriorityNow = want;
     /* ...and the whole PROCESS, because its other threads (courier and watchdog at
        HIGHEST, the throttle at ABOVE_NORMAL) otherwise share the foreground guest's
        core at its own level. In the idle class all of them sit below it; only the
        audio pump (TIME_CRITICAL, 15 in any class) keeps its place. */
-    SetPriorityClass(GetCurrentProcess(), bg ? IDLE_PRIORITY_CLASS : NORMAL_PRIORITY_CLASS);
-    if (s_logged++ < 32) {
-        char b[128], *q = LogPut(b, "PRIO: guest thread -> ");
-        q = LogPut(q, bg ? "idle class (background, another host running)"
+    SetPriorityClass(GetCurrentProcess(), isBackground ? IDLE_PRIORITY_CLASS : NORMAL_PRIORITY_CLASS);
+    if (logged++ < 32) {
+        char buffer[128], *cursor = LogPut(buffer, "PRIO: guest thread -> ");
+        cursor = LogPut(cursor, isBackground ? "idle class (background, another host running)"
                        : "its own priority");
-        q = LogPut(q, " (#211)\r\n");
-        LogAppend(LOG_PATH, b, q);
+        cursor = LogPut(cursor, " (#211)\r\n");
+        LogAppend(LOG_PATH, buffer, cursor);
     }
 }
 
-static int open_at_prompt(void)
+static int OpenAtPrompt(void)
 {
     return g_Running && !g_WoundDown && !g_WowLaunch && !g_DpmiDone
         && g_ExecDepth == 0 && g_TopIsShell && g_Machine && g_Machine->IsLineActive;
 }
 
 /* A DOS image: .COM or .BAT by name, or an MZ .EXE without an NE/PE header. */
-static int open_is_dos_image(const char *path)
+static int OpenIsDosImage(const char *path)
 {
-    int n = lstrlenA(path);
-    BYTE b[0x40]; DWORD got = 0, lf, got2 = 0; BYTE sig[2];
-    HANDLE f;
-    if (n >= 4 && (!lstrcmpiA(path + n - 4, ".COM") || !lstrcmpiA(path + n - 4, ".BAT"))) return 1;
-    f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    if (f == INVALID_HANDLE_VALUE) return 0;
-    if (!ReadFile(f, b, sizeof b, &got, NULL) || got < sizeof b || b[0] != 'M' || b[1] != 'Z') {
-        CloseHandle(f); return 0; }
-    lf = *(const DWORD *)(b + 0x3C);
-    if (lf >= 0x40 && SetFilePointer(f, (LONG)lf, NULL, FILE_BEGIN) == lf
-        && ReadFile(f, sig, 2, &got2, NULL) && got2 == 2
-        && ((sig[0] == 'N' && sig[1] == 'E') || (sig[0] == 'P' && sig[1] == 'E'))) {
-        CloseHandle(f); return 0; }
-    CloseHandle(f);
+    int length = lstrlenA(path);
+    BYTE header[0x40]; DWORD got = 0, newHeaderOffset, got2 = 0; BYTE signature[2];
+    HANDLE file;
+    if (length >= 4 && (!lstrcmpiA(path + length - 4, ".COM") || !lstrcmpiA(path + length - 4, ".BAT"))) return 1;
+    file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (file == INVALID_HANDLE_VALUE) return 0;
+    if (!ReadFile(file, header, sizeof header, &got, NULL) || got < sizeof header || header[0] != 'M' || header[1] != 'Z') {
+        CloseHandle(file); return 0; }
+    newHeaderOffset = *(const DWORD *)(header + 0x3C);
+    if (newHeaderOffset >= 0x40 && SetFilePointer(file, (LONG)newHeaderOffset, NULL, FILE_BEGIN) == newHeaderOffset
+        && ReadFile(file, signature, 2, &got2, NULL) && got2 == 2
+        && ((signature[0] == 'N' && signature[1] == 'E') || (signature[0] == 'P' && signature[1] == 'E'))) {
+        CloseHandle(file); return 0; }
+    CloseHandle(file);
     return 1;
 }
 
 /* Build "<backspaces>X:\r CD \dir\r NAME.EXT\r" from an 8.3 path; 0 if it cannot. */
-static int open_prompt_line(const char *sp, int rub, char *out, int cap)
+static int OpenPromptLine(const char *shortPath, int rub, char *out, int cap)
 {
-    int n = lstrlenA(sp), slash = -1, i, dl;
-    char *q = out, *e = out + cap - 1;
-    for (i = 0; i < n; ++i) if (sp[i] == '\\') slash = i;
-    if (n < 4 || sp[1] != ':' || sp[2] != '\\' || slash < 2) return 0;
-    dl = (slash == 2) ? 1 : slash - 2;                     /* "\" or "\DIR\SUB" */
-    if (dl > 63 || n - slash - 1 > 12 || rub + n + 16 > cap) return 0;
-    for (i = 0; i < rub; ++i) *q++ = 0x08;
-    *q++ = sp[0]; *q++ = ':'; *q++ = '\r';
-    q = LogPut(q, "CD ");
-    for (i = 2; i < (slash == 2 ? 3 : slash); ++i) *q++ = sp[i];
-    *q++ = '\r';
-    for (i = slash + 1; i < n; ++i) *q++ = sp[i];
-    *q++ = '\r';
-    if (q > e) return 0;
-    *q = 0;
+    int length = lstrlenA(shortPath), slash = -1, index, directoryLength;
+    char *cursor = out, *end = out + cap - 1;
+    for (index = 0; index < length; ++index) if (shortPath[index] == '\\') slash = index;
+    if (length < 4 || shortPath[1] != ':' || shortPath[2] != '\\' || slash < 2) return 0;
+    directoryLength = (slash == 2) ? 1 : slash - 2;                     /* "\" or "\DIR\SUB" */
+    if (directoryLength > 63 || length - slash - 1 > 12 || rub + length + 16 > cap) return 0;
+    for (index = 0; index < rub; ++index) *cursor++ = 0x08;
+    *cursor++ = shortPath[0]; *cursor++ = ':'; *cursor++ = '\r';
+    cursor = LogPut(cursor, "CD ");
+    for (index = 2; index < (slash == 2 ? 3 : slash); ++index) *cursor++ = shortPath[index];
+    *cursor++ = '\r';
+    for (index = slash + 1; index < length; ++index) *cursor++ = shortPath[index];
+    *cursor++ = '\r';
+    if (cursor > end) return 0;
+    *cursor = 0;
     return 1;
 }
 
-static void open_program(HWND h, const char *path)
+static void OpenProgram(HWND window, const char *path)
 {
-    char sp[MAX_PATH], dir[MAX_PATH], cmd[MAX_PATH + 4], line[512];
-    DWORD a = GetFileAttributesA(path), sl;
-    int i, cut = -1;
-    STARTUPINFOA si; PROCESS_INFORMATION pi;
-    if (a == INVALID_FILE_ATTRIBUTES || (a & FILE_ATTRIBUTE_DIRECTORY)) {
-        char m[MAX_PATH + 64], *q = LogPut(m, "This program could not be found:\n\n");
-        LogPut(q, path);
-        MessageBoxA(h, m, "NTVDMEX", MB_OK | MB_ICONEXCLAMATION);
+    char shortPath[MAX_PATH], directory[MAX_PATH], command[MAX_PATH + 4], line[512];
+    DWORD attributes = GetFileAttributesA(path), shortLength;
+    int index, cut = -1;
+    STARTUPINFOA startupInfo; PROCESS_INFORMATION processInfo;
+    if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+        char message[MAX_PATH + 64], *cursor = LogPut(message, "This program could not be found:\n\n");
+        LogPut(cursor, path);
+        MessageBoxA(window, message, "NTVDMEX", MB_OK | MB_ICONEXCLAMATION);
         return;
     }
     MruAdd(path);
-    if (g_Captured) input_capture_set(h, 0);
-    sl = GetShortPathNameA(path, sp, sizeof sp);
-    if (open_at_prompt() && sl && sl < sizeof sp && open_is_dos_image(path)
-        && open_prompt_line(sp, g_Machine->LineLength, line, (int)sizeof line)
+    if (g_Captured) InputCaptureSet(window, 0);
+    shortLength = GetShortPathNameA(path, shortPath, sizeof shortPath);
+    if (OpenAtPrompt() && shortLength && shortLength < sizeof shortPath && OpenIsDosImage(path)
+        && OpenPromptLine(shortPath, g_Machine->LineLength, line, (int)sizeof line)
         && TypeInPush(line)) {
-        char lb[MAX_PATH + 64], *lq = LogPut(lb, "OPEN: typed at the prompt [");
-        lq = LogPut(lq, sp); lq = LogPut(lq, "]\r\n");
-        LogAppend(LOG_PATH, lb, lq);
+        char lineBuffer[MAX_PATH + 64], *lineCursor = LogPut(lineBuffer, "OPEN: typed at the prompt [");
+        lineCursor = LogPut(lineCursor, shortPath); lineCursor = LogPut(lineCursor, "]\r\n");
+        LogAppend(LOG_PATH, lineBuffer, lineCursor);
         return;
     }
-    lstrcpynA(dir, path, sizeof dir);
-    for (i = 0; dir[i]; ++i) if (dir[i] == '\\') cut = i;
-    if (cut >= 0) dir[cut == 2 ? 3 : cut] = 0;
-    cmd[0] = '"'; lstrcpynA(cmd + 1, path, MAX_PATH); LogPut(cmd + lstrlenA(cmd), "\"");
-    for (i = 0; i < (int)sizeof si; ++i) ((char *)&si)[i] = 0;
-    si.cb = sizeof si;
-    if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL,
-                       cut >= 0 ? dir : NULL, &si, &pi)) {
-        char lb[MAX_PATH + 64], *lq = LogPut(lb, "OPEN: started in a new window [");
-        lq = LogPut(lq, path); lq = LogPut(lq, "]\r\n");
-        LogAppend(LOG_PATH, lb, lq);
-        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    lstrcpynA(directory, path, sizeof directory);
+    for (index = 0; directory[index]; ++index) if (directory[index] == '\\') cut = index;
+    if (cut >= 0) directory[cut == 2 ? 3 : cut] = 0;
+    command[0] = '"'; lstrcpynA(command + 1, path, MAX_PATH); LogPut(command + lstrlenA(command), "\"");
+    for (index = 0; index < (int)sizeof startupInfo; ++index) ((char *)&startupInfo)[index] = 0;
+    startupInfo.cb = sizeof startupInfo;
+    if (CreateProcessA(NULL, command, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL,
+                       cut >= 0 ? directory : NULL, &startupInfo, &processInfo)) {
+        char lineBuffer[MAX_PATH + 64], *lineCursor = LogPut(lineBuffer, "OPEN: started in a new window [");
+        lineCursor = LogPut(lineCursor, path); lineCursor = LogPut(lineCursor, "]\r\n");
+        LogAppend(LOG_PATH, lineBuffer, lineCursor);
+        CloseHandle(processInfo.hThread); CloseHandle(processInfo.hProcess);
     } else {
-        char m[MAX_PATH + 96], *q = LogPut(m, "NTVDMEX could not start:\n\n");
-        q = LogPut(q, path); q = LogPut(q, "\n\nWindows error 0x"); q = LogHex(q, GetLastError()); *q = 0;
-        MessageBoxA(h, m, "NTVDMEX", MB_OK | MB_ICONERROR);
+        char message[MAX_PATH + 96], *cursor = LogPut(message, "NTVDMEX could not start:\n\n");
+        cursor = LogPut(cursor, path); cursor = LogPut(cursor, "\n\nWindows error 0x"); cursor = LogHex(cursor, GetLastError()); *cursor = 0;
+        MessageBoxA(window, message, "NTVDMEX", MB_OK | MB_ICONERROR);
     }
 }
 
-static void open_program_dialog(HWND h)
+static void OpenProgramDialog(HWND window)
 {
-    char file[MAX_PATH]; OPENFILENAMEA of; int i;
+    char file[MAX_PATH]; OPENFILENAMEA openFile; int index;
     file[0] = 0;
-    for (i = 0; i < (int)sizeof of; ++i) ((char *)&of)[i] = 0;
-    of.lStructSize = sizeof of;
-    of.hwndOwner   = h;
-    of.lpstrFilter = "Programs (*.exe;*.com;*.bat)\0*.exe;*.com;*.bat\0All files (*.*)\0*.*\0";
-    of.lpstrFile   = file;
-    of.nMaxFile    = sizeof file;
-    of.lpstrTitle  = "Open Executable";
-    of.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
-    if (g_Captured) input_capture_set(h, 0);   /* the dialog needs the pointer */
-    if (GetOpenFileNameA(&of)) open_program(h, file);
+    for (index = 0; index < (int)sizeof openFile; ++index) ((char *)&openFile)[index] = 0;
+    openFile.lStructSize = sizeof openFile;
+    openFile.hwndOwner   = window;
+    openFile.lpstrFilter = "Programs (*.exe;*.com;*.bat)\0*.exe;*.com;*.bat\0All files (*.*)\0*.*\0";
+    openFile.lpstrFile   = file;
+    openFile.nMaxFile    = sizeof file;
+    openFile.lpstrTitle  = "Open Executable";
+    openFile.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+    if (g_Captured) InputCaptureSet(window, 0);   /* the dialog needs the pointer */
+    if (GetOpenFileNameA(&openFile)) OpenProgram(window, file);
 }
 
 /* Rebuilt every time the submenu opens, so it always shows the registry's list --
    including programs other NTVDMEX windows have run since this one started. */
-static void menu_recent_fill(void)
+static void MenuRecentFill(void)
 {
     char list[MRU_MAX][MAX_PATH];
-    int n, i;
+    int count, index;
     if (!g_RecentMenu) return;
     while (GetMenuItemCount(g_RecentMenu) > 0) DeleteMenu(g_RecentMenu, 0, MF_BYPOSITION);
-    n = MruLoad(list);
-    if (!n) { AppendMenuA(g_RecentMenu, MF_STRING | MF_GRAYED, IDM_RECENT_0, "(empty)"); return; }
-    for (i = 0; i < n; ++i) {
-        char t[2 * MAX_PATH + 8], *q = t; const char *s;
-        *q++ = '&'; *q++ = (char)('1' + i); *q++ = ' ';
-        for (s = list[i]; *s; ++s) { if (*s == '&') *q++ = '&'; *q++ = *s; }   /* a literal & */
-        *q = 0;
-        AppendMenuA(g_RecentMenu, MF_STRING, IDM_RECENT_0 + (UINT)i, t);
+    count = MruLoad(list);
+    if (!count) { AppendMenuA(g_RecentMenu, MF_STRING | MF_GRAYED, IDM_RECENT_0, "(empty)"); return; }
+    for (index = 0; index < count; ++index) {
+        char text[2 * MAX_PATH + 8], *cursor = text; const char *source;
+        *cursor++ = '&'; *cursor++ = (char)('1' + index); *cursor++ = ' ';
+        for (source = list[index]; *source; ++source) { if (*source == '&') *cursor++ = '&'; *cursor++ = *source; }   /* a literal & */
+        *cursor = 0;
+        AppendMenuA(g_RecentMenu, MF_STRING, IDM_RECENT_0 + (UINT)index, text);
     }
 }
 
@@ -11669,10 +11669,10 @@ static void menu_recent_fill(void)
    ⚠ ORDER: release the SYSTEM-WIDE things first, because they are what strands a
      human. The thread resume is a loop -- suspend counts NEST, and the throttle and
      the injector can each hold one. */
-static void host_panic_release(void)
+static void HostPanicRelease(void)
 {
     ClipCursor(NULL);
-    if (g_llkbd) { UnhookWindowsHookEx(g_llkbd); g_llkbd = NULL; }
+    if (g_LowLevelKeyboard) { UnhookWindowsHookEx(g_LowLevelKeyboard); g_LowLevelKeyboard = NULL; }
     InterlockedExchange(&g_Captured, 0);
     if (g_HostCpu) {
         int guard = 0;
@@ -11684,7 +11684,7 @@ static void host_panic_release(void)
 }
 
 /* ── ⛔⛔ THE LAST LINE OF DEFENCE: HAND THE MACHINE BACK WITHOUT BEING ASKED. ─────
-     host_panic_release covers the paths where we KNOW we are going away. This covers
+     HostPanicRelease covers the paths where we KNOW we are going away. This covers
      the one where we do not: the UI thread stops pumping while capture is held. That
      is the state that cost the user two hard resets -- the box runs, answers ping, and
      cannot be typed at or clicked out of, because the things capture holds are
@@ -11699,26 +11699,26 @@ static void host_panic_release(void)
      has ever taken (worst measured UI gap: 35 ms) and far shorter than a human's
      patience with a dead keyboard. */
 #define CAPWD_STALL_MS 3000u
-static DWORD WINAPI capture_watchdog_thread(LPVOID pv)
+static DWORD WINAPI CaptureWatchdogThread(LPVOID parameter)
 {
     LONG  last = -1;
-    DWORD last_ms = GetTickCount();
-    (void)pv;
+    DWORD lastMs = GetTickCount();
+    (void)parameter;
     while (g_Running) {
         Sleep(250);
-        if (!g_Captured) { last = g_ui_beat; last_ms = GetTickCount(); continue; }
-        if (g_ui_beat != last) { last = g_ui_beat; last_ms = GetTickCount(); continue; }
-        if (GetTickCount() - last_ms < CAPWD_STALL_MS) continue;
-        {   char wb[192], *wq = wb;
+        if (!g_Captured) { last = g_UiBeat; lastMs = GetTickCount(); continue; }
+        if (g_UiBeat != last) { last = g_UiBeat; lastMs = GetTickCount(); continue; }
+        if (GetTickCount() - lastMs < CAPWD_STALL_MS) continue;
+        {   char lineBuffer[192], *lineCursor = lineBuffer;
             ClipCursor(NULL);
-            if (g_llkbd) { UnhookWindowsHookEx(g_llkbd); g_llkbd = NULL; }
+            if (g_LowLevelKeyboard) { UnhookWindowsHookEx(g_LowLevelKeyboard); g_LowLevelKeyboard = NULL; }
             InterlockedExchange(&g_Captured, 0);
-            ++g_capwd_released;
-            wq = LogPut(wq, "CAPTURE-WATCHDOG: UI thread silent for ");
-            wq = LogHex(wq, GetTickCount() - last_ms);
-            wq = LogPut(wq, " ms while captured -- cursor clip and keyboard hook RELEASED\r\n");
-            LogAppend(LOG_PATH, wb, wq); SerialOut(wb, wq); }
-        last_ms = GetTickCount();
+            ++g_CaptureWatchdogReleased;
+            lineCursor = LogPut(lineCursor, "CAPTURE-WATCHDOG: UI thread silent for ");
+            lineCursor = LogHex(lineCursor, GetTickCount() - lastMs);
+            lineCursor = LogPut(lineCursor, " ms while captured -- cursor clip and keyboard hook RELEASED\r\n");
+            LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor); }
+        lastMs = GetTickCount();
     }
     return 0;
 }
@@ -11726,34 +11726,34 @@ static DWORD WINAPI capture_watchdog_thread(LPVOID pv)
 /* #218: the idle clock. A MOVE is a real change of screen position -- Windows also
    sends WM_MOUSEMOVE when nothing moved (a window appearing under a still pointer, a
    SetCursor), and counting those would keep a still pointer visible for ever. */
-static void cursor_idle_note_move(HWND h)
+static void CursorIdleNoteMove(HWND window)
 {
-    POINT pt;
-    if (!GetCursorPos(&pt)) return;
-    if (pt.x == g_CursorLastPoint.x && pt.y == g_CursorLastPoint.y) return;
-    g_CursorLastPoint = pt;
+    POINT point;
+    if (!GetCursorPos(&point)) return;
+    if (point.x == g_CursorLastPoint.x && point.y == g_CursorLastPoint.y) return;
+    g_CursorLastPoint = point;
     g_CursorMovedMs = GetTickCount();
-    if (g_CursorIdle) { g_CursorIdle = 0; host_cursor_refresh(h); }
+    if (g_CursorIdle) { g_CursorIdle = 0; HostCursorRefresh(window); }
 }
 /* From the UI tick: still for CURSOR_IDLE_MS over OUR video -> hide. Only for a program
    that does not use the mouse (one that does is governed by capture), and never while
    the pointer is over someone else's window or our status strip. */
-static void cursor_idle_tick(HWND h)
+static void CursorIdleTick(HWND window)
 {
-    POINT pt, c; HWND w;
+    POINT point, client; HWND under;
     if (g_CursorIdle || g_Captured || CaptureAllowed()) return;
     if (g_HostCursorMode != HOSTCUR_SMART) return;          /* s84: the idle rule is Smart's */
     if (!g_CursorMovedMs) { g_CursorMovedMs = GetTickCount(); return; }
     if (GetTickCount() - g_CursorMovedMs < CURSOR_IDLE_MS) return;
-    if (!GetCursorPos(&pt)) return;
-    if (pt.x != g_CursorLastPoint.x || pt.y != g_CursorLastPoint.y) {   /* moved elsewhere */
-        g_CursorLastPoint = pt; g_CursorMovedMs = GetTickCount(); return; }
-    w = WindowFromPoint(pt);
-    if (w != h) return;
-    c = pt; ScreenToClient(h, &c);
-    if (!pt_over_video(h, c.x, c.y)) return;
+    if (!GetCursorPos(&point)) return;
+    if (point.x != g_CursorLastPoint.x || point.y != g_CursorLastPoint.y) {   /* moved elsewhere */
+        g_CursorLastPoint = point; g_CursorMovedMs = GetTickCount(); return; }
+    under = WindowFromPoint(point);
+    if (under != window) return;
+    client = point; ScreenToClient(window, &client);
+    if (!IsPointOverVideo(window, client.x, client.y)) return;
     g_CursorIdle = 1;
-    host_cursor_refresh(h);
+    HostCursorRefresh(window);
 }
 
 /* ── ★★ FULLSCREEN IS A WINDOW STYLE, NOT JUST A DIRECTDRAW MODE. (s64) ──────────────
@@ -11780,50 +11780,50 @@ static void cursor_idle_tick(HWND h)
      it is about to own to already be the shape it will be. Coming out: DirectDraw
      first, then style, then placement, so the mode is back before we ask Windows to
      lay a window out on it. */
-static WINDOWPLACEMENT g_fs_place;      /* geometry to come back to                  */
-static LONG            g_fs_style;      /* the style we took off                     */
-static LONG            g_fs_exstyle;
-static int             g_fs_saved;
+static WINDOWPLACEMENT g_FullscreenPlace;      /* geometry to come back to                  */
+static LONG            g_FullscreenStyle;      /* the style we took off                     */
+static LONG            g_FullscreenExStyle;
+static int             g_FullscreenSaved;
 
 /* Undo everything the fullscreen entry changed. Separate because BOTH the normal exit
    and the "DirectDraw refused" path need it, and a chromeless window that is not
    fullscreen is a worse state than either end of the toggle. */
-static void host_fullscreen_toggle_restore(HWND h)
+static void HostFullscreenToggleRestore(HWND window)
 {
     if (g_Status) { ShowWindow(g_Status, SW_SHOW);
                     SendMessageA(g_Status, WM_SIZE, 0, 0); }   /* re-dock at the bottom */
-    if (g_FsMenu) { SetMenu(h, g_FsMenu); g_FsMenu = NULL; }
-    if (g_fs_style)   SetWindowLongA(h, GWL_STYLE, g_fs_style);
-    if (g_fs_exstyle) SetWindowLongA(h, GWL_EXSTYLE, g_fs_exstyle);
+    if (g_FsMenu) { SetMenu(window, g_FsMenu); g_FsMenu = NULL; }
+    if (g_FullscreenStyle)   SetWindowLongA(window, GWL_STYLE, g_FullscreenStyle);
+    if (g_FullscreenExStyle) SetWindowLongA(window, GWL_EXSTYLE, g_FullscreenExStyle);
     /* SWP_FRAMECHANGED before the placement: the frame has to exist again for
        SetWindowPlacement's rect to mean the same thing it did when we saved it. */
-    SetWindowPos(h, NULL, 0, 0, 0, 0,
+    SetWindowPos(window, NULL, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
                  | SWP_FRAMECHANGED);
-    if (g_fs_saved) { g_fs_place.length = sizeof g_fs_place;
-                      SetWindowPlacement(h, &g_fs_place); g_fs_saved = 0; }
-    g_fs_style = g_fs_exstyle = 0;
-    DrawMenuBar(h);
-    InvalidateRect(h, NULL, TRUE);
+    if (g_FullscreenSaved) { g_FullscreenPlace.length = sizeof g_FullscreenPlace;
+                      SetWindowPlacement(window, &g_FullscreenPlace); g_FullscreenSaved = 0; }
+    g_FullscreenStyle = g_FullscreenExStyle = 0;
+    DrawMenuBar(window);
+    InvalidateRect(window, NULL, TRUE);
 }
 
-static void host_fullscreen_toggle(HWND h);
-static void host_fullscreen_toggle(HWND h)
+static void HostFullscreenToggle(HWND window);
+static void HostFullscreenToggle(HWND window)
 {
     if (g_Safe.Fullscreen && !g_PresentDdraw.IsFullscreen) return;   /* s90 #132: SAFE MODE stays windowed */
     int want = !g_PresentDdraw.IsFullscreen;
     if (want) {
-        g_fs_place.length = sizeof g_fs_place;
-        g_fs_saved   = GetWindowPlacement(h, &g_fs_place) ? 1 : 0;
-        g_fs_style   = GetWindowLongA(h, GWL_STYLE);
-        g_fs_exstyle = GetWindowLongA(h, GWL_EXSTYLE);
-        g_FsMenu    = GetMenu(h);
-        SetMenu(h, NULL);
+        g_FullscreenPlace.length = sizeof g_FullscreenPlace;
+        g_FullscreenSaved   = GetWindowPlacement(window, &g_FullscreenPlace) ? 1 : 0;
+        g_FullscreenStyle   = GetWindowLongA(window, GWL_STYLE);
+        g_FullscreenExStyle = GetWindowLongA(window, GWL_EXSTYLE);
+        g_FsMenu    = GetMenu(window);
+        SetMenu(window, NULL);
         /* WS_VISIBLE stays -- everything else that draws or hit-tests chrome goes.
            WS_EX_ prefixes that put a border on (WINDOWEDGE / CLIENTEDGE / DLGMODALFRAME
            / STATICEDGE) go with it. */
-        SetWindowLongA(h, GWL_STYLE, (g_fs_style & ~(LONG)WS_OVERLAPPEDWINDOW) | WS_POPUP);
-        SetWindowLongA(h, GWL_EXSTYLE, g_fs_exstyle
+        SetWindowLongA(window, GWL_STYLE, (g_FullscreenStyle & ~(LONG)WS_OVERLAPPEDWINDOW) | WS_POPUP);
+        SetWindowLongA(window, GWL_EXSTYLE, g_FullscreenExStyle
                        & ~(LONG)(WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE
                                  | WS_EX_DLGMODALFRAME | WS_EX_STATICEDGE));
         /* The status strip is a CHILD WINDOW, so taking the menu and frame off does
@@ -11831,26 +11831,26 @@ static void host_fullscreen_toggle(HWND h)
            last docked to. PresentGdi already stops reserving room for it in
            fullscreen; this stops it being drawn. */
         if (g_Status) ShowWindow(g_Status, SW_HIDE);
-        SetWindowPos(h, HWND_TOP, 0, 0,
+        SetWindowPos(window, HWND_TOP, 0, 0,
                      GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
                      SWP_FRAMECHANGED | SWP_NOACTIVATE);
         if (PresentDdrawSetFullscreen(&g_PresentDdraw, 1) != 0) {
             /* No DirectDraw, or it refused. Do not leave the user in a chromeless
                window that is not fullscreen either -- put it all back. */
-            host_fullscreen_toggle_restore(h);
+            HostFullscreenToggleRestore(window);
             return;
         }
-        if (g_Captured) fs_release_hint();          /* #138 */
+        if (g_Captured) FullscreenReleaseHint();          /* #138 */
     } else {
         PresentDdrawSetFullscreen(&g_PresentDdraw, 0);
-        host_fullscreen_toggle_restore(h);
+        HostFullscreenToggleRestore(window);
     }
     /* The window just changed shape. If the guest holds the mouse, the ClipCursor
        rect is now describing the window we USED to be -- re-fence it. Alt+Enter is
        reachable while captured (see WM_SYSKEYDOWN), so this is a live path, not a
        theoretical one. */
-    capture_clip_apply(h);
-    host_cursor_refresh(h);
+    CaptureClipApply(window);
+    HostCursorRefresh(window);
     /* ── ★★ SAY WHAT ACTUALLY HAPPENED, IN DECIMAL, EVERY TOGGLE. ────────────────
          "None of them seem to actually achieve sharp pixels" (user, s64) could not be
          diagnosed from outside: a requested mode that the display REFUSES falls back
@@ -11866,32 +11866,32 @@ static void host_fullscreen_toggle(HWND h)
            got == native   -> the panel is getting its own resolution, which is the
                               other half of sharpness and the half we do not control. */
     if (g_PresentDdraw.IsFullscreen) {
-        char fb[256], *fq = fb;
-        RECT cr;
-        int cw = 0, chh = 0;
-        if (GetClientRect(h, &cr)) { cw = cr.right; chh = cr.bottom; }
-        fq = LogPut(fq, "FULLSCREEN: path=");
-        fq = LogPut(fq, (g_PresentDdraw.DirectDraw && g_PresentDdraw.Back) ? "ddraw-exclusive" : "gdi-borderless");
-        fq = LogPut(fq, " client=");           fq = LogDecimal(fq, (unsigned)cw);
-        fq = LogPut(fq, "x");                  fq = LogDecimal(fq, (unsigned)chh);
-        fq = LogPut(fq, " frame=");            fq = LogDecimal(fq, (unsigned)g_Video.Frame.Width);
-        fq = LogPut(fq, "x");                  fq = LogDecimal(fq, (unsigned)g_Video.Frame.Height);
+        char lineBuffer[256], *lineCursor = lineBuffer;
+        RECT clientRect;
+        int clientWidth = 0, clientHeight = 0;
+        if (GetClientRect(window, &clientRect)) { clientWidth = clientRect.right; clientHeight = clientRect.bottom; }
+        lineCursor = LogPut(lineCursor, "FULLSCREEN: path=");
+        lineCursor = LogPut(lineCursor, (g_PresentDdraw.DirectDraw && g_PresentDdraw.Back) ? "ddraw-exclusive" : "gdi-borderless");
+        lineCursor = LogPut(lineCursor, " client=");           lineCursor = LogDecimal(lineCursor, (unsigned)clientWidth);
+        lineCursor = LogPut(lineCursor, "x");                  lineCursor = LogDecimal(lineCursor, (unsigned)clientHeight);
+        lineCursor = LogPut(lineCursor, " frame=");            lineCursor = LogDecimal(lineCursor, (unsigned)g_Video.Frame.Width);
+        lineCursor = LogPut(lineCursor, "x");                  lineCursor = LogDecimal(lineCursor, (unsigned)g_Video.Frame.Height);
         if (g_Video.Frame.Width && g_Video.Frame.Height) {
-            int fx, fy, fw, fh;
-            PresentLayout(g_PresentDdraw.Aspect, g_PresentDdraw.Fit, 1, cw, chh, (int)g_Video.Frame.Width,
-                           (int)g_Video.Frame.Height, &fx, &fy, &fw, &fh);   /* #325: what is drawn */
-            fq = LogPut(fq, " dest=");  fq = LogDecimal(fq, (unsigned)fw);
-            fq = LogPut(fq, "x");       fq = LogDecimal(fq, (unsigned)fh);
-            fq = LogPut(fq, " at ");    fq = LogDecimal(fq, (unsigned)fx);
-            fq = LogPut(fq, ",");       fq = LogDecimal(fq, (unsigned)fy);
-            fq = LogPut(fq, " scale="); fq = LogDecimal(fq, (unsigned)(fw / (int)g_Video.Frame.Width));
-            fq = LogPut(fq, "x");       fq = LogDecimal(fq, (unsigned)(fh / (int)g_Video.Frame.Height));
-            fq = LogPut(fq, " rem=");   fq = LogDecimal(fq, (unsigned)(fw % (int)g_Video.Frame.Width));
-            fq = LogPut(fq, ",");       fq = LogDecimal(fq, (unsigned)(fh % (int)g_Video.Frame.Height));
+            int frameX, frameY, frameWidth, frameHeight;
+            PresentLayout(g_PresentDdraw.Aspect, g_PresentDdraw.Fit, 1, clientWidth, clientHeight, (int)g_Video.Frame.Width,
+                           (int)g_Video.Frame.Height, &frameX, &frameY, &frameWidth, &frameHeight);   /* #325: what is drawn */
+            lineCursor = LogPut(lineCursor, " dest=");  lineCursor = LogDecimal(lineCursor, (unsigned)frameWidth);
+            lineCursor = LogPut(lineCursor, "x");       lineCursor = LogDecimal(lineCursor, (unsigned)frameHeight);
+            lineCursor = LogPut(lineCursor, " at ");    lineCursor = LogDecimal(lineCursor, (unsigned)frameX);
+            lineCursor = LogPut(lineCursor, ",");       lineCursor = LogDecimal(lineCursor, (unsigned)frameY);
+            lineCursor = LogPut(lineCursor, " scale="); lineCursor = LogDecimal(lineCursor, (unsigned)(frameWidth / (int)g_Video.Frame.Width));
+            lineCursor = LogPut(lineCursor, "x");       lineCursor = LogDecimal(lineCursor, (unsigned)(frameHeight / (int)g_Video.Frame.Height));
+            lineCursor = LogPut(lineCursor, " rem=");   lineCursor = LogDecimal(lineCursor, (unsigned)(frameWidth % (int)g_Video.Frame.Width));
+            lineCursor = LogPut(lineCursor, ",");       lineCursor = LogDecimal(lineCursor, (unsigned)(frameHeight % (int)g_Video.Frame.Height));
         }
-        fq = LogPut(fq, " aspect=");  fq = LogDecimal(fq, (unsigned)g_PresentDdraw.Aspect);
-        fq = LogPut(fq, "\r\n");
-        LogAppend(LOG_PATH, fb, fq); SerialOut(fb, fq);
+        lineCursor = LogPut(lineCursor, " aspect=");  lineCursor = LogDecimal(lineCursor, (unsigned)g_PresentDdraw.Aspect);
+        lineCursor = LogPut(lineCursor, "\r\n");
+        LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
     }
 }
 
@@ -12159,7 +12159,7 @@ static void host_autofs_consider(HWND h, int graphics)
     if (mode == AUTOFS_NEVER) { g_autofs_done = 1; return; }
     if (mode == AUTOFS_GRAPHICS && !graphics) return;
     g_autofs_done = 1;
-    if (!g_PresentDdraw.IsFullscreen) host_fullscreen_toggle(h);
+    if (!g_PresentDdraw.IsFullscreen) HostFullscreenToggle(h);
 }
 static DOS_MACHINE   *g_dosm;          /* so the DOS version can be changed live */
 
@@ -12257,7 +12257,7 @@ static void settings_apply(HWND h, const NTVDMEX_SETTINGS *s, int live)
        pointer back now (we are on the UI thread when `live`), rather than leaving a
        capture that the policy can no longer release by clicking. */
     InterlockedExchange(&g_MouseSeamless, s->Values[SET_SEAMLESS] ? 1 : 0);
-    if (live && h && g_MouseSeamless && g_Captured) input_capture_set(h, 0);
+    if (live && h && g_MouseSeamless && g_Captured) InputCaptureSet(h, 0);
     /* The SbDma list is 1|3|5, and 5 is not an 8-bit channel on any real 8237 --
        on an SB16 it is the SIXTEEN-bit one. Selecting it therefore moves H and
        leaves D where it was, rather than pointing the 8-bit engine at a channel
@@ -13406,10 +13406,10 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         /* Liveness beat for the capture watchdog: proof the UI thread is still pumping
            messages. Taken FIRST, before any of the frame work below, so the beat means
            "this thread reached its timer", not "this thread finished a frame". */
-        InterlockedIncrement(&g_ui_beat);
-        cursor_idle_tick(h);                    /* #218: 5 s still over the video -> hide */
-        capture_clip_guard(h);                  /* captured -> the clip is still ours */
-        bg_prio_tick(h);                        /* #211 */
+        InterlockedIncrement(&g_UiBeat);
+        CursorIdleTick(h);                    /* #218: 5 s still over the video -> hide */
+        CaptureClipGuard(h);                  /* captured -> the clip is still ours */
+        BackgroundPriorityTick(h);                        /* #211 */
         /* ── THE 5 ms FRAME TIMER WAS NEVER ACTUALLY HONOURED, AND THE PACER REVEALED IT.
              SetTimer asks for VID_PRESENT_TICK_MS = 5, but XP's default timer granularity
              is 15.6 ms, so this body has ALWAYS run at ~64 Hz -- which is exactly the
@@ -13610,12 +13610,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              window polled its mouse, is exactly the behaviour that makes capture
              feel like something being done TO you. */
         if (InterlockedExchange(&g_MouseWantRelease, 0) && g_Captured)
-            input_capture_set(h, 0);      /* the program that owned it has exited */
+            InputCaptureSet(h, 0);      /* the program that owned it has exited */
         if (CaptureAllowed() && !g_MouseAutoCaptureDone && !g_Captured   /* #136: not seamless */
             && GetForegroundWindow() == h) {
             InterlockedExchange(&g_MouseAutoCaptureDone, 1);
             ++g_MouseAutoCaptureFired;
-            input_capture_set(h, 1);
+            InputCaptureSet(h, 1);
         }
         StatusUpdate();          /* program name / width / mode / capture, on the UI thread */
         /* Drive the PIT from REAL elapsed time so the BIOS tick (0040:006C) and
@@ -13836,7 +13836,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             POINT c;
             if (GetCursorPos(&c)) {
                 ScreenToClient(h, &c);
-                if (!host_cursor_visible_at(pt_over_video(h, c.x, c.y))) { SetCursor(NULL); return TRUE; }
+                if (!HostCursorVisibleAt(IsPointOverVideo(h, c.x, c.y))) { SetCursor(NULL); return TRUE; }
             }
         }
         /* Fullscreen has no frame, so the default would be whatever class cursor is
@@ -13926,8 +13926,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
        can change video mode whenever it likes, so this is synced at open time
        rather than at mode-set time. */
     case WM_INITMENUPOPUP:
-        if ((HMENU)wp == g_RecentMenu) menu_recent_fill();
-        menu_sync_modal(h, (HMENU)wp);
+        if ((HMENU)wp == g_RecentMenu) MenuRecentFill();
+        MenuSyncModal(h, (HMENU)wp);
         return 0;
     case WM_COMMAND:
         /* ── ★ EVERY MENU-BACKED SETTING, IN ONE PLACE. ──────────────────────────
@@ -13968,16 +13968,16 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (LOWORD(wp) >= IDM_RECENT_0 && LOWORD(wp) < IDM_RECENT_0 + MRU_MAX) {
             char list[MRU_MAX][MAX_PATH];
             int n = MruLoad(list), k = LOWORD(wp) - IDM_RECENT_0;
-            if (k < n) open_program(h, list[k]);
+            if (k < n) OpenProgram(h, list[k]);
             return 0;
         }
         switch (LOWORD(wp)) {
         case IDM_FILE_EXIT: DestroyWindow(h); return 0;
-        case IDM_FILE_OPEN: open_program_dialog(h); return 0;   /* #153 */
+        case IDM_FILE_OPEN: OpenProgramDialog(h); return 0;   /* #153 */
         /* #154: the text-mode Edit menu -- see g_MarkMode. */
         case IDM_EDIT_MARK:
             if (g_Video.ModeKind == VIDEO_KIND_TEXT) {
-                if (g_Captured) input_capture_set(h, 0);   /* the drag needs the pointer */
+                if (g_Captured) InputCaptureSet(h, 0);   /* the drag needs the pointer */
                 g_MarkMode = 1; g_MarkDrag = 0; g_SelectionOn = 0; SelectionPublish();
                 g_PresentDdraw.HintText  = "Mark: drag over the text, then Enter (or Edit > Copy). Esc cancels.";
                 g_PresentDdraw.HintUntil = GetTickCount() + 5000;
@@ -13991,14 +13991,14 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         case IDM_EDIT_COPY:       TextCopy(h, 0); SelectionClear(); return 0;
         case IDM_EDIT_COPYSCREEN: TextCopy(h, 1); return 0;
-        case IDM_EDIT_PASTE:      text_paste(h); return 0;
+        case IDM_EDIT_PASTE:      TextPaste(h); return 0;
         case IDM_FILE_CLOSEPROG:                       /* #152 -- see CloseProgramNow */
             if (!CloseProgramAvailable()) return 0;     /* greyed; belt and braces */
             if (g_WowLaunch) { DestroyWindow(h); return 0; }   /* Win16: the same as Exit */
-            if (g_Captured) input_capture_set(h, 0);   /* the shell does not own the mouse */
+            if (g_Captured) InputCaptureSet(h, 0);   /* the shell does not own the mouse */
             InterlockedExchange(&g_CloseRequest, 1);
             return 0;
-        case IDM_DISP_FULLSCREEN: host_fullscreen_toggle(h); return 0;
+        case IDM_DISP_FULLSCREEN: HostFullscreenToggle(h); return 0;
         /* ⚠ CONFIRM FIRST. Both of these change how EVERY DOS and Win16 program on
              the machine starts, and both outlive this process -- an accidental
              click on a menu is not consent for that. */
@@ -14034,7 +14034,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             DialogBoxParamA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(IDD_SETTINGS),
                             h, settings_dlgproc, 0);
             return 0;
-        case IDM_INPUT_CAPTURE: input_capture_set(h, !g_Captured); return 0;
+        case IDM_INPUT_CAPTURE: InputCaptureSet(h, !g_Captured); return 0;
         case IDM_CAP_SHOT: HostScreenshot(); return 0;
         case IDM_CAP_AUDIO: HostRecordToggle(); return 0;              /* #155 */
         case IDM_CAP_FOLDER: HostOpenCaptureFolder(); return 0;    /* #155 */
@@ -14076,7 +14076,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (lp == WM_RBUTTONUP || lp == WM_CONTEXTMENU) { TrayMenu(h); return 0; }
         /* s88: double-click no longer shows the hidden Win16 machine window. */
         return 0;
-    case WM_SYSKEYDOWN:                  /* F10 / Alt / Alt+key -- see input_capture_set */
+    case WM_SYSKEYDOWN:                  /* F10 / Alt / Alt+key -- see InputCaptureSet */
         /* ── WIN+F10 IS THE HOST KEY. ────────────────────────────────────────────────
              It has to be handled HERE and not in WM_KEYDOWN, because F10 is a SYSTEM key
              and only ever arrives as WM_SYSKEYDOWN -- binding it in WM_KEYDOWN is exactly
@@ -14085,7 +14085,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              a reserved XP shortcut. Scroll Lock is kept as an alternative below but must
              not be the only one -- plenty of current keyboards no longer have the key. */
         /* ⚠ Win+F10 IS GONE (s64). The release key is the WINDOWS KEY ALONE -- see
-             the capture rules above input_capture_set. A chord and a bare key for the
+             the capture rules above InputCaptureSet. A chord and a bare key for the
              same job means the chord's second half arrives at the guest after the bare
              key has already released, and the user asked for exactly one rule. */
         /* ── ★ ALT+ENTER IS A HOST KEY EVEN WHILE CAPTURED. (s64, user report) ────────
@@ -14099,7 +14099,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              the convention), and fullscreen is a HOST property of the window rather
              than anything the guest has an opinion about. F11 deliberately does NOT
              get the same treatment below -- that one is Doom's gamma key. */
-        if (wp == VK_RETURN) { host_fullscreen_toggle(h); return 0; }
+        if (wp == VK_RETURN) { HostFullscreenToggle(h); return 0; }
         /* Alt+F4 stays Windows' while uncaptured: there must always be a way to close
            the window that does not require knowing a chord. Captured, it is the guest's. */
         if (wp == VK_F4 && !g_Captured) break;
@@ -14114,27 +14114,27 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_SYSCHAR:
         return 0;                        /* swallow the menu-mnemonic beep */
     case WM_KILLFOCUS:
-        input_capture_set(h, 0);         /* never strand the user in a captured window */
+        InputCaptureSet(h, 0);         /* never strand the user in a captured window */
         host_release_modifiers();        /* ...nor the guest with Alt held forever     */
         return 0;
-    case WM_ENTERSIZEMOVE: g_in_sizemove = 1; break;
+    case WM_ENTERSIZEMOVE: g_InSizeMove = 1; break;
     case WM_EXITSIZEMOVE:                /* Windows' move/size loop leaves the cursor unclipped */
-        g_in_sizemove = 0;
-        capture_clip_apply(h);
+        g_InSizeMove = 0;
+        CaptureClipApply(h);
         break;
     case WM_ACTIVATE:
         /* ── RULE 5 (s69, user spec): GAINING FOCUS RE-CAPTURES, for a guest that asked
              for the mouse. The click-in-the-video path (below) already covers "click the
              window"; this adds "focus the window" -- alt-tab back, or the click that
              activated an unfocused window (WA_CLICKACTIVE), grabs the mouse straight
-             away. input_capture_set gates it on rule 1 (CaptureAllowed), so a guest
+             away. InputCaptureSet gates it on rule 1 (CaptureAllowed), so a guest
              that never touched INT 33h is unaffected. WM_KILLFOCUS is the matching
              release, so alt-tab away frees the pointer and alt-tab back takes it.
            ⚠ This composes with the Windows-key release ONLY because that release now
              suppresses the Start menu (see the WM_KEYDOWN handler): without suppression
              the menu would steal focus and returning to the window would re-capture
              instantly, making the release feel dead. */
-        if (LOWORD(wp) != WA_INACTIVE) input_capture_set(h, 1);
+        if (LOWORD(wp) != WA_INACTIVE) InputCaptureSet(h, 1);
         host_pause_set(LOWORD(wp) == WA_INACTIVE);   /* #219 */
         break;                           /* let DefWindowProc do the focus bookkeeping */
     case WM_KEYDOWN:
@@ -14163,15 +14163,15 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            ⚠ It is handled on the DOWN. Windows opens the Start menu on the UP, and by
              then capture is already released and ClipCursor already cleared -- so even
              in the case we cannot suppress (the low-level hook is off by default, see
-             input_capture_set) the user lands on a desktop with their mouse back,
+             InputCaptureSet) the user lands on a desktop with their mouse back,
              which is what they were asking for by pressing it. */
         if (wp == VK_LWIN || wp == VK_RWIN) {
-            if (g_Captured) input_capture_set(h, 0);
+            if (g_Captured) InputCaptureSet(h, 0);
             /* ── ★ SUPPRESS THE START MENU WITHOUT THE SYSTEM-WIDE HOOK. (s69, user ask) ──
                  The Windows equivalent of e.preventDefault() for a keystroke is a
-                 WH_KEYBOARD_LL hook returning nonzero -- and we HAVE that (ll_kbd_proc,
+                 WH_KEYBOARD_LL hook returning nonzero -- and we HAVE that (LowLevelKeyboardProcedure,
                  llkbd.txt) -- but it is off by default because that hook is system-wide
-                 and jammed the rig twice (see input_capture_set). This is the safe
+                 and jammed the rig twice (see InputCaptureSet). This is the safe
                  equivalent: Explorer opens the Start menu on the WIN key-UP only if no
                  other key was pressed while WIN was held, so -- WIN still down here --
                  inject ONE benign keystroke. Explorer then sees WIN+Ctrl, not a lone
@@ -14196,7 +14196,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              to the guest -- F11 is Doom's gamma, Ctrl+F5/F8 collide with its fire key.
              Exclusivity that still eats keys is not exclusivity. */
         if (g_Captured) { key_push_make(lp); break; }
-        if (wp == VK_F11) { host_fullscreen_toggle(h); return 0; }
+        if (wp == VK_F11) { HostFullscreenToggle(h); return 0; }
         if (wp == VK_F5 && (GetKeyState(VK_CONTROL) & 0x8000)) { HostScreenshot(); return 0; }
         /* ⚠ Ctrl+F8 (host cursor on/off) WAS REMOVED WITH ITS MENU ITEM. Its
              argument was "fullscreen is when you most want it and there is no menu
@@ -14253,7 +14253,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 POINT sp;
                 if (!GetCursorPos(&sp) || WindowFromPoint(sp) != h) break;
                 ScreenToClient(h, &sp);
-                if (!pt_over_video(h, sp.x, sp.y)) break;
+                if (!IsPointOverVideo(h, sp.x, sp.y)) break;
             }
             InterlockedExchangeAdd(&g_MouseDx, (LONG)ri.data.mouse.lLastX);
             InterlockedExchangeAdd(&g_MouseDy, (LONG)ri.data.mouse.lLastY);
@@ -14286,7 +14286,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_RBUTTONDOWN: case WM_RBUTTONUP:
     case WM_MBUTTONDOWN: case WM_MBUTTONUP: {
         RECT rc; int cw, ch, fw, fh; LONG b = 0;
-        if (msg == WM_MOUSEMOVE) cursor_idle_note_move(h);          /* #218 */
+        if (msg == WM_MOUSEMOVE) CursorIdleNoteMove(h);          /* #218 */
         /* #154: Mark owns the mouse until the selection is copied or cancelled. The
            guest sees none of it -- a drag that also clicked in the program would do two
            things at once. A right click cancels, as in the console. */
@@ -14321,11 +14321,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              weapon / picks the menu item under the pointer. The matching UP is
              harmless and is deliberately left alone: swallowing an UP without its
              DOWN is how a guest ends up believing a button is held forever.
-           ⚠ And gated on rule 1 via input_capture_set: for a guest that never touched
+           ⚠ And gated on rule 1 via InputCaptureSet: for a guest that never touched
              INT 33h this is an ordinary click on an ordinary window. */
         if (msg == WM_LBUTTONDOWN && !g_Captured && CaptureAllowed()
-            && pt_over_video(h, (short)LOWORD(lp), (short)HIWORD(lp))) {
-            input_capture_set(h, 1);
+            && IsPointOverVideo(h, (short)LOWORD(lp), (short)HIWORD(lp))) {
+            InputCaptureSet(h, 1);
             return 0;
         }
         /* RULE 6: a mouse-using guest that is released sees no position and no
@@ -14366,8 +14366,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         host_pause_set(0);               /* #219: a paused CPU thread must be let go */
         /* GIVE THE MACHINE BACK FIRST -- before g_Running, before the audio unwind,
            before anything that can block. Everything below this line is about our
-           process; this line is about the user's computer. See host_panic_release. */
-        host_panic_release();
+           process; this line is about the user's computer. See HostPanicRelease. */
+        HostPanicRelease();
         InterlockedExchange(&g_Running, 0);
         /* ── ★★ THE NUMBERS FOR A RUN A HUMAN ACTUALLY PLAYED. ───────────────────
              The full STAGE2 report is written by the EXEC thread when the guest
@@ -14401,7 +14401,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 cq = LogPut(cq, kb2 ? "," : ""); cq = LogHex(cq, g_KeyDeliveryHistogram[kb2]); } }
             cq = LogPut(cq, " keydel_max="); cq = LogHex(cq, g_KeyDeliveryMaximumMs);
             cq = LogPut(cq, " cour_inj=");   cq = LogHex(cq, g_CourierInjected);
-            cq = LogPut(cq, " capwd=");      cq = LogHex(cq, g_capwd_released);
+            cq = LogPut(cq, " capwd=");      cq = LogHex(cq, g_CaptureWatchdogReleased);
             cq = LogPut(cq, " pit_skip=");   cq = LogHex(cq, g_PitDeliverSkipped);
             /* ── ★★★ NAME THE LOCK HOLDER. (s61, and it is the whole question now.) ──
                  The arm-4 close said 86% of the stalls are GENERATION -- the 8254 never
@@ -14438,7 +14438,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             cq = LogPut(cq, " vbl_edges=");   cq = LogHex(cq, g_Video.VblEdges);
             cq = LogPut(cq, " vbl_owed=");    cq = LogHex(cq, g_Video.Port3DaVblOwed);
             cq = LogPut(cq, " p3da=");        cq = LogHex(cq, g_Video.Port3DaReads);
-            cq = LogPut(cq, " clip_repairs=");cq = LogHex(cq, g_clip_repairs);
+            cq = LogPut(cq, " clip_repairs=");cq = LogHex(cq, g_ClipRepairs);
             cq = LogPut(cq, " irq0tl=");
             for (t = 0; t < IRQ0TL_SECS; ++t) if (g_Irq0TimeLast[t]) last = t;
             for (t = 0; t <= last && t < IRQ0TL_SECS; ++t) { cq = LogPut(cq, t ? "," : ""); cq = LogHex(cq, g_Irq0TimeLast[t]); }
@@ -14623,7 +14623,7 @@ static DWORD WINAPI ui_thread(LPVOID arg)
            WinMain runs on the MAIN thread, which is the GUEST exec thread. Closing
            the window runs WM_DESTROY *on this UI thread* -- it sets g_Running=0 and
            PostQuitMessage, so this message loop returns and all the machine-release
-           cleanup (host_panic_release, audio, OPL, tray) has already run. But the
+           cleanup (HostPanicRelease, audio, OPL, tray) has already run. But the
            main thread only notices g_Running=0 when it RETURNS from VdmRunGuest; a guest
            spinning in a tight loop that traps nothing sits inside VdmStartExecution
            forever, so WinMain never returns, ExitProcess is never reached, and the
@@ -29766,7 +29766,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          clip, exclusive-fullscreen DirectDraw, and the guest's suspend count. The
          user hit it directly -- "I closed your Skyroads run, and reran it. That
          basically crashed Windows" -- because closing does not necessarily finish
-         (a suspended guest thread keeps the process alive; see host_panic_release),
+         (a suspended guest thread keeps the process alive; see HostPanicRelease),
          so the rerun landed ON TOP of a zombie that still owned the keyboard.
        ⚠ Bail SILENTLY and with success. This is launched by the IFEO Debugger key
          on every 16-bit start, so a message box here would be a modal dialog on a
@@ -30212,9 +30212,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       g_ExecPriority = prio;
       if (prio == 1) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
       else if (prio >= 2) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
-      g_exec_prio_fg = GetThreadPriority(GetCurrentThread());
+      g_ExecPriorityForeground = GetThreadPriority(GetCurrentThread());
       DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
-                      &g_hexec, 0, FALSE, DUPLICATE_SAME_ACCESS);   /* #211: bg_prio_tick */
+                      &g_ExecThread, 0, FALSE, DUPLICATE_SAME_ACCESS);   /* #211: BackgroundPriorityTick */
     }
     hostprof_start();                                 /* #183: cfg\hostprof.flag */
     if (g_QiBits) {
@@ -32272,13 +32272,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
           ReadFile(hp4, c, sizeof c, &rd, NULL); CloseHandle(hp4);
           if (rd && (c[0] == '0' || c[0] == '1')) g_PitPaceInject = c[0] - '0';
       } }
-    /* llkbd.txt = 1 re-enables the system-wide keyboard hook. See input_capture_set. */
+    /* llkbd.txt = 1 re-enables the system-wide keyboard hook. See InputCaptureSet. */
     { HANDLE hk = CreateFileA(LLKBD_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                               NULL, OPEN_EXISTING, 0, NULL);
       if (hk != INVALID_HANDLE_VALUE) {
           char c[8]; DWORD rd = 0;
           ReadFile(hk, c, sizeof c, &rd, NULL); CloseHandle(hk);
-          if (rd && (c[0] == '0' || c[0] == '1')) g_llkbd_on = c[0] - '0';
+          if (rd && (c[0] == '0' || c[0] == '1')) g_LowLevelKeyboardOn = c[0] - '0';
       } }
     /* courier.txt -- the tick courier (see TickCourierThread). 0 = as shipped. */
     { HANDLE hc = CreateFileA(COURIER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -32429,7 +32429,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     }
     /* The capture watchdog runs for every guest, throttled or not, headless or not:
        it is the only thing standing between a wedge and a hard reset. */
-    { HANDLE hcw = CreateThread(NULL, 0, capture_watchdog_thread, NULL, 0, NULL);
+    { HANDLE hcw = CreateThread(NULL, 0, CaptureWatchdogThread, NULL, 0, NULL);
       if (hcw) CloseHandle(hcw); }
     /* ── ★ THE TICK COURIER. Auto-reset: one signal wakes exactly one pass, and a
          signal arriving while it is already awake is not lost -- the pass re-checks
@@ -36197,7 +36197,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                was ever written. That was "QBasic cannot build EXEs" from a batch file.
                The guest is gone (the exec loop is out), so the system-wide things the
                guard protects are released here too; the child takes them over. */
-            host_panic_release();
+            HostPanicRelease();
             if (g_OnceMutex) { ReleaseMutex(g_OnceMutex); CloseHandle(g_OnceMutex); g_OnceMutex = NULL; }
             /* ── AND ITS REDIRECT. (s73) The command's StdIn/Out/Err came back from the
                  report call as handles CSRSS placed in THIS process (the launcher's
@@ -37887,7 +37887,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          the guest we were asked to run has TERMINATED -- for a game, quitting it
          exits the program and lands exactly here -- so the run is over and there is
          nothing to interact with. Closing through WM_CLOSE -> WM_DESTROY runs
-         host_panic_release(), which is also THE FIX FOR THE CAPTURE-EXIT TRAP: a
+         HostPanicRelease(), which is also THE FIX FOR THE CAPTURE-EXIT TRAP: a
          guest that exited while it held the mouse used to leave the pointer clipped
          to a dead window with no way to escape but the keyboard chord. Same path for
          DOS and Win16 now; the s63 ui_thread TerminateProcess then guarantees the
