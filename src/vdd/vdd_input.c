@@ -488,7 +488,7 @@ static BYTE InputKeyboardChar(PCINPUT_STATE state, BYTE code, INT shift)
 
 static INT InputIsLetterOn(PCINPUT_STATE state, BYTE code)
 {
-    BYTE character = InputKeyboardChar(state, code, 0);
+    BYTE character = InputKeyboardChar(state, code, INPUT_KEY_UNSHIFTED);
     return character >= 'a' && character <= 'z';
 }
 
@@ -732,7 +732,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
     } else if (shiftFlags & INPUT_SHIFT_CTRL) {
         key = g_InputScanCodeTable[code][INPUT_COLUMN_CTRL];
         if (state->Layout && InputIsLetterOn(state, code))           /* #136: a moved letter */
-            key = (WORD)((code << BYTE_SHIFT) | (InputKeyboardChar(state, code, 0) & INPUT_CTRL_CHARACTER_MASK));
+            key = (WORD)((code << BYTE_SHIFT) | (InputKeyboardChar(state, code, INPUT_KEY_UNSHIFTED) & INPUT_CTRL_CHARACTER_MASK));
     } else {
         INT shifted = (shiftFlags & (INPUT_SHIFT_LEFT_SHIFT | INPUT_SHIFT_RIGHT_SHIFT)) != 0;
         /* CapsLock inverts Shift for LETTERS only; NumLock inverts it for the KEYPAD

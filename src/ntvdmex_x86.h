@@ -335,6 +335,8 @@
    IRQ 8-15 -> 70h-77h. */
 #define PIC_LINES_PER_CHIP          8
 #define PIC_LINES                   16          /* master and slave                    */
+#define PIC_IRQ_TIMER               0           /* IRQ 0: the PIT                      */
+#define PIC_IRQ_KEYBOARD            1           /* IRQ 1                               */
 #define PIC_MASTER_VECTOR_BASE      0x08
 #define PIC_SLAVE_VECTOR_BASE       0x70
 #define VECTOR_IRQ0                 0x08

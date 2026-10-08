@@ -66,6 +66,8 @@
 #define VIDEO_PLANES                  4
 #define VIDEO_SCROLL_DOWN             0       /* VideoGraphicsScroll's direction       */
 #define VIDEO_SCROLL_UP               1
+#define VIDEO_LATCH_NOW               0       /* VideoLatch: bring the schedule up to now ... */
+#define VIDEO_LATCH_AT_FRAME          1       /* ... or latch as displayed at a frame         */
 #define VIDEO_DAC_ENTRIES             256     /* the DAC's colour registers          */
 #define VIDEO_DAC_COMPONENTS          3       /* red, green, blue                    */
 #define VIDEO_PALETTE_REGISTER_FILE   17      /* the 16 EGA palette registers + border */

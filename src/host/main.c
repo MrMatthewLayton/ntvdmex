@@ -2799,7 +2799,7 @@ static VOID ComTransmitSink(PVOID context, INT port, BYTE byteValue)
     { DWORD bytesWritten = 0; WriteFile(g_ComSpool[port], &byteValue, 1, &bytesWritten, NULL);
       FlushFileBuffers(g_ComSpool[port]); }
 }
-
+enum { SETTINGS_APPLY_STARTUP = 0, SETTINGS_APPLY_LIVE = 1 };   /* SettingsApply: before anything is built, or on a running VM */
 /* ── THE EQUIPMENT WORD IS A CLAIM ABOUT HARDWARE, SO COMPUTE IT FROM THE
      HARDWARE. (GH #9, session 56) ──────────────────────────────────────────
      Two arms answer INT 11h -- one in PM, one in V86 -- and both used the bare
@@ -3496,7 +3496,7 @@ static INT Irq0CanDeliver(VOID)
 {
     DWORD now = GetTickCount() | 1, gap = now - g_Irq0LastAttempt;
     g_Irq0LastAttempt = now;
-    if (VddPicCanDeliver(&g_Pic, 0)) return 1;
+    if (VddPicCanDeliver(&g_Pic, PIC_IRQ_TIMER)) return 1;
     if (g_Pic.Master.Isr & 1) {
         DWORD since = g_Irq0IsrSince;
         /* ── A HOST STALL IS NOT A GUEST THAT FORGOT TO EOI. s70: a headless run with
@@ -3508,7 +3508,7 @@ static INT Irq0CanDeliver(VOID)
              gap longer than the timeout's own resolution, restart the clock instead. */
         if (since && gap > IRQ0_ISR_GAP_RESET_MS) { g_Irq0IsrSince = now; since = now; }
         if (since && (now - since) > IRQ0_ISR_TIMEOUT_MS) {
-            VddPicEndOfInterrupt(&g_Pic, 0);
+            VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_TIMER);
             g_Irq0IsrSince = 0;
             if (++g_Irq0IsrTimeouts >= IRQ0_ISR_TIMEOUTS_MAX && !g_Irq0AutoEoi) {
                 static const CHAR message[] = "IRQ0-ISR: in service past the timeout 3x -- this guest "
@@ -3516,7 +3516,7 @@ static INT Irq0CanDeliver(VOID)
                 g_Irq0AutoEoi = 1;
                 LogAppend(LOG_PATH, message, message + sizeof(message) - 1);
             }
-            return VddPicCanDeliver(&g_Pic, 0);
+            return VddPicCanDeliver(&g_Pic, PIC_IRQ_TIMER);
         }
         g_Irq0IsrBlocks++;
         /* ── NAME THE LONG ONE. The s70 by-hand stall began with a single in-service
@@ -3548,7 +3548,7 @@ static INT Irq0CanDeliver(VOID)
    it EOIs, as the BIOS handler does.) */
 static VOID Irq0Ack(VOID)
 {
-    if (g_Irq0AutoEoi || AsyncVectorIsOurStub(0)) {
+    if (g_Irq0AutoEoi || AsyncVectorIsOurStub(PIC_IRQ_TIMER)) {
         VddPicAcknowledgeAutoEoi(&g_Pic, 0);
         g_Irq0IsrAuto++;
     } else {
@@ -3578,8 +3578,8 @@ static INT Irq0PmClaim(VOID)
 }
 static VOID Irq0PmUnclaim(VOID)
 {
-    if (g_Irq0AutoEoi || AsyncVectorIsOurStub(0)) { g_Irq0IsrAuto--; return; }
-    VddPicEndOfInterrupt(&g_Pic, 0);
+    if (g_Irq0AutoEoi || AsyncVectorIsOurStub(PIC_IRQ_TIMER)) { g_Irq0IsrAuto--; return; }
+    VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_TIMER);
     g_Irq0IsrSince = 0;
     g_Irq0IsrStrict--;
 }
@@ -4437,7 +4437,7 @@ static VOID HostIrqSink(PVOID context, BYTE irq)
              has installed a protected-mode INT 09h handler, asynchronous delivery is not
              a preference, it is the mechanism. */
         { INT gate = (g_QiKeysAsync || (g_DpmiPm && g_PmInt[VECTOR_KEYBOARD].Client));
-          INT isOk   = gate ? AsyncInjectIrq(1) : 0;
+          INT isOk   = gate ? AsyncInjectIrq(PIC_IRQ_KEYBOARD) : 0;
           if (isOk) InterlockedDecrement(&g_Irq1Pending);
           /* ► EVERY KEYBOARD INTERRUPT, ACCOUNTED FOR, FOR THE FIRST FEW DOZEN. A key
                press is a rare, deliberate event -- there is no firehose to guard against
@@ -4990,7 +4990,7 @@ static PSTR InstallResidentText(PSTR cursor, INT count)
                 "no longer print this.\r\n");
     return cursor;
 }
-
+enum { INSTALL_UNFORCED = 0, INSTALL_FORCED = 1 };   /* InstallPerform: /force replaces another program's Debugger value */
 /* ── DO IT, AND REPORT WHAT ACTUALLY HAPPENED. ───────────────────────────────────
      `want` is 1 to install, 0 to uninstall. The message is composed here rather
      than by the caller so the same words are used from the command line and from
@@ -6333,7 +6333,7 @@ static DWORD WINAPI TickCourierThread(LPVOID parameter)
                 SwitchToThread();
             } else {
                 ++g_CourierTries;
-                if (AsyncInjectIrq(0)) {
+                if (AsyncInjectIrq(PIC_IRQ_TIMER)) {
                     InterlockedDecrement(&g_Irq0Pending);
                     PmTickTake();
                     g_Irq0NoteCs = IRQ0_NOTE_ASYNC_CS; g_Irq0NoteIp = 0;   /* delivered async */
@@ -9145,7 +9145,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
            than the previous one. */
         volatile BYTE *guest = I33GuestPointer(tib, source, (WORD)VDM_REG16(tib, VTIB_ES),
                                          MouseI33Offset(tib, source, VDM_REG(tib, VTIB_EDX)),
-                                         I33_GC_DEFINITION_SIZE, 0);
+                                         I33_GC_DEFINITION_SIZE, X86_ACCESS_READ);
         InterlockedExchange(&g_MouseHotX, (LONG)(SHORT)VDM_REG16(tib, VTIB_EBX));
         InterlockedExchange(&g_MouseHotY, (LONG)(SHORT)VDM_REG16(tib, VTIB_ECX));
         ++g_MouseShapeSets;
@@ -9395,7 +9395,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         else if (bx >= 1 && bx <= I33_ACC_N) {
             volatile BYTE *guest = I33GuestPointer(tib, source, (WORD)VDM_REG16(tib, VTIB_ES),
                                              MouseI33Offset(tib, source, VDM_REG(tib, VTIB_ESI)),
-                                             I33_ACC_LEN, 0);
+                                             I33_ACC_LEN, X86_ACCESS_READ);
             UINT index;
             if (!guest) { ++g_MouseStateBadPointer; VDM_SET16(tib, VTIB_EAX, I33_ACCELERATION_ERROR); break; }
             for (index = 0; index < I33_ACC_LEN; ++index) g_MouseAcceleration[index] = guest[index];
@@ -9462,7 +9462,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         ++g_MouseAccelerationCalls; I33AccelerationReady();
         if (cap > I33_SET_LEN) cap = I33_SET_LEN;
         if (cap) guest = I33GuestPointer(tib, source, (WORD)VDM_REG16(tib, VTIB_ES),
-                                   MouseI33Offset(tib, source, VDM_REG(tib, VTIB_EDX)), cap, 1);
+                                   MouseI33Offset(tib, source, VDM_REG(tib, VTIB_EDX)), cap, X86_ACCESS_WRITE);
         if (!guest) { if (cap) ++g_MouseStateBadPointer; cap = 0; }
         settings.Type = I33_MOUSE_TYPE_PS2; settings.Language = I33_LANGUAGE_ENGLISH;
         settings.HorizontalSpeed = (BYTE)g_MouseSpeedX; settings.VerticalSpeed = (BYTE)g_MouseSpeedY;
@@ -11093,7 +11093,7 @@ static INT ClientToCell(INT clientX, INT clientY, INT *column, INT *row)
     if (*row >= g_Video.Rows) *row = g_Video.Rows - 1;
     return 1;
 }
-
+enum { TEXT_COPY_SELECTION = 0, TEXT_COPY_SCREEN = 1 };   /* TextCopy: the marked region, or the whole screen */
 static VOID TextCopy(HWND window, INT all)
 {
     INT column0, column1, row0, row1, row, column, length = 0;
@@ -12600,7 +12600,7 @@ static VOID SettingsApplyTextFont(VOID)
 
 static VOID SettingsApplyLive(HWND window)
 {
-    SettingsApply(window, &g_Settings, 1);
+    SettingsApply(window, &g_Settings, SETTINGS_APPLY_LIVE);
     SettingsApplyTextFont();
     SettingsApplyPresent(&g_PresentDdraw, &g_Settings);
     /* ⚠ THE ASPECT CHANGES THE BASE SIZE, so it has to re-size too -- picking 16:9
@@ -12674,7 +12674,7 @@ static VOID SettingsFillCombos(VOID)
             if ((control = SettingsControl(narrow[index])) != NULL) SendMessageA(control, CB_SETDROPPEDWIDTH, SETTINGS_COMBO_DROPPED_WIDTH, 0);
     }
 }
-
+enum { SETTINGS_SHELL_XP = 0, SETTINGS_SHELL_OWN = 1 };   /* the shell radios: XP's own COMMAND.COM, or a chosen one */
 /* #203: the DOS prompt's two radios, and the path box + Browse only live under "Another". */
 static VOID SettingsShellRadios(INT own)
 {
@@ -13064,8 +13064,8 @@ static INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM 
     }
     if (message == WM_COMMAND && HIWORD(wParam) == BN_CLICKED) {   /* #203, the General page */
         switch (LOWORD(wParam)) {
-        case IDC_S_SHELL_XP:     SettingsShellRadios(0); return TRUE;
-        case IDC_S_SHELL_OWN:    SettingsShellRadios(1); return TRUE;
+        case IDC_S_SHELL_XP:     SettingsShellRadios(SETTINGS_SHELL_XP); return TRUE;
+        case IDC_S_SHELL_OWN:    SettingsShellRadios(SETTINGS_SHELL_OWN); return TRUE;
         case IDC_S_SHELL_BROWSE: SettingsShellBrowse(dialog); return TRUE;
         /* s84: the Drives tab's radio pairs and the three new Browse buttons. */
         case IDC_S_FLOPPY_PHYS:  SettingsFloppyRadios(SETTINGS_DRIVE_PHYSICAL); return TRUE;
@@ -13989,8 +13989,8 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 g_SelectionOn = 1; g_MarkMode = 1; g_MarkDrag = 0; SelectionPublish();
             }
             return 0;
-        case IDM_EDIT_COPY:       TextCopy(window, 0); SelectionClear(); return 0;
-        case IDM_EDIT_COPYSCREEN: TextCopy(window, 1); return 0;
+        case IDM_EDIT_COPY:       TextCopy(window, TEXT_COPY_SELECTION); SelectionClear(); return 0;
+        case IDM_EDIT_COPYSCREEN: TextCopy(window, TEXT_COPY_SCREEN); return 0;
         case IDM_EDIT_PASTE:      TextPaste(window); return 0;
         case IDM_FILE_CLOSEPROG:                       /* #152 -- see CloseProgramNow */
             if (!CloseProgramAvailable()) return 0;     /* greyed; belt and braces */
@@ -14017,7 +14017,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                     "NTVDMEX", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
                 return 0;
             message[0] = 0;
-            isOk = InstallPerform(want, 0, message, sizeof message);
+            isOk = InstallPerform(want, INSTALL_UNFORCED, message, sizeof message);
             MessageBoxA(window, message, "NTVDMEX",
                         MB_OK | (isOk ? MB_ICONINFORMATION : MB_ICONERROR));
             return 0; }
@@ -14145,7 +14145,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
            keys -- and nothing typed reaches the guest until the mark is over. */
         if (g_MarkMode) {
             if (wParam == VK_ESCAPE) SelectionClear();
-            else if (wParam == VK_RETURN) { if (g_SelectionOn) TextCopy(window, 0); SelectionClear(); }
+            else if (wParam == VK_RETURN) { if (g_SelectionOn) TextCopy(window, TEXT_COPY_SELECTION); SelectionClear(); }
             return 0;
         }
         KeyMessageNote();
@@ -14991,7 +14991,7 @@ static VOID HostPitDeliver(VOID)
             if (g_KeyIrqRetry && !g_DpmiPm && g_Irq1Pending > 0
                 && (g_KeyIrqRetry != KEYIRQ_RETRY_CLOCK_ON_SCHEDULE || g_Irq0Pending <= 1)
                 && g_Irq0Yielded < maximumYields
-                && VddPicCanDeliver(&g_Pic, 1) && AsyncInjectIrq(1)) {
+                && VddPicCanDeliver(&g_Pic, PIC_IRQ_KEYBOARD) && AsyncInjectIrq(PIC_IRQ_KEYBOARD)) {
                 InterlockedDecrement(&g_Irq1Pending);
                 ++g_Irq0Yielded;
                 ++g_Irq1AsyncRetry;
@@ -15000,7 +15000,7 @@ static VOID HostPitDeliver(VOID)
                 g_Irq0Yielded = 0;
                 ++g_PitAsyncAttempts;
                 ++g_Irq0AttemptsCount;     /* A/B/C discriminator: an attempt was actually made */
-                if (AsyncInjectIrq(0)) {
+                if (AsyncInjectIrq(PIC_IRQ_TIMER)) {
                     InterlockedDecrement(&g_Irq0Pending);
                     PmTickTake();
                     /* ⚠ BOTH DELIVERY PATHS, OR THE TIMELINE IS A LIE. A PM guest
@@ -24460,7 +24460,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         VddBusDeliverInterrupt(&g_Bus, (BYTE)vector, &registers);   /* INT 1Ah get/set tick, or INT 08h increment */
                         /* The BIOS timer ISR ends with its EOI; a PM handler that chains
                            here is relying on it, as in V86 (#173). */
-                        if (vector == VECTOR_TIMER) VddPicEndOfInterrupt(&g_Pic, 0);
+                        if (vector == VECTOR_TIMER) VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_TIMER);
                         HOST_UNLOCK();
                         RegistersStore(&registers, tib);
                         VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
@@ -29962,7 +29962,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          what a headless measurement is measuring. */
     SettingsLoad(&g_Settings);
     g_SettingsDisk = g_Settings;          /* nothing has overridden anything yet */
-    SettingsApply(NULL, &g_Settings, 0);
+    SettingsApply(NULL, &g_Settings, SETTINGS_APPLY_STARTUP);
     /* Log only the LIVE settings -- the ones the SettingsApply* functions actually
        push into the machine. The stored-but-not-yet-honoured ones would make this
        line four times longer and every value in it would be a claim the run cannot
@@ -32902,7 +32902,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                   ((ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END) || (ip >= DOS_HDLR_INT09_STUB_OFF && ip < DOS_HDLR_INT09_STUB_END)))) {
                 InterlockedDecrement(&g_Irq1Pending);   /* one INT 09h per queued scancode byte */
                 VddPicAcknowledge(&g_Pic, 1);
-                if (AsyncVectorIsOurStub(1)) VddPicEndOfInterrupt(&g_Pic, 1);
+                if (AsyncVectorIsOurStub(PIC_IRQ_KEYBOARD)) VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_KEYBOARD);
                 g_Irq1Injected++;
                 InjectInt(tib, VECTOR_KEYBOARD);
                 KeyLatencyPop();               /* the guest is now IN its INT 09h */
@@ -33277,7 +33277,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 INT keyboardAction;
                 HOST_LOCK();
                 keyAction = VddInputBiosTranslate(&g_Input, (BYTE)VDM_REG(tib, VTIB_EAX));
-                VddPicEndOfInterrupt(&g_Pic, 1);
+                VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_KEYBOARD);
                 if (keyAction == INPUT_ACTION_PAUSE && KeyboardActionEntry(keyAction) < 0) VddInputPauseCancel(&g_Input);
                 HOST_UNLOCK();
                 ++g_Kb4FTranslate;
@@ -33312,7 +33312,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 }
                 /* nothing presented: a spurious IRQ1 -- EOI and IRET, as below */
                 HOST_LOCK();
-                VddPicEndOfInterrupt(&g_Pic, 1);
+                VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_KEYBOARD);
                 HOST_UNLOCK();
                 VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
                 continue;
@@ -33329,7 +33329,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                  keyirq=1 for a whole QBasic run of ~19 key presses. Same shape as the
                  INT 08h arm's EOI below, for the same reason. Harmless when the guest
                  EOI'd before chaining: the bit is already clear. */
-            VddPicEndOfInterrupt(&g_Pic, 1);
+            VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_KEYBOARD);
             HOST_UNLOCK();
             /* ── #254: AND WHAT THE BIOS CALLS FROM IT. Ctrl-Break -> INT 1Bh, Print
                  Screen -> INT 05h, SysReq -> INT 15h AH=85h, Pause -> the spin loop:
@@ -33355,7 +33355,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                with nowhere to put one, so issue the EOI here -- without it the PIC's
                in-service bit for IRQ0 latches on the first tick and the timer stops dead
                (measured: exactly one tick delivered in a 30 s run). */
-            VddPicEndOfInterrupt(&g_Pic, 0);
+            VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_TIMER);
             HOST_UNLOCK();
             RegistersStore(&registers, tib);
             VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;            /* -> CD 1C (chain user timer) */
@@ -34045,7 +34045,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                         if (g_Irq1Pending <= 0) InterlockedIncrement(&g_Irq1Pending);
                         INT virtualIf   = g_DpmiVi;
                         INT busy = g_InPmIrq || g_AsyncPmActive;
-                        INT picCanDeliver  = VddPicCanDeliver(&g_Pic, 1);
+                        INT picCanDeliver  = VddPicCanDeliver(&g_Pic, PIC_IRQ_KEYBOARD);
                         INT isCode32  = DpmiSelectorIs32((WORD)VDM_REG16(tib, VTIB_CS));
                         INT done1 = 0;
                         if (virtualIf && !busy && picCanDeliver) {

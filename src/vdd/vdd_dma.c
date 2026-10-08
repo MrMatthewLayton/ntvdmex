@@ -498,8 +498,8 @@ VOID VddDmaReset(PVOID context)
     /* the DREQ wiring is the machine's, not the chip's: a reset keeps it */
     for (index = 0; index < DMA_DREQ_MAX; ++index) { state->DreqRoutines[index] = dreqRoutines[index]; state->DreqContexts[index] = dreqContexts[index]; }
     state->DreqCount = dreqCount;
-    DmaMasterClear(state, 0);
-    DmaMasterClear(state, 1);
+    DmaMasterClear(state, DMA_CONTROLLER_8BIT);
+    DmaMasterClear(state, DMA_CONTROLLER_16BIT);
     DmaPost(state);
 }
 
@@ -507,8 +507,8 @@ INT VddDmaInitialize(PVDD_BUS bus, PVOID context)
 {
     PDMA_STATE state = (PDMA_STATE)context;
     state->Bus = bus;
-    DmaMasterClear(state, 0);
-    DmaMasterClear(state, 1);
+    DmaMasterClear(state, DMA_CONTROLLER_8BIT);
+    DmaMasterClear(state, DMA_CONTROLLER_16BIT);
     DmaPost(state);
     if (VddClaimPorts(bus, DMA_CONTROLLER1_FIRST_PORT, DMA_CONTROLLER1_LAST_PORT, DmaPortIn, DmaPortOut, state)) return DMA_FAILED;  /* controller 1 */
     if (VddClaimPorts(bus, DMA_PAGE_FIRST_PORT, DMA_PAGE_LAST_PORT, DmaPortIn, DmaPortOut, state)) return DMA_FAILED;  /* page regs    */

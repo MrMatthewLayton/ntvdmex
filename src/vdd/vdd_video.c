@@ -1004,7 +1004,7 @@ static VOID VideoAttributeOut(PVOID context, WORD port, BYTE width, UINT32 value
     if (port == VIDEO_PORT_AC_READ) return;                       /* data port is read-only       */
     if (!state->AttributeFlipFlop) { state->AttributeIndex = byteValue; state->AttributeFlipFlop = 1; return; }
     state->AttributeFlipFlop = 0;
-    if ((state->AttributeIndex & VIDEO_AR_INDEX_MASK) == VIDEO_AR_PAN) VideoLatch(state, 0);   /* pel panning: see VideoLatch */
+    if ((state->AttributeIndex & VIDEO_AR_INDEX_MASK) == VIDEO_AR_PAN) VideoLatch(state, VIDEO_LATCH_NOW);   /* pel panning: see VideoLatch */
     state->AttributeRegisters[state->AttributeIndex & VIDEO_AR_INDEX_MASK] = byteValue;
     state->AttributeWrites  [state->AttributeIndex & VIDEO_AR_INDEX_MASK]++;
     switch (state->AttributeIndex & VIDEO_AR_INDEX_MASK) {
@@ -1750,7 +1750,7 @@ static VOID VideoVbePortOut(PVOID context, WORD port, BYTE width, UINT32 value)
         UINT32 origin = (((UINT32)data << WORD_SHIFT) | state->VbeStartLow) * VIDEO_VBE_START_UNIT;
         UINT32 bytesPerPixel = VideoVesaBytesPerPixel(state->VesaBpp);
         if (!state->IsVesa || !state->VesaStride || !VideoVesaOriginFits(state, origin)) { state->VbePmRejected++; break; }
-        VideoLatch(state, 0);                     /* boundaries already passed keep the old start */
+        VideoLatch(state, VIDEO_LATCH_NOW);                     /* boundaries already passed keep the old start */
         state->VesaStartY = (WORD)(origin / state->VesaStride);
         state->VesaStartX = (WORD)((origin % state->VesaStride) / bytesPerPixel);
         state->VesaOrigin = state->VesaOriginVs = state->VesaOriginLive = origin;
@@ -2333,7 +2333,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
             VddSetCx(registers, state->VesaStartX); VddSetDx(registers, state->VesaStartY); VddSetBx(registers, 0);
             VddSetAx(registers, VIDEO_VBE_OK);
         } else if (bl == VIDEO_START_FLIP_STATUS) {                  /* 3.0: scheduled flip status    */
-            VideoLatch(state, 0);                     /* bring the schedule up to now  */
+            VideoLatch(state, VIDEO_LATCH_NOW);                     /* bring the schedule up to now  */
             VddSetCx(registers, (WORD)(state->VesaOriginVs == state->VesaOrigin ? 1 : 0));
             VddSetAx(registers, VIDEO_VBE_OK);
         } else if (bl == VIDEO_START_SET || bl == (VIDEO_START_SET | VIDEO_START_WAIT_RETRACE) || bl == VIDEO_START_SCHEDULE || bl == (VIDEO_START_SCHEDULE | VIDEO_START_WAIT_RETRACE)) {
@@ -2351,7 +2351,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
             /* the whole displayed page must exist: "if the requested Display Start
                coordinates do not allow for a full page of video memory ... fail" */
             if (!VideoVesaOriginFits(state, origin)) { state->Vesa07Rejected++; VddSetAx(registers, VIDEO_VBE_NOT_SUPPORTED); break; }
-            VideoLatch(state, 0);                     /* boundaries already passed keep the old start */
+            VideoLatch(state, VIDEO_LATCH_NOW);                     /* boundaries already passed keep the old start */
             state->VesaStartX = (WORD)column; state->VesaStartY = (WORD)line;
             state->VesaOrigin = origin;
             if (bl == VIDEO_START_SET) {
@@ -3978,10 +3978,10 @@ static VOID VideoCrtcSetData(PVOID context, UINT32 value)
          showed a garbage address -- a whole-screen flicker on any guest that scrolls
          or page-flips, which is every scrolling game. CrtcStartHalf counts how
          often a frame was built mid-pair; CrtcStartLive is what the renderer uses. */
-    case VIDEO_CR_START_HIGH: VideoLatch(state, 0);          /* boundaries passed BEFORE this write see the old value */
+    case VIDEO_CR_START_HIGH: VideoLatch(state, VIDEO_LATCH_NOW);          /* boundaries passed BEFORE this write see the old value */
                state->CrtcStart = (WORD)((state->CrtcStart & BYTE_MASK) | ((WORD)(value & BYTE_MASK) << BYTE_SHIFT));
                state->IsCrtcSeen = 1; state->IsCrtcStartPending ^= 1; state->IsDirty = 1; break;
-    case VIDEO_CR_START_LOW: VideoLatch(state, 0);
+    case VIDEO_CR_START_LOW: VideoLatch(state, VIDEO_LATCH_NOW);
                state->CrtcStart = (WORD)((state->CrtcStart & HIGH_BYTE_MASK) | (value & BYTE_MASK));
                state->IsCrtcSeen = 1; state->IsCrtcStartPending ^= 1;
                if (!state->IsCrtcStartPending) {
@@ -5173,7 +5173,7 @@ static VOID VideoOnFrame(PVOID context)
        ⚠ MEASURED ON LEMMINGS: 941 completed pairs, CrtcStartHalf = 0. So this is
          NOT the cause of the flicker it was written to explain. Kept because it is
          what the hardware does and the hazard is real for other guests. */
-    VideoLatch(state, 1);                /* start address + pel panning as displayed (s83) */
+    VideoLatch(state, VIDEO_LATCH_AT_FRAME);                /* start address + pel panning as displayed (s83) */
     if (state->IsVesa) {                                 /* VESA: sync window -> vram */
         VideoVesaSync(state);
         state->Frame.Width = state->VesaWidth; state->Frame.Height = state->VesaHeight;

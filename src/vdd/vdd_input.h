@@ -17,6 +17,8 @@
 #define INPUT_KEY_EXTENDED  1       /* E0-prefixed */
 #define INPUT_RELEASED      0
 #define INPUT_PRESSED       1
+#define INPUT_KEY_UNSHIFTED 0
+#define INPUT_KEY_SHIFTED   1
 
 #include "vdd_bus.h"
 #include "../dos/bios_bda_fields.h"   /* the BDA's fields */
