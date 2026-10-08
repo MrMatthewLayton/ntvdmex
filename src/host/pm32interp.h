@@ -35,52 +35,22 @@
 
 /* Operand widths, masks and signs. */
 #define PM32_PUSHAD_BYTES 32      /* eight DWORD registers                      */
-#define PM32_LOW_BYTE    0xFF      /* int-typed, where the expression is signed */
-#define PM32_BYTE_SIGN   0x80u
-#define PM32_WORD_SIGN   0x8000u
-#define PM32_DWORD_SIGN  0x80000000u
 /* Register numbers, in the instruction set's own order. */
-#define PM32_REGISTER_COUNT  8
-#define PM32_SEGMENT_COUNT   6
-#define PM32_REGISTER_MASK   7
-#define PM32_BYTE_REGISTERS  4      /* AL..BL; 4..7 are AH..BH                     */
-#define PM32_CLEAR_LOW_BYTE  0xFFFFFF00u
-#define PM32_CLEAR_SECOND_BYTE 0xFFFF00FFu
 #define PM32_AUXILIARY_BIT   0x10   /* the carry out of bit 3                       */
-#define PM32_INT8_MAX        127
-#define PM32_INT8_MIN        (-128)
-#define PM32_INT16_MAX       32767
-#define PM32_INT16_MIN       (-32768)
 /* ModRM and SIB. */
-#define PM32_MODRM_MODE_SHIFT 6
-#define PM32_MODRM_REG_SHIFT 3
-#define PM32_MODE_DISP8      1
 #define PM32_MODE_DISP_FULL  2
-#define PM32_MODE_REGISTER   3
 #define PM32_RM_SIB          4
 #define PM32_RM_DISP32       5
 #define PM32_SIB_NO_INDEX    4
 #define PM32_MODRM_SIB_LENGTH 2
 #define PM32_MODRM_DISP32_LENGTH 5
 /* Prefixes. */
-#define PM32_MAX_PREFIXES    4
-#define PM32_REPEAT_REP      1
-#define PM32_REPEAT_REPNE    2
 /* The ALU group (00..3F, and 80/81/83's /r): its operations and forms. */
-#define PM32_ALU_ADD 0
-#define PM32_ALU_OR  1
-#define PM32_ALU_ADC 2
-#define PM32_ALU_SBB 3
-#define PM32_ALU_AND 4
-#define PM32_ALU_SUB 5
-#define PM32_ALU_XOR 6
-#define PM32_ALU_CMP 7
 #define PM32_ALU_FORMS 6                /* forms 6/7 are other instructions          */
 #define PM32_FORM_FROM_REGISTER_END 2   /* forms 0/1: r/m op= reg                   */
 #define PM32_FORM_ACCUMULATOR_BYTE 4    /* AL op= imm8                              */
 #define PM32_FORM_ACCUMULATOR 5         /* eAX op= imm                              */
 /* Condition codes: pairs, the low bit negates. */
-#define PM32_CONDITION_MASK 0x0F
 #define PM32_CC_PAIR_SHIFT 1
 #define PM32_CC_OVERFLOW 0
 #define PM32_CC_BELOW 1
@@ -90,64 +60,40 @@
 #define PM32_CC_PARITY 5
 #define PM32_CC_LESS 6
 /* Shifts and rotates (C0/C1/D0-D3's /r). */
-#define PM32_SHIFT_COUNT_MASK 0x1F
-#define PM32_SHIFT_ROL 0
-#define PM32_SHIFT_ROR 1
-#define PM32_SHIFT_RCL 2
-#define PM32_SHIFT_RCR 3
-#define PM32_SHIFT_SHL 4
-#define PM32_SHIFT_SHR 5
-#define PM32_SHIFT_SAL 6
 /* Groups 3 and 5. */
 #define PM32_GROUP3_TEST 0
 #define PM32_GROUP3_TEST_ALIAS 1
-#define PM32_GROUP3_NOT 2
-#define PM32_GROUP3_NEG 3
-#define PM32_GROUP3_MUL 4
-#define PM32_GROUP3_IMUL 5
-#define PM32_GROUP3_DIV 6
-#define PM32_GROUP5_CALL 2
-#define PM32_GROUP5_JMP 4
-#define PM32_GROUP5_PUSH 6
 #define PM32_OUT_BIT 2                  /* E4-E7/EC-EF: bit 1 = OUT                  */
 #define PM32_MAX_STRING_COUNT 0x10000u
 /* Opcodes. */
-#define PM32_OP2_JCC_NEAR_FIRST        0x80    /* after X86_ESCAPE */
-#define PM32_OP2_JCC_NEAR_LAST         0x8F    /* after X86_ESCAPE */
-#define PM32_OP2_SETCC_FIRST           0x90    /* after X86_ESCAPE */
-#define PM32_OP2_SETCC_LAST            0x9F    /* after X86_ESCAPE */
 #define PM32_OP2_SHLD_IMM              0xA4    /* after X86_ESCAPE */
 #define PM32_OP2_SHLD_CL               0xA5    /* after X86_ESCAPE */
 #define PM32_OP2_SHRD_IMM              0xAC    /* after X86_ESCAPE */
 #define PM32_OP2_SHRD_CL               0xAD    /* after X86_ESCAPE */
 #define PM32_OP2_IMUL                  0xAF    /* after X86_ESCAPE */
-#define PM32_OP2_MOVZX_BYTE            0xB6    /* after X86_ESCAPE */
-#define PM32_OP2_MOVZX_WORD            0xB7    /* after X86_ESCAPE */
-#define PM32_OP2_MOVSX_BYTE            0xBE    /* after X86_ESCAPE */
-#define PM32_OP2_MOVSX_WORD            0xBF    /* after X86_ESCAPE */
 
 typedef struct _PM32_CPU {
-    UINT32 Registers[PM32_REGISTER_COUNT];        /* EAX ECX EDX EBX ESP EBP ESI EDI                            */
+    UINT32 Registers[X86_GENERAL_REGISTERS];        /* EAX ECX EDX EBX ESP EBP ESI EDI                            */
     UINT32 Eip;         /* offset in CS                                               */
     UINT32 Flags;
-    UINT32 SegmentBases[PM32_SEGMENT_COUNT];     /* segment BASES, x86 sreg order: ES CS SS DS FS GS            */
+    UINT32 SegmentBases[X86_SEGMENT_REGISTERS];     /* segment BASES, x86 sreg order: ES CS SS DS FS GS            */
 } PM32_CPU, *PPM32_CPU; typedef const PM32_CPU *PCPM32_CPU;
 
 /* ---- register views ------------------------------------------------------------- */
 static UINT32 Pm32Mask(INT width) { return width == 1 ? BYTE_MASK_U : width == X86_WORD_SIZE ? WORD_MASK_U : DWORD_MASK_U; }
-static UINT32 Pm32SignBit(INT width) { return width == 1 ? PM32_BYTE_SIGN : width == X86_WORD_SIZE ? PM32_WORD_SIGN : PM32_DWORD_SIGN; }
+static UINT32 Pm32SignBit(INT width) { return width == 1 ? X86_BYTE_SIGN_U : width == X86_WORD_SIZE ? X86_WORD_SIGN_U : X86_DWORD_SIGN_U; }
 static UINT32 Pm32GetRegister(const PM32_CPU *cpu, INT registerIndex, INT width)
 {
-    if (width == 1) return (registerIndex < PM32_BYTE_REGISTERS) ? (cpu->Registers[registerIndex] & PM32_LOW_BYTE) : ((cpu->Registers[registerIndex - PM32_BYTE_REGISTERS] >> BYTE_SHIFT) & PM32_LOW_BYTE);
-    return cpu->Registers[registerIndex & PM32_REGISTER_MASK] & Pm32Mask(width);
+    if (width == 1) return (registerIndex < X86_BYTE_REGISTERS) ? (cpu->Registers[registerIndex] & BYTE_MASK) : ((cpu->Registers[registerIndex - X86_BYTE_REGISTERS] >> BYTE_SHIFT) & BYTE_MASK);
+    return cpu->Registers[registerIndex & X86_MODRM_REGISTER_MASK] & Pm32Mask(width);
 }
 static VOID Pm32SetRegister(PM32_CPU *cpu, INT registerIndex, INT width, UINT32 value)
 {
     if (width == 1) {
-        if (registerIndex < PM32_BYTE_REGISTERS) cpu->Registers[registerIndex] = (cpu->Registers[registerIndex] & PM32_CLEAR_LOW_BYTE) | (value & PM32_LOW_BYTE);
-        else       cpu->Registers[registerIndex - PM32_BYTE_REGISTERS] = (cpu->Registers[registerIndex - PM32_BYTE_REGISTERS] & PM32_CLEAR_SECOND_BYTE) | ((value & PM32_LOW_BYTE) << BYTE_SHIFT);
-    } else if (width == X86_WORD_SIZE) cpu->Registers[registerIndex & PM32_REGISTER_MASK] = (cpu->Registers[registerIndex & PM32_REGISTER_MASK] & HIGH_WORD_MASK_U) | (value & WORD_MASK);
-    else cpu->Registers[registerIndex & PM32_REGISTER_MASK] = value;
+        if (registerIndex < X86_BYTE_REGISTERS) cpu->Registers[registerIndex] = (cpu->Registers[registerIndex] & (~BYTE_MASK_U)) | (value & BYTE_MASK);
+        else       cpu->Registers[registerIndex - X86_BYTE_REGISTERS] = (cpu->Registers[registerIndex - X86_BYTE_REGISTERS] & (~HIGH_BYTE_MASK_U)) | ((value & BYTE_MASK) << BYTE_SHIFT);
+    } else if (width == X86_WORD_SIZE) cpu->Registers[registerIndex & X86_MODRM_REGISTER_MASK] = (cpu->Registers[registerIndex & X86_MODRM_REGISTER_MASK] & HIGH_WORD_MASK_U) | (value & WORD_MASK);
+    else cpu->Registers[registerIndex & X86_MODRM_REGISTER_MASK] = value;
 }
 
 /* ---- memory --------------------------------------------------------------------- */
@@ -166,7 +112,7 @@ static VOID Pm32WriteMemory(UINT32 linear, INT width, UINT32 value)
 }
 
 /* ---- flags ---------------------------------------------------------------------- */
-static INT Pm32Parity(UINT32 value) { value &= PM32_LOW_BYTE; value ^= value >> 4; value ^= value >> 2; value ^= value >> 1; return !(value & 1); }
+static INT Pm32Parity(UINT32 value) { value &= BYTE_MASK; value ^= value >> 4; value ^= value >> 2; value ^= value >> 1; return !(value & 1); }
 static UINT32 Pm32SzpFlags(UINT32 result, INT width)
 {
     UINT32 flags = 0;
@@ -209,15 +155,15 @@ static UINT32 Pm32Logic(UINT32 *flags, UINT32 result, INT width)
 static UINT32 Pm32Alu(UINT32 *flags, INT operation, UINT32 first, UINT32 second, INT width, INT *isStore)
 {
     UINT32 carry = *flags & EFLAGS_CF_U;
-    *isStore = (operation != PM32_ALU_CMP);
+    *isStore = (operation != X86_ALU_CMP);
     switch (operation) {
-    case PM32_ALU_ADD: return Pm32Add(flags, first, second, 0, width);
-    case PM32_ALU_OR: return Pm32Logic(flags, first | second, width);
-    case PM32_ALU_ADC: return Pm32Add(flags, first, second, carry, width);
-    case PM32_ALU_SBB: return Pm32Subtract(flags, first, second, carry, width);
-    case PM32_ALU_AND: return Pm32Logic(flags, first & second, width);
-    case PM32_ALU_SUB: return Pm32Subtract(flags, first, second, 0, width);
-    case PM32_ALU_XOR: return Pm32Logic(flags, first ^ second, width);
+    case X86_ALU_ADD: return Pm32Add(flags, first, second, 0, width);
+    case X86_ALU_OR: return Pm32Logic(flags, first | second, width);
+    case X86_ALU_ADC: return Pm32Add(flags, first, second, carry, width);
+    case X86_ALU_SBB: return Pm32Subtract(flags, first, second, carry, width);
+    case X86_ALU_AND: return Pm32Logic(flags, first & second, width);
+    case X86_ALU_SUB: return Pm32Subtract(flags, first, second, 0, width);
+    case X86_ALU_XOR: return Pm32Logic(flags, first ^ second, width);
     default: return Pm32Subtract(flags, first, second, 0, width);
     }
 }
@@ -260,14 +206,14 @@ static UINT32 Pm32CodeImmediate(const PM32_CPU *cpu, UINT32 offset, INT width)
 static VOID Pm32Decode(const PM32_CPU *cpu, UINT32 offset, INT segmentOverride, PM32_MODRM *modrm)
 {
     BYTE modrmByte = Pm32CodeByte(cpu, offset);
-    INT mode = modrmByte >> PM32_MODRM_MODE_SHIFT, registerMemory = modrmByte & PM32_REGISTER_MASK, length = 1, defaultSegment = X86_SREG_DS;
+    INT mode = modrmByte >> X86_MODRM_MODE_SHIFT, registerMemory = modrmByte & X86_MODRM_REGISTER_MASK, length = 1, defaultSegment = X86_SREG_DS;
     UINT32 effectiveAddress = 0;
-    modrm->Register = (modrmByte >> PM32_MODRM_REG_SHIFT) & PM32_REGISTER_MASK;
-    if (mode == PM32_MODE_REGISTER) { modrm->IsMemory = 0; modrm->RegisterMemory = registerMemory; modrm->Length = 1; return; }
+    modrm->Register = (modrmByte >> X86_MODRM_REG_SHIFT) & X86_MODRM_REGISTER_MASK;
+    if (mode == X86_MODE_REGISTER) { modrm->IsMemory = 0; modrm->RegisterMemory = registerMemory; modrm->Length = 1; return; }
     modrm->IsMemory = 1;
     if (registerMemory == PM32_RM_SIB) {                                  /* SIB */
         BYTE sib = Pm32CodeByte(cpu, offset + 1);
-        INT scale = sib >> PM32_MODRM_MODE_SHIFT, indexRegister = (sib >> PM32_MODRM_REG_SHIFT) & PM32_REGISTER_MASK, baseRegister = sib & PM32_REGISTER_MASK;
+        INT scale = sib >> X86_MODRM_MODE_SHIFT, indexRegister = (sib >> X86_MODRM_REG_SHIFT) & X86_MODRM_REGISTER_MASK, baseRegister = sib & X86_MODRM_REGISTER_MASK;
         length = PM32_MODRM_SIB_LENGTH;
         if (baseRegister == X86_REG_BP && mode == 0) { effectiveAddress = Pm32CodeImmediate(cpu, offset + length, X86_DWORD_SIZE); length += X86_DWORD_SIZE; }
         else { effectiveAddress = cpu->Registers[baseRegister]; if (baseRegister == X86_REG_SP || baseRegister == X86_REG_BP) defaultSegment = X86_SREG_SS; }
@@ -278,7 +224,7 @@ static VOID Pm32Decode(const PM32_CPU *cpu, UINT32 offset, INT segmentOverride, 
         effectiveAddress = cpu->Registers[registerMemory];
         if (registerMemory == PM32_RM_DISP32) defaultSegment = X86_SREG_SS;                         /* [EBP+d] defaults to SS */
     }
-    if (mode == PM32_MODE_DISP8) { effectiveAddress += (UINT32)(INT32)(INT8)Pm32CodeByte(cpu, offset + length); length += 1; }
+    if (mode == X86_MODE_DISP8) { effectiveAddress += (UINT32)(INT32)(INT8)Pm32CodeByte(cpu, offset + length); length += 1; }
     else if (mode == PM32_MODE_DISP_FULL) { effectiveAddress += Pm32CodeImmediate(cpu, offset + length, X86_DWORD_SIZE); length += X86_DWORD_SIZE; }
     modrm->Linear = cpu->SegmentBases[segmentOverride >= 0 ? segmentOverride : defaultSegment] + effectiveAddress;
     modrm->Length = length;
@@ -296,26 +242,26 @@ static INT Pm32Shift(UINT32 *flags, INT operation, UINT32 value, UINT count, INT
 {
     UINT32 mask = Pm32Mask(width), signBit = Pm32SignBit(width), result = value & mask, newFlags;
     UINT bits = (UINT)width * BITS_PER_BYTE;
-    count &= PM32_SHIFT_COUNT_MASK;
+    count &= X86_SHIFT_COUNT_MASK;
     if (!count) { *out = result; return 1; }                 /* count 0: nothing, flags untouched */
     newFlags = *flags;
     switch (operation) {
-    case PM32_SHIFT_ROL: case PM32_SHIFT_ROR: {                               /* ROL / ROR */
+    case X86_SHIFT_ROL: case X86_SHIFT_ROR: {                               /* ROL / ROR */
         UINT rotate = count % bits;
-        if (rotate) result = (operation == PM32_SHIFT_ROL) ? ((result << rotate) | (result >> (bits - rotate))) & mask : ((result >> rotate) | (result << (bits - rotate))) & mask;
+        if (rotate) result = (operation == X86_SHIFT_ROL) ? ((result << rotate) | (result >> (bits - rotate))) & mask : ((result >> rotate) | (result << (bits - rotate))) & mask;
         newFlags &= ~(EFLAGS_CF_U | EFLAGS_OF_U);
-        if (operation == PM32_SHIFT_ROL) { if (result & 1) newFlags |= EFLAGS_CF_U; if (((result & signBit) != 0) != ((newFlags & EFLAGS_CF_U) != 0)) newFlags |= EFLAGS_OF_U; }
+        if (operation == X86_SHIFT_ROL) { if (result & 1) newFlags |= EFLAGS_CF_U; if (((result & signBit) != 0) != ((newFlags & EFLAGS_CF_U) != 0)) newFlags |= EFLAGS_OF_U; }
         else { if (result & signBit) newFlags |= EFLAGS_CF_U; if (((result & signBit) != 0) != ((result & (signBit >> 1)) != 0)) newFlags |= EFLAGS_OF_U; }
         *flags = newFlags; *out = result; return 1; }
-    case PM32_SHIFT_RCL: case PM32_SHIFT_RCR: return 0;                       /* RCL / RCR: decline */
-    case PM32_SHIFT_SHL: case PM32_SHIFT_SAL: {                               /* SHL / SAL */
+    case X86_SHIFT_RCL: case X86_SHIFT_RCR: return 0;                       /* RCL / RCR: decline */
+    case X86_SHIFT_SHL: case X86_SHIFT_SAL: {                               /* SHL / SAL */
         UINT32 carry = (count <= bits) ? ((result >> (bits - count)) & 1) : 0;
         result = (count < BITS_PER_DWORD) ? (result << count) & mask : 0;
         newFlags = (newFlags & ~PM32_ARITH) | Pm32SzpFlags(result, width);
         if (carry) newFlags |= EFLAGS_CF_U;
         if (((result & signBit) != 0) != (carry != 0)) newFlags |= EFLAGS_OF_U;
         *flags = newFlags; *out = result; return 1; }
-    case PM32_SHIFT_SHR: {                                       /* SHR */
+    case X86_SHIFT_SHR: {                                       /* SHR */
         UINT32 carry = (result >> (count - 1)) & 1;
         UINT32 isSignSet = (result & signBit) != 0;
         result = (count < BITS_PER_DWORD) ? result >> count : 0;
@@ -347,10 +293,10 @@ static INT Pm32Step(PM32_CPU *cpu)
         else if (opcode == X86_PREFIX_ES) { segmentOverride = X86_SREG_ES; ++offset; } else if (opcode == X86_PREFIX_CS) { segmentOverride = X86_SREG_CS; ++offset; }
         else if (opcode == X86_PREFIX_SS) { segmentOverride = X86_SREG_SS; ++offset; } else if (opcode == X86_PREFIX_DS) { segmentOverride = X86_SREG_DS; ++offset; }
         else if (opcode == X86_PREFIX_FS) { segmentOverride = X86_SREG_FS; ++offset; } else if (opcode == X86_PREFIX_GS) { segmentOverride = X86_SREG_GS; ++offset; }
-        else if (opcode == X86_PREFIX_REP) { repeat = PM32_REPEAT_REP; ++offset; } else if (opcode == X86_PREFIX_REPNE) { repeat = PM32_REPEAT_REPNE; ++offset; }
+        else if (opcode == X86_PREFIX_REP) { repeat = X86_REPEAT_REP; ++offset; } else if (opcode == X86_PREFIX_REPNE) { repeat = X86_REPEAT_REPNE; ++offset; }
         else if (opcode == X86_PREFIX_ADDRESS_SIZE || opcode == X86_PREFIX_LOCK) return 0;      /* 16-bit addressing / LOCK */
         else break;
-        if (offset > PM32_MAX_PREFIXES) return 0;
+        if (offset > X86_PREFIXES_MAX) return 0;
     }
     ++offset;
     operandSize = isOperand16 ? X86_WORD_SIZE : X86_DWORD_SIZE;
@@ -358,8 +304,8 @@ static INT Pm32Step(PM32_CPU *cpu)
 #define PM32_DONE(next) do { cpu->Eip += (UINT32)(next); return 1; } while (0)
 
     /* ---- ALU r/m,r / r,r/m / acc,imm : 00-3F except the segment/BCD holes ---- */
-    if (opcode < X86_OP_INC_FIRST && (opcode & PM32_REGISTER_MASK) < PM32_ALU_FORMS) {
-        INT aluOperation = opcode >> PM32_MODRM_REG_SHIFT, form = opcode & PM32_REGISTER_MASK, width = (form & 1) ? operandSize : 1, isStore;
+    if (opcode < X86_OP_INC_FIRST && (opcode & X86_MODRM_REGISTER_MASK) < PM32_ALU_FORMS) {
+        INT aluOperation = opcode >> X86_MODRM_REG_SHIFT, form = opcode & X86_MODRM_REGISTER_MASK, width = (form & 1) ? operandSize : 1, isStore;
         UINT32 result;
         if (form == PM32_FORM_ACCUMULATOR_BYTE || form == PM32_FORM_ACCUMULATOR) {                        /* AL/eAX, imm */
             UINT32 second = Pm32CodeImmediate(cpu, offset, width), flags = cpu->Flags;
@@ -370,7 +316,7 @@ static INT Pm32Step(PM32_CPU *cpu)
         } else {
             PM32_MODRM modrm; UINT32 first, second, flags = cpu->Flags;
             Pm32Decode(cpu, offset, segmentOverride, &modrm);
-            if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, form < PM32_FORM_FROM_REGISTER_END && aluOperation != PM32_ALU_CMP)) return 0;
+            if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, form < PM32_FORM_FROM_REGISTER_END && aluOperation != X86_ALU_CMP)) return 0;
             if (form < PM32_FORM_FROM_REGISTER_END) { first = Pm32ReadRm(cpu, &modrm, width); second = Pm32GetRegister(cpu, modrm.Register, width); }
             else          { first = Pm32GetRegister(cpu, modrm.Register, width); second = Pm32ReadRm(cpu, &modrm, width); }
             result = Pm32Alu(&flags, aluOperation, first, second, width, &isStore);
@@ -384,7 +330,7 @@ static INT Pm32Step(PM32_CPU *cpu)
     }
     /* ---- INC/DEC r32 (40-4F): CF preserved ---- */
     if (opcode >= X86_OP_INC_FIRST && opcode <= X86_OP_DEC_LAST) {
-        INT registerIndex = opcode & PM32_REGISTER_MASK; UINT32 carry = cpu->Flags & EFLAGS_CF_U, flags = cpu->Flags, result;
+        INT registerIndex = opcode & X86_MODRM_REGISTER_MASK; UINT32 carry = cpu->Flags & EFLAGS_CF_U, flags = cpu->Flags, result;
         result = (opcode < X86_OP_DEC_FIRST) ? Pm32Add(&flags, Pm32GetRegister(cpu, registerIndex, operandSize), 1, 0, operandSize) : Pm32Subtract(&flags, Pm32GetRegister(cpu, registerIndex, operandSize), 1, 0, operandSize);
         cpu->Flags = (flags & ~EFLAGS_CF_U) | carry;
         Pm32SetRegister(cpu, registerIndex, operandSize, result);
@@ -392,7 +338,7 @@ static INT Pm32Step(PM32_CPU *cpu)
     }
     /* ---- PUSH/POP r (50-5F) ---- */
     if (opcode >= X86_OP_PUSH_FIRST && opcode <= X86_OP_PUSH_LAST) {
-        UINT32 value = Pm32GetRegister(cpu, opcode & PM32_REGISTER_MASK, operandSize);
+        UINT32 value = Pm32GetRegister(cpu, opcode & X86_MODRM_REGISTER_MASK, operandSize);
         if (!Pm32CanPush(cpu, operandSize)) return 0;
         Pm32Push(cpu, value, operandSize); PM32_DONE(offset);
     }
@@ -400,21 +346,21 @@ static INT Pm32Step(PM32_CPU *cpu)
         UINT32 value;
         if (!Pm32HostCanAccess(cpu->SegmentBases[X86_SREG_SS] + cpu->Registers[X86_REG_SP], operandSize, 0)) return 0;
         value = Pm32Pop(cpu, operandSize);
-        Pm32SetRegister(cpu, opcode & PM32_REGISTER_MASK, operandSize, value);
+        Pm32SetRegister(cpu, opcode & X86_MODRM_REGISTER_MASK, operandSize, value);
         PM32_DONE(offset);
     }
     /* ---- PUSHAD / POPAD (60/61) ---- */
     if (opcode == X86_OP_PUSHAD) {
         UINT32 originalEsp = cpu->Registers[X86_REG_SP]; INT index;
         if (isOperand16 || !Pm32HostCanAccess(cpu->SegmentBases[X86_SREG_SS] + cpu->Registers[X86_REG_SP] - PM32_PUSHAD_BYTES, PM32_PUSHAD_BYTES, 1)) return 0;
-        for (index = 0; index < PM32_REGISTER_COUNT; ++index) Pm32Push(cpu, index == X86_REG_SP ? originalEsp : cpu->Registers[index], X86_DWORD_SIZE);
+        for (index = 0; index < X86_GENERAL_REGISTERS; ++index) Pm32Push(cpu, index == X86_REG_SP ? originalEsp : cpu->Registers[index], X86_DWORD_SIZE);
         PM32_DONE(offset);
     }
     if (opcode == X86_OP_POPAD) {
-        INT index; UINT32 saved[PM32_REGISTER_COUNT];
+        INT index; UINT32 saved[X86_GENERAL_REGISTERS];
         if (isOperand16 || !Pm32HostCanAccess(cpu->SegmentBases[X86_SREG_SS] + cpu->Registers[X86_REG_SP], PM32_PUSHAD_BYTES, 0)) return 0;
-        for (index = PM32_REGISTER_COUNT - 1; index >= 0; --index) saved[index] = Pm32Pop(cpu, X86_DWORD_SIZE);
-        for (index = 0; index < PM32_REGISTER_COUNT; ++index) if (index != X86_REG_SP) cpu->Registers[index] = saved[index];   /* the saved ESP is discarded */
+        for (index = X86_GENERAL_REGISTERS - 1; index >= 0; --index) saved[index] = Pm32Pop(cpu, X86_DWORD_SIZE);
+        for (index = 0; index < X86_GENERAL_REGISTERS; ++index) if (index != X86_REG_SP) cpu->Registers[index] = saved[index];   /* the saved ESP is discarded */
         PM32_DONE(offset);
     }
     /* ---- PUSH imm (68/6A) ---- */
@@ -443,7 +389,7 @@ static INT Pm32Step(PM32_CPU *cpu)
     if (opcode >= X86_OP_JCC_SHORT_FIRST && opcode <= X86_OP_JCC_SHORT_LAST) {
         INT32 displacement = (INT8)Pm32CodeByte(cpu, offset);
         cpu->Eip += offset + 1;
-        if (Pm32Condition(cpu->Flags, opcode & PM32_CONDITION_MASK)) cpu->Eip += (UINT32)displacement;
+        if (Pm32Condition(cpu->Flags, opcode & X86_CONDITION_MASK)) cpu->Eip += (UINT32)displacement;
         return 1;
     }
     /* ---- group 1 (80/81/83) ---- */
@@ -453,7 +399,7 @@ static INT Pm32Step(PM32_CPU *cpu)
         next = offset + (UINT32)modrm.Length;
         if (opcode == X86_OP_GROUP1_IMM) { second = Pm32CodeImmediate(cpu, next, width); next += (UINT32)width; }
         else { second = (UINT32)(INT32)(INT8)Pm32CodeByte(cpu, next); next += 1; }
-        if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, modrm.Register != PM32_ALU_CMP)) return 0;
+        if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, modrm.Register != X86_ALU_CMP)) return 0;
         first = Pm32ReadRm(cpu, &modrm, width);
         result = Pm32Alu(&flags, modrm.Register, first, second, width, &isStore);
         if (isStore) { if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, result); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, result); }
@@ -496,9 +442,9 @@ static INT Pm32Step(PM32_CPU *cpu)
         /* Pm32Decode added a segment base; LEA wants the effective address alone. The
            default segment for the form is DS or SS; subtract the one it used. */
         segmentBase = cpu->SegmentBases[X86_SREG_DS];
-        { BYTE modrmByte = Pm32CodeByte(cpu, offset); INT mode = modrmByte >> PM32_MODRM_MODE_SHIFT, registerMemory = modrmByte & PM32_REGISTER_MASK;
+        { BYTE modrmByte = Pm32CodeByte(cpu, offset); INT mode = modrmByte >> X86_MODRM_MODE_SHIFT, registerMemory = modrmByte & X86_MODRM_REGISTER_MASK;
           if (registerMemory == PM32_RM_DISP32 && mode != 0) segmentBase = cpu->SegmentBases[X86_SREG_SS];
-          if (registerMemory == PM32_RM_SIB) { BYTE sib = Pm32CodeByte(cpu, offset + 1); INT baseRegister = sib & PM32_REGISTER_MASK;
+          if (registerMemory == PM32_RM_SIB) { BYTE sib = Pm32CodeByte(cpu, offset + 1); INT baseRegister = sib & X86_MODRM_REGISTER_MASK;
                          if (baseRegister == X86_REG_SP || (baseRegister == X86_REG_BP && mode != 0)) segmentBase = cpu->SegmentBases[X86_SREG_SS]; } }
         Pm32SetRegister(cpu, modrm.Register, operandSize, modrm.Linear - segmentBase);
         PM32_DONE(offset + (UINT32)modrm.Length);
@@ -506,18 +452,18 @@ static INT Pm32Step(PM32_CPU *cpu)
     /* ---- NOP / XCHG eAX,r (90-97) ---- */
     if (opcode == X86_OP_NOP) { if (repeat) return 0; PM32_DONE(offset); }               /* F3 90 = PAUSE: decline */
     if (opcode > X86_OP_NOP && opcode <= X86_OP_XCHG_LAST) {
-        UINT32 first = Pm32GetRegister(cpu, X86_REG_AX, operandSize), second = Pm32GetRegister(cpu, opcode & PM32_REGISTER_MASK, operandSize);
-        Pm32SetRegister(cpu, X86_REG_AX, operandSize, second); Pm32SetRegister(cpu, opcode & PM32_REGISTER_MASK, operandSize, first); PM32_DONE(offset);
+        UINT32 first = Pm32GetRegister(cpu, X86_REG_AX, operandSize), second = Pm32GetRegister(cpu, opcode & X86_MODRM_REGISTER_MASK, operandSize);
+        Pm32SetRegister(cpu, X86_REG_AX, operandSize, second); Pm32SetRegister(cpu, opcode & X86_MODRM_REGISTER_MASK, operandSize, first); PM32_DONE(offset);
     }
     /* ---- CWDE/CBW (98), CDQ/CWD (99) ---- */
     if (opcode == X86_OP_CWDE) {
         if (operandSize == X86_DWORD_SIZE) cpu->Registers[X86_REG_AX] = (UINT32)(INT32)(INT16)(cpu->Registers[X86_REG_AX] & WORD_MASK);
-        else Pm32SetRegister(cpu, X86_REG_AX, X86_WORD_SIZE, (UINT32)(INT16)(INT8)(cpu->Registers[X86_REG_AX] & PM32_LOW_BYTE));
+        else Pm32SetRegister(cpu, X86_REG_AX, X86_WORD_SIZE, (UINT32)(INT16)(INT8)(cpu->Registers[X86_REG_AX] & BYTE_MASK));
         PM32_DONE(offset);
     }
     if (opcode == X86_OP_CDQ) {
-        if (operandSize == X86_DWORD_SIZE) cpu->Registers[X86_REG_DX] = (cpu->Registers[X86_REG_AX] & PM32_DWORD_SIGN) ? DWORD_MASK_U : 0;
-        else Pm32SetRegister(cpu, X86_REG_DX, X86_WORD_SIZE, (cpu->Registers[X86_REG_AX] & PM32_WORD_SIGN) ? WORD_MASK_U : 0);
+        if (operandSize == X86_DWORD_SIZE) cpu->Registers[X86_REG_DX] = (cpu->Registers[X86_REG_AX] & X86_DWORD_SIGN_U) ? DWORD_MASK_U : 0;
+        else Pm32SetRegister(cpu, X86_REG_DX, X86_WORD_SIZE, (cpu->Registers[X86_REG_AX] & X86_WORD_SIGN_U) ? WORD_MASK_U : 0);
         PM32_DONE(offset);
     }
     /* ---- MOV moffs (A0-A3) ---- */
@@ -539,7 +485,7 @@ static INT Pm32Step(PM32_CPU *cpu)
         INT32 delta = (cpu->Flags & EFLAGS_DF_U) ? -width : width;
         UINT32 count = repeat ? cpu->Registers[X86_REG_CX] : 1, index;
         UINT32 sourceBase = cpu->SegmentBases[segmentOverride >= 0 ? segmentOverride : X86_SREG_DS], destinationBase = cpu->SegmentBases[X86_SREG_ES];
-        if (repeat == PM32_REPEAT_REPNE) return 0;                                  /* REPNE on MOVS/STOS: odd */
+        if (repeat == X86_REPEAT_REPNE) return 0;                                  /* REPNE on MOVS/STOS: odd */
         if (count > PM32_MAX_STRING_COUNT) return 0;                              /* bounded; the CPU can have it */
         for (index = 0; index < count; ++index) {                                /* probe the whole range first */
             UINT32 sourceOffset = cpu->Registers[X86_REG_SI] + (UINT32)(delta * (INT32)index), destinationOffset = cpu->Registers[X86_REG_DI] + (UINT32)(delta * (INT32)index);
@@ -557,15 +503,15 @@ static INT Pm32Step(PM32_CPU *cpu)
         PM32_DONE(offset);
     }
     /* ---- MOV r,imm (B0-BF) ---- */
-    if (opcode >= X86_OP_MOV_IMM_BYTE_FIRST && opcode <= X86_OP_MOV_IMM_BYTE_LAST) { Pm32SetRegister(cpu, opcode & PM32_REGISTER_MASK, 1, Pm32CodeByte(cpu, offset)); PM32_DONE(offset + 1); }
-    if (opcode >= X86_OP_MOV_IMM_FIRST && opcode <= X86_OP_MOV_IMM_LAST) { Pm32SetRegister(cpu, opcode & PM32_REGISTER_MASK, operandSize, Pm32CodeImmediate(cpu, offset, operandSize)); PM32_DONE(offset + (UINT32)operandSize); }
+    if (opcode >= X86_OP_MOV_IMM_BYTE_FIRST && opcode <= X86_OP_MOV_IMM_BYTE_LAST) { Pm32SetRegister(cpu, opcode & X86_MODRM_REGISTER_MASK, 1, Pm32CodeByte(cpu, offset)); PM32_DONE(offset + 1); }
+    if (opcode >= X86_OP_MOV_IMM_FIRST && opcode <= X86_OP_MOV_IMM_LAST) { Pm32SetRegister(cpu, opcode & X86_MODRM_REGISTER_MASK, operandSize, Pm32CodeImmediate(cpu, offset, operandSize)); PM32_DONE(offset + (UINT32)operandSize); }
     /* ---- shifts: C0/C1 imm8, D0/D1 by 1, D2/D3 by CL ---- */
     if (opcode == X86_OP_SHIFT_IMM_BYTE || opcode == X86_OP_SHIFT_IMM || (opcode >= X86_OP_SHIFT_ONE_BYTE && opcode <= X86_OP_SHIFT_CL)) {
         INT width = (opcode & 1) ? operandSize : 1; PM32_MODRM modrm; UINT32 next, count, result, flags = cpu->Flags;
         Pm32Decode(cpu, offset, segmentOverride, &modrm);
         next = offset + (UINT32)modrm.Length;
         if (opcode <= X86_OP_SHIFT_IMM) { count = Pm32CodeByte(cpu, next); next += 1; }
-        else count = (opcode <= X86_OP_SHIFT_ONE) ? 1 : (cpu->Registers[X86_REG_CX] & PM32_LOW_BYTE);
+        else count = (opcode <= X86_OP_SHIFT_ONE) ? 1 : (cpu->Registers[X86_REG_CX] & BYTE_MASK);
         if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, 1)) return 0;
         if (!Pm32Shift(&flags, modrm.Register, Pm32ReadRm(cpu, &modrm, width), count, width, &result)) return 0;
         if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, result); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, result);
@@ -620,32 +566,32 @@ static INT Pm32Step(PM32_CPU *cpu)
         INT width = (opcode == X86_OP_GROUP3_BYTE) ? 1 : operandSize; PM32_MODRM modrm; UINT32 operand, next;
         Pm32Decode(cpu, offset, segmentOverride, &modrm);
         next = offset + (UINT32)modrm.Length;
-        if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, modrm.Register == PM32_GROUP3_NOT || modrm.Register == PM32_GROUP3_NEG)) return 0;
+        if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, modrm.Register == X86_GROUP3_NOT || modrm.Register == X86_GROUP3_NEG)) return 0;
         operand = Pm32ReadRm(cpu, &modrm, width);
         switch (modrm.Register) {
         case PM32_GROUP3_TEST: case PM32_GROUP3_TEST_ALIAS: Pm32Logic(&cpu->Flags, operand & Pm32CodeImmediate(cpu, next, width), width); next += (UINT32)width; break;
-        case PM32_GROUP3_NOT: { UINT32 result = ~operand & Pm32Mask(width); if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, result); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, result); break; }
-        case PM32_GROUP3_NEG: { UINT32 flags = cpu->Flags, result = Pm32Subtract(&flags, 0, operand, 0, width);
+        case X86_GROUP3_NOT: { UINT32 result = ~operand & Pm32Mask(width); if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, result); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, result); break; }
+        case X86_GROUP3_NEG: { UINT32 flags = cpu->Flags, result = Pm32Subtract(&flags, 0, operand, 0, width);
                   if (operand & Pm32Mask(width)) flags |= EFLAGS_CF_U; else flags &= ~EFLAGS_CF_U;
                   if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, result); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, result);
                   cpu->Flags = flags; break; }
-        case PM32_GROUP3_MUL: case PM32_GROUP3_IMUL: {                                        /* MUL / IMUL acc */
+        case X86_GROUP3_MUL: case X86_GROUP3_IMUL: {                                        /* MUL / IMUL acc */
             INT isOverflow;
             if (width == 1) {
-                UINT32 product = (modrm.Register == PM32_GROUP3_MUL) ? (cpu->Registers[X86_REG_AX] & PM32_LOW_BYTE) * operand
+                UINT32 product = (modrm.Register == X86_GROUP3_MUL) ? (cpu->Registers[X86_REG_AX] & BYTE_MASK) * operand
                                           : (UINT32)((INT32)(INT8)cpu->Registers[X86_REG_AX] * (INT32)(INT8)operand) & WORD_MASK;
                 Pm32SetRegister(cpu, X86_REG_AX, X86_WORD_SIZE, product);
-                isOverflow = (modrm.Register == PM32_GROUP3_MUL) ? (product >> BYTE_SHIFT) != 0 : (INT16)product != (INT8)product;
+                isOverflow = (modrm.Register == X86_GROUP3_MUL) ? (product >> BYTE_SHIFT) != 0 : (INT16)product != (INT8)product;
             } else if (width == X86_WORD_SIZE) {
-                UINT32 product = (modrm.Register == PM32_GROUP3_MUL) ? (cpu->Registers[X86_REG_AX] & WORD_MASK) * operand
+                UINT32 product = (modrm.Register == X86_GROUP3_MUL) ? (cpu->Registers[X86_REG_AX] & WORD_MASK) * operand
                                           : (UINT32)((INT32)(INT16)cpu->Registers[X86_REG_AX] * (INT32)(INT16)operand);
                 Pm32SetRegister(cpu, X86_REG_AX, X86_WORD_SIZE, product); Pm32SetRegister(cpu, X86_REG_DX, X86_WORD_SIZE, product >> WORD_SHIFT);
-                isOverflow = (modrm.Register == PM32_GROUP3_MUL) ? (product >> WORD_SHIFT) != 0 : (INT32)product != (INT16)product;
+                isOverflow = (modrm.Register == X86_GROUP3_MUL) ? (product >> WORD_SHIFT) != 0 : (INT32)product != (INT16)product;
             } else {
-                UINT64 product = (modrm.Register == PM32_GROUP3_MUL) ? (UINT64)cpu->Registers[X86_REG_AX] * operand
+                UINT64 product = (modrm.Register == X86_GROUP3_MUL) ? (UINT64)cpu->Registers[X86_REG_AX] * operand
                                           : (UINT64)((INT64)(INT32)cpu->Registers[X86_REG_AX] * (INT64)(INT32)operand);
                 cpu->Registers[X86_REG_AX] = (UINT32)product; cpu->Registers[X86_REG_DX] = (UINT32)(product >> DWORD_SHIFT);
-                isOverflow = (modrm.Register == PM32_GROUP3_MUL) ? (product >> DWORD_SHIFT) != 0 : (INT64)product != (INT32)product;
+                isOverflow = (modrm.Register == X86_GROUP3_MUL) ? (product >> DWORD_SHIFT) != 0 : (INT64)product != (INT32)product;
             }
             cpu->Flags &= ~(EFLAGS_CF_U | EFLAGS_OF_U);
             if (isOverflow) cpu->Flags |= EFLAGS_CF_U | EFLAGS_OF_U;
@@ -654,19 +600,19 @@ static INT Pm32Step(PM32_CPU *cpu)
             if (!(operand & Pm32Mask(width))) return 0;
             if (width == 1) {
                 UINT32 dividend = cpu->Registers[X86_REG_AX] & WORD_MASK;
-                if (modrm.Register == PM32_GROUP3_DIV) { UINT32 quotient = dividend / operand, remainder = dividend % operand; if (quotient > PM32_LOW_BYTE) return 0;
+                if (modrm.Register == X86_GROUP3_DIV) { UINT32 quotient = dividend / operand, remainder = dividend % operand; if (quotient > BYTE_MASK) return 0;
                                   Pm32SetRegister(cpu, X86_REG_AX, X86_WORD_SIZE, quotient | (remainder << BYTE_SHIFT)); }
                 else { INT32 signedDividend = (INT16)dividend, divisor = (INT8)operand, quotient = signedDividend / divisor, remainder = signedDividend % divisor;
-                       if (quotient > PM32_INT8_MAX || quotient < PM32_INT8_MIN) return 0; Pm32SetRegister(cpu, X86_REG_AX, X86_WORD_SIZE, (quotient & PM32_LOW_BYTE) | ((remainder & PM32_LOW_BYTE) << BYTE_SHIFT)); }
+                       if (quotient > INT8_MAX_VALUE || quotient < INT8_MIN_VALUE) return 0; Pm32SetRegister(cpu, X86_REG_AX, X86_WORD_SIZE, (quotient & BYTE_MASK) | ((remainder & BYTE_MASK) << BYTE_SHIFT)); }
             } else if (width == X86_WORD_SIZE) {
                 UINT32 dividend = ((cpu->Registers[X86_REG_DX] & WORD_MASK) << WORD_SHIFT) | (cpu->Registers[X86_REG_AX] & WORD_MASK);
-                if (modrm.Register == PM32_GROUP3_DIV) { UINT32 quotient = dividend / operand, remainder = dividend % operand; if (quotient > WORD_MASK) return 0;
+                if (modrm.Register == X86_GROUP3_DIV) { UINT32 quotient = dividend / operand, remainder = dividend % operand; if (quotient > WORD_MASK) return 0;
                                   Pm32SetRegister(cpu, X86_REG_AX, X86_WORD_SIZE, quotient); Pm32SetRegister(cpu, X86_REG_DX, X86_WORD_SIZE, remainder); }
                 else { INT32 signedDividend = (INT32)dividend, divisor = (INT16)operand, quotient = signedDividend / divisor, remainder = signedDividend % divisor;
-                       if (quotient > PM32_INT16_MAX || quotient < PM32_INT16_MIN) return 0; Pm32SetRegister(cpu, X86_REG_AX, X86_WORD_SIZE, (UINT32)quotient); Pm32SetRegister(cpu, X86_REG_DX, X86_WORD_SIZE, (UINT32)remainder); }
+                       if (quotient > INT16_MAX_VALUE || quotient < INT16_MIN_VALUE) return 0; Pm32SetRegister(cpu, X86_REG_AX, X86_WORD_SIZE, (UINT32)quotient); Pm32SetRegister(cpu, X86_REG_DX, X86_WORD_SIZE, (UINT32)remainder); }
             } else {
                 UINT64 dividend = ((UINT64)cpu->Registers[X86_REG_DX] << DWORD_SHIFT) | cpu->Registers[X86_REG_AX];
-                if (modrm.Register == PM32_GROUP3_DIV) { UINT64 quotient = dividend / operand, remainder = dividend % operand; if (quotient > DWORD_MASK_U) return 0;
+                if (modrm.Register == X86_GROUP3_DIV) { UINT64 quotient = dividend / operand, remainder = dividend % operand; if (quotient > DWORD_MASK_U) return 0;
                                   cpu->Registers[X86_REG_AX] = (UINT32)quotient; cpu->Registers[X86_REG_DX] = (UINT32)remainder; }
                 else { INT64 signedDividend = (INT64)dividend, divisor = (INT32)operand, quotient, remainder;
                        if (divisor == -1 && signedDividend == (INT64)0x8000000000000000ULL) return 0;
@@ -690,14 +636,14 @@ static INT Pm32Step(PM32_CPU *cpu)
             cpu->Flags = (flags & ~EFLAGS_CF_U) | carry;
             PM32_DONE(offset + (UINT32)modrm.Length);
         }
-        if (opcode == X86_OP_GROUP5 && (modrm.Register == PM32_GROUP5_CALL || modrm.Register == PM32_GROUP5_JMP) && !isOperand16) {
+        if (opcode == X86_OP_GROUP5 && (modrm.Register == X86_GROUP5_CALL || modrm.Register == X86_GROUP5_JMP) && !isOperand16) {
             UINT32 target;
             if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, X86_DWORD_SIZE, 0)) return 0;
             target = Pm32ReadRm(cpu, &modrm, X86_DWORD_SIZE);
-            if (modrm.Register == PM32_GROUP5_CALL) { if (!Pm32CanPush(cpu, X86_DWORD_SIZE)) return 0; Pm32Push(cpu, cpu->Eip + offset + (UINT32)modrm.Length, X86_DWORD_SIZE); }
+            if (modrm.Register == X86_GROUP5_CALL) { if (!Pm32CanPush(cpu, X86_DWORD_SIZE)) return 0; Pm32Push(cpu, cpu->Eip + offset + (UINT32)modrm.Length, X86_DWORD_SIZE); }
             cpu->Eip = target; return 1;
         }
-        if (opcode == X86_OP_GROUP5 && modrm.Register == PM32_GROUP5_PUSH) {
+        if (opcode == X86_OP_GROUP5 && modrm.Register == X86_GROUP5_PUSH) {
             UINT32 value;
             if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, operandSize, 0)) return 0;
             if (!Pm32CanPush(cpu, operandSize)) return 0;
@@ -711,26 +657,26 @@ static INT Pm32Step(PM32_CPU *cpu)
     if (opcode == X86_ESCAPE) {
         BYTE opcode2 = Pm32CodeByte(cpu, offset);
         ++offset;
-        if (opcode2 >= PM32_OP2_JCC_NEAR_FIRST && opcode2 <= PM32_OP2_JCC_NEAR_LAST) {                          /* Jcc rel32 */
+        if (opcode2 >= X86_JCC_NEAR_FIRST && opcode2 <= X86_JCC_NEAR_LAST) {                          /* Jcc rel32 */
             UINT32 displacement = Pm32CodeImmediate(cpu, offset, X86_DWORD_SIZE);
             if (isOperand16) return 0;
             cpu->Eip += offset + X86_DWORD_SIZE;
-            if (Pm32Condition(cpu->Flags, opcode2 & PM32_CONDITION_MASK)) cpu->Eip += displacement;
+            if (Pm32Condition(cpu->Flags, opcode2 & X86_CONDITION_MASK)) cpu->Eip += displacement;
             return 1;
         }
-        if (opcode2 >= PM32_OP2_SETCC_FIRST && opcode2 <= PM32_OP2_SETCC_LAST) {                          /* SETcc r/m8 */
-            PM32_MODRM modrm; UINT32 value = (UINT32)Pm32Condition(cpu->Flags, opcode2 & PM32_CONDITION_MASK);
+        if (opcode2 >= X86_OP2_SETCC_FIRST && opcode2 <= X86_OP2_SETCC_LAST) {                          /* SETcc r/m8 */
+            PM32_MODRM modrm; UINT32 value = (UINT32)Pm32Condition(cpu->Flags, opcode2 & X86_CONDITION_MASK);
             Pm32Decode(cpu, offset, segmentOverride, &modrm);
             if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, 1, 1)) return 0;
             if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, 1, value); else Pm32SetRegister(cpu, modrm.RegisterMemory, 1, value);
             PM32_DONE(offset + (UINT32)modrm.Length);
         }
-        if (opcode2 == PM32_OP2_MOVZX_BYTE || opcode2 == PM32_OP2_MOVZX_WORD || opcode2 == PM32_OP2_MOVSX_BYTE || opcode2 == PM32_OP2_MOVSX_WORD) {  /* MOVZX / MOVSX */
+        if (opcode2 == X86_OP2_MOVZX_BYTE || opcode2 == X86_OP2_MOVZX_WORD || opcode2 == X86_OP2_MOVSX_BYTE || opcode2 == X86_OP2_MOVSX_WORD) {  /* MOVZX / MOVSX */
             INT sourceWidth = (opcode2 & 1) ? X86_WORD_SIZE : 1; PM32_MODRM modrm; UINT32 value;
             Pm32Decode(cpu, offset, segmentOverride, &modrm);
             if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, sourceWidth, 0)) return 0;
             value = Pm32ReadRm(cpu, &modrm, sourceWidth);
-            if (opcode2 >= PM32_OP2_MOVSX_BYTE) value = (sourceWidth == 1) ? (UINT32)(INT32)(INT8)value : (UINT32)(INT32)(INT16)value;
+            if (opcode2 >= X86_OP2_MOVSX_BYTE) value = (sourceWidth == 1) ? (UINT32)(INT32)(INT8)value : (UINT32)(INT32)(INT16)value;
             Pm32SetRegister(cpu, modrm.Register, operandSize, value);
             PM32_DONE(offset + (UINT32)modrm.Length);
         }
@@ -750,8 +696,8 @@ static INT Pm32Step(PM32_CPU *cpu)
             PM32_MODRM modrm; UINT32 next, count, destinationValue, sourceValue, result, flags, bits = (UINT32)operandSize * BITS_PER_BYTE, mask = Pm32Mask(operandSize);
             Pm32Decode(cpu, offset, segmentOverride, &modrm);
             next = offset + (UINT32)modrm.Length;
-            if (opcode2 == PM32_OP2_SHLD_IMM || opcode2 == PM32_OP2_SHRD_IMM) { count = Pm32CodeByte(cpu, next); next += 1; } else count = cpu->Registers[X86_REG_CX] & PM32_LOW_BYTE;
-            count &= PM32_SHIFT_COUNT_MASK;
+            if (opcode2 == PM32_OP2_SHLD_IMM || opcode2 == PM32_OP2_SHRD_IMM) { count = Pm32CodeByte(cpu, next); next += 1; } else count = cpu->Registers[X86_REG_CX] & BYTE_MASK;
+            count &= X86_SHIFT_COUNT_MASK;
             if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, operandSize, 1)) return 0;
             if (!count) PM32_DONE(next);
             if (count > bits) return 0;                            /* undefined: let the CPU */

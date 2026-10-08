@@ -79,6 +79,52 @@
 #define X86_OP_OUTSB            0x6E
 #define X86_OP_OUTS             0x6F        /* OUTSW / OUTSD                            */
 #define X86_PREFIXES_MAX        4           /* a decoder gives up after this many       */
+
+/* The ModRM byte and the opcode extensions its reg field selects -- shared by the V86 and
+   the 32-bit protected-mode interpreters. */
+#define X86_MODRM_MODE_SHIFT    6
+#define X86_MODRM_REG_SHIFT     3
+#define X86_MODRM_REGISTER_MASK 7
+#define X86_MODE_DISP8          1           /* mod 01: an 8-bit displacement            */
+#define X86_MODE_REGISTER       3           /* mod 11: a register, not memory           */
+#define X86_BYTE_REGISTERS      4           /* AL..BL; 4..7 are AH..BH                  */
+#define X86_ALU_ADD             0           /* 00-3F's operation, and group 1's /r      */
+#define X86_ALU_OR              1
+#define X86_ALU_ADC             2
+#define X86_ALU_SBB             3
+#define X86_ALU_AND             4
+#define X86_ALU_SUB             5
+#define X86_ALU_XOR             6
+#define X86_ALU_CMP             7
+#define X86_SHIFT_ROL           0           /* group 2                                  */
+#define X86_SHIFT_ROR           1
+#define X86_SHIFT_RCL           2
+#define X86_SHIFT_RCR           3
+#define X86_SHIFT_SHL           4
+#define X86_SHIFT_SHR           5
+#define X86_SHIFT_SAL           6
+#define X86_SHIFT_SAR           7
+#define X86_SHIFT_COUNT_MASK    0x1F        /* the CPU masks a shift count to 5 bits    */
+#define X86_GROUP3_NOT          2
+#define X86_GROUP3_NEG          3
+#define X86_GROUP3_MUL          4
+#define X86_GROUP3_IMUL         5
+#define X86_GROUP3_DIV          6
+#define X86_GROUP5_CALL         2
+#define X86_GROUP5_JMP          4
+#define X86_GROUP5_PUSH         6
+#define X86_CONDITION_MASK      0xF         /* Jcc / SETcc: the condition nibble        */
+#define X86_OP2_MOVZX_BYTE      0xB6        /* after X86_ESCAPE                         */
+#define X86_OP2_MOVZX_WORD      0xB7
+#define X86_OP2_MOVSX_BYTE      0xBE
+#define X86_OP2_MOVSX_WORD      0xBF
+#define X86_OP2_SETCC_FIRST     0x90
+#define X86_OP2_SETCC_LAST      0x9F
+#define X86_BYTE_SIGN_U         0x80u
+#define X86_WORD_SIGN_U         0x8000u
+#define X86_DWORD_SIGN_U        0x80000000u
+#define X86_REPEAT_REP          1           /* an interpreter's REP state                */
+#define X86_REPEAT_REPNE        2
 #define X86_SELECTOR_INDEX_SHIFT 3          /* a selector's descriptor index starts at bit 3 */
 #define X86_DESCRIPTOR_FLAGS_SHIFT 20      /* the flags nibble: bits 20-23 of the high dword */
 #define X86_WORD_SIZE_U         2u
