@@ -35691,7 +35691,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                              tail " " + name HELLO.COM ran NOTHING (a blank line is "no
                              command" and the shell went to its prompt). */
                         commandDone = 1;
-                        {   CHAR *writeCursor = cmdbuf, *limit = cmdbuf + sizeof(cmdbuf) - 2;
+                        {   PSTR writeCursor = cmdbuf, limit = cmdbuf + sizeof(cmdbuf) - 2;
                             PCSTR firstProgram = g_FirstProgram;
                             while (*firstProgram && writeCursor < limit) *writeCursor++ = *firstProgram++;
                             if (g_FirstTail[0] && writeCursor < limit) {
