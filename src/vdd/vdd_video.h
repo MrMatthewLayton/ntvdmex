@@ -44,6 +44,9 @@
      construction. */
 #define VIDEO_PLANE_SIZE    65536u                        /* bytes/plane, as on a VGA */
 #define VIDEO_BPP_INDEXED             8
+#define VIDEO_VBE_AH                 0x4F    /* INT 10h AH=4Fh: the VESA BIOS extension */
+#define VIDEO_VBE_CONTROLLER_INFO_AX 0x4F00
+#define VIDEO_VBE_MODE_INFO_AX       0x4F01
 #define VIDEO_PLANES                  4
 #define VIDEO_ALL_PLANES              0x0F
 #define VIDEO_PLANE_INDEX_MASK        3

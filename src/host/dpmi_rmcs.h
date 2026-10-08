@@ -150,6 +150,7 @@ static INT RmcsSimIntRoute(UINT vector, WORD ivtSegment, WORD ivtOffset,
      any host could make.
    ⚠ SP = 0 IS A FULL 64 KB, not an empty stack: the first push wraps it to FFFEh. */
 #define RMCS_STACK_FULL  0x10000u   /* SP = 0: all 64 KB                            */
+#define RMCS_DEFAULT_SP  0xFF00     /* SS:SP = 0:0 -> the host's stack, SP here       */
 #define RMCS_WORD_BYTES  2u
 static INT RmcsStackPlan(WORD stackPointer, UINT words, UINT frame, PWORD stackPointerAfter)
 {

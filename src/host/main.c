@@ -21829,7 +21829,7 @@ static INT PmLfnCopy(WORD selector, DWORD offset, DWORD transferOffset, DWORD le
     else    for (index = 0; index < length; ++index) guest[index] = transfer[index];
     return 0;
 }
-
+enum { RMCS_RUN_ROUNDS_MAX = 128, PM_INT21_HANDLE_LIMIT = 24, PM_INT21_LOCK_REGION = 0xFF80 };   /* DpmiServicePmIntBody: 0301h's nested run, PM INT 21h */
 /* How many bytes of an output window go back: all `len` of a block (kind 2), or a
    string's length + its NUL, never more than `len` (kind 4). */
 static DWORD PmLfnOutLength(DWORD transferOffset, INT kind, DWORD length)
@@ -25982,7 +25982,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             { WORD handlerSegment = PeekWord(IVT_SEGMENT_ADDRESS(interruptNumber)), handlerOffset = PeekWord(IVT_OFFSET_ADDRESS(interruptNumber));
                               if (RmcsSimIntRoute(interruptNumber, handlerSegment, handlerOffset, g_SimIntReflect, DOS_HDLR_SEG) != SIMINT_FAST) {
                                   g_SimIntUnhandled++;
-                                  if (interruptNumber < 256) g_SimIntVector[interruptNumber]++;
+                                  if (interruptNumber < IVT_VECTORS) g_SimIntVector[interruptNumber]++;
                                   cursor = LogPut(cursor, " -> simInt 0x"); cursor = LogHex(cursor, interruptNumber);
                                   cursor = LogPut(cursor, (handlerSegment | handlerOffset) ? " NOT RUN (simintrefl_off.flag)" : " NOT RUN (null vector)");
                                   break;
@@ -26071,26 +26071,26 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 NTVDD_REGISTERS videoRegisters; RegistersLoad(&videoRegisters, tib);
                                 WORD inAx = (WORD)videoRegisters.Eax, inCx = (WORD)videoRegisters.Ecx;
                                 HOST_LOCK();
-                                VddBusDeliverInterrupt(&g_Bus, 0x10, &videoRegisters);
+                                VddBusDeliverInterrupt(&g_Bus, VECTOR_VIDEO, &videoRegisters);
                                 HOST_UNLOCK();
                                 Int10WaitAfter();                     /* #226: 4F07h BL=80h */
                                 /* s84: ZAR stopped seeing VESA. Its VBE traffic arrives HERE
                                    (int86 = 0300 BL=10h), where nothing counted it and the
                                    close path skips the STAGE2 summary. Say what we answered,
                                    bounded. For 4F01 the ModeAttributes word leads the block. */
-                                if ((inAx >> BYTE_SHIFT) == 0x4F) {
+                                if ((inAx >> BYTE_SHIFT) == VIDEO_VBE_AH) {
                                     static INT vbeLogged;
                                     if (vbeLogged++ < 48) {
                                         CHAR vectorLine[160], *vectorCursor = vectorLine;
                                         vectorCursor = LogPut(vectorCursor, "SIMINT10 VBE in=0x"); vectorCursor = LogHex(vectorCursor, inAx);
                                         vectorCursor = LogPut(vectorCursor, " cx=0x"); vectorCursor = LogHex(vectorCursor, inCx);
                                         vectorCursor = LogPut(vectorCursor, " -> ax=0x"); vectorCursor = LogHex(vectorCursor, (WORD)videoRegisters.Eax);
-                                        if (inAx == 0x4F01 || inAx == 0x4F00) {
+                                        if (inAx == VIDEO_VBE_MODE_INFO_AX || inAx == VIDEO_VBE_CONTROLLER_INFO_AX) {
                                             DWORD linear = ((DWORD)(WORD)videoRegisters.Es << PARAGRAPH_SHIFT) + (WORD)videoRegisters.Edi;
                                             if (HostReadable((const VOID *)(ULONG_PTR)linear, 8)) {
-                                                vectorCursor = LogPut(vectorCursor, inAx == 0x4F01 ? " attr=0x" : " sig/ver=");
+                                                vectorCursor = LogPut(vectorCursor, inAx == VIDEO_VBE_MODE_INFO_AX ? " attr=0x" : " sig/ver=");
                                                 vectorCursor = LogHex(vectorCursor, *(volatile DWORD *)(ULONG_PTR)linear);
-                                                if (inAx == 0x4F00) { vectorCursor = LogPut(vectorCursor, "/0x"); vectorCursor = LogHex(vectorCursor, *(volatile WORD *)(ULONG_PTR)(linear + 4)); }
+                                                if (inAx == VIDEO_VBE_CONTROLLER_INFO_AX) { vectorCursor = LogPut(vectorCursor, "/0x"); vectorCursor = LogHex(vectorCursor, *(volatile WORD *)(ULONG_PTR)(linear + 4)); }
                                             }
                                         }
                                         vectorCursor = LogPut(vectorCursor, "\r\n"); LogAppend(LOG_PATH, vectorLine, vectorCursor);
@@ -26155,8 +26155,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                   pFlags=VDM_REG(tib,VTIB_EFLAGS);
                             WORD machineStatusWord = *(volatile WORD *)(tib + VTIB_MSW);
                             /* real-mode target + stack from the RMCS (default SS:SP to the code seg) */
-                            WORD realCs = *(volatile WORD*)(registers+0x2C), realIp = *(volatile WORD*)(registers+0x2A);
-                            WORD realSs = *(volatile WORD*)(registers+0x30), realSp = *(volatile WORD*)(registers+0x2E);
+                            WORD realCs = *(volatile WORD*)(registers+RMCS_CS), realIp = *(volatile WORD*)(registers+RMCS_IP);
+                            WORD realSs = *(volatile WORD*)(registers+RMCS_SS), realSp = *(volatile WORD*)(registers+RMCS_SP);
                             UINT round; INT done = 0;
                             DWORD stackWordsToCopy = savedEcx & WORD_MASK;   /* words of PM stack to copy (DPMI 0.9) */
                             RMCS_REGS rmcsRegisters;
@@ -26166,7 +26166,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             /* 0301h/0302h rewrite the VDM into V86 and back for real, so they are
                                the SAME window as 0300h and share its guard -- see g_SimIntBusy. */
                             InterlockedExchange(&g_SimIntBusy, 1);
-                            if (realSs == 0) { realSs = (WORD)(g_DpmiCodeBase >> PARAGRAPH_SHIFT); realSp = 0xFF00; }
+                            if (realSs == 0) { realSs = (WORD)(g_DpmiCodeBase >> PARAGRAPH_SHIFT); realSp = RMCS_DEFAULT_SP; }
                             cursor = LogPut(cursor, (ax == DPMI_FN_CALL_REAL_MODE_IRET) ? " -> callRM(iret) 0x" : " -> callRM 0x");
                             cursor = LogHex(cursor, realCs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, realIp);
                             cursor = LogPut(cursor, " SS:SP=0x"); cursor = LogHex(cursor, realSs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, realSp);
@@ -26186,10 +26186,10 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 DWORD protectedOffset = DpmiSelectorIs32(protectedSs) ? pmSp : (pmSp & WORD_MASK);
                                 const BYTE *source = (const BYTE *)(ULONG_PTR)(DpmiSelectorBase(protectedSs) + protectedOffset);
                                 cursor = LogPut(cursor, " copy=0x"); cursor = LogHex(cursor, stackWordsToCopy);
-                                if (RmcsStackPlan(realSp, (UINT)stackWordsToCopy, (ax == DPMI_FN_CALL_REAL_MODE_IRET) ? 6u : 4u, &newSp)
+                                if (RmcsStackPlan(realSp, (UINT)stackWordsToCopy, (ax == DPMI_FN_CALL_REAL_MODE_IRET) ? X86_IRET16_SIZE : X86_FAR_RETURN16_SIZE, &newSp)
                                     && HostReadable(source, stackWordsToCopy * 2u)) {
                                     DWORD item;
-                                    for (item = 0; item < stackWordsToCopy * 2u; ++item)
+                                    for (item = 0; item < stackWordsToCopy * RMCS_WORD_BYTES; ++item)
                                         *(volatile BYTE *)(ULONG_PTR)(((DWORD)realSs << PARAGRAPH_SHIFT) + (WORD)(newSp + item)) = source[item];
                                     realSp = newSp;
                                     cursor = LogPut(cursor, " words");
@@ -26204,7 +26204,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                  through with an EMPTY name there was no way to tell whether the
                                  client had copied nothing or we were reading the wrong place.
                                  Print both the pointer and what is actually AT it. */
-                            { WORD realDs = *(volatile WORD*)(registers+0x24), realDx = *(volatile WORD*)(registers+0x14);
+                            { WORD realDs = *(volatile WORD*)(registers+RMCS_DS), realDx = *(volatile WORD*)(registers+RMCS_EDX);
                               DWORD linear = ((DWORD)realDs << PARAGRAPH_SHIFT) + realDx;
                               const BYTE *stackBytes = (const BYTE *)(ULONG_PTR)linear;
                               cursor = LogPut(cursor, " AX=0x"); cursor = LogHex(cursor, *(volatile WORD*)(registers+0x1C));
@@ -26226,14 +26226,14 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                present only for 0302 (the procedure will IRET, not RETF). */
                             if (ax == DPMI_FN_CALL_REAL_MODE_IRET) {
                                 realSp -= X86_WORD_SIZE; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp,
-                                                *(volatile WORD*)(registers+0x20));   /* RMCS.Flags */
+                                                *(volatile WORD*)(registers+RMCS_FLAGS));   /* RMCS.Flags */
                             }
                             realSp -= X86_WORD_SIZE; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp, DOS_HDLR_SEG);   /* return CS */
                             realSp -= X86_WORD_SIZE; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp, DPMI_RMRET_OFF);  /* return IP */
                             DpmiUnpatch();   /* restore real `CD nn` so RM ints in the proc vector natively */
                             /* --- rewrite the CONTEXT to V86 with the RMCS register file --- */
                             *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(machineStatusWord & ~MSW_PE_BIT);  /* leave PM */
-                            VDM_REG(tib,VTIB_EFLAGS) = 0x20202;    /* VM + IF + reserved bit-1 */
+                            VDM_REG(tib,VTIB_EFLAGS) = EFLAGS_VM | EFLAGS_IF | EFLAGS_RESERVED_ONE;    /* VM + IF + reserved bit-1 */
                             /* ── #247: THE WHOLE REGISTER FILE, 32 BITS WIDE, FS AND GS INCLUDED. ──
                                  This read the low WORD of each general register (zeroing the top
                                  half a 386 real-mode handler may take as input) and set FS = GS =
@@ -26256,7 +26256,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             VDM_SET16(tib,VTIB_CS,realCs); VDM_REG(tib,VTIB_EIP)=realIp;
                             VDM_SET16(tib,VTIB_SS,realSs); VDM_REG(tib,VTIB_ESP)=realSp;
                             /* --- nested V86 run loop: run the proc until the return-BOP --- */
-                            for (round = 0; round < 128 && !done; ++round) {
+                            for (round = 0; round < RMCS_RUN_ROUNDS_MAX && !done; ++round) {
                                 LONG runStatus; DWORD rev;
                                 /* ── ★★★ A DEVICE IRQ RAISED IN HERE HAD NOWHERE TO GO.
                                      The cooperative delivery gate lived in the MAIN exec
@@ -26282,7 +26282,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 if (rev == VDM_EVENT_BOP && info == DPMI_RMRET_BOP) {
                                     done = 1; break;                /* proc RETF'd -> finished */
                                 }
-                                if (rev == VDM_EVENT_BOP && info == 0x20) {   /* INT 21h from the proc */
+                                if (rev == VDM_EVENT_BOP && info == DOS_BOP_INT21) {   /* INT 21h from the proc */
                                     m.TraceCursor = cursor; m.CanTrampoline = 1; DosInt21(&m); m.CanTrampoline = 0; cursor = m.TraceCursor;
                                     if (m.Trampoline) {               /* #251: AUX/PRN driver code; its */
                                         VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);   /* INT 14h/17h are */
@@ -26494,7 +26494,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                  an unbound open device slot is the console, except 3/4,
                                  which are AUX and PRN (#251). */
                             INT bound = (bh < DOS_MAX_FILES && m.FileHandles[bh] != 0);
-                            INT device   = (!bound && bh < 32 && ((m.StdOpen >> bh) & 1u));
+                            INT device   = (!bound && bh < BITS_PER_DWORD && ((m.StdOpen >> bh) & 1u));
                             VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
                             if (device && (bh == DOS_HANDLE_AUX || bh == DOS_HANDLE_PRN)) {     /* AUX / PRN */
                                 DWORD item;
@@ -26593,7 +26593,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                         lastError == ERROR_ALREADY_EXISTS)     ? DOS_ERR_FILE_EXISTS :
                                        (lastError == ERROR_TOO_MANY_OPEN_FILES)? DOS_ERR_TOO_MANY_OPEN_FILES : DOS_ERR_FILE_NOT_FOUND); }
                             else { INT slot; for (slot = DOS_STD_HANDLES; slot < DOS_MAX_FILES && m.FileHandles[slot]; ++slot) {}
-                                   if (slot < 24) { m.FileHandles[slot] = file; VDM_SET16(tib, VTIB_EAX, slot);
+                                   if (slot < PM_INT21_HANDLE_LIMIT) { m.FileHandles[slot] = file; VDM_SET16(tib, VTIB_EAX, slot);
                                                     if (ah == DOS_FN_CREATE || ah == DOS_FN_CREATE_NEW) DosStampVdmNow(file); /* #263 */ }
                                    else { CloseHandle(file); VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, DOS_ERR_TOO_MANY_OPEN_FILES); } }
                             /* ── ⚠ "-> AX=0x2" MEANT TWO OPPOSITE THINGS. (session 37) ──
@@ -26772,7 +26772,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 INT ldtIndex = g_LdtNext++;
                                 WORD selector;
                                 g_Ldt[ldtIndex].Base   = segment << PARAGRAPH_SHIFT;
-                                g_Ldt[ldtIndex].Limit  = want ? (want * PARAGRAPH_SIZE_U - 1u) : 0xFFFF;
+                                g_Ldt[ldtIndex].Limit  = want ? (want * PARAGRAPH_SIZE_U - 1u) : X86_SEGMENT_LIMIT_64K;
                                 g_Ldt[ldtIndex].Access = DPMI_ACCESS_DATA;          /* present, DPL3, data R/W */
                                 g_Ldt[ldtIndex].Flags  = 0;             /* 16-bit, byte granular   */
                                 DpmiInstall(ldtIndex);
@@ -26807,7 +26807,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             INT error;
                             cursor = LogPut(cursor, "INT21h AH=49 (PM) free sel 0x"); cursor = LogHex(cursor, selector);
                             cursor = LogPut(cursor, " base 0x"); cursor = LogHex(cursor, segmentBase);
-                            if ((segmentBase & PARAGRAPH_LAST_BYTE) || segmentBase > 0xFFFFFu) {
+                            if ((segmentBase & PARAGRAPH_LAST_BYTE) || segmentBase > X86_REAL_MODE_LAST_U) {
                                 /* Not a paragraph-aligned conventional-memory base: this is not
                                    a block DOS ever handed out, so refuse LOUDLY rather than
                                    corrupt the MCB chain guessing. */
@@ -26897,7 +26897,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             cursor = LogPut(cursor, "INT21h AH=4A (PM) resize sel 0x"); cursor = LogHex(cursor, selector);
                             cursor = LogPut(cursor, " base 0x"); cursor = LogHex(cursor, segmentBase);
                             cursor = LogPut(cursor, " to 0x"); cursor = LogHex(cursor, want); cursor = LogPut(cursor, " paras");
-                            if ((segmentBase & PARAGRAPH_LAST_BYTE) || segmentBase > 0xFFFFFu) {
+                            if ((segmentBase & PARAGRAPH_LAST_BYTE) || segmentBase > X86_REAL_MODE_LAST_U) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
                                 VDM_SET16(tib, VTIB_EAX, DOS_ERR_INVALID_BLOCK);   /* invalid memory block address */
                                 cursor = LogPut(cursor, " -> REFUSED (not a DOS paragraph)");
@@ -26968,7 +26968,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         if (ah == DOS_FN_LFN) {
                             if (g_PmTransferSegment) { m.TraceCursor = cursor; cursor = PmInt21Lfn(&m, tib, cursor); }
                             else {
-                                VDM_SET16(tib, VTIB_EAX, 0x7100);
+                                VDM_SET16(tib, VTIB_EAX, DOS_FN_LFN << BYTE_SHIFT);
                                 VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
                                 cursor = LogPut(cursor, "INT21h AX=71xx (PM, no xfer buffer) -> AX=7100 CF=1"
                                             " (no LFN API for this client)\r\n");
@@ -27149,7 +27149,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              FFxx, so only the subfunction with a guest and a decoded call
                              site behind it is answered. Anything else still lands in the
                              dump, which is what names the next one. */
-                        if (VDM_REG16(tib, VTIB_EAX) == 0xFF80) {
+                        if (VDM_REG16(tib, VTIB_EAX) == PM_INT21_LOCK_REGION) {
                             VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;      /* CF=0 -- locked */
                             cursor = LogPut(cursor, "INT21h AX=FF80h lock region -> CF=0 (guest memory is"
                                         " never paged here, so it is already locked)\r\n");

@@ -58,6 +58,7 @@
 /* A segment spans at most 64 KB; a far pointer is offset then segment. */
 #define X86_SEGMENT_SIZE_U      0x10000u
 #define X86_SEGMENT_LIMIT_64K   0xFFFF
+#define X86_REAL_MODE_LAST_U    0xFFFFFu    /* the last real-mode linear byte: 1 MB - 1 */
 #define X86_FAR_POINTER_SEGMENT 2
 #define X86_SELECTOR_NULL_MASK  0xFFFC      /* a selector is null when these bits are   */
 
