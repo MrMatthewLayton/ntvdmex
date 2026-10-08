@@ -1302,9 +1302,9 @@ static DWORD    g_UiInputFirst;                         /* input served ahead of
 static uint32_t QpcMicroseconds(LONGLONG ticks);          /* fwd: defined with the lock instruments */
 static void ModeYTimelineReport(void);          /* fwd: north star 1, with the mode-Y remap */
 static void GusReport(void);               /* fwd: north star 2, with the GUS globals */
-static int  modey_interp_serves(void);      /* fwd: north star 1, design C */
-static void my_ring_dump(const char *why);  /* fwd: north star 1, design C */
-static void my_ring_note_irq(unsigned vec, WORD cs, WORD ip, WORD ss, WORD sp);
+static int  ModeYInterpServes(void);      /* fwd: north star 1, design C */
+static void ModeYRingDump(const char *why);  /* fwd: north star 1, design C */
+static void ModeYRingNoteIrq(unsigned vector, WORD cs, WORD ip, WORD ss, WORD sp);
 static int host_readable(const void *addr, SIZE_T len);  /* fwd: defined with the VEH */
 static volatile LONGLONG g_KeyLatencyTimes[KEYLAT_RING];
 static volatile LONG     g_KeyLatencyHead, g_KeyLatencyTail;
@@ -1882,7 +1882,7 @@ static DWORD          g_Irq0SkipStub= 0;  /* ...because we were inside our INT 0
 static DWORD          g_PitReloadLog = 0;
 static DWORD          g_PitLatchDumps = 0;   /* PIT-LATCH poll-ring dumps printed (max 2) */
 static DWORD          g_HeartbeatDs = 0;            /* guest DS sampled by the heartbeat (s69 fade dump) */
-static int imem_page_ok(uint32_t lin);        /* fwd: page-validity guard, defined with V86HostRead8 */
+static int InterpreterMemoryPageOk(uint32_t linear);        /* fwd: page-validity guard, defined with V86HostRead8 */
 static DWORD          g_EventIntPending    = 0;  /* event-3 interrupt-pending notifications */
 static DWORD          g_EventIoString      = 0;  /* REP INS/OUTS (event 1) reflects serviced */
 static DWORD          g_Irq1Injected      = 0;  /* INT 09h injections (should track scancodes) */
@@ -1985,15 +1985,15 @@ static int            g_OplTraceOn   = 0;
 static DWORD          g_P12Batches   = 0;
 static DWORD          g_P12Instructions    = 0;
 static DWORD          g_P12Bails     = 0;
-/* North star 1, design C (s80) -- see modey_needs_interp(). */
-static int            g_MyInterpOffset = 0;  /* MYINTERP_OFF_FLAG                          */
-static int            g_MyInterp     = 0;  /* inside host_interp on mode Y's behalf       */
-static DWORD          g_MySlices = 0, g_MyInstructions = 0, g_MyBails = 0, g_MyBailMp = 0;
-static int            g_MyRingOn    = 0;  /* MYRING_FLAG: record the ring (a copy per instruction) */
-static int            g_MyPmOffset     = 0;  /* MYPM_OFF_FLAG                               */
-static int            g_MyPmDetect  = 0;  /* MYPM_DETECT_FLAG                            */
-static DWORD          g_MyPmRuns = 0, g_MyPmInstructions = 0, g_MyPmBails = 0, g_MyPmBailMp = 0;
-static DWORD          g_MyPmStop[6];       /* returned, window closed, declined, cap, not32, irq (#172) */
+/* North star 1, design C (s80) -- see ModeYNeedsInterp(). */
+static int            g_ModeYInterpOffset = 0;  /* MYINTERP_OFF_FLAG                          */
+static int            g_ModeYInterp     = 0;  /* inside host_interp on mode Y's behalf       */
+static DWORD          g_ModeYSlices = 0, g_ModeYInstructions = 0, g_ModeYBails = 0, g_ModeYBailMp = 0;
+static int            g_ModeYRingOn    = 0;  /* MYRING_FLAG: record the ring (a copy per instruction) */
+static int            g_ModeYPmOffset     = 0;  /* MYPM_OFF_FLAG                               */
+static int            g_ModeYPmDetect  = 0;  /* MYPM_DETECT_FLAG                            */
+static DWORD          g_ModeYPmRuns = 0, g_ModeYPmInstructions = 0, g_ModeYPmBails = 0, g_ModeYPmBailMp = 0;
+static DWORD          g_ModeYPmStop[6];       /* returned, window closed, declined, cap, not32, irq (#172) */
 /* ── EVERY DISTINCT BAIL SITE, NOT THE FIRST TWELVE LINES. (s68) ──────────────────
      In a planar mode a bail is not one instruction: VdmRunGuest keeps the guest until the
      next EVENT with A0000 unprotected, so every VRAM write in that stretch is lost to
@@ -4593,7 +4593,7 @@ static void InjectInt(volatile BYTE *tib, unsigned vector)
     WORD cs = (WORD)VDM_REG(tib, VTIB_CS),  ip = (WORD)VDM_REG(tib, VTIB_EIP);
     DWORD eflags = VDM_REG(tib, VTIB_EFLAGS);
     WORD flags = (WORD)eflags;                           /* push the live frame's FLAGS */
-    my_ring_note_irq(vector, cs, ip, ss, sp);         /* north star 1: where did it land? */
+    ModeYRingNoteIrq(vector, cs, ip, ss, sp);         /* north star 1: where did it land? */
     /* ★ Fold VIF into the pushed IF. On VME hardware the guest's REAL interrupt-enable
        lives in EFLAGS.VIF (bit 19), because that is what its own STI sets -- but an IRET
        frame is 16 bits wide, so a straight truncation drops VIF and pushes IF=0. The
@@ -7488,7 +7488,7 @@ static DWORD WINAPI HeartbeatThread(LPVOID parameter)
         /* ⛔ READ GUEST MEMORY HERE ONLY THROUGH ReadProcessMemory. (s81, Mario) A
              check-then-dereference is a race on this thread: the A0000 window is remapped
              under a mode switch, and a pal2668 read with DS=A000 took an AV in between
-             imem_page_ok() and the load -- the diagnostic killed the host it was watching.
+             InterpreterMemoryPageOk() and the load -- the diagnostic killed the host it was watching.
              RPM on our own process fails cleanly instead of faulting. */
         if (cs || ip) {
             BYTE callback8[8]; SIZE_T got = 0;
@@ -15693,7 +15693,7 @@ static DWORD  g_ModeYSelectorZero  = 0;   /* ...and the mask selected no plane a
                 whole defect); a trap-per-write design would pay per store
          us     host time spent inside this function     (the current design's own cost)
          flip   CRTC 0Ch (start address high) writes      (guest frames, for page-flippers)
-         ins    instructions interpreted for mode Y        (design C, modey_needs_interp)
+         ins    instructions interpreted for mode Y        (design C, ModeYNeedsInterp)
          ius    host time spent interpreting them          (compare with `us`)
      Timed with RDTSC, not QPC: on XP QPC can be the ACPI PM timer at ~1 us a read, and
      this runs ~10^5 times a second in Doom's low detail; two QPCs a call would perturb
@@ -16126,17 +16126,17 @@ static void ModeYRemapSelect(void *context, int mask)
    a DOS/4GW guest leaves through the watchdog's forced exit and never reaches the STAGE2
    summary, and Doom is the guest this exists for. Prints once. */
 #define MY_SITE_MAX 16
-static struct { DWORD Cs, Ip, Count; BYTE Bytes[8]; } g_MySite[MY_SITE_MAX];
-static unsigned g_MySiteCount = 0;
+static struct { DWORD Cs, Ip, Count; BYTE Bytes[8]; } g_ModeYSite[MY_SITE_MAX];
+static unsigned g_ModeYSiteCount = 0;
 static void ModeYBailNote(DWORD cs, DWORD ip, const volatile BYTE *bytes)
 {
     unsigned index, byteIndex;
-    for (index = 0; index < g_MySiteCount; ++index)
-        if (g_MySite[index].Cs == cs && g_MySite[index].Ip == ip) { g_MySite[index].Count++; return; }
-    if (g_MySiteCount >= MY_SITE_MAX) return;
-    g_MySite[index].Cs = cs; g_MySite[index].Ip = ip; g_MySite[index].Count = 1;
-    for (byteIndex = 0; byteIndex < 8; ++byteIndex) g_MySite[index].Bytes[byteIndex] = bytes[byteIndex];
-    ++g_MySiteCount;
+    for (index = 0; index < g_ModeYSiteCount; ++index)
+        if (g_ModeYSite[index].Cs == cs && g_ModeYSite[index].Ip == ip) { g_ModeYSite[index].Count++; return; }
+    if (g_ModeYSiteCount >= MY_SITE_MAX) return;
+    g_ModeYSite[index].Cs = cs; g_ModeYSite[index].Ip = ip; g_ModeYSite[index].Count = 1;
+    for (byteIndex = 0; byteIndex < 8; ++byteIndex) g_ModeYSite[index].Bytes[byteIndex] = bytes[byteIndex];
+    ++g_ModeYSiteCount;
 }
 static void ModeYTimelineReport(void)
 {
@@ -16148,7 +16148,7 @@ static void ModeYTimelineReport(void)
     if (done || !g_ModeYTimelineT0) { if (!done) hostprof_dump(); return; }
     done = 1;
     hostprof_dump();
-    if (g_MySlices && g_MyRingOn) my_ring_dump("at exit -- the last instructions interpreted for mode Y");
+    if (g_ModeYSlices && g_ModeYRingOn) ModeYRingDump("at exit -- the last instructions interpreted for mode Y");
     QueryPerformanceCounter(&now);
     microsecondsRun = QpcMicroseconds(now.QuadPart - g_ModeYTimelineQpcBase);
     cpu = microsecondsRun ? (ModeYTimelineRdtsc() - g_ModeYTimelineTscBase) / microsecondsRun : 0;    /* cycles per us */
@@ -16157,19 +16157,19 @@ static void ModeYTimelineReport(void)
     cursor = LogPut(cursor, " secs="); cursor = LogDecimal(cursor, last + 1);
     cursor = LogPut(cursor, " fanB_total="); cursor = LogDecimal(cursor, g_ModeYFanoutBytes);
     cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer;
-    cursor = LogPut(cursor, "STAGE2: MODEY-INTERP "); cursor = LogPut(cursor, g_MyInterpOffset ? "OFF (knob)" : "on");
-    cursor = LogPut(cursor, " slices="); cursor = LogDecimal(cursor, g_MySlices);
-    cursor = LogPut(cursor, " instrs="); cursor = LogDecimal(cursor, g_MyInstructions);
-    cursor = LogPut(cursor, " bails="); cursor = LogDecimal(cursor, g_MyBails);
-    cursor = LogPut(cursor, " bails_under_multiplane="); cursor = LogDecimal(cursor, g_MyBailMp);
+    cursor = LogPut(cursor, "STAGE2: MODEY-INTERP "); cursor = LogPut(cursor, g_ModeYInterpOffset ? "OFF (knob)" : "on");
+    cursor = LogPut(cursor, " slices="); cursor = LogDecimal(cursor, g_ModeYSlices);
+    cursor = LogPut(cursor, " instrs="); cursor = LogDecimal(cursor, g_ModeYInstructions);
+    cursor = LogPut(cursor, " bails="); cursor = LogDecimal(cursor, g_ModeYBails);
+    cursor = LogPut(cursor, " bails_under_multiplane="); cursor = LogDecimal(cursor, g_ModeYBailMp);
     cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer;
-    cursor = LogPut(cursor, "STAGE2: MODEY-PM "); cursor = LogPut(cursor, (g_MyPmOffset || g_MyInterpOffset) ? "OFF (knob)" : "on");
-    cursor = LogPut(cursor, g_MyPmDetect ? " DETECT" : "");
-    cursor = LogPut(cursor, " runs="); cursor = LogDecimal(cursor, g_MyPmRuns);
-    cursor = LogPut(cursor, " instrs="); cursor = LogDecimal(cursor, g_MyPmInstructions);
+    cursor = LogPut(cursor, "STAGE2: MODEY-PM "); cursor = LogPut(cursor, (g_ModeYPmOffset || g_ModeYInterpOffset) ? "OFF (knob)" : "on");
+    cursor = LogPut(cursor, g_ModeYPmDetect ? " DETECT" : "");
+    cursor = LogPut(cursor, " runs="); cursor = LogDecimal(cursor, g_ModeYPmRuns);
+    cursor = LogPut(cursor, " instrs="); cursor = LogDecimal(cursor, g_ModeYPmInstructions);
     cursor = LogPut(cursor, " stop[returned,closed,declined,cap,not32,irq]=");
-    { int index2; for (index2 = 0; index2 < 6; ++index2) { cursor = LogPut(cursor, index2 ? "," : ""); cursor = LogDecimal(cursor, g_MyPmStop[index2]); } }
-    cursor = LogPut(cursor, " bails_under_multiplane="); cursor = LogDecimal(cursor, g_MyPmBailMp);
+    { int index2; for (index2 = 0; index2 < 6; ++index2) { cursor = LogPut(cursor, index2 ? "," : ""); cursor = LogDecimal(cursor, g_ModeYPmStop[index2]); } }
+    cursor = LogPut(cursor, " bails_under_multiplane="); cursor = LogDecimal(cursor, g_ModeYPmBailMp);
     cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer;
     { unsigned index, byteIndex;
       for (index = 0; index < g_ModeYPmCount; ++index) {
@@ -16183,11 +16183,11 @@ static void ModeYTimelineReport(void)
       }
       if (g_ModeYPmLost) { cursor = LogPut(cursor, "  MODEY-PM sites lost="); cursor = LogDecimal(cursor, g_ModeYPmLost);
                         cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer; }
-      for (index = 0; index < g_MySiteCount; ++index) {
-          cursor = LogPut(cursor, "  MODEY-INTERP bail cs:ip="); cursor = LogHex(cursor, g_MySite[index].Cs);
-          cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, g_MySite[index].Ip);
-          cursor = LogPut(cursor, " n="); cursor = LogDecimal(cursor, g_MySite[index].Count); cursor = LogPut(cursor, " bytes:");
-          for (byteIndex = 0; byteIndex < 8; ++byteIndex) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, g_MySite[index].Bytes[byteIndex]); }
+      for (index = 0; index < g_ModeYSiteCount; ++index) {
+          cursor = LogPut(cursor, "  MODEY-INTERP bail cs:ip="); cursor = LogHex(cursor, g_ModeYSite[index].Cs);
+          cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, g_ModeYSite[index].Ip);
+          cursor = LogPut(cursor, " n="); cursor = LogDecimal(cursor, g_ModeYSite[index].Count); cursor = LogPut(cursor, " bytes:");
+          for (byteIndex = 0; byteIndex < 8; ++byteIndex) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, g_ModeYSite[index].Bytes[byteIndex]); }
           cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer;
       } }
     for (row = 0; row < 9; ++row) {
@@ -16261,12 +16261,12 @@ static void ModeYRemapSelectBody(void *context, int mask)
         if (!selectedCount) { ++g_ModeYSelectorZero; return; }                /* mask 0: nothing to point at */
         want = (selectedCount == 1) ? selector[0] : 5;
         g_ModeYPreviousMask = (selectedCount == 1) ? 0 : mask;
-        /* The interpreter serves this window (modey_needs_interp): its stores never
+        /* The interpreter serves this window (ModeYNeedsInterp): its stores never
            touch A0000's mapping, so there is nothing to seed and nothing to fan out --
            which was ~93% of Doom-low's time and ~38% of Wolf3D's. Point the window at
            the first selected plane so an instruction the interpreter declines (it runs
            natively, counted as bail_mp) still lands in one right plane. */
-        if (selectedCount > 1 && modey_interp_serves()) { want = selector[0]; g_ModeYPreviousMask = 0; }
+        if (selectedCount > 1 && ModeYInterpServes()) { want = selector[0]; g_ModeYPreviousMask = 0; }
     }
     if (want == g_ModeYCurrent) { ++g_ModeYSelectorSame; return; }
     /* Before the mapping moves: what did the plane we are leaving actually receive? */
@@ -16588,21 +16588,21 @@ static void VideoTrapSync(void)
      addressing -- the second half of this north star. */
 /* Does the interpreter serve mode Y's multi-plane windows for this guest at all? Then
    the remap need not build a scratch window for them (see ModeYRemapSelectBody). */
-static int modey_interp_serves(void)
+static int ModeYInterpServes(void)
 {
-    if (g_MyInterpOffset || g_Video.ModeKind != VIDEO_KIND_LINEAR8) return 0;
-    /* A PM guest's drawers are interpreted (modey_pm_run); its OTHER code runs natively,
+    if (g_ModeYInterpOffset || g_Video.ModeKind != VIDEO_KIND_LINEAR8) return 0;
+    /* A PM guest's drawers are interpreted (ModeYPmRun); its OTHER code runs natively,
        so with the detector on keep the scratch window to catch what that code stores. */
-    if (g_DpmiPm) return !g_MyPmOffset && !g_MyPmDetect;
+    if (g_DpmiPm) return !g_ModeYPmOffset && !g_ModeYPmDetect;
     return 1;
 }
 /* Is the guest RIGHT NOW in a window no mapping can serve? */
-static int modey_needs_interp(void)
+static int ModeYNeedsInterp(void)
 {
-    uint8_t m;
-    if (!g_ModeYRemap || !modey_interp_serves() || g_Video.IsChain4) return 0;
-    m = (uint8_t)(g_Video.MapMask & 0x0F);
-    return (m & (uint8_t)(m - 1)) != 0 || (g_Video.WriteMode & 3) != 0;
+    uint8_t mask;
+    if (!g_ModeYRemap || !ModeYInterpServes() || g_Video.IsChain4) return 0;
+    mask = (uint8_t)(g_Video.MapMask & 0x0F);
+    return (mask & (uint8_t)(mask - 1)) != 0 || (g_Video.WriteMode & 3) != 0;
 }
 
 /* ====================================================================== *
@@ -16641,55 +16641,55 @@ static int modey_needs_interp(void)
      at most once per page. 0=unknown, 1=ok, 2=bad. The low conventional memory and our
      own aperture never reach the probe (handled above / by the A000 branch), so the
      cost falls only on the upper-memory accesses that are the anomaly. */
-static uint8_t g_pagemap[0x100000u >> 12];     /* one entry per 4KB page of the low 1MB */
-static DWORD   g_imem_bad_reads, g_imem_bad_writes, g_imem_bad_logged;
-static void imem_bad_note(uint32_t lin, int write);   /* defined after v86interp.h (needs icpu) */
-static int imem_page_ok(uint32_t lin)
+static uint8_t g_PageMap[0x100000u >> 12];     /* one entry per 4KB page of the low 1MB */
+static DWORD   g_InterpreterMemoryBadReads, g_InterpreterMemoryBadWrites, g_InterpreterMemoryBadLogged;
+static void InterpreterMemoryBadNote(uint32_t linear, int write);   /* defined after v86interp.h (needs icpu) */
+static int InterpreterMemoryPageOk(uint32_t linear)
 {
-    uint32_t pg = lin >> 12;
-    if (lin >= 0x100000u) return 1;             /* HMA and above: leave to the raw path */
-    if (g_pagemap[pg] == 0) {
+    uint32_t page = linear >> 12;
+    if (linear >= 0x100000u) return 1;             /* HMA and above: leave to the raw path */
+    if (g_PageMap[page] == 0) {
         MEMORY_BASIC_INFORMATION mbi;
-        int ok = 0;
-        if (VirtualQuery((LPCVOID)(ULONG_PTR)(pg << 12), &mbi, sizeof mbi) == sizeof mbi)
-            ok = (mbi.State == MEM_COMMIT) &&
+        int isOk = 0;
+        if (VirtualQuery((LPCVOID)(ULONG_PTR)(page << 12), &mbi, sizeof mbi) == sizeof mbi)
+            isOk = (mbi.State == MEM_COMMIT) &&
                  !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD));
-        g_pagemap[pg] = (uint8_t)(ok ? 1 : 2);
+        g_PageMap[page] = (uint8_t)(isOk ? 1 : 2);
     }
-    return g_pagemap[pg] == 1;
+    return g_PageMap[page] == 1;
 }
 /* Flat/planar guest memory for the interpreter: A0000 goes through the VGA
    engine (a read loads the latches), everything else is the directly-mapped
    V86 address space. These are the host hooks v86interp.h requires. */
 /* #183 (s87): inline, with everything but "a known-good page of plain RAM" out of line.
    The interpreter fetches every code byte through V86HostRead8, and it was a real cdecl call
-   per byte. g_pagemap[pg]==1 is exactly the old imem_page_ok() answer for a page already
+   per byte. g_PageMap[pg]==1 is exactly the old InterpreterMemoryPageOk() answer for a page already
    probed below 1 MB; anything else (the aperture, HMA, an unprobed or bad page) takes
    the slow path, which is the old function unchanged. */
-static __attribute__((noinline)) uint8_t imem_r8_slow(uint32_t lin)
-{ if (lin >= A000_LO && lin < A000_HI) return VddVideoPlanarRead(&g_Video, lin - A000_LO);
-  if (!imem_page_ok(lin)) { g_imem_bad_reads++; imem_bad_note(lin, 0); return 0xFF; }
-  return *(volatile BYTE *)lin; }
-static __attribute__((noinline)) void imem_w8_slow(uint32_t lin, uint8_t v)
-{ if (lin >= A000_LO && lin < A000_HI) { VddVideoPlanarWrite(&g_Video, lin - A000_LO, v); return; }
-  if (!imem_page_ok(lin)) { g_imem_bad_writes++; imem_bad_note(lin, 1); return; }
-  *(volatile BYTE *)lin = v; }
-static inline __attribute__((always_inline)) uint8_t V86HostRead8(uint32_t lin)
-{ if (lin < 0x100000u && g_pagemap[lin >> 12] == 1 && (lin < A000_LO || lin >= A000_HI))
-      return *(volatile BYTE *)lin;
-  return imem_r8_slow(lin); }
-static inline __attribute__((always_inline)) void V86HostWrite8(uint32_t lin, uint8_t v)
-{ if (lin < 0x100000u && g_pagemap[lin >> 12] == 1 && (lin < A000_LO || lin >= A000_HI))
-      { *(volatile BYTE *)lin = v; return; }
-  imem_w8_slow(lin, v); }
+static __attribute__((noinline)) uint8_t InterpreterMemoryRead8Slow(uint32_t linear)
+{ if (linear >= A000_LO && linear < A000_HI) return VddVideoPlanarRead(&g_Video, linear - A000_LO);
+  if (!InterpreterMemoryPageOk(linear)) { g_InterpreterMemoryBadReads++; InterpreterMemoryBadNote(linear, 0); return 0xFF; }
+  return *(volatile BYTE *)linear; }
+static __attribute__((noinline)) void InterpreterMemoryWrite8Slow(uint32_t linear, uint8_t value)
+{ if (linear >= A000_LO && linear < A000_HI) { VddVideoPlanarWrite(&g_Video, linear - A000_LO, value); return; }
+  if (!InterpreterMemoryPageOk(linear)) { g_InterpreterMemoryBadWrites++; InterpreterMemoryBadNote(linear, 1); return; }
+  *(volatile BYTE *)linear = value; }
+static inline __attribute__((always_inline)) uint8_t V86HostRead8(uint32_t linear)
+{ if (linear < 0x100000u && g_PageMap[linear >> 12] == 1 && (linear < A000_LO || linear >= A000_HI))
+      return *(volatile BYTE *)linear;
+  return InterpreterMemoryRead8Slow(linear); }
+static inline __attribute__((always_inline)) void V86HostWrite8(uint32_t linear, uint8_t value)
+{ if (linear < 0x100000u && g_PageMap[linear >> 12] == 1 && (linear < A000_LO || linear >= A000_HI))
+      { *(volatile BYTE *)linear = value; return; }
+  InterpreterMemoryWrite8Slow(linear, value); }
 /* The interpreter's per-instruction code pointer (v86interp.h, V86I_CODE_PTR): the 16
    bytes at `lin` sit in one already-probed page of plain RAM below 1 MB, outside the
    aperture -- exactly the bytes V86HostRead8's fast path would have read one at a time. */
 #define V86I_CODE_PTR 1
-static inline __attribute__((always_inline)) const volatile BYTE *V86HostCodePointer(uint32_t lin)
-{ if (lin < 0x100000u && (lin & 0xFFFu) <= 0xFF0u && g_pagemap[lin >> 12] == 1
-      && (lin < A000_LO || lin >= A000_HI))
-      return (const volatile BYTE *)(ULONG_PTR)lin;
+static inline __attribute__((always_inline)) const volatile BYTE *V86HostCodePointer(uint32_t linear)
+{ if (linear < 0x100000u && (linear & 0xFFFu) <= 0xFF0u && g_PageMap[linear >> 12] == 1
+      && (linear < A000_LO || linear >= A000_HI))
+      return (const volatile BYTE *)(ULONG_PTR)linear;
   return 0; }
 
 /* Port I/O dispatched to the device bus (same path as HostTryIo). The
@@ -16705,14 +16705,14 @@ static inline __attribute__((always_inline)) const volatile BYTE *V86HostCodePoi
      only: delivery takes g_Lock by TRY and the interpreter already holds it. */
 static void HostPitGenerate(void);
 static uint32_t V86HostIn(uint16_t port, int width)
-{ uint32_t v = 0;
+{ uint32_t value = 0;
   if (port >= 0x40 && port <= 0x43) HostPitGenerate();
-  VddBusIo(&g_Bus, port, (uint8_t)width, 1, &v); return v; }
-static void V86HostOut(uint16_t port, int width, uint32_t val)
-{ uint32_t v = val;
+  VddBusIo(&g_Bus, port, (uint8_t)width, 1, &value); return value; }
+static void V86HostOut(uint16_t port, int width, uint32_t byteValue)
+{ uint32_t value = byteValue;
   if (port >= 0x40 && port <= 0x43) HostPitGenerate();
-  VddBusIo(&g_Bus, port, (uint8_t)width, 0, &v);
-  if (port == 0x43) PitLatchNote((uint8_t)val);     /* same instrument as the reflected path */
+  VddBusIo(&g_Bus, port, (uint8_t)width, 0, &value);
+  if (port == 0x43) PitLatchNote((uint8_t)byteValue);     /* same instrument as the reflected path */
   if (port == 0x40) HostPitResyncCheck(); }         /* and the same resync rule           */
 
 #include "v86interp.h"
@@ -16724,56 +16724,56 @@ static void V86HostOut(uint16_t port, int width, uint32_t val)
      guard that turns a stray pointer into a DECLINE instead of a host access violation:
      a small page cache over VirtualQuery, so the syscall happens once per page. */
 #define P32_PGC 256
-static struct { DWORD pg; BYTE ok; } g_p32_pgc[P32_PGC];
-static int p32_page_ok(DWORD pg, int wr)
+static struct { DWORD Page; BYTE Access; } g_Pm32PageCache[P32_PGC];
+static int Pm32PageOk(DWORD page, int isWrite)
 {
-    unsigned h = (unsigned)(pg * 2654435761u) >> 24;
-    if (g_p32_pgc[h].pg != pg + 1) {
-        MEMORY_BASIC_INFORMATION mbi; BYTE ok = 0;
-        if (VirtualQuery((LPCVOID)(ULONG_PTR)(pg << 12), &mbi, sizeof mbi) == sizeof mbi
+    unsigned slot = (unsigned)(page * 2654435761u) >> 24;
+    if (g_Pm32PageCache[slot].Page != page + 1) {
+        MEMORY_BASIC_INFORMATION mbi; BYTE access = 0;
+        if (VirtualQuery((LPCVOID)(ULONG_PTR)(page << 12), &mbi, sizeof mbi) == sizeof mbi
             && mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
-            ok = 1;
+            access = 1;
             if (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY
-                               | PAGE_EXECUTE_WRITECOPY)) ok = 3;
+                               | PAGE_EXECUTE_WRITECOPY)) access = 3;
         }
-        g_p32_pgc[h].pg = pg + 1; g_p32_pgc[h].ok = ok;
+        g_Pm32PageCache[slot].Page = page + 1; g_Pm32PageCache[slot].Access = access;
     }
-    return wr ? (g_p32_pgc[h].ok & 2) != 0 : (g_p32_pgc[h].ok & 1) != 0;
+    return isWrite ? (g_Pm32PageCache[slot].Access & 2) != 0 : (g_Pm32PageCache[slot].Access & 1) != 0;
 }
-static DWORD g_p32_vga_n = 0;      /* aperture accesses by the interpreter (modey_pm_run) */
-static uint8_t Pm32HostRead8(uint32_t lin)
+static DWORD g_Pm32VgaCount = 0;      /* aperture accesses by the interpreter (ModeYPmRun) */
+static uint8_t Pm32HostRead8(uint32_t linear)
 {
-    if (lin >= A000_LO && lin < A000_HI) { ++g_p32_vga_n; return VddVideoPlanarRead(&g_Video, lin - A000_LO); }
-    return *(volatile BYTE *)(ULONG_PTR)lin;
+    if (linear >= A000_LO && linear < A000_HI) { ++g_Pm32VgaCount; return VddVideoPlanarRead(&g_Video, linear - A000_LO); }
+    return *(volatile BYTE *)(ULONG_PTR)linear;
 }
-static void Pm32HostWrite8(uint32_t lin, uint8_t v)
+static void Pm32HostWrite8(uint32_t linear, uint8_t value)
 {
-    if (lin >= A000_LO && lin < A000_HI) { ++g_p32_vga_n; VddVideoPlanarWrite(&g_Video, lin - A000_LO, v); return; }
-    *(volatile BYTE *)(ULONG_PTR)lin = v;
+    if (linear >= A000_LO && linear < A000_HI) { ++g_Pm32VgaCount; VddVideoPlanarWrite(&g_Video, linear - A000_LO, value); return; }
+    *(volatile BYTE *)(ULONG_PTR)linear = value;
 }
-static int Pm32HostCanAccess(uint32_t lin, int w, int wr)
+static int Pm32HostCanAccess(uint32_t linear, int width, int isWrite)
 {
-    uint32_t end = lin + (uint32_t)w - 1;
-    if (end < lin) return 0;
-    if (lin >= A000_LO && end < A000_HI) return 1;
-    if (lin < A000_HI && end >= A000_LO) return 0;          /* straddles the aperture */
-    if (!p32_page_ok(lin >> 12, wr)) return 0;
-    return ((end >> 12) == (lin >> 12)) || p32_page_ok(end >> 12, wr);
+    uint32_t end = linear + (uint32_t)width - 1;
+    if (end < linear) return 0;
+    if (linear >= A000_LO && end < A000_HI) return 1;
+    if (linear < A000_HI && end >= A000_LO) return 0;          /* straddles the aperture */
+    if (!Pm32PageOk(linear >> 12, isWrite)) return 0;
+    return ((end >> 12) == (linear >> 12)) || Pm32PageOk(end >> 12, isWrite);
 }
-static uint32_t Pm32HostIn(uint16_t port, int w)             { return V86HostIn(port, w); }
-static void     Pm32HostOut(uint16_t port, int w, uint32_t v) { V86HostOut(port, w, v); }
+static uint32_t Pm32HostIn(uint16_t port, int width)             { return V86HostIn(port, width); }
+static void     Pm32HostOut(uint16_t port, int width, uint32_t value) { V86HostOut(port, width, value); }
 
 #include "pm32interp.h"
 
 /* Is a PROTECTED-mode guest in a window no mapping can serve? (The real-mode twin is
-   modey_needs_interp.) */
-static int modey_pm_needs_interp(void)
+   ModeYNeedsInterp.) */
+static int ModeYPmNeedsInterp(void)
 {
-    uint8_t m;
-    if (!g_DpmiPm || g_MyPmOffset || g_MyInterpOffset || !g_ModeYRemap) return 0;
+    uint8_t mask;
+    if (!g_DpmiPm || g_ModeYPmOffset || g_ModeYInterpOffset || !g_ModeYRemap) return 0;
     if (g_Video.ModeKind != VIDEO_KIND_LINEAR8 || g_Video.IsChain4) return 0;
-    m = (uint8_t)(g_Video.MapMask & 0x0F);
-    return (m & (uint8_t)(m - 1)) != 0 || (g_Video.WriteMode & 3) != 0;
+    mask = (uint8_t)(g_Video.MapMask & 0x0F);
+    return (mask & (uint8_t)(mask - 1)) != 0 || (g_Video.WriteMode & 3) != 0;
 }
 
 /* ── ★★★ DOOM'S DRAWERS THROUGH THE ADDRESS GENERATOR. (s80, north star 1) ─────────────
@@ -16806,92 +16806,92 @@ static int modey_pm_needs_interp(void)
      is never cut short (the rest of it would run natively under a multi-plane mask and
      leak). A poll loop is released within MYPM_IDLE instructions, ~0.6 ms. */
 #define MYPM_IDLE 4096L
-static int modey_pm_irq_waiting(void)
+static int ModeYPmIrqWaiting(void)
 {
     return g_PmTickOwed > 0 || g_Irq1Pending > 0
         || (g_Pic.Master.Irr & (uint8_t)~g_Pic.Master.Imr) != 0;
 }
-static void modey_pm_run(volatile BYTE *tib)
+static void ModeYPmRun(volatile BYTE *tib)
 {
-    PM32_CPU c; long n = 0, idle_from = 0; uint32_t esp0; int why;
-    DWORD vga_seen;
-    WORD sel[6];
-    int k;
+    PM32_CPU cpu; long steps = 0, idleFrom = 0; uint32_t esp0; int why;
+    DWORD vgaSeen;
+    WORD selector[6];
+    int index;
     WORD cs = (WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF), ss = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
-    if (!DpmiSelectorIs32(cs) || !DpmiSelectorIs32(ss)) { g_MyPmStop[4]++; return; }
-    sel[0] = (WORD)VDM_REG(tib, VTIB_ES); sel[1] = cs; sel[2] = ss;
-    sel[3] = (WORD)VDM_REG(tib, VTIB_DS); sel[4] = (WORD)VDM_REG(tib, VTIB_FS);
-    sel[5] = (WORD)VDM_REG(tib, VTIB_GS);
-    for (k = 0; k < 6; ++k) c.SegmentBases[k] = (sel[k] & 0xFFFC) ? dpmi_sel_base(sel[k]) : 0;
-    c.Registers[0] = VDM_REG(tib, VTIB_EAX); c.Registers[1] = VDM_REG(tib, VTIB_ECX);
-    c.Registers[2] = VDM_REG(tib, VTIB_EDX); c.Registers[3] = VDM_REG(tib, VTIB_EBX);
-    c.Registers[4] = VDM_REG(tib, VTIB_ESP); c.Registers[5] = VDM_REG(tib, VTIB_EBP);
-    c.Registers[6] = VDM_REG(tib, VTIB_ESI); c.Registers[7] = VDM_REG(tib, VTIB_EDI);
-    c.Eip = VDM_REG(tib, VTIB_EIP); c.Flags = VDM_REG(tib, VTIB_EFLAGS);
-    esp0 = c.Registers[4];
-    { DWORD vga0 = g_p32_vga_n;
-    vga_seen = vga0;
+    if (!DpmiSelectorIs32(cs) || !DpmiSelectorIs32(ss)) { g_ModeYPmStop[4]++; return; }
+    selector[0] = (WORD)VDM_REG(tib, VTIB_ES); selector[1] = cs; selector[2] = ss;
+    selector[3] = (WORD)VDM_REG(tib, VTIB_DS); selector[4] = (WORD)VDM_REG(tib, VTIB_FS);
+    selector[5] = (WORD)VDM_REG(tib, VTIB_GS);
+    for (index = 0; index < 6; ++index) cpu.SegmentBases[index] = (selector[index] & 0xFFFC) ? dpmi_sel_base(selector[index]) : 0;
+    cpu.Registers[0] = VDM_REG(tib, VTIB_EAX); cpu.Registers[1] = VDM_REG(tib, VTIB_ECX);
+    cpu.Registers[2] = VDM_REG(tib, VTIB_EDX); cpu.Registers[3] = VDM_REG(tib, VTIB_EBX);
+    cpu.Registers[4] = VDM_REG(tib, VTIB_ESP); cpu.Registers[5] = VDM_REG(tib, VTIB_EBP);
+    cpu.Registers[6] = VDM_REG(tib, VTIB_ESI); cpu.Registers[7] = VDM_REG(tib, VTIB_EDI);
+    cpu.Eip = VDM_REG(tib, VTIB_EIP); cpu.Flags = VDM_REG(tib, VTIB_EFLAGS);
+    esp0 = cpu.Registers[4];
+    { DWORD vga0 = g_Pm32VgaCount;
+    vgaSeen = vga0;
     HOST_LOCK();
     for (;;) {
-        uint8_t op0 = Pm32HostRead8(c.SegmentBases[1] + c.Eip);
-        int was_ret = (op0 == 0xC3 || op0 == 0xC2);
-        if (n >= MYPM_CAP) { why = 3; break; }
-        if (!Pm32Step(&c)) { why = 2; break; }
-        ++n;
-        if (was_ret && c.Registers[4] > esp0 && g_p32_vga_n != vga0) { why = 0; break; }
-        if ((n & 0x3F) == 0) {
-            if (!modey_pm_needs_interp()) { why = 1; break; }
-            if (g_p32_vga_n != vga_seen) { vga_seen = g_p32_vga_n; idle_from = n; }
-            else if (n - idle_from >= MYPM_IDLE && modey_pm_irq_waiting()) { why = 5; break; }
+        uint8_t op0 = Pm32HostRead8(cpu.SegmentBases[1] + cpu.Eip);
+        int wasResult = (op0 == 0xC3 || op0 == 0xC2);
+        if (steps >= MYPM_CAP) { why = 3; break; }
+        if (!Pm32Step(&cpu)) { why = 2; break; }
+        ++steps;
+        if (wasResult && cpu.Registers[4] > esp0 && g_Pm32VgaCount != vga0) { why = 0; break; }
+        if ((steps & 0x3F) == 0) {
+            if (!ModeYPmNeedsInterp()) { why = 1; break; }
+            if (g_Pm32VgaCount != vgaSeen) { vgaSeen = g_Pm32VgaCount; idleFrom = steps; }
+            else if (steps - idleFrom >= MYPM_IDLE && ModeYPmIrqWaiting()) { why = 5; break; }
         }
     }
     HOST_UNLOCK();
     }
-    g_MyPmRuns++; g_MyPmInstructions += (DWORD)n; g_MyPmStop[why]++;
+    g_ModeYPmRuns++; g_ModeYPmInstructions += (DWORD)steps; g_ModeYPmStop[why]++;
     if (why == 2) {
-        uint8_t mm = (uint8_t)(g_Video.MapMask & 0x0F);
-        g_MyPmBails++;
-        if (mm & (uint8_t)(mm - 1)) g_MyPmBailMp++;
-        ModeYBailNote(cs, c.Eip, (const volatile BYTE *)(ULONG_PTR)(c.SegmentBases[1] + c.Eip));
+        uint8_t mapMask = (uint8_t)(g_Video.MapMask & 0x0F);
+        g_ModeYPmBails++;
+        if (mapMask & (uint8_t)(mapMask - 1)) g_ModeYPmBailMp++;
+        ModeYBailNote(cs, cpu.Eip, (const volatile BYTE *)(ULONG_PTR)(cpu.SegmentBases[1] + cpu.Eip));
     }
-    if (!n) return;
-    VDM_REG(tib, VTIB_EAX) = c.Registers[0]; VDM_REG(tib, VTIB_ECX) = c.Registers[1];
-    VDM_REG(tib, VTIB_EDX) = c.Registers[2]; VDM_REG(tib, VTIB_EBX) = c.Registers[3];
-    VDM_REG(tib, VTIB_ESP) = c.Registers[4]; VDM_REG(tib, VTIB_EBP) = c.Registers[5];
-    VDM_REG(tib, VTIB_ESI) = c.Registers[6]; VDM_REG(tib, VTIB_EDI) = c.Registers[7];
-    VDM_REG(tib, VTIB_EIP) = c.Eip;
+    if (!steps) return;
+    VDM_REG(tib, VTIB_EAX) = cpu.Registers[0]; VDM_REG(tib, VTIB_ECX) = cpu.Registers[1];
+    VDM_REG(tib, VTIB_EDX) = cpu.Registers[2]; VDM_REG(tib, VTIB_EBX) = cpu.Registers[3];
+    VDM_REG(tib, VTIB_ESP) = cpu.Registers[4]; VDM_REG(tib, VTIB_EBP) = cpu.Registers[5];
+    VDM_REG(tib, VTIB_ESI) = cpu.Registers[6]; VDM_REG(tib, VTIB_EDI) = cpu.Registers[7];
+    VDM_REG(tib, VTIB_EIP) = cpu.Eip;
     /* the arithmetic flags and DF only: IF, IOPL, VM and the rest are the monitor's */
-    VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & ~0x0CD5u) | (c.Flags & 0x0CD5u);
+    VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & ~0x0CD5u) | (cpu.Flags & 0x0CD5u);
 }
 
 /* The interpreter's live register file, for the fatal dump and the OOR logger. A
    crash or a stray access inside istep (s69) leaves the VDM context a whole slice
    stale; this is the es/di the effective address was actually built from. NULL when
    the interpreter is not running. */
-static const V86_CPU *g_interp_c;
+static const V86_CPU *g_InterpreterCpu;
 
 /* Name the FIRST few out-of-range accesses: the guest cs:ip, and the interpreter's
    live es/di/ds -- which is what says whether a bad address is a wrong SEGMENT or an
    unmasked OFFSET (s69, Lemmings' blit to a 0xD0000 hole). Bounded; graceful. */
-static void imem_bad_note(uint32_t lin, int write)
+static void InterpreterMemoryBadNote(uint32_t linear, int write)
 {
-    char b[224], *q = b;
-    if (g_imem_bad_logged >= 12) return;
-    g_imem_bad_logged++;
-    q = LogPut(q, "IMEM-OOR "); q = LogPut(q, write ? "W" : "R"); q = LogPut(q, " lin=0x"); q = LogHex(q, lin);
-    q = LogPut(q, " guest cs:ip=0x"); q = LogHex(q, g_V86InstructionPointer);
-    if (g_interp_c) { const V86_CPU *ic = g_interp_c;
-        q = LogPut(q, " es=0x"); q = LogHex(q, ic->Segments[0]);
-        q = LogPut(q, " ds=0x"); q = LogHex(q, ic->Segments[3]);
-        q = LogPut(q, " di=0x"); q = LogHex(q, ic->Registers[7]);
-        q = LogPut(q, " si=0x"); q = LogHex(q, ic->Registers[6]); }
-    q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, b, q);
+    char buffer[224], *cursor = buffer;
+    if (g_InterpreterMemoryBadLogged >= 12) return;
+    g_InterpreterMemoryBadLogged++;
+    cursor = LogPut(cursor, "IMEM-OOR "); cursor = LogPut(cursor, write ? "W" : "R"); cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, linear);
+    cursor = LogPut(cursor, " guest cs:ip=0x"); cursor = LogHex(cursor, g_V86InstructionPointer);
+    if (g_InterpreterCpu) { const V86_CPU *cpu = g_InterpreterCpu;
+        cursor = LogPut(cursor, " es=0x"); cursor = LogHex(cursor, cpu->Segments[0]);
+        cursor = LogPut(cursor, " ds=0x"); cursor = LogHex(cursor, cpu->Segments[3]);
+        cursor = LogPut(cursor, " di=0x"); cursor = LogHex(cursor, cpu->Registers[7]);
+        cursor = LogPut(cursor, " si=0x"); cursor = LogHex(cursor, cpu->Registers[6]); }
+    cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor);
 }
 
 /* Where the guest was at the last interpreted instruction. Every planar VRAM write
    arrives through V86HostWrite8 above, i.e. from the interpreter, so this is exact at the
    moment the video VDD's watchpoint fires. */
-static uint32_t host_guest_pc(void) { return g_V86InstructionPointer; }
+static uint32_t HostGuestPc(void) { return g_V86InstructionPointer; }
 
 /* The mode-12h trap-storm escape hatch. By default V86 runs on the real CPU and
    each VGA access (memory OR port) is emulated one-at-a-time as a device access
@@ -16919,40 +16919,40 @@ static uint32_t host_guest_pc(void) { return g_V86InstructionPointer; }
      A ring of the last 64 interpreted instructions, written only while interpreting for
      mode Y, dumped once when the guest lands at CS=0: the culprit is in it. */
 #define MY_RING 64
-static struct { WORD Cs, Ip, sp, Ss; BYTE Bytes[6]; } g_my_ring[MY_RING];
-static unsigned g_my_ring_pos = 0;
-static int      g_my_ring_dumped = 0;
-static void my_ring_dump(const char *why)
+static struct { WORD Cs, Ip, Sp, Ss; BYTE Bytes[6]; } g_ModeYRing[MY_RING];
+static unsigned g_ModeYRingPosition = 0;
+static int      g_ModeYRingDumped = 0;
+static void ModeYRingDump(const char *why)
 {
-    char lb[160], *q;
-    unsigned k, j;
-    if (g_my_ring_dumped) return;
-    g_my_ring_dumped = 1;
-    q = lb; q = LogPut(q, "MODEY-INTERP RING ("); q = LogPut(q, why); q = LogPut(q, "), oldest first:\r\n");
-    LogAppend(LOG_PATH, lb, q);
-    for (k = 0; k < MY_RING; ++k) {
-        unsigned i = (g_my_ring_pos + k) % MY_RING;
-        if (!g_my_ring[i].Cs && !g_my_ring[i].Ip) continue;
-        q = lb;
-        q = LogPut(q, "  "); q = LogHex(q, g_my_ring[i].Cs); q = LogPut(q, ":"); q = LogHex(q, g_my_ring[i].Ip);
-        q = LogPut(q, " ss:sp="); q = LogHex(q, g_my_ring[i].Ss); q = LogPut(q, ":"); q = LogHex(q, g_my_ring[i].sp);
-        q = LogPut(q, "  ");
-        for (j = 0; j < 6; ++j) { q = LogHexByte(q, g_my_ring[i].Bytes[j]); q = LogPut(q, " "); }
-        q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, lb, q);
+    char lineBuffer[160], *cursor;
+    unsigned age, byteIndex;
+    if (g_ModeYRingDumped) return;
+    g_ModeYRingDumped = 1;
+    cursor = lineBuffer; cursor = LogPut(cursor, "MODEY-INTERP RING ("); cursor = LogPut(cursor, why); cursor = LogPut(cursor, "), oldest first:\r\n");
+    LogAppend(LOG_PATH, lineBuffer, cursor);
+    for (age = 0; age < MY_RING; ++age) {
+        unsigned index = (g_ModeYRingPosition + age) % MY_RING;
+        if (!g_ModeYRing[index].Cs && !g_ModeYRing[index].Ip) continue;
+        cursor = lineBuffer;
+        cursor = LogPut(cursor, "  "); cursor = LogHex(cursor, g_ModeYRing[index].Cs); cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, g_ModeYRing[index].Ip);
+        cursor = LogPut(cursor, " ss:sp="); cursor = LogHex(cursor, g_ModeYRing[index].Ss); cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, g_ModeYRing[index].Sp);
+        cursor = LogPut(cursor, "  ");
+        for (byteIndex = 0; byteIndex < 6; ++byteIndex) { cursor = LogHexByte(cursor, g_ModeYRing[index].Bytes[byteIndex]); cursor = LogPut(cursor, " "); }
+        cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, cursor);
     }
 }
 
 /* An injected interrupt, as a ring entry: cs=FFFE, ip=vector, ss:sp = the cs:ip it
    interrupted. Only once mode Y has been interpreted -- the ring is its instrument. */
-static void my_ring_note_irq(unsigned vec, WORD cs, WORD ip, WORD ss, WORD sp)
+static void ModeYRingNoteIrq(unsigned vector, WORD cs, WORD ip, WORD ss, WORD sp)
 {
-    unsigned i, j;
+    unsigned index, byteIndex;
     (void)ss; (void)sp;
-    if (!g_MyRingOn || !g_MySlices || g_my_ring_dumped) return;
-    i = g_my_ring_pos++ % MY_RING;
-    g_my_ring[i].Cs = 0xFFFE; g_my_ring[i].Ip = (WORD)vec;
-    g_my_ring[i].Ss = cs;     g_my_ring[i].sp = ip;
-    for (j = 0; j < 6; ++j) g_my_ring[i].Bytes[j] = 0;
+    if (!g_ModeYRingOn || !g_ModeYSlices || g_ModeYRingDumped) return;
+    index = g_ModeYRingPosition++ % MY_RING;
+    g_ModeYRing[index].Cs = 0xFFFE; g_ModeYRing[index].Ip = (WORD)vector;
+    g_ModeYRing[index].Ss = cs;     g_ModeYRing[index].Sp = ip;
+    for (byteIndex = 0; byteIndex < 6; ++byteIndex) g_ModeYRing[index].Bytes[byteIndex] = 0;
 }
 
 /* ── #183: WHERE DOES THE HOST'S TIME GO? A SAMPLING PROFILER, OPT-IN. ──────────────
@@ -16963,81 +16963,81 @@ static void my_ring_note_irq(unsigned vec, WORD cs, WORD ip, WORD ss, WORD sp)
      a 16-byte bucket. Suspending a thread that holds a lock is safe here because the
      sampler takes none. Buckets are RVAs; `nm -n` on the same build names them. */
 #define HPROF_SHIFT 4
-static volatile LONG g_hprof_on;
-static HANDLE   g_hprof_th;
-static DWORD   *g_hprof;                 /* one counter per 16 bytes of the image */
-static DWORD    g_hprof_n, g_hprof_samples, g_hprof_in, g_hprof_base, g_hprof_size;
+static volatile LONG g_HostProfileOn;
+static HANDLE   g_HostProfileThread;
+static DWORD   *g_HostProfile;                 /* one counter per 16 bytes of the image */
+static DWORD    g_HostProfileCount, g_HostProfileSamples, g_HostProfileIn, g_HostProfileBase, g_HostProfileSize;
 /* ...and everything that is NOT our image, because half the samples were not: the
    guest running natively (VM flag), the kernel, and other user-mode code by 64 KB. */
-static DWORD    g_hprof_v86, g_hprof_kern, g_hprof_other;
-static DWORD    g_hprof_seg[0x8000];     /* user space below 2 GB, per 64 KB */
-static DWORD WINAPI hostprof_thread(LPVOID pv)
+static DWORD    g_HostProfileV86, g_HostProfileKernel, g_HostProfileOther;
+static DWORD    g_HostProfileSegment[0x8000];     /* user space below 2 GB, per 64 KB */
+static DWORD WINAPI HostProfileThread(LPVOID parameter)
 {
-    (void)pv;
-    while (g_hprof_on) {
-        CONTEXT cx;
+    (void)parameter;
+    while (g_HostProfileOn) {
+        CONTEXT context;
         Sleep(1);
-        if (SuspendThread(g_hprof_th) == (DWORD)-1) break;
-        cx.ContextFlags = CONTEXT_CONTROL;
-        if (GetThreadContext(g_hprof_th, &cx)) {
-            ++g_hprof_samples;
-            if (cx.EFlags & 0x20000) ++g_hprof_v86;
-            else if (cx.Eip >= g_hprof_base && cx.Eip < g_hprof_base + g_hprof_size) {
-                ++g_hprof_in;
-                ++g_hprof[(cx.Eip - g_hprof_base) >> HPROF_SHIFT];
-            } else if (cx.Eip >= 0x80000000u) ++g_hprof_kern;
-            else { ++g_hprof_other; ++g_hprof_seg[cx.Eip >> 16]; }
+        if (SuspendThread(g_HostProfileThread) == (DWORD)-1) break;
+        context.ContextFlags = CONTEXT_CONTROL;
+        if (GetThreadContext(g_HostProfileThread, &context)) {
+            ++g_HostProfileSamples;
+            if (context.EFlags & 0x20000) ++g_HostProfileV86;
+            else if (context.Eip >= g_HostProfileBase && context.Eip < g_HostProfileBase + g_HostProfileSize) {
+                ++g_HostProfileIn;
+                ++g_HostProfile[(context.Eip - g_HostProfileBase) >> HPROF_SHIFT];
+            } else if (context.Eip >= 0x80000000u) ++g_HostProfileKernel;
+            else { ++g_HostProfileOther; ++g_HostProfileSegment[context.Eip >> 16]; }
         }
-        ResumeThread(g_hprof_th);
+        ResumeThread(g_HostProfileThread);
     }
     return 0;
 }
-static void hostprof_start(void)
+static void HostProfileStart(void)
 {
-    const BYTE *mz = (const BYTE *)GetModuleHandleA(NULL);
-    DWORD lf, sz;
+    const BYTE *image = (const BYTE *)GetModuleHandleA(NULL);
+    DWORD newHeaderOffset, size;
     if (GetFileAttributesA(HOSTPROF_FLAG) == INVALID_FILE_ATTRIBUTES) return;
-    lf = *(const DWORD *)(mz + 0x3C);
-    sz = *(const DWORD *)(mz + lf + 0x50);                     /* SizeOfImage */
-    g_hprof_base = (DWORD)(ULONG_PTR)mz; g_hprof_size = sz;
-    g_hprof_n = (sz >> HPROF_SHIFT) + 1;
-    g_hprof = (DWORD *)VirtualAlloc(NULL, g_hprof_n * sizeof(DWORD), MEM_COMMIT, PAGE_READWRITE);
-    if (!g_hprof) return;
+    newHeaderOffset = *(const DWORD *)(image + 0x3C);
+    size = *(const DWORD *)(image + newHeaderOffset + 0x50);                     /* SizeOfImage */
+    g_HostProfileBase = (DWORD)(ULONG_PTR)image; g_HostProfileSize = size;
+    g_HostProfileCount = (size >> HPROF_SHIFT) + 1;
+    g_HostProfile = (DWORD *)VirtualAlloc(NULL, g_HostProfileCount * sizeof(DWORD), MEM_COMMIT, PAGE_READWRITE);
+    if (!g_HostProfile) return;
     DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
-                    &g_hprof_th, 0, FALSE, DUPLICATE_SAME_ACCESS);
-    g_hprof_on = 1;
-    { HANDLE t = CreateThread(NULL, 0, hostprof_thread, NULL, 0, NULL);
-      if (t) { SetThreadPriority(t, THREAD_PRIORITY_TIME_CRITICAL); CloseHandle(t); } }
+                    &g_HostProfileThread, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    g_HostProfileOn = 1;
+    { HANDLE thread = CreateThread(NULL, 0, HostProfileThread, NULL, 0, NULL);
+      if (thread) { SetThreadPriority(thread, THREAD_PRIORITY_TIME_CRITICAL); CloseHandle(thread); } }
 }
 static void hostprof_dump(void)
 {
     char b[160], *p;
     int k;
-    if (!g_hprof) return;
-    g_hprof_on = 0; Sleep(5);
-    p = LogPut(b, "STAGE2: HOSTPROF samples="); p = LogDecimal(p, g_hprof_samples);
-    p = LogPut(p, " in_host_image="); p = LogDecimal(p, g_hprof_in);
-    p = LogPut(p, " image_base=0x"); p = LogHex(p, g_hprof_base);
+    if (!g_HostProfile) return;
+    g_HostProfileOn = 0; Sleep(5);
+    p = LogPut(b, "STAGE2: HOSTPROF samples="); p = LogDecimal(p, g_HostProfileSamples);
+    p = LogPut(p, " in_host_image="); p = LogDecimal(p, g_HostProfileIn);
+    p = LogPut(p, " image_base=0x"); p = LogHex(p, g_HostProfileBase);
     p = LogPut(p, " (RVA buckets of 16 bytes, hottest first)\r\n"); LogAppend(LOG_PATH, b, p);
-    p = LogPut(b, "STAGE2: HOSTPROF guest_v86="); p = LogDecimal(p, g_hprof_v86);
-    p = LogPut(p, " kernel="); p = LogDecimal(p, g_hprof_kern);
-    p = LogPut(p, " other_user="); p = LogDecimal(p, g_hprof_other); p = LogPut(p, "\r\n");
+    p = LogPut(b, "STAGE2: HOSTPROF guest_v86="); p = LogDecimal(p, g_HostProfileV86);
+    p = LogPut(p, " kernel="); p = LogDecimal(p, g_HostProfileKernel);
+    p = LogPut(p, " other_user="); p = LogDecimal(p, g_HostProfileOther); p = LogPut(p, "\r\n");
     LogAppend(LOG_PATH, b, p);
     for (k = 0; k < 12; ++k) {
         DWORD i, best = 0, bi = 0;
-        for (i = 0; i < 0x8000; ++i) if (g_hprof_seg[i] > best) { best = g_hprof_seg[i]; bi = i; }
+        for (i = 0; i < 0x8000; ++i) if (g_HostProfileSegment[i] > best) { best = g_HostProfileSegment[i]; bi = i; }
         if (!best) break;
         p = LogPut(b, "  HOSTPROF other_user 64K@0x"); p = LogHex(p, bi << 16);
         p = LogPut(p, " n="); p = LogDecimal(p, best); p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p);
-        g_hprof_seg[bi] = 0;
+        g_HostProfileSegment[bi] = 0;
     }
     for (k = 0; k < 400; ++k) {
         DWORD i, best = 0, bi = 0;
-        for (i = 0; i < g_hprof_n; ++i) if (g_hprof[i] > best) { best = g_hprof[i]; bi = i; }
+        for (i = 0; i < g_HostProfileCount; ++i) if (g_HostProfile[i] > best) { best = g_HostProfile[i]; bi = i; }
         if (!best) break;
         p = LogPut(b, "  HOSTPROF rva=0x"); p = LogHex(p, bi << HPROF_SHIFT);
         p = LogPut(p, " n="); p = LogDecimal(p, best); p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p);
-        g_hprof[bi] = 0;
+        g_HostProfile[bi] = 0;
     }
 }
 
@@ -17066,14 +17066,14 @@ static long host_interp(volatile BYTE *tib, long cap)
     /* Mode Y (s80): the guest's interrupt flag is IF OR VIF -- a native STI under VME sets
        only VIF -- so give the interpreter the same answer the gate uses. See the
        write-back, which carries the interpreted flag back into both. */
-    if (g_MyInterp && (c.Flags & EFLAGS_VIF_BIT)) c.Flags |= 0x200u;
+    if (g_ModeYInterp && (c.Flags & EFLAGS_VIF_BIT)) c.Flags |= 0x200u;
 
     HOST_LOCK();
-    g_interp_c = &c;
+    g_InterpreterCpu = &c;
     /* Hoisted: a global read after every istep() call is a reload the compiler cannot
        drop, and it cost the mode-12h path ~6% of its throughput (Lemmings, two
        interleaved A/B pairs: 1.044G vs 1.108G instructions in the same 54 s). */
-    my = g_MyInterp;
+    my = g_ModeYInterp;
     if (!my) {
         /* THE MODE-12h LOOP, EXACTLY AS IT WAS. Mode Y's checks live in the copy below:
            two extra tests per instruction cost Lemmings ~2% of its interpreted
@@ -17105,17 +17105,17 @@ static long host_interp(volatile BYTE *tib, long cap)
            (MYRING_FLAG), a stop the moment the guest lands in the vector table, an IRQ
            yield only when the guest's IF would let it be taken, and a hand-back when
            the multi-plane / latch window closes. */
-        const int ring = g_MyRingOn;
+        const int ring = g_ModeYRingOn;
         for (iters = 0; iters < cap; ++iters) {
             if (ring) {
-                unsigned i = g_my_ring_pos++ % MY_RING, j;
+                unsigned i = g_ModeYRingPosition++ % MY_RING, j;
                 const volatile BYTE *ib = (const volatile BYTE *)(((uint32_t)c.Segments[1] << 4) + c.Ip);
-                g_my_ring[i].Cs = c.Segments[1]; g_my_ring[i].Ip = c.Ip;
-                g_my_ring[i].Ss = c.Segments[2]; g_my_ring[i].sp = (WORD)c.Registers[4];
-                for (j = 0; j < 6; ++j) g_my_ring[i].Bytes[j] = ib[j];
+                g_ModeYRing[i].Cs = c.Segments[1]; g_ModeYRing[i].Ip = c.Ip;
+                g_ModeYRing[i].Ss = c.Segments[2]; g_ModeYRing[i].Sp = (WORD)c.Registers[4];
+                for (j = 0; j < 6; ++j) g_ModeYRing[i].Bytes[j] = ib[j];
             }
             if (!V86Step(&c)) break;
-            if (c.Segments[1] == 0 && c.Ip < 0x400) { ++iters; my_ring_dump("interpreter reached CS=0"); break; }
+            if (c.Segments[1] == 0 && c.Ip < 0x400) { ++iters; ModeYRingDump("interpreter reached CS=0"); break; }
             if ((iters & 0xFF) == 0xFF) {
                 int q, pend = (g_Irq0Pending != 0);
                 for (q = 0; !pend && q < 16; ++q) pend = (g_IrqNPending[q] != 0);
@@ -17124,11 +17124,11 @@ static long host_interp(volatile BYTE *tib, long cap)
                 if (pend && (c.Flags & 0x200)) { ++iters; break; }
                 /* The window has closed (single-plane mask / write mode 0 again): hand
                    the CPU back. Staying would still be CORRECT, only slower. */
-                if (!modey_needs_interp()) { ++iters; break; }
+                if (!ModeYNeedsInterp()) { ++iters; break; }
             }
         }
     }
-    g_interp_c = NULL;
+    g_InterpreterCpu = NULL;
     HOST_UNLOCK();
 
     if (iters == 0) return 0;                          /* first opcode unmodeled */
@@ -17156,7 +17156,7 @@ static long host_interp(volatile BYTE *tib, long cap)
          (`pop ax / pop ds / iret`) ran on a frame that was not its own and IRET'd to
          0000:0078. Keep the two in step so the interpreter's answer is the answer.
        ⚠ Mode Y only: the mode-12h path (Lemmings) is user-confirmed as it stands. */
-    if (g_MyInterp) {
+    if (g_ModeYInterp) {
         if (c.Flags & 0x200) VDM_REG(tib, VTIB_EFLAGS) |=  EFLAGS_VIF_BIT;
         else                 VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_VIF_BIT;
     }
@@ -17301,8 +17301,8 @@ static void host_fatal_dump(EXCEPTION_RECORD *er, CONTEXT *cx)
          guest pointer, s69), the VDM context is a whole slice stale; THIS is the es/di
          the effective address was actually built from. es_base+ea that lands in an
          unmapped hole names the bug: a wrong SEGMENT vs an unmasked OFFSET. */
-    if (g_interp_c) {
-        const V86_CPU *ic = g_interp_c;
+    if (g_InterpreterCpu) {
+        const V86_CPU *ic = g_InterpreterCpu;
         p = LogPut(p, "\r\n  interp cs:ip=0x"); p = LogHex(p, ic->Segments[1]); p = LogPut(p, ":0x"); p = LogHex(p, ic->Ip);
         p = LogPut(p, " es=0x"); p = LogHex(p, ic->Segments[0]); p = LogPut(p, " ds=0x"); p = LogHex(p, ic->Segments[3]);
         p = LogPut(p, " ss=0x"); p = LogHex(p, ic->Segments[2]);
@@ -30083,8 +30083,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
     }
     g_Interp12 = (GetFileAttributesA(INTERP12_FLAG) != INVALID_FILE_ATTRIBUTES);
-    g_MyInterpOffset = (GetFileAttributesA(MYINTERP_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
-    g_MyRingOn    = (GetFileAttributesA(MYRING_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_ModeYInterpOffset = (GetFileAttributesA(MYINTERP_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_ModeYRingOn    = (GetFileAttributesA(MYRING_FLAG) != INVALID_FILE_ATTRIBUTES);
     /* The GUS is decided HERE, with its resources, because the environment block is
        built before the devices are added -- and ULTRASND= has to say what the card
        will be. Deciding it at device setup left the first heaven7 run with no ULTRASND
@@ -30107,8 +30107,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (g_SbConfig.Irq == g_Gus.Irq)   g_Gus.Irq = 12;
     if (g_SbConfig.Dma8Channel == g_Gus.DmaChannel || g_SbConfig.Dma16Channel == g_Gus.DmaChannel) g_Gus.DmaChannel = 1;
     if (g_SbConfig.Dma8Channel == g_Gus.DmaChannel || g_SbConfig.Dma16Channel == g_Gus.DmaChannel) g_Gus.DmaChannel = 6;
-    g_MyPmOffset     = (GetFileAttributesA(MYPM_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
-    g_MyPmDetect  = (GetFileAttributesA(MYPM_DETECT_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_ModeYPmOffset     = (GetFileAttributesA(MYPM_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_ModeYPmDetect  = (GetFileAttributesA(MYPM_DETECT_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_P12Offset  = (GetFileAttributesA(P12OFF_FLAG)   != INVALID_FILE_ATTRIBUTES);
     g_OplTraceOn = (GetFileAttributesA(OPLTRACE_FLAG) != INVALID_FILE_ATTRIBUTES);
     if (g_OplTraceOn) g_Opl.Trace = OplTraceWrite;
@@ -30216,7 +30216,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
                       &g_ExecThread, 0, FALSE, DUPLICATE_SAME_ACCESS);   /* #211: BackgroundPriorityTick */
     }
-    hostprof_start();                                 /* #183: cfg\hostprof.flag */
+    HostProfileStart();                                 /* #183: cfg\hostprof.flag */
     if (g_QiBits) {
         /* Experiment mode: retarget the kernel's PIC so a KERNEL-dispatched IRQ 5 arrives
            as INT 65h while our own injection still arrives as INT 0Dh. Without this the
@@ -32004,7 +32004,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        the dump does file I/O under g_Lock. See the note in vdd_video.h. */
     g_Video.IsPort3DaRingOn =
         (GetFileAttributesA(CFG_("pitlatch.flag")) != INVALID_FILE_ATTRIBUTES);
-    g_Video.GuestPc = host_guest_pc;             /* so a VRAM watchpoint names a routine */
+    g_Video.GuestPc = HostGuestPc;             /* so a VRAM watchpoint names a routine */
     g_Video.BiosData = (uint8_t *)0x400;               /* the display's BDA fields (0449..0489) */
     g_VideoDevice = VddVideoDevice(&g_Video);
     VddBusAdd(&g_Bus, &g_VideoDevice);
@@ -32963,17 +32963,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               } }
             g_P12Bails++;
         }
-        if (!g_P12Interp && modey_needs_interp()) {
+        if (!g_P12Interp && ModeYNeedsInterp()) {
             long ran;
             unsigned long long ic0 = ModeYTimelineRdtsc();
-            g_MyInterp = 1;
+            g_ModeYInterp = 1;
             ran = host_interp_paced(tib, P12_SLICE);
-            g_MyInterp = 0;
+            g_ModeYInterp = 0;
             if (g_ModeYTimelineT0) { DWORD sec = (GetTickCount() - g_ModeYTimelineT0) / 1000u;
                             if (sec < YTL_SECS) { if (ran > 0) g_ModeYTimelineIns[sec] += (DWORD)ran;
                                                   g_ModeYTimelineInterpreterCycles[sec] += ModeYTimelineRdtsc() - ic0; } }
-            if (ran > 0) { g_MySlices++; g_MyInstructions += (DWORD)ran; continue; }
-            if ((VDM_REG(tib, VTIB_CS) & 0xFFFF) == 0) my_ring_dump("guest at CS=0 after a slice");
+            if (ran > 0) { g_ModeYSlices++; g_ModeYInstructions += (DWORD)ran; continue; }
+            if ((VDM_REG(tib, VTIB_CS) & 0xFFFF) == 0) ModeYRingDump("guest at CS=0 after a slice");
             /* Declined (a BOP, or an opcode it does not model): that ONE instruction
                runs natively. Under a multi-plane mask a native A0000 store reaches only
                the first selected plane -- so count these separately; they are the
@@ -32982,8 +32982,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               const volatile BYTE *ip3 = (const volatile BYTE *)((c3 << 4) + i3);
               if (!(ip3[0] == 0xC4 && ip3[1] == 0xC4)) {
                   uint8_t mm = (uint8_t)(g_Video.MapMask & 0x0F);
-                  ++g_MyBails;
-                  if (mm & (uint8_t)(mm - 1)) ++g_MyBailMp;
+                  ++g_ModeYBails;
+                  if (mm & (uint8_t)(mm - 1)) ++g_ModeYBailMp;
                   ModeYBailNote(c3, i3, ip3);
               } }
         }
@@ -33988,7 +33988,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     /* ── #172: THE LATCH OPENS THIS, NOT THE OWED COUNT. (s85) ────────────
                          s84 opened the arm on `g_PmTickOwed > 0` as well, on the theory
                          that the quit wait's backlog was stuck here. The real cause was
-                         modey_pm_run holding g_Lock (stop reason `irq`), and isolated on the
+                         ModeYPmRun holding g_Lock (stop reason `irq`), and isolated on the
                          menu-quit route (runs/s85/owed/, interleaved x3) the owed-count arm
                          bought nothing: quit window 139/s either way, REPLAYED_LOUD 48-50
                          with it against 44-45 without, plus ~5,800 injections declined per
@@ -35331,7 +35331,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         if (io_h) {
                             /* North star 1: the OUT that just trapped may have opened a
                                multi-plane window -- Doom's drawers start exactly so. */
-                            if (modey_pm_needs_interp()) modey_pm_run(tib);
+                            if (ModeYPmNeedsInterp()) ModeYPmRun(tib);
                             continue;         /* serviced the port op -> keep running */
                         }
                         /* not a decodable I/O op -> fall through to the normal dispatch/stop */
@@ -37145,8 +37145,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = LogPut(p, " run_ms=");                 p = LogHex(p, GetTickCount() - g_RunStartTick);
         p = LogPut(p, "\r\n");
         p = LogPut(p, "STAGE2: imem out-of-range (guarded, would have CRASHED the host): bad_reads=");
-        p = LogHex(p, g_imem_bad_reads); p = LogPut(p, " bad_writes="); p = LogHex(p, g_imem_bad_writes);
-        p = LogPut(p, " logged="); p = LogHex(p, g_imem_bad_logged); p = LogPut(p, "\r\n");
+        p = LogHex(p, g_InterpreterMemoryBadReads); p = LogPut(p, " bad_writes="); p = LogHex(p, g_InterpreterMemoryBadWrites);
+        p = LogPut(p, " logged="); p = LogHex(p, g_InterpreterMemoryBadLogged); p = LogPut(p, "\r\n");
         /* ► Is mode Y actually in use? The whole unchained theory rests on Doom
              clearing Sequencer reg 4 bit 3, which was INFERRED from a pixel pattern
              (80-px period, 50 rows) and never observed directly. Print the register. */
@@ -37200,7 +37200,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         {   static const uint8_t sig[12] = {0x00,0x2a,0x00,0x15,0x3f,0x15,0x15,0x15,0x15,0x2a,0x00,0x00};
             uint32_t a, found = 0xFFFFFFFFu, hits = 0;
             for (a = 0x400; a + 12 <= 0xA0000u; ++a) {
-                if ((a & 0xFFF) == 0 && !imem_page_ok(a)) { a += 0xFFF; continue; }
+                if ((a & 0xFFF) == 0 && !InterpreterMemoryPageOk(a)) { a += 0xFFF; continue; }
                 if (*(volatile BYTE *)a == 0x00 && *(volatile BYTE *)(a+1) == 0x2a) {
                     uint32_t k; int ok = 1;
                     for (k = 0; k < 12; ++k) if (*(volatile BYTE *)(a+k) != sig[k]) { ok = 0; break; }
@@ -37217,15 +37217,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              heartbeat last sampled. The per-frame palette routine feeds the DAC from
              ds:0x2668; if that is black while the raw palette (above) is present, the
              fade multiplied it to zero. [0x1f7c] is the palette-state selector
-             (oracle=4). Reads go through imem_page_ok so an unmapped DS cannot fault. */
+             (oracle=4). Reads go through InterpreterMemoryPageOk so an unmapped DS cannot fault. */
         if (g_HeartbeatDs) {
             uint32_t dsb = (uint32_t)g_HeartbeatDs << 4, i;
             p = LogPut(p, "STAGE2: fade dump ds=0x"); p = LogHex(p, g_HeartbeatDs);
-            if (imem_page_ok(dsb + 0x1f7c)) {
+            if (InterpreterMemoryPageOk(dsb + 0x1f7c)) {
                 p = LogPut(p, " [1f7c]=0x"); p = LogHexByte(p, *(volatile BYTE *)(dsb + 0x1f7c));
             }
             p = LogPut(p, " buf@2668=[");
-            if (imem_page_ok(dsb + 0x2668)) {
+            if (InterpreterMemoryPageOk(dsb + 0x2668)) {
                 for (i = 0; i < 24; ++i) { p = LogHexByte(p, *(volatile BYTE *)(dsb + 0x2668 + i)); p = LogPut(p, " "); }
             } else p = LogPut(p, "<ds:2668 unmapped>");
             p = LogPut(p, "]\r\n");
