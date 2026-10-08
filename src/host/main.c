@@ -3557,7 +3557,7 @@ static VOID Irq0Ack(VOID)
         g_Irq0IsrStrict++;
     }
 }
-
+enum { IFV_PATH_LIVE = 0, IFV_PATH_VTIB_IRQ01 = 1, IFV_PATH_VTIB_DEVICE = 2, IFV_PATHS = 3 };   /* the IF/VIF census's paths: live (async), IRQ 0/1 via the VTIB, a device IRQ via the VTIB */
 /* ── #173: THE PROTECTED-MODE ARMS HOLD IRQ0 IN SERVICE TOO. ─────────────────────────
      Until s81 the async PM arm acknowledged IRQ0 and EOI'd it on the spot, and the two
      synchronous PM injectors (the #2b latch and the catch-up batch) never told the PIC
@@ -3661,7 +3661,7 @@ static VOID AsyncWhyNote(UINT irq, UINT why)
      clear -- how long a VIF-only gate would have held every line off.
      s81 run 1 (p_irq8): live IF was 1 in every sample; the nested IRQ 8s came through
      path 2, which the first cut did not count -- hence S and the delivery trace. */
-static DWORD g_IfvCensus[3][8];
+static DWORD g_IfvCensus[IFV_PATHS][8];
 static DWORD g_IfvShadow[PIC_LINES];
 static DWORD g_IfvStarveT0, g_IfvStarveMaximumMs, g_IfvStarveCount;
 static INT   g_IfvStarveOpen;
@@ -4168,7 +4168,7 @@ static INT AsyncInjectIrq(UINT irq)
          The fear that parked this -- a guest logically on with VIF clear -- did not show:
          Skyroads' live frames had VIF set every time, and ZAR's and Doom's real-mode
          stretches never reach this gate (census live{} empty for both). */
-    IfvNote(0, eflags);
+    IfvNote(IFV_PATH_LIVE, eflags);
     if (eflags & EFLAGS_VIF) g_VifLiveSeen = 1;
     if (!(eflags & (g_VifLiveSeen ? EFLAGS_VIF : (EFLAGS_IF_U | EFLAGS_VIF)))
         || cs == DOS_HDLR_SEG) {
@@ -4204,7 +4204,7 @@ static INT AsyncInjectIrq(UINT irq)
     context.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
     isOk = SetThreadContext(g_HostCpu, &context) ? 1 : 0;
     if (isOk && !(eflags & EFLAGS_VIF)) ++g_IfvShadow[irq & (PIC_LINES - 1)];   /* see IfvNote */
-    if (isOk) IfvTrace(irq, 0, eflags, cs, ip);
+    if (isOk) IfvTrace(irq, IFV_PATH_LIVE, eflags, cs, ip);
     if (isOk) {
         /* Acknowledge: in service until the guest EOIs.
            Release it immediately for a line vectored at one of OUR default stubs, which
@@ -7649,7 +7649,7 @@ static VOID IfvReport(VOID)
     if (g_IfvStarveOpen && GetTickCount() - g_IfvStarveT0 > starveMaximumMs)
         starveMaximumMs = GetTickCount() - g_IfvStarveT0;
     cursor = LogPut(cursor, "STAGE2: IFV census (IF,VIF,S714)");
-    for (path = 0; path < 3; ++path) {
+    for (path = 0; path < IFV_PATHS; ++path) {
         cursor = LogPut(cursor, path == 0 ? " live{" : path == 1 ? " vtib01{" : " vtibdev{");
         for (state = 0; state < 8; ++state) {
             if (!g_IfvCensus[path][state]) continue;
@@ -27332,7 +27332,7 @@ static VOID DpmiPmCarryToFrame(volatile BYTE *tib)
 
     ss  = (WORD)VDM_REG16(tib, VTIB_SS);
     sp  = DpmiSelectorIs32(ss) ? VDM_REG(tib, VTIB_ESP) : VDM_REG16(tib, VTIB_ESP);
-    linear = DpmiSelectorBase(ss) + sp + (DpmiSelectorIs32(cs) ? 8u : 4u);
+    linear = DpmiSelectorBase(ss) + sp + (DpmiSelectorIs32(cs) ? X86_FRAME32_FLAGS : X86_FRAME16_FLAGS);
     if (!MemoryReadable((ULONG_PTR)linear, 2)) return;
     flagsBytes  = (volatile BYTE *)(ULONG_PTR)linear;
 
@@ -27389,7 +27389,7 @@ static VOID DpmiEnsurePmReturnSelector(VOID)
              Follow g_DpmiIsClient32, exactly as the frame width does (h32). A 16-bit
              client is unaffected: flags stay 0 and every existing test keeps its
              6-byte frame and 16-bit catcher. */
-        g_Ldt[index].Flags = g_DpmiIsClient32 ? 0x4 : 0x0;   /* 0x4 = D/B */
+        g_Ldt[index].Flags = g_DpmiIsClient32 ? DPMI_DESCRIPTOR_FLAG_BIG : 0;   /* 0x4 = D/B */
         DpmiInstall(index);
         g_PmReturnSelector = (WORD)DPMI_LDT_SELECTOR(index);
     }
@@ -27421,7 +27421,7 @@ static INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context)
     UINT interruptVector = IrqPmVector(irq);               /* 08h-0Fh, or 70h-77h for the slave */
     DWORD eflags = context->EFlags;
     WORD  ss;
-    if (irq >= 16) { g_AsyncWhy = ASYNC_WHY_BAD_VECTOR; return 0; }
+    if (irq >= PIC_LINES) { g_AsyncWhy = ASYNC_WHY_BAD_VECTOR; return 0; }
     if (g_PmNoIrq || g_InPmIrq) { g_AsyncWhy = g_InPmIrq ? ASYNC_WHY_IN_PM_IRQ : ASYNC_WHY_PM_NO_IRQ; return 0; }     /* knob off, or a sync injection is running */
     if (g_PmReturnSelector == 0) { g_AsyncWhy = ASYNC_WHY_NO_CATCHER; return 0; }              /* no catcher yet -> no way back */
     if (!g_PmInt[interruptVector].Client) { g_AsyncWhy = ASYNC_WHY_UNHOOKED_PM; return 0; }          /* the client has not hooked this line */
@@ -27501,7 +27501,7 @@ static INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context)
          and clear the kernel's own pending bits too, exactly as the event-3 guard in the
          main loop already does for the stale-pending case. */
     context->EFlags = eflags & ~(EFLAGS_IF_U | EFLAGS_VIF | EFLAGS_VIP);
-    *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR &= ~3u;      /* the kernel's pending-IRQ bits */
+    *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR &= ~VDM_INT_PENDING;      /* the kernel's pending-IRQ bits */
     g_DpmiVi  = 0;                                  /* ...and our model of it */
     return 1;
 }
@@ -27562,7 +27562,7 @@ typedef struct {
     VOID   (*RemoveIoHook)(HANDLE vddHandle, WORD rangeCount, PCVOID ranges);
 } NTVDMEX_SHIM_API;
 
-
+#include <wownt32.h>   /* declarations only: WOW_TYPE_*, the handle types WOWHandle32/16 are given */
 static VOID ShimLog(PCSTR what)
 {
     CHAR buffer[200], *cursor = buffer;
@@ -27588,9 +27588,9 @@ static HANDLE ShimHandle32(WORD handle16, DWORD type)
     INT kind = -1;
     if (!handle16) return NULL;
     switch (type) {
-    case 0: case 14: { WOWUSER_WINDOW *window = WowUserFindWindow(handle16); return window ? (HANDLE)window->Window32 : NULL; }
-    case 1:  return (HANDLE)WowUserMenu32(handle16);
-    case 4: case 5: case 6: case 7: case 8: case 9: case 10: case 11:
+    case WOW_TYPE_HWND: case WOW_TYPE_FULLHWND: { WOWUSER_WINDOW *window = WowUserFindWindow(handle16); return window ? (HANDLE)window->Window32 : NULL; }
+    case WOW_TYPE_HMENU:  return (HANDLE)WowUserMenu32(handle16);
+    case WOW_TYPE_HDC: case WOW_TYPE_HFONT: case WOW_TYPE_HMETAFILE: case WOW_TYPE_HRGN: case WOW_TYPE_HBITMAP: case WOW_TYPE_HBRUSH: case WOW_TYPE_HPALETTE: case WOW_TYPE_HPEN:
         return (HANDLE)WowGdiH32(handle16, &kind);
     }
     ShimLog("WOWHandle32: a handle type this host does not map -- 0");
@@ -27600,9 +27600,9 @@ static WORD ShimHandle16(HANDLE handle, DWORD type)
 {
     if (!handle) return 0;
     switch (type) {
-    case 0: case 14: return WowWinHwnd16((HWND)handle);
-    case 4: return WowGdiH16((HGDIOBJ)handle, WOWGDI_KIND_DC);
-    case 5: case 6: case 7: case 8: case 9: case 10: case 11:
+    case WOW_TYPE_HWND: case WOW_TYPE_FULLHWND: return WowWinHwnd16((HWND)handle);
+    case WOW_TYPE_HDC: return WowGdiH16((HGDIOBJ)handle, WOWGDI_KIND_DC);
+    case WOW_TYPE_HFONT: case WOW_TYPE_HMETAFILE: case WOW_TYPE_HRGN: case WOW_TYPE_HBITMAP: case WOW_TYPE_HBRUSH: case WOW_TYPE_HPALETTE: case WOW_TYPE_HPEN:
         return WowGdiH16((HGDIOBJ)handle, WOWGDI_KIND_OBJ);
     }
     ShimLog("WOWHandle16: a handle type this host does not map -- 0");
@@ -27611,8 +27611,8 @@ static WORD ShimHandle16(HANDLE handle, DWORD type)
 static VOID ShimIcaInterrupt(INT isSlave, BYTE line, INT count)
 {
     (VOID)count;
-    if (line > 7) return;
-    InterlockedOr(&g_IcaPending, (LONG)(1u << ((isSlave ? 8 : 0) + line)));
+    if (line >= PIC_LINES_PER_CHIP) return;
+    InterlockedOr(&g_IcaPending, (LONG)(1u << ((isSlave ? PIC_LINES_PER_CHIP : 0) + line)));
     if (++g_IcaRaised <= 8) {
         CHAR buffer[96], *cursor = buffer;
         cursor = LogPut(cursor, "WOWSHIM: call_ica_hw_interrupt ms="); cursor = LogHex(cursor, (DWORD)isSlave);
@@ -27625,7 +27625,7 @@ static VOID ShimIcaInterrupt(INT isSlave, BYTE line, INT count)
         PostThreadMessageA(g_GuestThreadId, WM_NULL, 0, 0);
 }
 static VOID ShimYield(VOID) { Sleep(0); }
-
+#define DPMI_INTERP_STEPS_MAX 20000000L   /* DpmiRunPmInterp: modelled steps before giving up */
 /* ── s91 (#309): WOWCallback16Ex -- a 32-bit thunk DLL calling 16-bit code. pArgs is
      the 16-bit STACK IMAGE, cbArgs bytes, copied as it is (wownt32.h; Wine's
      K32WOWCallback16Ex does the same memcpy): its lowest word is what SP points at,
@@ -27638,14 +27638,14 @@ static BOOL ShimCallback16Ex(DWORD targetProcedure, DWORD flags, DWORD byteCount
 {
     WORD args[WOWCALL_MAX_ARGW], callResult = 0;
     const BYTE *argumentBytes = (const BYTE *)arguments;
-    INT wordCount = (INT)(byteCount / 2), index;
+    INT wordCount = (INT)(byteCount / WOW_WORD_BYTES), index;
     (VOID)flags;
     if ((byteCount & 1) || wordCount > WOWCALL_MAX_ARGW || (byteCount && !argumentBytes) || !g_TibDebug) {
         ShimLog("WOWCallback16Ex: refused (odd or > 64 argument bytes)");
         return FALSE;
     }
     for (index = 0; index < wordCount; ++index)
-        args[index] = (WORD)(argumentBytes[byteCount - 2 - 2 * index] | (argumentBytes[byteCount - 1 - 2 * index] << BYTE_SHIFT));
+        args[index] = (WORD)(argumentBytes[byteCount - WOW_WORD_BYTES - WOW_WORD_BYTES * index] | (argumentBytes[byteCount - 1 - WOW_WORD_BYTES * index] << BYTE_SHIFT));
     if (!WowCall16Sync(targetProcedure, (WORD)VDM_REG16(g_TibDebug, VTIB_DS),
                          args, wordCount, 0, 0, &callResult)) {
         ShimLog("WOWCallback16Ex: the nested run could not make the call");
@@ -27730,7 +27730,7 @@ static VOID IsvIoIn(PVOID self, WORD port, BYTE width, UINT32 *value)
     if (width == 1) {
         if (g_IsvHooks[index].Handlers.InByte) ((PISV_IN_BYTE_ROUTINE)g_IsvHooks[index].Handlers.InByte)(port, &lowByte);
         *value = lowByte;
-    } else if (width == 2 && g_IsvHooks[index].Handlers.InWord) {
+    } else if (width == X86_WORD_SIZE && g_IsvHooks[index].Handlers.InWord) {
         ((PISV_IN_WORD_ROUTINE)g_IsvHooks[index].Handlers.InWord)(port, &word); *value = word;
     } else {                                        /* no word handler: two byte reads */
         if (g_IsvHooks[index].Handlers.InByte) { ((PISV_IN_BYTE_ROUTINE)g_IsvHooks[index].Handlers.InByte)(port, &lowByte);
@@ -27743,7 +27743,7 @@ static VOID IsvIoOut(PVOID self, WORD port, BYTE width, UINT32 value)
     INT index = (INT)(ULONG_PTR)self;
     if (!g_IsvHooks[index].IsLive) return;
     if (width == 1) { if (g_IsvHooks[index].Handlers.OutByte) ((PISV_OUT_BYTE_ROUTINE)g_IsvHooks[index].Handlers.OutByte)(port, (BYTE)value); }
-    else if (width == 2 && g_IsvHooks[index].Handlers.OutWord) ((PISV_OUT_WORD_ROUTINE)g_IsvHooks[index].Handlers.OutWord)(port, (WORD)value);
+    else if (width == X86_WORD_SIZE && g_IsvHooks[index].Handlers.OutWord) ((PISV_OUT_WORD_ROUTINE)g_IsvHooks[index].Handlers.OutWord)(port, (WORD)value);
     else if (g_IsvHooks[index].Handlers.OutByte) {
         ((PISV_OUT_BYTE_ROUTINE)g_IsvHooks[index].Handlers.OutByte)(port, (BYTE)value);
         ((PISV_OUT_BYTE_ROUTINE)g_IsvHooks[index].Handlers.OutByte)((WORD)(port + 1), (BYTE)(value >> BYTE_SHIFT));
@@ -28151,7 +28151,7 @@ static LRESULT WowControlColour(HWND window, WORD window16, UINT message, WPARAM
      Win16 itemState has only the first five ODS_ bits. A refusal (no procedure, no
      nested run possible) leaves Windows' own handling. */
 static VOID OwnerDrawPutWord(BYTE *bytes, INT offset, WORD value) { bytes[offset] = (BYTE)value; bytes[offset + 1] = (BYTE)(value >> BYTE_SHIFT); }
-static VOID OwnerDrawPutDword(BYTE *bytes, INT offset, DWORD value) { OwnerDrawPutWord(bytes, offset, (WORD)value); OwnerDrawPutWord(bytes, offset + 2, (WORD)(value >> WORD_SHIFT)); }
+static VOID OwnerDrawPutDword(BYTE *bytes, INT offset, DWORD value) { OwnerDrawPutWord(bytes, offset, (WORD)value); OwnerDrawPutWord(bytes, offset + X86_WORD_SIZE, (WORD)(value >> WORD_SHIFT)); }
 static WORD OwnerDrawGetWord(const BYTE *bytes, INT offset) { return (WORD)(bytes[offset] | (bytes[offset + 1] << BYTE_SHIFT)); }
 enum { ENVIRONMENT_SCAN_MAX = 900, PATH_VALUE_MAX = 250 };   /* sub 0Fh's environment snapshot */
 static LRESULT WowOwnerDraw(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam, INT *handled)
@@ -28228,23 +28228,23 @@ static INT WowSend16Blob(WORD window16, WORD message, WORD wParam, BYTE *blob, I
 {
     WOWUSER_WINDOW *window = WowUserFindWindow(window16);
     DWORD proc = window ? WowUserWindowProcedureOf(window) : 0;
-    WORD args[5];
+    WORD args[WOW_WNDPROC_ARGUMENTS];
     if (!proc) return 0;
     args[0] = window16; args[1] = message; args[2] = wParam; args[3] = 0; args[4] = 0;
     return WowCall16SyncEx(proc, window->Instance ? window->Instance : g_WowUserClasses[window->Class].Instance,
-                              args, 5, window16, message, result, blob, blobLength, 3, fix, fixupCount);
+                              args, WOW_WNDPROC_ARGUMENTS, window16, message, result, blob, blobLength, 3, fix, fixupCount);
 }
 #define CPU_REFERENCE_MHZ_MAX_U 100000u
 static INT WowSend16Now(WORD window16, WORD message, WORD wParam, DWORD lParam, WORD *result)
 {
     WOWUSER_WINDOW *window = WowUserFindWindow(window16);
     DWORD proc = window ? WowUserWindowProcedureOf(window) : 0;
-    WORD args[5];
+    WORD args[WOW_WNDPROC_ARGUMENTS];
     if (!proc) return 0;
     args[0] = window16; args[1] = message; args[2] = wParam;
     args[3] = (WORD)(lParam >> WORD_SHIFT); args[4] = (WORD)(lParam & WORD_MASK);
     return WowCall16Sync(proc, window->Instance ? window->Instance : g_WowUserClasses[window->Class].Instance,
-                           args, 5, window16, message, result);
+                           args, WOW_WNDPROC_ARGUMENTS, window16, message, result);
 }
 #define CPU_REFERENCE_MHZ_MIN_U 1u
 static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interruptVector, UINT steps)
@@ -28479,10 +28479,10 @@ static VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps)
     UINT line;
     if (!g_IcaPending || g_InPmIrq || g_PmNoIrq || g_AsyncPmActive) return;
     bits = InterlockedExchange(&g_IcaPending, 0);
-    for (line = 0; line < 16; ++line) {
+    for (line = 0; line < PIC_LINES; ++line) {
         UINT interruptVector;
         if (!(bits & (1L << line))) continue;
-        interruptVector = (line < 8) ? 0x08 + line : 0x70 + (line - 8);
+        interruptVector = (line < PIC_LINES_PER_CHIP) ? PIC_MASTER_VECTOR_BASE + line : PIC_SLAVE_VECTOR_BASE + (line - PIC_LINES_PER_CHIP);
         if (!g_PmInt[interruptVector].Client) { ++g_IcaNoHandler; continue; }
         g_InPmIrq = 1;
         if (DpmiInjectPmIrq(machine, tib, interruptVector, steps)) ++g_IcaDelivered;
@@ -28803,13 +28803,13 @@ static INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib)
     lineCursor = LogPut(lineCursor, " DS=0x"); lineCursor = LogHex(lineCursor, cpu.Segments[X86_SREG_DS]); lineCursor = LogPut(lineCursor, " SS=0x"); lineCursor = LogHex(lineCursor, cpu.Segments[X86_SREG_SS]);
     lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
     for (;;) {
-        if (V86Step(&cpu)) { if (++guard > 20000000L) break; continue; }   /* modeled step */
+        if (V86Step(&cpu)) { if (++guard > DPMI_INTERP_STEPS_MAX) break; continue; }   /* modeled step */
         { UINT32 site = V86SegmentBase(cpu.Segments[X86_SREG_CS]) + cpu.Ip;
           BYTE opcode = V86HostRead8(site), nextByte = V86HostRead8(site+1);
           if (opcode == X86_OP_INT) {                   /* INT nn -> shared DPMI/DOS dispatch */
               INT status;
               DpmiInterpreterCpuStore(&cpu, tib);
-              VDM_REG(tib, VTIB_EVENT) = 4;   /* mimic a serviceable BOP for the dispatcher */
+              VDM_REG(tib, VTIB_EVENT) = VDM_EVENT_BOP;   /* mimic a serviceable BOP for the dispatcher */
               status = DpmiServicePmInt(machine, tib, (DWORD)nextByte, (UINT)guard);
               if (status <= 0) return status;         /* 0 = 4Ch exit, -1 = unserviceable */
               DpmiInterpreterCpuLoad(&cpu, tib);        /* pick up results + any selector/mode change */
@@ -28963,7 +28963,7 @@ static INT V86DeliverDeviceIrq(volatile BYTE *tib)
      PC delivers a device IRQ there quite happily. */
   INT inBop = (currentCs == DOS_HDLR_SEG &&
                 ((currentIp >= DOS_HDLR_INT08_STUB_OFF && currentIp < DOS_HDLR_INT08_STUB_OFF + VDM_BOP_LENGTH) || (currentIp >= DOS_HDLR_INT09_STUB_OFF && currentIp < DOS_HDLR_INT09_STUB_OFF + VDM_BOP_LENGTH)));
-  if (!inBop && currentCs != DOS_HDLR_SEG) IfvNote(2, VDM_REG(tib, VTIB_EFLAGS));
+  if (!inBop && currentCs != DOS_HDLR_SEG) IfvNote(IFV_PATH_VTIB_DEVICE, VDM_REG(tib, VTIB_EFLAGS));
   if (!inBop && GuestIfEnabled(tib)) {
       INT index;
       for (index = 0; index < (INT)sizeof g_IrqOrder; ++index) {
@@ -28990,7 +28990,7 @@ static INT V86DeliverDeviceIrq(volatile BYTE *tib)
               VddPicAcknowledge(&g_Pic, (BYTE)irq);
               if (AsyncVectorIsOurStub((UINT)irq)) VddPicEndOfInterrupt(&g_Pic, (BYTE)irq);
               g_IrqNInjected++;
-              IfvTrace((UINT)irq, 2, VDM_REG(tib, VTIB_EFLAGS), currentCs, currentIp);
+              IfvTrace((UINT)irq, IFV_PATH_VTIB_DEVICE, VDM_REG(tib, VTIB_EFLAGS), currentCs, currentIp);
               InjectInt(tib, vector);
               break;                    /* one per turn: let it IRET first */
           }
@@ -29009,7 +29009,7 @@ static INT V86DeliverDeviceIrq(volatile BYTE *tib)
          4.5M traps all happen in the first 6 s, before the block even exists. Async
          delivery is required; this log stays as the discriminator if that changes. */
       INT pend = 0;
-      for (irq = 2; irq < 16; ++irq) if (g_IrqNPending[irq]) { pend = irq; break; }
+      for (irq = ASYNC_FIRST_DEVICE_IRQ; irq < PIC_LINES; ++irq) if (g_IrqNPending[irq]) { pend = irq; break; }
       if (pend) g_IrqNRefuseTotal++;
       if (pend && g_IrqNRefuseLog < 16) {
           CHAR lineBuffer[256], *lineCursor = lineBuffer;
@@ -32850,7 +32850,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 flags2 = PeekWord((ss << PARAGRAPH_SHIFT) + ((stackPointer + X86_FRAME16_FLAGS) & WORD_MASK));   /* main-line FLAGS the stub returns to */
             } else {
                 flags2 = VDM_REG(tib, VTIB_EFLAGS);
-                IfvNote(1, flags2);
+                IfvNote(IFV_PATH_VTIB_IRQ01, flags2);
             }
             if (IfOrVif(flags2) && Irq0CanDeliver()
                 && !(cs == DOS_HDLR_SEG && ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END)) {
@@ -32887,7 +32887,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 flags2 = PeekWord((ss << PARAGRAPH_SHIFT) + ((stackPointer + X86_FRAME16_FLAGS) & WORD_MASK));
             } else {
                 flags2 = VDM_REG(tib, VTIB_EFLAGS);
-                IfvNote(1, flags2);
+                IfvNote(IFV_PATH_VTIB_IRQ01, flags2);
             }
             /* ── WHY IS THIS REFUSED? MEASURED, NOT ASSUMED. ─────────────────────────
                  KEYLAT says 90% of keystrokes take >64 ms to reach INT 09h (max 9.6 s)

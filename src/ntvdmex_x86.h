@@ -39,6 +39,7 @@
 /* A 16-bit far frame on the stack: IP, then CS, then (an interrupt's) FLAGS. */
 #define X86_FRAME16_CS          2
 #define X86_FRAME16_FLAGS       4
+#define X86_FRAME32_FLAGS       8           /* EIP, CS (as DWORDs), then EFLAGS         */
 #define X86_FRAME16_IP_WORD     0           /* the same frame as WORD indexes           */
 #define X86_FRAME16_CS_WORD     1
 #define X86_FRAME16_FLAGS_WORD  2
