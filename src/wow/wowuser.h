@@ -221,6 +221,9 @@
 #define WOWUSER_CLASS32_SIZE         96      /* the real Win32 class name behind a class  */
 #define WOWUSER_FULL_CLASS_NAME_SIZE 160     /* WOWWIN_CLASS_PREFIX + a guest class name  */
 #define WOWUSER_TASK_NONE16          0xFFFF  /* krnl386's current-task word: no task     */
+#define WOWUSER_KRNL_CURRENT_TASK    0x228   /* that word's offset in krnl386's DGROUP    */
+#define WOW_TDB_INSTANCE             0x1C    /* a task database's hInstance (InitTask writes it) */
+#define WOW_INSTANCE_FROM_SELECTOR   0xFFFE  /* a task's SS with the low bit clear = its hInstance */
 #define WOWUSER_MINUS_ONE16          0xFFFF  /* -1 as a Win16 WORD argument               */
 #define WOWUSER_WNDPROC_ARGUMENTS    5       /* hwnd, msg, wParam, lParam high, low       */
 #define WOWUSER_WNDPROC_ARG_LPARAM   3       /* lParam's high word: a blob's far pointer  */

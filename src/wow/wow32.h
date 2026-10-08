@@ -73,6 +73,8 @@
 #define WOW32_OFF_ARGB  10
 #define WOW32_OFF_FROM  12           /* return address into krnl386 -- WHICH call site */
 #define WOW32_OFF_ARGS  16
+#define WOW32_OFF_RETURN_STUB  2     /* [bp+2]: the return offset into the per-function stub */
+#define WOW32_OFF_STUB_SEGMENT 4     /* [bp+4]: that stub's segment -- whose id space this is  */
 #define WOW32_OFF_RET   (-16)        /* the return slot: low word, then high */
 
 /* ── ★★★ THE SECOND RETURN CHANNEL: THE EPILOGUE MODE. (GH #128, session 38) ──
@@ -104,6 +106,10 @@
 
 /* The BOP is `C4 C4 51`. Resuming the guest anywhere but past all three bytes
    restarts it mid-instruction. */
+#define WOW32_BOP                 0x51   /* C4 C4 51: a krnl386 call out to WOW32 (3 bytes)    */
+#define WOW32_BOP_DISPATCH        0x53   /* C4 C4 53 sub (4 bytes)                             */
+#define WOW32_DISPATCH_POINTER    0x03   /* 53/03: a far pointer to a 32-bit dispatch routine  */
+#define WOW32_TASK_LAUNCH         0x74   /* named from its use: made on the new task's stack  */
 
 typedef DWORD (*PWOW32_SELECTOR_TO_LINEAR)(WORD selector, PVOID context);
 
@@ -460,6 +466,8 @@ static DWORD Wow32PeekReturn(PCWOW32_FRAME frame)
    ⇒ Answering 0 is what made krnl386 compose module names against the CURRENT
      DIRECTORY and fail to open `C:\Documents and Settings\<user>\SHELL.DLL`. */
 #define WOW32_RESOLVEMODULEPATH         0xc5
+#define WOW32_RESOLVEMODULEPATH_ARG_DESTINATION 0   /* far */
+#define WOW32_RESOLVEMODULEPATH_ARG_SOURCE      4   /* far */
 /* ── ★★ 0xd0: GetWindowsDirectory(lpBuffer, uSize). (session 40) ──────────────
      Not named by krnl386's export table, so it comes from how it is called and
      from what the answer is USED for -- and the two agree.
@@ -486,6 +494,10 @@ static DWORD Wow32PeekReturn(PCWOW32_FRAME frame)
    below can print it, and so nobody adds a decline for it -- krnl386 reports a
    DX=0xFFFF answer to the app as a hard error, not as "ask DOS instead". */
 #define WOW32_GETCURDIR                 0xc9
+#define WOW32_GETCURDIR_ARG_BUFFER_OFFSET   0
+#define WOW32_GETCURDIR_ARG_BUFFER_SELECTOR 2
+#define WOW32_GETCURDIR_ARG_DRIVE           4
+#define WOW32_GETCURDIR_BUFFER_SIZE         68
 #define WOW32_GETSYSTEMDEFAULTLANGID    0xcf
 
 
@@ -720,6 +732,11 @@ static VOID WowShorten(PSTR path, UINT capacity)
    log as the INT 21h line that follows the call. */
 #define WOW32_FILE_OPEN        0xc1   /* AH=3Dh                    */
 #define WOW32_FILE_READ        0x97   /* -> AH=3Fh on decline      */
+#define WOW32_FILE_READ_ARG_COUNT          8    /* DWORD                          */
+#define WOW32_FILE_READ_ARG_BUFFER_OFFSET 12
+#define WOW32_FILE_READ_ARG_BUFFER_SELECTOR 14
+#define WOW32_FILE_READ_ARG_HANDLE        16
+#define WOW32_FILE_READ_FAILED_U  0xFFFFFFFFu  /* DX:AX: a real failure, never a short read */
 #define WOW32_FILE_CLOSE       0xc2   /* AH=3Eh                    */
 #define WOW32_FILE_GETATTR     0xc7   /* AH=43h AL=0               */
 #define WOW32_FILE_7E          0x7e   /*                           */

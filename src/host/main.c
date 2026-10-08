@@ -983,7 +983,7 @@ static MPU_STATE    g_Mpu;       static NTVDD_DEVICE g_MpuDevice;
 static COMM_STATE   g_Comm;      static NTVDD_DEVICE g_CommDevice;   /* GH #9 */
 static NETBIOS_STATE    g_Net;       static NTVDD_DEVICE g_NetDevice;    /* GH #8 (s91) */
 static BYTE      g_GenericStubVector[DOS_GENSTUB_N];  /* #315: which vector each generic stub is */
-
+enum { WOWFOLD_MUTE_NONE = 0, WOWFOLD_MUTE_FOLD = 1, WOWFOLD_MUTE_DROP = 2 };   /* g_WowFoldMute: log in full, fold to the verdict, drop */
 /* ── GH #8 (s91): THE HOST'S NetBIOS, for vdd_net.c. Win32's Netbios() takes an NCB
      that is the DOS one with a flat buffer pointer -- the same commands, the same
      return codes -- so this is a field copy. netapi32.dll is loaded on first use (a
@@ -3014,7 +3014,7 @@ static VOID VddLoadThirdParty(VOID)
 static VOID WowLogFlush(PSTR base, PSTR *logCursor)
 {
     PSTR end = *logCursor;
-    if (g_WowFoldMute == 2) { ++g_WowFoldDropped; *logCursor = base; return; }
+    if (g_WowFoldMute == WOWFOLD_MUTE_DROP) { ++g_WowFoldDropped; *logCursor = base; return; }
     if (g_WowFoldMute && end > base) {
         /* ── ⚠⚠ KEEP THE VERDICT LINE. DROPPING IT WOULD BREAK THE GATE. ──
              bmwow.sh's signature is a COUNT of `-> SERVICED` / `-> DECLINED` /
@@ -10143,7 +10143,7 @@ static INT WowKernel2Stub(WORD thunkId, WORD returnStub)
 }
 #define WOW_PATH_PARAS      0x20               /* the path buffer: one paragraph-run, one purpose */
 /* seg2 ids. Numbered in THEIR OWN space -- 0xd1 here is not 0xd1 in wow32.h. */
-#define WOW32K2_TASKENV   0x00d1     /* the new task's environment; see the service */
+#define WOW32K2_TASKENV   0x00d1     /* the new task's environment; args: block offset 2, selector 4 */
 static WORD      g_WowEntryDs = 0;   /* krnl386's autodata paragraph      */
 static INT       g_WowEntering = 0;   /* the guest is krnl386, not DOS     */
 /* The PM->V86 transfer buffer for pointer-taking INT 21h calls; allocated in
@@ -21840,7 +21840,7 @@ static DWORD PmLfnOutLength(DWORD transferOffset, INT kind, DWORD length)
     while (used < length && transfer[used]) ++used;
     return (used < length) ? used + 1 : length;
 }
-
+enum { WOW_PUMP_BUDGET = 64, WOW_PUMP_BUDGET_BRIEF = 32, WOW_INPUT_WAIT_MS = 50, WOW32K2_TASKENV_ARG_BLOCK_OFFSET = 2, WOW32K2_TASKENV_ARG_BLOCK_SELECTOR = 4 };   /* the WOW32 BOP service */
 static PSTR PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
 {
 #define m (*machine)
@@ -22181,7 +22181,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                 if (callFrame->ReturnMode == WOWCALL_RET_RESULTW && (result >> WORD_SHIFT))
                     cursor = LogPut(cursor, " (WORD result; DX was litter and is discarded)");
             }
-            else if (callFrame->ReturnLinear && callFrame->Message == WM_CREATE16 && (WORD)result == 0xFFFF)
+            else if (callFrame->ReturnLinear && callFrame->Message == WM_CREATE16 && (WORD)result == WOWUSER_MINUS_ONE16)
                 cursor = LogPut(cursor, " -- ★ WM_CREATE REFUSED: the call that made the window"
                             " now returns 0");
             /* ── ★★★★★ FOLLOW THE POINTER THE GUEST JUST HANDED BACK. ─────────
@@ -22433,9 +22433,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                    the dialog, so the Task List showed the desktop behind it
                    (runs/s92/untitled2.bmp). DefDlgProc's paint is the dialog colour. */
                 if (g_WowDlgIsDialogCall[g_WowCallDepth] && (WORD)result == 0
-                    && (g_WowDlgMessage[g_WowCallDepth] == 0x0010
-                        || g_WowDlgMessage[g_WowCallDepth] == 0x000F
-                        || g_WowDlgMessage[g_WowCallDepth] == 0x0014)) {
+                    && (g_WowDlgMessage[g_WowCallDepth] == WM_CLOSE
+                        || g_WowDlgMessage[g_WowCallDepth] == WM_PAINT
+                        || g_WowDlgMessage[g_WowCallDepth] == WM_ERASEBKGND)) {
                     CHAR defaultName[200]; INT defaultLength = 0;
                     WowUserDlgDefault(WowUserFindWindow(actionArgument), actionArgument,
                                         g_WowDlgMessage[g_WowCallDepth],
@@ -22458,7 +22458,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
             return 1;
         }
         if (bopBytes[0] == VDM_BOP0 && bopBytes[1] == VDM_BOP1) {
-            BYTE bopCode = bopBytes[2], bopSubcode = bopBytes[3];
+            BYTE bopCode = bopBytes[VDM_BOP_NUMBER_OFFSET], bopSubcode = bopBytes[VDM_BOP_LENGTH];
             /* What a stepped-over 0x51 will hand back -- see the step-over note below.
                Captured while the frame is still in scope. A separate flag, because
                every 32-bit value is a possible hole value (0xFFFF is DECLINE) and a
@@ -22528,8 +22528,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                  verdict line is kept. Interleaving cannot defeat it. */
             {   DWORD frameStackBase  = DpmiSelectorBase((WORD)VDM_REG16(tib, VTIB_SS));
                 DWORD frameBp  = VDM_REG16(tib, VTIB_EBP);
-                g_WowFoldMute = 0;
-                if (bopCode == 0x51 && frameStackBase
+                g_WowFoldMute = WOWFOLD_MUTE_NONE;
+                if (bopCode == WOW32_BOP && frameStackBase
                     && HostReadable((const VOID *)(ULONG_PTR)(frameStackBase + frameBp), 16)) {
                     const volatile BYTE *fromFrame =
                         (const volatile BYTE *)(ULONG_PTR)(frameStackBase + frameBp);
@@ -22542,7 +22542,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                          function's dump stop early. It can never change what is
                          serviced, and the verdict line is kept either way. */
                     DWORD slot = fromFrameId & (WOWFOLD_SLOTS - 1u);
-                    if (g_WowFoldSeen[slot] < 0xFFFFFFFFu) ++g_WowFoldSeen[slot];
+                    if (g_WowFoldSeen[slot] < MAXDWORD) ++g_WowFoldSeen[slot];
                     if (g_WowFoldSeen[slot] == WOWFOLD_KEEP) {
                         cursor = LogPut(cursor, "WOWFOLD: FUNC=0x"); cursor = LogHex(cursor, fromFrameId);
                         cursor = LogPut(cursor, " has now been traced 0x");
@@ -22560,8 +22560,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                     " point are a floor, not a total.\r\n");
                         LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                     }
-                    if (g_WowFoldSeen[slot] > WOWFOLD_KEEP) g_WowFoldMute = 1;
-                    if (g_WowFoldSeen[slot] > WOWFOLD_HARD) g_WowFoldMute = 2;
+                    if (g_WowFoldSeen[slot] > WOWFOLD_KEEP) g_WowFoldMute = WOWFOLD_MUTE_FOLD;
+                    if (g_WowFoldSeen[slot] > WOWFOLD_HARD) g_WowFoldMute = WOWFOLD_MUTE_DROP;
                 }
             }
             cursor = LogPut(cursor, "WOWBOP 0x"); cursor = LogHexByte(cursor, bopCode);
@@ -22664,7 +22664,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                        That is the whole WOW32 interface: a small integer namespace.
                        Naming it here is what turns a wall of identical BOP lines into
                        a list of functions to implement. */
-                    if (bopCode == 0x51) {
+                    if (bopCode == WOW32_BOP) {
                         /* ⚠ CORRECTED, AND THE CORRECTION IS THE WHOLE POINT.
                              This used to read the arguments at bp+12 and so printed
                              the CALLER's far return address as the first two argument
@@ -22680,7 +22680,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                              | (frameBytes[WOW32_OFF_ID + 1] << BYTE_SHIFT));
                         DWORD argumentBytes  = (DWORD)(frameBytes[WOW32_OFF_ARGB]
                                              | (frameBytes[WOW32_OFF_ARGB + 1] << BYTE_SHIFT));
-                        DWORD argumentCount   = argumentBytes / 2, item;
+                        DWORD argumentCount   = argumentBytes / WOW_WORD_BYTES, item;
                         /* ★ AN ID IS ONLY MEANINGFUL WITH ITS TABLE. The stub lives
                              in the module that owns the numbering, so print that
                              segment and only apply krnl386's names when the stub is
@@ -22688,7 +22688,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              RegisterClass for one run, which is how the whole per-module
                              id space came to light -- an instrument must not put a name
                              on something it has not identified. */
-                        DWORD frameSegment = (DWORD)(frameBytes[4] | (frameBytes[5] << BYTE_SHIFT));
+                        DWORD frameSegment = (DWORD)(frameBytes[WOW32_OFF_STUB_SEGMENT] | (frameBytes[WOW32_OFF_STUB_SEGMENT + 1] << BYTE_SHIFT));
                         INT   isKernelThunk   = frameSegment == VDM_REG16(tib, VTIB_CS);
                         PCSTR thunkName = isKernelThunk ? Wow32Name((WORD)frameId) : NULL;
                         cursor = LogPut(cursor, " FUNC=0x"); cursor = LogHex(cursor, frameId);
@@ -22748,7 +22748,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 cursor = LogHex(cursor, (DWORD)(dgroup[0x228] | (dgroup[0x229] << BYTE_SHIFT)));
                                 /* ★ And keep it where USER's GetWindowTask can
                                      see it -- the same word, read once. */
-                                g_WowUserCurrentTask = (WORD)(dgroup[0x228] | (dgroup[0x229] << BYTE_SHIFT));
+                                g_WowUserCurrentTask = (WORD)(dgroup[WOWUSER_KRNL_CURRENT_TASK] | (dgroup[WOWUSER_KRNL_CURRENT_TASK + 1] << BYTE_SHIFT));
                             }
                         }
                         /* ── ★ AND WHICH EPILOGUE THIS CALL WILL RETURN THROUGH.
@@ -22780,8 +22780,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             cursor = LogPut(cursor, " (");
                             for (item = 0; item < argumentCount; ++item) {
                                 if (item) cursor = LogPut(cursor, " ");
-                                cursor = LogHex(cursor, (DWORD)(frameBytes[WOW32_OFF_ARGS + item * 2]
-                                             | (frameBytes[WOW32_OFF_ARGS + item * 2 + 1] << BYTE_SHIFT)));
+                                cursor = LogHex(cursor, (DWORD)(frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES]
+                                             | (frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES + 1] << BYTE_SHIFT)));
                             }
                             cursor = LogPut(cursor, ")");
                             /* ── ★★ krnl386 SAYS WHY IT IS GIVING UP, AND WE NEVER READ IT. ──
@@ -22812,10 +22812,10 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                  still prints nothing rather than a plausible lie. */
                             if (argumentCount >= 2) {
                                 for (item = 0; item + 1 < argumentCount; ++item) {
-                                    DWORD argumentOffset = (DWORD)(frameBytes[WOW32_OFF_ARGS + item * 2]
-                                                  | (frameBytes[WOW32_OFF_ARGS + item * 2 + 1] << BYTE_SHIFT));
-                                    DWORD argumentSelector = (DWORD)(frameBytes[WOW32_OFF_ARGS + item * 2 + 2]
-                                                  | (frameBytes[WOW32_OFF_ARGS + item * 2 + 3] << BYTE_SHIFT));
+                                    DWORD argumentOffset = (DWORD)(frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES]
+                                                  | (frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES + 1] << BYTE_SHIFT));
+                                    DWORD argumentSelector = (DWORD)(frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES + 2]
+                                                  | (frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES + 3] << BYTE_SHIFT));
                                     DWORD abase = argumentSelector ? DpmiSelectorBase((WORD)argumentSelector) : 0;
                                     const volatile BYTE *sourceBytes;
                                     UINT length2 = 0;
@@ -22871,7 +22871,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                 }
                 cursor = LogPut(cursor, "\r\n   ");
             }
-            if (bopCode == 0x53 && bopSubcode == 0x03) {
+            if (bopCode == WOW32_BOP_DISPATCH && bopSubcode == WOW32_DISPATCH_POINTER) {
                 VDM_SET16(tib, VTIB_EBX, 0);
                 VDM_SET16(tib, VTIB_EDX, 0);
                 VDM_SET16(tib, VTIB_ES,  0);
@@ -22889,7 +22889,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                  -- the thunk loads AX/DX from that hole after the BOP (observed:
                  anything we put in registers is overwritten before the caller
                  sees it). Wow32SetReturn() is the only correct way. */
-            if (bopCode == 0x51) {
+            if (bopCode == WOW32_BOP) {
                 DWORD wow32StackBase = DpmiSelectorBase((WORD)VDM_REG16(tib, VTIB_SS));
                 WOW32_FRAME frame;
                 frame.FrameBase      = (volatile BYTE *)(ULONG_PTR)
@@ -22897,7 +22897,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                 frame.Id      = Wow32PeekWord(frame.FrameBase + WOW32_OFF_ID);
                 frame.ArgumentBytes    = Wow32PeekWord(frame.FrameBase + WOW32_OFF_ARGB);
                 frame.CallSite    = Wow32PeekWord(frame.FrameBase + WOW32_OFF_FROM);
-                frame.StubSegment = Wow32PeekWord(frame.FrameBase + 4);          /* the stub's own segment */
+                frame.StubSegment = Wow32PeekWord(frame.FrameBase + WOW32_OFF_STUB_SEGMENT);          /* the stub's own segment */
                 /* ★ WHOSE ID SPACE IS THIS? The per-function stub lives in the module
                      that owns the numbering, so resolving its segment against
                      krnl386's own segment bases answers it exactly. Everything we
@@ -22989,7 +22989,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                      with. Never inside a C-stack nested run or a modal loop. */
                 if (g_WowSchedOn && g_WowSchedLaunchChild) {
                     WORD freshCurrentTask = WowSchedCurrentTask();
-                    if (freshCurrentTask && freshCurrentTask != 0xFFFF && freshCurrentTask != g_WowSchedLaunchChild) {
+                    if (freshCurrentTask && freshCurrentTask != WOWUSER_TASK_NONE16 && freshCurrentTask != g_WowSchedLaunchChild) {
                         WORD child = g_WowSchedLaunchChild;
                         INT  freshIndex, freshSlotIndex = -1;
                         g_WowSchedLaunchChild = 0;
@@ -23034,14 +23034,14 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                            is exactly what makes resuming it later sound.
                          So: park the new task at this instruction, and send the
                            creator home through epilogue mode 25. */
-                    INT freedSlotIndex = (frame.Id == 0x74) ? WowSchedFree() : -1;
-                    if (frame.Id == 0x74 && freedSlotIndex >= 0) {
+                    INT freedSlotIndex = (frame.Id == WOW32_TASK_LAUNCH) ? WowSchedFree() : -1;
+                    if (frame.Id == WOW32_TASK_LAUNCH && freedSlotIndex >= 0) {
                         DWORD taskBase = DpmiSelectorBase(current);
                         WORD  taskInstance = 0;
                         INT   isFromTdb = 0;
                         if (taskBase) {
                             const volatile BYTE *task = (const volatile BYTE *)(ULONG_PTR)taskBase;
-                            taskInstance = (WORD)(task[0x1c] | (task[0x1d] << BYTE_SHIFT));
+                            taskInstance = (WORD)(task[WOW_TDB_INSTANCE] | (task[WOW_TDB_INSTANCE + 1] << BYTE_SHIFT));
                             isFromTdb = taskInstance != 0;
                         }
                         /* ★ LoadModule's result is the new task's instance handle, and
@@ -23053,7 +23053,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              (SS=0x16bf/hInst=0x16be, SS=0x03af/hInst=0x03ae) and our
                              own task a third time. It is VERIFIED at (C) below against
                              the value krnl386 itself writes, and a mismatch is loud. */
-                        if (!taskInstance) taskInstance = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFE);
+                        if (!taskInstance) taskInstance = (WORD)(VDM_REG(tib, VTIB_SS) & WOW_INSTANCE_FROM_SELECTOR);
                         WowSchedSave(&g_WowSchedSlots[freedSlotIndex], tib, modeLinear, current, VDM_BOP_LENGTH);
                         g_WowSchedSlots[freedSlotIndex].IsFresh = 1;          /* s92: not run yet (#306) */
                         g_WowSchedLaunchChild = current;            /* the parent is the next caller */
@@ -23104,7 +23104,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                          has nothing to do. The other new yield is at GetMessage -- see
                          "(E)" at the USER dispatch -- for a task launched and never run. */
                     else if (frame.Id == WOW32_WOWWAITFORMSGANDEVENT
-                             && current != 0 && current != 0xFFFF && !WowSchedInterTaskLive()
+                             && current != 0 && current != WOWUSER_TASK_NONE16 && !WowSchedInterTaskLive()
                              && (freedSlotIndex = WowSchedPick(current)) >= 0) {
                         WORD toTask = g_WowSchedSlots[freedSlotIndex].Task;
                         /* Written into the WAITING task's frame now; its epilogue
@@ -23141,8 +23141,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                      50 ms of waiting for input -- the same bound and reasoning as the
                      GetMessage wait -- and any IRQ a 32-bit component raised. */
                 if (frame.IsKernel && frame.Id == WOW32_WOWWAITFORMSGANDEVENT) {
-                    if (!g_WowMsgCount && !WowWinPump(64))
-                        MsgWaitForMultipleObjects(0, NULL, FALSE, 50, QS_ALLINPUT);
+                    if (!g_WowMsgCount && !WowWinPump(WOW_PUMP_BUDGET))
+                        MsgWaitForMultipleObjects(0, NULL, FALSE, WOW_INPUT_WAIT_MS, QS_ALLINPUT);
                     if (g_IcaPending) WowIcaDeliver(g_DosMachine, tib, 0);
                     Wow32SetReturn(&frame, 0);
                     ++g_Wow32Serviced;
@@ -23183,11 +23183,11 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                      0xFFFFFFFF in DX:AX, so a short read must return the SHORT COUNT
                      and only a real failure may return the sentinel. */
                 if (frame.IsKernel && frame.Id == WOW32_FILE_READ && !Wow32MayDecline(frame.Id, frame.CallSite)) {
-                    DWORD count  = (DWORD)Wow32ArgWord(&frame, 8)
-                               | ((DWORD)Wow32ArgWord(&frame, 10) << WORD_SHIFT);
-                    DWORD bufferOffset = Wow32ArgWord(&frame, 12);
-                    WORD  bufferSelector = Wow32ArgWord(&frame, 14);
-                    DWORD argumentHandle    = Wow32ArgWord(&frame, 16);
+                    DWORD count  = (DWORD)Wow32ArgWord(&frame, WOW32_FILE_READ_ARG_COUNT)
+                               | ((DWORD)Wow32ArgWord(&frame, WOW32_FILE_READ_ARG_COUNT + WOW_WORD_BYTES) << WORD_SHIFT);
+                    DWORD bufferOffset = Wow32ArgWord(&frame, WOW32_FILE_READ_ARG_BUFFER_OFFSET);
+                    WORD  bufferSelector = Wow32ArgWord(&frame, WOW32_FILE_READ_ARG_BUFFER_SELECTOR);
+                    DWORD argumentHandle    = Wow32ArgWord(&frame, WOW32_FILE_READ_ARG_HANDLE);
                     DWORD bufferBase = DpmiSelectorBase(bufferSelector);
                     DWORD bytesRead = 0;
                     INT isOk = 0;
@@ -23204,7 +23204,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     }
                     if (isOk) { Wow32SetReturn(&frame, bytesRead); ++g_Wow32Serviced;
                               cursor = LogPut(cursor, " -> read 0x"); cursor = LogHex(cursor, bytesRead); cursor = LogPut(cursor, "b"); }
-                    else    { Wow32SetReturn(&frame, 0xFFFFFFFFu); ++g_Wow32Unimplemented;
+                    else    { Wow32SetReturn(&frame, WOW32_FILE_READ_FAILED_U); ++g_Wow32Unimplemented;
                               cursor = LogPut(cursor, " -> FAILED (bad handle/selector/buffer)"); }
                     cursor = LogPut(cursor, "\r\n");
                     WowLogFlush(base, &cursor);
@@ -23212,17 +23212,17 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     return 1;
                 }
                 if (frame.IsKernel && frame.Id == WOW32_GETCURDIR && g_PmTransferSegment) {
-                    DWORD directoryOffset  = Wow32ArgWord(&frame, 0);
-                    WORD  directorySelector = Wow32ArgWord(&frame, 2);
-                    DWORD drive  = Wow32ArgWord(&frame, 4) & BYTE_MASK;
+                    DWORD directoryOffset  = Wow32ArgWord(&frame, WOW32_GETCURDIR_ARG_BUFFER_OFFSET);
+                    WORD  directorySelector = Wow32ArgWord(&frame, WOW32_GETCURDIR_ARG_BUFFER_SELECTOR);
+                    DWORD drive  = Wow32ArgWord(&frame, WOW32_GETCURDIR_ARG_DRIVE) & BYTE_MASK;
                     DWORD savedAx = VDM_REG(tib, VTIB_EAX), savedDx = VDM_REG(tib, VTIB_EDX);
                     DWORD savedDs = VDM_REG(tib, VTIB_DS),  savedSi = VDM_REG(tib, VTIB_ESI);
                     DWORD directoryBase = DpmiSelectorBase(directorySelector);
                     volatile BYTE *transfer = (volatile BYTE *)(ULONG_PTR)
                                         ((DWORD)g_PmTransferSegment << PARAGRAPH_SHIFT);
                     INT item;
-                    for (item = 0; item < 68; ++item) transfer[item] = 0;
-                    VDM_SET16(tib, VTIB_EAX, 0x4700);
+                    for (item = 0; item < WOW32_GETCURDIR_BUFFER_SIZE; ++item) transfer[item] = 0;
+                    VDM_SET16(tib, VTIB_EAX, DOS_FN_GET_CURRENT_DIRECTORY << BYTE_SHIFT);
                     VDM_SET16(tib, VTIB_EDX, (WORD)drive);
                     VDM_SET16(tib, VTIB_DS,  g_PmTransferSegment);
                     VDM_SET16(tib, VTIB_ESI, 0);
@@ -23236,13 +23236,13 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         cursor = LogPut(cursor, "\" cf="); cursor = LogHex(cursor, carryFlag);
                         if (!carryFlag && directoryBase) {
                             volatile BYTE *destinationBytes = (volatile BYTE *)(ULONG_PTR)(directoryBase + directoryOffset);
-                            if (MemoryReadable((ULONG_PTR)destinationBytes, 68))
-                                for (item = 0; item < 68; ++item) destinationBytes[item] = transfer[item];
+                            if (MemoryReadable((ULONG_PTR)destinationBytes, WOW32_GETCURDIR_BUFFER_SIZE))
+                                for (item = 0; item < WOW32_GETCURDIR_BUFFER_SIZE; ++item) destinationBytes[item] = transfer[item];
                             else { carryFlag = 1; cursor = LogPut(cursor, " (BUFFER UNREACHABLE)"); }
                         }
                         /* DX must not come back 0xFFFF -- that is this call site's
                            failure sentinel, and it is checked before AX. */
-                        Wow32SetReturn(&frame, carryFlag ? 0x0000000Fu : 0u);
+                        Wow32SetReturn(&frame, carryFlag ? DOS_ERR_INVALID_DRIVE : 0u);
                         cursor = LogPut(cursor, "\r\n");
                     }
                     ++g_Wow32Serviced;
@@ -23279,8 +23279,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                      the current directory, which Win16 did too. Recorded as a
                      difference rather than claimed as equivalence. */
                 if (frame.IsKernel && frame.Id == WOW32_RESOLVEMODULEPATH && g_WowPathSegment) {
-                    volatile BYTE *source = Wow32ArgPointer(&frame, 4);
-                    volatile BYTE *destination = Wow32ArgPointer(&frame, 0);
+                    volatile BYTE *source = Wow32ArgPointer(&frame, WOW32_RESOLVEMODULEPATH_ARG_SOURCE);
+                    volatile BYTE *destination = Wow32ArgPointer(&frame, WOW32_RESOLVEMODULEPATH_ARG_DESTINATION);
                     CHAR name[300], full[300];
                     INT item;
                     cursor = LogPut(cursor, "  WOW32 0xc5 ResolveModulePath ");
@@ -23311,15 +23311,15 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             volatile BYTE *pathBytes = (volatile BYTE *)(ULONG_PTR)
                                                 ((DWORD)g_WowPathSegment << PARAGRAPH_SHIFT);
                             WORD selector = DpmiSegmentToDescriptor(g_WowPathSegment);
-                            for (item = 0; item <= (INT)length && item < 0x1FF; ++item)
+                            for (item = 0; item <= (INT)length && item < WOW_PATH_PARAS * PARAGRAPH_SIZE - 1; ++item)
                                 pathBytes[item] = (BYTE)full[item];
-                            pathBytes[item < 0x1FF ? item : 0x1FF] = 0;
+                            pathBytes[item < WOW_PATH_PARAS * PARAGRAPH_SIZE - 1 ? item : WOW_PATH_PARAS * PARAGRAPH_SIZE - 1] = 0;
                             if (!selector) {
                                 cursor = LogPut(cursor, "NO SELECTOR (LDT full)");
                                 Wow32SetReturn(&frame, 0);
                             } else {
                                 Wow32PokeWord(destination,     0);        /* offset  */
-                                Wow32PokeWord(destination + 2, selector);      /* segment */
+                                Wow32PokeWord(destination + X86_FAR_POINTER_SEGMENT, selector);      /* segment */
                                 cursor = LogPut(cursor, "\""); cursor = LogPut(cursor, full);
                                 cursor = LogPut(cursor, "\" at 0x"); cursor = LogHex(cursor, selector);
                                 cursor = LogPut(cursor, ":0000");
@@ -23356,7 +23356,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                      the id space is per TABLE, so nothing here may be answered
                      until the table has identified itself. See WowKernel2Stub. */
                 if (!frame.IsKernel && !g_WowKernel2Segment && frame.StubSegment != g_WowUserSegment
-                    && WowKernel2Stub(frame.Id, Wow32PeekWord(frame.FrameBase + 2))) {
+                    && WowKernel2Stub(frame.Id, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
                     g_WowKernel2Segment = frame.StubSegment;
                     cursor = LogPut(cursor, "\n     WOWKRNL2: krnl386's SECOND stub table is in"
                                 " segment 0x");
@@ -23422,7 +23422,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                        will not find an arena entry. Recorded, not hidden. */
                 if (!frame.IsKernel && g_WowKernel2Segment && frame.StubSegment == g_WowKernel2Segment
                     && frame.Id == WOW32K2_TASKENV) {
-                    WORD  parameterBlockSelector = Wow32ArgWord(&frame, 4), parameterBlockOffset = Wow32ArgWord(&frame, 2);
+                    WORD  parameterBlockSelector = Wow32ArgWord(&frame, WOW32K2_TASKENV_ARG_BLOCK_SELECTOR), parameterBlockOffset = Wow32ArgWord(&frame, WOW32K2_TASKENV_ARG_BLOCK_OFFSET);
                     DWORD parameterBlockLinear = parameterBlockSelector ? DpmiSelectorBase(parameterBlockSelector) : 0;
                     WORD  environment = 0;
                     PCSTR source = "";
@@ -23447,7 +23447,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         }
                     }
                     {   DWORD environmentLinear = environment ? DpmiSelectorBase(environment) : 0;
-                        DWORD cap  = (DWORD)WOW_ENV_PARAS * 16u;
+                        DWORD cap  = (DWORD)WOW_ENV_PARAS * PARAGRAPH_SIZE_U;
                         cursor = LogPut(cursor, " src 0x"); cursor = LogHex(cursor, environment);
                         cursor = LogPut(cursor, " ("); cursor = LogPut(cursor, source[0] ? source : "nothing");
                         cursor = LogPut(cursor, ")");
@@ -23469,8 +23469,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 ++index;                          /* the string's NUL   */
                             }
                             ++index;                              /* the empty string   */
-                            if (index + 2 <= cap) {
-                                index += 2;                       /* the WORD count     */
+                            if (index + X86_WORD_SIZE <= cap) {
+                                index += X86_WORD_SIZE;                       /* the WORD count     */
                                 while (index < cap && sourceBytes[index]) ++index;
                                 ++index;                          /* the pathname's NUL */
                             }
@@ -23503,7 +23503,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                      in USER's, and one switch holding both id spaces is exactly
                      how this host came to answer the second with the first. */
                 if (!frame.IsKernel && !g_WowUserSegment
-                    && WowUserAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + 2))) {
+                    && WowUserAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
                     g_WowUserSegment = frame.StubSegment;
                     cursor = LogPut(cursor, "\n     WOWUSER: USER's code segment is 0x");
                     cursor = LogHex(cursor, g_WowUserSegment);
@@ -23518,7 +23518,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                          regular moment it is not inside the guest. Bounded, so a
                          flood of mouse moves cannot starve the thing we are here
                          to run. */
-                    WowWinPump(32);
+                    WowWinPump(WOW_PUMP_BUDGET_BRIEF);
                     /* ── (E) s92 (#306): GetMessage WITH NOTHING TO GET, AND A TASK THAT HAS
                          NEVER RUN. The idle yield (D) is krnl386's WowWaitForMsgAndEvent --
                          which only WOWEXEC's loop calls. An APPLICATION idles here, in our
@@ -23540,7 +23540,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     WORD messageTask = WowSchedCurrentTask();
                     INT  canYield = g_WowSchedOn && frame.Id == WOWUSER_GETMESSAGE
                                 && g_WowWindowNested == 0 && !WowDlgActive()
-                                && messageTask && messageTask != 0xFFFF && !WowSchedInterTaskLive();
+                                && messageTask && messageTask != WOWUSER_TASK_NONE16 && !WowSchedInterTaskLive();
                 wowSchedRetry:
                     if (canYield && !WowMsgCountFor(messageTask)) {
                         WORD yieldFrom = messageTask;
@@ -23581,8 +23581,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                        ⚠ THE HOST LOCK IS NOT HELD ACROSS THE WAIT. The UI thread
                          takes it to push a keystroke, so holding it here would
                          make the thing we are waiting for impossible. */
-                    if (frame.Id == WOWUSER_GETMESSAGE && !WowMsgCountFor(messageTask == 0xFFFF ? 0 : messageTask)
-                        && !WowMsgQuitFor(messageTask == 0xFFFF ? 0 : messageTask)) {
+                    if (frame.Id == WOWUSER_GETMESSAGE && !WowMsgCountFor(messageTask == WOWUSER_TASK_NONE16 ? 0 : messageTask)
+                        && !WowMsgQuitFor(messageTask == WOWUSER_TASK_NONE16 ? 0 : messageTask)) {
                         INT woke = 0;
                         DWORD start = GetTickCount(), waited;
                         /* ★ SAY THE SETTING AT THE POINT OF USE, ONCE. The startup
@@ -23633,8 +23633,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                  alternative is a flag that stays set once and
                                  disables the watchdog for the rest of the run. */
                             g_WowMsgInWait = 1;
-                            while (g_Running && !WowMsgCountFor(messageTask == 0xFFFF ? 0 : messageTask)
-                                   && !WowMsgQuitFor(messageTask == 0xFFFF ? 0 : messageTask)
+                            while (g_Running && !WowMsgCountFor(messageTask == WOWUSER_TASK_NONE16 ? 0 : messageTask)
+                                   && !WowMsgQuitFor(messageTask == WOWUSER_TASK_NONE16 ? 0 : messageTask)
                                    && (!g_WowMsgWaitMs
                                        || GetTickCount() - start < g_WowMsgWaitMs)) {
                                 /* s92 (#306): another parked task's message arrived */
@@ -23667,8 +23667,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                      on the grounds that it "should" help. */
                                 if (g_IcaPending)         /* s90 #278 */
                                     WowIcaDeliver(g_DosMachine, tib, 0);
-                                if (!WowWinPump(64))
-                                    MsgWaitForMultipleObjects(0, NULL, FALSE, 50,
+                                if (!WowWinPump(WOW_PUMP_BUDGET))
+                                    MsgWaitForMultipleObjects(0, NULL, FALSE, WOW_INPUT_WAIT_MS,
                                                               QS_ALLINPUT);
                                 if (beats < 20 && GetTickCount() - beat >= 2000) {
                                     CHAR handlerLine[160], *handlerCursor = handlerLine;
@@ -23777,7 +23777,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             { WORD procedureCs = (WORD)(frame.CallbackProcedure >> WORD_SHIFT);
                               WORD procedureIndex = (WORD)(DPMI_SELECTOR_INDEX(procedureCs));
                               callbackAbsent = (procedureIndex && procedureIndex < DPMI_LDT_MAX
-                                          && !(g_Ldt[procedureIndex].Access & 0x80));
+                                          && !(g_Ldt[procedureIndex].Access & X86_DESCRIPTOR_PRESENT));
                               if (callbackAbsent)
                                   cursor = LogPut(cursor, " [code segment NOT PRESENT --"
                                               " entering via the RETF trampoline"
@@ -23871,7 +23871,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                      itself with the first thing we are asked to do out of it. */
                 if (!frame.IsKernel && !g_WowShellSegment
                     && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
-                    && WowShellAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + 2))) {
+                    && WowShellAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
                     g_WowShellSegment = frame.StubSegment;
                     cursor = LogPut(cursor, "\n     WOWSHELL: SHELL.DLL's code segment is 0x");
                     cursor = LogHex(cursor, g_WowShellSegment);
@@ -23883,7 +23883,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     /* The About box runs a modal loop on this thread, so drain
                        what is already queued for the guest's windows first --
                        same reason the USER branch pumps. */
-                    WowWinPump(32);
+                    WowWinPump(WOW_PUMP_BUDGET_BRIEF);
                     /* ── ⚠ SAY IT BEFORE IT BLOCKS, NOT AFTER. ────────────────
                          A modal service does not return until a human dismisses
                          it, and the "SERVICED" line is written afterwards -- so
@@ -23917,7 +23917,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                 if (!frame.IsKernel && !g_WowCommonDialogSegment
                     && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
                     && frame.StubSegment != g_WowShellSegment
-                    && WowCommonDialogAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + 2))) {
+                    && WowCommonDialogAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
                     g_WowCommonDialogSegment = frame.StubSegment;
                     cursor = LogPut(cursor, "\n     WOWCOMMDLG: COMMDLG.DLL's code segment is 0x");
                     cursor = LogHex(cursor, g_WowCommonDialogSegment);
@@ -23926,7 +23926,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                 }
                 if (!frame.IsKernel && g_WowCommonDialogSegment && frame.StubSegment == g_WowCommonDialogSegment) {
                     CHAR note[416];
-                    WowWinPump(32);
+                    WowWinPump(WOW_PUMP_BUDGET_BRIEF);
                     /* ⚠ Same reason as ShellAbout: a modal service does not return
                          until a human dismisses it, and the SERVICED line is
                          written afterwards. Say it before it blocks, or the log
@@ -23957,7 +23957,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                 if (!frame.IsKernel && !g_WowKeyboardSegment
                     && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
                     && frame.StubSegment != g_WowShellSegment && frame.StubSegment != g_WowCommonDialogSegment
-                    && WowKeyboardAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + 2))) {
+                    && WowKeyboardAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
                     g_WowKeyboardSegment = frame.StubSegment;
                     cursor = LogPut(cursor, "\n     WOWKBD: KEYBOARD.DRV's code segment is 0x");
                     cursor = LogHex(cursor, g_WowKeyboardSegment);
@@ -23983,7 +23983,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
                     && frame.StubSegment != g_WowShellSegment && frame.StubSegment != g_WowCommonDialogSegment
                     && frame.StubSegment != g_WowKeyboardSegment
-                    && WowGdiAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + 2))) {
+                    && WowGdiAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
                     g_WowGdiSegment = frame.StubSegment;
                     cursor = LogPut(cursor, "\n     WOWGDI: GDI.EXE's code segment is 0x");
                     cursor = LogHex(cursor, g_WowGdiSegment);
@@ -24023,7 +24023,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
                     && frame.StubSegment != g_WowShellSegment && frame.StubSegment != g_WowCommonDialogSegment
                     && frame.StubSegment != g_WowKeyboardSegment && frame.StubSegment != g_WowGdiSegment
-                    && WowSoundAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + 2))) {
+                    && WowSoundAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
                     g_WowSoundSegment = frame.StubSegment;
                     cursor = LogPut(cursor, "\n     WOWSOUND: SOUND.DRV's code segment is 0x");
                     cursor = LogHex(cursor, g_WowSoundSegment);
@@ -24051,7 +24051,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     && frame.StubSegment != g_WowSoundSegment
                     && WowAnchorHit(g_WowMmediaAnchors,
                                       (INT)(sizeof g_WowMmediaAnchors / sizeof g_WowMmediaAnchors[0]),
-                                      frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + 2))) {
+                                      frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
                     g_WowMultimediaSegment = frame.StubSegment;
                     cursor = LogPut(cursor, "\n     WOWMMEDIA: MMSYSTEM's stub segment is 0x");
                     cursor = LogHex(cursor, g_WowMultimediaSegment);
@@ -28084,7 +28084,7 @@ static INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCo
     if (result) *result = sink;
     return isOk;
 }
-enum { GUEST_EIP_FROM_FRAME = 0, GUEST_EIP_FROM_TIB_SLOT = 1, GUEST_EIP_FROM_BLOCKS = 2, WOW_TDB_INSTANCE = 0x1C, CSRSS_REPORT_GRACE_MS = 50 };   /* WinMain: a PM fault's EIP source, the TDB's hInstance, ExitVDM's wait */
+enum { GUEST_EIP_FROM_FRAME = 0, GUEST_EIP_FROM_TIB_SLOT = 1, GUEST_EIP_FROM_BLOCKS = 2, CSRSS_REPORT_GRACE_MS = 50 };   /* WinMain: a PM fault's EIP source, the TDB's hInstance, ExitVDM's wait */
 /* ── WM_CTLCOLOR, ANSWERED BY THE PROGRAM (s89, #162). Win32's seven WM_CTLCOLOR*
      are Win16's one WM_CTLCOLOR (0x0019) with the type in lParam's HIGH word
      (MSGBOX 0 .. STATIC 6, in the same order). The program gets a DC token for the
