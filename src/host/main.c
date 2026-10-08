@@ -48,15 +48,15 @@
    reads as before. A returned pointer is good for the next 15 calls from any thread,
    which covers every use here (all immediate). */
 #define NTVDMEX_DIR_DEFAULT "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\"
-static const char *NtvdmexRoot(VOID);                    /* "<root>\", trailing slash */
-static const char *NtvdmexPath(const char *sub, const char *name);
+static PCSTR NtvdmexRoot(VOID);                    /* "<root>\", trailing slash */
+static PCSTR NtvdmexPath(PCSTR sub, PCSTR name);
 #define NTVDMEX_DIR NtvdmexRoot()
 #define NTVDMEX_CFG   NtvdmexPath("cfg\\", "")
 #define NTVDMEX_DEBUG NtvdmexPath("debug\\", "")        /* parent of out\; created first */
 /* #211: the FIRST host writes to debug\out\ as always; a second one running at the
    same time writes to debug\out\2\, and so on -- see the instance claim in WinMain.
    Everything it writes goes through these two, so no host clears another's log. */
-static char g_OutSubdirectory[24] = "debug\\out\\";
+static CHAR g_OutSubdirectory[24] = "debug\\out\\";
 static INT  g_Instance = 1, g_InstanceAbandoned;
 
 #define NTVDMEX_OUT   NtvdmexPath(g_OutSubdirectory, "")
@@ -109,10 +109,10 @@ static INT  g_Instance = 1, g_InstanceAbandoned;
 #include "dos_env.h"
 #include "dos_int21.h"
 #include "dos_auxprn.h"   /* #251: AUX/PRN driver code planted at DOS_CTAB_SEG */
-typedef char DOS_AUXPRN_FITS[(sizeof(g_DosAuxPrnCode) <= DOS_AUXPRN_LEN) ? 1 : -1];
+typedef CHAR DOS_AUXPRN_FITS[(sizeof(g_DosAuxPrnCode) <= DOS_AUXPRN_LEN) ? 1 : -1];
 #include "bios_kbdact.h"  /* #254: INT 09h side-calls planted at DOS_CTAB_SEG */
 #include "bios_prtsc.h"   /* #274: the default INT 05h's byte sequencer */
-typedef char BIOS_KBDACT_FITS[(sizeof(g_BiosKeyboardActionCode) <= DOS_KBDACT_LEN
+typedef CHAR BIOS_KBDACT_FITS[(sizeof(g_BiosKeyboardActionCode) <= DOS_KBDACT_LEN
                                && DOS_AUXPRN_OFF + DOS_AUXPRN_LEN <= DOS_KBDACT_OFF
                                && DOS_KBDACT_OFF + DOS_KBDACT_LEN <= DOS_GENSTUB_OFF
                                && DOS_GENSTUB_OFF + DOS_GENSTUB_N * 4 <= 0x6F0) ? 1 : -1];
@@ -136,7 +136,7 @@ typedef char BIOS_KBDACT_FITS[(sizeof(g_BiosKeyboardActionCode) <= DOS_KBDACT_LE
 #include "sysfont.h"        /* #322: the VGA tables from the system fonts */
 /* #321: what the last font build did (Settings shows it) and the TextFont it was for. */
 static SYSFONT_REPORT g_SysFontReport;
-static char             g_TextFontLive[NTVDMEX_PATH_MAX];
+static CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "vdd_input.h"
 #include "vdd_speaker.h"
 #include "vdd_joy.h"
@@ -461,9 +461,9 @@ static INT  g_DsProbeCount = 0;
 static WORD g_CsProbe[DSPROBE_MAX];
 static INT  g_CsProbeCount = 0;
 
-static VOID ProbeLoadInto(const char *path, WORD *out, INT *outn)
+static VOID ProbeLoadInto(PCSTR path, WORD *out, INT *outn)
 {
-    char buffer[256]; DWORD bytesRead = 0; INT index = 0;
+    CHAR buffer[256]; DWORD bytesRead = 0; INT index = 0;
     HANDLE handle = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                            NULL, OPEN_EXISTING, 0, NULL);
     *outn = 0;
@@ -475,7 +475,7 @@ static VOID ProbeLoadInto(const char *path, WORD *out, INT *outn)
         UINT value = 0; INT got = 0;
         while (buffer[index] == ' ' || buffer[index] == '\t' || buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == ',') ++index;
         while (buffer[index]) {
-            char character = buffer[index];
+            CHAR character = buffer[index];
             if      (character >= '0' && character <= '9') value = (value << 4) | (UINT)(character - '0');
             else if (character >= 'a' && character <= 'f') value = (value << 4) | (UINT)(character - 'a' + 10);
             else if (character >= 'A' && character <= 'F') value = (value << 4) | (UINT)(character - 'A' + 10);
@@ -488,7 +488,7 @@ static VOID ProbeLoadInto(const char *path, WORD *out, INT *outn)
 
 static VOID DsProbeLoad(VOID)
 {
-    char buffer[256]; DWORD bytesRead = 0; INT index = 0;
+    CHAR buffer[256]; DWORD bytesRead = 0; INT index = 0;
     HANDLE handle;
     ProbeLoadInto(CSPROBE_PATH, g_CsProbe, &g_CsProbeCount);
     handle = CreateFileA(DSPROBE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -502,7 +502,7 @@ static VOID DsProbeLoad(VOID)
         UINT value = 0; INT got = 0;
         while (buffer[index] == ' ' || buffer[index] == '\t' || buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == ',') ++index;
         while (buffer[index]) {
-            char character = buffer[index];
+            CHAR character = buffer[index];
             if      (character >= '0' && character <= '9') value = (value << 4) | (UINT)(character - '0');
             else if (character >= 'a' && character <= 'f') value = (value << 4) | (UINT)(character - 'a' + 10);
             else if (character >= 'A' && character <= 'F') value = (value << 4) | (UINT)(character - 'A' + 10);
@@ -595,7 +595,7 @@ static DWORD g_NtvdmBopCount = 0;   /* how many guest-issued NTVDM BOPs this run
 static DWORD g_GuestNtvdmBops = 0;
 static INT   g_GuestNtAware    = 0;
 static INT   g_ShellGetNextCount  = 0;
-static char  g_ShellPath[300];         /* the shell we loaded, for its COMSPEC (s81) */   /* BOP 54 sub 01 calls this session -- see its arm (s81) */
+static CHAR  g_ShellPath[300];         /* the shell we loaded, for its COMSPEC (s81) */   /* BOP 54 sub 01 calls this session -- see its arm (s81) */
 /* ── #208: A PROGRAM STARTED FROM WINDOWS RUNS UNDER XP's COMMAND.COM, AS STOCK DOES. ──
      Stock ntvdm never loads the program itself: it starts COMMAND.COM /P and answers the
      shell's first BOP 54 sub 01 ("what next?") with the program. That is what puts a
@@ -603,8 +603,8 @@ static char  g_ShellPath[300];         /* the shell we loaded, for its COMSPEC (
      shell is told 5.00 (it demands it); the program gets the Settings version (the
      user's choice, SETVER-style -- see g_shell_psp). */
 static INT   g_Routed;                  /* this run's program is handed over via sub 01 */
-static char  g_FirstProgram[300];         /* its 8.3 path -- the sub 01 NAME field        */
-static char  g_FirstTail[128];         /* its arguments -- the sub 01 command TAIL     */
+static CHAR  g_FirstProgram[300];         /* its 8.3 path -- the sub 01 NAME field        */
+static CHAR  g_FirstTail[128];         /* its arguments -- the sub 01 command TAIL     */
 static INT   g_BackToPrompt;          /* Close Program ended it: next sub 01 = prompt */
 
 /* NTVDM's own BOPs, as issued by Microsoft's 16-bit components. These are the GUEST's
@@ -743,18 +743,18 @@ static INT   g_BackToPrompt;          /* Close Program ended it: next sub 01 = p
 static DWORD g_EmsFrameLinear;                        /* set by VdmMapEmsFrame */
 
 /* CSRSS receive buffers + program image (no CRT heap; static = zero-init). */
-static char g_CommandLine[1024], g_Application[1024], g_CurrentDirectory[512], g_PifPath[512];
+static CHAR g_CommandLine[1024], g_Application[1024], g_CurrentDirectory[512], g_PifPath[512];
 static WORD g_CdsSegment;                       /* the CDS array's reserved block, 0 = none */
 static WORD g_SftSegment;                       /* the SFT block for a DOS guest, 0 = none  */
 
 /* See NTVDMEX_DIR. No CRT here (the host links without one), so the string work is
    spelled out. */
-static const char *NtvdmexRoot(VOID)
+static PCSTR NtvdmexRoot(VOID)
 {
-    static char root[MAX_PATH + 16];
+    static CHAR root[MAX_PATH + 16];
     static volatile LONG ready;
     if (!ready) {
-        char self[MAX_PATH + 16];
+        CHAR self[MAX_PATH + 16];
         DWORD length = GetModuleFileNameA(NULL, self, sizeof self - 2);
         INT index, last = -1, prev = -1;
         if (length == 0 || length >= sizeof self - 2) {
@@ -794,23 +794,23 @@ static const char *NtvdmexRoot(VOID)
 #define NTVDMEX_PATH_SLOTS 8
 #define NTVDMEX_PATH_SLOT  (MAX_PATH + 96)
 static volatile LONG g_PathTls = -1;             /* TlsAlloc'd on first use (no __thread: no libgcc) */
-static const char *NtvdmexPath(const char *sub, const char *name)
+static PCSTR NtvdmexPath(PCSTR sub, PCSTR name)
 {
-    char *ring; UINT *next; char *slot;
+    PSTR ring; UINT *next; PSTR slot;
     if (g_PathTls < 0) {
         LONG tlsIndex = (LONG)TlsAlloc();
         if (InterlockedCompareExchange(&g_PathTls, tlsIndex, -1) != -1) TlsFree((DWORD)tlsIndex);
     }
-    ring = (char *)TlsGetValue((DWORD)g_PathTls);
+    ring = (PSTR)TlsGetValue((DWORD)g_PathTls);
     if (!ring) {
-        ring = (char *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+        ring = (PSTR)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
                                  NTVDMEX_PATH_SLOTS * NTVDMEX_PATH_SLOT + sizeof(UINT));
         if (!ring) return "";                     /* out of memory: an empty path fails loudly downstream */
         TlsSetValue((DWORD)g_PathTls, ring);
     }
     next = (UINT *)(ring + NTVDMEX_PATH_SLOTS * NTVDMEX_PATH_SLOT);
     slot = ring + ((*next)++ & (NTVDMEX_PATH_SLOTS - 1)) * NTVDMEX_PATH_SLOT;
-    const char *root = NtvdmexRoot();
+    PCSTR root = NtvdmexRoot();
     INT length = 0, index;
     for (index = 0; root[index] && length < MAX_PATH + 90; ++index) slot[length++] = root[index];
     for (index = 0; sub[index] && length < MAX_PATH + 90; ++index) slot[length++] = sub[index];
@@ -818,12 +818,12 @@ static const char *NtvdmexPath(const char *sub, const char *name)
     slot[length] = 0;
     return slot;
 }
-static char g_Environment[8192], g_Desktop[512], g_Title[512], g_Reserved[512];
+static CHAR g_Environment[8192], g_Desktop[512], g_Title[512], g_Reserved[512];
 static VDM_COMMAND_INFO g_CommandInfo;
 /* The SECOND fetch (s72): what CSRSS actually queued -- AppName is the program's
    full path, CmdLine its argument tail (CR LF terminated), Env the launcher's Win32
    environment block. See csrss_fetch_command(). */
-static char g_Application2[1024], g_CommandLine2[1024], g_CurrentDirectory2[512], g_Environment2[8192];
+static CHAR g_Application2[1024], g_CommandLine2[1024], g_CurrentDirectory2[512], g_Environment2[8192];
 static INT  g_Fetch2Ok = 0;
 
 /* ── ★ THE COMPILER VARIABLES REACH THE GUEST, WITHOUT MOVING THE MEMORY MAP. (s73) ──
@@ -844,11 +844,11 @@ static INT  g_Fetch2Ok = 0;
      in DosEnvBuildWithCard's `extra` format (NAME=VALUE, newline-separated). A value
      containing ';' is not split here -- LIB/INCLUDE for the tool chain are single
      directories; a multi-dir LIB is not the case this serves. */
-static INT DosEnvironmentNameIs(const char *name, UINT length, const char *literal)
+static INT DosEnvironmentNameIs(PCSTR name, UINT length, PCSTR literal)
 {
     UINT index;
     for (index = 0; index < length; ++index) {
-        char character = name[index]; if (character >= 'a' && character <= 'z') character = (char)(character - 32);
+        CHAR character = name[index]; if (character >= 'a' && character <= 'z') character = (CHAR)(character - 32);
         if (character != literal[index]) return 0;
     }
     return literal[length] == 0;
@@ -857,19 +857,19 @@ static INT DosEnvironmentNameIs(const char *name, UINT length, const char *liter
 /* Scan a Win32 environment block for LIB= and INCLUDE=, 8.3-shorten each value, and
    write them as newline-separated NAME=VALUE lines into out (for DosEnvBuildWithCard's
    `extra`). Returns the number written. Nothing is written for a var that is absent. */
-static UINT LauncherCompilerVariables(const char *environment, DWORD envcap, char *out, DWORD outcap)
+static UINT LauncherCompilerVariables(PCSTR environment, DWORD envcap, PSTR out, DWORD outcap)
 {
-    static const char *want[] = { "LIB", "INCLUDE", NULL };
-    const char *entry = environment; UINT count = 0; DWORD outLength = 0;
+    static PCSTR want[] = { "LIB", "INCLUDE", NULL };
+    PCSTR entry = environment; UINT count = 0; DWORD outLength = 0;
     if (out && outcap) out[0] = 0;
     if (!environment || envcap < 2 || !environment[0] || !out) return 0;
     while (entry < environment + envcap && *entry) {
-        const char *equals = entry; UINT nameLength, wanted;
+        PCSTR equals = entry; UINT nameLength, wanted;
         while (*equals && *equals != '=') ++equals;
         if (*equals != '=' || equals == entry) { entry += lstrlenA(entry) + 1; continue; }
         nameLength = (UINT)(equals - entry);
         for (wanted = 0; want[wanted]; ++wanted) if (DosEnvironmentNameIs(entry, nameLength, want[wanted])) {
-            char shortValue[512]; const char *value = equals + 1;
+            CHAR shortValue[512]; PCSTR value = equals + 1;
             DWORD shortLength = GetShortPathNameA(value, shortValue, sizeof shortValue);
             UINT vlen, need;
             if (shortLength && shortLength < sizeof shortValue) value = shortValue;
@@ -931,14 +931,14 @@ static INT          g_AweOn = 0;
 /* The reported DOS version, when something overrides the dialog's (s80): the XP shell's
    5.00, or cfg\dosver.txt. The dialog SHOWS it and does not push over it. */
 static INT          g_DosVersionForced = 0;
-static const char  *g_DosVersionWhy = 0;
+static PCSTR g_DosVersionWhy = 0;
 static INT          g_DosVersionShell = 0;      /* #208: an XP shell is present, told 5.00 itself */
 /* One line: did the guest find the card, fill it, play it, and take its interrupts?
    Printed from both exits, once. */
 static VOID GusReport(VOID)
 {
     static INT done = 0;
-    char buffer[400], *cursor = buffer;
+    CHAR buffer[400], *cursor = buffer;
     UINT voice, running = 0;
     if (done) return;
     done = 1;
@@ -967,11 +967,11 @@ static VOID GusReport(VOID)
 
 /* Does a newline-separated NAME=VALUE block already set `name` (case-insensitive, at
    the start of a line)? No C runtime here, so no strstr. */
-static INT StrStrNoCase(const char *blk, const char *name)
+static INT StrStrNoCase(PCSTR blk, PCSTR name)
 {
-    const char *line = blk;
+    PCSTR line = blk;
     while (*line) {
-        const char *cursor = line, *nameCursor = name;
+        PCSTR cursor = line, nameCursor = name;
         while (*nameCursor && *cursor && ((*cursor | 0x20) == (*nameCursor | 0x20) || (*cursor == *nameCursor))) { ++cursor; ++nameCursor; }
         if (!*nameCursor) return 1;
         while (*line && *line != '\n') ++line;
@@ -1303,7 +1303,7 @@ static UINT32 QpcMicroseconds(LONGLONG ticks);          /* fwd: defined with the
 static VOID ModeYTimelineReport(VOID);          /* fwd: north star 1, with the mode-Y remap */
 static VOID GusReport(VOID);               /* fwd: north star 2, with the GUS globals */
 static INT  ModeYInterpServes(VOID);      /* fwd: north star 1, design C */
-static VOID ModeYRingDump(const char *why);  /* fwd: north star 1, design C */
+static VOID ModeYRingDump(PCSTR why);  /* fwd: north star 1, design C */
 static VOID ModeYRingNoteIrq(UINT vector, WORD cs, WORD ip, WORD ss, WORD sp);
 static INT HostReadable(PCVOID addr, SIZE_T length);  /* fwd: defined with the VEH */
 static volatile LONGLONG g_KeyLatencyTimes[KEYLAT_RING];
@@ -2200,13 +2200,13 @@ static struct {
     WORD  Ivt[512];                   /* 0000:0000-03FF as the parent left it */
     BYTE  ImrMaster, ImrSlave, VideoMode;
     DWORD Pit0;                       /* channel 0's effective reload */
-    char  ProgramName[64];               /* the PARENT's status-strip name (user, s84) */
+    CHAR  ProgramName[64];               /* the PARENT's status-strip name (user, s84) */
 } g_ExecMachine[EXEC_MAX_DEPTH];
 static volatile LONG g_CloseRequest;     /* UI -> exec thread: end the innermost program */
 static INT  g_CloseForced;           /* the exit in progress is ours, not the guest's */
 static INT  g_TopIsShell;           /* depth 0 is a shell: nothing to close there */
 static VOID ExecMachineSave(INT depth);    /* fwd: defined with CloseProgramNow */
-static char g_ProgramName[64];           /* fwd: the status strip's name (defined below) */
+static CHAR g_ProgramName[64];           /* fwd: the status strip's name (defined below) */
 
 static BYTE g_ExecFileBuffer[0x80000];    /* child image; separate from the parent's */
 
@@ -2226,19 +2226,19 @@ static BYTE g_ExecFileBuffer[0x80000];    /* child image; separate from the pare
    Returns 1 if Windows took it (EXEC succeeds, child rc in m->child_rc); 0 if it
    would not -- e.g. a "PE" that is a DOS extender's 32-bit image Windows refuses --
    and the caller then runs the MZ stub, which is what DOS would have done. */
-static INT ExecWindows(DOS_MACHINE *machine, INT kind, UINT subsys, char **logCursor)
+static INT ExecWindows(DOS_MACHINE *machine, INT kind, UINT subsys, PSTR *logCursor)
 {
-    char command[MAX_PATH + 160];
+    CHAR command[MAX_PATH + 160];
     STARTUPINFOA startupInfo; PROCESS_INFORMATION processInfo;
     const volatile BYTE *tail = (const volatile BYTE *)
         (((DWORD)machine->ExecTailSegment << 4) + machine->ExecTailOffset);
     INT tailLength = tail[0] > 126 ? 126 : tail[0], index, wait = (kind == DOS_EXE_PE && subsys == 3);
-    char *cursor = command;
+    PSTR cursor = command;
     DWORD exitCode = 0;
     *cursor++ = '"'; cursor = LogPut(cursor, machine->ExecPath); *cursor++ = '"';
-    for (index = 0; index < tailLength && tail[1 + index] != 0x0D; ++index) *cursor++ = (char)tail[1 + index];
+    for (index = 0; index < tailLength && tail[1 + index] != 0x0D; ++index) *cursor++ = (CHAR)tail[1 + index];
     *cursor = 0;
-    for (index = 0; index < (INT)sizeof startupInfo; ++index) ((char *)&startupInfo)[index] = 0;
+    for (index = 0; index < (INT)sizeof startupInfo; ++index) ((PSTR)&startupInfo)[index] = 0;
     startupInfo.cb = sizeof startupInfo;
     if (!CreateProcessA(NULL, command, NULL, NULL, FALSE,
                         wait ? CREATE_NEW_CONSOLE : 0, NULL, NULL, &startupInfo, &processInfo)) {
@@ -2262,7 +2262,7 @@ static INT ExecWindows(DOS_MACHINE *machine, INT kind, UINT subsys, char **logCu
 }
 
 /* Perform a recorded EXEC: load the child, snapshot the parent, hand over. */
-static char *ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, char *cursor)
+static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
 {
     HANDLE fileHandle;
     DWORD nread = 0;
@@ -2352,7 +2352,7 @@ static char *ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, char *cursor)
         volatile BYTE *childEnvironment;
         if (parentEnvironment[0] == 0) slen = 1;                   /* empty: one NUL ends the list */
         else { for (slen = 0; slen < 0x7FFE && !(parentEnvironment[slen] == 0 && parentEnvironment[slen + 1] == 0); ++slen) ; slen += 2; }
-        const char *ename = machine->ExecName;
+        PCSTR ename = machine->ExecName;
         /* ── ★ THE 64-BYTE argv[0] RULE, AT EXEC TOO. (s81, #208) ─────────────────
              DOS/4GW 1.97 copies its own path into a 64-byte buffer (see the start-up
              copy of this rule, "argv[0] MUST BE 8.3"). That rule only guarded a program
@@ -2364,8 +2364,8 @@ static char *ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, char *cursor)
              against that directory exactly as DOS would. */
         while (ename[nlen] && nlen < sizeof(machine->ExecName) - 1) ++nlen;
         if (nlen >= 64) {
-            char cwd[MAX_PATH], shortCwd[MAX_PATH]; DWORD cwdLength, shortCwdLength;
-            const char *executableBaseName = ename, *scan;
+            CHAR cwd[MAX_PATH], shortCwd[MAX_PATH]; DWORD cwdLength, shortCwdLength;
+            PCSTR executableBaseName = ename, scan;
             for (scan = ename; *scan; ++scan) if (*scan == '\\') executableBaseName = scan + 1;
             cwdLength = GetCurrentDirectoryA(sizeof cwd, cwd);
             shortCwdLength = (cwdLength && cwdLength < sizeof cwd) ? GetShortPathNameA(cwd, shortCwd, sizeof shortCwd) : 0;
@@ -2454,7 +2454,7 @@ static char *ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, char *cursor)
        EXE2BIN -- built for the DOS 5.00 that stock reports to everything; MEM checks for
        exactly that. This is SETVER's own job: a per-PROGRAM version, not a per-session
        one. Compared on the directory, long or 8.3 form. */
-    {   char systemDirectory[MAX_PATH], shortSystemDirectory[MAX_PATH]; DWORD systemLength, shortSystemLength = 0, directoryLength = 0; const char *scan;
+    {   CHAR systemDirectory[MAX_PATH], shortSystemDirectory[MAX_PATH]; DWORD systemLength, shortSystemLength = 0, directoryLength = 0; PCSTR scan;
         for (scan = machine->ExecPath; *scan; ++scan) if (*scan == '\\') directoryLength = (DWORD)(scan - machine->ExecPath);
         systemLength = GetSystemDirectoryA(systemDirectory, sizeof systemDirectory);
         if (systemLength && systemLength < sizeof systemDirectory) shortSystemLength = GetShortPathNameA(systemDirectory, shortSystemDirectory, sizeof shortSystemDirectory);
@@ -2527,7 +2527,7 @@ static char *ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, char *cursor)
          first -- which is the shell whenever a game is started from a prompt or by
          double-click through it. Save the parent's name with this level; DosTerminate
          puts it back (a Close Program ends through there too). */
-    {   const char *programBaseName = machine->ExecPath, *scan; INT index = 0;
+    {   PCSTR programBaseName = machine->ExecPath, scan; INT index = 0;
         for (index = 0; index < 63 && g_ProgramName[index]; ++index) g_ExecMachine[depth].ProgramName[index] = g_ProgramName[index];
         g_ExecMachine[depth].ProgramName[index] = 0;
         for (scan = machine->ExecPath; *scan; ++scan) if (*scan == '\\' || *scan == '/' || *scan == ':') programBaseName = scan + 1;
@@ -2599,14 +2599,14 @@ static VOID CriticalSnapshot(volatile BYTE *tib)
     g_Critical.Ds  = (WORD)VDM_REG(tib, VTIB_DS); g_Critical.Es = (WORD)VDM_REG(tib, VTIB_ES);
 }
 
-static VOID CriticalRaise(DOS_MACHINE *machine, volatile BYTE *tib, char **logCursor)
+static VOID CriticalRaise(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor)
 {
     volatile BYTE *sda = (volatile BYTE *)(((DWORD)DOS_SDA_SEG << 4) + DOS_SDA_OFF);
     g_Critical.Ah = machine->CritAh;
     g_Critical.Function = (BYTE)(g_Critical.Eax >> 8);
     *logCursor = LogPut(*logCursor, "  INT24 raised: fn=0x"); *logCursor = LogHexByte(*logCursor, g_Critical.Function);
     *logCursor = LogPut(*logCursor, " AH=0x"); *logCursor = LogHexByte(*logCursor, machine->CritAh);
-    *logCursor = LogPut(*logCursor, " drive="); **logCursor = (char)('A' + machine->CritAl); ++*logCursor;
+    *logCursor = LogPut(*logCursor, " drive="); **logCursor = (CHAR)('A' + machine->CritAl); ++*logCursor;
     *logCursor = LogPut(*logCursor, ": DI=0x"); *logCursor = LogHexByte(*logCursor, machine->CritCode);
     *logCursor = LogPut(*logCursor, " -> the guest's handler at 0x"); *logCursor = LogHex(*logCursor, *(volatile WORD *)(0x24 * 4 + 2));
     *logCursor = LogPut(*logCursor, ":0x"); *logCursor = LogHex(*logCursor, *(volatile WORD *)(0x24 * 4)); *logCursor = LogPut(*logCursor, "\r\n");
@@ -2626,7 +2626,7 @@ static VOID CriticalRaise(DOS_MACHINE *machine, volatile BYTE *tib, char **logCu
 }
 
 /* Returns 1 for ABORT (the caller terminates the program), 0 to resume the guest. */
-static INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, char **logCursor)
+static INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor)
 {
     volatile BYTE *sda = (volatile BYTE *)(((DWORD)DOS_SDA_SEG << 4) + DOS_SDA_OFF);
     BYTE act = (BYTE)(VDM_REG(tib, VTIB_EAX) & 0xFF), said = act, allowed = g_Critical.Ah;
@@ -2693,7 +2693,7 @@ static INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, char **logCu
      INT 24h is not reflected to DPMI clients (see the tail of DosInt21 for why, and
      what doing it properly needs). Returns 1 if it answered; 0 = not a hardware
      error, the caller keeps its old answer. `we` = GetLastError(), 0 = it did not fail. */
-static INT PmRwHardwareFail(DOS_MACHINE *machine, volatile BYTE *tib, BYTE function, DWORD win32Error, char **logCursor)
+static INT PmRwHardwareFail(DOS_MACHINE *machine, volatile BYTE *tib, BYTE function, DWORD win32Error, PSTR *logCursor)
 {
     WORD dosError = 0;
     if (!win32Error || !DosErrFromWin32((DWORD)win32Error, &dosError) || !DosCritIsHardwareError(dosError)) return 0;
@@ -2779,7 +2779,7 @@ static INT    g_ComFailed[COMM_MAX_PORTS];
 /* ⚠ One name per VDD slot, fitted or not (GH #181 grew the slots to four): a
      slot with no name would hand OUT_() a NULL the first time a later change
      fits COM3 and a guest transmits on it. */
-static const char *const g_ComSpoolName[COMM_MAX_PORTS] =
+static PCSTR const g_ComSpoolName[COMM_MAX_PORTS] =
     { "SERIAL1.TXT", "SERIAL2.TXT", "SERIAL3.TXT", "SERIAL4.TXT" };
 #define g_com_spool_path(i) OUT_(g_ComSpoolName[i])
 /* Opened lazily on the first byte, so a run that never transmits leaves no file
@@ -2865,7 +2865,7 @@ static VOID SerialInitialize(VOID)
     COMMTIMEOUTS timeouts;
     g_Serial = CreateFileA("\\\\.\\COM1", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
     if (g_Serial == INVALID_HANDLE_VALUE) return;
-    { UINT index; char *cursor = (char *)&dcb; for (index = 0; index < sizeof dcb; ++index) cursor[index] = 0; }
+    { UINT index; PSTR cursor = (PSTR)&dcb; for (index = 0; index < sizeof dcb; ++index) cursor[index] = 0; }
     dcb.DCBlength = sizeof dcb;
     if (GetCommState(g_Serial, &dcb)) {
         dcb.BaudRate = 115200; dcb.ByteSize = 8; dcb.Parity = 0; dcb.StopBits = 0;
@@ -2884,12 +2884,12 @@ static VOID SerialInitialize(VOID)
     }
     /* And a hard write deadline, because the default comm timeouts are all zero,
        which means "wait forever". */
-    { UINT index; char *cursor = (char *)&timeouts; for (index = 0; index < sizeof timeouts; ++index) cursor[index] = 0; }
+    { UINT index; PSTR cursor = (PSTR)&timeouts; for (index = 0; index < sizeof timeouts; ++index) cursor[index] = 0; }
     timeouts.WriteTotalTimeoutConstant = 250;          /* ms, per write */
     SetCommTimeouts(g_Serial, &timeouts);
 }
 /* Write [buf..end) to COM1 (and it's already in the file log via log_*). */
-static VOID SerialOut(const char *buffer, const char *end)
+static VOID SerialOut(PCSTR buffer, PCSTR end)
 {
     DWORD wrote;
     if (g_Serial != INVALID_HANDLE_VALUE && end > buffer) {
@@ -2919,9 +2919,9 @@ static VOID SerialOut(const char *buffer, const char *end)
      needs to change one without an installer. The registry path
      (HKLM\...\VirtualDeviceDrivers, MS's own) belongs with the vddsvc veneer,
      which ADR-0008 defers. */
-static VOID VddLogLine(const char *message)
+static VOID VddLogLine(PCSTR message)
 {
-    char lineBuffer[512], *cursor = lineBuffer;
+    CHAR lineBuffer[512], *cursor = lineBuffer;
     UINT index;
     cursor = LogPut(cursor, "  VDD: ");
     for (index = 0; message && message[index] && index < 400; ++index) *cursor++ = message[index];
@@ -2944,7 +2944,7 @@ static const ntvdmex_vdd_api g_VddApi = {
 static VOID VddLoadThirdParty(VOID)
 {
     HANDLE handle;
-    char buffer[4096];
+    CHAR buffer[4096];
     DWORD got = 0, index = 0, entryCount = 0, loaded = 0;
     if (g_Safe.VddPlugins) return;                 /* s90 #132: SAFE MODE */
     handle = CreateFileA(VDDLIST_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -2954,7 +2954,7 @@ static VOID VddLoadThirdParty(VOID)
     CloseHandle(handle);
     buffer[got] = 0;
     while (index < got) {
-        char path[MAX_PATH]; DWORD length = 0;
+        CHAR path[MAX_PATH]; DWORD length = 0;
         while (index < got && (buffer[index] == '\r' || buffer[index] == '\n')) ++index;
         while (index < got && buffer[index] != '\r' && buffer[index] != '\n' && length < MAX_PATH - 1)
             path[length++] = buffer[index++];
@@ -2963,7 +2963,7 @@ static VOID VddLoadThirdParty(VOID)
         if (!length || path[0] == '#' || path[0] == ';') continue;
         ++entryCount;
         {   HMODULE module = LoadLibraryA(path);
-            char lineBuffer[MAX_PATH + 200], *cursor = lineBuffer;
+            CHAR lineBuffer[MAX_PATH + 200], *cursor = lineBuffer;
             NtvdmexVddInitFn initialize;
             INT status;
             if (!module) {
@@ -2995,7 +2995,7 @@ static VOID VddLoadThirdParty(VOID)
             LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
         }
     }
-    {   char lineBuffer[160], *cursor = lineBuffer;
+    {   CHAR lineBuffer[160], *cursor = lineBuffer;
         cursor = LogPut(cursor, "  VDD: third-party list ["); cursor = LogPut(cursor, VDDLIST_PATH);
         cursor = LogPut(cursor, "] -- 0x"); cursor = LogHex(cursor, entryCount); cursor = LogPut(cursor, " entr(ies), 0x");
         cursor = LogHex(cursor, loaded); cursor = LogPut(cursor, " initialised\r\n");
@@ -3011,9 +3011,9 @@ static VOID VddLoadThirdParty(VOID)
      a fault, a PM interrupt, an LDT sync -- and hiding one of those to save disk
      would be trading the trace for the thing the trace exists to catch.
      `p` is reset either way, so a muted block cannot leak into the next one. */
-static VOID WowLogFlush(char *base, char **logCursor)
+static VOID WowLogFlush(PSTR base, PSTR *logCursor)
 {
-    char *end = *logCursor;
+    PSTR end = *logCursor;
     if (g_WowFoldMute == 2) { ++g_WowFoldDropped; *logCursor = base; return; }
     if (g_WowFoldMute && end > base) {
         /* ── ⚠⚠ KEEP THE VERDICT LINE. DROPPING IT WOULD BREAK THE GATE. ──
@@ -3026,7 +3026,7 @@ static VOID WowLogFlush(char *base, char **logCursor)
              DUMP -- the register line, the two stack windows, the arguments --
              and keep the one line that says what happened. That is ~90 bytes of
              a ~1 KB block, and it leaves every count in the log exact. */
-        char *lineStart = end - 1;
+        PSTR lineStart = end - 1;
         while (lineStart > base && (lineStart[-1] != '\n')) --lineStart;
         /* `ls` is now the start of the final line. If the block is one line
            already there is nothing to save, and emitting it is correct. */
@@ -3050,7 +3050,7 @@ static INT LptSpoolPut(BYTE character)
         g_Lpt = CreateFileA(LPT_SPOOL_PATH, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (g_Lpt == INVALID_HANDLE_VALUE) {
-            char lineBuffer[128], *lineCursor = lineBuffer;
+            CHAR lineBuffer[128], *lineCursor = lineBuffer;
             g_LptFailed = 1;
             lineCursor = LogPut(lineCursor, "  LPT1 spool OPEN FAILED err=0x");
             lineCursor = LogHex(lineCursor, GetLastError());
@@ -3221,7 +3221,7 @@ static VOID DosAuxOut(PVOID context, BYTE character)
 static INT  g_WowCommOpen[WOWCOMM_MAX];        /* 1 = this port is open to Win16 */
 static WORD g_WowCommEvent[WOWCOMM_MAX];         /* the event word SetCommEventMask points at */
 
-INT WowCommOpen(const char *device)
+INT WowCommOpen(PCSTR device)
 {
     INT index;
     /* "COM1".."COM4", case-insensitive, exactly as Windows parses it. Anything
@@ -3511,7 +3511,7 @@ static INT Irq0CanDeliver(VOID)
             VddPicEndOfInterrupt(&g_Pic, 0);
             g_Irq0IsrSince = 0;
             if (++g_Irq0IsrTimeouts >= IRQ0_ISR_TIMEOUTS_MAX && !g_Irq0AutoEoi) {
-                static const char message[] = "IRQ0-ISR: in service past the timeout 3x -- this guest "
+                static const CHAR message[] = "IRQ0-ISR: in service past the timeout 3x -- this guest "
                     "does not EOI its timer; auto-EOI fallback engaged for the rest of the run\r\n";
                 g_Irq0AutoEoi = 1;
                 LogAppend(LOG_PATH, message, message + sizeof(message) - 1);
@@ -3529,7 +3529,7 @@ static INT Irq0CanDeliver(VOID)
             DWORD milliseconds = GetTickCount() - since;
             if (episode != since) { episode = since; step = 0; }
             if (milliseconds >= (step + 1) * 50u && lines < 8) {
-                char buffer[160], *cursor = buffer;
+                CHAR buffer[160], *cursor = buffer;
                 step = milliseconds / 50u; ++lines;
                 cursor = LogPut(cursor, "IRQ0-ISR-LONG in service ms=");  cursor = LogDecimal(cursor, milliseconds);
                 cursor = LogPut(cursor, " guest cs:ip=0x"); cursor = LogHex(cursor, VDM_REG(g_TibDebug, VTIB_CS) & 0xFFFF);
@@ -3873,7 +3873,7 @@ static INT AsyncSiteNew(WORD cs, DWORD eip)
      the device lines a cooperative path; that would have been invisible here). */
 static VOID AsyncEarlyBail(UINT irq, UINT why)
 {
-    char lineBuffer[96], *lineCursor = lineBuffer;
+    CHAR lineBuffer[96], *lineCursor = lineBuffer;
     g_AsyncBail++;
     AsyncWhyNote(irq, why);
     /* A/B/C discriminator: "the tick was raised and we could not place it". 20 is
@@ -4017,7 +4017,7 @@ static INT AsyncInjectIrq(UINT irq)
        right now, so this line simply takes the next opportunity. */
     if (InterlockedCompareExchange(&g_AsyncContextWrite, 1, 0) != 0) { AsyncEarlyBail(irq, 28); return 0; }
     if (SuspendThread(g_HostCpu) == (DWORD)-1) { ASYNC_CTX_RELEASE(); AsyncEarlyBail(irq, 23); return 0; }
-    { UINT index; char *bytes = (char *)&context; for (index = 0; index < sizeof context; ++index) bytes[index] = 0; }
+    { UINT index; PSTR bytes = (PSTR)&context; for (index = 0; index < sizeof context; ++index) bytes[index] = 0; }
     context.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
     if (!GetThreadContext(g_HostCpu, &context)) { ResumeThread(g_HostCpu); ASYNC_CTX_RELEASE();
                                           AsyncEarlyBail(irq, 24); return 0; }
@@ -4043,7 +4043,7 @@ static INT AsyncInjectIrq(UINT irq)
          guest's EIP wanders over the whole real-mode image and would fill the table with
          noise, burying the one site this exists to catch. */
     if (!(eflags & EFLAGS_VM_BIT) && (cs & 4) && AsyncSiteNew((WORD)cs, context.Eip)) {
-        char lineBuffer[160], *lineCursor = lineBuffer;
+        CHAR lineBuffer[160], *lineCursor = lineBuffer;
         DWORD sblin = DpmiSelectorBase((WORD)cs) + context.Eip;
         ResumeThread(g_HostCpu);                    /* NEVER log while the guest is held */
         ASYNC_CTX_RELEASE();
@@ -4115,7 +4115,7 @@ static INT AsyncInjectIrq(UINT irq)
              PIT's rate (~100/s) against a 45s headless cap, so 4000 covers a whole run
              with ~900KB of log, well inside LOG_MAX_BYTES. */
         if (isOk || g_AsyncPmBail2 <= 4000) {
-            char lineBuffer[224], *lineCursor = lineBuffer;
+            CHAR lineBuffer[224], *lineCursor = lineBuffer;
             /* ► SAY WHICH LINE. This said "vec=0x08" literally, whatever interrupt it
                  had just delivered, so a run could not be asked "did any keyboard
                  interrupt reach the client?" -- every line claimed to be the timer. */
@@ -4242,7 +4242,7 @@ static INT AsyncInjectIrq(UINT irq)
        is exactly what happened first time out -- Skyroads ended up at F000:A390. Printing
        the whole IRQ3-7 vector range shows which line the game is actually listening on. */
     if (g_AsyncInjected + g_AsyncBail <= 4) {
-        char lineBuffer[256], *lineCursor = lineBuffer; INT logVector;
+        CHAR lineBuffer[256], *lineCursor = lineBuffer; INT logVector;
         lineCursor = LogPut(lineCursor, "ASYNC-INJ vec=0x");  lineCursor = LogHex(lineCursor, (DWORD)VddPicVector(&g_Pic, (BYTE)irq));
         lineCursor = LogPut(lineCursor, " ok=0x");            lineCursor = LogHex(lineCursor, (DWORD)isOk);
         lineCursor = LogPut(lineCursor, " from=0x");          lineCursor = LogHex(lineCursor, cs);
@@ -4445,7 +4445,7 @@ static VOID HostIrqSink(PVOID context, BYTE irq)
                causes between here and the client's ISR. Naming the gate values at the
                moment of the raise turns that into one line. */
           if (g_KeyIrqLogged++ < 64) {
-              char lineBuffer[160], *lineCursor = lineBuffer;
+              CHAR lineBuffer[160], *lineCursor = lineBuffer;
               lineCursor = LogPut(lineCursor, "KEYIRQ raise gate="); lineCursor = LogHex(lineCursor, (DWORD)gate);
               lineCursor = LogPut(lineCursor, " ok=");        lineCursor = LogHex(lineCursor, (DWORD)isOk);
               lineCursor = LogPut(lineCursor, " pm=");        lineCursor = LogHex(lineCursor, (DWORD)g_DpmiPm);
@@ -4572,9 +4572,9 @@ static VOID PokeWidth(DWORD linear, DWORD value, INT width)
    one the kernel virtualises in [0x714]; this sampler is how we identify which
    bit carries it -- compare a known-IF=1 moment (a BOP, where the guest's own
    FLAGS are on its stack) against an I/O reflect in the same run. */
-static VOID VdmStateSample(const char *label, volatile BYTE *tib, INT *budget)
+static VOID VdmStateSample(PCSTR label, volatile BYTE *tib, INT *budget)
 {
-    char buffer[128], *cursor = buffer;
+    CHAR buffer[128], *cursor = buffer;
     if (*budget <= 0) return;
     (*budget)--;
     cursor = LogPut(cursor, "GH#18 vdmstate ");
@@ -4628,9 +4628,9 @@ static VOID InjectInt(volatile BYTE *tib, UINT vector)
    Returns 1 if a child exited and the parent has been restored (the exec loop
    carries on), 0 if this was the top-level program and the run is over. */
 static VOID MouseChildExited(VOID);          /* fwd: see g_MouseWantRelease */
-static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, char **logCursor, char *base)
+static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
 {
-    char *cursor = *logCursor;
+    PSTR cursor = *logCursor;
     (VOID)cursor;
             if (g_ExecDepth > 0) {
         /* A CHILD terminated, not the program we were asked to run.
@@ -4788,7 +4788,7 @@ static DOS_START_MODE g_StartMode = DOS_START_NORMAL;
 
 static UINT RecoveryRead(VOID)
 {
-    char buffer[16]; DWORD bytesRead = 0; UINT value = 0;
+    CHAR buffer[16]; DWORD bytesRead = 0; UINT value = 0;
     HANDLE handle = CreateFileA(STARTFAIL_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
                            OPEN_EXISTING, 0, NULL);
     if (handle == INVALID_HANDLE_VALUE) return 0;
@@ -4799,12 +4799,12 @@ static UINT RecoveryRead(VOID)
 
 static VOID RecoveryWrite(UINT value)
 {
-    char buffer[16]; INT index = 0; DWORD bytesWritten = 0;
+    CHAR buffer[16]; INT index = 0; DWORD bytesWritten = 0;
     HANDLE handle = CreateFileA(STARTFAIL_PATH, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (handle == INVALID_HANDLE_VALUE) return;
-    if (value >= 10) buffer[index++] = (char)('0' + (value / 10) % 10);
-    buffer[index++] = (char)('0' + value % 10);
+    if (value >= 10) buffer[index++] = (CHAR)('0' + (value / 10) % 10);
+    buffer[index++] = (CHAR)('0' + value % 10);
     buffer[index++] = '\r'; buffer[index++] = '\n';
     WriteFile(handle, buffer, (DWORD)index, &bytesWritten, NULL);
     FlushFileBuffers(handle);                /* the next start may be after a crash */
@@ -4825,7 +4825,7 @@ static VOID RecoveryOk(VOID) { DeleteFileA(STARTFAIL_PATH); }
      exists to remove. Every function here returns the Win32 error so the caller can. */
 
 /* Read the current Debugger value. Returns 1 if a value was read (into buf). */
-static INT InstallRead(char *buffer, DWORD cap)
+static INT InstallRead(PSTR buffer, DWORD cap)
 {
     HKEY key; DWORD valueType = 0, size = cap;
     LONG status = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INSTALL_KEY, 0, KEY_QUERY_VALUE, &key);
@@ -4840,7 +4840,7 @@ static INT InstallRead(char *buffer, DWORD cap)
 }
 
 /* The displaced value, kept beside our own settings. */
-static INT InstallPreviousRead(char *buffer, DWORD cap)
+static INT InstallPreviousRead(PSTR buffer, DWORD cap)
 {
     HKEY key; DWORD valueType = 0, size = cap;
     LONG status = RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_QUERY_VALUE, &key);
@@ -4854,7 +4854,7 @@ static INT InstallPreviousRead(char *buffer, DWORD cap)
     return 1;
 }
 
-static VOID InstallPreviousWrite(const char *value)
+static VOID InstallPreviousWrite(PCSTR value)
 {
     HKEY key; DWORD disp;
     if (RegCreateKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, NULL, 0,
@@ -4873,13 +4873,13 @@ static VOID InstallPreviousWrite(const char *value)
      (A Win16 program started from Windows is not recorded: its path arrives inside
      WOW, not here.) */
 #define MRU_MAX 8
-static INT MruLoad(char out[MRU_MAX][MAX_PATH])
+static INT MruLoad(CHAR out[MRU_MAX][MAX_PATH])
 {
     HKEY key; INT count = 0, index;
     if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
         return 0;
     for (index = 0; index < MRU_MAX; ++index) {
-        char name[16], *cursor = LogPut(name, "Recent"); DWORD valueType = 0, size = MAX_PATH;
+        CHAR name[16], *cursor = LogPut(name, "Recent"); DWORD valueType = 0, size = MAX_PATH;
         cursor = LogDecimal(cursor, (DWORD)(index + 1)); *cursor = 0;
         if (RegQueryValueExA(key, name, NULL, &valueType, (LPBYTE)out[count], &size) != ERROR_SUCCESS
             || valueType != REG_SZ || size < 2) continue;
@@ -4889,11 +4889,11 @@ static INT MruLoad(char out[MRU_MAX][MAX_PATH])
     RegCloseKey(key);
     return count;
 }
-static VOID MruAdd(const char *path)
+static VOID MruAdd(PCSTR path)
 {
-    char list[MRU_MAX][MAX_PATH], longp[MAX_PATH];
+    CHAR list[MRU_MAX][MAX_PATH], longp[MAX_PATH];
     HKEY key; DWORD disp, longLength; INT count, index, written = 0;
-    const char *baseName;
+    PCSTR baseName;
     if (!path || !path[0] || lstrlenA(path) >= MAX_PATH) return;
     /* CSRSS hands us 8.3 names; the menu is for a person. */
     longLength = GetLongPathNameA(path, longp, sizeof longp);
@@ -4904,8 +4904,8 @@ static VOID MruAdd(const char *path)
     if (RegCreateKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, NULL, 0,
                         KEY_SET_VALUE, NULL, &key, &disp) != ERROR_SUCCESS) return;
     for (index = -1; index < count && written < MRU_MAX; ++index) {
-        const char *value = (index < 0) ? path : list[index];
-        char name[16], *cursor = LogPut(name, "Recent");
+        PCSTR value = (index < 0) ? path : list[index];
+        CHAR name[16], *cursor = LogPut(name, "Recent");
         if (index >= 0 && !lstrcmpiA(value, path)) continue;          /* moved to the front */
         cursor = LogDecimal(cursor, (DWORD)(++written)); *cursor = 0;
         RegSetValueExA(key, name, 0, REG_SZ, (const BYTE *)value, (DWORD)lstrlenA(value) + 1);
@@ -4915,7 +4915,7 @@ static VOID MruAdd(const char *path)
 
 /* Set (v non-NULL) or delete (v NULL) the IFEO Debugger value. Returns a Win32
    error code; ERROR_SUCCESS means the machine now says what we asked it to. */
-static LONG InstallWrite(const char *value)
+static LONG InstallWrite(PCSTR value)
 {
     HKEY key; DWORD disp; LONG status;
     status = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INSTALL_KEY, 0, NULL, 0,
@@ -4930,7 +4930,7 @@ static LONG InstallWrite(const char *value)
 }
 
 /* Our own full path, which is what the value has to contain. */
-static VOID InstallSelfPath(char *buffer, DWORD cap)
+static VOID InstallSelfPath(PSTR buffer, DWORD cap)
 {
     if (!GetModuleFileNameA(NULL, buffer, cap)) buffer[0] = 0;
 }
@@ -4959,11 +4959,11 @@ static INT InstallResidentVdms(VOID)
     entry.dwSize = sizeof entry;
     if (Process32First(snap, &entry)) {
         do {
-            static const char want[] = "ntvdm.exe";
+            static const CHAR want[] = "ntvdm.exe";
             INT index;
             for (index = 0; want[index]; ++index) {
-                char character = entry.szExeFile[index];
-                if (character >= 'A' && character <= 'Z') character = (char)(character - 'A' + 'a');
+                CHAR character = entry.szExeFile[index];
+                if (character >= 'A' && character <= 'Z') character = (CHAR)(character - 'A' + 'a');
                 if (character != want[index]) break;
             }
             if (!want[index] && !entry.szExeFile[index]) ++count;
@@ -4974,7 +4974,7 @@ static INT InstallResidentVdms(VOID)
 }
 
 /* The sentence that goes with a non-zero count, for /install and /status alike. */
-static char *InstallResidentText(char *cursor, INT count)
+static PSTR InstallResidentText(PSTR cursor, INT count)
 {
     if (count == 0) return cursor;
     if (count < 0) return LogPut(cursor, "(Could not read the process list, so whether one of "
@@ -4999,11 +4999,11 @@ static char *InstallResidentText(char *cursor, INT count)
      registry value that reads correctly and does not route, and by a write that
      silently did nothing; reporting success on the strength of a return code alone
      is the same class of claim. Read it again and classify it again. */
-static INT InstallPerform(INT want, INT force, char *message, DWORD cap)
+static INT InstallPerform(INT want, INT force, PSTR message, DWORD cap)
 {
-    char self[NTVDMEX_PATH_MAX], current[NTVDMEX_PATH_MAX], prev[NTVDMEX_PATH_MAX];
-    char cur0[NTVDMEX_PATH_MAX];
-    char *cursor = message;
+    CHAR self[NTVDMEX_PATH_MAX], current[NTVDMEX_PATH_MAX], prev[NTVDMEX_PATH_MAX];
+    CHAR cur0[NTVDMEX_PATH_MAX];
+    PSTR cursor = message;
     INSTALL_STATE state, oldState;
     INSTALL_ACTION act;
     LONG status = ERROR_SUCCESS;
@@ -5099,10 +5099,10 @@ static INT InstallPerform(INT want, INT force, char *message, DWORD cap)
    "installed as this machine", a sentence only /install ever prints -- so it
    declared NTVDMEX uninstalled the moment after install.bat said otherwise. Two
    layers that have to agree about a string, don't. (s72, found by hand on the rig.) */
-static INSTALL_STATE InstallStatusText(char *message, DWORD cap)
+static INSTALL_STATE InstallStatusText(PSTR message, DWORD cap)
 {
-    char self[NTVDMEX_PATH_MAX], current[NTVDMEX_PATH_MAX];
-    char *cursor = message;
+    CHAR self[NTVDMEX_PATH_MAX], current[NTVDMEX_PATH_MAX];
+    PSTR cursor = message;
     INSTALL_STATE state;
     (VOID)cap;
     InstallSelfPath(self, sizeof self);
@@ -5127,9 +5127,9 @@ static INSTALL_STATE InstallStatusText(char *message, DWORD cap)
 
 /* Which verb, if any, this command line asks for: 0 install, 1 uninstall,
    2 status, -1 none. The verb must be the FIRST argument -- see the call site. */
-static INT InstallVerb(const char *command)
+static INT InstallVerb(PCSTR command)
 {
-    static const char *const verbs[3] = { "install", "uninstall", "status" };
+    static PCSTR const verbs[3] = { "install", "uninstall", "status" };
     INT index, characterIndex;
     if (!command) return -1;
     /* Step over argv[0], quoted or not. */
@@ -5140,8 +5140,8 @@ static INT InstallVerb(const char *command)
     while (*command == '/' || *command == '-') ++command;
     for (index = 0; index < 3; ++index) {
         for (characterIndex = 0; verbs[index][characterIndex]; ++characterIndex) {
-            char character = command[characterIndex];
-            if (character >= 'A' && character <= 'Z') character = (char)(character - 'A' + 'a');
+            CHAR character = command[characterIndex];
+            if (character >= 'A' && character <= 'Z') character = (CHAR)(character - 'A' + 'a');
             if (character != verbs[index][characterIndex]) break;
         }
         if (!verbs[index][characterIndex] && (!command[characterIndex] || command[characterIndex] == ' ' || command[characterIndex] == '\t')) return index;
@@ -5151,9 +5151,9 @@ static INT InstallVerb(const char *command)
 
 /* `/force` anywhere after the verb (#195): /uninstall /force removes a value that names
    another program. Deliberately only a command-line switch, never a menu item. */
-static INT CommandLineHasForce(const char *command)
+static INT CommandLineHasForce(PCSTR command)
 {
-    const char *cursor;
+    PCSTR cursor;
     if (!command) return 0;
     for (cursor = command; *cursor; ++cursor)
         if ((*cursor == '/' || *cursor == '-') && (cursor[1]|0x20) == 'f' && (cursor[2]|0x20) == 'o'
@@ -5166,7 +5166,7 @@ static INT CommandLineHasForce(const char *command)
    menu shape, and it is safe to test for: Windows hands an IFEO-substituted VDM the
    ORIGINAL command line, whose first argument is always the path to ntvdm.exe, so a
    real VDM launch always has arguments. Same reasoning InstallVerb() already relies on. */
-static INT CommandLineBare(const char *command)
+static INT CommandLineBare(PCSTR command)
 {
     if (!command) return 0;
     if (*command == '"') { ++command; while (*command && *command != '"') ++command; if (*command) ++command; }
@@ -5176,7 +5176,7 @@ static INT CommandLineBare(const char *command)
 }
 
 /* stdout if we have one, a message box if we do not. */
-static VOID InstallReport(const char *message, INT isOk);
+static VOID InstallReport(PCSTR message, INT isOk);
 
 /* ── ★★★ "I WANT TO OPEN NTVDMEX AND SEE IT." ────────────────────────────────────────
      Write the four-byte DOS stub and run it, so CSRSS builds a VDM that the IFEO key
@@ -5193,7 +5193,7 @@ static VOID InstallReport(const char *message, INT isOk);
    Returns a process exit code. */
 static INT LaunchShellVdm(VOID)
 {
-    char stub[MAX_PATH + 32], message[1024];
+    CHAR stub[MAX_PATH + 32], message[1024];
     DWORD length, bytesWritten = 0;
     HANDLE handle;
     STARTUPINFOA startupInfo; PROCESS_INFORMATION processInfo;
@@ -5234,13 +5234,13 @@ static INT LaunchShellVdm(VOID)
             return 1;
         } }
 
-    { INT index; for (index = 0; index < (INT)sizeof startupInfo; ++index) ((char *)&startupInfo)[index] = 0; }
+    { INT index; for (index = 0; index < (INT)sizeof startupInfo; ++index) ((PSTR)&startupInfo)[index] = 0; }
     startupInfo.cb = sizeof startupInfo;
     if (!CreateProcessA(stub, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &startupInfo, &processInfo)) {
         LogPut(message, "NTVDMEX could not start a DOS session.\r\n\r\nCreateProcess on:\r\n");
         LogPut(message + lstrlenA(message), stub);
         LogPut(message + lstrlenA(message), "\r\nfailed with error 0x");
-        { char *end = message + lstrlenA(message); end = LogHex(end, GetLastError()); *end = 0; }
+        { PSTR end = message + lstrlenA(message); end = LogHex(end, GetLastError()); *end = 0; }
         InstallReport(message, 0);
         return 1;
     }
@@ -5252,7 +5252,7 @@ static INT LaunchShellVdm(VOID)
     return 0;
 }
 
-static VOID InstallReport(const char *message, INT isOk)
+static VOID InstallReport(PCSTR message, INT isOk)
 {
     HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD valueType = (handle && handle != INVALID_HANDLE_VALUE) ? GetFileType(handle) : FILE_TYPE_UNKNOWN;
@@ -5269,7 +5269,7 @@ static VOID InstallReport(const char *message, INT isOk)
 /* Take ourselves out of the launch path. Needs the privilege the installer had;
    if it fails, SAY SO -- a recovery step that silently does nothing is worse
    than none, because the next start believes it was handled. */
-static VOID RecoveryUninstall(char **logCursor)
+static VOID RecoveryUninstall(PSTR *logCursor)
 {
     HKEY key; LONG status;
     status = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
@@ -5306,8 +5306,8 @@ static VOID RecoveryUninstall(char **logCursor)
        machine where nothing had changed. */
 /* NULL = the harness fallback (FLOPPY_IMG_PATH), composed at use because the root is
    runtime-derived now; a settings value points this INTO g_Settings as before. */
-static const char   *g_FloppyImage = NULL;
-static const char   *FloppyImagePath(VOID) { return g_FloppyImage ? g_FloppyImage : FLOPPY_IMG_PATH; }
+static PCSTR g_FloppyImage = NULL;
+static PCSTR FloppyImagePath(VOID) { return g_FloppyImage ? g_FloppyImage : FLOPPY_IMG_PATH; }
 /* ── s84 (user): DOES THIS PC HAVE THE PHYSICAL DRIVE AT ALL? ──────────────────────
      GetDriveType reads the drive's TYPE, never its media, so it cannot raise an
      "insert a disk" prompt or spin a drive up. With no physical drive the Drives tab
@@ -5318,10 +5318,10 @@ static INT HostHasFloppy(VOID)
 }
 static INT HostHasCdrom(VOID)
 {
-    DWORD drives = GetLogicalDrives(); char root[4] = "C:\\"; INT drive;
+    DWORD drives = GetLogicalDrives(); CHAR root[4] = "C:\\"; INT drive;
     for (drive = 2; drive < 26; ++drive) {
         if (!(drives & (1u << drive))) continue;
-        root[0] = (char)('A' + drive);
+        root[0] = (CHAR)('A' + drive);
         if (GetDriveTypeA(root) == DRIVE_CDROM) return 1;
     }
     return 0;
@@ -5353,14 +5353,14 @@ static PDOS_DISK_GEOMETRY DiskFor(UINT drive)
         /* An image we cannot read the geometry of is treated as ABSENT. A
            guessed cylinder count returns the WRONG SECTOR and reports success,
            which is strictly worse than no drive. */
-        char lineBuffer[160], *lineCursor = lineBuffer;
+        CHAR lineBuffer[160], *lineCursor = lineBuffer;
         lineCursor = LogPut(lineCursor, "  INT13 image present but its BPB is not usable -- "
                       "treating drive 0 as ABSENT (GH #44)\r\n");
         LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
         CloseHandle(g_DiskHandle[0]); g_DiskHandle[0] = INVALID_HANDLE_VALUE;
         return NULL;
     }
-    { char lineBuffer[200], *lineCursor = lineBuffer;
+    { CHAR lineBuffer[200], *lineCursor = lineBuffer;
       lineCursor = LogPut(lineCursor, "  INT13 drive 0 = "); lineCursor = LogPut(lineCursor, FloppyImagePath()); lineCursor = LogPut(lineCursor, ", ");
       lineCursor = LogHex(lineCursor, g_DiskGeometry[0].Cylinders); lineCursor = LogPut(lineCursor, " cyl x ");
       lineCursor = LogHex(lineCursor, g_DiskGeometry[0].Heads);     lineCursor = LogPut(lineCursor, " head x ");
@@ -5448,10 +5448,10 @@ static HANDLE g_Stdio = INVALID_HANDLE_VALUE;
 /* ⚠ Reported at EXIT, not at init. The early-startup log line was written
    before a later LogWrite(LOG_PATH,...) TRUNCATES the file, so it never
    survived to be read -- which looked exactly like the code not running. */
-static const char *g_StdioHow = "(not initialised)";
-static const char *g_StdioSource = "";   /* which channel it came down, if any */
+static PCSTR g_StdioHow = "(not initialised)";
+static PCSTR g_StdioSource = "";   /* which channel it came down, if any */
 static DWORD g_StdioParentProcessId;   /* GH #131: whose child we turned out to be */
-static char   g_StdioBuffer[512];
+static CHAR   g_StdioBuffer[512];
 static UINT g_StdioLength = 0;
 
 static VOID StdioFlush(VOID)
@@ -5599,7 +5599,7 @@ static INT StdioParentIs(HANDLE proc, DWORD ppid)
     ULONG got = 0;
     SIZE_T bytesRead = 0;
     WCHAR path[MAX_PATH];
-    char  narrow[MAX_PATH], want[MAX_PATH];
+    CHAR  narrow[MAX_PATH], want[MAX_PATH];
     INT index, length;
     HANDLE snap;
     want[0] = 0;
@@ -5631,7 +5631,7 @@ static INT StdioParentIs(HANDLE proc, DWORD ppid)
     length = (INT)(imagePath.Length / sizeof(WCHAR));
     if (length >= MAX_PATH) length = MAX_PATH - 1;
     for (index = 0; index < length; ++index)
-        narrow[index] = (path[index] < 0x80) ? (char)path[index] : '?';
+        narrow[index] = (path[index] < 0x80) ? (CHAR)path[index] : '?';
     narrow[length] = 0;
     /* Compare the FILE NAME, case-insensitively: the list gives a name, the PEB
        gives a full path, and it is the tail that has to agree. */
@@ -5640,12 +5640,12 @@ static INT StdioParentIs(HANDLE proc, DWORD ppid)
     {   INT wantLength = 0, nameLength = length;
         while (want[wantLength]) ++wantLength;
         {
-        const char *tail = narrow + (nameLength > wantLength ? nameLength - wantLength : 0);
+        PCSTR tail = narrow + (nameLength > wantLength ? nameLength - wantLength : 0);
         if (nameLength < wantLength) return 0;
         for (index = 0; index < wantLength; ++index) {
-            char tailCharacter = tail[index], wantCharacter = want[index];
-            if (tailCharacter >= 'A' && tailCharacter <= 'Z') tailCharacter = (char)(tailCharacter + 32);
-            if (wantCharacter >= 'A' && wantCharacter <= 'Z') wantCharacter = (char)(wantCharacter + 32);
+            CHAR tailCharacter = tail[index], wantCharacter = want[index];
+            if (tailCharacter >= 'A' && tailCharacter <= 'Z') tailCharacter = (CHAR)(tailCharacter + 32);
+            if (wantCharacter >= 'A' && wantCharacter <= 'Z') wantCharacter = (CHAR)(wantCharacter + 32);
             if (tailCharacter != wantCharacter) return 0;
         }
         }
@@ -5653,7 +5653,7 @@ static INT StdioParentIs(HANDLE proc, DWORD ppid)
     return 1;
 }
 
-static const char *StdioFromParent(DWORD ppid)
+static PCSTR StdioFromParent(DWORD ppid)
 {
     HANDLE proc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ
                               | PROCESS_DUP_HANDLE, FALSE, ppid);
@@ -5696,7 +5696,7 @@ static const char *StdioFromParent(DWORD ppid)
     return "none (no console, no redirect)";
 }
 
-static const char *StdioInitialize(VOID)
+static PCSTR StdioInitialize(VOID)
 {
     HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD valueType = (handle && handle != INVALID_HANDLE_VALUE) ? GetFileType(handle) : FILE_TYPE_UNKNOWN;
@@ -5765,7 +5765,7 @@ static const char *StdioInitialize(VOID)
              costs a log line instead of a duplicated handle to something else
              entirely. */
         if (ppid) {
-            const char *why = StdioFromParent(ppid);
+            PCSTR why = StdioFromParent(ppid);
             if (g_Stdio != INVALID_HANDLE_VALUE && g_Stdio) return why;
         }
     }
@@ -5792,7 +5792,7 @@ static const char *StdioInitialize(VOID)
      logged so the next session starts from a measurement rather than a guess. */
 /* Adopt h as the real stdout if it is writable at all, and say what it turned out
    to be. NULL = not usable, so the caller falls through to the next source. */
-static const char *StdioAdopt(HANDLE handle)
+static PCSTR StdioAdopt(HANDLE handle)
 {
     DWORD valueType;
     if (!handle || handle == INVALID_HANDLE_VALUE) return NULL;
@@ -5804,9 +5804,9 @@ static const char *StdioAdopt(HANDLE handle)
                                   : "the console";
 }
 
-static const char *StdioInitializeVdm(VOID)
+static PCSTR StdioInitializeVdm(VOID)
 {
-    const char *what;
+    PCSTR what;
     if (g_Stdio != INVALID_HANDLE_VALUE) return g_StdioHow;   /* never downgrade */
     if ((what = StdioAdopt(g_CommandInfo.StdOut)) != NULL) {
         g_StdioSource = "CSRSS VDM StdOut"; return what;
@@ -5829,7 +5829,7 @@ static VOID HostConsoleOut(PVOID context, BYTE ch)
     HOST_LOCK();
     VddVideoPutChar(&g_Video, ch);
     if (g_Stdio != INVALID_HANDLE_VALUE) {
-        if (g_StdioLength < sizeof(g_StdioBuffer)) g_StdioBuffer[g_StdioLength++] = (char)ch;
+        if (g_StdioLength < sizeof(g_StdioBuffer)) g_StdioBuffer[g_StdioLength++] = (CHAR)ch;
         if (ch == '\n' || g_StdioLength >= sizeof(g_StdioBuffer)) StdioFlush();
     }
     HOST_UNLOCK();
@@ -5964,18 +5964,18 @@ static VOID OplTraceWrite(BYTE registerIndex, BYTE value)
 static VOID OplTraceDump(VOID)
 {
     HANDLE handle; DWORD index, bytesWritten;
-    static char buffer[64];
+    static CHAR buffer[64];
     if (!g_OplTraceOn || !g_OplTraceCount) return;
     handle = CreateFileA(OPLTRACE_PATH, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (handle == INVALID_HANDLE_VALUE) return;
-    { char *cursor = buffer;
+    { PSTR cursor = buffer;
       cursor = LogPut(cursor, "# opl2 register trace: us reg val (hex). writes=");
       cursor = LogHex(cursor, g_OplTraceCount); cursor = LogPut(cursor, " dropped="); cursor = LogHex(cursor, g_OplTraceDrop);
       cursor = LogPut(cursor, "\r\n");
       WriteFile(handle, buffer, (DWORD)(cursor - buffer), &bytesWritten, NULL); }
     for (index = 0; index < g_OplTraceCount; ++index) {
-        char *cursor = buffer;
+        PSTR cursor = buffer;
         cursor = LogHex(cursor, g_OplTrace[index].Microseconds); cursor = LogPut(cursor, " ");
         cursor = LogHexByte(cursor, g_OplTrace[index].Register); cursor = LogPut(cursor, " ");
         cursor = LogHexByte(cursor, g_OplTrace[index].Value); cursor = LogPut(cursor, "\r\n");
@@ -6603,10 +6603,10 @@ static INT CpuSpeedTimelineSeconds(VOID)
     g_ControlIo[seconds] = g_EventIo; g_ControlRaise[seconds] = g_Irq0RaiseCount;
     return (INT)seconds;
 }
-static VOID CpuSpeedTimelineDump(const char *tag)
+static VOID CpuSpeedTimelineDump(PCSTR tag)
 {
-    static const char *const names[7] = { "exec_ms", "hold_ms", "missed", "coop", "io", "raise", "run_us" };
-    char buffer[1400], *cursor; UINT column, second, last = 0;
+    static PCSTR const names[7] = { "exec_ms", "hold_ms", "missed", "coop", "io", "raise", "run_us" };
+    CHAR buffer[1400], *cursor; UINT column, second, last = 0;
     for (second = 0; second < IRQ0TL_SECS; ++second) if (g_ControlExecMicroseconds[second] || g_ControlHoldMicroseconds[second]) last = second;
     for (column = 0; column < 7; ++column) {
         DWORD prev = 0;
@@ -7015,8 +7015,8 @@ static VOID HostScreenshot(VOID)
     bits = dib + sizeof(BITMAPINFOHEADER) + palCount * 4;
     { DWORD row, column, rowb = (bpp == 8) ? width : width * 4u;
       for (row = 0; row < height; ++row) {                    /* flip: DIB row 0 is the bottom   */
-          const BYTE *sourceRow = source + (size_t)(height - 1 - row) * g_Video.Frame.Stride;
-          BYTE *destinationRow = bits + (size_t)row * stride;
+          const BYTE *sourceRow = source + (SIZE_T)(height - 1 - row) * g_Video.Frame.Stride;
+          BYTE *destinationRow = bits + (SIZE_T)row * stride;
           for (column = 0; column < rowb; ++column) destinationRow[column] = sourceRow[column];
           if (bpp == 32) for (column = 3; column < rowb; column += 4) destinationRow[column] = 0;   /* XRGB: no alpha */
       } }
@@ -7026,14 +7026,14 @@ static VOID HostScreenshot(VOID)
        block had been handed to the clipboard -- or FREED, when OpenClipboard failed:
        a use-after-free on exactly the path nobody tests. */
     {
-        char path[MAX_PATH];
-        const char *directory = NTVDMEX_OUT;   /* screenshots are output, not clutter in the root */
+        CHAR path[MAX_PATH];
+        PCSTR directory = NTVDMEX_OUT;   /* screenshots are output, not clutter in the root */
         INT index = 0, index2;
         while (directory[index] && index < MAX_PATH - 24) { path[index] = directory[index]; ++index; }
-        { const char *name = "shot_manual_00.bmp";
+        { PCSTR name = "shot_manual_00.bmp";
           for (index2 = 0; name[index2]; ++index2) path[index + index2] = name[index2];
-          path[index + 12] = (char)('0' + (seq / 10) % 10);
-          path[index + 13] = (char)('0' + seq % 10);
+          path[index + 12] = (CHAR)('0' + (seq / 10) % 10);
+          path[index + 13] = (CHAR)('0' + seq % 10);
           path[index + index2] = 0; }
         ++seq;
         { HANDLE file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
@@ -7064,14 +7064,14 @@ static VOID HostRecordFinish(VOID);        /* below: patches the header, logs */
 static VOID HostRecordToggle(VOID)
 {
     static INT seq = 0;
-    char path[MAX_PATH], *cursor;
+    CHAR path[MAX_PATH], *cursor;
     if (AudioWaveIsRecording()) { HostRecordFinish(); return; }
     cursor = LogPut(path, NTVDMEX_OUT); cursor = LogPut(cursor, "capture_audio_");
-    *cursor++ = (char)('0' + (seq / 10) % 10); *cursor++ = (char)('0' + seq % 10);
+    *cursor++ = (CHAR)('0' + (seq / 10) % 10); *cursor++ = (CHAR)('0' + seq % 10);
     cursor = LogPut(cursor, ".wav");
     ++seq;
     if (AudioWaveRecordStart(path, g_Wave.SampleHz) == 0) {
-        char lineBuffer[MAX_PATH + 64], *lineCursor = LogPut(lineBuffer, "STAGE2: audio recording started -> ");
+        CHAR lineBuffer[MAX_PATH + 64], *lineCursor = LogPut(lineBuffer, "STAGE2: audio recording started -> ");
         lineCursor = LogPut(lineCursor, path); lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor);
     }
 }
@@ -7080,10 +7080,10 @@ static VOID HostRecordToggle(VOID)
    explorer.exe rather than ShellExecute: no new import for one button. */
 static VOID HostOpenCaptureFolder(VOID)
 {
-    char command[MAX_PATH + 32], *cursor;
+    CHAR command[MAX_PATH + 32], *cursor;
     STARTUPINFOA startupInfo; PROCESS_INFORMATION processInfo; INT index;
     cursor = LogPut(command, "explorer.exe \""); cursor = LogPut(cursor, NTVDMEX_OUT); cursor = LogPut(cursor, "\"");
-    for (index = 0; index < (INT)sizeof startupInfo; ++index) ((char *)&startupInfo)[index] = 0;
+    for (index = 0; index < (INT)sizeof startupInfo; ++index) ((PSTR)&startupInfo)[index] = 0;
     startupInfo.cb = sizeof startupInfo;
     if (CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startupInfo, &processInfo)) {
         CloseHandle(processInfo.hThread); CloseHandle(processInfo.hProcess);
@@ -7097,9 +7097,9 @@ static VOID HostOpenCaptureFolder(VOID)
      periodic capture right after its BMP, under cfg\planedump.flag: writes the BMP's
      path with `.pln` = a 16-byte header (start, offset in 2-byte units, gw, gh) +
      the four 64K planes. Caller holds no lock; this takes it. */
-static VOID PlanesDumpBeside(const char *bmpPath)
+static VOID PlanesDumpBeside(PCSTR bmpPath)
 {
-    char path[200]; INT length = 0; HANDLE file;
+    CHAR path[200]; INT length = 0; HANDLE file;
     DWORD header[4], bytesWritten; INT plane;
     while (bmpPath[length] && length < 190) { path[length] = bmpPath[length]; ++length; }
     if (length < 4) return;
@@ -7263,7 +7263,7 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
     { HANDLE handle = CreateFileA(KEYS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, OPEN_EXISTING, 0, NULL);
       if (handle != INVALID_HANDLE_VALUE) {
-          char script[1024]; DWORD bytesRead = 0; DWORD index = 0;
+          CHAR script[1024]; DWORD bytesRead = 0; DWORD index = 0;
           ReadFile(handle, script, sizeof script - 1, &bytesRead, NULL);
           CloseHandle(handle);
           script[bytesRead] = 0;
@@ -7307,7 +7307,7 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
                   ++index;
                   if (index < bytesRead && (script[index] == 'e' || script[index] == 'E')) { extended = 1; ++index; }
                   while (index < bytesRead && digits < 2) {
-                      char character = script[index]; INT digit = -1;
+                      CHAR character = script[index]; INT digit = -1;
                       if (character >= '0' && character <= '9') digit = character - '0';
                       else if (character >= 'a' && character <= 'f') digit = character - 'a' + 10;
                       else if (character >= 'A' && character <= 'F') digit = character - 'A' + 10;
@@ -7321,7 +7321,7 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
               }
               if (script[index] == 'e' || script[index] == 'E') { extended = 1; ++index; }
               while (index < bytesRead && digits < 2) {               /* up to two hex digits */
-                  char character = script[index]; INT digit = -1;
+                  CHAR character = script[index]; INT digit = -1;
                   if (character >= '0' && character <= '9') digit = character - '0';
                   else if (character >= 'a' && character <= 'f') digit = character - 'a' + 10;
                   else if (character >= 'A' && character <= 'F') digit = character - 'A' + 10;
@@ -7371,7 +7371,7 @@ static DWORD WINAPI QueueIrqProbeThread(LPVOID parameter)
             if (after != before) break;
         }
         if (round < 8) {
-            char buffer[256], *cursor = buffer;
+            CHAR buffer[256], *cursor = buffer;
             cursor = LogPut(cursor, "QIRQ: raise#0x");   cursor = LogHex(cursor, (DWORD)round);
             cursor = LogPut(cursor, " bits=0x");         cursor = LogHex(cursor, g_QiBits);
             cursor = LogPut(cursor, " st=0x");           cursor = LogHex(cursor, (DWORD)g_QiStatus);
@@ -7407,7 +7407,7 @@ static DWORD WINAPI HeartbeatThread(LPVOID parameter)
            ⛔ AND AGAIN (s81): the pic{}/pend/ivt0d/aw5{} fields took it past 640 on ZAR and
              the heartbeat thread died writing " 1f7c=" over the top of its own stack
              (a host AV on a worker, mid-run). 2048 now, and aw5{} is capped at 6 codes. */
-        char buffer[2048], *cursor = buffer;
+        CHAR buffer[2048], *cursor = buffer;
         DWORD cs = 0, ip = 0, eflags = 0;
         if (g_TibDebug) {
             cs  = VDM_REG(g_TibDebug, VTIB_CS)  & 0xFFFF;
@@ -7534,7 +7534,7 @@ static DWORD WINAPI HeartbeatThread(LPVOID parameter)
    header still says "0 bytes" is a file most players refuse. Idempotent. */
 static VOID HostRecordFinish(VOID)
 {
-    char lineBuffer[160], *lineCursor = lineBuffer;
+    CHAR lineBuffer[160], *lineCursor = lineBuffer;
     UINT32 frames, dropped;
     if (!AudioWaveIsRecording()) return;
     dropped = AudioWaveRecordDropped();
@@ -7554,13 +7554,13 @@ static VOID HostRecordFinish(VOID)
      #238 was diagnosed without it. */
 static VOID AsyncWhyReport(VOID)
 {
-    static const char *const whyname[ASYNC_WHY_MAX] = {
+    static PCSTR const whyname[ASYNC_WHY_MAX] = {
         "DELIVERED","badvec","in_pm_irq","pm_noirq","no_catcher","unhooked_pm",
         "no_app_timer","vIF_off","IF_off","arm_quiet","IN_FLIGHT","host_stack",
         "not32","setctx_fail","HOST_CS","?f","?10","?11","?12","?13",
         "not_in_exec","pic_refuse","unhooked","suspend_fail","getctx_fail",
         "v86_IF_off","in_our_hdlr","observed","ctx_busy","left_exec","simint_rm","nested_tick" };
-    char base[1024], *cursor = base;
+    CHAR base[1024], *cursor = base;
     UINT line, reason;
     /* NO SILENT CAPS: say how many ASYNC-EARLY lines were written and how many were
        suppressed, so the log's thinness is never read as "it stopped happening". The
@@ -7591,7 +7591,7 @@ static VOID AsyncWhyReport(VOID)
 /* #238: guest time against host time, the host's share charged per event (g_HostMicrosecondsEvent). */
 static VOID ExecShareReport(VOID)
 {
-    char base[1024], *cursor = base;
+    CHAR base[1024], *cursor = base;
     INT event;
     cursor = LogPut(cursor, "STAGE2: exec share (#238) v86_ms="); cursor = LogDecimal(cursor, g_V86MicrosecondsTotal / 1000u);
     cursor = LogPut(cursor, " host_ms_after_event[ev:ms/count]=");
@@ -7624,7 +7624,7 @@ static VOID ExecShareReport(VOID)
     }
     cursor = LogPut(cursor, "\r\n");
     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-    {   static const char *const names[XS_N] = { "raise","async","coop","nie","bop","io","hostms","pace" };
+    {   static PCSTR const names[XS_N] = { "raise","async","coop","nie","bop","io","hostms","pace" };
         INT column; DWORD second;
         for (column = 0; column < XS_N; ++column) {
             cursor = LogPut(cursor, "STAGE2: persec "); cursor = LogPut(cursor, names[column]); cursor = LogPut(cursor, "=");
@@ -7643,9 +7643,9 @@ static VOID ExecShareReport(VOID)
    skips the main report, and is how ZAR's runs end -- can print it too. */
 static VOID IfvReport(VOID)
 {
-    char base[4096], *cursor = base;
+    CHAR base[4096], *cursor = base;
   { INT path, state, line; DWORD smax = g_IfvStarveMaximumMs;
-    static const char *const stname[8] = { "000","001","010","011","100","101","110","111" };
+    static PCSTR const stname[8] = { "000","001","010","011","100","101","110","111" };
     if (g_IfvStarveOpen && GetTickCount() - g_IfvStarveT0 > smax)
         smax = GetTickCount() - g_IfvStarveT0;
     cursor = LogPut(cursor, "STAGE2: IFV census (IF,VIF,S714)");
@@ -7701,7 +7701,7 @@ static DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
          many hot ports smashed the stack and the host faulted INSIDE the report meant to
          explain the run (`HOSTFAULT at=0x36303030`, i.e. "0006" as a return address).
          Worst case per flush: ~1.1 KB, then ~0.6 KB (unclaimed + VESA). */
-    char buffer[2048], *cursor = buffer;
+    CHAR buffer[2048], *cursor = buffer;
     DWORD fCs = 0, fIp = 0, fEflags = 0, fTick = 0;
     BYTE  fBytes[12];
     INT   fOk = 0;
@@ -7834,7 +7834,7 @@ static DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
              trap, and it has already cost this project a session on ZAR. */
         ModeYTimelineReport();   /* north star 1: the guests that need it leave this way */
         GusReport();        /* north star 2: and so does heaven7 */
-        {   static char vr2[2048];
+        {   static CHAR vr2[2048];
             INT length = VddVideoRegistersDump(&g_Video, vr2, (INT)sizeof vr2);
             if (length > 0) { LogAppend(LOG_PATH, vr2, vr2 + length); SerialOut(vr2, vr2 + length); } }
         HostRecordFinish();
@@ -7850,7 +7850,7 @@ static DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
      only while the top-level shell is sitting in that line read (OpenAtPrompt).
      Head/tail under g_Lock. */
 #define TYPEIN_CAP 512
-static char g_TypeIn[TYPEIN_CAP];
+static CHAR g_TypeIn[TYPEIN_CAP];
 static INT  g_TypeInHead, g_TypeInTail;
 static INT TypeInPop(VOID)
 {
@@ -7862,7 +7862,7 @@ static INT TypeInPop(VOID)
     return character;
 }
 /* Queue a string. All or nothing: a half-typed command is worse than none. */
-static INT TypeInPush(const char *text)
+static INT TypeInPush(PCSTR text)
 {
     INT length = lstrlenA(text), used, index;
     HOST_LOCK();
@@ -8161,7 +8161,7 @@ static VOID HostEms(volatile BYTE *tib)
 }
 
 /* --- menu + status bar (scaffold; most items are stubs for now) ------------ */
-static char g_ProgramName[64] = "(none)";      /* first part of the status strip    */
+static CHAR g_ProgramName[64] = "(none)";      /* first part of the status strip    */
 
 /* Mouse state shared UI thread -> V86 thread (INT 33h). Position is in guest
    pixels (mapped from the window client); buttons: bit0 L, bit1 R, bit2 M. */
@@ -8873,7 +8873,7 @@ out:
     if (g_Int15Function87Count <= 8 || status) {                /* the first few, and every refusal */
         static DWORD saidRefused = 0;
         if (!status || ++saidRefused <= 16) {
-            char buffer[160], *cursor = buffer;
+            CHAR buffer[160], *cursor = buffer;
             cursor = LogPut(cursor, "  INT15 AH=87h move 0x"); cursor = LogHex(cursor, length);
             cursor = LogPut(cursor, " bytes src=0x"); cursor = LogHex(cursor, gdt ? DosExtMemDescriptorBase(gdt + 0x10) : 0);
             cursor = LogPut(cursor, " dst=0x");       cursor = LogHex(cursor, gdt ? DosExtMemDescriptorBase(gdt + 0x18) : 0);
@@ -8901,7 +8901,7 @@ static VOID ExecMachineSave(INT depth)
 
 /* Put back what the ended child may have left broken. Called with the child still at
    depth d+1, before DosTerminate frees its memory. */
-static VOID ExecMachineRestore(INT depth, char **logCursor)
+static VOID ExecMachineRestore(INT depth, PSTR *logCursor)
 {
     UINT index;
     INT remode;
@@ -8942,7 +8942,7 @@ static VOID ExecMachineRestore(INT depth, char **logCursor)
 
 /* V86 loop: 1 = a child was ended and its parent resumed, 0 = the program we were
    started with was ended, so the run is over. */
-static INT CloseProgramNow(DOS_MACHINE *machine, PVOID tib, char **logCursor, char *base)
+static INT CloseProgramNow(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
 {
     if (g_ExecDepth > 0) {
         *logCursor = LogPut(*logCursor, "CLOSEPROG: ending the program at depth ");
@@ -9094,8 +9094,8 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         VDM_SET16(tib, VTIB_EBX, (WORD)buttons);
         break;
     case 0x0004: {                                      /* set cursor position     */
-        LONG virtualX = I33ClampX(I33Snapshot((LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF)));
-        LONG virtualY = I33ClampY(I33Snapshot((LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF)));
+        LONG virtualX = I33ClampX(I33Snapshot((LONG)(INT16)(VDM_REG(tib, VTIB_ECX) & 0xFFFF)));
+        LONG virtualY = I33ClampY(I33Snapshot((LONG)(INT16)(VDM_REG(tib, VTIB_EDX) & 0xFFFF)));
         InterlockedExchange(&g_MouseX, I33PixelX(virtualX));
         InterlockedExchange(&g_MouseY, I33PixelY(virtualY));
         break; }
@@ -9125,14 +9125,14 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         break; }
     case 0x0007:                                        /* set X range (virtual)   */
         I33SetRange(&g_MouseMinimumX, &g_MouseMaximumX,
-                      (LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
-                      (LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+                      (LONG)(INT16)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
+                      (LONG)(INT16)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
         InterlockedExchange(&g_MouseX, I33PixelX(I33ClampX(I33VirtualX(positionX))));
         break;
     case 0x0008:                                        /* set Y range (virtual)   */
         I33SetRange(&g_MouseMinimumY, &g_MouseMaximumY,
-                      (LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
-                      (LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+                      (LONG)(INT16)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
+                      (LONG)(INT16)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
         InterlockedExchange(&g_MouseY, I33PixelY(I33ClampY(I33VirtualY(positionY))));
         break;
     case 0x0009: {                                      /* define graphics cursor  */
@@ -9478,7 +9478,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
            it read; with none present the name a guest gets is the one it would look for,
            and opening it fails exactly as on a machine without one. The bare name (no
            path) is ours -- UNMEASURED. */
-        static const char ini[] = "MOUSE.INI";
+        static const CHAR ini[] = "MOUSE.INI";
         volatile BYTE *driverData = I33DriverData(); UINT index;
         ++g_MouseAccelerationCalls;
         for (index = 0; index < sizeof ini; ++index) driverData[VDD_MOUSE_INI + index] = (BYTE)ini[index];
@@ -9608,7 +9608,7 @@ static VOID MouseCallbackTry(volatile BYTE *tib)
     {   const volatile BYTE *returnStub = (const volatile BYTE *)(ULONG_PTR)((DOS_HDLR_SEG << 4) + MS_CB_RET_OFF);
         if (returnStub[0] != VDM_BOP0 || returnStub[1] != VDM_BOP1 || returnStub[2] != MS_CB_BOP) {
             if (g_MouseCallbackWhy[5] < 4) {
-                char lineBuffer[160], *lineCursor = lineBuffer;
+                CHAR lineBuffer[160], *lineCursor = lineBuffer;
                 lineCursor = LogPut(lineCursor, "MOUSECB REFUSED: return stub at 0050:");
                 lineCursor = LogHex(lineCursor, MS_CB_RET_OFF); lineCursor = LogPut(lineCursor, " overwritten by the guest: ");
                 lineCursor = LogDump(lineCursor, (const VOID *)returnStub, 4); lineCursor = LogPut(lineCursor, "\r\n");
@@ -9646,7 +9646,7 @@ static VOID MouseCallbackTry(volatile BYTE *tib)
     ++g_MouseCallbackInjected;
     if (g_MouseCallbackInjected <= 3) g_MouseCallbackTrace = 10;     /* see g_MouseCallbackTrace: the next VM events */
     if (g_MouseCallbackInjected <= 16) {                       /* the first few, with where from */
-        char lineBuffer[384], *lineCursor = lineBuffer;
+        CHAR lineBuffer[384], *lineCursor = lineBuffer;
         lineCursor = LogPut(lineCursor, "MOUSECB inject #"); lineCursor = LogHex(lineCursor, g_MouseCallbackInjected);
         lineCursor = LogPut(lineCursor, " ev=0x");   lineCursor = LogHex(lineCursor, (DWORD)pend);
         lineCursor = LogPut(lineCursor, " from=0x"); lineCursor = LogHex(lineCursor, g_MouseCallbackSaved.Cs);
@@ -9673,7 +9673,7 @@ static VOID MouseCallbackTry(volatile BYTE *tib)
            whether anything else of ours below 0x40 -- the INT 10h stub at 0x20 sits
            right after BASIC's INT 24h slot at 0x1A..0x1D -- has been written over. */
         if (g_MouseCallbackInjected == 1) {
-            char alternateBuffer[256], *alternateCursor = alternateBuffer;
+            CHAR alternateBuffer[256], *alternateCursor = alternateBuffer;
             alternateCursor = LogPut(alternateCursor, "MOUSECB area 0050:0000..003F=");
             alternateCursor = LogDump(alternateCursor, (const VOID *)(ULONG_PTR)(DOS_HDLR_SEG << 4), 0x40);
             alternateCursor = LogPut(alternateCursor, "\r\n");
@@ -9685,7 +9685,7 @@ static VOID MouseCallbackTry(volatile BYTE *tib)
 static VOID MouseCallbackReturn(volatile BYTE *tib)
 {
     if (!g_MouseCallbackActive) {                         /* not ours to unwind: step over  */
-        char lineBuffer[160], *lineCursor = lineBuffer;
+        CHAR lineBuffer[160], *lineCursor = lineBuffer;
         ++g_MouseCallbackStray; VDM_REG(tib, VTIB_EIP) += 3;
         lineCursor = LogPut(lineCursor, "MOUSECB STRAY return, nothing in flight: ss:sp=0x");
         lineCursor = LogHex(lineCursor, VDM_REG(tib, VTIB_SS) & 0xFFFF); lineCursor = LogPut(lineCursor, ":0x");
@@ -9694,7 +9694,7 @@ static VOID MouseCallbackReturn(volatile BYTE *tib)
         return;
     }
     if (g_MouseCallbackDone < 16) {
-        char lineBuffer[96], *lineCursor = lineBuffer;
+        CHAR lineBuffer[96], *lineCursor = lineBuffer;
         lineCursor = LogPut(lineCursor, "MOUSECB return #"); lineCursor = LogHex(lineCursor, g_MouseCallbackDone + 1);
         lineCursor = LogPut(lineCursor, " ok\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor);
     }
@@ -9720,7 +9720,7 @@ static VOID MouseCallbackReturn(volatile BYTE *tib)
    Regenerate with:  python3 tools/gen/mkcursor.py cursors/cursor-pointer.cur       */
 /* Generated by tools/gen/mkcursor.py from cursors/cursor-pointer.cur -- 16x16, hotspot (0,0).
    Do not hand-edit: regenerate from the artwork instead. */
-static const char *const g_MouseCursorShape[16] = {
+static PCSTR const g_MouseCursorShape[16] = {
     "oo",
     "oXo",
     "oXXo",
@@ -9742,10 +9742,10 @@ static VOID OverlayCursor(BYTE *pixels, INT width, INT height, INT stride, INT c
 {
     INT row;
     for (row = 0; row < 16; ++row) {
-        const char *shapeRow = g_MouseCursorShape[row]; INT column, screenRow = cursorY + row;
+        PCSTR shapeRow = g_MouseCursorShape[row]; INT column, screenRow = cursorY + row;
         if (screenRow < 0 || screenRow >= height) continue;
         for (column = 0; shapeRow[column]; ++column) {
-            INT screenColumn = cursorX + column; char shape = shapeRow[column];
+            INT screenColumn = cursorX + column; CHAR shape = shapeRow[column];
             if (shape == ' ' || screenColumn < 0 || screenColumn >= width) continue;
             pixels[screenRow * stride + screenColumn] = (shape == 'o') ? 0 : 15;     /* black outline / white fill */
         }
@@ -9851,18 +9851,18 @@ static const struct { UINT Id; INT IsSet; } g_MenuChecks[] = {
 };
 #define MENU_CHECK_N ((INT)(sizeof g_MenuChecks / sizeof g_MenuChecks[0]))
 
-static VOID MenuItem (HMENU menu, const char *text, UINT thunkId) { AppendMenuA(menu, MF_STRING, thunkId, text); }
+static VOID MenuItem (HMENU menu, PCSTR text, UINT thunkId) { AppendMenuA(menu, MF_STRING, thunkId, text); }
 static VOID MenuSeparator(HMENU menu) { AppendMenuA(menu, MF_SEPARATOR, 0, NULL); }
-static VOID MenuSubmenu(HMENU parent, const char *text, HMENU child) { AppendMenuA(parent, MF_POPUP, (UINT_PTR)child, text); }
+static VOID MenuSubmenu(HMENU parent, PCSTR text, HMENU child) { AppendMenuA(parent, MF_POPUP, (UINT_PTR)child, text); }
 static HMENU MenuPopup(VOID) { return CreatePopupMenu(); }
 
 /* A submenu built FROM THE SETTING ITSELF: one item per entry of g_SetDefinitions[set]'s
    own '|'-separated list, at ids base+0, base+1, ... See the note by IDM_COMBO_BASE
    for why the text is taken from there rather than written out again here. */
-static VOID MenuCombo(HMENU parent, const char *label, INT set, UINT base)
+static VOID MenuCombo(HMENU parent, PCSTR label, INT set, UINT base)
 {
     HMENU submenu = MenuPopup();
-    char item[64];
+    CHAR item[64];
     INT index;
     for (index = 0; index < IDM_COMBO_SPAN
                 && SettingsItem(g_SetDefinitions[set].Items, index, item, (INT)sizeof item); ++index)
@@ -9877,7 +9877,7 @@ static VOID MenuCombo(HMENU parent, const char *label, INT set, UINT base)
 /* Step over argv[0] (which Windows may have quoted) and return the rest. Under an
    IFEO Debugger hook argv[0] is OUR exe, and what follows is the ORIGINAL command
    line, starting with the quoted path of the program really being launched. */
-static const char *CommandLineAfterArgv0(const char *cursor)
+static PCSTR CommandLineAfterArgv0(PCSTR cursor)
 {
     if (*cursor == '"') { ++cursor; while (*cursor && *cursor != '"') ++cursor; if (*cursor) ++cursor; }
     else           { while (*cursor && *cursor != ' ') ++cursor; }
@@ -9889,9 +9889,9 @@ static const char *CommandLineAfterArgv0(const char *cursor)
    program's own path can contain "-w" (…\my-widget\game.exe) and would then be
    handed silently to stock ntvdm -- a worse failure than the one this guard exists
    to prevent, because the program WOULD run and we would never hear about it. */
-static INT LaunchIsWow(const char *command)
+static INT LaunchIsWow(PCSTR command)
 {
-    const char *cursor = CommandLineAfterArgv0(command);
+    PCSTR cursor = CommandLineAfterArgv0(command);
     while (*cursor) {
         if ((cursor[0] == '-' || cursor[0] == '/') && cursor[1] == 'w' && (cursor[2] == 0 || cursor[2] == ' '))
             return 1;
@@ -9950,7 +9950,7 @@ static INT LaunchIsWow(const char *command)
 #define WOW_MAX_MOD 16       /* krnl386 + the ten siblings, with headroom */
 static NE_MODULE g_WowModule[WOW_MAX_MOD];
 static BYTE  *g_WowImage[WOW_MAX_MOD];
-static char      g_WowName[WOW_MAX_MOD][16];
+static CHAR      g_WowName[WOW_MAX_MOD][16];
 static INT       g_WowModuleCount = 0;
 
 /* ── ★ WHICH MODULE OWNS THIS SELECTOR? (GH #128, session 38) ─────────────────
@@ -10189,7 +10189,7 @@ static WORD WowHostAllocate(WORD paras)
 }
 /* The `-a` argument of the WOW launch: the full path of krnl386.exe. krnl386 reads
    it back out of the DOS environment block to find its own file -- see WowPlaceV86. */
-static char      g_WowKernelPath[512];
+static CHAR      g_WowKernelPath[512];
 /* Bytes of usable memory above krnl386's stack, handed to it in CX at entry. See
    the note at the entry setup and WowPlaceV86. */
 static WORD      g_WowEntryCx = 0;
@@ -10239,7 +10239,7 @@ static INT HostReadable(PCVOID addr, SIZE_T length);   /* fwd: defined with the
    the spacing of the sampler: sampling only at WOW32 calls put the whole of WOWEXEC's
    launcher -- LoadModule included -- inside one window, which names a suspect rather
    than a writer. */
-static char *WowPspEnvironmentCheck(char *cursor, const char *where)
+static PSTR WowPspEnvironmentCheck(PSTR cursor, PCSTR where)
 {
     INT index;
     for (index = 0; index < g_WowPspCount; ++index) {
@@ -10276,9 +10276,9 @@ static WORD      g_PmTransferParagraphs = 0;
 /* Pull the `-a <path>` argument out of a WOW command line. Measured shape:
      "…\ntvdm.exe" -f -i1 -w -a C:\WINDOWS\system32\krnl386.exe
    That path is the module WOW is asked to bootstrap, so it is the loader's input. */
-static INT WowArgumentA(const char *command, char *out, INT cap)
+static INT WowArgumentA(PCSTR command, PSTR out, INT cap)
 {
-    const char *cursor = CommandLineAfterArgv0(command);
+    PCSTR cursor = CommandLineAfterArgv0(command);
     INT index = 0;
     out[0] = 0;
     while (*cursor) {
@@ -10299,7 +10299,7 @@ static INT WowArgumentA(const char *command, char *out, INT cap)
 
 /* Replace the file name in `path` with `leaf`, so the modules that live beside
    krnl386.exe can be found without hard-coding %SystemRoot%\system32. */
-static VOID WowSibling(const char *path, const char *leaf, char *out, INT cap)
+static VOID WowSibling(PCSTR path, PCSTR leaf, PSTR out, INT cap)
 {
     INT index, cut = 0;
     for (index = 0; path[index] && index < cap - 1; ++index) {
@@ -10312,9 +10312,9 @@ static VOID WowSibling(const char *path, const char *leaf, char *out, INT cap)
 
 /* Parse one module and give its segments memory. NO relocation -- see the two-phase
    note above. Returns the g_WowModule index, or -1. */
-static INT WowLoadOne(const char *path)
+static INT WowLoadOne(PCSTR path)
 {
-    char message[700], *cursor;
+    CHAR message[700], *cursor;
     HANDLE file;
     DWORD size = 0, got = 0;
     BYTE *image;
@@ -10394,18 +10394,18 @@ static INT WowLoadOne(const char *path)
      will want them. See WowProbeSelectors() for the correction: krnl386's init entry
      runs in V86, so a real load puts its segments in CONVENTIONAL memory and relocates
      against real-mode paragraphs. */
-static VOID WowProbeLoad(const char *command)
+static VOID WowProbeLoad(PCSTR command)
 {
     /* The whole graph, in dependency order. Everything imports from KERNEL, USER
        also needs SYSTEM, and wowexec needs KEYBOARD -- so the drivers come before
        the modules that bind to them. Measured: with these eleven present, every
        import in the set resolves and nothing is left dangling. */
-    static const char *sibling[] = {
+    static PCSTR sibling[] = {
         "system.drv", "keyboard.drv", "mouse.drv", "sound.drv", "comm.drv",
         "gdi.exe", "user.exe", "shell.dll", "toolhelp.dll", "wowexec.exe"
     };
-    char path[512], sib[512], message[700], *cursor;
-    size_t index;
+    CHAR path[512], sib[512], message[700], *cursor;
+    SIZE_T index;
 
     cursor = message; cursor = LogPut(cursor, "WOWTRY: probe begins\r\n"); LogAppend(LOG_PATH, message, cursor);
 
@@ -10430,9 +10430,9 @@ static VOID WowProbeLoad(const char *command)
     LogAppend(LOG_PATH, message, cursor);
 }
 
-static INT WowRefuse(const char *command)
+static INT WowRefuse(PCSTR command)
 {
-    char message[256], *cursor = message;
+    CHAR message[256], *cursor = message;
     cursor = LogPut(cursor, "STAGE0: WIN16/WOW -- NOT SUPPORTED and cannot be handed back "
                 "(see GH #129). Refusing loudly.\r\n");
     LogAppend(LOG_PATH, message, cursor);
@@ -10650,7 +10650,7 @@ static INT  g_TrayOn    = 0;                /* the icon is currently installed  
 static VOID TrayAdd(HINSTANCE instance, HWND window)
 {
     NOTIFYICONDATAA nid;
-    const char *tip = "NTVDMEX - 16-bit Windows";
+    PCSTR tip = "NTVDMEX - 16-bit Windows";
     INT index;
     if (g_TrayOn) return;
     ZeroMemory(&nid, sizeof nid);
@@ -10687,7 +10687,7 @@ static VOID TrayRemove(HWND window)
      tray icon exactly as before (g_ManagerAvailable = 0), and a DOS host never had one. */
 static INT   g_ManagerAvailable;                    /* ntvdmex.exe exists beside the host   */
 static UINT  g_ManagerCommandMessage;                   /* the registered manager->host message */
-static char  g_ManagerExe[MAX_PATH];
+static CHAR  g_ManagerExe[MAX_PATH];
 static DWORD g_ManagerHellos, g_ManagerLaunches;   /* for the log                          */
 typedef INT (WINAPI *PFN_INTGETWT)(HWND, LPWSTR, INT);
 
@@ -10697,10 +10697,10 @@ typedef INT (WINAPI *PFN_INTGETWT)(HWND, LPWSTR, INT);
    is read with InternalGetWindowText, which takes it from the window WITHOUT a
    message -- GetWindowText from this thread would wait on the exec thread, which is
    usually inside the guest. */
-static VOID ManagerName(char *out, HWND *show)
+static VOID ManagerName(PSTR out, HWND *show)
 {
-    char raw[MGR_NAME_SIZE]; INT index, length = 0;
-    const char *source = NULL;
+    CHAR raw[MGR_NAME_SIZE]; INT index, length = 0;
+    PCSTR source = NULL;
     raw[0] = 0; *show = g_Window;
     if (g_WowLaunch) {
         static PFN_INTGETWT internalGetWindowText;
@@ -10723,7 +10723,7 @@ static VOID ManagerName(char *out, HWND *show)
         source = g_ProgramName;
     }
     if (source) {
-        const char *baseName = source, *cursor;
+        PCSTR baseName = source, cursor;
         for (cursor = source; *cursor; ++cursor) if (*cursor == '\\' || *cursor == '/') baseName = cursor + 1;
         if (!*baseName || !lstrcmpiA(baseName, "COMMAND.COM") || !lstrcmpiA(baseName, "CMD.EXE")
             || !lstrcmpA(baseName, "(none)")) {
@@ -10732,9 +10732,9 @@ static VOID ManagerName(char *out, HWND *show)
         }
         /* "DOOM.EXE" -> "Doom": the base name, first letter up, the rest down. */
         for (index = 0; baseName[index] && baseName[index] != '.' && length < MGR_NAME_SIZE - 1; ++index) {
-            char character = baseName[index];
-            if (length == 0) { if (character >= 'a' && character <= 'z') character = (char)(character - 32); }
-            else        { if (character >= 'A' && character <= 'Z') character = (char)(character + 32); }
+            CHAR character = baseName[index];
+            if (length == 0) { if (character >= 'a' && character <= 'z') character = (CHAR)(character - 32); }
+            else        { if (character >= 'A' && character <= 'Z') character = (CHAR)(character + 32); }
             raw[length++] = character;
         }
         raw[length] = 0;
@@ -10755,7 +10755,7 @@ static DWORD WINAPI ManagerThread(LPVOID unused)
             DWORD now = GetTickCount();
             if (!lastLaunch || now - lastLaunch >= 5000) {
                 STARTUPINFOA startupInfo; PROCESS_INFORMATION processInfo;
-                char commandLine[MAX_PATH + 4];
+                CHAR commandLine[MAX_PATH + 4];
                 lastLaunch = now;
                 ZeroMemory(&startupInfo, sizeof startupInfo); startupInfo.cb = sizeof startupInfo;
                 commandLine[0] = '"'; lstrcpynA(commandLine + 1, g_ManagerExe, MAX_PATH); lstrcatA(commandLine, "\"");
@@ -10787,7 +10787,7 @@ static DWORD WINAPI ManagerThread(LPVOID unused)
 
 static VOID ManagerStart(VOID)
 {
-    char *cursor; HANDLE thread;
+    PSTR cursor; HANDLE thread;
     g_ManagerCommandMessage = RegisterWindowMessageA(MGR_CMD_MSGNAME);
     if (!GetModuleFileNameA(NULL, g_ManagerExe, sizeof g_ManagerExe)) return;
     for (cursor = g_ManagerExe + lstrlenA(g_ManagerExe); cursor > g_ManagerExe && cursor[-1] != '\\'; --cursor) ;
@@ -10870,7 +10870,7 @@ static HWND g_Status;                        /* the native comctl32 status bar  
      which cut it off; it now follows the speed. A program that never used the mouse
      gets no fourth part at all -- there is nothing to say about capture. The speed is
      the clock alone ("66 MHz", "Unlimited"), never the CPU's name. */
-static char g_StatusLeft[128], g_StatusMode[96], g_StatusSpeed[32], g_StatusRight[64];  /* ON it now */
+static CHAR g_StatusLeft[128], g_StatusMode[96], g_StatusSpeed[32], g_StatusRight[64];  /* ON it now */
 /* #325: the window's whole scale (setting or drag), the frame size it was sized for, and
    whether 1x did not fit the screen and was scaled down. See HostApplyScale. */
 static INT g_ScaleFactor = 0;            /* the scale the window is AT (after fitting)          */
@@ -10880,7 +10880,7 @@ static INT g_ScaleWant = 0;         /* the scale ASKED for (setting or drag) -- 
 static INT g_WindowFrameWidth, g_WindowFrameHeight;
 static INT g_FitDown;
 
-static INT StringsEqual(const char *first, const char *second)
+static INT StringsEqual(PCSTR first, PCSTR second)
 {
     while (*first && *first == *second) { ++first; ++second; }
     return *first == *second;
@@ -10889,7 +10889,7 @@ static INT StringsEqual(const char *first, const char *second)
 /* How wide a string renders IN THE STATUS BAR'S OWN FONT. Asking the control for
    its font matters: the strip is themed, so measuring with the stock system font
    would size the part for text of a different width than the one drawn in it. */
-static INT StatusTextWidth(const char *text)
+static INT StatusTextWidth(PCSTR text)
 {
     HDC deviceContext;
     HFONT font, old = NULL;
@@ -10913,7 +10913,7 @@ static INT StatusTextWidth(const char *text)
      somewhere to sit. Re-cut whenever any text changes: re-partitioning blanks every
      part, so StatusUpdate re-pushes all of them after it.
    ⚠ CLAMPED: a 63-character program name must not push everything else off the strip. */
-static VOID StatusSetParts(const char *const *text, int count) /* stays int: INT here moves the compiled code */
+static VOID StatusSetParts(PCSTR const *text, int count) /* stays int: INT here moves the compiled code */
 {
     INT parts[4], index, right = 0;
     if (!g_Status || count < 1 || count > 4) return;
@@ -10928,10 +10928,10 @@ static VOID StatusSetParts(const char *const *text, int count) /* stays int: INT
 }
 
 /* The CPU speed as the strip shows it: the clock only, no CPU name (user, s84). */
-static VOID StatusSpeedText(char *out)
+static VOID StatusSpeedText(PSTR out)
 {
     UINT mhz = ((UINT)g_CpuSpeedIndex < CPUSPEED_COUNT) ? g_CpuSpeedMhz[g_CpuSpeedIndex] : 0u;
-    char *cursor = out;
+    PSTR cursor = out;
     if (!mhz) { LogPut(out, "Unlimited"); return; }
     if (mhz >= 1000u && mhz % 1000u == 0u) { cursor = LogDecimal(cursor, mhz / 1000u); LogPut(cursor, " GHz"); }
     else                                   { cursor = LogDecimal(cursor, mhz);         LogPut(cursor, " MHz"); }
@@ -10945,8 +10945,8 @@ static VOID StatusSpeedText(char *out)
      costs nothing and cannot be forgotten. */
 static VOID StatusUpdate(VOID)
 {
-    const char *text[4];
-    char speed[32];
+    PCSTR text[4];
+    CHAR speed[32];
     INT parts;
     if (!g_Status) return;
     text[0] = g_ProgramName;
@@ -10956,11 +10956,11 @@ static VOID StatusUpdate(VOID)
              drawn rectangle is an exact whole multiple, "scaled" otherwise -- read
              from what PresentGdi actually drew, so it is true in a window, maximised
              and fullscreen alike. */
-        static char modeText[96];
-        const char *mode = (g_DpmiPm && g_DpmiIsClient32) ? "32-bit Protected Mode"
+        static CHAR modeText[96];
+        PCSTR mode = (g_DpmiPm && g_DpmiIsClient32) ? "32-bit Protected Mode"
                       : g_DpmiPm                      ? "16-bit Protected Mode"
                                                        : "16-bit Real Mode";
-        char *cursor = LogPut(modeText, mode);
+        PSTR cursor = LogPut(modeText, mode);
         if (g_PresentDdraw.IsSnapshotValid && g_PresentDdraw.SnapshotWidth > 0 && g_PresentDdraw.SnapshotHeight > 0 && g_PresentDdraw.LastDestinationWidth > 0) {
             INT snapshotWidth = g_PresentDdraw.SnapshotWidth, snapshotHeight = g_PresentDdraw.SnapshotHeight, destinationWidth = g_PresentDdraw.LastDestinationWidth, destinationHeight = g_PresentDdraw.LastDestinationHeight;
             cursor = LogPut(cursor, ", ");  cursor = LogDecimal(cursor, (UINT)snapshotWidth); cursor = LogPut(cursor, "x"); cursor = LogDecimal(cursor, (UINT)snapshotHeight);
@@ -11097,8 +11097,8 @@ static INT ClientToCell(INT clientX, INT clientY, INT *column, INT *row)
 static VOID TextCopy(HWND window, INT all)
 {
     INT column0, column1, row0, row1, row, column, length = 0;
-    static char text[132 * 60 * 2 + 256];
-    HGLOBAL memory; char *destination;
+    static CHAR text[132 * 60 * 2 + 256];
+    HGLOBAL memory; PSTR destination;
     if (g_Video.ModeKind != VIDEO_KIND_TEXT || !g_Video.VideoMemory) return;
     if (all || !g_SelectionOn) { column0 = 0; row0 = 0; column1 = g_Video.Columns - 1; row1 = g_Video.Rows - 1; }
     else {
@@ -11110,7 +11110,7 @@ static VOID TextCopy(HWND window, INT all)
         INT start = length;
         for (column = column0; column <= column1; ++column) {
             BYTE ch = g_Video.VideoMemory[VIDEO_TEXT_OFFSET + ((g_Video.CrtcStartLive * 2u + (UINT)(row * g_Video.Columns + column) * 2u) & 0x7FFFu)];   /* the DISPLAYED page (#252) */
-            text[length++] = (char)(ch ? ch : ' ');
+            text[length++] = (CHAR)(ch ? ch : ' ');
         }
         while (length > start && text[length - 1] == ' ') --length;          /* right-trim the line */
         if (row < row1) { text[length++] = '\r'; text[length++] = '\n'; }
@@ -11119,7 +11119,7 @@ static VOID TextCopy(HWND window, INT all)
     while (length >= 2 && text[length - 2] == '\r' && text[length - 1] == '\n') length -= 2;   /* the empty rows below */
     text[length] = 0;
     memory = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)length + 1);
-    destination = memory ? (char *)GlobalLock(memory) : NULL;
+    destination = memory ? (PSTR)GlobalLock(memory) : NULL;
     if (!destination) { if (memory) GlobalFree(memory); return; }
     for (column = 0; column <= length; ++column) destination[column] = text[column];
     GlobalUnlock(memory);
@@ -11136,7 +11136,7 @@ static VOID TextCopy(HWND window, INT all)
    is refused rather than interleaved. */
 static DWORD WINAPI PasteThread(LPVOID parameter)
 {
-    char *text = (char *)parameter;
+    PSTR text = (PSTR)parameter;
     INT index;
     for (index = 0; text[index] && g_Running; ++index) {
         BYTE ch = (BYTE)text[index], scan = 0, isShifted = 0;
@@ -11160,12 +11160,12 @@ static DWORD WINAPI PasteThread(LPVOID parameter)
 
 static VOID TextPaste(HWND window)
 {
-    HANDLE clipboard; const char *source; char *copy; INT length = 0;
+    HANDLE clipboard; PCSTR source; PSTR copy; INT length = 0;
     if (InterlockedExchange(&g_PasteBusy, 1)) return;
     if (!OpenClipboard(window)) { InterlockedExchange(&g_PasteBusy, 0); return; }
     clipboard = GetClipboardData(CF_TEXT);
-    source = clipboard ? (const char *)GlobalLock(clipboard) : NULL;
-    copy = source ? (char *)HeapAlloc(GetProcessHeap(), 0, 4097) : NULL;
+    source = clipboard ? (PCSTR)GlobalLock(clipboard) : NULL;
+    copy = source ? (PSTR)HeapAlloc(GetProcessHeap(), 0, 4097) : NULL;
     if (copy) { while (length < 4096 && source[length]) { copy[length] = source[length]; ++length; } copy[length] = 0; }
     if (source) GlobalUnlock(clipboard);
     CloseClipboard();
@@ -11481,9 +11481,9 @@ static INT    g_ExecPriorityForeground = THREAD_PRIORITY_NORMAL;
 static INT    g_ExecPriorityNow = 0x7FFF;       /* what BackgroundPriorityTick last set             */
 static INT OtherHostsRunning(VOID)
 {
-    INT instance; char name[48];
+    INT instance; CHAR name[48];
     for (instance = 1; instance <= 16; ++instance) {
-        HANDLE mutex; char *cursor = LogPut(name, "Global\\ntvdmex_host_single");
+        HANDLE mutex; PSTR cursor = LogPut(name, "Global\\ntvdmex_host_single");
         if (instance == g_Instance) continue;
         if (instance > 1) { *cursor++ = '_'; cursor = LogDecimal(cursor, (UINT)instance); }
         mutex = OpenMutexA(SYNCHRONIZE, FALSE, name);
@@ -11522,7 +11522,7 @@ static VOID BackgroundPriorityTick(HWND window)
        audio pump (TIME_CRITICAL, 15 in any class) keeps its place. */
     SetPriorityClass(GetCurrentProcess(), isBackground ? IDLE_PRIORITY_CLASS : NORMAL_PRIORITY_CLASS);
     if (logged++ < 32) {
-        char buffer[128], *cursor = LogPut(buffer, "PRIO: guest thread -> ");
+        CHAR buffer[128], *cursor = LogPut(buffer, "PRIO: guest thread -> ");
         cursor = LogPut(cursor, isBackground ? "idle class (background, another host running)"
                        : "its own priority");
         cursor = LogPut(cursor, " (#211)\r\n");
@@ -11537,7 +11537,7 @@ static INT OpenAtPrompt(VOID)
 }
 
 /* A DOS image: .COM or .BAT by name, or an MZ .EXE without an NE/PE header. */
-static INT OpenIsDosImage(const char *path)
+static INT OpenIsDosImage(PCSTR path)
 {
     INT length = lstrlenA(path);
     BYTE header[0x40]; DWORD got = 0, newHeaderOffset, got2 = 0; BYTE signature[2];
@@ -11557,10 +11557,10 @@ static INT OpenIsDosImage(const char *path)
 }
 
 /* Build "<backspaces>X:\r CD \dir\r NAME.EXT\r" from an 8.3 path; 0 if it cannot. */
-static INT OpenPromptLine(const char *shortPath, INT rub, char *out, INT cap)
+static INT OpenPromptLine(PCSTR shortPath, INT rub, PSTR out, INT cap)
 {
     INT length = lstrlenA(shortPath), slash = -1, index, directoryLength;
-    char *cursor = out, *end = out + cap - 1;
+    PSTR cursor = out, end = out + cap - 1;
     for (index = 0; index < length; ++index) if (shortPath[index] == '\\') slash = index;
     if (length < 4 || shortPath[1] != ':' || shortPath[2] != '\\' || slash < 2) return 0;
     directoryLength = (slash == 2) ? 1 : slash - 2;                     /* "\" or "\DIR\SUB" */
@@ -11577,14 +11577,14 @@ static INT OpenPromptLine(const char *shortPath, INT rub, char *out, INT cap)
     return 1;
 }
 
-static VOID OpenProgram(HWND window, const char *path)
+static VOID OpenProgram(HWND window, PCSTR path)
 {
-    char shortPath[MAX_PATH], directory[MAX_PATH], command[MAX_PATH + 4], line[512];
+    CHAR shortPath[MAX_PATH], directory[MAX_PATH], command[MAX_PATH + 4], line[512];
     DWORD attributes = GetFileAttributesA(path), shortLength;
     INT index, cut = -1;
     STARTUPINFOA startupInfo; PROCESS_INFORMATION processInfo;
     if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
-        char message[MAX_PATH + 64], *cursor = LogPut(message, "This program could not be found:\n\n");
+        CHAR message[MAX_PATH + 64], *cursor = LogPut(message, "This program could not be found:\n\n");
         LogPut(cursor, path);
         MessageBoxA(window, message, "NTVDMEX", MB_OK | MB_ICONEXCLAMATION);
         return;
@@ -11595,7 +11595,7 @@ static VOID OpenProgram(HWND window, const char *path)
     if (OpenAtPrompt() && shortLength && shortLength < sizeof shortPath && OpenIsDosImage(path)
         && OpenPromptLine(shortPath, g_Machine->LineLength, line, (INT)sizeof line)
         && TypeInPush(line)) {
-        char lineBuffer[MAX_PATH + 64], *lineCursor = LogPut(lineBuffer, "OPEN: typed at the prompt [");
+        CHAR lineBuffer[MAX_PATH + 64], *lineCursor = LogPut(lineBuffer, "OPEN: typed at the prompt [");
         lineCursor = LogPut(lineCursor, shortPath); lineCursor = LogPut(lineCursor, "]\r\n");
         LogAppend(LOG_PATH, lineBuffer, lineCursor);
         return;
@@ -11604,16 +11604,16 @@ static VOID OpenProgram(HWND window, const char *path)
     for (index = 0; directory[index]; ++index) if (directory[index] == '\\') cut = index;
     if (cut >= 0) directory[cut == 2 ? 3 : cut] = 0;
     command[0] = '"'; lstrcpynA(command + 1, path, MAX_PATH); LogPut(command + lstrlenA(command), "\"");
-    for (index = 0; index < (INT)sizeof startupInfo; ++index) ((char *)&startupInfo)[index] = 0;
+    for (index = 0; index < (INT)sizeof startupInfo; ++index) ((PSTR)&startupInfo)[index] = 0;
     startupInfo.cb = sizeof startupInfo;
     if (CreateProcessA(NULL, command, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL,
                        cut >= 0 ? directory : NULL, &startupInfo, &processInfo)) {
-        char lineBuffer[MAX_PATH + 64], *lineCursor = LogPut(lineBuffer, "OPEN: started in a new window [");
+        CHAR lineBuffer[MAX_PATH + 64], *lineCursor = LogPut(lineBuffer, "OPEN: started in a new window [");
         lineCursor = LogPut(lineCursor, path); lineCursor = LogPut(lineCursor, "]\r\n");
         LogAppend(LOG_PATH, lineBuffer, lineCursor);
         CloseHandle(processInfo.hThread); CloseHandle(processInfo.hProcess);
     } else {
-        char message[MAX_PATH + 96], *cursor = LogPut(message, "NTVDMEX could not start:\n\n");
+        CHAR message[MAX_PATH + 96], *cursor = LogPut(message, "NTVDMEX could not start:\n\n");
         cursor = LogPut(cursor, path); cursor = LogPut(cursor, "\n\nWindows error 0x"); cursor = LogHex(cursor, GetLastError()); *cursor = 0;
         MessageBoxA(window, message, "NTVDMEX", MB_OK | MB_ICONERROR);
     }
@@ -11621,9 +11621,9 @@ static VOID OpenProgram(HWND window, const char *path)
 
 static VOID OpenProgramDialog(HWND window)
 {
-    char file[MAX_PATH]; OPENFILENAMEA openFile; INT index;
+    CHAR file[MAX_PATH]; OPENFILENAMEA openFile; INT index;
     file[0] = 0;
-    for (index = 0; index < (INT)sizeof openFile; ++index) ((char *)&openFile)[index] = 0;
+    for (index = 0; index < (INT)sizeof openFile; ++index) ((PSTR)&openFile)[index] = 0;
     openFile.lStructSize = sizeof openFile;
     openFile.hwndOwner   = window;
     openFile.lpstrFilter = "Programs (*.exe;*.com;*.bat)\0*.exe;*.com;*.bat\0All files (*.*)\0*.*\0";
@@ -11639,15 +11639,15 @@ static VOID OpenProgramDialog(HWND window)
    including programs other NTVDMEX windows have run since this one started. */
 static VOID MenuRecentFill(VOID)
 {
-    char list[MRU_MAX][MAX_PATH];
+    CHAR list[MRU_MAX][MAX_PATH];
     INT count, index;
     if (!g_RecentMenu) return;
     while (GetMenuItemCount(g_RecentMenu) > 0) DeleteMenu(g_RecentMenu, 0, MF_BYPOSITION);
     count = MruLoad(list);
     if (!count) { AppendMenuA(g_RecentMenu, MF_STRING | MF_GRAYED, IDM_RECENT_0, "(empty)"); return; }
     for (index = 0; index < count; ++index) {
-        char text[2 * MAX_PATH + 8], *cursor = text; const char *source;
-        *cursor++ = '&'; *cursor++ = (char)('1' + index); *cursor++ = ' ';
+        CHAR text[2 * MAX_PATH + 8], *cursor = text; PCSTR source;
+        *cursor++ = '&'; *cursor++ = (CHAR)('1' + index); *cursor++ = ' ';
         for (source = list[index]; *source; ++source) { if (*source == '&') *cursor++ = '&'; *cursor++ = *source; }   /* a literal & */
         *cursor = 0;
         AppendMenuA(g_RecentMenu, MF_STRING, IDM_RECENT_0 + (UINT)index, text);
@@ -11709,7 +11709,7 @@ static DWORD WINAPI CaptureWatchdogThread(LPVOID parameter)
         if (!g_Captured) { last = g_UiBeat; lastMs = GetTickCount(); continue; }
         if (g_UiBeat != last) { last = g_UiBeat; lastMs = GetTickCount(); continue; }
         if (GetTickCount() - lastMs < CAPWD_STALL_MS) continue;
-        {   char lineBuffer[192], *lineCursor = lineBuffer;
+        {   CHAR lineBuffer[192], *lineCursor = lineBuffer;
             ClipCursor(NULL);
             if (g_LowLevelKeyboard) { UnhookWindowsHookEx(g_LowLevelKeyboard); g_LowLevelKeyboard = NULL; }
             InterlockedExchange(&g_Captured, 0);
@@ -11866,7 +11866,7 @@ static VOID HostFullscreenToggle(HWND window)
            got == native   -> the panel is getting its own resolution, which is the
                               other half of sharpness and the half we do not control. */
     if (g_PresentDdraw.IsFullscreen) {
-        char lineBuffer[256], *lineCursor = lineBuffer;
+        CHAR lineBuffer[256], *lineCursor = lineBuffer;
         RECT clientRect;
         INT clientWidth = 0, clientHeight = 0;
         if (GetClientRect(window, &clientRect)) { clientWidth = clientRect.right; clientHeight = clientRect.bottom; }
@@ -12044,13 +12044,13 @@ static NTVDMEX_SETTINGS g_SettingsDisk;
      registry value nobody could see, because only the FILE override ever printed. A
      file override changes a machine variable, not g_Settings, so it is noted here at the
      point it is read; SettingsLogSources() prints the lot once they have all run. */
-static const char *g_SettingsOverrideBy[SET_COUNT];      /* what overrode the row, if anything */
+static PCSTR g_SettingsOverrideBy[SET_COUNT];      /* what overrode the row, if anything */
 static DWORD       g_SettingsOverrideValue[SET_COUNT];    /* ...and the value it put in force   */
-static VOID SettingsNoteOverride(INT settingId, const char *source, DWORD value)
+static VOID SettingsNoteOverride(INT settingId, PCSTR source, DWORD value)
 {
     g_SettingsOverrideBy[settingId] = source; g_SettingsOverrideValue[settingId] = value;
 }
-static const char *g_ShellOverride;               /* #203: cfg\shell.txt beat DosPrompt */
+static PCSTR g_ShellOverride;               /* #203: cfg\shell.txt beat DosPrompt */
 
 /* ⚠ THE ROWS SettingsApply() AND ITS NEIGHBOURS ACTUALLY READ. A row not in this
      list is stored and shown in the dialog and changes nothing (GH #136), and the log
@@ -12087,7 +12087,7 @@ static INT SettingsIsLive(INT settingId)
      "stored only" alone reads like an oversight waiting for a line in SettingsApply;
      each of these is a decision, and the reason is what a reader needs to not re-open it.
      Only rows NOT in g_SettingsLiveIds ever reach this. */
-static const char *SettingsDeadWhy(INT settingId)
+static PCSTR SettingsDeadWhy(INT settingId)
 {
     switch (settingId) {
     case SET_UMB:   return "there are no upper memory blocks to provide: XMS 10h answers "
@@ -12098,7 +12098,7 @@ static const char *SettingsDeadWhy(INT settingId)
     default:        return "not used";
     }
 }
-static const char *SettingsDeadWhyText(INT index)
+static PCSTR SettingsDeadWhyText(INT index)
 {
     switch (index) {
     case SET_STR_CDROM:     return "no CD-ROM drive is mounted into DOS yet (#240/#241)";
@@ -12110,10 +12110,10 @@ static const char *SettingsDeadWhyText(INT index)
 
 static VOID SettingsLogSources(VOID)
 {
-    static const char *const source[] = { "default", "registry",
+    static PCSTR const source[] = { "default", "registry",
                                        "registry value OUT OF RANGE -> default" };
-    static char buffer[12288];            /* 41 rows + four 260-byte paths */
-    char *cursor = buffer, item[64];
+    static CHAR buffer[12288];            /* 41 rows + four 260-byte paths */
+    CHAR *cursor = buffer, item[64];
     INT index;
     cursor = LogPut(cursor, "STAGE2: settings -- value, source, and whether the host uses it (GH #144)\r\n");
     for (index = 0; index < SET_COUNT; ++index) {
@@ -12588,7 +12588,7 @@ static VOID HostFollowFrame(HWND window)
    which font it was drawing with from that point on. */
 static VOID SettingsApplyTextFont(VOID)
 {
-    char lineBuffer[480], *lineCursor = lineBuffer;
+    CHAR lineBuffer[480], *lineCursor = lineBuffer;
     if (!lstrcmpA(g_TextFontLive, g_Settings.Strings[SET_STR_TEXTFONT])) return;
     lstrcpynA(g_TextFontLive, g_Settings.Strings[SET_STR_TEXTFONT], sizeof g_TextFontLive);
     lineCursor = LogPut(lineCursor, "settings: text font changed -- ");
@@ -12627,7 +12627,7 @@ static const INT g_SettingsPages[NTVDMEX_PAGE_COUNT] = {
     IDD_PAGE_GENERAL, IDD_PAGE_CPU, IDD_PAGE_DISPLAY,
     IDD_PAGE_AUDIO,   IDD_PAGE_INPUT, IDD_PAGE_DRIVES
 };
-static const char *const g_SettingsTabs[NTVDMEX_PAGE_COUNT] = {
+static PCSTR const g_SettingsTabs[NTVDMEX_PAGE_COUNT] = {
     "MS-DOS", "Machine", "Video", "Audio", "Input", "Drives"
 };
 static HWND g_SettingsPage[NTVDMEX_PAGE_COUNT];
@@ -12648,8 +12648,8 @@ static HWND SettingsControl(INT controlId)
 
 static VOID SettingsFillCombos(VOID)
 {
-    static const char *const vers[] = { "6.22", "5.00", "4.01", "3.31", "7.10" };
-    char item[64]; INT index, index2;
+    static PCSTR const vers[] = { "6.22", "5.00", "4.01", "3.31", "7.10" };
+    CHAR item[64]; INT index, index2;
     HWND control;
     for (index = 0; index < SET_COUNT; ++index) {
         const SET_DEF *definition = &g_SetDefinitions[index];
@@ -12688,13 +12688,13 @@ static VOID SettingsShellRadios(INT own)
 
 /* One Open dialog for every path box: the shell, the floppy and ISO images, the
    SoundFont. The box's current text is where it starts. */
-static VOID SettingsBrowse(HWND page, INT editId, const char *filter, const char *title)
+static VOID SettingsBrowse(HWND page, INT editId, PCSTR filter, PCSTR title)
 {
-    char file[MAX_PATH]; OPENFILENAMEA openFile; INT index;
+    CHAR file[MAX_PATH]; OPENFILENAMEA openFile; INT index;
     HWND edit = SettingsControl(editId);
     file[0] = 0;
     if (edit) GetWindowTextA(edit, file, sizeof file);
-    for (index = 0; index < (INT)sizeof openFile; ++index) ((char *)&openFile)[index] = 0;
+    for (index = 0; index < (INT)sizeof openFile; ++index) ((PSTR)&openFile)[index] = 0;
     openFile.lStructSize = sizeof openFile;
     openFile.hwndOwner   = GetParent(page);
     openFile.lpstrFilter = filter;
@@ -12774,11 +12774,11 @@ static VOID SettingsTextFontFill(VOID)
 }
 
 /* The selected item as the stored string: "" for the default. */
-static VOID SettingsTextFontGet(char *out, INT cap)
+static VOID SettingsTextFontGet(PSTR out, INT cap)
 {
     HWND control = SettingsControl(IDC_S_TEXTFONT);
     LRESULT selector = control ? SendMessageA(control, CB_GETCURSEL, 0, 0) : CB_ERR;
-    char text[NTVDMEX_PATH_MAX];
+    CHAR text[NTVDMEX_PATH_MAX];
     out[0] = 0;
     if (selector == CB_ERR) return;
     text[0] = 0;
@@ -12788,7 +12788,7 @@ static VOID SettingsTextFontGet(char *out, INT cap)
 
 static VOID SettingsTextFontPreview(VOID)
 {
-    char face[NTVDMEX_PATH_MAX], text[200];
+    CHAR face[NTVDMEX_PATH_MAX], text[200];
     HWND info = SettingsControl(IDC_S_TEXTFONT_INFO), view = SettingsControl(IDC_S_TEXTFONT_VIEW);
     SettingsTextFontGet(face, sizeof face);
     SysFontBuildInto(face, &g_TextFontPreview, &g_TextFontPreviewReport);
@@ -12810,7 +12810,7 @@ static VOID SettingsTextFontPreview(VOID)
     if (view) InvalidateRect(view, NULL, TRUE);
 }
 
-static VOID SettingsTextFontSelect(const char *face)
+static VOID SettingsTextFontSelect(PCSTR face)
 {
     HWND control = SettingsControl(IDC_S_TEXTFONT);
     LRESULT found;
@@ -12826,7 +12826,7 @@ static VOID SettingsTextFontSelect(const char *face)
 /* Two lines of 64 cells from the previewed 8x16 table, light grey on black, 1:1. */
 static VOID SettingsTextFontDraw(const DRAWITEMSTRUCT *drawItem)
 {
-    static const char text[] = "Hello, DOS!  0123456789  ";
+    static const CHAR text[] = "Hello, DOS!  0123456789  ";
     BYTE row[2][64];
     static BYTE pixels[32][64];
     struct { BITMAPINFOHEADER Header; RGBQUAD Palette[2]; } bitmapInfo;
@@ -12850,7 +12850,7 @@ static VOID SettingsTextFontDraw(const DRAWITEMSTRUCT *drawItem)
 
 static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
 {
-    char text[NTVDMEX_PATH_MAX]; INT index;
+    CHAR text[NTVDMEX_PATH_MAX]; INT index;
     for (index = 0; index < SET_COUNT; ++index) {
         const SET_DEF *definition = &g_SetDefinitions[index];
         HWND control = definition->ControlId ? SettingsControl(definition->ControlId) : NULL;
@@ -12913,7 +12913,7 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
    clicking OK should not silently reset the knob you were adjusting. */
 static VOID SettingsFromDialog(NTVDMEX_SETTINGS *settings)
 {
-    char text[NTVDMEX_PATH_MAX]; INT index;
+    CHAR text[NTVDMEX_PATH_MAX]; INT index;
     for (index = 0; index < SET_COUNT; ++index) {
         const SET_DEF *definition = &g_SetDefinitions[index];
         HWND control = definition->ControlId ? SettingsControl(definition->ControlId) : NULL;
@@ -12975,9 +12975,9 @@ static VOID SettingsFillCpuInfo(HWND dialog)
 {
     HWND control = GetDlgItem(dialog, IDC_S_CPUINFO);
     HKEY key;
-    char name[128]; DWORD size = sizeof name - 1, type = 0;
-    char out[160];
-    const char *source = name;
+    CHAR name[128]; DWORD size = sizeof name - 1, type = 0;
+    CHAR out[160];
+    PCSTR source = name;
     if (!control) return;
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
             "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
@@ -12988,7 +12988,7 @@ static VOID SettingsFillCpuInfo(HWND dialog)
         && type == REG_SZ && size) {
         name[size < sizeof name ? size : sizeof name - 1] = 0;
         while (*source == ' ') ++source;                 /* Intel pads the string with spaces */
-        {   char *cursor = out;                     /* ...inside it too: "CPU     E8600  @" */
+        {   PSTR cursor = out;                     /* ...inside it too: "CPU     E8600  @" */
             for (; *source && cursor < out + sizeof out - 1; ++source)
                 if (*source != ' ' || (cursor > out && cursor[-1] != ' ')) *cursor++ = *source;
             *cursor = 0; }                          /* s84: the row's label says what it is */
@@ -13005,7 +13005,7 @@ static INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM 
         INT controlId = GetDlgCtrlID((HWND)lParam);
         HWND lbl = controlId ? GetDlgItem(dialog, controlId + 1000) : NULL;
         if (lbl) {
-            char text[16];
+            CHAR text[16];
             wsprintfA(text, "%u%%", (UINT)SendMessageA((HWND)lParam, TBM_GETPOS, 0, 0));
             SetWindowTextA(lbl, text);
         }
@@ -13030,7 +13030,7 @@ static INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM 
     }
     if (message == WM_DRAWITEM && ((DRAWITEMSTRUCT *)lParam)->CtlID == IDC_S_SPEEDMODE) {
         DRAWITEMSTRUCT *drawItem = (DRAWITEMSTRUCT *)lParam;
-        char text[96];
+        CHAR text[96];
         INT selector = (drawItem->itemState & ODS_SELECTED) != 0;
         INT isOk  = (INT)drawItem->itemID < 0 || CpuSpeedIsAvailable((UINT)drawItem->itemID, HostCpuMhz());
         FillRect(drawItem->hDC, &drawItem->rcItem, GetSysColorBrush(selector && isOk ? COLOR_HIGHLIGHT : COLOR_WINDOW));
@@ -13165,7 +13165,7 @@ static INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARA
              experiment permanent. See the note by g_SettingsDisk. */
         SettingsToDialog(&g_SettingsDisk);
         SettingsShowPage(0);
-        {   char buffer[8]; DWORD got = 0; INT page;          /* SETSHOT_PATH: start on page N */
+        {   CHAR buffer[8]; DWORD got = 0; INT page;          /* SETSHOT_PATH: start on page N */
             HANDLE file = CreateFileA(SETSHOT_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
                                    OPEN_EXISTING, 0, NULL);
             if (file != INVALID_HANDLE_VALUE) {
@@ -13371,7 +13371,7 @@ static VOID HostPauseSet(INT isOn)
         if (!g_PauseWant) return;
         if (g_PauseSuspended) { g_PauseSuspended = 0; ResumeThread(g_HostCpu); ASYNC_CTX_RELEASE(); }
         InterlockedExchange(&g_PauseWant, 0);
-        {   char buffer[160], *cursor = buffer;
+        {   CHAR buffer[160], *cursor = buffer;
             cursor = LogPut(cursor, "PAUSE: resumed after "); cursor = LogDecimal(cursor, GetTickCount() - g_PauseMs);
             cursor = LogPut(cursor, " ms (pauses="); cursor = LogDecimal(cursor, g_PauseCount);
             cursor = LogPut(cursor, " parked-in-loop="); cursor = LogDecimal(cursor, g_PauseCooperative); cursor = LogPut(cursor, ")\r\n");
@@ -13465,7 +13465,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                    mine, not the code's -- the tell was a build whose new code path had
                    provably never run (its counter read zero) dying identically to one
                    whose had. Leave room. */
-                char keyLine[1024], *keyCursor = keyLine; UINT index;
+                CHAR keyLine[1024], *keyCursor = keyLine; UINT index;
                 lastKeyDump = nowTicks;
                 keyCursor = LogPut(keyCursor, "KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
                 for (index = 0; index < 8; ++index) { keyCursor = LogPut(keyCursor, index ? "," : ""); keyCursor = LogHex(keyCursor, g_KeyMessageHistogram[index]); }
@@ -13516,7 +13516,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         {   static DWORD lastMouseDump;
             DWORD nowTicks = GetTickCount();
             if (g_MouseI33SiteCount && (DWORD)(nowTicks - lastMouseDump) >= 5000) {
-                char mouseLine[768], *mouseCursor = mouseLine; UINT index;
+                CHAR mouseLine[768], *mouseCursor = mouseLine; UINT index;
                 lastMouseDump = nowTicks;
                 mouseCursor = LogPut(mouseCursor, "MOUSEI33 ax:");
                 for (index = 0; index < I33_AXN && g_MouseI33Ax[index].Count; ++index) {
@@ -13588,7 +13588,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 mouseCursor = LogPut(mouseCursor, "\r\n");
                 LogAppend(LOG_PATH, mouseLine, mouseCursor);
                 for (index = 0; index < g_MouseI33SiteCount && index < I33_SITEN; ++index) {
-                    char siteLine[256], *siteCursor = siteLine;
+                    CHAR siteLine[256], *siteCursor = siteLine;
                     siteCursor = LogPut(siteCursor, "MOUSEI33 site src=");  siteCursor = LogHexByte(siteCursor, g_MouseI33Site[index].Source);
                     siteCursor = LogPut(siteCursor, " lin=0x");   siteCursor = LogHex(siteCursor, g_MouseI33Site[index].Linear);
                     siteCursor = LogPut(siteCursor, " cs=0x");    siteCursor = LogHex(siteCursor, g_MouseI33Site[index].Cs);
@@ -13773,17 +13773,17 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                      identical, which is the exact failure this codebase keeps paying
                      for. Derive the offset from the string so the next path change
                      cannot do it again, and SAY SO when a write fails. */
-                char name[] = "shot00.bmp";
-                const char *path;
-                name[4] = (char)('0' + (capSeq / 10) % 10);
-                name[5] = (char)('0' + capSeq % 10);
+                CHAR name[] = "shot00.bmp";
+                PCSTR path;
+                name[4] = (CHAR)('0' + (capSeq / 10) % 10);
+                name[5] = (CHAR)('0' + capSeq % 10);
                 /* ── ...AND THE SAME FRAME AS TEXT, when asked. A picture cannot say
                      whether a missing line was never written or merely never drawn,
                      and that distinction is where three wrong guesses went on
                      QBasic's empty file list. Gated: no run pays for it unaltered. */
                 if (g_TextDump && g_Video.ModeKind == VIDEO_KIND_TEXT && !g_Video.IsVesa) {
-                    static char tsnap[8192];
-                    char tname[] = "shot00.txt";
+                    static CHAR tsnap[8192];
+                    CHAR tname[] = "shot00.txt";
                     INT textLength;
                     tname[4] = name[4]; tname[5] = name[5];
                     textLength = VddVideoTextSnapshot(&g_Video, tsnap, sizeof tsnap);
@@ -13803,7 +13803,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                         PlanesDumpBeside(path);
                 }
                 else if (!capFailed) {
-                    char errorLine[320], *errorCursor = errorLine;
+                    CHAR errorLine[320], *errorCursor = errorLine;
                     capFailed = 1;
                     errorCursor = LogPut(errorCursor, "CAPTURE: save_bmp FAILED for ");
                     errorCursor = LogPut(errorCursor, path);
@@ -13966,7 +13966,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         }
         /* #153: Open Recent's items are a range, like the combos above. */
         if (LOWORD(wParam) >= IDM_RECENT_0 && LOWORD(wParam) < IDM_RECENT_0 + MRU_MAX) {
-            char list[MRU_MAX][MAX_PATH];
+            CHAR list[MRU_MAX][MAX_PATH];
             INT numerator = MruLoad(list), itemIndex = LOWORD(wParam) - IDM_RECENT_0;
             if (itemIndex < numerator) OpenProgram(window, list[itemIndex]);
             return 0;
@@ -14004,7 +14004,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
              click on a menu is not consent for that. */
         case IDM_FILE_INSTALL:
         case IDM_FILE_UNINSTALL: {
-            char message[2048]; INT want = (LOWORD(wParam) == IDM_FILE_INSTALL), isOk;
+            CHAR message[2048]; INT want = (LOWORD(wParam) == IDM_FILE_INSTALL), isOk;
             if (MessageBoxA(window, want
                     ? "Make NTVDMEX this machine's virtual DOS machine?\n\n"
                       "Every MS-DOS and 16-bit Windows program will then start "
@@ -14022,7 +14022,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                         MB_OK | (isOk ? MB_ICONINFORMATION : MB_ICONERROR));
             return 0; }
         case IDM_FILE_STATUS: {
-            char message[2048];
+            CHAR message[2048];
             message[0] = 0;
             InstallStatusText(message, sizeof message);
             MessageBoxA(window, message, "NTVDMEX", MB_OK | MB_ICONINFORMATION);
@@ -14291,7 +14291,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
            guest sees none of it -- a drag that also clicked in the program would do two
            things at once. A right click cancels, as in the console. */
         if (g_MarkMode) {
-            INT cellColumn, cellRow, clientX = (short)LOWORD(lParam), clientY = (short)HIWORD(lParam);
+            INT cellColumn, cellRow, clientX = (INT16)LOWORD(lParam), clientY = (INT16)HIWORD(lParam);
             if (message == WM_RBUTTONDOWN) { SelectionClear(); return 0; }
             if (message == WM_LBUTTONDOWN && ClientToCell(clientX, clientY, &cellColumn, &cellRow)) {
                 SetCapture(window);
@@ -14324,7 +14324,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
            ⚠ And gated on rule 1 via InputCaptureSet: for a guest that never touched
              INT 33h this is an ordinary click on an ordinary window. */
         if (message == WM_LBUTTONDOWN && !g_Captured && CaptureAllowed()
-            && IsPointOverVideo(window, (short)LOWORD(lParam), (short)HIWORD(lParam))) {
+            && IsPointOverVideo(window, (INT16)LOWORD(lParam), (INT16)HIWORD(lParam))) {
             InputCaptureSet(window, 1);
             return 0;
         }
@@ -14345,7 +14345,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
           }
           if (clientWidth < 1) clientWidth = 1;
           if (clientHeight < 1) clientHeight = 1;
-          frameX = ((short)LOWORD(lParam) - originX) * frameWidth / clientWidth; frameY = ((short)HIWORD(lParam) - originY) * frameHeight / clientHeight;
+          frameX = ((INT16)LOWORD(lParam) - originX) * frameWidth / clientWidth; frameY = ((INT16)HIWORD(lParam) - originY) * frameHeight / clientHeight;
           if (frameX < 0) frameX = 0;
           else if (frameX >= frameWidth) frameX = frameWidth - 1;
           if (frameY < 0) frameY = 0;
@@ -14380,7 +14380,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
              One line, no allocation, safe from this thread (all file-scope counters).
            ⚠ Read `yld` against `raise-att`: they are equal by construction when the
              keyboard is stealing the timer's slot, which is the whole mechanism. */
-        {   char closeLine[512], *closeCursor = closeLine;
+        {   CHAR closeLine[512], *closeCursor = closeLine;
             closeCursor = LogPut(closeCursor, "CLOSE: keyirq="); closeCursor = LogHex(closeCursor, (DWORD)g_KeyIrqRetry);
             closeCursor = LogPut(closeCursor, " courier=");      closeCursor = LogHex(closeCursor, (DWORD)g_CourierOn);
             closeCursor = LogPut(closeCursor, " irq0_inj=");     closeCursor = LogHex(closeCursor, g_Irq0Injected);
@@ -14422,7 +14422,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         /* #225: ...AND THE SPEED LIMIT'S, for the same reason. The user plays with the
              throttle on and closes the window, so "slow in-game" came back with no
              duty, no holds and no per-second clock. Second line, same rules. */
-        {   char closeLine[2048], *closeCursor = closeLine; UINT second; DWORD last = 0;   /* 90 x 9 + ~350 */
+        {   CHAR closeLine[2048], *closeCursor = closeLine; UINT second; DWORD last = 0;   /* 90 x 9 + ~350 */
             closeCursor = LogPut(closeCursor, "CLOSE2: cpuspd idx="); closeCursor = LogHex(closeCursor, (DWORD)g_CpuSpeedIndex);
             closeCursor = LogPut(closeCursor, " duty_bp=");     closeCursor = LogHex(closeCursor, (DWORD)g_CpuSpeedDuty);
             closeCursor = LogPut(closeCursor, " duty_rm_bp=");  closeCursor = LogHex(closeCursor, (DWORD)g_CpuSpeedDutyRm);
@@ -14524,7 +14524,7 @@ static DWORD WINAPI UiThread(LPVOID argument)
        ⚠ Behind a flag: six dialogs at every startup is a cost no shipped run needs
          to pay, and this answers a question that only changes when the .rc does. */
     if (GetFileAttributesA(DLGCHECK_FLAG) != INVALID_FILE_ATTRIBUTES) {
-        char createLine[512], *createCursor = createLine;
+        CHAR createLine[512], *createCursor = createLine;
         INT pageIndex;
         HINSTANCE hinst = GetModuleHandleA(NULL);
         for (pageIndex = 0; pageIndex < NTVDMEX_PAGE_COUNT; ++pageIndex) {
@@ -14582,7 +14582,7 @@ static DWORD WINAPI UiThread(LPVOID argument)
          at exit instead counted every X-button quit and every guest crash as a
          failed start, and three play-tests uninstalled the host. */
     RecoveryOk();
-    {   char stageLine[96], *stageCursor = stageLine;
+    {   CHAR stageLine[96], *stageCursor = stageLine;
         stageCursor = LogPut(stageCursor, "STAGE0: window up -> start counted as SUCCEEDED (GH #132)\r\n");
         LogAppend(LOG_PATH, stageLine, stageCursor); }
     HostAutoFullscreenConsider(g_Window, g_Video.ModeKind != VIDEO_KIND_TEXT || g_Video.IsVesa);
@@ -14692,7 +14692,7 @@ sited:
         DWORD slot, key = (cs << 16) ^ ip;
         for (slot = 0; slot < g_IoSiteLogged; ++slot) if (seen[slot] == key) return;
         seen[g_IoSiteLogged++] = key;
-        { char buffer[192], *cursor = buffer;
+        { CHAR buffer[192], *cursor = buffer;
           const volatile BYTE *code = (const volatile BYTE *)((cs << 4) + ((ip - 6) & 0xFFFF));
           BYTE temporary[16]; UINT byteIndex;
           for (byteIndex = 0; byteIndex < 16; ++byteIndex) temporary[byteIndex] = code[byteIndex];
@@ -15070,7 +15070,7 @@ static VOID HostPitSync(VOID)
 static VOID PitLatchNote(BYTE command)
 {
     UINT32 total, count, first, base, index, column = 0;
-    char buffer[1200], *cursor = buffer;
+    CHAR buffer[1200], *cursor = buffer;
     /* ⚠ The ring is opt-in (cfg\pitlatch.flag) and so is this: the dump is ~43
          LogAppend calls issued from V86HostOut, i.e. FILE I/O UNDER g_Lock from inside
          the planar interpreter. Fine for a debugging run, not for a build a person
@@ -15121,7 +15121,7 @@ static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port,
     if (port == 0x40 && !isIn && g_PitReloadLog < 8) {
         static WORD previous = 0;
         if (g_Pit.Reload != previous) {
-            char buffer[128], *cursor = buffer;
+            CHAR buffer[128], *cursor = buffer;
             previous = g_Pit.Reload; g_PitReloadLog++;
             cursor = LogPut(cursor, "PIT-RELOAD 0x"); cursor = LogHex(cursor, (DWORD)g_Pit.Reload);
             cursor = LogPut(cursor, " (hz=0x");
@@ -15167,7 +15167,7 @@ static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port,
         && ((port >= 0x220 && port <= 0x22F)      /* Sound Blaster            */
          || (port >= 0x388 && port <= 0x389)      /* AdLib / OPL              */
          || (port >= 0x330 && port <= 0x331))) {  /* MPU-401 MIDI             */
-        char sb2[128], *lineCursor = sb2;
+        CHAR sb2[128], *lineCursor = sb2;
         ++g_SoundIoLogged;
         lineCursor = LogPut(lineCursor, "SNDIO "); lineCursor = LogPut(lineCursor, isIn ? "in  0x" : "out 0x");
         lineCursor = LogHex(lineCursor, port);
@@ -15213,7 +15213,7 @@ static DWORD HostIoLoopBurst(volatile BYTE *tib, VDD_BUS *bus,
     DWORD cx, iterations, mask = is32 ? 0xFFFFFFFFu : 0xFFFFu;
     INT disp;
     if (segment[ipNext & mask] != 0xE2) return 0;           /* LOOP rel8 only        */
-    disp = (signed char)segment[(ipNext + 1) & mask];
+    disp = (INT8)segment[(ipNext + 1) & mask];
     if (((ipNext + 2 + disp) & mask) != (ioStart & mask)) return 0;
     cx = VDM_REG(tib, VTIB_ECX) & mask;
     iterations  = (cx - 1) & mask;                                /* body runs c-1 more    */
@@ -15303,7 +15303,7 @@ static VOID RetraceIdle(VOID)
     if (!((code[0] == 0xA8 || code[0] == 0x24) && code[1] == 0x08
           && (code[2] == 0x74 || code[2] == 0x75 || code[2] == 0xE1 || code[2] == 0xE0)))
         return;
-    {   INT target = (INT)((ip + 4 + (signed char)code[3]) & 0xFFFF);
+    {   INT target = (INT)((ip + 4 + (INT8)code[3]) & 0xFFFF);
         if (target > (INT)ip || (INT)ip - target > 3) return;    /* must jump back to the IN */ }
     /* A LOOP whose CX runs out THIS time round exits on its own: leave it be. (It
        decrements first, so CX == 1 is the last pass.) Sleeping otherwise only spends
@@ -15886,10 +15886,10 @@ static DWORD  g_ModeYLatchOk = 0, g_ModeYLatchUnsolved = 0, g_ModeYLatchDescript
 /* VirtualQuery a probe address into the log -- the shape of the A0000 region after each
    step is the only thing that distinguishes "the range is reserved by the VDM" from
    "we asked for it wrongly", and those need completely different answers. */
-static VOID ModeYRemapProbe(const char *when, DWORD addr)
+static VOID ModeYRemapProbe(PCSTR when, DWORD addr)
 {
     MEMORY_BASIC_INFORMATION mbi;
-    char buffer[200], *cursor = buffer;
+    CHAR buffer[200], *cursor = buffer;
     cursor = LogPut(cursor, "MODEY-REMAP probe "); cursor = LogPut(cursor, when);
     cursor = LogPut(cursor, " @0x"); cursor = LogHex(cursor, addr);
     if (VirtualQuery((LPCVOID)(ULONG_PTR)addr, &mbi, sizeof mbi) == sizeof mbi) {
@@ -15909,9 +15909,9 @@ static VOID ModeYRemapProbe(const char *when, DWORD addr)
      every few milliseconds and there is an instant during the swap when it is unmapped
      -- and every LogWrite() before the preamble TRUNCATES the file. Two separate
      reports have already been lost to that. */
-static char  g_RemapReport[2048];
-static char *g_RemapReportCursor = g_RemapReport;
-static VOID ModeYRemapEmit(const char *begin, const char *end)
+static CHAR  g_RemapReport[2048];
+static PSTR g_RemapReportCursor = g_RemapReport;
+static VOID ModeYRemapEmit(PCSTR begin, PCSTR end)
 {
     while (begin < end && g_RemapReportCursor < g_RemapReport + sizeof g_RemapReport - 1) *g_RemapReportCursor++ = *begin++;
     *g_RemapReportCursor = 0;
@@ -15923,9 +15923,9 @@ static VOID ModeYRemapFlushReport(VOID)
     SerialOut(g_RemapReport, g_RemapReportCursor);
     g_RemapReportCursor = g_RemapReport;
 }
-static VOID ModeYRemapLog(const char *what, DWORD error)
+static VOID ModeYRemapLog(PCSTR what, DWORD error)
 {
-    char buffer[160], *cursor = buffer;
+    CHAR buffer[160], *cursor = buffer;
     cursor = LogPut(cursor, "MODEY-REMAP "); cursor = LogPut(cursor, what);
     if (error) { cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, error); }
     cursor = LogPut(cursor, "\r\n"); ModeYRemapEmit(buffer, cursor);
@@ -16141,10 +16141,10 @@ static VOID ModeYBailNote(DWORD cs, DWORD ip, const volatile BYTE *bytes)
 static VOID ModeYTimelineReport(VOID)
 {
     static INT done = 0;
-    char buffer[1400], *cursor = buffer;
+    CHAR buffer[1400], *cursor = buffer;
     LARGE_INTEGER now; UINT64 cpu; DWORD microsecondsRun, second, last = 0;
     INT row;
-    static const char *names[9] = { "sel", "swap", "fan", "fanB", "us", "flip", "fanN", "ins", "ius" };
+    static PCSTR names[9] = { "sel", "swap", "fan", "fanB", "us", "flip", "fanN", "ins", "ius" };
     if (done || !g_ModeYTimelineT0) { if (!done) HostProfileDump(); return; }
     done = 1;
     HostProfileDump();
@@ -16503,7 +16503,7 @@ static VOID ModeYRemapWriteMode(PVOID context, INT writeMode)
                 if (row >= 168 && row < 200) ++nbar;
             }
             (VOID)uniq;
-            { char lb2[224], *lineCursor = lb2;
+            { CHAR lb2[224], *lineCursor = lb2;
               ++g_ModeYLatchDescriptor;
               lineCursor = LogPut(lineCursor, "MODEY-LATCH burst changed="); lineCursor = LogHex(lineCursor, count);
               lineCursor = LogPut(lineCursor, " span=0x"); lineCursor = LogHex(lineCursor, low);
@@ -16875,7 +16875,7 @@ static const V86_CPU *g_InterpreterCpu;
    unmasked OFFSET (s69, Lemmings' blit to a 0xD0000 hole). Bounded; graceful. */
 static VOID InterpreterMemoryBadNote(UINT32 linear, INT write)
 {
-    char buffer[224], *cursor = buffer;
+    CHAR buffer[224], *cursor = buffer;
     if (g_InterpreterMemoryBadLogged >= 12) return;
     g_InterpreterMemoryBadLogged++;
     cursor = LogPut(cursor, "IMEM-OOR "); cursor = LogPut(cursor, write ? "W" : "R"); cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, linear);
@@ -16922,9 +16922,9 @@ static UINT32 HostGuestPc(VOID) { return g_V86InstructionPointer; }
 static struct { WORD Cs, Ip, Sp, Ss; BYTE Bytes[6]; } g_ModeYRing[MY_RING];
 static UINT g_ModeYRingPosition = 0;
 static INT      g_ModeYRingDumped = 0;
-static VOID ModeYRingDump(const char *why)
+static VOID ModeYRingDump(PCSTR why)
 {
-    char lineBuffer[160], *cursor;
+    CHAR lineBuffer[160], *cursor;
     UINT age, byteIndex;
     if (g_ModeYRingDumped) return;
     g_ModeYRingDumped = 1;
@@ -17011,7 +17011,7 @@ static VOID HostProfileStart(VOID)
 }
 static VOID HostProfileDump(VOID)
 {
-    char buffer[160], *cursor;
+    CHAR buffer[160], *cursor;
     INT rank;
     if (!g_HostProfile) return;
     g_HostProfileOn = 0; Sleep(5);
@@ -17274,7 +17274,7 @@ static INT g_VehCount = 0;
      the old shared cb[1024] silently. */
 static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
 {
-    static char lineBuffer[2048]; char *cursor = lineBuffer;
+    static CHAR lineBuffer[2048]; PSTR cursor = lineBuffer;
     InterlockedIncrement(&g_VehFatal);                 /* run 52: a real fault WAS delivered */
     cursor = LogPut(cursor, g_DpmiPm ? "\r\nDPMI FATAL: exception code=0x"
                           : "\r\nHOST FATAL (real-mode guest): exception code=0x");
@@ -17332,7 +17332,7 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
          printing plausible-looking rubbish -- an instrument that invents its own frame
          is this project's most expensive recurring mistake. */
     cursor = LogPut(cursor, "  last WOW32 call ENTERED: id=0x"); cursor = LogHex(cursor, g_WowLastId);
-    { const char *name = Wow32Name(g_WowLastId);
+    { PCSTR name = Wow32Name(g_WowLastId);
       if (name) { cursor = LogPut(cursor, " "); cursor = LogPut(cursor, name); } }
     cursor = LogPut(cursor, " from=0x"); cursor = LogHex(cursor, g_WowLastFrom);
     cursor = LogPut(cursor, " (it may have COMPLETED -- the log line is only written with the result,\r\n"
@@ -17378,7 +17378,7 @@ static LONG g_RmFaultSeen = 0;
 
 static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
 {
-    static char lineBuffer[1024]; char *cursor = lineBuffer;
+    static CHAR lineBuffer[1024]; PSTR cursor = lineBuffer;
     EXCEPTION_RECORD *record = pointers->ExceptionRecord;
     CONTEXT *context = pointers->ContextRecord;
     if (!g_DpmiPm) {
@@ -17631,7 +17631,7 @@ veh_fatal:
      rig watcher collect the evidence either way. */
 static LONG WINAPI HostUnhandledFilter(EXCEPTION_POINTERS *pointers)
 {
-    static char lineBuffer[128]; char *cursor = lineBuffer;
+    static CHAR lineBuffer[128]; PSTR cursor = lineBuffer;
     /* ── NO VEH ON THIS OS (Windows 2000): the filter IS the VEH. ─────────────────
          With no vectored handler installed, a fault reaches here after the (empty)
          SEH chain, one dispatch step later than the VEH saw it on XP but with the same
@@ -17653,7 +17653,7 @@ static LONG WINAPI HostUnhandledFilter(EXCEPTION_POINTERS *pointers)
    the batch dumps the log and locks release. Makes every DPMI run self-terminating. */
 static DWORD WINAPI DpmiWatchdog(LPVOID param)
 {
-    static char lineBuffer[512]; char *cursor = lineBuffer; LONG prev = -1;
+    static CHAR lineBuffer[512]; PSTR cursor = lineBuffer; LONG prev = -1;
     LONG modeYGeneration = (LONG)(ULONG_PTR)param;          /* see g_DpmiWatchdogGeneration */
     /* ── ★★ AN INSTRUMENT MUST BE ABLE TO PREEMPT WHAT IT INSTRUMENTS. ─────────────
          The thread that RUNS THE GUEST is raised to THREAD_PRIORITY_ABOVE_NORMAL (or
@@ -17891,7 +17891,7 @@ static DWORD WINAPI DpmiWatchdog(LPVOID param)
         cursor = lineBuffer; cursor = LogPut(cursor, "  ==> DOS OUTPUT (wedged): [\r\n");
         LogAppend(WDLOG_PATH, lineBuffer, cursor);
         while (offset < total) {
-            DWORD length = total - offset; char slice[257];
+            DWORD length = total - offset; CHAR slice[257];
             if (length > 256) length = 256;
             { DWORD index; for (index = 0; index < length; ++index) slice[index] = g_Machine->Output[offset + index]; }
             LogAppend(WDLOG_PATH, slice, slice + length);
@@ -18075,17 +18075,17 @@ static VOID DpmiSegmentToDescriptorForget(WORD selector)
      and compare. Same code, same moment, one variable: which kind of launch this is.
      That is the only way to tell "NtSetLdtEntries needs more VDM setup" apart from
      "a WOW launch leaves the process in a different state". */
-static VOID WowProbeLdtMatrix(const char *tag)
+static VOID WowProbeLdtMatrix(PCSTR tag)
 {
-    static const struct { const char *Description; DWORD Base, Limit; BYTE Access, Flags; INT Index; }
+    static const struct { PCSTR Description; DWORD Base, Limit; BYTE Access, Flags; INT Index; }
     cases[] = {
         { "idx3  code small",  0x10000, 0x0FFF, 0xFA, 0, 3  },
         { "idx8  code small",  0x10000, 0x0FFF, 0xFA, 0, 8  },
         { "idx8  data small",  0x10000, 0x0FFF, 0xF2, 0, 8  },
         { "idx9  data 64K",    0x10000, 0xFFFF, 0xF2, 0, 9  },
     };
-    char message[300], *cursor;
-    size_t caseIndex;
+    CHAR message[300], *cursor;
+    SIZE_T caseIndex;
     for (caseIndex = 0; caseIndex < sizeof cases / sizeof cases[0]; ++caseIndex) {
         DWORD low, high; LONG status;
         WORD selector = (WORD)((cases[caseIndex].Index << 3) | 7);
@@ -18176,7 +18176,7 @@ static DWORD WowFindLdtBase(VOID)
     DWORD low1, high1, low2, high2;
     INT index1, index2;
     BYTE *addr = NULL;
-    char message[320], *cursor;
+    CHAR message[320], *cursor;
 
     if (g_WowLdtBase) return g_WowLdtBase;
     if (g_LdtNext + 2 >= DPMI_LDT_MAX) return 0;
@@ -18348,7 +18348,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *ecs, WORD *eip,
     enum { WOW_SELECTOR_PARAS = 0x1000 };        /* 64 KB -- the whole scratch selector */
     NE_MODULE *module = &g_WowModule[0];
     BYTE *image = g_WowImage[0];
-    char message[400], *cursor;
+    CHAR message[400], *cursor;
     WORD sseg = 0, smax = 0;
     DWORD imglen;
     INT index;
@@ -18948,13 +18948,13 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *ecs, WORD *eip,
              so: "Missing 16-bit system module ... WOWEXEC.EXE". Ask the host where
              Windows actually is rather than hardcoding it -- a real WOW launch
              inherits the NT environment, which is exactly these two directories. */
-        {   char pathValue[MAX_PATH * 2 + 2]; UINT length;
+        {   CHAR pathValue[MAX_PATH * 2 + 2]; UINT length;
             /* s89 (#270): ★ AND SYSTEMROOT, which a real WOW VDM inherits from
                  NT's environment. krnl386 builds its SYSTEM directory from it
                  (observed; see WOW32 0x7b): without it, 16-bit
                  GetSystemDirectory answered "\SYSTEM" with no drive. One entry,
                  through `extra`, whose cap note keeps the tail krnl386 reads. */
-            char wowroot[MAX_PATH + 16] = "SYSTEMROOT=";
+            CHAR wowroot[MAX_PATH + 16] = "SYSTEMROOT=";
             if (!GetWindowsDirectoryA(wowroot + 11, MAX_PATH)) wowroot[0] = 0;
             length = GetSystemDirectoryA(pathValue, MAX_PATH);
             if (length && length < MAX_PATH) { pathValue[length] = ';';
@@ -19007,7 +19007,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *ecs, WORD *eip,
 
 static VOID WowProbeSelectors(VOID)
 {
-    char message[600], *cursor;
+    CHAR message[600], *cursor;
     INT module2, index;
     if (!g_WowModuleCount) return;
     cursor = message; cursor = LogPut(cursor, "WOWTRY: selector stage, modules="); cursor = LogHex(cursor, (DWORD)g_WowModuleCount);
@@ -19131,7 +19131,7 @@ static VOID DpmiInstallDefaultPmHandlers(DOS_MACHINE *machine)
     WORD segment = 0, maximum = 0;
     volatile BYTE *stub;
     INT vector, index;
-    char lineBuffer[160], *cursor = lineBuffer;
+    CHAR lineBuffer[160], *cursor = lineBuffer;
     /* A SECOND CLIENT (s80): the table is the host's and outlives the first client.
        If its memory survived teardown (the host pool), point every vector back at it.
        If it came from DOS memory, teardown gave the block back to the parent and kept
@@ -19268,7 +19268,7 @@ static VOID DpmiInstall(INT index)
                 state2 = VdmInstallLdtEntries(selector, clo, chi, selector, clo, chi);
             }
             {
-                char lineBuffer[256], *cursor = lineBuffer;
+                CHAR lineBuffer[256], *cursor = lineBuffer;
                 cursor = LogPut(cursor, "DPMI-LDT: install REJECTED sel 0x"); cursor = LogHex(cursor, selector);
                 cursor = LogPut(cursor, " base 0x"); cursor = LogHex(cursor, g_Ldt[index].Base);
                 cursor = LogPut(cursor, " limit 0x"); cursor = LogHex(cursor, want);
@@ -19535,7 +19535,7 @@ static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT d32)
     DWORD end, patched = 0, rej = 0, ntbl = 0;   /* ntbl: jump-table entries skipped -- see the guard */
     DWORD patchedOffsets[12], npo = 0;               /* the first few patched offsets, for the log */
     DWORD nlog = 0;                      /* how many sites we have dumped BYTES for */
-    char lineBuffer[320], *cursor = lineBuffer;
+    CHAR lineBuffer[320], *cursor = lineBuffer;
     /* ► NEVER PATCH THE IVT / BIOS DATA AREA, even when the client declares a base-0
          code selector -- and Doom does exactly that (sel 0x67, base 0, limit 0xFFFF),
          which made the first version of this scan rewrite 16 sites in linear 0..0xFFFF.
@@ -19726,7 +19726,7 @@ static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT d32)
                                      out -- this project's most repeated lesson. */
                                 ++ntbl;
                                 if (ntbl <= 8) {
-                                    char pointerLine[192], *pointerCursor = pointerLine;
+                                    CHAR pointerLine[192], *pointerCursor = pointerLine;
                                     pointerCursor = LogPut(pointerCursor, "DPMI: NOT patching 0x"); pointerCursor = LogHex(pointerCursor, linear);
                                     pointerCursor = LogPut(pointerCursor, " vec=0x"); pointerCursor = LogHexByte(pointerCursor, memory[index+1]);
                                     pointerCursor = LogPut(pointerCursor, " -- inside aligned pointer 0x"); pointerCursor = LogHex(pointerCursor, word);
@@ -19767,7 +19767,7 @@ static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT d32)
                          Patching was the thing taking that away. */
                       if (memory[index+1] >= 0x34 && memory[index+1] <= 0x3F) {
                           if (rej < 16) {
-                              char fixupLine[160], *fixupCursor = fixupLine;
+                              CHAR fixupLine[160], *fixupCursor = fixupLine;
                               fixupCursor = LogPut(fixupCursor, "DPMI: NOT patching 0x"); fixupCursor = LogHex(fixupCursor, linear);
                               fixupCursor = LogPut(fixupCursor, " vec=0x"); fixupCursor = LogHexByte(fixupCursor, memory[index+1]);
                               fixupCursor = LogPut(fixupCursor, " -- FP EMULATOR / fixup range 34..3F,"
@@ -19813,7 +19813,7 @@ static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT d32)
                                         || vector == 0x08 || vector == 0x15);
                         if (!serviced) {
                             if (rej++ < 16) {
-                                char unservicedLine[176], *unservicedCursor = unservicedLine;
+                                CHAR unservicedLine[176], *unservicedCursor = unservicedLine;
                                 unservicedCursor = LogPut(unservicedCursor, "DPMI: NOT patching 0x"); unservicedCursor = LogHex(unservicedCursor, linear);
                                 unservicedCursor = LogPut(unservicedCursor, " vec=0x"); unservicedCursor = LogHexByte(unservicedCursor, vector);
                                 unservicedCursor = LogPut(unservicedCursor, " -- no PM service arm for it, so a BOP here"
@@ -19845,7 +19845,7 @@ static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT d32)
                       if (!X86IsIntSiteReal((const BYTE *)(ULONG_PTR)address, index,
                                                 rend - address, d32)) {
                           if (rej++ < 16) {
-                              char midInstructionLine[128], *midInstructionCursor = midInstructionLine;
+                              CHAR midInstructionLine[128], *midInstructionCursor = midInstructionLine;
                               midInstructionCursor = LogPut(midInstructionCursor, "DPMI: NOT an INT site (mid-instruction) 0x");
                               midInstructionCursor = LogHex(midInstructionCursor, linear);
                               midInstructionCursor = LogPut(midInstructionCursor, " vec=0x"); midInstructionCursor = LogHexByte(midInstructionCursor, memory[index+1]);
@@ -19875,7 +19875,7 @@ static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT d32)
                            generated, not loaded). A site list without bytes is a claim you
                            cannot check. Bounded to the first 12, like po[]. */
                       if (nlog < 24) {              /* its OWN counter: npo saturates at 12 */
-                          char sb2[192], *siteCursor = sb2;
+                          CHAR sb2[192], *siteCursor = sb2;
                           ++nlog;
                           siteCursor = LogPut(siteCursor, dry ? "DPMI: WOULD PATCH 0x" : "DPMI: PATCHING 0x"); siteCursor = LogHex(siteCursor, linear);
                           siteCursor = LogPut(siteCursor, " (+0x"); siteCursor = LogHex(siteCursor, linear - base);
@@ -19926,7 +19926,7 @@ static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT d32)
 static VOID DpmiLeLearn(const BYTE *buffer, DWORD length)
 {
     DWORD index;
-    char lineBuffer[192], *cursor;
+    CHAR lineBuffer[192], *cursor;
     if (!buffer || length < 0x200) return;
 #define LE32(o) ((DWORD)buffer[(o)] | ((DWORD)buffer[(o)+1] << 8) | ((DWORD)buffer[(o)+2] << 16) | ((DWORD)buffer[(o)+3] << 24))
 #define LE16(o) ((DWORD)buffer[(o)] | ((DWORD)buffer[(o)+1] << 8))
@@ -20019,8 +20019,8 @@ static VOID DpmiBreakpointLoad(VOID)
 {
     HANDLE handle = CreateFileA(PMBP_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                            NULL, OPEN_EXISTING, 0, NULL);
-    char buffer[8192]; DWORD bytesRead = 0, index = 0;
-    char lineBuffer[256], *cursor = lineBuffer;
+    CHAR buffer[8192]; DWORD bytesRead = 0, index = 0;
+    CHAR lineBuffer[256], *cursor = lineBuffer;
     INT countBefore = g_BreakpointCount;
     if (handle == INVALID_HANDLE_VALUE) return;
     ReadFile(handle, buffer, sizeof buffer - 1, &bytesRead, NULL);
@@ -20037,7 +20037,7 @@ static VOID DpmiBreakpointLoad(VOID)
             if (index >= bytesRead || buffer[index] == '\r' || buffer[index] == '\n') break;
             if (buffer[index] == '#') { while (index < bytesRead && buffer[index] != '\n') ++index; break; }
             while (index < bytesRead) {
-                char character = buffer[index];
+                CHAR character = buffer[index];
                 INT digit = (character >= '0' && character <= '9') ? character - '0'
                       : (character >= 'a' && character <= 'f') ? character - 'a' + 10
                       : (character >= 'A' && character <= 'F') ? character - 'A' + 10 : -1;
@@ -20102,7 +20102,7 @@ static VOID DpmiBreakpointLoad(VOID)
      resolving twice into a wild address. */
 static VOID DpmiBreakpointResolveCodeBase(DWORD base)
 {
-    char lineBuffer[200], *cursor;
+    CHAR lineBuffer[200], *cursor;
     INT index;
     for (index = 0; index < g_BreakpointCount; ++index) {
         DWORD offset;
@@ -20121,7 +20121,7 @@ static VOID DpmiBreakpointResolveCodeBase(DWORD base)
 
 static VOID DpmiBreakpointResolveSegment(UINT segno, DWORD base)
 {
-    char lineBuffer[200], *cursor;
+    CHAR lineBuffer[200], *cursor;
     INT index;
     for (index = 0; index < g_BreakpointCount; ++index) {
         DWORD offset;
@@ -20159,7 +20159,7 @@ static VOID DpmiBreakpointArm(VOID)
            The fault dump named it outright -- EDX held 0x33746e69, the ASCII "int3"
            from that very string. zput/zhex are caller-sized and check nothing, so
            the buffer has to be big enough for the LONGEST line, not the usual one. */
-        char lineBuffer[320], *cursor = lineBuffer;
+        CHAR lineBuffer[320], *cursor = lineBuffer;
         if (linear < 0x600) continue;
         /* ── ⚠★ AN UNRESOLVED SEGMENT-RELATIVE ADDRESS IS NOT A LINEAR ADDRESS. ────
              Mode bit 1 means "<addr> is an OFFSET into krnl386's PM copy of a
@@ -20471,8 +20471,8 @@ static VOID Wow32ModeLoad(VOID)
 {
     HANDLE handle = CreateFileA(WOWMODE_PATH, GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
-    char buffer[8192]; DWORD bytesRead = 0, index = 0;
-    char lineBuffer[256], *cursor = lineBuffer;
+    CHAR buffer[8192]; DWORD bytesRead = 0, index = 0;
+    CHAR lineBuffer[256], *cursor = lineBuffer;
     if (handle == INVALID_HANDLE_VALUE) return;
     ReadFile(handle, buffer, sizeof buffer - 1, &bytesRead, NULL);
     CloseHandle(handle);
@@ -20490,7 +20490,7 @@ static VOID Wow32ModeLoad(VOID)
             while (index < bytesRead && (buffer[index] == ' ' || buffer[index] == '\t')) ++index;
             if (index >= bytesRead || buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == '#') break;
             while (index < bytesRead) {
-                char character = buffer[index];
+                CHAR character = buffer[index];
                 INT digit = (character >= '0' && character <= '9') ? character - '0'
                       : (character >= 'a' && character <= 'f') ? character - 'a' + 10
                       : (character >= 'A' && character <= 'F') ? character - 'A' + 10 : -1;
@@ -20530,8 +20530,8 @@ static VOID Wow32ReturnLoad(VOID)
          reproduced in the loader written after fixing it. The rule is the same in
          both places and it is now enforced in both: read enough, and shout when the
          file was longer than the buffer. */
-    char buffer[8192]; DWORD bytesRead = 0, index = 0;
-    char lineBuffer[256], *cursor = lineBuffer;
+    CHAR buffer[8192]; DWORD bytesRead = 0, index = 0;
+    CHAR lineBuffer[256], *cursor = lineBuffer;
     if (handle == INVALID_HANDLE_VALUE) return;
     ReadFile(handle, buffer, sizeof buffer - 1, &bytesRead, NULL);
     CloseHandle(handle);
@@ -20549,7 +20549,7 @@ static VOID Wow32ReturnLoad(VOID)
             while (index < bytesRead && (buffer[index] == ' ' || buffer[index] == '\t')) ++index;
             if (index >= bytesRead || buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == '#') break;
             while (index < bytesRead) {
-                char character = buffer[index];
+                CHAR character = buffer[index];
                 INT digit = (character >= '0' && character <= '9') ? character - '0'
                       : (character >= 'a' && character <= 'f') ? character - 'a' + 10
                       : (character >= 'A' && character <= 'F') ? character - 'A' + 10 : -1;
@@ -20669,8 +20669,8 @@ static WORD WowSchedCurrentTask(VOID)
      its creator chose for LoadModule -- WOWEXEC sets it from the launch's cur= just
      before) and whenever it calls WOW32 0x82; it is restored when it is resumed. */
 #define WOW_TASK_DIRS 8
-static struct { WORD Task; char Directory[MAX_PATH]; } g_WowTaskDirectory[WOW_TASK_DIRS];
-static VOID WowTaskDirectoryNote(WORD task, const char *directory)
+static struct { WORD Task; CHAR Directory[MAX_PATH]; } g_WowTaskDirectory[WOW_TASK_DIRS];
+static VOID WowTaskDirectoryNote(WORD task, PCSTR directory)
 {
     INT index, freeK = -1;
     if (!task || task == 0xFFFF) return;
@@ -20684,14 +20684,14 @@ static VOID WowTaskDirectoryNote(WORD task, const char *directory)
 }
 static VOID WowTaskDirectoryHere(WORD task)          /* record the host's directory now */
 {
-    char directory[MAX_PATH];
+    CHAR directory[MAX_PATH];
     if (GetCurrentDirectoryA(sizeof directory, directory)) WowTaskDirectoryNote(task, directory);
 }
-static VOID Wow32CurrentDirectorySet(const char *directory)    /* WOW32 0x82 succeeded (wow32.h) */
+static VOID Wow32CurrentDirectorySet(PCSTR directory)    /* WOW32 0x82 succeeded (wow32.h) */
 {
     WowTaskDirectoryNote(WowSchedCurrentTask(), directory);
 }
-static VOID WowTaskChdir(WORD task, char **logCursor)
+static VOID WowTaskChdir(WORD task, PSTR *logCursor)
 {
     INT index;
     static INT logged;
@@ -20822,7 +20822,7 @@ static VOID WowQuietLoad(VOID)
 {
     HANDLE handle = CreateFileA(WOWQUIET_PATH, GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
-    char lineBuffer[192], *cursor = lineBuffer;
+    CHAR lineBuffer[192], *cursor = lineBuffer;
     if (handle == INVALID_HANDLE_VALUE) return;
     CloseHandle(handle);
     /* Say so BEFORE going quiet, or the run leaves no evidence of why it is
@@ -20838,7 +20838,7 @@ static VOID WowSchedLoad(VOID)
 {
     HANDLE handle = CreateFileA(WOWSCHED_PATH, GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
-    char lineBuffer[192], *cursor = lineBuffer;
+    CHAR lineBuffer[192], *cursor = lineBuffer;
     if (handle == INVALID_HANDLE_VALUE) return;
     CloseHandle(handle);
     g_WowSchedOn = 1;
@@ -20861,7 +20861,7 @@ static VOID WowCallLoad(VOID)
 {
     HANDLE handle = CreateFileA(WOWCALL_PATH, GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
-    char lineBuffer[224], *cursor = lineBuffer;
+    CHAR lineBuffer[224], *cursor = lineBuffer;
     if (handle == INVALID_HANDLE_VALUE) return;
     CloseHandle(handle);
     g_WowCallOn = 1;
@@ -20881,7 +20881,7 @@ static VOID DpmiEnsurePmReturnSelector(VOID);   /* fwd: shared PM-return catcher
    On entry the CONTEXT holds the V86 state at the far-call (segment un-patched). */
 static VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slot)
 {
-    char lineBuffer[256]; char *lineCursor = lineBuffer;
+    CHAR lineBuffer[256]; PSTR lineCursor = lineBuffer;
     WORD rss = (WORD)VDM_REG(tib, VTIB_SS), rsp = (WORD)VDM_REG(tib, VTIB_ESP);
     DWORD rstk = ((DWORD)rss << 4) + rsp;
     WORD retIP = PeekWord(rstk), retCS = PeekWord(rstk + 2);     /* the far-call return frame */
@@ -21060,7 +21060,7 @@ static INT DpmiDispatchToPmHandler(DOS_MACHINE *machine, volatile BYTE *tib,
        ► SO SIZE IT FOR THE LINE, NOT FOR THE HABIT. Nothing here counts characters, and
          the next field added would have hit this again -- 512 leaves room for one. If
          this line ever grows a second dump, split it rather than raising this again. */
-    char lineBuffer[512], *lineCursor = lineBuffer;
+    CHAR lineBuffer[512], *lineCursor = lineBuffer;
     /* Captured at ENTRY and kept in a LOCAL: the handler's whole job is to change AX, so
        the exit line must be keyed on what the caller ASKED, not on the answer -- and this
        function re-enters itself when a handler chains, so a static would cross-talk. */
@@ -21360,8 +21360,8 @@ static VOID DpmiRmcsProbe(volatile BYTE *tib, DWORD esb, UINT slot, DWORD intno)
     static BYTE seen[5][256];
     DWORD edi = VDM_REG(tib, VTIB_EDI), es = VDM_REG(tib, VTIB_ES) & 0xFFFF;
     DWORD maskedAddress  = esb + (edi & 0xFFFF), fullAddress = esb + edi;
-    char buffer[512], *cursor = buffer;
-    static const char *const tAG[5] = { "0300", "0301", "0302", "000b", "000c" };
+    CHAR buffer[512], *cursor = buffer;
+    static PCSTR const tAG[5] = { "0300", "0301", "0302", "000b", "000c" };
     if (slot > 4 || intno > 255) return;
     if (seen[slot][intno] >= 3) return;
     ++seen[slot][intno];
@@ -21539,10 +21539,10 @@ static VOID WowShadowPut(INT index)      /* g_Ldt[idx] -> shadow */
 }
 
 /* Push anything krnl386 changed in the shadow into the real LDT. Returns the count. */
-static INT WowShadowSync(char **logCursor)
+static INT WowShadowSync(PSTR *logCursor)
 {
     INT index, top = g_LdtNext + 8, count = 0;
-    char *cursor = logCursor ? *logCursor : NULL;
+    PSTR cursor = logCursor ? *logCursor : NULL;
     if (!g_WowShadow || !g_WowSeen) return 0;
     if (top > WOW_SHADOW_ENTRIES) top = WOW_SHADOW_ENTRIES;
     for (index = DPMI_LDT_RESERVED; index < top; ++index) {
@@ -21721,7 +21721,7 @@ static DWORD PmTransferStringLength(WORD selector, DWORD offset, DWORD cap)
 
 /* Service one pointer-taking INT 21h call made from protected mode. Returns the log
    cursor. EIP is advanced by the caller, as for every other arm. */
-static char *PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, char *cursor)
+static PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, PSTR cursor)
 {
 #define m (*machine)
     WORD  dsv = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
@@ -21743,7 +21743,7 @@ static char *PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah,
         DWORD length = PmTransferStringLength(dsv, dxv, cap < 260 ? cap - 1 : 259);
         status = PmTransferIn(dsv, dxv, length);
         if (!status) {
-            const char *name = (const char *)(ULONG_PTR)((DWORD)g_PmTransferSegment << 4);
+            PCSTR name = (PCSTR)(ULONG_PTR)((DWORD)g_PmTransferSegment << 4);
             cursor = LogPut(cursor, " name=\""); cursor = LogPut(cursor, name); cursor = LogPut(cursor, "\"");
         }
         break; }
@@ -21841,7 +21841,7 @@ static DWORD PmLfnOutLength(DWORD xoff, INT kind, DWORD length)
     return (used < length) ? used + 1 : length;
 }
 
-static char *PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, char *cursor)
+static PSTR PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
 {
 #define m (*machine)
     DWORD al = VDM_REG(tib, VTIB_EAX) & 0xFF;
@@ -21890,7 +21890,7 @@ static char *PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, char *cursor)
         return cursor;
     }
     if (dxK == 1 || siK == 1 || diK == 1) {
-        const char *name = (const char *)(ULONG_PTR)(((DWORD)g_PmTransferSegment << 4)
+        PCSTR name = (PCSTR)(ULONG_PTR)(((DWORD)g_PmTransferSegment << 4)
                                                    + (dxK == 1 ? 0x000 : siK == 1 ? 0x400 : 0x800));
         cursor = LogPut(cursor, " name=\""); cursor = LogPut(cursor, name); cursor = LogPut(cursor, "\"");
     }
@@ -21925,7 +21925,7 @@ static char *PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, char *cursor)
 #define V86BOP_NONE  0      /* not one of V86BiosBop's numbers                         */
 #define V86BOP_DONE  1      /* serviced; EIP is past the BOP, onto the stub's IRET/RETF  */
 #define V86BOP_RERUN 4      /* serviced, still waiting; EIP left ON the BOP to re-execute */
-static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, char **logCursor, char *base);
+static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base);
 
 /* ── ★★★ THE DEFAULT PM HANDLER FOR A HARDWARE IRQ, WHEN THE GUEST OWNS THE REAL-MODE
      VECTOR: A TRUE NESTED-V86 REFLECTION. (s81, ZAR's streaming audio) ───────────────
@@ -21946,7 +21946,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, char **logCursor, char
 static DWORD g_PmIrqRmReflects = 0, g_PmIrqRmFail = 0;
 static INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vector)
 {
-    char lineBuffer[256], *lineCursor = lineBuffer;
+    CHAR lineBuffer[256], *lineCursor = lineBuffer;
     DWORD savedEax=VDM_REG(tib,VTIB_EAX),savedEbx=VDM_REG(tib,VTIB_EBX),savedEcx=VDM_REG(tib,VTIB_ECX),
           savedEdx=VDM_REG(tib,VTIB_EDX),savedEsi=VDM_REG(tib,VTIB_ESI),savedEdi=VDM_REG(tib,VTIB_EDI),
           pBreakpoint=VDM_REG(tib,VTIB_EBP),pDs=VDM_REG(tib,VTIB_DS),pEs=VDM_REG(tib,VTIB_ES),
@@ -21978,7 +21978,7 @@ static INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vec
         info = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
         if (rev == VDM_EVENT_BOP && info == DPMI_RMRET_BOP) { done = 1; break; }
         if (rev == VDM_EVENT_BOP && info == 0x20) {             /* INT 21h from the ISR */
-            char dropBuffer[2048]; machine->TraceCursor = dropBuffer; DosInt21(machine);        /* its log text is dropped */
+            CHAR dropBuffer[2048]; machine->TraceCursor = dropBuffer; DosInt21(machine);        /* its log text is dropped */
             VDM_REG(tib, VTIB_EIP) += 3;
             continue;
         }
@@ -22020,7 +22020,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                     UINT steps)
 {
 #define m (*machine)
-    char report[2048]; char *base = report; char *cursor = report;
+    CHAR report[2048]; PSTR base = report; PSTR cursor = report;
     DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
     DWORD event = VDM_REG(tib, VTIB_EVENT), eip = DpmiPmEip(tib);
     (VOID)steps;
@@ -22044,7 +22044,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
     if (g_PmWatchOffset && !g_PmWatchLinear && g_PmWatchSegment == 0) g_PmWatchLinear = g_PmWatchOffset;
     if (g_PmWatchOffset && !g_PmWatchLinear && g_PmWatchSegment >= 1 &&
         g_PmWatchSegment <= WOW_PMBASE_MAX && g_WowPmBase[g_PmWatchSegment - 1]) {
-        char watchLine[160], *watchCursor = watchLine;
+        CHAR watchLine[160], *watchCursor = watchLine;
         g_PmWatchLinear = g_WowPmBase[g_PmWatchSegment - 1] + g_PmWatchOffset;
         watchCursor = LogPut(watchCursor, "PMWATCH armed: seg "); watchCursor = LogHex(watchCursor, g_PmWatchSegment);
         watchCursor = LogPut(watchCursor, " + 0x"); watchCursor = LogHex(watchCursor, g_PmWatchOffset);
@@ -22057,7 +22057,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
             BYTE now = *watch;
             if (!g_PmWatchHave) { g_PmWatchHave = 1; g_PmWatchLast = now; }
             else if (now != g_PmWatchLast) {
-                char watchLine[200], *watchCursor = watchLine;
+                CHAR watchLine[200], *watchCursor = watchLine;
                 watchCursor = LogPut(watchCursor, "PMWATCH linear 0x"); watchCursor = LogHex(watchCursor, g_PmWatchLinear);
                 watchCursor = LogPut(watchCursor, " CHANGED 0x"); watchCursor = LogHexByte(watchCursor, g_PmWatchLast);
                 watchCursor = LogPut(watchCursor, " -> 0x"); watchCursor = LogHexByte(watchCursor, now);
@@ -22145,7 +22145,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
             if (act == WOWCALL_ACT_DLGDEFAULT) {
                 DWORD hole = callFrame->ReturnLinear; WORD dmsg = callFrame->Message;
                 if ((WORD)result == 0) {
-                    char defaultName[200]; INT defaultLength = 0;
+                    CHAR defaultName[200]; INT defaultLength = 0;
                     LRESULT defaultResult = WowUserDlgDefault(WowUserFindWindow(actarg), actarg, dmsg,
                                                      g_WowUserDlgDefaults[g_WowCallDepth].WParam,
                                                      g_WowUserDlgDefaults[g_WowCallDepth].LParam,
@@ -22207,13 +22207,13 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                 if (!editWindow || !editWindow->Window32 || !dgb || !offset) {
                     cursor = LogPut(cursor, " -- ★ UNREADABLE, the control keeps no text");
                 } else {
-                    static char etext[16384];
+                    static CHAR etext[16384];
                     const volatile BYTE *sourceBytes =
                         (const volatile BYTE *)(ULONG_PTR)(dgb + offset);
                     INT length = 0;
                     while (length < (INT)sizeof etext - 1
                            && MemoryReadable((ULONG_PTR)(sourceBytes + length), 1) && sourceBytes[length])
-                        { etext[length] = (char)sourceBytes[length]; ++length; }
+                        { etext[length] = (CHAR)sourceBytes[length]; ++length; }
                     etext[length] = 0;
                     SetWindowTextA(editWindow->Window32, etext);
                     cursor = LogPut(cursor, " -> 0x"); cursor = LogHex(cursor, (DWORD)length);
@@ -22293,7 +22293,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                 if (!editWindow || !editWindow->Window32 || !dgb || !offset) {
                     cursor = LogPut(cursor, " -- ★ UNWRITABLE; the control's text is NOT saved");
                 } else {
-                    static char stext[16384];
+                    static CHAR stext[16384];
                     volatile BYTE *destinationBytes = (volatile BYTE *)(ULONG_PTR)(dgb + offset);
                     INT cap = GetWindowTextLengthA(editWindow->Window32) + 1;
                     INT length, index;
@@ -22356,12 +22356,12 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         const volatile BYTE *sourceBytes = (const volatile BYTE *)(ULONG_PTR)fplin;
                         while (length < (INT)sizeof g_WowUserClipboard - 1
                                && MemoryReadable((ULONG_PTR)(sourceBytes + length), 1) && sourceBytes[length])
-                            { g_WowUserClipboard[length] = (char)sourceBytes[length]; ++length; }
+                            { g_WowUserClipboard[length] = (CHAR)sourceBytes[length]; ++length; }
                     }
                     g_WowUserClipboard[length] = 0;
                     if (fplin) {
                         HGLOBAL clipboardMemory = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)length + 1);
-                        char *clipboardText = clipboardMemory ? (char *)GlobalLock(clipboardMemory) : NULL;
+                        PSTR clipboardText = clipboardMemory ? (PSTR)GlobalLock(clipboardMemory) : NULL;
                         INT index;
                         if (clipboardText) {
                             for (index = 0; index <= length; ++index) clipboardText[index] = g_WowUserClipboard[index];
@@ -22412,7 +22412,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                  parked caller, so the next call re-parks it at the same SS:SP
                  and nothing accumulates. See src/wow/wowenum.h. */
             if (act == WOWCALL_ACT_ENUMNEXT) {
-                char enote[256];
+                CHAR enote[256];
                 WORD  ersel = WowCallbackSelector();
                 DWORD essb  = DpmiSelectorBase(
                     (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
@@ -22421,7 +22421,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                 cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, enote);
             }
             if (act == WOWCALL_ACT_MODALPUMP) {
-                char mnote[512];
+                CHAR mnote[512];
                 WORD  mrsel = WowCallbackSelector();
                 DWORD mssb  = DpmiSelectorBase(
                     (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
@@ -22436,7 +22436,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     && (g_WowDlgMessage[g_WowCallDepth] == 0x0010
                         || g_WowDlgMessage[g_WowCallDepth] == 0x000F
                         || g_WowDlgMessage[g_WowCallDepth] == 0x0014)) {
-                    char defaultName[200]; INT defaultLength = 0;
+                    CHAR defaultName[200]; INT defaultLength = 0;
                     WowUserDlgDefault(WowUserFindWindow(actarg), actarg,
                                         g_WowDlgMessage[g_WowCallDepth],
                                         g_WowUserDlgDefaults[g_WowCallDepth].WParam,
@@ -22690,7 +22690,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              on something it has not identified. */
                         DWORD sseg = (DWORD)(frameBytes[4] | (frameBytes[5] << 8));
                         INT   isKernelThunk   = sseg == (VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                        const char *thunkName = isKernelThunk ? Wow32Name((WORD)fid) : NULL;
+                        PCSTR thunkName = isKernelThunk ? Wow32Name((WORD)fid) : NULL;
                         cursor = LogPut(cursor, " FUNC=0x"); cursor = LogHex(cursor, fid);
                         if (thunkName) { cursor = LogPut(cursor, " "); cursor = LogPut(cursor, thunkName); }
                         if (isKernelThunk) cursor = LogPut(cursor, " [krnl]");
@@ -22845,7 +22845,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                        can match. Stop before `report[2048]` overflows -- an
                                        instrument that corrupts its own stack to print one more
                                        message is worse than one that prints fewer. */
-                                    if ((size_t)(cursor - base) > sizeof(report) - 400) break;
+                                    if ((SIZE_T)(cursor - base) > sizeof(report) - 400) break;
                                     cursor = LogPut(cursor, "\r\n    ★ arg["); cursor = LogHex(cursor, item);
                                     cursor = LogPut(cursor, "] 0x"); cursor = LogHex(cursor, asel);
                                     cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, aoff);
@@ -22856,7 +22856,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                           if      (byteCharacter == '\t') { *cursor++ = '\\'; *cursor++ = 't'; }
                                           else if (byteCharacter == '\r') { *cursor++ = '\\'; *cursor++ = 'r'; }
                                           else if (byteCharacter == '\n') { *cursor++ = '\\'; *cursor++ = 'n'; }
-                                          else                   *cursor++ = (char)byteCharacter;
+                                          else                   *cursor++ = (CHAR)byteCharacter;
                                       } }
                                     cursor = LogPut(cursor, "\"");
                                 }
@@ -23232,7 +23232,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         VDM_REG(tib, VTIB_DS)  = sds; VDM_REG(tib, VTIB_ESI) = ssi;
                         cursor = LogPut(cursor, "  WOW32 0xc9 GetCurrentDirectory drive=0x");
                         cursor = LogHex(cursor, drv);
-                        cursor = LogPut(cursor, " -> \""); cursor = LogPut(cursor, (const char *)transfer);
+                        cursor = LogPut(cursor, " -> \""); cursor = LogPut(cursor, (PCSTR)transfer);
                         cursor = LogPut(cursor, "\" cf="); cursor = LogHex(cursor, carryFlag);
                         if (!carryFlag && gbase) {
                             volatile BYTE *destinationBytes = (volatile BYTE *)(ULONG_PTR)(gbase + gsi);
@@ -23281,7 +23281,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                 if (frame.IsKernel && frame.Id == WOW32_RESOLVEMODULEPATH && g_WowPathSegment) {
                     volatile BYTE *source = Wow32ArgPointer(&frame, 4);
                     volatile BYTE *destination = Wow32ArgPointer(&frame, 0);
-                    char name[300], full[300];
+                    CHAR name[300], full[300];
                     INT item;
                     cursor = LogPut(cursor, "  WOW32 0xc5 ResolveModulePath ");
                     if (!source) {
@@ -23292,9 +23292,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         cursor = LogPut(cursor, "RELEASE");
                         Wow32SetReturn(&frame, 1);
                     } else {
-                        DWORD length = 0; char *filePart = 0;
+                        DWORD length = 0; PSTR filePart = 0;
                         for (item = 0; item < (INT)sizeof name - 1 && source[item]; ++item)
-                            name[item] = (char)source[item];
+                            name[item] = (CHAR)source[item];
                         name[item] = 0;
                         cursor = LogPut(cursor, "\""); cursor = LogPut(cursor, name); cursor = LogPut(cursor, "\" -> ");
                         if (name[0])
@@ -23425,7 +23425,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     WORD  pbsel = Wow32ArgWord(&frame, 4), pboff = Wow32ArgWord(&frame, 2);
                     DWORD pblin = pbsel ? DpmiSelectorBase(pbsel) : 0;
                     WORD  environment = 0;
-                    const char *source = "";
+                    PCSTR source = "";
                     cursor = LogPut(cursor, "\n     WOW32 seg2 0xd1 task environment: parmblock 0x");
                     cursor = LogHex(cursor, pbsel); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, pboff);
                     if (pblin && HostReadable((const VOID *)(ULONG_PTR)(pblin + pboff), 2)) {
@@ -23510,7 +23510,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     cursor = LogPut(cursor, " (learned from its own stub, not from the module table)");
                 }
                 if (!frame.IsKernel && frame.StubSegment == g_WowUserSegment && g_WowUserSegment) {
-                    char note[224];
+                    CHAR note[224];
                     /* ── ★★ KEEP THE REAL WINDOWS ALIVE. (GH #128, session 42) ──
                          They belong to this thread, so nothing about them happens
                          -- no paint, no move, no click, no title bar -- unless
@@ -23593,7 +23593,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              "the guest quit after six seconds" and "the guest is
                              waiting for you" are never the same line. */
                         if (!g_WowMsgIsWaitAnnounced) {
-                            char sb2[128], *siteCursor = sb2;
+                            CHAR sb2[128], *siteCursor = sb2;
                             g_WowMsgIsWaitAnnounced = 1;
                             siteCursor = LogPut(siteCursor, "\n     WOWMSG: a blocked GetMessage waits ");
                             if (g_WowMsgWaitMs) { siteCursor = LogHex(siteCursor, g_WowMsgWaitMs);
@@ -23671,7 +23671,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                     MsgWaitForMultipleObjects(0, NULL, FALSE, 50,
                                                               QS_ALLINPUT);
                                 if (beats < 20 && GetTickCount() - beat >= 2000) {
-                                    char handlerLine[160], *handlerCursor = handlerLine;
+                                    CHAR handlerLine[160], *handlerCursor = handlerLine;
                                     beat = GetTickCount(); ++beats;
                                     handlerCursor = LogPut(handlerCursor, "     WOWMSG: blocked 0x");
                                     handlerCursor = LogHex(handlerCursor, beat - start);
@@ -23835,7 +23835,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              return. Nothing asks for both today; this is what
                              stops the day it does from being a mystery. */
                         else if (frame.IsEnumerationRequested) {
-                            char enote[256];
+                            CHAR enote[256];
                             WORD  ersel = WowCallbackSelector();
                             DWORD essb  = DpmiSelectorBase(
                                 (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
@@ -23846,7 +23846,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             cursor = LogPut(cursor, "\r\n");
                         }
                         else if (frame.IsModalDialog) {
-                            char mnote[512];
+                            CHAR mnote[512];
                             WORD  mrsel = WowCallbackSelector();
                             DWORD mssb  = DpmiSelectorBase(
                                 (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
@@ -23879,7 +23879,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 " table)");
                 }
                 if (!frame.IsKernel && g_WowShellSegment && frame.StubSegment == g_WowShellSegment) {
-                    char note[320];
+                    CHAR note[320];
                     /* The About box runs a modal loop on this thread, so drain
                        what is already queued for the guest's windows first --
                        same reason the USER branch pumps. */
@@ -23925,7 +23925,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 " table)");
                 }
                 if (!frame.IsKernel && g_WowCommonDialogSegment && frame.StubSegment == g_WowCommonDialogSegment) {
-                    char note[416];
+                    CHAR note[416];
                     WowWinPump(32);
                     /* ⚠ Same reason as ShellAbout: a modal service does not return
                          until a human dismisses it, and the SERVICED line is
@@ -23965,7 +23965,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 " table)");
                 }
                 if (!frame.IsKernel && g_WowKeyboardSegment && frame.StubSegment == g_WowKeyboardSegment) {
-                    char note[320];
+                    CHAR note[320];
                     if (WowKeyboardCall(&frame, note, sizeof note)) {
                         ++g_Wow32Serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
@@ -23991,7 +23991,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 " table)");
                 }
                 if (!frame.IsKernel && g_WowGdiSegment && frame.StubSegment == g_WowGdiSegment) {
-                    char note[320];
+                    CHAR note[320];
                     if (WowGdiCall(&frame, note, sizeof note)) {
                         ++g_Wow32Serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
@@ -24005,7 +24005,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              got "60 fonts" and not one callback, i.e. an empty list.
                              Same first step as USER's branch. */
                         if (frame.IsEnumerationRequested) {
-                            char enote[256];
+                            CHAR enote[256];
                             WORD  ersel = WowCallbackSelector();
                             DWORD essb  = DpmiSelectorBase(
                                 (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
@@ -24031,7 +24031,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 " table)");
                 }
                 if (!frame.IsKernel && g_WowSoundSegment && frame.StubSegment == g_WowSoundSegment) {
-                    char note[160];
+                    CHAR note[160];
                     if (WowSoundCall(&frame, note, sizeof note)) {
                         ++g_Wow32Serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
@@ -24057,7 +24057,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     cursor = LogHex(cursor, g_WowMultimediaSegment);
                 }
                 if (!frame.IsKernel && g_WowMultimediaSegment && frame.StubSegment == g_WowMultimediaSegment) {
-                    char note[200];
+                    CHAR note[200];
                     if (WowMultimediaCall(&frame, note, sizeof note)) {
                         ++g_Wow32Serviced;
                         VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
@@ -24159,7 +24159,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
          deliberate: it is how we find out whether a write-trapping shadow is needed
          instead of this one. See WowShadowSync. */
     if (g_WowShadow) {
-        char *syncCursor = cursor;
+        PSTR syncCursor = cursor;
         INT nsync = WowShadowSync(&syncCursor);
         if (nsync) {
             cursor = syncCursor;
@@ -24745,13 +24745,13 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             DWORD dataBase = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF));
                             DWORD sourceOffset = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
                             const volatile BYTE *dataBytes = (const volatile BYTE *)(ULONG_PTR)(dataBase + sourceOffset);
-                            static const char want[] = "MS-DOS";
+                            static const CHAR want[] = "MS-DOS";
                             INT item = 0, same = 1;
                             for (item = 0; item < (INT)sizeof want; ++item)
                                 if (dataBytes[item] != (BYTE)want[item]) { same = 0; break; }
                             cursor = LogPut(cursor, " vendor=[");
                             for (item = 0; item < 8 && dataBytes[item] >= 0x20 && dataBytes[item] < 0x7F; ++item) {
-                                char text[2]; text[0] = (char)dataBytes[item]; text[1] = 0; cursor = LogPut(cursor, text);
+                                CHAR text[2]; text[0] = (CHAR)dataBytes[item]; text[1] = 0; cursor = LogPut(cursor, text);
                             }
                             cursor = LogPut(cursor, "]");
                             if (same) {
@@ -26081,7 +26081,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 if ((inAx >> 8) == 0x4F) {
                                     static INT vbeLogged;
                                     if (vbeLogged++ < 48) {
-                                        char vectorLine[160], *vectorCursor = vectorLine;
+                                        CHAR vectorLine[160], *vectorCursor = vectorLine;
                                         vectorCursor = LogPut(vectorCursor, "SIMINT10 VBE in=0x"); vectorCursor = LogHex(vectorCursor, inAx);
                                         vectorCursor = LogPut(vectorCursor, " cx=0x"); vectorCursor = LogHex(vectorCursor, inCx);
                                         vectorCursor = LogPut(vectorCursor, " -> ax=0x"); vectorCursor = LogHex(vectorCursor, (WORD)videoRegisters.Eax);
@@ -26448,17 +26448,17 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             DWORD dsb = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
                             const volatile BYTE *sourceBytes = (const volatile BYTE *)(ULONG_PTR)
                                 (dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
-                            char outputLine[256]; char *outputCursor = outputLine; INT item;
+                            CHAR outputLine[256]; PSTR outputCursor = outputLine; INT item;
                             outputCursor = LogPut(outputCursor, "INT21h AH=09 print: \"");
                             for (item = 0; item < 200 && *sourceBytes != '$'; ++item, ++sourceBytes) {
                                 BYTE printCharacter = *sourceBytes;
-                                if (printCharacter >= 0x20) *outputCursor++ = (char)printCharacter;   /* printable -> serial echo */
+                                if (printCharacter >= 0x20) *outputCursor++ = (CHAR)printCharacter;   /* printable -> serial echo */
                                 if (m.FileHandles[1]) {                      /* #256: redirected stdout */
                                     DWORD bytesWritten9 = 0; WriteFile(m.FileHandles[1], &printCharacter, 1, &bytesWritten9, NULL);
                                     continue;
                                 }
                                 if (m.ConsoleOut) m.ConsoleOut(m.ConsoleOutContext, printCharacter);  /* -> the Luna console */
-                                if (m.OutputLength < m.OutputCapacity - 1) m.Output[m.OutputLength++] = (char)printCharacter;
+                                if (m.OutputLength < m.OutputCapacity - 1) m.Output[m.OutputLength++] = (CHAR)printCharacter;
                                 else m.IsOutputTruncated = 1;
                             }
                             outputCursor = LogPut(outputCursor, "\"\r\n");
@@ -26474,7 +26474,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             if (m.FileHandles[1]) { DWORD bytesWritten1 = 0; WriteFile(m.FileHandles[1], &ch, 1, &bytesWritten1, NULL); }
                             else {
                                 if (m.ConsoleOut) m.ConsoleOut(m.ConsoleOutContext, ch);
-                                if (m.OutputLength < m.OutputCapacity - 1) m.Output[m.OutputLength++] = (char)ch;
+                                if (m.OutputLength < m.OutputCapacity - 1) m.Output[m.OutputLength++] = (CHAR)ch;
                                 else m.IsOutputTruncated = 1;
                             }
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
@@ -26504,12 +26504,12 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 }
                                 VDM_SET16(tib, VTIB_EAX, count);
                             } else if (device) {                      /* the console */
-                                char outputLine[300]; char *outputCursor = outputLine; DWORD item;
+                                CHAR outputLine[300]; PSTR outputCursor = outputLine; DWORD item;
                                 outputCursor = LogPut(outputCursor, "INT21h AH=40 write: \"");
                                 for (item = 0; item < count && item < 250; ++item) {
-                                    if (bytes[item] >= 0x20 && outputCursor < outputLine + 270) *outputCursor++ = (char)bytes[item];
+                                    if (bytes[item] >= 0x20 && outputCursor < outputLine + 270) *outputCursor++ = (CHAR)bytes[item];
                                     if (m.ConsoleOut) m.ConsoleOut(m.ConsoleOutContext, bytes[item]);
-                                    if (m.OutputLength < m.OutputCapacity - 1) m.Output[m.OutputLength++] = (char)bytes[item];
+                                    if (m.OutputLength < m.OutputCapacity - 1) m.Output[m.OutputLength++] = (CHAR)bytes[item];
                                     else m.IsOutputTruncated = 1;
                                 }
                                 outputCursor = LogPut(outputCursor, "\"\r\n");
@@ -26545,7 +26545,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              rather than as a missing DOS call. */
                         if (ah == 0x3C || ah == 0x3D || ah == 0x5B) {  /* create / open: DS:DX = ASCIIZ name */
                             DWORD dsb = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
-                            const char *fileName = (const char *)(ULONG_PTR)(dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+                            PCSTR fileName = (PCSTR)(ULONG_PTR)(dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
                             /* ── ★★ AL IS A BIT FIELD, NOT A NUMBER. (#128, session 37) ──
                                  DOS open mode: bits 0-2 = access (0 read, 1 write, 2 r/w),
                                  bits 4-6 = the SHARE.EXE sharing mode, bit 7 = no-inherit.
@@ -27340,7 +27340,7 @@ static VOID DpmiPmCarryToFrame(volatile BYTE *tib)
     now = (image & ~DPMI_PMFRAME_CF) | (VDM_REG(tib, VTIB_EFLAGS) & DPMI_PMFRAME_CF);
     if (now == image) return;                    /* the frame already says what we do */
     flagsBytes[0] = (BYTE)(now & 0xFF); flagsBytes[1] = (BYTE)((now >> 8) & 0xFF);
-    {   char lineBuffer[192], *cursor = lineBuffer;
+    {   CHAR lineBuffer[192], *cursor = lineBuffer;
         cursor = LogPut(cursor, "PM CF -> IRET frame at 0x"); cursor = LogHex(cursor, linear);
         cursor = LogPut(cursor, ": 0x"); cursor = LogHex(cursor, image); cursor = LogPut(cursor, " -> 0x"); cursor = LogHex(cursor, now);
         cursor = LogPut(cursor, " (the stub's IRET would have restored the caller's CF)\r\n");
@@ -27551,7 +27551,7 @@ typedef struct {
     BOOL   (*Callback16Ex)(DWORD vpfn, DWORD flags, DWORD cb, PVOID args, DWORD *ret);
     VOID   (*IcaInterrupt)(INT ms, BYTE line, INT count);
     VOID   (*Yield16)(VOID);
-    VOID   (*Log)(const char *what);
+    VOID   (*Log)(PCSTR what);
     /* version 2 (s91, #309): krnl386's global heap -- see ShimGlobal16 */
     DWORD  (*Global16)(INT op, DWORD a, DWORD b);
     /* version 3 (s91, #11): the VDD service API -- see "THIRD-PARTY VDDs" below */
@@ -27563,9 +27563,9 @@ typedef struct {
 } NTVDMEX_SHIM_API;
 
 
-static VOID ShimLog(const char *what)
+static VOID ShimLog(PCSTR what)
 {
-    char buffer[200], *cursor = buffer;
+    CHAR buffer[200], *cursor = buffer;
     cursor = LogPut(cursor, "WOWSHIM: "); cursor = LogPut(cursor, what); cursor = LogPut(cursor, "\r\n");
     LogAppend(LOG_PATH, buffer, cursor);
 }
@@ -27614,7 +27614,7 @@ static VOID ShimIcaInterrupt(INT isSlave, BYTE line, INT count)
     if (line > 7) return;
     InterlockedOr(&g_IcaPending, (LONG)(1u << ((isSlave ? 8 : 0) + line)));
     if (++g_IcaRaised <= 8) {
-        char buffer[96], *cursor = buffer;
+        CHAR buffer[96], *cursor = buffer;
         cursor = LogPut(cursor, "WOWSHIM: call_ica_hw_interrupt ms="); cursor = LogHex(cursor, (DWORD)isSlave);
         cursor = LogPut(cursor, " line="); cursor = LogHex(cursor, line); cursor = LogPut(cursor, " tid=0x");
         cursor = LogHex(cursor, GetCurrentThreadId()); cursor = LogPut(cursor, "\r\n");
@@ -27753,7 +27753,7 @@ static BOOL ShimInstallIoHook(HANDLE hvdd, WORD rangeCount, PCVOID ranges, PCVOI
 {
     const WORD *ranges16 = (const WORD *)ranges;
     WORD index2;
-    char buffer[160], *cursor;
+    CHAR buffer[160], *cursor;
     if (!ranges || !handlers) return FALSE;
     for (index2 = 0; index2 < rangeCount; ++index2) {
         INT index, slot = -1;
@@ -27788,8 +27788,8 @@ static VOID WowShimsLoad(VOID)
 {
     static INT done;
     static NTVDMEX_SHIM_API api;
-    static const char *const names[] = { "WOW32.DLL", "NTVDM.EXE" };
-    char path[MAX_PATH], buffer[MAX_PATH + 160], *cursor;
+    static PCSTR const names[] = { "WOW32.DLL", "NTVDM.EXE" };
+    CHAR path[MAX_PATH], buffer[MAX_PATH + 160], *cursor;
     UINT index;
     if (done) return;
     done = 1;
@@ -27805,7 +27805,7 @@ static VOID WowShimsLoad(VOID)
         HMODULE module;
         BOOL (WINAPI *init)(const NTVDMEX_SHIM_API *);
         INT length = 0;
-        const char *source = NTVDMEX_DIR;
+        PCSTR source = NTVDMEX_DIR;
         while (*source && length < MAX_PATH - 40) path[length++] = *source++;
         source = "bin\\wowshim\\"; while (*source) path[length++] = *source++;
         source = names[index]; while (*source) path[length++] = *source++;
@@ -27829,22 +27829,22 @@ static VOID WowShimsLoad(VOID)
    LIVE flags -- a BOP is not an INT, nothing was pushed. Handles are 1-based. */
 #define ISV_MAX_MODS 8
 static struct { HMODULE Module; FARPROC Dispatch; } g_IsvModules[ISV_MAX_MODS];
-static VOID IsvBop(volatile BYTE *tib, DWORD sub, char **logCursor)
+static VOID IsvBop(volatile BYTE *tib, DWORD sub, PSTR *logCursor)
 {
-    char *cursor = *logCursor;
+    PSTR cursor = *logCursor;
     DWORD ds = VDM_REG(tib, VTIB_DS) & 0xFFFF;
     INT isProtectedMode = g_DpmiPm;
     WORD error = 0, vddHandle = 0;
     INT index;
-    #define ISV_STR(reg) ((const char *)ShimMapFlat((WORD)ds, VDM_REG(tib, reg) & 0xFFFF, isProtectedMode))
+    #define ISV_STR(reg) ((PCSTR)ShimMapFlat((WORD)ds, VDM_REG(tib, reg) & 0xFFFF, isProtectedMode))
     if (sub == 0) {                                     /* RegisterModule */
         /* ⚠ COPIED OUT FIRST. A V86 string lives below linear 64 KB, and GetProcAddress
              takes any "name" pointer under 0x10000 for an ORDINAL -- the first rig run
              answered ERROR_INVALID_ORDINAL for a routine stock found at once. */
-        char dllb[MAX_PATH], inib[128], dspb[128];
-        const char *dll = dllb, *ini = inib, *dsp = dspb;
+        CHAR dllb[MAX_PATH], inib[128], dspb[128];
+        PCSTR dll = dllb, ini = inib, dsp = dspb;
         HMODULE module = NULL; FARPROC initProcedure = NULL, dispatchProcedure = NULL;
-        {   const char *source[3]; char *destination[3]; INT cap[3], index2, length;
+        {   PCSTR source[3]; PSTR destination[3]; INT cap[3], index2, length;
             source[0] = ISV_STR(VTIB_ESI); source[1] = ISV_STR(VTIB_EDI); source[2] = ISV_STR(VTIB_EBX);
             destination[0] = dllb; destination[1] = inib; destination[2] = dspb;
             cap[0] = (INT)sizeof dllb; cap[1] = (INT)sizeof inib; cap[2] = (INT)sizeof dspb;
@@ -27925,7 +27925,7 @@ static INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip)
     DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
     DWORD stackBase, esp;
     volatile WORD *frame;
-    char lineBuffer[256], *lineCursor = lineBuffer;
+    CHAR lineBuffer[256], *lineCursor = lineBuffer;
     /* ⚠ WOW ONLY. The evidence is a WOW run; DOS clients (ZAR's DOS/16M, Doom's
          DOS/4GW) go through the IRQ injector too and keep their old behaviour until
          a DOS case is measured. */
@@ -28069,7 +28069,7 @@ static INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCo
     --g_WowWindowNested;
     isOk = (g_WowCallDepth == depth0);
     if (!isOk) {
-        char buffer[160], *cursor = buffer;
+        CHAR buffer[160], *cursor = buffer;
         while (g_WowCallDepth > depth0) WowCallLeave(tib, 0);
         cursor = LogPut(cursor, "WOWNEST: ★ the nested call to 0x"); cursor = LogHex(cursor, proc);
         cursor = LogPut(cursor, " (msg 0x"); cursor = LogHex(cursor, message);
@@ -28106,7 +28106,7 @@ static LRESULT WowControlColour(HWND window, WORD h16, UINT message, WPARAM wPar
     if (!dtok) return 0;
     /* A Win32 read-only edit reports WM_CTLCOLORSTATIC; a Win16 edit is always
        CTLCOLOR_EDIT -- Calc's display is one, and its default is the window colour. */
-    {   char className[16];
+    {   CHAR className[16];
         type = (WORD)(message - WM_CTLCOLORMSGBOX);
         if (type == 6 && GetClassNameA((HWND)lParam, className, sizeof className) && !lstrcmpiA(className, "Edit"))
             type = 1;
@@ -28215,7 +28215,7 @@ static LRESULT WowOwnerDraw(HWND window, WORD h16, UINT message, WPARAM wParam, 
         measureItem->itemHeight = OwnerDrawGetWord(bytes, 8);
         return TRUE;
     }
-    if (message == WM_COMPAREITEM) return (LRESULT)(short)result;
+    if (message == WM_COMPAREITEM) return (LRESULT)(INT16)result;
     return (LRESULT)(result ? TRUE : FALSE);
 }
 
@@ -28249,7 +28249,7 @@ static INT WowSend16Now(WORD h16, WORD message, WORD wParam, DWORD lParam, WORD 
 
 static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interruptVector, UINT steps)
 {
-    char lineBuffer[256], *lineCursor = lineBuffer;
+    CHAR lineBuffer[256], *lineCursor = lineBuffer;
     if (g_PmClientExited) return 0;              /* nothing left to interrupt */
     /* snapshot the interrupted PM register file */
     DWORD sEAX=VDM_REG(tib,VTIB_EAX), sEBX=VDM_REG(tib,VTIB_EBX), sECX=VDM_REG(tib,VTIB_ECX);
@@ -28377,7 +28377,7 @@ static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interr
              every field it prints. Log the state at each PM entry instead, bounded, so
              the fatal one can be DIFFED against its five healthy predecessors. */
         if (g_PmIrq0Done < 12) {
-            char errorLine[192], *errorCursor = errorLine;
+            CHAR errorLine[192], *errorCursor = errorLine;
             errorCursor = LogPut(errorCursor, "   PMENT tick="); errorCursor = LogHex(errorCursor, (DWORD)g_PmIrq0Done);
             errorCursor = LogPut(errorCursor, " ph="); errorCursor = LogHex(errorCursor, (DWORD)phase);
             errorCursor = LogPut(errorCursor, " cs:eip=0x"); errorCursor = LogHex(errorCursor, VDM_REG(tib, VTIB_CS) & 0xFFFF);
@@ -28418,13 +28418,13 @@ static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interr
          bookkeeping permanently wrong -- see the phase loop -- so it must never again
          be readable as a routine "done=0". */
     if (!done && g_PmClientExited) {
-        char ab2[128], *afterCursor = ab2;
+        CHAR ab2[128], *afterCursor = ab2;
         afterCursor = LogPut(afterCursor, "DPMI: the client EXITED inside its vec 0x"); afterCursor = LogHexByte(afterCursor, interruptVector);
         afterCursor = LogPut(afterCursor, " handler after "); afterCursor = LogHex(afterCursor, (DWORD)phase);
         afterCursor = LogPut(afterCursor, " phases -- not resuming it\r\n");
         LogAppend(LOG_PATH, ab2, afterCursor); SerialOut(ab2, afterCursor);
     } else if (!done) {
-        char ab2[192], *afterCursor = ab2;
+        CHAR ab2[192], *afterCursor = ab2;
         afterCursor = LogPut(afterCursor, "DPMI: *** PM ISR ABANDONED after "); afterCursor = LogHex(afterCursor, (DWORD)phase);
         afterCursor = LogPut(afterCursor, " phases / "); afterCursor = LogHex(afterCursor, GetTickCount() - tIsr0);
         afterCursor = LogPut(afterCursor, " ms -- the client's interrupt state is now INCONSISTENT"
@@ -28441,7 +28441,7 @@ static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interr
          "vec=0x08", one function over, and the same fix. */
     if (interruptVector <= 0x0F) { g_PmCooperativeLine[interruptVector & 7]++;
                       if (interruptVector == 0x08) TickDeliveredNote(); }
-    { char callback2[128], *changeCursor = callback2;
+    { CHAR callback2[128], *changeCursor = callback2;
       changeCursor = LogPut(changeCursor, "  PMIRQ vec=0x"); changeCursor = LogHexByte(changeCursor, interruptVector);
       changeCursor = LogPut(changeCursor, " done="); changeCursor = LogHex(changeCursor, (DWORD)done);
       changeCursor = LogPut(changeCursor, " phases="); changeCursor = LogHex(changeCursor, (DWORD)phase);
@@ -28555,7 +28555,7 @@ static INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, U
     VDM_REG(tib, VTIB_EIP) = h32 ? hoff : (hoff & 0xFFFF);
     ++g_MouseCallbackInjected;
     if (g_MouseCallbackInjected <= 16) {
-        char lineBuffer[256], *lineCursor = lineBuffer;
+        CHAR lineBuffer[256], *lineCursor = lineBuffer;
         lineCursor = LogPut(lineCursor, "  MOUSECB->PM #"); lineCursor = LogHex(lineCursor, g_MouseCallbackInjected);
         lineCursor = LogPut(lineCursor, " ev=0x"); lineCursor = LogHex(lineCursor, (DWORD)pend);
         lineCursor = LogPut(lineCursor, " btn=0x"); lineCursor = LogHex(lineCursor, (DWORD)event.Buttons);
@@ -28590,7 +28590,7 @@ static INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, U
     }
     if (done) ++g_MouseCallbackDone; else ++g_MouseCallbackLost;
     if (!done) {
-        char afterLine[192], *afterCursor = afterLine;
+        CHAR afterLine[192], *afterCursor = afterLine;
         afterCursor = LogPut(afterCursor, "DPMI: *** PM MOUSE CALLBACK ABANDONED after "); afterCursor = LogHex(afterCursor, (DWORD)phase);
         afterCursor = LogPut(afterCursor, " phases (last cs:eip=0x"); afterCursor = LogHex(afterCursor, VDM_REG(tib, VTIB_CS) & 0xFFFF);
         afterCursor = LogPut(afterCursor, ":0x"); afterCursor = LogHex(afterCursor, DpmiPmEip(tib)); afterCursor = LogPut(afterCursor, ")\r\n");
@@ -28628,7 +28628,7 @@ static VOID DpmiClientTeardown(VOID)
 {
     INT index, keepHigh = g_LdtClientMark, freedLdt = 0, freedMemory = 0, freedDos = 0;
     INT hostIndex[4];
-    char lineBuffer[256], *cursor = lineBuffer;
+    CHAR lineBuffer[256], *cursor = lineBuffer;
 
     /* ⛔ PUT EVERY PATCHED INT SITE BACK FIRST, while all of them are still mapped. The
          patcher's scans are not confined to the client's own blocks: the first version
@@ -28793,7 +28793,7 @@ static VOID DpmiInterpreterCpuStore(V86_CPU *cpu, volatile BYTE *tib)
    unserviceable opcode (already logged). Never touches the kernel PM path. */
 static INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib)
 {
-    V86_CPU cpu; long guard = 0; char lineBuffer[256]; char *lineCursor;
+    V86_CPU cpu; long guard = 0; CHAR lineBuffer[256]; PSTR lineCursor;
     g_V86SegmentToLinear = DpmiSegmentToLinear;                 /* interpreter now resolves LDT bases */
     g_V86SelectorDescriptor = DpmiSelectorDescriptor;               /* ...and answers LAR/LSL from g_Ldt[] (run 55) */
     DpmiInterpreterCpuLoad(&cpu, tib);
@@ -28909,7 +28909,7 @@ static VOID DosWowPublish(volatile BYTE *hdlr, volatile BYTE *controlTable,
      *pargs is left pointing at the remaining arguments within it, leading whitespace
      skipped, or NULL when there were none. Returns INVALID_HANDLE_VALUE if no split
      names a real file, leaving `path` as it was found. */
-static HANDLE CsrssOpenSplit(char *path, char **pargs)
+static HANDLE CsrssOpenSplit(PSTR path, PSTR *pargs)
 {
     HANDLE fileHandle;
     INT index;
@@ -28917,13 +28917,13 @@ static HANDLE CsrssOpenSplit(char *path, char **pargs)
     fileHandle = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
     if (fileHandle != INVALID_HANDLE_VALUE) return fileHandle;
     for (index = 0; path[index]; ++index) {
-        char save;
+        CHAR save;
         if (path[index] != ' ' && path[index] != '\t') continue;
         save = path[index];
         path[index] = 0;
         fileHandle = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
         if (fileHandle != INVALID_HANDLE_VALUE) {
-            char *arguments = path + index + 1;
+            PSTR arguments = path + index + 1;
             while (*arguments == ' ' || *arguments == '\t') ++arguments;
             if (*arguments) *pargs = arguments;
             return fileHandle;
@@ -29012,7 +29012,7 @@ static INT V86DeliverDeviceIrq(volatile BYTE *tib)
       for (irq = 2; irq < 16; ++irq) if (g_IrqNPending[irq]) { pend = irq; break; }
       if (pend) g_IrqNRefuseTotal++;
       if (pend && g_IrqNRefuseLog < 16) {
-          char lineBuffer[256], *lineCursor = lineBuffer;
+          CHAR lineBuffer[256], *lineCursor = lineBuffer;
           DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
           g_IrqNRefuseLog++;
           lineCursor = LogPut(lineCursor, "IRQN-REFUSE irq=0x");  lineCursor = LogHex(lineCursor, (DWORD)pend);
@@ -29052,9 +29052,9 @@ static INT V86DeliverDeviceIrq(volatile BYTE *tib)
    (serviced, still WAITING -- EIP left on the BOP so it re-executes: INT 16h AH=00h
    with no key, INT 15h AH=86h mid-countdown). */
 #define V86BOP_RET(v) do { *logCursor = cursor; return (v); } while (0)
-static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, char **logCursor, char *base)
+static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
 {
-    char *cursor = *logCursor;
+    PSTR cursor = *logCursor;
     /* ── GH #8 (s91): INT 2Ah / INT 5Ch, the network interface, to whichever device
          claimed them (vdd_net.c). A bus claim on a vector with no stub behind it was
          never delivered: INT 14h works because its BOP is wired here by number, and
@@ -29206,7 +29206,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, char **logCursor, char
                      (6.22's MEM: "Memory accessible using Int 15h 0"). */
                 BSETAX((WORD)CMOS_EXTENDED_KB);     /* 15 MB -- the machine, not the XMS pool */
                 BCF_CLR();
-                { char waitLine[128], *waitCursor = waitLine;
+                { CHAR waitLine[128], *waitCursor = waitLine;
                   waitCursor = LogPut(waitCursor, "  INT15 AH=88h extended memory -> 0x3C00 KB\r\n");
                   LogAppend(LOG_PATH, waitLine, waitCursor); SerialOut(waitLine, waitCursor); }
             } else if (ah15 == 0x86) {         /* wait CX:DX microseconds (#206) */
@@ -29278,7 +29278,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, char **logCursor, char
                 UINT dx84 = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
                 { static INT said = 0;
                   if (!said) { said = 1;
-                    char joystickLine[64], *joystickCursor = joystickLine;
+                    CHAR joystickLine[64], *joystickCursor = joystickLine;
                     joystickCursor = LogPut(joystickCursor, "  INT15 AH=84h joystick, dx=0x");
                     joystickCursor = LogHex(joystickCursor, dx84);
                     joystickCursor = LogPut(joystickCursor, VddJoystickIsLive(&g_Joystick) ? " (live)\r\n" : " (absent)\r\n");
@@ -29324,7 +29324,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, char **logCursor, char
                      this arm had already overwritten AH with 0x86, so the log said
                      "ax=0x86de" and only AL was the guest's -- the instrument
                      reporting its own write back as the guest's request. */
-                { char extendedLine[96], *extendedCursor = extendedLine;
+                { CHAR extendedLine[96], *extendedCursor = extendedLine;
                   extendedCursor = LogPut(extendedCursor, "  INT15 UNIMPL ax=0x");
                   extendedCursor = LogHex(extendedCursor, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
                   extendedCursor = LogPut(extendedCursor, " bx=0x"); extendedCursor = LogHex(extendedCursor, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
@@ -29677,7 +29677,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, char **logCursor, char
 
 INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
 {
-    char report[8192]; char *cursor = report; char *base;
+    CHAR report[8192]; PSTR cursor = report; PSTR base;
     INT wowCommandFromCsrss = 0;         /* s73: the Win16 program came from CSRSS, not target.txt */
     INT wantShell = 0;                 /* s79: our own launcher stub asked for a SHELL (see LAUNCH_STUB_NAME) */
     INT wasShell  = 0;                 /* s79: we actually loaded a shell, not a named program */
@@ -29685,8 +29685,8 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     DWORD nread = 0, error = 0, event; LONG vdmStatus;
     DOS_IMAGE image;
     DOS_MACHINE machine;
-    char dosout[16384];   /* M9 probe dumps run to several KB; 1024 truncated them */
-    char progpath[768]; char args[256];
+    CHAR dosout[16384];   /* M9 probe dumps run to several KB; 1024 truncated them */
+    CHAR progpath[768]; CHAR args[256];
     UINT index; INT guard;
     g_GuestThreadId = GetCurrentThreadId();
     OsCompatBind();                    /* the four XP-only imports, or their absence */
@@ -29727,7 +29727,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
          because this is the one part of the host that is run BOTH from a prompt and
          by double-clicking. Reporting into a console nobody can see is how an
          installer becomes "it did nothing". */
-    {   char vmsg[2048];
+    {   CHAR vmsg[2048];
         INT verb = InstallVerb(GetCommandLineA());
         if (verb >= 0) {
             /* ⚠ `verb == 0`, NOT `verb != 2`. The first cut wrote the latter, which
@@ -29805,10 +29805,10 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
        ⚠ The acquire rule is unchanged, per name: TRY to take it. A live host never
          yields its mutex (the wait times out -> next number); a dead one's is released
          or ABANDONED (-> we take that number). */
-    {   INT attempt; char name[48];
+    {   INT attempt; CHAR name[48];
         for (attempt = 1; attempt <= 16 && !g_OnceMutex; ++attempt) {
             HANDLE once; DWORD gle, waitResult = WAIT_OBJECT_0;
-            char *scan = LogPut(name, "Global\\ntvdmex_host_single");
+            PSTR scan = LogPut(name, "Global\\ntvdmex_host_single");
             if (attempt > 1) { *scan++ = '_'; scan = LogDecimal(scan, (UINT)attempt); }
             /* ⚠⚠ GetLastError() IS ONLY MEANINGFUL IMMEDIATELY AFTER THE CALL -- clear
                  it first; CreateMutexA does not clear it on success. (The first cut of
@@ -29823,14 +29823,14 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
             }
             g_OnceMutex = once;
             if (attempt > 1) {
-                char *position = LogPut(g_OutSubdirectory, "debug\\out\\");
+                PSTR position = LogPut(g_OutSubdirectory, "debug\\out\\");
                 position = LogDecimal(position, (UINT)attempt); LogPut(position, "\\");
                 CreateDirectoryA(NTVDMEX_OUT, NULL);
             }
             g_Instance = attempt; g_InstanceAbandoned = (waitResult == WAIT_ABANDONED);   /* reported at STAGE0 */
         }
         if (!g_OnceMutex) {
-            static const char message[] = "REFUSED: 16 NTVDMEX hosts are already running -- this instance is exiting\r\n";
+            static const CHAR message[] = "REFUSED: 16 NTVDMEX hosts are already running -- this instance is exiting\r\n";
             LogAppend(LOG_PATH, message, message + sizeof(message) - 1);
             return 0;
         } }
@@ -30014,11 +30014,11 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE modeHandle = CreateFileA(MODEY_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                               NULL, OPEN_EXISTING, 0, NULL);
       if (modeHandle != INVALID_HANDLE_VALUE) {
-          char modeYText[32]; DWORD modeYRead = 0, modeYValue = 0, modeYIndex; INT got = 0;
+          CHAR modeYText[32]; DWORD modeYRead = 0, modeYValue = 0, modeYIndex; INT got = 0;
           ReadFile(modeHandle, modeYText, sizeof modeYText - 1, &modeYRead, NULL); CloseHandle(modeHandle);
           for (modeYIndex = 0; modeYIndex < modeYRead && modeYText[modeYIndex] >= '0' && modeYText[modeYIndex] <= '9'; ++modeYIndex) { modeYValue = modeYValue * 10 + (DWORD)(modeYText[modeYIndex] - '0'); got = 1; }
           if (got && modeYValue <= 65536u) {
-              char lb4[96], *lineCursor = lb4;
+              CHAR lb4[96], *lineCursor = lb4;
               g_Video.ModeYGap = modeYValue;
               lineCursor = LogPut(lineCursor, "STAGE0: modey.txt -> gap="); lineCursor = LogHex(lineCursor, modeYValue);
               lineCursor = LogPut(lineCursor, " dwords\r\n"); LogAppend(LOG_PATH, lb4, lineCursor); SerialOut(lb4, lineCursor);
@@ -30029,7 +30029,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
         HANDLE configHandle = CreateFileA(CAPTURE_FLAG, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                 NULL, OPEN_EXISTING, 0, NULL);
         if (configHandle != INVALID_HANDLE_VALUE) {
-            char captureText[32]; DWORD captureRead = 0, captureValue = 0, captureIndex;
+            CHAR captureText[32]; DWORD captureRead = 0, captureValue = 0, captureIndex;
             ReadFile(configHandle, captureText, sizeof captureText - 1, &captureRead, NULL); CloseHandle(configHandle);
             for (captureIndex = 0; captureIndex < captureRead && captureText[captureIndex] >= '0' && captureText[captureIndex] <= '9'; ++captureIndex)
                 captureValue = captureValue * 10 + (DWORD)(captureText[captureIndex] - '0');
@@ -30055,7 +30055,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
         HANDLE noPatchHandle = CreateFileA(NOPMPATCH_FLAG, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                 NULL, OPEN_EXISTING, 0, NULL);
         if (noPatchHandle != INVALID_HANDLE_VALUE) {
-            char noPatchText[32]; DWORD nrd = 0, noPatchValue = 0, noPatchIndex;
+            CHAR noPatchText[32]; DWORD nrd = 0, noPatchValue = 0, noPatchIndex;
             ReadFile(noPatchHandle, noPatchText, sizeof noPatchText - 1, &nrd, NULL); CloseHandle(noPatchHandle);
             for (noPatchIndex = 0; noPatchIndex < nrd; ++noPatchIndex) {
                 INT hexDigit = (noPatchText[noPatchIndex] >= '0' && noPatchText[noPatchIndex] <= '9') ? noPatchText[noPatchIndex] - '0'
@@ -30070,7 +30070,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     {   HANDLE modeHandle = CreateFileA(MEMDUMP_FLAG, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                 NULL, OPEN_EXISTING, 0, NULL);
         if (modeHandle != INVALID_HANDLE_VALUE) {         /* "<linear> <size>" in hex */
-            char memoryDumpText[48]; DWORD mrd = 0, memoryDumpIndex, values[2] = {0, 0}, width = 0; INT isIn = 0;
+            CHAR memoryDumpText[48]; DWORD mrd = 0, memoryDumpIndex, values[2] = {0, 0}, width = 0; INT isIn = 0;
             ReadFile(modeHandle, memoryDumpText, sizeof memoryDumpText - 1, &mrd, NULL); CloseHandle(modeHandle);
             for (memoryDumpIndex = 0; memoryDumpIndex < mrd && width < 2; ++memoryDumpIndex) {
                 INT hexDigit = (memoryDumpText[memoryDumpIndex] >= '0' && memoryDumpText[memoryDumpIndex] <= '9') ? memoryDumpText[memoryDumpIndex] - '0'
@@ -30119,7 +30119,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE handle = CreateFileA(HEADLESS_MS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, OPEN_EXISTING, 0, NULL);
       if (handle != INVALID_HANDLE_VALUE) {
-          char text[16]; DWORD bytesRead = 0, number = 0; INT index;
+          CHAR text[16]; DWORD bytesRead = 0, number = 0; INT index;
           ReadFile(handle, text, sizeof text, &bytesRead, NULL);
           CloseHandle(handle);
           for (index = 0; index < (INT)bytesRead; ++index) {
@@ -30134,7 +30134,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE handle = CreateFileA(QIMODE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, OPEN_EXISTING, 0, NULL);
       if (handle != INVALID_HANDLE_VALUE) {
-          char text[2] = { 0, 0 }; DWORD bytesRead = 0; INT number = 0, index;
+          CHAR text[2] = { 0, 0 }; DWORD bytesRead = 0; INT number = 0, index;
           ReadFile(handle, text, 2, &bytesRead, NULL);
           CloseHandle(handle);
           for (index = 0; index < (INT)bytesRead; ++index) {          /* up to two hex digits */
@@ -30184,7 +30184,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE versionHandle = CreateFileA(DSPVER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                               NULL, OPEN_EXISTING, 0, NULL);
       if (versionHandle != INVALID_HANDLE_VALUE) {
-          char text[16]; DWORD bytesRead = 0; INT index = 0, major = 0, minor = 0;
+          CHAR text[16]; DWORD bytesRead = 0; INT index = 0, major = 0, minor = 0;
           ReadFile(versionHandle, text, sizeof text, &bytesRead, NULL);
           CloseHandle(versionHandle);
           while (index < (INT)bytesRead && text[index] >= '0' && text[index] <= '9') major = major * 10 + (text[index++] - '0');
@@ -30196,7 +30196,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE gateHandle = CreateFileA(SBGATE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                               NULL, OPEN_EXISTING, 0, NULL);
       if (gateHandle != INVALID_HANDLE_VALUE) {
-          char text[8]; DWORD bytesRead = 0;
+          CHAR text[8]; DWORD bytesRead = 0;
           ReadFile(gateHandle, text, sizeof text, &bytesRead, NULL); CloseHandle(gateHandle);
           g_SbGate = (bytesRead && text[0] >= '0' && text[0] <= '9') ? (text[0] - '0') : 1;
       } }
@@ -30204,7 +30204,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
       HANDLE priorityHandle = CreateFileA(EXECPRIO_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                               NULL, OPEN_EXISTING, 0, NULL);
       if (priorityHandle != INVALID_HANDLE_VALUE) {
-          char text[8]; DWORD bytesRead = 0;
+          CHAR text[8]; DWORD bytesRead = 0;
           ReadFile(priorityHandle, text, sizeof text, &bytesRead, NULL);
           CloseHandle(priorityHandle);
           if (bytesRead && text[0] >= '0' && text[0] <= '9') prio = (DWORD)(text[0] - '0');
@@ -30295,7 +30295,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
         HANDLE handle = CreateFileA(VDMSTATE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
         if (handle != INVALID_HANDLE_VALUE) {
-            char text[9]; DWORD bytesRead = 0; INT index;
+            CHAR text[9]; DWORD bytesRead = 0; INT index;
             ReadFile(handle, text, 8, &bytesRead, NULL);
             CloseHandle(handle);
             for (index = 0; index < (INT)bytesRead; ++index) {
@@ -30337,7 +30337,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
            VdmGetTib(). The latter is one call and costs nothing to try here, so
            try it BEFORE concluding the blocker is the command fetch. */
         {   PVOID tib2 = VdmGetTib();
-            char tibLine[120], *tibCursor = tibLine;
+            CHAR tibLine[120], *tibCursor = tibLine;
             tibCursor = LogPut(tibCursor, "WOWTRY: v86_get_tib -> 0x"); tibCursor = LogHex(tibCursor, (DWORD)(ULONG_PTR)tib2);
             tibCursor = LogPut(tibCursor, "\r\n"); LogAppend(LDTLOG_PATH, tibLine, tibCursor); }
         WowProbeLdtMatrix("wow-after-get-tib");
@@ -30402,7 +30402,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
              candidates actually WERE. A handle value with a file type beside it
              settles "is there a redirect on this VDM at all" in one line, for
              every one of the three streams, whether or not we end up using it. */
-        {   const char *nms[5]; HANDLE handles[5]; INT item;
+        {   PCSTR nms[5]; HANDLE handles[5]; INT item;
             nms[0] = "vdm.StdIn";   handles[0] = g_CommandInfo.StdIn;
             nms[1] = "vdm.StdOut";  handles[1] = g_CommandInfo.StdOut;
             nms[2] = "vdm.StdErr";  handles[2] = g_CommandInfo.StdErr;
@@ -30448,7 +30448,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     if (g_CurrentDirectory[0] || g_Title[0]) {
         VDM_COMMAND_INFO ci2;
         DWORD err2 = 0; BOOL ok2; INT item;
-        static char pf2[512], dk2[512], tt2[512], rv2[512];
+        static CHAR pf2[512], dk2[512], tt2[512], rv2[512];
         ZeroMemory(&ci2, sizeof ci2);
         ci2.CmdLine = g_CommandLine2; ci2.CmdLen = sizeof g_CommandLine2;  ci2.AppName = g_Application2; ci2.AppLen = sizeof g_Application2;
         ci2.PifFile = pf2; ci2.PifLen = sizeof pf2; ci2.CurDirectory = g_CurrentDirectory2; ci2.CurDirectoryLen = sizeof g_CurrentDirectory2;
@@ -30486,7 +30486,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
              does. DONT_WAIT: a misunderstanding is a FALSE, never a hang. */
         VDM_COMMAND_INFO ci2;
         DWORD err2 = 0; BOOL ok2; INT item;
-        static char pf2[512], dk2[512], tt2[512], rv2[512];
+        static CHAR pf2[512], dk2[512], tt2[512], rv2[512];
         ZeroMemory(&ci2, sizeof ci2);
         ci2.CmdLine = g_CommandLine2; ci2.CmdLen = sizeof g_CommandLine2;  ci2.AppName = g_Application2; ci2.AppLen = sizeof g_Application2;
         ci2.PifFile = pf2; ci2.PifLen = sizeof pf2; ci2.CurDirectory = g_CurrentDirectory2; ci2.CurDirectoryLen = sizeof g_CurrentDirectory2;
@@ -30502,7 +30502,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
              itself. Every call is DONT_WAIT and every answer is logged; a "name" is
              only believed when it is drive-qualified or UNC -- TRUE with junk is not
              a program. */
-        {   static const struct { DWORD VdmState; INT IsOwnTask; INT IsHandshake; const char *Description; } vdmStates[] = {
+        {   static const struct { DWORD VdmState; INT IsOwnTask; INT IsHandshake; PCSTR Description; } vdmStates[] = {
                 { 0x100 | 0x02 | 0x20, 1, 1, "GET_FIRST|WOW|DONT_WAIT taskid=-i (handshake)" },
                 { 0x02 | 0x01 | 0x20,  1, 0, "WOW|FIRST|DONT_WAIT taskid=-i" },
                 { 0x02 | 0x01 | 0x20,  0, 0, "WOW|FIRST|DONT_WAIT taskid=0"  },
@@ -30545,7 +30545,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
             HANDLE wowHandle;
             LogPut(g_WowCommandProgram, g_Application2); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
             /* the tail arrives with its leading space, as a DOS tail does; 0x70 adds its own */
-            { const char *cursorA = g_CommandLine2; while (*cursorA == ' ') ++cursorA; LogPut(g_WowCommandArguments, cursorA); LogPut(args, cursorA); }
+            { PCSTR cursorA = g_CommandLine2; while (*cursorA == ' ') ++cursorA; LogPut(g_WowCommandArguments, cursorA); LogPut(args, cursorA); }
             LogPut(progpath, g_WowCommandProgram);
             wowHandle = CreateFileA(g_WowCommandProgram, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
             if (wowHandle != INVALID_HANDLE_VALUE) { ReadFile(wowHandle, g_FileBuffer, sizeof(g_FileBuffer), &nread, NULL); CloseHandle(wowHandle); }
@@ -30600,7 +30600,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     if (g_Fetch2Ok) {
         HANDLE fileHandle = CreateFileA(g_Application2, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
         INT isStub = 0;
-        {   const char *baseName = g_Application2, *scan;
+        {   PCSTR baseName = g_Application2, scan;
             for (scan = g_Application2; *scan; ++scan) if (*scan == '\\' || *scan == '/') baseName = scan + 1;
             isStub   = (lstrcmpiA(baseName, "dosstub.com") == 0);
             /* ★ OUR OWN LAUNCHER'S STUB -- see LAUNCH_STUB_NAME. Same mechanism, a
@@ -30644,7 +30644,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                         "(GH #130)\r\n");
         }
         if (thread != INVALID_HANDLE_VALUE) {
-            char tpath[512]; DWORD tempLength = 0; char *scan; char *cursorA = 0;
+            CHAR tpath[512]; DWORD tempLength = 0; PSTR scan; PSTR cursorA = 0;
             ReadFile(thread, tpath, sizeof(tpath) - 1, &tempLength, NULL); CloseHandle(thread);
             tpath[tempLength < sizeof(tpath) ? tempLength : sizeof(tpath) - 1] = 0;
             /* ── ⚠⚠ A PROGRAM PATH MAY CONTAIN SPACES, AND THIS SPLIT ON THE FIRST ONE.
@@ -30665,12 +30665,12 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                  unambiguous and is what every Windows caller already writes. */
             scan = tpath;
             if (*scan == '"') {                            /* "path with spaces" [args] */
-                char *word2 = scan; ++scan;
+                PSTR word2 = scan; ++scan;
                 while (*scan && *scan != '"') *word2++ = *scan++;
                 if (*scan == '"') ++scan;
                 *word2 = 0;
                 while (*scan == ' ') ++scan;
-                { char *limit; for (limit = scan; *limit; ++limit) if (*limit == '\r' || *limit == '\n') { *limit = 0; break; } }
+                { PSTR limit; for (limit = scan; *limit; ++limit) if (*limit == '\r' || *limit == '\n') { *limit = 0; break; } }
                 if (*scan) cursorA = scan;
             } else {
                 for (scan = tpath; *scan; ++scan)                 /* trim EOL first */
@@ -30724,7 +30724,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
          is what the join was for and is still right. */
     if (!nread && g_Title[0]
         && (g_Title[0] == '\\' || (g_Title[1] == ':' && g_Title[2] == '\\'))) {
-        char path[768]; HANDLE fileHandle; int targetLength; char *targs = NULL; /* stays int: INT here moves the compiled code */
+        CHAR path[768]; HANDLE fileHandle; int targetLength; PSTR targs = NULL; /* stays int: INT here moves the compiled code */
         LogPut(path, g_Title);
         /* ⚠ AND THE TITLE ARRIVES WITH A TRAILING SPACE -- measured:
              `title=[C:\test\hello.com ]`. CreateFileA's treatment of one is not
@@ -30747,7 +30747,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                     " current directory]\r\n");
     }
     if (!nread && g_CurrentDirectory[0] && g_Title[0]) {
-        char path[768]; char *pathCursor = path; HANDLE fileHandle; int targetLength; char *targs = NULL; /* stays int: INT here moves the compiled code */
+        CHAR path[768]; PSTR pathCursor = path; HANDLE fileHandle; int targetLength; PSTR targs = NULL; /* stays int: INT here moves the compiled code */
         pathCursor = LogPut(pathCursor, g_CurrentDirectory); pathCursor = LogPut(pathCursor, "\\"); pathCursor = LogPut(pathCursor, g_Title);
         for (targetLength = 0; path[targetLength]; ++targetLength) ;              /* same trailing-space trim as above */
         while (targetLength > 0 && (path[targetLength - 1] == ' ' || path[targetLength - 1] == '\t')) path[--targetLength] = 0;
@@ -30795,7 +30795,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
          the harness is never overridden by whatever was last picked in the dialog. The
          #208 routing below and the shell load after it both read this one answer; they
          used to test the file separately, which a registry setting would have split. */
-    char shellConfig[512]; const char *shellSource = 0;
+    CHAR shellConfig[512]; PCSTR shellSource = 0;
     shellConfig[0] = 0;
     {   HANDLE configHandle = CreateFileA(SHELL_PATH, GENERIC_READ, FILE_SHARE_READ,
                                 NULL, OPEN_EXISTING, 0, NULL);
@@ -30830,7 +30830,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
         PIF_INFO pif;
         if (pathLength > 4 && !lstrcmpiA(progpath + pathLength - 4, ".PIF")
             && PifParse(g_FileBuffer, nread, &pif)) {
-            char prog[MAX_PATH], directory[MAX_PATH], pifdir[MAX_PATH], cand[MAX_PATH], extra[256];
+            CHAR prog[MAX_PATH], directory[MAX_PATH], pifdir[MAX_PATH], cand[MAX_PATH], extra[256];
             HANDLE pifHandle = INVALID_HANDLE_VALUE;
             INT item;
             ExpandEnvironmentStringsA(pif.Program, prog, sizeof prog);
@@ -30847,10 +30847,10 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                 lstrcpynA(cand, prog, sizeof cand);
                 pifHandle = CreateFileA(cand, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
             } else {
-                const char *roots[2]; INT rootIndex;
+                PCSTR roots[2]; INT rootIndex;
                 roots[0] = directory; roots[1] = pifdir;
                 for (rootIndex = 0; rootIndex < 2 && pifHandle == INVALID_HANDLE_VALUE; ++rootIndex) {
-                    char *wordStart;
+                    PSTR wordStart;
                     if (!roots[rootIndex][0]) continue;
                     wordStart = LogPut(cand, roots[rootIndex]); wordStart = LogPut(wordStart, "\\"); LogPut(wordStart, prog);
                     pifHandle = CreateFileA(cand, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
@@ -30869,7 +30869,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                 nread = 0; progpath[0] = 0; args[0] = 0;
                 cursor = LogPut(cursor, " -- PROGRAM NOT FOUND, starting a shell instead\r\n");
             } else {
-                char *wordStart;
+                PSTR wordStart;
                 nread = 0;
                 ReadFile(pifHandle, g_FileBuffer, sizeof(g_FileBuffer), &nread, NULL); CloseHandle(pifHandle);
                 lstrcpynA(progpath, cand, sizeof progpath);
@@ -30890,7 +30890,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     if (nread && !g_WowLaunch && !shellConfig[0]
         && GetFileAttributesA(DIRECTLAUNCH_FLAG) == INVALID_FILE_ATTRIBUTES) {
         INT pathLength = lstrlenA(progpath), isCommand = 0, isNewExe = 0;
-        char shortPath[300]; DWORD shortLength;
+        CHAR shortPath[300]; DWORD shortLength;
         isCommand = (pathLength >= 11 && !lstrcmpiA(progpath + pathLength - 11, "COMMAND.COM"));
         if (nread > 0x40 && g_FileBuffer[0] == 'M' && g_FileBuffer[1] == 'Z') {
             DWORD newHeaderOffset = *(const DWORD *)(g_FileBuffer + 0x3C);
@@ -30916,9 +30916,9 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
         }
     }
     if (!nread) {
-        char shell[512]; HANDLE shellHandle = INVALID_HANDLE_VALUE;
-        const char *why = 0;
-        static char whybuf[96];
+        CHAR shell[512]; HANDLE shellHandle = INVALID_HANDLE_VALUE;
+        PCSTR why = 0;
+        static CHAR whybuf[96];
         if (shellConfig[0]) {
             lstrcpynA(shell, shellConfig, sizeof shell);
             shellHandle = CreateFileA(shell, GENERIC_READ, FILE_SHARE_READ, NULL,
@@ -31014,7 +31014,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
          work"). The directory argument is COMMAND.COM's own COMSPEC location, which
          also replaces the C:\COMMAND.COM the environment otherwise names. */
     if (g_GuestNtAware && !args[0]) {
-        char directory[300], sdir[300]; INT directoryLength = 0, cut = 0;
+        CHAR directory[300], sdir[300]; INT directoryLength = 0, cut = 0;
         for (directoryLength = 0; progpath[directoryLength] && directoryLength < (INT)sizeof directory - 1; ++directoryLength) {
             directory[directoryLength] = progpath[directoryLength]; if (progpath[directoryLength] == '\\') cut = directoryLength; }
         directory[cut ? cut : directoryLength] = 0;
@@ -31031,7 +31031,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
              : (wasShell ? " -> an ordinary DOS shell\r\n" : " (not loaded as a shell)\r\n"));
 
     /* status-bar program name = basename of progpath (if any) */
-    { const char *baseName = progpath, *scan; INT item = 0;
+    { PCSTR baseName = progpath, scan; INT item = 0;
       for (scan = progpath; *scan; ++scan) if (*scan == '\\' || *scan == '/') baseName = scan + 1;
       if (*baseName) { while (baseName[item] && item < 63) { g_ProgramName[item] = baseName[item]; ++item; } g_ProgramName[item] = 0; } }
     /* No flag to raise: the UI tick polls g_ProgramName and repaints the strip when it
@@ -31280,7 +31280,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
          being built, so a knob that is absent costs exactly one failed open and the
          environment is byte-identical to what it has always been. */
     DsProbeLoad();          /* the #GP fault report's named guest data words */
-    { static char dosenv[192];
+    { static CHAR dosenv[192];
       HANDLE handle = CreateFileA(DOSENV_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, OPEN_EXISTING, 0, NULL);
       dosenv[0] = 0;
@@ -31309,7 +31309,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
            with the one that was already working. WowShorten leaves the path alone if
            GetShortPathNameA cannot answer, so a path that has no 8.3 form is unchanged. */
       if (progpath[0]) {
-          char before[768]; lstrcpynA(before, progpath, sizeof before);
+          CHAR before[768]; lstrcpynA(before, progpath, sizeof before);
           WowShorten(progpath, sizeof progpath);
           if (lstrcmpA(before, progpath) != 0) {
               cursor = LogPut(cursor, "STAGE2: argv[0] shortened for the guest: ["); cursor = LogPut(cursor, before);
@@ -31334,13 +31334,13 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                WAD), so the extender's open resolves to the same file -- and 8.3 name
                plus NUL can never approach 64. Only done when it must be. */
           if (lstrlenA(progpath) > 62) {
-              const char *baseName = progpath, *scan;
+              PCSTR baseName = progpath, scan;
               for (scan = progpath; *scan; ++scan) if (*scan == '\\' || *scan == '/') baseName = scan + 1;
               if (baseName != progpath && *baseName) {
                   cursor = LogPut(cursor, "STAGE2: argv[0] is "); cursor = LogHex(cursor, (DWORD)lstrlenA(progpath));
                   cursor = LogPut(cursor, " chars -- past DOS/4GW's 64-byte buffer; handing over the bare name [");
                   cursor = LogPut(cursor, baseName); cursor = LogPut(cursor, "] (cwd is the program's own directory)\r\n");
-                  { char bcopy[64]; lstrcpynA(bcopy, baseName, sizeof bcopy); LogPut(progpath, bcopy); }
+                  { CHAR bcopy[64]; lstrcpynA(bcopy, baseName, sizeof bcopy); LogPut(progpath, bcopy); }
               }
           }
       }
@@ -31348,7 +31348,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
            all in the ONE fixed 256-byte block at 0x60. The memory map does not move --
            see LauncherCompilerVariables for why that matters (a relocated block #GP'd every
            DOS extender). `extra` is dosenv.txt followed by the compiler vars. */
-      { static char envextra[512]; DWORD extraOffset = 0;
+      { static CHAR envextra[512]; DWORD extraOffset = 0;
         if (dosenv[0]) { extraOffset = (DWORD)wsprintfA(envextra, "%s", dosenv);
                          if (extraOffset && envextra[extraOffset-1] != '\n') envextra[extraOffset++] = '\n'; }
         /* ── ULTRASND= IS HOW A GUS PROGRAM FINDS THE CARD, AND IT LOOKS BEFORE IT PROBES.
@@ -31385,7 +31385,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
            like an EMPTY ENVIRONMENT. An instrument that fails by printing a plausible
            wrong answer is worse than one that fails loudly. */
       { const volatile BYTE *environmentBytes = (const volatile BYTE *)((DWORD)DOS_ENV_SEG << 4);
-        char environmentLine[288], *environmentCursor = environmentLine;
+        CHAR environmentLine[288], *environmentCursor = environmentLine;
         UINT environmentIndex, zeros = 0;
         environmentCursor = LogPut(environmentCursor, "STAGE2: guest environment block @0x");
         environmentCursor = LogHex(environmentCursor, (DWORD)DOS_ENV_SEG << 4); environmentCursor = LogPut(environmentCursor, " = [");
@@ -31395,7 +31395,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                           if (++zeros >= 2 && environmentIndex > 8) break;
                           continue; }
             zeros = 0;
-            *environmentCursor++ = (char)((character >= 0x20 && character < 0x7F) ? character : '?'); *environmentCursor = 0;
+            *environmentCursor++ = (CHAR)((character >= 0x20 && character < 0x7F) ? character : '?'); *environmentCursor = 0;
         }
         environmentCursor = LogPut(environmentCursor, "]\r\n");
         (VOID)environmentCursor;
@@ -31468,7 +31468,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     g_DosMachine = &machine;
     DosInt21SetVersion(&machine, (BYTE)g_Settings.Values[SET_DOSMAJ], (BYTE)g_Settings.Values[SET_DOSMIN]);
     /* Two sources, and the second one silently wins -- see the note below the file read. */
-    const char *dosVersionSource = "HKCU\\Software\\NTVDMEX (Settings dialog)";
+    PCSTR dosVersionSource = "HKCU\\Software\\NTVDMEX (Settings dialog)";
     /* ── THE REPORTED DOS VERSION IS A KNOB, BECAUSE IT IS A LIE THE GUEST CHOOSES.
          Real DOS ships SETVER for precisely this, and the number is not a fact about
          us: it is what a particular guest will accept. We default to 6.22 to match the
@@ -31507,7 +31507,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE handle = CreateFileA(DOSVER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, OPEN_EXISTING, 0, NULL);
       if (handle != INVALID_HANDLE_VALUE) {
-          char text[16]; DWORD bytesRead = 0; UINT index = 0, major = 0, minor = 0;
+          CHAR text[16]; DWORD bytesRead = 0; UINT index = 0, major = 0, minor = 0;
           ReadFile(handle, text, sizeof text - 1, &bytesRead, NULL);
           CloseHandle(handle);
           while (index < bytesRead && text[index] >= '0' && text[index] <= '9') { major = major*10 + (UINT)(text[index]-'0'); ++index; }
@@ -31558,7 +31558,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
        ⚠ And it prints unconditionally, with its source -- the dosver knob had two
          sources and logged a line only when one of them won, which is how the rig
          reported DOS 5.00 to every guest for an unknown number of sessions. */
-    { const char *int53Source = "built-in (measured vs stock ntvdm, 2026-09-25)";
+    { PCSTR int53Source = "built-in (measured vs stock ntvdm, 2026-09-25)";
       HANDLE handle;
       /* ── ★★ THE CONTEXT-DEPENDENCE, MODELLED RATHER THAN OVERRIDDEN. (s79) ─────────
            The measured stock answers (AL=2 -> CF=0, AL=5 -> AL=1) do not let XP's
@@ -31589,7 +31589,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
       handle = CreateFileA(INT53_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                       NULL, OPEN_EXISTING, 0, NULL);
       if (handle != INVALID_HANDLE_VALUE) {
-          char text[512]; DWORD bytesRead = 0, index = 0;
+          CHAR text[512]; DWORD bytesRead = 0, index = 0;
           ReadFile(handle, text, sizeof text - 1, &bytesRead, NULL); CloseHandle(handle);
           while (index < bytesRead) {
               UINT versions[3]; INT fieldCount = 0;
@@ -31600,7 +31600,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                   UINT value = 0; INT got = 0;
                   while (index < bytesRead && (text[index] == ' ' || text[index] == '\t')) ++index;
                   while (index < bytesRead) {
-                      char digitCharacter = text[index];
+                      CHAR digitCharacter = text[index];
                       INT digit = (digitCharacter >= '0' && digitCharacter <= '9') ? digitCharacter - '0'
                             : (digitCharacter >= 'a' && digitCharacter <= 'f') ? digitCharacter - 'a' + 10
                             : (digitCharacter >= 'A' && digitCharacter <= 'F') ? digitCharacter - 'A' + 10 : -1;
@@ -31705,7 +31705,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     {   volatile BYTE *controlTable = (volatile BYTE *)(DOS_CTAB_SEG << 4);
         DWORD drives = GetLogicalDrives();
         UINT drive, count = 0, slot[DOS_DPBCHAIN_MAX], driveCount = 0;
-        char *scan = report;
+        PSTR scan = report;
         /* Which drive letters exist, capped at what the reserved space holds.
            Counted FIRST, because each DPB's `next` pointer has to name the one
            after it and the last must terminate -- and a chain that does not
@@ -31729,10 +31729,10 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
              and network drives are redirector drives -- a CDS entry with the network
              flag and no DPB, which is how MSCDEX and a redirector present them. */
         for (drive = 0; drive < 26; ++drive) {
-            char rootText[4];
+            CHAR rootText[4];
             dtype[drive] = DRIVE_NO_ROOT_DIR;
             if (!(drives & (1u << drive))) continue;
-            rootText[0] = (char)('A' + drive); rootText[1] = ':'; rootText[2] = '\\'; rootText[3] = 0;
+            rootText[0] = (CHAR)('A' + drive); rootText[1] = ':'; rootText[2] = '\\'; rootText[3] = 0;
             dtype[drive] = GetDriveTypeA(rootText);
             if (dtype[drive] != DRIVE_FIXED && dtype[drive] != DRIVE_RAMDISK
                 && dtype[drive] != DRIVE_REMOVABLE) continue;
@@ -31740,9 +31740,9 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
         }
         for (count = 0; count < driveCount; ++count) {
             DWORD spc = 0, bps = 0, freec = 0, totc = 0;
-            char root[4]; UINT item; BYTE dpb[DOS_DPB_LEN];
+            CHAR root[4]; UINT item; BYTE dpb[DOS_DPB_LEN];
             INT last = (count + 1 == driveCount);
-            root[0] = (char)('A' + slot[count]); root[1] = ':'; root[2] = '\\'; root[3] = 0;
+            root[0] = (CHAR)('A' + slot[count]); root[1] = ':'; root[2] = '\\'; root[3] = 0;
             /* #48: a removable drive gets 6.22's OWN 1.44M floppy DPB -- 224 root entries,
                  media F0h -- which DosDpbBuild now reproduces byte for byte (sysvars_test).
                  It had 512 entries and F8h (the fixed-disk values) on a floppy. */
@@ -31888,7 +31888,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
             scan = LogPut(scan, dtype[drive] == DRIVE_FIXED ? " " : dtype[drive] == DRIVE_REMOVABLE ? " ~"
                        : dtype[drive] == DRIVE_CDROM ? " cd:" : dtype[drive] == DRIVE_REMOTE ? " net:"
                        : dtype[drive] == DRIVE_RAMDISK ? " ram:" : " ?");
-            { char driveLetter[2]; driveLetter[0] = (char)('A' + drive); driveLetter[1] = 0; scan = LogPut(scan, driveLetter); }
+            { CHAR driveLetter[2]; driveLetter[0] = (CHAR)('A' + drive); driveLetter[1] = 0; scan = LogPut(scan, driveLetter); }
         }
         scan = LogPut(scan, " (GH #48)\r\n");
         SetErrorMode(oldmode);
@@ -32016,10 +32016,10 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE watchHandle = CreateFileA(VWATCH_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                               NULL, OPEN_EXISTING, 0, NULL);
       if (watchHandle != INVALID_HANDLE_VALUE) {
-          char watchText[32]; DWORD rdw = 0, watchValue = 0, watchIndex; INT gotw = 0;
+          CHAR watchText[32]; DWORD rdw = 0, watchValue = 0, watchIndex; INT gotw = 0;
           ReadFile(watchHandle, watchText, sizeof watchText - 1, &rdw, NULL); CloseHandle(watchHandle);
           for (watchIndex = 0; watchIndex < rdw; ++watchIndex) {
-              INT digit = -1; char digitCharacter = watchText[watchIndex];
+              INT digit = -1; CHAR digitCharacter = watchText[watchIndex];
               if (digitCharacter >= '0' && digitCharacter <= '9') digit = digitCharacter - '0';
               else if (digitCharacter >= 'a' && digitCharacter <= 'f') digit = digitCharacter - 'a' + 10;
               else if (digitCharacter >= 'A' && digitCharacter <= 'F') digit = digitCharacter - 'A' + 10;
@@ -32027,7 +32027,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
               watchValue = (watchValue << 4) | (DWORD)digit; gotw = 1;
           }
           if (gotw) {
-              char lb5[96], *lq5 = lb5;
+              CHAR lb5[96], *lq5 = lb5;
               g_Video.WatchOffset = watchValue;
               lq5 = LogPut(lq5, "STAGE0: vwatch.txt -> planar watchpoint at VRAM offset 0x");
               lq5 = LogHex(lq5, watchValue); lq5 = LogPut(lq5, "\r\n");
@@ -32215,7 +32215,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE handle = CreateFileA(AWBUFS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, OPEN_EXISTING, 0, NULL);
       if (handle != INVALID_HANDLE_VALUE) {
-          char text[16]; DWORD bytesRead = 0, number = 0; INT index;
+          CHAR text[16]; DWORD bytesRead = 0, number = 0; INT index;
           ReadFile(handle, text, sizeof text, &bytesRead, NULL);
           CloseHandle(handle);
           for (index = 0; index < (INT)bytesRead; ++index) {
@@ -32234,7 +32234,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE handle = CreateFileA(AWFRAMES_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, OPEN_EXISTING, 0, NULL);
       if (handle != INVALID_HANDLE_VALUE) {
-          char text[16]; DWORD bytesRead = 0, number = 0; INT index;
+          CHAR text[16]; DWORD bytesRead = 0, number = 0; INT index;
           ReadFile(handle, text, sizeof text, &bytesRead, NULL);
           CloseHandle(handle);
           for (index = 0; index < (INT)bytesRead; ++index) {
@@ -32246,7 +32246,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE hp2 = CreateFileA(PITPACE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
       if (hp2 != INVALID_HANDLE_VALUE) {
-          char text[8]; DWORD bytesRead = 0;
+          CHAR text[8]; DWORD bytesRead = 0;
           ReadFile(hp2, text, sizeof text, &bytesRead, NULL); CloseHandle(hp2);
           if (bytesRead && text[0] >= '0' && text[0] <= '9') g_PitPaceMs = text[0] - '0';
           g_PitPaceOn = (g_PitPaceMs != 0);
@@ -32256,7 +32256,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE hp3 = CreateFileA(PITPRIO_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
       if (hp3 != INVALID_HANDLE_VALUE) {
-          char text[8]; DWORD bytesRead = 0;
+          CHAR text[8]; DWORD bytesRead = 0;
           ReadFile(hp3, text, sizeof text, &bytesRead, NULL); CloseHandle(hp3);
           if (bytesRead && text[0] >= '0' && text[0] <= '4') {
               static const INT pri[5] = { THREAD_PRIORITY_IDLE, THREAD_PRIORITY_BELOW_NORMAL,
@@ -32268,7 +32268,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE hp4 = CreateFileA(PITINJ_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
       if (hp4 != INVALID_HANDLE_VALUE) {
-          char text[8]; DWORD bytesRead = 0;
+          CHAR text[8]; DWORD bytesRead = 0;
           ReadFile(hp4, text, sizeof text, &bytesRead, NULL); CloseHandle(hp4);
           if (bytesRead && (text[0] == '0' || text[0] == '1')) g_PitPaceInject = text[0] - '0';
       } }
@@ -32276,7 +32276,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE keyHandle = CreateFileA(LLKBD_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                               NULL, OPEN_EXISTING, 0, NULL);
       if (keyHandle != INVALID_HANDLE_VALUE) {
-          char text[8]; DWORD bytesRead = 0;
+          CHAR text[8]; DWORD bytesRead = 0;
           ReadFile(keyHandle, text, sizeof text, &bytesRead, NULL); CloseHandle(keyHandle);
           if (bytesRead && (text[0] == '0' || text[0] == '1')) g_LowLevelKeyboardOn = text[0] - '0';
       } }
@@ -32284,7 +32284,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE configHandle = CreateFileA(COURIER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                               NULL, OPEN_EXISTING, 0, NULL);
       if (configHandle != INVALID_HANDLE_VALUE) {
-          char text[8]; DWORD bytesRead = 0;
+          CHAR text[8]; DWORD bytesRead = 0;
           ReadFile(configHandle, text, sizeof text, &bytesRead, NULL); CloseHandle(configHandle);
           /* 0 = off, 1 = REFUTED (progressive collapse), 2 = gentle. See the thread. */
           if (bytesRead && text[0] >= '0' && text[0] <= '2') g_CourierOn = text[0] - '0';
@@ -32292,7 +32292,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE hp5 = CreateFileA(UITICK_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
       if (hp5 != INVALID_HANDLE_VALUE) {
-          char text[8]; DWORD bytesRead = 0; INT number = 0, index;
+          CHAR text[8]; DWORD bytesRead = 0; INT number = 0, index;
           ReadFile(hp5, text, sizeof text, &bytesRead, NULL); CloseHandle(hp5);
           for (index = 0; index < (INT)bytesRead; ++index) {
               if (text[index] < '0' || text[index] > '9') break;
@@ -32307,14 +32307,14 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE hpw = CreateFileA(WOWIDLE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
       if (hpw != INVALID_HANDLE_VALUE) {
-          char text[12]; DWORD bytesRead = 0, number = 0; INT index;
+          CHAR text[12]; DWORD bytesRead = 0, number = 0; INT index;
           ReadFile(hpw, text, sizeof text, &bytesRead, NULL); CloseHandle(hpw);
           for (index = 0; index < (INT)bytesRead; ++index) {
               if (text[index] < '0' || text[index] > '9') break;
               number = number * 10 + (DWORD)(text[index] - '0');
           }
           if (bytesRead && text[0] >= '0' && text[0] <= '9') {
-              char wowLine2[160], *wowCursor2 = wowLine2;
+              CHAR wowLine2[160], *wowCursor2 = wowLine2;
               g_WowMsgWaitMs = number;
               wowCursor2 = LogPut(wowCursor2, "WOWMSG: GetMessage idle wait = ");
               if (number) { wowCursor2 = LogHex(wowCursor2, number); wowCursor2 = LogPut(wowCursor2, " ms"); }
@@ -32328,7 +32328,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE hp6 = CreateFileA(KEYIRQ_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
       if (hp6 != INVALID_HANDLE_VALUE) {
-          char text[8]; DWORD bytesRead = 0;
+          CHAR text[8]; DWORD bytesRead = 0;
           ReadFile(hp6, text, sizeof text, &bytesRead, NULL); CloseHandle(hp6);
           /* 0 = never yield, 1 = always (old default), 2 = only while the clock is on
              schedule. See the yield branch in HostIrqSink. */
@@ -32339,7 +32339,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE hp7 = CreateFileA(MSENS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
       if (hp7 != INVALID_HANDLE_VALUE) {
-          char text[8]; DWORD bytesRead = 0; INT value2 = 0, index2;
+          CHAR text[8]; DWORD bytesRead = 0; INT value2 = 0, index2;
           ReadFile(hp7, text, sizeof text, &bytesRead, NULL); CloseHandle(hp7);
           for (index2 = 0; index2 < (INT)bytesRead; ++index2) { if (text[index2] < '0' || text[index2] > '9') break;
                                           value2 = value2 * 10 + (text[index2] - '0'); }
@@ -32357,7 +32357,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE hp8 = CreateFileA(CPUREF_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
       if (hp8 != INVALID_HANDLE_VALUE) {
-          char text[12]; DWORD bytesRead = 0; UINT sbValue = 0; INT index2;
+          CHAR text[12]; DWORD bytesRead = 0; UINT sbValue = 0; INT index2;
           ReadFile(hp8, text, sizeof text, &bytesRead, NULL); CloseHandle(hp8);
           for (index2 = 0; index2 < (INT)bytesRead; ++index2) { if (text[index2] < '0' || text[index2] > '9') break;
                                           sbValue = sbValue * 10u + (UINT)(text[index2] - '0'); }
@@ -32387,7 +32387,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
              ⚠ This is the FILE knob only. The menu and the Settings dialog set the
                index directly and were never affected, so it is a testability defect
                and not the cause of any speed a user has seen. */
-          char text[8]; DWORD bytesRead = 0; UINT value9 = 0; INT index9;
+          CHAR text[8]; DWORD bytesRead = 0; UINT value9 = 0; INT index9;
           ReadFile(hp9, text, sizeof text, &bytesRead, NULL); CloseHandle(hp9);
           for (index9 = 0; index9 < (INT)bytesRead; ++index9) { if (text[index9] < '0' || text[index9] > '9') break;
                                              value9 = value9 * 10u + (UINT)(text[index9] - '0'); }
@@ -32405,7 +32405,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE hpg = CreateFileA(CPUGRAN_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
       if (hpg != INVALID_HANDLE_VALUE) {
-          char text[12]; DWORD bytesRead = 0; UINT valueG = 0; INT indexG;
+          CHAR text[12]; DWORD bytesRead = 0; UINT valueG = 0; INT indexG;
           ReadFile(hpg, text, sizeof text, &bytesRead, NULL); CloseHandle(hpg);
           for (indexG = 0; indexG < (INT)bytesRead; ++indexG) { if (text[indexG] < '0' || text[indexG] > '9') break;
                                              valueG = valueG * 10u + (UINT)(text[indexG] - '0'); }
@@ -32415,7 +32415,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     { HANDLE hpa = CreateFileA(CPUAFF_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
       if (hpa != INVALID_HANDLE_VALUE) {
-          char text[8]; DWORD bytesRead = 0;
+          CHAR text[8]; DWORD bytesRead = 0;
           ReadFile(hpa, text, sizeof text, &bytesRead, NULL); CloseHandle(hpa);
           if (bytesRead && (text[0] == '0' || text[0] == '1')) g_CpuAffinityOn = (text[0] == '1');
       } }
@@ -32471,7 +32471,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     /* ── #136: SAY WHICH SYNTH THE MPU-401 PLAYS THROUGH, but only when it was chosen.
          Host GM (the default) opens device 0 as it always did and logs nothing new. */
     if (g_Wave.MidiChoice != MIDI_ROUTE_GM) {
-        char midiLine[200], *midiCursor = LogPut(midiLine, "STAGE2: MIDI = ");
+        CHAR midiLine[200], *midiCursor = LogPut(midiLine, "STAGE2: MIDI = ");
         midiCursor = LogPut(midiCursor, g_Wave.MidiChoice == MIDI_ROUTE_MT32 ? "MT-32" : "SoundFont");
         if (g_Wave.IsMidiExternal) {
             midiCursor = LogPut(midiCursor, " -> device "); midiCursor = LogDecimal(midiCursor, (UINT)g_Wave.MidiDevice);
@@ -32488,7 +32488,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
             midiCursor = LogPut(midiCursor, "; SoundFontPath is not passed on -- the driver keeps its own list");
         midiCursor = LogPut(midiCursor, " (#136)\r\n"); LogAppend(LOG_PATH, midiLine, midiCursor);
     }
-    {   char audioLine[128], *audioCursor = LogPut(audioLine, "STAGE2: audio output = ");
+    {   CHAR audioLine[128], *audioCursor = LogPut(audioLine, "STAGE2: audio output = ");
         audioCursor = LogPut(audioCursor, g_Wave.IsUsingDirectSound ? "DirectSound" : g_Wave.IsSilent ? "none (silent pump)" : "WinMM");
         if (g_Wave.WantsDirectSound && !g_Wave.IsUsingDirectSound) audioCursor = LogPut(audioCursor, " (DirectSound asked for, would not open)");
         audioCursor = LogPut(audioCursor, "\r\n"); LogAppend(LOG_PATH, audioLine, audioCursor); }
@@ -32510,7 +32510,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
        because a guest-owned vector then silently does nothing again. */
     g_SimIntReflect = (GetFileAttributesA(SIMINTREFL_OFF_FLAG) == INVALID_FILE_ATTRIBUTES);
     if (!g_SimIntReflect) {
-        char sb2[224], *stageCursor = sb2;
+        CHAR sb2[224], *stageCursor = sb2;
         stageCursor = LogPut(stageCursor, "STAGE1: simintrefl_off.flag -- DPMI 0300 is the pre-#247 shape: INT 21h/"
                       "33h/10h host-side, EVERY other vector NOT RUN (ZAR: silent). See "
                       "simint_route().\r\n");
@@ -32675,7 +32675,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
     LogWrite(LOG_PATH, report, cursor);
     base = cursor;                       /* preamble is on disk; the loop appends from here */
     {   /* #211. After the last truncating write, for the same reason as #144 below. */
-        char instanceLine[200], *instanceCursor = LogPut(instanceLine, "STAGE2: instance "); instanceCursor = LogDecimal(instanceCursor, (UINT)g_Instance);
+        CHAR instanceLine[200], *instanceCursor = LogPut(instanceLine, "STAGE2: instance "); instanceCursor = LogDecimal(instanceCursor, (UINT)g_Instance);
         if (g_Instance > 1) { instanceCursor = LogPut(instanceCursor, " (another NTVDMEX was running) -> output in "); instanceCursor = LogPut(instanceCursor, g_OutSubdirectory); }
         if (g_InstanceAbandoned) instanceCursor = LogPut(instanceCursor, " -- prior holder ABANDONED (zombie thread died)");
         instanceCursor = LogPut(instanceCursor, " (#211)\r\n");
@@ -32712,7 +32712,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                          || number == 0x2A || number == 0x5C);
             INT user  = (number >= 0x60 && number <= 0x66) || (number >= 0x68 && number <= 0x6F)
                         || (number >= 0x78 && number <= 0xFE);
-            char gateLine[120], *gateCursor = gateLine;
+            CHAR gateLine[120], *gateCursor = gateLine;
             if (!g_Bus.Interrupts[number].Service || wired) continue;
             gateCursor = LogPut(gateCursor, "  VDD: claim_int 0x"); gateCursor = LogHex(gateCursor, number);
             if (!user || count >= DOS_GENSTUB_N) {
@@ -32738,7 +32738,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
          wrong place. If you add diagnostics to WinMain, append AFTER line ~9941 or put
          them in `p` so a LogWrite carries them. */
     {   DWORD attributes = GetFileAttributesA(WOWTRY_FLAG);
-        char wowLine[200], *wowCursor = wowLine;
+        CHAR wowLine[200], *wowCursor = wowLine;
         wowCursor = LogPut(wowCursor, "LDTARM: wow_mods="); wowCursor = LogHex(wowCursor, (DWORD)g_WowModuleCount);
         wowCursor = LogPut(wowCursor, " flag_attr=0x");      wowCursor = LogHex(wowCursor, attributes);
         wowCursor = LogPut(wowCursor, "\r\n"); LogAppend(LOG_PATH, wowLine, wowCursor);
@@ -32774,7 +32774,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                         : "  -> inside a larger reservation: NOT remappable in place\r\n");
           LogAppend(LOG_PATH, base, cursor); cursor = base;
       } }
-    { char bb2[160], *breakCursor = bb2;
+    { CHAR bb2[160], *breakCursor = bb2;
       breakCursor = LogPut(breakCursor, g_Bus.ClaimFailures ? "STAGE2: *** BUS CLAIMS REFUSED: " : "STAGE2: bus ok: ");
       breakCursor = LogHex(breakCursor, (DWORD)g_Bus.ClaimFailures);
       breakCursor = LogPut(breakCursor, " refused, ports="); breakCursor = LogHex(breakCursor, (DWORD)g_Bus.PortCount);
@@ -33022,7 +33022,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                     INT item;
                     for (item = 0; item < 6; ++item) trampoline[item] = g_TrampolineSave[item];
                     g_TrampolineSaved = 0;
-                    {   char trampolineLine[200], *trampolineCursor = LogPut(trampolineLine, "STAGE2: entry trampoline done -- first exit ev=0x");
+                    {   CHAR trampolineLine[200], *trampolineCursor = LogPut(trampolineLine, "STAGE2: entry trampoline done -- first exit ev=0x");
                         trampolineCursor = LogHex(trampolineCursor, (DWORD)event); trampolineCursor = LogPut(trampolineCursor, " at 0x"); trampolineCursor = LogHex(trampolineCursor, tcs);
                         trampolineCursor = LogPut(trampolineCursor, ":0x"); trampolineCursor = LogHex(trampolineCursor, tip); trampolineCursor = LogPut(trampolineCursor, " VTIB EFLAGS=0x");
                         trampolineCursor = LogHex(trampolineCursor, VDM_REG(tib, VTIB_EFLAGS)); trampolineCursor = LogPut(trampolineCursor, " (IF=bit 9, VIF=bit 19, VIP=bit 20)\r\n");
@@ -33053,7 +33053,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
              g_MouseCallbackTrace. Logged before any arm below acts on the event, so what is
              recorded is what the kernel handed back, not what we made of it. */
         if (g_MouseCallbackTrace > 0) {
-            char tibLine2[384], *tibCursor2 = tibLine2;
+            CHAR tibLine2[384], *tibCursor2 = tibLine2;
             DWORD tcs = VDM_REG(tib, VTIB_CS) & 0xFFFF, tip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
             DWORD tss = VDM_REG(tib, VTIB_SS) & 0xFFFF, tsp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
             --g_MouseCallbackTrace;
@@ -33699,13 +33699,13 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                                           OPEN_EXISTING, 0, NULL);
                   if (configHandle != INVALID_HANDLE_VALUE) {
-                      char pmChangeText[128]; DWORD commandLength = 0, pmTextIndex = 0, values[2] = { 0, 0 }; INT column = 0;
+                      CHAR pmChangeText[128]; DWORD commandLength = 0, pmTextIndex = 0, values[2] = { 0, 0 }; INT column = 0;
                       ReadFile(configHandle, pmChangeText, sizeof pmChangeText - 1, &commandLength, NULL); CloseHandle(configHandle);
                       while (pmTextIndex < commandLength && column < 2) {
                           INT digits = 0;
                           while (pmTextIndex < commandLength && (pmChangeText[pmTextIndex] == ' ' || pmChangeText[pmTextIndex] == '\t')) ++pmTextIndex;
                           while (pmTextIndex < commandLength) {
-                              char character = pmChangeText[pmTextIndex];
+                              CHAR character = pmChangeText[pmTextIndex];
                               INT pmDigit = (character >= '0' && character <= '9') ? character - '0'
                                     : (character >= 'a' && character <= 'f') ? character - 'a' + 10
                                     : (character >= 'A' && character <= 'F') ? character - 'A' + 10 : -1;
@@ -33731,13 +33731,13 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                                           OPEN_EXISTING, 0, NULL);
                   if (watchHandle != INVALID_HANDLE_VALUE) {
-                      char wb2[128]; DWORD watchLength = 0, index2b = 0;
+                      CHAR wb2[128]; DWORD watchLength = 0, index2b = 0;
                       ReadFile(watchHandle, wb2, sizeof wb2 - 1, &watchLength, NULL); CloseHandle(watchHandle);
                       while (index2b < watchLength && g_PmWatchCount < DPMI_WATCH_MAX) {
                           DWORD number = 0; INT dig = 0, rel = 0;
                           if (index2b < watchLength && wb2[index2b] == '+') { rel = 1; ++index2b; }
                           while (index2b < watchLength) {
-                              char character = wb2[index2b];
+                              CHAR character = wb2[index2b];
                               INT digit = (character >= '0' && character <= '9') ? character - '0'
                                     : (character >= 'a' && character <= 'f') ? character - 'a' + 10
                                     : (character >= 'A' && character <= 'F') ? character - 'A' + 10 : -1;
@@ -34073,7 +34073,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                              no keyboard activity pays nothing. */
                         if (g_KeyPmLogged < 64
                             && (!done1 || g_KeyPmLogged < 8)) {
-                            char kb2[176], *keyCursor = kb2;
+                            CHAR kb2[176], *keyCursor = kb2;
                             ++g_KeyPmLogged;
                             keyCursor = LogPut(keyCursor, "KEYPM pend=");  keyCursor = LogHex(keyCursor, (DWORD)g_Irq1Pending);
                             keyCursor = LogPut(keyCursor, " vi=");         keyCursor = LogHex(keyCursor, (DWORD)virtualIf);
@@ -34531,7 +34531,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                             g_InPmIrq = 0;
                           }
                           g_CooperativeDmaPolls += g_Dma.ChannelCountReads[1] - preb;
-                          { char breakLine[160], *breakCursor = breakLine;
+                          { CHAR breakLine[160], *breakCursor = breakLine;
                             breakCursor = LogPut(breakCursor, "  BATCH gate="); breakCursor = LogHex(breakCursor, (DWORD)gate);
                             breakCursor = LogPut(breakCursor, " k="); breakCursor = LogHex(breakCursor, (DWORD)item);
                             breakCursor = LogPut(breakCursor, " c32="); breakCursor = LogHex(breakCursor, (DWORD)g_DpmiIsClient32);
@@ -34802,7 +34802,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                                     }
                                     guestInstruction   = (volatile BYTE *)(ULONG_PTR)glin;
                                     if (!glin && !g_Fault32Warned) {
-                                        char wowLine3[288], *wowCursor3 = wowLine3;
+                                        CHAR wowLine3[288], *wowCursor3 = wowLine3;
                                         g_Fault32Warned = 1;
                                         wowCursor3 = LogPut(wowCursor3, "  EXC: #GP(IDT) vec=0x"); wowCursor3 = LogHex(wowCursor3, gvec);
                                         wowCursor3 = LogPut(wowCursor3, " in a FLAT base-0 32-bit CS 0x");
@@ -34818,7 +34818,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                                     }
                                 }
                                 if (gss32 && !gespok && !g_Fault32Warned) {
-                                    char wowLine4[224], *wowCursor4 = wowLine4;
+                                    CHAR wowLine4[224], *wowCursor4 = wowLine4;
                                     g_Fault32Warned = 1;
                                     wowCursor4 = LogPut(wowCursor4, "  EXC: #GP(IDT) vec=0x"); wowCursor4 = LogHex(wowCursor4, gvec);
                                     wowCursor4 = LogPut(wowCursor4, " with a 32-bit SS 0x"); wowCursor4 = LogHex(wowCursor4, frame[7]);
@@ -35121,7 +35121,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                                 cursor = LogPut(cursor, " esi=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_ESI));
                                 cursor = LogPut(cursor, " edi=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EDI));
                                 cursor = LogPut(cursor, " ebp=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EBP));
-                                { WORD sels[2]; const char *registerNames[2] = { " ds", " es" }; INT si2;
+                                { WORD sels[2]; PCSTR registerNames[2] = { " ds", " es" }; INT si2;
                                   sels[0] = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
                                   sels[1] = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF);
                                   for (si2 = 0; si2 < 2; ++si2) {
@@ -35461,7 +35461,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
             static INT  carryPolicy = -1;                 /* -1 = not yet read */
             INT quiet = 0;                           /* rate-limit the LOG, never the answer */
             if (carryPolicy < 0) {
-                char text[16]; DWORD bytesRead = 0;
+                CHAR text[16]; DWORD bytesRead = 0;
                 HANDLE handle = CreateFileA(BOP54_PATH, GENERIC_READ, FILE_SHARE_READ,
                                        NULL, OPEN_EXISTING, 0, NULL);
                 /* DEFAULT CF=0, and that is measured rather than chosen: with CF=1 the
@@ -35547,7 +35547,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                 const volatile BYTE *environment2 = (const volatile BYTE *)(ULONG_PTR)((DWORD)es2 << 4);
                 cursor = LogPut(cursor, "\r\n         shell env seg=0x"); cursor = LogHex(cursor, es2); cursor = LogPut(cursor, " [");
                 for (scan = 0; scan < 160 && !(environment2[scan] == 0 && environment2[scan + 1] == 0); ++scan) {
-                    char character1[2]; character1[0] = environment2[scan] ? (char)environment2[scan] : '|'; character1[1] = 0;
+                    CHAR character1[2]; character1[0] = environment2[scan] ? (CHAR)environment2[scan] : '|'; character1[1] = 0;
                     if (character1[0] < 0x20 || character1[0] > 0x7e) character1[0] = '.';
                     cursor = LogPut(cursor, character1); }
                 cursor = LogPut(cursor, "]"); } }
@@ -35681,7 +35681,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                          the same command again. That is the difference between testing
                          the mechanism and building a fork bomb. */
                     static INT commandDone = 0;
-                    char cmdbuf[128]; DWORD commandLength = 0;
+                    CHAR cmdbuf[128]; DWORD commandLength = 0;
                     if (!commandDone && g_Routed) {
                         /* #208: the program's arguments, as the shell's tail -- it passes
                            them on as the program's own PSP command tail. */
@@ -35691,11 +35691,11 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                              tail " " + name HELLO.COM ran NOTHING (a blank line is "no
                              command" and the shell went to its prompt). */
                         commandDone = 1;
-                        {   char *writeCursor = cmdbuf, *limit = cmdbuf + sizeof(cmdbuf) - 2;
-                            const char *firstProgram = g_FirstProgram;
+                        {   CHAR *writeCursor = cmdbuf, *limit = cmdbuf + sizeof(cmdbuf) - 2;
+                            PCSTR firstProgram = g_FirstProgram;
                             while (*firstProgram && writeCursor < limit) *writeCursor++ = *firstProgram++;
                             if (g_FirstTail[0] && writeCursor < limit) {
-                                const char *firstTail = g_FirstTail;
+                                PCSTR firstTail = g_FirstTail;
                                 if (*firstTail != ' ') *writeCursor++ = ' ';
                                 while (*firstTail && writeCursor < limit) *writeCursor++ = *firstTail++;
                             }
@@ -35722,7 +35722,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                     if (!quiet) { cursor = LogPut(cursor, "         cmdline buf 0x"); cursor = LogHex(cursor, codeBase);
                                   if (commandLength) { cursor = LogPut(cursor, " <- ["); 
                                             { DWORD item; for (item = 0; item < commandLength; ++item)
-                                                  { char piece[2]; piece[0]=cmdbuf[item]; piece[1]=0; cursor = LogPut(cursor, piece); } }
+                                                  { CHAR piece[2]; piece[0]=cmdbuf[item]; piece[1]=0; cursor = LogPut(cursor, piece); } }
                                             cursor = LogPut(cursor, "] ONE SHOT"); }
                                   else      cursor = LogPut(cursor, " <- empty tail (len=0, CR)");
                                   cursor = LogPut(cursor, "\r\n"); }
@@ -35765,7 +35765,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                        `dosstub.com` -- the harness stub -- and `target.txt` names the
                        real program, so g_Application2 would hand the shell the stub. progpath
                        is what we actually LOADED, which is the program either way. */
-                    const char *programPath = g_Routed ? g_FirstProgram      /* #208: the program */
+                    PCSTR programPath = g_Routed ? g_FirstProgram      /* #208: the program */
                                    : progpath[0] ? progpath : (g_Application2[0] ? g_Application2 : "");
                     DWORD al = 0, valueType = 9;
                     if (!namedOnce && programPath[0]) {
@@ -35773,10 +35773,10 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                         namedOnce = 1;
                     }
                     if (al > 6) {
-                        char extension[5]; INT item;
+                        CHAR extension[5]; INT item;
                         for (item = 0; item < 4; ++item) {
-                            char character = programPath[al - 4 + item];
-                            extension[item] = (character >= 'a' && character <= 'z') ? (char)(character - 32) : character;
+                            CHAR character = programPath[al - 4 + item];
+                            extension[item] = (character >= 'a' && character <= 'z') ? (CHAR)(character - 32) : character;
                         }
                         extension[4] = 0;
                         if      (extension[1]=='E' && extension[2]=='X' && extension[3]=='E' && extension[0]=='.') valueType = 4;
@@ -35791,7 +35791,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                 BW(0x1A, 0);
                     if (!quiet) {
                         cursor = LogPut(cursor, "         prog name <- ["); 
-                        { DWORD item; for (item = 0; item < al; ++item) { char piece[2]; piece[0]=programPath[item]; piece[1]=0; cursor = LogPut(cursor, piece); } }
+                        { DWORD item; for (item = 0; item < al; ++item) { CHAR piece[2]; piece[0]=programPath[item]; piece[1]=0; cursor = LogPut(cursor, piece); } }
                         cursor = LogPut(cursor, "] type="); cursor = LogDecimal(cursor, valueType); cursor = LogPut(cursor, "\r\n");
                     }
                 }
@@ -35848,7 +35848,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                  PATH, BLASTER, ULTRASND...), snapshotted on call 1 while it is intact, with
                  COMSPEC pointed at the real shell. */
             if (bopNumber == NTVDM_BOP_CMD && sub == 0x0F) {
-                static char envsnap[1024]; static DWORD envlen;
+                static CHAR envsnap[1024]; static DWORD envlen;
                 DWORD bx0 = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
                 if (bx0 == 0) {
                     const volatile BYTE *environment0 = (const volatile BYTE *)(ULONG_PTR)((DWORD)DOS_ENV_SEG << 4);
@@ -35866,8 +35866,8 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                         if ((environment0[envStart] | 0x20) == 'p' && (environment0[envStart + 1] | 0x20) == 'a' &&
                             (environment0[envStart + 2] | 0x20) == 't' && (environment0[envStart + 3] | 0x20) == 'h' &&
                             environment0[envStart + 4] == '=') {
-                            char writeBuffer[2048], shellPath[MAX_PATH]; DWORD writeLength, start = outputIndex, length0 = 0;
-                            char *start0 = writeBuffer, *limit;
+                            CHAR writeBuffer[2048], shellPath[MAX_PATH]; DWORD writeLength, start = outputIndex, length0 = 0;
+                            PSTR start0 = writeBuffer, limit;
                             writeLength = GetEnvironmentVariableA("PATH", writeBuffer, sizeof writeBuffer);
                             outputIndex = (DWORD)(LogPut(envsnap + outputIndex, "PATH=") - envsnap);
                             if (writeLength && writeLength < sizeof writeBuffer) {
@@ -35891,7 +35891,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                             outputIndex = (DWORD)(LogPut(envsnap + outputIndex, g_ShellPath[0] ? g_ShellPath
                                                            : "C:\\WINDOWS\\SYSTEM32\\COMMAND.COM") - envsnap);
                         } else {
-                            DWORD envIndex; for (envIndex = envStart; envIndex < inputIndex; ++envIndex) envsnap[outputIndex++] = (char)environment0[envIndex];
+                            DWORD envIndex; for (envIndex = envStart; envIndex < inputIndex; ++envIndex) envsnap[outputIndex++] = (CHAR)environment0[envIndex];
                         }
                         envsnap[outputIndex++] = 0;
                         ++inputIndex;
@@ -35940,7 +35940,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                 DWORD nameBase = ((VDM_REG(tib, VTIB_DS) & 0xFFFF) << 4)
                          + (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                 volatile BYTE *nameBytes = (volatile BYTE *)(ULONG_PTR)nameBase;
-                char autoText[80]; DWORD autoLength = 0, item;
+                CHAR autoText[80]; DWORD autoLength = 0, item;
                 HANDLE autoHandle = CreateFileA(BOPAUTO_PATH, GENERIC_READ, FILE_SHARE_READ,
                                         NULL, OPEN_EXISTING, 0, NULL);
                 if (autoHandle != INVALID_HANDLE_VALUE) {
@@ -35958,9 +35958,9 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                      is one -- so the user's batch still runs, silently. Its short path must
                      fit XP's 0x3F cap; if it cannot be made, the old answer stands. */
                 if (!autoLength) {
-                    static char wrap[MAX_PATH];
+                    static CHAR wrap[MAX_PATH];
                     if (!wrap[0]) {
-                        char tempDirectory[MAX_PATH], full[MAX_PATH], shortPath[MAX_PATH];
+                        CHAR tempDirectory[MAX_PATH], full[MAX_PATH], shortPath[MAX_PATH];
                         DWORD tempLength = GetTempPathA(sizeof tempDirectory, tempDirectory), shortTempLength;
                         HANDLE writeHandle;
                         if (tempLength && tempLength < sizeof tempDirectory - 16) {
@@ -35968,7 +35968,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                             writeHandle = CreateFileA(full, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
                             if (writeHandle != INVALID_HANDLE_VALUE) {
-                                static const char body[] = "@echo off\r\n"
+                                static const CHAR body[] = "@echo off\r\n"
                                     "if exist C:\\AUTOEXEC.BAT call C:\\AUTOEXEC.BAT\r\n";
                                 DWORD bytesWritten = 0;
                                 WriteFile(writeHandle, body, sizeof body - 1, &bytesWritten, NULL);
@@ -35987,7 +35987,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
                 nameBytes[autoLength] = 0;
                 if (!quiet) {
                     cursor = LogPut(cursor, "         sub 0D answered: startup batch [");
-                    for (item = 0; item < autoLength; ++item) { char piece[2]; piece[0]=autoText[item]; piece[1]=0; cursor = LogPut(cursor, piece); }
+                    for (item = 0; item < autoLength; ++item) { CHAR piece[2]; piece[0]=autoText[item]; piece[1]=0; cursor = LogPut(cursor, piece); }
                     cursor = LogPut(cursor, "] at 0x"); cursor = LogHex(cursor, nameBase); cursor = LogPut(cursor, "\r\n");
                     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                 }
@@ -36183,7 +36183,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
              runs in a fresh host. (Measured before this: the program silently did not
              run and the launcher saw exit code 0.) */
         if (g_ReportGotNext && g_CsrssNextApp[0]) {
-            char commandLine[2300]; char *scan = commandLine; STARTUPINFOA si; PROCESS_INFORMATION processInfo;
+            CHAR commandLine[2300]; PSTR scan = commandLine; STARTUPINFOA si; PROCESS_INFORMATION processInfo;
             scan = LogPut(scan, "\""); scan = LogPut(scan, g_CsrssNextApp); scan = LogPut(scan, "\"");
             if (g_CsrssNextCommand[0]) { scan = LogPut(scan, " "); scan = LogPut(scan, g_CsrssNextCommand); }
             *scan = 0;
@@ -37443,7 +37443,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
         /* ── THE VGA REGISTER FILE. (docs/inventory/vga.md, step 1) ─────────────────
              Its own buffer and its own flush: the block is ~1.2 KB and `report` is
              shared with everything else in this summary. */
-        {   static char videoRegisters[2048];
+        {   static CHAR videoRegisters[2048];
             INT dumpLength = VddVideoRegistersDump(&g_Video, videoRegisters, (INT)sizeof videoRegisters);
             if (dumpLength > 0) { LogAppend(LOG_PATH, videoRegisters, videoRegisters + dumpLength); SerialOut(videoRegisters, videoRegisters + dumpLength); } }
         cursor = LogPut(cursor, "STAGE2: video now: chain4="); cursor = LogHexByte(cursor, g_Video.IsChain4);
@@ -37778,7 +37778,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
          that is itself a fact worth re-checking. Mode-Y runs only; ~67 KB, one shot. */
     if (g_ModeYRemap && g_Video.ModeKind == VIDEO_KIND_LINEAR8 && !g_Video.IsChain4) {
         UINT32 page, plane, row;
-        char lineBuffer[220], *lineCursor;
+        CHAR lineBuffer[220], *lineCursor;
         LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;  /* keep the log in order */
         lineCursor = lineBuffer; lineCursor = LogPut(lineCursor, "MODEYBAR dump: 3 pages x 4 planes x rows 168..199, "
                                "80 bytes/row (plane offset = row*80 + x/4)\r\n");
