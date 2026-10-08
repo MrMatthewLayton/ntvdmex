@@ -35,6 +35,26 @@
    well-founded suspect. It changed nothing. Fifth refuted hypothesis. */
 #define DOS_XMS_REVISION      0x0300
 
+/* XMS driver functions (AH), as main.c's dispatcher comments name them. */
+#define DOS_XMS_FN_GET_VERSION        0x00
+#define DOS_XMS_FN_REQUEST_HMA        0x01
+#define DOS_XMS_FN_RELEASE_HMA        0x02
+#define DOS_XMS_FN_GLOBAL_ENABLE_A20  0x03
+#define DOS_XMS_FN_GLOBAL_DISABLE_A20 0x04
+#define DOS_XMS_FN_LOCAL_ENABLE_A20   0x05
+#define DOS_XMS_FN_LOCAL_DISABLE_A20  0x06
+#define DOS_XMS_FN_QUERY_A20          0x07
+#define DOS_XMS_FN_QUERY_FREE         0x08
+#define DOS_XMS_FN_ALLOCATE           0x09
+#define DOS_XMS_FN_FREE               0x0A
+#define DOS_XMS_FN_MOVE               0x0B
+#define DOS_XMS_FN_LOCK               0x0C
+#define DOS_XMS_FN_UNLOCK             0x0D
+#define DOS_XMS_FN_GET_HANDLE_INFO    0x0E
+#define DOS_XMS_FN_REALLOCATE         0x0F
+#define DOS_XMS_FN_REQUEST_UMB        0x10
+#define DOS_XMS_FN_RELEASE_UMB        0x11
+
 /* XMS error codes (returned in BL when AX=0). */
 #define DOS_XMS_ERROR_NOT_IMPLEMENTED             0x80  /* function not implemented      */
 #define DOS_XMS_ERROR_DRIVER                      0x8E  /* general driver error          */

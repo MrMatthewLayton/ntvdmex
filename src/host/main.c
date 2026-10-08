@@ -7957,7 +7957,7 @@ static VOID HostXms(volatile BYTE *tib)
     #define X_FAIL(e)  do { X_SETAX(0); X_SETBL(e); } while (0)
 
     switch (ah) {
-    case 0x00:                                  /* get version */
+    case DOS_XMS_FN_GET_VERSION:                                  /* get version */
         /* DX=0: no HMA. ⚠ REPORTING 1 HERE WAS TRIED AS A DIAGNOSTIC AND
            REFUTED (GH #47): MEM.EXE still asked the version twice and stopped,
            still reported Extended (XMS) 0K. So the HMA flag is not what gates
@@ -7969,7 +7969,7 @@ static VOID HostXms(volatile BYTE *tib)
              was a lie; providing one and then saying so is a different act. */
         X_SETAX(DOS_XMS_VERSION); X_SETBX(DOS_XMS_REVISION); X_SETDX(g_Hma ? 1 : 0);
         break;
-    case 0x01:                                  /* request HMA: DX = bytes needed */
+    case DOS_XMS_FN_REQUEST_HMA:                                  /* request HMA: DX = bytes needed */
         /* Oracle (6.22 + HIMEM, DOS=HIGH): BL=0x91 "already in use". Ours is free
            at boot, so a first caller gets it. DX=0xFFFF is the documented "I am a
            TSR/driver, give me all of it"; anything larger than the HMA is refused
@@ -7978,7 +7978,7 @@ static VOID HostXms(volatile BYTE *tib)
         else if (g_Xms.IsHmaAllocated) X_FAIL(DOS_XMS_ERROR_HMA_IN_USE);
         else { g_Xms.IsHmaAllocated = 1; X_SETAX(1); X_SETBL(0); }
         break;
-    case 0x02:                                  /* release HMA */
+    case DOS_XMS_FN_RELEASE_HMA:                                  /* release HMA */
         if (!g_Hma)              X_FAIL(DOS_XMS_ERROR_NO_HMA);
         else if (!g_Xms.IsHmaAllocated) X_FAIL(DOS_XMS_ERROR_HMA_NOT_ALLOCATED);
         else { g_Xms.IsHmaAllocated = 0; X_SETAX(1); X_SETBL(0); }
@@ -7996,14 +7996,14 @@ static VOID HostXms(volatile BYTE *tib)
        ⚠ STILL NO ADDRESS WRAP. That decision is separate, recorded at the top of
          this file and in dos_xms.h, and it still stands -- what was wrong was that
          the three ways of ASKING disagreed with each other. */
-    case 0x03: case 0x05:                                   /* enable A20 (global/local) */
+    case DOS_XMS_FN_GLOBAL_ENABLE_A20: case DOS_XMS_FN_LOCAL_ENABLE_A20:                                   /* enable A20 (global/local) */
         VddInputSetA20(&g_Input, 1); g_Xms.IsA20Enabled = 1; X_SETAX(1); break;
-    case 0x04: case 0x06:                                   /* disable A20 */
+    case DOS_XMS_FN_GLOBAL_DISABLE_A20: case DOS_XMS_FN_LOCAL_DISABLE_A20:                                   /* disable A20 */
         VddInputSetA20(&g_Input, 0); g_Xms.IsA20Enabled = 0; X_SETAX(1); break;
-    case 0x07:                                              /* query A20 */
+    case DOS_XMS_FN_QUERY_A20:                                              /* query A20 */
         g_Xms.IsA20Enabled = VddInputGetA20(&g_Input);
         X_SETAX(g_Xms.IsA20Enabled ? 1 : 0); X_SETBL(0); break;
-    case 0x08:                                  /* query free extended memory */
+    case DOS_XMS_FN_QUERY_FREE:                                  /* query free extended memory */
         DosXmsQueryFreeMemory(&g_Xms, &largest, &totalFree);
         X_SETAX(largest > 0xFFFF ? 0xFFFF : largest);
         X_SETDX(totalFree > 0xFFFF ? 0xFFFF : totalFree);
@@ -8013,15 +8013,15 @@ static VOID HostXms(volatile BYTE *tib)
            Settings > General > "behave like" picks which. */
         if (g_BehaveDos622) X_SETBH(0xAA);
         break;
-    case 0x09:                                  /* allocate EMB: DX=KB */
+    case DOS_XMS_FN_ALLOCATE:                                  /* allocate EMB: DX=KB */
         if (DosXmsAllocate(&g_Xms, VDM_REG16(tib, VTIB_EDX), &newHandle, &error)) { X_SETAX(1); X_SETDX(newHandle); }
         else X_FAIL(error);
         break;
-    case 0x0A:                                  /* free EMB: DX=handle */
+    case DOS_XMS_FN_FREE:                                  /* free EMB: DX=handle */
         if (DosXmsFree(&g_Xms, (WORD)VDM_REG16(tib, VTIB_EDX), &error)) X_SETAX(1);
         else X_FAIL(error);
         break;
-    case 0x0B: {                                /* move EMB: DS:SI -> move struct */
+    case DOS_XMS_FN_MOVE: {                                /* move EMB: DS:SI -> move struct */
         DWORD ds = VDM_REG16(tib, VTIB_DS), si = VDM_REG16(tib, VTIB_ESI);
         const volatile BYTE *source = (const volatile BYTE *)((ds << PARAGRAPH_SHIFT) + si);
         DOS_XMS_MOVE move;
@@ -8032,28 +8032,28 @@ static VOID HostXms(volatile BYTE *tib)
         move.DestinationOffset = (DWORD)source[12] | ((DWORD)source[13] << BYTE_SHIFT) | ((DWORD)source[14] << WORD_SHIFT) | ((DWORD)source[15] << TOP_BYTE_SHIFT);
         if (DosXmsMove(&g_Xms, NULL, &move, &error)) X_SETAX(1); else X_FAIL(error);
         break; }
-    case 0x0C:                                  /* lock EMB: DX=handle -> DX:BX linear */
+    case DOS_XMS_FN_LOCK:                                  /* lock EMB: DX=handle -> DX:BX linear */
         handle = (WORD)VDM_REG16(tib, VTIB_EDX);
         if (DosXmsLock(&g_Xms, handle, &linear, &error)) { X_SETAX(1); X_SETDX(linear >> WORD_SHIFT); X_SETBX(linear & WORD_MASK); }
         else X_FAIL(error);
         break;
-    case 0x0D:                                  /* unlock EMB: DX=handle */
+    case DOS_XMS_FN_UNLOCK:                                  /* unlock EMB: DX=handle */
         if (DosXmsUnlock(&g_Xms, (WORD)VDM_REG16(tib, VTIB_EDX), &error)) X_SETAX(1);
         else X_FAIL(error);
         break;
-    case 0x0E:                                  /* get handle info: DX=handle */
+    case DOS_XMS_FN_GET_HANDLE_INFO:                                  /* get handle info: DX=handle */
         handle = (WORD)VDM_REG16(tib, VTIB_EDX);
         if (DosXmsGetHandleInformation(&g_Xms, handle, &lock, &freeHandles, &sizeKb, &error)) {
             X_SETAX(1); X_SETBH(lock); X_SETBL(freeHandles); X_SETDX(sizeKb > 0xFFFF ? 0xFFFF : sizeKb);
         } else X_FAIL(error);
         break;
-    case 0x0F:                                  /* reallocate EMB: BX=new KB, DX=handle */
+    case DOS_XMS_FN_REALLOCATE:                                  /* reallocate EMB: BX=new KB, DX=handle */
         handle = (WORD)VDM_REG16(tib, VTIB_EDX);
         if (DosXmsReallocate(&g_Xms, handle, VDM_REG16(tib, VTIB_EBX), &error)) X_SETAX(1);
         else X_FAIL(error);
         break;
-    case 0x10: X_SETAX(0); X_SETBL(0xB1); X_SETDX(0); break;  /* request UMB: none */
-    case 0x11: X_FAIL(0xB2); break;                          /* release UMB */
+    case DOS_XMS_FN_REQUEST_UMB: X_SETAX(0); X_SETBL(0xB1); X_SETDX(0); break;  /* request UMB: none */
+    case DOS_XMS_FN_RELEASE_UMB: X_FAIL(0xB2); break;                          /* release UMB */
     default:   X_FAIL(DOS_XMS_ERROR_NOT_IMPLEMENTED); break;
     }
     #undef X_SETAX
@@ -8093,41 +8093,41 @@ static VOID HostEms(volatile BYTE *tib)
     #define E_SETDX(v) VDM_SET16(tib, VTIB_EDX, (v))
 
     switch (ah) {
-    case 0x40: E_SETAH(DOS_EMS_STATUS_OK); break;                  /* get manager status   */
-    case 0x41: E_SETBX(g_Ems.FrameSegment); E_SETAH(DOS_EMS_STATUS_OK); break;  /* page frame seg */
-    case 0x42:                                          /* unallocated/total pages */
+    case DOS_EMS_FN_GET_STATUS: E_SETAH(DOS_EMS_STATUS_OK); break;                  /* get manager status   */
+    case DOS_EMS_FN_GET_PAGE_FRAME: E_SETBX(g_Ems.FrameSegment); E_SETAH(DOS_EMS_STATUS_OK); break;  /* page frame seg */
+    case DOS_EMS_FN_GET_PAGE_COUNTS:                                          /* unallocated/total pages */
         DosEmsGetPageCounts(&g_Ems, &unallocatedPages, &totalPages);
         E_SETBX(unallocatedPages); E_SETDX(totalPages); E_SETAH(DOS_EMS_STATUS_OK);
         break;
-    case 0x43:                                          /* allocate BX pages -> DX handle */
+    case DOS_EMS_FN_ALLOCATE:                                          /* allocate BX pages -> DX handle */
         if (DosEmsAllocatePages(&g_Ems, VDM_REG16(tib, VTIB_EBX), &handle, &error)) { E_SETDX(handle); E_SETAH(DOS_EMS_STATUS_OK); }
         else E_SETAH(error);
         break;
-    case 0x44:                                          /* map: AL=phys BX=logical DX=handle */
+    case DOS_EMS_FN_MAP:                                          /* map: AL=phys BX=logical DX=handle */
         if (DosEmsMapPage(&g_Ems, (BYTE)(VDM_REG(tib, VTIB_EAX) & BYTE_MASK),
                     (WORD)VDM_REG16(tib, VTIB_EBX),
                     (WORD)VDM_REG16(tib, VTIB_EDX), &error)) E_SETAH(DOS_EMS_STATUS_OK);
         else E_SETAH(error);
         break;
-    case 0x45:                                          /* deallocate DX handle */
+    case DOS_EMS_FN_DEALLOCATE:                                          /* deallocate DX handle */
         if (DosEmsDeallocatePages(&g_Ems, (WORD)VDM_REG16(tib, VTIB_EDX), &error)) E_SETAH(DOS_EMS_STATUS_OK);
         else E_SETAH(error);
         break;
-    case 0x46: E_SETAL(DOS_EMS_VERSION); E_SETAH(DOS_EMS_STATUS_OK); break;  /* EMM version 4.0 */
-    case 0x47:                                          /* save page map: DX handle */
+    case DOS_EMS_FN_GET_VERSION: E_SETAL(DOS_EMS_VERSION); E_SETAH(DOS_EMS_STATUS_OK); break;  /* EMM version 4.0 */
+    case DOS_EMS_FN_SAVE_PAGE_MAP:                                          /* save page map: DX handle */
         if (DosEmsSavePageMap(&g_Ems, (WORD)VDM_REG16(tib, VTIB_EDX), &error)) E_SETAH(DOS_EMS_STATUS_OK);
         else E_SETAH(error);
         break;
-    case 0x48:                                          /* restore page map: DX handle */
+    case DOS_EMS_FN_RESTORE_PAGE_MAP:                                          /* restore page map: DX handle */
         if (DosEmsRestorePageMap(&g_Ems, (WORD)VDM_REG16(tib, VTIB_EDX), &error)) E_SETAH(DOS_EMS_STATUS_OK);
         else E_SETAH(error);
         break;
-    case 0x4B: E_SETBX(DosEmsGetHandleCount(&g_Ems)); E_SETAH(DOS_EMS_STATUS_OK); break;  /* # handles */
-    case 0x4C:                                          /* pages owned by DX handle */
+    case DOS_EMS_FN_GET_HANDLE_COUNT: E_SETBX(DosEmsGetHandleCount(&g_Ems)); E_SETAH(DOS_EMS_STATUS_OK); break;  /* # handles */
+    case DOS_EMS_FN_GET_HANDLE_PAGES:                                          /* pages owned by DX handle */
         if (DosEmsGetHandlePages(&g_Ems, (WORD)VDM_REG16(tib, VTIB_EDX), &unallocatedPages, &error)) { E_SETBX(unallocatedPages); E_SETAH(DOS_EMS_STATUS_OK); }
         else E_SETAH(error);
         break;
-    case 0x4D: {                                        /* all handle pages -> ES:DI, BX */
+    case DOS_EMS_FN_GET_ALL_HANDLE_PAGES: {                                        /* all handle pages -> ES:DI, BX */
         BYTE pairs[DOS_EMS_MAX_HANDLES * 4];
         volatile BYTE *destination = (volatile BYTE *)(ULONG_PTR)
             ((VDM_REG16(tib, VTIB_ES) << PARAGRAPH_SHIFT) + VDM_REG16(tib, VTIB_EDI));
@@ -8135,7 +8135,7 @@ static VOID HostEms(volatile BYTE *tib)
         for (index = 0; index < count * 4; ++index) destination[index] = pairs[index];
         E_SETBX((WORD)count); E_SETAH(DOS_EMS_STATUS_OK);
         break; }
-    case 0x53: {                                        /* handle name: AL=0 get ES:DI, 1 set DS:SI */
+    case DOS_EMS_FN_HANDLE_NAME: {                                        /* handle name: AL=0 get ES:DI, 1 set DS:SI */
         DWORD int53Al = VDM_REG(tib, VTIB_EAX) & BYTE_MASK;
         volatile BYTE *nameBuffer = (int53Al == 0)
             ? (volatile BYTE *)(ULONG_PTR)((VDM_REG16(tib, VTIB_ES) << PARAGRAPH_SHIFT) + VDM_REG16(tib, VTIB_EDI))
@@ -8145,7 +8145,7 @@ static VOID HostEms(volatile BYTE *tib)
                                  (INT)int53Al, nameBuffer, &error)) E_SETAH(DOS_EMS_STATUS_OK);
         else E_SETAH(error);
         break; }
-    case 0x51:                                          /* reallocate: BX pages, DX handle */
+    case DOS_EMS_FN_REALLOCATE:                                          /* reallocate: BX pages, DX handle */
         if (DosEmsReallocatePages(&g_Ems, (WORD)VDM_REG16(tib, VTIB_EDX),
                         (WORD)VDM_REG16(tib, VTIB_EBX), &error)) {
             DosEmsGetHandlePages(&g_Ems, (WORD)VDM_REG16(tib, VTIB_EDX), &unallocatedPages, &error);
@@ -9071,29 +9071,29 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
          otherwise never trigger the grab at all. 07h/08h (fencing the pointer into a
          region) is the same declaration made differently. 00h stays out: detection is
          not use, and it is the AX a mis-patched site is most likely to arrive with. */
-    if (ax == 0x0001 || ax == 0x0003 || ax == 0x0005 || ax == 0x0006
-        || ax == 0x0007 || ax == 0x0008 || ax == 0x000B
-        || ax == 0x000C || ax == 0x0014 || ax == 0x0018)
+    if (ax == I33_FN_SHOW_CURSOR || ax == I33_FN_GET_POSITION || ax == I33_FN_GET_PRESS_DATA || ax == I33_FN_GET_RELEASE_DATA
+        || ax == I33_FN_SET_X_RANGE || ax == I33_FN_SET_Y_RANGE || ax == I33_FN_READ_MOTION
+        || ax == I33_FN_SET_EVENT_HANDLER || ax == I33_FN_EXCHANGE_EVENT_HANDLER || ax == I33_FN_SET_ALTERNATE_HANDLER)
         InterlockedExchange(&g_MouseWantCapture, 1);
     switch (ax) {
-    case 0x0000:                                        /* reset + get status      */
+    case I33_FN_RESET:                                        /* reset + get status      */
         if (g_MouseAbsent) { VDM_SET16(tib, VTIB_EAX, 0x0000); break; }  /* no driver */
         VDM_SET16(tib, VTIB_EAX, 0xFFFF);               /* driver installed        */
         VDM_SET16(tib, VTIB_EBX, 0x0002);               /* 2 buttons               */
         I33ResetState();
         break;
-    case 0x0001:                                        /* show cursor (dec count) */
+    case I33_FN_SHOW_CURSOR:                                        /* show cursor (dec count) */
         if (g_MouseHidden > 0) InterlockedDecrement(&g_MouseHidden);
         break;
-    case 0x0002:                                        /* hide cursor (inc count) */
+    case I33_FN_HIDE_CURSOR:                                        /* hide cursor (inc count) */
         InterlockedIncrement(&g_MouseHidden);
         break;
-    case 0x0003:                                        /* get position + buttons  */
+    case I33_FN_GET_POSITION:                                        /* get position + buttons  */
         VDM_SET16(tib, VTIB_ECX, (WORD)I33ClampX(I33Snapshot(I33VirtualX(positionX))));
         VDM_SET16(tib, VTIB_EDX, (WORD)I33ClampY(I33Snapshot(I33VirtualY(positionY))));
         VDM_SET16(tib, VTIB_EBX, (WORD)buttons);
         break;
-    case 0x0004: {                                      /* set cursor position     */
+    case I33_FN_SET_POSITION: {                                      /* set cursor position     */
         LONG virtualX = I33ClampX(I33Snapshot((LONG)(INT16)VDM_REG16(tib, VTIB_ECX)));
         LONG virtualY = I33ClampY(I33Snapshot((LONG)(INT16)VDM_REG16(tib, VTIB_EDX)));
         InterlockedExchange(&g_MouseX, I33PixelX(virtualX));
@@ -9105,8 +9105,8 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
          transitions SINCE THE LAST CALL for that button, CX/DX where the last one
          happened. The count is drained by the read -- that is what "since" means,
          and a guest that polls in a loop must not see the same click twice. */
-    case 0x0005: case 0x0006: {
-        INT      isRelease = (ax == 0x0006);
+    case I33_FN_GET_PRESS_DATA: case I33_FN_GET_RELEASE_DATA: {
+        INT      isRelease = (ax == I33_FN_GET_RELEASE_DATA);
         DWORD    button  = VDM_REG16(tib, VTIB_EBX);
         volatile LONG *counter, *pressX, *pressY;
         LONG count;
@@ -9123,19 +9123,19 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         VDM_SET16(tib, VTIB_ECX, (WORD)I33ClampX(I33VirtualX(count ? *pressX : positionX)));
         VDM_SET16(tib, VTIB_EDX, (WORD)I33ClampY(I33VirtualY(count ? *pressY : positionY)));
         break; }
-    case 0x0007:                                        /* set X range (virtual)   */
+    case I33_FN_SET_X_RANGE:                                        /* set X range (virtual)   */
         I33SetRange(&g_MouseMinimumX, &g_MouseMaximumX,
                       (LONG)(INT16)VDM_REG16(tib, VTIB_ECX),
                       (LONG)(INT16)VDM_REG16(tib, VTIB_EDX));
         InterlockedExchange(&g_MouseX, I33PixelX(I33ClampX(I33VirtualX(positionX))));
         break;
-    case 0x0008:                                        /* set Y range (virtual)   */
+    case I33_FN_SET_Y_RANGE:                                        /* set Y range (virtual)   */
         I33SetRange(&g_MouseMinimumY, &g_MouseMaximumY,
                       (LONG)(INT16)VDM_REG16(tib, VTIB_ECX),
                       (LONG)(INT16)VDM_REG16(tib, VTIB_EDX));
         InterlockedExchange(&g_MouseY, I33PixelY(I33ClampY(I33VirtualY(positionY))));
         break;
-    case 0x0009: {                                      /* define graphics cursor  */
+    case I33_FN_DEFINE_GRAPHICS_CURSOR: {                                      /* define graphics cursor  */
         /* ★ #264: THE BITMAP IS READ AND DRAWN. It was "accepted and ignored on
            purpose" because the host arrow had nowhere to put it. ES:DX -> 16 screen-mask
            words then 16 cursor-mask words (i33_driver.h). The hot spot (BX, CX; -16..16)
@@ -9158,7 +9158,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
             I33GraphicsCursorDefine(screen, current);
             InterlockedExchange(&g_MouseGraphicsCursorDefined, 1); }
         break; }
-    case 0x000A:                                        /* define text cursor      */
+    case I33_FN_DEFINE_TEXT_CURSOR:                                        /* define text cursor      */
         /* BX=0: a SOFTWARE cursor -- CX is the screen mask (AND), DX the cursor mask
            (XOR), applied to the (char, attr) word of the cell under the pointer. That
            is the whole text-mode pointer, and the present path now draws it that way
@@ -9176,7 +9176,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
             ++g_MouseShapeSets;
         }
         break;
-    case 0x000B: {                                      /* read relative motion    */
+    case I33_FN_READ_MOTION: {                                      /* read relative motion    */
         LONG deltaX, deltaY;
         I33TakeMotion(positionX, positionY, &deltaX, &deltaY);                /* SIGNED 16-bit, drained  */
         VDM_SET16(tib, VTIB_ECX, (WORD)(SHORT)deltaX);
@@ -9187,13 +9187,13 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
          guest that chains handlers jumps to whatever we failed to tell it. */
     /* ES:(E)DX -- a flat PM client's handler offset is a full 32-bit linear (ZAR:
        0x347:0x0044xxxx, s74c); a 16-bit or V86 caller's is a word. */
-    case 0x000C:
+    case I33_FN_SET_EVENT_HANDLER:
         InterlockedExchange(&g_MouseEventMask, (LONG)VDM_REG16(tib, VTIB_ECX));
         InterlockedExchange(&g_MouseEventSegment,  (LONG)VDM_REG16(tib, VTIB_ES));
         InterlockedExchange(&g_MouseEventOffset,  (LONG)MouseI33Offset(tib, source, VDM_REG(tib, VTIB_EDX)));
         ++g_MouseEventInstalls;
         break;
-    case 0x0014: {                                      /* exchange event handler  */
+    case I33_FN_EXCHANGE_EVENT_HANDLER: {                                      /* exchange event handler  */
         LONG oldMask = g_MouseEventMask, oldSegment = g_MouseEventSegment, oldOffset = g_MouseEventOffset;
         InterlockedExchange(&g_MouseEventMask, (LONG)VDM_REG16(tib, VTIB_ECX));
         InterlockedExchange(&g_MouseEventSegment,  (LONG)VDM_REG16(tib, VTIB_ES));
@@ -9203,40 +9203,40 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         VDM_SET16(tib, VTIB_EDX, (WORD)oldOffset);
         VDM_SET16(tib, VTIB_ES,  (WORD)oldSegment);
         break; }
-    case 0x000F:                                        /* mickeys per 8 pixels    */
+    case I33_FN_SET_MICKEY_RATIO:                                        /* mickeys per 8 pixels    */
         {   LONG mickeysX = (LONG)VDM_REG16(tib, VTIB_ECX);
             LONG mickeysY = (LONG)VDM_REG16(tib, VTIB_EDX);
             if (mickeysX > 0) InterlockedExchange(&g_MouseMickeyX, mickeysX);
             if (mickeysY > 0) InterlockedExchange(&g_MouseMickeyY, mickeysY); }
         break;
-    case 0x0010:                                        /* conditional-off region  */
+    case I33_FN_CONDITIONAL_OFF:                                        /* conditional-off region  */
         /* The region in which the driver hides its own cursor while the guest
            redraws under it. We re-render the frame from VRAM every present and draw
            the overlay on top, so there is never a cursor to erase -- honouring this
            would change nothing visible. Accepted deliberately. */
         break;
-    case 0x0013:                                        /* double-speed threshold  */
+    case I33_FN_SET_DOUBLE_SPEED:                                        /* double-speed threshold  */
         InterlockedExchange(&g_MouseDoubleThreshold, (LONG)VDM_REG16(tib, VTIB_EDX));
         break;
-    case 0x0015:                                        /* get state buffer size   */
+    case I33_FN_GET_STATE_SIZE:                                        /* get state buffer size   */
         VDM_SET16(tib, VTIB_EBX, (WORD)sizeof(I33_STATE));
         break;
-    case 0x0016:                                        /* save state -> ES:DX     */
-    case 0x0017: {                                      /* restore state <- ES:DX  */
+    case I33_FN_SAVE_STATE:                                        /* save state -> ES:DX     */
+    case I33_FN_RESTORE_STATE: {                                      /* restore state <- ES:DX  */
         volatile BYTE *guest = I33GuestPointer(tib, source,
                                          (WORD)VDM_REG16(tib, VTIB_ES),
                                          (WORD)VDM_REG16(tib, VTIB_EDX),
-                                         sizeof(I33_STATE), ax == 0x0016);
+                                         sizeof(I33_STATE), ax == I33_FN_SAVE_STATE);
         if (!guest) { ++g_MouseStateBadPointer; break; }          /* refuse, do not fault    */
-        if (ax == 0x0016) I33StateSave(guest); else I33StateLoad(guest);
+        if (ax == I33_FN_SAVE_STATE) I33StateSave(guest); else I33StateLoad(guest);
         break; }
-    case 0x001A:                                        /* set sensitivity (SPEED) */
+    case I33_FN_SET_SENSITIVITY:                                        /* set sensitivity (SPEED) */
         /* The speeds, NOT 0Fh's mickey ratio -- see g_MouseSpeedX. */
         InterlockedExchange(&g_MouseSpeedX, (LONG)VDM_REG16(tib, VTIB_EBX));
         InterlockedExchange(&g_MouseSpeedY, (LONG)VDM_REG16(tib, VTIB_ECX));
         InterlockedExchange(&g_MouseSpeedDouble, (LONG)VDM_REG16(tib, VTIB_EDX));
         break;
-    case 0x001B:                                        /* get sensitivity         */
+    case I33_FN_GET_SENSITIVITY:                                        /* get sensitivity         */
         VDM_SET16(tib, VTIB_EBX, (WORD)g_MouseSpeedX);
         VDM_SET16(tib, VTIB_ECX, (WORD)g_MouseSpeedY);
         VDM_SET16(tib, VTIB_EDX, (WORD)g_MouseSpeedDouble);
@@ -9248,25 +9248,25 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
          whatever is displayed, so there is no per-page cursor to move). 22h is
          accepted and 23h says 0, English: this is the US driver, whose messages are
          not translated -- the same answer the US MOUSE.COM gives whatever it was told. */
-    case 0x001C:                                        /* set interrupt rate      */
+    case I33_FN_SET_INTERRUPT_RATE:                                        /* set interrupt rate      */
         {   LONG rate = (LONG)VDM_REG16(tib, VTIB_EBX);
             if (rate <= 4) InterlockedExchange(&g_MouseRate, rate); }
         break;
-    case 0x001D:                                        /* set display page        */
+    case I33_FN_SET_DISPLAY_PAGE:                                        /* set display page        */
         InterlockedExchange(&g_MousePage, (LONG)VDM_REG16(tib, VTIB_EBX));
         break;
-    case 0x001E:                                        /* get display page        */
+    case I33_FN_GET_DISPLAY_PAGE:                                        /* get display page        */
         VDM_SET16(tib, VTIB_EBX, (WORD)g_MousePage);
         break;
-    case 0x0022:                                        /* set language            */
+    case I33_FN_SET_LANGUAGE:                                        /* set language            */
         break;
-    case 0x0023:                                        /* get language: English   */
+    case I33_FN_GET_LANGUAGE:                                        /* get language: English   */
         VDM_SET16(tib, VTIB_EBX, 0x0000);
         break;
     /* 0Dh/0Eh light-pen emulation on/off: no outputs, and there is no light pen for
        INT 10h AH=04h to report -- nothing to switch. Named so it is not counted as
        an unknown call. */
-    case 0x000D: case 0x000E:
+    case I33_FN_LIGHT_PEN_ON: case I33_FN_LIGHT_PEN_OFF:
         break;
     /* ── 18h/19h ALTERNATE (SHIFT-QUALIFIED) HANDLERS. (#265) ──────────────────────
          18h answers AX=0018h on success, FFFFh on error. Through `default:` the
@@ -9276,7 +9276,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
          combination. 19h: BX:DX = the handler for CX's shift combination, CX = its whole
          mask; CX=0 = none (BX/DX left alone). The rules, and which of them are our
          reading rather than a measurement, are in i33_driver.h. */
-    case 0x0018:
+    case I33_FN_SET_ALTERNATE_HANDLER:
         if (I33AlternateSet(g_MouseAlt, (WORD)VDM_REG16(tib, VTIB_ECX),
                         (WORD)VDM_REG16(tib, VTIB_ES),
                         (UINT32)MouseI33Offset(tib, source, VDM_REG(tib, VTIB_EDX)))) {
@@ -9284,7 +9284,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
             ++g_MouseEventInstalls;
         } else VDM_SET16(tib, VTIB_EAX, 0xFFFF);
         break;
-    case 0x0019: {
+    case I33_FN_GET_ALTERNATE_HANDLER: {
         INT byteIndex = I33AlternateFind(g_MouseAlt, (WORD)VDM_REG16(tib, VTIB_ECX));
         if (byteIndex < 0) { VDM_SET16(tib, VTIB_ECX, 0x0000); break; }
         VDM_SET16(tib, VTIB_ECX, g_MouseAlt[byteIndex].Mask);
@@ -9297,9 +9297,9 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
          (p_mouse2 i33.20.*): MOUSE.COM 6.24 and DOSBox-X both return AX untouched
          (0020h) and keep a 07h fence across it. We are never disabled (1Fh refuses), so
          there is nothing to re-enable. */
-    case 0x0020:                                        /* enable driver           */
+    case I33_FN_ENABLE_DRIVER:                                        /* enable driver           */
         break;
-    case 0x0021:                                        /* software reset          */
+    case I33_FN_SOFTWARE_RESET:                                        /* software reset          */
         /* 21h differs from 00h: it does NOT re-probe the hardware, and it answers in
            AX/BX the same way. We have no hardware to re-probe, so the two are the
            same action here -- but say so, rather than letting 21h fall through to a
@@ -9316,16 +9316,16 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
          pointer and invites it to install it, which turns "disable the mouse" into a
          jump to the interrupt table. AX=FFFFh (failure) is both true and harmless --
          a guest that cannot disable the driver simply carries on using it. */
-    case 0x001F:
+    case I33_FN_DISABLE_DRIVER:
         VDM_SET16(tib, VTIB_EAX, 0xFFFF);
         break;
-    case 0x0024:                                        /* driver version / type   */
+    case I33_FN_GET_DRIVER_VERSION:                                        /* driver version / type   */
         VDM_SET16(tib, VTIB_EBX, 0x0800);               /* report 8.00             */
         /* CH=04 PS/2. CL is the IRQ, and the real driver answers FF for a PS/2
            mouse rather than 0 -- measured, p_mouse.asm i33.24.version. */
         VDM_SET16(tib, VTIB_ECX, 0x04FF);
         break;
-    case 0x0026:                                        /* max virtual coordinates */
+    case I33_FN_GET_MAXIMUM_VIRTUAL:                                        /* max virtual coordinates */
         VDM_SET16(tib, VTIB_EBX, 0x0000);               /* driver not disabled     */
         VDM_SET16(tib, VTIB_ECX, (WORD)I33RangeXMaximum());
         VDM_SET16(tib, VTIB_EDX, (WORD)I33RangeYMaximum());
@@ -9334,7 +9334,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
          Every one of these reached `default:` and returned the caller's registers, so
          a version-gated guest was told "success, and here is what you passed". The
          ones below answer as RBIL's MS Mouse 7.x/8.x entries document; 32h says which. */
-    case 0x0025: {                                      /* general driver info     */
+    case I33_FN_GET_DRIVER_INFO: {                                      /* general driver info     */
         /* AX: bit 15 = loaded as a device driver (no: we are the TSR shape), 14 = the
            newer integrated driver (yes -- every 7.x/8.x driver is; DOSBox-X's 8.05 sets
            it too), 13-12 = cursor type (00 software text, 01 hardware text, 1x
@@ -9348,7 +9348,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         VDM_SET16(tib, VTIB_ECX, 0x0000);
         VDM_SET16(tib, VTIB_EDX, 0x0000);
         break; }
-    case 0x0027: {                                      /* masks + mickey counts   */
+    case I33_FN_GET_MASKS_AND_MICKEYS: {                                      /* masks + mickey counts   */
         /* AX/BX = the text cursor's screen/cursor masks, or the hardware cursor's scan
            lines when 0Ah BX=1 chose it; CX/DX = mickeys since the last read -- the SAME
            counters 0Bh drains (I33TakeMotion), signed. */
@@ -9359,19 +9359,19 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         VDM_SET16(tib, VTIB_ECX, (WORD)(SHORT)deltaX);
         VDM_SET16(tib, VTIB_EDX, (WORD)(SHORT)deltaY);
         break; }
-    case 0x0028:                                        /* set video mode          */
+    case I33_FN_SET_VIDEO_MODE:                                        /* set video mode          */
         /* The driver sets modes only from its own list (29h), and it has none: the
            mode set belongs to INT 10h. CL != 0 = failed. */
         VDM_SET16(tib, VTIB_ECX, (WORD)((VDM_REG(tib, VTIB_ECX) & HIGH_BYTE_MASK) | 0x00FF));
         break;
-    case 0x0029:                                        /* enumerate video modes   */
+    case I33_FN_ENUMERATE_VIDEO_MODES:                                        /* enumerate video modes   */
         /* CX = 0: the end of the list, at once. (DS:DX would name the mode; DX = 0 and
            DS is left alone -- writing DS from here would be loaded into a PM caller's
            selector too.) */
         VDM_SET16(tib, VTIB_ECX, 0x0000);
         VDM_SET16(tib, VTIB_EDX, 0x0000);
         break;
-    case 0x002A:                                        /* cursor hot spot         */
+    case I33_FN_GET_HOT_SPOT:                                        /* cursor hot spot         */
         /* AX = the visibility counter as the MS driver keeps it: 0 shown, negative
            hidden (we count hides up from 0, so it is our count negated); BX/CX = 09h's
            hot spot; DX = mouse type, 4 = PS/2 (as 24h's CH). */
@@ -9386,7 +9386,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
          STORED AND HANDED BACK, never applied. Failure is AX=FFFEh throughout -- the
          value RBIL gives 2Dh/2Eh -- and 2Bh, whose RBIL entry says only "success flag",
          is given the same 0000h/FFFEh pair (UNMEASURED). */
-    case 0x002B: {                                      /* load acceleration profiles */
+    case I33_FN_LOAD_ACCELERATION_PROFILES: {                                      /* load acceleration profiles */
         /* BX = the profile to make active (1-4), or FFFFh = restore the default curves;
            ES:SI -> a 144h-byte block (not read for FFFFh). */
         WORD bx = (WORD)VDM_REG16(tib, VTIB_EBX);
@@ -9403,7 +9403,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         } else { VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
         VDM_SET16(tib, VTIB_EAX, 0x0000);
         break; }
-    case 0x002C: {                                      /* get acceleration profiles  */
+    case I33_FN_GET_ACCELERATION_PROFILES: {                                      /* get acceleration profiles  */
         /* AX=0, BX = the active profile, ES:SI -> the block -- written out fresh on every
            call, so a guest that scribbled on the last copy reads a good one. */
         volatile BYTE *driverData = I33DriverData(); UINT index;
@@ -9413,7 +9413,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         VDM_SET16(tib, VTIB_EBX, (WORD)g_MouseAccelerationCurrent);
         I33ResultPointer(tib, source, VTIB_ESI, VDD_MOUSE_ACC);
         break; }
-    case 0x002D: {                                      /* select acceleration profile */
+    case I33_FN_SELECT_ACCELERATION_PROFILE: {                                      /* select acceleration profile */
         /* BX = 1-4 selects, FFFFh only asks. AX=0 with BX = the active profile and ES:SI
            -> its 16-byte name; an invalid BX is AX=FFFEh with BX = the (unchanged)
            active profile, and ES:SI -- "destroyed" per RBIL -- left as it was. */
@@ -9432,7 +9432,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         I33ResultPointer(tib, source, VTIB_ESI,
                     (WORD)(VDD_MOUSE_ACC + I33_ACC_NAMES + (g_MouseAccelerationCurrent - 1) * I33_ACC_NAMELEN));
         break; }
-    case 0x002E: {                                      /* set acceleration profile names */
+    case I33_FN_SET_ACCELERATION_PROFILE_NAMES: {                                      /* set acceleration profile names */
         /* ES:SI -> 64 bytes, four 16-byte names. BL = 0: they become the names. BL != 0:
            "fill ES:SI buffer with default names on return" -- read here as RESTORE the
            default names and hand them back. ⚠ UNMEASURED (RBIL is the only voice; only an
@@ -9451,7 +9451,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
             for (index = 0; index < I33_ACC_N * I33_ACC_NAMELEN; ++index) g_MouseAcceleration[I33_ACC_NAMES + index] = guest[index];
         VDM_SET16(tib, VTIB_EAX, 0x0000);
         break; }
-    case 0x0033: {                                      /* switch settings + profiles */
+    case I33_FN_SWITCH_SETTINGS: {                                      /* switch settings + profiles */
         /* CX = the buffer's size, ES:DX -> it. AX=0, CX = bytes written (at most 154h);
            a short buffer gets the head of the block (I33SettingsBlock). A buffer we
            may not write gets CX=0 -- "nothing returned" -- not a fault. */
@@ -9473,7 +9473,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         VDM_SET16(tib, VTIB_EAX, 0x0000);
         VDM_SET16(tib, VTIB_ECX, (WORD)count);
         break; }
-    case 0x0034: {                                      /* initialization file name */
+    case I33_FN_GET_INI_FILE_NAME: {                                      /* initialization file name */
         /* AX=0, ES:DX -> "MOUSE.INI". There is no such file: a real driver names the one
            it read; with none present the name a guest gets is the one it would look for,
            and opening it fails exactly as on a machine without one. The bare name (no
@@ -9485,21 +9485,21 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
         VDM_SET16(tib, VTIB_EAX, 0x0000);
         I33ResultPointer(tib, source, VTIB_EDX, VDD_MOUSE_INI);
         break; }
-    case 0x002F:                                        /* mouse hardware reset    */
+    case I33_FN_HARDWARE_RESET:                                        /* mouse hardware reset    */
         /* FFFFh = done. There is no device under us to re-initialise; the driver's
            own state is untouched, as the call documents (00h/21h reset that). */
         VDM_SET16(tib, VTIB_EAX, 0xFFFF);
         break;
-    case 0x0030:                                        /* BallPoint information   */
+    case I33_FN_BALLPOINT_INFO:                                        /* BallPoint information   */
         VDM_SET16(tib, VTIB_EAX, 0xFFFF);               /* FFFFh = no BallPoint    */
         break;
-    case 0x0031:                                        /* current min/max virtual */
+    case I33_FN_GET_CURRENT_VIRTUAL:                                        /* current min/max virtual */
         VDM_SET16(tib, VTIB_EAX, (WORD)I33RangeXMinimum());
         VDM_SET16(tib, VTIB_EBX, (WORD)I33RangeYMinimum());
         VDM_SET16(tib, VTIB_ECX, (WORD)I33RangeXMaximum());
         VDM_SET16(tib, VTIB_EDX, (WORD)I33RangeYMaximum());
         break;
-    case 0x0032:                                        /* active advanced fns     */
+    case I33_FN_GET_ACTIVE_ADVANCED:                                        /* active advanced fns     */
         VDM_SET16(tib, VTIB_EAX, (WORD)I33_ACTIVE_FNS);
         VDM_SET16(tib, VTIB_EBX, 0x0000);               /* BX/CX/DX reserved = 0   */
         VDM_SET16(tib, VTIB_ECX, 0x0000);
@@ -9509,7 +9509,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
        this is the one unimplemented call whose behaviour was already measured: the
        documented "no SWIFT support" reply is AX = 0, and leaving AX holding 0x53C1
        only happened to read as a refusal. Say no on purpose. */
-    case 0x53C1:
+    case I33_FN_SWIFT_SUPPORT:
         VDM_SET16(tib, VTIB_EAX, 0x0000);
         break;
     /* ── ⚠ `default:` IS THE BUG SHAPE THIS FILE HAS PAID FOR SIX TIMES. ─────────

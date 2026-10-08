@@ -48,6 +48,60 @@
      counts mask BITS, so it is halved into pixels. Both UNMEASURED; p_mouse3's
      `i33.09.13h.hot.*` rows read where the oracle put the bitmap. */
 #define I33_GC_ROWS 16
+
+/* INT 33h functions (AX), as MouseInt33's comments name them. */
+#define I33_FN_RESET                          0x0000
+#define I33_FN_SHOW_CURSOR                    0x0001
+#define I33_FN_HIDE_CURSOR                    0x0002
+#define I33_FN_GET_POSITION                   0x0003
+#define I33_FN_SET_POSITION                   0x0004
+#define I33_FN_GET_PRESS_DATA                 0x0005
+#define I33_FN_GET_RELEASE_DATA               0x0006
+#define I33_FN_SET_X_RANGE                    0x0007
+#define I33_FN_SET_Y_RANGE                    0x0008
+#define I33_FN_DEFINE_GRAPHICS_CURSOR         0x0009
+#define I33_FN_DEFINE_TEXT_CURSOR             0x000A
+#define I33_FN_READ_MOTION                    0x000B
+#define I33_FN_SET_EVENT_HANDLER              0x000C
+#define I33_FN_LIGHT_PEN_ON                   0x000D
+#define I33_FN_LIGHT_PEN_OFF                  0x000E
+#define I33_FN_SET_MICKEY_RATIO               0x000F
+#define I33_FN_CONDITIONAL_OFF                0x0010
+#define I33_FN_SET_DOUBLE_SPEED               0x0013
+#define I33_FN_EXCHANGE_EVENT_HANDLER         0x0014
+#define I33_FN_GET_STATE_SIZE                 0x0015
+#define I33_FN_SAVE_STATE                     0x0016
+#define I33_FN_RESTORE_STATE                  0x0017
+#define I33_FN_SET_ALTERNATE_HANDLER          0x0018
+#define I33_FN_GET_ALTERNATE_HANDLER          0x0019
+#define I33_FN_SET_SENSITIVITY                0x001A
+#define I33_FN_GET_SENSITIVITY                0x001B
+#define I33_FN_SET_INTERRUPT_RATE             0x001C
+#define I33_FN_SET_DISPLAY_PAGE               0x001D
+#define I33_FN_GET_DISPLAY_PAGE               0x001E
+#define I33_FN_DISABLE_DRIVER                 0x001F
+#define I33_FN_ENABLE_DRIVER                  0x0020
+#define I33_FN_SOFTWARE_RESET                 0x0021
+#define I33_FN_SET_LANGUAGE                   0x0022
+#define I33_FN_GET_LANGUAGE                   0x0023
+#define I33_FN_GET_DRIVER_VERSION             0x0024
+#define I33_FN_GET_DRIVER_INFO                0x0025
+#define I33_FN_GET_MAXIMUM_VIRTUAL            0x0026
+#define I33_FN_GET_MASKS_AND_MICKEYS          0x0027
+#define I33_FN_SET_VIDEO_MODE                 0x0028
+#define I33_FN_ENUMERATE_VIDEO_MODES          0x0029
+#define I33_FN_GET_HOT_SPOT                   0x002A
+#define I33_FN_LOAD_ACCELERATION_PROFILES     0x002B
+#define I33_FN_GET_ACCELERATION_PROFILES      0x002C
+#define I33_FN_SELECT_ACCELERATION_PROFILE    0x002D
+#define I33_FN_SET_ACCELERATION_PROFILE_NAMES 0x002E
+#define I33_FN_HARDWARE_RESET                 0x002F
+#define I33_FN_BALLPOINT_INFO                 0x0030
+#define I33_FN_GET_CURRENT_VIRTUAL            0x0031
+#define I33_FN_GET_ACTIVE_ADVANCED            0x0032
+#define I33_FN_SWITCH_SETTINGS                0x0033
+#define I33_FN_GET_INI_FILE_NAME              0x0034
+#define I33_FN_SWIFT_SUPPORT                  0x53C1
 #define I33_GC_PIXELS         16      /* one mask word: sixteen pixels           */
 #define I33_GC_LEFT_BIT       0x8000u /* bit 15 is the leftmost pixel             */
 #define I33_GC_CGA_PIXELS     8       /* CGA 4-colour: eight 2-bit pixels a word  */

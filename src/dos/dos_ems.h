@@ -30,6 +30,22 @@
 #define DOS_EMS_PAGE_SIZE       0x4000u   /* 16 KB logical/physical page                */
 #define DOS_EMS_PHYSICAL_PAGES  4         /* the page frame is four 16 KB windows        */
 #define DOS_EMS_FRAME_SIZE      (DOS_EMS_PHYSICAL_PAGES * DOS_EMS_PAGE_SIZE)  /* 64 KB   */
+
+/* EMS functions (AH), as main.c's dispatcher comments name them. */
+#define DOS_EMS_FN_GET_STATUS           0x40
+#define DOS_EMS_FN_GET_PAGE_FRAME       0x41
+#define DOS_EMS_FN_GET_PAGE_COUNTS      0x42
+#define DOS_EMS_FN_ALLOCATE             0x43
+#define DOS_EMS_FN_MAP                  0x44
+#define DOS_EMS_FN_DEALLOCATE           0x45
+#define DOS_EMS_FN_GET_VERSION          0x46
+#define DOS_EMS_FN_SAVE_PAGE_MAP        0x47
+#define DOS_EMS_FN_RESTORE_PAGE_MAP     0x48
+#define DOS_EMS_FN_GET_HANDLE_COUNT     0x4B
+#define DOS_EMS_FN_GET_HANDLE_PAGES     0x4C
+#define DOS_EMS_FN_GET_ALL_HANDLE_PAGES 0x4D
+#define DOS_EMS_FN_REALLOCATE           0x51
+#define DOS_EMS_FN_HANDLE_NAME          0x53
 #define DOS_EMS_MAX_HANDLES     64
 #define DOS_EMS_VERSION         0x40      /* LIM EMS 4.0, BCD in AL                       */
 
