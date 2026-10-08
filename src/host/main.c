@@ -1300,7 +1300,7 @@ static DWORD    g_UiInputFirst;                         /* input served ahead of
      a torn sample costs one bucket, not a wrong conclusion. */
 #define KEYLAT_RING 32
 static uint32_t QpcMicroseconds(LONGLONG ticks);          /* fwd: defined with the lock instruments */
-static void modey_tl_report(void);          /* fwd: north star 1, with the mode-Y remap */
+static void ModeYTimelineReport(void);          /* fwd: north star 1, with the mode-Y remap */
 static void GusReport(void);               /* fwd: north star 2, with the GUS globals */
 static int  modey_interp_serves(void);      /* fwd: north star 1, design C */
 static void my_ring_dump(const char *why);  /* fwd: north star 1, design C */
@@ -1906,7 +1906,7 @@ static uint16_t g_IoLastPort = 0;      /* port the last serviced access touched 
      settings; it is a race with something.
    ▶ THESE THREE COUNTERS ARE THE DIAGNOSIS, PRE-PLACED. The two service paths
      differ in exactly the way that matters: HostTryIo() ADVANCES EIP past the
-     instruction, host_try_io_retro() deliberately DOES NOT (the real-hardware
+     instruction, HostTryIoRetro() deliberately DOES NOT (the real-hardware
      event reports CS:IP already past the I/O). A storm that is all `retro` is a
      guest that is not being stepped; a storm that is all `direct` is the kernel
      re-reporting an event we already retired. The event histogram says which
@@ -3566,7 +3566,7 @@ static void Irq0Ack(void)
      a sound card's or the keyboard's, whose handler was still running. Doom's DMX EOIs
      every tick it does not chain.
    ► A synchronous injector claims the line before it runs the handler (the handler EOIs
-     from inside the call, through host_try_io_pm) and hands it back when the injector
+     from inside the call, through HostTryIoPm) and hands it back when the injector
      declined, since then no handler ran to EOI it. A handler that chains to our default
      PM INT 08h gets the BIOS's EOI there, as the V86 BOP arm gives it. The safety nets
      (250 ms timeout, auto-EOI fallback) are Irq0CanDeliver's and cover these arms. */
@@ -7832,7 +7832,7 @@ static DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
              way. An instrument that only reports on the tidy exit cannot see the
              guests it exists for; that is the "an absence in the report means nothing"
              trap, and it has already cost this project a session on ZAR. */
-        modey_tl_report();   /* north star 1: the guests that need it leave this way */
+        ModeYTimelineReport();   /* north star 1: the guests that need it leave this way */
         GusReport();        /* north star 2: and so does heaven7 */
         {   static char vr2[2048];
             int length = VddVideoRegistersDump(&g_Video, vr2, (int)sizeof vr2);
@@ -8234,10 +8234,10 @@ static DWORD g_MouseI33AxOverflow, g_MouseI33SiteCount, g_MouseI33SiteOverflow;
 /* An offset register from the caller: full-width from a 32-bit PM caller, a word from
    V86, 16-bit PM, or a 0300 excursion (s74c, the 0Ch handler ZAR installs at
    0x347:0x0044xxxx). */
-static int dpmi_sel_is32(WORD sel);
+static int DpmiSelectorIs32(WORD selector);
 static DWORD MouseI33Offset(volatile BYTE *tib, int source, DWORD offset)
 {
-    if (source == I33_SRC_PM && dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF))) return offset;
+    if (source == I33_SRC_PM && DpmiSelectorIs32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF))) return offset;
     return offset & 0xFFFF;
 }
 /* DPMI 0300 (simulate real-mode interrupt) vectors we do NOT service. See the 0300 arm. */
@@ -8889,7 +8889,7 @@ static unsigned Int15MoveBlock(volatile BYTE *tib)
     return Int15MoveBlockAt(tib, (es << 4) + si);
 }
 
-static void video_trap_sync(void);             /* fwd */
+static void VideoTrapSync(void);             /* fwd */
 static void ExecMachineSave(int depth)
 {
     unsigned index;
@@ -8930,7 +8930,7 @@ static void ExecMachineRestore(int depth, char **logCursor)
         VddBusDeliverInterrupt(&g_Bus, 0x10, &registers);
     }
     HOST_UNLOCK();
-    if (remode) video_trap_sync();
+    if (remode) VideoTrapSync();
     /* Its mouse event handler lives in the block about to be freed. */
     g_MouseCallbackActive = 0;
     I33ResetState();
@@ -15363,35 +15363,35 @@ static int HostTryIo(volatile BYTE *tib, VDD_BUS *bus)
    we decode the IN/OUT that ENDS at CS:IP and service it WITHOUT advancing EIP: a DX-form
    (1 byte: EC/ED/EE/EF at IP-1, optional 66 prefix at IP-2) or an imm-form (2 bytes:
    E4-E7 at IP-2, port imm at IP-1). Returns 1 if serviced. */
-static int host_try_io_retro(volatile BYTE *tib, VDD_BUS *bus)
+static int HostTryIoRetro(volatile BYTE *tib, VDD_BUS *bus)
 {
     DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
     DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
-    volatile BYTE *seg = (volatile BYTE *)(cs << 4);
-    BYTE op; int is_in, width, opsize = 2; uint16_t port; DWORD io_start;
+    volatile BYTE *segment = (volatile BYTE *)(cs << 4);
+    BYTE opcode; int isIn, width, opsize = 2; uint16_t port; DWORD ioStart;
     if (ip < 1) return 0;
-    op = seg[ip - 1];
-    if (op == 0xEC || op == 0xED || op == 0xEE || op == 0xEF) {   /* DX-form (1 byte) */
-        io_start = ip - 1;
-        if (ip >= 2 && seg[ip - 2] == 0x66) { opsize = 4; io_start = ip - 2; }
-        is_in = (op == 0xEC || op == 0xED);
-        width = (op == 0xEC || op == 0xEE) ? 1 : opsize;
+    opcode = segment[ip - 1];
+    if (opcode == 0xEC || opcode == 0xED || opcode == 0xEE || opcode == 0xEF) {   /* DX-form (1 byte) */
+        ioStart = ip - 1;
+        if (ip >= 2 && segment[ip - 2] == 0x66) { opsize = 4; ioStart = ip - 2; }
+        isIn = (opcode == 0xEC || opcode == 0xED);
+        width = (opcode == 0xEC || opcode == 0xEE) ? 1 : opsize;
         port  = (uint16_t)VDM_REG(tib, VTIB_EDX);
-    } else if (ip >= 2 && ((op = seg[ip - 2]) == 0xE4 || op == 0xE5 ||
-                            op == 0xE6 || op == 0xE7)) {          /* imm-form (2 byte) */
-        io_start = ip - 2;
-        is_in = (op == 0xE4 || op == 0xE5);
-        width = (op == 0xE4 || op == 0xE6) ? 1 : opsize;
-        port  = seg[ip - 1];                                      /* imm8 port        */
+    } else if (ip >= 2 && ((opcode = segment[ip - 2]) == 0xE4 || opcode == 0xE5 ||
+                            opcode == 0xE6 || opcode == 0xE7)) {          /* imm-form (2 byte) */
+        ioStart = ip - 2;
+        isIn = (opcode == 0xE4 || opcode == 0xE5);
+        width = (opcode == 0xE4 || opcode == 0xE6) ? 1 : opsize;
+        port  = segment[ip - 1];                                      /* imm8 port        */
     } else {
         return 0;                                                 /* no I/O ends here */
     }
-    HostIoDo(tib, bus, port, is_in, width);
-    RetraceNote(tib, port, is_in, VDM_REG(tib, VTIB_CS) & 0xFFFF, ip);   /* #183 */
+    HostIoDo(tib, bus, port, isIn, width);
+    RetraceNote(tib, port, isIn, VDM_REG(tib, VTIB_CS) & 0xFFFF, ip);   /* #183 */
     /* EIP is already past the I/O, so the guest is sitting on whatever follows --
        if that is a LOOP back to this same I/O (the OPL write-delay idiom), drain
        the iterations here rather than paying one #GP reflect per read. */
-    HostIoLoopBurst(tib, bus, seg, ip, io_start, port, is_in, width, 0);
+    HostIoLoopBurst(tib, bus, segment, ip, ioStart, port, isIn, width, 0);
     return 1;                              /* EIP already past the I/O -- do NOT advance */
 }
 
@@ -15407,76 +15407,76 @@ static int host_try_io_retro(volatile BYTE *tib, VDD_BUS *bus)
    most IO_BURST_MAX units per reflect and only step past the instruction once CX
    drains -- leaving EIP on the REP otherwise, exactly as a real CPU resumes an
    interrupted string op, which keeps a 64K transfer from monopolising the monitor. */
-static int host_try_io_string(volatile BYTE *tib, VDD_BUS *bus)
+static int HostTryIoString(volatile BYTE *tib, VDD_BUS *bus)
 {
     DWORD cs = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
     DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
-    volatile BYTE *seg = (volatile BYTE *)(cs << 4);
-    int i = 0, opsize = 2, is_in, width, rep = 0;
-    DWORD sover = 0, count, n, step, k;
+    volatile BYTE *segment = (volatile BYTE *)(cs << 4);
+    int index = 0, opsize = 2, isIn, width, report = 0;
+    DWORD sover = 0, count, burst, step, element;
     uint16_t port;
-    BYTE op;
+    BYTE opcode;
 
     for (;;) {                                   /* prefixes                        */
-        op = seg[(ip + i) & 0xFFFF];
-        if      (op == 0x66) opsize = 4;
-        else if (op == 0xF2 || op == 0xF3) rep = 1;
-        else if (op == 0x26) sover = VTIB_ES;    /* segment overrides on the source */
-        else if (op == 0x2E) sover = VTIB_CS;
-        else if (op == 0x36) sover = VTIB_SS;
-        else if (op == 0x3E) sover = VTIB_DS;
-        else if (op != 0x67) break;
-        if (++i > 4) return 0;
+        opcode = segment[(ip + index) & 0xFFFF];
+        if      (opcode == 0x66) opsize = 4;
+        else if (opcode == 0xF2 || opcode == 0xF3) report = 1;
+        else if (opcode == 0x26) sover = VTIB_ES;    /* segment overrides on the source */
+        else if (opcode == 0x2E) sover = VTIB_CS;
+        else if (opcode == 0x36) sover = VTIB_SS;
+        else if (opcode == 0x3E) sover = VTIB_DS;
+        else if (opcode != 0x67) break;
+        if (++index > 4) return 0;
     }
-    switch (op) {
-    case 0x6C: is_in = 1; width = 1;      break;              /* INSB             */
-    case 0x6D: is_in = 1; width = opsize; break;              /* INSW / INSD      */
-    case 0x6E: is_in = 0; width = 1;      break;              /* OUTSB            */
-    case 0x6F: is_in = 0; width = opsize; break;              /* OUTSW / OUTSD    */
+    switch (opcode) {
+    case 0x6C: isIn = 1; width = 1;      break;              /* INSB             */
+    case 0x6D: isIn = 1; width = opsize; break;              /* INSW / INSD      */
+    case 0x6E: isIn = 0; width = 1;      break;              /* OUTSB            */
+    case 0x6F: isIn = 0; width = opsize; break;              /* OUTSW / OUTSD    */
     default:   return 0;                                      /* not a string I/O */
     }
     port  = (uint16_t)VDM_REG(tib, VTIB_EDX);
-    count = rep ? (VDM_REG(tib, VTIB_ECX) & 0xFFFF) : 1;
+    count = report ? (VDM_REG(tib, VTIB_ECX) & 0xFFFF) : 1;
     if (!count) {                                             /* REP with CX=0    */
-        VDM_REG(tib, VTIB_EIP) = (ip + i + 1) & 0xFFFF;
+        VDM_REG(tib, VTIB_EIP) = (ip + index + 1) & 0xFFFF;
         return 1;
     }
     step = (VDM_REG(tib, VTIB_EFLAGS) & 0x400) ? (DWORD)-width : (DWORD)width;  /* DF */
-    n = (count > IO_BURST_MAX) ? IO_BURST_MAX : count;
+    burst = (count > IO_BURST_MAX) ? IO_BURST_MAX : count;
 
-    for (k = 0; k < n; ++k) {
-        uint32_t val = 0;
-        if (is_in) {                                          /* port -> ES:DI    */
+    for (element = 0; element < burst; ++element) {
+        uint32_t value = 0;
+        if (isIn) {                                          /* port -> ES:DI    */
             DWORD di = VDM_REG(tib, VTIB_EDI) & 0xFFFF;
-            DWORD lin = ((VDM_REG(tib, VTIB_ES) & 0xFFFF) << 4) + di;
-            VddBusIo(bus, port, (uint8_t)width, 1, &val);
-            PokeWidth(lin, val, width);
+            DWORD linear = ((VDM_REG(tib, VTIB_ES) & 0xFFFF) << 4) + di;
+            VddBusIo(bus, port, (uint8_t)width, 1, &value);
+            PokeWidth(linear, value, width);
             VDM_SET16(tib, VTIB_EDI, (WORD)(di + step));
         } else {                                              /* DS:SI -> port    */
             DWORD si = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
             DWORD sregoff = sover ? sover : VTIB_DS;
-            DWORD lin = ((VDM_REG(tib, sregoff) & 0xFFFF) << 4) + si;
-            val = PeekWidth(lin, width);
-            VddBusIo(bus, port, (uint8_t)width, 0, &val);
+            DWORD linear = ((VDM_REG(tib, sregoff) & 0xFFFF) << 4) + si;
+            value = PeekWidth(linear, width);
+            VddBusIo(bus, port, (uint8_t)width, 0, &value);
             VDM_SET16(tib, VTIB_ESI, (WORD)(si + step));
         }
     }
-    if (rep) {
-        VDM_SET16(tib, VTIB_ECX, (WORD)(count - n));
-        if (count - n) return 1;                 /* more to go: resume ON the REP  */
+    if (report) {
+        VDM_SET16(tib, VTIB_ECX, (WORD)(count - burst));
+        if (count - burst) return 1;                 /* more to go: resume ON the REP  */
     }
-    VDM_REG(tib, VTIB_EIP) = (ip + i + 1) & 0xFFFF;
+    VDM_REG(tib, VTIB_EIP) = (ip + index + 1) & 0xFFFF;
     return 1;
 }
 
 /* True if selector `sel`'s descriptor has the D/B (32-bit default) bit set. The bit
    lives in g_Ldt[].flags bit 2 (descriptor byte-6 bit 6). All 16-bit DPMI clients leave
    it 0; a DOS/4GW-class 32-bit code selector sets it (via INT 31h 0009). */
-static int dpmi_sel_is32(WORD sel)
+static int DpmiSelectorIs32(WORD selector)
 {
-    int idx = (sel & 0xFFFF) >> 3;
-    if (idx < 1 || idx >= 512) return 0;
-    return (g_Ldt[idx].Flags & 0x4) != 0;
+    int index = (selector & 0xFFFF) >> 3;
+    if (index < 1 || index >= 512) return 0;
+    return (g_Ldt[index].Flags & 0x4) != 0;
 }
 
 /* PM variant of HostTryIo (GH #18 run 72). A real-CPU PROTECTED-MODE IN/OUT is
@@ -15490,8 +15490,8 @@ static int dpmi_sel_is32(WORD sel)
    read it per-selector and offset EIP by its full 32-bit value when D=1, so this decoder
    serves both classes; for every existing D=0 client the behaviour is unchanged. */
 #define DMAPOLL_MAX 8
-static DWORD g_dmapoll_eip[DMAPOLL_MAX], g_dmapoll_hits[DMAPOLL_MAX];
-static unsigned g_dmapoll_n = 0, g_dmapoll_overflow = 0;
+static DWORD g_DmaPollEip[DMAPOLL_MAX], g_DmaPollHits[DMAPOLL_MAX];
+static unsigned g_DmaPollCount = 0, g_DmaPollOverflow = 0;
 /* ── WHO CALLS THE POLL? THE STACK KNOWS, AND THE IMAGE DOES NOT. ────────────────────
      DMX dispatches through a card-driver vtable -- four position routines of identical
      shape, one per sound card -- and in an LE image those entries are FIXUP RECORDS, so
@@ -15510,39 +15510,39 @@ static unsigned g_dmapoll_n = 0, g_dmapoll_overflow = 0;
      blocks and the 31%-vs-30% agreement is a coincidence. This decides that, and it is
      the difference between a cause and a pattern match. */
 #define POLLSTK_MAX 48
-static DWORD g_pollstk[POLLSTK_MAX], g_pollstk_hits[POLLSTK_MAX];
-static DWORD g_pollgap[10], g_pollgap_max_us = 0;
-static unsigned g_pollstk_n = 0, g_pollstk_overflow = 0;
+static DWORD g_PollStack[POLLSTK_MAX], g_PollStackHits[POLLSTK_MAX];
+static DWORD g_PollGap[10], g_PollGapMaximumMicroseconds = 0;
+static unsigned g_PollStackCount = 0, g_PollStackOverflow = 0;
 
-static int host_try_io_pm(volatile BYTE *tib, VDD_BUS *bus)
+static int HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
 {
     DWORD csv = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
     DWORD eip = VDM_REG(tib, VTIB_EIP);
-    int is32 = dpmi_sel_is32((WORD)csv);
-    DWORD eip_off = is32 ? eip : (eip & 0xFFFF);
-    volatile BYTE *code = (volatile BYTE *)(ULONG_PTR)(dpmi_sel_base((WORD)csv) + eip_off);
-    int i = 0, opsize = is32 ? 4 : 2, is_in, width, used_dx, len;
-    BYTE op; uint16_t port;
+    int is32 = DpmiSelectorIs32((WORD)csv);
+    DWORD eipOffset = is32 ? eip : (eip & 0xFFFF);
+    volatile BYTE *code = (volatile BYTE *)(ULONG_PTR)(dpmi_sel_base((WORD)csv) + eipOffset);
+    int index = 0, opsize = is32 ? 4 : 2, isIn, width, usedDx, length;
+    BYTE opcode; uint16_t port;
 
-    while (code[i] == 0x66 || code[i] == 0x67 ||
-           code[i] == 0xF2 || code[i] == 0xF3) {        /* prefixes            */
-        if (code[i] == 0x66) opsize = is32 ? 2 : 4;     /* 0x66 flips the segment default */
-        if (++i > 4) return 0;
+    while (code[index] == 0x66 || code[index] == 0x67 ||
+           code[index] == 0xF2 || code[index] == 0xF3) {        /* prefixes            */
+        if (code[index] == 0x66) opsize = is32 ? 2 : 4;     /* 0x66 flips the segment default */
+        if (++index > 4) return 0;
     }
-    op = code[i];
-    switch (op) {
-    case 0xE4: is_in = 1; width = 1;      used_dx = 0; break;  /* IN  AL,ib    */
-    case 0xE5: is_in = 1; width = opsize; used_dx = 0; break;  /* IN  eAX,ib   */
-    case 0xE6: is_in = 0; width = 1;      used_dx = 0; break;  /* OUT ib,AL    */
-    case 0xE7: is_in = 0; width = opsize; used_dx = 0; break;  /* OUT ib,eAX   */
-    case 0xEC: is_in = 1; width = 1;      used_dx = 1; break;  /* IN  AL,DX    */
-    case 0xED: is_in = 1; width = opsize; used_dx = 1; break;  /* IN  eAX,DX   */
-    case 0xEE: is_in = 0; width = 1;      used_dx = 1; break;  /* OUT DX,AL    */
-    case 0xEF: is_in = 0; width = opsize; used_dx = 1; break;  /* OUT DX,eAX   */
+    opcode = code[index];
+    switch (opcode) {
+    case 0xE4: isIn = 1; width = 1;      usedDx = 0; break;  /* IN  AL,ib    */
+    case 0xE5: isIn = 1; width = opsize; usedDx = 0; break;  /* IN  eAX,ib   */
+    case 0xE6: isIn = 0; width = 1;      usedDx = 0; break;  /* OUT ib,AL    */
+    case 0xE7: isIn = 0; width = opsize; usedDx = 0; break;  /* OUT ib,eAX   */
+    case 0xEC: isIn = 1; width = 1;      usedDx = 1; break;  /* IN  AL,DX    */
+    case 0xED: isIn = 1; width = opsize; usedDx = 1; break;  /* IN  eAX,DX   */
+    case 0xEE: isIn = 0; width = 1;      usedDx = 1; break;  /* OUT DX,AL    */
+    case 0xEF: isIn = 0; width = opsize; usedDx = 1; break;  /* OUT DX,eAX   */
     default:   return 0;                       /* not an I/O op -> real fault  */
     }
-    if (used_dx) { port = (uint16_t)VDM_REG(tib, VTIB_EDX); len = i + 1; }
-    else         { port = code[i + 1];                      len = i + 2; }
+    if (usedDx) { port = (uint16_t)VDM_REG(tib, VTIB_EDX); length = index + 1; }
+    else         { port = code[index + 1];                      length = index + 2; }
 
     /* ── WHERE IN THE GUEST IS THE DMA POLL? A LOCATOR, NOT A HYPOTHESIS. ────────────
          DMX refills from its timer ISR and steers by the 8237's channel-1 count, and
@@ -15555,15 +15555,15 @@ static int host_try_io_pm(volatile BYTE *tib, VDD_BUS *bus)
          port 3, and the map `guest = file + 0x03AEDFEC` (verified on DMX's IRQ0 stub
          and Doom's keyboard ISR) turns it straight into a file offset to disassemble.
          The overflow is counted, so a too-small table cannot pass as a complete answer. */
-    if (is_in && port == 0x03) {
-        DWORD site = dpmi_sel_base((WORD)csv) + eip_off;
-        unsigned s;
-        for (s = 0; s < g_dmapoll_n; ++s) if (g_dmapoll_eip[s] == site) break;
-        if (s < g_dmapoll_n) g_dmapoll_hits[s]++;
-        else if (g_dmapoll_n < DMAPOLL_MAX) {
-            g_dmapoll_eip[g_dmapoll_n] = site; g_dmapoll_hits[g_dmapoll_n] = 1;
-            ++g_dmapoll_n;
-        } else ++g_dmapoll_overflow;
+    if (isIn && port == 0x03) {
+        DWORD site = dpmi_sel_base((WORD)csv) + eipOffset;
+        unsigned site2;
+        for (site2 = 0; site2 < g_DmaPollCount; ++site2) if (g_DmaPollEip[site2] == site) break;
+        if (site2 < g_DmaPollCount) g_DmaPollHits[site2]++;
+        else if (g_DmaPollCount < DMAPOLL_MAX) {
+            g_DmaPollEip[g_DmaPollCount] = site; g_DmaPollHits[g_DmaPollCount] = 1;
+            ++g_DmaPollCount;
+        } else ++g_DmaPollOverflow;
 
         /* ── WHY IS THE MIXER RUN ONLY 56 TIMES A SECOND? TWO CAUSES, ONE SHAPE EACH.
              DMX's scheduler (DOOM.EXE file 0x57224) runs a task when the tick clock
@@ -15577,16 +15577,16 @@ static int host_try_io_pm(volatile BYTE *tib, VDD_BUS *bus)
              A rate cannot tell those apart -- both give 56/s -- so bucket the actual
              interval. QPC because at these scales GetTickCount's 10-16 ms granularity
              is the same size as the effect. */
-        { static LARGE_INTEGER pf, prev;
+        { static LARGE_INTEGER frequency, prev;
           LARGE_INTEGER now;
-          if (!pf.QuadPart) QueryPerformanceFrequency(&pf);
-          if (pf.QuadPart && QueryPerformanceCounter(&now)) {
+          if (!frequency.QuadPart) QueryPerformanceFrequency(&frequency);
+          if (frequency.QuadPart && QueryPerformanceCounter(&now)) {
               if (prev.QuadPart) {
-                  LONGLONG dus = ((now.QuadPart - prev.QuadPart) * 1000000) / pf.QuadPart;
-                  unsigned b = 0;
-                  while (b < 9 && dus >= (LONGLONG)1000 << b) ++b;   /* 1,2,4..256ms+ */
-                  g_pollgap[b]++;
-                  if (dus > (LONGLONG)g_pollgap_max_us) g_pollgap_max_us = (DWORD)dus;
+                  LONGLONG dus = ((now.QuadPart - prev.QuadPart) * 1000000) / frequency.QuadPart;
+                  unsigned bucket = 0;
+                  while (bucket < 9 && dus >= (LONGLONG)1000 << bucket) ++bucket;   /* 1,2,4..256ms+ */
+                  g_PollGap[bucket]++;
+                  if (dus > (LONGLONG)g_PollGapMaximumMicroseconds) g_PollGapMaximumMicroseconds = (DWORD)dus;
               }
               prev = now;
           } }
@@ -15594,29 +15594,29 @@ static int host_try_io_pm(volatile BYTE *tib, VDD_BUS *bus)
         /* The return chain, straight off the guest's stack. */
         { DWORD ssb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
           DWORD esp = VDM_REG(tib, VTIB_ESP);
-          const volatile DWORD *sp = (const volatile DWORD *)(ULONG_PTR)(ssb + esp);
-          unsigned k;
-          for (k = 0; k < 40; ++k) {
-              DWORD w = sp[k], dlt = (w > site) ? (w - site) : (site - w);
-              unsigned t;
+          const volatile DWORD *stack = (const volatile DWORD *)(ULONG_PTR)(ssb + esp);
+          unsigned slot;
+          for (slot = 0; slot < 40; ++slot) {
+              DWORD word = stack[slot], dlt = (word > site) ? (word - site) : (site - word);
+              unsigned entry;
               if (dlt > 0x60000u) continue;             /* not a code address */
-              for (t = 0; t < g_pollstk_n; ++t) if (g_pollstk[t] == w) break;
-              if (t < g_pollstk_n) g_pollstk_hits[t]++;
-              else if (g_pollstk_n < POLLSTK_MAX) {
-                  g_pollstk[g_pollstk_n] = w; g_pollstk_hits[g_pollstk_n] = 1;
-                  ++g_pollstk_n;
-              } else ++g_pollstk_overflow;
+              for (entry = 0; entry < g_PollStackCount; ++entry) if (g_PollStack[entry] == word) break;
+              if (entry < g_PollStackCount) g_PollStackHits[entry]++;
+              else if (g_PollStackCount < POLLSTK_MAX) {
+                  g_PollStack[g_PollStackCount] = word; g_PollStackHits[g_PollStackCount] = 1;
+                  ++g_PollStackCount;
+              } else ++g_PollStackOverflow;
           } }
     }
 
-    HostIoDo(tib, bus, port, is_in, width);
+    HostIoDo(tib, bus, port, isIn, width);
     /* step past the I/O insn. 16-bit client (D=0): advance the low word, keep high.
        32-bit client (D=1): advance the full EIP. */
-    VDM_REG(tib, VTIB_EIP) = is32 ? (eip + len) : ((eip & 0xFFFF0000u) | ((eip + len) & 0xFFFF));
+    VDM_REG(tib, VTIB_EIP) = is32 ? (eip + length) : ((eip & 0xFFFF0000u) | ((eip + length) & 0xFFFF));
     /* Same LOOP-drain as V86 (a PM sound driver runs the identical OPL idiom).
        With D/B=1 the LOOP counts in ECX, so the counter width follows the selector. */
     HostIoLoopBurst(tib, bus, (volatile const BYTE *)(ULONG_PTR)dpmi_sel_base((WORD)csv),
-                       eip_off + len, eip_off, port, is_in, width, is32);
+                       eipOffset + length, eipOffset, port, isIn, width, is32);
     return 1;
 }
 
@@ -15655,14 +15655,14 @@ static int host_try_io_pm(volatile BYTE *tib, VDD_BUS *bus)
  */
 #define MODEY_WIN   0x10000u                 /* 64K: A0000..AFFFF and B0000..BFFFF   */
 #define MODEY_NSEC  6                        /* 0-3 planes, 4 chained/linear, 5 scratch */
-static HANDLE g_ysec[MODEY_NSEC];
-static void  *g_yview[MODEY_NSEC];           /* host-side views, always mapped       */
-static HANDLE g_bsec;
-static BYTE   g_yseed[MODEY_WIN];            /* scratch contents as it was seeded    */
-static int    g_yremap      = 0;             /* the window is ours                   */
-static int    g_ycur        = -1;            /* section index currently at A0000     */
-static int    g_yprev_mask  = 0;             /* mask live while the scratch was up   */
-static DWORD  g_yswaps = 0, g_yfanouts = 0, g_yfail = 0;
+static HANDLE g_ModeYSeconds[MODEY_NSEC];
+static void  *g_ModeYView[MODEY_NSEC];           /* host-side views, always mapped       */
+static HANDLE g_BarSecond;
+static BYTE   g_ModeYSeed[MODEY_WIN];            /* scratch contents as it was seeded    */
+static int    g_ModeYRemap      = 0;             /* the window is ours                   */
+static int    g_ModeYCurrent        = -1;            /* section index currently at A0000     */
+static int    g_ModeYPreviousMask  = 0;             /* mask live while the scratch was up   */
+static DWORD  g_ModeYSwaps = 0, g_ModeYFanouts = 0, g_ModeYFail = 0;
 /* ── WHERE DOES A MAP-MASK WRITE GO IF IT DOES NOT MOVE THE WINDOW? ──────────────────
      The last run wrote the map mask 2,042,942 times and swapped 1,867,689 times: 175,253
      writes -- 8.6% -- did not move the window, and nothing says which of the four ways
@@ -15676,9 +15676,9 @@ static DWORD  g_yswaps = 0, g_yfanouts = 0, g_yfail = 0;
          sel_calls   = swaps + sel_same + sel_zero + failed
      A residual in either line is a path nobody has accounted for. This is deliberately
      an IDENTITY rather than a rate: a rate cannot show a shape, and 8.6% has no shape. */
-static DWORD  g_ysel_calls = 0;   /* modey_remap_select() entered with the remap live  */
-static DWORD  g_ysel_same  = 0;   /* ...and the window was already where it wanted     */
-static DWORD  g_ysel_zero  = 0;   /* ...and the mask selected no plane at all          */
+static DWORD  g_ModeYSelectorCalls = 0;   /* ModeYRemapSelect() entered with the remap live  */
+static DWORD  g_ModeYSelectorSame  = 0;   /* ...and the window was already where it wanted     */
+static DWORD  g_ModeYSelectorZero  = 0;   /* ...and the mask selected no plane at all          */
 /* ── ★ NORTH STAR 1: WHAT DOES MODE Y COST, PER SECOND? (s80) ─────────────────────────
      The mode-Y fix was parked on a performance judgement -- "arming the A0000 trap makes
      the interpreter the CPU" -- that nobody had measured, and the user's bar is "measure
@@ -15699,29 +15699,29 @@ static DWORD  g_ysel_zero  = 0;   /* ...and the mask selected no plane at all   
      this runs ~10^5 times a second in Doom's low detail; two QPCs a call would perturb
      the thing measured. Cycles are converted to us once, at report time, against QPC. */
 #define YTL_SECS 90
-static DWORD  g_ytl_sel[YTL_SECS], g_ytl_swap[YTL_SECS], g_ytl_fan[YTL_SECS];
-static DWORD  g_ytl_fanb[YTL_SECS], g_ytl_flip[YTL_SECS];
-static unsigned long long g_ytl_cyc[YTL_SECS];
-static DWORD  g_ytl_t0 = 0;
-static unsigned long long g_ytl_tsc0 = 0;
-static LONGLONG g_ytl_qpc0 = 0;
-static DWORD  g_yfan_bytes = 0;   /* changed bytes fanned out, whole run */
+static DWORD  g_ModeYTimelineSelector[YTL_SECS], g_ModeYTimelineSwap[YTL_SECS], g_ModeYTimelineFanout[YTL_SECS];
+static DWORD  g_ModeYTimelineFanoutBytes[YTL_SECS], g_ModeYTimelineFlip[YTL_SECS];
+static unsigned long long g_ModeYTimelineCycles[YTL_SECS];
+static DWORD  g_ModeYTimelineT0 = 0;
+static unsigned long long g_ModeYTimelineTscBase = 0;
+static LONGLONG g_ModeYTimelineQpcBase = 0;
+static DWORD  g_ModeYFanoutBytes = 0;   /* changed bytes fanned out, whole run */
 /* ⚠ fanB IS NOT A STORE COUNT. Moving 0x03 -> 0x0c keeps the scratch (both want it), so
      the diff against the seed ACCUMULATES across windows and the same bytes are counted
      again each time -- measured ~90M/s in Doom's low detail, which no renderer stores.
      `fanN` counts bytes that changed SINCE THE PREVIOUS WINDOW CLOSED, against a shadow
      of the scratch: a true lower bound on the guest's multi-plane stores (a store of the
      value already there is still invisible -- that is the defect itself). */
-static BYTE   g_yshadow[MODEY_WIN];
-static DWORD  g_yfan_new = 0;
-static DWORD  g_ytl_fann[YTL_SECS];
-static DWORD  g_ytl_ins[YTL_SECS];   /* instructions interpreted for mode Y (s80, design C) */
-static unsigned long long g_ytl_icyc[YTL_SECS];   /* ...and the host cycles that took */
-static unsigned long long ytl_rdtsc(void)
+static BYTE   g_ModeYShadow[MODEY_WIN];
+static DWORD  g_ModeYFanoutNew = 0;
+static DWORD  g_ModeYTimelineFanoutCount[YTL_SECS];
+static DWORD  g_ModeYTimelineIns[YTL_SECS];   /* instructions interpreted for mode Y (s80, design C) */
+static unsigned long long g_ModeYTimelineInterpreterCycles[YTL_SECS];   /* ...and the host cycles that took */
+static unsigned long long ModeYTimelineRdtsc(void)
 {
-    unsigned lo, hi;
-    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
-    return ((unsigned long long)hi << 32) | lo;
+    unsigned low, high;
+    __asm__ __volatile__("rdtsc" : "=a"(low), "=d"(high));
+    return ((unsigned long long)high << 32) | low;
 }
 /* ── DOES THE FAN-OUT ITSELF CREATE THE STATUS BAR'S FOUR-WAY COLLAPSE? ──────────────
      `bar_planes_equal` says ~1709 of 2560 bar offsets hold the SAME byte in all four
@@ -15746,10 +15746,10 @@ static unsigned long long ytl_rdtsc(void)
 #define YBAR_OFF_MID  (184u * 80u)      /* band split: rows 184..199    */
 #define YBAR_OFF_HI   (200u * 80u)
 #define YBAR_PER_PAGE (YBAR_OFF_HI - YBAR_OFF_LO)          /* 2560 */
-static BYTE  g_yfan_bar_seen[(3u * YBAR_PER_PAGE + 7u) / 8u];
-static DWORD g_yfan_bar_writes[2];      /* fan-out writes to bar bytes, by band  */
-static DWORD g_yfan_bar_distinct[2];    /* ...distinct offsets, by band          */
-static DWORD g_yfan_bar_4way[2];        /* ...of which the mask was all four     */
+static BYTE  g_ModeYFanoutBarSeen[(3u * YBAR_PER_PAGE + 7u) / 8u];
+static DWORD g_ModeYFanoutBarWrites[2];      /* fan-out writes to bar bytes, by band  */
+static DWORD g_ModeYFanoutBarDistinct[2];    /* ...distinct offsets, by band          */
+static DWORD g_ModeYFanoutBar4Way[2];        /* ...of which the mask was all four     */
 /* ── IS THE GUEST WRITING THE SAME BYTES TO EVERY PLANE? ─────────────────────────────
      Everything else is now excluded by measurement: the fan-out writes 0 bar bytes, the
      latch bursts change the oracle by under a point when delivered, and the render is
@@ -15801,13 +15801,13 @@ static DWORD g_yfan_bar_4way[2];        /* ...of which the mask was all four    
 #define YSMP_LEN 256u
 #define YSMP_A   (176u * 80u)      /* band A, rows 168-183 (256B spans rows 176-179) */
 #define YSMP_B   (192u * 80u)      /* band B, rows 184-199 (256B spans rows 192-195) */
-static BYTE  g_ysmp[2][4][YSMP_LEN];      /* [band][plane] last seen                */
-static int   g_ysmp_have[2][4];
-static BYTE  g_ysmp_last[2][YSMP_LEN];    /* last CHANGED window, any plane         */
-static int   g_ysmp_last_pl[2] = { -1, -1 };
-static DWORD g_ysmp_cross_same[2], g_ysmp_cross_diff[2], g_ysmp_writes[2];
-static DWORD g_ysmp_cross_eqb[2], g_ysmp_cross_totb[2];
-static DWORD g_ysmp_p1_eq[2][4], g_ysmp_p1_tot[2][4];
+static BYTE  g_ModeYSample[2][4][YSMP_LEN];      /* [band][plane] last seen                */
+static int   g_ModeYSampleHave[2][4];
+static BYTE  g_ModeYSampleLast[2][YSMP_LEN];    /* last CHANGED window, any plane         */
+static int   g_ModeYSampleLastPlane[2] = { -1, -1 };
+static DWORD g_ModeYSampleCrossSame[2], g_ModeYSampleCrossDiff[2], g_ModeYSampleWrites[2];
+static DWORD g_ModeYSampleCrossEqualBytes[2], g_ModeYSampleCrossTotalBytes[2];
+static DWORD g_ModeYSampleP1Equal[2][4], g_ModeYSampleP1Total[2][4];
 /* ── ⚠ AND `cross_eqb` IS A STATE MEASUREMENT, NOT A DELIVERY ONE. ───────────────────
      It compares the WHOLE 256-byte window whenever ANY byte of it changed, so 255 of
      those bytes can be stale content left by an earlier event. That makes it very
@@ -15819,89 +15819,89 @@ static DWORD g_ysmp_p1_eq[2][4], g_ysmp_p1_tot[2][4];
      actually wrote, was the value already present in the other plane? Stale bytes are
      excluded by construction, so a high rate means the guest HANDED us the same byte for
      two different planes -- which state cannot fake. */
-static DWORD g_ysmp_dlv_eq[2], g_ysmp_dlv_tot[2];
-static void ysmp_check(int band, unsigned off, int pl)
+static DWORD g_ModeYSampleDeliveredEqual[2], g_ModeYSampleDeliveredTotal[2];
+static void ModeYSampleCheck(int band, unsigned offset, int plane)
 {
-    const BYTE *v = (const BYTE *)g_yview[pl] + off;
-    unsigned i;
+    const BYTE *view = (const BYTE *)g_ModeYView[plane] + offset;
+    unsigned index;
     BYTE prev[YSMP_LEN];
-    int had = g_ysmp_have[band][pl];
+    int had = g_ModeYSampleHave[band][plane];
     int changed = !had;
-    for (i = 0; i < YSMP_LEN && !changed; ++i)
-        if (g_ysmp[band][pl][i] != v[i]) changed = 1;
+    for (index = 0; index < YSMP_LEN && !changed; ++index)
+        if (g_ModeYSample[band][plane][index] != view[index]) changed = 1;
     if (!changed) return;                       /* nobody wrote this window */
-    for (i = 0; i < YSMP_LEN; ++i) prev[i] = g_ysmp[band][pl][i];
+    for (index = 0; index < YSMP_LEN; ++index) prev[index] = g_ModeYSample[band][plane][index];
     /* Against plane 1 BEFORE this window is stored, so pl==1 compares with its own
        previous content (a self-consistency baseline) rather than with itself. */
-    if (g_ysmp_have[band][1]) {
-        for (i = 0; i < YSMP_LEN; ++i) {
-            g_ysmp_p1_tot[band][pl]++;
-            if (g_ysmp[band][1][i] == v[i]) g_ysmp_p1_eq[band][pl]++;
+    if (g_ModeYSampleHave[band][1]) {
+        for (index = 0; index < YSMP_LEN; ++index) {
+            g_ModeYSampleP1Total[band][plane]++;
+            if (g_ModeYSample[band][1][index] == view[index]) g_ModeYSampleP1Equal[band][plane]++;
         }
     }
-    for (i = 0; i < YSMP_LEN; ++i) g_ysmp[band][pl][i] = v[i];
-    g_ysmp_have[band][pl] = 1;
-    g_ysmp_writes[band]++;
-    if (g_ysmp_last_pl[band] >= 0 && g_ysmp_last_pl[band] != pl) {
+    for (index = 0; index < YSMP_LEN; ++index) g_ModeYSample[band][plane][index] = view[index];
+    g_ModeYSampleHave[band][plane] = 1;
+    g_ModeYSampleWrites[band]++;
+    if (g_ModeYSampleLastPlane[band] >= 0 && g_ModeYSampleLastPlane[band] != plane) {
         int same = 1;
-        for (i = 0; i < YSMP_LEN; ++i) {
-            g_ysmp_cross_totb[band]++;
-            if (g_ysmp_last[band][i] == v[i]) g_ysmp_cross_eqb[band]++; else same = 0;
+        for (index = 0; index < YSMP_LEN; ++index) {
+            g_ModeYSampleCrossTotalBytes[band]++;
+            if (g_ModeYSampleLast[band][index] == view[index]) g_ModeYSampleCrossEqualBytes[band]++; else same = 0;
             /* DELIVERY: only bytes this pass actually changed. `prev` was captured
                before the store above overwrote it. */
-            if (had && prev[i] != v[i]) {
-                g_ysmp_dlv_tot[band]++;
-                if (g_ysmp_last[band][i] == v[i]) g_ysmp_dlv_eq[band]++;
+            if (had && prev[index] != view[index]) {
+                g_ModeYSampleDeliveredTotal[band]++;
+                if (g_ModeYSampleLast[band][index] == view[index]) g_ModeYSampleDeliveredEqual[band]++;
             }
         }
-        if (same) g_ysmp_cross_same[band]++; else g_ysmp_cross_diff[band]++;
+        if (same) g_ModeYSampleCrossSame[band]++; else g_ModeYSampleCrossDiff[band]++;
     }
-    for (i = 0; i < YSMP_LEN; ++i) g_ysmp_last[band][i] = v[i];
-    g_ysmp_last_pl[band] = pl;
+    for (index = 0; index < YSMP_LEN; ++index) g_ModeYSampleLast[band][index] = view[index];
+    g_ModeYSampleLastPlane[band] = plane;
 }
 /* Record a fan-out write at plane offset k under `mask`. Returns nothing; cheap
    enough to sit in the fan-out's inner loop (3 compares for a non-bar byte). */
-static void yfan_bar_note(unsigned k, int mask)
+static void ModeYFanoutBarNote(unsigned linearOffset, int mask)
 {
-    unsigned pg;
-    for (pg = 0; pg < 3; ++pg) {
-        unsigned off = k - pg * 0x4000u;
-        unsigned idx, band;
-        if (k < pg * 0x4000u || off < YBAR_OFF_LO || off >= YBAR_OFF_HI) continue;
-        band = (off < YBAR_OFF_MID) ? 0u : 1u;
-        g_yfan_bar_writes[band]++;
-        if ((mask & 0x0F) == 0x0F) g_yfan_bar_4way[band]++;
-        idx = pg * YBAR_PER_PAGE + (off - YBAR_OFF_LO);
-        if (!(g_yfan_bar_seen[idx >> 3] & (1u << (idx & 7)))) {
-            g_yfan_bar_seen[idx >> 3] |= (BYTE)(1u << (idx & 7));
-            g_yfan_bar_distinct[band]++;
+    unsigned page;
+    for (page = 0; page < 3; ++page) {
+        unsigned offset = linearOffset - page * 0x4000u;
+        unsigned index, band;
+        if (linearOffset < page * 0x4000u || offset < YBAR_OFF_LO || offset >= YBAR_OFF_HI) continue;
+        band = (offset < YBAR_OFF_MID) ? 0u : 1u;
+        g_ModeYFanoutBarWrites[band]++;
+        if ((mask & 0x0F) == 0x0F) g_ModeYFanoutBar4Way[band]++;
+        index = page * YBAR_PER_PAGE + (offset - YBAR_OFF_LO);
+        if (!(g_ModeYFanoutBarSeen[index >> 3] & (1u << (index & 7)))) {
+            g_ModeYFanoutBarSeen[index >> 3] |= (BYTE)(1u << (index & 7));
+            g_ModeYFanoutBarDistinct[band]++;
         }
         return;
     }
 }
-static int    g_ywmode      = 0;             /* GC write mode, tracked for latch copies */
-static int    g_ylatch      = 0;             /* write mode 1 seen in the current window */
-static DWORD  g_ylatch_ok = 0, g_ylatch_unsolved = 0, g_ylatch_desc = 0;
+static int    g_ModeYWriteMode      = 0;             /* GC write mode, tracked for latch copies */
+static int    g_ModeYLatch      = 0;             /* write mode 1 seen in the current window */
+static DWORD  g_ModeYLatchOk = 0, g_ModeYLatchUnsolved = 0, g_ModeYLatchDescriptor = 0;
 
 /* VirtualQuery a probe address into the log -- the shape of the A0000 region after each
    step is the only thing that distinguishes "the range is reserved by the VDM" from
    "we asked for it wrongly", and those need completely different answers. */
-static void modey_remap_probe(const char *when, DWORD addr)
+static void ModeYRemapProbe(const char *when, DWORD addr)
 {
     MEMORY_BASIC_INFORMATION mbi;
-    char b[200], *q = b;
-    q = LogPut(q, "MODEY-REMAP probe "); q = LogPut(q, when);
-    q = LogPut(q, " @0x"); q = LogHex(q, addr);
+    char buffer[200], *cursor = buffer;
+    cursor = LogPut(cursor, "MODEY-REMAP probe "); cursor = LogPut(cursor, when);
+    cursor = LogPut(cursor, " @0x"); cursor = LogHex(cursor, addr);
     if (VirtualQuery((LPCVOID)(ULONG_PTR)addr, &mbi, sizeof mbi) == sizeof mbi) {
-        q = LogPut(q, " allocbase=0x"); q = LogHex(q, (DWORD)(ULONG_PTR)mbi.AllocationBase);
-        q = LogPut(q, " base=0x");      q = LogHex(q, (DWORD)(ULONG_PTR)mbi.BaseAddress);
-        q = LogPut(q, " size=0x");      q = LogHex(q, (DWORD)mbi.RegionSize);
-        q = LogPut(q, " state=0x");     q = LogHex(q, mbi.State);
-        q = LogPut(q, " type=0x");      q = LogHex(q, mbi.Type);
-        q = LogPut(q, mbi.State == MEM_FREE     ? " (FREE)"
+        cursor = LogPut(cursor, " allocbase=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)mbi.AllocationBase);
+        cursor = LogPut(cursor, " base=0x");      cursor = LogHex(cursor, (DWORD)(ULONG_PTR)mbi.BaseAddress);
+        cursor = LogPut(cursor, " size=0x");      cursor = LogHex(cursor, (DWORD)mbi.RegionSize);
+        cursor = LogPut(cursor, " state=0x");     cursor = LogHex(cursor, mbi.State);
+        cursor = LogPut(cursor, " type=0x");      cursor = LogHex(cursor, mbi.Type);
+        cursor = LogPut(cursor, mbi.State == MEM_FREE     ? " (FREE)"
                   : mbi.State == MEM_RESERVE  ? " (RESERVED)" : " (COMMIT)");
-    } else q = LogPut(q, " <VirtualQuery failed>");
-    q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, b, q); SerialOut(b, q);
+    } else cursor = LogPut(cursor, " <VirtualQuery failed>");
+    cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor);
 }
 
 /* ► THE REPORT IS BUFFERED, BECAUSE THIS RUNS BEFORE THE PREAMBLE. The remap has to
@@ -15909,52 +15909,52 @@ static void modey_remap_probe(const char *when, DWORD addr)
      every few milliseconds and there is an instant during the swap when it is unmapped
      -- and every LogWrite() before the preamble TRUNCATES the file. Two separate
      reports have already been lost to that. */
-static char  g_remap_rep[2048];
-static char *g_remap_repq = g_remap_rep;
-static void modey_remap_emit(const char *b, const char *e)
+static char  g_RemapReport[2048];
+static char *g_RemapReportCursor = g_RemapReport;
+static void ModeYRemapEmit(const char *begin, const char *end)
 {
-    while (b < e && g_remap_repq < g_remap_rep + sizeof g_remap_rep - 1) *g_remap_repq++ = *b++;
-    *g_remap_repq = 0;
+    while (begin < end && g_RemapReportCursor < g_RemapReport + sizeof g_RemapReport - 1) *g_RemapReportCursor++ = *begin++;
+    *g_RemapReportCursor = 0;
 }
-static void modey_remap_flush_report(void)
+static void ModeYRemapFlushReport(void)
 {
-    if (g_remap_repq == g_remap_rep) return;
-    LogAppend(LOG_PATH, g_remap_rep, g_remap_repq);
-    SerialOut(g_remap_rep, g_remap_repq);
-    g_remap_repq = g_remap_rep;
+    if (g_RemapReportCursor == g_RemapReport) return;
+    LogAppend(LOG_PATH, g_RemapReport, g_RemapReportCursor);
+    SerialOut(g_RemapReport, g_RemapReportCursor);
+    g_RemapReportCursor = g_RemapReport;
 }
-static void modey_remap_log(const char *what, DWORD err)
+static void ModeYRemapLog(const char *what, DWORD error)
 {
-    char b[160], *q = b;
-    q = LogPut(q, "MODEY-REMAP "); q = LogPut(q, what);
-    if (err) { q = LogPut(q, " err=0x"); q = LogHex(q, err); }
-    q = LogPut(q, "\r\n"); modey_remap_emit(b, q);
+    char buffer[160], *cursor = buffer;
+    cursor = LogPut(cursor, "MODEY-REMAP "); cursor = LogPut(cursor, what);
+    if (error) { cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, error); }
+    cursor = LogPut(cursor, "\r\n"); ModeYRemapEmit(buffer, cursor);
 }
 
 /* Take ownership of the A0000 window. Returns 0 and leaves everything as it was if any
    step fails -- the heuristic path still works, so a failure here must not be fatal. */
-static int modey_remap_init(void)
+static int ModeYRemapInitialize(void)
 {
     static BYTE savea[MODEY_WIN], saveb[MODEY_WIN];
-    unsigned i;
-    for (i = 0; i < MODEY_WIN; ++i) savea[i] = ((volatile BYTE *)(ULONG_PTR)0xA0000)[i];
-    for (i = 0; i < MODEY_WIN; ++i) saveb[i] = ((volatile BYTE *)(ULONG_PTR)0xB0000)[i];
+    unsigned index;
+    for (index = 0; index < MODEY_WIN; ++index) savea[index] = ((volatile BYTE *)(ULONG_PTR)0xA0000)[index];
+    for (index = 0; index < MODEY_WIN; ++index) saveb[index] = ((volatile BYTE *)(ULONG_PTR)0xB0000)[index];
 
-    modey_remap_probe("before unmap", 0xA0000);
+    ModeYRemapProbe("before unmap", 0xA0000);
     if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)0xA0000)) {
-        modey_remap_log("unmap of the original A0000 view FAILED", GetLastError());
+        ModeYRemapLog("unmap of the original A0000 view FAILED", GetLastError());
         return 0;
     }
-    modey_remap_probe("after unmap", 0xA0000);
+    ModeYRemapProbe("after unmap", 0xA0000);
     /* Text memory first: it must be back before anything reads B8000. */
-    g_bsec = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_EXECUTE_READWRITE,
+    g_BarSecond = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_EXECUTE_READWRITE,
                                 0, MODEY_WIN, NULL);
-    if (!g_bsec || !MapViewOfFileEx(g_bsec, FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
+    if (!g_BarSecond || !MapViewOfFileEx(g_BarSecond, FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
                                     0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xB0000)) {
-        modey_remap_log("could not re-establish B0000 -- text memory is GONE", GetLastError());
+        ModeYRemapLog("could not re-establish B0000 -- text memory is GONE", GetLastError());
         return 0;
     }
-    for (i = 0; i < MODEY_WIN; ++i) ((volatile BYTE *)(ULONG_PTR)0xB0000)[i] = saveb[i];
+    for (index = 0; index < MODEY_WIN; ++index) ((volatile BYTE *)(ULONG_PTR)0xB0000)[index] = saveb[index];
 
     /* ► CLAIM A0000 BEFORE ASKING FOR ANY FLOATING VIEW. Unmapping the original view
          makes A0000-AFFFF the LOWEST FREE 64K-aligned hole in the address space, and
@@ -15965,31 +15965,31 @@ static int modey_remap_init(void)
              after unmap      A0000 size=0x20000 (FREE)
              after failed map A0000 size=0x10000 (COMMIT, MEM_MAPPED)  <- ours
          Take the fixed address first; everything else can live anywhere. */
-    for (i = 0; i < MODEY_NSEC; ++i) {
-        g_ysec[i] = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_EXECUTE_READWRITE,
+    for (index = 0; index < MODEY_NSEC; ++index) {
+        g_ModeYSeconds[index] = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_EXECUTE_READWRITE,
                                        0, MODEY_WIN, NULL);
-        if (!g_ysec[i]) { modey_remap_log("plane section allocation FAILED", GetLastError()); return 0; }
+        if (!g_ModeYSeconds[index]) { ModeYRemapLog("plane section allocation FAILED", GetLastError()); return 0; }
     }
-    if (!MapViewOfFileEx(g_ysec[4], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
+    if (!MapViewOfFileEx(g_ModeYSeconds[4], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
                          0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000)) {
-        modey_remap_log("could not map a replacement at A0000", GetLastError());
-        modey_remap_probe("after failed map", 0xA0000);
+        ModeYRemapLog("could not map a replacement at A0000", GetLastError());
+        ModeYRemapProbe("after failed map", 0xA0000);
         return 0;
     }
-    for (i = 0; i < MODEY_NSEC; ++i) {
-        g_yview[i] = MapViewOfFile(g_ysec[i], FILE_MAP_ALL_ACCESS, 0, 0, MODEY_WIN);
-        if (!g_yview[i]) { modey_remap_log("host-side plane view FAILED", GetLastError()); return 0; }
+    for (index = 0; index < MODEY_NSEC; ++index) {
+        g_ModeYView[index] = MapViewOfFile(g_ModeYSeconds[index], FILE_MAP_ALL_ACCESS, 0, 0, MODEY_WIN);
+        if (!g_ModeYView[index]) { ModeYRemapLog("host-side plane view FAILED", GetLastError()); return 0; }
         /* ► SEED EVERY PLANE WITH A DISTINCT MARKER, NOT WITH THE APERTURE. Seeding all
              four from the same flat buffer makes them IDENTICAL, and any region the guest
              never writes per-plane then renders as four equal pixels -- indistinguishable
              from the plane-collapse bug this whole change exists to remove. A per-plane
              marker makes "never written" visible and attributable instead: the oracle
              sees index 0/1/2/3 rather than a plausible picture. */
-        { unsigned k; BYTE *d = (BYTE *)g_yview[i];
-          for (k = 0; k < MODEY_WIN; ++k) d[k] = (BYTE)(i < 4 ? i : savea[k]); }
+        { unsigned byteIndex; BYTE *destination = (BYTE *)g_ModeYView[index];
+          for (byteIndex = 0; byteIndex < MODEY_WIN; ++byteIndex) destination[byteIndex] = (BYTE)(index < 4 ? index : savea[byteIndex]); }
     }
-    g_ycur = 4; g_yremap = 1;
-    modey_remap_log("A0000 is ours: 4 planes + linear + scratch", 0);
+    g_ModeYCurrent = 4; g_ModeYRemap = 1;
+    ModeYRemapLog("A0000 is ours: 4 planes + linear + scratch", 0);
     return 1;
 }
 
@@ -16013,18 +16013,18 @@ static int modey_remap_init(void)
      and only apply one that survives. A window nothing explains falls back to the plain
      fan-out and is counted, so "we could not solve it" can never masquerade as success. */
 /* Does one displacement explain EVERY byte the burst changed? */
-static int modey_latch_verify(long dl)
+static int ModeYLatchVerify(long delta)
 {
-    const BYTE *sc = (const BYTE *)g_yview[5];
-    unsigned i, n = 0;
-    for (i = 0; i < MODEY_WIN; ++i) {
-        long src;
-        if (sc[i] == g_yseed[i]) continue;
-        ++n;
-        src = (long)i - dl;
-        if (src < 0 || src >= (long)MODEY_WIN || g_yseed[src] != sc[i]) return 0;
+    const BYTE *scratch = (const BYTE *)g_ModeYView[5];
+    unsigned index, moved = 0;
+    for (index = 0; index < MODEY_WIN; ++index) {
+        long source;
+        if (scratch[index] == g_ModeYSeed[index]) continue;
+        ++moved;
+        source = (long)index - delta;
+        if (source < 0 || source >= (long)MODEY_WIN || g_ModeYSeed[source] != scratch[index]) return 0;
     }
-    return n != 0;
+    return moved != 0;
 }
 
 /* ► DERIVE THE DISPLACEMENT FROM THE DATA, DO NOT GUESS AT PAGE STRIDES. A candidate
@@ -16034,31 +16034,31 @@ static int modey_latch_verify(long dl)
      the pre-burst image, so find that run in the seed and the displacement falls out.
      Every hit is then VERIFIED against every changed byte before it is used, so a wrong
      match cannot be applied; a burst nothing explains is counted, never guessed at. */
-static long modey_latch_delta(void)
+static long ModeYLatchDelta(void)
 {
-    const BYTE *sc = (const BYTE *)g_yview[5];
-    unsigned i, run_lo = 0, run_len = 0, best_lo = 0, best_len = 0, cap;
-    for (i = 0; i < MODEY_WIN; ++i) {
-        if (sc[i] != g_yseed[i]) {
-            if (!run_len) run_lo = i;
-            ++run_len;
-            if (run_len > best_len) { best_len = run_len; best_lo = run_lo; }
-        } else run_len = 0;
+    const BYTE *scratch = (const BYTE *)g_ModeYView[5];
+    unsigned index, runLow = 0, runLength = 0, bestLow = 0, bestLength = 0, cap;
+    for (index = 0; index < MODEY_WIN; ++index) {
+        if (scratch[index] != g_ModeYSeed[index]) {
+            if (!runLength) runLow = index;
+            ++runLength;
+            if (runLength > bestLength) { bestLength = runLength; bestLow = runLow; }
+        } else runLength = 0;
     }
-    if (best_len < 8) return 0;                  /* too little to identify a source */
-    cap = best_len > 24 ? 24 : best_len;
-    for (i = 0; i + cap <= MODEY_WIN; ++i) {
-        unsigned j;
-        if (g_yseed[i] != sc[best_lo]) continue;              /* cheap first-byte reject */
-        for (j = 1; j < cap; ++j) if (g_yseed[i + j] != sc[best_lo + j]) break;
-        if (j < cap) continue;
-        { long dl = (long)best_lo - (long)i;
-          if (dl && modey_latch_verify(dl)) return dl; }
+    if (bestLength < 8) return 0;                  /* too little to identify a source */
+    cap = bestLength > 24 ? 24 : bestLength;
+    for (index = 0; index + cap <= MODEY_WIN; ++index) {
+        unsigned run;
+        if (g_ModeYSeed[index] != scratch[bestLow]) continue;              /* cheap first-byte reject */
+        for (run = 1; run < cap; ++run) if (g_ModeYSeed[index + run] != scratch[bestLow + run]) break;
+        if (run < cap) continue;
+        { long delta = (long)bestLow - (long)index;
+          if (delta && ModeYLatchVerify(delta)) return delta; }
     }
     return 0;
 }
 
-static void ygr4_close_run(void);       /* defined with the GR4 counters below */
+static void ModeYGr4CloseRun(void);       /* defined with the GR4 counters below */
 
 /* ── WHERE DOES A PROTECTED-MODE GUEST WRITE THE MAP MASK? (s80, north star 1) ────────
      Design C for Doom needs a 32-bit interpreter, and how much of one depends on what
@@ -16067,58 +16067,58 @@ static void ygr4_close_run(void);       /* defined with the GR4 counters below *
      with the masks it writes and the bytes around it, which anchor a disassembly of the
      LE image. Bounded: 16 sites. */
 #define YPM_SITES 16
-static struct { DWORD Linear, Count, multi; WORD masks; BYTE Bytes[48]; } g_ypm_site[YPM_SITES];
-static unsigned g_ypm_n = 0, g_ypm_lost = 0;
-static void ypm_site_note(int mask)
+static struct { DWORD Linear, Count, Multi; WORD Masks; BYTE Bytes[48]; } g_ModeYPmSite[YPM_SITES];
+static unsigned g_ModeYPmCount = 0, g_ModeYPmLost = 0;
+static void ModeYPmSiteNote(int mask)
 {
-    DWORD lin; unsigned k, j;
+    DWORD linear; unsigned index, byteIndex;
     if (!g_DpmiPm || !g_DpmiLastCs) return;
-    lin = dpmi_sel_base((WORD)g_DpmiLastCs) + g_DpmiLastEip;
-    for (k = 0; k < g_ypm_n; ++k) if (g_ypm_site[k].Linear == lin) break;
-    if (k == g_ypm_n) {
-        const BYTE *cp = (const BYTE *)(ULONG_PTR)(lin - 32);
-        if (g_ypm_n >= YPM_SITES) { ++g_ypm_lost; return; }
-        g_ypm_site[k].Linear = lin;
-        if (host_readable(cp, 48)) for (j = 0; j < 48; ++j) g_ypm_site[k].Bytes[j] = cp[j];
-        ++g_ypm_n;
+    linear = dpmi_sel_base((WORD)g_DpmiLastCs) + g_DpmiLastEip;
+    for (index = 0; index < g_ModeYPmCount; ++index) if (g_ModeYPmSite[index].Linear == linear) break;
+    if (index == g_ModeYPmCount) {
+        const BYTE *code = (const BYTE *)(ULONG_PTR)(linear - 32);
+        if (g_ModeYPmCount >= YPM_SITES) { ++g_ModeYPmLost; return; }
+        g_ModeYPmSite[index].Linear = linear;
+        if (host_readable(code, 48)) for (byteIndex = 0; byteIndex < 48; ++byteIndex) g_ModeYPmSite[index].Bytes[byteIndex] = code[byteIndex];
+        ++g_ModeYPmCount;
     }
-    g_ypm_site[k].Count++;
+    g_ModeYPmSite[index].Count++;
     if (mask >= 0) {
-        g_ypm_site[k].masks |= (WORD)(1u << (mask & 0x0F));
-        if ((mask & 0x0F) & ((mask & 0x0F) - 1)) g_ypm_site[k].multi++;
+        g_ModeYPmSite[index].Masks |= (WORD)(1u << (mask & 0x0F));
+        if ((mask & 0x0F) & ((mask & 0x0F) - 1)) g_ModeYPmSite[index].Multi++;
     }
 }
 
-static void modey_remap_select_body(void *ctx, int mask);
-static void modey_remap_select(void *ctx, int mask)
+static void ModeYRemapSelectBody(void *context, int mask);
+static void ModeYRemapSelect(void *context, int mask)
 {
-    unsigned long long c0;
-    DWORD sec, sw0, fan0, fb0, fn0;
-    if (!g_yremap) return;
+    unsigned long long cycleStart;
+    DWORD seconds, sw0, fan0, fb0, function0;
+    if (!g_ModeYRemap) return;
     /* The timeline measures MODE Y. A planar 16-colour guest (mode 12h) also moves this
        window on every map-mask write, and the RDTSC/GetTickCount toll cost Lemmings'
        interpreted run ~4% of its throughput -- so it goes straight to the work. */
-    if (g_Video.ModeKind != VIDEO_KIND_LINEAR8) { modey_remap_select_body(ctx, mask); return; }
-    if (!g_ytl_t0) {
-        LARGE_INTEGER q; QueryPerformanceCounter(&q);
-        g_ytl_t0 = GetTickCount(); g_ytl_tsc0 = ytl_rdtsc(); g_ytl_qpc0 = q.QuadPart;
+    if (g_Video.ModeKind != VIDEO_KIND_LINEAR8) { ModeYRemapSelectBody(context, mask); return; }
+    if (!g_ModeYTimelineT0) {
+        LARGE_INTEGER now; QueryPerformanceCounter(&now);
+        g_ModeYTimelineT0 = GetTickCount(); g_ModeYTimelineTscBase = ModeYTimelineRdtsc(); g_ModeYTimelineQpcBase = now.QuadPart;
     }
-    sec = (GetTickCount() - g_ytl_t0) / 1000u;
-    ypm_site_note(mask);
-    sw0 = g_yswaps; fan0 = g_yfanouts; fb0 = g_yfan_bytes; fn0 = g_yfan_new;
-    c0 = ytl_rdtsc();
-    modey_remap_select_body(ctx, mask);
-    if (sec < YTL_SECS) {
-        g_ytl_cyc[sec]  += ytl_rdtsc() - c0;
-        g_ytl_sel[sec]  += 1;
-        g_ytl_swap[sec] += g_yswaps - sw0;
-        g_ytl_fan[sec]  += g_yfanouts - fan0;
-        g_ytl_fanb[sec] += g_yfan_bytes - fb0;
-        g_ytl_fann[sec] += g_yfan_new - fn0;
+    seconds = (GetTickCount() - g_ModeYTimelineT0) / 1000u;
+    ModeYPmSiteNote(mask);
+    sw0 = g_ModeYSwaps; fan0 = g_ModeYFanouts; fb0 = g_ModeYFanoutBytes; function0 = g_ModeYFanoutNew;
+    cycleStart = ModeYTimelineRdtsc();
+    ModeYRemapSelectBody(context, mask);
+    if (seconds < YTL_SECS) {
+        g_ModeYTimelineCycles[seconds]  += ModeYTimelineRdtsc() - cycleStart;
+        g_ModeYTimelineSelector[seconds]  += 1;
+        g_ModeYTimelineSwap[seconds] += g_ModeYSwaps - sw0;
+        g_ModeYTimelineFanout[seconds]  += g_ModeYFanouts - fan0;
+        g_ModeYTimelineFanoutBytes[seconds] += g_ModeYFanoutBytes - fb0;
+        g_ModeYTimelineFanoutCount[seconds] += g_ModeYFanoutNew - function0;
         /* Cumulative, reported as deltas. CR0C (start address HIGH), not the paired
            counter: Doom flips pages by writing 0Ch alone -- its pages are 0x4000 apart,
            so the low byte never changes -- and crtc_start_writes counts only on 0Dh. */
-        g_ytl_flip[sec]  = g_Video.CrtcWrites[0x0C];
+        g_ModeYTimelineFlip[seconds]  = g_Video.CrtcWrites[0x0C];
     }
 }
 /* ★ NORTH STAR 1's measurement, printed -- see g_ytl_*. Decimal, one value per second of
@@ -16126,100 +16126,100 @@ static void modey_remap_select(void *ctx, int mask)
    a DOS/4GW guest leaves through the watchdog's forced exit and never reaches the STAGE2
    summary, and Doom is the guest this exists for. Prints once. */
 #define MY_SITE_MAX 16
-static struct { DWORD Cs, Ip, Count; BYTE Bytes[8]; } g_my_site[MY_SITE_MAX];
-static unsigned g_my_site_n = 0;
-static void modey_bail_note(DWORD cs, DWORD ip, const volatile BYTE *b)
+static struct { DWORD Cs, Ip, Count; BYTE Bytes[8]; } g_MySite[MY_SITE_MAX];
+static unsigned g_MySiteCount = 0;
+static void ModeYBailNote(DWORD cs, DWORD ip, const volatile BYTE *bytes)
 {
-    unsigned k, j;
-    for (k = 0; k < g_my_site_n; ++k)
-        if (g_my_site[k].Cs == cs && g_my_site[k].Ip == ip) { g_my_site[k].Count++; return; }
-    if (g_my_site_n >= MY_SITE_MAX) return;
-    g_my_site[k].Cs = cs; g_my_site[k].Ip = ip; g_my_site[k].Count = 1;
-    for (j = 0; j < 8; ++j) g_my_site[k].Bytes[j] = b[j];
-    ++g_my_site_n;
+    unsigned index, byteIndex;
+    for (index = 0; index < g_MySiteCount; ++index)
+        if (g_MySite[index].Cs == cs && g_MySite[index].Ip == ip) { g_MySite[index].Count++; return; }
+    if (g_MySiteCount >= MY_SITE_MAX) return;
+    g_MySite[index].Cs = cs; g_MySite[index].Ip = ip; g_MySite[index].Count = 1;
+    for (byteIndex = 0; byteIndex < 8; ++byteIndex) g_MySite[index].Bytes[byteIndex] = bytes[byteIndex];
+    ++g_MySiteCount;
 }
-static void modey_tl_report(void)
+static void ModeYTimelineReport(void)
 {
     static int done = 0;
-    char b[1400], *p = b;
-    LARGE_INTEGER qn; unsigned long long cpu; DWORD us_run, t, last = 0;
+    char buffer[1400], *cursor = buffer;
+    LARGE_INTEGER now; unsigned long long cpu; DWORD microsecondsRun, second, last = 0;
     int row;
-    static const char *nm[9] = { "sel", "swap", "fan", "fanB", "us", "flip", "fanN", "ins", "ius" };
-    if (done || !g_ytl_t0) { if (!done) hostprof_dump(); return; }
+    static const char *names[9] = { "sel", "swap", "fan", "fanB", "us", "flip", "fanN", "ins", "ius" };
+    if (done || !g_ModeYTimelineT0) { if (!done) hostprof_dump(); return; }
     done = 1;
     hostprof_dump();
     if (g_MySlices && g_MyRingOn) my_ring_dump("at exit -- the last instructions interpreted for mode Y");
-    QueryPerformanceCounter(&qn);
-    us_run = QpcMicroseconds(qn.QuadPart - g_ytl_qpc0);
-    cpu = us_run ? (ytl_rdtsc() - g_ytl_tsc0) / us_run : 0;    /* cycles per us */
-    for (t = 0; t < YTL_SECS; ++t) if (g_ytl_sel[t]) last = t;
-    p = LogPut(p, "STAGE2: MODEYTL cyc_per_us="); p = LogDecimal(p, (DWORD)cpu);
-    p = LogPut(p, " secs="); p = LogDecimal(p, last + 1);
-    p = LogPut(p, " fanB_total="); p = LogDecimal(p, g_yfan_bytes);
-    p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p); SerialOut(b, p); p = b;
-    p = LogPut(p, "STAGE2: MODEY-INTERP "); p = LogPut(p, g_MyInterpOffset ? "OFF (knob)" : "on");
-    p = LogPut(p, " slices="); p = LogDecimal(p, g_MySlices);
-    p = LogPut(p, " instrs="); p = LogDecimal(p, g_MyInstructions);
-    p = LogPut(p, " bails="); p = LogDecimal(p, g_MyBails);
-    p = LogPut(p, " bails_under_multiplane="); p = LogDecimal(p, g_MyBailMp);
-    p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p); SerialOut(b, p); p = b;
-    p = LogPut(p, "STAGE2: MODEY-PM "); p = LogPut(p, (g_MyPmOffset || g_MyInterpOffset) ? "OFF (knob)" : "on");
-    p = LogPut(p, g_MyPmDetect ? " DETECT" : "");
-    p = LogPut(p, " runs="); p = LogDecimal(p, g_MyPmRuns);
-    p = LogPut(p, " instrs="); p = LogDecimal(p, g_MyPmInstructions);
-    p = LogPut(p, " stop[returned,closed,declined,cap,not32,irq]=");
-    { int k2; for (k2 = 0; k2 < 6; ++k2) { p = LogPut(p, k2 ? "," : ""); p = LogDecimal(p, g_MyPmStop[k2]); } }
-    p = LogPut(p, " bails_under_multiplane="); p = LogDecimal(p, g_MyPmBailMp);
-    p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p); SerialOut(b, p); p = b;
-    { unsigned k, j;
-      for (k = 0; k < g_ypm_n; ++k) {
-          p = LogPut(p, "  MODEY-PM site lin=0x"); p = LogHex(p, g_ypm_site[k].Linear);
-          p = LogPut(p, " n="); p = LogDecimal(p, g_ypm_site[k].Count);
-          p = LogPut(p, " multi="); p = LogDecimal(p, g_ypm_site[k].multi);
-          p = LogPut(p, " masks=0x"); p = LogHex(p, g_ypm_site[k].masks);
-          p = LogPut(p, " bytes[-32..+16]:");
-          for (j = 0; j < 48; ++j) { p = LogPut(p, " "); p = LogHexByte(p, g_ypm_site[k].Bytes[j]); }
-          p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p); SerialOut(b, p); p = b;
+    QueryPerformanceCounter(&now);
+    microsecondsRun = QpcMicroseconds(now.QuadPart - g_ModeYTimelineQpcBase);
+    cpu = microsecondsRun ? (ModeYTimelineRdtsc() - g_ModeYTimelineTscBase) / microsecondsRun : 0;    /* cycles per us */
+    for (second = 0; second < YTL_SECS; ++second) if (g_ModeYTimelineSelector[second]) last = second;
+    cursor = LogPut(cursor, "STAGE2: MODEYTL cyc_per_us="); cursor = LogDecimal(cursor, (DWORD)cpu);
+    cursor = LogPut(cursor, " secs="); cursor = LogDecimal(cursor, last + 1);
+    cursor = LogPut(cursor, " fanB_total="); cursor = LogDecimal(cursor, g_ModeYFanoutBytes);
+    cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer;
+    cursor = LogPut(cursor, "STAGE2: MODEY-INTERP "); cursor = LogPut(cursor, g_MyInterpOffset ? "OFF (knob)" : "on");
+    cursor = LogPut(cursor, " slices="); cursor = LogDecimal(cursor, g_MySlices);
+    cursor = LogPut(cursor, " instrs="); cursor = LogDecimal(cursor, g_MyInstructions);
+    cursor = LogPut(cursor, " bails="); cursor = LogDecimal(cursor, g_MyBails);
+    cursor = LogPut(cursor, " bails_under_multiplane="); cursor = LogDecimal(cursor, g_MyBailMp);
+    cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer;
+    cursor = LogPut(cursor, "STAGE2: MODEY-PM "); cursor = LogPut(cursor, (g_MyPmOffset || g_MyInterpOffset) ? "OFF (knob)" : "on");
+    cursor = LogPut(cursor, g_MyPmDetect ? " DETECT" : "");
+    cursor = LogPut(cursor, " runs="); cursor = LogDecimal(cursor, g_MyPmRuns);
+    cursor = LogPut(cursor, " instrs="); cursor = LogDecimal(cursor, g_MyPmInstructions);
+    cursor = LogPut(cursor, " stop[returned,closed,declined,cap,not32,irq]=");
+    { int index2; for (index2 = 0; index2 < 6; ++index2) { cursor = LogPut(cursor, index2 ? "," : ""); cursor = LogDecimal(cursor, g_MyPmStop[index2]); } }
+    cursor = LogPut(cursor, " bails_under_multiplane="); cursor = LogDecimal(cursor, g_MyPmBailMp);
+    cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer;
+    { unsigned index, byteIndex;
+      for (index = 0; index < g_ModeYPmCount; ++index) {
+          cursor = LogPut(cursor, "  MODEY-PM site lin=0x"); cursor = LogHex(cursor, g_ModeYPmSite[index].Linear);
+          cursor = LogPut(cursor, " n="); cursor = LogDecimal(cursor, g_ModeYPmSite[index].Count);
+          cursor = LogPut(cursor, " multi="); cursor = LogDecimal(cursor, g_ModeYPmSite[index].Multi);
+          cursor = LogPut(cursor, " masks=0x"); cursor = LogHex(cursor, g_ModeYPmSite[index].Masks);
+          cursor = LogPut(cursor, " bytes[-32..+16]:");
+          for (byteIndex = 0; byteIndex < 48; ++byteIndex) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, g_ModeYPmSite[index].Bytes[byteIndex]); }
+          cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer;
       }
-      if (g_ypm_lost) { p = LogPut(p, "  MODEY-PM sites lost="); p = LogDecimal(p, g_ypm_lost);
-                        p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p); SerialOut(b, p); p = b; }
-      for (k = 0; k < g_my_site_n; ++k) {
-          p = LogPut(p, "  MODEY-INTERP bail cs:ip="); p = LogHex(p, g_my_site[k].Cs);
-          p = LogPut(p, ":"); p = LogHex(p, g_my_site[k].Ip);
-          p = LogPut(p, " n="); p = LogDecimal(p, g_my_site[k].Count); p = LogPut(p, " bytes:");
-          for (j = 0; j < 8; ++j) { p = LogPut(p, " "); p = LogHexByte(p, g_my_site[k].Bytes[j]); }
-          p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p); SerialOut(b, p); p = b;
+      if (g_ModeYPmLost) { cursor = LogPut(cursor, "  MODEY-PM sites lost="); cursor = LogDecimal(cursor, g_ModeYPmLost);
+                        cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer; }
+      for (index = 0; index < g_MySiteCount; ++index) {
+          cursor = LogPut(cursor, "  MODEY-INTERP bail cs:ip="); cursor = LogHex(cursor, g_MySite[index].Cs);
+          cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, g_MySite[index].Ip);
+          cursor = LogPut(cursor, " n="); cursor = LogDecimal(cursor, g_MySite[index].Count); cursor = LogPut(cursor, " bytes:");
+          for (byteIndex = 0; byteIndex < 8; ++byteIndex) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, g_MySite[index].Bytes[byteIndex]); }
+          cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer;
       } }
     for (row = 0; row < 9; ++row) {
         DWORD prevflip = 0;
-        p = LogPut(p, "STAGE2: MODEYTL "); p = LogPut(p, nm[row]); p = LogPut(p, "=");
-        for (t = 0; t <= last; ++t) {
-            DWORD v = 0;
+        cursor = LogPut(cursor, "STAGE2: MODEYTL "); cursor = LogPut(cursor, names[row]); cursor = LogPut(cursor, "=");
+        for (second = 0; second <= last; ++second) {
+            DWORD value = 0;
             switch (row) {
-            case 0: v = g_ytl_sel[t];  break;
-            case 1: v = g_ytl_swap[t]; break;
-            case 2: v = g_ytl_fan[t];  break;
-            case 3: v = g_ytl_fanb[t]; break;
-            case 4: v = cpu ? (DWORD)(g_ytl_cyc[t] / cpu) : 0; break;
-            case 5: v = g_ytl_flip[t] ? g_ytl_flip[t] - prevflip : 0;
-                    if (g_ytl_flip[t]) prevflip = g_ytl_flip[t]; break;
-            case 6: v = g_ytl_fann[t]; break;
-            case 7: v = g_ytl_ins[t];  break;
-            case 8: v = cpu ? (DWORD)(g_ytl_icyc[t] / cpu) : 0; break;
+            case 0: value = g_ModeYTimelineSelector[second];  break;
+            case 1: value = g_ModeYTimelineSwap[second]; break;
+            case 2: value = g_ModeYTimelineFanout[second];  break;
+            case 3: value = g_ModeYTimelineFanoutBytes[second]; break;
+            case 4: value = cpu ? (DWORD)(g_ModeYTimelineCycles[second] / cpu) : 0; break;
+            case 5: value = g_ModeYTimelineFlip[second] ? g_ModeYTimelineFlip[second] - prevflip : 0;
+                    if (g_ModeYTimelineFlip[second]) prevflip = g_ModeYTimelineFlip[second]; break;
+            case 6: value = g_ModeYTimelineFanoutCount[second]; break;
+            case 7: value = g_ModeYTimelineIns[second];  break;
+            case 8: value = cpu ? (DWORD)(g_ModeYTimelineInterpreterCycles[second] / cpu) : 0; break;
             }
-            p = LogPut(p, t ? "," : ""); p = LogDecimal(p, v);
+            cursor = LogPut(cursor, second ? "," : ""); cursor = LogDecimal(cursor, value);
         }
-        p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, b, p); SerialOut(b, p); p = b;
+        cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer;
     }
 }
 
-static void modey_remap_select_body(void *ctx, int mask)
+static void ModeYRemapSelectBody(void *context, int mask)
 {
-    int want, p, n = 0, sel[4];
-    (void)ctx;
-    if (!g_yremap) return;
-    ++g_ysel_calls;
-    ygr4_close_run();   /* the window is about to move: end the current read run */
+    int want, plane, selectedCount = 0, selector[4];
+    (void)context;
+    if (!g_ModeYRemap) return;
+    ++g_ModeYSelectorCalls;
+    ModeYGr4CloseRun();   /* the window is about to move: end the current read run */
 
     /* ── FAN OUT ONLY WHAT THE GUEST ACTUALLY WROTE. ────────────────────────────────
          A multi-plane mask means one store lands in several planes at once, so a
@@ -16235,74 +16235,74 @@ static void modey_remap_select_body(void *ctx, int mask)
          pixelated graphics" -- and a screen wipe looked pixelated until the full redraw
          behind it cleaned up. Diffing against the seed is exact and costs one pass over
          64K, 44 times a run. */
-    if (g_ycur == 5 && g_yprev_mask) {
-        unsigned k;
-        const BYTE *sc = (const BYTE *)g_yview[5];
+    if (g_ModeYCurrent == 5 && g_ModeYPreviousMask) {
+        unsigned index;
+        const BYTE *scratch = (const BYTE *)g_ModeYView[5];
         /* fanN is mode Y's measurement; a planar guest pays nothing for it -- a
            separate pass rather than a per-byte test, because this loop is hot for a
            mode-12h guest (Lemmings: ~38k windows a run) and -O2 does not unswitch. */
         if (g_Video.ModeKind == VIDEO_KIND_LINEAR8)
-            for (k = 0; k < MODEY_WIN; ++k)
-                if (sc[k] != g_yshadow[k]) { ++g_yfan_new; g_yshadow[k] = sc[k]; }
-        for (k = 0; k < MODEY_WIN; ++k) {
-            BYTE b;
-            if (sc[k] == g_yseed[k]) continue;   /* untouched: not this mask's business */
-            ++g_yfan_bytes;
-            b = sc[k];
-            yfan_bar_note(k, g_yprev_mask);      /* is this how the bar collapses? */
-            for (p = 0; p < 4; ++p)
-                if (g_yprev_mask & (1 << p)) ((BYTE *)g_yview[p])[k] = b;
+            for (index = 0; index < MODEY_WIN; ++index)
+                if (scratch[index] != g_ModeYShadow[index]) { ++g_ModeYFanoutNew; g_ModeYShadow[index] = scratch[index]; }
+        for (index = 0; index < MODEY_WIN; ++index) {
+            BYTE byteValue;
+            if (scratch[index] == g_ModeYSeed[index]) continue;   /* untouched: not this mask's business */
+            ++g_ModeYFanoutBytes;
+            byteValue = scratch[index];
+            ModeYFanoutBarNote(index, g_ModeYPreviousMask);      /* is this how the bar collapses? */
+            for (plane = 0; plane < 4; ++plane)
+                if (g_ModeYPreviousMask & (1 << plane)) ((BYTE *)g_ModeYView[plane])[index] = byteValue;
         }
-        ++g_yfanouts;
+        ++g_ModeYFanouts;
     }
-    if (mask < 0) { want = 4; g_yprev_mask = 0; }
+    if (mask < 0) { want = 4; g_ModeYPreviousMask = 0; }
     else {
-        for (p = 0; p < 4; ++p) if (mask & (1 << p)) sel[n++] = p;
-        if (!n) { ++g_ysel_zero; return; }                /* mask 0: nothing to point at */
-        want = (n == 1) ? sel[0] : 5;
-        g_yprev_mask = (n == 1) ? 0 : mask;
+        for (plane = 0; plane < 4; ++plane) if (mask & (1 << plane)) selector[selectedCount++] = plane;
+        if (!selectedCount) { ++g_ModeYSelectorZero; return; }                /* mask 0: nothing to point at */
+        want = (selectedCount == 1) ? selector[0] : 5;
+        g_ModeYPreviousMask = (selectedCount == 1) ? 0 : mask;
         /* The interpreter serves this window (modey_needs_interp): its stores never
            touch A0000's mapping, so there is nothing to seed and nothing to fan out --
            which was ~93% of Doom-low's time and ~38% of Wolf3D's. Point the window at
            the first selected plane so an instruction the interpreter declines (it runs
            natively, counted as bail_mp) still lands in one right plane. */
-        if (n > 1 && modey_interp_serves()) { want = sel[0]; g_yprev_mask = 0; }
+        if (selectedCount > 1 && modey_interp_serves()) { want = selector[0]; g_ModeYPreviousMask = 0; }
     }
-    if (want == g_ycur) { ++g_ysel_same; return; }
+    if (want == g_ModeYCurrent) { ++g_ModeYSelectorSame; return; }
     /* Before the mapping moves: what did the plane we are leaving actually receive? */
-    if (g_ycur >= 0 && g_ycur < 4) { ysmp_check(0, YSMP_A, g_ycur); ysmp_check(1, YSMP_B, g_ycur); }
-    if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)0xA0000)) { ++g_yfail; return; }
+    if (g_ModeYCurrent >= 0 && g_ModeYCurrent < 4) { ModeYSampleCheck(0, YSMP_A, g_ModeYCurrent); ModeYSampleCheck(1, YSMP_B, g_ModeYCurrent); }
+    if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)0xA0000)) { ++g_ModeYFail; return; }
     if (want == 5) {                                     /* seed the scratch so a
                                                             read-modify-write sees data,
                                                             and remember the seed so the
                                                             fan-out can tell writes from
                                                             bytes nobody touched */
-        unsigned k; BYTE *d = (BYTE *)g_yview[5]; const BYTE *s2 = (const BYTE *)g_yview[sel[0]];
-        for (k = 0; k < MODEY_WIN; ++k) { d[k] = s2[k]; g_yseed[k] = s2[k]; }
+        unsigned index; BYTE *destination = (BYTE *)g_ModeYView[5]; const BYTE *source = (const BYTE *)g_ModeYView[selector[0]];
+        for (index = 0; index < MODEY_WIN; ++index) { destination[index] = source[index]; g_ModeYSeed[index] = source[index]; }
         if (g_Video.ModeKind == VIDEO_KIND_LINEAR8)
-            for (k = 0; k < MODEY_WIN; ++k) g_yshadow[k] = s2[k];
+            for (index = 0; index < MODEY_WIN; ++index) g_ModeYShadow[index] = source[index];
     }
-    if (!MapViewOfFileEx(g_ysec[want], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
+    if (!MapViewOfFileEx(g_ModeYSeconds[want], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
                          0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000)) {
-        ++g_yfail;
+        ++g_ModeYFail;
         /* Never leave the window unmapped: put SOMETHING back or the guest's next
            store faults into a hole. */
-        MapViewOfFileEx(g_ysec[g_ycur < 0 ? 4 : g_ycur], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
+        MapViewOfFileEx(g_ModeYSeconds[g_ModeYCurrent < 0 ? 4 : g_ModeYCurrent], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
                         0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000);
         return;
     }
-    g_ycur = want;
-    ++g_yswaps;
+    g_ModeYCurrent = want;
+    ++g_ModeYSwaps;
 }
 
-static uint8_t *modey_remap_plane(void *ctx, int p)
+static uint8_t *ModeYRemapPlane(void *context, int plane)
 {
-    (void)ctx;
-    return (uint8_t *)g_yview[p & 3];
+    (void)context;
+    return (uint8_t *)g_ModeYView[plane & 3];
 }
 
 /* ── DOES THE GUEST EVER READ A PLANE OTHER THAN THE ONE IT IS WRITING? ──────────────
-     A0000 holds ONE section, and `modey_remap_select` positions it from the WRITE MASK.
+     A0000 holds ONE section, and `ModeYRemapSelect` positions it from the WRITE MASK.
      A guest read of A0000 is served by the mapping directly -- the VDD never sees it --
      so it returns the WRITE plane, whatever GR4 says. On the hardware those two are
      independent registers.
@@ -16312,7 +16312,7 @@ static uint8_t *modey_remap_plane(void *ctx, int p)
      a linear buffer whose every four-pixel group holds one plane's byte -- which is the
      collapse, arriving via a path no write-side measurement could ever have seen.
    ► THE PAIR IS THE MEASUREMENT. `gr4_hist` says only that GR4 was written; the defect
-     is GR4 disagreeing with the mapped plane, and only the host knows `g_ycur`. If
+     is GR4 disagreeing with the mapped plane, and only the host knows `g_ModeYCurrent`. If
      `mismatch` is ~0 this candidate dies in one run, like the linear section did.
      Measure first: do NOT move the window here yet. Remapping on GR4 would change what
      the guest sees mid-run and there would be no clean before/after.
@@ -16339,9 +16339,9 @@ static uint8_t *modey_remap_plane(void *ctx, int p)
      map mask before every plane WRITE (2,029,794 mask writes against 39,975 GR4 writes)
      and the pairing matrix shows the order is GR4-then-mask, so a write is always
      preceded by a mask change that puts the window back. Not done when the scratch is up
-     (`g_ycur == 5`): a multi-plane write window is mid-flight and I_ReadScreen never runs
+     (`g_ModeYCurrent == 5`): a multi-plane write window is mid-flight and I_ReadScreen never runs
      under one. */
-static DWORD g_ygr4_calls = 0, g_ygr4_mismatch = 0, g_ygr4_pair[4][6];
+static DWORD g_ModeYGr4Calls = 0, g_ModeYGr4Mismatch = 0, g_ModeYGr4Pair[4][6];
 /* ── AND THE MISMATCH ONLY BITES IF NO MASK CHANGE FOLLOWS. ──────────────────────────
      `mismatch` is sampled at the instant GR4 is written, and 74% of those instants have
      the window one plane behind -- but that is HARMLESS in the ordinary blit, where the
@@ -16354,39 +16354,39 @@ static DWORD g_ygr4_calls = 0, g_ygr4_mismatch = 0, g_ygr4_pair[4][6];
      replicated across each four-pixel group. That is the collapse, and a run length of
      4 with no intervening select is its fingerprint. A run of 1 is the ordinary blit and
      is fine. This is the counter that can come out either way. */
-static DWORD g_ygr4_since_sel = 0, g_ygr4_runs[10], g_ygr4_run_planes[4];
-static void ygr4_close_run(void)
+static DWORD g_ModeYGr4SinceSelector = 0, g_ModeYGr4Runs[10], g_ModeYGr4RunPlanes[4];
+static void ModeYGr4CloseRun(void)
 {
-    if (g_ygr4_since_sel) {
-        g_ygr4_runs[g_ygr4_since_sel < 9 ? g_ygr4_since_sel : 9]++;
+    if (g_ModeYGr4SinceSelector) {
+        g_ModeYGr4Runs[g_ModeYGr4SinceSelector < 9 ? g_ModeYGr4SinceSelector : 9]++;
         /* A run of 4+ is a read pass: record which plane the window was stranded on,
            because that plane's bytes are what the guest took away four times. */
-        if (g_ygr4_since_sel >= 4 && g_ycur >= 0 && g_ycur < 4) g_ygr4_run_planes[g_ycur]++;
-        g_ygr4_since_sel = 0;
+        if (g_ModeYGr4SinceSelector >= 4 && g_ModeYCurrent >= 0 && g_ModeYCurrent < 4) g_ModeYGr4RunPlanes[g_ModeYCurrent]++;
+        g_ModeYGr4SinceSelector = 0;
     }
 }
-static DWORD g_ygr4_moves = 0;
-static void modey_remap_readmap(void *ctx, int plane)
+static DWORD g_ModeYGr4Moves = 0;
+static void ModeYRemapReadMap(void *context, int plane)
 {
-    (void)ctx;
-    if (!g_yremap) return;
-    ++g_ygr4_calls;
-    ++g_ygr4_since_sel;
-    if (g_ycur >= 0 && g_ycur < 6) g_ygr4_pair[plane & 3][g_ycur]++;
-    if (plane != g_ycur) ++g_ygr4_mismatch;
+    (void)context;
+    if (!g_ModeYRemap) return;
+    ++g_ModeYGr4Calls;
+    ++g_ModeYGr4SinceSelector;
+    if (g_ModeYCurrent >= 0 && g_ModeYCurrent < 6) g_ModeYGr4Pair[plane & 3][g_ModeYCurrent]++;
+    if (plane != g_ModeYCurrent) ++g_ModeYGr4Mismatch;
 
     plane &= 3;
-    if (g_ycur == 5 || g_ycur == plane) return;   /* scratch in flight, or already there */
-    if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)0xA0000)) { ++g_yfail; return; }
-    if (!MapViewOfFileEx(g_ysec[plane], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
+    if (g_ModeYCurrent == 5 || g_ModeYCurrent == plane) return;   /* scratch in flight, or already there */
+    if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)0xA0000)) { ++g_ModeYFail; return; }
+    if (!MapViewOfFileEx(g_ModeYSeconds[plane], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
                          0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000)) {
-        ++g_yfail;
-        MapViewOfFileEx(g_ysec[g_ycur < 0 ? 4 : g_ycur], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
+        ++g_ModeYFail;
+        MapViewOfFileEx(g_ModeYSeconds[g_ModeYCurrent < 0 ? 4 : g_ModeYCurrent], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
                         0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000);
         return;
     }
-    g_ycur = plane;
-    ++g_ygr4_moves;     /* NOT g_yswaps: the map-mask identity must keep balancing */
+    g_ModeYCurrent = plane;
+    ++g_ModeYGr4Moves;     /* NOT g_ModeYSwaps: the map-mask identity must keep balancing */
 }
 
 /* ► THE COPY'S BOUNDARY IS THE WRITE-MODE CHANGE, NOT THE MASK CHANGE. Solving over a
@@ -16395,40 +16395,40 @@ static void modey_remap_readmap(void *ctx, int plane)
      union of several moves and no single displacement explains them. Between `write mode
      := 1` and `write mode := 0` there is exactly one burst, which is the thing a single
      displacement CAN describe. Seed at the start of the burst, solve at its end. */
-static void modey_remap_wmode(void *ctx, int wm)
+static void ModeYRemapWriteMode(void *context, int writeMode)
 {
-    (void)ctx;
-    if (!g_yremap) { g_ywmode = wm; return; }
-    if (wm == 1 && g_ywmode != 1) {
-        if (g_ycur == 5) {                          /* multi-plane: the scratch is the
+    (void)context;
+    if (!g_ModeYRemap) { g_ModeYWriteMode = writeMode; return; }
+    if (writeMode == 1 && g_ModeYWriteMode != 1) {
+        if (g_ModeYCurrent == 5) {                          /* multi-plane: the scratch is the
                                                        only place the copy is visible */
-            unsigned k; const BYTE *sc = (const BYTE *)g_yview[5];
-            for (k = 0; k < MODEY_WIN; ++k) g_yseed[k] = sc[k];
-            g_ylatch = 1;
+            unsigned index; const BYTE *scratch = (const BYTE *)g_ModeYView[5];
+            for (index = 0; index < MODEY_WIN; ++index) g_ModeYSeed[index] = scratch[index];
+            g_ModeYLatch = 1;
         }
         /* A single-plane mask needs nothing: the guest is moving bytes inside the plane
            that IS mapped, which is exactly what the hardware would do. */
-    } else if (wm != 1 && g_ywmode == 1 && g_ylatch) {
-        long dl = modey_latch_delta();
-        unsigned k;
-        const BYTE *sc = (const BYTE *)g_yview[5];
-        if (dl) {
-            int p;
-            for (k = 0; k < MODEY_WIN; ++k) {
-                long src;
-                if (sc[k] == g_yseed[k]) continue;
-                src = (long)k - dl;
-                for (p = 0; p < 4; ++p)
-                    if (g_yprev_mask & (1 << p)) ((BYTE *)g_yview[p])[k] = ((BYTE *)g_yview[p])[src];
+    } else if (writeMode != 1 && g_ModeYWriteMode == 1 && g_ModeYLatch) {
+        long delta = ModeYLatchDelta();
+        unsigned index;
+        const BYTE *scratch = (const BYTE *)g_ModeYView[5];
+        if (delta) {
+            int plane;
+            for (index = 0; index < MODEY_WIN; ++index) {
+                long source;
+                if (scratch[index] == g_ModeYSeed[index]) continue;
+                source = (long)index - delta;
+                for (plane = 0; plane < 4; ++plane)
+                    if (g_ModeYPreviousMask & (1 << plane)) ((BYTE *)g_ModeYView[plane])[index] = ((BYTE *)g_ModeYView[plane])[source];
             }
-            ++g_ylatch_ok;
+            ++g_ModeYLatchOk;
         } else {
             /* ── ⚠⚠ THE UNSOLVED PATH USED TO DROP THE BURST ENTIRELY. ────────────────
                  The solver is 0-for-120: `dl` has never once been non-zero on a real
                  run, so this branch IS the burst path, not an edge case. It counted the
                  failure and did nothing -- and then the re-seed at the bottom of this
-                 function overwrote g_yseed with the scratch, which is the very
-                 comparison modey_remap_select()'s fan-out uses to decide what to
+                 function overwrote g_ModeYSeed with the scratch, which is the very
+                 comparison ModeYRemapSelect()'s fan-out uses to decide what to
                  propagate. So by the time the mask changed, every byte matched the seed
                  and the fan-out copied NOTHING. Measured, and this is what sent me
                  looking: `fanout_bar distinct=0` over a whole run while the burst
@@ -16440,7 +16440,7 @@ static void modey_remap_wmode(void *ctx, int wm)
                  over it has failed and why the solver never succeeds. Recovering the
                  true per-plane bytes needs the accesses themselves, and the A0000 page
                  trap that would provide them is MEASURED TWICE ON THIS BOX TO FREEZE
-                 THE GUEST (see a000_protect) -- so that door is shut.
+                 THE GUEST (see A000Protect) -- so that door is shut.
                  What we can do is stop discarding: propagate the scratch byte to the
                  planes the mask selected, exactly as the write-mode-0 fan-out does.
                  For the 6 CONSTANT bursts a run (fills of 0x00) that is EXACTLY right.
@@ -16471,7 +16471,7 @@ static void modey_remap_wmode(void *ctx, int wm)
                  is handled. The real repair needs per-plane latch capture; see above for
                  why the page trap cannot provide it on this hardware, which leaves the
                  mode-12h-style interpreter as the only remaining candidate. */
-            ++g_ylatch_unsolved;
+            ++g_ModeYLatchUnsolved;
         }
         /* ► WHAT IS A BURST, ACTUALLY? Two inference schemes have now failed on it --
              plausible page strides explained 71 of 120 (the shape of a lucky guess) and
@@ -16488,59 +16488,59 @@ static void modey_remap_wmode(void *ctx, int wm)
              a hundred and sixty. A BOUND ON AN INSTRUMENT IS A CLAIM ABOUT WHAT IS
              REPRESENTATIVE, and this one was never checked. 160 lines is ~19 KB; describe
              them ALL, and let the row coverage be measured rather than extrapolated. */
-        if (g_ylatch_desc < 4096) {
-            unsigned k2, n = 0, lo = MODEY_WIN, hi = 0, uniq = 0, nbar = 0;
+        if (g_ModeYLatchDescriptor < 4096) {
+            unsigned index2, count = 0, low = MODEY_WIN, high = 0, uniq = 0, nbar = 0;
             BYTE first = 0;
             int constant = 1;
-            for (k2 = 0; k2 < MODEY_WIN; ++k2) {
+            for (index2 = 0; index2 < MODEY_WIN; ++index2) {
                 unsigned row;
-                if (sc[k2] == g_yseed[k2]) continue;
-                if (!n) { lo = k2; first = sc[k2]; }
-                if (sc[k2] != first) constant = 0;
-                hi = k2; ++n;
+                if (scratch[index2] == g_ModeYSeed[index2]) continue;
+                if (!count) { low = index2; first = scratch[index2]; }
+                if (scratch[index2] != first) constant = 0;
+                high = index2; ++count;
                 /* how much of this burst lands in the status bar at all */
-                row = (k2 % 0x4000u) / 80u;
+                row = (index2 % 0x4000u) / 80u;
                 if (row >= 168 && row < 200) ++nbar;
             }
             (void)uniq;
-            { char lb2[224], *lq = lb2;
-              ++g_ylatch_desc;
-              lq = LogPut(lq, "MODEY-LATCH burst changed="); lq = LogHex(lq, n);
-              lq = LogPut(lq, " span=0x"); lq = LogHex(lq, lo);
-              lq = LogPut(lq, "..0x"); lq = LogHex(lq, hi);
+            { char lb2[224], *lineCursor = lb2;
+              ++g_ModeYLatchDescriptor;
+              lineCursor = LogPut(lineCursor, "MODEY-LATCH burst changed="); lineCursor = LogHex(lineCursor, count);
+              lineCursor = LogPut(lineCursor, " span=0x"); lineCursor = LogHex(lineCursor, low);
+              lineCursor = LogPut(lineCursor, "..0x"); lineCursor = LogHex(lineCursor, high);
               /* ► IN THE UNITS OF THE CLAIM. A plane offset is row*80 + x/4, so a span
                    in hex says nothing about which rows a burst reaches -- and reading
                    0x3a1c..0x3e7f as "the status bar" without converting it is exactly
                    how the wrong cause survived. Print the rows next to the offsets. */
-              lq = LogPut(lq, " rows="); lq = LogHex(lq, n ? (lo % 0x4000u) / 80u : 0);
-              lq = LogPut(lq, "..");     lq = LogHex(lq, n ? (hi % 0x4000u) / 80u : 0);
-              lq = LogPut(lq, " barbytes="); lq = LogHex(lq, nbar);
-              lq = LogPut(lq, constant ? " DEST IS CONSTANT 0x" : " dest varies, first=0x");
-              lq = LogHexByte(lq, first);
-              lq = LogPut(lq, " mask=0x"); lq = LogHexByte(lq, (unsigned)g_yprev_mask);
-              lq = LogPut(lq, "\r\n"); LogAppend(LOG_PATH, lb2, lq); SerialOut(lb2, lq); }
+              lineCursor = LogPut(lineCursor, " rows="); lineCursor = LogHex(lineCursor, count ? (low % 0x4000u) / 80u : 0);
+              lineCursor = LogPut(lineCursor, "..");     lineCursor = LogHex(lineCursor, count ? (high % 0x4000u) / 80u : 0);
+              lineCursor = LogPut(lineCursor, " barbytes="); lineCursor = LogHex(lineCursor, nbar);
+              lineCursor = LogPut(lineCursor, constant ? " DEST IS CONSTANT 0x" : " dest varies, first=0x");
+              lineCursor = LogHexByte(lineCursor, first);
+              lineCursor = LogPut(lineCursor, " mask=0x"); lineCursor = LogHexByte(lineCursor, (unsigned)g_ModeYPreviousMask);
+              lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, lb2, lineCursor); SerialOut(lb2, lineCursor); }
         }
-        for (k = 0; k < MODEY_WIN; ++k) g_yseed[k] = sc[k];   /* re-seed for the byte diff */
-        g_ylatch = 0;
+        for (index = 0; index < MODEY_WIN; ++index) g_ModeYSeed[index] = scratch[index];   /* re-seed for the byte diff */
+        g_ModeYLatch = 0;
     }
-    g_ywmode = wm;
+    g_ModeYWriteMode = writeMode;
 }
 
 /* --- planar mode-12h: trap direct A0000 writes through the VGA write engine -- */
 #define A000_LO 0xA0000u
 #define A000_HI 0xB0000u
-static int g_a000_prot = 0;
+static int g_A000Protection = 0;
 
 /* In mode 12h, mark the A0000 graphics window NOACCESS so direct guest writes
    fault to us; restore RW otherwise. */
-static void a000_protect(int on)
+static void A000Protect(int isOn)
 {
     DWORD old;
-    if (g_NoA000) on = 0;              /* diagnostic knob -- see NOA000_FLAG */
-    if (on == g_a000_prot) return;
+    if (g_NoA000) isOn = 0;              /* diagnostic knob -- see NOA000_FLAG */
+    if (isOn == g_A000Protection) return;
     if (VirtualProtect((LPVOID)A000_LO, 0x10000,
-                       on ? PAGE_NOACCESS : PAGE_EXECUTE_READWRITE, &old))
-        g_a000_prot = on;
+                       isOn ? PAGE_NOACCESS : PAGE_EXECUTE_READWRITE, &old))
+        g_A000Protection = isOn;
 }
 
 /* ---- how mode 12h is intercepted (GH #55) --------------------------------- *
@@ -16558,13 +16558,13 @@ static void a000_protect(int on)
  * engine by construction (V86HostRead8/V86HostWrite8). The interpreter is the CPU for as long
  * as mode 12h is set; it yields whenever an IRQ is pending, and any opcode it does
  * not model drops that one instruction back to V86.                              */
-static int g_p12_interp = 0;    /* planar mode is current -> interpret the guest  */
+static int g_P12Interp = 0;    /* planar mode is current -> interpret the guest  */
 
-static void video_trap_sync(void)
+static void VideoTrapSync(void)
 {
     int planar = VddVideoIsPlanarActive(&g_Video);
-    if (planar && !g_P12Offset) { a000_protect(0); g_p12_interp = 1; }
-    else                      { a000_protect(planar); g_p12_interp = 0; }
+    if (planar && !g_P12Offset) { A000Protect(0); g_P12Interp = 1; }
+    else                      { A000Protect(planar); g_P12Interp = 0; }
 }
 
 /* ── ★★★ NORTH STAR 1: MODE Y'S MULTI-PLANE STORES GO THROUGH THE ADDRESS GENERATOR. ──
@@ -16587,7 +16587,7 @@ static void video_trap_sync(void)
      mode code and keeps the old path (g_DpmiPm) until the interpreter learns 32-bit
      addressing -- the second half of this north star. */
 /* Does the interpreter serve mode Y's multi-plane windows for this guest at all? Then
-   the remap need not build a scratch window for them (see modey_remap_select_body). */
+   the remap need not build a scratch window for them (see ModeYRemapSelectBody). */
 static int modey_interp_serves(void)
 {
     if (g_MyInterpOffset || g_Video.ModeKind != VIDEO_KIND_LINEAR8) return 0;
@@ -16600,7 +16600,7 @@ static int modey_interp_serves(void)
 static int modey_needs_interp(void)
 {
     uint8_t m;
-    if (!g_yremap || !modey_interp_serves() || g_Video.IsChain4) return 0;
+    if (!g_ModeYRemap || !modey_interp_serves() || g_Video.IsChain4) return 0;
     m = (uint8_t)(g_Video.MapMask & 0x0F);
     return (m & (uint8_t)(m - 1)) != 0 || (g_Video.WriteMode & 3) != 0;
 }
@@ -16770,7 +16770,7 @@ static void     Pm32HostOut(uint16_t port, int w, uint32_t v) { V86HostOut(port,
 static int modey_pm_needs_interp(void)
 {
     uint8_t m;
-    if (!g_DpmiPm || g_MyPmOffset || g_MyInterpOffset || !g_yremap) return 0;
+    if (!g_DpmiPm || g_MyPmOffset || g_MyInterpOffset || !g_ModeYRemap) return 0;
     if (g_Video.ModeKind != VIDEO_KIND_LINEAR8 || g_Video.IsChain4) return 0;
     m = (uint8_t)(g_Video.MapMask & 0x0F);
     return (m & (uint8_t)(m - 1)) != 0 || (g_Video.WriteMode & 3) != 0;
@@ -16818,7 +16818,7 @@ static void modey_pm_run(volatile BYTE *tib)
     WORD sel[6];
     int k;
     WORD cs = (WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF), ss = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
-    if (!dpmi_sel_is32(cs) || !dpmi_sel_is32(ss)) { g_MyPmStop[4]++; return; }
+    if (!DpmiSelectorIs32(cs) || !DpmiSelectorIs32(ss)) { g_MyPmStop[4]++; return; }
     sel[0] = (WORD)VDM_REG(tib, VTIB_ES); sel[1] = cs; sel[2] = ss;
     sel[3] = (WORD)VDM_REG(tib, VTIB_DS); sel[4] = (WORD)VDM_REG(tib, VTIB_FS);
     sel[5] = (WORD)VDM_REG(tib, VTIB_GS);
@@ -16852,7 +16852,7 @@ static void modey_pm_run(volatile BYTE *tib)
         uint8_t mm = (uint8_t)(g_Video.MapMask & 0x0F);
         g_MyPmBails++;
         if (mm & (uint8_t)(mm - 1)) g_MyPmBailMp++;
-        modey_bail_note(cs, c.Eip, (const volatile BYTE *)(ULONG_PTR)(c.SegmentBases[1] + c.Eip));
+        ModeYBailNote(cs, c.Eip, (const volatile BYTE *)(ULONG_PTR)(c.SegmentBases[1] + c.Eip));
     }
     if (!n) return;
     VDM_REG(tib, VTIB_EAX) = c.Registers[0]; VDM_REG(tib, VTIB_ECX) = c.Registers[1];
@@ -19504,11 +19504,11 @@ static DWORD dpmi_bop_vec(DWORD csv, DWORD eip)
    VERY INSTRUCTION THAT PROVED THE PATCH WORKED, and the log said 0x187:0x0be7, which
    reads like a wild jump into the BIOS data area rather than what it was.
    This is the same rule the interrupt-frame width already follows: ask the descriptor,
-   not the host's habits. dpmi_sel_is32() reads the D/B bit we store for the selector. */
+   not the host's habits. DpmiSelectorIs32() reads the D/B bit we store for the selector. */
 static DWORD dpmi_pm_eip(volatile BYTE *tib)
 {
     DWORD e = VDM_REG(tib, VTIB_EIP);
-    return dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) ? e : (e & 0xFFFF);
+    return DpmiSelectorIs32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) ? e : (e & 0xFFFF);
 }
 
 /* ── PATCH A REGION THE CLIENT HAS JUST DECLARED TO BE CODE. ──────────────────────
@@ -20909,7 +20909,7 @@ static void dpmi_invoke_callback(DOS_MACHINE *m, volatile BYTE *tib, int slot)
        The IRET operand size follows the HANDLER's CS D-bit: a 32-bit PM handler pops a dword
        FLAGS/CS/EIP frame, a 16-bit one pops a word frame (GH #18 run 83). */
     { WORD pss = 0x17, psp = 0xF400; DWORD b = dpmi_sel_base(pss);
-      if (dpmi_sel_is32(g_Callbacks[slot].PmSelector)) {
+      if (DpmiSelectorIs32(g_Callbacks[slot].PmSelector)) {
           psp -= 4; PokeDword(b + psp, 0x00000202);        /* EFLAGS */
           psp -= 4; PokeDword(b + psp, g_PmReturnSelector);       /* CS (dword; hi16=0) */
           psp -= 4; PokeDword(b + psp, DPMI_PMRET_OFF);    /* EIP */
@@ -21076,7 +21076,7 @@ static int dpmi_dispatch_to_pm_handler(DOS_MACHINE *mp, volatile BYTE *tib,
     /* ── THE FRAME WIDTH FOLLOWS THE CLIENT'S MODE, NOT THE HANDLER SELECTOR'S D BIT.
          This is measured, and getting it wrong is invisible until the handler RETURNS.
          DOS/4GW's PM INT 21h handler lives in a 16-BIT code selector (0x67, D/B=0) --
-         so dpmi_sel_is32() says "16-bit" and we pushed a 6-byte frame -- but it ends
+         so DpmiSelectorIs32() says "16-bit" and we pushed a 6-byte frame -- but it ends
          with `66 cf`, an operand-size-prefixed IRETD, which pops TWELVE bytes. It
          therefore returned to a wild address and the VDM died, with the last breakpoint
          sitting on the instruction before it.
@@ -21101,7 +21101,7 @@ static int dpmi_dispatch_to_pm_handler(DOS_MACHINE *mp, volatile BYTE *tib,
          the VEH reported an access violation inside pokew(). A 32-bit frame on a 16-bit
          stack is perfectly ordinary and is exactly what DOS/4GW uses. */
     { DWORD b = dpmi_sel_base(sSS);
-      int ss32 = dpmi_sel_is32(sSS);
+      int ss32 = DpmiSelectorIs32(sSS);
       DWORD sp = ss32 ? sESP : (sESP & 0xFFFF);
       if (h32) {
           sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); PokeDword(b + sp, sEFL);
@@ -21140,7 +21140,7 @@ static int dpmi_dispatch_to_pm_handler(DOS_MACHINE *mp, volatile BYTE *tib,
          bytes at the resulting linear address. */
     { DWORD dsv = VDM_REG(tib, VTIB_DS) & 0xFFFF;
       DWORD edx = VDM_REG(tib, VTIB_EDX);
-      DWORD off = dpmi_sel_is32((WORD)dsv) ? edx : (edx & 0xFFFF);
+      DWORD off = DpmiSelectorIs32((WORD)dsv) ? edx : (edx & 0xFFFF);
       DWORD lin = dpmi_sel_base((WORD)dsv) + off;
       const BYTE *sb = (const BYTE *)(ULONG_PTR)lin;
       lp = LogPut(lp, " DS:EDX=0x"); lp = LogHex(lp, dsv); lp = LogPut(lp, ":0x"); lp = LogHex(lp, edx);
@@ -21155,10 +21155,10 @@ static int dpmi_dispatch_to_pm_handler(DOS_MACHINE *mp, volatile BYTE *tib,
            low 16 bits, which is exactly the failure being chased here. */
       { WORD ssv = (WORD)VDM_REG(tib, VTIB_SS);
         lp = LogPut(lp, " SS=0x"); lp = LogHex(lp, ssv);
-        lp = LogPut(lp, dpmi_sel_is32(ssv) ? " (SS D/B=1)" : " (SS D/B=0)");
+        lp = LogPut(lp, DpmiSelectorIs32(ssv) ? " (SS D/B=1)" : " (SS D/B=0)");
         lp = LogPut(lp, " ESP=0x"); lp = LogHex(lp, VDM_REG(tib, VTIB_ESP));
         lp = LogPut(lp, " CS=0x"); lp = LogHex(lp, (WORD)VDM_REG(tib, VTIB_CS));
-        lp = LogPut(lp, dpmi_sel_is32((WORD)VDM_REG(tib, VTIB_CS)) ? " (CS D/B=1)" : " (CS D/B=0)");
+        lp = LogPut(lp, DpmiSelectorIs32((WORD)VDM_REG(tib, VTIB_CS)) ? " (CS D/B=1)" : " (CS D/B=0)");
         lp = LogPut(lp, " h32="); lp = LogHex(lp, (DWORD)h32); } }
     lp = LogPut(lp, "\r\n"); LogAppend(LOG_PATH, lb, lp); SerialOut(lb, lp); lp = lb;
     /* Say so on the last always-loud one, not silently on the first suppressed one. */
@@ -21206,7 +21206,7 @@ quiet_entry:
             && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == g_PmReturnSelector) { done = 1; break; }
         if (ev == 3) continue;                      /* "interrupt pending" -> retry */
         if (ev == VDM_EVENT_IO || ev == VDM_EVENT_IO_HW || ev == VDM_EVENT_GPFAULT) {
-            int io_h; HOST_LOCK(); io_h = host_try_io_pm(tib, &g_Bus); HOST_UNLOCK();
+            int io_h; HOST_LOCK(); io_h = HostTryIoPm(tib, &g_Bus); HOST_UNLOCK();
             if (io_h) continue;
         }
         /* ── ★★★★★ A DPMI FAULT SITE IS NOT AN INTERRUPT, AND THIS LOOP MUST NOT EAT IT.
@@ -21308,7 +21308,7 @@ quiet_entry:
    ► THE RULE IS THE CALLER'S D/B BIT, NOT A CLIENT-WIDE FLAG. DPMI passes the
      structure in ES:DI from 16-bit code and ES:EDI from 32-bit code, because that is
      simply what `mov di,x` versus `mov edi,x` leaves behind -- a 16-bit caller's top
-     half is stale, not zero. dpmi_sel_is32(CS) asks exactly that question, per call.
+     half is stale, not zero. DpmiSelectorIs32(CS) asks exactly that question, per call.
    ⚠ AND THAT IS WHY THIS IS SAFE FOR THE EXTENDER. DOS/4GW's own 0301/0302 traffic
      comes from 16-bit code, where this reduces to the mask that is already there --
      measured, not assumed: its RMCS pointers log as es=0x1f edi=0x00004b54, masked
@@ -21323,7 +21323,7 @@ quiet_entry:
    to run Duke Nukem 3D", and exited 0. */
 static DWORD dpmi_caller_off(volatile BYTE *tib, DWORD v)
 {
-    return dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) ? v : (v & 0xFFFF);
+    return DpmiSelectorIs32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) ? v : (v & 0xFFFF);
 }
 
 static DWORD dpmi_rmcs_ptr(volatile BYTE *tib, DWORD esb)
@@ -24214,7 +24214,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             if (ah25 == 0x25) {
                                 WORD hs = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
                                 g_PmInt[al25].Selector = hs;
-                                g_PmInt[al25].Offset = dpmi_sel_is32(hs) ? VDM_REG(tib, VTIB_EDX)
+                                g_PmInt[al25].Offset = DpmiSelectorIs32(hs) ? VDM_REG(tib, VTIB_EDX)
                                                                        : (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                                 g_PmInt[al25].Client = 1;
                                 if (al25 == 0x08) { g_PmAppHookedTimer = 1;
@@ -24242,7 +24242,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                      (BOP; IRET), which accepts the chain and returns. */
                                 WORD  osel = g_PmInt[al25].Selector;
                                 DWORD ooff = g_PmInt[al25].Offset;
-                                if (!dpmi_sel_is32(osel) && g_PmDefaultSelector) {
+                                if (!DpmiSelectorIs32(osel) && g_PmDefaultSelector) {
                                     osel = g_PmDefaultSelector;
                                     ooff = (DWORD)al25 * DPMI_PMDEF_STRIDE;
                                 }
@@ -24286,7 +24286,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         DWORD lin = cb + eip;
                         WORD  ss  = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
                         DWORD sb  = dpmi_sel_base(ss);
-                        DWORD sp  = dpmi_sel_is32(ss) ? VDM_REG(tib, VTIB_ESP)
+                        DWORD sp  = DpmiSelectorIs32(ss) ? VDM_REG(tib, VTIB_ESP)
                                                       : (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
                         p = LogPut(p, "DPMI-BP HIT linear 0x"); p = LogHex(p, lin);
                         p = LogPut(p, " cs:eip=0x"); p = LogHex(p, cs);
@@ -24424,7 +24424,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         HOST_UNLOCK();
                         Int10WaitAfter();                     /* #226: 4F07h BL=80h */
                         RegistersStore(&r, tib);
-                        video_trap_sync();          /* mode 12h: interpret (GH #55); no-op in 13h */
+                        VideoTrapSync();          /* mode 12h: interpret (GH #55); no-op in 13h */
                         VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                         VDM_REG(tib, VTIB_EIP) += 2;              /* past the 2-byte PM BOP */
                         p = LogPut(p, "INT10h (PM) -> video VDD AX=0x"); p = LogHex(p, ax);
@@ -24620,7 +24620,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                               }
                           } else if (ah15 == 0x87) {
                               WORD  es87 = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF);
-                              DWORD off  = dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF))
+                              DWORD off  = DpmiSelectorIs32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF))
                                            ? VDM_REG(tib, VTIB_ESI) : (VDM_REG(tib, VTIB_ESI) & 0xFFFF);
                               DWORD gl   = dpmi_sel_base(es87) + off;
                               unsigned rc87 = Int15MoveBlockAt(tib,
@@ -25387,7 +25387,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                      DOS/4GW Professional fatal error (1001):
                                      error in interrupt chain
                                  Zero-extend for a 32-bit client and the offset is just 0x20. */
-                            if (dpmi_sel_is32(g_PmInt[bl].Selector) || g_DpmiIsClient32)
+                            if (DpmiSelectorIs32(g_PmInt[bl].Selector) || g_DpmiIsClient32)
                                 VDM_REG(tib, VTIB_EDX) = g_PmInt[bl].Offset;
                             else
                                 VDM_SET16(tib, VTIB_EDX, g_PmInt[bl].Offset & 0xFFFF);
@@ -25399,7 +25399,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             g_PmInt[bl].Selector = hsel;
                             /* 32-bit handler selector -> take the full 32-bit offset (GH #18 run 83);
                                a 16-bit handler keeps the word-masked offset as before */
-                            g_PmInt[bl].Offset = dpmi_sel_is32(hsel) ? VDM_REG(tib, VTIB_EDX)
+                            g_PmInt[bl].Offset = DpmiSelectorIs32(hsel) ? VDM_REG(tib, VTIB_EDX)
                                                                    : (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                             g_PmInt[bl].Client = 1;         /* the client owns it now */
                             /* ── A HOOK IS NOT AN INVITATION TO INTERRUPT IMMEDIATELY. ──────
@@ -25449,7 +25449,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 g_PmException[bl].Offset = DPMI_SSR_OFF;
                             }
                             VDM_SET16(tib, VTIB_ECX, g_PmException[bl].Selector);
-                            if (dpmi_sel_is32(g_PmException[bl].Selector)) VDM_REG(tib, VTIB_EDX) = g_PmException[bl].Offset;
+                            if (DpmiSelectorIs32(g_PmException[bl].Selector)) VDM_REG(tib, VTIB_EDX) = g_PmException[bl].Offset;
                             else VDM_SET16(tib, VTIB_EDX, g_PmException[bl].Offset & 0xFFFF);
                             p = LogPut(p, " -> getEXC 0x"); p = LogHex(p, bl);
                             p = LogPut(p, " = 0x"); p = LogHex(p, g_PmException[bl].Selector);
@@ -25465,7 +25465,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             g_PmException[bl].Selector = hsel;
                             /* same 16/32 offset rule as 0205: a 32-bit handler selector means
                                the client passed a full EDX (GH #18 run 83). */
-                            g_PmException[bl].Offset = dpmi_sel_is32(hsel) ? VDM_REG(tib, VTIB_EDX)
+                            g_PmException[bl].Offset = DpmiSelectorIs32(hsel) ? VDM_REG(tib, VTIB_EDX)
                                                                    : (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                             g_PmException[bl].IsSet = 1;
                             p = LogPut(p, " -> setEXC 0x"); p = LogHex(p, bl);
@@ -25567,7 +25567,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                    (G|D/B|L|AVL|limit19:16); its HIGH nibble carries G/D/B/L/AVL,
                                    which maps 1:1 onto our flags nibble (see DpmiBuildDescriptor).
                                    #3 (DOS/4GW): a 32-bit code selector arrives here with CH bit6
-                                   (D/B) set -> flags bit2 -> dpmi_sel_is32() true. */
+                                   (D/B) set -> flags bit2 -> DpmiSelectorIs32() true. */
                                 g_Ldt[idx].Access = VDM_REG(tib, VTIB_ECX) & 0xFF;
                                 g_Ldt[idx].Flags  = (VDM_REG(tib, VTIB_ECX) >> 12) & 0xF;  /* CH high nibble */
                                 dpmi_install(idx);
@@ -26058,7 +26058,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  instrument -- they are in STAGE2 now.
                                ► Routed to the video VDD through exactly the path the
                                  PROTECTED-mode INT 10h arm uses (see `vec == 0x10` in
-                                 dpmi_service_pm_int_body), video_trap_sync() included, so
+                                 dpmi_service_pm_int_body), VideoTrapSync() included, so
                                  the two cannot drift into disagreeing about what a video
                                  BIOS call does depending on how the guest asked. */
                             if (intno == 0x21) {
@@ -26097,7 +26097,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                     }
                                 }
                                 RegistersStore(&vr, tib);
-                                video_trap_sync();   /* mode 12h: interpret; no-op in 13h */
+                                VideoTrapSync();   /* mode 12h: interpret; no-op in 13h */
                             }
                             /* ── #247: write back EVERYTHING the spec returns. This wrote AX BX CX
                                  DX SI DI FLAGS and dropped BP, ES and DS -- so every INT 21h that
@@ -26183,7 +26183,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  a refused one. */
                             if (cxw) {
                                 WORD nsp; WORD pss = (WORD)(pSs & 0xFFFF);
-                                DWORD poff = dpmi_sel_is32(pss) ? pSp : (pSp & 0xFFFF);
+                                DWORD poff = DpmiSelectorIs32(pss) ? pSp : (pSp & 0xFFFF);
                                 const BYTE *src = (const BYTE *)(ULONG_PTR)(dpmi_sel_base(pss) + poff);
                                 p = LogPut(p, " copy=0x"); p = LogHex(p, cxw);
                                 if (RmcsStackPlan(rsp, (unsigned)cxw, (ax == 0x0302) ? 6u : 4u, &nsp)
@@ -26855,7 +26855,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             if (ah == 0x25) {
                                 WORD hsel = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
                                 g_PmInt[al].Selector = hsel;
-                                g_PmInt[al].Offset = dpmi_sel_is32(hsel) ? VDM_REG(tib, VTIB_EDX)
+                                g_PmInt[al].Offset = DpmiSelectorIs32(hsel) ? VDM_REG(tib, VTIB_EDX)
                                                                        : (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                                 g_PmInt[al].Client = 1;
                                 p = LogPut(p, "INT21h AH=25 (PM) set PM vector 0x"); p = LogHex(p, al);
@@ -26863,7 +26863,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 p = LogPut(p, ":0x"); p = LogHex(p, g_PmInt[al].Offset);
                             } else {
                                 VDM_SET16(tib, VTIB_ES, g_PmInt[al].Selector);
-                                if (dpmi_sel_is32(g_PmInt[al].Selector)) VDM_REG(tib, VTIB_EBX) = g_PmInt[al].Offset;
+                                if (DpmiSelectorIs32(g_PmInt[al].Selector)) VDM_REG(tib, VTIB_EBX) = g_PmInt[al].Offset;
                                 else VDM_SET16(tib, VTIB_EBX, g_PmInt[al].Offset & 0xFFFF);
                                 p = LogPut(p, "INT21h AH=35 (PM) get PM vector 0x"); p = LogHex(p, al);
                                 p = LogPut(p, " -> 0x"); p = LogHex(p, g_PmInt[al].Selector);
@@ -27218,7 +27218,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                       p = LogPut(p, " CS:EIP=0x"); p = LogHex(p, csv);
                       p = LogPut(p, ":0x"); p = LogHex(p, eip);
                       p = LogPut(p, " linear=0x"); p = LogHex(p, lin);
-                      p = LogPut(p, (csv && dpmi_sel_is32((WORD)csv)) ? " (32-bit CS)" : " (16-bit CS)");
+                      p = LogPut(p, (csv && DpmiSelectorIs32((WORD)csv)) ? " (32-bit CS)" : " (16-bit CS)");
                       p = LogPut(p, " EAX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EAX));
                       p = LogPut(p, " EBX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX));
                       p = LogPut(p, " ECX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ECX));
@@ -27331,8 +27331,8 @@ static void dpmi_pm_cf_to_frame(volatile BYTE *tib)
     if (!MemoryReadable((ULONG_PTR)ip, 1) || *ip != 0xCF) return;   /* not about to IRET */
 
     ss  = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
-    sp  = dpmi_sel_is32(ss) ? VDM_REG(tib, VTIB_ESP) : (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
-    lin = dpmi_sel_base(ss) + sp + (dpmi_sel_is32(cs) ? 8u : 4u);
+    sp  = DpmiSelectorIs32(ss) ? VDM_REG(tib, VTIB_ESP) : (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
+    lin = dpmi_sel_base(ss) + sp + (DpmiSelectorIs32(cs) ? 8u : 4u);
     if (!MemoryReadable((ULONG_PTR)lin, 2)) return;
     fl  = (volatile BYTE *)(ULONG_PTR)lin;
 
@@ -27455,7 +27455,7 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
     if (!(ss & 4)) { g_AsyncPmActive = 0; g_AsyncWhy = 11; return 0; }    /* not a client stack -> not safe */
     /* Same rule as the cooperative path: interrupt the APPLICATION, never the extender
        mid-service. See dpmi_inject_pm_irq() for what that cost to learn. */
-    if (g_DpmiIsClient32 && !dpmi_sel_is32((WORD)(cx->SegCs & 0xFFFF))) {
+    if (g_DpmiIsClient32 && !DpmiSelectorIs32((WORD)(cx->SegCs & 0xFFFF))) {
         g_AsyncPmActive = 0; g_AsyncWhy = 12; return 0;
     }
 
@@ -27468,7 +27468,7 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
        Two different questions -- see dpmi_dispatch_to_pm_handler() for what conflating
        them costs. */
     { DWORD b = dpmi_sel_base(ss);
-      int   ss32 = dpmi_sel_is32(ss), h32 = g_DpmiIsClient32;
+      int   ss32 = DpmiSelectorIs32(ss), h32 = g_DpmiIsClient32;
       DWORD sp = ss32 ? cx->Esp : (cx->Esp & 0xFFFF);
       if (h32) {
           sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); PokeDword(b + sp, efl);
@@ -27967,7 +27967,7 @@ static int dpmi_nested_fault(volatile BYTE *tib, DWORD ev, DWORD eip)
             DWORD gvec = ((DWORD)fr[2] >> 3) & 0xFF;
             DWORD gcb  = dpmi_sel_base(fr[4]);
             volatile BYTE *gi = (volatile BYTE *)(ULONG_PTR)(gcb + fr[3]);
-            if (!gcb || dpmi_sel_is32(fr[4]) || dpmi_sel_is32(fr[7])
+            if (!gcb || DpmiSelectorIs32(fr[4]) || DpmiSelectorIs32(fr[7])
                 || (gvec >= 0x34 && gvec <= 0x3F)
                 || !host_readable((const void *)gi, 2) || gi[0] != 0xCD || gi[1] != (BYTE)gvec
                 || !host_writable((void *)gi, 2))
@@ -28057,7 +28057,7 @@ static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
         if (ev == VDM_EVENT_IO || ev == VDM_EVENT_IO_HW || ev == VDM_EVENT_GPFAULT) {
             int io_h;
             HOST_LOCK();
-            io_h = host_try_io_pm(tib, &g_Bus);
+            io_h = HostTryIoPm(tib, &g_Bus);
             HOST_UNLOCK();
             if (io_h) continue;
         }
@@ -28270,8 +28270,8 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
     dpmi_ensure_pmret_sel();
     if (g_PmReturnSelector == 0) return 0;
     /* #172 census: which of the two refusals below, when, and where the guest was. */
-    if (iv == 0x08 && g_DpmiIsClient32 && (!dpmi_sel_is32(sCS) || !g_PmAppHookedTimer))
-        PmInjectDeclineNote(!dpmi_sel_is32(sCS) ? 0 : 1, sCS, sEIP);
+    if (iv == 0x08 && g_DpmiIsClient32 && (!DpmiSelectorIs32(sCS) || !g_PmAppHookedTimer))
+        PmInjectDeclineNote(!DpmiSelectorIs32(sCS) ? 0 : 1, sCS, sEIP);
     /* ── DO NOT INTERRUPT THE EXTENDER, ONLY THE APPLICATION. ────────────────────────
          Measured: the first injection landed at mod:0x4b81 -- inside DOS/4GW's own INT
          21h thunk epilogue, on ITS internal 16-bit stack (SS=0xcf, SP=0x1a74) -- and the
@@ -28286,7 +28286,7 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
          the client is -- the extender's modules are all 16-bit selectors, so this
          separates "the game is running" from "the extender is mid-service" exactly.
          A 16-bit client keeps the previous behaviour unchanged. */
-    if (g_DpmiIsClient32 && !dpmi_sel_is32(sCS)) return 0;
+    if (g_DpmiIsClient32 && !DpmiSelectorIs32(sCS)) return 0;
     /* ...and not before the application actually has an ISR. Delivery still goes through
        the extender's stub, because the extender owns the IDT and must do the dispatching
        (bypassing it produced "fatal error (1001): error in interrupt chain"). */
@@ -28302,7 +28302,7 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
        behaviour change -- but they diverge exactly where DOS/4GW lives. */
     int h32 = g_DpmiIsClient32;
     { WORD ss = sSS; DWORD b = dpmi_sel_base(ss);
-      int ss32 = dpmi_sel_is32(ss);                /* see the note in the dispatch path */
+      int ss32 = DpmiSelectorIs32(ss);                /* see the note in the dispatch path */
       DWORD sp = ss32 ? sESP : (sESP & 0xFFFF);
       if (h32) {
           sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); PokeDword(b + sp, sEFL);
@@ -28335,11 +28335,11 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
       DWORD hl = dpmi_sel_base(hs) + (g_DpmiIsClient32 ? DPMI_IRQ_TARGET_OFF(iv) : (DPMI_IRQ_TARGET_OFF(iv) & 0xFFFF));
       const BYTE *hb = (const BYTE *)(ULONG_PTR)hl;
       lp = LogPut(lp, " lin=0x"); lp = LogHex(lp, hl);
-      lp = LogPut(lp, dpmi_sel_is32(hs) ? " (h CS D/B=1)" : " (h CS D/B=0)");
+      lp = LogPut(lp, DpmiSelectorIs32(hs) ? " (h CS D/B=1)" : " (h CS D/B=0)");
       lp = LogPut(lp, " h32="); lp = LogHex(lp, (DWORD)h32);
       lp = LogPut(lp, " SS:ESP=0x"); lp = LogHex(lp, VDM_REG(tib, VTIB_SS) & 0xFFFF);
       lp = LogPut(lp, ":0x"); lp = LogHex(lp, VDM_REG(tib, VTIB_ESP));
-      lp = LogPut(lp, dpmi_sel_is32(sSS) ? " (SS D/B=1)" : " (SS D/B=0)");
+      lp = LogPut(lp, DpmiSelectorIs32(sSS) ? " (SS D/B=1)" : " (SS D/B=0)");
       lp = LogPut(lp, " from 0x"); lp = LogHex(lp, sCS); lp = LogPut(lp, ":0x"); lp = LogHex(lp, sEIP);
       lp = LogPut(lp, " bytes@handler=");
       if (!host_readable(hb, 16)) lp = LogPut(lp, "<unreadable>");
@@ -28399,7 +28399,7 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
         if (ev == VDM_EVENT_IO || ev == VDM_EVENT_IO_HW || ev == VDM_EVENT_GPFAULT) {
             int io_h;
             HOST_LOCK();
-            io_h = host_try_io_pm(tib, &g_Bus);
+            io_h = HostTryIoPm(tib, &g_Bus);
             HOST_UNLOCK();
             if (io_h) continue;
         }
@@ -28524,14 +28524,14 @@ static int dpmi_inject_pm_mousecb(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
     if (!MouseAnyHandler()) return 0;                          /* 0Ch's or 18h's (#265)   */
     dpmi_ensure_pmret_sel();
     if (g_PmReturnSelector == 0) return 0;
-    if (g_DpmiIsClient32 && !dpmi_sel_is32(sCS)) return 0;      /* the extender mid-service */
+    if (g_DpmiIsClient32 && !DpmiSelectorIs32(sCS)) return 0;      /* the extender mid-service */
     if (!(sSS & 4)) return 0;                                    /* not a client stack      */
     /* The oldest queued event a handler asked for, and which handler (MouseEventQueueTake). */
     if (!MouseEventQueueTake(&ev, &pend, &hsel, &hoff) || !pend) return 0;
     /* A far-return frame (CS:EIP) onto the catcher, on the client's own stack. Frame
        width is the CLIENT's; stack addressing is the SS descriptor's B bit. */
     { DWORD b = dpmi_sel_base(sSS);
-      int ss32 = dpmi_sel_is32(sSS);
+      int ss32 = DpmiSelectorIs32(sSS);
       DWORD sp = ss32 ? sESP : (sESP & 0xFFFF);
       if (h32) {
           sp = ss32 ? sp - 4 : ((sp - 4) & 0xFFFF); PokeDword(b + sp, g_PmReturnSelector);
@@ -28578,7 +28578,7 @@ static int dpmi_inject_pm_mousecb(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
         if (e == VDM_EVENT_IO || e == VDM_EVENT_IO_HW || e == VDM_EVENT_GPFAULT) {
             int io_h;
             HOST_LOCK();
-            io_h = host_try_io_pm(tib, &g_Bus);
+            io_h = HostTryIoPm(tib, &g_Bus);
             HOST_UNLOCK();
             if (io_h) continue;
         }
@@ -29121,7 +29121,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
         HOST_UNLOCK();
         Int10WaitAfter();                     /* #226: 4F07h BL=80h */
         RegistersStore(&r, tib);
-        video_trap_sync();     /* mode 12h: interpret the guest (GH #55) */
+        VideoTrapSync();     /* mode 12h: interpret the guest (GH #55) */
         VDM_REG(tib, VTIB_EIP) += 3;
         V86BOP_RET(V86BOP_DONE);
     }
@@ -32531,12 +32531,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          window for an instant, and the renderer dereferences it every few milliseconds;
          doing this with that thread already running hung the host so early that no log
          reached disk at all. Its report is buffered and flushed after the preamble. */
-    if (GetFileAttributesA(NOREMAP_FLAG) == INVALID_FILE_ATTRIBUTES && modey_remap_init()) {
+    if (GetFileAttributesA(NOREMAP_FLAG) == INVALID_FILE_ATTRIBUTES && ModeYRemapInitialize()) {
         g_Video.YMapContext    = NULL;
-        g_Video.YMapSelect = modey_remap_select;
-        g_Video.YMapPlane  = modey_remap_plane;
-        g_Video.YMapWriteMode  = modey_remap_wmode;
-        g_Video.YMapReadMap = modey_remap_readmap;
+        g_Video.YMapSelect = ModeYRemapSelect;
+        g_Video.YMapPlane  = ModeYRemapPlane;
+        g_Video.YMapWriteMode  = ModeYRemapWriteMode;
+        g_Video.YMapReadMap = ModeYRemapReadMap;
     }
     ui = CreateThread(NULL, 0, UiThread, NULL, 0, NULL);
     /* Headless: arm the deadline watchdog so a run that blocks on input (a "press any
@@ -32745,7 +32745,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (!g_WowModuleCount && fa != INVALID_FILE_ATTRIBUTES)
             wow_probe_ldt_matrix("dos-late");  /* the other corner of the 2x2 */
     }
-    modey_remap_flush_report();     /* whatever the A0000 remap had to say, now it fits */
+    ModeYRemapFlushReport();     /* whatever the A0000 remap had to say, now it fits */
     /* ── CAN THE A0000 WINDOW BE REMAPPED? THE ONE FACT THE REAL VIDEO FIX NEEDS. ────
          Mode Y cannot be de-interleaved from a flat aperture: A0000 is one buffer, so
          a guest write lands there with no record of which plane the map mask selected,
@@ -32929,7 +32929,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* ---- MODE 12h: THE HOST IS THE CPU (GH #55) ------------------------- *
          * While a planar mode is current we do not hand the guest to V86 at all,
          * because on real hardware there is no way to see its A0000 writes there:
-         * the page trap that would show them freezes the VDM (see video_trap_sync).
+         * the page trap that would show them freezes the VDM (see VideoTrapSync).
          * Run a slice in the interpreter instead -- its A0000 accesses go through
          * the planar write engine -- then loop, which re-runs the IRQ delivery gate
          * above so timer and keyboard interrupts reach the guest between slices.
@@ -32939,7 +32939,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          * opcode it does not model), ran == 0 and we fall through to V86 exactly as
          * before -- so a DOS call still reaches the kernel as a BOP event, and an
          * unmodeled opcode still executes on the real CPU. */
-        if (g_p12_interp && !g_DpmiPm) {
+        if (g_P12Interp && !g_DpmiPm) {
             long ran = host_interp_paced(tib, P12_SLICE);
             if (ran > 0) { g_P12Batches++; g_P12Instructions += (DWORD)ran; continue; }
             /* NAME THE OPCODE. Every bail is guest execution we cannot see, so the
@@ -32963,15 +32963,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               } }
             g_P12Bails++;
         }
-        if (!g_p12_interp && modey_needs_interp()) {
+        if (!g_P12Interp && modey_needs_interp()) {
             long ran;
-            unsigned long long ic0 = ytl_rdtsc();
+            unsigned long long ic0 = ModeYTimelineRdtsc();
             g_MyInterp = 1;
             ran = host_interp_paced(tib, P12_SLICE);
             g_MyInterp = 0;
-            if (g_ytl_t0) { DWORD sec = (GetTickCount() - g_ytl_t0) / 1000u;
-                            if (sec < YTL_SECS) { if (ran > 0) g_ytl_ins[sec] += (DWORD)ran;
-                                                  g_ytl_icyc[sec] += ytl_rdtsc() - ic0; } }
+            if (g_ModeYTimelineT0) { DWORD sec = (GetTickCount() - g_ModeYTimelineT0) / 1000u;
+                            if (sec < YTL_SECS) { if (ran > 0) g_ModeYTimelineIns[sec] += (DWORD)ran;
+                                                  g_ModeYTimelineInterpreterCycles[sec] += ModeYTimelineRdtsc() - ic0; } }
             if (ran > 0) { g_MySlices++; g_MyInstructions += (DWORD)ran; continue; }
             if ((VDM_REG(tib, VTIB_CS) & 0xFFFF) == 0) my_ring_dump("guest at CS=0 after a slice");
             /* Declined (a BOP, or an opcode it does not model): that ONE instruction
@@ -32984,7 +32984,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                   uint8_t mm = (uint8_t)(g_Video.MapMask & 0x0F);
                   ++g_MyBails;
                   if (mm & (uint8_t)(mm - 1)) ++g_MyBailMp;
-                  modey_bail_note(c3, i3, ip3);
+                  ModeYBailNote(c3, i3, ip3);
               } }
         }
         while (g_PauseWant && g_Running) { ++g_PauseCooperative; Sleep(20); }   /* #219 */
@@ -33125,7 +33125,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             /* REP INS/OUTS arrives as its own event with CS:IP ON the instruction. */
             if (ev == VDM_EVENT_IO_STRING) {
                 HOST_LOCK();
-                handled = host_try_io_string(tib, &g_Bus);
+                handled = HostTryIoString(tib, &g_Bus);
                 HOST_UNLOCK();
                 if (handled) { g_EventIoString++; continue; }
             }
@@ -33139,7 +33139,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             uint32_t d = (cur > s_last_fault) ? (cur - s_last_fault) : (s_last_fault - cur);
             s_storm = (d <= STORM_WINDOW) ? (s_storm + 1) : 0;
             s_last_fault = cur;
-            if ((g_a000_prot || (g_Interp12 && VddVideoIsPlanarActive(&g_Video)))
+            if ((g_A000Protection || (g_Interp12 && VddVideoIsPlanarActive(&g_Video)))
                 && s_storm >= STORM_GATE) {
                 DWORD bc = VDM_REG(tib, VTIB_CS) & 0xFFFF, bi = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
                 long ran = host_interp_paced(tib, TIER1_CAP);
@@ -33166,19 +33166,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                I/O instruction ending at CS:IP and service it (Skyroads' vblank IN AL,DX). */
             if (ev == VDM_EVENT_IO_HW) {
                 HOST_LOCK();
-                handled = host_try_io_retro(tib, &g_Bus);
+                handled = HostTryIoRetro(tib, &g_Bus);
                 HOST_UNLOCK();
                 RetraceIdle();                          /* #183: outside the lock */
                 if (handled) { g_EventIo++; g_IoViaRetro++; IoHotNote(g_IoLastPort, VDM_REG(tib, VTIB_CS) & 0xFFFF, VDM_REG(tib, VTIB_EIP) & 0xFFFF); continue; }
             }
-            if ((g_a000_prot || (g_Interp12 && VddVideoIsPlanarActive(&g_Video)))
+            if ((g_A000Protection || (g_Interp12 && VddVideoIsPlanarActive(&g_Video)))
                 && host_interp_paced(tib, 1) > 0) continue;   /* single A0000 access */
             /* The interpreter refused the very first opcode. With A0000 trapped that
                is a LIVELOCK, not a miss: we resume at the same EIP, the guest
                re-faults on the same store, forever. Name the opcode -- this is the
                "mode-12h MOV-store decoder gap" from the M3 notes, and it is why
                mode 12h has never rendered. Budgeted so it cannot flood the log. */
-            if (g_a000_prot || g_Interp12) {
+            if (g_A000Protection || g_Interp12) {
                 static int s_bud_dec = 8;
                 if (s_bud_dec > 0) {
                     DWORD c2 = VDM_REG(tib, VTIB_CS) & 0xFFFF, i2 = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
@@ -33432,7 +33432,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     g_Ldt[1 + si].Limit  = 0xFFFF;
                     g_Ldt[1 + si].Access = (si == 0) ? 0xFA : 0xF2;
                     /* Mirror the D/B width DpmiSwitchToProtectedMode ACTUALLY installed, so
-                       dpmi_sel_is32() (I/O decode + EIP-mask gating) agrees with the live
+                       DpmiSelectorIs32() (I/O decode + EIP-mask gating) agrees with the live
                        descriptor. That is now always 16-bit for these three: the client's
                        post-switch code must also be valid real-mode code on the failure
                        path, so it cannot be 32-bit. A 32-bit client far-jmps to its OWN
@@ -34046,7 +34046,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         int vi   = g_DpmiVi;
                         int busy = g_InPmIrq || g_AsyncPmActive;
                         int pic  = VddPicCanDeliver(&g_Pic, 1);
-                        int app  = dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
+                        int app  = DpmiSelectorIs32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
                         int done1 = 0;
                         if (vi && !busy && pic) {
                             /* ── CLAIM THE PENDING INTERRUPT BEFORE RUNNING THE HANDLER,
@@ -34226,10 +34226,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              holding whatever junk was there -- the first run of this dump
                              read ESP=0xb3371474 against a base of 0x1100 and probed kernel
                              space. That is not a corrupt guest; it is the architecture, and
-                             the same dpmi_sel_is32() rule 0204/0205 already use. */
+                             the same DpmiSelectorIs32() rule 0204/0205 already use. */
                         { WORD ss = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
                           DWORD sb = dpmi_sel_base(ss);
-                          DWORD sp = dpmi_sel_is32(ss) ? VDM_REG(tib, VTIB_ESP)
+                          DWORD sp = DpmiSelectorIs32(ss) ? VDM_REG(tib, VTIB_ESP)
                                                        : (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
                           const BYTE *sk = (const BYTE *)(ULONG_PTR)(sb + sp);
                           p = LogPut(p, "DPMI-CP["); p = LogHex(p, (unsigned)steps);
@@ -34329,7 +34329,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            the junk is objectively wrong state that shows up in every dump
                            and there is no case where the high half of ESP is meaningful
                            while SS is 16-bit. Do not read this as the argument fix. */
-                    if (!dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF)))
+                    if (!DpmiSelectorIs32((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF)))
                         VDM_REG(tib, VTIB_ESP) &= 0xFFFFu;
                     while (g_PauseWant && g_Running) { ++g_PauseCooperative; Sleep(20); }   /* #219 */
                     CpuSpeedCooperativePark();                                                  /* #225 */
@@ -34353,7 +34353,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              0xb33a is a host thread-stack address, and 0xb33afffa is far
                              outside a 0xFFFF-limit selector. Narrow it to what the
                              descriptor can actually address. */
-                        if (!dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF)))
+                        if (!DpmiSelectorIs32((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF)))
                             VDM_REG(tib, VTIB_ESP) &= 0xFFFFu;
                         if (steps < 400) {      /* BEFORE the call: an entry that never
                                                   returns leaves no other trace at all */
@@ -34497,7 +34497,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              gate taken, and what was k at exit. */
                         { int k = -1, gate;
                           gate = (g_DpmiIsClient32 && g_PmAppHookedTimer && !g_PmNoIrq
-                                  && dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)));
+                                  && DpmiSelectorIs32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)));
                           uint32_t preb = g_Dma.ChannelCountReads[1];
                           if (gate) {
                             g_InPmIrq = 1;
@@ -34761,7 +34761,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 DWORD glin   = gcb + fr[3];
                                 DWORD grec   = 0;
                                 int   gsrc   = 0;                   /* 0 frame, 1 TIB slot, 2 blocks */
-                                int   gss32  = dpmi_sel_is32(fr[7]);
+                                int   gss32  = DpmiSelectorIs32(fr[7]);
                                 /* the slot must agree with the frame's low halves, or it is not
                                    the slot we calibrated -- then we do not resume on it */
                                 int   gespok = !gss32 || ((feip & 0xFFFFu) == fr[6] && (fcs & 0xFFFFu) == fr[7]);
@@ -35326,7 +35326,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     if (ev == VDM_EVENT_IO || ev == VDM_EVENT_IO_HW || ev == VDM_EVENT_GPFAULT) {
                         int io_h;
                         HOST_LOCK();
-                        io_h = host_try_io_pm(tib, &g_Bus);
+                        io_h = HostTryIoPm(tib, &g_Bus);
                         HOST_UNLOCK();
                         if (io_h) {
                             /* North star 1: the OUT that just trapped may have opened a
@@ -36891,21 +36891,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* ► THE GUEST ADDRESS OF EVERY DMA-COUNT POLL. Subtract 0x03AEDFEC for the
              DOOM.EXE file offset and disassemble it. */
         p = LogPut(p, " dma_poll_sites=");
-        { unsigned s; for (s = 0; s < g_dmapoll_n; ++s) {
-              p = LogPut(p, s ? " " : ""); p = LogPut(p, "0x"); p = LogHex(p, g_dmapoll_eip[s]);
-              p = LogPut(p, "x"); p = LogHex(p, g_dmapoll_hits[s]); } }
-        p = LogPut(p, " overflow="); p = LogHex(p, (DWORD)g_dmapoll_overflow);
+        { unsigned s; for (s = 0; s < g_DmaPollCount; ++s) {
+              p = LogPut(p, s ? " " : ""); p = LogPut(p, "0x"); p = LogHex(p, g_DmaPollEip[s]);
+              p = LogPut(p, "x"); p = LogHex(p, g_DmaPollHits[s]); } }
+        p = LogPut(p, " overflow="); p = LogHex(p, (DWORD)g_DmaPollOverflow);
         /* ► THE CALL CHAIN. Subtract 0x03AEDFEC for the DOOM.EXE file offset. */
         p = LogPut(p, " poll_stack=");
-        { unsigned s; for (s = 0; s < g_pollstk_n; ++s) {
-              p = LogPut(p, s ? " " : ""); p = LogPut(p, "0x"); p = LogHex(p, g_pollstk[s]);
-              p = LogPut(p, "x"); p = LogHex(p, g_pollstk_hits[s]); } }
-        p = LogPut(p, " stkovf="); p = LogHex(p, (DWORD)g_pollstk_overflow);
+        { unsigned s; for (s = 0; s < g_PollStackCount; ++s) {
+              p = LogPut(p, s ? " " : ""); p = LogPut(p, "0x"); p = LogHex(p, g_PollStack[s]);
+              p = LogPut(p, "x"); p = LogHex(p, g_PollStackHits[s]); } }
+        p = LogPut(p, " stkovf="); p = LogHex(p, (DWORD)g_PollStackOverflow);
         /* ► WHY ONLY 56 MIXER RUNS/s: long overruns (a) or bunching (b)? */
         p = LogPut(p, " poll_gap_us[<1k,2k,4k,8k,16k,32k,64k,128k,256k,+]=");
         { unsigned gb; for (gb = 0; gb < 10; ++gb) { p = LogPut(p, gb ? "," : "");
-                                                     p = LogHex(p, g_pollgap[gb]); } }
-        p = LogPut(p, " gap_max_us="); p = LogHex(p, g_pollgap_max_us);
+                                                     p = LogHex(p, g_PollGap[gb]); } }
+        p = LogPut(p, " gap_max_us="); p = LogHex(p, g_PollGapMaximumMicroseconds);
         /* ── READ DMX'S TASK PERIOD OUT OF THE LIVE GUEST. ──────────────────────────
              Everything about the refill rate is inferred from how often the mixer polls:
              "period 1 tick, overrunning" and "period 2 ticks, working as designed" both
@@ -37512,18 +37512,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            mode never touches -- so it has reported four zeroes for every mode-Y run
            ever made and told us nothing. These are the arrays a mode-Y frame is
            actually built from, plus the map-mask values the program really used. */
-      modey_tl_report();   /* NORTH STAR 1's measurement -- see g_ytl_* */
-      p = LogPut(p, "STAGE2: modeY remap="); p = LogHex(p, (DWORD)g_yremap);
-      p = LogPut(p, " swaps="); p = LogHex(p, g_yswaps);
-      p = LogPut(p, " fanouts="); p = LogHex(p, g_yfanouts);
-      p = LogPut(p, " failed="); p = LogHex(p, g_yfail);
+      ModeYTimelineReport();   /* NORTH STAR 1's measurement -- see g_ytl_* */
+      p = LogPut(p, "STAGE2: modeY remap="); p = LogHex(p, (DWORD)g_ModeYRemap);
+      p = LogPut(p, " swaps="); p = LogHex(p, g_ModeYSwaps);
+      p = LogPut(p, " fanouts="); p = LogHex(p, g_ModeYFanouts);
+      p = LogPut(p, " failed="); p = LogHex(p, g_ModeYFail);
       /* ► ARE THE PLANES COLLAPSED, OR DOES THE RENDER COLLAPSE THEM? The oracle says
            62% of the status bar's four-pixel groups hold one value where the reference
            holds four. That can only come from the four PLANES agreeing, or from the
            render reading one plane four times. Ask the planes directly, over the bar's
            own offsets in the page the CRTC is displaying. If they disagree here and the
            screen shows agreement, the fault is downstream of the planes. */
-      if (g_yremap) {
+      if (g_ModeYRemap) {
           /* ► PER PAGE, because "we are displaying the wrong buffer" and "the buffer is
                wrong" look identical from one page. Doom triple-buffers at 0, 0x4000 and
                0x8000; if one page's bar is intact and the one the CRTC points at is not,
@@ -37534,8 +37534,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
               uint32_t o, eq = 0, tot = 0, base = pg * 0x4000u;
               for (o = base + 168u * 80u; o < base + 200u * 80u; ++o) {
                   uint32_t m = o & (MODEY_WIN - 1u);
-                  BYTE a = ((BYTE *)g_yview[0])[m], b = ((BYTE *)g_yview[1])[m];
-                  BYTE c = ((BYTE *)g_yview[2])[m], d2 = ((BYTE *)g_yview[3])[m];
+                  BYTE a = ((BYTE *)g_ModeYView[0])[m], b = ((BYTE *)g_ModeYView[1])[m];
+                  BYTE c = ((BYTE *)g_ModeYView[2])[m], d2 = ((BYTE *)g_ModeYView[3])[m];
                   ++tot; if (a == b && b == c && c == d2) ++eq;
               }
               p = LogPut(p, " p"); p = LogHexByte(p, pg); p = LogPut(p, "=");
@@ -37548,14 +37548,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            which no write-mode-1 burst ever reaches and which session 23 measured as the
            WORSE half; band B is 184-199, where every burst lands. */
       p = LogPut(p, " fanout_bar[A=rows168-183,B=184-199]: writes=");
-      p = LogHex(p, g_yfan_bar_writes[0]); p = LogPut(p, "/"); p = LogHex(p, g_yfan_bar_writes[1]);
+      p = LogHex(p, g_ModeYFanoutBarWrites[0]); p = LogPut(p, "/"); p = LogHex(p, g_ModeYFanoutBarWrites[1]);
       p = LogPut(p, " distinct=");
-      p = LogHex(p, g_yfan_bar_distinct[0]); p = LogPut(p, "/"); p = LogHex(p, g_yfan_bar_distinct[1]);
+      p = LogHex(p, g_ModeYFanoutBarDistinct[0]); p = LogPut(p, "/"); p = LogHex(p, g_ModeYFanoutBarDistinct[1]);
       p = LogPut(p, " of "); p = LogHex(p, YBAR_OFF_MID - YBAR_OFF_LO);
       p = LogPut(p, "/");    p = LogHex(p, YBAR_OFF_HI - YBAR_OFF_MID);
       p = LogPut(p, " per page, 4way=");
-      p = LogHex(p, g_yfan_bar_4way[0]); p = LogPut(p, "/"); p = LogHex(p, g_yfan_bar_4way[1]);
-      /* ► DOES THE GUEST WRITE THE SAME BYTES TO DIFFERENT PLANES? See ysmp_check().
+      p = LogHex(p, g_ModeYFanoutBar4Way[0]); p = LogPut(p, "/"); p = LogHex(p, g_ModeYFanoutBar4Way[1]);
+      /* ► DOES THE GUEST WRITE THE SAME BYTES TO DIFFERENT PLANES? See ModeYSampleCheck().
            Read `eqb` (PER-BYTE agreement), not `cross_same` (per-window, kept only so
            the old number stays comparable and visibly useless). Compare eqb against the
            two figures printed above and by bandprof.py:
@@ -37571,40 +37571,40 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
       { int bnd; for (bnd = 0; bnd < 2; ++bnd) {
           int pq;
           p = LogPut(p, bnd ? " ysmpB[184-199]:" : " ysmpA[168-183]:");
-          p = LogPut(p, " writes="); p = LogHex(p, g_ysmp_writes[bnd]);
-          p = LogPut(p, " cross_same="); p = LogHex(p, g_ysmp_cross_same[bnd]);
-          p = LogPut(p, " cross_diff="); p = LogHex(p, g_ysmp_cross_diff[bnd]);
+          p = LogPut(p, " writes="); p = LogHex(p, g_ModeYSampleWrites[bnd]);
+          p = LogPut(p, " cross_same="); p = LogHex(p, g_ModeYSampleCrossSame[bnd]);
+          p = LogPut(p, " cross_diff="); p = LogHex(p, g_ModeYSampleCrossDiff[bnd]);
           p = LogPut(p, " cross_eqb=");
-          p = LogHex(p, g_ysmp_cross_eqb[bnd]); p = LogPut(p, "/");
-          p = LogHex(p, g_ysmp_cross_totb[bnd]);
-          if (g_ysmp_cross_totb[bnd]) {
+          p = LogHex(p, g_ModeYSampleCrossEqualBytes[bnd]); p = LogPut(p, "/");
+          p = LogHex(p, g_ModeYSampleCrossTotalBytes[bnd]);
+          if (g_ModeYSampleCrossTotalBytes[bnd]) {
               p = LogPut(p, "(");
-              p = LogHex(p, g_ysmp_cross_eqb[bnd] * 100u / g_ysmp_cross_totb[bnd]);
+              p = LogHex(p, g_ModeYSampleCrossEqualBytes[bnd] * 100u / g_ModeYSampleCrossTotalBytes[bnd]);
               p = LogPut(p, "% STATE-not-delivery)");
           }
           /* ► THE DELIVERY RATE -- CHANGED BYTES ONLY. This is the one to read:
                high => the guest handed the same byte to two different planes. */
           p = LogPut(p, " delivered_eq=");
-          p = LogHex(p, g_ysmp_dlv_eq[bnd]); p = LogPut(p, "/");
-          p = LogHex(p, g_ysmp_dlv_tot[bnd]);
-          if (g_ysmp_dlv_tot[bnd]) {
+          p = LogHex(p, g_ModeYSampleDeliveredEqual[bnd]); p = LogPut(p, "/");
+          p = LogHex(p, g_ModeYSampleDeliveredTotal[bnd]);
+          if (g_ModeYSampleDeliveredTotal[bnd]) {
               p = LogPut(p, "(");
-              p = LogHex(p, g_ysmp_dlv_eq[bnd] * 100u / g_ysmp_dlv_tot[bnd]);
+              p = LogHex(p, g_ModeYSampleDeliveredEqual[bnd] * 100u / g_ModeYSampleDeliveredTotal[bnd]);
               p = LogPut(p, "%)");
           }
           p = LogPut(p, " p1eq=");
           for (pq = 0; pq < 4; ++pq) {
               p = LogPut(p, pq ? "/" : "");
-              if (g_ysmp_p1_tot[bnd][pq])
-                  p = LogHex(p, g_ysmp_p1_eq[bnd][pq] * 100u / g_ysmp_p1_tot[bnd][pq]);
+              if (g_ModeYSampleP1Total[bnd][pq])
+                  p = LogHex(p, g_ModeYSampleP1Equal[bnd][pq] * 100u / g_ModeYSampleP1Total[bnd][pq]);
               else p = LogPut(p, "-");
           }
           p = LogPut(p, "% n=");
           for (pq = 0; pq < 4; ++pq) {
               p = LogPut(p, pq ? "/" : "");
-              p = LogHex(p, g_ysmp_p1_tot[bnd][pq] / YSMP_LEN);
+              p = LogHex(p, g_ModeYSampleP1Total[bnd][pq] / YSMP_LEN);
           } } }
-      /* ► THE MAP-MASK IDENTITY. See g_ysel_calls. Both lines must balance exactly;
+      /* ► THE MAP-MASK IDENTITY. See g_ModeYSelectorCalls. Both lines must balance exactly;
            a residual is a path nobody has accounted for. */
       { DWORD mw = 0, resid;
         for (i = 0; i < 16; ++i) mw += g_Video.MaskHistogram[i];
@@ -37615,62 +37615,62 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              Leaving it in the sum printed a **UNACCOUNTED** residual of exactly
              -skip_same, which is a counter describing the code as it used to be. */
         p = LogPut(p, " maskacct: writes="); p = LogHex(p, mw);
-        p = LogPut(p, " = sel_calls="); p = LogHex(p, g_ysel_calls);
+        p = LogPut(p, " = sel_calls="); p = LogHex(p, g_ModeYSelectorCalls);
         p = LogPut(p, " - c4sel="); p = LogHex(p, g_Video.Chain4Selects);
         p = LogPut(p, " c4xfer="); p = LogHex(p, g_Video.Chain4Transfers);
         p = LogPut(p, " + skip_chain4="); p = LogHex(p, g_Video.MaskSkipChain4);
         p = LogPut(p, " [redundant_same="); p = LogHex(p, g_Video.MaskSkipSame);
         p = LogPut(p, ", informational]");
-        resid = mw - (g_ysel_calls - g_Video.Chain4Selects) - g_Video.MaskSkipChain4;
+        resid = mw - (g_ModeYSelectorCalls - g_Video.Chain4Selects) - g_Video.MaskSkipChain4;
         p = LogPut(p, " residual="); p = LogHex(p, resid);
         p = LogPut(p, resid ? " **UNACCOUNTED**" : " (balanced)");
-        p = LogPut(p, " | sel_calls = swaps="); p = LogHex(p, g_yswaps);
-        p = LogPut(p, " + sel_same="); p = LogHex(p, g_ysel_same);
-        p = LogPut(p, " + sel_zero="); p = LogHex(p, g_ysel_zero);
-        p = LogPut(p, " + failed="); p = LogHex(p, g_yfail);
-        resid = g_ysel_calls - g_yswaps - g_ysel_same - g_ysel_zero - g_yfail;
+        p = LogPut(p, " | sel_calls = swaps="); p = LogHex(p, g_ModeYSwaps);
+        p = LogPut(p, " + sel_same="); p = LogHex(p, g_ModeYSelectorSame);
+        p = LogPut(p, " + sel_zero="); p = LogHex(p, g_ModeYSelectorZero);
+        p = LogPut(p, " + failed="); p = LogHex(p, g_ModeYFail);
+        resid = g_ModeYSelectorCalls - g_ModeYSwaps - g_ModeYSelectorSame - g_ModeYSelectorZero - g_ModeYFail;
         p = LogPut(p, " residual="); p = LogHex(p, resid);
         p = LogPut(p, resid ? " **UNACCOUNTED**" : " (balanced)"); }
-      /* ► THE READ PLANE. See modey_remap_readmap(). `mismatch` counts GR4 writes that
+      /* ► THE READ PLANE. See ModeYRemapReadMap(). `mismatch` counts GR4 writes that
            named a plane other than the one mapped at A0000 -- every guest read between
            such a write and the next mask change returns the WRONG PLANE'S BYTES, and no
            write-side instrument can see it. `pair` is the (GR4, mapped) matrix, so a
            mismatch can be attributed rather than just counted: a column concentrated on
            one mapped plane means the guest cycled GR4 while the window sat still, which
            is exactly the I_ReadScreen shape. Section 4 is linear, 5 is the scratch. */
-      p = LogPut(p, " gr4: writes="); p = LogHex(p, g_ygr4_calls);
-      p = LogPut(p, " mismatch="); p = LogHex(p, g_ygr4_mismatch);
-      p = LogPut(p, " WINDOW_MOVES="); p = LogHex(p, g_ygr4_moves);
+      p = LogPut(p, " gr4: writes="); p = LogHex(p, g_ModeYGr4Calls);
+      p = LogPut(p, " mismatch="); p = LogHex(p, g_ModeYGr4Mismatch);
+      p = LogPut(p, " WINDOW_MOVES="); p = LogHex(p, g_ModeYGr4Moves);
       p = LogPut(p, " hist=");
       for (i = 0; i < 4; ++i) { p = LogPut(p, i ? "/" : ""); p = LogHex(p, g_Video.Gr4Histogram[i]); }
       p = LogPut(p, " pair[gr4->mapped]:");
       { unsigned a2, b2;
         for (a2 = 0; a2 < 4; ++a2)
           for (b2 = 0; b2 < 6; ++b2)
-            if (g_ygr4_pair[a2][b2]) {
+            if (g_ModeYGr4Pair[a2][b2]) {
                 p = LogPut(p, " r"); p = LogHexByte(p, a2);
                 p = LogPut(p, "->m"); p = LogHexByte(p, b2);
-                p = LogPut(p, "="); p = LogHex(p, g_ygr4_pair[a2][b2]); } }
+                p = LogPut(p, "="); p = LogHex(p, g_ModeYGr4Pair[a2][b2]); } }
       /* ► THE ONE THAT DECIDES IT. GR4 writes between consecutive mask changes:
            1 = the ordinary blit (window moves before any read -- harmless)
            4 = a PURE READ PASS with the window stranded (the collapse)          */
       p = LogPut(p, " gr4_runs[n GR4 per select]:");
       { unsigned r2; for (r2 = 1; r2 < 10; ++r2)
-          if (g_ygr4_runs[r2]) { p = LogPut(p, " "); p = LogHexByte(p, r2);
-                                 p = LogPut(p, "x"); p = LogHex(p, g_ygr4_runs[r2]); } }
+          if (g_ModeYGr4Runs[r2]) { p = LogPut(p, " "); p = LogHexByte(p, r2);
+                                 p = LogPut(p, "x"); p = LogHex(p, g_ModeYGr4Runs[r2]); } }
       p = LogPut(p, " stranded_on_plane=");
-      for (i = 0; i < 4; ++i) { p = LogPut(p, i ? "/" : ""); p = LogHex(p, g_ygr4_run_planes[i]); }
+      for (i = 0; i < 4; ++i) { p = LogPut(p, i ? "/" : ""); p = LogHex(p, g_ModeYGr4RunPlanes[i]); }
       /* ► IS THE LINEAR SECTION EVEN OCCUPIED? One number, ahead of the dump: how many
            of the bar region's 10240 linear bytes are non-zero. Zero means nothing was
            ever written to A0000 while the window pointed at the linear section, and the
            candidate dies here without parsing anything. */
-      { uint32_t o2, nz = 0; const BYTE *lv = (const BYTE *)g_yview[4];
+      { uint32_t o2, nz = 0; const BYTE *lv = (const BYTE *)g_ModeYView[4];
         for (o2 = 168u * 320u; o2 < 200u * 320u; ++o2)
             if (lv[o2 & (MODEY_WIN - 1u)]) ++nz;
         p = LogPut(p, " linear_bar_nonzero="); p = LogHex(p, nz);
         p = LogPut(p, "/"); p = LogHex(p, 32u * 320u); }
-      p = LogPut(p, " latch_solved="); p = LogHex(p, g_ylatch_ok);
-      p = LogPut(p, " latch_UNSOLVED="); p = LogHex(p, g_ylatch_unsolved);
+      p = LogPut(p, " latch_solved="); p = LogHex(p, g_ModeYLatchOk);
+      p = LogPut(p, " latch_UNSOLVED="); p = LogHex(p, g_ModeYLatchUnsolved);
       p = LogPut(p, " gap="); p = LogHex(p, g_Video.ModeYGap);
       p = LogPut(p, " attributed="); p = LogHex(p, g_Video.YNonZero[0]);
       p = LogPut(p, " crtc_seen="); p = LogHexByte(p, g_Video.IsCrtcSeen);
@@ -37776,7 +37776,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          trap on the strength of session 22's note. See build/barprof.py.
          All three pages, because the pages have been equal to the digit before and
          that is itself a fact worth re-checking. Mode-Y runs only; ~67 KB, one shot. */
-    if (g_yremap && g_Video.ModeKind == VIDEO_KIND_LINEAR8 && !g_Video.IsChain4) {
+    if (g_ModeYRemap && g_Video.ModeKind == VIDEO_KIND_LINEAR8 && !g_Video.IsChain4) {
         uint32_t pg, pl, row;
         char lb[220], *lq;
         LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;  /* keep the log in order */
@@ -37787,7 +37787,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             for (pl = 0; pl < 4; ++pl)
                 for (row = 168; row < 200; ++row) {
                     uint32_t o = (pg * 0x4000u + row * 80u) & (MODEY_WIN - 1u), x;
-                    const BYTE *src = (const BYTE *)g_yview[pl];
+                    const BYTE *src = (const BYTE *)g_ModeYView[pl];
                     lq = lb;
                     lq = LogPut(lq, "MODEYBAR pg"); lq = LogHexByte(lq, pg);
                     lq = LogPut(lq, " pl");         lq = LogHexByte(lq, pl);
@@ -37800,8 +37800,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     LogAppend(LOG_PATH, lb, lq);
                 }
         /* ── AND THE LINEAR SECTION, WHICH IS THE ONE PLACE NOBODY HAS LOOKED. ────────
-             modey_remap_init() sets g_ycur = 4 and a chain4 change selects 4, so A0000
-             maps g_ysec[4] -- NOT any plane -- both before the first map-mask write and
+             ModeYRemapInitialize() sets g_ModeYCurrent = 4 and a chain4 change selects 4, so A0000
+             maps g_ModeYSeconds[4] -- NOT any plane -- both before the first map-mask write and
              for as long as the guest stays chained. Anything the guest writes to A0000
              in either window lands here and is invisible to all four planes, for good.
              That is the exact shape the evidence demands: the bar is wrong from the
@@ -37820,7 +37820,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             uint32_t q4, x;
             for (q4 = 0; q4 < 4; ++q4) {
                 uint32_t o = (row * 320u + q4 * 80u) & (MODEY_WIN - 1u);
-                const BYTE *src = (const BYTE *)g_yview[4];
+                const BYTE *src = (const BYTE *)g_ModeYView[4];
                 lq = lb;
                 lq = LogPut(lq, "MODEYLIN y"); lq = LogHexByte(lq, row);
                 lq = LogPut(lq, " q");         lq = LogHexByte(lq, q4);
