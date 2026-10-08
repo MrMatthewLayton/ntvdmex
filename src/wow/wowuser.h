@@ -1284,7 +1284,7 @@ static WORD g_WowUserCurrentTask = 0;
      through the nested run, with the procedure's own DS (its module's DGROUP). */
 static INT WowCall16SyncEx(DWORD proc, WORD ds, PCWORD args, INT n,
                               WORD hwnd, WORD msg, PWORD res,
-                              PBYTE blob, INT blobn, INT blobarg,
+                              PBYTE blob, INT blobLength, INT blobArgument,
                               const INT *fix, INT nfix);
 #define WOWUSER_HOOKS 8
 #define WOWUSER_HOOK_ARGUMENTS      4    /* nCode, wParam, lParam high, low            */
@@ -1442,7 +1442,7 @@ static INT WowUserHookUnset(SHORT hookId, DWORD procedure)
 #define WOWUSER_NE_FILE_INFO_MAX   0x8000
 #define WOWUSER_OFSTRUCT_PATH      8       /* OFSTRUCT.szPathName                */
 #define WOWUSER_MIN_FULL_PATH      4       /* "C:\x"                             */
-static DWORD DpmiSelectorBase(WORD sel);
+static DWORD DpmiSelectorBase(WORD selector);
 static CHAR g_WowUserResourceProgram[MAX_PATH];
 static PCSTR WowUserResourceProgram(VOID)
 {

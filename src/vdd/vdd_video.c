@@ -3448,18 +3448,18 @@ static VOID VideoPlanarWrite1(PVIDEO_STATE state, UINT32 offset, BYTE cpu)
      mean the pc never ran, and a hashed table cannot say that. See vdd_video.h. */
 static VOID VideoCacheSiteNote(PVIDEO_STATE state, UINT32 offset, INT isWrite)
 {
-    UINT32 pc, index;
+    UINT32 guestPc, index;
     if (offset < VIDEO_CACHE_LOW || !state->GuestPc) return;
-    pc = state->GuestPc();
+    guestPc = state->GuestPc();
     state->CacheSequence++;
     for (index = 0; index < VIDEO_CACHE_SITES; ++index) {
         PVIDEO_CACHE_SITE site = &state->CacheSites[index];
         if (site->Count) {
-            if (site->Pc != pc || site->IsWrite != (BYTE)isWrite) continue;
+            if (site->Pc != guestPc || site->IsWrite != (BYTE)isWrite) continue;
             if (offset < site->Low) site->Low = offset;
             if (offset > site->High) site->High = offset;
         } else {
-            site->Pc = pc; site->IsWrite = (BYTE)isWrite; site->Low = site->High = offset;
+            site->Pc = guestPc; site->IsWrite = (BYTE)isWrite; site->Low = site->High = offset;
             site->First = state->CacheSequence;
         }
         site->Count++; site->Last = state->CacheSequence;
@@ -3475,11 +3475,11 @@ VOID VddVideoPlanarWrite(PVIDEO_STATE state, UINT32 offset, BYTE cpu)
     VIDEO_WATCH_RECORD registers; INT plane;
     if (offset > state->PlanarHighWater) state->PlanarHighWater = offset;
     if (state->GuestPc) {
-        UINT32 pc = state->GuestPc();
-        PVIDEO_SITE width = &state->WriteSites[VIDEO_SITE_HASH(pc)];
-        if (!width->Count)            { width->Pc = pc; width->Low = width->High = offset; width->Count = 1; }
-        else if (width->Pc == pc) { if (offset < width->Low) width->Low = offset;
-                                if (offset > width->High) width->High = offset; width->Count++; }
+        UINT32 guestPc = state->GuestPc();
+        PVIDEO_SITE site = &state->WriteSites[VIDEO_SITE_HASH(guestPc)];
+        if (!site->Count)            { site->Pc = guestPc; site->Low = site->High = offset; site->Count = 1; }
+        else if (site->Pc == guestPc) { if (offset < site->Low) site->Low = offset;
+                                if (offset > site->High) site->High = offset; site->Count++; }
         else                  state->WriteSitesLost++;
     }
     VideoCacheSiteNote(state, offset, 1);
@@ -3502,16 +3502,16 @@ BYTE VddVideoPlanarRead(PVIDEO_STATE state, UINT32 offset)
     INT plane;
     if (offset > state->PlanarHighWater) state->PlanarHighWater = offset;
     if (state->GuestPc) {
-        UINT32 pc = state->GuestPc();
-        PVIDEO_SITE width = &state->ReadSites[VIDEO_SITE_HASH(pc)];
-        if (!width->Count)            { width->Pc = pc; width->Low = width->High = offset; width->Count = 1; }
-        else if (width->Pc == pc) { if (offset < width->Low) width->Low = offset;
-                                if (offset > width->High) width->High = offset; width->Count++; }
+        UINT32 guestPc = state->GuestPc();
+        PVIDEO_SITE site = &state->ReadSites[VIDEO_SITE_HASH(guestPc)];
+        if (!site->Count)            { site->Pc = guestPc; site->Low = site->High = offset; site->Count = 1; }
+        else if (site->Pc == guestPc) { if (offset < site->Low) site->Low = offset;
+                                if (offset > site->High) site->High = offset; site->Count++; }
         else                  state->ReadSitesLost++;
         if (state->ReadMode & 1) {
-            PVIDEO_SITE site = &state->CompareSites[VIDEO_SITE_HASH(pc)];
-            if (!site->Count)            { site->Pc = pc; site->Low = site->High = offset; site->Count = 1; }
-            else if (site->Pc == pc) { if (offset < site->Low) site->Low = offset;
+            PVIDEO_SITE site = &state->CompareSites[VIDEO_SITE_HASH(guestPc)];
+            if (!site->Count)            { site->Pc = guestPc; site->Low = site->High = offset; site->Count = 1; }
+            else if (site->Pc == guestPc) { if (offset < site->Low) site->Low = offset;
                                     if (offset > site->High) site->High = offset; site->Count++; }
             else                  state->CompareSitesLost++;
         }
@@ -3698,19 +3698,19 @@ static VOID VideoModeYCopy(PVIDEO_STATE state, const INT *selected, INT selected
 static VOID VideoModeYFlush(PVIDEO_STATE state)
 {
     UINT32 index, runLow = 0, runHigh = 0, gap = 0;
-    const UINT32 *src32, *shd32;
+    const UINT32 *memoryWords, *shadowWords;
     INT plane, selected[VIDEO_PLANES], selectedCount = 0, isInRun = 0;
     if (state->IsChain4 || state->ModeKind != VIDEO_KIND_LINEAR8 || !state->VideoMemory) return;
     for (plane = 0; plane < VIDEO_PLANES; ++plane) if (state->YMask & (1u << plane)) selected[selectedCount++] = plane;
     if (!selectedCount) return;
-    src32 = (const UINT32 *)state->VideoMemory;
-    shd32 = (const UINT32 *)state->YShadow;
+    memoryWords = (const UINT32 *)state->VideoMemory;
+    shadowWords = (const UINT32 *)state->YShadow;
 
     /* Dword-at-a-time scan. Most of the aperture is untouched between two adjacent
        mask changes -- and in Doom there are ~3,800 of those a second -- so the reject
        path is the one that has to be cheap. */
     for (index = 0; index < VIDEO_Y_PLANE_SIZE / VIDEO_DWORD_BYTES; ++index) {
-        if (src32[index] != shd32[index]) {
+        if (memoryWords[index] != shadowWords[index]) {
             if (!isInRun) { isInRun = 1; runLow = index; }
             runHigh = index + 1; gap = 0;
         } else if (isInRun && ++gap > state->ModeYGap) {

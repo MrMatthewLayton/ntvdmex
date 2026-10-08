@@ -366,9 +366,9 @@ typedef struct _VIDEO_STATE {
          returns a host-side view of a plane, valid whatever is mapped at A0000.
          Left null, the VDD falls back to VideoModeYFlush()'s heuristic. */
     PVOID YMapContext;
-    VOID   (*YMapSelect)(PVOID ctx, INT mask);
-    VOID   (*YMapWriteMode)(PVOID ctx, INT wmode);   /* GC write mode changed */
-    VOID   (*YMapReadMap)(PVOID ctx, INT Planes); /* GR4 read-plane changed -- see VideoGcSetData */
+    VOID   (*YMapSelect)(PVOID context, INT mask);
+    VOID   (*YMapWriteMode)(PVOID context, INT writeMode);   /* GC write mode changed */
+    VOID   (*YMapReadMap)(PVOID context, INT planes); /* GR4 read-plane changed -- see VideoGcSetData */
     BYTE *(*YMapPlane)(PVOID context, INT plane);
     BYTE  WriteMode;   /* GR5 bits0-1                                          */
     BYTE  BitMask;     /* GR8 (reset 0xFF)                                     */
@@ -400,7 +400,7 @@ typedef struct _VIDEO_STATE {
          that, the retrace itself -- this hook fires ONCE per frame and the host
          presents as a consequence of the guest's frame, not on its own stopwatch.
          NULL = nobody listening (off-VM, or a fixed tick). */
-    VOID   (*PresentHook)(PVOID ctx);
+    VOID   (*PresentHook)(PVOID context);
     PVOID PresentContext;
     UINT32 PresentFrame;      /* frame_no the hook last fired for              */
     UINT32 PresentHookFires; /* how often it fired (the report compares to edges) */

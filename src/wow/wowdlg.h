@@ -149,7 +149,7 @@ static DWORD g_WowDlgRefused = 0;   /* ...and ones the host could not drive     
 
 /* Defined in main.c, which owns the LDT: is this code selector NOT PRESENT?
    See the call site, and WOWCALL_RETF_OFF in wowcall.h for what it decides. */
-static INT WowDlgIsSelectorAbsent(WORD sel);
+static INT WowDlgIsSelectorAbsent(WORD selector);
 
 /*
  * ── ★★★ THE PUMP, WITH ITS MOUTH OPEN. (session 57, second run) ─────────────
