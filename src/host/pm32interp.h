@@ -35,7 +35,7 @@
 
 /* Operand widths, masks and signs. */
 #define PM32_PUSHAD_BYTES 32      /* eight DWORD registers                      */
-/* Register numbers, in the instruction set's own order. */
+/* Flags. */
 #define PM32_AUXILIARY_BIT   0x10   /* the carry out of bit 3                       */
 /* ModRM and SIB. */
 #define PM32_MODE_DISP_FULL  2
