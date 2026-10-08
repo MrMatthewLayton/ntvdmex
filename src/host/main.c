@@ -1031,8 +1031,8 @@ static BYTE NetSubmit(PVOID context, NETBIOS_REQUEST *request)
     enumBlock.ncb_num      = request->NameNumber;
     enumBlock.ncb_buffer   = request->Buffer;
     enumBlock.ncb_length   = request->Length;
-    memcpy(enumBlock.ncb_callname, request->CallName, 16);
-    memcpy(enumBlock.ncb_name, request->Name, 16);
+    memcpy(enumBlock.ncb_callname, request->CallName, NCBNAMSZ);
+    memcpy(enumBlock.ncb_name, request->Name, NCBNAMSZ);
     enumBlock.ncb_rto      = request->ReceiveTimeout;
     enumBlock.ncb_sto      = request->SendTimeout;
     enumBlock.ncb_lana_num = lana;
@@ -1045,7 +1045,7 @@ static BYTE NetSubmit(PVOID context, NETBIOS_REQUEST *request)
     request->ReturnCode = g_Netbios(&enumBlock);
     if (request->Command == NCBRESET && request->ReturnCode == NRC_GOODRET) g_NetReady[lana] = 1;
     request->LocalSession = enumBlock.ncb_lsn; request->NameNumber = enumBlock.ncb_num; request->Length = enumBlock.ncb_length;
-    memcpy(request->CallName, enumBlock.ncb_callname, 16);
+    memcpy(request->CallName, enumBlock.ncb_callname, NCBNAMSZ);
     return request->ReturnCode;
 }
 /* ── THE GAMEPORT (session 62). The VDD models the 558 one-shot behind port
@@ -2209,7 +2209,7 @@ static VOID ExecMachineSave(INT depth);    /* fwd: defined with CloseProgramNow 
 static CHAR g_ProgramName[PROGRAM_NAME_SIZE];           /* fwd: the status strip's name (defined below) */
 
 static BYTE g_ExecFileBuffer[0x80000];    /* child image; separate from the parent's */
-
+enum { EXEC_WINDOWS_POLL_MS = 100 };   /* ExecWindows: waiting for a console child */
 /* ── ★ GH #255: EXEC OF A WINDOWS PROGRAM GOES TO WINDOWS, AS ON STOCK NTVDM. ──────
      `kind` from DosExeKind. CreateProcess does what stock's EXEC does with a
      non-DOS binary: Windows itself routes it -- a PE to Win32, an NE to WOW (which,
@@ -2232,11 +2232,11 @@ static INT ExecWindows(DOS_MACHINE *machine, INT kind, UINT subsystem, PSTR *log
     STARTUPINFOA startupInfo; PROCESS_INFORMATION processInfo;
     const volatile BYTE *tail = (const volatile BYTE *)
         (((DWORD)machine->ExecTailSegment << PARAGRAPH_SHIFT) + machine->ExecTailOffset);
-    INT tailLength = tail[0] > 126 ? 126 : tail[0], index, wait = (kind == DOS_EXE_PE && subsystem == 3);
+    INT tailLength = tail[0] > DOS_PSP_COMMAND_TAIL_MAX ? DOS_PSP_COMMAND_TAIL_MAX : tail[0], index, wait = (kind == DOS_EXE_PE && subsystem == IMAGE_SUBSYSTEM_WINDOWS_CUI);
     PSTR cursor = command;
     DWORD exitCode = 0;
     *cursor++ = '"'; cursor = LogPut(cursor, machine->ExecPath); *cursor++ = '"';
-    for (index = 0; index < tailLength && tail[1 + index] != 0x0D; ++index) *cursor++ = (CHAR)tail[1 + index];
+    for (index = 0; index < tailLength && tail[1 + index] != DOS_PSP_COMMAND_TAIL_END; ++index) *cursor++ = (CHAR)tail[1 + index];
     *cursor = 0;
     for (index = 0; index < (INT)sizeof startupInfo; ++index) ((PSTR)&startupInfo)[index] = 0;
     startupInfo.cb = sizeof startupInfo;
@@ -2251,7 +2251,7 @@ static INT ExecWindows(DOS_MACHINE *machine, INT kind, UINT subsystem, PSTR *log
                                        : "  EXEC: a Win32 (PE) program -> handed to Windows");
     *logCursor = LogPut(*logCursor, wait ? ", console: waiting for it\r\n" : ", started, not waited for\r\n");
     if (wait) {
-        while (WaitForSingleObject(processInfo.hProcess, 100) == WAIT_TIMEOUT)
+        while (WaitForSingleObject(processInfo.hProcess, EXEC_WINDOWS_POLL_MS) == WAIT_TIMEOUT)
             if (!g_Running || g_WoundDown) break;       /* the host is closing */
         if (!GetExitCodeProcess(processInfo.hProcess, &exitCode) || exitCode == STILL_ACTIVE) exitCode = 0;
         *logCursor = LogPut(*logCursor, "  EXEC: it exited, rc=0x"); *logCursor = LogHex(*logCursor, exitCode); *logCursor = LogPut(*logCursor, "\r\n");
@@ -2698,7 +2698,7 @@ static INT PmRwHardwareFail(DOS_MACHINE *machine, volatile BYTE *tib, BYTE funct
     WORD dosError = 0;
     if (!win32Error || !DosErrFromWin32((DWORD)win32Error, &dosError) || !DosCritIsHardwareError(dosError)) return 0;
     VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
-    VDM_SET16(tib, VTIB_EAX, DosCritFailAx(function, (BYTE)(dosError - 19)));
+    VDM_SET16(tib, VTIB_EAX, DosCritFailAx(function, (BYTE)(dosError - DOS_ERR_WRITE_PROTECT)));
     machine->LastError = DOS_ERR_FAIL_I24;
     *logCursor = LogPut(*logCursor, "  INT24 not raised (DPMI client): AH=0x"); *logCursor = LogHexByte(*logCursor, function);
     *logCursor = LogPut(*logCursor, " error 0x"); *logCursor = LogHexByte(*logCursor, dosError);
@@ -2824,10 +2824,10 @@ static INT g_FpuPresent = 1;
 
 static WORD BiosEquipmentWord(VOID)
 {
-    WORD equipment = 0x4021;                      /* floppy, 80x25 colour, 1 parallel  */
+    WORD equipment = BIOS_EQUIPMENT_ONE_PARALLEL | BIOS_EQUIPMENT_VIDEO_80X25_COLOUR | BIOS_EQUIPMENT_FLOPPY;                      /* floppy, 80x25 colour, 1 parallel  */
     INT portCount = 0, index;
     for (index = 0; index < COMM_MAX_PORTS; ++index) if (VddCommIsFitted(&g_Comm, index)) ++portCount;
-    equipment = (WORD)((equipment & ~0x0E00u) | ((DWORD)(portCount & 7) << 9));
+    equipment = (WORD)((equipment & ~BIOS_EQUIPMENT_SERIAL_MASK_U) | ((DWORD)(portCount & BIOS_EQUIPMENT_SERIAL_COUNT_MASK) << BIOS_EQUIPMENT_SERIAL_SHIFT));
     /* ── ★ BIT 1 IS "A MATH COPROCESSOR IS INSTALLED", AND IT WAS ALWAYS CLEAR.
          (session 57, GH #136) The guest runs 16-bit code on the REAL CPU, which
          has had an FPU since the 486DX -- so answering "no coprocessor" was not
@@ -2838,11 +2838,11 @@ static WORD BiosEquipmentWord(VOID)
          makes it mean something. Unticking it now tells the guest what the host
          used to tell it unconditionally, which is a real configuration -- a
          program can be forced onto its emulator to compare the two. */
-    if (g_FpuPresent) equipment |= 0x0002;
+    if (g_FpuPresent) equipment |= BIOS_EQUIPMENT_FPU;
     /* Bit 12: game adapter installed. The CARD exists iff the JoystickType
        setting says so; whether a stick is plugged into it is the port's
        business (an empty gameport still answers), not the equipment word's. */
-    if (g_Joystick.Type != JOYSTICK_TYPE_NONE) equipment |= 0x1000;
+    if (g_Joystick.Type != JOYSTICK_TYPE_NONE) equipment |= BIOS_EQUIPMENT_GAMEPORT;
     return equipment;
 }
 
@@ -10744,7 +10744,7 @@ static VOID ManagerName(PSTR out, HWND *show)
         if (raw[index] == ' ' && raw[index + 1] == '-' && raw[index + 2] == ' ') { raw[index] = 0; break; }
     lstrcpynA(out, raw[0] ? raw : "NTVDMEX", MGR_NAME_SIZE);
 }
-
+enum { MANAGER_RELAUNCH_MS = 5000, MANAGER_START_WAIT_MS = 500, MANAGER_SEND_TIMEOUT_MS = 500, MANAGER_POLL_MS = 2000 };   /* ManagerThread */
 static DWORD WINAPI ManagerThread(LPVOID unused)
 {
     DWORD lastLaunch = 0;
@@ -10753,7 +10753,7 @@ static DWORD WINAPI ManagerThread(LPVOID unused)
         HWND manager = FindWindowA(MGR_CLASS, NULL);
         if (!manager) {
             DWORD now = GetTickCount();
-            if (!lastLaunch || now - lastLaunch >= 5000) {
+            if (!lastLaunch || now - lastLaunch >= MANAGER_RELAUNCH_MS) {
                 STARTUPINFOA startupInfo; PROCESS_INFORMATION processInfo;
                 CHAR commandLine[MAX_PATH + 4];
                 lastLaunch = now;
@@ -10765,7 +10765,7 @@ static DWORD WINAPI ManagerThread(LPVOID unused)
                     CloseHandle(processInfo.hThread); CloseHandle(processInfo.hProcess);
                 }
             }
-            Sleep(500);                              /* give it a moment to appear */
+            Sleep(MANAGER_START_WAIT_MS);                              /* give it a moment to appear */
             continue;
         }
         {   MGR_MESSAGE message; COPYDATASTRUCT copyData; HWND show; DWORD_PTR result = 0;
@@ -10777,10 +10777,10 @@ static DWORD WINAPI ManagerThread(LPVOID unused)
             message.CommandWindow = (DWORD)(ULONG_PTR)g_Window; message.ShowTargetWindow = (DWORD)(ULONG_PTR)show;
             copyData.dwData = MGR_MAGIC; copyData.cbData = sizeof message; copyData.lpData = &message;
             if (SendMessageTimeoutA(manager, WM_COPYDATA, (WPARAM)g_Window, (LPARAM)&copyData,
-                                    SMTO_ABORTIFHUNG, 500, &result) && result)
+                                    SMTO_ABORTIFHUNG, MANAGER_SEND_TIMEOUT_MS, &result) && result)
                 ++g_ManagerHellos;
         }
-        Sleep(2000);
+        Sleep(MANAGER_POLL_MS);
     }
     return 0;
 }
@@ -11109,7 +11109,7 @@ static VOID TextCopy(HWND window, INT all)
     for (row = row0; row <= row1 && length < (INT)sizeof text - 140; ++row) {
         INT start = length;
         for (column = column0; column <= column1; ++column) {
-            BYTE ch = g_Video.VideoMemory[VIDEO_TEXT_OFFSET + ((g_Video.CrtcStartLive * 2u + (UINT)(row * g_Video.Columns + column) * 2u) & 0x7FFFu)];   /* the DISPLAYED page (#252) */
+            BYTE ch = g_Video.VideoMemory[VIDEO_TEXT_OFFSET + ((g_Video.CrtcStartLive * VIDEO_TEXT_CELL_BYTES_U + (UINT)(row * g_Video.Columns + column) * VIDEO_TEXT_CELL_BYTES_U) & VIDEO_TEXT_WINDOW_MASK_U)];   /* the DISPLAYED page (#252) */
             text[length++] = (CHAR)(ch ? ch : ' ');
         }
         while (length > start && text[length - 1] == ' ') --length;          /* right-trim the line */
@@ -11540,16 +11540,16 @@ static INT OpenAtPrompt(VOID)
 static INT OpenIsDosImage(PCSTR path)
 {
     INT length = lstrlenA(path);
-    BYTE header[0x40]; DWORD got = 0, newHeaderOffset, signatureBytesRead = 0; BYTE signature[2];
+    BYTE header[DOS_MZ_NEW_HEADER_MIN]; DWORD got = 0, newHeaderOffset, signatureBytesRead = 0; BYTE signature[DOS_EXE_SIGNATURE_SIZE];
     HANDLE file;
-    if (length >= 4 && (!lstrcmpiA(path + length - 4, ".COM") || !lstrcmpiA(path + length - 4, ".BAT"))) return 1;
+    if (length >= DOS_DOT_EXTENSION_LENGTH && (!lstrcmpiA(path + length - DOS_DOT_EXTENSION_LENGTH, ".COM") || !lstrcmpiA(path + length - DOS_DOT_EXTENSION_LENGTH, ".BAT"))) return 1;
     file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
     if (file == INVALID_HANDLE_VALUE) return 0;
     if (!ReadFile(file, header, sizeof header, &got, NULL) || got < sizeof header || header[0] != 'M' || header[1] != 'Z') {
         CloseHandle(file); return 0; }
-    newHeaderOffset = *(const DWORD *)(header + 0x3C);
-    if (newHeaderOffset >= 0x40 && SetFilePointer(file, (LONG)newHeaderOffset, NULL, FILE_BEGIN) == newHeaderOffset
-        && ReadFile(file, signature, 2, &signatureBytesRead, NULL) && signatureBytesRead == 2
+    newHeaderOffset = *(const DWORD *)(header + DOS_MZ_NEW_HEADER);
+    if (newHeaderOffset >= DOS_MZ_NEW_HEADER_MIN && SetFilePointer(file, (LONG)newHeaderOffset, NULL, FILE_BEGIN) == newHeaderOffset
+        && ReadFile(file, signature, DOS_EXE_SIGNATURE_SIZE, &signatureBytesRead, NULL) && signatureBytesRead == DOS_EXE_SIGNATURE_SIZE
         && ((signature[0] == 'N' && signature[1] == 'E') || (signature[0] == 'P' && signature[1] == 'E'))) {
         CloseHandle(file); return 0; }
     CloseHandle(file);
@@ -11564,8 +11564,8 @@ static INT OpenPromptLine(PCSTR shortPath, INT backspaceCount, PSTR out, INT cap
     for (index = 0; index < length; ++index) if (shortPath[index] == '\\') slash = index;
     if (length < 4 || shortPath[1] != ':' || shortPath[2] != '\\' || slash < 2) return 0;
     directoryLength = (slash == 2) ? 1 : slash - 2;                     /* "\" or "\DIR\SUB" */
-    if (directoryLength > 63 || length - slash - 1 > 12 || backspaceCount + length + 16 > cap) return 0;
-    for (index = 0; index < backspaceCount; ++index) *cursor++ = 0x08;
+    if (directoryLength > DOS_DIRECTORY_MAX || length - slash - 1 > DOS_SHORT_NAME_SIZE - 1 || backspaceCount + length + 16 > cap) return 0;
+    for (index = 0; index < backspaceCount; ++index) *cursor++ = ASCII_BACKSPACE;
     *cursor++ = shortPath[0]; *cursor++ = ':'; *cursor++ = '\r';
     cursor = LogPut(cursor, "CD ");
     for (index = 2; index < (slash == 2 ? 3 : slash); ++index) *cursor++ = shortPath[index];
@@ -21796,7 +21796,7 @@ static PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, 
     return cursor;
 #undef m
 }
-
+#define DPMI_REFLECT_STACK_TOP 0xFB00   /* DpmiReflectIrqToRm: the real-mode stack it lends the ISR */
 /* ── #210: THE LONG-FILENAME API (INT 21h AH=71h) FROM PROTECTED MODE. ──────────────────
      Same bridge as PmInt21Transfer, but an LFN call can carry THREE pointers at once (7156h:
      DS:DX and ES:DI; 714Eh: DS:DX in, ES:DI out) and uses SI/DI/DX as plain numbers in
@@ -21829,7 +21829,7 @@ static INT PmLfnCopy(WORD selector, DWORD offset, DWORD transferOffset, DWORD le
     else    for (index = 0; index < length; ++index) guest[index] = transfer[index];
     return 0;
 }
-enum { RMCS_RUN_ROUNDS_MAX = 128, PM_INT21_HANDLE_LIMIT = 24, PM_INT21_LOCK_REGION = 0xFF80 };   /* DpmiServicePmIntBody: 0301h's nested run, PM INT 21h */
+enum { NESTED_V86_ROUNDS_MAX = 128, PM_INT21_HANDLE_LIMIT = 24, PM_INT21_LOCK_REGION = 0xFF80 };   /* DpmiServicePmIntBody: 0301h's nested run, PM INT 21h */
 /* How many bytes of an output window go back: all `len` of a block (kind 2), or a
    string's length + its NUL, never more than `len` (kind 4). */
 static DWORD PmLfnOutLength(DWORD transferOffset, INT kind, DWORD length)
@@ -21954,7 +21954,7 @@ static INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vec
           pmIp=VDM_REG(tib,VTIB_EIP),pmSs=VDM_REG(tib,VTIB_SS),pmSp=VDM_REG(tib,VTIB_ESP),
           pFlags=VDM_REG(tib,VTIB_EFLAGS);
     WORD machineStatusWord = *(volatile WORD *)(tib + VTIB_MSW);
-    WORD realSs = (WORD)(g_DpmiCodeBase >> PARAGRAPH_SHIFT), realSp = 0xFB00;
+    WORD realSs = (WORD)(g_DpmiCodeBase >> PARAGRAPH_SHIFT), realSp = DPMI_REFLECT_STACK_TOP;
     WORD realCs = PeekWord(IVT_SEGMENT_ADDRESS(vector)), rip = PeekWord(IVT_OFFSET_ADDRESS(vector));
     UINT round; INT done = 0;
     InterlockedExchange(&g_SimIntBusy, 1);
@@ -21963,12 +21963,12 @@ static INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vec
     realSp -= X86_WORD_SIZE; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp, DPMI_RMRET_OFF);
     DpmiUnpatch();
     *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(machineStatusWord & ~MSW_PE_BIT);
-    VDM_REG(tib, VTIB_EFLAGS) = 0x20002;                        /* VM, interrupts OFF */
+    VDM_REG(tib, VTIB_EFLAGS) = EFLAGS_VM | EFLAGS_RESERVED_ONE;                        /* VM, interrupts OFF */
     VDM_SET16(tib, VTIB_DS, realSs); VDM_SET16(tib, VTIB_ES, realSs);
     VDM_SET16(tib, VTIB_FS, realSs); VDM_SET16(tib, VTIB_GS, realSs);
     VDM_SET16(tib, VTIB_CS, realCs); VDM_REG(tib, VTIB_EIP) = rip;
     VDM_SET16(tib, VTIB_SS, realSs); VDM_REG(tib, VTIB_ESP) = realSp;
-    for (round = 0; round < 128 && !done; ++round) {
+    for (round = 0; round < NESTED_V86_ROUNDS_MAX && !done; ++round) {
         LONG runStatus; DWORD rev, info;
         InterlockedExchange(&g_NestedRm, 1);
         InterlockedExchange(&g_InExec, 1);                     /* see g_NestedRm */
@@ -21977,7 +21977,7 @@ static INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vec
         InterlockedExchange(&g_NestedRm, 0);
         info = VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK;
         if (rev == VDM_EVENT_BOP && info == DPMI_RMRET_BOP) { done = 1; break; }
-        if (rev == VDM_EVENT_BOP && info == 0x20) {             /* INT 21h from the ISR */
+        if (rev == VDM_EVENT_BOP && info == DOS_BOP_INT21) {             /* INT 21h from the ISR */
             CHAR dropBuffer[2048]; machine->TraceCursor = dropBuffer; DosInt21(machine);        /* its log text is dropped */
             VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
             continue;
@@ -26256,7 +26256,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             VDM_SET16(tib,VTIB_CS,realCs); VDM_REG(tib,VTIB_EIP)=realIp;
                             VDM_SET16(tib,VTIB_SS,realSs); VDM_REG(tib,VTIB_ESP)=realSp;
                             /* --- nested V86 run loop: run the proc until the return-BOP --- */
-                            for (round = 0; round < RMCS_RUN_ROUNDS_MAX && !done; ++round) {
+                            for (round = 0; round < NESTED_V86_ROUNDS_MAX && !done; ++round) {
                                 LONG runStatus; DWORD rev;
                                 /* ── ★★★ A DEVICE IRQ RAISED IN HERE HAD NOWHERE TO GO.
                                      The cooperative delivery gate lived in the MAIN exec
@@ -27783,7 +27783,7 @@ static VOID ShimRemoveIoHook(HANDLE vddHandle, WORD rangeCount, PCVOID ranges)
         for (index = 0; index < ISV_MAX_HOOKS; ++index)
             if (g_IsvHooks[index].VddHandle == vddHandle && g_IsvHooks[index].FirstPort == ranges16[index2 * 2]) g_IsvHooks[index].IsLive = 0;
 }
-
+enum { WOW_WNDPROC_ARGUMENTS = 5 };   /* a Win16 window procedure: hwnd, msg, wParam, lParam high, low */
 static VOID WowShimsLoad(VOID)
 {
     static INT done;
@@ -28096,7 +28096,7 @@ static LRESULT WowControlColour(HWND window, WORD window16, UINT message, WPARAM
 {
     WOWUSER_WINDOW *wowWindow = WowUserFindWindow(window16);
     DWORD proc = wowWindow ? WowUserWindowProcedureOf(wowWindow) : 0;
-    WORD  deviceContext16, child, args[5], result = 0, type;
+    WORD  deviceContext16, child, args[WOW_WNDPROC_ARGUMENTS], result = 0, type;
     INT   kind = -1, made;
     HGDIOBJ brush;
     *handled = 0;
@@ -28116,7 +28116,7 @@ static LRESULT WowControlColour(HWND window, WORD window16, UINT message, WPARAM
     args[3] = type;                              /* lParam HIGH: the control type */
     args[4] = child;                             /* lParam LOW: the control       */
     made = WowCall16Sync(proc, wowWindow->Instance ? wowWindow->Instance : g_WowUserClasses[wowWindow->Class].Instance,
-                           args, 5, window16, WM_CTLCOLOR16, &result);
+                           args, WOW_WNDPROC_ARGUMENTS, window16, WM_CTLCOLOR16, &result);
     WowGdiForget(deviceContext16);
     if (made && result) {
         brush = WowGdiH32(result, &kind);
@@ -28158,7 +28158,7 @@ static LRESULT WowOwnerDraw(HWND window, WORD window16, UINT message, WPARAM wPa
 {
     WOWUSER_WINDOW *wowWindow = WowUserFindWindow(window16);
     DWORD proc = wowWindow ? WowUserWindowProcedureOf(wowWindow) : 0;
-    WORD args[5], result = 0, deviceContext16 = 0;
+    WORD args[WOW_WNDPROC_ARGUMENTS], result = 0, deviceContext16 = 0;
     BYTE bytes[32];
     INT length = 0, index, made;
     *handled = 0;

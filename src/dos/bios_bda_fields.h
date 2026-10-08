@@ -14,6 +14,15 @@
 #define BIOS_BDA_COM_PORTS               4
 #define BIOS_BDA_EBDA_SEGMENT            0x0E  /* WORD: EBDA segment (AT and later)          */
 #define BIOS_BDA_EQUIPMENT               0x10  /* WORD: the equipment word, = INT 11h       */
+/* The equipment word's bits (INT 11h). */
+#define BIOS_EQUIPMENT_FLOPPY            0x0001
+#define BIOS_EQUIPMENT_FPU               0x0002
+#define BIOS_EQUIPMENT_VIDEO_80X25_COLOUR 0x0020
+#define BIOS_EQUIPMENT_SERIAL_MASK_U     0x0E00u /* bits 9-11: how many serial ports      */
+#define BIOS_EQUIPMENT_SERIAL_SHIFT      9
+#define BIOS_EQUIPMENT_SERIAL_COUNT_MASK 7
+#define BIOS_EQUIPMENT_GAMEPORT          0x1000
+#define BIOS_EQUIPMENT_ONE_PARALLEL      0x4000  /* bits 14-15 = 1                         */
 #define BIOS_BDA_MEMORY_KB               0x13  /* WORD: base memory in KB,  = INT 12h       */
 #define BIOS_BDA_SHIFT_FLAGS             0x17  /* shift/ctrl/alt + lock state (INT 16h AH=02) */
 #define BIOS_BDA_SHIFT_FLAGS2            0x18  /* extended shift flags      (INT 16h AH=12) */

@@ -19,6 +19,8 @@
 #define VIDEO_APERTURE_BASE 0xA0000u      /* video memory window base               */
 #define VIDEO_APERTURE_SIZE 0x20000u      /* A0000-BFFFF (128KB)                    */
 #define VIDEO_TEXT_BASE     0xB8000u      /* colour-text page 0                     */
+#define VIDEO_TEXT_CELL_BYTES_U  2u       /* a character and its attribute          */
+#define VIDEO_TEXT_WINDOW_MASK_U 0x7FFFu  /* B8000..BFFFF: the 32 KB text window     */
 #define VIDEO_MONO_BASE     0xB0000u      /* the second 64K window: B0000..BFFFF    */
 #define VIDEO_STATUS1_VERTICAL_RETRACE 0x08u  /* 3DAh bit 3                            */
 #define VIDEO_RETRACE_UNKNOWN_U 0xFFFFFFFFu   /* VddVideoUsToRetrace: no beam to time  */
