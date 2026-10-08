@@ -75,6 +75,7 @@
 /* Descriptor access bytes: present, DPL 3, and a readable code or a writable data segment. */
 #define DPMI_ACCESS_CODE  0xFA
 #define DPMI_ACCESS_DATA  0xF2
+#define DPMI_ACCESS_CODE_TYPE 0x18  /* S (code/data) and Executable: set for a code segment */
 /* The mode switch's code, data and stack selectors: LDT entries 1-3, RPL 3. */
 #define DPMI_INITIAL_CODE_SELECTOR  0x0F
 #define DPMI_INITIAL_DATA_SELECTOR  0x17

@@ -13,6 +13,7 @@
 #define BYTE_MASK           0xFF            /* the low 8 bits                       */
 #define BYTE_MASK_U         0xFFu
 #define HIGH_BYTE_MASK      0xFF00          /* bits 8-15                            */
+#define HIGH_BYTE_MASK_U    0xFF00u
 #define WORD_MASK           0xFFFF          /* the low 16 bits                      */
 #define WORD_MASK_U         0xFFFFu
 #define HIGH_WORD_MASK_U    0xFFFF0000u     /* bits 16-31                           */

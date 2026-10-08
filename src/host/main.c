@@ -724,7 +724,7 @@ static INT   g_BackToPrompt;          /* Close Program ended it: next sub 01 = p
    site. The sites themselves live at DOS_CTAB_SEG:DOS_FLTSITE_OFF -- see dos_layout.h for
    why the class has to be distinguishable at all. The handler segment cannot host them:
    it is 256 bytes with 16 free, and eight 3-byte BOPs do not fit. */
-#define DPMI_FAULT_SITE(i) (((DOS_CTAB_SEG << 4) - (DOS_HDLR_SEG << 4)) \
+#define DPMI_FAULT_SITE(i) (((DOS_CTAB_SEG << PARAGRAPH_SHIFT) - (DOS_HDLR_SEG << PARAGRAPH_SHIFT)) \
                             + DOS_FLTSITE_OFF + (i) * DOS_FLTSITE_SIZE)
 /* Where the client's exception handler's FAR RETURN lands. DPMI 0.9 puts a return CS:IP
    at the bottom of the exception frame and the handler exits through it with a `retf`
@@ -733,7 +733,7 @@ static INT   g_BackToPrompt;          /* Close Program ended it: next sub 01 = p
    two words ZERO for the host to fill (measured, session 34), so this is the address we
    fill them with, and the arm that catches it completes the resume. */
 #define DPMI_FLTRET_BOP    0x5A
-#define DPMI_FLTRET_COFF   (((DOS_CTAB_SEG << 4) - (DOS_HDLR_SEG << 4)) + DOS_FLTRET_OFF)
+#define DPMI_FLTRET_COFF   (((DOS_CTAB_SEG << PARAGRAPH_SHIFT) - (DOS_HDLR_SEG << PARAGRAPH_SHIFT)) + DOS_FLTRET_OFF)
 
 /* EMS (M4): the LIM page frame is a 64KB RAM window in the UMA. VdmMapEmsFrame
    scans the conventional page-frame segments AFTER VdmInitialize for a free 64KB
@@ -7952,8 +7952,8 @@ static VOID HostXms(volatile BYTE *tib)
     #define X_SETAX(v) VDM_SET16(tib, VTIB_EAX, (v))
     #define X_SETBX(v) VDM_SET16(tib, VTIB_EBX, (v))
     #define X_SETDX(v) VDM_SET16(tib, VTIB_EDX, (v))
-    #define X_SETBL(v) VDM_REG(tib, VTIB_EBX) = (VDM_REG(tib, VTIB_EBX) & 0xFFFFFF00u) | ((v) & 0xFF)
-    #define X_SETBH(v) VDM_REG(tib, VTIB_EBX) = (VDM_REG(tib, VTIB_EBX) & 0xFFFF00FFu) | (((DWORD)(v) & 0xFF) << 8)
+    #define X_SETBL(v) VDM_REG(tib, VTIB_EBX) = (VDM_REG(tib, VTIB_EBX) & ~BYTE_MASK_U) | ((v) & BYTE_MASK)
+    #define X_SETBH(v) VDM_REG(tib, VTIB_EBX) = (VDM_REG(tib, VTIB_EBX) & ~HIGH_BYTE_MASK_U) | (((DWORD)(v) & BYTE_MASK) << BYTE_SHIFT)
     #define X_FAIL(e)  do { X_SETAX(0); X_SETBL(e); } while (0)
 
     switch (ah) {
@@ -8087,8 +8087,8 @@ static VOID HostEms(volatile BYTE *tib)
     BYTE error = DOS_EMS_ERROR_UNDEFINED_FUNCTION;
     WORD handle = 0, unallocatedPages = 0, totalPages = 0;
 
-    #define E_SETAH(v) VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFF00FFu) | (((DWORD)(v) & 0xFF) << 8)
-    #define E_SETAL(v) VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & 0xFFFFFF00u) | ((v) & 0xFF)
+    #define E_SETAH(v) VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & ~HIGH_BYTE_MASK_U) | (((DWORD)(v) & BYTE_MASK) << BYTE_SHIFT)
+    #define E_SETAL(v) VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & ~BYTE_MASK_U) | ((v) & BYTE_MASK)
     #define E_SETBX(v) VDM_SET16(tib, VTIB_EBX, (v))
     #define E_SETDX(v) VDM_SET16(tib, VTIB_EDX, (v))
 
@@ -15619,7 +15619,7 @@ static INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
                        eipOffset + length, eipOffset, port, isIn, width, is32);
     return 1;
 }
-
+#define MODEY_ROW_BYTES 80u   /* a mode-Y row: 320 pixels across four planes */
 /* ══ MODE-Y PLANE BACKING: POINT A0000 AT THE PLANE THE MASK SELECTS ═════════════════
  *
  *  Mode Y cannot be de-interleaved after the fact. The A0000 aperture is one flat
@@ -15742,9 +15742,9 @@ static UINT64 ModeYTimelineRdtsc(VOID)
      zero the path is exonerated properly this time, by a number that could have said
      otherwise. One bit per (page, bar offset) = 960 bytes, set in a loop that already
      runs only over CHANGED bytes. */
-#define YBAR_OFF_LO   (168u * 80u)      /* first bar byte within a page */
-#define YBAR_OFF_MID  (184u * 80u)      /* band split: rows 184..199    */
-#define YBAR_OFF_HI   (200u * 80u)
+#define YBAR_OFF_LO   (168u * MODEY_ROW_BYTES)      /* first bar byte within a page */
+#define YBAR_OFF_MID  (184u * MODEY_ROW_BYTES)      /* band split: rows 184..199    */
+#define YBAR_OFF_HI   (200u * MODEY_ROW_BYTES)
 #define YBAR_PER_PAGE (YBAR_OFF_HI - YBAR_OFF_LO)          /* 2560 */
 static BYTE  g_ModeYFanoutBarSeen[(3u * YBAR_PER_PAGE + 7u) / 8u];
 static DWORD g_ModeYFanoutBarWrites[2];      /* fan-out writes to bar bytes, by band  */
@@ -15799,8 +15799,8 @@ static DWORD g_ModeYFanoutBar4Way[2];        /* ...of which the mask was all fou
      actually CHANGED (247 times a run, measured), so the compare is free and a wider
      window is a tighter rate. */
 #define YSMP_LEN 256u
-#define YSMP_A   (176u * 80u)      /* band A, rows 168-183 (256B spans rows 176-179) */
-#define YSMP_B   (192u * 80u)      /* band B, rows 184-199 (256B spans rows 192-195) */
+#define YSMP_A   (176u * MODEY_ROW_BYTES)      /* band A, rows 168-183 (256B spans rows 176-179) */
+#define YSMP_B   (192u * MODEY_ROW_BYTES)      /* band B, rows 184-199 (256B spans rows 192-195) */
 static BYTE  g_ModeYSample[2][4][YSMP_LEN];      /* [band][plane] last seen                */
 static INT   g_ModeYSampleHave[2][4];
 static BYTE  g_ModeYSampleLast[2][YSMP_LEN];    /* last CHANGED window, any plane         */
@@ -19987,7 +19987,7 @@ static VOID DpmiScanCodeBlocks(VOID)
 
 /* A descriptor access byte names CODE iff it is a segment (S, bit 4) and executable
    (bit 3). 0xFB -- what DOS/4GW writes -- is present/DPL3/S/code/readable/accessed. */
-#define DPMI_ACC_IS_CODE(a) (((a) & 0x18) == 0x18)
+#define DPMI_ACC_IS_CODE(a) (((a) & DPMI_ACCESS_CODE_TYPE) == DPMI_ACCESS_CODE_TYPE)
 
 /* Read PMBP_PATH. One line per breakpoint:
        <addr>  [dump linear]  [skip bytes]  [mode]  [rep]   # comment
