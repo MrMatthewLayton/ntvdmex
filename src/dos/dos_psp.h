@@ -11,7 +11,6 @@
 
 /* The PSP's fields, as offsets from psp_seg:0. */
 #define DOS_PSP_SIZE                 0x100
-#define DOS_PSP_PARAGRAPHS           (DOS_PSP_SIZE >> PARAGRAPH_SHIFT)
 #define DOS_PSP_INT20                0x00   /* INT 20h (legacy exit): opcode, then vector  */
 #define DOS_PSP_MEMORY_TOP           0x02   /* WORD: segment of top-of-memory              */
 #define DOS_PSP_INT22_COPY           0x0A   /* the saved INT 22h/23h/24h vectors           */

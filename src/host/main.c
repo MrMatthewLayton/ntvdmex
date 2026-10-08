@@ -21783,7 +21783,7 @@ static PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, 
     VDM_REG(tib, VTIB_DS) = savedDs; VDM_REG(tib, VTIB_EDX) = savedDx;
 
     /* Results back out. A short read is what AX says, not what CX asked for. */
-    if (ah == 0x3F && !(VDM_REG(tib, VTIB_EFLAGS) & 1u)) {
+    if (ah == DOS_FN_READ && !(VDM_REG(tib, VTIB_EFLAGS) & 1u)) {
         DWORD got = VDM_REG16(tib, VTIB_EAX);
         if (got > cxValue) got = cxValue;
         if (got) PmTransferOut(dsValue, dxValue, got);
@@ -24210,8 +24210,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                        untouched. Scoped to a 32-bit client so nothing 16-bit changes. */
                     if (vector == VECTOR_DOS && g_DpmiIsClient32) {
                         DWORD requestAh = (ax >> BYTE_SHIFT) & BYTE_MASK, vectorNumber = ax & BYTE_MASK;
-                        if ((requestAh == 0x25 || requestAh == 0x35) && vectorNumber >= VECTOR_IRQ0 && vectorNumber <= VECTOR_IRQ7) {
-                            if (requestAh == 0x25) {
+                        if ((requestAh == DOS_FN_SET_VECTOR || requestAh == DOS_FN_GET_VECTOR) && vectorNumber >= VECTOR_IRQ0 && vectorNumber <= VECTOR_IRQ7) {
+                            if (requestAh == DOS_FN_SET_VECTOR) {
                                 WORD handlerSegment = (WORD)VDM_REG16(tib, VTIB_DS);
                                 g_PmInt[vectorNumber].Selector = handlerSegment;
                                 g_PmInt[vectorNumber].Offset = DpmiSelectorIs32(handlerSegment) ? VDM_REG(tib, VTIB_EDX)
@@ -26429,7 +26429,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     }
                     if (vector == VECTOR_DOS) {                             /* DOS INT 21h (in PM) */
                         DWORD ah = (ax >> BYTE_SHIFT) & BYTE_MASK;
-                        if (ah == 0x4C) {                          /* terminate */
+                        if (ah == DOS_FN_EXIT) {                          /* terminate */
                             /* (The `ver` canary that stood here read linear 0x1600 and
                                expected 0x005A -- a leftover from the first DPMI spike, and
                                it printed "MISMATCH" on every real client's exit.) */
@@ -26442,7 +26442,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                             return 0;
                         }
-                        if (ah == 0x09) {                          /* print $-string DS:DX */
+                        if (ah == DOS_FN_PRINT_STRING) {                          /* print $-string DS:DX */
                             /* Resolve DS's linear base from the LDT so a client can print
                                through a descriptor it allocated + based itself. */
                             DWORD dsBase = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
@@ -26467,7 +26467,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
-                        if (ah == 0x02) {                          /* print char DL */
+                        if (ah == DOS_FN_CHAR_OUTPUT) {                          /* print char DL */
                             BYTE ch = VDM_REG(tib, VTIB_EDX) & BYTE_MASK;
                             /* #256: standard output, so a redirected handle 1 gets it --
                                as the V86 OUTC does. */
@@ -26481,7 +26481,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
-                        if (ah == 0x40) {                          /* write BX=handle CX=cnt DS:DX=buf */
+                        if (ah == DOS_FN_WRITE) {                          /* write BX=handle CX=cnt DS:DX=buf */
                             DWORD bh = VDM_REG16(tib, VTIB_EBX), count = VDM_REG16(tib, VTIB_ECX);
                             DWORD dsBase = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
                             const volatile BYTE *bytes = (const volatile BYTE *)(ULONG_PTR)
@@ -26543,7 +26543,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              on a 243 GB volume -- which is the recorded WRITE defect
                              too, and the reason both were filed under "runs but lies"
                              rather than as a missing DOS call. */
-                        if (ah == 0x3C || ah == 0x3D || ah == 0x5B) {  /* create / open: DS:DX = ASCIIZ name */
+                        if (ah == DOS_FN_CREATE || ah == DOS_FN_OPEN || ah == DOS_FN_CREATE_NEW) {  /* create / open: DS:DX = ASCIIZ name */
                             DWORD dsBase = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
                             PCSTR fileName = (PCSTR)(ULONG_PTR)(dsBase + VDM_REG16(tib, VTIB_EDX));
                             /* ── ★★ AL IS A BIT FIELD, NOT A NUMBER. (#128, session 37) ──
@@ -26569,9 +26569,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             DWORD desiredAccess = (mode == 1) ? GENERIC_WRITE
                                       : (mode == 2) ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
                             DWORD shareMode = FILE_SHARE_READ | FILE_SHARE_WRITE;
-                            HANDLE file = (ah == 0x3C || ah == 0x5B)
+                            HANDLE file = (ah == DOS_FN_CREATE || ah == DOS_FN_CREATE_NEW)
                                 ? CreateFileA(fileName, GENERIC_READ | GENERIC_WRITE, shareMode, NULL,
-                                              (ah == 0x5B) ? CREATE_NEW : CREATE_ALWAYS,
+                                              (ah == DOS_FN_CREATE_NEW) ? CREATE_NEW : CREATE_ALWAYS,
                                               FILE_ATTRIBUTE_NORMAL, NULL)
                                 : CreateFileA(fileName, desiredAccess, shareMode, NULL, OPEN_EXISTING,
                                               FILE_ATTRIBUTE_NORMAL, NULL);
@@ -26594,7 +26594,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                        (lastError == ERROR_TOO_MANY_OPEN_FILES)? 4 : 2); }
                             else { INT slot; for (slot = 5; slot < DOS_MAX_FILES && m.FileHandles[slot]; ++slot) {}
                                    if (slot < 24) { m.FileHandles[slot] = file; VDM_SET16(tib, VTIB_EAX, slot);
-                                                    if (ah == 0x3C || ah == 0x5B) DosStampVdmNow(file); /* #263 */ }
+                                                    if (ah == DOS_FN_CREATE || ah == DOS_FN_CREATE_NEW) DosStampVdmNow(file); /* #263 */ }
                                    else { CloseHandle(file); VDM_REG(tib, VTIB_EFLAGS) |= 1u; VDM_SET16(tib, VTIB_EAX, 4); } }
                             /* ── ⚠ "-> AX=0x2" MEANT TWO OPPOSITE THINGS. (session 37) ──
                                  This printed AX and nothing else, so a failed open reading
@@ -26612,7 +26612,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                             VDM_REG(tib, VTIB_EIP) += 2; return 1;
                         }
-                        if (ah == 0x3E) {                          /* close: BX=handle */
+                        if (ah == DOS_FN_CLOSE) {                          /* close: BX=handle */
                             DWORD handle = VDM_REG16(tib, VTIB_EBX);
                             INT wasOpen = (handle < DOS_MAX_FILES && m.FileHandles[handle]) ? 1 : 0;
                             if (handle >= 5 && handle < DOS_MAX_FILES && m.FileHandles[handle]) DosHandleRelease(&m, handle);   /* s81: a parent may hold it */
@@ -26626,7 +26626,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                             VDM_REG(tib, VTIB_EIP) += 2; return 1;
                         }
-                        if (ah == 0x3F) {                          /* read: BX=handle CX=cnt -> DS:DX */
+                        if (ah == DOS_FN_READ) {                          /* read: BX=handle CX=cnt -> DS:DX */
                             DWORD handle = VDM_REG16(tib, VTIB_EBX), count = VDM_REG16(tib, VTIB_ECX), bytesRead = 0;
                             DWORD dsBase = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
                             PVOID buffer = (VOID *)(ULONG_PTR)(dsBase + VDM_REG16(tib, VTIB_EDX));
@@ -26674,7 +26674,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                             VDM_REG(tib, VTIB_EIP) += 2; return 1;
                         }
-                        if (ah == 0x42) {                          /* lseek: AL=org BX=h CX:DX=off */
+                        if (ah == DOS_FN_SEEK) {                          /* lseek: AL=org BX=h CX:DX=off */
                             DWORD handle = VDM_REG16(tib, VTIB_EBX), seekMethod = ax & BYTE_MASK;
                             LONG seekDistance = (LONG)((VDM_REG16(tib, VTIB_ECX) << WORD_SHIFT) | VDM_REG16(tib, VTIB_EDX));
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
@@ -26721,7 +26721,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              `xchg ax,cx / cbw / retn`, i.e. it propagates whatever we left.
                            Doom (DOS/4GW) needs 48h to allocate the memory it loads its LE image
                            into -- it is the first DOS call it makes from protected mode. */
-                        if (ah == 0x48) {
+                        if (ah == DOS_FN_ALLOCATE) {
                             /* ── DOS ALLOCATE, FROM PROTECTED MODE, RETURNS A SELECTOR ──────
                                A raw real-mode segment is useless to a PM client, and Doom
                                proves the convention by what it does: on success it loads the
@@ -26787,7 +26787,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
-                        if (ah == 0x49) {
+                        if (ah == DOS_FN_FREE) {
                             /* ── DOS FREE, FROM PROTECTED MODE: ES IS A SELECTOR ────────────
                                The mirror image of 48h above, and the convention is forced by
                                it rather than chosen: 48h handed the client a SELECTOR in AX,
@@ -26827,7 +26827,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
-                        if (ah == 0x25 || ah == 0x35) {
+                        if (ah == DOS_FN_SET_VECTOR || ah == DOS_FN_GET_VECTOR) {
                             /* ── SET/GET INTERRUPT VECTOR FROM PROTECTED MODE ───────────────
                                These operate on the PROTECTED-MODE vector, i.e. they are
                                INT 31h 0205/0204 wearing a DOS hat, and must never reach
@@ -26852,7 +26852,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                  DPMI host with a text-mode probe (`stock <target>`). Until
                                  then this is forced-by-the-data, not oracle-confirmed. */
                             DWORD al = ax & BYTE_MASK;
-                            if (ah == 0x25) {
+                            if (ah == DOS_FN_SET_VECTOR) {
                                 WORD handlerSelector = (WORD)VDM_REG16(tib, VTIB_DS);
                                 g_PmInt[al].Selector = handlerSelector;
                                 g_PmInt[al].Offset = DpmiSelectorIs32(handlerSelector) ? VDM_REG(tib, VTIB_EDX)
@@ -26875,7 +26875,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
-                        if (ah == 0x4A) {
+                        if (ah == DOS_FN_RESIZE) {
                             /* ── DOS RESIZE, FROM PROTECTED MODE ────────────────────────────
                                ES is a selector, exactly as for 49h, and the evidence arrived
                                the same way: session 16 left 4Ah loud pending a client that
@@ -26931,7 +26931,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                            status) likewise touch no memory. Everything else takes a DS:DX
                            buffer and stays loud -- the whitelist rule, applied within a
                            function rather than to it. */
-                        if (ah == 0x44) {
+                        if (ah == DOS_FN_IOCTL) {
                             /* ⚠ THE WHITELIST'S COMMENT WAS WRONG ABOUT 08/09/0E.
                                "Everything else takes a DS:DX buffer" is true of most
                                of AH=44h and false of exactly these three, which are
@@ -26965,7 +26965,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              copying through a conventional-memory buffer. */
                         cursor = WowPspEnvironmentCheck(cursor, "a PM INT 21h");
                         /* #210: the long-filename API -- PmInt21Lfn says how and why. */
-                        if (ah == 0x71) {
+                        if (ah == DOS_FN_LFN) {
                             if (g_PmTransferSegment) { m.TraceCursor = cursor; cursor = PmInt21Lfn(&m, tib, cursor); }
                             else {
                                 VDM_SET16(tib, VTIB_EAX, 0x7100);
@@ -26977,9 +26977,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
-                        if (g_PmTransferSegment && (ah == 0x3D || ah == 0x3F || ah == 0x40 ||
-                                              ah == 0x41 || ah == 0x43 || ah == 0x4E ||
-                                              ah == 0x39 || ah == 0x3A || ah == 0x3B)) {
+                        if (g_PmTransferSegment && (ah == DOS_FN_OPEN || ah == DOS_FN_READ || ah == DOS_FN_WRITE ||
+                                              ah == DOS_FN_DELETE || ah == DOS_FN_FILE_ATTRIBUTES || ah == DOS_FN_FIND_FIRST ||
+                                              ah == DOS_FN_MKDIR || ah == DOS_FN_RMDIR || ah == DOS_FN_CHDIR)) {
                             m.TraceCursor = cursor; cursor = PmInt21Transfer(&m, tib, ah, cursor);
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                             VDM_REG(tib, VTIB_EIP) += 2;
@@ -27000,7 +27000,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              it is this function not answering. Same treatment as 34h --
                              the V86 handler fills ES:BX with the SysVars segment, and the
                              segment becomes a selector over the same linear address. */
-                        if (ah == 0x34 || ah == 0x52) {
+                        if (ah == DOS_FN_GET_INDOS_FLAG || ah == DOS_FN_GET_LIST_OF_LISTS) {
                             WORD esSelector;
                             m.TraceCursor = cursor; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); cursor = m.TraceCursor;
                             esSelector = DpmiSegmentToDescriptor((WORD)VDM_REG16(tib, VTIB_ES));
@@ -27034,15 +27034,15 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                          ⚠ NOT 01h/07h/08h/0Ch: those READ THE KEYBOARD by re-entering
                            (`m->retry`), which this synchronous path cannot honour -- they
                            would return with no key. They stay in the loud arm. */
-                        if (ah == 0x19 || ah == 0x2A || ah == 0x2C || ah == 0x30 ||
-                            ah == 0x33 || ah == 0x58 || ah == 0x06 || ah == 0x44 ||
-                            ah == 0x0E || ah == 0x3E || ah == 0x42 || ah == 0x45 ||
-                            ah == 0x46 || ah == 0x57 || ah == 0xDC ||
-                            ah == 0x03 || ah == 0x04 || ah == 0x05 || ah == 0x0B ||
-                            ah == 0x0D || ah == 0x2B || ah == 0x2D || ah == 0x2E ||
-                            ah == 0x36 || ah == 0x37 || ah == 0x4D || ah == 0x54 ||
-                            ah == 0x5C || ah == 0x66 || ah == 0x67 || ah == 0x68 ||
-                            ah == 0x6A) {
+                        if (ah == DOS_FN_GET_DRIVE || ah == DOS_FN_GET_DATE || ah == DOS_FN_GET_TIME || ah == DOS_FN_GET_VERSION ||
+                            ah == DOS_FN_BREAK_STATE || ah == DOS_FN_ALLOCATION_STRATEGY || ah == DOS_FN_DIRECT_CONSOLE_IO || ah == DOS_FN_IOCTL ||
+                            ah == DOS_FN_SELECT_DRIVE || ah == DOS_FN_CLOSE || ah == DOS_FN_SEEK || ah == DOS_FN_DUP ||
+                            ah == DOS_FN_DUP2 || ah == DOS_FN_FILE_DATE_TIME || ah == DOS_FN_GET_LOGICAL_DRIVE_MAP ||
+                            ah == DOS_FN_AUX_INPUT || ah == DOS_FN_AUX_OUTPUT || ah == DOS_FN_PRINTER_OUTPUT || ah == DOS_FN_INPUT_STATUS ||
+                            ah == DOS_FN_DISK_RESET || ah == DOS_FN_SET_DATE || ah == DOS_FN_SET_TIME || ah == DOS_FN_SET_VERIFY ||
+                            ah == DOS_FN_GET_FREE_SPACE || ah == DOS_FN_SWITCH_CHAR || ah == DOS_FN_GET_RETURN_CODE || ah == DOS_FN_GET_VERIFY ||
+                            ah == DOS_FN_LOCK || ah == DOS_FN_CODE_PAGE || ah == DOS_FN_SET_HANDLE_COUNT || ah == DOS_FN_COMMIT ||
+                            ah == DOS_FN_COMMIT_6A) {
                             m.TraceCursor = cursor; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); cursor = m.TraceCursor;
                             cursor = LogPut(cursor, "INT21h AH=0x"); cursor = LogHex(cursor, ah);
                             cursor = LogPut(cursor, " (PM, register-only -> V86 DOS) -> AX=0x");
@@ -27081,7 +27081,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              into ES. So the copied PSP gets a descriptor over
                              the same environment instead -- the same treatment AH=34h and
                              AH=52h already get, for the same reason. */
-                        if (ah == 0x55 || ah == 0x26) {
+                        if (ah == DOS_FN_CREATE_CHILD_PSP || ah == DOS_FN_CREATE_PSP) {
                             WORD  dxSelector = (WORD)VDM_REG16(tib, VTIB_EDX);
                             DWORD dxLinear = DpmiSelectorBase(dxSelector);
                             const volatile BYTE *source =
@@ -27098,7 +27098,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 for (item = 0; item < DOS_PSP_SIZE; ++item) destination[item] = source[item];
                                 destination[DOS_PSP_PARENT] = (BYTE)(DOS_PSP_SEG & BYTE_MASK);   /* parent PSP   */
                                 destination[DOS_PSP_PARENT + 1] = (BYTE)(DOS_PSP_SEG >> BYTE_SHIFT);
-                                if (ah == 0x55) {                          /* memory top   */
+                                if (ah == DOS_FN_CREATE_CHILD_PSP) {                          /* memory top   */
                                     WORD si = (WORD)VDM_REG16(tib, VTIB_ESI);
                                     destination[DOS_PSP_MEMORY_TOP] = (BYTE)(si & BYTE_MASK);
                                     destination[DOS_PSP_MEMORY_TOP + 1] = (BYTE)(si >> BYTE_SHIFT);

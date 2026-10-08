@@ -379,6 +379,6 @@
 #define DOS_SFT_ENTSZ     0x3B      /* DOS 4.0+ SFT entry: 59 bytes              */
 #define DOS_SFT_HEADER    6         /* the block's far "next" pointer and word entry count */
 #define DOS_SFT_BYTES     (DOS_SFT_HEADER + DOS_SFT_ENTRIES * DOS_SFT_ENTSZ)
-#define DOS_SFT_PARAS     ((DOS_SFT_BYTES + DOS_PARAGRAPH_LAST_BYTE) / DOS_PARAGRAPH_BYTES)
+#define DOS_SFT_PARAS     ((DOS_SFT_BYTES + PARAGRAPH_LAST_BYTE) / PARAGRAPH_SIZE)
 
 #endif /* NTVDMEX_DOS_LAYOUT_H */

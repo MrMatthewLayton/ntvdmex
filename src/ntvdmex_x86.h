@@ -8,6 +8,9 @@
 
 /* Real-mode addressing: linear = segment * 16 + offset. */
 #define PARAGRAPH_SHIFT     4
+#define PARAGRAPH_SIZE      16
+#define PARAGRAPH_SIZE_U    16u
+#define PARAGRAPH_LAST_BYTE 15              /* added before dividing, to round up to a paragraph */
 
 /* Paging: a 4 KB page. */
 #define PAGE_SHIFT          12

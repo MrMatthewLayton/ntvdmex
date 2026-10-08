@@ -71,7 +71,7 @@ static inline DOS_IMAGE DosLoadImageAt(_In_opt_ volatile BYTE *base, _In_reads_b
     DOS_IMAGE image;
     DWORD index;
     if (bytesRead >= DOS_MZ_HEADER_MIN && file[0] == 'M' && file[1] == 'Z') {
-        DWORD headerSize  = (DWORD)DosLoaderReadWord(file + DOS_MZ_HEADER_PARAGRAPHS) * DOS_PARAGRAPH_BYTES;  /* e_cparhdr */
+        DWORD headerSize  = (DWORD)DosLoaderReadWord(file + DOS_MZ_HEADER_PARAGRAPHS) * PARAGRAPH_SIZE;  /* e_cparhdr */
         DWORD relocationCount   = DosLoaderReadWord(file + DOS_MZ_RELOCATION_COUNT);                 /* reloc count   */
         DWORD relocationTable = DosLoaderReadWord(file + DOS_MZ_RELOCATION_TABLE);               /* reloc tbl off */
         WORD loadSegment = requestedSegment ? requestedSegment : (WORD)(pspSegment + DOS_PSP_PARAGRAPHS);
@@ -230,7 +230,7 @@ static inline DWORD DosLoadOverlay(_In_opt_ volatile BYTE *base, _In_reads_bytes
         for (index = 0; index < bytesRead; ++index) imageBytes[index] = file[index];
         return bytesRead;
     }
-    headerSize  = (DWORD)DosLoaderReadWord(file + DOS_MZ_HEADER_PARAGRAPHS) * DOS_PARAGRAPH_BYTES;
+    headerSize  = (DWORD)DosLoaderReadWord(file + DOS_MZ_HEADER_PARAGRAPHS) * PARAGRAPH_SIZE;
     relocationCount   = DosLoaderReadWord(file + DOS_MZ_RELOCATION_COUNT);
     relocationTable = DosLoaderReadWord(file + DOS_MZ_RELOCATION_TABLE);
     lastPageBytes   = DosLoaderReadWord(file + DOS_MZ_LAST_PAGE_BYTES);

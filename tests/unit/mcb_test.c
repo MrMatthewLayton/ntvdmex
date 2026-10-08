@@ -164,8 +164,8 @@ INT main(VOID) {
                  "init: kernel area + DOS block = the pre-#207 total (MEM /C's MSDOS)");
     /* SysVars, its -2 word and the SDA are kernel data below the chain now. */
     McbTestCheck((DWORD)DOS_SYSVARS_SEG < firstMcb
-                 && (DWORD)DOS_SYSVARS_SEG * DOS_PARAGRAPH_BYTES + DOS_SYSVARS_OFF + DOS_SYSVARS_LEN <= (DWORD)firstMcb * DOS_PARAGRAPH_BYTES
-                 && (DWORD)DOS_SDA_SEG * DOS_PARAGRAPH_BYTES + DOS_SDA_OFF + DOS_SDA_LEN <= (DWORD)firstMcb * DOS_PARAGRAPH_BYTES,
+                 && (DWORD)DOS_SYSVARS_SEG * PARAGRAPH_SIZE + DOS_SYSVARS_OFF + DOS_SYSVARS_LEN <= (DWORD)firstMcb * PARAGRAPH_SIZE
+                 && (DWORD)DOS_SDA_SEG * PARAGRAPH_SIZE + DOS_SDA_OFF + DOS_SDA_LEN <= (DWORD)firstMcb * PARAGRAPH_SIZE,
                  "init: SysVars + SDA end below the first MCB header (#207)");
 
     /* T0b: a block reserved at the TOP for resident DOS data (the CDS array) --
@@ -182,14 +182,14 @@ INT main(VOID) {
            data, reserve again, and the mark must survive with both blocks intact. */
         {   volatile BYTE *firstData = DosMcbSegmentAddress(g_Memory, cdsSegment);
             WORD secondSegment;
-            firstData[0] = MCB_TEST_MARK_FIRST; firstData[MCB_TEST_CDS_PARAS * DOS_PARAGRAPH_BYTES - 1] = MCB_TEST_MARK_LAST;
+            firstData[0] = MCB_TEST_MARK_FIRST; firstData[MCB_TEST_CDS_PARAS * PARAGRAPH_SIZE - 1] = MCB_TEST_MARK_LAST;
             secondSegment = DosMcbReserveTop(g_Memory, firstMcb, MCB_TEST_SECOND_RESERVE);
             McbTestCheck(secondSegment == cdsSegment - 1 - MCB_TEST_SECOND_RESERVE, "reserve_top x2: second block sits just below the first");
             McbTestCheck(DosMcbCheckChain(g_Memory, firstMcb, DOS_MEM_TOP) == DOS_MCB_CHAIN_OK, "reserve_top x2: chain consistent");
             McbTestCheck(McbTestSignature(secondSegment - 1) == DOS_MCB_MEMBER && McbTestOwner(secondSegment - 1) == DOS_MCB_OWNER_DOS && McbTestSize(secondSegment - 1) == MCB_TEST_SECOND_RESERVE,
                          "reserve_top x2: new block is M / DOS / paras");
             McbTestCheck(McbTestSignature(cdsSegment - 1) == DOS_MCB_LAST && McbTestSize(cdsSegment - 1) == MCB_TEST_CDS_PARAS && firstData[0] == MCB_TEST_MARK_FIRST
-                         && firstData[MCB_TEST_CDS_PARAS * DOS_PARAGRAPH_BYTES - 1] == MCB_TEST_MARK_LAST, "reserve_top x2: the first block is untouched");
+                         && firstData[MCB_TEST_CDS_PARAS * PARAGRAPH_SIZE - 1] == MCB_TEST_MARK_LAST, "reserve_top x2: the first block is untouched");
             McbTestCheck(McbTestSize(MCB_TEST_PROGRAM_MCB) == programParas - MCB_TEST_CDS_PARAS - 1 - MCB_TEST_SECOND_RESERVE - 1,
                          "reserve_top x2: program block shrank by the second reservation");
         }

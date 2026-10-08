@@ -35,12 +35,6 @@
    Both numbers are measured; this is the one a real machine gives. */
 #define DOS_MEM_TOP 0x9FC0u     /* conventional top in paragraphs: 640K - 1K EBDA */
 
-/* A paragraph is 16 bytes: segment << 4 is its linear address. */
-#define DOS_PARAGRAPH_BYTES       16
-#define DOS_PARAGRAPH_LAST_BYTE   15     /* added before dividing, to round up to a paragraph */
-
-/* A little-endian WORD: the low byte first, then the high byte. */
-
 /* The MCB's fields (see the layout above). */
 #define DOS_MCB_SIGNATURE         0      /* 'M' or 'Z'                                    */
 #define DOS_MCB_OWNER             1      /* WORD: the owner's PSP segment                 */

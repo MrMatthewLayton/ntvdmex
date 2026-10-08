@@ -46,11 +46,10 @@
 /* The EBDA is the kilobyte between the end of DOS's memory and the 640 KB line. */
 #define BIOS_EBDA_SEG     DOS_MEM_TOP                              /* 0x9FC0          */
 #define BIOS_640K_SEGMENT    0xA000u                              /* the 640 KB line */
-#define BIOS_PARAGRAPH_BYTES 16u
 #define BIOS_BYTES_PER_KB    1024u
-#define BIOS_EBDA_KB      ((BIOS_640K_SEGMENT - BIOS_EBDA_SEG) * BIOS_PARAGRAPH_BYTES / BIOS_BYTES_PER_KB)   /* 1 */
+#define BIOS_EBDA_KB      ((BIOS_640K_SEGMENT - BIOS_EBDA_SEG) * PARAGRAPH_SIZE_U / BIOS_BYTES_PER_KB)   /* 1 */
 /* INT 12h's answer and 0040:0013: conventional memory BELOW the EBDA, in KB.  */
-#define BIOS_BASE_MEM_KB  ((DOS_MEM_TOP * BIOS_PARAGRAPH_BYTES) / BIOS_BYTES_PER_KB)            /* 639 */
+#define BIOS_BASE_MEM_KB  ((DOS_MEM_TOP * PARAGRAPH_SIZE_U) / BIOS_BYTES_PER_KB)            /* 639 */
 
 /* ── #136: CONVENTIONAL MEMORY IS A SETTING, AND IT MEANS MEMORY FITTED. ─────────────
      Settings > Machine > Memory > Conventional Memory (KB), 64..640, default 640. The number is
@@ -83,7 +82,7 @@ static inline WORD BiosConventionalTopParagraph(_In_ UINT kilobytes) {
 }
 /* INT 12h's answer for a given top -- the memory below the EBDA, in KB. */
 static inline WORD BiosBaseKbOfTop(_In_ WORD top) {
-    return (WORD)(((DWORD)top * BIOS_PARAGRAPH_BYTES) / BIOS_BYTES_PER_KB);
+    return (WORD)(((DWORD)top * PARAGRAPH_SIZE_U) / BIOS_BYTES_PER_KB);
 }
 
 /* BDA offsets (from linear 0x400) this header owns. */
