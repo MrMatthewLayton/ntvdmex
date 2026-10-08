@@ -267,8 +267,10 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 
 /* Access a 32-bit guest register/field at VDM_TIB offset `off` (e.g. VTIB_EAX). */
 #define VDM_REG(tib, off)      (*(volatile DWORD *)((volatile BYTE *)(tib) + (off)))
+/* The low 16 bits of such a field: a 16-bit register (CS, IP, DS...) or AX/BX/CX/DX. */
+#define VDM_REG16(tib, off)    (VDM_REG(tib, off) & WORD_MASK)
 /* Set the low 16 bits of such a field, preserving the high half. */
 #define VDM_SET16(tib, off, v) (VDM_REG((tib), (off)) = \
-        (VDM_REG((tib), (off)) & 0xFFFF0000u) | ((DWORD)(v) & 0xFFFFu))
+        (VDM_REG((tib), (off)) & HIGH_WORD_MASK_U) | ((DWORD)(v) & WORD_MASK_U))
 
 #endif /* NTVDMEX_VDM_NTVDM_H */
