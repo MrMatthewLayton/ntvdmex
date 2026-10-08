@@ -1952,7 +1952,7 @@ static DWORD g_IoSiteLogged = 0;
 #define IO_UNCLAIMED_MAX 24
 static WORD g_Unclaimed[IO_UNCLAIMED_MAX];
 static INT      g_UnclaimedCount = 0;
-
+enum { MYPM_STOP_RETURNED, MYPM_STOP_WINDOW_CLOSED, MYPM_STOP_DECLINED, MYPM_STOP_CAP, MYPM_STOP_NOT_FLAT, MYPM_STOP_IRQ_WAITING, MYPM_STOP_REASONS, MYPM_CHECK_MASK = 0x3F };
 static UINT       g_CaptureMs    = 300; /* CAPTURE_FLAG contents: ms between shots */
 /* #58: an optional SECOND number in capture.flag -- ms to wait before the first shot --
    so the 40-shot budget can be spent on one moment (Doom's melt) instead of the start. */
@@ -1993,7 +1993,7 @@ static INT            g_ModeYRingOn    = 0;  /* MYRING_FLAG: record the ring (a 
 static INT            g_ModeYPmOffset     = 0;  /* MYPM_OFF_FLAG                               */
 static INT            g_ModeYPmDetect  = 0;  /* MYPM_DETECT_FLAG                            */
 static DWORD          g_ModeYPmRuns = 0, g_ModeYPmInstructions = 0, g_ModeYPmBails = 0, g_ModeYPmBailMp = 0;
-static DWORD          g_ModeYPmStop[6];       /* returned, window closed, declined, cap, not32, irq (#172) */
+static DWORD          g_ModeYPmStop[MYPM_STOP_REASONS];       /* returned, window closed, declined, cap, not32, irq (#172) */
 /* ── EVERY DISTINCT BAIL SITE, NOT THE FIRST TWELVE LINES. (s68) ──────────────────
      In a planar mode a bail is not one instruction: VdmRunGuest keeps the guest until the
      next EVENT with A0000 unprotected, so every VRAM write in that stretch is lost to
@@ -6949,13 +6949,13 @@ static VOID HostMidiSysEx(PVOID context, const BYTE *message, UINT32 length)
     (VOID)context;
     AudioWaveMidiLong(&g_Wave, message, length);
 }
-#define SCREENSHOT_NAME_ROOM    24   /* path characters kept for "shot_manual_NN.bmp" */
+
 /* #190: the GUS's 6850 MIDI UART sends raw bytes; a PRIVATE message assembler (never on
    the bus) turns them into MIDI messages for the same synth. Its own, not g_Mpu's: two
    byte streams through one assembler would corrupt each other's running status. */
 static MPU_STATE g_GusMidi;
 static VOID GusMidiToSynth(PVOID context, BYTE byteValue) { (VOID)context; VddMpuFeed(&g_GusMidi, byteValue); }
-#define SCREENSHOT_NAME_DIGITS  12   /* where NN starts in that name               */
+enum { SCREENSHOT_NAME_ROOM = 24, SCREENSHOT_NAME_DIGITS = 12 };   /* "shot_manual_NN.bmp": path room kept for it, and where NN starts */
 /* Async-preemption probe driver (session 11, QIMODE_PATH bit 2). Raises IRQ 5 from a
    thread that is NOT the exec thread -- exactly how the audio thread raises the Sound
    Blaster's completion IRQ -- while the guest (qirq.com) spins in pure V86 code that
@@ -7182,7 +7182,7 @@ static VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak)
 static UINT32 g_TypematicDelayMicroseconds  = 500000u;   /* replaced at startup from XP's setting */
 static UINT32 g_TypematicPeriodMicroseconds =  92000u;
 static DWORD    g_TypematicSpiDelay, g_TypematicSpiSpeed;     /* raw, so STAGE2 can show them */
-#define SYNTHKEY_HOLD_MS        60     /* synthkey.txt: a human-length key hold       */
+
 /* XP exposes the two values it programs into the keyboard controller:
      SPI_GETKEYBOARDDELAY  0..3  -> 250, 500, 750, 1000 ms
      SPI_GETKEYBOARDSPEED  0..31 -> about 2.5/s at 0 up to about 30/s at 31,
@@ -7203,10 +7203,10 @@ static VOID HostKeyTypematicInitialize(VOID)
 static BYTE  g_TypematicScanCode, g_TypematicExtended, g_TypematicOn;
 static LONGLONG g_TypematicDue;
 static UINT32 g_TypematicSent, g_TypematicOsRepeats;  /* ours generated / OS ones suppressed */
-#define SYNTHKEY_GAP_MS         250    /* ...and the gap between taps                 */
+
 static LONGLONG QpcTicks(UINT32 microseconds)
 { return g_QpcFrequency.QuadPart ? (LONGLONG)((g_QpcFrequency.QuadPart / MILLISECONDS_PER_SECOND) * microseconds / MICROSECONDS_PER_MILLISECOND) : 0; }
-#define SYNTHKEY_TAP_MS         40
+
 static VOID HostKeyTypematicPress(BYTE scanCode, INT extended)
 {
     LARGE_INTEGER now;
@@ -7214,12 +7214,12 @@ static VOID HostKeyTypematicPress(BYTE scanCode, INT extended)
     g_TypematicScanCode = scanCode; g_TypematicExtended = (BYTE)(extended ? 1 : 0); g_TypematicOn = 1;
     g_TypematicDue = now.QuadPart + QpcTicks(KEY_TYPEMATIC_DELAY_US);
 }
-#define SYNTHKEY_SLEEP_SLICE_MS 100    /* a scripted wait, in slices g_Running can end */
+
 static VOID HostKeyTypematicRelease(BYTE scanCode, INT extended)
 {
     if (g_TypematicOn && g_TypematicScanCode == scanCode && g_TypematicExtended == (BYTE)(extended ? 1 : 0)) g_TypematicOn = 0;
 }
-#define SYNTHKEY_MENU_DELAY_MS  9000   /* the menu walk: wait for the menu, then tap  */
+
 /* Pumped from both threads; cheap and lock-free until it actually fires. */
 /* The 8042 presents the next queued scancode only after the keyboard's transfer time
    (see INPUT_KEYBOARD_TRANSFER_US in vdd_input.h). Nothing raises IRQ1 for it unless someone looks, so
@@ -7245,13 +7245,13 @@ static VOID HostKeyTypematic(VOID)
     HostKeyScancode(g_TypematicScanCode, g_TypematicExtended, 0);
     g_TypematicSent++;
 }
-#define SYNTHKEY_MENU_ROUNDS    400
+
 /* Defined with the rest of the mouse state, below. A scripted run needs it because
    a guest that finds an INT 33h driver asks for a CLICK and ignores the keyboard --
    Lemmings' level briefing says "Press mouse button to continue" to us and "Press
    Space" to a DOS with no driver, so without this the harness cannot get past it. */
 static VOID HostMouseButton(INT button, INT down);
-#define SYNTHKEY_HEX_DIGITS_MAX 2      /* a scripted scancode: up to two hex digits   */
+enum { SYNTHKEY_HOLD_MS = 60, SYNTHKEY_GAP_MS = 250, SYNTHKEY_TAP_MS = 40, SYNTHKEY_SLEEP_SLICE_MS = 100, SYNTHKEY_MENU_DELAY_MS = 9000, SYNTHKEY_MENU_ROUNDS = 400, SYNTHKEY_HEX_DIGITS_MAX = 2 };   /* synthkey.txt's driver: hold, gap, tap, wait slice, menu walk; a scancode is up to two hex digits */
 static DWORD WINAPI SynthKeyThread(LPVOID parameter)
 {
     INT round;
@@ -11806,7 +11806,7 @@ static VOID HostFullscreenToggleRestore(HWND window)
     DrawMenuBar(window);
     InvalidateRect(window, NULL, TRUE);
 }
-#define JOYSTICK_ABSENT_POLL_MS  250   /* no joystick configured: look again this often */
+
 static VOID HostFullscreenToggle(HWND window);
 static VOID HostFullscreenToggle(HWND window)
 {
@@ -11894,7 +11894,7 @@ static VOID HostFullscreenToggle(HWND window)
         LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
     }
 }
-#define JOYSTICK_API_RETRY_MS    1000  /* winmm has no joyGetPosEx: try again         */
+
 /* ── SETTINGS: THE STORE, AND WHAT APPLYING THEM MEANS. ──────────────────────────
      g_Settings is the live copy, and the three SettingsApply* functions below are
      deliberately the ONLY places a setting reaches the machine, so "what does this
@@ -11949,7 +11949,7 @@ static UINT64 JoystickNowMicroseconds(PVOID context)
     QueryPerformanceCounter(&now);
     return QpcMicroseconds64(now.QuadPart);
 }
-#define JOYSTICK_POLL_MS         15
+enum { JOYSTICK_ABSENT_POLL_MS = 250, JOYSTICK_API_RETRY_MS = 1000, JOYSTICK_POLL_MS = 15 };   /* the poll thread: no stick configured, no joyGetPosEx, and the sample period */
 /* joyGetPosEx costs a driver round-trip, so it must NEVER run inside the port
    trap -- the guest polls 0x201 in a tight CLI loop precisely while measuring an
    axis. This thread samples at ~66 Hz into g_Joystick and the trap reads only the
@@ -13088,14 +13088,14 @@ static INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM 
     }
     return FALSE;
 }
-#define HOST_MINIMUM_PICTURE_HEIGHT 100
+
 static VOID SettingsShowPage(INT page)
 {
     INT index;
     for (index = 0; index < NTVDMEX_PAGE_COUNT; ++index)
         if (g_SettingsPage[index]) ShowWindow(g_SettingsPage[index], index == page ? SW_SHOW : SW_HIDE);
 }
-#define HOST_MINIMUM_PICTURE_WIDTH  160   /* when the frame does not fit the work area */
+
 /* ── Ctrl+Tab / Ctrl+Shift+Tab (and Ctrl+PgDn / Ctrl+PgUp) switch pages. (s81, #137) ──
      A modal dialog's own loop runs IsDialogMessage on every key, so a Ctrl+Tab never
      reaches SettingsDialogProcedure -- the dialog manager takes it as a plain Tab and moves
@@ -13124,7 +13124,7 @@ static LRESULT CALLBACK SettingsMessageFilter(INT code, WPARAM wParam, LPARAM lP
     }
     return CallNextHookEx(g_SettingsHook, code, wParam, lParam);
 }
-#define CAPTURE_NAME_DIGITS     4      /* where NN starts in "shotNN.bmp"             */
+
 static INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message) {
@@ -13239,7 +13239,7 @@ static INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARA
     }
     return FALSE;
 }
-#define CAPTURE_SHOTS_MAX       40     /* capture.flag: shots per run                 */
+
 /* One keystroke, ONE path -- shared by WM_KEYDOWN and WM_SYSKEYDOWN, because F10 and
    Alt arrive as SYSTEM keys and are just as much the guest's as any other. */
 static VOID KeyMessageNote(VOID)
@@ -13327,7 +13327,7 @@ static VOID HostReleaseModifiers(VOID)
         }
     g_ModifiersDown = 0;
 }
-#define FULLSCREEN_HINT_MS      5000   /* how long the leave-fullscreen hint shows    */
+
 /* --- the UI thread: window + present + frame timer ------------------------- */
 /* ── #219: ONLY THE FOCUSED NTVDMEX WINDOW RUNS. (user, s83 sweep; decision 2026-09-28:
      always, no setting) Skyroads and Doom side by side were "very jittery": two guests
@@ -13378,7 +13378,7 @@ static VOID HostPauseSet(INT isOn)
             LogAppend(LOG_PATH, buffer, cursor); }
     }
 }
-#define HOST_DUMP_INTERVAL_MS   5000   /* the key/mouse census, at most this often   */
+enum { HOST_DUMP_INTERVAL_MS = 5000, FULLSCREEN_HINT_MS = 5000, CAPTURE_SHOTS_MAX = 40, CAPTURE_NAME_DIGITS = 4, HOST_MINIMUM_PICTURE_WIDTH = 160, HOST_MINIMUM_PICTURE_HEIGHT = 100 };   /* the census interval, the leave-fullscreen hint, capture.flag's shots and "shotNN.bmp", the smallest picture */
 static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
     /* GH #281: a command from the manager's tray menu, mapped onto this host's own
@@ -16168,7 +16168,7 @@ static VOID ModeYTimelineReport(VOID)
     cursor = LogPut(cursor, " runs="); cursor = LogDecimal(cursor, g_ModeYPmRuns);
     cursor = LogPut(cursor, " instrs="); cursor = LogDecimal(cursor, g_ModeYPmInstructions);
     cursor = LogPut(cursor, " stop[returned,closed,declined,cap,not32,irq]=");
-    { INT index2; for (index2 = 0; index2 < 6; ++index2) { cursor = LogPut(cursor, index2 ? "," : ""); cursor = LogDecimal(cursor, g_ModeYPmStop[index2]); } }
+    { INT index2; for (index2 = 0; index2 < MYPM_STOP_REASONS; ++index2) { cursor = LogPut(cursor, index2 ? "," : ""); cursor = LogDecimal(cursor, g_ModeYPmStop[index2]); } }
     cursor = LogPut(cursor, " bails_under_multiplane="); cursor = LogDecimal(cursor, g_ModeYPmBailMp);
     cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer;
     { UINT index, byteIndex;
@@ -16818,11 +16818,11 @@ static VOID ModeYPmRun(volatile BYTE *tib)
     WORD selector[X86_SEGMENT_REGISTERS];
     INT index;
     WORD cs = (WORD)VDM_REG16(tib, VTIB_CS), ss = (WORD)VDM_REG16(tib, VTIB_SS);
-    if (!DpmiSelectorIs32(cs) || !DpmiSelectorIs32(ss)) { g_ModeYPmStop[4]++; return; }
+    if (!DpmiSelectorIs32(cs) || !DpmiSelectorIs32(ss)) { g_ModeYPmStop[MYPM_STOP_NOT_FLAT]++; return; }
     selector[X86_SREG_ES] = (WORD)VDM_REG(tib, VTIB_ES); selector[X86_SREG_CS] = cs; selector[X86_SREG_SS] = ss;
     selector[X86_SREG_DS] = (WORD)VDM_REG(tib, VTIB_DS); selector[X86_SREG_FS] = (WORD)VDM_REG(tib, VTIB_FS);
     selector[X86_SREG_GS] = (WORD)VDM_REG(tib, VTIB_GS);
-    for (index = 0; index < X86_SEGMENT_REGISTERS; ++index) cpu.SegmentBases[index] = (selector[index] & 0xFFFC) ? DpmiSelectorBase(selector[index]) : 0;
+    for (index = 0; index < X86_SEGMENT_REGISTERS; ++index) cpu.SegmentBases[index] = (selector[index] & X86_SELECTOR_NULL_MASK) ? DpmiSelectorBase(selector[index]) : 0;
     cpu.Registers[X86_REG_AX] = VDM_REG(tib, VTIB_EAX); cpu.Registers[X86_REG_CX] = VDM_REG(tib, VTIB_ECX);
     cpu.Registers[X86_REG_DX] = VDM_REG(tib, VTIB_EDX); cpu.Registers[X86_REG_BX] = VDM_REG(tib, VTIB_EBX);
     cpu.Registers[X86_REG_SP] = VDM_REG(tib, VTIB_ESP); cpu.Registers[X86_REG_BP] = VDM_REG(tib, VTIB_EBP);
@@ -16835,21 +16835,21 @@ static VOID ModeYPmRun(volatile BYTE *tib)
     for (;;) {
         BYTE opcodeByte = Pm32HostRead8(cpu.SegmentBases[X86_SREG_CS] + cpu.Eip);
         INT wasResult = (opcodeByte == X86_OP_RET || opcodeByte == X86_OP_RET_IMM);
-        if (steps >= MYPM_CAP) { why = 3; break; }
-        if (!Pm32Step(&cpu)) { why = 2; break; }
+        if (steps >= MYPM_CAP) { why = MYPM_STOP_CAP; break; }
+        if (!Pm32Step(&cpu)) { why = MYPM_STOP_DECLINED; break; }
         ++steps;
-        if (wasResult && cpu.Registers[X86_REG_SP] > espStart && g_Pm32VgaCount != vgaCountStart) { why = 0; break; }
-        if ((steps & 0x3F) == 0) {
-            if (!ModeYPmNeedsInterp()) { why = 1; break; }
+        if (wasResult && cpu.Registers[X86_REG_SP] > espStart && g_Pm32VgaCount != vgaCountStart) { why = MYPM_STOP_RETURNED; break; }
+        if ((steps & MYPM_CHECK_MASK) == 0) {
+            if (!ModeYPmNeedsInterp()) { why = MYPM_STOP_WINDOW_CLOSED; break; }
             if (g_Pm32VgaCount != vgaSeen) { vgaSeen = g_Pm32VgaCount; idleFrom = steps; }
-            else if (steps - idleFrom >= MYPM_IDLE && ModeYPmIrqWaiting()) { why = 5; break; }
+            else if (steps - idleFrom >= MYPM_IDLE && ModeYPmIrqWaiting()) { why = MYPM_STOP_IRQ_WAITING; break; }
         }
     }
     HOST_UNLOCK();
     }
     g_ModeYPmRuns++; g_ModeYPmInstructions += (DWORD)steps; g_ModeYPmStop[why]++;
-    if (why == 2) {
-        BYTE mapMask = (BYTE)(g_Video.MapMask & 0x0F);
+    if (why == MYPM_STOP_DECLINED) {
+        BYTE mapMask = (BYTE)(g_Video.MapMask & VIDEO_ALL_PLANES);
         g_ModeYPmBails++;
         if (mapMask & (BYTE)(mapMask - 1)) g_ModeYPmBailMp++;
         ModeYBailNote(cs, cpu.Eip, (const volatile BYTE *)(ULONG_PTR)(cpu.SegmentBases[X86_SREG_CS] + cpu.Eip));
@@ -17096,7 +17096,7 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
                fill loops this batching exists to accelerate. */
             if ((iters & BYTE_MASK) == 0xFF) {
                 INT irq, pend = (g_Irq0Pending != 0);
-                for (irq = 0; !pend && irq < 16; ++irq) pend = (g_IrqNPending[irq] != 0);
+                for (irq = 0; !pend && irq < ARRAYSIZE(g_IrqNPending); ++irq) pend = (g_IrqNPending[irq] != 0);
                 if (pend) { ++iters; break; }
             }
         }
@@ -17112,13 +17112,13 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
                 const volatile BYTE *codeBytes = (const volatile BYTE *)(((UINT32)cpu.Segments[X86_SREG_CS] << PARAGRAPH_SHIFT) + cpu.Ip);
                 g_ModeYRing[index].Cs = cpu.Segments[X86_SREG_CS]; g_ModeYRing[index].Ip = cpu.Ip;
                 g_ModeYRing[index].Ss = cpu.Segments[X86_SREG_SS]; g_ModeYRing[index].Sp = (WORD)cpu.Registers[X86_REG_SP];
-                for (byteIndex = 0; byteIndex < 6; ++byteIndex) g_ModeYRing[index].Bytes[byteIndex] = codeBytes[byteIndex];
+                for (byteIndex = 0; byteIndex < ARRAYSIZE(g_ModeYRing[index].Bytes); ++byteIndex) g_ModeYRing[index].Bytes[byteIndex] = codeBytes[byteIndex];
             }
             if (!V86Step(&cpu)) break;
-            if (cpu.Segments[X86_SREG_CS] == 0 && cpu.Ip < 0x400) { ++iters; ModeYRingDump("interpreter reached CS=0"); break; }
+            if (cpu.Segments[X86_SREG_CS] == 0 && cpu.Ip < IVT_SIZE) { ++iters; ModeYRingDump("interpreter reached CS=0"); break; }
             if ((iters & BYTE_MASK) == 0xFF) {
                 INT irq, pend = (g_Irq0Pending != 0);
-                for (irq = 0; !pend && irq < 16; ++irq) pend = (g_IrqNPending[irq] != 0);
+                for (irq = 0; !pend && irq < ARRAYSIZE(g_IrqNPending); ++irq) pend = (g_IrqNPending[irq] != 0);
                 /* Only when the guest could TAKE it: yielding inside a CLI region hands
                    the loop a chance to inject there (see the write-back below). */
                 if (pend && (cpu.Flags & EFLAGS_IF)) { ++iters; break; }
@@ -17395,7 +17395,7 @@ static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
              first cut of this arm filtered to error severity only, so the one
              exception that names the killer was exactly the one not logged.
              Guard pages and debug prints stay excluded. */
-        if ((record->ExceptionCode & 0xF0000000u) == 0xC0000000u
+        if ((record->ExceptionCode & NT_STATUS_SEVERITY_MASK) == NT_STATUS_SEVERITY_ERROR
             || record->ExceptionCode == EXCEPTION_BREAKPOINT
             || record->ExceptionCode == EXCEPTION_SINGLE_STEP) {
             LONG faultNumber = InterlockedIncrement(&g_RmFaultSeen);
@@ -17452,7 +17452,7 @@ static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
          ENTRY EIP in EDX (that fault carried EDX=0x5fd8, entry 1 exactly), and we
          only look while g_PmEntryEip is set, i.e. inside VdmStartExecution. Accept
          either: the old low-memory case, or a match on EDX. */
-    if (context->SegCs == 0x1B && g_VehCount < 256
+    if (context->SegCs == NT_USER_CODE_SELECTOR && g_VehCount < 256
         && (context->Eip < 0x00200000u
             || (g_PmEntryEip >= 0 && (DWORD)context->Edx == (DWORD)g_PmEntryEip))) {
         DWORD site = g_DpmiCodeBase + (context->Edx & WORD_MASK);
@@ -17587,7 +17587,7 @@ static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
               }
               cursor = LogPut(cursor, "\r\n");
               LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
-              context->SegCs = 0x0F; context->SegSs = 0x17;       /* guest selectors back; regs intact */
+              context->SegCs = DPMI_INITIAL_CODE_SELECTOR; context->SegSs = DPMI_INITIAL_DATA_SELECTOR;       /* guest selectors back; regs intact */
               return EXCEPTION_CONTINUE_EXECUTION;
           } }
         context->EFlags &= ~EFLAGS_CF_U;                              /* default: CF=0 (success)          */
@@ -17612,7 +17612,7 @@ static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
         }
         cursor = LogPut(cursor, "\r\n");
         LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
-        context->SegCs = 0x0F; context->SegSs = 0x17;             /* restore the guest's LDT selectors  */
+        context->SegCs = DPMI_INITIAL_CODE_SELECTOR; context->SegSs = DPMI_INITIAL_DATA_SELECTOR;             /* restore the guest's LDT selectors  */
         return EXCEPTION_CONTINUE_EXECUTION;            /* resume the guest past the INT      */
     }
 
@@ -20908,7 +20908,7 @@ static VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slo
     /* PM handler stack (data selector 0x17, scratch SP) with an IRET frame -> PM-return catcher.
        The IRET operand size follows the HANDLER's CS D-bit: a 32-bit PM handler pops a dword
        FLAGS/CS/EIP frame, a 16-bit one pops a word frame (GH #18 run 83). */
-    { WORD protectedSs = 0x17, protectedSp = 0xF400; DWORD stackBase = DpmiSelectorBase(protectedSs);
+    { WORD protectedSs = DPMI_INITIAL_DATA_SELECTOR, protectedSp = 0xF400; DWORD stackBase = DpmiSelectorBase(protectedSs);
       if (DpmiSelectorIs32(g_Callbacks[slot].PmSelector)) {
           protectedSp -= X86_DWORD_SIZE; PokeDword(stackBase + protectedSp, EFLAGS_IF | EFLAGS_RESERVED_ONE);        /* EFLAGS */
           protectedSp -= X86_DWORD_SIZE; PokeDword(stackBase + protectedSp, g_PmReturnSelector);       /* CS (dword; hi16=0) */

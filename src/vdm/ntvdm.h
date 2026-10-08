@@ -250,6 +250,11 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 #define VTIB_FLT_SAV3   0x640    /* kernel: saved third slot (SS:ESP-class)      */
 
 /* Access a 32-bit guest register/field at VDM_TIB offset `off` (e.g. VTIB_EAX). */
+/* NT's own facts the host meets in exceptions: an NTSTATUS's top nibble C is error severity,
+   and user mode runs on GDT selector 1Bh. */
+#define NT_STATUS_SEVERITY_MASK   0xF0000000u
+#define NT_STATUS_SEVERITY_ERROR  0xC0000000u
+#define NT_USER_CODE_SELECTOR     0x1B
 #define VDM_REG(tib, off)      (*(volatile DWORD *)((volatile BYTE *)(tib) + (off)))
 /* The low 16 bits of such a field: a 16-bit register (CS, IP, DS...) or AX/BX/CX/DX. */
 #define VDM_REG16(tib, off)    (VDM_REG(tib, off) & WORD_MASK)

@@ -71,6 +71,10 @@
 #define DPMI_SELECTOR_TI          4    /* the table indicator: 1 = the LDT         */
 #define DPMI_SELECTOR_RPL_USER    3    /* requested privilege level 3: a client's  */
 #define DPMI_SELECTOR_INDEX_SHIFT 3
+/* The mode switch's code, data and stack selectors: LDT entries 1-3, RPL 3. */
+#define DPMI_INITIAL_CODE_SELECTOR  0x0F
+#define DPMI_INITIAL_DATA_SELECTOR  0x17
+#define DPMI_INITIAL_STACK_SELECTOR 0x1F
 /* A client's LDT selector for descriptor `index`, and the descriptor index of a selector. */
 #define DPMI_LDT_SELECTOR(index)      (((index) << DPMI_SELECTOR_INDEX_SHIFT) | (DPMI_SELECTOR_TI | DPMI_SELECTOR_RPL_USER))
 #define DPMI_SELECTOR_INDEX(selector) ((selector) >> DPMI_SELECTOR_INDEX_SHIFT)
