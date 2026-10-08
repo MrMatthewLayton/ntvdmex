@@ -12822,30 +12822,30 @@ static VOID SettingsTextFontSelect(PCSTR face)
     SendMessageA(control, CB_SETCURSEL, (WPARAM)(found == CB_ERR ? 0 : found), 0);
     SettingsTextFontPreview();
 }
-
+enum { FONT_PREVIEW_COLUMNS = 64, FONT_PREVIEW_ROWS = 2, FONT_PREVIEW_CELL_WIDTH = 8, FONT_PREVIEW_CELL_HEIGHT = 16, FONT_PREVIEW_WIDTH = 512, FONT_PREVIEW_HEIGHT = 32, FONT_PREVIEW_HIGH_FIRST = 0x80, FONT_PREVIEW_BOX_FIRST = 0xB0, FONT_PREVIEW_BOX_COUNT = 48, FONT_PREVIEW_GREEK_FIRST = 0xE0, FONT_PREVIEW_GREY = 0xAA };   /* the Settings font preview: two rows of 8x16 cells */
 /* Two lines of 64 cells from the previewed 8x16 table, light grey on black, 1:1. */
 static VOID SettingsTextFontDraw(const DRAWITEMSTRUCT *drawItem)
 {
     static const CHAR text[] = "Hello, DOS!  0123456789  ";
-    BYTE row[2][64];
-    static BYTE pixels[32][64];
+    BYTE row[FONT_PREVIEW_ROWS][FONT_PREVIEW_COLUMNS];
+    static BYTE pixels[FONT_PREVIEW_HEIGHT][FONT_PREVIEW_COLUMNS];
     struct { BITMAPINFOHEADER Header; RGBQUAD Palette[2]; } bitmapInfo;
     INT index, pixelRow, left, top;
     RECT rect = drawItem->rcItem;
-    for (index = 0; index < 64; ++index) {
-        row[0][index] = (BYTE)(index < (INT)sizeof text - 1 ? text[index] : 0x80 + (index - (INT)sizeof text + 1));
-        row[1][index] = (BYTE)(index < 48 ? 0xB0 + index : 0xE0 + (index - 48));
+    for (index = 0; index < FONT_PREVIEW_COLUMNS; ++index) {
+        row[0][index] = (BYTE)(index < (INT)sizeof text - 1 ? text[index] : FONT_PREVIEW_HIGH_FIRST + (index - (INT)sizeof text + 1));
+        row[1][index] = (BYTE)(index < FONT_PREVIEW_BOX_COUNT ? FONT_PREVIEW_BOX_FIRST + index : FONT_PREVIEW_GREEK_FIRST + (index - FONT_PREVIEW_BOX_COUNT));
     }
-    for (pixelRow = 0; pixelRow < 32; ++pixelRow)
-        for (index = 0; index < 64; ++index) pixels[pixelRow][index] = g_TextFontPreview.Table16[row[pixelRow / 16][index]][pixelRow % 16];
+    for (pixelRow = 0; pixelRow < FONT_PREVIEW_HEIGHT; ++pixelRow)
+        for (index = 0; index < FONT_PREVIEW_COLUMNS; ++index) pixels[pixelRow][index] = g_TextFontPreview.Table16[row[pixelRow / FONT_PREVIEW_CELL_HEIGHT][index]][pixelRow % FONT_PREVIEW_CELL_HEIGHT];
     ZeroMemory(&bitmapInfo, sizeof bitmapInfo);
-    bitmapInfo.Header.biSize = sizeof bitmapInfo.Header; bitmapInfo.Header.biWidth = 512; bitmapInfo.Header.biHeight = -32;
+    bitmapInfo.Header.biSize = sizeof bitmapInfo.Header; bitmapInfo.Header.biWidth = FONT_PREVIEW_WIDTH; bitmapInfo.Header.biHeight = -FONT_PREVIEW_HEIGHT;
     bitmapInfo.Header.biPlanes = 1; bitmapInfo.Header.biBitCount = 1; bitmapInfo.Header.biCompression = BI_RGB;
-    bitmapInfo.Palette[1].rgbRed = bitmapInfo.Palette[1].rgbGreen = bitmapInfo.Palette[1].rgbBlue = 0xAA;
+    bitmapInfo.Palette[1].rgbRed = bitmapInfo.Palette[1].rgbGreen = bitmapInfo.Palette[1].rgbBlue = FONT_PREVIEW_GREY;
     FillRect(drawItem->hDC, &rect, (HBRUSH)GetStockObject(BLACK_BRUSH));
-    left = rect.left + ((rect.right - rect.left) - 512) / 2; if (left < rect.left) left = rect.left;
-    top = rect.top + ((rect.bottom - rect.top) - 32) / 2;   if (top < rect.top)  top = rect.top;
-    SetDIBitsToDevice(drawItem->hDC, left, top, 512, 32, 0, 0, 0, 32, pixels, (BITMAPINFO *)&bitmapInfo, DIB_RGB_COLORS);
+    left = rect.left + ((rect.right - rect.left) - FONT_PREVIEW_WIDTH) / 2; if (left < rect.left) left = rect.left;
+    top = rect.top + ((rect.bottom - rect.top) - FONT_PREVIEW_HEIGHT) / 2;   if (top < rect.top)  top = rect.top;
+    SetDIBitsToDevice(drawItem->hDC, left, top, FONT_PREVIEW_WIDTH, FONT_PREVIEW_HEIGHT, 0, 0, 0, FONT_PREVIEW_HEIGHT, pixels, (BITMAPINFO *)&bitmapInfo, DIB_RGB_COLORS);
 }
 
 static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
@@ -15513,7 +15513,7 @@ static UINT g_DmaPollCount = 0, g_DmaPollOverflow = 0;
 static DWORD g_PollStack[POLLSTK_MAX], g_PollStackHits[POLLSTK_MAX];
 static DWORD g_PollGap[10], g_PollGapMaximumMicroseconds = 0;
 static UINT g_PollStackCount = 0, g_PollStackOverflow = 0;
-
+enum { MODEY_VIEW_LINEAR = 4, MODEY_VIEW_SCRATCH = 5 };   /* g_ModeYSeconds/View: 0-3 the planes, then these */
 static INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
 {
     DWORD csValue = VDM_REG16(tib, VTIB_CS);
@@ -15937,24 +15937,24 @@ static INT ModeYRemapInitialize(VOID)
 {
     static BYTE savedWindowA[MODEY_WIN], savedWindowB[MODEY_WIN];
     UINT index;
-    for (index = 0; index < MODEY_WIN; ++index) savedWindowA[index] = ((volatile BYTE *)(ULONG_PTR)0xA0000)[index];
-    for (index = 0; index < MODEY_WIN; ++index) savedWindowB[index] = ((volatile BYTE *)(ULONG_PTR)0xB0000)[index];
+    for (index = 0; index < MODEY_WIN; ++index) savedWindowA[index] = ((volatile BYTE *)(ULONG_PTR)VIDEO_APERTURE_BASE)[index];
+    for (index = 0; index < MODEY_WIN; ++index) savedWindowB[index] = ((volatile BYTE *)(ULONG_PTR)VIDEO_MONO_BASE)[index];
 
-    ModeYRemapProbe("before unmap", 0xA0000);
-    if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)0xA0000)) {
+    ModeYRemapProbe("before unmap", VIDEO_APERTURE_BASE);
+    if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE)) {
         ModeYRemapLog("unmap of the original A0000 view FAILED", GetLastError());
         return 0;
     }
-    ModeYRemapProbe("after unmap", 0xA0000);
+    ModeYRemapProbe("after unmap", VIDEO_APERTURE_BASE);
     /* Text memory first: it must be back before anything reads B8000. */
     g_BarSecond = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_EXECUTE_READWRITE,
                                 0, MODEY_WIN, NULL);
     if (!g_BarSecond || !MapViewOfFileEx(g_BarSecond, FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
-                                    0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xB0000)) {
+                                    0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)VIDEO_MONO_BASE)) {
         ModeYRemapLog("could not re-establish B0000 -- text memory is GONE", GetLastError());
         return 0;
     }
-    for (index = 0; index < MODEY_WIN; ++index) ((volatile BYTE *)(ULONG_PTR)0xB0000)[index] = savedWindowB[index];
+    for (index = 0; index < MODEY_WIN; ++index) ((volatile BYTE *)(ULONG_PTR)VIDEO_MONO_BASE)[index] = savedWindowB[index];
 
     /* ► CLAIM A0000 BEFORE ASKING FOR ANY FLOATING VIEW. Unmapping the original view
          makes A0000-AFFFF the LOWEST FREE 64K-aligned hole in the address space, and
@@ -15970,10 +15970,10 @@ static INT ModeYRemapInitialize(VOID)
                                        0, MODEY_WIN, NULL);
         if (!g_ModeYSeconds[index]) { ModeYRemapLog("plane section allocation FAILED", GetLastError()); return 0; }
     }
-    if (!MapViewOfFileEx(g_ModeYSeconds[4], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
-                         0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000)) {
+    if (!MapViewOfFileEx(g_ModeYSeconds[MODEY_VIEW_LINEAR], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
+                         0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE)) {
         ModeYRemapLog("could not map a replacement at A0000", GetLastError());
-        ModeYRemapProbe("after failed map", 0xA0000);
+        ModeYRemapProbe("after failed map", VIDEO_APERTURE_BASE);
         return 0;
     }
     for (index = 0; index < MODEY_NSEC; ++index) {
@@ -15986,9 +15986,9 @@ static INT ModeYRemapInitialize(VOID)
              marker makes "never written" visible and attributable instead: the oracle
              sees index 0/1/2/3 rather than a plausible picture. */
         { UINT byteIndex; BYTE *destination = (BYTE *)g_ModeYView[index];
-          for (byteIndex = 0; byteIndex < MODEY_WIN; ++byteIndex) destination[byteIndex] = (BYTE)(index < 4 ? index : savedWindowA[byteIndex]); }
+          for (byteIndex = 0; byteIndex < MODEY_WIN; ++byteIndex) destination[byteIndex] = (BYTE)(index < VIDEO_PLANES ? index : savedWindowA[byteIndex]); }
     }
-    g_ModeYCurrent = 4; g_ModeYRemap = 1;
+    g_ModeYCurrent = MODEY_VIEW_LINEAR; g_ModeYRemap = 1;
     ModeYRemapLog("A0000 is ours: 4 planes + linear + scratch", 0);
     return 1;
 }
@@ -16015,7 +16015,7 @@ static INT ModeYRemapInitialize(VOID)
 /* Does one displacement explain EVERY byte the burst changed? */
 static INT ModeYLatchVerify(INT32 delta)
 {
-    const BYTE *scratch = (const BYTE *)g_ModeYView[5];
+    const BYTE *scratch = (const BYTE *)g_ModeYView[MODEY_VIEW_SCRATCH];
     UINT index, moved = 0;
     for (index = 0; index < MODEY_WIN; ++index) {
         INT32 source;
@@ -16036,7 +16036,7 @@ static INT ModeYLatchVerify(INT32 delta)
      match cannot be applied; a burst nothing explains is counted, never guessed at. */
 static INT32 ModeYLatchDelta(VOID)
 {
-    const BYTE *scratch = (const BYTE *)g_ModeYView[5];
+    const BYTE *scratch = (const BYTE *)g_ModeYView[MODEY_VIEW_SCRATCH];
     unsigned index, runLow = 0, runLength = 0, bestLow = 0, bestLength = 0, cap; /* stays unsigned: UINT here moves the compiled code */
     for (index = 0; index < MODEY_WIN; ++index) {
         if (scratch[index] != g_ModeYSeed[index]) {
@@ -16235,9 +16235,9 @@ static VOID ModeYRemapSelectBody(PVOID context, INT mask)
          pixelated graphics" -- and a screen wipe looked pixelated until the full redraw
          behind it cleaned up. Diffing against the seed is exact and costs one pass over
          64K, 44 times a run. */
-    if (g_ModeYCurrent == 5 && g_ModeYPreviousMask) {
+    if (g_ModeYCurrent == MODEY_VIEW_SCRATCH && g_ModeYPreviousMask) {
         UINT index;
-        const BYTE *scratch = (const BYTE *)g_ModeYView[5];
+        const BYTE *scratch = (const BYTE *)g_ModeYView[MODEY_VIEW_SCRATCH];
         /* fanN is mode Y's measurement; a planar guest pays nothing for it -- a
            separate pass rather than a per-byte test, because this loop is hot for a
            mode-12h guest (Lemmings: ~38k windows a run) and -O2 does not unswitch. */
@@ -16255,11 +16255,11 @@ static VOID ModeYRemapSelectBody(PVOID context, INT mask)
         }
         ++g_ModeYFanouts;
     }
-    if (mask < 0) { want = 4; g_ModeYPreviousMask = 0; }
+    if (mask < 0) { want = MODEY_VIEW_LINEAR; g_ModeYPreviousMask = 0; }
     else {
         for (plane = 0; plane < VIDEO_PLANES; ++plane) if (mask & (1 << plane)) selector[selectedCount++] = plane;
         if (!selectedCount) { ++g_ModeYSelectorZero; return; }                /* mask 0: nothing to point at */
-        want = (selectedCount == 1) ? selector[0] : 5;
+        want = (selectedCount == 1) ? selector[0] : MODEY_VIEW_SCRATCH;
         g_ModeYPreviousMask = (selectedCount == 1) ? 0 : mask;
         /* The interpreter serves this window (ModeYNeedsInterp): its stores never
            touch A0000's mapping, so there is nothing to seed and nothing to fan out --
@@ -16270,25 +16270,25 @@ static VOID ModeYRemapSelectBody(PVOID context, INT mask)
     }
     if (want == g_ModeYCurrent) { ++g_ModeYSelectorSame; return; }
     /* Before the mapping moves: what did the plane we are leaving actually receive? */
-    if (g_ModeYCurrent >= 0 && g_ModeYCurrent < 4) { ModeYSampleCheck(0, YSMP_A, g_ModeYCurrent); ModeYSampleCheck(1, YSMP_B, g_ModeYCurrent); }
-    if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)0xA0000)) { ++g_ModeYFail; return; }
-    if (want == 5) {                                     /* seed the scratch so a
+    if (g_ModeYCurrent >= 0 && g_ModeYCurrent < VIDEO_PLANES) { ModeYSampleCheck(0, YSMP_A, g_ModeYCurrent); ModeYSampleCheck(1, YSMP_B, g_ModeYCurrent); }
+    if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE)) { ++g_ModeYFail; return; }
+    if (want == MODEY_VIEW_SCRATCH) {                                     /* seed the scratch so a
                                                             read-modify-write sees data,
                                                             and remember the seed so the
                                                             fan-out can tell writes from
                                                             bytes nobody touched */
-        UINT index; BYTE *destination = (BYTE *)g_ModeYView[5]; const BYTE *source = (const BYTE *)g_ModeYView[selector[0]];
+        UINT index; BYTE *destination = (BYTE *)g_ModeYView[MODEY_VIEW_SCRATCH]; const BYTE *source = (const BYTE *)g_ModeYView[selector[0]];
         for (index = 0; index < MODEY_WIN; ++index) { destination[index] = source[index]; g_ModeYSeed[index] = source[index]; }
         if (g_Video.ModeKind == VIDEO_KIND_LINEAR8)
             for (index = 0; index < MODEY_WIN; ++index) g_ModeYShadow[index] = source[index];
     }
     if (!MapViewOfFileEx(g_ModeYSeconds[want], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
-                         0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000)) {
+                         0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE)) {
         ++g_ModeYFail;
         /* Never leave the window unmapped: put SOMETHING back or the guest's next
            store faults into a hole. */
-        MapViewOfFileEx(g_ModeYSeconds[g_ModeYCurrent < 0 ? 4 : g_ModeYCurrent], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
-                        0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000);
+        MapViewOfFileEx(g_ModeYSeconds[g_ModeYCurrent < 0 ? MODEY_VIEW_LINEAR : g_ModeYCurrent], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
+                        0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE);
         return;
     }
     g_ModeYCurrent = want;
@@ -16377,12 +16377,12 @@ static VOID ModeYRemapReadMap(PVOID context, INT plane)
 
     plane &= 3;
     if (g_ModeYCurrent == 5 || g_ModeYCurrent == plane) return;   /* scratch in flight, or already there */
-    if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)0xA0000)) { ++g_ModeYFail; return; }
+    if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE)) { ++g_ModeYFail; return; }
     if (!MapViewOfFileEx(g_ModeYSeconds[plane], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
-                         0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000)) {
+                         0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE)) {
         ++g_ModeYFail;
-        MapViewOfFileEx(g_ModeYSeconds[g_ModeYCurrent < 0 ? 4 : g_ModeYCurrent], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
-                        0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)0xA0000);
+        MapViewOfFileEx(g_ModeYSeconds[g_ModeYCurrent < 0 ? MODEY_VIEW_LINEAR : g_ModeYCurrent], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
+                        0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE);
         return;
     }
     g_ModeYCurrent = plane;
@@ -16527,8 +16527,8 @@ static VOID ModeYRemapWriteMode(PVOID context, INT writeMode)
 }
 
 /* --- planar mode-12h: trap direct A0000 writes through the VGA write engine -- */
-#define A000_LO 0xA0000u
-#define A000_HI 0xB0000u
+
+
 static INT g_A000Protection = 0;
 
 /* In mode 12h, mark the A0000 graphics window NOACCESS so direct guest writes
@@ -16538,7 +16538,7 @@ static VOID A000Protect(INT isOn)
     DWORD old;
     if (g_NoA000) isOn = 0;              /* diagnostic knob -- see NOA000_FLAG */
     if (isOn == g_A000Protection) return;
-    if (VirtualProtect((LPVOID)A000_LO, 0x10000,
+    if (VirtualProtect((LPVOID)VIDEO_APERTURE_BASE, 0x10000,
                        isOn ? PAGE_NOACCESS : PAGE_EXECUTE_READWRITE, &old))
         g_A000Protection = isOn;
 }
@@ -16667,19 +16667,19 @@ static INT InterpreterMemoryPageOk(UINT32 linear)
    probed below 1 MB; anything else (the aperture, HMA, an unprobed or bad page) takes
    the slow path, which is the old function unchanged. */
 static __attribute__((noinline)) BYTE InterpreterMemoryRead8Slow(UINT32 linear)
-{ if (linear >= A000_LO && linear < A000_HI) return VddVideoPlanarRead(&g_Video, linear - A000_LO);
+{ if (linear >= VIDEO_APERTURE_BASE && linear < VIDEO_MONO_BASE) return VddVideoPlanarRead(&g_Video, linear - VIDEO_APERTURE_BASE);
   if (!InterpreterMemoryPageOk(linear)) { g_InterpreterMemoryBadReads++; InterpreterMemoryBadNote(linear, 0); return 0xFF; }
   return *(volatile BYTE *)linear; }
 static __attribute__((noinline)) VOID InterpreterMemoryWrite8Slow(UINT32 linear, BYTE value)
-{ if (linear >= A000_LO && linear < A000_HI) { VddVideoPlanarWrite(&g_Video, linear - A000_LO, value); return; }
+{ if (linear >= VIDEO_APERTURE_BASE && linear < VIDEO_MONO_BASE) { VddVideoPlanarWrite(&g_Video, linear - VIDEO_APERTURE_BASE, value); return; }
   if (!InterpreterMemoryPageOk(linear)) { g_InterpreterMemoryBadWrites++; InterpreterMemoryBadNote(linear, 1); return; }
   *(volatile BYTE *)linear = value; }
 static inline __attribute__((always_inline)) BYTE V86HostRead8(UINT32 linear)
-{ if (linear < 0x100000u && g_PageMap[linear >> PAGE_SHIFT] == 1 && (linear < A000_LO || linear >= A000_HI))
+{ if (linear < 0x100000u && g_PageMap[linear >> PAGE_SHIFT] == 1 && (linear < VIDEO_APERTURE_BASE || linear >= VIDEO_MONO_BASE))
       return *(volatile BYTE *)linear;
   return InterpreterMemoryRead8Slow(linear); }
 static inline __attribute__((always_inline)) VOID V86HostWrite8(UINT32 linear, BYTE value)
-{ if (linear < 0x100000u && g_PageMap[linear >> PAGE_SHIFT] == 1 && (linear < A000_LO || linear >= A000_HI))
+{ if (linear < 0x100000u && g_PageMap[linear >> PAGE_SHIFT] == 1 && (linear < VIDEO_APERTURE_BASE || linear >= VIDEO_MONO_BASE))
       { *(volatile BYTE *)linear = value; return; }
   InterpreterMemoryWrite8Slow(linear, value); }
 /* The interpreter's per-instruction code pointer (v86interp.h, V86I_CODE_PTR): the 16
@@ -16688,7 +16688,7 @@ static inline __attribute__((always_inline)) VOID V86HostWrite8(UINT32 linear, B
 #define V86I_CODE_PTR 1
 static inline __attribute__((always_inline)) const volatile BYTE *V86HostCodePointer(UINT32 linear)
 { if (linear < 0x100000u && (linear & 0xFFFu) <= 0xFF0u && g_PageMap[linear >> PAGE_SHIFT] == 1
-      && (linear < A000_LO || linear >= A000_HI))
+      && (linear < VIDEO_APERTURE_BASE || linear >= VIDEO_MONO_BASE))
       return (const volatile BYTE *)(ULONG_PTR)linear;
   return 0; }
 
@@ -16743,20 +16743,20 @@ static INT Pm32PageOk(DWORD page, INT isWrite)
 static DWORD g_Pm32VgaCount = 0;      /* aperture accesses by the interpreter (ModeYPmRun) */
 static BYTE Pm32HostRead8(UINT32 linear)
 {
-    if (linear >= A000_LO && linear < A000_HI) { ++g_Pm32VgaCount; return VddVideoPlanarRead(&g_Video, linear - A000_LO); }
+    if (linear >= VIDEO_APERTURE_BASE && linear < VIDEO_MONO_BASE) { ++g_Pm32VgaCount; return VddVideoPlanarRead(&g_Video, linear - VIDEO_APERTURE_BASE); }
     return *(volatile BYTE *)(ULONG_PTR)linear;
 }
 static VOID Pm32HostWrite8(UINT32 linear, BYTE value)
 {
-    if (linear >= A000_LO && linear < A000_HI) { ++g_Pm32VgaCount; VddVideoPlanarWrite(&g_Video, linear - A000_LO, value); return; }
+    if (linear >= VIDEO_APERTURE_BASE && linear < VIDEO_MONO_BASE) { ++g_Pm32VgaCount; VddVideoPlanarWrite(&g_Video, linear - VIDEO_APERTURE_BASE, value); return; }
     *(volatile BYTE *)(ULONG_PTR)linear = value;
 }
 static INT Pm32HostCanAccess(UINT32 linear, INT width, INT isWrite)
 {
     UINT32 end = linear + (UINT32)width - 1;
     if (end < linear) return 0;
-    if (linear >= A000_LO && end < A000_HI) return 1;
-    if (linear < A000_HI && end >= A000_LO) return 0;          /* straddles the aperture */
+    if (linear >= VIDEO_APERTURE_BASE && end < VIDEO_MONO_BASE) return 1;
+    if (linear < VIDEO_MONO_BASE && end >= VIDEO_APERTURE_BASE) return 0;          /* straddles the aperture */
     if (!Pm32PageOk(linear >> PAGE_SHIFT, isWrite)) return 0;
     return ((end >> PAGE_SHIFT) == (linear >> PAGE_SHIFT)) || Pm32PageOk(end >> PAGE_SHIFT, isWrite);
 }

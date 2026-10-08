@@ -19,6 +19,7 @@
 #define VIDEO_APERTURE_BASE 0xA0000u      /* video memory window base               */
 #define VIDEO_APERTURE_SIZE 0x20000u      /* A0000-BFFFF (128KB)                    */
 #define VIDEO_TEXT_BASE     0xB8000u      /* colour-text page 0                     */
+#define VIDEO_MONO_BASE     0xB0000u      /* the second 64K window: B0000..BFFFF    */
 #define VIDEO_TEXT_OFFSET      (VIDEO_TEXT_BASE - VIDEO_APERTURE_BASE)  /* 0x18000         */
 #define VIDEO_COLUMNS          80
 #define VIDEO_ROWS          25
