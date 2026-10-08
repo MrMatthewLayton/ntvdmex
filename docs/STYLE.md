@@ -112,7 +112,7 @@ says where to look.
 
 ## 3. No magic values
 
-**Ideally nothing appears inline.** Every value — number, string, boolean, bit mask — is
+**No meaningful value appears inline.** Every such value — number, string, boolean, bit mask — is
 assigned to a named constant and used by that name, so the code says what each value *means*
 and the definition says what it *is* and, for hardware, where it comes from.
 
@@ -126,6 +126,15 @@ case 0x802: st->ptr = w; break;
 case EMU8K_POINTER_PORT_OFFSET: state->Pointer = value; break;
 ```
 
+- **Name what a value means, not its digits.** Ports, masks, sizes, addresses, timeouts and
+  protocol codes get names. Arithmetic identities stay literal — `index = 0`, `+ 1`, `/ 2` —
+  because a name like `ZERO` only repeats the digit.
+- **One name per meaning, not per value.** `0xFFFF` as a 16-bit offset mask, as a segment limit
+  and as "no handle" is three names, even though the values are equal.
+- **A value the code does not explain is named for its origin, never a guessed purpose**
+  (`KRNL386_OFFSET_2F`, not `KRNL386_TASK_LIST`).
+- **Constants live in shared area headers** (`vga_ports.h`, `bios_data.h`, …), so a port or mask
+  is defined once and every module uses the same name.
 - **Hardware values cite their source** — the datasheet section, the specification, or the
   oracle measurement.
 - **Booleans at call sites are named too.** `Emu8kDataWrite(state, 0, TRUE, value)` hides what
