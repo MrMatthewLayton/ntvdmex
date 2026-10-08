@@ -54,6 +54,15 @@
 #define DOS_XMS_FN_REALLOCATE         0x0F
 #define DOS_XMS_FN_REQUEST_UMB        0x10
 #define DOS_XMS_FN_RELEASE_UMB        0x11
+#define DOS_XMS_ERROR_NO_UMB          0xB1   /* no upper memory blocks available       */
+#define DOS_XMS_ERROR_INVALID_UMB     0xB2   /* not a UMB segment                      */
+#define DOS_XMS_HIMEM622_QUERY_BH     0xAA   /* 08h: the BH 6.22's HIMEM leaves         */
+/* 0Bh's move structure. */
+#define DOS_XMS_MOVE_LENGTH              0  /* DWORD                                  */
+#define DOS_XMS_MOVE_SOURCE_HANDLE       4
+#define DOS_XMS_MOVE_SOURCE_OFFSET       6  /* DWORD                                  */
+#define DOS_XMS_MOVE_DESTINATION_HANDLE  10
+#define DOS_XMS_MOVE_DESTINATION_OFFSET  12 /* DWORD                                  */
 
 /* XMS error codes (returned in BL when AX=0). */
 #define DOS_XMS_ERROR_NOT_IMPLEMENTED             0x80  /* function not implemented      */

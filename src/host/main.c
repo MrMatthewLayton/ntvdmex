@@ -7182,7 +7182,7 @@ static VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak)
 static UINT32 g_TypematicDelayMicroseconds  = 500000u;   /* replaced at startup from XP's setting */
 static UINT32 g_TypematicPeriodMicroseconds =  92000u;
 static DWORD    g_TypematicSpiDelay, g_TypematicSpiSpeed;     /* raw, so STAGE2 can show them */
-
+#define SYNTHKEY_HOLD_MS        60     /* synthkey.txt: a human-length key hold       */
 /* XP exposes the two values it programs into the keyboard controller:
      SPI_GETKEYBOARDDELAY  0..3  -> 250, 500, 750, 1000 ms
      SPI_GETKEYBOARDSPEED  0..31 -> about 2.5/s at 0 up to about 30/s at 31,
@@ -7203,10 +7203,10 @@ static VOID HostKeyTypematicInitialize(VOID)
 static BYTE  g_TypematicScanCode, g_TypematicExtended, g_TypematicOn;
 static LONGLONG g_TypematicDue;
 static UINT32 g_TypematicSent, g_TypematicOsRepeats;  /* ours generated / OS ones suppressed */
-
+#define SYNTHKEY_GAP_MS         250    /* ...and the gap between taps                 */
 static LONGLONG QpcTicks(UINT32 microseconds)
 { return g_QpcFrequency.QuadPart ? (LONGLONG)((g_QpcFrequency.QuadPart / MILLISECONDS_PER_SECOND) * microseconds / MICROSECONDS_PER_MILLISECOND) : 0; }
-
+#define SYNTHKEY_TAP_MS         40
 static VOID HostKeyTypematicPress(BYTE scanCode, INT extended)
 {
     LARGE_INTEGER now;
@@ -7214,12 +7214,12 @@ static VOID HostKeyTypematicPress(BYTE scanCode, INT extended)
     g_TypematicScanCode = scanCode; g_TypematicExtended = (BYTE)(extended ? 1 : 0); g_TypematicOn = 1;
     g_TypematicDue = now.QuadPart + QpcTicks(KEY_TYPEMATIC_DELAY_US);
 }
-
+#define SYNTHKEY_SLEEP_SLICE_MS 100    /* a scripted wait, in slices g_Running can end */
 static VOID HostKeyTypematicRelease(BYTE scanCode, INT extended)
 {
     if (g_TypematicOn && g_TypematicScanCode == scanCode && g_TypematicExtended == (BYTE)(extended ? 1 : 0)) g_TypematicOn = 0;
 }
-
+#define SYNTHKEY_MENU_DELAY_MS  9000   /* the menu walk: wait for the menu, then tap  */
 /* Pumped from both threads; cheap and lock-free until it actually fires. */
 /* The 8042 presents the next queued scancode only after the keyboard's transfer time
    (see INPUT_KEYBOARD_TRANSFER_US in vdd_input.h). Nothing raises IRQ1 for it unless someone looks, so
@@ -7245,13 +7245,13 @@ static VOID HostKeyTypematic(VOID)
     HostKeyScancode(g_TypematicScanCode, g_TypematicExtended, 0);
     g_TypematicSent++;
 }
-
+#define SYNTHKEY_MENU_ROUNDS    400
 /* Defined with the rest of the mouse state, below. A scripted run needs it because
    a guest that finds an INT 33h driver asks for a CLICK and ignores the keyboard --
    Lemmings' level briefing says "Press mouse button to continue" to us and "Press
    Space" to a DOS with no driver, so without this the harness cannot get past it. */
 static VOID HostMouseButton(INT button, INT down);
-
+#define SYNTHKEY_HEX_DIGITS_MAX 2      /* a scripted scancode: up to two hex digits   */
 static DWORD WINAPI SynthKeyThread(LPVOID parameter)
 {
     INT round;
@@ -7281,9 +7281,9 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
                   ++index;
                   if (index < bytesRead && script[index] >= '0' && script[index] <= '2') { button = script[index] - '0'; ++index; }
                   HostMouseButton(button, 1);
-                  Sleep(60);
+                  Sleep(SYNTHKEY_HOLD_MS);
                   HostMouseButton(button, 0);
-                  Sleep(250);
+                  Sleep(SYNTHKEY_GAP_MS);
                   continue;
               }
               if (script[index] == 'w' || script[index] == 'W') {           /* w<decimal ms> */
@@ -7291,8 +7291,8 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
                   while (index < bytesRead && script[index] >= '0' && script[index] <= '9') { value = value*10 + (DWORD)(script[index]-'0'); ++index; }
                   { DWORD slept = 0;                       /* sleep in slices so a wind-down
                                                               is not stuck behind a long wait */
-                    while (slept < value && g_Running) { Sleep(value - slept > 100 ? 100 : value - slept);
-                                                     slept += 100; } }
+                    while (slept < value && g_Running) { Sleep(value - slept > SYNTHKEY_SLEEP_SLICE_MS ? SYNTHKEY_SLEEP_SLICE_MS : value - slept);
+                                                     slept += SYNTHKEY_SLEEP_SLICE_MS; } }
                   continue;
               }
               /* ── A MODIFIER HAS TO BE HELD, AND EVERY TOKEN HERE WAS A TAP. ──────
@@ -7306,7 +7306,7 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
                   INT isUp = (script[index] == 'u' || script[index] == 'U');
                   ++index;
                   if (index < bytesRead && (script[index] == 'e' || script[index] == 'E')) { extended = 1; ++index; }
-                  while (index < bytesRead && digits < 2) {
+                  while (index < bytesRead && digits < SYNTHKEY_HEX_DIGITS_MAX) {
                       CHAR character = script[index]; INT digit = -1;
                       if (character >= '0' && character <= '9') digit = character - '0';
                       else if (character >= 'a' && character <= 'f') digit = character - 'a' + 10;
@@ -7316,11 +7316,11 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
                   }
                   if (!digits) continue;
                   HostKeyScancode((BYTE)value, extended, isUp);
-                  Sleep(40);
+                  Sleep(SYNTHKEY_TAP_MS);
                   continue;
               }
               if (script[index] == 'e' || script[index] == 'E') { extended = 1; ++index; }
-              while (index < bytesRead && digits < 2) {               /* up to two hex digits */
+              while (index < bytesRead && digits < SYNTHKEY_HEX_DIGITS_MAX) {               /* up to two hex digits */
                   CHAR character = script[index]; INT digit = -1;
                   if (character >= '0' && character <= '9') digit = character - '0';
                   else if (character >= 'a' && character <= 'f') digit = character - 'a' + 10;
@@ -7330,15 +7330,15 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
               }
               if (!digits) { ++index; continue; }              /* skip a token we do not grok */
               HostKeyScancode((BYTE)value, extended, 0);
-              Sleep(60);                                    /* a human-length hold */
+              Sleep(SYNTHKEY_HOLD_MS);                                    /* a human-length hold */
               HostKeyScancode((BYTE)value, extended, 1);
-              Sleep(250);
+              Sleep(SYNTHKEY_GAP_MS);
           }
           return 0;
       } }
 
-    Sleep(9000);
-    for (round = 0; round < 400 && g_Running; ++round) {
+    Sleep(SYNTHKEY_MENU_DELAY_MS);
+    for (round = 0; round < SYNTHKEY_MENU_ROUNDS && g_Running; ++round) {
         /* An EXTENDED key (the arrows a player actually holds) at the OS auto-repeat rate,
            through exactly what WM_KEYDOWN does: E0 prefix + make code on the raw FIFO with
            an IRQ1 per byte, AND the BIOS ring entry that INT 16h returns. Feeding only the
@@ -7348,10 +7348,10 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
            the TOP item -- so a working UP arrow moves the highlight nowhere and a probe
            built on it cannot tell success from failure. DOWN has somewhere to go, and
            staying out of the game keeps the highlight on screen where a screenshot sees it. */
-        HostKeyScancode(0x50, 1, 0);                   /* INT 09h fills the BIOS ring now */
-        Sleep(250);                                      /* menu-paced taps, not a hold */
-        HostKeyScancode(0x50, 1, 1);                   /* release each time          */
-        Sleep(250);
+        HostKeyScancode(INPUT_SCANCODE_DOWN, 1, 0);                   /* INT 09h fills the BIOS ring now */
+        Sleep(SYNTHKEY_GAP_MS);                                      /* menu-paced taps, not a hold */
+        HostKeyScancode(INPUT_SCANCODE_DOWN, 1, 1);                   /* release each time          */
+        Sleep(SYNTHKEY_GAP_MS);
     }
     return 0;
 }
@@ -8005,13 +8005,13 @@ static VOID HostXms(volatile BYTE *tib)
         X_SETAX(g_Xms.IsA20Enabled ? 1 : 0); X_SETBL(0); break;
     case DOS_XMS_FN_QUERY_FREE:                                  /* query free extended memory */
         DosXmsQueryFreeMemory(&g_Xms, &largest, &totalFree);
-        X_SETAX(largest > 0xFFFF ? 0xFFFF : largest);
-        X_SETDX(totalFree > 0xFFFF ? 0xFFFF : totalFree);
+        X_SETAX(largest > MAXWORD ? MAXWORD : largest);
+        X_SETDX(totalFree > MAXWORD ? MAXWORD : totalFree);
         X_SETBL(largest ? 0 : DOS_XMS_ERROR_OUT_OF_MEMORY);
         /* #167: BH is undefined for 08h and the references disagree: stock NTVDM leaves
            it alone (p_xms: BX=B100 over the poison), 6.22's HIMEM writes AAh (BX=AA00).
            Settings > General > "behave like" picks which. */
-        if (g_BehaveDos622) X_SETBH(0xAA);
+        if (g_BehaveDos622) X_SETBH(DOS_XMS_HIMEM622_QUERY_BH);
         break;
     case DOS_XMS_FN_ALLOCATE:                                  /* allocate EMB: DX=KB */
         if (DosXmsAllocate(&g_Xms, VDM_REG16(tib, VTIB_EDX), &newHandle, &error)) { X_SETAX(1); X_SETDX(newHandle); }
@@ -8025,11 +8025,11 @@ static VOID HostXms(volatile BYTE *tib)
         DWORD ds = VDM_REG16(tib, VTIB_DS), si = VDM_REG16(tib, VTIB_ESI);
         const volatile BYTE *source = (const volatile BYTE *)((ds << PARAGRAPH_SHIFT) + si);
         DOS_XMS_MOVE move;
-        move.Length     = (DWORD)source[0] | ((DWORD)source[1] << BYTE_SHIFT) | ((DWORD)source[2] << WORD_SHIFT) | ((DWORD)source[3] << TOP_BYTE_SHIFT);
-        move.SourceHandle = (WORD)(source[4] | (source[5] << BYTE_SHIFT));
-        move.SourceOffset = (DWORD)source[6] | ((DWORD)source[7] << BYTE_SHIFT) | ((DWORD)source[8] << WORD_SHIFT) | ((DWORD)source[9] << TOP_BYTE_SHIFT);
-        move.DestinationHandle = (WORD)(source[10] | (source[11] << BYTE_SHIFT));
-        move.DestinationOffset = (DWORD)source[12] | ((DWORD)source[13] << BYTE_SHIFT) | ((DWORD)source[14] << WORD_SHIFT) | ((DWORD)source[15] << TOP_BYTE_SHIFT);
+        move.Length     = (DWORD)source[DOS_XMS_MOVE_LENGTH] | ((DWORD)source[DOS_XMS_MOVE_LENGTH + 1] << BYTE_SHIFT) | ((DWORD)source[DOS_XMS_MOVE_LENGTH + 2] << WORD_SHIFT) | ((DWORD)source[DOS_XMS_MOVE_LENGTH + 3] << TOP_BYTE_SHIFT);
+        move.SourceHandle = (WORD)(source[DOS_XMS_MOVE_SOURCE_HANDLE] | (source[DOS_XMS_MOVE_SOURCE_HANDLE + 1] << BYTE_SHIFT));
+        move.SourceOffset = (DWORD)source[DOS_XMS_MOVE_SOURCE_OFFSET] | ((DWORD)source[DOS_XMS_MOVE_SOURCE_OFFSET + 1] << BYTE_SHIFT) | ((DWORD)source[DOS_XMS_MOVE_SOURCE_OFFSET + 2] << WORD_SHIFT) | ((DWORD)source[DOS_XMS_MOVE_SOURCE_OFFSET + 3] << TOP_BYTE_SHIFT);
+        move.DestinationHandle = (WORD)(source[DOS_XMS_MOVE_DESTINATION_HANDLE] | (source[DOS_XMS_MOVE_DESTINATION_HANDLE + 1] << BYTE_SHIFT));
+        move.DestinationOffset = (DWORD)source[DOS_XMS_MOVE_DESTINATION_OFFSET] | ((DWORD)source[DOS_XMS_MOVE_DESTINATION_OFFSET + 1] << BYTE_SHIFT) | ((DWORD)source[DOS_XMS_MOVE_DESTINATION_OFFSET + 2] << WORD_SHIFT) | ((DWORD)source[DOS_XMS_MOVE_DESTINATION_OFFSET + 3] << TOP_BYTE_SHIFT);
         if (DosXmsMove(&g_Xms, NULL, &move, &error)) X_SETAX(1); else X_FAIL(error);
         break; }
     case DOS_XMS_FN_LOCK:                                  /* lock EMB: DX=handle -> DX:BX linear */
@@ -8044,7 +8044,7 @@ static VOID HostXms(volatile BYTE *tib)
     case DOS_XMS_FN_GET_HANDLE_INFO:                                  /* get handle info: DX=handle */
         handle = (WORD)VDM_REG16(tib, VTIB_EDX);
         if (DosXmsGetHandleInformation(&g_Xms, handle, &lock, &freeHandles, &sizeKb, &error)) {
-            X_SETAX(1); X_SETBH(lock); X_SETBL(freeHandles); X_SETDX(sizeKb > 0xFFFF ? 0xFFFF : sizeKb);
+            X_SETAX(1); X_SETBH(lock); X_SETBL(freeHandles); X_SETDX(sizeKb > MAXWORD ? MAXWORD : sizeKb);
         } else X_FAIL(error);
         break;
     case DOS_XMS_FN_REALLOCATE:                                  /* reallocate EMB: BX=new KB, DX=handle */
@@ -8052,8 +8052,8 @@ static VOID HostXms(volatile BYTE *tib)
         if (DosXmsReallocate(&g_Xms, handle, VDM_REG16(tib, VTIB_EBX), &error)) X_SETAX(1);
         else X_FAIL(error);
         break;
-    case DOS_XMS_FN_REQUEST_UMB: X_SETAX(0); X_SETBL(0xB1); X_SETDX(0); break;  /* request UMB: none */
-    case DOS_XMS_FN_RELEASE_UMB: X_FAIL(0xB2); break;                          /* release UMB */
+    case DOS_XMS_FN_REQUEST_UMB: X_SETAX(0); X_SETBL(DOS_XMS_ERROR_NO_UMB); X_SETDX(0); break;  /* request UMB: none */
+    case DOS_XMS_FN_RELEASE_UMB: X_FAIL(DOS_XMS_ERROR_INVALID_UMB); break;                          /* release UMB */
     default:   X_FAIL(DOS_XMS_ERROR_NOT_IMPLEMENTED); break;
     }
     #undef X_SETAX
@@ -11806,7 +11806,7 @@ static VOID HostFullscreenToggleRestore(HWND window)
     DrawMenuBar(window);
     InvalidateRect(window, NULL, TRUE);
 }
-
+#define JOYSTICK_ABSENT_POLL_MS  250   /* no joystick configured: look again this often */
 static VOID HostFullscreenToggle(HWND window);
 static VOID HostFullscreenToggle(HWND window)
 {
@@ -11894,7 +11894,7 @@ static VOID HostFullscreenToggle(HWND window)
         LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
     }
 }
-
+#define JOYSTICK_API_RETRY_MS    1000  /* winmm has no joyGetPosEx: try again         */
 /* ── SETTINGS: THE STORE, AND WHAT APPLYING THEM MEANS. ──────────────────────────
      g_Settings is the live copy, and the three SettingsApply* functions below are
      deliberately the ONLY places a setting reaches the machine, so "what does this
@@ -11949,7 +11949,7 @@ static UINT64 JoystickNowMicroseconds(PVOID context)
     QueryPerformanceCounter(&now);
     return QpcMicroseconds64(now.QuadPart);
 }
-
+#define JOYSTICK_POLL_MS         15
 /* joyGetPosEx costs a driver round-trip, so it must NEVER run inside the port
    trap -- the guest polls 0x201 in a tight CLI loop precisely while measuring an
    axis. This thread samples at ~66 Hz into g_Joystick and the trap reads only the
@@ -11969,39 +11969,39 @@ static DWORD WINAPI JoystickPollThread(LPVOID param)
          pacer (g_PitPacePriority = NORMAL) and the exec thread always win. */
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     for (;;) {
-        if (g_Joystick.Type == JOYSTICK_TYPE_NONE) { g_Joystick.IsPresent = 0; Sleep(250); continue; }
+        if (g_Joystick.Type == JOYSTICK_TYPE_NONE) { g_Joystick.IsPresent = 0; Sleep(JOYSTICK_ABSENT_POLL_MS); continue; }
         if (!getPositionEx) {
             if (!module) module = LoadLibraryA("winmm.dll");
             getPositionEx = module ? (PFN_JOY_GET_POS_EX)GetProcAddress(module, "joyGetPosEx") : NULL;
-            if (!getPositionEx) { g_Joystick.IsPresent = 0; Sleep(1000); continue; }
+            if (!getPositionEx) { g_Joystick.IsPresent = 0; Sleep(JOYSTICK_API_RETRY_MS); continue; }
         }
-        {   JOYINFOEX info; UINT axes[4]; INT index;
+        {   JOYINFOEX info; UINT axes[JOYSTICK_AXES]; INT index;
             info.dwSize = sizeof info;
-            info.dwFlags = 0xFFu;                    /* JOY_RETURNALL: X Y Z R U V POV buttons */
+            info.dwFlags = JOY_RETURNALL;                    /* JOY_RETURNALL: X Y Z R U V POV buttons */
             if (getPositionEx(0, &info) == 0) {            /* JOYSTICKID1, JOYERR_NOERROR */
                 /* winmm's view of a 360 pad on XP: X/Y = left stick, U/R = right
                    stick, Z = triggers (unused here), POV = the D-pad. */
                 axes[0] = (info.dwXpos >> BYTE_SHIFT) & BYTE_MASK; axes[1] = (info.dwYpos >> BYTE_SHIFT) & BYTE_MASK;
                 axes[2] = (info.dwUpos >> BYTE_SHIFT) & BYTE_MASK; axes[3] = (info.dwRpos >> BYTE_SHIFT) & BYTE_MASK;
-                if (g_JoystickPovMap && info.dwPOV < 36000) {
+                if (g_JoystickPovMap && info.dwPOV < JOYSTICK_POV_FULL_CIRCLE) {
                     /* Hundredths of a degree, 0 = up. Snap the eight sectors
                        onto axis A extremes -- a DOS platformer reads digital
                        directions out of the analog port, and a held D-pad must
                        pin the axis, not average with a centred stick. */
-                    INT povOctant = (INT)(((info.dwPOV + 2250u) / 4500u) & 7u);
-                    if (povOctant == 7 || povOctant == 0 || povOctant == 1) axes[1] = 0;
-                    if (povOctant >= 3 && povOctant <= 5)             axes[1] = 255;
-                    if (povOctant >= 1 && povOctant <= 3)             axes[0] = 255;
-                    if (povOctant >= 5 && povOctant <= 7)             axes[0] = 0;
+                    INT povOctant = (INT)(((info.dwPOV + JOYSTICK_POV_OCTANT_U / 2) / JOYSTICK_POV_OCTANT_U) & JOYSTICK_POV_OCTANT_MASK);
+                    if (povOctant == JOYSTICK_POV_NORTH_WEST || povOctant == JOYSTICK_POV_NORTH || povOctant == JOYSTICK_POV_NORTH_EAST) axes[1] = JOYSTICK_AXIS_MIN;
+                    if (povOctant >= JOYSTICK_POV_SOUTH_EAST && povOctant <= JOYSTICK_POV_SOUTH_WEST) axes[1] = JOYSTICK_AXIS_MAX;
+                    if (povOctant >= JOYSTICK_POV_NORTH_EAST && povOctant <= JOYSTICK_POV_SOUTH_EAST) axes[0] = JOYSTICK_AXIS_MAX;
+                    if (povOctant >= JOYSTICK_POV_SOUTH_WEST && povOctant <= JOYSTICK_POV_NORTH_WEST) axes[0] = JOYSTICK_AXIS_MIN;
                 }
-                for (index = 0; index < 4; ++index) g_Joystick.Axis[index] = (BYTE)axes[index];
-                g_Joystick.Buttons = (BYTE)(info.dwButtons & 0x0F);
+                for (index = 0; index < JOYSTICK_AXES; ++index) g_Joystick.Axis[index] = (BYTE)axes[index];
+                g_Joystick.Buttons = (BYTE)(info.dwButtons & JOYSTICK_BUTTON_MASK);
                 g_Joystick.IsPresent = 1;
             } else {
                 g_Joystick.IsPresent = 0;                 /* unplugged mid-run is fine */
             }
         }
-        Sleep(15);
+        Sleep(JOYSTICK_POLL_MS);
     }
 }
 

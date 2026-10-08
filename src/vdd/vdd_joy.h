@@ -42,6 +42,19 @@ enum { JOYSTICK_TYPE_NONE = 0, JOYSTICK_TYPE_2AXIS = 1, JOYSTICK_TYPE_4AXIS = 2 
 #define JOYSTICK_4AXIS_WIRED    4
 #define JOYSTICK_NONE_WIRED     0
 #define JOYSTICK_DEVICE_NAME    "joystick"
+#define JOYSTICK_AXIS_MIN       0
+#define JOYSTICK_AXIS_MAX       255
+#define JOYSTICK_BUTTON_MASK    0x0F   /* four buttons                                 */
+/* A POV hat, in hundredths of a degree: below 36000 it points, in eight octants from north. */
+#define JOYSTICK_POV_FULL_CIRCLE 36000
+#define JOYSTICK_POV_OCTANT_U    4500u
+#define JOYSTICK_POV_OCTANT_MASK 7u
+#define JOYSTICK_POV_NORTH       0
+#define JOYSTICK_POV_NORTH_EAST  1
+#define JOYSTICK_POV_SOUTH_EAST  3
+#define JOYSTICK_POV_SOUTH       4
+#define JOYSTICK_POV_SOUTH_WEST  5
+#define JOYSTICK_POV_NORTH_WEST  7
 
 typedef struct _JOYSTICK_STATE {
     PVDD_BUS     Bus;

@@ -40,6 +40,7 @@
 #define INPUT_PORT_LOG_ENTRIES 16
 #define INPUT_PORT_LOG_FIELDS  2         /* (port low byte, value)                */
 #define INPUT_ACTION_KINDS     6
+#define INPUT_SCANCODE_DOWN    0x50     /* the cursor-down key's make code           */
 #define INPUT_DEVICE_NAME      "input"
 #define INPUT_HOST_KEY_BYTES_MAX 6         /* VddInputHostKeyBytes: the Pause sequence    */
 
