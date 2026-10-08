@@ -66,6 +66,8 @@
      in s84 logs: 0007h on 0x2ef, 0xc97, 0xcaf ... none of which we handed out. There the
      allocation record is the guest's, not ours, and refusing would kill Win16 -- so in
      that mode only the range is checked. (`isGuestOwnedTable` = the shadow exists.) */
+/* A PM INT n site is patched to a 2-byte BOP over its `CD nn`, so servicing one steps EIP by 2. */
+#define DPMI_PM_BOP_LENGTH        2
 #define DPMI_SELECTOR_TI          4    /* the table indicator: 1 = the LDT         */
 #define DPMI_SELECTOR_RPL_USER    3    /* requested privilege level 3: a client's  */
 #define DPMI_SELECTOR_INDEX_SHIFT 3

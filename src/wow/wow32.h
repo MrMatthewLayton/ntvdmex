@@ -104,7 +104,6 @@
 
 /* The BOP is `C4 C4 51`. Resuming the guest anywhere but past all three bytes
    restarts it mid-instruction. */
-#define WOW32_BOP_LEN   3
 
 typedef DWORD (*PWOW32_SELECTOR_TO_LINEAR)(WORD selector, PVOID context);
 

@@ -174,6 +174,8 @@
    BOP, so every INT 21h surfaces to the host. */
 #define VDM_BOP0 0xC4
 #define VDM_BOP1 0xC4
+#define VDM_BOP_LENGTH              3   /* C4 C4 nn                                 */
+#define VDM_BOP_SUBFUNCTION_LENGTH  4   /* C4 C4 nn sub                             */
 
 /* EFLAGS. The plain names are `int` literals, the _U names `unsigned` (see ntvdmex_bits.h). */
 #define EFLAGS_CF           0x0001

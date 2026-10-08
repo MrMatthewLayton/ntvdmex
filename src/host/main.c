@@ -2279,7 +2279,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     if (depth >= EXEC_MAX_DEPTH) {
         cursor = LogPut(cursor, "  EXEC: nesting limit reached\r\n");
         VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & HIGH_WORD_MASK_U) | 8;
-        *flagsPointer |= EFLAGS_CF; VDM_REG(tib, VTIB_EIP) += 3;
+        *flagsPointer |= EFLAGS_CF; VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         return cursor;
     }
     fileHandle = CreateFileA(machine->ExecPath, GENERIC_READ, FILE_SHARE_READ, NULL,
@@ -2287,7 +2287,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     if (fileHandle == INVALID_HANDLE_VALUE) {
         cursor = LogPut(cursor, "  EXEC: file not found\r\n");
         VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & HIGH_WORD_MASK_U) | 2;
-        *flagsPointer |= EFLAGS_CF; VDM_REG(tib, VTIB_EIP) += 3;
+        *flagsPointer |= EFLAGS_CF; VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         return cursor;
     }
     ReadFile(fileHandle, g_ExecFileBuffer, sizeof(g_ExecFileBuffer), &bytesRead, NULL);
@@ -2301,7 +2301,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
         INT kind = DosExeKind(g_ExecFileBuffer, bytesRead, &subsystem);
         if (kind != DOS_EXE_DOS && ExecWindows(machine, kind, subsystem, &cursor)) {
             VDM_REG(tib, VTIB_EAX) &= HIGH_WORD_MASK_U;
-            *flagsPointer &= (WORD)~EFLAGS_CF; VDM_REG(tib, VTIB_EIP) += 3;
+            *flagsPointer &= (WORD)~EFLAGS_CF; VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
             return cursor;
         }
     }
@@ -2320,7 +2320,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
         cursor = LogPut(cursor, " bytes=0x"); cursor = LogHex(cursor, count); cursor = LogPut(cursor, "\r\n");
         VDM_REG(tib, VTIB_EAX) &= HIGH_WORD_MASK_U;
         *flagsPointer &= (WORD)~EFLAGS_CF;
-        VDM_REG(tib, VTIB_EIP) += 3;
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         return cursor;
     }
 
@@ -2382,7 +2382,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
         if (DosMcbAllocate(NULL, machine->FirstMcb, (WORD)((total + PARAGRAPH_LAST_BYTE) >> PARAGRAPH_SHIFT), &environmentBlock, &maximumParagraphs) != 0) {
             cursor = LogPut(cursor, "  EXEC: no memory for the environment copy\r\n");
             VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & HIGH_WORD_MASK_U) | 8;
-            *flagsPointer |= EFLAGS_CF; VDM_REG(tib, VTIB_EIP) += 3;
+            *flagsPointer |= EFLAGS_CF; VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
             return cursor;
         }
         childEnvironment = (volatile BYTE *)((DWORD)environmentBlock << PARAGRAPH_SHIFT);
@@ -2415,7 +2415,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
         cursor = LogPut(cursor, "  EXEC: no memory\r\n");
         if (environmentBlock) DosMcbFree(NULL, environmentBlock);
         VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & HIGH_WORD_MASK_U) | 8;
-        *flagsPointer |= EFLAGS_CF; VDM_REG(tib, VTIB_EIP) += 3;
+        *flagsPointer |= EFLAGS_CF; VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         return cursor;
     }
     /* The env block belongs to the child, as DOS records it (MCB owner = its PSP). */
@@ -2517,7 +2517,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
            leaves it alone. We kept the loader's. */
         machine->PspSegment = child;
         VDM_REG(tib, VTIB_EAX) &= HIGH_WORD_MASK_U;
-        *flagsPointer &= (WORD)~EFLAGS_CF; VDM_REG(tib, VTIB_EIP) += 3;
+        *flagsPointer &= (WORD)~EFLAGS_CF; VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         return cursor;
     }
 
@@ -2675,14 +2675,14 @@ static INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCur
         *flagsPointer &= (WORD)~EFLAGS_CF_U;
         *logCursor = LogPut(*logCursor, "  INT24 IGNORE: the call reports 0x"); *logCursor = LogHex(*logCursor, ignoreCount);
         *logCursor = LogPut(*logCursor, " bytes, CF=0\r\n");
-        VDM_REG(tib, VTIB_EIP) += 3;                     /* past the BOP -> the IRET */
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;                     /* past the BOP -> the IRET */
         return 0;
     }
     /* FAIL (and an IGNORE with no handle left to ignore on): the call returns an error. */
     VDM_SET16(tib, VTIB_EAX, DosCritFailAx(g_Critical.Function, machine->CritCode));
     *flagsPointer |= EFLAGS_CF;
     machine->LastError = DOS_ERR_FAIL_I24;
-    VDM_REG(tib, VTIB_EIP) += 3;                         /* past the BOP -> the IRET */
+    VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;                         /* past the BOP -> the IRET */
     return 0;
 }
 
@@ -4754,7 +4754,7 @@ static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR b
                 + ((VDM_REG16(tib, VTIB_ESP) + 4) & WORD_MASK));
         *flagsPointer &= (WORD)~EFLAGS_CF;
         VDM_REG(tib, VTIB_EAX) &= HIGH_WORD_MASK_U;
-        VDM_REG(tib, VTIB_EIP) += 3;        /* past the BOP -> the IRET */
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;        /* past the BOP -> the IRET */
         machine->ExitCode = 0;
         *logCursor = LogPut(*logCursor, "  EXEC: child exited rc=0x"); *logCursor = LogHexByte(*logCursor, machine->ChildReturnCode);
         *logCursor = LogPut(*logCursor, ", parent resumed (depth="); *logCursor = LogHexByte(*logCursor, (UINT)g_ExecDepth);
@@ -4762,7 +4762,7 @@ static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR b
         LogAppend(LOG_PATH, base, *logCursor); *logCursor = base;
         return 1;                    /* the parent is back: carry on */
     }
-    VDM_REG(tib, VTIB_EIP) += 3;
+    VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
     LogAppend(LOG_PATH, base, *logCursor); *logCursor = base;
     return 0;                        /* top-level program: the run is over */
 }
@@ -9686,7 +9686,7 @@ static VOID MouseCallbackReturn(volatile BYTE *tib)
 {
     if (!g_MouseCallbackActive) {                         /* not ours to unwind: step over  */
         CHAR lineBuffer[160], *lineCursor = lineBuffer;
-        ++g_MouseCallbackStray; VDM_REG(tib, VTIB_EIP) += 3;
+        ++g_MouseCallbackStray; VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         lineCursor = LogPut(lineCursor, "MOUSECB STRAY return, nothing in flight: ss:sp=0x");
         lineCursor = LogHex(lineCursor, VDM_REG16(tib, VTIB_SS)); lineCursor = LogPut(lineCursor, ":0x");
         lineCursor = LogHex(lineCursor, VDM_REG16(tib, VTIB_ESP)); lineCursor = LogPut(lineCursor, "\r\n");
@@ -21979,7 +21979,7 @@ static INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vec
         if (rev == VDM_EVENT_BOP && info == DPMI_RMRET_BOP) { done = 1; break; }
         if (rev == VDM_EVENT_BOP && info == 0x20) {             /* INT 21h from the ISR */
             CHAR dropBuffer[2048]; machine->TraceCursor = dropBuffer; DosInt21(machine);        /* its log text is dropped */
-            VDM_REG(tib, VTIB_EIP) += 3;
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
             continue;
         }
         if (rev == VDM_EVENT_BOP && info == DPMI_CB_BOP) {      /* the ISR far-called a 0303 callback */
@@ -22875,7 +22875,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                 VDM_SET16(tib, VTIB_EBX, 0);
                 VDM_SET16(tib, VTIB_EDX, 0);
                 VDM_SET16(tib, VTIB_ES,  0);
-                VDM_REG(tib, VTIB_EIP) += 4;
+                VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
                 cursor = LogPut(cursor, " -> no 32-bit companion (BX:DX=0) => it will use the "
                             "per-call BOP path\r\n");
                 WowLogFlush(base, &cursor);
@@ -23054,7 +23054,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              own task a third time. It is VERIFIED at (C) below against
                              the value krnl386 itself writes, and a mismatch is loud. */
                         if (!taskInstance) taskInstance = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFE);
-                        WowSchedSave(&g_WowSchedSlots[freedSlotIndex], tib, modeLinear, current, WOW32_BOP_LEN);
+                        WowSchedSave(&g_WowSchedSlots[freedSlotIndex], tib, modeLinear, current, VDM_BOP_LENGTH);
                         g_WowSchedSlots[freedSlotIndex].IsFresh = 1;          /* s92: not run yet (#306) */
                         g_WowSchedLaunchChild = current;            /* the parent is the next caller */
                         WowTaskDirectoryHere(current);             /* #164: its launch directory */
@@ -23069,7 +23069,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                                               " resume)");
                         cursor = LogPut(cursor, "\r\n");
                         WowLogFlush(base, &cursor);
-                        VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
                         return 1;
                     }
                     /* ── (D) ★★★ A TASK ASKS TO WAIT FOR A MESSAGE. THAT IS THE
@@ -23113,7 +23113,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         Wow32PokeWord(frame.FrameBase + WOW32_OFF_MODE, WOW32_MODE_ORDINARY);
                         INT isTopLevel = WowSchedTopLevel(&g_WowSchedSlots[freedSlotIndex]);
                         WowSchedPoke(g_WowSchedSlots[freedSlotIndex].ModeLinear, WOW32_MODE_ORDINARY);
-                        WowSchedSwap(&g_WowSchedSlots[freedSlotIndex], tib, modeLinear, current, WOW32_BOP_LEN);
+                        WowSchedSwap(&g_WowSchedSlots[freedSlotIndex], tib, modeLinear, current, VDM_BOP_LENGTH);
                         if (isTopLevel) g_WowSchedCurrentBase = g_WowCallDepth;
                         WowSchedSetCurrent(toTask);
                         WowTaskChdir(toTask, &cursor);           /* #164 */
@@ -23147,7 +23147,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     Wow32SetReturn(&frame, 0);
                     ++g_Wow32Serviced;
                     ++g_WowIdleWaits;
-                    VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                    VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
                     if (g_WowIdleWaits <= 4) {
                         cursor = LogPut(cursor, " -> SERVICED: idle wait (no parked task to yield to),"
                                     " answered 0 after up to 50 ms\r\n");
@@ -23208,7 +23208,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                               cursor = LogPut(cursor, " -> FAILED (bad handle/selector/buffer)"); }
                     cursor = LogPut(cursor, "\r\n");
                     WowLogFlush(base, &cursor);
-                    VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                    VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
                     return 1;
                 }
                 if (frame.IsKernel && frame.Id == WOW32_GETCURDIR && g_PmTransferSegment) {
@@ -23246,7 +23246,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         cursor = LogPut(cursor, "\r\n");
                     }
                     ++g_Wow32Serviced;
-                    VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                    VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
                     cursor = LogPut(cursor, " -> SERVICED (DOS-backed), returned 0x");
                     cursor = LogHex(cursor, frame.Result); cursor = LogPut(cursor, "\r\n");
                     WowLogFlush(base, &cursor);
@@ -23329,7 +23329,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     }
                     cursor = LogPut(cursor, "\r\n");
                     ++g_Wow32Serviced;
-                    VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                    VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
                     cursor = LogPut(cursor, " -> SERVICED (host path search), returned 0x");
                     cursor = LogHex(cursor, frame.Result); cursor = LogPut(cursor, "\r\n");
                     WowLogFlush(base, &cursor);
@@ -23483,7 +23483,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             if (selector) {
                                 Wow32SetReturn(&frame, selector);
                                 ++g_Wow32Serviced;
-                                VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                                VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
                                 cursor = LogPut(cursor, "\r\n -> SERVICED (task environment),"
                                             " returned 0x");
                                 cursor = LogHex(cursor, frame.Result); cursor = LogPut(cursor, "\r\n");
@@ -23718,7 +23718,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     }
                     if (WowUserCall(&frame, note, sizeof note)) {
                         ++g_Wow32Serviced;
-                        VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
                         cursor = LogPut(cursor, " -> SERVICED (USER), returned 0x");
                         cursor = LogHex(cursor, frame.Result);
                         if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
@@ -23901,7 +23901,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     }
                     if (WowShellCall(&frame, note, sizeof note)) {
                         ++g_Wow32Serviced;
-                        VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
                         cursor = LogPut(cursor, " -> SERVICED (SHELL), returned 0x");
                         cursor = LogHex(cursor, frame.Result);
                         if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
@@ -23942,7 +23942,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     }
                     if (WowCommdlgCall(&frame, note, sizeof note)) {
                         ++g_Wow32Serviced;
-                        VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
                         cursor = LogPut(cursor, " -> SERVICED (COMMDLG), returned 0x");
                         cursor = LogHex(cursor, frame.Result);
                         if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
@@ -23968,7 +23968,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     CHAR note[320];
                     if (WowKeyboardCall(&frame, note, sizeof note)) {
                         ++g_Wow32Serviced;
-                        VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
                         cursor = LogPut(cursor, " -> SERVICED (KEYBOARD), returned 0x");
                         cursor = LogHex(cursor, frame.Result);
                         if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
@@ -23994,7 +23994,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     CHAR note[320];
                     if (WowGdiCall(&frame, note, sizeof note)) {
                         ++g_Wow32Serviced;
-                        VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
                         cursor = LogPut(cursor, " -> SERVICED (GDI), returned 0x");
                         cursor = LogHex(cursor, frame.Result);
                         if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
@@ -24034,7 +24034,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     CHAR note[160];
                     if (WowSoundCall(&frame, note, sizeof note)) {
                         ++g_Wow32Serviced;
-                        VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
                         cursor = LogPut(cursor, " -> SERVICED (SOUND), returned 0x");
                         cursor = LogHex(cursor, frame.Result);
                         if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
@@ -24060,7 +24060,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     CHAR note[200];
                     if (WowMultimediaCall(&frame, note, sizeof note)) {
                         ++g_Wow32Serviced;
-                        VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
                         cursor = LogPut(cursor, " -> SERVICED (MMSYSTEM), returned 0x");
                         cursor = LogHex(cursor, frame.Result);
                         if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
@@ -24082,7 +24082,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     INT isDeclined = (frame.Result == WOW32_DECLINE
                                 && Wow32MayDecline(frame.Id, frame.CallSite));
                     if (isDeclined) ++g_Wow32Declined; else ++g_Wow32Serviced;
-                    VDM_REG(tib, VTIB_EIP) += WOW32_BOP_LEN;
+                    VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
                     cursor = LogPut(cursor, isDeclined ? " -> DECLINED (krnl386 will chain to real"
                                        " DOS) 0x" : " -> SERVICED, returned 0x");
                     cursor = LogHex(cursor, frame.Result);
@@ -24129,7 +24129,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                  the registers. Findings that depend on execution AFTER an unimplemented
                  BOP are suspect, and the log is what lets a reader tell. All the
                  non-0x53 sites are 3 bytes -- see the length note above. */
-            VDM_REG(tib, VTIB_EIP) += 3;
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
             cursor = LogPut(cursor, " -> UNIMPLEMENTED, STEPPED OVER (the call did NOT happen)");
             /* ⚠ BUT IT IS STILL ANSWERED, because krnl386 pops the hole into AX:DX and
                  BRANCHES on it whether we wrote it or not. Print BOTH numbers: what was
@@ -24255,7 +24255,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;          /* success */
                             cursor = LogPut(cursor, "\r\n");
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += 2;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
                         }
                     }
@@ -24426,7 +24426,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         RegistersStore(&registers, tib);
                         VideoTrapSync();          /* mode 12h: interpret (GH #55); no-op in 13h */
                         VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                        VDM_REG(tib, VTIB_EIP) += 2;              /* past the 2-byte PM BOP */
+                        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;              /* past the 2-byte PM BOP */
                         cursor = LogPut(cursor, "INT10h (PM) -> video VDD AX=0x"); cursor = LogHex(cursor, ax);
                         cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                         return 1;
@@ -24445,13 +24445,13 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         /* set CF/ZF directly in the PM eflags (no real-mode IRET frame in PM) */
                         if (registers.CarryFlag) VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;    else VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
                         if (registers.ZeroFlag) VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_ZF_U; else VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_ZF_U;
-                        VDM_REG(tib, VTIB_EIP) += 2;               /* past the 2-byte PM BOP */
+                        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;               /* past the 2-byte PM BOP */
                         (VOID)base;                                 /* no per-poll logging (would flood) */
                         return 1;
                     }
                     if (vector == VECTOR_MOUSE) {                             /* mouse in PM -> INT 33h */
                         MouseInt33(tib, I33_SRC_PM);
-                        VDM_REG(tib, VTIB_EIP) += 2;
+                        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                         return 1;
                     }
                     if (vector == VECTOR_TIME || vector == VECTOR_TIMER) {              /* BIOS time / timer tick in PM */
@@ -24463,7 +24463,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         if (vector == VECTOR_TIMER) VddPicEndOfInterrupt(&g_Pic, 0);
                         HOST_UNLOCK();
                         RegistersStore(&registers, tib);
-                        VDM_REG(tib, VTIB_EIP) += 2;
+                        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                         return 1;
                     }
                     /* ── ★★★ THE DEFAULT HANDLER FOR A HARDWARE IRQ REFLECTS IT TO REAL
@@ -24512,7 +24512,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                         }
                         ++g_PmIrqReflects;
-                        VDM_REG(tib, VTIB_EIP) += 2;               /* past the BOP -> the stub's IRET */
+                        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;               /* past the BOP -> the stub's IRET */
                         return 1;
                     }
                     /* ...and when the GUEST owns the real-mode vector, run its ISR there.
@@ -24526,7 +24526,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 cursor = LogPut(cursor, "\r\n");
                                 LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                             }
-                            VDM_REG(tib, VTIB_EIP) += 2;           /* past the BOP -> the stub's IRET */
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;           /* past the BOP -> the stub's IRET */
                             return 1;
                         }
                     }
@@ -24541,7 +24541,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         cursor = LogPut(cursor, "INT11h(PM) equipment -> 0x"); cursor = LogHex(cursor, equipmentWord);
                         cursor = LogPut(cursor, "\r\n");
                         LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                        VDM_REG(tib, VTIB_EIP) += 2;
+                        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                         return 1;
                     }
                     if (vector == VECTOR_SYSTEM) {                             /* BIOS misc/system, in PM */
@@ -24687,7 +24687,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                           cursor = LogPut(cursor, " cf="); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_CF_U);
                           cursor = LogPut(cursor, "\r\n");
                           LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
-                        VDM_REG(tib, VTIB_EIP) += 2;
+                        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                         return 1;
                     }
                     if (vector == VECTOR_KERNEL_DEBUGGER) {                             /* Windows kernel debugger */
@@ -24706,7 +24706,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         cursor = LogPut(cursor, "INT41h(PM) kernel-debugger AX=0x"); cursor = LogHex(cursor, ax);
                         cursor = LogPut(cursor, " -> no debugger (registers untouched)\r\n");
                         LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                        VDM_REG(tib, VTIB_EIP) += 2;
+                        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                         return 1;
                     }
                     if (vector == VECTOR_MULTIPLEX) {                             /* INT 2Fh, from PM */
@@ -24773,7 +24773,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         }
                         cursor = LogPut(cursor, "\r\n");
                         LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                        VDM_REG(tib, VTIB_EIP) += 2;               /* past the BOP */
+                        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;               /* past the BOP */
                         return 1;
                     }
                     if (vector == VECTOR_DPMI) {                             /* DPMI INT 31h */
@@ -26289,7 +26289,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                         VDM_REG(tib, VTIB_EIP) = m.Trampoline;    /* served below    */
                                         m.Trampoline = 0;
                                     } else
-                                    VDM_REG(tib, VTIB_EIP) += 3;    /* past the BOP -> the stub IRET */
+                                    VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;    /* past the BOP -> the stub IRET */
                                     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                                     continue;
                                 }
@@ -26424,7 +26424,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         }
                         cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                         if (needScan) DpmiScanCodeBlocks();
-                        VDM_REG(tib, VTIB_EIP) += 2;               /* past the 2-byte INT */
+                        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;               /* past the 2-byte INT */
                         return 1;
                     }
                     if (vector == VECTOR_DOS) {                             /* DOS INT 21h (in PM) */
@@ -26464,7 +26464,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             outputCursor = LogPut(outputCursor, "\"\r\n");
                             LogAppend(LOG_PATH, outputLine, outputCursor); SerialOut(outputLine, outputCursor);
                             VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                            VDM_REG(tib, VTIB_EIP) += 2;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
                         }
                         if (ah == DOS_FN_CHAR_OUTPUT) {                          /* print char DL */
@@ -26478,7 +26478,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 else m.IsOutputTruncated = 1;
                             }
                             VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                            VDM_REG(tib, VTIB_EIP) += 2;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
                         }
                         if (ah == DOS_FN_WRITE) {                          /* write BX=handle CX=cnt DS:DX=buf */
@@ -26525,7 +26525,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 cursor = LogPut(cursor, "INT21h AH=40 file write "); cursor = LogHex(cursor, bytesWritten); cursor = LogPut(cursor, "b\r\n");
                                 LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                             } else { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, 6); }
-                            VDM_REG(tib, VTIB_EIP) += 2;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
                         }
                         /* ── ★★★ AND 5Bh, "CREATE NEW", WHICH IS HOW A GUEST MAKES A
@@ -26610,7 +26610,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             cursor = LogPut(cursor, " CF="); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_CF_U);
                             if (lastError) { cursor = LogPut(cursor, " FAILED gle="); cursor = LogHex(cursor, lastError); }
                             cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += 2; return 1;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH; return 1;
                         }
                         if (ah == DOS_FN_CLOSE) {                          /* close: BX=handle */
                             DWORD handle = VDM_REG16(tib, VTIB_EBX);
@@ -26624,7 +26624,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             cursor = LogPut(cursor, "INT21h AH=3E close h=0x"); cursor = LogHex(cursor, handle);
                             cursor = LogPut(cursor, wasOpen ? " (was open)\r\n" : " (was NOT open)\r\n");
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += 2; return 1;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH; return 1;
                         }
                         if (ah == DOS_FN_READ) {                          /* read: BX=handle CX=cnt -> DS:DX */
                             DWORD handle = VDM_REG16(tib, VTIB_EBX), count = VDM_REG16(tib, VTIB_ECX), bytesRead = 0;
@@ -26672,7 +26672,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             else                           cursor = LogPut(cursor, "-");
                             cursor = LogPut(cursor, "\r\n");
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += 2; return 1;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH; return 1;
                         }
                         if (ah == DOS_FN_SEEK) {                          /* lseek: AL=org BX=h CX:DX=off */
                             DWORD handle = VDM_REG16(tib, VTIB_EBX), seekMethod = ax & BYTE_MASK;
@@ -26694,7 +26694,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                  other file arm here prints; this one did not. */
                             cursor = LogPut(cursor, "\r\n");
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += 2; return 1;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH; return 1;
                         }
                         /* ── REGISTER-ONLY INT 21h: DELEGATE TO THE V86 DOS IMPLEMENTATION ──
                            DosInt21() reads and writes the same VDM_TIB register fields the PM
@@ -26784,7 +26784,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             }
                             cursor = LogPut(cursor, "\r\n");
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += 2;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
                         }
                         if (ah == DOS_FN_FREE) {
@@ -26824,7 +26824,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             }
                             cursor = LogPut(cursor, "\r\n");
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += 2;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
                         }
                         if (ah == DOS_FN_SET_VECTOR || ah == DOS_FN_GET_VECTOR) {
@@ -26872,7 +26872,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
                             cursor = LogPut(cursor, "\r\n");
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += 2;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
                         }
                         if (ah == DOS_FN_RESIZE) {
@@ -26922,7 +26922,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             }
                             cursor = LogPut(cursor, "\r\n");
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += 2;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
                         }
                         /* AH=44h IOCTL: only the register-only subfunctions. AL=00 (get
@@ -26974,7 +26974,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                             " (no LFN API for this client)\r\n");
                             }
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += 2;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
                         }
                         if (g_PmTransferSegment && (ah == DOS_FN_OPEN || ah == DOS_FN_READ || ah == DOS_FN_WRITE ||
@@ -26982,7 +26982,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                               ah == DOS_FN_MKDIR || ah == DOS_FN_RMDIR || ah == DOS_FN_CHDIR)) {
                             m.TraceCursor = cursor; cursor = PmInt21Transfer(&m, tib, ah, cursor);
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += 2;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
                         }
                         /* AH=34h hands back a FAR POINTER to the InDOS flag. In V86 that is
@@ -27014,7 +27014,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             } else cursor = LogPut(cursor, " -> NO DESCRIPTOR AVAILABLE (left as a segment)");
                             cursor = LogPut(cursor, "\r\n");
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += 2;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
                         }
                         /* 0Eh select disk, 3Eh close, 42h seek, 45h dup, 46h dup2, 57h
@@ -27051,7 +27051,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             cursor = LogPut(cursor, " CF="); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_CF_U);
                             cursor = LogPut(cursor, "\r\n");
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += 2;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
                         }
                         /* ── ★★★★ AH=55h / 26h: CREATE A PSP, IN PROTECTED MODE. ────────
@@ -27124,7 +27124,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             }
                             cursor = LogPut(cursor, "\r\n");
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += 2;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
                         }
                     pmInt21Unhandled:
@@ -27154,7 +27154,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             cursor = LogPut(cursor, "INT21h AX=FF80h lock region -> CF=0 (guest memory is"
                                         " never paged here, so it is already locked)\r\n");
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += 2;
+                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
                         }
                         /* ── UNHANDLED INT 21h FROM PM: SAY ENOUGH TO IDENTIFY IT ────────
@@ -27201,7 +27201,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                            would be inventing. */
                         VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
                         LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                        VDM_REG(tib, VTIB_EIP) += 2;
+                        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                         return 1;
                     }
                     /* ── THE LAST THING THE RUN SAYS SHOULD NAME THE WALL. ───────────
@@ -29075,7 +29075,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                                     + ((VDM_REG16(tib, VTIB_ESP) + 4) & WORD_MASK));
                 if (registers.CarryFlag) *flagsWord |= EFLAGS_CF; else *flagsWord &= (WORD)~EFLAGS_CF;
             }
-            VDM_REG(tib, VTIB_EIP) += 3;
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
             V86BOP_RET(V86BOP_DONE);
         }
     }
@@ -29087,7 +29087,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         DWORD ip = VDM_REG16(tib, VTIB_EIP);
         if (ip == DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05_BEGIN || ip == DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05_NEXT) {
             PrintScreenBop(tib, ip == DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05_BEGIN);
-            VDM_REG(tib, VTIB_EIP) += 3;
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
             V86BOP_RET(V86BOP_DONE);
         }
     }
@@ -29097,7 +29097,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         VddBusDeliverInterrupt(&g_Bus, (BYTE)bopNumber, &registers);
         HOST_UNLOCK();
         RegistersStore(&registers, tib);
-        VDM_REG(tib, VTIB_EIP) += 3;
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         /* A no-wait NCB's POST routine (vdd_net.h): put one more interrupt frame on
            the guest's stack, below the caller's, so the stub's IRET enters POST with
            ES:BX = the NCB and POST's own IRET returns to the caller. FLAGS = the
@@ -29122,7 +29122,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         Int10WaitAfter();                     /* #226: 4F07h BL=80h */
         RegistersStore(&registers, tib);
         VideoTrapSync();     /* mode 12h: interpret the guest (GH #55) */
-        VDM_REG(tib, VTIB_EIP) += 3;
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         V86BOP_RET(V86BOP_DONE);
     }
     if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD_SERVICES)) {
@@ -29138,12 +29138,12 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         if ((int16Ah == 0x00 || int16Ah == 0x10) && registers.ZeroFlag != 0 && g_Running) V86BOP_RET(V86BOP_RERUN);
         RegistersStore(&registers, tib);
         HostSetFlags(tib, registers.CarryFlag, registers.ZeroFlag);
-        VDM_REG(tib, VTIB_EIP) += 3;
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         V86BOP_RET(V86BOP_DONE);
     }
     if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_MOUSE)) {   /* INT 33h mouse  */
         MouseInt33(tib, I33_SRC_V86);
-        VDM_REG(tib, VTIB_EIP) += 3;
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         V86BOP_RET(V86BOP_DONE);
     }
     {   /* ---- BIOS services: INT 11h/12h/13h/14h/15h/17h/25h/26h ---------
@@ -29491,7 +29491,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         #undef BCF_CLR
         #undef BSETAX
         if (handled == 4) V86BOP_RET(V86BOP_RERUN);   /* #206: still waiting -- re-run the BOP */
-        if (handled) { VDM_REG(tib, VTIB_EIP) += 3; V86BOP_RET(V86BOP_DONE); }
+        if (handled) { VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH; V86BOP_RET(V86BOP_DONE); }
     }
     if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_TIME)) {   /* INT 1Ah BIOS time */
         NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
@@ -29500,7 +29500,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         HOST_UNLOCK();
         RegistersStore(&registers, tib);
         HostSetFlags(tib, registers.CarryFlag, registers.ZeroFlag);
-        VDM_REG(tib, VTIB_EIP) += 3;
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         V86BOP_RET(V86BOP_DONE);
     }
     if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_MULTIPLEX)) {   /* INT 2Fh multiplex */
@@ -29631,7 +29631,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                     in DS:SI is "MS-DOS" -- so the thing it is looking for is
                     NTVDM's private WOW API. See the vendor-API note at
                     g_WowVendorSelector for what happens when that is refused. */
-        VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET (CF) */
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;                        /* -> the IRET (CF) */
         V86BOP_RET(V86BOP_DONE);
     }
     if (bopNumber == DOS_BOP_XMS_ENTRY) {   /* XMS API far-call entry */
@@ -29659,7 +29659,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
             cursor = LogPut(cursor, "\r\n"); }
         LogAppend(LOG_PATH, base, cursor); cursor = base;
         HostXms(tib);
-        VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the RETF      */
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;                        /* -> the RETF      */
         V86BOP_RET(V86BOP_DONE);
     }
     if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_EMS)) {   /* INT 67h EMM (EMS) */
@@ -29668,7 +29668,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         HOST_LOCK();
         HostEms(tib);
         HOST_UNLOCK();
-        VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET      */
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;                        /* -> the IRET      */
         V86BOP_RET(V86BOP_DONE);
     }
     V86BOP_RET(V86BOP_NONE);
@@ -33314,7 +33314,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 HOST_LOCK();
                 VddPicEndOfInterrupt(&g_Pic, 1);
                 HOST_UNLOCK();
-                VDM_REG(tib, VTIB_EIP) += 3;
+                VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
                 continue;
             }
             HOST_LOCK();
@@ -33344,7 +33344,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 }
                 if (keyAction == INPUT_ACTION_PAUSE) { HOST_LOCK(); VddInputPauseCancel(&g_Input); HOST_UNLOCK(); }
             }
-            VDM_REG(tib, VTIB_EIP) += 3;        /* -> the IRET */
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;        /* -> the IRET */
             continue;
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == 0x08) {   /* INT 08h timer tick */
@@ -33358,7 +33358,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             VddPicEndOfInterrupt(&g_Pic, 0);
             HOST_UNLOCK();
             RegistersStore(&registers, tib);
-            VDM_REG(tib, VTIB_EIP) += 3;            /* -> CD 1C (chain user timer) */
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;            /* -> CD 1C (chain user timer) */
             continue;
         }
         {   /* ---- INT 20h / 22h (BOP 30h) and INT 27h: they END the program, so they stay
@@ -33396,7 +33396,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             } else handled = 0;
             if (handled == 2) break;               /* terminate: the run is over  */
             if (handled == 3) continue;            /* a child exited: parent is back */
-            if (handled) { VDM_REG(tib, VTIB_EIP) += 3; continue; }
+            if (handled) { VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH; continue; }
         }
         /* ⚠ `!g_BopFromGuest`: XP's COMMAND.COM issues a `BOP 0x50` of its own (one
              site, in its "Incorrect DOS version" path). Without the origin test that
@@ -35394,7 +35394,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             cursor = LogPut(cursor, " -> SWITCH FAILED (staying real mode, CF=1)\r\n");
             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
             VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF;         /* CF=1 signals failure to the client */
-            VDM_REG(tib, VTIB_EIP) += 3;            /* -> the RETF, returns real mode     */
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;            /* -> the RETF, returns real mode     */
             continue;
         }
         /* ── ★★ THIS IS THE FALL-THROUGH, AND IT ANSWERS FOR EVERY BOP IT WAS NEVER
@@ -35448,7 +35448,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             DWORD codeSegment = VDM_REG16(tib, VTIB_CS), instructionPointer = VDM_REG16(tib, VTIB_EIP);
             const volatile BYTE *isvBopBytes = (const volatile BYTE *)(ULONG_PTR)((codeSegment << PARAGRAPH_SHIFT) + instructionPointer);
             IsvBop(tib, isvBopBytes[3], &cursor);
-            VDM_REG(tib, VTIB_EIP) += 4;
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
             continue;
         }
         if (g_BopFromGuest
@@ -35824,7 +35824,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                 }
                 VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;  /* success */
-                VDM_REG(tib, VTIB_EIP) += 4;
+                VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
                 continue;
             }
             /* ── ★ sub 0F = THE HOST'S `PROMPT`, AND IT ANSWERS IN BX. ──────────────
@@ -35914,7 +35914,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                 }
                 VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                VDM_REG(tib, VTIB_EIP) += 4;
+                VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
                 continue;
             }
             /* ── ★ sub 0D = "GIVE ME A PATH TO OPEN" -- THE STARTUP BATCH FILE. ─────
@@ -35992,7 +35992,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                 }
                 VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                VDM_REG(tib, VTIB_EIP) += 4;
+                VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
                 continue;
             }
             /* ── ★ sub 10 = A ONE-BIT QUERY, AND IT GATES THE PROMPT. ───────────────
@@ -36013,7 +36013,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                 }
                 VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                VDM_REG(tib, VTIB_EIP) += 4;
+                VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
                 continue;
             }
             /* ── ★ sub 0E = THE KEYBOARD / CODE-PAGE CONFIGURATION. ─────────────────
@@ -36048,12 +36048,12 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                 }
                 VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                VDM_REG(tib, VTIB_EIP) += 4;
+                VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
                 continue;
             }
             if (carryPolicy) VDM_REG(tib, VTIB_EFLAGS) |=  EFLAGS_CF_U;
             else        VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-            VDM_REG(tib, VTIB_EIP) += 4;             /* C4 C4 <bop> <sub> -- see above */
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;             /* C4 C4 <bop> <sub> -- see above */
             continue;
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) != 0x20) {
@@ -36123,7 +36123,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         /* A blocking read with nothing to return leaves EIP ON the BOP, so the guest
            re-executes the INT and keeps running -- and keeps taking timer interrupts, so
            its music and animation carry on while it waits for a key, as on real hardware. */
-        if (!machine.IsRetry) VDM_REG(tib, VTIB_EIP) += 3;  /* past the 3-byte BOP -> the IRET */
+        if (!machine.IsRetry) VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;  /* past the 3-byte BOP -> the IRET */
         LogAppend(LOG_PATH, base, cursor); cursor = base;
     }
     }   /* storm-state block */

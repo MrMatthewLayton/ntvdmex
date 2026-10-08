@@ -78,7 +78,6 @@
 /* The three bytes we plant, and the code that identifies them in a log. The
    dispatch is on the ADDRESS -- this byte is for the reader. */
 #define WOWCALL_BOP_CODE  0x57
-#define WOWCALL_BOP_LEN   3
 
 /* ── ★★★★★ ONE MORE BYTE: A `RETF`, SO THE CPU CAN FAULT FOR US. (session 56) ──
      A Win16 code segment is LOADED ON DEMAND, and the demand is a fault: krnl386
