@@ -13879,11 +13879,11 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 PresentTargetRatio((INT)g_Settings.Values[SET_ASPECT], sourceWidth, sourceHeight, &numerator, &denominator);
                 switch (wParam) {
                 case WMSZ_LEFT: case WMSZ_RIGHT:
-                    viewHeight = (INT)((long)viewWidth * denominator / numerator); break;   /* width drives height     */
+                    viewHeight = (INT)((INT32)viewWidth * denominator / numerator); break;   /* width drives height     */
                 case WMSZ_TOP: case WMSZ_BOTTOM:
-                    viewWidth = (INT)((long)viewHeight * numerator / denominator); break;   /* height drives width     */
+                    viewWidth = (INT)((INT32)viewHeight * numerator / denominator); break;   /* height drives width     */
                 default:
-                    viewHeight = (INT)((long)viewWidth * denominator / numerator); break;   /* a corner: width wins    */
+                    viewHeight = (INT)((INT32)viewWidth * denominator / numerator); break;   /* a corner: width wins    */
                 }
             }
             if (wParam == WMSZ_LEFT || wParam == WMSZ_TOPLEFT || wParam == WMSZ_BOTTOMLEFT)
@@ -16013,16 +16013,16 @@ static INT ModeYRemapInitialize(VOID)
      and only apply one that survives. A window nothing explains falls back to the plain
      fan-out and is counted, so "we could not solve it" can never masquerade as success. */
 /* Does one displacement explain EVERY byte the burst changed? */
-static INT ModeYLatchVerify(long delta)
+static INT ModeYLatchVerify(INT32 delta)
 {
     const BYTE *scratch = (const BYTE *)g_ModeYView[5];
     UINT index, moved = 0;
     for (index = 0; index < MODEY_WIN; ++index) {
-        long source;
+        INT32 source;
         if (scratch[index] == g_ModeYSeed[index]) continue;
         ++moved;
-        source = (long)index - delta;
-        if (source < 0 || source >= (long)MODEY_WIN || g_ModeYSeed[source] != scratch[index]) return 0;
+        source = (INT32)index - delta;
+        if (source < 0 || source >= (INT32)MODEY_WIN || g_ModeYSeed[source] != scratch[index]) return 0;
     }
     return moved != 0;
 }
@@ -16034,7 +16034,7 @@ static INT ModeYLatchVerify(long delta)
      the pre-burst image, so find that run in the seed and the displacement falls out.
      Every hit is then VERIFIED against every changed byte before it is used, so a wrong
      match cannot be applied; a burst nothing explains is counted, never guessed at. */
-static long ModeYLatchDelta(VOID)
+static INT32 ModeYLatchDelta(VOID)
 {
     const BYTE *scratch = (const BYTE *)g_ModeYView[5];
     unsigned index, runLow = 0, runLength = 0, bestLow = 0, bestLength = 0, cap; /* stays unsigned: UINT here moves the compiled code */
@@ -16052,7 +16052,7 @@ static long ModeYLatchDelta(VOID)
         if (g_ModeYSeed[index] != scratch[bestLow]) continue;              /* cheap first-byte reject */
         for (run = 1; run < cap; ++run) if (g_ModeYSeed[index + run] != scratch[bestLow + run]) break;
         if (run < cap) continue;
-        { long delta = (long)bestLow - (long)index;
+        { INT32 delta = (INT32)bestLow - (INT32)index;
           if (delta && ModeYLatchVerify(delta)) return delta; }
     }
     return 0;
@@ -16409,15 +16409,15 @@ static VOID ModeYRemapWriteMode(PVOID context, INT writeMode)
         /* A single-plane mask needs nothing: the guest is moving bytes inside the plane
            that IS mapped, which is exactly what the hardware would do. */
     } else if (writeMode != 1 && g_ModeYWriteMode == 1 && g_ModeYLatch) {
-        long delta = ModeYLatchDelta();
+        INT32 delta = ModeYLatchDelta();
         UINT index;
         const BYTE *scratch = (const BYTE *)g_ModeYView[5];
         if (delta) {
             INT plane;
             for (index = 0; index < MODEY_WIN; ++index) {
-                long source;
+                INT32 source;
                 if (scratch[index] == g_ModeYSeed[index]) continue;
-                source = (long)index - delta;
+                source = (INT32)index - delta;
                 for (plane = 0; plane < 4; ++plane)
                     if (g_ModeYPreviousMask & (1 << plane)) ((BYTE *)g_ModeYView[plane])[index] = ((BYTE *)g_ModeYView[plane])[source];
             }
@@ -16813,7 +16813,7 @@ static INT ModeYPmIrqWaiting(VOID)
 }
 static VOID ModeYPmRun(volatile BYTE *tib)
 {
-    PM32_CPU cpu; long steps = 0, idleFrom = 0; UINT32 esp0; INT why;
+    PM32_CPU cpu; INT32 steps = 0, idleFrom = 0; UINT32 esp0; INT why;
     DWORD vgaSeen;
     WORD selector[6];
     INT index;
@@ -17041,9 +17041,9 @@ static VOID HostProfileDump(VOID)
     }
 }
 
-static long HostInterp(volatile BYTE *tib, long cap)
+static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
 {
-    V86_CPU cpu; long iters; INT modeY;
+    V86_CPU cpu; INT32 iters; INT modeY;
 
     /* ── ★★ THE FULL 32-BIT REGISTERS, IN AND OUT. (s80) ──────────────────────────────
          This loaded and stored 16 bits, so the high half of every register was ZEROED
@@ -17176,12 +17176,12 @@ static long HostInterp(volatile BYTE *tib, long cap)
    ⚠ SLEEPING HERE IS SAFE AND SLEEPING INSIDE HostInterp WOULD NOT BE: this is
      outside the HOST_LOCK, so a throttled guest does not hold the bus lock while it
      waits and the audio pump is untouched. */
-static long HostInterpPaced(volatile BYTE *tib, long cap)
+static INT32 HostInterpPaced(volatile BYTE *tib, INT32 cap)
 {
     static CPUSPEED_PACE pace;              /* exec thread only -- no lock needed */
     DWORD ips = CpuSpeedInstructionsPerSecond((UINT)g_CpuSpeedIndex);
     LARGE_INTEGER before, after;
-    long ran;
+    INT32 ran;
     INT milliseconds;
     if (!ips) return HostInterp(tib, cap);           /* Unlimited: not one branch  */
     QueryPerformanceCounter(&before);
@@ -28793,7 +28793,7 @@ static VOID DpmiInterpreterCpuStore(V86_CPU *cpu, volatile BYTE *tib)
    unserviceable opcode (already logged). Never touches the kernel PM path. */
 static INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib)
 {
-    V86_CPU cpu; long guard = 0; CHAR lineBuffer[256]; PSTR lineCursor;
+    V86_CPU cpu; INT32 guard = 0; CHAR lineBuffer[256]; PSTR lineCursor;
     g_V86SegmentToLinear = DpmiSegmentToLinear;                 /* interpreter now resolves LDT bases */
     g_V86SelectorDescriptor = DpmiSelectorDescriptor;               /* ...and answers LAR/LSL from g_Ldt[] (run 55) */
     DpmiInterpreterCpuLoad(&cpu, tib);
@@ -32940,7 +32940,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
          * before -- so a DOS call still reaches the kernel as a BOP event, and an
          * unmodeled opcode still executes on the real CPU. */
         if (g_P12Interp && !g_DpmiPm) {
-            long ran = HostInterpPaced(tib, P12_SLICE);
+            INT32 ran = HostInterpPaced(tib, P12_SLICE);
             if (ran > 0) { g_P12Batches++; g_P12Instructions += (DWORD)ran; continue; }
             /* NAME THE OPCODE. Every bail is guest execution we cannot see, so the
                list of declined opcodes IS the to-do list for this path (#27).
@@ -32964,7 +32964,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
             g_P12Bails++;
         }
         if (!g_P12Interp && ModeYNeedsInterp()) {
-            long ran;
+            INT32 ran;
             UINT64 ic0 = ModeYTimelineRdtsc();
             g_ModeYInterp = 1;
             ran = HostInterpPaced(tib, P12_SLICE);
@@ -33142,7 +33142,7 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, INT nShow)
             if ((g_A000Protection || (g_Interp12 && VddVideoIsPlanarActive(&g_Video)))
                 && stormCount >= STORM_GATE) {
                 DWORD breakCs = VDM_REG(tib, VTIB_CS) & 0xFFFF, breakIp = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
-                long ran = HostInterpPaced(tib, TIER1_CAP);
+                INT32 ran = HostInterpPaced(tib, TIER1_CAP);
                 if (ran > 0) {
                     static INT batchBudget = 10;
                     if (batchBudget > 0) {            /* is the batch ADVANCING the guest? */
