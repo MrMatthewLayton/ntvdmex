@@ -13,9 +13,6 @@
 #define PRESENT_MONITOR_HZ_MIN        40
 #define PRESENT_MONITOR_HZ_MAX        240
 #define PRESENT_MONITOR_HZ_DEFAULT    60      /* when the driver will not say            */
-#define PRESENT_US_PER_SECOND_U       1000000u
-#define PRESENT_US_PER_SECOND         1000000
-#define PRESENT_US_PER_MS             1000
 #define PRESENT_FRAME_LINES_NUMERATOR   21u   /* a frame is ~21/20 of the visible lines  */
 #define PRESENT_FRAME_LINES_DENOMINATOR 20u
 #define PRESENT_VBLANK_SPIN_US        1200    /* sleep to here, spin the rest            */
@@ -110,7 +107,7 @@ static VOID PresentWaitVerticalBlank(PPRESENT_DDRAW presenter)
     if (!presenter->IsVsync || !presenter->DirectDraw) return;
     PresentMonitorQuery(presenter);
     height = presenter->MonitorLines > 0 ? (DWORD)presenter->MonitorLines : 0;
-    periodUs = PRESENT_US_PER_SECOND_U / (DWORD)(presenter->MonitorHz ? presenter->MonitorHz : PRESENT_MONITOR_HZ_DEFAULT);
+    periodUs = MICROSECONDS_PER_SECOND_U / (DWORD)(presenter->MonitorHz ? presenter->MonitorHz : PRESENT_MONITOR_HZ_DEFAULT);
     result = IDirectDraw7_GetScanLine(PRESENT_DIRECT_DRAW, &scanLine);
     if (result == DDERR_VERTICALBLANKINPROGRESS) return;  /* already in the blank: go   */
     if (result != DD_OK) return;                          /* cannot tell: do not wait   */
@@ -118,7 +115,7 @@ static VOID PresentWaitVerticalBlank(PPRESENT_DDRAW presenter)
         /* lines to go, as time; the blank starts at `height` (the CRTC counts on
            through it), so sleep for all of it but the last ~1.2 ms */
         DWORD sleepUs = (DWORD)((UINT64)(height - scanLine) * periodUs / (height * PRESENT_FRAME_LINES_NUMERATOR / PRESENT_FRAME_LINES_DENOMINATOR));
-        if (sleepUs > PRESENT_VBLANK_SPIN_US) Sleep((sleepUs - PRESENT_VBLANK_SPIN_US) / PRESENT_US_PER_MS);
+        if (sleepUs > PRESENT_VBLANK_SPIN_US) Sleep((sleepUs - PRESENT_VBLANK_SPIN_US) / MICROSECONDS_PER_MILLISECOND);
     }
     for (spin = 0; spin < PRESENT_VBLANK_SPIN_MAX; ++spin) {                 /* the last stretch: ~1-2 ms */
         result = IDirectDraw7_GetScanLine(PRESENT_DIRECT_DRAW, &scanLine);
@@ -847,7 +844,7 @@ VOID PresentDdrawPresent(PPRESENT_DDRAW presenter)
     else    PresentGdi(presenter);
     QueryPerformanceCounter(&end);
     if (QueryPerformanceFrequency(&frequency) && frequency.QuadPart) {  /* s84 */
-        ULONG elapsedUs = (ULONG)(((end.QuadPart - start.QuadPart) * PRESENT_US_PER_SECOND) / frequency.QuadPart);
+        ULONG elapsedUs = (ULONG)(((end.QuadPart - start.QuadPart) * MICROSECONDS_PER_SECOND) / frequency.QuadPart);
         if (isFullscreen) { presenter->PresentFullscreenCount++;  presenter->PresentFullscreenUs  += elapsedUs; if (elapsedUs > presenter->PresentFullscreenMax)  presenter->PresentFullscreenMax  = elapsedUs; }
         else    { presenter->PresentWindowCount++; presenter->PresentWindowUs += elapsedUs; if (elapsedUs > presenter->PresentWindowMax) presenter->PresentWindowMax = elapsedUs; }
     }

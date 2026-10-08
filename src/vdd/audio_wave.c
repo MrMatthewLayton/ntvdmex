@@ -7,7 +7,6 @@
 #include <dsound.h>       /* #234: interfaces only -- dsound.dll is bound at runtime */
 
 #define AUDIO_WAVE_DEFAULT_HZ       44100
-#define AUDIO_WAVE_MS_PER_SECOND    1000
 #define AUDIO_WAVE_MIN_BUFFERS      2
 #define AUDIO_WAVE_BITS_PER_SAMPLE  16
 #define AUDIO_WAVE_WAKE_MS          5       /* a buffer is ~11.6 ms: wake well inside it */
@@ -120,7 +119,7 @@ static DWORD WINAPI AudioWaveThread(LPVOID parameter)
                what advances SB playback and raises its IRQ. */
             wave->Fill(wave->Context, wave->Buffers[0], wave->FrameCount);
             AudioRecorderFeed(wave->Buffers[0], wave->FrameCount * AUDIO_WAVE_CHANNELS);
-            Sleep((wave->FrameCount * AUDIO_WAVE_MS_PER_SECOND) / (wave->SampleHz ? wave->SampleHz : AUDIO_WAVE_DEFAULT_HZ));
+            Sleep((wave->FrameCount * MILLISECONDS_PER_SECOND) / (wave->SampleHz ? wave->SampleHz : AUDIO_WAVE_DEFAULT_HZ));
             continue;
         }
         /* How much of the queue has the driver already given back? Sampled BEFORE we

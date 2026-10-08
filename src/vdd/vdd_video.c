@@ -583,7 +583,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_PARAMETER_GC            0x37
 
 /* Frame timing. */
-#define VIDEO_MICROSECONDS_PER_SECOND 1000000u
 #define VIDEO_PER_MILLE               1000u
 #define VIDEO_TALL_FRAME_LINES        500u
 #define VIDEO_PRESENT_PER_MILLE_TALL  914
@@ -3538,9 +3537,9 @@ static INT VideoVerticalTiming(PCVIDEO_STATE state, UINT32 *total, UINT32 *activ
 UINT32 VddVideoFrameUs(PCVIDEO_STATE state)
 {
     UINT32 verticalTotal, verticalDisplay, verticalBlank, hz; INT isTall = (state->GraphicsHeight > VIDEO_VACTIVE_LOW);
-    if (VideoVesaGeometry(state, &verticalTotal, &verticalDisplay, &verticalBlank, &hz)) return VIDEO_MICROSECONDS_PER_SECOND / hz;   /* #226: the VESA mode's */
+    if (VideoVesaGeometry(state, &verticalTotal, &verticalDisplay, &verticalBlank, &hz)) return MICROSECONDS_PER_SECOND_U / hz;   /* #226: the VESA mode's */
     if (VideoVerticalTiming(state, &verticalTotal, &verticalDisplay, &verticalBlank)) isTall = (verticalTotal >= VIDEO_TALL_FRAME_LINES);
-    return VIDEO_MICROSECONDS_PER_SECOND / (UINT32)(isTall ? VIDEO_VBL_HZ_HIGH : VIDEO_VBL_HZ_LOW);
+    return MICROSECONDS_PER_SECOND_U / (UINT32)(isTall ? VIDEO_VBL_HZ_HIGH : VIDEO_VBL_HZ_LOW);
 }
 INT VddVideoIsPresentReady(PVIDEO_STATE state)
 {
@@ -3548,7 +3547,7 @@ INT VddVideoIsPresentReady(PVIDEO_STATE state)
     INT presentPerMille, isTall;
     if (!state->TimeUs) return 1;                 /* no clock: present every tick   */
     if (VideoVesaGeometry(state, &verticalTotal, &verticalDisplay, &verticalBlank, &hz)) {      /* #226: the VESA mode's own frame */
-        frameUs = VIDEO_MICROSECONDS_PER_SECOND / hz; presentPerMille = (INT)(verticalDisplay * VIDEO_PER_MILLE / verticalTotal);
+        frameUs = MICROSECONDS_PER_SECOND_U / hz; presentPerMille = (INT)(verticalDisplay * VIDEO_PER_MILLE / verticalTotal);
         perMille  = (UINT32)((state->TimeUs() % frameUs) * VIDEO_PER_MILLE / frameUs);
         return (INT)perMille >= presentPerMille - VIDEO_PRESENT_WINDOW_PER_MILLE && (INT)perMille < presentPerMille;
     }
@@ -3559,7 +3558,7 @@ INT VddVideoIsPresentReady(PVIDEO_STATE state)
     isTall = (state->GraphicsHeight > VIDEO_VACTIVE_LOW);
     presentPerMille  = isTall ? VIDEO_PRESENT_PER_MILLE_TALL : VIDEO_PRESENT_PER_MILLE_SHORT;
     if (VideoVerticalTiming(state, &verticalTotal, &verticalDisplay, &verticalBlank)) { isTall = (verticalTotal >= VIDEO_TALL_FRAME_LINES); presentPerMille = (INT)(verticalDisplay * VIDEO_PER_MILLE / verticalTotal); }
-    frameUs = VIDEO_MICROSECONDS_PER_SECOND / (UINT32)(isTall ? VIDEO_VBL_HZ_HIGH : VIDEO_VBL_HZ_LOW);
+    frameUs = MICROSECONDS_PER_SECOND_U / (UINT32)(isTall ? VIDEO_VBL_HZ_HIGH : VIDEO_VBL_HZ_LOW);
     if (!frameUs) return 1;
     perMille  = (UINT32)((state->TimeUs() % frameUs) * VIDEO_PER_MILLE / frameUs);
     return (INT)perMille >= presentPerMille - VIDEO_PRESENT_WINDOW_PER_MILLE && (INT)perMille < presentPerMille;
@@ -4296,7 +4295,7 @@ static INT VideoBeam(PCVIDEO_STATE state, UINT64 *now, UINT32 *frameUs,
     if (!state->TimeUs) return 0;
     /* A VESA graphics mode runs on its own timing, not the last VGA mode's (#226). */
     if (VideoVesaGeometry(state, verticalTotal, verticalDisplay, verticalBlank, &hz)) {
-        *frameUs = VIDEO_MICROSECONDS_PER_SECOND / hz;
+        *frameUs = MICROSECONDS_PER_SECOND_U / hz;
         *now      = state->TimeUs();
         *frameNumber = (UINT32)(*now / *frameUs);
         inFrame  = *now % (UINT64)*frameUs;
@@ -4320,7 +4319,7 @@ static INT VideoBeam(PCVIDEO_STATE state, UINT64 *now, UINT32 *frameUs,
            longer forced to pick a side of a 400-line fence. */
         isTall = (total >= VIDEO_TALL_FRAME_LINES);
     }
-    *frameUs = VIDEO_MICROSECONDS_PER_SECOND / (UINT32)(isTall ? VIDEO_VBL_HZ_HIGH : VIDEO_VBL_HZ_LOW);
+    *frameUs = MICROSECONDS_PER_SECOND_U / (UINT32)(isTall ? VIDEO_VBL_HZ_HIGH : VIDEO_VBL_HZ_LOW);
     *now      = state->TimeUs();
     *frameNumber = (UINT32)(*now / *frameUs);
     inFrame  = *now % (UINT64)*frameUs;
@@ -4429,7 +4428,7 @@ UINT32 VddVideoInt10WaitUs(PVIDEO_STATE state)
     now = state->TimeUs();
     /* Done, or a stamp more than a second out (a clock that went backwards, a stale
        value): never park the guest on it. */
-    if (now >= until || until - now > VIDEO_MICROSECONDS_PER_SECOND) { state->Int10WaitUntil = 0; return 0; }
+    if (now >= until || until - now > MICROSECONDS_PER_SECOND_U) { state->Int10WaitUntil = 0; return 0; }
     return (UINT32)(until - now);
 }
 

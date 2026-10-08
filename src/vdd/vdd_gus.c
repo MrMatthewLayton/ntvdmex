@@ -143,7 +143,6 @@
 #define GUS_SAMPLE_MAX                32767
 #define GUS_SAMPLE_MIN                (-32768)
 #define GUS_FALLBACK_RATE_HZ          44100u
-#define GUS_NANOSECONDS_PER_SECOND    1000000000u
 /* The latches (ref §5), 2X0 and the 2XF banks. */
 #define GUS_LATCH_CODES               8
 #define GUS_LATCH_CODE_MASK           7
@@ -482,7 +481,7 @@ static VOID GusRecord(PGUS_STATE state, UINT32 nanoseconds)
     if (!GusIsDmaReady(state, channel)) return;
     unit = (channel & GUS_DMA_16BIT_CHANNELS) ? GUS_WORD_BYTES : 1u;                  /* a 16-bit channel moves words */
     rate = GUS_ADC_CLOCK_HZ / (GUS_ADC_DIVIDER * ((UINT32)state->SampleFrequency + GUS_ADC_RATE_OFFSET));
-    period  = GUS_NANOSECONDS_PER_SECOND / (rate ? rate : 1u);
+    period  = NANOSECONDS_PER_SECOND_U / (rate ? rate : 1u);
     state->SampleAccumulatorNs += nanoseconds;
     while (state->SampleAccumulatorNs >= period && (state->SampleControl & GUS_SAMPLE_GO)) {
         state->SampleAccumulatorNs -= period;
@@ -902,7 +901,7 @@ static INT16 GusClip(INT32 value) { return (INT16)(value > GUS_SAMPLE_MAX ? GUS_
    always did, 1 writes panned L/R pairs at output[2i], output[2i+1]. */
 static VOID GusRender(PGUS_STATE state, INT16 *output, UINT32 count, INT isStereo)
 {
-    UINT32 sampleIndex, voiceIndex, nanoseconds = GUS_NANOSECONDS_PER_SECOND / (VddGusRateHz(state) ? VddGusRateHz(state) : GUS_FALLBACK_RATE_HZ);
+    UINT32 sampleIndex, voiceIndex, nanoseconds = NANOSECONDS_PER_SECOND_U / (VddGusRateHz(state) ? VddGusRateHz(state) : GUS_FALLBACK_RATE_HZ);
     state->Renders++;
     GusDmaTry(state);                                /* a DMA that was waiting on the 8237 */
     for (sampleIndex = 0; sampleIndex < count; ++sampleIndex) {

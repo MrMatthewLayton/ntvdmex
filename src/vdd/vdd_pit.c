@@ -49,7 +49,6 @@
 #define PIT_UNDRIVEN_BUS        0xFF
 /* Pacing. */
 #define PIT_CATCH_UP_GUARD      100000  /* most IRQ0 periods caught up in one call   */
-#define PIT_MICROSECONDS_PER_SECOND 1000000u
 #define PIT_HALF                2       /* mode 3 runs each half of the period       */
 #define PIT_SQUARE_WAVE_STEP    2       /* mode 3 decrements by two                  */
 /* POST's choices (see VddPitReset) and DRAM refresh. */
@@ -365,7 +364,7 @@ static VOID PitFrame(PVOID context)
        a no-op ARITHMETICALLY but its u64 read-modify-writes still race the pacer
        on a 32-bit build, so do not touch the state at all. */
     if (!state->FrameMicroseconds) return;
-    clocks = (UINT32)(((UINT64)PIT_INPUT_HZ * state->FrameMicroseconds) / PIT_MICROSECONDS_PER_SECOND);
+    clocks = (UINT32)(((UINT64)PIT_INPUT_HZ * state->FrameMicroseconds) / MICROSECONDS_PER_SECOND_U);
     PIT_GUARD(state, 1);
     VddPitAddClocks(state, clocks);
     PIT_GUARD(state, 0);

@@ -63,7 +63,6 @@
 #define SB_ARGUMENTS_WORD           2
 #define SB_ARGUMENTS_PROGRAMMED     3       /* mode byte + 16-bit length                 */
 #define SB_TIME_CONSTANT_BASE       256u    /* the DSP stores 256 - 1000000/rate         */
-#define SB_MICROSECONDS_PER_SECOND  1000000u
 #define SB_FALLBACK_RATE_HZ         4000u
 #define SB_DEFAULT_RATE_HZ          22050
 /* The mixer. */
@@ -159,7 +158,7 @@ static VOID SbStartBlock(PSB_STATE state, UINT32 bytes, INT isAutoInit)
 static UINT32 SbRateFromTimeConstant(BYTE timeConstant)
 {
     UINT32 divisor = SB_TIME_CONSTANT_BASE - timeConstant;
-    return divisor ? (SB_MICROSECONDS_PER_SECOND / divisor) : SB_FALLBACK_RATE_HZ;
+    return divisor ? (MICROSECONDS_PER_SECOND_U / divisor) : SB_FALLBACK_RATE_HZ;
 }
 
 /* #231: the commands a DSP 3.xx (SB Pro) does not have -- the SB16's rate commands,

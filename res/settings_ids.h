@@ -35,6 +35,8 @@
 #define NTVDMEX_PAGE_COUNT      6
 
 /* ── General ──────────────────────────────────────────────────────────────────── */
+/* A slider's value label is its control id + this (SK_SLIDER). */
+#define IDC_S_SLIDER_VALUE_OFFSET 1000
 #define IDC_S_DOSVER          230   /* combo:    reported MS-DOS version, "6.22"      */
 #define IDC_S_DOSVER_NOTE     231   /* static:   why the version is a knob            */
 #define IDC_S_DOSVER_NOW      294   /* static:   the version THIS session reports (s81) */

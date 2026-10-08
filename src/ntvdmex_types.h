@@ -140,5 +140,6 @@ NTVDMEX_TYPES_ASSERT_SIZE(UINT_PTR, sizeof(PVOID));
 
 #include "ntvdmex_bits.h"       /* the byte/word/dword masks and shifts */
 #include "ntvdmex_x86.h"        /* the x86 layout: paragraphs, pages, the IVT */
+#include "ntvdmex_units.h"      /* time and frequency units */
 
 #endif /* NTVDMEX_TYPES_H */
