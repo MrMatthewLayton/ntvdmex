@@ -28136,7 +28136,7 @@ static LRESULT WowControlColour(HWND window, WORD window16, UINT message, WPARAM
     }
     return 0;
 }
-
+#define UNIMPLEMENTED_BOP_EXIT_CODE 0xBD   /* a guest killed by an unanswered BOP: never a clean 0 */
 /* ── s89 (#302 M3): OWNER-DRAW, ANSWERED BY THE PROGRAM. Windows SENDS the four
      owner-draw messages to a control's parent and needs the answer before it goes
      on -- the control's size before it is laid out (MEASUREITEM), the pixels before
@@ -28153,7 +28153,7 @@ static LRESULT WowControlColour(HWND window, WORD window16, UINT message, WPARAM
 static VOID OwnerDrawPutWord(BYTE *bytes, INT offset, WORD value) { bytes[offset] = (BYTE)value; bytes[offset + 1] = (BYTE)(value >> BYTE_SHIFT); }
 static VOID OwnerDrawPutDword(BYTE *bytes, INT offset, DWORD value) { OwnerDrawPutWord(bytes, offset, (WORD)value); OwnerDrawPutWord(bytes, offset + 2, (WORD)(value >> WORD_SHIFT)); }
 static WORD OwnerDrawGetWord(const BYTE *bytes, INT offset) { return (WORD)(bytes[offset] | (bytes[offset + 1] << BYTE_SHIFT)); }
-
+enum { ENVIRONMENT_SCAN_MAX = 900, PATH_VALUE_MAX = 250 };   /* sub 0Fh's environment snapshot */
 static LRESULT WowOwnerDraw(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam, INT *handled)
 {
     WOWUSER_WINDOW *wowWindow = WowUserFindWindow(window16);
@@ -28738,7 +28738,7 @@ static VOID DpmiClientTeardown(VOID)
     cursor = LogPut(cursor, ")\r\n");
     LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
 }
-enum { NT_AWARE_SHELL_BOPS_MIN = 8, ROUTED_PATH_MAX = 120, WOW_COMMAND_DIRECTORY_MAX = 0x10C, SHELL_HEADER_READ = 0x44, COMMAND_COM_LENGTH = 11, PIF_EXTENSION_LENGTH = 4, STD_HANDLE_REPORTS = 5 };   /* WinMain's launch path */
+enum { NT_AWARE_SHELL_BOPS_MIN = 8, ROUTED_PATH_MAX = 120, WOW_COMMAND_DIRECTORY_MAX = 0x10C, SHELL_HEADER_READ = 0x44, COMMAND_COM_LENGTH = 11, STD_HANDLE_REPORTS = 5 };   /* WinMain's launch path */
 /* ================================================================================ *
  *  run 53 (GH #2): host-interpreted protected mode -- the emulation path.           *
  *                                                                                    *
@@ -30828,7 +30828,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     if (readCount && !g_WowLaunch && programPathBuffer[0]) {
         INT pathLength = lstrlenA(programPathBuffer);
         PIF_INFO pif;
-        if (pathLength > PIF_EXTENSION_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - PIF_EXTENSION_LENGTH, ".PIF")
+        if (pathLength > DOS_DOT_EXTENSION_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - DOS_DOT_EXTENSION_LENGTH, ".PIF")
             && PifParse(g_FileBuffer, readCount, &pif)) {
             CHAR program[MAX_PATH], directory[MAX_PATH], pifDirectory[MAX_PATH], pifCandidate[MAX_PATH], extra[256];
             HANDLE pifHandle = INVALID_HANDLE_VALUE;
@@ -35444,10 +35444,10 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
            ⛔ A BOP IS NOT AN INT: nothing was pushed, so CF goes in the live EFLAGS. */
         /* s91 (#11): a guest's own `C4 C4 58 nn` is the third-party BOP -- see IsvBop.
              Four bytes (the sub-function follows), like 50h/54h below. */
-        if (g_BopFromGuest && (VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == 0x58) {
+        if (g_BopFromGuest && (VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == NTVDM_BOP_ISV) {
             DWORD codeSegment = VDM_REG16(tib, VTIB_CS), instructionPointer = VDM_REG16(tib, VTIB_EIP);
             const volatile BYTE *isvBopBytes = (const volatile BYTE *)(ULONG_PTR)((codeSegment << PARAGRAPH_SHIFT) + instructionPointer);
-            IsvBop(tib, isvBopBytes[3], &cursor);
+            IsvBop(tib, isvBopBytes[VDM_BOP_LENGTH], &cursor);
             VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
             continue;
         }
@@ -35457,7 +35457,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             DWORD bopNumber  = VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK;
             DWORD codeSegment = VDM_REG16(tib, VTIB_CS), instructionPointer = VDM_REG16(tib, VTIB_EIP);
             const volatile BYTE *isvBopBytes = (const volatile BYTE *)(ULONG_PTR)((codeSegment << PARAGRAPH_SHIFT) + instructionPointer);
-            DWORD sub = isvBopBytes[3];
+            DWORD sub = isvBopBytes[VDM_BOP_LENGTH];
             static INT  carryPolicy = -1;                 /* -1 = not yet read */
             INT quiet = 0;                           /* rate-limit the LOG, never the answer */
             if (carryPolicy < 0) {
@@ -35526,7 +35526,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             cursor = LogPut(cursor, "\r\n");
             /* And the bytes it is about to run either way -- the branch is right there,
                and which way it goes is the whole question. */
-            cursor = LogPut(cursor, "         next="); cursor = LogDump(cursor, (const VOID *)(isvBopBytes + 4), 12);
+            cursor = LogPut(cursor, "         next="); cursor = LogDump(cursor, (const VOID *)(isvBopBytes + VDM_BOP_SUBFUNCTION_LENGTH), 12);
             /* ── ★ COMMAND.COM's STATE BLOCK, WHOLE, RATHER THAN ONE BYTE AT A TIME.
                  Its decisions about being a shell follow a handful of bytes in its
                  RESIDENT data -- around 0x2B0 and 0x320..0x333 of the
@@ -35575,7 +35575,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                ⛔ The cookie is preserved rather than zeroed, because the guest reloads
                  it into its own state unconditionally -- zeroing it would destroy
                  something we were only asked to carry. */
-            if (bopNumber == NTVDM_BOP_CMD && sub == 0x01) {
+            if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_NEXT_COMMAND) {
                 DWORD block = (VDM_REG16(tib, VTIB_DS) << PARAGRAPH_SHIFT)
                           + VDM_REG16(tib, VTIB_EDX);
                 volatile BYTE *blockBytes = (volatile BYTE *)(ULONG_PTR)block;
@@ -35602,9 +35602,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 if (g_GuestNtAware && ++g_ShellGetNextCount > 1) {
                     cursor = LogPut(cursor, "         sub 01 again: the shell is handing back control (EXIT)"
                                 " -- ending the VDM, rc=0x");
-                    cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + 0x0E)); cursor = LogPut(cursor, "\r\n");
+                    cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_EXIT_CODE)); cursor = LogPut(cursor, "\r\n");
                     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                    machine.ExitCode = *(volatile WORD *)(blockBytes + 0x0E) & BYTE_MASK;
+                    machine.ExitCode = *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_EXIT_CODE) & BYTE_MASK;
                     break;
                 }
                 #define BW(o, v) (*(volatile WORD *)(blockBytes + (o)) = (WORD)(v))
@@ -35614,9 +35614,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 if (quiet) goto blockWritten;
                 cursor = LogPut(cursor, "         blk in="); cursor = LogDump(cursor, (const VOID *)blockBytes, 0x28);
                 cursor = LogPut(cursor, "\r\n         +1C:1E=0x");
-                cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + 0x1C)); cursor = LogPut(cursor, ":0x");
-                cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + 0x1E));
-                cursor = LogPut(cursor, " +20=0x"); cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + 0x20));
+                cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_SEGMENT)); cursor = LogPut(cursor, ":0x");
+                cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_OFFSET));
+                cursor = LogPut(cursor, " +20=0x"); cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_CAPACITY));
                 cursor = LogPut(cursor, "\r\n");
                 blockWritten: ;
                 /* ── ★★ TOUCH AS LITTLE AS POSSIBLE. ────────────────────────────────
@@ -35638,8 +35638,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                    ⇒ So we now write only what a "no command" answer really is: the
                      empty command tail, and the flags word. Everything else is left as
                      the guest set it, because a field we cannot name is not ours. */
-                {   DWORD codeBase = ((DWORD)(*(volatile WORD *)(blockBytes + 0x08)) << PARAGRAPH_SHIFT)
-                             + *(volatile WORD *)(blockBytes + 0x0A);
+                {   DWORD codeBase = ((DWORD)(*(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_TAIL_SEGMENT)) << PARAGRAPH_SHIFT)
+                             + *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_TAIL_OFFSET);
                     volatile BYTE *codeBlock = (volatile BYTE *)(ULONG_PTR)codeBase;
                     /* ── AN EMPTY DOS COMMAND TAIL, AND THE CR IS THE POINT. ────────
                          COMMAND.COM scans this buffer for the terminating CR (observed).
@@ -35713,11 +35713,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     }
                     if (commandLength) {
                         DWORD item;
-                        codeBlock[1] = (BYTE)commandLength;                /* [0] is the guest's AH=0Ah max */
-                        for (item = 0; item < commandLength; ++item) codeBlock[2 + item] = (BYTE)commandBuffer[item];
-                        codeBlock[2 + commandLength] = 0x0D;
+                        codeBlock[DOS_LINE_INPUT_LENGTH] = (BYTE)commandLength;                /* [0] is the guest's AH=0Ah max */
+                        for (item = 0; item < commandLength; ++item) codeBlock[DOS_LINE_INPUT_TEXT + item] = (BYTE)commandBuffer[item];
+                        codeBlock[DOS_LINE_INPUT_TEXT + commandLength] = ASCII_CR;
                     } else {
-                        codeBlock[1] = 0; codeBlock[2] = 0x0D;          /* ditto: [0] is NOT ours */
+                        codeBlock[DOS_LINE_INPUT_LENGTH] = 0; codeBlock[DOS_LINE_INPUT_TEXT] = ASCII_CR;          /* ditto: [0] is NOT ours */
                     }
                     if (!quiet) { cursor = LogPut(cursor, "         cmdline buf 0x"); cursor = LogHex(cursor, codeBase);
                                   if (commandLength) { cursor = LogPut(cursor, " <- ["); 
@@ -35727,7 +35727,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                   else      cursor = LogPut(cursor, " <- empty tail (len=0, CR)");
                                   cursor = LogPut(cursor, "\r\n"); }
                 }
-                BW(0x10, 0);                       /* flags: nothing was redirected */
+                BW(NTVDM_CMD_BLOCK_REDIRECTION, 0);                       /* flags: nothing was redirected */
                 /* ── ★ AND THE OTHER TWO HALVES OF THE ANSWER. ──────────────────────
                      sub 01 returns THREE things, not one: a command TAIL (+0x08:+0x0A,
                      written above), a program NAME (+0x1C:+0x1E, capacity +0x20), and
@@ -35743,9 +35743,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                    ⚠ We had been leaving both alone, i.e. handing the shell whatever was
                      in its own memory. `ver` and `dir` worked anyway -- a builtin needs
                      only the tail -- but that was luck, not an answer. */
-                {   DWORD nameBase = ((DWORD)(*(volatile WORD *)(blockBytes + 0x1C)) << PARAGRAPH_SHIFT)
-                             + *(volatile WORD *)(blockBytes + 0x1E);
-                    DWORD capacity = *(volatile WORD *)(blockBytes + 0x20);
+                {   DWORD nameBase = ((DWORD)(*(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_SEGMENT)) << PARAGRAPH_SHIFT)
+                             + *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_OFFSET);
+                    DWORD capacity = *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_CAPACITY);
                     volatile BYTE *nameBytes = (volatile BYTE *)(ULONG_PTR)nameBase;
                     /* ── ★ HAND BACK WHAT CSRSS NAMED -- THE SAME SOURCE XP USES. ────
                          On XP this buffer is filled from the VDM_COMMAND_INFO that
@@ -35767,28 +35767,28 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                        is what we actually LOADED, which is the program either way. */
                     PCSTR programPath = g_Routed ? g_FirstProgram      /* #208: the program */
                                    : programPathBuffer[0] ? programPathBuffer : (g_Application2[0] ? g_Application2 : "");
-                    DWORD al = 0, valueType = 9;
+                    DWORD al = 0, valueType = NTVDM_CMD_TYPE_OTHER;
                     if (!namedOnce && programPath[0]) {
-                        while (programPath[al] && al + 1 < capacity && al < 260) ++al;
+                        while (programPath[al] && al + 1 < capacity && al < MAX_PATH) ++al;
                         namedOnce = 1;
                     }
-                    if (al > 6) {
-                        CHAR extension[5]; INT item;
-                        for (item = 0; item < 4; ++item) {
-                            CHAR character = programPath[al - 4 + item];
-                            extension[item] = (character >= 'a' && character <= 'z') ? (CHAR)(character - 32) : character;
+                    if (al > NTVDM_CMD_SHORT_NAME_MAX) {
+                        CHAR extension[DOS_DOT_EXTENSION_LENGTH + 1]; INT item;
+                        for (item = 0; item < DOS_DOT_EXTENSION_LENGTH; ++item) {
+                            CHAR character = programPath[al - DOS_DOT_EXTENSION_LENGTH + item];
+                            extension[item] = (character >= 'a' && character <= 'z') ? (CHAR)(character - ASCII_CASE_BIT) : character;
                         }
-                        extension[4] = 0;
-                        if      (extension[1]=='E' && extension[2]=='X' && extension[3]=='E' && extension[0]=='.') valueType = 4;
-                        else if (extension[1]=='C' && extension[2]=='O' && extension[3]=='M' && extension[0]=='.') valueType = 8;
-                        else if (extension[1]=='B' && extension[2]=='A' && extension[3]=='T' && extension[0]=='.') valueType = 2;
+                        extension[DOS_DOT_EXTENSION_LENGTH] = 0;
+                        if      (extension[1]=='E' && extension[2]=='X' && extension[3]=='E' && extension[0]=='.') valueType = NTVDM_CMD_TYPE_EXE;
+                        else if (extension[1]=='C' && extension[2]=='O' && extension[3]=='M' && extension[0]=='.') valueType = NTVDM_CMD_TYPE_COM;
+                        else if (extension[1]=='B' && extension[2]=='A' && extension[3]=='T' && extension[0]=='.') valueType = NTVDM_CMD_TYPE_BAT;
                     }
                     { DWORD item; for (item = 0; item < al; ++item) nameBytes[item] = (BYTE)programPath[item]; nameBytes[al] = 0; }
-                    BW(0x22, valueType);
+                    BW(NTVDM_CMD_BLOCK_PROGRAM_TYPE, valueType);
                 /* ── +0x1A GATES THE INTERACTIVE PATH, so it is not a field we may
                      leave alone. COMMAND.COM keeps its low byte, and a non-zero value
                      takes it AWAY from the prompt. Zero. */
-                BW(0x1A, 0);
+                BW(NTVDM_CMD_BLOCK_KEYBOARD_GATE, 0);
                     if (!quiet) {
                         cursor = LogPut(cursor, "         prog name <- ["); 
                         { DWORD item; for (item = 0; item < al; ++item) { CHAR piece[2]; piece[0]=programPath[item]; piece[1]=0; cursor = LogPut(cursor, piece); } }
@@ -35811,7 +35811,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                      concludes it is being driven -- for ever. 1.25M calls a run.
                    ⇒ Zero, and only because the flags are zero: the two move together
                      in stock's answers and must stay tied together here. */
-                *(volatile DWORD *)(blockBytes + 0x12) = 0;
+                *(volatile DWORD *)(blockBytes + NTVDM_CMD_BLOCK_INTERACTIVE) = 0;
                 /* +0x14 is the high half of that dword and is covered by the store above.
                    +0x02 +0x04 +0x06 +0x16 +0x1A +0x20 +0x22 likewise: XP writes them,
                    but we cannot yet say WHAT, and a named wrong value is worse than an
@@ -35847,15 +35847,15 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                  We answer with the environment we built for it (seg DOS_ENV_SEG: PROMPT,
                  PATH, BLASTER, ULTRASND...), snapshotted on call 1 while it is intact, with
                  COMSPEC pointed at the real shell. */
-            if (bopNumber == NTVDM_BOP_CMD && sub == 0x0F) {
+            if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_PROMPT) {
                 static CHAR environmentSnapshot[1024]; static DWORD environmentSnapshotLength;
                 DWORD initialBx = VDM_REG16(tib, VTIB_EBX);
                 if (initialBx == 0) {
                     const volatile BYTE *environment0 = (const volatile BYTE *)(ULONG_PTR)((DWORD)DOS_ENV_SEG << PARAGRAPH_SHIFT);
                     DWORD inputIndex = 0, outputIndex = 0;
-                    while (inputIndex < 900 && !(environment0[inputIndex] == 0 && environment0[inputIndex + 1] == 0)) {
+                    while (inputIndex < ENVIRONMENT_SCAN_MAX && !(environment0[inputIndex] == 0 && environment0[inputIndex + 1] == 0)) {
                         DWORD environmentStart = inputIndex;
-                        while (environment0[inputIndex] && inputIndex < 900) ++inputIndex;
+                        while (environment0[inputIndex] && inputIndex < ENVIRONMENT_SCAN_MAX) ++inputIndex;
                         /* ── PATH IS WINDOWS' PATH, IN 8.3. (s81, user: "mem" -> "Bad command
                              or file name") We handed the shell `PATH=C:\`, so nothing in
                              SYSTEM32 -- MEM, EDIT, DEBUG, every XP DOS tool -- could be run by
@@ -35863,8 +35863,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                              each entry shortened (a DOS program cannot open a long name) and
                              the whole kept under 250 characters, dropping entries past that
                              rather than cutting one in half. */
-                        if ((environment0[environmentStart] | 0x20) == 'p' && (environment0[environmentStart + 1] | 0x20) == 'a' &&
-                            (environment0[environmentStart + 2] | 0x20) == 't' && (environment0[environmentStart + 3] | 0x20) == 'h' &&
+                        if ((environment0[environmentStart] | ASCII_CASE_BIT) == 'p' && (environment0[environmentStart + 1] | ASCII_CASE_BIT) == 'a' &&
+                            (environment0[environmentStart + 2] | ASCII_CASE_BIT) == 't' && (environment0[environmentStart + 3] | ASCII_CASE_BIT) == 'h' &&
                             environment0[environmentStart + 4] == '=') {
                             CHAR writeBuffer[2048], shellPath[MAX_PATH]; DWORD writeLength, start = outputIndex, length0 = 0;
                             PSTR start0 = writeBuffer, limit;
@@ -35876,7 +35876,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                     limit = start0; while (*limit && *limit != ';') ++limit;
                                     if (*limit) *limit++ = 0; else limit = start0 + lstrlenA(start0);
                                     shortLength = *start0 ? GetShortPathNameA(start0, shellPath, sizeof shellPath) : 0;
-                                    if (shortLength && shortLength < sizeof shellPath && (outputIndex - start) + shortLength + 1 < 250) {
+                                    if (shortLength && shortLength < sizeof shellPath && (outputIndex - start) + shortLength + 1 < PATH_VALUE_MAX) {
                                         if (length0++) environmentSnapshot[outputIndex++] = ';';
                                         outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, shellPath) - environmentSnapshot);
                                     }
@@ -35885,8 +35885,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                             }
                             if (!length0) outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, "C:\\") - environmentSnapshot);
                         } else
-                        if ((environment0[environmentStart] | 0x20) == 'c' && environment0[environmentStart + 7] == '=' &&
-                            (environment0[environmentStart + 1] | 0x20) == 'o' && (environment0[environmentStart + 2] | 0x20) == 'm') {
+                        if ((environment0[environmentStart] | ASCII_CASE_BIT) == 'c' && environment0[environmentStart + 7] == '=' &&
+                            (environment0[environmentStart + 1] | ASCII_CASE_BIT) == 'o' && (environment0[environmentStart + 2] | ASCII_CASE_BIT) == 'm') {
                             outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, "COMSPEC=") - environmentSnapshot);
                             outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, g_ShellPath[0] ? g_ShellPath
                                                            : "C:\\WINDOWS\\SYSTEM32\\COMMAND.COM") - environmentSnapshot);
@@ -35898,10 +35898,10 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     }
                     environmentSnapshot[outputIndex++] = 0;
                     environmentSnapshotLength = outputIndex;
-                    VDM_SET16(tib, VTIB_EBX, (WORD)((environmentSnapshotLength + 15) / 16 + 1));
+                    VDM_SET16(tib, VTIB_EBX, (WORD)((environmentSnapshotLength + PARAGRAPH_LAST_BYTE) / PARAGRAPH_SIZE + 1));
                 } else {
                     volatile BYTE *environment1 = (volatile BYTE *)(ULONG_PTR)(VDM_REG16(tib, VTIB_ES) << PARAGRAPH_SHIFT);
-                    DWORD paragraph, used = (environmentSnapshotLength + 15) / 16;
+                    DWORD paragraph, used = (environmentSnapshotLength + PARAGRAPH_LAST_BYTE) / PARAGRAPH_SIZE;
                     if (environmentSnapshotLength && used <= initialBx) {
                         for (paragraph = 0; paragraph < environmentSnapshotLength; ++paragraph) environment1[paragraph] = (BYTE)environmentSnapshot[paragraph];
                         VDM_SET16(tib, VTIB_EBX, (WORD)used);
@@ -35936,7 +35936,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                  ours; `cfg\autoexec.txt` points it anywhere, including at NT's.
                ⚠ A path that does not exist is FINE and is the normal case -- a DOS with no
                  AUTOEXEC.BAT simply has none. What was broken was the empty string. */
-            if (bopNumber == NTVDM_BOP_CMD && sub == 0x0D) {
+            if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_STARTUP_BATCH) {
                 DWORD nameBase = (VDM_REG16(tib, VTIB_DS) << PARAGRAPH_SHIFT)
                          + VDM_REG16(tib, VTIB_EDX);
                 volatile BYTE *nameBytes = (volatile BYTE *)(ULONG_PTR)nameBase;
@@ -35974,7 +35974,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                 WriteFile(writeHandle, body, sizeof body - 1, &bytesWritten, NULL);
                                 CloseHandle(writeHandle);
                                 shortTempLength = GetShortPathNameA(full, shortPath, sizeof shortPath);
-                                if (shortTempLength && shortTempLength <= 0x3F && bytesWritten == sizeof body - 1)
+                                if (shortTempLength && shortTempLength <= NTVDM_CMD_STARTUP_PATH_MAX && bytesWritten == sizeof body - 1)
                                     lstrcpynA(wrap, shortPath, sizeof wrap);
                             }
                         }
@@ -35982,7 +35982,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     }
                     for (autoLength = 0; wrap[autoLength] && autoLength < sizeof autoText - 1; ++autoLength) autoText[autoLength] = wrap[autoLength];
                 }
-                if (autoLength > 0x3F) autoLength = 0x3F;          /* XP's own cap */
+                if (autoLength > NTVDM_CMD_STARTUP_PATH_MAX) autoLength = NTVDM_CMD_STARTUP_PATH_MAX;          /* XP's own cap */
                 for (item = 0; item < autoLength; ++item) nameBytes[item] = (BYTE)autoText[item];
                 nameBytes[autoLength] = 0;
                 if (!quiet) {
@@ -36006,8 +36006,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                  has been asked to run a shell, and 0 is the value that lets the shell
                  be a shell. ⚠ Recorded as a reading of ONE flag we have not named,
                  not as a decode of what it means. */
-            if (bopNumber == NTVDM_BOP_CMD && sub == 0x10) {
-                VDM_REG(tib, VTIB_EAX) &= 0xFFFFFF00u;   /* AL = 0 */
+            if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_QUERY_BIT) {
+                VDM_REG(tib, VTIB_EAX) &= ~BYTE_MASK_U;   /* AL = 0 */
                 if (!quiet) {
                     cursor = LogPut(cursor, "         sub 10 answered: AL=0\r\n");
                     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
@@ -36035,13 +36035,13 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                  permanent shell (started with /P) -- observed.
                  It had no arm, so it fell to the generic "skip the BOP" below and EXIT
                  did nothing. End the run exactly as a top-level AH=4Ch does. */
-            if (bopNumber == NTVDM_BOP_CMD && sub == 0x00) {
+            if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_TERMINATE) {
                 cursor = LogPut(cursor, "         sub 00: the shell asked to END THE VDM (EXIT) -- ending the run\r\n");
                 LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                 machine.ExitCode = 0;
                 break;
             }
-            if (bopNumber == NTVDM_BOP_CMD && sub == 0x0E) {
+            if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_KEYBOARD_CONFIG) {
                 VDM_REG(tib, VTIB_EDX) &= HIGH_WORD_MASK_U;   /* DX = 0: no KEYB to run */
                 if (!quiet) {
                     cursor = LogPut(cursor, "         sub 0E answered: no keyboard driver (DX=0)\r\n");
@@ -36056,12 +36056,12 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;             /* C4 C4 <bop> <sub> -- see above */
             continue;
         }
-        if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) != 0x20) {
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) != DOS_BOP_INT21) {
             DWORD codeSegment = VDM_REG16(tib, VTIB_CS), instructionPointer = VDM_REG16(tib, VTIB_EIP);
             const volatile BYTE *isvBopBytes = (const volatile BYTE *)(ULONG_PTR)((codeSegment << PARAGRAPH_SHIFT) + instructionPointer);
             cursor = LogPut(cursor, "STAGE2: UNIMPLEMENTED BOP -- refusing (NOT an INT 21h call): bop=0x");
             cursor = LogHexByte(cursor, VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK);
-            cursor = LogPut(cursor, " next=0x"); cursor = LogHexByte(cursor, isvBopBytes[3]);   /* the sub-function byte */
+            cursor = LogPut(cursor, " next=0x"); cursor = LogHexByte(cursor, isvBopBytes[VDM_BOP_LENGTH]);   /* the sub-function byte */
             cursor = LogPut(cursor, " at 0x");  cursor = LogHex(cursor, codeSegment); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, instructionPointer);
             cursor = LogPut(cursor, " ax=0x");  cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EAX));
             cursor = LogPut(cursor, " bx=0x");  cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EBX));
@@ -36071,7 +36071,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             /* A DISTINCT, NON-ZERO exit code. The whole defect this closes was a guest
                killed by an unimplemented call and reported as a clean exit 0; reusing 0
                here would leave the lie in place with better logging on top of it. */
-            machine.ExitCode = 0xBD;
+            machine.ExitCode = UNIMPLEMENTED_BOP_EXIT_CODE;
             break;
         }
         /* ── #34: THE GUEST'S INT 24h HAS ANSWERED. Recognised by ADDRESS: BOP 20h is

@@ -274,4 +274,32 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 #define VDM_SET16(tib, off, v) (VDM_REG((tib), (off)) = \
         (VDM_REG((tib), (off)) & HIGH_WORD_MASK_U) | ((DWORD)(v) & WORD_MASK_U))
 
+/* ── XP's COMMAND.COM AND ITS PRIVATE BOP 54h (docs/inventory/bop.md). `C4 C4 54 sub`;
+     the names are the inventory's, from what each call was observed to do. */
+#define NTVDM_BOP_ISV                  0x58  /* a guest's third-party BOP, C4 C4 58 sub    */
+#define NTVDM_CMD_TERMINATE            0x00  /* ends the VDM, as VDDTerminateVDM          */
+#define NTVDM_CMD_NEXT_COMMAND         0x01  /* GetNextVDMCommand: what to run next       */
+#define NTVDM_CMD_STARTUP_BATCH        0x0D  /* a path to open: the startup batch file    */
+#define NTVDM_CMD_KEYBOARD_CONFIG      0x0E  /* the console's keyboard layout, code page  */
+#define NTVDM_CMD_PROMPT               0x0F  /* the host's PROMPT / environment           */
+#define NTVDM_CMD_QUERY_BIT            0x10  /* a one-bit query, answered in AL           */
+/* sub 01's block, at DS:DX. */
+#define NTVDM_CMD_BLOCK_TAIL_SEGMENT   0x08  /* the command-tail buffer, seg:off          */
+#define NTVDM_CMD_BLOCK_TAIL_OFFSET    0x0A
+#define NTVDM_CMD_BLOCK_EXIT_CODE      0x0E  /* copied into the VDM_COMMAND_INFO          */
+#define NTVDM_CMD_BLOCK_REDIRECTION    0x10  /* bit 0 stdin, 1 stdout, 2 stderr           */
+#define NTVDM_CMD_BLOCK_INTERACTIVE    0x12  /* DWORD: 0 = nothing drives the shell       */
+#define NTVDM_CMD_BLOCK_KEYBOARD_GATE  0x1A  /* low byte must be 0 for the prompt         */
+#define NTVDM_CMD_BLOCK_NAME_SEGMENT   0x1C  /* the program-name buffer, seg:off          */
+#define NTVDM_CMD_BLOCK_NAME_OFFSET    0x1E
+#define NTVDM_CMD_BLOCK_NAME_CAPACITY  0x20
+#define NTVDM_CMD_BLOCK_PROGRAM_TYPE   0x22
+/* +0x22: the program's type, by stock's rule on the name's last four characters. */
+#define NTVDM_CMD_TYPE_BAT             2
+#define NTVDM_CMD_TYPE_EXE             4
+#define NTVDM_CMD_TYPE_COM             8
+#define NTVDM_CMD_TYPE_OTHER           9     /* anything else, or a name this short:   */
+#define NTVDM_CMD_SHORT_NAME_MAX       6
+#define NTVDM_CMD_STARTUP_PATH_MAX     0x3F  /* sub 0D: XP's own cap                    */
+
 #endif /* NTVDMEX_VDM_NTVDM_H */

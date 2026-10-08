@@ -29,6 +29,10 @@
 #define DOS_FN_CHAR_INPUT               0x08
 #define DOS_FN_PRINT_STRING             0x09
 #define DOS_FN_BUFFERED_INPUT           0x0A
+/* AH=0Ah's buffer: [0] the maximum, [1] the length read, [2..] the text, then CR. */
+#define DOS_LINE_INPUT_MAXIMUM          0
+#define DOS_LINE_INPUT_LENGTH           1
+#define DOS_LINE_INPUT_TEXT             2
 #define DOS_FN_INPUT_STATUS             0x0B
 #define DOS_FN_FLUSH_AND_INPUT          0x0C
 #define DOS_FN_DISK_RESET               0x0D
