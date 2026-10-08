@@ -2379,7 +2379,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
             }
         }
         total = environmentLength + 2 + nameLength + 1;
-        if (DosMcbAllocate(NULL, machine->FirstMcb, (WORD)((total + 15) >> PARAGRAPH_SHIFT), &environmentBlock, &maximumParagraphs) != 0) {
+        if (DosMcbAllocate(NULL, machine->FirstMcb, (WORD)((total + PARAGRAPH_LAST_BYTE) >> PARAGRAPH_SHIFT), &environmentBlock, &maximumParagraphs) != 0) {
             cursor = LogPut(cursor, "  EXEC: no memory for the environment copy\r\n");
             VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & HIGH_WORD_MASK_U) | 8;
             *flagsPointer |= 1; VDM_REG(tib, VTIB_EIP) += 3;
@@ -18356,7 +18356,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
     if (!g_WowModuleCount || !image) return -1;
 
     imageLength        = module->ImageLength > module->Header ? module->ImageLength - module->Header : 0;
-    headerImageParagraphs  = (WORD)((imageLength + 15u) >> PARAGRAPH_SHIFT);
+    headerImageParagraphs  = (WORD)((imageLength + PARAGRAPH_LAST_BYTE_U) >> PARAGRAPH_SHIFT);
     windowParas  = headerImageParagraphs > (WORD)WOW_SELECTOR_PARAS
                   ? headerImageParagraphs : (WORD)WOW_SELECTOR_PARAS;
 
@@ -18540,7 +18540,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
                 need = dgroupSize;
             }
         }
-        if (DosMcbAllocate(NULL, machine->FirstMcb, (WORD)((need + 15) >> PARAGRAPH_SHIFT), &segment, &maximum) || !segment) {
+        if (DosMcbAllocate(NULL, machine->FirstMcb, (WORD)((need + PARAGRAPH_LAST_BYTE) >> PARAGRAPH_SHIFT), &segment, &maximum) || !segment) {
             cursor = message; cursor = LogPut(cursor, "WOWV86: no conventional memory for seg ");
             cursor = LogHex(cursor, (DWORD)(index + 1)); cursor = LogPut(cursor, ", largest free 0x"); cursor = LogHex(cursor, maximum);
             cursor = LogPut(cursor, " paras\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
@@ -31056,7 +31056,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         if (readCount >= 2 && g_FileBuffer[0] == 'M' && g_FileBuffer[1] == 'Z')
             fits = DosExecSize(g_FileBuffer, readCount, avail, &alloc, &high) == 0;
         else                                /* .COM: PSP + the image + a 256-byte stack */
-            fits = (UINT32)0x10u + ((readCount + 0x100u + 15u) >> PARAGRAPH_SHIFT) <= (UINT32)avail;
+            fits = (UINT32)DOS_PSP_PARAGRAPHS + ((readCount + DOS_PSP_SIZE + PARAGRAPH_LAST_BYTE_U) >> PARAGRAPH_SHIFT) <= (UINT32)avail;
         cursor = LogPut(cursor, "STAGE2: ConventionalKB=");  cursor = LogDecimal(cursor, g_ConventionalKbWant);
         if (fits) {
             g_DosMemoryTop = top;
@@ -33385,7 +33385,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                      the last partial one is kept rather than cut off.
                      CS is the resident program's PSP for an INT 27h caller. */
                 DWORD int27Dx = VDM_REG16(tib, VTIB_EDX);
-                machine.TsrKeep = (WORD)((int27Dx + 15) >> PARAGRAPH_SHIFT);
+                machine.TsrKeep = (WORD)((int27Dx + PARAGRAPH_LAST_BYTE) >> PARAGRAPH_SHIFT);
                 machine.IsTsrPending = 1;
                 cursor = LogPut(cursor, "  INT27 TSR: keep 0x"); cursor = LogHex(cursor, machine.TsrKeep);
                 cursor = LogPut(cursor, " paras (DX=0x"); cursor = LogHex(cursor, int27Dx);
