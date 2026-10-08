@@ -47,6 +47,7 @@
 #define DOS_MCB_OWNER_FREE        0
 #define DOS_MCB_OWNER_DOS         0x0008
 #define DOS_MCB_WALK_LIMIT        0x1000 /* more blocks than this = a runaway chain       */
+#define DOS_MCB_DUMP_GUARD        48     /* a logged chain dump stops here                */
 #define DOS_MCB_NO_SEGMENT        0      /* DosMcbReserveTop: nothing was reserved        */
 #define DOS_MCB_LOWER_TO_UPPER    0x20   /* 'a' - 'A'                                     */
 

@@ -105,13 +105,8 @@ __declspec(dllexport) VOID WINAPI WOWDirectedYield16(WORD task16) { (VOID)task16
 
 /* s91 (#309): krnl386's own global heap, through the host (shim_global16). Ops:
    0 GlobalAlloc(flags, cb) 1 GlobalFree(h) 2 GlobalLock(h) 3 GlobalUnlock(h)
-   4 GlobalSize(h) 5 GlobalHandle(sel) -- answers exactly as the 16-bit calls do. */
-#define SHIM_GLOBAL_ALLOC           0
-#define SHIM_GLOBAL_FREE            1
-#define SHIM_GLOBAL_LOCK            2
-#define SHIM_GLOBAL_UNLOCK          3
-#define SHIM_GLOBAL_SIZE            4
-#define SHIM_GLOBAL_HANDLE          5
+   4 GlobalSize(h) 5 GlobalHandle(sel) -- answers exactly as the 16-bit calls do.
+   The operation codes are the host's too: SHIM_GLOBAL_* in shim_api.h. */
 #define SHIM_NO_ARGUMENT            0
 #define SHIM_GLOBAL_FREED           0       /* Win16 GlobalFree: 0 = freed                */
 #define SHIM_SELECTOR_SHIFT         16      /* a 16:16 pointer's selector                */

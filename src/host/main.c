@@ -4614,7 +4614,7 @@ static VOID InjectInt(volatile BYTE *tib, UINT vector)
     VDM_SET16(tib, VTIB_EIP, PeekWord(IVT_OFFSET_ADDRESS(vector)));      /* IVT[vec].offset */
     VDM_SET16(tib, VTIB_CS,  PeekWord(IVT_SEGMENT_ADDRESS(vector)));  /* IVT[vec].segment */
 }
-
+enum { DOS_TERMINATE_MCB_GUARD = 1024 };   /* DosTerminate: blocks freed before giving up */
 /* ── A GUEST ASKED TO TERMINATE. FOUR DOORS, ONE ANSWER. (GH #134) ───────────
      AH=4Ch, AH=00h, INT 20h and INT 27h all end a program, and this decides
      whether that ends the RUN or merely returns a child to its parent.
@@ -4673,7 +4673,7 @@ static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR b
                DX counted paragraphs from the PSP; a request for less
                than a PSP is nonsense, so floor it at 16 rather than
                hand back a block that does not contain its own header. */
-            WORD keep = machine->TsrKeep < 0x10 ? 0x10 : machine->TsrKeep, maximumParagraphs = 0;
+            WORD keep = machine->TsrKeep < DOS_PSP_PARAGRAPHS ? DOS_PSP_PARAGRAPHS : machine->TsrKeep, maximumParagraphs = 0;
             INT resizeResult = DosMcbResize(NULL, g_Exec[depth].ChildSegment, keep, &maximumParagraphs);
             *logCursor = LogPut(*logCursor, "  TSR: seg=0x"); *logCursor = LogHex(*logCursor, g_Exec[depth].ChildSegment);
             *logCursor = LogPut(*logCursor, " stays resident, 0x"); *logCursor = LogHex(*logCursor, keep);
@@ -4700,14 +4700,14 @@ static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR b
             INT pass, freedCount = 0;
             /* ⚠ Was 64, and Skyroads owns MORE than that: closing it (#152) freed exactly
                  0x40 and stopped, leaving the rest owned by a PSP that no longer exists. */
-            for (pass = 0; pass < 4096; ++pass) {
+            for (pass = 0; pass < DOS_MCB_WALK_LIMIT; ++pass) {
                 WORD mcbSegment = machine->FirstMcb, hit = 0; INT guard = 0;
                 for (;;) {
                     volatile BYTE *mcb = DosMcbSegmentAddress(NULL, mcbSegment);
-                    if ((mcb[0] != 'M' && mcb[0] != 'Z') || ++guard > 1024) break;
+                    if ((mcb[DOS_MCB_SIGNATURE] != DOS_MCB_MEMBER && mcb[DOS_MCB_SIGNATURE] != DOS_MCB_LAST) || ++guard > DOS_TERMINATE_MCB_GUARD) break;
                     if (DosMcbReadWord(mcb + 1) == g_Exec[depth].ChildSegment) { hit = (WORD)(mcbSegment + 1); break; }
-                    if (mcb[0] == 'Z') break;
-                    mcbSegment = (WORD)(mcbSegment + 1 + DosMcbReadWord(mcb + 3));
+                    if (mcb[DOS_MCB_SIGNATURE] == DOS_MCB_LAST) break;
+                    mcbSegment = (WORD)(mcbSegment + 1 + DosMcbReadWord(mcb + DOS_MCB_SIZE));
                 }
                 if (!hit || DosMcbFree(NULL, hit)) break;
                 ++freedCount;
@@ -4724,8 +4724,8 @@ static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR b
             for (;;) {
                 volatile BYTE *mcb = DosMcbSegmentAddress(NULL, mcbSegment);
                 WORD owner, size;
-                if ((mcb[0] != 'M' && mcb[0] != 'Z') || ++guard > 48) { *logCursor = LogPut(*logCursor, " <broken>"); break; }
-                owner = DosMcbReadWord(mcb + 1); size = DosMcbReadWord(mcb + 3);
+                if ((mcb[DOS_MCB_SIGNATURE] != DOS_MCB_MEMBER && mcb[DOS_MCB_SIGNATURE] != DOS_MCB_LAST) || ++guard > DOS_MCB_DUMP_GUARD) { *logCursor = LogPut(*logCursor, " <broken>"); break; }
+                owner = DosMcbReadWord(mcb + DOS_MCB_OWNER); size = DosMcbReadWord(mcb + DOS_MCB_SIZE);
                 *logCursor = LogPut(*logCursor, " "); *logCursor = LogHex(*logCursor, mcbSegment);
                 *logCursor = LogPut(*logCursor, owner ? "/own=" : "/FREE"); if (owner) *logCursor = LogHex(*logCursor, owner);
                 *logCursor = LogPut(*logCursor, "/sz="); *logCursor = LogHex(*logCursor, size);
@@ -6006,7 +6006,7 @@ static VOID OplPumpTime(VOID)
     VddOplAddMicroseconds(&g_Opl, microseconds);
     HOST_UNLOCK();
 }
-
+#define IRQ0_NOTE_ASYNC_CS 0xFFFF   /* g_Irq0NoteCs: the tick was delivered async, no CS:IP to note */
 /* The audio thread's fill callback. Mixing touches the DMA controller, guest
    memory and the IRQ path, so it takes the same lock the exec thread uses. */
 /* ── WATCH DMX'S TASK TABLE FROM OUTSIDE. ────────────────────────────────────────
@@ -6061,7 +6061,7 @@ static VOID DmxSample(VOID)
           if (late > g_DmxOverdueMaximum) g_DmxOverdueMaximum = late;
       } }
 }
-
+#define COURIER_NORMAL_BUDGET_US 300u
 /* ── PACE THE PIT. ──────────────────────────────────────────────────────────────────
      HostPitSync() advances the emulated 8254 by however much wall-clock has elapsed
      since the last call, raising one IRQ0 per reload period -- so its CALL RATE sets
@@ -6207,7 +6207,7 @@ static DWORD WINAPI PitPacerThread(LPVOID param)
     }
     return 0;
 }
-
+enum { COURIER_OFF = 0, COURIER_ON = 1, COURIER_NORMAL_PRIORITY = 2, COURIER_WAIT_MS = 50, COURIER_NORMAL_TRIES = 2, COURIER_TRIES_MAX = 1000000 };   /* courier.txt's modes; the courier's wait and tries */
 /* ── ★★★ THE TICK COURIER: A RETRY THAT IS NOT TIED TO THE RAISE CADENCE. (s61) ──
      MEASURED, in-game, 45 s, Unlimited, synthetic keys (the fair A/B is in
      docs/STATE.md SESSION 61). Across the 75 gaps where Skyroads missed at least one
@@ -6310,19 +6310,19 @@ static DWORD WINAPI TickCourierThread(LPVOID parameter)
          become a spin at all. If that still decays, the retry idea is dead and the
          answer is the port-trap cost, not arbitration. */
     SetThreadPriority(GetCurrentThread(),
-                      g_CourierOn == 2 ? THREAD_PRIORITY_NORMAL
+                      g_CourierOn == COURIER_NORMAL_PRIORITY ? THREAD_PRIORITY_NORMAL
                                         : THREAD_PRIORITY_HIGHEST);
     while (g_Running) {
         LARGE_INTEGER start, now;
         /* The 50 ms cap is a backstop, not the mechanism: the raise site signals us.
            Without it a lost signal would park the courier for the rest of the run. */
-        WaitForSingleObject(g_CourierEvent, 50);
+        WaitForSingleObject(g_CourierEvent, COURIER_WAIT_MS);
         ++g_CourierWakes;
         if (!g_CourierOn || !g_QiSuspended || g_DpmiPm || !g_HostCpu) continue;
         if (g_Irq0Pending <= 0) continue;
         QueryPerformanceCounter(&start);
-        {   UINT budgetMicroseconds = (g_CourierOn == 2) ? 300u : COURIER_BUDGET_US;
-            INT triesLeft     = (g_CourierOn == 2) ? 2    : 1000000;
+        {   UINT budgetMicroseconds = (g_CourierOn == COURIER_NORMAL_PRIORITY) ? COURIER_NORMAL_BUDGET_US : COURIER_BUDGET_US;
+            INT triesLeft     = (g_CourierOn == COURIER_NORMAL_PRIORITY) ? COURIER_NORMAL_TRIES : COURIER_TRIES_MAX;
         for (;;) {
             if (!g_Running || g_Irq0Pending <= 0) break;
             if (triesLeft-- <= 0) { ++g_CourierGiveUp; break; }
@@ -6336,7 +6336,7 @@ static DWORD WINAPI TickCourierThread(LPVOID parameter)
                 if (AsyncInjectIrq(0)) {
                     InterlockedDecrement(&g_Irq0Pending);
                     PmTickTake();
-                    g_Irq0NoteCs = 0xFFFF; g_Irq0NoteIp = 0;   /* delivered async */
+                    g_Irq0NoteCs = IRQ0_NOTE_ASYNC_CS; g_Irq0NoteIp = 0;   /* delivered async */
                     Irq0DeliveredNote();
                     ++g_CourierInjected;
                     break;                      /* one tick per wake -- see above */
@@ -7132,8 +7132,8 @@ static VOID PlanesDumpBeside(PCSTR bitmapPath)
 static VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak)
 {
     HOST_LOCK();
-    if (extended) VddInputPushScanCode(&g_Input, 0xE0);
-    VddInputPushScanCode(&g_Input, isBreak ? (BYTE)(rawScancode | 0x80) : rawScancode);
+    if (extended) VddInputPushScanCode(&g_Input, INPUT_SCAN_PREFIX_E0);
+    VddInputPushScanCode(&g_Input, isBreak ? (BYTE)(rawScancode | INPUT_SCAN_BREAK_BIT) : rawScancode);
     HOST_UNLOCK();
     KeyLatencyPush();                  /* start the clock on this keystroke's delivery */
     /* The VDD raises IRQ1 itself now, on the 8042's empty->full transition and again as the
@@ -10126,7 +10126,7 @@ static INT WowGdiAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
      it never matches, the dispatcher simply never engages and every seg2 call
      stays honestly unimplemented -- the same failure mode as USER's anchor. */
 static WORD g_WowKernel2Segment = 0;
-
+enum { WOW_K2_STUB_LENGTH = 8 };   /* WowKernel2Stub: push imm16 ; call far -- the bytes before the return */
 static INT WowKernel2Stub(WORD thunkId, WORD returnStub)
 {
     const NE_SEGMENT *segment;
@@ -10134,9 +10134,9 @@ static INT WowKernel2Stub(WORD thunkId, WORD returnStub)
     DWORD offset;
     if (g_WowModuleCount < 1 || !g_WowImage[0] || g_WowModule[0].SegmentCount < 2) return 0;
     segment = &g_WowModule[0].Segments[1];
-    if (!segment->Sector || returnStub < 8 || (DWORD)returnStub > segment->Length) return 0;
+    if (!segment->Sector || returnStub < WOW_K2_STUB_LENGTH || (DWORD)returnStub > segment->Length) return 0;
     image = g_WowImage[0] + segment->FileOffset;
-    offset   = (DWORD)returnStub - 8;
+    offset   = (DWORD)returnStub - WOW_K2_STUB_LENGTH;
     return image[offset] == X86_OP_PUSH_IMM
         && (WORD)(image[offset + 1] | (image[offset + 2] << BYTE_SHIFT)) == thunkId
         && image[offset + 3] == X86_OP_CALL_FAR;
@@ -15007,7 +15007,7 @@ static VOID HostPitDeliver(VOID)
                        is fed almost entirely from here and a V86 one from the
                        cooperative site; counting one would show a clock stopping
                        exactly where the other took over. */
-                    g_Irq0NoteCs = 0xFFFF; g_Irq0NoteIp = 0;  /* delivered async */
+                    g_Irq0NoteCs = IRQ0_NOTE_ASYNC_CS; g_Irq0NoteIp = 0;  /* delivered async */
                     Irq0DeliveredNote();
                 }
             } }
@@ -21926,7 +21926,7 @@ static PSTR PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
 #define V86BOP_DONE  1      /* serviced; EIP is past the BOP, onto the stub's IRET/RETF  */
 #define V86BOP_RERUN 4      /* serviced, still waiting; EIP left ON the BOP to re-execute */
 static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base);
-enum { WOW_SEGMENT_LIMIT_SLACK = 0x100, MCB_DUMP_CHAIN_GUARD = 48, DPMI_SET_DESCRIPTOR_INDEX_LIMIT = 512 };   /* DpmiServicePmIntBody */
+enum { WOW_SEGMENT_LIMIT_SLACK = 0x100, DPMI_SET_DESCRIPTOR_INDEX_LIMIT = 512 };   /* DpmiServicePmIntBody */
 /* ── ★★★ THE DEFAULT PM HANDLER FOR A HARDWARE IRQ, WHEN THE GUEST OWNS THE REAL-MODE
      VECTOR: A TRUE NESTED-V86 REFLECTION. (s81, ZAR's streaming audio) ───────────────
      DPMI 0.9: a protected-mode interrupt nobody hooked in PM is reflected to the real-mode
@@ -25231,7 +25231,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                         if (cursor - base > 1600) { cursor = LogPut(cursor, " ...(chain dump truncated)"); break; }
                                         WORD owner = (WORD)(mcb[DOS_MCB_OWNER] | (mcb[DOS_MCB_OWNER + 1] << BYTE_SHIFT));
                                         WORD size  = (WORD)(mcb[DOS_MCB_SIZE] | (mcb[DOS_MCB_SIZE + 1] << BYTE_SHIFT));
-                                        if ((signature != DOS_MCB_MEMBER && signature != DOS_MCB_LAST) || ++chainGuard > MCB_DUMP_CHAIN_GUARD) {
+                                        if ((signature != DOS_MCB_MEMBER && signature != DOS_MCB_LAST) || ++chainGuard > DOS_MCB_DUMP_GUARD) {
                                             /* ⚠ AND SHOW THE BYTES WHERE THE WALK STOPPED. (s74)
                                                  A chain that ends without a 'Z' is a chain
                                                  somebody wrote over, and the 16 bytes say WHO:
@@ -27654,7 +27654,7 @@ static BOOL ShimCallback16Ex(DWORD targetProcedure, DWORD flags, DWORD byteCount
     if (result) *result = g_WowCallLastResult;
     return TRUE;
 }
-
+#include "../shim/shim_api.h"   /* defines only: the host/shim contract (SHIM_API_VERSION, SHIM_GLOBAL_*) */
 /* ── s91 (#309): WOWGlobal*16 -- krnl386's OWN global heap, through its exports
      (offsets in its segment 1, read off guest/win16/krnl386.exe's entry table:
      15 GlobalAlloc 3ac3, 17 GlobalFree 3adf, 18 GlobalLock 3b10, 19 GlobalUnlock
@@ -27662,19 +27662,19 @@ static BOOL ShimCallback16Ex(DWORD targetProcedure, DWORD flags, DWORD byteCount
      AllocLock/UnlockFree/LockSize forms from these. 0 when the call cannot be made. */
 static DWORD ShimGlobal16(INT operation, DWORD firstArgument, DWORD secondArgument)
 {
-    static const WORD offset[6] = { 0x3ac3, 0x3adf, 0x3b10, 0x3b63, 0x3b4f, 0x3afc };
+    static const WORD offset[SHIM_GLOBAL_OPERATIONS] = { 0x3ac3, 0x3adf, 0x3b10, 0x3b63, 0x3b4f, 0x3afc };
     WORD args[3], result = 0;
     INT argumentCount;
-    if (operation < 0 || operation > 5 || !g_WowUserKernelSegment || !g_TibDebug) return 0;
-    if (operation == 0) { args[0] = (WORD)firstArgument; args[1] = (WORD)(secondArgument >> WORD_SHIFT); args[2] = (WORD)secondArgument; argumentCount = 3; }
+    if (operation < 0 || operation >= SHIM_GLOBAL_OPERATIONS || !g_WowUserKernelSegment || !g_TibDebug) return 0;
+    if (operation == SHIM_GLOBAL_ALLOC) { args[0] = (WORD)firstArgument; args[1] = (WORD)(secondArgument >> WORD_SHIFT); args[2] = (WORD)secondArgument; argumentCount = 3; }
     else         { args[0] = (WORD)firstArgument; argumentCount = 1; }
     if (!WowCall16Sync(((DWORD)g_WowUserKernelSegment << WORD_SHIFT) | offset[operation],
                          (WORD)VDM_REG16(g_TibDebug, VTIB_DS), args, argumentCount, 0, 0, &result))
         return 0;
     /* GlobalLock / GlobalSize / GlobalHandle answer in DX:AX; the rest in AX */
-    return (operation == 2 || operation == 4 || operation == 5) ? g_WowCallLastResult : (DWORD)(WORD)g_WowCallLastResult;
+    return (operation == SHIM_GLOBAL_LOCK || operation == SHIM_GLOBAL_SIZE || operation == SHIM_GLOBAL_HANDLE) ? g_WowCallLastResult : (DWORD)(WORD)g_WowCallLastResult;
 }
-
+enum { WOW_WINDOW_NESTING_MAX = 6, WOW_CALL16_PHASE_MAX = 500000 };   /* WowCall16SyncEx */
 /* ══ THIRD-PARTY VDDs, MICROSOFT ABI (s91, #11). ════════════════════════════════════
      A DOS program with a VDD of its own registers it with the third-party BOP,
      `C4 C4 58 nn` (the DDK's isvbop.inc): nn=0 RegisterModule (DS:SI the DLL, DS:DI
@@ -27783,7 +27783,7 @@ static VOID ShimRemoveIoHook(HANDLE vddHandle, WORD rangeCount, PCVOID ranges)
         for (index = 0; index < ISV_MAX_HOOKS; ++index)
             if (g_IsvHooks[index].VddHandle == vddHandle && g_IsvHooks[index].FirstPort == ranges16[index2 * 2]) g_IsvHooks[index].IsLive = 0;
 }
-#include "../shim/shim_api.h"   /* defines only: SHIM_API_VERSION, which the shim checks */
+
 static VOID WowShimsLoad(VOID)
 {
     static INT done;
@@ -28024,7 +28024,7 @@ static INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCo
     UINT phase;
     if (!tib || !g_DpmiPm || !g_WowLaunch || !g_DosMachine || !g_Running) return 0;
     if (GetCurrentThreadId() != g_GuestThreadId) return 0;
-    if (g_WowCallDepth >= WOWCALL_MAX_DEPTH - 1 || g_WowWindowNested >= 6 || !(proc >> WORD_SHIFT)) return 0;
+    if (g_WowCallDepth >= WOWCALL_MAX_DEPTH - 1 || g_WowWindowNested >= WOW_WINDOW_NESTING_MAX || !(proc >> WORD_SHIFT)) return 0;
     callbackSelector = WowCallbackSelector();
     stackSegmentBase  = DpmiSelectorBase((WORD)VDM_REG16(tib, VTIB_SS));
     if (!callbackSelector || !stackSegmentBase) return 0;
@@ -28035,11 +28035,11 @@ static INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCo
         for (fixIndex = 0; fix && fixIndex < fixupCount; ++fixIndex) {
             INT fixOffset = fix[fixIndex];
             WORD fixupValue;
-            if (fixOffset < 0 || fixOffset + 4 > blobLength) continue;
+            if (fixOffset < 0 || fixOffset + X86_FAR_POINTER_SIZE > blobLength) continue;
             fixupValue = (WORD)(blob[fixOffset] | (blob[fixOffset + 1] << BYTE_SHIFT));
             fixupValue = (WORD)(blobStackPointer + fixupValue);
             blob[fixOffset] = (BYTE)fixupValue; blob[fixOffset + 1] = (BYTE)(fixupValue >> BYTE_SHIFT);
-            blob[fixOffset + 2] = (BYTE)ss; blob[fixOffset + 3] = (BYTE)(ss >> BYTE_SHIFT);
+            blob[fixOffset + X86_FAR_POINTER_SEGMENT] = (BYTE)ss; blob[fixOffset + X86_FAR_POINTER_SEGMENT + 1] = (BYTE)(ss >> BYTE_SHIFT);
         }
     }
     if (!WowCallEnter(tib, stackSegmentBase, callbackSelector, proc, ds, args, argumentCount, 0, WOWCALL_RET_KEEP, &sink,
@@ -28047,7 +28047,7 @@ static INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCo
                        WowDlgIsSelectorAbsent((WORD)(proc >> WORD_SHIFT))))
         return 0;
     ++g_WowWindowNested;
-    for (phase = 0; phase < 500000 && g_WowCallDepth > depthBefore && g_Running; ++phase) {
+    for (phase = 0; phase < WOW_CALL16_PHASE_MAX && g_WowCallDepth > depthBefore && g_Running; ++phase) {
         DWORD event, eip, vector; INT status;
         DpmiArmFaultTrampoline(tib, 0);
         DpmiEnterProtectedMode(tib);
@@ -28525,7 +28525,7 @@ static INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, U
     DpmiEnsurePmReturnSelector();
     if (g_PmReturnSelector == 0) return 0;
     if (g_DpmiIsClient32 && !DpmiSelectorIs32(savedCs)) return 0;      /* the extender mid-service */
-    if (!(savedSs & 4)) return 0;                                    /* not a client stack      */
+    if (!(savedSs & DPMI_SELECTOR_TI)) return 0;                                    /* not a client stack      */
     /* The oldest queued event a handler asked for, and which handler (MouseEventQueueTake). */
     if (!MouseEventQueueTake(&event, &pend, &handlerSelector, &handlerOffset) || !pend) return 0;
     /* A far-return frame (CS:EIP) onto the catcher, on the client's own stack. Frame
@@ -28549,8 +28549,8 @@ static INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, U
     /* DS stays the interrupted application's: for a flat client that IS its data
        selector, and a Watcom `__loadds` handler reloads its own anyway. */
     g_DpmiVi = 0;
-    VDM_REG(tib, VTIB_EFLAGS) = (sEFL & ~(EFLAGS_IF_U | EFLAGS_VIF | EFLAGS_VIP)) | 2u;
-    *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR &= ~3u;
+    VDM_REG(tib, VTIB_EFLAGS) = (sEFL & ~(EFLAGS_IF_U | EFLAGS_VIF | EFLAGS_VIP)) | EFLAGS_RESERVED_ONE_U;
+    *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR &= ~VDM_INT_PENDING;
     VDM_SET16(tib, VTIB_CS, handlerSelector);
     VDM_REG(tib, VTIB_EIP) = isClient32 ? handlerOffset : (handlerOffset & WORD_MASK);
     ++g_MouseCallbackInjected;
@@ -28567,7 +28567,7 @@ static INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, U
     }
     for (phase = 0; phase < DPMI_IRQ0_PHASE_MAX && !done; ++phase) {
         DWORD runEvent, eip, vector; INT status;
-        if ((phase & 0x3F) == 0x3F && (GetTickCount() - start) > DPMI_IRQ0_MS_MAX) break;
+        if ((phase & DPMI_IRQ_TIME_CHECK_MASK) == DPMI_IRQ_TIME_CHECK_MASK && (GetTickCount() - start) > DPMI_IRQ0_MS_MAX) break;
         DpmiArmFaultTrampoline(tib, 0);
         DpmiEnterProtectedMode(tib);
         runEvent   = VDM_REG(tib, VTIB_EVENT);
@@ -28766,25 +28766,25 @@ static UINT32 DpmiSegmentToLinear(WORD selector) { return DpmiSelectorBase(selec
 #define OS_VERSION_NOT_NT_U 0x80000000u   /* GetVersion: the high bit is set on Windows 9x */
 static VOID DpmiInterpreterCpuLoad(V86_CPU *cpu, volatile BYTE *tib)
 {
-    cpu->Registers[0]=(WORD)VDM_REG(tib,VTIB_EAX); cpu->Registers[1]=(WORD)VDM_REG(tib,VTIB_ECX);
-    cpu->Registers[2]=(WORD)VDM_REG(tib,VTIB_EDX); cpu->Registers[3]=(WORD)VDM_REG(tib,VTIB_EBX);
-    cpu->Registers[4]=(WORD)VDM_REG(tib,VTIB_ESP); cpu->Registers[5]=(WORD)VDM_REG(tib,VTIB_EBP);
-    cpu->Registers[6]=(WORD)VDM_REG(tib,VTIB_ESI); cpu->Registers[7]=(WORD)VDM_REG(tib,VTIB_EDI);
-    cpu->Segments[0]=(WORD)VDM_REG(tib,VTIB_ES); cpu->Segments[1]=(WORD)VDM_REG(tib,VTIB_CS);
-    cpu->Segments[2]=(WORD)VDM_REG(tib,VTIB_SS); cpu->Segments[3]=(WORD)VDM_REG(tib,VTIB_DS);
-    cpu->Segments[4]=(WORD)VDM_REG(tib,VTIB_FS); cpu->Segments[5]=(WORD)VDM_REG(tib,VTIB_GS);
+    cpu->Registers[X86_REG_AX]=(WORD)VDM_REG(tib,VTIB_EAX); cpu->Registers[X86_REG_CX]=(WORD)VDM_REG(tib,VTIB_ECX);
+    cpu->Registers[X86_REG_DX]=(WORD)VDM_REG(tib,VTIB_EDX); cpu->Registers[X86_REG_BX]=(WORD)VDM_REG(tib,VTIB_EBX);
+    cpu->Registers[X86_REG_SP]=(WORD)VDM_REG(tib,VTIB_ESP); cpu->Registers[X86_REG_BP]=(WORD)VDM_REG(tib,VTIB_EBP);
+    cpu->Registers[X86_REG_SI]=(WORD)VDM_REG(tib,VTIB_ESI); cpu->Registers[X86_REG_DI]=(WORD)VDM_REG(tib,VTIB_EDI);
+    cpu->Segments[X86_SREG_ES]=(WORD)VDM_REG(tib,VTIB_ES); cpu->Segments[X86_SREG_CS]=(WORD)VDM_REG(tib,VTIB_CS);
+    cpu->Segments[X86_SREG_SS]=(WORD)VDM_REG(tib,VTIB_SS); cpu->Segments[X86_SREG_DS]=(WORD)VDM_REG(tib,VTIB_DS);
+    cpu->Segments[X86_SREG_FS]=(WORD)VDM_REG(tib,VTIB_FS); cpu->Segments[X86_SREG_GS]=(WORD)VDM_REG(tib,VTIB_GS);
     cpu->Ip=(WORD)VDM_REG(tib,VTIB_EIP);
     cpu->Flags=VDM_REG(tib,VTIB_EFLAGS);
 }
 static VOID DpmiInterpreterCpuStore(V86_CPU *cpu, volatile BYTE *tib)
 {
-    VDM_SET16(tib,VTIB_EAX,cpu->Registers[0]); VDM_SET16(tib,VTIB_ECX,cpu->Registers[1]);
-    VDM_SET16(tib,VTIB_EDX,cpu->Registers[2]); VDM_SET16(tib,VTIB_EBX,cpu->Registers[3]);
-    VDM_SET16(tib,VTIB_ESP,cpu->Registers[4]); VDM_SET16(tib,VTIB_EBP,cpu->Registers[5]);
-    VDM_SET16(tib,VTIB_ESI,cpu->Registers[6]); VDM_SET16(tib,VTIB_EDI,cpu->Registers[7]);
-    VDM_SET16(tib,VTIB_ES,cpu->Segments[0]); VDM_SET16(tib,VTIB_CS,cpu->Segments[1]);
-    VDM_SET16(tib,VTIB_SS,cpu->Segments[2]); VDM_SET16(tib,VTIB_DS,cpu->Segments[3]);
-    VDM_SET16(tib,VTIB_FS,cpu->Segments[4]); VDM_SET16(tib,VTIB_GS,cpu->Segments[5]);
+    VDM_SET16(tib,VTIB_EAX,cpu->Registers[X86_REG_AX]); VDM_SET16(tib,VTIB_ECX,cpu->Registers[X86_REG_CX]);
+    VDM_SET16(tib,VTIB_EDX,cpu->Registers[X86_REG_DX]); VDM_SET16(tib,VTIB_EBX,cpu->Registers[X86_REG_BX]);
+    VDM_SET16(tib,VTIB_ESP,cpu->Registers[X86_REG_SP]); VDM_SET16(tib,VTIB_EBP,cpu->Registers[X86_REG_BP]);
+    VDM_SET16(tib,VTIB_ESI,cpu->Registers[X86_REG_SI]); VDM_SET16(tib,VTIB_EDI,cpu->Registers[X86_REG_DI]);
+    VDM_SET16(tib,VTIB_ES,cpu->Segments[X86_SREG_ES]); VDM_SET16(tib,VTIB_CS,cpu->Segments[X86_SREG_CS]);
+    VDM_SET16(tib,VTIB_SS,cpu->Segments[X86_SREG_SS]); VDM_SET16(tib,VTIB_DS,cpu->Segments[X86_SREG_DS]);
+    VDM_SET16(tib,VTIB_FS,cpu->Segments[X86_SREG_FS]); VDM_SET16(tib,VTIB_GS,cpu->Segments[X86_SREG_GS]);
     VDM_SET16(tib,VTIB_EIP,cpu->Ip);
     VDM_REG(tib,VTIB_EFLAGS) = (VDM_REG(tib,VTIB_EFLAGS) & HIGH_WORD_MASK_U) | (cpu->Flags & WORD_MASK_U);
 }

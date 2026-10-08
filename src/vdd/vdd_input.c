@@ -9,9 +9,7 @@
 #define INPUT_FAILED                (-1)
 #define INPUT_NO_SCAN_CODE          (-1)
 /* Scan code set 1. */
-#define INPUT_SCAN_BREAK_BIT        0x80
 #define INPUT_SCAN_CODE_MASK        0x7F
-#define INPUT_SCAN_PREFIX_E0        0xE0
 #define INPUT_SCAN_PREFIX_E1        0xE1
 #define INPUT_PAUSE_CODES_AFTER_E1  2       /* E1 1D 45: the 1D and the 45               */
 #define INPUT_PAUSE_SEQUENCE_LENGTH 6       /* E1 1D 45 E1 9D C5                         */

@@ -42,6 +42,8 @@
 #define INPUT_ACTION_KINDS     6
 #define INPUT_SCANCODE_DOWN    0x50     /* the cursor-down key's make code           */
 #define INPUT_SCAN_TAB              0x0F
+#define INPUT_SCAN_BREAK_BIT        0x80    /* make code | this = the key's release     */
+#define INPUT_SCAN_PREFIX_E0        0xE0    /* an extended key's prefix                 */
 #define INPUT_SCAN_ENTER            0x1C    /* keypad Enter when E0-prefixed             */
 #define INPUT_SCAN_LEFT_SHIFT       0x2A
 #define INPUT_LAYOUT_LAST           3       /* Layout: 0 US, 1 UK, 2 German, 3 French    */
