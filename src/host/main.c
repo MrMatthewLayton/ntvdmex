@@ -53,10 +53,10 @@ static PCSTR NtvdmexPath(PCSTR subdirectory, PCSTR name);
 #define NTVDMEX_DIR NtvdmexRoot()
 #define NTVDMEX_CFG   NtvdmexPath("cfg\\", "")
 #define NTVDMEX_DEBUG NtvdmexPath("debug\\", "")        /* parent of out\; created first */
-/* #211: the FIRST host writes to debug\out\ as always; a second one running at the
-   same time writes to debug\out\2\, and so on -- see the instance claim in WinMain.
-   Everything it writes goes through these two, so no host clears another's log. */
-static CHAR g_OutSubdirectory[24] = "debug\\out\\";
+#include "host_strings.h"   /* defines only: the strings that are not log text */
+/* #211: the FIRST host writes to debug\out\ as always; a second one at the same time writes
+   to debug\out\2\, and so on (the instance claim in WinMain) -- so no host clears another's log. */
+static CHAR g_OutSubdirectory[24] = HOST_OUT_SUBDIRECTORY;
 static INT  g_Instance = 1, g_InstanceAbandoned;
 
 #define NTVDMEX_OUT   NtvdmexPath(g_OutSubdirectory, "")
@@ -193,12 +193,12 @@ static DWORD                       g_OsVersion;       /* GetVersion(): 0x0500 = 
 
 static VOID OsCompatBind(VOID)
 {
-    HMODULE kernel32 = GetModuleHandleA("kernel32.dll"), user32 = GetModuleHandleA("user32.dll");
+    HMODULE kernel32 = GetModuleHandleA(HOST_MODULE_KERNEL32), user32 = GetModuleHandleA(HOST_MODULE_USER32);
     g_OsVersion = GetVersion();
-    g_PfnAddVeh        = (PFN_ADD_VECTORED_EXCEPTION_HANDLER)(ULONG_PTR)GetProcAddress(kernel32, "AddVectoredExceptionHandler");
-    g_PfnAttachConsole = (PFN_ATTACH_CONSOLE)(ULONG_PTR)GetProcAddress(kernel32, "AttachConsole");
-    g_PfnRegisterRawInput   = user32 ? (PFN_REGISTER_RAW_INPUT_DEVICES)(ULONG_PTR)GetProcAddress(user32, "RegisterRawInputDevices") : 0;
-    g_PfnGetRawInput   = user32 ? (PFN_GET_RAW_INPUT_DATA)(ULONG_PTR)GetProcAddress(user32, "GetRawInputData") : 0;
+    g_PfnAddVeh        = (PFN_ADD_VECTORED_EXCEPTION_HANDLER)(ULONG_PTR)GetProcAddress(kernel32, HOST_EXPORT_ADD_VECTORED_EXCEPTION_HANDLER);
+    g_PfnAttachConsole = (PFN_ATTACH_CONSOLE)(ULONG_PTR)GetProcAddress(kernel32, HOST_EXPORT_ATTACH_CONSOLE);
+    g_PfnRegisterRawInput   = user32 ? (PFN_REGISTER_RAW_INPUT_DEVICES)(ULONG_PTR)GetProcAddress(user32, HOST_EXPORT_REGISTER_RAW_INPUT_DEVICES) : 0;
+    g_PfnGetRawInput   = user32 ? (PFN_GET_RAW_INPUT_DATA)(ULONG_PTR)GetProcAddress(user32, HOST_EXPORT_GET_RAW_INPUT_DATA) : 0;
 }
 /* AttachConsole on an OS without it: fail, and let the next route try. */
 static BOOL OsCompatAttachConsole(DWORD processId)
@@ -267,7 +267,7 @@ static BOOL OsCompatAttachConsole(DWORD processId)
    keeping only because it is what a machine that refuses the remap will use. */
 #define SBDUMP_FLAG  CFG_("sbdump.flag")
 /* North star 2: present = no Gravis UltraSound (no device, no ULTRASND= in the env). */
-#define NOGUS_FLAG   CFG_("nogus.flag")
+#define NOGUS_FLAG   CFG_(KNOB_FILE_NOGUS)
 #define SBDUMP_PATH  OUT_("sb.raw")
 /* s81: record the audio output (audio_rec.h via AudioWaveRecord*). The flag is the harness's
    switch; Tools > Capture > Record Audio will drive the same recorder. */
@@ -397,10 +397,10 @@ static DOS_SAFE_SKIPS g_Safe;           /* s90 #132: all zero unless SAFE MODE (
 #define EXECPRIO_PATH    CFG_("execprio.txt")
 #define DSPVER_PATH      CFG_("dspver.txt")
 #define SBGATE_PATH      CFG_("sbgate.txt")
-#define PITPACE_PATH     CFG_("pitpace.txt")
+#define PITPACE_PATH     CFG_(KNOB_FILE_PITPACE)
 #define PITPRIO_PATH     CFG_("pitprio.txt")
 #define PITINJ_PATH      CFG_("pitinj.txt")
-#define UITICK_PATH      CFG_("uitick.txt")
+#define UITICK_PATH      CFG_(KNOB_FILE_UITICK)
 /* courier.txt = 0 turns the tick courier off (see TickCourierThread). 1 = as shipped. */
 #define COURIER_PATH     CFG_("courier.txt")
 /* llkbd.txt = 1 re-enables the SYSTEM-WIDE low-level keyboard hook. OFF by default --
@@ -415,7 +415,7 @@ static DOS_SAFE_SKIPS g_Safe;           /* s90 #132: all zero unless SAFE MODE (
      will never receive anything still lets the run finish. */
 #define WOWIDLE_PATH     CFG_("wowidle.txt")
 #define KEYIRQ_PATH      CFG_("keyirq.txt")
-#define MSENS_PATH       CFG_("msens.txt")
+#define MSENS_PATH       CFG_(KNOB_FILE_MSENS)
 /* ── ★ THE CPU-SPEED CALIBRATION, AS A FILE. (GH #56) ────────────────────────────
      Decimal MHz: how fast an UNTHROTTLED host looks to a DOS program on THIS box.
      Every speed on the menu is a fraction of it, so it is the one number that makes
@@ -425,12 +425,12 @@ static DOS_SAFE_SKIPS g_Safe;           /* s90 #132: all zero unless SAFE MODE (
 #define CPUREF_PATH      CFG_("cpuref.txt")
 /* Decimal index into g_CpuSpeedMhz, overriding the registry for one run. This is how
    the rig sweeps every speed in a single batch without touching HKCU. */
-#define CPUSPD_PATH      CFG_("cpuspd.txt")
+#define CPUSPD_PATH      CFG_(KNOB_FILE_CPUSPD)
 /* Throttle granularity (target run/hold period, ms). 0/absent = auto-detect. */
 #define CPUGRAN_PATH     CFG_("cpugran.txt")
 /* cpuaff.txt = 1 -> pin the guest to a core of its own (see CpuAffinityApply). */
 #define CPUAFF_PATH      CFG_("cpuaff.txt")
-#define DOSVER_PATH      CFG_("dosver.txt")
+#define DOSVER_PATH      CFG_(KNOB_FILE_DOSVER)
 /* INT 21h AH=53h's private AL sub-functions. A knob because the measured values are
    measured IN A CONTEXT (a probe whose stdout was redirected) and at least AL=5 is
    suspected of depending on it -- see dos_int21.c. One row per line:
@@ -876,7 +876,7 @@ static UINT LauncherCompilerVariables(PCSTR environment, DWORD environmentCapaci
             valueLength = (UINT)lstrlenA(value);
             need = (UINT)lstrlenA(want[wanted]) + 1 + valueLength + 1;   /* NAME=VALUE\n */
             if (outLength + need + 1 < outCapacity) {
-                outLength += (DWORD)wsprintfA(out + outLength, "%s=%s\n", want[wanted], value);
+                outLength += (DWORD)wsprintfA(out + outLength, HOST_ENV_LINE_FORMAT, want[wanted], value);
                 ++count;
             }
             break;
@@ -1008,8 +1008,8 @@ static BYTE NetSubmit(PVOID context, NETBIOS_REQUEST *request)
         HMODULE module;
         if (tried) return NRC_BRIDGE;
         tried = 1;
-        module = LoadLibraryA("netapi32.dll");
-        g_Netbios = module ? (PNETBIOS_ROUTINE)(VOID *)GetProcAddress(module, "Netbios") : NULL;
+        module = LoadLibraryA(HOST_MODULE_NETAPI32);
+        g_Netbios = module ? (PNETBIOS_ROUTINE)(VOID *)GetProcAddress(module, HOST_EXPORT_NETBIOS) : NULL;
         if (!g_Netbios) return NRC_BRIDGE;
         ZeroMemory(&enumBlock, sizeof enumBlock);
         enumBlock.ncb_command = NCBENUM;
@@ -2863,7 +2863,7 @@ static VOID SerialInitialize(VOID)
 {
     DCB deviceControlBlock;
     COMMTIMEOUTS timeouts;
-    g_Serial = CreateFileA("\\\\.\\COM1", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    g_Serial = CreateFileA(HOST_DEVICE_COM1, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
     if (g_Serial == INVALID_HANDLE_VALUE) return;
     { UINT index; PSTR cursor = (PSTR)&deviceControlBlock; for (index = 0; index < sizeof deviceControlBlock; ++index) cursor[index] = 0; }
     deviceControlBlock.DCBlength = sizeof deviceControlBlock;
@@ -4879,7 +4879,7 @@ static INT MruLoad(CHAR out[MRU_MAX][MAX_PATH])
     if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
         return 0;
     for (index = 0; index < MRU_MAX; ++index) {
-        CHAR name[16], *cursor = LogPut(name, "Recent"); DWORD valueType = 0, size = MAX_PATH;
+        CHAR name[16], *cursor = LogPut(name, HOST_REG_RECENT_PREFIX); DWORD valueType = 0, size = MAX_PATH;
         cursor = LogDecimal(cursor, (DWORD)(index + 1)); *cursor = 0;
         if (RegQueryValueExA(key, name, NULL, &valueType, (LPBYTE)out[count], &size) != ERROR_SUCCESS
             || valueType != REG_SZ || size < 2) continue;
@@ -4899,13 +4899,13 @@ static VOID MruAdd(PCSTR path)
     longLength = GetLongPathNameA(path, longPath, sizeof longPath);
     if (longLength && longLength < sizeof longPath) path = longPath;
     for (baseName = path, index = 0; path[index]; ++index) if (path[index] == '\\') baseName = path + index + 1;
-    if (!lstrcmpiA(baseName, LAUNCH_STUB_NAME) || !lstrcmpiA(baseName, "dosstub.com")) return;   /* ours */
+    if (!lstrcmpiA(baseName, LAUNCH_STUB_NAME) || !lstrcmpiA(baseName, HOST_HARNESS_STUB_NAME)) return;   /* ours */
     count = MruLoad(list);
     if (RegCreateKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, NULL, 0,
                         KEY_SET_VALUE, NULL, &key, &disposition) != ERROR_SUCCESS) return;
     for (index = -1; index < count && written < MRU_MAX; ++index) {
         PCSTR value = (index < 0) ? path : list[index];
-        CHAR name[16], *cursor = LogPut(name, "Recent");
+        CHAR name[16], *cursor = LogPut(name, HOST_REG_RECENT_PREFIX);
         if (index >= 0 && !lstrcmpiA(value, path)) continue;          /* moved to the front */
         cursor = LogDecimal(cursor, (DWORD)(++written)); *cursor = 0;
         RegSetValueExA(key, name, 0, REG_SZ, (const BYTE *)value, (DWORD)lstrlenA(value) + 1);
@@ -4959,7 +4959,7 @@ static INT InstallResidentVdms(VOID)
     entry.dwSize = sizeof entry;
     if (Process32First(snap, &entry)) {
         do {
-            static const CHAR want[] = "ntvdm.exe";
+            static const CHAR want[] = HOST_STOCK_NTVDM_NAME;
             INT index;
             for (index = 0; want[index]; ++index) {
                 CHAR character = entry.szExeFile[index];
@@ -5201,23 +5201,23 @@ static INT LaunchShellVdm(VOID)
     {   INSTALL_STATE state = InstallStatusText(message, sizeof message);
         if (state != INSTALL_OURS) {
             /* The status text says WHICH of the two it is; add what to do about it. */
-            LogPut(message + lstrlenA(message),
-                 "\r\n\r\nNTVDMEX has to be the machine's VDM before it can open a "
-                 "DOS session of its own.\r\n\r\nRun:    ntvdmhost.exe /install\r\n"
-                 "(as an administrator), then try again.");
+#define HOST_NOT_THE_VDM_TEXT "\r\n\r\nNTVDMEX has to be the machine's VDM before it can open a " \
+                 "DOS session of its own.\r\n\r\nRun:    ntvdmhost.exe /install\r\n" \
+                 "(as an administrator), then try again."
+            LogPut(message + lstrlenA(message), HOST_NOT_THE_VDM_TEXT);
             InstallReport(message, FALSE);
             return 1;
         } }
 
     length = GetTempPathA(MAX_PATH, stub);
-    if (!length || length > MAX_PATH) { LogPut(stub, "C:\\"); length = 3; }
+    if (!length || length > MAX_PATH) { LogPut(stub, HOST_DEFAULT_DRIVE_ROOT); length = 3; }
     if (stub[length - 1] != '\\') { stub[length++] = '\\'; stub[length] = 0; }
     LogPut(stub + length, LAUNCH_STUB_NAME);
 
     handle = CreateFileA(stub, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                     FILE_ATTRIBUTE_NORMAL, NULL);
     if (handle == INVALID_HANDLE_VALUE) {
-        LogPut(message, "NTVDMEX could not write its launch stub to:\r\n\r\n");
+        LogPut(message, HOST_STUB_WRITE_FAILED_TEXT);
         LogPut(message + lstrlenA(message), stub);
         InstallReport(message, FALSE);
         return 1;
@@ -5228,7 +5228,7 @@ static INT LaunchShellVdm(VOID)
         /* ⚠ A SHORT WRITE IS NOT A SUCCESS. A truncated stub is not a DOS image and
              CreateProcess would report something unrelated to the real cause. */
         if (!isWritten || bytesWritten != sizeof exitStub) {
-            LogPut(message, "NTVDMEX wrote an incomplete launch stub to:\r\n\r\n");
+            LogPut(message, HOST_STUB_INCOMPLETE_TEXT);
             LogPut(message + lstrlenA(message), stub);
             InstallReport(message, FALSE);
             return 1;
@@ -5237,9 +5237,9 @@ static INT LaunchShellVdm(VOID)
     { INT index; for (index = 0; index < (INT)sizeof startupInfo; ++index) ((PSTR)&startupInfo)[index] = 0; }
     startupInfo.cb = sizeof startupInfo;
     if (!CreateProcessA(stub, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &startupInfo, &processInfo)) {
-        LogPut(message, "NTVDMEX could not start a DOS session.\r\n\r\nCreateProcess on:\r\n");
+        LogPut(message, HOST_SESSION_START_FAILED_TEXT);
         LogPut(message + lstrlenA(message), stub);
-        LogPut(message + lstrlenA(message), "\r\nfailed with error 0x");
+        LogPut(message + lstrlenA(message), HOST_SESSION_ERROR_TEXT);
         { PSTR end = message + lstrlenA(message); end = LogHex(end, GetLastError()); *end = 0; }
         InstallReport(message, FALSE);
         return 1;
@@ -5262,7 +5262,7 @@ static VOID InstallReport(PCSTR message, INT isOk)
         WriteFile(handle, message, length, &bytesWritten, NULL);
         return;
     }
-    MessageBoxA(NULL, message, "NTVDMEX",
+    MessageBoxA(NULL, message, HOST_PRODUCT_NAME,
                 MB_OK | (isOk ? MB_ICONINFORMATION : MB_ICONERROR));
 }
 
@@ -5273,10 +5273,10 @@ static VOID RecoveryUninstall(PSTR *logCursor)
 {
     HKEY key; LONG status;
     status = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
-        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File "
-        "Execution Options\\ntvdm.exe", 0, KEY_SET_VALUE, &key);
+        INSTALL_KEY,
+        0, KEY_SET_VALUE, &key);
     if (status == ERROR_SUCCESS) {
-        status = RegDeleteValueA(key, "Debugger");
+        status = RegDeleteValueA(key, INSTALL_VAL);
         RegCloseKey(key);
     }
     *logCursor = LogPut(*logCursor, status == ERROR_SUCCESS
@@ -5314,11 +5314,11 @@ static PCSTR FloppyImagePath(VOID) { return g_FloppyImage ? g_FloppyImage : FLOP
      greys the choice and the host treats the setting as "mounted image". */
 static INT HostHasFloppy(VOID)
 {
-    return GetDriveTypeA("A:\\") == DRIVE_REMOVABLE || GetDriveTypeA("B:\\") == DRIVE_REMOVABLE;
+    return GetDriveTypeA(HOST_FLOPPY_A_ROOT) == DRIVE_REMOVABLE || GetDriveTypeA(HOST_FLOPPY_B_ROOT) == DRIVE_REMOVABLE;
 }
 static INT HostHasCdrom(VOID)
 {
-    DWORD drives = GetLogicalDrives(); CHAR root[4] = "C:\\"; INT drive;
+    DWORD drives = GetLogicalDrives(); CHAR root[4] = HOST_DEFAULT_DRIVE_ROOT; INT drive;
     for (drive = DOS_DRIVE_C; drive < DOS_DRIVE_LETTERS; ++drive) {
         if (!(drives & (1u << drive))) continue;
         root[0] = (CHAR)('A' + drive);
@@ -5516,7 +5516,7 @@ static HANDLE StdioPebStdout(HANDLE proc)
     HANDLE out = NULL;
     SIZE_T bytesRead = 0;
     if (!queryInformationProcess) queryInformationProcess = (PFN_NT_QUERY_INFORMATION_PROCESS)(ULONG_PTR)GetProcAddress(
-                        GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess");
+                        GetModuleHandleA(HOST_MODULE_NTDLL), HOST_EXPORT_NT_QUERY_INFORMATION_PROCESS);
     if (!queryInformationProcess || !proc) return NULL;
     if (queryInformationProcess(proc, 0 /* ProcessBasicInformation */, &basicInfo, sizeof basicInfo, &got) < 0)
         return NULL;
@@ -5544,7 +5544,7 @@ static HANDLE StdioPebHandle(HANDLE proc, UINT offset)
     HANDLE out = NULL;
     SIZE_T bytesRead = 0;
     if (!queryInformationProcess) queryInformationProcess = (PFN_NT_QUERY_INFORMATION_PROCESS)(ULONG_PTR)GetProcAddress(
-                        GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess");
+                        GetModuleHandleA(HOST_MODULE_NTDLL), HOST_EXPORT_NT_QUERY_INFORMATION_PROCESS);
     if (!queryInformationProcess || !proc) return NULL;
     if (queryInformationProcess(proc, 0, &basicInfo, sizeof basicInfo, &got) < 0 || !basicInfo.PebBase) return NULL;
     if (!ReadProcessMemory(proc, (BYTE *)basicInfo.PebBase + PEB_OFF_PROCESSPARAMS,
@@ -5604,7 +5604,7 @@ static INT StdioParentIs(HANDLE proc, DWORD parentProcessId)
     HANDLE snap;
     want[0] = 0;
     if (!queryInformationProcess) queryInformationProcess = (PFN_NT_QUERY_INFORMATION_PROCESS)(ULONG_PTR)GetProcAddress(
-                        GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess");
+                        GetModuleHandleA(HOST_MODULE_NTDLL), HOST_EXPORT_NT_QUERY_INFORMATION_PROCESS);
     if (!queryInformationProcess) return 0;
     /* What the process list says this pid is. */
     snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -5706,7 +5706,7 @@ static PCSTR StdioInitialize(VOID)
     }
     if (valueType == FILE_TYPE_CHAR) { g_Stdio = handle; return "inherited console"; }
     if (OsCompatAttachConsole(ATTACH_PARENT_PROCESS)) {
-        g_Stdio = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
+        g_Stdio = CreateFileA(HOST_DEVICE_CONSOLE_OUTPUT, GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
                               OPEN_EXISTING, 0, NULL);
         if (g_Stdio != INVALID_HANDLE_VALUE) return "attached parent console";
     }
@@ -5728,7 +5728,7 @@ static PCSTR StdioInitialize(VOID)
             CloseHandle(snap);
         }
         if (parentProcessId && OsCompatAttachConsole(parentProcessId)) {
-            g_Stdio = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
+            g_Stdio = CreateFileA(HOST_DEVICE_CONSOLE_OUTPUT, GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
                                   OPEN_EXISTING, 0, NULL);
             if (g_Stdio != INVALID_HANDLE_VALUE) return "attached console by parent pid";
         }
@@ -6179,7 +6179,7 @@ static HANDLE   g_PitPaceEvent;
 static MMRESULT g_PitPaceTimer;
 static VOID PitPacerTimerStart(HMODULE winmmModule)
 {
-    PFN_TIME_SET_EVENT timeSetEvent = winmmModule ? (PFN_TIME_SET_EVENT)GetProcAddress(winmmModule, "timeSetEvent") : NULL;
+    PFN_TIME_SET_EVENT timeSetEvent = winmmModule ? (PFN_TIME_SET_EVENT)GetProcAddress(winmmModule, HOST_EXPORT_TIME_SET_EVENT) : NULL;
     if (!timeSetEvent || g_PitPaceMs <= 0) return;
     g_PitPaceEvent = CreateEventA(NULL, FALSE, FALSE, NULL);      /* auto-reset */
     if (!g_PitPaceEvent) return;
@@ -6398,9 +6398,9 @@ static UINT HostCpuMhz(VOID)
     if (mhz == CPU_MHZ_UNKNOWN_U) {
         HKEY key; DWORD value = 0, size = sizeof value, valueType = 0;
         mhz = 0;
-        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, HOST_REG_CPU_KEY,
                           0, KEY_READ, &key) == ERROR_SUCCESS) {
-            if (RegQueryValueExA(key, "~MHz", NULL, &valueType, (BYTE *)&value, &size) == ERROR_SUCCESS
+            if (RegQueryValueExA(key, HOST_REG_CPU_MHZ, NULL, &valueType, (BYTE *)&value, &size) == ERROR_SUCCESS
                 && valueType == REG_DWORD) mhz = (UINT)value;
             RegCloseKey(key);
         }
@@ -7030,7 +7030,7 @@ static VOID HostScreenshot(VOID)
         PCSTR directory = NTVDMEX_OUT;   /* screenshots are output, not clutter in the root */
         INT index = 0, index2;
         while (directory[index] && index < MAX_PATH - SCREENSHOT_NAME_ROOM) { path[index] = directory[index]; ++index; }
-        { PCSTR name = "shot_manual_00.bmp";
+        { PCSTR name = HOST_MANUAL_SHOT_NAME;
           for (index2 = 0; name[index2]; ++index2) path[index + index2] = name[index2];
           path[index + SCREENSHOT_NAME_DIGITS] = (CHAR)('0' + (sequence / DECIMAL_RADIX) % DECIMAL_RADIX);
           path[index + SCREENSHOT_NAME_DIGITS + 1] = (CHAR)('0' + sequence % DECIMAL_RADIX);
@@ -7082,7 +7082,7 @@ static VOID HostOpenCaptureFolder(VOID)
 {
     CHAR command[MAX_PATH + 32], *cursor;
     STARTUPINFOA startupInfo; PROCESS_INFORMATION processInfo; INT index;
-    cursor = LogPut(command, "explorer.exe \""); cursor = LogPut(cursor, NTVDMEX_OUT); cursor = LogPut(cursor, "\"");
+    cursor = LogPut(command, HOST_EXPLORER_COMMAND); cursor = LogPut(cursor, NTVDMEX_OUT); cursor = LogPut(cursor, "\"");
     for (index = 0; index < (INT)sizeof startupInfo; ++index) ((PSTR)&startupInfo)[index] = 0;
     startupInfo.cb = sizeof startupInfo;
     if (CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startupInfo, &processInfo)) {
@@ -8161,7 +8161,7 @@ static VOID HostEms(volatile BYTE *tib)
 }
 enum { I33_FALLBACK_X = 320, I33_FALLBACK_Y = 240, I33_ABSOLUTE_DELTA_SCALE = 8 };   /* I33TakeMotion's absolute-derived fallback */
 /* --- menu + status bar (scaffold; most items are stubs for now) ------------ */
-static CHAR g_ProgramName[64] = "(none)";      /* first part of the status strip    */
+static CHAR g_ProgramName[64] = HOST_PROGRAM_NONE;      /* first part of the status strip    */
 #define I33_SITE_CONTEXT_BEFORE 4   /* g_MouseI33Site: bytes kept from before the INT */
 /* Mouse state shared UI thread -> V86 thread (INT 33h). Position is in guest
    pixels (mapped from the window client); buttons: bit0 L, bit1 R, bit2 M. */
@@ -9478,7 +9478,7 @@ static VOID MouseInt33(volatile BYTE *tib, INT source)
            it read; with none present the name a guest gets is the one it would look for,
            and opening it fails exactly as on a machine without one. The bare name (no
            path) is ours -- UNMEASURED. */
-        static const CHAR iniName[] = "MOUSE.INI";
+        static const CHAR iniName[] = I33_INI_FILE_NAME;
         volatile BYTE *driverData = I33DriverData(); UINT index;
         ++g_MouseAccelerationCalls;
         for (index = 0; index < sizeof iniName; ++index) driverData[VDD_MOUSE_INI + index] = (BYTE)iniName[index];
@@ -10436,16 +10436,16 @@ static INT WowRefuse(PCSTR command)
     cursor = LogPut(cursor, "STAGE0: WIN16/WOW -- NOT SUPPORTED and cannot be handed back "
                 "(see GH #129). Refusing loudly.\r\n");
     LogAppend(LOG_PATH, message, cursor);
-    MessageBoxA(NULL,
-        "NTVDMEX cannot run 16-bit Windows programs.\n\n"
-        "It replaces the DOS half of NTVDM only. Because Windows starts 16-bit "
-        "Windows programs through the same ntvdm.exe, this launch reached NTVDMEX "
-        "as well -- and it cannot be passed back to the original.\n\n"
-        "To run this program, remove NTVDMEX's interception:\n\n"
-        "    reg delete \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"
-        "\\Image File Execution Options\\ntvdm.exe\" /v Debugger /f\n\n"
-        "DOS programs will then use the original NTVDM too.",
-        "NTVDMEX - 16-bit Windows not supported", MB_OK | MB_ICONERROR);
+#define HOST_WOW16_REFUSED_TEXT \
+        "NTVDMEX cannot run 16-bit Windows programs.\n\n" \
+        "It replaces the DOS half of NTVDM only. Because Windows starts 16-bit " \
+        "Windows programs through the same ntvdm.exe, this launch reached NTVDMEX " \
+        "as well -- and it cannot be passed back to the original.\n\n" \
+        "To run this program, remove NTVDMEX's interception:\n\n" \
+        "    reg delete \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion" \
+        "\\Image File Execution Options\\ntvdm.exe\" /v Debugger /f\n\n" \
+        "DOS programs will then use the original NTVDM too."
+    MessageBoxA(NULL, HOST_WOW16_REFUSED_TEXT, HOST_WOW16_REFUSED_TITLE, MB_OK | MB_ICONERROR);
     return 1;
 }
 
@@ -10466,18 +10466,18 @@ static HMENU BuildMenu(VOID)
     menu = MenuPopup();                                                   /* File         */
     /* #153. No Ctrl+O: that chord belongs to the DOS program (WordStar's own menu). The
        Open Recent list is filled when it opens -- see MenuRecentFill. */
-    MenuItem(menu, "Open Executable...", IDM_FILE_OPEN);
+    MenuItem(menu, MENU_TEXT_OPEN_EXECUTABLE, IDM_FILE_OPEN);
     g_RecentMenu = MenuPopup();
-    MenuSubmenu(menu, "Open Recent", g_RecentMenu);
+    MenuSubmenu(menu, MENU_TEXT_OPEN_RECENT, g_RecentMenu);
     /* Save State / Load State removed (s81, #145, user decision); what a real
        implementation would need is #146. */
     MenuSeparator(menu);
     /* The old "Configuration" submenu (Edit Config File, Open Config Folder, ...)
        described a config FILE that never existed; the store is HKCU and the dialog
        is how you edit it. One entry, and it is this one. */
-    MenuItem(menu, "Close Program", IDM_FILE_CLOSEPROG);
-    MenuItem(menu, "Exit\tAlt+F4", IDM_FILE_EXIT);
-    MenuSubmenu(menuBar, "File", menu);
+    MenuItem(menu, MENU_TEXT_CLOSE_PROGRAM, IDM_FILE_CLOSEPROG);
+    MenuItem(menu, MENU_TEXT_EXIT_ACCELERATOR, IDM_FILE_EXIT);
+    MenuSubmenu(menuBar, MENU_TEXT_FILE, menu);
 
     /* ── EDIT IS A TEXT-MODE MENU, AND MenuSyncModal() SAYS SO AT OPEN TIME. ───
          Every item here works on the character grid the text renderer maintains.
@@ -10487,10 +10487,10 @@ static HMENU BuildMenu(VOID)
     menu = MenuPopup();                                                   /* Edit         */
     /* #154: no Ctrl+C / Ctrl+V labels -- those keys belong to the DOS program (Ctrl+C
        is Break), and a label naming a shortcut that does not exist is a small lie. */
-    MenuItem(menu,"Mark / Select Region",IDM_EDIT_MARK); MenuItem(menu,"Copy",IDM_EDIT_COPY);
-    MenuItem(menu,"Copy Whole Screen",IDM_EDIT_COPYSCREEN); MenuItem(menu,"Paste",IDM_EDIT_PASTE);
-    MenuItem(menu,"Select All",IDM_EDIT_SELECTALL);
-    MenuSubmenu(menuBar, "Edit", menu);
+    MenuItem(menu,MENU_TEXT_MARK,IDM_EDIT_MARK); MenuItem(menu,MENU_TEXT_COPY,IDM_EDIT_COPY);
+    MenuItem(menu,MENU_TEXT_COPY_SCREEN,IDM_EDIT_COPYSCREEN); MenuItem(menu,MENU_TEXT_PASTE,IDM_EDIT_PASTE);
+    MenuItem(menu,MENU_TEXT_SELECT_ALL,IDM_EDIT_SELECTALL);
+    MenuSubmenu(menuBar, MENU_TEXT_EDIT, menu);
 
     /* ── ★ VIEW IS THE DISPLAY PAGE, AND IT IS SESSION-ONLY. ─────────────────────
          Every knob on the Settings dialog's Display tab is here too, because these
@@ -10506,28 +10506,28 @@ static HMENU BuildMenu(VOID)
          always GDI, and DirectDraw makes FULLSCREEN the exclusive DirectDraw mode.
          The list comes from g_SetDefinitions so it says exactly what the dialog says. */
     menu = MenuPopup();                                                   /* View         */
-    MenuItem(menu,"Fullscreen\tAlt+Enter",IDM_DISP_FULLSCREEN);
+    MenuItem(menu,MENU_TEXT_FULLSCREEN,IDM_DISP_FULLSCREEN);
     MenuSeparator(menu);
-    MenuCombo(menu, "Window Size", SET_WINSIZE,   IDM_WINSIZE_0);
-    MenuCombo(menu, "Renderer",    SET_RENDERER,  IDM_RENDER_0);
-    MenuCombo(menu, "Scaler",      SET_SCALER,    IDM_SCALER_0);
-    MenuCombo(menu, "Filtering",   SET_FILTER,    IDM_FILTER_0);
-    MenuCombo(menu, "Frame Skip",  SET_FRAMESKIP, IDM_FSKIP_0);
+    MenuCombo(menu, MENU_TEXT_WINDOW_SIZE, SET_WINSIZE,   IDM_WINSIZE_0);
+    MenuCombo(menu, MENU_TEXT_RENDERER,    SET_RENDERER,  IDM_RENDER_0);
+    MenuCombo(menu, MENU_TEXT_SCALER,      SET_SCALER,    IDM_SCALER_0);
+    MenuCombo(menu, MENU_TEXT_FILTERING,   SET_FILTER,    IDM_FILTER_0);
+    MenuCombo(menu, MENU_TEXT_FRAME_SKIP,  SET_FRAMESKIP, IDM_FSKIP_0);
     /* ── ★ ASPECT RATIO IS A LOCK ON THE WINDOW, not just a letterbox. Picking a
          ratio constrains the window's shape as you drag it, so the picture fills the
          client and there are no bars at all -- letterboxing only reappears if the
          window ends up off-aspect anyway (maximised). "None" is a free resize. */
-    MenuCombo(menu, "Aspect Ratio", SET_ASPECT,    IDM_ASPECT_0);
-    MenuCombo(menu, "Full Screen Fit", SET_FIT,     IDM_FIT_0);       /* #325 */
+    MenuCombo(menu, MENU_TEXT_ASPECT_RATIO, SET_ASPECT,    IDM_ASPECT_0);
+    MenuCombo(menu, MENU_TEXT_FULL_SCREEN_FIT, SET_FIT,     IDM_FIT_0);       /* #325 */
     /* #229 (user, s84): "Nice, working! Can you add these to the View menu as well." */
-    MenuCombo(menu, "Colour Filter", SET_TINT,     IDM_TINT_0);
+    MenuCombo(menu, MENU_TEXT_COLOUR_FILTER, SET_TINT,     IDM_TINT_0);
     /* #230 (docs/EMULATION.md): "force vsync for programs that don't ask for it" is
        what this always did -- every blit is timed to the monitor's blank whether or
        not the guest waits for retrace -- so it is named for that. DirectDraw's
        fullscreen flip waits for the blank regardless. */
-    MenuItem(menu,"Force VSync",IDM_VIEW_VSYNC);              /* user, s81: with the picture group */
+    MenuItem(menu,MENU_TEXT_FORCE_VSYNC,IDM_VIEW_VSYNC);              /* user, s81: with the picture group */
     MenuSeparator(menu);
-    MenuItem(menu,"Blink Text Cursor",IDM_VIEW_BLINK);
+    MenuItem(menu,MENU_TEXT_BLINK_CURSOR,IDM_VIEW_BLINK);
     /* #218 (user, s83 sweep): "Show Host Cursor" (#157) is GONE AGAIN, for good -- it
          "feels jaggy". A program that does not use the mouse now keeps the pointer and
          it hides itself after 5 s still over the video; see CURSOR_IDLE_MS. */
@@ -10535,7 +10535,7 @@ static HMENU BuildMenu(VOID)
          The desktop pointer's visibility is not a knob of its own -- it is what
          exclusive mode looks like, and Win+F10 is the control for that. See the
          note on g_cursor_show. */
-    MenuSubmenu(menuBar, "View", menu);
+    MenuSubmenu(menuBar, MENU_TEXT_VIEW, menu);
 
     /* ── ★ TOOLS: ONE MENU FOR EVERYTHING THAT IS NOT THE PICTURE. ───────────────
          The bar was File / Edit / View / Machine / Capture / Debug / Help -- seven
@@ -10571,23 +10571,23 @@ static HMENU BuildMenu(VOID)
          while a scaler tried from the menu did not. One rule -- the menu is for
          trying things, the dialog is for keeping them. */
     /* user, s81: with only two items left, Machine is flattened into Tools itself. */
-    MenuCombo(tools, "Limit Speed", SET_SPEEDMODE, IDM_SPEED_0);
+    MenuCombo(tools, MENU_TEXT_LIMIT_SPEED, SET_SPEEDMODE, IDM_SPEED_0);
     {   UINT speed;                                  /* #224: faster than this PC -> grey */
         for (speed = 1; speed < CPUSPEED_COUNT; ++speed)
             if (!CpuSpeedIsAvailable(speed, HostCpuMhz()))
                 EnableMenuItem(tools, IDM_SPEED_0 + speed, MF_BYCOMMAND | MF_GRAYED); }
     /* The accelerator column names the RELEASE, because that is the one a captured
        user needs and cannot look up -- the menu is unreachable while capture is held. */
-    MenuItem(tools,"Capture Mouse\tWin releases",IDM_INPUT_CAPTURE);
+    MenuItem(tools,MENU_TEXT_CAPTURE_MOUSE,IDM_INPUT_CAPTURE);
     MenuSeparator(tools);
 
     menu = MenuPopup();                                                   /* Tools>Capture*/
-    MenuItem(menu,"Take Screenshot\tCtrl+F5",IDM_CAP_SHOT);
-    MenuSubmenu(menu,"Record Video (AVI)",(submenu=MenuPopup(),MenuItem(submenu,"Start / Stop",IDM_STUB),submenu));
-    MenuItem(menu,"Record Audio (WAV)",IDM_CAP_AUDIO);          /* #155: ticked while recording */
-    MenuSubmenu(menu,"Record OPL / MIDI",(submenu=MenuPopup(),MenuItem(submenu,"Start / Stop",IDM_STUB),submenu)); MenuSeparator(menu);
-    MenuItem(menu,"Open Capture Folder",IDM_CAP_FOLDER); MenuItem(menu,"Capture Settings...",IDM_STUB);
-    MenuSubmenu(tools, "Capture", menu);
+    MenuItem(menu,MENU_TEXT_SCREENSHOT_ACCELERATOR,IDM_CAP_SHOT);
+    MenuSubmenu(menu,MENU_TEXT_RECORD_VIDEO,(submenu=MenuPopup(),MenuItem(submenu,MENU_TEXT_START_STOP,IDM_STUB),submenu));
+    MenuItem(menu,MENU_TEXT_RECORD_AUDIO,IDM_CAP_AUDIO);          /* #155: ticked while recording */
+    MenuSubmenu(menu,MENU_TEXT_RECORD_MUSIC,(submenu=MenuPopup(),MenuItem(submenu,MENU_TEXT_START_STOP,IDM_STUB),submenu)); MenuSeparator(menu);
+    MenuItem(menu,MENU_TEXT_CAPTURE_FOLDER,IDM_CAP_FOLDER); MenuItem(menu,MENU_TEXT_CAPTURE_SETTINGS,IDM_STUB);
+    MenuSubmenu(tools, MENU_TEXT_CAPTURE, menu);
 
     MenuSeparator(tools);
     /* ── ★ INSTALLING IS AN ACTION, SO IT IS ON A MENU AND NOT A SETTINGS PAGE.
@@ -10595,19 +10595,19 @@ static HMENU BuildMenu(VOID)
          one thing here that outlives the process -- none of which belongs behind a
          tab of checkboxes. The same three verbs exist on the command line
          (/install, /uninstall, /status) for scripted use. */
-    MenuItem(tools, "Install as System VDM...", IDM_FILE_INSTALL);
-    MenuItem(tools, "Uninstall...", IDM_FILE_UNINSTALL);
-    MenuItem(tools, "Installation Status...", IDM_FILE_STATUS);
+    MenuItem(tools, MENU_TEXT_INSTALL, IDM_FILE_INSTALL);
+    MenuItem(tools, MENU_TEXT_UNINSTALL, IDM_FILE_UNINSTALL);
+    MenuItem(tools, MENU_TEXT_INSTALL_STATUS, IDM_FILE_STATUS);
     MenuSeparator(tools);
     /* The old "Configuration" submenu (Edit Config File, Open Config Folder, ...)
        described a config FILE that never existed; the store is HKCU and the dialog
        is how you edit it. One entry, and it is this one. */
-    MenuItem(tools, "Settings...", IDM_FILE_SETTINGS);
-    MenuSubmenu(menuBar, "Tools", tools);
+    MenuItem(tools, MENU_TEXT_SETTINGS, IDM_FILE_SETTINGS);
+    MenuSubmenu(menuBar, MENU_TEXT_TOOLS, tools);
 
     menu = MenuPopup();                                                   /* Help         */
-    MenuItem(menu,"About",IDM_HELP_ABOUT);
-    MenuSubmenu(menuBar, "Help", menu);
+    MenuItem(menu,MENU_TEXT_ABOUT,IDM_HELP_ABOUT);
+    MenuSubmenu(menuBar, MENU_TEXT_HELP, menu);
     return menuBar;
 }
 
@@ -10650,7 +10650,7 @@ static INT  g_TrayOn    = 0;                /* the icon is currently installed  
 static VOID TrayAdd(HINSTANCE instance, HWND window)
 {
     NOTIFYICONDATAA notifyIconData;
-    PCSTR tip = "NTVDMEX - 16-bit Windows";
+    PCSTR tip = HOST_TRAY_WIN16_TIP;
     INT index;
     if (g_TrayOn) return;
     ZeroMemory(&notifyIconData, sizeof notifyIconData);
@@ -10704,8 +10704,8 @@ static VOID ManagerName(PSTR out, HWND *show)
     raw[0] = 0; *show = g_Window;
     if (g_WowLaunch) {
         static PFN_INTGETWT internalGetWindowText;
-        if (!internalGetWindowText) internalGetWindowText = (PFN_INTGETWT)(ULONG_PTR)GetProcAddress(GetModuleHandleA("user32.dll"),
-                                                                  "InternalGetWindowText");
+        if (!internalGetWindowText) internalGetWindowText = (PFN_INTGETWT)(ULONG_PTR)GetProcAddress(GetModuleHandleA(HOST_MODULE_USER32),
+                                                                  HOST_EXPORT_INTERNAL_GET_WINDOW_TEXT);
         *show = NULL;
         for (index = 0; index < WOWUSER_MAX_WIN; ++index) {
             const WOWUSER_WINDOW *wowWindow = &g_WowUserWindows[index];
@@ -10725,9 +10725,9 @@ static VOID ManagerName(PSTR out, HWND *show)
     if (source) {
         PCSTR baseName = source, cursor;
         for (cursor = source; *cursor; ++cursor) if (*cursor == '\\' || *cursor == '/') baseName = cursor + 1;
-        if (!*baseName || !lstrcmpiA(baseName, "COMMAND.COM") || !lstrcmpiA(baseName, "CMD.EXE")
-            || !lstrcmpA(baseName, "(none)")) {
-            lstrcpynA(out, g_WowLaunch ? "16-bit Windows" : "MS-DOS Prompt", MGR_NAME_SIZE);
+        if (!*baseName || !lstrcmpiA(baseName, HOST_COMMAND_COM) || !lstrcmpiA(baseName, HOST_CMD_EXE)
+            || !lstrcmpA(baseName, HOST_PROGRAM_NONE)) {
+            lstrcpynA(out, g_WowLaunch ? HOST_MANAGER_WIN16_NAME : HOST_MANAGER_DOS_NAME, MGR_NAME_SIZE);
             return;
         }
         /* "DOOM.EXE" -> "Doom": the base name, first letter up, the rest down. */
@@ -10742,7 +10742,7 @@ static VOID ManagerName(PSTR out, HWND *show)
     raw[MGR_NAME_SIZE - 1] = 0;
     for (index = 0; raw[index]; ++index)                         /* "Notepad - (Untitled)" -> "Notepad" */
         if (raw[index] == ' ' && raw[index + 1] == '-' && raw[index + 2] == ' ') { raw[index] = 0; break; }
-    lstrcpynA(out, raw[0] ? raw : "NTVDMEX", MGR_NAME_SIZE);
+    lstrcpynA(out, raw[0] ? raw : HOST_PRODUCT_NAME, MGR_NAME_SIZE);
 }
 enum { MANAGER_RELAUNCH_MS = 5000, MANAGER_START_WAIT_MS = 500, MANAGER_SEND_TIMEOUT_MS = 500, MANAGER_POLL_MS = 2000 };   /* ManagerThread */
 static DWORD WINAPI ManagerThread(LPVOID unused)
@@ -10811,12 +10811,12 @@ static VOID TrayMenu(HWND window)
     if (!menu) return;
     /* s88 (user): a Win16 host's machine window is never shown, so there is no
        "Show NTVDMEX Window" here any more (this menu only exists for Win16). */
-    AppendMenuA(menu, MF_STRING, IDM_FILE_SETTINGS,  "Settings...");
-    AppendMenuA(menu, MF_STRING, IDM_CAP_SHOT,       "Take Screenshot");
-    AppendMenuA(menu, MF_STRING, IDM_HELP_ABOUT,     "About");
+    AppendMenuA(menu, MF_STRING, IDM_FILE_SETTINGS,  MENU_TEXT_SETTINGS);
+    AppendMenuA(menu, MF_STRING, IDM_CAP_SHOT,       MENU_TEXT_SCREENSHOT);
+    AppendMenuA(menu, MF_STRING, IDM_HELP_ABOUT,     MENU_TEXT_ABOUT);
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(menu, MF_STRING, IDM_FILE_CLOSEPROG, "Close Program");
-    AppendMenuA(menu, MF_STRING, IDM_FILE_EXIT,      "Exit");
+    AppendMenuA(menu, MF_STRING, IDM_FILE_CLOSEPROG, MENU_TEXT_CLOSE_PROGRAM);
+    AppendMenuA(menu, MF_STRING, IDM_FILE_EXIT,      MENU_TEXT_EXIT);
     GetCursorPos(&point);
     /* ⚠ SetForegroundWindow FIRST and a stray post AFTER: without them a tray
          menu does not dismiss when you click away from it. This is the documented
@@ -10932,7 +10932,7 @@ static VOID StatusSpeedText(PSTR out)
 {
     UINT mhz = ((UINT)g_CpuSpeedIndex < CPUSPEED_COUNT) ? g_CpuSpeedMhz[g_CpuSpeedIndex] : 0u;
     PSTR cursor = out;
-    if (!mhz) { LogPut(out, "Unlimited"); return; }
+    if (!mhz) { LogPut(out, HOST_SPEED_UNLIMITED); return; }
     if (mhz >= MEGAHERTZ_PER_GIGAHERTZ_U && mhz % MEGAHERTZ_PER_GIGAHERTZ_U == 0u) { cursor = LogDecimal(cursor, mhz / MEGAHERTZ_PER_GIGAHERTZ_U); LogPut(cursor, " GHz"); }
     else                                   { cursor = LogDecimal(cursor, mhz);         LogPut(cursor, " MHz"); }
 }
@@ -10957,9 +10957,9 @@ static VOID StatusUpdate(VOID)
              from what PresentGdi actually drew, so it is true in a window, maximised
              and fullscreen alike. */
         static CHAR modeText[96];
-        PCSTR mode = (g_DpmiPm && g_DpmiIsClient32) ? "32-bit Protected Mode"
-                      : g_DpmiPm                      ? "16-bit Protected Mode"
-                                                       : "16-bit Real Mode";
+        PCSTR mode = (g_DpmiPm && g_DpmiIsClient32) ? STATUS_TEXT_PM32
+                      : g_DpmiPm                      ? STATUS_TEXT_PM16
+                                                       : STATUS_TEXT_REAL_MODE;
         PSTR cursor = LogPut(modeText, mode);
         if (g_PresentDdraw.IsSnapshotValid && g_PresentDdraw.SnapshotWidth > 0 && g_PresentDdraw.SnapshotHeight > 0 && g_PresentDdraw.LastDestinationWidth > 0) {
             INT snapshotWidth = g_PresentDdraw.SnapshotWidth, snapshotHeight = g_PresentDdraw.SnapshotHeight, destinationWidth = g_PresentDdraw.LastDestinationWidth, destinationHeight = g_PresentDdraw.LastDestinationHeight;
@@ -10974,9 +10974,9 @@ static VOID StatusUpdate(VOID)
     text[STATUS_PART_SPEED] = speed;
     /* Only a program that asked for the mouse has anything to say about capture
        (rule 1); exactly the user's wording. */
-    text[STATUS_PART_CAPTURE] = g_Captured        ? "Press WIN to release mouse"
-           : CaptureAllowed() ? "Click video to capture mouse"
-                               : "";
+    text[STATUS_PART_CAPTURE] = g_Captured        ? STATUS_TEXT_RELEASE_MOUSE
+           : CaptureAllowed() ? STATUS_TEXT_CAPTURE_MOUSE
+                               : STATUS_TEXT_NONE;
     parts = text[STATUS_PART_CAPTURE][0] ? STATUS_PARTS : STATUS_PARTS - 1;
     if (StringsEqual(text[STATUS_PART_PROGRAM], g_StatusLeft) && StringsEqual(text[STATUS_PART_MODE], g_StatusMode) &&
         StringsEqual(text[STATUS_PART_SPEED], g_StatusSpeed) && StringsEqual(text[STATUS_PART_CAPTURE], g_StatusRight)) return;
@@ -11406,7 +11406,7 @@ enum { FULLSCREEN_RELEASE_HINT_MS = 4000 };   /* FullscreenReleaseHint: how long
 /* #138: in fullscreen there is no status strip, so say how to get the mouse back. */
 static VOID FullscreenReleaseHint(VOID)
 {
-    g_PresentDdraw.HintText  = "Mouse captured -- press the Windows key to release it";
+    g_PresentDdraw.HintText  = HOST_CAPTURE_HINT_TEXT;
     g_PresentDdraw.HintUntil = GetTickCount() + FULLSCREEN_RELEASE_HINT_MS;
 }
 static VOID InputCaptureSet(HWND window, INT isOn)
@@ -11483,7 +11483,7 @@ static INT OtherHostsRunning(VOID)
 {
     INT instance; CHAR name[48];
     for (instance = 1; instance <= HOST_INSTANCES_MAX; ++instance) {
-        HANDLE mutex; PSTR cursor = LogPut(name, "Global\\ntvdmex_host_single");
+        HANDLE mutex; PSTR cursor = LogPut(name, HOST_INSTANCE_MUTEX);
         if (instance == g_Instance) continue;
         if (instance > 1) { *cursor++ = '_'; cursor = LogDecimal(cursor, (UINT)instance); }
         mutex = OpenMutexA(SYNCHRONIZE, FALSE, name);
@@ -11542,7 +11542,7 @@ static INT OpenIsDosImage(PCSTR path)
     INT length = lstrlenA(path);
     BYTE header[DOS_MZ_NEW_HEADER_MIN]; DWORD got = 0, newHeaderOffset, signatureBytesRead = 0; BYTE signature[DOS_EXE_SIGNATURE_SIZE];
     HANDLE file;
-    if (length >= DOS_DOT_EXTENSION_LENGTH && (!lstrcmpiA(path + length - DOS_DOT_EXTENSION_LENGTH, ".COM") || !lstrcmpiA(path + length - DOS_DOT_EXTENSION_LENGTH, ".BAT"))) return 1;
+    if (length >= DOS_DOT_EXTENSION_LENGTH && (!lstrcmpiA(path + length - DOS_DOT_EXTENSION_LENGTH, HOST_EXTENSION_COM) || !lstrcmpiA(path + length - DOS_DOT_EXTENSION_LENGTH, HOST_EXTENSION_BAT))) return 1;
     file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
     if (file == INVALID_HANDLE_VALUE) return 0;
     if (!ReadFile(file, header, sizeof header, &got, NULL) || got < sizeof header || header[0] != 'M' || header[1] != 'Z') {
@@ -11584,9 +11584,9 @@ static VOID OpenProgram(HWND window, PCSTR path)
     INT index, cut = -1;
     STARTUPINFOA startupInfo; PROCESS_INFORMATION processInfo;
     if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
-        CHAR message[MAX_PATH + 64], *cursor = LogPut(message, "This program could not be found:\n\n");
+        CHAR message[MAX_PATH + 64], *cursor = LogPut(message, HOST_PROGRAM_NOT_FOUND_TEXT);
         LogPut(cursor, path);
-        MessageBoxA(window, message, "NTVDMEX", MB_OK | MB_ICONEXCLAMATION);
+        MessageBoxA(window, message, HOST_PRODUCT_NAME, MB_OK | MB_ICONEXCLAMATION);
         return;
     }
     MruAdd(path);
@@ -11613,9 +11613,9 @@ static VOID OpenProgram(HWND window, PCSTR path)
         LogAppend(LOG_PATH, lineBuffer, lineCursor);
         CloseHandle(processInfo.hThread); CloseHandle(processInfo.hProcess);
     } else {
-        CHAR message[MAX_PATH + 96], *cursor = LogPut(message, "NTVDMEX could not start:\n\n");
-        cursor = LogPut(cursor, path); cursor = LogPut(cursor, "\n\nWindows error 0x"); cursor = LogHex(cursor, GetLastError()); *cursor = 0;
-        MessageBoxA(window, message, "NTVDMEX", MB_OK | MB_ICONERROR);
+        CHAR message[MAX_PATH + 96], *cursor = LogPut(message, HOST_PROGRAM_START_FAILED_TEXT);
+        cursor = LogPut(cursor, path); cursor = LogPut(cursor, HOST_WINDOWS_ERROR_TEXT); cursor = LogHex(cursor, GetLastError()); *cursor = 0;
+        MessageBoxA(window, message, HOST_PRODUCT_NAME, MB_OK | MB_ICONERROR);
     }
 }
 
@@ -11626,10 +11626,10 @@ static VOID OpenProgramDialog(HWND window)
     for (index = 0; index < (INT)sizeof openFile; ++index) ((PSTR)&openFile)[index] = 0;
     openFile.lStructSize = sizeof openFile;
     openFile.hwndOwner   = window;
-    openFile.lpstrFilter = "Programs (*.exe;*.com;*.bat)\0*.exe;*.com;*.bat\0All files (*.*)\0*.*\0";
+    openFile.lpstrFilter = HOST_OPEN_FILTER;
     openFile.lpstrFile   = file;
     openFile.nMaxFile    = sizeof file;
-    openFile.lpstrTitle  = "Open Executable";
+    openFile.lpstrTitle  = HOST_OPEN_TITLE;
     openFile.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
     if (g_Captured) InputCaptureSet(window, FALSE);   /* the dialog needs the pointer */
     if (GetOpenFileNameA(&openFile)) OpenProgram(window, file);
@@ -11644,7 +11644,7 @@ static VOID MenuRecentFill(VOID)
     if (!g_RecentMenu) return;
     while (GetMenuItemCount(g_RecentMenu) > 0) DeleteMenu(g_RecentMenu, 0, MF_BYPOSITION);
     count = MruLoad(list);
-    if (!count) { AppendMenuA(g_RecentMenu, MF_STRING | MF_GRAYED, IDM_RECENT_0, "(empty)"); return; }
+    if (!count) { AppendMenuA(g_RecentMenu, MF_STRING | MF_GRAYED, IDM_RECENT_0, MENU_TEXT_RECENT_EMPTY); return; }
     for (index = 0; index < count; ++index) {
         CHAR text[2 * MAX_PATH + 8], *cursor = text; PCSTR source;
         *cursor++ = '&'; *cursor++ = (CHAR)('1' + index); *cursor++ = ' ';
@@ -11971,8 +11971,8 @@ static DWORD WINAPI JoystickPollThread(LPVOID param)
     for (;;) {
         if (g_Joystick.Type == JOYSTICK_TYPE_NONE) { g_Joystick.IsPresent = 0; Sleep(JOYSTICK_ABSENT_POLL_MS); continue; }
         if (!getPositionEx) {
-            if (!module) module = LoadLibraryA("winmm.dll");
-            getPositionEx = module ? (PFN_JOY_GET_POS_EX)GetProcAddress(module, "joyGetPosEx") : NULL;
+            if (!module) module = LoadLibraryA(HOST_MODULE_WINMM);
+            getPositionEx = module ? (PFN_JOY_GET_POS_EX)GetProcAddress(module, HOST_EXPORT_JOY_GET_POS_EX) : NULL;
             if (!getPositionEx) { g_Joystick.IsPresent = 0; Sleep(JOYSTICK_API_RETRY_MS); continue; }
         }
         {   JOYINFOEX info; UINT axes[JOYSTICK_AXES]; INT index;
@@ -12314,7 +12314,7 @@ static VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT liv
      fullscreen through the GDI path has none of that.
      Kept as a knob rather than deleted because "no tearing" was the exclusive path's
      original argument and a file is enough to get it back for a comparison. */
-#define DDRAWFS_FLAG CFG_("ddrawfs.flag")
+#define DDRAWFS_FLAG CFG_(KNOB_FILE_DDRAWFS)
 
 /* ── ★ fsinteger.flag -- SNAP FULLSCREEN TO WHOLE PIXEL MULTIPLES. OFF BY DEFAULT. ──
      I added whole-multiple scaling to cure blurry fullscreen. It was never the cause
@@ -12707,8 +12707,8 @@ static VOID SettingsBrowse(HWND page, INT editId, PCSTR filter, PCSTR title)
 static VOID SettingsShellBrowse(HWND page)
 {
     SettingsBrowse(page, IDC_S_SHELL,
-        "COMMAND.COM\0COMMAND.COM\0DOS programs (*.com;*.exe)\0*.com;*.exe\0"
-        "All files (*.*)\0*.*\0", "Choose the DOS prompt's COMMAND.COM");
+        SETTINGS_FILTER_SHELL,
+        SETTINGS_TITLE_SHELL);
 }
 
 /* ── s84 (user): EACH REMOVABLE DRIVE IS THE PHYSICAL ONE OR A MOUNTED IMAGE. ──────
@@ -12793,19 +12793,19 @@ static VOID SettingsTextFontPreview(VOID)
     SettingsTextFontGet(face, sizeof face);
     SysFontBuildInto(face, &g_TextFontPreview, &g_TextFontPreviewReport);
     if (!face[0])
-        lstrcpyA(text, "Fixedsys for text and Terminal (code page 437) for line drawing.");
+        lstrcpyA(text, SETTINGS_FONT_DEFAULT_TEXT);
     else if (g_TextFontPreviewReport.User == SYSFONT_USER_OK && g_TextFontPreviewReport.UserCodePage)
-        wsprintfA(text, "This font draws code page %d, not 437: some line-drawing characters "
-                  "will show as letters.", g_TextFontPreviewReport.UserCodePage);
+        wsprintfA(text, SETTINGS_FONT_CODE_PAGE_FORMAT,
+                  g_TextFontPreviewReport.UserCodePage);
     else if (g_TextFontPreviewReport.User == SYSFONT_USER_OK)
-        wsprintfA(text, "%d of 253 characters come from this font; the rest from the default.",
+        wsprintfA(text, SETTINGS_FONT_PARTIAL_FORMAT,
                   g_TextFontPreviewReport.UserGlyphs[2]);
     else if (g_TextFontPreviewReport.User == SYSFONT_USER_NOSIZE)
-        lstrcpyA(text, "This font has no 8-pixel-wide size, so the default is used.");
+        lstrcpyA(text, SETTINGS_FONT_NO_8_PIXEL);
     else
-        lstrcpyA(text, "This font is not installed on this computer, so the default is used.");
+        lstrcpyA(text, SETTINGS_FONT_MISSING);
     if (SysFontIsDefaultDegraded(&g_TextFontPreviewReport))
-        lstrcatA(text, " Warning: a code page 437 font file is missing; line drawing may be wrong.");
+        lstrcatA(text, SETTINGS_FONT_437_MISSING);
     if (info) SetWindowTextA(info, text);
     if (view) InvalidateRect(view, NULL, TRUE);
 }
@@ -12826,7 +12826,7 @@ enum { FONT_PREVIEW_COLUMNS = 64, FONT_PREVIEW_ROWS = 2, FONT_PREVIEW_CELL_WIDTH
 /* Two lines of 64 cells from the previewed 8x16 table, light grey on black, 1:1. */
 static VOID SettingsTextFontDraw(const DRAWITEMSTRUCT *drawItem)
 {
-    static const CHAR text[] = "Hello, DOS!  0123456789  ";
+    static const CHAR text[] = SETTINGS_FONT_SAMPLE_TEXT;
     BYTE row[FONT_PREVIEW_ROWS][FONT_PREVIEW_COLUMNS];
     static BYTE pixels[FONT_PREVIEW_HEIGHT][FONT_PREVIEW_COLUMNS];
     struct { BITMAPINFOHEADER Header; RGBQUAD Palette[2]; } bitmapInfo;
@@ -12860,14 +12860,14 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
             SendMessageA(control, BM_SETCHECK, settings->Values[index] ? BST_CHECKED : BST_UNCHECKED, 0);
             break;
         case SK_UINT:
-            wsprintfA(text, "%u", (UINT)settings->Values[index]); SetWindowTextA(control, text);
+            wsprintfA(text, SETTINGS_FORMAT_NUMBER, (UINT)settings->Values[index]); SetWindowTextA(control, text);
             break;
         case SK_SLIDER: {                    /* #291: a trackbar and its "N%" label */
             HWND label = SettingsControl(definition->ControlId + IDC_S_SLIDER_VALUE_OFFSET);
             SendMessageA(control, TBM_SETRANGE, FALSE, MAKELPARAM(definition->Low, definition->High));
             SendMessageA(control, TBM_SETPAGESIZE, 0, SETTINGS_SLIDER_PAGE);
             SendMessageA(control, TBM_SETPOS, TRUE, (LPARAM)settings->Values[index]);
-            if (label) { wsprintfA(text, "%u%%", (UINT)settings->Values[index]); SetWindowTextA(label, text); }
+            if (label) { wsprintfA(text, SETTINGS_FORMAT_PERCENT, (UINT)settings->Values[index]); SetWindowTextA(label, text); }
             break; }
         case SK_COMBO:
             SendMessageA(control, CB_SETCURSEL, (WPARAM)settings->Values[index], 0);
@@ -12875,7 +12875,7 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
         case SK_VER:
             /* "6.22", not "6.2200" -- two digits, zero-padded, as DOS says it. The
                minor is the NEXT row (SK_DERIVED); that adjacency is the contract. */
-            wsprintfA(text, "%u.%02u", (UINT)settings->Values[index], (UINT)settings->Values[index + 1]);
+            wsprintfA(text, SETTINGS_FORMAT_VERSION, (UINT)settings->Values[index], (UINT)settings->Values[index + 1]);
             SetWindowTextA(control, text);
             break;
         default: break;                      /* SK_DERIVED has no control of its own */
@@ -12900,9 +12900,9 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
        forces a different number than the setting, which file. */
     {   HWND dosVersionNow = SettingsControl(IDC_S_DOSVER_NOW);
         if (dosVersionNow && g_DosMachine) {
-            wsprintfA(text, "The current session is reporting: MS-DOS %u.%02u",
+            wsprintfA(text, SETTINGS_DOS_VERSION_FORMAT,
                       (UINT)g_DosMachine->VersionMajor, (UINT)g_DosMachine->VersionMinor);
-            if (g_DosVersionForced && g_DosVersionWhy) lstrcatA(text, " (set by cfg\\dosver.txt)");
+            if (g_DosVersionForced && g_DosVersionWhy) lstrcatA(text, SETTINGS_DOS_VERSION_FORCED);
             SetWindowTextA(dosVersionNow, text);
         }
     }
@@ -12956,7 +12956,7 @@ static VOID SettingsFromDialog(NTVDMEX_SETTINGS *settings)
         if (xpShell && SendMessageA(xpShell, BM_GETCHECK, 0, 0) == BST_CHECKED) settings->Strings[SET_STR_SHELL][0] = 0;
     }
 }
-
+#define PLANEDUMP_FLAG CFG_("planedump.flag")
 /* EnableThemeDialogTexture is what stops a page rendering as a grey slab on the
    tab's themed background. It lives in uxtheme.dll (XP and later), so it is bound by
    name; a box with no theming simply gets the old grey rather than a dialog that
@@ -12980,10 +12980,10 @@ static VOID SettingsFillCpuInfo(HWND dialog)
     PCSTR source = name;
     if (!control) return;
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
-            "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+            HOST_REG_CPU_KEY,
             0, KEY_READ, &key) != ERROR_SUCCESS)
         return;
-    if (RegQueryValueExA(key, "ProcessorNameString", NULL, &type,
+    if (RegQueryValueExA(key, HOST_REG_CPU_NAME, NULL, &type,
                          (BYTE *)name, &size) == ERROR_SUCCESS
         && type == REG_SZ && size) {
         name[size < sizeof name ? size : sizeof name - 1] = 0;
@@ -13006,16 +13006,16 @@ static INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM 
         HWND label = controlId ? GetDlgItem(dialog, controlId + IDC_S_SLIDER_VALUE_OFFSET) : NULL;
         if (label) {
             CHAR text[16];
-            wsprintfA(text, "%u%%", (UINT)SendMessageA((HWND)lParam, TBM_GETPOS, 0, 0));
+            wsprintfA(text, SETTINGS_FORMAT_PERCENT, (UINT)SendMessageA((HWND)lParam, TBM_GETPOS, 0, 0));
             SetWindowTextA(label, text);
         }
         return TRUE;
     }
     if (message == WM_INITDIALOG) {
         if (!g_UxTheme) {
-            g_UxTheme = LoadLibraryA("uxtheme.dll");
+            g_UxTheme = LoadLibraryA(HOST_MODULE_UXTHEME);
             if (g_UxTheme)
-                g_EnableThemeDialogTexture = (PFN_ENABLE_THEME_DIALOG_TEXTURE)GetProcAddress(g_UxTheme, "EnableThemeDialogTexture");
+                g_EnableThemeDialogTexture = (PFN_ENABLE_THEME_DIALOG_TEXTURE)GetProcAddress(g_UxTheme, HOST_EXPORT_ENABLE_THEME_DIALOG_TEXTURE);
         }
         if (g_EnableThemeDialogTexture) g_EnableThemeDialogTexture(dialog, THEME_ETDT_ENABLE | THEME_ETDT_USETABTEXTURE);   /* ETDT_ENABLE | ETDT_USETABTEXTURE */
         SettingsFillCpuInfo(dialog);            /* no-op on pages without the static */
@@ -13037,7 +13037,7 @@ static INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM 
         if ((INT)drawItem->itemID >= 0) {
             SendMessageA(drawItem->hwndItem, CB_GETLBTEXT, drawItem->itemID, (LPARAM)text);
             if (drawItem->itemID == 0 && HostCpuMhz())
-                wsprintfA(text + lstrlenA(text), " - this PC, %u MHz", HostCpuMhz());
+                wsprintfA(text + lstrlenA(text), SETTINGS_FORMAT_THIS_PC, HostCpuMhz());
             SetBkMode(drawItem->hDC, TRANSPARENT);
             SetTextColor(drawItem->hDC, GetSysColor(!isOk ? COLOR_GRAYTEXT
                                               : selector ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
@@ -13073,16 +13073,16 @@ static INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM 
         case IDC_S_CD_PHYS:      SettingsCdRadios(SETTINGS_DRIVE_PHYSICAL); return TRUE;
         case IDC_S_CD_IMG:       SettingsCdRadios(SETTINGS_DRIVE_IMAGE); return TRUE;
         case IDC_S_FLOPPY_BROWSE:
-            SettingsBrowse(dialog, IDC_S_FLOPPYA, "Floppy disk images (*.img;*.ima;*.flp)\0*.img;*.ima;*.flp\0"
-                            "All files (*.*)\0*.*\0", "Choose a floppy disk image");
+            SettingsBrowse(dialog, IDC_S_FLOPPYA, SETTINGS_FILTER_FLOPPY,
+                            SETTINGS_TITLE_FLOPPY);
             return TRUE;
         case IDC_S_CD_BROWSE:
-            SettingsBrowse(dialog, IDC_S_CDROM, "ISO disk images (*.iso)\0*.iso\0All files (*.*)\0*.*\0",
-                            "Choose an ISO disk image");
+            SettingsBrowse(dialog, IDC_S_CDROM, SETTINGS_FILTER_ISO,
+                            SETTINGS_TITLE_ISO);
             return TRUE;
         case IDC_S_SF_BROWSE:
-            SettingsBrowse(dialog, IDC_S_SOUNDFONT, "SoundFonts (*.sf2)\0*.sf2\0All files (*.*)\0*.*\0",
-                            "Choose a SoundFont");
+            SettingsBrowse(dialog, IDC_S_SOUNDFONT, SETTINGS_FILTER_SOUNDFONT,
+                            SETTINGS_TITLE_SOUNDFONT);
             return TRUE;
         }
     }
@@ -13773,7 +13773,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                      identical, which is the exact failure this codebase keeps paying
                      for. Derive the offset from the string so the next path change
                      cannot do it again, and SAY SO when a write fails. */
-                CHAR name[] = "shot00.bmp";
+                CHAR name[] = HOST_SHOT_NAME;
                 PCSTR path;
                 name[CAPTURE_NAME_DIGITS] = (CHAR)('0' + (captureSequence / DECIMAL_RADIX) % DECIMAL_RADIX);
                 name[CAPTURE_NAME_DIGITS + 1] = (CHAR)('0' + captureSequence % DECIMAL_RADIX);
@@ -13783,7 +13783,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                      QBasic's empty file list. Gated: no run pays for it unaltered. */
                 if (g_TextDump && g_Video.ModeKind == VIDEO_KIND_TEXT && !g_Video.IsVesa) {
                     static CHAR textSnapshot[8192];
-                    CHAR shotName[] = "shot00.txt";
+                    CHAR shotName[] = HOST_SHOT_TEXT_NAME;
                     INT textLength;
                     shotName[CAPTURE_NAME_DIGITS] = name[CAPTURE_NAME_DIGITS]; shotName[CAPTURE_NAME_DIGITS + 1] = name[CAPTURE_NAME_DIGITS + 1];
                     textLength = VddVideoTextSnapshot(&g_Video, textSnapshot, sizeof textSnapshot);
@@ -13799,7 +13799,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 path = OUT_(name);
                 if (PresentDdrawSaveBmp(&g_PresentDdraw, path) == 0) {
                     ++captureSequence;
-                    if (GetFileAttributesA(CFG_("planedump.flag")) != INVALID_FILE_ATTRIBUTES)
+                    if (GetFileAttributesA(PLANEDUMP_FLAG) != INVALID_FILE_ATTRIBUTES)
                         PlanesDumpBeside(path);
                 }
                 else if (!capFailed) {
@@ -13979,7 +13979,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             if (g_Video.ModeKind == VIDEO_KIND_TEXT) {
                 if (g_Captured) InputCaptureSet(window, FALSE);   /* the drag needs the pointer */
                 g_MarkMode = 1; g_MarkDrag = 0; g_SelectionOn = 0; SelectionPublish();
-                g_PresentDdraw.HintText  = "Mark: drag over the text, then Enter (or Edit > Copy). Esc cancels.";
+                g_PresentDdraw.HintText  = HOST_MARK_HINT_TEXT;
                 g_PresentDdraw.HintUntil = GetTickCount() + FULLSCREEN_HINT_MS;
             }
             return 0;
@@ -14005,27 +14005,27 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         case IDM_FILE_INSTALL:
         case IDM_FILE_UNINSTALL: {
             CHAR message[2048]; INT want = (LOWORD(wParam) == IDM_FILE_INSTALL), isOk;
-            if (MessageBoxA(window, want
-                    ? "Make NTVDMEX this machine's virtual DOS machine?\n\n"
-                      "Every MS-DOS and 16-bit Windows program will then start "
-                      "through NTVDMEX instead of Microsoft's ntvdm.exe.\n\n"
-                      "This changes a machine-wide setting and needs Administrator. "
+#define HOST_INSTALL_CONFIRM_TEXT "Make NTVDMEX this machine's virtual DOS machine?\n\n" \
+                      "Every MS-DOS and 16-bit Windows program will then start " \
+                      "through NTVDMEX instead of Microsoft's ntvdm.exe.\n\n" \
+                      "This changes a machine-wide setting and needs Administrator. " \
                       "It is reversible from this menu."
-                    : "Remove NTVDMEX from the launch path?\n\n"
-                      "This machine will go back to using its own ntvdm.exe for "
-                      "MS-DOS and 16-bit Windows programs.",
-                    "NTVDMEX", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+#define HOST_UNINSTALL_CONFIRM_TEXT "Remove NTVDMEX from the launch path?\n\n" \
+                      "This machine will go back to using its own ntvdm.exe for " \
+                      "MS-DOS and 16-bit Windows programs."
+            if (MessageBoxA(window, want ? HOST_INSTALL_CONFIRM_TEXT : HOST_UNINSTALL_CONFIRM_TEXT,
+                            HOST_PRODUCT_NAME, MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
                 return 0;
             message[0] = 0;
             isOk = InstallPerform(want, INSTALL_UNFORCED, message, sizeof message);
-            MessageBoxA(window, message, "NTVDMEX",
+            MessageBoxA(window, message, HOST_PRODUCT_NAME,
                         MB_OK | (isOk ? MB_ICONINFORMATION : MB_ICONERROR));
             return 0; }
         case IDM_FILE_STATUS: {
             CHAR message[2048];
             message[0] = 0;
             InstallStatusText(message, sizeof message);
-            MessageBoxA(window, message, "NTVDMEX", MB_OK | MB_ICONINFORMATION);
+            MessageBoxA(window, message, HOST_PRODUCT_NAME, MB_OK | MB_ICONINFORMATION);
             return 0; }
         case IDM_FILE_SETTINGS:
             /* Modal, on the UI thread. The guest keeps running throughout -- it lives
@@ -14054,10 +14054,10 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
              ▶ NOT YET SEEN ON HARDWARE: what XP renders here needs one look before
                this is called done. */
         case IDM_HELP_ABOUT:
-            ShellAboutA(window, "NTVDMEX#NTVDMEX -- New Technology Virtual DOS Manager, Extended",
-                        "A from-scratch ntvdm.exe for Windows XP.\r\n"
-                        "MS-DOS on the real CPU in V86, and 16-bit Windows through "
-                        "the system's own krnl386.",
+#define HOST_ABOUT_TEXT "A from-scratch ntvdm.exe for Windows XP.\r\n" \
+                        "MS-DOS on the real CPU in V86, and 16-bit Windows through " \
+                        "the system's own krnl386."
+            ShellAboutA(window, HOST_ABOUT_TITLE, HOST_ABOUT_TEXT,
                         LoadIconA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(IDI_MAINICON)));
             return 0;
         /* ★ The way back to a window that was never shown. Not a toggle: "hide it
@@ -14487,7 +14487,7 @@ static DWORD WINAPI UiThread(LPVOID argument)
     windowClass.hCursor = LoadCursorA(NULL, IDC_ARROW);
     windowClass.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     windowClass.hIcon = LoadIconA(instance, MAKEINTRESOURCEA(IDI_MAINICON));    /* IDI_MAINICON: title bar + taskbar */
-    windowClass.lpszClassName = "NtvdmexHostWindow";
+    windowClass.lpszClassName = HOST_WINDOW_CLASS;
     if (!RegisterClassA(&windowClass)) return 1;
     /* The initial size. Same helper the View menu and the dialog resize through, so
        "what 2x means" has one definition rather than one per call site. */
@@ -15095,7 +15095,7 @@ static VOID PitLatchNote(BYTE command)
         }
     }
 }
-
+#define RTIDLE_OFF_FLAG CFG_("rtidle.off")
 static DWORD g_SoundIoLogged = 0;    /* bounded SNDIO trace; see the note below */
 static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port,
                        INT isIn, INT width)
@@ -15293,7 +15293,7 @@ static VOID RetraceIdle(VOID)
     UINT32 microseconds;
     if (!g_RetracePending) return;
     g_RetracePending = 0;
-    if (g_RetraceOffset < 0) g_RetraceOffset = (GetFileAttributesA(CFG_("rtidle.off")) != INVALID_FILE_ATTRIBUTES);
+    if (g_RetraceOffset < 0) g_RetraceOffset = (GetFileAttributesA(RTIDLE_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
     if (g_RetraceOffset) return;
     ip = g_RetraceIp;
     code = (const volatile BYTE *)(ULONG_PTR)((g_RetraceCs << PARAGRAPH_SHIFT) + ip);
@@ -18954,8 +18954,8 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
                  (observed; see WOW32 0x7b): without it, 16-bit
                  GetSystemDirectory answered "\SYSTEM" with no drive. One entry,
                  through `extra`, whose cap note keeps the tail krnl386 reads. */
-            CHAR systemRootVariable[MAX_PATH + 16] = "SYSTEMROOT=";
-            if (!GetWindowsDirectoryA(systemRootVariable + sizeof "SYSTEMROOT=" - 1, MAX_PATH)) systemRootVariable[0] = 0;
+            CHAR systemRootVariable[MAX_PATH + 16] = HOST_ENV_SYSTEMROOT_ASSIGN;
+            if (!GetWindowsDirectoryA(systemRootVariable + sizeof HOST_ENV_SYSTEMROOT_ASSIGN - 1, MAX_PATH)) systemRootVariable[0] = 0;
             length = GetSystemDirectoryA(pathValue, MAX_PATH);
             if (length && length < MAX_PATH) { pathValue[length] = ';';
                 if (!GetWindowsDirectoryA(pathValue + length + 1, MAX_PATH)) pathValue[length] = 0; }
@@ -18966,8 +18966,8 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
                  to the double NUL, so anything added here moves the tail it reads. */
             DosEnvBuildWithCard(NULL, DOS_ENV_SEG,
                           g_WowKernelPath[0] ? g_WowKernelPath
-                                             : "C:\\WINDOWS\\SYSTEM32\\KRNL386.EXE",
-                          pathValue[0] ? pathValue : "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS", &g_SbConfig,
+                                             : HOST_DEFAULT_KRNL386_PATH,
+                          pathValue[0] ? pathValue : HOST_DEFAULT_WIN16_PATH, &g_SbConfig,
                           systemRootVariable[0] ? systemRootVariable : NULL);
             cursor = message; cursor = LogPut(cursor, "WOWV86: env rebuilt, PATH=");
             cursor = LogPut(cursor, pathValue[0] ? pathValue : "(fallback)");
@@ -27505,7 +27505,7 @@ static INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context)
     g_DpmiVi  = 0;                                  /* ...and our model of it */
     return 1;
 }
-
+#define LIVEHB_FLAG CFG_("livehb.flag")
 /* ── ★★★ THE NESTED RUN: CALL 16-BIT CODE AND WAIT FOR THE ANSWER. (s89, #162) ─────
      Every call into Win16 code so far was ARRANGED from a BOP and taken on the way out
      (wowcall.h): fine for anything the guest asked us to do, impossible for a question
@@ -27561,7 +27561,7 @@ typedef struct {
     BOOL   (*InstallIoHook)(HANDLE vddHandle, WORD rangeCount, PCVOID ranges, PCVOID handlers);
     VOID   (*RemoveIoHook)(HANDLE vddHandle, WORD rangeCount, PCVOID ranges);
 } NTVDMEX_SHIM_API;
-
+#define PITLATCH_FLAG CFG_("pitlatch.flag")
 #include <wownt32.h>   /* declarations only: WOW_TYPE_*, the handle types WOWHandle32/16 are given */
 static VOID ShimLog(PCSTR what)
 {
@@ -27807,11 +27807,11 @@ static VOID WowShimsLoad(VOID)
         INT length = 0;
         PCSTR source = NTVDMEX_DIR;
         while (*source && length < MAX_PATH - 40) path[length++] = *source++;
-        source = "bin\\wowshim\\"; while (*source) path[length++] = *source++;
+        source = HOST_SHIM_SUBDIRECTORY; while (*source) path[length++] = *source++;
         source = names[index]; while (*source) path[length++] = *source++;
         path[length] = 0;
         module = LoadLibraryExA(path, NULL, 0);
-        initialize = module ? (BOOL (WINAPI *)(const NTVDMEX_SHIM_API *))GetProcAddress(module, "NtvdmexShimInit")
+        initialize = module ? (BOOL (WINAPI *)(const NTVDMEX_SHIM_API *))GetProcAddress(module, HOST_EXPORT_SHIM_INIT)
                  : NULL;
         cursor = buffer; cursor = LogPut(cursor, "WOWSHIM: "); cursor = LogPut(cursor, names[index]);
         if (!module) { g_ShimState[index] = SHIM_NO_LOAD; g_ShimError[index] = GetLastError();
@@ -28108,7 +28108,7 @@ static LRESULT WowControlColour(HWND window, WORD window16, UINT message, WPARAM
        CTLCOLOR_EDIT -- Calc's display is one, and its default is the window colour. */
     {   CHAR className[16];
         type = (WORD)(message - WM_CTLCOLORMSGBOX);
-        if (type == CTLCOLOR_STATIC && GetClassNameA((HWND)lParam, className, sizeof className) && !lstrcmpiA(className, "Edit"))
+        if (type == CTLCOLOR_STATIC && GetClassNameA((HWND)lParam, className, sizeof className) && !lstrcmpiA(className, WC_EDITA))
             type = 1;
     }
     args[0] = window16; args[1] = WM_CTLCOLOR16;
@@ -29808,7 +29808,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     {   INT attempt; CHAR name[48];
         for (attempt = 1; attempt <= HOST_INSTANCES_MAX && !g_OnceMutex; ++attempt) {
             HANDLE once; DWORD lastError, waitResult = WAIT_OBJECT_0;
-            PSTR scan = LogPut(name, "Global\\ntvdmex_host_single");
+            PSTR scan = LogPut(name, HOST_INSTANCE_MUTEX);
             if (attempt > 1) { *scan++ = '_'; scan = LogDecimal(scan, (UINT)attempt); }
             /* ⚠⚠ GetLastError() IS ONLY MEANINGFUL IMMEDIATELY AFTER THE CALL -- clear
                  it first; CreateMutexA does not clear it on success. (The first cut of
@@ -29823,8 +29823,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             }
             g_OnceMutex = once;
             if (attempt > 1) {
-                PSTR position = LogPut(g_OutSubdirectory, "debug\\out\\");
-                position = LogDecimal(position, (UINT)attempt); LogPut(position, "\\");
+                PSTR position = LogPut(g_OutSubdirectory, HOST_OUT_SUBDIRECTORY);
+                position = LogDecimal(position, (UINT)attempt); LogPut(position, HOST_PATH_SEPARATOR);
                 CreateDirectoryA(NTVDMEX_OUT, NULL);
             }
             g_Instance = attempt; g_InstanceAbandoned = (waitResult == WAIT_ABANDONED);   /* reported at STAGE0 */
@@ -30090,9 +30090,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
        will be. Deciding it at device setup left the first heaven7 run with no ULTRASND
        and a card nothing looked for. */
     g_GusOn = g_Settings.Values[SET_GUS] && (GetFileAttributesA(NOGUS_FLAG) == INVALID_FILE_ATTRIBUTES);
-    if (g_Settings.Values[SET_GUS] && !g_GusOn) SettingsNoteOverride(SET_GUS, "cfg\\nogus.flag", 0);
+    if (g_Settings.Values[SET_GUS] && !g_GusOn) SettingsNoteOverride(SET_GUS, CFG_TEXT(KNOB_FILE_NOGUS), 0);
     if (GetFileAttributesA(DDRAWFS_FLAG) != INVALID_FILE_ATTRIBUTES)   /* read again at fullscreen */
-        SettingsNoteOverride(SET_RENDERER, "cfg\\ddrawfs.flag", 1);
+        SettingsNoteOverride(SET_RENDERER, CFG_TEXT(KNOB_FILE_DDRAWFS), 1);
     /* #235: the card as the Audio page's jumpers set it (defaults = the card as built). */
     {   static const BYTE gusIrqs[7] = { 2, 3, 5, 7, 11, 12, 15 };
         static const BYTE gusDmaChannels[5] = { 1, 3, 5, 6, 7 };
@@ -30370,7 +30370,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         cursor = LogPut(cursor, "STAGE1: program ");
         if (g_Title[0] == '\\' || (g_Title[1] == ':' && g_Title[2] == '\\'))
             cursor = LogPut(cursor, g_Title);
-        else { cursor = LogPut(cursor, g_CurrentDirectory); cursor = LogPut(cursor, "\\"); cursor = LogPut(cursor, g_Title); } cursor = LogPut(cursor, "\r\n");
+        else { cursor = LogPut(cursor, g_CurrentDirectory); cursor = LogPut(cursor, HOST_PATH_SEPARATOR); cursor = LogPut(cursor, g_Title); } cursor = LogPut(cursor, "\r\n");
         /* #129: the OTHER half of the launch shape. CSRSS hands back the app name,
            the command tail, the PIF and a set of flags -- any of which may be what
            actually distinguishes a WOW launch from a DOS one. Print them all rather
@@ -30602,7 +30602,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         INT isStub = 0;
         {   PCSTR baseName = g_Application2, scan;
             for (scan = g_Application2; *scan; ++scan) if (*scan == '\\' || *scan == '/') baseName = scan + 1;
-            isStub   = (lstrcmpiA(baseName, "dosstub.com") == 0);
+            isStub   = (lstrcmpiA(baseName, HOST_HARNESS_STUB_NAME) == 0);
             /* ★ OUR OWN LAUNCHER'S STUB -- see LAUNCH_STUB_NAME. Same mechanism, a
                  DIFFERENT meaning: the harness stub says "target.txt names the
                  program", this one says "the user opened NTVDMEX, give them a shell".
@@ -30748,7 +30748,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     }
     if (!readCount && g_CurrentDirectory[0] && g_Title[0]) {
         CHAR path[768]; PSTR pathCursor = path; HANDLE fileHandle; int targetLength; PSTR targetArguments = NULL; /* stays int: INT here moves the compiled code */
-        pathCursor = LogPut(pathCursor, g_CurrentDirectory); pathCursor = LogPut(pathCursor, "\\"); pathCursor = LogPut(pathCursor, g_Title);
+        pathCursor = LogPut(pathCursor, g_CurrentDirectory); pathCursor = LogPut(pathCursor, HOST_PATH_SEPARATOR); pathCursor = LogPut(pathCursor, g_Title);
         for (targetLength = 0; path[targetLength]; ++targetLength) ;              /* same trailing-space trim as above */
         while (targetLength > 0 && (path[targetLength - 1] == ' ' || path[targetLength - 1] == '\t')) path[--targetLength] = 0;
         fileHandle = CsrssOpenSplit(path, &targetArguments);        /* a RELATIVE title carries args too */
@@ -30828,7 +30828,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     if (readCount && !g_WowLaunch && programPathBuffer[0]) {
         INT pathLength = lstrlenA(programPathBuffer);
         PIF_INFO pif;
-        if (pathLength > DOS_DOT_EXTENSION_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - DOS_DOT_EXTENSION_LENGTH, ".PIF")
+        if (pathLength > DOS_DOT_EXTENSION_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - DOS_DOT_EXTENSION_LENGTH, HOST_EXTENSION_PIF)
             && PifParse(g_FileBuffer, readCount, &pif)) {
             CHAR program[MAX_PATH], directory[MAX_PATH], pifDirectory[MAX_PATH], pifCandidate[MAX_PATH], extra[256];
             HANDLE pifHandle = INVALID_HANDLE_VALUE;
@@ -30852,7 +30852,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 for (rootIndex = 0; rootIndex < 2 && pifHandle == INVALID_HANDLE_VALUE; ++rootIndex) {
                     PSTR wordStart;
                     if (!roots[rootIndex][0]) continue;
-                    wordStart = LogPut(pifCandidate, roots[rootIndex]); wordStart = LogPut(wordStart, "\\"); LogPut(wordStart, program);
+                    wordStart = LogPut(pifCandidate, roots[rootIndex]); wordStart = LogPut(wordStart, HOST_PATH_SEPARATOR); LogPut(wordStart, program);
                     pifHandle = CreateFileA(pifCandidate, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
                 }
                 if (pifHandle == INVALID_HANDLE_VALUE && SearchPathA(NULL, program, NULL, sizeof pifCandidate, pifCandidate, NULL))
@@ -30891,7 +30891,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         && GetFileAttributesA(DIRECTLAUNCH_FLAG) == INVALID_FILE_ATTRIBUTES) {
         INT pathLength = lstrlenA(programPathBuffer), isCommand = 0, isNewExe = 0;
         CHAR shortPath[300]; DWORD shortLength;
-        isCommand = (pathLength >= COMMAND_COM_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - COMMAND_COM_LENGTH, "COMMAND.COM"));
+        isCommand = (pathLength >= COMMAND_COM_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - COMMAND_COM_LENGTH, HOST_COMMAND_COM));
         if (readCount > DOS_MZ_NEW_HEADER_MIN && g_FileBuffer[0] == 'M' && g_FileBuffer[1] == 'Z') {
             DWORD newHeaderOffset = *(const DWORD *)(g_FileBuffer + DOS_MZ_NEW_HEADER);
             if (newHeaderOffset > DOS_MZ_NEW_HEADER_MIN && newHeaderOffset + DOS_EXE_SIGNATURE_SIZE < readCount
@@ -30947,7 +30947,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             }
         }
         if (shellHandle == INVALID_HANDLE_VALUE) {
-            LogPut(shell, "C:\\WINDOWS\\SYSTEM32\\COMMAND.COM");
+            LogPut(shell, HOST_DEFAULT_SHELL_PATH);
             shellHandle = CreateFileA(shell, GENERIC_READ, FILE_SHARE_READ, NULL,
                              OPEN_EXISTING, 0, NULL);
             if (shellHandle != INVALID_HANDLE_VALUE && !why) why = "the system's own COMMAND.COM";
@@ -31005,7 +31005,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
        chose the shell or something named COMMAND.COM explicitly. */
     {   INT pathLength = lstrlenA(programPathBuffer);
         g_TopIsShell = wasShell
-            || (pathLength >= COMMAND_COM_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - COMMAND_COM_LENGTH, "COMMAND.COM")); }
+            || (pathLength >= COMMAND_COM_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - COMMAND_COM_LENGTH, HOST_COMMAND_COM)); }
     /* ── ★ THE NTVDM-AWARE SHELL IS LAUNCHED `/P <its own directory>`, AS STOCK DOES. ──
          ntvdm.exe carries `%s=%s%s /p %s\system32`; s79 found /P mattered and the bare
          launch later dropped every argument. Without /P, PERMCOM ([0x2B0]) stays 0, so
@@ -31019,7 +31019,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             directory[directoryLength] = programPathBuffer[directoryLength]; if (programPathBuffer[directoryLength] == '\\') cut = directoryLength; }
         directory[cut ? cut : directoryLength] = 0;
         if (!GetShortPathNameA(directory, shortDirectory, sizeof shortDirectory)) LogPut(shortDirectory, directory);
-        wsprintfA(args, "/P %s", shortDirectory);
+        wsprintfA(args, HOST_SHELL_ARGUMENTS_FORMAT, shortDirectory);
         if (!GetShortPathNameA(programPathBuffer, g_ShellPath, sizeof g_ShellPath)) LogPut(g_ShellPath, programPathBuffer);
         cursor = LogPut(cursor, "STAGE2: NTVDM-aware shell -> command tail [");
         cursor = LogPut(cursor, args); cursor = LogPut(cursor, "] (permanent, as stock launches it)\r\n");
@@ -31066,7 +31066,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         } else {
             cursor = LogPut(cursor, " REFUSED: this program does not fit under it -- the machine stays at "
                         "640 KB (#136)\r\n");
-            SettingsNoteOverride(SET_CONVKB, "a program too big for it", BIOS_CONV_KB_MAX);
+            SettingsNoteOverride(SET_CONVKB, SETTINGS_SOURCE_CONV_KB, BIOS_CONV_KB_MAX);
         }
     }
     /* Build the DOS process in conventional memory (base=NULL => absolute V86). */
@@ -31355,8 +31355,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
              heaven7 never touched a port without it. <base hex>,<DRAM DMA>,<record DMA>,
              <GF1 IRQ>,<MIDI IRQ> (docs/ref/gus.md §1) -- the numbers the device was built
              with, so the string and the card cannot disagree. A dosenv.txt ULTRASND wins. */
-        if (g_GusOn && !StrStrNoCase(environmentExtra, "ULTRASND=")) {
-            extraOffset += (DWORD)wsprintfA(environmentExtra + extraOffset, "ULTRASND=%X,%u,%u,%u,%u\n",
+        if (g_GusOn && !StrStrNoCase(environmentExtra, HOST_ENV_ULTRASND_ASSIGN)) {
+            extraOffset += (DWORD)wsprintfA(environmentExtra + extraOffset, HOST_ENV_ULTRASND_FORMAT,
                                    (UINT)g_Gus.BasePort, (UINT)g_Gus.DmaChannel, (UINT)g_Gus.DmaChannel,
                                    (UINT)g_Gus.Irq, (UINT)g_Gus.Irq);
         }
@@ -31366,8 +31366,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             if (variableCount) { cursor = LogPut(cursor, "STAGE2: launcher compiler vars -> "); cursor = LogHex(cursor, variableCount);
                       cursor = LogPut(cursor, " (LIB/INCLUDE into the 0x60 block; memory map unmoved)\r\n"); }
         }
-        DosEnvBuildWithCard(NULL, DOS_ENV_SEG, programPathBuffer[0] ? programPathBuffer : "C:\\PROGRAM.COM",
-                           "C:\\", &g_SbConfig, environmentExtra[0] ? environmentExtra : NULL);        /* M2.5: env */
+        DosEnvBuildWithCard(NULL, DOS_ENV_SEG, programPathBuffer[0] ? programPathBuffer : HOST_DEFAULT_PROGRAM_PATH,
+                           HOST_DEFAULT_DRIVE_ROOT, &g_SbConfig, environmentExtra[0] ? environmentExtra : NULL);        /* M2.5: env */
       }
       /* ── ★ READ THE BLOCK BACK OUT OF GUEST MEMORY AND PRINT IT. Not the string we
            passed in -- the bytes the guest will actually walk, which is a different
@@ -31517,11 +31517,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           }
           if (major && major < BYTE_VALUES && minor < BYTE_VALUES) {
               DosInt21SetVersion(&machine, (BYTE)major, (BYTE)minor);
-              SettingsNoteOverride(SET_DOSMAJ, "cfg\\dosver.txt", major);
-              SettingsNoteOverride(SET_DOSMIN, "cfg\\dosver.txt", minor);
-              dosVersionSource = "cfg\\dosver.txt";
+              SettingsNoteOverride(SET_DOSMAJ, CFG_TEXT(KNOB_FILE_DOSVER), major);
+              SettingsNoteOverride(SET_DOSMIN, CFG_TEXT(KNOB_FILE_DOSVER), minor);
+              dosVersionSource = CFG_TEXT(KNOB_FILE_DOSVER);
               g_DosVersionForced = 1;
-              g_DosVersionWhy = "The file cfg\\dosver.txt overrides the setting above.";
+              g_DosVersionWhy = SETTINGS_DOS_VERSION_WHY;
           }
       } }
     /* ── ★ SAY WHICH VERSION IS IN FORCE, AND WHERE IT CAME FROM. EVERY RUN. ──────
@@ -32003,7 +32003,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     /* Opt-in only: the ring costs two stores on the hottest path in the program and
        the dump does file I/O under g_Lock. See the note in vdd_video.h. */
     g_Video.IsPort3DaRingOn =
-        (GetFileAttributesA(CFG_("pitlatch.flag")) != INVALID_FILE_ATTRIBUTES);
+        (GetFileAttributesA(PITLATCH_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_Video.GuestPc = HostGuestPc;             /* so a VRAM watchpoint names a routine */
     g_Video.BiosData = (BYTE *)BIOS_BDA_BASE;               /* the display's BDA fields (0449..0489) */
     g_VideoDevice = VddVideoDevice(&g_Video);
@@ -32250,7 +32250,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           ReadFile(pitPaceFile, text, sizeof text, &bytesRead, NULL); CloseHandle(pitPaceFile);
           if (bytesRead && text[0] >= '0' && text[0] <= '9') g_PitPaceMs = text[0] - '0';
           g_PitPaceOn = (g_PitPaceMs != 0);
-          SettingsNoteOverride(SET_PITPACE, "cfg\\pitpace.txt (ms)", (DWORD)g_PitPaceMs);
+          SettingsNoteOverride(SET_PITPACE, CFG_TEXT(KNOB_FILE_PITPACE) SETTINGS_SOURCE_MS, (DWORD)g_PitPaceMs);
       } }
     /* The pacer's two OTHER levers -- see PitPacerThread. Absent file = as shipped. */
     { HANDLE pitPriorityFile = CreateFileA(PITPRIO_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -32300,7 +32300,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           }
           if (bytesRead && text[0] >= '0' && text[0] <= '9' && number <= UI_TICK_MS_MAX) {
               g_UiTickMinimumMs = number;
-              SettingsNoteOverride(SET_UITICK, "cfg\\uitick.txt (ms)", (DWORD)number);
+              SettingsNoteOverride(SET_UITICK, CFG_TEXT(KNOB_FILE_UITICK) SETTINGS_SOURCE_MS, (DWORD)number);
           }
       } }
     /* wowidle.txt -- how long a Win16 task blocked in GetMessage waits. 0 = forever. */
@@ -32345,7 +32345,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                           value2 = value2 * DECIMAL_RADIX + (text[index2] - '0'); }
           if (value2 >= MOUSE_SENSITIVITY_MIN && value2 <= MOUSE_SENSITIVITY_MAX) {
               g_MouseSensitivity = value2;
-              SettingsNoteOverride(SET_MSENS, "cfg\\msens.txt", (DWORD)value2);
+              SettingsNoteOverride(SET_MSENS, CFG_TEXT(KNOB_FILE_MSENS), (DWORD)value2);
           }
       } }
     /* ── GH #56: the calibration and a one-run speed override, both from the share.
@@ -32393,7 +32393,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                              value9 = value9 * DECIMAL_RADIX_U + (UINT)(text[index9] - '0'); }
           if (index9 > 0 && value9 < (UINT)CPUSPEED_COUNT) {
               g_CpuSpeedIndex = (INT)value9;
-              SettingsNoteOverride(SET_SPEEDMODE, "cfg\\cpuspd.txt", value9);
+              SettingsNoteOverride(SET_SPEEDMODE, CFG_TEXT(KNOB_FILE_CPUSPD), value9);
           }
       } }
     /* ── THE GRANULARITY SLIDER AS A FILE KNOB. cpugran.txt = target period in ms,
@@ -32420,9 +32420,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           if (bytesRead && (text[0] == '0' || text[0] == '1')) g_CpuAffinityOn = (text[0] == '1');
       } }
     if (g_PitPaceOn) {
-        HMODULE winmmModule = LoadLibraryA("winmm.dll");
+        HMODULE winmmModule = LoadLibraryA(HOST_MODULE_WINMM);
         if (winmmModule) { PFN_TIME_BEGIN_PERIOD beginPeriod =
-                      (PFN_TIME_BEGIN_PERIOD)GetProcAddress(winmmModule, "timeBeginPeriod");
+                      (PFN_TIME_BEGIN_PERIOD)GetProcAddress(winmmModule, HOST_EXPORT_TIME_BEGIN_PERIOD);
                   if (beginPeriod) beginPeriod(1); }
         PitPacerTimerStart(winmmModule);                /* #238: a true 1 ms wake */
         g_PitPaceThread = CreateThread(NULL, 0, PitPacerThread, NULL, 0, NULL);
@@ -32453,9 +32453,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          means. Bound by name, like every other winmm use, so the import allowlist
          is unaffected. */
     if (!g_PitPaceOn) {
-        HMODULE winmmModule2 = LoadLibraryA("winmm.dll");
+        HMODULE winmmModule2 = LoadLibraryA(HOST_MODULE_WINMM);
         if (winmmModule2) { PFN_TIME_BEGIN_PERIOD beginPeriod2 =
-                       (PFN_TIME_BEGIN_PERIOD)GetProcAddress(winmmModule2, "timeBeginPeriod");
+                       (PFN_TIME_BEGIN_PERIOD)GetProcAddress(winmmModule2, HOST_EXPORT_TIME_BEGIN_PERIOD);
                    if (beginPeriod2) beginPeriod2(1); }
     }
     CpuSpeedRecompute();
@@ -32548,7 +32548,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                       cursor = LogPut(cursor, " ms\r\n"); }
     /* cfg\livehb.flag: the heartbeat on a LIVE (by-hand) run too. A host that dies
        with no exit report leaves nothing else that says where the guest was. (s68) */
-    if (g_Headless || GetFileAttributesA(CFG_("livehb.flag")) != INVALID_FILE_ATTRIBUTES) {
+    if (g_Headless || GetFileAttributesA(LIVEHB_FLAG) != INVALID_FILE_ATTRIBUTES) {
                       HANDLE heartbeatThread = CreateThread(NULL, 0, HeartbeatThread, NULL, 0, NULL);
                       if (heartbeatThread) CloseHandle(heartbeatThread); }
     if (g_QiKeys) { HANDLE keyThread = CreateThread(NULL, 0, SynthKeyThread, NULL, 0, NULL);
@@ -35868,8 +35868,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                             environment0[environmentStart + 4] == '=') {
                             CHAR writeBuffer[2048], shellPath[MAX_PATH]; DWORD writeLength, start = outputIndex, length0 = 0;
                             PSTR start0 = writeBuffer, limit;
-                            writeLength = GetEnvironmentVariableA("PATH", writeBuffer, sizeof writeBuffer);
-                            outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, "PATH=") - environmentSnapshot);
+                            writeLength = GetEnvironmentVariableA(HOST_ENV_PATH, writeBuffer, sizeof writeBuffer);
+                            outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, HOST_ENV_PATH_ASSIGN) - environmentSnapshot);
                             if (writeLength && writeLength < sizeof writeBuffer) {
                                 while (*start0) {
                                     DWORD shortLength;
@@ -35883,13 +35883,13 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                     start0 = limit;
                                 }
                             }
-                            if (!length0) outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, "C:\\") - environmentSnapshot);
+                            if (!length0) outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, HOST_DEFAULT_DRIVE_ROOT) - environmentSnapshot);
                         } else
                         if ((environment0[environmentStart] | ASCII_CASE_BIT) == 'c' && environment0[environmentStart + 7] == '=' &&
                             (environment0[environmentStart + 1] | ASCII_CASE_BIT) == 'o' && (environment0[environmentStart + 2] | ASCII_CASE_BIT) == 'm') {
-                            outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, "COMSPEC=") - environmentSnapshot);
+                            outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, HOST_ENV_COMSPEC_ASSIGN) - environmentSnapshot);
                             outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, g_ShellPath[0] ? g_ShellPath
-                                                           : "C:\\WINDOWS\\SYSTEM32\\COMMAND.COM") - environmentSnapshot);
+                                                           : HOST_DEFAULT_SHELL_PATH) - environmentSnapshot);
                         } else {
                             DWORD snapshotIndex; for (snapshotIndex = environmentStart; snapshotIndex < inputIndex; ++snapshotIndex) environmentSnapshot[outputIndex++] = (CHAR)environment0[snapshotIndex];
                         }
@@ -35964,12 +35964,12 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                         DWORD tempLength = GetTempPathA(sizeof tempDirectory, tempDirectory), shortTempLength;
                         HANDLE writeHandle;
                         if (tempLength && tempLength < sizeof tempDirectory - 16) {
-                            wsprintfA(full, "%sNTVDMEXS.BAT", tempDirectory);
+                            wsprintfA(full, HOST_STARTUP_BATCH_FORMAT, tempDirectory);
                             writeHandle = CreateFileA(full, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
                             if (writeHandle != INVALID_HANDLE_VALUE) {
-                                static const CHAR body[] = "@echo off\r\n"
-                                    "if exist C:\\AUTOEXEC.BAT call C:\\AUTOEXEC.BAT\r\n";
+                                static const CHAR body[] =
+                                    HOST_STARTUP_BATCH_BODY;
                                 DWORD bytesWritten = 0;
                                 WriteFile(writeHandle, body, sizeof body - 1, &bytesWritten, NULL);
                                 CloseHandle(writeHandle);
@@ -35978,7 +35978,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                     lstrcpynA(wrap, shortPath, sizeof wrap);
                             }
                         }
-                        if (!wrap[0]) lstrcpynA(wrap, "C:\\AUTOEXEC.BAT", sizeof wrap);
+                        if (!wrap[0]) lstrcpynA(wrap, HOST_AUTOEXEC_PATH, sizeof wrap);
                     }
                     for (autoLength = 0; wrap[autoLength] && autoLength < sizeof autoText - 1; ++autoLength) autoText[autoLength] = wrap[autoLength];
                 }
@@ -36267,7 +36267,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     cursor = LogPut(cursor, " ppid=0x"); cursor = LogHex(cursor, g_StdioParentProcessId); cursor = LogPut(cursor, "\r\n");
     {
         HANDLE consoleHandle = (g_Stdio == INVALID_HANDLE_VALUE)
-            ? CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
+            ? CreateFileA(HOST_DEVICE_CONSOLE_OUTPUT, GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
                           OPEN_EXISTING, 0, NULL)
             : INVALID_HANDLE_VALUE;
         if (machine.OutputLength > 0) {

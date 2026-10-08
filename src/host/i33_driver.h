@@ -152,6 +152,7 @@
 #define I33_DEFAULT_TEXT_XOR       0x7700
 #define I33_DEFAULT_SPEED          50
 #define I33_DEFAULT_RATE           3
+#define I33_INI_FILE_NAME          "MOUSE.INI"   /* 34h: the initialization file a driver names */
 #define I33_TEXT_VIRTUAL_MAX_Y     199     /* text modes: 25 rows of 8 virtual pixels */
 #define I33_TEXT_VIRTUAL_HEIGHT    200
 #define I33_DEFAULT_WIDTH          640     /* no graphics mode yet: a 640x480 screen  */
