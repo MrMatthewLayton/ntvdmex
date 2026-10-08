@@ -46,6 +46,7 @@
 #define VECTOR_KEYBOARD_SERVICES    0x16    /* keyboard BIOS                            */
 #define VECTOR_TIME                 0x1A    /* BIOS time                                */
 #define VECTOR_USER_TICK            0x1C    /* called from the timer tick               */
+#define VECTOR_TERMINATE            0x20    /* program terminate                        */
 #define VECTOR_DOS                  0x21
 #define VECTOR_TERMINATE_ADDRESS    0x22
 #define VECTOR_CTRL_C               0x23

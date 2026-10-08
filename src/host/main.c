@@ -2346,7 +2346,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     environmentSegment = machine->ExecEnvironment;
     {
         const volatile BYTE *parentPsp = (const volatile BYTE *)((DWORD)machine->PspSegment << PARAGRAPH_SHIFT);
-        WORD parentEnvironmentSegment = environmentSegment ? environmentSegment : (WORD)(parentPsp[0x2C] | (parentPsp[0x2D] << BYTE_SHIFT));
+        WORD parentEnvironmentSegment = environmentSegment ? environmentSegment : (WORD)(parentPsp[DOS_PSP_ENVIRONMENT] | (parentPsp[DOS_PSP_ENVIRONMENT + 1] << BYTE_SHIFT));
         const volatile BYTE *parentEnvironment = (const volatile BYTE *)((DWORD)parentEnvironmentSegment << PARAGRAPH_SHIFT);
         DWORD environmentLength, nameLength = 0, total, index;
         volatile BYTE *childEnvironment;
@@ -2475,10 +2475,10 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
       const volatile BYTE *tail = (const volatile BYTE *)
           ((machine->ExecTailSegment << PARAGRAPH_SHIFT) + machine->ExecTailOffset);
       INT index, count = tail[0] > 126 ? 126 : tail[0];
-      for (index = 0; index <= count; ++index) childPsp[0x80 + index] = tail[index];
-      childPsp[0x81 + count] = 0x0D;
-      childPsp[0x16] = (BYTE)(machine->PspSegment & BYTE_MASK);       /* parent PSP */
-      childPsp[0x17] = (BYTE)(machine->PspSegment >> BYTE_SHIFT); }
+      for (index = 0; index <= count; ++index) childPsp[DOS_PSP_COMMAND_TAIL_LENGTH + index] = tail[index];
+      childPsp[DOS_PSP_COMMAND_TAIL + count] = DOS_PSP_COMMAND_TAIL_END;
+      childPsp[DOS_PSP_PARENT] = (BYTE)(machine->PspSegment & BYTE_MASK);       /* parent PSP */
+      childPsp[DOS_PSP_PARENT + 1] = (BYTE)(machine->PspSegment >> BYTE_SHIFT); }
 
     /* Load high puts the image at the top of the block; the PSP stays at the bottom. */
     image = DosLoadImageAt(NULL, g_ExecFileBuffer, bytesRead, child,
@@ -10253,7 +10253,7 @@ static PSTR WowPspEnvironmentCheck(PSTR cursor, PCSTR where)
         DWORD linear = DpmiSelectorBase(g_WowPspSelector[index]);
         const volatile BYTE *psp = (const volatile BYTE *)(ULONG_PTR)linear;
         WORD now;
-        if (!linear || !HostReadable((const VOID *)psp, 0x2e)) continue;
+        if (!linear || !HostReadable((const VOID *)psp, DOS_PSP_ENVIRONMENT + sizeof(WORD))) continue;
         if (linear != g_WowPspLinear[index]) {
             cursor = LogPut(cursor, "PSPENV REBASED: sel 0x"); cursor = LogHex(cursor, g_WowPspSelector[index]);
             cursor = LogPut(cursor, " 0x"); cursor = LogHex(cursor, g_WowPspLinear[index]);
@@ -10261,7 +10261,7 @@ static PSTR WowPspEnvironmentCheck(PSTR cursor, PCSTR where)
             cursor = LogPut(cursor, " (the PSP we built is at the OLD address)\r\n");
             g_WowPspLinear[index] = linear;
         }
-        now = (WORD)(psp[0x2c] | (psp[0x2d] << BYTE_SHIFT));
+        now = (WORD)(psp[DOS_PSP_ENVIRONMENT] | (psp[DOS_PSP_ENVIRONMENT + 1] << BYTE_SHIFT));
         if (g_WowPspEnvironment[index] == now) continue;
         cursor = LogPut(cursor, "PSPENV CHANGED: sel 0x"); cursor = LogHex(cursor, g_WowPspSelector[index]);
         cursor = LogPut(cursor, " +0x2c 0x"); cursor = LogHex(cursor, g_WowPspEnvironment[index]);
@@ -23439,10 +23439,10 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         DWORD pspLinear = DpmiSelectorBase(pspSelector);
                         cursor = LogPut(cursor, " segEnv=0 (inherit) parent PSP 0x");
                         cursor = LogHex(cursor, pspSelector);
-                        if (pspLinear && HostReadable((const VOID *)(ULONG_PTR)pspLinear, 0x2e)) {
+                        if (pspLinear && HostReadable((const VOID *)(ULONG_PTR)pspLinear, DOS_PSP_ENVIRONMENT + sizeof(WORD))) {
                             const volatile BYTE *psp =
                                 (const volatile BYTE *)(ULONG_PTR)pspLinear;
-                            environment = (WORD)(psp[0x2c] | (psp[0x2d] << BYTE_SHIFT));
+                            environment = (WORD)(psp[DOS_PSP_ENVIRONMENT] | (psp[DOS_PSP_ENVIRONMENT + 1] << BYTE_SHIFT));
                             source = "the parent PSP's +0x2c";
                         }
                     }
@@ -27095,22 +27095,22 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             } else {
                                 volatile BYTE *destination = (volatile BYTE *)(ULONG_PTR)dxLinear;
                                 INT item;
-                                for (item = 0; item < 256; ++item) destination[item] = source[item];
-                                destination[0x16] = (BYTE)(DOS_PSP_SEG & BYTE_MASK);   /* parent PSP   */
-                                destination[0x17] = (BYTE)(DOS_PSP_SEG >> BYTE_SHIFT);
+                                for (item = 0; item < DOS_PSP_SIZE; ++item) destination[item] = source[item];
+                                destination[DOS_PSP_PARENT] = (BYTE)(DOS_PSP_SEG & BYTE_MASK);   /* parent PSP   */
+                                destination[DOS_PSP_PARENT + 1] = (BYTE)(DOS_PSP_SEG >> BYTE_SHIFT);
                                 if (ah == 0x55) {                          /* memory top   */
                                     WORD si = (WORD)VDM_REG16(tib, VTIB_ESI);
-                                    destination[0x02] = (BYTE)(si & BYTE_MASK);
-                                    destination[0x03] = (BYTE)(si >> BYTE_SHIFT);
+                                    destination[DOS_PSP_MEMORY_TOP] = (BYTE)(si & BYTE_MASK);
+                                    destination[DOS_PSP_MEMORY_TOP + 1] = (BYTE)(si >> BYTE_SHIFT);
                                 }
                                 /* What was there BEFORE we wrote -- if krnl386 had
                                    already filled the field, overwriting it would be
                                    the defect rather than the fix. */
                                 cursor = LogPut(cursor, " (+0x2c was 0x");
-                                cursor = LogHex(cursor, (DWORD)(destination[0x2c] | (destination[0x2d] << BYTE_SHIFT)));
+                                cursor = LogHex(cursor, (DWORD)(destination[DOS_PSP_ENVIRONMENT] | (destination[DOS_PSP_ENVIRONMENT + 1] << BYTE_SHIFT)));
                                 cursor = LogPut(cursor, ")");
-                                destination[0x2c] = (BYTE)(environmentSelector & BYTE_MASK);           /* env SELECTOR */
-                                destination[0x2d] = (BYTE)(environmentSelector >> BYTE_SHIFT);
+                                destination[DOS_PSP_ENVIRONMENT] = (BYTE)(environmentSelector & BYTE_MASK);           /* env SELECTOR */
+                                destination[DOS_PSP_ENVIRONMENT + 1] = (BYTE)(environmentSelector >> BYTE_SHIFT);
                                 if (g_WowPspCount < WOW_PSP_TRACK) {
                                     g_WowPspSelector[g_WowPspCount] = dxSelector;
                                     g_WowPspLinear[g_WowPspCount] = dxLinear;
@@ -31412,9 +31412,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          MEMORY, and this is the memory. Length byte, the bytes, and the terminator. */
     { volatile BYTE *pspView = (volatile BYTE *)((DWORD)DOS_PSP_SEG << PARAGRAPH_SHIFT);
       UINT textIndex;
-      cursor = LogPut(cursor, "STAGE2: cmdtail len=0x"); cursor = LogHexByte(cursor, pspView[0x80]);
+      cursor = LogPut(cursor, "STAGE2: cmdtail len=0x"); cursor = LogHexByte(cursor, pspView[DOS_PSP_COMMAND_TAIL_LENGTH]);
       cursor = LogPut(cursor, " [");
-      for (textIndex = 0; textIndex < 16; ++textIndex) { cursor = LogHexByte(cursor, pspView[0x81 + textIndex]); cursor = LogPut(cursor, " "); }
+      for (textIndex = 0; textIndex < 16; ++textIndex) { cursor = LogHexByte(cursor, pspView[DOS_PSP_COMMAND_TAIL + textIndex]); cursor = LogPut(cursor, " "); }
       cursor = LogPut(cursor, "]\r\n"); }
     {   WORD firstMcb = DosMcbInitializeWithTop(NULL, g_DosMemoryTop);   /* #136 */
         DosInt21Initialize(&machine, firstMcb);
@@ -32602,7 +32602,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         cursor = LogPut(cursor, " DS=0x"); cursor = LogHex(cursor, g_WowEntryDs);
         cursor = LogPut(cursor, " ES=0x"); cursor = LogHex(cursor, g_WowPspSegment);
         cursor = LogPut(cursor, " CX=0x"); cursor = LogHex(cursor, g_WowEntryCx);
-        cursor = LogPut(cursor, " (it will carve from 0x"); cursor = LogHex(cursor, (DWORD)(g_WowPspSegment + 0x10));
+        cursor = LogPut(cursor, " (it will carve from 0x"); cursor = LogHex(cursor, (DWORD)(g_WowPspSegment + DOS_PSP_PARAGRAPHS));
         cursor = LogPut(cursor, ") AX=0x4b4f\r\n");
     }
     /* ENTRY TRAMPOLINE: `STI` then a far jump to the program's real entry point.
@@ -33482,7 +33482,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                       pspSelector = (WORD)DPMI_LDT_SELECTOR(pspIndex);
                       VDM_SET16(tib, VTIB_ES, pspSelector);
                   }
-                  { volatile WORD *environmentField = (volatile WORD *)(ULONG_PTR)(pspBase + 0x2C);
+                  { volatile WORD *environmentField = (volatile WORD *)(ULONG_PTR)(pspBase + DOS_PSP_ENVIRONMENT);
                     WORD environmentSegment = *environmentField;
                     /* environmentSegment == 0 is legal and documented: a client may free its
                        environment and zero this word BEFORE switching, in which case
@@ -34969,8 +34969,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                         (ULONG_PTR)DpmiSelectorBase(g_WowPspSelector[probeIndex3]);
                                     cursor = LogPut(cursor, " sel 0x"); cursor = LogHex(cursor, g_WowPspSelector[probeIndex3]);
                                     cursor = LogPut(cursor, "->+0x2c=0x");
-                                    if (HostReadable((const VOID *)pspBytes, 0x2e))
-                                        cursor = LogHex(cursor, (DWORD)(pspBytes[0x2c] | (pspBytes[0x2d] << BYTE_SHIFT)));
+                                    if (HostReadable((const VOID *)pspBytes, DOS_PSP_ENVIRONMENT + sizeof(WORD)))
+                                        cursor = LogHex(cursor, (DWORD)(pspBytes[DOS_PSP_ENVIRONMENT] | (pspBytes[DOS_PSP_ENVIRONMENT + 1] << BYTE_SHIFT)));
                                     else cursor = LogPut(cursor, "??unreadable");
                                 }
                                 cursor = LogPut(cursor, "\r\n");
@@ -35543,7 +35543,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
               cursor = LogPut(cursor, "\r\n         cc[0x320..0x333]="); cursor = LogDump(cursor, (const VOID *)(lowPspBytes + 0x320), 20);
               /* s81: the environment the shell ACTUALLY has (PSP:2Ch), as text -- the
                  prompt came up `C>` under /P, i.e. without the PROMPT we passed. */
-              { WORD pspEnvironmentSegment = *(const volatile WORD *)(lowPspBytes + 0x2C); INT scan;
+              { WORD pspEnvironmentSegment = *(const volatile WORD *)(lowPspBytes + DOS_PSP_ENVIRONMENT); INT scan;
                 const volatile BYTE *environment2 = (const volatile BYTE *)(ULONG_PTR)((DWORD)pspEnvironmentSegment << PARAGRAPH_SHIFT);
                 cursor = LogPut(cursor, "\r\n         shell env seg=0x"); cursor = LogHex(cursor, pspEnvironmentSegment); cursor = LogPut(cursor, " [");
                 for (scan = 0; scan < 160 && !(environment2[scan] == 0 && environment2[scan + 1] == 0); ++scan) {

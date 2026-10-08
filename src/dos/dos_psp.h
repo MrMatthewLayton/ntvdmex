@@ -11,6 +11,7 @@
 
 /* The PSP's fields, as offsets from psp_seg:0. */
 #define DOS_PSP_SIZE                 0x100
+#define DOS_PSP_PARAGRAPHS           (DOS_PSP_SIZE >> PARAGRAPH_SHIFT)
 #define DOS_PSP_INT20                0x00   /* INT 20h (legacy exit): opcode, then vector  */
 #define DOS_PSP_MEMORY_TOP           0x02   /* WORD: segment of top-of-memory              */
 #define DOS_PSP_INT22_COPY           0x0A   /* the saved INT 22h/23h/24h vectors           */
@@ -31,8 +32,6 @@
 /* What DosPspBuild writes into them. */
 #define DOS_PSP_OPCODE_INT           0xCD
 #define DOS_PSP_OPCODE_RETF          0xCB
-#define DOS_PSP_INT20_VECTOR         0x20
-#define DOS_PSP_INT21_VECTOR         0x21
 #define DOS_PSP_JFT_STDIN_ENTRY      1      /* JFT: std handles open                       */
 #define DOS_PSP_JFT_STDOUT_ENTRY     1
 #define DOS_PSP_JFT_STDERR_ENTRY     1
@@ -45,9 +44,6 @@
 #define DOS_PSP_COMMAND_TAIL_MAX     126
 
 /* The vectors a PSP saves, and the IVT they come from. */
-#define DOS_PSP_INT22_VECTOR         0x22
-#define DOS_PSP_INT23_VECTOR         0x23
-#define DOS_PSP_INT24_VECTOR         0x24
 #define DOS_PSP_SAVED_VECTORS        3
 
 /* Build a PSP at pspSegment:0 that points at the environment at environmentSegment:0.
@@ -70,7 +66,7 @@ static inline VOID DosPspBuild(_In_opt_ volatile BYTE *base, _In_ WORD pspSegmen
     DWORD byteIndex;
 
     for (byteIndex = 0; byteIndex < DOS_PSP_SIZE; ++byteIndex) psp[byteIndex] = 0;
-    psp[DOS_PSP_INT20] = DOS_PSP_OPCODE_INT; psp[DOS_PSP_INT20 + 1] = DOS_PSP_INT20_VECTOR;                /* INT 20h (legacy exit)      */
+    psp[DOS_PSP_INT20] = DOS_PSP_OPCODE_INT; psp[DOS_PSP_INT20 + 1] = VECTOR_TERMINATE;                /* INT 20h (legacy exit)      */
     DosMcbWriteWord(psp + DOS_PSP_MEMORY_TOP, topSegment);                     /* segment of top-of-memory   */
     psp[DOS_PSP_JFT] = DOS_PSP_JFT_STDIN_ENTRY; psp[DOS_PSP_JFT + 1] = DOS_PSP_JFT_STDOUT_ENTRY; psp[DOS_PSP_JFT + 2] = DOS_PSP_JFT_STDERR_ENTRY;       /* JFT: std handles open      */
     psp[DOS_PSP_JFT + 3] = DOS_PSP_JFT_AUX_ENTRY; psp[DOS_PSP_JFT + 4] = DOS_PSP_JFT_PRN_ENTRY;
@@ -81,7 +77,7 @@ static inline VOID DosPspBuild(_In_opt_ volatile BYTE *base, _In_ WORD pspSegmen
     DosMcbWriteWord(psp + DOS_PSP_JFT_POINTER + 2, pspSegment);                     /* JFT pointer: segment       */
     psp[DOS_PSP_PREVIOUS] = DOS_PSP_NO_PREVIOUS; psp[DOS_PSP_PREVIOUS + 1] = DOS_PSP_NO_PREVIOUS;                /* previous PSP = 0xFFFFFFFF  */
     psp[DOS_PSP_PREVIOUS + 2] = DOS_PSP_NO_PREVIOUS; psp[DOS_PSP_PREVIOUS + 3] = DOS_PSP_NO_PREVIOUS;
-    psp[DOS_PSP_DISPATCH] = DOS_PSP_OPCODE_INT; psp[DOS_PSP_DISPATCH + 1] = DOS_PSP_INT21_VECTOR; psp[DOS_PSP_DISPATCH + 2] = DOS_PSP_OPCODE_RETF; /* INT 21h ; RETF          */
+    psp[DOS_PSP_DISPATCH] = DOS_PSP_OPCODE_INT; psp[DOS_PSP_DISPATCH + 1] = VECTOR_DOS; psp[DOS_PSP_DISPATCH + 2] = DOS_PSP_OPCODE_RETF; /* INT 21h ; RETF          */
     psp[DOS_PSP_COMMAND_TAIL_LENGTH] = 0; psp[DOS_PSP_COMMAND_TAIL] = DOS_PSP_COMMAND_TAIL_END;                   /* empty command tail + 0x0D  */
 }
 
@@ -110,7 +106,7 @@ static inline VOID DosPspBuildCommandTail(_In_opt_ volatile BYTE *base, _In_ WOR
    invariant the probe asserts. */
 static inline VOID DosPspSaveVectors(_In_opt_ volatile BYTE *base, _In_ WORD pspSegment,
                                      _In_ WORD parentPsp) {
-    static const BYTE vectors[DOS_PSP_SAVED_VECTORS] = { DOS_PSP_INT22_VECTOR, DOS_PSP_INT23_VECTOR, DOS_PSP_INT24_VECTOR };
+    static const BYTE vectors[DOS_PSP_SAVED_VECTORS] = { VECTOR_TERMINATE_ADDRESS, VECTOR_CTRL_C, VECTOR_CRITICAL_ERROR };
     static const BYTE copyOffsets[DOS_PSP_SAVED_VECTORS]  = { DOS_PSP_INT22_COPY, DOS_PSP_INT23_COPY, DOS_PSP_INT24_COPY };
     volatile BYTE *psp = DosMcbSegmentAddress(base, pspSegment);
     volatile BYTE *ivt = DosMcbSegmentAddress(base, IVT_BASE_SEGMENT);
@@ -125,7 +121,7 @@ static inline VOID DosPspSaveVectors(_In_opt_ volatile BYTE *base, _In_ WORD psp
    own INT 24h must not leave it installed after it exits -- that is how one
    guest's critical-error handler ends up servicing the next one's failure. */
 static inline VOID DosPspRestoreVectors(_In_opt_ volatile BYTE *base, _In_ WORD pspSegment) {
-    static const BYTE vectors[DOS_PSP_SAVED_VECTORS] = { DOS_PSP_INT22_VECTOR, DOS_PSP_INT23_VECTOR, DOS_PSP_INT24_VECTOR };
+    static const BYTE vectors[DOS_PSP_SAVED_VECTORS] = { VECTOR_TERMINATE_ADDRESS, VECTOR_CTRL_C, VECTOR_CRITICAL_ERROR };
     static const BYTE copyOffsets[DOS_PSP_SAVED_VECTORS]  = { DOS_PSP_INT22_COPY, DOS_PSP_INT23_COPY, DOS_PSP_INT24_COPY };
     volatile BYTE *psp = DosMcbSegmentAddress(base, pspSegment);
     volatile BYTE *ivt = DosMcbSegmentAddress(base, IVT_BASE_SEGMENT);
