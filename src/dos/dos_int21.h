@@ -437,6 +437,8 @@ BYTE DosInt21CurrentDrive(_In_ PCDOS_MACHINE machine);
      keeps DOS's "invalid function" (AX=1, CF=1). */
 typedef struct _DOS_INT53_ANSWER { WORD Ax; BYTE IsCarry; } DOS_INT53_ANSWER;
 #define DOS_INT53_COUNT 8
+#define DOS_INT53_SHELL_LOOP 0x02   /* AX=5302h: the top of each pass of XP's shell loop */
+#define DOS_INT53_STARTUP    0x05   /* AX=5305h: asked once at start-up                  */
 extern DOS_INT53_ANSWER g_DosInt53Answers[DOS_INT53_COUNT];
 
 INT DosInt21(_Inout_ PDOS_MACHINE machine);

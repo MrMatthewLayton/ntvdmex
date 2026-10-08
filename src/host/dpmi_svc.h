@@ -89,6 +89,7 @@
 /* The flags nibble (G, D/B, L, AVL) is bits 20-23 of a descriptor's high dword. */
 #define DPMI_DESCRIPTOR_FLAGS_SHIFT 20
 #define DPMI_DESCRIPTOR_FLAGS_MASK  0x0F
+#define DPMI_DESCRIPTOR_FLAG_BIG    0x4    /* D/B: a 32-bit segment                 */
 
 /* A DPMI 0.9 exception frame, as entries (WORDs for a 16-bit client, DWORDs for a 32-bit
    one): the handler's return CS:IP, then the error code and the faulting CS:IP, FLAGS, SS:SP. */

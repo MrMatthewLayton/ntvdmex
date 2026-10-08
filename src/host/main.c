@@ -28084,7 +28084,7 @@ static INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCo
     if (result) *result = sink;
     return isOk;
 }
-
+enum { GUEST_EIP_FROM_FRAME = 0, GUEST_EIP_FROM_TIB_SLOT = 1, GUEST_EIP_FROM_BLOCKS = 2, WOW_TDB_INSTANCE = 0x1C, CSRSS_REPORT_GRACE_MS = 50 };   /* WinMain: a PM fault's EIP source, the TDB's hInstance, ExitVDM's wait */
 /* ── WM_CTLCOLOR, ANSWERED BY THE PROGRAM (s89, #162). Win32's seven WM_CTLCOLOR*
      are Win16's one WM_CTLCOLOR (0x0019) with the type in lParam's HIGH word
      (MSGBOX 0 .. STATIC 6, in the same order). The program gets a DC token for the
@@ -31577,13 +31577,13 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
            asked for the AL=0 answer this branch gives it. Kept as the model until
            that can be measured. It is marked here so it cannot quietly become folklore. */
       if (g_GuestNtAware) {
-          g_DosInt53Answers[0x02].Ax = 0x5300; g_DosInt53Answers[0x02].IsCarry = 1;   /* top of its main loop */
+          g_DosInt53Answers[DOS_INT53_SHELL_LOOP].Ax = DOS_FN_BPB_TO_DPB << BYTE_SHIFT; g_DosInt53Answers[DOS_INT53_SHELL_LOOP].IsCarry = 1;   /* top of its main loop */
           /* #208: a ROUTED program is the shell's work, not the keyboard's. CF=0 here sends
              its loop to BOP 54 sub 01 ("what next?") instead of the prompt -- so when the
              program ends the shell ASKS, and we decide: done (close the window) or, after
              Close Program, the prompt. See the sub 01 arm. */
-          if (g_Routed) g_DosInt53Answers[0x02].IsCarry = 0;
-          g_DosInt53Answers[0x05].Ax = 0x5300; g_DosInt53Answers[0x05].IsCarry = 0;   /* -> [0x327] = 0       */
+          if (g_Routed) g_DosInt53Answers[DOS_INT53_SHELL_LOOP].IsCarry = 0;
+          g_DosInt53Answers[DOS_INT53_STARTUP].Ax = DOS_FN_BPB_TO_DPB << BYTE_SHIFT; g_DosInt53Answers[DOS_INT53_STARTUP].IsCarry = 0;   /* -> [0x327] = 0       */
           int53Source = "NTVDM-aware shell (PROVISIONAL -- see p_int53f)";
       }
       handle = CreateFileA(INT53_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -34126,7 +34126,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                slave -- which is where a client hooks its IRQ 8-15 handler. */
                             UINT interruptVector;
                             scan  = g_IrqOrder[item];
-                            interruptVector = (scan < 8) ? 0x08u + (UINT)scan : 0x70u + (UINT)(scan - 8);
+                            interruptVector = (scan < PIC_LINES_PER_CHIP) ? PIC_MASTER_VECTOR_BASE + (UINT)scan : PIC_SLAVE_VECTOR_BASE + (UINT)(scan - PIC_LINES_PER_CHIP);
                             if (!g_IrqNPending[scan]) continue;
                             /* No PM handler: the client cannot want it. Drop it rather
                                than spin on it forever. */
@@ -34755,12 +34755,12 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                      is evidence; picking the first match would be a guess. */
                                 UINT32 guestAccessRights = 0;
                                 INT guestPresent = DpmiSelectorDescriptor(frame[DPMI_FRAME_CS], &guestAccessRights, NULL);
-                                INT guestIs32    = guestPresent && (((guestAccessRights >> DPMI_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK) & 0x4);
+                                INT guestIs32    = guestPresent && (((guestAccessRights >> DPMI_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK) & DPMI_DESCRIPTOR_FLAG_BIG);
                                 INT guestTruncated   = guestIs32 && guestCodeBase == 0;   /* EIP *is* the linear addr */
                                 INT guestCandidates    = 0;
                                 DWORD guestLinear   = guestCodeBase + frame[DPMI_FRAME_IP];
                                 DWORD guestRecovered   = 0;
-                                INT   guestSource   = 0;                   /* 0 frame, 1 TIB slot, 2 blocks */
+                                INT   guestSource   = GUEST_EIP_FROM_FRAME;                   /* 0 frame, 1 TIB slot, 2 blocks */
                                 INT   guestSsIs32  = DpmiSelectorIs32(frame[DPMI_FRAME_SS]);
                                 /* the slot must agree with the frame's low halves, or it is not
                                    the slot we calibrated -- then we do not resume on it */
@@ -34796,9 +34796,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                         && HostReadable((const VOID *)(ULONG_PTR)faultEip, X86_INT_LENGTH)
                                         && ((const volatile BYTE *)(ULONG_PTR)faultEip)[0] == X86_OP_INT
                                         && ((const volatile BYTE *)(ULONG_PTR)faultEip)[1] == (BYTE)gateVector) {
-                                        guestLinear = faultEip; guestSource = 1;
+                                        guestLinear = faultEip; guestSource = GUEST_EIP_FROM_TIB_SLOT;
                                     } else {
-                                        guestLinear = guestRecovered; guestSource = 2;      /* 0 = ambiguous or absent */
+                                        guestLinear = guestRecovered; guestSource = GUEST_EIP_FROM_BLOCKS;      /* 0 = ambiguous or absent */
                                     }
                                     guestInstruction   = (volatile BYTE *)(ULONG_PTR)guestLinear;
                                     if (!guestLinear && !g_Fault32Warned) {
@@ -34859,11 +34859,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                     cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_IP]);
                                     cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, guestLinear);
                                     if (guestTruncated) {
-                                        cursor = LogPut(cursor, guestSource == 1 ? " (flat base-0 CS: EIP from TIB sav3,"
+                                        cursor = LogPut(cursor, guestSource == GUEST_EIP_FROM_TIB_SLOT ? " (flat base-0 CS: EIP from TIB sav3,"
                                                                 " blocks cross-check "
                                                               : " (flat base-0 CS: EIP RECONSTRUCTED"
                                                                 " from blocks, TIB sav3=0x");
-                                        if (guestSource == 1) {
+                                        if (guestSource == GUEST_EIP_FROM_TIB_SLOT) {
                                             if (!guestRecovered)             { cursor = LogPut(cursor, "ambiguous n="); cursor = LogHex(cursor, (DWORD)guestCandidates); }
                                             else if (guestRecovered == guestLinear)   cursor = LogPut(cursor, "AGREE");
                                             else                   { cursor = LogPut(cursor, "DISAGREE 0x"); cursor = LogHex(cursor, guestRecovered); }
@@ -34994,7 +34994,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                     if (taskBase) {
                                         const volatile BYTE *taskBytes =
                                             (const volatile BYTE *)(ULONG_PTR)taskBase;
-                                        WORD handle = (WORD)(taskBytes[0x1c] | (taskBytes[0x1d] << BYTE_SHIFT));
+                                        WORD handle = (WORD)(taskBytes[WOW_TDB_INSTANCE] | (taskBytes[WOW_TDB_INSTANCE + 1] << BYTE_SHIFT));
                                         cursor = LogPut(cursor, "  WOWSCHED: TDB+0x1c now reads 0x");
                                         cursor = LogHex(cursor, handle);
                                         cursor = LogPut(cursor, " (0 = InitTask has not run yet)\r\n");
@@ -35595,7 +35595,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                      shell's NEXT sub 01 is then an ordinary EXIT. */
                 if (g_GuestNtAware && g_BackToPrompt && g_ShellGetNextCount >= 1) {
                     g_BackToPrompt = 0;
-                    g_DosInt53Answers[0x02].IsCarry = 1;
+                    g_DosInt53Answers[DOS_INT53_SHELL_LOOP].IsCarry = 1;
                     cursor = LogPut(cursor, "         sub 01 after Close Program: back to the prompt (#208)\r\n");
                     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                 } else
@@ -36165,7 +36165,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         /* A short grace so the report's LPC is processed (launcher released) before
            ExitVDM's is. The wait normally times out: the call is blocked for the
            console's next command, which is stock ntvdm's idle state, not ours. */
-        waitResult = thread2 ? WaitForSingleObject(thread2, 50) : WAIT_FAILED;
+        waitResult = thread2 ? WaitForSingleObject(thread2, CSRSS_REPORT_GRACE_MS) : WAIT_FAILED;
         if (thread2) CloseHandle(thread2);
         cursor = LogPut(cursor, "STAGE2: task done -> report thread ");
         cursor = LogPut(cursor, waitResult == WAIT_OBJECT_0 ? "returned" : waitResult == WAIT_TIMEOUT ? "blocked for the console's next command (expected)" : "could not start");
@@ -36205,8 +36205,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                  standard handle first, so hand them over inheritable; a console handle
                  is left alone (the child finds its console the way it always has).
                  Measured before this: the relaunched LINK's log said "stdout -> none". */
-            {   INT item, any = 0; HANDLE handles[3] = { NULL, NULL, NULL };
-                for (item = 0; item < 3; ++item) {
+            {   INT item, any = 0; HANDLE handles[CSRSS_STANDARD_HANDLES] = { NULL, NULL, NULL };
+                for (item = 0; item < CSRSS_STANDARD_HANDLES; ++item) {
                     HANDLE handle = g_CsrssNextStandardHandles[item]; DWORD valueType;
                     if (!handle || handle == INVALID_HANDLE_VALUE) continue;
                     valueType = GetFileType(handle);
@@ -36221,13 +36221,13 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                        (StdioFromParent, GH #131) -- and its parent is this process.
                        SetStdHandle writes exactly those PEB fields. Measured: with
                        STARTUPINFO alone the child still said "stdout -> none". */
-                    if (handles[0]) SetStdHandle(STD_INPUT_HANDLE,  handles[0]);
-                    if (handles[1]) SetStdHandle(STD_OUTPUT_HANDLE, handles[1]);
-                    if (handles[2] || handles[1]) SetStdHandle(STD_ERROR_HANDLE, handles[2] ? handles[2] : handles[1]);
+                    if (handles[CSRSS_STD_IN]) SetStdHandle(STD_INPUT_HANDLE,  handles[CSRSS_STD_IN]);
+                    if (handles[CSRSS_STD_OUT]) SetStdHandle(STD_OUTPUT_HANDLE, handles[CSRSS_STD_OUT]);
+                    if (handles[CSRSS_STD_ERR] || handles[CSRSS_STD_OUT]) SetStdHandle(STD_ERROR_HANDLE, handles[CSRSS_STD_ERR] ? handles[CSRSS_STD_ERR] : handles[CSRSS_STD_OUT]);
                     si.dwFlags |= STARTF_USESTDHANDLES;
-                    si.hStdInput  = handles[0] ? handles[0] : GetStdHandle(STD_INPUT_HANDLE);
-                    si.hStdOutput = handles[1] ? handles[1] : GetStdHandle(STD_OUTPUT_HANDLE);
-                    si.hStdError  = handles[2] ? handles[2] : (handles[1] ? handles[1] : GetStdHandle(STD_ERROR_HANDLE));
+                    si.hStdInput  = handles[CSRSS_STD_IN] ? handles[CSRSS_STD_IN] : GetStdHandle(STD_INPUT_HANDLE);
+                    si.hStdOutput = handles[CSRSS_STD_OUT] ? handles[CSRSS_STD_OUT] : GetStdHandle(STD_OUTPUT_HANDLE);
+                    si.hStdError  = handles[CSRSS_STD_ERR] ? handles[CSRSS_STD_ERR] : (handles[CSRSS_STD_OUT] ? handles[CSRSS_STD_OUT] : GetStdHandle(STD_ERROR_HANDLE));
                 }
                 cursor = LogPut(cursor, "STAGE2: task done -> next command's std handles in=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[0]);
                 cursor = LogPut(cursor, " out=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[1]);

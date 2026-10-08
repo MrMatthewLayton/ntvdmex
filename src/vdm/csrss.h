@@ -13,6 +13,9 @@
 #define CSRSS_COMMAND_LINE_SIZE  1024
 #define CSRSS_DIRECTORY_SIZE     512
 #define CSRSS_STANDARD_HANDLES   3      /* StdIn, StdOut, StdErr                         */
+#define CSRSS_STD_IN             0
+#define CSRSS_STD_OUT            1
+#define CSRSS_STD_ERR            2
 
 /* Parse the task id ntvdm's launcher passed as "-i<hex>" on our command line
    (the last one wins). GetNextVDMCommand's first-command lookup keys on this

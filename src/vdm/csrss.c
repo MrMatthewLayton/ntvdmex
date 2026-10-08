@@ -84,9 +84,6 @@ HANDLE g_CsrssNextStandardHandles[CSRSS_STANDARD_HANDLES];   /* the next command
 #define CSRSS_DESKTOP_SIZE           512
 #define CSRSS_TITLE_SIZE             512
 #define CSRSS_RESERVED_SIZE          512
-#define CSRSS_STD_IN                 0
-#define CSRSS_STD_OUT                1
-#define CSRSS_STD_ERR                2
 #define CSRSS_EXIT_VDM_FLAGS         0       /* ExitVDM's second argument                 */
 #define CSRSS_END_OF_STRING          0
 #define CSRSS_CARRIAGE_RETURN        '\r'
