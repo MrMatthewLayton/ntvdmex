@@ -15,7 +15,6 @@
 #define AUDIO_GAIN_SCALE            256u
 #define AUDIO_GAIN_SHIFT            8
 #define AUDIO_MASTER_MAX            100     /* percent                                  */
-#define AUDIO_PERCENT               100u
 /* The resampler's 16.16 position. */
 #define AUDIO_FRACTION_BITS         16
 #define AUDIO_FRACTION_ONE          0x10000u
@@ -232,7 +231,7 @@ VOID VddAudioMixStereo(PAUDIO_STATE state, INT16 *output, UINT32 frames)
         if (state->IsMuted) {
             for (frameIndex = 0; frameIndex < AUDIO_STEREO_CHANNELS * count; ++frameIndex) chunk[frameIndex] = 0;
         } else if (state->Master < AUDIO_MASTER_MAX) {
-            INT32 gain = (INT32)((state->Master * AUDIO_GAIN_SCALE) / AUDIO_PERCENT); /* 0..256 */
+            INT32 gain = (INT32)((state->Master * AUDIO_GAIN_SCALE) / PERCENT_U); /* 0..256 */
             for (frameIndex = 0; frameIndex < AUDIO_STEREO_CHANNELS * count; ++frameIndex) chunk[frameIndex] = (INT16)((chunk[frameIndex] * gain) >> AUDIO_GAIN_SHIFT);
         }
 

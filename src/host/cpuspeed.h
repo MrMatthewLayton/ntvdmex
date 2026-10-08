@@ -72,7 +72,6 @@
 #define CPUSPEED_BP_FULL        10000     /* basis points: a 100% share = flat out */
 #define CPUSPEED_BP_FULL_U      10000u
 #define CPUSPEED_BP_FULL_UL     10000ul
-#define CPUSPEED_PERCENT      100u
 #define CPUSPEED_DEFAULT_ROUND_TRIP_US 100ul   /* unmeasured: a sane placeholder  */
 #define CPUSPEED_MAX_DEBT_US  100000ll  /* 100 ms ceiling on one debt              */
 static const UINT g_CpuSpeedMhz[CPUSPEED_COUNT] = {
@@ -219,7 +218,7 @@ static UINT CpuSpeedRealModeDutyBp(UINT protectedModeBp)
 {
     UINT64 dutyBp;
     if (protectedModeBp == 0u || protectedModeBp >= CPUSPEED_BP_FULL_U) return CPUSPEED_BP_FULL_U;
-    dutyBp = (UINT64)protectedModeBp * CPUSPEED_RM_PCT / CPUSPEED_PERCENT;
+    dutyBp = (UINT64)protectedModeBp * CPUSPEED_RM_PCT / PERCENT_U;
     return dutyBp >= (UINT64)CPUSPEED_BP_FULL_U ? CPUSPEED_BP_FULL_U : (UINT)dutyBp;
 }
 

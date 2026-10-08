@@ -23,5 +23,7 @@
 #define HERTZ_PER_MEGAHERTZ_U           1000000u
 #define MEGAHERTZ_PER_GIGAHERTZ_U       1000u
 #define PER_MILLE_U                     1000u
+#define PERCENT                         100
+#define PERCENT_U                       100u
 
 #endif /* NTVDMEX_UNITS_H */

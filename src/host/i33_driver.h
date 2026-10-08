@@ -55,6 +55,9 @@
 #define I33_NO_BALLPOINT                0xFFFF  /* 30h AX                               */
 #define I33_HARDWARE_RESET_DONE         0xFFFF  /* 2Fh AX                               */
 #define I33_BUTTON_COUNT                0x0002
+#define I33_BUTTON_LEFT_BIT             1       /* the button-state bits (03h BX)        */
+#define I33_BUTTON_RIGHT_BIT            2
+#define I33_BUTTON_MIDDLE_BIT           4
 #define I33_DRIVER_VERSION              0x0800  /* 24h BX: 8.00                         */
 #define I33_MOUSE_TYPE_PS2              0x04    /* 24h CH, 2Ah DX, 33h's type           */
 #define I33_PS2_IRQ                     0xFF    /* 24h CL: what a real driver says for PS/2 */

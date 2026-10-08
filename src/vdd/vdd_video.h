@@ -43,6 +43,7 @@
      can no longer fail at all -- off is lin - 0xA0000, so it is 16-bit by
      construction. */
 #define VIDEO_PLANE_SIZE    65536u                        /* bytes/plane, as on a VGA */
+#define VIDEO_BPP_INDEXED             8
 #define VIDEO_PLANES                  4
 #define VIDEO_ALL_PLANES              0x0F
 #define VIDEO_PLANE_INDEX_MASK        3

@@ -25,7 +25,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 /* Modes. */
 #define VIDEO_MODE_TEXT_80            0x03
 #define VIDEO_MODE_VGA_256            0x13
-#define VIDEO_BPP_INDEXED             8
 /* The DAC and colour. */
 #define VIDEO_DAC_WIDTH_8             8       /* 4F08: an 8-bit DAC                      */
 #define VIDEO_DAC_6BIT_MASK           0x3Fu
@@ -37,7 +36,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_GREY_RED                30      /* grey summing, percent                   */
 #define VIDEO_GREY_GREEN              59
 #define VIDEO_GREY_BLUE               11
-#define VIDEO_PERCENT                 100
 /* vga_defaults.h: g_VgaDefaultsByMode's rows. */
 #define VIDEO_DEFAULTS_MODE_ROW       0
 #define VIDEO_DEFAULTS_DAC_ROW        2
@@ -962,7 +960,7 @@ static VOID VideoDacGrey(PVIDEO_STATE state, UINT first, UINT count)
     for (index = 0; index < count && (first + index) < NTVDD_PALETTE_ENTRIES; ++index) {
         UINT32 value = state->Dac[first + index];
         UINT32 grey = ((((value >> VIDEO_RED_SHIFT) & VIDEO_CHANNEL_MASK) * VIDEO_GREY_RED) + (((value >> VIDEO_GREEN_SHIFT) & VIDEO_CHANNEL_MASK) * VIDEO_GREY_GREEN)
-                      + ((value & VIDEO_CHANNEL_MASK) * VIDEO_GREY_BLUE)) / VIDEO_PERCENT;
+                      + ((value & VIDEO_CHANNEL_MASK) * VIDEO_GREY_BLUE)) / PERCENT;
         state->Dac[first + index] = VIDEO_ARGB_OPAQUE | (grey << VIDEO_RED_SHIFT) | (grey << VIDEO_GREEN_SHIFT) | grey;
     }
 }
@@ -4559,7 +4557,7 @@ static VOID VideoStatusIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     inFrame = now % (UINT64)frameUs;
     {   UINT64 position = inFrame * (UINT64)verticalTotal;
         line   = (UINT32)(position / frameUs);
-        isInHbl = ((UINT64)(position % frameUs) * VIDEO_PERCENT >= (UINT64)frameUs * VIDEO_HACTIVE_PERCENT);
+        isInHbl = ((UINT64)(position % frameUs) * PERCENT >= (UINT64)frameUs * VIDEO_HACTIVE_PERCENT);
     }
     isInVbl = (line >= (UINT32)verticalActive);
     /* ── #225: A RETRACE THAT STARTED AND ENDED BETWEEN TWO POLLS HAPPENED TOO -- but

@@ -478,7 +478,7 @@ static VOID PresentPutPixel(BYTE *destinationRow, INT column, DWORD bitsPerPixel
     else if (bitsPerPixel == PRESENT_SURFACE_BPP_16 || bitsPerPixel == PRESENT_SURFACE_BPP_15)
         ((WORD *)destinationRow)[column] = (WORD)(((red>>(PRESENT_CHANNEL_BITS-redBits))<<redShift)|((green>>(PRESENT_CHANNEL_BITS-greenBits))<<greenShift)|((blue>>(PRESENT_CHANNEL_BITS-blueBits))<<blueShift));
     else if (bitsPerPixel == PRESENT_SURFACE_BPP_24) { BYTE *pixel = destinationRow + column*PRESENT_BYTES_PER_PIXEL_24; pixel[0]=(BYTE)blue; pixel[1]=(BYTE)green; pixel[2]=(BYTE)red; }
-    else destinationRow[column] = (BYTE)((red*PRESENT_GREY_RED + green*PRESENT_GREY_GREEN + blue*PRESENT_GREY_BLUE) / PRESENT_PERCENT);
+    else destinationRow[column] = (BYTE)((red*PRESENT_GREY_RED + green*PRESENT_GREY_GREEN + blue*PRESENT_GREY_BLUE) / PERCENT);
 }
 
 /* Convert the snapshot 1:1 into the staging surface's top-left corner. No scaling

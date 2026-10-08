@@ -35,6 +35,10 @@
 #define NTVDMEX_PAGE_COUNT      6
 
 /* ── General ──────────────────────────────────────────────────────────────────── */
+/* The main icon (also defined by ntvdmhost.rc itself, ahead of its include of this file). */
+#ifndef IDI_MAINICON
+#define IDI_MAINICON 101
+#endif
 /* A slider's value label is its control id + this (SK_SLIDER). */
 #define IDC_S_SLIDER_VALUE_OFFSET 1000
 #define IDC_S_DOSVER          230   /* combo:    reported MS-DOS version, "6.22"      */

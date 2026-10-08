@@ -38,7 +38,6 @@
 #define PRESENT_LUMA_BLUE             114u
 #define PRESENT_LUMA_ROUND            500u
 #define PRESENT_LUMA_SCALE            1000u
-#define PRESENT_PERCENT               100
 #define PRESENT_SEPIA_KEEP_NUMERATOR  2       /* keep 2/5 = 40% of the distance from luma */
 #define PRESENT_SEPIA_KEEP_DENOMINATOR 5
 #define PRESENT_SEPIA_WARM_RED        108     /* the warm cast, percent                   */
@@ -306,7 +305,7 @@ static UINT32 PresentTint(UINT32 argb, INT tint)
         INT sepiaGreen = (INT)luminance + ((INT)green - (INT)luminance) * PRESENT_SEPIA_KEEP_NUMERATOR / PRESENT_SEPIA_KEEP_DENOMINATOR;
         INT sepiaBlue = (INT)luminance + ((INT)blue - (INT)luminance) * PRESENT_SEPIA_KEEP_NUMERATOR / PRESENT_SEPIA_KEEP_DENOMINATOR;
         /* 2. warm cast */
-        sepiaRed = sepiaRed * PRESENT_SEPIA_WARM_RED / PRESENT_PERCENT; sepiaGreen = sepiaGreen * PRESENT_SEPIA_WARM_GREEN / PRESENT_PERCENT; sepiaBlue = sepiaBlue * PRESENT_SEPIA_WARM_BLUE / PRESENT_PERCENT;
+        sepiaRed = sepiaRed * PRESENT_SEPIA_WARM_RED / PERCENT; sepiaGreen = sepiaGreen * PRESENT_SEPIA_WARM_GREEN / PERCENT; sepiaBlue = sepiaBlue * PRESENT_SEPIA_WARM_BLUE / PERCENT;
         if (sepiaRed > PRESENT_CHANNEL_MAX) sepiaRed = PRESENT_CHANNEL_MAX;
         if (sepiaGreen > PRESENT_CHANNEL_MAX) sepiaGreen = PRESENT_CHANNEL_MAX;
         if (sepiaBlue > PRESENT_CHANNEL_MAX) sepiaBlue = PRESENT_CHANNEL_MAX;
