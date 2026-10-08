@@ -16,7 +16,6 @@
 #define SB_PORT_DSP_WRITE           0xC
 #define SB_PORT_DSP_READ_STATUS     0xE     /* and the 8-bit IRQ ack                     */
 #define SB_PORT_DSP_ACK16           0xF
-#define SB_PORT_LAST                0x0F
 #define SB_FLOATING_BUS             0xFF
 #define SB_FAILED                   (-1)
 /* The DSP. */

@@ -2,7 +2,6 @@
  * file and timers, on the VDD bus.  Pure C, no <windows.h>. */
 #include "vdd_opl.h"
 
-#define OPL_PORT_FIRST               0x388
 #define OPL_PORT_LAST                0x38B
 #define OPL_PORT_A0                  1       /* 0 = address, 1 = data                  */
 #define OPL_PORT_A1                  2       /* the array, on an address write         */

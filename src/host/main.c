@@ -4192,7 +4192,7 @@ static INT AsyncInjectIrq(UINT irq)
     ss = context.SegSs & WORD_MASK; sp = context.Esp & WORD_MASK; ip = context.Eip & WORD_MASK;
 
     flags = (WORD)eflags;
-    if (eflags & EFLAGS_VIF) flags |= 0x200;      /* same VIF fold as InjectInt */
+    if (eflags & EFLAGS_VIF) flags |= EFLAGS_IF;      /* same VIF fold as InjectInt */
     sp = (sp - X86_WORD_SIZE) & WORD_MASK; PokeWord((ss << PARAGRAPH_SHIFT) + sp, flags);
     sp = (sp - X86_WORD_SIZE) & WORD_MASK; PokeWord((ss << PARAGRAPH_SHIFT) + sp, (WORD)cs);
     sp = (sp - X86_WORD_SIZE) & WORD_MASK; PokeWord((ss << PARAGRAPH_SHIFT) + sp, (WORD)ip);
@@ -4547,7 +4547,7 @@ static INT GuestIfEnabled(volatile BYTE *tib)
     DWORD cs = VDM_REG16(tib, VTIB_CS);
     if (IsOurStubCsIp(cs, VDM_REG16(tib, VTIB_EIP))) {
         DWORD ss = VDM_REG16(tib, VTIB_SS), sp = VDM_REG16(tib, VTIB_ESP);
-        return (PeekWord((ss << PARAGRAPH_SHIFT) + ((sp + X86_FRAME16_FLAGS) & WORD_MASK)) & 0x200) != 0;
+        return (PeekWord((ss << PARAGRAPH_SHIFT) + ((sp + X86_FRAME16_FLAGS) & WORD_MASK)) & EFLAGS_IF) != 0;
     }
     return IfOrVif(VDM_REG(tib, VTIB_EFLAGS));
 }
@@ -12262,12 +12262,12 @@ static VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT liv
        on an SB16 it is the SIXTEEN-bit one. Selecting it therefore moves H and
        leaves D where it was, rather than pointing the 8-bit engine at a channel
        whose registers live at completely different ports. */
-    g_SbConfig.IoBase = (WORD)(0x220 + 0x20 * (settings->Values[SET_SBADDR] & 3));
+    g_SbConfig.IoBase = (WORD)(SB_DEFAULT_BASE + SB_BASE_STEP * (settings->Values[SET_SBADDR] & SB_BASE_CHOICE_MASK));
     { static const BYTE irqs[4] = { 5, 7, 10, 11 };
       static const BYTE dmas[3] = { 1, 3, 5 };
-      BYTE ch = dmas[settings->Values[SET_SBDMA] < 3 ? settings->Values[SET_SBDMA] : 0];
-      g_SbConfig.Irq = irqs[settings->Values[SET_SBIRQ] & 3];
-      if (ch < 4) { g_SbConfig.Dma8Channel = ch; g_SbConfig.Dma16Channel = 0; }
+      BYTE ch = dmas[settings->Values[SET_SBDMA] < ARRAYSIZE(dmas) ? settings->Values[SET_SBDMA] : 0];
+      g_SbConfig.Irq = irqs[settings->Values[SET_SBIRQ] & SB_IRQ_CHOICE_MASK];
+      if (ch < DMA_FIRST_16BIT_CHANNEL) { g_SbConfig.Dma8Channel = ch; g_SbConfig.Dma16Channel = 0; }
       else        { g_SbConfig.Dma8Channel = SB_DEFAULT_DMA8; g_SbConfig.Dma16Channel = ch; } }
     /* ── #231: THE MODEL IS A CARD, NOT A LABEL. It was stored and read by nothing, so
          all three answered as one SB16 that called itself an SB 2.0 (T3) in BLASTER.
@@ -12277,18 +12277,18 @@ static VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT liv
              SB16     DSP 4.05   A220 I5 D1 H5 P330 T6
              AWE32    DSP 4.12   A220 I5 D1 H5 P330 T6       (E620 with #233's EMU8000)
          A 16-bit channel chosen on the DMA row still wins for H; an SB Pro has none. */
-    {   BYTE model = (BYTE)(settings->Values[SET_SBMODEL] <= 2 ? settings->Values[SET_SBMODEL] : 0);
+    {   BYTE model = (BYTE)(settings->Values[SET_SBMODEL] <= SB_MODEL_LAST ? settings->Values[SET_SBMODEL] : 0);
         g_Sb.Model = model;
-        g_SbConfig.Emu8kBase = (model == SB_MODEL_AWE32) ? (WORD)(g_SbConfig.IoBase + 0x400) : 0;  /* #233 */
+        g_SbConfig.Emu8kBase = (model == SB_MODEL_AWE32) ? (WORD)(g_SbConfig.IoBase + SB_EMU8K_PORT_OFFSET) : 0;  /* #233 */
         if (model == SB_MODEL_SBPRO) {
-            g_SbConfig.Type = 4; g_SbConfig.Dma16Channel = 0; g_SbConfig.MpuBase = 0;
-            if (!g_DspVersionForced) { g_SbVersionMajor = 3; g_SbVersionMinor = 2; }
+            g_SbConfig.Type = SB_BLASTER_TYPE_SBPRO; g_SbConfig.Dma16Channel = 0; g_SbConfig.MpuBase = 0;
+            if (!g_DspVersionForced) { g_SbVersionMajor = SB_DSP_VERSION_SBPRO_MAJOR; g_SbVersionMinor = SB_DSP_VERSION_SBPRO_MINOR; }
         } else {
             {   static const WORD mpuBases[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };
-                g_SbConfig.Type = 6;                         /* P follows the MPU's port (#235) */
-                g_SbConfig.MpuBase = mpuBases[settings->Values[SET_MPUADDR] <= 4 ? settings->Values[SET_MPUADDR] : 3]; }
-            if (!g_SbConfig.Dma16Channel) g_SbConfig.Dma16Channel = 5;
-            if (!g_DspVersionForced) { g_SbVersionMajor = 4; g_SbVersionMinor = model == SB_MODEL_AWE32 ? 12 : 5; }
+                g_SbConfig.Type = SB_BLASTER_TYPE_SB16;                         /* P follows the MPU's port (#235) */
+                g_SbConfig.MpuBase = mpuBases[settings->Values[SET_MPUADDR] <= ARRAYSIZE(mpuBases) - 1 ? settings->Values[SET_MPUADDR] : MPU_DEFAULT_BASE_CHOICE]; }
+            if (!g_SbConfig.Dma16Channel) g_SbConfig.Dma16Channel = SB_DEFAULT_DMA16;
+            if (!g_DspVersionForced) { g_SbVersionMajor = SB_DSP_VERSION_MAJOR; g_SbVersionMinor = model == SB_MODEL_AWE32 ? SB_DSP_VERSION_AWE32_MINOR : SB_DSP_VERSION_MINOR; }
         } }
     /* Not over a FORCED version: XP's COMMAND.COM (5.00) and cfg\dosver.txt both win at
        startup, so they win here too -- pushing 6.22 into a session whose shell requires
@@ -15164,9 +15164,9 @@ static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port,
          which is why STAGE2's "hot ports:" line came back empty from a run that had
          plainly done thousands of port accesses. */
     if (g_SoundIoLogged < 300
-        && ((port >= 0x220 && port <= 0x22F)      /* Sound Blaster            */
-         || (port >= 0x388 && port <= 0x389)      /* AdLib / OPL              */
-         || (port >= 0x330 && port <= 0x331))) {  /* MPU-401 MIDI             */
+        && ((port >= SB_DEFAULT_BASE && port <= SB_DEFAULT_BASE + SB_PORT_LAST)      /* Sound Blaster            */
+         || (port >= OPL_PORT_FIRST && port <= OPL_PORT_FIRST + 1)      /* AdLib / OPL              */
+         || (port >= MPU_DEFAULT_BASE && port <= MPU_DEFAULT_BASE + 1))) {  /* MPU-401 MIDI             */
         CHAR soundIoLine[128], *lineCursor = soundIoLine;
         ++g_SoundIoLogged;
         lineCursor = LogPut(lineCursor, "SNDIO "); lineCursor = LogPut(lineCursor, isIn ? "in  0x" : "out 0x");
@@ -30096,16 +30096,16 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     /* #235: the card as the Audio page's jumpers set it (defaults = the card as built). */
     {   static const BYTE gusIrqs[7] = { 2, 3, 5, 7, 11, 12, 15 };
         static const BYTE gusDmaChannels[5] = { 1, 3, 5, 6, 7 };
-        g_Gus.BasePort   = (WORD)(0x210 + 0x10 * (g_Settings.Values[SET_GUSADDR] <= 5 ? g_Settings.Values[SET_GUSADDR] : 3));
-        g_Gus.Irq    = gusIrqs[g_Settings.Values[SET_GUSIRQ] <= 6 ? g_Settings.Values[SET_GUSIRQ] : 4];
-        g_Gus.DmaChannel = gusDmaChannels[g_Settings.Values[SET_GUSDMA] <= 4 ? g_Settings.Values[SET_GUSDMA] : 1]; }
+        g_Gus.BasePort   = (WORD)(GUS_BASE_FIRST + GUS_BASE_STEP * (g_Settings.Values[SET_GUSADDR] <= GUS_BASE_LAST_CHOICE ? g_Settings.Values[SET_GUSADDR] : GUS_DEFAULT_BASE_CHOICE));
+        g_Gus.Irq    = gusIrqs[g_Settings.Values[SET_GUSIRQ] <= ARRAYSIZE(gusIrqs) - 1 ? g_Settings.Values[SET_GUSIRQ] : GUS_DEFAULT_IRQ_CHOICE];
+        g_Gus.DmaChannel = gusDmaChannels[g_Settings.Values[SET_GUSDMA] <= ARRAYSIZE(gusDmaChannels) - 1 ? g_Settings.Values[SET_GUSDMA] : GUS_DEFAULT_DMA_CHOICE]; }
     /* ...and OFF THE SOUND BLASTER'S RESOURCES. The SB's own choices in the dialog
        include 240h, IRQ 11 and DMA 3 -- each of them the GUS default -- and two cards on
        one line is a machine nobody could have built. Step aside to the next period
        choice (ref/gus.md §5 lists what the latches can select). */
-    if (g_SbConfig.IoBase == g_Gus.BasePort) g_Gus.BasePort = 0x260;
-    if (g_SbConfig.Irq == g_Gus.Irq)   g_Gus.Irq = 12;
-    if (g_SbConfig.Dma8Channel == g_Gus.DmaChannel || g_SbConfig.Dma16Channel == g_Gus.DmaChannel) g_Gus.DmaChannel = 1;
+    if (g_SbConfig.IoBase == g_Gus.BasePort) g_Gus.BasePort = GUS_FALLBACK_BASE;
+    if (g_SbConfig.Irq == g_Gus.Irq)   g_Gus.Irq = GUS_FALLBACK_IRQ;
+    if (g_SbConfig.Dma8Channel == g_Gus.DmaChannel || g_SbConfig.Dma16Channel == g_Gus.DmaChannel) g_Gus.DmaChannel = GUS_FALLBACK_DMA;
     if (g_SbConfig.Dma8Channel == g_Gus.DmaChannel || g_SbConfig.Dma16Channel == g_Gus.DmaChannel) g_Gus.DmaChannel = 6;
     g_ModeYPmOffset     = (GetFileAttributesA(MYPM_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
     g_ModeYPmDetect  = (GetFileAttributesA(MYPM_DETECT_FLAG) != INVALID_FILE_ATTRIBUTES);
@@ -32165,7 +32165,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     VddBusAdd(&g_Bus, &g_SbDevice);             /* Sound Blaster 16: 0x220-0x22F  */
     g_Mpu.Sink = HostMidiSink;
     {   static const WORD mpuBases[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };   /* #235 */
-        g_Mpu.BasePort = mpuBases[g_Settings.Values[SET_MPUADDR] <= 4 ? g_Settings.Values[SET_MPUADDR] : 3]; }
+        g_Mpu.BasePort = mpuBases[g_Settings.Values[SET_MPUADDR] <= ARRAYSIZE(mpuBases) - 1 ? g_Settings.Values[SET_MPUADDR] : MPU_DEFAULT_BASE_CHOICE]; }
     g_MpuDevice = VddMpuDevice(&g_Mpu);
     VddBusAdd(&g_Bus, &g_MpuDevice);            /* MPU-401 MIDI: 0x330/0x331      */
     /* The Gravis UltraSound: 240h-24Fh and 340h-347h, IRQ 11, DMA 3 (docs/ref/gus.md).

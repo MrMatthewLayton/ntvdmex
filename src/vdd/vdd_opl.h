@@ -44,6 +44,8 @@
 
 #include "vdd_bus.h"
 
+#define OPL_PORT_FIRST               0x388
+
 #define OPL_CHANNELS   9       /* OPL2 (and OPL3 array 0): 9 two-operator channels */
 #define OPL_OPERATORS  18
 #define OPL3_CHANNELS 18       /* OPL3: two arrays of 9                          */

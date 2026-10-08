@@ -35,6 +35,13 @@
 #define SB_DEFAULT_IRQ   5
 #define SB_DEFAULT_DMA8  1
 #define SB_DEFAULT_DMA16 5
+#define SB_PORT_LAST                0x0F
+#define SB_BASE_STEP     0x20       /* the Audio page's base choices: 220h, 240h, ...  */
+#define SB_BASE_CHOICE_MASK 3
+#define SB_IRQ_CHOICE_MASK  3
+#define SB_EMU8K_PORT_OFFSET 0x400  /* an AWE32's EMU8000 at base + 400h (A220 -> E620) */
+#define SB_BLASTER_TYPE_SBPRO 4     /* BLASTER's T                                     */
+#define SB_BLASTER_TYPE_SB16  6
 
 /* DSP version we report to command 0xE1. 4.05 = a Sound Blaster 16, which is what
    a game needs to see before it will use the 16-bit and auto-init commands. */
@@ -44,8 +51,12 @@
 #define SB_MODEL_SB16   0
 #define SB_MODEL_AWE32  1
 #define SB_MODEL_SBPRO  2
+#define SB_MODEL_LAST   SB_MODEL_SBPRO
 #define SB_DSP_VERSION_MAJOR 4
 #define SB_DSP_VERSION_MINOR 5
+#define SB_DSP_VERSION_SBPRO_MAJOR 3   /* 3.02 */
+#define SB_DSP_VERSION_SBPRO_MINOR 2
+#define SB_DSP_VERSION_AWE32_MINOR 12  /* 4.12 */
 /* ── ...AND THAT CHOICE SELECTS THE GUEST'S ENTIRE DRIVER PATH. ──────────────────
      DMX branches on it in two places that matter. Its SB interrupt handler
      (DOOM.EXE 0x53024) tests `version >= 4.00` and, if so, asks MIXER REGISTER 0x82

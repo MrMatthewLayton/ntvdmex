@@ -25,6 +25,7 @@
 #include "vdd_bus.h"
 
 #define MPU_DEFAULT_BASE 0x330
+#define MPU_DEFAULT_BASE_CHOICE 3     /* MPU_DEFAULT_BASE in the Audio page's list */
 
 /* status register bits, both ACTIVE LOW */
 #define MPU_STATUS_DRR       0x40    /* clear => the port can accept a byte from the guest */
