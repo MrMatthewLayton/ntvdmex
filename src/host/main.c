@@ -1512,7 +1512,7 @@ static VOID PatchMapClear(DWORD linear)
         if (g_PatchMapLinear[slot] == linear) { g_PatchMapVector[slot] = 0; return; }
     }
 }
-
+enum { BREAKPOINT_MODE_INT3 = 1, BREAKPOINT_MODE_WOW_SEGMENT = 2, BREAKPOINT_MODE_DUMP_DS = 4, BREAKPOINT_MODE_LE_CODE = 8 };   /* pmbreak.txt column 4: 2 takes the segment number in bits 4-7 */
 /* ── GUEST BREAKPOINTS IN PROTECTED MODE. ─────────────────────────────────────────
    THE PROBLEM THIS EXISTS FOR, because it has now cost three sessions. When a PM
    client dies, the kernel terminates the whole VDM: no exception reaches our VEH, the
@@ -16941,7 +16941,7 @@ static VOID ModeYRingDump(PCSTR why)
         cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, cursor);
     }
 }
-
+#define FATAL_DUMP_EXIT_CODE 0xDE0   /* HostFatalDump: a clean exit after the dump */
 /* An injected interrupt, as a ring entry: cs=FFFE, ip=vector, ss:sp = the cs:ip it
    interrupted. Only once mode Y has been interpreted -- the ring is its instrument. */
 static VOID ModeYRingNoteIrq(UINT vector, WORD cs, WORD ip, WORD ss, WORD sp)
@@ -16998,7 +16998,7 @@ static VOID HostProfileStart(VOID)
     DWORD newHeaderOffset, size;
     if (GetFileAttributesA(HOSTPROF_FLAG) == INVALID_FILE_ATTRIBUTES) return;
     newHeaderOffset = *(const DWORD *)(image + DOS_MZ_NEW_HEADER);
-    size = *(const DWORD *)(image + newHeaderOffset + 0x50);                     /* SizeOfImage */
+    size = *(const DWORD *)(image + newHeaderOffset + FIELD_OFFSET(IMAGE_NT_HEADERS32, OptionalHeader.SizeOfImage));                     /* SizeOfImage */
     g_HostProfileBase = (DWORD)(ULONG_PTR)image; g_HostProfileSize = size;
     g_HostProfileCount = (size >> HPROF_SHIFT) + 1;
     g_HostProfile = (DWORD *)VirtualAlloc(NULL, g_HostProfileCount * sizeof(DWORD), MEM_COMMIT, PAGE_READWRITE);
@@ -17370,7 +17370,7 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
     SerialOut(lineBuffer, cursor);
     TrayRemove(g_Window);      /* the VEH exits without unwinding the UI thread */
     HostRecordFinish();
-    ExitProcess(0xDE0);                                 /* clean exit; batch dumps the log */
+    ExitProcess(FATAL_DUMP_EXIT_CODE);                                 /* clean exit; batch dumps the log */
 }
 #define VEH_LOW_MEMORY_EIP_LIMIT_U 0x00200000u
 /* First-chance sightings of real-mode/host faults -- see the arm in the VEH below. */
@@ -20106,10 +20106,10 @@ static VOID DpmiBreakpointResolveCodeBase(DWORD base)
     INT index;
     for (index = 0; index < g_BreakpointCount; ++index) {
         DWORD offset;
-        if (!(g_BreakpointMode[index] & 8)) continue;
+        if (!(g_BreakpointMode[index] & BREAKPOINT_MODE_LE_CODE)) continue;
         offset = g_BreakpointLinear[index];
         g_BreakpointLinear[index]   = base + offset;
-        g_BreakpointMode[index] &= ~8u;
+        g_BreakpointMode[index] &= ~(DWORD)BREAKPOINT_MODE_LE_CODE;
         cursor = lineBuffer;
         cursor = LogPut(cursor, "DPMI-BP: codebase+0x"); cursor = LogHex(cursor, offset);
         cursor = LogPut(cursor, " -> linear 0x");        cursor = LogHex(cursor, g_BreakpointLinear[index]);
@@ -20126,13 +20126,13 @@ static VOID DpmiBreakpointResolveSegment(UINT segmentNumber, DWORD base)
     for (index = 0; index < g_BreakpointCount; ++index) {
         DWORD offset;
         UINT want;
-        if (!(g_BreakpointMode[index] & 2)) continue;
-        want = (g_BreakpointMode[index] >> NIBBLE_SHIFT) & 0xF;
+        if (!(g_BreakpointMode[index] & BREAKPOINT_MODE_WOW_SEGMENT)) continue;
+        want = (g_BreakpointMode[index] >> NIBBLE_SHIFT) & NIBBLE_MASK;
         if (!want) want = 1;                       /* bare `2` is segment 1, as before */
         if (want != segmentNumber) continue;
         offset = g_BreakpointLinear[index] & WORD_MASK;
         g_BreakpointLinear[index]   = base + offset;
-        g_BreakpointMode[index] &= ~2u;
+        g_BreakpointMode[index] &= ~(DWORD)BREAKPOINT_MODE_WOW_SEGMENT;
         cursor = lineBuffer;
         cursor = LogPut(cursor, "DPMI-BP: seg");    cursor = LogHex(cursor, (DWORD)segmentNumber);
         cursor = LogPut(cursor, ":0x");             cursor = LogHex(cursor, offset);
@@ -20160,7 +20160,7 @@ static VOID DpmiBreakpointArm(VOID)
            from that very string. zput/zhex are caller-sized and check nothing, so
            the buffer has to be big enough for the LONGEST line, not the usual one. */
         CHAR lineBuffer[320], *cursor = lineBuffer;
-        if (linear < 0x600) continue;
+        if (linear < DPMI_PATCH_FLOOR) continue;
         /* ── ⚠★ AN UNRESOLVED SEGMENT-RELATIVE ADDRESS IS NOT A LINEAR ADDRESS. ────
              Mode bit 1 means "<addr> is an OFFSET into krnl386's PM copy of a
              segment", and DpmiBreakpointResolveSegment() rewrites it to a linear address when
@@ -20173,7 +20173,7 @@ static VOID DpmiBreakpointArm(VOID)
              only ONE such breakpoint was ever used, because a single stray BOP happened
              to land where `b[0]==0 && b[1]==0` skipped it.
            ⇒ Not armed until resolved. An address we cannot place yet is not an address. */
-        if (g_BreakpointMode[index] & 2) continue;
+        if (g_BreakpointMode[index] & BREAKPOINT_MODE_WOW_SEGMENT) continue;
         /* ── ★★ NEVER RE-PLANT A BREAKPOINT THE GUEST IS STANDING ON. ──────────────
              A hit removes the BOP and, for a repeating breakpoint, sets g_BreakpointPending;
              DpmiBreakpointRearmPending() then clears that flag only once the guest's EIP has
@@ -20213,7 +20213,7 @@ static VOID DpmiBreakpointArm(VOID)
              is still 00 00 holds nothing to break on, so leave it unarmed and try
              again after the next region is loaded. */
         if (g_BreakpointArmed[index]) {
-            if (g_BreakpointMode[index] == 1 ? (bytes[0] == X86_OP_INT3)
+            if (g_BreakpointMode[index] == BREAKPOINT_MODE_INT3 ? (bytes[0] == X86_OP_INT3)
                                   : (bytes[0] == VDM_BOP0 && bytes[1] == VDM_BOP1)) continue;  /* still planted */
             /* ── ⚠⚠ A HALF-CLOBBERED BOP MUST NOT BE RE-CAPTURED AS THE ORIGINAL. ───
                  Falling straight through to the re-arm below saves whatever is at the
@@ -20234,7 +20234,7 @@ static VOID DpmiBreakpointArm(VOID)
                  it: byte 0 is still ours, therefore the byte 0 we saved first is still
                  the truth; only byte 1's new value is news. Update that half, re-plant
                  ours, and leave the entry armed. */
-            if (g_BreakpointMode[index] != 1 && bytes[0] == VDM_BOP0 && g_BreakpointOriginal[index][0] != VDM_BOP0) {
+            if (g_BreakpointMode[index] != BREAKPOINT_MODE_INT3 && bytes[0] == VDM_BOP0 && g_BreakpointOriginal[index][0] != VDM_BOP0) {
                 g_BreakpointOriginal[index][1] = bytes[1];                    /* the guest's new byte 1 */
                 bytes[1] = VDM_BOP1;                               /* re-plant the lost half */
                 cursor = LogPut(cursor, "DPMI-BP: 0x"); cursor = LogHex(cursor, linear);
@@ -20283,8 +20283,8 @@ static VOID DpmiBreakpointArm(VOID)
               }
               continue;
           } }
-        if (g_BreakpointMode[index] != 1 && HostReadable((const VOID *)(ULONG_PTR)linear, 16)) {
-            UINT instructionLength = X86InstructionLength((const BYTE *)(ULONG_PTR)linear, 0, 16,
+        if (g_BreakpointMode[index] != BREAKPOINT_MODE_INT3 && HostReadable((const VOID *)(ULONG_PTR)linear, 16)) {
+            UINT instructionLength = X86InstructionLength((const BYTE *)(ULONG_PTR)linear, 0, X86_MAX_INSTRUCTION,
                                          g_DpmiIsClient32);
             if (instructionLength == 1) {
                 if (!g_BreakpointRefused[index]) {
@@ -20302,7 +20302,7 @@ static VOID DpmiBreakpointArm(VOID)
         }
         g_BreakpointOriginal[index][0] = bytes[0]; g_BreakpointOriginal[index][1] = bytes[1];
         ++g_BreakpointArms[index];
-        if (g_BreakpointMode[index] == 1) {
+        if (g_BreakpointMode[index] == BREAKPOINT_MODE_INT3) {
             bytes[0] = X86_OP_INT3;                      /* INT3: one byte, fits over CLI/STI */
         } else {
             bytes[0] = VDM_BOP0; bytes[1] = VDM_BOP1;
@@ -20337,7 +20337,7 @@ static INT DpmiBreakpointDisarm(DWORD linear)
         if (g_BreakpointArmed[index] && g_BreakpointLinear[index] == linear) {
             volatile BYTE *bytes = (volatile BYTE *)(ULONG_PTR)linear;
             bytes[0] = g_BreakpointOriginal[index][0];
-            if (g_BreakpointMode[index] != 1) bytes[1] = g_BreakpointOriginal[index][1];
+            if (g_BreakpointMode[index] != BREAKPOINT_MODE_INT3) bytes[1] = g_BreakpointOriginal[index][1];
             PatchMapClear(linear); g_BreakpointArmed[index] = 0;
             return index;
         }
@@ -20409,7 +20409,7 @@ static VOID DpmiSyncDefaultSelectorWidth(VOID)
 {
     BYTE want;
     if (g_PmDefaultIndex < 0) return;
-    want = (BYTE)(g_DpmiIsClient32 ? 0x4 : 0x0);      /* 0x4 = D/B, same idiom as the handler code sel */
+    want = (BYTE)(g_DpmiIsClient32 ? DPMI_DESCRIPTOR_FLAG_BIG : 0);      /* 0x4 = D/B, same idiom as the handler code sel */
     if (g_Ldt[g_PmDefaultIndex].Flags == want) return;
     g_Ldt[g_PmDefaultIndex].Flags = want;
     DpmiInstall(g_PmDefaultIndex);
@@ -20466,7 +20466,7 @@ static INT Wow32ModeOverride(WORD thunkId)
         if (g_Wow32ModeId[index] == thunkId) return (INT)g_Wow32ModeValue[index];
     return -1;
 }
-
+enum { WOW32_KNOB_COLUMNS = 2 };   /* wow32mode.txt / wow32ret.txt: two hex columns a line */
 static VOID Wow32ModeLoad(VOID)
 {
     HANDLE handle = CreateFileA(WOWMODE_PATH, GENERIC_READ,
@@ -20481,11 +20481,11 @@ static VOID Wow32ModeLoad(VOID)
         LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor); cursor = lineBuffer;
     }
     while (index < bytesRead && g_Wow32ModeCount < WOWMODE_MAX) {
-        DWORD values[2] = { 0, 0 }; INT column = 0;
+        DWORD values[WOW32_KNOB_COLUMNS] = { 0, 0 }; INT column = 0;
         while (index < bytesRead && (buffer[index] == '\r' || buffer[index] == '\n')) ++index;
         if (index >= bytesRead) break;
         if (buffer[index] == '#') { while (index < bytesRead && buffer[index] != '\n') ++index; continue; }
-        while (index < bytesRead && buffer[index] != '\r' && buffer[index] != '\n' && column < 2) {
+        while (index < bytesRead && buffer[index] != '\r' && buffer[index] != '\n' && column < WOW32_KNOB_COLUMNS) {
             INT digits = 0;
             while (index < bytesRead && (buffer[index] == ' ' || buffer[index] == '\t')) ++index;
             if (index >= bytesRead || buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == '#') break;
@@ -20500,7 +20500,7 @@ static VOID Wow32ModeLoad(VOID)
             if (digits) ++column; else ++index;
         }
         while (index < bytesRead && buffer[index] != '\n') ++index;
-        if (column >= 2) {
+        if (column >= WOW32_KNOB_COLUMNS) {
             g_Wow32ModeId[g_Wow32ModeCount]  = (WORD)values[0];
             g_Wow32ModeValue[g_Wow32ModeCount] = (WORD)values[1];
             ++g_Wow32ModeCount;
@@ -20540,11 +20540,11 @@ static VOID Wow32ReturnLoad(VOID)
         LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor); cursor = lineBuffer;
     }
     while (index < bytesRead && g_Wow32ReturnCount < WOW32RET_MAX) {
-        DWORD values[2] = { 0, 0 }; INT column = 0;
+        DWORD values[WOW32_KNOB_COLUMNS] = { 0, 0 }; INT column = 0;
         while (index < bytesRead && (buffer[index] == '\r' || buffer[index] == '\n')) ++index;
         if (index >= bytesRead) break;
         if (buffer[index] == '#') { while (index < bytesRead && buffer[index] != '\n') ++index; continue; }
-        while (index < bytesRead && buffer[index] != '\r' && buffer[index] != '\n' && column < 2) {
+        while (index < bytesRead && buffer[index] != '\r' && buffer[index] != '\n' && column < WOW32_KNOB_COLUMNS) {
             INT digits = 0;
             while (index < bytesRead && (buffer[index] == ' ' || buffer[index] == '\t')) ++index;
             if (index >= bytesRead || buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == '#') break;
@@ -20559,7 +20559,7 @@ static VOID Wow32ReturnLoad(VOID)
             if (digits) ++column; else ++index;
         }
         while (index < bytesRead && buffer[index] != '\n') ++index;
-        if (column >= 2) {
+        if (column >= WOW32_KNOB_COLUMNS) {
             g_Wow32ReturnId[g_Wow32ReturnCount]  = (WORD)values[0];
             g_Wow32ReturnValue[g_Wow32ReturnCount] = values[1];
             ++g_Wow32ReturnCount;
@@ -20654,7 +20654,7 @@ static WORD WowSchedCurrentTask(VOID)
     base = DpmiSelectorBase(g_WowDgroupSelector);
     if (!base) return WOWUSER_TASK_NONE16;
     dgroup = (const volatile BYTE *)(ULONG_PTR)base;
-    return (WORD)(dgroup[0x228] | (dgroup[0x229] << BYTE_SHIFT));
+    return (WORD)(dgroup[WOWUSER_KRNL_CURRENT_TASK] | (dgroup[WOWUSER_KRNL_CURRENT_TASK + 1] << BYTE_SHIFT));
 }
 
 /* ── #164: A TASK RUNS IN ITS OWN CURRENT DIRECTORY. (s85) ──────────────────────────
@@ -20731,8 +20731,8 @@ static VOID WowSchedSetCurrent(WORD task)
     base = DpmiSelectorBase(g_WowDgroupSelector);
     if (!base) return;
     dgroup = (volatile BYTE *)(ULONG_PTR)base;
-    dgroup[0x228] = (BYTE)(task & BYTE_MASK);
-    dgroup[0x229] = (BYTE)(task >> BYTE_SHIFT);
+    dgroup[WOWUSER_KRNL_CURRENT_TASK] = (BYTE)(task & BYTE_MASK);
+    dgroup[WOWUSER_KRNL_CURRENT_TASK + 1] = (BYTE)(task >> BYTE_SHIFT);
 }
 enum { WOW_RETARGET_HEADROOM = 0x40, WOW_RETARGET_STACK_MIN = 0x200 };   /* WowSchedRetarget: below the lowest live frame */
 /* ── s92 (#306): THE RECEIVER'S STACK FOR AN INTER-TASK MESSAGE -- see
@@ -20873,7 +20873,7 @@ static VOID WowCallLoad(VOID)
 
 static INT DpmiServicePmInt(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
 static VOID DpmiEnsurePmReturnSelector(VOID);   /* fwd: shared PM-return catcher installer (#2b + 0303) */
-
+enum { DPMI_CALLBACK_STACK_TOP = 0xF400, DPMI_CALLBACK_PHASE_MAX = 64 };   /* DpmiInvokeCallback: the PM stack it lends, the run's bound */
 /* Invoke a DPMI 0303 real-mode callback: the guest (running in V86 during a 0301
    excursion) far-called a planted callback BOP -- switch V86->PM, run the client's
    PM handler with the real-mode register state marshalled into its RMCS, then resume
@@ -20908,7 +20908,7 @@ static VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slo
     /* PM handler stack (data selector 0x17, scratch SP) with an IRET frame -> PM-return catcher.
        The IRET operand size follows the HANDLER's CS D-bit: a 32-bit PM handler pops a dword
        FLAGS/CS/EIP frame, a 16-bit one pops a word frame (GH #18 run 83). */
-    { WORD protectedSs = DPMI_INITIAL_DATA_SELECTOR, protectedSp = 0xF400; DWORD stackBase = DpmiSelectorBase(protectedSs);
+    { WORD protectedSs = DPMI_INITIAL_DATA_SELECTOR, protectedSp = DPMI_CALLBACK_STACK_TOP; DWORD stackBase = DpmiSelectorBase(protectedSs);
       if (DpmiSelectorIs32(g_Callbacks[slot].PmSelector)) {
           protectedSp -= X86_DWORD_SIZE; PokeDword(stackBase + protectedSp, EFLAGS_IF | EFLAGS_RESERVED_ONE);        /* EFLAGS */
           protectedSp -= X86_DWORD_SIZE; PokeDword(stackBase + protectedSp, g_PmReturnSelector);       /* CS (dword; hi16=0) */
@@ -20922,12 +20922,12 @@ static VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slo
     VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM;
     VDM_SET16(tib, VTIB_CS, g_Callbacks[slot].PmSelector); VDM_REG(tib, VTIB_EIP) = g_Callbacks[slot].PmOffset;
     VDM_SET16(tib, VTIB_ES, g_Callbacks[slot].RmEs);  VDM_REG(tib, VTIB_EDI) = g_Callbacks[slot].RmDi;  /* ES:DI = RMCS */
-    VDM_SET16(tib, VTIB_DS, 0x17); VDM_REG(tib, VTIB_ESI) = 0;
+    VDM_SET16(tib, VTIB_DS, DPMI_INITIAL_DATA_SELECTOR); VDM_REG(tib, VTIB_ESI) = 0;
     /* run the PM handler until it IRETs onto the PM-return catcher (g_PmReturnSelector:PMRET_OFF).
        A handler that itself issues INT 31h/21h now routes through the shared dispatcher
        DpmiServicePmInt() -- the same full surface the main PM loop gets (GH #2), so a
        callback can allocate descriptors, print, sim-real-mode-int, etc. */
-    for (phase = 0; phase < 64 && !callbackDone; ++phase) {
+    for (phase = 0; phase < DPMI_CALLBACK_PHASE_MAX && !callbackDone; ++phase) {
         DWORD event, eip, vector;
         DpmiArmFaultTrampoline(tib, 0);   /* GH #18: re-arm the PM-fault reflect (no-op on interp path) */
         DpmiEnterProtectedMode(tib);
@@ -20957,7 +20957,7 @@ static VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slo
     VDM_SET16(tib,VTIB_ES,*(volatile WORD*)(callStructureBytes+RMCS_ES)); VDM_SET16(tib,VTIB_DS,*(volatile WORD*)(callStructureBytes+RMCS_DS));
     VDM_SET16(tib,VTIB_CS,*(volatile WORD*)(callStructureBytes+RMCS_CS)); VDM_REG(tib,VTIB_EIP)=*(volatile WORD*)(callStructureBytes+RMCS_IP);
     VDM_SET16(tib,VTIB_SS,*(volatile WORD*)(callStructureBytes+RMCS_SS)); VDM_REG(tib,VTIB_ESP)=*(volatile WORD*)(callStructureBytes+RMCS_SP);
-    VDM_SET16(tib,VTIB_FS,*(volatile WORD*)(callStructureBytes+0x30)); VDM_SET16(tib,VTIB_GS,*(volatile WORD*)(callStructureBytes+0x30));
+    VDM_SET16(tib,VTIB_FS,*(volatile WORD*)(callStructureBytes+RMCS_SS)); VDM_SET16(tib,VTIB_GS,*(volatile WORD*)(callStructureBytes+RMCS_SS));
     lineCursor = LogPut(lineCursor, callbackDone ? "  0303-cb: PM handler returned (OK)\r\n" : "  0303-cb: PM handler NO-RET\r\n");
     LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor); lineCursor = lineBuffer;
 }
@@ -21533,9 +21533,9 @@ static VOID WowShadowPut(INT index)      /* g_Ldt[idx] -> shadow */
     if (!g_WowShadow || index < 0 || index >= WOW_SHADOW_ENTRIES) return;
     DpmiBuildDescriptor(g_Ldt[index].Base, g_Ldt[index].Limit,
                     g_Ldt[index].Access, g_Ldt[index].Flags, &low, &high);
-    entry = (DWORD *)(g_WowShadow + index * 8);
+    entry = (DWORD *)(g_WowShadow + index * X86_DESCRIPTOR_SIZE);
     entry[0] = low; entry[1] = high;
-    if (g_WowSeen) { entry = (DWORD *)(g_WowSeen + index * 8); entry[0] = low; entry[1] = high; }
+    if (g_WowSeen) { entry = (DWORD *)(g_WowSeen + index * X86_DESCRIPTOR_SIZE); entry[0] = low; entry[1] = high; }
 }
 enum { WOW_SHADOW_SCAN_SLACK = 8 };   /* WowShadowSync looks a few entries past g_LdtNext */
 /* Push anything krnl386 changed in the shadow into the real LDT. Returns the count. */
@@ -21689,7 +21689,7 @@ static INT PmTransferIn(WORD selector, DWORD offset, DWORD length)
     const volatile BYTE *source = (const volatile BYTE *)(ULONG_PTR)(base + offset);
     volatile BYTE *destination = (volatile BYTE *)(ULONG_PTR)((DWORD)g_PmTransferSegment << PARAGRAPH_SHIFT);
     DWORD index;
-    if (!base || length > (DWORD)g_PmTransferParagraphs * 16u) return -1;
+    if (!base || length > (DWORD)g_PmTransferParagraphs * PARAGRAPH_SIZE_U) return -1;
     if (!HostReadable((const VOID *)source, length)) return -1;
     for (index = 0; index < length; ++index) destination[index] = source[index];
     return 0;
@@ -21701,7 +21701,7 @@ static INT PmTransferOut(WORD selector, DWORD offset, DWORD length)
     volatile BYTE *destination = (volatile BYTE *)(ULONG_PTR)(base + offset);
     const volatile BYTE *source = (const volatile BYTE *)(ULONG_PTR)((DWORD)g_PmTransferSegment << PARAGRAPH_SHIFT);
     DWORD index;
-    if (!base || length > (DWORD)g_PmTransferParagraphs * 16u) return -1;
+    if (!base || length > (DWORD)g_PmTransferParagraphs * PARAGRAPH_SIZE_U) return -1;
     if (!HostReadable((const VOID *)destination, length)) return -1;
     for (index = 0; index < length; ++index) destination[index] = source[index];
     return 0;
@@ -24399,7 +24399,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                    for the dump column. */
                               DWORD dumpAddress = g_BreakpointDump[breakpoint];
                               const BYTE *dumpBytes;
-                              if (g_BreakpointMode[breakpoint] & 4) {
+                              if (g_BreakpointMode[breakpoint] & BREAKPOINT_MODE_DUMP_DS) {
                                   DWORD dataSegmentBase = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_DS)
                                                                     & WORD_MASK));
                                   cursor = LogPut(cursor, "\r\n  dump@ds:0x"); cursor = LogHex(cursor, dumpAddress);
