@@ -51,6 +51,12 @@
      which is what two UARTs on one wire do. Whether the guest's drivers
      cooperate over the shared line is their business, as it was in 1990. */
 #define COMM_MAX_PORTS 4
+#define COMM_COM1_BASE 0x03F8
+#define COMM_COM2_BASE 0x02F8
+#define COMM_COM3_BASE 0x03E8
+#define COMM_COM4_BASE 0x02E8
+#define COMM_COM1_IRQ  4          /* COM3 shares it */
+#define COMM_COM2_IRQ  3          /* COM4 shares it */
 #define LPT_DEFAULT_BASE 0x0378   /* LPT1: the one parallel port fitted          */
 #define COMM_DEVICE_NAME "comm"
 #define COMM_RECEIVE_RING_SIZE   256      /* host input waiting for the guest             */

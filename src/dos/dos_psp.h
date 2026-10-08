@@ -29,6 +29,7 @@
 #define DOS_PSP_COMMAND_TAIL         0x81
 #define DOS_PSP_COMMAND_TAIL_MAX     126    /* characters, before the CR                   */
 #define DOS_PSP_DEFAULT_DTA          0x80   /* DOS resets the DTA to PSP:80               */
+#define DOS_COM_STACK_TOP            0xFFFE /* a .COM's first stack word: 0, so RET exits */
 
 /* What DosPspBuild writes into them. */
 #define DOS_PSP_OPCODE_INT           0xCD

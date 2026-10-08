@@ -65,6 +65,8 @@
 #define DOS_SYSVARS_NUL           0x22        /* the NUL device header, INLINE */
 #define DOS_SYSVARS_NUL_LEN       0x12        /* 18 bytes, measured */
 #define DOS_SYSVARS_NUL_END       (DOS_SYSVARS_NUL + DOS_SYSVARS_NUL_LEN)   /* 0x34 */
+#define DOS_SYSVARS_EXTENDED_KB   0x45        /* WORD: extended memory in KB (GH #47)   */
+#define DOS_SYSVARS_FIRST_MCB_COPY 0x68       /* the first MCB again, as 6.22 and PCem  */
 
 /* ---- DPB (DOS 4.0+), 33 bytes. Offsets measured from sysvars.dpb0. */
 #define DOS_DPB_DRIVE           0x00
@@ -107,6 +109,15 @@
 #define DOS_SYSVARS_FAR_SEGMENT     2       /* a far pointer: offset WORD, then segment WORD */
 #define DOS_CHAIN_END               0xFFFF  /* FFFF:FFFF ends a DPB or device chain           */
 #define DOS_DPB_DEFAULT_SECTOR_SIZE 512     /* what a sector size of 0 is taken as            */
+#define DOS_CDS_ARRAY_NONE          0xFFFF  /* SysVars' CDS pointer when there is no array     */
+#define DOS_DPB_CLUSTER_LIMIT       0xFFFE  /* the highest cluster a WORD field can say        */
+#define DOS_MEDIA_FIXED             0xF8
+#define DOS_MEDIA_FLOPPY_144        0xF0
+#define DOS_FIXED_ROOT_ENTRIES      512
+#define DOS_FLOPPY_144_ROOT_ENTRIES 224
+#define DOS_FLOPPY_144_CLUSTERS     2847    /* 6.22's own 1.44M DPB: one sector a cluster      */
+#define DOS_UNMEASURED_SECTORS_PER_CLUSTER 8     /* a fixed drive GetDiskFreeSpace refused */
+#define DOS_UNMEASURED_CLUSTERS     0xFFF0
 #define DOS_FAT12_HIGHEST_CLUSTER   0xFF5   /* FAT12 if the highest cluster is at most this    */
 #define DOS_FAT12_PAIR_BYTES        3       /* FAT12: two entries in three bytes               */
 #define DOS_FAT12_PAIR_ENTRIES      2

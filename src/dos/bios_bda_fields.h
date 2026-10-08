@@ -10,6 +10,8 @@
 #define BIOS_BDA_KEY_ENTRY_SIZE          2  /* one ring entry: AL then AH                */
 #define BIOS_BDA_CURSOR_ENTRY_SIZE       2
 #define BIOS_BDA_LPT_BASES               0x08  /* WORD x3: LPT1-3 base ports */
+#define BIOS_BDA_COM_BASES               0x00  /* WORD x4: COM1-4 base ports */
+#define BIOS_BDA_COM_PORTS               4
 #define BIOS_BDA_EBDA_SEGMENT            0x0E  /* WORD: EBDA segment (AT and later)          */
 #define BIOS_BDA_EQUIPMENT               0x10  /* WORD: the equipment word, = INT 11h       */
 #define BIOS_BDA_MEMORY_KB               0x13  /* WORD: base memory in KB,  = INT 12h       */

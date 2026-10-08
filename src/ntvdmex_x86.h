@@ -222,6 +222,7 @@
 #define VDM_BOP_LENGTH              3   /* C4 C4 nn                                 */
 #define VDM_BOP_SUBFUNCTION_LENGTH  4   /* C4 C4 nn sub                             */
 #define VDM_BOP_NUMBER_OFFSET       2   /* nn: the byte after C4 C4                 */
+#define VDM_BOP_STUB_SIZE           4   /* C4 C4 nn, then IRET or RETF              */
 
 /* EFLAGS. The plain names are `int` literals, the _U names `unsigned` (see ntvdmex_bits.h). */
 #define EFLAGS_CF           0x0001

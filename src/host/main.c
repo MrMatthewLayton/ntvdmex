@@ -28234,7 +28234,7 @@ static INT WowSend16Blob(WORD window16, WORD message, WORD wParam, BYTE *blob, I
     return WowCall16SyncEx(proc, window->Instance ? window->Instance : g_WowUserClasses[window->Class].Instance,
                               args, 5, window16, message, result, blob, blobLength, 3, fix, fixupCount);
 }
-
+#define CPU_REFERENCE_MHZ_MAX_U 100000u
 static INT WowSend16Now(WORD window16, WORD message, WORD wParam, DWORD lParam, WORD *result)
 {
     WOWUSER_WINDOW *window = WowUserFindWindow(window16);
@@ -28246,7 +28246,7 @@ static INT WowSend16Now(WORD window16, WORD message, WORD wParam, DWORD lParam, 
     return WowCall16Sync(proc, window->Instance ? window->Instance : g_WowUserClasses[window->Class].Instance,
                            args, 5, window16, message, result);
 }
-
+#define CPU_REFERENCE_MHZ_MIN_U 1u
 static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interruptVector, UINT steps)
 {
     CHAR lineBuffer[256], *lineCursor = lineBuffer;
@@ -28466,7 +28466,7 @@ static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interr
     g_DpmiVi = previousVi;
     return done;
 }
-
+enum { EXTENDER_ARGV0_SAFE_LENGTH = 62, ENVIRONMENT_DUMP_BYTES = 0xC0, ENVIRONMENT_DUMP_LINE = 264, ENVIRONMENT_DUMP_NULS = 2, ENVIRONMENT_DUMP_SKIP = 8, COMMAND_TAIL_DUMP_BYTES = 16, UI_TICK_MS_MAX = 100, MOUSE_SENSITIVITY_MIN = 10, MOUSE_SENSITIVITY_MAX = 1000 };   /* WinMain: argv[0], the guest dumps, knob ranges */
 /* ── s90 (#278): deliver IRQs a 32-bit component raised (call_ica_hw_interrupt via
      bin\wowshim\NTVDM.EXE) to the client's PM handlers. Called from the main PM loop
      AND from the WOW GetMessage wait: a Win16 program spends a sound's whole playback
@@ -28490,7 +28490,7 @@ static VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps)
         g_InPmIrq = 0;
     }
 }
-
+#define WOW_KRNL386_ENTRY_AX 0x4B4F   /* 'OK': what krnl386 expects in AX at entry */
 /* ── THE INT 33h EVENT HANDLER, FOR A PROTECTED-MODE CLIENT. (s74c: ZAR's clicks) ───
      MouseCallbackTry() delivers 0Ch callbacks to V86 guests only; for a DPMI client it
      DROPPED the queue ("not this path (yet)", counted as cb_pm). ZAR installs its
@@ -31333,7 +31333,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                program's own directory (it is how every one of these games finds its
                WAD), so the extender's open resolves to the same file -- and 8.3 name
                plus NUL can never approach 64. Only done when it must be. */
-          if (lstrlenA(programPathBuffer) > 62) {
+          if (lstrlenA(programPathBuffer) > EXTENDER_ARGV0_SAFE_LENGTH) {
               PCSTR baseName = programPathBuffer, scan;
               for (scan = programPathBuffer; *scan; ++scan) if (*scan == '\\' || *scan == '/') baseName = scan + 1;
               if (baseName != programPathBuffer && *baseName) {
@@ -31389,13 +31389,13 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         UINT environmentIndex, zeros = 0;
         environmentCursor = LogPut(environmentCursor, "STAGE2: guest environment block @0x");
         environmentCursor = LogHex(environmentCursor, (DWORD)DOS_ENV_SEG << PARAGRAPH_SHIFT); environmentCursor = LogPut(environmentCursor, " = [");
-        for (environmentIndex = 0; environmentIndex < 0xC0 && environmentCursor < environmentLine + 264; ++environmentIndex) {
+        for (environmentIndex = 0; environmentIndex < ENVIRONMENT_DUMP_BYTES && environmentCursor < environmentLine + ENVIRONMENT_DUMP_LINE; ++environmentIndex) {
             BYTE character = environmentBytes[environmentIndex];
             if (character == 0) { *environmentCursor++ = '.'; *environmentCursor = 0;
-                          if (++zeros >= 2 && environmentIndex > 8) break;
+                          if (++zeros >= ENVIRONMENT_DUMP_NULS && environmentIndex > ENVIRONMENT_DUMP_SKIP) break;
                           continue; }
             zeros = 0;
-            *environmentCursor++ = (CHAR)((character >= 0x20 && character < 0x7F) ? character : '?'); *environmentCursor = 0;
+            *environmentCursor++ = (CHAR)((character >= ASCII_SPACE && character < ASCII_DELETE) ? character : '?'); *environmentCursor = 0;
         }
         environmentCursor = LogPut(environmentCursor, "]\r\n");
         (VOID)environmentCursor;
@@ -31414,7 +31414,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
       UINT textIndex;
       cursor = LogPut(cursor, "STAGE2: cmdtail len=0x"); cursor = LogHexByte(cursor, pspView[DOS_PSP_COMMAND_TAIL_LENGTH]);
       cursor = LogPut(cursor, " [");
-      for (textIndex = 0; textIndex < 16; ++textIndex) { cursor = LogHexByte(cursor, pspView[DOS_PSP_COMMAND_TAIL + textIndex]); cursor = LogPut(cursor, " "); }
+      for (textIndex = 0; textIndex < COMMAND_TAIL_DUMP_BYTES; ++textIndex) { cursor = LogHexByte(cursor, pspView[DOS_PSP_COMMAND_TAIL + textIndex]); cursor = LogPut(cursor, " "); }
       cursor = LogPut(cursor, "]\r\n"); }
     {   WORD firstMcb = DosMcbInitializeWithTop(NULL, g_DosMemoryTop);   /* #136 */
         DosInt21Initialize(&machine, firstMcb);
@@ -31460,7 +31460,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
              taken AFTER the CDS, so it lands just below it and the program's block
              now ends below THIS one -- hence PSP+2 comes from the lower of the two. */
         if (g_CdsSegment)
-            *(volatile WORD *)(((DWORD)DOS_PSP_SEG << PARAGRAPH_SHIFT) + 2) = (WORD)(g_CdsSegment - 1);
+            *(volatile WORD *)(((DWORD)DOS_PSP_SEG << PARAGRAPH_SHIFT) + DOS_PSP_MEMORY_TOP) = (WORD)(g_CdsSegment - 1);
     }
     /* Published so the Settings dialog can change the reported DOS version while a
        guest is running -- it is read per INT 21h AH=30h, so it takes effect at the
@@ -31515,7 +31515,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
               ++index;
               while (index < bytesRead && text[index] >= '0' && text[index] <= '9') { minor = minor*DECIMAL_RADIX + (UINT)(text[index]-'0'); ++index; }
           }
-          if (major && major < 256 && minor < 256) {
+          if (major && major < BYTE_VALUES && minor < BYTE_VALUES) {
               DosInt21SetVersion(&machine, (BYTE)major, (BYTE)minor);
               SettingsNoteOverride(SET_DOSMAJ, "cfg\\dosver.txt", major);
               SettingsNoteOverride(SET_DOSMIN, "cfg\\dosver.txt", minor);
@@ -31641,7 +31641,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
            left there -- and this is exactly the region where a stale pointer had
            krnl386 writing into our own handler code. Cheap to be certain.
          ⚠ 192 bytes covers all three tables (A, B, C at 0x4E0/0x520/0x560). */
-      for (item = 0; item < 192; ++item) controlTable[DOS_INT2F_TBL_A + item] = 0;
+      for (item = 0; item < DOS_INT2F_TBLS_LEN; ++item) controlTable[DOS_INT2F_TBL_A + item] = 0;
       /* ── INT 15h AH=C0h: THE SYSTEM CONFIGURATION TABLE. (GH #54) ──────────────
            Measured (tests/probes/dos/p_int15.asm): PCem's real AMI 486 says FC 01 00
            70 00; SeaBIOS FC 00 01 74 40; dosbox-x FC 00 01 70 40. The model triple
@@ -31673,17 +31673,17 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          the whole of it is ours to clear -- the old "+0x40 only, the SDA follows"
          limit was a symptom of it sharing DOS_HDLR_SEG. */
     volatile BYTE *sysVars = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_SYSVARS_SEG << PARAGRAPH_SHIFT);
-    { INT item; for (item = -2; item < DOS_SYSVARS_LEN; ++item) sysVars[DOS_SYSVARS_OFF + item] = 0; }
-    *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF - 2) = machine.FirstMcb;
+    { INT item; for (item = DOS_SYSVARS_MCB_HEAD; item < DOS_SYSVARS_LEN; ++item) sysVars[DOS_SYSVARS_OFF + item] = 0; }
+    *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_MCB_HEAD) = machine.FirstMcb;
     /* ⚠⚠ SysVars+0x66 = "first MCB in upper memory" (= absolute SEG:0x008C, which MEM
          also reads directly -- see DOS_UMBHEAD_OFF). 0xFFFF means "none", the truth
          on a machine that refuses AH=5803. Zero here is what MEM /C walked as a UMB
          chain starting at segment 0. SysVars+0x68 holds the first MCB again, as it
          does on 6.22 and PCem (p_sysvar). */
     *(volatile WORD *)(sysVars + DOS_UMBHEAD_OFF) = DOS_UMBHEAD_NONE;
-    *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + 0x68) = machine.FirstMcb;
-    sysVars[DOS_SYSVARS_OFF + 0x20] = 1;                      /* block devices       */
-    sysVars[DOS_SYSVARS_OFF + 0x21] = DOS_LASTDRIVE;          /* LASTDRIVE           */
+    *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_FIRST_MCB_COPY) = machine.FirstMcb;
+    sysVars[DOS_SYSVARS_OFF + DOS_SYSVARS_BLOCK_DEVICES] = 1;                      /* block devices       */
+    sysVars[DOS_SYSVARS_OFF + DOS_SYSVARS_LASTDRIVE] = DOS_LASTDRIVE;          /* LASTDRIVE           */
     machine.SysvarsSegment = DOS_SYSVARS_SEG;
     machine.SysvarsOffset = DOS_SYSVARS_OFF;
     /* ── ★ THE REAL CHAINS: DPB, CDS AND THE DEVICE HEADER. (GH #48) ────────────
@@ -31721,14 +31721,14 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
              instead of asking, and DRIVE_REMOVABLE is skipped outright: a DPB
              for a drive whose media can vanish is not worth the risk here. */
         UINT previousErrorMode = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
-        UINT driveTypes[26];
+        UINT driveTypes[DOS_DRIVE_LETTERS];
         /* ── s71: EVERY DRIVE THE MACHINE HAS, CLASSIFIED ONCE. ──────────────────────
              Fixed and RAM disks get a DPB measured off the volume; a REMOVABLE drive
              (A:) gets a DPB with floppy defaults and its media is NEVER touched here
              (the "no disk in drive A:" box is modal and wedged the rig once); CD-ROM
              and network drives are redirector drives -- a CDS entry with the network
              flag and no DPB, which is how MSCDEX and a redirector present them. */
-        for (drive = 0; drive < 26; ++drive) {
+        for (drive = 0; drive < DOS_DRIVE_LETTERS; ++drive) {
             CHAR rootText[4];
             driveTypes[drive] = DRIVE_NO_ROOT_DIR;
             if (!(drives & (1u << drive))) continue;
@@ -31748,25 +31748,25 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                  It had 512 entries and F8h (the fixed-disk values) on a floppy. */
             INT isRemovable = (driveTypes[slot[count]] == DRIVE_REMOVABLE);
             if (isRemovable)                                           /* 1.44M defaults, no probe */
-                { sectorsPerCluster = 1; bytesPerSector = 512; totalClusters = 2847; }
+                { sectorsPerCluster = 1; bytesPerSector = DOS_DPB_DEFAULT_SECTOR_SIZE; totalClusters = DOS_FLOPPY_144_CLUSTERS; }
             else if (!GetDiskFreeSpaceA(root, &sectorsPerCluster, &bytesPerSector, &freeClusters, &totalClusters))
-                { sectorsPerCluster = 8; bytesPerSector = 512; totalClusters = 0xFFF0; }
-            DosDpbBuild(driveParameterBlock, slot[count], bytesPerSector ? bytesPerSector : 512, sectorsPerCluster ? sectorsPerCluster : 1, isRemovable ? 224 : 512,
-                          (totalClusters > 0xFFFE) ? 0xFFFE : totalClusters + 1, isRemovable ? 0xF0 : 0xF8,
+                { sectorsPerCluster = DOS_UNMEASURED_SECTORS_PER_CLUSTER; bytesPerSector = DOS_DPB_DEFAULT_SECTOR_SIZE; totalClusters = DOS_UNMEASURED_CLUSTERS; }
+            DosDpbBuild(driveParameterBlock, slot[count], bytesPerSector ? bytesPerSector : DOS_DPB_DEFAULT_SECTOR_SIZE, sectorsPerCluster ? sectorsPerCluster : 1, isRemovable ? DOS_FLOPPY_144_ROOT_ENTRIES : DOS_FIXED_ROOT_ENTRIES,
+                          (totalClusters > DOS_DPB_CLUSTER_LIMIT) ? DOS_DPB_CLUSTER_LIMIT : totalClusters + 1, isRemovable ? DOS_MEDIA_FLOPPY_144 : DOS_MEDIA_FIXED,
                           DOS_DEV_SEG, DOS_DEVICE_OFFSET(DOS_DEVICE_BLOCK),       /* #48: the block driver */
-                          last ? 0xFFFF : DOS_CTAB_SEG,
-                          last ? 0xFFFF : (WORD)(DOS_DPBCHAIN_OFF + (count + 1) * DOS_DPB_LEN));
+                          last ? DOS_CHAIN_END : DOS_CTAB_SEG,
+                          last ? DOS_CHAIN_END : (WORD)(DOS_DPBCHAIN_OFF + (count + 1) * DOS_DPB_LEN));
             for (item = 0; item < DOS_DPB_LEN; ++item)
                 controlTable[DOS_DPBCHAIN_OFF + count * DOS_DPB_LEN + item] = driveParameterBlock[item];
         }
         if (driveCount) {
             *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_DPB)     = DOS_DPBCHAIN_OFF;
-            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_DPB + 2) = DOS_CTAB_SEG;
+            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_DPB + X86_FAR_POINTER_SEGMENT) = DOS_CTAB_SEG;
         } else {                                  /* no chain is better than a bad one */
-            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_DPB)     = 0xFFFF;
-            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_DPB + 2) = 0xFFFF;
+            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_DPB)     = DOS_CHAIN_END;
+            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_DPB + X86_FAR_POINTER_SEGMENT) = DOS_CHAIN_END;
         }
-        *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_MAX_SECTOR) = 512;
+        *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_MAX_SECTOR) = DOS_DPB_DEFAULT_SECTOR_SIZE;
         /* ── ★ SYSVARS+0x45: EXTENDED MEMORY, IN KB. THE ANSWER TO GH #47. ────
              MEM.EXE does not get this from the XMS driver. It reads it straight
              out of SysVars and skips its entire extended-memory report when the
@@ -31788,7 +31788,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
              15360 -- one machine with two sizes. Now all three are CMOS_EXTENDED_KB and the
              pool is that LESS the HMA (XMS_POOL_KB), so MEM's Total - Free = Used
              comes out 64K, 6.22's shape, and can never go negative. */
-        *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + 0x45) = (WORD)CMOS_EXTENDED_KB;
+        *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_EXTENDED_KB) = (WORD)CMOS_EXTENDED_KB;
         /* ⚠ GH #47: SysVars +0x43 = 0x0103, +0x49 = 0xFFFF and +0x4B = 0x0001
            (6.22's values, where ours are zero) were planted together as a
            diagnostic and REFUTED -- the phantom "Upper 1,663K" did not move.
@@ -31814,9 +31814,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             for (item = 0; item < DOS_SYSVARS_NUL_LEN; ++item)
                 sysVars[DOS_SYSVARS_OFF + DOS_SYSVARS_NUL + item] = nulDevice[item];
             *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CLOCK)     = DOS_DEVICE_OFFSET(DOS_DEVICE_CLOCK);
-            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CLOCK + 2) = DOS_DEV_SEG;
+            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CLOCK + X86_FAR_POINTER_SEGMENT) = DOS_DEV_SEG;
             *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CON)       = DOS_DEVICE_OFFSET(DOS_DEVICE_CON);
-            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CON + 2)   = DOS_DEV_SEG; }
+            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CON + X86_FAR_POINTER_SEGMENT)   = DOS_DEV_SEG; }
         /* ---- the CDS array. ONE ENTRY PER DRIVE LETTER, LASTDRIVE of them,
                because it is INDEXED by drive and a walker reads all of them
                whatever we populate. Entries for drives that exist carry flags
@@ -31842,10 +31842,10 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     cdsBytes[di2 * DOS_CDS_LEN + item] = cds[item];
             }
             *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CDS)     = 0x0000;
-            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CDS + 2) = g_CdsSegment;
+            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CDS + X86_FAR_POINTER_SEGMENT) = g_CdsSegment;
         } else {                                  /* no block: no array, say so */
-            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CDS)     = 0xFFFF;
-            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CDS + 2) = 0xFFFF;
+            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CDS)     = DOS_CDS_ARRAY_NONE;
+            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CDS + X86_FAR_POINTER_SEGMENT) = DOS_CDS_ARRAY_NONE;
         }
         /* ---- the SYSTEM FILE TABLE: one block, terminated, entries = what our
                INT 21h layer can really open (DOS_MACHINE::fh[]). Same shape the
@@ -31860,14 +31860,14 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             volatile BYTE *sft = (volatile BYTE *)((DWORD)g_SftSegment << PARAGRAPH_SHIFT);
             UINT item;
             for (item = 0; item < (UINT)DOS_SFT_BYTES; ++item) sft[item] = 0;
-            *(volatile WORD *)(sft + 0) = 0xFFFF;             /* next offset: last block */
-            *(volatile WORD *)(sft + 2) = 0xFFFF;             /* next segment            */
-            *(volatile WORD *)(sft + 4) = DOS_SFT_ENTRIES;    /* entries in this block   */
+            *(volatile WORD *)(sft + DOS_SFT_NEXT_OFFSET) = DOS_SFT_LAST;             /* next offset: last block */
+            *(volatile WORD *)(sft + DOS_SFT_NEXT_SEGMENT) = DOS_SFT_LAST;             /* next segment            */
+            *(volatile WORD *)(sft + DOS_SFT_COUNT) = DOS_SFT_ENTRIES;    /* entries in this block   */
             *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_SFT)     = 0x0000;
-            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_SFT + 2) = g_SftSegment;
+            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_SFT + X86_FAR_POINTER_SEGMENT) = g_SftSegment;
         } else {
-            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_SFT)     = 0xFFFF;
-            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_SFT + 2) = 0xFFFF;
+            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_SFT)     = DOS_SFT_LAST;
+            *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_SFT + X86_FAR_POINTER_SEGMENT) = DOS_SFT_LAST;
         }
         scan = LogPut(scan, "DOS: SysVars ");     scan = LogHex(scan, driveCount);
         scan = LogPut(scan, " DPBs at 0x");       scan = LogHex(scan, DOS_CTAB_SEG);
@@ -31883,7 +31883,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                          scan = LogPut(scan, " entries (terminated)"); }
         else             scan = LogPut(scan, "ABSENT -- chain head terminated FFFF:FFFF");
         scan = LogPut(scan, ", drives=");
-        for (drive = 0; drive < 26; ++drive) {
+        for (drive = 0; drive < DOS_DRIVE_LETTERS; ++drive) {
             if (!(drives & (1u << drive))) continue;
             scan = LogPut(scan, driveTypes[drive] == DRIVE_FIXED ? " " : driveTypes[drive] == DRIVE_REMOVABLE ? " ~"
                        : driveTypes[drive] == DRIVE_CDROM ? " cd:" : driveTypes[drive] == DRIVE_REMOTE ? " net:"
@@ -31895,7 +31895,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         LogAppend(LOG_PATH, report, scan); SerialOut(report, scan);
     }
     /* GH #128: and the WOW extension krnl386 reads before it does anything else. */
-    DosWowPublish(handlerArea, (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT), 2 /* C: */);
+    DosWowPublish(handlerArea, (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT), DOS_DRIVE_C);
     DosXmsInitialize(&g_Xms, XMS_POOL_KB, XmsHostAllocate, XmsHostFree, NULL);  /* M4: XMS pool */
     /* ── ★ THE HMA: 64KB-16 AT LINEAR 0x100000, REACHED AS FFFF:0010. (s72) ───────
          p_xms measured us refusing it TWICE over -- AH=00h answered DX=0 ("no HMA")
@@ -32005,7 +32005,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     g_Video.IsPort3DaRingOn =
         (GetFileAttributesA(CFG_("pitlatch.flag")) != INVALID_FILE_ATTRIBUTES);
     g_Video.GuestPc = HostGuestPc;             /* so a VRAM watchpoint names a routine */
-    g_Video.BiosData = (BYTE *)0x400;               /* the display's BDA fields (0449..0489) */
+    g_Video.BiosData = (BYTE *)BIOS_BDA_BASE;               /* the display's BDA fields (0449..0489) */
     g_VideoDevice = VddVideoDevice(&g_Video);
     VddBusAdd(&g_Bus, &g_VideoDevice);
     /* ⚠ AFTER VddBusAdd, NOT BEFORE. VddBusAdd calls VddVideoInitialize, which
@@ -32050,7 +32050,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
        bus resets it, so the ring pointers it initialises land in guest memory where a DOS
        program reading 0040:001A can see them. V86 low memory is mapped in our address
        space, so the BDA is addressable directly. */
-    g_Input.BiosData = (BYTE *)0x400;
+    g_Input.BiosData = (BYTE *)BIOS_BDA_BASE;
     g_Input.TimeMicroseconds = HostTimeMicroseconds;                /* the keyboard's transfer time is real time */
     g_InputDevice = VddInputDevice(&g_Input);
     VddBusAdd(&g_Bus, &g_InputDevice);             /* keyboard: claims INT 16h      */
@@ -32086,16 +32086,16 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     { INT callbackIndex;
       for (callbackIndex = 0; callbackIndex < COMM_MAX_PORTS; ++callbackIndex) {
           g_ComSpool[callbackIndex] = INVALID_HANDLE_VALUE; g_ComFailed[callbackIndex] = 0; }
-      g_Comm.Ports[0].BasePort = 0x03F8; g_Comm.Ports[0].Irq = 4; g_Comm.Ports[0].IsFitted = 1;
-      g_Comm.Ports[1].BasePort = 0x02F8; g_Comm.Ports[1].Irq = 3; g_Comm.Ports[1].IsFitted = 1;
+      g_Comm.Ports[0].BasePort = COMM_COM1_BASE; g_Comm.Ports[0].Irq = COMM_COM1_IRQ; g_Comm.Ports[0].IsFitted = 1;
+      g_Comm.Ports[1].BasePort = COMM_COM2_BASE; g_Comm.Ports[1].Irq = COMM_COM2_IRQ; g_Comm.Ports[1].IsFitted = 1;
       /* #245 (s90): COM3 AND COM4 ARE FITTED BECAUSE STOCK DECLARES THEM. Measured
          with tests/probes/dos/p_com34 under XP's own NTVDM on the rig: INT 11h
          AX=C823 (FOUR serial ports, bits 9-11) and BDA 0040:0000 = 03F8 02F8 03E8
          02E8. The question #181 left open is answered by the oracle that defines
          "ntvdm superset", and the device has had the slots since s85. */
-      g_Comm.Ports[2].BasePort = 0x03E8; g_Comm.Ports[2].Irq = 4; g_Comm.Ports[2].IsFitted = 1;
-      g_Comm.Ports[3].BasePort = 0x02E8; g_Comm.Ports[3].Irq = 3; g_Comm.Ports[3].IsFitted = 1;
-      g_Comm.Printers[0].BasePort = 0x0378; g_Comm.Printers[0].IsFitted = 1;   /* LPT1 data/strobe */
+      g_Comm.Ports[2].BasePort = COMM_COM3_BASE; g_Comm.Ports[2].Irq = COMM_COM1_IRQ; g_Comm.Ports[2].IsFitted = 1;
+      g_Comm.Ports[3].BasePort = COMM_COM4_BASE; g_Comm.Ports[3].Irq = COMM_COM2_IRQ; g_Comm.Ports[3].IsFitted = 1;
+      g_Comm.Printers[0].BasePort = LPT_DEFAULT_BASE; g_Comm.Printers[0].IsFitted = 1;   /* LPT1 data/strobe */
       g_Comm.Sink = ComTransmitSink; g_Comm.SinkContext = NULL;
       g_Comm.PrinterSink = LptTransmitSink; g_Comm.PrinterSinkContext = NULL;
       g_CommDevice = VddCommDevice(&g_Comm);
@@ -32103,7 +32103,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     VddNetBiosSetBackend(&g_Net, NetSubmit, NULL);
     g_NetDevice = VddNetBiosDevice(&g_Net);
     VddBusAdd(&g_Bus, &g_NetDevice);             /* GH #8: NetBIOS, INT 5Ch       */
-    { volatile WORD *biosDataArea = (volatile WORD *)(ULONG_PTR)0x400;
+    { volatile WORD *biosDataArea = (volatile WORD *)(ULONG_PTR)BIOS_BDA_BASE;
       /* Declare exactly what the VDD actually CLAIMED. A port whose claim was
          refused for want of a bus table slot is not fitted, and writing its base
          here anyway would recreate the very inconsistency this block exists to
@@ -32117,10 +32117,10 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
            0 here; the point is that fitting one is now a single line above
            and this table and INT 11h follow it without being edited. */
       { INT callbackIndex;
-        for (callbackIndex = 0; callbackIndex < 4; ++callbackIndex)
+        for (callbackIndex = 0; callbackIndex < BIOS_BDA_COM_PORTS; ++callbackIndex)
             biosDataArea[callbackIndex] = (WORD)(VddCommIsFitted(&g_Comm, callbackIndex) ? g_Comm.Ports[callbackIndex].BasePort : 0); }
-      biosDataArea[4] = (WORD)(VddLptIsFitted(&g_Comm, 0) ? 0x0378 : 0);   /* LPT1          */
-      biosDataArea[5] = 0; biosDataArea[6] = 0; }                         /* LPT2..LPT3: none fitted   */
+      biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE] = (WORD)(VddLptIsFitted(&g_Comm, 0) ? LPT_DEFAULT_BASE : 0);   /* LPT1          */
+      biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE + 1] = 0; biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE + 2] = 0; }                         /* LPT2..LPT3: none fitted   */
     /* ── ★★ 000E, 0010, 0013 AND THE EBDA, FROM THE FUNCTIONS INT 11h/12h CALL. (#253)
          0040:000E is LPT4 on a PC and the EBDA segment on an AT and later; this block
          used to zero it as "LPT4: none", which on an AT reads as "no EBDA" -- while
@@ -32298,7 +32298,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
               if (text[index] < '0' || text[index] > '9') break;
               number = number * DECIMAL_RADIX + (text[index] - '0');
           }
-          if (bytesRead && text[0] >= '0' && text[0] <= '9' && number <= 100) {
+          if (bytesRead && text[0] >= '0' && text[0] <= '9' && number <= UI_TICK_MS_MAX) {
               g_UiTickMinimumMs = number;
               SettingsNoteOverride(SET_UITICK, "cfg\\uitick.txt (ms)", (DWORD)number);
           }
@@ -32343,7 +32343,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           ReadFile(mouseSensitivityFile, text, sizeof text, &bytesRead, NULL); CloseHandle(mouseSensitivityFile);
           for (index2 = 0; index2 < (INT)bytesRead; ++index2) { if (text[index2] < '0' || text[index2] > '9') break;
                                           value2 = value2 * DECIMAL_RADIX + (text[index2] - '0'); }
-          if (value2 >= 10 && value2 <= 1000) {
+          if (value2 >= MOUSE_SENSITIVITY_MIN && value2 <= MOUSE_SENSITIVITY_MAX) {
               g_MouseSensitivity = value2;
               SettingsNoteOverride(SET_MSENS, "cfg\\msens.txt", (DWORD)value2);
           }
@@ -32361,7 +32361,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           ReadFile(cpuReferenceFile, text, sizeof text, &bytesRead, NULL); CloseHandle(cpuReferenceFile);
           for (index2 = 0; index2 < (INT)bytesRead; ++index2) { if (text[index2] < '0' || text[index2] > '9') break;
                                           sbValue = sbValue * DECIMAL_RADIX_U + (UINT)(text[index2] - '0'); }
-          if (sbValue >= 1u && sbValue <= 100000u) g_CpuSpeedReferenceMhz = sbValue;
+          if (sbValue >= CPU_REFERENCE_MHZ_MIN_U && sbValue <= CPU_REFERENCE_MHZ_MAX_U) g_CpuSpeedReferenceMhz = sbValue;
       } }
     { HANDLE cpuSpeedFile = CreateFileA(CPUSPD_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
@@ -32596,7 +32596,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
            The selector has a 64 KB limit, so this is the whole of it minus the header
            image we place at its base. Nothing else names this quantity to the guest. */
         VDM_SET16(tib, VTIB_ECX, (WORD)g_WowEntryCx);
-        VDM_REG(tib, VTIB_EAX) = 0x4B4F;
+        VDM_REG(tib, VTIB_EAX) = WOW_KRNL386_ENTRY_AX;
         cursor = LogPut(cursor, "STAGE2: WOW entry -- krnl386 in V86 at 0x");
         cursor = LogHex(cursor, image.CodeSegment); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, image.InstructionPointer);
         cursor = LogPut(cursor, " DS=0x"); cursor = LogHex(cursor, g_WowEntryDs);
@@ -32633,20 +32633,20 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
        for the shell, not the program. ExecBegin() now enters the child with IF set;
        p_ifst agrees with all three oracles. */
     if (g_QiVif) {
-        volatile BYTE *trampoline = (volatile BYTE *)(ULONG_PTR)(((DWORD)DOS_HDLR_SEG << PARAGRAPH_SHIFT) + 0x60);
+        volatile BYTE *trampoline = (volatile BYTE *)(ULONG_PTR)(((DWORD)DOS_HDLR_SEG << PARAGRAPH_SHIFT) + DOS_HDLR_TRAMPOLINE_OFF);
         /* ⚠ s82: 0x60-0x65 is DPMI callback slot 0 and half of slot 1, planted ABOVE
              (dos_layout.h). Keep what was there; the exec loop puts it back at the first
              exit outside the trampoline. Opt-in, this never mattered; default, it would
              send a client's first callback into `sti; jmp far <program entry>`.
            (#248: the callback slots moved to 0x90, so these bytes are now unused; the
              save/restore stays because it costs nothing and keeps the area as found.) */
-        { INT item; for (item = 0; item < 6; ++item) g_TrampolineSave[item] = trampoline[item]; g_TrampolineSaved = 1; }
-        trampoline[0] = 0xFB;                                   /* sti                       */
-        trampoline[1] = 0xEA;                                   /* jmp far cs:ip             */
+        { INT item; for (item = 0; item < DOS_HDLR_TRAMPOLINE_SIZE; ++item) g_TrampolineSave[item] = trampoline[item]; g_TrampolineSaved = 1; }
+        trampoline[0] = X86_OP_STI;                                   /* sti                       */
+        trampoline[1] = X86_OP_JMP_FAR;                                   /* jmp far cs:ip             */
         trampoline[2] = (BYTE)image.InstructionPointer; trampoline[3] = (BYTE)(image.InstructionPointer >> BYTE_SHIFT);
         trampoline[4] = (BYTE)image.CodeSegment; trampoline[5] = (BYTE)(image.CodeSegment >> BYTE_SHIFT);
         VDM_REG(tib, VTIB_CS)  = DOS_HDLR_SEG;
-        VDM_REG(tib, VTIB_EIP) = 0x60;
+        VDM_REG(tib, VTIB_EIP) = DOS_HDLR_TRAMPOLINE_OFF;
     }
     /* Session 11: the kernel's deliverability test for a V86 frame on a VME CPU follows
        EFLAGS.VIF, not IF (observed: VIP set and delivery deferred). Starting the guest with
@@ -32654,7 +32654,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
        view -- it just sets VIP and defers. Opt-in until the rig confirms it. */
     if (g_QiVif) VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_VIF;
     if (!image.IsExe)                                        /* .COM near-ret guard */
-        *(volatile WORD *)(((DWORD)DOS_PSP_SEG << PARAGRAPH_SHIFT) + 0xFFFE) = 0;
+        *(volatile WORD *)(((DWORD)DOS_PSP_SEG << PARAGRAPH_SHIFT) + DOS_COM_STACK_TOP) = 0;
 
     /* Every stub the host plants in DOS_HDLR_SEG is planted by a different piece of
        start-up code with its own idea of a free offset. Verify the ones a guest can
@@ -32663,10 +32663,10 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
        mouse move) names nothing. */
     {   volatile BYTE *handlerSegment = (volatile BYTE *)(DOS_HDLR_SEG << PARAGRAPH_SHIFT);
         if (handlerSegment[MS_CB_RET_OFF] != VDM_BOP0 || handlerSegment[MS_CB_RET_OFF + 1] != VDM_BOP1
-            || handlerSegment[MS_CB_RET_OFF + 2] != MS_CB_BOP) {
+            || handlerSegment[MS_CB_RET_OFF + VDM_BOP_NUMBER_OFFSET] != MS_CB_BOP) {
             cursor = LogPut(cursor, "STAGE2: *** STUB OVERWRITTEN at DOS_HDLR_SEG:0x");
             cursor = LogHex(cursor, MS_CB_RET_OFF); cursor = LogPut(cursor, " (mouse callback return): bytes ");
-            cursor = LogDump(cursor, (const VOID *)(handlerSegment + MS_CB_RET_OFF), 4); cursor = LogPut(cursor, "\r\n");
+            cursor = LogDump(cursor, (const VOID *)(handlerSegment + MS_CB_RET_OFF), VDM_BOP_STUB_SIZE); cursor = LogPut(cursor, "\r\n");
         }
     }
     cursor = LogPut(cursor, image.IsExe ? "STAGE2: running .EXE (entry 0x"
@@ -32707,7 +32707,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          refused rather than silently stealing it from the system. */
     {   UINT number, count = 0;
         volatile BYTE *controlBytes = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_CTAB_SEG << PARAGRAPH_SHIFT);
-        for (number = 0; number < 256; ++number) {
+        for (number = 0; number < IVT_VECTORS; ++number) {
             INT wired = (number == VECTOR_TIMER || number == VECTOR_VIDEO || number == VECTOR_SERIAL || number == VECTOR_KEYBOARD_SERVICES || number == VECTOR_TIME
                          || number == VECTOR_NETWORK || number == VECTOR_NETBIOS);
             INT user  = (number >= VECTOR_USER_RANGE1_FIRST && number <= VECTOR_USER_RANGE1_LAST) || (number >= VECTOR_USER_RANGE2_FIRST && number <= VECTOR_USER_RANGE2_LAST)
@@ -32719,7 +32719,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 gateCursor = LogPut(gateCursor, user ? " -- no generic stub left; NOT delivered\r\n"
                                    : " -- a system vector; NOT delivered (user vectors only)\r\n");
             } else {
-                UINT offset = DOS_GENSTUB_OFF + count * 4;
+                UINT offset = DOS_GENSTUB_OFF + count * DOS_GENSTUB_SIZE;
                 controlBytes[offset + 0] = VDM_BOP0; controlBytes[offset + 1] = VDM_BOP1;
                 controlBytes[offset + VDM_BOP_NUMBER_OFFSET] = DOS_GENSTUB_BOP; controlBytes[offset + VDM_BOP_LENGTH] = X86_OP_IRET;            /* IRET */
                 g_GenericStubVector[count] = (BYTE)number;
@@ -32760,7 +32760,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          only takes a whole allocation. VirtualQuery answers it for the cost of one log
          line, and it is worth far more than another guess at a heuristic. */
     { MEMORY_BASIC_INFORMATION regionInfo;
-      if (VirtualQuery((LPCVOID)(ULONG_PTR)0xA0000, &regionInfo, sizeof regionInfo) == sizeof regionInfo) {
+      if (VirtualQuery((LPCVOID)(ULONG_PTR)VIDEO_APERTURE_BASE, &regionInfo, sizeof regionInfo) == sizeof regionInfo) {
           cursor = LogPut(cursor, "STAGE2: A0000 region: alloc_base=0x");
           cursor = LogHex(cursor, (DWORD)(ULONG_PTR)regionInfo.AllocationBase);
           cursor = LogPut(cursor, " base=0x");   cursor = LogHex(cursor, (DWORD)(ULONG_PTR)regionInfo.BaseAddress);
@@ -32769,7 +32769,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           cursor = LogPut(cursor, " type=0x");   cursor = LogHex(cursor, regionInfo.Type);
           cursor = LogPut(cursor, " prot=0x");   cursor = LogHex(cursor, regionInfo.Protect);
           cursor = LogPut(cursor, " allocprot=0x"); cursor = LogHex(cursor, regionInfo.AllocationProtect);
-          cursor = LogPut(cursor, (regionInfo.AllocationBase == (LPVOID)(ULONG_PTR)0xA0000)
+          cursor = LogPut(cursor, (regionInfo.AllocationBase == (LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE)
                         ? "  -> OWN ALLOCATION: remappable\r\n"
                         : "  -> inside a larger reservation: NOT remappable in place\r\n");
           LogAppend(LOG_PATH, base, cursor); cursor = base;

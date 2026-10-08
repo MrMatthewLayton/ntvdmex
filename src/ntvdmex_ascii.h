@@ -12,6 +12,7 @@
 #define ASCII_END_OF_FILE   0x1A    /* ^Z                                        */
 #define ASCII_SPACE         0x20    /* and the first printable character         */
 #define ASCII_CASE_BIT      0x20    /* 'a' - 'A'                                 */
+#define ASCII_DELETE        0x7F    /* one past the last printable character     */
 
 /* Reading a number from text, one digit at a time. */
 #define DECIMAL_RADIX       10

@@ -21,6 +21,8 @@
 #define DOS_HDLR_INT67_STUB_OFF 0x0048
 #define DOS_HDLR_INT09_STUB_OFF 0x004C  /* BOP 09h ; IRET                               */
 #define DOS_HDLR_INT09_STUB_END 0x0050
+#define DOS_HDLR_TRAMPOLINE_OFF  0x0060  /* qimode VIF: sti ; jmp far entry  */
+#define DOS_HDLR_TRAMPOLINE_SIZE 6
 /* ── THE CURRENT DRIVE, IN ONE PLACE. (session 56) ───────────────────────────
      Three routes ask this machine what drive it is on -- INT 21h AH=19h, the
      WOW32 select-drive thunk (id 0xc8), and krnl386's own cached copy, which
@@ -255,6 +257,8 @@
    program block loses 0x90 paragraphs, which is what LASTDRIVE=Z costs on a
    real PC too. */
 #define DOS_LASTDRIVE     26
+#define DOS_DRIVE_LETTERS 26        /* A: to Z:                                 */
+#define DOS_DRIVE_C       2         /* drive numbers count from A: = 0          */
 #define DOS_CDS_PARAS     0x8F      /* 26 * 88 = 2288 bytes = 143 paragraphs        */
 #define DOS_WOW_TBL_OFF   0x0370   /* 11 far pointers = 44 bytes                */
 #define DOS_WOW_TBL_N     11
@@ -328,6 +332,7 @@
 #define DOS_INT2F_TBL_A   0x04E0   /* 64 bytes: DL=0 and DL=4 share this     */
 #define DOS_INT2F_TBL_B   0x0520   /* 64 bytes: DL=2                         */
 #define DOS_INT2F_TBL_C   0x0560   /* 64 bytes: DL=8                         */
+#define DOS_INT2F_TBLS_LEN 192     /* A, B and C together                    */
 /* ...ending at 0x5A0, well inside the block, which runs to 0x6F0 (linear 0xFF0,
    the next MCB header). */
 /* ── GH #54: INT 15h AH=C0h's SYSTEM CONFIGURATION TABLE, 10 bytes. ──────────────
