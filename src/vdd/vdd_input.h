@@ -10,6 +10,14 @@
 #ifndef NTVDMEX_VDD_INPUT_H
 #define NTVDMEX_VDD_INPUT_H
 
+/* A key event's flags, as the host passes them on. */
+#define INPUT_KEY_MAKE      0
+#define INPUT_KEY_BREAK     1
+#define INPUT_KEY_NORMAL    0
+#define INPUT_KEY_EXTENDED  1       /* E0-prefixed */
+#define INPUT_RELEASED      0
+#define INPUT_PRESSED       1
+
 #include "vdd_bus.h"
 #include "../dos/bios_bda_fields.h"   /* the BDA's fields */
 

@@ -1479,7 +1479,7 @@ static VOID VideoScrollUp(PVIDEO_STATE state, INT lines, INT top, INT left,
                       INT bottom, INT right, BYTE attribute)
 {
     INT row, column;
-    if (state->ModeKind != VIDEO_KIND_TEXT) { VideoGraphicsScroll(state, lines, top, left, bottom, right, attribute, 1); return; }
+    if (state->ModeKind != VIDEO_KIND_TEXT) { VideoGraphicsScroll(state, lines, top, left, bottom, right, attribute, VIDEO_SCROLL_UP); return; }
     if (lines <= 0 || lines > (bottom - top + 1)) {
         for (row = top; row <= bottom; ++row)
             for (column = left; column <= right; ++column) { BYTE *cellPointer = VideoCell(state, row, column); cellPointer[0]=' '; cellPointer[1]=attribute; }
@@ -1992,7 +1992,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
           if (VideoVesaFindText(VddGetCx(registers), &textColumns, &textRows, &textCellHeight)) {   /* a TEXT mode: answer in characters */
               BYTE *buffer = (BYTE *)VddMapFlat(state->Bus, registers->Es, (WORD)registers->Edi);
               UINT textPageBytes = (UINT)textColumns * textRows * VIDEO_CELL_BYTES;
-              VideoVesaNote(state, VIDEO_VBE_MODE_INFO, VddGetCx(registers), 1);
+              VideoVesaNote(state, VIDEO_VBE_MODE_INFO, VddGetCx(registers), TRUE);
               for (index = 0; index < VIDEO_MODE_INFO_BYTES; ++index) buffer[index] = 0;
               VideoWrite16(buffer + VIDEO_MODE_INFO_ATTRIBUTES, VIDEO_MODE_ATTRIBUTES_TEXT);              /* supported|opt info|BIOS output|colour; bit 4 clear = TEXT */
               buffer[VIDEO_MODE_INFO_WINDOW_A_ATTRIBUTES] = VIDEO_WINDOW_READ_WRITE; buffer[VIDEO_MODE_INFO_WINDOW_B_ATTRIBUTES] = 0x00;         /* WinA r/w/exists; WinB none    */
@@ -2136,12 +2136,12 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
                  then the call will fail." A text mode has none (its ModeInfoBlock says
                  D7 = 0), so fail before anything changes (#226; we used to accept it). */
               if (VddGetBx(registers) & VIDEO_VBE_MODE_LFB) {
-                  VideoVesaNote(state, VIDEO_VBE_SET_MODE, VddGetBx(registers), 0);
+                  VideoVesaNote(state, VIDEO_VBE_SET_MODE, VddGetBx(registers), FALSE);
                   state->VesaSetBx = VddGetBx(registers); state->IsVesaSetSeen = 1; state->IsVesaSetOk = 0;
                   VddSetAx(registers, VIDEO_VBE_FAILED);
                   break;
               }
-              VideoVesaNote(state, VIDEO_VBE_SET_MODE, VddGetBx(registers), 1);
+              VideoVesaNote(state, VIDEO_VBE_SET_MODE, VddGetBx(registers), TRUE);
               state->VesaSetBx = VddGetBx(registers); state->IsVesaSetSeen = 1; state->IsVesaSetOk = 1;
               VddSetAh(&modeRegisters, VIDEO_FUNCTION_SET_MODE); VddSetAl(&modeRegisters, (BYTE)(VIDEO_MODE_TEXT_80 | ((VddGetBx(registers) & VIDEO_VBE_MODE_NO_CLEAR) ? VIDEO_MODE_NO_CLEAR : 0x00)));
               VideoInt10(state, &modeRegisters);
@@ -2907,7 +2907,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         BYTE attribute = (BYTE)(VddGetBx(registers) >> BYTE_SHIFT);
         INT row, column, step;
         if (state->ModeKind != VIDEO_KIND_TEXT) {              /* graphics: pixels, BH = fill colour (#252) */
-            VideoGraphicsScroll(state, count, top, left, bottom, right, attribute, 0);
+            VideoGraphicsScroll(state, count, top, left, bottom, right, attribute, VIDEO_SCROLL_DOWN);
             break;
         }
         if (!count || count > (bottom - top + 1)) {               /* 0 or oversized = clear  */
@@ -3432,7 +3432,7 @@ VOID VddVideoPlanarWrite(PVIDEO_STATE state, UINT32 offset, BYTE cpu)
                                 if (offset > site->High) site->High = offset; site->Count++; }
         else                  state->WriteSitesLost++;
     }
-    VideoCacheSiteNote(state, offset, 1);
+    VideoCacheSiteNote(state, offset, X86_ACCESS_WRITE);
     if (offset != state->WatchOffset) { VideoPlanarWrite1(state, offset, cpu); return; }
     registers.Pc = state->GuestPc ? state->GuestPc() : 0;
     registers.WriteMode = (BYTE)(state->WriteMode & VIDEO_GC_WRITE_MODE_MASK); registers.MapMask = state->MapMask;
@@ -3466,7 +3466,7 @@ BYTE VddVideoPlanarRead(PVIDEO_STATE state, UINT32 offset)
             else                  state->CompareSitesLost++;
         }
     }
-    VideoCacheSiteNote(state, offset, 0);
+    VideoCacheSiteNote(state, offset, X86_ACCESS_READ);
     if (offset >= VIDEO_PLANE_SIZE) return VIDEO_FLOATING_BUS;
     for (plane = 0; plane < VIDEO_PLANES; ++plane) state->Latch[plane] = VideoPlaneBytes(state,plane)[offset];   /* load latches    */
     state->ReadModeHistogram[state->ReadMode & 1]++;

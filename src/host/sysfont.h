@@ -33,6 +33,8 @@
 #include "vga_font.h"
 
 #define SYSFONT_MAX_HEIGHT 32
+#define SYSFONT_GLYPH      0      /* SysFontFit: an ordinary character ...      */
+#define SYSFONT_BOX_BLOCK  1      /* ... or a box/block one that reaches its edges */
 #define SYSFONT_CELL_WIDTH 8            /* a VGA character cell                       */
 #define SYSFONT_TERMINAL_HEIGHT 12      /* Terminal's 8x12: the 8x14/8x16 source       */
 #define SYSFONT_CENTRE      2
@@ -416,9 +418,9 @@ static PCSTR SysFontBuildInto(PCSTR faceName, SYSFONT_TABLES *tables, SYSFONT_RE
             INT isText = fixedsys.IsOk && SysFontIsText(character, &ansi);
             INT isBoxBlock = SysFontIsBoxBlock(character);
             if (terminal8.IsOk) SysFontFit(&terminal8, (BYTE)character, isBoxBlock, tables->Table8[character], VGA_FONT8_HEIGHT, 0);
-            if (isText)     SysFontFit(&fixedsys, ansi, 0, tables->Table14[character], VGA_FONT14_HEIGHT, cropFixedsys);
+            if (isText)     SysFontFit(&fixedsys, ansi, SYSFONT_GLYPH, tables->Table14[character], VGA_FONT14_HEIGHT, cropFixedsys);
             else if (face14) SysFontFit(face14, (BYTE)character, isBoxBlock, tables->Table14[character], VGA_FONT14_HEIGHT, 0);
-            if (isText)     SysFontFit(&fixedsys, ansi, 0, tables->Table16[character], VGA_FONT16_HEIGHT, cropFixedsys);
+            if (isText)     SysFontFit(&fixedsys, ansi, SYSFONT_GLYPH, tables->Table16[character], VGA_FONT16_HEIGHT, cropFixedsys);
             else if (face16) SysFontFit(face16, (BYTE)character, isBoxBlock, tables->Table16[character], VGA_FONT16_HEIGHT, 0);
         }
     }

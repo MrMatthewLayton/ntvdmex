@@ -42,6 +42,10 @@
 #ifndef NTVDMEX_VDD_OPL_H
 #define NTVDMEX_VDD_OPL_H
 
+/* VddOplOperatorIndex: which operator of a channel. */
+#define OPL_MODULATOR 0
+#define OPL_CARRIER   1
+
 #include "vdd_bus.h"
 
 #define OPL_PORT_FIRST               0x388

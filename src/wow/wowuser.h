@@ -221,6 +221,8 @@
 #define WOWUSER_CLASS32_SIZE         96      /* the real Win32 class name behind a class  */
 #define WOWUSER_FULL_CLASS_NAME_SIZE 160     /* WOWWIN_CLASS_PREFIX + a guest class name  */
 #define WOWUSER_TASK_NONE16          0xFFFF  /* krnl386's current-task word: no task     */
+#define WOWUSER_PAINT_WINDOW         0       /* WowUserDefaultPaint: a window ...         */
+#define WOWUSER_PAINT_DIALOG         1       /* ... or a dialog (the dialog colour)       */
 #define WOWUSER_KRNL_CURRENT_TASK    0x228   /* that word's offset in krnl386's DGROUP    */
 #define WOW_TDB_INSTANCE             0x1C    /* a task database's hInstance (InitTask writes it) */
 #define WOW_INSTANCE_FROM_SELECTOR   0xFFFE  /* a task's SS with the low bit clear = its hInstance */
@@ -4228,7 +4230,7 @@ static LRESULT WowUserDlgDefault(PWOWUSER_WINDOW window, WORD dialog16, WORD mes
         *noteLengthInOut = noteLength; return brush16;
     }
     if (message == WM_PAINT) {
-        WowUserDefaultPaint(window, 1);
+        WowUserDefaultPaint(window, WOWUSER_PAINT_DIALOG);
         WowNotePut(note, noteCapacity, &noteLength, " -> WM_PAINT: erased what was owed, as DefDlgProc");
         *noteLengthInOut = noteLength;
         return 0;
@@ -8723,10 +8725,10 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
            where they go on real hardware, so a guest that asserts DTR and reads
            MSR back in loopback sees DSR exactly as the port test does. */
         switch (function) {
-        case SETDTR: WowCommDtr(portId, 1); break;  /* SETDTR */
-        case CLRDTR: WowCommDtr(portId, 0); break;  /* CLRDTR */
-        case SETRTS: WowCommRts(portId, 1); break;  /* SETRTS */
-        case CLRRTS: WowCommRts(portId, 0); break;  /* CLRRTS */
+        case SETDTR: WowCommDtr(portId, TRUE); break;  /* SETDTR */
+        case CLRDTR: WowCommDtr(portId, FALSE); break;  /* CLRDTR */
+        case SETRTS: WowCommRts(portId, TRUE); break;  /* SETRTS */
+        case CLRRTS: WowCommRts(portId, FALSE); break;  /* CLRRTS */
         default: break;
         }
         WowNotePut(note, noteCapacity, &noteLength, "EscapeCommFunction fn=0x");
@@ -8857,7 +8859,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
         if (message16 == WM_PAINT) {
-            WowUserDefaultPaint(window, 0);
+            WowUserDefaultPaint(window, WOWUSER_PAINT_WINDOW);
             WowNotePut(note, noteCapacity, &noteLength, " -> WM_PAINT: erased what was owed (class brush)");
             Wow32SetReturn(frame, 0);
             return 1;
@@ -9096,7 +9098,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 have = 1; shouldErase = 1;
             }
             ValidateRect(window->Window32, NULL);
-            while (WowMsgTake(window16, WM_PAINT16, WM_PAINT16, 1, &pending)) ++dropped;
+            while (WowMsgTake(window16, WM_PAINT16, WM_PAINT16, PM_REMOVE, &pending)) ++dropped;
             if (dropped) { WowNotePut(note, noteCapacity, &noteLength, " [queued paints absorbed 0x");
                            WowNoteHex(note, noteCapacity, &noteLength, (DWORD)dropped, WOW_HEX_BYTE_DIGITS);
                            WowNotePut(note, noteCapacity, &noteLength, "]"); }
@@ -9813,7 +9815,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
         if (message16 == WM_PAINT) {
-            WowUserDefaultPaint(WowUserFindWindow(window16), 0);
+            WowUserDefaultPaint(WowUserFindWindow(window16), WOWUSER_PAINT_WINDOW);
             WowNotePut(note, noteCapacity, &noteLength, " -> WM_PAINT: erased what was owed (class brush)");
             Wow32SetReturn(frame, 0);
             return 1;

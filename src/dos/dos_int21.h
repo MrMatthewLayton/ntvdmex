@@ -9,6 +9,10 @@
 #ifndef DOS_INT21_H
 #define DOS_INT21_H
 
+/* DosFileTimeZoned: which clock a time is read in. */
+#define DOS_TIME_UTC   0
+#define DOS_TIME_LOCAL 1
+
 #include <windows.h>
 #include <stdint.h>
 #include "ntvdm.h"

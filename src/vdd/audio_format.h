@@ -7,5 +7,7 @@
 #define NTVDMEX_VDD_AUDIO_FORMAT_H
 
 #define AUDIO_STEREO_CHANNELS 2         /* a frame is an L/R pair of samples */
+#define AUDIO_MONO            0         /* a renderer's stereo flag          */
+#define AUDIO_STEREO          1
 
 #endif /* NTVDMEX_VDD_AUDIO_FORMAT_H */

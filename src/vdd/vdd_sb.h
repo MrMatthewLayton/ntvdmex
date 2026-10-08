@@ -27,6 +27,11 @@
 #ifndef NTVDMEX_VDD_SB_H
 #define NTVDMEX_VDD_SB_H
 
+/* SbStartBlock: a DMA block's mode. */
+#define SB_SINGLE_CYCLE 0
+#define SB_AUTO_INIT    1
+#include "audio_format.h"    /* defines only: AUDIO_MONO / AUDIO_STEREO for SbRender */
+
 #include "vdd_bus.h"
 #include "vdd_dma.h"
 #include "vdd_opl.h"

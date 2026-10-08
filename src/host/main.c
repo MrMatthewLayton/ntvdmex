@@ -2448,7 +2448,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     {   DWORD index, bopCount = 0;
         for (index = 0; index + VDM_BOP_LENGTH < bytesRead; ++index)
             if (g_ExecFileBuffer[index] == VDM_BOP0 && g_ExecFileBuffer[index+1] == VDM_BOP1 && g_ExecFileBuffer[index+2] == NTVDM_BOP_CMD) ++bopCount;
-        if (bopCount >= EXEC_SHELL_BOP_SITES_MIN) DosInt21SetShellPsp(machine, child, 1); }
+        if (bopCount >= EXEC_SHELL_BOP_SITES_MIN) DosInt21SetShellPsp(machine, child, TRUE); }
     /* ...and so is every program in Windows' own SYSTEM directory. (s81, user: `mem` ->
        "Incorrect DOS version".) Those are XP's DOS tools -- MEM, EDIT, DEBUG, EDLIN,
        EXE2BIN -- built for the DOS 5.00 that stock reports to everything; MEM checks for
@@ -2464,7 +2464,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
                    || (shortSystemLength && shortSystemLength < sizeof shortSystemDirectory && directoryLength == shortSystemLength
                     && CompareStringA(LOCALE_SYSTEM_DEFAULT, NORM_IGNORECASE,
                                       machine->ExecPath, (INT)directoryLength, shortSystemDirectory, (INT)shortSystemLength) == CSTR_EQUAL))) {
-            DosInt21SetShellPsp(machine, child, 1);
+            DosInt21SetShellPsp(machine, child, TRUE);
             cursor = LogPut(cursor, "  EXEC: an XP DOS tool (Windows' system directory) -- told DOS 5.00, as SETVER would\r\n");
         } }
     /* The child gets the vectors as they stand NOW, so whatever it installs is
@@ -3247,7 +3247,7 @@ INT WowCommRead(INT port, BYTE *buffer, INT count)
     /* Straight off the same receive ring the guest would see through RBR. */
     while (got < count && g_Comm.Ports[port].ReceiveLength) {
         UINT32 value = 0;
-        VddBusIo(&g_Bus, (WORD)(g_Comm.Ports[port].BasePort + COMM_RBR), 1, 1, &value);
+        VddBusIo(&g_Bus, (WORD)(g_Comm.Ports[port].BasePort + COMM_RBR), 1, VDD_IO_IN, &value);
         buffer[got++] = (BYTE)value;
     }
     return got;
@@ -3258,7 +3258,7 @@ INT WowCommWrite(INT port, const BYTE *buffer, INT count)
     if (!WowCommValid(port)) return WOWUSER_COMM_FAILED;
     for (index = 0; index < count; ++index) {
         UINT32 value = buffer[index];
-        VddBusIo(&g_Bus, (WORD)(g_Comm.Ports[port].BasePort + COMM_RBR), 1, 0, &value);
+        VddBusIo(&g_Bus, (WORD)(g_Comm.Ports[port].BasePort + COMM_RBR), 1, VDD_IO_OUT, &value);
     }
     return count;
 }
@@ -3271,9 +3271,9 @@ static VOID WowCommMcr(INT port, UINT set, UINT clear)
 {
     UINT32 value = 0;
     if (!WowCommValid(port)) return;
-    VddBusIo(&g_Bus, (WORD)(g_Comm.Ports[port].BasePort + COMM_MCR), 1, 1, &value);
+    VddBusIo(&g_Bus, (WORD)(g_Comm.Ports[port].BasePort + COMM_MCR), 1, VDD_IO_IN, &value);
     value = (value | set) & ~clear;
-    VddBusIo(&g_Bus, (WORD)(g_Comm.Ports[port].BasePort + COMM_MCR), 1, 0, &value);
+    VddBusIo(&g_Bus, (WORD)(g_Comm.Ports[port].BasePort + COMM_MCR), 1, VDD_IO_OUT, &value);
 }
 /* Named rather than exposing MCR bit numbers to the WOW layer: that header must
    not need a VDD header to compile, and "DTR" is the thing the caller means. */
@@ -4646,7 +4646,7 @@ static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR b
            a TSR's). Without this Doom's SETUP closed the shell's stdout for good. */
         DosHandlesPop(machine, machine->IsTsrPending);
         if (g_Exec[depth].ChildSegment && !machine->IsTsrPending)
-            DosInt21SetShellPsp(machine, g_Exec[depth].ChildSegment, 0);   /* #208: its PSP is gone */
+            DosInt21SetShellPsp(machine, g_Exec[depth].ChildSegment, FALSE);   /* #208: its PSP is gone */
         MouseChildExited();          /* s81: the shell does not own the mouse */
         /* #214: A PROGRAM THAT HAS ENDED MUST NOT KEEP SOUNDING. Close Program on Doom
            left its MIDI notes hanging: the emulated MPU-401 was reset, but the notes
@@ -5205,7 +5205,7 @@ static INT LaunchShellVdm(VOID)
                  "\r\n\r\nNTVDMEX has to be the machine's VDM before it can open a "
                  "DOS session of its own.\r\n\r\nRun:    ntvdmhost.exe /install\r\n"
                  "(as an administrator), then try again.");
-            InstallReport(message, 0);
+            InstallReport(message, FALSE);
             return 1;
         } }
 
@@ -5219,7 +5219,7 @@ static INT LaunchShellVdm(VOID)
     if (handle == INVALID_HANDLE_VALUE) {
         LogPut(message, "NTVDMEX could not write its launch stub to:\r\n\r\n");
         LogPut(message + lstrlenA(message), stub);
-        InstallReport(message, 0);
+        InstallReport(message, FALSE);
         return 1;
     }
     {   static const BYTE exitStub[] = { X86_OP_MOV_AH_IMM, DOS_FN_EXIT, X86_OP_INT, VECTOR_DOS };   /* mov ah,4Ch; int 21h */
@@ -5230,7 +5230,7 @@ static INT LaunchShellVdm(VOID)
         if (!isWritten || bytesWritten != sizeof exitStub) {
             LogPut(message, "NTVDMEX wrote an incomplete launch stub to:\r\n\r\n");
             LogPut(message + lstrlenA(message), stub);
-            InstallReport(message, 0);
+            InstallReport(message, FALSE);
             return 1;
         } }
 
@@ -5241,7 +5241,7 @@ static INT LaunchShellVdm(VOID)
         LogPut(message + lstrlenA(message), stub);
         LogPut(message + lstrlenA(message), "\r\nfailed with error 0x");
         { PSTR end = message + lstrlenA(message); end = LogHex(end, GetLastError()); *end = 0; }
-        InstallReport(message, 0);
+        InstallReport(message, FALSE);
         return 1;
     }
     CloseHandle(processInfo.hThread);
@@ -7242,7 +7242,7 @@ static VOID HostKeyTypematic(VOID)
        the same mistake the PIT catch-up made, and it is worse here -- a burst of
        makes is indistinguishable to the guest from the player hammering the key. */
     g_TypematicDue = now.QuadPart + QpcTicks(KEY_TYPEMATIC_PERIOD_US);
-    HostKeyScancode(g_TypematicScanCode, g_TypematicExtended, 0);
+    HostKeyScancode(g_TypematicScanCode, g_TypematicExtended, INPUT_KEY_MAKE);
     g_TypematicSent++;
 }
 
@@ -7280,9 +7280,9 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
                   INT button = 0;
                   ++index;
                   if (index < bytesRead && script[index] >= '0' && script[index] <= '2') { button = script[index] - '0'; ++index; }
-                  HostMouseButton(button, 1);
+                  HostMouseButton(button, INPUT_PRESSED);
                   Sleep(SYNTHKEY_HOLD_MS);
-                  HostMouseButton(button, 0);
+                  HostMouseButton(button, INPUT_RELEASED);
                   Sleep(SYNTHKEY_GAP_MS);
                   continue;
               }
@@ -7329,9 +7329,9 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
                   value = (value << NIBBLE_SHIFT) | (DWORD)digit; ++index; ++digits;
               }
               if (!digits) { ++index; continue; }              /* skip a token we do not grok */
-              HostKeyScancode((BYTE)value, extended, 0);
+              HostKeyScancode((BYTE)value, extended, INPUT_KEY_MAKE);
               Sleep(SYNTHKEY_HOLD_MS);                                    /* a human-length hold */
-              HostKeyScancode((BYTE)value, extended, 1);
+              HostKeyScancode((BYTE)value, extended, INPUT_KEY_BREAK);
               Sleep(SYNTHKEY_GAP_MS);
           }
           return 0;
@@ -7348,9 +7348,9 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
            the TOP item -- so a working UP arrow moves the highlight nowhere and a probe
            built on it cannot tell success from failure. DOWN has somewhere to go, and
            staying out of the game keeps the highlight on screen where a screenshot sees it. */
-        HostKeyScancode(INPUT_SCANCODE_DOWN, 1, 0);                   /* INT 09h fills the BIOS ring now */
+        HostKeyScancode(INPUT_SCANCODE_DOWN, INPUT_KEY_EXTENDED, INPUT_KEY_MAKE);                   /* INT 09h fills the BIOS ring now */
         Sleep(SYNTHKEY_GAP_MS);                                      /* menu-paced taps, not a hold */
-        HostKeyScancode(INPUT_SCANCODE_DOWN, 1, 1);                   /* release each time          */
+        HostKeyScancode(INPUT_SCANCODE_DOWN, INPUT_KEY_EXTENDED, INPUT_KEY_BREAK);                   /* release each time          */
         Sleep(SYNTHKEY_GAP_MS);
     }
     return 0;
@@ -7997,9 +7997,9 @@ static VOID HostXms(volatile BYTE *tib)
          this file and in dos_xms.h, and it still stands -- what was wrong was that
          the three ways of ASKING disagreed with each other. */
     case DOS_XMS_FN_GLOBAL_ENABLE_A20: case DOS_XMS_FN_LOCAL_ENABLE_A20:                                   /* enable A20 (global/local) */
-        VddInputSetA20(&g_Input, 1); g_Xms.IsA20Enabled = 1; X_SETAX(1); break;
+        VddInputSetA20(&g_Input, TRUE); g_Xms.IsA20Enabled = 1; X_SETAX(1); break;
     case DOS_XMS_FN_GLOBAL_DISABLE_A20: case DOS_XMS_FN_LOCAL_DISABLE_A20:                                   /* disable A20 */
-        VddInputSetA20(&g_Input, 0); g_Xms.IsA20Enabled = 0; X_SETAX(1); break;
+        VddInputSetA20(&g_Input, FALSE); g_Xms.IsA20Enabled = 0; X_SETAX(1); break;
     case DOS_XMS_FN_QUERY_A20:                                              /* query A20 */
         g_Xms.IsA20Enabled = VddInputGetA20(&g_Input);
         X_SETAX(g_Xms.IsA20Enabled ? 1 : 0); X_SETBL(0); break;
@@ -8912,9 +8912,9 @@ static VOID ExecMachineRestore(INT depth, PSTR *logCursor)
     g_Irq0IsrSince = 0;
     if (VddPitEffectiveReload(&g_Pit) != g_ExecMachine[depth].Pit0) {   /* a game's fast timer */
         UINT32 value = PIT_CONTROL_CHANNEL0_SQUARE, reload = g_ExecMachine[depth].Pit0 & WORD_MASK;
-        VddBusIo(&g_Bus, PIT_PORT_CONTROL, 1, 0, &value);
-        value = reload & BYTE_MASK;        VddBusIo(&g_Bus, PIT_PORT_COUNTER0, 1, 0, &value);
-        value = (reload >> BYTE_SHIFT) & BYTE_MASK; VddBusIo(&g_Bus, PIT_PORT_COUNTER0, 1, 0, &value);
+        VddBusIo(&g_Bus, PIT_PORT_CONTROL, 1, VDD_IO_OUT, &value);
+        value = reload & BYTE_MASK;        VddBusIo(&g_Bus, PIT_PORT_COUNTER0, 1, VDD_IO_OUT, &value);
+        value = (reload >> BYTE_SHIFT) & BYTE_MASK; VddBusIo(&g_Bus, PIT_PORT_COUNTER0, 1, VDD_IO_OUT, &value);
     }
     /* Silence: an auto-init DMA block or a held OPL note would otherwise play on
        into the shell. */
@@ -11146,11 +11146,11 @@ static DWORD WINAPI PasteThread(LPVOID parameter)
         else { BYTE scanCode; INT shift;                           /* #136: on the active layout */
                if (VddInputCharToKey(&g_Input, ch, &scanCode, &shift)) { scan = scanCode; isShifted = (BYTE)shift; } }
         if (!scan) continue;                                  /* not typeable: skipped */
-        if (isShifted) HostKeyScancode(INPUT_SCAN_LEFT_SHIFT, 0, 0);
-        HostKeyScancode(scan, 0, 0);
+        if (isShifted) HostKeyScancode(INPUT_SCAN_LEFT_SHIFT, INPUT_KEY_NORMAL, INPUT_KEY_MAKE);
+        HostKeyScancode(scan, INPUT_KEY_NORMAL, INPUT_KEY_MAKE);
         Sleep(PASTE_KEY_HOLD_MS);
-        HostKeyScancode(scan, 0, 1);
-        if (isShifted) HostKeyScancode(INPUT_SCAN_LEFT_SHIFT, 0, 1);
+        HostKeyScancode(scan, INPUT_KEY_NORMAL, INPUT_KEY_BREAK);
+        if (isShifted) HostKeyScancode(INPUT_SCAN_LEFT_SHIFT, INPUT_KEY_NORMAL, INPUT_KEY_BREAK);
         Sleep(PASTE_KEY_GAP_MS);
     }
     HeapFree(GetProcessHeap(), 0, text);
@@ -11590,7 +11590,7 @@ static VOID OpenProgram(HWND window, PCSTR path)
         return;
     }
     MruAdd(path);
-    if (g_Captured) InputCaptureSet(window, 0);
+    if (g_Captured) InputCaptureSet(window, FALSE);
     shortLength = GetShortPathNameA(path, shortPath, sizeof shortPath);
     if (OpenAtPrompt() && shortLength && shortLength < sizeof shortPath && OpenIsDosImage(path)
         && OpenPromptLine(shortPath, g_Machine->LineLength, line, (INT)sizeof line)
@@ -11631,7 +11631,7 @@ static VOID OpenProgramDialog(HWND window)
     openFile.nMaxFile    = sizeof file;
     openFile.lpstrTitle  = "Open Executable";
     openFile.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
-    if (g_Captured) InputCaptureSet(window, 0);   /* the dialog needs the pointer */
+    if (g_Captured) InputCaptureSet(window, FALSE);   /* the dialog needs the pointer */
     if (GetOpenFileNameA(&openFile)) OpenProgram(window, file);
 }
 
@@ -11834,7 +11834,7 @@ static VOID HostFullscreenToggle(HWND window)
         SetWindowPos(window, HWND_TOP, 0, 0,
                      GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
                      SWP_FRAMECHANGED | SWP_NOACTIVATE);
-        if (PresentDdrawSetFullscreen(&g_PresentDdraw, 1) != 0) {
+        if (PresentDdrawSetFullscreen(&g_PresentDdraw, TRUE) != 0) {
             /* No DirectDraw, or it refused. Do not leave the user in a chromeless
                window that is not fullscreen either -- put it all back. */
             HostFullscreenToggleRestore(window);
@@ -11842,7 +11842,7 @@ static VOID HostFullscreenToggle(HWND window)
         }
         if (g_Captured) FullscreenReleaseHint();          /* #138 */
     } else {
-        PresentDdrawSetFullscreen(&g_PresentDdraw, 0);
+        PresentDdrawSetFullscreen(&g_PresentDdraw, FALSE);
         HostFullscreenToggleRestore(window);
     }
     /* The window just changed shape. If the guest holds the mouse, the ClipCursor
@@ -11878,7 +11878,7 @@ static VOID HostFullscreenToggle(HWND window)
         lineCursor = LogPut(lineCursor, "x");                  lineCursor = LogDecimal(lineCursor, (UINT)g_Video.Frame.Height);
         if (g_Video.Frame.Width && g_Video.Frame.Height) {
             INT frameX, frameY, frameWidth, frameHeight;
-            PresentLayout(g_PresentDdraw.Aspect, g_PresentDdraw.Fit, 1, clientWidth, clientHeight, (INT)g_Video.Frame.Width,
+            PresentLayout(g_PresentDdraw.Aspect, g_PresentDdraw.Fit, PRESENT_LAYOUT_SCREEN, clientWidth, clientHeight, (INT)g_Video.Frame.Width,
                            (INT)g_Video.Frame.Height, &frameX, &frameY, &frameWidth, &frameHeight);   /* #325: what is drawn */
             lineCursor = LogPut(lineCursor, " dest=");  lineCursor = LogDecimal(lineCursor, (UINT)frameWidth);
             lineCursor = LogPut(lineCursor, "x");       lineCursor = LogDecimal(lineCursor, (UINT)frameHeight);
@@ -12257,7 +12257,7 @@ static VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT liv
        pointer back now (we are on the UI thread when `live`), rather than leaving a
        capture that the policy can no longer release by clicking. */
     InterlockedExchange(&g_MouseSeamless, settings->Values[SET_SEAMLESS] ? 1 : 0);
-    if (live && window && g_MouseSeamless && g_Captured) InputCaptureSet(window, 0);
+    if (live && window && g_MouseSeamless && g_Captured) InputCaptureSet(window, FALSE);
     /* The SbDma list is 1|3|5, and 5 is not an 8-bit channel on any real 8237 --
        on an SB16 it is the SIXTEEN-bit one. Selecting it therefore moves H and
        leaves D where it was, rather than pointing the 8-bit engine at a channel
@@ -12965,7 +12965,7 @@ static VOID SettingsFromDialog(NTVDMEX_SETTINGS *settings)
 typedef HRESULT (WINAPI *PFN_ENABLE_THEME_DIALOG_TEXTURE)(HWND, DWORD);
 static HMODULE   g_UxTheme;
 static PFN_ENABLE_THEME_DIALOG_TEXTURE  g_EnableThemeDialogTexture;
-
+enum { SETTINGS_DRIVE_IMAGE = 0, SETTINGS_DRIVE_PHYSICAL = 1 };   /* SettingsFloppy/CdRadios: an image file, or the real drive */
 /* The Processor page says WHICH processor -- the user's own -- so fill the static
    with its brand string. It is read from the same place a DOS tool or Windows shows
    it (HKLM\HARDWARE\...\CentralProcessor\0\ProcessorNameString), trimmed of the
@@ -13068,10 +13068,10 @@ static INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM 
         case IDC_S_SHELL_OWN:    SettingsShellRadios(1); return TRUE;
         case IDC_S_SHELL_BROWSE: SettingsShellBrowse(dialog); return TRUE;
         /* s84: the Drives tab's radio pairs and the three new Browse buttons. */
-        case IDC_S_FLOPPY_PHYS:  SettingsFloppyRadios(1); return TRUE;
-        case IDC_S_FLOPPY_IMG:   SettingsFloppyRadios(0); return TRUE;
-        case IDC_S_CD_PHYS:      SettingsCdRadios(1); return TRUE;
-        case IDC_S_CD_IMG:       SettingsCdRadios(0); return TRUE;
+        case IDC_S_FLOPPY_PHYS:  SettingsFloppyRadios(SETTINGS_DRIVE_PHYSICAL); return TRUE;
+        case IDC_S_FLOPPY_IMG:   SettingsFloppyRadios(SETTINGS_DRIVE_IMAGE); return TRUE;
+        case IDC_S_CD_PHYS:      SettingsCdRadios(SETTINGS_DRIVE_PHYSICAL); return TRUE;
+        case IDC_S_CD_IMG:       SettingsCdRadios(SETTINGS_DRIVE_IMAGE); return TRUE;
         case IDC_S_FLOPPY_BROWSE:
             SettingsBrowse(dialog, IDC_S_FLOPPYA, "Floppy disk images (*.img;*.ima;*.flp)\0*.img;*.ima;*.flp\0"
                             "All files (*.*)\0*.*\0", "Choose a floppy disk image");
@@ -13285,18 +13285,18 @@ static VOID KeyPushMake(LPARAM lParam)
        not silently dropped: the count is how we tell "the OS stopped sending them"
        from "we stopped listening". */
     if (lParam & LPARAM_KEY_PREVIOUS) { g_TypematicOsRepeats++; return; }
-    if (rawScancode && HostKeySpecial(rawScancode, extended, 0)) return;   /* #274: Pause, Ctrl+Break */
-    if (rawScancode) { HostKeyScancode(rawScancode, extended, 0); HostKeyTypematicPress(rawScancode, extended);
-                 ModifierTrack(rawScancode, extended, 1); }
+    if (rawScancode && HostKeySpecial(rawScancode, extended, INPUT_KEY_MAKE)) return;   /* #274: Pause, Ctrl+Break */
+    if (rawScancode) { HostKeyScancode(rawScancode, extended, INPUT_KEY_MAKE); HostKeyTypematicPress(rawScancode, extended);
+                 ModifierTrack(rawScancode, extended, INPUT_PRESSED); }
 }
 static VOID KeyPushBreak(LPARAM lParam)
 {
     BYTE rawScancode = (BYTE)((lParam >> WORD_SHIFT) & BYTE_MASK);
     INT extended = (lParam & LPARAM_KEY_EXTENDED) != 0;
-    if (rawScancode && HostKeySpecial(rawScancode, extended, 1)) return;   /* #274: they send no break */
+    if (rawScancode && HostKeySpecial(rawScancode, extended, INPUT_KEY_BREAK)) return;   /* #274: they send no break */
     if (rawScancode) { HostKeyTypematicRelease(rawScancode, extended);   /* stop repeating first */
-                 HostKeyScancode(rawScancode, extended, 1);
-                 ModifierTrack(rawScancode, extended, 0); }
+                 HostKeyScancode(rawScancode, extended, INPUT_KEY_BREAK);
+                 ModifierTrack(rawScancode, extended, INPUT_RELEASED); }
 }
 /* ── LOSING FOCUS RELEASES THE MODIFIERS. ─────────────────────────────────────────────
      Windows delivers a key's UP to whichever window has focus WHEN IT IS RELEASED. So
@@ -13323,7 +13323,7 @@ static VOID HostReleaseModifiers(VOID)
     for (index = 0; index < MODIFIER_KEYS; ++index)
         if (g_ModifiersDown & (1u << index)) {
             HostKeyTypematicRelease(mods[index].ScanCode, mods[index].IsExtended);
-            HostKeyScancode(mods[index].ScanCode, mods[index].IsExtended, 1);
+            HostKeyScancode(mods[index].ScanCode, mods[index].IsExtended, INPUT_KEY_BREAK);
         }
     g_ModifiersDown = 0;
 }
@@ -13610,12 +13610,12 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
              window polled its mouse, is exactly the behaviour that makes capture
              feel like something being done TO you. */
         if (InterlockedExchange(&g_MouseWantRelease, 0) && g_Captured)
-            InputCaptureSet(window, 0);      /* the program that owned it has exited */
+            InputCaptureSet(window, FALSE);      /* the program that owned it has exited */
         if (CaptureAllowed() && !g_MouseAutoCaptureDone && !g_Captured   /* #136: not seamless */
             && GetForegroundWindow() == window) {
             InterlockedExchange(&g_MouseAutoCaptureDone, 1);
             ++g_MouseAutoCaptureFired;
-            InputCaptureSet(window, 1);
+            InputCaptureSet(window, TRUE);
         }
         StatusUpdate();          /* program name / width / mode / capture, on the UI thread */
         /* Drive the PIT from REAL elapsed time so the BIOS tick (0040:006C) and
@@ -13977,7 +13977,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         /* #154: the text-mode Edit menu -- see g_MarkMode. */
         case IDM_EDIT_MARK:
             if (g_Video.ModeKind == VIDEO_KIND_TEXT) {
-                if (g_Captured) InputCaptureSet(window, 0);   /* the drag needs the pointer */
+                if (g_Captured) InputCaptureSet(window, FALSE);   /* the drag needs the pointer */
                 g_MarkMode = 1; g_MarkDrag = 0; g_SelectionOn = 0; SelectionPublish();
                 g_PresentDdraw.HintText  = "Mark: drag over the text, then Enter (or Edit > Copy). Esc cancels.";
                 g_PresentDdraw.HintUntil = GetTickCount() + FULLSCREEN_HINT_MS;
@@ -13995,7 +13995,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         case IDM_FILE_CLOSEPROG:                       /* #152 -- see CloseProgramNow */
             if (!CloseProgramAvailable()) return 0;     /* greyed; belt and braces */
             if (g_WowLaunch) { DestroyWindow(window); return 0; }   /* Win16: the same as Exit */
-            if (g_Captured) InputCaptureSet(window, 0);   /* the shell does not own the mouse */
+            if (g_Captured) InputCaptureSet(window, FALSE);   /* the shell does not own the mouse */
             InterlockedExchange(&g_CloseRequest, 1);
             return 0;
         case IDM_DISP_FULLSCREEN: HostFullscreenToggle(window); return 0;
@@ -14114,7 +14114,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
     case WM_SYSCHAR:
         return 0;                        /* swallow the menu-mnemonic beep */
     case WM_KILLFOCUS:
-        InputCaptureSet(window, 0);         /* never strand the user in a captured window */
+        InputCaptureSet(window, FALSE);         /* never strand the user in a captured window */
         HostReleaseModifiers();        /* ...nor the guest with Alt held forever     */
         return 0;
     case WM_ENTERSIZEMOVE: g_InSizeMove = 1; break;
@@ -14134,7 +14134,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
              suppresses the Start menu (see the WM_KEYDOWN handler): without suppression
              the menu would steal focus and returning to the window would re-capture
              instantly, making the release feel dead. */
-        if (LOWORD(wParam) != WA_INACTIVE) InputCaptureSet(window, 1);
+        if (LOWORD(wParam) != WA_INACTIVE) InputCaptureSet(window, TRUE);
         HostPauseSet(LOWORD(wParam) == WA_INACTIVE);   /* #219 */
         break;                           /* let DefWindowProc do the focus bookkeeping */
     case WM_KEYDOWN:
@@ -14166,7 +14166,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
              InputCaptureSet) the user lands on a desktop with their mouse back,
              which is what they were asking for by pressing it. */
         if (wParam == VK_LWIN || wParam == VK_RWIN) {
-            if (g_Captured) InputCaptureSet(window, 0);
+            if (g_Captured) InputCaptureSet(window, FALSE);
             /* ── ★ SUPPRESS THE START MENU WITHOUT THE SYSTEM-WIDE HOOK. (s69, user ask) ──
                  The Windows equivalent of e.preventDefault() for a keystroke is a
                  WH_KEYBOARD_LL hook returning nonzero -- and we HAVE that (LowLevelKeyboardProcedure,
@@ -14325,7 +14325,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
              INT 33h this is an ordinary click on an ordinary window. */
         if (message == WM_LBUTTONDOWN && !g_Captured && CaptureAllowed()
             && IsPointOverVideo(window, (INT16)LOWORD(lParam), (INT16)HIWORD(lParam))) {
-            InputCaptureSet(window, 1);
+            InputCaptureSet(window, TRUE);
             return 0;
         }
         /* RULE 6: a mouse-using guest that is released sees no position and no
@@ -14363,7 +14363,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             if (prev != buttons) MouseButtonEdges(prev, buttons); }
         return 0; }
     case WM_DESTROY:
-        HostPauseSet(0);               /* #219: a paused CPU thread must be let go */
+        HostPauseSet(FALSE);               /* #219: a paused CPU thread must be let go */
         /* GIVE THE MACHINE BACK FIRST -- before g_Running, before the audio unwind,
            before anything that can block. Everything below this line is about our
            process; this line is about the user's computer. See HostPanicRelease. */
@@ -15139,16 +15139,16 @@ static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port,
            absent card can conclude it IS present and then wait forever for a
            response that will never come. */
         value = 0;
-        if (!VddBusIo(bus, port, (BYTE)width, 1, &value)) {
+        if (!VddBusIo(bus, port, (BYTE)width, VDD_IO_IN, &value)) {
             value = VDD_UNCLAIMED_READ_U;
-            IoUnclaimedNote(port, 1);
+            IoUnclaimedNote(port, VDD_IO_IN);
         }
         if (width == 1)      VDM_REG(tib, VTIB_EAX) = (eax & ~BYTE_MASK_U) | (value & BYTE_MASK);
         else if (width == X86_WORD_SIZE) VDM_REG(tib, VTIB_EAX) = (eax & HIGH_WORD_MASK_U) | (value & WORD_MASK);
         else                 VDM_REG(tib, VTIB_EAX) = value;
     } else {
         value = (width == 1) ? (eax & BYTE_MASK) : (width == X86_WORD_SIZE) ? (eax & WORD_MASK) : eax;
-        if (!VddBusIo(bus, port, (BYTE)width, 0, &value)) IoUnclaimedNote(port, 0);
+        if (!VddBusIo(bus, port, (BYTE)width, VDD_IO_OUT, &value)) IoUnclaimedNote(port, VDD_IO_OUT);
         if (port == PIT_PORT_COUNTER0) HostPitResyncCheck();   /* see HostPitResyncCheck */
     }
     /* ── THE SOUND-CARD HANDSHAKE, IN FULL, FOR AS LONG AS IT LASTS. ─────────────────
@@ -15352,7 +15352,7 @@ static INT HostTryIo(volatile BYTE *tib, VDD_BUS *bus)
     RetraceNote(tib, port, isIn, cs, (ip + length) & WORD_MASK);    /* #183 */
     /* ...and if a LOOP over this very instruction follows, drain it here. */
     HostIoLoopBurst(tib, bus, (volatile const BYTE *)(cs << PARAGRAPH_SHIFT),
-                       (ip + length) & WORD_MASK, ip, port, isIn, width, 0);
+                       (ip + length) & WORD_MASK, ip, port, isIn, width, X86_OPERAND_16);
     return 1;
 }
 
@@ -15391,7 +15391,7 @@ static INT HostTryIoRetro(volatile BYTE *tib, VDD_BUS *bus)
     /* EIP is already past the I/O, so the guest is sitting on whatever follows --
        if that is a LOOP back to this same I/O (the OPL write-delay idiom), drain
        the iterations here rather than paying one #GP reflect per read. */
-    HostIoLoopBurst(tib, bus, segment, ip, ioStart, port, isIn, width, 0);
+    HostIoLoopBurst(tib, bus, segment, ip, ioStart, port, isIn, width, X86_OPERAND_16);
     return 1;                              /* EIP already past the I/O -- do NOT advance */
 }
 
@@ -15449,7 +15449,7 @@ static INT HostTryIoString(volatile BYTE *tib, VDD_BUS *bus)
         if (isIn) {                                          /* port -> ES:DI    */
             DWORD di = VDM_REG16(tib, VTIB_EDI);
             DWORD linear = (VDM_REG16(tib, VTIB_ES) << PARAGRAPH_SHIFT) + di;
-            VddBusIo(bus, port, (BYTE)width, 1, &value);
+            VddBusIo(bus, port, (BYTE)width, VDD_IO_IN, &value);
             PokeWidth(linear, value, width);
             VDM_SET16(tib, VTIB_EDI, (WORD)(di + step));
         } else {                                              /* DS:SI -> port    */
@@ -15457,7 +15457,7 @@ static INT HostTryIoString(volatile BYTE *tib, VDD_BUS *bus)
             DWORD segmentRegisterOffset = sover ? sover : VTIB_DS;
             DWORD linear = (VDM_REG16(tib, segmentRegisterOffset) << PARAGRAPH_SHIFT) + si;
             value = PeekWidth(linear, width);
-            VddBusIo(bus, port, (BYTE)width, 0, &value);
+            VddBusIo(bus, port, (BYTE)width, VDD_IO_OUT, &value);
             VDM_SET16(tib, VTIB_ESI, (WORD)(si + step));
         }
     }
@@ -16563,7 +16563,7 @@ static INT g_P12Interp = 0;    /* planar mode is current -> interpret the guest 
 static VOID VideoTrapSync(VOID)
 {
     INT planar = VddVideoIsPlanarActive(&g_Video);
-    if (planar && !g_P12Offset) { A000Protect(0); g_P12Interp = 1; }
+    if (planar && !g_P12Offset) { A000Protect(FALSE); g_P12Interp = 1; }
     else                      { A000Protect(planar); g_P12Interp = 0; }
 }
 
@@ -16668,11 +16668,11 @@ static INT InterpreterMemoryPageOk(UINT32 linear)
    the slow path, which is the old function unchanged. */
 static __attribute__((noinline)) BYTE InterpreterMemoryRead8Slow(UINT32 linear)
 { if (linear >= VIDEO_APERTURE_BASE && linear < VIDEO_MONO_BASE) return VddVideoPlanarRead(&g_Video, linear - VIDEO_APERTURE_BASE);
-  if (!InterpreterMemoryPageOk(linear)) { g_InterpreterMemoryBadReads++; InterpreterMemoryBadNote(linear, 0); return VDD_UNCLAIMED_READ_BYTE; }
+  if (!InterpreterMemoryPageOk(linear)) { g_InterpreterMemoryBadReads++; InterpreterMemoryBadNote(linear, X86_ACCESS_READ); return VDD_UNCLAIMED_READ_BYTE; }
   return *(volatile BYTE *)linear; }
 static __attribute__((noinline)) VOID InterpreterMemoryWrite8Slow(UINT32 linear, BYTE value)
 { if (linear >= VIDEO_APERTURE_BASE && linear < VIDEO_MONO_BASE) { VddVideoPlanarWrite(&g_Video, linear - VIDEO_APERTURE_BASE, value); return; }
-  if (!InterpreterMemoryPageOk(linear)) { g_InterpreterMemoryBadWrites++; InterpreterMemoryBadNote(linear, 1); return; }
+  if (!InterpreterMemoryPageOk(linear)) { g_InterpreterMemoryBadWrites++; InterpreterMemoryBadNote(linear, X86_ACCESS_WRITE); return; }
   *(volatile BYTE *)linear = value; }
 static inline __attribute__((always_inline)) BYTE V86HostRead8(UINT32 linear)
 { if (linear < X86_REAL_MODE_SIZE_U && g_PageMap[linear >> PAGE_SHIFT] == PAGE_MAP_OK && (linear < VIDEO_APERTURE_BASE || linear >= VIDEO_MONO_BASE))
@@ -16707,11 +16707,11 @@ static VOID HostPitGenerate(VOID);
 static UINT32 V86HostIn(WORD port, INT width)
 { UINT32 value = 0;
   if (port >= PIT_PORT_COUNTER0 && port <= PIT_PORT_CONTROL) HostPitGenerate();
-  VddBusIo(&g_Bus, port, (BYTE)width, 1, &value); return value; }
+  VddBusIo(&g_Bus, port, (BYTE)width, VDD_IO_IN, &value); return value; }
 static VOID V86HostOut(WORD port, INT width, UINT32 byteValue)
 { UINT32 value = byteValue;
   if (port >= PIT_PORT_COUNTER0 && port <= PIT_PORT_CONTROL) HostPitGenerate();
-  VddBusIo(&g_Bus, port, (BYTE)width, 0, &value);
+  VddBusIo(&g_Bus, port, (BYTE)width, VDD_IO_OUT, &value);
   if (port == PIT_PORT_CONTROL) PitLatchNote((BYTE)byteValue);     /* same instrument as the reflected path */
   if (port == PIT_PORT_COUNTER0) HostPitResyncCheck(); }         /* and the same resync rule           */
 
@@ -21779,7 +21779,7 @@ static PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, 
     /* Point the DOS layer at the buffer, in the terms it understands. */
     VDM_SET16(tib, VTIB_DS, g_PmTransferSegment);
     VDM_SET16(tib, VTIB_EDX, 0);
-    m.TraceCursor = cursor; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); cursor = m.TraceCursor;
+    m.TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(&m); DosInt21SetProtectedMode(FALSE); cursor = m.TraceCursor;
     VDM_REG(tib, VTIB_DS) = savedDs; VDM_REG(tib, VTIB_EDX) = savedDx;
 
     /* Results back out. A short read is what AX says, not what CX asked for. */
@@ -21900,7 +21900,7 @@ static PSTR PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     if (copyDx) VDM_SET16(tib, VTIB_EDX, PM_TRANSFER_WINDOW_DX);
     if (copySi) VDM_SET16(tib, VTIB_ESI, PM_TRANSFER_WINDOW_SI);
     if (copyDi) VDM_SET16(tib, VTIB_EDI, PM_TRANSFER_WINDOW_DI);
-    m.TraceCursor = cursor; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); cursor = m.TraceCursor;
+    m.TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(&m); DosInt21SetProtectedMode(FALSE); cursor = m.TraceCursor;
     /* Restore what we re-pointed -- except a register the call ANSWERS in: 71A0h returns
        the maximum path in DX, 7143h BL=2 the size's high word. */
     VDM_REG(tib, VTIB_DS) = savedDs; VDM_REG(tib, VTIB_ES) = savedEs;
@@ -22233,7 +22233,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                              | WOWUSER_KRNL_LOCALUNLOCK_OFF,
                                          editWindow->Instance, &unlockArgument, 1, 0,
                                          WOWCALL_RET_KEEP, NULL, editWindow->Window16, 0,
-                                         NULL, 0, -1, 0))
+                                         NULL, 0, -1, WOWCALL_PROCEDURE_PRESENT))
                         cursor = LogPut(cursor, "; LocalUnlock in flight");
                     else
                         cursor = LogPut(cursor, "; ★ LocalUnlock REFUSED -- the block stays"
@@ -22262,7 +22262,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                              | WOWUSER_KRNL_LOCALLOCK_OFF,
                                          editWindow->Instance, &lockArgument, 1, 0,
                                          WOWCALL_RET_KEEP, NULL, editWindow->Window16, 0,
-                                         NULL, 0, -1, 0)) {
+                                         NULL, 0, -1, WOWCALL_PROCEDURE_PRESENT)) {
                         if (g_WowCallDepth > 0) {
                             g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_EDITFILL;
                             g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = editWindow->Window16;
@@ -22316,7 +22316,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                              | WOWUSER_KRNL_LOCALUNLOCK_OFF,
                                          editWindow->Instance, &unlockArgument, 1, 0,
                                          WOWCALL_RET_KEEP, NULL, editWindow->Window16, 0,
-                                         NULL, 0, -1, 0))
+                                         NULL, 0, -1, WOWCALL_PROCEDURE_PRESENT))
                         cursor = LogPut(cursor, "; LocalUnlock in flight");
                     else
                         cursor = LogPut(cursor, "; ★ LocalUnlock REFUSED -- the block stays"
@@ -22384,7 +22384,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                | (callAction == WOWCALL_ACT_CLIPLOCK ? WOWUSER_KRNL_GLOBALLOCK_OFF
                                                               : WOWUSER_KRNL_GLOBALUNLOCK_OFF);
                     if (WowCallEnter(tib, clipStackBase, clipCallbackSelector, proc, clipDs, &firstArgument, 1, 0,
-                                      WOWCALL_RET_KEEP, NULL, 0, 0, NULL, 0, -1, 0)) {
+                                      WOWCALL_RET_KEEP, NULL, 0, 0, NULL, 0, -1, WOWCALL_PROCEDURE_PRESENT)) {
                         if (callAction == WOWCALL_ACT_CLIPLOCK && g_WowCallDepth > 0) {
                             g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_CLIPFILL;
                             g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = handleArgument;
@@ -22417,7 +22417,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                 DWORD enumStackBase  = DpmiSelectorBase(
                     (WORD)VDM_REG16(tib, VTIB_SS));
                 enumNote[0] = 0;
-                WowEnumStep(tib, enumStackBase, enumCallbackSelector, 0, result, enumNote, sizeof enumNote);
+                WowEnumStep(tib, enumStackBase, enumCallbackSelector, WOWENUM_NEXT, result, enumNote, sizeof enumNote);
                 cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, enumNote);
             }
             if (callAction == WOWCALL_ACT_MODALPUMP) {
@@ -23226,7 +23226,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     VDM_SET16(tib, VTIB_EDX, (WORD)drive);
                     VDM_SET16(tib, VTIB_DS,  g_PmTransferSegment);
                     VDM_SET16(tib, VTIB_ESI, 0);
-                    m.TraceCursor = cursor; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); cursor = m.TraceCursor;
+                    m.TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(&m); DosInt21SetProtectedMode(FALSE); cursor = m.TraceCursor;
                     {   DWORD carryFlag = VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_CF_U;
                         VDM_REG(tib, VTIB_EAX) = savedAx; VDM_REG(tib, VTIB_EDX) = savedDx;
                         VDM_REG(tib, VTIB_DS)  = savedDs; VDM_REG(tib, VTIB_ESI) = savedSi;
@@ -23840,7 +23840,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             DWORD enumStackBase  = DpmiSelectorBase(
                                 (WORD)VDM_REG16(tib, VTIB_SS));
                             enumNote[0] = 0;
-                            WowEnumStep(tib, enumStackBase, enumCallbackSelector, 1, 0,
+                            WowEnumStep(tib, enumStackBase, enumCallbackSelector, WOWENUM_FIRST, 0,
                                          enumNote, sizeof enumNote);
                             cursor = LogPut(cursor, "WOWENUM: "); cursor = LogPut(cursor, enumNote);
                             cursor = LogPut(cursor, "\r\n");
@@ -24010,7 +24010,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             DWORD enumStackBase  = DpmiSelectorBase(
                                 (WORD)VDM_REG16(tib, VTIB_SS));
                             enumNote[0] = 0;
-                            WowEnumStep(tib, enumStackBase, enumCallbackSelector, 1, 0, enumNote, sizeof enumNote);
+                            WowEnumStep(tib, enumStackBase, enumCallbackSelector, WOWENUM_FIRST, 0, enumNote, sizeof enumNote);
                             cursor = LogPut(cursor, "WOWENUM: "); cursor = LogPut(cursor, enumNote);
                             cursor = LogPut(cursor, "\r\n");
                         }
@@ -26064,7 +26064,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             if (interruptNumber == VECTOR_DOS) {
                                 /* CF/ZF into VTIB_EFLAGS, not into an IRET frame there is none of --
                                    see the #247 note above. */
-                                m.TraceCursor = cursor; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); cursor = m.TraceCursor;
+                                m.TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(&m); DosInt21SetProtectedMode(FALSE); cursor = m.TraceCursor;
                             }
                             else if (interruptNumber == VECTOR_MOUSE) MouseInt33(tib, I33_SRC_SIM);
                             else if (interruptNumber == VECTOR_VIDEO) {
@@ -26758,7 +26758,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                  leaves alone is not a harmless bonus, it is a silent
                                  corruption of the caller's state. Return what DOS returns. */
                             DWORD want = VDM_REG16(tib, VTIB_EBX);
-                            m.TraceCursor = cursor; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); cursor = m.TraceCursor;
+                            m.TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(&m); DosInt21SetProtectedMode(FALSE); cursor = m.TraceCursor;
                             cursor = LogPut(cursor, "INT21h AH=48 (PM) alloc 0x"); cursor = LogHex(cursor, want);
                             if (VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_CF_U) {
                                 cursor = LogPut(cursor, " -> FAILED, largest 0x");
@@ -27002,7 +27002,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              segment becomes a selector over the same linear address. */
                         if (ah == DOS_FN_GET_INDOS_FLAG || ah == DOS_FN_GET_LIST_OF_LISTS) {
                             WORD esSelector;
-                            m.TraceCursor = cursor; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); cursor = m.TraceCursor;
+                            m.TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(&m); DosInt21SetProtectedMode(FALSE); cursor = m.TraceCursor;
                             esSelector = DpmiSegmentToDescriptor((WORD)VDM_REG16(tib, VTIB_ES));
                             cursor = LogPut(cursor, "INT21h AH=0x"); cursor = LogHex(cursor, ah);
                             cursor = LogPut(cursor, " (PM) far pointer at V86 0x");
@@ -27043,7 +27043,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             ah == DOS_FN_GET_FREE_SPACE || ah == DOS_FN_SWITCH_CHAR || ah == DOS_FN_GET_RETURN_CODE || ah == DOS_FN_GET_VERIFY ||
                             ah == DOS_FN_LOCK || ah == DOS_FN_CODE_PAGE || ah == DOS_FN_SET_HANDLE_COUNT || ah == DOS_FN_COMMIT ||
                             ah == DOS_FN_COMMIT_6A) {
-                            m.TraceCursor = cursor; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); cursor = m.TraceCursor;
+                            m.TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(&m); DosInt21SetProtectedMode(FALSE); cursor = m.TraceCursor;
                             cursor = LogPut(cursor, "INT21h AH=0x"); cursor = LogHex(cursor, ah);
                             cursor = LogPut(cursor, " (PM, register-only -> V86 DOS) -> AX=0x");
                             cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EAX));
@@ -29744,7 +29744,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                      sentence -- which is exactly what package/smoke.bat was doing
                      wrongly, grepping for text only /install ever prints. */
                 INSTALL_STATE installState = InstallStatusText(installStatus, sizeof installStatus);
-                InstallReport(installStatus, 1);
+                InstallReport(installStatus, TRUE);
                 return installState == INSTALL_OURS ? INSTALL_STATUS_EXIT_OURS : (installState == INSTALL_OTHER ? INSTALL_STATUS_EXIT_OTHER : INSTALL_STATUS_EXIT_NONE);
             }
             isOk = InstallPerform(want, CommandLineHasForce(GetCommandLineA()), installStatus, sizeof installStatus);
@@ -31489,7 +31489,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          5.00 would have changed the version every program sees. Only the SHELL'S OWN
          PROCESS is told 5.00 (DosInt21SetShellPsp); what it runs gets the setting. */
     if (g_GuestNtAware) {
-        DosInt21SetShellPsp(&machine, DOS_PSP_SEG, 1);
+        DosInt21SetShellPsp(&machine, DOS_PSP_SEG, TRUE);
         dosVersionSource = "the setting -- the NTVDM-aware shell ITSELF is told 5.00 (per process, SETVER-style)";
         g_DosVersionShell = 1;
     } else if (g_GuestNtvdmBops >= NT_AWARE_SHELL_BOPS_MIN && g_TopIsShell) {
@@ -31500,7 +31500,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
              runs/s91/chain18b). Same image test and same per-process 5.00 as the
              EXEC path gives a second XP shell; the name check is the second factor
              that keeps an innocent guest from being told DOS 5. */
-        DosInt21SetShellPsp(&machine, DOS_PSP_SEG, 1);
+        DosInt21SetShellPsp(&machine, DOS_PSP_SEG, TRUE);
         dosVersionSource = "the setting -- XP's COMMAND.COM run as the program is told 5.00 (per process, SETVER-style)";
         g_DosVersionShell = 1;
     }
@@ -33619,7 +33619,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                               /* Initial mode-switch selectors are 16-bit even for a 32-bit
                                  client (the RETF-on-failure proof, session 16), so d32=0. */
                               if (!X86IsIntSiteReal((const BYTE *)(ULONG_PTR)cs,
-                                                        position, X86_SEGMENT_LIMIT_64K, 0)) continue;
+                                                        position, X86_SEGMENT_LIMIT_64K, X86_OPERAND_16)) continue;
                               ++votedCount;
                           }
                           PatchMapSet(linear, siteVector); cs[position] = VDM_BOP0; cs[position+1] = VDM_BOP1; ++count; last = position;

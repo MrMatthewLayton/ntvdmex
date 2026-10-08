@@ -1468,7 +1468,7 @@ INT DosInt21(PDOS_MACHINE machine)
         /* Any BOUND handle closes, including a low one the shell redirected -- see
            the note at AH=40h. An unbound 0-4 is the console and closing it is a no-op. */
         if (DosHandleIsFile((PVOID const *)machine->FileHandles, handle)) DosHandleRelease(machine, handle);
-        else DosHandleSetDevice(&machine->StdOpen, handle, 0);  /* free the device slot */
+        else DosHandleSetDevice(&machine->StdOpen, handle, FALSE);  /* free the device slot */
         OKCF();
     } else if (function == DOS_FN_READ) {              /* read: BX=handle CX=cnt -> DS:DX */
         DWORD handle = R_BX & WORD_MASK, count = R_CX & WORD_MASK, read = 0;
@@ -2333,7 +2333,7 @@ INT DosInt21(PDOS_MACHINE machine)
                 targetHandle = DosHandleAllocate((PVOID const *)machine->FileHandles, machine->StdOpen);
                 if (targetHandle >= DOS_MAX_FILES) {
                     if (newHandle) CloseHandle(newHandle); SETAX(DOS_ERR_TOO_MANY_OPEN_FILES); ERRCF();
-                } else if (isSourceDevice && !DosHandleSetDevice(&machine->StdOpen, targetHandle, 1)) {
+                } else if (isSourceDevice && !DosHandleSetDevice(&machine->StdOpen, targetHandle, TRUE)) {
                     /* Past the device mask. Refuse LOUDLY rather than hand back a
                        slot that would read as a file -- see DOS_DEV_SLOTS. */
                     trace = LogPut(trace, "  INT21 AH=45 device dup past slot 0x");
@@ -2343,14 +2343,14 @@ INT DosInt21(PDOS_MACHINE machine)
             } else {
                 targetHandle = R_CX & WORD_MASK;
                 if (targetHandle >= DOS_MAX_FILES) { if (newHandle) CloseHandle(newHandle); SETAX(DOS_ERR_INVALID_HANDLE); ERRCF(); }
-                else if (isSourceDevice && !DosHandleSetDevice(&machine->StdOpen, targetHandle, 1)) {
+                else if (isSourceDevice && !DosHandleSetDevice(&machine->StdOpen, targetHandle, TRUE)) {
                     trace = LogPut(trace, "  INT21 AH=46 device dup2 past slot 0x");
                     trace = LogHex(trace, DOS_DEV_SLOTS); trace = LogPut(trace, " -- refused\r\n");
                     SETAX(DOS_ERR_TOO_MANY_OPEN_FILES); ERRCF();
                 }
                 else { DosHandleRelease(machine, targetHandle);
                        machine->FileHandles[targetHandle] = newHandle;  /* 0 when src is a device */
-                       if (!isSourceDevice) DosHandleSetDevice(&machine->StdOpen, targetHandle, 0);
+                       if (!isSourceDevice) DosHandleSetDevice(&machine->StdOpen, targetHandle, FALSE);
                        OKCF(); }
             }
         }
@@ -3228,7 +3228,7 @@ INT DosInt21(PDOS_MACHINE machine)
                                        : (action == DOS_INT21_LFN_ATTR_GET_ACCESS_TIME) ? &attributeData.ftLastAccessTime
                                                         : &attributeData.ftCreationTime;
                     WORD dosDate = 0, dosTime = 0; BYTE hundredths = 0;
-                    if (!DosLfnFileTimeToDos(DosFileTimeZoned(targetTime, 1), &dosDate, &dosTime, &hundredths)) { dosDate = 0; dosTime = 0; hundredths = 0; }
+                    if (!DosLfnFileTimeToDos(DosFileTimeZoned(targetTime, DOS_TIME_LOCAL), &dosDate, &dosTime, &hundredths)) { dosDate = 0; dosTime = 0; hundredths = 0; }
                     SET16(R_DI, dosDate);
                     if (action != DOS_INT21_LFN_ATTR_GET_ACCESS_TIME) SET16(R_CX, dosTime);
                     if (action == DOS_INT21_LFN_ATTR_GET_CREATION_TIME) SET16(R_SI, hundredths);
@@ -3423,7 +3423,7 @@ INT DosInt21(PDOS_MACHINE machine)
                 FILETIME fileTime; WORD dosDate, dosTime; BYTE hundredths;
                 fileTime.dwLowDateTime  = (DWORD)bytes[0] | ((DWORD)bytes[1] << BYTE_SHIFT) | ((DWORD)bytes[2] << WORD_SHIFT) | ((DWORD)bytes[3] << TOP_BYTE_SHIFT);
                 fileTime.dwHighDateTime = (DWORD)bytes[4] | ((DWORD)bytes[5] << BYTE_SHIFT) | ((DWORD)bytes[6] << WORD_SHIFT) | ((DWORD)bytes[7] << TOP_BYTE_SHIFT);
-                if (!DosLfnFileTimeToDos(DosFileTimeZoned(&fileTime, 1), &dosDate, &dosTime, &hundredths)) { SETAX(DOS_ERR_INVALID_DATA); ERRCF(); }
+                if (!DosLfnFileTimeToDos(DosFileTimeZoned(&fileTime, DOS_TIME_LOCAL), &dosDate, &dosTime, &hundredths)) { SETAX(DOS_ERR_INVALID_DATA); ERRCF(); }
                 else {
                     SET16(R_CX, dosTime); SET16(R_DX, dosDate);
                     /* ⚠ INTENDED DIVERGENCE (s92): for an exact even second stock answers

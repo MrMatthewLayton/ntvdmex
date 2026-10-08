@@ -19,6 +19,8 @@
 #define GUS_DEFAULT_IRQ  11         /* user decision 2026-09-25; slave delivery s80  */
 #define GUS_DEFAULT_DMA  3
 #define GUS_VOICE_STOPPED_MASK 3   /* Control bits 0-1: stopped, stop */
+#define GUS_FRACTION_FOUR_BIT  0   /* start/end: a 4-bit fraction in the low word */
+#define GUS_FRACTION_NINE_BIT  1   /* the current position: 9 bits                */
 #define GUS_BASE_FIRST   0x210      /* the Audio page's base choices: 210h-260h       */
 #define GUS_BASE_STEP    0x10
 #define GUS_BASE_LAST_CHOICE    5

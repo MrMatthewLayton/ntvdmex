@@ -378,7 +378,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
              again with 1. */
         verdict = WowConvModalExit(dialog->IsEnded,
                                      window && window->Window32 && IsWindow(window->Window32),
-                                     dialog->DialogProcedure || dialog->WindowProcedure, 0);
+                                     dialog->DialogProcedure || dialog->WindowProcedure, FALSE);
 
         /* ── EXIT 1: THE REAL ONE. EndDialog was called for this dialog. ───── */
         if (verdict == WOWCONV_MODAL_END) {
@@ -593,12 +593,12 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                  interactive session waits forever and never gets here. The same
                  tested decision as the three above, asked again now that the
                  fourth fact is known. */
-            if (!WowMsgTake(0, 0, 0, 1, &message)) {
+            if (!WowMsgTake(0, 0, 0, PM_REMOVE, &message)) {
                 /* ⚠ AND ONLY IF NOTHING ELSE ENDED IT WHILE WE WAITED. The
                      answer for a dialog that was dismissed during the wait is
                      EndDialog's result, not 0 -- so anything but EXPIRED goes
                      back to the top of the loop, where that case is handled. */
-                if (WowConvModalExit(dialog->IsEnded, 1, 1, 1)
+                if (WowConvModalExit(dialog->IsEnded, TRUE, TRUE, TRUE)
                         != WOWCONV_MODAL_EXPIRED)
                     continue;
                 ++g_WowDlgRefused;

@@ -557,9 +557,9 @@ static VOID InputSetBdaFlag(PINPUT_STATE state, INT offset, BYTE bit, INT isOn)
 /* A lock key: toggle `lock` in 0017 on the first make only; track `held` in 0018. */
 static VOID InputLockKey(PINPUT_STATE state, BYTE lockBit, BYTE heldBit, INT isBreak)
 {
-    if (isBreak) { InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, heldBit, 0); return; }
+    if (isBreak) { InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, heldBit, FALSE); return; }
     if (InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & heldBit) return;           /* typematic repeat */
-    InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, heldBit, 1);
+    InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, heldBit, TRUE);
     InputSetShiftFlag(state, lockBit, !(InputShiftFlags(state) & lockBit));
 }
 
@@ -598,16 +598,16 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
 
     if (scanCode == INPUT_SCAN_PREFIX_E0) {                                  /* prefix: the next code is extended */
         state->IsExtendedPending = 1;
-        InputSetBdaFlag(state, BIOS_BDA_KEYBOARD_FLAGS3, INPUT_FLAGS3_E0, 1);
+        InputSetBdaFlag(state, BIOS_BDA_KEYBOARD_FLAGS3, INPUT_FLAGS3_E0, TRUE);
         return INPUT_ACTION_NONE;
     }
     if (scanCode == INPUT_SCAN_PREFIX_E1) {                                  /* Pause: E1 1D 45 / E1 9D C5        */
         state->IsExtendedPending = 0; state->E1Pending = INPUT_PAUSE_CODES_AFTER_E1;
-        InputSetBdaFlag(state, BIOS_BDA_KEYBOARD_FLAGS3, INPUT_FLAGS3_E1, 1);
+        InputSetBdaFlag(state, BIOS_BDA_KEYBOARD_FLAGS3, INPUT_FLAGS3_E1, TRUE);
         return INPUT_ACTION_NONE;
     }
     state->IsExtendedPending = 0;
-    InputSetBdaFlag(state, BIOS_BDA_KEYBOARD_FLAGS3, INPUT_FLAGS3_E0 | INPUT_FLAGS3_E1, 0);
+    InputSetBdaFlag(state, BIOS_BDA_KEYBOARD_FLAGS3, INPUT_FLAGS3_E0 | INPUT_FLAGS3_E1, FALSE);
     if (state->E1Pending) {
         /* ── PAUSE. The make sequence is E1 1D 45, the break E1 9D C5, and neither is
              a Ctrl or a NumLock (the E1 is there so an old BIOS reads it as
@@ -615,7 +615,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
              its handler, interrupts on, until the next keystroke. */
         if (--state->E1Pending) return INPUT_ACTION_NONE;      /* the 1D / 9D                       */
         if (isBreak || (InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & INPUT_SHIFT2_PAUSE)) return INPUT_ACTION_NONE;
-        InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_PAUSE, 1);
+        InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_PAUSE, TRUE);
         state->BiosActions[INPUT_ACTION_PAUSE]++;
         return INPUT_ACTION_PAUSE;
     }
@@ -647,7 +647,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
              the 83-key PAUSE. */
         if (!isExtended && !isBreak && (InputShiftFlags(state) & INPUT_SHIFT_CTRL)) {
             if (InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & INPUT_SHIFT2_PAUSE) return INPUT_ACTION_NONE;
-            InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_PAUSE, 1);
+            InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_PAUSE, TRUE);
             state->BiosActions[INPUT_ACTION_PAUSE]++;
             return INPUT_ACTION_PAUSE;
         }
@@ -673,31 +673,31 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
              press, 8501h on the release. Stores nothing. */
         if (isBreak) {
             if (!(InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & INPUT_SHIFT2_SYSREQ)) return INPUT_ACTION_NONE;
-            InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_SYSREQ, 0);
+            InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_SYSREQ, FALSE);
             state->BiosActions[INPUT_ACTION_SYSREQ_UP]++;
             return INPUT_ACTION_SYSREQ_UP;
         }
         if (InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & INPUT_SHIFT2_SYSREQ) return INPUT_ACTION_NONE;   /* repeat */
-        InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_SYSREQ, 1);
+        InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_SYSREQ, TRUE);
         state->BiosActions[INPUT_ACTION_SYSREQ_DOWN]++;
         return INPUT_ACTION_SYSREQ_DOWN;
     case INPUT_SCAN_INSERT:
         /* ── INSERT. 0018 bit 7 while held; 0017 bit 7 toggles on the press when the
              key is acting as Insert (grey, or keypad with NumLock and Shift agreeing)
              and Alt/Ctrl are up. The keystroke is stored as well. */
-        if (isBreak) { InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_INSERT_HELD, 0); return INPUT_ACTION_NONE; }
+        if (isBreak) { InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_INSERT_HELD, FALSE); return INPUT_ACTION_NONE; }
         shiftFlags = InputShiftFlags(state);
         if (!(InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & INPUT_SHIFT2_INSERT_HELD) && !(shiftFlags & (INPUT_SHIFT_ALT | INPUT_SHIFT_CTRL))
             && (isExtended || !(shiftFlags & INPUT_SHIFT_NUM_LOCK) == !(shiftFlags & (INPUT_SHIFT_LEFT_SHIFT | INPUT_SHIFT_RIGHT_SHIFT))))
             InputSetShiftFlag(state, INPUT_SHIFT_INSERT, !(shiftFlags & INPUT_SHIFT_INSERT));
-        InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_INSERT_HELD, 1);
+        InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_INSERT_HELD, TRUE);
         break;
     default: break;
     }
     if (isBreak) return INPUT_ACTION_NONE;                  /* releases change no buffer content */
     /* ── WHILE PAUSED, the next keystroke ends the pause and is thrown away. */
     if (InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & INPUT_SHIFT2_PAUSE) {
-        InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_PAUSE, 0);
+        InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_PAUSE, FALSE);
         return INPUT_ACTION_NONE;
     }
     /* ── #274: ALT + A KEYPAD DIGIT ACCUMULATES; ANY OTHER KEY UNDER ALT CLEARS IT. */
@@ -751,7 +751,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
 }
 
 VOID VddInputPauseCancel(PINPUT_STATE state)
-{ InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_PAUSE, 0); }
+{ InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_PAUSE, FALSE); }
 
 WORD VddInputDosKey(WORD key)
 {

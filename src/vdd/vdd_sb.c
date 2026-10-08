@@ -226,17 +226,17 @@ static VOID SbExecute(PSB_STATE state)
     case SB_DSP_DMA8_SINGLE: case SB_DSP_DMA8_SINGLE_X16: case SB_DSP_DMA8_SINGLE_X17:            /* 8-bit single-cycle DMA output  */
         state->Is16Bit = 0; state->IsSigned = 0; state->IsLegacyTransfer = 1;
         state->IsStereo = (state->Mixer[SB_MIXER_STEREO_SWITCH] & SB_MIXER_STEREO_BIT) ? 1 : 0;
-        SbStartBlock(state, ((UINT32)arguments[0] | ((UINT32)arguments[1] << BYTE_SHIFT)) + 1, 0);
+        SbStartBlock(state, ((UINT32)arguments[0] | ((UINT32)arguments[1] << BYTE_SHIFT)) + 1, SB_SINGLE_CYCLE);
         break;
     case SB_DSP_DMA8_AUTO: case SB_DSP_DMA8_AUTO_X2C: case SB_DSP_DMA8_AUTO_HIGH_SPEED:            /* 8-bit auto-init (0x90: high-speed) */
         state->Is16Bit = 0; state->IsSigned = 0; state->IsLegacyTransfer = 1;
         state->IsStereo = (state->Mixer[SB_MIXER_STEREO_SWITCH] & SB_MIXER_STEREO_BIT) ? 1 : 0;
-        SbStartBlock(state, state->BlockLength, 1);
+        SbStartBlock(state, state->BlockLength, SB_AUTO_INIT);
         break;
     case SB_DSP_DMA8_SINGLE_HIGH_SPEED:                                  /* high-speed 8-bit single-cycle   */
         state->Is16Bit = 0; state->IsSigned = 0; state->IsLegacyTransfer = 1;
         state->IsStereo = (state->Mixer[SB_MIXER_STEREO_SWITCH] & SB_MIXER_STEREO_BIT) ? 1 : 0;
-        SbStartBlock(state, state->BlockLength, 0);
+        SbStartBlock(state, state->BlockLength, SB_SINGLE_CYCLE);
         break;
     case SB_DSP_TIME_CONSTANT:
         state->RateHz = SbRateFromTimeConstant(arguments[0]);
@@ -708,11 +708,11 @@ static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isSter
 #undef SB_PUT
 
 UINT32 VddSbRender(PSB_STATE state, INT16 *output, UINT32 frames)
-{ return SbRender(state, output, frames, 0); }
+{ return SbRender(state, output, frames, AUDIO_MONO); }
 UINT32 VddSbFrameHz(PCSB_STATE state)
 { return (state->IsLegacyTransfer && state->IsStereo) ? state->RateHz / SB_STEREO_CHANNELS : state->RateHz; }
 UINT32 VddSbRenderStereo(PSB_STATE state, INT16 *output, UINT32 frames)
-{ return SbRender(state, output, frames, 1); }
+{ return SbRender(state, output, frames, AUDIO_STEREO); }
 
 /* --- lifecycle ------------------------------------------------------------ */
 VOID VddSbReset(PVOID context)

@@ -1,5 +1,9 @@
 #ifndef NTVDMEX_WOWENUM_H
 #define NTVDMEX_WOWENUM_H
+
+/* WowEnumStep: the first call of an enumeration, or the next. */
+#define WOWENUM_NEXT  0
+#define WOWENUM_FIRST 1
 /*
  * wowenum.h -- ★★★ CALLING A GUEST'S CALLBACK ONCE PER ITEM. GH #128, session 57.
  *

@@ -18,6 +18,10 @@
 #ifndef NTVDMEX_PRESENT_SCALE_H
 #define NTVDMEX_PRESENT_SCALE_H
 
+/* PresentLayout: laying out for a window or for the whole screen. */
+#define PRESENT_LAYOUT_WINDOW 0
+#define PRESENT_LAYOUT_SCREEN 1
+
 #include "../ntvdmex_types.h"
 
 /* A frame with no size yet is laid out as the 720x400 text screen (9:5). */

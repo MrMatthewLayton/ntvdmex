@@ -1,5 +1,9 @@
 #ifndef NTVDMEX_WOWCALL_H
 #define NTVDMEX_WOWCALL_H
+
+/* WowCallEnter: whether the 16-bit procedure is known to be absent. */
+#define WOWCALL_PROCEDURE_PRESENT 0
+#define WOWCALL_PROCEDURE_ABSENT  1
 /*
  * wowcall.h -- ★ CALLING 16-BIT CODE FROM THE HOST. GH #128, session 40.
  *

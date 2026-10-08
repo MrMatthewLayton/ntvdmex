@@ -330,7 +330,7 @@ INT VddPicCanDeliver(PPIC_STATE state, BYTE irq)
          path that sets it releases it (VddPicEndOfInterrupt clears IR2 once the slave's ISR is
          empty -- our stubs, the PM reflection, a failed PM inject -- and a guest
          handler's own `out 20h` does the rest). */
-    if (irq >= PIC_LINES_PER_CHIP && !PicIsLineOpen(&state->Master, PIC_CASCADE_LINE, TRUE)) return FALSE;
+    if (irq >= PIC_LINES_PER_CHIP && !PicIsLineOpen(&state->Master, PIC_CASCADE_LINE, PIC_CHIP_MASTER)) return FALSE;
     return TRUE;
 }
 

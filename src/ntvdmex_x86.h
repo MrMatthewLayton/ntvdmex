@@ -125,6 +125,10 @@
 #define X86_DWORD_SIGN_U        0x80000000u
 #define X86_REPEAT_REP          1           /* an interpreter's REP state                */
 #define X86_REPEAT_REPNE        2
+#define X86_ACCESS_READ         0           /* a memory access's direction             */
+#define X86_ACCESS_WRITE        1
+#define X86_OPERAND_16          0           /* an operand or address size flag          */
+#define X86_OPERAND_32          1
 #define X86_SELECTOR_INDEX_SHIFT 3          /* a selector's descriptor index starts at bit 3 */
 #define X86_DESCRIPTOR_FLAGS_SHIFT 20      /* the flags nibble: bits 20-23 of the high dword */
 #define X86_WORD_SIZE_U         2u

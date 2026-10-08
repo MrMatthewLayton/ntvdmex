@@ -25,6 +25,10 @@
 #ifndef NTVDMEX_VDD_PIC_H
 #define NTVDMEX_VDD_PIC_H
 
+/* PicIsLineOpen: which 8259. */
+#define PIC_CHIP_SLAVE  0
+#define PIC_CHIP_MASTER 1
+
 #include "ntvdd.h"
 
 typedef struct _PIC_CHIP {

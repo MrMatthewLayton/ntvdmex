@@ -184,7 +184,7 @@ static VOID OplKeyChannel(POPL_STATE state, INT channel, INT isKeyOn)
     if (isKeyOn && !state->Channels[channel].IsKeyOn) { /* key-on edge: restart   */
         INT isAm = 0, isVibrato = 0;
         for (pairIndex = 0; pairIndex < channelCount; ++pairIndex) {
-            INT modulator = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER * pairIndex, 0), carrier = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER * pairIndex, 1);
+            INT modulator = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER * pairIndex, OPL_MODULATOR), carrier = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER * pairIndex, OPL_CARRIER);
             state->Operators[modulator].EnvelopeState = OPL_ENVELOPE_ATTACK; state->Operators[modulator].Phase = 0;
             state->Operators[carrier].EnvelopeState = OPL_ENVELOPE_ATTACK; state->Operators[carrier].Phase = 0;
             isAm  |= state->Operators[modulator].AmplitudeModulation  | state->Operators[carrier].AmplitudeModulation;
@@ -195,8 +195,8 @@ static VOID OplKeyChannel(POPL_STATE state, INT channel, INT isKeyOn)
         if (isVibrato) state->ProfileKeyOnVibrato++;
     } else if (!isKeyOn && state->Channels[channel].IsKeyOn) {               /* key-off edge: release  */
         for (pairIndex = 0; pairIndex < channelCount; ++pairIndex) {
-            state->Operators[VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER * pairIndex, 0)].EnvelopeState = OPL_ENVELOPE_RELEASE;
-            state->Operators[VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER * pairIndex, 1)].EnvelopeState = OPL_ENVELOPE_RELEASE;
+            state->Operators[VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER * pairIndex, OPL_MODULATOR)].EnvelopeState = OPL_ENVELOPE_RELEASE;
+            state->Operators[VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER * pairIndex, OPL_CARRIER)].EnvelopeState = OPL_ENVELOPE_RELEASE;
         }
     }
     state->Channels[channel].IsKeyOn = (BYTE)isKeyOn;

@@ -13,6 +13,10 @@
 #ifndef NTVDMEX_VDD_BUS_H
 #define NTVDMEX_VDD_BUS_H
 
+/* VddBusIo's direction. */
+#define VDD_IO_OUT 0
+#define VDD_IO_IN  1
+
 #include "ntvdd.h"
 
 #ifndef VDD_MAX_PORT_RANGES

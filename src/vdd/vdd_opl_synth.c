@@ -589,7 +589,7 @@ static VOID OplRhythmSample(POPL_STATE state, INT32 *channel6Output, INT32 *chan
    idle voice costs nothing, and the OPL2 golden depends on that staying so. */
 static INT32 OplVoiceTwoOperator(POPL_STATE state, INT channel)
 {
-    INT modulatorIndex = VddOplOperatorIndex(channel, 0), carrierIndex = VddOplOperatorIndex(channel, 1);
+    INT modulatorIndex = VddOplOperatorIndex(channel, OPL_MODULATOR), carrierIndex = VddOplOperatorIndex(channel, OPL_CARRIER);
     POPL_OPERATOR modulator = &state->Operators[modulatorIndex], carrier = &state->Operators[carrierIndex];
     INT32 modulatorOutput, carrierOutput, feedbackModulation = 0, output;
 
@@ -630,8 +630,8 @@ static INT32 OplVoiceTwoOperator(POPL_STATE state, INT channel)
      while it is paired. */
 static INT32 OplVoiceFourOperator(POPL_STATE state, INT channel)
 {
-    INT operator1 = VddOplOperatorIndex(channel, 0),     operator2 = VddOplOperatorIndex(channel, 1);
-    INT operator3 = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER, 0), operator4 = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER, 1);
+    INT operator1 = VddOplOperatorIndex(channel, OPL_MODULATOR),     operator2 = VddOplOperatorIndex(channel, OPL_CARRIER);
+    INT operator3 = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER, OPL_MODULATOR), operator4 = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER, OPL_CARRIER);
     POPL_OPERATOR firstOperator = &state->Operators[operator1];
     INT connection1 = state->Channels[channel].Connection, connection2 = state->Channels[channel + OPL_FOUR_OPERATOR_PARTNER].Connection;
     INT32 sample1, sample2, sample3, sample4, feedbackModulation = 0;

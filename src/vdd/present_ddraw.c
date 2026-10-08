@@ -308,7 +308,7 @@ static VOID PresentGdi(PPRESENT_DDRAW presenter)
     memoryDc = PresentMemoryTarget(presenter, windowDc, clientWidth, clientHeight);
     dc = memoryDc ? memoryDc : windowDc;
 
-    pixels = PresentSnapshotDib(presenter, &dib, &sourceWidth, &sourceHeight, 1);
+    pixels = PresentSnapshotDib(presenter, &dib, &sourceWidth, &sourceHeight, PRESENT_SNAPSHOT_2X);
     /* ⚠ THE INTEGER FIT USES sw/sh, WHICH ARE POST-SCALE2X. That is deliberate: the
          blit source is what has to divide into the destination. Snapping to a multiple
          of the ORIGINAL 320 while blitting a 640-wide scale2x source would give 2.5x
@@ -582,7 +582,7 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
          renderers is the point: a setting that meant one thing windowed and another
          fullscreen is exactly the bug it exists to prevent. */
     /* #325: exclusive fullscreen is "the screen": the same layout as the window. */
-    PresentLayout(presenter->Aspect, presenter->Fit, 1, presenter->FullscreenWidth, presenter->FullscreenHeight, presenter->SnapshotWidth, presenter->SnapshotHeight,
+    PresentLayout(presenter->Aspect, presenter->Fit, PRESENT_LAYOUT_SCREEN, presenter->FullscreenWidth, presenter->FullscreenHeight, presenter->SnapshotWidth, presenter->SnapshotHeight,
                    &fitX, &fitY, &fitWidth, &fitHeight);
     /* ...and remember it: the mouse maps through the rectangle actually drawn. */
     presenter->LastDestinationX = fitX; presenter->LastDestinationY = fitY; presenter->LastDestinationWidth = fitWidth; presenter->LastDestinationHeight = fitHeight;
@@ -606,7 +606,7 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
         }
         if (SUCCEEDED(IDirectDrawSurface7_GetDC(back, &dc))) {
             PRESENT_SNAPSHOT_DIB dib; INT sourceWidth, sourceHeight;
-            const BYTE *pixels = PresentSnapshotDib(presenter, &dib, &sourceWidth, &sourceHeight, 1);
+            const BYTE *pixels = PresentSnapshotDib(presenter, &dib, &sourceWidth, &sourceHeight, PRESENT_SNAPSHOT_2X);
             isDone = PresentBlitPicture(dc, fitX, fitY, fitWidth, fitHeight, pixels, &dib, sourceWidth, sourceHeight, presenter->Filter);   /* #325 */
             IDirectDrawSurface7_ReleaseDC(back, dc);
         }

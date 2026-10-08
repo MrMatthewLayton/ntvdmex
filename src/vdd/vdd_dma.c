@@ -269,7 +269,7 @@ static VOID DmaSoftwareBlock(PDMA_STATE state, BYTE channelNumber)
             BYTE *memory = DmaMemory(state, VddDmaCurrentPhysical(state, channelNumber));
             if (memory) for (byteIndex = 0; byteIndex < unitBytes; ++byteIndex) memory[byteIndex] = DMA_FLOATING_BYTE;
         }
-        if (DmaAdvance(state, channelNumber, 0)) break;
+        if (DmaAdvance(state, channelNumber, FALSE)) break;
     }
 }
 

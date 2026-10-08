@@ -541,15 +541,15 @@ static VOID GusRegisterWrite(PGUS_STATE state, BYTE registerNumber, WORD value)
         break; }
     case GUS_REGISTER_FREQUENCY: voice->FrequencyControl = value; break;
     case GUS_REGISTER_START_HIGH: voice->Start = GusPositionSetHigh(voice->Start, value); break;
-    case GUS_REGISTER_START_LOW: voice->Start = GusPositionSetLow(voice->Start, value, 0); break;
+    case GUS_REGISTER_START_LOW: voice->Start = GusPositionSetLow(voice->Start, value, GUS_FRACTION_FOUR_BIT); break;
     case GUS_REGISTER_END_HIGH: voice->End   = GusPositionSetHigh(voice->End, value); break;
-    case GUS_REGISTER_END_LOW: voice->End   = GusPositionSetLow(voice->End, value, 0); break;
+    case GUS_REGISTER_END_LOW: voice->End   = GusPositionSetLow(voice->End, value, GUS_FRACTION_FOUR_BIT); break;
     case GUS_REGISTER_RAMP_RATE: voice->RampRate  = byteValue; break;
     case GUS_REGISTER_RAMP_START: voice->RampStart = byteValue; break;
     case GUS_REGISTER_RAMP_END: voice->RampEnd   = byteValue; break;
     case GUS_REGISTER_VOLUME: voice->Volume = (WORD)(value & GUS_VOLUME_MASK); break;
     case GUS_REGISTER_POSITION_HIGH: voice->Position = GusPositionSetHigh(voice->Position, value); break;
-    case GUS_REGISTER_POSITION_LOW: voice->Position = GusPositionSetLow(voice->Position, value, 1); break;
+    case GUS_REGISTER_POSITION_LOW: voice->Position = GusPositionSetLow(voice->Position, value, GUS_FRACTION_NINE_BIT); break;
     case GUS_REGISTER_PAN: voice->Pan = (BYTE)(byteValue & GUS_PAN_MASK); break;
     case GUS_REGISTER_VOLUME_CONTROL:
         voice->VolumeControl = (BYTE)((byteValue & GUS_RAMP_CONTROL_BITS) | (voice->VolumeControl & GUS_RAMP_IRQ_PENDING));
@@ -604,15 +604,15 @@ static WORD GusRegisterRead(PGUS_STATE state, BYTE registerNumber)
     case GUS_REGISTER_READ_VOICE_CONTROL: return voice->Control;
     case GUS_REGISTER_READ_FREQUENCY: return voice->FrequencyControl;
     case GUS_REGISTER_READ_START_HIGH: return GusPositionGetHigh(voice->Start);
-    case GUS_REGISTER_READ_START_LOW: return GusPositionGetLow(voice->Start, 0);
+    case GUS_REGISTER_READ_START_LOW: return GusPositionGetLow(voice->Start, GUS_FRACTION_FOUR_BIT);
     case GUS_REGISTER_READ_END_HIGH: return GusPositionGetHigh(voice->End);
-    case GUS_REGISTER_READ_END_LOW: return GusPositionGetLow(voice->End, 0);
+    case GUS_REGISTER_READ_END_LOW: return GusPositionGetLow(voice->End, GUS_FRACTION_FOUR_BIT);
     case GUS_REGISTER_READ_RAMP_RATE: return voice->RampRate;
     case GUS_REGISTER_READ_RAMP_START: return voice->RampStart;
     case GUS_REGISTER_READ_RAMP_END: return voice->RampEnd;
     case GUS_REGISTER_READ_VOLUME: return voice->Volume;
     case GUS_REGISTER_READ_POSITION_HIGH: return GusPositionGetHigh(voice->Position);
-    case GUS_REGISTER_READ_POSITION_LOW: return GusPositionGetLow(voice->Position, 1);
+    case GUS_REGISTER_READ_POSITION_LOW: return GusPositionGetLow(voice->Position, GUS_FRACTION_NINE_BIT);
     case GUS_REGISTER_READ_PAN: return voice->Pan;
     case GUS_REGISTER_READ_VOLUME_CONTROL: return voice->VolumeControl;
     case GUS_REGISTER_READ_ACTIVE_VOICES: return (WORD)(GUS_ACTIVE_VOICES_READ_BITS | (state->ActiveVoices - 1));
@@ -944,8 +944,8 @@ static VOID GusRender(PGUS_STATE state, INT16 *output, UINT32 count, INT isStere
     GusIrqUpdate(state);
 }
 
-VOID VddGusRender(PGUS_STATE state, INT16 *output, UINT32 count)    { GusRender(state, output, count, 0); }
-VOID VddGusRenderStereo(PGUS_STATE state, INT16 *output, UINT32 count) { GusRender(state, output, count, 1); }
+VOID VddGusRender(PGUS_STATE state, INT16 *output, UINT32 count)    { GusRender(state, output, count, AUDIO_MONO); }
+VOID VddGusRenderStereo(PGUS_STATE state, INT16 *output, UINT32 count) { GusRender(state, output, count, AUDIO_STEREO); }
 
 /* ---- the bus ------------------------------------------------------------------- */
 
