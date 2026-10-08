@@ -62,22 +62,6 @@
 #define XL_KIND_MASK 0x0F  /* the immediate kind, below XL_MR       */
 
 /* The instruction set's own numbers. */
-#define X86_PREFIX_ES           0x26
-#define X86_PREFIX_CS           0x2E
-#define X86_PREFIX_SS           0x36
-#define X86_PREFIX_DS           0x3E
-#define X86_PREFIX_FS           0x64
-#define X86_PREFIX_GS           0x65
-#define X86_PREFIX_OPERAND_SIZE 0x66
-#define X86_PREFIX_ADDRESS_SIZE 0x67
-#define X86_PREFIX_LOCK         0xF0
-#define X86_PREFIX_REPNE        0xF2
-#define X86_PREFIX_REP          0xF3
-#define X86_ESCAPE              0x0F    /* two-byte opcodes                      */
-#define X86_ESCAPE_38           0x38    /* three-byte opcodes                    */
-#define X86_ESCAPE_3A           0x3A    /* ...with an imm8                       */
-#define X86_JCC_NEAR_FIRST      0x80    /* 0F 80..8F: jcc rel16/32               */
-#define X86_JCC_NEAR_LAST       0x8F
 #define X86_MODRM_MODE_SHIFT    6
 #define X86_MODRM_REG_SHIFT     3
 #define X86_MODRM_FIELD_MASK    7

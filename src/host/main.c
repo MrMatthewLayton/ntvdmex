@@ -2447,7 +2447,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
        is -- the same image test as at start-up: >= 8 NTVDM `C4 C4 54` sites. */
     {   DWORD index, bopCount = 0;
         for (index = 0; index + 3 < bytesRead; ++index)
-            if (g_ExecFileBuffer[index] == 0xC4 && g_ExecFileBuffer[index+1] == 0xC4 && g_ExecFileBuffer[index+2] == 0x54) ++bopCount;
+            if (g_ExecFileBuffer[index] == VDM_BOP0 && g_ExecFileBuffer[index+1] == VDM_BOP1 && g_ExecFileBuffer[index+2] == 0x54) ++bopCount;
         if (bopCount >= 8) DosInt21SetShellPsp(machine, child, 1); }
     /* ...and so is every program in Windows' own SYSTEM directory. (s81, user: `mem` ->
        "Incorrect DOS version".) Those are XP's DOS tools -- MEM, EDIT, DEBUG, EDLIN,
@@ -3095,7 +3095,7 @@ static INT KeyboardActionEntry(INT keyboardAction)
            here: the call is made only once a guest, a TSR or a DOS has hooked the
            vector -- which is the case Ctrl-Break / Print Screen handling exists for. */
         if (segment >= 0xF000) return -1;
-        if (target[0] == 0xC4 && target[1] == 0xC4 && segment != DOS_HDLR_SEG && segment != DOS_CTAB_SEG) return -1;
+        if (target[0] == VDM_BOP0 && target[1] == VDM_BOP1 && segment != DOS_HDLR_SEG && segment != DOS_CTAB_SEG) return -1;
     }
     return keyboardAction == INPUT_ACTION_BREAK ? BIOS_KEYBOARD_ACTION_BREAK : BIOS_KEYBOARD_ACTION_PRINT_SCREEN;
 }
@@ -5222,7 +5222,7 @@ static INT LaunchShellVdm(VOID)
         InstallReport(message, 0);
         return 1;
     }
-    {   static const BYTE exitStub[] = { 0xB4, 0x4C, 0xCD, 0x21 };   /* mov ah,4Ch; int 21h */
+    {   static const BYTE exitStub[] = { X86_OP_MOV_AH_IMM, DOS_FN_EXIT, X86_OP_INT, VECTOR_DOS };   /* mov ah,4Ch; int 21h */
         BOOL isWritten = WriteFile(handle, exitStub, sizeof exitStub, &bytesWritten, NULL);
         CloseHandle(handle);
         /* ⚠ A SHORT WRITE IS NOT A SUCCESS. A truncated stub is not a DOS image and
@@ -10137,9 +10137,9 @@ static INT WowKernel2Stub(WORD thunkId, WORD returnStub)
     if (!segment->Sector || returnStub < 8 || (DWORD)returnStub > segment->Length) return 0;
     image = g_WowImage[0] + segment->FileOffset;
     offset   = (DWORD)returnStub - 8;
-    return image[offset] == 0x68
+    return image[offset] == X86_OP_PUSH_IMM
         && (WORD)(image[offset + 1] | (image[offset + 2] << BYTE_SHIFT)) == thunkId
-        && image[offset + 3] == 0x9A;
+        && image[offset + 3] == X86_OP_CALL_FAR;
 }
 
 /* seg2 ids. Numbered in THEIR OWN space -- 0xd1 here is not 0xd1 in wow32.h. */
@@ -15212,7 +15212,7 @@ static DWORD HostIoLoopBurst(volatile BYTE *tib, VDD_BUS *bus,
        does not, and there LOOP counts in ECX. One mask drives both. */
     DWORD cx, iterations, mask = is32 ? 0xFFFFFFFFu : 0xFFFFu;
     INT displacement;
-    if (segment[ipNext & mask] != 0xE2) return 0;           /* LOOP rel8 only        */
+    if (segment[ipNext & mask] != X86_OP_LOOP) return 0;           /* LOOP rel8 only        */
     displacement = (INT8)segment[(ipNext + 1) & mask];
     if (((ipNext + 2 + displacement) & mask) != (ioStart & mask)) return 0;
     cx = VDM_REG(tib, VTIB_ECX) & mask;
@@ -15300,8 +15300,8 @@ static VOID RetraceIdle(VOID)
     /* test al,08h (A8 08) or and al,08h (24 08), then back to the IN with jz/jnz (74/75)
        -- or, #183 (s84 census: Skyroads' only hot site, 276:6287, 5.5M reads a run), with
        loopz/loopnz (E1/E0): the same wait with a CX timeout. */
-    if (!((code[0] == 0xA8 || code[0] == 0x24) && code[1] == 0x08
-          && (code[2] == 0x74 || code[2] == 0x75 || code[2] == 0xE1 || code[2] == 0xE0)))
+    if (!((code[0] == X86_OP_TEST_IMM_BYTE || code[0] == X86_OP_AND_AL_IMM) && code[1] == 0x08
+          && (code[2] == X86_OP_JZ_SHORT || code[2] == X86_OP_JNZ_SHORT || code[2] == X86_OP_LOOPE || code[2] == X86_OP_LOOPNE)))
         return;
     {   INT target = (INT)((ip + 4 + (INT8)code[3]) & WORD_MASK);
         if (target > (INT)ip || (INT)ip - target > 3) return;    /* must jump back to the IN */ }
@@ -15327,21 +15327,21 @@ static INT HostTryIo(volatile BYTE *tib, VDD_BUS *bus)
     INT index = 0, operandSize = 2, isIn, width, usedDx, length;
     BYTE opcode; WORD port;
 
-    while (code[index] == 0x66 || code[index] == 0x67 ||
-           code[index] == 0xF2 || code[index] == 0xF3) {        /* prefixes            */
+    while (code[index] == X86_PREFIX_OPERAND_SIZE || code[index] == X86_PREFIX_ADDRESS_SIZE ||
+           code[index] == X86_PREFIX_REPNE || code[index] == X86_PREFIX_REP) {        /* prefixes            */
         if (code[index] == 0x66) operandSize = 4;
         if (++index > 4) return 0;
     }
     opcode = code[index];
     switch (opcode) {
-    case 0xE4: isIn = 1; width = 1;      usedDx = 0; break;  /* IN  AL,ib    */
-    case 0xE5: isIn = 1; width = operandSize; usedDx = 0; break;  /* IN  eAX,ib   */
-    case 0xE6: isIn = 0; width = 1;      usedDx = 0; break;  /* OUT ib,AL    */
-    case 0xE7: isIn = 0; width = operandSize; usedDx = 0; break;  /* OUT ib,eAX   */
-    case 0xEC: isIn = 1; width = 1;      usedDx = 1; break;  /* IN  AL,DX    */
-    case 0xED: isIn = 1; width = operandSize; usedDx = 1; break;  /* IN  eAX,DX   */
-    case 0xEE: isIn = 0; width = 1;      usedDx = 1; break;  /* OUT DX,AL    */
-    case 0xEF: isIn = 0; width = operandSize; usedDx = 1; break;  /* OUT DX,eAX   */
+    case X86_OP_IN_IMM_BYTE: isIn = 1; width = 1;      usedDx = 0; break;  /* IN  AL,ib    */
+    case X86_OP_IN_IMM: isIn = 1; width = operandSize; usedDx = 0; break;  /* IN  eAX,ib   */
+    case X86_OP_OUT_IMM_BYTE: isIn = 0; width = 1;      usedDx = 0; break;  /* OUT ib,AL    */
+    case X86_OP_OUT_IMM: isIn = 0; width = operandSize; usedDx = 0; break;  /* OUT ib,eAX   */
+    case X86_OP_IN_DX_BYTE: isIn = 1; width = 1;      usedDx = 1; break;  /* IN  AL,DX    */
+    case X86_OP_IN_DX: isIn = 1; width = operandSize; usedDx = 1; break;  /* IN  eAX,DX   */
+    case X86_OP_OUT_DX_BYTE: isIn = 0; width = 1;      usedDx = 1; break;  /* OUT DX,AL    */
+    case X86_OP_OUT_DX: isIn = 0; width = operandSize; usedDx = 1; break;  /* OUT DX,eAX   */
     default:   return 0;                       /* not an I/O op -> real fault  */
     }
     if (usedDx) { port = (WORD)VDM_REG(tib, VTIB_EDX); length = index + 1; }
@@ -15371,17 +15371,17 @@ static INT HostTryIoRetro(volatile BYTE *tib, VDD_BUS *bus)
     BYTE opcode; INT isIn, width, operandSize = 2; WORD port; DWORD ioStart;
     if (ip < 1) return 0;
     opcode = segment[ip - 1];
-    if (opcode == 0xEC || opcode == 0xED || opcode == 0xEE || opcode == 0xEF) {   /* DX-form (1 byte) */
+    if (opcode == X86_OP_IN_DX_BYTE || opcode == X86_OP_IN_DX || opcode == X86_OP_OUT_DX_BYTE || opcode == X86_OP_OUT_DX) {   /* DX-form (1 byte) */
         ioStart = ip - 1;
         if (ip >= 2 && segment[ip - 2] == 0x66) { operandSize = 4; ioStart = ip - 2; }
-        isIn = (opcode == 0xEC || opcode == 0xED);
-        width = (opcode == 0xEC || opcode == 0xEE) ? 1 : operandSize;
+        isIn = (opcode == X86_OP_IN_DX_BYTE || opcode == X86_OP_IN_DX);
+        width = (opcode == X86_OP_IN_DX_BYTE || opcode == X86_OP_OUT_DX_BYTE) ? 1 : operandSize;
         port  = (WORD)VDM_REG(tib, VTIB_EDX);
-    } else if (ip >= 2 && ((opcode = segment[ip - 2]) == 0xE4 || opcode == 0xE5 ||
-                            opcode == 0xE6 || opcode == 0xE7)) {          /* imm-form (2 byte) */
+    } else if (ip >= 2 && ((opcode = segment[ip - 2]) == X86_OP_IN_IMM_BYTE || opcode == X86_OP_IN_IMM ||
+                            opcode == X86_OP_OUT_IMM_BYTE || opcode == X86_OP_OUT_IMM)) {          /* imm-form (2 byte) */
         ioStart = ip - 2;
-        isIn = (opcode == 0xE4 || opcode == 0xE5);
-        width = (opcode == 0xE4 || opcode == 0xE6) ? 1 : operandSize;
+        isIn = (opcode == X86_OP_IN_IMM_BYTE || opcode == X86_OP_IN_IMM);
+        width = (opcode == X86_OP_IN_IMM_BYTE || opcode == X86_OP_OUT_IMM_BYTE) ? 1 : operandSize;
         port  = segment[ip - 1];                                      /* imm8 port        */
     } else {
         return 0;                                                 /* no I/O ends here */
@@ -15421,10 +15421,10 @@ static INT HostTryIoString(volatile BYTE *tib, VDD_BUS *bus)
         opcode = segment[(ip + index) & WORD_MASK];
         if      (opcode == 0x66) operandSize = 4;
         else if (opcode == 0xF2 || opcode == 0xF3) report = 1;
-        else if (opcode == 0x26) sover = VTIB_ES;    /* segment overrides on the source */
-        else if (opcode == 0x2E) sover = VTIB_CS;
-        else if (opcode == 0x36) sover = VTIB_SS;
-        else if (opcode == 0x3E) sover = VTIB_DS;
+        else if (opcode == X86_PREFIX_ES) sover = VTIB_ES;    /* segment overrides on the source */
+        else if (opcode == X86_PREFIX_CS) sover = VTIB_CS;
+        else if (opcode == X86_PREFIX_SS) sover = VTIB_SS;
+        else if (opcode == X86_PREFIX_DS) sover = VTIB_DS;
         else if (opcode != 0x67) break;
         if (++index > 4) return 0;
     }
@@ -15531,14 +15531,14 @@ static INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
     }
     opcode = code[index];
     switch (opcode) {
-    case 0xE4: isIn = 1; width = 1;      usedDx = 0; break;  /* IN  AL,ib    */
-    case 0xE5: isIn = 1; width = operandSize; usedDx = 0; break;  /* IN  eAX,ib   */
-    case 0xE6: isIn = 0; width = 1;      usedDx = 0; break;  /* OUT ib,AL    */
-    case 0xE7: isIn = 0; width = operandSize; usedDx = 0; break;  /* OUT ib,eAX   */
-    case 0xEC: isIn = 1; width = 1;      usedDx = 1; break;  /* IN  AL,DX    */
-    case 0xED: isIn = 1; width = operandSize; usedDx = 1; break;  /* IN  eAX,DX   */
-    case 0xEE: isIn = 0; width = 1;      usedDx = 1; break;  /* OUT DX,AL    */
-    case 0xEF: isIn = 0; width = operandSize; usedDx = 1; break;  /* OUT DX,eAX   */
+    case X86_OP_IN_IMM_BYTE: isIn = 1; width = 1;      usedDx = 0; break;  /* IN  AL,ib    */
+    case X86_OP_IN_IMM: isIn = 1; width = operandSize; usedDx = 0; break;  /* IN  eAX,ib   */
+    case X86_OP_OUT_IMM_BYTE: isIn = 0; width = 1;      usedDx = 0; break;  /* OUT ib,AL    */
+    case X86_OP_OUT_IMM: isIn = 0; width = operandSize; usedDx = 0; break;  /* OUT ib,eAX   */
+    case X86_OP_IN_DX_BYTE: isIn = 1; width = 1;      usedDx = 1; break;  /* IN  AL,DX    */
+    case X86_OP_IN_DX: isIn = 1; width = operandSize; usedDx = 1; break;  /* IN  eAX,DX   */
+    case X86_OP_OUT_DX_BYTE: isIn = 0; width = 1;      usedDx = 1; break;  /* OUT DX,AL    */
+    case X86_OP_OUT_DX: isIn = 0; width = operandSize; usedDx = 1; break;  /* OUT DX,eAX   */
     default:   return 0;                       /* not an I/O op -> real fault  */
     }
     if (usedDx) { port = (WORD)VDM_REG(tib, VTIB_EDX); length = index + 1; }
@@ -16834,7 +16834,7 @@ static VOID ModeYPmRun(volatile BYTE *tib)
     HOST_LOCK();
     for (;;) {
         BYTE opcodeByte = Pm32HostRead8(cpu.SegmentBases[1] + cpu.Eip);
-        INT wasResult = (opcodeByte == 0xC3 || opcodeByte == 0xC2);
+        INT wasResult = (opcodeByte == X86_OP_RET || opcodeByte == X86_OP_RET_IMM);
         if (steps >= MYPM_CAP) { why = 3; break; }
         if (!Pm32Step(&cpu)) { why = 2; break; }
         ++steps;
@@ -17458,7 +17458,7 @@ static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
         DWORD site = g_DpmiCodeBase + (context->Edx & WORD_MASK);
         const BYTE *siteBytes = (const BYTE *)(ULONG_PTR)site;
         DWORD functionNumber = context->Eax & WORD_MASK;
-        BYTE  vector  = (siteBytes[0] == 0xCD) ? siteBytes[1] : 0x31;    /* CD nn -> vector; default 31h    */
+        BYTE  vector  = (siteBytes[0] == X86_OP_INT) ? siteBytes[1] : VECTOR_DPMI;    /* CD nn -> vector; default 31h    */
         ++g_VehCount;
         cursor = LogPut(cursor, "DPMI INT"); cursor = LogHex(cursor, vector); cursor = LogPut(cursor, "h #"); cursor = LogHex(cursor, (UINT)g_VehCount);
         cursor = LogPut(cursor, ": AX=0x"); cursor = LogHex(cursor, functionNumber);
@@ -17517,7 +17517,7 @@ static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
              so resuming without that dies instantly) and resume, touching NOTHING else.
              Service ONLY what is provably an INT: `CD nn` at the faulting EIP. */
         { const BYTE *faultInstruction = (const BYTE *)(ULONG_PTR)(g_DpmiCodeBase + (context->Eip & WORD_MASK));
-          if (faultInstruction[0] != 0xCD) {
+          if (faultInstruction[0] != X86_OP_INT) {
               /* ► WE ARE A FIRST-CHANCE HANDLER. ARE WE STEALING A FAULT THE KERNEL
                    WOULD HANDLE BETTER? Under `pmkernel.flag` the guest runs INSIDE
                    VdmStartExecution, and the kernel's whole job for a VDM is to turn
@@ -18489,7 +18489,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
             volatile BYTE *callStub = (volatile BYTE *)(ULONG_PTR)((DWORD)callStubSegment << PARAGRAPH_SHIFT);
             g_WowCallbackSegment = callStubSegment;
             g_WowCallbackLinear = (DWORD)callStubSegment << PARAGRAPH_SHIFT;
-            callStub[0] = 0xC4; callStub[1] = 0xC4; callStub[2] = WOWCALL_BOP_CODE;
+            callStub[0] = VDM_BOP0; callStub[1] = VDM_BOP1; callStub[2] = WOWCALL_BOP_CODE;
             /* ★ And the RETF trampoline, four bytes along -- the paragraph has
                  sixteen and we were using three. See WOWCALL_RETF_OFF: it is how
                  a call into a NOT-YET-LOADED code segment gets that segment
@@ -19182,8 +19182,8 @@ static VOID DpmiInstallDefaultPmHandlers(DOS_MACHINE *machine)
     g_PmDefaultSelector = (WORD)DPMI_LDT_SELECTOR(index);
     for (vector = 0; vector < 256; ++vector) {
         DWORD offset = (DWORD)vector * DPMI_PMDEF_STRIDE;
-        stub[offset + 0] = 0xC4; stub[offset + 1] = 0xC4;
-        stub[offset + 2] = 0xCF;                    /* BOP immediate AND the IRET */
+        stub[offset + 0] = VDM_BOP0; stub[offset + 1] = VDM_BOP1;
+        stub[offset + 2] = X86_OP_IRET;                    /* BOP immediate AND the IRET */
         PatchMapSet(g_PmDefaultBase + offset, (BYTE)vector);   /* resolves the chained BOP -> vector v */
         g_PmInt[vector].Selector = g_PmDefaultSelector;
         g_PmInt[vector].Offset = offset;
@@ -19348,12 +19348,12 @@ static VOID DpmiInstallFaultTrampoline(VOID)
           sites[DOS_FLTSITE_OFF + index * 4 + 0] = VDM_BOP0;
           sites[DOS_FLTSITE_OFF + index * 4 + 1] = VDM_BOP1;
           sites[DOS_FLTSITE_OFF + index * 4 + 2] = DPMI_FAULT_BOP;
-          sites[DOS_FLTSITE_OFF + index * 4 + 3] = 0xCB;      /* RETF, never reached  */
+          sites[DOS_FLTSITE_OFF + index * 4 + 3] = X86_OP_RETF;      /* RETF, never reached  */
       }
       sites[DOS_FLTRET_OFF + 0] = VDM_BOP0;               /* the handler's retf lands here */
       sites[DOS_FLTRET_OFF + 1] = VDM_BOP1;
       sites[DOS_FLTRET_OFF + 2] = DPMI_FLTRET_BOP;
-      sites[DOS_FLTRET_OFF + 3] = 0xCB; }
+      sites[DOS_FLTRET_OFF + 3] = X86_OP_RETF; }
     for (index = 0; index * 0x10 < sizeof g_FaultTable; ++index) {
         *(WORD  *)(g_FaultTable + index * 0x10 + 0) = g_DpmiFaultCodeSelector;
         *(DWORD *)(g_FaultTable + index * 0x10 + 4) = (index < DOS_FLTSITE_N)
@@ -19416,7 +19416,7 @@ static DWORD DpmiRecoverFlatEip(DWORD lo16, BYTE vector, INT *candidateCount)
             if (address < base || address + 1 >= base + size) continue;
             if (!HostReadable((const VOID *)(ULONG_PTR)address, 2)) continue;
             bytes = (const volatile BYTE *)(ULONG_PTR)address;
-            if (bytes[0] != 0xCD || bytes[1] != vector) continue;
+            if (bytes[0] != X86_OP_INT || bytes[1] != vector) continue;
             if (matches == 0) { found = address; matches = 1; }
             else if (address != found) ++matches;
         }
@@ -19476,7 +19476,7 @@ static DWORD DpmiBopVector(DWORD csValue, DWORD eip)
     if (!g_WowModuleCount || !g_WowImage[0]) return 0;
     if (!HostReadable((const VOID *)(ULONG_PTR)linear, 2)) return 0;
     {   const volatile BYTE *bytes = (const volatile BYTE *)(ULONG_PTR)linear;
-        if (bytes[0] != 0xC4 || bytes[1] != 0xC4) return 0;
+        if (bytes[0] != VDM_BOP0 || bytes[1] != VDM_BOP1) return 0;
     }
     for (segmentIndex = 0; segmentIndex < (INT)g_WowModule[0].SegmentCount && segmentIndex < WOW_PMBASE_MAX; ++segmentIndex) {
         NE_SEGMENT *segment = &g_WowModule[0].Segments[segmentIndex];
@@ -19484,7 +19484,7 @@ static DWORD DpmiBopVector(DWORD csValue, DWORD eip)
         if (base != g_WowPmBase[segmentIndex] && base != ((DWORD)segment->Selector << PARAGRAPH_SHIFT)) continue;
         if (segment->FileOffset + eip + 1 >= g_WowModule[0].ImageLength) continue;
         {   const BYTE *fileBytes = g_WowImage[0] + segment->FileOffset + eip;
-            if (fileBytes[0] != 0xCD) return 0;
+            if (fileBytes[0] != X86_OP_INT) return 0;
             PatchMapSet(linear, fileBytes[1]);                     /* one lookup, once */
             return fileBytes[1];
         }
@@ -19681,7 +19681,7 @@ static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
                        as policy: those were *reverted for lack of evidence*, and the evidence
                        now exists. Watch the patched-site count and the "NOT an INT site"
                        rejects across this change -- that is how a false positive would show. */
-                  if (memory[index] == 0xCD) {
+                  if (memory[index] == X86_OP_INT) {
                       DWORD linear = address + index;
                       if (PatchMapGet(linear)) continue;   /* already patched (aliased region) */
                       /* ── ★★★★★ A JUMP/CALL TABLE IS DATA, EVEN INSIDE A CODE OBJECT.
@@ -19857,7 +19857,7 @@ static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
                           continue;
                       }
                       /* ⚠ RECORDED HERE, AFTER THE VOTE, NOT AT CANDIDATE TIME.
-                           This push used to sit next to the `mem[i] == 0xCD` test, so
+                           This push used to sit next to the `mem[i] == X86_OP_INT` test, so
                            the line below read "patched 4 INT sites, rejected 16 ... at
                            +0x13a3 +0x2052 ..." with TWELVE offsets -- candidates
                            rendered as if they were the patched ones. Session 39 spent
@@ -19888,7 +19888,7 @@ static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
                       }
                       if (!isDryRun) {
                           PatchMapSet(linear, memory[index+1]);
-                          memory[index] = 0xC4; memory[index+1] = 0xC4;
+                          memory[index] = VDM_BOP0; memory[index+1] = VDM_BOP1;
                       }
                       ++patched;
                   }
@@ -20213,8 +20213,8 @@ static VOID DpmiBreakpointArm(VOID)
              is still 00 00 holds nothing to break on, so leave it unarmed and try
              again after the next region is loaded. */
         if (g_BreakpointArmed[index]) {
-            if (g_BreakpointMode[index] == 1 ? (bytes[0] == 0xCC)
-                                  : (bytes[0] == 0xC4 && bytes[1] == 0xC4)) continue;  /* still planted */
+            if (g_BreakpointMode[index] == 1 ? (bytes[0] == X86_OP_INT3)
+                                  : (bytes[0] == VDM_BOP0 && bytes[1] == VDM_BOP1)) continue;  /* still planted */
             /* ── ⚠⚠ A HALF-CLOBBERED BOP MUST NOT BE RE-CAPTURED AS THE ORIGINAL. ───
                  Falling straight through to the re-arm below saves whatever is at the
                  site RIGHT NOW as `the guest's instruction` -- and when only the SECOND
@@ -20234,9 +20234,9 @@ static VOID DpmiBreakpointArm(VOID)
                  it: byte 0 is still ours, therefore the byte 0 we saved first is still
                  the truth; only byte 1's new value is news. Update that half, re-plant
                  ours, and leave the entry armed. */
-            if (g_BreakpointMode[index] != 1 && bytes[0] == 0xC4 && g_BreakpointOriginal[index][0] != 0xC4) {
+            if (g_BreakpointMode[index] != 1 && bytes[0] == VDM_BOP0 && g_BreakpointOriginal[index][0] != VDM_BOP0) {
                 g_BreakpointOriginal[index][1] = bytes[1];                    /* the guest's new byte 1 */
-                bytes[1] = 0xC4;                               /* re-plant the lost half */
+                bytes[1] = VDM_BOP1;                               /* re-plant the lost half */
                 cursor = LogPut(cursor, "DPMI-BP: 0x"); cursor = LogHex(cursor, linear);
                 cursor = LogPut(cursor, " half-clobbered (a fixup rewrote the byte under our BOP);"
                             " byte 1 re-planted, saved original now ");
@@ -20303,9 +20303,9 @@ static VOID DpmiBreakpointArm(VOID)
         g_BreakpointOriginal[index][0] = bytes[0]; g_BreakpointOriginal[index][1] = bytes[1];
         ++g_BreakpointArms[index];
         if (g_BreakpointMode[index] == 1) {
-            bytes[0] = 0xCC;                      /* INT3: one byte, fits over CLI/STI */
+            bytes[0] = X86_OP_INT3;                      /* INT3: one byte, fits over CLI/STI */
         } else {
-            bytes[0] = 0xC4; bytes[1] = 0xC4;
+            bytes[0] = VDM_BOP0; bytes[1] = VDM_BOP1;
             PatchMapSet(linear, DPMI_BP_VEC);       /* only a BOP is resolvable by vector  */
         }
         g_BreakpointArmed[index] = 1; g_BreakpointPending[index] = 0;
@@ -20373,7 +20373,7 @@ static VOID DpmiUnpatch(VOID)
         DWORD address = g_PatchMapLinear[slot]; BYTE vector = g_PatchMapVector[slot];
         if (!address || !vector || vector == DPMI_BP_VEC) continue;           /* a BP is not an INT site */
         { volatile BYTE *bytes = (volatile BYTE *)(ULONG_PTR)address;
-          if (bytes[0] == 0xC4 && bytes[1] == 0xC4) { bytes[0] = 0xCD; bytes[1] = vector; }
+          if (bytes[0] == VDM_BOP0 && bytes[1] == VDM_BOP1) { bytes[0] = X86_OP_INT; bytes[1] = vector; }
           else g_PatchMapVector[slot] = 0; }                          /* stale: guest reused it */
     }
 }
@@ -20384,7 +20384,7 @@ static VOID DpmiRepatch(VOID)
         DWORD address = g_PatchMapLinear[slot]; BYTE vector = g_PatchMapVector[slot];
         if (!address || !vector || vector == DPMI_BP_VEC) continue;           /* a BP stays planted */
         { volatile BYTE *bytes = (volatile BYTE *)(ULONG_PTR)address;
-          if (bytes[0] == 0xCD && bytes[1] == vector) { bytes[0] = 0xC4; bytes[1] = 0xC4; }
+          if (bytes[0] == X86_OP_INT && bytes[1] == vector) { bytes[0] = VDM_BOP0; bytes[1] = VDM_BOP1; }
           else g_PatchMapVector[slot] = 0; }                          /* stale: guest reused it */
     }
 }
@@ -21627,11 +21627,11 @@ static INT WowVendorApiEntry(DOS_MACHINE *machine, WORD *selector, WORD *offset)
         0x75, 0x04,              /* +08  jnz  +0x0E  -- not ours  */
         0xB4, 0x01,              /* +0A  mov ah,1    (AX=0x0100)  */
         0xF8,                    /* +0C  clc                      */
-        0xCB,                    /* +0D  retf                     */
-        0xCB,                    /* +0E  retf        (CF=1)       */
+        X86_OP_RETF,                    /* +0D  retf                     */
+        X86_OP_RETF,                    /* +0E  retf        (CF=1)       */
         0xB8, 0x00, 0x00,        /* +0F  mov ax,<shadow selector> */
         0xF8,                    /* +12  clc                      */
-        0xCB                     /* +13  retf                     */
+        X86_OP_RETF                     /* +13  retf                     */
     };
     WORD segment = 0, maximum = 0, shadow;
     volatile BYTE *bytes;
@@ -22107,7 +22107,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
            ⚠ AN UNEXPECTED ARRIVAL IS NOT INERT. If nothing is in flight, some
              guest reached our stub on its own, and the honest thing is to say so
              and stop -- resuming would run whatever context happened to be live. */
-        if (bopBytes[0] == 0xC4 && bopBytes[1] == 0xC4 && g_WowCallbackLinear && codeLinear == g_WowCallbackLinear) {
+        if (bopBytes[0] == VDM_BOP0 && bopBytes[1] == VDM_BOP1 && g_WowCallbackLinear && codeLinear == g_WowCallbackLinear) {
             DWORD result = VDM_REG16(tib, VTIB_EAX)
                       | (VDM_REG16(tib, VTIB_EDX) << WORD_SHIFT);
             WOWCALL_FRAME *callFrame = WowCallLeave(tib, result);
@@ -22457,7 +22457,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
             return 1;
         }
-        if (bopBytes[0] == 0xC4 && bopBytes[1] == 0xC4) {
+        if (bopBytes[0] == VDM_BOP0 && bopBytes[1] == VDM_BOP1) {
             BYTE bopCode = bopBytes[2], bopSubcode = bopBytes[3];
             /* What a stepped-over 0x51 will hand back -- see the step-over note below.
                Captured while the frame is still in scope. A separate flag, because
@@ -22617,7 +22617,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         cursor = LogPut(cursor, "+0x"); cursor = LogHex(cursor, eip);
                         cursor = LogPut(cursor, " = "); cursor = LogHexByte(cursor, fileBytes[0]);
                         cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, fileBytes[1]);
-                        if (fileBytes[0] == 0xCD)
+                        if (fileBytes[0] == X86_OP_INT)
                             cursor = LogPut(cursor, " -- ★ A PATCHED INT, NOT A BOP; vector lost");
                         cursor = LogPut(cursor, "]");
                     }
@@ -27328,7 +27328,7 @@ static VOID DpmiPmCarryToFrame(volatile BYTE *tib)
     if (!base) return;
     eip = VDM_REG(tib, VTIB_EIP);
     instruction  = (const volatile BYTE *)(ULONG_PTR)(base + eip);
-    if (!MemoryReadable((ULONG_PTR)instruction, 1) || *instruction != 0xCF) return;   /* not about to IRET */
+    if (!MemoryReadable((ULONG_PTR)instruction, 1) || *instruction != X86_OP_IRET) return;   /* not about to IRET */
 
     ss  = (WORD)VDM_REG16(tib, VTIB_SS);
     sp  = DpmiSelectorIs32(ss) ? VDM_REG(tib, VTIB_ESP) : VDM_REG16(tib, VTIB_ESP);
@@ -27969,7 +27969,7 @@ static INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip)
             volatile BYTE *guestInstruction = (volatile BYTE *)(ULONG_PTR)(guestCodeBase + frame[3]);
             if (!guestCodeBase || DpmiSelectorIs32(frame[4]) || DpmiSelectorIs32(frame[7])
                 || (gateVector >= VECTOR_FLOATING_POINT_FIRST && gateVector <= VECTOR_FLOATING_POINT_LAST)
-                || !HostReadable((const VOID *)guestInstruction, 2) || guestInstruction[0] != 0xCD || guestInstruction[1] != (BYTE)gateVector
+                || !HostReadable((const VOID *)guestInstruction, 2) || guestInstruction[0] != X86_OP_INT || guestInstruction[1] != (BYTE)gateVector
                 || !HostWritable((VOID *)guestInstruction, 2))
                 return 0;
             VDM_SET16(tib, VTIB_SS, frame[7]); VDM_REG(tib, VTIB_ESP) = frame[6];
@@ -28651,7 +28651,7 @@ static VOID DpmiClientTeardown(VOID)
                                    | PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY))
                 || address + 2 > (DWORD)(ULONG_PTR)memoryInfo.BaseAddress + (DWORD)memoryInfo.RegionSize) continue;
             bytes = (volatile BYTE *)(ULONG_PTR)address;
-            if (bytes[0] == 0xC4 && bytes[1] == 0xC4) { bytes[0] = 0xCD; bytes[1] = vector; }
+            if (bytes[0] == VDM_BOP0 && bytes[1] == VDM_BOP1) { bytes[0] = X86_OP_INT; bytes[1] = vector; }
         }
     }
 
@@ -28680,7 +28680,7 @@ static VOID DpmiClientTeardown(VOID)
     if (g_PmDefaultBase)
         for (index = 0; index < 256; ++index) {
             volatile BYTE *stub = (volatile BYTE *)(ULONG_PTR)(g_PmDefaultBase + (DWORD)index * DPMI_PMDEF_STRIDE);
-            stub[0] = 0xC4; stub[1] = 0xC4; stub[2] = 0xCF;       /* BOP ; IRET, as installed */
+            stub[0] = VDM_BOP0; stub[1] = VDM_BOP1; stub[2] = X86_OP_IRET;       /* BOP ; IRET, as installed */
             PatchMapSet(g_PmDefaultBase + (DWORD)index * DPMI_PMDEF_STRIDE, (BYTE)index);
         }
 
@@ -28806,7 +28806,7 @@ static INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib)
         if (V86Step(&cpu)) { if (++guard > 20000000L) break; continue; }   /* modeled step */
         { UINT32 site = V86SegmentBase(cpu.Segments[1]) + cpu.Ip;
           BYTE opcode = V86HostRead8(site), nextByte = V86HostRead8(site+1);
-          if (opcode == 0xCD) {                   /* INT nn -> shared DPMI/DOS dispatch */
+          if (opcode == X86_OP_INT) {                   /* INT nn -> shared DPMI/DOS dispatch */
               INT status;
               DpmiInterpreterCpuStore(&cpu, tib);
               VDM_REG(tib, VTIB_EVENT) = 4;   /* mimic a serviceable BOP for the dispatcher */
@@ -29834,27 +29834,27 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             LogAppend(LOG_PATH, message, message + sizeof(message) - 1);
             return 0;
         } }
-    static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, 0x20, 0xCF };  /* BOP 0x20 ; iret */
-    static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, 0x10, 0xCF }; /* BOP 0x10 ; iret */
-    static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, 0x16, 0xCF }; /* BOP 0x16 ; iret */
-    static const BYTE bop33[] = { VDM_BOP0, VDM_BOP1, 0x33, 0xCF }; /* BOP 0x33 ; iret */
+    static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, 0x20, X86_OP_IRET };  /* BOP 0x20 ; iret */
+    static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, 0x10, X86_OP_IRET }; /* BOP 0x10 ; iret */
+    static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, 0x16, X86_OP_IRET }; /* BOP 0x16 ; iret */
+    static const BYTE bop33[] = { VDM_BOP0, VDM_BOP1, 0x33, X86_OP_IRET }; /* BOP 0x33 ; iret */
     /* INT 08h (timer): tick via BOP, then chain INT 1Ch, then iret. INT 1Ch is a
        bare iret by default (the user-timer hook a program may repoint). INT 1Ah
        (BIOS time-of-day) is a plain BOP. */
-    static const BYTE bop08[] = { VDM_BOP0, VDM_BOP1, 0x08, 0xCD, 0x1C, 0xCF };
-    static const BYTE bop1c[] = { 0xCF };                           /* iret stub       */
+    static const BYTE bop08[] = { VDM_BOP0, VDM_BOP1, 0x08, X86_OP_INT, VECTOR_USER_TICK, X86_OP_IRET };
+    static const BYTE bop1c[] = { X86_OP_IRET };                           /* iret stub       */
     /* Default INT 09h = BOP 09 ; IRET. It must CONSUME the scancode, exactly as the BIOS
        handler does: a bare IRET left the byte in the controller forever, so with the 8042's
        proper one-byte-at-a-time pacing no further key could ever raise an interrupt (the
        whole keyboard died after one press). A game that installs its own INT 09h replaces
        this vector, so its handler still reads port 0x60 itself. */
-    static const BYTE bop09[] = { VDM_BOP0, VDM_BOP1, 0x09, 0xCF };
-    static const BYTE bop1a[] = { VDM_BOP0, VDM_BOP1, 0x1A, 0xCF }; /* BOP 0x1A ; iret */
-    static const BYTE bop2f[] = { VDM_BOP0, VDM_BOP1, 0x2F, 0xCF }; /* INT 2Fh ; iret  */
+    static const BYTE bop09[] = { VDM_BOP0, VDM_BOP1, 0x09, X86_OP_IRET };
+    static const BYTE bop1a[] = { VDM_BOP0, VDM_BOP1, 0x1A, X86_OP_IRET }; /* BOP 0x1A ; iret */
+    static const BYTE bop2f[] = { VDM_BOP0, VDM_BOP1, 0x2F, X86_OP_IRET }; /* INT 2Fh ; iret  */
     /* XMS API entry: reached by FAR CALL (INT 2Fh AX=4310 hands back ES:BX), so it
        ends in RETF (0xCB), not IRET. */
-    static const BYTE xmsBopStub[] = { VDM_BOP0, VDM_BOP1, 0x43, 0xCB };
-    static const BYTE bop67[] = { VDM_BOP0, VDM_BOP1, 0x67, 0xCF }; /* INT 67h ; iret  */
+    static const BYTE xmsBopStub[] = { VDM_BOP0, VDM_BOP1, 0x43, X86_OP_RETF };
+    static const BYTE bop67[] = { VDM_BOP0, VDM_BOP1, 0x67, X86_OP_IRET }; /* INT 67h ; iret  */
     /* GH #43/#44/#45: the BIOS interrupts we had never planted at all. Until now
        these vectors were filled by the null-vector sweep with a bare IRET, so a
        guest asking for the equipment list or the memory size got silence and
@@ -30962,7 +30962,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         }
     }
     if (!readCount) {
-        static const BYTE stub[] = { 0xB4, 0x4C, 0xCD, 0x21 };   /* mov ah,4Ch; int 21h */
+        static const BYTE stub[] = { X86_OP_MOV_AH_IMM, DOS_FN_EXIT, X86_OP_INT, VECTOR_DOS };   /* mov ah,4Ch; int 21h */
         for (index = 0; index < sizeof(stub); ++index) g_FileBuffer[index] = stub[index];
         readCount = sizeof(stub);
         /* ⚠ SAY WHY, not just that. This printed "embedded fallback" and nothing else,
@@ -30997,7 +30997,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     if (readCount > 4) {
         DWORD item;
         for (item = 0; item + 3 < readCount; ++item)
-            if (g_FileBuffer[item] == 0xC4 && g_FileBuffer[item+1] == 0xC4 && g_FileBuffer[item+2] == 0x54)
+            if (g_FileBuffer[item] == VDM_BOP0 && g_FileBuffer[item+1] == VDM_BOP1 && g_FileBuffer[item+2] == 0x54)
                 ++g_GuestNtvdmBops;
     }
     g_GuestNtAware = (wasShell && g_GuestNtvdmBops >= 8);
@@ -31095,7 +31095,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     for (index = 0; index < sizeof(bop09); ++index) handlerArea[0x4C + index] = bop09[index];  /* INT 09h default iret (0x4C-0x4F) */
     /* INT 33h event-handler return: the guest's handler RETFs here (see MouseCallbackTry). */
     handlerArea[MS_CB_RET_OFF + 0] = VDM_BOP0; handlerArea[MS_CB_RET_OFF + 1] = VDM_BOP1;
-    handlerArea[MS_CB_RET_OFF + 2] = MS_CB_BOP; handlerArea[MS_CB_RET_OFF + 3] = 0xCF;
+    handlerArea[MS_CB_RET_OFF + 2] = MS_CB_BOP; handlerArea[MS_CB_RET_OFF + 3] = X86_OP_IRET;
     /* DEFAULT DEVICE-IRQ HANDLERS. A real BIOS points the unused hardware vectors at a
        handler that just acknowledges and returns; we had them pointing at whatever junk was
        in the IVT, which on this box read F000:A390 -- unowned ROM. That was harmless only so
@@ -31103,8 +31103,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
        IRQ the guest has not hooked jumps it into that junk and hangs it: measured, Skyroads
        (which never installs a Sound Blaster ISR at all) froze at F000:A390 the moment its DMA
        block completed. So give IRQ2-7 and IRQ8-15 a plain IRET, exactly as INT 09h has. */
-    handlerArea[DOS_IRET_STUB_OFF] = 0xCF;                                /* shared IRET stub    */
-    handlerArea[DOS_CASEMAP_OFF]   = 0xCB;                                /* AH=38h case map: RETF */
+    handlerArea[DOS_IRET_STUB_OFF] = X86_OP_IRET;                                /* shared IRET stub    */
+    handlerArea[DOS_CASEMAP_OFF]   = X86_OP_RETF;                                /* AH=38h case map: RETF */
     { volatile BYTE *swappableDataArea = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_SDA_SEG << PARAGRAPH_SHIFT);   /* AH=34h/5D06h */
       INT item; for (item = 0; item < DOS_SDA_LEN; ++item) swappableDataArea[DOS_SDA_OFF + item] = 0; }
     for (index = 0x0A; index <= 0x0F; ++index) {
@@ -31144,7 +31144,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     /* DPMI mode-switch entry (far-called): BOP 0x50 ; RETF. The host services the
        BOP by switching to PM; the RETF only executes if the switch fails. */
     handlerArea[DPMI_ENTRY_OFF + 0] = VDM_BOP0; handlerArea[DPMI_ENTRY_OFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_ENTRY_OFF + 2] = DPMI_BOP; handlerArea[DPMI_ENTRY_OFF + 3] = 0xCB; /* RETF */
+    handlerArea[DPMI_ENTRY_OFF + 2] = DPMI_BOP; handlerArea[DPMI_ENTRY_OFF + 3] = X86_OP_RETF; /* RETF */
     /* DPMI 0301 real-mode-call return catcher: BOP 0x54 (no IRET/RETF -- the 0301
        handler detects it and returns to PM, it never resumes past it). */
     handlerArea[DPMI_RMRET_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RMRET_OFF + 1] = VDM_BOP1;
@@ -31168,7 +31168,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     handlerArea[DPMI_RAW2RM_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RAW2RM_OFF + 1] = VDM_BOP1;
     handlerArea[DPMI_RAW2RM_OFF + 2] = DPMI_RAW2RM_BOP;
     /* 0305 save/restore: a register-preserving no-op (see the define). */
-    handlerArea[DPMI_SSR_OFF] = 0xCB;                               /* RETF */
+    handlerArea[DPMI_SSR_OFF] = X86_OP_RETF;                               /* RETF */
     /* (GH #18 run 67: the PM-fault handler BOP is planted at the handler CODE selector's
        DPMI_FAULT_COFF by DpmiInstallFaultTrampoline(), not here.) */
     /* EMS detection method 2: programs read the INT 67h vector's segment:000Ah for
@@ -31190,8 +31190,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                and the caller's `add sp,2` then eats its own return address --
                corruption that surfaces later, somewhere else. (GH #44) */
           controlBytes[offset + 3] = (biosInts[byteIndex][0] == 0x25 || biosInts[byteIndex][0] == 0x26)
-                        ? 0xCB   /* RETF */
-                        : 0xCF;  /* IRET */
+                        ? X86_OP_RETF   /* RETF */
+                        : X86_OP_IRET;  /* IRET */
           *(volatile WORD *)(IVT_OFFSET_ADDRESS(biosInts[byteIndex][0]))     = (WORD)offset;
           *(volatile WORD *)(IVT_SEGMENT_ADDRESS(biosInts[byteIndex][0])) = DOS_CTAB_SEG;
           if (biosInts[byteIndex][0] == 0x15) g_Int15StubOffset = (WORD)offset;   /* #244 */
@@ -31213,17 +31213,17 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          that jumps there actually exits instead of falling through the IVT. */
     {   volatile BYTE *controlBytes = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT);
         UINT position = DOS_CRIT_STUBS;
-        controlBytes[position+0] = VDM_BOP0; controlBytes[position+1] = VDM_BOP1; controlBytes[position+2] = 0x30; controlBytes[position+3] = 0xCF;
+        controlBytes[position+0] = VDM_BOP0; controlBytes[position+1] = VDM_BOP1; controlBytes[position+2] = 0x30; controlBytes[position+3] = X86_OP_IRET;
         *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TERMINATE_ADDRESS))     = (WORD)position;              /* INT 22h */
         *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TERMINATE_ADDRESS)) = DOS_CTAB_SEG;
-        controlBytes[position+4] = 0xCF;                                          /* INT 23h: IRET */
+        controlBytes[position+4] = X86_OP_IRET;                                          /* INT 23h: IRET */
         *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CTRL_C))     = (WORD)(position + 4);
         *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CTRL_C)) = DOS_CTAB_SEG;
-        controlBytes[position+8] = 0xB0; controlBytes[position+9] = 0x03; controlBytes[position+10] = 0xCF;         /* mov al,3 ; iret */
+        controlBytes[position+8] = X86_OP_MOV_IMM_BYTE_FIRST; controlBytes[position+9] = 0x03; controlBytes[position+10] = X86_OP_IRET;         /* mov al,3 ; iret */
         *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CRITICAL_ERROR))     = (WORD)(position + 8);        /* INT 24h */
         *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CRITICAL_ERROR)) = DOS_CTAB_SEG;
         /* #34: the site DOS calls the guest's INT 24h from -- see CriticalRaise. */
-        controlBytes[DOS_CRIT_RAISE + 0] = 0xCD; controlBytes[DOS_CRIT_RAISE + 1] = 0x24;   /* int 24h  */
+        controlBytes[DOS_CRIT_RAISE + 0] = X86_OP_INT; controlBytes[DOS_CRIT_RAISE + 1] = 0x24;   /* int 24h  */
         controlBytes[DOS_CRIT_RETURN + 0] = VDM_BOP0; controlBytes[DOS_CRIT_RETURN + 1] = VDM_BOP1;
         controlBytes[DOS_CRIT_RETURN + 2] = 0x20;                                 /* bop 20h  */
     }
@@ -32721,7 +32721,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             } else {
                 UINT offset = DOS_GENSTUB_OFF + count * 4;
                 controlBytes[offset + 0] = VDM_BOP0; controlBytes[offset + 1] = VDM_BOP1;
-                controlBytes[offset + 2] = DOS_GENSTUB_BOP; controlBytes[offset + 3] = 0xCF;            /* IRET */
+                controlBytes[offset + 2] = DOS_GENSTUB_BOP; controlBytes[offset + 3] = X86_OP_IRET;            /* IRET */
                 g_GenericStubVector[count] = (BYTE)number;
                 *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(number))     = (WORD)offset;
                 *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(number)) = DOS_CTAB_SEG;
@@ -32949,7 +32949,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                exit -- see g_P12Site. */
             { DWORD codeSegment3 = VDM_REG16(tib, VTIB_CS), eip3 = VDM_REG16(tib, VTIB_EIP);
               const volatile BYTE *ip3 = (const volatile BYTE *)((codeSegment3 << PARAGRAPH_SHIFT) + eip3);
-              if (!(ip3[0] == 0xC4 && ip3[1] == 0xC4)) {
+              if (!(ip3[0] == VDM_BOP0 && ip3[1] == VDM_BOP1)) {
                 UINT index5;
                 for (index5 = 0; index5 < g_P12SiteCount; ++index5)
                     if (g_P12Site[index5].Cs == codeSegment3 && g_P12Site[index5].Ip == eip3) break;
@@ -32980,7 +32980,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                remaining way this window can be wrong. */
             { DWORD codeSegment3 = VDM_REG16(tib, VTIB_CS), eip3 = VDM_REG16(tib, VTIB_EIP);
               const volatile BYTE *ip3 = (const volatile BYTE *)((codeSegment3 << PARAGRAPH_SHIFT) + eip3);
-              if (!(ip3[0] == 0xC4 && ip3[1] == 0xC4)) {
+              if (!(ip3[0] == VDM_BOP0 && ip3[1] == VDM_BOP1)) {
                   BYTE mapMask = (BYTE)(g_Video.MapMask & 0x0F);
                   ++g_ModeYBails;
                   if (mapMask & (BYTE)(mapMask - 1)) ++g_ModeYBailMp;
@@ -33606,7 +33606,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                            listed vector is patched exactly as before, unvoted, so no existing
                            guest can change behaviour. `votedCount` is counted separately so the
                            next widening is measurable rather than asserted. */
-                      if (cs[position] == 0xCD) {
+                      if (cs[position] == X86_OP_INT) {
                           BYTE siteVector = cs[position+1];
                           INT listed = (siteVector == VECTOR_DPMI || siteVector == VECTOR_DOS || siteVector == VECTOR_VIDEO
                                         || siteVector == VECTOR_KEYBOARD_SERVICES || siteVector == VECTOR_MOUSE
@@ -33622,7 +33622,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                                         position, 0xFFFF, 0)) continue;
                               ++votedCount;
                           }
-                          PatchMapSet(linear, siteVector); cs[position] = 0xC4; cs[position+1] = 0xC4; ++count; last = position;
+                          PatchMapSet(linear, siteVector); cs[position] = VDM_BOP0; cs[position+1] = VDM_BOP1; ++count; last = position;
                       }
                   }
                   cursor = LogPut(cursor, "DPMI: patched "); cursor = LogHex(cursor, count);
@@ -33646,7 +33646,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                   {   DWORD hist[256], offset2, total = 0; INT number;
                       for (number = 0; number < 256; ++number) hist[number] = 0;
                       for (offset2 = 0; offset2 < 0xFFFF; ++offset2)
-                          if (cs[offset2] == 0xCD) { ++hist[cs[offset2 + 1]]; ++total; }
+                          if (cs[offset2] == X86_OP_INT) { ++hist[cs[offset2 + 1]]; ++total; }
                       /* ── ★★ AND THE OFFSETS, NOT JUST THE HISTOGRAM. ──────────────────
                            A histogram says a vector is a suspect; it does not say WHERE,
                            so acting on it still means reading the binary by hand. Session
@@ -33662,7 +33662,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                       {   DWORD shown = 0;
                           cursor = LogPut(cursor, "DPMI: residual CD nn SITES (linear, first 24):");
                           for (offset2 = 0; offset2 < 0xFFFF && shown < 24; ++offset2)
-                              if (cs[offset2] == 0xCD) {
+                              if (cs[offset2] == X86_OP_INT) {
                                   cursor = LogPut(cursor, " 0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)(cs + offset2));
                                   cursor = LogPut(cursor, "="); cursor = LogHexByte(cursor, cs[offset2 + 1]);
                                   ++shown;
@@ -34794,7 +34794,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                     guestRecovered = DpmiRecoverFlatEip((DWORD)frame[3], (BYTE)gateVector, &guestCandidates);
                                     if ((faultEip & WORD_MASK_U) == frame[3]
                                         && HostReadable((const VOID *)(ULONG_PTR)faultEip, 2)
-                                        && ((const volatile BYTE *)(ULONG_PTR)faultEip)[0] == 0xCD
+                                        && ((const volatile BYTE *)(ULONG_PTR)faultEip)[0] == X86_OP_INT
                                         && ((const volatile BYTE *)(ULONG_PTR)faultEip)[1] == (BYTE)gateVector) {
                                         guestLinear = faultEip; guestSource = 1;
                                     } else {
@@ -34831,7 +34831,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                 }
                                 if (guestPresent && guestLinear && guestEspOk
                                     && HostReadable((const VOID *)guestInstruction, 2)
-                                    && guestInstruction[0] == 0xCD && guestInstruction[1] == (BYTE)gateVector) {
+                                    && guestInstruction[0] == X86_OP_INT && guestInstruction[1] == (BYTE)gateVector) {
                                     /* ── ★★★★★ THIS IS THE PASS THAT RE-PATCHED CALC'S FP SITE.
                                          (session 56 -- the question session 55 left open.)
                                          Session 55 put a 34h..3Fh guard in the SCANNER and the
