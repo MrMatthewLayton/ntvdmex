@@ -147,6 +147,14 @@ case EMU8K_POINTER_PORT_OFFSET: state->Pointer = value; break;
   (`static INT ioBudget = 6`), how many histogram buckets a report prints. They are choices
   about the log, not facts about the machine. When the value IS a real size -- a stub, a
   frame, a table's length -- it uses that size's name.
+- **Positions inside a fixed pattern stay literal**: the bytes of `"X:\"` (`root[1] = ':'`),
+  of a signature (`buffer[0] == 'V' && buffer[1] == 'B'`), the slots of an argument array built
+  line by line, the bytes of a DWORD written one at a time (`bytes[2] = value >> WORD_SHIFT`).
+  The character or the shift beside the index already says what it is.
+- **Data tables stay data**: a table of the period's choices (`{ 0x300, 0x310, 0x320 }`), of
+  register defaults, of measured signatures or of an EDID block is read as a table, with its
+  comment; naming each entry only repeats it. The table's own size and index are named when
+  the code uses them.
 - **A repeated idiom gets an accessor**, not just a named constant: a 16-bit register out of
   the VDM state is `VDM_REG16(tib, VTIB_CS)`, not `VDM_REG(tib, VTIB_CS) & WORD_MASK`.
 - **Hardware values cite their source** — the datasheet section, the specification, or the
