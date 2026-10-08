@@ -2205,7 +2205,7 @@ static struct {
 static volatile LONG g_CloseRequest;     /* UI -> exec thread: end the innermost program */
 static int  g_CloseForced;           /* the exit in progress is ours, not the guest's */
 static int  g_TopIsShell;           /* depth 0 is a shell: nothing to close there */
-static void exec_mach_save(int d);    /* fwd: defined with close_prog_now */
+static void ExecMachineSave(int depth);    /* fwd: defined with CloseProgramNow */
 static char g_ProgramName[64];           /* fwd: the status strip's name (defined below) */
 
 static BYTE g_ExecFileBuffer[0x80000];    /* child image; separate from the parent's */
@@ -2521,7 +2521,7 @@ static char *ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, char *cursor)
         return cursor;
     }
 
-    exec_mach_save(depth);                              /* #152: what a forced close restores */
+    ExecMachineSave(depth);                              /* #152: what a forced close restores */
     /* ── THE STRIP NAMES THE PROGRAM RUNNING NOW, NOT THE SHELL. (user, s84: "the exe/com
          name is always COMMAND.COM") It was set once, from the program NTVDMEX loaded
          first -- which is the shell whenever a game is started from a prompt or by
@@ -4627,7 +4627,7 @@ static void InjectInt(volatile BYTE *tib, unsigned vector)
      EXEC simply never reported.
    Returns 1 if a child exited and the parent has been restored (the exec loop
    carries on), 0 if this was the top-level program and the run is over. */
-static void mouse_child_exited(void);          /* fwd: see g_ms_want_release */
+static void MouseChildExited(void);          /* fwd: see g_MouseWantRelease */
 static int DosTerminate(DOS_MACHINE *machine, void *tib, char **logCursor, char *base)
 {
     char *cursor = *logCursor;
@@ -4647,7 +4647,7 @@ static int DosTerminate(DOS_MACHINE *machine, void *tib, char **logCursor, char 
         DosHandlesPop(machine, machine->IsTsrPending);
         if (g_Exec[depth].ChildSegment && !machine->IsTsrPending)
             DosInt21SetShellPsp(machine, g_Exec[depth].ChildSegment, 0);   /* #208: its PSP is gone */
-        mouse_child_exited();          /* s81: the shell does not own the mouse */
+        MouseChildExited();          /* s81: the shell does not own the mouse */
         /* #214: A PROGRAM THAT HAS ENDED MUST NOT KEEP SOUNDING. Close Program on Doom
            left its MIDI notes hanging: the emulated MPU-401 was reset, but the notes
            were already in XP's synth. Every child exit comes through here (its own
@@ -7250,7 +7250,7 @@ static void HostKeyTypematic(void)
    a guest that finds an INT 33h driver asks for a CLICK and ignores the keyboard --
    Lemmings' level briefing says "Press mouse button to continue" to us and "Press
    Space" to a DOS with no driver, so without this the harness cannot get past it. */
-static void host_mouse_button(int btn, int down);
+static void HostMouseButton(int button, int down);
 
 static DWORD WINAPI SynthKeyThread(LPVOID parameter)
 {
@@ -7280,9 +7280,9 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
                   int button = 0;
                   ++index;
                   if (index < bytesRead && script[index] >= '0' && script[index] <= '2') { button = script[index] - '0'; ++index; }
-                  host_mouse_button(button, 1);
+                  HostMouseButton(button, 1);
                   Sleep(60);
-                  host_mouse_button(button, 0);
+                  HostMouseButton(button, 0);
                   Sleep(250);
                   continue;
               }
@@ -8215,7 +8215,7 @@ static DWORD g_MouseWmInput, g_MouseRawAbsolute, g_MouseI33[16], g_MouseI33Other
    ► AND THE HISTOGRAM IS NOW LOAD-BEARING: the auto-capture trigger keys on exactly
      the USE functions (01/03/05/06/0B) and deliberately not on 00/15/53c1, which is
      only defensible because this measurement says which is which. See
-     g_ms_want_capture.
+     g_MouseWantCapture.
    ⚠ SO RECORD BOTH, AND DO NOT GUESS BETWEEN THEM. The AX values as they actually
      are (sparse, not bucketed), and WHERE the caller was -- linear address, which
      entry path, and the bytes around the site so it can be diffed against the file
@@ -8482,7 +8482,7 @@ static void MouseEventRaise(LONG bits)
 /* Record a button transition. Normally UI-thread only, and the position is taken
    from the live driver position rather than the message's client coordinates because
    while captured it is WM_INPUT, not WM_MOUSEMOVE, that owns it.
-   ⚠ host_mouse_button below is a SECOND writer, from the scripted-input thread. It
+   ⚠ HostMouseButton below is a SECOND writer, from the scripted-input thread. It
    is why g_MouseButtons is updated there with a compare-exchange loop rather than the plain
    exchange the window procedure can afford. */
 static void MouseButtonEdges(LONG prev, LONG now)
@@ -8507,11 +8507,11 @@ static void MouseButtonEdges(LONG prev, LONG now)
    the level goes into g_MouseButtons and the EDGE goes into the press/release counters that
    INT 33h 05h/06h report. A compare-exchange loop, not an exchange, because the UI
    thread is writing the same word from a real mouse. */
-static void host_mouse_button(int btn, int down)
+static void HostMouseButton(int button, int down)
 {
     LONG bit;
-    if (btn < 0 || btn >= MS_BTNS) return;
-    bit = 1L << btn;
+    if (button < 0 || button >= MS_BTNS) return;
+    bit = 1L << button;
     for (;;) {
         LONG prev = g_MouseButtons;
         LONG now  = down ? (prev | bit) : (prev & ~bit);
@@ -8555,14 +8555,14 @@ static void host_mouse_button(int btn, int down)
 #define CURSOR_IDLE_MS 5000u
 /* s84 (user): Settings > Input > Show Host Mouse Cursor -- HOSTCUR_* in settings.h.
    Smart is the rule above; Always never hides over the video, Never always does. */
-static int   g_hostcur_mode = HOSTCUR_SMART;
-static DWORD g_cursor_moved_ms;         /* GetTickCount of the last real movement   */
-static POINT g_cursor_last_pt = { -1, -1 };
-static int   g_cursor_idle;             /* hidden for stillness, until it next moves */
+static int   g_HostCursorMode = HOSTCUR_SMART;
+static DWORD g_CursorMovedMs;         /* GetTickCount of the last real movement   */
+static POINT g_CursorLastPoint = { -1, -1 };
+static int   g_CursorIdle;             /* hidden for stillness, until it next moves */
 /* Input capture ("exclusivity") -- see input_capture_set. Declared up here because
    status_update, which is defined above it, reports the capture state and the chord
    that changes it on the right-hand half of the status strip. */
-static volatile LONG g_captured = 0;
+static volatile LONG g_Captured = 0;
 
 /* ── ★ THE GUEST ASKING FOR THE MOUSE IS WHAT TAKES IT. ──────────────────────────
      A DOS program that wants the mouse says so, through INT 33h, and a program that
@@ -8588,27 +8588,27 @@ static volatile LONG g_captured = 0;
      set when we auto-capture and never cleared, so a user who escapes with Win+F10
      stays escaped -- the guest goes on polling INT 33h every frame, and without the
      latch every one of those polls would drag the pointer straight back in. */
-static volatile LONG g_ms_want_capture = 0;   /* guest used the mouse; UI: please grab */
-static volatile LONG g_ms_autocap_done = 0;   /* we have grabbed once; never again     */
+static volatile LONG g_MouseWantCapture = 0;   /* guest used the mouse; UI: please grab */
+static volatile LONG g_MouseAutoCaptureDone = 0;   /* we have grabbed once; never again     */
 /* ── ★ A PROGRAM THAT TOOK THE MOUSE GIVES IT BACK WHEN IT EXITS. (s81, user) ──────
      The grab above is latched per PROCESS, so after a game quit to the prompt the
      pointer stayed captured over a shell that has no use for it -- and the next game
      could never be auto-captured again. On every return to a parent the exec thread
      clears the request and the latch and asks the UI thread (the owner of ClipCursor)
      to let go. */
-static volatile LONG g_ms_want_release = 0;
-static void mouse_child_exited(void)
+static volatile LONG g_MouseWantRelease = 0;
+static void MouseChildExited(void)
 {
-    InterlockedExchange(&g_ms_want_capture, 0);
-    InterlockedExchange(&g_ms_autocap_done, 0);
-    InterlockedExchange(&g_ms_want_release, 1);
+    InterlockedExchange(&g_MouseWantCapture, 0);
+    InterlockedExchange(&g_MouseAutoCaptureDone, 0);
+    InterlockedExchange(&g_MouseWantRelease, 1);
 }
 /* Reported at STAGE2, because "the guest asked and we took it" and "the guest asked
    and we did not" are different outcomes and a headless run must be able to tell
    them apart. want=1 fired=0 means the request was raised and the window was not in
    the foreground -- which is correct behaviour, not a failure, and only a counter
    can say which of the two happened. */
-static DWORD         g_ms_autocap_fired = 0;
+static DWORD         g_MouseAutoCaptureFired = 0;
 
 /* RULE 1 of the capture policy, and the ONE predicate for it -- "has this guest ever
    used the mouse". Defined here rather than beside the rules it serves because the
@@ -8619,7 +8619,7 @@ static DWORD         g_ms_autocap_fired = 0;
      with rules 2 and 5 switched off: a guest that uses the mouse is treated exactly like
      one that never did -- the pointer stays the desktop's, WM_MOUSEMOVE positions and
      buttons reach the guest (rule 6's "ordinary window" arm), and nothing ever
-     ClipCursors it. capture_allowed() is the one place the policy reads it.
+     ClipCursors it. CaptureAllowed() is the one place the policy reads it.
    ⚠ THE RAW DELTAS ARE GATED ON THE POINTER BEING OVER OUR VIDEO (WM_INPUT). Raw input
      follows focus, so without that a seamless guest that reads mickeys (0Bh) would keep
      moving while the pointer was dragged across someone else's window.
@@ -8629,14 +8629,14 @@ static DWORD         g_ms_autocap_fired = 0;
      the arrow over the video would leave NO pointer in a graphics mode where our INT 33h
      draws none (09h shapes are accepted and discarded); unmeasured which guests that is. Default OFF = capture, the behaviour every build so far has had.
      Live: OK in the dialog releases a held capture at once (settings_apply). */
-static volatile LONG g_ms_seamless = 0;
-static int capture_allowed(void) { return g_ms_want_capture != 0 && !g_ms_seamless; }
+static volatile LONG g_MouseSeamless = 0;
+static int CaptureAllowed(void) { return g_MouseWantCapture != 0 && !g_MouseSeamless; }
 /* RULE 6 (see the capture rules above input_capture_set): does host mouse input reach
    the guest right now? Captured: yes. Never used the mouse: yes (ordinary window).
    Uses the mouse but released: no. Read on the UI thread only. */
-static int mouse_goes_to_guest(void) { return g_captured || !capture_allowed(); }
+static int MouseGoesToGuest(void) { return g_Captured || !CaptureAllowed(); }
 
-static DWORD g_ms_shape_sets;      /* 09h (and 0Ah BX=1): cursor shapes defined       */
+static DWORD g_MouseShapeSets;      /* 09h (and 0Ah BX=1): cursor shapes defined       */
 /* ── ★ 09h's BITMAP IS DRAWN NOW (#264). ─────────────────────────────────────────────
      It used to be "accepted and discarded" and the host arrow drawn regardless, so a
      game's crosshair or hand was never seen. Now a defined shape replaces the arrow,
@@ -8644,62 +8644,62 @@ static DWORD g_ms_shape_sets;      /* 09h (and 0Ah BX=1): cursor shapes defined 
      cursor mask, hot spot on the pointer); a reset (00h/21h) puts the host arrow back,
      as a reset puts the real driver's default arrow back.
    ⚠ DOUBLE-BUFFERED, because the exec thread writes it (09h) and the UI thread reads it
-     (the present): 09h fills the buffer NOT being shown and then flips g_ms_gc_buf, so
+     (the present): 09h fills the buffer NOT being shown and then flips g_MouseGraphicsCursorBuffer, so
      a present never sees half of one shape and half of another. */
-static uint16_t      g_ms_gc_scr[2][I33_GC_ROWS], g_ms_gc_cur[2][I33_GC_ROWS];
-static volatile LONG g_ms_gc_buf;          /* which of the two the present reads      */
-static volatile LONG g_ms_gc_defined;      /* 0 = the host arrow; 1 = 09h's bitmap     */
-static DWORD         g_ms_gc_badptr;       /* 09h ES:DX we refused to read             */
+static uint16_t      g_MouseGraphicsCursorScreen[2][I33_GC_ROWS], g_MouseGraphicsCursorCurrent[2][I33_GC_ROWS];
+static volatile LONG g_MouseGraphicsCursorBuffer;          /* which of the two the present reads      */
+static volatile LONG g_MouseGraphicsCursorDefined;      /* 0 = the host arrow; 1 = 09h's bitmap     */
+static DWORD         g_MouseGraphicsCursorBadPointer;       /* 09h ES:DX we refused to read             */
 /* ── 2Bh-2Eh / 33h: THE ACCELERATION PROFILES, STORED, NOT APPLIED (#265). ─────────────
      See i33_driver.h for the layout and for why the curves are never applied. Exec
      thread only. */
-static uint8_t       g_ms_acc[I33_ACC_LEN];
-static LONG          g_ms_acc_cur = I33_ACC_DEFAULT;
-static int           g_ms_acc_ok;          /* g_ms_acc holds the defaults or a 2Bh load  */
-static DWORD         g_ms_acc_calls;       /* 2Bh-2Eh/33h/34h answered -- STAGE2 evidence */
+static uint8_t       g_MouseAcceleration[I33_ACC_LEN];
+static LONG          g_MouseAccelerationCurrent = I33_ACC_DEFAULT;
+static int           g_MouseAccelerationOk;          /* g_MouseAcceleration holds the defaults or a 2Bh load  */
+static DWORD         g_MouseAccelerationCalls;       /* 2Bh-2Eh/33h/34h answered -- STAGE2 evidence */
 /* ── 18h/19h: THE SHIFT-QUALIFIED HANDLERS, AND NOW THEY ARE CALLED (#265). ────────────
      They were refused (AX=FFFFh) because nothing delivered them. mouse_evq_take() now
      picks, per event, between these and 0Ch's handler by the BDA shift state -- the
      one picker both delivery paths (V86 mouse_cb_try, PM dpmi_inject_pm_mousecb) use. */
-static I33_ALTERNATE       g_ms_alt[I33_ALT_N];
-static DWORD         g_ms_alt_calls;       /* events delivered to an alternate handler   */
+static I33_ALTERNATE       g_MouseAlt[I33_ALT_N];
+static DWORD         g_MouseAltCalls;       /* events delivered to an alternate handler   */
 
-/* Fill the hidden buffer, then show it (see g_ms_gc_buf). Does not set g_ms_gc_defined:
+/* Fill the hidden buffer, then show it (see g_MouseGraphicsCursorBuffer). Does not set g_MouseGraphicsCursorDefined:
    the caller decides whether the shape is the guest's (09h) or a restored one (17h). */
-static void i33_gc_define(const WORD *scr, const WORD *cur)
+static void I33GraphicsCursorDefine(const WORD *screen, const WORD *current)
 {
-    int r, b = (int)((g_ms_gc_buf + 1) & 1);
-    for (r = 0; r < I33_GC_ROWS; ++r) { g_ms_gc_scr[b][r] = scr[r]; g_ms_gc_cur[b][r] = cur[r]; }
-    InterlockedExchange(&g_ms_gc_buf, b);
+    int row, buffer = (int)((g_MouseGraphicsCursorBuffer + 1) & 1);
+    for (row = 0; row < I33_GC_ROWS; ++row) { g_MouseGraphicsCursorScreen[buffer][row] = screen[row]; g_MouseGraphicsCursorCurrent[buffer][row] = current[row]; }
+    InterlockedExchange(&g_MouseGraphicsCursorBuffer, buffer);
 }
 /* 0Ah BX=0: the text cursor's screen (AND) and cursor (XOR) masks over the cell's
    (char, attr) word. The driver's defaults invert the colours and leave the character. */
-static volatile LONG g_ms_tc_and = 0x77FF, g_ms_tc_xor = 0x7700;
-static DWORD g_ms_state_badptr;    /* 16h/17h: ES:DX we refused to dereference       */
-static DWORD g_ms_i33_unimpl;      /* calls that reached `default:` -- see there     */
+static volatile LONG g_MouseTextCursorAnd = 0x77FF, g_MouseTextCursorXor = 0x7700;
+static DWORD g_MouseStateBadPointer;    /* 16h/17h: ES:DX we refused to dereference       */
+static DWORD g_MouseI33Unimplemented;      /* calls that reached `default:` -- see there     */
 
 /* Range accessors. A guest range wins; otherwise the current mode's own extent, so a
    mode change moves the limits with it rather than pinning the pointer to whatever
    was on screen when the driver was reset. */
-static LONG i33_rangex_min(void) { return g_MouseMinimumX >= 0 ? g_MouseMinimumX : 0; }
-static LONG i33_rangey_min(void) { return g_MouseMinimumY >= 0 ? g_MouseMinimumY : 0; }
-static LONG i33_rangex_max(void) { return g_MouseMaximumX >= 0 ? g_MouseMaximumX : I33VirtualMaximumX(); }
-static LONG i33_rangey_max(void) { return g_MouseMaximumY >= 0 ? g_MouseMaximumY : I33VirtualMaximumY(); }
-static LONG i33_clampx(LONG vx)
-{ LONG lo = i33_rangex_min(), hi = i33_rangex_max();
-  return vx < lo ? lo : (vx > hi ? hi : vx); }
-static LONG i33_clampy(LONG vy)
-{ LONG lo = i33_rangey_min(), hi = i33_rangey_max();
-  return vy < lo ? lo : (vy > hi ? hi : vy); }
+static LONG I33RangeXMinimum(void) { return g_MouseMinimumX >= 0 ? g_MouseMinimumX : 0; }
+static LONG I33RangeYMinimum(void) { return g_MouseMinimumY >= 0 ? g_MouseMinimumY : 0; }
+static LONG I33RangeXMaximum(void) { return g_MouseMaximumX >= 0 ? g_MouseMaximumX : I33VirtualMaximumX(); }
+static LONG I33RangeYMaximum(void) { return g_MouseMaximumY >= 0 ? g_MouseMaximumY : I33VirtualMaximumY(); }
+static LONG I33ClampX(LONG virtualX)
+{ LONG low = I33RangeXMinimum(), high = I33RangeXMaximum();
+  return virtualX < low ? low : (virtualX > high ? high : virtualX); }
+static LONG I33ClampY(LONG virtualY)
+{ LONG low = I33RangeYMinimum(), high = I33RangeYMaximum();
+  return virtualY < low ? low : (virtualY > high ? high : virtualY); }
 /* 07h/08h hand over CX and DX and the driver takes them EITHER WAY ROUND -- passing
    max first is common enough that a driver which honoured the order literally would
    pin the pointer to a single coordinate. Swap rather than reject. */
-static void i33_set_range(volatile LONG *lo, volatile LONG *hi, LONG a, LONG b)
+static void I33SetRange(volatile LONG *low, volatile LONG *high, LONG first, LONG second)
 {
-    if (a > b) { LONG t = a; a = b; b = t; }
-    if (a < 0) a = 0;
-    if (b < a) b = a;
-    InterlockedExchange(lo, a); InterlockedExchange(hi, b);
+    if (first > second) { LONG swap = first; first = second; second = swap; }
+    if (first < 0) first = 0;
+    if (second < first) second = first;
+    InterlockedExchange(low, first); InterlockedExchange(high, second);
 }
 
 /* 15h/16h/17h state block. The layout is OURS -- the guest is told the size by 15h
@@ -8708,58 +8708,58 @@ static void i33_set_range(volatile LONG *lo, volatile LONG *hi, LONG a, LONG b)
 #define I33_STATE_MAGIC 0x4133564EuL       /* 'NV3A' (#264/#265 added the cursor bitmap,
                                               the alternate handlers and the profile) */
 typedef struct {
-    DWORD magic;
-    LONG  X, Y, hidden;
-    LONG  minx, maxx, miny, maxy;
-    LONG  mick_x, mick_y, dbl;
-    LONG  evt_mask, evt_seg, evt_off;
-    LONG  spd_x, spd_y, spd_dbl, hot_x, hot_y, page, rate;
-    LONG  gc_defined, acc_cur;
-    WORD  gc_scr[I33_GC_ROWS], gc_cur[I33_GC_ROWS];
-    I33_ALTERNATE alt[I33_ALT_N];
-} i33_state;
+    DWORD Magic;
+    LONG  X, Y, Hidden;
+    LONG  MinimumX, MaximumX, MinimumY, MaximumY;
+    LONG  MickeyX, MickeyY, Double;
+    LONG  EventMask, EventSegment, EventOffset;
+    LONG  SpeedX, SpeedY, SpeedDouble, HotX, HotY, Page, Rate;
+    LONG  GraphicsCursorDefined, AccelerationCurrent;
+    WORD  GraphicsCursorScreen[I33_GC_ROWS], GraphicsCursorCurrent[I33_GC_ROWS];
+    I33_ALTERNATE Alt[I33_ALT_N];
+} I33_STATE;
 
-static void i33_state_save(volatile BYTE *p)
+static void I33StateSave(volatile BYTE *destination)
 {
-    i33_state s;
-    s.magic = I33_STATE_MAGIC;
-    s.X = g_MouseX; s.Y = g_MouseY; s.hidden = g_MouseHidden;
-    s.minx = g_MouseMinimumX; s.maxx = g_MouseMaximumX;
-    s.miny = g_MouseMinimumY; s.maxy = g_MouseMaximumY;
-    s.mick_x = g_MouseMickeyX; s.mick_y = g_MouseMickeyY; s.dbl = g_MouseDoubleThreshold;
-    s.evt_mask = g_MouseEventMask; s.evt_seg = g_MouseEventSegment; s.evt_off = g_MouseEventOffset;
-    s.spd_x = g_MouseSpeedX; s.spd_y = g_MouseSpeedY; s.spd_dbl = g_MouseSpeedDouble; s.hot_x = g_MouseHotX; s.hot_y = g_MouseHotY;
-    s.page = g_MousePage; s.rate = g_MouseRate;
-    s.gc_defined = g_ms_gc_defined; s.acc_cur = g_ms_acc_cur;
-    { int r, b = (int)(g_ms_gc_buf & 1);
-      for (r = 0; r < I33_GC_ROWS; ++r) { s.gc_scr[r] = g_ms_gc_scr[b][r]; s.gc_cur[r] = g_ms_gc_cur[b][r]; } }
-    memcpy(s.alt, g_ms_alt, sizeof s.alt);
-    { unsigned i; const BYTE *q = (const BYTE *)&s;
-      for (i = 0; i < sizeof s; ++i) p[i] = q[i]; }
+    I33_STATE state;
+    state.Magic = I33_STATE_MAGIC;
+    state.X = g_MouseX; state.Y = g_MouseY; state.Hidden = g_MouseHidden;
+    state.MinimumX = g_MouseMinimumX; state.MaximumX = g_MouseMaximumX;
+    state.MinimumY = g_MouseMinimumY; state.MaximumY = g_MouseMaximumY;
+    state.MickeyX = g_MouseMickeyX; state.MickeyY = g_MouseMickeyY; state.Double = g_MouseDoubleThreshold;
+    state.EventMask = g_MouseEventMask; state.EventSegment = g_MouseEventSegment; state.EventOffset = g_MouseEventOffset;
+    state.SpeedX = g_MouseSpeedX; state.SpeedY = g_MouseSpeedY; state.SpeedDouble = g_MouseSpeedDouble; state.HotX = g_MouseHotX; state.HotY = g_MouseHotY;
+    state.Page = g_MousePage; state.Rate = g_MouseRate;
+    state.GraphicsCursorDefined = g_MouseGraphicsCursorDefined; state.AccelerationCurrent = g_MouseAccelerationCurrent;
+    { int row, buffer = (int)(g_MouseGraphicsCursorBuffer & 1);
+      for (row = 0; row < I33_GC_ROWS; ++row) { state.GraphicsCursorScreen[row] = g_MouseGraphicsCursorScreen[buffer][row]; state.GraphicsCursorCurrent[row] = g_MouseGraphicsCursorCurrent[buffer][row]; } }
+    memcpy(state.Alt, g_MouseAlt, sizeof state.Alt);
+    { unsigned index; const BYTE *bytes = (const BYTE *)&state;
+      for (index = 0; index < sizeof state; ++index) destination[index] = bytes[index]; }
 }
-static void i33_state_load(volatile BYTE *p)
+static void I33StateLoad(volatile BYTE *source)
 {
-    i33_state s;
-    { unsigned i; BYTE *q = (BYTE *)&s;
-      for (i = 0; i < sizeof s; ++i) q[i] = p[i]; }
-    if (s.magic != I33_STATE_MAGIC) { ++g_ms_state_badptr; return; }
-    InterlockedExchange(&g_MouseX, s.X);       InterlockedExchange(&g_MouseY, s.Y);
-    InterlockedExchange(&g_MouseHidden, s.hidden);
-    InterlockedExchange(&g_MouseMinimumX, s.minx); InterlockedExchange(&g_MouseMaximumX, s.maxx);
-    InterlockedExchange(&g_MouseMinimumY, s.miny); InterlockedExchange(&g_MouseMaximumY, s.maxy);
-    InterlockedExchange(&g_MouseMickeyX, s.mick_x);
-    InterlockedExchange(&g_MouseMickeyY, s.mick_y);
-    InterlockedExchange(&g_MouseDoubleThreshold, s.dbl);
-    InterlockedExchange(&g_MouseEventMask, s.evt_mask);
-    InterlockedExchange(&g_MouseEventSegment, s.evt_seg);
-    InterlockedExchange(&g_MouseEventOffset, s.evt_off);
-    InterlockedExchange(&g_MouseSpeedX, s.spd_x); InterlockedExchange(&g_MouseSpeedY, s.spd_y); InterlockedExchange(&g_MouseSpeedDouble, s.spd_dbl);
-    InterlockedExchange(&g_MouseHotX, s.hot_x); InterlockedExchange(&g_MouseHotY, s.hot_y);
-    InterlockedExchange(&g_MousePage, s.page);   InterlockedExchange(&g_MouseRate, s.rate);
-    i33_gc_define(s.gc_scr, s.gc_cur);
-    InterlockedExchange(&g_ms_gc_defined, s.gc_defined ? 1 : 0);
-    if (s.acc_cur >= 1 && s.acc_cur <= I33_ACC_N) g_ms_acc_cur = s.acc_cur;
-    memcpy(g_ms_alt, s.alt, sizeof g_ms_alt);
+    I33_STATE state;
+    { unsigned index; BYTE *bytes = (BYTE *)&state;
+      for (index = 0; index < sizeof state; ++index) bytes[index] = source[index]; }
+    if (state.Magic != I33_STATE_MAGIC) { ++g_MouseStateBadPointer; return; }
+    InterlockedExchange(&g_MouseX, state.X);       InterlockedExchange(&g_MouseY, state.Y);
+    InterlockedExchange(&g_MouseHidden, state.Hidden);
+    InterlockedExchange(&g_MouseMinimumX, state.MinimumX); InterlockedExchange(&g_MouseMaximumX, state.MaximumX);
+    InterlockedExchange(&g_MouseMinimumY, state.MinimumY); InterlockedExchange(&g_MouseMaximumY, state.MaximumY);
+    InterlockedExchange(&g_MouseMickeyX, state.MickeyX);
+    InterlockedExchange(&g_MouseMickeyY, state.MickeyY);
+    InterlockedExchange(&g_MouseDoubleThreshold, state.Double);
+    InterlockedExchange(&g_MouseEventMask, state.EventMask);
+    InterlockedExchange(&g_MouseEventSegment, state.EventSegment);
+    InterlockedExchange(&g_MouseEventOffset, state.EventOffset);
+    InterlockedExchange(&g_MouseSpeedX, state.SpeedX); InterlockedExchange(&g_MouseSpeedY, state.SpeedY); InterlockedExchange(&g_MouseSpeedDouble, state.SpeedDouble);
+    InterlockedExchange(&g_MouseHotX, state.HotX); InterlockedExchange(&g_MouseHotY, state.HotY);
+    InterlockedExchange(&g_MousePage, state.Page);   InterlockedExchange(&g_MouseRate, state.Rate);
+    I33GraphicsCursorDefine(state.GraphicsCursorScreen, state.GraphicsCursorCurrent);
+    InterlockedExchange(&g_MouseGraphicsCursorDefined, state.GraphicsCursorDefined ? 1 : 0);
+    if (state.AccelerationCurrent >= 1 && state.AccelerationCurrent <= I33_ACC_N) g_MouseAccelerationCurrent = state.AccelerationCurrent;
+    memcpy(g_MouseAlt, state.Alt, sizeof g_MouseAlt);
 }
 
 /* Resolve a guest ES:DX to something we may touch. The segment means different things
@@ -8767,34 +8767,34 @@ static void i33_state_load(volatile BYTE *p)
    selector in PM -- and NEITHER may be dereferenced on trust: this address comes from
    a guest register, and 16h/17h are exactly where a wrong one would fault the host
    rather than the guest. MemoryReadable is the same guard the call-site capture uses. */
-static volatile BYTE *i33_guest_ptr(volatile BYTE *tib, int src,
-                                    WORD seg, DWORD off, SIZE_T len, int forwrite)
+static volatile BYTE *I33GuestPointer(volatile BYTE *tib, int source,
+                                    WORD segment, DWORD offset, SIZE_T length, int forwrite)
 {
-    ULONG_PTR lin;
+    ULONG_PTR linear;
     (void)tib;
-    lin = (src == I33_SRC_PM) ? (ULONG_PTR)(dpmi_sel_base(seg) + off)
-                              : (ULONG_PTR)(((DWORD)seg << 4) + off);
-    if (!lin || !MemoryReadable(lin, len)) return NULL;
+    linear = (source == I33_SRC_PM) ? (ULONG_PTR)(dpmi_sel_base(segment) + offset)
+                              : (ULONG_PTR)(((DWORD)segment << 4) + offset);
+    if (!linear || !MemoryReadable(linear, length)) return NULL;
     /* 16h WRITES, and MemoryReadable says nothing about that -- a read-only page passes
        it and then faults the HOST on the first store. Ask separately rather than
        assume a guest buffer is writable because it usually is. */
     if (forwrite) {
-        MEMORY_BASIC_INFORMATION mb;
-        if (VirtualQuery((LPCVOID)lin, &mb, sizeof mb) != sizeof mb) return NULL;
-        if (!(mb.Protect & (PAGE_READWRITE | PAGE_WRITECOPY
+        MEMORY_BASIC_INFORMATION memoryInfo;
+        if (VirtualQuery((LPCVOID)linear, &memoryInfo, sizeof memoryInfo) != sizeof memoryInfo) return NULL;
+        if (!(memoryInfo.Protect & (PAGE_READWRITE | PAGE_WRITECOPY
                           | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
             return NULL;
     }
-    return (volatile BYTE *)lin;
+    return (volatile BYTE *)linear;
 }
 
 /* 00h and 21h both reset. Everything the driver owns goes back to its power-on value
    -- and that includes the things the old 00h arm left standing: the ranges, the
    sensitivity, the event handler and the button counts. A guest that resets and then
    asks "how many clicks" must be told none, not however many it ignored earlier. */
-static void i33_reset_state(void)
+static void I33ResetState(void)
 {
-    int i;
+    int index;
     InterlockedExchange(&g_MouseHidden, 1);               /* hidden until Show       */
     InterlockedExchange(&g_MouseMinimumX, -1); InterlockedExchange(&g_MouseMaximumX, -1);
     InterlockedExchange(&g_MouseMinimumY, -1); InterlockedExchange(&g_MouseMaximumY, -1);
@@ -8803,7 +8803,7 @@ static void i33_reset_state(void)
     InterlockedExchange(&g_MouseEventMask, 0);
     InterlockedExchange(&g_MouseEventSegment, 0);
     InterlockedExchange(&g_MouseEventOffset, 0);
-    InterlockedExchange(&g_ms_tc_and, 0x77FF); InterlockedExchange(&g_ms_tc_xor, 0x7700);
+    InterlockedExchange(&g_MouseTextCursorAnd, 0x77FF); InterlockedExchange(&g_MouseTextCursorXor, 0x7700);
     InterlockedExchange(&g_MouseSpeedX, 50); InterlockedExchange(&g_MouseSpeedY, 50); InterlockedExchange(&g_MouseSpeedDouble, 50);
     InterlockedExchange(&g_MouseHotX, 0);  InterlockedExchange(&g_MouseHotY, 0);
     InterlockedExchange(&g_MouseTcHardware, 0);
@@ -8811,12 +8811,12 @@ static void i33_reset_state(void)
     /* #264/#265: the default cursor (the host arrow), no alternate handlers, the default
        profiles. ⚠ That a reset clears 18h's handlers and the loaded profiles is the
        reading "everything the driver owns goes back to power-on" -- UNMEASURED. */
-    InterlockedExchange(&g_ms_gc_defined, 0);
-    ZeroMemory(g_ms_alt, sizeof g_ms_alt);
-    I33AccelerationDefaults(g_ms_acc); g_ms_acc_cur = I33_ACC_DEFAULT; g_ms_acc_ok = 1;
-    for (i = 0; i < MS_BTNS; ++i) {
-        InterlockedExchange(&g_MousePressCount[i], 0);
-        InterlockedExchange(&g_MouseReleaseCount[i], 0);
+    InterlockedExchange(&g_MouseGraphicsCursorDefined, 0);
+    ZeroMemory(g_MouseAlt, sizeof g_MouseAlt);
+    I33AccelerationDefaults(g_MouseAcceleration); g_MouseAccelerationCurrent = I33_ACC_DEFAULT; g_MouseAccelerationOk = 1;
+    for (index = 0; index < MS_BTNS; ++index) {
+        InterlockedExchange(&g_MousePressCount[index], 0);
+        InterlockedExchange(&g_MouseReleaseCount[index], 0);
     }
     InterlockedExchange(&g_MouseDx, 0); InterlockedExchange(&g_MouseDy, 0);
     /* ── A RESET PUTS THE POINTER IN THE MIDDLE OF THE SCREEN. ───────────────────
@@ -8826,10 +8826,10 @@ static void i33_reset_state(void)
          6.22: after AX=0000 in mode 3 the real driver reports 320,96 -- the centre,
          snapped to its cell grid. The ranges are cleared just above, so the extent
          used here is the mode's own. */
-    {   LONG cx = i33_clampx(I33Snapshot((I33VirtualMaximumX() + 1) / 2));
-        LONG cy = i33_clampy(I33Snapshot((I33VirtualMaximumY() + 1) / 2));
-        InterlockedExchange(&g_MouseX, I33PixelX(cx));
-        InterlockedExchange(&g_MouseY, I33PixelY(cy)); }
+    {   LONG centreX = I33ClampX(I33Snapshot((I33VirtualMaximumX() + 1) / 2));
+        LONG centreY = I33ClampY(I33Snapshot((I33VirtualMaximumY() + 1) / 2));
+        InterlockedExchange(&g_MouseX, I33PixelX(centreX));
+        InterlockedExchange(&g_MouseY, I33PixelY(centreY)); }
 }
 
 /* ── FILE > CLOSE PROGRAM, THE EXEC-THREAD HALF. (GH #152) ─────────────────────────
@@ -8843,119 +8843,119 @@ static void i33_reset_state(void)
      BIOS's "exception interrupt error") for anything unresolvable. memmove, because a
      caller may overlap source and destination and a real BIOS copies forwards through
      a descriptor pair that does not care. */
-static uint8_t *g_extmem_raw;                  /* AH=88h's 15 MB, allocated on first use */
-static DWORD    g_i15_87_n, g_i15_87_refused;
+static uint8_t *g_ExtendedMemoryRaw;                  /* AH=88h's 15 MB, allocated on first use */
+static DWORD    g_Int15Function87Count, g_Int15Function87Refused;
 /* `gdt_lin` = where the caller's 48-byte GDT is: ES:SI in V86; in PM the base of the
    selector in ES plus (E)SI (#244, the PM arm). */
-static unsigned int15_move_block_at(volatile BYTE *tib, DWORD gdt_lin)
+static unsigned Int15MoveBlockAt(volatile BYTE *tib, DWORD gdtLinear)
 {
-    DWORD cx = VDM_REG(tib, VTIB_ECX) & 0xFFFF, n = cx * 2u;
-    const volatile uint8_t *gdt = (const volatile uint8_t *)(ULONG_PTR)gdt_lin;
-    uint32_t src, dst;
-    uint8_t *ps, *pd;
-    unsigned rc = 0;
+    DWORD cx = VDM_REG(tib, VTIB_ECX) & 0xFFFF, length = cx * 2u;
+    const volatile uint8_t *gdt = (const volatile uint8_t *)(ULONG_PTR)gdtLinear;
+    uint32_t source, destination;
+    uint8_t *sourcePointer, *destinationPointer;
+    unsigned status = 0;
     if (cx == 0) return 0;                      /* nothing to move: done */
-    if (cx > 0x8000u) { rc = 0x02; goto out; }  /* past the 64 KB a descriptor spans */
-    if (!gdt) { rc = 0x02; goto out; }          /* PM: the GDT pointer did not resolve */
-    src = DosExtMemDescriptorBase(gdt + 0x10);
-    dst = DosExtMemDescriptorBase(gdt + 0x18);
-    if (!g_extmem_raw && (DosExtMemClassify(&g_Xms, src, n) == DOS_EXTMEM_REGION_RAW
-                          || DosExtMemClassify(&g_Xms, dst, n) == DOS_EXTMEM_REGION_RAW))
-        g_extmem_raw = (uint8_t *)VirtualAlloc(NULL, DOS_EXTMEM_RAW_LENGTH,
+    if (cx > 0x8000u) { status = 0x02; goto out; }  /* past the 64 KB a descriptor spans */
+    if (!gdt) { status = 0x02; goto out; }          /* PM: the GDT pointer did not resolve */
+    source = DosExtMemDescriptorBase(gdt + 0x10);
+    destination = DosExtMemDescriptorBase(gdt + 0x18);
+    if (!g_ExtendedMemoryRaw && (DosExtMemClassify(&g_Xms, source, length) == DOS_EXTMEM_REGION_RAW
+                          || DosExtMemClassify(&g_Xms, destination, length) == DOS_EXTMEM_REGION_RAW))
+        g_ExtendedMemoryRaw = (uint8_t *)VirtualAlloc(NULL, DOS_EXTMEM_RAW_LENGTH,
                                                MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    ps = DosExtMemResolve(&g_Xms, 0, g_extmem_raw, src, n);
-    pd = DosExtMemResolve(&g_Xms, 0, g_extmem_raw, dst, n);
-    if (!ps || !pd) { rc = 0x02; goto out; }
-    MoveMemory(pd, ps, n);
+    sourcePointer = DosExtMemResolve(&g_Xms, 0, g_ExtendedMemoryRaw, source, length);
+    destinationPointer = DosExtMemResolve(&g_Xms, 0, g_ExtendedMemoryRaw, destination, length);
+    if (!sourcePointer || !destinationPointer) { status = 0x02; goto out; }
+    MoveMemory(destinationPointer, sourcePointer, length);
 out:
-    ++g_i15_87_n;
-    if (rc) ++g_i15_87_refused;
-    if (g_i15_87_n <= 8 || rc) {                /* the first few, and every refusal */
-        static DWORD said_refused = 0;
-        if (!rc || ++said_refused <= 16) {
-            char b[160], *q = b;
-            q = LogPut(q, "  INT15 AH=87h move 0x"); q = LogHex(q, n);
-            q = LogPut(q, " bytes src=0x"); q = LogHex(q, gdt ? DosExtMemDescriptorBase(gdt + 0x10) : 0);
-            q = LogPut(q, " dst=0x");       q = LogHex(q, gdt ? DosExtMemDescriptorBase(gdt + 0x18) : 0);
-            q = LogPut(q, rc ? " -> REFUSED (unresolvable range), AH=02\r\n" : " -> done\r\n");
-            LogAppend(LOG_PATH, b, q);
+    ++g_Int15Function87Count;
+    if (status) ++g_Int15Function87Refused;
+    if (g_Int15Function87Count <= 8 || status) {                /* the first few, and every refusal */
+        static DWORD saidRefused = 0;
+        if (!status || ++saidRefused <= 16) {
+            char buffer[160], *cursor = buffer;
+            cursor = LogPut(cursor, "  INT15 AH=87h move 0x"); cursor = LogHex(cursor, length);
+            cursor = LogPut(cursor, " bytes src=0x"); cursor = LogHex(cursor, gdt ? DosExtMemDescriptorBase(gdt + 0x10) : 0);
+            cursor = LogPut(cursor, " dst=0x");       cursor = LogHex(cursor, gdt ? DosExtMemDescriptorBase(gdt + 0x18) : 0);
+            cursor = LogPut(cursor, status ? " -> REFUSED (unresolvable range), AH=02\r\n" : " -> done\r\n");
+            LogAppend(LOG_PATH, buffer, cursor);
         }
     }
-    return rc;
+    return status;
 }
-static unsigned int15_move_block(volatile BYTE *tib)
+static unsigned Int15MoveBlock(volatile BYTE *tib)
 {
     DWORD es = VDM_REG(tib, VTIB_ES) & 0xFFFF, si = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
-    return int15_move_block_at(tib, (es << 4) + si);
+    return Int15MoveBlockAt(tib, (es << 4) + si);
 }
 
 static void video_trap_sync(void);             /* fwd */
-static void exec_mach_save(int d)
+static void ExecMachineSave(int depth)
 {
-    unsigned i;
-    for (i = 0; i < 512; ++i) g_ExecMachine[d].Ivt[i] = PeekWord(i * 2);
-    g_ExecMachine[d].ImrMaster = g_Pic.Master.Imr; g_ExecMachine[d].ImrSlave = g_Pic.Slave.Imr;
-    g_ExecMachine[d].VideoMode = *(volatile BYTE *)(ULONG_PTR)0x449;   /* BDA current mode */
-    g_ExecMachine[d].Pit0  = VddPitEffectiveReload(&g_Pit);
+    unsigned index;
+    for (index = 0; index < 512; ++index) g_ExecMachine[depth].Ivt[index] = PeekWord(index * 2);
+    g_ExecMachine[depth].ImrMaster = g_Pic.Master.Imr; g_ExecMachine[depth].ImrSlave = g_Pic.Slave.Imr;
+    g_ExecMachine[depth].VideoMode = *(volatile BYTE *)(ULONG_PTR)0x449;   /* BDA current mode */
+    g_ExecMachine[depth].Pit0  = VddPitEffectiveReload(&g_Pit);
 }
 
 /* Put back what the ended child may have left broken. Called with the child still at
    depth d+1, before DosTerminate frees its memory. */
-static void exec_mach_restore(int d, char **pp)
+static void ExecMachineRestore(int depth, char **logCursor)
 {
-    unsigned i;
+    unsigned index;
     int remode;
     HOST_LOCK();
-    for (i = 0; i < 512; ++i) PokeWord(i * 2, g_ExecMachine[d].Ivt[i]);
-    g_Pic.Master.Imr = g_ExecMachine[d].ImrMaster; g_Pic.Slave.Imr = g_ExecMachine[d].ImrSlave;
+    for (index = 0; index < 512; ++index) PokeWord(index * 2, g_ExecMachine[depth].Ivt[index]);
+    g_Pic.Master.Imr = g_ExecMachine[depth].ImrMaster; g_Pic.Slave.Imr = g_ExecMachine[depth].ImrSlave;
     g_Pic.Master.Isr = 0; g_Pic.Slave.Isr = 0;           /* a handler it never finished */
     g_Irq0IsrSince = 0;
-    if (VddPitEffectiveReload(&g_Pit) != g_ExecMachine[d].Pit0) {   /* a game's fast timer */
-        uint32_t v = 0x36, n = g_ExecMachine[d].Pit0 & 0xFFFF;
-        VddBusIo(&g_Bus, 0x43, 1, 0, &v);
-        v = n & 0xFF;        VddBusIo(&g_Bus, 0x40, 1, 0, &v);
-        v = (n >> 8) & 0xFF; VddBusIo(&g_Bus, 0x40, 1, 0, &v);
+    if (VddPitEffectiveReload(&g_Pit) != g_ExecMachine[depth].Pit0) {   /* a game's fast timer */
+        uint32_t value = 0x36, reload = g_ExecMachine[depth].Pit0 & 0xFFFF;
+        VddBusIo(&g_Bus, 0x43, 1, 0, &value);
+        value = reload & 0xFF;        VddBusIo(&g_Bus, 0x40, 1, 0, &value);
+        value = (reload >> 8) & 0xFF; VddBusIo(&g_Bus, 0x40, 1, 0, &value);
     }
     /* Silence: an auto-init DMA block or a held OPL note would otherwise play on
        into the shell. */
     VddSbReset(&g_Sb); VddOplReset(&g_Opl); VddGusReset(&g_Gus);
     if (g_AweOn) VddEmu8kReset(&g_Emu8K);    /* #233 */
     VddMpuReset(&g_Mpu); VddSpeakerReset(&g_Speaker);
-    remode = (*(volatile BYTE *)(ULONG_PTR)0x449 != g_ExecMachine[d].VideoMode
+    remode = (*(volatile BYTE *)(ULONG_PTR)0x449 != g_ExecMachine[depth].VideoMode
               || g_Video.ModeKind != VIDEO_KIND_TEXT);
     if (remode) {
-        NTVDD_REGISTERS r;
-        ZeroMemory(&r, sizeof r);
-        r.Eax = g_ExecMachine[d].VideoMode;           /* AH=00h set mode */
-        VddBusDeliverInterrupt(&g_Bus, 0x10, &r);
+        NTVDD_REGISTERS registers;
+        ZeroMemory(&registers, sizeof registers);
+        registers.Eax = g_ExecMachine[depth].VideoMode;           /* AH=00h set mode */
+        VddBusDeliverInterrupt(&g_Bus, 0x10, &registers);
     }
     HOST_UNLOCK();
     if (remode) video_trap_sync();
     /* Its mouse event handler lives in the block about to be freed. */
     g_MouseCallbackActive = 0;
-    i33_reset_state();
-    InterlockedExchange(&g_ms_want_capture, 0);
-    *pp = LogPut(*pp, "CLOSEPROG: machine restored to the parent's (IVT, PIC, PIT");
-    *pp = LogPut(*pp, remode ? ", video mode 0x" : ")\r\n");
-    if (remode) { *pp = LogHexByte(*pp, g_ExecMachine[d].VideoMode); *pp = LogPut(*pp, ")\r\n"); }
+    I33ResetState();
+    InterlockedExchange(&g_MouseWantCapture, 0);
+    *logCursor = LogPut(*logCursor, "CLOSEPROG: machine restored to the parent's (IVT, PIC, PIT");
+    *logCursor = LogPut(*logCursor, remode ? ", video mode 0x" : ")\r\n");
+    if (remode) { *logCursor = LogHexByte(*logCursor, g_ExecMachine[depth].VideoMode); *logCursor = LogPut(*logCursor, ")\r\n"); }
 }
 
 /* V86 loop: 1 = a child was ended and its parent resumed, 0 = the program we were
    started with was ended, so the run is over. */
-static int close_prog_now(DOS_MACHINE *m, void *tib, char **pp, char *base)
+static int CloseProgramNow(DOS_MACHINE *machine, void *tib, char **logCursor, char *base)
 {
     if (g_ExecDepth > 0) {
-        *pp = LogPut(*pp, "CLOSEPROG: ending the program at depth ");
-        *pp = LogHexByte(*pp, (unsigned)g_ExecDepth); *pp = LogPut(*pp, " (File > Close Program)\r\n");
-        exec_mach_restore(g_ExecDepth - 1, pp);
+        *logCursor = LogPut(*logCursor, "CLOSEPROG: ending the program at depth ");
+        *logCursor = LogHexByte(*logCursor, (unsigned)g_ExecDepth); *logCursor = LogPut(*logCursor, " (File > Close Program)\r\n");
+        ExecMachineRestore(g_ExecDepth - 1, logCursor);
         if (g_Routed && g_ExecDepth == 1) g_BackToPrompt = 1;   /* #208 */
-        m->IsTsrPending = 0;
-        m->ExitCode = 0;
-        return DosTerminate(m, tib, pp, base);
+        machine->IsTsrPending = 0;
+        machine->ExitCode = 0;
+        return DosTerminate(machine, tib, logCursor, base);
     }
-    *pp = LogPut(*pp, "CLOSEPROG: ending the top-level program -- the run is over\r\n");
-    LogAppend(LOG_PATH, base, *pp); *pp = base;
-    m->ExitCode = 0;
+    *logCursor = LogPut(*logCursor, "CLOSEPROG: ending the top-level program -- the run is over\r\n");
+    LogAppend(LOG_PATH, base, *logCursor); *logCursor = base;
+    machine->ExitCode = 0;
     return 0;
 }
 
@@ -8964,21 +8964,21 @@ static int close_prog_now(DOS_MACHINE *m, void *tib, char **pp, char *base)
    pair of motion accumulators and both calls reset it. Clamped to signed 16 bits
    (a guest reads them as such; a big sweep must not wrap round and turn the player
    the wrong way). x/y = the pointer now, for the no-raw-input fallback. */
-static void i33_take_motion(LONG x, LONG y, LONG *pdx, LONG *pdy)
+static void I33TakeMotion(LONG positionX, LONG positionY, LONG *outDeltaX, LONG *outDeltaY)
 {
-    static LONG last_x = 320, last_y = 240;             /* fallback only (exec thread) */
-    LONG dx, dy;
+    static LONG lastX = 320, lastY = 240;             /* fallback only (exec thread) */
+    LONG deltaX, deltaY;
     if (g_MouseRawOk) {                                  /* the device's own counts */
-        dx = InterlockedExchange(&g_MouseDx, 0);
-        dy = InterlockedExchange(&g_MouseDy, 0);
-        dx = dx * g_MouseSensitivity / 100; dy = dy * g_MouseSensitivity / 100;
+        deltaX = InterlockedExchange(&g_MouseDx, 0);
+        deltaY = InterlockedExchange(&g_MouseDy, 0);
+        deltaX = deltaX * g_MouseSensitivity / 100; deltaY = deltaY * g_MouseSensitivity / 100;
     } else {                                            /* fallback: absolute-derived */
-        dx = (x - last_x) * 8; dy = (y - last_y) * 8;
-        last_x = x; last_y = y;
+        deltaX = (positionX - lastX) * 8; deltaY = (positionY - lastY) * 8;
+        lastX = positionX; lastY = positionY;
     }
-    if (dx >  32767) dx =  32767; else if (dx < -32768) dx = -32768;
-    if (dy >  32767) dy =  32767; else if (dy < -32768) dy = -32768;
-    *pdx = dx; *pdy = dy;
+    if (deltaX >  32767) deltaX =  32767; else if (deltaX < -32768) deltaX = -32768;
+    if (deltaY >  32767) deltaY =  32767; else if (deltaY < -32768) deltaY = -32768;
+    *outDeltaX = deltaX; *outDeltaY = deltaY;
 }
 
 /* ── 32h's ANSWER: WHICH OF 25h-34h THIS DRIVER REALLY SERVICES. (#249) ────────────
@@ -9008,20 +9008,20 @@ static void i33_take_motion(LONG x, LONG y, LONG *pdx, LONG *pdy)
      extender translates the calls it knows and passes the rest down; ours is the shape
      a client that issues the INT in PM would most usefully get. UNMEASURED. */
 static WORD dpmi_seg_to_desc(WORD seg);
-static volatile BYTE *i33_drvdata(void)
+static volatile BYTE *I33DriverData(void)
 { return (volatile BYTE *)VddMapFlat(&g_Bus, VDD_MOUSE_SEG, 0); }
-static void i33_ret_ptr(volatile BYTE *tib, int src, int offreg, WORD off)
+static void I33ResultPointer(volatile BYTE *tib, int source, int offreg, WORD offset)
 {
-    if (src == I33_SRC_PM) {
+    if (source == I33_SRC_PM) {
         VDM_SET16(tib, VTIB_ES, dpmi_seg_to_desc(VDD_MOUSE_SEG));
-        VDM_REG(tib, offreg) = off;
+        VDM_REG(tib, offreg) = offset;
     } else {
         VDM_SET16(tib, VTIB_ES, VDD_MOUSE_SEG);
-        VDM_SET16(tib, offreg, off);
+        VDM_SET16(tib, offreg, offset);
     }
 }
-static void i33_acc_ready(void)
-{ if (!g_ms_acc_ok) { I33AccelerationDefaults(g_ms_acc); g_ms_acc_cur = I33_ACC_DEFAULT; g_ms_acc_ok = 1; } }
+static void I33AccelerationReady(void)
+{ if (!g_MouseAccelerationOk) { I33AccelerationDefaults(g_MouseAcceleration); g_MouseAccelerationCurrent = I33_ACC_DEFAULT; g_MouseAccelerationOk = 1; } }
 
 /* INT 33h mouse driver (functions DOS apps actually use). The host draws the
    cursor (overlay in the present path) when the hide-count is 0, so apps that
@@ -9063,7 +9063,7 @@ static void mouse_int33(volatile BYTE *tib, int src)
         } else ++g_MouseI33SiteOverflow;
     }
     /* The guest is USING the mouse, not merely asking whether one exists -- so take
-       it into the window. See the note on g_ms_want_capture for why 0x00 is not in
+       it into the window. See the note on g_MouseWantCapture for why 0x00 is not in
        this set and why the UI thread is the one that acts. */
     /* ► 0Ch/14h JOIN THE SET (s64). Installing an event handler is the single most
          explicit way a guest can say "the mouse is mine" -- more so than polling --
@@ -9074,13 +9074,13 @@ static void mouse_int33(volatile BYTE *tib, int src)
     if (ax == 0x0001 || ax == 0x0003 || ax == 0x0005 || ax == 0x0006
         || ax == 0x0007 || ax == 0x0008 || ax == 0x000B
         || ax == 0x000C || ax == 0x0014 || ax == 0x0018)
-        InterlockedExchange(&g_ms_want_capture, 1);
+        InterlockedExchange(&g_MouseWantCapture, 1);
     switch (ax) {
     case 0x0000:                                        /* reset + get status      */
         if (g_MouseAbsent) { VDM_SET16(tib, VTIB_EAX, 0x0000); break; }  /* no driver */
         VDM_SET16(tib, VTIB_EAX, 0xFFFF);               /* driver installed        */
         VDM_SET16(tib, VTIB_EBX, 0x0002);               /* 2 buttons               */
-        i33_reset_state();
+        I33ResetState();
         break;
     case 0x0001:                                        /* show cursor (dec count) */
         if (g_MouseHidden > 0) InterlockedDecrement(&g_MouseHidden);
@@ -9089,13 +9089,13 @@ static void mouse_int33(volatile BYTE *tib, int src)
         InterlockedIncrement(&g_MouseHidden);
         break;
     case 0x0003:                                        /* get position + buttons  */
-        VDM_SET16(tib, VTIB_ECX, (WORD)i33_clampx(I33Snapshot(I33VirtualX(x))));
-        VDM_SET16(tib, VTIB_EDX, (WORD)i33_clampy(I33Snapshot(I33VirtualY(y))));
+        VDM_SET16(tib, VTIB_ECX, (WORD)I33ClampX(I33Snapshot(I33VirtualX(x))));
+        VDM_SET16(tib, VTIB_EDX, (WORD)I33ClampY(I33Snapshot(I33VirtualY(y))));
         VDM_SET16(tib, VTIB_EBX, (WORD)b);
         break;
     case 0x0004: {                                      /* set cursor position     */
-        LONG vx = i33_clampx(I33Snapshot((LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF)));
-        LONG vy = i33_clampy(I33Snapshot((LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF)));
+        LONG vx = I33ClampX(I33Snapshot((LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF)));
+        LONG vy = I33ClampY(I33Snapshot((LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF)));
         InterlockedExchange(&g_MouseX, I33PixelX(vx));
         InterlockedExchange(&g_MouseY, I33PixelY(vy));
         break; }
@@ -9120,20 +9120,20 @@ static void mouse_int33(volatile BYTE *tib, int src)
         VDM_SET16(tib, VTIB_EBX, (WORD)n);
         /* No transition yet: the documented answer is the CURRENT position, not a
            stale zero -- a guest that plots at CX/DX would jump to the top-left. */
-        VDM_SET16(tib, VTIB_ECX, (WORD)i33_clampx(I33VirtualX(n ? *px : x)));
-        VDM_SET16(tib, VTIB_EDX, (WORD)i33_clampy(I33VirtualY(n ? *py : y)));
+        VDM_SET16(tib, VTIB_ECX, (WORD)I33ClampX(I33VirtualX(n ? *px : x)));
+        VDM_SET16(tib, VTIB_EDX, (WORD)I33ClampY(I33VirtualY(n ? *py : y)));
         break; }
     case 0x0007:                                        /* set X range (virtual)   */
-        i33_set_range(&g_MouseMinimumX, &g_MouseMaximumX,
+        I33SetRange(&g_MouseMinimumX, &g_MouseMaximumX,
                       (LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
                       (LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
-        InterlockedExchange(&g_MouseX, I33PixelX(i33_clampx(I33VirtualX(x))));
+        InterlockedExchange(&g_MouseX, I33PixelX(I33ClampX(I33VirtualX(x))));
         break;
     case 0x0008:                                        /* set Y range (virtual)   */
-        i33_set_range(&g_MouseMinimumY, &g_MouseMaximumY,
+        I33SetRange(&g_MouseMinimumY, &g_MouseMaximumY,
                       (LONG)(short)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
                       (LONG)(short)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
-        InterlockedExchange(&g_MouseY, I33PixelY(i33_clampy(I33VirtualY(y))));
+        InterlockedExchange(&g_MouseY, I33PixelY(I33ClampY(I33VirtualY(y))));
         break;
     case 0x0009: {                                      /* define graphics cursor  */
         /* ★ #264: THE BITMAP IS READ AND DRAWN. It was "accepted and ignored on
@@ -9143,20 +9143,20 @@ static void mouse_int33(volatile BYTE *tib, int src)
            bitmap by it. A pointer we may not read is refused and COUNTED, and the shape
            before it stays: a cursor made of whatever an unreadable address held is worse
            than the previous one. */
-        volatile BYTE *p = i33_guest_ptr(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
+        volatile BYTE *p = I33GuestPointer(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
                                          MouseI33Offset(tib, src, VDM_REG(tib, VTIB_EDX)),
                                          2 * 2 * I33_GC_ROWS, 0);
         InterlockedExchange(&g_MouseHotX, (LONG)(SHORT)(VDM_REG(tib, VTIB_EBX) & 0xFFFF));
         InterlockedExchange(&g_MouseHotY, (LONG)(SHORT)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
-        ++g_ms_shape_sets;
-        if (!p) { ++g_ms_gc_badptr; break; }
+        ++g_MouseShapeSets;
+        if (!p) { ++g_MouseGraphicsCursorBadPointer; break; }
         {   WORD scr[I33_GC_ROWS], cur[I33_GC_ROWS]; int r;
             for (r = 0; r < I33_GC_ROWS; ++r) {
                 scr[r] = (WORD)(p[2 * r] | (p[2 * r + 1] << 8));
                 cur[r] = (WORD)(p[32 + 2 * r] | (p[32 + 2 * r + 1] << 8));
             }
-            i33_gc_define(scr, cur);
-            InterlockedExchange(&g_ms_gc_defined, 1); }
+            I33GraphicsCursorDefine(scr, cur);
+            InterlockedExchange(&g_MouseGraphicsCursorDefined, 1); }
         break; }
     case 0x000A:                                        /* define text cursor      */
         /* BX=0: a SOFTWARE cursor -- CX is the screen mask (AND), DX the cursor mask
@@ -9166,19 +9166,19 @@ static void mouse_int33(volatile BYTE *tib, int src)
            instead; counted with the shapes and drawn as the software default, which
            is at least a pointer in the right cell. */
         if ((VDM_REG(tib, VTIB_EBX) & 0xFFFF) == 0) {
-            InterlockedExchange(&g_ms_tc_and, (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
-            InterlockedExchange(&g_ms_tc_xor, (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
+            InterlockedExchange(&g_MouseTextCursorAnd, (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
+            InterlockedExchange(&g_MouseTextCursorXor, (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
             InterlockedExchange(&g_MouseTcHardware, 0);
         } else {                                        /* 25h/27h report it (#249) */
             InterlockedExchange(&g_MouseTcHardwareLow, (LONG)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
             InterlockedExchange(&g_MouseTcHardwareHigh, (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
             InterlockedExchange(&g_MouseTcHardware, 1);
-            ++g_ms_shape_sets;
+            ++g_MouseShapeSets;
         }
         break;
     case 0x000B: {                                      /* read relative motion    */
         LONG dx, dy;
-        i33_take_motion(x, y, &dx, &dy);                /* SIGNED 16-bit, drained  */
+        I33TakeMotion(x, y, &dx, &dy);                /* SIGNED 16-bit, drained  */
         VDM_SET16(tib, VTIB_ECX, (WORD)(SHORT)dx);
         VDM_SET16(tib, VTIB_EDX, (WORD)(SHORT)dy);
         break; }
@@ -9219,16 +9219,16 @@ static void mouse_int33(volatile BYTE *tib, int src)
         InterlockedExchange(&g_MouseDoubleThreshold, (LONG)(VDM_REG(tib, VTIB_EDX) & 0xFFFF));
         break;
     case 0x0015:                                        /* get state buffer size   */
-        VDM_SET16(tib, VTIB_EBX, (WORD)sizeof(i33_state));
+        VDM_SET16(tib, VTIB_EBX, (WORD)sizeof(I33_STATE));
         break;
     case 0x0016:                                        /* save state -> ES:DX     */
     case 0x0017: {                                      /* restore state <- ES:DX  */
-        volatile BYTE *p = i33_guest_ptr(tib, src,
+        volatile BYTE *p = I33GuestPointer(tib, src,
                                          (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
                                          (WORD)(VDM_REG(tib, VTIB_EDX) & 0xFFFF),
-                                         sizeof(i33_state), ax == 0x0016);
-        if (!p) { ++g_ms_state_badptr; break; }          /* refuse, do not fault    */
-        if (ax == 0x0016) i33_state_save(p); else i33_state_load(p);
+                                         sizeof(I33_STATE), ax == 0x0016);
+        if (!p) { ++g_MouseStateBadPointer; break; }          /* refuse, do not fault    */
+        if (ax == 0x0016) I33StateSave(p); else I33StateLoad(p);
         break; }
     case 0x001A:                                        /* set sensitivity (SPEED) */
         /* The speeds, NOT 0Fh's mickey ratio -- see g_MouseSpeedX. */
@@ -9277,7 +9277,7 @@ static void mouse_int33(volatile BYTE *tib, int src)
          mask; CX=0 = none (BX/DX left alone). The rules, and which of them are our
          reading rather than a measurement, are in i33_driver.h. */
     case 0x0018:
-        if (I33AlternateSet(g_ms_alt, (uint16_t)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
+        if (I33AlternateSet(g_MouseAlt, (uint16_t)(VDM_REG(tib, VTIB_ECX) & 0xFFFF),
                         (uint16_t)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
                         (uint32_t)MouseI33Offset(tib, src, VDM_REG(tib, VTIB_EDX)))) {
             VDM_SET16(tib, VTIB_EAX, 0x0018);
@@ -9285,12 +9285,12 @@ static void mouse_int33(volatile BYTE *tib, int src)
         } else VDM_SET16(tib, VTIB_EAX, 0xFFFF);
         break;
     case 0x0019: {
-        int k = I33AlternateFind(g_ms_alt, (uint16_t)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
+        int k = I33AlternateFind(g_MouseAlt, (uint16_t)(VDM_REG(tib, VTIB_ECX) & 0xFFFF));
         if (k < 0) { VDM_SET16(tib, VTIB_ECX, 0x0000); break; }
-        VDM_SET16(tib, VTIB_ECX, g_ms_alt[k].Mask);
-        VDM_SET16(tib, VTIB_EBX, g_ms_alt[k].Segment);
-        if (src == I33_SRC_PM) VDM_REG(tib, VTIB_EDX) = g_ms_alt[k].Offset;
-        else VDM_SET16(tib, VTIB_EDX, (WORD)g_ms_alt[k].Offset);
+        VDM_SET16(tib, VTIB_ECX, g_MouseAlt[k].Mask);
+        VDM_SET16(tib, VTIB_EBX, g_MouseAlt[k].Segment);
+        if (src == I33_SRC_PM) VDM_REG(tib, VTIB_EDX) = g_MouseAlt[k].Offset;
+        else VDM_SET16(tib, VTIB_EDX, (WORD)g_MouseAlt[k].Offset);
         break; }
     /* ── 20h ENABLE IS NOT A RESET. (#249) It shared 21h's arm, so enabling the driver
          wiped the ranges, the handler and the counts, and answered AX=FFFFh. Measured
@@ -9306,7 +9306,7 @@ static void mouse_int33(volatile BYTE *tib, int src)
            `default:` that would leave AX holding 0x21. */
         VDM_SET16(tib, VTIB_EAX, 0xFFFF);
         VDM_SET16(tib, VTIB_EBX, 0x0002);
-        i33_reset_state();
+        I33ResetState();
         break;
     /* ── 1Fh DISABLE DRIVER: WE REFUSE, AND THAT IS THE SAFE ANSWER. ────────────
          Success means "AX=001Fh, and ES:BX is the INT 33h vector that was there
@@ -9327,8 +9327,8 @@ static void mouse_int33(volatile BYTE *tib, int src)
         break;
     case 0x0026:                                        /* max virtual coordinates */
         VDM_SET16(tib, VTIB_EBX, 0x0000);               /* driver not disabled     */
-        VDM_SET16(tib, VTIB_ECX, (WORD)i33_rangex_max());
-        VDM_SET16(tib, VTIB_EDX, (WORD)i33_rangey_max());
+        VDM_SET16(tib, VTIB_ECX, (WORD)I33RangeXMaximum());
+        VDM_SET16(tib, VTIB_EDX, (WORD)I33RangeYMaximum());
         break;
     /* ══ 25h-34h: WHAT 24h's "8.00" PROMISES. (#249) ═══════════════════════════════
          Every one of these reached `default:` and returned the caller's registers, so
@@ -9351,11 +9351,11 @@ static void mouse_int33(volatile BYTE *tib, int src)
     case 0x0027: {                                      /* masks + mickey counts   */
         /* AX/BX = the text cursor's screen/cursor masks, or the hardware cursor's scan
            lines when 0Ah BX=1 chose it; CX/DX = mickeys since the last read -- the SAME
-           counters 0Bh drains (i33_take_motion), signed. */
+           counters 0Bh drains (I33TakeMotion), signed. */
         LONG dx, dy;
-        i33_take_motion(x, y, &dx, &dy);
-        VDM_SET16(tib, VTIB_EAX, (WORD)(g_MouseTcHardware ? g_MouseTcHardwareLow : g_ms_tc_and));
-        VDM_SET16(tib, VTIB_EBX, (WORD)(g_MouseTcHardware ? g_MouseTcHardwareHigh : g_ms_tc_xor));
+        I33TakeMotion(x, y, &dx, &dy);
+        VDM_SET16(tib, VTIB_EAX, (WORD)(g_MouseTcHardware ? g_MouseTcHardwareLow : g_MouseTextCursorAnd));
+        VDM_SET16(tib, VTIB_EBX, (WORD)(g_MouseTcHardware ? g_MouseTcHardwareHigh : g_MouseTextCursorXor));
         VDM_SET16(tib, VTIB_ECX, (WORD)(SHORT)dx);
         VDM_SET16(tib, VTIB_EDX, (WORD)(SHORT)dy);
         break; }
@@ -9390,47 +9390,47 @@ static void mouse_int33(volatile BYTE *tib, int src)
         /* BX = the profile to make active (1-4), or FFFFh = restore the default curves;
            ES:SI -> a 144h-byte block (not read for FFFFh). */
         WORD bx = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-        ++g_ms_acc_calls; i33_acc_ready();
-        if (bx == 0xFFFF) { I33AccelerationDefaults(g_ms_acc); g_ms_acc_cur = I33_ACC_DEFAULT; }
+        ++g_MouseAccelerationCalls; I33AccelerationReady();
+        if (bx == 0xFFFF) { I33AccelerationDefaults(g_MouseAcceleration); g_MouseAccelerationCurrent = I33_ACC_DEFAULT; }
         else if (bx >= 1 && bx <= I33_ACC_N) {
-            volatile BYTE *p = i33_guest_ptr(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
+            volatile BYTE *p = I33GuestPointer(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
                                              MouseI33Offset(tib, src, VDM_REG(tib, VTIB_ESI)),
                                              I33_ACC_LEN, 0);
             unsigned i;
-            if (!p) { ++g_ms_state_badptr; VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
-            for (i = 0; i < I33_ACC_LEN; ++i) g_ms_acc[i] = p[i];
-            g_ms_acc_cur = bx;
+            if (!p) { ++g_MouseStateBadPointer; VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
+            for (i = 0; i < I33_ACC_LEN; ++i) g_MouseAcceleration[i] = p[i];
+            g_MouseAccelerationCurrent = bx;
         } else { VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
         VDM_SET16(tib, VTIB_EAX, 0x0000);
         break; }
     case 0x002C: {                                      /* get acceleration profiles  */
         /* AX=0, BX = the active profile, ES:SI -> the block -- written out fresh on every
            call, so a guest that scribbled on the last copy reads a good one. */
-        volatile BYTE *d = i33_drvdata(); unsigned i;
-        ++g_ms_acc_calls; i33_acc_ready();
-        for (i = 0; i < I33_ACC_LEN; ++i) d[VDD_MOUSE_ACC + i] = g_ms_acc[i];
+        volatile BYTE *d = I33DriverData(); unsigned i;
+        ++g_MouseAccelerationCalls; I33AccelerationReady();
+        for (i = 0; i < I33_ACC_LEN; ++i) d[VDD_MOUSE_ACC + i] = g_MouseAcceleration[i];
         VDM_SET16(tib, VTIB_EAX, 0x0000);
-        VDM_SET16(tib, VTIB_EBX, (WORD)g_ms_acc_cur);
-        i33_ret_ptr(tib, src, VTIB_ESI, VDD_MOUSE_ACC);
+        VDM_SET16(tib, VTIB_EBX, (WORD)g_MouseAccelerationCurrent);
+        I33ResultPointer(tib, src, VTIB_ESI, VDD_MOUSE_ACC);
         break; }
     case 0x002D: {                                      /* select acceleration profile */
         /* BX = 1-4 selects, FFFFh only asks. AX=0 with BX = the active profile and ES:SI
            -> its 16-byte name; an invalid BX is AX=FFFEh with BX = the (unchanged)
            active profile, and ES:SI -- "destroyed" per RBIL -- left as it was. */
         WORD bx = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-        volatile BYTE *d = i33_drvdata(); unsigned i;
-        ++g_ms_acc_calls; i33_acc_ready();
+        volatile BYTE *d = I33DriverData(); unsigned i;
+        ++g_MouseAccelerationCalls; I33AccelerationReady();
         if (bx != 0xFFFF && (bx < 1 || bx > I33_ACC_N)) {
             VDM_SET16(tib, VTIB_EAX, 0xFFFE);
-            VDM_SET16(tib, VTIB_EBX, (WORD)g_ms_acc_cur);
+            VDM_SET16(tib, VTIB_EBX, (WORD)g_MouseAccelerationCurrent);
             break;
         }
-        if (bx != 0xFFFF) g_ms_acc_cur = bx;
-        for (i = 0; i < I33_ACC_LEN; ++i) d[VDD_MOUSE_ACC + i] = g_ms_acc[i];
+        if (bx != 0xFFFF) g_MouseAccelerationCurrent = bx;
+        for (i = 0; i < I33_ACC_LEN; ++i) d[VDD_MOUSE_ACC + i] = g_MouseAcceleration[i];
         VDM_SET16(tib, VTIB_EAX, 0x0000);
-        VDM_SET16(tib, VTIB_EBX, (WORD)g_ms_acc_cur);
-        i33_ret_ptr(tib, src, VTIB_ESI,
-                    (WORD)(VDD_MOUSE_ACC + I33_ACC_NAMES + (g_ms_acc_cur - 1) * I33_ACC_NAMELEN));
+        VDM_SET16(tib, VTIB_EBX, (WORD)g_MouseAccelerationCurrent);
+        I33ResultPointer(tib, src, VTIB_ESI,
+                    (WORD)(VDD_MOUSE_ACC + I33_ACC_NAMES + (g_MouseAccelerationCurrent - 1) * I33_ACC_NAMELEN));
         break; }
     case 0x002E: {                                      /* set acceleration profile names */
         /* ES:SI -> 64 bytes, four 16-byte names. BL = 0: they become the names. BL != 0:
@@ -9438,17 +9438,17 @@ static void mouse_int33(volatile BYTE *tib, int src)
            default names and hand them back. ⚠ UNMEASURED (RBIL is the only voice; only an
            8.10+ driver has 2Eh at all). */
         int fill = (VDM_REG(tib, VTIB_EBX) & 0xFF) != 0;
-        volatile BYTE *p = i33_guest_ptr(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
+        volatile BYTE *p = I33GuestPointer(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
                                          MouseI33Offset(tib, src, VDM_REG(tib, VTIB_ESI)),
                                          I33_ACC_N * I33_ACC_NAMELEN, fill);
         unsigned i;
-        ++g_ms_acc_calls; i33_acc_ready();
-        if (!p) { ++g_ms_state_badptr; VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
+        ++g_MouseAccelerationCalls; I33AccelerationReady();
+        if (!p) { ++g_MouseStateBadPointer; VDM_SET16(tib, VTIB_EAX, 0xFFFE); break; }
         if (fill) {
-            I33AccelerationDefaultNames(g_ms_acc + I33_ACC_NAMES);
-            for (i = 0; i < I33_ACC_N * I33_ACC_NAMELEN; ++i) p[i] = g_ms_acc[I33_ACC_NAMES + i];
+            I33AccelerationDefaultNames(g_MouseAcceleration + I33_ACC_NAMES);
+            for (i = 0; i < I33_ACC_N * I33_ACC_NAMELEN; ++i) p[i] = g_MouseAcceleration[I33_ACC_NAMES + i];
         } else
-            for (i = 0; i < I33_ACC_N * I33_ACC_NAMELEN; ++i) g_ms_acc[I33_ACC_NAMES + i] = p[i];
+            for (i = 0; i < I33_ACC_N * I33_ACC_NAMELEN; ++i) g_MouseAcceleration[I33_ACC_NAMES + i] = p[i];
         VDM_SET16(tib, VTIB_EAX, 0x0000);
         break; }
     case 0x0033: {                                      /* switch settings + profiles */
@@ -9459,16 +9459,16 @@ static void mouse_int33(volatile BYTE *tib, int src)
         uint8_t blk[I33_SET_LEN];
         I33_SETTINGS st;
         volatile BYTE *p = NULL;
-        ++g_ms_acc_calls; i33_acc_ready();
+        ++g_MouseAccelerationCalls; I33AccelerationReady();
         if (cap > I33_SET_LEN) cap = I33_SET_LEN;
-        if (cap) p = i33_guest_ptr(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
+        if (cap) p = I33GuestPointer(tib, src, (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF),
                                    MouseI33Offset(tib, src, VDM_REG(tib, VTIB_EDX)), cap, 1);
-        if (!p) { if (cap) ++g_ms_state_badptr; cap = 0; }
+        if (!p) { if (cap) ++g_MouseStateBadPointer; cap = 0; }
         st.Type = 4; st.Language = 0;
         st.HorizontalSpeed = (uint8_t)g_MouseSpeedX; st.VerticalSpeed = (uint8_t)g_MouseSpeedY;
-        st.DoubleSpeed = (uint8_t)g_MouseSpeedDouble; st.Curve = (uint8_t)g_ms_acc_cur;
+        st.DoubleSpeed = (uint8_t)g_MouseSpeedDouble; st.Curve = (uint8_t)g_MouseAccelerationCurrent;
         st.Rate = (uint8_t)g_MouseRate;
-        n = I33SettingsBlock(blk, cap, &st, g_ms_acc);
+        n = I33SettingsBlock(blk, cap, &st, g_MouseAcceleration);
         for (i = 0; i < n; ++i) p[i] = blk[i];
         VDM_SET16(tib, VTIB_EAX, 0x0000);
         VDM_SET16(tib, VTIB_ECX, (WORD)n);
@@ -9479,11 +9479,11 @@ static void mouse_int33(volatile BYTE *tib, int src)
            and opening it fails exactly as on a machine without one. The bare name (no
            path) is ours -- UNMEASURED. */
         static const char ini[] = "MOUSE.INI";
-        volatile BYTE *d = i33_drvdata(); unsigned i;
-        ++g_ms_acc_calls;
+        volatile BYTE *d = I33DriverData(); unsigned i;
+        ++g_MouseAccelerationCalls;
         for (i = 0; i < sizeof ini; ++i) d[VDD_MOUSE_INI + i] = (BYTE)ini[i];
         VDM_SET16(tib, VTIB_EAX, 0x0000);
-        i33_ret_ptr(tib, src, VTIB_EDX, VDD_MOUSE_INI);
+        I33ResultPointer(tib, src, VTIB_EDX, VDD_MOUSE_INI);
         break; }
     case 0x002F:                                        /* mouse hardware reset    */
         /* FFFFh = done. There is no device under us to re-initialise; the driver's
@@ -9494,10 +9494,10 @@ static void mouse_int33(volatile BYTE *tib, int src)
         VDM_SET16(tib, VTIB_EAX, 0xFFFF);               /* FFFFh = no BallPoint    */
         break;
     case 0x0031:                                        /* current min/max virtual */
-        VDM_SET16(tib, VTIB_EAX, (WORD)i33_rangex_min());
-        VDM_SET16(tib, VTIB_EBX, (WORD)i33_rangey_min());
-        VDM_SET16(tib, VTIB_ECX, (WORD)i33_rangex_max());
-        VDM_SET16(tib, VTIB_EDX, (WORD)i33_rangey_max());
+        VDM_SET16(tib, VTIB_EAX, (WORD)I33RangeXMinimum());
+        VDM_SET16(tib, VTIB_EBX, (WORD)I33RangeYMinimum());
+        VDM_SET16(tib, VTIB_ECX, (WORD)I33RangeXMaximum());
+        VDM_SET16(tib, VTIB_EDX, (WORD)I33RangeYMaximum());
         break;
     case 0x0032:                                        /* active advanced fns     */
         VDM_SET16(tib, VTIB_EAX, (WORD)I33_ACTIVE_FNS);
@@ -9519,7 +9519,7 @@ static void mouse_int33(volatile BYTE *tib, int src)
          either a genuinely exotic call or a MIS-PATCHED `CD 33` site -- and those need
          opposite fixes, so COUNT it and leave the registers alone rather than invent
          an answer. g_MouseI33Ax already records which AX values and from which sites. */
-    default: ++g_ms_i33_unimpl; break;
+    default: ++g_MouseI33Unimplemented; break;
     }
 }
 
@@ -9527,7 +9527,7 @@ static void mouse_int33(volatile BYTE *tib, int src)
    any 18h handler with event bits? */
 static int mouse_any_handler(void)
 {
-    return (g_MouseEventMask && (g_MouseEventSegment | g_MouseEventOffset) != 0) || I33AlternateAny(g_ms_alt);
+    return (g_MouseEventMask && (g_MouseEventSegment | g_MouseEventOffset) != 0) || I33AlternateAny(g_MouseAlt);
 }
 
 /* ── THE ONE PICKER BOTH DELIVERY PATHS USE (#265). ───────────────────────────────────
@@ -9547,11 +9547,11 @@ static int mouse_evq_take(MOUSE_EVENT_ENTRY *ev, LONG *ax, WORD *seg, DWORD *off
         t = g_MouseEventQueueTail;
         *ev = g_MouseEventQueue[t];
         g_MouseEventQueueTail = (t + 1) % MS_EVQ;
-        who = I33PickHandler(g_ms_alt, (unsigned)ev->Bits, kb, main_mask, &a);
+        who = I33PickHandler(g_MouseAlt, (unsigned)ev->Bits, kb, main_mask, &a);
         if (who == -2) continue;
         if (g_MouseEventQueueTail == g_MouseEventQueueHead) InterlockedExchange(&g_MouseEventPend, 0);
         *ax = (LONG)a;
-        if (who >= 0) { *seg = g_ms_alt[who].Segment; *off = g_ms_alt[who].Offset; ++g_ms_alt_calls; }
+        if (who >= 0) { *seg = g_MouseAlt[who].Segment; *off = g_MouseAlt[who].Offset; ++g_MouseAltCalls; }
         else          { *seg = (WORD)g_MouseEventSegment; *off = (DWORD)g_MouseEventOffset; }
         return 1;
     }
@@ -9574,7 +9574,7 @@ static void mouse_cb_try(volatile BYTE *tib)
         ++g_MouseCallbackWhy[0]; return;
     }
     /* 18h's handlers count as handlers (#265): a guest with only those still gets calls. */
-    if ((!g_MouseEventMask && !I33AlternateAny(g_ms_alt)) || g_MouseEventQueueHead == g_MouseEventQueueTail)
+    if ((!g_MouseEventMask && !I33AlternateAny(g_MouseAlt)) || g_MouseEventQueueHead == g_MouseEventQueueTail)
     { ++g_MouseCallbackWhy[1]; return; }
     if (!mouse_any_handler()) { ++g_MouseCallbackWhy[2]; return; }
     if (g_DpmiPm) {                               /* PM client: dpmi_inject_pm_mousecb()
@@ -9635,8 +9635,8 @@ static void mouse_cb_try(volatile BYTE *tib)
     VDM_SET16(tib, VTIB_ESP, (WORD)sp);
     VDM_SET16(tib, VTIB_EAX, (WORD)pend);
     VDM_SET16(tib, VTIB_EBX, (WORD)ev.Buttons);          /* the state AT the event     */
-    VDM_SET16(tib, VTIB_ECX, (WORD)i33_clampx(I33VirtualX(ev.X)));
-    VDM_SET16(tib, VTIB_EDX, (WORD)i33_clampy(I33VirtualY(ev.Y)));
+    VDM_SET16(tib, VTIB_ECX, (WORD)I33ClampX(I33VirtualX(ev.X)));
+    VDM_SET16(tib, VTIB_EDX, (WORD)I33ClampY(I33VirtualY(ev.Y)));
     VDM_SET16(tib, VTIB_ESI, 0);
     VDM_SET16(tib, VTIB_EDI, 0);
     VDM_SET16(tib, VTIB_DS,  DOS_HDLR_SEG);        /* "the driver's DS"              */
@@ -9769,12 +9769,12 @@ static void ms_draw_gfx_cursor(uint8_t *px, int W, int H, int stride)
     /* #325: the pointer lives in the mode's extent (gw x gh); the snapshot may be the
        CRTC's real geometry (Mode X is 320x240 in a mode 13h extent of 320x200). */
     int mx = (int)((LONG)g_MouseX * W / (LONG)I33Width()), my = (int)((LONG)g_MouseY * H / (LONG)I33Height());
-    if (!g_ms_gc_defined) { overlay_cursor(px, W, H, stride, mx, my); return; }
-    b = (int)(g_ms_gc_buf & 1);
+    if (!g_MouseGraphicsCursorDefined) { overlay_cursor(px, W, H, stride, mx, my); return; }
+    b = (int)(g_MouseGraphicsCursorBuffer & 1);
     if (g_Video.ModeKind == VIDEO_KIND_CGA && !g_Video.IsVesa && g_Video.CgaBpp != 1)
         map4 = VddVideoCga4Map(&g_Video);
     I33GraphicsCursorDraw(px, W, H, stride, mx, my, (int)g_MouseHotX, (int)g_MouseHotY,
-                g_ms_gc_scr[b], g_ms_gc_cur[b], 0x0F, map4);
+                g_MouseGraphicsCursorScreen[b], g_MouseGraphicsCursorCurrent[b], 0x0F, map4);
 }
 
 enum {                                       /* wired command IDs                */
@@ -10974,8 +10974,8 @@ static void status_update(void)
     txt[2] = spd;
     /* Only a program that asked for the mouse has anything to say about capture
        (rule 1); exactly the user's wording. */
-    txt[3] = g_captured        ? "Press WIN to release mouse"
-           : capture_allowed() ? "Click video to capture mouse"
+    txt[3] = g_Captured        ? "Press WIN to release mouse"
+           : CaptureAllowed() ? "Click video to capture mouse"
                                : "";
     n = txt[3][0] ? 4 : 3;
     if (zsame(txt[0], g_status_l) && zsame(txt[1], g_status_m) &&
@@ -11232,7 +11232,7 @@ static volatile LONG g_win_down;         /* Win held -- maintained by the hook, 
 
 static LRESULT CALLBACK ll_kbd_proc(int code, WPARAM wp, LPARAM lp)
 {
-    if (code == HC_ACTION && g_captured && GetForegroundWindow() == g_Window) {
+    if (code == HC_ACTION && g_Captured && GetForegroundWindow() == g_Window) {
         KBDLLHOOKSTRUCT *k = (KBDLLHOOKSTRUCT *)lp;
         int alt  = (k->flags & LLKHF_ALTDOWN) != 0;
         int ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
@@ -11282,7 +11282,7 @@ static LRESULT CALLBACK ll_kbd_proc(int code, WPARAM wp, LPARAM lp)
           no click takes the pointer -- it belongs to the Windows desktop and stays
           there. Skyroads is this case, and there is nothing capture could give it.
        2. A GUEST THAT HOOKS THE MOUSE CAPTURES IMMEDIATELY, at the moment it hooks.
-          That is g_ms_want_capture, raised by mouse_int33 the first time the guest
+          That is g_MouseWantCapture, raised by mouse_int33 the first time the guest
           USES the driver, and performed on the UI tick.
        3. CAPTURED, THE POINTER DOES NOT EXIST. Not over the video, not over the status
           bar, not over the menu -- ClipCursor already confines it to our client, and
@@ -11303,12 +11303,12 @@ static LRESULT CALLBACK ll_kbd_proc(int code, WPARAM wp, LPARAM lp)
           click over the picture still reached it. Release also reports any held button
           as let go, so the guest is never left believing a button is down. A guest that
           never used the mouse is untouched -- it was never captured and the plain
-          window behaviour is right for it. One decision point: mouse_goes_to_guest().
+          window behaviour is right for it. One decision point: MouseGoesToGuest().
 
-   ⚠ capture_allowed() gates rule 1 and it is deliberately the SAME latch the automatic
+   ⚠ CaptureAllowed() gates rule 1 and it is deliberately the SAME latch the automatic
      grab keys on. "Has this guest ever used the mouse" has one answer and one variable;
      two would drift, and a UI that disagrees with itself about who owns the pointer is
-     the bug this replaces. It is defined up beside g_ms_autocap_fired because the
+     the bug this replaces. It is defined up beside g_MouseAutoCaptureFired because the
      status strip needs it and is built before this point. */
 
 /* Is a point (client coords) over the VIDEO, as opposed to the status strip? The menu
@@ -11335,12 +11335,12 @@ static int pt_over_video(HWND h, int cx, int cy)
                      arrow and its size grip whatever the checkbox says. */
 static int host_cursor_visible_at(int over_video)
 {
-    if (g_captured) return 0;
-    if (!over_video || g_hostcur_mode == HOSTCUR_ALWAYS) return 1;   /* s84 */
-    if (g_hostcur_mode == HOSTCUR_NEVER) return 0;
+    if (g_Captured) return 0;
+    if (!over_video || g_HostCursorMode == HOSTCUR_ALWAYS) return 1;   /* s84 */
+    if (g_HostCursorMode == HOSTCUR_NEVER) return 0;
     /* #218: fullscreen no longer hides it outright -- a program that does not use the
        mouse keeps a usable pointer there too, and the idle rule applies to both. */
-    return !(g_cursor_idle && !capture_allowed());
+    return !(g_CursorIdle && !CaptureAllowed());
 }
 
 /* Apply it NOW rather than waiting for WM_SETCURSOR, which only fires when the mouse
@@ -11376,7 +11376,7 @@ static void capture_clip_rect(HWND h, RECT *rc)
 static void capture_clip_apply(HWND h)
 {
     RECT rc;
-    if (!h || !g_captured) return;
+    if (!h || !g_Captured) return;
     capture_clip_rect(h, &rc);
     ClipCursor(&rc);
 }
@@ -11393,7 +11393,7 @@ static DWORD g_clip_repairs;
 static void capture_clip_guard(HWND h)
 {
     RECT want, cur;
-    if (!h || !g_captured || g_in_sizemove || GetForegroundWindow() != h) return;
+    if (!h || !g_Captured || g_in_sizemove || GetForegroundWindow() != h) return;
     capture_clip_rect(h, &want);
     if (!GetClipCursor(&cur)) return;
     if (cur.left != want.left || cur.top != want.top ||
@@ -11414,9 +11414,9 @@ static void input_capture_set(HWND h, int on)
     /* RULE 1. Refuse rather than assert: this is reached from the menu, the click
        path and the UI tick, and "the guest never asked for the mouse" is a normal
        state, not an error. */
-    if (on && !capture_allowed()) return;
-    if (on == g_captured) return;
-    InterlockedExchange(&g_captured, on ? 1 : 0);
+    if (on && !CaptureAllowed()) return;
+    if (on == g_Captured) return;
+    InterlockedExchange(&g_Captured, on ? 1 : 0);
     if (on && g_PresentDdraw.IsFullscreen) fs_release_hint();
     if (on) {
         /* ── ⛔⛔ THIS HOOK CAN JAM THE WHOLE MACHINE, SO IT IS OFF BY DEFAULT. ────────
@@ -11590,7 +11590,7 @@ static void open_program(HWND h, const char *path)
         return;
     }
     MruAdd(path);
-    if (g_captured) input_capture_set(h, 0);
+    if (g_Captured) input_capture_set(h, 0);
     sl = GetShortPathNameA(path, sp, sizeof sp);
     if (open_at_prompt() && sl && sl < sizeof sp && open_is_dos_image(path)
         && open_prompt_line(sp, g_Machine->LineLength, line, (int)sizeof line)
@@ -11631,7 +11631,7 @@ static void open_program_dialog(HWND h)
     of.nMaxFile    = sizeof file;
     of.lpstrTitle  = "Open Executable";
     of.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
-    if (g_captured) input_capture_set(h, 0);   /* the dialog needs the pointer */
+    if (g_Captured) input_capture_set(h, 0);   /* the dialog needs the pointer */
     if (GetOpenFileNameA(&of)) open_program(h, file);
 }
 
@@ -11673,7 +11673,7 @@ static void host_panic_release(void)
 {
     ClipCursor(NULL);
     if (g_llkbd) { UnhookWindowsHookEx(g_llkbd); g_llkbd = NULL; }
-    InterlockedExchange(&g_captured, 0);
+    InterlockedExchange(&g_Captured, 0);
     if (g_HostCpu) {
         int guard = 0;
         /* ResumeThread returns the PREVIOUS count; >1 means it is still suspended.
@@ -11706,13 +11706,13 @@ static DWORD WINAPI capture_watchdog_thread(LPVOID pv)
     (void)pv;
     while (g_Running) {
         Sleep(250);
-        if (!g_captured) { last = g_ui_beat; last_ms = GetTickCount(); continue; }
+        if (!g_Captured) { last = g_ui_beat; last_ms = GetTickCount(); continue; }
         if (g_ui_beat != last) { last = g_ui_beat; last_ms = GetTickCount(); continue; }
         if (GetTickCount() - last_ms < CAPWD_STALL_MS) continue;
         {   char wb[192], *wq = wb;
             ClipCursor(NULL);
             if (g_llkbd) { UnhookWindowsHookEx(g_llkbd); g_llkbd = NULL; }
-            InterlockedExchange(&g_captured, 0);
+            InterlockedExchange(&g_Captured, 0);
             ++g_capwd_released;
             wq = LogPut(wq, "CAPTURE-WATCHDOG: UI thread silent for ");
             wq = LogHex(wq, GetTickCount() - last_ms);
@@ -11730,10 +11730,10 @@ static void cursor_idle_note_move(HWND h)
 {
     POINT pt;
     if (!GetCursorPos(&pt)) return;
-    if (pt.x == g_cursor_last_pt.x && pt.y == g_cursor_last_pt.y) return;
-    g_cursor_last_pt = pt;
-    g_cursor_moved_ms = GetTickCount();
-    if (g_cursor_idle) { g_cursor_idle = 0; host_cursor_refresh(h); }
+    if (pt.x == g_CursorLastPoint.x && pt.y == g_CursorLastPoint.y) return;
+    g_CursorLastPoint = pt;
+    g_CursorMovedMs = GetTickCount();
+    if (g_CursorIdle) { g_CursorIdle = 0; host_cursor_refresh(h); }
 }
 /* From the UI tick: still for CURSOR_IDLE_MS over OUR video -> hide. Only for a program
    that does not use the mouse (one that does is governed by capture), and never while
@@ -11741,18 +11741,18 @@ static void cursor_idle_note_move(HWND h)
 static void cursor_idle_tick(HWND h)
 {
     POINT pt, c; HWND w;
-    if (g_cursor_idle || g_captured || capture_allowed()) return;
-    if (g_hostcur_mode != HOSTCUR_SMART) return;          /* s84: the idle rule is Smart's */
-    if (!g_cursor_moved_ms) { g_cursor_moved_ms = GetTickCount(); return; }
-    if (GetTickCount() - g_cursor_moved_ms < CURSOR_IDLE_MS) return;
+    if (g_CursorIdle || g_Captured || CaptureAllowed()) return;
+    if (g_HostCursorMode != HOSTCUR_SMART) return;          /* s84: the idle rule is Smart's */
+    if (!g_CursorMovedMs) { g_CursorMovedMs = GetTickCount(); return; }
+    if (GetTickCount() - g_CursorMovedMs < CURSOR_IDLE_MS) return;
     if (!GetCursorPos(&pt)) return;
-    if (pt.x != g_cursor_last_pt.x || pt.y != g_cursor_last_pt.y) {   /* moved elsewhere */
-        g_cursor_last_pt = pt; g_cursor_moved_ms = GetTickCount(); return; }
+    if (pt.x != g_CursorLastPoint.x || pt.y != g_CursorLastPoint.y) {   /* moved elsewhere */
+        g_CursorLastPoint = pt; g_CursorMovedMs = GetTickCount(); return; }
     w = WindowFromPoint(pt);
     if (w != h) return;
     c = pt; ScreenToClient(h, &c);
     if (!pt_over_video(h, c.x, c.y)) return;
-    g_cursor_idle = 1;
+    g_CursorIdle = 1;
     host_cursor_refresh(h);
 }
 
@@ -11840,7 +11840,7 @@ static void host_fullscreen_toggle(HWND h)
             host_fullscreen_toggle_restore(h);
             return;
         }
-        if (g_captured) fs_release_hint();          /* #138 */
+        if (g_Captured) fs_release_hint();          /* #138 */
     } else {
         PresentDdrawSetFullscreen(&g_PresentDdraw, 0);
         host_fullscreen_toggle_restore(h);
@@ -11923,7 +11923,7 @@ static void host_fullscreen_toggle(HWND h)
                        clocked down it is a DUTY CYCLE -- see src/host/cpuspeed.h,
                        which also carries the one calibration constant.
        ★ #136 (s92): ConventionalKB (g_dos_mem_top, start-up only), Midi (AudioWaveMidiOpen,
-                       start-up only), SeamlessMouse (capture_allowed) are live; so are
+                       start-up only), SeamlessMouse (CaptureAllowed) are live; so are
                        HostCursorMode and FloppyUsePhysical, which were read here since s84.
        STILL STORED ONLY, each for a reason the startup report prints (settings_dead_why):
          Umb          -- there are no upper memory blocks to link (XMS 10h = B1h, AH=5803h
@@ -12073,7 +12073,7 @@ static const BYTE SET_LIVE_IDS[] = {
     /* #136 (s92). HostCursorMode and FloppyUsePhysical were READ by settings_apply since
        s84 and simply never listed here, so the report called two working rows dead.
        ConventionalKB, Midi and SeamlessMouse are new consumers: g_dos_mem_top,
-       AudioWaveMidiOpen, capture_allowed. */
+       AudioWaveMidiOpen, CaptureAllowed. */
     SET_HOSTCURSOR, SET_FLOPPYPHYS, SET_CONVKB, SET_MIDI, SET_SEAMLESS,
     SET_FIT,                                     /* #325 */
 };
@@ -12250,14 +12250,14 @@ static void settings_apply(HWND h, const NTVDMEX_SETTINGS *s, int live)
        only on the test rig (the harness's disk), so on a user's PC it is simply absent. */
     g_FloppyImage     = ((!s->Values[SET_FLOPPYPHYS] || !HostHasFloppy()) && s->Strings[SET_STR_FLOPPYA][0])
                      ? s->Strings[SET_STR_FLOPPYA] : NULL;
-    g_hostcur_mode   = (int)s->Values[SET_HOSTCURSOR];                   /* s84 */
+    g_HostCursorMode   = (int)s->Values[SET_HOSTCURSOR];                   /* s84 */
     /* #136: read at start-up only -- see g_dos_mem_top. */
     g_conv_kb_want   = BiosClampConventionalKb((unsigned)s->Values[SET_CONVKB]);
     /* #136: seamless mouse. Turning it on while a guest holds the pointer gives the
        pointer back now (we are on the UI thread when `live`), rather than leaving a
        capture that the policy can no longer release by clicking. */
-    InterlockedExchange(&g_ms_seamless, s->Values[SET_SEAMLESS] ? 1 : 0);
-    if (live && h && g_ms_seamless && g_captured) input_capture_set(h, 0);
+    InterlockedExchange(&g_MouseSeamless, s->Values[SET_SEAMLESS] ? 1 : 0);
+    if (live && h && g_MouseSeamless && g_Captured) input_capture_set(h, 0);
     /* The SbDma list is 1|3|5, and 5 is not an 8-bit channel on any real 8237 --
        on an SB16 it is the SIXTEEN-bit one. Selecting it therefore moves H and
        leaves D where it was, rather than pointing the 8-bit engine at a channel
@@ -12491,9 +12491,9 @@ static void menu_view_sync(HWND h)
          guest that has never called INT 33h -- there is nothing to capture the mouse
          INTO. An enabled item that silently does nothing is the worse answer. */
     EnableMenuItem(m, IDM_INPUT_CAPTURE, MF_BYCOMMAND
-                   | (capture_allowed() ? MF_ENABLED : MF_GRAYED));
+                   | (CaptureAllowed() ? MF_ENABLED : MF_GRAYED));
     CheckMenuItem(m, IDM_INPUT_CAPTURE, MF_BYCOMMAND
-                  | (g_captured ? MF_CHECKED : MF_UNCHECKED));
+                  | (g_Captured ? MF_CHECKED : MF_UNCHECKED));
 }
 
 /* ── #325: SIZE THE WINDOW TO THE PICTURE AT WHOLE SCALE k. ──────────────────────────
@@ -13485,7 +13485,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 kq = LogPut(kq, " i33[B]=");    kq = LogHex(kq, g_MouseI33[0xB]);
                 kq = LogPut(kq, " i33[1]=");    kq = LogHex(kq, g_MouseI33[1]);
                 kq = LogPut(kq, " i33oth=");    kq = LogHex(kq, g_MouseI33Other);
-                kq = LogPut(kq, " captured=");  kq = LogHex(kq, (DWORD)g_captured);
+                kq = LogPut(kq, " captured=");  kq = LogHex(kq, (DWORD)g_Captured);
                 kq = LogPut(kq, " simint_unh="); kq = LogHex(kq, g_SimIntUnhandled);
                 { unsigned sv; for (sv = 0; sv < 256; ++sv) if (g_SimIntVector[sv]) {
                       kq = LogPut(kq, " v"); kq = LogHexByte(kq, (BYTE)sv);
@@ -13529,9 +13529,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 mq = LogPut(mq, " site_ovf="); mq = LogHex(mq, g_MouseI33SiteOverflow);
                 /* Auto-capture, so a headless run can show it. want=1 fired=0 is the
                    window not being in the foreground, which is deliberate. */
-                mq = LogPut(mq, " autocap_want="); mq = LogHex(mq, (DWORD)g_ms_want_capture);
-                mq = LogPut(mq, " fired="); mq = LogHex(mq, g_ms_autocap_fired);
-                mq = LogPut(mq, " captured="); mq = LogHex(mq, (DWORD)g_captured);
+                mq = LogPut(mq, " autocap_want="); mq = LogHex(mq, (DWORD)g_MouseWantCapture);
+                mq = LogPut(mq, " fired="); mq = LogHex(mq, g_MouseAutoCaptureFired);
+                mq = LogPut(mq, " captured="); mq = LogHex(mq, (DWORD)g_Captured);
                 /* ── ★ THE s64 EVIDENCE, AND EACH FIELD ANSWERS ONE QUESTION. ────
                      edges  -- did the HOST see any button transitions at all? 0 with
                                a user who was clicking means the fault is above INT
@@ -13564,15 +13564,15 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 mq = LogPut(mq, " mask=0x");  mq = LogHex(mq, (DWORD)g_MouseEventMask);
                 mq = LogPut(mq, " hdl=0x");   mq = LogHex(mq, (DWORD)g_MouseEventSegment);
                 mq = LogPut(mq, ":0x");       mq = LogHex(mq, (DWORD)g_MouseEventOffset);
-                mq = LogPut(mq, " shape="); mq = LogHex(mq, g_ms_shape_sets);
+                mq = LogPut(mq, " shape="); mq = LogHex(mq, g_MouseShapeSets);
                 /* #264/#265: is a guest bitmap the pointer (gc=1), how many 09h pointers
                    were unreadable, events routed to an 18h handler, 2Bh-34h calls. */
-                mq = LogPut(mq, " gc=");    mq = LogHex(mq, (DWORD)g_ms_gc_defined);
-                mq = LogPut(mq, " gcbad="); mq = LogHex(mq, g_ms_gc_badptr);
-                mq = LogPut(mq, " alt=");   mq = LogHex(mq, g_ms_alt_calls);
-                mq = LogPut(mq, " acc=");   mq = LogHex(mq, g_ms_acc_calls);
-                mq = LogPut(mq, " badptr=");mq = LogHex(mq, g_ms_state_badptr);
-                mq = LogPut(mq, " unimpl=");mq = LogHex(mq, g_ms_i33_unimpl);
+                mq = LogPut(mq, " gc=");    mq = LogHex(mq, (DWORD)g_MouseGraphicsCursorDefined);
+                mq = LogPut(mq, " gcbad="); mq = LogHex(mq, g_MouseGraphicsCursorBadPointer);
+                mq = LogPut(mq, " alt=");   mq = LogHex(mq, g_MouseAltCalls);
+                mq = LogPut(mq, " acc=");   mq = LogHex(mq, g_MouseAccelerationCalls);
+                mq = LogPut(mq, " badptr=");mq = LogHex(mq, g_MouseStateBadPointer);
+                mq = LogPut(mq, " unimpl=");mq = LogHex(mq, g_MouseI33Unimplemented);
                 mq = LogPut(mq, " xsh=");   mq = LogHex(mq, (DWORD)I33XShift());
                 /* THE VIRTUAL SCREEN THIS DRIVER IS ACTUALLY USING. Without these,
                    a coordinate that comes back wrong is indistinguishable from a
@@ -13604,17 +13604,17 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              Raised on the exec thread by mouse_int33 and performed here, because
              ClipCursor / SetWindowsHookEx / SetCursor belong to the window's own
              thread. Latched, so this fires once per program and Win+F10 stays the
-             last word on it -- see the note on g_ms_want_capture.
+             last word on it -- see the note on g_MouseWantCapture.
            ⚠ NOT while the window is in the background: grabbing the pointer out of
              whatever the user is actually doing, because a DOS program in another
              window polled its mouse, is exactly the behaviour that makes capture
              feel like something being done TO you. */
-        if (InterlockedExchange(&g_ms_want_release, 0) && g_captured)
+        if (InterlockedExchange(&g_MouseWantRelease, 0) && g_Captured)
             input_capture_set(h, 0);      /* the program that owned it has exited */
-        if (capture_allowed() && !g_ms_autocap_done && !g_captured   /* #136: not seamless */
+        if (CaptureAllowed() && !g_MouseAutoCaptureDone && !g_Captured   /* #136: not seamless */
             && GetForegroundWindow() == h) {
-            InterlockedExchange(&g_ms_autocap_done, 1);
-            ++g_ms_autocap_fired;
+            InterlockedExchange(&g_MouseAutoCaptureDone, 1);
+            ++g_MouseAutoCaptureFired;
             input_capture_set(h, 1);
         }
         status_update();          /* program name / width / mode / capture, on the UI thread */
@@ -13687,7 +13687,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 if (g_MouseHidden == 0 && ms_text && g_Video.Frame.BitsPerPixel == 8 && g_Video.Frame.Pixels) {
                     int ch = g_Video.CellHeight ? g_Video.CellHeight : VIDEO_CELL_HEIGHT;
                     VddVideoTextCursor(&g_Video, (int)(g_MouseX / VIDEO_CELL_WIDTH), (int)(g_MouseY / ch),
-                                          (uint16_t)g_ms_tc_and, (uint16_t)g_ms_tc_xor);
+                                          (uint16_t)g_MouseTextCursorAnd, (uint16_t)g_MouseTextCursorXor);
                 }
                 VddVideoFrameTouch(&g_Video);               /* raster-split state + frame no. */
                 g_PresentDdraw.IsModeVesa = g_Video.IsVesa;             /* #228: Auto aspect needs it */
@@ -13829,10 +13829,10 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              hit-test on every part of this window, ours or a child's.
              Otherwise fall back to the per-area decision, which is the only place
              the Hide-over-video setting applies. */
-        if (g_captured) { SetCursor(NULL); return TRUE; }
+        if (g_Captured) { SetCursor(NULL); return TRUE; }
         /* #218: otherwise only the idle rule hides it, and only over the video. */
         if ((HWND)wp == h && LOWORD(lp) == HTCLIENT
-            && (g_cursor_idle || g_hostcur_mode == HOSTCUR_NEVER)) {
+            && (g_CursorIdle || g_HostCursorMode == HOSTCUR_NEVER)) {
             POINT c;
             if (GetCursorPos(&c)) {
                 ScreenToClient(h, &c);
@@ -13977,7 +13977,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         /* #154: the text-mode Edit menu -- see g_mark_mode. */
         case IDM_EDIT_MARK:
             if (g_Video.ModeKind == VIDEO_KIND_TEXT) {
-                if (g_captured) input_capture_set(h, 0);   /* the drag needs the pointer */
+                if (g_Captured) input_capture_set(h, 0);   /* the drag needs the pointer */
                 g_mark_mode = 1; g_mark_drag = 0; g_sel_on = 0; sel_publish();
                 g_PresentDdraw.HintText  = "Mark: drag over the text, then Enter (or Edit > Copy). Esc cancels.";
                 g_PresentDdraw.HintUntil = GetTickCount() + 5000;
@@ -13992,10 +13992,10 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_EDIT_COPY:       text_copy(h, 0); sel_clear(); return 0;
         case IDM_EDIT_COPYSCREEN: text_copy(h, 1); return 0;
         case IDM_EDIT_PASTE:      text_paste(h); return 0;
-        case IDM_FILE_CLOSEPROG:                       /* #152 -- see close_prog_now */
+        case IDM_FILE_CLOSEPROG:                       /* #152 -- see CloseProgramNow */
             if (!close_prog_available()) return 0;     /* greyed; belt and braces */
             if (g_wow_launch) { DestroyWindow(h); return 0; }   /* Win16: the same as Exit */
-            if (g_captured) input_capture_set(h, 0);   /* the shell does not own the mouse */
+            if (g_Captured) input_capture_set(h, 0);   /* the shell does not own the mouse */
             InterlockedExchange(&g_CloseRequest, 1);
             return 0;
         case IDM_DISP_FULLSCREEN: host_fullscreen_toggle(h); return 0;
@@ -14034,7 +14034,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             DialogBoxParamA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(IDD_SETTINGS),
                             h, settings_dlgproc, 0);
             return 0;
-        case IDM_INPUT_CAPTURE: input_capture_set(h, !g_captured); return 0;
+        case IDM_INPUT_CAPTURE: input_capture_set(h, !g_Captured); return 0;
         case IDM_CAP_SHOT: HostScreenshot(); return 0;
         case IDM_CAP_AUDIO: HostRecordToggle(); return 0;              /* #155 */
         case IDM_CAP_FOLDER: HostOpenCaptureFolder(); return 0;    /* #155 */
@@ -14091,7 +14091,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         /* ── ★ ALT+ENTER IS A HOST KEY EVEN WHILE CAPTURED. (s64, user report) ────────
              Reported as "Alt+Enter worked a few times in DOOM, and then stopped -- I
              guess the game hooks the enter key". The game does not: the guard here was
-             `!g_captured`, and Doom takes the mouse the moment it first polls INT 33h.
+             `!g_Captured`, and Doom takes the mouse the moment it first polls INT 33h.
              So Alt+Enter worked right up until the auto-grab fired and never again --
              "a few times, then stopped" exactly.
            ► Alt+Enter is the one hotkey that must survive capture. It is the universal
@@ -14102,12 +14102,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (wp == VK_RETURN) { host_fullscreen_toggle(h); return 0; }
         /* Alt+F4 stays Windows' while uncaptured: there must always be a way to close
            the window that does not require knowing a chord. Captured, it is the guest's. */
-        if (wp == VK_F4 && !g_captured) break;
+        if (wp == VK_F4 && !g_Captured) break;
         key_msg_note();
         key_push_make(lp);
         return 0;                        /* never let DefWindowProc open the menu bar */
     case WM_SYSKEYUP:
-        if (wp == VK_F4 && !g_captured) break;
+        if (wp == VK_F4 && !g_Captured) break;
         key_msg_note();
         key_push_break(lp);
         return 0;
@@ -14127,7 +14127,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              for the mouse. The click-in-the-video path (below) already covers "click the
              window"; this adds "focus the window" -- alt-tab back, or the click that
              activated an unfocused window (WA_CLICKACTIVE), grabs the mouse straight
-             away. input_capture_set gates it on rule 1 (capture_allowed), so a guest
+             away. input_capture_set gates it on rule 1 (CaptureAllowed), so a guest
              that never touched INT 33h is unaffected. WM_KILLFOCUS is the matching
              release, so alt-tab away frees the pointer and alt-tab back takes it.
            ⚠ This composes with the Windows-key release ONLY because that release now
@@ -14166,7 +14166,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              input_capture_set) the user lands on a desktop with their mouse back,
              which is what they were asking for by pressing it. */
         if (wp == VK_LWIN || wp == VK_RWIN) {
-            if (g_captured) input_capture_set(h, 0);
+            if (g_Captured) input_capture_set(h, 0);
             /* ── ★ SUPPRESS THE START MENU WITHOUT THE SYSTEM-WIDE HOOK. (s69, user ask) ──
                  The Windows equivalent of e.preventDefault() for a keystroke is a
                  WH_KEYBOARD_LL hook returning nonzero -- and we HAVE that (ll_kbd_proc,
@@ -14195,7 +14195,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         /* ► CAPTURED MEANS CAPTURED. Every other host hotkey stands down and the key goes
              to the guest -- F11 is Doom's gamma, Ctrl+F5/F8 collide with its fire key.
              Exclusivity that still eats keys is not exclusivity. */
-        if (g_captured) { key_push_make(lp); break; }
+        if (g_Captured) { key_push_make(lp); break; }
         if (wp == VK_F11) { host_fullscreen_toggle(h); return 0; }
         if (wp == VK_F5 && (GetKeyState(VK_CONTROL) & 0x8000)) { HostScreenshot(); return 0; }
         /* ⚠ Ctrl+F8 (host cursor on/off) WAS REMOVED WITH ITS MENU ITEM. Its
@@ -14247,9 +14247,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             InterlockedExchangeAdd(&g_MouseRawTotalY, (LONG)ri.data.mouse.lLastY);
             /* RULE 6: raw input follows FOCUS, not capture -- a released guest would
                otherwise keep mouse-looking while the user drags on the desktop. */
-            if (!mouse_goes_to_guest()) break;
+            if (!MouseGoesToGuest()) break;
             /* #136: seamless -- only while Windows' pointer is over our picture. */
-            if (g_ms_seamless && !g_captured) {
+            if (g_MouseSeamless && !g_Captured) {
                 POINT sp;
                 if (!GetCursorPos(&sp) || WindowFromPoint(sp) != h) break;
                 ScreenToClient(h, &sp);
@@ -14260,7 +14260,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             /* While captured the pointer is clipped, so WM_MOUSEMOVE stops telling the
                truth about position -- drive the driver cursor from the deltas instead,
                so INT 33h 03h still reports somewhere sensible. */
-            if (g_captured && I33Width() && I33Height()) {
+            if (g_Captured && I33Width() && I33Height()) {
                 /* ── #291 (user, s89): SENSITIVITY DRIVES THE CAPTURED POINTER. A game
                      that reads the POSITION (Lemmings: INT 33h 03h only, never 0Bh)
                      was never touched by the setting, and a mickey moved it one GAME
@@ -14323,14 +14323,14 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              DOWN is how a guest ends up believing a button is held forever.
            ⚠ And gated on rule 1 via input_capture_set: for a guest that never touched
              INT 33h this is an ordinary click on an ordinary window. */
-        if (msg == WM_LBUTTONDOWN && !g_captured && capture_allowed()
+        if (msg == WM_LBUTTONDOWN && !g_Captured && CaptureAllowed()
             && pt_over_video(h, (short)LOWORD(lp), (short)HIWORD(lp))) {
             input_capture_set(h, 1);
             return 0;
         }
         /* RULE 6: a mouse-using guest that is released sees no position and no
            buttons. Not consumed -- DefWindowProc still gets its ordinary click. */
-        if (!mouse_goes_to_guest()) break;
+        if (!MouseGoesToGuest()) break;
         /* ── #325: g_MouseX/y are in the MODE's extent (gw x gh -- what the driver reports,
              640 wide in text whatever the cell width), mapped through the rectangle the
              picture was actually drawn into. It used the whole client, which put the
@@ -14350,7 +14350,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
           else if (fx >= fw) fx = fw - 1;
           if (fy < 0) fy = 0;
           else if (fy >= fh) fy = fh - 1;
-          if (!g_captured) { if (fx != g_MouseX || fy != g_MouseY) MouseEventRaise(1);  /* motion */
+          if (!g_Captured) { if (fx != g_MouseX || fy != g_MouseY) MouseEventRaise(1);  /* motion */
                              InterlockedExchange(&g_MouseX, fx);   /* captured: WM_INPUT owns it */
                              InterlockedExchange(&g_MouseY, fy); } }
         if (wp & MK_LBUTTON) b |= 1;
@@ -24623,7 +24623,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                               DWORD off  = dpmi_sel_is32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF))
                                            ? VDM_REG(tib, VTIB_ESI) : (VDM_REG(tib, VTIB_ESI) & 0xFFFF);
                               DWORD gl   = dpmi_sel_base(es87) + off;
-                              unsigned rc87 = int15_move_block_at(tib,
+                              unsigned rc87 = Int15MoveBlockAt(tib,
                                   (es87 && host_readable((const void *)(ULONG_PTR)gl, 0x30)) ? gl : 0);
                               VDM_SET16(tib, VTIB_EAX, (WORD)((rc87 << 8) | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
                               /* AT BIOS: success is AH=0 with CF=0 AND ZF=1 (as the V86 arm) */
@@ -28543,8 +28543,8 @@ static int dpmi_inject_pm_mousecb(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
       VDM_REG(tib, VTIB_ESP) = ss32 ? sp : ((sESP & 0xFFFF0000u) | sp); }
     VDM_SET16(tib, VTIB_EAX, (WORD)pend);
     VDM_SET16(tib, VTIB_EBX, (WORD)ev.Buttons);
-    VDM_SET16(tib, VTIB_ECX, (WORD)i33_clampx(I33VirtualX(ev.X)));
-    VDM_SET16(tib, VTIB_EDX, (WORD)i33_clampy(I33VirtualY(ev.Y)));
+    VDM_SET16(tib, VTIB_ECX, (WORD)I33ClampX(I33VirtualX(ev.X)));
+    VDM_SET16(tib, VTIB_EDX, (WORD)I33ClampY(I33VirtualY(ev.Y)));
     VDM_REG(tib, VTIB_ESI) = 0; VDM_REG(tib, VTIB_EDI) = 0;
     /* DS stays the interrupted application's: for a flat client that IS its data
        selector, and a Watcom `__loadds` handler reloads its own anyway. */
@@ -29314,7 +29314,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                 BSETAX((WORD)(VDM_REG(tib, VTIB_EAX) & 0x00FF));   /* AH=0 */
                 BCF_CLR();
             } else if (ah15 == 0x87) {         /* move extended memory block (#54) */
-                BSETAX((WORD)((int15_move_block(tib) << 8)
+                BSETAX((WORD)((Int15MoveBlock(tib) << 8)
                               | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
                 /* AT BIOS: success is AH=0 with CF=0 AND ZF=1 */
                 if ((VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF) { BCF_SET(); *pflg &= (WORD)~0x40; }
@@ -32817,7 +32817,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (g_CloseRequest && !g_wow_launch) {
             InterlockedExchange(&g_CloseRequest, 0);
             if (g_ExecDepth > 0 || !g_TopIsShell) {
-                if (close_prog_now(&m, (void *)tib, &p, base)) continue;
+                if (CloseProgramNow(&m, (void *)tib, &p, base)) continue;
                 break;
             }
         }
@@ -35382,7 +35382,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                     if (g_CloseForced) {           /* #152: it did not unhook itself */
                         g_CloseForced = 0;
                         if (g_Routed && g_ExecDepth == 1) g_BackToPrompt = 1;   /* #208 */
-                        exec_mach_restore(g_ExecDepth - 1, &p);
+                        ExecMachineRestore(g_ExecDepth - 1, &p);
                         m.IsTsrPending = 0;
                     }
                     if (DosTerminate(&m, tib, &p, base)) continue;   /* parent resumed */
