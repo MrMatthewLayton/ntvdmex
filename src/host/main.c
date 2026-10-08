@@ -28888,7 +28888,7 @@ static VOID DosWowPublish(volatile BYTE *handlerArea, volatile BYTE *controlTabl
     (VOID)handlerArea;
     *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_WOW_TABLE) = table;
 }
-
+enum { INT53_FIELD_AL = 0, INT53_FIELD_AX = 1, INT53_FIELD_CARRY = 2, INT53_FIELDS = 3, MEMDUMP_FIELDS = 2 };   /* int53.txt: "<AL> <AX> <CF>"; memdump.flag: "<linear> <size>" */
 /* ── ★★★★★ A TITLE IS "PROGRAM [ARGUMENTS]", AND WE OPENED THE WHOLE THING AS A
      FILENAME. (session 59) `target.txt` has split `path [args]` since M2.5, but the
      CSRSS path -- which is EVERY REAL LAUNCH, because the IFEO hook is how a program
@@ -30070,9 +30070,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     {   HANDLE modeHandle = CreateFileA(MEMDUMP_FLAG, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                 NULL, OPEN_EXISTING, 0, NULL);
         if (modeHandle != INVALID_HANDLE_VALUE) {         /* "<linear> <size>" in hex */
-            CHAR memoryDumpText[48]; DWORD memoryDumpBytesRead = 0, memoryDumpIndex, values[2] = {0, 0}, width = 0; INT isIn = 0;
+            CHAR memoryDumpText[48]; DWORD memoryDumpBytesRead = 0, memoryDumpIndex, values[MEMDUMP_FIELDS] = {0, 0}, width = 0; INT isIn = 0;
             ReadFile(modeHandle, memoryDumpText, sizeof memoryDumpText - 1, &memoryDumpBytesRead, NULL); CloseHandle(modeHandle);
-            for (memoryDumpIndex = 0; memoryDumpIndex < memoryDumpBytesRead && width < 2; ++memoryDumpIndex) {
+            for (memoryDumpIndex = 0; memoryDumpIndex < memoryDumpBytesRead && width < MEMDUMP_FIELDS; ++memoryDumpIndex) {
                 INT hexDigit = (memoryDumpText[memoryDumpIndex] >= '0' && memoryDumpText[memoryDumpIndex] <= '9') ? memoryDumpText[memoryDumpIndex] - '0'
                        : (memoryDumpText[memoryDumpIndex] >= 'a' && memoryDumpText[memoryDumpIndex] <= 'f') ? memoryDumpText[memoryDumpIndex] - 'a' + HEX_DIGIT_A_VALUE
                        : (memoryDumpText[memoryDumpIndex] >= 'A' && memoryDumpText[memoryDumpIndex] <= 'F') ? memoryDumpText[memoryDumpIndex] - 'A' + HEX_DIGIT_A_VALUE : -1;
@@ -31592,11 +31592,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           CHAR text[512]; DWORD bytesRead = 0, index = 0;
           ReadFile(handle, text, sizeof text - 1, &bytesRead, NULL); CloseHandle(handle);
           while (index < bytesRead) {
-              UINT versions[3]; INT fieldCount = 0;
+              UINT versions[INT53_FIELDS]; INT fieldCount = 0;
               /* one line */
               while (index < bytesRead && (text[index] == ' ' || text[index] == '\t')) ++index;
               if (index < bytesRead && (text[index] == ';' || text[index] == '#')) { while (index < bytesRead && text[index] != '\n') ++index; }
-              while (index < bytesRead && text[index] != '\n' && fieldCount < 3) {
+              while (index < bytesRead && text[index] != '\n' && fieldCount < INT53_FIELDS) {
                   UINT value = 0; INT got = 0;
                   while (index < bytesRead && (text[index] == ' ' || text[index] == '\t')) ++index;
                   while (index < bytesRead) {
@@ -31610,9 +31610,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                   if (!got) break;
                   versions[fieldCount++] = value;
               }
-              if (fieldCount == 3 && versions[0] < DOS_INT53_COUNT) {
-                  g_DosInt53Answers[versions[0]].Ax = (WORD)versions[1];
-                  g_DosInt53Answers[versions[0]].IsCarry = (BYTE)(versions[2] ? 1 : 0);
+              if (fieldCount == INT53_FIELDS && versions[INT53_FIELD_AL] < DOS_INT53_COUNT) {
+                  g_DosInt53Answers[versions[INT53_FIELD_AL]].Ax = (WORD)versions[INT53_FIELD_AX];
+                  g_DosInt53Answers[versions[INT53_FIELD_AL]].IsCarry = (BYTE)(versions[INT53_FIELD_CARRY] ? 1 : 0);
                   int53Source = "cfg\\int53.txt";
               }
               while (index < bytesRead && text[index] != '\n') ++index;
@@ -32181,7 +32181,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
        E20h for a card at 220h), 512 KB of sample DRAM, and BLASTER's E says where. */
     g_AweOn = (g_Settings.Values[SET_SBMODEL] == SB_MODEL_AWE32);
     if (g_AweOn) {
-        g_Emu8K.BasePort = (WORD)(g_SbConfig.IoBase + 0x400);
+        g_Emu8K.BasePort = (WORD)(g_SbConfig.IoBase + SB_EMU8K_PORT_OFFSET);
         g_Emu8K.Dram = g_Emu8KDram; g_Emu8K.DramWords = EMU8K_DRAM_WORDS;
         g_Emu8KDevice = VddEmu8kDevice(&g_Emu8K);
         VddBusAdd(&g_Bus, &g_Emu8KDevice);
@@ -36649,22 +36649,22 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
        positive statement that nothing was missing, which a suppressed line is not. */
     { INT index, count;
       cursor = LogPut(cursor, "STAGE2: INT21 unimplemented:");
-      for (index = 0, count = 0; index < 256; ++index)
+      for (index = 0, count = 0; index < BYTE_VALUES; ++index)
           if ((machine.Unimplemented[index >> BITMAP_BYTE_SHIFT] >> (index & BITMAP_BIT_MASK)) & 1u) { cursor = LogPut(cursor, " AH=0x"); cursor = LogHexByte(cursor, (UINT)index); ++count; }
       if (!count) cursor = LogPut(cursor, " none");
       cursor = LogPut(cursor, "\r\n");
       cursor = LogPut(cursor, "STAGE2: INT21 undefined-on-6.22 (no-op, matches DOS):");
-      for (index = 0, count = 0; index < 256; ++index)
+      for (index = 0, count = 0; index < BYTE_VALUES; ++index)
           if ((machine.Undefined[index >> BITMAP_BYTE_SHIFT] >> (index & BITMAP_BIT_MASK)) & 1u) { cursor = LogPut(cursor, " AH=0x"); cursor = LogHexByte(cursor, (UINT)index); ++count; }
       if (!count) cursor = LogPut(cursor, " none");
       cursor = LogPut(cursor, "\r\n");
       cursor = LogPut(cursor, "STAGE2: BIOS partial/unimplemented:");
-      for (index = 0, count = 0; index < 256; ++index)
+      for (index = 0, count = 0; index < BYTE_VALUES; ++index)
           if (g_BiosUnimplemented[index]) { cursor = LogPut(cursor, " INT"); cursor = LogHexByte(cursor, (UINT)index); ++count; }
       if (!count) cursor = LogPut(cursor, " none");
       cursor = LogPut(cursor, "\r\n");
       cursor = LogPut(cursor, "STAGE2: INT10 unimplemented:");
-      for (index = 0, count = 0; index < 256; ++index)
+      for (index = 0, count = 0; index < BYTE_VALUES; ++index)
           if (VIDEO_UNIMPLEMENTED_GET(g_Video.UnimplementedFunctions, index)) { cursor = LogPut(cursor, " AH=0x"); cursor = LogHexByte(cursor, (UINT)index); ++count; }
       if (!count) cursor = LogPut(cursor, " none");
       cursor = LogPut(cursor, "\r\n");
