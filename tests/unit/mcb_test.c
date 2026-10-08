@@ -286,10 +286,10 @@ INT main(VOID) {
         static BYTE pspMemory[MCB_TEST_IMAGE_SIZE];
         volatile BYTE *psp = pspMemory + ((DWORD)MCB_TEST_PSP << PARAGRAPH_SHIFT);
         DosPspBuild(pspMemory, MCB_TEST_PSP, MCB_TEST_ENV_SEGMENT, MCB_TEST_TOP_640K);
-        McbTestCheck(psp[DOS_PSP_INT20] == DOS_PSP_OPCODE_INT && psp[DOS_PSP_INT20 + 1] == VECTOR_TERMINATE, "psp: INT 20h at offset 0");
+        McbTestCheck(psp[DOS_PSP_INT20] == X86_OP_INT && psp[DOS_PSP_INT20 + 1] == VECTOR_TERMINATE, "psp: INT 20h at offset 0");
         McbTestCheck(DosMcbReadWord(psp + DOS_PSP_MEMORY_TOP) == MCB_TEST_TOP_640K, "psp: top-of-mem segment = 0xA000");
         McbTestCheck(DosMcbReadWord(psp + DOS_PSP_ENVIRONMENT) == MCB_TEST_ENV_SEGMENT, "psp: environment segment = 0x60");
-        McbTestCheck(psp[DOS_PSP_DISPATCH] == DOS_PSP_OPCODE_INT && psp[DOS_PSP_DISPATCH + 1] == VECTOR_DOS && psp[DOS_PSP_DISPATCH + 2] == DOS_PSP_OPCODE_RETF,
+        McbTestCheck(psp[DOS_PSP_DISPATCH] == X86_OP_INT && psp[DOS_PSP_DISPATCH + 1] == VECTOR_DOS && psp[DOS_PSP_DISPATCH + 2] == X86_OP_RETF,
                      "psp: INT 21h;RETF dispatch stub at 0x50");
         McbTestCheck(psp[DOS_PSP_COMMAND_TAIL_LENGTH] == 0 && psp[DOS_PSP_COMMAND_TAIL] == DOS_PSP_COMMAND_TAIL_END, "psp: empty command tail + 0x0D");
     }

@@ -46,8 +46,6 @@
 #define BIOS_PRINT_SCREEN_DEFAULT_ROWS   25
 
 /* The bytes the job sends besides the screen cells. */
-#define BIOS_PRINT_SCREEN_LINE_FEED       0x0A
-#define BIOS_PRINT_SCREEN_CARRIAGE_RETURN 0x0D
 #define BIOS_PRINT_SCREEN_BLANK_CELL      ' '      /* what a NUL cell prints as */
 
 /* What BiosPrintScreenStep returns. */
@@ -111,10 +109,10 @@ static inline INT BiosPrintScreenStep(_Inout_ PBIOS_PRINT_SCREEN_JOB job,
     job->ShouldTestStatus = FALSE;
     switch (job->Phase) {
     case BIOS_PRINT_SCREEN_PHASE_INITIAL_LF:
-        *nextByte = BIOS_PRINT_SCREEN_LINE_FEED; job->Phase = BIOS_PRINT_SCREEN_PHASE_INITIAL_CR;
+        *nextByte = ASCII_LF; job->Phase = BIOS_PRINT_SCREEN_PHASE_INITIAL_CR;
         return BIOS_PRINT_SCREEN_STEP_EMIT;
     case BIOS_PRINT_SCREEN_PHASE_INITIAL_CR:
-        *nextByte = BIOS_PRINT_SCREEN_CARRIAGE_RETURN;
+        *nextByte = ASCII_CR;
         job->Phase = (job->Rows && job->Columns) ? BIOS_PRINT_SCREEN_PHASE_CELL
                                                  : BIOS_PRINT_SCREEN_PHASE_END;
         return BIOS_PRINT_SCREEN_STEP_EMIT;
@@ -125,10 +123,10 @@ static inline INT BiosPrintScreenStep(_Inout_ PBIOS_PRINT_SCREEN_JOB job,
         if (++job->Column >= job->Columns) job->Phase = BIOS_PRINT_SCREEN_PHASE_LF;
         return BIOS_PRINT_SCREEN_STEP_EMIT;
     case BIOS_PRINT_SCREEN_PHASE_LF:
-        *nextByte = BIOS_PRINT_SCREEN_LINE_FEED; job->Phase = BIOS_PRINT_SCREEN_PHASE_CR;
+        *nextByte = ASCII_LF; job->Phase = BIOS_PRINT_SCREEN_PHASE_CR;
         return BIOS_PRINT_SCREEN_STEP_EMIT;
     case BIOS_PRINT_SCREEN_PHASE_CR:
-        *nextByte = BIOS_PRINT_SCREEN_CARRIAGE_RETURN;
+        *nextByte = ASCII_CR;
         job->Column = 0;
         job->Phase = (++job->Row >= job->Rows) ? BIOS_PRINT_SCREEN_PHASE_END
                                                : BIOS_PRINT_SCREEN_PHASE_CELL;

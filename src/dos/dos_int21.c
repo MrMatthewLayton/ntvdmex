@@ -12,7 +12,6 @@
 #include "dos_lfn.h"      /* #210: the long-filename API's pure half */
 
 /* Characters, drives, paths. */
-#define DOS_INT21_LOWER_TO_UPPER  32      /* 'a'..'z' minus this is 'A'..'Z'           */
 #define DOS_INT21_DRIVES          26
 #define DOS_INT21_PATH_SIZE       300
 #define DOS_INT21_DRIVE_ROOT_SIZE 3       /* "A:"                                      */
@@ -54,7 +53,6 @@
 #define DOS_INT21_DEVICE_NAME_SIZE 80
 #define DOS_INT21_WCHAR_BYTES     2
 /* The INT 21h the guest executed, and its frame. */
-#define DOS_INT21_INT_LENGTH      2       /* CD 21                                     */
 #define DOS_INT21_CALLSITE_BEFORE 24      /* the trace's bytes around the call site    */
 #define DOS_INT21_CALLSITE_AFTER  10
 #define DOS_INT21_CALLSITE_MAX    48
@@ -118,7 +116,6 @@
 #define DOS_INT21_GET             0x00
 #define DOS_INT21_SET             0x01
 #define DOS_INT21_HEX_DIGIT_BITS  4
-#define DOS_INT21_HEX_DIGIT_MASK  0xF
 #define DOS_INT21_CH_CLEAR_MASK   0xFFFF00FFu
 /* EXEC (AH=4Bh): AL, and the parameter block. */
 #define DOS_INT21_EXEC_PB_TAIL    2       /* environment, then tail, FCB1, FCB2        */
@@ -183,7 +180,6 @@
 #define DOS_INT21_SERVER_PRINTER_FLUSH 0x09
 #define DOS_INT21_TRUENAME_MAX    127
 #define DOS_INT21_ZERO_FLAG       0x0040
-#define DOS_INT21_DWORD_BYTES     4
 #define DOS_INT21_TRACE_MCB_MAX   40
 #define DOS_INT21_INVALID_DRIVE_AX 0xFFFF /* AH=36h: no such drive                     */
 #define DOS_INT21_COUNTRY_IN_BX   0xFF    /* AH=38h AL=FFh: the country code is in BX  */
@@ -434,7 +430,7 @@ static VOID DosDtaFill(volatile BYTE *dta, const WIN32_FIND_DATAA *findData)
     dta[DOS_INT21_DTA_SIZE + 3] = (BYTE)((findData->nFileSizeLow >> TOP_BYTE_SHIFT) & BYTE_MASK);
     for (index = 0; index < DOS_INT21_DTA_NAME_LENGTH && name[index]; ++index) {
         CHAR character = name[index];
-        if (character >= 'a' && character <= 'z') character = (CHAR)(character - DOS_INT21_LOWER_TO_UPPER);  /* DOS reports 8.3 upper */
+        if (character >= 'a' && character <= 'z') character = (CHAR)(character - ASCII_CASE_BIT);  /* DOS reports 8.3 upper */
         dta[DOS_INT21_DTA_NAME + index] = (BYTE)character;
     }
     dta[DOS_INT21_DTA_NAME + index] = 0;
@@ -530,13 +526,13 @@ static VOID DosFcbPutName(volatile BYTE *destination, PCSTR name)
          cause was in the parser none of them go through. */
     for (index = 0; index < DOS_INT21_FCB_BASE_LENGTH && !DosFcbIsNameEnd((BYTE)name[source]) && name[source] != '.'; ++index, ++source) {
         if (name[source] == '*') { while (index < DOS_INT21_FCB_BASE_LENGTH) destination[index++] = '?'; break; }
-        destination[index] = (BYTE)(name[source] >= 'a' && name[source] <= 'z' ? name[source] - DOS_INT21_LOWER_TO_UPPER : name[source]);
+        destination[index] = (BYTE)(name[source] >= 'a' && name[source] <= 'z' ? name[source] - ASCII_CASE_BIT : name[source]);
     }
     while (!DosFcbIsNameEnd((BYTE)name[source]) && name[source] != '.') ++source;
     if (name[source] == '.') ++source;
     for (index = DOS_INT21_FCB_BASE_LENGTH; index < DOS_FCB_NAME_SIZE && !DosFcbIsNameEnd((BYTE)name[source]); ++index, ++source) {
         if (name[source] == '*') { while (index < DOS_FCB_NAME_SIZE) destination[index++] = '?'; break; }
-        destination[index] = (BYTE)(name[source] >= 'a' && name[source] <= 'z' ? name[source] - DOS_INT21_LOWER_TO_UPPER : name[source]);
+        destination[index] = (BYTE)(name[source] >= 'a' && name[source] <= 'z' ? name[source] - ASCII_CASE_BIT : name[source]);
     }
 }
 
@@ -571,7 +567,7 @@ static INT DosTemplateMatches(const BYTE nameTemplate[DOS_FCB_NAME_SIZE], const 
     for (index = 0; index < DOS_FCB_NAME_SIZE; ++index) {
         BYTE character = nameTemplate[index];
         if (character == '?') continue;
-        if (character >= 'a' && character <= 'z') character = (BYTE)(character - DOS_INT21_LOWER_TO_UPPER);
+        if (character >= 'a' && character <= 'z') character = (BYTE)(character - ASCII_CASE_BIT);
         if (character != name[index]) return 0;
     }
     return 1;
@@ -1016,7 +1012,7 @@ static PSTR DosInt21CallSite(PSTR trace, INT isFramed, DWORD segment, DWORD offs
     if (!isFramed) return LogPut(trace, " from=<PM: no pushed frame>");
     trace = LogPut(trace, " from=0x"); trace = LogHex(trace, segment);
     trace = LogPut(trace, ":0x");      trace = LogHex(trace, offset);
-    site = (offset >= DOS_INT21_INT_LENGTH) ? offset - DOS_INT21_INT_LENGTH : 0;      /* the CD 21 itself */
+    site = (offset >= X86_INT_LENGTH) ? offset - X86_INT_LENGTH : 0;      /* the CD 21 itself */
     trace = LogPut(trace, " site=0x");  trace = LogHex(trace, site);
     base = (segment & WORD_MASK) << PARAGRAPH_SHIFT;
     low   = (site >= DOS_INT21_CALLSITE_BEFORE) ? site - DOS_INT21_CALLSITE_BEFORE : 0;
@@ -1738,7 +1734,7 @@ INT DosInt21(PDOS_MACHINE machine)
                     for (volumeIndex = 0; volumeIndex < DOS_FCB_NAME_SIZE; ++volumeIndex) {
                         CHAR character = volume[volumeIndex] ? volume[volumeIndex] : ' ';
                         if (!volume[volumeIndex]) { extension[1 + volumeIndex] = ' '; continue; }
-                        extension[DOS_INT21_FCB_NAME + volumeIndex] = (BYTE)(character >= 'a' && character <= 'z' ? character - DOS_INT21_LOWER_TO_UPPER : character);
+                        extension[DOS_INT21_FCB_NAME + volumeIndex] = (BYTE)(character >= 'a' && character <= 'z' ? character - ASCII_CASE_BIT : character);
                     }
                     extension[DOS_INT21_DIRENTRY_ATTRIBUTE] = DOS_INT21_ATTRIBUTE_VOLUME;                 /* attribute: volume label */
                     { INT position; for (position = DOS_INT21_DIRENTRY_RESERVED; position <= DOS_INT21_DIRENTRY_LAST; ++position) extension[position] = 0; }
@@ -1935,7 +1931,7 @@ INT DosInt21(PDOS_MACHINE machine)
             destination[0] = 0;
             if (input[inputIndex] && input[inputIndex + 1] == ':') {
                 CHAR character = input[inputIndex];
-                destination[0] = (BYTE)((character >= 'a' ? character - DOS_INT21_LOWER_TO_UPPER : character) - 'A' + 1);
+                destination[0] = (BYTE)((character >= 'a' ? character - ASCII_CASE_BIT : character) - 'A' + 1);
                 inputIndex += DOS_INT21_DRIVE_PREFIX_LENGTH;
             } else if (subfunction & DOS_INT21_PARSE_KEEP_DRIVE) destination[0] = kept[0];
             for (index2 = inputIndex; !DosFcbIsNameEnd((BYTE)input[index2]) && input[index2] != '.'; ++index2) {}
@@ -2398,7 +2394,7 @@ INT DosInt21(PDOS_MACHINE machine)
             while (fileName[index] && index < DOS_INT21_TEMP_DIRECTORY_MAX) ++index;
             if (index && fileName[index-1] != '\\' && fileName[index-1] != '/') fileName[index++] = '\\';
             { UINT seed = (UINT)(GetTickCount() + (sequence++ * DOS_INT21_TEMP_SEED_STEP));
-              INT index2; for (index2 = 0; index2 < DOS_INT21_TEMP_NAME_DIGITS; ++index2) fileName[index + index2] = hexDigits[(seed >> (DOS_INT21_TEMP_TOP_SHIFT - index2*DOS_INT21_HEX_DIGIT_BITS)) & DOS_INT21_HEX_DIGIT_MASK]; }
+              INT index2; for (index2 = 0; index2 < DOS_INT21_TEMP_NAME_DIGITS; ++index2) fileName[index + index2] = hexDigits[(seed >> (DOS_INT21_TEMP_TOP_SHIFT - index2*DOS_INT21_HEX_DIGIT_BITS)) & NIBBLE_MASK]; }
             fileName[index + DOS_INT21_TEMP_NAME_DIGITS] = 0;
             { volatile BYTE *buffer = (volatile BYTE *)((R_DS << PARAGRAPH_SHIFT) + (R_DX & WORD_MASK));
               INT index2 = 0; while (fileName[index2]) { buffer[index2] = (BYTE)fileName[index2]; ++index2; } buffer[index2] = 0; }
@@ -2526,7 +2522,7 @@ INT DosInt21(PDOS_MACHINE machine)
                required -- "SUB\\FILE.TXT" became "C:\\SUB\\FILE.TXT" with no such dir. */
             while (output[index] && index < DOS_INT21_TRUENAME_MAX) {
                 CHAR character = output[index];
-                if (character >= 'a' && character <= 'z') character = (CHAR)(character - DOS_INT21_LOWER_TO_UPPER);
+                if (character >= 'a' && character <= 'z') character = (CHAR)(character - ASCII_CASE_BIT);
                 buffer[index] = (BYTE)character; ++index;
             }
             buffer[index] = 0;
@@ -2712,7 +2708,7 @@ INT DosInt21(PDOS_MACHINE machine)
                 INT charIndex;
                 if (shortLength && shortLength < sizeof shortPath) lstrcpynA(currentDirectory, shortPath, sizeof currentDirectory);
                 for (charIndex = 0; currentDirectory[charIndex]; ++charIndex)
-                    if (currentDirectory[charIndex] >= 'a' && currentDirectory[charIndex] <= 'z') currentDirectory[charIndex] = (CHAR)(currentDirectory[charIndex] - DOS_INT21_LOWER_TO_UPPER);
+                    if (currentDirectory[charIndex] >= 'a' && currentDirectory[charIndex] <= 'z') currentDirectory[charIndex] = (CHAR)(currentDirectory[charIndex] - ASCII_CASE_BIT);
             }
             if (currentDirectory[1] == ':') path += DOS_INT21_DRIVE_PREFIX_LENGTH;  /* drop "C:"            */
             if (*path == '\\' || *path == '/') ++path;  /* drop the separator   */
@@ -3446,9 +3442,9 @@ INT DosInt21(PDOS_MACHINE machine)
                     INT index;
                     localTime.dwLowDateTime = (DWORD)fileTime64; localTime.dwHighDateTime = (DWORD)(fileTime64 >> DWORD_SHIFT);
                     if (!LocalFileTimeToFileTime(&localTime, &fileTime)) fileTime = localTime;
-                    for (index = 0; index < DOS_INT21_DWORD_BYTES; ++index) {
+                    for (index = 0; index < X86_DWORD_SIZE; ++index) {
                         bytes[index]     = (BYTE)(fileTime.dwLowDateTime  >> (BYTE_SHIFT * index));
-                        bytes[DOS_INT21_DWORD_BYTES + index] = (BYTE)(fileTime.dwHighDateTime >> (BYTE_SHIFT * index));
+                        bytes[X86_DWORD_SIZE + index] = (BYTE)(fileTime.dwHighDateTime >> (BYTE_SHIFT * index));
                     }
                     OKCF();
                 }

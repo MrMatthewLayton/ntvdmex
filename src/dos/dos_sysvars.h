@@ -107,7 +107,6 @@
 #define DOS_CDS_FLAG_NETWORK  0x8000
 
 /* The values the builders below write. */
-#define DOS_SYSVARS_FAR_SEGMENT     2       /* a far pointer: offset WORD, then segment WORD */
 #define DOS_CHAIN_END               0xFFFF  /* FFFF:FFFF ends a DPB or device chain           */
 #define DOS_DPB_DEFAULT_SECTOR_SIZE 512     /* what a sector size of 0 is taken as            */
 #define DOS_CDS_ARRAY_NONE          0xFFFF  /* SysVars' CDS pointer when there is no array     */
@@ -145,7 +144,7 @@ static inline VOID DosSysVarsWriteFarPointer(_Out_ PBYTE buffer, _In_ UINT offse
                                              _In_ UINT pointerOffset)
 {
     DosSysVarsWriteWord(buffer, offset, pointerOffset);
-    DosSysVarsWriteWord(buffer, offset + DOS_SYSVARS_FAR_SEGMENT, segment);
+    DosSysVarsWriteWord(buffer, offset + X86_FAR_POINTER_SEGMENT, segment);
 }
 
 /* ── #48: THE FAT LAYOUT A DPB DESCRIBES, DERIVED -- AND CHECKED AGAINST 6.22. ──────

@@ -221,9 +221,6 @@ static inline BOOL DosLfnDosToFileTime(_In_ WORD dosDate, _In_ WORD dosTime, _In
 #define DOS_LFN_BYTE1               1
 #define DOS_LFN_BYTE2               2
 #define DOS_LFN_BYTE3               3
-#define DOS_LFN_BYTE1_SHIFT         8
-#define DOS_LFN_BYTE2_SHIFT         16
-#define DOS_LFN_BYTE3_SHIFT         24
 
 typedef struct _DOS_LFN_FIND_ENTRY {
     DWORD  Attributes;
@@ -239,9 +236,9 @@ typedef const DOS_LFN_FIND_ENTRY *PCDOS_LFN_FIND_ENTRY;
 static inline VOID DosLfnPutDword(_Out_writes_bytes_(sizeof(DWORD)) PBYTE destination,
                                   _In_ DWORD value)
 {
-    destination[0] = (BYTE)value; destination[DOS_LFN_BYTE1] = (BYTE)(value >> DOS_LFN_BYTE1_SHIFT);
-    destination[DOS_LFN_BYTE2] = (BYTE)(value >> DOS_LFN_BYTE2_SHIFT);
-    destination[DOS_LFN_BYTE3] = (BYTE)(value >> DOS_LFN_BYTE3_SHIFT);
+    destination[0] = (BYTE)value; destination[DOS_LFN_BYTE1] = (BYTE)(value >> BYTE_SHIFT);
+    destination[DOS_LFN_BYTE2] = (BYTE)(value >> WORD_SHIFT);
+    destination[DOS_LFN_BYTE3] = (BYTE)(value >> TOP_BYTE_SHIFT);
 }
 
 static inline VOID DosLfnPutTime(_Out_writes_bytes_(sizeof(UINT64)) PBYTE destination,
@@ -319,8 +316,6 @@ static inline BOOL DosLfnAttributesOk(_In_ DWORD attributes, _In_ BYTE allowed, 
      documented (RBIL) as generating the BASIS name; whether it -- or NTVDM -- adds the
      numeric tail is exactly the question. The "~1" form is what NT's own generator
      produces and what the file system would assign a lone file of that name. */
-#define DOS_LFN_FIRST_PRINTABLE     0x20    /* below this, a control character           */
-#define DOS_LFN_CASE_OFFSET         32      /* 'a' - 'A'                                 */
 #define DOS_LFN_BASE_CHARS          8       /* an 8.3 name: 8 of base ...                */
 #define DOS_LFN_EXTENSION_CHARS     3       /* ... and 3 of extension                    */
 #define DOS_LFN_BASE_BUFFER_SIZE    9
@@ -335,7 +330,7 @@ static inline BOOL DosLfnAttributesOk(_In_ DWORD attributes, _In_ BYTE allowed, 
 
 static inline BOOL DosLfnIsBadShortNameChar(_In_ BYTE character)
 {
-    return character < DOS_LFN_FIRST_PRINTABLE || character == '"' || character == '*'
+    return character < ASCII_SPACE || character == '"' || character == '*'
         || character == '+' || character == ',' || character == '/' || character == ':'
         || character == ';' || character == '<' || character == '=' || character == '>'
         || character == '?' || character == '[' || character == '\\' || character == ']'
@@ -344,7 +339,7 @@ static inline BOOL DosLfnIsBadShortNameChar(_In_ BYTE character)
 
 static inline CHAR DosLfnUpperCase(_In_ CHAR character)
 {
-    return (character >= 'a' && character <= 'z') ? (CHAR)(character - DOS_LFN_CASE_OFFSET)
+    return (character >= 'a' && character <= 'z') ? (CHAR)(character - ASCII_CASE_BIT)
                                                    : character;
 }
 
@@ -397,7 +392,7 @@ static inline VOID DosLfnShortName(_In_ PCSTR longName,
              *cursor && cursor != lastDot && baseLength < DOS_LFN_ALIAS_BASE_CHARS; ++cursor) {
             BYTE character = (BYTE)*cursor;
             if (character == ' ' || character == DOS_LFN_EXTENSION_DOT
-                || character < DOS_LFN_FIRST_PRINTABLE || character == '"' || character == '*'
+                || character < ASCII_SPACE || character == '"' || character == '*'
                 || character == '/' || character == ':' || character == '<' || character == '>'
                 || character == '?' || character == '\\' || character == '|') continue;
             base[baseLength++] = DosLfnCleanShortNameChar(character);
@@ -409,7 +404,7 @@ static inline VOID DosLfnShortName(_In_ PCSTR longName,
                  *cursor && extensionLength < DOS_LFN_EXTENSION_CHARS; ++cursor) {
                 BYTE character = (BYTE)*cursor;
                 if (character == ' ' || character == DOS_LFN_EXTENSION_DOT
-                    || character < DOS_LFN_FIRST_PRINTABLE || character == '"' || character == '*'
+                    || character < ASCII_SPACE || character == '"' || character == '*'
                     || character == '/' || character == ':' || character == '<'
                     || character == '>' || character == '?' || character == '\\'
                     || character == '|') continue;

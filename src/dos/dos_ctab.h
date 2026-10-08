@@ -39,18 +39,15 @@ static const BYTE g_DosCtabUpper[DOS_CTAB_UPPER_TABLE_SIZE] = {
     0xFE, 0xFF
 };
 
-#define DOS_CTAB_CASE_OFFSET        0x20    /* 'a' - 'A'                                  */
-#define DOS_CTAB_FIRST_HIGH_CHAR    0x80    /* the table covers 80h-FFh ...               */
-#define DOS_CTAB_LENGTH_WORD_SIZE   2       /* ... after its length word                  */
 
 /* One character through the table above: ASCII a-z directly, 80h-FFh by lookup.
    Used by AH=65h AL=20h-23h, so capitalising through DOS and reading the table
    agree by construction. */
 static inline BYTE DosCtabUpcase437(_In_ BYTE character)
 {
-    if (character >= 'a' && character <= 'z') return (BYTE)(character - DOS_CTAB_CASE_OFFSET);
-    if (character >= DOS_CTAB_FIRST_HIGH_CHAR)
-        return g_DosCtabUpper[DOS_CTAB_LENGTH_WORD_SIZE + (character - DOS_CTAB_FIRST_HIGH_CHAR)];
+    if (character >= 'a' && character <= 'z') return (BYTE)(character - ASCII_CASE_BIT);
+    if (character >= ASCII_HIGH_FIRST)
+        return g_DosCtabUpper[X86_WORD_SIZE + (character - ASCII_HIGH_FIRST)];
     return character;
 }
 

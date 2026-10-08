@@ -52,28 +52,25 @@ typedef struct _RMCS_REGS {
     UINT16 Flags, Es, Ds, Fs, Gs;
 } RMCS_REGS, *PRMCS_REGS; typedef const RMCS_REGS *PCRMCS_REGS;
 
-#define RMCS_BYTE1_SHIFT 8
-#define RMCS_BYTE2_SHIFT 16
-#define RMCS_BYTE3_SHIFT 24
 
 /* Byte-assembled: the structure lives wherever the client put it, at any alignment. */
 static DWORD RmcsRead32(const volatile BYTE *structure, UINT offset)
 {
-    return (DWORD)structure[offset] | ((DWORD)structure[offset + 1] << RMCS_BYTE1_SHIFT)
-         | ((DWORD)structure[offset + 2] << RMCS_BYTE2_SHIFT) | ((DWORD)structure[offset + 3] << RMCS_BYTE3_SHIFT);
+    return (DWORD)structure[offset] | ((DWORD)structure[offset + 1] << BYTE_SHIFT)
+         | ((DWORD)structure[offset + 2] << WORD_SHIFT) | ((DWORD)structure[offset + 3] << TOP_BYTE_SHIFT);
 }
 static WORD RmcsRead16(const volatile BYTE *structure, UINT offset)
 {
-    return (WORD)(structure[offset] | (structure[offset + 1] << RMCS_BYTE1_SHIFT));
+    return (WORD)(structure[offset] | (structure[offset + 1] << BYTE_SHIFT));
 }
 static VOID RmcsWrite32(volatile BYTE *structure, UINT offset, DWORD value)
 {
-    structure[offset] = (BYTE)value; structure[offset + 1] = (BYTE)(value >> RMCS_BYTE1_SHIFT);
-    structure[offset + 2] = (BYTE)(value >> RMCS_BYTE2_SHIFT); structure[offset + 3] = (BYTE)(value >> RMCS_BYTE3_SHIFT);
+    structure[offset] = (BYTE)value; structure[offset + 1] = (BYTE)(value >> BYTE_SHIFT);
+    structure[offset + 2] = (BYTE)(value >> WORD_SHIFT); structure[offset + 3] = (BYTE)(value >> TOP_BYTE_SHIFT);
 }
 static VOID RmcsWrite16(volatile BYTE *structure, UINT offset, WORD value)
 {
-    structure[offset] = (BYTE)value; structure[offset + 1] = (BYTE)(value >> RMCS_BYTE1_SHIFT);
+    structure[offset] = (BYTE)value; structure[offset + 1] = (BYTE)(value >> BYTE_SHIFT);
 }
 
 static VOID RmcsRead(const volatile BYTE *structure, PRMCS_REGS out)
@@ -122,15 +119,12 @@ static VOID RmcsWrite(volatile BYTE *structure, PCRMCS_REGS in)
 #define SIMINT_FAST 1   /* host-side: dos_int21 / mouse_int33 / the video VDD          */
 #define SIMINT_RUN  2   /* run IVT[vec] in V86 with an IRET frame (the 0302h machinery) */
 #define SIMINT_NONE 3   /* not run; counted in `STAGE2: simInt (DPMI 0300) UNHANDLED`   */
-#define SIMINT_VECTOR_VIDEO 0x10
-#define SIMINT_VECTOR_DOS   0x21
-#define SIMINT_VECTOR_MOUSE 0x33
 
 static INT RmcsSimIntRoute(UINT vector, WORD ivtSegment, WORD ivtOffset,
                            INT isReflectOn, WORD ourSegment)
 {
-    if (vector == SIMINT_VECTOR_DOS) return SIMINT_FAST;
-    if (vector == SIMINT_VECTOR_MOUSE || vector == SIMINT_VECTOR_VIDEO)
+    if (vector == VECTOR_DOS) return SIMINT_FAST;
+    if (vector == VECTOR_MOUSE || vector == VECTOR_VIDEO)
         if (ivtSegment == ourSegment || !isReflectOn) return SIMINT_FAST;
     if (!isReflectOn) return SIMINT_NONE;
     if (ivtSegment == 0 && ivtOffset == 0) return SIMINT_NONE;

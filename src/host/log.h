@@ -124,7 +124,6 @@ static INT           g_LogIsCapped = 0;
 #define LOG_ROTATION_SLACK   16
 #define LOG_ROTATION_SUFFIX  8       /* "-k" and the rest                       */
 #define LOG_EXTENSION_LENGTH 4       /* ".log"                                  */
-#define LOG_CASE_BIT         0x20
 static HANDLE g_LogHandle = INVALID_HANDLE_VALUE;
 static CHAR   g_LogHandlePathBuffer[MAX_PATH + LOG_PATH_SLACK];
 static PCSTR g_LogHandlePath = 0;        /* -> g_LogHandlePathBuffer when a handle is open */
@@ -201,8 +200,8 @@ static inline VOID LogRotateOnce(PCSTR path) {
     if (length < LOG_EXTENSION_LENGTH || length + LOG_ROTATION_SUFFIX >= (INT)sizeof from) return;
     if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) return;   /* nothing to keep */
     stem = length;
-    if (path[length-LOG_EXTENSION_LENGTH] == '.' && (path[length-3] | LOG_CASE_BIT) == 'l' && (path[length-2] | LOG_CASE_BIT) == 'o'
-        && (path[length-1] | LOG_CASE_BIT) == 'g') stem = length - LOG_EXTENSION_LENGTH;
+    if (path[length-LOG_EXTENSION_LENGTH] == '.' && (path[length-3] | ASCII_CASE_BIT) == 'l' && (path[length-2] | ASCII_CASE_BIT) == 'o'
+        && (path[length-1] | ASCII_CASE_BIT) == 'g') stem = length - LOG_EXTENSION_LENGTH;
     LogRotationName(to, path, length, stem, LOG_KEEP);
     DeleteFileA(to);                                        /* the oldest falls off */
     for (number = LOG_KEEP - 1; number >= 1; --number) {

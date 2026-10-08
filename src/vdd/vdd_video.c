@@ -588,7 +588,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_PORT_CRTC_COLOUR_DATA   0x3D5
 #define VIDEO_PORT_STATUS1_MONO       0x3BA
 #define VIDEO_PORT_VBE_DATA           0x1CF
-#define VIDEO_INT10_VECTOR            0x10
 #define VIDEO_STATUS1_DISPLAY_DISABLED 0x01u
 #define VIDEO_UINT32_MAX              0xFFFFFFFFu
 #define VIDEO_DT3DA_LAST_BUCKET       7
@@ -641,7 +640,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_SNAPSHOT_HEADER_ROOM    8
 #define VIDEO_CHAR_PRINTABLE_FIRST    32
 #define VIDEO_CHAR_PRINTABLE_END      127
-#define VIDEO_NIBBLE_MASK             0xF
 #define VIDEO_DECIMAL_DIGITS          12
 #define VIDEO_DECIMAL_BASE            10
 #define VIDEO_REGISTER_DUMP_MIN_CAPACITY 1600
@@ -4811,7 +4809,7 @@ INT VddVideoTextSnapshot(PVIDEO_STATE state, char *output, INT capacity)
     for (row = 0; row < state->Rows; ++row) {
         for (column = 0; column < state->Columns && count < capacity - VIDEO_SNAPSHOT_HEX_ROOM; ++column) {
             BYTE attributeByte = VideoDisplayCell(state, row, column)[1];
-            output[count++] = hexDigits[(attributeByte >> NIBBLE_SHIFT) & VIDEO_NIBBLE_MASK]; output[count++] = hexDigits[attributeByte & VIDEO_NIBBLE_MASK];
+            output[count++] = hexDigits[(attributeByte >> NIBBLE_SHIFT) & NIBBLE_MASK]; output[count++] = hexDigits[attributeByte & NIBBLE_MASK];
         }
         if (count < capacity - VIDEO_SNAPSHOT_LINE_ROOM) output[count++] = '\n';
     }
@@ -5270,7 +5268,7 @@ VOID VddVideoPutChar(PVIDEO_STATE state, BYTE character) { VideoTeletype(state, 
 static char *VideoReadHex2(char *output, UINT value)
 {
     static const char H[] = "0123456789ABCDEF";
-    *output++ = H[(value >> NIBBLE_SHIFT) & VIDEO_NIBBLE_MASK]; *output++ = H[value & VIDEO_NIBBLE_MASK]; return output;
+    *output++ = H[(value >> NIBBLE_SHIFT) & NIBBLE_MASK]; *output++ = H[value & NIBBLE_MASK]; return output;
 }
 static char *VideoReadString(char *output, const char *text) { while (*text) *output++ = *text++; return output; }
 static char *VideoReadDecimal(char *output, UINT value)
@@ -5392,7 +5390,7 @@ INT VddVideoInitialize(PVDD_BUS bus, PVOID context)
     VddVideoReset(state);
     state->ModeYGap = VIDEO_MODEY_GAP_DEFAULT;
     if (VddClaimMemory(bus, VIDEO_TEXT_BASE, VIDEO_TEXT_WINDOW_BYTES, VideoRead, VideoWrite, state)) return -1;
-    if (VddClaimInterrupt(bus, VIDEO_INT10_VECTOR, VideoInt10, state)) return -1;
+    if (VddClaimInterrupt(bus, VECTOR_VIDEO, VideoInt10, state)) return -1;
     if (VddClaimPorts(bus, VIDEO_PORT_SEQUENCER_INDEX, VIDEO_PORT_SEQUENCER_DATA, VideoSequencerIn, VideoSequencerOut, state)) return -1;  /* Sequencer */
     /* ⚠ THE OLD WARNING HERE ("DO NOT CLAIM CRTC 0x3D4/0x3D5", three regressions,
          mechanism UNKNOWN) IS RESOLVED, not ignored. The mechanism was that Doom

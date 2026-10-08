@@ -350,7 +350,6 @@ static inline WORD DosCritIgnoreCount(_In_ BYTE function, _In_ WORD requestedCou
 /* The drive letters A: to Z:, and what DosCritDriveFromNtName answers for no match. */
 #define DOS_CRIT_DRIVE_COUNT   26
 #define DOS_CRIT_NO_DRIVE      (-1)
-#define DOS_CRIT_CASE_OFFSET   32       /* 'a' - 'A' */
 #define DOS_CRIT_PATH_SEPARATOR '\\'
 
 /* #275: AL for a handle call -- the drive the OPEN FILE lives on, not the current
@@ -372,9 +371,9 @@ static inline INT DosCritDriveFromNtName(
         while (*devicePosition && *namePosition) {
             CHAR deviceChar = *devicePosition, nameChar = *namePosition;
             if (deviceChar >= 'A' && deviceChar <= 'Z')
-                deviceChar = (CHAR)(deviceChar + DOS_CRIT_CASE_OFFSET);
+                deviceChar = (CHAR)(deviceChar + ASCII_CASE_BIT);
             if (nameChar >= 'A' && nameChar <= 'Z')
-                nameChar = (CHAR)(nameChar + DOS_CRIT_CASE_OFFSET);
+                nameChar = (CHAR)(nameChar + ASCII_CASE_BIT);
             if (deviceChar != nameChar) break;
             ++devicePosition; ++namePosition;
         }

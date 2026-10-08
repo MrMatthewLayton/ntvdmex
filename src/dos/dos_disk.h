@@ -59,9 +59,6 @@ typedef const DOS_DISK_GEOMETRY *PCDOS_DISK_GEOMETRY;
 #define DOS_BPB_BYTE1                 1     /* the field's second byte, and so on   */
 #define DOS_BPB_BYTE2                 2
 #define DOS_BPB_BYTE3                 3
-#define DOS_BPB_BYTE1_SHIFT           8     /* ...and where each byte goes          */
-#define DOS_BPB_BYTE2_SHIFT           16
-#define DOS_BPB_BYTE3_SHIFT           24
 
 /* The limits a CHS address can express: 6 bits of sector, 8 bits of head. */
 #define DOS_DISK_MAX_SECTORS_PER_TRACK  63
@@ -99,18 +96,18 @@ static BOOL DosDiskGeometryFromBpb(_In_reads_bytes_opt_(DOS_SECTOR_SIZE) PCBYTE 
     geometry->IsValid = FALSE;
     if (!bootSector) return FALSE;
     geometry->BytesPerSector  = (WORD)(bootSector[DOS_BPB_BYTES_PER_SECTOR]
-        | (bootSector[DOS_BPB_BYTES_PER_SECTOR + DOS_BPB_BYTE1] << DOS_BPB_BYTE1_SHIFT));
+        | (bootSector[DOS_BPB_BYTES_PER_SECTOR + DOS_BPB_BYTE1] << BYTE_SHIFT));
     geometry->SectorsPerTrack = (WORD)(bootSector[DOS_BPB_SECTORS_PER_TRACK]
-        | (bootSector[DOS_BPB_SECTORS_PER_TRACK + DOS_BPB_BYTE1] << DOS_BPB_BYTE1_SHIFT));
+        | (bootSector[DOS_BPB_SECTORS_PER_TRACK + DOS_BPB_BYTE1] << BYTE_SHIFT));
     geometry->Heads           = (WORD)(bootSector[DOS_BPB_HEADS]
-        | (bootSector[DOS_BPB_HEADS + DOS_BPB_BYTE1] << DOS_BPB_BYTE1_SHIFT));
+        | (bootSector[DOS_BPB_HEADS + DOS_BPB_BYTE1] << BYTE_SHIFT));
     totalSectors              = (DWORD)(bootSector[DOS_BPB_TOTAL_SECTORS_16]
-        | (bootSector[DOS_BPB_TOTAL_SECTORS_16 + DOS_BPB_BYTE1] << DOS_BPB_BYTE1_SHIFT));
+        | (bootSector[DOS_BPB_TOTAL_SECTORS_16 + DOS_BPB_BYTE1] << BYTE_SHIFT));
     if (totalSectors == 0)                            /* the >64K-sector form */
         totalSectors = (DWORD)bootSector[DOS_BPB_TOTAL_SECTORS_32]
-              | ((DWORD)bootSector[DOS_BPB_TOTAL_SECTORS_32 + DOS_BPB_BYTE1] << DOS_BPB_BYTE1_SHIFT)
-              | ((DWORD)bootSector[DOS_BPB_TOTAL_SECTORS_32 + DOS_BPB_BYTE2] << DOS_BPB_BYTE2_SHIFT)
-              | ((DWORD)bootSector[DOS_BPB_TOTAL_SECTORS_32 + DOS_BPB_BYTE3] << DOS_BPB_BYTE3_SHIFT);
+              | ((DWORD)bootSector[DOS_BPB_TOTAL_SECTORS_32 + DOS_BPB_BYTE1] << BYTE_SHIFT)
+              | ((DWORD)bootSector[DOS_BPB_TOTAL_SECTORS_32 + DOS_BPB_BYTE2] << WORD_SHIFT)
+              | ((DWORD)bootSector[DOS_BPB_TOTAL_SECTORS_32 + DOS_BPB_BYTE3] << TOP_BYTE_SHIFT);
     /* Every one of these must be sane before the arithmetic below means
        anything. 512 is not assumed -- it is required to be what the BPB says
        AND a power of two the rest of this layer can address. */

@@ -172,13 +172,13 @@ INT main(VOID)
     SysVarsTestExpect("ES:BX-2 is the first MCB segment (0x0253)",
                       SysVarsTestWordAt(g_OracleRaw), SYSVARS_TEST_FIRST_MCB);
     SysVarsTestExpect("+00 DPB chain offset  = 0x136A", SysVarsTestWord(DOS_SYSVARS_DPB), SYSVARS_TEST_DPB_OFFSET);
-    SysVarsTestExpect("+02 DPB chain segment = 0x0116", SysVarsTestWord(DOS_SYSVARS_DPB + DOS_SYSVARS_FAR_SEGMENT), SYSVARS_TEST_DPB_SEGMENT);
+    SysVarsTestExpect("+02 DPB chain segment = 0x0116", SysVarsTestWord(DOS_SYSVARS_DPB + X86_FAR_POINTER_SEGMENT), SYSVARS_TEST_DPB_SEGMENT);
     SysVarsTestExpect("+04 SFT chain offset  = 0x00CC", SysVarsTestWord(DOS_SYSVARS_SFT), SYSVARS_TEST_SFT_OFFSET);
-    SysVarsTestExpect("+08 CLOCK$ device     = 0070:0059", SysVarsTestWord(DOS_SYSVARS_CLOCK + DOS_SYSVARS_FAR_SEGMENT), SYSVARS_TEST_IO_SEGMENT);
-    SysVarsTestExpect("+0C CON device        = 0070:0023", SysVarsTestWord(DOS_SYSVARS_CON + DOS_SYSVARS_FAR_SEGMENT), SYSVARS_TEST_IO_SEGMENT);
+    SysVarsTestExpect("+08 CLOCK$ device     = 0070:0059", SysVarsTestWord(DOS_SYSVARS_CLOCK + X86_FAR_POINTER_SEGMENT), SYSVARS_TEST_IO_SEGMENT);
+    SysVarsTestExpect("+0C CON device        = 0070:0023", SysVarsTestWord(DOS_SYSVARS_CON + X86_FAR_POINTER_SEGMENT), SYSVARS_TEST_IO_SEGMENT);
     SysVarsTestExpect("+10 max bytes/sector  = 512", SysVarsTestWord(DOS_SYSVARS_MAX_SECTOR), SYSVARS_TEST_SECTOR_SIZE);
-    SysVarsTestExpect("+16 CDS array segment = 0x0350", SysVarsTestWord(DOS_SYSVARS_CDS + DOS_SYSVARS_FAR_SEGMENT), SYSVARS_TEST_CDS_SEGMENT);
-    SysVarsTestExpect("+1A FCB table segment = 0x031E", SysVarsTestWord(DOS_SYSVARS_FCB + DOS_SYSVARS_FAR_SEGMENT), SYSVARS_TEST_FCB_SEGMENT);
+    SysVarsTestExpect("+16 CDS array segment = 0x0350", SysVarsTestWord(DOS_SYSVARS_CDS + X86_FAR_POINTER_SEGMENT), SYSVARS_TEST_CDS_SEGMENT);
+    SysVarsTestExpect("+1A FCB table segment = 0x031E", SysVarsTestWord(DOS_SYSVARS_FCB + X86_FAR_POINTER_SEGMENT), SYSVARS_TEST_FCB_SEGMENT);
     SysVarsTestExpect("+20 block devices     = 3", SYSVARS_TEST_BYTE(DOS_SYSVARS_BLOCK_DEVICES), SYSVARS_TEST_BLOCK_DEVICES);
     SysVarsTestExpect("+21 LASTDRIVE         = 5", SYSVARS_TEST_BYTE(DOS_SYSVARS_LASTDRIVE), SYSVARS_TEST_LASTDRIVE);
 
@@ -230,7 +230,7 @@ INT main(VOID)
     }
     SysVarsTestExpect("built CDS flags = 0x4000 (physical)",
                       SysVarsTestWordAt(buffer + DOS_CDS_FLAGS), DOS_CDS_FLAG_PHYSICAL);
-    SysVarsTestExpect("built CDS DPB segment", SysVarsTestWordAt(buffer + DOS_CDS_DPB + DOS_SYSVARS_FAR_SEGMENT), SYSVARS_TEST_DPB_PAIR_SEGMENT);
+    SysVarsTestExpect("built CDS DPB segment", SysVarsTestWordAt(buffer + DOS_CDS_DPB + X86_FAR_POINTER_SEGMENT), SYSVARS_TEST_DPB_PAIR_SEGMENT);
     SysVarsTestExpect("built CDS backslash offset = 2",
                       SysVarsTestWordAt(buffer + DOS_CDS_SLASH), SYSVARS_TEST_ROOT_SLASH);
     /* A drive letter with nothing behind it: flags 0, and the DPB pointer must
@@ -238,12 +238,12 @@ INT main(VOID)
     DosCdsBuild(buffer, SYSVARS_TEST_DRIVE_Z /* Z: */, SYSVARS_TEST_FLAGS_NONE, SYSVARS_TEST_DPB_PAIR_SEGMENT, SYSVARS_TEST_DPB_PAIR_OFFSET);
     SysVarsTestExpect("absent drive: flags = 0", SysVarsTestWordAt(buffer + DOS_CDS_FLAGS), SYSVARS_TEST_FLAGS_NONE);
     SysVarsTestExpect("absent drive: DPB pointer is FFFF (terminated, not dangling)",
-                      SysVarsTestWordAt(buffer + DOS_CDS_DPB + DOS_SYSVARS_FAR_SEGMENT), SYSVARS_TEST_UNKNOWN);
+                      SysVarsTestWordAt(buffer + DOS_CDS_DPB + X86_FAR_POINTER_SEGMENT), SYSVARS_TEST_UNKNOWN);
     /* A redirected drive (network share, MSCDEX CD-ROM): physical|network, no DPB. */
     DosCdsBuild(buffer, SYSVARS_TEST_DRIVE_Z /* Z: */, DOS_CDS_FLAG_PHYSICAL | DOS_CDS_FLAG_NETWORK, SYSVARS_TEST_DPB_PAIR_SEGMENT, SYSVARS_TEST_DPB_PAIR_OFFSET);
     SysVarsTestExpect("network drive: flags = 0xC000", SysVarsTestWordAt(buffer + DOS_CDS_FLAGS), SYSVARS_TEST_FLAGS_REDIRECTED);
     SysVarsTestExpect("network drive: DPB pointer is 0000 (no FAT behind a redirector)",
-                      SysVarsTestWordAt(buffer + DOS_CDS_DPB + DOS_SYSVARS_FAR_SEGMENT), SYSVARS_TEST_NULL_POINTER);
+                      SysVarsTestWordAt(buffer + DOS_CDS_DPB + X86_FAR_POINTER_SEGMENT), SYSVARS_TEST_NULL_POINTER);
 
     memset(buffer, SYSVARS_TEST_FILL, sizeof(buffer));
     DosDpbBuild(buffer, SYSVARS_TEST_DRIVE_C, SYSVARS_TEST_SECTOR_SIZE, SYSVARS_TEST_FIXED_SECTORS_PER_CLUSTER,
@@ -252,7 +252,7 @@ INT main(VOID)
     SysVarsTestExpect("built DPB: 8 sectors/cluster stores 7", buffer[DOS_DPB_CLUSTER_MAX], SYSVARS_TEST_CLUSTER_MAX_8);
     SysVarsTestExpect("built DPB: ...and a shift of 3", buffer[DOS_DPB_CLUSTER_SHIFT], SYSVARS_TEST_CLUSTER_SHIFT_8);
     SysVarsTestExpect("built DPB: chain terminates at FFFF",
-                      SysVarsTestWordAt(buffer + DOS_DPB_NEXT + DOS_SYSVARS_FAR_SEGMENT), DOS_CHAIN_END);
+                      SysVarsTestWordAt(buffer + DOS_DPB_NEXT + X86_FAR_POINTER_SEGMENT), DOS_CHAIN_END);
     SysVarsTestExpect("built DPB: free count is FFFF, never a number we did not count",
                       SysVarsTestWordAt(buffer + DOS_DPB_FREE_COUNT), DOS_DPB_FREE_COUNT_UNKNOWN);
 
@@ -320,7 +320,7 @@ INT main(VOID)
         for (;;) {
             PCBYTE header = buffer + headerOffset;
             UINT nextOffset = SysVarsTestWordAt(header + DOS_DEVICE_HEADER_NEXT);
-            UINT nextSegment = SysVarsTestWordAt(header + DOS_DEVICE_HEADER_NEXT + DOS_SYSVARS_FAR_SEGMENT);
+            UINT nextSegment = SysVarsTestWordAt(header + DOS_DEVICE_HEADER_NEXT + X86_FAR_POINTER_SEGMENT);
             UINT attribute = SysVarsTestWordAt(header + DOS_DEVICE_HEADER_ATTRIBUTE);
             ++g_Checks;
             if (headerCount >= DOS_DEVICE_COUNT) { SysVarsTestFail("device chain runs past 12"); break; }
@@ -363,7 +363,7 @@ INT main(VOID)
         SysVarsTestFail("built NUL header carries the name");
     }
     SysVarsTestExpect("built NUL attribute = 0x8004", SysVarsTestWordAt(buffer + DOS_DEVICE_HEADER_ATTRIBUTE), SYSVARS_TEST_NUL_ATTRIBUTE);
-    SysVarsTestExpect("built NUL links on to CON (was FFFF:FFFF)", SysVarsTestWordAt(buffer + DOS_DEVICE_HEADER_NEXT + DOS_SYSVARS_FAR_SEGMENT), SYSVARS_TEST_DEVICE_SEGMENT);
+    SysVarsTestExpect("built NUL links on to CON (was FFFF:FFFF)", SysVarsTestWordAt(buffer + DOS_DEVICE_HEADER_NEXT + X86_FAR_POINTER_SEGMENT), SYSVARS_TEST_DEVICE_SEGMENT);
     SysVarsTestExpect("built NUL strategy entry", SysVarsTestWordAt(buffer + DOS_DEVICE_HEADER_STRATEGY), SYSVARS_TEST_NUL_STRATEGY);
     {   BYTE nulStub[DOS_NULSTUB_LEN];
         static const BYTE expectedStub[] = { 0x26,0xC7,0x47,0x03,0x00,0x01,0xCB,0xCB };

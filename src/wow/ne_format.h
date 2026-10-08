@@ -13,7 +13,6 @@
 #define NE_WORD_BYTES      2
 #define NE_WORD_BYTES_U    2u
 #define NE_FARADDR_BYTES   4u
-#define NE_LOWER_TO_UPPER  32       /* 'a' - 'A' */
 
 /* The MZ stub: its size, and e_lfanew -- where the NE header is. */
 #define NE_MZ_HEADER_SIZE  0x40

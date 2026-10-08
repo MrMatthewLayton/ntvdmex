@@ -49,7 +49,6 @@
 #define DOS_MCB_WALK_LIMIT        0x1000 /* more blocks than this = a runaway chain       */
 #define DOS_MCB_DUMP_GUARD        48     /* a logged chain dump stops here                */
 #define DOS_MCB_NO_SEGMENT        0      /* DosMcbReserveTop: nothing was reserved        */
-#define DOS_MCB_LOWER_TO_UPPER    0x20   /* 'a' - 'A'                                     */
 
 /* What AH=48h/49h/4Ah return: 0, or the DOS error code. */
 #define DOS_MCB_SUCCESS                   0
@@ -101,7 +100,7 @@ static inline VOID DosMcbSetOwnerName(_In_opt_ volatile BYTE *base, _In_ WORD ps
     for (index = 0; index < DOS_MCB_NAME_LENGTH; ++index) {
         CHAR character = baseName[index];
         if (!character || character == '.' || character == ' ') break;
-        if (character >= 'a' && character <= 'z') character = (CHAR)(character - DOS_MCB_LOWER_TO_UPPER);
+        if (character >= 'a' && character <= 'z') character = (CHAR)(character - ASCII_CASE_BIT);
         mcb[DOS_MCB_NAME + index] = (BYTE)character;
     }
     for (; index < DOS_MCB_NAME_LENGTH; ++index) mcb[DOS_MCB_NAME + index] = 0;

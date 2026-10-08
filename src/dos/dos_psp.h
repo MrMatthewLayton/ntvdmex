@@ -32,8 +32,6 @@
 #define DOS_COM_STACK_TOP            0xFFFE /* a .COM's first stack word: 0, so RET exits */
 
 /* What DosPspBuild writes into them. */
-#define DOS_PSP_OPCODE_INT           0xCD
-#define DOS_PSP_OPCODE_RETF          0xCB
 #define DOS_PSP_JFT_STDIN_ENTRY      1      /* JFT: std handles open                       */
 #define DOS_PSP_JFT_STDOUT_ENTRY     1
 #define DOS_PSP_JFT_STDERR_ENTRY     1
@@ -68,7 +66,7 @@ static inline VOID DosPspBuild(_In_opt_ volatile BYTE *base, _In_ WORD pspSegmen
     DWORD byteIndex;
 
     for (byteIndex = 0; byteIndex < DOS_PSP_SIZE; ++byteIndex) psp[byteIndex] = 0;
-    psp[DOS_PSP_INT20] = DOS_PSP_OPCODE_INT; psp[DOS_PSP_INT20 + 1] = VECTOR_TERMINATE;                /* INT 20h (legacy exit)      */
+    psp[DOS_PSP_INT20] = X86_OP_INT; psp[DOS_PSP_INT20 + 1] = VECTOR_TERMINATE;                /* INT 20h (legacy exit)      */
     DosMcbWriteWord(psp + DOS_PSP_MEMORY_TOP, topSegment);                     /* segment of top-of-memory   */
     psp[DOS_PSP_JFT] = DOS_PSP_JFT_STDIN_ENTRY; psp[DOS_PSP_JFT + 1] = DOS_PSP_JFT_STDOUT_ENTRY; psp[DOS_PSP_JFT + 2] = DOS_PSP_JFT_STDERR_ENTRY;       /* JFT: std handles open      */
     psp[DOS_PSP_JFT + 3] = DOS_PSP_JFT_AUX_ENTRY; psp[DOS_PSP_JFT + 4] = DOS_PSP_JFT_PRN_ENTRY;
@@ -79,7 +77,7 @@ static inline VOID DosPspBuild(_In_opt_ volatile BYTE *base, _In_ WORD pspSegmen
     DosMcbWriteWord(psp + DOS_PSP_JFT_POINTER + 2, pspSegment);                     /* JFT pointer: segment       */
     psp[DOS_PSP_PREVIOUS] = DOS_PSP_NO_PREVIOUS; psp[DOS_PSP_PREVIOUS + 1] = DOS_PSP_NO_PREVIOUS;                /* previous PSP = 0xFFFFFFFF  */
     psp[DOS_PSP_PREVIOUS + 2] = DOS_PSP_NO_PREVIOUS; psp[DOS_PSP_PREVIOUS + 3] = DOS_PSP_NO_PREVIOUS;
-    psp[DOS_PSP_DISPATCH] = DOS_PSP_OPCODE_INT; psp[DOS_PSP_DISPATCH + 1] = VECTOR_DOS; psp[DOS_PSP_DISPATCH + 2] = DOS_PSP_OPCODE_RETF; /* INT 21h ; RETF          */
+    psp[DOS_PSP_DISPATCH] = X86_OP_INT; psp[DOS_PSP_DISPATCH + 1] = VECTOR_DOS; psp[DOS_PSP_DISPATCH + 2] = X86_OP_RETF; /* INT 21h ; RETF          */
     psp[DOS_PSP_COMMAND_TAIL_LENGTH] = 0; psp[DOS_PSP_COMMAND_TAIL] = DOS_PSP_COMMAND_TAIL_END;                   /* empty command tail + 0x0D  */
 }
 

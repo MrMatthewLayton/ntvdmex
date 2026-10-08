@@ -42,9 +42,6 @@ enum { DOS_EXTMEM_REGION_NONE = 0, DOS_EXTMEM_REGION_DIRECT, DOS_EXTMEM_REGION_E
 #define DOS_EXTMEM_DESCRIPTOR_BASE_BYTE1  3
 #define DOS_EXTMEM_DESCRIPTOR_BASE_BYTE2  4
 #define DOS_EXTMEM_DESCRIPTOR_BASE_BYTE3  7
-#define DOS_EXTMEM_BYTE1_SHIFT            8
-#define DOS_EXTMEM_BYTE2_SHIFT            16
-#define DOS_EXTMEM_BYTE3_SHIFT            24
 
 /* Which region [linearAddress, linearAddress+length) lies in. length > 0. */
 static inline INT DosExtMemClassify(_In_opt_ PCDOS_XMS_STATE xmsState, _In_ DWORD linearAddress,
@@ -95,9 +92,9 @@ static inline DWORD DosExtMemDescriptorBase(
     _In_reads_bytes_(X86_DESCRIPTOR_SIZE) const volatile BYTE *descriptor)
 {
     return (DWORD)descriptor[DOS_EXTMEM_DESCRIPTOR_BASE_BYTE0]
-         | ((DWORD)descriptor[DOS_EXTMEM_DESCRIPTOR_BASE_BYTE1] << DOS_EXTMEM_BYTE1_SHIFT)
-         | ((DWORD)descriptor[DOS_EXTMEM_DESCRIPTOR_BASE_BYTE2] << DOS_EXTMEM_BYTE2_SHIFT)
-         | ((DWORD)descriptor[DOS_EXTMEM_DESCRIPTOR_BASE_BYTE3] << DOS_EXTMEM_BYTE3_SHIFT);
+         | ((DWORD)descriptor[DOS_EXTMEM_DESCRIPTOR_BASE_BYTE1] << BYTE_SHIFT)
+         | ((DWORD)descriptor[DOS_EXTMEM_DESCRIPTOR_BASE_BYTE2] << WORD_SHIFT)
+         | ((DWORD)descriptor[DOS_EXTMEM_DESCRIPTOR_BASE_BYTE3] << TOP_BYTE_SHIFT);
 }
 
 #endif /* NTVDMEX_DOS_EXTMEM_H */

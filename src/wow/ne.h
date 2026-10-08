@@ -267,7 +267,7 @@ static INT NeNameAt(PCNE_MODULE module, UINT32 offset, PSTR output, INT capacity
     return 0;
 }
 
-static CHAR NeUpper(CHAR character) { return (character >= 'a' && character <= 'z') ? (CHAR)(character - NE_LOWER_TO_UPPER) : character; }
+static CHAR NeUpper(CHAR character) { return (character >= 'a' && character <= 'z') ? (CHAR)(character - ASCII_CASE_BIT) : character; }
 
 static INT NeEqualIgnoreCase(PCSTR left, PCSTR right)
 {
