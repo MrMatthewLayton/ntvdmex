@@ -28,7 +28,7 @@
 #include "../ntvdmex_bits.h"
 #include "../ntvdmex_x86.h"
 
-#define SHIM_API_VERSION        3       /* host + bin\wowshim\ must agree (STYLE.md §7)   */
+#include "shim_api.h"            /* SHIM_API_VERSION: host + bin\wowshim\ must agree */
 
 /* The table the host hands over in NtvdmexShimInit. Its LAYOUT is the contract (the
    host's copy in main.c must match it field for field); the names are ours. */

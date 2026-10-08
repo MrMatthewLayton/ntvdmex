@@ -964,7 +964,7 @@ static VOID GusReport(VOID)
     cursor = LogPut(cursor, " peak=");            cursor = LogHex(cursor, g_Gus.OutputPeak);
     cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor);
 }
-
+enum { WOW_SHIMS = 2, SHIM_NOT_TRIED = 0, SHIM_LOADED = 1, SHIM_NO_LOAD = 2, SHIM_INIT_REFUSED = 3 };   /* WOW32.DLL and NTVDM.EXE's shims, and how each went */
 /* Does a newline-separated NAME=VALUE block already set `name` (case-insensitive, at
    the start of a line)? No C runtime here, so no strstr. */
 static INT StrStrNoCase(PCSTR block, PCSTR name)
@@ -1133,7 +1133,7 @@ static volatile LONG g_Irq0Pending = 0;    /* PIT raised IRQ0 (UI thread sets, V
 static volatile LONG g_IcaPending = 0;
 static DWORD g_IcaRaised = 0, g_IcaDelivered = 0, g_IcaNoHandler = 0;
 static DWORD g_WowIdleWaits = 0;              /* #306: krnl386 idle waits that blocked */
-static DWORD g_ShimState[2], g_ShimError[2];  /* 0 not tried, 1 loaded+init, 2 no load, 3 init refused */
+static DWORD g_ShimState[WOW_SHIMS], g_ShimError[WOW_SHIMS];  /* 0 not tried, 1 loaded+init, 2 no load, 3 init refused */
 static VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
 /* ── HOW MANY TIMER TICKS DOES THE PROTECTED-MODE CLIENT ACTUALLY OWE? ───────────────
      Separate from g_Irq0Pending, which SATURATES AT FOUR on purpose (see above) and so
@@ -16400,9 +16400,9 @@ static VOID ModeYRemapWriteMode(PVOID context, INT writeMode)
     (VOID)context;
     if (!g_ModeYRemap) { g_ModeYWriteMode = writeMode; return; }
     if (writeMode == 1 && g_ModeYWriteMode != 1) {
-        if (g_ModeYCurrent == 5) {                          /* multi-plane: the scratch is the
+        if (g_ModeYCurrent == MODEY_VIEW_SCRATCH) {                          /* multi-plane: the scratch is the
                                                        only place the copy is visible */
-            UINT index; const BYTE *scratch = (const BYTE *)g_ModeYView[5];
+            UINT index; const BYTE *scratch = (const BYTE *)g_ModeYView[MODEY_VIEW_SCRATCH];
             for (index = 0; index < MODEY_WIN; ++index) g_ModeYSeed[index] = scratch[index];
             g_ModeYLatch = 1;
         }
@@ -16411,7 +16411,7 @@ static VOID ModeYRemapWriteMode(PVOID context, INT writeMode)
     } else if (writeMode != 1 && g_ModeYWriteMode == 1 && g_ModeYLatch) {
         INT32 delta = ModeYLatchDelta();
         UINT index;
-        const BYTE *scratch = (const BYTE *)g_ModeYView[5];
+        const BYTE *scratch = (const BYTE *)g_ModeYView[MODEY_VIEW_SCRATCH];
         if (delta) {
             INT plane;
             for (index = 0; index < MODEY_WIN; ++index) {
@@ -19202,7 +19202,7 @@ static VOID DpmiInstall(INT index)
     DWORD low, high, descriptorLimit = g_Ldt[index].Limit; BYTE flags = g_Ldt[index].Flags;
     BYTE accessRights = g_Ldt[index].Access;
     WORD selector = (WORD)DPMI_LDT_SELECTOR(index);
-    if (descriptorLimit > 0xFFFFF) { descriptorLimit >>= 12; flags = (BYTE)(flags | 0x8); }   /* >1MB -> page granular */
+    if (descriptorLimit > X86_DESCRIPTOR_LIMIT_MAX) { descriptorLimit >>= PAGE_SHIFT; flags = (BYTE)(flags | DPMI_DESCRIPTOR_FLAG_GRANULARITY); }   /* >1MB -> page granular */
     /* Run 69 (option C: avoid the kernel PM-fault reflect). On the REAL CPU a data/stack
        selector that a client retypes to CODE (or non-writable) faults the moment it is used
        -- exactly i310102's wall: its C runtime does INT 31h 0009 to set SS (sel 0x1F, idx 3)
@@ -19212,7 +19212,7 @@ static VOID DpmiInstall(INT index)
        2 = DS) and STACK (idx 3 = SS) selectors are ALWAYS installed as present writable-data,
        so they stay usable no matter how the client retypes them. g_Ldt[idx].access keeps the
        client's requested value, so LAR/LSL introspection (DpmiSelectorDescriptor) still reports it. */
-    if (index == 2 || index == 3) accessRights = 0xF2;                      /* present, DPL3, data R/W */
+    if (index == DPMI_INITIAL_DATA_INDEX || index == DPMI_INITIAL_STACK_INDEX) accessRights = DPMI_ACCESS_DATA;                      /* present, DPL3, data R/W */
     /* ── DPL IS THE HOST'S, NOT THE CLIENT'S. (s74c, ZAR's VESA modes) ──────────
          ZAR builds its LFB selector with 0009 CX=8092: DPL 0. On real DOS that is
          legal because DOS/4GW runs the client at ring 0; under a ring-3 DPMI host
@@ -19223,8 +19223,8 @@ static VOID DpmiInstall(INT index)
          always 3. g_Ldt[idx].access keeps the requested byte for LAR. Only a
          PRESENT descriptor is touched: a freed selector is installed as the all-zero
          null descriptor, which is the one non-DPL-3 entry NT accepts. */
-    if (accessRights & 0x80) accessRights = (BYTE)(accessRights | 0x60);
-    DpmiBuildDescriptor(g_Ldt[index].Base, descriptorLimit & 0xFFFFF, accessRights, flags, &low, &high);
+    if (accessRights & X86_DESCRIPTOR_PRESENT) accessRights = (BYTE)(accessRights | X86_DESCRIPTOR_DPL3);
+    DpmiBuildDescriptor(g_Ldt[index].Base, descriptorLimit & X86_DESCRIPTOR_LIMIT_MAX, accessRights, flags, &low, &high);
     {
         /* #3 (DOS/4GW flat model): XP's LDT validator caps base+limit <= MmHighestUserAddress
            (~2GB); a base-0 ~2GB G=1 selector installs, a true 4GB one is REJECTED (Kernel RE
@@ -19261,9 +19261,9 @@ static VOID DpmiInstall(INT index)
             LONG state2 = status;
             if (g_Ldt[index].Base < cap) {
                 DWORD room = cap - g_Ldt[index].Base;
-                if (flags & 0x8) cl = (room > 0xFFF) ? ((room - 0xFFF) >> PAGE_SHIFT) : 0;  /* G=1 */
+                if (flags & DPMI_DESCRIPTOR_FLAG_GRANULARITY) cl = (room > PAGE_LAST_BYTE_U) ? ((room - PAGE_LAST_BYTE_U) >> PAGE_SHIFT) : 0;  /* G=1 */
                 else          cl = room;                                        /* G=0 */
-                if (cl > 0xFFFFF) cl = 0xFFFFF;
+                if (cl > X86_DESCRIPTOR_LIMIT_MAX) cl = X86_DESCRIPTOR_LIMIT_MAX;
                 DpmiBuildDescriptor(g_Ldt[index].Base, cl, accessRights, flags, &descriptorLow, &descriptorHigh);
                 state2 = VdmInstallLdtEntries(selector, descriptorLow, descriptorHigh, selector, descriptorLow, descriptorHigh);
             }
@@ -19988,7 +19988,7 @@ static VOID DpmiScanCodeBlocks(VOID)
 /* A descriptor access byte names CODE iff it is a segment (S, bit 4) and executable
    (bit 3). 0xFB -- what DOS/4GW writes -- is present/DPL3/S/code/readable/accessed. */
 #define DPMI_ACC_IS_CODE(a) (((a) & DPMI_ACCESS_CODE_TYPE) == DPMI_ACCESS_CODE_TYPE)
-
+enum { BREAKPOINT_COLUMN_LINEAR = 0, BREAKPOINT_COLUMN_DUMP = 1, BREAKPOINT_COLUMN_SKIP = 2, BREAKPOINT_COLUMN_MODE = 3, BREAKPOINT_COLUMN_REPORT = 4, BREAKPOINT_COLUMNS = 5 };   /* pmbreak.txt: one breakpoint a line */
 /* Read PMBP_PATH. One line per breakpoint:
        <addr>  [dump linear]  [skip bytes]  [mode]  [rep]   # comment
    mode is a bit field: bit 0 (1) = the site is a ONE-BYTE instruction, so plant a
@@ -20026,7 +20026,7 @@ static VOID DpmiBreakpointLoad(VOID)
     ReadFile(handle, buffer, sizeof buffer - 1, &bytesRead, NULL);
     CloseHandle(handle);
     while (index < bytesRead && g_BreakpointCount < DPMI_BP_MAX) {
-        DWORD values[5] = { 0, 0, 0, 0, 0 }; INT column = 0;
+        DWORD values[BREAKPOINT_COLUMNS] = { 0, 0, 0, 0, 0 }; INT column = 0;
         /* consume one LINE, taking up to two hex fields from it */
         while (index < bytesRead && (buffer[index] == '\r' || buffer[index] == '\n')) ++index;   /* line breaks */
         if (index >= bytesRead) break;
@@ -20042,18 +20042,18 @@ static VOID DpmiBreakpointLoad(VOID)
                       : (character >= 'a' && character <= 'f') ? character - 'a' + HEX_DIGIT_A_VALUE
                       : (character >= 'A' && character <= 'F') ? character - 'A' + HEX_DIGIT_A_VALUE : -1;
                 if (digit < 0) break;
-                if (column < 5) values[column] = (values[column] << NIBBLE_SHIFT) | (DWORD)digit;
+                if (column < BREAKPOINT_COLUMNS) values[column] = (values[column] << NIBBLE_SHIFT) | (DWORD)digit;
                 ++digits; ++index;
             }
             if (digits) ++column;
             else ++index;                              /* junk byte: skip, never spin */
         }
-        if (column >= 1) {
-            g_BreakpointLinear[g_BreakpointCount] = values[0];
-            g_BreakpointDump[g_BreakpointCount] = (column >= 2) ? values[1] : 0;
-            g_BreakpointSkip[g_BreakpointCount] = (column >= 3) ? values[2] : 0;
-            g_BreakpointMode[g_BreakpointCount] = (column >= 4) ? values[3] : 0;
-            g_BreakpointReport[g_BreakpointCount]  = (column >= 5) ? values[4] : 0;
+        if (column > BREAKPOINT_COLUMN_LINEAR) {
+            g_BreakpointLinear[g_BreakpointCount] = values[BREAKPOINT_COLUMN_LINEAR];
+            g_BreakpointDump[g_BreakpointCount] = (column > BREAKPOINT_COLUMN_DUMP) ? values[BREAKPOINT_COLUMN_DUMP] : 0;
+            g_BreakpointSkip[g_BreakpointCount] = (column > BREAKPOINT_COLUMN_SKIP) ? values[BREAKPOINT_COLUMN_SKIP] : 0;
+            g_BreakpointMode[g_BreakpointCount] = (column > BREAKPOINT_COLUMN_MODE) ? values[BREAKPOINT_COLUMN_MODE] : 0;
+            g_BreakpointReport[g_BreakpointCount]  = (column > BREAKPOINT_COLUMN_REPORT) ? values[BREAKPOINT_COLUMN_REPORT] : 0;
             ++g_BreakpointCount;
         }
     }
@@ -20734,7 +20734,7 @@ static VOID WowSchedSetCurrent(WORD task)
     dgroup[0x228] = (BYTE)(task & BYTE_MASK);
     dgroup[0x229] = (BYTE)(task >> BYTE_SHIFT);
 }
-
+enum { WOW_RETARGET_HEADROOM = 0x40, WOW_RETARGET_STACK_MIN = 0x200 };   /* WowSchedRetarget: below the lowest live frame */
 /* ── s92 (#306): THE RECEIVER'S STACK FOR AN INTER-TASK MESSAGE -- see
      g_WowCallRetarget in wowcall.h. The window's owner (wowuser.h records its
      creator) must not be the running task, and must be somewhere the host knows
@@ -20748,9 +20748,9 @@ static INT WowSchedRetarget(WORD hwnd, WORD *stackSegment, WORD *stackPointer, D
 {
     WORD owner = WowSchedOwnerOf(hwnd), current = WowSchedCurrentTask();
     const BYTE *contexts[WOWSCHED_MAX + WOWCALL_MAX_DEPTH];
-    WORD foundStackSegment = 0, lowestStackPointer = 0xFFFF;
+    WORD foundStackSegment = 0, lowestStackPointer = WORD_MASK;
     INT index, count = 0;
-    if (!owner || !current || current == 0xFFFF || owner == current) return 0;
+    if (!owner || !current || current == WOWUSER_TASK_NONE16 || owner == current) return 0;
     for (index = 0; index < WOWSCHED_MAX; ++index)
         if (g_WowSchedSlots[index].IsUsed && g_WowSchedSlots[index].Task == owner) contexts[count++] = g_WowSchedSlots[index].Context;
     for (index = g_WowCallDepth - 2; index >= 0; --index)         /* the newest frame is the one being built */
@@ -20760,14 +20760,14 @@ static INT WowSchedRetarget(WORD hwnd, WORD *stackSegment, WORD *stackPointer, D
     for (index = 0; index < count; ++index) {
         WORD contextSs = (WORD)(contexts[index][VTIB_SS - WOWSCHED_CTX_LO] | (contexts[index][VTIB_SS - WOWSCHED_CTX_LO + 1] << BYTE_SHIFT));
         WORD contextSp = (WORD)(contexts[index][VTIB_ESP - WOWSCHED_CTX_LO] | (contexts[index][VTIB_ESP - WOWSCHED_CTX_LO + 1] << BYTE_SHIFT));
-        if (foundStackSegment && (contextSs & ~3u) != (foundStackSegment & ~3u)) return 0;   /* two stacks: do not guess */
+        if (foundStackSegment && (contextSs & ~X86_SELECTOR_RPL_MASK_U) != (foundStackSegment & ~X86_SELECTOR_RPL_MASK_U)) return 0;   /* two stacks: do not guess */
         foundStackSegment = contextSs;
         if (contextSp < lowestStackPointer) lowestStackPointer = contextSp;
     }
     if (!count) return 0;
     *stackSegment = foundStackSegment;
-    *stackPointer = (WORD)((lowestStackPointer - 0x40) & ~1u);
-    if (*stackPointer < 0x200) return 0;                    /* no room: run where it always did */
+    *stackPointer = (WORD)((lowestStackPointer - WOW_RETARGET_HEADROOM) & ~X86_WORD_ALIGN_MASK_U);
+    if (*stackPointer < WOW_RETARGET_STACK_MIN) return 0;                    /* no room: run where it always did */
     *stackSegmentBase = DpmiSelectorBase(*stackSegment);
     if (!*stackSegmentBase) return 0;
     *prev = current;
@@ -21044,7 +21044,7 @@ static BYTE g_PmDispatch[256];                 /* 1 while inside vec's client ha
 static BYTE  g_PmDispatchLogged[256][256];    /* always-loud lines emitted for (vec, AH) */
 static DWORD g_PmDispatchCount[256][256];     /* every dispatch, logged or not */
 static DWORD g_PmDispatchMs[256][256];        /* GetTickCount of the last line for the pair */
-
+enum { DPMI_DISPATCH_PHASE_MAX = 4096 };   /* DpmiDispatchToPmHandler: the nested run's bound */
 static INT DpmiDispatchToPmHandler(DOS_MACHINE *machine, volatile BYTE *tib,
                                        DWORD vector, UINT steps)
 {
@@ -21068,7 +21068,7 @@ static INT DpmiDispatchToPmHandler(DOS_MACHINE *machine, volatile BYTE *tib,
     DWORD dispatchTick = GetTickCount();
     INT   isFirstDispatch = (g_PmDispatchLogged[dispatchVector][dispatchAh] < PM_DISP_LOG_MAX);
     INT   loud = isFirstDispatch || (dispatchTick - g_PmDispatchMs[dispatchVector][dispatchAh]) >= PM_DISP_QUIET_MS;
-    if (g_PmDispatchCount[dispatchVector][dispatchAh] != 0xFFFFFFFFu) ++g_PmDispatchCount[dispatchVector][dispatchAh];
+    if (g_PmDispatchCount[dispatchVector][dispatchAh] != MAXDWORD) ++g_PmDispatchCount[dispatchVector][dispatchAh];
     if (loud) g_PmDispatchMs[dispatchVector][dispatchAh] = dispatchTick;
     DWORD sEIP = VDM_REG(tib, VTIB_EIP), sESP = VDM_REG(tib, VTIB_ESP);
     WORD  savedCs  = (WORD)VDM_REG(tib, VTIB_CS), savedSs = (WORD)VDM_REG(tib, VTIB_SS);
@@ -21173,7 +21173,7 @@ static INT DpmiDispatchToPmHandler(DOS_MACHINE *machine, volatile BYTE *tib,
 quietEntry:
 
     g_PmDispatch[vector] = 1;
-    for (phase = 0; phase < 4096 && !done; ++phase) {
+    for (phase = 0; phase < DPMI_DISPATCH_PHASE_MAX && !done; ++phase) {
         DWORD event, eip, vectorNumber; INT status;
         /* ► CHECKPOINT INSIDE THE HANDLER TOO. The main loop's DPMI-CP lines stop at the
              moment we hand control to the client's handler, so without this a death in
@@ -21238,7 +21238,7 @@ quietEntry:
             && (eip == DPMI_FAULT_COFF
                 || (eip >= DPMI_FAULT_SITE(0)
                     && eip <  DPMI_FAULT_SITE(DOS_FLTSITE_N)
-                    && ((eip - DPMI_FAULT_SITE(0)) & 3) == 0))) {
+                    && ((eip - DPMI_FAULT_SITE(0)) & (DOS_FLTSITE_SIZE - 1)) == 0))) {
             lineCursor = LogPut(lineCursor, "  PM INT 0x"); lineCursor = LogHex(lineCursor, vector);
             lineCursor = LogPut(lineCursor, " handler FAULTED at fault-site eip=0x"); lineCursor = LogHex(lineCursor, eip);
             lineCursor = LogPut(lineCursor, " -- returning to the main loop so the exception is DELIVERED"
@@ -21258,7 +21258,7 @@ quietEntry:
     /* Resume the client past its INT. CS/SS and the stack pointer go back to what they
        were; the GPRs and EFLAGS are the handler's answer and are left alone. */
     VDM_SET16(tib, VTIB_CS, savedCs);
-    VDM_REG(tib, VTIB_EIP) = sEIP + 2;               /* past the 2-byte patched INT */
+    VDM_REG(tib, VTIB_EIP) = sEIP + X86_INT_LENGTH;               /* past the 2-byte patched INT */
     VDM_SET16(tib, VTIB_SS, savedSs);
     VDM_REG(tib, VTIB_ESP) = sESP;
     /* ⚠ PAIRED WITH THE ENTRY LINE BY `loud`, NOT RE-TESTED. Re-testing the counter here
@@ -21537,18 +21537,18 @@ static VOID WowShadowPut(INT index)      /* g_Ldt[idx] -> shadow */
     entry[0] = low; entry[1] = high;
     if (g_WowSeen) { entry = (DWORD *)(g_WowSeen + index * 8); entry[0] = low; entry[1] = high; }
 }
-
+enum { WOW_SHADOW_SCAN_SLACK = 8 };   /* WowShadowSync looks a few entries past g_LdtNext */
 /* Push anything krnl386 changed in the shadow into the real LDT. Returns the count. */
 static INT WowShadowSync(PSTR *logCursor)
 {
-    INT index, top = g_LdtNext + 8, count = 0;
+    INT index, top = g_LdtNext + WOW_SHADOW_SCAN_SLACK, count = 0;
     PSTR cursor = logCursor ? *logCursor : NULL;
     if (!g_WowShadow || !g_WowSeen) return 0;
     if (top > WOW_SHADOW_ENTRIES) top = WOW_SHADOW_ENTRIES;
     for (index = DPMI_LDT_RESERVED; index < top; ++index) {
         DWORD low, high;
-        const DWORD *entry = (const DWORD *)(g_WowShadow + index * 8);
-        DWORD *seen = (DWORD *)(g_WowSeen + index * 8);
+        const DWORD *entry = (const DWORD *)(g_WowShadow + index * X86_DESCRIPTOR_SIZE);
+        DWORD *seen = (DWORD *)(g_WowSeen + index * X86_DESCRIPTOR_SIZE);
         low = seen[0]; high = seen[1];
         if (entry[0] == low && entry[1] == high) continue;      /* the guest did not touch it */
         seen[0] = entry[0]; seen[1] = entry[1];                  /* acknowledged either way */
@@ -21558,8 +21558,8 @@ static INT WowShadowSync(PSTR *logCursor)
                would quietly normalise anything we got wrong. Then decode purely for
                our own bookkeeping so later host-side reads of g_Ldt[] agree. */
             LONG status = VdmInstallLdtEntries(selector, descriptorLow, descriptorHigh, selector, descriptorLow, descriptorHigh);
-            DWORD descriptorBase = (descriptorHigh & 0xFF000000u) | ((descriptorHigh & BYTE_MASK_U) << WORD_SHIFT) | (descriptorLow >> WORD_SHIFT);
-            DWORD descriptorLimit  = (descriptorLow & WORD_MASK_U) | (descriptorHigh & 0x000F0000u);
+            DWORD descriptorBase = (descriptorHigh & X86_DESCRIPTOR_BASE_HIGH_U) | ((descriptorHigh & BYTE_MASK_U) << WORD_SHIFT) | (descriptorLow >> WORD_SHIFT);
+            DWORD descriptorLimit  = (descriptorLow & WORD_MASK_U) | (descriptorHigh & X86_DESCRIPTOR_LIMIT_HIGH_U);
             /* ★ ONLY RECORD IT IF THE CPU ACTUALLY TOOK IT. g_Ldt[] is the host's
                  record of the REAL LDT, and DpmiSelectorBase() answers every guest
                  pointer translation from it. Writing a descriptor the kernel just
@@ -21592,21 +21592,21 @@ static WORD WowShadowSelector(VOID)
     INT ldtIndex, index;
     if (g_WowShadowSelector) return g_WowShadowSelector;
     if (g_LdtNext >= DPMI_LDT_MAX) return 0;
-    g_WowShadow = (BYTE *)VirtualAlloc(NULL, WOW_SHADOW_ENTRIES * 8,
+    g_WowShadow = (BYTE *)VirtualAlloc(NULL, WOW_SHADOW_ENTRIES * X86_DESCRIPTOR_SIZE,
                                         MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!g_WowShadow) return 0;
     /* The `seen` copy is host-private and is NEVER handed to the guest -- that is
        the point of it. See WowShadowSync for what went wrong without it. */
-    g_WowSeen = (BYTE *)VirtualAlloc(NULL, WOW_SHADOW_ENTRIES * 8,
+    g_WowSeen = (BYTE *)VirtualAlloc(NULL, WOW_SHADOW_ENTRIES * X86_DESCRIPTOR_SIZE,
                                       MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!g_WowSeen) { VirtualFree(g_WowShadow, 0, MEM_RELEASE);
                        g_WowShadow = NULL; return 0; }
-    for (index = 0; index < WOW_SHADOW_ENTRIES * 8; ++index) { g_WowShadow[index] = 0; g_WowSeen[index] = 0; }
+    for (index = 0; index < WOW_SHADOW_ENTRIES * X86_DESCRIPTOR_SIZE; ++index) { g_WowShadow[index] = 0; g_WowSeen[index] = 0; }
     for (index = 0; index < WOW_SHADOW_ENTRIES; ++index) WowShadowPut(index);
     ldtIndex = g_LdtNext++;
     g_Ldt[ldtIndex].Base   = (DWORD)(ULONG_PTR)g_WowShadow;
-    g_Ldt[ldtIndex].Limit  = WOW_SHADOW_ENTRIES * 8 - 1;
-    g_Ldt[ldtIndex].Access = 0xF2;            /* present, DPL3, data R/W -- verw must pass */
+    g_Ldt[ldtIndex].Limit  = WOW_SHADOW_ENTRIES * X86_DESCRIPTOR_SIZE - 1;
+    g_Ldt[ldtIndex].Access = DPMI_ACCESS_DATA;            /* present, DPL3, data R/W -- verw must pass */
     g_Ldt[ldtIndex].Flags  = 0;               /* 16-bit                                    */
     DpmiInstall(ldtIndex);
     g_WowShadowSelector = (WORD)DPMI_LDT_SELECTOR(ldtIndex);
@@ -27783,7 +27783,7 @@ static VOID ShimRemoveIoHook(HANDLE vddHandle, WORD rangeCount, PCVOID ranges)
         for (index = 0; index < ISV_MAX_HOOKS; ++index)
             if (g_IsvHooks[index].VddHandle == vddHandle && g_IsvHooks[index].FirstPort == ranges16[index2 * 2]) g_IsvHooks[index].IsLive = 0;
 }
-
+#include "../shim/shim_api.h"   /* defines only: SHIM_API_VERSION, which the shim checks */
 static VOID WowShimsLoad(VOID)
 {
     static INT done;
@@ -27796,12 +27796,12 @@ static VOID WowShimsLoad(VOID)
     /* SAFE MODE (#132): read the counter here -- this runs before the recovery
        decision is taken further down WinMain, and must not wait for it. */
     if (DosRecoveryGetSafeSkips(DosRecoveryDecideStartMode(RecoveryRead())).WowShims) return;
-    shimApi.Version = 3; shimApi.GetVdmPointer = ShimGetVdmPointer; shimApi.Handle32 = ShimHandle32;
+    shimApi.Version = SHIM_API_VERSION; shimApi.GetVdmPointer = ShimGetVdmPointer; shimApi.Handle32 = ShimHandle32;
     shimApi.Handle16 = ShimHandle16; shimApi.Callback16Ex = ShimCallback16Ex; shimApi.IcaInterrupt = ShimIcaInterrupt;
     shimApi.Yield16 = ShimYield; shimApi.Log = ShimLog; shimApi.Global16 = ShimGlobal16;
     shimApi.GetRegister = ShimGetRegister; shimApi.SetRegister = ShimSetRegister; shimApi.MapFlat = ShimMapFlat;
     shimApi.InstallIoHook = ShimInstallIoHook; shimApi.RemoveIoHook = ShimRemoveIoHook;
-    for (index = 0; index < 2; ++index) {
+    for (index = 0; index < WOW_SHIMS; ++index) {
         HMODULE module;
         BOOL (WINAPI *initialize)(const NTVDMEX_SHIM_API *);
         INT length = 0;
@@ -27814,12 +27814,12 @@ static VOID WowShimsLoad(VOID)
         initialize = module ? (BOOL (WINAPI *)(const NTVDMEX_SHIM_API *))GetProcAddress(module, "NtvdmexShimInit")
                  : NULL;
         cursor = buffer; cursor = LogPut(cursor, "WOWSHIM: "); cursor = LogPut(cursor, names[index]);
-        if (!module) { g_ShimState[index] = 2; g_ShimError[index] = GetLastError();
+        if (!module) { g_ShimState[index] = SHIM_NO_LOAD; g_ShimError[index] = GetLastError();
                   cursor = LogPut(cursor, " NOT LOADED from ["); cursor = LogPut(cursor, path);
                   cursor = LogPut(cursor, "] err=0x"); cursor = LogHex(cursor, g_ShimError[index]); }
-        else if (!initialize || !initialize(&shimApi)) { g_ShimState[index] = 3;
+        else if (!initialize || !initialize(&shimApi)) { g_ShimState[index] = SHIM_INIT_REFUSED;
                   cursor = LogPut(cursor, " loaded but its init REFUSED the table"); }
-        else { g_ShimState[index] = 1; cursor = LogPut(cursor, " loaded at 0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)module); }
+        else { g_ShimState[index] = SHIM_LOADED; cursor = LogPut(cursor, " loaded at 0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)module); }
         cursor = LogPut(cursor, "\r\n");
         LogAppend(LOG_PATH, buffer, cursor);
     }

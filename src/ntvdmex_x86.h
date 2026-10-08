@@ -31,6 +31,10 @@
 #define X86_DESCRIPTOR_PRESENT        0x80        /* the access byte's P bit             */
 #define X86_DESCRIPTOR_BASE_HIGH_U    0xFF000000u /* the high dword: base bits 24-31     */
 #define X86_DESCRIPTOR_LIMIT_HIGH_U   0x000F0000u /* the high dword: limit bits 16-19    */
+#define X86_DESCRIPTOR_LIMIT_MAX      0xFFFFF     /* a limit field's 20 bits             */
+#define X86_DESCRIPTOR_DPL3           0x60        /* the access byte's DPL field, ring 3 */
+#define X86_SELECTOR_RPL_MASK_U       3u
+#define X86_WORD_ALIGN_MASK_U         1u
 #define X86_PAGE_SIZE                 0x1000
 /* A 16-bit far frame on the stack: IP, then CS, then (an interrupt's) FLAGS. */
 #define X86_FRAME16_CS          2
