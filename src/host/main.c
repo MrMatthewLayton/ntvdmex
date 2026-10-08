@@ -7110,7 +7110,7 @@ static VOID PlanesDumpBeside(PCSTR bitmapPath)
     header[0] = g_Video.CrtcStartLive; header[1] = g_Video.CrtcOffset;
     header[2] = g_Video.GraphicsWidth;              header[3] = g_Video.GraphicsHeight;
     WriteFile(file, header, sizeof header, &bytesWritten, NULL);
-    for (plane = 0; plane < 4; ++plane)                        /* the live backing: host sections when remapped (s74b) */
+    for (plane = 0; plane < VIDEO_PLANES; ++plane)                        /* the live backing: host sections when remapped (s74b) */
         WriteFile(file, g_Video.YMapPlane ? g_Video.YMapPlane(g_Video.YMapContext, plane) : g_Video.Planes[plane], VIDEO_PLANE_SIZE, &bytesWritten, NULL);
     HOST_UNLOCK();
     CloseHandle(file);
@@ -16215,7 +16215,7 @@ static VOID ModeYTimelineReport(VOID)
 
 static VOID ModeYRemapSelectBody(PVOID context, INT mask)
 {
-    INT want, plane, selectedCount = 0, selector[4];
+    INT want, plane, selectedCount = 0, selector[VIDEO_PLANES];
     (VOID)context;
     if (!g_ModeYRemap) return;
     ++g_ModeYSelectorCalls;
@@ -16250,14 +16250,14 @@ static VOID ModeYRemapSelectBody(PVOID context, INT mask)
             ++g_ModeYFanoutBytes;
             byteValue = scratch[index];
             ModeYFanoutBarNote(index, g_ModeYPreviousMask);      /* is this how the bar collapses? */
-            for (plane = 0; plane < 4; ++plane)
+            for (plane = 0; plane < VIDEO_PLANES; ++plane)
                 if (g_ModeYPreviousMask & (1 << plane)) ((BYTE *)g_ModeYView[plane])[index] = byteValue;
         }
         ++g_ModeYFanouts;
     }
     if (mask < 0) { want = 4; g_ModeYPreviousMask = 0; }
     else {
-        for (plane = 0; plane < 4; ++plane) if (mask & (1 << plane)) selector[selectedCount++] = plane;
+        for (plane = 0; plane < VIDEO_PLANES; ++plane) if (mask & (1 << plane)) selector[selectedCount++] = plane;
         if (!selectedCount) { ++g_ModeYSelectorZero; return; }                /* mask 0: nothing to point at */
         want = (selectedCount == 1) ? selector[0] : 5;
         g_ModeYPreviousMask = (selectedCount == 1) ? 0 : mask;
@@ -16354,7 +16354,7 @@ static DWORD g_ModeYGr4Calls = 0, g_ModeYGr4Mismatch = 0, g_ModeYGr4Pair[4][6];
      replicated across each four-pixel group. That is the collapse, and a run length of
      4 with no intervening select is its fingerprint. A run of 1 is the ordinary blit and
      is fine. This is the counter that can come out either way. */
-static DWORD g_ModeYGr4SinceSelector = 0, g_ModeYGr4Runs[10], g_ModeYGr4RunPlanes[4];
+static DWORD g_ModeYGr4SinceSelector = 0, g_ModeYGr4Runs[10], g_ModeYGr4RunPlanes[VIDEO_PLANES];
 static VOID ModeYGr4CloseRun(VOID)
 {
     if (g_ModeYGr4SinceSelector) {
@@ -16418,7 +16418,7 @@ static VOID ModeYRemapWriteMode(PVOID context, INT writeMode)
                 INT32 source;
                 if (scratch[index] == g_ModeYSeed[index]) continue;
                 source = (INT32)index - delta;
-                for (plane = 0; plane < 4; ++plane)
+                for (plane = 0; plane < VIDEO_PLANES; ++plane)
                     if (g_ModeYPreviousMask & (1 << plane)) ((BYTE *)g_ModeYView[plane])[index] = ((BYTE *)g_ModeYView[plane])[source];
             }
             ++g_ModeYLatchOk;
@@ -36668,8 +36668,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
           if (VIDEO_UNIMPLEMENTED_GET(g_Video.UnimplementedFunctions, index)) { cursor = LogPut(cursor, " AH=0x"); cursor = LogHexByte(cursor, (UINT)index); ++count; }
       if (!count) cursor = LogPut(cursor, " none");
       cursor = LogPut(cursor, "\r\n");
-      { UINT plane, nonZero[4]; 
-        for (plane = 0; plane < 4; ++plane) { UINT byteIndex2, changed = 0;
+      { UINT plane, nonZero[VIDEO_PLANES]; 
+        for (plane = 0; plane < VIDEO_PLANES; ++plane) { UINT byteIndex2, changed = 0;
             { const BYTE *planeBytes = g_Video.YMapPlane ? g_Video.YMapPlane(g_Video.YMapContext, plane) : g_Video.Planes[plane];
               for (byteIndex2 = 0; byteIndex2 < VIDEO_PLANE_SIZE; ++byteIndex2) if (planeBytes[byteIndex2]) ++changed; }
             nonZero[plane] = changed; }
@@ -37455,7 +37455,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         cursor = LogPut(cursor, " ensr="); cursor = LogHexByte(cursor, g_Video.EnableSetReset);
         cursor = LogPut(cursor, " wmode="); cursor = LogHexByte(cursor, g_Video.WriteMode);
         cursor = LogPut(cursor, " plane-nonzero=");
-        for (plane = 0; plane < 4; ++plane) { cursor = LogHex(cursor, nonZero[plane]); cursor = LogPut(cursor, plane<3?"/":""); }
+        for (plane = 0; plane < VIDEO_PLANES; ++plane) { cursor = LogHex(cursor, nonZero[plane]); cursor = LogPut(cursor, plane<VIDEO_PLANES - 1?"/":""); }
         cursor = LogPut(cursor, "\r\n"); }
       /* ⚠ FLUSH FIRST. The rsite/crtc/video-now block above can fill the 8 KB report
            on its own, and LogAppend writes [buf,end) UNCLAMPED: the ivt08 line was
@@ -37784,7 +37784,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                "80 bytes/row (plane offset = row*80 + x/4)\r\n");
         LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
         for (page = 0; page < 3; ++page)
-            for (plane = 0; plane < 4; ++plane)
+            for (plane = 0; plane < VIDEO_PLANES; ++plane)
                 for (row = 168; row < 200; ++row) {
                     UINT32 position = (page * 0x4000u + row * 80u) & (MODEY_WIN - 1u), pixelX;
                     const BYTE *source = (const BYTE *)g_ModeYView[plane];

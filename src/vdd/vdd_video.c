@@ -22,7 +22,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_TEXT_DEFAULT_ROWS       25
 #define VIDEO_TEXT_PAGE_MIN           0x800u
 #define VIDEO_PAGE_ALIGN_MASK         0xFFu
-#define VIDEO_PLANE_INDEX_MASK        3
 /* Modes. */
 #define VIDEO_MODE_TEXT_80            0x03
 #define VIDEO_MODE_VGA_256            0x13
@@ -79,7 +78,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_MODE_VGA_MONO_480       0x11
 #define VIDEO_MODE_VGA_480            0x12
 #define VIDEO_PAGES                   8
-#define VIDEO_PLANES                  4
 #define VIDEO_LINES_200               200
 #define VIDEO_LINES_350               350
 #define VIDEO_PORT_CRTC_MONO          0x3B4u
@@ -279,7 +277,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 
 /* 4F02h, 4F04h, 4F06h and 4F07h subfunctions. */
 #define VIDEO_MODE_NOT_STANDARD       0xFF
-#define VIDEO_ALL_PLANES              0x0F
 #define VIDEO_DAC_WIDTH_6             6
 #define VIDEO_STATE_GET_SIZE          0x00
 #define VIDEO_STATE_SAVE          0x01

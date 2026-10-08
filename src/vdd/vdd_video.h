@@ -43,6 +43,9 @@
      can no longer fail at all -- off is lin - 0xA0000, so it is 16-bit by
      construction. */
 #define VIDEO_PLANE_SIZE    65536u                        /* bytes/plane, as on a VGA */
+#define VIDEO_PLANES                  4
+#define VIDEO_ALL_PLANES              0x0F
+#define VIDEO_PLANE_INDEX_MASK        3
 #define VIDEO_Y_PLANE_SIZE       65536u                        /* mode-Y plane = full 64K */
 
 /* VESA VBE 2.0 (banked, packed-256). A0000 is the 64KB window onto VesaVram. */
