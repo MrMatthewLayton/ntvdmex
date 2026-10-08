@@ -225,7 +225,7 @@ static VOID WowNotePut(PSTR buffer, INT capacity, PINT length, PCSTR text)
 #define WOW_WORD_BYTES       2
 static VOID WowNoteHex(PSTR buffer, INT capacity, PINT length, DWORD value, INT digits)
 {
-    static const CHAR hexDigits[] = "0123456789abcdef";
+    static const CHAR hexDigits[] = HEX_DIGITS_LOWER;
     INT index;
     for (index = digits - 1; index >= 0; --index) {
         if (*length >= capacity - 1) break;
@@ -1231,7 +1231,7 @@ static INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
              instrument. Write the line here, then show the box. */
         {   PCSTR prefix = "  WOWMSGBOX: krnl386 is reporting an error to the "
                               "user. type=0x";
-            PCSTR hexDigits = "0123456789abcdef";
+            PCSTR hexDigits = HEX_DIGITS_LOWER;
             PCSTR cursor; INT position;
             for (cursor = prefix; *cursor && number < (INT)sizeof logLine - WOW32_MSGBOX_LOG_LINE_END; ++cursor) logLine[number++] = *cursor;
             logLine[number++] = hexDigits[(type >> (3 * NIBBLE_SHIFT)) & NIBBLE_MASK]; logLine[number++] = hexDigits[(type >> (2 * NIBBLE_SHIFT)) & NIBBLE_MASK];

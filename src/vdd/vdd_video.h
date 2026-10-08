@@ -68,6 +68,13 @@
 #define VIDEO_SCROLL_UP               1
 #define VIDEO_LATCH_NOW               0       /* VideoLatch: bring the schedule up to now ... */
 #define VIDEO_LATCH_AT_FRAME          1       /* ... or latch as displayed at a frame         */
+/* What the VESA BIOS and the monitor's EDID call themselves. */
+#define VIDEO_VBE_OEM_STRING          "NTVDMEX VESA"
+#define VIDEO_VBE_OEM_VENDOR          "NTVDMEX"
+#define VIDEO_VBE_OEM_PRODUCT         "NTVDMEX VBE"
+#define VIDEO_VBE_OEM_REVISION        "1.00"
+#define VIDEO_EDID_PRODUCT_NAME       "NTVDMEX VESA\n"   /* EDID text descriptors end in LF */
+#define VIDEO_EDID_SERIAL             "0000001\n"
 #define VIDEO_DAC_ENTRIES             256     /* the DAC's colour registers          */
 #define VIDEO_DAC_COMPONENTS          3       /* red, green, blue                    */
 #define VIDEO_PALETTE_REGISTER_FILE   17      /* the 16 EGA palette registers + border */

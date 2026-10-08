@@ -2389,7 +2389,7 @@ INT DosInt21(PDOS_MACHINE machine)
                                                    DOS appends a generated name
                                                    and hands it back in place. */
             INT index = 0; static UINT sequence = 0;
-            PCSTR hexDigits = "0123456789ABCDEF";
+            PCSTR hexDigits = HEX_DIGITS_UPPER;
             while (fileName[index] && index < DOS_INT21_TEMP_DIRECTORY_MAX) ++index;
             if (index && fileName[index-1] != '\\' && fileName[index-1] != '/') fileName[index++] = '\\';
             { UINT seed = (UINT)(GetTickCount() + (sequence++ * DOS_INT21_TEMP_SEED_STEP));

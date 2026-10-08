@@ -6,6 +6,27 @@
 #define COBJMACROS
 #include <dsound.h>       /* #234: interfaces only -- dsound.dll is bound at runtime */
 
+/* The modules and exports bound by name (no import library: optional at run time). */
+#define AUDIO_MODULE_DSOUND "dsound.dll"
+#define AUDIO_MODULE_WINMM  "winmm.dll"
+#define AUDIO_EXPORT_DIRECT_SOUND_CREATE "DirectSoundCreate"
+#define AUDIO_EXPORT_WAVE_OUT_OPEN               "waveOutOpen"
+#define AUDIO_EXPORT_WAVE_OUT_PREPARE_HEADER     "waveOutPrepareHeader"
+#define AUDIO_EXPORT_WAVE_OUT_UNPREPARE_HEADER   "waveOutUnprepareHeader"
+#define AUDIO_EXPORT_WAVE_OUT_WRITE              "waveOutWrite"
+#define AUDIO_EXPORT_WAVE_OUT_GET_VOLUME         "waveOutGetVolume"
+#define AUDIO_EXPORT_WAVE_OUT_RESET              "waveOutReset"
+#define AUDIO_EXPORT_WAVE_OUT_CLOSE              "waveOutClose"
+#define AUDIO_EXPORT_MIDI_OUT_OPEN               "midiOutOpen"
+#define AUDIO_EXPORT_MIDI_OUT_SHORT_MSG          "midiOutShortMsg"
+#define AUDIO_EXPORT_MIDI_OUT_CLOSE              "midiOutClose"
+#define AUDIO_EXPORT_MIDI_OUT_RESET              "midiOutReset"
+#define AUDIO_EXPORT_MIDI_OUT_GET_NUM_DEVS       "midiOutGetNumDevs"
+#define AUDIO_EXPORT_MIDI_OUT_GET_DEV_CAPS_A     "midiOutGetDevCapsA"
+#define AUDIO_EXPORT_MIDI_OUT_PREPARE_HEADER     "midiOutPrepareHeader"
+#define AUDIO_EXPORT_MIDI_OUT_UNPREPARE_HEADER   "midiOutUnprepareHeader"
+#define AUDIO_EXPORT_MIDI_OUT_LONG_MSG           "midiOutLongMsg"
+
 #define AUDIO_WAVE_DEFAULT_HZ       44100
 #define AUDIO_WAVE_MIN_BUFFERS      2
 #define AUDIO_WAVE_BITS_PER_SAMPLE  16
@@ -164,13 +185,13 @@ typedef HRESULT (WINAPI *PFN_DIRECT_SOUND_CREATE)(LPCGUID, LPDIRECTSOUND *, LPUN
 
 static INT AudioWaveDirectSoundOpen(PAUDIO_WAVE wave, PCAUDIO_WAVE_FORMAT format)
 {
-    HMODULE module = LoadLibraryA("dsound.dll");
+    HMODULE module = LoadLibraryA(AUDIO_MODULE_DSOUND);
     PFN_DIRECT_SOUND_CREATE directSoundCreate;
     LPDIRECTSOUND directSound = NULL; LPDIRECTSOUNDBUFFER buffer = NULL;
     DSBUFFERDESC description; WAVEFORMATEX waveFormat;
     PVOID part1, part2; DWORD length1, length2;
     if (!module) return 0;
-    directSoundCreate = (PFN_DIRECT_SOUND_CREATE)GetProcAddress(module, "DirectSoundCreate");
+    directSoundCreate = (PFN_DIRECT_SOUND_CREATE)GetProcAddress(module, AUDIO_EXPORT_DIRECT_SOUND_CREATE);
     if (!directSoundCreate || FAILED(directSoundCreate(NULL, &directSound, NULL))) return 0;
     if (FAILED(IDirectSound_SetCooperativeLevel(directSound, GetDesktopWindow(), DSSCL_NORMAL))) {
         IDirectSound_Release(directSound); return 0;
@@ -236,24 +257,24 @@ static DWORD WINAPI AudioWaveDirectSoundThread(LPVOID parameter)
 
 static INT AudioWaveBind(PAUDIO_WAVE wave)
 {
-    wave->Module = LoadLibraryA("winmm.dll");
+    wave->Module = LoadLibraryA(AUDIO_MODULE_WINMM);
     if (!wave->Module) return 0;
-    g_WaveOutOpen       = (PFN_WAVE_OUT_OPEN) GetProcAddress(wave->Module, "waveOutOpen");
-    g_WaveOutPrepareHeader    = (PFN_WAVE_OUT_HEADER)  GetProcAddress(wave->Module, "waveOutPrepareHeader");
-    g_WaveOutUnprepareHeader  = (PFN_WAVE_OUT_HEADER)  GetProcAddress(wave->Module, "waveOutUnprepareHeader");
-    g_WaveOutWrite      = (PFN_WAVE_OUT_HEADER)  GetProcAddress(wave->Module, "waveOutWrite");
-    g_WaveOutGetVolume  = (PFN_WAVE_OUT_VOLUME)  GetProcAddress(wave->Module, "waveOutGetVolume");
-    g_WaveOutReset      = (PFN_WAVE_OUT_HANDLE)  GetProcAddress(wave->Module, "waveOutReset");
-    g_WaveOutClose      = (PFN_WAVE_OUT_HANDLE)  GetProcAddress(wave->Module, "waveOutClose");
-    g_MidiOutOpen       = (PFN_MIDI_OUT_OPEN) GetProcAddress(wave->Module, "midiOutOpen");
-    g_MidiOutShortMsg   = (PFN_MIDI_OUT_SHORT)GetProcAddress(wave->Module, "midiOutShortMsg");
-    g_MidiOutClose      = (PFN_MIDI_OUT_HANDLE)GetProcAddress(wave->Module, "midiOutClose");
-    g_MidiOutReset      = (PFN_MIDI_OUT_HANDLE)GetProcAddress(wave->Module, "midiOutReset");
-    g_MidiOutGetNumDevs = (PFN_MIDI_OUT_GET_NUM_DEVS) GetProcAddress(wave->Module, "midiOutGetNumDevs");
-    g_MidiOutGetDevCapsA= (PFN_MIDI_OUT_GET_DEV_CAPS)GetProcAddress(wave->Module, "midiOutGetDevCapsA");
-    g_MidiOutPrepareHeader    = (PFN_MIDI_OUT_HEADER)  GetProcAddress(wave->Module, "midiOutPrepareHeader");
-    g_MidiOutUnprepareHeader  = (PFN_MIDI_OUT_HEADER)  GetProcAddress(wave->Module, "midiOutUnprepareHeader");
-    g_MidiOutLongMsg    = (PFN_MIDI_OUT_HEADER)  GetProcAddress(wave->Module, "midiOutLongMsg");
+    g_WaveOutOpen       = (PFN_WAVE_OUT_OPEN) GetProcAddress(wave->Module, AUDIO_EXPORT_WAVE_OUT_OPEN);
+    g_WaveOutPrepareHeader    = (PFN_WAVE_OUT_HEADER)  GetProcAddress(wave->Module, AUDIO_EXPORT_WAVE_OUT_PREPARE_HEADER);
+    g_WaveOutUnprepareHeader  = (PFN_WAVE_OUT_HEADER)  GetProcAddress(wave->Module, AUDIO_EXPORT_WAVE_OUT_UNPREPARE_HEADER);
+    g_WaveOutWrite      = (PFN_WAVE_OUT_HEADER)  GetProcAddress(wave->Module, AUDIO_EXPORT_WAVE_OUT_WRITE);
+    g_WaveOutGetVolume  = (PFN_WAVE_OUT_VOLUME)  GetProcAddress(wave->Module, AUDIO_EXPORT_WAVE_OUT_GET_VOLUME);
+    g_WaveOutReset      = (PFN_WAVE_OUT_HANDLE)  GetProcAddress(wave->Module, AUDIO_EXPORT_WAVE_OUT_RESET);
+    g_WaveOutClose      = (PFN_WAVE_OUT_HANDLE)  GetProcAddress(wave->Module, AUDIO_EXPORT_WAVE_OUT_CLOSE);
+    g_MidiOutOpen       = (PFN_MIDI_OUT_OPEN) GetProcAddress(wave->Module, AUDIO_EXPORT_MIDI_OUT_OPEN);
+    g_MidiOutShortMsg   = (PFN_MIDI_OUT_SHORT)GetProcAddress(wave->Module, AUDIO_EXPORT_MIDI_OUT_SHORT_MSG);
+    g_MidiOutClose      = (PFN_MIDI_OUT_HANDLE)GetProcAddress(wave->Module, AUDIO_EXPORT_MIDI_OUT_CLOSE);
+    g_MidiOutReset      = (PFN_MIDI_OUT_HANDLE)GetProcAddress(wave->Module, AUDIO_EXPORT_MIDI_OUT_RESET);
+    g_MidiOutGetNumDevs = (PFN_MIDI_OUT_GET_NUM_DEVS) GetProcAddress(wave->Module, AUDIO_EXPORT_MIDI_OUT_GET_NUM_DEVS);
+    g_MidiOutGetDevCapsA= (PFN_MIDI_OUT_GET_DEV_CAPS)GetProcAddress(wave->Module, AUDIO_EXPORT_MIDI_OUT_GET_DEV_CAPS_A);
+    g_MidiOutPrepareHeader    = (PFN_MIDI_OUT_HEADER)  GetProcAddress(wave->Module, AUDIO_EXPORT_MIDI_OUT_PREPARE_HEADER);
+    g_MidiOutUnprepareHeader  = (PFN_MIDI_OUT_HEADER)  GetProcAddress(wave->Module, AUDIO_EXPORT_MIDI_OUT_UNPREPARE_HEADER);
+    g_MidiOutLongMsg    = (PFN_MIDI_OUT_HEADER)  GetProcAddress(wave->Module, AUDIO_EXPORT_MIDI_OUT_LONG_MSG);
     return g_WaveOutOpen && g_WaveOutPrepareHeader && g_WaveOutWrite &&
            g_WaveOutReset && g_WaveOutClose;
 }

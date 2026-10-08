@@ -22,5 +22,7 @@
 #define HEX_RADIX           16
 #define HEX_RADIX_U         16u
 #define HEX_DIGIT_A_VALUE   10      /* 'A'/'a': the first hex digit that is a letter */
+#define HEX_DIGITS_LOWER    "0123456789abcdef"
+#define HEX_DIGITS_UPPER    "0123456789ABCDEF"
 
 #endif /* NTVDMEX_ASCII_H */

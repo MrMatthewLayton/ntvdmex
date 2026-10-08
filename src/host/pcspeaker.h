@@ -40,6 +40,9 @@
 #ifndef NTVDMEX_PCSPEAKER_H
 #define NTVDMEX_PCSPEAKER_H
 
+#define PCSPEAKER_DEVICE_GLOBALROOT "\\\\?\\GLOBALROOT\\Device\\Beep"   /* the Beep driver, by its NT name ... */
+#define PCSPEAKER_DEVICE_DOS        "\\\\.\\Beep"                      /* ... or its DOS device name         */
+
 #include <windows.h>
 
 #define PCSPEAKER_IOCTL_BEEP_SET 0x00010000u
@@ -101,7 +104,7 @@ static VOID PcSpeakerSet(PPCSPEAKER speaker, DWORD hz)
            machine where it was never going to work, and if some configuration
            does publish the symlink, that machine keeps working. */
         static const CHAR *const paths[PCSPEAKER_PATHS] = {
-            "\\\\?\\GLOBALROOT\\Device\\Beep", "\\\\.\\Beep"
+            PCSPEAKER_DEVICE_GLOBALROOT, PCSPEAKER_DEVICE_DOS
         };
         INT index;
         if (!hz) return;                       /* nothing to say: stay unopened */

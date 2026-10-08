@@ -30,15 +30,15 @@ static inline PSTR LogPut(PSTR cursor, PCSTR text) {
 /* Append v as 8 lowercase hex digits. */
 static inline PSTR LogHex(PSTR cursor, UINT value) {
     INT index; CHAR digits[LOG_HEX_DIGITS + 1]; digits[LOG_HEX_DIGITS] = 0;
-    for (index = LOG_HEX_DIGITS - 1; index >= 0; --index) { digits[index] = "0123456789abcdef"[value & NIBBLE_MASK]; value >>= NIBBLE_SHIFT; }
+    for (index = LOG_HEX_DIGITS - 1; index >= 0; --index) { digits[index] = HEX_DIGITS_LOWER[value & NIBBLE_MASK]; value >>= NIBBLE_SHIFT; }
     return LogPut(cursor, digits);
 }
 
 /* Append v as 2 lowercase hex digits. For byte-sized things -- interrupt numbers,
    AH values, mode numbers -- where LogHex's 8 digits turn a list into a wall. */
 static inline PSTR LogHexByte(PSTR cursor, UINT value) {
-    CHAR digits[LOG_HEX_BYTE_DIGITS + 1]; digits[0] = "0123456789abcdef"[(value >> NIBBLE_SHIFT) & NIBBLE_MASK];
-    digits[1] = "0123456789abcdef"[value & NIBBLE_MASK]; digits[LOG_HEX_BYTE_DIGITS] = 0;
+    CHAR digits[LOG_HEX_BYTE_DIGITS + 1]; digits[0] = HEX_DIGITS_LOWER[(value >> NIBBLE_SHIFT) & NIBBLE_MASK];
+    digits[1] = HEX_DIGITS_LOWER[value & NIBBLE_MASK]; digits[LOG_HEX_BYTE_DIGITS] = 0;
     return LogPut(cursor, digits);
 }
 
@@ -58,8 +58,8 @@ static inline PSTR LogDecimal(PSTR cursor, UINT value) {
 static inline PSTR LogDump(PSTR cursor, LPCVOID bytes, UINT length) {
     const BYTE *source = (const BYTE *)bytes; UINT index;
     for (index = 0; index < length; ++index) {
-        *cursor++ = "0123456789abcdef"[source[index] >> NIBBLE_SHIFT];
-        *cursor++ = "0123456789abcdef"[source[index] & NIBBLE_MASK];
+        *cursor++ = HEX_DIGITS_LOWER[source[index] >> NIBBLE_SHIFT];
+        *cursor++ = HEX_DIGITS_LOWER[source[index] & NIBBLE_MASK];
         *cursor++ = ((index & LOG_DUMP_ROW_MASK) == LOG_DUMP_ROW_MASK) ? '\n' : ' ';
     }
     *cursor = 0;
@@ -153,9 +153,9 @@ static inline INT LogIsBadRange(PCSTR path, PCSTR buffer, PCSTR end) {
     HANDLE file; CHAR message[LOG_MESSAGE_SIZE], *cursor = message; DWORD written; UINT value; INT index;
     if (end >= buffer && (unsigned long)(end - buffer) < LOG_MAX_RANGE) return 0;
     for (index = 0; "\r\n[log: BAD RANGE from a caller: buf=0x"[index]; ++index) *cursor++ = "\r\n[log: BAD RANGE from a caller: buf=0x"[index];
-    for (value = (UINT)(ULONG_PTR)buffer, index = LOG_HEX_TOP_SHIFT; index >= 0; index -= NIBBLE_SHIFT) *cursor++ = "0123456789abcdef"[(value >> index) & NIBBLE_MASK];
+    for (value = (UINT)(ULONG_PTR)buffer, index = LOG_HEX_TOP_SHIFT; index >= 0; index -= NIBBLE_SHIFT) *cursor++ = HEX_DIGITS_LOWER[(value >> index) & NIBBLE_MASK];
     for (index = 0; " end=0x"[index]; ++index) *cursor++ = " end=0x"[index];
-    for (value = (UINT)(ULONG_PTR)end, index = LOG_HEX_TOP_SHIFT; index >= 0; index -= NIBBLE_SHIFT) *cursor++ = "0123456789abcdef"[(value >> index) & NIBBLE_MASK];
+    for (value = (UINT)(ULONG_PTR)end, index = LOG_HEX_TOP_SHIFT; index >= 0; index -= NIBBLE_SHIFT) *cursor++ = HEX_DIGITS_LOWER[(value >> index) & NIBBLE_MASK];
     for (index = 0; " -- line dropped, run continues]\r\n"[index]; ++index) *cursor++ = " -- line dropped, run continues]\r\n"[index];
     file = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                     NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);

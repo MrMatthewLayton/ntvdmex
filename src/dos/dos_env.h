@@ -117,7 +117,7 @@ static inline volatile BYTE *DosEnvPutDecimal(_Out_ volatile BYTE *cursor, _In_ 
    0x280) is three, and that is how every BLASTER string in the wild spells it. */
 static inline volatile BYTE *DosEnvPutThreeHexDigits(_Out_ volatile BYTE *cursor, _In_ volatile BYTE *end,
                                                      _In_ UINT value) {
-    static const CHAR hexDigits[] = "0123456789ABCDEF";
+    static const CHAR hexDigits[] = HEX_DIGITS_UPPER;
     INT shift;
     for (shift = DOS_ENV_HEX_FIRST_SHIFT; shift >= 0; shift -= NIBBLE_SHIFT) if (cursor < end) *cursor++ = (BYTE)hexDigits[(value >> shift) & NIBBLE_MASK];
     return cursor;

@@ -20,6 +20,7 @@
 #ifndef NTVDMEX_PIF_H
 #define NTVDMEX_PIF_H
 #include "../ntvdmex_types.h"
+#define PIF_SECTION_WINDOWS_386 "WINDOWS 386 3.0"   /* the 386-enhanced extension block */
 
 #define PIF_BASIC_LEN   0x171
 #define PIF_PROG_OFF    0x24
@@ -85,7 +86,7 @@ static INT PifParse(PCBYTE bytes, unsigned long length, PPIF_INFO out)
         unsigned next = (unsigned)(header[PIF_EXT_NEXT] | (header[PIF_EXT_NEXT + 1] << BYTE_SHIFT));
         unsigned dataOffset = (unsigned)(header[PIF_EXT_DATA_OFFSET] | (header[PIF_EXT_DATA_OFFSET + 1] << BYTE_SHIFT));
         unsigned dataLength = (unsigned)(header[PIF_EXT_DATA_LENGTH] | (header[PIF_EXT_DATA_LENGTH + 1] << BYTE_SHIFT));
-        if (PifIsSectionName(header, "WINDOWS 386 3.0") && dataLength >= PIF_W386_PARAMS + PIF_PARAMS_LEN
+        if (PifIsSectionName(header, PIF_SECTION_WINDOWS_386) && dataLength >= PIF_W386_PARAMS + PIF_PARAMS_LEN
             && (unsigned long)dataOffset + dataLength <= length) {
             CHAR parameters386[PIF_PARAMS_LEN + 1];
             PifCopyField(parameters386, bytes + dataOffset + PIF_W386_PARAMS, PIF_PARAMS_LEN);

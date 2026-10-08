@@ -10,6 +10,8 @@
 #include "present_scale.h"
 
 /* Timing the blit near the vertical blank (PresentWaitVerticalBlank). */
+#define PRESENT_MODULE_DDRAW          "ddraw.dll"
+#define PRESENT_EXPORT_DIRECT_DRAW_CREATE_EX "DirectDrawCreateEx"
 #define PRESENT_MONITOR_HZ_MIN        40
 #define PRESENT_ROP_PATAND            0x00A000C9L  /* DPa: destination AND pattern (no windows.h name) */
 #define PRESENT_MONITOR_HZ_MAX        240
@@ -697,9 +699,9 @@ INT PresentDdrawInitialize(PPRESENT_DDRAW presenter, HWND window)
        these: this host has always waited for vblank. The other three (nearest, fill
        the client, no scaler) are what it has always done, so zero is right. */
     presenter->IsVsync = 1;
-    presenter->DirectDrawModule = LoadLibraryA("ddraw.dll");          /* for fullscreen (optional)   */
+    presenter->DirectDrawModule = LoadLibraryA(PRESENT_MODULE_DDRAW);          /* for fullscreen (optional)   */
     if (presenter->DirectDrawModule) {
-        directDrawCreateEx = (PFN_DIRECT_DRAW_CREATE_EX)GetProcAddress(presenter->DirectDrawModule, "DirectDrawCreateEx");
+        directDrawCreateEx = (PFN_DIRECT_DRAW_CREATE_EX)GetProcAddress(presenter->DirectDrawModule, PRESENT_EXPORT_DIRECT_DRAW_CREATE_EX);
         if (directDrawCreateEx && SUCCEEDED(directDrawCreateEx(NULL, (LPVOID *)&directDraw, &g_PresentIidDirectDraw7, NULL))) {
             presenter->DirectDraw = directDraw;
             IDirectDraw7_SetCooperativeLevel(PRESENT_DIRECT_DRAW, window, DDSCL_NORMAL);

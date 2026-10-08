@@ -1956,7 +1956,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
         VideoWrite32(buffer + VIDEO_VBE_INFO_CAPABILITIES, VIDEO_VBE_CAPABILITY_DAC_SWITCHABLE);                          /* capabilities: D0 DAC switchable */
         VideoWrite32(buffer + VIDEO_VBE_INFO_MODE_LIST, ((UINT32)registers->Es << WORD_SHIFT) | (((WORD)registers->Edi + MODES) & WORD_MASK_U));  /* mode list  */
         VideoWrite16(buffer + VIDEO_VBE_INFO_TOTAL_MEMORY, VIDEO_VESA_VRAM / VIDEO_VBE_MEMORY_UNIT);    /* total memory in 64KB units   */
-        { const char *oemString = "NTVDMEX VESA"; for (index = 0; oemString[index]; ++index) buffer[OEM + index] = (BYTE)oemString[index]; buffer[OEM+index]=0; }
+        { const char *oemString = VIDEO_VBE_OEM_STRING; for (index = 0; oemString[index]; ++index) buffer[OEM + index] = (BYTE)oemString[index]; buffer[OEM+index]=0; }
         if (isVbe2) {                               /* VBE 2.0 fields, only for a 2.0 caller */
             /* ── THE FOUR STRINGS GO IN OemData (+100h), EACH ITS OWN (#226). §4.3: "VBE
                  2.0 BIOS implementations must place this string [OemString] in the
@@ -1968,7 +1968,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
                  but in the Reserved area §4.3 keeps for the mode list, and three of
                  them named the wrong thing. A 1.x caller (no 'VBE2', 256 bytes) keeps
                  the +22h string: it has no OemData, and +100h is not its memory. */
-            static const char *const strings[VIDEO_VBE_OEM_STRINGS] = { "NTVDMEX VESA", "NTVDMEX", "NTVDMEX VBE", "1.00" };
+            static const char *const strings[VIDEO_VBE_OEM_STRINGS] = { VIDEO_VBE_OEM_STRING, VIDEO_VBE_OEM_VENDOR, VIDEO_VBE_OEM_PRODUCT, VIDEO_VBE_OEM_REVISION };
             static const UINT pointerOffsets[VIDEO_VBE_OEM_STRINGS] = { VIDEO_VBE_INFO_OEM_STRING, VIDEO_VBE_INFO_OEM_VENDOR, VIDEO_VBE_INFO_OEM_PRODUCT, VIDEO_VBE_INFO_OEM_PRODUCT_REVISION };   /* OemString, Vendor, Product, Rev */
             UINT stringOffset = VIDEO_VBE_INFO_OEM_DATA, byteIndex;
             VideoWrite16(buffer + VIDEO_VBE_INFO_OEM_SOFTWARE_REVISION, VIDEO_VBE_OEM_REVISION_1_00);                 /* OEM software rev 1.00        */
@@ -2498,10 +2498,10 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
             for (byteIndex = 84; byteIndex < 90; ++byteIndex) extra[byteIndex] = 0x20;
             /* descriptor 3: monitor name */
             extra[90] = 0; extra[91] = 0; extra[92] = 0; extra[93] = 0xFC; extra[94] = 0;
-            { const char *productName = "NTVDMEX VESA\n"; for (byteIndex = 0; byteIndex < 13; ++byteIndex) extra[95 + byteIndex] = (BYTE)(productName[byteIndex] ? productName[byteIndex] : ' '); }
+            { const char *productName = VIDEO_EDID_PRODUCT_NAME; for (byteIndex = 0; byteIndex < 13; ++byteIndex) extra[95 + byteIndex] = (BYTE)(productName[byteIndex] ? productName[byteIndex] : ' '); }
             /* descriptor 4: serial */
             extra[108] = 0; extra[109] = 0; extra[110] = 0; extra[111] = 0xFF; extra[112] = 0;
-            { const char *serialString = "0000001\n"; for (byteIndex = 0; byteIndex < 13; ++byteIndex) extra[113 + byteIndex] = (BYTE)(serialString[byteIndex] ? serialString[byteIndex] : ' '); }
+            { const char *serialString = VIDEO_EDID_SERIAL; for (byteIndex = 0; byteIndex < 13; ++byteIndex) extra[113 + byteIndex] = (BYTE)(serialString[byteIndex] ? serialString[byteIndex] : ' '); }
             extra[126] = 0;                               /* no extension blocks           */
             for (byteIndex = 0; byteIndex < VIDEO_EDID_CHECKSUM; ++byteIndex) sum += extra[byteIndex];
             extra[VIDEO_EDID_CHECKSUM] = (BYTE)(VIDEO_EDID_CHECKSUM_MODULUS - (sum & VIDEO_EDID_CHECKSUM_MASK));
@@ -4795,7 +4795,7 @@ static VOID VideoDrawHardwareCursor(PVIDEO_STATE state);
      text VRAM the renderer itself reads. */
 INT VddVideoTextSnapshot(PVIDEO_STATE state, char *output, INT capacity)
 {
-    static const char hexDigits[] = "0123456789abcdef";
+    static const char hexDigits[] = HEX_DIGITS_LOWER;
     INT row, column, count = 0;
     if (!output || capacity < VIDEO_SNAPSHOT_MIN_CAPACITY) return 0;
     for (row = 0; row < state->Rows; ++row) {
@@ -5267,7 +5267,7 @@ VOID VddVideoPutChar(PVIDEO_STATE state, BYTE character) { VideoTeletype(state, 
      built off-VM too), so the formatting is by hand. */
 static char *VideoReadHex2(char *output, UINT value)
 {
-    static const char H[] = "0123456789ABCDEF";
+    static const char H[] = HEX_DIGITS_UPPER;
     *output++ = H[(value >> NIBBLE_SHIFT) & NIBBLE_MASK]; *output++ = H[value & NIBBLE_MASK]; return output;
 }
 static char *VideoReadString(char *output, const char *text) { while (*text) *output++ = *text++; return output; }

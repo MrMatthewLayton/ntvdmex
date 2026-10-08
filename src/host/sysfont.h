@@ -54,6 +54,11 @@
 #define SYSFONT_BOX_BLOCK_LAST  0x259F
 #define SYSFONT_NO_GLYPH    0xFFFF      /* GetGlyphIndices: GGI_MARK_NONEXISTING_GLYPHS */
 /* A .FON file: an NE executable whose RT_FONT resources are FNT 2.0/3.0 fonts. */
+#define SYSFONT_FONTS_DIRECTORY "\\Fonts\\"   /* under the Windows directory */
+#define SYSFONT_FILE_CGA80WOA "CGA80WOA.FON"
+#define SYSFONT_FILE_DOSAPP "DOSAPP.FON"
+#define SYSFONT_FILE_VGAOEM "VGAOEM.FON"
+#define SYSFONT_FILE_EGA80WOA "EGA80WOA.FON"
 #define SYSFONT_FONTS_DIRECTORY_ROOM 32 /* "\\Fonts\\" and a file name                 */
 #define SYSFONT_FON_MIN_SIZE 0x80
 #define SYSFONT_FON_MAX_SIZE (4u << 20)
@@ -170,7 +175,7 @@ static INT SysFontOpenFon(SYSFONT_FACE *face, PCSTR fileName, INT wantedHeight)
     INT isFound = 0;
     face->IsOk = 0; face->Font = NULL; face->Width = 0; face->Height = 0;
     if (!GetWindowsDirectoryA(path, MAX_PATH - SYSFONT_FONTS_DIRECTORY_ROOM)) return 0;
-    lstrcatA(path, "\\Fonts\\"); lstrcatA(path, fileName);
+    lstrcatA(path, SYSFONT_FONTS_DIRECTORY); lstrcatA(path, fileName);
     file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
     if (file == INVALID_HANDLE_VALUE) return 0;
     size = GetFileSize(file, NULL);
@@ -393,11 +398,11 @@ static PCSTR SysFontBuildInto(PCSTR faceName, SYSFONT_TABLES *tables, SYSFONT_RE
     /* Measured on the rig's UK XP: CGA80WOA.FON is the 437 Terminal 8x8 (by name GDI
        gave CGA80850.FON, code page 850); VGAOEM.FON and EGA80WOA.FON are 437 8x12.
        DOSAPP.FON there has no 8-wide face at all. */
-    if (SysFontOpenFon(&terminal8, "CGA80WOA.FON", VGA_FONT8_HEIGHT)) source8 = "CGA80WOA.FON";
-    else if (SysFontOpenFon(&terminal8, "DOSAPP.FON", VGA_FONT8_HEIGHT)) source8 = "DOSAPP.FON";
+    if (SysFontOpenFon(&terminal8, SYSFONT_FILE_CGA80WOA, VGA_FONT8_HEIGHT)) source8 = SYSFONT_FILE_CGA80WOA;
+    else if (SysFontOpenFon(&terminal8, SYSFONT_FILE_DOSAPP, VGA_FONT8_HEIGHT)) source8 = SYSFONT_FILE_DOSAPP;
     else SysFontOpen(dc, (BYTE *)bits, &terminal8, "Terminal", OEM_CHARSET, VGA_FONT8_HEIGHT);
-    if (SysFontOpenFon(&terminal12, "VGAOEM.FON", SYSFONT_TERMINAL_HEIGHT))        source12 = "VGAOEM.FON";
-    else if (SysFontOpenFon(&terminal12, "EGA80WOA.FON", SYSFONT_TERMINAL_HEIGHT)) source12 = "EGA80WOA.FON";
+    if (SysFontOpenFon(&terminal12, SYSFONT_FILE_VGAOEM, SYSFONT_TERMINAL_HEIGHT))        source12 = SYSFONT_FILE_VGAOEM;
+    else if (SysFontOpenFon(&terminal12, SYSFONT_FILE_EGA80WOA, SYSFONT_TERMINAL_HEIGHT)) source12 = SYSFONT_FILE_EGA80WOA;
     else SysFontOpen(dc, (BYTE *)bits, &terminal12, "Terminal", OEM_CHARSET, VGA_FONT14_HEIGHT);
     terminal16.IsOk = 0;                                         /* no 8x16 Terminal exists */
     /* A Terminal size GDI could not match exactly (it substitutes the nearest) must not
