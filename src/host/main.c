@@ -2016,7 +2016,7 @@ static volatile DWORD g_DpmiLastEip = 0;  /* guest EIP after the last return    
 static volatile DWORD g_DpmiLastVector = 0;  /* vector serviced on the last iteration         */
 static volatile LONG  g_VehAny       = 0;  /* # PM-context exceptions delivered to the VEH  */
 static volatile LONG  g_VehFatal     = 0;  /* # of those that took the non-reflect fatal path */
-static DWORD dpmi_sel_base(WORD sel);       /* fwd: watchdog resolves the frozen selector base */
+static DWORD DpmiSelectorBase(WORD selector);       /* fwd: watchdog resolves the frozen selector base */
 /* DPMI PM interrupt-vector table (INT 31h 0204/0205). A client installs its own PM
    handlers here; we store them so a get/set/restore round-trips faithfully. (We still
    service patched INT 21h/31h ourselves -- routing to a client-installed PM handler is
@@ -2731,11 +2731,11 @@ static BYTE  g_FaultStack[DPMI_FAULT_STK_SIZE] __attribute__((aligned(16)));   /
    The table is also bigger: 512 was an arbitrary bound from the spike era. */
 #define DPMI_LDT_MAX 2048
 /* Indices below this belong to the host: 0 null, 1/2 the initial CS/DS, and 3 which
-   dpmi_install() force-types to writable data. INT 31h 0001 refuses to free them and
+   DpmiInstall() force-types to writable data. INT 31h 0001 refuses to free them and
    the WOW selector stage refuses to allocate them -- one constant so the two agree. */
 #define DPMI_LDT_RESERVED 6
 /* ★★★ The host's private LDT pool sits between the reserved entries and the
-     client's arena; see the long note at dpmi_host_idx(). The range is MEASURED
+     client's arena; see the long note at DpmiHostIndex(). The range is MEASURED
      (the guest never touches 0x09..0x2b across three full runs), and the
      client-facing counter starts ABOVE it so the two can never meet. */
 #define DPMI_HOSTPOOL_LO  0x09
@@ -4044,7 +4044,7 @@ static int AsyncInjectIrq(unsigned irq)
          noise, burying the one site this exists to catch. */
     if (!(eflags & EFLAGS_VM_BIT) && (cs & 4) && AsyncSiteNew((WORD)cs, context.Eip)) {
         char lineBuffer[160], *lineCursor = lineBuffer;
-        DWORD sblin = dpmi_sel_base((WORD)cs) + context.Eip;
+        DWORD sblin = DpmiSelectorBase((WORD)cs) + context.Eip;
         ResumeThread(g_HostCpu);                    /* NEVER log while the guest is held */
         ASYNC_CTX_RELEASE();
         lineCursor = LogPut(lineCursor, "ASYNC-SITE #"); lineCursor = LogHex(lineCursor, (DWORD)g_AsyncSiteCount);
@@ -4136,7 +4136,7 @@ static int AsyncInjectIrq(unsigned irq)
                  Sixteen bytes at the interrupted EIP can be disassembled, so "it is
                  looping around 0x03b71317" becomes "it is polling X".
                  (ZAR, GH #23: it reaches "Game loading..." and then spins.) */
-            {   DWORD instructionBase = dpmi_sel_base((WORD)cs) + g_AsyncPmEip;
+            {   DWORD instructionBase = DpmiSelectorBase((WORD)cs) + g_AsyncPmEip;
                 const volatile BYTE *ip = (const volatile BYTE *)(ULONG_PTR)instructionBase;
                 lineCursor = LogPut(lineCursor, " code@eip=");
                 if (MemoryReadable((ULONG_PTR)instructionBase, 16)) lineCursor = LogDump(lineCursor, (const void *)ip, 16);
@@ -8772,7 +8772,7 @@ static volatile BYTE *I33GuestPointer(volatile BYTE *tib, int source,
 {
     ULONG_PTR linear;
     (void)tib;
-    linear = (source == I33_SRC_PM) ? (ULONG_PTR)(dpmi_sel_base(segment) + offset)
+    linear = (source == I33_SRC_PM) ? (ULONG_PTR)(DpmiSelectorBase(segment) + offset)
                               : (ULONG_PTR)(((DWORD)segment << 4) + offset);
     if (!linear || !MemoryReadable(linear, length)) return NULL;
     /* 16h WRITES, and MemoryReadable says nothing about that -- a read-only page passes
@@ -9002,18 +9002,18 @@ static void I33TakeMotion(LONG positionX, LONG positionY, LONG *outDeltaX, LONG 
      at the driver's own bytes (VDD_MOUSE_SEG). A real-mode caller (V86, or a DPMI 0300h
      excursion) gets the paragraph; a protected-mode caller cannot use a paragraph in ES
      -- loading it would fault -- so it gets a data selector over the same 64 KB
-     (dpmi_seg_to_desc, cached: one LDT slot for the life of the VDM), and the offset
+     (DpmiSegmentToDescriptor, cached: one LDT slot for the life of the VDM), and the offset
      goes into the full 32-bit register so a flat client reading ES:ESI sees no junk in
      the top half. ⚠ A real driver under DOS/4GW never sees this question -- the
      extender translates the calls it knows and passes the rest down; ours is the shape
      a client that issues the INT in PM would most usefully get. UNMEASURED. */
-static WORD dpmi_seg_to_desc(WORD seg);
+static WORD DpmiSegmentToDescriptor(WORD segment);
 static volatile BYTE *I33DriverData(void)
 { return (volatile BYTE *)VddMapFlat(&g_Bus, VDD_MOUSE_SEG, 0); }
 static void I33ResultPointer(volatile BYTE *tib, int source, int offreg, WORD offset)
 {
     if (source == I33_SRC_PM) {
-        VDM_SET16(tib, VTIB_ES, dpmi_seg_to_desc(VDD_MOUSE_SEG));
+        VDM_SET16(tib, VTIB_ES, DpmiSegmentToDescriptor(VDD_MOUSE_SEG));
         VDM_REG(tib, offreg) = offset;
     } else {
         VDM_SET16(tib, VTIB_ES, VDD_MOUSE_SEG);
@@ -9037,7 +9037,7 @@ static void MouseInt33(volatile BYTE *tib, int source)
         /* An EIP is only 16 bits wide when its code selector is -- so mask it in V86
            and NEVER in PM, where a flat selector makes EIP the address itself. */
         DWORD linear = (source == I33_SRC_V86) ? ((cs << 4) + (eip & 0xFFFF))
-                                         : (dpmi_sel_base((WORD)cs) + eip);
+                                         : (DpmiSelectorBase((WORD)cs) + eip);
         unsigned index;
         for (index = 0; index < I33_AXN && g_MouseI33Ax[index].Count; ++index)
             if (g_MouseI33Ax[index].Ax == (WORD)ax) break;
@@ -9934,7 +9934,7 @@ static int LaunchIsWow(const char *command)
    ► THE REAL ANSWER IS #128: implement WOW, and this becomes the dispatch point
      rather than a dead end. The detection above is what that will hang off. */
 /* The loaded modules, at file scope: selector allocation happens in a LATER stage of
-   WinMain -- dpmi_install and the LDT pool are defined further down, and entering
+   WinMain -- DpmiInstall and the LDT pool are defined further down, and entering
    protected mode needs the VDM registered first -- so the result of the load has to
    outlive this call.
 
@@ -10147,13 +10147,13 @@ static int WowKernel2Stub(WORD thunkId, WORD returnStub)
 static WORD      g_WowEntryDs = 0;   /* krnl386's autodata paragraph      */
 static int       g_WowEntering = 0;   /* the guest is krnl386, not DOS     */
 /* The PM->V86 transfer buffer for pointer-taking INT 21h calls; allocated in
-   wow_place_v86 and used by pm_int21_xfer. Declared here because the allocation
+   WowPlaceV86 and used by pm_int21_xfer. Declared here because the allocation
    site comes long before the use site. 0 = absent, and every arm checks. */
 /* The PSP/arena block krnl386 is entered with. It must be the LAST thing allocated:
-   krnl386 carves from ES+0x10 upward without asking DOS (see wow_place_v86), so
+   krnl386 carves from ES+0x10 upward without asking DOS (see WowPlaceV86), so
    anything handed out after it would be memory krnl386 already believes it owns. */
 /* ── THE HOST POOL, AND WHY THERE HAS TO BE ONE. ────────────────────────────────
-     wow_place_v86 hands krnl386 every remaining paragraph of conventional memory,
+     WowPlaceV86 hands krnl386 every remaining paragraph of conventional memory,
      because krnl386 carves from ES+0x10 upward without asking DOS and anything left
      free would be handed out twice. The consequence is that EVERY host structure
      allocated after that point finds nothing -- and two are, both lazily at the
@@ -10166,11 +10166,11 @@ static int       g_WowEntering = 0;   /* the guest is krnl386, not DOS     */
      Both were found this way, one run apart. So: reserve a pool BEFORE the arena
      goes, and bump-allocate host structures out of it.
    ▸ THE RULE FOR ANYTHING ADDED LATER: on the WOW path, host memory comes from
-     WowHostAllocate(), not DosMcbAllocate(). A DosMcbAllocate() after wow_place_v86 will fail,
+     WowHostAllocate(), not DosMcbAllocate(). A DosMcbAllocate() after WowPlaceV86 will fail,
      and the failure will look like the guest's fault. */
 /* 16 KB. Was 4 KB (0x100) with 0x41 in use, and the SFT block is 0x1D9 paragraphs on
    its own -- a 128-entry table of 59-byte entries. Sized at 0x200 first, and THAT IS
-   THE REGRESSION THIS COMMENT EXISTS FOR: the SFT is claimed in wow_place_v86 and the
+   THE REGRESSION THIS COMMENT EXISTS FOR: the SFT is claimed in WowPlaceV86 and the
    256-vector handler table lazily at the mode switch, so the SFT fitted, the handler
    table did not, and WowHostAllocate's failure is SILENT at that call site. The run
    died at PM step 0x0d with no error -- precisely the failure the note above predicts,
@@ -10188,10 +10188,10 @@ static WORD WowHostAllocate(WORD paras)
     return segment;
 }
 /* The `-a` argument of the WOW launch: the full path of krnl386.exe. krnl386 reads
-   it back out of the DOS environment block to find its own file -- see wow_place_v86. */
+   it back out of the DOS environment block to find its own file -- see WowPlaceV86. */
 static char      g_WowKernelPath[512];
 /* Bytes of usable memory above krnl386's stack, handed to it in CX at entry. See
-   the note at the entry setup and wow_place_v86. */
+   the note at the entry setup and WowPlaceV86. */
 static WORD      g_WowEntryCx = 0;
 static WORD      g_WowPspSegment  = 0;
 static WORD      g_PmTransferSegment  = 0;
@@ -10250,7 +10250,7 @@ static char *WowPspEnvironmentCheck(char *cursor, const char *where)
              moment it moves, and this instrument would then report whatever now
              lives at the old address as if it were the field. Watch what the GUEST
              watches: the selector. */
-        DWORD linear = dpmi_sel_base(g_WowPspSelector[index]);
+        DWORD linear = DpmiSelectorBase(g_WowPspSelector[index]);
         const volatile BYTE *psp = (const volatile BYTE *)(ULONG_PTR)linear;
         WORD now;
         if (!linear || !HostReadable((const void *)psp, 0x2e)) continue;
@@ -10391,7 +10391,7 @@ static int WowLoadOne(const char *path)
      none of the import machinery. user.exe and gdi.exe both import from KERNEL by
      ordinal (and user once BY NAME), which is the path every real program takes.
    ⚠ Segments get HOST memory here and nothing else -- which is NOT where execution
-     will want them. See wow_probe_selectors() for the correction: krnl386's init entry
+     will want them. See WowProbeSelectors() for the correction: krnl386's init entry
      runs in V86, so a real load puts its segments in CONVENTIONAL memory and relocates
      against real-mode paragraphs. */
 static void WowProbeLoad(const char *command)
@@ -15520,7 +15520,7 @@ static int HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
     DWORD eip = VDM_REG(tib, VTIB_EIP);
     int is32 = DpmiSelectorIs32((WORD)csv);
     DWORD eipOffset = is32 ? eip : (eip & 0xFFFF);
-    volatile BYTE *code = (volatile BYTE *)(ULONG_PTR)(dpmi_sel_base((WORD)csv) + eipOffset);
+    volatile BYTE *code = (volatile BYTE *)(ULONG_PTR)(DpmiSelectorBase((WORD)csv) + eipOffset);
     int index = 0, opsize = is32 ? 4 : 2, isIn, width, usedDx, length;
     BYTE opcode; uint16_t port;
 
@@ -15556,7 +15556,7 @@ static int HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
          and Doom's keyboard ISR) turns it straight into a file offset to disassemble.
          The overflow is counted, so a too-small table cannot pass as a complete answer. */
     if (isIn && port == 0x03) {
-        DWORD site = dpmi_sel_base((WORD)csv) + eipOffset;
+        DWORD site = DpmiSelectorBase((WORD)csv) + eipOffset;
         unsigned site2;
         for (site2 = 0; site2 < g_DmaPollCount; ++site2) if (g_DmaPollEip[site2] == site) break;
         if (site2 < g_DmaPollCount) g_DmaPollHits[site2]++;
@@ -15592,7 +15592,7 @@ static int HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
           } }
 
         /* The return chain, straight off the guest's stack. */
-        { DWORD ssb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+        { DWORD ssb = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
           DWORD esp = VDM_REG(tib, VTIB_ESP);
           const volatile DWORD *stack = (const volatile DWORD *)(ULONG_PTR)(ssb + esp);
           unsigned slot;
@@ -15615,7 +15615,7 @@ static int HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
     VDM_REG(tib, VTIB_EIP) = is32 ? (eip + length) : ((eip & 0xFFFF0000u) | ((eip + length) & 0xFFFF));
     /* Same LOOP-drain as V86 (a PM sound driver runs the identical OPL idiom).
        With D/B=1 the LOOP counts in ECX, so the counter width follows the selector. */
-    HostIoLoopBurst(tib, bus, (volatile const BYTE *)(ULONG_PTR)dpmi_sel_base((WORD)csv),
+    HostIoLoopBurst(tib, bus, (volatile const BYTE *)(ULONG_PTR)DpmiSelectorBase((WORD)csv),
                        eipOffset + length, eipOffset, port, isIn, width, is32);
     return 1;
 }
@@ -16073,7 +16073,7 @@ static void ModeYPmSiteNote(int mask)
 {
     DWORD linear; unsigned index, byteIndex;
     if (!g_DpmiPm || !g_DpmiLastCs) return;
-    linear = dpmi_sel_base((WORD)g_DpmiLastCs) + g_DpmiLastEip;
+    linear = DpmiSelectorBase((WORD)g_DpmiLastCs) + g_DpmiLastEip;
     for (index = 0; index < g_ModeYPmCount; ++index) if (g_ModeYPmSite[index].Linear == linear) break;
     if (index == g_ModeYPmCount) {
         const BYTE *code = (const BYTE *)(ULONG_PTR)(linear - 32);
@@ -16822,7 +16822,7 @@ static void ModeYPmRun(volatile BYTE *tib)
     selector[0] = (WORD)VDM_REG(tib, VTIB_ES); selector[1] = cs; selector[2] = ss;
     selector[3] = (WORD)VDM_REG(tib, VTIB_DS); selector[4] = (WORD)VDM_REG(tib, VTIB_FS);
     selector[5] = (WORD)VDM_REG(tib, VTIB_GS);
-    for (index = 0; index < 6; ++index) cpu.SegmentBases[index] = (selector[index] & 0xFFFC) ? dpmi_sel_base(selector[index]) : 0;
+    for (index = 0; index < 6; ++index) cpu.SegmentBases[index] = (selector[index] & 0xFFFC) ? DpmiSelectorBase(selector[index]) : 0;
     cpu.Registers[0] = VDM_REG(tib, VTIB_EAX); cpu.Registers[1] = VDM_REG(tib, VTIB_ECX);
     cpu.Registers[2] = VDM_REG(tib, VTIB_EDX); cpu.Registers[3] = VDM_REG(tib, VTIB_EBX);
     cpu.Registers[4] = VDM_REG(tib, VTIB_ESP); cpu.Registers[5] = VDM_REG(tib, VTIB_EBP);
@@ -17781,7 +17781,7 @@ static DWORD WINAPI DpmiWatchdog(LPVOID param)
             if (frozen) {
               cursor = LogPut(cursor, "  wd["); cursor = LogHex(cursor, tick); cursor = LogPut(cursor, "]+");
               if (g_DpmiPm) {                           /* wedged: dump the guest bytes there */
-                base = dpmi_sel_base((WORD)enCs);
+                base = DpmiSelectorBase((WORD)enCs);
                 entryBytes = (const BYTE *)(ULONG_PTR)(base + (enEip & 0xFFFF));
                 /* ⚠ GUARD THE DEREFERENCE. This read is unguarded no longer, and the
                      bug it caused is the exact shape this project keeps hitting: an
@@ -17829,7 +17829,7 @@ static DWORD WINAPI DpmiWatchdog(LPVOID param)
                 if (!got) {
                     cursor = LogPut(cursor, " LIVE=<thread sample failed>");
                 } else {
-                    DWORD liveBase = dpmi_sel_base((WORD)gcs);
+                    DWORD liveBase = DpmiSelectorBase((WORD)gcs);
                     const BYTE *liveBytes = (const BYTE *)(ULONG_PTR)(liveBase + (geip & 0xFFFF));
                     cursor = LogPut(cursor, " LIVE cs:eip=");  cursor = LogHex(cursor, gcs);
                     cursor = LogPut(cursor, ":");              cursor = LogHex(cursor, geip);
@@ -17913,7 +17913,7 @@ static DWORD WINAPI DpmiWatchdog(LPVOID param)
     return 0;
 }
 
-static void dpmi_install(int idx);           /* defined just below; used by the helper */
+static void DpmiInstall(int index);           /* defined just below; used by the helper */
 static void wow_shadow_put(int idx);         /* GH #128: keep the descriptor shadow in step */
 
 /* ── ★★★★★ A HOST-PRIVATE LDT POOL, BECAUSE krnl386 IS A SECOND ALLOCATOR. ────
@@ -17950,7 +17950,7 @@ static void wow_shadow_put(int idx);         /* GH #128: keep the descriptor sha
 static int g_HostPoolNext = DPMI_HOSTPOOL_LO;
 static int g_HostPoolSpill = 0;
 
-static int dpmi_host_idx(void)
+static int DpmiHostIndex(void)
 {
     if (g_HostPoolNext <= DPMI_HOSTPOOL_HI) return g_HostPoolNext++;
     if (g_LdtNext >= DPMI_LDT_MAX) return -1;
@@ -17962,20 +17962,20 @@ static int dpmi_host_idx(void)
    protected-to-real entry, the 0305 save/restore no-op) have a protected-mode address
    to hand the client. Allocated once, from the host-private pool above, and cached --
    0305 and 0306 both want it and a client may call either more than once. */
-static WORD g_dpmi_hdlr_sel = 0;
-static WORD dpmi_hdlr_code_sel(void)
+static WORD g_DpmiHandlerSelector = 0;
+static WORD DpmiHandlerCodeSelector(void)
 {
-    int idx;
-    if (g_dpmi_hdlr_sel) return g_dpmi_hdlr_sel;
-    idx = dpmi_host_idx();
-    if (idx < 0) return 0;
-    g_Ldt[idx].Base   = (DWORD)DOS_HDLR_SEG << 4;
-    g_Ldt[idx].Limit  = 0xFFFF;
-    g_Ldt[idx].Access = 0xFA;                 /* present, DPL3, code, readable        */
-    g_Ldt[idx].Flags  = 0;                    /* 16-bit: the stubs are 16-bit code    */
-    dpmi_install(idx);
-    g_dpmi_hdlr_sel = (WORD)((idx << 3) | 7);
-    return g_dpmi_hdlr_sel;
+    int index;
+    if (g_DpmiHandlerSelector) return g_DpmiHandlerSelector;
+    index = DpmiHostIndex();
+    if (index < 0) return 0;
+    g_Ldt[index].Base   = (DWORD)DOS_HDLR_SEG << 4;
+    g_Ldt[index].Limit  = 0xFFFF;
+    g_Ldt[index].Access = 0xFA;                 /* present, DPL3, code, readable        */
+    g_Ldt[index].Flags  = 0;                    /* 16-bit: the stubs are 16-bit code    */
+    DpmiInstall(index);
+    g_DpmiHandlerSelector = (WORD)((index << 3) | 7);
+    return g_DpmiHandlerSelector;
 }
 
 /* ── DPMI 0002: SEGMENT TO DESCRIPTOR. ──────────────────────────────────────────────
@@ -17994,28 +17994,28 @@ static WORD dpmi_hdlr_code_sel(void)
      next 0002 builds a fresh one rather than returning a selector that is no longer
      present. That is the failure this avoids: a stale mapping faults far from here. */
 #define DPMI_S2D_MAX 64
-static WORD g_s2d_seg[DPMI_S2D_MAX], g_s2d_sel[DPMI_S2D_MAX];
-static int  g_s2d_n = 0;
+static WORD g_SegmentToDescriptorSegment[DPMI_S2D_MAX], g_SegmentToDescriptorSelector[DPMI_S2D_MAX];
+static int  g_SegmentToDescriptorCount = 0;
 
-static WORD dpmi_seg_to_desc(WORD seg)
+static WORD DpmiSegmentToDescriptor(WORD segment)
 {
-    int i, idx;
-    for (i = 0; i < g_s2d_n; ++i) if (g_s2d_seg[i] == seg) return g_s2d_sel[i];
+    int index, ldtIndex;
+    for (index = 0; index < g_SegmentToDescriptorCount; ++index) if (g_SegmentToDescriptorSegment[index] == segment) return g_SegmentToDescriptorSelector[index];
     /* ★ THE HOST-PRIVATE POOL, and this is the call that proved it necessary --
          krnl386 keeps the selector this returns for the life of the VDM. */
-    idx = dpmi_host_idx();
-    if (idx < 0) return 0;
-    g_Ldt[idx].Base   = (DWORD)seg << 4;
-    g_Ldt[idx].Limit  = 0xFFFF;
-    g_Ldt[idx].Access = 0xF2;                /* present, DPL3, data, read/write */
-    g_Ldt[idx].Flags  = 0;                   /* 16-bit                          */
-    dpmi_install(idx);
-    if (g_s2d_n < DPMI_S2D_MAX) {
-        g_s2d_seg[g_s2d_n] = seg;
-        g_s2d_sel[g_s2d_n] = (WORD)((idx << 3) | 7);
-        ++g_s2d_n;
+    ldtIndex = DpmiHostIndex();
+    if (ldtIndex < 0) return 0;
+    g_Ldt[ldtIndex].Base   = (DWORD)segment << 4;
+    g_Ldt[ldtIndex].Limit  = 0xFFFF;
+    g_Ldt[ldtIndex].Access = 0xF2;                /* present, DPL3, data, read/write */
+    g_Ldt[ldtIndex].Flags  = 0;                   /* 16-bit                          */
+    DpmiInstall(ldtIndex);
+    if (g_SegmentToDescriptorCount < DPMI_S2D_MAX) {
+        g_SegmentToDescriptorSegment[g_SegmentToDescriptorCount] = segment;
+        g_SegmentToDescriptorSelector[g_SegmentToDescriptorCount] = (WORD)((ldtIndex << 3) | 7);
+        ++g_SegmentToDescriptorCount;
     }
-    return (WORD)((idx << 3) | 7);
+    return (WORD)((ldtIndex << 3) | 7);
 }
 
 /* ── ★ IS THIS CODE SELECTOR NOT PRESENT? (session 57) ─────────────────────────────
@@ -18025,41 +18025,41 @@ static WORD dpmi_seg_to_desc(WORD seg)
      writing CS -- see WOWCALL_RETF_OFF in wowcall.h and the CARDFILE run that named
      it. The same three lines the BOP handler's own callback path computes inline;
      one day both should read this. */
-static int WowDlgIsSelectorAbsent(WORD sel)
+static int WowDlgIsSelectorAbsent(WORD selector)
 {
-    WORD idx = (WORD)(sel >> 3);
-    return idx && idx < DPMI_LDT_MAX && !(g_Ldt[idx].Access & 0x80);
+    WORD index = (WORD)(selector >> 3);
+    return index && index < DPMI_LDT_MAX && !(g_Ldt[index].Access & 0x80);
 }
 
 /* ── ★★★ A 16-BIT CODE SELECTOR OVER THE CALLBACK RETURN STUB. (session 40) ────────
-     Not `dpmi_seg_to_desc`: that builds a DATA descriptor, and the guest has to
+     Not `DpmiSegmentToDescriptor`: that builds a DATA descriptor, and the guest has to
      EXECUTE these three bytes. The limit is one paragraph on purpose -- the stub is
      three bytes and nothing may ever be reached past it, so a stray branch into this
      selector faults here rather than running off into whatever follows. */
-static WORD wow_callback_selector(void)
+static WORD WowCallbackSelector(void)
 {
-    int idx;
+    int index;
     if (g_WowCallbackSelector) return g_WowCallbackSelector;
     if (!g_WowCallbackSegment) return 0;
-    idx = dpmi_host_idx();       /* host-private: the guest returns THROUGH this */
-    if (idx < 0) return 0;
-    g_Ldt[idx].Base   = g_WowCallbackLinear;
-    g_Ldt[idx].Limit  = 0x0F;
-    g_Ldt[idx].Access = 0xFA;                /* present, DPL3, code, readable */
-    g_Ldt[idx].Flags  = 0;                   /* 16-bit                        */
-    dpmi_install(idx);
-    g_WowCallbackSelector = (WORD)((idx << 3) | 7);
+    index = DpmiHostIndex();       /* host-private: the guest returns THROUGH this */
+    if (index < 0) return 0;
+    g_Ldt[index].Base   = g_WowCallbackLinear;
+    g_Ldt[index].Limit  = 0x0F;
+    g_Ldt[index].Access = 0xFA;                /* present, DPL3, code, readable */
+    g_Ldt[index].Flags  = 0;                   /* 16-bit                        */
+    DpmiInstall(index);
+    g_WowCallbackSelector = (WORD)((index << 3) | 7);
     return g_WowCallbackSelector;
 }
 
-static void dpmi_s2d_forget(WORD sel)
+static void DpmiSegmentToDescriptorForget(WORD selector)
 {
-    int i;
-    for (i = 0; i < g_s2d_n; ++i)
-        if (g_s2d_sel[i] == sel) {
-            g_s2d_seg[i] = g_s2d_seg[g_s2d_n - 1];
-            g_s2d_sel[i] = g_s2d_sel[g_s2d_n - 1];
-            --g_s2d_n;
+    int index;
+    for (index = 0; index < g_SegmentToDescriptorCount; ++index)
+        if (g_SegmentToDescriptorSelector[index] == selector) {
+            g_SegmentToDescriptorSegment[index] = g_SegmentToDescriptorSegment[g_SegmentToDescriptorCount - 1];
+            g_SegmentToDescriptorSelector[index] = g_SegmentToDescriptorSelector[g_SegmentToDescriptorCount - 1];
+            --g_SegmentToDescriptorCount;
             return;
         }
 }
@@ -18075,28 +18075,28 @@ static void dpmi_s2d_forget(WORD sel)
      and compare. Same code, same moment, one variable: which kind of launch this is.
      That is the only way to tell "NtSetLdtEntries needs more VDM setup" apart from
      "a WOW launch leaves the process in a different state". */
-static void wow_probe_ldt_matrix(const char *tag)
+static void WowProbeLdtMatrix(const char *tag)
 {
-    static const struct { const char *what; DWORD Base, Limit; BYTE acc, Flags; int idx; }
-    T[] = {
+    static const struct { const char *Description; DWORD Base, Limit; BYTE Access, Flags; int Index; }
+    cases[] = {
         { "idx3  code small",  0x10000, 0x0FFF, 0xFA, 0, 3  },
         { "idx8  code small",  0x10000, 0x0FFF, 0xFA, 0, 8  },
         { "idx8  data small",  0x10000, 0x0FFF, 0xF2, 0, 8  },
         { "idx9  data 64K",    0x10000, 0xFFFF, 0xF2, 0, 9  },
     };
-    char m[300], *q;
-    size_t t;
-    for (t = 0; t < sizeof T / sizeof T[0]; ++t) {
-        DWORD lo, hi; LONG st;
-        WORD sel = (WORD)((T[t].idx << 3) | 7);
-        DpmiBuildDescriptor(T[t].Base, T[t].Limit, T[t].acc, T[t].Flags, &lo, &hi);
-        st = VdmInstallLdtEntries(sel, lo, hi, sel, lo, hi);
-        q = m;
-        q = LogPut(q, "LDTPROBE["); q = LogPut(q, tag);
-        q = LogPut(q, "] ");       q = LogPut(q, T[t].what);
-        q = LogPut(q, " sel=0x");  q = LogHex(q, sel);
-        q = LogPut(q, " -> st=0x");q = LogHex(q, (DWORD)st);
-        q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
+    char message[300], *cursor;
+    size_t caseIndex;
+    for (caseIndex = 0; caseIndex < sizeof cases / sizeof cases[0]; ++caseIndex) {
+        DWORD low, high; LONG status;
+        WORD selector = (WORD)((cases[caseIndex].Index << 3) | 7);
+        DpmiBuildDescriptor(cases[caseIndex].Base, cases[caseIndex].Limit, cases[caseIndex].Access, cases[caseIndex].Flags, &low, &high);
+        status = VdmInstallLdtEntries(selector, low, high, selector, low, high);
+        cursor = message;
+        cursor = LogPut(cursor, "LDTPROBE["); cursor = LogPut(cursor, tag);
+        cursor = LogPut(cursor, "] ");       cursor = LogPut(cursor, cases[caseIndex].Description);
+        cursor = LogPut(cursor, " sel=0x");  cursor = LogHex(cursor, selector);
+        cursor = LogPut(cursor, " -> st=0x");cursor = LogHex(cursor, (DWORD)status);
+        cursor = LogPut(cursor, "\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
     }
 }
 
@@ -18162,23 +18162,23 @@ static void wow_probe_ldt_matrix(const char *tag)
          verify both probes installed before the search runs. Otherwise a refused
          descriptor and an unmappable table produce the same log line -- and one of
          those is a conclusion about Windows while the other is a bug in here. */
-static DWORD g_wow_ldt_base = 0;
+static DWORD g_WowLdtBase = 0;
 
-static int wow_ldt_peek(DWORD lin, DWORD lo, DWORD hi)
+static int WowLdtPeek(DWORD linear, DWORD low, DWORD high)
 {
-    const volatile DWORD *d = (const volatile DWORD *)(ULONG_PTR)lin;
-    return d[0] == lo && d[1] == hi;
+    const volatile DWORD *descriptor = (const volatile DWORD *)(ULONG_PTR)linear;
+    return descriptor[0] == low && descriptor[1] == high;
 }
 
-static DWORD wow_find_ldt_base(void)
+static DWORD WowFindLdtBase(void)
 {
     MEMORY_BASIC_INFORMATION mbi;
-    DWORD lo1, hi1, lo2, hi2;
-    int i1, i2;
+    DWORD low1, high1, low2, high2;
+    int index1, index2;
     BYTE *addr = NULL;
-    char m[320], *q;
+    char message[320], *cursor;
 
-    if (g_wow_ldt_base) return g_wow_ldt_base;
+    if (g_WowLdtBase) return g_WowLdtBase;
     if (g_LdtNext + 2 >= DPMI_LDT_MAX) return 0;
 
     /* Two probes, distinctive and different. ⚠ BOTH bases must sit under
@@ -18186,10 +18186,10 @@ static DWORD wow_find_ldt_base(void)
        the search can never find what was never installed. The first cut used
        0xA5A52000 -- 2.77GB -- and reported "not found" for that reason alone: a false
        negative dressed as a finding, with the cap documented a few hundred lines up. */
-    i1 = g_LdtNext++;
-    g_Ldt[i1].Base = 0x5A5A1000; g_Ldt[i1].Limit = 0x0123;
-    g_Ldt[i1].Access = 0xF2;     g_Ldt[i1].Flags = 0;
-    dpmi_install(i1);
+    index1 = g_LdtNext++;
+    g_Ldt[index1].Base = 0x5A5A1000; g_Ldt[index1].Limit = 0x0123;
+    g_Ldt[index1].Access = 0xF2;     g_Ldt[index1].Flags = 0;
+    DpmiInstall(index1);
     /* ⚠ NOT CONSECUTIVE, AND THAT IS THE WHOLE POINT. The first cut used i1 and i1+1,
        "confirmed" a hit, and reported a table base -- which MOVED between two runs
        while the winning address stayed at 0x02219018. Two consecutive descriptors sit
@@ -18198,28 +18198,28 @@ static DWORD wow_find_ldt_base(void)
        matching the buffer. A five-slot gap is 40 bytes in a table and still 8 in the
        buffer, so only a real table can satisfy it. */
     g_LdtNext += 4;                        /* leave a gap between the two probes */
-    i2 = g_LdtNext++;
-    g_Ldt[i2].Base = 0x3C3C2000; g_Ldt[i2].Limit = 0x0456;
-    g_Ldt[i2].Access = 0xF2;     g_Ldt[i2].Flags = 0;
-    dpmi_install(i2);
-    DpmiBuildDescriptor(g_Ldt[i1].Base, g_Ldt[i1].Limit, 0xF2, 0, &lo1, &hi1);
-    DpmiBuildDescriptor(g_Ldt[i2].Base, g_Ldt[i2].Limit, 0xF2, 0, &lo2, &hi2);
+    index2 = g_LdtNext++;
+    g_Ldt[index2].Base = 0x3C3C2000; g_Ldt[index2].Limit = 0x0456;
+    g_Ldt[index2].Access = 0xF2;     g_Ldt[index2].Flags = 0;
+    DpmiInstall(index2);
+    DpmiBuildDescriptor(g_Ldt[index1].Base, g_Ldt[index1].Limit, 0xF2, 0, &low1, &high1);
+    DpmiBuildDescriptor(g_Ldt[index2].Base, g_Ldt[index2].Limit, 0xF2, 0, &low2, &high2);
 
-    {   WORD s1 = (WORD)((i1 << 3) | 7), s2 = (WORD)((i2 << 3) | 7);
-        DWORD a1 = 0, a2 = 0;
-        unsigned char z1 = 0, z2 = 0;
-        __asm__ __volatile__("lar %2, %0\n\tsetz %1" : "=r"(a1), "=q"(z1) : "r"(s1) : "cc");
-        __asm__ __volatile__("lar %2, %0\n\tsetz %1" : "=r"(a2), "=q"(z2) : "r"(s2) : "cc");
-        q = m;
-        q = LogPut(q, "WOWLDT: probes idx 0x"); q = LogHex(q, (DWORD)i1);
-        q = LogPut(q, z1 ? " LAR ok ar=0x" : " LAR FAILED ar=0x"); q = LogHex(q, a1);
-        q = LogPut(q, " | idx 0x"); q = LogHex(q, (DWORD)i2);
-        q = LogPut(q, z2 ? " LAR ok ar=0x" : " LAR FAILED ar=0x"); q = LogHex(q, a2);
-        q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
-        if (!z1 || !z2) {
-            q = m; q = LogPut(q, "WOWLDT: a probe did NOT install -- search skipped, a "
+    {   WORD selector1 = (WORD)((index1 << 3) | 7), selector2 = (WORD)((index2 << 3) | 7);
+        DWORD access1 = 0, access2 = 0;
+        unsigned char isValid1 = 0, isValid2 = 0;
+        __asm__ __volatile__("lar %2, %0\n\tsetz %1" : "=r"(access1), "=q"(isValid1) : "r"(selector1) : "cc");
+        __asm__ __volatile__("lar %2, %0\n\tsetz %1" : "=r"(access2), "=q"(isValid2) : "r"(selector2) : "cc");
+        cursor = message;
+        cursor = LogPut(cursor, "WOWLDT: probes idx 0x"); cursor = LogHex(cursor, (DWORD)index1);
+        cursor = LogPut(cursor, isValid1 ? " LAR ok ar=0x" : " LAR FAILED ar=0x"); cursor = LogHex(cursor, access1);
+        cursor = LogPut(cursor, " | idx 0x"); cursor = LogHex(cursor, (DWORD)index2);
+        cursor = LogPut(cursor, isValid2 ? " LAR ok ar=0x" : " LAR FAILED ar=0x"); cursor = LogHex(cursor, access2);
+        cursor = LogPut(cursor, "\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
+        if (!isValid1 || !isValid2) {
+            cursor = message; cursor = LogPut(cursor, "WOWLDT: a probe did NOT install -- search skipped, a "
                                "'not found' would have meant nothing\r\n");
-            LogAppend(LDTLOG_PATH, m, q);
+            LogAppend(LDTLOG_PATH, message, cursor);
             return 0;
         }
     }
@@ -18231,23 +18231,23 @@ static DWORD wow_find_ldt_base(void)
                 || prot == PAGE_WRITECOPY || prot == PAGE_EXECUTE_READ
                 || prot == PAGE_EXECUTE_READWRITE || prot == PAGE_EXECUTE_WRITECOPY);
         if (readable) {
-            DWORD b = (DWORD)(ULONG_PTR)mbi.BaseAddress, n = (DWORD)mbi.RegionSize, o;
-            for (o = 0; o + 8 <= n; o += 8) {          /* descriptors are 8-aligned */
-                DWORD cand = b + o;
-                if (!wow_ldt_peek(cand, lo1, hi1)) continue;
-                {   DWORD tbase = cand - (DWORD)i1 * 8;
-                    DWORD other = tbase + (DWORD)i2 * 8;
-                    if (other < b || other + 8 > b + n) continue;   /* same region only */
-                    if (!wow_ldt_peek(other, lo2, hi2)) continue;   /* one hit is chance */
-                    g_wow_ldt_base = tbase;
-                    q = m;
-                    q = LogPut(q, "WOWLDT: descriptor table FOUND at linear 0x");
-                    q = LogHex(q, tbase);
-                    q = LogPut(q, " (idx 0x"); q = LogHex(q, (DWORD)i1);
-                    q = LogPut(q, " at 0x"); q = LogHex(q, cand);
-                    q = LogPut(q, ", confirmed idx 0x"); q = LogHex(q, (DWORD)i2);
-                    q = LogPut(q, " at 0x"); q = LogHex(q, other);
-                    q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
+            DWORD regionBase = (DWORD)(ULONG_PTR)mbi.BaseAddress, regionSize = (DWORD)mbi.RegionSize, offset;
+            for (offset = 0; offset + 8 <= regionSize; offset += 8) {          /* descriptors are 8-aligned */
+                DWORD cand = regionBase + offset;
+                if (!WowLdtPeek(cand, low1, high1)) continue;
+                {   DWORD tbase = cand - (DWORD)index1 * 8;
+                    DWORD other = tbase + (DWORD)index2 * 8;
+                    if (other < regionBase || other + 8 > regionBase + regionSize) continue;   /* same region only */
+                    if (!WowLdtPeek(other, low2, high2)) continue;   /* one hit is chance */
+                    g_WowLdtBase = tbase;
+                    cursor = message;
+                    cursor = LogPut(cursor, "WOWLDT: descriptor table FOUND at linear 0x");
+                    cursor = LogHex(cursor, tbase);
+                    cursor = LogPut(cursor, " (idx 0x"); cursor = LogHex(cursor, (DWORD)index1);
+                    cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, cand);
+                    cursor = LogPut(cursor, ", confirmed idx 0x"); cursor = LogHex(cursor, (DWORD)index2);
+                    cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, other);
+                    cursor = LogPut(cursor, ")\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
                     return tbase;
                 }
             }
@@ -18255,14 +18255,14 @@ static DWORD wow_find_ldt_base(void)
         addr = (BYTE *)mbi.BaseAddress + mbi.RegionSize;
         if ((DWORD)(ULONG_PTR)addr >= 0x7FFF0000u) break;
     }
-    q = m; q = LogPut(q, "WOWLDT: descriptor table NOT in our own address space "
+    cursor = message; cursor = LogPut(cursor, "WOWLDT: descriptor table NOT in our own address space "
                        "(probes verified installed) -- a real LDT window is not "
                        "available this way\r\n");
-    LogAppend(LDTLOG_PATH, m, q);
+    LogAppend(LDTLOG_PATH, message, cursor);
     return 0;
 }
 
-static NE_REGISTRY g_wow_reg;
+static NE_REGISTRY g_WowRegistry;
 
 /* ── WOW ENTRY STAGE: put krnl386 in CONVENTIONAL memory and relocate to PARAGRAPHS. ─
      This, not the selector stage below, is how krnl386 is actually entered -- see the
@@ -18279,7 +18279,7 @@ static NE_REGISTRY g_wow_reg;
 
    Returns 0 and fills the entry registers. krnl386 imports from nothing, so no
    importer callback is needed here; user/gdi come later and will need one. */
-static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
+static int WowPlaceV86(DOS_MACHINE *machine, WORD *ecs, WORD *eip,
                          WORD *eds, WORD *ess, WORD *esp)
 {
     /* krnl386 is a LIBRARY: SS:SP = 0:0 and stack = 0 in the header, so nothing tells
@@ -18316,8 +18316,8 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
          read whatever followed and decoded it as relocation records, which is exactly
          the failure session 32 bracketed to the instruction.
        ⇒ Stage all of it. The size is the file's, so it is computed, not a constant. */
-    WORD  hdrimg_paras;                          /* whole image, in paragraphs */
-    WORD  window_paras;                          /* what the block must really cover */
+    WORD  hdrimgParas;                          /* whole image, in paragraphs */
+    WORD  windowParas;                          /* what the block must really cover */
     /* ── ★★★ AND THE WHOLE 64 KB OF IT MUST BE OURS TO GIVE. ───────────────────────
          krnl386 builds a SIXTY-FOUR KILOBYTE selector over `base(SS) + SP` (observed in
          the LDT) and treats everything above the header image as its scratch arena -- we even
@@ -18346,19 +18346,19 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
          and it is the thing that has to be real memory; the staged image may now be
          LARGER than it (krnl386's is 0x1644 paragraphs), in which case the image wins. */
     enum { WOW_SELECTOR_PARAS = 0x1000 };        /* 64 KB -- the whole scratch selector */
-    NE_MODULE *ne = &g_WowModule[0];
-    uint8_t *img = g_WowImage[0];
-    char m[400], *q;
+    NE_MODULE *module = &g_WowModule[0];
+    uint8_t *image = g_WowImage[0];
+    char message[400], *cursor;
     WORD sseg = 0, smax = 0;
     DWORD imglen;
-    int i;
+    int index;
 
-    if (!g_WowModuleCount || !img) return -1;
+    if (!g_WowModuleCount || !image) return -1;
 
-    imglen        = ne->ImageLength > ne->Header ? ne->ImageLength - ne->Header : 0;
-    hdrimg_paras  = (WORD)((imglen + 15u) >> 4);
-    window_paras  = hdrimg_paras > (WORD)WOW_SELECTOR_PARAS
-                  ? hdrimg_paras : (WORD)WOW_SELECTOR_PARAS;
+    imglen        = module->ImageLength > module->Header ? module->ImageLength - module->Header : 0;
+    hdrimgParas  = (WORD)((imglen + 15u) >> 4);
+    windowParas  = hdrimgParas > (WORD)WOW_SELECTOR_PARAS
+                  ? hdrimgParas : (WORD)WOW_SELECTOR_PARAS;
 
     /* ── SHRINK THE PROGRAM BLOCK FIRST, OR THERE IS NOTHING TO ALLOCATE. ───────────
          DosMcbInitialize lays out one 'Z' block covering all 0x9F00 paragraphs of
@@ -18372,11 +18372,11 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
        -- so the block can go back to just the PSP. Doing this through DosMcbResize()
        rather than poking the chain keeps the MCB invariants (and DosMcbCheckChain) true. */
     {   WORD rmax = 0;
-        int rr = DosMcbResize(NULL, DOS_PSP_SEG, 0x40, &rmax);
-        q = m;
-        q = LogPut(q, "WOWV86: shrink PSP block to 0x40 paras -> rc=");
-        q = LogHex(q, (DWORD)rr); q = LogPut(q, " max=0x"); q = LogHex(q, rmax);
-        q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
+        int resizeResult = DosMcbResize(NULL, DOS_PSP_SEG, 0x40, &rmax);
+        cursor = message;
+        cursor = LogPut(cursor, "WOWV86: shrink PSP block to 0x40 paras -> rc=");
+        cursor = LogHex(cursor, (DWORD)resizeResult); cursor = LogPut(cursor, " max=0x"); cursor = LogHex(cursor, rmax);
+        cursor = LogPut(cursor, "\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
     }
 
     /* ── THE PM->V86 TRANSFER BUFFER, BEFORE krnl386 TAKES THE REST. ───────────────
@@ -18394,13 +18394,13 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
          in the middle of krnl386's scratch and was read back as an NE header. Host
          memory belongs below the guest's, not in the middle of it. */
     {   WORD hseg = 0, hmax = 0;
-        if (DosMcbAllocate(NULL, mp->FirstMcb, WOW_HOSTPOOL_PARAS, &hseg, &hmax) == 0 && hseg)
+        if (DosMcbAllocate(NULL, machine->FirstMcb, WOW_HOSTPOOL_PARAS, &hseg, &hmax) == 0 && hseg)
             g_WowPoolSegment = hseg;
-        q = m; q = LogPut(q, "WOWV86: host pool reserved at para 0x");
-        q = LogHex(q, g_WowPoolSegment); q = LogPut(q, " size 0x");
-        q = LogHex(q, (DWORD)WOW_HOSTPOOL_PARAS);
-        q = LogPut(q, " paras (see wow_host_alloc)\r\n");
-        LogAppend(LDTLOG_PATH, m, q);
+        cursor = message; cursor = LogPut(cursor, "WOWV86: host pool reserved at para 0x");
+        cursor = LogHex(cursor, g_WowPoolSegment); cursor = LogPut(cursor, " size 0x");
+        cursor = LogHex(cursor, (DWORD)WOW_HOSTPOOL_PARAS);
+        cursor = LogPut(cursor, " paras (see wow_host_alloc)\r\n");
+        LogAppend(LDTLOG_PATH, message, cursor);
     }
     /* ── ★ THE SFT CHAIN, OR krnl386 WALKS THE IVT FOREVER. (GH #128) ─────────────
          See the DOS_SFT_* block in dos_layout.h for what this is built against.
@@ -18413,36 +18413,36 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
          gets SysVars+4 = 0 -- unchanged, and the reason no DOS guest has ever been
          affected by this. When a DOS program needs the SFT, this moves. */
     {   WORD sft = WowHostAllocate(DOS_SFT_PARAS);
-        volatile BYTE *sv = (volatile BYTE *)(ULONG_PTR)
+        volatile BYTE *sysVars = (volatile BYTE *)(ULONG_PTR)
                             (((DWORD)DOS_SYSVARS_SEG << 4) + DOS_SYSVARS_OFF);
-        q = m; q = LogPut(q, "WOWV86: SFT ");
+        cursor = message; cursor = LogPut(cursor, "WOWV86: SFT ");
         if (!sft) {
-            q = LogPut(q, "NOT ALLOCATED -- host pool exhausted; krnl386 will spin on "
+            cursor = LogPut(cursor, "NOT ALLOCATED -- host pool exhausted; krnl386 will spin on "
                         "SysVars+4 = 0000:0000\r\n");
         } else {
-            volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)((DWORD)sft << 4);
-            unsigned k;
-            for (k = 0; k < (unsigned)DOS_SFT_BYTES; ++k) b[k] = 0;
-            *(volatile WORD *)(b + 0) = 0xFFFF;              /* next offset: last block */
-            *(volatile WORD *)(b + 2) = 0xFFFF;              /* next segment            */
-            *(volatile WORD *)(b + 4) = DOS_SFT_ENTRIES;     /* entries in this block   */
-            *(volatile WORD *)(sv + 4) = 0;                  /* SysVars+4 = offset      */
-            *(volatile WORD *)(sv + 6) = sft;                /* SysVars+6 = segment     */
-            q = LogPut(q, "at 0x"); q = LogHex(q, sft);
-            q = LogPut(q, ":0000, "); q = LogHex(q, (DWORD)DOS_SFT_ENTRIES);
-            q = LogPut(q, " entries, next=FFFF:FFFF -> SysVars+4\r\n");
+            volatile BYTE *sftBlock = (volatile BYTE *)(ULONG_PTR)((DWORD)sft << 4);
+            unsigned byteIndex;
+            for (byteIndex = 0; byteIndex < (unsigned)DOS_SFT_BYTES; ++byteIndex) sftBlock[byteIndex] = 0;
+            *(volatile WORD *)(sftBlock + 0) = 0xFFFF;              /* next offset: last block */
+            *(volatile WORD *)(sftBlock + 2) = 0xFFFF;              /* next segment            */
+            *(volatile WORD *)(sftBlock + 4) = DOS_SFT_ENTRIES;     /* entries in this block   */
+            *(volatile WORD *)(sysVars + 4) = 0;                  /* SysVars+4 = offset      */
+            *(volatile WORD *)(sysVars + 6) = sft;                /* SysVars+6 = segment     */
+            cursor = LogPut(cursor, "at 0x"); cursor = LogHex(cursor, sft);
+            cursor = LogPut(cursor, ":0000, "); cursor = LogHex(cursor, (DWORD)DOS_SFT_ENTRIES);
+            cursor = LogPut(cursor, " entries, next=FFFF:FFFF -> SysVars+4\r\n");
         }
-        LogAppend(LDTLOG_PATH, m, q);
+        LogAppend(LDTLOG_PATH, message, cursor);
     }
     {   WORD xseg = 0, xmax = 0;
-        if (DosMcbAllocate(NULL, mp->FirstMcb, 0x400, &xseg, &xmax) == 0 && xseg) {
+        if (DosMcbAllocate(NULL, machine->FirstMcb, 0x400, &xseg, &xmax) == 0 && xseg) {
             g_PmTransferSegment = xseg; g_PmTransferParagraphs = 0x400;
         }
-        q = m;
-        q = LogPut(q, "WOWV86: PM->V86 transfer buffer at para 0x"); q = LogHex(q, g_PmTransferSegment);
-        q = LogPut(q, " (0x"); q = LogHex(q, (DWORD)g_PmTransferParagraphs * 16u);
-        q = LogPut(q, " bytes; largest free was 0x"); q = LogHex(q, xmax);
-        q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
+        cursor = message;
+        cursor = LogPut(cursor, "WOWV86: PM->V86 transfer buffer at para 0x"); cursor = LogHex(cursor, g_PmTransferSegment);
+        cursor = LogPut(cursor, " (0x"); cursor = LogHex(cursor, (DWORD)g_PmTransferParagraphs * 16u);
+        cursor = LogPut(cursor, " bytes; largest free was 0x"); cursor = LogHex(cursor, xmax);
+        cursor = LogPut(cursor, ")\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
     }
     /* ── ★ A SEPARATE PARAGRAPH FOR RESOLVED MODULE PATHS (WOW32 0xc5). ─────────
          Deliberately NOT the transfer buffer above. 0xc5 hands krnl386 a far
@@ -18452,12 +18452,12 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
          that the very next call overwrites, and the corruption would surface as
          a wrong filename somewhere far from here. One paragraph, one purpose. */
     {   WORD pseg = 0, pmax = 0;
-        if (DosMcbAllocate(NULL, mp->FirstMcb, 0x20, &pseg, &pmax) == 0 && pseg)
+        if (DosMcbAllocate(NULL, machine->FirstMcb, 0x20, &pseg, &pmax) == 0 && pseg)
             g_WowPathSegment = pseg;
-        q = m;
-        q = LogPut(q, "WOWV86: module-path scratch at para 0x"); q = LogHex(q, g_WowPathSegment);
-        q = LogPut(q, " (0x200 bytes; largest free was 0x"); q = LogHex(q, pmax);
-        q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
+        cursor = message;
+        cursor = LogPut(cursor, "WOWV86: module-path scratch at para 0x"); cursor = LogHex(cursor, g_WowPathSegment);
+        cursor = LogPut(cursor, " (0x200 bytes; largest free was 0x"); cursor = LogHex(cursor, pmax);
+        cursor = LogPut(cursor, ")\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
     }
     /* ── ★ AND ONE FOR A LAUNCHED TASK'S ENVIRONMENT (WOW32 seg2 0xd1). ────────
          Allocated here, with the others, because after this function hands the
@@ -18465,13 +18465,13 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
          WowHostAllocate. Separate again: this one is held by the child for its
          whole life, and both buffers above are reused on the very next call. */
     {   WORD eseg = 0, emax = 0;
-        if (DosMcbAllocate(NULL, mp->FirstMcb, WOW_ENV_PARAS, &eseg, &emax) == 0 && eseg)
+        if (DosMcbAllocate(NULL, machine->FirstMcb, WOW_ENV_PARAS, &eseg, &emax) == 0 && eseg)
             g_WowEnvironmentSegment = eseg;
-        q = m;
-        q = LogPut(q, "WOWV86: task-environment block at para 0x"); q = LogHex(q, g_WowEnvironmentSegment);
-        q = LogPut(q, " (0x"); q = LogHex(q, (DWORD)WOW_ENV_PARAS * 16u);
-        q = LogPut(q, " bytes; largest free was 0x"); q = LogHex(q, emax);
-        q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
+        cursor = message;
+        cursor = LogPut(cursor, "WOWV86: task-environment block at para 0x"); cursor = LogHex(cursor, g_WowEnvironmentSegment);
+        cursor = LogPut(cursor, " (0x"); cursor = LogHex(cursor, (DWORD)WOW_ENV_PARAS * 16u);
+        cursor = LogPut(cursor, " bytes; largest free was 0x"); cursor = LogHex(cursor, emax);
+        cursor = LogPut(cursor, ")\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
     }
     /* ── ★★★ THREE BYTES THAT LET THE HOST CALL 16-BIT CODE. (session 40) ──────
          The whole of the return path is `C4 C4 57`: we push its address as the
@@ -18485,37 +18485,37 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
          code descriptor over it is only useful once there is an LDT to put it
          in, so it is built at the first callback and cached. */
     {   WORD cseg = 0, cmax = 0;
-        if (DosMcbAllocate(NULL, mp->FirstMcb, 1, &cseg, &cmax) == 0 && cseg) {
-            volatile BYTE *cb = (volatile BYTE *)(ULONG_PTR)((DWORD)cseg << 4);
+        if (DosMcbAllocate(NULL, machine->FirstMcb, 1, &cseg, &cmax) == 0 && cseg) {
+            volatile BYTE *callStub = (volatile BYTE *)(ULONG_PTR)((DWORD)cseg << 4);
             g_WowCallbackSegment = cseg;
             g_WowCallbackLinear = (DWORD)cseg << 4;
-            cb[0] = 0xC4; cb[1] = 0xC4; cb[2] = WOWCALL_BOP_CODE;
+            callStub[0] = 0xC4; callStub[1] = 0xC4; callStub[2] = WOWCALL_BOP_CODE;
             /* ★ And the RETF trampoline, four bytes along -- the paragraph has
                  sixteen and we were using three. See WOWCALL_RETF_OFF: it is how
                  a call into a NOT-YET-LOADED code segment gets that segment
                  loaded, by faulting the way the guest's own far calls do. */
-            cb[WOWCALL_RETF_OFF] = WOWCALL_RETF_BYTE;
+            callStub[WOWCALL_RETF_OFF] = WOWCALL_RETF_BYTE;
         }
-        q = m;
-        q = LogPut(q, "WOWV86: 16-bit callback return stub at para 0x");
-        q = LogHex(q, g_WowCallbackSegment);
-        q = LogPut(q, " (C4 C4 "); q = LogHexByte(q, WOWCALL_BOP_CODE);
-        q = LogPut(q, "; largest free was 0x"); q = LogHex(q, cmax);
-        q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
+        cursor = message;
+        cursor = LogPut(cursor, "WOWV86: 16-bit callback return stub at para 0x");
+        cursor = LogHex(cursor, g_WowCallbackSegment);
+        cursor = LogPut(cursor, " (C4 C4 "); cursor = LogHexByte(cursor, WOWCALL_BOP_CODE);
+        cursor = LogPut(cursor, "; largest free was 0x"); cursor = LogHex(cursor, cmax);
+        cursor = LogPut(cursor, ")\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
     }
 
-    for (i = 0; i < (int)ne->SegmentCount; ++i) {
-        NE_SEGMENT *s = &ne->Segments[i];
-        uint32_t need = NeSegmentAllocSize(s), k;
-        WORD seg = 0, max = 0;
-        volatile BYTE *dst;
+    for (index = 0; index < (int)module->SegmentCount; ++index) {
+        NE_SEGMENT *neSegment = &module->Segments[index];
+        uint32_t need = NeSegmentAllocSize(neSegment), byteIndex;
+        WORD segment = 0, maximum = 0;
+        volatile BYTE *destination;
         /* Room for the relocation records copied in below -- krnl386 reads them back
            out of the loaded segment, so they are part of what has to be resident. */
-        if (s->Sector && (s->Flags & NE_SEG_RELOCS)) {
-            uint32_t ro = s->FileOffset + s->Length;
-            if (ro + 2 <= ne->ImageLength) {
-                uint32_t rb = 2 + (uint32_t)(img[ro] | (img[ro + 1] << 8)) * 8;
-                if (s->Length + rb > need) need = s->Length + rb;
+        if (neSegment->Sector && (neSegment->Flags & NE_SEG_RELOCS)) {
+            uint32_t relocationOffset = neSegment->FileOffset + neSegment->Length;
+            if (relocationOffset + 2 <= module->ImageLength) {
+                uint32_t relocationBytes = 2 + (uint32_t)(image[relocationOffset] | (image[relocationOffset + 1] << 8)) * 8;
+                if (neSegment->Length + relocationBytes > need) need = neSegment->Length + relocationBytes;
             }
         }
         /* ── DGROUP IS BIGGER THAN THE SEGMENT IN THE FILE. ────────────────────────
@@ -18526,29 +18526,29 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
              fields have to be added here. krnl386 asks for heap 0x200 and got none,
              which left its DGROUP exactly as large as its initialised data: any local
              allocation would have run off the end of the segment. */
-        if (ne->AutoData && i == (int)ne->AutoData - 1) {
-            uint32_t dg = need + ne->Heap + ne->Stack;
-            if (dg > 0x10000u) dg = 0x10000u;
-            if (dg > need) {
-                q = m;
-                q = LogPut(q, "WOWV86: DGROUP (seg "); q = LogHex(q, (DWORD)(i + 1));
-                q = LogPut(q, ") 0x");        q = LogHex(q, need);
-                q = LogPut(q, " + heap 0x");  q = LogHex(q, ne->Heap);
-                q = LogPut(q, " + stack 0x"); q = LogHex(q, ne->Stack);
-                q = LogPut(q, " = 0x");       q = LogHex(q, dg);
-                q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
-                need = dg;
+        if (module->AutoData && index == (int)module->AutoData - 1) {
+            uint32_t dgroupSize = need + module->Heap + module->Stack;
+            if (dgroupSize > 0x10000u) dgroupSize = 0x10000u;
+            if (dgroupSize > need) {
+                cursor = message;
+                cursor = LogPut(cursor, "WOWV86: DGROUP (seg "); cursor = LogHex(cursor, (DWORD)(index + 1));
+                cursor = LogPut(cursor, ") 0x");        cursor = LogHex(cursor, need);
+                cursor = LogPut(cursor, " + heap 0x");  cursor = LogHex(cursor, module->Heap);
+                cursor = LogPut(cursor, " + stack 0x"); cursor = LogHex(cursor, module->Stack);
+                cursor = LogPut(cursor, " = 0x");       cursor = LogHex(cursor, dgroupSize);
+                cursor = LogPut(cursor, "\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
+                need = dgroupSize;
             }
         }
-        if (DosMcbAllocate(NULL, mp->FirstMcb, (WORD)((need + 15) >> 4), &seg, &max) || !seg) {
-            q = m; q = LogPut(q, "WOWV86: no conventional memory for seg ");
-            q = LogHex(q, (DWORD)(i + 1)); q = LogPut(q, ", largest free 0x"); q = LogHex(q, max);
-            q = LogPut(q, " paras\r\n"); LogAppend(LDTLOG_PATH, m, q);
+        if (DosMcbAllocate(NULL, machine->FirstMcb, (WORD)((need + 15) >> 4), &segment, &maximum) || !segment) {
+            cursor = message; cursor = LogPut(cursor, "WOWV86: no conventional memory for seg ");
+            cursor = LogHex(cursor, (DWORD)(index + 1)); cursor = LogPut(cursor, ", largest free 0x"); cursor = LogHex(cursor, maximum);
+            cursor = LogPut(cursor, " paras\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
             return -1;
         }
-        dst = (volatile BYTE *)(ULONG_PTR)((DWORD)seg << 4);
-        for (k = 0; k < need; ++k) dst[k] = 0;
-        if (s->Sector) for (k = 0; k < s->Length; ++k) dst[k] = img[s->FileOffset + k];
+        destination = (volatile BYTE *)(ULONG_PTR)((DWORD)segment << 4);
+        for (byteIndex = 0; byteIndex < need; ++byteIndex) destination[byteIndex] = 0;
+        if (neSegment->Sector) for (byteIndex = 0; byteIndex < neSegment->Length; ++byteIndex) destination[byteIndex] = image[neSegment->FileOffset + byteIndex];
         /* ── ★ AND THE RELOCATION RECORDS, WHICH LIVE AFTER THE SEGMENT DATA. ──────
              An NE segment with NE_SEG_RELOCS is followed in the FILE by a WORD count
              and that many 8-byte records. A conventional loader applies them and
@@ -18561,33 +18561,33 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
              module that imports from nothing, so the import lookup failed and
              LoadSegment failed. Bracketed with breakpoints; see session 31 part 20.
            So copy them too, and size the block to hold them. */
-        if (s->Sector && (s->Flags & NE_SEG_RELOCS)) {
-            uint32_t ro = s->FileOffset + s->Length;
-            if (ro + 2 <= ne->ImageLength) {
-                uint32_t nrel = (uint32_t)(img[ro] | (img[ro + 1] << 8));
-                uint32_t rb   = 2 + nrel * 8;
-                if (ro + rb <= ne->ImageLength && s->Length + rb <= need)
-                    for (k = 0; k < rb; ++k) dst[s->Length + k] = img[ro + k];
-                q = m;
-                q = LogPut(q, "WOWV86:   + "); q = LogHex(q, nrel);
-                q = LogPut(q, " relocation records ("); q = LogHex(q, rb);
-                q = LogPut(q, " bytes) at segment offset 0x"); q = LogHex(q, s->Length);
-                q = LogPut(q, (s->Length + rb <= need) ? "\r\n"
+        if (neSegment->Sector && (neSegment->Flags & NE_SEG_RELOCS)) {
+            uint32_t relocationOffset = neSegment->FileOffset + neSegment->Length;
+            if (relocationOffset + 2 <= module->ImageLength) {
+                uint32_t nrel = (uint32_t)(image[relocationOffset] | (image[relocationOffset + 1] << 8));
+                uint32_t relocationBytes   = 2 + nrel * 8;
+                if (relocationOffset + relocationBytes <= module->ImageLength && neSegment->Length + relocationBytes <= need)
+                    for (byteIndex = 0; byteIndex < relocationBytes; ++byteIndex) destination[neSegment->Length + byteIndex] = image[relocationOffset + byteIndex];
+                cursor = message;
+                cursor = LogPut(cursor, "WOWV86:   + "); cursor = LogHex(cursor, nrel);
+                cursor = LogPut(cursor, " relocation records ("); cursor = LogHex(cursor, relocationBytes);
+                cursor = LogPut(cursor, " bytes) at segment offset 0x"); cursor = LogHex(cursor, neSegment->Length);
+                cursor = LogPut(cursor, (neSegment->Length + relocationBytes <= need) ? "\r\n"
                                                      : " -- ⚠ DOES NOT FIT\r\n");
-                LogAppend(LDTLOG_PATH, m, q);
+                LogAppend(LDTLOG_PATH, message, cursor);
             }
         }
-        s->Memory = (uint8_t *)(ULONG_PTR)((DWORD)seg << 4);   /* relocate in place */
-        s->Selector = seg;                                        /* a PARAGRAPH now     */
+        neSegment->Memory = (uint8_t *)(ULONG_PTR)((DWORD)segment << 4);   /* relocate in place */
+        neSegment->Selector = segment;                                        /* a PARAGRAPH now     */
 
-        q = m;
-        q = LogPut(q, "WOWV86: seg ");   q = LogHex(q, (DWORD)(i + 1));
-        q = LogPut(q, (s->Flags & NE_SEG_DATA) ? " DATA" : " CODE");
-        q = LogPut(q, " len=0x");        q = LogHex(q, s->Length);
-        q = LogPut(q, " alloc=0x");      q = LogHex(q, need);
-        q = LogPut(q, " -> para 0x");    q = LogHex(q, seg);
-        q = LogPut(q, " (linear 0x");    q = LogHex(q, (DWORD)seg << 4);
-        q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
+        cursor = message;
+        cursor = LogPut(cursor, "WOWV86: seg ");   cursor = LogHex(cursor, (DWORD)(index + 1));
+        cursor = LogPut(cursor, (neSegment->Flags & NE_SEG_DATA) ? " DATA" : " CODE");
+        cursor = LogPut(cursor, " len=0x");        cursor = LogHex(cursor, neSegment->Length);
+        cursor = LogPut(cursor, " alloc=0x");      cursor = LogHex(cursor, need);
+        cursor = LogPut(cursor, " -> para 0x");    cursor = LogHex(cursor, segment);
+        cursor = LogPut(cursor, " (linear 0x");    cursor = LogHex(cursor, (DWORD)segment << 4);
+        cursor = LogPut(cursor, ")\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
     }
 
     /* ── ★★★ WE DO NOT RELOCATE krnl386. IT RELOCATES ITSELF, AND ONLY IT CAN. ──────
@@ -18626,11 +18626,11 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
 
        ⚠ NeApplyRelocations is UNCHANGED and still used for the selector-stage load and by
          all 209 NE checks; it is only this V86 entry stage that must not run it. */
-    ne->Sites = 0;
-    q = m;
-    q = LogPut(q, "WOWV86: NOT relocating -- the chains are left intact for krnl386's own "
+    module->Sites = 0;
+    cursor = message;
+    cursor = LogPut(cursor, "WOWV86: NOT relocating -- the chains are left intact for krnl386's own "
                 "LoadSegment pass, which resolves to SELECTORS (see the note here)\r\n");
-    LogAppend(LDTLOG_PATH, m, q);
+    LogAppend(LDTLOG_PATH, message, cursor);
 
     /* ⚠ ONE BLOCK FOR BOTH, because DOS puts a one-paragraph MCB header between any
          two allocations and krnl386 needs the header image to be EXACTLY at
@@ -18656,34 +18656,34 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
          filler that leaves exactly this block's worth at the top, allocate, free the
          filler. The PSP block below then takes the freed region, as before. */
     {   WORD fseg = 0, fmax = 0, want;
-        (void)DosMcbAllocate(NULL, mp->FirstMcb, 0xFFFF, &fseg, &fmax);   /* ask -> largest free */
-        want = (WORD)(WOW_STACK_PARAS + window_paras);
+        (void)DosMcbAllocate(NULL, machine->FirstMcb, 0xFFFF, &fseg, &fmax);   /* ask -> largest free */
+        want = (WORD)(WOW_STACK_PARAS + windowParas);
         if (fmax > want + 2) {
             /* -1 for the MCB header DOS puts in front of the second allocation: without
                it the filler eats the paragraph the stack+window block needs and the
                allocation fails outright ("no memory for the stack + header image"). */
             WORD fill = (WORD)(fmax - want - 1);
-            if (DosMcbAllocate(NULL, mp->FirstMcb, fill, &fseg, &fmax) == 0 && fseg) {
-                q = m; q = LogPut(q, "WOWV86: filler 0x"); q = LogHex(q, fill);
-                q = LogPut(q, " paras at 0x"); q = LogHex(q, fseg);
-                q = LogPut(q, " so the stack+window lands HIGH (freed again below)\r\n");
-                LogAppend(LDTLOG_PATH, m, q);
+            if (DosMcbAllocate(NULL, machine->FirstMcb, fill, &fseg, &fmax) == 0 && fseg) {
+                cursor = message; cursor = LogPut(cursor, "WOWV86: filler 0x"); cursor = LogHex(cursor, fill);
+                cursor = LogPut(cursor, " paras at 0x"); cursor = LogHex(cursor, fseg);
+                cursor = LogPut(cursor, " so the stack+window lands HIGH (freed again below)\r\n");
+                LogAppend(LDTLOG_PATH, message, cursor);
             } else fseg = 0;
         } else fseg = 0;
-        if (DosMcbAllocate(NULL, mp->FirstMcb, (WORD)(WOW_STACK_PARAS + window_paras),
+        if (DosMcbAllocate(NULL, machine->FirstMcb, (WORD)(WOW_STACK_PARAS + windowParas),
                       &sseg, &smax) || !sseg) sseg = 0;
         if (fseg) DosMcbFree(NULL, fseg);          /* give the low region back */
     }
     if (!sseg) {
-        q = m; q = LogPut(q, "WOWV86: no memory for the stack + header image\r\n");
-        LogAppend(LDTLOG_PATH, m, q); return -1;
+        cursor = message; cursor = LogPut(cursor, "WOWV86: no memory for the stack + header image\r\n");
+        LogAppend(LDTLOG_PATH, message, cursor); return -1;
     }
     /* ZERO IT. A loader hands out clean memory, and here it is load-bearing rather
        than tidy: krnl386's scratch selector starts inside this block, and whatever
        was left in it is read back as structured data. Uninitialised memory that gets
        PARSED is a bug that reads like a guest fault. */
-    {   volatile BYTE *sb = (volatile BYTE *)(ULONG_PTR)((DWORD)sseg << 4);
-        DWORD k; for (k = 0; k < (DWORD)WOW_STACK_PARAS * 16u; ++k) sb[k] = 0; }
+    {   volatile BYTE *stackBytes = (volatile BYTE *)(ULONG_PTR)((DWORD)sseg << 4);
+        DWORD byteIndex; for (byteIndex = 0; byteIndex < (DWORD)WOW_STACK_PARAS * 16u; ++byteIndex) stackBytes[byteIndex] = 0; }
 
     /* ── ★ THE NE HEADER GOES IMMEDIATELY ABOVE THE STACK. ─────────────────────────
          krnl386 builds a selector over `base(SS) + SP` (observed in the LDT) and parses
@@ -18707,15 +18707,15 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
          to the header, so the header must land at offset 0 of the selector for any of
          them to resolve. */
     {   WORD hseg = (WORD)(sseg + WOW_STACK_PARAS);      /* same block, no MCB between */
-        DWORD hlen = ne->ImageLength > ne->Header ? ne->ImageLength - ne->Header : 0;
-        volatile BYTE *hb = (volatile BYTE *)(ULONG_PTR)((DWORD)hseg << 4);
-        DWORD k;
+        DWORD hlen = module->ImageLength > module->Header ? module->ImageLength - module->Header : 0;
+        volatile BYTE *headerBytes = (volatile BYTE *)(ULONG_PTR)((DWORD)hseg << 4);
+        DWORD byteIndex;
         /* Zero the WHOLE block, not just what the image fills: anything the image
            does not cover is krnl386's scratch, it is parsed as structured data, and
            uninitialised memory that gets parsed is a bug that reads like a guest
            fault. Then stage the file -- ALL of it; see the note on hdrimg_paras. */
-        for (k = 0; k < (DWORD)window_paras * 16u; ++k) hb[k] = 0;
-        for (k = 0; k < hlen; ++k) hb[k] = img[ne->Header + k];
+        for (byteIndex = 0; byteIndex < (DWORD)windowParas * 16u; ++byteIndex) headerBytes[byteIndex] = 0;
+        for (byteIndex = 0; byteIndex < hlen; ++byteIndex) headerBytes[byteIndex] = image[module->Header + byteIndex];
 
         /* ── ⚠ DO NOT WIDEN THE SEGMENT TABLE HERE. TRIED, MEASURED, REFUTED. ──────
              krnl386's in-memory segment table has TEN-byte entries, the handle at +8 --
@@ -18746,37 +18746,37 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
              ExitKernelThunk(1) wall and is NOT the right answer; see the refutation
              above NeApplyRelocations's call site. Recorded so it is not re-tried. */
 
-        q = m;
-        q = LogPut(q, "WOWV86: NE header image at para 0x"); q = LogHex(q, hseg);
-        q = LogPut(q, " = SS 0x");  q = LogHex(q, sseg);
-        q = LogPut(q, " + 0x1000 (0x"); q = LogHex(q, hlen);
-        q = LogPut(q, " bytes from file offset 0x"); q = LogHex(q, ne->Header);
-        q = LogPut(q, ", ne_cseg=0x"); q = LogHex(q, ne->SegmentCount);
-        q = LogPut(q, ")\r\n  staged 0x"); q = LogHex(q, hlen);
-        q = LogPut(q, " of 0x");            q = LogHex(q, imglen);
-        q = LogPut(q, " bytes = 0x");       q = LogHex(q, (DWORD)window_paras);
-        q = LogPut(q, " paras");
-        q = LogPut(q, hlen == imglen ? " (WHOLE FILE)\r\n" : " -- ⚠ STILL TRUNCATED\r\n");
-        LogAppend(LDTLOG_PATH, m, q);
+        cursor = message;
+        cursor = LogPut(cursor, "WOWV86: NE header image at para 0x"); cursor = LogHex(cursor, hseg);
+        cursor = LogPut(cursor, " = SS 0x");  cursor = LogHex(cursor, sseg);
+        cursor = LogPut(cursor, " + 0x1000 (0x"); cursor = LogHex(cursor, hlen);
+        cursor = LogPut(cursor, " bytes from file offset 0x"); cursor = LogHex(cursor, module->Header);
+        cursor = LogPut(cursor, ", ne_cseg=0x"); cursor = LogHex(cursor, module->SegmentCount);
+        cursor = LogPut(cursor, ")\r\n  staged 0x"); cursor = LogHex(cursor, hlen);
+        cursor = LogPut(cursor, " of 0x");            cursor = LogHex(cursor, imglen);
+        cursor = LogPut(cursor, " bytes = 0x");       cursor = LogHex(cursor, (DWORD)windowParas);
+        cursor = LogPut(cursor, " paras");
+        cursor = LogPut(cursor, hlen == imglen ? " (WHOLE FILE)\r\n" : " -- ⚠ STILL TRUNCATED\r\n");
+        LogAppend(LDTLOG_PATH, message, cursor);
 
         /* Say where each segment's image landed inside the staged copy: that is the
            address krnl386's own LoadSegment has to be able to reach, and the old
            truncation was INVISIBLE in the line above, which only ever printed the
            already-clamped length. A number that cannot show the fault it is there to
            catch is not an instrument. */
-        for (i = 0; i < (int)ne->SegmentCount; ++i) {
-            uint32_t fo = ne->Segments[i].FileOffset;
-            int resident = fo >= ne->Header && (DWORD)(fo - ne->Header) < hlen;
-            q = m;
-            q = LogPut(q, "WOWV86:   seg "); q = LogHex(q, (DWORD)(i + 1));
-            q = LogPut(q, " file 0x");       q = LogHex(q, fo);
-            q = LogPut(q, " -> staged linear 0x");
-            q = LogHex(q, ((DWORD)hseg << 4) + (fo - ne->Header));
-            q = LogPut(q, resident ? " RESIDENT\r\n" : " ⚠ NOT RESIDENT\r\n");
-            LogAppend(LDTLOG_PATH, m, q);
+        for (index = 0; index < (int)module->SegmentCount; ++index) {
+            uint32_t fileOffset = module->Segments[index].FileOffset;
+            int resident = fileOffset >= module->Header && (DWORD)(fileOffset - module->Header) < hlen;
+            cursor = message;
+            cursor = LogPut(cursor, "WOWV86:   seg "); cursor = LogHex(cursor, (DWORD)(index + 1));
+            cursor = LogPut(cursor, " file 0x");       cursor = LogHex(cursor, fileOffset);
+            cursor = LogPut(cursor, " -> staged linear 0x");
+            cursor = LogHex(cursor, ((DWORD)hseg << 4) + (fileOffset - module->Header));
+            cursor = LogPut(cursor, resident ? " RESIDENT\r\n" : " ⚠ NOT RESIDENT\r\n");
+            LogAppend(LDTLOG_PATH, message, cursor);
         }
 
-        q = m;
+        cursor = message;
         /* ── ★★★ CX IS THE WHOLE WINDOW, NOT "THE PART ABOVE THE HEADER". ────────────
              This used to subtract the header image, on the reading that the header is
              not krnl386's to allocate from. That reading is what kills the run:
@@ -18835,35 +18835,35 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
              set to the header alone, the loop's first iteration copied segment 1's image
              and called it segment 2 (measured -- `@ds:si` was seg1+0x4a). krnl386's own
              per-segment bookkeeping advances it after that. */
-        {   DWORD first = ne->SegmentCount > 1 ? ne->Segments[1].FileOffset
-                                        : ne->Segments[0].FileOffset;
-            DWORD gap   = (first > ne->Header) ? ((first - ne->Header) + 15u) & ~15u : 0;
+        {   DWORD first = module->SegmentCount > 1 ? module->Segments[1].FileOffset
+                                        : module->Segments[0].FileOffset;
+            DWORD gap   = (first > module->Header) ? ((first - module->Header) + 15u) & ~15u : 0;
             DWORD full  = 0xF880u;
             g_WowEntryCx = (WORD)(gap < full ? full - gap : full);
-            q = LogPut(q, "WOWV86: arena gap = 0x"); q = LogHex(q, gap);
-            q = LogPut(q, " bytes (the header and tables, header+0x0 .. +0x");
-            q = LogHex(q, first - ne->Header);
-            q = LogPut(q, ") -- the first reclaim discards them so segment 1 lands at "
+            cursor = LogPut(cursor, "WOWV86: arena gap = 0x"); cursor = LogHex(cursor, gap);
+            cursor = LogPut(cursor, " bytes (the header and tables, header+0x0 .. +0x");
+            cursor = LogHex(cursor, first - module->Header);
+            cursor = LogPut(cursor, ") -- the first reclaim discards them so segment 1 lands at "
                         "offset 0\r\n");
-            LogAppend(LDTLOG_PATH, m, q);
-            q = m;
+            LogAppend(LDTLOG_PATH, message, cursor);
+            cursor = message;
         }
-        q = LogPut(q, "WOWV86: arena declared to krnl386 = 0x"); q = LogHex(q, g_WowEntryCx);
-        q = LogPut(q, " bytes -> CX at entry");
+        cursor = LogPut(cursor, "WOWV86: arena declared to krnl386 = 0x"); cursor = LogHex(cursor, g_WowEntryCx);
+        cursor = LogPut(cursor, " bytes -> CX at entry");
         /* ⚠ UNCHANGED WHILE THE STAGED IMAGE GREW, DELIBERATELY -- one change per run.
              It is now a claim about memory the staged image also occupies (the image is
              0x16440 bytes and this declares 0xf880 of scratch above the header), so if
              the run gets past LoadSegment and then dies in the arena, THIS is the next
              thing to look at, not a new mystery. Stock's arena is a separate block
              below its staged image (session 33 part 7). */
-        q = LogPut(q, (DWORD)g_WowEntryCx > hlen ? "\r\n"
+        cursor = LogPut(cursor, (DWORD)g_WowEntryCx > hlen ? "\r\n"
                                                  : " -- ⚠ OVERLAPS THE STAGED IMAGE\r\n");
-        LogAppend(LDTLOG_PATH, m, q);
+        LogAppend(LDTLOG_PATH, message, cursor);
     }
 
-    if (!ne->AutoData || ne->AutoData > ne->SegmentCount) {
-        q = m; q = LogPut(q, "WOWV86: autodata segment out of range\r\n");
-        LogAppend(LDTLOG_PATH, m, q); return -1;
+    if (!module->AutoData || module->AutoData > module->SegmentCount) {
+        cursor = message; cursor = LogPut(cursor, "WOWV86: autodata segment out of range\r\n");
+        LogAppend(LDTLOG_PATH, message, cursor); return -1;
     }
 
     /* ── ★ krnl386 CARVES FROM `ES + 0x10` AND NEVER ASKS DOS. ────────────────────
@@ -18889,10 +18889,10 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
        ⚠ It must be a REAL PSP, not a bare block: krnl386 writes PSP+0x42 and reads
          PSP+0x02 (top of memory) during bring-up. DosPspBuild fills both. */
     {   WORD pseg = 0, pmax = 0;
-        (void)DosMcbAllocate(NULL, mp->FirstMcb, 0xFFFF, &pseg, &pmax);  /* ask -> get max */
-        if (!pmax || DosMcbAllocate(NULL, mp->FirstMcb, pmax, &pseg, &pmax) || !pseg) {
-            q = m; q = LogPut(q, "WOWV86: no arena left for krnl386's PSP block\r\n");
-            LogAppend(LDTLOG_PATH, m, q); return -1;
+        (void)DosMcbAllocate(NULL, machine->FirstMcb, 0xFFFF, &pseg, &pmax);  /* ask -> get max */
+        if (!pmax || DosMcbAllocate(NULL, machine->FirstMcb, pmax, &pseg, &pmax) || !pseg) {
+            cursor = message; cursor = LogPut(cursor, "WOWV86: no arena left for krnl386's PSP block\r\n");
+            LogAppend(LDTLOG_PATH, message, cursor); return -1;
         }
         /* ── ★ ZERO THE ARENA. The same rule the header-image block already states,
              applied where it was measurably needed: krnl386 carves everything from
@@ -18920,11 +18920,11 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
              a few lines up), and a deterministic arena makes the next such bug
              reproducible instead of intermittent.
            ▸ Skips the PSP itself: DosPspBuild lays that down immediately after. */
-        {   volatile BYTE *ab = (volatile BYTE *)(ULONG_PTR)((DWORD)pseg << 4);
-            DWORD nb = (DWORD)pmax * 16u, k2;
-            for (k2 = 0x100; k2 < nb; ++k2) ab[k2] = 0;
-            q = m; q = LogPut(q, "WOWV86: arena zeroed, 0x"); q = LogHex(q, nb - 0x100);
-            q = LogPut(q, " bytes above the PSP\r\n"); LogAppend(LDTLOG_PATH, m, q);
+        {   volatile BYTE *arena = (volatile BYTE *)(ULONG_PTR)((DWORD)pseg << 4);
+            DWORD arenaBytes = (DWORD)pmax * 16u, index2;
+            for (index2 = 0x100; index2 < arenaBytes; ++index2) arena[index2] = 0;
+            cursor = message; cursor = LogPut(cursor, "WOWV86: arena zeroed, 0x"); cursor = LogHex(cursor, arenaBytes - 0x100);
+            cursor = LogPut(cursor, " bytes above the PSP\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
         }
         DosPspBuild(NULL, pseg, DOS_ENV_SEG, (WORD)(pseg + pmax));
         /* ★ AND REBUILD THE ENVIRONMENT, because DosPspBuild ZEROES ITS FIRST
@@ -18948,7 +18948,7 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
              so: "Missing 16-bit system module ... WOWEXEC.EXE". Ask the host where
              Windows actually is rather than hardcoding it -- a real WOW launch
              inherits the NT environment, which is exactly these two directories. */
-        {   char pv[MAX_PATH * 2 + 2]; UINT n;
+        {   char pathValue[MAX_PATH * 2 + 2]; UINT length;
             /* s89 (#270): ★ AND SYSTEMROOT, which a real WOW VDM inherits from
                  NT's environment. krnl386 builds its SYSTEM directory from it
                  (observed; see WOW32 0x7b): without it, 16-bit
@@ -18956,10 +18956,10 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
                  through `extra`, whose cap note keeps the tail krnl386 reads. */
             char wowroot[MAX_PATH + 16] = "SYSTEMROOT=";
             if (!GetWindowsDirectoryA(wowroot + 11, MAX_PATH)) wowroot[0] = 0;
-            n = GetSystemDirectoryA(pv, MAX_PATH);
-            if (n && n < MAX_PATH) { pv[n] = ';';
-                if (!GetWindowsDirectoryA(pv + n + 1, MAX_PATH)) pv[n] = 0; }
-            else pv[0] = 0;
+            length = GetSystemDirectoryA(pathValue, MAX_PATH);
+            if (length && length < MAX_PATH) { pathValue[length] = ';';
+                if (!GetWindowsDirectoryA(pathValue + length + 1, MAX_PATH)) pathValue[length] = 0; }
+            else pathValue[0] = 0;
             /* ⚠ NO dosenv.txt ON THE WOW PATH, deliberately. This block is krnl386's,
                  it is rebuilt after the fact, and the note above records how narrowly
                  it fits: krnl386 finds its own executable by scanning past the strings
@@ -18967,26 +18967,26 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
             DosEnvBuildWithCard(NULL, DOS_ENV_SEG,
                           g_WowKernelPath[0] ? g_WowKernelPath
                                              : "C:\\WINDOWS\\SYSTEM32\\KRNL386.EXE",
-                          pv[0] ? pv : "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS", &g_SbConfig,
+                          pathValue[0] ? pathValue : "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS", &g_SbConfig,
                           wowroot[0] ? wowroot : NULL);
-            q = m; q = LogPut(q, "WOWV86: env rebuilt, PATH=");
-            q = LogPut(q, pv[0] ? pv : "(fallback)");
-            q = LogPut(q, " program path = ");
-            q = LogPut(q, g_WowKernelPath[0] ? g_WowKernelPath : "(default)");
-            q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
+            cursor = message; cursor = LogPut(cursor, "WOWV86: env rebuilt, PATH=");
+            cursor = LogPut(cursor, pathValue[0] ? pathValue : "(fallback)");
+            cursor = LogPut(cursor, " program path = ");
+            cursor = LogPut(cursor, g_WowKernelPath[0] ? g_WowKernelPath : "(default)");
+            cursor = LogPut(cursor, "\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
         }
         g_WowPspSegment = pseg;
-        q = m;
-        q = LogPut(q, "WOWV86: krnl386 PSP/arena block at para 0x"); q = LogHex(q, pseg);
-        q = LogPut(q, " size 0x");        q = LogHex(q, pmax);
-        q = LogPut(q, " paras -> it will carve from 0x"); q = LogHex(q, (DWORD)(pseg + 0x10));
-        q = LogPut(q, " upward (top 0x");  q = LogHex(q, (DWORD)(pseg + pmax));
-        q = LogPut(q, ")\r\n"); LogAppend(LDTLOG_PATH, m, q);
+        cursor = message;
+        cursor = LogPut(cursor, "WOWV86: krnl386 PSP/arena block at para 0x"); cursor = LogHex(cursor, pseg);
+        cursor = LogPut(cursor, " size 0x");        cursor = LogHex(cursor, pmax);
+        cursor = LogPut(cursor, " paras -> it will carve from 0x"); cursor = LogHex(cursor, (DWORD)(pseg + 0x10));
+        cursor = LogPut(cursor, " upward (top 0x");  cursor = LogHex(cursor, (DWORD)(pseg + pmax));
+        cursor = LogPut(cursor, ")\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
     }
 
-    *ecs = ne->Segments[(ne->CsIp >> 16) - 1].Selector;
-    *eip = (WORD)(ne->CsIp & 0xFFFF);
-    *eds = ne->Segments[ne->AutoData - 1].Selector;
+    *ecs = module->Segments[(module->CsIp >> 16) - 1].Selector;
+    *eip = (WORD)(module->CsIp & 0xFFFF);
+    *eds = module->Segments[module->AutoData - 1].Selector;
     *ess = sseg;
     /* ⚠ THE VERY TOP, not top-2. `base(SS) + SP` is what krnl386 turns into its
          header selector, and it must land exactly on the header image placed in the
@@ -18995,27 +18995,27 @@ static int wow_place_v86(DOS_MACHINE *mp, WORD *ecs, WORD *eip,
          the -2 was a nicety that is now load-bearing in the wrong direction. */
     *esp = (WORD)(WOW_STACK_PARAS << 4);
 
-    q = m;
-    q = LogPut(q, "WOWV86: relocated to paragraphs, sites=0x"); q = LogHex(q, ne->Sites);
-    q = LogPut(q, "\r\n  ENTRY CS:IP=");  q = LogHex(q, *ecs); q = LogPut(q, ":"); q = LogHex(q, *eip);
-    q = LogPut(q, "  DS=");               q = LogHex(q, *eds);
-    q = LogPut(q, "  SS:SP=");            q = LogHex(q, *ess); q = LogPut(q, ":"); q = LogHex(q, *esp);
-    q = LogPut(q, "  AX=4b4f ('OK')\r\n");
-    LogAppend(LDTLOG_PATH, m, q);
+    cursor = message;
+    cursor = LogPut(cursor, "WOWV86: relocated to paragraphs, sites=0x"); cursor = LogHex(cursor, module->Sites);
+    cursor = LogPut(cursor, "\r\n  ENTRY CS:IP=");  cursor = LogHex(cursor, *ecs); cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, *eip);
+    cursor = LogPut(cursor, "  DS=");               cursor = LogHex(cursor, *eds);
+    cursor = LogPut(cursor, "  SS:SP=");            cursor = LogHex(cursor, *ess); cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, *esp);
+    cursor = LogPut(cursor, "  AX=4b4f ('OK')\r\n");
+    LogAppend(LDTLOG_PATH, message, cursor);
     return 0;
 }
 
-static void wow_probe_selectors(void)
+static void WowProbeSelectors(void)
 {
-    char m[600], *q;
-    int k, i;
+    char message[600], *cursor;
+    int module2, index;
     if (!g_WowModuleCount) return;
-    q = m; q = LogPut(q, "WOWTRY: selector stage, modules="); q = LogHex(q, (DWORD)g_WowModuleCount);
-    q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
-    wow_probe_ldt_matrix("wow-late");
+    cursor = message; cursor = LogPut(cursor, "WOWTRY: selector stage, modules="); cursor = LogHex(cursor, (DWORD)g_WowModuleCount);
+    cursor = LogPut(cursor, "\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
+    WowProbeLdtMatrix("wow-late");
 
     /* ── STEP PAST THE RESERVED LDT INDICES BEFORE ALLOCATING ANYTHING. ─────────────
-         `g_LdtNext` starts at 3, and dpmi_install() FORCES indices 2 and 3 to
+         `g_LdtNext` starts at 3, and DpmiInstall() FORCES indices 2 and 3 to
          writable data (0xF2) no matter what access we asked for -- a deliberate hack
          for the DPMI path, where a client's first allocation is typically its stack
          and i310102's C runtime retypes sel 0x1F to code and then #GPs on it.
@@ -19033,61 +19033,61 @@ static void wow_probe_selectors(void)
          private pool, so a client allocation can never land on a selector the host
          has handed out and the guest is holding forever. */
     if (g_LdtNext < DPMI_LDT_FIRSTFREE) {
-        q = m; q = LogPut(q, "  skipping reserved + host-pool LDT indices, next 0x");
-        q = LogHex(q, (DWORD)g_LdtNext); q = LogPut(q, " -> 0x");
+        cursor = message; cursor = LogPut(cursor, "  skipping reserved + host-pool LDT indices, next 0x");
+        cursor = LogHex(cursor, (DWORD)g_LdtNext); cursor = LogPut(cursor, " -> 0x");
         g_LdtNext = DPMI_LDT_FIRSTFREE;
-        q = LogHex(q, (DWORD)g_LdtNext);
-        q = LogPut(q, " (2 and 3 are forced to data by dpmi_install)\r\n");
-        LogAppend(LDTLOG_PATH, m, q);
+        cursor = LogHex(cursor, (DWORD)g_LdtNext);
+        cursor = LogPut(cursor, " (2 and 3 are forced to data by dpmi_install)\r\n");
+        LogAppend(LDTLOG_PATH, message, cursor);
     }
 
     /* Can krnl386 be given a real descriptor-table window? Asked AFTER the reserved
        skip above, so the throwaway probes cannot land on indices 2/3 -- which
-       dpmi_install() force-types to data, i.e. the exact interaction that silently
+       DpmiInstall() force-types to data, i.e. the exact interaction that silently
        turned krnl386's code segment into a data descriptor earlier this session. */
-    wow_find_ldt_base();
+    WowFindLdtBase();
 
     /* ── PHASE 2a: a selector for EVERY segment of EVERY module, before any
          relocation runs. NeRegistryResolve refuses a target whose selector is still
          0, so getting this order wrong fails loudly instead of writing 0000:xxxx. */
-    for (k = 0; k < g_WowModuleCount; ++k) {
-        NE_MODULE *ne = &g_WowModule[k];
-        for (i = 0; i < (int)ne->SegmentCount; ++i) {
-            NE_SEGMENT *sg = &ne->Segments[i];
-            int is_code = !(sg->Flags & NE_SEG_DATA);
-            uint32_t need = NeSegmentAllocSize(sg);
-            int idx;
+    for (module2 = 0; module2 < g_WowModuleCount; ++module2) {
+        NE_MODULE *module = &g_WowModule[module2];
+        for (index = 0; index < (int)module->SegmentCount; ++index) {
+            NE_SEGMENT *segment = &module->Segments[index];
+            int isCode = !(segment->Flags & NE_SEG_DATA);
+            uint32_t need = NeSegmentAllocSize(segment);
+            int ldtIndex;
             if (g_LdtNext >= DPMI_LDT_MAX) {
-                q = m; q = LogPut(q, "  LDT POOL EXHAUSTED\r\n");
-                LogAppend(LDTLOG_PATH, m, q); return;
+                cursor = message; cursor = LogPut(cursor, "  LDT POOL EXHAUSTED\r\n");
+                LogAppend(LDTLOG_PATH, message, cursor); return;
             }
-            idx = g_LdtNext++;
-            g_Ldt[idx].Base   = (DWORD)(ULONG_PTR)sg->Memory;
-            g_Ldt[idx].Limit  = need - 1;
-            g_Ldt[idx].Access = (BYTE)(is_code ? 0xFA : 0xF2);
-            g_Ldt[idx].Flags  = 0;                       /* 16-bit segments */
-            dpmi_install(idx);
-            sg->Selector = (WORD)((idx << 3) | 7);            /* the REAL selector now */
+            ldtIndex = g_LdtNext++;
+            g_Ldt[ldtIndex].Base   = (DWORD)(ULONG_PTR)segment->Memory;
+            g_Ldt[ldtIndex].Limit  = need - 1;
+            g_Ldt[ldtIndex].Access = (BYTE)(isCode ? 0xFA : 0xF2);
+            g_Ldt[ldtIndex].Flags  = 0;                       /* 16-bit segments */
+            DpmiInstall(ldtIndex);
+            segment->Selector = (WORD)((ldtIndex << 3) | 7);            /* the REAL selector now */
 
-            q = m;
-            q = LogPut(q, "  "); q = LogPut(q, g_WowName[k]);
-            q = LogPut(q, " seg ");      q = LogHex(q, (DWORD)(i + 1));
-            q = LogPut(q, is_code ? " CODE" : " DATA");
-            q = LogPut(q, " base=0x");   q = LogHex(q, g_Ldt[idx].Base);
-            q = LogPut(q, " limit=0x");  q = LogHex(q, g_Ldt[idx].Limit);
-            q = LogPut(q, " -> sel 0x"); q = LogHex(q, sg->Selector);
+            cursor = message;
+            cursor = LogPut(cursor, "  "); cursor = LogPut(cursor, g_WowName[module2]);
+            cursor = LogPut(cursor, " seg ");      cursor = LogHex(cursor, (DWORD)(index + 1));
+            cursor = LogPut(cursor, isCode ? " CODE" : " DATA");
+            cursor = LogPut(cursor, " base=0x");   cursor = LogHex(cursor, g_Ldt[ldtIndex].Base);
+            cursor = LogPut(cursor, " limit=0x");  cursor = LogHex(cursor, g_Ldt[ldtIndex].Limit);
+            cursor = LogPut(cursor, " -> sel 0x"); cursor = LogHex(cursor, segment->Selector);
             /* Read the descriptor back through the CPU. LAR only succeeds on a
                selector the processor can actually see, so this is the hardware
                confirming the install rather than us believing our own bookkeeping. */
-            {   DWORD ar = 0; unsigned char zf = 0; WORD sel = sg->Selector;
+            {   DWORD accessRights = 0; unsigned char isValid = 0; WORD selector = segment->Selector;
                 __asm__ __volatile__("lar %2, %0\n\tsetz %1"
-                                     : "=r"(ar), "=q"(zf) : "r"(sel) : "cc");
-                q = LogPut(q, zf ? "  LAR ok ar=0x" : "  LAR FAILED ar=0x");
-                q = LogHex(q, zf ? ar : 0);
+                                     : "=r"(accessRights), "=q"(isValid) : "r"(selector) : "cc");
+                cursor = LogPut(cursor, isValid ? "  LAR ok ar=0x" : "  LAR FAILED ar=0x");
+                cursor = LogHex(cursor, isValid ? accessRights : 0);
             }
-            q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
+            cursor = LogPut(cursor, "\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
         }
-        NeRegistryAdd(&g_wow_reg, ne);
+        NeRegistryAdd(&g_WowRegistry, module);
     }
 
     /* ── PHASE 2b: relocate ONCE, resolving imports across the registry. ──────────
@@ -19095,57 +19095,57 @@ static void wow_probe_selectors(void)
          USER are the real test: every call they make into KERNEL is patched here.
          WOWEXEC is expected to STOP at KEYBOARD, which is simply not loaded yet --
          a stop that names its module is a to-do list, not a failure. */
-    for (k = 0; k < g_WowModuleCount; ++k) {
-        NE_MODULE *ne = &g_WowModule[k];
-        int rc = 0;
-        ne->Sites = 0;
-        for (i = 0; i < (int)ne->SegmentCount && rc == 0; ++i)
-            rc = NeApplyRelocations(ne, i, NeRegistryResolve, &g_wow_reg);
-        q = m;
-        q = LogPut(q, "  RELOC "); q = LogPut(q, g_WowName[k]);
-        if (rc == 0) {
-            q = LogPut(q, " ALL RESOLVED sites=0x"); q = LogHex(q, ne->Sites);
+    for (module2 = 0; module2 < g_WowModuleCount; ++module2) {
+        NE_MODULE *module = &g_WowModule[module2];
+        int status = 0;
+        module->Sites = 0;
+        for (index = 0; index < (int)module->SegmentCount && status == 0; ++index)
+            status = NeApplyRelocations(module, index, NeRegistryResolve, &g_WowRegistry);
+        cursor = message;
+        cursor = LogPut(cursor, "  RELOC "); cursor = LogPut(cursor, g_WowName[module2]);
+        if (status == 0) {
+            cursor = LogPut(cursor, " ALL RESOLVED sites=0x"); cursor = LogHex(cursor, module->Sites);
         } else {
-            q = LogPut(q, " STOPPED after 0x");     q = LogHex(q, ne->Sites);
-            q = LogPut(q, " sites, at ne.h line "); q = LogHex(q, (DWORD)ne->Error);
-            q = LogPut(q, ", needed ");             q = LogPut(q, g_wow_reg.FailedModule);
-            q = LogPut(q, ".");
-            if (g_wow_reg.FailedFunction[0]) q = LogPut(q, g_wow_reg.FailedFunction);
-            else                    { q = LogPut(q, "@"); q = LogHex(q, g_wow_reg.FailedOrdinal); }
+            cursor = LogPut(cursor, " STOPPED after 0x");     cursor = LogHex(cursor, module->Sites);
+            cursor = LogPut(cursor, " sites, at ne.h line "); cursor = LogHex(cursor, (DWORD)module->Error);
+            cursor = LogPut(cursor, ", needed ");             cursor = LogPut(cursor, g_WowRegistry.FailedModule);
+            cursor = LogPut(cursor, ".");
+            if (g_WowRegistry.FailedFunction[0]) cursor = LogPut(cursor, g_WowRegistry.FailedFunction);
+            else                    { cursor = LogPut(cursor, "@"); cursor = LogHex(cursor, g_WowRegistry.FailedOrdinal); }
         }
-        q = LogPut(q, "\r\n"); LogAppend(LDTLOG_PATH, m, q);
+        cursor = LogPut(cursor, "\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
     }
 
-    q = m;
-    q = LogPut(q, "WOWTRY: bind stage done.\r\n  KERNEL init entry would be CS:IP = sel 0x");
-    q = LogHex(q, g_WowModule[0].Segments[(g_WowModule[0].CsIp >> 16) - 1].Selector);
-    q = LogPut(q, ":0x"); q = LogHex(q, g_WowModule[0].CsIp & 0xFFFF);
-    q = LogPut(q, "\r\nWOWTRY: NOT entering PM yet -- next step.\r\n");
-    LogAppend(LDTLOG_PATH, m, q);
+    cursor = message;
+    cursor = LogPut(cursor, "WOWTRY: bind stage done.\r\n  KERNEL init entry would be CS:IP = sel 0x");
+    cursor = LogHex(cursor, g_WowModule[0].Segments[(g_WowModule[0].CsIp >> 16) - 1].Selector);
+    cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, g_WowModule[0].CsIp & 0xFFFF);
+    cursor = LogPut(cursor, "\r\nWOWTRY: NOT entering PM yet -- next step.\r\n");
+    LogAppend(LDTLOG_PATH, message, cursor);
 }
 
 /* Plant the default PM interrupt handlers and point every vector at them. See the
    note on g_PmDefaultSelector. Called once, at the mode switch, before the client runs. */
-static void dpmi_install_default_pm_handlers(DOS_MACHINE *mp)
+static void DpmiInstallDefaultPmHandlers(DOS_MACHINE *machine)
 {
-    uint16_t seg = 0, max = 0;
+    uint16_t segment = 0, maximum = 0;
     volatile BYTE *stub;
-    int v, idx;
-    char lb[160], *q = lb;
+    int vector, index;
+    char lineBuffer[160], *cursor = lineBuffer;
     /* A SECOND CLIENT (s80): the table is the host's and outlives the first client.
        If its memory survived teardown (the host pool), point every vector back at it.
        If it came from DOS memory, teardown gave the block back to the parent and kept
        only the selector: fall through, allocate again, and rebase that same slot --
        allocating a new one would leak an LDT slot per program run. */
     if (g_PmDefaultSelector && g_PmDefaultBase) {
-        for (v = 0; v < 256; ++v) {
-            g_PmInt[v].Selector = g_PmDefaultSelector;
-            g_PmInt[v].Offset = (DWORD)v * DPMI_PMDEF_STRIDE;
-            g_PmInt[v].Client = 0;
+        for (vector = 0; vector < 256; ++vector) {
+            g_PmInt[vector].Selector = g_PmDefaultSelector;
+            g_PmInt[vector].Offset = (DWORD)vector * DPMI_PMDEF_STRIDE;
+            g_PmInt[vector].Client = 0;
         }
-        q = LogPut(q, "DPMI: default PM handlers reused at 0x"); q = LogHex(q, g_PmDefaultSelector);
-        q = LogPut(q, " (a previous client's table)\r\n");
-        LogAppend(LOG_PATH, lb, q); SerialOut(lb, q);
+        cursor = LogPut(cursor, "DPMI: default PM handlers reused at 0x"); cursor = LogHex(cursor, g_PmDefaultSelector);
+        cursor = LogPut(cursor, " (a previous client's table)\r\n");
+        LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
         return;
     }
     /* 256 vectors x 3 bytes = 768; one 0x40-paragraph block covers it with room over.
@@ -19157,52 +19157,52 @@ static void dpmi_install_default_pm_handlers(DOS_MACHINE *mp)
          pushed this allocation out, the table was never built, and the run died at PM
          step 0x0d with nothing in the log pointing here. A silent return from the
          function that installs 256 interrupt vectors is not a small omission. */
-    seg = WowHostAllocate(0x40);
-    g_PmDefaultFromDos = !seg;
-    if (!seg && (DosMcbAllocate(NULL, mp->FirstMcb, 0x40, &seg, &max) || !seg)) {
-        q = LogPut(q, "DPMI: NO MEMORY for the 256-vector default PM handler table "
+    segment = WowHostAllocate(0x40);
+    g_PmDefaultFromDos = !segment;
+    if (!segment && (DosMcbAllocate(NULL, machine->FirstMcb, 0x40, &segment, &maximum) || !segment)) {
+        cursor = LogPut(cursor, "DPMI: NO MEMORY for the 256-vector default PM handler table "
                     "(host pool exhausted AND dos_alloc failed) -- every PM vector will "
                     "read back 0000:0000\r\n");
-        LogAppend(LOG_PATH, lb, q); SerialOut(lb, q);
+        LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
         return;
     }
     if (g_PmDefaultIndex < 0 && g_LdtNext >= DPMI_LDT_MAX) {
-        q = LogPut(q, "DPMI: NO LDT SLOT for the default PM handler table\r\n");
-        LogAppend(LOG_PATH, lb, q); SerialOut(lb, q);
+        cursor = LogPut(cursor, "DPMI: NO LDT SLOT for the default PM handler table\r\n");
+        LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
         return;
     }
-    g_PmDefaultBase = (DWORD)seg << 4;
+    g_PmDefaultBase = (DWORD)segment << 4;
     stub = (volatile BYTE *)(ULONG_PTR)g_PmDefaultBase;
-    idx = (g_PmDefaultIndex >= 0) ? g_PmDefaultIndex : g_LdtNext++;   /* a previous client's slot, rebased */
-    g_Ldt[idx].Base   = g_PmDefaultBase;
-    g_Ldt[idx].Limit  = 0x3FF;
-    g_Ldt[idx].Access = 0xFA;                    /* present, DPL3, code, readable */
-    g_Ldt[idx].Flags  = 0;                       /* 16-bit: the stubs are 16-bit  */
-    dpmi_install(idx);
-    g_PmDefaultSelector = (WORD)((idx << 3) | 7);
-    for (v = 0; v < 256; ++v) {
-        DWORD off = (DWORD)v * DPMI_PMDEF_STRIDE;
-        stub[off + 0] = 0xC4; stub[off + 1] = 0xC4;
-        stub[off + 2] = 0xCF;                    /* BOP immediate AND the IRET */
-        PatchMapSet(g_PmDefaultBase + off, (BYTE)v);   /* resolves the chained BOP -> vector v */
-        g_PmInt[v].Selector = g_PmDefaultSelector;
-        g_PmInt[v].Offset = off;
-        g_PmInt[v].Client = 0;
+    index = (g_PmDefaultIndex >= 0) ? g_PmDefaultIndex : g_LdtNext++;   /* a previous client's slot, rebased */
+    g_Ldt[index].Base   = g_PmDefaultBase;
+    g_Ldt[index].Limit  = 0x3FF;
+    g_Ldt[index].Access = 0xFA;                    /* present, DPL3, code, readable */
+    g_Ldt[index].Flags  = 0;                       /* 16-bit: the stubs are 16-bit  */
+    DpmiInstall(index);
+    g_PmDefaultSelector = (WORD)((index << 3) | 7);
+    for (vector = 0; vector < 256; ++vector) {
+        DWORD offset = (DWORD)vector * DPMI_PMDEF_STRIDE;
+        stub[offset + 0] = 0xC4; stub[offset + 1] = 0xC4;
+        stub[offset + 2] = 0xCF;                    /* BOP immediate AND the IRET */
+        PatchMapSet(g_PmDefaultBase + offset, (BYTE)vector);   /* resolves the chained BOP -> vector v */
+        g_PmInt[vector].Selector = g_PmDefaultSelector;
+        g_PmInt[vector].Offset = offset;
+        g_PmInt[vector].Client = 0;
     }
-    g_PmDefaultIndex = idx;      /* so the width can be corrected once the client declares it */
-    q = LogPut(q, "DPMI: default PM handlers at 0x"); q = LogHex(q, g_PmDefaultSelector);
-    q = LogPut(q, ":0 (linear 0x"); q = LogHex(q, g_PmDefaultBase);
-    q = LogPut(q, ", 256 vectors)\r\n");
-    LogAppend(LOG_PATH, lb, q); SerialOut(lb, q);
+    g_PmDefaultIndex = index;      /* so the width can be corrected once the client declares it */
+    cursor = LogPut(cursor, "DPMI: default PM handlers at 0x"); cursor = LogHex(cursor, g_PmDefaultSelector);
+    cursor = LogPut(cursor, ":0 (linear 0x"); cursor = LogHex(cursor, g_PmDefaultBase);
+    cursor = LogPut(cursor, ", 256 vectors)\r\n");
+    LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
 }
 
 /* (Re)build g_Ldt[idx]'s descriptor and install it in the process LDT via svc 10. */
-static void dpmi_install(int idx)
+static void DpmiInstall(int index)
 {
-    DWORD lo, hi, lim = g_Ldt[idx].Limit; BYTE fl = g_Ldt[idx].Flags;
-    BYTE acc = g_Ldt[idx].Access;
-    WORD sel = (WORD)((idx << 3) | 7);
-    if (lim > 0xFFFFF) { lim >>= 12; fl = (BYTE)(fl | 0x8); }   /* >1MB -> page granular */
+    DWORD low, high, lim = g_Ldt[index].Limit; BYTE flags = g_Ldt[index].Flags;
+    BYTE acceleration = g_Ldt[index].Access;
+    WORD selector = (WORD)((index << 3) | 7);
+    if (lim > 0xFFFFF) { lim >>= 12; flags = (BYTE)(flags | 0x8); }   /* >1MB -> page granular */
     /* Run 69 (option C: avoid the kernel PM-fault reflect). On the REAL CPU a data/stack
        selector that a client retypes to CODE (or non-writable) faults the moment it is used
        -- exactly i310102's wall: its C runtime does INT 31h 0009 to set SS (sel 0x1F, idx 3)
@@ -19212,7 +19212,7 @@ static void dpmi_install(int idx)
        2 = DS) and STACK (idx 3 = SS) selectors are ALWAYS installed as present writable-data,
        so they stay usable no matter how the client retypes them. g_Ldt[idx].access keeps the
        client's requested value, so LAR/LSL introspection (dpmi_sel_desc) still reports it. */
-    if (idx == 2 || idx == 3) acc = 0xF2;                      /* present, DPL3, data R/W */
+    if (index == 2 || index == 3) acceleration = 0xF2;                      /* present, DPL3, data R/W */
     /* ── DPL IS THE HOST'S, NOT THE CLIENT'S. (s74c, ZAR's VESA modes) ──────────
          ZAR builds its LFB selector with 0009 CX=8092: DPL 0. On real DOS that is
          legal because DOS/4GW runs the client at ring 0; under a ring-3 DPMI host
@@ -19223,14 +19223,14 @@ static void dpmi_install(int idx)
          always 3. g_Ldt[idx].access keeps the requested byte for LAR. Only a
          PRESENT descriptor is touched: a freed selector is installed as the all-zero
          null descriptor, which is the one non-DPL-3 entry NT accepts. */
-    if (acc & 0x80) acc = (BYTE)(acc | 0x60);
-    DpmiBuildDescriptor(g_Ldt[idx].Base, lim & 0xFFFFF, acc, fl, &lo, &hi);
+    if (acceleration & 0x80) acceleration = (BYTE)(acceleration | 0x60);
+    DpmiBuildDescriptor(g_Ldt[index].Base, lim & 0xFFFFF, acceleration, flags, &low, &high);
     {
         /* #3 (DOS/4GW flat model): XP's LDT validator caps base+limit <= MmHighestUserAddress
            (~2GB); a base-0 ~2GB G=1 selector installs, a true 4GB one is REJECTED (Kernel RE
            session 7). Surface the NTSTATUS so a rejected flat/large descriptor is visible
            instead of silently leaving a stale selector that faults on first use (run 84). */
-        LONG st;
+        LONG status;
         /* ⚠ HOST-SIDE CHANGES MUST REACH THE SHADOW TOO, OR THE SYNC EATS THEM.
              wow_shadow_sync() treats "shadow differs from g_Ldt[]" as "the guest wrote
              this". A descriptor WE allocate after the shadow was created is zero in the
@@ -19240,9 +19240,9 @@ static void dpmi_install(int idx)
              LDTSYNC lines saying "guest wrote base=0 limit=0 acc=0" for indices the
              guest had never touched. Keeping both sides in step here is what makes the
              difference test mean what it says. */
-        wow_shadow_put(idx);
-        st = VdmInstallLdtEntries(sel, lo, hi, sel, lo, hi); /* idempotent single-entry */
-        if (st != 0) {
+        wow_shadow_put(index);
+        status = VdmInstallLdtEntries(selector, low, high, selector, low, high); /* idempotent single-entry */
+        if (status != 0) {
             /* ── CLAMP AND RETRY, don't just report ────────────────────────────────
                DOS/4GW (Doom) allocates a base-0 4GB G=1 FLAT selector and XP rejects it
                (0xC000011A): PspIsDescriptorValid requires
@@ -19257,29 +19257,29 @@ static void dpmi_install(int idx)
                The clamp is LOUD -- a client that then walks off the end of a segment it
                believes is 4GB must not look like a mystery. */
             DWORD cap = XP_LDT_MAX_LINEAR;
-            DWORD clo = lo, chi = hi, want = g_Ldt[idx].Limit, cl = 0;
-            LONG st2 = st;
-            if (g_Ldt[idx].Base < cap) {
-                DWORD room = cap - g_Ldt[idx].Base;
-                if (fl & 0x8) cl = (room > 0xFFF) ? ((room - 0xFFF) >> 12) : 0;  /* G=1 */
+            DWORD clo = low, chi = high, want = g_Ldt[index].Limit, cl = 0;
+            LONG state2 = status;
+            if (g_Ldt[index].Base < cap) {
+                DWORD room = cap - g_Ldt[index].Base;
+                if (flags & 0x8) cl = (room > 0xFFF) ? ((room - 0xFFF) >> 12) : 0;  /* G=1 */
                 else          cl = room;                                        /* G=0 */
                 if (cl > 0xFFFFF) cl = 0xFFFFF;
-                DpmiBuildDescriptor(g_Ldt[idx].Base, cl, acc, fl, &clo, &chi);
-                st2 = VdmInstallLdtEntries(sel, clo, chi, sel, clo, chi);
+                DpmiBuildDescriptor(g_Ldt[index].Base, cl, acceleration, flags, &clo, &chi);
+                state2 = VdmInstallLdtEntries(selector, clo, chi, selector, clo, chi);
             }
             {
-                char lb[256], *p = lb;
-                p = LogPut(p, "DPMI-LDT: install REJECTED sel 0x"); p = LogHex(p, sel);
-                p = LogPut(p, " base 0x"); p = LogHex(p, g_Ldt[idx].Base);
-                p = LogPut(p, " limit 0x"); p = LogHex(p, want);
-                p = LogPut(p, " g="); p = LogHex(p, (DWORD)((fl >> 3) & 1));
-                p = LogPut(p, " status 0x"); p = LogHex(p, (DWORD)st);
-                if (st2 == 0) { p = LogPut(p, " -> CLAMPED to limit 0x"); p = LogHex(p, cl);
-                                p = LogPut(p, " (XP LDT cap) and installed"); }
-                else          { p = LogPut(p, " -> clamp ALSO refused, status 0x");
-                                p = LogHex(p, (DWORD)st2); }
-                p = LogPut(p, "\r\n");
-                LogAppend(LOG_PATH, lb, p); SerialOut(lb, p);
+                char lineBuffer[256], *cursor = lineBuffer;
+                cursor = LogPut(cursor, "DPMI-LDT: install REJECTED sel 0x"); cursor = LogHex(cursor, selector);
+                cursor = LogPut(cursor, " base 0x"); cursor = LogHex(cursor, g_Ldt[index].Base);
+                cursor = LogPut(cursor, " limit 0x"); cursor = LogHex(cursor, want);
+                cursor = LogPut(cursor, " g="); cursor = LogHex(cursor, (DWORD)((flags >> 3) & 1));
+                cursor = LogPut(cursor, " status 0x"); cursor = LogHex(cursor, (DWORD)status);
+                if (state2 == 0) { cursor = LogPut(cursor, " -> CLAMPED to limit 0x"); cursor = LogHex(cursor, cl);
+                                cursor = LogPut(cursor, " (XP LDT cap) and installed"); }
+                else          { cursor = LogPut(cursor, " -> clamp ALSO refused, status 0x");
+                                cursor = LogHex(cursor, (DWORD)state2); }
+                cursor = LogPut(cursor, "\r\n");
+                LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
             }
         }
     }
@@ -19291,34 +19291,34 @@ static void dpmi_install(int idx)
    (g_DpmiFaultCodeSelector, based at DOS_HDLR_SEG<<4) with a BOP at DPMI_FAULT_COFF. The
    handler table g_FaultTable[class]=({code_sel,COFF}) is what the kernel reads via
    [VDM_TIB+8] to set the reflected CS:EIP. Allocated once from the g_Ldt[] pool. */
-static void dpmi_install_fault_trampoline(void)
+static void DpmiInstallFaultTrampoline(void)
 {
-    int si, ci; unsigned i;
+    int stackIndex, codeIndex; unsigned index;
     volatile BYTE *hdlr = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_HDLR_SEG << 4);
     if (g_DpmiFaultSelector) return;                  /* already installed */
     if (g_LdtNext >= 510) return;
     /* the handler CODE selector + its BOP */
-    ci = g_LdtNext++;
-    g_Ldt[ci].Base   = (DWORD)DOS_HDLR_SEG << 4;   /* 0x500 -> code:COFF = linear 0x580 */
-    g_Ldt[ci].Limit  = 0xFFFF;
-    g_Ldt[ci].Access = 0xFA;                       /* code exec/read, DPL3, present     */
-    g_Ldt[ci].Flags  = 0;
-    dpmi_install(ci);
-    g_DpmiFaultCodeSelector = (WORD)((ci << 3) | 7);
+    codeIndex = g_LdtNext++;
+    g_Ldt[codeIndex].Base   = (DWORD)DOS_HDLR_SEG << 4;   /* 0x500 -> code:COFF = linear 0x580 */
+    g_Ldt[codeIndex].Limit  = 0xFFFF;
+    g_Ldt[codeIndex].Access = 0xFA;                       /* code exec/read, DPL3, present     */
+    g_Ldt[codeIndex].Flags  = 0;
+    DpmiInstall(codeIndex);
+    g_DpmiFaultCodeSelector = (WORD)((codeIndex << 3) | 7);
     hdlr[DPMI_FAULT_COFF + 0] = VDM_BOP0;          /* plant C4 C4 57 at code:COFF (0x580) */
     hdlr[DPMI_FAULT_COFF + 1] = VDM_BOP1;
     hdlr[DPMI_FAULT_COFF + 2] = DPMI_FAULT_BOP;
     /* the handler STACK selector (writable-data) */
-    si = g_LdtNext++;
-    g_Ldt[si].Base   = (DWORD)(ULONG_PTR)g_FaultStack;   /* #205: not guest memory */
-    g_Ldt[si].Limit  = 0xFFFF;
-    g_Ldt[si].Access = 0xF2;                       /* data read/write, DPL3, present      */
-    g_Ldt[si].Flags  = 0;
-    dpmi_install(si);
-    g_DpmiFaultSelector = (WORD)((si << 3) | 7);
+    stackIndex = g_LdtNext++;
+    g_Ldt[stackIndex].Base   = (DWORD)(ULONG_PTR)g_FaultStack;   /* #205: not guest memory */
+    g_Ldt[stackIndex].Limit  = 0xFFFF;
+    g_Ldt[stackIndex].Access = 0xF2;                       /* data read/write, DPL3, present      */
+    g_Ldt[stackIndex].Flags  = 0;
+    DpmiInstall(stackIndex);
+    g_DpmiFaultSelector = (WORD)((stackIndex << 3) | 7);
     /* the per-fault-class handler table: entry N (stride 0x10) = {CS@+0 word, EIP@+4 dword}.
        Fill the #GP class (6) with our code selector + BOP offset; zero the rest. */
-    for (i = 0; i < sizeof g_FaultTable; ++i) g_FaultTable[i] = 0;
+    for (index = 0; index < sizeof g_FaultTable; ++index) g_FaultTable[index] = 0;
     /* ── ★★★ EVERY CLASS, NOT JUST #GP. ────────────────────────────────────────────
          Only class 6 was filled, and a class left ZERO is a class the kernel has
          nowhere to send -- so it terminates the VDM instead. That is not a theory:
@@ -19344,20 +19344,20 @@ static void dpmi_install_fault_trampoline(void)
          kills, and threw away the only thing that says WHICH exception fired.
          Give class i its own 4-byte BOP; the reflected EIP then names it. */
     { volatile BYTE *sites = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_CTAB_SEG << 4);
-      for (i = 0; i < DOS_FLTSITE_N; ++i) {
-          sites[DOS_FLTSITE_OFF + i * 4 + 0] = VDM_BOP0;
-          sites[DOS_FLTSITE_OFF + i * 4 + 1] = VDM_BOP1;
-          sites[DOS_FLTSITE_OFF + i * 4 + 2] = DPMI_FAULT_BOP;
-          sites[DOS_FLTSITE_OFF + i * 4 + 3] = 0xCB;      /* RETF, never reached  */
+      for (index = 0; index < DOS_FLTSITE_N; ++index) {
+          sites[DOS_FLTSITE_OFF + index * 4 + 0] = VDM_BOP0;
+          sites[DOS_FLTSITE_OFF + index * 4 + 1] = VDM_BOP1;
+          sites[DOS_FLTSITE_OFF + index * 4 + 2] = DPMI_FAULT_BOP;
+          sites[DOS_FLTSITE_OFF + index * 4 + 3] = 0xCB;      /* RETF, never reached  */
       }
       sites[DOS_FLTRET_OFF + 0] = VDM_BOP0;               /* the handler's retf lands here */
       sites[DOS_FLTRET_OFF + 1] = VDM_BOP1;
       sites[DOS_FLTRET_OFF + 2] = DPMI_FLTRET_BOP;
       sites[DOS_FLTRET_OFF + 3] = 0xCB; }
-    for (i = 0; i * 0x10 < sizeof g_FaultTable; ++i) {
-        *(WORD  *)(g_FaultTable + i * 0x10 + 0) = g_DpmiFaultCodeSelector;
-        *(DWORD *)(g_FaultTable + i * 0x10 + 4) = (i < DOS_FLTSITE_N)
-                                             ? (DWORD)DPMI_FAULT_SITE(i) : DPMI_FAULT_COFF;
+    for (index = 0; index * 0x10 < sizeof g_FaultTable; ++index) {
+        *(WORD  *)(g_FaultTable + index * 0x10 + 0) = g_DpmiFaultCodeSelector;
+        *(DWORD *)(g_FaultTable + index * 0x10 + 4) = (index < DOS_FLTSITE_N)
+                                             ? (DWORD)DPMI_FAULT_SITE(index) : DPMI_FAULT_COFF;
     }
 }
 
@@ -19365,7 +19365,7 @@ static void dpmi_install_fault_trampoline(void)
    takes the "first level, save" path only when the nest counter is 0 (then inc's it), so
    this runs before EVERY DpmiEnterProtectedMode. Sets: nest=0, the 16/32 flag, the handler STACK
    selector at [TIB+0x638], and the handler-table pointer at [VDM_TIB+8]. */
-static void dpmi_arm_fault_trampoline(volatile BYTE *tib, WORD flag)
+static void DpmiArmFaultTrampoline(volatile BYTE *tib, WORD flag)
 {
     if (!g_DpmiFaultSelector) return;
     *(volatile WORD  *)(tib + VTIB_FLT_NEST)  = 0;
@@ -19375,14 +19375,14 @@ static void dpmi_arm_fault_trampoline(volatile BYTE *tib, WORD flag)
 }
 
 /* Linear base of a selector, for INT 21h pointer thunks. */
-static DWORD dpmi_sel_base(WORD sel)
+static DWORD DpmiSelectorBase(WORD selector)
 {
-    int idx = (sel & 0xFFFF) >> 3;
+    int index = (selector & 0xFFFF) >> 3;
     /* Indices 1..3 are the switch's code/data/stack selectors (recorded in g_Ldt[]
        from g_DpmiSegmentBase); 3+ are client allocations. For a .COM all three bases
        equal g_DpmiCodeBase; for a real .EXE (CS!=DS!=SS) they differ, so a per-
        selector lookup is required to translate DS:/ES: buffers correctly. */
-    if (idx >= 1 && idx < DPMI_LDT_MAX) return g_Ldt[idx].Base;
+    if (index >= 1 && index < DPMI_LDT_MAX) return g_Ldt[index].Base;
     return g_DpmiCodeBase;                                    /* null / unknown selector */
 }
 
@@ -19467,7 +19467,7 @@ static int dpmi_sel_desc(uint16_t sel, uint32_t *ar, uint32_t *limit)
      of, and the file really has CD there. Then record it, so it costs one lookup once. */
 static DWORD dpmi_bop_vec(DWORD csv, DWORD eip)
 {
-    DWORD base = dpmi_sel_base((WORD)csv);
+    DWORD base = DpmiSelectorBase((WORD)csv);
     DWORD lin  = base + eip;
     BYTE  v    = PatchMapGet(lin);
     int   sg;
@@ -20412,7 +20412,7 @@ static void dpmi_sync_defsel_width(void)
     want = (BYTE)(g_DpmiIsClient32 ? 0x4 : 0x0);      /* 0x4 = D/B, same idiom as the handler code sel */
     if (g_Ldt[g_PmDefaultIndex].Flags == want) return;
     g_Ldt[g_PmDefaultIndex].Flags = want;
-    dpmi_install(g_PmDefaultIndex);
+    DpmiInstall(g_PmDefaultIndex);
 }
 
 /* ── ★ ANSWER AN UNIMPLEMENTED WOW32 CALL DIFFERENTLY, WITHOUT CLAIMING TO KNOW
@@ -20651,7 +20651,7 @@ static WORD wowsched_curtask(void)
     DWORD b;
     const volatile BYTE *d;
     if (!g_wow_dgsel) return 0xFFFF;
-    b = dpmi_sel_base(g_wow_dgsel);
+    b = DpmiSelectorBase(g_wow_dgsel);
     if (!b) return 0xFFFF;
     d = (const volatile BYTE *)(ULONG_PTR)b;
     return (WORD)(d[0x228] | (d[0x229] << 8));
@@ -20728,7 +20728,7 @@ static void wowsched_setcur(WORD task)
     DWORD b;
     volatile BYTE *d;
     if (!g_wow_dgsel) return;
-    b = dpmi_sel_base(g_wow_dgsel);
+    b = DpmiSelectorBase(g_wow_dgsel);
     if (!b) return;
     d = (volatile BYTE *)(ULONG_PTR)b;
     d[0x228] = (BYTE)(task & 0xFF);
@@ -20768,7 +20768,7 @@ static int ws_retarget(WORD hwnd, WORD *ss, WORD *sp, DWORD *ssbase, WORD *prev)
     *ss = bss;
     *sp = (WORD)((bsp - 0x40) & ~1u);
     if (*sp < 0x200) return 0;                    /* no room: run where it always did */
-    *ssbase = dpmi_sel_base(*ss);
+    *ssbase = DpmiSelectorBase(*ss);
     if (!*ssbase) return 0;
     *prev = cur;
     wowsched_setcur(owner);
@@ -20886,7 +20886,7 @@ static void dpmi_invoke_callback(DOS_MACHINE *m, volatile BYTE *tib, int slot)
     DWORD rstk = ((DWORD)rss << 4) + rsp;
     WORD retIP = PeekWord(rstk), retCS = PeekWord(rstk + 2);     /* the far-call return frame */
     WORD newSP = (WORD)(rsp + 4);                          /* pop it */
-    DWORD rmcs = dpmi_sel_base(g_Callbacks[slot].RmEs) + g_Callbacks[slot].RmDi;
+    DWORD rmcs = DpmiSelectorBase(g_Callbacks[slot].RmEs) + g_Callbacks[slot].RmDi;
     volatile BYTE *rc = (volatile BYTE *)(ULONG_PTR)rmcs;
     WORD vMsw = *(volatile WORD *)(tib + VTIB_MSW);
     unsigned ph; int cbdone = 0;
@@ -20908,7 +20908,7 @@ static void dpmi_invoke_callback(DOS_MACHINE *m, volatile BYTE *tib, int slot)
     /* PM handler stack (data selector 0x17, scratch SP) with an IRET frame -> PM-return catcher.
        The IRET operand size follows the HANDLER's CS D-bit: a 32-bit PM handler pops a dword
        FLAGS/CS/EIP frame, a 16-bit one pops a word frame (GH #18 run 83). */
-    { WORD pss = 0x17, psp = 0xF400; DWORD b = dpmi_sel_base(pss);
+    { WORD pss = 0x17, psp = 0xF400; DWORD b = DpmiSelectorBase(pss);
       if (DpmiSelectorIs32(g_Callbacks[slot].PmSelector)) {
           psp -= 4; PokeDword(b + psp, 0x00000202);        /* EFLAGS */
           psp -= 4; PokeDword(b + psp, g_PmReturnSelector);       /* CS (dword; hi16=0) */
@@ -20929,7 +20929,7 @@ static void dpmi_invoke_callback(DOS_MACHINE *m, volatile BYTE *tib, int slot)
        callback can allocate descriptors, print, sim-real-mode-int, etc. */
     for (ph = 0; ph < 64 && !cbdone; ++ph) {
         DWORD ev, eip, vec;
-        dpmi_arm_fault_trampoline(tib, 0);   /* GH #18: re-arm the PM-fault reflect (no-op on interp path) */
+        DpmiArmFaultTrampoline(tib, 0);   /* GH #18: re-arm the PM-fault reflect (no-op on interp path) */
         DpmiEnterProtectedMode(tib);
         ev = VDM_REG(tib, VTIB_EVENT); eip = dpmi_pm_eip(tib);
         if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
@@ -21100,7 +21100,7 @@ static int dpmi_dispatch_to_pm_handler(DOS_MACHINE *mp, volatile BYTE *tib,
          an offset from the segment base walked straight off the end of guest memory and
          the VEH reported an access violation inside pokew(). A 32-bit frame on a 16-bit
          stack is perfectly ordinary and is exactly what DOS/4GW uses. */
-    { DWORD b = dpmi_sel_base(sSS);
+    { DWORD b = DpmiSelectorBase(sSS);
       int ss32 = DpmiSelectorIs32(sSS);
       DWORD sp = ss32 ? sESP : (sESP & 0xFFFF);
       if (h32) {
@@ -21132,7 +21132,7 @@ static int dpmi_dispatch_to_pm_handler(DOS_MACHINE *mp, volatile BYTE *tib,
          16-bit one's is not, and the file image is only comparable in linear terms. */
     lp = LogPut(lp, " from 0x"); lp = LogHex(lp, sCS);
     lp = LogPut(lp, ":0x"); lp = LogHex(lp, sEIP);
-    lp = LogPut(lp, " lin=0x"); lp = LogHex(lp, dpmi_sel_base(sCS) + sEIP);
+    lp = LogPut(lp, " lin=0x"); lp = LogHex(lp, DpmiSelectorBase(sCS) + sEIP);
     /* ► WHAT THE CALLER ACTUALLY PASSED. A DOS call that takes a pointer takes it in
          DS:(E)DX, and when one fails the FIRST question is whether the caller's pointer
          was good -- i.e. whether the fault is the client's or ours. Print the selector,
@@ -21141,7 +21141,7 @@ static int dpmi_dispatch_to_pm_handler(DOS_MACHINE *mp, volatile BYTE *tib,
     { DWORD dsv = VDM_REG(tib, VTIB_DS) & 0xFFFF;
       DWORD edx = VDM_REG(tib, VTIB_EDX);
       DWORD off = DpmiSelectorIs32((WORD)dsv) ? edx : (edx & 0xFFFF);
-      DWORD lin = dpmi_sel_base((WORD)dsv) + off;
+      DWORD lin = DpmiSelectorBase((WORD)dsv) + off;
       const BYTE *sb = (const BYTE *)(ULONG_PTR)lin;
       lp = LogPut(lp, " DS:EDX=0x"); lp = LogHex(lp, dsv); lp = LogPut(lp, ":0x"); lp = LogHex(lp, edx);
       lp = LogPut(lp, " lin=0x"); lp = LogHex(lp, lin); lp = LogPut(lp, " @=");
@@ -21182,7 +21182,7 @@ quiet_entry:
              handler that loops pays nothing. */
         if (ph < 64 && g_DpmiCpMaximum > 8) {
             DWORD ccs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
-            DWORD cb  = dpmi_sel_base((WORD)ccs), cip = VDM_REG(tib, VTIB_EIP);
+            DWORD cb  = DpmiSelectorBase((WORD)ccs), cip = VDM_REG(tib, VTIB_EIP);
             const BYTE *ib = (const BYTE *)(ULONG_PTR)(cb + cip);
             lp = LogPut(lp, "  PMH["); lp = LogHex(lp, ph);
             lp = LogPut(lp, "] cs:eip=0x"); lp = LogHex(lp, ccs);
@@ -21198,7 +21198,7 @@ quiet_entry:
             lp = LogPut(lp, "\r\n");
             LogAppend(LOG_PATH, lb, lp); SerialOut(lb, lp); lp = lb;
         }
-        dpmi_arm_fault_trampoline(tib, 0);
+        DpmiArmFaultTrampoline(tib, 0);
         DpmiEnterProtectedMode(tib);
         ev  = VDM_REG(tib, VTIB_EVENT);
         eip = dpmi_pm_eip(tib);
@@ -21455,13 +21455,13 @@ static WOW32_DOSDATA g_wow_dosdata;
 static DWORD g_wow32_serviced = 0, g_wow32_unimpl = 0, g_wow32_declined = 0;
 
 /* Translate a guest selector to a host linear base, for far-pointer arguments.
-   ⚠ Goes through dpmi_sel_base rather than g_Ldt[] directly so that a selector
+   ⚠ Goes through DpmiSelectorBase rather than g_Ldt[] directly so that a selector
      krnl386 created by writing the descriptor shadow resolves the same way here
      as everywhere else in the host. */
 static DWORD wow32_host_sel2lin(WORD sel, void *ctx)
 {
     (void)ctx;
-    return dpmi_sel_base(sel);
+    return DpmiSelectorBase(sel);
 }
 
 #define WOW_SHADOW_ENTRIES DPMI_LDT_MAX
@@ -21479,7 +21479,7 @@ static DWORD g_wow_sync_writes = 0;      /* how many entries krnl386 has changed
      (`INSTALL FAILED st=0xc000011a`, four per run on the rig), and the old code
      then updated g_Ldt[] to match the shadow ANYWAY -- purely so the next pass
      would not retry forever. From that moment g_Ldt[] claimed a base and limit
-     the CPU had never been told about, and dpmi_sel_base() -- which every part of
+     the CPU had never been told about, and DpmiSelectorBase() -- which every part of
      the host uses to resolve a guest pointer, including the WOW32 argument
      translation added this session -- would have answered from it.
      With a separate `seen` copy, a failed install stops being retried without
@@ -21502,7 +21502,7 @@ static void dpmi_ldt_release(int idx)
     g_Ldt[idx].Base = g_Ldt[idx].Limit = 0;
     g_Ldt[idx].Access = 0;                          /* not present */
     g_Ldt[idx].Flags = 0;
-    dpmi_install(idx);
+    DpmiInstall(idx);
     if (g_LdtFreeCount < DPMI_LDT_MAX) g_LdtFree[g_LdtFreeCount++] = (WORD)idx;
 }
 
@@ -21561,7 +21561,7 @@ static int wow_shadow_sync(char **pp)
             DWORD dbase = (nhi & 0xFF000000u) | ((nhi & 0xFFu) << 16) | (nlo >> 16);
             DWORD dlim  = (nlo & 0xFFFFu) | (nhi & 0x000F0000u);
             /* ★ ONLY RECORD IT IF THE CPU ACTUALLY TOOK IT. g_Ldt[] is the host's
-                 record of the REAL LDT, and dpmi_sel_base() answers every guest
+                 record of the REAL LDT, and DpmiSelectorBase() answers every guest
                  pointer translation from it. Writing a descriptor the kernel just
                  rejected would make it a record of what the guest WANTED, which is
                  a different thing and silently wrong exactly where it matters. */
@@ -21608,7 +21608,7 @@ static WORD wow_shadow_selector(void)
     g_Ldt[idx].Limit  = WOW_SHADOW_ENTRIES * 8 - 1;
     g_Ldt[idx].Access = 0xF2;            /* present, DPL3, data R/W -- verw must pass */
     g_Ldt[idx].Flags  = 0;               /* 16-bit                                    */
-    dpmi_install(idx);
+    DpmiInstall(idx);
     g_wow_shadow_sel = (WORD)((idx << 3) | 7);
     return g_wow_shadow_sel;
 }
@@ -21644,7 +21644,7 @@ static int wow_vendor_api_entry(DOS_MACHINE *mp, WORD *sel, WORD *off)
     /* Its own paragraph rather than a corner of DOS_HDLR_SEG: that segment is at
        linear 0x500 and DOS_DEV_SEG (was DOS_ENV_SEG) starts at 0x600, so it has 0x100 bytes total and
        the map in the header shows them nearly all spoken for. */
-    /* Prefer the paragraph wow_place_v86 set aside. On a WOW launch krnl386 owns
+    /* Prefer the paragraph WowPlaceV86 set aside. On a WOW launch krnl386 owns
        every other free paragraph by the time this runs, so the fallback below can
        only succeed on a non-WOW path -- and failing here is not cosmetic: krnl386
        treats a missing vendor API as "Inadequate DPMI Server" and exits. */
@@ -21659,7 +21659,7 @@ static int wow_vendor_api_entry(DOS_MACHINE *mp, WORD *sel, WORD *off)
     g_Ldt[idx].Limit  = 0x1F;
     g_Ldt[idx].Access = 0xFA;            /* present, DPL3, code, readable */
     g_Ldt[idx].Flags  = 0;               /* 16-bit                        */
-    dpmi_install(idx);
+    DpmiInstall(idx);
     g_wow_vendor_sel = (WORD)((idx << 3) | 7);
     *sel = g_wow_vendor_sel;
     return 0;
@@ -21678,14 +21678,14 @@ static int wow_vendor_api_entry(DOS_MACHINE *mp, WORD *sel, WORD *off)
      results are copied after. This is the same shape as DPMI's own translation
      buffer, and for the same reason.
 
-   ⚠ ALLOCATED ONLY ON THE WOW PATH (see wow_place_v86), and every arm below is gated
+   ⚠ ALLOCATED ONLY ON THE WOW PATH (see WowPlaceV86), and every arm below is gated
      on it being present. A DOS or DOS/4GW run therefore takes byte-identical paths to
      before -- which matters, because a fix measured on one guest is a fix for none and
      this one is measured on krnl386. */
 /* Copy [len] bytes out of a PM guest pointer sel:off into the transfer buffer. */
 static int pm_xfer_in(WORD sel, DWORD off, DWORD len)
 {
-    DWORD b = dpmi_sel_base(sel);
+    DWORD b = DpmiSelectorBase(sel);
     const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)(b + off);
     volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)((DWORD)g_PmTransferSegment << 4);
     DWORD k;
@@ -21697,7 +21697,7 @@ static int pm_xfer_in(WORD sel, DWORD off, DWORD len)
 
 static int pm_xfer_out(WORD sel, DWORD off, DWORD len)
 {
-    DWORD b = dpmi_sel_base(sel);
+    DWORD b = DpmiSelectorBase(sel);
     volatile BYTE *d = (volatile BYTE *)(ULONG_PTR)(b + off);
     const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)((DWORD)g_PmTransferSegment << 4);
     DWORD k;
@@ -21712,7 +21712,7 @@ static int pm_xfer_out(WORD sel, DWORD off, DWORD len)
    a reason to walk off the end of a segment. */
 static DWORD pm_xfer_strlen(WORD sel, DWORD off, DWORD cap)
 {
-    DWORD b = dpmi_sel_base(sel), n = 0;
+    DWORD b = DpmiSelectorBase(sel), n = 0;
     const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)(b + off);
     if (!b) return 0;
     while (n < cap && HostReadable((const void *)(s + n), 1) && s[n]) ++n;
@@ -21811,7 +21811,7 @@ static char *pm_int21_xfer(DOS_MACHINE *mp, volatile BYTE *tib, DWORD ah, char *
      Offsets follow the caller's D/B bit (dpmi_caller_off), so a flat 32-bit client's
      EDX/ESI/EDI work as its 16-bit cousins' DX/SI/DI do.
    ⚠ WOW-ONLY, like every pointer-taking PM INT 21h here: the transfer buffer exists only
-     on the WOW path (see wow_place_v86). A DPMI client without one is told AX=7100h CF=1
+     on the WOW path (see WowPlaceV86). A DPMI client without one is told AX=7100h CF=1
      by the caller -- "no LFN API", which is what this host told everyone before #210 and
      the answer every LFN client is written to fall back from. DOS/4GW-style extenders
      that pass 71xxh down in REAL mode reach the V86 arm directly and are not affected.
@@ -21819,7 +21819,7 @@ static char *pm_int21_xfer(DOS_MACHINE *mp, volatile BYTE *tib, DWORD ah, char *
      this is the API made reachable, not a fix for an observed call. */
 static int pm_lfn_copy(WORD sel, DWORD off, DWORD xoff, DWORD len, int in)
 {
-    DWORD b = dpmi_sel_base(sel), k;
+    DWORD b = DpmiSelectorBase(sel), k;
     volatile BYTE *g = (volatile BYTE *)(ULONG_PTR)(b + off);
     volatile BYTE *x = (volatile BYTE *)(ULONG_PTR)(((DWORD)g_PmTransferSegment << 4) + xoff);
     if (!b || xoff + len > (DWORD)g_PmTransferParagraphs * 16u || len > 0x400) return -1;
@@ -22025,7 +22025,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
     DWORD ev = VDM_REG(tib, VTIB_EVENT), eip = dpmi_pm_eip(tib);
     (void)steps;
     /* First safe moment to re-plant anything the skip mode stepped over. */
-    if (g_BreakpointCount) dpmi_bp_rearm_pending(dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) + eip);
+    if (g_BreakpointCount) dpmi_bp_rearm_pending(DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) + eip);
     /* ── ★ A CHANGE DETECTOR, NOT A DUMP. (GH #128, session 37) ────────────────────
          pmbp.txt's dump column answers "what is there when I stop here", which needs
          you to already know where to stop. The question that costs sessions is the
@@ -22094,7 +22094,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
          so it is a call with stack arguments. Getting a length wrong here resumes the
          guest mid-instruction. */
     if (vec == 0 && ev == VDM_EVENT_BOP) {
-        DWORD blin = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) + eip;
+        DWORD blin = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) + eip;
         const volatile BYTE *bb = (const volatile BYTE *)(ULONG_PTR)blin;
         /* ── ★★★★★ A 16-BIT PROCEDURE THIS HOST CALLED HAS RETURNED. ───────────
              The one BOP in the whole VDM that is not the guest asking us for
@@ -22201,7 +22201,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
             if (act == WOWCALL_ACT_EDITTEXT) {
                 WOWUSER_WINDOW *ew = WowUserFindWindow(actarg);
                 DWORD off = res & 0xFFFF;
-                DWORD dgb = ew ? dpmi_sel_base(ew->Instance) : 0;
+                DWORD dgb = ew ? DpmiSelectorBase(ew->Instance) : 0;
                 p = LogPut(p, " -- EDIT text at 0x"); p = LogHex(p, ew ? ew->Instance : 0);
                 p = LogPut(p, ":0x"); p = LogHex(p, off);
                 if (!ew || !ew->Window32 || !dgb || !off) {
@@ -22223,8 +22223,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                 }
                 /* Release the lock we took, whatever came of the read. */
                 if (ew && ew->Memory16 && g_WowUserKernelSegment) {
-                    WORD  rsel2 = wow_callback_selector();
-                    DWORD ssb4  = dpmi_sel_base(
+                    WORD  rsel2 = WowCallbackSelector();
+                    DWORD ssb4  = DpmiSelectorBase(
                                     (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                     WORD  uarg  = ew->Memory16;
                     if (rsel2 && ssb4
@@ -22252,8 +22252,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                 if (!ew || !ew->Memory16 || !ew->Window32 || !g_WowUserKernelSegment) {
                     p = LogPut(p, " -- ★ NOT USABLE; the control's text is NOT saved");
                 } else {
-                    WORD  rsel2 = wow_callback_selector();
-                    DWORD ssb4  = dpmi_sel_base(
+                    WORD  rsel2 = WowCallbackSelector();
+                    DWORD ssb4  = DpmiSelectorBase(
                                     (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                     WORD  larg  = ew->Memory16;
                     if (rsel2 && ssb4
@@ -22287,7 +22287,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
             if (act == WOWCALL_ACT_EDITFILL) {
                 WOWUSER_WINDOW *ew = WowUserFindWindow(actarg);
                 DWORD off = res & 0xFFFF;
-                DWORD dgb = ew ? dpmi_sel_base(ew->Instance) : 0;
+                DWORD dgb = ew ? DpmiSelectorBase(ew->Instance) : 0;
                 p = LogPut(p, " -- EDIT block at 0x"); p = LogHex(p, ew ? ew->Instance : 0);
                 p = LogPut(p, ":0x"); p = LogHex(p, off);
                 if (!ew || !ew->Window32 || !dgb || !off) {
@@ -22306,8 +22306,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         p = LogPut(p, " (★ TRUNCATED at the host's buffer)");
                 }
                 if (ew && ew->Memory16 && g_WowUserKernelSegment) {
-                    WORD  rsel2 = wow_callback_selector();
-                    DWORD ssb4  = dpmi_sel_base(
+                    WORD  rsel2 = WowCallbackSelector();
+                    DWORD ssb4  = DpmiSelectorBase(
                                     (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                     WORD  uarg  = ew->Memory16;
                     if (rsel2 && ssb4
@@ -22328,13 +22328,13 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                  chain above, so a follow-up call re-parks it at the same SS:SP. */
             if (act == WOWCALL_ACT_CLIPLOCK || act == WOWCALL_ACT_CLIPFILL
                 || act == WOWCALL_ACT_CLIPPUT) {
-                WORD  crsel = wow_callback_selector();
-                DWORD cssb  = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                WORD  crsel = WowCallbackSelector();
+                DWORD cssb  = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                 WORD  cds   = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
                 WORD  harg  = (act == WOWCALL_ACT_CLIPLOCK) ? (WORD)res : actarg;
                 DWORD fplin = 0;
                 if (act != WOWCALL_ACT_CLIPLOCK && (res >> 16))
-                    fplin = dpmi_sel_base((WORD)(res >> 16)) + (res & 0xFFFF);
+                    fplin = DpmiSelectorBase((WORD)(res >> 16)) + (res & 0xFFFF);
                 if (act == WOWCALL_ACT_CLIPLOCK) {
                     p = LogPut(p, " -- CLIP GlobalAlloc -> 0x"); p = LogHex(p, harg);
                 } else if (act == WOWCALL_ACT_CLIPFILL) {
@@ -22413,8 +22413,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                  and nothing accumulates. See src/wow/wowenum.h. */
             if (act == WOWCALL_ACT_ENUMNEXT) {
                 char enote[256];
-                WORD  ersel = wow_callback_selector();
-                DWORD essb  = dpmi_sel_base(
+                WORD  ersel = WowCallbackSelector();
+                DWORD essb  = DpmiSelectorBase(
                     (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                 enote[0] = 0;
                 WowEnumStep(tib, essb, ersel, 0, res, enote, sizeof enote);
@@ -22422,8 +22422,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
             }
             if (act == WOWCALL_ACT_MODALPUMP) {
                 char mnote[512];
-                WORD  mrsel = wow_callback_selector();
-                DWORD mssb  = dpmi_sel_base(
+                WORD  mrsel = WowCallbackSelector();
+                DWORD mssb  = DpmiSelectorBase(
                     (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                 /* s88: the modal loop calls a #32770 dialog's DLGPROC directly, so a
                    FALSE answer to WM_CLOSE got no DefDlgProc default -- Task List's X
@@ -22526,7 +22526,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                  traced in full -- which is where the arguments worth reading
                  are -- and after that the block's DUMP is dropped while the
                  verdict line is kept. Interleaving cannot defeat it. */
-            {   DWORD fsb  = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+            {   DWORD fsb  = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                 DWORD fbp  = VDM_REG(tib, VTIB_EBP) & 0xFFFF;
                 g_WowFoldMute = 0;
                 if (bcode == 0x51 && fsb
@@ -22577,7 +22577,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                  rewrote, so one lookup settles it whatever the guest is. Print the address
                  too: a BOP at an EIP with no pmap entry is the guest's own `C4 C4`, and
                  that is a completely different bug from a patched INT whose vector we lost. */
-            {   DWORD cb3 = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
+            {   DWORD cb3 = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
                 DWORD lin3 = cb3 + eip;
                 BYTE  pv3 = PatchMapGet(lin3);
                 p = LogPut(p, " cs=0x"); p = LogHex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
@@ -22602,7 +22602,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                  0x1f" into "a swallowed INT 21h", which is a different bug entirely. */
             if (g_WowModuleCount && g_WowImage[0]) {
                 int mi;
-                DWORD csb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
+                DWORD csb = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
                 for (mi = 0; mi < (int)g_WowModule[0].SegmentCount; ++mi) {
                     NE_SEGMENT *sg = &g_WowModule[0].Segments[mi];
                     if (!sg->Sector || eip + 1 >= sg->Length) continue;
@@ -22632,7 +22632,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                So the useful question is never "implement 0x51", it is "WHICH function
                  is being asked for", and that is on the guest stack. Dump it. This
                  turns "implement wow32.dll" into a short, specific list. */
-            {   DWORD ssb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+            {   DWORD ssb = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                 DWORD sp16 = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
                 const volatile BYTE *st = (const volatile BYTE *)(ULONG_PTR)(ssb + sp16);
                 int w;
@@ -22739,7 +22739,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                              schedule by writing it -- but measured, what that does is
                              restore the caller after someone else ran. Writing it here
                              would park the wrong stack in the wrong TDB. */
-                        {   DWORD dgb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_DS)
+                        {   DWORD dgb = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_DS)
                                                              & 0xFFFF));
                             if (dgb) {
                                 const volatile BYTE *dg =
@@ -22816,7 +22816,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                                   | (fb[WOW32_OFF_ARGS + k * 2 + 1] << 8));
                                     DWORD asel = (DWORD)(fb[WOW32_OFF_ARGS + k * 2 + 2]
                                                   | (fb[WOW32_OFF_ARGS + k * 2 + 3] << 8));
-                                    DWORD abase = asel ? dpmi_sel_base((WORD)asel) : 0;
+                                    DWORD abase = asel ? DpmiSelectorBase((WORD)asel) : 0;
                                     const volatile BYTE *s;
                                     unsigned n2 = 0;
                                     if (!asel || !abase) continue;
@@ -22890,7 +22890,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                  anything we put in registers is overwritten before the caller
                  sees it). Wow32SetReturn() is the only correct way. */
             if (bcode == 0x51) {
-                DWORD ssb2 = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                DWORD ssb2 = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                 WOW32_FRAME f;
                 f.FrameBase      = (volatile BYTE *)(ULONG_PTR)
                             (ssb2 + (VDM_REG(tib, VTIB_EBP) & 0xFFFF));
@@ -23036,7 +23036,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                            creator home through epilogue mode 25. */
                     int wsi = (f.Id == 0x74) ? ws_free() : -1;
                     if (f.Id == 0x74 && wsi >= 0) {
-                        DWORD tb = dpmi_sel_base(cur);
+                        DWORD tb = DpmiSelectorBase(cur);
                         WORD  hinst = 0;
                         int   fromtdb = 0;
                         if (tb) {
@@ -23188,7 +23188,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     DWORD boff = Wow32ArgWord(&f, 12);
                     WORD  bsel = Wow32ArgWord(&f, 14);
                     DWORD h    = Wow32ArgWord(&f, 16);
-                    DWORD bbase = dpmi_sel_base(bsel);
+                    DWORD bbase = DpmiSelectorBase(bsel);
                     DWORD rd = 0;
                     int ok = 0;
                     p = LogPut(p, "\n     WOW32 0x97 read (site 0x"); p = LogHex(p, f.CallSite);
@@ -23217,7 +23217,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     DWORD drv  = Wow32ArgWord(&f, 4) & 0xFF;
                     DWORD sax = VDM_REG(tib, VTIB_EAX), sdx = VDM_REG(tib, VTIB_EDX);
                     DWORD sds = VDM_REG(tib, VTIB_DS),  ssi = VDM_REG(tib, VTIB_ESI);
-                    DWORD gbase = dpmi_sel_base(gsel);
+                    DWORD gbase = DpmiSelectorBase(gsel);
                     volatile BYTE *xb = (volatile BYTE *)(ULONG_PTR)
                                         ((DWORD)g_PmTransferSegment << 4);
                     int k;
@@ -23310,7 +23310,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         } else {
                             volatile BYTE *pb = (volatile BYTE *)(ULONG_PTR)
                                                 ((DWORD)g_WowPathSegment << 4);
-                            WORD sel = dpmi_seg_to_desc(g_WowPathSegment);
+                            WORD sel = DpmiSegmentToDescriptor(g_WowPathSegment);
                             for (k = 0; k <= (int)n && k < 0x1FF; ++k)
                                 pb[k] = (BYTE)full[k];
                             pb[k < 0x1FF ? k : 0x1FF] = 0;
@@ -23423,7 +23423,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                 if (!f.IsKernel && g_WowKernel2Segment && f.StubSegment == g_WowKernel2Segment
                     && f.Id == WOW32K2_TASKENV) {
                     WORD  pbsel = Wow32ArgWord(&f, 4), pboff = Wow32ArgWord(&f, 2);
-                    DWORD pblin = pbsel ? dpmi_sel_base(pbsel) : 0;
+                    DWORD pblin = pbsel ? DpmiSelectorBase(pbsel) : 0;
                     WORD  env = 0;
                     const char *src = "";
                     p = LogPut(p, "\n     WOW32 seg2 0xd1 task environment: parmblock 0x");
@@ -23436,7 +23436,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                     }
                     if (!env && g_WowPspCount > 0) {
                         WORD  psel = g_WowPspSelector[g_WowPspCount - 1];
-                        DWORD plin = dpmi_sel_base(psel);
+                        DWORD plin = DpmiSelectorBase(psel);
                         p = LogPut(p, " segEnv=0 (inherit) parent PSP 0x");
                         p = LogHex(p, psel);
                         if (plin && HostReadable((const void *)(ULONG_PTR)plin, 0x2e)) {
@@ -23446,7 +23446,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             src = "the parent PSP's +0x2c";
                         }
                     }
-                    {   DWORD elin = env ? dpmi_sel_base(env) : 0;
+                    {   DWORD elin = env ? DpmiSelectorBase(env) : 0;
                         DWORD cap  = (DWORD)WOW_ENV_PARAS * 16u;
                         p = LogPut(p, " src 0x"); p = LogHex(p, env);
                         p = LogPut(p, " ("); p = LogPut(p, src[0] ? src : "nothing");
@@ -23462,7 +23462,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             /* The MS-DOS 3.0+ block: the strings, the empty string
                                that ends them, a WORD count, then the program's own
                                pathname. krnl386 finds its OWN exe through exactly
-                               this tail (see wow_place_v86), so it is part of the
+                               this tail (see WowPlaceV86), so it is part of the
                                environment and not an optional extra. */
                             while (i < cap && s[i]) {
                                 while (i < cap && s[i]) ++i;
@@ -23476,7 +23476,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             }
                             if (i > cap) i = cap;
                             for (k = 0; k < i; ++k) d[k] = s[k];
-                            sel = dpmi_seg_to_desc(g_WowEnvironmentSegment);
+                            sel = DpmiSegmentToDescriptor(g_WowEnvironmentSegment);
                             p = LogPut(p, " -> copied 0x"); p = LogHex(p, i);
                             p = LogPut(p, " bytes to 0x"); p = LogHex(p, g_WowEnvironmentSegment);
                             p = LogPut(p, ":0000 as sel 0x"); p = LogHex(p, sel);
@@ -23731,8 +23731,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                              the run belongs to the 16-bit procedure until its
                              `retf` reaches our stub. */
                         if (f.CallbackProcedure) {
-                            WORD  rsel = wow_callback_selector();
-                            DWORD ssb3 = dpmi_sel_base(
+                            WORD  rsel = WowCallbackSelector();
+                            DWORD ssb3 = DpmiSelectorBase(
                                 (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                             int ai, cbabsent = 0;
                             p = LogPut(p, "WOWCALL: -> 0x");
@@ -23836,8 +23836,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                              stops the day it does from being a mystery. */
                         else if (f.IsEnumerationRequested) {
                             char enote[256];
-                            WORD  ersel = wow_callback_selector();
-                            DWORD essb  = dpmi_sel_base(
+                            WORD  ersel = WowCallbackSelector();
+                            DWORD essb  = DpmiSelectorBase(
                                 (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                             enote[0] = 0;
                             WowEnumStep(tib, essb, ersel, 1, 0,
@@ -23847,8 +23847,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         }
                         else if (f.IsModalDialog) {
                             char mnote[512];
-                            WORD  mrsel = wow_callback_selector();
-                            DWORD mssb  = dpmi_sel_base(
+                            WORD  mrsel = WowCallbackSelector();
+                            DWORD mssb  = DpmiSelectorBase(
                                 (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                             mnote[0] = 0;
                             p = LogPut(p, "WOWDLG: the caller is PARKED inside"
@@ -24006,8 +24006,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                              Same first step as USER's branch. */
                         if (f.IsEnumerationRequested) {
                             char enote[256];
-                            WORD  ersel = wow_callback_selector();
-                            DWORD essb  = dpmi_sel_base(
+                            WORD  ersel = WowCallbackSelector();
+                            DWORD essb  = DpmiSelectorBase(
                                 (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                             enote[0] = 0;
                             WowEnumStep(tib, essb, ersel, 1, 0, enote, sizeof enote);
@@ -24282,10 +24282,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                            leave EIP WHERE IT IS, so the real instruction runs next and the
                            client carries on as if we had never been here. */
                         DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
-                        DWORD cb = dpmi_sel_base((WORD)cs);
+                        DWORD cb = DpmiSelectorBase((WORD)cs);
                         DWORD lin = cb + eip;
                         WORD  ss  = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
-                        DWORD sb  = dpmi_sel_base(ss);
+                        DWORD sb  = DpmiSelectorBase(ss);
                         DWORD sp  = DpmiSelectorIs32(ss) ? VDM_REG(tib, VTIB_ESP)
                                                       : (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
                         p = LogPut(p, "DPMI-BP HIT linear 0x"); p = LogHex(p, lin);
@@ -24330,7 +24330,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                              most of the way to being no debugger. */
                         {   WORD dsv = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
                             WORD esv = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF);
-                            DWORD dsb = dpmi_sel_base(dsv), esb = dpmi_sel_base(esv);
+                            DWORD dsb = DpmiSelectorBase(dsv), esb = DpmiSelectorBase(esv);
                             DWORD siv = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
                             DWORD div = VDM_REG(tib, VTIB_EDI) & 0xFFFF;
                             p = LogPut(p, "\r\n  dsbase=0x"); p = LogHex(p, dsb);
@@ -24400,7 +24400,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                               DWORD da = g_BreakpointDump[bk];
                               const BYTE *dm;
                               if (g_BreakpointMode[bk] & 4) {
-                                  DWORD dsb2 = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_DS)
+                                  DWORD dsb2 = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_DS)
                                                                     & 0xFFFF));
                                   p = LogPut(p, "\r\n  dump@ds:0x"); p = LogHex(p, da);
                                   da += dsb2;
@@ -24584,7 +24584,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                            ★ #244: C0h AND 87h NOW ANSWER AS IN V86 -- the "two modes
                              disagree knowingly" above is retired for these two:
                                C0h -> ES:BX = a selector over DOS_CTAB_SEG (built as INT 31h
-                                      0002h builds one, dpmi_seg_to_desc -- the INT 21h
+                                      0002h builds one, DpmiSegmentToDescriptor -- the INT 21h
                                       AH=34h/52h treatment) : DOS_SYSCONF_OFF, AH=0, CF=0.
                                       ⚠ So the session-36 Win16 driver now reads model FCh
                                       and takes its AT path instead of its "no C0h" path.
@@ -24607,7 +24607,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                               VDM_SET16(tib, VTIB_EAX, (WORD)CMOS_EXTENDED_KB);
                               VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                           } else if (ah15 == 0xC0) {
-                              WORD selc0 = dpmi_seg_to_desc(DOS_CTAB_SEG);
+                              WORD selc0 = DpmiSegmentToDescriptor(DOS_CTAB_SEG);
                               if (selc0) {
                                   VDM_SET16(tib, VTIB_ES, selc0);
                                   VDM_SET16(tib, VTIB_EBX, DOS_SYSCONF_OFF);
@@ -24622,7 +24622,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                               WORD  es87 = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF);
                               DWORD off  = DpmiSelectorIs32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF))
                                            ? VDM_REG(tib, VTIB_ESI) : (VDM_REG(tib, VTIB_ESI) & 0xFFFF);
-                              DWORD gl   = dpmi_sel_base(es87) + off;
+                              DWORD gl   = DpmiSelectorBase(es87) + off;
                               unsigned rc87 = Int15MoveBlockAt(tib,
                                   (es87 && HostReadable((const void *)(ULONG_PTR)gl, 0x30)) ? gl : 0);
                               VDM_SET16(tib, VTIB_EAX, (WORD)((rc87 << 8) | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
@@ -24742,7 +24742,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             /* DS:SI names the vendor. Match it rather than answering
                                every caller: the entry we hand back is specific to the
                                "MS-DOS" contract and means nothing to anyone else. */
-                            DWORD sb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF));
+                            DWORD sb = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF));
                             DWORD so = VDM_REG(tib, VTIB_ESI) & 0xFFFF;
                             const volatile BYTE *v = (const volatile BYTE *)(ULONG_PTR)(sb + so);
                             static const char want[] = "MS-DOS";
@@ -24892,7 +24892,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 int idx = g_LdtFree[--g_LdtFreeCount];
                                 g_Ldt[idx].Base = 0; g_Ldt[idx].Limit = 0;
                                 g_Ldt[idx].Access = 0xF2; g_Ldt[idx].Flags = 0;
-                                dpmi_install(idx);
+                                DpmiInstall(idx);
                                 VDM_SET16(tib, VTIB_EAX, (WORD)((idx << 3) | 7));
                                 p = LogPut(p, " -> sel 0x"); p = LogHex(p, (idx << 3) | 7);
                                 p = LogPut(p, " (recycled)");
@@ -24907,7 +24907,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 int idx = g_LdtNext++;
                                 g_Ldt[idx].Base = 0; g_Ldt[idx].Limit = 0;
                                 g_Ldt[idx].Access = 0xF2; g_Ldt[idx].Flags = 0;  /* data, RPL3 */
-                                dpmi_install(idx);
+                                DpmiInstall(idx);
                             }
                             VDM_SET16(tib, VTIB_EAX, basesel);
                             p = LogPut(p, " -> sel 0x"); p = LogHex(p, basesel);
@@ -24925,7 +24925,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  (#248, measured by p_dpmi31 on the first cut). */
                             int reserved = idx >= 1
                                 && (idx < DPMI_LDT_RESERVED
-                                    || fsel == g_dpmi_hdlr_sel || fsel == g_PmReturnSelector
+                                    || fsel == g_DpmiHandlerSelector || fsel == g_PmReturnSelector
                                     || fsel == g_DpmiFaultSelector || fsel == g_DpmiFaultCodeSelector);
                             /* ── #248: A SELECTOR THAT WAS NEVER THE CLIENT'S IS 8022h, NOT
                                  SUCCESS. This arm used to fall through to "kept" with CF=0 for
@@ -24950,7 +24950,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 if (!dup) {
                                     dpmi_ldt_release(idx);          /* not present, on the free list */
                                     /* If this was a 0002 mapping, stop claiming it. */
-                                    dpmi_s2d_forget(fsel);
+                                    DpmiSegmentToDescriptorForget(fsel);
                                     p = LogPut(p, " -> freed sel 0x"); p = LogHex(p, fsel);
                                     p = LogPut(p, " ("); p = LogHex(p, (DWORD)g_LdtFreeCount);
                                     p = LogPut(p, " on the free list)");
@@ -24981,7 +24981,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 int a = g_LdtNext++;
                                 g_Ldt[a].Base = 0; g_Ldt[a].Limit = 0;
                                 g_Ldt[a].Access = 0xF2; g_Ldt[a].Flags = 0;
-                                dpmi_install(a);
+                                DpmiInstall(a);
                             }
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                             VDM_SET16(tib, VTIB_EAX, bs);
@@ -25034,7 +25034,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                        The reason the guard exists is the ACCESS byte, not the
                                          base: a client that retypes the initial DS/SS to code
                                          faults on its next stack write (GH #18 run 69). So
-                                         take the base and limit, and let dpmi_install() apply
+                                         take the base and limit, and let DpmiInstall() apply
                                          its existing idx-2/3 force-to-writable-data rule --
                                          which is where that rule already lives. Index 0 is the
                                          null selector and stays untouchable. */
@@ -25052,7 +25052,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                         g_Ldt[a].Limit  = (e[0] & 0xFFFFu) | (e[1] & 0x000F0000u);
                                         g_Ldt[a].Access = (BYTE)((e[1] >> 8) & 0xFF);
                                         g_Ldt[a].Flags  = (BYTE)((e[1] >> 20) & 0x0F);
-                                        dpmi_install(a);       /* force-types idx 2 and 3 */
+                                        DpmiInstall(a);       /* force-types idx 2 and 3 */
                                         ++done;
                                         continue;
                                     }
@@ -25187,7 +25187,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             } else {
                                 g_Ldt[widx].Base = 0; g_Ldt[widx].Limit = 0;
                                 g_Ldt[widx].Access = 0xF2; g_Ldt[widx].Flags = 0;
-                                dpmi_install(widx);
+                                DpmiInstall(widx);
                                 if (widx >= g_LdtNext) g_LdtNext = widx + 1;
                                 VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                                 p = LogPut(p, " -> allocated specific sel 0x"); p = LogHex(p, want);
@@ -25254,7 +25254,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 g_Ldt[idx].Base = (DWORD)seg << 4;
                                 g_Ldt[idx].Limit = want ? ((DWORD)want << 4) - 1 : 0;
                                 g_Ldt[idx].Access = 0xF2; g_Ldt[idx].Flags = 0;  /* data, RPL3 */
-                                dpmi_install(idx);
+                                DpmiInstall(idx);
                                 if (g_DpmiDosBlockCount < DPMI_DOSBLK_MAX) g_DpmiDosBlock[g_DpmiDosBlockCount++] = seg;
                                 VDM_SET16(tib, VTIB_EAX, seg);
                                 VDM_SET16(tib, VTIB_EDX, (WORD)((idx << 3) | 7));
@@ -25314,7 +25314,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                     p = LogPut(p, " -> resize FAIL max=0x"); p = LogHex(p, max);
                                 } else {
                                     g_Ldt[idx].Limit = want ? ((DWORD)want << 4) - 1 : 0;
-                                    dpmi_install(idx);
+                                    DpmiInstall(idx);
                                     p = LogPut(p, " -> resize seg=0x"); p = LogHex(p, seg);
                                     p = LogPut(p, " to 0x"); p = LogHex(p, want); p = LogPut(p, " paras");
                                 }
@@ -25445,7 +25445,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 p = LogPut(p, " -> getEXC bad exception 0x"); p = LogHex(p, bl); break;
                             }
                             if (!g_PmException[bl].IsSet) {
-                                g_PmException[bl].Selector = dpmi_hdlr_code_sel();
+                                g_PmException[bl].Selector = DpmiHandlerCodeSelector();
                                 g_PmException[bl].Offset = DPMI_SSR_OFF;
                             }
                             VDM_SET16(tib, VTIB_ECX, g_PmException[bl].Selector);
@@ -25516,7 +25516,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             p = LogPut(p, " -> getIF ");  p = LogHex(p, g_DpmiVi);
                             break;
                         case 0x0006: {                             /* get base of sel BX -> CX:DX */
-                            DWORD b = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_EBX)));
+                            DWORD b = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_EBX)));
                             VDM_SET16(tib, VTIB_ECX, b >> 16); VDM_SET16(tib, VTIB_EDX, b & 0xFFFF);
                             p = LogPut(p, " sel 0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = LogPut(p, " -> base 0x"); p = LogHex(p, b);
@@ -25541,21 +25541,21 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             if (ax == 0x0007) {                    /* set base of sel BX = CX:DX */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
                             DWORD b = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                            if (idx >= 1 && idx < DPMI_LDT_MAX) { g_Ldt[idx].Base = b; dpmi_install(idx); }
+                            if (idx >= 1 && idx < DPMI_LDT_MAX) { g_Ldt[idx].Base = b; DpmiInstall(idx); }
                             p = LogPut(p, " sel 0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = LogPut(p, " -> setbase 0x"); p = LogHex(p, b);
                             break; }
                             if (ax == 0x0008) {                    /* set limit of sel BX = CX:DX */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
                             DWORD l = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                            /* 0008's limit is in BYTES and the host chooses G (dpmi_install
+                            /* 0008's limit is in BYTES and the host chooses G (DpmiInstall
                                scales anything past 1 MB). A G bit the client left in the
                                flags via 0009 CH must not survive into a byte limit: ZAR
                                sets 8092 (G=1) first and 0x4afff bytes second, and G=1 over
                                a raw 0x4afff field is a 1.2 GB segment NT refuses. */
                             if (idx >= 1 && idx < DPMI_LDT_MAX) {
                                 g_Ldt[idx].Limit = l; g_Ldt[idx].Flags &= (BYTE)~0x8;
-                                dpmi_install(idx);
+                                DpmiInstall(idx);
                             }
                             p = LogPut(p, " sel 0x"); p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                             p = LogPut(p, " -> setlimit 0x"); p = LogHex(p, l);
@@ -25570,7 +25570,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                    (D/B) set -> flags bit2 -> DpmiSelectorIs32() true. */
                                 g_Ldt[idx].Access = VDM_REG(tib, VTIB_ECX) & 0xFF;
                                 g_Ldt[idx].Flags  = (VDM_REG(tib, VTIB_ECX) >> 12) & 0xF;  /* CH high nibble */
-                                dpmi_install(idx);
+                                DpmiInstall(idx);
                                 /* "This region is now code" is the client naming its own
                                    requirement -- and the only notice we get that a module
                                    it just loaded is about to be executed. Patch its INT
@@ -25605,7 +25605,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             idx = g_LdtNext++;
                             g_Ldt[idx] = g_Ldt[src];
                             g_Ldt[idx].Access = 0xF2;              /* data alias */
-                            dpmi_install(idx);
+                            DpmiInstall(idx);
                             VDM_SET16(tib, VTIB_EAX, (WORD)((idx << 3) | 7));
                             p = LogPut(p, " -> alias sel 0x"); p = LogHex(p, (idx << 3) | 7);
                             break; }
@@ -25621,7 +25621,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                            conclusion DpmiSwitchToProtectedMode() reaches from the other direction. */
                         case 0x0002: {                             /* segment (BX) -> descriptor */
                             WORD rseg = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                            WORD s2d  = dpmi_seg_to_desc(rseg);
+                            WORD s2d  = DpmiSegmentToDescriptor(rseg);
                             if (!s2d) {
                                 VDM_REG(tib, VTIB_EFLAGS) |= 1u;
                                 VDM_SET16(tib, VTIB_EAX, 0x8011);  /* descriptor unavailable */
@@ -25656,7 +25656,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             break;
                         case 0x000B: {                             /* get descriptor of sel BX -> ES:(E)DI */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
-                            DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
+                            DWORD esb = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_ES));
                             /* Same ES:(E)DI rule as the RMCS -- see dpmi_rmcs_ptr. A no-op for
                                the 16-bit extender code that calls this today; the probe says so
                                in the log rather than leaving it as an assumption. */
@@ -25674,7 +25674,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             break; }
                         case 0x000C: {                             /* set descriptor of sel BX from ES:(E)DI */
                             int idx = (VDM_REG(tib, VTIB_EBX) & 0xFFFF) >> 3;
-                            DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
+                            DWORD esb = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_ES));
                             volatile DWORD *d = (volatile DWORD *)(ULONG_PTR)dpmi_rmcs_ptr(tib, esb);
                             DWORD lo, hi;
                             dpmi_rmcs_probe(tib, esb, 4, 0);       /* observation only */
@@ -25687,7 +25687,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                               | (((hi >> 24) & 0xFF) << 24);
                             g_Ldt[idx].Access = (BYTE)((hi >> 8) & 0xFF);
                             g_Ldt[idx].Flags  = (BYTE)((hi >> 20) & 0xF);
-                            dpmi_install(idx);
+                            DpmiInstall(idx);
                             if (DPMI_ACC_IS_CODE(g_Ldt[idx].Access)) { /* same rule as 0009 */
                                 dpmi_patch_code_region(g_Ldt[idx].Base, g_Ldt[idx].Limit,
                                                        (g_Ldt[idx].Flags & 0x4) != 0);
@@ -25707,7 +25707,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                The size is nominal rather than 0: nothing is written to the
                                buffer, but a client that allocates AX bytes should not be handed
                                a zero-size allocation. */
-                            WORD sel = dpmi_hdlr_code_sel();
+                            WORD sel = DpmiHandlerCodeSelector();
                             VDM_SET16(tib, VTIB_EAX, 0x0040);
                             VDM_SET16(tib, VTIB_EBX, DOS_HDLR_SEG);
                             VDM_SET16(tib, VTIB_ECX, DPMI_SSR_OFF);
@@ -25725,7 +25725,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                `73 03 e9 44 02` = jnc +3 / jmp +0x244, so CF=1 sends DOS/4GW
                                straight to its abort path. Returning the two entries is what
                                lets it proceed. */
-                            WORD sel = dpmi_hdlr_code_sel();
+                            WORD sel = DpmiHandlerCodeSelector();
                             VDM_SET16(tib, VTIB_EBX, DOS_HDLR_SEG);        /* real->prot seg   */
                             VDM_SET16(tib, VTIB_ECX, DPMI_RAW2PM_OFF);     /* real->prot off   */
                             VDM_SET16(tib, VTIB_ESI, sel);                 /* prot->real sel   */
@@ -25752,7 +25752,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                know these numbers: 0501 is VirtualAlloc in our own process, so the
                                pool is what we say it is. Report it consistently in both units
                                rather than making the client guess. Reserved fields stay -1. */
-                            DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
+                            DWORD esb = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_ES));
                             /* ES:(E)DI by the caller's D/B bit -- see dpmi_caller_off. Duke3D
                                passes a 32-bit stack offset here and the old 16-bit mask sent
                                the block to low memory; it then read its own uninitialised
@@ -25970,7 +25970,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             break; }
                         case 0x0300: {                             /* simulate real-mode interrupt: BL=int, ES:DI=RMCS */
                             DWORD intno = VDM_REG(tib, VTIB_EBX) & 0xFF;
-                            DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
+                            DWORD esb = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_ES));
                             volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)dpmi_rmcs_ptr(tib, esb);
                             dpmi_rmcs_probe(tib, esb, 0, intno);   /* observation only */
                             /* ── #247: ONLY TWO WAYS IN HERE NOW. The decision site above sent every
@@ -26142,7 +26142,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             /* ── #247: AND 0300h IS THIS CALL TOO, with CS:IP = IVT[BL] (simint_vec >= 0,
                                  set at the decision site above the switch). Everything below is
                                  shared; the three places 0300h differs say so. */
-                            DWORD esb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_ES));
+                            DWORD esb = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_ES));
                             volatile BYTE *r = (volatile BYTE *)(ULONG_PTR)dpmi_rmcs_ptr(tib, esb);
                             if (simint_vec >= 0) dpmi_rmcs_probe(tib, esb, 0, (DWORD)simint_vec);
                             else dpmi_rmcs_probe(tib, esb, (ax == 0x0302) ? 2 : 1, 0);  /* observation only */
@@ -26184,7 +26184,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             if (cxw) {
                                 WORD nsp; WORD pss = (WORD)(pSs & 0xFFFF);
                                 DWORD poff = DpmiSelectorIs32(pss) ? pSp : (pSp & 0xFFFF);
-                                const BYTE *src = (const BYTE *)(ULONG_PTR)(dpmi_sel_base(pss) + poff);
+                                const BYTE *src = (const BYTE *)(ULONG_PTR)(DpmiSelectorBase(pss) + poff);
                                 p = LogPut(p, " copy=0x"); p = LogHex(p, cxw);
                                 if (RmcsStackPlan(rsp, (unsigned)cxw, (ax == 0x0302) ? 6u : 4u, &nsp)
                                     && HostReadable(src, cxw * 2u)) {
@@ -26445,7 +26445,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         if (ah == 0x09) {                          /* print $-string DS:DX */
                             /* Resolve DS's linear base from the LDT so a client can print
                                through a descriptor it allocated + based itself. */
-                            DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
+                            DWORD dsb = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
                             const volatile BYTE *s = (const volatile BYTE *)(ULONG_PTR)
                                 (dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
                             char ob[256]; char *op = ob; int k;
@@ -26483,7 +26483,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         }
                         if (ah == 0x40) {                          /* write BX=handle CX=cnt DS:DX=buf */
                             DWORD bh = VDM_REG(tib, VTIB_EBX) & 0xFFFF, cnt = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
-                            DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
+                            DWORD dsb = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
                             const volatile BYTE *b = (const volatile BYTE *)(ULONG_PTR)
                                 (dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
                             /* ── #256: A BOUND HANDLE IS A FILE, WHATEVER ITS NUMBER. ──────
@@ -26544,7 +26544,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                              too, and the reason both were filed under "runs but lies"
                              rather than as a missing DOS call. */
                         if (ah == 0x3C || ah == 0x3D || ah == 0x5B) {  /* create / open: DS:DX = ASCIIZ name */
-                            DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
+                            DWORD dsb = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
                             const char *fn = (const char *)(ULONG_PTR)(dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
                             /* ── ★★ AL IS A BIT FIELD, NOT A NUMBER. (#128, session 37) ──
                                  DOS open mode: bits 0-2 = access (0 read, 1 write, 2 r/w),
@@ -26628,7 +26628,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         }
                         if (ah == 0x3F) {                          /* read: BX=handle CX=cnt -> DS:DX */
                             DWORD h = VDM_REG(tib, VTIB_EBX) & 0xFFFF, cnt = VDM_REG(tib, VTIB_ECX) & 0xFFFF, rd = 0;
-                            DWORD dsb = dpmi_sel_base((WORD)VDM_REG(tib, VTIB_DS));
+                            DWORD dsb = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
                             void *b = (void *)(ULONG_PTR)(dsb + (VDM_REG(tib, VTIB_EDX) & 0xFFFF));
                             VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                             if (h < DOS_MAX_FILES && m.FileHandles[h]) {
@@ -26706,7 +26706,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                              treats it as a real-mode segment reads or writes whatever happens to
                              live at selector<<4. That is a silent wrong-memory bug of exactly the
                              kind that cost this session a day (see the D/B fix). Pointer-taking
-                             services are hand-rolled above with dpmi_sel_base(), or stay loud.
+                             services are hand-rolled above with DpmiSelectorBase(), or stay loud.
                            ► ES-as-SEGMENT services (49h free, 4Ah resize) are ALSO excluded from
                              the whitelist: the block address they want is a real-mode paragraph,
                              but in PM ES holds a selector. Session 16 said "if Doom calls 49h the
@@ -26775,7 +26775,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 g_Ldt[idx].Limit  = want ? (want * 16u - 1u) : 0xFFFF;
                                 g_Ldt[idx].Access = 0xF2;          /* present, DPL3, data R/W */
                                 g_Ldt[idx].Flags  = 0;             /* 16-bit, byte granular   */
-                                dpmi_install(idx);
+                                DpmiInstall(idx);
                                 sel = (WORD)((idx << 3) | 7);
                                 VDM_SET16(tib, VTIB_EAX, sel);   /* AX only -- see above */
                                 p = LogPut(p, " -> seg 0x"); p = LogHex(p, seg);
@@ -26803,7 +26803,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                have. */
                             WORD sel = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF);
                             int idx = sel >> 3;
-                            DWORD segbase = dpmi_sel_base(sel);
+                            DWORD segbase = DpmiSelectorBase(sel);
                             int err;
                             p = LogPut(p, "INT21h AH=49 (PM) free sel 0x"); p = LogHex(p, sel);
                             p = LogPut(p, " base 0x"); p = LogHex(p, segbase);
@@ -26891,7 +26891,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                what happens when we improvise extra return values. */
                             WORD sel = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF);
                             int idx = sel >> 3;
-                            DWORD segbase = dpmi_sel_base(sel);
+                            DWORD segbase = DpmiSelectorBase(sel);
                             DWORD want = VDM_REG(tib, VTIB_EBX) & 0xFFFF;
                             uint16_t max = 0;
                             p = LogPut(p, "INT21h AH=4A (PM) resize sel 0x"); p = LogHex(p, sel);
@@ -26914,7 +26914,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                     VDM_REG(tib, VTIB_EFLAGS) &= ~1u;
                                     if (idx >= 1 && idx < DPMI_LDT_MAX) {
                                         g_Ldt[idx].Limit = want ? (want * 16u - 1u) : 0;
-                                        dpmi_install(idx);
+                                        DpmiInstall(idx);
                                         p = LogPut(p, " -> ok, sel limit now 0x");
                                         p = LogHex(p, g_Ldt[idx].Limit);
                                     } else p = LogPut(p, " -> ok (no descriptor to update)");
@@ -27003,7 +27003,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         if (ah == 0x34 || ah == 0x52) {
                             WORD sel34;
                             m.TraceCursor = p; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); p = m.TraceCursor;
-                            sel34 = dpmi_seg_to_desc((WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF));
+                            sel34 = DpmiSegmentToDescriptor((WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF));
                             p = LogPut(p, "INT21h AH=0x"); p = LogHex(p, ah);
                             p = LogPut(p, " (PM) far pointer at V86 0x");
                             p = LogHex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
@@ -27083,10 +27083,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                              AH=52h already get, for the same reason. */
                         if (ah == 0x55 || ah == 0x26) {
                             WORD  dsel = (WORD)(VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                            DWORD dlin = dpmi_sel_base(dsel);
+                            DWORD dlin = DpmiSelectorBase(dsel);
                             const volatile BYTE *src =
                                 (const volatile BYTE *)(ULONG_PTR)((DWORD)DOS_PSP_SEG << 4);
-                            WORD esel = dpmi_seg_to_desc((WORD)DOS_ENV_SEG);
+                            WORD esel = DpmiSegmentToDescriptor((WORD)DOS_ENV_SEG);
                             p = LogPut(p, "INT21h AH=0x"); p = LogHex(p, ah);
                             p = LogPut(p, " (PM) create PSP at sel 0x"); p = LogHex(p, dsel);
                             if (!dlin || !HostWritable((void *)(ULONG_PTR)dlin, 256)) {
@@ -27167,7 +27167,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                            full register file and the caller's bytes so the NEXT run names it.
                            Note the caller's INT is 2 bytes back from EIP (the patched BOP). */
                         { DWORD cs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
-                          DWORD cb = dpmi_sel_base((WORD)cs);
+                          DWORD cb = DpmiSelectorBase((WORD)cs);
                           DWORD ip = VDM_REG(tib, VTIB_EIP);
                           p = LogPut(p, "INT21h AH=0x"); p = LogHex(p, ah); p = LogPut(p, " (PM thunk TODO)");
                           p = LogPut(p, " EAX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EAX));
@@ -27213,7 +27213,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                        that ends here identifies its own cause instead of needing a
                        breakpoint sweep to re-find it. */
                     { DWORD csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
-                      DWORD lin = dpmi_sel_base((WORD)csv) + eip;
+                      DWORD lin = DpmiSelectorBase((WORD)csv) + eip;
                       p = LogPut(p, "DPMI: unexpected PM stop event=0x"); p = LogHex(p, ev);
                       p = LogPut(p, " CS:EIP=0x"); p = LogHex(p, csv);
                       p = LogPut(p, ":0x"); p = LogHex(p, eip);
@@ -27324,7 +27324,7 @@ static void dpmi_pm_cf_to_frame(volatile BYTE *tib)
     volatile BYTE *fl;
 
     if (!g_PmDefaultSelector || cs != g_PmDefaultSelector) return;      /* not in our stub at all */
-    base = dpmi_sel_base(cs);
+    base = DpmiSelectorBase(cs);
     if (!base) return;
     eip = VDM_REG(tib, VTIB_EIP);
     ip  = (const volatile BYTE *)(ULONG_PTR)(base + eip);
@@ -27332,7 +27332,7 @@ static void dpmi_pm_cf_to_frame(volatile BYTE *tib)
 
     ss  = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
     sp  = DpmiSelectorIs32(ss) ? VDM_REG(tib, VTIB_ESP) : (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
-    lin = dpmi_sel_base(ss) + sp + (DpmiSelectorIs32(cs) ? 8u : 4u);
+    lin = DpmiSelectorBase(ss) + sp + (DpmiSelectorIs32(cs) ? 8u : 4u);
     if (!MemoryReadable((ULONG_PTR)lin, 2)) return;
     fl  = (volatile BYTE *)(ULONG_PTR)lin;
 
@@ -27390,7 +27390,7 @@ static void dpmi_ensure_pmret_sel(void)
              client is unaffected: flags stay 0 and every existing test keeps its
              6-byte frame and 16-bit catcher. */
         g_Ldt[idx].Flags = g_DpmiIsClient32 ? 0x4 : 0x0;   /* 0x4 = D/B */
-        dpmi_install(idx);
+        DpmiInstall(idx);
         g_PmReturnSelector = (WORD)((idx << 3) | 7);
     }
 }
@@ -27467,7 +27467,7 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
     /* Frame width is the CLIENT's mode; stack addressing is the SS descriptor's B bit.
        Two different questions -- see dpmi_dispatch_to_pm_handler() for what conflating
        them costs. */
-    { DWORD b = dpmi_sel_base(ss);
+    { DWORD b = DpmiSelectorBase(ss);
       int   ss32 = DpmiSelectorIs32(ss), h32 = g_DpmiIsClient32;
       DWORD sp = ss32 ? cx->Esp : (cx->Esp & 0xFFFF);
       if (h32) {
@@ -27576,7 +27576,7 @@ static void *shim_getvdmptr(DWORD vp, DWORD cb, BOOL pm)
     (void)cb;
     if (!vp) return NULL;
     if (pm) {
-        DWORD b = dpmi_sel_base((WORD)(vp >> 16));
+        DWORD b = DpmiSelectorBase((WORD)(vp >> 16));
         return b ? (void *)(ULONG_PTR)(b + (vp & 0xFFFF)) : NULL;
     }
     return (void *)(ULONG_PTR)(((vp >> 16) << 4) + (vp & 0xFFFF));
@@ -27709,7 +27709,7 @@ static void shim_setreg(int r, DWORD v)
 }
 static void *shim_mapflat(WORD seg, DWORD off, int pm)
 {
-    if (pm) { DWORD b = dpmi_sel_base(seg); return b ? (void *)(ULONG_PTR)(b + off) : NULL; }
+    if (pm) { DWORD b = DpmiSelectorBase(seg); return b ? (void *)(ULONG_PTR)(b + off) : NULL; }
     return (void *)(ULONG_PTR)(((DWORD)seg << 4) + (off & 0xFFFF));
 }
 /* An I/O hook: the VDD's VDD_IO_HANDLERS, claimed on our bus range by range. STDCALL:
@@ -27932,7 +27932,7 @@ static int dpmi_nested_fault(volatile BYTE *tib, DWORD ev, DWORD eip)
     if (!g_WowLaunch) return 0;
     if (ev != VDM_EVENT_BOP || csv != (g_DpmiFaultCodeSelector & 0xFFFF) || g_DpmiIsClient32)
         return 0;
-    sb  = dpmi_sel_base(g_DpmiFaultSelector);
+    sb  = DpmiSelectorBase(g_DpmiFaultSelector);
     esp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
     fr  = (volatile WORD *)(ULONG_PTR)(sb + esp);
     if (!sb || !HostReadable((const void *)fr, 0x10)) return 0;
@@ -27965,7 +27965,7 @@ static int dpmi_nested_fault(volatile BYTE *tib, DWORD ev, DWORD eip)
              it on the next turn. Everything else is declined, as before. */
         if (exc == 13 && (fr[2] & 0x2)) {
             DWORD gvec = ((DWORD)fr[2] >> 3) & 0xFF;
-            DWORD gcb  = dpmi_sel_base(fr[4]);
+            DWORD gcb  = DpmiSelectorBase(fr[4]);
             volatile BYTE *gi = (volatile BYTE *)(ULONG_PTR)(gcb + fr[3]);
             if (!gcb || DpmiSelectorIs32(fr[4]) || DpmiSelectorIs32(fr[7])
                 || (gvec >= 0x34 && gvec <= 0x3F)
@@ -28025,8 +28025,8 @@ static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
     if (!tib || !g_DpmiPm || !g_WowLaunch || !g_DosMachine || !g_Running) return 0;
     if (GetCurrentThreadId() != g_GuestThreadId) return 0;
     if (g_WowCallDepth >= WOWCALL_MAX_DEPTH - 1 || g_ww_nested >= 6 || !(proc >> 16)) return 0;
-    rsel = wow_callback_selector();
-    ssb  = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+    rsel = WowCallbackSelector();
+    ssb  = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
     if (!rsel || !ssb) return 0;
     if (blob && blobn > 0) {
         WORD ss = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
@@ -28049,7 +28049,7 @@ static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
     ++g_ww_nested;
     for (ph = 0; ph < 500000 && g_WowCallDepth > depth0 && g_Running; ++ph) {
         DWORD ev, eip, vec; int rc;
-        dpmi_arm_fault_trampoline(tib, 0);
+        DpmiArmFaultTrampoline(tib, 0);
         DpmiEnterProtectedMode(tib);
         ev  = VDM_REG(tib, VTIB_EVENT);
         eip = dpmi_pm_eip(tib);
@@ -28301,7 +28301,7 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
        client with a 16-bit handler), so this is a consistency fix rather than a
        behaviour change -- but they diverge exactly where DOS/4GW lives. */
     int h32 = g_DpmiIsClient32;
-    { WORD ss = sSS; DWORD b = dpmi_sel_base(ss);
+    { WORD ss = sSS; DWORD b = DpmiSelectorBase(ss);
       int ss32 = DpmiSelectorIs32(ss);                /* see the note in the dispatch path */
       DWORD sp = ss32 ? sESP : (sESP & 0xFFFF);
       if (h32) {
@@ -28332,7 +28332,7 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
     /* What we are about to RUN, and the stack we are about to run it on. This path dies
        with no further output, so anything not printed here is unrecoverable afterwards. */
     { WORD hs = DPMI_IRQ_TARGET_SEL(iv);
-      DWORD hl = dpmi_sel_base(hs) + (g_DpmiIsClient32 ? DPMI_IRQ_TARGET_OFF(iv) : (DPMI_IRQ_TARGET_OFF(iv) & 0xFFFF));
+      DWORD hl = DpmiSelectorBase(hs) + (g_DpmiIsClient32 ? DPMI_IRQ_TARGET_OFF(iv) : (DPMI_IRQ_TARGET_OFF(iv) & 0xFFFF));
       const BYTE *hb = (const BYTE *)(ULONG_PTR)hl;
       lp = LogPut(lp, " lin=0x"); lp = LogHex(lp, hl);
       lp = LogPut(lp, DpmiSelectorIs32(hs) ? " (h CS D/B=1)" : " (h CS D/B=0)");
@@ -28368,7 +28368,7 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
     for (ph = 0; ph < DPMI_IRQ0_PHASE_MAX && !done; ++ph) {
         DWORD ev, eip, vec; int rc;
         if ((ph & 0x3F) == 0x3F && (GetTickCount() - t_isr0) > DPMI_IRQ0_MS_MAX) break;
-        dpmi_arm_fault_trampoline(tib, 0);
+        DpmiArmFaultTrampoline(tib, 0);
         /* ► THE LAST THING BEFORE THE CLIFF. Doom takes five of these injections and
              dies inside the SIXTH: its "IRQ0->PM INT" entry line is the final line in
              the log, DpmiEnterProtectedMode() never returns, and the VDM is gone. The entry line
@@ -28530,7 +28530,7 @@ static int dpmi_inject_pm_mousecb(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
     if (!MouseEventQueueTake(&ev, &pend, &hsel, &hoff) || !pend) return 0;
     /* A far-return frame (CS:EIP) onto the catcher, on the client's own stack. Frame
        width is the CLIENT's; stack addressing is the SS descriptor's B bit. */
-    { DWORD b = dpmi_sel_base(sSS);
+    { DWORD b = DpmiSelectorBase(sSS);
       int ss32 = DpmiSelectorIs32(sSS);
       DWORD sp = ss32 ? sESP : (sESP & 0xFFFF);
       if (h32) {
@@ -28568,7 +28568,7 @@ static int dpmi_inject_pm_mousecb(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
     for (ph = 0; ph < DPMI_IRQ0_PHASE_MAX && !done; ++ph) {
         DWORD e, eip, vec; int rc;
         if ((ph & 0x3F) == 0x3F && (GetTickCount() - t0) > DPMI_IRQ0_MS_MAX) break;
-        dpmi_arm_fault_trampoline(tib, 0);
+        DpmiArmFaultTrampoline(tib, 0);
         DpmiEnterProtectedMode(tib);
         e   = VDM_REG(tib, VTIB_EVENT);
         eip = dpmi_pm_eip(tib);
@@ -28672,7 +28672,7 @@ static void dpmi_client_teardown(void)
     /* ...unless the table itself lives in the DOS arena. Then it is a 0x40-paragraph
        block in the middle of the parent's memory: measured, the next `doom` loaded
        above it at 0x169f instead of 0x242. Give it back; keep the selector, which the
-       next client's install rebases (see dpmi_install_default_pm_handlers). */
+       next client's install rebases (see DpmiInstallDefaultPmHandlers). */
     if (g_PmDefaultBase && g_PmDefaultFromDos) {
         DosMcbFree(NULL, (uint16_t)(g_PmDefaultBase >> 4));
         g_PmDefaultBase = 0; g_PmDefaultFromDos = 0;
@@ -28762,7 +28762,7 @@ static int g_dpmi_use_interp = 0;             /* run 53 toggle (1 = interp fallb
                                                  WITH the +0x638 PM-fault trampoline. Flip to 1 to restore
                                                  the VM-confirmed interpreter runs (i310102/DPMIBACK). */
 
-static uint32_t dpmi_seg2lin(uint16_t sel) { return dpmi_sel_base(sel); }
+static uint32_t dpmi_seg2lin(uint16_t sel) { return DpmiSelectorBase(sel); }
 
 static void dpmi_icpu_load(V86_CPU *c, volatile BYTE *tib)
 {
@@ -30319,7 +30319,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          Probe BOTH launch types at BOTH points and let the 2x2 say whether it is the
          launch type or the amount of VDM setup that matters. */
     if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
-        wow_probe_ldt_matrix(g_WowModuleCount ? "wow-early" : "dos-early");
+        WowProbeLdtMatrix(g_WowModuleCount ? "wow-early" : "dos-early");
     if (g_WowModuleCount) {                        /* GH #128: WOW selector stage */
         /* ⛔ NO FLUSH HERE, AND NEVER THROUGH `base`. (s73) This read
              `LogAppend(LOG_PATH, base, p); p = base;` from e595c91 (s68), which turned
@@ -30340,8 +30340,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
             char m3[120], *q3 = m3;
             q3 = LogPut(q3, "WOWTRY: v86_get_tib -> 0x"); q3 = LogHex(q3, (DWORD)(ULONG_PTR)t);
             q3 = LogPut(q3, "\r\n"); LogAppend(LDTLOG_PATH, m3, q3); }
-        wow_probe_ldt_matrix("wow-after-get-tib");
-        wow_probe_selectors();
+        WowProbeLdtMatrix("wow-after-get-tib");
+        WowProbeSelectors();
         /* ⚠ NO EARLY RETURN ANY MORE. This used to `return WowRefuse(...)` here,
              which was correct while the plan was "enter in protected mode" -- there was
              nothing further to do. It is not, krnl386 is entered in V86, and a V86
@@ -30354,13 +30354,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     }
     /* EMS page frame must be mapped AFTER VdmInitialize (see VdmMapEmsFrame). */
     g_EmsFrameLinear = VdmMapEmsFrame();
-    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) wow_probe_ldt_matrix("B-after-emsframe");
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) WowProbeLdtMatrix("B-after-emsframe");
     p = LogPut(p, "STAGE1: ems_frame lin=0x"); p = LogHex(p, g_EmsFrameLinear);
     p = LogPut(p, " seg=0x"); p = LogHex(p, g_EmsFrameLinear >> 4); p = LogPut(p, "\r\n");
 
     /* CSRSS: register as the console VDM, then fetch the program to run. */
     CsrssRegisterConsole();
-    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) wow_probe_ldt_matrix("C-after-csrss-register");
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) WowProbeLdtMatrix("C-after-csrss-register");
     if (CsrssGetCommand(&g_CommandInfo, &err)) {
         /* ⚠ PRINT THE PATH WE WILL ACTUALLY USE. This joined the directory and
              the title unconditionally and so reported `C:\test\C:\test\hello.com`
@@ -30502,7 +30502,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
              itself. Every call is DONT_WAIT and every answer is logged; a "name" is
              only believed when it is drive-qualified or UNC -- TRUE with junk is not
              a program. */
-        {   static const struct { DWORD state; int own_task; int handshake; const char *what; } SH[] = {
+        {   static const struct { DWORD state; int own_task; int handshake; const char *Description; } SH[] = {
                 { 0x100 | 0x02 | 0x20, 1, 1, "GET_FIRST|WOW|DONT_WAIT taskid=-i (handshake)" },
                 { 0x02 | 0x01 | 0x20,  1, 0, "WOW|FIRST|DONT_WAIT taskid=-i" },
                 { 0x02 | 0x01 | 0x20,  0, 0, "WOW|FIRST|DONT_WAIT taskid=0"  },
@@ -30522,7 +30522,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 named = ok2 && !SH[si].handshake
                         && ((g_Application2[0] >= 'A' && (g_Application2[0] | 0x20) <= 'z' && g_Application2[1] == ':' && g_Application2[2] == '\\')
                             || (g_Application2[0] == '\\' && g_Application2[1] == '\\'));
-                p = LogPut(p, "STAGE1: WOW command fetch ["); p = LogPut(p, SH[si].what); p = LogPut(p, "] -> ");
+                p = LogPut(p, "STAGE1: WOW command fetch ["); p = LogPut(p, SH[si].Description); p = LogPut(p, "] -> ");
                 p = LogPut(p, ok2 ? "TRUE" : "FALSE");
                 p = LogPut(p, " err=0x"); p = LogHex(p, err2);
                 p = LogPut(p, " app=["); if (named) p = LogPut(p, g_Application2); else if (g_Application2[0]) p = LogPut(p, "<not a path>");
@@ -30540,7 +30540,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                builds the V86 world for the embedded four-byte stub instead ("STAGE2:
                embedded fallback"), krnl386 gets no program path in its environment,
                and it dies in its own init: "NTVDM KERNEL: Unable to initialize heap".
-               Measured, first cut. The image read here is discarded by wow_place_v86;
+               Measured, first cut. The image read here is discarded by WowPlaceV86;
                the NAME and the byte count are what the stage keys on. */
             HANDLE hw;
             LogPut(g_WowCommandProgram, g_Application2); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
@@ -30568,9 +30568,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          which looked exactly like "the probe never ran". Same stale/truncated-artefact
          trap this project keeps paying for, in a new costume. */
     if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
-        wow_probe_ldt_matrix("D-after-getcommand");   /* before VdmGetTib */
+        WowProbeLdtMatrix("D-after-getcommand");   /* before VdmGetTib */
     tib = VdmGetTib();
-    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) wow_probe_ldt_matrix("E-after-get-tib");
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) WowProbeLdtMatrix("E-after-get-tib");
     g_TibDebug = tib;                                    /* let the crash VEH dump guest state */
     if (!tib) {
         p = LogPut(p, "STAGE1: no VDM_TIB -- abort\r\n"); LogAppend(LOG_PATH, report, p);
@@ -30692,7 +30692,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 if (a) LogPut(args, a);                   /* PSP command tail */
                 /* ★ GH #128: on a WOW launch this same path is the WIN16 program,
                      and WOW32 0x70 is how WOWEXEC asks for it. The DOS image
-                     loaded just below is discarded there (see wow_place_v86), but
+                     loaded just below is discarded there (see WowPlaceV86), but
                      the NAME is the one thing the WOW path still needs -- Windows
                      does not put it on the VDM's command line. */
                 LogPut(g_WowCommandProgram, tpath); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
@@ -31170,7 +31170,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* 0305 save/restore: a register-preserving no-op (see the define). */
     hdlr[DPMI_SSR_OFF] = 0xCB;                               /* RETF */
     /* (GH #18 run 67: the PM-fault handler BOP is planted at the handler CODE selector's
-       DPMI_FAULT_COFF by dpmi_install_fault_trampoline(), not here.) */
+       DPMI_FAULT_COFF by DpmiInstallFaultTrampoline(), not here.) */
     /* EMS detection method 2: programs read the INT 67h vector's segment:000Ah for
        the device-driver name "EMMXXXX0". Park it in the handler segment. */
     if (g_EmsOn)
@@ -32565,7 +32565,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          tolerant of a missing target and costs one wasted image. Overriding here
          rather than short-circuiting there keeps the DOS path's spine untouched. */
     {   WORD wcs = 0, wip = 0, wds = 0, wss = 0, wsp = 0;
-        if (g_WowModuleCount && wow_place_v86(&m, &wcs, &wip, &wds, &wss, &wsp) == 0) {
+        if (g_WowModuleCount && WowPlaceV86(&m, &wcs, &wip, &wds, &wss, &wsp) == 0) {
             img.CodeSegment = wcs; img.InstructionPointer = wip; img.StackSegment = wss; img.StackPointer = wsp;
             g_WowEntryDs = wds;
             g_WowEntering = 1;
@@ -32743,7 +32743,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         q2 = LogPut(q2, " flag_attr=0x");      q2 = LogHex(q2, fa);
         q2 = LogPut(q2, "\r\n"); LogAppend(LOG_PATH, m2, q2);
         if (!g_WowModuleCount && fa != INVALID_FILE_ATTRIBUTES)
-            wow_probe_ldt_matrix("dos-late");  /* the other corner of the 2x2 */
+            WowProbeLdtMatrix("dos-late");  /* the other corner of the 2x2 */
     }
     ModeYRemapFlushReport();     /* whatever the A0000 remap had to say, now it fits */
     /* ── CAN THE A0000 WINDOW BE REMAPPED? THE ONE FACT THE REAL VIDEO FIX NEEDS. ────
@@ -33425,7 +33425,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                 g_DpmiPm = 1;
                 g_DpmiCodeBase = g_DpmiSegmentBase[0];   /* CS base = the patch-scan target */
                 /* Record the switch's code/data/stack selector bases (indices 1/2/3) so
-                   dpmi_sel_base() translates DS:/ES:/SS: through the right base -- essential
+                   DpmiSelectorBase() translates DS:/ES:/SS: through the right base -- essential
                    once CS!=DS!=SS (a real .EXE); for a .COM all three are equal. */
                 { int si; for (si = 0; si < 3; ++si) {
                     g_Ldt[1 + si].Base   = g_DpmiSegmentBase[si];
@@ -33478,7 +33478,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                       g_Ldt[pi].Limit  = 0xFF;        /* "a 100h byte limit", exactly */
                       g_Ldt[pi].Access = 0xF2;        /* present, DPL3, data R/W       */
                       g_Ldt[pi].Flags  = 0;
-                      dpmi_install(pi);
+                      DpmiInstall(pi);
                       psp_sel = (WORD)((pi << 3) | 7);
                       VDM_SET16(tib, VTIB_ES, psp_sel);
                   }
@@ -33493,12 +33493,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         g_Ldt[ei].Limit  = 0xFF;      /* DosEnvBuild fills a 0x10-para block */
                         g_Ldt[ei].Access = 0xF2;
                         g_Ldt[ei].Flags  = 0;
-                        dpmi_install(ei);
+                        DpmiInstall(ei);
                         env_sel = (WORD)((ei << 3) | 7);
                         *envf = env_sel;
                     }
                   }
-                  dpmi_install_default_pm_handlers(&m);
+                  DpmiInstallDefaultPmHandlers(&m);
                   p = LogPut(p, " PSP 0x"); p = LogHex(p, psp);
                   p = LogPut(p, " -> ES=0x"); p = LogHex(p, psp_sel);
                   p = LogPut(p, " env -> sel 0x"); p = LogHex(p, env_sel);
@@ -33784,7 +33784,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    PM #GP -- an SS-retype, HLT, or privileged op the INT->BOP scan cannot
                    pre-patch -- is reflected by the kernel to our handler (code sel : BOP) on a
                    scratch stack, instead of silently terminating the VDM (runs 20-34). */
-                dpmi_install_fault_trampoline();
+                DpmiInstallFaultTrampoline();
                 p = LogPut(p, "DPMI: PM-fault reflect stkSel=0x"); p = LogHex(p, g_DpmiFaultSelector);
                 p = LogPut(p, " codeSel=0x"); p = LogHex(p, g_DpmiFaultCodeSelector);
                 p = LogPut(p, " bop@code:0x"); p = LogHex(p, DPMI_FAULT_COFF);
@@ -33891,8 +33891,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            ⚠ Both reads are guarded. An instrument that faults while
                              reporting a wedge reports nothing, which is how the
                              watchdog thread came to log one sample and stop. */
-                        {   DWORD cbase = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
-                            DWORD sbase = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
+                        {   DWORD cbase = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
+                            DWORD sbase = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                             DWORD spv   = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
                             ULONG_PTR cp = (ULONG_PTR)(cbase + dpmi_pm_eip(tib));
                             ULONG_PTR sp2 = (ULONG_PTR)(sbase + spv);
@@ -34192,7 +34192,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            dies inside the FIRST DpmiEnterProtectedMode and never returns, so the only
                            thing that can tell a bad mode switch from a specific offending
                            instruction is knowing which instruction it was. Cheap: 4 iterations. */
-                        DWORD cbase = dpmi_sel_base((WORD)g_DpmiEnterCs);
+                        DWORD cbase = DpmiSelectorBase((WORD)g_DpmiEnterCs);
                         p = LogPut(p, "DPMI-CP["); p = LogHex(p, (unsigned)steps);
                         p = LogPut(p, "] pre-arm cs:eip=0x"); p = LogHex(p, g_DpmiEnterCs);
                         p = LogPut(p, ":0x"); p = LogHex(p, g_DpmiEnterEip);
@@ -34228,7 +34228,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              space. That is not a corrupt guest; it is the architecture, and
                              the same DpmiSelectorIs32() rule 0204/0205 already use. */
                         { WORD ss = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF);
-                          DWORD sb = dpmi_sel_base(ss);
+                          DWORD sb = DpmiSelectorBase(ss);
                           DWORD sp = DpmiSelectorIs32(ss) ? VDM_REG(tib, VTIB_ESP)
                                                        : (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
                           const BYTE *sk = (const BYTE *)(ULONG_PTR)(sb + sp);
@@ -34283,17 +34283,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 { WORD fcs = *(const WORD *)(fr + 0x22);
                                   WORD fip = *(const WORD *)(fr + 0x1e);
                                   const BYTE *ep = (const BYTE *)(ULONG_PTR)
-                                      (dpmi_sel_base(fcs) + fip);
+                                      (DpmiSelectorBase(fcs) + fip);
                                   p = LogPut(p, " entry=0x"); p = LogHex(p, fcs);
                                   p = LogPut(p, ":0x"); p = LogHex(p, fip);
-                                  p = LogPut(p, " base=0x"); p = LogHex(p, dpmi_sel_base(fcs));
+                                  p = LogPut(p, " base=0x"); p = LogHex(p, DpmiSelectorBase(fcs));
                                   p = LogPut(p, " code@entry=");
                                   if (!HostReadable(ep, 64)) p = LogPut(p, "<unreadable from host>");
                                   else                        p = LogDump(p, ep, 64); } } }
                           p = LogPut(p, "\r\n");
                           LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base; }
                     }
-                    dpmi_arm_fault_trampoline(tib, 0);   /* re-arm nest/flag/[0x638]/[TIB+8] */
+                    DpmiArmFaultTrampoline(tib, 0);   /* re-arm nest/flag/[0x638]/[TIB+8] */
                     if (steps < g_DpmiCpMaximum) {
                         p = LogPut(p, "DPMI-CP["); p = LogHex(p, (unsigned)steps);
                         p = LogPut(p, "] armed -> entering PM\r\n");
@@ -34430,7 +34430,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     p = LogPut(p, " entry=0x"); p = LogHex(p, s_cs);
                                     p = LogPut(p, ":0x"); p = LogHex(p, s_eip);
                                     p = LogPut(p, " lin=0x");
-                                    p = LogHex(p, dpmi_sel_base((WORD)s_cs) + s_eip);
+                                    p = LogHex(p, DpmiSelectorBase((WORD)s_cs) + s_eip);
                                     p = LogPut(p, " exit=0x");
                                     p = LogHex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
                                     p = LogPut(p, ":0x"); p = LogHex(p, dpmi_pm_eip(tib));
@@ -34689,7 +34689,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              had no handler -- it does not call the wrong handler. */
                         {
                             int exc = fclass;
-                            DWORD sb  = dpmi_sel_base(g_DpmiFaultSelector);
+                            DWORD sb  = DpmiSelectorBase(g_DpmiFaultSelector);
                             DWORD esp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
                             volatile WORD *fr = (volatile WORD *)(ULONG_PTR)(sb + esp);
                             /* ── ★★ A #GP THROUGH AN IDT GATE IS AN UNSERVICED `INT nn`. ────
@@ -34725,11 +34725,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                  x86len vote was ever trying to approximate. */
                             if ((fr[2] & 0x2) && HostReadable((const void *)fr, 0x10)) {
                                 DWORD gvec = (DWORD)(fr[2] >> 3) & 0xFF;
-                                DWORD gcb  = dpmi_sel_base(fr[4]);
+                                DWORD gcb  = DpmiSelectorBase(fr[4]);
                                 volatile BYTE *gi = (volatile BYTE *)(ULONG_PTR)(gcb + fr[3]);
                                 /* ── ⚠⚠⚠ WHAT MAKES THE FRAME'S IP TRUSTWORTHY IS THE
                                      SELECTOR'S BASE, NOT ITS WIDTH. (s74)
-                                     This began as `if (gcb && ...)`. dpmi_sel_base() returns
+                                     This began as `if (gcb && ...)`. DpmiSelectorBase() returns
                                      g_Ldt[idx].base, so a base of 0 -- exactly what a FLAT
                                      32-bit client runs on (`desc 0x0000ffff:0x00cffa00`, base 0,
                                      limit 4 GB, D/B=1) -- was being read as "no selector" and
@@ -34916,7 +34916,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                          (see [[vme-vif-interrupt-gating]]). TF is cleared,
                                          which is what a gate does and costs nothing. */
                                     if (fpref) {
-                                        DWORD sb   = dpmi_sel_base(fr[7]);
+                                        DWORD sb   = DpmiSelectorBase(fr[7]);
                                         int   ss32 = gss32;
                                         DWORD sp   = ss32 ? feip : (DWORD)fr[6];   /* full width, see gespok */
                                         sp = ss32 ? sp - 2 : ((sp - 2) & 0xFFFF);
@@ -34966,7 +34966,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 p = LogPut(p, "  PSPENV:");
                                 for (z = 0; z < g_WowPspCount; ++z) {
                                     const volatile BYTE *pe = (const volatile BYTE *)
-                                        (ULONG_PTR)dpmi_sel_base(g_WowPspSelector[z]);
+                                        (ULONG_PTR)DpmiSelectorBase(g_WowPspSelector[z]);
                                     p = LogPut(p, " sel 0x"); p = LogHex(p, g_WowPspSelector[z]);
                                     p = LogPut(p, "->+0x2c=0x");
                                     if (HostReadable((const void *)pe, 0x2e))
@@ -34990,7 +34990,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      invariant, and a wrong hInstance is exactly the kind
                                      of thing that would otherwise fail three walls later
                                      with no trace back to here. */
-                                {   DWORD tb = dpmi_sel_base(g_ws_slots[wsc].Task);
+                                {   DWORD tb = DpmiSelectorBase(g_ws_slots[wsc].Task);
                                     if (tb) {
                                         const volatile BYTE *t =
                                             (const volatile BYTE *)(ULONG_PTR)tb;
@@ -35128,7 +35128,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                       uint32_t ar = 0, lim = 0;
                                       p = LogPut(p, nm[si2]); p = LogPut(p, "=0x"); p = LogHex(p, sels[si2]);
                                       if (dpmi_sel_desc(sels[si2], &ar, &lim)) {
-                                          p = LogPut(p, "{base=0x"); p = LogHex(p, dpmi_sel_base(sels[si2]));
+                                          p = LogPut(p, "{base=0x"); p = LogHex(p, DpmiSelectorBase(sels[si2]));
                                           p = LogPut(p, " lim=0x"); p = LogHex(p, lim);
                                           p = LogPut(p, " ar=0x"); p = LogHex(p, ar); p = LogPut(p, "}");
                                       } else p = LogPut(p, "{NO DESCRIPTOR}");
@@ -35140,7 +35140,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      whether that database is malformed or simply is not at
                                      ES cannot be decided from a register dump, only from
                                      the bytes. 0x40 of them is the whole NE header. */
-                                { DWORD eb = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF));
+                                { DWORD eb = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF));
                                   const volatile BYTE *eo = (const volatile BYTE *)(ULONG_PTR)eb;
                                   p = LogPut(p, "\r\n       @es:0000 = ");
                                   if (eb && HostReadable((const void *)eo, 0x40))
@@ -35156,7 +35156,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      means "size memory with INT 15h AH=88h", anything else
                                      means "use my own manager", and the second path is the one
                                      that faults. One dump says which we are on.) */
-                                { DWORD db = dpmi_sel_base((WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF));
+                                { DWORD db = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF));
                                   const volatile BYTE *do_ = (const volatile BYTE *)(ULONG_PTR)db;
                                   p = LogPut(p, "\r\n       @ds:0000 = ");
                                   if (db && HostReadable((const void *)do_, 0x40))
@@ -35181,7 +35181,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      bytes each -- enough for `e8 rel16` plus what follows, which
                                      is the shape being checked against the file on disk. */
                                   if (g_CsProbeCount) {
-                                      DWORD cb2 = dpmi_sel_base(fr[4]);
+                                      DWORD cb2 = DpmiSelectorBase(fr[4]);
                                       const volatile BYTE *co =
                                           (const volatile BYTE *)(ULONG_PTR)cb2;
                                       int cq;
@@ -35195,7 +35195,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                           else p = LogPut(p, "?? ");
                                       }
                                   } }
-                                { DWORD fb2 = dpmi_sel_base(fr[4]);
+                                { DWORD fb2 = DpmiSelectorBase(fr[4]);
                                   const volatile BYTE *fi2 =
                                       (const volatile BYTE *)(ULONG_PTR)(fb2 + fr[3]);
                                   p = LogPut(p, " bytes@fault=");
@@ -35228,7 +35228,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      on the faulting stack, a few words up from SS:SP, and it
                                      costs one dump to have it instead of a second run and a
                                      breakpoint. (ZAR, GH #23: `push 8 / pop es` in DOS/16M.) */
-                                { DWORD sb2 = dpmi_sel_base(fr[7]);
+                                { DWORD sb2 = DpmiSelectorBase(fr[7]);
                                   const volatile BYTE *st2 =
                                       (const volatile BYTE *)(ULONG_PTR)(sb2 + fr[6]);
                                   p = LogPut(p, "\r\n       @ss:sp = ");
@@ -35257,7 +35257,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                          high half -- VM, IOPL's neighbours, the lot -- so merge it. */
                     if (ev == VDM_EVENT_BOP && csv == (g_DpmiFaultCodeSelector & 0xFFFF)
                         && eip == DPMI_FLTRET_COFF) {
-                        DWORD sb  = dpmi_sel_base(g_DpmiFaultSelector);
+                        DWORD sb  = DpmiSelectorBase(g_DpmiFaultSelector);
                         DWORD esp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
                         volatile WORD *fr = (volatile WORD *)(ULONG_PTR)(sb + esp);
                         if (!HostReadable((const void *)fr, 0x0C)) {
@@ -35341,7 +35341,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        (raw PM #GP) vs the HVF silent-terminate. Rate-limited to the first 32 stops
                        so a client that repeatedly faults can't flood the log (session-9). */
                     if (ev != VDM_EVENT_BOP && g_pmfault_dumps < 32) {
-                        DWORD fb = dpmi_sel_base((WORD)csv);
+                        DWORD fb = DpmiSelectorBase((WORD)csv);
                         ++g_pmfault_dumps;
                         const volatile BYTE *fi = (const volatile BYTE *)(ULONG_PTR)(fb + eip);
                         uint32_t sel_ar = 0, sel_lim = 0; dpmi_sel_desc((WORD)csv, &sel_ar, &sel_lim);

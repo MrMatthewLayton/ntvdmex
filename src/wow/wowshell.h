@@ -718,7 +718,7 @@ static INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD bufferSize   = Wow32ArgWord(frame, WOWSHELL_DRAGQUERYFILE_ARG_CCH);
         volatile BYTE *output = Wow32ArgPointer(frame, WOWSHELL_DRAGQUERYFILE_ARG_BUF);
         DWORD farPointer = g_WowWinGlobal16 ? g_WowWinGlobal16(WOWWIN_GLOBAL16_LOCK, drop16, 0) : 0;
-        DWORD segmentBase = (farPointer >> WOW_WORD_SHIFT) ? dpmi_sel_base((WORD)(farPointer >> WOW_WORD_SHIFT)) : 0;
+        DWORD segmentBase = (farPointer >> WOW_WORD_SHIFT) ? DpmiSelectorBase((WORD)(farPointer >> WOW_WORD_SHIFT)) : 0;
         volatile BYTE *dropBytes = segmentBase ? (volatile BYTE *)(ULONG_PTR)(segmentBase + (farPointer & WOW_WORD_MASK)) : NULL;
         DWORD result = 0;
         INT noteLength = 0;

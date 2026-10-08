@@ -1442,7 +1442,7 @@ static INT WowUserHookUnset(SHORT hookId, DWORD procedure)
 #define WOWUSER_NE_FILE_INFO_MAX   0x8000
 #define WOWUSER_OFSTRUCT_PATH      8       /* OFSTRUCT.szPathName                */
 #define WOWUSER_MIN_FULL_PATH      4       /* "C:\x"                             */
-static DWORD dpmi_sel_base(WORD sel);
+static DWORD DpmiSelectorBase(WORD sel);
 static CHAR g_WowUserResourceProgram[MAX_PATH];
 static PCSTR WowUserResourceProgram(VOID)
 {
@@ -1450,10 +1450,10 @@ static PCSTR WowUserResourceProgram(VOID)
     DWORD taskBase, moduleBase;
     const volatile BYTE *taskBytes, *moduleBytes;
     INT   index;
-    if (!task || task == WOWUSER_TASK_NONE16 || !(taskBase = dpmi_sel_base(task))) return g_WowCommandProgram;
+    if (!task || task == WOWUSER_TASK_NONE16 || !(taskBase = DpmiSelectorBase(task))) return g_WowCommandProgram;
     taskBytes = (const volatile BYTE *)(ULONG_PTR)taskBase;
     module = (WORD)(taskBytes[WOWUSER_TDB_HMODULE] | (taskBytes[WOWUSER_TDB_HMODULE + 1] << WOW_BYTE_SHIFT));
-    if (!module || !(moduleBase = dpmi_sel_base(module))) return g_WowCommandProgram;
+    if (!module || !(moduleBase = DpmiSelectorBase(module))) return g_WowCommandProgram;
     moduleBytes = (const volatile BYTE *)(ULONG_PTR)moduleBase;
     if (moduleBytes[0] != 'N' || moduleBytes[1] != 'E') return g_WowCommandProgram;
     offset = (WORD)(moduleBytes[WOWUSER_NE_FILE_INFO] | (moduleBytes[WOWUSER_NE_FILE_INFO + 1] << WOW_BYTE_SHIFT));
@@ -5728,7 +5728,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                its DS comes from its MakeProcInstance thunk (AX), the task's own
                instance is passed for a procedure that reads DS instead. */
             WORD dataSelector = 0;
-            DWORD taskBase = (g_WowUserCurrentTask && g_WowUserCurrentTask != WOWUSER_TASK_NONE16) ? dpmi_sel_base(g_WowUserCurrentTask) : 0;
+            DWORD taskBase = (g_WowUserCurrentTask && g_WowUserCurrentTask != WOWUSER_TASK_NONE16) ? DpmiSelectorBase(g_WowUserCurrentTask) : 0;
             if (taskBase) { const volatile BYTE *taskBytes = (const volatile BYTE *)(ULONG_PTR)taskBase;
                       dataSelector = (WORD)(taskBytes[WOWUSER_TDB_HINSTANCE] | (taskBytes[WOWUSER_TDB_HINSTANCE + 1] << WOW_BYTE_SHIFT)); }
             WowNotePut(note, noteCapacity, &noteLength, " -> a windowless timer's TIMERPROC 0x");

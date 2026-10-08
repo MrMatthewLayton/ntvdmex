@@ -254,7 +254,7 @@ static DWORD (*g_WowWinGlobal16)(INT operation, DWORD first, DWORD second);
 #define WOWWIN_GLOBAL16_FREE   1
 #define WOWWIN_GLOBAL16_LOCK   2
 #define WOWWIN_GLOBAL16_UNLOCK 3
-static DWORD dpmi_sel_base(WORD sel);            /* main.c: a selector's linear base */
+static DWORD DpmiSelectorBase(WORD sel);            /* main.c: a selector's linear base */
 
 /* ── s92 (#305 M12): WM_DROPFILES -- A WIN16 HDROP IS A REAL GLOBAL BLOCK. ─────────
      DragQueryPoint (SHELL ord 13) and DragFinish (ord 12) never reach us -- they
@@ -297,8 +297,8 @@ static WORD WowWinDrop16(HDROP drop, PSTR reason, INT reasonCapacity)
     handle16 = (WORD)g_WowWinGlobal16(WOWWIN_GLOBAL16_ALLOC, WOWWIN_GMEM_SHARE_MOVEABLE_ZEROINIT, offset);
     if (!handle16) { lstrcpynA(reason, "GlobalAlloc refused", reasonCapacity); return 0; }
     farPointer = g_WowWinGlobal16(WOWWIN_GLOBAL16_LOCK, handle16, 0);
-    bytes = (farPointer >> WOW_WORD_SHIFT) ? (volatile BYTE *)(ULONG_PTR)(dpmi_sel_base((WORD)(farPointer >> WOW_WORD_SHIFT)) + (farPointer & WOW_WORD_MASK)) : NULL;
-    if (!bytes || !(farPointer >> WOW_WORD_SHIFT) || !dpmi_sel_base((WORD)(farPointer >> WOW_WORD_SHIFT))) {
+    bytes = (farPointer >> WOW_WORD_SHIFT) ? (volatile BYTE *)(ULONG_PTR)(DpmiSelectorBase((WORD)(farPointer >> WOW_WORD_SHIFT)) + (farPointer & WOW_WORD_MASK)) : NULL;
+    if (!bytes || !(farPointer >> WOW_WORD_SHIFT) || !DpmiSelectorBase((WORD)(farPointer >> WOW_WORD_SHIFT))) {
         g_WowWinGlobal16(WOWWIN_GLOBAL16_FREE, handle16, 0);
         lstrcpynA(reason, "GlobalLock refused", reasonCapacity);
         return 0;
