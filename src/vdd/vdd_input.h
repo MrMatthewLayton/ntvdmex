@@ -46,6 +46,9 @@
 #define INPUT_SCAN_PREFIX_E0        0xE0    /* an extended key's prefix                 */
 #define INPUT_SCAN_ENTER            0x1C    /* keypad Enter when E0-prefixed             */
 #define INPUT_SCAN_LEFT_SHIFT       0x2A
+#define INPUT_SCAN_CTRL             0x1D
+#define INPUT_SCAN_RIGHT_SHIFT      0x36
+#define INPUT_SCAN_ALT              0x38
 #define INPUT_LAYOUT_LAST           3       /* Layout: 0 US, 1 UK, 2 German, 3 French    */
 #define INPUT_DEVICE_NAME      "input"
 #define INPUT_HOST_KEY_BYTES_MAX 6         /* VddInputHostKeyBytes: the Pause sequence    */

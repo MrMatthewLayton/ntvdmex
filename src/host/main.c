@@ -1282,7 +1282,7 @@ static DWORD    g_UiHookPresents, g_UiTimerPresents;  /* who raised each present
 static volatile LONG g_UiPresentPending;                /* one WM_APP_PRESENT in flight */
 static int      g_UiForced;                              /* this body run was raised by the hook; stays int: INT here moves the compiled code */
 static DWORD    g_UiInputFirst;                         /* input served ahead of a queued present */
-
+enum { KEYIRQ_RETRY_OFF = 0, KEYIRQ_RETRY_ON = 1, KEYIRQ_RETRY_CLOCK_ON_SCHEDULE = 2, KEYIRQ_RETRY_ONE_YIELD = 3 };   /* keyirq.txt; 2 is refuted (see HostPitDeliver) */
 /* ── MEASURE THE KEYSTROKE ITSELF, BECAUSE FOUR HYPOTHESES HAVE NOW MISSED. ──────────
      Session 26: the user reports Skyroads key lag whenever the pacer runs, and it has
      survived every fix aimed at a mechanism I INFERRED -- pacer period, pacer injection,
@@ -1315,7 +1315,7 @@ static DWORD    g_KeyDeliveryMaximumMs, g_KeyDeliveryCount;
 /* Which of the three exits from the cooperative IRQ1 gate fires. See its call site. */
 static DWORD    g_Irq1Checks, g_Irq1NoIf, g_Irq1In08, g_Irq1In09;
 static DWORD    g_Irq1AsyncInjected;        /* IRQ1s placed on the ASYNC path (see above) */
-static INT      g_KeyIrqRetry = 1;      /* keyirq.txt = 0 restores single-attempt */
+static INT      g_KeyIrqRetry = KEYIRQ_RETRY_ON;      /* keyirq.txt = 0 restores single-attempt */
 static DWORD    g_Irq1AsyncRetry;
 static INT      g_Irq0Yielded;
 #define KEYIRQ_MAX_YIELD 3
@@ -1474,8 +1474,8 @@ static DWORD g_DpmiCodeBase = 0;          /* linear base of the guest PM code se
 static DWORD g_PatchMapLinear[DPMI_PMAP_SLOTS];      /* 0 = empty (linear 0 is never a site) */
 static BYTE  g_PatchMapVector[DPMI_PMAP_SLOTS];
 static DWORD g_PatchMapCount;
-#define PATCH_MAP_HASH_MULTIPLIER_U 2654435761u   /* Knuth's multiplicative hash: 2^32 / the golden ratio */
-static DWORD PatchMapHash(DWORD linear) { return ((linear * PATCH_MAP_HASH_MULTIPLIER_U) >> PATCH_MAP_HASH_SHIFT) & DPMI_PMAP_MASK; }
+
+static DWORD PatchMapHash(DWORD linear) { return ((linear * KNUTH_HASH_MULTIPLIER_U) >> PATCH_MAP_HASH_SHIFT) & DPMI_PMAP_MASK; }
 
 static BYTE PatchMapGet(DWORD linear)
 {
@@ -12341,7 +12341,7 @@ static VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT liv
 static VOID SettingsApplyPresent(PRESENT_DDRAW *present, const NTVDMEX_SETTINGS *settings)
 {
     present->IsVsync  = (INT)(settings->Values[SET_VSYNC]  ? 1 : 0);
-    present->Filter = (INT)(settings->Values[SET_FILTER] <= 2 ? settings->Values[SET_FILTER] : PRESENT_FILTER_SHARP);   /* #325 */
+    present->Filter = (INT)(settings->Values[SET_FILTER] <= PRESENT_FILTER_SHARP ? settings->Values[SET_FILTER] : PRESENT_FILTER_SHARP);   /* #325 */
     present->Fit    = (INT)(settings->Values[SET_FIT] ? PRESENT_FIT_FILL : PRESENT_FIT_WHOLE);
     present->IsOsdOff    = settings->Values[SET_OSD]      ? 0 : 1;      /* #217 */
     present->Tint       = (INT)settings->Values[SET_TINT];             /* #229 */
@@ -12374,15 +12374,15 @@ static VOID SettingsApplyDevices(const NTVDMEX_SETTINGS *settings)
     if (!g_SpeakerReal) PcSpeakerSet(&g_PcSpeaker, 0);
     SettingsApplyPresent(&g_PresentDdraw, settings);
 }
-
+enum { SETTINGS_RATE_CHOICES = 3, SETTINGS_RATE_DEFAULT = 1 };   /* SettingsOutputHz: 22050 / 44100 / 48000 */
 /* The output rate is a CONSTRUCTION parameter, not something to push: the mixer
    and the waveOut device must be opened at the same rate or every sample is
    resampled to a clock nothing is running at. One function so the two callers
    cannot disagree. */
 static UINT32 SettingsOutputHz(const NTVDMEX_SETTINGS *settings)
 {
-    static const UINT32 rates[3] = { 22050u, 44100u, 48000u };
-    return rates[settings->Values[SET_RATE] < 3 ? settings->Values[SET_RATE] : 1];
+    static const UINT32 rates[SETTINGS_RATE_CHOICES] = { 22050u, 44100u, 48000u };
+    return rates[settings->Values[SET_RATE] < SETTINGS_RATE_CHOICES ? settings->Values[SET_RATE] : SETTINGS_RATE_DEFAULT];
 }
 
 /* ── #325: THE WINDOW IS THE PICTURE, AT A WHOLE SCALE. ──────────────────────────────
@@ -12397,7 +12397,7 @@ static VOID HostFrameSize(INT *frameWidth, INT *frameHeight)
 {
     if (g_PresentDdraw.IsSnapshotValid && g_PresentDdraw.SnapshotWidth > 0 && g_PresentDdraw.SnapshotHeight > 0) { *frameWidth = g_PresentDdraw.SnapshotWidth; *frameHeight = g_PresentDdraw.SnapshotHeight; return; }
     if (g_Video.Frame.Width && g_Video.Frame.Height) { *frameWidth = (INT)g_Video.Frame.Width; *frameHeight = (INT)g_Video.Frame.Height; return; }
-    *frameWidth = 720; *frameHeight = 400;                          /* before the first frame: VGA text */
+    *frameWidth = VIDEO_TEXT_FRAME_WIDTH; *frameHeight = VIDEO_TEXT_FRAME_HEIGHT;                          /* before the first frame: VGA text */
 }
 static VOID HostPicture(INT scale, INT *pictureWidth, INT *pictureHeight)
 {
@@ -12447,7 +12447,7 @@ static INT WindowScaleFits(INT scale)
     HostWorkRoom(&roomWidth, &roomHeight);
     return pictureWidth <= roomWidth && pictureHeight <= roomHeight;
 }
-
+enum { HOST_SCALE_MAX = 4 };   /* the window's integer scales: 1x to 4x */
 /* ── EVERY MENU-BACKED SETTING'S TICK, FROM THE ONE PLACE THAT KNOWS THE VALUES. ─
      CheckMenuRadioItem for the dropdowns rather than a tick, because they are
      exclusive and a bullet is what Windows uses to say so -- and because it clears
@@ -12483,7 +12483,7 @@ static VOID MenuViewSync(HWND window)
        ⚠ Re-evaluated on every sync rather than once, because the work area moves --
          a taskbar that auto-hides, a second monitor, a resolution change. */
     {   INT scale;
-        for (scale = 2; scale <= 4; ++scale)          /* #325: 1x is always offered (scaled to fit if need be) */
+        for (scale = 2; scale <= HOST_SCALE_MAX; ++scale)          /* #325: 1x is always offered (scaled to fit if need be) */
             EnableMenuItem(menu, IDM_WINSIZE_0 + (UINT)(scale - 1), MF_BYCOMMAND
                            | (WindowScaleFits(scale) ? MF_ENABLED : MF_GRAYED)); }
     /* ── RULE 1, SAID IN THE MENU. Same argument as the scale items above and NOT the
@@ -12546,7 +12546,7 @@ static VOID HostApplyScale(HWND window, INT scale)
 }
 static VOID HostApplyWindowSize(HWND window, DWORD index)
 {
-    HostApplyScale(window, (INT)index + 1 <= 4 ? (INT)index + 1 : 1);
+    HostApplyScale(window, (INT)index + 1 <= HOST_SCALE_MAX ? (INT)index + 1 : 1);
 }
 #define WINDOW_SETTING_UNSET_U 0xFFFFFFFFu   /* g_WindowSizeLive / g_AspectLive: nothing applied yet */
 /* ── PUT g_Settings INTO EFFECT, WITHOUT TOUCHING THE REGISTRY. ───────────────────────
@@ -12645,7 +12645,7 @@ static HWND SettingsControl(INT controlId)
     }
     return NULL;
 }
-
+enum { SETTINGS_COMBO_DROPPED_WIDTH = 130, SETTINGS_FONT_DROPPED_WIDTH = 240, SETTINGS_SLIDER_PAGE = 10, SETTINGS_ITEM_HEIGHT = 14, SETTINGS_ITEM_INSET = 3, LOGFONT_PITCH_MASK = 3 };   /* the Settings dialog */
 static VOID SettingsFillCombos(VOID)
 {
     static PCSTR const versions[] = { "6.22", "5.00", "4.01", "3.31", "7.10" };
@@ -12671,7 +12671,7 @@ static VOID SettingsFillCombos(VOID)
                                       IDC_S_SCALER, IDC_S_FILTER, IDC_S_ASPECT,
                                       IDC_S_TINT, IDC_S_FRAMESKIP, IDC_S_FIT };
         for (index = 0; index < (INT)(sizeof narrow / sizeof narrow[0]); ++index)
-            if ((control = SettingsControl(narrow[index])) != NULL) SendMessageA(control, CB_SETDROPPEDWIDTH, 130, 0);
+            if ((control = SettingsControl(narrow[index])) != NULL) SendMessageA(control, CB_SETDROPPEDWIDTH, SETTINGS_COMBO_DROPPED_WIDTH, 0);
     }
 }
 
@@ -12752,7 +12752,7 @@ static INT CALLBACK SettingsFontEnum(const LOGFONTA *logFont, const TEXTMETRICA 
 {
     HWND control = (HWND)lParam;
     (VOID)textMetric; (VOID)type;
-    if ((logFont->lfPitchAndFamily & 3) != FIXED_PITCH || logFont->lfFaceName[0] == '@') return 1;
+    if ((logFont->lfPitchAndFamily & LOGFONT_PITCH_MASK) != FIXED_PITCH || logFont->lfFaceName[0] == '@') return 1;
     if (SendMessageA(control, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)logFont->lfFaceName) == CB_ERR)
         SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)logFont->lfFaceName);
     return 1;
@@ -12770,7 +12770,7 @@ static VOID SettingsTextFontFill(VOID)
     deviceContext = GetDC(NULL);
     if (deviceContext) { EnumFontFamiliesExA(deviceContext, &logFont, (FONTENUMPROCA)SettingsFontEnum, (LPARAM)control, 0);
               ReleaseDC(NULL, deviceContext); }
-    SendMessageA(control, CB_SETDROPPEDWIDTH, 240, 0);
+    SendMessageA(control, CB_SETDROPPEDWIDTH, SETTINGS_FONT_DROPPED_WIDTH, 0);
 }
 
 /* The selected item as the stored string: "" for the default. */
@@ -12865,7 +12865,7 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
         case SK_SLIDER: {                    /* #291: a trackbar and its "N%" label */
             HWND label = SettingsControl(definition->ControlId + IDC_S_SLIDER_VALUE_OFFSET);
             SendMessageA(control, TBM_SETRANGE, FALSE, MAKELPARAM(definition->Low, definition->High));
-            SendMessageA(control, TBM_SETPAGESIZE, 0, 10);
+            SendMessageA(control, TBM_SETPAGESIZE, 0, SETTINGS_SLIDER_PAGE);
             SendMessageA(control, TBM_SETPOS, TRUE, (LPARAM)settings->Values[index]);
             if (label) { wsprintfA(text, "%u%%", (UINT)settings->Values[index]); SetWindowTextA(label, text); }
             break; }
@@ -12996,7 +12996,7 @@ static VOID SettingsFillCpuInfo(HWND dialog)
     }
     RegCloseKey(key);
 }
-
+enum { THEME_ETDT_ENABLE = 0x2, THEME_ETDT_USETABTEXTURE = 0x4 };   /* uxtheme.h's EnableThemeDialogTexture flags */
 static INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
 {
     (VOID)wParam; (VOID)lParam;
@@ -13017,7 +13017,7 @@ static INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM 
             if (g_UxTheme)
                 g_EnableThemeDialogTexture = (PFN_ENABLE_THEME_DIALOG_TEXTURE)GetProcAddress(g_UxTheme, "EnableThemeDialogTexture");
         }
-        if (g_EnableThemeDialogTexture) g_EnableThemeDialogTexture(dialog, 0x00000006);   /* ETDT_ENABLE | ETDT_USETABTEXTURE */
+        if (g_EnableThemeDialogTexture) g_EnableThemeDialogTexture(dialog, THEME_ETDT_ENABLE | THEME_ETDT_USETABTEXTURE);   /* ETDT_ENABLE | ETDT_USETABTEXTURE */
         SettingsFillCpuInfo(dialog);            /* no-op on pages without the static */
         return TRUE;
     }
@@ -13025,7 +13025,7 @@ static INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM 
          cannot be a throttle, so it is drawn greyed and choosing it snaps back to the
          last rung that can. Host shows the PC's own speed beside it. */
     if (message == WM_MEASUREITEM && ((MEASUREITEMSTRUCT *)lParam)->CtlID == IDC_S_SPEEDMODE) {
-        ((MEASUREITEMSTRUCT *)lParam)->itemHeight = 14;
+        ((MEASUREITEMSTRUCT *)lParam)->itemHeight = SETTINGS_ITEM_HEIGHT;
         return TRUE;
     }
     if (message == WM_DRAWITEM && ((DRAWITEMSTRUCT *)lParam)->CtlID == IDC_S_SPEEDMODE) {
@@ -13041,7 +13041,7 @@ static INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM 
             SetBkMode(drawItem->hDC, TRANSPARENT);
             SetTextColor(drawItem->hDC, GetSysColor(!isOk ? COLOR_GRAYTEXT
                                               : selector ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
-            drawItem->rcItem.left += 3;
+            drawItem->rcItem.left += SETTINGS_ITEM_INSET;
             DrawTextA(drawItem->hDC, text, -1, &drawItem->rcItem, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
         }
         return TRUE;
@@ -13088,14 +13088,14 @@ static INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM 
     }
     return FALSE;
 }
-
+enum { PAUSE_SUSPEND_TRIES = 200 };   /* HostPauseSet: attempts to catch the CPU thread */
 static VOID SettingsShowPage(INT page)
 {
     INT index;
     for (index = 0; index < NTVDMEX_PAGE_COUNT; ++index)
         if (g_SettingsPage[index]) ShowWindow(g_SettingsPage[index], index == page ? SW_SHOW : SW_HIDE);
 }
-
+enum { MODIFIER_LEFT_SHIFT = 0, MODIFIER_RIGHT_SHIFT = 1, MODIFIER_LEFT_CTRL = 2, MODIFIER_RIGHT_CTRL = 3, MODIFIER_LEFT_ALT = 4, MODIFIER_RIGHT_ALT = 5, MODIFIER_KEYS = 6 };   /* g_ModifiersDown's bits */
 /* ── Ctrl+Tab / Ctrl+Shift+Tab (and Ctrl+PgDn / Ctrl+PgUp) switch pages. (s81, #137) ──
      A modal dialog's own loop runs IsDialogMessage on every key, so a Ctrl+Tab never
      reaches SettingsDialogProcedure -- the dialog manager takes it as a plain Tab and moves
@@ -13124,7 +13124,7 @@ static LRESULT CALLBACK SettingsMessageFilter(INT code, WPARAM wParam, LPARAM lP
     }
     return CallNextHookEx(g_SettingsHook, code, wParam, lParam);
 }
-
+#define LPARAM_KEY_PREVIOUS 0x40000000   /* bit 30: the key was already down (a repeat) */
 static INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message) {
@@ -13239,7 +13239,7 @@ static INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARA
     }
     return FALSE;
 }
-
+#define LPARAM_KEY_EXTENDED 0x01000000   /* WM_KEYDOWN lParam bit 24 */
 /* One keystroke, ONE path -- shared by WM_KEYDOWN and WM_SYSKEYDOWN, because F10 and
    Alt arrive as SYSTEM keys and are just as much the guest's as any other. */
 static VOID KeyMessageNote(VOID)
@@ -13279,12 +13279,12 @@ static INT HostKeySpecial(BYTE rawScancode, INT extended, INT isBreak)
 static VOID KeyPushMake(LPARAM lParam)
 {
     BYTE rawScancode = (BYTE)((lParam >> WORD_SHIFT) & BYTE_MASK);
-    INT extended = (lParam & 0x01000000) != 0;
+    INT extended = (lParam & LPARAM_KEY_EXTENDED) != 0;
     /* Bit 30 = the key was ALREADY down, i.e. OS auto-repeat. We generate typematic
        ourselves, so swallow it -- two sources would double the repeat rate. Counted,
        not silently dropped: the count is how we tell "the OS stopped sending them"
        from "we stopped listening". */
-    if (lParam & 0x40000000) { g_TypematicOsRepeats++; return; }
+    if (lParam & LPARAM_KEY_PREVIOUS) { g_TypematicOsRepeats++; return; }
     if (rawScancode && HostKeySpecial(rawScancode, extended, 0)) return;   /* #274: Pause, Ctrl+Break */
     if (rawScancode) { HostKeyScancode(rawScancode, extended, 0); HostKeyTypematicPress(rawScancode, extended);
                  ModifierTrack(rawScancode, extended, 1); }
@@ -13292,7 +13292,7 @@ static VOID KeyPushMake(LPARAM lParam)
 static VOID KeyPushBreak(LPARAM lParam)
 {
     BYTE rawScancode = (BYTE)((lParam >> WORD_SHIFT) & BYTE_MASK);
-    INT extended = (lParam & 0x01000000) != 0;
+    INT extended = (lParam & LPARAM_KEY_EXTENDED) != 0;
     if (rawScancode && HostKeySpecial(rawScancode, extended, 1)) return;   /* #274: they send no break */
     if (rawScancode) { HostKeyTypematicRelease(rawScancode, extended);   /* stop repeating first */
                  HostKeyScancode(rawScancode, extended, 1);
@@ -13309,18 +13309,18 @@ static BYTE g_ModifiersDown;                              /* bits: 0 LSh 1 RSh 2
 static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down)
 {
     INT bit = -1;
-    if (!extended) { if (rawScancode == 0x2A) bit = 0; else if (rawScancode == 0x36) bit = 1;
-                else if (rawScancode == 0x1D) bit = 2; else if (rawScancode == 0x38) bit = 4; }
-    else      { if (rawScancode == 0x1D) bit = 3; else if (rawScancode == 0x38) bit = 5; }
+    if (!extended) { if (rawScancode == INPUT_SCAN_LEFT_SHIFT) bit = MODIFIER_LEFT_SHIFT; else if (rawScancode == INPUT_SCAN_RIGHT_SHIFT) bit = MODIFIER_RIGHT_SHIFT;
+                else if (rawScancode == INPUT_SCAN_CTRL) bit = MODIFIER_LEFT_CTRL; else if (rawScancode == INPUT_SCAN_ALT) bit = MODIFIER_LEFT_ALT; }
+    else      { if (rawScancode == INPUT_SCAN_CTRL) bit = MODIFIER_RIGHT_CTRL; else if (rawScancode == INPUT_SCAN_ALT) bit = MODIFIER_RIGHT_ALT; }
     if (bit < 0) return;
     if (down) g_ModifiersDown |= (BYTE)(1u << bit); else g_ModifiersDown &= (BYTE)~(1u << bit);
 }
 static VOID HostReleaseModifiers(VOID)
 {
-    static const struct { BYTE ScanCode; INT IsExtended; } mods[6] =
-        { {0x2A,0}, {0x36,0}, {0x1D,0}, {0x1D,1}, {0x38,0}, {0x38,1} };
+    static const struct { BYTE ScanCode; INT IsExtended; } mods[MODIFIER_KEYS] =
+        { {INPUT_SCAN_LEFT_SHIFT,0}, {INPUT_SCAN_RIGHT_SHIFT,0}, {INPUT_SCAN_CTRL,0}, {INPUT_SCAN_CTRL,1}, {INPUT_SCAN_ALT,0}, {INPUT_SCAN_ALT,1} };
     INT index;
-    for (index = 0; index < 6; ++index)
+    for (index = 0; index < MODIFIER_KEYS; ++index)
         if (g_ModifiersDown & (1u << index)) {
             HostKeyTypematicRelease(mods[index].ScanCode, mods[index].IsExtended);
             HostKeyScancode(mods[index].ScanCode, mods[index].IsExtended, 1);
@@ -13357,7 +13357,7 @@ static VOID HostPauseSet(INT isOn)
         ++g_PauseCount;
         AudioWaveMidiSilence(&g_Wave);
         if (g_SpeakerReal) PcSpeakerSet(&g_PcSpeaker, 0);
-        for (index = 0; index < 200 && g_PauseWant; ++index) {
+        for (index = 0; index < PAUSE_SUSPEND_TRIES && g_PauseWant; ++index) {
             CONTEXT context;
             if (InterlockedCompareExchange(&g_AsyncContextWrite, 1, 0) != 0) { Sleep(1); continue; }
             if (SuspendThread(g_HostCpu) == (DWORD)-1) { ASYNC_CTX_RELEASE(); break; }
@@ -14473,7 +14473,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
     }
     return DefWindowProcA(window, message, wParam, lParam);
 }
-
+enum { HID_USAGE_PAGE_GENERIC_DESKTOP = 0x01, HID_USAGE_GENERIC_MOUSE = 0x02 };   /* hidusage.h: raw input's mouse */
 static DWORD WINAPI UiThread(LPVOID argument)
 {
     WNDCLASSA windowClass; MSG message; RECT rect;
@@ -14505,7 +14505,7 @@ static DWORD WINAPI UiThread(LPVOID argument)
                            NULL, NULL, instance, NULL);
     if (!g_Window) return 1;
     {   RAWINPUTDEVICE rawInputDevice;              /* generic desktop / mouse */
-        rawInputDevice.usUsagePage = 0x01; rawInputDevice.usUsage = 0x02;
+        rawInputDevice.usUsagePage = HID_USAGE_PAGE_GENERIC_DESKTOP; rawInputDevice.usUsage = HID_USAGE_GENERIC_MOUSE;
         rawInputDevice.dwFlags = 0;                 /* follow focus: no INPUTSINK, foreground only */
         rawInputDevice.hwndTarget = g_Window;
         g_MouseRawOk = (g_PfnRegisterRawInput && g_PfnRegisterRawInput(&rawInputDevice, 1, sizeof rawInputDevice)) ? 1 : 0;
@@ -14605,7 +14605,7 @@ static DWORD WINAPI UiThread(LPVOID argument)
         if (message.message == WM_APP_PRESENT) {
             MSG pending;
             while (PeekMessageA(&pending, NULL, 0, 0, PM_REMOVE |
-                                ((0x0001u | 0x0002u | 0x0004u | 0x0400u) << WORD_SHIFT))) {  /* KEY MOUSEMOVE MOUSEBUTTON RAWINPUT */
+                                (((UINT)QS_KEY | (UINT)QS_MOUSEMOVE | (UINT)QS_MOUSEBUTTON | (UINT)QS_RAWINPUT) << WORD_SHIFT))) {  /* KEY MOUSEMOVE MOUSEBUTTON RAWINPUT */
                 if (pending.message == WM_QUIT) { PostQuitMessage((INT)pending.wParam); break; }
                 ++g_UiInputFirst;
                 TranslateMessage(&pending); DispatchMessageA(&pending);
@@ -14776,8 +14776,8 @@ static VOID HostRtcNow(PVOID context, PIT_RTC_READING *out)
     DOS_CLOCK_TIME clock;
     (VOID)context;
     DosClockRead(g_DosClock.RtcOffset, &clock);
-    out->Century  = clock.Year / 100u;
-    out->Year  = clock.Year % 100u;
+    out->Century  = clock.Year / YEARS_PER_CENTURY_U;
+    out->Year  = clock.Year % YEARS_PER_CENTURY_U;
     out->Month = clock.Month;
     out->Day   = clock.Day;
     out->Hour  = clock.Hour;
@@ -14799,7 +14799,7 @@ static INT HostRtcSet(PVOID context, const PIT_RTC_READING *reading, INT what)
         if (!DosClockIsTimeValid(reading->Hour, reading->Minute, reading->Second, 0)) return 0;
         DosClockSetTime(&host, &g_DosClock.RtcOffset, reading->Hour, reading->Minute, reading->Second, 0);
     } else {
-        UINT year = reading->Century * 100u + reading->Year;
+        UINT year = reading->Century * YEARS_PER_CENTURY_U + reading->Year;
         if (!DosClockIsRealDate(year, reading->Month, reading->Day)) return 0;
         DosClockSetDate(&host, &g_DosClock.RtcOffset, year, reading->Month, reading->Day);
     }
@@ -14987,9 +14987,9 @@ static VOID HostPitDeliver(VOID)
                  served instantly exactly as in mode 1, and the clock's worst-case
                  loss falls from three periods (16.7 ms at 180 Hz) to one. It cannot
                  strand a break code, because a key is never made to wait. */
-            {   INT maximumYields = (g_KeyIrqRetry == 3) ? 1 : KEYIRQ_MAX_YIELD;
+            {   INT maximumYields = (g_KeyIrqRetry == KEYIRQ_RETRY_ONE_YIELD) ? 1 : KEYIRQ_MAX_YIELD;
             if (g_KeyIrqRetry && !g_DpmiPm && g_Irq1Pending > 0
-                && (g_KeyIrqRetry != 2 || g_Irq0Pending <= 1)
+                && (g_KeyIrqRetry != KEYIRQ_RETRY_CLOCK_ON_SCHEDULE || g_Irq0Pending <= 1)
                 && g_Irq0Yielded < maximumYields
                 && VddPicCanDeliver(&g_Pic, 1) && AsyncInjectIrq(1)) {
                 InterlockedDecrement(&g_Irq1Pending);
@@ -15178,7 +15178,7 @@ static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port,
         lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, soundIoLine, lineCursor); SerialOut(soundIoLine, lineCursor);
     }
 }
-
+enum { INT10_WAIT_MAX_MS = 50 };   /* Int10WaitAfter: never hold a video call longer */
 /* Burst fast path for the `<I/O insn>; LOOP <back to it>` idiom -- the same
    trick as the mode-12h fill-loop interpreter below, applied to port I/O.
 
@@ -15214,7 +15214,7 @@ static DWORD HostIoLoopBurst(volatile BYTE *tib, VDD_BUS *bus,
     INT displacement;
     if (segment[ipNext & mask] != X86_OP_LOOP) return 0;           /* LOOP rel8 only        */
     displacement = (INT8)segment[(ipNext + 1) & mask];
-    if (((ipNext + 2 + displacement) & mask) != (ioStart & mask)) return 0;
+    if (((ipNext + X86_JCC_SHORT_LENGTH + displacement) & mask) != (ioStart & mask)) return 0;
     cx = VDM_REG(tib, VTIB_ECX) & mask;
     iterations  = (cx - 1) & mask;                                /* body runs c-1 more    */
     if (iterations > IO_BURST_MAX) iterations = IO_BURST_MAX;
@@ -15256,8 +15256,8 @@ static VOID Int10WaitAfter(VOID)
     INT waited = 0;
     while ((microseconds = VddVideoInt10WaitUs(&g_Video)) != 0) {
         waited = 1;
-        if (GetTickCount() - start > 50u) break;
-        if (microseconds > 1500u) Sleep(1); else Sleep(0);
+        if (GetTickCount() - start > INT10_WAIT_MAX_MS) break;
+        if (microseconds > RETRACE_IDLE_MIN_US) Sleep(1); else Sleep(0);
     }
     if (waited) ++g_VbeWaits;
 }
@@ -15270,7 +15270,7 @@ static INT g_RetraceOffset = -1;
 static struct { DWORD Cs, Ip, Count; BYTE Bytes[10]; } g_RetraceSite[RT_SITES];
 static VOID RetraceNote(volatile BYTE *tib, WORD port, INT isIn, DWORD cs, DWORD ipAfter)
 {
-    if (!isIn || port != 0x3DA) return;
+    if (!isIn || port != VIDEO_PORT_STATUS1_COLOUR) return;
     {   INT slot;
         for (slot = 0; slot < RT_SITES; ++slot) {
             if (g_RetraceSite[slot].Count && g_RetraceSite[slot].Cs == cs && g_RetraceSite[slot].Ip == ipAfter) { g_RetraceSite[slot].Count++; break; }
@@ -15324,13 +15324,13 @@ static INT HostTryIo(volatile BYTE *tib, VDD_BUS *bus)
     DWORD cs = VDM_REG16(tib, VTIB_CS);
     DWORD ip = VDM_REG16(tib, VTIB_EIP);
     volatile BYTE *code = (volatile BYTE *)((cs << PARAGRAPH_SHIFT) + ip);   /* absolute V86 */
-    INT index = 0, operandSize = 2, isIn, width, usedDx, length;
+    INT index = 0, operandSize = X86_WORD_SIZE, isIn, width, usedDx, length;
     BYTE opcode; WORD port;
 
     while (code[index] == X86_PREFIX_OPERAND_SIZE || code[index] == X86_PREFIX_ADDRESS_SIZE ||
            code[index] == X86_PREFIX_REPNE || code[index] == X86_PREFIX_REP) {        /* prefixes            */
-        if (code[index] == 0x66) operandSize = 4;
-        if (++index > 4) return 0;
+        if (code[index] == X86_PREFIX_OPERAND_SIZE) operandSize = X86_DWORD_SIZE;
+        if (++index > X86_PREFIXES_MAX) return 0;
     }
     opcode = code[index];
     switch (opcode) {
@@ -15368,18 +15368,18 @@ static INT HostTryIoRetro(volatile BYTE *tib, VDD_BUS *bus)
     DWORD cs = VDM_REG16(tib, VTIB_CS);
     DWORD ip = VDM_REG16(tib, VTIB_EIP);
     volatile BYTE *segment = (volatile BYTE *)(cs << PARAGRAPH_SHIFT);
-    BYTE opcode; INT isIn, width, operandSize = 2; WORD port; DWORD ioStart;
+    BYTE opcode; INT isIn, width, operandSize = X86_WORD_SIZE; WORD port; DWORD ioStart;
     if (ip < 1) return 0;
     opcode = segment[ip - 1];
     if (opcode == X86_OP_IN_DX_BYTE || opcode == X86_OP_IN_DX || opcode == X86_OP_OUT_DX_BYTE || opcode == X86_OP_OUT_DX) {   /* DX-form (1 byte) */
         ioStart = ip - 1;
-        if (ip >= 2 && segment[ip - 2] == 0x66) { operandSize = 4; ioStart = ip - 2; }
+        if (ip >= X86_IN_IMM_LENGTH && segment[ip - X86_IN_IMM_LENGTH] == X86_PREFIX_OPERAND_SIZE) { operandSize = X86_DWORD_SIZE; ioStart = ip - X86_IN_IMM_LENGTH; }
         isIn = (opcode == X86_OP_IN_DX_BYTE || opcode == X86_OP_IN_DX);
         width = (opcode == X86_OP_IN_DX_BYTE || opcode == X86_OP_OUT_DX_BYTE) ? 1 : operandSize;
         port  = (WORD)VDM_REG(tib, VTIB_EDX);
-    } else if (ip >= 2 && ((opcode = segment[ip - 2]) == X86_OP_IN_IMM_BYTE || opcode == X86_OP_IN_IMM ||
+    } else if (ip >= X86_IN_IMM_LENGTH && ((opcode = segment[ip - X86_IN_IMM_LENGTH]) == X86_OP_IN_IMM_BYTE || opcode == X86_OP_IN_IMM ||
                             opcode == X86_OP_OUT_IMM_BYTE || opcode == X86_OP_OUT_IMM)) {          /* imm-form (2 byte) */
-        ioStart = ip - 2;
+        ioStart = ip - X86_IN_IMM_LENGTH;
         isIn = (opcode == X86_OP_IN_IMM_BYTE || opcode == X86_OP_IN_IMM);
         width = (opcode == X86_OP_IN_IMM_BYTE || opcode == X86_OP_OUT_IMM_BYTE) ? 1 : operandSize;
         port  = segment[ip - 1];                                      /* imm8 port        */
@@ -16298,7 +16298,7 @@ static VOID ModeYRemapSelectBody(PVOID context, INT mask)
 static BYTE *ModeYRemapPlane(PVOID context, INT plane)
 {
     (VOID)context;
-    return (BYTE *)g_ModeYView[plane & 3];
+    return (BYTE *)g_ModeYView[plane & VIDEO_PLANE_INDEX_MASK];
 }
 
 /* ── DOES THE GUEST EVER READ A PLANE OTHER THAN THE ONE IT IS WRITING? ──────────────
@@ -16602,7 +16602,7 @@ static INT ModeYNeedsInterp(VOID)
     BYTE mask;
     if (!g_ModeYRemap || !ModeYInterpServes() || g_Video.IsChain4) return 0;
     mask = (BYTE)(g_Video.MapMask & VIDEO_ALL_PLANES);
-    return (mask & (BYTE)(mask - 1)) != 0 || (g_Video.WriteMode & 3) != 0;
+    return (mask & (BYTE)(mask - 1)) != 0 || (g_Video.WriteMode & VIDEO_WRITE_MODE_MASK) != 0;
 }
 
 /* ====================================================================== *
@@ -16624,7 +16624,7 @@ static INT ModeYNeedsInterp(VOID)
  *  that instruction, so V86 re-executes it. 16-bit only (0x66/0x67/LOCK   *
  *  bail). One fault now drives the entire fill instead of one-per-pixel.  *
  * ====================================================================== */
-
+enum { PAGE_MAP_UNKNOWN = 0, PAGE_MAP_OK = 1, PAGE_MAP_BAD = 2 };   /* g_PageMap: per 4 KB page of the low 1 MB */
 /* ── ⚠⚠ A STRAY GUEST POINTER MUST NOT JAM THE MACHINE. ─────────────────────────────
      imem treats a guest LINEAR address as a HOST virtual address -- true for the low
      megabyte NTVDM identity-maps, but the UMB region (0xC0000-0xEFFFF) has HOLES that
@@ -16641,22 +16641,22 @@ static INT ModeYNeedsInterp(VOID)
      at most once per page. 0=unknown, 1=ok, 2=bad. The low conventional memory and our
      own aperture never reach the probe (handled above / by the A000 branch), so the
      cost falls only on the upper-memory accesses that are the anomaly. */
-static BYTE g_PageMap[0x100000u >> PAGE_SHIFT];     /* one entry per 4KB page of the low 1MB */
+static BYTE g_PageMap[X86_REAL_MODE_SIZE_U >> PAGE_SHIFT];     /* one entry per 4KB page of the low 1MB */
 static DWORD   g_InterpreterMemoryBadReads, g_InterpreterMemoryBadWrites, g_InterpreterMemoryBadLogged;
 static VOID InterpreterMemoryBadNote(UINT32 linear, INT write);   /* defined after v86interp.h (needs icpu) */
 static INT InterpreterMemoryPageOk(UINT32 linear)
 {
     UINT32 page = linear >> PAGE_SHIFT;
-    if (linear >= 0x100000u) return 1;             /* HMA and above: leave to the raw path */
-    if (g_PageMap[page] == 0) {
+    if (linear >= X86_REAL_MODE_SIZE_U) return 1;             /* HMA and above: leave to the raw path */
+    if (g_PageMap[page] == PAGE_MAP_UNKNOWN) {
         MEMORY_BASIC_INFORMATION memoryInfo;
         INT isOk = 0;
         if (VirtualQuery((LPCVOID)(ULONG_PTR)(page << PAGE_SHIFT), &memoryInfo, sizeof memoryInfo) == sizeof memoryInfo)
             isOk = (memoryInfo.State == MEM_COMMIT) &&
                  !(memoryInfo.Protect & (PAGE_NOACCESS | PAGE_GUARD));
-        g_PageMap[page] = (BYTE)(isOk ? 1 : 2);
+        g_PageMap[page] = (BYTE)(isOk ? PAGE_MAP_OK : PAGE_MAP_BAD);
     }
-    return g_PageMap[page] == 1;
+    return g_PageMap[page] == PAGE_MAP_OK;
 }
 /* Flat/planar guest memory for the interpreter: A0000 goes through the VGA
    engine (a read loads the latches), everything else is the directly-mapped
@@ -16675,11 +16675,11 @@ static __attribute__((noinline)) VOID InterpreterMemoryWrite8Slow(UINT32 linear,
   if (!InterpreterMemoryPageOk(linear)) { g_InterpreterMemoryBadWrites++; InterpreterMemoryBadNote(linear, 1); return; }
   *(volatile BYTE *)linear = value; }
 static inline __attribute__((always_inline)) BYTE V86HostRead8(UINT32 linear)
-{ if (linear < 0x100000u && g_PageMap[linear >> PAGE_SHIFT] == 1 && (linear < VIDEO_APERTURE_BASE || linear >= VIDEO_MONO_BASE))
+{ if (linear < X86_REAL_MODE_SIZE_U && g_PageMap[linear >> PAGE_SHIFT] == PAGE_MAP_OK && (linear < VIDEO_APERTURE_BASE || linear >= VIDEO_MONO_BASE))
       return *(volatile BYTE *)linear;
   return InterpreterMemoryRead8Slow(linear); }
 static inline __attribute__((always_inline)) VOID V86HostWrite8(UINT32 linear, BYTE value)
-{ if (linear < 0x100000u && g_PageMap[linear >> PAGE_SHIFT] == 1 && (linear < VIDEO_APERTURE_BASE || linear >= VIDEO_MONO_BASE))
+{ if (linear < X86_REAL_MODE_SIZE_U && g_PageMap[linear >> PAGE_SHIFT] == PAGE_MAP_OK && (linear < VIDEO_APERTURE_BASE || linear >= VIDEO_MONO_BASE))
       { *(volatile BYTE *)linear = value; return; }
   InterpreterMemoryWrite8Slow(linear, value); }
 /* The interpreter's per-instruction code pointer (v86interp.h, V86I_CODE_PTR): the 16
@@ -16687,7 +16687,7 @@ static inline __attribute__((always_inline)) VOID V86HostWrite8(UINT32 linear, B
    aperture -- exactly the bytes V86HostRead8's fast path would have read one at a time. */
 #define V86I_CODE_PTR 1
 static inline __attribute__((always_inline)) const volatile BYTE *V86HostCodePointer(UINT32 linear)
-{ if (linear < 0x100000u && (linear & 0xFFFu) <= 0xFF0u && g_PageMap[linear >> PAGE_SHIFT] == 1
+{ if (linear < X86_REAL_MODE_SIZE_U && (linear & PAGE_LAST_BYTE_U) <= PAGE_LAST_PARAGRAPH_U && g_PageMap[linear >> PAGE_SHIFT] == PAGE_MAP_OK
       && (linear < VIDEO_APERTURE_BASE || linear >= VIDEO_MONO_BASE))
       return (const volatile BYTE *)(ULONG_PTR)linear;
   return 0; }
@@ -16712,11 +16712,11 @@ static VOID V86HostOut(WORD port, INT width, UINT32 byteValue)
 { UINT32 value = byteValue;
   if (port >= PIT_PORT_COUNTER0 && port <= PIT_PORT_CONTROL) HostPitGenerate();
   VddBusIo(&g_Bus, port, (BYTE)width, 0, &value);
-  if (port == 0x43) PitLatchNote((BYTE)byteValue);     /* same instrument as the reflected path */
+  if (port == PIT_PORT_CONTROL) PitLatchNote((BYTE)byteValue);     /* same instrument as the reflected path */
   if (port == PIT_PORT_COUNTER0) HostPitResyncCheck(); }         /* and the same resync rule           */
 
 #include "v86interp.h"
-
+enum { PM32_PAGE_READ = 1, PM32_PAGE_WRITE = 2 };   /* g_Pm32PageCache access bits */
 /* ── THE FLAT 32-BIT INTERPRETER'S HOST HOOKS (north star 1, Doom). ───────────────────
      Same division as imem_*: A0000-AFFFF goes through the VGA engine (a read loads the
      latches, a write reaches every plane the map mask selects), everything else is flat
@@ -16727,18 +16727,18 @@ static VOID V86HostOut(WORD port, INT width, UINT32 byteValue)
 static struct { DWORD Page; BYTE Access; } g_Pm32PageCache[P32_PGC];
 static INT Pm32PageOk(DWORD page, INT isWrite)
 {
-    UINT slot = (UINT)(page * 2654435761u) >> 24;
+    UINT slot = (UINT)(page * KNUTH_HASH_MULTIPLIER_U) >> TOP_BYTE_SHIFT;
     if (g_Pm32PageCache[slot].Page != page + 1) {
         MEMORY_BASIC_INFORMATION memoryInfo; BYTE access = 0;
         if (VirtualQuery((LPCVOID)(ULONG_PTR)(page << PAGE_SHIFT), &memoryInfo, sizeof memoryInfo) == sizeof memoryInfo
             && memoryInfo.State == MEM_COMMIT && !(memoryInfo.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
-            access = 1;
+            access = PM32_PAGE_READ;
             if (memoryInfo.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY
-                               | PAGE_EXECUTE_WRITECOPY)) access = 3;
+                               | PAGE_EXECUTE_WRITECOPY)) access = PM32_PAGE_READ | PM32_PAGE_WRITE;
         }
         g_Pm32PageCache[slot].Page = page + 1; g_Pm32PageCache[slot].Access = access;
     }
-    return isWrite ? (g_Pm32PageCache[slot].Access & 2) != 0 : (g_Pm32PageCache[slot].Access & 1) != 0;
+    return isWrite ? (g_Pm32PageCache[slot].Access & PM32_PAGE_WRITE) != 0 : (g_Pm32PageCache[slot].Access & PM32_PAGE_READ) != 0;
 }
 static DWORD g_Pm32VgaCount = 0;      /* aperture accesses by the interpreter (ModeYPmRun) */
 static BYTE Pm32HostRead8(UINT32 linear)
@@ -16773,7 +16773,7 @@ static INT ModeYPmNeedsInterp(VOID)
     if (!g_DpmiPm || g_ModeYPmOffset || g_ModeYInterpOffset || !g_ModeYRemap) return 0;
     if (g_Video.ModeKind != VIDEO_KIND_LINEAR8 || g_Video.IsChain4) return 0;
     mask = (BYTE)(g_Video.MapMask & VIDEO_ALL_PLANES);
-    return (mask & (BYTE)(mask - 1)) != 0 || (g_Video.WriteMode & 3) != 0;
+    return (mask & (BYTE)(mask - 1)) != 0 || (g_Video.WriteMode & VIDEO_WRITE_MODE_MASK) != 0;
 }
 
 /* ── ★★★ DOOM'S DRAWERS THROUGH THE ADDRESS GENERATOR. (s80, north star 1) ─────────────
@@ -16997,7 +16997,7 @@ static VOID HostProfileStart(VOID)
     const BYTE *image = (const BYTE *)GetModuleHandleA(NULL);
     DWORD newHeaderOffset, size;
     if (GetFileAttributesA(HOSTPROF_FLAG) == INVALID_FILE_ATTRIBUTES) return;
-    newHeaderOffset = *(const DWORD *)(image + 0x3C);
+    newHeaderOffset = *(const DWORD *)(image + DOS_MZ_NEW_HEADER);
     size = *(const DWORD *)(image + newHeaderOffset + 0x50);                     /* SizeOfImage */
     g_HostProfileBase = (DWORD)(ULONG_PTR)image; g_HostProfileSize = size;
     g_HostProfileCount = (size >> HPROF_SHIFT) + 1;

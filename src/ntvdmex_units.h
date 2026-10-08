@@ -9,6 +9,7 @@
 #define NTVDMEX_UNITS_H
 
 #define BYTES_PER_KILOBYTE          1024
+#define YEARS_PER_CENTURY_U         100u
 
 #define MILLISECONDS_PER_SECOND         1000
 #define MILLISECONDS_PER_SECOND_U       1000u

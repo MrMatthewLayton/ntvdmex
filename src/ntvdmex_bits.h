@@ -36,4 +36,7 @@
 #define BITMAP_BYTE_SHIFT   3
 #define BITMAP_BIT_MASK     7
 
+/* Knuth's multiplicative hash: 2^32 divided by the golden ratio. */
+#define KNUTH_HASH_MULTIPLIER_U 2654435761u
+
 #endif /* NTVDMEX_BITS_H */

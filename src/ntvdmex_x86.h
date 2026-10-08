@@ -67,6 +67,10 @@
 #define X86_SEGMENT_SIZE_U      0x10000u
 #define X86_SEGMENT_LIMIT_64K   0xFFFF
 #define X86_REAL_MODE_LAST_U    0xFFFFFu    /* the last real-mode linear byte: 1 MB - 1 */
+#define X86_REAL_MODE_SIZE_U    0x100000u   /* the 1 MB below the HMA                  */
+#define PAGE_LAST_PARAGRAPH_U   0xFF0u      /* a 16-byte read from here stays in the page */
+#define X86_JCC_SHORT_LENGTH    2           /* Jcc rel8                                 */
+#define X86_IN_IMM_LENGTH       2           /* IN AL,imm8 / OUT imm8,AL                 */
 #define X86_FAR_POINTER_SEGMENT 2
 #define X86_FAR_POINTER_SIZE    4           /* offset WORD, segment WORD                */
 #define X86_OP_INSB             0x6C

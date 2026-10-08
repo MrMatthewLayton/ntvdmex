@@ -24,6 +24,10 @@
 #define VIDEO_MONO_BASE     0xB0000u      /* the second 64K window: B0000..BFFFF    */
 #define VIDEO_STATUS1_VERTICAL_RETRACE 0x08u  /* 3DAh bit 3                            */
 #define VIDEO_RETRACE_UNKNOWN_U 0xFFFFFFFFu   /* VddVideoUsToRetrace: no beam to time  */
+#define VIDEO_PORT_STATUS1_COLOUR     0x3DA
+#define VIDEO_WRITE_MODE_MASK         3       /* GR5 bits 0-1                          */
+#define VIDEO_TEXT_FRAME_WIDTH        720     /* VGA text: 80 columns of 9 dots        */
+#define VIDEO_TEXT_FRAME_HEIGHT       400
 #define VIDEO_OFFSET_NONE             0xFFFFFFFFu   /* WatchOffset and friends: none set */
 #define VIDEO_TEXT_OFFSET      (VIDEO_TEXT_BASE - VIDEO_APERTURE_BASE)  /* 0x18000         */
 #define VIDEO_COLUMNS          80
