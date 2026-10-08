@@ -57,8 +57,6 @@
 #define DOS_INT21_WCHAR_BYTES     2
 /* The INT 21h the guest executed, and its frame. */
 #define DOS_INT21_INT_LENGTH      2       /* CD 21                                     */
-#define DOS_INT21_FRAME_CS        2       /* the pushed frame: IP, CS, FLAGS           */
-#define DOS_INT21_FRAME_FLAGS     4
 #define DOS_INT21_CALLSITE_BEFORE 24      /* the trace's bytes around the call site    */
 #define DOS_INT21_CALLSITE_AFTER  10
 #define DOS_INT21_CALLSITE_MAX    48
@@ -1114,7 +1112,7 @@ INT DosInt21(PDOS_MACHINE machine)
     guestFlags = g_DosInt21IsProtectedMode
         ? (volatile WORD *)(tib + VTIB_EFLAGS)
         : (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & WORD_MASK) << PARAGRAPH_SHIFT)
-                            + (((VDM_REG(tib, VTIB_ESP) & WORD_MASK) + DOS_INT21_FRAME_FLAGS) & WORD_MASK));
+                            + (((VDM_REG(tib, VTIB_ESP) & WORD_MASK) + X86_FRAME16_FLAGS) & WORD_MASK));
     function = (R_AX >> BYTE_SHIFT) & BYTE_MASK;
     machine->Trampoline = 0;
     /* #251: resume the V86 guest in the AUX/PRN driver code -- see dos_auxprn.asm. */
@@ -1141,7 +1139,7 @@ INT DosInt21(PDOS_MACHINE machine)
         DWORD stackPointer = VDM_REG(tib, VTIB_ESP) & WORD_MASK;
         const volatile BYTE *frame = (const volatile BYTE *)(ULONG_PTR)(stackBase + stackPointer);
         callOffset = (DWORD)frame[0] | ((DWORD)frame[1] << BYTE_SHIFT);
-        callSegment = (DWORD)frame[DOS_INT21_FRAME_CS] | ((DWORD)frame[DOS_INT21_FRAME_CS + 1] << BYTE_SHIFT);
+        callSegment = (DWORD)frame[X86_FRAME16_CS] | ((DWORD)frame[X86_FRAME16_CS + 1] << BYTE_SHIFT);
         isCallFramed  = 1;
     }
 

@@ -112,7 +112,7 @@ INT main(VOID)
                                      EXTMEM_TEST_RAW_ADDRESS, EXTMEM_TEST_WORD_LENGTH) == 0,
                     "raw with no buffer yet -> 0 (caller allocates)");
 
-    {   BYTE descriptor[DOS_EXTMEM_DESCRIPTOR_SIZE] = EXTMEM_TEST_DESCRIPTOR;
+    {   BYTE descriptor[X86_DESCRIPTOR_SIZE] = EXTMEM_TEST_DESCRIPTOR;
         ExtMemTestCheck(DosExtMemDescriptorBase(descriptor) == EXTMEM_TEST_DESCRIPTOR_BASE,
                         "GDT base: bytes 2-4 and 7"); }
 

@@ -38,7 +38,6 @@ enum { DOS_EXTMEM_REGION_NONE = 0, DOS_EXTMEM_REGION_DIRECT, DOS_EXTMEM_REGION_E
 
 /* An AH=87h GDT descriptor (8 bytes; the GDT holds six) and where its base sits:
    bits 0-23 in bytes 2-4, bits 24-31 in byte 7. */
-#define DOS_EXTMEM_DESCRIPTOR_SIZE        8
 #define DOS_EXTMEM_DESCRIPTOR_BASE_BYTE0  2
 #define DOS_EXTMEM_DESCRIPTOR_BASE_BYTE1  3
 #define DOS_EXTMEM_DESCRIPTOR_BASE_BYTE2  4
@@ -93,7 +92,7 @@ static inline PBYTE DosExtMemResolve(_In_opt_ PCDOS_XMS_STATE xmsState,
    descriptor 2 (+0x10) is the source, 3 (+0x18) the destination; base bits 0-23 at
    +2..+4 and 24-31 at +7 (386 BIOSes honour the high byte). */
 static inline DWORD DosExtMemDescriptorBase(
-    _In_reads_bytes_(DOS_EXTMEM_DESCRIPTOR_SIZE) const volatile BYTE *descriptor)
+    _In_reads_bytes_(X86_DESCRIPTOR_SIZE) const volatile BYTE *descriptor)
 {
     return (DWORD)descriptor[DOS_EXTMEM_DESCRIPTOR_BASE_BYTE0]
          | ((DWORD)descriptor[DOS_EXTMEM_DESCRIPTOR_BASE_BYTE1] << DOS_EXTMEM_BYTE1_SHIFT)

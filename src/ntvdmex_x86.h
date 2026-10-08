@@ -6,6 +6,16 @@
 #ifndef NTVDMEX_X86_H
 #define NTVDMEX_X86_H
 
+/* Operand and structure sizes, in bytes. */
+#define X86_WORD_SIZE       2
+#define X86_DWORD_SIZE      4
+#define X86_DESCRIPTOR_SIZE 8               /* a GDT/LDT/IDT entry                      */
+/* A 16-bit far frame on the stack: IP, then CS, then (an interrupt's) FLAGS. */
+#define X86_FRAME16_CS          2
+#define X86_FRAME16_FLAGS       4
+#define X86_FAR_RETURN16_SIZE   4           /* IP, CS                                   */
+#define X86_IRET16_SIZE         6           /* IP, CS, FLAGS                            */
+
 /* Real-mode addressing: linear = segment * 16 + offset. */
 #define PARAGRAPH_SHIFT     4
 #define PARAGRAPH_SIZE      16
@@ -180,6 +190,7 @@
 /* EFLAGS. The plain names are `int` literals, the _U names `unsigned` (see ntvdmex_bits.h). */
 #define EFLAGS_CF           0x0001
 #define EFLAGS_CF_U         0x0001u
+#define EFLAGS_RESERVED_ONE 0x0002
 #define EFLAGS_RESERVED_ONE_U 0x0002u       /* bit 1 always reads 1                     */
 #define EFLAGS_PF_U         0x0004u
 #define EFLAGS_AF_U         0x0010u

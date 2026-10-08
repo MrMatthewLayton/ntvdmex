@@ -35,8 +35,6 @@
 
 /* Operand widths, masks and signs (the u-suffixed ones are unsigned; the
    V86_LOW_* are int, where the expression they replaced was). */
-#define V86_WORD          2
-#define V86_DWORD         4
 #define V86_LOW_BYTE      0xFF
 #define V86_LOW_WORD      0xFFFF
 #define V86_BYTE_SIGN     0x80u
@@ -202,8 +200,8 @@ V86_INLINE int V86Parity(BYTE value) { value ^= value >> NIBBLE_SHIFT; return !(
 /* Operand-width helpers: w is 1/2/4 bytes. The 4-byte path exists for 16-bit code
    that uses the 0x66 operand-size prefix (386 32-bit register math -- e.g. a C
    runtime's MOVZX ESI,SI / SHL ESI,4). run 54. */
-V86_INLINE UINT32 V86Mask(int width) { return (width == 1) ? BYTE_MASK_U : (width == V86_WORD) ? WORD_MASK_U : DWORD_MASK_U; }
-V86_INLINE UINT32 V86SignBit(int width) { return (width == 1) ? V86_BYTE_SIGN : (width == V86_WORD) ? V86_WORD_SIGN : V86_DWORD_SIGN; }
+V86_INLINE UINT32 V86Mask(int width) { return (width == 1) ? BYTE_MASK_U : (width == X86_WORD_SIZE) ? WORD_MASK_U : DWORD_MASK_U; }
+V86_INLINE UINT32 V86SignBit(int width) { return (width == 1) ? V86_BYTE_SIGN : (width == X86_WORD_SIZE) ? V86_WORD_SIGN : V86_DWORD_SIGN; }
 
 /* Segment-register -> linear-base resolver. NULL = V86 semantics (base = seg<<4).
    For protected mode (DPMI, GH #2) the host sets this to an LDT-selector->base
@@ -227,13 +225,13 @@ static int (*g_V86SelectorDescriptor)(WORD selector, UINT32 *accessRights, UINT3
 
 V86_INLINE UINT32 V86ReadMemory(UINT32 linear, int width)
 { UINT32 value = V86HostRead8(linear);
-  if (width >= V86_WORD) value |= (UINT32)V86HostRead8(linear + 1) << BYTE_SHIFT;
-  if (width == V86_DWORD) value |= ((UINT32)V86HostRead8(linear + V86_THIRD_BYTE) << WORD_SHIFT) | ((UINT32)V86HostRead8(linear + V86_FOURTH_BYTE) << TOP_BYTE_SHIFT);
+  if (width >= X86_WORD_SIZE) value |= (UINT32)V86HostRead8(linear + 1) << BYTE_SHIFT;
+  if (width == X86_DWORD_SIZE) value |= ((UINT32)V86HostRead8(linear + V86_THIRD_BYTE) << WORD_SHIFT) | ((UINT32)V86HostRead8(linear + V86_FOURTH_BYTE) << TOP_BYTE_SHIFT);
   return value; }
 V86_INLINE VOID V86WriteMemory(UINT32 linear, int width, UINT32 value)
 { V86HostWrite8(linear, (BYTE)value);
-  if (width >= V86_WORD) V86HostWrite8(linear + 1, (BYTE)(value >> BYTE_SHIFT));
-  if (width == V86_DWORD) { V86HostWrite8(linear + V86_THIRD_BYTE, (BYTE)(value >> WORD_SHIFT)); V86HostWrite8(linear + V86_FOURTH_BYTE, (BYTE)(value >> TOP_BYTE_SHIFT)); } }
+  if (width >= X86_WORD_SIZE) V86HostWrite8(linear + 1, (BYTE)(value >> BYTE_SHIFT));
+  if (width == X86_DWORD_SIZE) { V86HostWrite8(linear + V86_THIRD_BYTE, (BYTE)(value >> WORD_SHIFT)); V86HostWrite8(linear + V86_FOURTH_BYTE, (BYTE)(value >> TOP_BYTE_SHIFT)); } }
 
 /* ── #194: THE 0x66 FORMS THAT USED TO BAIL, AND THE TWO THINGS THE MANUAL LEAVES OPEN.
      PUSHFD/POPFD, 32-bit PUSH/POP of a segment register, the 32-bit string ops, CALL/
@@ -282,7 +280,7 @@ static UINT32 V86Pop(V86_CPU *cpu, int width)
 static VOID V86PushSegment(V86_CPU *cpu, int width, WORD value)
 {
     WORD stackPointer = (WORD)(cpu->Registers[V86_SP] - width);
-    V86WriteMemory(V86SegmentBase(cpu->Segments[V86_SS]) + stackPointer, V86_WORD, value);
+    V86WriteMemory(V86SegmentBase(cpu->Segments[V86_SS]) + stackPointer, X86_WORD_SIZE, value);
     cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | stackPointer;
 }
 /* The FLAGS image PUSHF(D) writes, and what POPF(D) may load. IF is carried (an
@@ -292,7 +290,7 @@ static VOID V86PushSegment(V86_CPU *cpu, int width, WORD value)
 static UINT32 V86FlagsImage(const V86_CPU *cpu, int width)
 {
     UINT32 value = (cpu->Flags & V86_FLAGS_MODELLED) | EFLAGS_RESERVED_ONE_U;
-    if (width == V86_DWORD) {
+    if (width == X86_DWORD_SIZE) {
         value |= cpu->Flags & V86I_EFL_HI;
         if (!g_V86SegmentToLinear) value |= (EFLAGS_RF_U | EFLAGS_VM_U) | ((cpu->Flags & EFLAGS_IF_U) ? EFLAGS_VIF_U : 0u);
     }
@@ -304,7 +302,7 @@ static VOID V86FlagsLoad(V86_CPU *cpu, UINT32 value, int width)
     /* The 16-bit form REPLACES the whole register (upper half -> 0), as POPF and IRET
        always have here -- kept bit for bit, the fuzz pins it. The 32-bit form loads
        only the modelled upper bits and leaves the rest (VM, VIF ...) as they were. */
-    if (width == V86_WORD) cpu->Flags = low;
+    if (width == X86_WORD_SIZE) cpu->Flags = low;
     else        cpu->Flags = (cpu->Flags & ~(WORD_MASK_U | V86I_EFL_HI)) | (value & V86I_EFL_HI) | low;
 }
 
@@ -334,9 +332,9 @@ V86_INLINE VOID     V86Set8(V86_CPU *cpu, int registerIndex, BYTE value)
   else cpu->Registers[registerIndex - V86_BYTE_REGISTERS] = (cpu->Registers[registerIndex - V86_BYTE_REGISTERS] & V86_CLEAR_SECOND_BYTE) | ((UINT32)value << BYTE_SHIFT); }
 /* read/write a register by operand width (1/2/4). */
 V86_INLINE UINT32 V86GetRegister(V86_CPU *cpu, int registerIndex, int width)
-{ return (width == 1) ? V86Get8(cpu, registerIndex) : (width == V86_WORD) ? (UINT32)(WORD)cpu->Registers[registerIndex & V86_REGISTER_MASK] : cpu->Registers[registerIndex & V86_REGISTER_MASK]; }
+{ return (width == 1) ? V86Get8(cpu, registerIndex) : (width == X86_WORD_SIZE) ? (UINT32)(WORD)cpu->Registers[registerIndex & V86_REGISTER_MASK] : cpu->Registers[registerIndex & V86_REGISTER_MASK]; }
 V86_INLINE VOID V86SetRegister(V86_CPU *cpu, int registerIndex, int width, UINT32 value)
-{ if (width == 1) V86Set8(cpu, registerIndex, (BYTE)value); else if (width == V86_WORD) V86Set16(cpu, registerIndex, (WORD)value); else cpu->Registers[registerIndex & V86_REGISTER_MASK] = value; }
+{ if (width == 1) V86Set8(cpu, registerIndex, (BYTE)value); else if (width == X86_WORD_SIZE) V86Set16(cpu, registerIndex, (WORD)value); else cpu->Registers[registerIndex & V86_REGISTER_MASK] = value; }
 
 /* Flag-computing ALU primitives (result masked to operand width w). */
 /* Carry without 64-bit arithmetic (i686 pays for every uint64_t): below 32 bits the
@@ -350,7 +348,7 @@ V86_INLINE UINT32 V86Add(V86_CPU *cpu, UINT32 first, UINT32 second, int carryIn,
     UINT32 maskedFirst = first & mask, maskedSecond = second & mask;
     UINT32 full = maskedFirst + maskedSecond + (UINT32)carryIn;
     UINT32 result = full & mask, newFlags = cpu->Flags & ~(EFLAGS_CF_U | EFLAGS_PF_U | EFLAGS_AF_U | EFLAGS_ZF_U | EFLAGS_SF_U | EFLAGS_OF_U);
-    if (width == V86_DWORD ? (carryIn ? full <= maskedFirst : full < maskedFirst) : (full > mask)) newFlags |= EFLAGS_CF_U;
+    if (width == X86_DWORD_SIZE ? (carryIn ? full <= maskedFirst : full < maskedFirst) : (full > mask)) newFlags |= EFLAGS_CF_U;
     if ((maskedFirst ^ maskedSecond ^ result) & EFLAGS_AF_U)                newFlags |= EFLAGS_AF_U;
     if (!result)                                   newFlags |= EFLAGS_ZF_U;
     if (result & signBit)                               newFlags |= EFLAGS_SF_U;
@@ -476,8 +474,8 @@ V86_INLINE int V86Condition(V86_CPU *cpu, int condition)
 #define V86_CODE_BYTE(position) (codePointer ? codePointer[(position)] : V86HostRead8(codeLinear + (UINT32)(position)))
 /* An immediate of `width` bytes at V86_CODE_BYTE(position): little-endian, the same bytes as V86ReadMemory(codeLinear + position, width). */
 #define V86_IMMEDIATE(position, width) (codePointer ? (UINT32)codePointer[(position)] \
-                          | ((width) >= V86_WORD ? (UINT32)codePointer[(position) + 1] << BYTE_SHIFT : 0u) \
-                          | ((width) == V86_DWORD ? ((UINT32)codePointer[(position) + V86_THIRD_BYTE] << WORD_SHIFT) | ((UINT32)codePointer[(position) + V86_FOURTH_BYTE] << TOP_BYTE_SHIFT) : 0u) \
+                          | ((width) >= X86_WORD_SIZE ? (UINT32)codePointer[(position) + 1] << BYTE_SHIFT : 0u) \
+                          | ((width) == X86_DWORD_SIZE ? ((UINT32)codePointer[(position) + V86_THIRD_BYTE] << WORD_SHIFT) | ((UINT32)codePointer[(position) + V86_FOURTH_BYTE] << TOP_BYTE_SHIFT) : 0u) \
                         : V86ReadMemory(codeLinear + (UINT32)(position), (width)))
 
 /* Decode a 16-bit ModRM byte at CB(idx). Fills *o (is_mem + linear addr or rm
@@ -494,12 +492,12 @@ static int V86DecodeModrm(V86_CPU *cpu, UINT32 codeLinear, const volatile BYTE *
     case V86_RM_BP_SI: effectiveAddress = (WORD)(bpValue + siValue); isStackBased = 1; break;
     case V86_RM_BP_DI: effectiveAddress = (WORD)(bpValue + diValue); isStackBased = 1; break;
     case V86_RM_SI: effectiveAddress = siValue; break;                   case V86_RM_DI: effectiveAddress = diValue; break;
-    case V86_RM_BP: if (mode == V86_MODE_NO_DISP) { effectiveAddress = (WORD)(V86_CODE_BYTE(offset + 1) | (V86_CODE_BYTE(offset + V86_WORD) << BYTE_SHIFT)); length += V86_WORD; }
+    case V86_RM_BP: if (mode == V86_MODE_NO_DISP) { effectiveAddress = (WORD)(V86_CODE_BYTE(offset + 1) | (V86_CODE_BYTE(offset + X86_WORD_SIZE) << BYTE_SHIFT)); length += X86_WORD_SIZE; }
             else { effectiveAddress = bpValue; isStackBased = 1; } break;
     default: effectiveAddress = bxValue; break;
     }
     if (mode == V86_MODE_DISP8)      { effectiveAddress = (WORD)(effectiveAddress + (INT16)(signed char)V86_CODE_BYTE(offset + length)); length += 1; }
-    else if (mode == V86_MODE_DISP16) { effectiveAddress = (WORD)(effectiveAddress + (V86_CODE_BYTE(offset + length) | (V86_CODE_BYTE(offset + length + 1) << BYTE_SHIFT))); length += V86_WORD; }
+    else if (mode == V86_MODE_DISP16) { effectiveAddress = (WORD)(effectiveAddress + (V86_CODE_BYTE(offset + length) | (V86_CODE_BYTE(offset + length + 1) << BYTE_SHIFT))); length += X86_WORD_SIZE; }
     out->IsMemory = 1; out->EffectiveAddress = effectiveAddress;
     out->Linear = (V86SegmentBase(cpu->Segments[(segmentOverride >= 0) ? segmentOverride : (isStackBased ? V86_SS : V86_DS)])) + effectiveAddress;  /* SS if BP else DS */
     return length;
@@ -537,7 +535,7 @@ static int V86Step(V86_CPU *cpu)
         if (offset > V86_MAX_PREFIXES) return 0;
     }
     opcode = V86_CODE_BYTE(offset++);
-    operandSize = isOperand32 ? V86_DWORD : V86_WORD;                                  /* run 54: word operand width (0x66 -> 4) */
+    operandSize = isOperand32 ? X86_DWORD_SIZE : X86_WORD_SIZE;                                  /* run 54: word operand width (0x66 -> 4) */
 
     /* ---- 0F two-byte map (run 54): MOVZX/MOVSX r, r/m -------------------- *
      * B6/B7 = zero-extend byte/word, BE/BF = sign-extend. Dest width = W, so *
@@ -545,7 +543,7 @@ static int V86Step(V86_CPU *cpu)
     if (opcode == X86_ESCAPE) {
         BYTE opcode2 = V86_CODE_BYTE(offset++);
         if (opcode2 == V86_OP2_MOVZX_BYTE || opcode2 == V86_OP2_MOVZX_WORD || opcode2 == V86_OP2_MOVSX_BYTE || opcode2 == V86_OP2_MOVSX_WORD) {
-            int sourceWidth = (opcode2 & 1) ? V86_WORD : 1;               /* source width */
+            int sourceWidth = (opcode2 & 1) ? X86_WORD_SIZE : 1;               /* source width */
             int isSignExtend = (opcode2 >= V86_OP2_MOVSX_BYTE);                   /* sign- vs zero-extend */
             V86_MODRM modrm; offset += V86DecodeModrm(cpu, codeLinear, codePointer, offset, segmentOverride, &modrm);
             if (modrm.IsMemory && modrm.Linear >= V86_GUEST_LIMIT) return 0;
@@ -560,7 +558,7 @@ static int V86Step(V86_CPU *cpu)
             if (!g_V86SelectorDescriptor) return 0;                /* V86: no descriptor table -> bail */
             offset += V86DecodeModrm(cpu, codeLinear, codePointer, offset, segmentOverride, &modrm);
             if (modrm.IsMemory && modrm.Linear >= V86_GUEST_LIMIT) return 0;
-            selector = modrm.IsMemory ? (WORD)V86ReadMemory(modrm.Linear, V86_WORD) : V86Get16(cpu, modrm.RegisterMemory);  /* selector is 16-bit */
+            selector = modrm.IsMemory ? (WORD)V86ReadMemory(modrm.Linear, X86_WORD_SIZE) : V86Get16(cpu, modrm.RegisterMemory);  /* selector is 16-bit */
             if (g_V86SelectorDescriptor(selector, &accessRights, &limit)) {         /* valid -> load rights/limit, set ZF */
                 V86SetRegister(cpu, modrm.Register, operandSize, (opcode2 == V86_OP2_LAR ? accessRights : limit) & V86Mask(operandSize));
                 cpu->Flags |= EFLAGS_ZF_U;
@@ -584,12 +582,12 @@ static int V86Step(V86_CPU *cpu)
         if (opcode2 >= V86_OP2_JCC_NEAR_FIRST && opcode2 <= V86_OP2_JCC_NEAR_LAST) {
             int isTaken = V86Condition(cpu, opcode2 & V86_CONDITION_MASK);
             if (isOperand32) {
-                UINT32 nextIp = (UINT32)(WORD)(cpu->Ip + offset + V86_DWORD);
-                UINT32 target = nextIp + V86ReadMemory(codeLinear + offset, V86_DWORD);
+                UINT32 nextIp = (UINT32)(WORD)(cpu->Ip + offset + X86_DWORD_SIZE);
+                UINT32 target = nextIp + V86ReadMemory(codeLinear + offset, X86_DWORD_SIZE);
                 if (isTaken && target > V86_OFFSET_MAX) return 0;
                 cpu->Ip = (WORD)(isTaken ? target : nextIp); return 1;
             } else {
-                INT16 relative = (INT16)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT)); offset += V86_WORD;
+                INT16 relative = (INT16)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT)); offset += X86_WORD_SIZE;
                 cpu->Ip = (WORD)(cpu->Ip + offset + (isTaken ? relative : 0)); return 1;
             }
         }
@@ -675,33 +673,33 @@ static int V86Step(V86_CPU *cpu)
                64 KB limit -- see the #194 note at the top); PUSH r/m32; and CALL/JMP
                FAR m16:32 -- offset dword, then the selector -- real mode only, as the
                16-bit far forms below are. */
-            UINT32 value32 = modrm.IsMemory ? V86ReadMemory(modrm.Linear, V86_DWORD) : cpu->Registers[modrm.RegisterMemory & V86_REGISTER_MASK];
+            UINT32 value32 = modrm.IsMemory ? V86ReadMemory(modrm.Linear, X86_DWORD_SIZE) : cpu->Registers[modrm.RegisterMemory & V86_REGISTER_MASK];
             UINT32 nextIp = (UINT32)(WORD)(cpu->Ip + offset);
             if (modrm.Register == V86_GROUP5_CALL || modrm.Register == V86_GROUP5_JMP) {
                 if (value32 > V86_OFFSET_MAX) return 0;
-                if (modrm.Register == V86_GROUP5_CALL) V86Push(cpu, V86_DWORD, nextIp);
+                if (modrm.Register == V86_GROUP5_CALL) V86Push(cpu, X86_DWORD_SIZE, nextIp);
                 cpu->Ip = (WORD)value32; return 1;
             }
-            if (modrm.Register == V86_GROUP5_PUSH) { V86Push(cpu, V86_DWORD, value32); cpu->Ip = (WORD)nextIp; return 1; }
+            if (modrm.Register == V86_GROUP5_PUSH) { V86Push(cpu, X86_DWORD_SIZE, value32); cpu->Ip = (WORD)nextIp; return 1; }
             if ((modrm.Register == V86_GROUP5_CALL_FAR || modrm.Register == V86_GROUP5_JMP_FAR) && modrm.IsMemory && !g_V86SegmentToLinear) {
-                WORD segment = (WORD)V86ReadMemory(modrm.Linear + V86_DWORD, V86_WORD);
+                WORD segment = (WORD)V86ReadMemory(modrm.Linear + X86_DWORD_SIZE, X86_WORD_SIZE);
                 if (value32 > V86_OFFSET_MAX) return 0;
-                if (modrm.Register == V86_GROUP5_CALL_FAR) { V86Push(cpu, V86_DWORD, cpu->Segments[V86_CS]); V86Push(cpu, V86_DWORD, nextIp); }  /* CS slot: dword */
+                if (modrm.Register == V86_GROUP5_CALL_FAR) { V86Push(cpu, X86_DWORD_SIZE, cpu->Segments[V86_CS]); V86Push(cpu, X86_DWORD_SIZE, nextIp); }  /* CS slot: dword */
                 cpu->Segments[V86_CS] = segment; cpu->Ip = (WORD)value32; return 1;
             }
             return 0;
         }
-        { WORD value16 = modrm.IsMemory ? (WORD)V86ReadMemory(modrm.Linear, V86_WORD) : V86Get16(cpu, modrm.RegisterMemory);
+        { WORD value16 = modrm.IsMemory ? (WORD)V86ReadMemory(modrm.Linear, X86_WORD_SIZE) : V86Get16(cpu, modrm.RegisterMemory);
           WORD nextIp = (WORD)(cpu->Ip + offset);
           if (modrm.Register == V86_GROUP5_CALL) {                              /* CALL near indirect */
-              WORD stackPointer = (WORD)(cpu->Registers[V86_SP] - V86_WORD);
-              V86WriteMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, V86_WORD, nextIp);
+              WORD stackPointer = (WORD)(cpu->Registers[V86_SP] - X86_WORD_SIZE);
+              V86WriteMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, X86_WORD_SIZE, nextIp);
               cpu->Registers[V86_SP] = stackPointer; cpu->Ip = value16; return 1;
           }
           if (modrm.Register == V86_GROUP5_JMP) { cpu->Ip = value16; return 1; }     /* JMP near indirect */
           if (modrm.Register == V86_GROUP5_PUSH) {                              /* PUSH r/m16 */
-              WORD stackPointer = (WORD)(cpu->Registers[V86_SP] - V86_WORD);
-              V86WriteMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, V86_WORD, value16);
+              WORD stackPointer = (WORD)(cpu->Registers[V86_SP] - X86_WORD_SIZE);
+              V86WriteMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, X86_WORD_SIZE, value16);
               cpu->Registers[V86_SP] = stackPointer; cpu->Ip = nextIp; return 1;
           }
           /* CALL FAR m16:16 (/3) and JMP FAR m16:16 (/5): the seg:off is IN MEMORY.
@@ -710,11 +708,11 @@ static int V86Step(V86_CPU *cpu)
              it is everything up to the next event, with A0000 unprotected. Same shape
              as the scasb leak; same fix. Real mode only, like EA/9A above. */
           if ((modrm.Register == V86_GROUP5_CALL_FAR || modrm.Register == V86_GROUP5_JMP_FAR) && modrm.IsMemory && !g_V86SegmentToLinear) {
-              WORD segment = (WORD)V86ReadMemory(modrm.Linear + V86_WORD, V86_WORD);
+              WORD segment = (WORD)V86ReadMemory(modrm.Linear + X86_WORD_SIZE, X86_WORD_SIZE);
               if (modrm.Register == V86_GROUP5_CALL_FAR) {
                   UINT32 stackBase = V86SegmentBase(cpu->Segments[V86_SS]);
-                  WORD stackPointer = (WORD)(cpu->Registers[V86_SP] - V86_WORD); V86WriteMemory(stackBase + stackPointer, V86_WORD, cpu->Segments[V86_CS]);
-                  stackPointer = (WORD)(stackPointer - V86_WORD);               V86WriteMemory(stackBase + stackPointer, V86_WORD, nextIp);
+                  WORD stackPointer = (WORD)(cpu->Registers[V86_SP] - X86_WORD_SIZE); V86WriteMemory(stackBase + stackPointer, X86_WORD_SIZE, cpu->Segments[V86_CS]);
+                  stackPointer = (WORD)(stackPointer - X86_WORD_SIZE);               V86WriteMemory(stackBase + stackPointer, X86_WORD_SIZE, nextIp);
                   cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | stackPointer;
               }
               cpu->Segments[V86_CS] = segment; cpu->Ip = value16; return 1;
@@ -768,7 +766,7 @@ static int V86Step(V86_CPU *cpu)
                   cpu->Registers[V86_AX] = (cpu->Registers[V86_AX] & V86_CLEAR_LOW_WORD) | (product & WORD_MASK_U);
                   isOverflow = (modrm.Register == V86_GROUP3_MUL) ? ((product >> BYTE_SHIFT) != 0)
                                    : ((INT16)product != (INT8)(product & V86_LOW_BYTE));
-              } else if (width == V86_WORD) {
+              } else if (width == X86_WORD_SIZE) {
                   UINT32 product = (modrm.Register == V86_GROUP3_MUL)
                       ? (cpu->Registers[V86_AX] & WORD_MASK_U) * (operand & WORD_MASK_U)
                       : (UINT32)(INT32)((INT16)(cpu->Registers[V86_AX] & V86_LOW_WORD) * (INT16)operand);
@@ -795,7 +793,7 @@ static int V86Step(V86_CPU *cpu)
                   else { INT16 dividend = (INT16)(cpu->Registers[V86_AX] & V86_LOW_WORD); INT8 divisor = (INT8)operand;
                       INT32 quotient = dividend / divisor, remainder = dividend % divisor; if (quotient > V86_INT8_MAX || quotient < V86_INT8_MIN) return 0;
                       cpu->Registers[V86_AX] = (cpu->Registers[V86_AX] & V86_CLEAR_LOW_WORD) | (quotient & V86_LOW_BYTE) | ((remainder & V86_LOW_BYTE) << BYTE_SHIFT); }
-              } else if (width == V86_WORD) {
+              } else if (width == X86_WORD_SIZE) {
                   UINT32 dividend = ((cpu->Registers[V86_DX] & WORD_MASK_U) << WORD_SHIFT) | (cpu->Registers[V86_AX] & WORD_MASK_U);
                   if (modrm.Register == V86_GROUP3_DIV) { UINT32 quotient = dividend / (operand & WORD_MASK_U), remainder = dividend % (operand & WORD_MASK_U);
                       if (quotient > V86_LOW_WORD) return 0;
@@ -893,24 +891,24 @@ static int V86Step(V86_CPU *cpu)
     if (opcode == X86_OP_PUSHF) {                                  /* PUSHF */
         WORD stackPointer;
         if (isOperand32) {                                     /* PUSHFD (#194): see V86FlagsImage */
-            V86Push(cpu, V86_DWORD, V86FlagsImage(cpu, V86_DWORD));
+            V86Push(cpu, X86_DWORD_SIZE, V86FlagsImage(cpu, X86_DWORD_SIZE));
             cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
         }
-        stackPointer = (WORD)(cpu->Registers[V86_SP] - V86_WORD);
-        V86WriteMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, V86_WORD, (WORD)((cpu->Flags & V86_FLAGS_MODELLED) | EFLAGS_RESERVED_ONE_U));
+        stackPointer = (WORD)(cpu->Registers[V86_SP] - X86_WORD_SIZE);
+        V86WriteMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, X86_WORD_SIZE, (WORD)((cpu->Flags & V86_FLAGS_MODELLED) | EFLAGS_RESERVED_ONE_U));
         cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | stackPointer; cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
     }
     if (opcode == X86_OP_POPF) {                                  /* POPF */
         WORD stackPointer;
         if (isOperand32) {                                     /* POPFD (#194): see V86FlagsLoad */
-            V86FlagsLoad(cpu, V86Pop(cpu, V86_DWORD), V86_DWORD);
+            V86FlagsLoad(cpu, V86Pop(cpu, X86_DWORD_SIZE), X86_DWORD_SIZE);
             cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
         }
         stackPointer = (WORD)cpu->Registers[V86_SP];
         /* IF (0x200) is part of the mask: dropping it made every interpreted POPF
            silently disable the guest's interrupts. */
-        cpu->Flags = (V86ReadMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, V86_WORD) & V86_FLAGS_MODELLED) | EFLAGS_RESERVED_ONE_U;
-        cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + V86_WORD); cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
+        cpu->Flags = (V86ReadMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, X86_WORD_SIZE) & V86_FLAGS_MODELLED) | EFLAGS_RESERVED_ONE_U;
+        cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + X86_WORD_SIZE); cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
     }
 
     /* ---- PUSHA/POPA (60/61): push/pop the whole GP file. A callee saves the    *
@@ -947,23 +945,23 @@ static int V86Step(V86_CPU *cpu)
         int segmentRegister = (opcode == X86_OP_PUSH_ES) ? V86_ES : (opcode == X86_OP_PUSH_CS) ? V86_CS : (opcode == X86_OP_PUSH_SS) ? V86_SS : V86_DS;
         WORD stackPointer;
         if (isOperand32) {                                     /* #194: 4-byte slot */
-            V86PushSegment(cpu, V86_DWORD, cpu->Segments[segmentRegister]);
+            V86PushSegment(cpu, X86_DWORD_SIZE, cpu->Segments[segmentRegister]);
             cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
         }
-        stackPointer = (WORD)(cpu->Registers[V86_SP] - V86_WORD);
-        V86WriteMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, V86_WORD, cpu->Segments[segmentRegister]);
+        stackPointer = (WORD)(cpu->Registers[V86_SP] - X86_WORD_SIZE);
+        V86WriteMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, X86_WORD_SIZE, cpu->Segments[segmentRegister]);
         cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | stackPointer; cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
     }
     if (opcode == X86_OP_POP_ES || opcode == X86_OP_POP_SS || opcode == X86_OP_POP_DS) {                      /* POP sreg */
         int segmentRegister = (opcode == X86_OP_POP_ES) ? V86_ES : (opcode == X86_OP_POP_SS) ? V86_SS : V86_DS;
         WORD stackPointer;
         if (isOperand32) {                                     /* #194: 4-byte slot, low word */
-            cpu->Segments[segmentRegister] = (WORD)V86Pop(cpu, V86_DWORD);
+            cpu->Segments[segmentRegister] = (WORD)V86Pop(cpu, X86_DWORD_SIZE);
             cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
         }
         stackPointer = (WORD)cpu->Registers[V86_SP];
-        cpu->Segments[segmentRegister] = (WORD)V86ReadMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, V86_WORD);
-        cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + V86_WORD); cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
+        cpu->Segments[segmentRegister] = (WORD)V86ReadMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, X86_WORD_SIZE);
+        cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + X86_WORD_SIZE); cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
     }
 
     /* ---- MOV r/m16,Sreg (8C) / MOV Sreg,r/m16 (8E) ------------------------- */
@@ -975,12 +973,12 @@ static int V86Step(V86_CPU *cpu)
             WORD value = cpu->Segments[modrm.Register & V86_REGISTER_MASK];
             /* #194: `66 8C` to a REGISTER zero-extends into all 32 bits (measured, p_o32
                item 4); to memory it is a word store either way. */
-            if (modrm.IsMemory) V86WriteMemory(modrm.Linear, V86_WORD, value);
+            if (modrm.IsMemory) V86WriteMemory(modrm.Linear, X86_WORD_SIZE, value);
             else if (isOperand32) cpu->Registers[modrm.RegisterMemory & V86_REGISTER_MASK] = value;
             else V86Set16(cpu, modrm.RegisterMemory, value);
         } else {                                       /* load Sreg <- r/m16 */
             if ((modrm.Register & V86_REGISTER_MASK) == V86_CS) return 0;              /* MOV CS,x is illegal */
-            cpu->Segments[modrm.Register & V86_REGISTER_MASK] = modrm.IsMemory ? (WORD)V86ReadMemory(modrm.Linear, V86_WORD) : V86Get16(cpu, modrm.RegisterMemory);
+            cpu->Segments[modrm.Register & V86_REGISTER_MASK] = modrm.IsMemory ? (WORD)V86ReadMemory(modrm.Linear, X86_WORD_SIZE) : V86Get16(cpu, modrm.RegisterMemory);
         }
         cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
     }
@@ -1034,7 +1032,7 @@ static int V86Step(V86_CPU *cpu)
     if (opcode >= X86_OP_MOV_IMM_FIRST && opcode <= X86_OP_MOV_IMM_LAST) { UINT32 value = V86_IMMEDIATE(offset, operandSize); offset += operandSize;
                                     V86SetRegister(cpu, opcode & V86_REGISTER_MASK, operandSize, value); cpu->Ip = (WORD)(cpu->Ip + offset); return 1; }
     if (opcode >= X86_OP_MOV_FROM_MOFFS_BYTE && opcode <= X86_OP_MOV_TO_MOFFS) {
-        WORD address = (WORD)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT)); offset += V86_WORD;
+        WORD address = (WORD)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT)); offset += X86_WORD_SIZE;
         UINT32 linear = (V86SegmentBase(cpu->Segments[(segmentOverride >= 0) ? segmentOverride : V86_DS])) + address;
         int width = (opcode & 1) ? operandSize : 1;
         if (linear >= V86_GUEST_LIMIT) return 0;
@@ -1131,20 +1129,20 @@ static int V86Step(V86_CPU *cpu)
     /* #194: JMP/CALL rel32 (66 E9/E8): EIP = next + rel32, a 4-byte return slot; bail if
        the target leaves the 64 KB segment (the CPU's #GP, not ours to fake). */
     if ((opcode == X86_OP_JMP || opcode == X86_OP_CALL) && isOperand32) {
-        UINT32 nextIp = (UINT32)(WORD)(cpu->Ip + offset + V86_DWORD);
-        UINT32 target = nextIp + V86ReadMemory(codeLinear + offset, V86_DWORD);
+        UINT32 nextIp = (UINT32)(WORD)(cpu->Ip + offset + X86_DWORD_SIZE);
+        UINT32 target = nextIp + V86ReadMemory(codeLinear + offset, X86_DWORD_SIZE);
         if (target > V86_OFFSET_MAX) return 0;
-        if (opcode == X86_OP_CALL) V86Push(cpu, V86_DWORD, nextIp);
+        if (opcode == X86_OP_CALL) V86Push(cpu, X86_DWORD_SIZE, nextIp);
         cpu->Ip = (WORD)target; return 1;
     }
-    if (opcode == X86_OP_JMP) { INT16 relative; relative = (INT16)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT)); offset += V86_WORD;
+    if (opcode == X86_OP_JMP) { INT16 relative; relative = (INT16)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT)); offset += X86_WORD_SIZE;
                       cpu->Ip = (WORD)(cpu->Ip + offset + relative); return 1; }
     if (opcode == X86_OP_CALL) {                                  /* CALL near relative */
         INT16 relative; WORD nextIp, stackPointer;
-        relative = (INT16)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT)); offset += V86_WORD;
+        relative = (INT16)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT)); offset += X86_WORD_SIZE;
         nextIp = (WORD)(cpu->Ip + offset);                 /* return address */
-        stackPointer = (WORD)(cpu->Registers[V86_SP] - V86_WORD);
-        V86WriteMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, V86_WORD, nextIp);
+        stackPointer = (WORD)(cpu->Registers[V86_SP] - X86_WORD_SIZE);
+        V86WriteMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, X86_WORD_SIZE, nextIp);
         cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | stackPointer; cpu->Ip = (WORD)(nextIp + relative); return 1;
     }
     if (opcode == X86_OP_RET || opcode == X86_OP_RET_IMM) {                    /* RET near (+ imm16 pop) */
@@ -1152,16 +1150,16 @@ static int V86Step(V86_CPU *cpu)
         if (isOperand32) {                                     /* #194: a 4-byte EIP slot */
             UINT32 operand;
             stackPointer = (WORD)cpu->Registers[V86_SP];
-            operand = V86ReadMemory(V86SegmentBase(cpu->Segments[V86_SS]) + stackPointer, V86_DWORD);
+            operand = V86ReadMemory(V86SegmentBase(cpu->Segments[V86_SS]) + stackPointer, X86_DWORD_SIZE);
             if (operand > V86_OFFSET_MAX) return 0;
             extraPop = (opcode == X86_OP_RET_IMM) ? (WORD)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT)) : 0;
-            cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + V86_DWORD + extraPop);
+            cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + X86_DWORD_SIZE + extraPop);
             cpu->Ip = (WORD)operand; return 1;
         }
         stackPointer = (WORD)cpu->Registers[V86_SP];
-        returnIp = (WORD)V86ReadMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, V86_WORD);
+        returnIp = (WORD)V86ReadMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, X86_WORD_SIZE);
         extraPop = (opcode == X86_OP_RET_IMM) ? (WORD)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT)) : 0;
-        cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + V86_WORD + extraPop); cpu->Ip = returnIp; return 1;
+        cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + X86_WORD_SIZE + extraPop); cpu->Ip = returnIp; return 1;
     }
 
     /* ---- RETF (CB) / RETF imm16 (CA): far return -- pop offset then a 2-byte  *
@@ -1173,16 +1171,16 @@ static int V86Step(V86_CPU *cpu)
         if (isOperand32) {                                     /* #194: EIP dword, then a CS dword */
             UINT32 operand; UINT32 stackBase = V86SegmentBase(cpu->Segments[V86_SS]);
             stackPointer  = (WORD)cpu->Registers[V86_SP];
-            operand   = V86ReadMemory(stackBase + stackPointer, V86_DWORD);
-            selector = (WORD)V86ReadMemory(stackBase + (WORD)(stackPointer + V86_DWORD), V86_WORD);
+            operand   = V86ReadMemory(stackBase + stackPointer, X86_DWORD_SIZE);
+            selector = (WORD)V86ReadMemory(stackBase + (WORD)(stackPointer + X86_DWORD_SIZE), X86_WORD_SIZE);
             if (g_V86SegmentToLinear ? !V86IsFarTargetValid(cpu, selector, operand) : (operand > V86_OFFSET_MAX)) return 0;
             extraPop = (opcode == X86_OP_RETF_IMM) ? (WORD)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT)) : 0;
             cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + V86_FAR_FRAME32 + extraPop);
             cpu->Segments[V86_CS] = selector; cpu->Ip = (WORD)operand; return 1;
         }
         stackPointer  = (WORD)cpu->Registers[V86_SP];
-        returnOffset = (WORD)V86ReadMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, V86_WORD);
-        selector = (WORD)V86ReadMemory((V86SegmentBase(cpu->Segments[V86_SS])) + (WORD)(stackPointer + V86_WORD), V86_WORD);
+        returnOffset = (WORD)V86ReadMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, X86_WORD_SIZE);
+        selector = (WORD)V86ReadMemory((V86SegmentBase(cpu->Segments[V86_SS])) + (WORD)(stackPointer + X86_WORD_SIZE), X86_WORD_SIZE);
         extraPop = (opcode == X86_OP_RETF_IMM) ? (WORD)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT)) : 0;
         cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + V86_FAR_FRAME16 + extraPop);
         cpu->Segments[V86_CS] = selector; cpu->Ip = returnOffset; return 1;
@@ -1200,10 +1198,10 @@ static int V86Step(V86_CPU *cpu)
     if (opcode == X86_OP_ENTER && !isOperand32) {
         WORD frameSize = (WORD)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT));
         WORD stackPointer;
-        if (V86_CODE_BYTE(offset + V86_WORD) & V86_ENTER_LEVEL_MASK) return 0;
+        if (V86_CODE_BYTE(offset + X86_WORD_SIZE) & V86_ENTER_LEVEL_MASK) return 0;
         offset += V86_ENTER_OPERAND_LENGTH;
-        stackPointer = (WORD)(cpu->Registers[V86_SP] - V86_WORD);
-        V86WriteMemory(V86SegmentBase(cpu->Segments[V86_SS]) + stackPointer, V86_WORD, (WORD)cpu->Registers[V86_BP]);
+        stackPointer = (WORD)(cpu->Registers[V86_SP] - X86_WORD_SIZE);
+        V86WriteMemory(V86SegmentBase(cpu->Segments[V86_SS]) + stackPointer, X86_WORD_SIZE, (WORD)cpu->Registers[V86_BP]);
         cpu->Registers[V86_BP] = (cpu->Registers[V86_BP] & V86_CLEAR_LOW_WORD) | stackPointer;        /* BP <- SP */
         cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer - frameSize);
         cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
@@ -1212,14 +1210,14 @@ static int V86Step(V86_CPU *cpu)
         WORD stackPointer, framePointer;
         if (isOperand32) {                                     /* #194: SP <- BP (16-bit stack), EBP <- pop32 */
             stackPointer = (WORD)cpu->Registers[V86_BP];
-            cpu->Registers[V86_BP] = V86ReadMemory(V86SegmentBase(cpu->Segments[V86_SS]) + stackPointer, V86_DWORD);
-            cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + V86_DWORD);
+            cpu->Registers[V86_BP] = V86ReadMemory(V86SegmentBase(cpu->Segments[V86_SS]) + stackPointer, X86_DWORD_SIZE);
+            cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + X86_DWORD_SIZE);
             cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
         }
         stackPointer = (WORD)cpu->Registers[V86_BP];                        /* SP <- BP */
-        framePointer = (WORD)V86ReadMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, V86_WORD);
+        framePointer = (WORD)V86ReadMemory((V86SegmentBase(cpu->Segments[V86_SS])) + stackPointer, X86_WORD_SIZE);
         cpu->Registers[V86_BP] = (cpu->Registers[V86_BP] & V86_CLEAR_LOW_WORD) | framePointer;        /* BP <- pop */
-        cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + V86_WORD);
+        cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + X86_WORD_SIZE);
         cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
     }
     /* ── CBW (98) / CWD (99), XLAT (D7), LES/LDS (C4/C5, MEMORY form). (s68) ────────
@@ -1271,13 +1269,13 @@ static int V86Step(V86_CPU *cpu)
         V86_MODRM modrm; offset += V86DecodeModrm(cpu, codeLinear, codePointer, offset, segmentOverride, &modrm);
         if (modrm.IsMemory && modrm.Linear >= V86_GUEST_LIMIT) return 0;
         { UINT32 operand = modrm.IsMemory ? V86ReadMemory(modrm.Linear, width) : V86GetRegister(cpu, modrm.RegisterMemory, width);
-          first = (width == V86_DWORD) ? (INT64)(INT32)operand : (INT64)(INT16)operand; }
+          first = (width == X86_DWORD_SIZE) ? (INT64)(INT32)operand : (INT64)(INT16)operand; }
         if (opcode == X86_OP_IMUL_IMM8) { second = (INT8)V86_IMMEDIATE(offset, 1); offset += 1; }
         else { UINT32 immediate = V86_IMMEDIATE(offset, width); offset += width;
-               second = (width == V86_DWORD) ? (INT64)(INT32)immediate : (INT64)(INT16)immediate; }
+               second = (width == X86_DWORD_SIZE) ? (INT64)(INT32)immediate : (INT64)(INT16)immediate; }
         product = first * second;
         result = (UINT32)product & V86Mask(width);
-        isOverflow = (width == V86_DWORD) ? (product != (INT64)(INT32)result) : (product != (INT64)(INT16)result);
+        isOverflow = (width == X86_DWORD_SIZE) ? (product != (INT64)(INT32)result) : (product != (INT64)(INT16)result);
         V86SetRegister(cpu, modrm.Register, width, result);
         cpu->Flags = (cpu->Flags & ~(EFLAGS_CF_U | EFLAGS_OF_U)) | (isOverflow ? (EFLAGS_CF_U | EFLAGS_OF_U) : 0);
         cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
@@ -1293,10 +1291,10 @@ static int V86Step(V86_CPU *cpu)
         V86_MODRM modrm;
         if (g_V86SegmentToLinear) return 0;                       /* PM: TODO */
         offset += V86DecodeModrm(cpu, codeLinear, codePointer, offset, segmentOverride, &modrm);
-        if (!modrm.IsMemory || modrm.Linear + operandSize + V86_WORD > V86_GUEST_LIMIT) return 0;
+        if (!modrm.IsMemory || modrm.Linear + operandSize + X86_WORD_SIZE > V86_GUEST_LIMIT) return 0;
         /* #194: under 0x66 the pointer is m16:32 -- a dword offset, then the segment. */
         V86SetRegister(cpu, modrm.Register, operandSize, V86ReadMemory(modrm.Linear, operandSize));
-        cpu->Segments[opcode == X86_OP_LES ? V86_ES : V86_DS] = (WORD)V86ReadMemory(modrm.Linear + operandSize, V86_WORD);
+        cpu->Segments[opcode == X86_OP_LES ? V86_ES : V86_DS] = (WORD)V86ReadMemory(modrm.Linear + operandSize, X86_WORD_SIZE);
         cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
     }
     if (opcode >= X86_OP_LOOPNE && opcode <= X86_OP_JCXZ) {
@@ -1346,13 +1344,13 @@ static int V86Step(V86_CPU *cpu)
         vector = (opcode == X86_OP_INT3) ? V86_INT3_VECTOR : V86_CODE_BYTE(offset++);
         nextIp = (WORD)(cpu->Ip + offset);                 /* return address = past the int  */
         stackBase = V86SegmentBase(cpu->Segments[V86_SS]);
-        stackPointer = (WORD)(cpu->Registers[V86_SP] - V86_WORD); V86WriteMemory(stackBase + stackPointer, V86_WORD, (cpu->Flags & V86_FLAGS_MODELLED) | EFLAGS_RESERVED_ONE_U);
-        stackPointer = (WORD)(stackPointer - V86_WORD);      V86WriteMemory(stackBase + stackPointer, V86_WORD, cpu->Segments[V86_CS]);
-        stackPointer = (WORD)(stackPointer - V86_WORD);      V86WriteMemory(stackBase + stackPointer, V86_WORD, nextIp);
+        stackPointer = (WORD)(cpu->Registers[V86_SP] - X86_WORD_SIZE); V86WriteMemory(stackBase + stackPointer, X86_WORD_SIZE, (cpu->Flags & V86_FLAGS_MODELLED) | EFLAGS_RESERVED_ONE_U);
+        stackPointer = (WORD)(stackPointer - X86_WORD_SIZE);      V86WriteMemory(stackBase + stackPointer, X86_WORD_SIZE, cpu->Segments[V86_CS]);
+        stackPointer = (WORD)(stackPointer - X86_WORD_SIZE);      V86WriteMemory(stackBase + stackPointer, X86_WORD_SIZE, nextIp);
         cpu->Registers[V86_SP]   = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | stackPointer;
         cpu->Flags &= ~(EFLAGS_IF_U | EFLAGS_TF_U);                          /* IF/TF cleared on entry         */
-        cpu->Ip     = (WORD)V86ReadMemory((UINT32)vector * IVT_ENTRY_SIZE, V86_WORD);
-        cpu->Segments[V86_CS] = (WORD)V86ReadMemory((UINT32)vector * IVT_ENTRY_SIZE + V86_WORD, V86_WORD);
+        cpu->Ip     = (WORD)V86ReadMemory((UINT32)vector * IVT_ENTRY_SIZE, X86_WORD_SIZE);
+        cpu->Segments[V86_CS] = (WORD)V86ReadMemory((UINT32)vector * IVT_ENTRY_SIZE + X86_WORD_SIZE, X86_WORD_SIZE);
         return 1;
     }
     if (opcode == X86_OP_IRET) {                                  /* IRET */
@@ -1363,12 +1361,12 @@ static int V86Step(V86_CPU *cpu)
                PM IRETD still bails: it may return to a 32-bit segment or another ring. */
             UINT32 operand, newFlags; WORD codeSegment;
             stackPointer  = (WORD)cpu->Registers[V86_SP]; stackBase = V86SegmentBase(cpu->Segments[V86_SS]);
-            operand   = V86ReadMemory(stackBase + stackPointer, V86_DWORD);
-            codeSegment  = (WORD)V86ReadMemory(stackBase + (WORD)(stackPointer + V86_DWORD), V86_WORD);
-            newFlags  = V86ReadMemory(stackBase + (WORD)(stackPointer + V86_FAR_FRAME32), V86_DWORD);
+            operand   = V86ReadMemory(stackBase + stackPointer, X86_DWORD_SIZE);
+            codeSegment  = (WORD)V86ReadMemory(stackBase + (WORD)(stackPointer + X86_DWORD_SIZE), X86_WORD_SIZE);
+            newFlags  = V86ReadMemory(stackBase + (WORD)(stackPointer + V86_FAR_FRAME32), X86_DWORD_SIZE);
             if (operand > V86_OFFSET_MAX) return 0;
             cpu->Ip = (WORD)operand; cpu->Segments[V86_CS] = codeSegment;
-            V86FlagsLoad(cpu, newFlags, V86_DWORD);
+            V86FlagsLoad(cpu, newFlags, X86_DWORD_SIZE);
             cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + V86_IRET_FRAME32);
             return 1;
         }
@@ -1383,19 +1381,19 @@ static int V86Step(V86_CPU *cpu)
                this path: the virtual IF is the DPMI host's to keep, see 0900h-0902h). */
             WORD nextIp, newCodeSegment; UINT32 newFlags;
             stackPointer  = (WORD)cpu->Registers[V86_SP]; stackBase = V86SegmentBase(cpu->Segments[V86_SS]);
-            nextIp = (WORD)V86ReadMemory(stackBase + stackPointer, V86_WORD);
-            newCodeSegment = (WORD)V86ReadMemory(stackBase + (WORD)(stackPointer + V86_WORD), V86_WORD);
-            newFlags  = V86ReadMemory(stackBase + (WORD)(stackPointer + V86_FAR_FRAME16), V86_WORD);
+            nextIp = (WORD)V86ReadMemory(stackBase + stackPointer, X86_WORD_SIZE);
+            newCodeSegment = (WORD)V86ReadMemory(stackBase + (WORD)(stackPointer + X86_WORD_SIZE), X86_WORD_SIZE);
+            newFlags  = V86ReadMemory(stackBase + (WORD)(stackPointer + V86_FAR_FRAME16), X86_WORD_SIZE);
             if (!V86IsFarTargetValid(cpu, newCodeSegment, nextIp)) return 0;
             cpu->Ip = nextIp; cpu->Segments[V86_CS] = newCodeSegment;
-            V86FlagsLoad(cpu, newFlags, V86_WORD);
+            V86FlagsLoad(cpu, newFlags, X86_WORD_SIZE);
             cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + V86_IRET_FRAME16);
             return 1;
         }
         stackPointer  = (WORD)cpu->Registers[V86_SP]; stackBase = V86SegmentBase(cpu->Segments[V86_SS]);
-        cpu->Ip     = (WORD)V86ReadMemory(stackBase + stackPointer, V86_WORD);
-        cpu->Segments[V86_CS] = (WORD)V86ReadMemory(stackBase + (WORD)(stackPointer + V86_WORD), V86_WORD);
-        cpu->Flags  = (V86ReadMemory(stackBase + (WORD)(stackPointer + V86_FAR_FRAME16), V86_WORD) & V86_FLAGS_MODELLED) | EFLAGS_RESERVED_ONE_U;
+        cpu->Ip     = (WORD)V86ReadMemory(stackBase + stackPointer, X86_WORD_SIZE);
+        cpu->Segments[V86_CS] = (WORD)V86ReadMemory(stackBase + (WORD)(stackPointer + X86_WORD_SIZE), X86_WORD_SIZE);
+        cpu->Flags  = (V86ReadMemory(stackBase + (WORD)(stackPointer + V86_FAR_FRAME16), X86_WORD_SIZE) & V86_FLAGS_MODELLED) | EFLAGS_RESERVED_ONE_U;
         cpu->Registers[V86_SP]   = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | (WORD)(stackPointer + V86_IRET_FRAME16);
         return 1;
     }
@@ -1403,23 +1401,23 @@ static int V86Step(V86_CPU *cpu)
     if ((opcode == X86_OP_JMP_FAR || opcode == X86_OP_CALL_FAR) && isOperand32 && !g_V86SegmentToLinear) {
         /* #194: ptr16:32 -- a dword offset, then the segment; CALL pushes CS and EIP as
            dwords. Real mode only, like the 16-bit form below. */
-        UINT32 farOffset32 = V86ReadMemory(codeLinear + offset, V86_DWORD);
-        WORD segment = (WORD)(V86_CODE_BYTE(offset + V86_DWORD) | (V86_CODE_BYTE(offset + V86_DWORD + 1) << BYTE_SHIFT));
+        UINT32 farOffset32 = V86ReadMemory(codeLinear + offset, X86_DWORD_SIZE);
+        WORD segment = (WORD)(V86_CODE_BYTE(offset + X86_DWORD_SIZE) | (V86_CODE_BYTE(offset + X86_DWORD_SIZE + 1) << BYTE_SHIFT));
         offset += V86_FAR_POINTER32;
         if (farOffset32 > V86_OFFSET_MAX) return 0;
-        if (opcode == X86_OP_CALL_FAR) { V86Push(cpu, V86_DWORD, cpu->Segments[V86_CS]); V86Push(cpu, V86_DWORD, (WORD)(cpu->Ip + offset)); }  /* CS: dword */
+        if (opcode == X86_OP_CALL_FAR) { V86Push(cpu, X86_DWORD_SIZE, cpu->Segments[V86_CS]); V86Push(cpu, X86_DWORD_SIZE, (WORD)(cpu->Ip + offset)); }  /* CS: dword */
         cpu->Segments[V86_CS] = segment; cpu->Ip = (WORD)farOffset32; return 1;
     }
     if (opcode == X86_OP_JMP_FAR || opcode == X86_OP_CALL_FAR) {
         WORD farOffset, segment;
         if (isOperand32 || g_V86SegmentToLinear) return 0;
-        farOffset = (WORD)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT)); offset += V86_WORD;
-        segment = (WORD)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT)); offset += V86_WORD;
+        farOffset = (WORD)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT)); offset += X86_WORD_SIZE;
+        segment = (WORD)(V86_CODE_BYTE(offset) | (V86_CODE_BYTE(offset + 1) << BYTE_SHIFT)); offset += X86_WORD_SIZE;
         if (opcode == X86_OP_CALL_FAR) {                              /* CALL FAR: push CS then IP      */
             UINT32 stackBase = V86SegmentBase(cpu->Segments[V86_SS]);
             WORD nextIp = (WORD)(cpu->Ip + offset), stackPointer;
-            stackPointer = (WORD)(cpu->Registers[V86_SP] - V86_WORD); V86WriteMemory(stackBase + stackPointer, V86_WORD, cpu->Segments[V86_CS]);
-            stackPointer = (WORD)(stackPointer - V86_WORD);      V86WriteMemory(stackBase + stackPointer, V86_WORD, nextIp);
+            stackPointer = (WORD)(cpu->Registers[V86_SP] - X86_WORD_SIZE); V86WriteMemory(stackBase + stackPointer, X86_WORD_SIZE, cpu->Segments[V86_CS]);
+            stackPointer = (WORD)(stackPointer - X86_WORD_SIZE);      V86WriteMemory(stackBase + stackPointer, X86_WORD_SIZE, nextIp);
             cpu->Registers[V86_SP] = (cpu->Registers[V86_SP] & V86_CLEAR_LOW_WORD) | stackPointer;
         }
         cpu->Segments[V86_CS] = segment; cpu->Ip = farOffset; return 1;

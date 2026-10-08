@@ -2272,7 +2272,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     INT depth = g_ExecDepth, loadHigh = 0;
 
     flagsPointer = (volatile WORD *)((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT)
-           + ((VDM_REG16(tib, VTIB_ESP) + 4) & WORD_MASK));
+           + ((VDM_REG16(tib, VTIB_ESP) + X86_FRAME16_FLAGS) & WORD_MASK));
 
     cursor = LogPut(cursor, "  EXEC: \""); cursor = LogPut(cursor, machine->ExecPath); cursor = LogPut(cursor, "\"\r\n");
 
@@ -2656,7 +2656,7 @@ static INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCur
     }
     /* CF goes on the FLAGS its INT pushed, as every INT 21h answer does. */
     flagsPointer = (volatile WORD *)((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT)
-                            + ((VDM_REG16(tib, VTIB_ESP) + 4) & WORD_MASK));
+                            + ((VDM_REG16(tib, VTIB_ESP) + X86_FRAME16_FLAGS) & WORD_MASK));
     /* ── #275: IGNORE, which only a 3Fh/40h is allowed (AH bit 5, DosCritInt24Ah). DOS
          carries on as if the sectors had moved (MS-DOS 4.0 DREAD: IGNORE returns carry
          clear): the call reports the bytes asked for -- a read still stops at end of
@@ -4193,9 +4193,9 @@ static INT AsyncInjectIrq(UINT irq)
 
     flags = (WORD)eflags;
     if (eflags & EFLAGS_VIF) flags |= 0x200;      /* same VIF fold as InjectInt */
-    sp = (sp - 2) & WORD_MASK; PokeWord((ss << PARAGRAPH_SHIFT) + sp, flags);
-    sp = (sp - 2) & WORD_MASK; PokeWord((ss << PARAGRAPH_SHIFT) + sp, (WORD)cs);
-    sp = (sp - 2) & WORD_MASK; PokeWord((ss << PARAGRAPH_SHIFT) + sp, (WORD)ip);
+    sp = (sp - X86_WORD_SIZE) & WORD_MASK; PokeWord((ss << PARAGRAPH_SHIFT) + sp, flags);
+    sp = (sp - X86_WORD_SIZE) & WORD_MASK; PokeWord((ss << PARAGRAPH_SHIFT) + sp, (WORD)cs);
+    sp = (sp - X86_WORD_SIZE) & WORD_MASK; PokeWord((ss << PARAGRAPH_SHIFT) + sp, (WORD)ip);
     context.Esp    = sp;
     { UINT vector = VddPicVector(&g_Pic, (BYTE)irq);
       context.Eip   = PeekWord(IVT_OFFSET_ADDRESS(vector));
@@ -4547,7 +4547,7 @@ static INT GuestIfEnabled(volatile BYTE *tib)
     DWORD cs = VDM_REG16(tib, VTIB_CS);
     if (IsOurStubCsIp(cs, VDM_REG16(tib, VTIB_EIP))) {
         DWORD ss = VDM_REG16(tib, VTIB_SS), sp = VDM_REG16(tib, VTIB_ESP);
-        return (PeekWord((ss << PARAGRAPH_SHIFT) + ((sp + 4) & WORD_MASK)) & 0x200) != 0;
+        return (PeekWord((ss << PARAGRAPH_SHIFT) + ((sp + X86_FRAME16_FLAGS) & WORD_MASK)) & 0x200) != 0;
     }
     return IfOrVif(VDM_REG(tib, VTIB_EFLAGS));
 }
@@ -4604,9 +4604,9 @@ static VOID InjectInt(volatile BYTE *tib, UINT vector)
        CPU does this fold itself for a hardware-vectored interrupt; we synthesise the frame,
        so we must do it too. */
     if (eflags & EFLAGS_VIF) flags |= EFLAGS_IF;
-    sp -= 2; PokeWord(((DWORD)ss << PARAGRAPH_SHIFT) + sp, flags);     /* push FLAGS */
-    sp -= 2; PokeWord(((DWORD)ss << PARAGRAPH_SHIFT) + sp, cs);     /* push CS    */
-    sp -= 2; PokeWord(((DWORD)ss << PARAGRAPH_SHIFT) + sp, ip);     /* push IP    */
+    sp -= X86_WORD_SIZE; PokeWord(((DWORD)ss << PARAGRAPH_SHIFT) + sp, flags);     /* push FLAGS */
+    sp -= X86_WORD_SIZE; PokeWord(((DWORD)ss << PARAGRAPH_SHIFT) + sp, cs);     /* push CS    */
+    sp -= X86_WORD_SIZE; PokeWord(((DWORD)ss << PARAGRAPH_SHIFT) + sp, ip);     /* push IP    */
     VDM_SET16(tib, VTIB_ESP, sp);
     /* Clear IF + TF, and VIF with them: vectoring an interrupt disables the guest's
        interrupts, and under VME "the guest's interrupts" means VIF. */
@@ -4751,7 +4751,7 @@ static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR b
         /* EXEC succeeded, so clear the carry the parent's IRET will
            restore, and set AX=0 as DOS does. */
         flagsPointer = (volatile WORD *)((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT)
-                + ((VDM_REG16(tib, VTIB_ESP) + 4) & WORD_MASK));
+                + ((VDM_REG16(tib, VTIB_ESP) + X86_FRAME16_FLAGS) & WORD_MASK));
         *flagsPointer &= (WORD)~EFLAGS_CF;
         VDM_REG(tib, VTIB_EAX) &= HIGH_WORD_MASK_U;
         VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;        /* past the BOP -> the IRET */
@@ -7918,7 +7918,7 @@ static INT HostConsolePeek(PVOID context)
 static VOID HostSetFlags(volatile BYTE *tib, BYTE carryFlag, BYTE zeroFlag)
 {
     volatile WORD *flagsPointer = (volatile WORD *)((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT)
-                         + ((VDM_REG16(tib, VTIB_ESP) + 4) & WORD_MASK));
+                         + ((VDM_REG16(tib, VTIB_ESP) + X86_FRAME16_FLAGS) & WORD_MASK));
     if (carryFlag) *flagsPointer |= EFLAGS_CF; else *flagsPointer &= (WORD)~EFLAGS_CF;
     if (zeroFlag) *flagsPointer |= EFLAGS_ZF; else *flagsPointer &= (WORD)~EFLAGS_ZF;
 }
@@ -9599,7 +9599,7 @@ static VOID MouseCallbackTry(volatile BYTE *tib)
              out, so the byte it consumes is not disturbed. */
         if (ip >= DOS_HDLR_INT09_STUB_OFF && ip < DOS_HDLR_INT09_STUB_OFF + VDM_BOP_LENGTH) { ++g_MouseCallbackWhy[3]; return; }
         if ((ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END) || ip == DOS_HDLR_INT09_STUB_OFF + VDM_BOP_LENGTH) flags = EFLAGS_IF; /* stub about to IRET: deliver */
-        else flags = PeekWord((ss << PARAGRAPH_SHIFT) + ((sp + 4) & WORD_MASK));    /* the FLAGS the stub IRETs to  */
+        else flags = PeekWord((ss << PARAGRAPH_SHIFT) + ((sp + X86_FRAME16_FLAGS) & WORD_MASK));    /* the FLAGS the stub IRETs to  */
     } else flags = VDM_REG(tib, VTIB_EFLAGS);
     if (!IfOrVif(flags)) { ++g_MouseCallbackWhy[4]; return; } /* interrupts off: like an IRQ, wait */
     /* ── THE RETURN STUB, RE-VERIFIED EVERY TIME (see MS_CB_RET_OFF). A guest that has
@@ -9630,8 +9630,8 @@ static VOID MouseCallbackTry(volatile BYTE *tib)
     g_MouseCallbackSaved.Cs  = VDM_REG(tib, VTIB_CS);  g_MouseCallbackSaved.Ds  = VDM_REG(tib, VTIB_DS);
     g_MouseCallbackSaved.Es  = VDM_REG(tib, VTIB_ES);  g_MouseCallbackSaved.Ss  = VDM_REG(tib, VTIB_SS);
     /* The far return the handler's RETF will take, then the call itself. */
-    sp = (sp - 2) & WORD_MASK; PokeWord((ss << PARAGRAPH_SHIFT) + sp, DOS_HDLR_SEG);
-    sp = (sp - 2) & WORD_MASK; PokeWord((ss << PARAGRAPH_SHIFT) + sp, MS_CB_RET_OFF);
+    sp = (sp - X86_WORD_SIZE) & WORD_MASK; PokeWord((ss << PARAGRAPH_SHIFT) + sp, DOS_HDLR_SEG);
+    sp = (sp - X86_WORD_SIZE) & WORD_MASK; PokeWord((ss << PARAGRAPH_SHIFT) + sp, MS_CB_RET_OFF);
     VDM_SET16(tib, VTIB_ESP, (WORD)sp);
     VDM_SET16(tib, VTIB_EAX, (WORD)pend);
     VDM_SET16(tib, VTIB_EBX, (WORD)event.Buttons);          /* the state AT the event     */
@@ -20884,8 +20884,8 @@ static VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slo
     CHAR lineBuffer[256]; PSTR lineCursor = lineBuffer;
     WORD realSs = (WORD)VDM_REG(tib, VTIB_SS), realSp = (WORD)VDM_REG(tib, VTIB_ESP);
     DWORD realStack = ((DWORD)realSs << PARAGRAPH_SHIFT) + realSp;
-    WORD retIP = PeekWord(realStack), retCS = PeekWord(realStack + 2);     /* the far-call return frame */
-    WORD newSP = (WORD)(realSp + 4);                          /* pop it */
+    WORD retIP = PeekWord(realStack), retCS = PeekWord(realStack + X86_FRAME16_CS);     /* the far-call return frame */
+    WORD newSP = (WORD)(realSp + X86_FAR_RETURN16_SIZE);                          /* pop it */
     DWORD callStructure = DpmiSelectorBase(g_Callbacks[slot].RmEs) + g_Callbacks[slot].RmDi;
     volatile BYTE *callStructureBytes = (volatile BYTE *)(ULONG_PTR)callStructure;
     WORD machineStatusWord = *(volatile WORD *)(tib + VTIB_MSW);
@@ -20910,13 +20910,13 @@ static VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slo
        FLAGS/CS/EIP frame, a 16-bit one pops a word frame (GH #18 run 83). */
     { WORD protectedSs = 0x17, protectedSp = 0xF400; DWORD stackBase = DpmiSelectorBase(protectedSs);
       if (DpmiSelectorIs32(g_Callbacks[slot].PmSelector)) {
-          protectedSp -= 4; PokeDword(stackBase + protectedSp, 0x00000202);        /* EFLAGS */
-          protectedSp -= 4; PokeDword(stackBase + protectedSp, g_PmReturnSelector);       /* CS (dword; hi16=0) */
-          protectedSp -= 4; PokeDword(stackBase + protectedSp, DPMI_PMRET_OFF);    /* EIP */
+          protectedSp -= X86_DWORD_SIZE; PokeDword(stackBase + protectedSp, EFLAGS_IF | EFLAGS_RESERVED_ONE);        /* EFLAGS */
+          protectedSp -= X86_DWORD_SIZE; PokeDword(stackBase + protectedSp, g_PmReturnSelector);       /* CS (dword; hi16=0) */
+          protectedSp -= X86_DWORD_SIZE; PokeDword(stackBase + protectedSp, DPMI_PMRET_OFF);    /* EIP */
       } else {
-          protectedSp -= 2; PokeWord(stackBase + protectedSp, 0x0202);            /* FLAGS */
-          protectedSp -= 2; PokeWord(stackBase + protectedSp, g_PmReturnSelector);       /* CS */
-          protectedSp -= 2; PokeWord(stackBase + protectedSp, DPMI_PMRET_OFF);    /* IP */
+          protectedSp -= X86_WORD_SIZE; PokeWord(stackBase + protectedSp, EFLAGS_IF | EFLAGS_RESERVED_ONE);            /* FLAGS */
+          protectedSp -= X86_WORD_SIZE; PokeWord(stackBase + protectedSp, g_PmReturnSelector);       /* CS */
+          protectedSp -= X86_WORD_SIZE; PokeWord(stackBase + protectedSp, DPMI_PMRET_OFF);    /* IP */
       }
       VDM_SET16(tib, VTIB_SS, protectedSs); VDM_REG(tib, VTIB_ESP) = protectedSp; }
     VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM;
@@ -21104,13 +21104,13 @@ static INT DpmiDispatchToPmHandler(DOS_MACHINE *machine, volatile BYTE *tib,
       INT ss32 = DpmiSelectorIs32(savedSs);
       DWORD sp = ss32 ? sESP : (sESP & WORD_MASK);
       if (isClient32) {
-          sp = ss32 ? sp - 4 : ((sp - 4) & WORD_MASK); PokeDword(stackBase + sp, sEFL);
-          sp = ss32 ? sp - 4 : ((sp - 4) & WORD_MASK); PokeDword(stackBase + sp, g_PmReturnSelector);
-          sp = ss32 ? sp - 4 : ((sp - 4) & WORD_MASK); PokeDword(stackBase + sp, DPMI_PMRET_OFF);
+          sp = ss32 ? sp - X86_DWORD_SIZE : ((sp - X86_DWORD_SIZE) & WORD_MASK); PokeDword(stackBase + sp, sEFL);
+          sp = ss32 ? sp - X86_DWORD_SIZE : ((sp - X86_DWORD_SIZE) & WORD_MASK); PokeDword(stackBase + sp, g_PmReturnSelector);
+          sp = ss32 ? sp - X86_DWORD_SIZE : ((sp - X86_DWORD_SIZE) & WORD_MASK); PokeDword(stackBase + sp, DPMI_PMRET_OFF);
       } else {
-          sp = ss32 ? sp - 2 : ((sp - 2) & WORD_MASK); PokeWord(stackBase + sp, (WORD)sEFL);
-          sp = ss32 ? sp - 2 : ((sp - 2) & WORD_MASK); PokeWord(stackBase + sp, g_PmReturnSelector);
-          sp = ss32 ? sp - 2 : ((sp - 2) & WORD_MASK); PokeWord(stackBase + sp, DPMI_PMRET_OFF);
+          sp = ss32 ? sp - X86_WORD_SIZE : ((sp - X86_WORD_SIZE) & WORD_MASK); PokeWord(stackBase + sp, (WORD)sEFL);
+          sp = ss32 ? sp - X86_WORD_SIZE : ((sp - X86_WORD_SIZE) & WORD_MASK); PokeWord(stackBase + sp, g_PmReturnSelector);
+          sp = ss32 ? sp - X86_WORD_SIZE : ((sp - X86_WORD_SIZE) & WORD_MASK); PokeWord(stackBase + sp, DPMI_PMRET_OFF);
       }
       VDM_REG(tib, VTIB_ESP) = ss32 ? sp : ((sESP & HIGH_WORD_MASK_U) | sp); }
 
@@ -21958,9 +21958,9 @@ static INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vec
     WORD realCs = PeekWord(IVT_SEGMENT_ADDRESS(vector)), rip = PeekWord(IVT_OFFSET_ADDRESS(vector));
     UINT round; INT done = 0;
     InterlockedExchange(&g_SimIntBusy, 1);
-    realSp -= 2; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp, 0x0202);          /* FLAGS: IF set, restored by IRET */
-    realSp -= 2; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp, DOS_HDLR_SEG);
-    realSp -= 2; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp, DPMI_RMRET_OFF);
+    realSp -= X86_WORD_SIZE; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp, EFLAGS_IF | EFLAGS_RESERVED_ONE);          /* FLAGS: IF set, restored by IRET */
+    realSp -= X86_WORD_SIZE; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp, DOS_HDLR_SEG);
+    realSp -= X86_WORD_SIZE; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp, DPMI_RMRET_OFF);
     DpmiUnpatch();
     *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(machineStatusWord & ~MSW_PE_BIT);
     VDM_REG(tib, VTIB_EFLAGS) = 0x20002;                        /* VM, interrupts OFF */
@@ -26225,11 +26225,11 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             /* push the return frame on the RM stack: [FLAGS] CS IP, with FLAGS
                                present only for 0302 (the procedure will IRET, not RETF). */
                             if (ax == DPMI_FN_CALL_REAL_MODE_IRET) {
-                                realSp -= 2; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp,
+                                realSp -= X86_WORD_SIZE; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp,
                                                 *(volatile WORD*)(registers+0x20));   /* RMCS.Flags */
                             }
-                            realSp -= 2; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp, DOS_HDLR_SEG);   /* return CS */
-                            realSp -= 2; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp, DPMI_RMRET_OFF);  /* return IP */
+                            realSp -= X86_WORD_SIZE; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp, DOS_HDLR_SEG);   /* return CS */
+                            realSp -= X86_WORD_SIZE; PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp, DPMI_RMRET_OFF);  /* return IP */
                             DpmiUnpatch();   /* restore real `CD nn` so RM ints in the proc vector natively */
                             /* --- rewrite the CONTEXT to V86 with the RMCS register file --- */
                             *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(machineStatusWord & ~MSW_PE_BIT);  /* leave PM */
@@ -27471,13 +27471,13 @@ static INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context)
       INT   ss32 = DpmiSelectorIs32(ss), isClient32 = g_DpmiIsClient32;
       DWORD sp = ss32 ? context->Esp : (context->Esp & WORD_MASK);
       if (isClient32) {
-          sp = ss32 ? sp - 4 : ((sp - 4) & WORD_MASK); PokeDword(stackBase + sp, eflags);
-          sp = ss32 ? sp - 4 : ((sp - 4) & WORD_MASK); PokeDword(stackBase + sp, g_PmReturnSelector);
-          sp = ss32 ? sp - 4 : ((sp - 4) & WORD_MASK); PokeDword(stackBase + sp, DPMI_PMRET_OFF);
+          sp = ss32 ? sp - X86_DWORD_SIZE : ((sp - X86_DWORD_SIZE) & WORD_MASK); PokeDword(stackBase + sp, eflags);
+          sp = ss32 ? sp - X86_DWORD_SIZE : ((sp - X86_DWORD_SIZE) & WORD_MASK); PokeDword(stackBase + sp, g_PmReturnSelector);
+          sp = ss32 ? sp - X86_DWORD_SIZE : ((sp - X86_DWORD_SIZE) & WORD_MASK); PokeDword(stackBase + sp, DPMI_PMRET_OFF);
       } else {
-          sp = ss32 ? sp - 2 : ((sp - 2) & WORD_MASK); PokeWord(stackBase + sp, (WORD)eflags);
-          sp = ss32 ? sp - 2 : ((sp - 2) & WORD_MASK); PokeWord(stackBase + sp, g_PmReturnSelector);
-          sp = ss32 ? sp - 2 : ((sp - 2) & WORD_MASK); PokeWord(stackBase + sp, DPMI_PMRET_OFF);
+          sp = ss32 ? sp - X86_WORD_SIZE : ((sp - X86_WORD_SIZE) & WORD_MASK); PokeWord(stackBase + sp, (WORD)eflags);
+          sp = ss32 ? sp - X86_WORD_SIZE : ((sp - X86_WORD_SIZE) & WORD_MASK); PokeWord(stackBase + sp, g_PmReturnSelector);
+          sp = ss32 ? sp - X86_WORD_SIZE : ((sp - X86_WORD_SIZE) & WORD_MASK); PokeWord(stackBase + sp, DPMI_PMRET_OFF);
       }
       context->Esp = ss32 ? sp : ((context->Esp & HIGH_WORD_MASK_U) | sp); }
 
@@ -28305,13 +28305,13 @@ static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interr
       INT ss32 = DpmiSelectorIs32(ss);                /* see the note in the dispatch path */
       DWORD sp = ss32 ? sESP : (sESP & WORD_MASK);
       if (isClient32) {
-          sp = ss32 ? sp - 4 : ((sp - 4) & WORD_MASK); PokeDword(stackBase + sp, sEFL);
-          sp = ss32 ? sp - 4 : ((sp - 4) & WORD_MASK); PokeDword(stackBase + sp, g_PmReturnSelector);
-          sp = ss32 ? sp - 4 : ((sp - 4) & WORD_MASK); PokeDword(stackBase + sp, DPMI_PMRET_OFF);
+          sp = ss32 ? sp - X86_DWORD_SIZE : ((sp - X86_DWORD_SIZE) & WORD_MASK); PokeDword(stackBase + sp, sEFL);
+          sp = ss32 ? sp - X86_DWORD_SIZE : ((sp - X86_DWORD_SIZE) & WORD_MASK); PokeDword(stackBase + sp, g_PmReturnSelector);
+          sp = ss32 ? sp - X86_DWORD_SIZE : ((sp - X86_DWORD_SIZE) & WORD_MASK); PokeDword(stackBase + sp, DPMI_PMRET_OFF);
       } else {
-          sp = ss32 ? sp - 2 : ((sp - 2) & WORD_MASK); PokeWord(stackBase + sp, (WORD)sEFL);
-          sp = ss32 ? sp - 2 : ((sp - 2) & WORD_MASK); PokeWord(stackBase + sp, g_PmReturnSelector);
-          sp = ss32 ? sp - 2 : ((sp - 2) & WORD_MASK); PokeWord(stackBase + sp, DPMI_PMRET_OFF);
+          sp = ss32 ? sp - X86_WORD_SIZE : ((sp - X86_WORD_SIZE) & WORD_MASK); PokeWord(stackBase + sp, (WORD)sEFL);
+          sp = ss32 ? sp - X86_WORD_SIZE : ((sp - X86_WORD_SIZE) & WORD_MASK); PokeWord(stackBase + sp, g_PmReturnSelector);
+          sp = ss32 ? sp - X86_WORD_SIZE : ((sp - X86_WORD_SIZE) & WORD_MASK); PokeWord(stackBase + sp, DPMI_PMRET_OFF);
       }
       VDM_SET16(tib, VTIB_SS, ss);
       VDM_REG(tib, VTIB_ESP) = ss32 ? sp : ((sESP & HIGH_WORD_MASK_U) | sp); }
@@ -28534,11 +28534,11 @@ static INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, U
       INT ss32 = DpmiSelectorIs32(savedSs);
       DWORD sp = ss32 ? sESP : (sESP & WORD_MASK);
       if (isClient32) {
-          sp = ss32 ? sp - 4 : ((sp - 4) & WORD_MASK); PokeDword(stackBase + sp, g_PmReturnSelector);
-          sp = ss32 ? sp - 4 : ((sp - 4) & WORD_MASK); PokeDword(stackBase + sp, DPMI_PMRET_OFF);
+          sp = ss32 ? sp - X86_DWORD_SIZE : ((sp - X86_DWORD_SIZE) & WORD_MASK); PokeDword(stackBase + sp, g_PmReturnSelector);
+          sp = ss32 ? sp - X86_DWORD_SIZE : ((sp - X86_DWORD_SIZE) & WORD_MASK); PokeDword(stackBase + sp, DPMI_PMRET_OFF);
       } else {
-          sp = ss32 ? sp - 2 : ((sp - 2) & WORD_MASK); PokeWord(stackBase + sp, g_PmReturnSelector);
-          sp = ss32 ? sp - 2 : ((sp - 2) & WORD_MASK); PokeWord(stackBase + sp, DPMI_PMRET_OFF);
+          sp = ss32 ? sp - X86_WORD_SIZE : ((sp - X86_WORD_SIZE) & WORD_MASK); PokeWord(stackBase + sp, g_PmReturnSelector);
+          sp = ss32 ? sp - X86_WORD_SIZE : ((sp - X86_WORD_SIZE) & WORD_MASK); PokeWord(stackBase + sp, DPMI_PMRET_OFF);
       }
       VDM_REG(tib, VTIB_ESP) = ss32 ? sp : ((sESP & HIGH_WORD_MASK_U) | sp); }
     VDM_SET16(tib, VTIB_EAX, (WORD)pend);
@@ -29022,7 +29022,7 @@ static INT V86DeliverDeviceIrq(volatile BYTE *tib)
           lineCursor = LogPut(lineCursor, " ss:sp=0x");           lineCursor = LogHex(lineCursor, ss);
           lineCursor = LogPut(lineCursor, ":0x");                 lineCursor = LogHex(lineCursor, sp);
           lineCursor = LogPut(lineCursor, " stkflags=0x");
-          lineCursor = LogHex(lineCursor, PeekWord((ss << PARAGRAPH_SHIFT) + ((sp + 4) & WORD_MASK)));
+          lineCursor = LogHex(lineCursor, PeekWord((ss << PARAGRAPH_SHIFT) + ((sp + X86_FRAME16_FLAGS) & WORD_MASK)));
           lineCursor = LogPut(lineCursor, inBop ? " why=in_bop" : " why=if_gate");
           lineCursor = LogPut(lineCursor, "\r\n");
           LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
@@ -29072,7 +29072,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
             RegistersStore(&registers, tib);
             {   /* CF into the FLAGS the stub's IRET restores (an INT pushed them) */
                 WORD *flagsWord = (WORD *)(ULONG_PTR)((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT)
-                                    + ((VDM_REG16(tib, VTIB_ESP) + 4) & WORD_MASK));
+                                    + ((VDM_REG16(tib, VTIB_ESP) + X86_FRAME16_FLAGS) & WORD_MASK));
                 if (registers.CarryFlag) *flagsWord |= EFLAGS_CF; else *flagsWord &= (WORD)~EFLAGS_CF;
             }
             VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
@@ -29106,7 +29106,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
             DWORD ss = VDM_REG16(tib, VTIB_SS), sp = VDM_REG16(tib, VTIB_ESP);
             volatile WORD *frame = (volatile WORD *)(ULONG_PTR)((ss << PARAGRAPH_SHIFT) + sp);
             WORD flags = frame[2];
-            WORD newSp = (WORD)(sp - 6);
+            WORD newSp = (WORD)(sp - X86_IRET16_SIZE);
             volatile WORD *newFrame = (volatile WORD *)(ULONG_PTR)((ss << PARAGRAPH_SHIFT) + newSp);
             g_Net.IsPostPending = 0;
             newFrame[0] = g_Net.PostOffset; newFrame[1] = g_Net.PostSegment; newFrame[2] = (WORD)(flags & ~EFLAGS_IF);
@@ -29157,7 +29157,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
            rather than pretending hardware exists. */
         INT handled = 1;
         WORD *flagsPointer = (WORD *)((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT)
-                              + ((VDM_REG16(tib, VTIB_ESP) + 4) & WORD_MASK));
+                              + ((VDM_REG16(tib, VTIB_ESP) + X86_FRAME16_FLAGS) & WORD_MASK));
         #define BCF_SET() (*flagsPointer |= EFLAGS_CF)
         #define BCF_CLR() (*flagsPointer &= (WORD)~EFLAGS_CF)
         #define BSETAX(v) (VDM_REG(tib, VTIB_EAX) = \
@@ -32847,7 +32847,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             DWORD flags2;
             if (IsOurStubCsIp(cs, ip)) {   /* #206: BIOS stubs too */
                 DWORD ss = VDM_REG16(tib, VTIB_SS), stackPointer = VDM_REG16(tib, VTIB_ESP);
-                flags2 = PeekWord((ss << PARAGRAPH_SHIFT) + ((stackPointer + 4) & WORD_MASK));   /* main-line FLAGS the stub returns to */
+                flags2 = PeekWord((ss << PARAGRAPH_SHIFT) + ((stackPointer + X86_FRAME16_FLAGS) & WORD_MASK));   /* main-line FLAGS the stub returns to */
             } else {
                 flags2 = VDM_REG(tib, VTIB_EFLAGS);
                 IfvNote(1, flags2);
@@ -32868,7 +32868,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     g_Irq0SkipIf++;
                     if (IsOurStubCsIp(cs, ip)) {   /* #238: who called our stub with IF off */
                         DWORD ss = VDM_REG16(tib, VTIB_SS), stackPointer = VDM_REG16(tib, VTIB_ESP);
-                        SkipIfSiteNote(PeekWord((ss << PARAGRAPH_SHIFT) + ((stackPointer + 2) & WORD_MASK)),
+                        SkipIfSiteNote(PeekWord((ss << PARAGRAPH_SHIFT) + ((stackPointer + X86_FRAME16_CS) & WORD_MASK)),
                                          PeekWord((ss << PARAGRAPH_SHIFT) + (stackPointer & WORD_MASK)), ip);
                     }
                 }
@@ -32884,7 +32884,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             DWORD flags2;
             if (IsOurStubCsIp(cs, ip)) {   /* #206: BIOS stubs too */
                 DWORD ss = VDM_REG16(tib, VTIB_SS), stackPointer = VDM_REG16(tib, VTIB_ESP);
-                flags2 = PeekWord((ss << PARAGRAPH_SHIFT) + ((stackPointer + 4) & WORD_MASK));
+                flags2 = PeekWord((ss << PARAGRAPH_SHIFT) + ((stackPointer + X86_FRAME16_FLAGS) & WORD_MASK));
             } else {
                 flags2 = VDM_REG(tib, VTIB_EFLAGS);
                 IfvNote(1, flags2);
@@ -33282,7 +33282,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 HOST_UNLOCK();
                 ++g_Kb4FTranslate;
                 VDM_SET16(tib, VTIB_EAX, PeekWord((ss << PARAGRAPH_SHIFT) + stackPointer));          /* pop ax */
-                VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & HIGH_WORD_MASK_U) | ((stackPointer + 2) & WORD_MASK);
+                VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & HIGH_WORD_MASK_U) | ((stackPointer + X86_WORD_SIZE) & WORD_MASK);
                 keyboardAction = KeyboardActionEntry(keyAction);
                 VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + (keyboardAction >= 0 ? keyboardAction : BIOS_KEYBOARD_ACTION_IRET));
                 continue;
@@ -33301,7 +33301,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 HOST_UNLOCK();
                 if (scanCode >= 0) {
                     DWORD ss = VDM_REG16(tib, VTIB_SS);
-                    WORD  stackPointer = (WORD)((VDM_REG(tib, VTIB_ESP) - 2) & WORD_MASK);
+                    WORD  stackPointer = (WORD)((VDM_REG(tib, VTIB_ESP) - X86_WORD_SIZE) & WORD_MASK);
                     PokeWord((ss << PARAGRAPH_SHIFT) + stackPointer, (WORD)VDM_REG(tib, VTIB_EAX));     /* push ax */
                     VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & HIGH_WORD_MASK_U) | stackPointer;
                     VDM_SET16(tib, VTIB_EAX, (WORD)(0x4F00 | (UINT)scanCode));
@@ -34919,11 +34919,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                         DWORD stackBase   = DpmiSelectorBase(frame[7]);
                                         INT   ss32 = guestSsIs32;
                                         DWORD stackPointer   = ss32 ? faultEsp : (DWORD)frame[6];   /* full width, see guestEspOk */
-                                        stackPointer = ss32 ? stackPointer - 2 : ((stackPointer - 2) & WORD_MASK);
+                                        stackPointer = ss32 ? stackPointer - X86_WORD_SIZE : ((stackPointer - X86_WORD_SIZE) & WORD_MASK);
                                         PokeWord(stackBase + stackPointer, frame[5]);                    /* FLAGS      */
-                                        stackPointer = ss32 ? stackPointer - 2 : ((stackPointer - 2) & WORD_MASK);
+                                        stackPointer = ss32 ? stackPointer - X86_WORD_SIZE : ((stackPointer - X86_WORD_SIZE) & WORD_MASK);
                                         PokeWord(stackBase + stackPointer, frame[4]);                    /* return CS  */
-                                        stackPointer = ss32 ? stackPointer - 2 : ((stackPointer - 2) & WORD_MASK);
+                                        stackPointer = ss32 ? stackPointer - X86_WORD_SIZE : ((stackPointer - X86_WORD_SIZE) & WORD_MASK);
                                         PokeWord(stackBase + stackPointer, (WORD)(frame[3] + 2));        /* return IP  */
                                         VDM_REG(tib, VTIB_ESP) = stackPointer;
                                         VDM_SET16(tib, VTIB_CS, g_PmInt[gateVector].Selector);
