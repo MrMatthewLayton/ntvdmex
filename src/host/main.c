@@ -1455,7 +1455,7 @@ static DWORD g_DpmiCodeBase = 0;          /* linear base of the guest PM code se
    PM raises a #GP the kernel will not reflect, so the VDM died silently, at the same
    address, every run since session 15.
    Keying by linear address lets the map cover every region the client later declares to
-   be code, and makes dpmi_bop_vec's alias handling fall out for free. Sized to the V86
+   be code, and makes DpmiBopVector's alias handling fall out for free. Sized to the V86
    window plus the HMA; the DOS blocks Doom loads into land around 0x15000-0x2F000. */
 /* Keyed by LINEAR ADDRESS and stored as a HASH, not a flat array.
    It was a flat byte array over the low 1.1 MB, which is exactly as much of the guest
@@ -1663,7 +1663,7 @@ static DWORD g_BreakpointReport[DPMI_BP_MAX];
 static BYTE  g_BreakpointOriginal[DPMI_BP_MAX][2]; /* the two bytes we displaced                  */
 static BYTE  g_BreakpointArmed[DPMI_BP_MAX];
 /* ── ⚠⚠ A REFUSAL IS A STANDING CONDITION, NOT AN EVENT. (session 59) ───────────────
-     dpmi_bp_arm() runs before EVERY PM entry, and both REFUSED arms below `continue`
+     DpmiBreakpointArm() runs before EVERY PM entry, and both REFUSED arms below `continue`
      without incrementing g_BreakpointArms -- so DPMI_BP_ARM_MAX, the ceiling that exists to
      stop exactly this, never applies to them. A breakpoint on a one-byte instruction
      therefore re-reports itself for the whole run: **489,200 lines and an 88 MB log**,
@@ -1680,7 +1680,7 @@ static BYTE  g_BreakpointRefused[DPMI_BP_MAX];
 #define DPMI_BP_ARM_MAX 512
 static DWORD g_BreakpointArms[DPMI_BP_MAX];
 /* ── ★★ A ONE-SHOT BREAKPOINT IS RETIRED BY ITS HIT, AND NOTHING SAID SO. ──────────
-     dpmi_bp_arm() runs before every PM entry and re-plants anything not currently
+     DpmiBreakpointArm() runs before every PM entry and re-plants anything not currently
      armed. The "never re-plant a site the guest is standing on" guard keys off
      g_BreakpointPending, and g_BreakpointPending is set ONLY for repeating and skip breakpoints --
      so the ONE kind with no protection was the plain one-shot, which is the kind you
@@ -2039,13 +2039,13 @@ static struct { WORD Selector; DWORD Offset; BYTE Client; } g_PmInt[256];
    The third byte does double duty -- it is the BOP's immediate AND the IRET that
    returns to the client -- which is exactly the +2 EIP convention the patched-INT path
    already uses, so it needs no special case in the dispatcher. Each stub's LINEAR
-   address is registered in the patch map against its vector, so dpmi_bop_vec() resolves
+   address is registered in the patch map against its vector, so DpmiBopVector() resolves
    a chained call straight back to the service the client was asking for. */
 /* Every block we have handed the client through INT 31h 0501. We know exactly which
    memory is the client's because we allocated it -- and that is the only usable answer
-   when the client declares a FLAT code selector. See dpmi_patch_code_region().
+   when the client declares a FLAT code selector. See DpmiPatchCodeRegion().
    `code` marks a block that holds one of the program's EXECUTABLE objects, matched by
-   size against the LE object table -- see dpmi_le_learn(). */
+   size against the LE object table -- see DpmiLeLearn(). */
 #define DPMI_MEMBLK_MAX 64
 static struct { DWORD Base, Size; BYTE Code; } g_DpmiBlock[DPMI_MEMBLK_MAX];
 static int g_DpmiBlockCount = 0;
@@ -19211,7 +19211,7 @@ static void DpmiInstall(int index)
        by NOT enforcing descriptor types. We do the same on the real CPU: the initial DATA (idx
        2 = DS) and STACK (idx 3 = SS) selectors are ALWAYS installed as present writable-data,
        so they stay usable no matter how the client retypes them. g_Ldt[idx].access keeps the
-       client's requested value, so LAR/LSL introspection (dpmi_sel_desc) still reports it. */
+       client's requested value, so LAR/LSL introspection (DpmiSelectorDescriptor) still reports it. */
     if (index == 2 || index == 3) acceleration = 0xF2;                      /* present, DPL3, data R/W */
     /* ── DPL IS THE HOST'S, NOT THE CLIENT'S. (s74c, ZAR's VESA modes) ──────────
          ZAR builds its LFB selector with 0009 CX=8092: DPL 0. On real DOS that is
@@ -19404,33 +19404,33 @@ static DWORD DpmiSelectorBase(WORD selector)
    CPU just told us it executed is EVIDENCE; taking the first of several would be the
    same kind of guess as the eager scan's length vote, which has broken five guests.
    Returns the linear address, or 0 if absent or ambiguous. *pcand gets the count. */
-static DWORD dpmi_recover_flat_eip(DWORD lo16, BYTE vec, int *pcand)
+static DWORD DpmiRecoverFlatEip(DWORD lo16, BYTE vector, int *pcand)
 {
-    DWORD found = 0; int n = 0, i;
+    DWORD found = 0; int matches = 0, index;
     lo16 &= 0xFFFFu;
-    for (i = 0; i < g_DpmiBlockCount; ++i) {
-        DWORD b = g_DpmiBlock[i].Base, sz = g_DpmiBlock[i].Size, a;
-        if (!sz) continue;
-        for (a = (b & ~0xFFFFu) | lo16; a < b + sz; a += 0x10000u) {
-            const volatile BYTE *q2;
-            if (a < b || a + 1 >= b + sz) continue;
-            if (!HostReadable((const void *)(ULONG_PTR)a, 2)) continue;
-            q2 = (const volatile BYTE *)(ULONG_PTR)a;
-            if (q2[0] != 0xCD || q2[1] != vec) continue;
-            if (n == 0) { found = a; n = 1; }
-            else if (a != found) ++n;
+    for (index = 0; index < g_DpmiBlockCount; ++index) {
+        DWORD base = g_DpmiBlock[index].Base, size = g_DpmiBlock[index].Size, address;
+        if (!size) continue;
+        for (address = (base & ~0xFFFFu) | lo16; address < base + size; address += 0x10000u) {
+            const volatile BYTE *bytes;
+            if (address < base || address + 1 >= base + size) continue;
+            if (!HostReadable((const void *)(ULONG_PTR)address, 2)) continue;
+            bytes = (const volatile BYTE *)(ULONG_PTR)address;
+            if (bytes[0] != 0xCD || bytes[1] != vector) continue;
+            if (matches == 0) { found = address; matches = 1; }
+            else if (address != found) ++matches;
         }
     }
-    if (pcand) *pcand = n;
-    return (n == 1) ? found : 0;
+    if (pcand) *pcand = matches;
+    return (matches == 1) ? found : 0;
 }
 
-static int dpmi_sel_desc(uint16_t sel, uint32_t *ar, uint32_t *limit)
+static int DpmiSelectorDescriptor(uint16_t selector, uint32_t *accessRights, uint32_t *limit)
 {
-    int idx = (sel & 0xFFFF) >> 3;
-    if (idx < 1 || idx >= 512 || g_Ldt[idx].Access == 0) return 0;
-    if (ar)    *ar    = ((uint32_t)g_Ldt[idx].Access << 8) | ((uint32_t)(g_Ldt[idx].Flags & 0xF) << 20);
-    if (limit) *limit = (uint32_t)g_Ldt[idx].Limit;
+    int index = (selector & 0xFFFF) >> 3;
+    if (index < 1 || index >= 512 || g_Ldt[index].Access == 0) return 0;
+    if (accessRights)    *accessRights    = ((uint32_t)g_Ldt[index].Access << 8) | ((uint32_t)(g_Ldt[index].Flags & 0xF) << 20);
+    if (limit) *limit = (uint32_t)g_Ldt[index].Limit;
     return 1;
 }
 
@@ -19465,28 +19465,28 @@ static int dpmi_sel_desc(uint16_t sel, uint32_t *ar, uint32_t *limit)
      bytes nothing has rewritten. Self-verifying, and it fires only when all three hold:
      the memory really is C4 C4, the address really is inside a segment we know the base
      of, and the file really has CD there. Then record it, so it costs one lookup once. */
-static DWORD dpmi_bop_vec(DWORD csv, DWORD eip)
+static DWORD DpmiBopVector(DWORD csv, DWORD eip)
 {
     DWORD base = DpmiSelectorBase((WORD)csv);
-    DWORD lin  = base + eip;
-    BYTE  v    = PatchMapGet(lin);
-    int   sg;
+    DWORD linear  = base + eip;
+    BYTE  vector    = PatchMapGet(linear);
+    int   segmentIndex;
 
-    if (v) return v;
+    if (vector) return vector;
     if (!g_WowModuleCount || !g_WowImage[0]) return 0;
-    if (!HostReadable((const void *)(ULONG_PTR)lin, 2)) return 0;
-    {   const volatile BYTE *b = (const volatile BYTE *)(ULONG_PTR)lin;
-        if (b[0] != 0xC4 || b[1] != 0xC4) return 0;
+    if (!HostReadable((const void *)(ULONG_PTR)linear, 2)) return 0;
+    {   const volatile BYTE *bytes = (const volatile BYTE *)(ULONG_PTR)linear;
+        if (bytes[0] != 0xC4 || bytes[1] != 0xC4) return 0;
     }
-    for (sg = 0; sg < (int)g_WowModule[0].SegmentCount && sg < WOW_PMBASE_MAX; ++sg) {
-        NE_SEGMENT *s = &g_WowModule[0].Segments[sg];
-        if (!s->Sector || eip + 1 >= s->Length) continue;
-        if (base != g_WowPmBase[sg] && base != ((DWORD)s->Selector << 4)) continue;
-        if (s->FileOffset + eip + 1 >= g_WowModule[0].ImageLength) continue;
-        {   const BYTE *f = g_WowImage[0] + s->FileOffset + eip;
-            if (f[0] != 0xCD) return 0;
-            PatchMapSet(lin, f[1]);                     /* one lookup, once */
-            return f[1];
+    for (segmentIndex = 0; segmentIndex < (int)g_WowModule[0].SegmentCount && segmentIndex < WOW_PMBASE_MAX; ++segmentIndex) {
+        NE_SEGMENT *segment = &g_WowModule[0].Segments[segmentIndex];
+        if (!segment->Sector || eip + 1 >= segment->Length) continue;
+        if (base != g_WowPmBase[segmentIndex] && base != ((DWORD)segment->Selector << 4)) continue;
+        if (segment->FileOffset + eip + 1 >= g_WowModule[0].ImageLength) continue;
+        {   const BYTE *fileBytes = g_WowImage[0] + segment->FileOffset + eip;
+            if (fileBytes[0] != 0xCD) return 0;
+            PatchMapSet(linear, fileBytes[1]);                     /* one lookup, once */
+            return fileBytes[1];
         }
     }
     return 0;
@@ -19505,10 +19505,10 @@ static DWORD dpmi_bop_vec(DWORD csv, DWORD eip)
    reads like a wild jump into the BIOS data area rather than what it was.
    This is the same rule the interrupt-frame width already follows: ask the descriptor,
    not the host's habits. DpmiSelectorIs32() reads the D/B bit we store for the selector. */
-static DWORD dpmi_pm_eip(volatile BYTE *tib)
+static DWORD DpmiPmEip(volatile BYTE *tib)
 {
-    DWORD e = VDM_REG(tib, VTIB_EIP);
-    return DpmiSelectorIs32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) ? e : (e & 0xFFFF);
+    DWORD eip2 = VDM_REG(tib, VTIB_EIP);
+    return DpmiSelectorIs32((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) ? eip2 : (eip2 & 0xFFFF);
 }
 
 /* ── PATCH A REGION THE CLIENT HAS JUST DECLARED TO BE CODE. ──────────────────────
@@ -19520,8 +19520,8 @@ static DWORD dpmi_pm_eip(volatile BYTE *tib)
    Scanning a data region would be the dangerous thing (a `CD 21` byte pair that is
    really data gets corrupted); scanning only what the client itself calls code is the
    narrowest rule that covers the case, and g_int_vec[] remains the revert map. */
-static void dpmi_bp_arm(void);               /* fwd: a new region may hold a requested BP */
-static void dpmi_bp_rearm_pending(DWORD cur_lin);   /* fwd: re-plant stepped-over breakpoints */
+static void DpmiBreakpointArm(void);               /* fwd: a new region may hold a requested BP */
+static void DpmiBreakpointRearmPending(DWORD currentLinear);   /* fwd: re-plant stepped-over breakpoints */
 /* `d32` is the region's DEFAULT OPERAND SIZE -- the D/B bit of the descriptor that named
    it code -- and it is not optional: instruction lengths differ between the two, so
    decoding DOS/4GW's 16-bit modules as 32-bit rejects obvious real sites (`mov ax,4c00h
@@ -19529,13 +19529,13 @@ static void dpmi_bp_rearm_pending(DWORD cur_lin);   /* fwd: re-plant stepped-ove
    is idempotent and self-healing: a site rejected under the wrong width is not recorded
    in the patch map, so the next pass -- and there is always a next pass, because the
    client declares its regions repeatedly while it loads -- gets another chance at it. */
-static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
+static void DpmiPatchCodeRegion(DWORD base, DWORD limit, int d32)
 {
-    volatile BYTE *mem;
-    DWORD end, n = 0, rej = 0, ntbl = 0;   /* ntbl: jump-table entries skipped -- see the guard */
-    DWORD po[12], npo = 0;               /* the first few patched offsets, for the log */
+    volatile BYTE *memory;
+    DWORD end, patched = 0, rej = 0, ntbl = 0;   /* ntbl: jump-table entries skipped -- see the guard */
+    DWORD patchedOffsets[12], npo = 0;               /* the first few patched offsets, for the log */
     DWORD nlog = 0;                      /* how many sites we have dumped BYTES for */
-    char lb[320], *q = lb;
+    char lineBuffer[320], *cursor = lineBuffer;
     /* ► NEVER PATCH THE IVT / BIOS DATA AREA, even when the client declares a base-0
          code selector -- and Doom does exactly that (sel 0x67, base 0, limit 0xFFFF),
          which made the first version of this scan rewrite 16 sites in linear 0..0xFFFF.
@@ -19546,16 +19546,16 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
          client's code. Start the scan above it. */
     end = base + limit;                              /* limit is the LAST valid byte */
     if (g_NoPmPatch && (!g_NoPmPatchMinimum || (end - base) >= g_NoPmPatchMinimum)) {
-        q = LogPut(q, "DPMI: code region 0x"); q = LogHex(q, base);      /* see NOPMPATCH_FLAG */
-        q = LogPut(q, "..0x"); q = LogHex(q, end);
-        q = LogPut(q, " size=0x"); q = LogHex(q, end - base);
-        q = LogPut(q, " -- NOT SCANNED (nopmpatch.flag");
-        if (g_NoPmPatchMinimum) { q = LogPut(q, " min=0x"); q = LogHex(q, g_NoPmPatchMinimum); }
-        q = LogPut(q, ")\r\n");
-        LogAppend(LOG_PATH, lb, q); SerialOut(lb, q);
+        cursor = LogPut(cursor, "DPMI: code region 0x"); cursor = LogHex(cursor, base);      /* see NOPMPATCH_FLAG */
+        cursor = LogPut(cursor, "..0x"); cursor = LogHex(cursor, end);
+        cursor = LogPut(cursor, " size=0x"); cursor = LogHex(cursor, end - base);
+        cursor = LogPut(cursor, " -- NOT SCANNED (nopmpatch.flag");
+        if (g_NoPmPatchMinimum) { cursor = LogPut(cursor, " min=0x"); cursor = LogHex(cursor, g_NoPmPatchMinimum); }
+        cursor = LogPut(cursor, ")\r\n");
+        LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
         return;
     }
-    DWORD ptr_lo = base, ptr_hi = end;               /* a near-pointer table INTO this region is DATA -- see the loop */
+    DWORD pointerLow = base, pointerHigh = end;               /* a near-pointer table INTO this region is DATA -- see the loop */
     /* ── ★★★★★ A 32-BIT CODE REGION IS SCANNED BUT NEVER WRITTEN. (s74) ─────────────
          The sixth guest this scan corrupted was heaven7, and the failure is not one the
          vote can be tuned out of: its LE code object is a PACKED payload, and x86's
@@ -19611,12 +19611,12 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                flag, but we DO see every window descriptor it builds over each object
                (0006 + 000C) while relocating -- that is the shape of the answer.
              g_DpmiBlock[] is recorded and ready for whoever takes this on. */
-        q = LogPut(q, "DPMI: FLAT code region 0x"); q = LogHex(q, base);
-        q = LogPut(q, "..0x"); q = LogHex(q, end);
-        q = LogPut(q, " -- not scanned as a range (");
-        q = LogHex(q, (DWORD)g_DpmiBlockCount); q = LogPut(q, " blocks known, ");
-        q = LogHex(q, (DWORD)g_LeCodeCount); q = LogPut(q, " LE code sizes)\r\n");
-        LogAppend(LOG_PATH, lb, q); SerialOut(lb, q);
+        cursor = LogPut(cursor, "DPMI: FLAT code region 0x"); cursor = LogHex(cursor, base);
+        cursor = LogPut(cursor, "..0x"); cursor = LogHex(cursor, end);
+        cursor = LogPut(cursor, " -- not scanned as a range (");
+        cursor = LogHex(cursor, (DWORD)g_DpmiBlockCount); cursor = LogPut(cursor, " blocks known, ");
+        cursor = LogHex(cursor, (DWORD)g_LeCodeCount); cursor = LogPut(cursor, " LE code sizes)\r\n");
+        LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
         return;
     }
     /* ► WALK THE COMMITTED REGIONS, DO NOT WALK THE ADDRESS RANGE. A declared code
@@ -19627,17 +19627,17 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
          our own scanner killing the run it exists to help. Probing every N bytes is not
          good enough either -- it guesses at a boundary the memory manager already knows.
          Ask it: VirtualQuery hands back exactly the committed, readable extents. */
-    { DWORD a = base;
-      while (a < end) {
+    { DWORD address = base;
+      while (address < end) {
           MEMORY_BASIC_INFORMATION mbi;
-          DWORD rend, i;
-          if (VirtualQuery((LPCVOID)(ULONG_PTR)a, &mbi, sizeof mbi) != sizeof mbi) break;
+          DWORD rend, index;
+          if (VirtualQuery((LPCVOID)(ULONG_PTR)address, &mbi, sizeof mbi) != sizeof mbi) break;
           rend = (DWORD)((ULONG_PTR)mbi.BaseAddress + mbi.RegionSize);
-          if (rend <= a) break;                      /* no progress -> stop, never spin */
+          if (rend <= address) break;                      /* no progress -> stop, never spin */
           if (rend > end) rend = end;
           if (mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
-              mem = (volatile BYTE *)(ULONG_PTR)a;
-              for (i = 0; i + 1 < (rend - a); ++i) {
+              memory = (volatile BYTE *)(ULONG_PTR)address;
+              for (index = 0; index + 1 < (rend - address); ++index) {
                   /* ⚠ ADDING 0x32/0x34/0x35/0x36 HERE WAS TRIED AND IS NOT THE ANSWER.
                        Doom's Watcom thunk table at obj1+0x41e41 is `[cd nn][c3]` triples and
                        the log dump shows only INT 33h patched:
@@ -19657,7 +19657,7 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                      ⚠ MEASURED, session 32. krnl386 executes an `INT 2` (`cd 02`) in
                        protected mode during bring-up. A breakpoint armed on that site reported
                        `displaced cd 02` -- proof it
-                       was RAW, because dpmi_bp_arm() refuses a site that is already an INT
+                       was RAW, because DpmiBreakpointArm() refuses a site that is already an INT
                        site (PatchMapGet), so it could not have armed at all otherwise. And a raw
                        `CD nn` in protected mode is the one fault XP will not reflect: it tears
                        the VDM down silently, which is precisely the death being chased.
@@ -19681,9 +19681,9 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                        as policy: those were *reverted for lack of evidence*, and the evidence
                        now exists. Watch the patched-site count and the "NOT an INT site"
                        rejects across this change -- that is how a false positive would show. */
-                  if (mem[i] == 0xCD) {
-                      DWORD lin = a + i;
-                      if (PatchMapGet(lin)) continue;   /* already patched (aliased region) */
+                  if (memory[index] == 0xCD) {
+                      DWORD linear = address + index;
+                      if (PatchMapGet(linear)) continue;   /* already patched (aliased region) */
                       /* ── ★★★★★ A JUMP/CALL TABLE IS DATA, EVEN INSIDE A CODE OBJECT.
                            (session 72) The FOURTH instance of the patcher rewriting a
                            non-code byte pair -- the ZAR call displacement, the
@@ -19709,10 +19709,10 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                            below: a real INT so aligned is still serviced out of the #GP. The
                            read is 4-aligned (VirtualQuery bases are page-aligned), so it cannot
                            itself fault the scanner. */
-                      { DWORD doff = (lin & ~3u) - a;
-                        if (doff + 4 <= (rend - a)) {
-                            DWORD w = *(const volatile DWORD *)(const volatile void *)(mem + doff);
-                            if (w >= ptr_lo && w < ptr_hi) {
+                      { DWORD doff = (linear & ~3u) - address;
+                        if (doff + 4 <= (rend - address)) {
+                            DWORD word = *(const volatile DWORD *)(const volatile void *)(memory + doff);
+                            if (word >= pointerLow && word < pointerHigh) {
                                 /* ⚠ ITS OWN BUDGET, NOT THE SHARED ONE. Counted separately
                                      AND always reported in the scan line below, because the
                                      first version shared `rej`'s 16-line cap -- and the
@@ -19726,12 +19726,12 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                                      out -- this project's most repeated lesson. */
                                 ++ntbl;
                                 if (ntbl <= 8) {
-                                    char tb[192], *tq = tb;
-                                    tq = LogPut(tq, "DPMI: NOT patching 0x"); tq = LogHex(tq, lin);
-                                    tq = LogPut(tq, " vec=0x"); tq = LogHexByte(tq, mem[i+1]);
-                                    tq = LogPut(tq, " -- inside aligned pointer 0x"); tq = LogHex(tq, w);
-                                    tq = LogPut(tq, " into this code region: a jump-table entry, DATA\r\n");
-                                    LogAppend(LOG_PATH, tb, tq); SerialOut(tb, tq);
+                                    char pointerLine[192], *pointerCursor = pointerLine;
+                                    pointerCursor = LogPut(pointerCursor, "DPMI: NOT patching 0x"); pointerCursor = LogHex(pointerCursor, linear);
+                                    pointerCursor = LogPut(pointerCursor, " vec=0x"); pointerCursor = LogHexByte(pointerCursor, memory[index+1]);
+                                    pointerCursor = LogPut(pointerCursor, " -- inside aligned pointer 0x"); pointerCursor = LogHex(pointerCursor, word);
+                                    pointerCursor = LogPut(pointerCursor, " into this code region: a jump-table entry, DATA\r\n");
+                                    LogAppend(LOG_PATH, pointerLine, pointerCursor); SerialOut(pointerLine, pointerCursor);
                                 }
                                 continue;
                             }
@@ -19765,15 +19765,15 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                          still reaches whatever PM handler it installed through
                          DPMI 0205h -- which for this range is its own emulator's.
                          Patching was the thing taking that away. */
-                      if (mem[i+1] >= 0x34 && mem[i+1] <= 0x3F) {
+                      if (memory[index+1] >= 0x34 && memory[index+1] <= 0x3F) {
                           if (rej < 16) {
-                              char fb[160], *fq = fb;
-                              fq = LogPut(fq, "DPMI: NOT patching 0x"); fq = LogHex(fq, lin);
-                              fq = LogPut(fq, " vec=0x"); fq = LogHexByte(fq, mem[i+1]);
-                              fq = LogPut(fq, " -- FP EMULATOR / fixup range 34..3F,"
+                              char fixupLine[160], *fixupCursor = fixupLine;
+                              fixupCursor = LogPut(fixupCursor, "DPMI: NOT patching 0x"); fixupCursor = LogHex(fixupCursor, linear);
+                              fixupCursor = LogPut(fixupCursor, " vec=0x"); fixupCursor = LogHexByte(fixupCursor, memory[index+1]);
+                              fixupCursor = LogPut(fixupCursor, " -- FP EMULATOR / fixup range 34..3F,"
                                             " this is an x87 instruction not an"
                                             " interrupt\r\n");
-                              LogAppend(LOG_PATH, fb, fq); SerialOut(fb, fq);
+                              LogAppend(LOG_PATH, fixupLine, fixupCursor); SerialOut(fixupLine, fixupCursor);
                           }
                           continue;
                       }
@@ -19806,19 +19806,19 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                            has now cost three guests.
                          ⚠ 0x15 IS IN THE LIST, so this segment's other two sites (+0x1b3e
                            and +0x1b4a, both real `cd 15`) are patched exactly as before. */
-                      { BYTE pv = mem[i+1];
-                        int serviced = (pv == 0x31 || pv == 0x21 || pv == 0x10
-                                        || pv == 0x16 || pv == 0x33 || pv == 0x2F
-                                        || pv == 0x11 || pv == 0x41 || pv == 0x1A
-                                        || pv == 0x08 || pv == 0x15);
+                      { BYTE vector = memory[index+1];
+                        int serviced = (vector == 0x31 || vector == 0x21 || vector == 0x10
+                                        || vector == 0x16 || vector == 0x33 || vector == 0x2F
+                                        || vector == 0x11 || vector == 0x41 || vector == 0x1A
+                                        || vector == 0x08 || vector == 0x15);
                         if (!serviced) {
                             if (rej++ < 16) {
-                                char nb[176], *nq = nb;
-                                nq = LogPut(nq, "DPMI: NOT patching 0x"); nq = LogHex(nq, lin);
-                                nq = LogPut(nq, " vec=0x"); nq = LogHexByte(nq, pv);
-                                nq = LogPut(nq, " -- no PM service arm for it, so a BOP here"
+                                char unservicedLine[176], *unservicedCursor = unservicedLine;
+                                unservicedCursor = LogPut(unservicedCursor, "DPMI: NOT patching 0x"); unservicedCursor = LogHex(unservicedCursor, linear);
+                                unservicedCursor = LogPut(unservicedCursor, " vec=0x"); unservicedCursor = LogHexByte(unservicedCursor, vector);
+                                unservicedCursor = LogPut(unservicedCursor, " -- no PM service arm for it, so a BOP here"
                                               " could only ever lose an instruction\r\n");
-                                LogAppend(LOG_PATH, nb, nq); SerialOut(nb, nq);
+                                LogAppend(LOG_PATH, unservicedLine, unservicedCursor); SerialOut(unservicedLine, unservicedCursor);
                             }
                             continue;
                         } }
@@ -19842,17 +19842,17 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                            48 bytes and asks how many streams land here; see x86len.h for
                            the measured separation (real sites 19-48 votes, false pairs
                            0-3) and why the threshold leans toward keeping. */
-                      if (!X86IsIntSiteReal((const unsigned char *)(ULONG_PTR)a, i,
-                                                rend - a, d32)) {
+                      if (!X86IsIntSiteReal((const unsigned char *)(ULONG_PTR)address, index,
+                                                rend - address, d32)) {
                           if (rej++ < 16) {
-                              char rb[128], *rq = rb;
-                              rq = LogPut(rq, "DPMI: NOT an INT site (mid-instruction) 0x");
-                              rq = LogHex(rq, lin);
-                              rq = LogPut(rq, " vec=0x"); rq = LogHexByte(rq, mem[i+1]);
-                              rq = LogPut(rq, d32 ? " d32=1" : " d32=0");
-                              rq = LogPut(rq, " ctx="); rq = LogDump(rq, (const BYTE *)(ULONG_PTR)(lin - 4), 10);
-                              rq = LogPut(rq, "\r\n");
-                              LogAppend(LOG_PATH, rb, rq); SerialOut(rb, rq);
+                              char midInstructionLine[128], *midInstructionCursor = midInstructionLine;
+                              midInstructionCursor = LogPut(midInstructionCursor, "DPMI: NOT an INT site (mid-instruction) 0x");
+                              midInstructionCursor = LogHex(midInstructionCursor, linear);
+                              midInstructionCursor = LogPut(midInstructionCursor, " vec=0x"); midInstructionCursor = LogHexByte(midInstructionCursor, memory[index+1]);
+                              midInstructionCursor = LogPut(midInstructionCursor, d32 ? " d32=1" : " d32=0");
+                              midInstructionCursor = LogPut(midInstructionCursor, " ctx="); midInstructionCursor = LogDump(midInstructionCursor, (const BYTE *)(ULONG_PTR)(linear - 4), 10);
+                              midInstructionCursor = LogPut(midInstructionCursor, "\r\n");
+                              LogAppend(LOG_PATH, midInstructionLine, midInstructionCursor); SerialOut(midInstructionLine, midInstructionCursor);
                           }
                           continue;
                       }
@@ -19864,7 +19864,7 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                            a step ruling out the patcher on exactly that line while the
                            offset it needed was sitting in it. The count and the list
                            have to be claims about the same set. */
-                      if (npo < 12) po[npo++] = lin - base;
+                      if (npo < 12) patchedOffsets[npo++] = linear - base;
                       /* ── ★ SAY WHAT WE ARE ABOUT TO OVERWRITE, BEFORE WE DO. (s74)
                            "ON ANY SILENT VDM DEATH, GET THE BYTES FIRST" -- and for five
                            sessions the one thing this patcher never recorded was the bytes
@@ -19875,41 +19875,41 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
                            generated, not loaded). A site list without bytes is a claim you
                            cannot check. Bounded to the first 12, like po[]. */
                       if (nlog < 24) {              /* its OWN counter: npo saturates at 12 */
-                          char sb2[192], *sq = sb2;
+                          char sb2[192], *siteCursor = sb2;
                           ++nlog;
-                          sq = LogPut(sq, dry ? "DPMI: WOULD PATCH 0x" : "DPMI: PATCHING 0x"); sq = LogHex(sq, lin);
-                          sq = LogPut(sq, " (+0x"); sq = LogHex(sq, lin - base);
-                          sq = LogPut(sq, ") vec=0x"); sq = LogHexByte(sq, mem[i+1]);
-                          sq = LogPut(sq, dry ? " (32-bit region: left for the #GP(IDT) arm)  bytes="
+                          siteCursor = LogPut(siteCursor, dry ? "DPMI: WOULD PATCH 0x" : "DPMI: PATCHING 0x"); siteCursor = LogHex(siteCursor, linear);
+                          siteCursor = LogPut(siteCursor, " (+0x"); siteCursor = LogHex(siteCursor, linear - base);
+                          siteCursor = LogPut(siteCursor, ") vec=0x"); siteCursor = LogHexByte(siteCursor, memory[index+1]);
+                          siteCursor = LogPut(siteCursor, dry ? " (32-bit region: left for the #GP(IDT) arm)  bytes="
                                             : " -> C4 C4  was=");
-                          sq = LogDump(sq, (const BYTE *)(ULONG_PTR)(lin - 6), 16);
-                          sq = LogPut(sq, "\r\n");
-                          LogAppend(LOG_PATH, sb2, sq); SerialOut(sb2, sq);
+                          siteCursor = LogDump(siteCursor, (const BYTE *)(ULONG_PTR)(linear - 6), 16);
+                          siteCursor = LogPut(siteCursor, "\r\n");
+                          LogAppend(LOG_PATH, sb2, siteCursor); SerialOut(sb2, siteCursor);
                       }
                       if (!dry) {
-                          PatchMapSet(lin, mem[i+1]);
-                          mem[i] = 0xC4; mem[i+1] = 0xC4;
+                          PatchMapSet(linear, memory[index+1]);
+                          memory[index] = 0xC4; memory[index+1] = 0xC4;
                       }
-                      ++n;
+                      ++patched;
                   }
               }
           }
-          a = rend;
+          address = rend;
       } }
-    q = LogPut(q, "DPMI: code region 0x"); q = LogHex(q, base);
-    q = LogPut(q, "..0x"); q = LogHex(q, end);
-    q = LogPut(q, dry ? " -> 32-bit, NOT WRITTEN: would patch " : " -> patched ");
-    q = LogHex(q, n); q = LogPut(q, " INT sites, rejected ");
-    q = LogHex(q, rej); q = LogPut(q, " mid-instruction byte pairs, ");
-    q = LogHex(q, ntbl); q = LogPut(q, " jump-table entries");
+    cursor = LogPut(cursor, "DPMI: code region 0x"); cursor = LogHex(cursor, base);
+    cursor = LogPut(cursor, "..0x"); cursor = LogHex(cursor, end);
+    cursor = LogPut(cursor, dry ? " -> 32-bit, NOT WRITTEN: would patch " : " -> patched ");
+    cursor = LogHex(cursor, patched); cursor = LogPut(cursor, " INT sites, rejected ");
+    cursor = LogHex(cursor, rej); cursor = LogPut(cursor, " mid-instruction byte pairs, ");
+    cursor = LogHex(cursor, ntbl); cursor = LogPut(cursor, " jump-table entries");
     if (npo) {
-        DWORD z;
-        q = LogPut(q, " at +0x");
-        for (z = 0; z < npo; ++z) { if (z) q = LogPut(q, " +0x"); q = LogHex(q, po[z]); }
+        DWORD index2;
+        cursor = LogPut(cursor, " at +0x");
+        for (index2 = 0; index2 < npo; ++index2) { if (index2) cursor = LogPut(cursor, " +0x"); cursor = LogHex(cursor, patchedOffsets[index2]); }
     }
-    q = LogPut(q, "\r\n");
-    LogAppend(LOG_PATH, lb, q); SerialOut(lb, q);
-    dpmi_bp_arm();          /* a module that has just appeared may hold a requested BP */
+    cursor = LogPut(cursor, "\r\n");
+    LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
+    DpmiBreakpointArm();          /* a module that has just appeared may hold a requested BP */
 }
 
 /* Learn the program's EXECUTABLE object sizes from its own LE header. See the commentary
@@ -19923,43 +19923,43 @@ static void dpmi_patch_code_region(DWORD base, DWORD limit, int d32)
      and occurs in data by chance. Byte/word order little-endian, format level 0, a 386+
      CPU, a plausible OS and object count: five agreeing fields, which no accident of
      data passed on any binary tried here. */
-static void dpmi_le_learn(const BYTE *buf, DWORD n)
+static void DpmiLeLearn(const BYTE *buffer, DWORD length)
 {
-    DWORD i;
-    char lb[192], *q;
-    if (!buf || n < 0x200) return;
-#define LE32(o) ((DWORD)buf[(o)] | ((DWORD)buf[(o)+1] << 8) | ((DWORD)buf[(o)+2] << 16) | ((DWORD)buf[(o)+3] << 24))
-#define LE16(o) ((DWORD)buf[(o)] | ((DWORD)buf[(o)+1] << 8))
-    for (i = 0; i + 0x100 < n; ++i) {
-        DWORD objoff, nobj, k;
-        if (buf[i] != 'L' || buf[i+1] != 'E' || buf[i+2] || buf[i+3]) continue;
-        if (LE32(i + 0x04) != 0) continue;                     /* format level      */
-        { DWORD cpu = LE16(i + 0x08), os = LE16(i + 0x0A);
-          if (cpu < 1 || cpu > 4 || os < 1 || os > 4) continue; }
-        nobj   = LE32(i + 0x44);
-        objoff = LE32(i + 0x40);
+    DWORD index;
+    char lineBuffer[192], *cursor;
+    if (!buffer || length < 0x200) return;
+#define LE32(o) ((DWORD)buffer[(o)] | ((DWORD)buffer[(o)+1] << 8) | ((DWORD)buffer[(o)+2] << 16) | ((DWORD)buffer[(o)+3] << 24))
+#define LE16(o) ((DWORD)buffer[(o)] | ((DWORD)buffer[(o)+1] << 8))
+    for (index = 0; index + 0x100 < length; ++index) {
+        DWORD objoff, nobj, object;
+        if (buffer[index] != 'L' || buffer[index+1] != 'E' || buffer[index+2] || buffer[index+3]) continue;
+        if (LE32(index + 0x04) != 0) continue;                     /* format level      */
+        { DWORD cpu = LE16(index + 0x08), targetOs = LE16(index + 0x0A);
+          if (cpu < 1 || cpu > 4 || targetOs < 1 || targetOs > 4) continue; }
+        nobj   = LE32(index + 0x44);
+        objoff = LE32(index + 0x40);
         if (nobj < 1 || nobj > 64) continue;
-        if (objoff < 0x50 || i + objoff + nobj * 24 > n) continue;
-        q = lb; q = LogPut(q, "DPMI: LE image at file 0x"); q = LogHex(q, i);
-        q = LogPut(q, ", "); q = LogHex(q, nobj); q = LogPut(q, " objects\r\n");
-        LogAppend(LOG_PATH, lb, q);
-        for (k = 0; k < nobj; ++k) {
-            DWORD o     = i + objoff + k * 24;
-            DWORD vsize = LE32(o + 0x00), flags = LE32(o + 0x08);
-            DWORD pr    = (vsize + 0xFFFu) & ~0xFFFu;          /* what 0501 will ask for */
+        if (objoff < 0x50 || index + objoff + nobj * 24 > length) continue;
+        cursor = lineBuffer; cursor = LogPut(cursor, "DPMI: LE image at file 0x"); cursor = LogHex(cursor, index);
+        cursor = LogPut(cursor, ", "); cursor = LogHex(cursor, nobj); cursor = LogPut(cursor, " objects\r\n");
+        LogAppend(LOG_PATH, lineBuffer, cursor);
+        for (object = 0; object < nobj; ++object) {
+            DWORD entry     = index + objoff + object * 24;
+            DWORD vsize = LE32(entry + 0x00), flags = LE32(entry + 0x08);
+            DWORD pageRounded    = (vsize + 0xFFFu) & ~0xFFFu;          /* what 0501 will ask for */
             int   exec  = (flags & 0x0004u) != 0;
-            q = lb; q = LogPut(q, "DPMI:   obj"); q = LogHex(q, k + 1);
-            q = LogPut(q, " vsize 0x"); q = LogHex(q, vsize);
-            q = LogPut(q, " flags 0x"); q = LogHex(q, flags);
-            q = LogPut(q, exec ? " EXEC" : " data");
-            if (exec && pr >= 0x10000u && g_LeCodeCount < DPMI_LE_MAX) {
-                g_LeCodeSize[g_LeCodeCount++] = pr;
-                q = LogPut(q, " -- code block size 0x"); q = LogHex(q, pr);
+            cursor = lineBuffer; cursor = LogPut(cursor, "DPMI:   obj"); cursor = LogHex(cursor, object + 1);
+            cursor = LogPut(cursor, " vsize 0x"); cursor = LogHex(cursor, vsize);
+            cursor = LogPut(cursor, " flags 0x"); cursor = LogHex(cursor, flags);
+            cursor = LogPut(cursor, exec ? " EXEC" : " data");
+            if (exec && pageRounded >= 0x10000u && g_LeCodeCount < DPMI_LE_MAX) {
+                g_LeCodeSize[g_LeCodeCount++] = pageRounded;
+                cursor = LogPut(cursor, " -- code block size 0x"); cursor = LogHex(cursor, pageRounded);
             } else if (exec) {
-                q = LogPut(q, " -- too small to key on (a based descriptor will reach it)");
+                cursor = LogPut(cursor, " -- too small to key on (a based descriptor will reach it)");
             }
-            q = LogPut(q, "\r\n");
-            LogAppend(LOG_PATH, lb, q);
+            cursor = LogPut(cursor, "\r\n");
+            LogAppend(LOG_PATH, lineBuffer, cursor);
         }
         return;                                                /* first valid LE wins */
     }
@@ -19976,12 +19976,12 @@ static void dpmi_le_learn(const BYTE *buf, DWORD n)
      that means "loaded", so this is idempotent and cheap instead: sites already in the
      patch map are skipped, and the map drops entries whose bytes the guest has since
      overwritten, so a later pass re-patches what a copy undid. */
-static void dpmi_scan_code_blocks(void)
+static void DpmiScanCodeBlocks(void)
 {
-    int i;
-    for (i = 0; i < g_DpmiBlockCount; ++i)
-        if (g_DpmiBlock[i].Code)
-            dpmi_patch_code_region(g_DpmiBlock[i].Base, g_DpmiBlock[i].Size - 1,
+    int index;
+    for (index = 0; index < g_DpmiBlockCount; ++index)
+        if (g_DpmiBlock[index].Code)
+            DpmiPatchCodeRegion(g_DpmiBlock[index].Base, g_DpmiBlock[index].Size - 1,
                                    g_DpmiIsClient32);
 }
 
@@ -19995,7 +19995,7 @@ static void dpmi_scan_code_blocks(void)
    one-byte 0xCC rather than the two-byte BOP; bit 2 (4) = the DUMP column is an offset
    from DS's base rather than a linear address; bit 1 (2) = <addr> is an OFFSET INTO
    krnl386's protected-mode copy of a segment, resolved when that selector is committed
-   (see dpmi_bp_resolve_seg -- the copies move between runs, so a segment-relative
+   (see DpmiBreakpointResolveSegment -- the copies move between runs, so a segment-relative
    offset is the only form of that address worth writing down), with mode bits 4..7 naming WHICH
    segment:
    `2` = seg 1 (0 reads as 1, so old lists still work), `0x22` = seg 2, `0x32` = seg 3.
@@ -20015,57 +20015,57 @@ static void dpmi_scan_code_blocks(void)
    ⇒ 8 KB, and SAY what was loaded: the count, and a loud line if the file was longer
      than the buffer or if DPMI_BP_MAX was reached. A parser that discards input
      without a word is not an instrument. */
-static void dpmi_bp_load(void)
+static void DpmiBreakpointLoad(void)
 {
-    HANDLE h = CreateFileA(PMBP_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    HANDLE handle = CreateFileA(PMBP_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                            NULL, OPEN_EXISTING, 0, NULL);
-    char buf[8192]; DWORD rd = 0, i = 0;
-    char lb[256], *q = lb;
-    int n0 = g_BreakpointCount;
-    if (h == INVALID_HANDLE_VALUE) return;
-    ReadFile(h, buf, sizeof buf - 1, &rd, NULL);
-    CloseHandle(h);
-    while (i < rd && g_BreakpointCount < DPMI_BP_MAX) {
-        DWORD v[5] = { 0, 0, 0, 0, 0 }; int col = 0;
+    char buffer[8192]; DWORD bytesRead = 0, index = 0;
+    char lineBuffer[256], *cursor = lineBuffer;
+    int countBefore = g_BreakpointCount;
+    if (handle == INVALID_HANDLE_VALUE) return;
+    ReadFile(handle, buffer, sizeof buffer - 1, &bytesRead, NULL);
+    CloseHandle(handle);
+    while (index < bytesRead && g_BreakpointCount < DPMI_BP_MAX) {
+        DWORD values[5] = { 0, 0, 0, 0, 0 }; int column = 0;
         /* consume one LINE, taking up to two hex fields from it */
-        while (i < rd && (buf[i] == '\r' || buf[i] == '\n')) ++i;   /* line breaks */
-        if (i >= rd) break;
-        if (buf[i] == '#') { while (i < rd && buf[i] != '\n') ++i; continue; }
-        while (i < rd && buf[i] != '\r' && buf[i] != '\n') {
+        while (index < bytesRead && (buffer[index] == '\r' || buffer[index] == '\n')) ++index;   /* line breaks */
+        if (index >= bytesRead) break;
+        if (buffer[index] == '#') { while (index < bytesRead && buffer[index] != '\n') ++index; continue; }
+        while (index < bytesRead && buffer[index] != '\r' && buffer[index] != '\n') {
             int digits = 0;
-            while (i < rd && (buf[i] == ' ' || buf[i] == '\t')) ++i;
-            if (i >= rd || buf[i] == '\r' || buf[i] == '\n') break;
-            if (buf[i] == '#') { while (i < rd && buf[i] != '\n') ++i; break; }
-            while (i < rd) {
-                char c = buf[i];
-                int d = (c >= '0' && c <= '9') ? c - '0'
-                      : (c >= 'a' && c <= 'f') ? c - 'a' + 10
-                      : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
-                if (d < 0) break;
-                if (col < 5) v[col] = (v[col] << 4) | (DWORD)d;
-                ++digits; ++i;
+            while (index < bytesRead && (buffer[index] == ' ' || buffer[index] == '\t')) ++index;
+            if (index >= bytesRead || buffer[index] == '\r' || buffer[index] == '\n') break;
+            if (buffer[index] == '#') { while (index < bytesRead && buffer[index] != '\n') ++index; break; }
+            while (index < bytesRead) {
+                char character = buffer[index];
+                int digit = (character >= '0' && character <= '9') ? character - '0'
+                      : (character >= 'a' && character <= 'f') ? character - 'a' + 10
+                      : (character >= 'A' && character <= 'F') ? character - 'A' + 10 : -1;
+                if (digit < 0) break;
+                if (column < 5) values[column] = (values[column] << 4) | (DWORD)digit;
+                ++digits; ++index;
             }
-            if (digits) ++col;
-            else ++i;                              /* junk byte: skip, never spin */
+            if (digits) ++column;
+            else ++index;                              /* junk byte: skip, never spin */
         }
-        if (col >= 1) {
-            g_BreakpointLinear[g_BreakpointCount] = v[0];
-            g_BreakpointDump[g_BreakpointCount] = (col >= 2) ? v[1] : 0;
-            g_BreakpointSkip[g_BreakpointCount] = (col >= 3) ? v[2] : 0;
-            g_BreakpointMode[g_BreakpointCount] = (col >= 4) ? v[3] : 0;
-            g_BreakpointReport[g_BreakpointCount]  = (col >= 5) ? v[4] : 0;
+        if (column >= 1) {
+            g_BreakpointLinear[g_BreakpointCount] = values[0];
+            g_BreakpointDump[g_BreakpointCount] = (column >= 2) ? values[1] : 0;
+            g_BreakpointSkip[g_BreakpointCount] = (column >= 3) ? values[2] : 0;
+            g_BreakpointMode[g_BreakpointCount] = (column >= 4) ? values[3] : 0;
+            g_BreakpointReport[g_BreakpointCount]  = (column >= 5) ? values[4] : 0;
             ++g_BreakpointCount;
         }
     }
-    q = LogPut(q, "DPMI-BP: pmbp.txt read 0x"); q = LogHex(q, rd);
-    q = LogPut(q, " bytes, loaded "); q = LogHex(q, (DWORD)(g_BreakpointCount - n0));
-    q = LogPut(q, " entries (total "); q = LogHex(q, (DWORD)g_BreakpointCount); q = LogPut(q, ")");
-    if (rd >= sizeof buf - 1)
-        q = LogPut(q, "  !! FILE TRUNCATED AT THE BUFFER -- ENTRIES WERE DROPPED");
-    if (g_BreakpointCount >= DPMI_BP_MAX && i < rd)
-        q = LogPut(q, "  !! DPMI_BP_MAX REACHED -- REMAINING LINES IGNORED");
-    q = LogPut(q, "\r\n");
-    LogAppend(LOG_PATH, lb, q); SerialOut(lb, q);
+    cursor = LogPut(cursor, "DPMI-BP: pmbp.txt read 0x"); cursor = LogHex(cursor, bytesRead);
+    cursor = LogPut(cursor, " bytes, loaded "); cursor = LogHex(cursor, (DWORD)(g_BreakpointCount - countBefore));
+    cursor = LogPut(cursor, " entries (total "); cursor = LogHex(cursor, (DWORD)g_BreakpointCount); cursor = LogPut(cursor, ")");
+    if (bytesRead >= sizeof buffer - 1)
+        cursor = LogPut(cursor, "  !! FILE TRUNCATED AT THE BUFFER -- ENTRIES WERE DROPPED");
+    if (g_BreakpointCount >= DPMI_BP_MAX && index < bytesRead)
+        cursor = LogPut(cursor, "  !! DPMI_BP_MAX REACHED -- REMAINING LINES IGNORED");
+    cursor = LogPut(cursor, "\r\n");
+    LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
 }
 
 /* Turn `seg1:0xNNNN` breakpoints into linear ones, now that we know where krnl386 put
@@ -20083,7 +20083,7 @@ static void dpmi_bp_load(void)
      segment 2, `0x32` segment 3, and so on. */
 /* ── ★★★ AND THE SAME FOR AN EXTENDED DOS GUEST: MODE BIT 8 = "OFFSET FROM THE LE
      CODE-OBJECT LOAD BASE". (session 59) ────────────────────────────────────────────
-     The argument is the one dpmi_bp_resolve_seg already makes, arriving from the other
+     The argument is the one DpmiBreakpointResolveSegment already makes, arriving from the other
      direction. krnl386's segment copies move every run; so does a DOS/4GW client's
      image -- ZAR's LE code object came up at 0x03f70000 on one run and 0x03b70000 on
      the next. Every interesting address in a #23 investigation is `obj1+0xNNNN` read
@@ -20100,70 +20100,70 @@ static void dpmi_bp_load(void)
      one guest is WOW, the other is an extended DOS program -- but they are checked
      independently so a nonsense combination resolves once and stops, rather than
      resolving twice into a wild address. */
-static void dpmi_bp_resolve_codebase(DWORD base)
+static void DpmiBreakpointResolveCodeBase(DWORD base)
 {
-    char lb[200], *q;
-    int k;
-    for (k = 0; k < g_BreakpointCount; ++k) {
-        DWORD off;
-        if (!(g_BreakpointMode[k] & 8)) continue;
-        off = g_BreakpointLinear[k];
-        g_BreakpointLinear[k]   = base + off;
-        g_BreakpointMode[k] &= ~8u;
-        q = lb;
-        q = LogPut(q, "DPMI-BP: codebase+0x"); q = LogHex(q, off);
-        q = LogPut(q, " -> linear 0x");        q = LogHex(q, g_BreakpointLinear[k]);
-        q = LogPut(q, " (the client's LE code object is at 0x"); q = LogHex(q, base);
-        q = LogPut(q, ")\r\n");
-        LogAppend(LOG_PATH, lb, q); SerialOut(lb, q);
+    char lineBuffer[200], *cursor;
+    int index;
+    for (index = 0; index < g_BreakpointCount; ++index) {
+        DWORD offset;
+        if (!(g_BreakpointMode[index] & 8)) continue;
+        offset = g_BreakpointLinear[index];
+        g_BreakpointLinear[index]   = base + offset;
+        g_BreakpointMode[index] &= ~8u;
+        cursor = lineBuffer;
+        cursor = LogPut(cursor, "DPMI-BP: codebase+0x"); cursor = LogHex(cursor, offset);
+        cursor = LogPut(cursor, " -> linear 0x");        cursor = LogHex(cursor, g_BreakpointLinear[index]);
+        cursor = LogPut(cursor, " (the client's LE code object is at 0x"); cursor = LogHex(cursor, base);
+        cursor = LogPut(cursor, ")\r\n");
+        LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
     }
 }
 
-static void dpmi_bp_resolve_seg(unsigned segno, DWORD base)
+static void DpmiBreakpointResolveSegment(unsigned segno, DWORD base)
 {
-    char lb[200], *q;
-    int k;
-    for (k = 0; k < g_BreakpointCount; ++k) {
-        DWORD off;
+    char lineBuffer[200], *cursor;
+    int index;
+    for (index = 0; index < g_BreakpointCount; ++index) {
+        DWORD offset;
         unsigned want;
-        if (!(g_BreakpointMode[k] & 2)) continue;
-        want = (g_BreakpointMode[k] >> 4) & 0xF;
+        if (!(g_BreakpointMode[index] & 2)) continue;
+        want = (g_BreakpointMode[index] >> 4) & 0xF;
         if (!want) want = 1;                       /* bare `2` is segment 1, as before */
         if (want != segno) continue;
-        off = g_BreakpointLinear[k] & 0xFFFF;
-        g_BreakpointLinear[k]   = base + off;
-        g_BreakpointMode[k] &= ~2u;
-        q = lb;
-        q = LogPut(q, "DPMI-BP: seg");    q = LogHex(q, (DWORD)segno);
-        q = LogPut(q, ":0x");             q = LogHex(q, off);
-        q = LogPut(q, " -> linear 0x");   q = LogHex(q, g_BreakpointLinear[k]);
-        q = LogPut(q, " (krnl386's PM copy of segment "); q = LogHex(q, (DWORD)segno);
-        q = LogPut(q, " is at 0x"); q = LogHex(q, base);
-        q = LogPut(q, ")\r\n");
-        LogAppend(LOG_PATH, lb, q);
+        offset = g_BreakpointLinear[index] & 0xFFFF;
+        g_BreakpointLinear[index]   = base + offset;
+        g_BreakpointMode[index] &= ~2u;
+        cursor = lineBuffer;
+        cursor = LogPut(cursor, "DPMI-BP: seg");    cursor = LogHex(cursor, (DWORD)segno);
+        cursor = LogPut(cursor, ":0x");             cursor = LogHex(cursor, offset);
+        cursor = LogPut(cursor, " -> linear 0x");   cursor = LogHex(cursor, g_BreakpointLinear[index]);
+        cursor = LogPut(cursor, " (krnl386's PM copy of segment "); cursor = LogHex(cursor, (DWORD)segno);
+        cursor = LogPut(cursor, " is at 0x"); cursor = LogHex(cursor, base);
+        cursor = LogPut(cursor, ")\r\n");
+        LogAppend(LOG_PATH, lineBuffer, cursor);
     }
 }
 
 /* Arm any requested breakpoint whose address is now present in guest memory. Called
    after the up-front INT scan and after every code-region patch, because a module the
    client loads at runtime does not exist to be patched before then. */
-static void dpmi_bp_arm(void)
+static void DpmiBreakpointArm(void)
 {
-    int k;
-    for (k = 0; k < g_BreakpointCount; ++k) {
-        DWORD lin = g_BreakpointLinear[k];
-        volatile BYTE *b;
+    int index;
+    for (index = 0; index < g_BreakpointCount; ++index) {
+        DWORD linear = g_BreakpointLinear[index];
+        volatile BYTE *bytes;
         /* 320, not 128: the REFUSED-one-byte-instruction message below is ~180
            bytes and overflowed the old buffer, corrupting this function's stack and
            taking the host down with an access violation before the guest ever ran.
            The fault dump named it outright -- EDX held 0x33746e69, the ASCII "int3"
            from that very string. zput/zhex are caller-sized and check nothing, so
            the buffer has to be big enough for the LONGEST line, not the usual one. */
-        char lb[320], *q = lb;
-        if (lin < 0x600) continue;
+        char lineBuffer[320], *cursor = lineBuffer;
+        if (linear < 0x600) continue;
         /* ── ⚠★ AN UNRESOLVED SEGMENT-RELATIVE ADDRESS IS NOT A LINEAR ADDRESS. ────
              Mode bit 1 means "<addr> is an OFFSET into krnl386's PM copy of a
-             segment", and dpmi_bp_resolve_seg() rewrites it to a linear address when
+             segment", and DpmiBreakpointResolveSegment() rewrites it to a linear address when
              that selector is committed. Until then the field holds a bare offset like
              0x0e11 -- and this loop was arming it AS a linear address, planting BOPs
              into CONVENTIONAL MEMORY: our own DOS kernel and krnl386's V86 image.
@@ -20173,10 +20173,10 @@ static void dpmi_bp_arm(void)
              only ONE such breakpoint was ever used, because a single stray BOP happened
              to land where `b[0]==0 && b[1]==0` skipped it.
            ⇒ Not armed until resolved. An address we cannot place yet is not an address. */
-        if (g_BreakpointMode[k] & 2) continue;
+        if (g_BreakpointMode[index] & 2) continue;
         /* ── ★★ NEVER RE-PLANT A BREAKPOINT THE GUEST IS STANDING ON. ──────────────
              A hit removes the BOP and, for a repeating breakpoint, sets g_BreakpointPending;
-             dpmi_bp_rearm_pending() then clears that flag only once the guest's EIP has
+             DpmiBreakpointRearmPending() then clears that flag only once the guest's EIP has
              moved off the site, and re-arms. That protocol is correct -- but it lived
              entirely in the CALLER, so this function would happily re-plant the BOP
              under a guest that has not executed the instruction yet.
@@ -20185,15 +20185,15 @@ static void dpmi_bp_arm(void)
              while the memory still reads 00 00) hit one krnl386 site **340,808 times** with
              byte-identical registers and one millisecond on the clock, and wrote a
              **268 MB** log. The guest was not looping; the debugger was holding it in
-             place. Honouring `pending` here makes dpmi_bp_arm() safe to call from
+             place. Honouring `pending` here makes DpmiBreakpointArm() safe to call from
              anywhere, which is what the late-loading case needs. */
-        if (g_BreakpointPending[k]) continue;
-        if (g_BreakpointDone[k]) continue;              /* one-shot, already fired -- see g_BreakpointDone */
+        if (g_BreakpointPending[index]) continue;
+        if (g_BreakpointDone[index]) continue;              /* one-shot, already fired -- see g_BreakpointDone */
         /* And a hard ceiling, because the failure above cost a run and a quarter of a
            gigabyte before anything noticed. A breakpoint that has fired this often is
            not answering a question any more. */
-        if (g_BreakpointArms[k] > DPMI_BP_ARM_MAX) continue;
-        b = (volatile BYTE *)(ULONG_PTR)lin;
+        if (g_BreakpointArms[index] > DPMI_BP_ARM_MAX) continue;
+        bytes = (volatile BYTE *)(ULONG_PTR)linear;
         /* ► THE TARGET NEED NOT EXIST YET, and reading it blindly faults in OUR OWN
              process. A breakpoint is usually placed on a module the client has not
              loaded at the time the list is read -- extended-memory addresses are not
@@ -20201,7 +20201,7 @@ static void dpmi_bp_arm(void)
              repeatedly and must tolerate an address that is currently nothing. Same
              lesson as IsBadReadPtr: an instrument that faults kills the run it exists
              to observe. */
-        if (!HostReadable((const void *)(ULONG_PTR)lin, 2)) continue;
+        if (!HostReadable((const void *)(ULONG_PTR)linear, 2)) continue;
         /* ► RE-ARM IF THE CLIENT OVERWROTE US, and skip empty memory entirely. The
              first version armed at mode-switch time into memory the client had not
              loaded yet -- every breakpoint reported "was 00 00", the module was then
@@ -20212,9 +20212,9 @@ static void dpmi_bp_arm(void)
              clobbered and must be re-armed against the NEW contents; and a site that
              is still 00 00 holds nothing to break on, so leave it unarmed and try
              again after the next region is loaded. */
-        if (g_BreakpointArmed[k]) {
-            if (g_BreakpointMode[k] == 1 ? (b[0] == 0xCC)
-                                  : (b[0] == 0xC4 && b[1] == 0xC4)) continue;  /* still planted */
+        if (g_BreakpointArmed[index]) {
+            if (g_BreakpointMode[index] == 1 ? (bytes[0] == 0xCC)
+                                  : (bytes[0] == 0xC4 && bytes[1] == 0xC4)) continue;  /* still planted */
             /* ── ⚠⚠ A HALF-CLOBBERED BOP MUST NOT BE RE-CAPTURED AS THE ORIGINAL. ───
                  Falling straight through to the re-arm below saves whatever is at the
                  site RIGHT NOW as `the guest's instruction` -- and when only the SECOND
@@ -20234,21 +20234,21 @@ static void dpmi_bp_arm(void)
                  it: byte 0 is still ours, therefore the byte 0 we saved first is still
                  the truth; only byte 1's new value is news. Update that half, re-plant
                  ours, and leave the entry armed. */
-            if (g_BreakpointMode[k] != 1 && b[0] == 0xC4 && g_BreakpointOriginal[k][0] != 0xC4) {
-                g_BreakpointOriginal[k][1] = b[1];                    /* the guest's new byte 1 */
-                b[1] = 0xC4;                               /* re-plant the lost half */
-                q = LogPut(q, "DPMI-BP: 0x"); q = LogHex(q, lin);
-                q = LogPut(q, " half-clobbered (a fixup rewrote the byte under our BOP);"
+            if (g_BreakpointMode[index] != 1 && bytes[0] == 0xC4 && g_BreakpointOriginal[index][0] != 0xC4) {
+                g_BreakpointOriginal[index][1] = bytes[1];                    /* the guest's new byte 1 */
+                bytes[1] = 0xC4;                               /* re-plant the lost half */
+                cursor = LogPut(cursor, "DPMI-BP: 0x"); cursor = LogHex(cursor, linear);
+                cursor = LogPut(cursor, " half-clobbered (a fixup rewrote the byte under our BOP);"
                             " byte 1 re-planted, saved original now ");
-                q = LogDump(q, (const BYTE *)g_BreakpointOriginal[k], 2);
-                q = LogPut(q, "\r\n");
-                LogAppend(LOG_PATH, lb, q); SerialOut(lb, q);
+                cursor = LogDump(cursor, (const BYTE *)g_BreakpointOriginal[index], 2);
+                cursor = LogPut(cursor, "\r\n");
+                LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
                 continue;
             }
-            g_BreakpointArmed[k] = 0; PatchMapClear(lin);            /* clobbered -> re-arm below */
+            g_BreakpointArmed[index] = 0; PatchMapClear(linear);            /* clobbered -> re-arm below */
         }
-        if (b[0] == 0x00 && b[1] == 0x00) continue;        /* nothing loaded here yet */
-        if (PatchMapGet(lin)) continue;              /* an INT site already lives here */
+        if (bytes[0] == 0x00 && bytes[1] == 0x00) continue;        /* nothing loaded here yet */
+        if (PatchMapGet(linear)) continue;              /* an INT site already lives here */
         /* ► A BREAKPOINT HAS A TWO-BYTE FOOTPRINT, and that is not a detail. It
              displaces the byte AFTER the one you named, so a breakpoint on a ONE-BYTE
              instruction eats its neighbour. Session 17 put one on a `c3` (ret) at
@@ -20269,77 +20269,77 @@ static void dpmi_bp_arm(void)
              of the step counter to notice that the debugger was the bug.
              Use mode 1 (a one-byte 0xCC) for a one-byte instruction, or move the
              breakpoint. Either way the guest is no longer silently corrupted. */
-        { int j, clash = 0;
-          for (j = 0; j < g_BreakpointCount; ++j)
-              if (j != k && g_BreakpointArmed[j] &&
-                  (g_BreakpointLinear[j] == lin + 1 || g_BreakpointLinear[j] + 1 == lin)) clash = 1;
+        { int other, clash = 0;
+          for (other = 0; other < g_BreakpointCount; ++other)
+              if (other != index && g_BreakpointArmed[other] &&
+                  (g_BreakpointLinear[other] == linear + 1 || g_BreakpointLinear[other] + 1 == linear)) clash = 1;
           if (clash) {
-              if (!g_BreakpointRefused[k]) {
-                  g_BreakpointRefused[k] = 1;
-                  q = LogPut(q, "DPMI-BP: REFUSED 0x"); q = LogHex(q, lin);
-                  q = LogPut(q, " -- its 2-byte footprint overlaps another breakpoint"
+              if (!g_BreakpointRefused[index]) {
+                  g_BreakpointRefused[index] = 1;
+                  cursor = LogPut(cursor, "DPMI-BP: REFUSED 0x"); cursor = LogHex(cursor, linear);
+                  cursor = LogPut(cursor, " -- its 2-byte footprint overlaps another breakpoint"
                               " (said once; re-checked every PM entry)\r\n");
-                  LogAppend(LOG_PATH, lb, q); SerialOut(lb, q);
+                  LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
               }
               continue;
           } }
-        if (g_BreakpointMode[k] != 1 && HostReadable((const void *)(ULONG_PTR)lin, 16)) {
-            unsigned ilen = X86InstructionLength((const unsigned char *)(ULONG_PTR)lin, 0, 16,
+        if (g_BreakpointMode[index] != 1 && HostReadable((const void *)(ULONG_PTR)linear, 16)) {
+            unsigned ilen = X86InstructionLength((const unsigned char *)(ULONG_PTR)linear, 0, 16,
                                          g_DpmiIsClient32);
             if (ilen == 1) {
-                if (!g_BreakpointRefused[k]) {
-                    g_BreakpointRefused[k] = 1;
-                    q = LogPut(q, "DPMI-BP: REFUSED 0x"); q = LogHex(q, lin);
-                    q = LogPut(q, " -- ONE-BYTE instruction (");
-                    q = LogDump(q, (const BYTE *)(ULONG_PTR)lin, 1);
-                    q = LogPut(q, "); a 2-byte BOP would eat the NEXT instruction and "
+                if (!g_BreakpointRefused[index]) {
+                    g_BreakpointRefused[index] = 1;
+                    cursor = LogPut(cursor, "DPMI-BP: REFUSED 0x"); cursor = LogHex(cursor, linear);
+                    cursor = LogPut(cursor, " -- ONE-BYTE instruction (");
+                    cursor = LogDump(cursor, (const BYTE *)(ULONG_PTR)linear, 1);
+                    cursor = LogPut(cursor, "); a 2-byte BOP would eat the NEXT instruction and "
                                 "silently change what the guest does. Use mode 1 (int3) "
                                 "or move it. (said once; re-checked every PM entry)\r\n");
-                    LogAppend(LOG_PATH, lb, q); SerialOut(lb, q);
+                    LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
                 }
                 continue;
             }
         }
-        g_BreakpointOriginal[k][0] = b[0]; g_BreakpointOriginal[k][1] = b[1];
-        ++g_BreakpointArms[k];
-        if (g_BreakpointMode[k] == 1) {
-            b[0] = 0xCC;                      /* INT3: one byte, fits over CLI/STI */
+        g_BreakpointOriginal[index][0] = bytes[0]; g_BreakpointOriginal[index][1] = bytes[1];
+        ++g_BreakpointArms[index];
+        if (g_BreakpointMode[index] == 1) {
+            bytes[0] = 0xCC;                      /* INT3: one byte, fits over CLI/STI */
         } else {
-            b[0] = 0xC4; b[1] = 0xC4;
-            PatchMapSet(lin, DPMI_BP_VEC);       /* only a BOP is resolvable by vector  */
+            bytes[0] = 0xC4; bytes[1] = 0xC4;
+            PatchMapSet(linear, DPMI_BP_VEC);       /* only a BOP is resolvable by vector  */
         }
-        g_BreakpointArmed[k] = 1; g_BreakpointPending[k] = 0;
-        q = LogPut(q, "DPMI-BP: armed at linear 0x"); q = LogHex(q, lin);
-        q = LogPut(q, "..0x"); q = LogHex(q, lin + 1);       /* say the 2-byte footprint */
-        q = LogPut(q, " (displaced "); q = LogDump(q, (const BYTE *)g_BreakpointOriginal[k], 2);
-        q = LogPut(q, ")\r\n");
-        LogAppend(LOG_PATH, lb, q); SerialOut(lb, q);
+        g_BreakpointArmed[index] = 1; g_BreakpointPending[index] = 0;
+        cursor = LogPut(cursor, "DPMI-BP: armed at linear 0x"); cursor = LogHex(cursor, linear);
+        cursor = LogPut(cursor, "..0x"); cursor = LogHex(cursor, linear + 1);       /* say the 2-byte footprint */
+        cursor = LogPut(cursor, " (displaced "); cursor = LogDump(cursor, (const BYTE *)g_BreakpointOriginal[index], 2);
+        cursor = LogPut(cursor, ")\r\n");
+        LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
     }
 }
 
 /* Re-plant any breakpoint that was stepped over, once the guest is no longer standing
    on its footprint. Called at every PM event, which is the first safe moment. */
-static void dpmi_bp_rearm_pending(DWORD cur_lin)
+static void DpmiBreakpointRearmPending(DWORD currentLinear)
 {
-    int k, any = 0;
-    for (k = 0; k < g_BreakpointCount; ++k)
-        if (g_BreakpointPending[k] && cur_lin != g_BreakpointLinear[k] && cur_lin != g_BreakpointLinear[k] + 1) {
-            g_BreakpointPending[k] = 0; any = 1;
+    int index, any = 0;
+    for (index = 0; index < g_BreakpointCount; ++index)
+        if (g_BreakpointPending[index] && currentLinear != g_BreakpointLinear[index] && currentLinear != g_BreakpointLinear[index] + 1) {
+            g_BreakpointPending[index] = 0; any = 1;
         }
-    if (any) dpmi_bp_arm();
+    if (any) DpmiBreakpointArm();
 }
 
 /* Disarm the breakpoint at `lin` (restore its bytes). Returns its index, or -1. */
-static int dpmi_bp_disarm(DWORD lin)
+static int DpmiBreakpointDisarm(DWORD linear)
 {
-    int k;
-    for (k = 0; k < g_BreakpointCount; ++k)
-        if (g_BreakpointArmed[k] && g_BreakpointLinear[k] == lin) {
-            volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)lin;
-            b[0] = g_BreakpointOriginal[k][0];
-            if (g_BreakpointMode[k] != 1) b[1] = g_BreakpointOriginal[k][1];
-            PatchMapClear(lin); g_BreakpointArmed[k] = 0;
-            return k;
+    int index;
+    for (index = 0; index < g_BreakpointCount; ++index)
+        if (g_BreakpointArmed[index] && g_BreakpointLinear[index] == linear) {
+            volatile BYTE *bytes = (volatile BYTE *)(ULONG_PTR)linear;
+            bytes[0] = g_BreakpointOriginal[index][0];
+            if (g_BreakpointMode[index] != 1) bytes[1] = g_BreakpointOriginal[index][1];
+            PatchMapClear(linear); g_BreakpointArmed[index] = 0;
+            return index;
         }
     return -1;
 }
@@ -20366,26 +20366,26 @@ static int dpmi_bp_disarm(DWORD lin)
    there, the guest has reused that memory, so the site is stale -- drop it and never
    touch those bytes again. That is strictly better than trying to predict which regions
    the guest will reuse, which is not knowable. */
-static void dpmi_unpatch(void)
+static void DpmiUnpatch(void)
 {
-    DWORD sl;
-    for (sl = 0; sl < DPMI_PMAP_SLOTS; ++sl) {
-        DWORD a = g_PatchMapLinear[sl]; BYTE v = g_PatchMapVector[sl];
-        if (!a || !v || v == DPMI_BP_VEC) continue;           /* a BP is not an INT site */
-        { volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)a;
-          if (b[0] == 0xC4 && b[1] == 0xC4) { b[0] = 0xCD; b[1] = v; }
-          else g_PatchMapVector[sl] = 0; }                          /* stale: guest reused it */
+    DWORD slot;
+    for (slot = 0; slot < DPMI_PMAP_SLOTS; ++slot) {
+        DWORD address = g_PatchMapLinear[slot]; BYTE vector = g_PatchMapVector[slot];
+        if (!address || !vector || vector == DPMI_BP_VEC) continue;           /* a BP is not an INT site */
+        { volatile BYTE *bytes = (volatile BYTE *)(ULONG_PTR)address;
+          if (bytes[0] == 0xC4 && bytes[1] == 0xC4) { bytes[0] = 0xCD; bytes[1] = vector; }
+          else g_PatchMapVector[slot] = 0; }                          /* stale: guest reused it */
     }
 }
-static void dpmi_repatch(void)
+static void DpmiRepatch(void)
 {
-    DWORD sl;
-    for (sl = 0; sl < DPMI_PMAP_SLOTS; ++sl) {
-        DWORD a = g_PatchMapLinear[sl]; BYTE v = g_PatchMapVector[sl];
-        if (!a || !v || v == DPMI_BP_VEC) continue;           /* a BP stays planted */
-        { volatile BYTE *b = (volatile BYTE *)(ULONG_PTR)a;
-          if (b[0] == 0xCD && b[1] == v) { b[0] = 0xC4; b[1] = 0xC4; }
-          else g_PatchMapVector[sl] = 0; }                          /* stale: guest reused it */
+    DWORD slot;
+    for (slot = 0; slot < DPMI_PMAP_SLOTS; ++slot) {
+        DWORD address = g_PatchMapLinear[slot]; BYTE vector = g_PatchMapVector[slot];
+        if (!address || !vector || vector == DPMI_BP_VEC) continue;           /* a BP stays planted */
+        { volatile BYTE *bytes = (volatile BYTE *)(ULONG_PTR)address;
+          if (bytes[0] == 0xCD && bytes[1] == vector) { bytes[0] = 0xC4; bytes[1] = 0xC4; }
+          else g_PatchMapVector[slot] = 0; }                          /* stale: guest reused it */
     }
 }
 
@@ -20405,7 +20405,7 @@ static void dpmi_repatch(void)
      project has paid for "frame width and descriptor width are the same question" -- see
      the initial-selector and PM-return-catcher notes. The client's width is not known when
      the table is built, so sync it at use. */
-static void dpmi_sync_defsel_width(void)
+static void DpmiSyncDefaultSelectorWidth(void)
 {
     BYTE want;
     if (g_PmDefaultIndex < 0) return;
@@ -20429,14 +20429,14 @@ static void dpmi_sync_defsel_width(void)
      implementation. Absent file = the sentinel, unchanged, and no cost. */
 #define WOW32RET_PATH CFG_("wow32ret.txt")
 #define WOW32RET_MAX 16
-static WORD  g_w32ret_id[WOW32RET_MAX];
-static DWORD g_w32ret_val[WOW32RET_MAX];
-static int   g_w32ret_n = 0;
+static WORD  g_Wow32ReturnId[WOW32RET_MAX];
+static DWORD g_Wow32ReturnValue[WOW32RET_MAX];
+static int   g_Wow32ReturnCount = 0;
 
-static DWORD wow32_ret_override(WORD id)
+static DWORD Wow32ReturnOverride(WORD thunkId)
 {
-    int k;
-    for (k = 0; k < g_w32ret_n; ++k) if (g_w32ret_id[k] == id) return g_w32ret_val[k];
+    int index;
+    for (index = 0; index < g_Wow32ReturnCount; ++index) if (g_Wow32ReturnId[index] == thunkId) return g_Wow32ReturnValue[index];
     return (DWORD)WOW32_UNIMPL_RET;
 }
 
@@ -20454,126 +20454,126 @@ static DWORD wow32_ret_override(WORD id)
    Format: `<hex id> <hex mode>`, data lines first, `#` comments below. */
 #define WOWMODE_PATH CFG_("wowmode.txt")
 #define WOWMODE_MAX 8
-static WORD g_w32mode_id[WOWMODE_MAX];
-static WORD g_w32mode_val[WOWMODE_MAX];
-static int  g_w32mode_n = 0;
+static WORD g_Wow32ModeId[WOWMODE_MAX];
+static WORD g_Wow32ModeValue[WOWMODE_MAX];
+static int  g_Wow32ModeCount = 0;
 
 /* -1 = no override for this id (0 is a legal mode, so it cannot be the sentinel). */
-static int wow32_mode_override(WORD id)
+static int Wow32ModeOverride(WORD thunkId)
 {
-    int k;
-    for (k = 0; k < g_w32mode_n; ++k)
-        if (g_w32mode_id[k] == id) return (int)g_w32mode_val[k];
+    int index;
+    for (index = 0; index < g_Wow32ModeCount; ++index)
+        if (g_Wow32ModeId[index] == thunkId) return (int)g_Wow32ModeValue[index];
     return -1;
 }
 
-static void wow32_mode_load(void)
+static void Wow32ModeLoad(void)
 {
-    HANDLE h = CreateFileA(WOWMODE_PATH, GENERIC_READ,
+    HANDLE handle = CreateFileA(WOWMODE_PATH, GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
-    char buf[8192]; DWORD rd = 0, i = 0;
-    char lb[256], *q = lb;
-    if (h == INVALID_HANDLE_VALUE) return;
-    ReadFile(h, buf, sizeof buf - 1, &rd, NULL);
-    CloseHandle(h);
-    if (rd >= sizeof buf - 1) {
-        q = LogPut(q, "WOWMODE: !! wowmode.txt TRUNCATED AT THE BUFFER -- LINES DROPPED\r\n");
-        LogAppend(LOG_PATH, lb, q); SerialOut(lb, q); q = lb;
+    char buffer[8192]; DWORD bytesRead = 0, index = 0;
+    char lineBuffer[256], *cursor = lineBuffer;
+    if (handle == INVALID_HANDLE_VALUE) return;
+    ReadFile(handle, buffer, sizeof buffer - 1, &bytesRead, NULL);
+    CloseHandle(handle);
+    if (bytesRead >= sizeof buffer - 1) {
+        cursor = LogPut(cursor, "WOWMODE: !! wowmode.txt TRUNCATED AT THE BUFFER -- LINES DROPPED\r\n");
+        LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor); cursor = lineBuffer;
     }
-    while (i < rd && g_w32mode_n < WOWMODE_MAX) {
-        DWORD v[2] = { 0, 0 }; int col = 0;
-        while (i < rd && (buf[i] == '\r' || buf[i] == '\n')) ++i;
-        if (i >= rd) break;
-        if (buf[i] == '#') { while (i < rd && buf[i] != '\n') ++i; continue; }
-        while (i < rd && buf[i] != '\r' && buf[i] != '\n' && col < 2) {
-            int dg = 0;
-            while (i < rd && (buf[i] == ' ' || buf[i] == '\t')) ++i;
-            if (i >= rd || buf[i] == '\r' || buf[i] == '\n' || buf[i] == '#') break;
-            while (i < rd) {
-                char c = buf[i];
-                int t = (c >= '0' && c <= '9') ? c - '0'
-                      : (c >= 'a' && c <= 'f') ? c - 'a' + 10
-                      : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
-                if (t < 0) break;
-                v[col] = (v[col] << 4) | (DWORD)t; ++dg; ++i;
+    while (index < bytesRead && g_Wow32ModeCount < WOWMODE_MAX) {
+        DWORD values[2] = { 0, 0 }; int column = 0;
+        while (index < bytesRead && (buffer[index] == '\r' || buffer[index] == '\n')) ++index;
+        if (index >= bytesRead) break;
+        if (buffer[index] == '#') { while (index < bytesRead && buffer[index] != '\n') ++index; continue; }
+        while (index < bytesRead && buffer[index] != '\r' && buffer[index] != '\n' && column < 2) {
+            int digits = 0;
+            while (index < bytesRead && (buffer[index] == ' ' || buffer[index] == '\t')) ++index;
+            if (index >= bytesRead || buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == '#') break;
+            while (index < bytesRead) {
+                char character = buffer[index];
+                int digit = (character >= '0' && character <= '9') ? character - '0'
+                      : (character >= 'a' && character <= 'f') ? character - 'a' + 10
+                      : (character >= 'A' && character <= 'F') ? character - 'A' + 10 : -1;
+                if (digit < 0) break;
+                values[column] = (values[column] << 4) | (DWORD)digit; ++digits; ++index;
             }
-            if (dg) ++col; else ++i;
+            if (digits) ++column; else ++index;
         }
-        while (i < rd && buf[i] != '\n') ++i;
-        if (col >= 2) {
-            g_w32mode_id[g_w32mode_n]  = (WORD)v[0];
-            g_w32mode_val[g_w32mode_n] = (WORD)v[1];
-            ++g_w32mode_n;
+        while (index < bytesRead && buffer[index] != '\n') ++index;
+        if (column >= 2) {
+            g_Wow32ModeId[g_Wow32ModeCount]  = (WORD)values[0];
+            g_Wow32ModeValue[g_Wow32ModeCount] = (WORD)values[1];
+            ++g_Wow32ModeCount;
         }
     }
-    if (g_w32mode_n) {
-        int k;
-        q = LogPut(q, "WOWMODE: ** EXPERIMENT ** returning");
-        for (k = 0; k < g_w32mode_n; ++k) {
-            q = LogPut(q, " 0x"); q = LogHexByte(q, (BYTE)g_w32mode_id[k]);
-            q = LogPut(q, " through epilogue mode "); q = LogHex(q, g_w32mode_val[k]);
+    if (g_Wow32ModeCount) {
+        int entry;
+        cursor = LogPut(cursor, "WOWMODE: ** EXPERIMENT ** returning");
+        for (entry = 0; entry < g_Wow32ModeCount; ++entry) {
+            cursor = LogPut(cursor, " 0x"); cursor = LogHexByte(cursor, (BYTE)g_Wow32ModeId[entry]);
+            cursor = LogPut(cursor, " through epilogue mode "); cursor = LogHex(cursor, g_Wow32ModeValue[entry]);
         }
-        q = LogPut(q, "\r\n");
-        LogAppend(LOG_PATH, lb, q); SerialOut(lb, q);
+        cursor = LogPut(cursor, "\r\n");
+        LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
     }
 }
 
-static void wow32_ret_load(void)
+static void Wow32ReturnLoad(void)
 {
-    HANDLE h = CreateFileA(WOW32RET_PATH, GENERIC_READ,
+    HANDLE handle = CreateFileA(WOW32RET_PATH, GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
     /* ⚠⚠ 8 KB, AND SAY SO WHEN IT IS NOT ENOUGH. This was `char buf[1024]` for
          exactly as long as it took to write a file with a comment block explaining
          why the one data line matters -- 1375 bytes, data line last, silently
          truncated, and the run regressed to the stack overflow with NOTHING in the
-         log to say why. That is dpmi_bp_load's bug from earlier the same session,
+         log to say why. That is DpmiBreakpointLoad's bug from earlier the same session,
          reproduced in the loader written after fixing it. The rule is the same in
          both places and it is now enforced in both: read enough, and shout when the
          file was longer than the buffer. */
-    char buf[8192]; DWORD rd = 0, i = 0;
-    char lb[256], *q = lb;
-    if (h == INVALID_HANDLE_VALUE) return;
-    ReadFile(h, buf, sizeof buf - 1, &rd, NULL);
-    CloseHandle(h);
-    if (rd >= sizeof buf - 1) {
-        q = LogPut(q, "WOW32RET: !! wow32ret.txt TRUNCATED AT THE BUFFER -- LINES DROPPED\r\n");
-        LogAppend(LOG_PATH, lb, q); SerialOut(lb, q); q = lb;
+    char buffer[8192]; DWORD bytesRead = 0, index = 0;
+    char lineBuffer[256], *cursor = lineBuffer;
+    if (handle == INVALID_HANDLE_VALUE) return;
+    ReadFile(handle, buffer, sizeof buffer - 1, &bytesRead, NULL);
+    CloseHandle(handle);
+    if (bytesRead >= sizeof buffer - 1) {
+        cursor = LogPut(cursor, "WOW32RET: !! wow32ret.txt TRUNCATED AT THE BUFFER -- LINES DROPPED\r\n");
+        LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor); cursor = lineBuffer;
     }
-    while (i < rd && g_w32ret_n < WOW32RET_MAX) {
-        DWORD v[2] = { 0, 0 }; int col = 0;
-        while (i < rd && (buf[i] == '\r' || buf[i] == '\n')) ++i;
-        if (i >= rd) break;
-        if (buf[i] == '#') { while (i < rd && buf[i] != '\n') ++i; continue; }
-        while (i < rd && buf[i] != '\r' && buf[i] != '\n' && col < 2) {
-            int dg = 0;
-            while (i < rd && (buf[i] == ' ' || buf[i] == '\t')) ++i;
-            if (i >= rd || buf[i] == '\r' || buf[i] == '\n' || buf[i] == '#') break;
-            while (i < rd) {
-                char c = buf[i];
-                int t = (c >= '0' && c <= '9') ? c - '0'
-                      : (c >= 'a' && c <= 'f') ? c - 'a' + 10
-                      : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
-                if (t < 0) break;
-                v[col] = (v[col] << 4) | (DWORD)t; ++dg; ++i;
+    while (index < bytesRead && g_Wow32ReturnCount < WOW32RET_MAX) {
+        DWORD values[2] = { 0, 0 }; int column = 0;
+        while (index < bytesRead && (buffer[index] == '\r' || buffer[index] == '\n')) ++index;
+        if (index >= bytesRead) break;
+        if (buffer[index] == '#') { while (index < bytesRead && buffer[index] != '\n') ++index; continue; }
+        while (index < bytesRead && buffer[index] != '\r' && buffer[index] != '\n' && column < 2) {
+            int digits = 0;
+            while (index < bytesRead && (buffer[index] == ' ' || buffer[index] == '\t')) ++index;
+            if (index >= bytesRead || buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == '#') break;
+            while (index < bytesRead) {
+                char character = buffer[index];
+                int digit = (character >= '0' && character <= '9') ? character - '0'
+                      : (character >= 'a' && character <= 'f') ? character - 'a' + 10
+                      : (character >= 'A' && character <= 'F') ? character - 'A' + 10 : -1;
+                if (digit < 0) break;
+                values[column] = (values[column] << 4) | (DWORD)digit; ++digits; ++index;
             }
-            if (dg) ++col; else ++i;
+            if (digits) ++column; else ++index;
         }
-        while (i < rd && buf[i] != '\n') ++i;
-        if (col >= 2) {
-            g_w32ret_id[g_w32ret_n]  = (WORD)v[0];
-            g_w32ret_val[g_w32ret_n] = v[1];
-            ++g_w32ret_n;
+        while (index < bytesRead && buffer[index] != '\n') ++index;
+        if (column >= 2) {
+            g_Wow32ReturnId[g_Wow32ReturnCount]  = (WORD)values[0];
+            g_Wow32ReturnValue[g_Wow32ReturnCount] = values[1];
+            ++g_Wow32ReturnCount;
         }
     }
-    if (g_w32ret_n) {
-        int k;
-        q = LogPut(q, "WOW32RET: ** EXPERIMENT ** overriding");
-        for (k = 0; k < g_w32ret_n; ++k) {
-            q = LogPut(q, " 0x"); q = LogHexByte(q, (BYTE)g_w32ret_id[k]);
-            q = LogPut(q, "->0x"); q = LogHex(q, g_w32ret_val[k]);
+    if (g_Wow32ReturnCount) {
+        int entry;
+        cursor = LogPut(cursor, "WOW32RET: ** EXPERIMENT ** overriding");
+        for (entry = 0; entry < g_Wow32ReturnCount; ++entry) {
+            cursor = LogPut(cursor, " 0x"); cursor = LogHexByte(cursor, (BYTE)g_Wow32ReturnId[entry]);
+            cursor = LogPut(cursor, "->0x"); cursor = LogHex(cursor, g_Wow32ReturnValue[entry]);
         }
-        q = LogPut(q, "\r\n");
-        LogAppend(LOG_PATH, lb, q); SerialOut(lb, q);
+        cursor = LogPut(cursor, "\r\n");
+        LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
     }
 }
 
@@ -20586,62 +20586,62 @@ static void wow32_ret_load(void)
      reproduce the committed result exactly, so the switch is a file on the share
      and its absence costs nothing. */
 #define WOWSCHED_PATH CFG_("wowsched.txt")
-static int   g_wowsched_on = 0;
-static WORD  g_wow_dgsel   = 0;      /* krnl386's DGROUP selector, learned at a BOP */
+static int   g_WowSchedOn = 0;
+static WORD  g_WowDgroupSelector   = 0;      /* krnl386's DGROUP selector, learned at a BOP */
 /* s92 (#306): every task that is not running, parked (wowsched.h WOWSCHED_MAX). */
-static WOWSCHED_SLOT g_ws_slots[WOWSCHED_MAX];
-static int   g_ws_rr = 0;            /* round-robin cursor for the yields            */
-static int   g_ww_nested;            /* defined with the nested run (wow_call16_sync_ex) */
-static DWORD g_ws_switches = 0;
-static int ws_free(void)
+static WOWSCHED_SLOT g_WowSchedSlots[WOWSCHED_MAX];
+static int   g_WowSchedRoundRobin = 0;            /* round-robin cursor for the yields            */
+static int   g_WowWindowNested;            /* defined with the nested run (wow_call16_sync_ex) */
+static DWORD g_WowSchedSwitches = 0;
+static int WowSchedFree(void)
 {
-    int i;
-    for (i = 0; i < WOWSCHED_MAX; ++i) if (!g_ws_slots[i].IsUsed) return i;
+    int index;
+    for (index = 0; index < WOWSCHED_MAX; ++index) if (!g_WowSchedSlots[index].IsUsed) return index;
     return -1;
 }
 /* The next parked task other than `cur`, round robin; -1 if none. */
-static int ws_pick(WORD cur)
+static int WowSchedPick(WORD current)
 {
-    int i, k;
-    for (k = 1; k <= WOWSCHED_MAX; ++k) {
-        i = (g_ws_rr + k) % WOWSCHED_MAX;
-        if (g_ws_slots[i].IsUsed && g_ws_slots[i].Task != cur) { g_ws_rr = i; return i; }
+    int index, step;
+    for (step = 1; step <= WOWSCHED_MAX; ++step) {
+        index = (g_WowSchedRoundRobin + step) % WOWSCHED_MAX;
+        if (g_WowSchedSlots[index].IsUsed && g_WowSchedSlots[index].Task != current) { g_WowSchedRoundRobin = index; return index; }
     }
     return -1;
 }
 /* A task parked at its launch that has never run -- or, with `mid`, one parked
    mid-work by the launch-first yield below; -1 if none. */
-static int ws_fresh(WORD cur)
+static int WowSchedFresh(WORD current)
 {
-    int i;
-    for (i = 0; i < WOWSCHED_MAX; ++i)
-        if (g_ws_slots[i].IsUsed && g_ws_slots[i].IsFresh && g_ws_slots[i].Task != cur) return i;
+    int index;
+    for (index = 0; index < WOWSCHED_MAX; ++index)
+        if (g_WowSchedSlots[index].IsUsed && g_WowSchedSlots[index].IsFresh && g_WowSchedSlots[index].Task != current) return index;
     return -1;
 }
 /* A task that may take the CPU from one idling at callback depth `depth`: a fresh one
    only from the top (depth 0); a parent parked mid-work (F) only at the depth it left,
    so the host's callback frames stay last-in first-out across the swap. */
-static int ws_runnable(WORD cur, int depth)
+static int WowSchedRunnable(WORD current, int depth)
 {
-    int i;
-    for (i = 0; i < WOWSCHED_MAX; ++i)
-        if (g_ws_slots[i].IsUsed && g_ws_slots[i].Task != cur
-            && ((g_ws_slots[i].IsRunnable && g_ws_slots[i].CallbackDepth == depth)
-                || (g_ws_slots[i].IsFresh && depth == 0)
-                || (g_ws_slots[i].IsWaitingForMessage && WowMsgCountFor(g_ws_slots[i].Task)
-                    && (g_ws_slots[i].CallbackDepth == g_ws_slots[i].BaseDepth
-                        || g_ws_slots[i].CallbackDepth == depth)))) return i;
+    int index;
+    for (index = 0; index < WOWSCHED_MAX; ++index)
+        if (g_WowSchedSlots[index].IsUsed && g_WowSchedSlots[index].Task != current
+            && ((g_WowSchedSlots[index].IsRunnable && g_WowSchedSlots[index].CallbackDepth == depth)
+                || (g_WowSchedSlots[index].IsFresh && depth == 0)
+                || (g_WowSchedSlots[index].IsWaitingForMessage && WowMsgCountFor(g_WowSchedSlots[index].Task)
+                    && (g_WowSchedSlots[index].CallbackDepth == g_WowSchedSlots[index].BaseDepth
+                        || g_WowSchedSlots[index].CallbackDepth == depth)))) return index;
     return -1;
 }
 /* Parked holding no host callback frame: launched and never run, or idle in its own
    top-level GetMessage. Such a task is re-based at whatever depth resumes it. */
-static int ws_toplevel(const WOWSCHED_SLOT *s)
+static int WowSchedTopLevel(const WOWSCHED_SLOT *slot)
 {
-    return s->IsFresh || (s->IsWaitingForMessage && s->CallbackDepth == s->BaseDepth);
+    return slot->IsFresh || (slot->IsWaitingForMessage && slot->CallbackDepth == slot->BaseDepth);
 }
 /* s92 (#306): the task launched last and not yet run -- see "(F) LAUNCH-FIRST" -- and
    WOWEXEC (the first task resumed at (C)), whose launches keep the measured order. */
-static WORD g_ws_launch_child, g_ws_shell;
+static WORD g_WowSchedLaunchChild, g_WowSchedShell;
 
 /* krnl386's current-task word. 0xFFFF means "we do not know yet", which is NOT
    the same as 0 -- 0 is krnl386 saying "no task is current", and acting on the
@@ -20650,8 +20650,8 @@ static WORD wowsched_curtask(void)
 {
     DWORD b;
     const volatile BYTE *d;
-    if (!g_wow_dgsel) return 0xFFFF;
-    b = DpmiSelectorBase(g_wow_dgsel);
+    if (!g_WowDgroupSelector) return 0xFFFF;
+    b = DpmiSelectorBase(g_WowDgroupSelector);
     if (!b) return 0xFFFF;
     d = (const volatile BYTE *)(ULONG_PTR)b;
     return (WORD)(d[0x228] | (d[0x229] << 8));
@@ -20727,8 +20727,8 @@ static void wowsched_setcur(WORD task)
 {
     DWORD b;
     volatile BYTE *d;
-    if (!g_wow_dgsel) return;
-    b = DpmiSelectorBase(g_wow_dgsel);
+    if (!g_WowDgroupSelector) return;
+    b = DpmiSelectorBase(g_WowDgroupSelector);
     if (!b) return;
     d = (volatile BYTE *)(ULONG_PTR)b;
     d[0x228] = (BYTE)(task & 0xFF);
@@ -20752,7 +20752,7 @@ static int ws_retarget(WORD hwnd, WORD *ss, WORD *sp, DWORD *ssbase, WORD *prev)
     int i, n = 0;
     if (!owner || !cur || cur == 0xFFFF || owner == cur) return 0;
     for (i = 0; i < WOWSCHED_MAX; ++i)
-        if (g_ws_slots[i].IsUsed && g_ws_slots[i].Task == owner) c[n++] = g_ws_slots[i].Context;
+        if (g_WowSchedSlots[i].IsUsed && g_WowSchedSlots[i].Task == owner) c[n++] = g_WowSchedSlots[i].Context;
     for (i = g_WowCallDepth - 2; i >= 0; --i)         /* the newest frame is the one being built */
         if (g_WowCallFrames[i].EnteredTask == owner) c[n++] = g_WowCallFrames[i].Saved.Context;
     /* ⚠ THE DEEPEST ONE. Calls that bounce between two tasks leave the owner's
@@ -20841,7 +20841,7 @@ static void wowsched_load(void)
     char lb[192], *q = lb;
     if (h == INVALID_HANDLE_VALUE) return;
     CloseHandle(h);
-    g_wowsched_on = 1;
+    g_WowSchedOn = 1;
     q = LogPut(q, "WOWSCHED: ** ON ** -- Win16 tasks will be interleaved by the host "
                 "(0x74 saves the launch frame, WaitEvent hands the creator back "
                 "through epilogue mode 25, [0x228]==0 starts the parked task)\r\n");
@@ -20903,7 +20903,7 @@ static void dpmi_invoke_callback(DOS_MACHINE *m, volatile BYTE *tib, int slot)
     lp = LogPut(lp, ":0x"); lp = LogHex(lp, g_Callbacks[slot].PmOffset); lp = LogPut(lp, "\r\n");
     LogAppend(LOG_PATH, lb, lp); SerialOut(lb, lp); lp = lb;
     /* re-arm the BOP patch (the PM handler is protected-mode code), enter PM */
-    dpmi_repatch();
+    DpmiRepatch();
     *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(vMsw | MSW_PE_BIT);
     /* PM handler stack (data selector 0x17, scratch SP) with an IRET frame -> PM-return catcher.
        The IRET operand size follows the HANDLER's CS D-bit: a 32-bit PM handler pops a dword
@@ -20931,11 +20931,11 @@ static void dpmi_invoke_callback(DOS_MACHINE *m, volatile BYTE *tib, int slot)
         DWORD ev, eip, vec;
         DpmiArmFaultTrampoline(tib, 0);   /* GH #18: re-arm the PM-fault reflect (no-op on interp path) */
         DpmiEnterProtectedMode(tib);
-        ev = VDM_REG(tib, VTIB_EVENT); eip = dpmi_pm_eip(tib);
+        ev = VDM_REG(tib, VTIB_EVENT); eip = DpmiPmEip(tib);
         if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
             && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == g_PmReturnSelector) { cbdone = 1; break; }
         if (ev == 3) continue;   /* DpmiEnterProtectedMode reports "interrupt pending, not entered" -- retry */
-        vec = (ev == VDM_EVENT_BOP) ? dpmi_bop_vec(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;   /* a patched INT the handler issued */
+        vec = (ev == VDM_EVENT_BOP) ? DpmiBopVector(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;   /* a patched INT the handler issued */
         if (vec == 0x31 || vec == 0x21) {
             if (dpmi_service_pm_int(m, tib, vec, ph) > 0) continue;   /* serviced -> resume handler */
             cbdone = 1; break;   /* client-exit or unexpected from inside a callback: end the loop */
@@ -20947,7 +20947,7 @@ static void dpmi_invoke_callback(DOS_MACHINE *m, volatile BYTE *tib, int slot)
         break;
     }
     /* handler done: un-patch again and resume the RM proc in V86 at the RMCS CS:IP */
-    dpmi_unpatch();
+    DpmiUnpatch();
     *(volatile WORD *)(tib + VTIB_MSW) = vMsw;
     VDM_REG(tib, VTIB_EFLAGS) = 0x20202;
     VDM_REG(tib,VTIB_EDI)=*(volatile WORD*)(rc+0x00); VDM_REG(tib,VTIB_ESI)=*(volatile WORD*)(rc+0x04);
@@ -21089,7 +21089,7 @@ static int dpmi_dispatch_to_pm_handler(DOS_MACHINE *mp, volatile BYTE *tib,
     unsigned ph; int done = 0;
 
     dpmi_ensure_pmret_sel();
-    dpmi_sync_defsel_width();     /* the ISR may chain into the default stubs -- see the helper */
+    DpmiSyncDefaultSelectorWidth();     /* the ISR may chain into the default stubs -- see the helper */
     if (g_PmReturnSelector == 0) return 0;                 /* caller falls back to servicing */
 
     /* ► FRAME WIDTH AND STACK-POINTER WIDTH ARE TWO DIFFERENT QUESTIONS, and conflating
@@ -21201,7 +21201,7 @@ quiet_entry:
         DpmiArmFaultTrampoline(tib, 0);
         DpmiEnterProtectedMode(tib);
         ev  = VDM_REG(tib, VTIB_EVENT);
-        eip = dpmi_pm_eip(tib);
+        eip = DpmiPmEip(tib);
         if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
             && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == g_PmReturnSelector) { done = 1; break; }
         if (ev == 3) continue;                      /* "interrupt pending" -> retry */
@@ -21247,7 +21247,7 @@ quiet_entry:
             g_pm_disp[vec] = 0;
             return 1;
         }
-        nvec = (ev == VDM_EVENT_BOP) ? dpmi_bop_vec(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;
+        nvec = (ev == VDM_EVENT_BOP) ? DpmiBopVector(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;
         rc = dpmi_service_pm_int(mp, tib, nvec, steps);
         if (rc > 0) continue;
         g_pm_disp[vec] = 0;
@@ -21961,7 +21961,7 @@ static int dpmi_reflect_irq_to_rm(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
     rsp -= 2; PokeWord(((DWORD)rss << 4) + rsp, 0x0202);          /* FLAGS: IF set, restored by IRET */
     rsp -= 2; PokeWord(((DWORD)rss << 4) + rsp, DOS_HDLR_SEG);
     rsp -= 2; PokeWord(((DWORD)rss << 4) + rsp, DPMI_RMRET_OFF);
-    dpmi_unpatch();
+    DpmiUnpatch();
     *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(pMsw & ~MSW_PE_BIT);
     VDM_REG(tib, VTIB_EFLAGS) = 0x20002;                        /* VM, interrupts OFF */
     VDM_SET16(tib, VTIB_DS, rss); VDM_SET16(tib, VTIB_ES, rss);
@@ -22004,7 +22004,7 @@ static int dpmi_reflect_irq_to_rm(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
         }
         break;
     }
-    dpmi_repatch();
+    DpmiRepatch();
     *(volatile WORD *)(tib + VTIB_MSW) = pMsw;
     VDM_REG(tib,VTIB_EAX)=pA;VDM_REG(tib,VTIB_EBX)=pB;VDM_REG(tib,VTIB_ECX)=pC;VDM_REG(tib,VTIB_EDX)=pD;
     VDM_REG(tib,VTIB_ESI)=pSi;VDM_REG(tib,VTIB_EDI)=pDi;VDM_REG(tib,VTIB_EBP)=pBp;
@@ -22022,10 +22022,10 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
 #define m (*mp)
     char report[2048]; char *base = report; char *p = report;
     DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
-    DWORD ev = VDM_REG(tib, VTIB_EVENT), eip = dpmi_pm_eip(tib);
+    DWORD ev = VDM_REG(tib, VTIB_EVENT), eip = DpmiPmEip(tib);
     (void)steps;
     /* First safe moment to re-plant anything the skip mode stepped over. */
-    if (g_BreakpointCount) dpmi_bp_rearm_pending(DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) + eip);
+    if (g_BreakpointCount) DpmiBreakpointRearmPending(DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF)) + eip);
     /* ── ★ A CHANGE DETECTOR, NOT A DUMP. (GH #128, session 37) ────────────────────
          pmbp.txt's dump column answers "what is there when I stop here", which needs
          you to already know where to stop. The question that costs sessions is the
@@ -22074,7 +22074,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
     }
     /* ── NATIVE BOPs: krnl386 CALLING ITS 32-BIT COMPANION. (GH #128) ──────────────
          `C4 C4 nn` in krnl386's OWN code -- not one our INT-site patcher planted, so
-         dpmi_bop_vec() finds nothing in the patch map and hands us vec 0. That used to
+         DpmiBopVector() finds nothing in the patch map and hands us vec 0. That used to
          fall through to "unexpected PM stop", which stopped the guest while leaving
          the host alive: a hang, not a crash, and misleading to look at.
 
@@ -22953,7 +22953,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                      one call this exists for (0x74, the task launch) is stepped
                      over. See WOW32_OFF_MODE in wow32.h for what the modes are and
                      why krnl386 itself never sets one. */
-                {   int md = wow32_mode_override((WORD)f.Id);
+                {   int md = Wow32ModeOverride((WORD)f.Id);
                     if (md >= 0) {
                         Wow32PokeWord(f.FrameBase + WOW32_OFF_MODE, (WORD)md);
                         p = LogPut(p, "\n     ** wowmode.txt OVERRIDE: returning"
@@ -22968,8 +22968,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                      current-task word is reachable from outside a call. Learn it
                      unconditionally -- it costs nothing and the fault hook, which
                      runs where DS is anybody's, depends on having it. */
-                g_wow_dgsel = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
-                if (g_wowsched_on && !g_WowCallRetarget) {     /* s92 #306: inter-task calls */
+                g_WowDgroupSelector = (WORD)(VDM_REG(tib, VTIB_DS) & 0xFFFF);
+                if (g_WowSchedOn && !g_WowCallRetarget) {     /* s92 #306: inter-task calls */
                     g_WowCallCurrentTask = wowsched_curtask;
                     g_WowCallRetarget = ws_retarget;
                     g_WowCallUntarget = ws_untarget;
@@ -22983,30 +22983,30 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                      PARENT's next call is where it yields: parked AT this BOP (re-issued on
                      resume), marked runnable at the current callback depth; the child runs,
                      and its first empty GetMessage at that same depth (E) hands back.
-                   ⚠ Not for the BOOT launch of WOWEXEC (g_ws_shell still 0) -- that creator
+                   ⚠ Not for the BOOT launch of WOWEXEC (g_WowSchedShell still 0) -- that creator
                      retires, moment (C), and yielding there killed every launch (gate4) --
                      nor for WOWEXEC's own launches, which every shelf program was measured
                      with. Never inside a C-stack nested run or a modal loop. */
-                if (g_wowsched_on && g_ws_launch_child) {
+                if (g_WowSchedOn && g_WowSchedLaunchChild) {
                     WORD fcur = wowsched_curtask();
-                    if (fcur && fcur != 0xFFFF && fcur != g_ws_launch_child) {
-                        WORD child = g_ws_launch_child;
+                    if (fcur && fcur != 0xFFFF && fcur != g_WowSchedLaunchChild) {
+                        WORD child = g_WowSchedLaunchChild;
                         int  fi, fsi = -1;
-                        g_ws_launch_child = 0;
+                        g_WowSchedLaunchChild = 0;
                         for (fi = 0; fi < WOWSCHED_MAX; ++fi)
-                            if (g_ws_slots[fi].IsUsed && g_ws_slots[fi].IsFresh
-                                && g_ws_slots[fi].Task == child) fsi = fi;
-                        if (fsi >= 0 && g_ws_shell && fcur != g_ws_shell
-                            && g_ww_nested == 0 && !WowDlgActive() && !ws_intertask_live()) {
+                            if (g_WowSchedSlots[fi].IsUsed && g_WowSchedSlots[fi].IsFresh
+                                && g_WowSchedSlots[fi].Task == child) fsi = fi;
+                        if (fsi >= 0 && g_WowSchedShell && fcur != g_WowSchedShell
+                            && g_WowWindowNested == 0 && !WowDlgActive() && !ws_intertask_live()) {
                             DWORD fmode = (DWORD)(ULONG_PTR)(f.FrameBase + WOW32_OFF_MODE);
-                            WowSchedPoke(g_ws_slots[fsi].ModeLinear, WOW32_MODE_ORDINARY);
-                            WowSchedSwap(&g_ws_slots[fsi], tib, fmode, fcur, 0);
-                            g_ws_slots[fsi].IsRunnable = 1;          /* the parent, mid-work */
-                            g_ws_slots[fsi].CallbackDepth  = g_WowCallDepth;
+                            WowSchedPoke(g_WowSchedSlots[fsi].ModeLinear, WOW32_MODE_ORDINARY);
+                            WowSchedSwap(&g_WowSchedSlots[fsi], tib, fmode, fcur, 0);
+                            g_WowSchedSlots[fsi].IsRunnable = 1;          /* the parent, mid-work */
+                            g_WowSchedSlots[fsi].CallbackDepth  = g_WowCallDepth;
                             g_WowSchedCurrentBase = g_WowCallDepth;             /* the child's top level */
                             wowsched_setcur(child);
                             wow_task_chdir(child, &p);
-                            ++g_ws_switches;
+                            ++g_WowSchedSwitches;
                             p = LogPut(p, "\n     WOWSCHED: task 0x"); p = LogHex(p, fcur);
                             p = LogPut(p, " launched task 0x"); p = LogHex(p, child);
                             p = LogPut(p, " -- LAUNCH-FIRST at depth 0x"); p = LogHex(p, (DWORD)g_WowCallDepth);
@@ -23018,7 +23018,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                         }
                     }
                 }
-                if (g_wowsched_on && f.IsKernel) {
+                if (g_WowSchedOn && f.IsKernel) {
                     DWORD modelin = (DWORD)(ULONG_PTR)(f.FrameBase + WOW32_OFF_MODE);
                     WORD  cur     = wowsched_curtask();
                     /* (A) THE LAUNCH -- AND THE SWITCH HAS TO HAPPEN HERE.
@@ -23034,7 +23034,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                            is exactly what makes resuming it later sound.
                          So: park the new task at this instruction, and send the
                            creator home through epilogue mode 25. */
-                    int wsi = (f.Id == 0x74) ? ws_free() : -1;
+                    int wsi = (f.Id == 0x74) ? WowSchedFree() : -1;
                     if (f.Id == 0x74 && wsi >= 0) {
                         DWORD tb = DpmiSelectorBase(cur);
                         WORD  hinst = 0;
@@ -23054,13 +23054,13 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                              own task a third time. It is VERIFIED at (C) below against
                              the value krnl386 itself writes, and a mismatch is loud. */
                         if (!hinst) hinst = (WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFE);
-                        WowSchedSave(&g_ws_slots[wsi], tib, modelin, cur, WOW32_BOP_LEN);
-                        g_ws_slots[wsi].IsFresh = 1;          /* s92: not run yet (#306) */
-                        g_ws_launch_child = cur;            /* the parent is the next caller */
+                        WowSchedSave(&g_WowSchedSlots[wsi], tib, modelin, cur, WOW32_BOP_LEN);
+                        g_WowSchedSlots[wsi].IsFresh = 1;          /* s92: not run yet (#306) */
+                        g_WowSchedLaunchChild = cur;            /* the parent is the next caller */
                         wow_task_dir_here(cur);             /* #164: its launch directory */
                         Wow32SetReturn(&f, hinst);
                         Wow32PokeWord(f.FrameBase + WOW32_OFF_MODE, WOW32_MODE_SWITCHBACK);
-                        ++g_ws_switches;
+                        ++g_WowSchedSwitches;
                         p = LogPut(p, "\n     WOWSCHED: task 0x"); p = LogHex(p, cur);
                         p = LogPut(p, " parked at its launch; creator sent home through"
                                     " epilogue mode 25 with LoadModule result 0x");
@@ -23097,27 +23097,27 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                          should do.
 
                        ★ s92 (#306): NO LONGER TWO TASKS ONLY. Every task that is not
-                         running sits in g_ws_slots; this yield goes ROUND ROBIN to the
-                         next one (ws_pick). Round robin and not krnl386's own priority
+                         running sits in g_WowSchedSlots; this yield goes ROUND ROBIN to the
+                         next one (WowSchedPick). Round robin and not krnl386's own priority
                          order (TDB+0x08): every Win16 task here runs at the same priority, and
                          the yield only happens when the running one
                          has nothing to do. The other new yield is at GetMessage -- see
                          "(E)" at the USER dispatch -- for a task launched and never run. */
                     else if (f.Id == WOW32_WOWWAITFORMSGANDEVENT
                              && cur != 0 && cur != 0xFFFF && !ws_intertask_live()
-                             && (wsi = ws_pick(cur)) >= 0) {
-                        WORD to = g_ws_slots[wsi].Task;
+                             && (wsi = WowSchedPick(cur)) >= 0) {
+                        WORD to = g_WowSchedSlots[wsi].Task;
                         /* Written into the WAITING task's frame now; its epilogue
                            reads them whenever it is resumed, off its own stack. */
                         Wow32SetReturn(&f, 0);
                         Wow32PokeWord(f.FrameBase + WOW32_OFF_MODE, WOW32_MODE_ORDINARY);
-                        int drb = ws_toplevel(&g_ws_slots[wsi]);
-                        WowSchedPoke(g_ws_slots[wsi].ModeLinear, WOW32_MODE_ORDINARY);
-                        WowSchedSwap(&g_ws_slots[wsi], tib, modelin, cur, WOW32_BOP_LEN);
+                        int drb = WowSchedTopLevel(&g_WowSchedSlots[wsi]);
+                        WowSchedPoke(g_WowSchedSlots[wsi].ModeLinear, WOW32_MODE_ORDINARY);
+                        WowSchedSwap(&g_WowSchedSlots[wsi], tib, modelin, cur, WOW32_BOP_LEN);
                         if (drb) g_WowSchedCurrentBase = g_WowCallDepth;
                         wowsched_setcur(to);
                         wow_task_chdir(to, &p);           /* #164 */
-                        ++g_ws_switches;
+                        ++g_WowSchedSwitches;
                         p = LogPut(p, "\n     WOWSCHED: task 0x"); p = LogHex(p, cur);
                         p = LogPut(p, " waited for a message -- YIELDING to parked task 0x");
                         p = LogHex(p, to);
@@ -23538,25 +23538,25 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                          how a click on one task's window wakes it while another is idle
                          in the wait below (which then comes back here). */
                     WORD ecur = wowsched_curtask();
-                    int  ecan = g_wowsched_on && f.Id == WOWUSER_GETMESSAGE
-                                && g_ww_nested == 0 && !WowDlgActive()
+                    int  ecan = g_WowSchedOn && f.Id == WOWUSER_GETMESSAGE
+                                && g_WowWindowNested == 0 && !WowDlgActive()
                                 && ecur && ecur != 0xFFFF && !ws_intertask_live();
                 ws_again_e:
                     if (ecan && !WowMsgCountFor(ecur)) {
                         WORD ycur = ecur;
-                        int  ysi  = ws_runnable(ycur, g_WowCallDepth);
+                        int  ysi  = WowSchedRunnable(ycur, g_WowCallDepth);
                         if (ysi >= 0) {
-                            WORD  yto = g_ws_slots[ysi].Task;
+                            WORD  yto = g_WowSchedSlots[ysi].Task;
                             DWORD ymode = (DWORD)(ULONG_PTR)(f.FrameBase + WOW32_OFF_MODE);
-                            int   yrb = ws_toplevel(&g_ws_slots[ysi]);
-                            WowSchedPoke(g_ws_slots[ysi].ModeLinear, WOW32_MODE_ORDINARY);
-                            WowSchedSwap(&g_ws_slots[ysi], tib, ymode, ycur, 0);
-                            g_ws_slots[ysi].IsWaitingForMessage = 1;          /* the one that yielded */
-                            g_ws_slots[ysi].CallbackDepth = g_WowCallDepth;
+                            int   yrb = WowSchedTopLevel(&g_WowSchedSlots[ysi]);
+                            WowSchedPoke(g_WowSchedSlots[ysi].ModeLinear, WOW32_MODE_ORDINARY);
+                            WowSchedSwap(&g_WowSchedSlots[ysi], tib, ymode, ycur, 0);
+                            g_WowSchedSlots[ysi].IsWaitingForMessage = 1;          /* the one that yielded */
+                            g_WowSchedSlots[ysi].CallbackDepth = g_WowCallDepth;
                             if (yrb) g_WowSchedCurrentBase = g_WowCallDepth;
                             wowsched_setcur(yto);
                             wow_task_chdir(yto, &p);
-                            ++g_ws_switches;
+                            ++g_WowSchedSwitches;
                             p = LogPut(p, "\n     WOWSCHED: task 0x"); p = LogHex(p, ycur);
                             p = LogPut(p, " has an empty GetMessage -- YIELDING to task 0x");
                             p = LogHex(p, yto);
@@ -23638,7 +23638,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                    && (!g_WowMsgWaitMs
                                        || GetTickCount() - t0 < g_WowMsgWaitMs)) {
                                 /* s92 (#306): another parked task's message arrived */
-                                if (ecan && ws_runnable(ecur, g_WowCallDepth) >= 0) { ewoke = 1; break; }
+                                if (ecan && WowSchedRunnable(ecur, g_WowCallDepth) >= 0) { ewoke = 1; break; }
                                 /* ── ★★ THE IDLE WAIT, AND ITS TIMEOUT IS A
                                      LATENCY FLOOR. A WM_PAINT arriving while the
                                      guest is parked here should wake the wait
@@ -24116,7 +24116,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                 /* Read the litter FIRST, then overwrite it -- the value that would
                    have been used is evidence, and it is gone a line later. */
                 wow_stale = Wow32PeekReturn(&f); wow_stale_ok = 1;
-                wow_ans = wow32_ret_override(f.Id);   /* wow32ret.txt, if any */
+                wow_ans = Wow32ReturnOverride(f.Id);   /* wow32ret.txt, if any */
                 Wow32SetReturn(&f, wow_ans);            /* ★ see WOW32_UNIMPL_RET */
             }
             /* ── STEP OVER AND KEEP GOING, RATHER THAN STOPPING THE GUEST. ─────
@@ -24359,7 +24359,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 p = LogDump(p, (const BYTE *)(ULONG_PTR)(dsb + div), 32);
                             }
                         }
-                        { int bk = dpmi_bp_disarm(lin);
+                        { int bk = DpmiBreakpointDisarm(lin);
                           /* ★ EVERY hit leaves the guest standing on the footprint we
                                just restored, so EVERY hit is pending -- not only the
                                repeating ones. A one-shot is additionally retired, so
@@ -24382,7 +24382,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                               /* A skipped site is usually in a loop or a shared wrapper, so
                                  one-shot is useless there. We cannot re-plant NOW -- EIP is
                                  inside the two-byte footprint we just restored -- so mark it
-                                 and let dpmi_bp_rearm_pending() do it once the guest has
+                                 and let DpmiBreakpointRearmPending() do it once the guest has
                                  moved on. */
                               g_BreakpointPending[bk] = 1;
                           }
@@ -25114,7 +25114,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                          client declares CODE must be patched wherever it lands. */
                                     if (a < 1 || a >= WOW_SHADOW_ENTRIES) continue;
                                     if (!DPMI_ACC_IS_CODE(g_Ldt[a].Access)) continue;
-                                    dpmi_patch_code_region(g_Ldt[a].Base, g_Ldt[a].Limit,
+                                    DpmiPatchCodeRegion(g_Ldt[a].Base, g_Ldt[a].Limit,
                                                            (g_Ldt[a].Flags & 0x4) != 0);
                                     need_scan = 1;
                                     p = LogPut(p, " [CODE sel 0x"); p = LogHex(p, (DWORD)((a << 3) | 7));
@@ -25150,7 +25150,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                                 g_WowPmBase[sg] = g_Ldt[a].Base;
                                                 /* Every segment, not just seg 1 -- the
                                                    module-load path is in seg 2. */
-                                                dpmi_bp_resolve_seg((unsigned)sg + 1,
+                                                DpmiBreakpointResolveSegment((unsigned)sg + 1,
                                                                     g_Ldt[a].Base);
                                             }
                                             if (sg == 0) g_WowPmSegment1Base = g_Ldt[a].Base;
@@ -25574,9 +25574,9 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 /* "This region is now code" is the client naming its own
                                    requirement -- and the only notice we get that a module
                                    it just loaded is about to be executed. Patch its INT
-                                   sites now; see dpmi_patch_code_region(). */
+                                   sites now; see DpmiPatchCodeRegion(). */
                                 if (DPMI_ACC_IS_CODE(g_Ldt[idx].Access)) {
-                                    dpmi_patch_code_region(g_Ldt[idx].Base, g_Ldt[idx].Limit,
+                                    DpmiPatchCodeRegion(g_Ldt[idx].Base, g_Ldt[idx].Limit,
                                                            (g_Ldt[idx].Flags & 0x4) != 0);
                                     /* The client naming ANY region code means it has finished
                                        loading something -- a good moment to re-look at the
@@ -25689,7 +25689,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             g_Ldt[idx].Flags  = (BYTE)((hi >> 20) & 0xF);
                             DpmiInstall(idx);
                             if (DPMI_ACC_IS_CODE(g_Ldt[idx].Access)) { /* same rule as 0009 */
-                                dpmi_patch_code_region(g_Ldt[idx].Base, g_Ldt[idx].Limit,
+                                DpmiPatchCodeRegion(g_Ldt[idx].Base, g_Ldt[idx].Limit,
                                                        (g_Ldt[idx].Flags & 0x4) != 0);
                                 need_scan = 1;
                             }
@@ -25837,7 +25837,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 /* Does this allocation match one of the program's EXEC objects?
                                    DOS/4GW asks for exactly the object's page-rounded virtual
                                    size, so the size IS the client telling us "this block is
-                                   about to hold my code". See dpmi_le_learn(). */
+                                   about to hold my code". See DpmiLeLearn(). */
                                 for (c = 0; c < g_LeCodeCount; ++c)
                                     if (g_LeCodeSize[c] == ((sz + 0xFFFu) & ~0xFFFu)) { iscode = 1; break; }
                                 g_DpmiBlock[g_DpmiBlockCount].Base = (DWORD)(ULONG_PTR)mem;
@@ -25853,8 +25853,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                            writes its own, or the two interleave. */
                                         p = LogPut(p, "\r\n");
                                         LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
-                                        dpmi_bp_resolve_codebase(g_LeLoadBase);
-                                        dpmi_bp_arm();   /* it may now be plantable */
+                                        DpmiBreakpointResolveCodeBase(g_LeLoadBase);
+                                        DpmiBreakpointArm();   /* it may now be plantable */
                                     } }
                             }
                             { DWORD lin = (DWORD)(ULONG_PTR)mem;   /* in-process: linear = host ptr */
@@ -25877,8 +25877,8 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 break;
                             }
                             /* ── THE PATCH MAP MUST FORGET THE BLOCK TOO. (s80) pmap holds
-                                 every INT site we rewrote, by address, and dpmi_unpatch()
-                                 / dpmi_repatch() dereference all of them on every 0301.
+                                 every INT site we rewrote, by address, and DpmiUnpatch()
+                                 / DpmiRepatch() dereference all of them on every 0301.
                                  A block released here left its sites behind, so the next
                                  walk read freed memory -- found as a host AV at teardown
                                  (addr 0x04581e53, a site in a block Doom freed on its way
@@ -25913,7 +25913,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                  that pointed at the old block is the client's job (spec).
                                ⚠ THE PATCH MAP MOVES WITH THE BYTES. INT sites we rewrote in the
                                  old block are copied as BOPs; their pmap entries are re-keyed to
-                                 the new addresses, or dpmi_unpatch()/repatch() would walk freed
+                                 the new addresses, or DpmiUnpatch()/repatch() would walk freed
                                  memory (0502h's s80 teardown AV) and the copies would never be
                                  restored. */
                             DWORD h  = ((VDM_REG(tib, VTIB_ESI) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDI) & 0xFFFF);
@@ -26230,7 +26230,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             }
                             rsp -= 2; PokeWord(((DWORD)rss << 4) + rsp, DOS_HDLR_SEG);   /* return CS */
                             rsp -= 2; PokeWord(((DWORD)rss << 4) + rsp, DPMI_RMRET_OFF);  /* return IP */
-                            dpmi_unpatch();   /* restore real `CD nn` so RM ints in the proc vector natively */
+                            DpmiUnpatch();   /* restore real `CD nn` so RM ints in the proc vector natively */
                             /* --- rewrite the CONTEXT to V86 with the RMCS register file --- */
                             *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(pMsw & ~MSW_PE_BIT);  /* leave PM */
                             VDM_REG(tib,VTIB_EFLAGS) = 0x20202;    /* VM + IF + reserved bit-1 */
@@ -26336,7 +26336,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                                 LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
                                 break;
                             }
-                            dpmi_repatch();   /* re-arm the BOP patch before the PM client resumes */
+                            DpmiRepatch();   /* re-arm the BOP patch before the PM client resumes */
                             /* --- copy the real-mode register file back into the RMCS ---
                                #247: all of it -- 32-bit general registers, FLAGS, ES DS FS GS -- and
                                never CS:IP/SS:SP (RmcsWrite cannot). Was: the low words, ES, DS. */
@@ -26423,7 +26423,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
                             break;
                         }
                         p = LogPut(p, "\r\n"); LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
-                        if (need_scan) dpmi_scan_code_blocks();
+                        if (need_scan) DpmiScanCodeBlocks();
                         VDM_REG(tib, VTIB_EIP) += 2;               /* past the 2-byte INT */
                         return 1;
                     }
@@ -27311,7 +27311,7 @@ static int dpmi_service_pm_int_body(DOS_MACHINE *mp, volatile BYTE *tib, DWORD v
      on the vector or on how we were entered. Both facts are exact and read out of the
      live machine: a service that parked a different context (a wowcall.h callback, an
      EXEC) is no longer in the stub and is correctly skipped.
-   ⚠ The IRET's width follows the STUB's D bit (dpmi_sync_defsel_width makes it track
+   ⚠ The IRET's width follows the STUB's D bit (DpmiSyncDefaultSelectorWidth makes it track
      the client), and the stack's address width follows SS's -- the same "frame width
      and descriptor width are the same question" this host has paid for three times. */
 #define DPMI_PMFRAME_CF 0x1u
@@ -27518,7 +27518,7 @@ static int dpmi_async_inject_pm(unsigned irq, CONTEXT *cx)
      frame (WowCallLeave restores the parked context), then hands the result back.
    ⚠ Only on the guest thread, in protected mode, a Win16 session, below the callback
      depth limit. A run that stops without returning unwinds its frame and says so. */
-static int g_ww_nested = 0;
+static int g_WowWindowNested = 0;
 /* ── s89 (#302): …and WITH A STRUCTURE. `blob` (blobn bytes) is placed on the guest's
      stack below the arguments and its far pointer written into args[blobarg..+1]
      (high word first, as WowCallEnter does for WM_CREATE). After the procedure
@@ -28004,7 +28004,7 @@ static int dpmi_nested_fault(volatile BYTE *tib, DWORD ev, DWORD eip)
             lp = LogPut(lp, " msg=0x"); lp = LogHex(lp, g_WowCallFrames[g_WowCallDepth - 1].Message);
             lp = LogPut(lp, " depth=0x"); lp = LogHex(lp, (DWORD)g_WowCallDepth);
         }
-        lp = LogPut(lp, " nested=0x"); lp = LogHex(lp, (DWORD)g_ww_nested);
+        lp = LogPut(lp, " nested=0x"); lp = LogHex(lp, (DWORD)g_WowWindowNested);
         lp = LogPut(lp, "\r\n");
         LogAppend(LOG_PATH, lb, lp);
         return 1;
@@ -28024,7 +28024,7 @@ static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
     unsigned ph;
     if (!tib || !g_DpmiPm || !g_WowLaunch || !g_DosMachine || !g_Running) return 0;
     if (GetCurrentThreadId() != g_GuestThreadId) return 0;
-    if (g_WowCallDepth >= WOWCALL_MAX_DEPTH - 1 || g_ww_nested >= 6 || !(proc >> 16)) return 0;
+    if (g_WowCallDepth >= WOWCALL_MAX_DEPTH - 1 || g_WowWindowNested >= 6 || !(proc >> 16)) return 0;
     rsel = WowCallbackSelector();
     ssb  = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
     if (!rsel || !ssb) return 0;
@@ -28046,13 +28046,13 @@ static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
                        hwnd, msg, blob, blob ? blobn : 0, blob ? blobarg : -1,
                        WowDlgIsSelectorAbsent((WORD)(proc >> 16))))
         return 0;
-    ++g_ww_nested;
+    ++g_WowWindowNested;
     for (ph = 0; ph < 500000 && g_WowCallDepth > depth0 && g_Running; ++ph) {
         DWORD ev, eip, vec; int rc;
         DpmiArmFaultTrampoline(tib, 0);
         DpmiEnterProtectedMode(tib);
         ev  = VDM_REG(tib, VTIB_EVENT);
-        eip = dpmi_pm_eip(tib);
+        eip = DpmiPmEip(tib);
         if (ev == 3) continue;
         if (ev == VDM_EVENT_IO || ev == VDM_EVENT_IO_HW || ev == VDM_EVENT_GPFAULT) {
             int io_h;
@@ -28062,11 +28062,11 @@ static int wow_call16_sync_ex(DWORD proc, WORD ds, const WORD *args, int n,
             if (io_h) continue;
         }
         if (dpmi_nested_fault(tib, ev, eip)) continue;      /* s90: see the helper */
-        vec = (ev == VDM_EVENT_BOP) ? dpmi_bop_vec(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;
+        vec = (ev == VDM_EVENT_BOP) ? DpmiBopVector(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;
         rc = dpmi_service_pm_int(g_DosMachine, tib, vec, 0);
         if (rc <= 0) break;
     }
-    --g_ww_nested;
+    --g_WowWindowNested;
     ok = (g_WowCallDepth == depth0);
     if (!ok) {
         char b[160], *q = b;
@@ -28392,7 +28392,7 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
         }
         DpmiEnterProtectedMode(tib);
         ev  = VDM_REG(tib, VTIB_EVENT);
-        eip = dpmi_pm_eip(tib);
+        eip = DpmiPmEip(tib);
         if (ev == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
             && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == g_PmReturnSelector) { done = 1; break; }
         if (ev == 3) continue;                     /* "interrupt pending, not entered" -> retry */
@@ -28404,7 +28404,7 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
             if (io_h) continue;
         }
         if (dpmi_nested_fault(tib, ev, eip)) continue;      /* s90 */
-        vec = (ev == VDM_EVENT_BOP) ? dpmi_bop_vec(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;
+        vec = (ev == VDM_EVENT_BOP) ? DpmiBopVector(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;
         rc = dpmi_service_pm_int(mp, tib, vec, steps);
         if (rc > 0) continue;
         break;                                     /* handler exited / unexpected stop */
@@ -28430,7 +28430,7 @@ static int dpmi_inject_pm_irq(DOS_MACHINE *mp, volatile BYTE *tib, unsigned iv, 
         aq = LogPut(aq, " ms -- the client's interrupt state is now INCONSISTENT"
                       " (vec 0x"); aq = LogHexByte(aq, iv);
         aq = LogPut(aq, ", last cs:eip=0x"); aq = LogHex(aq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-        aq = LogPut(aq, ":0x"); aq = LogHex(aq, dpmi_pm_eip(tib));
+        aq = LogPut(aq, ":0x"); aq = LogHex(aq, DpmiPmEip(tib));
         aq = LogPut(aq, ")\r\n");
         LogAppend(LOG_PATH, ab2, aq); SerialOut(ab2, aq);
     }
@@ -28571,7 +28571,7 @@ static int dpmi_inject_pm_mousecb(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
         DpmiArmFaultTrampoline(tib, 0);
         DpmiEnterProtectedMode(tib);
         e   = VDM_REG(tib, VTIB_EVENT);
-        eip = dpmi_pm_eip(tib);
+        eip = DpmiPmEip(tib);
         if (e == VDM_EVENT_BOP && eip == DPMI_PMRET_OFF
             && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == g_PmReturnSelector) { done = 1; break; }
         if (e == 3) continue;
@@ -28583,7 +28583,7 @@ static int dpmi_inject_pm_mousecb(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
             if (io_h) continue;
         }
         if (dpmi_nested_fault(tib, e, eip)) continue;       /* s90 */
-        vec = (e == VDM_EVENT_BOP) ? dpmi_bop_vec(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;
+        vec = (e == VDM_EVENT_BOP) ? DpmiBopVector(VDM_REG(tib, VTIB_CS) & 0xFFFF, eip) : 0;
         rc = dpmi_service_pm_int(mp, tib, vec, steps);
         if (rc > 0) continue;
         break;
@@ -28593,7 +28593,7 @@ static int dpmi_inject_pm_mousecb(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
         char ab[192], *aq = ab;
         aq = LogPut(aq, "DPMI: *** PM MOUSE CALLBACK ABANDONED after "); aq = LogHex(aq, (DWORD)ph);
         aq = LogPut(aq, " phases (last cs:eip=0x"); aq = LogHex(aq, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-        aq = LogPut(aq, ":0x"); aq = LogHex(aq, dpmi_pm_eip(tib)); aq = LogPut(aq, ")\r\n");
+        aq = LogPut(aq, ":0x"); aq = LogHex(aq, DpmiPmEip(tib)); aq = LogPut(aq, ")\r\n");
         LogAppend(LOG_PATH, ab, aq); SerialOut(ab, aq);
     }
     VDM_REG(tib,VTIB_EAX)=sEAX; VDM_REG(tib,VTIB_EBX)=sEBX; VDM_REG(tib,VTIB_ECX)=sECX;
@@ -28622,7 +28622,7 @@ static int dpmi_inject_pm_mousecb(DOS_MACHINE *mp, volatile BYTE *tib, unsigned 
      exception handlers -- goes, or the next client inherits a dead one's state.
    ⛔ THE PATCH MAP IS REBUILT, NOT KEPT. pmap holds the address of every INT site we
      rewrote in the client's code, and that code lives in the 0501 blocks released
-     below. dpmi_unpatch/dpmi_repatch dereference every entry: left in place, the next
+     below. DpmiUnpatch/DpmiRepatch dereference every entry: left in place, the next
      client's first 0301 would read freed memory and fault the host. */
 static void dpmi_client_teardown(void)
 {
@@ -28637,7 +28637,7 @@ static void dpmi_client_teardown(void)
          orphaned BOP with no client behind it, and the shell died on its first call.
          Restore `CD nn` wherever the bytes are still ours -- which also reverts the
          host's default stubs; those are re-planted below.
-       ⚠ GUARDED, unlike dpmi_unpatch(): this runs once, so it can afford to ask
+       ⚠ GUARDED, unlike DpmiUnpatch(): this runs once, so it can afford to ask
          whether each site is still mapped and writable rather than trust the map. */
     {   DWORD sl;
         for (sl = 0; sl < DPMI_PMAP_SLOTS; ++sl) {
@@ -28795,7 +28795,7 @@ static int dpmi_run_pm_interp(DOS_MACHINE *mp, volatile BYTE *tib)
 {
     V86_CPU c; long guard = 0; char rb[256]; char *r;
     g_V86SegmentToLinear = dpmi_seg2lin;                 /* interpreter now resolves LDT bases */
-    g_V86SelectorDescriptor = dpmi_sel_desc;               /* ...and answers LAR/LSL from g_Ldt[] (run 55) */
+    g_V86SelectorDescriptor = DpmiSelectorDescriptor;               /* ...and answers LAR/LSL from g_Ldt[] (run 55) */
     dpmi_icpu_load(&c, tib);
     r = rb;
     r = LogPut(r, "DPMI-INTERP: run 53 host PM begins CS:IP=0x"); r = LogHex(r, c.Segments[1]);
@@ -31039,7 +31039,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
 
     /* If this is a bound linear executable (every DOS/4GW game is one), learn which of
        its objects are code before it starts asking us for memory to load them into. */
-    dpmi_le_learn(g_FileBuffer, nread);
+    DpmiLeLearn(g_FileBuffer, nread);
 
     /* ── #136: HOW MUCH CONVENTIONAL MEMORY THIS MACHINE HAS. Decided here, once, before
          the image is laid down: the loader writes the program above the PSP with no
@@ -33576,12 +33576,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            it is right that widening a naive byte-pair scan is dangerous.
                            But "naive" is the part that changed: x86len.h's vote arrived in
                            session 21 and is already trusted to gate every site in
-                           dpmi_patch_code_region(). It was simply never wired in here.
+                           DpmiPatchCodeRegion(). It was simply never wired in here.
 
                          ⚠ MEASURED, session 32. krnl386 executes an `INT 2` (`cd 02`) in
                            protected mode. A breakpoint armed on that site reported `displaced
                            cd 02`, which
-                           is proof it was RAW -- dpmi_bp_arm() refuses a site that is already
+                           is proof it was RAW -- DpmiBreakpointArm() refuses a site that is already
                            an INT site, so it could not have armed otherwise. 0x02 is not on
                            the list, so it was never even a candidate.
 
@@ -33654,7 +33654,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            REAL CODE the guest executes, left RAW by the boundary vote --
                            proved by arming a breakpoint on it and reading back
                            `displaced cd 02` (a patched site is an INT site, and
-                           dpmi_bp_arm refuses those, so it could not have armed at all).
+                           DpmiBreakpointArm refuses those, so it could not have armed at all).
                          A raw `CD nn` in protected mode is not a warning, it is a silent
                            VDM teardown waiting for the guest to take that branch. Print the
                            addresses so the next one is a breakpoint away instead of a
@@ -33684,10 +33684,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                    so the list is read on the run that will use it, and armed both now and
                    after every code-region patch -- an address inside a module the client
                    has not loaded yet simply arms later. */
-                dpmi_bp_load();
-                dpmi_bp_arm();
-                wow32_ret_load();
-                wow32_mode_load();
+                DpmiBreakpointLoad();
+                DpmiBreakpointArm();
+                Wow32ReturnLoad();
+                Wow32ModeLoad();
                 wowsched_load();
                 wowcall_load();
                 /* LAST of the switches, so everything above still gets to say
@@ -33862,7 +33862,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         p = LogPut(p, "PMHB ms=0x");     p = LogHex(p, GetTickCount());
                         p = LogPut(p, " steps=0x");      p = LogHex(p, (DWORD)steps);
                         p = LogPut(p, " cs:eip=0x");     p = LogHex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                        p = LogPut(p, ":0x");            p = LogHex(p, dpmi_pm_eip(tib));
+                        p = LogPut(p, ":0x");            p = LogHex(p, DpmiPmEip(tib));
                         p = LogPut(p, " lastev=0x");     p = LogHex(p, g_DpmiLastEvent);
                         p = LogPut(p, " lastvec=0x");    p = LogHex(p, g_DpmiLastVector);
                         p = LogPut(p, " wow32{ok=0x");   p = LogHex(p, g_wow32_serviced);
@@ -33894,7 +33894,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         {   DWORD cbase = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_CS) & 0xFFFF));
                             DWORD sbase = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_SS) & 0xFFFF));
                             DWORD spv   = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
-                            ULONG_PTR cp = (ULONG_PTR)(cbase + dpmi_pm_eip(tib));
+                            ULONG_PTR cp = (ULONG_PTR)(cbase + DpmiPmEip(tib));
                             ULONG_PTR sp2 = (ULONG_PTR)(sbase + spv);
                             p = LogPut(p, " ss:sp=0x"); p = LogHex(p, VDM_REG(tib, VTIB_SS) & 0xFFFF);
                             p = LogPut(p, ":0x");       p = LogHex(p, spv);
@@ -33936,7 +33936,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        iteration counter BEFORE entering, so a watchdog sample taken while
                        we're blocked inside DpmiEnterProtectedMode sees a FROZEN iter at this CS:EIP. */
                     g_DpmiEnterCs  = VDM_REG(tib, VTIB_CS)  & 0xFFFF;
-                    g_DpmiEnterEip = dpmi_pm_eip(tib);
+                    g_DpmiEnterEip = DpmiPmEip(tib);
                     g_DpmiIteration      = (LONG)(steps + 1);
                     /* run 66 diagnostic (kept): log FIXED_NTVDMSTATE [0x714] once. Run 66 proved
                        bit3=0 already (classifier is NOT the blocker), so no forcing needed -- for
@@ -34397,9 +34397,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                              instruction after the BOP we last serviced, i.e. the name of
                              the stretch. */
                         LARGE_INTEGER t0, t1;
-                        DWORD s_cs = VDM_REG(tib, VTIB_CS) & 0xFFFF, s_eip = dpmi_pm_eip(tib);
+                        DWORD s_cs = VDM_REG(tib, VTIB_CS) & 0xFFFF, s_eip = DpmiPmEip(tib);
                         /* ── ★★ RE-ARM BEFORE EVERY ENTRY, BECAUSE THE TARGET APPEARS LATE. ──
-                             dpmi_bp_arm() skips a site that still reads 00 00 -- correctly,
+                             DpmiBreakpointArm() skips a site that still reads 00 00 -- correctly,
                              since arming into memory the client has not loaded yet was a
                              previous session's silent no-op. It is then only retried when a
                              code region is patched, and that was enough while the CLIENT's
@@ -34414,7 +34414,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                            Cheap: a handful of entries, and only when a list was loaded. The
                              guest is the ONLY thing still running when the process is killed,
                              so this is the last instrument standing -- it has to actually arm. */
-                        if (g_BreakpointCount) dpmi_bp_arm();
+                        if (g_BreakpointCount) DpmiBreakpointArm();
                         /* The injections above run the client's own code; if it exited in
                            there, there is nothing left to enter. See g_PmClientExited. */
                         if (g_PmClientExited) break;
@@ -34433,7 +34433,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     p = LogHex(p, DpmiSelectorBase((WORD)s_cs) + s_eip);
                                     p = LogPut(p, " exit=0x");
                                     p = LogHex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-                                    p = LogPut(p, ":0x"); p = LogHex(p, dpmi_pm_eip(tib));
+                                    p = LogPut(p, ":0x"); p = LogHex(p, DpmiPmEip(tib));
                                     p = LogPut(p, " ev=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EVENT));
                                     p = LogPut(p, " ms="); p = LogHex(p, GetTickCount());
                                     p = LogPut(p, "\r\n");
@@ -34453,7 +34453,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
                     }
                     ev  = VDM_REG(tib, VTIB_EVENT);
-                    eip = dpmi_pm_eip(tib);
+                    eip = DpmiPmEip(tib);
                     csv = VDM_REG(tib, VTIB_CS) & 0xFFFF;
                     g_DpmiLastEvent  = ev;  g_DpmiLastEip = eip;  g_DpmiLastCs = csv;
                     /* ── AN ASYNC PM INTERRUPT HAS COME BACK. ────────────────────────────
@@ -34754,7 +34754,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      UNIQUE hit that actually holds `CD <vec>`. Unique-or-decline
                                      is evidence; picking the first match would be a guess. */
                                 uint32_t gar = 0;
-                                int gpresent = dpmi_sel_desc(fr[4], &gar, NULL);
+                                int gpresent = DpmiSelectorDescriptor(fr[4], &gar, NULL);
                                 int gis32    = gpresent && (((gar >> 20) & 0xF) & 0x4);
                                 int gtrunc   = gis32 && gcb == 0;   /* EIP *is* the linear addr */
                                 int gcand    = 0;
@@ -34791,7 +34791,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      if the slot and the frame disagree in the low half -- that is
                                      the one check that would catch a mis-identified slot. */
                                 if (gtrunc) {
-                                    grec = dpmi_recover_flat_eip((DWORD)fr[3], (BYTE)gvec, &gcand);
+                                    grec = DpmiRecoverFlatEip((DWORD)fr[3], (BYTE)gvec, &gcand);
                                     if ((fss3 & 0xFFFFu) == fr[3]
                                         && HostReadable((const void *)(ULONG_PTR)fss3, 2)
                                         && ((const volatile BYTE *)(ULONG_PTR)fss3)[0] == 0xCD
@@ -34975,11 +34975,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                 }
                                 p = LogPut(p, "\r\n");
                             }
-                            int wsc = g_wowsched_on ? ws_pick(0) : -1;
+                            int wsc = g_WowSchedOn ? WowSchedPick(0) : -1;
                             if (wsc >= 0 && wowsched_curtask() == 0) {
                                 p = LogPut(p, "  WOWSCHED: [0x228]==0 -- the creator retired "
                                             "and task 0x");
-                                p = LogHex(p, g_ws_slots[wsc].Task);
+                                p = LogHex(p, g_WowSchedSlots[wsc].Task);
                                 p = LogPut(p, " is parked. Resuming it INSTEAD of reflecting this "
                                             "fault; the creator's remaining teardown is "
                                             "ABANDONED (selectors leak).\r\n");
@@ -34990,7 +34990,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                      invariant, and a wrong hInstance is exactly the kind
                                      of thing that would otherwise fail three walls later
                                      with no trace back to here. */
-                                {   DWORD tb = DpmiSelectorBase(g_ws_slots[wsc].Task);
+                                {   DWORD tb = DpmiSelectorBase(g_WowSchedSlots[wsc].Task);
                                     if (tb) {
                                         const volatile BYTE *t =
                                             (const volatile BYTE *)(ULONG_PTR)tb;
@@ -35001,11 +35001,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     }
                                 }
                                 LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
-                                WowSchedPoke(g_ws_slots[wsc].ModeLinear, WOW32_MODE_ORDINARY);
-                                {   WORD to = g_ws_slots[wsc].Task;
-                                    int crb = ws_toplevel(&g_ws_slots[wsc]);
-                                    if (!g_ws_shell) g_ws_shell = to;   /* s92: WOWEXEC */
-                                    WowSchedRestore(&g_ws_slots[wsc], tib);
+                                WowSchedPoke(g_WowSchedSlots[wsc].ModeLinear, WOW32_MODE_ORDINARY);
+                                {   WORD to = g_WowSchedSlots[wsc].Task;
+                                    int crb = WowSchedTopLevel(&g_WowSchedSlots[wsc]);
+                                    if (!g_WowSchedShell) g_WowSchedShell = to;   /* s92: WOWEXEC */
+                                    WowSchedRestore(&g_WowSchedSlots[wsc], tib);
                                     if (crb) g_WowSchedCurrentBase = g_WowCallDepth;
                                     /* ★ AND PUT THE CURRENT-TASK WORD BACK WITH IT.
                                          The creator zeroed it on its way out; the
@@ -35019,7 +35019,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                     wowsched_setcur(to);
                                     wow_task_chdir(to, &p);   /* #164 */
                                 }
-                                ++g_ws_switches;
+                                ++g_WowSchedSwitches;
                                 continue;
                             }
                             if (exc < 0 || exc > 0x1F) {
@@ -35127,7 +35127,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                   for (si2 = 0; si2 < 2; ++si2) {
                                       uint32_t ar = 0, lim = 0;
                                       p = LogPut(p, nm[si2]); p = LogPut(p, "=0x"); p = LogHex(p, sels[si2]);
-                                      if (dpmi_sel_desc(sels[si2], &ar, &lim)) {
+                                      if (DpmiSelectorDescriptor(sels[si2], &ar, &lim)) {
                                           p = LogPut(p, "{base=0x"); p = LogHex(p, DpmiSelectorBase(sels[si2]));
                                           p = LogPut(p, " lim=0x"); p = LogHex(p, lim);
                                           p = LogPut(p, " ar=0x"); p = LogHex(p, ar); p = LogPut(p, "}");
@@ -35344,7 +35344,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         DWORD fb = DpmiSelectorBase((WORD)csv);
                         ++g_pmfault_dumps;
                         const volatile BYTE *fi = (const volatile BYTE *)(ULONG_PTR)(fb + eip);
-                        uint32_t sel_ar = 0, sel_lim = 0; dpmi_sel_desc((WORD)csv, &sel_ar, &sel_lim);
+                        uint32_t sel_ar = 0, sel_lim = 0; DpmiSelectorDescriptor((WORD)csv, &sel_ar, &sel_lim);
                         p = LogPut(p, "GH#18 PM-FAULT ev=0x"); p = LogHex(p, ev);
                         p = LogPut(p, " CS:EIP=0x"); p = LogHex(p, csv); p = LogPut(p, ":0x"); p = LogHex(p, eip);
                         p = LogPut(p, " base=0x"); p = LogHex(p, fb); p = LogPut(p, " AR=0x"); p = LogHex(p, sel_ar);
@@ -35352,7 +35352,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                         p = LogDump(p, (const void *)fi, 12); p = LogPut(p, "\r\n");
                         LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
                     }
-                    vec = (ev == VDM_EVENT_BOP) ? dpmi_bop_vec(csv, eip) : 0;
+                    vec = (ev == VDM_EVENT_BOP) ? DpmiBopVector(csv, eip) : 0;
                     g_DpmiLastVector = vec;
                     g_PmTopDispatch = 1;          /* #256: consumed by this dispatch */
                     rc = dpmi_service_pm_int(&m, tib, vec, steps);
