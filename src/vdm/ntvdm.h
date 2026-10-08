@@ -261,6 +261,11 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 #define VDM_INT_HARDWARE          0x1u    /* bit 0: dispatch through the virtual ICA */
 #define VDM_INT_TIMER             0x2u    /* bit 1                                   */
 #define VDM_INT_PENDING           (VDM_INT_HARDWARE | VDM_INT_TIMER)
+/* An access violation's ExceptionInformation: [0] the operation, [1] the address. */
+#define EXCEPTION_AV_OPERATION    0
+#define EXCEPTION_AV_ADDRESS      1
+#define EXCEPTION_AV_PARAMETERS   2
+#define NT_USER_SPACE_END_U       0x7FFF0000u   /* one past the highest user-mode page */
 /* NT's own facts the host meets in exceptions: an NTSTATUS's top nibble C is error severity,
    and user mode runs on GDT selector 1Bh. */
 #define NT_STATUS_SEVERITY_MASK   0xF0000000u

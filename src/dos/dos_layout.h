@@ -333,6 +333,10 @@
 #define DOS_INT2F_TBL_B   0x0520   /* 64 bytes: DL=2                         */
 #define DOS_INT2F_TBL_C   0x0560   /* 64 bytes: DL=8                         */
 #define DOS_INT2F_TBLS_LEN 192     /* A, B and C together                    */
+#define DOS_INT2F_TBL_A_DL       0x00   /* INT 2Fh AX=122Eh: DL selects the table */
+#define DOS_INT2F_TBL_A_DL_ALIAS 0x04
+#define DOS_INT2F_TBL_B_DL       0x02
+#define DOS_INT2F_TBL_C_DL       0x08
 /* ...ending at 0x5A0, well inside the block, which runs to 0x6F0 (linear 0xFF0,
    the next MCB header). */
 /* ── GH #54: INT 15h AH=C0h's SYSTEM CONFIGURATION TABLE, 10 bytes. ──────────────

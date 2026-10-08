@@ -67,7 +67,9 @@
 #define DOS_ERR_NO_MORE_FILES           0x12
 #define DOS_ERR_LOCK_VIOLATION          0x21
 #define DOS_ERR_SHARING_VIOLATION       0x20
-#define DOS_CRITICAL_ERROR_FAIL 3     /* INT 24h\'s answer in AL: fail the call */
+#define DOS_CRITICAL_ERROR_FAIL 3     /* INT 24h's answer in AL: fail the call */
+#define DOS_ABSOLUTE_UNKNOWN_UNIT      0x0201  /* INT 25h/26h AX: AH=02h, AL=01h unknown unit     */
+#define DOS_ABSOLUTE_SECTOR_NOT_FOUND  0x0208  /* INT 25h/26h AX: AH=02h, AL=08h sector not found */
 #define DOS_ERR_FILE_EXISTS             0x50
 #define DOS_ERR_FAIL_I24   0x53     /* 59h after a FAILed critical error: "fail on INT 24" */
 

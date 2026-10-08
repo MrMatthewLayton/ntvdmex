@@ -17280,9 +17280,9 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
                           : "\r\nHOST FATAL (real-mode guest): exception code=0x");
     cursor = LogHex(cursor, record->ExceptionCode);
     cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, (UINT)(ULONG_PTR)record->ExceptionAddress);
-    if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2) {
-        cursor = LogPut(cursor, " av{op=0x");  cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[0]);
-        cursor = LogPut(cursor, " addr=0x");   cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[1]);
+    if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= EXCEPTION_AV_PARAMETERS) {
+        cursor = LogPut(cursor, " av{op=0x");  cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[EXCEPTION_AV_OPERATION]);
+        cursor = LogPut(cursor, " addr=0x");   cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[EXCEPTION_AV_ADDRESS]);
         cursor = LogPut(cursor, "}");
     }
     cursor = LogPut(cursor, "\r\n  CS:EIP=0x"); cursor = LogHex(cursor, context->SegCs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, context->Eip);
@@ -17372,10 +17372,10 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
     HostRecordFinish();
     ExitProcess(0xDE0);                                 /* clean exit; batch dumps the log */
 }
-
+#define VEH_LOW_MEMORY_EIP_LIMIT_U 0x00200000u
 /* First-chance sightings of real-mode/host faults -- see the arm in the VEH below. */
 static LONG g_RmFaultSeen = 0;
-
+#define DPMI_SPIKE_BASE_SELECTOR 0x001F   /* the spike's 0000h answer */
 static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
 {
     static CHAR lineBuffer[1024]; PSTR cursor = lineBuffer;
@@ -17403,9 +17403,9 @@ static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
                 cursor = LogPut(cursor, "HOSTFAULT #"); cursor = LogHex(cursor, (UINT)faultNumber);
                 cursor = LogPut(cursor, ": exc=0x"); cursor = LogHex(cursor, record->ExceptionCode);
                 cursor = LogPut(cursor, " at=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)record->ExceptionAddress);
-                if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2) {
-                    cursor = LogPut(cursor, " av{op=0x"); cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[0]);
-                    cursor = LogPut(cursor, " addr=0x"); cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[1]);
+                if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= EXCEPTION_AV_PARAMETERS) {
+                    cursor = LogPut(cursor, " av{op=0x"); cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[EXCEPTION_AV_OPERATION]);
+                    cursor = LogPut(cursor, " addr=0x"); cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[EXCEPTION_AV_ADDRESS]);
                     cursor = LogPut(cursor, "}");
                 }
                 cursor = LogPut(cursor, " cs:eip=0x"); cursor = LogHex(cursor, context->SegCs);
@@ -17453,7 +17453,7 @@ static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
          only look while g_PmEntryEip is set, i.e. inside VdmStartExecution. Accept
          either: the old low-memory case, or a match on EDX. */
     if (context->SegCs == NT_USER_CODE_SELECTOR && g_VehCount < 256
-        && (context->Eip < 0x00200000u
+        && (context->Eip < VEH_LOW_MEMORY_EIP_LIMIT_U
             || (g_PmEntryEip >= 0 && (DWORD)context->Edx == (DWORD)g_PmEntryEip))) {
         DWORD site = g_DpmiCodeBase + (context->Edx & WORD_MASK);
         const BYTE *siteBytes = (const BYTE *)(ULONG_PTR)site;
@@ -17485,9 +17485,9 @@ static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
              guest's CONTEXT at all. Cheap: one line, on a path that already logs. */
         cursor = LogPut(cursor, " exc=0x"); cursor = LogHex(cursor, record->ExceptionCode);
         cursor = LogPut(cursor, " at=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)record->ExceptionAddress);
-        if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2) {
-            cursor = LogPut(cursor, " av{op=0x");  cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[0]);
-            cursor = LogPut(cursor, " addr=0x");   cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[1]);
+        if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= EXCEPTION_AV_PARAMETERS) {
+            cursor = LogPut(cursor, " av{op=0x");  cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[EXCEPTION_AV_OPERATION]);
+            cursor = LogPut(cursor, " addr=0x");   cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[EXCEPTION_AV_ADDRESS]);
             cursor = LogPut(cursor, "}");
         }
         { const BYTE *faultBytes = (const BYTE *)(ULONG_PTR)(g_DpmiCodeBase + (context->Eip & WORD_MASK));
@@ -17592,17 +17592,17 @@ static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
           } }
         context->EFlags &= ~EFLAGS_CF_U;                              /* default: CF=0 (success)          */
         switch (functionNumber) {
-        case 0x0400:                                    /* get DPMI version                 */
+        case DPMI_FN_GET_VERSION:                                    /* get DPMI version                 */
             /* #248: the same answer as the main 0400h arm (dpmi_svc.h) -- this spike path
                said CL=3 and swapped the PIC bases (DH is the MASTER base). */
-            context->Eax = (context->Eax & 0xFFFF0000) | DPMI_VERSION_090;
-            context->Ebx = (context->Ebx & 0xFFFF0000) | DPMI_VER_BX;
-            context->Ecx = (context->Ecx & 0xFFFF0000) | DPMI_CPU_CLASS;
-            context->Edx = (context->Edx & 0xFFFF0000) | DPMI_VER_DX;
+            context->Eax = (context->Eax & HIGH_WORD_MASK_U) | DPMI_VERSION_090;
+            context->Ebx = (context->Ebx & HIGH_WORD_MASK_U) | DPMI_VER_BX;
+            context->Ecx = (context->Ecx & HIGH_WORD_MASK_U) | DPMI_CPU_CLASS;
+            context->Edx = (context->Edx & HIGH_WORD_MASK_U) | DPMI_VER_DX;
             cursor = LogPut(cursor, " -> DPMI 0.90");
             break;
-        case 0x0000:                                    /* allocate LDT descriptors (CX=count) */
-            context->Eax = (context->Eax & 0xFFFF0000) | 0x001F;  /* base selector 0x1F (spike stub)    */
+        case DPMI_FN_ALLOCATE_DESCRIPTORS:                                    /* allocate LDT descriptors (CX=count) */
+            context->Eax = (context->Eax & HIGH_WORD_MASK_U) | DPMI_SPIKE_BASE_SELECTOR;  /* base selector 0x1F (spike stub)    */
             cursor = LogPut(cursor, " -> alloc base sel 0x1F");
             break;
         default:
@@ -18169,7 +18169,7 @@ static INT WowLdtPeek(DWORD linear, DWORD low, DWORD high)
     const volatile DWORD *descriptor = (const volatile DWORD *)(ULONG_PTR)linear;
     return descriptor[0] == low && descriptor[1] == high;
 }
-
+enum { WOW_LDT_PROBES = 2, WOW_LDT_PROBE_GAP = 4, WOW_LDT_PROBE1_BASE = 0x5A5A1000, WOW_LDT_PROBE1_LIMIT = 0x0123, WOW_LDT_PROBE2_BASE = 0x3C3C2000, WOW_LDT_PROBE2_LIMIT = 0x0456 };   /* WowFindLdtBase: two distinctive descriptors */
 static DWORD WowFindLdtBase(VOID)
 {
     MEMORY_BASIC_INFORMATION memoryInfo;
@@ -18179,7 +18179,7 @@ static DWORD WowFindLdtBase(VOID)
     CHAR message[320], *cursor;
 
     if (g_WowLdtBase) return g_WowLdtBase;
-    if (g_LdtNext + 2 >= DPMI_LDT_MAX) return 0;
+    if (g_LdtNext + WOW_LDT_PROBES >= DPMI_LDT_MAX) return 0;
 
     /* Two probes, distinctive and different. ⚠ BOTH bases must sit under
        XP_LDT_MAX_LINEAR (~2GB) or the validator refuses the descriptor outright and
@@ -18187,8 +18187,8 @@ static DWORD WowFindLdtBase(VOID)
        0xA5A52000 -- 2.77GB -- and reported "not found" for that reason alone: a false
        negative dressed as a finding, with the cap documented a few hundred lines up. */
     index1 = g_LdtNext++;
-    g_Ldt[index1].Base = 0x5A5A1000; g_Ldt[index1].Limit = 0x0123;
-    g_Ldt[index1].Access = 0xF2;     g_Ldt[index1].Flags = 0;
+    g_Ldt[index1].Base = WOW_LDT_PROBE1_BASE; g_Ldt[index1].Limit = WOW_LDT_PROBE1_LIMIT;
+    g_Ldt[index1].Access = DPMI_ACCESS_DATA;     g_Ldt[index1].Flags = 0;
     DpmiInstall(index1);
     /* ⚠ NOT CONSECUTIVE, AND THAT IS THE WHOLE POINT. The first cut used i1 and i1+1,
        "confirmed" a hit, and reported a table base -- which MOVED between two runs
@@ -18197,13 +18197,13 @@ static DWORD WowFindLdtBase(VOID)
        its two entries through, so that check could not tell them apart and was
        matching the buffer. A five-slot gap is 40 bytes in a table and still 8 in the
        buffer, so only a real table can satisfy it. */
-    g_LdtNext += 4;                        /* leave a gap between the two probes */
+    g_LdtNext += WOW_LDT_PROBE_GAP;                        /* leave a gap between the two probes */
     index2 = g_LdtNext++;
-    g_Ldt[index2].Base = 0x3C3C2000; g_Ldt[index2].Limit = 0x0456;
-    g_Ldt[index2].Access = 0xF2;     g_Ldt[index2].Flags = 0;
+    g_Ldt[index2].Base = WOW_LDT_PROBE2_BASE; g_Ldt[index2].Limit = WOW_LDT_PROBE2_LIMIT;
+    g_Ldt[index2].Access = DPMI_ACCESS_DATA;     g_Ldt[index2].Flags = 0;
     DpmiInstall(index2);
-    DpmiBuildDescriptor(g_Ldt[index1].Base, g_Ldt[index1].Limit, 0xF2, 0, &low1, &high1);
-    DpmiBuildDescriptor(g_Ldt[index2].Base, g_Ldt[index2].Limit, 0xF2, 0, &low2, &high2);
+    DpmiBuildDescriptor(g_Ldt[index1].Base, g_Ldt[index1].Limit, DPMI_ACCESS_DATA, 0, &low1, &high1);
+    DpmiBuildDescriptor(g_Ldt[index2].Base, g_Ldt[index2].Limit, DPMI_ACCESS_DATA, 0, &low2, &high2);
 
     {   WORD selector1 = (WORD)DPMI_LDT_SELECTOR(index1), selector2 = (WORD)DPMI_LDT_SELECTOR(index2);
         DWORD accessRights1 = 0, accessRights2 = 0;
@@ -18232,12 +18232,12 @@ static DWORD WowFindLdtBase(VOID)
                 || protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY);
         if (readable) {
             DWORD regionBase = (DWORD)(ULONG_PTR)memoryInfo.BaseAddress, regionSize = (DWORD)memoryInfo.RegionSize, offset;
-            for (offset = 0; offset + 8 <= regionSize; offset += 8) {          /* descriptors are 8-aligned */
+            for (offset = 0; offset + X86_DESCRIPTOR_SIZE <= regionSize; offset += X86_DESCRIPTOR_SIZE) {          /* descriptors are 8-aligned */
                 DWORD cand = regionBase + offset;
                 if (!WowLdtPeek(cand, low1, high1)) continue;
-                {   DWORD tableBase = cand - (DWORD)index1 * 8;
-                    DWORD other = tableBase + (DWORD)index2 * 8;
-                    if (other < regionBase || other + 8 > regionBase + regionSize) continue;   /* same region only */
+                {   DWORD tableBase = cand - (DWORD)index1 * X86_DESCRIPTOR_SIZE;
+                    DWORD other = tableBase + (DWORD)index2 * X86_DESCRIPTOR_SIZE;
+                    if (other < regionBase || other + X86_DESCRIPTOR_SIZE > regionBase + regionSize) continue;   /* same region only */
                     if (!WowLdtPeek(other, low2, high2)) continue;   /* one hit is chance */
                     g_WowLdtBase = tableBase;
                     cursor = message;
@@ -18253,7 +18253,7 @@ static DWORD WowFindLdtBase(VOID)
             }
         }
         address = (BYTE *)memoryInfo.BaseAddress + memoryInfo.RegionSize;
-        if ((DWORD)(ULONG_PTR)address >= 0x7FFF0000u) break;
+        if ((DWORD)(ULONG_PTR)address >= NT_USER_SPACE_END_U) break;
     }
     cursor = message; cursor = LogPut(cursor, "WOWLDT: descriptor table NOT in our own address space "
                        "(probes verified installed) -- a real LDT window is not "
@@ -19491,7 +19491,7 @@ static DWORD DpmiBopVector(DWORD csValue, DWORD eip)
     }
     return 0;
 }
-
+#define DPMI_PATCH_REGION_MAX_U 0x00400000u   /* larger = a flat selector, not a region */
 /* ── AN EIP IS ONLY 16 BITS WIDE WHEN ITS CODE SELECTOR IS. ───────────────────────
    Every PM stop used to read `VDM_REG(tib, VTIB_EIP) & 0xFFFF`, which is right for the
    16-bit selectors this host grew up on and WRONG the moment a client runs 32-bit code
@@ -19510,7 +19510,7 @@ static DWORD DpmiPmEip(volatile BYTE *tib)
     DWORD currentEip = VDM_REG(tib, VTIB_EIP);
     return DpmiSelectorIs32((WORD)VDM_REG16(tib, VTIB_CS)) ? currentEip : (currentEip & WORD_MASK);
 }
-
+#define DPMI_PATCH_FLOOR       0x600          /* below: the IVT, the BDA and DOS's own area */
 /* ── PATCH A REGION THE CLIENT HAS JUST DECLARED TO BE CODE. ──────────────────────
    Called from INT 31h 0009/000C when the resulting descriptor is a CODE type. The
    TIMING is the client's, not ours, and it is right: Doom's trace shows AH=48h
@@ -19578,7 +19578,7 @@ static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
          are all confirmed on the eager path, and the lazy arm's 16-bit resume has a
          longer record than its 32-bit one. One change per by-hand test. */
     const INT isDryRun = is32BitRegion;
-    if (base < 0x600) base = 0x600;                  /* ...but the region END is unchanged */
+    if (base < DPMI_PATCH_FLOOR) base = DPMI_PATCH_FLOOR;                  /* ...but the region END is unchanged */
     /* No upper bound any more: the regions that matter live in EXTENDED memory, which is
        where a working extender puts its modules. The size cap is a sanity bound rather
        than a policy -- a multi-megabyte "code" region is a flat alias, not a module. */
@@ -19595,7 +19595,7 @@ static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
          loaded and long before it reads data files, so the blocks in play at that moment
          are code. The count is logged -- thousands of "INT sites" would mean we are
          patching data, and that is the number to look at if something later reads wrong. */
-    if ((end - base) > 0x00400000u) {
+    if ((end - base) > DPMI_PATCH_REGION_MAX_U) {
         /* ► A FLAT CODE SELECTOR, AND WE DO NOT HAVE AN ANSWER FOR IT YET. Doom's own
              32-bit code selector is `setaccess 0xC7FA` -- present, DPL3, code, G=1,
              D/B=1, base 0, limit 4 GB. Scanning that range is impossible, so the
@@ -19709,8 +19709,8 @@ static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
                            below: a real INT so aligned is still serviced out of the #GP. The
                            read is 4-aligned (VirtualQuery bases are page-aligned), so it cannot
                            itself fault the scanner. */
-                      { DWORD doff = (linear & ~3u) - address;
-                        if (doff + 4 <= (rend - address)) {
+                      { DWORD doff = (linear & ~X86_DWORD_ALIGN_MASK_U) - address;
+                        if (doff + X86_DWORD_SIZE <= (rend - address)) {
                             DWORD word = *(const volatile DWORD *)(const volatile VOID *)(memory + doff);
                             if (word >= pointerLow && word < pointerHigh) {
                                 /* ⚠ ITS OWN BUDGET, NOT THE SHARED ONE. Counted separately
@@ -19765,7 +19765,7 @@ static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
                          still reaches whatever PM handler it installed through
                          DPMI 0205h -- which for this range is its own emulator's.
                          Patching was the thing taking that away. */
-                      if (memory[index+1] >= 0x34 && memory[index+1] <= 0x3F) {
+                      if (memory[index+1] >= VECTOR_FLOATING_POINT_FIRST && memory[index+1] <= VECTOR_FLOATING_POINT_LAST) {
                           if (rejected < 16) {
                               CHAR fixupLine[160], *fixupCursor = fixupLine;
                               fixupCursor = LogPut(fixupCursor, "DPMI: NOT patching 0x"); fixupCursor = LogHex(fixupCursor, linear);
@@ -29105,11 +29105,11 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         if (g_Net.IsPostPending) {
             DWORD ss = VDM_REG16(tib, VTIB_SS), sp = VDM_REG16(tib, VTIB_ESP);
             volatile WORD *frame = (volatile WORD *)(ULONG_PTR)((ss << PARAGRAPH_SHIFT) + sp);
-            WORD flags = frame[2];
+            WORD flags = frame[X86_FRAME16_FLAGS_WORD];
             WORD newSp = (WORD)(sp - X86_IRET16_SIZE);
             volatile WORD *newFrame = (volatile WORD *)(ULONG_PTR)((ss << PARAGRAPH_SHIFT) + newSp);
             g_Net.IsPostPending = 0;
-            newFrame[0] = g_Net.PostOffset; newFrame[1] = g_Net.PostSegment; newFrame[2] = (WORD)(flags & ~EFLAGS_IF);
+            newFrame[X86_FRAME16_IP_WORD] = g_Net.PostOffset; newFrame[X86_FRAME16_CS_WORD] = g_Net.PostSegment; newFrame[X86_FRAME16_FLAGS_WORD] = (WORD)(flags & ~EFLAGS_IF);
             VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & HIGH_WORD_MASK_U) | newSp;
         }
         V86BOP_RET(V86BOP_DONE);
@@ -29235,7 +29235,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                 UINT eventWaitAl = VDM_REG(tib, VTIB_EAX) & BYTE_MASK;
                 if (eventWaitAl == BIOS_EVENT_WAIT_CANCEL) {            /* cancel                            */
                     g_Int15EventEnd = 0;
-                    *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_ACTIVE) = 0x00;
+                    *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_ACTIVE) = BIOS_BDA_WAIT_NONE;
                     BCF_CLR();
                 } else if (g_Int15EventEnd || g_Int15WaitEnd) {
                     BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | (BIOS_SYSTEM_STATUS_BUSY << BYTE_SHIFT)));
@@ -29247,7 +29247,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                     *(volatile WORD  *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_FLAG_POINTER) = bx;    /* 40:98 flag pointer  */
                     *(volatile WORD  *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_FLAG_SEGMENT) = es;
                     *(volatile DWORD *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_COUNT) = microseconds;    /* 40:9C count, us     */
-                    *(volatile BYTE  *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_ACTIVE) = 0x01;  /* 40:A0 wait active   */
+                    *(volatile BYTE  *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_ACTIVE) = BIOS_BDA_WAIT_IN_PROGRESS;  /* 40:A0 wait active   */
                     ++g_Int15Events;
                     g_Int15EventEnd = Int15QpcAfterMicroseconds(microseconds ? microseconds : 1);
                     BCF_CLR();
@@ -29288,15 +29288,15 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                     BCF_SET();
                 } else if (joystickDx == BIOS_JOYSTICK_READ_BUTTONS) {
                     UINT mask = (1u << VddJoystickButtonsWired(&g_Joystick)) - 1u;
-                    BSETAX((WORD)(((~g_Joystick.Buttons & mask) & 0x0F) << NIBBLE_SHIFT));
+                    BSETAX((WORD)(((~g_Joystick.Buttons & mask) & JOYSTICK_BUTTON_MASK) << NIBBLE_SHIFT));
                     BCF_CLR();
                 } else if (joystickDx == BIOS_JOYSTICK_READ_AXES) {
                     BSETAX((WORD)g_Joystick.Axis[0]);
                     VDM_REG(tib, VTIB_EBX) = (VDM_REG(tib, VTIB_EBX) & HIGH_WORD_MASK_U) | g_Joystick.Axis[1];
                     VDM_REG(tib, VTIB_ECX) = (VDM_REG(tib, VTIB_ECX) & HIGH_WORD_MASK_U)
-                                           | (VddJoystickAxes(&g_Joystick) >= 4 ? g_Joystick.Axis[2] : 0u);
+                                           | (VddJoystickAxes(&g_Joystick) >= JOYSTICK_4AXIS_WIRED ? g_Joystick.Axis[2] : 0u);
                     VDM_REG(tib, VTIB_EDX) = (VDM_REG(tib, VTIB_EDX) & HIGH_WORD_MASK_U)
-                                           | (VddJoystickAxes(&g_Joystick) >= 4 ? g_Joystick.Axis[3] : 0u);
+                                           | (VddJoystickAxes(&g_Joystick) >= JOYSTICK_4AXIS_WIRED ? g_Joystick.Axis[3] : 0u);
                     BCF_CLR();
                 } else {
                     BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | (BIOS_SYSTEM_STATUS_UNSUPPORTED << BYTE_SHIFT)));
@@ -29383,7 +29383,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                ► An unknown AH also leaves AX as passed (SeaBIOS, DOSBox-X). PCem's AMI
                  answers the status for it instead -- disputed, recorded in
                  oracle-rules.json; "ready" for a call that does nothing was neither. */
-            WORD base17 = (int17Dx < 3) ? *(volatile WORD *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_LPT_BASES + 2 * int17Dx) : 0;
+            WORD base17 = (int17Dx < BIOS_BDA_LPT_PORTS) ? *(volatile WORD *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_LPT_BASES + X86_WORD_SIZE * int17Dx) : 0;
             if (base17 != LPT_DEFAULT_BASE || !VddLptIsFitted(&g_Comm, 0)) {
                 /* absent printer: nothing, registers as passed */
             } else if (int17Ah == BIOS_PRINTER_PRINT) {         /* print AL                 */
@@ -29481,11 +29481,11 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
             PDOS_DISK_GEOMETRY int25Geometry = DiskFor(drive);
             DWORD linear = (VDM_REG16(tib, VTIB_DS) << PARAGRAPH_SHIFT)
                       + VDM_REG16(tib, VTIB_EBX);
-            if (!int25Geometry) { BSETAX(0x0201); BCF_SET(); g_BiosUnimplemented[bopNumber] = 1; }
-            else if (firstSector + count > int25Geometry->TotalSectors) { BSETAX(0x0208); BCF_SET(); }
+            if (!int25Geometry) { BSETAX(DOS_ABSOLUTE_UNKNOWN_UNIT); BCF_SET(); g_BiosUnimplemented[bopNumber] = 1; }
+            else if (firstSector + count > int25Geometry->TotalSectors) { BSETAX(DOS_ABSOLUTE_SECTOR_NOT_FOUND); BCF_SET(); }
             else if (DiskIo(drive, firstSector, count, (BYTE *)(ULONG_PTR)linear, bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_ABSOLUTE_DISK_WRITE)))
                  { BSETAX(0); BCF_CLR(); }
-            else { BSETAX(0x0208); BCF_SET(); }  /* AL=08 sector not found */
+            else { BSETAX(DOS_ABSOLUTE_SECTOR_NOT_FOUND); BCF_SET(); }  /* AL=08 sector not found */
         } else handled = 0;
         #undef BCF_SET
         #undef BCF_CLR
@@ -29591,9 +29591,9 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                  not measured. */
             DWORD dl2e = VDM_REG(tib, VTIB_EDX) & BYTE_MASK;
             WORD  toff = 0;
-            if (dl2e == 0x00 || dl2e == 0x04) toff = DOS_INT2F_TBL_A;
-            else if (dl2e == 0x02)            toff = DOS_INT2F_TBL_B;
-            else if (dl2e == 0x08)            toff = DOS_INT2F_TBL_C;
+            if (dl2e == DOS_INT2F_TBL_A_DL || dl2e == DOS_INT2F_TBL_A_DL_ALIAS) toff = DOS_INT2F_TBL_A;
+            else if (dl2e == DOS_INT2F_TBL_B_DL)            toff = DOS_INT2F_TBL_B;
+            else if (dl2e == DOS_INT2F_TBL_C_DL)            toff = DOS_INT2F_TBL_C;
             if (toff) {
                 VDM_SET16(tib, VTIB_ES,  DOS_CTAB_SEG);
                 VDM_SET16(tib, VTIB_EDI, toff);

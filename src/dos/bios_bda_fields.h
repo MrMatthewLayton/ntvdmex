@@ -56,6 +56,9 @@
 #define BIOS_BDA_WAIT_FLAG_SEGMENT       0x9A
 #define BIOS_BDA_WAIT_COUNT              0x9C  /* DWORD: microseconds left */
 #define BIOS_BDA_WAIT_ACTIVE             0xA0
+#define BIOS_BDA_WAIT_IN_PROGRESS        0x01  /* 40:A0 bit 0: an AH=83h wait counts */
+#define BIOS_BDA_WAIT_NONE               0x00
+#define BIOS_BDA_LPT_PORTS               3
 #define BIOS_BDA_VIDEO_SAVE_POINTER      0xA8
 
 #endif /* NTVDMEX_DOS_BIOS_BDA_FIELDS_H */

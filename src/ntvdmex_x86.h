@@ -35,6 +35,10 @@
 /* A 16-bit far frame on the stack: IP, then CS, then (an interrupt's) FLAGS. */
 #define X86_FRAME16_CS          2
 #define X86_FRAME16_FLAGS       4
+#define X86_FRAME16_IP_WORD     0           /* the same frame as WORD indexes           */
+#define X86_FRAME16_CS_WORD     1
+#define X86_FRAME16_FLAGS_WORD  2
+#define X86_DWORD_ALIGN_MASK_U  3u
 #define X86_FAR_RETURN16_SIZE   4           /* IP, CS                                   */
 #define X86_IRET16_SIZE         6           /* IP, CS, FLAGS                            */
 
