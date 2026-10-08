@@ -153,6 +153,10 @@
 #define I33_DEFAULT_SPEED          50
 #define I33_DEFAULT_RATE           3
 #define I33_TEXT_VIRTUAL_MAX_Y     199     /* text modes: 25 rows of 8 virtual pixels */
+#define I33_TEXT_VIRTUAL_HEIGHT    200
+#define I33_DEFAULT_WIDTH          640     /* no graphics mode yet: a 640x480 screen  */
+#define I33_DEFAULT_HEIGHT         480
+#define I33_NARROW_MODE_WIDTH      320     /* modes this narrow double X (mode 13h)   */
 #define I33_TEXT_CELL_MASK         7       /* text modes snap to the 8x8 cell         */
 #define I33_GC_CGA_LEFT_SHIFT 14      /* the leftmost pixel's pair: bits 15-14    */
 #define I33_GC_CGA_MASK       3u

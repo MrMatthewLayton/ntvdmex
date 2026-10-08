@@ -7067,7 +7067,7 @@ static VOID HostRecordToggle(VOID)
     CHAR path[MAX_PATH], *cursor;
     if (AudioWaveIsRecording()) { HostRecordFinish(); return; }
     cursor = LogPut(path, NTVDMEX_OUT); cursor = LogPut(cursor, "capture_audio_");
-    *cursor++ = (CHAR)('0' + (sequence / 10) % 10); *cursor++ = (CHAR)('0' + sequence % 10);
+    *cursor++ = (CHAR)('0' + (sequence / DECIMAL_RADIX) % DECIMAL_RADIX); *cursor++ = (CHAR)('0' + sequence % DECIMAL_RADIX);
     cursor = LogPut(cursor, ".wav");
     ++sequence;
     if (AudioWaveRecordStart(path, g_Wave.SampleHz) == 0) {
@@ -7115,7 +7115,7 @@ static VOID PlanesDumpBeside(PCSTR bitmapPath)
     HOST_UNLOCK();
     CloseHandle(file);
 }
-
+#define TYPEMATIC_DEFAULT_PERIOD_US 92000u
 /* ONE path for a keystroke, whoever produced it. The window proc used to latch
    g_Irq1Pending itself and never call HostIrqSink, which meant real keys bypassed BOTH
    the async delivery added for input lag AND the PIC that gates re-entry -- so every fix
@@ -7141,7 +7141,7 @@ static VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak)
        interrupts run ahead of the bytes again. */
     if (g_KeyEvent) SetEvent(g_KeyEvent);
 }
-
+#define TYPEMATIC_DEFAULT_DELAY_US  500000u   /* until XP's own setting is read at startup */
 /* ── TYPEMATIC REPEAT: WE ARE THE KEYBOARD, SO WE MUST DO ITS REPEATING ───────
    THE BUG (user, reported twice): crash the ship in Skyroads while holding the up
    arrow and, on real DOS or stock ntvdm, the restarted level accelerates
@@ -7179,8 +7179,8 @@ static VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak)
      box would follow. So take it from the system, which is the thing stock ntvdm is
      effectively passing through, and keep the measured pair above as the
      VERIFICATION target rather than the source. */
-static UINT32 g_TypematicDelayMicroseconds  = 500000u;   /* replaced at startup from XP's setting */
-static UINT32 g_TypematicPeriodMicroseconds =  92000u;
+static UINT32 g_TypematicDelayMicroseconds  = TYPEMATIC_DEFAULT_DELAY_US;   /* replaced at startup from XP's setting */
+static UINT32 g_TypematicPeriodMicroseconds =  TYPEMATIC_DEFAULT_PERIOD_US;
 static DWORD    g_TypematicSpiDelay, g_TypematicSpiSpeed;     /* raw, so STAGE2 can show them */
 enum { KEYBOARD_DELAY_MAX = 3, KEYBOARD_SPEED_MAX = 31, TYPEMATIC_DELAY_STEP_US = 250000, TYPEMATIC_PERIOD_SLOWEST_US = 400000, TYPEMATIC_PERIOD_STEP_US = 12000 };   /* SPI_GETKEYBOARDDELAY 0-3 = 250-1000 ms; SPEED 0-31 = 400-28 ms */
 /* XP exposes the two values it programs into the keyboard controller:
@@ -7435,7 +7435,7 @@ static DWORD WINAPI HeartbeatThread(LPVOID parameter)
            in service, both chips), which lines we still hold pending, and where IRQ 5's
            real-mode vector points -- the three things that decide it. */
         { INT index; DWORD pendingMask = 0; WORD int0DOffset = PeekWord(IVT_OFFSET_ADDRESS(VECTOR_IRQ5)), int0DSegment = PeekWord(IVT_SEGMENT_ADDRESS(VECTOR_IRQ5));
-          for (index = 0; index < 16; ++index) if (g_IrqNPending[index]) pendingMask |= 1u << index;
+          for (index = 0; index < PIC_LINES; ++index) if (g_IrqNPending[index]) pendingMask |= 1u << index;
           cursor = LogPut(cursor, " pic{imr=");  cursor = LogHexByte(cursor, g_Pic.Master.Imr); cursor = LogPut(cursor, "/"); cursor = LogHexByte(cursor, g_Pic.Slave.Imr);
           cursor = LogPut(cursor, " irr=");      cursor = LogHexByte(cursor, g_Pic.Master.Irr); cursor = LogPut(cursor, "/"); cursor = LogHexByte(cursor, g_Pic.Slave.Irr);
           cursor = LogPut(cursor, " isr=");      cursor = LogHexByte(cursor, g_Pic.Master.Isr); cursor = LogPut(cursor, "/"); cursor = LogHexByte(cursor, g_Pic.Slave.Isr);
@@ -7931,7 +7931,7 @@ static VOID HostSetFlags(volatile BYTE *tib, BYTE carryFlag, BYTE zeroFlag)
 static PVOID XmsHostAllocate(PVOID context, DWORD kilobytes)
 {
     (VOID)context;
-    return VirtualAlloc(NULL, (SIZE_T)kilobytes * 1024, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    return VirtualAlloc(NULL, (SIZE_T)kilobytes * BYTES_PER_KILOBYTE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 }
 static VOID XmsHostFree(PVOID context, PVOID memory, DWORD kilobytes)
 {
@@ -8159,13 +8159,13 @@ static VOID HostEms(volatile BYTE *tib)
     #undef E_SETBX
     #undef E_SETDX
 }
-
+enum { I33_FALLBACK_X = 320, I33_FALLBACK_Y = 240, I33_ABSOLUTE_DELTA_SCALE = 8 };   /* I33TakeMotion's absolute-derived fallback */
 /* --- menu + status bar (scaffold; most items are stubs for now) ------------ */
 static CHAR g_ProgramName[64] = "(none)";      /* first part of the status strip    */
 #define I33_SITE_CONTEXT_BEFORE 4   /* g_MouseI33Site: bytes kept from before the INT */
 /* Mouse state shared UI thread -> V86 thread (INT 33h). Position is in guest
    pixels (mapped from the window client); buttons: bit0 L, bit1 R, bit2 M. */
-static volatile LONG g_MouseX = 320, g_MouseY = 240, g_MouseButtons = 0;
+static volatile LONG g_MouseX = I33_FALLBACK_X, g_MouseY = I33_FALLBACK_Y, g_MouseButtons = 0;
 /* ── RELATIVE MOTION, WHICH IS WHAT A GAME ACTUALLY ASKS FOR. ────────────────────────
      INT 33h function 0Bh reports MICKEYS MOVED SINCE THE LAST CALL, and we derived that
      from the absolute pointer: (x - last_x) * 8. Fine for a menu, useless for Doom -- the
@@ -8180,7 +8180,7 @@ static volatile LONG g_MouseX = 320, g_MouseY = 240, g_MouseButtons = 0;
      absolute-derived delta rather than reporting no motion at all. */
 static volatile LONG g_MouseDx, g_MouseDy;      /* raw mickeys since the last 0Bh drain */
 static INT           g_MouseRawOk;           /* raw mouse registered with the window */
-static INT           g_MouseSensitivity = 100;       /* percent; msens.txt tunes feel per-guest */
+static INT           g_MouseSensitivity = PERCENT;       /* percent; msens.txt tunes feel per-guest */
 /* Doom reports "no mouse look" while capture is demonstrably on. Three things can be
    false and they need opposite fixes: raw input never REGISTERED, WM_INPUT never
    ARRIVING, or the guest never ASKING (INT 33h 0Bh). Count all three -- and note that
@@ -8304,12 +8304,12 @@ static DWORD         g_MouseEdges;            /* transitions seen -- STAGE2 evid
    ⇒ g_Video.gw/gh are the MODE's extent, set by the mode set itself and always
      populated (VddVideoReset seeds them), which is also what the real driver keys
      off: it hooks INT 10h and rebuilds its screen when the mode changes. */
-static UINT I33Width(VOID) { return g_Video.GraphicsWidth ? g_Video.GraphicsWidth : 640; }
-static UINT I33Height(VOID) { return g_Video.GraphicsHeight ? g_Video.GraphicsHeight : 480; }
+static UINT I33Width(VOID) { return g_Video.GraphicsWidth ? g_Video.GraphicsWidth : I33_DEFAULT_WIDTH; }
+static UINT I33Height(VOID) { return g_Video.GraphicsHeight ? g_Video.GraphicsHeight : I33_DEFAULT_HEIGHT; }
 static INT I33XShift(VOID)
 {
     UINT width = I33Width();
-    return (width <= 320) ? 1 : 0;
+    return (width <= I33_NARROW_MODE_WIDTH) ? 1 : 0;
 }
 static LONG I33VirtualX(LONG pixelX) { return pixelX << I33XShift(); }
 static LONG I33PixelX(LONG virtualX) { return virtualX >> I33XShift(); }
@@ -8320,9 +8320,9 @@ static LONG I33VirtualMaximumX(VOID)
      application does `row = DX / 8` -- 0..199 over 25 rows. Our text frame is 400
      lines tall and we handed that back raw, so every row came out DOUBLED: a click on
      QBasic's menu bar landed two rows below it and no menu ever opened by mouse. */
-static INT  I33Text(VOID)  { return g_Video.ModeKind == VIDEO_KIND_TEXT && !g_Video.IsVesa && I33Height() > 200; }
-static LONG I33VirtualY(LONG pixelY) { return I33Text() ? pixelY * 200 / (LONG)I33Height() : pixelY; }
-static LONG I33PixelY(LONG virtualY) { return I33Text() ? virtualY * (LONG)I33Height() / 200 : virtualY; }
+static INT  I33Text(VOID)  { return g_Video.ModeKind == VIDEO_KIND_TEXT && !g_Video.IsVesa && I33Height() > I33_TEXT_VIRTUAL_HEIGHT; }
+static LONG I33VirtualY(LONG pixelY) { return I33Text() ? pixelY * I33_TEXT_VIRTUAL_HEIGHT / (LONG)I33Height() : pixelY; }
+static LONG I33PixelY(LONG virtualY) { return I33Text() ? virtualY * (LONG)I33Height() / I33_TEXT_VIRTUAL_HEIGHT : virtualY; }
 static LONG I33VirtualMaximumY(VOID)
 { return I33Text() ? I33_TEXT_VIRTUAL_MAX_Y : (LONG)I33Height() - 1; }
 /* ── ...AND A TEXT POSITION IS A CELL, NOT A PIXEL. ──────────────────────────────
@@ -8674,7 +8674,7 @@ static VOID I33GraphicsCursorDefine(const WORD *screen, const WORD *current)
 }
 /* 0Ah BX=0: the text cursor's screen (AND) and cursor (XOR) masks over the cell's
    (char, attr) word. The driver's defaults invert the colours and leave the character. */
-static volatile LONG g_MouseTextCursorAnd = 0x77FF, g_MouseTextCursorXor = 0x7700;
+static volatile LONG g_MouseTextCursorAnd = I33_DEFAULT_TEXT_AND, g_MouseTextCursorXor = I33_DEFAULT_TEXT_XOR;
 static DWORD g_MouseStateBadPointer;    /* 16h/17h: ES:DX we refused to dereference       */
 static DWORD g_MouseI33Unimplemented;      /* calls that reached `default:` -- see there     */
 
@@ -8958,7 +8958,7 @@ static INT CloseProgramNow(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PST
     machine->ExitCode = 0;
     return 0;
 }
-enum { I33_FALLBACK_X = 320, I33_FALLBACK_Y = 240, I33_ABSOLUTE_DELTA_SCALE = 8 };   /* I33TakeMotion's absolute-derived fallback */
+
 /* The mickeys moved since the last read, DRAINED -- 0Bh's arithmetic, lifted out
    unchanged so 27h (#249) reads the same counters the same way: the driver has ONE
    pair of motion accumulators and both calls reset it. Clamped to signed 16 bits
@@ -9548,7 +9548,7 @@ static INT MouseEventQueueTake(MOUSE_EVENT_ENTRY *event, LONG *outAx, WORD *segm
         *event = g_MouseEventQueue[tail];
         g_MouseEventQueueTail = (tail + 1) % MS_EVQ;
         handlerChoice = I33PickHandler(g_MouseAlt, (UINT)event->Bits, shiftFlags, mainMask, &handlerAx);
-        if (handlerChoice == -2) continue;
+        if (handlerChoice == I33_PICK_NOBODY) continue;
         if (g_MouseEventQueueTail == g_MouseEventQueueHead) InterlockedExchange(&g_MouseEventPend, 0);
         *outAx = (LONG)handlerAx;
         if (handlerChoice >= 0) { *segment = g_MouseAlt[handlerChoice].Segment; *offset = g_MouseAlt[handlerChoice].Offset; ++g_MouseAltCalls; }
@@ -9707,7 +9707,7 @@ static VOID MouseCallbackReturn(volatile BYTE *tib)
     VDM_REG(tib, VTIB_ES)  = g_MouseCallbackSaved.Es;  VDM_REG(tib, VTIB_SS)  = g_MouseCallbackSaved.Ss;
     g_MouseCallbackActive = 0; ++g_MouseCallbackDone;
 }
-
+enum { OVERLAY_CURSOR_ROWS = 16, OVERLAY_CURSOR_OUTLINE = 0, OVERLAY_CURSOR_FILL = 15 };   /* the host-drawn pointer: black outline, white fill */
 /* Classic arrow cursor: 'o' = black outline (index 0), 'X' = white fill (15),
    ' ' = transparent; hotspot at the top-left tip. Drawn into the presenter's 8-bpp
    SNAPSHOT each present (#264) -- ⛔ not the frame: in mode 13h the frame IS guest VRAM,
@@ -9720,7 +9720,7 @@ static VOID MouseCallbackReturn(volatile BYTE *tib)
    Regenerate with:  python3 tools/gen/mkcursor.py cursors/cursor-pointer.cur       */
 /* Generated by tools/gen/mkcursor.py from cursors/cursor-pointer.cur -- 16x16, hotspot (0,0).
    Do not hand-edit: regenerate from the artwork instead. */
-static PCSTR const g_MouseCursorShape[16] = {
+static PCSTR const g_MouseCursorShape[OVERLAY_CURSOR_ROWS] = {
     "oo",
     "oXo",
     "oXXo",
@@ -9741,13 +9741,13 @@ static PCSTR const g_MouseCursorShape[16] = {
 static VOID OverlayCursor(BYTE *pixels, INT width, INT height, INT stride, INT cursorX, INT cursorY)
 {
     INT row;
-    for (row = 0; row < 16; ++row) {
+    for (row = 0; row < OVERLAY_CURSOR_ROWS; ++row) {
         PCSTR shapeRow = g_MouseCursorShape[row]; INT column, screenRow = cursorY + row;
         if (screenRow < 0 || screenRow >= height) continue;
         for (column = 0; shapeRow[column]; ++column) {
             INT screenColumn = cursorX + column; CHAR shape = shapeRow[column];
             if (shape == ' ' || screenColumn < 0 || screenColumn >= width) continue;
-            pixels[screenRow * stride + screenColumn] = (shape == 'o') ? 0 : 15;     /* black outline / white fill */
+            pixels[screenRow * stride + screenColumn] = (shape == 'o') ? OVERLAY_CURSOR_OUTLINE : OVERLAY_CURSOR_FILL;     /* black outline / white fill */
         }
     }
 }
@@ -10659,7 +10659,7 @@ static VOID TrayAdd(HINSTANCE instance, HWND window)
     notifyIconData.uID              = TRAY_ID;
     notifyIconData.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     notifyIconData.uCallbackMessage = WM_TRAY;
-    notifyIconData.hIcon            = LoadIconA(instance, MAKEINTRESOURCEA(101));
+    notifyIconData.hIcon            = LoadIconA(instance, MAKEINTRESOURCEA(IDI_MAINICON));
     if (!notifyIconData.hIcon) notifyIconData.hIcon = LoadIconA(NULL, IDI_APPLICATION);
     for (index = 0; tip[index] && index < (INT)sizeof notifyIconData.szTip - 1; ++index) notifyIconData.szTip[index] = tip[index];
     notifyIconData.szTip[index] = 0;
@@ -10733,8 +10733,8 @@ static VOID ManagerName(PSTR out, HWND *show)
         /* "DOOM.EXE" -> "Doom": the base name, first letter up, the rest down. */
         for (index = 0; baseName[index] && baseName[index] != '.' && length < MGR_NAME_SIZE - 1; ++index) {
             CHAR character = baseName[index];
-            if (length == 0) { if (character >= 'a' && character <= 'z') character = (CHAR)(character - 32); }
-            else        { if (character >= 'A' && character <= 'Z') character = (CHAR)(character + 32); }
+            if (length == 0) { if (character >= 'a' && character <= 'z') character = (CHAR)(character - ASCII_CASE_BIT); }
+            else        { if (character >= 'A' && character <= 'Z') character = (CHAR)(character + ASCII_CASE_BIT); }
             raw[length++] = character;
         }
         raw[length] = 0;
@@ -11157,7 +11157,7 @@ static DWORD WINAPI PasteThread(LPVOID parameter)
     InterlockedExchange(&g_PasteBusy, 0);
     return 0;
 }
-
+enum { PASTE_TEXT_MAX = 4096 };   /* TextPaste: the most it types in one go */
 static VOID TextPaste(HWND window)
 {
     HANDLE clipboard; PCSTR source; PSTR copy; INT length = 0;
@@ -11165,8 +11165,8 @@ static VOID TextPaste(HWND window)
     if (!OpenClipboard(window)) { InterlockedExchange(&g_PasteBusy, 0); return; }
     clipboard = GetClipboardData(CF_TEXT);
     source = clipboard ? (PCSTR)GlobalLock(clipboard) : NULL;
-    copy = source ? (PSTR)HeapAlloc(GetProcessHeap(), 0, 4097) : NULL;
-    if (copy) { while (length < 4096 && source[length]) { copy[length] = source[length]; ++length; } copy[length] = 0; }
+    copy = source ? (PSTR)HeapAlloc(GetProcessHeap(), 0, PASTE_TEXT_MAX + 1) : NULL;
+    if (copy) { while (length < PASTE_TEXT_MAX && source[length]) { copy[length] = source[length]; ++length; } copy[length] = 0; }
     if (source) GlobalUnlock(clipboard);
     CloseClipboard();
     if (!copy || !length) { if (copy) HeapFree(GetProcessHeap(), 0, copy); InterlockedExchange(&g_PasteBusy, 0); return; }
@@ -11358,7 +11358,7 @@ static VOID HostCursorRefresh(HWND window)
     SetCursor(HostCursorVisibleAt(IsPointOverVideo(window, client.x, client.y))
               ? LoadCursorA(NULL, IDC_ARROW) : NULL);
 }
-
+enum { EXEC_PRIORITY_UNSET = 0x7FFF, BACKGROUND_PRIORITY_TICK_MS = 500 };   /* BackgroundPriorityTick */
 /* Confine the pointer to our client area. Split out of InputCaptureSet because the
    rect is only true for the geometry it was computed from: go fullscreen (or resize)
    while captured and the clip is still the OLD window, so the mouse is fenced into a
@@ -11402,12 +11402,12 @@ static VOID CaptureClipGuard(HWND window)
         ++g_ClipRepairs;
     }
 }
-
+enum { FULLSCREEN_RELEASE_HINT_MS = 4000 };   /* FullscreenReleaseHint: how long its hint shows */
 /* #138: in fullscreen there is no status strip, so say how to get the mouse back. */
 static VOID FullscreenReleaseHint(VOID)
 {
     g_PresentDdraw.HintText  = "Mouse captured -- press the Windows key to release it";
-    g_PresentDdraw.HintUntil = GetTickCount() + 4000;
+    g_PresentDdraw.HintUntil = GetTickCount() + FULLSCREEN_RELEASE_HINT_MS;
 }
 static VOID InputCaptureSet(HWND window, INT isOn)
 {
@@ -11453,7 +11453,7 @@ static VOID InputCaptureSet(HWND window, INT isOn)
        which is where SendMessage to the control is safe -- InputCaptureSet is also
        reached from the WM_KEYDOWN path, but the tick is the single writer. */
 }
-
+enum { HOST_INSTANCES_MAX = 16, HOST_INSTANCE_WAIT_MS = 200, CAPTURE_MS_MIN = 50, CAPTURE_MS_MAX = 60000, CAPTURE_DELAY_MS_MAX = 600000, HEADLESS_MS_MAX = 3600000 };   /* startup limits: instance numbers, knob ranges */
 /* ── #153: FILE > OPEN EXECUTABLE / OPEN RECENT. ─────────────────────────────────────
      User decision (s81): if this window is sitting at the top-level shell's prompt,
      TYPE the program into it -- drive, `CD`, name -- so it runs here and the prompt
@@ -11478,11 +11478,11 @@ static VOID InputCaptureSet(HWND window, INT isOn)
      which is what the Skyroads timing guard and every rig measurement assume. */
 static HANDLE g_ExecThread;                        /* the exec (guest) thread               */
 static INT    g_ExecPriorityForeground = THREAD_PRIORITY_NORMAL;
-static INT    g_ExecPriorityNow = 0x7FFF;       /* what BackgroundPriorityTick last set             */
+static INT    g_ExecPriorityNow = EXEC_PRIORITY_UNSET;       /* what BackgroundPriorityTick last set             */
 static INT OtherHostsRunning(VOID)
 {
     INT instance; CHAR name[48];
-    for (instance = 1; instance <= 16; ++instance) {
+    for (instance = 1; instance <= HOST_INSTANCES_MAX; ++instance) {
         HANDLE mutex; PSTR cursor = LogPut(name, "Global\\ntvdmex_host_single");
         if (instance == g_Instance) continue;
         if (instance > 1) { *cursor++ = '_'; cursor = LogDecimal(cursor, (UINT)instance); }
@@ -11508,7 +11508,7 @@ static VOID BackgroundPriorityTick(HWND window)
     static DWORD last; static INT logged;
     DWORD now = GetTickCount();
     HWND foreground; INT want, isBackground;
-    if (!g_ExecThread || now - last < 500) return;
+    if (!g_ExecThread || now - last < BACKGROUND_PRIORITY_TICK_MS) return;
     last = now;
     foreground = GetForegroundWindow();
     isBackground = !(foreground && (foreground == window || GetAncestor(foreground, GA_ROOTOWNER) == window)) && OtherHostsRunning();
@@ -11653,7 +11653,7 @@ static VOID MenuRecentFill(VOID)
         AppendMenuA(g_RecentMenu, MF_STRING, IDM_RECENT_0 + (UINT)index, text);
     }
 }
-
+enum { HOST_PANIC_RESUME_MAX = 64 };   /* HostPanicRelease: undo at most this many suspends */
 /* ── ⛔⛔⛔ GIVE THE MACHINE BACK. CALL THIS BEFORE ANY TEARDOWN PATH. ─────────────
      Two things this host does are SYSTEM-WIDE and outlive our window, and a third
      can stop the process dying at all:
@@ -11678,7 +11678,7 @@ static VOID HostPanicRelease(VOID)
         INT guard = 0;
         /* ResumeThread returns the PREVIOUS count; >1 means it is still suspended.
            Bounded so a bad handle cannot spin here forever. */
-        while (guard++ < 64) { DWORD prev = ResumeThread(g_HostCpu);
+        while (guard++ < HOST_PANIC_RESUME_MAX) { DWORD prev = ResumeThread(g_HostCpu);
                                if (prev == (DWORD)-1 || prev <= 1) break; }
     }
 }
@@ -28888,7 +28888,7 @@ static VOID DosWowPublish(volatile BYTE *handlerArea, volatile BYTE *controlTabl
     (VOID)handlerArea;
     *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_WOW_TABLE) = table;
 }
-enum { HOST_INSTANCES_MAX = 16, HOST_INSTANCE_WAIT_MS = 200, CAPTURE_MS_MIN = 50, CAPTURE_MS_MAX = 60000, CAPTURE_DELAY_MS_MAX = 600000, HEADLESS_MS_MAX = 3600000 };   /* startup limits: instance numbers, knob ranges */
+
 /* ── ★★★★★ A TITLE IS "PROGRAM [ARGUMENTS]", AND WE OPENED THE WHOLE THING AS A
      FILENAME. (session 59) `target.txt` has split `path [args]` since M2.5, but the
      CSRSS path -- which is EVERY REAL LAUNCH, because the IFEO hook is how a program
