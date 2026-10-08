@@ -41,6 +41,7 @@
 #define NTVDMEX_DOS_BIOS_BDA_H
 
 #include "../ntvdmex_types.h"
+#include "bios_services.h"     /* BIOS function numbers and status codes */
 #include "dos_mcb.h"            /* DOS_MEM_TOP -- where conventional memory ends */
 #include "bios_bda_fields.h"   /* the BDA's fields */
 

@@ -11988,11 +11988,11 @@ static DWORD WINAPI JoystickPollThread(LPVOID param)
                        onto axis A extremes -- a DOS platformer reads digital
                        directions out of the analog port, and a held D-pad must
                        pin the axis, not average with a centred stick. */
-                    INT seconds = (INT)(((info.dwPOV + 2250u) / 4500u) & 7u);
-                    if (seconds == 7 || seconds == 0 || seconds == 1) axes[1] = 0;
-                    if (seconds >= 3 && seconds <= 5)             axes[1] = 255;
-                    if (seconds >= 1 && seconds <= 3)             axes[0] = 255;
-                    if (seconds >= 5 && seconds <= 7)             axes[0] = 0;
+                    INT povOctant = (INT)(((info.dwPOV + 2250u) / 4500u) & 7u);
+                    if (povOctant == 7 || povOctant == 0 || povOctant == 1) axes[1] = 0;
+                    if (povOctant >= 3 && povOctant <= 5)             axes[1] = 255;
+                    if (povOctant >= 1 && povOctant <= 3)             axes[0] = 255;
+                    if (povOctant >= 5 && povOctant <= 7)             axes[0] = 0;
                 }
                 for (index = 0; index < 4; ++index) g_Joystick.Axis[index] = (BYTE)axes[index];
                 g_Joystick.Buttons = (BYTE)(info.dwButtons & 0x0F);
@@ -17595,7 +17595,7 @@ static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
         case 0x0400:                                    /* get DPMI version                 */
             /* #248: the same answer as the main 0400h arm (dpmi_svc.h) -- this spike path
                said CL=3 and swapped the PIC bases (DH is the MASTER base). */
-            context->Eax = (context->Eax & 0xFFFF0000) | DPMI_VER_AX;
+            context->Eax = (context->Eax & 0xFFFF0000) | DPMI_VERSION_090;
             context->Ebx = (context->Ebx & 0xFFFF0000) | DPMI_VER_BX;
             context->Ecx = (context->Ecx & 0xFFFF0000) | DPMI_CPU_CLASS;
             context->Edx = (context->Edx & 0xFFFF0000) | DPMI_VER_DX;
@@ -24729,7 +24729,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             VDM_SET16(tib, VTIB_EAX, 0);
                             VDM_SET16(tib, VTIB_EBX, 1);
                             VDM_SET16(tib, VTIB_ECX, (VDM_REG(tib, VTIB_ECX) & HIGH_BYTE_MASK) | DPMI_CPU_CLASS);
-                            VDM_SET16(tib, VTIB_EDX, 0x005A);      /* DPMI 0.90 */
+                            VDM_SET16(tib, VTIB_EDX, DPMI_VERSION_090);      /* DPMI 0.90 */
                             VDM_SET16(tib, VTIB_ESI, 0);
                             VDM_SET16(tib, VTIB_ES,  DOS_HDLR_SEG);
                             VDM_SET16(tib, VTIB_EDI, DPMI_ENTRY_OFF);
@@ -24875,7 +24875,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             /* ── #248: CL IS THE SAME BYTE 1687h REPORTS. It was a hardcoded 3
                                  here while 1687h said DPMI_CPU_CLASS (4) -- the s79 GetWinFlags
                                  fix changed one site of two. CH stays 0, as it always was here. */
-                            VDM_SET16(tib, VTIB_EAX, DPMI_VER_AX);  /* 0.90 */
+                            VDM_SET16(tib, VTIB_EAX, DPMI_VERSION_090);  /* 0.90 */
                             VDM_SET16(tib, VTIB_EBX, DPMI_VER_BX);
                             VDM_SET16(tib, VTIB_ECX, DPMI_CPU_CLASS);
                             VDM_SET16(tib, VTIB_EDX, DPMI_VER_DX);
@@ -28932,7 +28932,7 @@ static HANDLE CsrssOpenSplit(PSTR path, PSTR *argumentsOut)
     }
     return INVALID_HANDLE_VALUE;
 }
-
+#define V86BOP_2F_LOG_LINES_MAX 512     /* BOP 2Fh lines logged before the cap        */
 
 /* ── ★★★ COOPERATIVE DEVICE-IRQ DELIVERY IN V86, FACTORED SO IT HAS ONE HOME. ──────
      This was inline in the main exec loop, which meant it only ran when the guest
@@ -29031,7 +29031,7 @@ static INT V86DeliverDeviceIrq(volatile BYTE *tib)
 
     return injected;
 }
-
+#define V86BOP_WAIT_SLEEP_MS    3       /* sleep only while more than this is left    */
 /* ── ★★★ OUR BIOS AND DRIVER STUBS, SERVICED FROM ONE PLACE. (GH #247) ─────────────────
      Every stub we plant in the IVT is `BOP nn ; IRET` (or RETF), and until #247 the only
      code that knew what each `nn` MEANS was the body of WinMain's exec loop. So a stub
@@ -29064,10 +29064,10 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
          the vector; the bus delivers it to whoever claimed it. Only from our stub. */
     if (bopNumber == DOS_GENSTUB_BOP && VDM_REG16(tib, VTIB_CS) == DOS_CTAB_SEG) {
         DWORD ip = VDM_REG16(tib, VTIB_EIP);
-        if (ip >= DOS_GENSTUB_OFF && ip < DOS_GENSTUB_OFF + DOS_GENSTUB_N * 4) {
+        if (ip >= DOS_GENSTUB_OFF && ip < DOS_GENSTUB_OFF + DOS_GENSTUB_N * DOS_GENSTUB_SIZE) {
             NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
             HOST_LOCK();
-            VddBusDeliverInterrupt(&g_Bus, g_GenericStubVector[(ip - DOS_GENSTUB_OFF) / 4], &registers);
+            VddBusDeliverInterrupt(&g_Bus, g_GenericStubVector[(ip - DOS_GENSTUB_OFF) / DOS_GENSTUB_SIZE], &registers);
             HOST_UNLOCK();
             RegistersStore(&registers, tib);
             {   /* CF into the FLAGS the stub's IRET restores (an INT pushed them) */
@@ -29117,7 +29117,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
     if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_VIDEO)) {
         NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
         HOST_LOCK();
-        VddBusDeliverInterrupt(&g_Bus, 0x10, &registers);
+        VddBusDeliverInterrupt(&g_Bus, VECTOR_VIDEO, &registers);
         HOST_UNLOCK();
         Int10WaitAfter();                     /* #226: 4F07h BL=80h */
         RegistersStore(&registers, tib);
@@ -29128,14 +29128,14 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
     if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD_SERVICES)) {
         NTVDD_REGISTERS registers; BYTE int16Ah; RegistersLoad(&registers, tib); int16Ah = VddGetAh(&registers);
         HOST_LOCK();
-        VddBusDeliverInterrupt(&g_Bus, 0x16, &registers);
+        VddBusDeliverInterrupt(&g_Bus, VECTOR_KEYBOARD_SERVICES, &registers);
         HOST_UNLOCK();
         /* A blocking BIOS read with no key must NOT park the exec thread -- doing that
            stops the guest dead, so its timer, its music and its screen freeze until a key
            arrives. (Same fault as INT 21h AH=01/07/08, fixed the same way.) Leave EIP on
            the BOP instead: the guest re-executes INT 16h and keeps taking timer
            interrupts while it waits, which is what a real BIOS spin does. */
-        if ((int16Ah == 0x00 || int16Ah == 0x10) && registers.ZeroFlag != 0 && g_Running) V86BOP_RET(V86BOP_RERUN);
+        if ((int16Ah == BIOS_KEYBOARD_READ || int16Ah == BIOS_KEYBOARD_READ_EXTENDED) && registers.ZeroFlag != 0 && g_Running) V86BOP_RET(V86BOP_RERUN);
         RegistersStore(&registers, tib);
         HostSetFlags(tib, registers.CarryFlag, registers.ZeroFlag);
         VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
@@ -29179,7 +29179,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
             BCF_CLR();
         } else if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_SYSTEM)) {
             UINT int15Ah = (VDM_REG(tib, VTIB_EAX) >> BYTE_SHIFT) & BYTE_MASK;
-            if (int15Ah == 0x88) {                /* extended memory, KB */
+            if (int15Ah == BIOS_SYSTEM_EXTENDED_MEMORY) {                /* extended memory, KB */
                 /* ⚠ THIS ARM IS LOGGED BECAUSE ITS SILENCE COST A WRONG CONCLUSION.
                      A serviced call that leaves no trace is indistinguishable in a
                      log from one that never happened, and session 58 read exactly
@@ -29209,16 +29209,16 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                 { CHAR waitLine[128], *waitCursor = waitLine;
                   waitCursor = LogPut(waitCursor, "  INT15 AH=88h extended memory -> 0x3C00 KB\r\n");
                   LogAppend(LOG_PATH, waitLine, waitCursor); SerialOut(waitLine, waitCursor); }
-            } else if (int15Ah == 0x86) {         /* wait CX:DX microseconds (#206) */
+            } else if (int15Ah == BIOS_SYSTEM_WAIT) {         /* wait CX:DX microseconds (#206) */
                 DWORD microseconds = (VDM_REG16(tib, VTIB_ECX) << WORD_SHIFT) | VDM_REG16(tib, VTIB_EDX);
                 LARGE_INTEGER now;
                 QueryPerformanceCounter(&now);
                 if (g_Int15EventEnd) {           /* an AH=83h event is counting: busy */
-                    BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | 0x8300));
+                    BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | (BIOS_SYSTEM_STATUS_BUSY << BYTE_SHIFT)));
                     BCF_SET(); ++g_Int15Busy;
                 } else if (!g_Int15WaitEnd) {  /* first pass: start the countdown   */
                     if (microseconds == 0) BCF_CLR();
-                    else { g_Int15WaitEnd = Int15QpcAfterMicroseconds(microseconds); ++g_Int15Waits; handled = 4; }
+                    else { g_Int15WaitEnd = Int15QpcAfterMicroseconds(microseconds); ++g_Int15Waits; handled = V86BOP_RERUN; }
                 } else if (now.QuadPart >= g_Int15WaitEnd) {
                     g_Int15WaitEnd = 0;        /* elapsed                           */
                     BCF_CLR();
@@ -29228,17 +29228,17 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                        interrupts and the host's threads need -- a 1 ms nap is far
                        below any wait a program asks this for. */
                     LARGE_INTEGER frequency; QueryPerformanceFrequency(&frequency);
-                    if ((g_Int15WaitEnd - now.QuadPart) * MILLISECONDS_PER_SECOND > 3 * frequency.QuadPart) Sleep(1);
-                    handled = 4;
+                    if ((g_Int15WaitEnd - now.QuadPart) * MILLISECONDS_PER_SECOND > V86BOP_WAIT_SLEEP_MS * frequency.QuadPart) Sleep(1);
+                    handled = V86BOP_RERUN;
                 }
-            } else if (int15Ah == 0x83) {         /* event wait (#206) */
+            } else if (int15Ah == BIOS_SYSTEM_EVENT_WAIT) {         /* event wait (#206) */
                 UINT eventWaitAl = VDM_REG(tib, VTIB_EAX) & BYTE_MASK;
-                if (eventWaitAl == 0x01) {            /* cancel                            */
+                if (eventWaitAl == BIOS_EVENT_WAIT_CANCEL) {            /* cancel                            */
                     g_Int15EventEnd = 0;
                     *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_ACTIVE) = 0x00;
                     BCF_CLR();
                 } else if (g_Int15EventEnd || g_Int15WaitEnd) {
-                    BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | 0x8300));
+                    BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | (BIOS_SYSTEM_STATUS_BUSY << BYTE_SHIFT)));
                     BCF_SET(); ++g_Int15Busy;   /* one countdown at a time           */
                 } else {
                     DWORD microseconds = (VDM_REG16(tib, VTIB_ECX) << WORD_SHIFT) | VDM_REG16(tib, VTIB_EDX);
@@ -29252,19 +29252,19 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                     g_Int15EventEnd = Int15QpcAfterMicroseconds(microseconds ? microseconds : 1);
                     BCF_CLR();
                 }
-            } else if (int15Ah == 0x85) {         /* SysReq key (#254)              */
+            } else if (int15Ah == BIOS_SYSTEM_SYSREQ) {         /* SysReq key (#254)              */
                 /* The hook our INT 09h now calls on SysReq press (AL=0) / release
                    (AL=1). The BIOS's own default does nothing and returns AH=0,
                    CF=0 -- a multitasker hooks it. (p_kbd2 int15.85) */
-                BSETAX((WORD)(VDM_REG(tib, VTIB_EAX) & 0x00FF));
+                BSETAX((WORD)(VDM_REG(tib, VTIB_EAX) & BYTE_MASK));
                 BCF_CLR();
-            } else if (int15Ah == 0x4F) {         /* keyboard intercept (#206) */
+            } else if (int15Ah == BIOS_SYSTEM_KEYBOARD_INTERCEPT) {         /* keyboard intercept (#206) */
                 /* The default handler: CF=1 and AL untouched, "process this key".
                    A TSR that hooks INT 15h answers for itself. #244: our INT 09h CALLS
                    it once IVT[15h] is hooked (Int15Hooked, bios_kbdact.asm k4f); while
                    it is not, this answer is the one the call would get, so it is skipped. */
                 BCF_SET();
-            } else if (int15Ah == 0x84) {
+            } else if (int15Ah == BIOS_SYSTEM_JOYSTICK) {
                 /* ── BIOS joystick support (session 62). DX picks the half:
                      0 = switches (buttons, bits 4-7 of AL, ACTIVE LOW like
                      the port), 1 = the four resistive inputs. The values
@@ -29284,13 +29284,13 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                     joystickCursor = LogPut(joystickCursor, VddJoystickIsLive(&g_Joystick) ? " (live)\r\n" : " (absent)\r\n");
                     LogAppend(LOG_PATH, joystickLine, joystickCursor); SerialOut(joystickLine, joystickCursor); } }
                 if (!VddJoystickIsLive(&g_Joystick)) {
-                    BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | 0x8600));
+                    BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | (BIOS_SYSTEM_STATUS_UNSUPPORTED << BYTE_SHIFT)));
                     BCF_SET();
-                } else if (joystickDx == 0x0000) {
+                } else if (joystickDx == BIOS_JOYSTICK_READ_BUTTONS) {
                     UINT mask = (1u << VddJoystickButtonsWired(&g_Joystick)) - 1u;
                     BSETAX((WORD)(((~g_Joystick.Buttons & mask) & 0x0F) << NIBBLE_SHIFT));
                     BCF_CLR();
-                } else if (joystickDx == 0x0001) {
+                } else if (joystickDx == BIOS_JOYSTICK_READ_AXES) {
                     BSETAX((WORD)g_Joystick.Axis[0]);
                     VDM_REG(tib, VTIB_EBX) = (VDM_REG(tib, VTIB_EBX) & HIGH_WORD_MASK_U) | g_Joystick.Axis[1];
                     VDM_REG(tib, VTIB_ECX) = (VDM_REG(tib, VTIB_ECX) & HIGH_WORD_MASK_U)
@@ -29299,21 +29299,21 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                                            | (VddJoystickAxes(&g_Joystick) >= 4 ? g_Joystick.Axis[3] : 0u);
                     BCF_CLR();
                 } else {
-                    BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | 0x8600));
+                    BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | (BIOS_SYSTEM_STATUS_UNSUPPORTED << BYTE_SHIFT)));
                     BCF_SET();
                 }
-            } else if (int15Ah == 0xC1) {         /* EBDA segment (#253)          */
+            } else if (int15Ah == BIOS_SYSTEM_GET_EBDA) {         /* EBDA segment (#253)          */
                 /* ES = the EBDA, CF=0, AX untouched -- as SeaBIOS answers it
                    (p_int15 int15.c1.status). Used to fall to the UNIMPL arm
                    below: CF=1, "no EBDA", while INT 12h withheld its kilobyte. */
                 VDM_SET16(tib, VTIB_ES, g_DosMemoryTop);   /* #136: = BIOS_EBDA_SEG at 640 KB */
                 BCF_CLR();
-            } else if (int15Ah == 0xC0) {         /* get system config table (#54) */
+            } else if (int15Ah == BIOS_SYSTEM_GET_CONFIGURATION) {         /* get system config table (#54) */
                 VDM_SET16(tib, VTIB_ES, DOS_CTAB_SEG);
                 VDM_SET16(tib, VTIB_EBX, DOS_SYSCONF_OFF);
-                BSETAX((WORD)(VDM_REG(tib, VTIB_EAX) & 0x00FF));   /* AH=0 */
+                BSETAX((WORD)(VDM_REG(tib, VTIB_EAX) & BYTE_MASK));   /* AH=0 */
                 BCF_CLR();
-            } else if (int15Ah == 0x87) {         /* move extended memory block (#54) */
+            } else if (int15Ah == BIOS_SYSTEM_MOVE_BLOCK) {         /* move extended memory block (#54) */
                 BSETAX((WORD)((Int15MoveBlock(tib) << BYTE_SHIFT)
                               | (VDM_REG(tib, VTIB_EAX) & BYTE_MASK)));
                 /* AT BIOS: success is AH=0 with CF=0 AND ZF=1 */
@@ -29332,9 +29332,9 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                   extendedCursor = LogPut(extendedCursor, " dx=0x"); extendedCursor = LogHex(extendedCursor, VDM_REG16(tib, VTIB_EDX));
                   extendedCursor = LogPut(extendedCursor, " es=0x"); extendedCursor = LogHex(extendedCursor, VDM_REG16(tib, VTIB_ES));
                   extendedCursor = LogPut(extendedCursor, "\r\n"); LogAppend(LOG_PATH, extendedLine, extendedCursor); SerialOut(extendedLine, extendedCursor); }
-                BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | 0x8600));
+                BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & BYTE_MASK) | (BIOS_SYSTEM_STATUS_UNSUPPORTED << BYTE_SHIFT)));
                 BCF_SET();                     /* AH=86h: unsupported fn */
-                g_BiosUnimplemented[0x15] = 1;
+                g_BiosUnimplemented[VECTOR_SYSTEM] = 1;
                 /* ► WHICH function, because "INT15" alone does not say. This arm is
                      the only difference between a Doom run that works and one given
                      a command-line argument: with an argument the trace is identical
@@ -29361,7 +29361,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                  the part's own documented behaviour rather than an opinion. */
             NTVDD_REGISTERS int14Registers; RegistersLoad(&int14Registers, tib);
             HOST_LOCK();
-            VddBusDeliverInterrupt(&g_Bus, 0x14, &int14Registers);
+            VddBusDeliverInterrupt(&g_Bus, VECTOR_SERIAL, &int14Registers);
             HOST_UNLOCK();
             RegistersStore(&int14Registers, tib);
             BCF_CLR();
@@ -29384,14 +29384,14 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                  answers the status for it instead -- disputed, recorded in
                  oracle-rules.json; "ready" for a call that does nothing was neither. */
             WORD base17 = (int17Dx < 3) ? *(volatile WORD *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_LPT_BASES + 2 * int17Dx) : 0;
-            if (base17 != 0x0378 || !VddLptIsFitted(&g_Comm, 0)) {
+            if (base17 != LPT_DEFAULT_BASE || !VddLptIsFitted(&g_Comm, 0)) {
                 /* absent printer: nothing, registers as passed */
-            } else if (int17Ah == 0x00) {         /* print AL                 */
+            } else if (int17Ah == BIOS_PRINTER_PRINT) {         /* print AL                 */
                 BYTE character = (BYTE)(VDM_REG(tib, VTIB_EAX) & BYTE_MASK);
                 /* Shared with the 0x378 port model -- see LptSpoolPut.
                    One printer, two ways in. */
                 if (LptSpoolPut(character)) {
-                    BSETAX((WORD)(0x9000 | (VDM_REG(tib, VTIB_EAX) & BYTE_MASK)));
+                    BSETAX((WORD)((BIOS_PRINTER_READY << BYTE_SHIFT) | (VDM_REG(tib, VTIB_EAX) & BYTE_MASK)));
                 } else {
                     /* ── DO NOT REPORT READY WHEN THE BYTE WENT NOWHERE. ──
                          The first cut did exactly that: status 0x90 on every
@@ -29399,32 +29399,32 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                          passed every check and the feature did not work.
                          Bit 3 is I/O ERROR and bit 5 is OUT OF PAPER; a
                          program that checks either can now tell. */
-                    BSETAX((WORD)(0x2800 | (VDM_REG(tib, VTIB_EAX) & BYTE_MASK)));
-                    g_BiosUnimplemented[0x17] = 1;
+                    BSETAX((WORD)((BIOS_PRINTER_FAILED << BYTE_SHIFT) | (VDM_REG(tib, VTIB_EAX) & BYTE_MASK)));
+                    g_BiosUnimplemented[VECTOR_PRINTER] = 1;
                 }
                 BCF_CLR();
-            } else if (int17Ah == 0x01 || int17Ah == 0x02) {  /* init / status   */
-                BSETAX((WORD)((g_LptFailed ? 0x2800 : 0x9000)
+            } else if (int17Ah == BIOS_PRINTER_INITIALIZE || int17Ah == BIOS_PRINTER_GET_STATUS) {  /* init / status   */
+                BSETAX((WORD)((g_LptFailed ? (BIOS_PRINTER_FAILED << BYTE_SHIFT) : (BIOS_PRINTER_READY << BYTE_SHIFT))
                               | (VDM_REG(tib, VTIB_EAX) & BYTE_MASK)));
                 BCF_CLR();
             } else {
-                g_BiosUnimplemented[0x17] = 1;       /* unknown AH: AX as passed */
+                g_BiosUnimplemented[VECTOR_PRINTER] = 1;       /* unknown AH: AX as passed */
             }
         } else if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_DISK)) {               /* disk services  GH #44   */
             UINT int13Ah = (VDM_REG(tib, VTIB_EAX) >> BYTE_SHIFT) & BYTE_MASK;
             UINT int13Dl = VDM_REG(tib, VTIB_EDX) & BYTE_MASK;
             PDOS_DISK_GEOMETRY int13Geometry = DiskFor(int13Dl);
-            if (int13Ah == 0x00) { BSETAX(0); g_DiskStatus = 0; BCF_CLR(); }
-            else if (int13Ah == 0x01) { BSETAX((WORD)(g_DiskStatus << BYTE_SHIFT)); BCF_CLR(); }
+            if (int13Ah == BIOS_DISK_RESET) { BSETAX(0); g_DiskStatus = 0; BCF_CLR(); }
+            else if (int13Ah == BIOS_DISK_GET_STATUS) { BSETAX((WORD)(g_DiskStatus << BYTE_SHIFT)); BCF_CLR(); }
             else if (!int13Geometry) {
                 /* No image behind this drive letter. AH=80 is "drive not
                    ready", which is what a real machine says for a floppy
                    bay with nothing in it -- and is distinguishable from
                    AH=01 "bad command", which would mean the SERVICE does
                    not exist. Those are different answers to a guest. */
-                BSETAX(0x8000); g_DiskStatus = 0x80; BCF_SET();
-                g_BiosUnimplemented[0x13] = 1;
-            } else if (int13Ah == 0x08) {          /* get drive parameters    */
+                BSETAX(BIOS_DISK_STATUS_NOT_READY << BYTE_SHIFT); g_DiskStatus = BIOS_DISK_STATUS_NOT_READY; BCF_SET();
+                g_BiosUnimplemented[VECTOR_DISK] = 1;
+            } else if (int13Ah == BIOS_DISK_GET_PARAMETERS) {          /* get drive parameters    */
                 /* BH is ZEROED, not preserved: 6.22 answered BX=0004 to a
                    call made with BX poisoned to B1B1. Keeping the caller's
                    BH would hand back its own junk in half the register. */
@@ -29433,35 +29433,35 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                 VDM_SET16(tib, VTIB_EDX,
                           (WORD)(((int13Geometry->Heads - 1) << BYTE_SHIFT) | g_DiskCount));
                 BSETAX(0); g_DiskStatus = 0; BCF_CLR();
-            } else if (int13Ah == 0x15) {          /* get disk type           */
+            } else if (int13Ah == BIOS_DISK_GET_TYPE) {          /* get disk type           */
                 /* AH=01: floppy WITHOUT change-line support, which is what
                    6.22 answered (AX=0100) and is the truthful claim -- we
                    cannot detect a media swap under an image file. */
-                BSETAX(0x0100); BCF_CLR();
-            } else if (int13Ah == 0x02 || int13Ah == 0x03 || int13Ah == 0x04) {
+                BSETAX(BIOS_DISK_TYPE_FLOPPY_NO_CHANGE_LINE << BYTE_SHIFT); BCF_CLR();
+            } else if (int13Ah == BIOS_DISK_READ || int13Ah == BIOS_DISK_WRITE || int13Ah == BIOS_DISK_VERIFY) {
                 UINT sectorCount = VDM_REG(tib, VTIB_EAX) & BYTE_MASK;
                 UINT int13Cx = VDM_REG16(tib, VTIB_ECX);
-                UINT seconds  = int13Cx & 0x3F;
-                UINT cylinder  = ((int13Cx >> BYTE_SHIFT) & BYTE_MASK) | ((int13Cx & 0xC0) << 2);
+                UINT sector  = int13Cx & BIOS_CHS_SECTOR_MASK;
+                UINT cylinder  = ((int13Cx >> BYTE_SHIFT) & BYTE_MASK) | ((int13Cx & BIOS_CHS_CYLINDER_HIGH_MASK) << BIOS_CHS_CYLINDER_HIGH_SHIFT);
                 UINT head = (VDM_REG(tib, VTIB_EDX) >> BYTE_SHIFT) & BYTE_MASK;
                 DWORD    lba = 0;
-                if (!DosDiskChsToLba(int13Geometry, (WORD)cylinder, (WORD)head, (WORD)seconds, &lba)
+                if (!DosDiskChsToLba(int13Geometry, (WORD)cylinder, (WORD)head, (WORD)sector, &lba)
                     || lba + sectorCount > int13Geometry->TotalSectors) {
-                    BSETAX(0x0400); g_DiskStatus = 0x04;  /* sector not found */
+                    BSETAX(BIOS_DISK_STATUS_SECTOR_NOT_FOUND << BYTE_SHIFT); g_DiskStatus = BIOS_DISK_STATUS_SECTOR_NOT_FOUND;  /* sector not found */
                     BCF_SET();
-                } else if (int13Ah == 0x04) {      /* verify: bounds only     */
+                } else if (int13Ah == BIOS_DISK_VERIFY) {      /* verify: bounds only     */
                     BSETAX((WORD)sectorCount); g_DiskStatus = 0; BCF_CLR();
                 } else {
                     DWORD linear = (VDM_REG16(tib, VTIB_ES) << PARAGRAPH_SHIFT)
                               + VDM_REG16(tib, VTIB_EBX);
                     INT isOk = DiskIo(int13Dl, lba, sectorCount, (BYTE *)(ULONG_PTR)linear,
-                                     int13Ah == 0x03);
+                                     int13Ah == BIOS_DISK_WRITE);
                     if (isOk) { BSETAX((WORD)sectorCount); g_DiskStatus = 0; BCF_CLR(); }
-                    else    { BSETAX(0x0400); g_DiskStatus = 0x04; BCF_SET(); }
+                    else    { BSETAX(BIOS_DISK_STATUS_SECTOR_NOT_FOUND << BYTE_SHIFT); g_DiskStatus = BIOS_DISK_STATUS_SECTOR_NOT_FOUND; BCF_SET(); }
                 }
             } else {
-                BSETAX(0x0100); BCF_SET();      /* bad command             */
-                g_BiosUnimplemented[0x13] = 1;
+                BSETAX(BIOS_DISK_STATUS_BAD_COMMAND << BYTE_SHIFT); BCF_SET();      /* bad command             */
+                g_BiosUnimplemented[VECTOR_DISK] = 1;
             }
         } else if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_DOS_IDLE)) {               /* DOS idle                 */
             BCF_CLR();                         /* nothing to yield to      */
@@ -29477,26 +29477,26 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
                pushed FLAGS for it to discard; see the stub planting. */
             UINT drive = VDM_REG(tib, VTIB_EAX) & BYTE_MASK;
             UINT count = VDM_REG16(tib, VTIB_ECX);
-            UINT32 seconds = VDM_REG16(tib, VTIB_EDX);
+            UINT32 firstSector = VDM_REG16(tib, VTIB_EDX);
             PDOS_DISK_GEOMETRY int25Geometry = DiskFor(drive);
             DWORD linear = (VDM_REG16(tib, VTIB_DS) << PARAGRAPH_SHIFT)
                       + VDM_REG16(tib, VTIB_EBX);
             if (!int25Geometry) { BSETAX(0x0201); BCF_SET(); g_BiosUnimplemented[bopNumber] = 1; }
-            else if (seconds + count > int25Geometry->TotalSectors) { BSETAX(0x0208); BCF_SET(); }
-            else if (DiskIo(drive, seconds, count, (BYTE *)(ULONG_PTR)linear, bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_ABSOLUTE_DISK_WRITE)))
+            else if (firstSector + count > int25Geometry->TotalSectors) { BSETAX(0x0208); BCF_SET(); }
+            else if (DiskIo(drive, firstSector, count, (BYTE *)(ULONG_PTR)linear, bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_ABSOLUTE_DISK_WRITE)))
                  { BSETAX(0); BCF_CLR(); }
             else { BSETAX(0x0208); BCF_SET(); }  /* AL=08 sector not found */
         } else handled = 0;
         #undef BCF_SET
         #undef BCF_CLR
         #undef BSETAX
-        if (handled == 4) V86BOP_RET(V86BOP_RERUN);   /* #206: still waiting -- re-run the BOP */
+        if (handled == V86BOP_RERUN) V86BOP_RET(V86BOP_RERUN);   /* #206: still waiting -- re-run the BOP */
         if (handled) { VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH; V86BOP_RET(V86BOP_DONE); }
     }
     if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_TIME)) {   /* INT 1Ah BIOS time */
         NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
         HOST_LOCK();
-        VddBusDeliverInterrupt(&g_Bus, 0x1A, &registers);
+        VddBusDeliverInterrupt(&g_Bus, VECTOR_TIME, &registers);
         HOST_UNLOCK();
         RegistersStore(&registers, tib);
         HostSetFlags(tib, registers.CarryFlag, registers.ZeroFlag);
@@ -29523,11 +29523,11 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
            ⇒ 512 lines, then one line saying so. The first 512 are where any
              INT 2Fh answer worth reading is. */
         { static DWORD count2F = 0;
-          if (++count2F == 513) {
+          if (++count2F == V86BOP_2F_LOG_LINES_MAX + 1) {
               cursor = LogPut(cursor, "STAGE2: BOP2F ... CAPPED at 512 lines (guest is looping)\r\n");
               LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
           }
-          if (count2F > 512) goto bop2FServiced; }
+          if (count2F > V86BOP_2F_LOG_LINES_MAX) goto bop2FServiced; }
         cursor = LogPut(cursor, "STAGE2: BOP2F ax=0x"); cursor = LogHex(cursor, ax);
         cursor = LogPut(cursor, " bx=0x");  cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EBX));
         cursor = LogPut(cursor, " cx=0x");  cursor = LogHex(cursor, VDM_REG16(tib, VTIB_ECX));
@@ -29547,27 +29547,27 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
              80h" -- which is exactly what a real one sees. Returning an entry
              point that then refuses every call would be a driver that lies
              about being installed. */
-        if (ax == 0x4300 && g_XmsOn) {                     /* XMS installation check */
-            VDM_SET16(tib, VTIB_EAX, (VDM_REG(tib, VTIB_EAX) & HIGH_BYTE_MASK) | 0x80);  /* AL=80h installed */
-        } else if (ax == 0x4310 && g_XmsOn) {              /* get XMS entry -> ES:BX */
+        if (ax == MULTIPLEX_XMS_INSTALLATION_CHECK && g_XmsOn) {                     /* XMS installation check */
+            VDM_SET16(tib, VTIB_EAX, (VDM_REG(tib, VTIB_EAX) & HIGH_BYTE_MASK) | MULTIPLEX_XMS_INSTALLED);  /* AL=80h installed */
+        } else if (ax == MULTIPLEX_XMS_GET_ENTRY && g_XmsOn) {              /* get XMS entry -> ES:BX */
             VDM_SET16(tib, VTIB_ES, DOS_HDLR_SEG);
             VDM_SET16(tib, VTIB_EBX, XMS_ENTRY_OFF);
-        } else if (ax == 0x1687) {                           /* DPMI installation check (SPIKE) */
+        } else if (ax == MULTIPLEX_DPMI_INSTALLATION_CHECK) {                           /* DPMI installation check (SPIKE) */
             /* AX=0 present; BX bit0=1 (32-bit programs supported, run 81); CL = the CPU
                class (see DPMI_CPU_CLASS); DX=0.90; SI=0 private paras; ES:DI = mode-switch
                entry to FAR-CALL. A 16-bit client ignores BX; a 32-bit client reads bit0 to
                decide to far-call with AX=1. */
             VDM_SET16(tib, VTIB_EAX, 0);
-            VDM_SET16(tib, VTIB_EBX, 1);
+            VDM_SET16(tib, VTIB_EBX, MULTIPLEX_DPMI_32BIT_SUPPORTED);
             VDM_SET16(tib, VTIB_ECX, (VDM_REG(tib, VTIB_ECX) & HIGH_BYTE_MASK) | DPMI_CPU_CLASS);
-            VDM_SET16(tib, VTIB_EDX, 0x005A);               /* DPMI 0.90        */
+            VDM_SET16(tib, VTIB_EDX, DPMI_VERSION_090);               /* DPMI 0.90        */
             VDM_SET16(tib, VTIB_ESI, 0);
             VDM_SET16(tib, VTIB_ES,  DOS_HDLR_SEG);
             VDM_SET16(tib, VTIB_EDI, DPMI_ENTRY_OFF);
             cursor = LogPut(cursor, "STAGE2: DPMI 1687 -> AX=0 ES:DI=0x"); cursor = LogHex(cursor, DOS_HDLR_SEG);
             cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, DPMI_ENTRY_OFF); cursor = LogPut(cursor, " (guest must far-call this)\r\n");
             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-        } else if (ax == 0x122E) {
+        } else if (ax == MULTIPLEX_DOS_TABLES) {
             /* ── THE TABLES XP's COMMAND.COM ASKS FOR BEFORE IT PRINTS. ────
                  DL selects; ES:DI comes back as a far pointer. It zeroes
                  ES:DI, calls five times (DL = 0,2,4,6,8) and STORES each
@@ -29606,7 +29606,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
             cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EDI));
             cursor = LogPut(cursor, "\r\n");
             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-        } else if (ax == 0x1684) {                          /* get device API entry point */
+        } else if (ax == MULTIPLEX_DEVICE_API_ENTRY) {                          /* get device API entry point */
             /* ES:DI = 0:0 means "no API for that device ID", and we have none.
                ⚠ Leaving the registers alone would be a POINTER-RETURNING call
                  that returns whatever was in ES:DI -- the caller then far-calls

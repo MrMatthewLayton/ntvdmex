@@ -35,7 +35,7 @@ INT main(VOID)
 
     /* ---- 0400h / 1687h ---- */
     CHECK(DPMI_CPU_CLASS == 4, "CPU class is 4 -- the value 1687h has reported since s79");
-    CHECK(DPMI_VER_AX == 0x005A, "0400h AX = 005Ah (version 0.90)");
+    CHECK(DPMI_VERSION_090 == 0x005A, "0400h AX = 005Ah (version 0.90)");
     CHECK((DPMI_VER_DX >> 8) == 0x08 && (DPMI_VER_DX & 0xFF) == 0x70,
           "0400h DH = master PIC base 08h, DL = slave PIC base 70h");
     CHECK(DPMI_VER_BX & 1, "0400h BX bit 0: a 32-bit host");

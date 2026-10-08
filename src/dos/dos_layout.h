@@ -345,6 +345,7 @@
    (Were 0x6A0..0x6DF until #244/#274 needed the room; nothing hard-codes the offset.) */
 #define DOS_GENSTUB_OFF   0x06B0
 #define DOS_GENSTUB_N     16
+#define DOS_GENSTUB_SIZE  4      /* BOP 5Bh ; IRET                              */
 #define DOS_GENSTUB_BOP   0x5B
 /* The host's own stubs issue BOP n for INT n -- except INT 21h's stub, which has BOP 20h, and
    so INT 20h's, which has 30h; and the XMS far-call entry, which is BOP 43h. */

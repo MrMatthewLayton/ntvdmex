@@ -45,7 +45,7 @@
      memory is committed at allocation).
    ► 0400h DX: DH = master PIC base 08h, DL = slave PIC base 70h -- where the IRQs land. */
 #define DPMI_CPU_CLASS   0x04
-#define DPMI_VER_AX      0x005A        /* AH = 0 major, AL = 90 (5Ah) minor -> "0.90"   */
+#define DPMI_VERSION_090 0x005A        /* AH = 0 major, AL = 90 (5Ah) minor -> "0.90"   */
 #define DPMI_VER_BX      0x0001
 #define DPMI_VER_DX      0x0870
 
