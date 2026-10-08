@@ -4263,7 +4263,7 @@ static INT AsyncVectorIsOurStub(UINT irq)
 {
     UINT vector = VddPicVector(&g_Pic, (BYTE)irq);
     WORD segment = PeekWord(IVT_SEGMENT_ADDRESS(vector)), offset = PeekWord(IVT_OFFSET_ADDRESS(vector));
-    return segment == DOS_HDLR_SEG && (offset == DOS_IRET_STUB_OFF || offset == 0x004C);
+    return segment == DOS_HDLR_SEG && (offset == DOS_IRET_STUB_OFF || offset == DOS_HDLR_INT09_STUB_OFF);
 }
 
 static VOID HostIrqSink(PVOID context, BYTE irq)
@@ -9597,8 +9597,8 @@ static VOID MouseCallbackTry(volatile BYTE *tib)
              driver on real hardware calls it from an interrupt context too. Only the
              INT 09h stub's own BOP instruction (0x4C..0x4E, not yet executed) is kept
              out, so the byte it consumes is not disturbed. */
-        if (ip >= 0x4C && ip < 0x4F) { ++g_MouseCallbackWhy[3]; return; }
-        if ((ip >= 0x34 && ip < 0x3A) || ip == 0x4F) flags = 0x200; /* stub about to IRET: deliver */
+        if (ip >= DOS_HDLR_INT09_STUB_OFF && ip < DOS_HDLR_INT09_STUB_OFF + VDM_BOP_LENGTH) { ++g_MouseCallbackWhy[3]; return; }
+        if ((ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END) || ip == DOS_HDLR_INT09_STUB_OFF + VDM_BOP_LENGTH) flags = EFLAGS_IF; /* stub about to IRET: deliver */
         else flags = PeekWord((ss << PARAGRAPH_SHIFT) + ((sp + 4) & WORD_MASK));    /* the FLAGS the stub IRETs to  */
     } else flags = VDM_REG(tib, VTIB_EFLAGS);
     if (!IfOrVif(flags)) { ++g_MouseCallbackWhy[4]; return; } /* interrupts off: like an IRQ, wait */
@@ -28962,7 +28962,7 @@ static INT V86DeliverDeviceIrq(volatile BYTE *tib)
      once past it the guest is running a handler with IF set, and a real
      PC delivers a device IRQ there quite happily. */
   INT inBop = (currentCs == DOS_HDLR_SEG &&
-                ((currentIp >= 0x34 && currentIp < 0x37) || (currentIp >= 0x4C && currentIp < 0x4F)));
+                ((currentIp >= DOS_HDLR_INT08_STUB_OFF && currentIp < DOS_HDLR_INT08_STUB_OFF + VDM_BOP_LENGTH) || (currentIp >= DOS_HDLR_INT09_STUB_OFF && currentIp < DOS_HDLR_INT09_STUB_OFF + VDM_BOP_LENGTH)));
   if (!inBop && currentCs != DOS_HDLR_SEG) IfvNote(2, VDM_REG(tib, VTIB_EFLAGS));
   if (!inBop && GuestIfEnabled(tib)) {
       INT index;
@@ -31073,26 +31073,26 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     image = DosLoadImage(NULL, g_FileBuffer, readCount, DOS_PSP_SEG);
 
     handlerArea = (volatile BYTE *)(DOS_HDLR_SEG << PARAGRAPH_SHIFT);            /* INT 21h BOP handler */
-    for (index = 0; index < sizeof(bop); ++index) handlerArea[index] = bop[index];
+    for (index = 0; index < sizeof(bop); ++index) handlerArea[DOS_HDLR_INT21_STUB_OFF + index] = bop[index];
     *(volatile WORD *)0x84 = 0x0000;                        /* IVT[0x21].offset    */
     *(volatile WORD *)0x86 = DOS_HDLR_SEG;                  /* IVT[0x21].segment   */
     handlerArea[DOS_DBCS_OFF] = 0; handlerArea[DOS_DBCS_OFF + 1] = 0;     /* empty DBCS table    */
-    for (index = 0; index < sizeof(bop10); ++index) handlerArea[0x20 + index] = bop10[index];  /* INT 10h stub */
+    for (index = 0; index < sizeof(bop10); ++index) handlerArea[DOS_HDLR_INT10_STUB_OFF + index] = bop10[index];  /* INT 10h stub */
     *(volatile WORD *)0x40 = 0x0020;                        /* IVT[0x10].offset    */
     *(volatile WORD *)0x42 = DOS_HDLR_SEG;                  /* IVT[0x10].segment   */
-    for (index = 0; index < sizeof(bop16); ++index) handlerArea[0x28 + index] = bop16[index];  /* INT 16h stub */
+    for (index = 0; index < sizeof(bop16); ++index) handlerArea[DOS_HDLR_INT16_STUB_OFF + index] = bop16[index];  /* INT 16h stub */
     *(volatile WORD *)0x58 = 0x0028;                        /* IVT[0x16].offset    */
     *(volatile WORD *)0x5A = DOS_HDLR_SEG;                  /* IVT[0x16].segment   */
-    for (index = 0; index < sizeof(bop33); ++index) handlerArea[0x30 + index] = bop33[index];  /* INT 33h stub */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_MOUSE))     = 0x0030;              /* IVT[0x33].offset    */
+    for (index = 0; index < sizeof(bop33); ++index) handlerArea[DOS_HDLR_INT33_STUB_OFF + index] = bop33[index];  /* INT 33h stub */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_MOUSE))     = DOS_HDLR_INT33_STUB_OFF;              /* IVT[0x33].offset    */
     *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_MOUSE)) = DOS_HDLR_SEG;        /* IVT[0x33].segment   */
-    for (index = 0; index < sizeof(bop08); ++index) handlerArea[0x34 + index] = bop08[index];  /* INT 08h stub */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TIMER))     = 0x0034;              /* IVT[0x08].offset    */
+    for (index = 0; index < sizeof(bop08); ++index) handlerArea[DOS_HDLR_INT08_STUB_OFF + index] = bop08[index];  /* INT 08h stub */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TIMER))     = DOS_HDLR_INT08_STUB_OFF;              /* IVT[0x08].offset    */
     *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TIMER)) = DOS_HDLR_SEG;        /* IVT[0x08].segment   */
-    for (index = 0; index < sizeof(bop1c); ++index) handlerArea[0x3A + index] = bop1c[index];  /* INT 1Ch iret */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_USER_TICK))     = 0x003A;              /* IVT[0x1C].offset    */
+    for (index = 0; index < sizeof(bop1c); ++index) handlerArea[DOS_HDLR_INT1C_STUB_OFF + index] = bop1c[index];  /* INT 1Ch iret */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_USER_TICK))     = DOS_HDLR_INT1C_STUB_OFF;              /* IVT[0x1C].offset    */
     *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_USER_TICK)) = DOS_HDLR_SEG;        /* IVT[0x1C].segment   */
-    for (index = 0; index < sizeof(bop09); ++index) handlerArea[0x4C + index] = bop09[index];  /* INT 09h default iret (0x4C-0x4F) */
+    for (index = 0; index < sizeof(bop09); ++index) handlerArea[DOS_HDLR_INT09_STUB_OFF + index] = bop09[index];  /* INT 09h default iret (0x4C-0x4F) */
     /* INT 33h event-handler return: the guest's handler RETFs here (see MouseCallbackTry). */
     handlerArea[MS_CB_RET_OFF + 0] = VDM_BOP0; handlerArea[MS_CB_RET_OFF + 1] = VDM_BOP1;
     handlerArea[MS_CB_RET_OFF + 2] = MS_CB_BOP; handlerArea[MS_CB_RET_OFF + 3] = X86_OP_IRET;
@@ -31115,13 +31115,13 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         *(volatile WORD *)(IVT_OFFSET_ADDRESS(index))     = DOS_IRET_STUB_OFF;
         *(volatile WORD *)(IVT_SEGMENT_ADDRESS(index)) = DOS_HDLR_SEG;
     }
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_KEYBOARD))     = 0x004C;              /* IVT[0x09].offset    */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_KEYBOARD))     = DOS_HDLR_INT09_STUB_OFF;              /* IVT[0x09].offset    */
     *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_KEYBOARD)) = DOS_HDLR_SEG;        /* IVT[0x09].segment   */
-    for (index = 0; index < sizeof(bop1a); ++index) handlerArea[0x3C + index] = bop1a[index];  /* INT 1Ah stub */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TIME))     = 0x003C;              /* IVT[0x1A].offset    */
+    for (index = 0; index < sizeof(bop1a); ++index) handlerArea[DOS_HDLR_INT1A_STUB_OFF + index] = bop1a[index];  /* INT 1Ah stub */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TIME))     = DOS_HDLR_INT1A_STUB_OFF;              /* IVT[0x1A].offset    */
     *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TIME)) = DOS_HDLR_SEG;        /* IVT[0x1A].segment   */
-    for (index = 0; index < sizeof(bop2f); ++index) handlerArea[0x40 + index] = bop2f[index];  /* INT 2Fh stub */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_MULTIPLEX))     = 0x0040;              /* IVT[0x2F].offset    */
+    for (index = 0; index < sizeof(bop2f); ++index) handlerArea[DOS_HDLR_INT2F_STUB_OFF + index] = bop2f[index];  /* INT 2Fh stub */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_MULTIPLEX))     = DOS_HDLR_INT2F_STUB_OFF;              /* IVT[0x2F].offset    */
     *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_MULTIPLEX)) = DOS_HDLR_SEG;        /* IVT[0x2F].segment   */
     for (index = 0; index < sizeof(xmsBopStub); ++index) handlerArea[XMS_ENTRY_OFF + index] = xmsBopStub[index];  /* XMS far-call entry */
     /* ⚠ GH #47: a non-zero word at XMS_ENTRY_OFF+0x45 WAS TRIED AND REFUTED.
@@ -31129,13 +31129,13 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
        some structure, and that structure looked like the XMS entry. It is not:
        planting HIMEM's own bytes (EB 50) at the entry changed nothing. Sixth
        refutation. */
-    for (index = 0; index < sizeof(bop67); ++index) handlerArea[0x48 + index] = bop67[index];  /* INT 67h (EMM) stub */
+    for (index = 0; index < sizeof(bop67); ++index) handlerArea[DOS_HDLR_INT67_STUB_OFF + index] = bop67[index];  /* INT 67h (EMM) stub */
     /* ⚠ NO EMS MEANS NO INT 67h VECTOR AND NO DEVICE NAME. Both halves, because
          a program detects EMM by either following the vector to the "EMMXXXX0"
          header OR by opening the device; leaving one of them behind is a manager
          that half-exists, which is worse for a guest than one that does not. */
     if (g_EmsOn) {
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_EMS))     = 0x0048;          /* IVT[0x67].offset    */
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_EMS))     = DOS_HDLR_INT67_STUB_OFF;          /* IVT[0x67].offset    */
         *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_EMS)) = DOS_HDLR_SEG;    /* IVT[0x67].segment   */
     } else {
         *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_EMS))     = 0;
@@ -32853,7 +32853,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 IfvNote(1, flags2);
             }
             if (IfOrVif(flags2) && Irq0CanDeliver()
-                && !(cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A)) {
+                && !(cs == DOS_HDLR_SEG && ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END)) {
                 InterlockedDecrement(&g_Irq0Pending);
                 Irq0Ack();                     /* in service until the guest EOIs (s70) */
                 g_Irq0Injected++;
@@ -32863,7 +32863,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             } else {
                 static INT skipBudget = 6;
                 g_Irq0Skip++;                  /* IF=0 or inside our own INT 08h */
-                if (cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A) g_Irq0SkipStub++;
+                if (cs == DOS_HDLR_SEG && ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END) g_Irq0SkipStub++;
                 else if (!IfOrVif(flags2)) {
                     g_Irq0SkipIf++;
                     if (IsOurStubCsIp(cs, ip)) {   /* #238: who called our stub with IF off */
@@ -32896,10 +32896,10 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                  out of this gate, and guessing which one has already cost four rounds. */
             ++g_Irq1Checks;
             if (!IfOrVif(flags2))                                          ++g_Irq1NoIf;
-            else if (cs == DOS_HDLR_SEG && ip >= 0x34 && ip < 0x3A)      ++g_Irq1In08;
-            else if (cs == DOS_HDLR_SEG && ip >= 0x4C && ip < 0x50)      ++g_Irq1In09;
+            else if (cs == DOS_HDLR_SEG && ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END)      ++g_Irq1In08;
+            else if (cs == DOS_HDLR_SEG && ip >= DOS_HDLR_INT09_STUB_OFF && ip < DOS_HDLR_INT09_STUB_END)      ++g_Irq1In09;
             if (IfOrVif(flags2) && !(cs == DOS_HDLR_SEG &&
-                                  ((ip >= 0x34 && ip < 0x3A) || (ip >= 0x4C && ip < 0x50)))) {
+                                  ((ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END) || (ip >= DOS_HDLR_INT09_STUB_OFF && ip < DOS_HDLR_INT09_STUB_END)))) {
                 InterlockedDecrement(&g_Irq1Pending);   /* one INT 09h per queued scancode byte */
                 VddPicAcknowledge(&g_Pic, 1);
                 if (AsyncVectorIsOurStub(1)) VddPicEndOfInterrupt(&g_Pic, 1);

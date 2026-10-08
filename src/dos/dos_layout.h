@@ -8,6 +8,19 @@
 #include "dos_mcb.h"          /* DOS_PSP_SEG (0x0100), DOS_MEM_TOP (0xA000) */
 
 #define DOS_HDLR_SEG  0x0050  /* INT 21h BOP handler segment (linear 0x0500) */
+/* The host's stubs in DOS_HDLR_SEG -- where WinMain plants each and points its vector. */
+#define DOS_HDLR_INT21_STUB_OFF 0x0000
+#define DOS_HDLR_INT10_STUB_OFF 0x0020
+#define DOS_HDLR_INT16_STUB_OFF 0x0028
+#define DOS_HDLR_INT33_STUB_OFF 0x0030
+#define DOS_HDLR_INT08_STUB_OFF 0x0034  /* BOP 08h ; INT 1Ch ; IRET                     */
+#define DOS_HDLR_INT08_STUB_END 0x003A
+#define DOS_HDLR_INT1C_STUB_OFF 0x003A
+#define DOS_HDLR_INT1A_STUB_OFF 0x003C
+#define DOS_HDLR_INT2F_STUB_OFF 0x0040
+#define DOS_HDLR_INT67_STUB_OFF 0x0048
+#define DOS_HDLR_INT09_STUB_OFF 0x004C  /* BOP 09h ; IRET                               */
+#define DOS_HDLR_INT09_STUB_END 0x0050
 /* ── THE CURRENT DRIVE, IN ONE PLACE. (session 56) ───────────────────────────
      Three routes ask this machine what drive it is on -- INT 21h AH=19h, the
      WOW32 select-drive thunk (id 0xc8), and krnl386's own cached copy, which
