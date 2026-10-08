@@ -17,10 +17,7 @@
 #define INPUT_PAUSE_SEQUENCE_LENGTH 6       /* E1 1D 45 E1 9D C5                         */
 #define INPUT_CTRL_BREAK_SEQUENCE_LENGTH 4  /* E0 46 E0 C6                               */
 #define INPUT_SCAN_FIRST_TYPED      0x02    /* the 1 key: the first one searched for a character */
-#define INPUT_SCAN_TAB              0x0F
-#define INPUT_SCAN_ENTER            0x1C    /* keypad Enter when E0-prefixed             */
 #define INPUT_SCAN_CTRL             0x1D
-#define INPUT_SCAN_LEFT_SHIFT       0x2A
 #define INPUT_SCAN_SLASH            0x35    /* keypad slash when E0-prefixed             */
 #define INPUT_SCAN_RIGHT_SHIFT      0x36
 #define INPUT_SCAN_PRINT_SCREEN     0x37    /* E0 37, the grey key                       */

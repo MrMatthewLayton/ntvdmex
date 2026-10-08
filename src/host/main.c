@@ -1235,7 +1235,7 @@ static volatile LONG g_Irq1Pending = 0;    /* count of un-delivered keyboard IRQ
 static INT g_PmIrq0Latch = 0;             /* #2b: a virtual IRQ0 awaiting injection into the PM hook */
 static INT g_InPmIrq     = 0;             /* #2b: re-entrancy guard while inside an injected PM ISR   */
 static CRITICAL_SECTION g_Lock;             /* serialises all bus dispatch       */
-
+#define UITICK_CHOICES 5   /* the Settings combo's entries */
 /* ── LOCK CONTENTION INSTRUMENT ──────────────────────────────────────────────
    MEASURED (gameplay run, 2026-08-21): the guest's clock went 448 ms without
    advancing and then received all 448 ms at once. At Skyroads' ~291 Hz tick that
@@ -1275,7 +1275,7 @@ static UINT32 g_LockHoldMicroseconds, g_LockWaitMicroseconds, g_UiGapMicrosecond
      only a fallback (floor = 90% of the mode's frame period) for a guest that never
      looks at the retrace. Two clocks became one; see present_hook in vdd_video.h. */
 #define UITICK_AUTO 0
-static const INT UITICK_MS[5] = { UITICK_AUTO, 5, 10, 15, 20 };   /* Settings combo index -> ms */
+static const INT UITICK_MS[UITICK_CHOICES] = { UITICK_AUTO, 5, 10, 15, 20 };   /* Settings combo index -> ms */
 static INT      g_UiTickMinimumMs = UITICK_AUTO;
 static DWORD    g_UiTickSkips;
 static DWORD    g_UiHookPresents, g_UiTimerPresents;  /* who raised each present   */
@@ -10906,7 +10906,7 @@ static INT StatusTextWidth(PCSTR text)
     ReleaseDC(g_Status, deviceContext);
     return width;
 }
-
+enum { STATUS_PART_PROGRAM = 0, STATUS_PART_MODE = 1, STATUS_PART_SPEED = 2, STATUS_PART_CAPTURE = 3, STATUS_PARTS = 4, STATUS_TEXT_INSET = 18, STATUS_PROGRAM_WIDTH_MAX = 260, STATUS_PART_WIDTH_MIN = 40, STATUS_PART_TO_EDGE = -1 };   /* the status strip, left to right */
 /* ── ★ EACH PART HUGS ITS TEXT (s84: extended from the name to every part). ─────────
      Measure each string in the bar's own font, add the control's inset, and lay the
      parts out left to right; the LAST part runs to the edge (-1) so the size grip has
@@ -10915,14 +10915,14 @@ static INT StatusTextWidth(PCSTR text)
    ⚠ CLAMPED: a 63-character program name must not push everything else off the strip. */
 static VOID StatusSetParts(PCSTR const *text, int count) /* stays int: INT here moves the compiled code */
 {
-    INT parts[4], index, right = 0;
-    if (!g_Status || count < 1 || count > 4) return;
+    INT parts[STATUS_PARTS], index, right = 0;
+    if (!g_Status || count < 1 || count > STATUS_PARTS) return;
     for (index = 0; index < count; ++index) {
-        INT width = StatusTextWidth(text[index]) + 18;       /* the control's own left inset */
-        if (index == 0 && width > 260) width = 260;
-        if (width < 40) width = 40;
+        INT width = StatusTextWidth(text[index]) + STATUS_TEXT_INSET;       /* the control's own left inset */
+        if (index == STATUS_PART_PROGRAM && width > STATUS_PROGRAM_WIDTH_MAX) width = STATUS_PROGRAM_WIDTH_MAX;
+        if (width < STATUS_PART_WIDTH_MIN) width = STATUS_PART_WIDTH_MIN;
         right += width;
-        parts[index] = (index == count - 1) ? -1 : right;
+        parts[index] = (index == count - 1) ? STATUS_PART_TO_EDGE : right;
     }
     SendMessageA(g_Status, SB_SETPARTS, (WPARAM)count, (LPARAM)parts);
 }
@@ -10945,11 +10945,11 @@ static VOID StatusSpeedText(PSTR out)
      costs nothing and cannot be forgotten. */
 static VOID StatusUpdate(VOID)
 {
-    PCSTR text[4];
+    PCSTR text[STATUS_PARTS];
     CHAR speed[32];
     INT parts;
     if (!g_Status) return;
-    text[0] = g_ProgramName;
+    text[STATUS_PART_PROGRAM] = g_ProgramName;
     /* One field, because they are one fact: 32-bit only ever means a DPMI client in
        protected mode. Title case (user, s84). */
     {   /* #325: the picture's own resolution and how it is shown -- "at 2x" when the
@@ -10968,25 +10968,25 @@ static VOID StatusUpdate(VOID)
                 cursor = LogPut(cursor, " at "); cursor = LogDecimal(cursor, (UINT)(destinationWidth / snapshotWidth)); cursor = LogPut(cursor, "x");
             } else cursor = LogPut(cursor, g_FitDown ? " (scaled to fit)" : " (scaled)");
         }
-        text[1] = modeText;
+        text[STATUS_PART_MODE] = modeText;
     }
     StatusSpeedText(speed);
-    text[2] = speed;
+    text[STATUS_PART_SPEED] = speed;
     /* Only a program that asked for the mouse has anything to say about capture
        (rule 1); exactly the user's wording. */
-    text[3] = g_Captured        ? "Press WIN to release mouse"
+    text[STATUS_PART_CAPTURE] = g_Captured        ? "Press WIN to release mouse"
            : CaptureAllowed() ? "Click video to capture mouse"
                                : "";
-    parts = text[3][0] ? 4 : 3;
-    if (StringsEqual(text[0], g_StatusLeft) && StringsEqual(text[1], g_StatusMode) &&
-        StringsEqual(text[2], g_StatusSpeed) && StringsEqual(text[3], g_StatusRight)) return;
+    parts = text[STATUS_PART_CAPTURE][0] ? STATUS_PARTS : STATUS_PARTS - 1;
+    if (StringsEqual(text[STATUS_PART_PROGRAM], g_StatusLeft) && StringsEqual(text[STATUS_PART_MODE], g_StatusMode) &&
+        StringsEqual(text[STATUS_PART_SPEED], g_StatusSpeed) && StringsEqual(text[STATUS_PART_CAPTURE], g_StatusRight)) return;
     StatusSetParts(text, parts);
-    LogPut(g_StatusLeft, text[0]); LogPut(g_StatusMode, text[1]);
-    LogPut(g_StatusSpeed, text[2]); LogPut(g_StatusRight, text[3]);
-    SendMessageA(g_Status, SB_SETTEXTA, 0, (LPARAM)text[0]);
-    SendMessageA(g_Status, SB_SETTEXTA, 1, (LPARAM)text[1]);
-    SendMessageA(g_Status, SB_SETTEXTA, 2, (LPARAM)text[2]);
-    if (parts == 4) SendMessageA(g_Status, SB_SETTEXTA, 3, (LPARAM)text[3]);
+    LogPut(g_StatusLeft, text[STATUS_PART_PROGRAM]); LogPut(g_StatusMode, text[STATUS_PART_MODE]);
+    LogPut(g_StatusSpeed, text[STATUS_PART_SPEED]); LogPut(g_StatusRight, text[STATUS_PART_CAPTURE]);
+    SendMessageA(g_Status, SB_SETTEXTA, STATUS_PART_PROGRAM, (LPARAM)text[STATUS_PART_PROGRAM]);
+    SendMessageA(g_Status, SB_SETTEXTA, STATUS_PART_MODE, (LPARAM)text[STATUS_PART_MODE]);
+    SendMessageA(g_Status, SB_SETTEXTA, STATUS_PART_SPEED, (LPARAM)text[STATUS_PART_SPEED]);
+    if (parts == STATUS_PARTS) SendMessageA(g_Status, SB_SETTEXTA, STATUS_PART_CAPTURE, (LPARAM)text[STATUS_PART_CAPTURE]);
 }
 
 /* Create the native status bar child; record its height so the video blit reserves
@@ -11130,7 +11130,7 @@ static VOID TextCopy(HWND window, INT all)
     } else GlobalFree(memory);
 }
 
-
+enum { PASTE_KEY_HOLD_MS = 12, PASTE_KEY_GAP_MS = 20 };   /* PasteThread: per typed key */
 /* Typed, not injected: ~30 characters a second, so a guest that reads slowly (or a
    BIOS ring of 15 keys) is not overrun. One paste at a time; a new one while typing
    is refused rather than interleaved. */
@@ -11140,18 +11140,18 @@ static DWORD WINAPI PasteThread(LPVOID parameter)
     INT index;
     for (index = 0; text[index] && g_Running; ++index) {
         BYTE ch = (BYTE)text[index], scan = 0, isShifted = 0;
-        if (ch == '\r') { scan = 0x1C; if (text[index + 1] == '\n') ++index; }
-        else if (ch == '\n') scan = 0x1C;
-        else if (ch == '\t') scan = 0x0F;
+        if (ch == '\r') { scan = INPUT_SCAN_ENTER; if (text[index + 1] == '\n') ++index; }
+        else if (ch == '\n') scan = INPUT_SCAN_ENTER;
+        else if (ch == '\t') scan = INPUT_SCAN_TAB;
         else { BYTE scanCode; INT shift;                           /* #136: on the active layout */
                if (VddInputCharToKey(&g_Input, ch, &scanCode, &shift)) { scan = scanCode; isShifted = (BYTE)shift; } }
         if (!scan) continue;                                  /* not typeable: skipped */
-        if (isShifted) HostKeyScancode(0x2A, 0, 0);
+        if (isShifted) HostKeyScancode(INPUT_SCAN_LEFT_SHIFT, 0, 0);
         HostKeyScancode(scan, 0, 0);
-        Sleep(12);
+        Sleep(PASTE_KEY_HOLD_MS);
         HostKeyScancode(scan, 0, 1);
-        if (isShifted) HostKeyScancode(0x2A, 0, 1);
-        Sleep(20);
+        if (isShifted) HostKeyScancode(INPUT_SCAN_LEFT_SHIFT, 0, 1);
+        Sleep(PASTE_KEY_GAP_MS);
     }
     HeapFree(GetProcessHeap(), 0, text);
     InterlockedExchange(&g_PasteBusy, 0);
@@ -12195,18 +12195,18 @@ static INT g_XmsOn = 1, g_EmsOn = 1;
      does; the new value is the next program's. */
 static UINT g_ConventionalKbWant = BIOS_CONV_KB_MAX;
 static WORD g_DosMemoryTop  = (WORD)DOS_MEM_TOP;
-
+enum { TYPEMATIC_RATE_MIN = 2 };   /* SettingsApply: below it, the BIOS default rate stands */
 static VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
 {
     g_MouseSensitivity        = (INT)settings->Values[SET_MSENS];
     /* #136: the keyboard layout the BIOS translates with (vdd_input.c, from XP's own
        tables). Live: the next keystroke uses it. */
-    g_Input.Layout      = (BYTE)(settings->Values[SET_KBLAYOUT] <= 3 ? settings->Values[SET_KBLAYOUT] : 0);
+    g_Input.Layout      = (BYTE)(settings->Values[SET_KBLAYOUT] <= INPUT_LAYOUT_LAST ? settings->Values[SET_KBLAYOUT] : 0);
     /* ── THE JOYSTICK ROWS GO LIVE (session 62). The type reaches the gameport
          VDD (how many axes/buttons the adapter wires); the D-pad mapping stays
          host-side because it shapes the SAMPLE, not the device model. Live: the
          poll thread and the port trap both re-read these on every pass. */
-    g_Joystick.Type       = (BYTE)(settings->Values[SET_JOYTYPE] <= 2 ? settings->Values[SET_JOYTYPE] : 0);
+    g_Joystick.Type       = (BYTE)(settings->Values[SET_JOYTYPE] <= JOYSTICK_TYPE_4AXIS ? settings->Values[SET_JOYTYPE] : 0);
     g_JoystickPovMap     = (INT)(settings->Values[SET_JOYPAD] ? 1 : 0);
     JoystickPollEnsure();               /* spawns the winmm poll thread ONLY if a
                                         joystick is configured -- no thread, and no
@@ -12214,7 +12214,7 @@ static VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT liv
     BiosBdaRefreshEquipment();    /* #253: bit 12 (game adapter) follows the type
                                         into 0040:0010 as well as INT 11h */
     g_PitPaceOn     = (INT)(settings->Values[SET_PITPACE] ? 1 : 0);
-    g_UiTickMinimumMs = UITICK_MS[settings->Values[SET_UITICK] < 5 ? settings->Values[SET_UITICK] : 0];
+    g_UiTickMinimumMs = UITICK_MS[settings->Values[SET_UITICK] < UITICK_CHOICES ? settings->Values[SET_UITICK] : 0];
     g_Video.IsCursorBlink = (BYTE)(settings->Values[SET_BLINKCURSOR] ? 1 : 0);
     g_BehaveDos622 = (settings->Values[SET_BEHAVE] == BEHAVE_DOS622);         /* #167 */
     /* #232: OPL2 (an AdLib: bank-1 ports dead) or OPL3 (YMF262). Live -- the chip model
@@ -12241,7 +12241,7 @@ static VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT liv
          row is `TypematicRate`, it says nothing about the delay before the
          first repeat, and inventing a second meaning for one control is how a
          knob comes to do something its label does not say. */
-    if (settings->Values[SET_TYPEMATIC] >= 2)
+    if (settings->Values[SET_TYPEMATIC] >= TYPEMATIC_RATE_MIN)
         g_TypematicPeriodMicroseconds = MICROSECONDS_PER_SECOND_U / (UINT32)settings->Values[SET_TYPEMATIC];
     /* s84 (user): the physical drive, or a mounted image. The physical one needs no
        setting -- DOS already reaches the host's A: -- so only IMAGE mode (chosen, or
@@ -13327,7 +13327,7 @@ static VOID HostReleaseModifiers(VOID)
         }
     g_ModifiersDown = 0;
 }
-
+enum { UI_TICK_FRAME_NUMERATOR = 9, UI_TICK_FRAME_DENOMINATOR = 10, UI_PRESENT_STALE_FRAMES = 2 };   /* the UI tick: 90% of a frame; quiet for two */
 /* --- the UI thread: window + present + frame timer ------------------------- */
 /* ── #219: ONLY THE FOCUSED NTVDMEX WINDOW RUNS. (user, s83 sweep; decision 2026-09-28:
      always, no setting) Skyroads and Doom side by side were "very jittery": two guests
@@ -13436,7 +13436,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                tick; a hook-raised run resets the interval so the two never double up. */
             UINT32 floorMicroseconds = g_UiTickMinimumMs != UITICK_AUTO
                                 ? (UINT32)g_UiTickMinimumMs * MICROSECONDS_PER_MILLISECOND_U
-                                : VddVideoFrameUs(&g_Video) * 9u / 10u;
+                                : VddVideoFrameUs(&g_Video) * UI_TICK_FRAME_NUMERATOR / UI_TICK_FRAME_DENOMINATOR;
             QueryPerformanceCounter(&bodyNow);
             if (!g_UiForced && body.QuadPart &&
                 QpcMicroseconds(bodyNow.QuadPart - body.QuadPart) < floorMicroseconds) {
@@ -13673,7 +13673,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                gone quiet (a guest that never polls the retrace), never on top of it --
                the first cut presented 112 frames twice in 30 s that way. */
             int timerOk = g_UiTickMinimumMs == UITICK_AUTO /* stays int: INT here moves the compiled code */
-                           ? ((DWORD)(nowTicks - lastPresent) >= 2u * (VddVideoFrameUs(&g_Video) / MICROSECONDS_PER_MILLISECOND_U))
+                           ? ((DWORD)(nowTicks - lastPresent) >= UI_PRESENT_STALE_FRAMES * (VddVideoFrameUs(&g_Video) / MICROSECONDS_PER_MILLISECOND_U))
                            : (VddVideoIsPresentReady(&g_Video) || stale);
             if (g_UiForced || timerOk) {
                 lastPresent = nowTicks;
@@ -13775,8 +13775,8 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                      cannot do it again, and SAY SO when a write fails. */
                 CHAR name[] = "shot00.bmp";
                 PCSTR path;
-                name[CAPTURE_NAME_DIGITS] = (CHAR)('0' + (captureSequence / 10) % 10);
-                name[CAPTURE_NAME_DIGITS + 1] = (CHAR)('0' + captureSequence % 10);
+                name[CAPTURE_NAME_DIGITS] = (CHAR)('0' + (captureSequence / DECIMAL_RADIX) % DECIMAL_RADIX);
+                name[CAPTURE_NAME_DIGITS + 1] = (CHAR)('0' + captureSequence % DECIMAL_RADIX);
                 /* ── ...AND THE SAME FRAME AS TEXT, when asked. A picture cannot say
                      whether a missing line was never written or merely never drawn,
                      and that distinction is where three wrong guesses went on
@@ -16372,11 +16372,11 @@ static VOID ModeYRemapReadMap(PVOID context, INT plane)
     if (!g_ModeYRemap) return;
     ++g_ModeYGr4Calls;
     ++g_ModeYGr4SinceSelector;
-    if (g_ModeYCurrent >= 0 && g_ModeYCurrent < 6) g_ModeYGr4Pair[plane & 3][g_ModeYCurrent]++;
+    if (g_ModeYCurrent >= 0 && g_ModeYCurrent < MODEY_NSEC) g_ModeYGr4Pair[plane & VIDEO_PLANE_INDEX_MASK][g_ModeYCurrent]++;
     if (plane != g_ModeYCurrent) ++g_ModeYGr4Mismatch;
 
-    plane &= 3;
-    if (g_ModeYCurrent == 5 || g_ModeYCurrent == plane) return;   /* scratch in flight, or already there */
+    plane &= VIDEO_PLANE_INDEX_MASK;
+    if (g_ModeYCurrent == MODEY_VIEW_SCRATCH || g_ModeYCurrent == plane) return;   /* scratch in flight, or already there */
     if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE)) { ++g_ModeYFail; return; }
     if (!MapViewOfFileEx(g_ModeYSeconds[plane], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
                          0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE)) {
@@ -17261,7 +17261,7 @@ static INT HostWritable(PVOID pointer, SIZE_T length)
    the guest PM CONTEXT to the log, then exits CLEANLY (no WER dialog) so the batch
    still prints the log. Only meaningful once g_DpmiPm is set. */
 static INT g_VehCount = 0;
-
+#define DPMI_WATCHDOG_FROZEN_TICKS_WOW_U 600u   /* 150 s: krnl386 is watched BECAUSE it stops */
 /* ── THE FATAL DUMP, SHARED. (session 62) ────────────────────────────────────────
      Factored out of the VEH's fatalDump arm so the LAST-CHANCE filter below can
      produce the same dump for a real-mode run -- until now `!g_DpmiPm` bailed at
@@ -17622,7 +17622,7 @@ fatalDump:
     HostFatalDump(record, context);                            /* the dump has its own buffer. The */
     return EXCEPTION_CONTINUE_SEARCH;                   /* old inline dump overflowed cb.   */
 }
-
+#define DPMI_WATCHDOG_FROZEN_TICKS_U     12u    /* 3 s */
 /* ── LAST CHANCE: the dump a real-mode run never had. (session 62) ───────────────
      With g_DpmiPm set the VEH above already turns an unmatched fault into the
      fatal dump at FIRST chance. Real-mode runs only log there and pass the fault
@@ -17647,7 +17647,7 @@ static LONG WINAPI HostUnhandledFilter(EXCEPTION_POINTERS *pointers)
     HostFatalDump(pointers->ExceptionRecord, pointers->ContextRecord);
     return EXCEPTION_EXECUTE_HANDLER;                   /* not reached */
 }
-
+enum { DPMI_WATCHDOG_TICK_MS = 250, DPMI_WATCHDOG_EXIT_CODE = 0xDD0 };   /* DpmiWatchdog */
 /* DPMI test watchdog: if the PM guest neither faults to the VEH nor exits within a few
    seconds (the kernel skip+resumes PM faults, so the guest spins), terminate cleanly so
    the batch dumps the log and locks release. Makes every DPMI run self-terminating. */
@@ -17697,7 +17697,7 @@ static DWORD WINAPI DpmiWatchdog(LPVOID param)
     { UINT tick = 0, frozen = 0; INT watchdogSaidWait = 0;
       for (;;) {
         LONG iter; DWORD enCs, enEip, base; const BYTE *entryBytes;
-        Sleep(250);
+        Sleep(DPMI_WATCHDOG_TICK_MS);
         if (g_DpmiDone) {                              /* client exited cleanly -> keep the window */
             cursor = LogPut(cursor, "STAGE3-DPMI: watchdog stand-down (client done)\r\n");
             LogAppend(WDLOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
@@ -17852,7 +17852,7 @@ static DWORD WINAPI DpmiWatchdog(LPVOID param)
                          guest is somewhere else every 250 ms. Client code (TI=1) at a
                          new EIP resets the streak, exactly as the Win16 wait does. */
                     { static DWORD watchdogLivePrevious = 0;
-                      if ((guestCs & 4) && guestEip != watchdogLivePrevious) {
+                      if ((guestCs & DPMI_SELECTOR_TI) && guestEip != watchdogLivePrevious) {
                           frozen = 0;
                           cursor = LogPut(cursor, " (moving -> not wedged)");
                       }
@@ -17871,7 +17871,7 @@ static DWORD WINAPI DpmiWatchdog(LPVOID param)
              3s throws away every later sample, i.e. the whole trace of where it sits.
              wowrun.bat already bounds the run (75s, then taskkill) and the headless
              deadline bounds the rest, so nothing here is unbounded. */
-        if (frozen >= (g_WowModuleCount ? 600u : 12u)          /* 3s normally; 150s on a WOW run */
+        if (frozen >= (g_WowModuleCount ? DPMI_WATCHDOG_FROZEN_TICKS_WOW_U : DPMI_WATCHDOG_FROZEN_TICKS_U)          /* 3s normally; 150s on a WOW run */
             && g_DpmiWatchdogGeneration == modeYGeneration) break;           /* ...and only while its client lives */
       }
     }
@@ -17909,7 +17909,7 @@ static DWORD WINAPI DpmiWatchdog(LPVOID param)
     /* TerminateProcess (forceful) -- ExitProcess hangs trying to unwind the PM engine
        thread (un-terminable LDT context). */
     HostRecordFinish();
-    TerminateProcess(GetCurrentProcess(), 0xDD0);
+    TerminateProcess(GetCurrentProcess(), DPMI_WATCHDOG_EXIT_CODE);
     return 0;
 }
 
@@ -19123,7 +19123,7 @@ static VOID WowProbeSelectors(VOID)
     cursor = LogPut(cursor, "\r\nWOWTRY: NOT entering PM yet -- next step.\r\n");
     LogAppend(LDTLOG_PATH, message, cursor);
 }
-
+enum { DPMI_PMDEF_PARAS = 0x40 };   /* the 256 default PM stubs, DPMI_PMDEF_STRIDE bytes each */
 /* Plant the default PM interrupt handlers and point every vector at them. See the
    note on g_PmDefaultSelector. Called once, at the mode switch, before the client runs. */
 static VOID DpmiInstallDefaultPmHandlers(DOS_MACHINE *machine)
@@ -19138,7 +19138,7 @@ static VOID DpmiInstallDefaultPmHandlers(DOS_MACHINE *machine)
        only the selector: fall through, allocate again, and rebase that same slot --
        allocating a new one would leak an LDT slot per program run. */
     if (g_PmDefaultSelector && g_PmDefaultBase) {
-        for (vector = 0; vector < 256; ++vector) {
+        for (vector = 0; vector < IVT_VECTORS; ++vector) {
             g_PmInt[vector].Selector = g_PmDefaultSelector;
             g_PmInt[vector].Offset = (DWORD)vector * DPMI_PMDEF_STRIDE;
             g_PmInt[vector].Client = 0;
@@ -19157,9 +19157,9 @@ static VOID DpmiInstallDefaultPmHandlers(DOS_MACHINE *machine)
          pushed this allocation out, the table was never built, and the run died at PM
          step 0x0d with nothing in the log pointing here. A silent return from the
          function that installs 256 interrupt vectors is not a small omission. */
-    segment = WowHostAllocate(0x40);
+    segment = WowHostAllocate(DPMI_PMDEF_PARAS);
     g_PmDefaultFromDos = !segment;
-    if (!segment && (DosMcbAllocate(NULL, machine->FirstMcb, 0x40, &segment, &maximum) || !segment)) {
+    if (!segment && (DosMcbAllocate(NULL, machine->FirstMcb, DPMI_PMDEF_PARAS, &segment, &maximum) || !segment)) {
         cursor = LogPut(cursor, "DPMI: NO MEMORY for the 256-vector default PM handler table "
                     "(host pool exhausted AND dos_alloc failed) -- every PM vector will "
                     "read back 0000:0000\r\n");
@@ -19175,15 +19175,15 @@ static VOID DpmiInstallDefaultPmHandlers(DOS_MACHINE *machine)
     stub = (volatile BYTE *)(ULONG_PTR)g_PmDefaultBase;
     index = (g_PmDefaultIndex >= 0) ? g_PmDefaultIndex : g_LdtNext++;   /* a previous client's slot, rebased */
     g_Ldt[index].Base   = g_PmDefaultBase;
-    g_Ldt[index].Limit  = 0x3FF;
-    g_Ldt[index].Access = 0xFA;                    /* present, DPL3, code, readable */
+    g_Ldt[index].Limit  = DPMI_PMDEF_PARAS * PARAGRAPH_SIZE - 1;
+    g_Ldt[index].Access = DPMI_ACCESS_CODE;                    /* present, DPL3, code, readable */
     g_Ldt[index].Flags  = 0;                       /* 16-bit: the stubs are 16-bit  */
     DpmiInstall(index);
     g_PmDefaultSelector = (WORD)DPMI_LDT_SELECTOR(index);
-    for (vector = 0; vector < 256; ++vector) {
+    for (vector = 0; vector < IVT_VECTORS; ++vector) {
         DWORD offset = (DWORD)vector * DPMI_PMDEF_STRIDE;
         stub[offset + 0] = VDM_BOP0; stub[offset + 1] = VDM_BOP1;
-        stub[offset + 2] = X86_OP_IRET;                    /* BOP immediate AND the IRET */
+        stub[offset + DPMI_PM_BOP_LENGTH] = X86_OP_IRET;                    /* BOP immediate AND the IRET */
         PatchMapSet(g_PmDefaultBase + offset, (BYTE)vector);   /* resolves the chained BOP -> vector v */
         g_PmInt[vector].Selector = g_PmDefaultSelector;
         g_PmInt[vector].Offset = offset;
@@ -21728,7 +21728,7 @@ static PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, 
     DWORD dxValue = VDM_REG16(tib, VTIB_EDX);
     DWORD cxValue = VDM_REG16(tib, VTIB_ECX);
     DWORD savedDs = VDM_REG(tib, VTIB_DS), savedDx = VDM_REG(tib, VTIB_EDX);
-    DWORD cap = (DWORD)g_PmTransferParagraphs * 16u;
+    DWORD cap = (DWORD)g_PmTransferParagraphs * PARAGRAPH_SIZE_U;
     INT status = 0;
 
     cursor = LogPut(cursor, "INT21h AH=0x"); cursor = LogHex(cursor, ah);
@@ -21738,9 +21738,9 @@ static PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, 
     switch (ah) {
     /* A FILENAME IN. 3Dh open, 41h delete, 43h get/set attributes, 4Eh find-first,
        39h/3Ah/3Bh mkdir/rmdir/chdir -- all DS:DX -> ASCIIZ path. */
-    case 0x3D: case 0x41: case 0x43: case 0x4E:
-    case 0x39: case 0x3A: case 0x3B: {
-        DWORD length = PmTransferStringLength(dsValue, dxValue, cap < 260 ? cap - 1 : 259);
+    case DOS_FN_OPEN: case DOS_FN_DELETE: case DOS_FN_FILE_ATTRIBUTES: case DOS_FN_FIND_FIRST:
+    case DOS_FN_MKDIR: case DOS_FN_RMDIR: case DOS_FN_CHDIR: {
+        DWORD length = PmTransferStringLength(dsValue, dxValue, cap < MAX_PATH ? cap - 1 : MAX_PATH - 1);
         status = PmTransferIn(dsValue, dxValue, length);
         if (!status) {
             PCSTR name = (PCSTR)(ULONG_PTR)((DWORD)g_PmTransferSegment << PARAGRAPH_SHIFT);
@@ -21748,7 +21748,7 @@ static PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, 
         }
         break; }
     /* A BUFFER OUT. 3Fh read CX bytes into DS:DX -- nothing to copy in. */
-    case 0x3F:
+    case DOS_FN_READ:
         if (cxValue > cap) {
             /* Say so rather than silently short-reading: a caller that asked for
                0x4000 and got 0x1000 with CF=0 would believe it had the whole file. */
@@ -21760,7 +21760,7 @@ static PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, 
         }
         break;
     /* A BUFFER IN. 40h write CX bytes from DS:DX. */
-    case 0x40:
+    case DOS_FN_WRITE:
         if (cxValue > cap) { cxValue = cap; VDM_SET16(tib, VTIB_ECX, (WORD)cxValue); }
         status = PmTransferIn(dsValue, dxValue, cxValue);
         break;
@@ -21771,7 +21771,7 @@ static PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, 
 
     if (status) {
         VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;              /* CF=1 */
-        VDM_SET16(tib, VTIB_EAX, 0x0005);             /* access denied */
+        VDM_SET16(tib, VTIB_EAX, DOS_ERR_ACCESS_DENIED);             /* access denied */
         cursor = LogPut(cursor, " -> XFER FAILED (unreadable pointer or oversize) CF=1\r\n");
         return cursor;
     }
@@ -27900,7 +27900,7 @@ static VOID IsvBop(volatile BYTE *tib, DWORD subfunction, PSTR *logCursor)
     }
     *logCursor = cursor;
 }
-
+enum { DPMI_IRQ_TIME_CHECK_MASK = 0x3F };   /* DpmiInjectPmIrq: look at the clock every 64 phases */
 /* ── ★★ A FAULT INSIDE A NESTED RUN IS STILL A FAULT. (s90, found tracing #278) ────
      The main PM loop owns exception delivery: the kernel reflects a fault onto one
      of our fault sites (`C4 C4 57` in g_DpmiFaultCodeSelector), and the main loop hands
@@ -28321,8 +28321,8 @@ static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interr
        does -- and discards the guest's own flags, DF included, so a handler that returned
        through a string operation would run it in the wrong direction. */
     /* VIP too -- see DpmiAsyncInjectPm() for why an STI with VIP set is fatal here. */
-    VDM_REG(tib, VTIB_EFLAGS) = (sEFL & ~(EFLAGS_IF_U | EFLAGS_VIF | EFLAGS_VIP)) | 2u;
-    *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR &= ~3u;
+    VDM_REG(tib, VTIB_EFLAGS) = (sEFL & ~(EFLAGS_IF_U | EFLAGS_VIF | EFLAGS_VIP)) | EFLAGS_RESERVED_ONE_U;
+    *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR &= ~VDM_INT_PENDING;
     VDM_SET16(tib, VTIB_CS, DPMI_IRQ_TARGET_SEL(interruptVector));
     VDM_REG(tib, VTIB_EIP) = isClient32 ? DPMI_IRQ_TARGET_OFF(interruptVector) : (DPMI_IRQ_TARGET_OFF(interruptVector) & WORD_MASK);
 
@@ -28367,7 +28367,7 @@ static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interr
          problem; it already terminates a VDM that stops making progress. */
     for (phase = 0; phase < DPMI_IRQ0_PHASE_MAX && !done; ++phase) {
         DWORD event, eip, vector; INT status;
-        if ((phase & 0x3F) == 0x3F && (GetTickCount() - isrStartTick) > DPMI_IRQ0_MS_MAX) break;
+        if ((phase & DPMI_IRQ_TIME_CHECK_MASK) == DPMI_IRQ_TIME_CHECK_MASK && (GetTickCount() - isrStartTick) > DPMI_IRQ0_MS_MAX) break;
         DpmiArmFaultTrampoline(tib, 0);
         /* ► THE LAST THING BEFORE THE CLIFF. Doom takes five of these injections and
              dies inside the SIXTH: its "IRQ0->PM INT" entry line is the final line in
@@ -28439,7 +28439,7 @@ static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interr
          so counting these lines to measure the TIMER's delivery over-counts by however
          much the Sound Blaster contributed. Same fault as ASYNC-PM's hardcoded
          "vec=0x08", one function over, and the same fix. */
-    if (interruptVector <= VECTOR_IRQ7) { g_PmCooperativeLine[interruptVector & 7]++;
+    if (interruptVector <= VECTOR_IRQ7) { g_PmCooperativeLine[interruptVector & (PIC_LINES_PER_CHIP - 1)]++;
                       if (interruptVector == VECTOR_TIMER) TickDeliveredNote(); }
     { CHAR changeLine[128], *changeCursor = changeLine;
       changeCursor = LogPut(changeCursor, "  PMIRQ vec=0x"); changeCursor = LogHexByte(changeCursor, interruptVector);
