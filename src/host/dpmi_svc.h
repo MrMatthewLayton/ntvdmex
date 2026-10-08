@@ -76,6 +76,23 @@
 #define DPMI_DESCRIPTOR_FLAGS_SHIFT 20
 #define DPMI_DESCRIPTOR_FLAGS_MASK  0x0F
 
+/* A PM INT 21h's transfer buffer (WOW only): one 1 KB window per pointer register, so an LFN
+   call can carry DS:DX, DS:SI and ES:DI at once (PmInt21Lfn). */
+#define PM_TRANSFER_WINDOW_SIZE      0x400
+#define PM_TRANSFER_STRING_MAX       0x3FF   /* a string in, less room for its NUL        */
+#define PM_TRANSFER_WINDOW_DX        0x000
+#define PM_TRANSFER_WINDOW_SI        0x400
+#define PM_TRANSFER_WINDOW_DI        0x800
+/* How a pointer register's bytes move (PmInt21Lfn). */
+#define PM_LFN_COPY_NONE             0       /* not a pointer for this call               */
+#define PM_LFN_COPY_STRING_IN        1
+#define PM_LFN_COPY_BLOCK_OUT        2       /* a block of `length` bytes out             */
+#define PM_LFN_COPY_BLOCK_IN         3
+#define PM_LFN_COPY_STRING_OUT       4       /* at most `length`, copied back to its NUL  */
+/* PmLfnCopy's direction. */
+#define PM_LFN_INTO_TRANSFER         1       /* guest -> transfer buffer                  */
+#define PM_LFN_BACK_TO_GUEST         0       /* transfer buffer -> guest                  */
+
 /* INT 31h functions (AX), as the dispatcher's comments name them; 04F1h/04F2h are NTVDM's own. */
 #define DPMI_FN_ALLOCATE_DESCRIPTORS         0x0000
 #define DPMI_FN_FREE_DESCRIPTOR              0x0001

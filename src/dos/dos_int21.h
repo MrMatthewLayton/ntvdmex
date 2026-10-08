@@ -15,6 +15,7 @@
 #include "dos_layout.h"   /* DOS_MAX_FILES -- the capacity fh[] must match */
 #include "dos_clock.h"    /* the VDM's own clock -- GH #250 */
 #include "dos_psp.h"      /* DOS_PSP_JFT_HANDLES -- a JFT's size */
+#include "dos_sizes.h"    /* name and path sizes */
 
 /* INT 21h function numbers (AH), by their documented names. */
 #define DOS_FN_TERMINATE                0x00
@@ -130,6 +131,38 @@
 #define DOS_FN_GET_LOGICAL_DRIVE_MAP    0xDC
 #define DOS_FN_LAST_622                 0x6C    /* the last function 6.22 defines */
 
+/* Long file names (AH=71h): AL, and its own subfunctions. */
+#define DOS_INT21_LFN_DELETE      0x41
+#define DOS_INT21_LFN_ATTRIBUTES  0x43
+#define DOS_INT21_LFN_CURRENT_DIRECTORY 0x47
+#define DOS_INT21_LFN_VOLUME_INFO 0xA0
+#define DOS_INT21_LFN_FIND_CLOSE  0xA1
+#define DOS_INT21_LFN_HANDLE_INFO 0xA6
+#define DOS_INT21_LFN_TIME_CONVERT 0xA7
+#define DOS_INT21_LFN_SHORT_NAME  0xA8
+#define DOS_INT21_LFN_SUBST       0xAA
+#define DOS_INT21_LFN_SERVER_OPEN 0xA9    /* AX=71A9h: an ordinary 716Ch here          */
+#define DOS_INT21_LFN_ATTR_GET_ATTRIBUTES 0x00   /* AX=7143h BL */
+#define DOS_INT21_LFN_ATTR_SET_ATTRIBUTES 0x01
+#define DOS_INT21_LFN_ATTR_GET_COMPRESSED_SIZE 0x02
+#define DOS_INT21_LFN_ATTR_SET_WRITE_TIME 0x03
+#define DOS_INT21_LFN_ATTR_GET_WRITE_TIME 0x04
+#define DOS_INT21_LFN_ATTR_SET_ACCESS_TIME 0x05
+#define DOS_INT21_LFN_ATTR_GET_ACCESS_TIME 0x06
+#define DOS_INT21_LFN_ATTR_SET_CREATION_TIME 0x07
+#define DOS_INT21_LFN_ATTR_GET_CREATION_TIME 0x08
+#define DOS_INT21_TIME_TO_DOS     0x00    /* AX=71A7h BL                               */
+#define DOS_INT21_TIME_FROM_DOS   0x01
+#define DOS_INT21_TRUENAME_LONG   2       /* AX=7160h CL: 0 full, 1 short, 2 long      */
+#define DOS_INT21_FS_CASE_FLAGS   0x0007  /* AX=71A0h BX: case-sensitive/preserved, Unicode */
+#define DOS_INT21_FS_COMPRESSED   0x8000
+#define DOS_INT21_FS_LFN_APIS     0x4000
+#define DOS_INT21_MAX_COMPONENT   255
+#define DOS_INT21_HANDLE_INFO_SIZE 52     /* BY_HANDLE_FILE_INFORMATION                */
+#define DOS_INT21_SUBST_CREATE    0
+#define DOS_INT21_SUBST_QUERY     2       /* AX=71AAh BH: 0 create, 1 delete, 2 query  */
+#define DOS_INT21_SUBST_NONE_ERROR 0x89   /* stock's answer to a query of no SUBST     */
+
 
 /* A trace is opt-in via cfg\dostrace.flag, which says who PAYS for it and nothing
    about how big it gets. XP's COMMAND.COM in a command loop wrote 2,166,824 lines
@@ -140,7 +173,6 @@
 #define DOS_SERVICE_BITS      32     /* one bit per AH: 256 services                */
 #define DOS_CONSOLE_LINE_SIZE 130    /* 127 characters + CR LF + room               */
 #define DOS_SFT_INDEXES       256    /* a JFT entry is a byte                       */
-#define DOS_FCB_NAME_SIZE     11     /* 8.3, blank-padded, no dot                   */
 
 /* One saved handle table -- see DOS_MACHINE::HandleStack. */
 typedef struct _DOS_HANDLE_FRAME { HANDLE FileHandles[DOS_MAX_FILES]; UINT32 StdOpen; BYTE JftKnown[DOS_PSP_JFT_HANDLES]; } DOS_HANDLE_FRAME;

@@ -62,7 +62,6 @@
 #define DOS_INT21_CALLSITE_BEFORE 24      /* the trace's bytes around the call site    */
 #define DOS_INT21_CALLSITE_AFTER  10
 #define DOS_INT21_CALLSITE_MAX    48
-#define DOS_INT21_LFN_SERVER_OPEN 0xA9    /* AX=71A9h: an ordinary 716Ch here          */
 /* Console I/O. */
 #define DOS_INT21_NUL             0x00
 #define DOS_INT21_BACKSPACE       0x08
@@ -236,35 +235,6 @@
 #define DOS_INT21_DEVICE_INFO_FILE 0x0002
 #define DOS_INT21_DEVICE_INFO_AUX 0x80C0
 #define DOS_INT21_DEVICE_INFO_PRN 0xA0C0
-/* Long file names (AH=71h): AL, and its own subfunctions. */
-#define DOS_INT21_LFN_DELETE      0x41
-#define DOS_INT21_LFN_ATTRIBUTES  0x43
-#define DOS_INT21_LFN_CURRENT_DIRECTORY 0x47
-#define DOS_INT21_LFN_VOLUME_INFO 0xA0
-#define DOS_INT21_LFN_FIND_CLOSE  0xA1
-#define DOS_INT21_LFN_HANDLE_INFO 0xA6
-#define DOS_INT21_LFN_TIME_CONVERT 0xA7
-#define DOS_INT21_LFN_SHORT_NAME  0xA8
-#define DOS_INT21_LFN_SUBST       0xAA
-#define DOS_INT21_LFN_ATTR_GET_ATTRIBUTES 0x00   /* AX=7143h BL */
-#define DOS_INT21_LFN_ATTR_SET_ATTRIBUTES 0x01
-#define DOS_INT21_LFN_ATTR_GET_COMPRESSED_SIZE 0x02
-#define DOS_INT21_LFN_ATTR_SET_WRITE_TIME 0x03
-#define DOS_INT21_LFN_ATTR_GET_WRITE_TIME 0x04
-#define DOS_INT21_LFN_ATTR_SET_ACCESS_TIME 0x05
-#define DOS_INT21_LFN_ATTR_GET_ACCESS_TIME 0x06
-#define DOS_INT21_LFN_ATTR_SET_CREATION_TIME 0x07
-#define DOS_INT21_LFN_ATTR_GET_CREATION_TIME 0x08
-#define DOS_INT21_TIME_TO_DOS     0x00    /* AX=71A7h BL                               */
-#define DOS_INT21_TIME_FROM_DOS   0x01
-#define DOS_INT21_TRUENAME_LONG   2       /* AX=7160h CL: 0 full, 1 short, 2 long      */
-#define DOS_INT21_FS_CASE_FLAGS   0x0007  /* AX=71A0h BX: case-sensitive/preserved, Unicode */
-#define DOS_INT21_FS_COMPRESSED   0x8000
-#define DOS_INT21_FS_LFN_APIS     0x4000
-#define DOS_INT21_MAX_COMPONENT   255
-#define DOS_INT21_HANDLE_INFO_SIZE 52     /* BY_HANDLE_FILE_INFORMATION                */
-#define DOS_INT21_SUBST_QUERY     2       /* AX=71AAh BH: 0 create, 1 delete, 2 query  */
-#define DOS_INT21_SUBST_NONE_ERROR 0x89   /* stock's answer to a query of no SUBST     */
 #define DOS_INT21_NT_PREFIX_LENGTH 4      /* "\\??\\"                                   */
 #define DOS_INT21_NONE            0x0000
 #define DOS_INT21_TAB             9
@@ -538,7 +508,7 @@ static VOID DosFcbName(const volatile BYTE *fcb, PSTR out)
     for (index = DOS_INT21_FCB_NAME; index <= DOS_INT21_FCB_BASE_LENGTH && fcb[index] != ' '; ++index) out[length++] = (CHAR)fcb[index];
     if (fcb[DOS_INT21_FCB_EXTENSION] != ' ') {
         out[length++] = '.';
-        for (index = DOS_INT21_FCB_EXTENSION; index <= DOS_LFN_FCB_NAME_SIZE && fcb[index] != ' '; ++index) out[length++] = (CHAR)fcb[index];
+        for (index = DOS_INT21_FCB_EXTENSION; index <= DOS_FCB_NAME_SIZE && fcb[index] != ' '; ++index) out[length++] = (CHAR)fcb[index];
     }
     out[length] = 0;
 }
@@ -566,7 +536,7 @@ static INT DosFcbIsNameEnd(BYTE character)
 static VOID DosFcbPutName(volatile BYTE *destination, PCSTR name)
 {
     INT source = 0, index;
-    for (index = 0; index < DOS_LFN_FCB_NAME_SIZE; ++index) destination[index] = ' ';
+    for (index = 0; index < DOS_FCB_NAME_SIZE; ++index) destination[index] = ' ';
     /* "." AND ".." ARE NAMES, NOT EXTENSIONS. The rule below ends the name at the
        first '.', which for these two directory entries ends it at character zero and
        leaves eleven blanks -- DIR then printed an empty column where the oracle
@@ -594,8 +564,8 @@ static VOID DosFcbPutName(volatile BYTE *destination, PCSTR name)
     }
     while (!DosFcbIsNameEnd((BYTE)name[source]) && name[source] != '.') ++source;
     if (name[source] == '.') ++source;
-    for (index = DOS_INT21_FCB_BASE_LENGTH; index < DOS_LFN_FCB_NAME_SIZE && !DosFcbIsNameEnd((BYTE)name[source]); ++index, ++source) {
-        if (name[source] == '*') { while (index < DOS_LFN_FCB_NAME_SIZE) destination[index++] = '?'; break; }
+    for (index = DOS_INT21_FCB_BASE_LENGTH; index < DOS_FCB_NAME_SIZE && !DosFcbIsNameEnd((BYTE)name[source]); ++index, ++source) {
+        if (name[source] == '*') { while (index < DOS_FCB_NAME_SIZE) destination[index++] = '?'; break; }
         destination[index] = (BYTE)(name[source] >= 'a' && name[source] <= 'z' ? name[source] - DOS_INT21_LOWER_TO_UPPER : name[source]);
     }
 }
@@ -610,7 +580,7 @@ static VOID DosFcbPutName(volatile BYTE *destination, PCSTR name)
      (the short alias, or the long name when that is already a legal 8.3 name -- and
      no name at all otherwise: such a file is invisible to DOS, as it is on NTVDM),
      laid out as 11 bytes, matched position by position, `?` matching anything. */
-static INT DosShortNameOf(const WIN32_FIND_DATAA *findData, BYTE out[DOS_LFN_FCB_NAME_SIZE])
+static INT DosShortNameOf(const WIN32_FIND_DATAA *findData, BYTE out[DOS_FCB_NAME_SIZE])
 {
     PCSTR baseName = findData->cAlternateFileName[0] ? findData->cAlternateFileName : findData->cFileName;
     if (!findData->cAlternateFileName[0] && baseName[0] != '.') {  /* the long name must BE 8.3 */
@@ -625,10 +595,10 @@ static INT DosShortNameOf(const WIN32_FIND_DATAA *findData, BYTE out[DOS_LFN_FCB
     DosFcbPutName((volatile BYTE *)out, baseName);
     return 1;
 }
-static INT DosTemplateMatches(const BYTE nameTemplate[DOS_LFN_FCB_NAME_SIZE], const BYTE name[DOS_LFN_FCB_NAME_SIZE])
+static INT DosTemplateMatches(const BYTE nameTemplate[DOS_FCB_NAME_SIZE], const BYTE name[DOS_FCB_NAME_SIZE])
 {
     INT index;
-    for (index = 0; index < DOS_LFN_FCB_NAME_SIZE; ++index) {
+    for (index = 0; index < DOS_FCB_NAME_SIZE; ++index) {
         BYTE character = nameTemplate[index];
         if (character == '?') continue;
         if (character >= 'a' && character <= 'z') character = (BYTE)(character - DOS_INT21_LOWER_TO_UPPER);
@@ -636,14 +606,14 @@ static INT DosTemplateMatches(const BYTE nameTemplate[DOS_LFN_FCB_NAME_SIZE], co
     }
     return 1;
 }
-static INT DosFindMatches(const WIN32_FIND_DATAA *findData, const BYTE nameTemplate[DOS_LFN_FCB_NAME_SIZE], WORD mask)
+static INT DosFindMatches(const WIN32_FIND_DATAA *findData, const BYTE nameTemplate[DOS_FCB_NAME_SIZE], WORD mask)
 {
-    BYTE name[DOS_LFN_FCB_NAME_SIZE];
+    BYTE name[DOS_FCB_NAME_SIZE];
     return DosDtaMatchesAttributes(findData->dwFileAttributes, mask) && DosShortNameOf(findData, name) && DosTemplateMatches(nameTemplate, name);
 }
 /* Split a host path pattern into "directory\*" (for FindFirstFileA) and the final
    component's 11-byte template. */
-static VOID DosFindSplit(PCSTR pattern, PSTR directoryPattern, INT directoryPatternSize, BYTE nameTemplate[DOS_LFN_FCB_NAME_SIZE])
+static VOID DosFindSplit(PCSTR pattern, PSTR directoryPattern, INT directoryPatternSize, BYTE nameTemplate[DOS_FCB_NAME_SIZE])
 {
     INT index, cut = 0;
     for (index = 0; pattern[index]; ++index) if (pattern[index] == '\\' || pattern[index] == '/' || pattern[index] == ':') cut = index + 1;
@@ -657,7 +627,7 @@ static VOID DosFindSplit(PCSTR pattern, PSTR directoryPattern, INT directoryPatt
    that is NOT READY (21) can be told from "no such file" -- the first is a critical
    error and goes to INT 24h, the second is an ordinary answer. 0 = it did not fail. */
 static DWORD g_DosFindWin32Error;
-static HANDLE DosFindFirst(PCSTR directoryPattern, const BYTE nameTemplate[DOS_LFN_FCB_NAME_SIZE], WORD mask,
+static HANDLE DosFindFirst(PCSTR directoryPattern, const BYTE nameTemplate[DOS_FCB_NAME_SIZE], WORD mask,
                              WIN32_FIND_DATAA *findData, PINT isNoDirectory)
 {
     HANDLE find = FindFirstFileA(directoryPattern, findData);
@@ -714,7 +684,7 @@ static INT DosHandleDrive(HANDLE file)
    the INT 24h tail of DosInt21, reset at its entry (the g_DosFindWin32Error pattern). */
 static INT g_DosReadWriteDrive = -1;
 
-static INT DosFindNext(HANDLE find, const BYTE nameTemplate[DOS_LFN_FCB_NAME_SIZE], WORD mask, WIN32_FIND_DATAA *findData)
+static INT DosFindNext(HANDLE find, const BYTE nameTemplate[DOS_FCB_NAME_SIZE], WORD mask, WIN32_FIND_DATAA *findData)
 {
     do { if (!FindNextFileA(find, findData)) return 0; } while (!DosFindMatches(findData, nameTemplate, mask));
     return 1;
@@ -1648,7 +1618,7 @@ INT DosInt21(PDOS_MACHINE machine)
             for (slot = 0; slot < DOS_FIND_SLOTS && machine->FindHandles[slot]; ++slot) {}
             if (slot >= DOS_FIND_SLOTS) { slot = 0;                       /* recycle the oldest */
                              FindClose(machine->FindHandles[0]); machine->FindHandles[0] = 0; }
-            { CHAR directoryPattern[DOS_INT21_PATH_SIZE]; BYTE nameTemplate[DOS_LFN_FCB_NAME_SIZE]; INT isNoDirectory;
+            { CHAR directoryPattern[DOS_INT21_PATH_SIZE]; BYTE nameTemplate[DOS_FCB_NAME_SIZE]; INT isNoDirectory;
               HANDLE find;
               DosFindSplit(pattern, directoryPattern, sizeof directoryPattern, nameTemplate);  /* DOS matching: see DosFindMatches */
               find = DosFindFirst(directoryPattern, nameTemplate, mask, &findData, &isNoDirectory);
@@ -1676,7 +1646,7 @@ INT DosInt21(PDOS_MACHINE machine)
                      puts the EXPANDED 11-byte search template there (a "*.*"
                      search reads back as eleven '?'), so do the same. */
                   /* The template, exactly as matched -- 4Fh reads it back from here. */
-                  { INT nameIndex; for (nameIndex = 0; nameIndex < DOS_LFN_FCB_NAME_SIZE; ++nameIndex) dta[DOS_INT21_FCB_NAME + nameIndex] = nameTemplate[nameIndex]; }
+                  { INT nameIndex; for (nameIndex = 0; nameIndex < DOS_FCB_NAME_SIZE; ++nameIndex) dta[DOS_INT21_FCB_NAME + nameIndex] = nameTemplate[nameIndex]; }
                   dta[0] = DOS_INT21_FIND_DRIVE_C;                                /* drive C:        */
                   dta[DOS_INT21_FIND_MASK] = (BYTE)(mask & BYTE_MASK);
                   dta[DOS_INT21_FIND_RESERVED] = 0; dta[DOS_INT21_FIND_RESERVED + 1] = 0; dta[DOS_INT21_FIND_RESERVED + 2] = 0; dta[DOS_INT21_FIND_RESERVED + 3] = 0;
@@ -1688,9 +1658,9 @@ INT DosInt21(PDOS_MACHINE machine)
         } else {                                             /* 4Fh: continue   */
             mask = (WORD)dta[DOS_INT21_FIND_MASK];
             if (dta[DOS_INT21_FIND_TAG] == DOS_FIND_MAGIC && dta[DOS_INT21_FIND_SLOT] < DOS_FIND_SLOTS && machine->FindHandles[dta[DOS_INT21_FIND_SLOT]]) {
-                BYTE nameTemplate[DOS_LFN_FCB_NAME_SIZE]; INT index;
+                BYTE nameTemplate[DOS_FCB_NAME_SIZE]; INT index;
                 slot = dta[DOS_INT21_FIND_SLOT];
-                for (index = 0; index < DOS_LFN_FCB_NAME_SIZE; ++index) nameTemplate[index] = dta[DOS_INT21_FCB_NAME + index];  /* the template 4Eh stored */
+                for (index = 0; index < DOS_FCB_NAME_SIZE; ++index) nameTemplate[index] = dta[DOS_INT21_FCB_NAME + index];  /* the template 4Eh stored */
                 isOk = DosFindNext(machine->FindHandles[slot], nameTemplate, mask, &findData);
             } else {
                 SETAX(DOS_ERR_NO_MORE_FILES); ERRCF();                          /* no search live  */
@@ -1795,7 +1765,7 @@ INT DosInt21(PDOS_MACHINE machine)
                     extension = dta + isExtended;
                     if (isExtended) { INT position; dta[0] = DOS_INT21_XFCB_FLAG; for (position = 1; position < DOS_INT21_XFCB_ATTRIBUTE; ++position) dta[position] = 0; dta[DOS_INT21_XFCB_ATTRIBUTE] = DOS_INT21_ATTRIBUTE_VOLUME; }
                     extension[0] = DOS_INT21_FIND_DRIVE_C;                     /* drive C:                */
-                    for (volumeIndex = 0; volumeIndex < DOS_LFN_FCB_NAME_SIZE; ++volumeIndex) {
+                    for (volumeIndex = 0; volumeIndex < DOS_FCB_NAME_SIZE; ++volumeIndex) {
                         CHAR character = volume[volumeIndex] ? volume[volumeIndex] : ' ';
                         if (!volume[volumeIndex]) { extension[1 + volumeIndex] = ' '; continue; }
                         extension[DOS_INT21_FCB_NAME + volumeIndex] = (BYTE)(character >= 'a' && character <= 'z' ? character - DOS_INT21_LOWER_TO_UPPER : character);

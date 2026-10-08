@@ -24,6 +24,7 @@
 #define NTVDMEX_DOS_LFN_H
 
 #include "../ntvdmex_types.h"
+#include "dos_sizes.h"     /* name and path sizes */
 #include "dos_err.h"      /* DosErrFromWin32: the measured rows come first */
 
 /* ── FILETIME <-> DOS DATE/TIME. ──────────────────────────────────────────────────
@@ -201,7 +202,6 @@ static inline BOOL DosLfnDosToFileTime(_In_ WORD dosDate, _In_ WORD dosTime, _In
      name is Win32's cAlternateFileName, i.e. EMPTY when the long name is already a
      valid 8.3 name; (4) everything past each name's NUL is zeroed, so the record is
      deterministic (Win32 leaves garbage there). */
-#define DOS_LFN_FIND_RECORD_SIZE    0x13E
 #define DOS_LFN_FIND_ATTRIBUTES     0x00
 #define DOS_LFN_FIND_CREATION_TIME  0x04
 #define DOS_LFN_FIND_ACCESS_TIME    0x0C
@@ -332,8 +332,6 @@ static inline BOOL DosLfnAttributesOk(_In_ DWORD attributes, _In_ BYTE allowed, 
 #define DOS_LFN_REPLACEMENT_CHAR    '_'
 #define DOS_LFN_EXTENSION_DOT       '.'
 #define DOS_LFN_FCB_PAD             ' '
-#define DOS_LFN_SHORT_NAME_SIZE     13      /* "NAME.EXT" and its NUL                    */
-#define DOS_LFN_FCB_NAME_SIZE       11
 
 static inline BOOL DosLfnIsBadShortNameChar(_In_ BYTE character)
 {
@@ -376,10 +374,10 @@ static inline CHAR DosLfnCleanShortNameChar(_In_ BYTE character)
 }
 
 static inline VOID DosLfnShortName(_In_ PCSTR longName,
-                                   _Out_writes_(DOS_LFN_SHORT_NAME_SIZE)
-                                   CHAR shortName[DOS_LFN_SHORT_NAME_SIZE],
-                                   _Out_writes_(DOS_LFN_FCB_NAME_SIZE)
-                                   CHAR fcbName[DOS_LFN_FCB_NAME_SIZE])
+                                   _Out_writes_(DOS_SHORT_NAME_SIZE)
+                                   CHAR shortName[DOS_SHORT_NAME_SIZE],
+                                   _Out_writes_(DOS_FCB_NAME_SIZE)
+                                   CHAR fcbName[DOS_FCB_NAME_SIZE])
 {
     PCSTR component = longName, cursor, lastDot = 0;
     CHAR base[DOS_LFN_BASE_BUFFER_SIZE], extension[DOS_LFN_EXTENSION_BUFFER_SIZE];
@@ -418,7 +416,7 @@ static inline VOID DosLfnShortName(_In_ PCSTR longName,
                 extension[extensionLength++] = DosLfnCleanShortNameChar(character);
             }
     }
-    for (charIndex = 0; charIndex < DOS_LFN_FCB_NAME_SIZE; ++charIndex)
+    for (charIndex = 0; charIndex < DOS_FCB_NAME_SIZE; ++charIndex)
         fcbName[charIndex] = DOS_LFN_FCB_PAD;
     for (charIndex = 0; charIndex < baseLength; ++charIndex) fcbName[charIndex] = base[charIndex];
     for (charIndex = 0; charIndex < extensionLength; ++charIndex)

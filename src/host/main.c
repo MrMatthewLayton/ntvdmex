@@ -21822,7 +21822,7 @@ static INT PmLfnCopy(WORD selector, DWORD offset, DWORD transferOffset, DWORD le
     DWORD base = DpmiSelectorBase(selector), index;
     volatile BYTE *guest = (volatile BYTE *)(ULONG_PTR)(base + offset);
     volatile BYTE *transfer = (volatile BYTE *)(ULONG_PTR)(((DWORD)g_PmTransferSegment << PARAGRAPH_SHIFT) + transferOffset);
-    if (!base || transferOffset + length > (DWORD)g_PmTransferParagraphs * 16u || length > 0x400) return -1;
+    if (!base || transferOffset + length > (DWORD)g_PmTransferParagraphs * PARAGRAPH_SIZE_U || length > PM_TRANSFER_WINDOW_SIZE) return -1;
     if (!length) return 0;
     if (!HostReadable((const VOID *)guest, length)) return -1;
     if (isIn) for (index = 0; index < length; ++index) transfer[index] = guest[index];
@@ -21836,7 +21836,7 @@ static DWORD PmLfnOutLength(DWORD transferOffset, INT kind, DWORD length)
 {
     const volatile BYTE *transfer = (const volatile BYTE *)(ULONG_PTR)(((DWORD)g_PmTransferSegment << PARAGRAPH_SHIFT) + transferOffset);
     DWORD used = 0;
-    if (kind != 4) return length;
+    if (kind != PM_LFN_COPY_STRING_OUT) return length;
     while (used < length && transfer[used]) ++used;
     return (used < length) ? used + 1 : length;
 }
@@ -21859,59 +21859,59 @@ static PSTR PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     INT copyDx = 0, copySi = 0, copyDi = 0, status = 0;
     DWORD dxLength = 0, siLength = 0, diLength = 0;
     switch (al) {
-    case 0x39: case 0x3A: case 0x3B: case 0x41: case 0x43: case 0x4E: case 0xA0:
-        copyDx = 1; break;
-    case 0x56:            copyDx = 1; copyDi = 1; break;
-    case 0x6C: case 0xA9: case 0x60: case 0xA8: copySi = 1; break;
-    case 0x47:            copySi = 4; siLength = 261; break;
-    case 0xA6:            copyDx = 2; dxLength = 52; break;
-    case 0xA7:            if (bl == 0) { copySi = 3; siLength = 8; } else { copyDi = 2; diLength = 8; } break;
-    case 0xAA:            if (bh == 0) copyDx = 1; else if (bh == 2) { copyDx = 4; dxLength = 261; } break;
+    case DOS_FN_MKDIR: case DOS_FN_RMDIR: case DOS_FN_CHDIR: case DOS_FN_DELETE: case DOS_FN_FILE_ATTRIBUTES: case DOS_FN_FIND_FIRST: case DOS_INT21_LFN_VOLUME_INFO:
+        copyDx = PM_LFN_COPY_STRING_IN; break;
+    case DOS_FN_RENAME:            copyDx = PM_LFN_COPY_STRING_IN; copyDi = PM_LFN_COPY_STRING_IN; break;
+    case DOS_FN_EXTENDED_OPEN: case DOS_INT21_LFN_SERVER_OPEN: case DOS_FN_TRUENAME: case DOS_INT21_LFN_SHORT_NAME: copySi = PM_LFN_COPY_STRING_IN; break;
+    case DOS_FN_GET_CURRENT_DIRECTORY:            copySi = PM_LFN_COPY_STRING_OUT; siLength = DOS_LFN_PATH_BUFFER_SIZE; break;
+    case DOS_INT21_LFN_HANDLE_INFO:            copyDx = PM_LFN_COPY_BLOCK_OUT; dxLength = DOS_INT21_HANDLE_INFO_SIZE; break;
+    case DOS_INT21_LFN_TIME_CONVERT:            if (bl == DOS_INT21_TIME_TO_DOS) { copySi = PM_LFN_COPY_BLOCK_IN; siLength = DOS_LFN_FILETIME_SIZE; } else { copyDi = PM_LFN_COPY_BLOCK_OUT; diLength = DOS_LFN_FILETIME_SIZE; } break;
+    case DOS_INT21_LFN_SUBST:            if (bh == DOS_INT21_SUBST_CREATE) copyDx = PM_LFN_COPY_STRING_IN; else if (bh == DOS_INT21_SUBST_QUERY) { copyDx = PM_LFN_COPY_STRING_OUT; dxLength = DOS_LFN_PATH_BUFFER_SIZE; } break;
     default: break;
     }
-    if (al == 0x4E || al == 0x4F) { copyDi = 2; diLength = 0x13E; }   /* DOS_LFN_FIND_RECORD_SIZE */
-    if (al == 0x60) { copyDi = 4; diLength = 261; }
-    if (al == 0xA8) { if (((VDM_REG(tib, VTIB_EDX) >> BYTE_SHIFT) & BYTE_MASK) == 0) { copyDi = 2; diLength = 11; }
-                      else { copyDi = 4; diLength = 13; } }
-    if (al == 0xA0) { copyDi = 4; diLength = VDM_REG16(tib, VTIB_ECX); if (diLength > 0x400) diLength = 0x400; }
+    if (al == DOS_FN_FIND_FIRST || al == DOS_FN_FIND_NEXT) { copyDi = PM_LFN_COPY_BLOCK_OUT; diLength = DOS_LFN_FIND_RECORD_SIZE; }
+    if (al == DOS_FN_TRUENAME) { copyDi = PM_LFN_COPY_STRING_OUT; diLength = DOS_LFN_PATH_BUFFER_SIZE; }
+    if (al == DOS_INT21_LFN_SHORT_NAME) { if (((VDM_REG(tib, VTIB_EDX) >> BYTE_SHIFT) & BYTE_MASK) == 0) { copyDi = PM_LFN_COPY_BLOCK_OUT; diLength = DOS_FCB_NAME_SIZE; }
+                      else { copyDi = PM_LFN_COPY_STRING_OUT; diLength = DOS_SHORT_NAME_SIZE; } }
+    if (al == DOS_INT21_LFN_VOLUME_INFO) { copyDi = PM_LFN_COPY_STRING_OUT; diLength = VDM_REG16(tib, VTIB_ECX); if (diLength > PM_TRANSFER_WINDOW_SIZE) diLength = PM_TRANSFER_WINDOW_SIZE; }
 
     cursor = LogPut(cursor, "INT21h AX=71"); cursor = LogHexByte(cursor, (BYTE)al);
     cursor = LogPut(cursor, " (PM LFN -> V86 via xfer buf 0x"); cursor = LogHex(cursor, g_PmTransferSegment); cursor = LogPut(cursor, ")");
 
     /* In. A string's length is found first (bounded, never past what is readable). */
-    if (copyDx == 1) { dxLength = PmTransferStringLength(dsValue, dxOffset, 0x3FF); status |= PmLfnCopy(dsValue, dxOffset, 0x000, dxLength, 1); }
-    if (copySi == 1) { siLength = PmTransferStringLength(dsValue, siOffset, 0x3FF); status |= PmLfnCopy(dsValue, siOffset, 0x400, siLength, 1); }
-    if (copyDi == 1) { diLength = PmTransferStringLength(esValue, diOffset, 0x3FF); status |= PmLfnCopy(esValue, diOffset, 0x800, diLength, 1); }
-    if (copySi == 3) status |= PmLfnCopy(dsValue, siOffset, 0x400, siLength, 1);
+    if (copyDx == PM_LFN_COPY_STRING_IN) { dxLength = PmTransferStringLength(dsValue, dxOffset, PM_TRANSFER_STRING_MAX); status |= PmLfnCopy(dsValue, dxOffset, PM_TRANSFER_WINDOW_DX, dxLength, PM_LFN_INTO_TRANSFER); }
+    if (copySi == PM_LFN_COPY_STRING_IN) { siLength = PmTransferStringLength(dsValue, siOffset, PM_TRANSFER_STRING_MAX); status |= PmLfnCopy(dsValue, siOffset, PM_TRANSFER_WINDOW_SI, siLength, PM_LFN_INTO_TRANSFER); }
+    if (copyDi == PM_LFN_COPY_STRING_IN) { diLength = PmTransferStringLength(esValue, diOffset, PM_TRANSFER_STRING_MAX); status |= PmLfnCopy(esValue, diOffset, PM_TRANSFER_WINDOW_DI, diLength, PM_LFN_INTO_TRANSFER); }
+    if (copySi == PM_LFN_COPY_BLOCK_IN) status |= PmLfnCopy(dsValue, siOffset, PM_TRANSFER_WINDOW_SI, siLength, PM_LFN_INTO_TRANSFER);
     if (status) {
         VDM_REG(tib, VTIB_EFLAGS) |= 1u;
-        VDM_SET16(tib, VTIB_EAX, 0x0005);
+        VDM_SET16(tib, VTIB_EAX, DOS_ERR_ACCESS_DENIED);
         cursor = LogPut(cursor, " -> XFER FAILED (unreadable pointer) CF=1\r\n");
         return cursor;
     }
-    if (copyDx == 1 || copySi == 1 || copyDi == 1) {
+    if (copyDx == PM_LFN_COPY_STRING_IN || copySi == PM_LFN_COPY_STRING_IN || copyDi == PM_LFN_COPY_STRING_IN) {
         PCSTR name = (PCSTR)(ULONG_PTR)(((DWORD)g_PmTransferSegment << PARAGRAPH_SHIFT)
-                                                   + (copyDx == 1 ? 0x000 : copySi == 1 ? 0x400 : 0x800));
+                                                   + (copyDx == PM_LFN_COPY_STRING_IN ? PM_TRANSFER_WINDOW_DX : copySi == PM_LFN_COPY_STRING_IN ? PM_TRANSFER_WINDOW_SI : PM_TRANSFER_WINDOW_DI));
         cursor = LogPut(cursor, " name=\""); cursor = LogPut(cursor, name); cursor = LogPut(cursor, "\"");
     }
 
     VDM_SET16(tib, VTIB_DS, g_PmTransferSegment);
     VDM_SET16(tib, VTIB_ES, g_PmTransferSegment);
-    if (copyDx) VDM_SET16(tib, VTIB_EDX, 0x000);
-    if (copySi) VDM_SET16(tib, VTIB_ESI, 0x400);
-    if (copyDi) VDM_SET16(tib, VTIB_EDI, 0x800);
+    if (copyDx) VDM_SET16(tib, VTIB_EDX, PM_TRANSFER_WINDOW_DX);
+    if (copySi) VDM_SET16(tib, VTIB_ESI, PM_TRANSFER_WINDOW_SI);
+    if (copyDi) VDM_SET16(tib, VTIB_EDI, PM_TRANSFER_WINDOW_DI);
     m.TraceCursor = cursor; DosInt21SetProtectedMode(1); DosInt21(&m); DosInt21SetProtectedMode(0); cursor = m.TraceCursor;
     /* Restore what we re-pointed -- except a register the call ANSWERS in: 71A0h returns
        the maximum path in DX, 7143h BL=2 the size's high word. */
     VDM_REG(tib, VTIB_DS) = savedDs; VDM_REG(tib, VTIB_ES) = savedEs;
-    if (copyDx && !(al == 0xA0) && !(al == 0x43 && bl == 0x02)) VDM_REG(tib, VTIB_EDX) = savedDx;
+    if (copyDx && !(al == DOS_INT21_LFN_VOLUME_INFO) && !(al == DOS_FN_FILE_ATTRIBUTES && bl == DOS_INT21_LFN_ATTR_GET_COMPRESSED_SIZE)) VDM_REG(tib, VTIB_EDX) = savedDx;
     if (copySi) VDM_REG(tib, VTIB_ESI) = savedSi;
     if (copyDi) VDM_REG(tib, VTIB_EDI) = savedDi;
 
     if (!(VDM_REG(tib, VTIB_EFLAGS) & 1u)) {
-        if (copyDx == 2 || copyDx == 4) PmLfnCopy(dsValue, dxOffset, 0x000, PmLfnOutLength(0x000, copyDx, dxLength), 0);
-        if (copySi == 2 || copySi == 4) PmLfnCopy(dsValue, siOffset, 0x400, PmLfnOutLength(0x400, copySi, siLength), 0);
-        if (copyDi == 2 || copyDi == 4) PmLfnCopy(esValue, diOffset, 0x800, PmLfnOutLength(0x800, copyDi, diLength), 0);
+        if (copyDx == PM_LFN_COPY_BLOCK_OUT || copyDx == PM_LFN_COPY_STRING_OUT) PmLfnCopy(dsValue, dxOffset, PM_TRANSFER_WINDOW_DX, PmLfnOutLength(PM_TRANSFER_WINDOW_DX, copyDx, dxLength), PM_LFN_BACK_TO_GUEST);
+        if (copySi == PM_LFN_COPY_BLOCK_OUT || copySi == PM_LFN_COPY_STRING_OUT) PmLfnCopy(dsValue, siOffset, PM_TRANSFER_WINDOW_SI, PmLfnOutLength(PM_TRANSFER_WINDOW_SI, copySi, siLength), PM_LFN_BACK_TO_GUEST);
+        if (copyDi == PM_LFN_COPY_BLOCK_OUT || copyDi == PM_LFN_COPY_STRING_OUT) PmLfnCopy(esValue, diOffset, PM_TRANSFER_WINDOW_DI, PmLfnOutLength(PM_TRANSFER_WINDOW_DI, copyDi, diLength), PM_LFN_BACK_TO_GUEST);
     }
     cursor = LogPut(cursor, " -> AX=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EAX));
     cursor = LogPut(cursor, " CF=");      cursor = LogHex(cursor, VDM_REG(tib, VTIB_EFLAGS) & 1u);

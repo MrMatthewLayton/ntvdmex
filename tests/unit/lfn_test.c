@@ -182,11 +182,11 @@ static VOID LfnTestDosToFileTime(PCSTR description, UINT dosDate, UINT dosTime, 
 
 static VOID LfnTestShortName(PCSTR longName, PCSTR expectedShortName, PCSTR expectedFcbName)
 {
-    CHAR shortName[DOS_LFN_SHORT_NAME_SIZE], fcbName[DOS_LFN_FCB_NAME_SIZE + 1];
+    CHAR shortName[DOS_SHORT_NAME_SIZE], fcbName[DOS_FCB_NAME_SIZE + 1];
     CHAR label[LFN_TEST_LABEL_SIZE];
     memset(shortName, LFN_TEST_POISON_CHAR, sizeof shortName);
     DosLfnShortName(longName, shortName, fcbName);
-    fcbName[DOS_LFN_FCB_NAME_SIZE] = 0;
+    fcbName[DOS_FCB_NAME_SIZE] = 0;
     snprintf(label, sizeof label, "71A8 DH=1 \"%s\"", longName);
     LfnTestExpectString(label, shortName, expectedShortName);
     snprintf(label, sizeof label, "71A8 DH=0 \"%s\"", longName);
