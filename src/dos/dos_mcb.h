@@ -36,6 +36,7 @@
 #define DOS_MEM_TOP 0x9FC0u     /* conventional top in paragraphs: 640K - 1K EBDA */
 
 /* The MCB's fields (see the layout above). */
+#define DOS_MCB_LARGEST_REQUEST   0xFFFF /* AH=48h for 0xFFFF paragraphs: fails, and BX = the largest free */
 #define DOS_MCB_SIGNATURE         0      /* 'M' or 'Z'                                    */
 #define DOS_MCB_OWNER             1      /* WORD: the owner's PSP segment                 */
 #define DOS_MCB_SIZE              3      /* WORD: the block's size in paragraphs          */

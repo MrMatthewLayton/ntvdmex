@@ -27,6 +27,8 @@
 #define DOS_PSP_DISPATCH             0x50   /* INT 21h ; RETF                              */
 #define DOS_PSP_COMMAND_TAIL_LENGTH  0x80
 #define DOS_PSP_COMMAND_TAIL         0x81
+#define DOS_PSP_COMMAND_TAIL_MAX     126    /* characters, before the CR                   */
+#define DOS_PSP_DEFAULT_DTA          0x80   /* DOS resets the DTA to PSP:80               */
 
 /* What DosPspBuild writes into them. */
 #define DOS_PSP_OPCODE_INT           0xCD

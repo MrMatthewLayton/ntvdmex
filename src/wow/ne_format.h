@@ -64,6 +64,7 @@
 #define NE_ORDINAL_BYTES    2u
 
 /* Relocation records: addr_type, rel_type, site, then two target words. */
+#define NE_RELOC_COUNT_SIZE 2       /* a segment's relocations: a WORD count, then the records */
 #define NE_RELOC_SIZE       8
 #define NE_RELOC_SITE       2
 #define NE_RELOC_TARGET_A   4

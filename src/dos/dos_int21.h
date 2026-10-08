@@ -132,6 +132,16 @@
 #define DOS_FN_LAST_622                 0x6C    /* the last function 6.22 defines */
 
 /* Long file names (AH=71h): AL, and its own subfunctions. */
+/* AH=4Bh EXEC (AL), and AL=01h's parameter block: the child's SS:SP and CS:IP. */
+#define DOS_INT21_EXEC_LOAD_AND_GO 0x00
+#define DOS_INT21_EXEC_LOAD_ONLY  0x01
+#define DOS_INT21_EXEC_OVERLAY    0x03
+#define DOS_INT21_EXEC_SET_STATE  0x05
+#define DOS_EXEC_BLOCK_SP         0x0E
+#define DOS_EXEC_BLOCK_SS         0x10
+#define DOS_EXEC_BLOCK_IP         0x12
+#define DOS_EXEC_BLOCK_CS         0x14
+
 /* AH=44h IOCTL (AL) and AH=3Dh open modes (AL bits 0-2). */
 #define DOS_INT21_IOCTL_GET_DEVICE_INFO 0x00
 #define DOS_INT21_OPEN_ACCESS_MASK 7      /* AL bits 0-2: read, write, read/write      */

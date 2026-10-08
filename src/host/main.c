@@ -2260,7 +2260,7 @@ static INT ExecWindows(DOS_MACHINE *machine, INT kind, UINT subsystem, PSTR *log
     machine->ChildReturnCode = (WORD)(exitCode & BYTE_MASK);                 /* AH=4Dh: AH=0 normal end */
     return 1;
 }
-
+#define EXEC_SHELL_BOP_SITES_MIN 8   /* this many C4 C4 54 sites mark XP's COMMAND.COM (it has 15) */
 /* Perform a recorded EXEC: load the child, snapshot the parent, hand over. */
 static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
 {
@@ -2278,7 +2278,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
 
     if (depth >= EXEC_MAX_DEPTH) {
         cursor = LogPut(cursor, "  EXEC: nesting limit reached\r\n");
-        VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & HIGH_WORD_MASK_U) | 8;
+        VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & HIGH_WORD_MASK_U) | DOS_ERR_INSUFFICIENT_MEMORY;
         *flagsPointer |= EFLAGS_CF; VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         return cursor;
     }
@@ -2286,7 +2286,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (fileHandle == INVALID_HANDLE_VALUE) {
         cursor = LogPut(cursor, "  EXEC: file not found\r\n");
-        VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & HIGH_WORD_MASK_U) | 2;
+        VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & HIGH_WORD_MASK_U) | DOS_ERR_FILE_NOT_FOUND;
         *flagsPointer |= EFLAGS_CF; VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         return cursor;
     }
@@ -2296,7 +2296,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     /* GH #255: a Windows program is Windows's to run (see ExecWindows). Load-and-go
        only: AL=01 asks for an IMAGE in memory and AL=03 for an overlay, and for those
        the MZ part is the only thing DOS could give. */
-    if (machine->ExecMode == 0x00) {
+    if (machine->ExecMode == DOS_INT21_EXEC_LOAD_AND_GO) {
         UINT subsystem = 0;
         INT kind = DosExeKind(g_ExecFileBuffer, bytesRead, &subsystem);
         if (kind != DOS_EXE_DOS && ExecWindows(machine, kind, subsystem, &cursor)) {
@@ -2312,7 +2312,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
          owns the buffer and only wants the image put in it and relocated by the
          factor IT supplies. Running it through the code below would allocate a
          block and hand the child the CPU, which is a different function. (#50) */
-    if (machine->ExecMode == 0x03) {
+    if (machine->ExecMode == DOS_INT21_EXEC_OVERLAY) {
         UINT32 count = DosLoadOverlay(NULL, g_ExecFileBuffer, bytesRead,
                                       machine->ExecOverlaySegment, machine->ExecOverlayRelocation);
         cursor = LogPut(cursor, "  EXEC: AL=03 overlay -> seg=0x"); cursor = LogHex(cursor, machine->ExecOverlaySegment);
@@ -2363,7 +2363,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
              is in the current directory, the bare file name -- which the guest resolves
              against that directory exactly as DOS would. */
         while (executableName[nameLength] && nameLength < sizeof(machine->ExecName) - 1) ++nameLength;
-        if (nameLength >= 64) {
+        if (nameLength >= DOS_EXTENDER_ARGV0_MAX) {
             CHAR currentDirectory[MAX_PATH], shortCurrentDirectory[MAX_PATH]; DWORD currentDirectoryLength, shortCurrentDirectoryLength;
             PCSTR executableBaseName = executableName, scan;
             for (scan = executableName; *scan; ++scan) if (*scan == '\\') executableBaseName = scan + 1;
@@ -2378,17 +2378,17 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
                 for (nameLength = 0; executableName[nameLength]; ++nameLength) ;
             }
         }
-        total = environmentLength + 2 + nameLength + 1;
+        total = environmentLength + X86_WORD_SIZE + nameLength + 1;
         if (DosMcbAllocate(NULL, machine->FirstMcb, (WORD)((total + PARAGRAPH_LAST_BYTE) >> PARAGRAPH_SHIFT), &environmentBlock, &maximumParagraphs) != 0) {
             cursor = LogPut(cursor, "  EXEC: no memory for the environment copy\r\n");
-            VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & HIGH_WORD_MASK_U) | 8;
+            VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & HIGH_WORD_MASK_U) | DOS_ERR_INSUFFICIENT_MEMORY;
             *flagsPointer |= EFLAGS_CF; VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
             return cursor;
         }
         childEnvironment = (volatile BYTE *)((DWORD)environmentBlock << PARAGRAPH_SHIFT);
         for (index = 0; index < environmentLength; ++index) childEnvironment[index] = parentEnvironment[index];
         childEnvironment[environmentLength] = 1; childEnvironment[environmentLength + 1] = 0;             /* count word 0001 */
-        for (index = 0; index <= nameLength; ++index) childEnvironment[environmentLength + 2 + index] = (BYTE)executableName[index];
+        for (index = 0; index <= nameLength; ++index) childEnvironment[environmentLength + X86_WORD_SIZE + index] = (BYTE)executableName[index];
         environmentSegment = environmentBlock;
         cursor = LogPut(cursor, "  EXEC: env copied from 0x"); cursor = LogHex(cursor, parentEnvironmentSegment);
         cursor = LogPut(cursor, " to 0x"); cursor = LogHex(cursor, environmentBlock);
@@ -2404,7 +2404,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
          its TOP. DosExecSize has the measurements. Every child used to get the
          whole block, so a program linked to leave memory for its own children found
          none, and one that could not fit was loaded anyway. */
-    if (DosMcbAllocate(NULL, machine->FirstMcb, 0xFFFF, &child, &maximumParagraphs) == 0) maximumParagraphs = 0;
+    if (DosMcbAllocate(NULL, machine->FirstMcb, DOS_MCB_LARGEST_REQUEST, &child, &maximumParagraphs) == 0) maximumParagraphs = 0;
     want = 0;
     if (maximumParagraphs && DosExecSize(g_ExecFileBuffer, bytesRead, maximumParagraphs, &want, &loadHigh) != 0) {
         cursor = LogPut(cursor, "  EXEC: e_minalloc does not fit -- largest block 0x"); cursor = LogHex(cursor, maximumParagraphs);
@@ -2414,7 +2414,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     if (!want || DosMcbAllocate(NULL, machine->FirstMcb, want, &child, &maximumParagraphs) != 0) {
         cursor = LogPut(cursor, "  EXEC: no memory\r\n");
         if (environmentBlock) DosMcbFree(NULL, environmentBlock);
-        VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & HIGH_WORD_MASK_U) | 8;
+        VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & HIGH_WORD_MASK_U) | DOS_ERR_INSUFFICIENT_MEMORY;
         *flagsPointer |= EFLAGS_CF; VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         return cursor;
     }
@@ -2446,9 +2446,9 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     /* #208: a SECOND XP shell (the user typed `command`) is told 5.00 as the first one
        is -- the same image test as at start-up: >= 8 NTVDM `C4 C4 54` sites. */
     {   DWORD index, bopCount = 0;
-        for (index = 0; index + 3 < bytesRead; ++index)
+        for (index = 0; index + VDM_BOP_LENGTH < bytesRead; ++index)
             if (g_ExecFileBuffer[index] == VDM_BOP0 && g_ExecFileBuffer[index+1] == VDM_BOP1 && g_ExecFileBuffer[index+2] == NTVDM_BOP_CMD) ++bopCount;
-        if (bopCount >= 8) DosInt21SetShellPsp(machine, child, 1); }
+        if (bopCount >= EXEC_SHELL_BOP_SITES_MIN) DosInt21SetShellPsp(machine, child, 1); }
     /* ...and so is every program in Windows' own SYSTEM directory. (s81, user: `mem` ->
        "Incorrect DOS version".) Those are XP's DOS tools -- MEM, EDIT, DEBUG, EDLIN,
        EXE2BIN -- built for the DOS 5.00 that stock reports to everything; MEM checks for
@@ -2474,7 +2474,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     { volatile BYTE *childPsp = (volatile BYTE *)(child << PARAGRAPH_SHIFT);
       const volatile BYTE *tail = (const volatile BYTE *)
           ((machine->ExecTailSegment << PARAGRAPH_SHIFT) + machine->ExecTailOffset);
-      INT index, count = tail[0] > 126 ? 126 : tail[0];
+      INT index, count = tail[0] > DOS_PSP_COMMAND_TAIL_MAX ? DOS_PSP_COMMAND_TAIL_MAX : tail[0];
       for (index = 0; index <= count; ++index) childPsp[DOS_PSP_COMMAND_TAIL_LENGTH + index] = tail[index];
       childPsp[DOS_PSP_COMMAND_TAIL + count] = DOS_PSP_COMMAND_TAIL_END;
       childPsp[DOS_PSP_PARENT] = (BYTE)(machine->PspSegment & BYTE_MASK);       /* parent PSP */
@@ -2486,7 +2486,7 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     if (loadHigh) { cursor = LogPut(cursor, "  EXEC: e_minalloc = e_maxalloc = 0 -> loaded HIGH at 0x");
                      cursor = LogHex(cursor, image.CodeSegment); cursor = LogPut(cursor, "\r\n"); }
 
-    if (machine->ExecMode == 0x01) {
+    if (machine->ExecMode == DOS_INT21_EXEC_LOAD_ONLY) {
         /* ── LOAD WITHOUT EXECUTING. DOS builds the PSP and loads the image, then
              ANSWERS THROUGH THE PARAMETER BLOCK instead of transferring control:
              +0x0E gets the initial SS:SP and +0x12 the entry CS:IP. The memory
@@ -2502,11 +2502,11 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
              single-point measurement rather than dressed up as a law. */
         volatile BYTE *parameterBlock = (volatile BYTE *)
             (((DWORD)machine->ExecBlockSegment << PARAGRAPH_SHIFT) + machine->ExecBlockOffset);
-        WORD sp01 = (WORD)(image.StackPointer - 2);
-        parameterBlock[0x0E] = (BYTE)(sp01 & BYTE_MASK);       parameterBlock[0x0F] = (BYTE)(sp01 >> BYTE_SHIFT);
-        parameterBlock[0x10] = (BYTE)(image.StackSegment & BYTE_MASK);     parameterBlock[0x11] = (BYTE)(image.StackSegment >> BYTE_SHIFT);
-        parameterBlock[0x12] = (BYTE)(image.InstructionPointer & BYTE_MASK);     parameterBlock[0x13] = (BYTE)(image.InstructionPointer >> BYTE_SHIFT);
-        parameterBlock[0x14] = (BYTE)(image.CodeSegment & BYTE_MASK);     parameterBlock[0x15] = (BYTE)(image.CodeSegment >> BYTE_SHIFT);
+        WORD sp01 = (WORD)(image.StackPointer - X86_WORD_SIZE);
+        parameterBlock[DOS_EXEC_BLOCK_SP] = (BYTE)(sp01 & BYTE_MASK);       parameterBlock[DOS_EXEC_BLOCK_SP + 1] = (BYTE)(sp01 >> BYTE_SHIFT);
+        parameterBlock[DOS_EXEC_BLOCK_SS] = (BYTE)(image.StackSegment & BYTE_MASK);     parameterBlock[DOS_EXEC_BLOCK_SS + 1] = (BYTE)(image.StackSegment >> BYTE_SHIFT);
+        parameterBlock[DOS_EXEC_BLOCK_IP] = (BYTE)(image.InstructionPointer & BYTE_MASK);     parameterBlock[DOS_EXEC_BLOCK_IP + 1] = (BYTE)(image.InstructionPointer >> BYTE_SHIFT);
+        parameterBlock[DOS_EXEC_BLOCK_CS] = (BYTE)(image.CodeSegment & BYTE_MASK);     parameterBlock[DOS_EXEC_BLOCK_CS + 1] = (BYTE)(image.CodeSegment >> BYTE_SHIFT);
         cursor = LogPut(cursor, "  EXEC: AL=01 loaded, not run -- entry=");
         cursor = LogHex(cursor, image.CodeSegment); cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, image.InstructionPointer);
         cursor = LogPut(cursor, " stack="); cursor = LogHex(cursor, image.StackSegment); cursor = LogPut(cursor, ":");
@@ -2528,15 +2528,15 @@ static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
          double-click through it. Save the parent's name with this level; DosTerminate
          puts it back (a Close Program ends through there too). */
     {   PCSTR programBaseName = machine->ExecPath, scan; INT index = 0;
-        for (index = 0; index < 63 && g_ProgramName[index]; ++index) g_ExecMachine[depth].ProgramName[index] = g_ProgramName[index];
+        for (index = 0; index < ARRAYSIZE(g_ProgramName) - 1 && g_ProgramName[index]; ++index) g_ExecMachine[depth].ProgramName[index] = g_ProgramName[index];
         g_ExecMachine[depth].ProgramName[index] = 0;
         for (scan = machine->ExecPath; *scan; ++scan) if (*scan == '\\' || *scan == '/' || *scan == ':') programBaseName = scan + 1;
-        if (*programBaseName) { for (index = 0; programBaseName[index] && index < 63; ++index) g_ProgramName[index] = programBaseName[index]; g_ProgramName[index] = 0; } }
+        if (*programBaseName) { for (index = 0; programBaseName[index] && index < ARRAYSIZE(g_ProgramName) - 1; ++index) g_ProgramName[index] = programBaseName[index]; g_ProgramName[index] = 0; } }
     DosHandlesPush(machine);                            /* s81: the child works on a copy */
     DosJftExec(machine, child);    /* s91: JFT edits the parent made directly (COMMAND.COM's `>`) */
     ++g_ExecDepth;
     machine->PspSegment = child;
-    machine->DtaSegment = child; machine->DtaOffset = 0x0080;        /* DOS resets the DTA to PSP:80 */
+    machine->DtaSegment = child; machine->DtaOffset = DOS_PSP_DEFAULT_DTA;        /* DOS resets the DTA to PSP:80 */
     VDM_REG(tib, VTIB_CS)  = image.CodeSegment; VDM_REG(tib, VTIB_EIP) = image.InstructionPointer;
     VDM_REG(tib, VTIB_SS)  = image.StackSegment; VDM_REG(tib, VTIB_ESP) = image.StackPointer;
     VDM_REG(tib, VTIB_DS)  = child;  VDM_REG(tib, VTIB_ES)  = child;
@@ -10141,7 +10141,7 @@ static INT WowKernel2Stub(WORD thunkId, WORD returnStub)
         && (WORD)(image[offset + 1] | (image[offset + 2] << BYTE_SHIFT)) == thunkId
         && image[offset + 3] == X86_OP_CALL_FAR;
 }
-
+#define WOW_PATH_PARAS      0x20               /* the path buffer: one paragraph-run, one purpose */
 /* seg2 ids. Numbered in THEIR OWN space -- 0xd1 here is not 0xd1 in wow32.h. */
 #define WOW32K2_TASKENV   0x00d1     /* the new task's environment; see the service */
 static WORD      g_WowEntryDs = 0;   /* krnl386's autodata paragraph      */
@@ -10178,7 +10178,7 @@ static INT       g_WowEntering = 0;   /* the guest is krnl386, not DOS     */
 #define WOW_HOSTPOOL_PARAS 0x400          /* 16 KB: SFT 0x1d9, handler table 0x40  */
 static WORD      g_WowPoolSegment  = 0;
 static WORD      g_WowPoolNext = 0;     /* paragraphs handed out so far          */
-
+#define WOW_PSP_BLOCK_PARAS 0x40               /* a WOW launch keeps only the PSP's block   */
 static WORD WowHostAllocate(WORD paras)
 {
     WORD segment;
@@ -18372,7 +18372,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
        -- so the block can go back to just the PSP. Doing this through DosMcbResize()
        rather than poking the chain keeps the MCB invariants (and DosMcbCheckChain) true. */
     {   WORD pspMaximum = 0;
-        INT resizeResult = DosMcbResize(NULL, DOS_PSP_SEG, 0x40, &pspMaximum);
+        INT resizeResult = DosMcbResize(NULL, DOS_PSP_SEG, WOW_PSP_BLOCK_PARAS, &pspMaximum);
         cursor = message;
         cursor = LogPut(cursor, "WOWV86: shrink PSP block to 0x40 paras -> rc=");
         cursor = LogHex(cursor, (DWORD)resizeResult); cursor = LogPut(cursor, " max=0x"); cursor = LogHex(cursor, pspMaximum);
@@ -18423,11 +18423,11 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
             volatile BYTE *sftBlock = (volatile BYTE *)(ULONG_PTR)((DWORD)sft << PARAGRAPH_SHIFT);
             UINT byteIndex;
             for (byteIndex = 0; byteIndex < (UINT)DOS_SFT_BYTES; ++byteIndex) sftBlock[byteIndex] = 0;
-            *(volatile WORD *)(sftBlock + 0) = 0xFFFF;              /* next offset: last block */
-            *(volatile WORD *)(sftBlock + 2) = 0xFFFF;              /* next segment            */
-            *(volatile WORD *)(sftBlock + 4) = DOS_SFT_ENTRIES;     /* entries in this block   */
-            *(volatile WORD *)(sysVars + 4) = 0;                  /* SysVars+4 = offset      */
-            *(volatile WORD *)(sysVars + 6) = sft;                /* SysVars+6 = segment     */
+            *(volatile WORD *)(sftBlock + DOS_SFT_NEXT_OFFSET) = DOS_SFT_LAST;              /* next offset: last block */
+            *(volatile WORD *)(sftBlock + DOS_SFT_NEXT_SEGMENT) = DOS_SFT_LAST;              /* next segment            */
+            *(volatile WORD *)(sftBlock + DOS_SFT_COUNT) = DOS_SFT_ENTRIES;     /* entries in this block   */
+            *(volatile WORD *)(sysVars + DOS_SYSVARS_SFT) = 0;                  /* SysVars+4 = offset      */
+            *(volatile WORD *)(sysVars + DOS_SYSVARS_SFT + X86_FAR_POINTER_SEGMENT) = sft;                /* SysVars+6 = segment     */
             cursor = LogPut(cursor, "at 0x"); cursor = LogHex(cursor, sft);
             cursor = LogPut(cursor, ":0000, "); cursor = LogHex(cursor, (DWORD)DOS_SFT_ENTRIES);
             cursor = LogPut(cursor, " entries, next=FFFF:FFFF -> SysVars+4\r\n");
@@ -18435,12 +18435,12 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
         LogAppend(LDTLOG_PATH, message, cursor);
     }
     {   WORD transferSegment = 0, transferMaximum = 0;
-        if (DosMcbAllocate(NULL, machine->FirstMcb, 0x400, &transferSegment, &transferMaximum) == 0 && transferSegment) {
-            g_PmTransferSegment = transferSegment; g_PmTransferParagraphs = 0x400;
+        if (DosMcbAllocate(NULL, machine->FirstMcb, PM_TRANSFER_PARAGRAPHS, &transferSegment, &transferMaximum) == 0 && transferSegment) {
+            g_PmTransferSegment = transferSegment; g_PmTransferParagraphs = PM_TRANSFER_PARAGRAPHS;
         }
         cursor = message;
         cursor = LogPut(cursor, "WOWV86: PM->V86 transfer buffer at para 0x"); cursor = LogHex(cursor, g_PmTransferSegment);
-        cursor = LogPut(cursor, " (0x"); cursor = LogHex(cursor, (DWORD)g_PmTransferParagraphs * 16u);
+        cursor = LogPut(cursor, " (0x"); cursor = LogHex(cursor, (DWORD)g_PmTransferParagraphs * PARAGRAPH_SIZE_U);
         cursor = LogPut(cursor, " bytes; largest free was 0x"); cursor = LogHex(cursor, transferMaximum);
         cursor = LogPut(cursor, ")\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
     }
@@ -18452,7 +18452,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
          that the very next call overwrites, and the corruption would surface as
          a wrong filename somewhere far from here. One paragraph, one purpose. */
     {   WORD pathSegment = 0, pathMaximum = 0;
-        if (DosMcbAllocate(NULL, machine->FirstMcb, 0x20, &pathSegment, &pathMaximum) == 0 && pathSegment)
+        if (DosMcbAllocate(NULL, machine->FirstMcb, WOW_PATH_PARAS, &pathSegment, &pathMaximum) == 0 && pathSegment)
             g_WowPathSegment = pathSegment;
         cursor = message;
         cursor = LogPut(cursor, "WOWV86: module-path scratch at para 0x"); cursor = LogHex(cursor, g_WowPathSegment);
@@ -18469,7 +18469,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
             g_WowEnvironmentSegment = environmentSegment;
         cursor = message;
         cursor = LogPut(cursor, "WOWV86: task-environment block at para 0x"); cursor = LogHex(cursor, g_WowEnvironmentSegment);
-        cursor = LogPut(cursor, " (0x"); cursor = LogHex(cursor, (DWORD)WOW_ENV_PARAS * 16u);
+        cursor = LogPut(cursor, " (0x"); cursor = LogHex(cursor, (DWORD)WOW_ENV_PARAS * PARAGRAPH_SIZE_U);
         cursor = LogPut(cursor, " bytes; largest free was 0x"); cursor = LogHex(cursor, environmentMaximum);
         cursor = LogPut(cursor, ")\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
     }
@@ -18513,8 +18513,8 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
            out of the loaded segment, so they are part of what has to be resident. */
         if (neSegment->Sector && (neSegment->Flags & NE_SEG_RELOCS)) {
             UINT32 relocationOffset = neSegment->FileOffset + neSegment->Length;
-            if (relocationOffset + 2 <= module->ImageLength) {
-                UINT32 relocationBytes = 2 + (UINT32)(image[relocationOffset] | (image[relocationOffset + 1] << BYTE_SHIFT)) * 8;
+            if (relocationOffset + NE_RELOC_COUNT_SIZE <= module->ImageLength) {
+                UINT32 relocationBytes = NE_RELOC_COUNT_SIZE + (UINT32)(image[relocationOffset] | (image[relocationOffset + 1] << BYTE_SHIFT)) * NE_RELOC_SIZE;
                 if (neSegment->Length + relocationBytes > need) need = neSegment->Length + relocationBytes;
             }
         }
@@ -18528,7 +18528,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
              allocation would have run off the end of the segment. */
         if (module->AutoData && index == (INT)module->AutoData - 1) {
             UINT32 dgroupSize = need + module->Heap + module->Stack;
-            if (dgroupSize > 0x10000u) dgroupSize = 0x10000u;
+            if (dgroupSize > X86_SEGMENT_SIZE_U) dgroupSize = X86_SEGMENT_SIZE_U;
             if (dgroupSize > need) {
                 cursor = message;
                 cursor = LogPut(cursor, "WOWV86: DGROUP (seg "); cursor = LogHex(cursor, (DWORD)(index + 1));
@@ -18563,9 +18563,9 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
            So copy them too, and size the block to hold them. */
         if (neSegment->Sector && (neSegment->Flags & NE_SEG_RELOCS)) {
             UINT32 relocationOffset = neSegment->FileOffset + neSegment->Length;
-            if (relocationOffset + 2 <= module->ImageLength) {
+            if (relocationOffset + NE_RELOC_COUNT_SIZE <= module->ImageLength) {
                 UINT32 relocationCount = (UINT32)(image[relocationOffset] | (image[relocationOffset + 1] << BYTE_SHIFT));
-                UINT32 relocationBytes   = 2 + relocationCount * 8;
+                UINT32 relocationBytes   = NE_RELOC_COUNT_SIZE + relocationCount * NE_RELOC_SIZE;
                 if (relocationOffset + relocationBytes <= module->ImageLength && neSegment->Length + relocationBytes <= need)
                     for (byteIndex = 0; byteIndex < relocationBytes; ++byteIndex) destination[neSegment->Length + byteIndex] = image[relocationOffset + byteIndex];
                 cursor = message;
@@ -18656,7 +18656,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
          filler that leaves exactly this block's worth at the top, allocate, free the
          filler. The PSP block below then takes the freed region, as before. */
     {   WORD fillerSegment = 0, fillerMaximum = 0, want;
-        (VOID)DosMcbAllocate(NULL, machine->FirstMcb, 0xFFFF, &fillerSegment, &fillerMaximum);   /* ask -> largest free */
+        (VOID)DosMcbAllocate(NULL, machine->FirstMcb, DOS_MCB_LARGEST_REQUEST, &fillerSegment, &fillerMaximum);   /* ask -> largest free */
         want = (WORD)(WOW_STACK_PARAS + windowParas);
         if (fillerMaximum > want + 2) {
             /* -1 for the MCB header DOS puts in front of the second allocation: without
@@ -18683,7 +18683,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
        was left in it is read back as structured data. Uninitialised memory that gets
        PARSED is a bug that reads like a guest fault. */
     {   volatile BYTE *stackBytes = (volatile BYTE *)(ULONG_PTR)((DWORD)stackBlockSegment << PARAGRAPH_SHIFT);
-        DWORD byteIndex; for (byteIndex = 0; byteIndex < (DWORD)WOW_STACK_PARAS * 16u; ++byteIndex) stackBytes[byteIndex] = 0; }
+        DWORD byteIndex; for (byteIndex = 0; byteIndex < (DWORD)WOW_STACK_PARAS * PARAGRAPH_SIZE_U; ++byteIndex) stackBytes[byteIndex] = 0; }
 
     /* ── ★ THE NE HEADER GOES IMMEDIATELY ABOVE THE STACK. ─────────────────────────
          krnl386 builds a selector over `base(SS) + SP` (observed in the LDT) and parses
@@ -18714,7 +18714,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
            does not cover is krnl386's scratch, it is parsed as structured data, and
            uninitialised memory that gets parsed is a bug that reads like a guest
            fault. Then stage the file -- ALL of it; see the note on hdrimg_paras. */
-        for (byteIndex = 0; byteIndex < (DWORD)windowParas * 16u; ++byteIndex) headerBytes[byteIndex] = 0;
+        for (byteIndex = 0; byteIndex < (DWORD)windowParas * PARAGRAPH_SIZE_U; ++byteIndex) headerBytes[byteIndex] = 0;
         for (byteIndex = 0; byteIndex < loadLength; ++byteIndex) headerBytes[byteIndex] = image[module->Header + byteIndex];
 
         /* ── ⚠ DO NOT WIDEN THE SEGMENT TABLE HERE. TRIED, MEASURED, REFUTED. ──────
@@ -18837,7 +18837,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
              per-segment bookkeeping advances it after that. */
         {   DWORD first = module->SegmentCount > 1 ? module->Segments[1].FileOffset
                                         : module->Segments[0].FileOffset;
-            DWORD gap   = (first > module->Header) ? ((first - module->Header) + 15u) & ~15u : 0;
+            DWORD gap   = (first > module->Header) ? ((first - module->Header) + PARAGRAPH_LAST_BYTE_U) & ~PARAGRAPH_LAST_BYTE_U : 0;
             DWORD full  = 0xF880u;
             g_WowEntryCx = (WORD)(gap < full ? full - gap : full);
             cursor = LogPut(cursor, "WOWV86: arena gap = 0x"); cursor = LogHex(cursor, gap);
@@ -18889,7 +18889,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
        ⚠ It must be a REAL PSP, not a bare block: krnl386 writes PSP+0x42 and reads
          PSP+0x02 (top of memory) during bring-up. DosPspBuild fills both. */
     {   WORD pathSegment = 0, pathMaximum = 0;
-        (VOID)DosMcbAllocate(NULL, machine->FirstMcb, 0xFFFF, &pathSegment, &pathMaximum);  /* ask -> get max */
+        (VOID)DosMcbAllocate(NULL, machine->FirstMcb, DOS_MCB_LARGEST_REQUEST, &pathSegment, &pathMaximum);  /* ask -> get max */
         if (!pathMaximum || DosMcbAllocate(NULL, machine->FirstMcb, pathMaximum, &pathSegment, &pathMaximum) || !pathSegment) {
             cursor = message; cursor = LogPut(cursor, "WOWV86: no arena left for krnl386's PSP block\r\n");
             LogAppend(LDTLOG_PATH, message, cursor); return -1;
@@ -18921,9 +18921,9 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
              reproducible instead of intermittent.
            ▸ Skips the PSP itself: DosPspBuild lays that down immediately after. */
         {   volatile BYTE *arena = (volatile BYTE *)(ULONG_PTR)((DWORD)pathSegment << PARAGRAPH_SHIFT);
-            DWORD arenaBytes = (DWORD)pathMaximum * 16u, index2;
-            for (index2 = 0x100; index2 < arenaBytes; ++index2) arena[index2] = 0;
-            cursor = message; cursor = LogPut(cursor, "WOWV86: arena zeroed, 0x"); cursor = LogHex(cursor, arenaBytes - 0x100);
+            DWORD arenaBytes = (DWORD)pathMaximum * PARAGRAPH_SIZE_U, index2;
+            for (index2 = DOS_PSP_SIZE; index2 < arenaBytes; ++index2) arena[index2] = 0;
+            cursor = message; cursor = LogPut(cursor, "WOWV86: arena zeroed, 0x"); cursor = LogHex(cursor, arenaBytes - DOS_PSP_SIZE);
             cursor = LogPut(cursor, " bytes above the PSP\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
         }
         DosPspBuild(NULL, pathSegment, DOS_ENV_SEG, (WORD)(pathSegment + pathMaximum));
@@ -18979,7 +18979,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
         cursor = message;
         cursor = LogPut(cursor, "WOWV86: krnl386 PSP/arena block at para 0x"); cursor = LogHex(cursor, pathSegment);
         cursor = LogPut(cursor, " size 0x");        cursor = LogHex(cursor, pathMaximum);
-        cursor = LogPut(cursor, " paras -> it will carve from 0x"); cursor = LogHex(cursor, (DWORD)(pathSegment + 0x10));
+        cursor = LogPut(cursor, " paras -> it will carve from 0x"); cursor = LogHex(cursor, (DWORD)(pathSegment + DOS_PSP_PARAGRAPHS));
         cursor = LogPut(cursor, " upward (top 0x");  cursor = LogHex(cursor, (DWORD)(pathSegment + pathMaximum));
         cursor = LogPut(cursor, ")\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
     }

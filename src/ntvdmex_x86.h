@@ -26,6 +26,10 @@
 /* Paging: a 4 KB page. */
 #define PAGE_SHIFT          12
 
+/* A segment spans at most 64 KB; a far pointer is offset then segment. */
+#define X86_SEGMENT_SIZE_U      0x10000u
+#define X86_FAR_POINTER_SEGMENT 2
+
 /* The real-mode interrupt vector table: at 0000:0000, one 4-byte entry per vector -- the
    handler's offset word, then its segment word. */
 #define IVT_BASE_SEGMENT    0

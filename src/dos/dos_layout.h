@@ -400,6 +400,10 @@
 
 #define DOS_SFT_ENTRIES   DOS_MAX_FILES   /* == the size of dos_machine_t::fh[]  */
 #define DOS_SFT_ENTSZ     0x3B      /* DOS 4.0+ SFT entry: 59 bytes              */
+#define DOS_SFT_NEXT_OFFSET  0        /* the block header: far pointer to the next block, */
+#define DOS_SFT_NEXT_SEGMENT 2        /* FFFF:FFFF = the last block,                       */
+#define DOS_SFT_COUNT        4        /* then the entry count                              */
+#define DOS_SFT_LAST         0xFFFF
 #define DOS_SFT_HEADER    6         /* the block's far "next" pointer and word entry count */
 #define DOS_SFT_BYTES     (DOS_SFT_HEADER + DOS_SFT_ENTRIES * DOS_SFT_ENTSZ)
 #define DOS_SFT_PARAS     ((DOS_SFT_BYTES + PARAGRAPH_LAST_BYTE) / PARAGRAPH_SIZE)

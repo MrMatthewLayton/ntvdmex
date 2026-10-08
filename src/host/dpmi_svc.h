@@ -80,6 +80,7 @@
 
 /* A PM INT 21h's transfer buffer (WOW only): one 1 KB window per pointer register, so an LFN
    call can carry DS:DX, DS:SI and ES:DI at once (PmInt21Lfn). */
+#define PM_TRANSFER_PARAGRAPHS       0x400   /* the whole buffer: 16 KB                   */
 #define PM_TRANSFER_WINDOW_SIZE      0x400
 #define PM_TRANSFER_STRING_MAX       0x3FF   /* a string in, less room for its NUL        */
 #define PM_TRANSFER_WINDOW_DX        0x000

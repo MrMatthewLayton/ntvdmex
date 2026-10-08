@@ -121,10 +121,6 @@
 #define DOS_INT21_HEX_DIGIT_MASK  0xF
 #define DOS_INT21_CH_CLEAR_MASK   0xFFFF00FFu
 /* EXEC (AH=4Bh): AL, and the parameter block. */
-#define DOS_INT21_EXEC_LOAD_AND_GO 0x00
-#define DOS_INT21_EXEC_LOAD_ONLY  0x01
-#define DOS_INT21_EXEC_OVERLAY    0x03
-#define DOS_INT21_EXEC_SET_STATE  0x05
 #define DOS_INT21_EXEC_PB_TAIL    2       /* environment, then tail, FCB1, FCB2        */
 #define DOS_INT21_EXEC_PB_FCB1    6
 #define DOS_INT21_EXEC_PB_FCB2    10
