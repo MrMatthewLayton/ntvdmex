@@ -134,8 +134,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_RGB_BLUE                2
 
 /* INT 10h functions this file calls itself. */
-#define VIDEO_FUNCTION_SET_MODE       0x00
-#define VIDEO_FUNCTION_VESA           0x4F
 #define VIDEO_MODE_NO_CLEAR           0x80
 
 /* VESA: mode numbers, pixel depths, direct-colour layouts and timing. */
@@ -344,8 +342,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 
 /* INT 10h functions (AH). */
 #define VIDEO_FUNCTION_SET_CURSOR_SHAPE 0x01
-#define VIDEO_FUNCTION_SET_CURSOR     0x02
-#define VIDEO_FUNCTION_GET_CURSOR     0x03
 #define VIDEO_FUNCTION_LIGHT_PEN      0x04
 #define VIDEO_FUNCTION_SELECT_PAGE    0x05
 #define VIDEO_FUNCTION_SCROLL_UP      0x06
@@ -357,7 +353,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_FUNCTION_WRITE_PIXEL    0x0C
 #define VIDEO_FUNCTION_READ_PIXEL     0x0D
 #define VIDEO_FUNCTION_TELETYPE       0x0E
-#define VIDEO_FUNCTION_GET_MODE       0x0F
 #define VIDEO_FUNCTION_PALETTE        0x10
 #define VIDEO_FUNCTION_FONT           0x11
 #define VIDEO_FUNCTION_ALTERNATE_SELECT 0x12

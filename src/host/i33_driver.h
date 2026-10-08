@@ -152,6 +152,8 @@
 #define I33_DEFAULT_TEXT_XOR       0x7700
 #define I33_DEFAULT_SPEED          50
 #define I33_DEFAULT_RATE           3
+#define I33_TEXT_VIRTUAL_MAX_Y     199     /* text modes: 25 rows of 8 virtual pixels */
+#define I33_TEXT_CELL_MASK         7       /* text modes snap to the 8x8 cell         */
 #define I33_GC_CGA_LEFT_SHIFT 14      /* the leftmost pixel's pair: bits 15-14    */
 #define I33_GC_CGA_MASK       3u
 #define I33_GC_CGA_COLOURS    4

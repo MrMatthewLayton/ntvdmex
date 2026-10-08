@@ -3115,7 +3115,7 @@ static INT Int15Hooked(VOID)
     return *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(VECTOR_SYSTEM)) != DOS_CTAB_SEG
         || *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(VECTOR_SYSTEM)) != g_Int15StubOffset;
 }
-
+enum { PRINT_SCREEN_SAVED_REGISTERS = 9 };   /* PrintScreenBop: what the INT 05h sequencer preserves */
 /* ── #274: THE HOST HALF OF THE DEFAULT INT 05h (bios_kbdact.asm p5; bios_prtsc.h). ───
      begin: if a print is already running -> CF=1, nothing touched (the nested INT 05h
      the BIOS's busy byte exists to refuse). Otherwise save the registers the loop and
@@ -3132,7 +3132,7 @@ static INT Int15Hooked(VOID)
      the stub off 0050:0000 is its own change (IVT[21h], the PM INT 21h paths, WOW) --
      filed in the #274 report, not done in passing. */
 static BIOS_PRINT_SCREEN_JOB g_PrintScreen;
-static DWORD      g_PrintScreenSaved[9];
+static DWORD      g_PrintScreenSaved[PRINT_SCREEN_SAVED_REGISTERS];
 static DWORD      g_PrintScreenJobs, g_PrintScreenErrors;
 static BYTE       g_PrintScreenStatus = BIOS_PRINT_SCREEN_STATUS_OK;   /* what 0050:0000 would hold */
 static VOID PrintScreenInt10(NTVDD_REGISTERS *registers)
@@ -3154,20 +3154,20 @@ static BYTE PrintScreenReadCharacter(PVOID context, BYTE row, BYTE column)
 }
 static VOID PrintScreenBop(volatile BYTE *tib, INT begin)
 {
-    static const INT savedRegisters[9] = { VTIB_EAX, VTIB_EBX, VTIB_ECX, VTIB_EDX, VTIB_ESI,
+    static const INT savedRegisters[PRINT_SCREEN_SAVED_REGISTERS] = { VTIB_EAX, VTIB_EBX, VTIB_ECX, VTIB_EDX, VTIB_ESI,
                                VTIB_EDI, VTIB_EBP, VTIB_DS, VTIB_ES };
     BYTE character = 0;
     INT status, index;
     if (begin) {
         NTVDD_REGISTERS registers;
         if (g_PrintScreen.IsActive) { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; return; }
-        for (index = 0; index < 9; ++index) g_PrintScreenSaved[index] = VDM_REG(tib, savedRegisters[index]);
+        for (index = 0; index < PRINT_SCREEN_SAVED_REGISTERS; ++index) g_PrintScreenSaved[index] = VDM_REG(tib, savedRegisters[index]);
         g_PrintScreenStatus = BIOS_PRINT_SCREEN_STATUS_BUSY;
         ZeroMemory(&registers, sizeof registers);
-        registers.Eax = 0x0F00; PrintScreenInt10(&registers);               /* AH = columns, BH = page */
+        registers.Eax = VIDEO_FUNCTION_GET_MODE << BYTE_SHIFT; PrintScreenInt10(&registers);               /* AH = columns, BH = page */
         {   BYTE cols = (BYTE)(registers.Eax >> BYTE_SHIFT), page = (BYTE)(registers.Ebx >> BYTE_SHIFT);
             ZeroMemory(&registers, sizeof registers);
-            registers.Eax = 0x0300; registers.Ebx = (DWORD)page << BYTE_SHIFT; PrintScreenInt10(&registers);
+            registers.Eax = VIDEO_FUNCTION_GET_CURSOR << BYTE_SHIFT; registers.Ebx = (DWORD)page << BYTE_SHIFT; PrintScreenInt10(&registers);
             BiosPrintScreenBegin(&g_PrintScreen, cols, *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_VIDEO_ROWS), page,
                              (WORD)registers.Edx); }
         ++g_PrintScreenJobs;
@@ -3185,11 +3185,11 @@ static VOID PrintScreenBop(volatile BYTE *tib, INT begin)
     }
     {   NTVDD_REGISTERS registers;
         ZeroMemory(&registers, sizeof registers);
-        registers.Eax = 0x0200; registers.Ebx = (DWORD)g_PrintScreen.Page << BYTE_SHIFT; registers.Edx = g_PrintScreen.Cursor;
+        registers.Eax = VIDEO_FUNCTION_SET_CURSOR << BYTE_SHIFT; registers.Ebx = (DWORD)g_PrintScreen.Page << BYTE_SHIFT; registers.Edx = g_PrintScreen.Cursor;
         PrintScreenInt10(&registers); }
     g_PrintScreenStatus = (status == BIOS_PRINT_SCREEN_STEP_ERROR) ? BIOS_PRINT_SCREEN_STATUS_ERROR : BIOS_PRINT_SCREEN_STATUS_OK;
     if (status == BIOS_PRINT_SCREEN_STEP_ERROR) ++g_PrintScreenErrors;
-    for (index = 0; index < 9; ++index) VDM_REG(tib, savedRegisters[index]) = g_PrintScreenSaved[index];
+    for (index = 0; index < PRINT_SCREEN_SAVED_REGISTERS; ++index) VDM_REG(tib, savedRegisters[index]) = g_PrintScreenSaved[index];
     VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
 }
 static VOID DosAuxOut(PVOID context, BYTE character)
@@ -3226,13 +3226,13 @@ INT WowCommOpen(PCSTR device)
     INT index;
     /* "COM1".."COM4", case-insensitive, exactly as Windows parses it. Anything
        else -- including the LPTn a guest may legally pass -- is not ours. */
-    if (!device) return -2;                                        /* IE_BADID     */
+    if (!device) return WOWUSER_COMM_FAILED;                                        /* IE_BADID     */
     if ((device[0] != 'C' && device[0] != 'c') || (device[1] != 'O' && device[1] != 'o')
-        || (device[2] != 'M' && device[2] != 'm')) return -2;
+        || (device[2] != 'M' && device[2] != 'm')) return WOWUSER_COMM_FAILED;
     index = device[3] - '1';
-    if (index < 0 || index >= WOWCOMM_MAX) return -2;               /* no such port */
-    if (!VddCommIsFitted(&g_Comm, index))  return -2;
-    if (g_WowCommOpen[index]) return -5;                              /* IE_OPEN      */
+    if (index < 0 || index >= WOWCOMM_MAX) return WOWUSER_COMM_FAILED;               /* no such port */
+    if (!VddCommIsFitted(&g_Comm, index))  return WOWUSER_COMM_FAILED;
+    if (g_WowCommOpen[index]) return WOWUSER_COMM_ALREADY_OPEN;                              /* IE_OPEN      */
     g_WowCommOpen[index] = 1; g_WowCommEvent[index] = 0;
     return index;                                                 /* the comm id  */
 }
@@ -4272,13 +4272,13 @@ static VOID HostIrqSink(PVOID context, BYTE irq)
     /* Every raise, counted by line. sb_blocks reached 1 while irqn_inj AND irqn_refused
        both stayed 0 -- i.e. the SB's completion IRQ was raised but nothing was ever
        latched -- so the line number this arrives on is the missing fact. */
-    g_IrqRaised[irq & 15]++;
+    g_IrqRaised[irq & (PIC_LINES - 1)]++;
     g_IrqRaisedAny++;
     /* ⚠ ATOMICALLY: the timer's raise now arrives under g_PitCs while every other
        PIC mutation runs under g_Lock, and IRR |= bit compiled as a plain byte RMW
        could undo a concurrent acknowledge on a DIFFERENT line. One atomic OR closes
        it; the slave (irq >= 8) keeps the plain path, nothing raises it cross-lock. */
-    if (irq < 8) __sync_fetch_and_or(&g_Pic.Master.Irr, (BYTE)(1u << irq));
+    if (irq < PIC_LINES_PER_CHIP) __sync_fetch_and_or(&g_Pic.Master.Irr, (BYTE)(1u << irq));
     else         VddPicRaise(&g_Pic, irq);
     if (irq == 0) {
         Irq0Latch();
@@ -4436,7 +4436,7 @@ static VOID HostIrqSink(PVOID context, BYTE irq)
              never delivered and the guest never sees a keystroke at all. When the client
              has installed a protected-mode INT 09h handler, asynchronous delivery is not
              a preference, it is the mechanism. */
-        { INT gate = (g_QiKeysAsync || (g_DpmiPm && g_PmInt[0x09].Client));
+        { INT gate = (g_QiKeysAsync || (g_DpmiPm && g_PmInt[VECTOR_KEYBOARD].Client));
           INT isOk   = gate ? AsyncInjectIrq(1) : 0;
           if (isOk) InterlockedDecrement(&g_Irq1Pending);
           /* ► EVERY KEYBOARD INTERRUPT, ACCOUNTED FOR, FOR THE FIRST FEW DOZEN. A key
@@ -4456,7 +4456,7 @@ static VOID HostIrqSink(PVOID context, BYTE irq)
               lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
           } }
     }
-    else if (irq < 16) {
+    else if (irq < PIC_LINES) {
         InterlockedExchange(&g_IrqNPending[irq], 1);
         /* A device IRQ is raised from the AUDIO thread, while the guest may be
            spinning in V86 code that never faults -- and our exec loop only gets a
@@ -4483,7 +4483,7 @@ static VOID HostIrqSink(PVOID context, BYTE irq)
            session 10 recorded for Skyroads at 0x0050:0x0037. So the bit is now set only
            when an experiment asks for it; the ICA must be programmed before this can be
            the real delivery path. */
-        if (g_QiBits && irq < 8) {
+        if (g_QiBits && irq < PIC_LINES_PER_CHIP) {
             /* The kernel dispatches from its virtual PIC, so request the line there
                first -- otherwise the APC wakes up, finds nothing requested, and the
                pending bit just sits there (which is the whole of session 10's
@@ -7032,8 +7032,8 @@ static VOID HostScreenshot(VOID)
         while (directory[index] && index < MAX_PATH - SCREENSHOT_NAME_ROOM) { path[index] = directory[index]; ++index; }
         { PCSTR name = "shot_manual_00.bmp";
           for (index2 = 0; name[index2]; ++index2) path[index + index2] = name[index2];
-          path[index + SCREENSHOT_NAME_DIGITS] = (CHAR)('0' + (sequence / 10) % 10);
-          path[index + SCREENSHOT_NAME_DIGITS + 1] = (CHAR)('0' + sequence % 10);
+          path[index + SCREENSHOT_NAME_DIGITS] = (CHAR)('0' + (sequence / DECIMAL_RADIX) % DECIMAL_RADIX);
+          path[index + SCREENSHOT_NAME_DIGITS + 1] = (CHAR)('0' + sequence % DECIMAL_RADIX);
           path[index + index2] = 0; }
         ++sequence;
         { HANDLE file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
@@ -7182,21 +7182,21 @@ static VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak)
 static UINT32 g_TypematicDelayMicroseconds  = 500000u;   /* replaced at startup from XP's setting */
 static UINT32 g_TypematicPeriodMicroseconds =  92000u;
 static DWORD    g_TypematicSpiDelay, g_TypematicSpiSpeed;     /* raw, so STAGE2 can show them */
-
+enum { KEYBOARD_DELAY_MAX = 3, KEYBOARD_SPEED_MAX = 31, TYPEMATIC_DELAY_STEP_US = 250000, TYPEMATIC_PERIOD_SLOWEST_US = 400000, TYPEMATIC_PERIOD_STEP_US = 12000 };   /* SPI_GETKEYBOARDDELAY 0-3 = 250-1000 ms; SPEED 0-31 = 400-28 ms */
 /* XP exposes the two values it programs into the keyboard controller:
      SPI_GETKEYBOARDDELAY  0..3  -> 250, 500, 750, 1000 ms
      SPI_GETKEYBOARDSPEED  0..31 -> about 2.5/s at 0 up to about 30/s at 31,
                                     linear in PERIOD rather than in rate. */
 static VOID HostKeyTypematicInitialize(VOID)
 {
-    DWORD delay = 1, speed = 31;
+    DWORD delay = 1, speed = KEYBOARD_SPEED_MAX;
     if (!SystemParametersInfoA(SPI_GETKEYBOARDDELAY, 0, &delay, 0)) delay = 1;
-    if (!SystemParametersInfoA(SPI_GETKEYBOARDSPEED, 0, &speed, 0)) speed = 31;
-    if (delay > 3)  delay = 3;
-    if (speed > 31) speed = 31;
+    if (!SystemParametersInfoA(SPI_GETKEYBOARDSPEED, 0, &speed, 0)) speed = KEYBOARD_SPEED_MAX;
+    if (delay > KEYBOARD_DELAY_MAX)  delay = KEYBOARD_DELAY_MAX;
+    if (speed > KEYBOARD_SPEED_MAX) speed = KEYBOARD_SPEED_MAX;
     g_TypematicSpiDelay = delay; g_TypematicSpiSpeed = speed;
-    g_TypematicDelayMicroseconds  = (delay + 1) * 250000u;
-    g_TypematicPeriodMicroseconds = 400000u - (speed * 12000u);        /* 0 -> 400 ms, 31 -> 28 ms */
+    g_TypematicDelayMicroseconds  = (delay + 1) * TYPEMATIC_DELAY_STEP_US;
+    g_TypematicPeriodMicroseconds = TYPEMATIC_PERIOD_SLOWEST_US - (speed * TYPEMATIC_PERIOD_STEP_US);        /* 0 -> 400 ms, 31 -> 28 ms */
 }
 #define KEY_TYPEMATIC_DELAY_US  g_TypematicDelayMicroseconds
 #define KEY_TYPEMATIC_PERIOD_US g_TypematicPeriodMicroseconds
@@ -7355,7 +7355,7 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
     }
     return 0;
 }
-
+enum { QIRQ_PROBE_IRQ = 5 };   /* qimode bit 2: the device line the probe raises */
 static DWORD WINAPI QueueIrqProbeThread(LPVOID parameter)
 {
     INT round;
@@ -7364,7 +7364,7 @@ static DWORD WINAPI QueueIrqProbeThread(LPVOID parameter)
     for (round = 0; round < 40 && g_Running; ++round) {
         DWORD before = *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR, after = before;
         INT attempt;
-        HostIrqSink(NULL, 5);
+        HostIrqSink(NULL, QIRQ_PROBE_IRQ);
         for (attempt = 0; attempt < 50; ++attempt) {
             Sleep(1);
             after = *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR;
@@ -7686,7 +7686,7 @@ static VOID IfvReport(VOID)
       }
       LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; } }
 }
-
+enum { HEADLESS_EXIT_CODE = 3 };   /* the deadline ended the run */
 /* Headless deadline watchdog (session-9). A headless run must self-bound even when the
    guest blocks INSIDE a host INT handler -- e.g. a blocking INT 16h/21h key read at a
    "press any key" prompt or a game menu (HostConsoleIn + the INT 16h loops spin until
@@ -7728,10 +7728,10 @@ static DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
         DWORD done = 0, offset = 0;
         if (dumpHandle != INVALID_HANDLE_VALUE) {
             while (offset < g_MemoryDumpLength) {       /* page at a time, skipping what is not mapped */
-                DWORD chunk = 0x1000, bytesWritten = 0; PCVOID source = (const VOID *)(ULONG_PTR)(g_MemoryDumpLinear + offset);
+                DWORD chunk = X86_PAGE_SIZE, bytesWritten = 0; PCVOID source = (const VOID *)(ULONG_PTR)(g_MemoryDumpLinear + offset);
                 if (chunk > g_MemoryDumpLength - offset) chunk = g_MemoryDumpLength - offset;
                 if (HostReadable(source, chunk)) { WriteFile(dumpHandle, source, chunk, &bytesWritten, NULL); done += bytesWritten; }
-                else { static const BYTE zeros[0x1000]; WriteFile(dumpHandle, zeros, chunk, &bytesWritten, NULL); }
+                else { static const BYTE zeros[X86_PAGE_SIZE]; WriteFile(dumpHandle, zeros, chunk, &bytesWritten, NULL); }
                 offset += chunk;
             }
             CloseHandle(dumpHandle);
@@ -7838,7 +7838,7 @@ static DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
             INT length = VddVideoRegistersDump(&g_Video, registersDump, (INT)sizeof registersDump);
             if (length > 0) { LogAppend(LOG_PATH, registersDump, registersDump + length); SerialOut(registersDump, registersDump + length); } }
         HostRecordFinish();
-        ExitProcess(3);
+        ExitProcess(HEADLESS_EXIT_CODE);
     }
     return 0;
 }
@@ -8324,7 +8324,7 @@ static INT  I33Text(VOID)  { return g_Video.ModeKind == VIDEO_KIND_TEXT && !g_Vi
 static LONG I33VirtualY(LONG pixelY) { return I33Text() ? pixelY * 200 / (LONG)I33Height() : pixelY; }
 static LONG I33PixelY(LONG virtualY) { return I33Text() ? virtualY * (LONG)I33Height() / 200 : virtualY; }
 static LONG I33VirtualMaximumY(VOID)
-{ return I33Text() ? 199 : (LONG)I33Height() - 1; }
+{ return I33Text() ? I33_TEXT_VIRTUAL_MAX_Y : (LONG)I33Height() - 1; }
 /* ── ...AND A TEXT POSITION IS A CELL, NOT A PIXEL. ──────────────────────────────
      The real driver quantises to its 8x8 virtual cell in a text mode: measured on
      6.22, set-position 100,50 reads back as 96,48 and 101,51 reads back as 96,48
@@ -8332,7 +8332,7 @@ static LONG I33VirtualMaximumY(VOID)
      driver about which cell the pointer is in, which is the whole question a text
      UI asks. Snap BEFORE clamping, so snapping can never push the pointer outside
      a range the guest set with 07h/08h. */
-static LONG I33Snapshot(LONG value) { return I33Text() ? (value & ~(LONG)7) : value; }
+static LONG I33Snapshot(LONG value) { return I33Text() ? (value & ~(LONG)I33_TEXT_CELL_MASK) : value; }
 
 /* 07h/08h cursor ranges, in VIRTUAL coordinates. -1 = the guest never set one, so the
    mode's own extent applies; a guest that sets a range while in one mode and then
@@ -8341,7 +8341,7 @@ static volatile LONG g_MouseMinimumX = -1, g_MouseMaximumX = -1, g_MouseMinimumY
 /* 0Fh / 1Ah / 1Bh. The defaults are the real driver's: 8 mickeys per 8 pixels
    horizontally, 16 vertically (a mouse moves further across a screen than down it),
    and a 64 mickey/second double-speed threshold. */
-static volatile LONG g_MouseMickeyX = 8, g_MouseMickeyY = 16, g_MouseDoubleThreshold = 64;
+static volatile LONG g_MouseMickeyX = I33_DEFAULT_MICKEYS_X, g_MouseMickeyY = I33_DEFAULT_MICKEYS_Y, g_MouseDoubleThreshold = I33_DEFAULT_DOUBLE_SPEED;
 /* ── 1Ah/1Bh SPEED IS NOT 0Fh's RATIO. (#249) ─────────────────────────────────────
      1Ah sets the horizontal/vertical SPEED (0-100, default 50) and the double-speed
      threshold ON THE SAME 0-100 SCALE (default 50); 0Fh sets the mickey-to-pixel
@@ -8352,7 +8352,7 @@ static volatile LONG g_MouseMickeyX = 8, g_MouseMickeyY = 16, g_MouseDoubleThres
      40/60/32, and 13h DX=100 leaves 1Bh's DX at 32.
    ⚠ None of them is APPLIED -- the pointer follows the host cursor and 0Bh reports
      device counts scaled by msens; see docs/inventory/mouse.md (N/A). */
-static volatile LONG g_MouseSpeedX = 50, g_MouseSpeedY = 50, g_MouseSpeedDouble = 50;
+static volatile LONG g_MouseSpeedX = I33_DEFAULT_SPEED, g_MouseSpeedY = I33_DEFAULT_SPEED, g_MouseSpeedDouble = I33_DEFAULT_SPEED;
 /* ── THE v7/v8 STATE THAT 25h-34h REPORT (#249). ───────────────────────────────────
      09h's hot spot (2Ah reads it back), whether 0Ah asked for the HARDWARE text cursor
      and its scan lines (25h bits 13-12, 27h AX/BX), 1Dh's display page and 1Ch's
@@ -8360,7 +8360,7 @@ static volatile LONG g_MouseSpeedX = 50, g_MouseSpeedY = 50, g_MouseSpeedDouble 
 static volatile LONG g_MouseHotX = 0, g_MouseHotY = 0;
 static volatile LONG g_MouseTcHardware = 0, g_MouseTcHardwareLow = 0, g_MouseTcHardwareHigh = 0;
 static volatile LONG g_MousePage = 0;
-static volatile LONG g_MouseRate = 3;     /* 1Ch code: 3 = 100 reports/s, the PS/2 aux default */
+static volatile LONG g_MouseRate = I33_DEFAULT_RATE;     /* 1Ch code: 3 = 100 reports/s, the PS/2 aux default */
 enum { MOUSE_CB_WHY_IN_FLIGHT = 0, MOUSE_CB_WHY_NO_EVENTS = 1, MOUSE_CB_WHY_NO_HANDLER = 2, MOUSE_CB_WHY_IN_STUB = 3, MOUSE_CB_WHY_IF_OFF = 4, MOUSE_CB_WHY_STUB_CLOBBERED = 5, MOUSE_CB_WHY_COUNT = 6 };   /* g_MouseCallbackWhy */
 /* ── 0Ch / 14h: THE EVENT HANDLER. STORED AND REPORTED; NOT YET CALLED. ──────────────
      A guest installs a far pointer and a call mask and expects the driver to CALL IT
@@ -8906,15 +8906,15 @@ static VOID ExecMachineRestore(INT depth, PSTR *logCursor)
     UINT index;
     INT needsModeSet;
     HOST_LOCK();
-    for (index = 0; index < 512; ++index) PokeWord(index * 2, g_ExecMachine[depth].Ivt[index]);
+    for (index = 0; index < IVT_SIZE / X86_WORD_SIZE; ++index) PokeWord(index * X86_WORD_SIZE, g_ExecMachine[depth].Ivt[index]);
     g_Pic.Master.Imr = g_ExecMachine[depth].ImrMaster; g_Pic.Slave.Imr = g_ExecMachine[depth].ImrSlave;
     g_Pic.Master.Isr = 0; g_Pic.Slave.Isr = 0;           /* a handler it never finished */
     g_Irq0IsrSince = 0;
     if (VddPitEffectiveReload(&g_Pit) != g_ExecMachine[depth].Pit0) {   /* a game's fast timer */
-        UINT32 value = 0x36, reload = g_ExecMachine[depth].Pit0 & WORD_MASK;
-        VddBusIo(&g_Bus, 0x43, 1, 0, &value);
-        value = reload & BYTE_MASK;        VddBusIo(&g_Bus, 0x40, 1, 0, &value);
-        value = (reload >> BYTE_SHIFT) & BYTE_MASK; VddBusIo(&g_Bus, 0x40, 1, 0, &value);
+        UINT32 value = PIT_CONTROL_CHANNEL0_SQUARE, reload = g_ExecMachine[depth].Pit0 & WORD_MASK;
+        VddBusIo(&g_Bus, PIT_PORT_CONTROL, 1, 0, &value);
+        value = reload & BYTE_MASK;        VddBusIo(&g_Bus, PIT_PORT_COUNTER0, 1, 0, &value);
+        value = (reload >> BYTE_SHIFT) & BYTE_MASK; VddBusIo(&g_Bus, PIT_PORT_COUNTER0, 1, 0, &value);
     }
     /* Silence: an auto-init DMA block or a held OPL note would otherwise play on
        into the shell. */
@@ -8927,7 +8927,7 @@ static VOID ExecMachineRestore(INT depth, PSTR *logCursor)
         NTVDD_REGISTERS registers;
         ZeroMemory(&registers, sizeof registers);
         registers.Eax = g_ExecMachine[depth].VideoMode;           /* AH=00h set mode */
-        VddBusDeliverInterrupt(&g_Bus, 0x10, &registers);
+        VddBusDeliverInterrupt(&g_Bus, VECTOR_VIDEO, &registers);
     }
     HOST_UNLOCK();
     if (needsModeSet) VideoTrapSync();
@@ -17261,7 +17261,7 @@ static INT HostWritable(PVOID pointer, SIZE_T length)
    the guest PM CONTEXT to the log, then exits CLEANLY (no WER dialog) so the batch
    still prints the log. Only meaningful once g_DpmiPm is set. */
 static INT g_VehCount = 0;
-#define DPMI_WATCHDOG_FROZEN_TICKS_WOW_U 600u   /* 150 s: krnl386 is watched BECAUSE it stops */
+
 /* ── THE FATAL DUMP, SHARED. (session 62) ────────────────────────────────────────
      Factored out of the VEH's fatalDump arm so the LAST-CHANCE filter below can
      produce the same dump for a real-mode run -- until now `!g_DpmiPm` bailed at
@@ -17622,7 +17622,7 @@ fatalDump:
     HostFatalDump(record, context);                            /* the dump has its own buffer. The */
     return EXCEPTION_CONTINUE_SEARCH;                   /* old inline dump overflowed cb.   */
 }
-#define DPMI_WATCHDOG_FROZEN_TICKS_U     12u    /* 3 s */
+
 /* ── LAST CHANCE: the dump a real-mode run never had. (session 62) ───────────────
      With g_DpmiPm set the VEH above already turns an unmatched fault into the
      fatal dump at FIRST chance. Real-mode runs only log there and pass the fault
@@ -17647,7 +17647,7 @@ static LONG WINAPI HostUnhandledFilter(EXCEPTION_POINTERS *pointers)
     HostFatalDump(pointers->ExceptionRecord, pointers->ContextRecord);
     return EXCEPTION_EXECUTE_HANDLER;                   /* not reached */
 }
-enum { DPMI_WATCHDOG_TICK_MS = 250, DPMI_WATCHDOG_EXIT_CODE = 0xDD0 };   /* DpmiWatchdog */
+enum { DPMI_WATCHDOG_TICK_MS = 250, DPMI_WATCHDOG_EXIT_CODE = 0xDD0, DPMI_WATCHDOG_FROZEN_TICKS = 12, DPMI_WATCHDOG_FROZEN_TICKS_WOW = 600 };   /* DpmiWatchdog: frozen 3 s, or 150 s on WOW (krnl386 is watched BECAUSE it stops) */
 /* DPMI test watchdog: if the PM guest neither faults to the VEH nor exits within a few
    seconds (the kernel skip+resumes PM faults, so the guest spins), terminate cleanly so
    the batch dumps the log and locks release. Makes every DPMI run self-terminating. */
@@ -17871,7 +17871,7 @@ static DWORD WINAPI DpmiWatchdog(LPVOID param)
              3s throws away every later sample, i.e. the whole trace of where it sits.
              wowrun.bat already bounds the run (75s, then taskkill) and the headless
              deadline bounds the rest, so nothing here is unbounded. */
-        if (frozen >= (g_WowModuleCount ? DPMI_WATCHDOG_FROZEN_TICKS_WOW_U : DPMI_WATCHDOG_FROZEN_TICKS_U)          /* 3s normally; 150s on a WOW run */
+        if (frozen >= (g_WowModuleCount ? DPMI_WATCHDOG_FROZEN_TICKS_WOW : DPMI_WATCHDOG_FROZEN_TICKS)          /* 3s normally; 150s on a WOW run */
             && g_DpmiWatchdogGeneration == modeYGeneration) break;           /* ...and only while its client lives */
       }
     }
@@ -26078,7 +26078,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                    (int86 = 0300 BL=10h), where nothing counted it and the
                                    close path skips the STAGE2 summary. Say what we answered,
                                    bounded. For 4F01 the ModeAttributes word leads the block. */
-                                if ((inAx >> BYTE_SHIFT) == VIDEO_VBE_AH) {
+                                if ((inAx >> BYTE_SHIFT) == VIDEO_FUNCTION_VESA) {
                                     static INT vbeLogged;
                                     if (vbeLogged++ < 48) {
                                         CHAR vectorLine[160], *vectorCursor = vectorLine;
