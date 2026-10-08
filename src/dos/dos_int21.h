@@ -132,6 +132,24 @@
 #define DOS_FN_LAST_622                 0x6C    /* the last function 6.22 defines */
 
 /* Long file names (AH=71h): AL, and its own subfunctions. */
+/* AH=44h IOCTL (AL) and AH=3Dh open modes (AL bits 0-2). */
+#define DOS_INT21_IOCTL_GET_DEVICE_INFO 0x00
+#define DOS_INT21_OPEN_ACCESS_MASK 7      /* AL bits 0-2: read, write, read/write      */
+#define DOS_INT21_OPEN_WRITE      1
+#define DOS_INT21_OPEN_READ_WRITE 2
+#define DOS_INT21_IOCTL_SET_DEVICE_INFO 0x01
+#define DOS_INT21_IOCTL_INPUT_STATUS 0x06
+#define DOS_INT21_IOCTL_OUTPUT_STATUS 0x07
+#define DOS_INT21_IOCTL_REMOVABLE 0x08
+#define DOS_INT21_IOCTL_REMOTE_DRIVE 0x09
+#define DOS_INT21_IOCTL_REMOTE_HANDLE 0x0A
+#define DOS_INT21_IOCTL_SET_RETRY 0x0B
+#define DOS_INT21_IOCTL_GENERIC_BLOCK 0x0D
+#define DOS_INT21_IOCTL_GET_DRIVE_MAP 0x0E
+#define DOS_INT21_IOCTL_SET_DRIVE_MAP 0x0F
+#define DOS_INT21_IOCTL_QUERY_GENERIC 0x11
+#define DOS_INT21_IOCTL_REMOTE_BIT 0x1000 /* AX=4409h DX: the drive is remote          */
+
 #define DOS_INT21_LFN_DELETE      0x41
 #define DOS_INT21_LFN_ATTRIBUTES  0x43
 #define DOS_INT21_LFN_CURRENT_DIRECTORY 0x47

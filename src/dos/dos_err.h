@@ -61,10 +61,12 @@
 #define DOS_ERR_ACCESS_DENIED           0x05
 #define DOS_ERR_INVALID_HANDLE          0x06
 #define DOS_ERR_INSUFFICIENT_MEMORY     0x08
+#define DOS_ERR_INVALID_BLOCK           0x09      /* invalid memory block address         */
 #define DOS_ERR_INVALID_DATA            0x0D
 #define DOS_ERR_INVALID_DRIVE           0x0F
 #define DOS_ERR_NO_MORE_FILES           0x12
 #define DOS_ERR_LOCK_VIOLATION          0x21
+#define DOS_ERR_SHARING_VIOLATION       0x20
 #define DOS_ERR_FILE_EXISTS             0x50
 #define DOS_ERR_FAIL_I24   0x53     /* 59h after a FAILed critical error: "fail on INT 24" */
 

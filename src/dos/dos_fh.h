@@ -39,7 +39,6 @@
 #include "dos_layout.h"     /* DOS_MAX_FILES */
 
 /* The five slots DOS pre-opens: 0 stdin, 1 stdout, 2 stderr, 3 aux, 4 prn. */
-#define DOS_STD_HANDLES 5
 
 /* ── A DEVICE HANDLE IS NOT CONFINED TO SLOTS 0-4. ────────────────────────────
      It was, and that made the classic redirection idiom impossible:

@@ -394,6 +394,9 @@
      thresholds and stays inside the byte krnl386 sums the counts into (so a
      single block may not exceed 255). */
 #define DOS_MAX_FILES 128
+#define DOS_STD_HANDLES   5      /* stdin, stdout, stderr, AUX, PRN             */
+#define DOS_HANDLE_AUX    3
+#define DOS_HANDLE_PRN    4
 
 #define DOS_SFT_ENTRIES   DOS_MAX_FILES   /* == the size of dos_machine_t::fh[]  */
 #define DOS_SFT_ENTSZ     0x3B      /* DOS 4.0+ SFT entry: 59 bytes              */

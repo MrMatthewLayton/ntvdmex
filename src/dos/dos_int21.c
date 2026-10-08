@@ -13,8 +13,6 @@
 
 /* Characters, drives, paths. */
 #define DOS_INT21_LOWER_TO_UPPER  32      /* 'a'..'z' minus this is 'A'..'Z'           */
-#define DOS_INT21_CASE_BIT        0x20
-#define DOS_INT21_SPACE           0x20    /* this and below end an FCB name            */
 #define DOS_INT21_DRIVES          26
 #define DOS_INT21_PATH_SIZE       300
 #define DOS_INT21_DRIVE_ROOT_SIZE 3       /* "A:"                                      */
@@ -61,10 +59,6 @@
 #define DOS_INT21_CALLSITE_AFTER  10
 #define DOS_INT21_CALLSITE_MAX    48
 /* Console I/O. */
-#define DOS_INT21_NUL             0x00
-#define DOS_INT21_BACKSPACE       0x08
-#define DOS_INT21_LF              0x0A
-#define DOS_INT21_CR              0x0D
 #define DOS_INT21_CRLF_LENGTH     2
 #define DOS_INT21_DIRECT_INPUT    0xFF    /* AH=06h DL=FFh: read, don't write          */
 #define DOS_INT21_INPUT_READY     0xFF    /* AH=0Bh/06h: a character is waiting        */
@@ -77,9 +71,6 @@
 #define DOS_INT21_TRACE_FIRST_BYTES 8
 #define DOS_INT21_TRACE_DTA_BYTES 44
 /* Files. */
-#define DOS_INT21_OPEN_ACCESS_MASK 7      /* AL bits 0-2: read, write, read/write      */
-#define DOS_INT21_OPEN_WRITE      1
-#define DOS_INT21_OPEN_READ_WRITE 2
 #define DOS_INT21_HARD_ERROR_FIRST 19     /* Win32 19..31: the critical-error codes    */
 #define DOS_INT21_HARD_ERROR_LAST 31
 #define DOS_INT21_OEM_SERIAL_HIGH 0xFF00  /* AH=30h: BH = OEM FFh, BL = serial high    */
@@ -128,7 +119,6 @@
 #define DOS_INT21_SET             0x01
 #define DOS_INT21_HEX_DIGIT_BITS  4
 #define DOS_INT21_HEX_DIGIT_MASK  0xF
-#define DOS_INT21_END_OF_FILE     0x1A    /* ^Z                                        */
 #define DOS_INT21_CH_CLEAR_MASK   0xFFFF00FFu
 /* EXEC (AH=4Bh): AL, and the parameter block. */
 #define DOS_INT21_EXEC_LOAD_AND_GO 0x00
@@ -216,25 +206,12 @@
 #define DOS_INT21_CLOCK_SET       0x00    /* AH=2Bh/2Dh: AL                            */
 #define DOS_INT21_CLOCK_INVALID   0xFF
 /* IOCTL (AH=44h). */
-#define DOS_INT21_IOCTL_SET_DEVICE_INFO 0x01
-#define DOS_INT21_IOCTL_INPUT_STATUS 0x06
-#define DOS_INT21_IOCTL_OUTPUT_STATUS 0x07
-#define DOS_INT21_IOCTL_REMOVABLE 0x08
-#define DOS_INT21_IOCTL_REMOTE_DRIVE 0x09
-#define DOS_INT21_IOCTL_REMOTE_HANDLE 0x0A
-#define DOS_INT21_IOCTL_SET_RETRY 0x0B
-#define DOS_INT21_IOCTL_GENERIC_BLOCK 0x0D
-#define DOS_INT21_IOCTL_GET_DRIVE_MAP 0x0E
-#define DOS_INT21_IOCTL_SET_DRIVE_MAP 0x0F
-#define DOS_INT21_IOCTL_QUERY_GENERIC 0x11
-#define DOS_INT21_IOCTL_REMOTE_BIT 0x1000 /* AX=4409h DX: the drive is remote          */
 #define DOS_INT21_DEVICE_INFO_CONSOLE 0x80D3  /* AX=4400h DX, as 6.22 answers          */
 #define DOS_INT21_DEVICE_INFO_FILE 0x0002
 #define DOS_INT21_DEVICE_INFO_AUX 0x80C0
 #define DOS_INT21_DEVICE_INFO_PRN 0xA0C0
 #define DOS_INT21_NT_PREFIX_LENGTH 4      /* "\\??\\"                                   */
 #define DOS_INT21_NONE            0x0000
-#define DOS_INT21_TAB             9
 #define DOS_INT21_PARSE_KEEP_DRIVE 0x02   /* AH=29h AL: keep what the FCB already has  */
 #define DOS_INT21_PARSE_KEEP_NAME 0x04
 #define DOS_INT21_PARSE_KEEP_EXTENSION 0x08
@@ -524,7 +501,7 @@ static VOID DosFcbName(const volatile BYTE *fcb, PSTR out)
      "Bad command or file name" until you put a space after it. */
 static INT DosFcbIsNameEnd(BYTE character)
 {
-    if (character <= DOS_INT21_SPACE) return 1;            /* NUL, CR, TAB, space, any control */
+    if (character <= ASCII_SPACE) return 1;            /* NUL, CR, TAB, space, any control */
     return character == '"' || character == '/' || character == '\\' || character == '[' || character == ']' || character == ':'
         || character == '|' || character == '<'  || character == '>'  || character == '+' || character == '=' || character == ';'
         || character == ',';
@@ -704,7 +681,7 @@ static BYTE DosCurrentDrive(PCDOS_MACHINE machine)
     DWORD length;
     if (machine->VirtualDrive >= 0) return (BYTE)machine->VirtualDrive;
     length = GetCurrentDirectoryA(sizeof(directory), directory);
-    return (length >= 2 && directory[1] == ':') ? (BYTE)((directory[0] | DOS_INT21_CASE_BIT) - 'a') : DOS_CURRENT_DRIVE;
+    return (length >= 2 && directory[1] == ':') ? (BYTE)((directory[0] | ASCII_CASE_BIT) - 'a') : DOS_CURRENT_DRIVE;
 }
 
 /* See the header: the host needs this for the NTVDM BOP 0x54 sub 01 reply, and must
@@ -732,7 +709,7 @@ static VOID DosNoteDriveDirectory(PCSTR fullPath)
 {
     CHAR variable[DOS_INT21_DRIVE_VARIABLE_SIZE];
     if (!fullPath || !fullPath[0] || fullPath[1] != ':') return;
-    variable[0] = '='; variable[1] = (CHAR)(fullPath[0] & ~DOS_INT21_CASE_BIT); variable[2] = ':'; variable[3] = 0;
+    variable[0] = '='; variable[1] = (CHAR)(fullPath[0] & ~ASCII_CASE_BIT); variable[2] = ':'; variable[3] = 0;
     SetEnvironmentVariableA(variable, fullPath);
 }
 
@@ -1294,14 +1271,14 @@ INT DosInt21(PDOS_MACHINE machine)
         HANDLE file = (HANDLE)machine->FileHandles[0];
         for (;;) {
             if (!ReadFile(file, &character, 1, &received, NULL) || received == 0) break;
-            if (character == DOS_INT21_LF && length == 0) continue;
-            if (character == DOS_INT21_CR) break;
+            if (character == ASCII_LF && length == 0) continue;
+            if (character == ASCII_CR) break;
             if (length < maximumLength - 1) { buffer[DOS_INT21_LINE_TEXT + length++] = character; OUTC(character); }
         }
         if (length == 0 && received == 0) machine->IsRetry = 1;
         else {
-            buffer[DOS_INT21_LINE_COUNT] = (BYTE)length; buffer[DOS_INT21_LINE_TEXT + length] = DOS_INT21_CR;
-            OUTC(DOS_INT21_CR); OUTC(DOS_INT21_LF);
+            buffer[DOS_INT21_LINE_COUNT] = (BYTE)length; buffer[DOS_INT21_LINE_TEXT + length] = ASCII_CR;
+            OUTC(ASCII_CR); OUTC(ASCII_LF);
             OKCF();
         }
     } else if (function == DOS_FN_BUFFERED_INPUT) {              /* buffered input DS:DX */
@@ -1335,24 +1312,24 @@ INT DosInt21(PDOS_MACHINE machine)
         }
         for (;;) {
             if (machine->LineLength >= maximumLength - 1) break;  /* buffer full -> take it as a line */
-            character = machine->ConsoleInNoWait ? machine->ConsoleInNoWait(machine->ConsoleInContext) : DOS_INT21_CR;
+            character = machine->ConsoleInNoWait ? machine->ConsoleInNoWait(machine->ConsoleInContext) : ASCII_CR;
             if (character < 0) { machine->IsRetry = 1; break; }  /* nothing yet -> let the guest run */
             /* s91: a LF at the START of a line is the tail of the previous line's
                CR LF in a redirected file (`command < script`, cmd's `<` lands on the
                host stdin this reads). Every line after the first began with it and
                6.22's COMMAND.COM answered "Bad command or file name" to each. */
-            if (character == DOS_INT21_LF && machine->LineLength == 0) continue;
-            if (character == DOS_INT21_CR) { machine->IsLineActive = 0; break; }
-            if (character == DOS_INT21_BACKSPACE) {                    /* backspace: rub it out on screen */
-                if (machine->LineLength > 0) { --machine->LineLength; OUTC(DOS_INT21_BACKSPACE); OUTC(' '); OUTC(DOS_INT21_BACKSPACE); }
+            if (character == ASCII_LF && machine->LineLength == 0) continue;
+            if (character == ASCII_CR) { machine->IsLineActive = 0; break; }
+            if (character == ASCII_BACKSPACE) {                    /* backspace: rub it out on screen */
+                if (machine->LineLength > 0) { --machine->LineLength; OUTC(ASCII_BACKSPACE); OUTC(' '); OUTC(ASCII_BACKSPACE); }
                 continue;
             }
-            if (character == DOS_INT21_NUL) continue;            /* extended key: no ASCII, ignore  */
+            if (character == ASCII_NUL) continue;            /* extended key: no ASCII, ignore  */
             buffer[DOS_INT21_LINE_TEXT + machine->LineLength++] = (BYTE)character; OUTC(character);
         }
         if (!machine->IsRetry) {
-            buffer[DOS_INT21_LINE_COUNT] = (BYTE)machine->LineLength; buffer[DOS_INT21_LINE_TEXT + machine->LineLength] = DOS_INT21_CR;
-            OUTC(DOS_INT21_CR); OUTC(DOS_INT21_LF);
+            buffer[DOS_INT21_LINE_COUNT] = (BYTE)machine->LineLength; buffer[DOS_INT21_LINE_TEXT + machine->LineLength] = ASCII_CR;
+            OUTC(ASCII_CR); OUTC(ASCII_LF);
             machine->IsLineActive = 0;
             /* WHAT THE SHELL ACTUALLY RECEIVES. `echo hi` works while a bare `ver`
                comes back "Bad command or file name" -- and the difference between
@@ -1550,21 +1527,21 @@ INT DosInt21(PDOS_MACHINE machine)
             if (machine->ConsolePosition >= machine->ConsoleLength) {  /* nothing pending: collect a line */
                 if (!machine->IsConsoleCollecting) { machine->IsConsoleCollecting = 1; machine->ConsoleTyped = 0; }
                 for (;;) {
-                    character = machine->ConsoleInNoWait ? machine->ConsoleInNoWait(machine->ConsoleInContext) : DOS_INT21_CR;
+                    character = machine->ConsoleInNoWait ? machine->ConsoleInNoWait(machine->ConsoleInContext) : ASCII_CR;
                     if (character < 0) { machine->IsRetry = 1; break; }
-                    if (character == DOS_INT21_CR) break;
-                    if (character == DOS_INT21_BACKSPACE) {
-                        if (machine->ConsoleTyped > 0) { --machine->ConsoleTyped; OUTC(DOS_INT21_BACKSPACE); OUTC(' '); OUTC(DOS_INT21_BACKSPACE); }
+                    if (character == ASCII_CR) break;
+                    if (character == ASCII_BACKSPACE) {
+                        if (machine->ConsoleTyped > 0) { --machine->ConsoleTyped; OUTC(ASCII_BACKSPACE); OUTC(' '); OUTC(ASCII_BACKSPACE); }
                         continue;
                     }
-                    if (character == DOS_INT21_NUL) continue;    /* extended key: no ASCII */
+                    if (character == ASCII_NUL) continue;    /* extended key: no ASCII */
                     if (machine->ConsoleTyped >= DOS_INT21_CONSOLE_LINE_MAX) continue;  /* full: only Enter ends it */
                     machine->ConsoleLine[machine->ConsoleTyped++] = (BYTE)character; OUTC(character);
                 }
                 if (machine->IsRetry) goto readDone;
-                machine->ConsoleLine[machine->ConsoleTyped] = DOS_INT21_CR; machine->ConsoleLine[machine->ConsoleTyped + 1] = DOS_INT21_LF;
+                machine->ConsoleLine[machine->ConsoleTyped] = ASCII_CR; machine->ConsoleLine[machine->ConsoleTyped + 1] = ASCII_LF;
                 machine->ConsoleLength = machine->ConsoleTyped + DOS_INT21_CRLF_LENGTH; machine->ConsolePosition = 0; machine->IsConsoleCollecting = 0;
-                OUTC(DOS_INT21_CR); OUTC(DOS_INT21_LF);
+                OUTC(ASCII_CR); OUTC(ASCII_LF);
             }
             while (transferred < count && machine->ConsolePosition < machine->ConsoleLength) bytes[transferred++] = machine->ConsoleLine[machine->ConsolePosition++];
             SETAX(transferred); OKCF();
@@ -1958,7 +1935,7 @@ INT DosInt21(PDOS_MACHINE machine)
             BYTE kept[DOS_INT21_FCB_DRIVE_AND_NAME]; INT index2, hasName, hasExtension;
             for (index = 0; index < DOS_INT21_FCB_DRIVE_AND_NAME; ++index) kept[index] = destination[index];
             DosGuestString(R_DS, R_SI, input, sizeof(input));
-            while (input[inputIndex] == ' ' || input[inputIndex] == DOS_INT21_TAB) ++inputIndex;
+            while (input[inputIndex] == ' ' || input[inputIndex] == ASCII_TAB) ++inputIndex;
             destination[0] = 0;
             if (input[inputIndex] && input[inputIndex + 1] == ':') {
                 CHAR character = input[inputIndex];
@@ -2247,7 +2224,7 @@ INT DosInt21(PDOS_MACHINE machine)
         if (AUXPRN_V86)
             AUXPRN_TRAMP(function == DOS_FN_PRINTER_OUTPUT ? DOS_AUXPRN_PRN_OUTPUT : function == DOS_FN_AUX_OUTPUT ? DOS_AUXPRN_AUX_OUTPUT : DOS_AUXPRN_AUX_INPUT);
         else if (function == DOS_FN_AUX_INPUT) {
-            SETAX((R_AX & HIGH_BYTE_MASK) | DOS_INT21_END_OF_FILE);
+            SETAX((R_AX & HIGH_BYTE_MASK) | ASCII_END_OF_FILE);
             OKCF();
         } else {
             BYTE character = (BYTE)(R_DX & BYTE_MASK);
@@ -2765,7 +2742,7 @@ INT DosInt21(PDOS_MACHINE machine)
         else if ((count = GetFullPathNameA(fileName, sizeof(fullPath), fullPath, NULL)) == 0 || count >= sizeof(fullPath)
                  || fullPath[1] != ':') { SETAX(DOS_ERR_PATH_NOT_FOUND); ERRCF(); trace = LogPut(trace, " -> 3\r\n"); }
         else {
-            target = (BYTE)((fullPath[0] | DOS_INT21_CASE_BIT) - 'a');
+            target = (BYTE)((fullPath[0] | ASCII_CASE_BIT) - 'a');
             if (target == DosCurrentDrive(machine)) {
                 if (SetCurrentDirectoryA(fullPath)) {
                     machine->VirtualDrive = -1;  /* it can be stood on after all */
@@ -3605,7 +3582,7 @@ INT DosInt21(PDOS_MACHINE machine)
         INT isPathCall = (function == DOS_FN_CREATE || function == DOS_FN_OPEN || function == DOS_FN_FIND_FIRST || function == DOS_FN_MKDIR || function == DOS_FN_RMDIR
                         || function == DOS_FN_CHDIR || function == DOS_FN_DELETE || function == DOS_FN_FILE_ATTRIBUTES || function == DOS_FN_CREATE_TEMP || function == DOS_FN_CREATE_NEW);
         BYTE drive = DosCurrentDrive(machine);
-        if (isPathCall && pathBytes[1] == ':') drive = (BYTE)((pathBytes[0] | DOS_INT21_CASE_BIT) - 'a');
+        if (isPathCall && pathBytes[1] == ':') drive = (BYTE)((pathBytes[0] | ASCII_CASE_BIT) - 'a');
         if ((function == DOS_FN_READ || function == DOS_FN_WRITE) && g_DosReadWriteDrive >= 0) drive = (BYTE)g_DosReadWriteDrive;
         machine->IsCritPending = 1;
         machine->CritAl = drive;
