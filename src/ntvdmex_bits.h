@@ -29,6 +29,8 @@
 #define BITS_PER_DWORD      32
 #define BYTE_VALUES         256             /* the values a byte can hold           */
 #define DWORD_HEX_DIGITS    8
+#define INT16_MAX_VALUE     32767           /* a signed WORD's range              */
+#define INT16_MIN_VALUE     (-32768)
 
 /* Bit n of a bitmap of bytes: byte n >> BITMAP_BYTE_SHIFT, bit n & BITMAP_BIT_MASK. */
 #define BITMAP_BYTE_SHIFT   3

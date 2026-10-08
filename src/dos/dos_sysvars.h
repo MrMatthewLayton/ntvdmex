@@ -67,6 +67,7 @@
 #define DOS_SYSVARS_NUL_END       (DOS_SYSVARS_NUL + DOS_SYSVARS_NUL_LEN)   /* 0x34 */
 #define DOS_SYSVARS_EXTENDED_KB   0x45        /* WORD: extended memory in KB (GH #47)   */
 #define DOS_SYSVARS_FIRST_MCB_COPY 0x68       /* the first MCB again, as 6.22 and PCem  */
+#define DOS_SYSVARS_WOW_TABLE     0x6A        /* krnl386's table of DOS variables      */
 
 /* ---- DPB (DOS 4.0+), 33 bytes. Offsets measured from sysvars.dpb0. */
 #define DOS_DPB_DRIVE           0x00

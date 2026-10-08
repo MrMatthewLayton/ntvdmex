@@ -377,6 +377,11 @@
 #define DOS_WOW_E_E       0x18
 #define DOS_WOW_E_D       0x24     /* krnl386 WRITES a word through this one     */
 #define DOS_WOW_E_F       0x28
+#define DOS_WOW_VAR_CURDRV 0         /* DOS_WOW_VARS_OFF: the words those entries point at */
+#define DOS_WOW_VAR_C      2
+#define DOS_WOW_VAR_E      4
+#define DOS_WOW_VAR_D      6
+#define DOS_WOW_VAR_F      8
 
 /* ── THE SYSTEM FILE TABLE.  krnl386 COUNTS FILE HANDLES BEFORE IT WILL START. ──
      At start-up krnl386 calls INT 21h AH=52h and walks the SFT chain from

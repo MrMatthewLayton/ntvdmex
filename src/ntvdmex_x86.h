@@ -64,6 +64,12 @@
 #define X86_SEGMENT_LIMIT_64K   0xFFFF
 #define X86_REAL_MODE_LAST_U    0xFFFFFu    /* the last real-mode linear byte: 1 MB - 1 */
 #define X86_FAR_POINTER_SEGMENT 2
+#define X86_FAR_POINTER_SIZE    4           /* offset WORD, segment WORD                */
+#define X86_OP_INSB             0x6C
+#define X86_OP_INS              0x6D        /* INSW / INSD                              */
+#define X86_OP_OUTSB            0x6E
+#define X86_OP_OUTS             0x6F        /* OUTSW / OUTSD                            */
+#define X86_PREFIXES_MAX        4           /* a decoder gives up after this many       */
 #define X86_SELECTOR_NULL_MASK  0xFFFC      /* a selector is null when these bits are   */
 
 /* The real-mode interrupt vector table: at 0000:0000, one 4-byte entry per vector -- the

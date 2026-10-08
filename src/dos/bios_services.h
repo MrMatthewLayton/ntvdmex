@@ -32,6 +32,10 @@
 #define BIOS_SYSTEM_EXTENDED_MEMORY     0x88
 #define BIOS_SYSTEM_GET_CONFIGURATION   0xC0
 #define BIOS_SYSTEM_GET_EBDA            0xC1
+#define BIOS_MOVE_BLOCK_SOURCE          0x10    /* AH=87h's GDT: the source descriptor     */
+#define BIOS_MOVE_BLOCK_DESTINATION     0x18
+#define BIOS_MOVE_BLOCK_WORDS_MAX_U     0x8000u /* CX: 64 KB, one descriptor's reach      */
+#define BIOS_MOVE_BLOCK_EXCEPTION       0x02    /* AH=87h status: exception interrupt error */
 #define BIOS_SYSTEM_STATUS_BUSY         0x83    /* a wait is already counting      */
 #define BIOS_SYSTEM_STATUS_UNSUPPORTED  0x86
 #define BIOS_EVENT_WAIT_CANCEL          0x01    /* AH=83h AL                       */

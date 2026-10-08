@@ -67,7 +67,6 @@
 #define DOS_ERR_NO_MORE_FILES           0x12
 #define DOS_ERR_LOCK_VIOLATION          0x21
 #define DOS_ERR_SHARING_VIOLATION       0x20
-#define DOS_CRITICAL_ERROR_FAIL 3     /* INT 24h's answer in AL: fail the call */
 #define DOS_ABSOLUTE_UNKNOWN_UNIT      0x0201  /* INT 25h/26h AX: AH=02h, AL=01h unknown unit     */
 #define DOS_ABSOLUTE_SECTOR_NOT_FOUND  0x0208  /* INT 25h/26h AX: AH=02h, AL=08h sector not found */
 #define DOS_ERR_FILE_EXISTS             0x50
@@ -254,6 +253,13 @@ static BOOL DosErrFromWin32(_In_ DWORD win32Error, _Out_ PWORD dosError)
      and the handler answers 0 IGNORE, 1 RETRY, 2 ABORT, 3 FAIL. Every value below is
      a row p_crit.asm measured on 6.22 (QEMU) and PCem with drive A: failed "not
      ready" -- see the evidence beside each. */
+/* INT 24h's answer in AL, and what DOS makes of it. */
+#define DOS_CRIT_ACTION_IGNORE 0
+#define DOS_CRIT_ACTION_RETRY  1
+#define DOS_CRIT_ACTION_ABORT  2
+#define DOS_CRIT_ACTION_FAIL   3
+#define DOS_TERM_NORMAL          0      /* AH of AH=4Dh: how the child ended            */
+#define DOS_TERM_CRITICAL_ABORT  2
 #define DOS_CRIT_ABORT_RETURN_CODE  0x00  /* AL of AH=4Dh after an abort: PCem crit.abort.4d=0200 */
 
 static inline BOOL DosCritIsHardwareError(_In_ WORD errorCode)

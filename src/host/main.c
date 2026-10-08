@@ -768,10 +768,10 @@ static PCSTR NtvdmexRoot(VOID)
                 /* the exe's directory is "bin" or "bm" (any case) -> the root is its
                    parent. bm is the pre-s73 name; an installed s72 zip still has it. */
                 INT directoryLength = last - prev;                /* dir name length + 1 */
-                if (prev >= 0 && (self[prev + 1] | 0x20) == 'b'
-                    && ((directoryLength == 3 && (self[prev + 2] | 0x20) == 'm')
-                        || (directoryLength == 4 && (self[prev + 2] | 0x20) == 'i'
-                                    && (self[prev + 3] | 0x20) == 'n')))
+                if (prev >= 0 && (self[prev + 1] | ASCII_CASE_BIT) == 'b'
+                    && ((directoryLength == 3 && (self[prev + 2] | ASCII_CASE_BIT) == 'm')
+                        || (directoryLength == 4 && (self[prev + 2] | ASCII_CASE_BIT) == 'i'
+                                    && (self[prev + 3] | ASCII_CASE_BIT) == 'n')))
                     cut = prev;
                 for (index = 0; index < cut; ++index) root[index] = self[index];
                 root[cut] = '\\'; root[cut + 1] = 0;
@@ -2633,13 +2633,13 @@ static INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCur
     volatile WORD *flagsPointer;
     swappableDataArea[0] = 0;
     machine->IsCritActive = 0;
-    if (criticalAction > 3) criticalAction = 3;
-    if (criticalAction == 0 && !(allowed & 0x20)) criticalAction = 3;               /* ignore not allowed -> fail */
-    if (criticalAction == 1 && !(allowed & 0x10)) criticalAction = 3;               /* retry not allowed  -> fail */
-    if (criticalAction == 3 && !(allowed & 0x08)) criticalAction = 2;               /* fail not allowed   -> abort */
+    if (criticalAction > DOS_CRIT_ACTION_FAIL) criticalAction = DOS_CRIT_ACTION_FAIL;
+    if (criticalAction == DOS_CRIT_ACTION_IGNORE && !(allowed & DOS_CRIT_ALLOW_IGNORE)) criticalAction = DOS_CRIT_ACTION_FAIL;               /* ignore not allowed -> fail */
+    if (criticalAction == DOS_CRIT_ACTION_RETRY && !(allowed & DOS_CRIT_ALLOW_RETRY)) criticalAction = DOS_CRIT_ACTION_FAIL;               /* retry not allowed  -> fail */
+    if (criticalAction == DOS_CRIT_ACTION_FAIL && !(allowed & DOS_CRIT_ALLOW_FAIL)) criticalAction = DOS_CRIT_ACTION_ABORT;               /* fail not allowed   -> abort */
     *logCursor = LogPut(*logCursor, "  INT24 answered AL=0x"); *logCursor = LogHexByte(*logCursor, said);
-    *logCursor = LogPut(*logCursor, criticalAction == 0 ? " -> IGNORE" : criticalAction == 1 ? " -> RETRY"
-                  : criticalAction == 2 ? " -> ABORT" : " -> FAIL");
+    *logCursor = LogPut(*logCursor, criticalAction == DOS_CRIT_ACTION_IGNORE ? " -> IGNORE" : criticalAction == DOS_CRIT_ACTION_RETRY ? " -> RETRY"
+                  : criticalAction == DOS_CRIT_ACTION_ABORT ? " -> ABORT" : " -> FAIL");
     *logCursor = LogPut(*logCursor, "\r\n");
     /* the INT 21h call's own registers, and CS:IP back ON its BOP */
     VDM_REG(tib, VTIB_EAX) = g_Critical.Eax; VDM_REG(tib, VTIB_EBX) = g_Critical.Ebx;
@@ -2648,10 +2648,10 @@ static INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCur
     VDM_REG(tib, VTIB_EBP) = g_Critical.Ebp; VDM_REG(tib, VTIB_EIP) = g_Critical.Eip;
     VDM_SET16(tib, VTIB_CS, g_Critical.Cs);
     VDM_SET16(tib, VTIB_DS, g_Critical.Ds); VDM_SET16(tib, VTIB_ES, g_Critical.Es);
-    if (criticalAction == 1) return 0;                              /* RETRY: the BOP runs again */
-    if (criticalAction == 2) {                                      /* ABORT */
+    if (criticalAction == DOS_CRIT_ACTION_RETRY) return 0;                              /* RETRY: the BOP runs again */
+    if (criticalAction == DOS_CRIT_ACTION_ABORT) {                                      /* ABORT */
         machine->ExitCode = DOS_CRIT_ABORT_RETURN_CODE;
-        machine->TermType = 2;
+        machine->TermType = DOS_TERM_CRITICAL_ABORT;
         return 1;
     }
     /* CF goes on the FLAGS its INT pushed, as every INT 21h answer does. */
@@ -2663,7 +2663,7 @@ static INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCur
          file -- and the position advances by them. Nothing is copied: what an ignored
          read leaves in the buffer is what was there. See DosCritIgnoreCount.
        ⚠ Spec-derived, unmeasured on 6.22: p_crit2 crit2.h3f.ignore / crit2.h40.ignore. */
-    if (criticalAction == 0 && (g_Critical.Function == 0x3F || g_Critical.Function == 0x40)
+    if (criticalAction == DOS_CRIT_ACTION_IGNORE && (g_Critical.Function == DOS_CRIT_FUNCTION_READ || g_Critical.Function == DOS_CRIT_FUNCTION_WRITE)
         && (g_Critical.Ebx & WORD_MASK) < DOS_MAX_FILES && machine->FileHandles[g_Critical.Ebx & WORD_MASK]) {
         HANDLE fileHandle = machine->FileHandles[g_Critical.Ebx & WORD_MASK];
         DWORD position = SetFilePointer(fileHandle, 0, NULL, FILE_CURRENT);
@@ -4639,7 +4639,7 @@ static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR b
         volatile WORD *flagsPointer;
         /* AH = how it ended (#34): 0 normally, 2 when its INT 24h answered ABORT. */
         machine->ChildReturnCode = (WORD)(((WORD)machine->TermType << BYTE_SHIFT) | (machine->ExitCode & BYTE_MASK));
-        machine->TermType = 0;
+        machine->TermType = DOS_TERM_NORMAL;
         if (g_ExecMachine[depth].ProgramName[0])             /* the strip names the parent again */
             LogPut(g_ProgramName, g_ExecMachine[depth].ProgramName);
         /* s81: the parent's handle table back, the child's leftover files closed (not
@@ -6695,7 +6695,7 @@ static VOID CpuAffinityApply(VOID)
         SetThreadAffinityMask(GetCurrentThread(), rest);
     }
 }
-
+enum { CPUSPEED_IDLE_SLEEP_MS = 4, CPUSPEED_CATCH_TIMEOUT_MS = 400, CPUSPEED_CATCH_NONE = 0, CPUSPEED_CATCH_CONTEXT = 1, CPUSPEED_CATCH_COOPERATIVE = 2 };   /* CpuSpeedThread */
 #define CPUSPD_RUN_MIN_US 100ul   /* #225: shortest spun run slice */
 static DWORD WINAPI CpuSpeedThread(LPVOID param)
 {
@@ -6743,7 +6743,7 @@ static DWORD WINAPI CpuSpeedThread(LPVOID param)
         if (duty >= CPUSPEED_BP_FULL_U) {            /* Unlimited: no hold, no window to keep */
             if (g_CpuSpeedCatchRequest) { InterlockedExchange(&g_CpuSpeedCatchRequest, 0);
                                       if (g_CpuSpeedRelease) SetEvent(g_CpuSpeedRelease); }
-            executedUs = 0ull; clockSet = 0; lastDuty = duty; Sleep(4);
+            executedUs = 0ull; clockSet = 0; lastDuty = duty; Sleep(CPUSPEED_IDLE_SLEEP_MS);
             QueryPerformanceCounter(&wWin); wRun0 = wWin; eRun0 = ExecMicrosecondsNow();
             continue;
         }
@@ -6765,7 +6765,7 @@ static DWORD WINAPI CpuSpeedThread(LPVOID param)
             if (g_PauseWant) {
                 if (g_CpuSpeedCatchRequest) { InterlockedExchange(&g_CpuSpeedCatchRequest, 0);
                                           if (g_CpuSpeedRelease) SetEvent(g_CpuSpeedRelease); }
-                Sleep(4); continue;
+                Sleep(CPUSPEED_IDLE_SLEEP_MS); continue;
             }
         }
         /* ── THE RUN SLICE, AND IT MUST BE AT LEAST A MILLISECOND. ────────────────
@@ -6811,7 +6811,7 @@ static DWORD WINAPI CpuSpeedThread(LPVOID param)
                  ticks from this thread instead was tried and REJECTED: without g_Lock it
                  raced the PIT's own delivery and injected 12,170 ticks of 5,934 raised. */
             if (runMicroseconds == MICROSECONDS_PER_MILLISECOND_UL && duty < CPUSPEED_BP_FULL_U) {
-                DWORD reload = g_Pit.Reload ? (DWORD)g_Pit.Reload : 65536u;
+                DWORD reload = g_Pit.Reload ? (DWORD)g_Pit.Reload : PIT_FULL_COUNT_U;
                 DWORD tickMicroseconds = (DWORD)((UINT64)reload * MICROSECONDS_PER_SECOND_ULL / PIT_INPUT_HZ_ULL);
                 DWORD want = (DWORD)((UINT64)(tickMicroseconds / 2ul) * duty / CPUSPEED_BP_FULL_U);   /* cycle = run/duty */
                 if (want < MICROSECONDS_PER_MILLISECOND_UL) runMicroseconds = want < CPUSPD_RUN_MIN_US ? CPUSPD_RUN_MIN_US : want;
@@ -6837,13 +6837,13 @@ static DWORD WINAPI CpuSpeedThread(LPVOID param)
             LARGE_INTEGER parkStart;
             QueryPerformanceCounter(&parkStart);
 #define CPUSPD_YIELD_BURST 200
-            while (!done && g_Running && !g_PauseWant && GetTickCount() - started < 400u) {
-                CONTEXT context; LARGE_INTEGER roundTrip0, roundTrip1, now; INT gotContext, caught = 0;
+            while (!done && g_Running && !g_PauseWant && GetTickCount() - started < CPUSPEED_CATCH_TIMEOUT_MS) {
+                CONTEXT context; LARGE_INTEGER roundTrip0, roundTrip1, now; INT gotContext, caught = CPUSPEED_CATCH_NONE;
                 if (!g_HostCpu || g_InExec == 0) {
                     /* #225: outside VdmRunGuest -- ask it to park at its next re-entry. */
                     if (g_HostCpu) {
                         InterlockedExchange(&g_CpuSpeedCatchRequest, 1);
-                        if (g_CpuSpeedParked && g_InExec == 0) caught = 2;
+                        if (g_CpuSpeedParked && g_InExec == 0) caught = CPUSPEED_CATCH_COOPERATIVE;
                     }
                     if (!caught) {
                         ++g_CpuSpeedMissed;
@@ -6858,7 +6858,7 @@ static DWORD WINAPI CpuSpeedThread(LPVOID param)
                     gotContext = GetThreadContext(g_HostCpu, &context);
                     QueryPerformanceCounter(&roundTrip1);
                     CpuSpeedNoteRoundTrip((DWORD)QpcMicroseconds(roundTrip1.QuadPart - roundTrip0.QuadPart));
-                    if (gotContext && g_InExec != 0) caught = 1;
+                    if (gotContext && g_InExec != 0) caught = CPUSPEED_CATCH_CONTEXT;
                     else {
                         ResumeThread(g_HostCpu);
                         ++g_CpuSpeedMissed;
@@ -6887,7 +6887,7 @@ static DWORD WINAPI CpuSpeedThread(LPVOID param)
                     windowUs = QpcMicroseconds64(now.QuadPart - wWin.QuadPart);  /* window wall, holds in */
                     holdMicroseconds = CpuSpeedStep(executedUs, windowUs, duty, cAPMicroseconds, &reset);
                     {   UINT64 raw = CpuSpeedHoldFor(executedUs, windowUs, duty);
-                        if (raw > g_CpuSpeedDebtMaximumMicroseconds) g_CpuSpeedDebtMaximumMicroseconds = raw > 0xFFFFFFFFull ? 0xFFFFFFFFu : (DWORD)raw;
+                        if (raw > g_CpuSpeedDebtMaximumMicroseconds) g_CpuSpeedDebtMaximumMicroseconds = raw > MAXDWORD ? MAXDWORD : (DWORD)raw;
                         if (holdMicroseconds > g_CpuSpeedHoldMaximumMicroseconds) g_CpuSpeedHoldMaximumMicroseconds = (DWORD)holdMicroseconds; }
                     g_CpuSpeedRanMicroseconds   = executedDelta;
                     g_CpuSpeedWallMicroseconds  = (DWORD)windowUs;
@@ -6897,10 +6897,10 @@ static DWORD WINAPI CpuSpeedThread(LPVOID param)
                         runRemainder  += executedDelta;           g_CpuSpeedRunMs  += runRemainder / MICROSECONDS_PER_MILLISECOND_U;  runRemainder  %= MICROSECONDS_PER_MILLISECOND_U;
                         holdRemainder += (DWORD)holdMicroseconds;  g_CpuSpeedHeldMs += holdRemainder / MICROSECONDS_PER_MILLISECOND_U; holdRemainder %= MICROSECONDS_PER_MILLISECOND_U; }
                     ++g_CpuSpeedPeriods;
-                    if (caught == 2) ++g_CpuSpeedCooperativeCatches;
+                    if (caught == CPUSPEED_CATCH_COOPERATIVE) ++g_CpuSpeedCooperativeCatches;
                     {   INT second = CpuSpeedTimelineSeconds();
                         if (second >= 0) { g_ControlExecMicroseconds[second] += executedDelta; g_ControlHoldMicroseconds[second] += (DWORD)holdMicroseconds;
-                                       if (caught == 2) ++g_ControlCooperative[second]; } }
+                                       if (caught == CPUSPEED_CATCH_COOPERATIVE) ++g_ControlCooperative[second]; } }
                     if (holdMicroseconds >= MICROSECONDS_PER_MILLISECOND_ULL) Sleep((DWORD)(holdMicroseconds / MICROSECONDS_PER_MILLISECOND_ULL));
                     /* Release: lower the request FIRST, so a parked guest cannot see it
                        still raised and park again, then let it go. */
@@ -8849,23 +8849,23 @@ static DWORD    g_Int15Function87Count, g_Int15Function87Refused;
    selector in ES plus (E)SI (#244, the PM arm). */
 static UINT Int15MoveBlockAt(volatile BYTE *tib, DWORD gdtLinear)
 {
-    DWORD cx = VDM_REG16(tib, VTIB_ECX), length = cx * 2u;
+    DWORD cx = VDM_REG16(tib, VTIB_ECX), length = cx * X86_WORD_SIZE;
     const volatile BYTE *gdt = (const volatile BYTE *)(ULONG_PTR)gdtLinear;
     UINT32 source, destination;
     BYTE *sourcePointer, *destinationPointer;
     UINT status = 0;
     if (cx == 0) return 0;                      /* nothing to move: done */
-    if (cx > 0x8000u) { status = 0x02; goto out; }  /* past the 64 KB a descriptor spans */
-    if (!gdt) { status = 0x02; goto out; }          /* PM: the GDT pointer did not resolve */
-    source = DosExtMemDescriptorBase(gdt + 0x10);
-    destination = DosExtMemDescriptorBase(gdt + 0x18);
+    if (cx > BIOS_MOVE_BLOCK_WORDS_MAX_U) { status = BIOS_MOVE_BLOCK_EXCEPTION; goto out; }  /* past the 64 KB a descriptor spans */
+    if (!gdt) { status = BIOS_MOVE_BLOCK_EXCEPTION; goto out; }          /* PM: the GDT pointer did not resolve */
+    source = DosExtMemDescriptorBase(gdt + BIOS_MOVE_BLOCK_SOURCE);
+    destination = DosExtMemDescriptorBase(gdt + BIOS_MOVE_BLOCK_DESTINATION);
     if (!g_ExtendedMemoryRaw && (DosExtMemClassify(&g_Xms, source, length) == DOS_EXTMEM_REGION_RAW
                           || DosExtMemClassify(&g_Xms, destination, length) == DOS_EXTMEM_REGION_RAW))
         g_ExtendedMemoryRaw = (BYTE *)VirtualAlloc(NULL, DOS_EXTMEM_RAW_LENGTH,
                                                MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     sourcePointer = DosExtMemResolve(&g_Xms, 0, g_ExtendedMemoryRaw, source, length);
     destinationPointer = DosExtMemResolve(&g_Xms, 0, g_ExtendedMemoryRaw, destination, length);
-    if (!sourcePointer || !destinationPointer) { status = 0x02; goto out; }
+    if (!sourcePointer || !destinationPointer) { status = BIOS_MOVE_BLOCK_EXCEPTION; goto out; }
     MoveMemory(destinationPointer, sourcePointer, length);
 out:
     ++g_Int15Function87Count;
@@ -8958,7 +8958,7 @@ static INT CloseProgramNow(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PST
     machine->ExitCode = 0;
     return 0;
 }
-
+enum { I33_FALLBACK_X = 320, I33_FALLBACK_Y = 240, I33_ABSOLUTE_DELTA_SCALE = 8 };   /* I33TakeMotion's absolute-derived fallback */
 /* The mickeys moved since the last read, DRAINED -- 0Bh's arithmetic, lifted out
    unchanged so 27h (#249) reads the same counters the same way: the driver has ONE
    pair of motion accumulators and both calls reset it. Clamped to signed 16 bits
@@ -8966,18 +8966,18 @@ static INT CloseProgramNow(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PST
    the wrong way). x/y = the pointer now, for the no-raw-input fallback. */
 static VOID I33TakeMotion(LONG positionX, LONG positionY, LONG *outDeltaX, LONG *outDeltaY)
 {
-    static LONG lastX = 320, lastY = 240;             /* fallback only (exec thread) */
+    static LONG lastX = I33_FALLBACK_X, lastY = I33_FALLBACK_Y;             /* fallback only (exec thread) */
     LONG deltaX, deltaY;
     if (g_MouseRawOk) {                                  /* the device's own counts */
         deltaX = InterlockedExchange(&g_MouseDx, 0);
         deltaY = InterlockedExchange(&g_MouseDy, 0);
-        deltaX = deltaX * g_MouseSensitivity / 100; deltaY = deltaY * g_MouseSensitivity / 100;
+        deltaX = deltaX * g_MouseSensitivity / PERCENT; deltaY = deltaY * g_MouseSensitivity / PERCENT;
     } else {                                            /* fallback: absolute-derived */
-        deltaX = (positionX - lastX) * 8; deltaY = (positionY - lastY) * 8;
+        deltaX = (positionX - lastX) * I33_ABSOLUTE_DELTA_SCALE; deltaY = (positionY - lastY) * I33_ABSOLUTE_DELTA_SCALE;
         lastX = positionX; lastY = positionY;
     }
-    if (deltaX >  32767) deltaX =  32767; else if (deltaX < -32768) deltaX = -32768;
-    if (deltaY >  32767) deltaY =  32767; else if (deltaY < -32768) deltaY = -32768;
+    if (deltaX >  INT16_MAX_VALUE) deltaX =  INT16_MAX_VALUE; else if (deltaX < INT16_MIN_VALUE) deltaX = INT16_MIN_VALUE;
+    if (deltaY >  INT16_MAX_VALUE) deltaY =  INT16_MAX_VALUE; else if (deltaY < INT16_MIN_VALUE) deltaY = INT16_MIN_VALUE;
     *outDeltaX = deltaX; *outDeltaY = deltaY;
 }
 
@@ -15412,27 +15412,27 @@ static INT HostTryIoString(volatile BYTE *tib, VDD_BUS *bus)
     DWORD cs = VDM_REG16(tib, VTIB_CS);
     DWORD ip = VDM_REG16(tib, VTIB_EIP);
     volatile BYTE *segment = (volatile BYTE *)(cs << PARAGRAPH_SHIFT);
-    INT index = 0, operandSize = 2, isIn, width, report = 0;
+    INT index = 0, operandSize = X86_WORD_SIZE, isIn, width, report = 0;
     DWORD sover = 0, count, burst, step, element;
     WORD port;
     BYTE opcode;
 
     for (;;) {                                   /* prefixes                        */
         opcode = segment[(ip + index) & WORD_MASK];
-        if      (opcode == 0x66) operandSize = 4;
-        else if (opcode == 0xF2 || opcode == 0xF3) report = 1;
+        if      (opcode == X86_PREFIX_OPERAND_SIZE) operandSize = X86_DWORD_SIZE;
+        else if (opcode == X86_PREFIX_REPNE || opcode == X86_PREFIX_REP) report = 1;
         else if (opcode == X86_PREFIX_ES) sover = VTIB_ES;    /* segment overrides on the source */
         else if (opcode == X86_PREFIX_CS) sover = VTIB_CS;
         else if (opcode == X86_PREFIX_SS) sover = VTIB_SS;
         else if (opcode == X86_PREFIX_DS) sover = VTIB_DS;
-        else if (opcode != 0x67) break;
-        if (++index > 4) return 0;
+        else if (opcode != X86_PREFIX_ADDRESS_SIZE) break;
+        if (++index > X86_PREFIXES_MAX) return 0;
     }
     switch (opcode) {
-    case 0x6C: isIn = 1; width = 1;      break;              /* INSB             */
-    case 0x6D: isIn = 1; width = operandSize; break;              /* INSW / INSD      */
-    case 0x6E: isIn = 0; width = 1;      break;              /* OUTSB            */
-    case 0x6F: isIn = 0; width = operandSize; break;              /* OUTSW / OUTSD    */
+    case X86_OP_INSB: isIn = 1; width = 1;      break;              /* INSB             */
+    case X86_OP_INS: isIn = 1; width = operandSize; break;              /* INSW / INSD      */
+    case X86_OP_OUTSB: isIn = 0; width = 1;      break;              /* OUTSB            */
+    case X86_OP_OUTS: isIn = 0; width = operandSize; break;              /* OUTSW / OUTSD    */
     default:   return 0;                                      /* not a string I/O */
     }
     port  = (WORD)VDM_REG(tib, VTIB_EDX);
@@ -15527,7 +15527,7 @@ static INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
     while (code[index] == X86_PREFIX_OPERAND_SIZE || code[index] == X86_PREFIX_ADDRESS_SIZE ||
            code[index] == X86_PREFIX_REPNE || code[index] == X86_PREFIX_REP) {        /* prefixes            */
         if (code[index] == X86_PREFIX_OPERAND_SIZE) operandSize = is32 ? X86_WORD_SIZE : X86_DWORD_SIZE;     /* 0x66 flips the segment default */
-        if (++index > 4) return 0;
+        if (++index > X86_PREFIXES_MAX) return 0;
     }
     opcode = code[index];
     switch (opcode) {
@@ -28108,15 +28108,15 @@ static LRESULT WowControlColour(HWND window, WORD window16, UINT message, WPARAM
        CTLCOLOR_EDIT -- Calc's display is one, and its default is the window colour. */
     {   CHAR className[16];
         type = (WORD)(message - WM_CTLCOLORMSGBOX);
-        if (type == 6 && GetClassNameA((HWND)lParam, className, sizeof className) && !lstrcmpiA(className, "Edit"))
+        if (type == CTLCOLOR_STATIC && GetClassNameA((HWND)lParam, className, sizeof className) && !lstrcmpiA(className, "Edit"))
             type = 1;
     }
-    args[0] = window16; args[1] = 0x0019;
+    args[0] = window16; args[1] = WM_CTLCOLOR16;
     args[2] = deviceContext16;
     args[3] = type;                              /* lParam HIGH: the control type */
     args[4] = child;                             /* lParam LOW: the control       */
     made = WowCall16Sync(proc, wowWindow->Instance ? wowWindow->Instance : g_WowUserClasses[wowWindow->Class].Instance,
-                           args, 5, window16, 0x0019, &result);
+                           args, 5, window16, WM_CTLCOLOR16, &result);
     WowGdiForget(deviceContext16);
     if (made && result) {
         brush = WowGdiH32(result, &kind);
@@ -28128,7 +28128,7 @@ static LRESULT WowControlColour(HWND window, WORD window16, UINT message, WPARAM
          look when its template names a font -- Charmap's labels) and the WINDOW
          colour otherwise (Calc's display; Cardfile's card bar, Packager's headers). Scroll bars and the dialog's own
          background keep Windows' default. */
-    if (type == 1 || type == 2 || ((type == 3 || type == 6) && !wowWindow->IsDialog3D)) {
+    if (type == CTLCOLOR_EDIT || type == CTLCOLOR_LISTBOX || ((type == CTLCOLOR_BTN || type == CTLCOLOR_STATIC) && !wowWindow->IsDialog3D)) {
         SetTextColor((HDC)wParam, GetSysColor(COLOR_WINDOWTEXT));
         SetBkColor((HDC)wParam, GetSysColor(COLOR_WINDOW));
         *handled = 1;
@@ -28871,22 +28871,22 @@ static VOID DosWowPublish(volatile BYTE *handlerArea, volatile BYTE *controlTabl
     /* Every entry points somewhere valid, not just the six that are read. An
        unread entry left at 0:0 is a landmine for the next thing that reads it. */
     for (index = 0; index < DOS_WOW_TBL_N; ++index) {
-        *(volatile WORD *)(tableBytes + index * 4 + 0) = variablesOffset;
-        *(volatile WORD *)(tableBytes + index * 4 + 2) = DOS_SYSVARS_SEG;
+        *(volatile WORD *)(tableBytes + index * X86_FAR_POINTER_SIZE) = variablesOffset;
+        *(volatile WORD *)(tableBytes + index * X86_FAR_POINTER_SIZE + X86_FAR_POINTER_SEGMENT) = DOS_SYSVARS_SEG;
     }
-    *(volatile WORD *)(tableBytes + DOS_WOW_E_LASTDRV) = (WORD)(DOS_SYSVARS_OFF + 0x21);
-    *(volatile WORD *)(tableBytes + DOS_WOW_E_CURDRV)  = (WORD)(variablesOffset + 0);
-    *(volatile WORD *)(tableBytes + DOS_WOW_E_C)       = (WORD)(variablesOffset + 2);
-    *(volatile WORD *)(tableBytes + DOS_WOW_E_E)       = (WORD)(variablesOffset + 4);
-    *(volatile WORD *)(tableBytes + DOS_WOW_E_D)       = (WORD)(variablesOffset + 6);
-    *(volatile WORD *)(tableBytes + DOS_WOW_E_F)       = (WORD)(variablesOffset + 8);
+    *(volatile WORD *)(tableBytes + DOS_WOW_E_LASTDRV) = (WORD)(DOS_SYSVARS_OFF + DOS_SYSVARS_LASTDRIVE);
+    *(volatile WORD *)(tableBytes + DOS_WOW_E_CURDRV)  = (WORD)(variablesOffset + DOS_WOW_VAR_CURDRV);
+    *(volatile WORD *)(tableBytes + DOS_WOW_E_C)       = (WORD)(variablesOffset + DOS_WOW_VAR_C);
+    *(volatile WORD *)(tableBytes + DOS_WOW_E_E)       = (WORD)(variablesOffset + DOS_WOW_VAR_E);
+    *(volatile WORD *)(tableBytes + DOS_WOW_E_D)       = (WORD)(variablesOffset + DOS_WOW_VAR_D);
+    *(volatile WORD *)(tableBytes + DOS_WOW_E_F)       = (WORD)(variablesOffset + DOS_WOW_VAR_F);
 
     /* ⛔ THIS COMMENT USED TO SAY SysVars+0x6A "LANDS AT DOS_HDLR_SEG:0x00FA ... FREE".
          It was the NAME FIELD OF THE FIRST MCB (0x5F:000A), and SysVars+0x60 onward was
          that MCB's whole header -- the defect behind MEM /C's 1 MB "MSDOS" (#47). In
          SysVars' own segment it is simply SysVars+0x6A. */
     (VOID)handlerArea;
-    *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + 0x6A) = table;
+    *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_WOW_TABLE) = table;
 }
 enum { HOST_INSTANCES_MAX = 16, HOST_INSTANCE_WAIT_MS = 200, CAPTURE_MS_MIN = 50, CAPTURE_MS_MAX = 60000, CAPTURE_DELAY_MS_MAX = 600000, HEADLESS_MS_MAX = 3600000 };   /* startup limits: instance numbers, knob ranges */
 /* ── ★★★★★ A TITLE IS "PROGRAM [ARGUMENTS]", AND WE OPENED THE WHOLE THING AS A
@@ -31219,7 +31219,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         controlBytes[position+DOS_CRIT_STUB_INT23] = X86_OP_IRET;                                          /* INT 23h: IRET */
         *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CTRL_C))     = (WORD)(position + DOS_CRIT_STUB_INT23);
         *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CTRL_C)) = DOS_CTAB_SEG;
-        controlBytes[position+DOS_CRIT_STUB_INT24] = X86_OP_MOV_IMM_BYTE_FIRST; controlBytes[position+DOS_CRIT_STUB_INT24+1] = DOS_CRITICAL_ERROR_FAIL; controlBytes[position+DOS_CRIT_STUB_INT24+2] = X86_OP_IRET;         /* mov al,3 ; iret */
+        controlBytes[position+DOS_CRIT_STUB_INT24] = X86_OP_MOV_IMM_BYTE_FIRST; controlBytes[position+DOS_CRIT_STUB_INT24+1] = DOS_CRIT_ACTION_FAIL; controlBytes[position+DOS_CRIT_STUB_INT24+2] = X86_OP_IRET;         /* mov al,3 ; iret */
         *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CRITICAL_ERROR))     = (WORD)(position + DOS_CRIT_STUB_INT24);        /* INT 24h */
         *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CRITICAL_ERROR)) = DOS_CTAB_SEG;
         /* #34: the site DOS calls the guest's INT 24h from -- see CriticalRaise. */
