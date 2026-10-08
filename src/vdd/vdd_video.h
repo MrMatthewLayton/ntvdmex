@@ -24,6 +24,7 @@
 #define VIDEO_MONO_BASE     0xB0000u      /* the second 64K window: B0000..BFFFF    */
 #define VIDEO_STATUS1_VERTICAL_RETRACE 0x08u  /* 3DAh bit 3                            */
 #define VIDEO_RETRACE_UNKNOWN_U 0xFFFFFFFFu   /* VddVideoUsToRetrace: no beam to time  */
+#define VIDEO_OFFSET_NONE             0xFFFFFFFFu   /* WatchOffset and friends: none set */
 #define VIDEO_TEXT_OFFSET      (VIDEO_TEXT_BASE - VIDEO_APERTURE_BASE)  /* 0x18000         */
 #define VIDEO_COLUMNS          80
 #define VIDEO_ROWS          25

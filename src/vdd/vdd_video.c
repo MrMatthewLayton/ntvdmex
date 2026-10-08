@@ -129,7 +129,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_ATTRIBUTE_NORMAL        0x07
 
 /* Bytes and words, assembled and taken apart. */
-#define VIDEO_OFFSET_NONE             0xFFFFFFFFu
 #define VIDEO_RGB_BYTES               3
 #define VIDEO_RGB_BLUE                2
 

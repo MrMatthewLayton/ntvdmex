@@ -82,6 +82,7 @@
 #define DPMI_INITIAL_STACK_SELECTOR 0x1F
 #define DPMI_INITIAL_FIRST_INDEX    1
 #define DPMI_INITIAL_DATA_INDEX     2      /* DS: always installed as writable data */
+#define DPMI_LDT_LEGACY_LIMIT       512    /* index bound several checks still use (the LDT holds DPMI_LDT_MAX) */
 #define DPMI_INITIAL_STACK_INDEX    3      /* SS: likewise                          */
 #define DPMI_INITIAL_SELECTOR_COUNT 3
 #define DPMI_FIRST_CLIENT_INDEX     4      /* a client's own allocations start here */

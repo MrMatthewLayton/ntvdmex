@@ -1923,7 +1923,7 @@ static DWORD g_EventHistogram[EV_HIST_MAX];
 static DWORD g_V86MicrosecondsTotal, g_HostMicrosecondsEvent[EV_HIST_MAX];
 static LONGLONG g_HostTimeLast;           /* QPC of the last VdmRunGuest return; 0 = none */
 static INT  g_HostEventLast;
-static DWORD g_BopHistogram[256];            /* V86 BOP events by number (the busiest are printed) */
+static DWORD g_BopHistogram[BYTE_VALUES];            /* V86 BOP events by number (the busiest are printed) */
 /* ...and the same, second by second, so a run with two phases (3DBench: a title wait
    spinning on INT 16h, then the benchmark) is not read as one average. Cumulative
    snapshots at the first VdmRunGuest return of each second; the report prints deltas. */
@@ -2026,7 +2026,7 @@ static DWORD DpmiSelectorBase(WORD selector);       /* fwd: watchdog resolves th
    load-bearing in two places: we only ROUTE an interrupt to a handler the client chose,
    and we only INJECT IRQ0 into an INT 08h the client actually hooked -- injecting into
    our own default would be a very confusing way to talk to ourselves. */
-static struct { WORD Selector; DWORD Offset; BYTE Client; } g_PmInt[256];
+static struct { WORD Selector; DWORD Offset; BYTE Client; } g_PmInt[IVT_VECTORS];
 /* ── THE HOST'S DEFAULT PROTECTED-MODE INTERRUPT HANDLERS. ────────────────────────
    0204 (get PM interrupt vector) used to return 0000:0000 for anything the client had
    not yet installed, and that is not an answer -- it is a null pointer wearing the
@@ -2159,7 +2159,7 @@ static INT   g_DpmiVi = 1;                 /* DPMI virtual interrupt flag (INT 3
    code selector based at DOS_HDLR_SEG (0x500) so the PM handler's IRET lands on the
    planted DPMI_PMRET catcher; allocated lazily on the first 0303. */
 static struct { WORD PmSelector; DWORD PmOffset; WORD RmEs; DWORD RmDi; INT IsUsed; } g_Callbacks[DPMI_CB_SLOTS];
-static BYTE g_BiosUnimplemented[256];   /* GH #27: BIOS services a run actually wanted */
+static BYTE g_BiosUnimplemented[BYTE_VALUES];   /* GH #27: BIOS services a run actually wanted */
 
 /* ---- INT 21h AH=4Bh EXEC.  GH #30. ------------------------------------------
  *
@@ -2197,7 +2197,7 @@ static INT g_ExecDepth;
      back before the ordinary child terminate runs. Only a FORCED close restores: a
      program's own exit is DOS's business, and DOS does not do this. */
 static struct {
-    WORD  Ivt[512];                   /* 0000:0000-03FF as the parent left it */
+    WORD  Ivt[IVT_SIZE / X86_WORD_SIZE];                   /* 0000:0000-03FF as the parent left it */
     BYTE  ImrMaster, ImrSlave, VideoMode;
     DWORD Pit0;                       /* channel 0's effective reload */
     CHAR  ProgramName[64];               /* the PARENT's status-strip name (user, s84) */
@@ -5334,7 +5334,7 @@ static UINT      g_DiskStatus;      /* AH=01h's last-status byte           */
 
 static PDOS_DISK_GEOMETRY DiskFor(UINT drive)
 {
-    BYTE boot[512];
+    BYTE boot[DOS_SECTOR_SIZE];
     DWORD got = 0, size;
     UINT oldErrorMode;
     if (drive != 0) return NULL;                 /* only A: is backed today     */
@@ -5348,7 +5348,7 @@ static PDOS_DISK_GEOMETRY DiskFor(UINT drive)
     SetErrorMode(oldErrorMode);
     if (g_DiskHandle[0] == INVALID_HANDLE_VALUE) return NULL;
     size = GetFileSize(g_DiskHandle[0], NULL);
-    if (!ReadFile(g_DiskHandle[0], boot, 512, &got, NULL) || got != 512
+    if (!ReadFile(g_DiskHandle[0], boot, DOS_SECTOR_SIZE, &got, NULL) || got != DOS_SECTOR_SIZE
         || !DosDiskGeometryFromBpb(boot, size, &g_DiskGeometry[0])) {
         /* An image we cannot read the geometry of is treated as ABSENT. A
            guessed cylinder count returns the WRONG SECTOR and reports success,
@@ -5376,9 +5376,9 @@ static PDOS_DISK_GEOMETRY DiskFor(UINT drive)
 static INT DiskIo(UINT drive, UINT32 lba, UINT count,
                    BYTE *guest, INT write)
 {
-    DWORD moved = 0, want = count * 512u;
+    DWORD moved = 0, want = count * DOS_SECTOR_SIZE;
     if (drive != 0 || g_DiskHandle[0] == INVALID_HANDLE_VALUE || !count) return 0;
-    if (SetFilePointer(g_DiskHandle[0], (LONG)(lba * 512u), NULL, FILE_BEGIN)
+    if (SetFilePointer(g_DiskHandle[0], (LONG)(lba * DOS_SECTOR_SIZE), NULL, FILE_BEGIN)
         == INVALID_SET_FILE_POINTER) return 0;
     if (write) {
         if (!WriteFile(g_DiskHandle[0], guest, want, &moved, NULL)) return 0;
@@ -6352,7 +6352,7 @@ static DWORD WINAPI TickCourierThread(LPVOID parameter)
     }
     return 0;
 }
-
+#define CPU_MHZ_UNKNOWN_U 0xFFFFFFFFu   /* HostCpuMhz: not read yet */
 /* ── ★ APPROXIMATE CPU SPEED: THE V86 HALF. (GH #56) ─────────────────────────────
      The arithmetic and the whole argument for it are in src/host/cpuspeed.h. This
      is the mechanism: a thread that, for the milliseconds the Bresenham says the
@@ -6394,8 +6394,8 @@ static INT    g_CpuSpeedIndex      = 0;      /* CPUSPEED_* index; 0 = unlimited 
    -- what Windows itself shows in System Properties. Rungs at or above it are greyed. */
 static UINT HostCpuMhz(VOID)
 {
-    static UINT mhz = 0xFFFFFFFFu;
-    if (mhz == 0xFFFFFFFFu) {
+    static UINT mhz = CPU_MHZ_UNKNOWN_U;
+    if (mhz == CPU_MHZ_UNKNOWN_U) {
         HKEY key; DWORD value = 0, size = sizeof value, valueType = 0;
         mhz = 0;
         if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
@@ -7601,12 +7601,12 @@ static VOID ExecShareReport(VOID)
         cursor = LogDecimal(cursor, g_HostMicrosecondsEvent[event] / MICROSECONDS_PER_MILLISECOND_U); cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_EventHistogram[event]);
     }
     {   /* the six busiest BOP numbers */
-        DWORD seen[256]; INT index, rank;
-        for (index = 0; index < 256; ++index) seen[index] = g_BopHistogram[index];
+        DWORD seen[BYTE_VALUES]; INT index, rank;
+        for (index = 0; index < BYTE_VALUES; ++index) seen[index] = g_BopHistogram[index];
         cursor = LogPut(cursor, " bops:");
         for (rank = 0; rank < 6; ++rank) {
             INT best = -1;
-            for (index = 0; index < 256; ++index) if (seen[index] && (best < 0 || seen[index] > seen[best])) best = index;
+            for (index = 0; index < BYTE_VALUES; ++index) if (seen[index] && (best < 0 || seen[index] > seen[best])) best = index;
             if (best < 0) break;
             cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, (BYTE)best); cursor = LogPut(cursor, "="); cursor = LogDecimal(cursor, seen[best]);
             seen[best] = 0;
@@ -8241,7 +8241,7 @@ static DWORD MouseI33Offset(volatile BYTE *tib, INT source, DWORD offset)
     return offset & WORD_MASK;
 }
 /* DPMI 0300 (simulate real-mode interrupt) vectors we do NOT service. See the 0300 arm. */
-static DWORD g_SimIntUnhandled, g_SimIntVector[256];
+static DWORD g_SimIntUnhandled, g_SimIntVector[IVT_VECTORS];
 /* ── ★ REFLECT DPMI 0300 TO THE GUEST'S OWN REAL-MODE HANDLER -- ON BY DEFAULT (s81).
      It was off (simintrefl.flag to enable) because it wedged ZAR waiting on an SB
      completion the nested V86 call never delivered. s81 fixed that, and the spec says
@@ -8893,7 +8893,7 @@ static VOID VideoTrapSync(VOID);             /* fwd */
 static VOID ExecMachineSave(INT depth)
 {
     UINT index;
-    for (index = 0; index < 512; ++index) g_ExecMachine[depth].Ivt[index] = PeekWord(index * 2);
+    for (index = 0; index < IVT_SIZE / X86_WORD_SIZE; ++index) g_ExecMachine[depth].Ivt[index] = PeekWord(index * X86_WORD_SIZE);
     g_ExecMachine[depth].ImrMaster = g_Pic.Master.Imr; g_ExecMachine[depth].ImrSlave = g_Pic.Slave.Imr;
     g_ExecMachine[depth].VideoMode = *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_VIDEO_MODE);   /* BDA current mode */
     g_ExecMachine[depth].Pit0  = VddPitEffectiveReload(&g_Pit);
@@ -12548,7 +12548,7 @@ static VOID HostApplyWindowSize(HWND window, DWORD index)
 {
     HostApplyScale(window, (INT)index + 1 <= 4 ? (INT)index + 1 : 1);
 }
-
+#define WINDOW_SETTING_UNSET_U 0xFFFFFFFFu   /* g_WindowSizeLive / g_AspectLive: nothing applied yet */
 /* ── PUT g_Settings INTO EFFECT, WITHOUT TOUCHING THE REGISTRY. ───────────────────────
      One function so the View menu, the CPU Speed submenu and the dialog's OK all
      reach the machine by the same path -- three call sites that each remembered a
@@ -12561,8 +12561,8 @@ static VOID HostApplyWindowSize(HWND window, DWORD index)
      unconditionally would mean picking a different SCALER snapped a window the user
      had dragged to their own size back to 1x -- the setting reaching past its own
      business, which is the thing that makes people stop touching the menu. */
-static DWORD g_WindowSizeLive = 0xFFFFFFFFu;   /* what the window is currently AT */
-static DWORD g_AspectLive  = 0xFFFFFFFFu;   /* ...and the shape it is that size IN */
+static DWORD g_WindowSizeLive = WINDOW_SETTING_UNSET_U;   /* what the window is currently AT */
+static DWORD g_AspectLive  = WINDOW_SETTING_UNSET_U;   /* ...and the shape it is that size IN */
 
 /* ── #325: THE WINDOW FOLLOWS THE MODE. When the frame's size changes -- text to a
      320x200 game, a VESA mode, Mode X -- a normal (not maximised, not fullscreen)
@@ -15210,7 +15210,7 @@ static DWORD HostIoLoopBurst(volatile BYTE *tib, VDD_BUS *bus,
 {
     /* A 16-bit segment wraps offsets (and LOOP counts) at 64K; a 32-bit flat one
        does not, and there LOOP counts in ECX. One mask drives both. */
-    DWORD cx, iterations, mask = is32 ? 0xFFFFFFFFu : 0xFFFFu;
+    DWORD cx, iterations, mask = is32 ? DWORD_MASK_U : WORD_MASK_U;
     INT displacement;
     if (segment[ipNext & mask] != X86_OP_LOOP) return 0;           /* LOOP rel8 only        */
     displacement = (INT8)segment[(ipNext + 1) & mask];
@@ -15475,8 +15475,8 @@ static INT HostTryIoString(volatile BYTE *tib, VDD_BUS *bus)
 static INT DpmiSelectorIs32(WORD selector)
 {
     INT index = DPMI_SELECTOR_INDEX(selector & WORD_MASK);
-    if (index < 1 || index >= 512) return 0;
-    return (g_Ldt[index].Flags & 0x4) != 0;
+    if (index < 1 || index >= DPMI_LDT_LEGACY_LIMIT) return 0;
+    return (g_Ldt[index].Flags & DPMI_DESCRIPTOR_FLAG_BIG) != 0;
 }
 
 /* PM variant of HostTryIo (GH #18 run 72). A real-CPU PROTECTED-MODE IN/OUT is
@@ -16538,7 +16538,7 @@ static VOID A000Protect(INT isOn)
     DWORD old;
     if (g_NoA000) isOn = 0;              /* diagnostic knob -- see NOA000_FLAG */
     if (isOn == g_A000Protection) return;
-    if (VirtualProtect((LPVOID)VIDEO_APERTURE_BASE, 0x10000,
+    if (VirtualProtect((LPVOID)VIDEO_APERTURE_BASE, X86_SEGMENT_SIZE_U,
                        isOn ? PAGE_NOACCESS : PAGE_EXECUTE_READWRITE, &old))
         g_A000Protection = isOn;
 }
@@ -17209,7 +17209,7 @@ static INT32 HostInterpPaced(volatile BYTE *tib, INT32 cap)
    whether a host-side crash happened on it or on one of the worker threads -- audio,
    present, watchdog. Those are different bugs and the dump used to name neither. */
 static DWORD g_GuestThreadId = 0;
-
+#define WOW_ID_NONE 0xFFFF   /* g_WowLastId: no WOW32 call entered yet */
 /* ── ★ WHICH WOW32 CALL WAS THE HOST INSIDE? (session 38) ─────────────────────────
      The WOWBOP log line is accumulated into `p` and only flushed WITH its result, so
      a host-side crash inside a service loses the whole line -- header included. The
@@ -17219,7 +17219,7 @@ static DWORD g_GuestThreadId = 0;
    ⇒ Record the id and call site on entry. This is "the last call ENTERED", not "the
      call in flight" -- if the run ended cleanly it names a call that completed. The
      fatal dump says so rather than implying more than it knows. */
-static WORD g_WowLastId   = 0xFFFF;
+static WORD g_WowLastId   = WOW_ID_NONE;
 static WORD g_WowLastFrom = 0;
 
 static INT HostReadable(PCVOID pointer, SIZE_T length)
@@ -17970,8 +17970,8 @@ static WORD DpmiHandlerCodeSelector(VOID)
     index = DpmiHostIndex();
     if (index < 0) return 0;
     g_Ldt[index].Base   = (DWORD)DOS_HDLR_SEG << PARAGRAPH_SHIFT;
-    g_Ldt[index].Limit  = 0xFFFF;
-    g_Ldt[index].Access = 0xFA;                 /* present, DPL3, code, readable        */
+    g_Ldt[index].Limit  = X86_SEGMENT_LIMIT_64K;
+    g_Ldt[index].Access = DPMI_ACCESS_CODE;                 /* present, DPL3, code, readable        */
     g_Ldt[index].Flags  = 0;                    /* 16-bit: the stubs are 16-bit code    */
     DpmiInstall(index);
     g_DpmiHandlerSelector = (WORD)DPMI_LDT_SELECTOR(index);
@@ -18006,8 +18006,8 @@ static WORD DpmiSegmentToDescriptor(WORD segment)
     ldtIndex = DpmiHostIndex();
     if (ldtIndex < 0) return 0;
     g_Ldt[ldtIndex].Base   = (DWORD)segment << PARAGRAPH_SHIFT;
-    g_Ldt[ldtIndex].Limit  = 0xFFFF;
-    g_Ldt[ldtIndex].Access = 0xF2;                /* present, DPL3, data, read/write */
+    g_Ldt[ldtIndex].Limit  = X86_SEGMENT_LIMIT_64K;
+    g_Ldt[ldtIndex].Access = DPMI_ACCESS_DATA;                /* present, DPL3, data, read/write */
     g_Ldt[ldtIndex].Flags  = 0;                   /* 16-bit                          */
     DpmiInstall(ldtIndex);
     if (g_SegmentToDescriptorCount < DPMI_S2D_MAX) {
@@ -18045,7 +18045,7 @@ static WORD WowCallbackSelector(VOID)
     if (index < 0) return 0;
     g_Ldt[index].Base   = g_WowCallbackLinear;
     g_Ldt[index].Limit  = 0x0F;
-    g_Ldt[index].Access = 0xFA;                /* present, DPL3, code, readable */
+    g_Ldt[index].Access = DPMI_ACCESS_CODE;                /* present, DPL3, code, readable */
     g_Ldt[index].Flags  = 0;                   /* 16-bit                        */
     DpmiInstall(index);
     g_WowCallbackSelector = (WORD)DPMI_LDT_SELECTOR(index);
@@ -19064,7 +19064,7 @@ static VOID WowProbeSelectors(VOID)
             ldtIndex = g_LdtNext++;
             g_Ldt[ldtIndex].Base   = (DWORD)(ULONG_PTR)segment->Memory;
             g_Ldt[ldtIndex].Limit  = need - 1;
-            g_Ldt[ldtIndex].Access = (BYTE)(isCode ? 0xFA : 0xF2);
+            g_Ldt[ldtIndex].Access = (BYTE)(isCode ? DPMI_ACCESS_CODE : DPMI_ACCESS_DATA);
             g_Ldt[ldtIndex].Flags  = 0;                       /* 16-bit segments */
             DpmiInstall(ldtIndex);
             segment->Selector = (WORD)DPMI_LDT_SELECTOR(ldtIndex);            /* the REAL selector now */
@@ -19411,7 +19411,7 @@ static DWORD DpmiRecoverFlatEip(DWORD lo16, BYTE vector, INT *candidateCount)
     for (index = 0; index < g_DpmiBlockCount; ++index) {
         DWORD base = g_DpmiBlock[index].Base, size = g_DpmiBlock[index].Size, address;
         if (!size) continue;
-        for (address = (base & ~0xFFFFu) | lo16; address < base + size; address += 0x10000u) {
+        for (address = (base & ~WORD_MASK_U) | lo16; address < base + size; address += X86_SEGMENT_SIZE_U) {
             const volatile BYTE *bytes;
             if (address < base || address + 1 >= base + size) continue;
             if (!HostReadable((const VOID *)(ULONG_PTR)address, 2)) continue;
@@ -19428,7 +19428,7 @@ static DWORD DpmiRecoverFlatEip(DWORD lo16, BYTE vector, INT *candidateCount)
 static INT DpmiSelectorDescriptor(WORD selector, UINT32 *accessRights, UINT32 *limit)
 {
     INT index = DPMI_SELECTOR_INDEX(selector & WORD_MASK);
-    if (index < 1 || index >= 512 || g_Ldt[index].Access == 0) return 0;
+    if (index < 1 || index >= DPMI_LDT_LEGACY_LIMIT || g_Ldt[index].Access == 0) return 0;
     if (accessRights)    *accessRights    = ((UINT32)g_Ldt[index].Access << BYTE_SHIFT) | ((UINT32)(g_Ldt[index].Flags & DPMI_DESCRIPTOR_FLAGS_MASK) << DPMI_DESCRIPTOR_FLAGS_SHIFT);
     if (limit) *limit = (UINT32)g_Ldt[index].Limit;
     return 1;
@@ -20650,9 +20650,9 @@ static WORD WowSchedCurrentTask(VOID)
 {
     DWORD base;
     const volatile BYTE *dgroup;
-    if (!g_WowDgroupSelector) return 0xFFFF;
+    if (!g_WowDgroupSelector) return WOWUSER_TASK_NONE16;
     base = DpmiSelectorBase(g_WowDgroupSelector);
-    if (!base) return 0xFFFF;
+    if (!base) return WOWUSER_TASK_NONE16;
     dgroup = (const volatile BYTE *)(ULONG_PTR)base;
     return (WORD)(dgroup[0x228] | (dgroup[0x229] << BYTE_SHIFT));
 }
@@ -20673,7 +20673,7 @@ static struct { WORD Task; CHAR Directory[MAX_PATH]; } g_WowTaskDirectory[WOW_TA
 static VOID WowTaskDirectoryNote(WORD task, PCSTR directory)
 {
     INT index, freeK = -1;
-    if (!task || task == 0xFFFF) return;
+    if (!task || task == WOWUSER_TASK_NONE16) return;
     for (index = 0; index < WOW_TASK_DIRS; ++index) {
         if (g_WowTaskDirectory[index].Task == task) break;
         if (!g_WowTaskDirectory[index].Task && freeK < 0) freeK = index;
@@ -21004,7 +21004,7 @@ static VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slo
  *    again (a chain back to the host). We then service it ourselves, which is the
  *    correct meaning of "chain to the previous handler" when the previous one is us.
  */
-static BYTE g_PmDispatch[256];                 /* 1 while inside vec's client handler */
+static BYTE g_PmDispatch[IVT_VECTORS];                 /* 1 while inside vec's client handler */
 
 /* ── ★★★★ A REFLECTED INTERRUPT IS THE ONE TRACE THAT CAN OUTRUN THE GUEST. ────────
      Every dispatch below writes two LogAppend lines (~350 bytes) and does two
@@ -21041,9 +21041,9 @@ static BYTE g_PmDispatch[256];                 /* 1 while inside vec's client ha
      LogAppend's own cap follows). */
 #define PM_DISP_LOG_MAX   24        /* always-loud lines per (vec, AH) */
 #define PM_DISP_QUIET_MS  100u      /* ...then at most one more per pair per this */
-static BYTE  g_PmDispatchLogged[256][256];    /* always-loud lines emitted for (vec, AH) */
-static DWORD g_PmDispatchCount[256][256];     /* every dispatch, logged or not */
-static DWORD g_PmDispatchMs[256][256];        /* GetTickCount of the last line for the pair */
+static BYTE  g_PmDispatchLogged[IVT_VECTORS][BYTE_VALUES];    /* always-loud lines emitted for (vec, AH) */
+static DWORD g_PmDispatchCount[IVT_VECTORS][BYTE_VALUES];     /* every dispatch, logged or not */
+static DWORD g_PmDispatchMs[IVT_VECTORS][BYTE_VALUES];        /* GetTickCount of the last line for the pair */
 enum { DPMI_DISPATCH_PHASE_MAX = 4096 };   /* DpmiDispatchToPmHandler: the nested run's bound */
 static INT DpmiDispatchToPmHandler(DOS_MACHINE *machine, volatile BYTE *tib,
                                        DWORD vector, UINT steps)
@@ -21926,7 +21926,7 @@ static PSTR PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
 #define V86BOP_DONE  1      /* serviced; EIP is past the BOP, onto the stub's IRET/RETF  */
 #define V86BOP_RERUN 4      /* serviced, still waiting; EIP left ON the BOP to re-execute */
 static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base);
-enum { WOW_SEGMENT_LIMIT_SLACK = 0x100, DPMI_SET_DESCRIPTOR_INDEX_LIMIT = 512 };   /* DpmiServicePmIntBody */
+enum { WOW_SEGMENT_LIMIT_SLACK = 0x100 };   /* DpmiServicePmIntBody */
 /* ── ★★★ THE DEFAULT PM HANDLER FOR A HARDWARE IRQ, WHEN THE GUEST OWNS THE REAL-MODE
      VECTOR: A TRUE NESTED-V86 REFLECTION. (s81, ZAR's streaming audio) ───────────────
      DPMI 0.9: a protected-mode interrupt nobody hooked in PM is reflected to the real-mode
@@ -25678,7 +25678,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             volatile DWORD *descriptor = (volatile DWORD *)(ULONG_PTR)DpmiRmcsPointer(tib, esBase);
                             DWORD low, high;
                             DpmiRmcsProbe(tib, esBase, 4, 0);       /* observation only */
-                            if (ldtIndex < 1 || ldtIndex >= DPMI_SET_DESCRIPTOR_INDEX_LIMIT) { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
+                            if (ldtIndex < 1 || ldtIndex >= DPMI_LDT_LEGACY_LIMIT) { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
                                                          cursor = LogPut(cursor, " -> bad sel"); break; }
                             low = descriptor[0]; high = descriptor[1];
                             /* Exact inverse of DpmiBuildDescriptor(). */
@@ -27370,8 +27370,8 @@ static VOID DpmiEnsurePmReturnSelector(VOID)
 {
     if (g_PmReturnSelector == 0 && g_LdtNext < DPMI_LDT_MAX) {
         INT index = g_LdtNext++;
-        g_Ldt[index].Base = (DWORD)DOS_HDLR_SEG << PARAGRAPH_SHIFT; g_Ldt[index].Limit = 0xFFFF;
-        g_Ldt[index].Access = 0xFA;                         /* code exec/read */
+        g_Ldt[index].Base = (DWORD)DOS_HDLR_SEG << PARAGRAPH_SHIFT; g_Ldt[index].Limit = X86_SEGMENT_LIMIT_64K;
+        g_Ldt[index].Access = DPMI_ACCESS_CODE;                         /* code exec/read */
         /* ── THE CATCHER'S D/B BIT IS PART OF THE CALLER'S IDENTITY. ─────────────────
              We push this selector as the RETURN CS of the interrupt frame the client's
              handler runs on, so that its IRET lands back on our BOP. But a DOS extender
@@ -27725,8 +27725,8 @@ static struct { HANDLE VddHandle; WORD FirstPort, LastPort; ISV_IO_HANDLERS Hand
 static VOID IsvIoIn(PVOID self, WORD port, BYTE width, UINT32 *value)
 {
     INT index = (INT)(ULONG_PTR)self;
-    BYTE lowByte = 0xFF, highByte = 0xFF; WORD word = 0xFFFF;
-    if (!g_IsvHooks[index].IsLive) { *value = width == 1 ? 0xFF : width == 2 ? 0xFFFF : 0xFFFFFFFFu; return; }
+    BYTE lowByte = VDD_UNCLAIMED_READ_BYTE, highByte = VDD_UNCLAIMED_READ_BYTE; WORD word = VDD_UNCLAIMED_READ_WORD;
+    if (!g_IsvHooks[index].IsLive) { *value = width == 1 ? VDD_UNCLAIMED_READ_BYTE : width == X86_WORD_SIZE ? VDD_UNCLAIMED_READ_WORD : VDD_UNCLAIMED_READ_U; return; }
     if (width == 1) {
         if (g_IsvHooks[index].Handlers.InByte) ((PISV_IN_BYTE_ROUTINE)g_IsvHooks[index].Handlers.InByte)(port, &lowByte);
         *value = lowByte;
@@ -29031,7 +29031,7 @@ static INT V86DeliverDeviceIrq(volatile BYTE *tib)
 
     return injected;
 }
-
+enum { PENDING_INT_RETRIES_MAX = 0x10000 };   /* event 3 ("interrupt pending, not entered"): retries before giving up */
 /* ── ★★★ OUR BIOS AND DRIVER STUBS, SERVICED FROM ONE PLACE. (GH #247) ─────────────────
      Every stub we plant in the IVT is `BOP nn ; IRET` (or RETF), and until #247 the only
      code that knew what each `nn` MEANS was the body of WinMain's exec loop. So a stub
@@ -34553,7 +34553,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                        Clear the stale pending bits and re-enter. Bounded so a genuinely re-arming
                        pending can't spin; the BIOS tick still advances via the IRQ0 path above. */
                     if (event == 3) {
-                        if (++event3Retries <= 0x10000) {
+                        if (++event3Retries <= PENDING_INT_RETRIES_MAX) {
                             if (event3Retries <= 3) {
                                 cursor = LogPut(cursor, "GH#18: event3 pending-int guard at CS:EIP=0x");
                                 cursor = LogHex(cursor, currentCs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, eip);
@@ -36768,7 +36768,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         cursor = LogPut(cursor, "\r\nSTAGE2: simInt (DPMI 0300) UNHANDLED: total=");
         cursor = LogHex(cursor, g_SimIntUnhandled);
         { UINT sbIndex, any = 0;
-          for (sbIndex = 0; sbIndex < 256; ++sbIndex) if (g_SimIntVector[sbIndex]) {
+          for (sbIndex = 0; sbIndex < IVT_VECTORS; ++sbIndex) if (g_SimIntVector[sbIndex]) {
               cursor = LogPut(cursor, " int"); cursor = LogHexByte(cursor, (BYTE)sbIndex);
               cursor = LogPut(cursor, "h x"); cursor = LogHex(cursor, g_SimIntVector[sbIndex]); any = 1; }
           if (!any) cursor = LogPut(cursor, " (none -- every simulated interrupt was serviced)"); }
@@ -36884,7 +36884,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         cursor = LogPut(cursor, " rate_hz="); cursor = LogHex(cursor, g_Sb.RateHz);
         cursor = LogPut(cursor, " blk_len="); cursor = LogHex(cursor, g_Sb.BlockLength);
         cursor = LogPut(cursor, " dsp_cmds:");
-        { UINT vectorIndex; for (vectorIndex = 0; vectorIndex < 256; ++vectorIndex)
+        { UINT vectorIndex; for (vectorIndex = 0; vectorIndex < IVT_VECTORS; ++vectorIndex)
             if (g_Sb.CommandHistogram[vectorIndex]) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, vectorIndex);
                                      cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Sb.CommandHistogram[vectorIndex]); } }
         cursor = LogPut(cursor, "\r\nSTAGE2: sb ");
@@ -37231,7 +37231,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             cursor = LogPut(cursor, "]\r\n");
         }
         /* The VRAM watchpoint. Silent unless cfg/vwatch.txt armed it. */
-        if (g_Video.WatchOffset != 0xFFFFFFFFu) {
+        if (g_Video.WatchOffset != VIDEO_OFFSET_NONE) {
             UINT watchIndex2, watchCount = g_Video.WatchCount < VIDEO_WATCH_MAX ? g_Video.WatchCount : VIDEO_WATCH_MAX;
             cursor = LogPut(cursor, "STAGE2: vwatch off=0x"); cursor = LogHex(cursor, g_Video.WatchOffset);
             cursor = LogPut(cursor, " writes="); cursor = LogDecimal(cursor, g_Video.WatchCount); cursor = LogPut(cursor, "\r\n");
