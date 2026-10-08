@@ -26,6 +26,35 @@
 #define IVT_OFFSET_ADDRESS(vector)   ((vector) * IVT_ENTRY_SIZE)
 #define IVT_SEGMENT_ADDRESS(vector)  ((vector) * IVT_ENTRY_SIZE + IVT_SEGMENT_OFFSET)
 
+/* EFLAGS. The plain names are `int` literals, the _U names `unsigned` (see ntvdmex_bits.h). */
+#define EFLAGS_CF           0x0001
+#define EFLAGS_CF_U         0x0001u
+#define EFLAGS_RESERVED_ONE_U 0x0002u       /* bit 1 always reads 1                     */
+#define EFLAGS_PF_U         0x0004u
+#define EFLAGS_AF_U         0x0010u
+#define EFLAGS_ZF           0x0040
+#define EFLAGS_ZF_U         0x0040u
+#define EFLAGS_SF_U         0x0080u
+#define EFLAGS_TF_U         0x0100u
+#define EFLAGS_IF           0x0200
+#define EFLAGS_IF_U         0x0200u
+#define EFLAGS_DF           0x0400
+#define EFLAGS_DF_U         0x0400u
+#define EFLAGS_OF_U         0x0800u
+#define EFLAGS_STATUS_DF_U  0x0CD5u         /* CF PF AF ZF SF DF OF                     */
+#define EFLAGS_RF_U         0x00010000u
+#define EFLAGS_VM           0x20000         /* bit 17: set = V86, clear = PM            */
+#define EFLAGS_VM_U         0x00020000u
+/* EFLAGS.VIF (bit 19) -- the VIRTUAL interrupt flag. On a VME-capable CPU (every box
+   we target) the kernel's "can I deliver a hardware interrupt to this VDM right now?"
+   test reads VIF, NOT IF: with VME on, a V86 frame counts as interruptible only
+   when EFlags & EFLAGS_VIF is set. A guest started with IF=1 but VIF=0 therefore looks to the
+   kernel like interrupts are disabled forever, so its interrupt-assist never delivers
+   and it just sets VIP (bit 20) and defers -- which is exactly what the rig showed. */
+#define EFLAGS_VIF          0x80000
+#define EFLAGS_VIF_U        0x00080000u
+#define EFLAGS_VIP          0x100000        /* bit 20: a virtual interrupt is pending   */
+
 /* The PC's interrupt vectors. The PICs as the BIOS programs them: IRQ 0-7 -> 08h-0Fh,
    IRQ 8-15 -> 70h-77h. */
 #define PIC_LINES_PER_CHIP          8

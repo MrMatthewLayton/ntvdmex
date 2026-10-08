@@ -13,7 +13,7 @@
  *   40h h3:  per byte 14h/01cc                     AX=CX CF=0
  *   3Fh h3:  14h/0200 per byte, stop after CR      AX=n  CF=0
  *
- * The interpreter's own names (icpu, istep, V86_CF) and the four callbacks it requires of
+ * The interpreter's own names (icpu, istep, EFLAGS_CF_U) and the four callbacks it requires of
  * its includer (V86HostRead8, V86HostWrite8, V86HostIn, V86HostOut) are v86interp.h's, not this test's.
  */
 #include <stdio.h>
@@ -253,7 +253,7 @@ INT main(VOID)
                       "05h: BX CX DX unchanged");
     AUXPRN_TEST_CHECK(cpu.Registers[AUXPRN_TEST_SP] == AUXPRN_TEST_STACK_TOP,
                       "05h: stack balanced (the INT 21h frame popped)");
-    AUXPRN_TEST_CHECK(cpu.Flags & V86_CF,
+    AUXPRN_TEST_CHECK(cpu.Flags & EFLAGS_CF_U,
                       "05h: the caller's flags come back as they were (CF set in)");
 
     cpu = AuxPrnTestSetup(); cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_04H;
@@ -290,7 +290,7 @@ INT main(VOID)
                       && AuxPrnTestCallIs(2, AUXPRN_TEST_INT17, 0x0200, 0)
                       && AuxPrnTestCallIs(3, AUXPRN_TEST_INT17, 0x0051, 0),
                       "40h h4: per byte INT 17h 02h then 00h");
-    AUXPRN_TEST_CHECK((WORD)cpu.Registers[AUXPRN_TEST_AX] == 2 && !(cpu.Flags & V86_CF),
+    AUXPRN_TEST_CHECK((WORD)cpu.Registers[AUXPRN_TEST_AX] == 2 && !(cpu.Flags & EFLAGS_CF_U),
                       "40h h4: AX=2, CF cleared");
     AUXPRN_TEST_CHECK((WORD)cpu.Registers[AUXPRN_TEST_CX] == 2
                       && (WORD)cpu.Registers[AUXPRN_TEST_DX] == AUXPRN_TEST_BUFFER
@@ -302,7 +302,7 @@ INT main(VOID)
     cpu.Registers[AUXPRN_TEST_DX] = AUXPRN_TEST_BUFFER;
     AUXPRN_TEST_CHECK(AuxPrnTestRunEntry(&cpu, DOS_AUXPRN_PRN_WRITE, AUXPRN_TEST_FLAGS_CF_SET)
                       == AUXPRN_TEST_RETURNED && g_CallCount == 0
-                      && (WORD)cpu.Registers[AUXPRN_TEST_AX] == 0 && !(cpu.Flags & V86_CF),
+                      && (WORD)cpu.Registers[AUXPRN_TEST_AX] == 0 && !(cpu.Flags & EFLAGS_CF_U),
                       "40h h4: CX=0 writes nothing, AX=0");
 
     cpu = AuxPrnTestSetup(); cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_40H;
@@ -315,7 +315,7 @@ INT main(VOID)
     AUXPRN_TEST_CHECK(g_CallCount == 2 && AuxPrnTestCallIs(0, AUXPRN_TEST_INT14, 0x0141, 0)
                       && AuxPrnTestCallIs(1, AUXPRN_TEST_INT14, 0x0142, 0),
                       "40h h3: per byte INT 14h 01h, no status");
-    AUXPRN_TEST_CHECK((WORD)cpu.Registers[AUXPRN_TEST_AX] == 2 && !(cpu.Flags & V86_CF),
+    AUXPRN_TEST_CHECK((WORD)cpu.Registers[AUXPRN_TEST_AX] == 2 && !(cpu.Flags & EFLAGS_CF_U),
                       "40h h3: AX=2, CF cleared");
 
     cpu = AuxPrnTestSetup(); cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_3FH;
@@ -328,7 +328,7 @@ INT main(VOID)
     AUXPRN_TEST_CHECK(g_CallCount == 2 && AuxPrnTestCallIs(0, AUXPRN_TEST_INT14, 0x0200, 0)
                       && AuxPrnTestCallIs(1, AUXPRN_TEST_INT14, 0x0200, 0),
                       "3Fh h3: INT 14h 02h per byte, stops after the CR");
-    AUXPRN_TEST_CHECK((WORD)cpu.Registers[AUXPRN_TEST_AX] == 2 && !(cpu.Flags & V86_CF),
+    AUXPRN_TEST_CHECK((WORD)cpu.Registers[AUXPRN_TEST_AX] == 2 && !(cpu.Flags & EFLAGS_CF_U),
                       "3Fh h3: AX=2, CF cleared");
     AUXPRN_TEST_CHECK(g_Memory[dataBase + AUXPRN_TEST_READ_BUFFER] == 'r'
                       && g_Memory[dataBase + AUXPRN_TEST_READ_BUFFER + 1] == AUXPRN_TEST_CR

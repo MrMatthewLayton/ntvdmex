@@ -31,14 +31,7 @@
 #define PM32INTERP_H
 #include "../ntvdmex_types.h"
 
-#define PM32_CF 0x0001u
-#define PM32_PF 0x0004u
-#define PM32_AF 0x0010u
-#define PM32_ZF 0x0040u
-#define PM32_SF 0x0080u
-#define PM32_DF 0x0400u
-#define PM32_OF 0x0800u
-#define PM32_ARITH (PM32_CF | PM32_PF | PM32_AF | PM32_ZF | PM32_SF | PM32_OF)
+#define PM32_ARITH (EFLAGS_CF_U | EFLAGS_PF_U | EFLAGS_AF_U | EFLAGS_ZF_U | EFLAGS_SF_U | EFLAGS_OF_U)
 
 /* Operand widths, masks and signs. */
 #define PM32_WORD        2
@@ -279,9 +272,9 @@ static UINT32 Pm32SzpFlags(UINT32 result, INT width)
 {
     UINT32 flags = 0;
     result &= Pm32Mask(width);
-    if (!result) flags |= PM32_ZF;
-    if (result & Pm32SignBit(width)) flags |= PM32_SF;
-    if (Pm32Parity(result)) flags |= PM32_PF;
+    if (!result) flags |= EFLAGS_ZF_U;
+    if (result & Pm32SignBit(width)) flags |= EFLAGS_SF_U;
+    if (Pm32Parity(result)) flags |= EFLAGS_PF_U;
     return flags;
 }
 /* ADD/ADC and SUB/SBB/CMP: result + the six arithmetic flags. */
@@ -290,9 +283,9 @@ static UINT32 Pm32Add(UINT32 *flags, UINT32 first, UINT32 second, UINT32 carryIn
     UINT32 mask = Pm32Mask(width), signBit = Pm32SignBit(width);
     UINT64 full = (UINT64)(first & mask) + (UINT64)(second & mask) + carryIn;
     UINT32 result = (UINT32)full & mask, newFlags = Pm32SzpFlags(result, width);
-    if (full >> (width * BITS_PER_BYTE)) newFlags |= PM32_CF;
-    if (((first ^ second ^ result) & PM32_AUXILIARY_BIT)) newFlags |= PM32_AF;
-    if ((~(first ^ second) & (first ^ result)) & signBit) newFlags |= PM32_OF;
+    if (full >> (width * BITS_PER_BYTE)) newFlags |= EFLAGS_CF_U;
+    if (((first ^ second ^ result) & PM32_AUXILIARY_BIT)) newFlags |= EFLAGS_AF_U;
+    if ((~(first ^ second) & (first ^ result)) & signBit) newFlags |= EFLAGS_OF_U;
     *flags = (*flags & ~PM32_ARITH) | newFlags;
     return result;
 }
@@ -300,9 +293,9 @@ static UINT32 Pm32Subtract(UINT32 *flags, UINT32 first, UINT32 second, UINT32 bo
 {
     UINT32 mask = Pm32Mask(width), signBit = Pm32SignBit(width);
     UINT32 result = (first - second - borrowIn) & mask, newFlags = Pm32SzpFlags(result, width);
-    if ((UINT64)(first & mask) < (UINT64)(second & mask) + borrowIn) newFlags |= PM32_CF;
-    if (((first ^ second ^ result) & PM32_AUXILIARY_BIT)) newFlags |= PM32_AF;
-    if (((first ^ second) & (first ^ result)) & signBit) newFlags |= PM32_OF;
+    if ((UINT64)(first & mask) < (UINT64)(second & mask) + borrowIn) newFlags |= EFLAGS_CF_U;
+    if (((first ^ second ^ result) & PM32_AUXILIARY_BIT)) newFlags |= EFLAGS_AF_U;
+    if (((first ^ second) & (first ^ result)) & signBit) newFlags |= EFLAGS_OF_U;
     *flags = (*flags & ~PM32_ARITH) | newFlags;
     return result;
 }
@@ -316,7 +309,7 @@ static UINT32 Pm32Logic(UINT32 *flags, UINT32 result, INT width)
    says whether it is written back (CMP is not). */
 static UINT32 Pm32Alu(UINT32 *flags, INT operation, UINT32 first, UINT32 second, INT width, INT *isStore)
 {
-    UINT32 carry = *flags & PM32_CF;
+    UINT32 carry = *flags & EFLAGS_CF_U;
     *isStore = (operation != PM32_ALU_CMP);
     switch (operation) {
     case PM32_ALU_ADD: return Pm32Add(flags, first, second, 0, width);
@@ -333,14 +326,14 @@ static INT Pm32Condition(UINT32 flags, INT condition)
 {
     INT isTrue;
     switch (condition >> PM32_CC_PAIR_SHIFT) {
-    case PM32_CC_OVERFLOW: isTrue = (flags & PM32_OF) != 0; break;                              /* O  */
-    case PM32_CC_BELOW: isTrue = (flags & PM32_CF) != 0; break;                              /* B  */
-    case PM32_CC_ZERO: isTrue = (flags & PM32_ZF) != 0; break;                              /* Z  */
-    case PM32_CC_BELOW_OR_EQUAL: isTrue = (flags & (PM32_CF | PM32_ZF)) != 0; break;                   /* BE */
-    case PM32_CC_SIGN: isTrue = (flags & PM32_SF) != 0; break;                              /* S  */
-    case PM32_CC_PARITY: isTrue = (flags & PM32_PF) != 0; break;                              /* P  */
-    case PM32_CC_LESS: isTrue = ((flags & PM32_SF) != 0) != ((flags & PM32_OF) != 0); break;     /* L  */
-    default: isTrue = (flags & PM32_ZF) || (((flags & PM32_SF) != 0) != ((flags & PM32_OF) != 0)); /* LE */
+    case PM32_CC_OVERFLOW: isTrue = (flags & EFLAGS_OF_U) != 0; break;                              /* O  */
+    case PM32_CC_BELOW: isTrue = (flags & EFLAGS_CF_U) != 0; break;                              /* B  */
+    case PM32_CC_ZERO: isTrue = (flags & EFLAGS_ZF_U) != 0; break;                              /* Z  */
+    case PM32_CC_BELOW_OR_EQUAL: isTrue = (flags & (EFLAGS_CF_U | EFLAGS_ZF_U)) != 0; break;                   /* BE */
+    case PM32_CC_SIGN: isTrue = (flags & EFLAGS_SF_U) != 0; break;                              /* S  */
+    case PM32_CC_PARITY: isTrue = (flags & EFLAGS_PF_U) != 0; break;                              /* P  */
+    case PM32_CC_LESS: isTrue = ((flags & EFLAGS_SF_U) != 0) != ((flags & EFLAGS_OF_U) != 0); break;     /* L  */
+    default: isTrue = (flags & EFLAGS_ZF_U) || (((flags & EFLAGS_SF_U) != 0) != ((flags & EFLAGS_OF_U) != 0)); /* LE */
     }
     return (condition & 1) ? !isTrue : isTrue;
 }
@@ -411,32 +404,32 @@ static INT Pm32Shift(UINT32 *flags, INT operation, UINT32 value, UINT count, INT
     case PM32_SHIFT_ROL: case PM32_SHIFT_ROR: {                               /* ROL / ROR */
         UINT rotate = count % bits;
         if (rotate) result = (operation == PM32_SHIFT_ROL) ? ((result << rotate) | (result >> (bits - rotate))) & mask : ((result >> rotate) | (result << (bits - rotate))) & mask;
-        newFlags &= ~(PM32_CF | PM32_OF);
-        if (operation == PM32_SHIFT_ROL) { if (result & 1) newFlags |= PM32_CF; if (((result & signBit) != 0) != ((newFlags & PM32_CF) != 0)) newFlags |= PM32_OF; }
-        else { if (result & signBit) newFlags |= PM32_CF; if (((result & signBit) != 0) != ((result & (signBit >> 1)) != 0)) newFlags |= PM32_OF; }
+        newFlags &= ~(EFLAGS_CF_U | EFLAGS_OF_U);
+        if (operation == PM32_SHIFT_ROL) { if (result & 1) newFlags |= EFLAGS_CF_U; if (((result & signBit) != 0) != ((newFlags & EFLAGS_CF_U) != 0)) newFlags |= EFLAGS_OF_U; }
+        else { if (result & signBit) newFlags |= EFLAGS_CF_U; if (((result & signBit) != 0) != ((result & (signBit >> 1)) != 0)) newFlags |= EFLAGS_OF_U; }
         *flags = newFlags; *out = result; return 1; }
     case PM32_SHIFT_RCL: case PM32_SHIFT_RCR: return 0;                       /* RCL / RCR: decline */
     case PM32_SHIFT_SHL: case PM32_SHIFT_SAL: {                               /* SHL / SAL */
         UINT32 carry = (count <= bits) ? ((result >> (bits - count)) & 1) : 0;
         result = (count < PM32_DWORD_BITS) ? (result << count) & mask : 0;
         newFlags = (newFlags & ~PM32_ARITH) | Pm32SzpFlags(result, width);
-        if (carry) newFlags |= PM32_CF;
-        if (((result & signBit) != 0) != (carry != 0)) newFlags |= PM32_OF;
+        if (carry) newFlags |= EFLAGS_CF_U;
+        if (((result & signBit) != 0) != (carry != 0)) newFlags |= EFLAGS_OF_U;
         *flags = newFlags; *out = result; return 1; }
     case PM32_SHIFT_SHR: {                                       /* SHR */
         UINT32 carry = (result >> (count - 1)) & 1;
         UINT32 isSignSet = (result & signBit) != 0;
         result = (count < PM32_DWORD_BITS) ? result >> count : 0;
         newFlags = (newFlags & ~PM32_ARITH) | Pm32SzpFlags(result, width);
-        if (carry) newFlags |= PM32_CF;
-        if (isSignSet) newFlags |= PM32_OF;
+        if (carry) newFlags |= EFLAGS_CF_U;
+        if (isSignSet) newFlags |= EFLAGS_OF_U;
         *flags = newFlags; *out = result; return 1; }
     default: {                                      /* SAR */
         INT32 signedValue = (width == 1) ? (INT8)result : (width == PM32_WORD) ? (INT16)result : (INT32)result;
         UINT32 carry = (UINT32)(signedValue >> (count - 1)) & 1;
         result = (UINT32)(signedValue >> (count > PM32_DWORD_BITS - 1 ? PM32_DWORD_BITS - 1 : count)) & mask;
         newFlags = (newFlags & ~PM32_ARITH) | Pm32SzpFlags(result, width);
-        if (carry) newFlags |= PM32_CF;
+        if (carry) newFlags |= EFLAGS_CF_U;
         *flags = newFlags; *out = result; return 1; }
     }
 }
@@ -492,9 +485,9 @@ static INT Pm32Step(PM32_CPU *cpu)
     }
     /* ---- INC/DEC r32 (40-4F): CF preserved ---- */
     if (opcode >= PM32_OP_INC_FIRST && opcode <= PM32_OP_DEC_LAST) {
-        INT registerIndex = opcode & PM32_REGISTER_MASK; UINT32 carry = cpu->Flags & PM32_CF, flags = cpu->Flags, result;
+        INT registerIndex = opcode & PM32_REGISTER_MASK; UINT32 carry = cpu->Flags & EFLAGS_CF_U, flags = cpu->Flags, result;
         result = (opcode < PM32_OP_DEC_FIRST) ? Pm32Add(&flags, Pm32GetRegister(cpu, registerIndex, operandSize), 1, 0, operandSize) : Pm32Subtract(&flags, Pm32GetRegister(cpu, registerIndex, operandSize), 1, 0, operandSize);
-        cpu->Flags = (flags & ~PM32_CF) | carry;
+        cpu->Flags = (flags & ~EFLAGS_CF_U) | carry;
         Pm32SetRegister(cpu, registerIndex, operandSize, result);
         PM32_DONE(offset);
     }
@@ -543,8 +536,8 @@ static INT Pm32Step(PM32_CPU *cpu)
         else { UINT32 immediate = Pm32CodeImmediate(cpu, next, operandSize); next += (UINT32)operandSize; second = (operandSize == PM32_DWORD) ? (INT64)(INT32)immediate : (INT64)(INT16)immediate; }
         product = first * second; result = (UINT32)product & Pm32Mask(operandSize);
         Pm32SetRegister(cpu, modrm.Register, operandSize, result);
-        cpu->Flags &= ~(PM32_CF | PM32_OF);
-        if (product != ((operandSize == PM32_DWORD) ? (INT64)(INT32)result : (INT64)(INT16)result)) cpu->Flags |= PM32_CF | PM32_OF;
+        cpu->Flags &= ~(EFLAGS_CF_U | EFLAGS_OF_U);
+        if (product != ((operandSize == PM32_DWORD) ? (INT64)(INT32)result : (INT64)(INT16)result)) cpu->Flags |= EFLAGS_CF_U | EFLAGS_OF_U;
         PM32_DONE(next);
     }
     /* ---- Jcc rel8 (70-7F) ---- */
@@ -644,7 +637,7 @@ static INT Pm32Step(PM32_CPU *cpu)
     /* ---- string ops: MOVS (A4/A5), STOS (AA/AB), LODS (AC/AD), with REP ---- */
     if (opcode == PM32_OP_MOVSB || opcode == PM32_OP_MOVS || opcode == PM32_OP_STOSB || opcode == PM32_OP_STOS || opcode == PM32_OP_LODSB || opcode == PM32_OP_LODS) {
         INT width = (opcode & 1) ? operandSize : 1;
-        INT32 delta = (cpu->Flags & PM32_DF) ? -width : width;
+        INT32 delta = (cpu->Flags & EFLAGS_DF_U) ? -width : width;
         UINT32 count = repeat ? cpu->Registers[PM32_ECX] : 1, index;
         UINT32 sourceBase = cpu->SegmentBases[segmentOverride >= 0 ? segmentOverride : PM32_DS], destinationBase = cpu->SegmentBases[PM32_ES];
         if (repeat == PM32_REPEAT_REPNE) return 0;                                  /* REPNE on MOVS/STOS: odd */
@@ -718,11 +711,11 @@ static INT Pm32Step(PM32_CPU *cpu)
     if (opcode == PM32_OP_JMP) { if (isOperand16) return 0; cpu->Eip += offset + PM32_DWORD + Pm32CodeImmediate(cpu, offset, PM32_DWORD); return 1; }
     if (opcode == PM32_OP_JMP_SHORT) { cpu->Eip += offset + 1 + (UINT32)(INT32)(INT8)Pm32CodeByte(cpu, offset); return 1; }
     /* ---- flag ops ---- */
-    if (opcode == PM32_OP_CMC) { cpu->Flags ^= PM32_CF; PM32_DONE(offset); }
-    if (opcode == PM32_OP_CLC) { cpu->Flags &= ~PM32_CF; PM32_DONE(offset); }
-    if (opcode == PM32_OP_STC) { cpu->Flags |= PM32_CF; PM32_DONE(offset); }
-    if (opcode == PM32_OP_CLD) { cpu->Flags &= ~PM32_DF; PM32_DONE(offset); }
-    if (opcode == PM32_OP_STD) { cpu->Flags |= PM32_DF; PM32_DONE(offset); }
+    if (opcode == PM32_OP_CMC) { cpu->Flags ^= EFLAGS_CF_U; PM32_DONE(offset); }
+    if (opcode == PM32_OP_CLC) { cpu->Flags &= ~EFLAGS_CF_U; PM32_DONE(offset); }
+    if (opcode == PM32_OP_STC) { cpu->Flags |= EFLAGS_CF_U; PM32_DONE(offset); }
+    if (opcode == PM32_OP_CLD) { cpu->Flags &= ~EFLAGS_DF_U; PM32_DONE(offset); }
+    if (opcode == PM32_OP_STD) { cpu->Flags |= EFLAGS_DF_U; PM32_DONE(offset); }
     /* ---- group 3 (F6/F7) ---- */
     if (opcode == PM32_OP_GROUP3_BYTE || opcode == PM32_OP_GROUP3) {
         INT width = (opcode == PM32_OP_GROUP3_BYTE) ? 1 : operandSize; PM32_MODRM modrm; UINT32 operand, next;
@@ -734,7 +727,7 @@ static INT Pm32Step(PM32_CPU *cpu)
         case PM32_GROUP3_TEST: case PM32_GROUP3_TEST_ALIAS: Pm32Logic(&cpu->Flags, operand & Pm32CodeImmediate(cpu, next, width), width); next += (UINT32)width; break;
         case PM32_GROUP3_NOT: { UINT32 result = ~operand & Pm32Mask(width); if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, result); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, result); break; }
         case PM32_GROUP3_NEG: { UINT32 flags = cpu->Flags, result = Pm32Subtract(&flags, 0, operand, 0, width);
-                  if (operand & Pm32Mask(width)) flags |= PM32_CF; else flags &= ~PM32_CF;
+                  if (operand & Pm32Mask(width)) flags |= EFLAGS_CF_U; else flags &= ~EFLAGS_CF_U;
                   if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, result); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, result);
                   cpu->Flags = flags; break; }
         case PM32_GROUP3_MUL: case PM32_GROUP3_IMUL: {                                        /* MUL / IMUL acc */
@@ -755,8 +748,8 @@ static INT Pm32Step(PM32_CPU *cpu)
                 cpu->Registers[PM32_EAX] = (UINT32)product; cpu->Registers[PM32_EDX] = (UINT32)(product >> DWORD_SHIFT);
                 isOverflow = (modrm.Register == PM32_GROUP3_MUL) ? (product >> DWORD_SHIFT) != 0 : (INT64)product != (INT32)product;
             }
-            cpu->Flags &= ~(PM32_CF | PM32_OF);
-            if (isOverflow) cpu->Flags |= PM32_CF | PM32_OF;
+            cpu->Flags &= ~(EFLAGS_CF_U | EFLAGS_OF_U);
+            if (isOverflow) cpu->Flags |= EFLAGS_CF_U | EFLAGS_OF_U;
             break; }
         default: {                                               /* DIV / IDIV: #DE declines */
             if (!(operand & Pm32Mask(width))) return 0;
@@ -791,11 +784,11 @@ static INT Pm32Step(PM32_CPU *cpu)
         INT width = (opcode == PM32_OP_GROUP4) ? 1 : operandSize; PM32_MODRM modrm;
         Pm32Decode(cpu, offset, segmentOverride, &modrm);
         if (modrm.Register <= 1) {
-            UINT32 flags = cpu->Flags, carry = cpu->Flags & PM32_CF, result;
+            UINT32 flags = cpu->Flags, carry = cpu->Flags & EFLAGS_CF_U, result;
             if (modrm.IsMemory && !Pm32HostCanAccess(modrm.Linear, width, 1)) return 0;
             result = (modrm.Register == 0) ? Pm32Add(&flags, Pm32ReadRm(cpu, &modrm, width), 1, 0, width) : Pm32Subtract(&flags, Pm32ReadRm(cpu, &modrm, width), 1, 0, width);
             if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, width, result); else Pm32SetRegister(cpu, modrm.RegisterMemory, width, result);
-            cpu->Flags = (flags & ~PM32_CF) | carry;
+            cpu->Flags = (flags & ~EFLAGS_CF_U) | carry;
             PM32_DONE(offset + (UINT32)modrm.Length);
         }
         if (opcode == PM32_OP_GROUP5 && (modrm.Register == PM32_GROUP5_CALL || modrm.Register == PM32_GROUP5_JMP) && !isOperand16) {
@@ -850,8 +843,8 @@ static INT Pm32Step(PM32_CPU *cpu)
             else        product = (INT64)(INT16)cpu->Registers[modrm.Register] * (INT64)(INT16)Pm32ReadRm(cpu, &modrm, PM32_WORD);
             result = (UINT32)product & Pm32Mask(operandSize);
             Pm32SetRegister(cpu, modrm.Register, operandSize, result);
-            cpu->Flags &= ~(PM32_CF | PM32_OF);
-            if (product != ((operandSize == PM32_DWORD) ? (INT64)(INT32)result : (INT64)(INT16)result)) cpu->Flags |= PM32_CF | PM32_OF;
+            cpu->Flags &= ~(EFLAGS_CF_U | EFLAGS_OF_U);
+            if (product != ((operandSize == PM32_DWORD) ? (INT64)(INT32)result : (INT64)(INT16)result)) cpu->Flags |= EFLAGS_CF_U | EFLAGS_OF_U;
             PM32_DONE(offset + (UINT32)modrm.Length);
         }
         if (opcode2 == PM32_OP2_SHLD_IMM || opcode2 == PM32_OP2_SHLD_CL || opcode2 == PM32_OP2_SHRD_IMM || opcode2 == PM32_OP2_SHRD_CL) {  /* SHLD / SHRD */
@@ -869,14 +862,14 @@ static INT Pm32Step(PM32_CPU *cpu)
                 UINT64 concatenated = ((UINT64)destinationValue << bits) | sourceValue;
                 result = (UINT32)((concatenated << count) >> bits) & mask;
                 flags = (flags & ~PM32_ARITH) | Pm32SzpFlags(result, operandSize);
-                if ((destinationValue >> (bits - count)) & 1) flags |= PM32_CF;
-                if (((result ^ destinationValue) & Pm32SignBit(operandSize))) flags |= PM32_OF;
+                if ((destinationValue >> (bits - count)) & 1) flags |= EFLAGS_CF_U;
+                if (((result ^ destinationValue) & Pm32SignBit(operandSize))) flags |= EFLAGS_OF_U;
             } else {                                             /* SHRD */
                 UINT64 concatenated = ((UINT64)sourceValue << bits) | destinationValue;
                 result = (UINT32)(concatenated >> count) & mask;
                 flags = (flags & ~PM32_ARITH) | Pm32SzpFlags(result, operandSize);
-                if ((destinationValue >> (count - 1)) & 1) flags |= PM32_CF;
-                if (((result ^ destinationValue) & Pm32SignBit(operandSize))) flags |= PM32_OF;
+                if ((destinationValue >> (count - 1)) & 1) flags |= EFLAGS_CF_U;
+                if (((result ^ destinationValue) & Pm32SignBit(operandSize))) flags |= EFLAGS_OF_U;
             }
             if (modrm.IsMemory) Pm32WriteMemory(modrm.Linear, operandSize, result); else Pm32SetRegister(cpu, modrm.RegisterMemory, operandSize, result);
             cpu->Flags = flags;

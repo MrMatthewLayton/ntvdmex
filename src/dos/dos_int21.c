@@ -198,7 +198,6 @@
 #define DOS_INT21_SERVER_PRINTER_MODE 0x08
 #define DOS_INT21_SERVER_PRINTER_FLUSH 0x09
 #define DOS_INT21_TRUENAME_MAX    127
-#define DOS_INT21_CARRY_FLAG      0x0001
 #define DOS_INT21_ZERO_FLAG       0x0040
 #define DOS_INT21_DWORD_BYTES     4
 #define DOS_INT21_TRACE_MCB_MAX   40
@@ -1078,8 +1077,8 @@ INT DosInt21(PDOS_MACHINE machine)
     #define R_DI VDM_REG(tib, VTIB_EDI)
     #define SETAX(value)        (R_AX = (R_AX & HIGH_WORD_MASK_U) | ((DWORD)(value) & WORD_MASK))
     #define SET16(reg, value)   ((reg)  = ((reg)  & HIGH_WORD_MASK_U) | ((DWORD)(value) & WORD_MASK))
-    #define OKCF()      (*guestFlags &= (WORD)~DOS_INT21_CARRY_FLAG)
-    #define ERRCF()     (*guestFlags |= DOS_INT21_CARRY_FLAG)
+    #define OKCF()      (*guestFlags &= (WORD)~EFLAGS_CF)
+    #define ERRCF()     (*guestFlags |= EFLAGS_CF)
     #define SETZF()     (*guestFlags |= DOS_INT21_ZERO_FLAG)
     #define CLRZF()     (*guestFlags &= (WORD)~DOS_INT21_ZERO_FLAG)
     /* Dropping output silently once cost a wrong conclusion: a probe's dump was
@@ -3600,7 +3599,7 @@ INT DosInt21(PDOS_MACHINE machine)
     /* s92, MEASURED (dospair p_lfn lfn.713B.missing / 713A.again): stock's LFN chdir and
        rmdir say 2 (file not found) for a directory that is not there, where 6.22's short
        3Bh/3Ah -- whose code serves them -- say 3. */
-    if (isLfnAlias && (isLfnAlias == DOS_FN_RMDIR || isLfnAlias == DOS_FN_CHDIR) && (*guestFlags & DOS_INT21_CARRY_FLAG)
+    if (isLfnAlias && (isLfnAlias == DOS_FN_RMDIR || isLfnAlias == DOS_FN_CHDIR) && (*guestFlags & EFLAGS_CF)
         && (R_AX & WORD_MASK) == DOS_ERR_PATH_NOT_FOUND) SETAX(DOS_ERR_FILE_NOT_FOUND);
     if ((*guestFlags & 1) && machine->CanRaiseCrit && !g_DosInt21IsProtectedMode && !machine->IsCritActive
         && DosCritIsHardwareError((WORD)(R_AX & WORD_MASK))) {

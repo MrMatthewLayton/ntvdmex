@@ -170,14 +170,6 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
    init, FM music, PCM block timing) hung. Note VTIB_EFLAGS_PM below always had IF
    set, which is why the protected-mode timer path worked while real mode did not. */
 #define VTIB_EFLAGS_V86    0x20202
-/* EFLAGS.VIF (bit 19) -- the VIRTUAL interrupt flag. On a VME-capable CPU (every box
-   we target) the kernel's "can I deliver a hardware interrupt to this VDM right now?"
-   test reads VIF, NOT IF: with VME on, a V86 frame counts as interruptible only
-   when EFlags & 0x80000 is set. A guest started with IF=1 but VIF=0 therefore looks to the
-   kernel like interrupts are disabled forever, so its interrupt-assist never delivers
-   and it just sets VIP (bit 20) and defers -- which is exactly what the rig showed. */
-#define EFLAGS_VIF_BIT     0x80000
-#define EFLAGS_VIP_BIT     0x100000
 /* ── PROTECTED-MODE EFLAGS: IOPL MUST BE 3, AND IT IS NOT A DETAIL. ──────────────
    The guest runs at CPL 3. With IOPL 0, `STI`, `CLI`, `IN`, `OUT` and `INT n` to a
    gate are all IOPL-sensitive and raise #GP -- and a raw protected-mode #GP is the one
@@ -204,7 +196,6 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
      completion. See return-ntvdm.md. */
 #define VTIB_EFLAGS_PM     0x00202    /* EFlags: IF + reserved bit, VM clear (PM); IOPL
                                          is 0 because the kernel strips anything else */
-#define EFLAGS_VM_BIT      0x20000    /* EFLAGS.VM (bit 17): set=V86, clear=PM     */
 /* Virtual MSW (low 16 of the client's CR0) the monitor keeps in the VDM_TIB.
    Stock keeps it at TIB+0x668 and decides PM-vs-V86 on its PE bit. Setting PE
    marks the client as in protected mode. */

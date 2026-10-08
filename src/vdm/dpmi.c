@@ -169,7 +169,7 @@ INT DpmiSwitchToProtectedMode(volatile BYTE *tib, INT isClient32,
        resume at the real-mode OFFSETS (the selectors carry the seg<<4 base). */
     /* ── VIF, NOT JUST IF, OR THE KERNEL WILL NEVER DELIVER AN INTERRUPT HERE. ──────
          The kernel's "can I deliver a hardware interrupt to this VDM right now?" test
-         reads the VIRTUAL interrupt flag, not IF -- see the EFLAGS_VIF_BIT note in
+         reads the VIRTUAL interrupt flag, not IF -- see the EFLAGS_VIF note in
          ntvdm.h, where exactly this cost the real-mode timer: "a guest started with
          IF=1 but VIF=0 therefore looks to the kernel like interrupts are disabled
          forever, so its interrupt-assist never delivers and it just sets VIP and
@@ -179,7 +179,7 @@ INT DpmiSwitchToProtectedMode(volatile BYTE *tib, INT isClient32,
          guest receives ZERO timer ticks and spins for ever, while stock ntvdm runs the
          same client to Doom's title screen. If the kernel is willing to deliver to a PM
          VDM at all, VIF is the flag it asks about. */
-    VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM | EFLAGS_VIF_BIT;  /* VM clear -> PM */
+    VDM_REG(tib, VTIB_EFLAGS) = VTIB_EFLAGS_PM | EFLAGS_VIF;  /* VM clear -> PM */
     VDM_SET16(tib, VTIB_CS,  codeSelector);
     VDM_REG (tib, VTIB_EIP) = returnOffset;                /* offset within the based CS  */
     VDM_SET16(tib, VTIB_SS,  stackSelector);

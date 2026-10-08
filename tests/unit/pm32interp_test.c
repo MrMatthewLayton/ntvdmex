@@ -42,35 +42,35 @@ INT main(VOID)
     { BYTE code[] = { 0x01, 0xD8 };                         /* add eax,ebx */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 2); cpu.Registers[0] = 0x7FFFFFFF; cpu.Registers[3] = 1;
       CHECK(Pm32Step(&cpu) && cpu.Registers[0] == 0x80000000u && cpu.Eip == CODE + 2, "add eax,ebx: 7FFFFFFF+1");
-      CHECK((cpu.Flags & PM32_OF) && (cpu.Flags & PM32_SF) && !(cpu.Flags & PM32_CF) && !(cpu.Flags & PM32_ZF),
+      CHECK((cpu.Flags & EFLAGS_OF_U) && (cpu.Flags & EFLAGS_SF_U) && !(cpu.Flags & EFLAGS_CF_U) && !(cpu.Flags & EFLAGS_ZF_U),
             "add: signed overflow sets OF+SF, not CF/ZF"); }
     { BYTE code[] = { 0x2B, 0xC5 };                         /* sub eax,ebp */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 2); cpu.Registers[0] = 1; cpu.Registers[5] = 2; Pm32Step(&cpu);
-      CHECK(cpu.Registers[0] == 0xFFFFFFFFu && (cpu.Flags & PM32_CF) && (cpu.Flags & PM32_SF), "sub eax,ebp: 1-2 borrows"); }
+      CHECK(cpu.Registers[0] == 0xFFFFFFFFu && (cpu.Flags & EFLAGS_CF_U) && (cpu.Flags & EFLAGS_SF_U), "sub eax,ebp: 1-2 borrows"); }
     { BYTE code[] = { 0x3B, 0x05, 0x10, 0x20, 0x00, 0x00 }; /* cmp eax,[2010h] */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 6); cpu.Registers[0] = 5; g_Memory[0x2010] = 5; Pm32Step(&cpu);
-      CHECK((cpu.Flags & PM32_ZF) && cpu.Registers[0] == 5 && cpu.Eip == CODE + 6, "cmp eax,[disp32]: equal -> ZF, no store"); }
+      CHECK((cpu.Flags & EFLAGS_ZF_U) && cpu.Registers[0] == 5 && cpu.Eip == CODE + 6, "cmp eax,[disp32]: equal -> ZF, no store"); }
     { BYTE code[] = { 0x83, 0xE1, 0x01 };                   /* and ecx,1 */
-      PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 3); cpu.Registers[1] = 0x12345677; cpu.Flags |= PM32_CF | PM32_OF; Pm32Step(&cpu);
-      CHECK(cpu.Registers[1] == 1 && !(cpu.Flags & (PM32_CF | PM32_OF | PM32_ZF)), "and ecx,1: CF=OF=0"); }
+      PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 3); cpu.Registers[1] = 0x12345677; cpu.Flags |= EFLAGS_CF_U | EFLAGS_OF_U; Pm32Step(&cpu);
+      CHECK(cpu.Registers[1] == 1 && !(cpu.Flags & (EFLAGS_CF_U | EFLAGS_OF_U | EFLAGS_ZF_U)), "and ecx,1: CF=OF=0"); }
     { BYTE code[] = { 0x81, 0xE3, 0x00, 0x00, 0xFF, 0xFF }; /* and ebx,FFFF0000h */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 6); cpu.Registers[3] = 0x12345678; Pm32Step(&cpu);
       CHECK(cpu.Registers[3] == 0x12340000u && cpu.Eip == CODE + 6, "and ebx,imm32"); }
     { BYTE code[] = { 0x48 };                               /* dec eax: CF preserved */
-      PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 1); cpu.Registers[0] = 1; cpu.Flags |= PM32_CF; Pm32Step(&cpu);
-      CHECK(cpu.Registers[0] == 0 && (cpu.Flags & PM32_ZF) && (cpu.Flags & PM32_CF), "dec eax: 1->0 sets ZF, keeps CF"); }
+      PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 1); cpu.Registers[0] = 1; cpu.Flags |= EFLAGS_CF_U; Pm32Step(&cpu);
+      CHECK(cpu.Registers[0] == 0 && (cpu.Flags & EFLAGS_ZF_U) && (cpu.Flags & EFLAGS_CF_U), "dec eax: 1->0 sets ZF, keeps CF"); }
     { BYTE code[] = { 0xFF, 0x0D, 0x58, 0x1A, 0x00, 0x00 }; /* dec dword [1A58h] */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 6); g_Memory[0x1A58] = 1; g_Memory[0x1A59] = 0; g_Memory[0x1A5A] = 0; g_Memory[0x1A5B] = 0; Pm32Step(&cpu);
-      CHECK(g_Memory[0x1A58] == 0 && (cpu.Flags & PM32_ZF) && cpu.Eip == CODE + 6, "dec dword [disp32]: -> 0, ZF"); }
+      CHECK(g_Memory[0x1A58] == 0 && (cpu.Flags & EFLAGS_ZF_U) && cpu.Eip == CODE + 6, "dec dword [disp32]: -> 0, ZF"); }
     { BYTE code[] = { 0xF7, 0x05, 0x5C, 0x1A, 0x00, 0x00, 0xFE, 0xFF, 0xFF, 0xFF };  /* test dword [1A5Ch],FFFFFFFEh */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 10); g_Memory[0x1A5C] = 1; g_Memory[0x1A5D] = g_Memory[0x1A5E] = g_Memory[0x1A5F] = 0; Pm32Step(&cpu);
-      CHECK((cpu.Flags & PM32_ZF) && cpu.Eip == CODE + 10, "test dword [disp32],imm32: 1 & FFFFFFFE = 0 -> ZF"); }
+      CHECK((cpu.Flags & EFLAGS_ZF_U) && cpu.Eip == CODE + 10, "test dword [disp32],imm32: 1 & FFFFFFFE = 0 -> ZF"); }
     { BYTE code[] = { 0xF7, 0xE9 };                         /* imul ecx */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 2); cpu.Registers[0] = 0xFFFFFFFE; cpu.Registers[1] = 3; Pm32Step(&cpu);
-      CHECK(cpu.Registers[0] == 0xFFFFFFFAu && cpu.Registers[2] == 0xFFFFFFFFu && !(cpu.Flags & PM32_CF), "imul ecx: -2*3 = -6 in EDX:EAX"); }
+      CHECK(cpu.Registers[0] == 0xFFFFFFFAu && cpu.Registers[2] == 0xFFFFFFFFu && !(cpu.Flags & EFLAGS_CF_U), "imul ecx: -2*3 = -6 in EDX:EAX"); }
     { BYTE code[] = { 0x0F, 0xAF, 0xC3 };                   /* imul eax,ebx */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 3); cpu.Registers[0] = 0x10000; cpu.Registers[3] = 0x10000; Pm32Step(&cpu);
-      CHECK(cpu.Registers[0] == 0 && (cpu.Flags & PM32_CF) && (cpu.Flags & PM32_OF), "imul eax,ebx: overflow -> CF=OF=1"); }
+      CHECK(cpu.Registers[0] == 0 && (cpu.Flags & EFLAGS_CF_U) && (cpu.Flags & EFLAGS_OF_U), "imul eax,ebx: overflow -> CF=OF=1"); }
     { BYTE code[] = { 0x99, 0xF7, 0x7E, 0x0A };             /* cdq ; idiv dword [esi+0Ah] */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 4); cpu.Registers[0] = (UINT32)-100; cpu.Registers[6] = 0x3000;
       g_Memory[0x300A] = 7; g_Memory[0x300B] = g_Memory[0x300C] = g_Memory[0x300D] = 0;
@@ -83,13 +83,13 @@ INT main(VOID)
     /* ---- shifts ---- */
     { BYTE code[] = { 0xC1, 0xEB, 0x02 };                   /* shr ebx,2 */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 3); cpu.Registers[3] = 0x0B; Pm32Step(&cpu);
-      CHECK(cpu.Registers[3] == 2 && (cpu.Flags & PM32_CF), "shr ebx,2: 0Bh -> 2, CF = last bit out (1)"); }
+      CHECK(cpu.Registers[3] == 2 && (cpu.Flags & EFLAGS_CF_U), "shr ebx,2: 0Bh -> 2, CF = last bit out (1)"); }
     { BYTE code[] = { 0xD3, 0xE0 };                         /* shl eax,cl */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 2); cpu.Registers[0] = 3; cpu.Registers[1] = 2; Pm32Step(&cpu);
       CHECK(cpu.Registers[0] == 0x0C, "shl eax,cl: 3<<2 = 0Ch (Doom's two-plane mask)"); }
     { BYTE code[] = { 0xD1, 0xE8 };                         /* shr eax,1 */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 2); cpu.Registers[0] = 1; Pm32Step(&cpu);
-      CHECK(cpu.Registers[0] == 0 && (cpu.Flags & PM32_ZF) && (cpu.Flags & PM32_CF), "shr eax,1: 1 -> 0, ZF+CF"); }
+      CHECK(cpu.Registers[0] == 0 && (cpu.Flags & EFLAGS_ZF_U) && (cpu.Flags & EFLAGS_CF_U), "shr eax,1: 1 -> 0, ZF+CF"); }
     { BYTE code[] = { 0x0F, 0xA4, 0xE9, 0x16 };             /* shld ecx,ebp,16h */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 4); cpu.Registers[1] = 0; cpu.Registers[5] = 0xABCD1234u; Pm32Step(&cpu);
       CHECK(cpu.Registers[1] == (0xABCD1234u >> 10) && cpu.Eip == CODE + 4, "shld ecx,ebp,22: brings in ebp's top 22 bits"); }
