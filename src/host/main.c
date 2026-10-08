@@ -13452,13 +13452,13 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
              instrument that only reports if the run ends politely is an instrument that
              does not report. Dump it every 5 s instead, so whatever state the run ends
              in, the last five seconds of it are on disk. */
-        {   static DWORD kl;
-            DWORD nowt = GetTickCount();
+        {   static DWORD lastKeyDump;
+            DWORD nowTicks = GetTickCount();
             /* g_KeyMessageCount counts WINDOWS key messages, so gating on it alone silently
                disabled this whole dump for SCRIPTED runs (keys.txt drives
                HostKeyScancode directly, never WM_KEYDOWN) -- a headless repro
                attempt produced one sample and no IRQ1GATE at all. Gate on either half. */
-            if ((g_KeyMessageCount || g_KeyDeliveryCount) && (DWORD)(nowt - kl) >= 5000) {
+            if ((g_KeyMessageCount || g_KeyDeliveryCount) && (DWORD)(nowTicks - lastKeyDump) >= 5000) {
                 /* ⚠ 768, and the margin is the point. At 384 this line already emitted
                    379 bytes; adding two more fields took it past 418 and SMASHED THE UI
                    THREAD'S STACK. Two experiments "died" on that and both verdicts were
@@ -13466,7 +13466,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                    provably never run (its counter read zero) dying identically to one
                    whose had. Leave room. */
                 char keyLine[1024], *keyCursor = keyLine; unsigned index;
-                kl = nowt;
+                lastKeyDump = nowTicks;
                 keyCursor = LogPut(keyCursor, "KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
                 for (index = 0; index < 8; ++index) { keyCursor = LogPut(keyCursor, index ? "," : ""); keyCursor = LogHex(keyCursor, g_KeyMessageHistogram[index]); }
                 keyCursor = LogPut(keyCursor, " n=");      keyCursor = LogHex(keyCursor, g_KeyMessageCount);
@@ -13513,11 +13513,11 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 the UI thread's stack at 379 bytes in a 384-byte buffer; a dozen sites
                 with a 12-byte context dump each is several times that. Bounded work
                 per line, and the buffer is sized for the worst case with room over. */
-        {   static DWORD md;
-            DWORD nowt = GetTickCount();
-            if (g_MouseI33SiteCount && (DWORD)(nowt - md) >= 5000) {
+        {   static DWORD lastMouseDump;
+            DWORD nowTicks = GetTickCount();
+            if (g_MouseI33SiteCount && (DWORD)(nowTicks - lastMouseDump) >= 5000) {
                 char mouseLine[768], *mouseCursor = mouseLine; unsigned index;
-                md = nowt;
+                lastMouseDump = nowTicks;
                 mouseCursor = LogPut(mouseCursor, "MOUSEI33 ax:");
                 for (index = 0; index < I33_AXN && g_MouseI33Ax[index].Count; ++index) {
                     mouseCursor = LogPut(mouseCursor, " "); mouseCursor = LogHexByte(mouseCursor, (g_MouseI33Ax[index].Ax >> 8) & 0xFF);
@@ -13667,16 +13667,16 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
            present if the phase window keeps being missed, so a guest that never
            touches 0x3DA is unaffected. */
         {   static DWORD lastPresent = 0;
-            DWORD nowt = GetTickCount();
-            int stale = (DWORD)(nowt - lastPresent) >= VID_PRESENT_STALE_MS;
+            DWORD nowTicks = GetTickCount();
+            int stale = (DWORD)(nowTicks - lastPresent) >= VID_PRESENT_STALE_MS;
             /* Auto: the hook owns the cadence; the timer presents only when it has
                gone quiet (a guest that never polls the retrace), never on top of it --
                the first cut presented 112 frames twice in 30 s that way. */
             int timerOk = g_UiTickMinimumMs == UITICK_AUTO
-                           ? ((DWORD)(nowt - lastPresent) >= 2u * (VddVideoFrameUs(&g_Video) / 1000u))
+                           ? ((DWORD)(nowTicks - lastPresent) >= 2u * (VddVideoFrameUs(&g_Video) / 1000u))
                            : (VddVideoIsPresentReady(&g_Video) || stale);
             if (g_UiForced || timerOk) {
-                lastPresent = nowt;
+                lastPresent = nowTicks;
                 if (g_UiForced) ++g_UiHookPresents; else ++g_UiTimerPresents;
                 /* THE DRIVER CURSOR. In a text mode it is not a sprite at all: the real
                    driver inverts the character cell under the pointer (0Ah masks), and
@@ -14267,12 +14267,12 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                      pixel -- across a 320-wide picture scaled up on screen, much too
                      fast. Scaled by Sensitivity here, with the remainder carried in
                      hundredths so a slow hand still moves the pointer. */
-                static LONG fx, fy;
-                LONG scaledX = (LONG)rawInput.data.mouse.lLastX * g_MouseSensitivity + fx;
-                LONG scaledY = (LONG)rawInput.data.mouse.lLastY * g_MouseSensitivity + fy;
+                static LONG remainderX, remainderY;
+                LONG scaledX = (LONG)rawInput.data.mouse.lLastX * g_MouseSensitivity + remainderX;
+                LONG scaledY = (LONG)rawInput.data.mouse.lLastY * g_MouseSensitivity + remainderY;
                 LONG newX = g_MouseX + scaledX / 100;
                 LONG newY = g_MouseY + scaledY / 100;
-                fx = scaledX % 100; fy = scaledY % 100;
+                remainderX = scaledX % 100; remainderY = scaledY % 100;
                 if (newX < 0) newX = 0; else if (newX >= (LONG)I33Width()) newX = (LONG)I33Width() - 1;
                 if (newY < 0) newY = 0; else if (newY >= (LONG)I33Height()) newY = (LONG)I33Height() - 1;
                 if (newX != g_MouseX || newY != g_MouseY) MouseEventRaise(1);   /* motion event */
@@ -33801,7 +33801,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        -- also VTIB_EVENT=4, but CS==g_DpmiFaultCodeSelector and EIP==DPMI_FAULT_COFF.
                        We recover the saved faulting CS:EIP/SS:ESP from the VTIB_FLT_SAV* slots. */
                 DWORD event3Retries = 0;   /* GH#18: bounded event-3 (pending-int guard) re-entries */
-                DWORD g_pmfault_dumps = 0;              /* rate-limit the PM-fault byte dump (anti-flood) */
+                DWORD pmFaultDumps = 0;              /* rate-limit the PM-fault byte dump (anti-flood) */
                 DWORD pmStartTick = GetTickCount();   /* headless wall-clock cap origin */
                 for (steps = 0; g_Running && steps < 100000000; ++steps) {  /* run until window close (animation) */
                     DWORD event, eip, csv, vector; int status;
@@ -35340,9 +35340,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                        any non-BOP stop, so we can identify what real hardware reflects as event 3
                        (raw PM #GP) vs the HVF silent-terminate. Rate-limited to the first 32 stops
                        so a client that repeatedly faults can't flood the log (session-9). */
-                    if (event != VDM_EVENT_BOP && g_pmfault_dumps < 32) {
+                    if (event != VDM_EVENT_BOP && pmFaultDumps < 32) {
                         DWORD faultBase = DpmiSelectorBase((WORD)csv);
-                        ++g_pmfault_dumps;
+                        ++pmFaultDumps;
                         const volatile BYTE *faultInstruction = (const volatile BYTE *)(ULONG_PTR)(faultBase + eip);
                         uint32_t selectorAr = 0, selectorLim = 0; DpmiSelectorDescriptor((WORD)csv, &selectorAr, &selectorLim);
                         cursor = LogPut(cursor, "GH#18 PM-FAULT ev=0x"); cursor = LogHex(cursor, event);
