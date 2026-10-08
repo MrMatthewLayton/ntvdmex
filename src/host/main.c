@@ -21922,10 +21922,10 @@ static char *PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, char *cursor)
 
 /* Our BIOS/driver stub BOPs, serviced in one place for the exec loop AND the nested DPMI
    real-mode loop -- defined just above WinMain, where its arms used to live. (GH #247) */
-#define V86BOP_NONE  0      /* not one of v86_bios_bop's numbers                         */
+#define V86BOP_NONE  0      /* not one of V86BiosBop's numbers                         */
 #define V86BOP_DONE  1      /* serviced; EIP is past the BOP, onto the stub's IRET/RETF  */
 #define V86BOP_RERUN 4      /* serviced, still waiting; EIP left ON the BOP to re-execute */
-static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base);
+static int V86BiosBop(volatile BYTE *tib, unsigned bopNumber, char **logCursor, char *base);
 
 /* ── ★★★ THE DEFAULT PM HANDLER FOR A HARDWARE IRQ, WHEN THE GUEST OWNS THE REAL-MODE
      VECTOR: A TRUE NESTED-V86 REFLECTION. (s81, ZAR's streaming audio) ───────────────
@@ -24846,7 +24846,7 @@ static int DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              which abandoned the call as an "unexpected RM event".
                            ► Now ONE rule, the spec's: run IVT[BL] in V86 through the 0302
                              machinery. The nested loop services our stubs' BOPs through
-                             v86_bios_bop(), the same code the exec loop runs, so "our stub" is
+                             V86BiosBop(), the same code the exec loop runs, so "our stub" is
                              just another real-mode handler and needs no special case.
                            ► The host-side 21h/33h/10h arms in `case 0x0300` stay as a FAST
                              PATH, and only where they give the same answer -- see
@@ -26319,7 +26319,7 @@ static int DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 if (rev == VDM_EVENT_BOP) {
                                     DWORD bcs = VDM_REG(tib, VTIB_CS) & 0xFFFF;
                                     if ((bcs == DOS_HDLR_SEG || bcs == DOS_CTAB_SEG)
-                                        && v86_bios_bop(tib, info, &cursor, base) != V86BOP_NONE) {
+                                        && V86BiosBop(tib, info, &cursor, base) != V86BOP_NONE) {
                                         if (cursor != base) { LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
                                         continue;
                                     }
@@ -29051,10 +29051,10 @@ static int V86DeliverDeviceIrq(volatile BYTE *tib)
    V86BOP_DONE (serviced, EIP past the BOP, onto the stub's IRET/RETF) or V86BOP_RERUN
    (serviced, still WAITING -- EIP left on the BOP so it re-executes: INT 16h AH=00h
    with no key, INT 15h AH=86h mid-countdown). */
-#define V86BOP_RET(v) do { *pp = p; return (v); } while (0)
-static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
+#define V86BOP_RET(v) do { *logCursor = cursor; return (v); } while (0)
+static int V86BiosBop(volatile BYTE *tib, unsigned bopNumber, char **logCursor, char *base)
 {
-    char *p = *pp;
+    char *cursor = *logCursor;
     /* ── GH #8 (s91): INT 2Ah / INT 5Ch, the network interface, to whichever device
          claimed them (vdd_net.c). A bus claim on a vector with no stub behind it was
          never delivered: INT 14h works because its BOP is wired here by number, and
@@ -29062,18 +29062,18 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
          are numbers a guest's own BOP may also use (the s78 rule). */
     /* s91 (#315): a GENERIC stub (vdd_plant_generic_ints) -- the slot it sits in names
          the vector; the bus delivers it to whoever claimed it. Only from our stub. */
-    if (bn == DOS_GENSTUB_BOP && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG) {
+    if (bopNumber == DOS_GENSTUB_BOP && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG) {
         DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
         if (ip >= DOS_GENSTUB_OFF && ip < DOS_GENSTUB_OFF + DOS_GENSTUB_N * 4) {
-            NTVDD_REGISTERS r; RegistersLoad(&r, tib);
+            NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
             HOST_LOCK();
-            VddBusDeliverInterrupt(&g_Bus, g_GenericStubVector[(ip - DOS_GENSTUB_OFF) / 4], &r);
+            VddBusDeliverInterrupt(&g_Bus, g_GenericStubVector[(ip - DOS_GENSTUB_OFF) / 4], &registers);
             HOST_UNLOCK();
-            RegistersStore(&r, tib);
+            RegistersStore(&registers, tib);
             {   /* CF into the FLAGS the stub's IRET restores (an INT pushed them) */
-                WORD *pf = (WORD *)(ULONG_PTR)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
+                WORD *flagsWord = (WORD *)(ULONG_PTR)(((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
                                     + (((VDM_REG(tib, VTIB_ESP) & 0xFFFF) + 4) & 0xFFFF));
-                if (r.CarryFlag) *pf |= 1; else *pf &= (WORD)~1;
+                if (registers.CarryFlag) *flagsWord |= 1; else *flagsWord &= (WORD)~1;
             }
             VDM_REG(tib, VTIB_EIP) += 3;
             V86BOP_RET(V86BOP_DONE);
@@ -29083,7 +29083,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
          the exec loop's INT 09h arm because INT 05h is a SOFTWARE interrupt a program may
          issue from anywhere, including a DPMI 0300h -- so the nested loop must serve it
          too. Same number as the INT 09h stub's BOP, told apart by address. */
-    if (bn == 0x09 && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG) {
+    if (bopNumber == 0x09 && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG) {
         DWORD ip = VDM_REG(tib, VTIB_EIP) & 0xFFFF;
         if (ip == DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05_BEGIN || ip == DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05_NEXT) {
             PrintScreenBop(tib, ip == DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05_BEGIN);
@@ -29091,12 +29091,12 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
             V86BOP_RET(V86BOP_DONE);
         }
     }
-    if ((bn == 0x2A || bn == 0x5C) && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG) {
-        NTVDD_REGISTERS r; RegistersLoad(&r, tib);
+    if ((bopNumber == 0x2A || bopNumber == 0x5C) && (VDM_REG(tib, VTIB_CS) & 0xFFFF) == DOS_CTAB_SEG) {
+        NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
         HOST_LOCK();
-        VddBusDeliverInterrupt(&g_Bus, (uint8_t)bn, &r);
+        VddBusDeliverInterrupt(&g_Bus, (uint8_t)bopNumber, &registers);
         HOST_UNLOCK();
-        RegistersStore(&r, tib);
+        RegistersStore(&registers, tib);
         VDM_REG(tib, VTIB_EIP) += 3;
         /* A no-wait NCB's POST routine (vdd_net.h): put one more interrupt frame on
            the guest's stack, below the caller's, so the stub's IRET enters POST with
@@ -29104,44 +29104,44 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
            caller's with IF clear, as a hardware interrupt would enter it. */
         if (g_Net.IsPostPending) {
             DWORD ss = VDM_REG(tib, VTIB_SS) & 0xFFFF, sp = VDM_REG(tib, VTIB_ESP) & 0xFFFF;
-            volatile WORD *fr = (volatile WORD *)(ULONG_PTR)((ss << 4) + sp);
-            WORD fl = fr[2];
+            volatile WORD *frame = (volatile WORD *)(ULONG_PTR)((ss << 4) + sp);
+            WORD flags = frame[2];
             WORD nsp = (WORD)(sp - 6);
-            volatile WORD *nf = (volatile WORD *)(ULONG_PTR)((ss << 4) + nsp);
+            volatile WORD *newFrame = (volatile WORD *)(ULONG_PTR)((ss << 4) + nsp);
             g_Net.IsPostPending = 0;
-            nf[0] = g_Net.PostOffset; nf[1] = g_Net.PostSegment; nf[2] = (WORD)(fl & ~0x0200);
+            newFrame[0] = g_Net.PostOffset; newFrame[1] = g_Net.PostSegment; newFrame[2] = (WORD)(flags & ~0x0200);
             VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & 0xFFFF0000u) | nsp;
         }
         V86BOP_RET(V86BOP_DONE);
     }
-    if (bn == 0x10) {
-        NTVDD_REGISTERS r; RegistersLoad(&r, tib);
+    if (bopNumber == 0x10) {
+        NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
         HOST_LOCK();
-        VddBusDeliverInterrupt(&g_Bus, 0x10, &r);
+        VddBusDeliverInterrupt(&g_Bus, 0x10, &registers);
         HOST_UNLOCK();
         Int10WaitAfter();                     /* #226: 4F07h BL=80h */
-        RegistersStore(&r, tib);
+        RegistersStore(&registers, tib);
         VideoTrapSync();     /* mode 12h: interpret the guest (GH #55) */
         VDM_REG(tib, VTIB_EIP) += 3;
         V86BOP_RET(V86BOP_DONE);
     }
-    if (bn == 0x16) {
-        NTVDD_REGISTERS r; uint8_t ah16; RegistersLoad(&r, tib); ah16 = VddGetAh(&r);
+    if (bopNumber == 0x16) {
+        NTVDD_REGISTERS registers; uint8_t ah16; RegistersLoad(&registers, tib); ah16 = VddGetAh(&registers);
         HOST_LOCK();
-        VddBusDeliverInterrupt(&g_Bus, 0x16, &r);
+        VddBusDeliverInterrupt(&g_Bus, 0x16, &registers);
         HOST_UNLOCK();
         /* A blocking BIOS read with no key must NOT park the exec thread -- doing that
            stops the guest dead, so its timer, its music and its screen freeze until a key
            arrives. (Same fault as INT 21h AH=01/07/08, fixed the same way.) Leave EIP on
            the BOP instead: the guest re-executes INT 16h and keeps taking timer
            interrupts while it waits, which is what a real BIOS spin does. */
-        if ((ah16 == 0x00 || ah16 == 0x10) && r.ZeroFlag != 0 && g_Running) V86BOP_RET(V86BOP_RERUN);
-        RegistersStore(&r, tib);
-        HostSetFlags(tib, r.CarryFlag, r.ZeroFlag);
+        if ((ah16 == 0x00 || ah16 == 0x10) && registers.ZeroFlag != 0 && g_Running) V86BOP_RET(V86BOP_RERUN);
+        RegistersStore(&registers, tib);
+        HostSetFlags(tib, registers.CarryFlag, registers.ZeroFlag);
         VDM_REG(tib, VTIB_EIP) += 3;
         V86BOP_RET(V86BOP_DONE);
     }
-    if (bn == 0x33) {   /* INT 33h mouse  */
+    if (bopNumber == 0x33) {   /* INT 33h mouse  */
         MouseInt33(tib, I33_SRC_V86);
         VDM_REG(tib, VTIB_EIP) += 3;
         V86BOP_RET(V86BOP_DONE);
@@ -29162,13 +29162,13 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
         #define BCF_CLR() (*pflg &= (WORD)~1)
         #define BSETAX(v) (VDM_REG(tib, VTIB_EAX) = \
             (VDM_REG(tib, VTIB_EAX) & 0xFFFF0000u) | ((DWORD)(v) & 0xFFFF))
-        if (bn == 0x11) {
+        if (bopNumber == 0x11) {
             /* Equipment word -- see BiosEquipmentWord(). The serial count
                comes from the VDD that claimed the ports, so this and the
                0040:0000 port base table cannot drift apart. */
             BSETAX(BiosEquipmentWord());
             BCF_CLR();
-        } else if (bn == 0x12) {
+        } else if (bopNumber == 0x12) {
             /* KB of conventional memory. 640 CONTRADICTED OUR OWN MEMORY MAP
                once DOS_MEM_TOP moved to the real EBDA boundary: the MCB chain
                ends at 0x9FC0 and the PSP says 0x9FC0, which is 639K, while
@@ -29177,7 +29177,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                from the map rather than typed, so the two cannot drift. */
             BSETAX(BiosBaseKbOfTop(g_DosMemoryTop));   /* #253 EBDA; #136 the setting */
             BCF_CLR();
-        } else if (bn == 0x15) {
+        } else if (bopNumber == 0x15) {
             unsigned ah15 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
             if (ah15 == 0x88) {                /* extended memory, KB */
                 /* ⚠ THIS ARM IS LOGGED BECAUSE ITS SILENCE COST A WRONG CONCLUSION.
@@ -29206,20 +29206,20 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                      (6.22's MEM: "Memory accessible using Int 15h 0"). */
                 BSETAX((WORD)CMOS_EXTENDED_KB);     /* 15 MB -- the machine, not the XMS pool */
                 BCF_CLR();
-                { char x8[128], *x8q = x8;
-                  x8q = LogPut(x8q, "  INT15 AH=88h extended memory -> 0x3C00 KB\r\n");
-                  LogAppend(LOG_PATH, x8, x8q); SerialOut(x8, x8q); }
+                { char waitLine[128], *waitCursor = waitLine;
+                  waitCursor = LogPut(waitCursor, "  INT15 AH=88h extended memory -> 0x3C00 KB\r\n");
+                  LogAppend(LOG_PATH, waitLine, waitCursor); SerialOut(waitLine, waitCursor); }
             } else if (ah15 == 0x86) {         /* wait CX:DX microseconds (#206) */
-                DWORD us = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                LARGE_INTEGER n;
-                QueryPerformanceCounter(&n);
+                DWORD microseconds = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                LARGE_INTEGER now;
+                QueryPerformanceCounter(&now);
                 if (g_Int15EventEnd) {           /* an AH=83h event is counting: busy */
                     BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8300));
                     BCF_SET(); ++g_Int15Busy;
                 } else if (!g_Int15WaitEnd) {  /* first pass: start the countdown   */
-                    if (us == 0) BCF_CLR();
-                    else { g_Int15WaitEnd = Int15QpcAfterMicroseconds(us); ++g_Int15Waits; handled = 4; }
-                } else if (n.QuadPart >= g_Int15WaitEnd) {
+                    if (microseconds == 0) BCF_CLR();
+                    else { g_Int15WaitEnd = Int15QpcAfterMicroseconds(microseconds); ++g_Int15Waits; handled = 4; }
+                } else if (now.QuadPart >= g_Int15WaitEnd) {
                     g_Int15WaitEnd = 0;        /* elapsed                           */
                     BCF_CLR();
                 } else {
@@ -29227,8 +29227,8 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                        is time to, so a long wait does not burn the CPU the guest's own
                        interrupts and the host's threads need -- a 1 ms nap is far
                        below any wait a program asks this for. */
-                    LARGE_INTEGER f; QueryPerformanceFrequency(&f);
-                    if ((g_Int15WaitEnd - n.QuadPart) * 1000 > 3 * f.QuadPart) Sleep(1);
+                    LARGE_INTEGER frequency; QueryPerformanceFrequency(&frequency);
+                    if ((g_Int15WaitEnd - now.QuadPart) * 1000 > 3 * frequency.QuadPart) Sleep(1);
                     handled = 4;
                 }
             } else if (ah15 == 0x83) {         /* event wait (#206) */
@@ -29241,15 +29241,15 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                     BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8300));
                     BCF_SET(); ++g_Int15Busy;   /* one countdown at a time           */
                 } else {
-                    DWORD us = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                    DWORD microseconds = ((VDM_REG(tib, VTIB_ECX) & 0xFFFF) << 16) | (VDM_REG(tib, VTIB_EDX) & 0xFFFF);
                     WORD es = (WORD)(VDM_REG(tib, VTIB_ES) & 0xFFFF), bx = (WORD)(VDM_REG(tib, VTIB_EBX) & 0xFFFF);
                     g_Int15EventLinear = ((DWORD)es << 4) + bx;
                     *(volatile WORD  *)(ULONG_PTR)0x498 = bx;    /* 40:98 flag pointer  */
                     *(volatile WORD  *)(ULONG_PTR)0x49A = es;
-                    *(volatile DWORD *)(ULONG_PTR)0x49C = us;    /* 40:9C count, us     */
+                    *(volatile DWORD *)(ULONG_PTR)0x49C = microseconds;    /* 40:9C count, us     */
                     *(volatile BYTE  *)(ULONG_PTR)0x4A0 = 0x01;  /* 40:A0 wait active   */
                     ++g_Int15Events;
-                    g_Int15EventEnd = Int15QpcAfterMicroseconds(us ? us : 1);
+                    g_Int15EventEnd = Int15QpcAfterMicroseconds(microseconds ? microseconds : 1);
                     BCF_CLR();
                 }
             } else if (ah15 == 0x85) {         /* SysReq key (#254)              */
@@ -29278,11 +29278,11 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                 unsigned dx84 = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
                 { static int said = 0;
                   if (!said) { said = 1;
-                    char jb[64], *jq = jb;
-                    jq = LogPut(jq, "  INT15 AH=84h joystick, dx=0x");
-                    jq = LogHex(jq, dx84);
-                    jq = LogPut(jq, VddJoystickIsLive(&g_Joystick) ? " (live)\r\n" : " (absent)\r\n");
-                    LogAppend(LOG_PATH, jb, jq); SerialOut(jb, jq); } }
+                    char joystickLine[64], *joystickCursor = joystickLine;
+                    joystickCursor = LogPut(joystickCursor, "  INT15 AH=84h joystick, dx=0x");
+                    joystickCursor = LogHex(joystickCursor, dx84);
+                    joystickCursor = LogPut(joystickCursor, VddJoystickIsLive(&g_Joystick) ? " (live)\r\n" : " (absent)\r\n");
+                    LogAppend(LOG_PATH, joystickLine, joystickCursor); SerialOut(joystickLine, joystickCursor); } }
                 if (!VddJoystickIsLive(&g_Joystick)) {
                     BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
                     BCF_SET();
@@ -29324,14 +29324,14 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                      this arm had already overwritten AH with 0x86, so the log said
                      "ax=0x86de" and only AL was the guest's -- the instrument
                      reporting its own write back as the guest's request. */
-                { char xb[96], *xq = xb;
-                  xq = LogPut(xq, "  INT15 UNIMPL ax=0x");
-                  xq = LogHex(xq, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
-                  xq = LogPut(xq, " bx=0x"); xq = LogHex(xq, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                  xq = LogPut(xq, " cx=0x"); xq = LogHex(xq, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
-                  xq = LogPut(xq, " dx=0x"); xq = LogHex(xq, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-                  xq = LogPut(xq, " es=0x"); xq = LogHex(xq, VDM_REG(tib, VTIB_ES) & 0xFFFF);
-                  xq = LogPut(xq, "\r\n"); LogAppend(LOG_PATH, xb, xq); SerialOut(xb, xq); }
+                { char extendedLine[96], *extendedCursor = extendedLine;
+                  extendedCursor = LogPut(extendedCursor, "  INT15 UNIMPL ax=0x");
+                  extendedCursor = LogHex(extendedCursor, VDM_REG(tib, VTIB_EAX) & 0xFFFF);
+                  extendedCursor = LogPut(extendedCursor, " bx=0x"); extendedCursor = LogHex(extendedCursor, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+                  extendedCursor = LogPut(extendedCursor, " cx=0x"); extendedCursor = LogHex(extendedCursor, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+                  extendedCursor = LogPut(extendedCursor, " dx=0x"); extendedCursor = LogHex(extendedCursor, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+                  extendedCursor = LogPut(extendedCursor, " es=0x"); extendedCursor = LogHex(extendedCursor, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+                  extendedCursor = LogPut(extendedCursor, "\r\n"); LogAppend(LOG_PATH, extendedLine, extendedCursor); SerialOut(extendedLine, extendedCursor); }
                 BSETAX((WORD)((VDM_REG(tib, VTIB_EAX) & 0xFF) | 0x8600));
                 BCF_SET();                     /* AH=86h: unsupported fn */
                 g_BiosUnimplemented[0x15] = 1;
@@ -29341,7 +29341,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                      until here, DOS/4GW takes this CF=1, and exits CLEANLY in 328 ms
                      (STAGE2: complete, run_ms=0x148) without printing a character. */
             }
-        } else if (bn == 0x14) {               /* SERIAL.  GH #45, #9     */
+        } else if (bopNumber == 0x14) {               /* SERIAL.  GH #45, #9     */
             /* ── ★★★ NOW ANSWERED BY THE PART, NOT BY THIS ARM. (GH #9) ──
                  What used to be here was a plausible set of status bits and
                  a transmit that wrote to g_Serial -- THE HOST'S OWN DEBUG
@@ -29365,7 +29365,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
             HOST_UNLOCK();
             RegistersStore(&r14, tib);
             BCF_CLR();
-        } else if (bn == 0x17) {               /* PRINTER, LPT1.  GH #45  */
+        } else if (bopNumber == 0x17) {               /* PRINTER, LPT1.  GH #45  */
             /* Printed output goes to a SPOOL FILE, which is a real printer
                as far as a DOS program can tell and is inspectable afterwards
                -- the alternative was reporting "selected, out of paper"
@@ -29387,10 +29387,10 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
             if (base17 != 0x0378 || !VddLptIsFitted(&g_Comm, 0)) {
                 /* absent printer: nothing, registers as passed */
             } else if (ah17 == 0x00) {         /* print AL                 */
-                BYTE c = (BYTE)(VDM_REG(tib, VTIB_EAX) & 0xFF);
+                BYTE character = (BYTE)(VDM_REG(tib, VTIB_EAX) & 0xFF);
                 /* Shared with the 0x378 port model -- see LptSpoolPut.
                    One printer, two ways in. */
-                if (LptSpoolPut(c)) {
+                if (LptSpoolPut(character)) {
                     BSETAX((WORD)(0x9000 | (VDM_REG(tib, VTIB_EAX) & 0xFF)));
                 } else {
                     /* ── DO NOT REPORT READY WHEN THE BYTE WENT NOWHERE. ──
@@ -29410,7 +29410,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
             } else {
                 g_BiosUnimplemented[0x17] = 1;       /* unknown AH: AX as passed */
             }
-        } else if (bn == 0x13) {               /* disk services  GH #44   */
+        } else if (bopNumber == 0x13) {               /* disk services  GH #44   */
             unsigned ah13 = (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF;
             unsigned dl13 = VDM_REG(tib, VTIB_EDX) & 0xFF;
             PDOS_DISK_GEOMETRY g13 = DiskFor(dl13);
@@ -29441,49 +29441,49 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
             } else if (ah13 == 0x02 || ah13 == 0x03 || ah13 == 0x04) {
                 unsigned nsec = VDM_REG(tib, VTIB_EAX) & 0xFF;
                 unsigned cx13 = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
-                unsigned sec  = cx13 & 0x3F;
+                unsigned seconds  = cx13 & 0x3F;
                 unsigned cyl  = ((cx13 >> 8) & 0xFF) | ((cx13 & 0xC0) << 2);
                 unsigned head = (VDM_REG(tib, VTIB_EDX) >> 8) & 0xFF;
                 DWORD    lba = 0;
-                if (!DosDiskChsToLba(g13, (WORD)cyl, (WORD)head, (WORD)sec, &lba)
+                if (!DosDiskChsToLba(g13, (WORD)cyl, (WORD)head, (WORD)seconds, &lba)
                     || lba + nsec > g13->TotalSectors) {
                     BSETAX(0x0400); g_DiskStatus = 0x04;  /* sector not found */
                     BCF_SET();
                 } else if (ah13 == 0x04) {      /* verify: bounds only     */
                     BSETAX((WORD)nsec); g_DiskStatus = 0; BCF_CLR();
                 } else {
-                    DWORD lin = ((VDM_REG(tib, VTIB_ES) & 0xFFFF) << 4)
+                    DWORD linear = ((VDM_REG(tib, VTIB_ES) & 0xFFFF) << 4)
                               + (VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-                    int ok = DiskIo(dl13, lba, nsec, (BYTE *)(ULONG_PTR)lin,
+                    int isOk = DiskIo(dl13, lba, nsec, (BYTE *)(ULONG_PTR)linear,
                                      ah13 == 0x03);
-                    if (ok) { BSETAX((WORD)nsec); g_DiskStatus = 0; BCF_CLR(); }
+                    if (isOk) { BSETAX((WORD)nsec); g_DiskStatus = 0; BCF_CLR(); }
                     else    { BSETAX(0x0400); g_DiskStatus = 0x04; BCF_SET(); }
                 }
             } else {
                 BSETAX(0x0100); BCF_SET();      /* bad command             */
                 g_BiosUnimplemented[0x13] = 1;
             }
-        } else if (bn == 0x28) {               /* DOS idle                 */
+        } else if (bopNumber == 0x28) {               /* DOS idle                 */
             BCF_CLR();                         /* nothing to yield to      */
-        } else if (bn == 0x29) {               /* fast console output      */
+        } else if (bopNumber == 0x29) {               /* fast console output      */
             /* AL is the character. Programs that hook this expect it to
                PRINT; leaving it as an IRET swallowed the output silently. */
             VddVideoPutChar(&g_Video, (uint8_t)(VDM_REG(tib, VTIB_EAX) & 0xFF));
             BCF_CLR();
-        } else if (bn == 0x25 || bn == 0x26) { /* absolute disk read/write */
+        } else if (bopNumber == 0x25 || bopNumber == 0x26) { /* absolute disk read/write */
             /* AL = drive (0 = A:), CX = sector count, DX = first sector,
                DS:BX = buffer. LBA directly -- no CHS, which is the whole
                point of this pair. The stub RETFs, leaving the caller's
                pushed FLAGS for it to discard; see the stub planting. */
             unsigned drv = VDM_REG(tib, VTIB_EAX) & 0xFF;
-            unsigned cnt = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
-            uint32_t sec = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
+            unsigned count = VDM_REG(tib, VTIB_ECX) & 0xFFFF;
+            uint32_t seconds = VDM_REG(tib, VTIB_EDX) & 0xFFFF;
             PDOS_DISK_GEOMETRY g25 = DiskFor(drv);
-            DWORD lin = ((VDM_REG(tib, VTIB_DS) & 0xFFFF) << 4)
+            DWORD linear = ((VDM_REG(tib, VTIB_DS) & 0xFFFF) << 4)
                       + (VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-            if (!g25) { BSETAX(0x0201); BCF_SET(); g_BiosUnimplemented[bn] = 1; }
-            else if (sec + cnt > g25->TotalSectors) { BSETAX(0x0208); BCF_SET(); }
-            else if (DiskIo(drv, sec, cnt, (BYTE *)(ULONG_PTR)lin, bn == 0x26))
+            if (!g25) { BSETAX(0x0201); BCF_SET(); g_BiosUnimplemented[bopNumber] = 1; }
+            else if (seconds + count > g25->TotalSectors) { BSETAX(0x0208); BCF_SET(); }
+            else if (DiskIo(drv, seconds, count, (BYTE *)(ULONG_PTR)linear, bopNumber == 0x26))
                  { BSETAX(0); BCF_CLR(); }
             else { BSETAX(0x0208); BCF_SET(); }  /* AL=08 sector not found */
         } else handled = 0;
@@ -29493,17 +29493,17 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
         if (handled == 4) V86BOP_RET(V86BOP_RERUN);   /* #206: still waiting -- re-run the BOP */
         if (handled) { VDM_REG(tib, VTIB_EIP) += 3; V86BOP_RET(V86BOP_DONE); }
     }
-    if (bn == 0x1A) {   /* INT 1Ah BIOS time */
-        NTVDD_REGISTERS r; RegistersLoad(&r, tib);
+    if (bopNumber == 0x1A) {   /* INT 1Ah BIOS time */
+        NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
         HOST_LOCK();
-        VddBusDeliverInterrupt(&g_Bus, 0x1A, &r);
+        VddBusDeliverInterrupt(&g_Bus, 0x1A, &registers);
         HOST_UNLOCK();
-        RegistersStore(&r, tib);
-        HostSetFlags(tib, r.CarryFlag, r.ZeroFlag);
+        RegistersStore(&registers, tib);
+        HostSetFlags(tib, registers.CarryFlag, registers.ZeroFlag);
         VDM_REG(tib, VTIB_EIP) += 3;
         V86BOP_RET(V86BOP_DONE);
     }
-    if (bn == 0x2F) {   /* INT 2Fh multiplex */
+    if (bopNumber == 0x2F) {   /* INT 2Fh multiplex */
         DWORD ax = VDM_REG(tib, VTIB_EAX) & 0xFFFF;
         /* ── AX ALONE IS NOT THE CALL. ───────────────────────────────────────
              INT 2Fh is a multiplex: the function is AX, but the REQUEST is in
@@ -29522,24 +29522,24 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
              make a log readable, and a 211 MB file over SMB is its own outage.
            ⇒ 512 lines, then one line saying so. The first 512 are where any
              INT 2Fh answer worth reading is. */
-        { static DWORD n2f = 0;
-          if (++n2f == 513) {
-              p = LogPut(p, "STAGE2: BOP2F ... CAPPED at 512 lines (guest is looping)\r\n");
-              LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
+        { static DWORD count2F = 0;
+          if (++count2F == 513) {
+              cursor = LogPut(cursor, "STAGE2: BOP2F ... CAPPED at 512 lines (guest is looping)\r\n");
+              LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
           }
-          if (n2f > 512) goto bop2f_serviced; }
-        p = LogPut(p, "STAGE2: BOP2F ax=0x"); p = LogHex(p, ax);
-        p = LogPut(p, " bx=0x");  p = LogHex(p, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
-        p = LogPut(p, " cx=0x");  p = LogHex(p, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
-        p = LogPut(p, " dx=0x");  p = LogHex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-        p = LogPut(p, " ds:si=0x"); p = LogHex(p, VDM_REG(tib, VTIB_DS) & 0xFFFF);
-        p = LogPut(p, ":0x");     p = LogHex(p, VDM_REG(tib, VTIB_ESI) & 0xFFFF);
-        p = LogPut(p, " es:di=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
-        p = LogPut(p, ":0x");     p = LogHex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
-        p = LogPut(p, " from=0x"); p = LogHex(p, VDM_REG(tib, VTIB_CS) & 0xFFFF);
-        p = LogPut(p, ":0x");     p = LogHex(p, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
-        p = LogPut(p, "\r\n");
-        LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
+          if (count2F > 512) goto bop2f_serviced; }
+        cursor = LogPut(cursor, "STAGE2: BOP2F ax=0x"); cursor = LogHex(cursor, ax);
+        cursor = LogPut(cursor, " bx=0x");  cursor = LogHex(cursor, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
+        cursor = LogPut(cursor, " cx=0x");  cursor = LogHex(cursor, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
+        cursor = LogPut(cursor, " dx=0x");  cursor = LogHex(cursor, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+        cursor = LogPut(cursor, " ds:si=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_DS) & 0xFFFF);
+        cursor = LogPut(cursor, ":0x");     cursor = LogHex(cursor, VDM_REG(tib, VTIB_ESI) & 0xFFFF);
+        cursor = LogPut(cursor, " es:di=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+        cursor = LogPut(cursor, ":0x");     cursor = LogHex(cursor, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+        cursor = LogPut(cursor, " from=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_CS) & 0xFFFF);
+        cursor = LogPut(cursor, ":0x");     cursor = LogHex(cursor, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
+        cursor = LogPut(cursor, "\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
     bop2f_serviced:
         /* ── "NO XMS" MEANS NOT ANSWERING, NOT ANSWERING BADLY. ────────────
              A machine with no HIMEM.SYS does not reply to 4300 at all, so AL
@@ -29564,9 +29564,9 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
             VDM_SET16(tib, VTIB_ESI, 0);
             VDM_SET16(tib, VTIB_ES,  DOS_HDLR_SEG);
             VDM_SET16(tib, VTIB_EDI, DPMI_ENTRY_OFF);
-            p = LogPut(p, "STAGE2: DPMI 1687 -> AX=0 ES:DI=0x"); p = LogHex(p, DOS_HDLR_SEG);
-            p = LogPut(p, ":0x"); p = LogHex(p, DPMI_ENTRY_OFF); p = LogPut(p, " (guest must far-call this)\r\n");
-            LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
+            cursor = LogPut(cursor, "STAGE2: DPMI 1687 -> AX=0 ES:DI=0x"); cursor = LogHex(cursor, DOS_HDLR_SEG);
+            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, DPMI_ENTRY_OFF); cursor = LogPut(cursor, " (guest must far-call this)\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
         } else if (ax == 0x122E) {
             /* ── THE TABLES XP's COMMAND.COM ASKS FOR BEFORE IT PRINTS. ────
                  DL selects; ES:DI comes back as a far pointer. It zeroes
@@ -29601,11 +29601,11 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                 VDM_SET16(tib, VTIB_ES,  0);      /* DL=6, and anything else */
                 VDM_SET16(tib, VTIB_EDI, 0);
             }
-            p = LogPut(p, "STAGE2: 2F/122E dl="); p = LogHexByte(p, (unsigned)dl2e);
-            p = LogPut(p, " -> ES:DI=0x"); p = LogHex(p, VDM_REG(tib, VTIB_ES) & 0xFFFF);
-            p = LogPut(p, ":0x"); p = LogHex(p, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
-            p = LogPut(p, "\r\n");
-            LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
+            cursor = LogPut(cursor, "STAGE2: 2F/122E dl="); cursor = LogHexByte(cursor, (unsigned)dl2e);
+            cursor = LogPut(cursor, " -> ES:DI=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_ES) & 0xFFFF);
+            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EDI) & 0xFFFF);
+            cursor = LogPut(cursor, "\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
         } else if (ax == 0x1684) {                          /* get device API entry point */
             /* ES:DI = 0:0 means "no API for that device ID", and we have none.
                ⚠ Leaving the registers alone would be a POINTER-RETURNING call
@@ -29616,8 +29616,8 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
                  not something to rely on from other callers. */
             VDM_SET16(tib, VTIB_ES, 0);
             VDM_SET16(tib, VTIB_EDI, 0);
-            p = LogPut(p, "STAGE2: 2F/1684 device API -> none (ES:DI=0)\r\n");
-            LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
+            cursor = LogPut(cursor, "STAGE2: 2F/1684 device API -> none (ES:DI=0)\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
         }
         /* ── The rest of what krnl386 asks INT 2Fh (as logged), and why leaving
              it alone is the RIGHT answer rather than merely the easy one:
@@ -29634,7 +29634,7 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
         VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the IRET (CF) */
         V86BOP_RET(V86BOP_DONE);
     }
-    if (bn == 0x43) {   /* XMS API far-call entry */
+    if (bopNumber == 0x43) {   /* XMS API far-call entry */
         /* ── LOG WHO CALLED, NOT JUST WHAT THEY ASKED. (GH #47) ───────────
              This printed AH and nothing else, so "MEM asks the version twice
              and stops" was all we could see -- not WHERE it stops, which is
@@ -29648,23 +29648,23 @@ static int v86_bios_bop(volatile BYTE *tib, unsigned bn, char **pp, char *base)
         {   DWORD sp43 = ((VDM_REG(tib, VTIB_SS) & 0xFFFF) << 4)
                        + (VDM_REG(tib, VTIB_ESP) & 0xFFFF);
             const volatile BYTE *st43 = (const volatile BYTE *)(ULONG_PTR)sp43;
-            p = LogPut(p, " XMS AH=0x");
-            p = LogHexByte(p, (unsigned)((VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF));
-            p = LogPut(p, " BL=0x"); p = LogHexByte(p, (unsigned)(VDM_REG(tib, VTIB_EBX) & 0xFF));
-            p = LogPut(p, " DX=0x"); p = LogHex(p, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
-            p = LogPut(p, " <- caller ");
-            p = LogHex(p, (DWORD)(st43[2] | (st43[3] << 8)));   /* return CS */
-            p = LogPut(p, ":");
-            p = LogHex(p, (DWORD)(st43[0] | (st43[1] << 8)));   /* return IP */
-            p = LogPut(p, "\r\n"); }
-        LogAppend(LOG_PATH, base, p); p = base;
+            cursor = LogPut(cursor, " XMS AH=0x");
+            cursor = LogHexByte(cursor, (unsigned)((VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF));
+            cursor = LogPut(cursor, " BL=0x"); cursor = LogHexByte(cursor, (unsigned)(VDM_REG(tib, VTIB_EBX) & 0xFF));
+            cursor = LogPut(cursor, " DX=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EDX) & 0xFFFF);
+            cursor = LogPut(cursor, " <- caller ");
+            cursor = LogHex(cursor, (DWORD)(st43[2] | (st43[3] << 8)));   /* return CS */
+            cursor = LogPut(cursor, ":");
+            cursor = LogHex(cursor, (DWORD)(st43[0] | (st43[1] << 8)));   /* return IP */
+            cursor = LogPut(cursor, "\r\n"); }
+        LogAppend(LOG_PATH, base, cursor); cursor = base;
         HostXms(tib);
         VDM_REG(tib, VTIB_EIP) += 3;                        /* -> the RETF      */
         V86BOP_RET(V86BOP_DONE);
     }
-    if (bn == 0x67) {   /* INT 67h EMM (EMS) */
-        p = LogPut(p, " EMS AH=0x"); p = LogHex(p, (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF); p = LogPut(p, "\r\n");
-        LogAppend(LOG_PATH, base, p); p = base;
+    if (bopNumber == 0x67) {   /* INT 67h EMM (EMS) */
+        cursor = LogPut(cursor, " EMS AH=0x"); cursor = LogHex(cursor, (VDM_REG(tib, VTIB_EAX) >> 8) & 0xFF); cursor = LogPut(cursor, "\r\n");
+        LogAppend(LOG_PATH, base, cursor); cursor = base;
         HOST_LOCK();
         HostEms(tib);
         HOST_UNLOCK();
@@ -29869,7 +29869,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         { 0x15, 0x15 }, { 0x17, 0x17 }, { 0x25, 0x25 }, { 0x26, 0x26 },
         { 0x20, 0x30 },                                  /* GH #46: see above */
         { 0x27, 0x27 }, { 0x28, 0x28 }, { 0x29, 0x29 },
-        { 0x2A, 0x2A }, { 0x5C, 0x5C },                  /* GH #8 (s91): NetBIOS, see v86_bios_bop */
+        { 0x2A, 0x2A }, { 0x5C, 0x5C },                  /* GH #8 (s91): NetBIOS, see V86BiosBop */
     };
     static const BYTE emmname[] = { 'E','M','M','X','X','X','X','0' };  /* EMS device header name */
     HANDLE ui = NULL;
@@ -33256,8 +33256,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         /* Route the BOP by its number.
            ── The BOP numbers our stubs share with the nested DPMI loop: INT 10h/16h/33h,
              the BIOS block (11h-17h, 25h/26h, 28h/29h), 1Ah, 2Fh, the XMS entry and
-             INT 67h. One copy, in v86_bios_bop() (GH #247). */
-        {   int vb = v86_bios_bop(tib, VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF, &p, base);
+             INT 67h. One copy, in V86BiosBop() (GH #247). */
+        {   int vb = V86BiosBop(tib, VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF, &p, base);
             if (vb != V86BOP_NONE) continue;          /* DONE or RERUN: both resume the guest */
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF) == MS_CB_BOP) {   /* INT 33h handler returned */
@@ -33363,7 +33363,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         }
         {   /* ---- INT 20h / 22h (BOP 30h) and INT 27h: they END the program, so they stay
                here -- only the exec loop can terminate a run or return to a parent.
-               The rest of the BIOS block moved to v86_bios_bop() (GH #247). */
+               The rest of the BIOS block moved to V86BiosBop() (GH #247). */
             unsigned bn = VDM_REG(tib, VTIB_EVENT_INFO) & 0xFF;
             int handled = 1;
             if (bn == 0x30) {               /* INT 20h: terminate       */
