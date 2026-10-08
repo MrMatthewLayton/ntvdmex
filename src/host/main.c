@@ -2781,7 +2781,7 @@ static INT    g_ComFailed[COMM_MAX_PORTS];
      fits COM3 and a guest transmits on it. */
 static PCSTR const g_ComSpoolName[COMM_MAX_PORTS] =
     { "SERIAL1.TXT", "SERIAL2.TXT", "SERIAL3.TXT", "SERIAL4.TXT" };
-#define g_com_spool_path(i) OUT_(g_ComSpoolName[i])
+#define COMM_SPOOL_PATH(i) OUT_(g_ComSpoolName[i])
 /* Opened lazily on the first byte, so a run that never transmits leaves no file
    to confuse the next one -- and flushed per byte, because a VDM is far more
    often killed than exited and an unflushed buffer would read as "nothing was
@@ -2791,7 +2791,7 @@ static VOID ComTransmitSink(PVOID context, INT port, BYTE byteValue)
     (VOID)context;
     if (port < 0 || port >= COMM_MAX_PORTS || g_ComFailed[port]) return;
     if (g_ComSpool[port] == INVALID_HANDLE_VALUE) {
-        g_ComSpool[port] = CreateFileA(g_com_spool_path(port), GENERIC_WRITE,
+        g_ComSpool[port] = CreateFileA(COMM_SPOOL_PATH(port), GENERIC_WRITE,
                                         FILE_SHARE_READ, NULL, CREATE_ALWAYS,
                                         FILE_ATTRIBUTE_NORMAL, NULL);
         if (g_ComSpool[port] == INVALID_HANDLE_VALUE) { g_ComFailed[port] = 1; return; }
@@ -17263,7 +17263,7 @@ static INT HostWritable(PVOID pointer, SIZE_T length)
 static INT g_VehCount = 0;
 
 /* ── THE FATAL DUMP, SHARED. (session 62) ────────────────────────────────────────
-     Factored out of the VEH's veh_fatal arm so the LAST-CHANCE filter below can
+     Factored out of the VEH's fatalDump arm so the LAST-CHANCE filter below can
      produce the same dump for a real-mode run -- until now `!g_DpmiPm` bailed at
      the top of the VEH, so a host fault under a V86-only guest fell through to WER
      and the log just STOPPED. Mario and Heretic both died blind that way (10-game
@@ -17576,7 +17576,7 @@ static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
               if ((DWORD)context->Edx != (DWORD)g_PmEntryEip || g_PmEntryEip < 0) {
                   cursor = LogPut(cursor, " -> REAL fault (EDX is not the entry EIP): FATAL dump");
                   cursor = LogPut(cursor, "\r\n");
-                  goto veh_fatal;                       /* the label flushes cb */
+                  goto fatalDump;                       /* the label flushes cb */
               }
               if (g_PmEntryEip >= 0 && (DWORD)g_PmEntryEip != context->Eip) {
                   cursor = LogPut(cursor, " -> FAULT, not an INT: resuming at ENTRY 0x");
@@ -17617,7 +17617,7 @@ static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
     }
 
     /* --- genuine (non-reflected) PM fault: full dump + clean exit -------------------- */
-veh_fatal:
+fatalDump:
     LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);     /* flush the arm's context first;   */
     HostFatalDump(record, context);                            /* the dump has its own buffer. The */
     return EXCEPTION_CONTINUE_SEARCH;                   /* old inline dump overflowed cb.   */
@@ -21117,7 +21117,7 @@ static INT DpmiDispatchToPmHandler(DOS_MACHINE *machine, volatile BYTE *tib,
     VDM_SET16(tib, VTIB_CS, g_PmInt[vector].Selector);
     VDM_REG(tib, VTIB_EIP) = isClient32 ? g_PmInt[vector].Offset : (g_PmInt[vector].Offset & 0xFFFF);
 
-    if (!loud) goto quiet_entry;
+    if (!loud) goto quietEntry;
     if (isFirstDispatch) ++g_PmDispatchLogged[dispatchVector][dispatchAh];
     lineCursor = LogPut(lineCursor, "PM INT 0x"); lineCursor = LogHex(lineCursor, vector);
     lineCursor = LogPut(lineCursor, " -> CLIENT handler 0x"); lineCursor = LogHex(lineCursor, g_PmInt[vector].Selector);
@@ -21170,7 +21170,7 @@ static INT DpmiDispatchToPmHandler(DOS_MACHINE *machine, volatile BYTE *tib,
                       " total at STAGE2)\r\n");
         LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor); lineCursor = lineBuffer;
     }
-quiet_entry:
+quietEntry:
 
     g_PmDispatch[vector] = 1;
     for (phase = 0; phase < 4096 && !done; ++phase) {
@@ -23541,7 +23541,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     INT  canYield = g_WowSchedOn && frame.Id == WOWUSER_GETMESSAGE
                                 && g_WowWindowNested == 0 && !WowDlgActive()
                                 && messageTask && messageTask != 0xFFFF && !WowSchedInterTaskLive();
-                ws_again_e:
+                wowSchedRetry:
                     if (canYield && !WowMsgCountFor(messageTask)) {
                         WORD yieldFrom = messageTask;
                         INT  yieldSlotIndex  = WowSchedRunnable(yieldFrom, g_WowCallDepth);
@@ -23699,7 +23699,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             cursor = LogPut(cursor, "     WOWSCHED: a parked task's message arrived"
                                         " -- yielding to it\r\n");
                             WowLogFlush(base, &cursor);
-                            goto ws_again_e;
+                            goto wowSchedRetry;
                         }
                         WowLogFlush(base, &cursor);
                     }
@@ -26943,7 +26943,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             DWORD al = ax & 0xFF;
                             if (al != 0x00 && al != 0x06 && al != 0x07 &&
                                 al != 0x08 && al != 0x09 && al != 0x0E)
-                                goto pm_int21_unhandled;
+                                goto pmInt21Unhandled;
                         }
                         /* AH=06h direct console I/O is register-only in BOTH directions
                            (DL=char out, DL=FFh -> AL=char in, ZF), so it thunks with no
@@ -27127,7 +27127,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             VDM_REG(tib, VTIB_EIP) += 2;
                             return 1;
                         }
-                    pm_int21_unhandled:
+                    pmInt21Unhandled:
                         /* ── ★★★★ INT 21h AX=FF80h -- "LOCK THIS MEMORY", AND THE ANSWER
                              HERE IS YES. ─────────────────────────────────────────────────
                              Rational's DOS/16M asks its host to lock a region through this
@@ -27545,21 +27545,21 @@ static INT WowCall16Sync(DWORD proc, WORD ds, const WORD *args, INT argumentCoun
      (winmm asks in NotifyCallbackData, the first thing MMSYSTEM calls). */
 typedef struct {
     DWORD  Version;
-    PVOID (*GetVdmPointer)(DWORD vp, DWORD cb, BOOL pm);
-    HANDLE (*Handle32)(WORD h16, DWORD type);
-    WORD   (*Handle16)(HANDLE h32, DWORD type);
-    BOOL   (*Callback16Ex)(DWORD vpfn, DWORD flags, DWORD cb, PVOID args, DWORD *ret);
-    VOID   (*IcaInterrupt)(INT ms, BYTE line, INT count);
+    PVOID (*GetVdmPointer)(DWORD segmentedAddress, DWORD byteCount, BOOL isProtectedMode);
+    HANDLE (*Handle32)(WORD handle16, DWORD handleType);
+    WORD   (*Handle16)(HANDLE handle32, DWORD handleType);
+    BOOL   (*Callback16Ex)(DWORD segmentedFunction, DWORD flags, DWORD argumentBytes, PVOID arguments, DWORD *returnValue);
+    VOID   (*IcaInterrupt)(INT picAdapter, BYTE line, INT count);
     VOID   (*Yield16)(VOID);
-    VOID   (*Log)(PCSTR what);
+    VOID   (*Log)(PCSTR message);
     /* version 2 (s91, #309): krnl386's global heap -- see ShimGlobal16 */
-    DWORD  (*Global16)(INT op, DWORD a, DWORD b);
+    DWORD  (*Global16)(INT operation, DWORD firstArgument, DWORD secondArgument);
     /* version 3 (s91, #11): the VDD service API -- see "THIRD-PARTY VDDs" below */
-    DWORD  (*GetRegister)(INT r);
-    VOID   (*SetRegister)(INT r, DWORD v);
-    PVOID (*MapFlat)(WORD seg, DWORD off, INT pm);
-    BOOL   (*InstallIoHook)(HANDLE hvdd, WORD n, PCVOID ranges, PCVOID handlers);
-    VOID   (*RemoveIoHook)(HANDLE hvdd, WORD n, PCVOID ranges);
+    DWORD  (*GetRegister)(INT registerIndex);
+    VOID   (*SetRegister)(INT registerIndex, DWORD value);
+    PVOID (*MapFlat)(WORD segment, DWORD offset, INT isProtectedMode);
+    BOOL   (*InstallIoHook)(HANDLE vddHandle, WORD rangeCount, PCVOID ranges, PCVOID handlers);
+    VOID   (*RemoveIoHook)(HANDLE vddHandle, WORD rangeCount, PCVOID ranges);
 } NTVDMEX_SHIM_API;
 
 
@@ -29527,7 +29527,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
               cursor = LogPut(cursor, "STAGE2: BOP2F ... CAPPED at 512 lines (guest is looping)\r\n");
               LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
           }
-          if (count2F > 512) goto bop2f_serviced; }
+          if (count2F > 512) goto bop2FServiced; }
         cursor = LogPut(cursor, "STAGE2: BOP2F ax=0x"); cursor = LogHex(cursor, ax);
         cursor = LogPut(cursor, " bx=0x");  cursor = LogHex(cursor, VDM_REG(tib, VTIB_EBX) & 0xFFFF);
         cursor = LogPut(cursor, " cx=0x");  cursor = LogHex(cursor, VDM_REG(tib, VTIB_ECX) & 0xFFFF);
@@ -29540,7 +29540,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
         cursor = LogPut(cursor, ":0x");     cursor = LogHex(cursor, VDM_REG(tib, VTIB_EIP) & 0xFFFF);
         cursor = LogPut(cursor, "\r\n");
         LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-    bop2f_serviced:
+    bop2FServiced:
         /* ── "NO XMS" MEANS NOT ANSWERING, NOT ANSWERING BADLY. ────────────
              A machine with no HIMEM.SYS does not reply to 4300 at all, so AL
              keeps whatever the caller put there and the caller reads "not
@@ -35508,7 +35508,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                      that also changes behaviour is not an instrument. */
                 quiet = (g_NtvdmBopCount > 64) || (g_NtvdmBopCount > 16 && !novel);
             }
-            if (quiet) goto ntvdm_bop_dispatch;
+            if (quiet) goto ntvdmBopDispatch;
             cursor = LogPut(cursor, "STAGE2: NTVDM BOP from guest: bop=0x"); cursor = LogHexByte(cursor, bopNumber);
             cursor = LogPut(cursor, " sub=0x"); cursor = LogHexByte(cursor, sub);
             cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, codeSegment); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, instructionPointer);
@@ -35553,7 +35553,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 cursor = LogPut(cursor, "]"); } }
             cursor = LogPut(cursor, "\r\n");
             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-        ntvdm_bop_dispatch:
+        ntvdmBopDispatch:
             /* ── ★ sub 01 = "WHAT SHOULD I RUN NEXT?" -- ANSWER "NOTHING". ───────────
                  On XP this is answered from CSRSS's GetNextVDMCommand (VDM_COMMAND_INFO).
                  The guest's request block is at DS:DX -- (DS<<4)+DX, exactly as we
@@ -35611,14 +35611,14 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 /* ⚠ DUMPED BEFORE WE WRITE ANYTHING. Logging it after the BW()s below
                      would show our own zeros back and read as the guest's input --
                      which is the whole class of mistake this file keeps catching. */
-                if (quiet) goto blk_written;
+                if (quiet) goto blockWritten;
                 cursor = LogPut(cursor, "         blk in="); cursor = LogDump(cursor, (const VOID *)blockBytes, 0x28);
                 cursor = LogPut(cursor, "\r\n         +1C:1E=0x");
                 cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + 0x1C)); cursor = LogPut(cursor, ":0x");
                 cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + 0x1E));
                 cursor = LogPut(cursor, " +20=0x"); cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + 0x20));
                 cursor = LogPut(cursor, "\r\n");
-                blk_written: ;
+                blockWritten: ;
                 /* ── ★★ TOUCH AS LITTLE AS POSSIBLE. ────────────────────────────────
                      The first cut zeroed every field that XP's handler writes. One of
                      them, `+0x04`, is the DEFAULT DRIVE -- COMMAND.COM selects it with

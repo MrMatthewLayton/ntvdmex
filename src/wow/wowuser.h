@@ -994,8 +994,8 @@ static WORD g_WowUserClipboardFormat;  /* SetClipboardData's format, for the put
    header must not see host internals. See the note beside them. */
 INT  WowCommOpen(PCSTR dev);
 INT  WowCommClose(INT id);
-INT  WowCommRead(INT id, PBYTE buf, INT n);
-INT  WowCommWrite(INT id, PCBYTE buf, INT n);
+INT  WowCommRead(INT port, PBYTE buffer, INT count);
+INT  WowCommWrite(INT port, PCBYTE buffer, INT count);
 INT  WowCommInqueue(INT id);
 VOID WowCommDtr(INT id, INT on);
 VOID WowCommRts(INT id, INT on);

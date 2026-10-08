@@ -369,7 +369,7 @@ typedef struct _VIDEO_STATE {
     VOID   (*YMapSelect)(PVOID ctx, INT mask);
     VOID   (*YMapWriteMode)(PVOID ctx, INT wmode);   /* GC write mode changed */
     VOID   (*YMapReadMap)(PVOID ctx, INT Planes); /* GR4 read-plane changed -- see VideoGcSetData */
-    BYTE *(*YMapPlane)(PVOID ctx, INT p);
+    BYTE *(*YMapPlane)(PVOID context, INT plane);
     BYTE  WriteMode;   /* GR5 bits0-1                                          */
     BYTE  BitMask;     /* GR8 (reset 0xFF)                                     */
     BYTE  Latch[4];     /* per-plane read latches                               */
