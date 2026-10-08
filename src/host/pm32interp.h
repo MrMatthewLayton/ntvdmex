@@ -44,7 +44,7 @@
 #define PM32_SIB_NO_INDEX    4
 #define PM32_MODRM_SIB_LENGTH 2
 #define PM32_MODRM_DISP32_LENGTH 5
-/* Prefixes. */
+/* The x86 encoding facts both interpreters share are in ntvdmex_x86.h (X86_*). */
 /* The ALU group (00..3F, and 80/81/83's /r): its operations and forms. */
 #define PM32_ALU_FORMS 6                /* forms 6/7 are other instructions          */
 #define PM32_FORM_FROM_REGISTER_END 2   /* forms 0/1: r/m op= reg                   */
@@ -59,8 +59,7 @@
 #define PM32_CC_SIGN 4
 #define PM32_CC_PARITY 5
 #define PM32_CC_LESS 6
-/* Shifts and rotates (C0/C1/D0-D3's /r). */
-/* Groups 3 and 5. */
+/* Group 3. */
 #define PM32_GROUP3_TEST 0
 #define PM32_GROUP3_TEST_ALIAS 1
 #define PM32_OUT_BIT 2                  /* E4-E7/EC-EF: bit 1 = OUT                  */

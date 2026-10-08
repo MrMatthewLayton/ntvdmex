@@ -33,9 +33,8 @@
 #define V86_FLAGS_MODELLED     0x0ED5u     /* CF PF AF ZF SF TF IF DF OF: the flags kept */
 #define V86_LAHF_FLAGS         0xD5u       /* SF ZF AF PF CF: what LAHF/SAHF move        */
 
-/* Operand widths, masks and signs (the u-suffixed ones are unsigned; the
-   V86_LOW_* are int, where the expression they replaced was). */
-/* Registers and segments, in the instruction set's order. */
+/* The x86 encoding facts both interpreters share -- ModRM fields, opcode extensions, sign
+   bits, register counts -- are in ntvdmex_x86.h (X86_*). What follows is this one's own. */
 /* ModRM (16-bit addressing). */
 #define V86_MODE_DISP16    2
 #define V86_THIRD_BYTE     2      /* byte offsets of a dword's upper half        */
@@ -65,7 +64,6 @@
 #define V86_ALU_FORM_REG       3  /* r, r/m     */
 #define V86_ALU_FORM_AL_IMM    4  /* AL, imm8   */
 #define V86_ALU_FORM_COUNT     6
-/* Shift/rotate operations (group 2's reg field). */
 /* Condition codes (the low nibble of Jcc/SETcc). */
 #define V86_CC_OVERFLOW         0x0
 #define V86_CC_NOT_OVERFLOW     0x1
