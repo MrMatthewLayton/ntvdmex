@@ -428,7 +428,7 @@ static DOS_SAFE_SKIPS g_Safe;           /* s90 #132: all zero unless SAFE MODE (
 #define CPUSPD_PATH      CFG_("cpuspd.txt")
 /* Throttle granularity (target run/hold period, ms). 0/absent = auto-detect. */
 #define CPUGRAN_PATH     CFG_("cpugran.txt")
-/* cpuaff.txt = 1 -> pin the guest to a core of its own (see cpuaff_apply). */
+/* cpuaff.txt = 1 -> pin the guest to a core of its own (see CpuAffinityApply). */
 #define CPUAFF_PATH      CFG_("cpuaff.txt")
 #define DOSVER_PATH      CFG_("dosver.txt")
 /* INT 21h AH=53h's private AL sub-functions. A knob because the measured values are
@@ -1788,7 +1788,7 @@ static DWORD          g_Irq0NoteCs, g_Irq0NoteIp;      /* set by the caller     
                       75% of attempts). A courier that retries OUTSIDE g_Lock fixes
                       this and nothing else.
        B  GENERATION  the tick was never raised at all, because host_pit_sync could
-                      not run -- every caller takes g_Lock and host_audio_fill holds
+                      not run -- every caller takes g_Lock and HostAudioFill holds
                       it across a whole buffer mix. A gap with NO RAISES inside it is
                       not a delivery fault, and a courier cannot fix it: there is
                       nothing pending to deliver. The fix would be the lock.
@@ -6673,13 +6673,13 @@ static void CpuSpeedRecompute(void)
  */
 static int   g_CpuAffinityOn;              /* cpuaff.txt = 1 (file knob only): pin the guest */
 static DWORD g_CpuAffinityGuest, g_CpuAffinityRest, g_CpuAffinityCpuCount;   /* what we chose       */
-static void cpuaff_apply(void)
+static void CpuAffinityApply(void)
 {
-    SYSTEM_INFO si;
+    SYSTEM_INFO systemInfo;
     DWORD_PTR procmask = 0, sysmask = 0;
     if (!g_CpuAffinityOn || !g_HostCpu) return;
-    GetSystemInfo(&si);
-    g_CpuAffinityCpuCount = si.dwNumberOfProcessors;
+    GetSystemInfo(&systemInfo);
+    g_CpuAffinityCpuCount = systemInfo.dwNumberOfProcessors;
     if (g_CpuAffinityCpuCount < 2) return;     /* one core: nothing to separate */
     if (!GetProcessAffinityMask(GetCurrentProcess(), &procmask, &sysmask) || !procmask)
         return;
@@ -6697,7 +6697,7 @@ static void cpuaff_apply(void)
 }
 
 #define CPUSPD_RUN_MIN_US 100ul   /* #225: shortest spun run slice */
-static DWORD WINAPI cpuspeed_thread(LPVOID param)
+static DWORD WINAPI CpuSpeedThread(LPVOID param)
 {
     /* ── ★★★ THE CLOSED-LOOP THROTTLE. The whole control law is CpuSpeedStep (the
          long note in cpuspeed.h); this loop only FEEDS it two measured numbers and
@@ -6717,23 +6717,23 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
        ► T IS WINDOWED and rebaselines only when the guest is at or ahead of target
          (CpuSpeedStep's *reset), which banks no credit for having run slow, absorbs
          a stall, and keeps the 64-bit totals small. */
-    LARGE_INTEGER w_win;                 /* wall origin of the current window         */
-    LARGE_INTEGER w_run0;                /* wall clock at the last resume (run start)  */
-    LONG e_run0;                         /* exec clock at the last resume (run start)  */
-    unsigned long long E = 0ull;         /* guest execution this window, microseconds  */
-    int clock_set = 0;                   /* g_StartMs anchored at first throttled catch */
-    unsigned last_duty = 10000u;         /* the duty the current window was priced at   */
-    const unsigned long long CAP_US = (unsigned long long)CPUSPEED_MAX_OFF_MS * 1000ull;
+    LARGE_INTEGER wWin;                 /* wall origin of the current window         */
+    LARGE_INTEGER wRun0;                /* wall clock at the last resume (run start)  */
+    LONG eRun0;                         /* exec clock at the last resume (run start)  */
+    unsigned long long executedUs = 0ull;         /* guest execution this window, microseconds  */
+    int clockSet = 0;                   /* g_StartMs anchored at first throttled catch */
+    unsigned lastDuty = 10000u;         /* the duty the current window was priced at   */
+    const unsigned long long cAPMicroseconds = (unsigned long long)CPUSPEED_MAX_OFF_MS * 1000ull;
     (void)param;
     /* Above the guest, so a hold is actually a hold; below the audio pump and the PIT
        pacer, so throttling can never starve the clock or the mixer. */
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
-    cpuaff_apply();
+    CpuAffinityApply();
     if (g_CpuAffinityRest) SetThreadAffinityMask(GetCurrentThread(), g_CpuAffinityRest);
     g_StartMs = GetTickCount();
-    QueryPerformanceCounter(&w_win);
-    w_run0 = w_win;
-    e_run0 = ExecMicrosecondsNow();
+    QueryPerformanceCounter(&wWin);
+    wRun0 = wWin;
+    eRun0 = ExecMicrosecondsNow();
     while (g_Running) {
         /* #225: a real-mode program has its own share -- see CpuSpeedRealModeDutyBp. g_DpmiPm
            is set for the whole life of a protected-mode client, so this does not flip at
@@ -6743,8 +6743,8 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
         if (duty >= 10000u) {            /* Unlimited: no hold, no window to keep */
             if (g_CpuSpeedCatchRequest) { InterlockedExchange(&g_CpuSpeedCatchRequest, 0);
                                       if (g_CpuSpeedRelease) SetEvent(g_CpuSpeedRelease); }
-            E = 0ull; clock_set = 0; last_duty = duty; Sleep(4);
-            QueryPerformanceCounter(&w_win); w_run0 = w_win; e_run0 = ExecMicrosecondsNow();
+            executedUs = 0ull; clockSet = 0; lastDuty = duty; Sleep(4);
+            QueryPerformanceCounter(&wWin); wRun0 = wWin; eRun0 = ExecMicrosecondsNow();
             continue;
         }
         /* ── ⚠⚠ #225 (user, round 9): "the speeds degrade over time", and 100 -> 66 MHz
@@ -6759,9 +6759,9 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
            ► A SPEED CHANGE KEPT THE OLD RUNG'S EXECUTION. E earned at 100 MHz, re-priced
              at 66 MHz's duty, is a debt of E x (1/d66 - 1/d100) that the guest never ran
              up. A new rung is a new window. */
-        if (g_PauseWant || duty != last_duty) {
-            E = 0ull; last_duty = duty;
-            QueryPerformanceCounter(&w_win); w_run0 = w_win; e_run0 = ExecMicrosecondsNow();
+        if (g_PauseWant || duty != lastDuty) {
+            executedUs = 0ull; lastDuty = duty;
+            QueryPerformanceCounter(&wWin); wRun0 = wWin; eRun0 = ExecMicrosecondsNow();
             if (g_PauseWant) {
                 if (g_CpuSpeedCatchRequest) { InterlockedExchange(&g_CpuSpeedCatchRequest, 0);
                                           if (g_CpuSpeedRelease) SetEvent(g_CpuSpeedRelease); }
@@ -6793,10 +6793,10 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
              immediate-catch hold would otherwise be swamped by the catch cost. The
              threshold is rig-tuned (8 MHz = 14 bp fails with the floor, 33 MHz = 56 bp
              needs it) and keyed on the DUTY, which already folds in the reference. */
-        {   unsigned long run_us = g_CpuSpeedGranularityMs
+        {   unsigned long runMicroseconds = g_CpuSpeedGranularityMs
                 ? (unsigned long)g_CpuSpeedGranularityMs * 1000ul * duty / 10000ul : 0ul;
-            if (duty >= CPUSPEED_RUN_FLOOR_BP && run_us < 1000ul)
-                run_us = 1000ul;                       /* Sleep-able floor, fast half */
+            if (duty >= CPUSPEED_RUN_FLOOR_BP && runMicroseconds < 1000ul)
+                runMicroseconds = 1000ul;                       /* Sleep-able floor, fast half */
             /* ── #225: A CYCLE SHORTER THAN THE GUEST'S TIMER. The per-second record
                  put Skyroads' slow seconds on pure compute, IRQ0 capped at 97..133/s of
                  180: a tick placed during a hold stays in service until the handler runs
@@ -6810,19 +6810,19 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
                  1 ms floor, so a guest on the BIOS 18.2 Hz tick is untouched. Placing
                  ticks from this thread instead was tried and REJECTED: without g_Lock it
                  raced the PIT's own delivery and injected 12,170 ticks of 5,934 raised. */
-            if (run_us == 1000ul && duty < 10000u) {
-                DWORD rl = g_Pit.Reload ? (DWORD)g_Pit.Reload : 65536u;
-                unsigned long tick_us = (unsigned long)((unsigned long long)rl * 1000000ull / 1193182ull);
-                unsigned long want = (unsigned long)((unsigned long long)(tick_us / 2ul) * duty / 10000u);   /* cycle = run/duty */
-                if (want < 1000ul) run_us = want < CPUSPD_RUN_MIN_US ? CPUSPD_RUN_MIN_US : want;
+            if (runMicroseconds == 1000ul && duty < 10000u) {
+                DWORD reload = g_Pit.Reload ? (DWORD)g_Pit.Reload : 65536u;
+                unsigned long tickMicroseconds = (unsigned long)((unsigned long long)reload * 1000000ull / 1193182ull);
+                unsigned long want = (unsigned long)((unsigned long long)(tickMicroseconds / 2ul) * duty / 10000u);   /* cycle = run/duty */
+                if (want < 1000ul) runMicroseconds = want < CPUSPD_RUN_MIN_US ? CPUSPD_RUN_MIN_US : want;
             }
-            {   int ts = CpuSpeedTimelineSeconds(); if (ts >= 0) g_ControlRunMicroseconds[ts] = (DWORD)run_us; }
-            if (run_us >= 1000ul) Sleep((DWORD)(run_us / 1000ul));
-            else if (run_us && duty >= CPUSPEED_RUN_FLOOR_BP) {
-                LARGE_INTEGER r0, rn;
-                QueryPerformanceCounter(&r0);
-                do { SwitchToThread(); QueryPerformanceCounter(&rn); }
-                while (g_Running && QpcMicroseconds(rn.QuadPart - r0.QuadPart) < run_us);
+            {   int second = CpuSpeedTimelineSeconds(); if (second >= 0) g_ControlRunMicroseconds[second] = (DWORD)runMicroseconds; }
+            if (runMicroseconds >= 1000ul) Sleep((DWORD)(runMicroseconds / 1000ul));
+            else if (runMicroseconds && duty >= CPUSPEED_RUN_FLOOR_BP) {
+                LARGE_INTEGER runStart, runNow;
+                QueryPerformanceCounter(&runStart);
+                do { SwitchToThread(); QueryPerformanceCounter(&runNow); }
+                while (g_Running && QpcMicroseconds(runNow.QuadPart - runStart.QuadPart) < runMicroseconds);
             }
             /* else: immediate catch -- correct for the slow half. */
         }
@@ -6834,11 +6834,11 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
              at-or-ahead step forgives it). */
         {   DWORD started = GetTickCount();
             int done = 0, spins = 0;
-            LARGE_INTEGER d0;
-            QueryPerformanceCounter(&d0);
+            LARGE_INTEGER parkStart;
+            QueryPerformanceCounter(&parkStart);
 #define CPUSPD_YIELD_BURST 200
             while (!done && g_Running && !g_PauseWant && GetTickCount() - started < 400u) {
-                CONTEXT cx; LARGE_INTEGER rt0, rt1, now; int gotctx, caught = 0;
+                CONTEXT context; LARGE_INTEGER roundTrip0, roundTrip1, now; int gotctx, caught = 0;
                 if (!g_HostCpu || g_InExec == 0) {
                     /* #225: outside VdmRunGuest -- ask it to park at its next re-entry. */
                     if (g_HostCpu) {
@@ -6847,17 +6847,17 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
                     }
                     if (!caught) {
                         ++g_CpuSpeedMissed;
-                        { int ts = CpuSpeedTimelineSeconds(); if (ts >= 0) ++g_ControlMissed[ts]; }
+                        { int second = CpuSpeedTimelineSeconds(); if (second >= 0) ++g_ControlMissed[second]; }
                         if (++spins < CPUSPD_YIELD_BURST) SwitchToThread(); else Sleep(1);
                         continue;
                     }
                 } else {
-                    QueryPerformanceCounter(&rt0);
+                    QueryPerformanceCounter(&roundTrip0);
                     if (SuspendThread(g_HostCpu) == (DWORD)-1) { ++g_CpuSpeedMissed; Sleep(1); continue; }
-                    cx.ContextFlags = CONTEXT_CONTROL;
-                    gotctx = GetThreadContext(g_HostCpu, &cx);
-                    QueryPerformanceCounter(&rt1);
-                    CpuSpeedNoteRoundTrip((unsigned long)QpcMicroseconds(rt1.QuadPart - rt0.QuadPart));
+                    context.ContextFlags = CONTEXT_CONTROL;
+                    gotctx = GetThreadContext(g_HostCpu, &context);
+                    QueryPerformanceCounter(&roundTrip1);
+                    CpuSpeedNoteRoundTrip((unsigned long)QpcMicroseconds(roundTrip1.QuadPart - roundTrip0.QuadPart));
                     if (gotctx && g_InExec != 0) caught = 1;
                     else {
                         ResumeThread(g_HostCpu);
@@ -6869,47 +6869,47 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
                 /* Caught: suspended inside VdmRunGuest (1) or parked at the re-entry (2).
                    Parked, the exec clock has no open interval, so the same
                    accounting holds -- the servicing time was never guest execution. */
-                {   unsigned long long T, hold_us; int reset;
+                {   unsigned long long windowUs, holdMicroseconds; int reset;
                     unsigned dexec;
-                    LONG e_now = ExecMicrosecondsNow();
+                    LONG eNow = ExecMicrosecondsNow();
                     QueryPerformanceCounter(&now);
-                    dexec = (unsigned)(ULONG)(e_now - e_run0);   /* run exec, no hold  */
+                    dexec = (unsigned)(ULONG)(eNow - eRun0);   /* run exec, no hold  */
                     /* ⚠ EXEC CAN NEVER EXCEED WALL. A torn read of the exec clock on
                          this thread while the exec thread mutates it can wrap dexec to
                          a garbage ~4e9; clamping to the run's own wall (now - resume)
                          kills that at the source, so one bad sample cannot corrupt E or
                          the lifetime exec_ms. Measured: idx 2 reported exec_ms=8.5M in a
                          46 s run before this. */
-                    {   unsigned rw = QpcMicroseconds((LONGLONG)(now.QuadPart - w_run0.QuadPart));
-                        if (dexec > rw) dexec = rw; }
-                    if (!clock_set) { g_StartMs = GetTickCount(); clock_set = 1; }
-                    E += (unsigned long long)dexec;
-                    T = QpcMicroseconds64(now.QuadPart - w_win.QuadPart);  /* window wall, holds in */
-                    hold_us = CpuSpeedStep(E, T, duty, CAP_US, &reset);
-                    {   unsigned long long raw = CpuSpeedHoldFor(E, T, duty);
+                    {   unsigned runWall = QpcMicroseconds((LONGLONG)(now.QuadPart - wRun0.QuadPart));
+                        if (dexec > runWall) dexec = runWall; }
+                    if (!clockSet) { g_StartMs = GetTickCount(); clockSet = 1; }
+                    executedUs += (unsigned long long)dexec;
+                    windowUs = QpcMicroseconds64(now.QuadPart - wWin.QuadPart);  /* window wall, holds in */
+                    holdMicroseconds = CpuSpeedStep(executedUs, windowUs, duty, cAPMicroseconds, &reset);
+                    {   unsigned long long raw = CpuSpeedHoldFor(executedUs, windowUs, duty);
                         if (raw > g_CpuSpeedDebtMaximumMicroseconds) g_CpuSpeedDebtMaximumMicroseconds = raw > 0xFFFFFFFFull ? 0xFFFFFFFFu : (DWORD)raw;
-                        if (hold_us > g_CpuSpeedHoldMaximumMicroseconds) g_CpuSpeedHoldMaximumMicroseconds = (DWORD)hold_us; }
+                        if (holdMicroseconds > g_CpuSpeedHoldMaximumMicroseconds) g_CpuSpeedHoldMaximumMicroseconds = (DWORD)holdMicroseconds; }
                     g_CpuSpeedRanMicroseconds   = dexec;
-                    g_CpuSpeedWallMicroseconds  = (DWORD)T;
+                    g_CpuSpeedWallMicroseconds  = (DWORD)windowUs;
                     /* Carry the sub-millisecond remainders: with #225's short runs
                        (~340 us) rounding each one reported half the real exec. */
-                    {   static DWORD run_rem, hold_rem;
-                        run_rem  += dexec;           g_CpuSpeedRunMs  += run_rem / 1000u;  run_rem  %= 1000u;
-                        hold_rem += (DWORD)hold_us;  g_CpuSpeedHeldMs += hold_rem / 1000u; hold_rem %= 1000u; }
+                    {   static DWORD runRem, holdRem;
+                        runRem  += dexec;           g_CpuSpeedRunMs  += runRem / 1000u;  runRem  %= 1000u;
+                        holdRem += (DWORD)holdMicroseconds;  g_CpuSpeedHeldMs += holdRem / 1000u; holdRem %= 1000u; }
                     ++g_CpuSpeedPeriods;
                     if (caught == 2) ++g_CpuSpeedCooperativeCatches;
-                    {   int ts = CpuSpeedTimelineSeconds();
-                        if (ts >= 0) { g_ControlExecMicroseconds[ts] += dexec; g_ControlHoldMicroseconds[ts] += (DWORD)hold_us;
-                                       if (caught == 2) ++g_ControlCooperative[ts]; } }
-                    if (hold_us >= 1000ull) Sleep((DWORD)(hold_us / 1000ull));
+                    {   int second = CpuSpeedTimelineSeconds();
+                        if (second >= 0) { g_ControlExecMicroseconds[second] += dexec; g_ControlHoldMicroseconds[second] += (DWORD)holdMicroseconds;
+                                       if (caught == 2) ++g_ControlCooperative[second]; } }
+                    if (holdMicroseconds >= 1000ull) Sleep((DWORD)(holdMicroseconds / 1000ull));
                     /* Release: lower the request FIRST, so a parked guest cannot see it
                        still raised and park again, then let it go. */
                     InterlockedExchange(&g_CpuSpeedCatchRequest, 0);
                     if (caught == 1) ResumeThread(g_HostCpu);
                     else if (g_CpuSpeedRelease) SetEvent(g_CpuSpeedRelease);
-                    QueryPerformanceCounter(&w_run0);
-                    e_run0 = ExecMicrosecondsNow();           /* new run baseline, POST-hold */
-                    if (reset) { w_win = w_run0; E = 0ull; }
+                    QueryPerformanceCounter(&wRun0);
+                    eRun0 = ExecMicrosecondsNow();           /* new run baseline, POST-hold */
+                    if (reset) { wWin = wRun0; executedUs = 0ull; }
                     done = 1;
                 }
             }
@@ -6918,15 +6918,15 @@ static DWORD WINAPI cpuspeed_thread(LPVOID param)
     }
     return 0;
 }
-static void host_audio_fill(void *ctx, int16_t *out, uint32_t frames)
+static void HostAudioFill(void *context, int16_t *out, uint32_t frames)
 {
-    (void)ctx;
+    (void)context;
     /* #219: paused -> silence, and the devices are NOT rendered, so a Sound Blaster
        block, the OPL envelopes and the GUS voices all stand still and carry on from
        the same sample on resume. */
     if (g_PauseWant) {
-        uint32_t k;
-        for (k = 0; k < frames * 2u; ++k) out[k] = 0;
+        uint32_t index;
+        for (index = 0; index < frames * 2u; ++index) out[index] = 0;
         return;
     }
     DmxSample();
@@ -6936,25 +6936,25 @@ static void host_audio_fill(void *ctx, int16_t *out, uint32_t frames)
 }
 
 /* MPU-401 output -> the host's MIDI synth (XP ships a GS Wavetable device). */
-static void host_midi_sink(void *ctx, uint32_t msg)
+static void HostMidiSink(void *context, uint32_t message)
 {
-    (void)ctx;
-    AudioWaveMidi(&g_Wave, msg);
+    (void)context;
+    AudioWaveMidi(&g_Wave, message);
 }
 /* #136: whole SysEx messages, wired ONLY when Settings > Audio > MIDI found an external
    synth by name (g_Wave.IsMidiExternal) -- see midi_route.h. Otherwise SysEx is swallowed in
    vdd_mpu exactly as it always was. */
-static void host_midi_sysex(void *ctx, const uint8_t *msg, uint32_t len)
+static void HostMidiSysEx(void *context, const uint8_t *message, uint32_t length)
 {
-    (void)ctx;
-    AudioWaveMidiLong(&g_Wave, msg, len);
+    (void)context;
+    AudioWaveMidiLong(&g_Wave, message, length);
 }
 
 /* #190: the GUS's 6850 MIDI UART sends raw bytes; a PRIVATE message assembler (never on
    the bus) turns them into MIDI messages for the same synth. Its own, not g_Mpu's: two
    byte streams through one assembler would corrupt each other's running status. */
-static MPU_STATE g_gusmidi;
-static void gus_midi_to_synth(void *ctx, uint8_t b) { (void)ctx; VddMpuFeed(&g_gusmidi, b); }
+static MPU_STATE g_GusMidi;
+static void GusMidiToSynth(void *context, uint8_t byteValue) { (void)context; VddMpuFeed(&g_GusMidi, byteValue); }
 
 /* Async-preemption probe driver (session 11, QIMODE_PATH bit 2). Raises IRQ 5 from a
    thread that is NOT the exec thread -- exactly how the audio thread raises the Sound
@@ -6974,51 +6974,51 @@ static void gus_midi_to_synth(void *ctx, uint8_t b) { (void)ctx; VddMpuFeed(&g_g
    from the build machine without anyone having to move a file around. 8bpp frames carry
    their palette in the DIB colour table, which is what makes a mode-13h capture come out
    with the right colours rather than a grey mush. */
-static void host_screenshot(void)
+static void HostScreenshot(void)
 {
     static int seq = 0;
     BITMAPINFOHEADER *bih;
     HGLOBAL hmem;
-    DWORD w, h, stride, pal_n, img_sz, dib_sz, bpp;
+    DWORD width, height, stride, palCount, imageSize, dibSize, bpp;
     BYTE *dib, *bits;
-    const uint8_t *src;
+    const uint8_t *source;
 
     /* #155: 8-bit AND direct-colour (32bpp, VBE 2 LFB) frames. It returned silently for
        anything but 8-bit -- the user pressed Ctrl+F5 in Heaven7's direct-colour part and
        got nothing, with nothing said. */
     HOST_LOCK();
-    w = g_Video.Frame.Width; h = g_Video.Frame.Height; bpp = g_Video.Frame.BitsPerPixel;
-    src = g_Video.Frame.Pixels;
-    if (!src || !w || !h || (bpp != 8 && bpp != 32)) { HOST_UNLOCK(); return; }
-    stride = (bpp == 8) ? ((w + 3) & ~3u) : w * 4u;    /* DIB rows are 4-byte aligned */
-    pal_n  = (bpp == 8) ? 256 : 0;
-    img_sz = stride * h;
-    dib_sz = sizeof(BITMAPINFOHEADER) + pal_n * 4 + img_sz;
-    hmem = GlobalAlloc(GMEM_MOVEABLE, dib_sz);
+    width = g_Video.Frame.Width; height = g_Video.Frame.Height; bpp = g_Video.Frame.BitsPerPixel;
+    source = g_Video.Frame.Pixels;
+    if (!source || !width || !height || (bpp != 8 && bpp != 32)) { HOST_UNLOCK(); return; }
+    stride = (bpp == 8) ? ((width + 3) & ~3u) : width * 4u;    /* DIB rows are 4-byte aligned */
+    palCount  = (bpp == 8) ? 256 : 0;
+    imageSize = stride * height;
+    dibSize = sizeof(BITMAPINFOHEADER) + palCount * 4 + imageSize;
+    hmem = GlobalAlloc(GMEM_MOVEABLE, dibSize);
     if (!hmem) { HOST_UNLOCK(); return; }
     dib = (BYTE *)GlobalLock(hmem);
     if (!dib) { GlobalFree(hmem); HOST_UNLOCK(); return; }
-    { unsigned i; for (i = 0; i < dib_sz; ++i) dib[i] = 0; }
+    { unsigned index; for (index = 0; index < dibSize; ++index) dib[index] = 0; }
     bih = (BITMAPINFOHEADER *)dib;
     bih->biSize = sizeof(BITMAPINFOHEADER);
-    bih->biWidth = (LONG)w; bih->biHeight = (LONG)h;   /* positive => bottom-up      */
+    bih->biWidth = (LONG)width; bih->biHeight = (LONG)height;   /* positive => bottom-up      */
     bih->biPlanes = 1; bih->biBitCount = (WORD)bpp; bih->biCompression = 0;
-    bih->biSizeImage = img_sz; bih->biClrUsed = pal_n; bih->biClrImportant = pal_n;
-    { DWORD i; BYTE *pal = dib + sizeof(BITMAPINFOHEADER);
-      for (i = 0; i < pal_n; ++i) {
-          uint32_t c = g_Video.Frame.Palette ? g_Video.Frame.Palette[i] : 0;
-          pal[i*4+0] = (BYTE)(c & 0xFF);          /* B */
-          pal[i*4+1] = (BYTE)((c >> 8) & 0xFF);   /* G */
-          pal[i*4+2] = (BYTE)((c >> 16) & 0xFF);  /* R */
-          pal[i*4+3] = 0;
+    bih->biSizeImage = imageSize; bih->biClrUsed = palCount; bih->biClrImportant = palCount;
+    { DWORD index; BYTE *pal = dib + sizeof(BITMAPINFOHEADER);
+      for (index = 0; index < palCount; ++index) {
+          uint32_t colour = g_Video.Frame.Palette ? g_Video.Frame.Palette[index] : 0;
+          pal[index*4+0] = (BYTE)(colour & 0xFF);          /* B */
+          pal[index*4+1] = (BYTE)((colour >> 8) & 0xFF);   /* G */
+          pal[index*4+2] = (BYTE)((colour >> 16) & 0xFF);  /* R */
+          pal[index*4+3] = 0;
       } }
-    bits = dib + sizeof(BITMAPINFOHEADER) + pal_n * 4;
-    { DWORD y, x, rowb = (bpp == 8) ? w : w * 4u;
-      for (y = 0; y < h; ++y) {                    /* flip: DIB row 0 is the bottom   */
-          const uint8_t *sr = src + (size_t)(h - 1 - y) * g_Video.Frame.Stride;
-          BYTE *dr = bits + (size_t)y * stride;
-          for (x = 0; x < rowb; ++x) dr[x] = sr[x];
-          if (bpp == 32) for (x = 3; x < rowb; x += 4) dr[x] = 0;   /* XRGB: no alpha */
+    bits = dib + sizeof(BITMAPINFOHEADER) + palCount * 4;
+    { DWORD row, column, rowb = (bpp == 8) ? width : width * 4u;
+      for (row = 0; row < height; ++row) {                    /* flip: DIB row 0 is the bottom   */
+          const uint8_t *sourceRow = source + (size_t)(height - 1 - row) * g_Video.Frame.Stride;
+          BYTE *destinationRow = bits + (size_t)row * stride;
+          for (column = 0; column < rowb; ++column) destinationRow[column] = sourceRow[column];
+          if (bpp == 32) for (column = 3; column < rowb; column += 4) destinationRow[column] = 0;   /* XRGB: no alpha */
       } }
     HOST_UNLOCK();
 
@@ -7027,26 +7027,26 @@ static void host_screenshot(void)
        a use-after-free on exactly the path nobody tests. */
     {
         char path[MAX_PATH];
-        const char *dir = NTVDMEX_OUT;   /* screenshots are output, not clutter in the root */
-        int i = 0, j;
-        while (dir[i] && i < MAX_PATH - 24) { path[i] = dir[i]; ++i; }
-        { const char *nm = "shot_manual_00.bmp";
-          for (j = 0; nm[j]; ++j) path[i + j] = nm[j];
-          path[i + 12] = (char)('0' + (seq / 10) % 10);
-          path[i + 13] = (char)('0' + seq % 10);
-          path[i + j] = 0; }
+        const char *directory = NTVDMEX_OUT;   /* screenshots are output, not clutter in the root */
+        int index = 0, index2;
+        while (directory[index] && index < MAX_PATH - 24) { path[index] = directory[index]; ++index; }
+        { const char *name = "shot_manual_00.bmp";
+          for (index2 = 0; name[index2]; ++index2) path[index + index2] = name[index2];
+          path[index + 12] = (char)('0' + (seq / 10) % 10);
+          path[index + 13] = (char)('0' + seq % 10);
+          path[index + index2] = 0; }
         ++seq;
-        { HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
-          if (f != INVALID_HANDLE_VALUE) {
-              BYTE fh[14]; DWORD wr; DWORD off = 14 + sizeof(BITMAPINFOHEADER) + pal_n * 4;
-              DWORD tot = 14 + dib_sz;
-              fh[0]='B'; fh[1]='M';
-              fh[2]=(BYTE)tot; fh[3]=(BYTE)(tot>>8); fh[4]=(BYTE)(tot>>16); fh[5]=(BYTE)(tot>>24);
-              fh[6]=fh[7]=fh[8]=fh[9]=0;
-              fh[10]=(BYTE)off; fh[11]=(BYTE)(off>>8); fh[12]=(BYTE)(off>>16); fh[13]=(BYTE)(off>>24);
-              WriteFile(f, fh, 14, &wr, NULL);
-              WriteFile(f, dib, dib_sz, &wr, NULL);
-              CloseHandle(f);
+        { HANDLE file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+          if (file != INVALID_HANDLE_VALUE) {
+              BYTE fileHeader[14]; DWORD bytesWritten; DWORD offset = 14 + sizeof(BITMAPINFOHEADER) + palCount * 4;
+              DWORD tot = 14 + dibSize;
+              fileHeader[0]='B'; fileHeader[1]='M';
+              fileHeader[2]=(BYTE)tot; fileHeader[3]=(BYTE)(tot>>8); fileHeader[4]=(BYTE)(tot>>16); fileHeader[5]=(BYTE)(tot>>24);
+              fileHeader[6]=fileHeader[7]=fileHeader[8]=fileHeader[9]=0;
+              fileHeader[10]=(BYTE)offset; fileHeader[11]=(BYTE)(offset>>8); fileHeader[12]=(BYTE)(offset>>16); fileHeader[13]=(BYTE)(offset>>24);
+              WriteFile(file, fileHeader, 14, &bytesWritten, NULL);
+              WriteFile(file, dib, dibSize, &bytesWritten, NULL);
+              CloseHandle(file);
           } }
     }
     GlobalUnlock(hmem);
@@ -7057,36 +7057,36 @@ static void host_screenshot(void)
     } else GlobalFree(hmem);
 }
 
-static void host_rec_finish(void);        /* below: patches the header, logs */
+static void HostRecordFinish(void);        /* below: patches the header, logs */
 /* #155: Tools > Capture > Record Audio -- a toggle over the recorder cfg\wavrec.flag
    already drives. Each recording is its own numbered file in the capture folder, so a
-   second one never overwrites the first; stopping patches the header (host_rec_finish). */
-static void host_rec_toggle(void)
+   second one never overwrites the first; stopping patches the header (HostRecordFinish). */
+static void HostRecordToggle(void)
 {
     static int seq = 0;
-    char path[MAX_PATH], *q;
-    if (AudioWaveIsRecording()) { host_rec_finish(); return; }
-    q = LogPut(path, NTVDMEX_OUT); q = LogPut(q, "capture_audio_");
-    *q++ = (char)('0' + (seq / 10) % 10); *q++ = (char)('0' + seq % 10);
-    q = LogPut(q, ".wav");
+    char path[MAX_PATH], *cursor;
+    if (AudioWaveIsRecording()) { HostRecordFinish(); return; }
+    cursor = LogPut(path, NTVDMEX_OUT); cursor = LogPut(cursor, "capture_audio_");
+    *cursor++ = (char)('0' + (seq / 10) % 10); *cursor++ = (char)('0' + seq % 10);
+    cursor = LogPut(cursor, ".wav");
     ++seq;
     if (AudioWaveRecordStart(path, g_Wave.SampleHz) == 0) {
-        char lb[MAX_PATH + 64], *lq = LogPut(lb, "STAGE2: audio recording started -> ");
-        lq = LogPut(lq, path); lq = LogPut(lq, "\r\n"); LogAppend(LOG_PATH, lb, lq);
+        char lineBuffer[MAX_PATH + 64], *lineCursor = LogPut(lineBuffer, "STAGE2: audio recording started -> ");
+        lineCursor = LogPut(lineCursor, path); lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor);
     }
 }
 
 /* #155: the folder screenshots and recordings land in, in Explorer. CreateProcess on
    explorer.exe rather than ShellExecute: no new import for one button. */
-static void host_open_capture_folder(void)
+static void HostOpenCaptureFolder(void)
 {
-    char cmd[MAX_PATH + 32], *q;
-    STARTUPINFOA si; PROCESS_INFORMATION pi; int i;
-    q = LogPut(cmd, "explorer.exe \""); q = LogPut(q, NTVDMEX_OUT); q = LogPut(q, "\"");
-    for (i = 0; i < (int)sizeof si; ++i) ((char *)&si)[i] = 0;
-    si.cb = sizeof si;
-    if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    char command[MAX_PATH + 32], *cursor;
+    STARTUPINFOA startupInfo; PROCESS_INFORMATION processInfo; int index;
+    cursor = LogPut(command, "explorer.exe \""); cursor = LogPut(cursor, NTVDMEX_OUT); cursor = LogPut(cursor, "\"");
+    for (index = 0; index < (int)sizeof startupInfo; ++index) ((char *)&startupInfo)[index] = 0;
+    startupInfo.cb = sizeof startupInfo;
+    if (CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startupInfo, &processInfo)) {
+        CloseHandle(processInfo.hThread); CloseHandle(processInfo.hProcess);
     }
 }
 
@@ -7097,23 +7097,23 @@ static void host_open_capture_folder(void)
      periodic capture right after its BMP, under cfg\planedump.flag: writes the BMP's
      path with `.pln` = a 16-byte header (start, offset in 2-byte units, gw, gh) +
      the four 64K planes. Caller holds no lock; this takes it. */
-static void planes_dump_beside(const char *bmp_path)
+static void PlanesDumpBeside(const char *bmpPath)
 {
-    char path[200]; int n = 0; HANDLE f;
-    DWORD hdr[4], wr; int pl;
-    while (bmp_path[n] && n < 190) { path[n] = bmp_path[n]; ++n; }
-    if (n < 4) return;
-    path[n - 3] = 'p'; path[n - 2] = 'l'; path[n - 1] = 'n'; path[n] = 0;
-    f = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
-    if (f == INVALID_HANDLE_VALUE) return;
+    char path[200]; int length = 0; HANDLE file;
+    DWORD header[4], bytesWritten; int plane;
+    while (bmpPath[length] && length < 190) { path[length] = bmpPath[length]; ++length; }
+    if (length < 4) return;
+    path[length - 3] = 'p'; path[length - 2] = 'l'; path[length - 1] = 'n'; path[length] = 0;
+    file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+    if (file == INVALID_HANDLE_VALUE) return;
     HOST_LOCK();
-    hdr[0] = g_Video.CrtcStartLive; hdr[1] = g_Video.CrtcOffset;
-    hdr[2] = g_Video.GraphicsWidth;              hdr[3] = g_Video.GraphicsHeight;
-    WriteFile(f, hdr, sizeof hdr, &wr, NULL);
-    for (pl = 0; pl < 4; ++pl)                        /* the live backing: host sections when remapped (s74b) */
-        WriteFile(f, g_Video.YMapPlane ? g_Video.YMapPlane(g_Video.YMapContext, pl) : g_Video.Planes[pl], VIDEO_PLANE_SIZE, &wr, NULL);
+    header[0] = g_Video.CrtcStartLive; header[1] = g_Video.CrtcOffset;
+    header[2] = g_Video.GraphicsWidth;              header[3] = g_Video.GraphicsHeight;
+    WriteFile(file, header, sizeof header, &bytesWritten, NULL);
+    for (plane = 0; plane < 4; ++plane)                        /* the live backing: host sections when remapped (s74b) */
+        WriteFile(file, g_Video.YMapPlane ? g_Video.YMapPlane(g_Video.YMapContext, plane) : g_Video.Planes[plane], VIDEO_PLANE_SIZE, &bytesWritten, NULL);
     HOST_UNLOCK();
-    CloseHandle(f);
+    CloseHandle(file);
 }
 
 /* ONE path for a keystroke, whoever produced it. The window proc used to latch
@@ -7129,11 +7129,11 @@ static void planes_dump_beside(const char *bmp_path)
    Win32 messages addressed to it, with the OS's own focus deciding which window
    gets them -- see WowWinProc. Feeding the Win16 queue from the 8042 as well
    would deliver every key twice and to a window the OS had not focused. */
-static void host_key_scancode(uint8_t rawsc, int ext, int is_break)
+static void HostKeyScancode(uint8_t rawsc, int extended, int isBreak)
 {
     HOST_LOCK();
-    if (ext) VddInputPushScanCode(&g_Input, 0xE0);
-    VddInputPushScanCode(&g_Input, is_break ? (uint8_t)(rawsc | 0x80) : rawsc);
+    if (extended) VddInputPushScanCode(&g_Input, 0xE0);
+    VddInputPushScanCode(&g_Input, isBreak ? (uint8_t)(rawsc | 0x80) : rawsc);
     HOST_UNLOCK();
     KeyLatencyPush();                  /* start the clock on this keystroke's delivery */
     /* The VDD raises IRQ1 itself now, on the 8042's empty->full transition and again as the
@@ -7179,71 +7179,71 @@ static void host_key_scancode(uint8_t rawsc, int ext, int is_break)
      box would follow. So take it from the system, which is the thing stock ntvdm is
      effectively passing through, and keep the measured pair above as the
      VERIFICATION target rather than the source. */
-static uint32_t g_ty_delay_us  = 500000u;   /* replaced at startup from XP's setting */
-static uint32_t g_ty_period_us =  92000u;
-static DWORD    g_ty_spi_delay, g_ty_spi_speed;     /* raw, so STAGE2 can show them */
+static uint32_t g_TypematicDelayMicroseconds  = 500000u;   /* replaced at startup from XP's setting */
+static uint32_t g_TypematicPeriodMicroseconds =  92000u;
+static DWORD    g_TypematicSpiDelay, g_TypematicSpiSpeed;     /* raw, so STAGE2 can show them */
 
 /* XP exposes the two values it programs into the keyboard controller:
      SPI_GETKEYBOARDDELAY  0..3  -> 250, 500, 750, 1000 ms
      SPI_GETKEYBOARDSPEED  0..31 -> about 2.5/s at 0 up to about 30/s at 31,
                                     linear in PERIOD rather than in rate. */
-static void host_key_typematic_init(void)
+static void HostKeyTypematicInitialize(void)
 {
-    DWORD d = 1, s = 31;
-    if (!SystemParametersInfoA(SPI_GETKEYBOARDDELAY, 0, &d, 0)) d = 1;
-    if (!SystemParametersInfoA(SPI_GETKEYBOARDSPEED, 0, &s, 0)) s = 31;
-    if (d > 3)  d = 3;
-    if (s > 31) s = 31;
-    g_ty_spi_delay = d; g_ty_spi_speed = s;
-    g_ty_delay_us  = (d + 1) * 250000u;
-    g_ty_period_us = 400000u - (s * 12000u);        /* 0 -> 400 ms, 31 -> 28 ms */
+    DWORD delay = 1, speed = 31;
+    if (!SystemParametersInfoA(SPI_GETKEYBOARDDELAY, 0, &delay, 0)) delay = 1;
+    if (!SystemParametersInfoA(SPI_GETKEYBOARDSPEED, 0, &speed, 0)) speed = 31;
+    if (delay > 3)  delay = 3;
+    if (speed > 31) speed = 31;
+    g_TypematicSpiDelay = delay; g_TypematicSpiSpeed = speed;
+    g_TypematicDelayMicroseconds  = (delay + 1) * 250000u;
+    g_TypematicPeriodMicroseconds = 400000u - (speed * 12000u);        /* 0 -> 400 ms, 31 -> 28 ms */
 }
-#define KEY_TYPEMATIC_DELAY_US  g_ty_delay_us
-#define KEY_TYPEMATIC_PERIOD_US g_ty_period_us
-static uint8_t  g_ty_sc, g_ty_ext, g_ty_on;
-static LONGLONG g_ty_due;
-static uint32_t g_ty_sent, g_ty_os_repeats;  /* ours generated / OS ones suppressed */
+#define KEY_TYPEMATIC_DELAY_US  g_TypematicDelayMicroseconds
+#define KEY_TYPEMATIC_PERIOD_US g_TypematicPeriodMicroseconds
+static uint8_t  g_TypematicScanCode, g_TypematicExtended, g_TypematicOn;
+static LONGLONG g_TypematicDue;
+static uint32_t g_TypematicSent, g_TypematicOsRepeats;  /* ours generated / OS ones suppressed */
 
-static LONGLONG qpc_ticks(uint32_t us)
-{ return g_QpcFrequency.QuadPart ? (LONGLONG)((g_QpcFrequency.QuadPart / 1000) * us / 1000) : 0; }
+static LONGLONG QpcTicks(uint32_t microseconds)
+{ return g_QpcFrequency.QuadPart ? (LONGLONG)((g_QpcFrequency.QuadPart / 1000) * microseconds / 1000) : 0; }
 
-static void host_key_typematic_press(uint8_t sc, int ext)
+static void HostKeyTypematicPress(uint8_t scanCode, int extended)
 {
-    LARGE_INTEGER n;
-    QueryPerformanceCounter(&n);
-    g_ty_sc = sc; g_ty_ext = (uint8_t)(ext ? 1 : 0); g_ty_on = 1;
-    g_ty_due = n.QuadPart + qpc_ticks(KEY_TYPEMATIC_DELAY_US);
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    g_TypematicScanCode = scanCode; g_TypematicExtended = (uint8_t)(extended ? 1 : 0); g_TypematicOn = 1;
+    g_TypematicDue = now.QuadPart + QpcTicks(KEY_TYPEMATIC_DELAY_US);
 }
 
-static void host_key_typematic_release(uint8_t sc, int ext)
+static void HostKeyTypematicRelease(uint8_t scanCode, int extended)
 {
-    if (g_ty_on && g_ty_sc == sc && g_ty_ext == (uint8_t)(ext ? 1 : 0)) g_ty_on = 0;
+    if (g_TypematicOn && g_TypematicScanCode == scanCode && g_TypematicExtended == (uint8_t)(extended ? 1 : 0)) g_TypematicOn = 0;
 }
 
 /* Pumped from both threads; cheap and lock-free until it actually fires. */
 /* The 8042 presents the next queued scancode only after the keyboard's transfer time
    (see INPUT_KEYBOARD_TRANSFER_US in vdd_input.h). Nothing raises IRQ1 for it unless someone looks, so
    both pumps look. Lock-free when nothing is queued or an interrupt is already up. */
-static void host_key_present(void)
+static void HostKeyPresent(void)
 {
     if (g_Input.ScanCodeHead == g_Input.ScanCodeTail || g_Input.IsScanCodeIrqUp) return;   /* racy, benign */
     HOST_LOCK();
     VddInputPoll(&g_Input);
     HOST_UNLOCK();
 }
-static void host_key_typematic(void)
+static void HostKeyTypematic(void)
 {
-    LARGE_INTEGER n;
-    if (!g_ty_on || !g_QpcFrequency.QuadPart) return;
-    QueryPerformanceCounter(&n);
-    if (n.QuadPart < g_ty_due) return;
+    LARGE_INTEGER now;
+    if (!g_TypematicOn || !g_QpcFrequency.QuadPart) return;
+    QueryPerformanceCounter(&now);
+    if (now.QuadPart < g_TypematicDue) return;
     /* A stall must not turn into a burst of makes: schedule from NOW, not from the
        missed deadline, so we never try to "catch up" the repeats we owe. That is
        the same mistake the PIT catch-up made, and it is worse here -- a burst of
        makes is indistinguishable to the guest from the player hammering the key. */
-    g_ty_due = n.QuadPart + qpc_ticks(KEY_TYPEMATIC_PERIOD_US);
-    host_key_scancode(g_ty_sc, g_ty_ext, 0);
-    g_ty_sent++;
+    g_TypematicDue = now.QuadPart + QpcTicks(KEY_TYPEMATIC_PERIOD_US);
+    HostKeyScancode(g_TypematicScanCode, g_TypematicExtended, 0);
+    g_TypematicSent++;
 }
 
 /* Defined with the rest of the mouse state, below. A scripted run needs it because
@@ -7252,46 +7252,46 @@ static void host_key_typematic(void)
    Space" to a DOS with no driver, so without this the harness cannot get past it. */
 static void host_mouse_button(int btn, int down);
 
-static DWORD WINAPI synthkey_thread(LPVOID pv)
+static DWORD WINAPI SynthKeyThread(LPVOID parameter)
 {
-    int n;
-    (void)pv;
+    int round;
+    (void)parameter;
     /* Reach the MENU before testing menu keys. The intro/attract loop reads no keyboard at
        all (measured: int16=[0,0,0,0], p60=0 for a whole run), so arrows sent during it prove
        nothing -- Enter is what gets from the intro to the menu, per the bug report. */
     /* A script on the share wins, if there is one: it can aim at a particular screen. */
-    { HANDLE h = CreateFileA(KEYS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    { HANDLE handle = CreateFileA(KEYS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, OPEN_EXISTING, 0, NULL);
-      if (h != INVALID_HANDLE_VALUE) {
-          char s[1024]; DWORD rd = 0; DWORD i = 0;
-          ReadFile(h, s, sizeof s - 1, &rd, NULL);
-          CloseHandle(h);
-          s[rd] = 0;
-          while (i < rd && g_Running) {
-              int ext = 0; DWORD v = 0; int digits = 0;
-              while (i < rd && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) ++i;
-              if (i >= rd) break;
+      if (handle != INVALID_HANDLE_VALUE) {
+          char script[1024]; DWORD bytesRead = 0; DWORD index = 0;
+          ReadFile(handle, script, sizeof script - 1, &bytesRead, NULL);
+          CloseHandle(handle);
+          script[bytesRead] = 0;
+          while (index < bytesRead && g_Running) {
+              int extended = 0; DWORD value = 0; int digits = 0;
+              while (index < bytesRead && (script[index] == ' ' || script[index] == '\t' || script[index] == '\r' || script[index] == '\n')) ++index;
+              if (index >= bytesRead) break;
               /* m<0|1|2> -- a full click of that button (left/right/middle). Not a
                  keystroke, but it belongs in the same script: the point of the script
                  is to reach a screen, and mouse-driven guests cannot be reached with
                  scancodes. `dm0`/`um0` are not provided; nothing has wanted a held
                  button yet, and an unreleased one is a nasty thing to leave behind. */
-              if (s[i] == 'm' || s[i] == 'M') {
-                  int bn = 0;
-                  ++i;
-                  if (i < rd && s[i] >= '0' && s[i] <= '2') { bn = s[i] - '0'; ++i; }
-                  host_mouse_button(bn, 1);
+              if (script[index] == 'm' || script[index] == 'M') {
+                  int button = 0;
+                  ++index;
+                  if (index < bytesRead && script[index] >= '0' && script[index] <= '2') { button = script[index] - '0'; ++index; }
+                  host_mouse_button(button, 1);
                   Sleep(60);
-                  host_mouse_button(bn, 0);
+                  host_mouse_button(button, 0);
                   Sleep(250);
                   continue;
               }
-              if (s[i] == 'w' || s[i] == 'W') {           /* w<decimal ms> */
-                  ++i;
-                  while (i < rd && s[i] >= '0' && s[i] <= '9') { v = v*10 + (DWORD)(s[i]-'0'); ++i; }
+              if (script[index] == 'w' || script[index] == 'W') {           /* w<decimal ms> */
+                  ++index;
+                  while (index < bytesRead && script[index] >= '0' && script[index] <= '9') { value = value*10 + (DWORD)(script[index]-'0'); ++index; }
                   { DWORD slept = 0;                       /* sleep in slices so a wind-down
                                                               is not stuck behind a long wait */
-                    while (slept < v && g_Running) { Sleep(v - slept > 100 ? 100 : v - slept);
+                    while (slept < value && g_Running) { Sleep(value - slept > 100 ? 100 : value - slept);
                                                      slept += 100; } }
                   continue;
               }
@@ -7302,43 +7302,43 @@ static DWORD WINAPI synthkey_thread(LPVOID pv)
                    and the shell dutifully echoed `echo hello world . hi.txt`, i.e.
                    the harness silently tested something other than redirection.
                    `d` = make only, `u` = break only. `d2a 34 u2a` is a held shift. */
-              if (s[i] == 'd' || s[i] == 'D' || s[i] == 'u' || s[i] == 'U') {
-                  int up = (s[i] == 'u' || s[i] == 'U');
-                  ++i;
-                  if (i < rd && (s[i] == 'e' || s[i] == 'E')) { ext = 1; ++i; }
-                  while (i < rd && digits < 2) {
-                      char c = s[i]; int dg = -1;
-                      if (c >= '0' && c <= '9') dg = c - '0';
-                      else if (c >= 'a' && c <= 'f') dg = c - 'a' + 10;
-                      else if (c >= 'A' && c <= 'F') dg = c - 'A' + 10;
-                      if (dg < 0) break;
-                      v = (v << 4) | (DWORD)dg; ++i; ++digits;
+              if (script[index] == 'd' || script[index] == 'D' || script[index] == 'u' || script[index] == 'U') {
+                  int isUp = (script[index] == 'u' || script[index] == 'U');
+                  ++index;
+                  if (index < bytesRead && (script[index] == 'e' || script[index] == 'E')) { extended = 1; ++index; }
+                  while (index < bytesRead && digits < 2) {
+                      char character = script[index]; int digit = -1;
+                      if (character >= '0' && character <= '9') digit = character - '0';
+                      else if (character >= 'a' && character <= 'f') digit = character - 'a' + 10;
+                      else if (character >= 'A' && character <= 'F') digit = character - 'A' + 10;
+                      if (digit < 0) break;
+                      value = (value << 4) | (DWORD)digit; ++index; ++digits;
                   }
                   if (!digits) continue;
-                  host_key_scancode((uint8_t)v, ext, up);
+                  HostKeyScancode((uint8_t)value, extended, isUp);
                   Sleep(40);
                   continue;
               }
-              if (s[i] == 'e' || s[i] == 'E') { ext = 1; ++i; }
-              while (i < rd && digits < 2) {               /* up to two hex digits */
-                  char c = s[i]; int d = -1;
-                  if (c >= '0' && c <= '9') d = c - '0';
-                  else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
-                  else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
-                  if (d < 0) break;
-                  v = (v << 4) | (DWORD)d; ++i; ++digits;
+              if (script[index] == 'e' || script[index] == 'E') { extended = 1; ++index; }
+              while (index < bytesRead && digits < 2) {               /* up to two hex digits */
+                  char character = script[index]; int digit = -1;
+                  if (character >= '0' && character <= '9') digit = character - '0';
+                  else if (character >= 'a' && character <= 'f') digit = character - 'a' + 10;
+                  else if (character >= 'A' && character <= 'F') digit = character - 'A' + 10;
+                  if (digit < 0) break;
+                  value = (value << 4) | (DWORD)digit; ++index; ++digits;
               }
-              if (!digits) { ++i; continue; }              /* skip a token we do not grok */
-              host_key_scancode((uint8_t)v, ext, 0);
+              if (!digits) { ++index; continue; }              /* skip a token we do not grok */
+              HostKeyScancode((uint8_t)value, extended, 0);
               Sleep(60);                                    /* a human-length hold */
-              host_key_scancode((uint8_t)v, ext, 1);
+              HostKeyScancode((uint8_t)value, extended, 1);
               Sleep(250);
           }
           return 0;
       } }
 
     Sleep(9000);
-    for (n = 0; n < 400 && g_Running; ++n) {
+    for (round = 0; round < 400 && g_Running; ++round) {
         /* An EXTENDED key (the arrows a player actually holds) at the OS auto-repeat rate,
            through exactly what WM_KEYDOWN does: E0 prefix + make code on the raw FIFO with
            an IRQ1 per byte, AND the BIOS ring entry that INT 16h returns. Feeding only the
@@ -7348,40 +7348,40 @@ static DWORD WINAPI synthkey_thread(LPVOID pv)
            the TOP item -- so a working UP arrow moves the highlight nowhere and a probe
            built on it cannot tell success from failure. DOWN has somewhere to go, and
            staying out of the game keeps the highlight on screen where a screenshot sees it. */
-        host_key_scancode(0x50, 1, 0);                   /* INT 09h fills the BIOS ring now */
+        HostKeyScancode(0x50, 1, 0);                   /* INT 09h fills the BIOS ring now */
         Sleep(250);                                      /* menu-paced taps, not a hold */
-        host_key_scancode(0x50, 1, 1);                   /* release each time          */
+        HostKeyScancode(0x50, 1, 1);                   /* release each time          */
         Sleep(250);
     }
     return 0;
 }
 
-static DWORD WINAPI qirq_probe_thread(LPVOID pv)
+static DWORD WINAPI QueueIrqProbeThread(LPVOID parameter)
 {
-    int n;
-    (void)pv;
+    int round;
+    (void)parameter;
     Sleep(500);                                  /* let the guest install its ISRs */
-    for (n = 0; n < 40 && g_Running; ++n) {
+    for (round = 0; round < 40 && g_Running; ++round) {
         DWORD before = *(volatile DWORD *)(ULONG_PTR)0x714, after = before;
-        int k;
+        int attempt;
         HostIrqSink(NULL, 5);
-        for (k = 0; k < 50; ++k) {
+        for (attempt = 0; attempt < 50; ++attempt) {
             Sleep(1);
             after = *(volatile DWORD *)(ULONG_PTR)0x714;
             if (after != before) break;
         }
-        if (n < 8) {
-            char b[256], *q = b;
-            q = LogPut(q, "QIRQ: raise#0x");   q = LogHex(q, (DWORD)n);
-            q = LogPut(q, " bits=0x");         q = LogHex(q, g_QiBits);
-            q = LogPut(q, " st=0x");           q = LogHex(q, (DWORD)g_QiStatus);
-            q = LogPut(q, " state 0x");        q = LogHex(q, before);
-            q = LogPut(q, "->0x");             q = LogHex(q, after);
-            q = LogPut(q, " after 0x");        q = LogHex(q, (DWORD)k);
-            q = LogPut(q, "ms pend5=0x");      q = LogHex(q, (DWORD)g_IrqNPending[5]);
-            q = LogPut(q, " ica=0x");          q = LogHex(q, VdmIcaGetState(5));
-            q = LogPut(q, "\r\n");
-            LogAppend(LOG_PATH, b, q); SerialOut(b, q);
+        if (round < 8) {
+            char buffer[256], *cursor = buffer;
+            cursor = LogPut(cursor, "QIRQ: raise#0x");   cursor = LogHex(cursor, (DWORD)round);
+            cursor = LogPut(cursor, " bits=0x");         cursor = LogHex(cursor, g_QiBits);
+            cursor = LogPut(cursor, " st=0x");           cursor = LogHex(cursor, (DWORD)g_QiStatus);
+            cursor = LogPut(cursor, " state 0x");        cursor = LogHex(cursor, before);
+            cursor = LogPut(cursor, "->0x");             cursor = LogHex(cursor, after);
+            cursor = LogPut(cursor, " after 0x");        cursor = LogHex(cursor, (DWORD)attempt);
+            cursor = LogPut(cursor, "ms pend5=0x");      cursor = LogHex(cursor, (DWORD)g_IrqNPending[5]);
+            cursor = LogPut(cursor, " ica=0x");          cursor = LogHex(cursor, VdmIcaGetState(5));
+            cursor = LogPut(cursor, "\r\n");
+            LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor);
         }
         Sleep(250);
     }
@@ -7393,11 +7393,11 @@ static DWORD WINAPI qirq_probe_thread(LPVOID pv)
    means the process died without user-mode notice. A once-per-500ms beat carrying the
    guest's CS:IP/EFLAGS and the counters turns that silence into a timestamped last known
    position, which is the only way to tell "guest still spinning" from "process killed". */
-static DWORD WINAPI heartbeat_thread(LPVOID pv)
+static DWORD WINAPI HeartbeatThread(LPVOID parameter)
 {
-    int n;
-    (void)pv;
-    for (n = 0; n < 400 && g_Running; ++n) {   /* 200 s: a live run outlasts 40 s */
+    int beat;
+    (void)parameter;
+    for (beat = 0; beat < 400 && g_Running; ++beat) {   /* 200 s: a live run outlasts 40 s */
         /* ⚠⚠ 640, AND MEASURE THE LINE IN A REAL LOG BEFORE ADDING A FIELD. A fixed log
              buffer in this file is a silent budget: adding one field to a 247-char line
              in a char[256] killed the host once (see dpmi_dispatch_to_pm_handler's lb),
@@ -7407,71 +7407,71 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
            ⛔ AND AGAIN (s81): the pic{}/pend/ivt0d/aw5{} fields took it past 640 on ZAR and
              the heartbeat thread died writing " 1f7c=" over the top of its own stack
              (a host AV on a worker, mid-run). 2048 now, and aw5{} is capped at 6 codes. */
-        char b[2048], *q = b;
-        DWORD cs = 0, ip = 0, efl = 0;
+        char buffer[2048], *cursor = buffer;
+        DWORD cs = 0, ip = 0, eflags = 0;
         if (g_TibDebug) {
             cs  = VDM_REG(g_TibDebug, VTIB_CS)  & 0xFFFF;
             ip  = VDM_REG(g_TibDebug, VTIB_EIP) & 0xFFFF;
-            efl = VDM_REG(g_TibDebug, VTIB_EFLAGS);
+            eflags = VDM_REG(g_TibDebug, VTIB_EFLAGS);
             g_HeartbeatDs = VDM_REG(g_TibDebug, VTIB_DS) & 0xFFFF;   /* s69: for the fade dump */
         }
-        q = LogPut(q, "HB 0x");        q = LogHex(q, (DWORD)n);
-        q = LogPut(q, " cs:ip=0x");    q = LogHex(q, cs); q = LogPut(q, ":0x"); q = LogHex(q, ip);
-        q = LogPut(q, " efl=0x");      q = LogHex(q, efl);
-        q = LogPut(q, " state=0x");    q = LogHex(q, *(volatile DWORD *)(ULONG_PTR)0x714);
-        q = LogPut(q, " io=0x");       q = LogHex(q, g_EventIo);
-        q = LogPut(q, " irq0=0x");     q = LogHex(q, g_Irq0Injected);
-        q = LogPut(q, " irqn=0x");     q = LogHex(q, g_IrqNInjected);
+        cursor = LogPut(cursor, "HB 0x");        cursor = LogHex(cursor, (DWORD)beat);
+        cursor = LogPut(cursor, " cs:ip=0x");    cursor = LogHex(cursor, cs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, ip);
+        cursor = LogPut(cursor, " efl=0x");      cursor = LogHex(cursor, eflags);
+        cursor = LogPut(cursor, " state=0x");    cursor = LogHex(cursor, *(volatile DWORD *)(ULONG_PTR)0x714);
+        cursor = LogPut(cursor, " io=0x");       cursor = LogHex(cursor, g_EventIo);
+        cursor = LogPut(cursor, " irq0=0x");     cursor = LogHex(cursor, g_Irq0Injected);
+        cursor = LogPut(cursor, " irqn=0x");     cursor = LogHex(cursor, g_IrqNInjected);
         /* ► THE HEARTBEAT IS THE ONLY INSTRUMENT THAT SURVIVES A WEDGE -- STAGE2 never
              prints when the watchdog kills the run, which is exactly the case being
              debugged. `r5` is raises on line 5 (the SB); `rtry` is the async retry
              offer/land pair. */
-        q = LogPut(q, " r5=0x");       q = LogHex(q, g_IrqRaised[5]);
-        q = LogPut(q, " rtry=0x");     q = LogHex(q, g_IrqNRetryTry);
-        q = LogPut(q, "/0x");          q = LogHex(q, g_IrqNRetryOk);
-        q = LogPut(q, " why=0x");      q = LogHex(q, g_IrqNRetryWhy);
-        q = LogPut(q, " intpend=0x");  q = LogHex(q, g_EventIntPending);
+        cursor = LogPut(cursor, " r5=0x");       cursor = LogHex(cursor, g_IrqRaised[5]);
+        cursor = LogPut(cursor, " rtry=0x");     cursor = LogHex(cursor, g_IrqNRetryTry);
+        cursor = LogPut(cursor, "/0x");          cursor = LogHex(cursor, g_IrqNRetryOk);
+        cursor = LogPut(cursor, " why=0x");      cursor = LogHex(cursor, g_IrqNRetryWhy);
+        cursor = LogPut(cursor, " intpend=0x");  cursor = LogHex(cursor, g_EventIntPending);
         /* s81: WHY IS A RAISED LINE NOT DELIVERED? The PIC's own view (mask, request,
            in service, both chips), which lines we still hold pending, and where IRQ 5's
            real-mode vector points -- the three things that decide it. */
-        { int k; DWORD pm = 0; WORD v5o = PeekWord(0x0D * 4), v5s = PeekWord(0x0D * 4 + 2);
-          for (k = 0; k < 16; ++k) if (g_IrqNPending[k]) pm |= 1u << k;
-          q = LogPut(q, " pic{imr=");  q = LogHexByte(q, g_Pic.Master.Imr); q = LogPut(q, "/"); q = LogHexByte(q, g_Pic.Slave.Imr);
-          q = LogPut(q, " irr=");      q = LogHexByte(q, g_Pic.Master.Irr); q = LogPut(q, "/"); q = LogHexByte(q, g_Pic.Slave.Irr);
-          q = LogPut(q, " isr=");      q = LogHexByte(q, g_Pic.Master.Isr); q = LogPut(q, "/"); q = LogHexByte(q, g_Pic.Slave.Isr);
-          q = LogPut(q, "} pend=0x");  q = LogHex(q, pm);
-          q = LogPut(q, " ivt0d=");    q = LogHex(q, v5s); q = LogPut(q, ":"); q = LogHex(q, v5o);
-          q = LogPut(q, " nested=");   q = LogHex(q, (DWORD)g_NestedRm);
-          q = LogPut(q, " aw5{");
+        { int index; DWORD pendingMask = 0; WORD v5O = PeekWord(0x0D * 4), v5S = PeekWord(0x0D * 4 + 2);
+          for (index = 0; index < 16; ++index) if (g_IrqNPending[index]) pendingMask |= 1u << index;
+          cursor = LogPut(cursor, " pic{imr=");  cursor = LogHexByte(cursor, g_Pic.Master.Imr); cursor = LogPut(cursor, "/"); cursor = LogHexByte(cursor, g_Pic.Slave.Imr);
+          cursor = LogPut(cursor, " irr=");      cursor = LogHexByte(cursor, g_Pic.Master.Irr); cursor = LogPut(cursor, "/"); cursor = LogHexByte(cursor, g_Pic.Slave.Irr);
+          cursor = LogPut(cursor, " isr=");      cursor = LogHexByte(cursor, g_Pic.Master.Isr); cursor = LogPut(cursor, "/"); cursor = LogHexByte(cursor, g_Pic.Slave.Isr);
+          cursor = LogPut(cursor, "} pend=0x");  cursor = LogHex(cursor, pendingMask);
+          cursor = LogPut(cursor, " ivt0d=");    cursor = LogHex(cursor, v5S); cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, v5O);
+          cursor = LogPut(cursor, " nested=");   cursor = LogHex(cursor, (DWORD)g_NestedRm);
+          cursor = LogPut(cursor, " aw5{");
           { int shown = 0;
-            for (k = 0; k < ASYNC_WHY_MAX && shown < 6; ++k) if (g_AsyncWhyHistogram[5][k]) {
-                q = LogPut(q, " "); q = LogHex(q, (DWORD)k); q = LogPut(q, "=");
-                q = LogHex(q, g_AsyncWhyHistogram[5][k]); ++shown; } }
-          q = LogPut(q, " }"); }
+            for (index = 0; index < ASYNC_WHY_MAX && shown < 6; ++index) if (g_AsyncWhyHistogram[5][index]) {
+                cursor = LogPut(cursor, " "); cursor = LogHex(cursor, (DWORD)index); cursor = LogPut(cursor, "=");
+                cursor = LogHex(cursor, g_AsyncWhyHistogram[5][index]); ++shown; } }
+          cursor = LogPut(cursor, " }"); }
         /* SB transfer state on the beat. irqn_refused=0 across 4.6M gate evaluations
            proves the completion IRQ was raised only AFTER the exec loop ended, so what
            matters now is WHEN the block starts and how fast it drains -- neither of which
            any counter shows after the fact. */
-        q = LogPut(q, " sb{mode=0x");  q = LogHex(q, (DWORD)g_Sb.TransferMode);
-        q = LogPut(q, " left=0x");     q = LogHex(q, g_Sb.BlockRemaining);
-        q = LogPut(q, " len=0x");      q = LogHex(q, g_Sb.BlockLength);
-        q = LogPut(q, " blocks=0x");   q = LogHex(q, g_Sb.Blocks);
-        q = LogPut(q, " rate=0x");     q = LogHex(q, g_Sb.RateHz);
-        q = LogPut(q, "} mixed=0x");   q = LogHex(q, g_Audio.FramesMixed);
+        cursor = LogPut(cursor, " sb{mode=0x");  cursor = LogHex(cursor, (DWORD)g_Sb.TransferMode);
+        cursor = LogPut(cursor, " left=0x");     cursor = LogHex(cursor, g_Sb.BlockRemaining);
+        cursor = LogPut(cursor, " len=0x");      cursor = LogHex(cursor, g_Sb.BlockLength);
+        cursor = LogPut(cursor, " blocks=0x");   cursor = LogHex(cursor, g_Sb.Blocks);
+        cursor = LogPut(cursor, " rate=0x");     cursor = LogHex(cursor, g_Sb.RateHz);
+        cursor = LogPut(cursor, "} mixed=0x");   cursor = LogHex(cursor, g_Audio.FramesMixed);
         /* ► THE 3DA VIEW: did the guest's vblank polls reach the VDD, and what was
              it told last? Mario spins >1s on `in al,3DA / test al,8 / jz` before
              the breakpoint kill; 700k reads with no edge is either "the reads
              never reach status_in" or "the model never asserts bit 3", and only
              these two numbers can tell them apart. (session 62) */
-        q = LogPut(q, " p3da=0x");     q = LogHex(q, g_Video.Port3DaReads);
-        q = LogPut(q, "/edges=0x");    q = LogHex(q, g_Video.VblEdges);
-        q = LogPut(q, "/last=0x");     q = LogHexByte(q, g_Video.Retrace);
+        cursor = LogPut(cursor, " p3da=0x");     cursor = LogHex(cursor, g_Video.Port3DaReads);
+        cursor = LogPut(cursor, "/edges=0x");    cursor = LogHex(cursor, g_Video.VblEdges);
+        cursor = LogPut(cursor, "/last=0x");     cursor = LogHexByte(cursor, g_Video.Retrace);
         /* ► THE LIVE DISPLAY START, so a VRAM watchpoint can be AIMED. The exit
              report prints it once, at exit, when the guest is back in text mode --
              useless for `offset = start + y*stride + x/8` during gameplay. (s68) */
-        q = LogPut(q, " crtc=0x");     q = LogHex(q, g_Video.CrtcStartLive);
-        q = LogPut(q, "/flips=0x");    q = LogHex(q, g_Video.CrtcStartWrites);
-        q = LogPut(q, "/ofs=0x");      q = LogHexByte(q, g_Video.CrtcOffset);
+        cursor = LogPut(cursor, " crtc=0x");     cursor = LogHex(cursor, g_Video.CrtcStartLive);
+        cursor = LogPut(cursor, "/flips=0x");    cursor = LogHex(cursor, g_Video.CrtcStartWrites);
+        cursor = LogPut(cursor, "/ofs=0x");      cursor = LogHexByte(cursor, g_Video.CrtcOffset);
         /* ► AND THE CLOCK THOSE TWO ARE RATES AGAINST. Without it the only time axis
              on this line is irq0, and irq0 is the PIT -- which a guest REPROGRAMS.
              Reading frames-per-second off a beat count that the guest itself can
@@ -7479,7 +7479,7 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
              the same run. This is the same microsecond clock the retrace model and
              the PIT sync derive from, so edges/ms on this line is a measurement and
              not a conversion. */
-        q = LogPut(q, " t_ms=0x");     q = LogHex(q, (uint32_t)(HostTimeMicroseconds() / 1000u));
+        cursor = LogPut(cursor, " t_ms=0x");     cursor = LogHex(cursor, (uint32_t)(HostTimeMicroseconds() / 1000u));
         /* ► THE BYTES AT THE BEAT'S CS:IP. Mario's host dies between beats with
              exit 0x80000003 and NO user-mode dispatch, so the last heartbeat is
              the only witness -- and a bare cs:ip in a moving guest names nothing
@@ -7491,11 +7491,11 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
              imem_page_ok() and the load -- the diagnostic killed the host it was watching.
              RPM on our own process fails cleanly instead of faulting. */
         if (cs || ip) {
-            BYTE cb8[8]; SIZE_T got = 0;
-            q = LogPut(q, " code@csip=");
-            if (ReadProcessMemory(GetCurrentProcess(), (LPCVOID)(ULONG_PTR)((cs << 4) + ip), cb8, 8, &got)
-                && got == 8) q = LogDump(q, cb8, 8);
-            else q = LogPut(q, "<unreadable>");
+            BYTE callback8[8]; SIZE_T got = 0;
+            cursor = LogPut(cursor, " code@csip=");
+            if (ReadProcessMemory(GetCurrentProcess(), (LPCVOID)(ULONG_PTR)((cs << 4) + ip), callback8, 8, &got)
+                && got == 8) cursor = LogDump(cursor, callback8, 8);
+            else cursor = LogPut(cursor, "<unreadable>");
         }
         /* ── s69: THE PALETTE FADE, ON THE BEAT. The blank-screen bug is a black
              per-frame palette buffer (ds:0x2668) while the colours are loaded; it is
@@ -7505,25 +7505,25 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
              selector (oracle=4). All zero here = the fade is stuck black. */
         if (g_HeartbeatDs) {
             uint32_t dsb = (uint32_t)g_HeartbeatDs << 4;
-            q = LogPut(q, " reload=0x"); q = LogHex(q, (DWORD)g_Pit.Reload);
-            q = LogPut(q, " dacrow[0-1,2-159,160+,vbl]="); q = LogDecimal(q, g_Video.DacRowHistogram[0]);
-            q = LogPut(q, "/"); q = LogDecimal(q, g_Video.DacRowHistogram[1]);
-            q = LogPut(q, "/"); q = LogDecimal(q, g_Video.DacRowHistogram[2]);
-            q = LogPut(q, "/"); q = LogDecimal(q, g_Video.DacRowHistogram[3]);
-            q = LogPut(q, " lastrow=0x"); q = LogHex(q, (DWORD)g_Video.DacLastRow);
+            cursor = LogPut(cursor, " reload=0x"); cursor = LogHex(cursor, (DWORD)g_Pit.Reload);
+            cursor = LogPut(cursor, " dacrow[0-1,2-159,160+,vbl]="); cursor = LogDecimal(cursor, g_Video.DacRowHistogram[0]);
+            cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.DacRowHistogram[1]);
+            cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.DacRowHistogram[2]);
+            cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.DacRowHistogram[3]);
+            cursor = LogPut(cursor, " lastrow=0x"); cursor = LogHex(cursor, (DWORD)g_Video.DacLastRow);
             BYTE pb6[6], pb1; SIZE_T got = 0;
-            q = LogPut(q, " pal2668=");
+            cursor = LogPut(cursor, " pal2668=");
             if (ReadProcessMemory(GetCurrentProcess(), (LPCVOID)(ULONG_PTR)(dsb + 0x2668), pb6, 6, &got)
                 && got == 6) {
-                int j; for (j = 0; j < 6; ++j) q = LogHexByte(q, pb6[j]);
-            } else q = LogPut(q, "??");
-            q = LogPut(q, " 1f7c=");
+                int byteIndex; for (byteIndex = 0; byteIndex < 6; ++byteIndex) cursor = LogHexByte(cursor, pb6[byteIndex]);
+            } else cursor = LogPut(cursor, "??");
+            cursor = LogPut(cursor, " 1f7c=");
             if (ReadProcessMemory(GetCurrentProcess(), (LPCVOID)(ULONG_PTR)(dsb + 0x1f7c), &pb1, 1, &got)
-                && got == 1) q = LogHexByte(q, pb1);
-            else q = LogPut(q, "??");
+                && got == 1) cursor = LogHexByte(cursor, pb1);
+            else cursor = LogPut(cursor, "??");
         }
-        q = LogPut(q, "\r\n");
-        LogAppend(LOG_PATH, b, q); SerialOut(b, q);
+        cursor = LogPut(cursor, "\r\n");
+        LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor);
         Sleep(500);
     }
     return 0;
@@ -7532,17 +7532,17 @@ static DWORD WINAPI heartbeat_thread(LPVOID pv)
 /* Finish an audio recording (cfg\wavrec.flag or, later, the Capture menu): patch the
    WAV sizes and say what was captured. Every exit path calls it -- a recording whose
    header still says "0 bytes" is a file most players refuse. Idempotent. */
-static void host_rec_finish(void)
+static void HostRecordFinish(void)
 {
-    char rb[160], *rq = rb;
-    uint32_t n, dr;
+    char lineBuffer[160], *lineCursor = lineBuffer;
+    uint32_t frames, dropped;
     if (!AudioWaveIsRecording()) return;
-    dr = AudioWaveRecordDropped();
-    n  = AudioWaveRecordStop();
-    rq = LogPut(rq, "STAGE2: audio recording closed: frames=0x"); rq = LogHex(rq, n);   /* stereo L/R pairs (#189) */
-    rq = LogPut(rq, " dropped=0x"); rq = LogHex(rq, dr);
-    rq = LogPut(rq, dr ? " (the ring filled -- the file has holes)\r\n" : "\r\n");
-    LogAppend(LOG_PATH, rb, rq); SerialOut(rb, rq);
+    dropped = AudioWaveRecordDropped();
+    frames  = AudioWaveRecordStop();
+    lineCursor = LogPut(lineCursor, "STAGE2: audio recording closed: frames=0x"); lineCursor = LogHex(lineCursor, frames);   /* stereo L/R pairs (#189) */
+    lineCursor = LogPut(lineCursor, " dropped=0x"); lineCursor = LogHex(lineCursor, dropped);
+    lineCursor = LogPut(lineCursor, dropped ? " (the ring filled -- the file has holes)\r\n" : "\r\n");
+    LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
 }
 
 /* ► WHICH CLAUSE SAID NO, PER LINE. `attempts` and `delivered` give the shortfall as one
@@ -7552,7 +7552,7 @@ static void host_rec_finish(void)
      spent a rig run on the one fix that could not have helped any of them. On its own
      (s85) so the headless forced exit prints it too: 3DBench's runs end that way, and
      #238 was diagnosed without it. */
-static void async_why_report(void)
+static void AsyncWhyReport(void)
 {
     static const char *const whyname[ASYNC_WHY_MAX] = {
         "DELIVERED","badvec","in_pm_irq","pm_noirq","no_catcher","unhooked_pm",
@@ -7560,131 +7560,131 @@ static void async_why_report(void)
         "not32","setctx_fail","HOST_CS","?f","?10","?11","?12","?13",
         "not_in_exec","pic_refuse","unhooked","suspend_fail","getctx_fail",
         "v86_IF_off","in_our_hdlr","observed","ctx_busy","left_exec","simint_rm","nested_tick" };
-    char base[1024], *p = base;
-    unsigned wl, wc;
+    char base[1024], *cursor = base;
+    unsigned line, reason;
     /* NO SILENT CAPS: say how many ASYNC-EARLY lines were written and how many were
        suppressed, so the log's thinness is never read as "it stopped happening". The
        histogram below is the complete account either way. */
-    p = LogPut(p, "STAGE2: async early-bail lines logged=");
-    p = LogHex(p, g_AsyncEarlyBailLogged < ASYNC_EARLY_BAIL_LOG_MAX
+    cursor = LogPut(cursor, "STAGE2: async early-bail lines logged=");
+    cursor = LogHex(cursor, g_AsyncEarlyBailLogged < ASYNC_EARLY_BAIL_LOG_MAX
                   ? g_AsyncEarlyBailLogged : ASYNC_EARLY_BAIL_LOG_MAX);
-    p = LogPut(p, " of ");   p = LogHex(p, g_AsyncEarlyBailLogged);
-    p = LogPut(p, " (cap "); p = LogHex(p, ASYNC_EARLY_BAIL_LOG_MAX);
-    p = LogPut(p, " -- these are FILE I/O UNDER g_lock; see async_early_bail)\r\n");
-    LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
-    for (wl = 0; wl < 8; ++wl) {     /* one line per IRQ, flushed each: <= 32 x 24 chars */
+    cursor = LogPut(cursor, " of ");   cursor = LogHex(cursor, g_AsyncEarlyBailLogged);
+    cursor = LogPut(cursor, " (cap "); cursor = LogHex(cursor, ASYNC_EARLY_BAIL_LOG_MAX);
+    cursor = LogPut(cursor, " -- these are FILE I/O UNDER g_lock; see async_early_bail)\r\n");
+    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    for (line = 0; line < 8; ++line) {     /* one line per IRQ, flushed each: <= 32 x 24 chars */
         unsigned tot = 0;
-        for (wc = 0; wc < ASYNC_WHY_MAX; ++wc) tot += g_AsyncWhyHistogram[wl][wc];
+        for (reason = 0; reason < ASYNC_WHY_MAX; ++reason) tot += g_AsyncWhyHistogram[line][reason];
         if (!tot) continue;
-        p = LogPut(p, "STAGE2: async why irq"); p = LogHexByte(p, (BYTE)wl);
-        p = LogPut(p, " total=");               p = LogHex(p, tot);
-        for (wc = 0; wc < ASYNC_WHY_MAX; ++wc) {
-            if (!g_AsyncWhyHistogram[wl][wc]) continue;
-            p = LogPut(p, " "); p = LogPut(p, whyname[wc]);
-            p = LogPut(p, "="); p = LogHex(p, g_AsyncWhyHistogram[wl][wc]);
+        cursor = LogPut(cursor, "STAGE2: async why irq"); cursor = LogHexByte(cursor, (BYTE)line);
+        cursor = LogPut(cursor, " total=");               cursor = LogHex(cursor, tot);
+        for (reason = 0; reason < ASYNC_WHY_MAX; ++reason) {
+            if (!g_AsyncWhyHistogram[line][reason]) continue;
+            cursor = LogPut(cursor, " "); cursor = LogPut(cursor, whyname[reason]);
+            cursor = LogPut(cursor, "="); cursor = LogHex(cursor, g_AsyncWhyHistogram[line][reason]);
         }
-        p = LogPut(p, "\r\n");
-        LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
+        cursor = LogPut(cursor, "\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
     }
 }
 
 /* #238: guest time against host time, the host's share charged per event (g_HostMicrosecondsEvent). */
-static void exec_share_report(void)
+static void ExecShareReport(void)
 {
-    char base[1024], *p = base;
-    int e;
-    p = LogPut(p, "STAGE2: exec share (#238) v86_ms="); p = LogDecimal(p, g_V86MicrosecondsTotal / 1000u);
-    p = LogPut(p, " host_ms_after_event[ev:ms/count]=");
-    for (e = 0; e < EV_HIST_MAX; ++e) {
-        if (!g_HostMicrosecondsEvent[e] && !g_EventHistogram[e]) continue;
-        p = LogPut(p, " "); p = LogHex(p, (DWORD)e); p = LogPut(p, ":");
-        p = LogDecimal(p, g_HostMicrosecondsEvent[e] / 1000u); p = LogPut(p, "/"); p = LogDecimal(p, g_EventHistogram[e]);
+    char base[1024], *cursor = base;
+    int event;
+    cursor = LogPut(cursor, "STAGE2: exec share (#238) v86_ms="); cursor = LogDecimal(cursor, g_V86MicrosecondsTotal / 1000u);
+    cursor = LogPut(cursor, " host_ms_after_event[ev:ms/count]=");
+    for (event = 0; event < EV_HIST_MAX; ++event) {
+        if (!g_HostMicrosecondsEvent[event] && !g_EventHistogram[event]) continue;
+        cursor = LogPut(cursor, " "); cursor = LogHex(cursor, (DWORD)event); cursor = LogPut(cursor, ":");
+        cursor = LogDecimal(cursor, g_HostMicrosecondsEvent[event] / 1000u); cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_EventHistogram[event]);
     }
     {   /* the six busiest BOP numbers */
-        DWORD seen[256]; int k, j;
-        for (k = 0; k < 256; ++k) seen[k] = g_BopHistogram[k];
-        p = LogPut(p, " bops:");
-        for (j = 0; j < 6; ++j) {
+        DWORD seen[256]; int index, rank;
+        for (index = 0; index < 256; ++index) seen[index] = g_BopHistogram[index];
+        cursor = LogPut(cursor, " bops:");
+        for (rank = 0; rank < 6; ++rank) {
             int best = -1;
-            for (k = 0; k < 256; ++k) if (seen[k] && (best < 0 || seen[k] > seen[best])) best = k;
+            for (index = 0; index < 256; ++index) if (seen[index] && (best < 0 || seen[index] > seen[best])) best = index;
             if (best < 0) break;
-            p = LogPut(p, " "); p = LogHexByte(p, (BYTE)best); p = LogPut(p, "="); p = LogDecimal(p, seen[best]);
+            cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, (BYTE)best); cursor = LogPut(cursor, "="); cursor = LogDecimal(cursor, seen[best]);
             seen[best] = 0;
         }
     }
-    p = LogPut(p, "\r\nSTAGE2: irq0 coop skip="); p = LogDecimal(p, g_Irq0Skip);
-    p = LogPut(p, " if="); p = LogDecimal(p, g_Irq0SkipIf);
-    p = LogPut(p, " stub="); p = LogDecimal(p, g_Irq0SkipStub);
-    p = LogPut(p, " inj="); p = LogDecimal(p, g_Irq0Injected);
-    p = LogPut(p, " if-off callers of our stubs:");
-    for (e = 0; e < SKIPIF_SITES && g_SkipIfSite[e].Count; ++e) {
-        p = LogPut(p, " "); p = LogHex(p, g_SkipIfSite[e].Cs); p = LogPut(p, ":");
-        p = LogHex(p, g_SkipIfSite[e].Ip); p = LogPut(p, "(stub+"); p = LogHex(p, g_SkipIfSite[e].Stub);
-        p = LogPut(p, ")x"); p = LogDecimal(p, g_SkipIfSite[e].Count);
+    cursor = LogPut(cursor, "\r\nSTAGE2: irq0 coop skip="); cursor = LogDecimal(cursor, g_Irq0Skip);
+    cursor = LogPut(cursor, " if="); cursor = LogDecimal(cursor, g_Irq0SkipIf);
+    cursor = LogPut(cursor, " stub="); cursor = LogDecimal(cursor, g_Irq0SkipStub);
+    cursor = LogPut(cursor, " inj="); cursor = LogDecimal(cursor, g_Irq0Injected);
+    cursor = LogPut(cursor, " if-off callers of our stubs:");
+    for (event = 0; event < SKIPIF_SITES && g_SkipIfSite[event].Count; ++event) {
+        cursor = LogPut(cursor, " "); cursor = LogHex(cursor, g_SkipIfSite[event].Cs); cursor = LogPut(cursor, ":");
+        cursor = LogHex(cursor, g_SkipIfSite[event].Ip); cursor = LogPut(cursor, "(stub+"); cursor = LogHex(cursor, g_SkipIfSite[event].Stub);
+        cursor = LogPut(cursor, ")x"); cursor = LogDecimal(cursor, g_SkipIfSite[event].Count);
     }
-    p = LogPut(p, "\r\n");
-    LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
-    {   static const char *const xn[XS_N] = { "raise","async","coop","nie","bop","io","hostms","pace" };
-        int c; DWORD sN;
-        for (c = 0; c < XS_N; ++c) {
-            p = LogPut(p, "STAGE2: persec "); p = LogPut(p, xn[c]); p = LogPut(p, "=");
-            for (sN = 1; sN < g_XsSeconds; ++sN) {
-                p = LogPut(p, sN > 1 ? "," : "");
-                p = LogDecimal(p, g_XsSnapshot[sN][c] - g_XsSnapshot[sN - 1][c]);
+    cursor = LogPut(cursor, "\r\n");
+    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    {   static const char *const names[XS_N] = { "raise","async","coop","nie","bop","io","hostms","pace" };
+        int column; DWORD second;
+        for (column = 0; column < XS_N; ++column) {
+            cursor = LogPut(cursor, "STAGE2: persec "); cursor = LogPut(cursor, names[column]); cursor = LogPut(cursor, "=");
+            for (second = 1; second < g_XsSeconds; ++second) {
+                cursor = LogPut(cursor, second > 1 ? "," : "");
+                cursor = LogDecimal(cursor, g_XsSnapshot[second][column] - g_XsSnapshot[second - 1][column]);
             }
-            p = LogPut(p, "\r\n");
-            LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
+            cursor = LogPut(cursor, "\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
         }
     }
-    LogAppend(LOG_PATH, base, p); SerialOut(base, p);
+    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor);
 }
 
 /* The IF/VIF census (see IfvNote), on its own so the headless forced exit -- which
    skips the main report, and is how ZAR's runs end -- can print it too. */
-static void ifv_report(void)
+static void IfvReport(void)
 {
-    char base[4096], *p = base;
-  { int path, st, ln; DWORD smax = g_IfvStarveMaximumMs;
+    char base[4096], *cursor = base;
+  { int path, state, line; DWORD smax = g_IfvStarveMaximumMs;
     static const char *const stname[8] = { "000","001","010","011","100","101","110","111" };
     if (g_IfvStarveOpen && GetTickCount() - g_IfvStarveT0 > smax)
         smax = GetTickCount() - g_IfvStarveT0;
-    p = LogPut(p, "STAGE2: IFV census (IF,VIF,S714)");
+    cursor = LogPut(cursor, "STAGE2: IFV census (IF,VIF,S714)");
     for (path = 0; path < 3; ++path) {
-        p = LogPut(p, path == 0 ? " live{" : path == 1 ? " vtib01{" : " vtibdev{");
-        for (st = 0; st < 8; ++st) {
-            if (!g_IfvCensus[path][st]) continue;
-            p = LogPut(p, " "); p = LogPut(p, stname[st]); p = LogPut(p, "=");
-            p = LogHex(p, g_IfvCensus[path][st]);
+        cursor = LogPut(cursor, path == 0 ? " live{" : path == 1 ? " vtib01{" : " vtibdev{");
+        for (state = 0; state < 8; ++state) {
+            if (!g_IfvCensus[path][state]) continue;
+            cursor = LogPut(cursor, " "); cursor = LogPut(cursor, stname[state]); cursor = LogPut(cursor, "=");
+            cursor = LogHex(cursor, g_IfvCensus[path][state]);
         }
-        p = LogPut(p, " }");
+        cursor = LogPut(cursor, " }");
     }
-    p = LogPut(p, " starve_max_ms="); p = LogHex(p, smax);
-    p = LogPut(p, " stretches=");     p = LogHex(p, g_IfvStarveCount);
-    p = LogPut(p, " shadow{");
-    for (ln = 0; ln < 16; ++ln) {
-        if (!g_IfvShadow[ln]) continue;
-        p = LogPut(p, " irq"); p = LogHexByte(p, (BYTE)ln);
-        p = LogPut(p, "=");    p = LogHex(p, g_IfvShadow[ln]);
+    cursor = LogPut(cursor, " starve_max_ms="); cursor = LogHex(cursor, smax);
+    cursor = LogPut(cursor, " stretches=");     cursor = LogHex(cursor, g_IfvStarveCount);
+    cursor = LogPut(cursor, " shadow{");
+    for (line = 0; line < 16; ++line) {
+        if (!g_IfvShadow[line]) continue;
+        cursor = LogPut(cursor, " irq"); cursor = LogHexByte(cursor, (BYTE)line);
+        cursor = LogPut(cursor, "=");    cursor = LogHex(cursor, g_IfvShadow[line]);
     }
-    p = LogPut(p, " } reenter{");
-    for (ln = 0; ln < 16; ++ln) {
-        if (!g_IfvReenter[ln]) continue;
-        p = LogPut(p, " irq"); p = LogHexByte(p, (BYTE)ln);
-        p = LogPut(p, "=");    p = LogHex(p, g_IfvReenter[ln]);
+    cursor = LogPut(cursor, " } reenter{");
+    for (line = 0; line < 16; ++line) {
+        if (!g_IfvReenter[line]) continue;
+        cursor = LogPut(cursor, " irq"); cursor = LogHexByte(cursor, (BYTE)line);
+        cursor = LogPut(cursor, "=");    cursor = LogHex(cursor, g_IfvReenter[line]);
     }
-    p = LogPut(p, " }\r\n");
-    LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
-    { LONG i, n = g_IfvTraceCount < IFV_TRACE_MAX ? g_IfvTraceCount : IFV_TRACE_MAX;
-      for (i = 0; i < n; ++i) {
-          p = LogPut(p, "STAGE2: IFV irq"); p = LogHexByte(p, g_IfvTrace[i].Irq);
-          p = LogPut(p, g_IfvTrace[i].Path == 0 ? " async" : " coop");
-          p = LogPut(p, " st=");  p = LogPut(p, stname[g_IfvTrace[i].State & 7]);
-          p = LogPut(p, " fl=0x"); p = LogHex(p, g_IfvTrace[i].Flags);
-          p = LogPut(p, " at ");   p = LogHex(p, g_IfvTrace[i].Cs);
-          p = LogPut(p, ":");      p = LogHex(p, g_IfvTrace[i].Ip);
-          p = LogPut(p, "\r\n");
+    cursor = LogPut(cursor, " }\r\n");
+    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    { LONG index, count = g_IfvTraceCount < IFV_TRACE_MAX ? g_IfvTraceCount : IFV_TRACE_MAX;
+      for (index = 0; index < count; ++index) {
+          cursor = LogPut(cursor, "STAGE2: IFV irq"); cursor = LogHexByte(cursor, g_IfvTrace[index].Irq);
+          cursor = LogPut(cursor, g_IfvTrace[index].Path == 0 ? " async" : " coop");
+          cursor = LogPut(cursor, " st=");  cursor = LogPut(cursor, stname[g_IfvTrace[index].State & 7]);
+          cursor = LogPut(cursor, " fl=0x"); cursor = LogHex(cursor, g_IfvTrace[index].Flags);
+          cursor = LogPut(cursor, " at ");   cursor = LogHex(cursor, g_IfvTrace[index].Cs);
+          cursor = LogPut(cursor, ":");      cursor = LogHex(cursor, g_IfvTrace[index].Ip);
+          cursor = LogPut(cursor, "\r\n");
       }
-      LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base; } }
+      LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; } }
 }
 
 /* Headless deadline watchdog (session-9). A headless run must self-bound even when the
@@ -7694,51 +7694,51 @@ static void ifv_report(void)
    iterating), so this thread forces the wind-down: after PM_HEADLESS_MS it clears
    g_Running -- which unblocks every blocking key-read (all check !g_Running) AND exits
    both exec loops -- and wakes any blocked reader. Started only when g_Headless. */
-static DWORD WINAPI headless_deadline_thread(LPVOID pv)
+static DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
 {
     /* ⛔ 2048, NOT 512 (s80). The hot-ports line alone is up to IO_HOT_MAX (48) x ~22
          chars = ~1.1 KB -- IO_HOT_MAX grew from 12 and this buffer did not, so a run with
          many hot ports smashed the stack and the host faulted INSIDE the report meant to
          explain the run (`HOSTFAULT at=0x36303030`, i.e. "0006" as a return address).
          Worst case per flush: ~1.1 KB, then ~0.6 KB (unclaimed + VESA). */
-    char b[2048], *q = b;
-    DWORD f_cs = 0, f_ip = 0, f_efl = 0, f_tick = 0;
-    BYTE  f_bytes[12];
-    int   f_ok = 0;
-    (void)pv;
+    char buffer[2048], *cursor = buffer;
+    DWORD fCs = 0, fIp = 0, fEflags = 0, fTick = 0;
+    BYTE  fBytes[12];
+    int   fOk = 0;
+    (void)parameter;
     Sleep(PM_HEADLESS_MS);
     /* Snapshot the guest NOW, before anything winds down: by the time the grace
        period below expires the VDM address space may already be torn down, and
        reading it then faults this thread and loses the report entirely. */
     if (g_TibDebug) {
-        f_cs  = VDM_REG(g_TibDebug, VTIB_CS)  & 0xFFFF;
-        f_ip  = VDM_REG(g_TibDebug, VTIB_EIP) & 0xFFFF;
-        f_efl = VDM_REG(g_TibDebug, VTIB_EFLAGS);
-        { const volatile BYTE *cp = (const volatile BYTE *)((f_cs << 4) + f_ip);
-          unsigned k; for (k = 0; k < 12; ++k) f_bytes[k] = cp[k]; }
-        f_tick = ((DWORD)PeekWord(0x46E) << 16) | PeekWord(0x46C);
-        f_ok = 1;
+        fCs  = VDM_REG(g_TibDebug, VTIB_CS)  & 0xFFFF;
+        fIp  = VDM_REG(g_TibDebug, VTIB_EIP) & 0xFFFF;
+        fEflags = VDM_REG(g_TibDebug, VTIB_EFLAGS);
+        { const volatile BYTE *code = (const volatile BYTE *)((fCs << 4) + fIp);
+          unsigned byteIndex; for (byteIndex = 0; byteIndex < 12; ++byteIndex) fBytes[byteIndex] = code[byteIndex]; }
+        fTick = ((DWORD)PeekWord(0x46E) << 16) | PeekWord(0x46C);
+        fOk = 1;
     }
     InterlockedExchange(&g_Running, 0);         /* stop exec loops + unblock key reads */
     if (g_KeyEvent) SetEvent(g_KeyEvent);     /* wake a blocked HostConsoleIn/INT16 wait */
-    q = LogPut(q, "HEADLESS: deadline reached -> g_running=0 (wind down)\r\n");
-    LogAppend(LOG_PATH, b, q); SerialOut(b, q);
+    cursor = LogPut(cursor, "HEADLESS: deadline reached -> g_running=0 (wind down)\r\n");
+    LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor);
     if (g_MemoryDumpLength) {                        /* MEMDUMP_FLAG: the guest is still mapped */
-        HANDLE hd = CreateFileA(MEMDUMP_PATH, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
-        DWORD done = 0, off = 0;
-        if (hd != INVALID_HANDLE_VALUE) {
-            while (off < g_MemoryDumpLength) {       /* page at a time, skipping what is not mapped */
-                DWORD n = 0x1000, wr = 0; const void *src = (const void *)(ULONG_PTR)(g_MemoryDumpLinear + off);
-                if (n > g_MemoryDumpLength - off) n = g_MemoryDumpLength - off;
-                if (host_readable(src, n)) { WriteFile(hd, src, n, &wr, NULL); done += wr; }
-                else { static const BYTE z[0x1000]; WriteFile(hd, z, n, &wr, NULL); }
-                off += n;
+        HANDLE dumpHandle = CreateFileA(MEMDUMP_PATH, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+        DWORD done = 0, offset = 0;
+        if (dumpHandle != INVALID_HANDLE_VALUE) {
+            while (offset < g_MemoryDumpLength) {       /* page at a time, skipping what is not mapped */
+                DWORD chunk = 0x1000, bytesWritten = 0; const void *source = (const void *)(ULONG_PTR)(g_MemoryDumpLinear + offset);
+                if (chunk > g_MemoryDumpLength - offset) chunk = g_MemoryDumpLength - offset;
+                if (host_readable(source, chunk)) { WriteFile(dumpHandle, source, chunk, &bytesWritten, NULL); done += bytesWritten; }
+                else { static const BYTE zeros[0x1000]; WriteFile(dumpHandle, zeros, chunk, &bytesWritten, NULL); }
+                offset += chunk;
             }
-            CloseHandle(hd);
+            CloseHandle(dumpHandle);
         }
-        q = b; q = LogPut(q, "HEADLESS: memdump 0x"); q = LogHex(q, g_MemoryDumpLinear);
-        q = LogPut(q, " +0x"); q = LogHex(q, g_MemoryDumpLength); q = LogPut(q, " -> memdump.bin, readable bytes 0x");
-        q = LogHex(q, done); q = LogPut(q, "\r\n"); LogAppend(LOG_PATH, b, q); SerialOut(b, q);
+        cursor = buffer; cursor = LogPut(cursor, "HEADLESS: memdump 0x"); cursor = LogHex(cursor, g_MemoryDumpLinear);
+        cursor = LogPut(cursor, " +0x"); cursor = LogHex(cursor, g_MemoryDumpLength); cursor = LogPut(cursor, " -> memdump.bin, readable bytes 0x");
+        cursor = LogHex(cursor, done); cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor);
     }
 
     /* HARD BACKSTOP. Clearing g_Running only stops a loop that gets a turn, and the
@@ -7753,79 +7753,79 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
        the watcher survives, which is the whole point of headless mode. */
     Sleep(PM_HEADLESS_GRACE_MS);
     if (!g_WoundDown) {
-        q = b;
-        async_why_report();
-        exec_share_report();
-        ifv_report();
-        q = LogPut(q, "HEADLESS: exec loop never wound down (guest spinning in V86 with"
+        cursor = buffer;
+        AsyncWhyReport();
+        ExecShareReport();
+        IfvReport();
+        cursor = LogPut(cursor, "HEADLESS: exec loop never wound down (guest spinning in V86 with"
                     " no traps) -> forcing process exit\r\n");
         /* Report WHERE it froze and what the counters say. Without this the forced
            exit throws away the only evidence of why the guest stopped trapping,
            which is exactly what we need to disassemble the offending loop. */
-        if (f_ok) {
-            q = LogPut(q, "  frozen at CS:IP=0x"); q = LogHex(q, f_cs);
-            q = LogPut(q, ":0x"); q = LogHex(q, f_ip);
-            q = LogPut(q, " EFL=0x"); q = LogHex(q, f_efl);
-            q = LogPut(q, " tick=0x"); q = LogHex(q, f_tick);
-            q = LogPut(q, "\r\n  bytes: "); q = LogDump(q, f_bytes, 12);
-            q = LogPut(q, "\r\n");
+        if (fOk) {
+            cursor = LogPut(cursor, "  frozen at CS:IP=0x"); cursor = LogHex(cursor, fCs);
+            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, fIp);
+            cursor = LogPut(cursor, " EFL=0x"); cursor = LogHex(cursor, fEflags);
+            cursor = LogPut(cursor, " tick=0x"); cursor = LogHex(cursor, fTick);
+            cursor = LogPut(cursor, "\r\n  bytes: "); cursor = LogDump(cursor, fBytes, 12);
+            cursor = LogPut(cursor, "\r\n");
         }
-        LogAppend(LOG_PATH, b, q); SerialOut(b, q); q = b;
-        q = LogPut(q, "  io_events=0x");  q = LogHex(q, g_EventIo);
-        q = LogPut(q, " io_burst=0x");    q = LogHex(q, g_IoExtra);
-        q = LogPut(q, " iostr=0x");       q = LogHex(q, g_EventIoString);
-        q = LogPut(q, " irq0_inj=0x");    q = LogHex(q, g_Irq0Injected);
-        q = LogPut(q, " irq0_skip=0x");   q = LogHex(q, g_Irq0Skip);
-        q = LogPut(q, " intpend=0x");     q = LogHex(q, g_EventIntPending);
-        q = LogPut(q, " irqn_inj=0x");    q = LogHex(q, g_IrqNInjected);
-        q = LogPut(q, " irqn_refused=0x"); q = LogHex(q, g_IrqNRefuseTotal);
-        q = LogPut(q, " raised_any=0x"); q = LogHex(q, g_IrqRaisedAny);
-        q = LogPut(q, " async_inj=0x");  q = LogHex(q, g_AsyncInjected);
-        q = LogPut(q, " async_bail=0x"); q = LogHex(q, g_AsyncBail);
-        { int r; q = LogPut(q, " raised[0..15]=");
-          for (r = 0; r < 16; ++r) { q = LogPut(q, "0x"); q = LogHex(q, g_IrqRaised[r]); q = LogPut(q, " "); } }
-        q = LogPut(q, " sb_irq=0x"); q = LogHex(q, (DWORD)g_Sb.Irq);
-        q = LogPut(q, " qi_calls=0x");    q = LogHex(q, g_QiCalls);
-        q = LogPut(q, " qi_st=0x");       q = LogHex(q, (DWORD)g_QiStatus);
-        q = LogPut(q, " state714=0x");    q = LogHex(q, *(volatile DWORD *)(ULONG_PTR)0x714);
-        q = LogPut(q, "\r\n  audio: silent=0x"); q = LogHex(q, (DWORD)g_Wave.IsSilent);
-        q = LogPut(q, " mixed=0x");        q = LogHex(q, g_Audio.FramesMixed);
-        q = LogPut(q, " sb_dspwr=0x");     q = LogHex(q, g_Sb.DspWrites);
-        q = LogPut(q, " sb_blocks=0x");    q = LogHex(q, g_Sb.Blocks);
-        q = LogPut(q, " sb_mode=0x");      q = LogHex(q, (DWORD)g_Sb.TransferMode);
-        q = LogPut(q, " sb_rate=0x");      q = LogHex(q, g_Sb.RateHz);
+        LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer;
+        cursor = LogPut(cursor, "  io_events=0x");  cursor = LogHex(cursor, g_EventIo);
+        cursor = LogPut(cursor, " io_burst=0x");    cursor = LogHex(cursor, g_IoExtra);
+        cursor = LogPut(cursor, " iostr=0x");       cursor = LogHex(cursor, g_EventIoString);
+        cursor = LogPut(cursor, " irq0_inj=0x");    cursor = LogHex(cursor, g_Irq0Injected);
+        cursor = LogPut(cursor, " irq0_skip=0x");   cursor = LogHex(cursor, g_Irq0Skip);
+        cursor = LogPut(cursor, " intpend=0x");     cursor = LogHex(cursor, g_EventIntPending);
+        cursor = LogPut(cursor, " irqn_inj=0x");    cursor = LogHex(cursor, g_IrqNInjected);
+        cursor = LogPut(cursor, " irqn_refused=0x"); cursor = LogHex(cursor, g_IrqNRefuseTotal);
+        cursor = LogPut(cursor, " raised_any=0x"); cursor = LogHex(cursor, g_IrqRaisedAny);
+        cursor = LogPut(cursor, " async_inj=0x");  cursor = LogHex(cursor, g_AsyncInjected);
+        cursor = LogPut(cursor, " async_bail=0x"); cursor = LogHex(cursor, g_AsyncBail);
+        { int irq; cursor = LogPut(cursor, " raised[0..15]=");
+          for (irq = 0; irq < 16; ++irq) { cursor = LogPut(cursor, "0x"); cursor = LogHex(cursor, g_IrqRaised[irq]); cursor = LogPut(cursor, " "); } }
+        cursor = LogPut(cursor, " sb_irq=0x"); cursor = LogHex(cursor, (DWORD)g_Sb.Irq);
+        cursor = LogPut(cursor, " qi_calls=0x");    cursor = LogHex(cursor, g_QiCalls);
+        cursor = LogPut(cursor, " qi_st=0x");       cursor = LogHex(cursor, (DWORD)g_QiStatus);
+        cursor = LogPut(cursor, " state714=0x");    cursor = LogHex(cursor, *(volatile DWORD *)(ULONG_PTR)0x714);
+        cursor = LogPut(cursor, "\r\n  audio: silent=0x"); cursor = LogHex(cursor, (DWORD)g_Wave.IsSilent);
+        cursor = LogPut(cursor, " mixed=0x");        cursor = LogHex(cursor, g_Audio.FramesMixed);
+        cursor = LogPut(cursor, " sb_dspwr=0x");     cursor = LogHex(cursor, g_Sb.DspWrites);
+        cursor = LogPut(cursor, " sb_blocks=0x");    cursor = LogHex(cursor, g_Sb.Blocks);
+        cursor = LogPut(cursor, " sb_mode=0x");      cursor = LogHex(cursor, (DWORD)g_Sb.TransferMode);
+        cursor = LogPut(cursor, " sb_rate=0x");      cursor = LogHex(cursor, g_Sb.RateHz);
         /* Is what it streamed SOUND? A forced exit never prints the sb OUTPUT block, and
            that was how ZAR's runs end (s81). Flat = no dynamic range (SB_FLAT_RANGE). */
-        q = LogPut(q, " sb_checked=0x");   q = LogHex(q, g_Sb.BlocksChecked);
-        q = LogPut(q, " sb_flat=0x");      q = LogHex(q, g_Sb.BlocksFlat);
-        q = LogPut(q, " bda_tick=0x");    q = LogHex(q, ((DWORD)PeekWord(0x46E) << 16) | PeekWord(0x46C));
-        q = LogPut(q, "\r\n");
-        LogAppend(LOG_PATH, b, q); SerialOut(b, q); q = b;
-        { int i; q = LogPut(q, "  hot ports:");
-          for (i = 0; i < g_IoHotCount; ++i) {
-              q = LogPut(q, " 0x"); q = LogHex(q, g_IoHot[i].Port);
-              q = LogPut(q, "=0x"); q = LogHex(q, g_IoHot[i].Count);
+        cursor = LogPut(cursor, " sb_checked=0x");   cursor = LogHex(cursor, g_Sb.BlocksChecked);
+        cursor = LogPut(cursor, " sb_flat=0x");      cursor = LogHex(cursor, g_Sb.BlocksFlat);
+        cursor = LogPut(cursor, " bda_tick=0x");    cursor = LogHex(cursor, ((DWORD)PeekWord(0x46E) << 16) | PeekWord(0x46C));
+        cursor = LogPut(cursor, "\r\n");
+        LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer;
+        { int index; cursor = LogPut(cursor, "  hot ports:");
+          for (index = 0; index < g_IoHotCount; ++index) {
+              cursor = LogPut(cursor, " 0x"); cursor = LogHex(cursor, g_IoHot[index].Port);
+              cursor = LogPut(cursor, "=0x"); cursor = LogHex(cursor, g_IoHot[index].Count);
           }
-          q = LogPut(q, "\r\n  pit_reload=0x"); q = LogHex(q, (DWORD)g_Pit.Reload);
-          q = LogPut(q, " pit_mode=0x");          q = LogHex(q, (DWORD)g_Pit.Mode);
-          q = LogPut(q, "\r\n");
-          LogAppend(LOG_PATH, b, q); SerialOut(b, q); q = b; }
-        { int i; q = LogPut(q, "  unclaimed ports touched:");
-          for (i = 0; i < g_UnclaimedCount; ++i) { q = LogPut(q, " 0x"); q = LogHex(q, g_Unclaimed[i]); }
-          q = LogPut(q, "\r\n"); }
+          cursor = LogPut(cursor, "\r\n  pit_reload=0x"); cursor = LogHex(cursor, (DWORD)g_Pit.Reload);
+          cursor = LogPut(cursor, " pit_mode=0x");          cursor = LogHex(cursor, (DWORD)g_Pit.Mode);
+          cursor = LogPut(cursor, "\r\n");
+          LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer; }
+        { int index; cursor = LogPut(cursor, "  unclaimed ports touched:");
+          for (index = 0; index < g_UnclaimedCount; ++index) { cursor = LogPut(cursor, " 0x"); cursor = LogHex(cursor, g_Unclaimed[index]); }
+          cursor = LogPut(cursor, "\r\n"); }
         /* The VESA inventory too: a guest that spins at wind-down (Heretic, Hexen,
            ZAR) never reaches the STAGE2 summary, and the corpus sweep read "no line"
            as "no data" for exactly the three guests it most wanted. (s74b) */
-        { int i, any = 0; q = LogPut(q, "  VESA calls by sub-function:");
-          for (i = 0; i < 0x16; ++i) if (g_Video.VesaCalls[i]) {
-              any = 1; q = LogPut(q, " 4F"); q = LogHexByte(q, (unsigned)i); q = LogPut(q, "x"); q = LogHex(q, g_Video.VesaCalls[i]); }
-          if (!any) q = LogPut(q, " none");
+        { int index, any = 0; cursor = LogPut(cursor, "  VESA calls by sub-function:");
+          for (index = 0; index < 0x16; ++index) if (g_Video.VesaCalls[index]) {
+              any = 1; cursor = LogPut(cursor, " 4F"); cursor = LogHexByte(cursor, (unsigned)index); cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Video.VesaCalls[index]); }
+          if (!any) cursor = LogPut(cursor, " none");
           if (g_Video.VbePmBankCount | g_Video.VbePmStartCount | g_Video.VbePmRejected) {   /* #53 */
-              q = LogPut(q, " | 4F0A-block banks=0x"); q = LogHex(q, g_Video.VbePmBankCount);
-              q = LogPut(q, " starts=0x"); q = LogHex(q, g_Video.VbePmStartCount);
-              q = LogPut(q, " refused=0x"); q = LogHex(q, g_Video.VbePmRejected); }
-          q = LogPut(q, "\r\n"); }
-        LogAppend(LOG_PATH, b, q); SerialOut(b, q);
+              cursor = LogPut(cursor, " | 4F0A-block banks=0x"); cursor = LogHex(cursor, g_Video.VbePmBankCount);
+              cursor = LogPut(cursor, " starts=0x"); cursor = LogHex(cursor, g_Video.VbePmStartCount);
+              cursor = LogPut(cursor, " refused=0x"); cursor = LogHex(cursor, g_Video.VbePmRejected); }
+          cursor = LogPut(cursor, "\r\n"); }
+        LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor);
         /* ── ⛔ AND THE REGISTER FILE HERE TOO, NOT ONLY ON THE CLEAN PATH. ──────────
              The STAGE2 summary is printed by the wind-down path, and a guest that has
              to be forced out never reaches it -- Doom headless and ZAR both leave this
@@ -7835,9 +7835,9 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
         modey_tl_report();   /* north star 1: the guests that need it leave this way */
         GusReport();        /* north star 2: and so does heaven7 */
         {   static char vr2[2048];
-            int n2 = VddVideoRegistersDump(&g_Video, vr2, (int)sizeof vr2);
-            if (n2 > 0) { LogAppend(LOG_PATH, vr2, vr2 + n2); SerialOut(vr2, vr2 + n2); } }
-        host_rec_finish();
+            int length = VddVideoRegistersDump(&g_Video, vr2, (int)sizeof vr2);
+            if (length > 0) { LogAppend(LOG_PATH, vr2, vr2 + length); SerialOut(vr2, vr2 + length); } }
+        HostRecordFinish();
         ExitProcess(3);
     }
     return 0;
@@ -7850,14 +7850,14 @@ static DWORD WINAPI headless_deadline_thread(LPVOID pv)
      only while the top-level shell is sitting in that line read (open_at_prompt).
      Head/tail under g_Lock. */
 #define TYPEIN_CAP 512
-static char g_typein[TYPEIN_CAP];
-static int  g_typein_head, g_typein_tail;
+static char g_TypeIn[TYPEIN_CAP];
+static int  g_TypeInHead, g_TypeInTail;
 static int typein_pop(void)
 {
     int c = -1;
-    if (g_typein_head != g_typein_tail) {
-        c = (BYTE)g_typein[g_typein_head];
-        g_typein_head = (g_typein_head + 1) % TYPEIN_CAP;
+    if (g_TypeInHead != g_TypeInTail) {
+        c = (BYTE)g_TypeIn[g_TypeInHead];
+        g_TypeInHead = (g_TypeInHead + 1) % TYPEIN_CAP;
     }
     return c;
 }
@@ -7866,11 +7866,11 @@ static int typein_push(const char *s)
 {
     int n = lstrlenA(s), used, i;
     HOST_LOCK();
-    used = (g_typein_tail - g_typein_head + TYPEIN_CAP) % TYPEIN_CAP;
+    used = (g_TypeInTail - g_TypeInHead + TYPEIN_CAP) % TYPEIN_CAP;
     if (used + n >= TYPEIN_CAP - 1) { HOST_UNLOCK(); return 0; }
     for (i = 0; i < n; ++i) {
-        g_typein[g_typein_tail] = s[i];
-        g_typein_tail = (g_typein_tail + 1) % TYPEIN_CAP;
+        g_TypeIn[g_TypeInTail] = s[i];
+        g_TypeInTail = (g_TypeInTail + 1) % TYPEIN_CAP;
     }
     HOST_UNLOCK();
     return 1;
@@ -7907,7 +7907,7 @@ static int host_conpeek(void *ctx)
          left to give, which is the hang this whole route exists to remove. */
     if (g_StdinHandle) return 1;
     HOST_LOCK();
-    if (g_typein_head != g_typein_tail) { HOST_UNLOCK(); return 1; }
+    if (g_TypeInHead != g_TypeInTail) { HOST_UNLOCK(); return 1; }
     got = VddInputPeek(&g_Input, &k);
     HOST_UNLOCK();
     return got;
@@ -11146,11 +11146,11 @@ static DWORD WINAPI paste_thread(LPVOID pv)
         else { uint8_t k; int kk;                           /* #136: on the active layout */
                if (VddInputCharToKey(&g_Input, ch, &k, &kk)) { sc = k; sh = (BYTE)kk; } }
         if (!sc) continue;                                  /* not typeable: skipped */
-        if (sh) host_key_scancode(0x2A, 0, 0);
-        host_key_scancode(sc, 0, 0);
+        if (sh) HostKeyScancode(0x2A, 0, 0);
+        HostKeyScancode(sc, 0, 0);
         Sleep(12);
-        host_key_scancode(sc, 0, 1);
-        if (sh) host_key_scancode(0x2A, 0, 1);
+        HostKeyScancode(sc, 0, 1);
+        if (sh) HostKeyScancode(0x2A, 0, 1);
         Sleep(20);
     }
     HeapFree(GetProcessHeap(), 0, s);
@@ -11248,7 +11248,7 @@ static LRESULT CALLBACK ll_kbd_proc(int code, WPARAM wp, LPARAM lp)
                          InterlockedExchange(&g_win_down, 0);
                      return CallNextHookEx(g_llkbd, code, wp, lp); }
         /* Swallow only, and deliberately do NOT push these to the guest from here: a
-           low-level hook that blocks is torn down by Windows, and host_key_scancode
+           low-level hook that blocks is torn down by Windows, and HostKeyScancode
            takes g_Lock. Losing Alt+Tab to the guest costs nothing; stalling the hook
            would cost every key. */
         if (k->vkCode == VK_LWIN || k->vkCode == VK_RWIN) {
@@ -12233,7 +12233,7 @@ static void settings_apply(HWND h, const NTVDMEX_SETTINGS *s, int live)
          just "select Unlimited", which the speed list already offers directly. */
     CpuSpeedRecompute();
     /* ── ★ THE GUEST'S KEY REPEAT IS THE GUEST'S, NOT THE HOST'S. (session 57)
-         g_ty_period_us is seeded from the host's own SPI_GETKEYBOARDSPEED, which
+         g_TypematicPeriodMicroseconds is seeded from the host's own SPI_GETKEYBOARDSPEED, which
          is right for a Windows application and wrong for a DOS one: a DOS
          program's repeat rate is the BIOS's, and the IBM BIOS default is about
          ten characters a second. The setting's own default is 10 for that
@@ -12242,7 +12242,7 @@ static void settings_apply(HWND h, const NTVDMEX_SETTINGS *s, int live)
          first repeat, and inventing a second meaning for one control is how a
          knob comes to do something its label does not say. */
     if (s->Values[SET_TYPEMATIC] >= 2)
-        g_ty_period_us = 1000000u / (uint32_t)s->Values[SET_TYPEMATIC];
+        g_TypematicPeriodMicroseconds = 1000000u / (uint32_t)s->Values[SET_TYPEMATIC];
     /* s84 (user): the physical drive, or a mounted image. The physical one needs no
        setting -- DOS already reaches the host's A: -- so only IMAGE mode (chosen, or
        forced because this PC has no floppy drive) names a file here. A blank image
@@ -13267,7 +13267,7 @@ static int host_key_special(uint8_t rawsc, int ext, int is_break)
     n = VddInputHostKeyBytes(rawsc, ext, is_break, b, &no_rep);
     if (!no_rep) return 0;
     if (n) {
-        g_ty_on = 0;
+        g_TypematicOn = 0;
         HOST_LOCK();
         for (i = 0; i < n; ++i) VddInputPushScanCode(&g_Input, b[i]);
         HOST_UNLOCK();
@@ -13284,9 +13284,9 @@ static void key_push_make(LPARAM lp)
        ourselves, so swallow it -- two sources would double the repeat rate. Counted,
        not silently dropped: the count is how we tell "the OS stopped sending them"
        from "we stopped listening". */
-    if (lp & 0x40000000) { g_ty_os_repeats++; return; }
+    if (lp & 0x40000000) { g_TypematicOsRepeats++; return; }
     if (rawsc && host_key_special(rawsc, ext, 0)) return;   /* #274: Pause, Ctrl+Break */
-    if (rawsc) { host_key_scancode(rawsc, ext, 0); host_key_typematic_press(rawsc, ext);
+    if (rawsc) { HostKeyScancode(rawsc, ext, 0); HostKeyTypematicPress(rawsc, ext);
                  mod_track(rawsc, ext, 1); }
 }
 static void key_push_break(LPARAM lp)
@@ -13294,8 +13294,8 @@ static void key_push_break(LPARAM lp)
     uint8_t rawsc = (uint8_t)((lp >> 16) & 0xFF);
     int ext = (lp & 0x01000000) != 0;
     if (rawsc && host_key_special(rawsc, ext, 1)) return;   /* #274: they send no break */
-    if (rawsc) { host_key_typematic_release(rawsc, ext);   /* stop repeating first */
-                 host_key_scancode(rawsc, ext, 1);
+    if (rawsc) { HostKeyTypematicRelease(rawsc, ext);   /* stop repeating first */
+                 HostKeyScancode(rawsc, ext, 1);
                  mod_track(rawsc, ext, 0); }
 }
 /* ── LOSING FOCUS RELEASES THE MODIFIERS. ─────────────────────────────────────────────
@@ -13322,8 +13322,8 @@ static void host_release_modifiers(void)
     int i;
     for (i = 0; i < 6; ++i)
         if (g_mod_down & (1u << i)) {
-            host_key_typematic_release(mods[i].sc, mods[i].ext);
-            host_key_scancode(mods[i].sc, mods[i].ext, 1);
+            HostKeyTypematicRelease(mods[i].sc, mods[i].ext);
+            HostKeyScancode(mods[i].sc, mods[i].ext, 1);
         }
     g_mod_down = 0;
 }
@@ -13340,7 +13340,7 @@ static void host_release_modifiers(void)
      also makes every injector decline. If the thread is in host code at that moment it
      parks itself at the top of its exec loop instead (the two `while (g_PauseWant)`s).
    ► TIME: host_pit_generate drops the paused interval instead of owing it, so there is
-     no burst of ticks on resume; host_audio_fill returns silence without rendering any
+     no burst of ticks on resume; HostAudioFill returns silence without rendering any
      device, so a DMA block or an envelope resumes from the same sample.
    ► SOUND THAT IS NOT OURS TO FREEZE: notes already in XP's MIDI synth are silenced
      (they cannot be held), and the real speaker is switched off.
@@ -13456,7 +13456,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             DWORD nowt = GetTickCount();
             /* g_KeyMessageCount counts WINDOWS key messages, so gating on it alone silently
                disabled this whole dump for SCRIPTED runs (keys.txt drives
-               host_key_scancode directly, never WM_KEYDOWN) -- a headless repro
+               HostKeyScancode directly, never WM_KEYDOWN) -- a headless repro
                attempt produced one sample and no IRQ1GATE at all. Gate on either half. */
             if ((g_KeyMessageCount || g_KeyDeliveryCount) && (DWORD)(nowt - s_kl) >= 5000) {
                 /* ⚠ 768, and the margin is the point. At 384 this line already emitted
@@ -13639,8 +13639,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             s_prev = n; }
         g_Pit.FrameMicroseconds = 0;
         host_pit_sync();
-        host_key_typematic();       /* pumped from BOTH threads, like the PIT */
-        host_key_present();
+        HostKeyTypematic();       /* pumped from BOTH threads, like the PIT */
+        HostKeyPresent();
         HOST_LOCK();
         VddBusFrame(&g_Bus);          /* tick PIT + render into g_Video.frame       */
         /* ── THE REAL PC SPEAKER, SAMPLED HERE AND DRIVEN BELOW. ─────────────────
@@ -13800,7 +13800,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 if (PresentDdrawSaveBmp(&g_PresentDdraw, path) == 0) {
                     ++cap_seq;
                     if (GetFileAttributesA(CFG_("planedump.flag")) != INVALID_FILE_ATTRIBUTES)
-                        planes_dump_beside(path);
+                        PlanesDumpBeside(path);
                 }
                 else if (!cap_failed) {
                     char eb[320], *eq = eb;
@@ -14035,9 +14035,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                             h, settings_dlgproc, 0);
             return 0;
         case IDM_INPUT_CAPTURE: input_capture_set(h, !g_captured); return 0;
-        case IDM_CAP_SHOT: host_screenshot(); return 0;
-        case IDM_CAP_AUDIO: host_rec_toggle(); return 0;              /* #155 */
-        case IDM_CAP_FOLDER: host_open_capture_folder(); return 0;    /* #155 */
+        case IDM_CAP_SHOT: HostScreenshot(); return 0;
+        case IDM_CAP_AUDIO: HostRecordToggle(); return 0;              /* #155 */
+        case IDM_CAP_FOLDER: HostOpenCaptureFolder(); return 0;    /* #155 */
         /* ── ★ THE SYSTEM ABOUT BOX, WHICH IS WHAT A PROGRAM OF THIS ERA USES. ───
              ShellAbout is the shared About dialog every Win16 and early Win32
              application on this desktop puts behind Help > About -- Program
@@ -14197,7 +14197,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
              Exclusivity that still eats keys is not exclusivity. */
         if (g_captured) { key_push_make(lp); break; }
         if (wp == VK_F11) { host_fullscreen_toggle(h); return 0; }
-        if (wp == VK_F5 && (GetKeyState(VK_CONTROL) & 0x8000)) { host_screenshot(); return 0; }
+        if (wp == VK_F5 && (GetKeyState(VK_CONTROL) & 0x8000)) { HostScreenshot(); return 0; }
         /* ⚠ Ctrl+F8 (host cursor on/off) WAS REMOVED WITH ITS MENU ITEM. Its
              argument was "fullscreen is when you most want it and there is no menu
              bar to reach" -- which is true of EXCLUSIVE MODE, and that is a mode, not
@@ -14457,7 +14457,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
            fill callbacks, so no audio thread is inside VddAudioMix when the OPL
            is torn down underneath it. Only then silence the chip. Doing it the
            other way round races the callback for the state it is reading. */
-        host_rec_finish();       /* before the device stops feeding it */
+        HostRecordFinish();       /* before the device stops feeding it */
         AudioWaveStop(&g_Wave);
         /* ⚠ AND THE OTHER SPEAKER, WHICH IS NOT OURS TO LEAVE RUNNING. Beep.sys
              keeps sounding after the process that started it exits -- the note
@@ -17369,7 +17369,7 @@ static void host_fatal_dump(EXCEPTION_RECORD *er, CONTEXT *cx)
     LogAppend(LOG_PATH, cb, p);
     SerialOut(cb, p);
     tray_remove(g_Window);      /* the VEH exits without unwinding the UI thread */
-    host_rec_finish();
+    HostRecordFinish();
     ExitProcess(0xDE0);                                 /* clean exit; batch dumps the log */
 }
 
@@ -17908,7 +17908,7 @@ static DWORD WINAPI dpmi_watchdog(LPVOID param)
     tray_remove(g_Window);
     /* TerminateProcess (forceful) -- ExitProcess hangs trying to unwind the PM engine
        thread (un-terminable LDT context). */
-    host_rec_finish();
+    HostRecordFinish();
     TerminateProcess(GetCurrentProcess(), 0xDD0);
     return 0;
 }
@@ -30166,7 +30166,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          Measured: the mixer NEVER runs on consecutive ticks (2.6% of gaps are one tick,
          49% two, 45% three or four) although we deliver 135 ticks/s against a 140 Hz
          reload -- so it is overrunning, not starved of ticks. And it is not lock
-         contention: slicing host_audio_fill's hold into 64-frame pieces moved
+         contention: slicing HostAudioFill's hold into 64-frame pieces moved
          REPLAYED_LOUD by 2 blocks in 894. Preemption is what slicing cannot touch.
        ► ABOVE_NORMAL, not higher. The audio pump stays at 15 so it still wins every
          race it needs to -- starving it is what "a periodic tick or pulse in otherwise
@@ -31935,7 +31935,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     g_Pit.TicksSet = host_ticks_set;           /* INT 1Ah AH=01h -> DOS's clock (#262) */
     g_DosTickTake = host_tick_take;           /* a raw 006C store -> DOS's clock (#262 B) */
     QueryPerformanceFrequency(&g_QpcFrequency);      /* seeds QpcMicroseconds for the lock instrument */
-    host_key_typematic_init();              /* typematic from XP's setting, not a guess */
+    HostKeyTypematicInitialize();              /* typematic from XP's setting, not a guess */
     VddBusInitialize(&g_Bus, NULL);
     VddBusSetSinks(&g_Bus, HostIrqSink, NULL, NULL, NULL);  /* host presents directly */
     g_PicDevice = VddPicDevice(&g_Pic);      /* before the PIT: it gates every IRQ */
@@ -32163,7 +32163,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     }
     g_SbDevice = VddSbDevice(&g_Sb);
     VddBusAdd(&g_Bus, &g_SbDevice);             /* Sound Blaster 16: 0x220-0x22F  */
-    g_Mpu.Sink = host_midi_sink;
+    g_Mpu.Sink = HostMidiSink;
     {   static const uint16_t MPUB[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };   /* #235 */
         g_Mpu.BasePort = MPUB[g_set.Values[SET_MPUADDR] <= 4 ? g_set.Values[SET_MPUADDR] : 3]; }
     g_MpuDevice = VddMpuDevice(&g_Mpu);
@@ -32172,8 +32172,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
        ⚠ THE SAME NUMBERS GO INTO ULTRASND= -- see the environment build. */
     if (g_GusOn) {                             /* decided at startup: see NOGUS_FLAG's read */
         g_Gus.Dma = &g_Dma; g_Gus.Dram = g_GusDram;
-        g_gusmidi.Sink = host_midi_sink;            /* #190: the 6850 UART -> the synth */
-        g_Gus.MidiSink = gus_midi_to_synth;
+        g_GusMidi.Sink = HostMidiSink;            /* #190: the 6850 UART -> the synth */
+        g_Gus.MidiSink = GusMidiToSynth;
         g_GusDevice = VddGusDevice(&g_Gus);
         VddBusAdd(&g_Bus, &g_GusDevice);
     }
@@ -32411,7 +32411,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
                                              vg = vg * 10u + (unsigned)(c[jg] - '0'); }
           if (jg > 0 && vg <= CPUSPEED_GRAN_MAX_MS) g_CpuSpeedGranularityMs = vg;
       } }
-    /* cpuaff.txt = 1 -> give the guest a core of its own. See cpuaff_apply. */
+    /* cpuaff.txt = 1 -> give the guest a core of its own. See CpuAffinityApply. */
     { HANDLE hpa = CreateFileA(CPUAFF_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
       if (hpa != INVALID_HANDLE_VALUE) {
@@ -32460,14 +32460,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     }
     CpuSpeedRecompute();
     g_CpuSpeedRelease = CreateEventA(NULL, FALSE, FALSE, NULL);   /* #225, auto-reset */
-    g_CpuSpeedThread = CreateThread(NULL, 0, cpuspeed_thread, NULL, 0, NULL);
+    g_CpuSpeedThread = CreateThread(NULL, 0, CpuSpeedThread, NULL, 0, NULL);
     /* ⚠ THE SAME RATE THE MIXER WAS BUILT AT. Opening the device at one rate and
          mixing at another silently resamples everything to a clock nothing runs
          on -- audible as a pitch error, not as an error message. */
     g_Wave.WantsDirectSound = (g_set.Values[SET_AUDIOAPI] == 1);          /* #234 */
     g_Wave.IsForcedSilent = g_Safe.AudioOut;                 /* s90 #132: SAFE MODE */
     g_Wave.MidiChoice = (int)(g_set.Values[SET_MIDI] < MIDI_ROUTE_COUNT ? g_set.Values[SET_MIDI] : 0);  /* #136 */
-    AudioWaveStart(&g_Wave, settings_out_hz(&g_set), host_audio_fill, NULL);
+    AudioWaveStart(&g_Wave, settings_out_hz(&g_set), HostAudioFill, NULL);
     /* ── #136: SAY WHICH SYNTH THE MPU-401 PLAYS THROUGH, but only when it was chosen.
          Host GM (the default) opens device 0 as it always did and logs nothing new. */
     if (g_Wave.MidiChoice != MIDI_ROUTE_GM) {
@@ -32476,8 +32476,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         if (g_Wave.IsMidiExternal) {
             mq = LogPut(mq, " -> device "); mq = LogDecimal(mq, (unsigned)g_Wave.MidiDevice);
             mq = LogPut(mq, " \""); mq = LogPut(mq, g_Wave.MidiName); mq = LogPut(mq, "\", SysEx passed through");
-            g_Mpu.SysExSink = host_midi_sysex;     /* the MPU is on the bus already; no */
-            g_gusmidi.SysExSink = host_midi_sysex; /* guest code has run yet            */
+            g_Mpu.SysExSink = HostMidiSysEx;     /* the MPU is on the bus already; no */
+            g_GusMidi.SysExSink = HostMidiSysEx; /* guest code has run yet            */
         } else {
             mq = LogPut(mq, " asked for, NO such device among "); mq = LogDecimal(mq, g_Wave.MidiDeviceCount);
             mq = LogPut(mq, " -> Host GM (device 0");
@@ -32492,7 +32492,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         aq = LogPut(aq, g_Wave.IsUsingDirectSound ? "DirectSound" : g_Wave.IsSilent ? "none (silent pump)" : "WinMM");
         if (g_Wave.WantsDirectSound && !g_Wave.IsUsingDirectSound) aq = LogPut(aq, " (DirectSound asked for, would not open)");
         aq = LogPut(aq, "\r\n"); LogAppend(LOG_PATH, ab, aq); }
-    /* cfg\wavrec.flag: record the whole run's audio -- see host_rec_finish. */
+    /* cfg\wavrec.flag: record the whole run's audio -- see HostRecordFinish. */
     if (GetFileAttributesA(WAVREC_FLAG) != INVALID_FILE_ATTRIBUTES) {
         int rr = AudioWaveRecordStart(WAVREC_PATH, g_Wave.SampleHz);
         p = LogPut(p, rr == 0 ? "STAGE1: wavrec.flag -- recording the audio output to debug\\out\\capture_audio.wav at "
@@ -32541,7 +32541,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     ui = CreateThread(NULL, 0, ui_thread, NULL, 0, NULL);
     /* Headless: arm the deadline watchdog so a run that blocks on input (a "press any
        key" prompt, a game menu) still self-terminates instead of wedging the harness. */
-    if (g_Headless) { HANDLE hd = CreateThread(NULL, 0, headless_deadline_thread, NULL, 0, NULL);
+    if (g_Headless) { HANDLE hd = CreateThread(NULL, 0, HeadlessDeadlineThread, NULL, 0, NULL);
                       if (hd) CloseHandle(hd);
                       /* appended to the preamble, which is flushed further down */
                       p = LogPut(p, "HEADLESS: cap=0x"); p = LogHex(p, g_HeadlessMs);
@@ -32549,11 +32549,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     /* cfg\livehb.flag: the heartbeat on a LIVE (by-hand) run too. A host that dies
        with no exit report leaves nothing else that says where the guest was. (s68) */
     if (g_Headless || GetFileAttributesA(CFG_("livehb.flag")) != INVALID_FILE_ATTRIBUTES) {
-                      HANDLE hb = CreateThread(NULL, 0, heartbeat_thread, NULL, 0, NULL);
+                      HANDLE hb = CreateThread(NULL, 0, HeartbeatThread, NULL, 0, NULL);
                       if (hb) CloseHandle(hb); }
-    if (g_QiKeys) { HANDLE hk = CreateThread(NULL, 0, synthkey_thread, NULL, 0, NULL);
+    if (g_QiKeys) { HANDLE hk = CreateThread(NULL, 0, SynthKeyThread, NULL, 0, NULL);
                      if (hk) CloseHandle(hk); }
-    if (g_QiRaise) { HANDLE hq = CreateThread(NULL, 0, qirq_probe_thread, NULL, 0, NULL);
+    if (g_QiRaise) { HANDLE hq = CreateThread(NULL, 0, QueueIrqProbeThread, NULL, 0, NULL);
                       if (hq) CloseHandle(hq); }
 
     /* ── GH #128: on a WOW launch, the guest is krnl386, not a DOS program. ─────────
@@ -32833,8 +32833,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
            (as this one does) had its sequencer clocked far too slowly no matter what. */
         host_pit_sync();
         OplPumpTime();            /* keep the OPL timers current for the guest */
-        host_key_typematic();       /* the keyboard repeats even when the UI stalls */
-        host_key_present();         /* ...and presents the next byte after its transfer time */
+        HostKeyTypematic();       /* the keyboard repeats even when the UI stalls */
+        HostKeyPresent();         /* ...and presents the next byte after its transfer time */
         /* Deliver a pending PIT IRQ0 as INT 08h when the guest's main-line
            interrupts are enabled. We regain control at event boundaries, almost
            always inside a BOP stub (CS == DOS_HDLR_SEG) where the LIVE IF is the
@@ -36496,15 +36496,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
          suppressed because we generate our own. If ty_os is large and ty_sent is
          small, the pump is not running; if both are small while a key was held,
          the OS was not delivering repeats either -- which is what started this. */
-      p = LogPut(p, " ty_sent=0x");                   p = LogHex(p, g_ty_sent);
-      p = LogPut(p, " ty_os=0x");                     p = LogHex(p, g_ty_os_repeats);
+      p = LogPut(p, " ty_sent=0x");                   p = LogHex(p, g_TypematicSent);
+      p = LogPut(p, " ty_os=0x");                     p = LogHex(p, g_TypematicOsRepeats);
       /* The XP setting we derived the rate from, raw and in microseconds, so a run
          says WHY it repeats at the speed it does. Verify against stock ntvdm with
          tests/probes/dos/tymat.asm: the target is delay 7 ticks / 102 repeats. */
-      p = LogPut(p, " spi_delay=0x");                 p = LogHex(p, g_ty_spi_delay);
-      p = LogPut(p, " spi_speed=0x");                 p = LogHex(p, g_ty_spi_speed);
-      p = LogPut(p, " ty_delay_us=0x");               p = LogHex(p, g_ty_delay_us);
-      p = LogPut(p, " ty_period_us=0x");              p = LogHex(p, g_ty_period_us);
+      p = LogPut(p, " spi_delay=0x");                 p = LogHex(p, g_TypematicSpiDelay);
+      p = LogPut(p, " spi_speed=0x");                 p = LogHex(p, g_TypematicSpiSpeed);
+      p = LogPut(p, " ty_delay_us=0x");               p = LogHex(p, g_TypematicDelayMicroseconds);
+      p = LogPut(p, " ty_period_us=0x");              p = LogHex(p, g_TypematicPeriodMicroseconds);
       /* Does the guest set its OWN typematic rate? If it does, ours is a guess and
          should be taken from its 0xF3 byte instead (bits 0-4 rate, 5-6 delay). */
       p = LogPut(p, "\r\nSTAGE2: kbd 8042: writes=0x"); p = LogHex(p, g_Input.KeyboardPortWrites);
@@ -36823,11 +36823,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
         p = LogPut(p, "\r\n");
         /* Flushed first, deliberately: `base` points past the preamble, so report[] has
            well under 8 KB of headroom and the sbblk ledger below eats most of what is
-           left. Then which clause said no, per line (async_why_report). */
+           left. Then which clause said no, per line (AsyncWhyReport). */
         LogAppend(LOG_PATH, base, p); SerialOut(base, p); p = base;
-        async_why_report();
-        exec_share_report();
-        ifv_report();   /* IF/VIF census -- see IfvNote */
+        AsyncWhyReport();
+        ExecShareReport();
+        IfvReport();   /* IF/VIF census -- see IfvNote */
         /* ► DOES DMX ASK US WHERE THE PLAY HEAD IS? See the note in vdd_dma.h. A
              nonzero rd_addr on the SB's channel means every refill decision the guest
              makes is downstream of our cur_addr, which advances on the audio thread in
@@ -37842,7 +37842,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     if (g_Headless) {
         DeleteFileA(AUTOEXIT_PATH);
         tray_remove(g_Window);     /* ExitProcess runs no window cleanup -- see below */
-        host_rec_finish();
+        HostRecordFinish();
         ExitProcess(0);
     }
     /* ── ★★★★ A WIN16 HOST MUST NOT OUTLIVE ITS GUEST. (session 56) ────────────
