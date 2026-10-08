@@ -39,6 +39,8 @@
 #define DOS_XMS_FN_GET_VERSION        0x00
 #define DOS_XMS_FN_REQUEST_HMA        0x01
 #define DOS_XMS_FN_RELEASE_HMA        0x02
+#define DOS_HMA_BASE_U                0x100000u   /* FFFF:0010 */
+#define DOS_HMA_ALLOCATION_U          0x10000u    /* the 64 KB reserved for it */
 #define DOS_XMS_FN_GLOBAL_ENABLE_A20  0x03
 #define DOS_XMS_FN_GLOBAL_DISABLE_A20 0x04
 #define DOS_XMS_FN_LOCAL_ENABLE_A20   0x05

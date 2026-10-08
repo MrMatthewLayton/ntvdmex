@@ -1080,7 +1080,7 @@ static PRESENT_DDRAW g_PresentDdraw;
 static DOS_XMS_STATE    g_Xms;       /* M4: XMS extended-memory manager           */
 static PVOID g_Hma;       /* the HMA at linear 0x100000, 0 = unavailable */
 static DWORD        g_HmaError;   /* why not, when g_Hma == 0                     */
-
+#define HMA_ERROR_PROTECTED 0xE1   /* g_HmaError: committed but not accessible */
 /* Make the HMA real: one committed 64KB range at linear 0x100000, which a guest
    reaches as FFFF:0010 because in this design a guest linear IS a host VA.
    ⚠ Called ONCE and EARLY so the answer can ride the STAGE0 preamble, which is a
@@ -1092,7 +1092,7 @@ static DWORD g_HmaState, g_HmaProtection;   /* what was already at 0x100000     
 static VOID HmaTry(VOID)
 {
     MEMORY_BASIC_INFORMATION memoryInfo;
-    PVOID want = (VOID *)(ULONG_PTR)0x100000u;
+    PVOID want = (VOID *)(ULONG_PTR)DOS_HMA_BASE_U;
     /* ── ASK WHAT IS THERE BEFORE ASKING FOR IT. ──────────────────────────────
          The first cut went straight to VirtualAlloc(MEM_RESERVE|MEM_COMMIT) and
          got ERROR_INVALID_ADDRESS (0x1E7) -- which says "something already owns
@@ -1105,17 +1105,17 @@ static VOID HmaTry(VOID)
     }
     g_HmaState = memoryInfo.State; g_HmaProtection = memoryInfo.Protect;
     if (memoryInfo.State == MEM_COMMIT) {
-        if (memoryInfo.Protect & (PAGE_NOACCESS | PAGE_GUARD)) { g_HmaError = 0xE1; return; }
+        if (memoryInfo.Protect & (PAGE_NOACCESS | PAGE_GUARD)) { g_HmaError = HMA_ERROR_PROTECTED; return; }
         g_Hma = want;                       /* already ours -- nothing to do      */
         return;
     }
-    g_Hma = VirtualAlloc(want, 0x10000u,
+    g_Hma = VirtualAlloc(want, DOS_HMA_ALLOCATION_U,
                          (memoryInfo.State == MEM_RESERVE) ? MEM_COMMIT
                                                     : (MEM_COMMIT | MEM_RESERVE),
                          PAGE_READWRITE);
     if (g_Hma != want) { g_HmaError = GetLastError(); g_Hma = 0; return; }
-    { UINT index; volatile BYTE *hma = (volatile BYTE *)(ULONG_PTR)0x100000u;
-      for (index = 0; index < 0x10000u; ++index) hma[index] = 0; }
+    { UINT index; volatile BYTE *hma = (volatile BYTE *)(ULONG_PTR)DOS_HMA_BASE_U;
+      for (index = 0; index < DOS_HMA_ALLOCATION_U; ++index) hma[index] = 0; }
 }
 static DOS_EMS_STATE    g_Ems;       /* M4: EMS expanded-memory manager           */
 /* PENDING TIMER TICKS, as a saturating COUNT rather than a flag. A boolean coalesces: every
@@ -2706,7 +2706,7 @@ static INT PmRwHardwareFail(DOS_MACHINE *machine, volatile BYTE *tib, BYTE funct
     *logCursor = LogPut(*logCursor, ", 59h=53h\r\n");
     return 1;
 }
-
+enum { DPMI_FAULT_TABLE_ENTRY = 0x10, DPMI_FAULT_TABLE_OFFSET = 4 };   /* g_FaultTable: per class, the code selector then the offset DWORD */
 static WORD  g_PmReturnSelector = 0;
 /* GH #18: the PM-fault reflect selectors (0 = not installed). Run 67 corrected model:
    g_DpmiFaultSelector = the handler STACK selector (writable-data) written to [TIB+0x638];
@@ -2716,7 +2716,7 @@ static WORD  g_PmReturnSelector = 0;
    pointing at its OWN BOP so the index survives the reflect (see dos_layout.h). */
 static WORD  g_DpmiFaultSelector = 0;
 static WORD  g_DpmiFaultCodeSelector = 0;
-static BYTE  g_FaultTable[DOS_FLTSITE_N * 0x10] __attribute__((aligned(16)));
+static BYTE  g_FaultTable[DOS_FLTSITE_N * DPMI_FAULT_TABLE_ENTRY] __attribute__((aligned(16)));
 static BYTE  g_FaultStack[DPMI_FAULT_STK_SIZE] __attribute__((aligned(16)));   /* #205 */
 /* DPMI LDT descriptor allocator. Indices 0=null,1=code(0x0F),2=data(0x17) are the
    switch's; DPMI clients allocate from 3+. We keep base/limit/access so INT 31h
@@ -8128,11 +8128,11 @@ static VOID HostEms(volatile BYTE *tib)
         else E_SETAH(error);
         break;
     case DOS_EMS_FN_GET_ALL_HANDLE_PAGES: {                                        /* all handle pages -> ES:DI, BX */
-        BYTE pairs[DOS_EMS_MAX_HANDLES * 4];
+        BYTE pairs[DOS_EMS_MAX_HANDLES * DOS_EMS_HANDLE_PAGES_ENTRY];
         volatile BYTE *destination = (volatile BYTE *)(ULONG_PTR)
             ((VDM_REG16(tib, VTIB_ES) << PARAGRAPH_SHIFT) + VDM_REG16(tib, VTIB_EDI));
         INT count = DosEmsGetAllHandlePages(&g_Ems, pairs), index;
-        for (index = 0; index < count * 4; ++index) destination[index] = pairs[index];
+        for (index = 0; index < count * DOS_EMS_HANDLE_PAGES_ENTRY; ++index) destination[index] = pairs[index];
         E_SETBX((WORD)count); E_SETAH(DOS_EMS_STATUS_OK);
         break; }
     case DOS_EMS_FN_HANDLE_NAME: {                                        /* handle name: AL=0 get ES:DI, 1 set DS:SI */
@@ -8140,7 +8140,7 @@ static VOID HostEms(volatile BYTE *tib)
         volatile BYTE *nameBuffer = (int53Al == 0)
             ? (volatile BYTE *)(ULONG_PTR)((VDM_REG16(tib, VTIB_ES) << PARAGRAPH_SHIFT) + VDM_REG16(tib, VTIB_EDI))
             : (volatile BYTE *)(ULONG_PTR)((VDM_REG16(tib, VTIB_DS) << PARAGRAPH_SHIFT) + VDM_REG16(tib, VTIB_ESI));
-        if (int53Al > 1) E_SETAH(0x8F);                    /* LIM: invalid subfunction */
+        if (int53Al > DOS_EMS_HANDLE_NAME_SET) E_SETAH(DOS_EMS_ERROR_INVALID_SUBFUNCTION);                    /* LIM: invalid subfunction */
         else if (DosEmsGetSetHandleName(&g_Ems, (WORD)VDM_REG16(tib, VTIB_EDX),
                                  (INT)int53Al, nameBuffer, &error)) E_SETAH(DOS_EMS_STATUS_OK);
         else E_SETAH(error);
@@ -8361,7 +8361,7 @@ static volatile LONG g_MouseHotX = 0, g_MouseHotY = 0;
 static volatile LONG g_MouseTcHardware = 0, g_MouseTcHardwareLow = 0, g_MouseTcHardwareHigh = 0;
 static volatile LONG g_MousePage = 0;
 static volatile LONG g_MouseRate = 3;     /* 1Ch code: 3 = 100 reports/s, the PS/2 aux default */
-
+enum { MOUSE_CB_WHY_IN_FLIGHT = 0, MOUSE_CB_WHY_NO_EVENTS = 1, MOUSE_CB_WHY_NO_HANDLER = 2, MOUSE_CB_WHY_IN_STUB = 3, MOUSE_CB_WHY_IF_OFF = 4, MOUSE_CB_WHY_STUB_CLOBBERED = 5, MOUSE_CB_WHY_COUNT = 6 };   /* g_MouseCallbackWhy */
 /* ── 0Ch / 14h: THE EVENT HANDLER. STORED AND REPORTED; NOT YET CALLED. ──────────────
      A guest installs a far pointer and a call mask and expects the driver to CALL IT
      on the masked events. We do not do that yet -- invoking guest code out of band
@@ -8456,7 +8456,7 @@ static DWORD  g_MouseCallbackInjected, g_MouseCallbackDone, g_MouseCallbackLost,
 static INT    g_MouseCallbackTrace;            /* VM events still to log after an injection  */
 /* Why a delivery attempt did NOT happen, by reason -- a zero cb_inj must be readable:
    [0] in flight  [1] no mask/no events  [2] no handler  [3] inside our stub  [4] IF off */
-static DWORD  g_MouseCallbackWhy[6];           /* [5] = return stub clobbered (see MS_CB_RET_OFF) */
+static DWORD  g_MouseCallbackWhy[MOUSE_CB_WHY_COUNT];           /* [5] = return stub clobbered (see MS_CB_RET_OFF) */
 static DWORD  g_MouseEventRaised;          /* event bits ever raised by the UI side      */
 static struct { DWORD Eax, Ebx, Ecx, Edx, Esi, Edi, Ebp, Esp, Eip, Eflags, Cs, Ds, Es, Ss; } g_MouseCallbackSaved;
 static VOID MouseEventRaise(LONG bits)
@@ -8798,16 +8798,16 @@ static VOID I33ResetState(VOID)
     InterlockedExchange(&g_MouseHidden, 1);               /* hidden until Show       */
     InterlockedExchange(&g_MouseMinimumX, -1); InterlockedExchange(&g_MouseMaximumX, -1);
     InterlockedExchange(&g_MouseMinimumY, -1); InterlockedExchange(&g_MouseMaximumY, -1);
-    InterlockedExchange(&g_MouseMickeyX, 8); InterlockedExchange(&g_MouseMickeyY, 16);
-    InterlockedExchange(&g_MouseDoubleThreshold, 64);
+    InterlockedExchange(&g_MouseMickeyX, I33_DEFAULT_MICKEYS_X); InterlockedExchange(&g_MouseMickeyY, I33_DEFAULT_MICKEYS_Y);
+    InterlockedExchange(&g_MouseDoubleThreshold, I33_DEFAULT_DOUBLE_SPEED);
     InterlockedExchange(&g_MouseEventMask, 0);
     InterlockedExchange(&g_MouseEventSegment, 0);
     InterlockedExchange(&g_MouseEventOffset, 0);
-    InterlockedExchange(&g_MouseTextCursorAnd, 0x77FF); InterlockedExchange(&g_MouseTextCursorXor, 0x7700);
-    InterlockedExchange(&g_MouseSpeedX, 50); InterlockedExchange(&g_MouseSpeedY, 50); InterlockedExchange(&g_MouseSpeedDouble, 50);
+    InterlockedExchange(&g_MouseTextCursorAnd, I33_DEFAULT_TEXT_AND); InterlockedExchange(&g_MouseTextCursorXor, I33_DEFAULT_TEXT_XOR);
+    InterlockedExchange(&g_MouseSpeedX, I33_DEFAULT_SPEED); InterlockedExchange(&g_MouseSpeedY, I33_DEFAULT_SPEED); InterlockedExchange(&g_MouseSpeedDouble, I33_DEFAULT_SPEED);
     InterlockedExchange(&g_MouseHotX, 0);  InterlockedExchange(&g_MouseHotY, 0);
     InterlockedExchange(&g_MouseTcHardware, 0);
-    InterlockedExchange(&g_MousePage, 0);   InterlockedExchange(&g_MouseRate, 3);
+    InterlockedExchange(&g_MousePage, 0);   InterlockedExchange(&g_MouseRate, I33_DEFAULT_RATE);
     /* #264/#265: the default cursor (the host arrow), no alternate handlers, the default
        profiles. ⚠ That a reset clears 18h's handlers and the loaded profiles is the
        reading "everything the driver owns goes back to power-on" -- UNMEASURED. */
@@ -9571,12 +9571,12 @@ static VOID MouseCallbackTry(volatile BYTE *tib)
         if ((DWORD)(GetTickCount() - (g_MouseCallbackSince & ~1u)) > MS_CB_TIMEOUT_MS) {
             g_MouseCallbackActive = 0; ++g_MouseCallbackLost;
         }
-        ++g_MouseCallbackWhy[0]; return;
+        ++g_MouseCallbackWhy[MOUSE_CB_WHY_IN_FLIGHT]; return;
     }
     /* 18h's handlers count as handlers (#265): a guest with only those still gets calls. */
     if ((!g_MouseEventMask && !I33AlternateAny(g_MouseAlt)) || g_MouseEventQueueHead == g_MouseEventQueueTail)
-    { ++g_MouseCallbackWhy[1]; return; }
-    if (!MouseAnyHandler()) { ++g_MouseCallbackWhy[2]; return; }
+    { ++g_MouseCallbackWhy[MOUSE_CB_WHY_NO_EVENTS]; return; }
+    if (!MouseAnyHandler()) { ++g_MouseCallbackWhy[MOUSE_CB_WHY_NO_HANDLER]; return; }
     if (g_DpmiPm) {                               /* PM client: DpmiInjectPmMouseCallback()
                                                       delivers from the PM loop; leave the
                                                       queue for it (s74c -- it used to be
@@ -9597,24 +9597,24 @@ static VOID MouseCallbackTry(volatile BYTE *tib)
              driver on real hardware calls it from an interrupt context too. Only the
              INT 09h stub's own BOP instruction (0x4C..0x4E, not yet executed) is kept
              out, so the byte it consumes is not disturbed. */
-        if (ip >= DOS_HDLR_INT09_STUB_OFF && ip < DOS_HDLR_INT09_STUB_OFF + VDM_BOP_LENGTH) { ++g_MouseCallbackWhy[3]; return; }
+        if (ip >= DOS_HDLR_INT09_STUB_OFF && ip < DOS_HDLR_INT09_STUB_OFF + VDM_BOP_LENGTH) { ++g_MouseCallbackWhy[MOUSE_CB_WHY_IN_STUB]; return; }
         if ((ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END) || ip == DOS_HDLR_INT09_STUB_OFF + VDM_BOP_LENGTH) flags = EFLAGS_IF; /* stub about to IRET: deliver */
         else flags = PeekWord((ss << PARAGRAPH_SHIFT) + ((sp + X86_FRAME16_FLAGS) & WORD_MASK));    /* the FLAGS the stub IRETs to  */
     } else flags = VDM_REG(tib, VTIB_EFLAGS);
-    if (!IfOrVif(flags)) { ++g_MouseCallbackWhy[4]; return; } /* interrupts off: like an IRQ, wait */
+    if (!IfOrVif(flags)) { ++g_MouseCallbackWhy[MOUSE_CB_WHY_IF_OFF]; return; } /* interrupts off: like an IRQ, wait */
     /* ── THE RETURN STUB, RE-VERIFIED EVERY TIME (see MS_CB_RET_OFF). A guest that has
          written over it would be sent into data by its own RETF; refusing is the
          lesser harm, and the refusal is counted and named. */
     {   const volatile BYTE *returnStub = (const volatile BYTE *)(ULONG_PTR)((DOS_HDLR_SEG << PARAGRAPH_SHIFT) + MS_CB_RET_OFF);
-        if (returnStub[0] != VDM_BOP0 || returnStub[1] != VDM_BOP1 || returnStub[2] != MS_CB_BOP) {
-            if (g_MouseCallbackWhy[5] < 4) {
+        if (returnStub[0] != VDM_BOP0 || returnStub[1] != VDM_BOP1 || returnStub[VDM_BOP_NUMBER_OFFSET] != MS_CB_BOP) {
+            if (g_MouseCallbackWhy[MOUSE_CB_WHY_STUB_CLOBBERED] < 4) {
                 CHAR lineBuffer[160], *lineCursor = lineBuffer;
                 lineCursor = LogPut(lineCursor, "MOUSECB REFUSED: return stub at 0050:");
                 lineCursor = LogHex(lineCursor, MS_CB_RET_OFF); lineCursor = LogPut(lineCursor, " overwritten by the guest: ");
                 lineCursor = LogDump(lineCursor, (const VOID *)returnStub, 4); lineCursor = LogPut(lineCursor, "\r\n");
                 LogAppend(LOG_PATH, lineBuffer, lineCursor);
             }
-            ++g_MouseCallbackWhy[5];
+            ++g_MouseCallbackWhy[MOUSE_CB_WHY_STUB_CLOBBERED];
             g_MouseEventQueueTail = g_MouseEventQueueHead; InterlockedExchange(&g_MouseEventPend, 0);
             return;
         }
@@ -15226,7 +15226,7 @@ static DWORD HostIoLoopBurst(volatile BYTE *tib, VDD_BUS *bus,
     g_IoExtra += iterations;
     return iterations;
 }
-
+#define RETRACE_IDLE_MIN_US 1500u   /* shorter waits are not worth idling for */
 /* Decode + service a V86 IN/OUT that #GP-faulted (event 2), dispatch it to the
    bus, and advance EIP past the instruction so the guest resumes. Returns 1 if
    the faulting instruction was a (supported) I/O op we handled, 0 if it was a
@@ -15261,7 +15261,7 @@ static VOID Int10WaitAfter(VOID)
     }
     if (waited) ++g_VbeWaits;
 }
-
+enum { RETRACE_IDLE_PATTERN_LENGTH = 4, RETRACE_IDLE_BACK_MAX = 3 };   /* RetraceIdle: test/and al ; jcc back to the IN */
 static volatile DWORD g_RetracePending, g_RetraceCs, g_RetraceIp, g_RetraceAl, g_RetraceCx, g_RetraceIdles;
 static INT g_RetraceOffset = -1;
 /* What follows the guests' 3DAh reads, site by site: the loops RetraceIdle() must recognise
@@ -15300,21 +15300,21 @@ static VOID RetraceIdle(VOID)
     /* test al,08h (A8 08) or and al,08h (24 08), then back to the IN with jz/jnz (74/75)
        -- or, #183 (s84 census: Skyroads' only hot site, 276:6287, 5.5M reads a run), with
        loopz/loopnz (E1/E0): the same wait with a CX timeout. */
-    if (!((code[0] == X86_OP_TEST_IMM_BYTE || code[0] == X86_OP_AND_AL_IMM) && code[1] == 0x08
+    if (!((code[0] == X86_OP_TEST_IMM_BYTE || code[0] == X86_OP_AND_AL_IMM) && code[1] == VIDEO_STATUS1_VERTICAL_RETRACE
           && (code[2] == X86_OP_JZ_SHORT || code[2] == X86_OP_JNZ_SHORT || code[2] == X86_OP_LOOPE || code[2] == X86_OP_LOOPNE)))
         return;
-    {   INT target = (INT)((ip + 4 + (INT8)code[3]) & WORD_MASK);
-        if (target > (INT)ip || (INT)ip - target > 3) return;    /* must jump back to the IN */ }
+    {   INT target = (INT)((ip + RETRACE_IDLE_PATTERN_LENGTH + (INT8)code[3]) & WORD_MASK);
+        if (target > (INT)ip || (INT)ip - target > RETRACE_IDLE_BACK_MAX) return;    /* must jump back to the IN */ }
     /* A LOOP whose CX runs out THIS time round exits on its own: leave it be. (It
        decrements first, so CX == 1 is the last pass.) Sleeping otherwise only spends
        fewer iterations of the timeout per millisecond, which a real slow bus did too. */
-    if ((code[2] == 0xE1 || code[2] == 0xE0) && g_RetraceCx <= 1u) return;
+    if ((code[2] == X86_OP_LOOPE || code[2] == X86_OP_LOOPNE) && g_RetraceCx <= 1u) return;
     /* jz / loopz loop while the bit is CLEAR -> waiting for bit 3 SET */
-    want = (code[2] == 0x74 || code[2] == 0xE1);
-    bit3 = (g_RetraceAl & 0x08) != 0;
+    want = (code[2] == X86_OP_JZ_SHORT || code[2] == X86_OP_LOOPE);
+    bit3 = (g_RetraceAl & VIDEO_STATUS1_VERTICAL_RETRACE) != 0;
     if (bit3 == want) return;          /* the loop exits this time round */
     microseconds = VddVideoUsToRetrace(&g_Video, want);
-    if (microseconds == 0xFFFFFFFFu || microseconds < 1500u) return;
+    if (microseconds == VIDEO_RETRACE_UNKNOWN_U || microseconds < RETRACE_IDLE_MIN_US) return;
     ++g_RetraceIdles;
     Sleep(1);
 }
@@ -18261,9 +18261,9 @@ static DWORD WowFindLdtBase(VOID)
     LogAppend(LDTLOG_PATH, message, cursor);
     return 0;
 }
-
+#define WOW_ENTRY_CX_FULL_U 0xF880u   /* krnl386's entry CX: its 64 KB selector less our header image */
 static NE_REGISTRY g_WowRegistry;
-
+enum { WOW_FILLER_SLACK_PARAS = 2 };   /* WowPlaceV86: the MCB headers a filler allocation adds */
 /* ── WOW ENTRY STAGE: put krnl386 in CONVENTIONAL memory and relocate to PARAGRAPHS. ─
      This, not the selector stage below, is how krnl386 is actually entered -- see the
      refutation there. It runs in V86 first and switches itself to protected mode via
@@ -18489,7 +18489,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
             volatile BYTE *callStub = (volatile BYTE *)(ULONG_PTR)((DWORD)callStubSegment << PARAGRAPH_SHIFT);
             g_WowCallbackSegment = callStubSegment;
             g_WowCallbackLinear = (DWORD)callStubSegment << PARAGRAPH_SHIFT;
-            callStub[0] = VDM_BOP0; callStub[1] = VDM_BOP1; callStub[2] = WOWCALL_BOP_CODE;
+            callStub[0] = VDM_BOP0; callStub[1] = VDM_BOP1; callStub[VDM_BOP_NUMBER_OFFSET] = WOWCALL_BOP_CODE;
             /* ★ And the RETF trampoline, four bytes along -- the paragraph has
                  sixteen and we were using three. See WOWCALL_RETF_OFF: it is how
                  a call into a NOT-YET-LOADED code segment gets that segment
@@ -18658,7 +18658,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
     {   WORD fillerSegment = 0, fillerMaximum = 0, want;
         (VOID)DosMcbAllocate(NULL, machine->FirstMcb, DOS_MCB_LARGEST_REQUEST, &fillerSegment, &fillerMaximum);   /* ask -> largest free */
         want = (WORD)(WOW_STACK_PARAS + windowParas);
-        if (fillerMaximum > want + 2) {
+        if (fillerMaximum > want + WOW_FILLER_SLACK_PARAS) {
             /* -1 for the MCB header DOS puts in front of the second allocation: without
                it the filler eats the paragraph the stack+window block needs and the
                allocation fails outright ("no memory for the stack + header image"). */
@@ -18838,7 +18838,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
         {   DWORD first = module->SegmentCount > 1 ? module->Segments[1].FileOffset
                                         : module->Segments[0].FileOffset;
             DWORD gap   = (first > module->Header) ? ((first - module->Header) + PARAGRAPH_LAST_BYTE_U) & ~PARAGRAPH_LAST_BYTE_U : 0;
-            DWORD full  = 0xF880u;
+            DWORD full  = WOW_ENTRY_CX_FULL_U;
             g_WowEntryCx = (WORD)(gap < full ? full - gap : full);
             cursor = LogPut(cursor, "WOWV86: arena gap = 0x"); cursor = LogHex(cursor, gap);
             cursor = LogPut(cursor, " bytes (the header and tables, header+0x0 .. +0x");
@@ -18955,7 +18955,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
                  GetSystemDirectory answered "\SYSTEM" with no drive. One entry,
                  through `extra`, whose cap note keeps the tail krnl386 reads. */
             CHAR systemRootVariable[MAX_PATH + 16] = "SYSTEMROOT=";
-            if (!GetWindowsDirectoryA(systemRootVariable + 11, MAX_PATH)) systemRootVariable[0] = 0;
+            if (!GetWindowsDirectoryA(systemRootVariable + sizeof "SYSTEMROOT=" - 1, MAX_PATH)) systemRootVariable[0] = 0;
             length = GetSystemDirectoryA(pathValue, MAX_PATH);
             if (length && length < MAX_PATH) { pathValue[length] = ';';
                 if (!GetWindowsDirectoryA(pathValue + length + 1, MAX_PATH)) pathValue[length] = 0; }
@@ -19284,7 +19284,7 @@ static VOID DpmiInstall(INT index)
         }
     }
 }
-
+#define DPMI_FAULT_TRAMPOLINE_LDT_LIMIT 510   /* the trampoline takes two descriptors */
 /* GH #18 (run 67 corrected): install the PM-fault reflect machinery. Two LDT selectors:
    a writable-DATA stack selector (g_DpmiFaultSelector, based at the host's g_FaultStack so
    its :0x1000 is a valid scratch stack top) written to [TIB+0x638]; and a CODE selector
@@ -19296,12 +19296,12 @@ static VOID DpmiInstallFaultTrampoline(VOID)
     INT stackIndex, codeIndex; UINT index;
     volatile BYTE *handlerArea = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_HDLR_SEG << PARAGRAPH_SHIFT);
     if (g_DpmiFaultSelector) return;                  /* already installed */
-    if (g_LdtNext >= 510) return;
+    if (g_LdtNext >= DPMI_FAULT_TRAMPOLINE_LDT_LIMIT) return;
     /* the handler CODE selector + its BOP */
     codeIndex = g_LdtNext++;
     g_Ldt[codeIndex].Base   = (DWORD)DOS_HDLR_SEG << PARAGRAPH_SHIFT;   /* 0x500 -> code:COFF = linear 0x580 */
-    g_Ldt[codeIndex].Limit  = 0xFFFF;
-    g_Ldt[codeIndex].Access = 0xFA;                       /* code exec/read, DPL3, present     */
+    g_Ldt[codeIndex].Limit  = X86_SEGMENT_LIMIT_64K;
+    g_Ldt[codeIndex].Access = DPMI_ACCESS_CODE;                       /* code exec/read, DPL3, present     */
     g_Ldt[codeIndex].Flags  = 0;
     DpmiInstall(codeIndex);
     g_DpmiFaultCodeSelector = (WORD)DPMI_LDT_SELECTOR(codeIndex);
@@ -19311,8 +19311,8 @@ static VOID DpmiInstallFaultTrampoline(VOID)
     /* the handler STACK selector (writable-data) */
     stackIndex = g_LdtNext++;
     g_Ldt[stackIndex].Base   = (DWORD)(ULONG_PTR)g_FaultStack;   /* #205: not guest memory */
-    g_Ldt[stackIndex].Limit  = 0xFFFF;
-    g_Ldt[stackIndex].Access = 0xF2;                       /* data read/write, DPL3, present      */
+    g_Ldt[stackIndex].Limit  = X86_SEGMENT_LIMIT_64K;
+    g_Ldt[stackIndex].Access = DPMI_ACCESS_DATA;                       /* data read/write, DPL3, present      */
     g_Ldt[stackIndex].Flags  = 0;
     DpmiInstall(stackIndex);
     g_DpmiFaultSelector = (WORD)DPMI_LDT_SELECTOR(stackIndex);
@@ -19354,9 +19354,9 @@ static VOID DpmiInstallFaultTrampoline(VOID)
       sites[DOS_FLTRET_OFF + 1] = VDM_BOP1;
       sites[DOS_FLTRET_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_FLTRET_BOP;
       sites[DOS_FLTRET_OFF + VDM_BOP_LENGTH] = X86_OP_RETF; }
-    for (index = 0; index * 0x10 < sizeof g_FaultTable; ++index) {
-        *(WORD  *)(g_FaultTable + index * 0x10 + 0) = g_DpmiFaultCodeSelector;
-        *(DWORD *)(g_FaultTable + index * 0x10 + 4) = (index < DOS_FLTSITE_N)
+    for (index = 0; index * DPMI_FAULT_TABLE_ENTRY < sizeof g_FaultTable; ++index) {
+        *(WORD  *)(g_FaultTable + index * DPMI_FAULT_TABLE_ENTRY) = g_DpmiFaultCodeSelector;
+        *(DWORD *)(g_FaultTable + index * DPMI_FAULT_TABLE_ENTRY + DPMI_FAULT_TABLE_OFFSET) = (index < DOS_FLTSITE_N)
                                              ? (DWORD)DPMI_FAULT_SITE(index) : DPMI_FAULT_COFF;
     }
 }
@@ -21612,7 +21612,7 @@ static WORD WowShadowSelector(VOID)
     g_WowShadowSelector = (WORD)DPMI_LDT_SELECTOR(ldtIndex);
     return g_WowShadowSelector;
 }
-
+enum { WOW_VENDOR_STUB_SELECTOR = 0x10, WOW_VENDOR_STUB_LIMIT = 0x1F };   /* WowVendorApiEntry: the mov ax,imm16's operand; the segment */
 static INT WowVendorApiEntry(DOS_MACHINE *machine, WORD *selector, WORD *offset)
 {
     /* The DPMI vendor-specific API entry krnl386 asks for (INT 2Fh AX=168Ah). Its
@@ -21652,11 +21652,11 @@ static INT WowVendorApiEntry(DOS_MACHINE *machine, WORD *selector, WORD *offset)
     if (!segment && (DosMcbAllocate(NULL, machine->FirstMcb, 1, &segment, &maximum) || !segment)) return -1;
     bytes = (volatile BYTE *)(ULONG_PTR)((DWORD)segment << PARAGRAPH_SHIFT);
     for (index = 0; index < (INT)sizeof stub; ++index) bytes[index] = stub[index];
-    bytes[0x10] = (BYTE)shadow; bytes[0x11] = (BYTE)(shadow >> BYTE_SHIFT);   /* the returned selector */
+    bytes[WOW_VENDOR_STUB_SELECTOR] = (BYTE)shadow; bytes[WOW_VENDOR_STUB_SELECTOR + 1] = (BYTE)(shadow >> BYTE_SHIFT);   /* the returned selector */
     if (g_LdtNext >= DPMI_LDT_MAX) return -1;
     ldtIndex = g_LdtNext++;
     g_Ldt[ldtIndex].Base   = (DWORD)segment << PARAGRAPH_SHIFT;
-    g_Ldt[ldtIndex].Limit  = 0x1F;
+    g_Ldt[ldtIndex].Limit  = WOW_VENDOR_STUB_LIMIT;
     g_Ldt[ldtIndex].Access = DPMI_ACCESS_CODE;            /* present, DPL3, code, readable */
     g_Ldt[ldtIndex].Flags  = 0;               /* 16-bit                        */
     DpmiInstall(ldtIndex);
@@ -36448,7 +36448,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
       cursor = LogPut(cursor, " active="); cursor = LogHex(cursor, (DWORD)g_MouseCallbackActive);
       cursor = LogPut(cursor, " raised="); cursor = LogHex(cursor, g_MouseEventRaised);
       cursor = LogPut(cursor, " why[fly,none,nohdl,stub,if]=");
-      { INT reason; for (reason = 0; reason < 6; ++reason) { cursor = LogHex(cursor, g_MouseCallbackWhy[reason]); cursor = LogPut(cursor, reason < 5 ? "," : ""); } }
+      { INT reason; for (reason = 0; reason < MOUSE_CB_WHY_COUNT; ++reason) { cursor = LogHex(cursor, g_MouseCallbackWhy[reason]); cursor = LogPut(cursor, reason < MOUSE_CB_WHY_COUNT - 1 ? "," : ""); } }
       cursor = LogPut(cursor, " mask=0x"); cursor = LogHex(cursor, (DWORD)g_MouseEventMask);
       cursor = LogPut(cursor, " hdl=0x");  cursor = LogHex(cursor, (DWORD)g_MouseEventSegment);
       cursor = LogPut(cursor, ":0x");      cursor = LogHex(cursor, (DWORD)g_MouseEventOffset);

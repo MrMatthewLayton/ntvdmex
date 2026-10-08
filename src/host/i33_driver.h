@@ -144,6 +144,14 @@
 #define I33_GC_CGA_PIXELS     8       /* CGA 4-colour: eight 2-bit pixels a word  */
 #define I33_GC_CGA_BITS       2
 #define I33_GC_ONES_COLOUR    0x0F    /* a 16-colour cursor's set pixels: white  */
+/* What 00h/21h reset to. */
+#define I33_DEFAULT_MICKEYS_X      8       /* mickeys per 8 pixels                   */
+#define I33_DEFAULT_MICKEYS_Y      16
+#define I33_DEFAULT_DOUBLE_SPEED   64      /* mickeys/second                         */
+#define I33_DEFAULT_TEXT_AND       0x77FF  /* the software text cursor's masks       */
+#define I33_DEFAULT_TEXT_XOR       0x7700
+#define I33_DEFAULT_SPEED          50
+#define I33_DEFAULT_RATE           3
 #define I33_GC_CGA_LEFT_SHIFT 14      /* the leftmost pixel's pair: bits 15-14    */
 #define I33_GC_CGA_MASK       3u
 #define I33_GC_CGA_COLOURS    4

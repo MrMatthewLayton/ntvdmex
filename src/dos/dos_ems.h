@@ -56,6 +56,9 @@
 #define DOS_EMS_ERROR_INVALID_HANDLE         0x83  /* invalid handle                        */
 #define DOS_EMS_ERROR_UNDEFINED_FUNCTION     0x84  /* undefined function requested          */
 #define DOS_EMS_ERROR_NO_HANDLES             0x85  /* no more handles available             */
+#define DOS_EMS_ERROR_INVALID_SUBFUNCTION    0x8F  /* LIM: invalid subfunction              */
+#define DOS_EMS_HANDLE_NAME_SET              1     /* AH=53h AL: 0 get, 1 set                */
+#define DOS_EMS_HANDLE_PAGES_ENTRY           4     /* AH=4Dh: a handle WORD, a page-count WORD */
 #define DOS_EMS_ERROR_SAVE_RESTORE           0x86  /* page-map save/restore error           */
 #define DOS_EMS_ERROR_TOO_MANY_PAGES         0x87  /* more pages requested than physically exist */
 #define DOS_EMS_ERROR_NOT_ENOUGH_PAGES       0x88  /* not enough free pages to satisfy request */
