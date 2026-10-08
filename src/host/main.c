@@ -3668,7 +3668,7 @@ static INT   g_IfvStarveOpen;
 static INT   g_VifLiveSeen;   /* a live V86 frame has shown VIF set: VME is keeping it */
 static DWORD IfvState(DWORD flags)
 {
-    DWORD virtualIf = (*(volatile DWORD *)(ULONG_PTR)0x714 >> 9) & 1u;
+    DWORD virtualIf = (*(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR >> 9) & 1u;
     return ((flags >> 7) & 4u) | ((flags & EFLAGS_VIF) ? 2u : 0u) | virtualIf;
 }
 static VOID IfvNote(INT path, DWORD flags)
@@ -4489,7 +4489,7 @@ static VOID HostIrqSink(PVOID context, BYTE irq)
                pending bit just sits there (which is the whole of session 10's
                "already tried and failed"). */
             if (g_QiBits & 1) VdmIcaRaise(irq);
-            *(volatile DWORD *)(ULONG_PTR)0x714 |= g_QiBits;
+            *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR |= g_QiBits;
         }
         if (g_QiBits && g_HostCpu) {
             LONG status = VdmControl(VDM_SVC_VdmQueueInterrupt, (PVOID)g_HostCpu);
@@ -4579,7 +4579,7 @@ static VOID VdmStateSample(PCSTR label, volatile BYTE *tib, INT *budget)
     (*budget)--;
     cursor = LogPut(cursor, "GH#18 vdmstate ");
     cursor = LogPut(cursor, label);
-    cursor = LogPut(cursor, ": [0x714]=0x"); cursor = LogHex(cursor, *(volatile DWORD *)(ULONG_PTR)0x714);
+    cursor = LogPut(cursor, ": [0x714]=0x"); cursor = LogHex(cursor, *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR);
     cursor = LogPut(cursor, " EFL=0x");      cursor = LogHex(cursor, VDM_REG(tib, VTIB_EFLAGS));
     cursor = LogPut(cursor, " CS:IP=0x");    cursor = LogHex(cursor, VDM_REG16(tib, VTIB_CS));
     cursor = LogPut(cursor, ":0x");          cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EIP));
@@ -7362,12 +7362,12 @@ static DWORD WINAPI QueueIrqProbeThread(LPVOID parameter)
     (VOID)parameter;
     Sleep(500);                                  /* let the guest install its ISRs */
     for (round = 0; round < 40 && g_Running; ++round) {
-        DWORD before = *(volatile DWORD *)(ULONG_PTR)0x714, after = before;
+        DWORD before = *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR, after = before;
         INT attempt;
         HostIrqSink(NULL, 5);
         for (attempt = 0; attempt < 50; ++attempt) {
             Sleep(1);
-            after = *(volatile DWORD *)(ULONG_PTR)0x714;
+            after = *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR;
             if (after != before) break;
         }
         if (round < 8) {
@@ -7418,7 +7418,7 @@ static DWORD WINAPI HeartbeatThread(LPVOID parameter)
         cursor = LogPut(cursor, "HB 0x");        cursor = LogHex(cursor, (DWORD)beat);
         cursor = LogPut(cursor, " cs:ip=0x");    cursor = LogHex(cursor, cs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, ip);
         cursor = LogPut(cursor, " efl=0x");      cursor = LogHex(cursor, eflags);
-        cursor = LogPut(cursor, " state=0x");    cursor = LogHex(cursor, *(volatile DWORD *)(ULONG_PTR)0x714);
+        cursor = LogPut(cursor, " state=0x");    cursor = LogHex(cursor, *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR);
         cursor = LogPut(cursor, " io=0x");       cursor = LogHex(cursor, g_EventIo);
         cursor = LogPut(cursor, " irq0=0x");     cursor = LogHex(cursor, g_Irq0Injected);
         cursor = LogPut(cursor, " irqn=0x");     cursor = LogHex(cursor, g_IrqNInjected);
@@ -7787,7 +7787,7 @@ static DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
         cursor = LogPut(cursor, " sb_irq=0x"); cursor = LogHex(cursor, (DWORD)g_Sb.Irq);
         cursor = LogPut(cursor, " qi_calls=0x");    cursor = LogHex(cursor, g_QiCalls);
         cursor = LogPut(cursor, " qi_st=0x");       cursor = LogHex(cursor, (DWORD)g_QiStatus);
-        cursor = LogPut(cursor, " state714=0x");    cursor = LogHex(cursor, *(volatile DWORD *)(ULONG_PTR)0x714);
+        cursor = LogPut(cursor, " state714=0x");    cursor = LogHex(cursor, *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR);
         cursor = LogPut(cursor, "\r\n  audio: silent=0x"); cursor = LogHex(cursor, (DWORD)g_Wave.IsSilent);
         cursor = LogPut(cursor, " mixed=0x");        cursor = LogHex(cursor, g_Audio.FramesMixed);
         cursor = LogPut(cursor, " sb_dspwr=0x");     cursor = LogHex(cursor, g_Sb.DspWrites);
@@ -27501,7 +27501,7 @@ static INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context)
          and clear the kernel's own pending bits too, exactly as the event-3 guard in the
          main loop already does for the stale-pending case. */
     context->EFlags = eflags & ~(EFLAGS_IF_U | EFLAGS_VIF | EFLAGS_VIP);
-    *(volatile DWORD *)(ULONG_PTR)0x714 &= ~3u;      /* the kernel's pending-IRQ bits */
+    *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR &= ~3u;      /* the kernel's pending-IRQ bits */
     g_DpmiVi  = 0;                                  /* ...and our model of it */
     return 1;
 }
@@ -28322,7 +28322,7 @@ static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interr
        through a string operation would run it in the wrong direction. */
     /* VIP too -- see DpmiAsyncInjectPm() for why an STI with VIP set is fatal here. */
     VDM_REG(tib, VTIB_EFLAGS) = (sEFL & ~(EFLAGS_IF_U | EFLAGS_VIF | EFLAGS_VIP)) | 2u;
-    *(volatile DWORD *)(ULONG_PTR)0x714 &= ~3u;
+    *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR &= ~3u;
     VDM_SET16(tib, VTIB_CS, DPMI_IRQ_TARGET_SEL(interruptVector));
     VDM_REG(tib, VTIB_EIP) = isClient32 ? DPMI_IRQ_TARGET_OFF(interruptVector) : (DPMI_IRQ_TARGET_OFF(interruptVector) & WORD_MASK);
 
@@ -28385,7 +28385,7 @@ static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interr
             errorCursor = LogPut(errorCursor, " ss:esp=0x"); errorCursor = LogHex(errorCursor, VDM_REG16(tib, VTIB_SS));
             errorCursor = LogPut(errorCursor, ":0x"); errorCursor = LogHex(errorCursor, VDM_REG(tib, VTIB_ESP));
             errorCursor = LogPut(errorCursor, " efl=0x"); errorCursor = LogHex(errorCursor, VDM_REG(tib, VTIB_EFLAGS));
-            errorCursor = LogPut(errorCursor, " [714]=0x"); errorCursor = LogHex(errorCursor, *(volatile DWORD *)(ULONG_PTR)0x714);
+            errorCursor = LogPut(errorCursor, " [714]=0x"); errorCursor = LogHex(errorCursor, *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR);
             errorCursor = LogPut(errorCursor, " vi="); errorCursor = LogHex(errorCursor, (DWORD)g_DpmiVi);
             errorCursor = LogPut(errorCursor, " apa="); errorCursor = LogHex(errorCursor, (DWORD)g_AsyncPmActive);
             errorCursor = LogPut(errorCursor, "\r\n"); LogAppend(LOG_PATH, errorLine, errorCursor); SerialOut(errorLine, errorCursor);
@@ -28550,7 +28550,7 @@ static INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, U
        selector, and a Watcom `__loadds` handler reloads its own anyway. */
     g_DpmiVi = 0;
     VDM_REG(tib, VTIB_EFLAGS) = (sEFL & ~(EFLAGS_IF_U | EFLAGS_VIF | EFLAGS_VIP)) | 2u;
-    *(volatile DWORD *)(ULONG_PTR)0x714 &= ~3u;
+    *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR &= ~3u;
     VDM_SET16(tib, VTIB_CS, handlerSelector);
     VDM_REG(tib, VTIB_EIP) = isClient32 ? handlerOffset : (handlerOffset & WORD_MASK);
     ++g_MouseCallbackInjected;
@@ -29674,7 +29674,7 @@ static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR 
     V86BOP_RET(V86BOP_NONE);
 }
 #undef V86BOP_RET
-
+enum { EXEC_HANDLED_RUN_OVER = 2, EXEC_HANDLED_CHILD_EXITED = 3 };   /* WinMain's DosTerminate outcomes: the run ends, or a child returned to its parent */
 INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR commandLineText, INT showCommand)
 {
     CHAR report[8192]; PSTR cursor = report; PSTR base;
@@ -30290,7 +30290,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          no 0xc000 high bits, nothing pending -- it starts from a DEFINED word. So do
          we, now: zero, or cfg\vdmstate.txt. The kernel sets bits 0-1 when it queues
          and dpmi_enter.S sets bit 9 on PM entry; nothing else needs to be pre-set. */
-    {   volatile DWORD *vdmState = (volatile DWORD *)(ULONG_PTR)0x714;
+    {   volatile DWORD *vdmState = (volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR;
         DWORD inherited = *vdmState, want = 0;
         HANDLE handle = CreateFileA(VDMSTATE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
@@ -33064,7 +33064,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             tibCursor2 = LogPut(tibCursor2, " efl=0x");  tibCursor2 = LogHex(tibCursor2, VDM_REG(tib, VTIB_EFLAGS));
             tibCursor2 = LogPut(tibCursor2, " ss:sp=0x"); tibCursor2 = LogHex(tibCursor2, tibSs); tibCursor2 = LogPut(tibCursor2, ":0x"); tibCursor2 = LogHex(tibCursor2, tibSp);
             tibCursor2 = LogPut(tibCursor2, " ax=0x");   tibCursor2 = LogHex(tibCursor2, VDM_REG16(tib, VTIB_EAX));
-            tibCursor2 = LogPut(tibCursor2, " [714]=0x"); tibCursor2 = LogHex(tibCursor2, *(volatile DWORD *)(ULONG_PTR)0x714);
+            tibCursor2 = LogPut(tibCursor2, " [714]=0x"); tibCursor2 = LogHex(tibCursor2, *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR);
             tibCursor2 = LogPut(tibCursor2, " active="); tibCursor2 = LogHex(tibCursor2, (DWORD)g_MouseCallbackActive);
             tibCursor2 = LogPut(tibCursor2, " code=");   tibCursor2 = LogDump(tibCursor2, (const VOID *)(ULONG_PTR)((trampolineCs << PARAGRAPH_SHIFT) + trampolineIp), 8);
             tibCursor2 = LogPut(tibCursor2, " stack=");  tibCursor2 = LogDump(tibCursor2, (const VOID *)(ULONG_PTR)((tibSs << PARAGRAPH_SHIFT) + tibSp), 12);
@@ -33206,11 +33206,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                re-entrancy checks. (Session 9 met this same event in protected mode and
                cleared the bits there; see dpmi_enter.S label 2.) */
             if (event == VDM_EVENT_IO_HW) {
-                volatile DWORD *vdmStateWord = (volatile DWORD *)(ULONG_PTR)0x714;
-                DWORD pend = *vdmStateWord & 3u;
+                volatile DWORD *vdmStateWord = (volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR;
+                DWORD pend = *vdmStateWord & VDM_INT_PENDING;
                 if (pend) {
-                    if (pend & 2u) Irq0Latch();         /* VDM_INT_TIMER -> IRQ0 */
-                    *vdmStateWord &= ~3u;
+                    if (pend & VDM_INT_TIMER) Irq0Latch();         /* VDM_INT_TIMER -> IRQ0 */
+                    *vdmStateWord &= ~VDM_INT_PENDING;
                     g_EventIntPending++;
                     continue;
                 }
@@ -33264,7 +33264,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             MouseCallbackReturn(tib);
             continue;
         }
-        if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == 0x09) {   /* INT 09h: BIOS keyboard */
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == VECTOR_KEYBOARD) {   /* INT 09h: BIOS keyboard */
             INT keyAction;
             /* ── #244: THE SECOND HALF, AFTER INT 15h AH=4Fh SAID "PROCESS IT" (CF=1).
                  We are at bios_kbdact.asm k4f's BOP: AL is the scancode as the hook left
@@ -33304,7 +33304,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     WORD  stackPointer = (WORD)((VDM_REG(tib, VTIB_ESP) - X86_WORD_SIZE) & WORD_MASK);
                     PokeWord((ss << PARAGRAPH_SHIFT) + stackPointer, (WORD)VDM_REG(tib, VTIB_EAX));     /* push ax */
                     VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & HIGH_WORD_MASK_U) | stackPointer;
-                    VDM_SET16(tib, VTIB_EAX, (WORD)(0x4F00 | (UINT)scanCode));
+                    VDM_SET16(tib, VTIB_EAX, (WORD)((BIOS_SYSTEM_KEYBOARD_INTERCEPT << BYTE_SHIFT) | (UINT)scanCode));
                     VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
                     VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_INTERCEPT);
                     ++g_Kb4FCalls;
@@ -33347,10 +33347,10 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;        /* -> the IRET */
             continue;
         }
-        if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == 0x08) {   /* INT 08h timer tick */
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == VECTOR_TIMER) {   /* INT 08h timer tick */
             NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
             HOST_LOCK();
-            VddBusDeliverInterrupt(&g_Bus, 0x08, &registers);  /* bump BIOS tick at 0040:006C */
+            VddBusDeliverInterrupt(&g_Bus, VECTOR_TIMER, &registers);  /* bump BIOS tick at 0040:006C */
             /* The real BIOS timer ISR ends with `mov al,20h; out 20h,al`. Ours is a BOP
                with nowhere to put one, so issue the EOI here -- without it the PIC's
                in-service bit for IRQ0 latches on the first tick and the timer stops dead
@@ -33376,7 +33376,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                      This used to set handled = 2, which `break`s the exec loop
                      and ends the whole VDM -- so a .COM child exiting the normal
                      .COM way took the host down with it. */
-                handled = DosTerminate(&machine, tib, &cursor, base) ? 3 : 2;
+                handled = DosTerminate(&machine, tib, &cursor, base) ? EXEC_HANDLED_CHILD_EXITED : EXEC_HANDLED_RUN_OVER;
             } else if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_TERMINATE_RESIDENT)) {               /* TSR, CP/M style          */
                 /* ── THE OLD FORM OF AH=31h, AND IT KEEPS MEMORY TOO. (GH #49) ─
                      DX is a BYTE OFFSET past the PSP here, not a paragraph
@@ -33392,10 +33392,10 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 cursor = LogPut(cursor, " bytes), vectors LEFT INSTALLED\r\n");
                 VDM_REG(tib, VTIB_EAX) &= HIGH_WORD_MASK_U;
                 machine.TraceCursor = cursor; DosInt21(&machine); cursor = machine.TraceCursor;
-                handled = DosTerminate(&machine, tib, &cursor, base) ? 3 : 2;
+                handled = DosTerminate(&machine, tib, &cursor, base) ? EXEC_HANDLED_CHILD_EXITED : EXEC_HANDLED_RUN_OVER;
             } else handled = 0;
-            if (handled == 2) break;               /* terminate: the run is over  */
-            if (handled == 3) continue;            /* a child exited: parent is back */
+            if (handled == EXEC_HANDLED_RUN_OVER) break;               /* terminate: the run is over  */
+            if (handled == EXEC_HANDLED_CHILD_EXITED) continue;            /* a child exited: parent is back */
             if (handled) { VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH; continue; }
         }
         /* ⚠ `!g_BopFromGuest`: XP's COMMAND.COM issues a `BOP 0x50` of its own (one
@@ -33427,19 +33427,19 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 /* Record the switch's code/data/stack selector bases (indices 1/2/3) so
                    DpmiSelectorBase() translates DS:/ES:/SS: through the right base -- essential
                    once CS!=DS!=SS (a real .EXE); for a .COM all three are equal. */
-                { INT si; for (si = 0; si < 3; ++si) {
-                    g_Ldt[1 + si].Base   = g_DpmiSegmentBase[si];
-                    g_Ldt[1 + si].Limit  = 0xFFFF;
-                    g_Ldt[1 + si].Access = (si == 0) ? 0xFA : 0xF2;
+                { INT si; for (si = 0; si < DPMI_INITIAL_SELECTOR_COUNT; ++si) {
+                    g_Ldt[DPMI_INITIAL_FIRST_INDEX + si].Base   = g_DpmiSegmentBase[si];
+                    g_Ldt[DPMI_INITIAL_FIRST_INDEX + si].Limit  = X86_SEGMENT_LIMIT_64K;
+                    g_Ldt[DPMI_INITIAL_FIRST_INDEX + si].Access = (si == 0) ? DPMI_ACCESS_CODE : DPMI_ACCESS_DATA;
                     /* Mirror the D/B width DpmiSwitchToProtectedMode ACTUALLY installed, so
                        DpmiSelectorIs32() (I/O decode + EIP-mask gating) agrees with the live
                        descriptor. That is now always 16-bit for these three: the client's
                        post-switch code must also be valid real-mode code on the failure
                        path, so it cannot be 32-bit. A 32-bit client far-jmps to its OWN
                        INT 31h-allocated 32-bit selectors, which are reported correctly. */
-                    g_Ldt[1 + si].Flags  = 0;
+                    g_Ldt[DPMI_INITIAL_FIRST_INDEX + si].Flags  = 0;
                 } }
-                if (g_LdtNext < 4) g_LdtNext = 4;      /* client allocs start at index 4 now */
+                if (g_LdtNext < DPMI_FIRST_CLIENT_INDEX) g_LdtNext = DPMI_FIRST_CLIENT_INDEX;      /* client allocs start at index 4 now */
                 g_LdtClientMark = g_LdtNext;          /* teardown gives back everything above */
                 /* ── DPMI INITIAL CLIENT STATE: ES = PSP SELECTOR, AND THE PSP'S
                       ENVIRONMENT POINTER CONVERTED TO A SELECTOR. ────────────────────
@@ -33475,8 +33475,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                   if (g_LdtNext < DPMI_LDT_MAX) {
                       INT pspIndex = g_LdtNext++;
                       g_Ldt[pspIndex].Base   = pspBase;
-                      g_Ldt[pspIndex].Limit  = 0xFF;        /* "a 100h byte limit", exactly */
-                      g_Ldt[pspIndex].Access = 0xF2;        /* present, DPL3, data R/W       */
+                      g_Ldt[pspIndex].Limit  = DOS_PSP_SIZE - 1;        /* "a 100h byte limit", exactly */
+                      g_Ldt[pspIndex].Access = DPMI_ACCESS_DATA;        /* present, DPL3, data R/W       */
                       g_Ldt[pspIndex].Flags  = 0;
                       DpmiInstall(pspIndex);
                       pspSelector = (WORD)DPMI_LDT_SELECTOR(pspIndex);
@@ -33490,8 +33490,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     if (environmentSegment && g_LdtNext < DPMI_LDT_MAX) {
                         INT entryIndex = g_LdtNext++;
                         g_Ldt[entryIndex].Base   = (DWORD)environmentSegment << PARAGRAPH_SHIFT;
-                        g_Ldt[entryIndex].Limit  = 0xFF;      /* DosEnvBuild fills a 0x10-para block */
-                        g_Ldt[entryIndex].Access = 0xF2;
+                        g_Ldt[entryIndex].Limit  = DOS_PSP_SIZE - 1;      /* DosEnvBuild fills a 0x10-para block */
+                        g_Ldt[entryIndex].Access = DPMI_ACCESS_DATA;
                         g_Ldt[entryIndex].Flags  = 0;
                         DpmiInstall(entryIndex);
                         environmentSelector = (WORD)DPMI_LDT_SELECTOR(entryIndex);
@@ -33942,7 +33942,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                        bit3=0 already (classifier is NOT the blocker), so no forcing needed -- for
                        a #GP the kernel uses class 6, which reaches the generic reflect body. */
                     if (steps == 0) {
-                        DWORD vdmStateAt714 = *(volatile DWORD *)(ULONG_PTR)0x714;
+                        DWORD vdmStateAt714 = *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR;
                         cursor = LogPut(cursor, "GH#18: [0x714]=0x"); cursor = LogHex(cursor, vdmStateAt714);
                         cursor = LogPut(cursor, " bit3="); cursor = LogHex(cursor, (vdmStateAt714 >> 3) & 1);
                         cursor = LogPut(cursor, " bit4="); cursor = LogHex(cursor, (vdmStateAt714 >> 4) & 1);
@@ -33960,7 +33960,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     if (InterlockedExchange(&g_Irq0Pending, 0)) {
                         NTVDD_REGISTERS trapRegisters; RegistersLoad(&trapRegisters, tib);
                         HOST_LOCK();
-                        VddBusDeliverInterrupt(&g_Bus, 0x08, &trapRegisters);   /* PitInt08 -> ++0040:006C */
+                        VddBusDeliverInterrupt(&g_Bus, VECTOR_TIMER, &trapRegisters);   /* PitInt08 -> ++0040:006C */
                         HOST_UNLOCK();
                         g_PmIrq0Latch = 1;    /* #2b: latch a virtual IRQ0 for the PM hook */
                     }
@@ -33979,7 +33979,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     INT twoTicksOwed = (g_PmTickOwed >= 2);
                     if (twoTicksOwed) {
                         UINT gateIndex = !(g_PmIrq0Latch || g_PmTickOwed > 0) ? 0 : !g_DpmiVi ? 1
-                                    : !g_PmInt[0x08].Client ? 2 : g_InPmIrq ? 3
+                                    : !g_PmInt[VECTOR_TIMER].Client ? 2 : g_InPmIrq ? 3
                                     : g_PmNoIrq ? 4 : g_AsyncPmActive ? 5
                                     : (GetTickCount() - g_PmVector8ArmedMs) < DPMI_IRQ0_ARM_QUIET_MS ? 6
                                     : 7;
@@ -33994,14 +33994,14 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                          with it against 44-45 without, plus ~5,800 injections declined per
                          run in DOS/4GW's 16-bit start-up. Latch only. */
                     if (g_PmIrq0Latch
-                        && g_DpmiVi && g_PmInt[0x08].Client && !g_InPmIrq
+                        && g_DpmiVi && g_PmInt[VECTOR_TIMER].Client && !g_InPmIrq
                         && !g_PmNoIrq && !g_AsyncPmActive
                         && (GetTickCount() - g_PmVector8ArmedMs) >= DPMI_IRQ0_ARM_QUIET_MS) {
                         UINT32 dmaReadsBefore = g_Dma.ChannelCountReads[1];
                         g_PmIrq0Latch = 0;
                         g_InPmIrq = 1;
                         if (g_PmTickOwed > 0 && Irq0PmClaim()) {
-                            if (DpmiInjectPmIrq(&machine, tib, 0x08, steps))
+                            if (DpmiInjectPmIrq(&machine, tib, VECTOR_TIMER, steps))
                                 InterlockedDecrement(&g_PmTickOwed);
                             else { Irq0PmUnclaim(); if (twoTicksOwed) g_PmCooperativeGate[9]++; }
                         } else if (twoTicksOwed) g_PmCooperativeGate[8]++;
@@ -34041,7 +34041,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                          well as the latch makes any future counter slip self-correcting
                          instead of silently swallowing a keystroke. */
                     if ((g_Irq1Pending > 0 || VddInputScanCodePending(&g_Input))
-                        && g_PmInt[0x09].Client && !g_PmNoIrq) {
+                        && g_PmInt[VECTOR_KEYBOARD].Client && !g_PmNoIrq) {
                         if (g_Irq1Pending <= 0) InterlockedIncrement(&g_Irq1Pending);
                         INT virtualIf   = g_DpmiVi;
                         INT busy = g_InPmIrq || g_AsyncPmActive;
@@ -34062,7 +34062,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                  Claim first, hand it back if the injection did not run. */
                             InterlockedDecrement(&g_Irq1Pending);
                             g_InPmIrq = 1;
-                            done1 = DpmiInjectPmIrq(&machine, tib, 0x09, steps);
+                            done1 = DpmiInjectPmIrq(&machine, tib, VECTOR_KEYBOARD, steps);
                             g_InPmIrq = 0;
                             if (!done1) InterlockedIncrement(&g_Irq1Pending);
                         }
@@ -34364,7 +34364,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                             cursor = LogPut(cursor, ":0x");         cursor = LogHex(cursor, VDM_REG(tib, VTIB_ESP));
                             cursor = LogPut(cursor, " efl=0x");     cursor = LogHex(cursor, VDM_REG(tib, VTIB_EFLAGS));
                             cursor = LogPut(cursor, " msw=0x");     cursor = LogHex(cursor, *(volatile WORD *)(tib + VTIB_MSW));
-                            cursor = LogPut(cursor, " [0x714]=0x"); cursor = LogHex(cursor, *(volatile DWORD *)(ULONG_PTR)0x714);
+                            cursor = LogPut(cursor, " [0x714]=0x"); cursor = LogHex(cursor, *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR);
                             cursor = LogPut(cursor, "\r\n");
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                         }
@@ -34525,7 +34525,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                             for (item = 0; item < DPMI_IRQ0_BATCH; ++item) {
                                 if (g_PmTickOwed <= 0) break;
                                 if (!Irq0PmClaim()) break;     /* last tick not EOI'd (#173) */
-                                if (!DpmiInjectPmIrq(&machine, tib, 0x08, steps)) { Irq0PmUnclaim(); break; }
+                                if (!DpmiInjectPmIrq(&machine, tib, VECTOR_TIMER, steps)) { Irq0PmUnclaim(); break; }
                                 InterlockedDecrement(&g_PmTickOwed);
                             }
                             g_InPmIrq = 0;
@@ -34558,11 +34558,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                 cursor = LogPut(cursor, "GH#18: event3 pending-int guard at CS:EIP=0x");
                                 cursor = LogHex(cursor, currentCs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, eip);
                                 cursor = LogPut(cursor, " [0x714]=0x");
-                                cursor = LogHex(cursor, *(volatile DWORD *)(ULONG_PTR)0x714);
+                                cursor = LogHex(cursor, *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR);
                                 cursor = LogPut(cursor, " -> clear stale pending + re-enter\r\n");
                                 LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                             }
-                            *(volatile DWORD *)(ULONG_PTR)0x714 &= ~3u;
+                            *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR &= ~VDM_INT_PENDING;
                             continue;
                         }
                         /* retry budget exhausted -> fall through and report an unexpected stop */

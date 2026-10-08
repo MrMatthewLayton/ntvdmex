@@ -250,6 +250,11 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 #define VTIB_FLT_SAV3   0x640    /* kernel: saved third slot (SS:ESP-class)      */
 
 /* Access a 32-bit guest register/field at VDM_TIB offset `off` (e.g. VTIB_EAX). */
+/* FIXED_NTVDMSTATE, the kernel's VDM state word at linear 0x714, and its pending-interrupt bits. */
+#define FIXED_NTVDMSTATE_LINEAR   0x714
+#define VDM_INT_HARDWARE          0x1u    /* bit 0: dispatch through the virtual ICA */
+#define VDM_INT_TIMER             0x2u    /* bit 1                                   */
+#define VDM_INT_PENDING           (VDM_INT_HARDWARE | VDM_INT_TIMER)
 /* NT's own facts the host meets in exceptions: an NTSTATUS's top nibble C is error severity,
    and user mode runs on GDT selector 1Bh. */
 #define NT_STATUS_SEVERITY_MASK   0xF0000000u

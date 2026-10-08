@@ -80,6 +80,9 @@
 #define DPMI_INITIAL_CODE_SELECTOR  0x0F
 #define DPMI_INITIAL_DATA_SELECTOR  0x17
 #define DPMI_INITIAL_STACK_SELECTOR 0x1F
+#define DPMI_INITIAL_FIRST_INDEX    1
+#define DPMI_INITIAL_SELECTOR_COUNT 3
+#define DPMI_FIRST_CLIENT_INDEX     4      /* a client's own allocations start here */
 /* A client's LDT selector for descriptor `index`, and the descriptor index of a selector. */
 #define DPMI_LDT_SELECTOR(index)      (((index) << DPMI_SELECTOR_INDEX_SHIFT) | (DPMI_SELECTOR_TI | DPMI_SELECTOR_RPL_USER))
 #define DPMI_SELECTOR_INDEX(selector) ((selector) >> DPMI_SELECTOR_INDEX_SHIFT)
