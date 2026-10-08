@@ -99,7 +99,7 @@ static DWORD WowCdlgPeekDword(const volatile BYTE *bytes, INT offset)
 
 static VOID WowCdlgPokeDword(volatile BYTE *bytes, INT offset, DWORD value)
 {
-    Wow32PokeWord(bytes + offset,     (WORD)(value & WOW_WORD_MASK));
+    Wow32PokeWord(bytes + offset,     (WORD)(value & WORD_MASK));
     Wow32PokeWord(bytes + offset + WOW_WORD_BYTES, (WORD)(value >> WOW_WORD_SHIFT));
 }
 

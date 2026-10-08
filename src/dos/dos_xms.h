@@ -63,7 +63,6 @@
 
 /* A real-mode far pointer as a Move offset: low word = offset, high word = segment. */
 #define DOS_XMS_FAR_SEGMENT_SHIFT    16
-#define DOS_XMS_FAR_WORD_MASK        0xFFFF
 #define DOS_XMS_PARAGRAPH_SHIFT      4
 
 /* One Extended Memory Block. */
@@ -341,8 +340,8 @@ static inline BOOL DosXmsMove(_Inout_ PDOS_XMS_STATE state,
     }
 
     if (move->SourceHandle == DOS_XMS_CONVENTIONAL_HANDLE) {
-        DWORD segment = (move->SourceOffset >> DOS_XMS_FAR_SEGMENT_SHIFT) & DOS_XMS_FAR_WORD_MASK,
-              offset = move->SourceOffset & DOS_XMS_FAR_WORD_MASK;
+        DWORD segment = (move->SourceOffset >> DOS_XMS_FAR_SEGMENT_SHIFT) & WORD_MASK,
+              offset = move->SourceOffset & WORD_MASK;
         if ((segment << DOS_XMS_PARAGRAPH_SHIFT) + offset + length > DOS_XMS_CONVENTIONAL_LIMIT) {
             if (errorCode) *errorCode = DOS_XMS_ERROR_INVALID_SOURCE_OFFSET;
             return FALSE;
@@ -364,8 +363,8 @@ static inline BOOL DosXmsMove(_Inout_ PDOS_XMS_STATE state,
     }
     if (move->DestinationHandle == DOS_XMS_CONVENTIONAL_HANDLE) {
         DWORD segment = (move->DestinationOffset >> DOS_XMS_FAR_SEGMENT_SHIFT)
-                      & DOS_XMS_FAR_WORD_MASK,
-              offset = move->DestinationOffset & DOS_XMS_FAR_WORD_MASK;
+                      & WORD_MASK,
+              offset = move->DestinationOffset & WORD_MASK;
         if ((segment << DOS_XMS_PARAGRAPH_SHIFT) + offset + length > DOS_XMS_CONVENTIONAL_LIMIT) {
             if (errorCode) *errorCode = DOS_XMS_ERROR_INVALID_DESTINATION_OFFSET;
             return FALSE;

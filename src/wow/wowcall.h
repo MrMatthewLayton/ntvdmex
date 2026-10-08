@@ -297,7 +297,7 @@ static VOID WowCallPush(DWORD stackBase, PWORD stackPointer, WORD value)
     volatile BYTE *bytes;
     *stackPointer = (WORD)(*stackPointer - WOW_WORD_BYTES);
     bytes = (volatile BYTE *)(ULONG_PTR)(stackBase + *stackPointer);
-    bytes[0] = (BYTE)(value & WOW_BYTE_MASK);
+    bytes[0] = (BYTE)(value & BYTE_MASK);
     bytes[1] = (BYTE)(value >> WOW_BYTE_SHIFT);
 }
 
@@ -357,7 +357,7 @@ static INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector
        at the highest address -- which is what `[bp+0x0e] == hwnd` in a window
        procedure means under the documented Pascal convention. A DWORD is two words, high first, for the same reason. The caller
        hands them in declared order and this pushes them in that order. */
-    stackPointer = (WORD)(VDM_REG(tib, VTIB_ESP) & WOW_WORD_MASK);
+    stackPointer = (WORD)(VDM_REG(tib, VTIB_ESP) & WORD_MASK);
 
     /* ── ★★★ THE STRUCTURE GOES DOWN FIRST, BELOW THE ARGUMENTS. ─────────────
          A pointer argument has to point at memory the GUEST can address, and the
@@ -376,7 +376,7 @@ static INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector
          a host linear address and means nothing to 16-bit code. */
     g_WowCallBlobLinear = 0;
     if (blob && blobLength > 0 && blobArgument >= 0 && blobArgument + 1 < argumentWordCount) {
-        WORD stackSelector = (WORD)(VDM_REG(tib, VTIB_SS) & WOW_WORD_MASK);
+        WORD stackSelector = (WORD)(VDM_REG(tib, VTIB_SS) & WORD_MASK);
         INT  blobBytes  = (blobLength + 1) & ~1;
         stackPointer = (WORD)(stackPointer - blobBytes);
         for (index = 0; index < blobLength; ++index)
@@ -400,7 +400,7 @@ static INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector
          the return address above: CS first, so IP ends up at [SP]. */
     if (isAbsent) {
         WowCallPush(stackBase, &stackPointer, (WORD)(procedure >> WOW_WORD_SHIFT));
-        WowCallPush(stackBase, &stackPointer, (WORD)(procedure & WOW_WORD_MASK));
+        WowCallPush(stackBase, &stackPointer, (WORD)(procedure & WORD_MASK));
     }
     VDM_SET16(tib, VTIB_ESP, stackPointer);
 
@@ -418,7 +418,7 @@ static INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector
         VDM_REG(tib, VTIB_EIP) = (DWORD)WOWCALL_RETF_OFF;
     } else {
         VDM_SET16(tib, VTIB_CS,  (WORD)(procedure >> WOW_WORD_SHIFT));
-        VDM_REG(tib, VTIB_EIP) = (DWORD)(procedure & WOW_WORD_MASK);
+        VDM_REG(tib, VTIB_EIP) = (DWORD)(procedure & WORD_MASK);
     }
     ++g_WowCallCount;
     return 1;
@@ -457,13 +457,13 @@ static PWOWCALL_FRAME WowCallLeave(volatile BYTE *tib, DWORD result)
             /* ⚠ MASK A WORD RETURN. DX is not the high half of a WORD result --
                  see WOWCALL_RET_RESULTW above, and the LocalAlloc call that
                  proved it. */
-            value = (frame->ReturnMode == WOWCALL_RET_RESULTW) ? (result & WOW_WORD_MASK) : result;
+            value = (frame->ReturnMode == WOWCALL_RET_RESULTW) ? (result & WORD_MASK) : result;
             isWrite = 1;                  /* SendMessage: the procedure's answer */
         }
         if (isWrite) {
             frame->Written = value;
-            hole[0] = (BYTE)(value & WOW_BYTE_MASK);        hole[1] = (BYTE)((value >> WOW_BYTE_SHIFT)  & WOW_BYTE_MASK);
-            hole[2] = (BYTE)((value >> WOW_WORD_SHIFT) & WOW_BYTE_MASK); hole[3] = (BYTE)((value >> WOW_HIGH_BYTE_SHIFT) & WOW_BYTE_MASK);
+            hole[0] = (BYTE)(value & BYTE_MASK);        hole[1] = (BYTE)((value >> WOW_BYTE_SHIFT)  & BYTE_MASK);
+            hole[2] = (BYTE)((value >> WOW_WORD_SHIFT) & BYTE_MASK); hole[3] = (BYTE)((value >> WOW_HIGH_BYTE_SHIFT) & BYTE_MASK);
         }
     }
     return frame;

@@ -61,7 +61,6 @@
 #define DOS_EMS_ENTRY_HANDLE_HIGH        1
 #define DOS_EMS_ENTRY_PAGES_LOW          2
 #define DOS_EMS_ENTRY_PAGES_HIGH         3
-#define DOS_EMS_LOW_BYTE_MASK            0xFF
 #define DOS_EMS_HIGH_BYTE_SHIFT          8
 
 /* What one physical window holds: which handle's which logical page, if any. */
@@ -316,11 +315,11 @@ static inline INT DosEmsGetAllHandlePages(
         if (!state->Handles[handleIndex].InUse) continue;
         if (entries) {
             entries[entryCount * DOS_EMS_HANDLE_PAGES_ENTRY_SIZE + DOS_EMS_ENTRY_HANDLE_LOW]
-                = (BYTE)(handleIndex & DOS_EMS_LOW_BYTE_MASK);
+                = (BYTE)(handleIndex & BYTE_MASK);
             entries[entryCount * DOS_EMS_HANDLE_PAGES_ENTRY_SIZE + DOS_EMS_ENTRY_HANDLE_HIGH]
                 = (BYTE)(handleIndex >> DOS_EMS_HIGH_BYTE_SHIFT);
             entries[entryCount * DOS_EMS_HANDLE_PAGES_ENTRY_SIZE + DOS_EMS_ENTRY_PAGES_LOW]
-                = (BYTE)(state->Handles[handleIndex].Pages & DOS_EMS_LOW_BYTE_MASK);
+                = (BYTE)(state->Handles[handleIndex].Pages & BYTE_MASK);
             entries[entryCount * DOS_EMS_HANDLE_PAGES_ENTRY_SIZE + DOS_EMS_ENTRY_PAGES_HIGH]
                 = (BYTE)(state->Handles[handleIndex].Pages >> DOS_EMS_HIGH_BYTE_SHIFT);
         }

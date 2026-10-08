@@ -1,0 +1,21 @@
+/* ntvdmex_bits.h -- the masks that select a byte, word or dword of a value (#333).
+ *
+ * One name per meaning, defined once (docs/STYLE.md, section 3). Each mask exists in the
+ * C type the code already used it in: the plain form is an `int` literal, the `_U` form is
+ * `unsigned`. They are not interchangeable -- an `int` mask and an `unsigned` mask give the
+ * expression around them a different type, and that has changed the generated code before.
+ *
+ * Included by ntvdmex_types.h, so every file that has the base types has these too.
+ */
+#ifndef NTVDMEX_BITS_H
+#define NTVDMEX_BITS_H
+
+#define BYTE_MASK           0xFF            /* the low 8 bits                       */
+#define BYTE_MASK_U         0xFFu
+#define HIGH_BYTE_MASK      0xFF00          /* bits 8-15                            */
+#define WORD_MASK           0xFFFF          /* the low 16 bits                      */
+#define WORD_MASK_U         0xFFFFu
+#define HIGH_WORD_MASK_U    0xFFFF0000u     /* bits 16-31                           */
+#define DWORD_MASK_U        0xFFFFFFFFu     /* all 32 bits                          */
+
+#endif /* NTVDMEX_BITS_H */

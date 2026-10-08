@@ -50,9 +50,6 @@
    V86_LOW_* are int, where the expression they replaced was). */
 #define V86_WORD          2
 #define V86_DWORD         4
-#define V86_BYTE_MASK     0xFFu
-#define V86_WORD_MASK     0xFFFFu
-#define V86_DWORD_MASK    0xFFFFFFFFu
 #define V86_LOW_BYTE      0xFF
 #define V86_LOW_WORD      0xFFFF
 #define V86_BYTE_SIGN     0x80u
@@ -352,7 +349,7 @@ V86_INLINE int V86Parity(BYTE value) { value ^= value >> V86_NIBBLE_SHIFT; retur
 /* Operand-width helpers: w is 1/2/4 bytes. The 4-byte path exists for 16-bit code
    that uses the 0x66 operand-size prefix (386 32-bit register math -- e.g. a C
    runtime's MOVZX ESI,SI / SHL ESI,4). run 54. */
-V86_INLINE UINT32 V86Mask(int width) { return (width == 1) ? V86_BYTE_MASK : (width == V86_WORD) ? V86_WORD_MASK : V86_DWORD_MASK; }
+V86_INLINE UINT32 V86Mask(int width) { return (width == 1) ? BYTE_MASK_U : (width == V86_WORD) ? WORD_MASK_U : DWORD_MASK_U; }
 V86_INLINE UINT32 V86SignBit(int width) { return (width == 1) ? V86_BYTE_SIGN : (width == V86_WORD) ? V86_WORD_SIGN : V86_DWORD_SIGN; }
 
 /* Segment-register -> linear-base resolver. NULL = V86 semantics (base = seg<<4).
@@ -455,7 +452,7 @@ static VOID V86FlagsLoad(V86_CPU *cpu, UINT32 value, int width)
        always have here -- kept bit for bit, the fuzz pins it. The 32-bit form loads
        only the modelled upper bits and leaves the rest (VM, VIF ...) as they were. */
     if (width == V86_WORD) cpu->Flags = low;
-    else        cpu->Flags = (cpu->Flags & ~(V86_WORD_MASK | V86I_EFL_HI)) | (value & V86I_EFL_HI) | low;
+    else        cpu->Flags = (cpu->Flags & ~(WORD_MASK_U | V86I_EFL_HI)) | (value & V86I_EFL_HI) | low;
 }
 
 /* A protected-mode far transfer the interpreter can FOLLOW: a present, 16-bit code
@@ -913,17 +910,17 @@ static int V86Step(V86_CPU *cpu)
               int isOverflow;
               if (width == 1) {
                   UINT32 product = (modrm.Register == V86_GROUP3_MUL)
-                      ? (cpu->Registers[V86_AX] & V86_BYTE_MASK) * (operand & V86_BYTE_MASK)
-                      : (UINT32)(INT32)((INT8)(cpu->Registers[V86_AX] & V86_LOW_BYTE) * (INT8)operand) & V86_WORD_MASK;
-                  cpu->Registers[V86_AX] = (cpu->Registers[V86_AX] & V86_CLEAR_LOW_WORD) | (product & V86_WORD_MASK);
+                      ? (cpu->Registers[V86_AX] & BYTE_MASK_U) * (operand & BYTE_MASK_U)
+                      : (UINT32)(INT32)((INT8)(cpu->Registers[V86_AX] & V86_LOW_BYTE) * (INT8)operand) & WORD_MASK_U;
+                  cpu->Registers[V86_AX] = (cpu->Registers[V86_AX] & V86_CLEAR_LOW_WORD) | (product & WORD_MASK_U);
                   isOverflow = (modrm.Register == V86_GROUP3_MUL) ? ((product >> V86_BYTE_SHIFT) != 0)
                                    : ((INT16)product != (INT8)(product & V86_LOW_BYTE));
               } else if (width == V86_WORD) {
                   UINT32 product = (modrm.Register == V86_GROUP3_MUL)
-                      ? (cpu->Registers[V86_AX] & V86_WORD_MASK) * (operand & V86_WORD_MASK)
+                      ? (cpu->Registers[V86_AX] & WORD_MASK_U) * (operand & WORD_MASK_U)
                       : (UINT32)(INT32)((INT16)(cpu->Registers[V86_AX] & V86_LOW_WORD) * (INT16)operand);
-                  cpu->Registers[V86_AX] = (cpu->Registers[V86_AX] & V86_CLEAR_LOW_WORD) | (product & V86_WORD_MASK);
-                  cpu->Registers[V86_DX] = (cpu->Registers[V86_DX] & V86_CLEAR_LOW_WORD) | ((product >> V86_WORD_SHIFT) & V86_WORD_MASK);
+                  cpu->Registers[V86_AX] = (cpu->Registers[V86_AX] & V86_CLEAR_LOW_WORD) | (product & WORD_MASK_U);
+                  cpu->Registers[V86_DX] = (cpu->Registers[V86_DX] & V86_CLEAR_LOW_WORD) | ((product >> V86_WORD_SHIFT) & WORD_MASK_U);
                   isOverflow = (modrm.Register == V86_GROUP3_MUL) ? ((product >> V86_WORD_SHIFT) != 0)
                                    : ((INT32)product != (INT16)(product & V86_LOW_WORD));
               } else {                                  /* w == 4 */
@@ -939,15 +936,15 @@ static int V86Step(V86_CPU *cpu)
           } else {                                     /* m.g == 6 DIV / 7 IDIV */
               if (operand == 0) return 0;                     /* #DE (div by zero): bail */
               if (width == 1) {
-                  if (modrm.Register == V86_GROUP3_DIV) { UINT32 dividend = cpu->Registers[V86_AX] & V86_WORD_MASK, quotient = dividend / (operand & V86_BYTE_MASK), remainder = dividend % (operand & V86_BYTE_MASK);
+                  if (modrm.Register == V86_GROUP3_DIV) { UINT32 dividend = cpu->Registers[V86_AX] & WORD_MASK_U, quotient = dividend / (operand & BYTE_MASK_U), remainder = dividend % (operand & BYTE_MASK_U);
                       if (quotient > V86_LOW_BYTE) return 0;            /* #DE quotient overflow */
                       cpu->Registers[V86_AX] = (cpu->Registers[V86_AX] & V86_CLEAR_LOW_WORD) | (quotient & V86_LOW_BYTE) | ((remainder & V86_LOW_BYTE) << V86_BYTE_SHIFT); }
                   else { INT16 dividend = (INT16)(cpu->Registers[V86_AX] & V86_LOW_WORD); INT8 divisor = (INT8)operand;
                       INT32 quotient = dividend / divisor, remainder = dividend % divisor; if (quotient > V86_INT8_MAX || quotient < V86_INT8_MIN) return 0;
                       cpu->Registers[V86_AX] = (cpu->Registers[V86_AX] & V86_CLEAR_LOW_WORD) | (quotient & V86_LOW_BYTE) | ((remainder & V86_LOW_BYTE) << V86_BYTE_SHIFT); }
               } else if (width == V86_WORD) {
-                  UINT32 dividend = ((cpu->Registers[V86_DX] & V86_WORD_MASK) << V86_WORD_SHIFT) | (cpu->Registers[V86_AX] & V86_WORD_MASK);
-                  if (modrm.Register == V86_GROUP3_DIV) { UINT32 quotient = dividend / (operand & V86_WORD_MASK), remainder = dividend % (operand & V86_WORD_MASK);
+                  UINT32 dividend = ((cpu->Registers[V86_DX] & WORD_MASK_U) << V86_WORD_SHIFT) | (cpu->Registers[V86_AX] & WORD_MASK_U);
+                  if (modrm.Register == V86_GROUP3_DIV) { UINT32 quotient = dividend / (operand & WORD_MASK_U), remainder = dividend % (operand & WORD_MASK_U);
                       if (quotient > V86_LOW_WORD) return 0;
                       cpu->Registers[V86_AX] = (cpu->Registers[V86_AX] & V86_CLEAR_LOW_WORD) | (quotient & V86_LOW_WORD);
                       cpu->Registers[V86_DX] = (cpu->Registers[V86_DX] & V86_CLEAR_LOW_WORD) | (remainder & V86_LOW_WORD); }
@@ -958,7 +955,7 @@ static int V86Step(V86_CPU *cpu)
               } else {                                  /* w == 4 */
                   UINT64 dividend = ((UINT64)cpu->Registers[V86_DX] << V86_DWORD_SHIFT) | (UINT64)cpu->Registers[V86_AX];
                   if (modrm.Register == V86_GROUP3_DIV) { UINT64 quotient = dividend / operand, remainder = dividend % operand;
-                      if (quotient > V86_DWORD_MASK) return 0;
+                      if (quotient > DWORD_MASK_U) return 0;
                       cpu->Registers[V86_AX] = (UINT32)quotient; cpu->Registers[V86_DX] = (UINT32)remainder; }
                   else { INT64 signedDividend = (INT64)dividend, divisor = (INT32)operand, quotient = signedDividend / divisor, remainder = signedDividend % divisor;
                       if (quotient > V86_INT32_MAX || quotient < V86_INT32_MIN) return 0;
@@ -1406,8 +1403,8 @@ static int V86Step(V86_CPU *cpu)
     if (opcode == V86_OP_CWD) {                                  /* CWD: DX <- sign(AX); 66: CDQ */
         /* CDQ is s80's: Wolf3D's FixedByFrac (`cdq / idiv dword`) declined it 1,074
            times under a multi-plane mask, handing its renderer to the real CPU. */
-        if (isOperand32) cpu->Registers[V86_DX] = (cpu->Registers[V86_AX] & V86_DWORD_SIGN) ? V86_DWORD_MASK : 0u;
-        else     V86Set16(cpu, V86_DX, (cpu->Registers[V86_AX] & V86_WORD_SIGN) ? V86_WORD_MASK : 0u);
+        if (isOperand32) cpu->Registers[V86_DX] = (cpu->Registers[V86_AX] & V86_DWORD_SIGN) ? DWORD_MASK_U : 0u;
+        else     V86Set16(cpu, V86_DX, (cpu->Registers[V86_AX] & V86_WORD_SIGN) ? WORD_MASK_U : 0u);
         cpu->Ip = (WORD)(cpu->Ip + offset); return 1;
     }
     /* ---- IMUL reg, r/m, imm (69: imm16/32, 6B: sign-extended imm8). s80: Mario's

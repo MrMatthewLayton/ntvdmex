@@ -2,6 +2,7 @@
 #include "dpmi.h"
 #include "ntvdm.h"
 #include "v86.h"
+#include "../ntvdmex_bits.h"
 
 /* Diagnostic snapshot of the last switch (read by the host log): ret_cs, ret_ip,
    code descriptor lo, code descriptor hi. Localises base-0 faults (my descriptor
@@ -23,8 +24,6 @@ INT g_DpmiIsClient32 = FALSE;
 #define DPMI_IDX_STACK 3
 
 /* The x86 segment descriptor's fields (Intel SDM vol. 3, "Segment Descriptors"). */
-#define DPMI_DESCRIPTOR_WORD_MASK        0xFFFF
-#define DPMI_DESCRIPTOR_BYTE_MASK        0xFF
 #define DPMI_DESCRIPTOR_NIBBLE_MASK      0xF
 #define DPMI_DESCRIPTOR_BASE_LOW_SHIFT   16    /* low dword: base 15-0 in bits 31-16     */
 #define DPMI_DESCRIPTOR_BASE_MID_SHIFT   16    /* base 23-16 -> high dword bits 7-0      */
@@ -38,15 +37,14 @@ VOID DpmiBuildDescriptor(DWORD base, DWORD limit, BYTE access, BYTE flags,
 {
     /* Standard x86 descriptor: limit in 20 bits, base in 32. access = P|DPL|S|type;
        flags nibble = G|D/B|0|AVL in bits 23..20 of the high dword. */
-    *descriptorLow = (limit & DPMI_DESCRIPTOR_WORD_MASK) | ((base & DPMI_DESCRIPTOR_WORD_MASK) << DPMI_DESCRIPTOR_BASE_LOW_SHIFT);
-    *descriptorHigh = ((base >> DPMI_DESCRIPTOR_BASE_MID_SHIFT) & DPMI_DESCRIPTOR_BYTE_MASK)
+    *descriptorLow = (limit & WORD_MASK) | ((base & WORD_MASK) << DPMI_DESCRIPTOR_BASE_LOW_SHIFT);
+    *descriptorHigh = ((base >> DPMI_DESCRIPTOR_BASE_MID_SHIFT) & BYTE_MASK)
         | ((DWORD)access << DPMI_DESCRIPTOR_ACCESS_SHIFT)
         | (((limit >> DPMI_DESCRIPTOR_LIMIT_HIGH_SHIFT) & DPMI_DESCRIPTOR_NIBBLE_MASK) << DPMI_DESCRIPTOR_LIMIT_HIGH_SHIFT)
         | (((DWORD)flags & DPMI_DESCRIPTOR_NIBBLE_MASK) << DPMI_DESCRIPTOR_FLAGS_SHIFT)
-        | (((base >> DPMI_DESCRIPTOR_BASE_HIGH_SHIFT) & DPMI_DESCRIPTOR_BYTE_MASK) << DPMI_DESCRIPTOR_BASE_HIGH_SHIFT);
+        | (((base >> DPMI_DESCRIPTOR_BASE_HIGH_SHIFT) & BYTE_MASK) << DPMI_DESCRIPTOR_BASE_HIGH_SHIFT);
 }
 
-#define DPMI_WORD_MASK               0xFFFF
 #define DPMI_SEGMENT_SHIFT           4         /* real mode: linear = segment << 4         */
 #define DPMI_FAR_RETURN_CS_OFFSET    2         /* 16-bit FAR CALL frame: [SP]=IP, [SP+2]=CS */
 #define DPMI_FAR_RETURN_FRAME_SIZE   4
@@ -67,9 +65,9 @@ VOID DpmiBuildDescriptor(DWORD base, DWORD limit, BYTE access, BYTE flags,
 INT DpmiSwitchToProtectedMode(volatile BYTE *tib, INT isClient32,
                               LONG *registerStatus, LONG *setStatus)
 {
-    WORD stackSegment = (WORD)(VDM_REG(tib, VTIB_SS)  & DPMI_WORD_MASK);
-    WORD stackPointer = (WORD)(VDM_REG(tib, VTIB_ESP) & DPMI_WORD_MASK);
-    WORD dataSegment = (WORD)(VDM_REG(tib, VTIB_DS)  & DPMI_WORD_MASK);
+    WORD stackSegment = (WORD)(VDM_REG(tib, VTIB_SS)  & WORD_MASK);
+    WORD stackPointer = (WORD)(VDM_REG(tib, VTIB_ESP) & WORD_MASK);
+    WORD dataSegment = (WORD)(VDM_REG(tib, VTIB_DS)  & WORD_MASK);
     DWORD frameLinear = ((DWORD)stackSegment << DPMI_SEGMENT_SHIFT) + stackPointer;      /* linear addr of the far-call frame  */
     /* 16-bit FAR CALL pushed IP then CS: [SP]=retIP, [SP+2]=retCS. */
     WORD returnOffset = *(volatile WORD *)frameLinear;
@@ -212,9 +210,9 @@ VOID DpmiRunProtectedMode(volatile BYTE *tib)
     BYTE *contextBytes = (BYTE *)&context; UINT byteIndex;
     for (byteIndex = 0; byteIndex < sizeof context; ++byteIndex) contextBytes[byteIndex] = 0;
     context.ContextFlags = VTIB_CTXFLAGS_VAL;  /* CONTEXT_CONTROL|INTEGER|SEGMENTS (0x10007) */
-    context.SegGs = VDM_REG(tib, VTIB_GS) & DPMI_WORD_MASK;  context.SegFs = VDM_REG(tib, VTIB_FS) & DPMI_WORD_MASK;
-    context.SegEs = VDM_REG(tib, VTIB_ES) & DPMI_WORD_MASK;  context.SegDs = VDM_REG(tib, VTIB_DS) & DPMI_WORD_MASK;
-    context.SegCs = VDM_REG(tib, VTIB_CS) & DPMI_WORD_MASK;  context.SegSs = VDM_REG(tib, VTIB_SS) & DPMI_WORD_MASK;
+    context.SegGs = VDM_REG(tib, VTIB_GS) & WORD_MASK;  context.SegFs = VDM_REG(tib, VTIB_FS) & WORD_MASK;
+    context.SegEs = VDM_REG(tib, VTIB_ES) & WORD_MASK;  context.SegDs = VDM_REG(tib, VTIB_DS) & WORD_MASK;
+    context.SegCs = VDM_REG(tib, VTIB_CS) & WORD_MASK;  context.SegSs = VDM_REG(tib, VTIB_SS) & WORD_MASK;
     context.Edi = VDM_REG(tib, VTIB_EDI); context.Esi = VDM_REG(tib, VTIB_ESI);
     context.Ebx = VDM_REG(tib, VTIB_EBX); context.Edx = VDM_REG(tib, VTIB_EDX);
     context.Ecx = VDM_REG(tib, VTIB_ECX); context.Eax = VDM_REG(tib, VTIB_EAX);

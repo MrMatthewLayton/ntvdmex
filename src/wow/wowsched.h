@@ -59,7 +59,6 @@
 #define WOWSCHED_CTX_LO   0x364      /* VTIB_GS  -- the low end of the block */
 #define WOWSCHED_CTX_LEN  0x40       /* .. through VTIB_SS inclusive         */
 #define WOWSCHED_VTIB_EIP 0x390      /* the saved EIP within the block       */
-#define WOWSCHED_BYTE_MASK  0xFF
 #define WOWSCHED_BYTE_SHIFT 8
 
 typedef struct _WOWSCHED_SLOT {
@@ -143,7 +142,7 @@ static VOID WowSchedSwap(PWOWSCHED_SLOT slot, volatile BYTE *tib,
 static VOID WowSchedPoke(DWORD linear, WORD value)
 {
     volatile BYTE *bytes = (volatile BYTE *)(ULONG_PTR)linear;
-    bytes[0] = (BYTE)(value & WOWSCHED_BYTE_MASK);
+    bytes[0] = (BYTE)(value & BYTE_MASK);
     bytes[1] = (BYTE)(value >> WOWSCHED_BYTE_SHIFT);
 }
 

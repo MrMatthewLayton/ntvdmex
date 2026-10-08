@@ -326,7 +326,7 @@ static INT WowShellPutDword(PCWOW32_FRAME frame, INT argumentOffset, DWORD value
 {
     volatile BYTE *bytes = Wow32ArgPointer(frame, argumentOffset);
     if (!bytes) return 0;
-    Wow32PokeWord(bytes,     (WORD)(value & WOW_WORD_MASK));
+    Wow32PokeWord(bytes,     (WORD)(value & WORD_MASK));
     Wow32PokeWord(bytes + WOW_WORD_BYTES, (WORD)(value >> WOW_WORD_SHIFT));
     return 1;
 }
@@ -431,7 +431,7 @@ static INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                                    (UINT)-1);
             WowNotePut(note, noteCapacity, &noteLength, " -- a COUNT query -> ");
             WowNoteHex(note, noteCapacity, &noteLength, count, WOW_HEX_WORD_DIGITS);
-            Wow32SetReturn(frame, (DWORD)(count & WOW_WORD_MASK));
+            Wow32SetReturn(frame, (DWORD)(count & WORD_MASK));
             return 1;
         }
         icon = ExtractIconA(GetModuleHandleA(NULL), fileName, (UINT)itemIndex);
@@ -488,7 +488,7 @@ static INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             if (index == MAX_PATH - 1)
                 WowNotePut(note, noteCapacity, &noteLength, " [★ path TRUNCATED at MAX_PATH]");
         }
-        if (indexPointer) { indexPointer[0] = (BYTE)(itemIndex & WOW_BYTE_MASK); indexPointer[1] = (BYTE)(itemIndex >> WOW_BYTE_SHIFT); }
+        if (indexPointer) { indexPointer[0] = (BYTE)(itemIndex & BYTE_MASK); indexPointer[1] = (BYTE)(itemIndex >> WOW_BYTE_SHIFT); }
         token = WowUserSystemResourceMintIcon(icon);
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
         WowNoteQuoted(note, noteCapacity, &noteLength, path);
@@ -554,7 +554,7 @@ static INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         /* ⚠ TRUNCATED TO 16 BITS DELIBERATELY: the guest's variable is an
              HINSTANCE, which is a WORD here. A success value above 0xFFFF would
              wrap to something <= 32 and read as an error, so clamp instead. */
-        if (result > WOW_WORD_MASK) result = WOW_WORD_MASK;
+        if (result > WORD_MASK) result = WORD_MASK;
         Wow32SetReturn(frame, result);
         return 1;
     }
@@ -590,7 +590,7 @@ static INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WowNoteHex(note, noteCapacity, &noteLength, result, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, ")");
         }
-        if (result > WOW_WORD_MASK) result = WOW_WORD_MASK;
+        if (result > WORD_MASK) result = WORD_MASK;
         Wow32SetReturn(frame, result);
         return 1;
     }
@@ -719,7 +719,7 @@ static INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         volatile BYTE *output = Wow32ArgPointer(frame, WOWSHELL_DRAGQUERYFILE_ARG_BUF);
         DWORD farPointer = g_WowWinGlobal16 ? g_WowWinGlobal16(WOWWIN_GLOBAL16_LOCK, drop16, 0) : 0;
         DWORD segmentBase = (farPointer >> WOW_WORD_SHIFT) ? DpmiSelectorBase((WORD)(farPointer >> WOW_WORD_SHIFT)) : 0;
-        volatile BYTE *dropBytes = segmentBase ? (volatile BYTE *)(ULONG_PTR)(segmentBase + (farPointer & WOW_WORD_MASK)) : NULL;
+        volatile BYTE *dropBytes = segmentBase ? (volatile BYTE *)(ULONG_PTR)(segmentBase + (farPointer & WORD_MASK)) : NULL;
         DWORD result = 0;
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "DragQueryFile drop 0x");

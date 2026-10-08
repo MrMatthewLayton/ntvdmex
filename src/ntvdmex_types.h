@@ -138,4 +138,6 @@ NTVDMEX_TYPES_ASSERT_SIZE(ULONG, 4);
 NTVDMEX_TYPES_ASSERT_SIZE(BOOL, 4);
 NTVDMEX_TYPES_ASSERT_SIZE(UINT_PTR, sizeof(PVOID));
 
+#include "ntvdmex_bits.h"       /* the byte/word/dword masks */
+
 #endif /* NTVDMEX_TYPES_H */

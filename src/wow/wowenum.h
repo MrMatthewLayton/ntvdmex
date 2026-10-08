@@ -179,7 +179,7 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
     /* s91: NOT FOR LineDDA -- its callback is VOID, so AX is whatever the procedure
          left there; reading it as "stop" cut a line short at the first point whose y
          happened to be 0 (tests/probes/win16/w_ldda: 1 call where stock makes 10). */
-    if (!isFirst && g_WowEnum.Kind != WOWENUM_LINE && !(result & WOW_WORD_MASK)) {
+    if (!isFirst && g_WowEnum.Kind != WOWENUM_LINE && !(result & WORD_MASK)) {
         WowNotePut(note, noteCapacity, &noteLength, "ENUM stopped by the callback after 0x");
         WowNoteHex(note, noteCapacity, &noteLength, g_WowEnum.Calls, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " call(s) -- the caller returns FALSE");
@@ -203,7 +203,7 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         arguments[2] = 0; arguments[3] = 0;             /* lpntm: ditto, +146 into the blob */
         arguments[4] = entry->FontType;
         arguments[5] = (WORD)(g_WowEnum.LParam >> WOW_WORD_SHIFT);
-        arguments[6] = (WORD)(g_WowEnum.LParam & WOW_WORD_MASK);
+        arguments[6] = (WORD)(g_WowEnum.LParam & WORD_MASK);
         g_WowCallBlob2Argument = WOWENUM_FONT_ARG_METRICS; g_WowCallBlob2Offset = WOWENUM_ELF16;
         if (!returnSelector || !stackBase
             || !WowCallEnter(tib, stackBase, returnSelector, g_WowEnum.Procedure, g_WowEnum.DataSelector, arguments, WOWENUM_FONT_ARGUMENTS,
@@ -242,7 +242,7 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         entry = &g_WowEnumFonts[g_WowEnum.Index++];
         arguments[0] = 0; arguments[1] = 0;             /* lpLogObject: filled by WowCallEnter */
         arguments[2] = (WORD)(g_WowEnum.LParam >> WOW_WORD_SHIFT);
-        arguments[3] = (WORD)(g_WowEnum.LParam & WOW_WORD_MASK);
+        arguments[3] = (WORD)(g_WowEnum.LParam & WORD_MASK);
         if (!returnSelector || !stackBase
             || !WowCallEnter(tib, stackBase, returnSelector, g_WowEnum.Procedure, g_WowEnum.DataSelector, arguments, WOWENUM_PAIR_ARGUMENTS,
                               0, WOWCALL_RET_KEEP, NULL, 0, 0,
@@ -268,7 +268,7 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
            -- #295. One blob, two pointers: the record at +0, the table after it. */
         INT blobLength = 0, tableOffset = 0, room = WOWCALL_MAX_BLOB;
         UINT function = 0;
-        WORD stackPointer = (WORD)(VDM_REG(tib, VTIB_ESP) & WOW_WORD_MASK);
+        WORD stackPointer = (WORD)(VDM_REG(tib, VTIB_ESP) & WORD_MASK);
         /* ⚠ THE BLOB IS ON THE GUEST'S STACK, so it must fit there. A Win16 task's
              DGROUP starts with INSTANCEDATA, whose word at +0x0A is pStackTop -- the
              lowest offset the stack may reach (what the C runtime's chkstk compares
@@ -306,7 +306,7 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         arguments[3] = 0; arguments[4] = 0;                 /* lpmr: the blob itself         */
         arguments[5] = (WORD)g_WowGdiMetafile.ObjectCount;
         arguments[6] = (WORD)(g_WowEnum.LParam >> WOW_WORD_SHIFT);
-        arguments[7] = (WORD)(g_WowEnum.LParam & WOW_WORD_MASK);
+        arguments[7] = (WORD)(g_WowEnum.LParam & WORD_MASK);
         g_WowCallBlob2Argument = 1; g_WowCallBlob2Offset = tableOffset;
         if (!returnSelector || !stackBase
             || !WowCallEnter(tib, stackBase, returnSelector, g_WowEnum.Procedure, g_WowEnum.DataSelector, arguments, WOWENUM_METAFILE_ARGUMENTS,
@@ -437,7 +437,7 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
 
     /* lParam / lpData: one DWORD, high word first. */
     arguments[argumentCount]     = (WORD)(g_WowEnum.LParam >> WOW_WORD_SHIFT);
-    arguments[argumentCount + 1] = (WORD)(g_WowEnum.LParam & WOW_WORD_MASK);
+    arguments[argumentCount + 1] = (WORD)(g_WowEnum.LParam & WORD_MASK);
     argumentCount += WOWENUM_LPARAM_WORDS;
 
     if (!returnSelector || !stackBase
@@ -459,7 +459,7 @@ static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
     WowNotePut(note, noteCapacity, &noteLength, "ENUM -> 0x");
     WowNoteHex(note, noteCapacity, &noteLength, g_WowEnum.Procedure >> WOW_WORD_SHIFT, WOW_HEX_WORD_DIGITS);
     WowNotePut(note, noteCapacity, &noteLength, ":0x");
-    WowNoteHex(note, noteCapacity, &noteLength, g_WowEnum.Procedure & WOW_WORD_MASK, WOW_HEX_WORD_DIGITS);
+    WowNoteHex(note, noteCapacity, &noteLength, g_WowEnum.Procedure & WORD_MASK, WOW_HEX_WORD_DIGITS);
     WowNotePut(note, noteCapacity, &noteLength, "(");
     {   INT index;
         for (index = 0; index < argumentCount; ++index) {

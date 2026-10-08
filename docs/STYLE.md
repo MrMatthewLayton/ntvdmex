@@ -135,6 +135,11 @@ case EMU8K_POINTER_PORT_OFFSET: state->Pointer = value; break;
   (`KRNL386_OFFSET_2F`, not `KRNL386_TASK_LIST`).
 - **Constants live in shared area headers** (`vga_ports.h`, `bios_data.h`, …), so a port or mask
   is defined once and every module uses the same name.
+- **The byte/word/dword masks are shared** (`src/ntvdmex_bits.h`: `BYTE_MASK`, `WORD_MASK`,
+  `HIGH_BYTE_MASK`, ...); no module defines its own copy. A name keeps its literal's C type:
+  the plain name is the `int` literal (`0xFFFF`), the `_U` name the `unsigned` one (`0xFFFFu`).
+- **A repeated idiom gets an accessor**, not just a named constant: a 16-bit register out of
+  the VDM state is `VDM_REG16(tib, VTIB_CS)`, not `VDM_REG(tib, VTIB_CS) & WORD_MASK`.
 - **Hardware values cite their source** — the datasheet section, the specification, or the
   oracle measurement.
 - **Booleans at call sites are named too.** `Emu8kDataWrite(state, 0, TRUE, value)` hides what

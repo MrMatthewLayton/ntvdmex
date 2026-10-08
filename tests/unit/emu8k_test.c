@@ -117,7 +117,6 @@
 #define EMU8K_TEST_SMA_FLAG          0x80000000u  /* EMPTY / FULL                          */
 #define EMU8K_TEST_ADDRESS_MASK      0xFFFFFF
 #define EMU8K_TEST_HIGH_WORD_SHIFT   16
-#define EMU8K_TEST_LOW_WORD_MASK     0xFFFF
 
 /* The DMA stream modes for CCCA (bits 26-24: DMA, write, right). */
 #define EMU8K_TEST_STREAM_LEFT_READ   0x04000000u
@@ -668,7 +667,7 @@ INT main(VOID)
       Emu8kTestCheck(peakLowCutoff < peakOpen * 15 / 100, "cutoff 00h (125 Hz): a 689 Hz tone is cut to under 15%");
       Emu8kTestCheck(peakResonant > peakOnTone * 3, "Q 15 at a cutoff on the tone: resonance lifts it more than 3x");
       Emu8kTestCheck(Emu8kTestData0Read(EMU8K_TEST_CVCF, EMU8K_TEST_TONE_CHANNEL) != 0
-                     && (Emu8kTestData0Read(EMU8K_TEST_CVCF, EMU8K_TEST_TONE_CHANNEL) & EMU8K_TEST_LOW_WORD_MASK)
+                     && (Emu8kTestData0Read(EMU8K_TEST_CVCF, EMU8K_TEST_TONE_CHANNEL) & WORD_MASK)
                         == EMU8K_TEST_CUTOFF_ON_TONE,
                      "CVCF: the current cutoff follows IFATN's byte (6800h)"); }
     Emu8kTestNoteKill(EMU8K_TEST_TONE_CHANNEL);

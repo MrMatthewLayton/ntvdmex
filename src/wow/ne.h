@@ -370,7 +370,7 @@ static INT NeApplyRelocations(PNE_MODULE module, INT index, PNE_IMPORT importer,
 
         switch (relocationType & NE_REL_TYPE_MASK) {
         case NE_REL_INTERNAL:
-            if ((fieldA & NE_BYTE_MASK) == NE_ENT_MOVEABLE) {           /* target names an entry ordinal */
+            if ((fieldA & BYTE_MASK) == NE_ENT_MOVEABLE) {           /* target names an entry ordinal */
                 WORD segmentNumber;
                 if (NeEntryLookup(module, fieldB, &segmentNumber, &targetOffset) != 0) { module->Error = __LINE__; return -1; }
                 if (!segmentNumber || segmentNumber > module->SegmentCount) { module->Error = __LINE__; return -1; }

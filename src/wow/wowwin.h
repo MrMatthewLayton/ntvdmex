@@ -297,7 +297,7 @@ static WORD WowWinDrop16(HDROP drop, PSTR reason, INT reasonCapacity)
     handle16 = (WORD)g_WowWinGlobal16(WOWWIN_GLOBAL16_ALLOC, WOWWIN_GMEM_SHARE_MOVEABLE_ZEROINIT, offset);
     if (!handle16) { lstrcpynA(reason, "GlobalAlloc refused", reasonCapacity); return 0; }
     farPointer = g_WowWinGlobal16(WOWWIN_GLOBAL16_LOCK, handle16, 0);
-    bytes = (farPointer >> WOW_WORD_SHIFT) ? (volatile BYTE *)(ULONG_PTR)(DpmiSelectorBase((WORD)(farPointer >> WOW_WORD_SHIFT)) + (farPointer & WOW_WORD_MASK)) : NULL;
+    bytes = (farPointer >> WOW_WORD_SHIFT) ? (volatile BYTE *)(ULONG_PTR)(DpmiSelectorBase((WORD)(farPointer >> WOW_WORD_SHIFT)) + (farPointer & WORD_MASK)) : NULL;
     if (!bytes || !(farPointer >> WOW_WORD_SHIFT) || !DpmiSelectorBase((WORD)(farPointer >> WOW_WORD_SHIFT))) {
         g_WowWinGlobal16(WOWWIN_GLOBAL16_FREE, handle16, 0);
         lstrcpynA(reason, "GlobalLock refused", reasonCapacity);

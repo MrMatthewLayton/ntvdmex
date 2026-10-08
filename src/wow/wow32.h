@@ -222,8 +222,6 @@ static VOID WowNotePut(PSTR buffer, INT capacity, PINT length, PCSTR text)
 #define WOW_BYTE_SHIFT       8
 #define WOW_WORD_SHIFT       16
 #define WOW_HIGH_BYTE_SHIFT  24
-#define WOW_BYTE_MASK        0xFF
-#define WOW_WORD_MASK        0xFFFF
 #define WOW_WORD_BYTES       2
 static VOID WowNoteHex(PSTR buffer, INT capacity, PINT length, DWORD value, INT digits)
 {
@@ -253,7 +251,7 @@ static WORD Wow32PeekWord(volatile BYTE *bytes)
 
 static VOID Wow32PokeWord(volatile BYTE *bytes, WORD value)
 {
-    bytes[0] = (BYTE)(value & WOW_BYTE_MASK);
+    bytes[0] = (BYTE)(value & BYTE_MASK);
     bytes[1] = (BYTE)(value >> WOW_BYTE_SHIFT);
 }
 
@@ -281,7 +279,7 @@ static volatile BYTE *Wow32ArgPointer(PCWOW32_FRAME frame, INT offset)
     if (!selector || !frame->SelectorToLinear) return NULL;
     base = frame->SelectorToLinear(selector, frame->Context);
     if (!base) return NULL;
-    return (volatile BYTE *)(ULONG_PTR)(base + (farPointer & WOW_WORD_MASK));
+    return (volatile BYTE *)(ULONG_PTR)(base + (farPointer & WORD_MASK));
 }
 
 /* Copy a NUL-terminated guest string at a far-pointer argument into a host buffer.
@@ -313,7 +311,7 @@ static volatile BYTE *Wow32FarAt(PCWOW32_FRAME frame, volatile BYTE *base, INT o
     if (!selector || !frame->SelectorToLinear) return NULL;
     linear = frame->SelectorToLinear(selector, frame->Context);
     if (!linear) return NULL;
-    return (volatile BYTE *)(ULONG_PTR)(linear + (farPointer & WOW_WORD_MASK));
+    return (volatile BYTE *)(ULONG_PTR)(linear + (farPointer & WORD_MASK));
 }
 
 /* Copy a host string into a guest buffer described by a POINTER/CAPACITY PAIR,
@@ -339,7 +337,7 @@ static INT Wow32FarPut(PCWOW32_FRAME frame, volatile BYTE *base,
 /* ★ The return value goes in the stack hole, NOT in AX/DX -- see the header note. */
 static VOID Wow32SetReturn(PWOW32_FRAME frame, DWORD value)
 {
-    Wow32PokeWord(frame->FrameBase + WOW32_OFF_RET,     (WORD)(value & WOW_WORD_MASK));
+    Wow32PokeWord(frame->FrameBase + WOW32_OFF_RET,     (WORD)(value & WORD_MASK));
     Wow32PokeWord(frame->FrameBase + WOW32_OFF_RET + WOW_WORD_BYTES, (WORD)(value >> WOW_WORD_SHIFT));
     frame->Result = value;
 }
@@ -839,7 +837,7 @@ static DWORD Wow32Flat(PCWOW32_FRAME frame, DWORD farPointer)
     DWORD base;
     if (!selector || !frame->SelectorToLinear) return 0;
     base = frame->SelectorToLinear(selector, frame->Context);
-    return base ? base + (farPointer & WOW_WORD_MASK) : 0;
+    return base ? base + (farPointer & WORD_MASK) : 0;
 }
 /* Call a 32-bit function with n DWORDs, a[0] first. ESP is restored by hand, so a
    STDCALL target (which pops) and a CDECL one (which does not) both come back
@@ -906,7 +904,7 @@ static INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         FARPROC pointer = NULL;
         if (module) {
             if (!(procedureName >> WOW_WORD_SHIFT)) pointer = GetProcAddress((HMODULE)(ULONG_PTR)module,
-                                                (LPCSTR)(ULONG_PTR)(procedureName & WOW_WORD_MASK));
+                                                (LPCSTR)(ULONG_PTR)(procedureName & WORD_MASK));
             else if (Wow32ArgString(frame, WOW32_GETPROCADDRESS32W_ARG_NAME, name, (INT)sizeof name))
                 pointer = GetProcAddress((HMODULE)(ULONG_PTR)module, name);
         }
@@ -921,7 +919,7 @@ static INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         DWORD farPointer   = Wow32ArgDword(frame, WOW32_GETVDMPOINTER32W_ARG_POINTER);
         DWORD result;
         if (mode) result = Wow32Flat(frame, farPointer);
-        else      result = ((farPointer >> WOW_WORD_SHIFT) << WOW32_PARAGRAPH_SHIFT) + (farPointer & WOW_WORD_MASK);
+        else      result = ((farPointer >> WOW_WORD_SHIFT) << WOW32_PARAGRAPH_SHIFT) + (farPointer & WORD_MASK);
         Wow32SetReturn(frame, result);
         return 1;
     }
@@ -931,7 +929,7 @@ static INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         DWORD mask = Wow32RawArgDword(frame, WOW32_CALLPROCEX32W_ARG_MASK);
         DWORD procedureAddress   = Wow32RawArgDword(frame, WOW32_CALLPROCEX32W_ARG_PROCEDURE);
         INT   isExtended   = (countAndFlags & WOW32_CALLPROCEX32W_EXTENDED) != 0;      /* krnl386's own mark: 518 */
-        INT   number    = (INT)(countAndFlags & WOW_WORD_MASK);
+        INT   number    = (INT)(countAndFlags & WORD_MASK);
         DWORD arguments[WOW_GT_MAX_PARAMETERS];
         INT   index;
         if (!procedureAddress || number < 0 || number > WOW_GT_MAX_PARAMETERS) { Wow32SetReturn(frame, 0); return 1; }
@@ -1452,7 +1450,7 @@ static INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         SYSTEMTIME systemTime;
         GetLocalTime(&systemTime);
         Wow32SetReturn(frame, ((DWORD)systemTime.wYear << WOW32_DATE_YEAR_SHIFT)
-                      | ((DWORD)(systemTime.wDay & WOW_BYTE_MASK) << WOW32_DATE_DAY_SHIFT)
+                      | ((DWORD)(systemTime.wDay & BYTE_MASK) << WOW32_DATE_DAY_SHIFT)
                       | ((DWORD)(systemTime.wMonth & WOW32_DATE_NIBBLE_MASK) << WOW32_DATE_MONTH_SHIFT)
                       | (DWORD)(systemTime.wDayOfWeek & WOW32_DATE_NIBBLE_MASK));
         return 1;
@@ -1479,7 +1477,7 @@ static INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
          every caller. Same rule as our DOS layer's 44/08 (dos_int21.c): 0 removable (a
          CD too), 1 fixed, 0Fh invalid drive; BL 0 = the default drive. */
     case WOW32_ISDRIVEREMOVABLE: {
-        BYTE drive = (BYTE)(Wow32ArgWord(frame, WOW32_ISDRIVEREMOVABLE_ARG_DRIVE) & WOW_BYTE_MASK);
+        BYTE drive = (BYTE)(Wow32ArgWord(frame, WOW32_ISDRIVEREMOVABLE_ARG_DRIVE) & BYTE_MASK);
         UINT driveType = 0;
         CHAR root[WOW32_ROOT_PATH_SIZE];
         if (!drive) {

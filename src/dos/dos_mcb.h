@@ -41,7 +41,6 @@
 #define DOS_PARAGRAPH_LAST_BYTE   15     /* added before dividing, to round up to a paragraph */
 
 /* A little-endian WORD: the low byte first, then the high byte. */
-#define DOS_LOW_BYTE_MASK         0xFF
 #define DOS_HIGH_BYTE_SHIFT       8
 
 /* The MCB's fields (see the layout above). */
@@ -80,7 +79,7 @@ static inline WORD DosMcbReadWord(_In_ volatile BYTE *field) {
     return (WORD)((WORD)field[0] | ((WORD)field[1] << DOS_HIGH_BYTE_SHIFT));
 }
 static inline VOID DosMcbWriteWord(_Out_ volatile BYTE *field, _In_ WORD value) {
-    field[0] = (BYTE)(value & DOS_LOW_BYTE_MASK);
+    field[0] = (BYTE)(value & BYTE_MASK);
     field[1] = (BYTE)(value >> DOS_HIGH_BYTE_SHIFT);
 }
 static inline VOID DosMcbWriteHeader(_In_opt_ volatile BYTE *base, _In_ WORD mcbSegment,

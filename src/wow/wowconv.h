@@ -6,7 +6,6 @@
 #define WOWCONV_BYTE_SHIFT        8
 #define WOWCONV_WORD_SHIFT        16
 #define WOWCONV_HIGH_BYTE_SHIFT   24
-#define WOWCONV_BYTE_MASK         0xff
 #define WOWCONV_BYTES_PER_WORD    2
 #define WOWCONV_INT16_SIGN        0x8000
 #define WOWCONV_INT16_RANGE       0x10000
@@ -139,8 +138,8 @@ static INT WowConvRect16Get(PCBYTE rect, INT index)
 }
 static VOID WowConvRect16Put(PBYTE rect, INT index, INT value)
 {
-    rect[index * WOWCONV_RECT16_FIELD_BYTES]     = (BYTE)(value & WOWCONV_BYTE_MASK);
-    rect[index * WOWCONV_RECT16_FIELD_BYTES + 1] = (BYTE)((value >> WOWCONV_BYTE_SHIFT) & WOWCONV_BYTE_MASK);
+    rect[index * WOWCONV_RECT16_FIELD_BYTES]     = (BYTE)(value & BYTE_MASK);
+    rect[index * WOWCONV_RECT16_FIELD_BYTES + 1] = (BYTE)((value >> WOWCONV_BYTE_SHIFT) & BYTE_MASK);
 }
 
 /* ── PACKED DIB: THE 12-BYTE CORE HEADER ─────────────────────────────────────
@@ -184,13 +183,13 @@ static UINT WowConvDibCoreToInfo(PCBYTE core, UINT length,
     if (capacity < WOWCONV_INFO_HEADER_SIZE + paletteEntries * WOWCONV_RGBQUAD_SIZE) return 0;
     for (index = 0; index < WOWCONV_INFO_HEADER_SIZE; ++index) output[index] = 0;
     output[0] = WOWCONV_INFO_HEADER_SIZE;                                            /* biSize     */
-    output[WOWCONV_INFO_WIDTH] = (BYTE)(width & WOWCONV_BYTE_MASK);
-    output[WOWCONV_INFO_WIDTH + 1] = (BYTE)((width >> WOWCONV_BYTE_SHIFT) & WOWCONV_BYTE_MASK);            /* biWidth    */
-    output[WOWCONV_INFO_HEIGHT] = (BYTE)(height & WOWCONV_BYTE_MASK);
-    output[WOWCONV_INFO_HEIGHT + 1] = (BYTE)((height >> WOWCONV_BYTE_SHIFT) & WOWCONV_BYTE_MASK);            /* biHeight   */
+    output[WOWCONV_INFO_WIDTH] = (BYTE)(width & BYTE_MASK);
+    output[WOWCONV_INFO_WIDTH + 1] = (BYTE)((width >> WOWCONV_BYTE_SHIFT) & BYTE_MASK);            /* biWidth    */
+    output[WOWCONV_INFO_HEIGHT] = (BYTE)(height & BYTE_MASK);
+    output[WOWCONV_INFO_HEIGHT + 1] = (BYTE)((height >> WOWCONV_BYTE_SHIFT) & BYTE_MASK);            /* biHeight   */
     output[WOWCONV_INFO_PLANES] = 1;                                            /* biPlanes   */
-    output[WOWCONV_INFO_BIT_COUNT] = (BYTE)(bitCount & WOWCONV_BYTE_MASK);
-    output[WOWCONV_INFO_BIT_COUNT + 1] = (BYTE)((bitCount >> WOWCONV_BYTE_SHIFT) & WOWCONV_BYTE_MASK);          /* biBitCount */
+    output[WOWCONV_INFO_BIT_COUNT] = (BYTE)(bitCount & BYTE_MASK);
+    output[WOWCONV_INFO_BIT_COUNT + 1] = (BYTE)((bitCount >> WOWCONV_BYTE_SHIFT) & BYTE_MASK);          /* biBitCount */
     /* RGBTRIPLE -> RGBQUAD. Both are B,G,R order, so only the fourth
        (reserved) byte is new -- but the STRIDE is the whole point. */
     for (index = 0; index < paletteEntries; ++index) {
@@ -278,12 +277,12 @@ static VOID WowConvAbc32To16(const long *abc32, PBYTE abc16)
     long widthB = abc32[WOWCONV_ABC_B] < 0 ? 0 : abc32[WOWCONV_ABC_B];      /* a width is never negative */
     INT widthC = WowConvClamp16(abc32[WOWCONV_ABC_C]);
     if (widthB > WOWCONV_UINT16_MAX) widthB = WOWCONV_UINT16_MAX;
-    abc16[WOWCONV_ABC16_A] = (BYTE)(widthA & WOWCONV_BYTE_MASK);
-    abc16[WOWCONV_ABC16_A + 1] = (BYTE)((widthA >> WOWCONV_BYTE_SHIFT) & WOWCONV_BYTE_MASK);
-    abc16[WOWCONV_ABC16_B] = (BYTE)(widthB & WOWCONV_BYTE_MASK);
-    abc16[WOWCONV_ABC16_B + 1] = (BYTE)((widthB >> WOWCONV_BYTE_SHIFT) & WOWCONV_BYTE_MASK);
-    abc16[WOWCONV_ABC16_C] = (BYTE)(widthC & WOWCONV_BYTE_MASK);
-    abc16[WOWCONV_ABC16_C + 1] = (BYTE)((widthC >> WOWCONV_BYTE_SHIFT) & WOWCONV_BYTE_MASK);
+    abc16[WOWCONV_ABC16_A] = (BYTE)(widthA & BYTE_MASK);
+    abc16[WOWCONV_ABC16_A + 1] = (BYTE)((widthA >> WOWCONV_BYTE_SHIFT) & BYTE_MASK);
+    abc16[WOWCONV_ABC16_B] = (BYTE)(widthB & BYTE_MASK);
+    abc16[WOWCONV_ABC16_B + 1] = (BYTE)((widthB >> WOWCONV_BYTE_SHIFT) & BYTE_MASK);
+    abc16[WOWCONV_ABC16_C] = (BYTE)(widthC & BYTE_MASK);
+    abc16[WOWCONV_ABC16_C + 1] = (BYTE)((widthC >> WOWCONV_BYTE_SHIFT) & BYTE_MASK);
 }
 
 /* ── WINDOWS METAFILE BYTES: THE HEADER AND ONE RECORD. (#295) ───────────────

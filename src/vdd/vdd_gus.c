@@ -26,7 +26,6 @@
 #define GUS_PORT_HIGH_LAST            0x107
 #define GUS_FLOATING_BUS              0xFF
 #define GUS_FAILED                    (-1)
-#define GUS_BYTE_MASK                 0xFF
 #define GUS_BYTE_SHIFT                8
 #define GUS_WORD_WIDTH                2       /* a 16-bit port access                     */
 #define GUS_WORD_BYTES                2u
@@ -681,7 +680,7 @@ static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
                it powered up is let go. The lines drop, so a source still pending
                afterwards interrupts afresh on the next update. */
             state->RegisterClear = (BYTE)value;
-            if (!(value & GUS_BYTE_MASK)) { state->IsLineUp = 0; state->IsMidiLineUp = 0; }
+            if (!(value & BYTE_MASK)) { state->IsLineUp = 0; state->IsMidiLineUp = 0; }
             break;
         case GUS_REGCTL_JUMPER:                                      /* the jumper register */
             state->Jumper = (BYTE)value;
@@ -723,11 +722,11 @@ static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
         if (width >= GUS_WORD_WIDTH) { GusRegisterWrite(state, state->RegisterSelect, (WORD)value); break; }
         /* A byte to 3X4 is the LOW half of a 16-bit register: latched, and the write
            to 3X5 that follows completes it (ref §2). */
-        state->LowByteLatch = (WORD)(value & GUS_BYTE_MASK);
+        state->LowByteLatch = (WORD)(value & BYTE_MASK);
         break;
     case GUS_PORT_DATA_HIGH:
-        if (GusIsRegister16(state->RegisterSelect)) GusRegisterWrite(state, state->RegisterSelect, (WORD)(((value & GUS_BYTE_MASK) << GUS_BYTE_SHIFT) | state->LowByteLatch));
-        else                    GusRegisterWrite(state, state->RegisterSelect, (WORD)(value & GUS_BYTE_MASK));
+        if (GusIsRegister16(state->RegisterSelect)) GusRegisterWrite(state, state->RegisterSelect, (WORD)(((value & BYTE_MASK) << GUS_BYTE_SHIFT) | state->LowByteLatch));
+        else                    GusRegisterWrite(state, state->RegisterSelect, (WORD)(value & BYTE_MASK));
         break;
     case GUS_PORT_DRAM:
         if (state->Dram) state->Dram[state->DramIoAddress & (GUS_DRAM_SIZE - 1)] = (BYTE)value;
@@ -766,12 +765,12 @@ static VOID GusPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     case GUS_PORT_REGISTER_SELECT: result = state->RegisterSelect; break;
     case GUS_PORT_DATA_LOW: {
         WORD value16 = GusIsRegister16(state->RegisterSelect) ? GusRegisterRead(state, (BYTE)(state->RegisterSelect | GUS_REGISTER_READ)) : 0;
-        result = (width >= GUS_WORD_WIDTH) ? value16 : (value16 & GUS_BYTE_MASK);
+        result = (width >= GUS_WORD_WIDTH) ? value16 : (value16 & BYTE_MASK);
         break; }
     case GUS_PORT_DATA_HIGH: {
         BYTE select = state->RegisterSelect;
         if (select < GUS_REGISTER_GLOBAL_FIRST) select |= GUS_REGISTER_READ;           /* voice regs read at 80h+ (ref §2.2) */
-        result = GusIsRegister16(state->RegisterSelect) ? (UINT32)(GusRegisterRead(state, select) >> GUS_BYTE_SHIFT) : (UINT32)(GusRegisterRead(state, select) & GUS_BYTE_MASK);
+        result = GusIsRegister16(state->RegisterSelect) ? (UINT32)(GusRegisterRead(state, select) >> GUS_BYTE_SHIFT) : (UINT32)(GusRegisterRead(state, select) & BYTE_MASK);
         break; }
     case GUS_PORT_DRAM:
         result = state->Dram ? state->Dram[state->DramIoAddress & (GUS_DRAM_SIZE - 1)] : GUS_FLOATING_BUS;

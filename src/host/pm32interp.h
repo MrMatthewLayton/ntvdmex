@@ -45,9 +45,6 @@
 #define PM32_DWORD       4
 #define PM32_PUSHAD_BYTES 32      /* eight DWORD registers                      */
 #define PM32_BITS_PER_BYTE 8
-#define PM32_BYTE_MASK   0xFFu
-#define PM32_WORD_MASK   0xFFFFu
-#define PM32_DWORD_MASK  0xFFFFFFFFu
 #define PM32_LOW_BYTE    0xFF      /* int-typed, where the expression is signed */
 #define PM32_LOW_WORD    0xFFFF
 #define PM32_BYTE_SIGN   0x80u
@@ -250,7 +247,7 @@ typedef struct _PM32_CPU {
 } PM32_CPU, *PPM32_CPU; typedef const PM32_CPU *PCPM32_CPU;
 
 /* ---- register views ------------------------------------------------------------- */
-static UINT32 Pm32Mask(INT width) { return width == 1 ? PM32_BYTE_MASK : width == PM32_WORD ? PM32_WORD_MASK : PM32_DWORD_MASK; }
+static UINT32 Pm32Mask(INT width) { return width == 1 ? BYTE_MASK_U : width == PM32_WORD ? WORD_MASK_U : DWORD_MASK_U; }
 static UINT32 Pm32SignBit(INT width) { return width == 1 ? PM32_BYTE_SIGN : width == PM32_WORD ? PM32_WORD_SIGN : PM32_DWORD_SIGN; }
 static UINT32 Pm32GetRegister(const PM32_CPU *cpu, INT registerIndex, INT width)
 {
@@ -632,8 +629,8 @@ static INT Pm32Step(PM32_CPU *cpu)
         PM32_DONE(offset);
     }
     if (opcode == PM32_OP_CDQ) {
-        if (operandSize == PM32_DWORD) cpu->Registers[PM32_EDX] = (cpu->Registers[PM32_EAX] & PM32_DWORD_SIGN) ? PM32_DWORD_MASK : 0;
-        else Pm32SetRegister(cpu, PM32_EDX, PM32_WORD, (cpu->Registers[PM32_EAX] & PM32_WORD_SIGN) ? PM32_WORD_MASK : 0);
+        if (operandSize == PM32_DWORD) cpu->Registers[PM32_EDX] = (cpu->Registers[PM32_EAX] & PM32_DWORD_SIGN) ? DWORD_MASK_U : 0;
+        else Pm32SetRegister(cpu, PM32_EDX, PM32_WORD, (cpu->Registers[PM32_EAX] & PM32_WORD_SIGN) ? WORD_MASK_U : 0);
         PM32_DONE(offset);
     }
     /* ---- MOV moffs (A0-A3) ---- */
@@ -782,7 +779,7 @@ static INT Pm32Step(PM32_CPU *cpu)
                        if (quotient > PM32_INT16_MAX || quotient < PM32_INT16_MIN) return 0; Pm32SetRegister(cpu, PM32_EAX, PM32_WORD, (UINT32)quotient); Pm32SetRegister(cpu, PM32_EDX, PM32_WORD, (UINT32)remainder); }
             } else {
                 UINT64 dividend = ((UINT64)cpu->Registers[PM32_EDX] << PM32_DWORD_SHIFT) | cpu->Registers[PM32_EAX];
-                if (modrm.Register == PM32_GROUP3_DIV) { UINT64 quotient = dividend / operand, remainder = dividend % operand; if (quotient > PM32_DWORD_MASK) return 0;
+                if (modrm.Register == PM32_GROUP3_DIV) { UINT64 quotient = dividend / operand, remainder = dividend % operand; if (quotient > DWORD_MASK_U) return 0;
                                   cpu->Registers[PM32_EAX] = (UINT32)quotient; cpu->Registers[PM32_EDX] = (UINT32)remainder; }
                 else { INT64 signedDividend = (INT64)dividend, divisor = (INT32)operand, quotient, remainder;
                        if (divisor == -1 && signedDividend == (INT64)0x8000000000000000ULL) return 0;

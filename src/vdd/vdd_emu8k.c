@@ -21,12 +21,8 @@
 #define EMU8K_Q28_SHIFT          28          /* the filter's coefficients are Q28              */
 #define EMU8K_Q28_ONE_DOUBLE     268435456.0
 #define EMU8K_HIGH_BYTE_SHIFT    8
-#define EMU8K_LOW_BYTE_MASK      0xFF
-#define EMU8K_HIGH_BYTE_MASK     0xFF00
 #define EMU8K_HIGH_WORD_SHIFT    16
-#define EMU8K_LOW_WORD_MASK      0xFFFFu
 #define EMU8K_LOW_WORD_MASK_KEEP_HIGH 0x0000FFFFu
-#define EMU8K_HIGH_WORD_MASK     0xFFFF0000u
 #define EMU8K_WORD_MAX           0xFFFF
 
 /* ---- fixed-point exponentials --------------------------------------------------------- */
@@ -55,7 +51,7 @@ static DWORD Emu8kExp2(INT32 exponent)
            tableIndex = fraction >> EMU8K_HIGH_BYTE_SHIFT, mantissa;
     mantissa = g_Emu8kExp2Table[tableIndex]
              + (DWORD)(((UINT64)(g_Emu8kExp2Table[tableIndex + 1] - g_Emu8kExp2Table[tableIndex])
-                        * (fraction & EMU8K_LOW_BYTE_MASK)) >> EMU8K_HIGH_BYTE_SHIFT);
+                        * (fraction & BYTE_MASK)) >> EMU8K_HIGH_BYTE_SHIFT);
     if (octave >= EMU8K_EXP2_MAX_OCTAVE) return EMU8K_EXP2_SATURATED;
     if (octave >= 0)  return mantissa << octave;
     if (octave <= EMU8K_EXP2_MIN_OCTAVE) return 0;
@@ -445,23 +441,23 @@ static VOID Emu8kVoiceTick(PEMU8K_VOICE voice)
         pitchTarget = (DWORD)(((UINT64)Emu8kExp2(octaves) * EMU8K_CP_UNITY) >> EMU8K_Q16_SHIFT); /* 4000h = unity (p.7) */
         if (octaves >= (EMU8K_PITCH_MAX_OCTAVES << EMU8K_Q16_SHIFT) || pitchTarget > EMU8K_WORD_MAX) pitchTarget = EMU8K_WORD_MAX;
         /* cutoff: IFATN hi, ENV1 × PEFE lo (±6 oct), LFO1 × FMMOD lo (±3 oct) */
-        cutoff  = (INT32)(voice->Ifatn & EMU8K_HIGH_BYTE_MASK);
+        cutoff  = (INT32)(voice->Ifatn & HIGH_BYTE_MASK);
         cutoff += (INT32)(((INT64)modulation * (INT8)voice->Pefe  * EMU8K_CUTOFF_ENVELOPE_OCTAVES * EMU8K_CUTOFF_OCTAVE / EMU8K_MODULATION_FULL_SCALE) >> EMU8K_Q16_SHIFT);
         cutoff += (INT32)(((INT64)lfo1  * (INT8)voice->Fmmod * EMU8K_CUTOFF_LFO_OCTAVES * EMU8K_CUTOFF_OCTAVE / EMU8K_MODULATION_FULL_SCALE) >> EMU8K_Q16_SHIFT);
         cutoffTarget = cutoff < 0 ? 0 : cutoff > EMU8K_WORD_MAX ? EMU8K_WORD_MAX : (DWORD)cutoff;
         /* volume: ENV2 × IFATN lo (0.375 dB steps) × LFO1 tremolo (TREMFRQ hi, ±12 dB) */
-        attenuation  = (INT32)(voice->Ifatn & EMU8K_LOW_BYTE_MASK) * EMU8K_ATTENUATION_STEP_DB_Q16;  /* 0.375 dB = 24576 Q16    */
+        attenuation  = (INT32)(voice->Ifatn & BYTE_MASK) * EMU8K_ATTENUATION_STEP_DB_Q16;  /* 0.375 dB = 24576 Q16    */
         attenuation -= (INT32)(((INT64)lfo1 * (INT8)(voice->Tremfrq >> EMU8K_HIGH_BYTE_SHIFT) * EMU8K_TREMOLO_DB) / EMU8K_MODULATION_FULL_SCALE);
         gain = (DWORD)(((UINT64)volumeLevel * Emu8kDbToGain(attenuation)) >> EMU8K_Q16_SHIFT);
         if (attenuation < 0) gain = (DWORD)(((UINT64)volumeLevel * Emu8kExp2((INT32)(((INT64)-attenuation * EMU8K_OCTAVES_PER_DB_Q16) >> EMU8K_Q16_SHIFT))) >> EMU8K_Q16_SHIFT);
         volumeTarget = gain >= EMU8K_Q16_ONE_UNSIGNED ? EMU8K_WORD_MAX : (INT32)gain;
-        voice->Ptrx = (pitchTarget << EMU8K_HIGH_WORD_SHIFT) | (voice->Ptrx & EMU8K_LOW_WORD_MASK);
+        voice->Ptrx = (pitchTarget << EMU8K_HIGH_WORD_SHIFT) | (voice->Ptrx & WORD_MASK_U);
         voice->Vtft = ((DWORD)volumeTarget << EMU8K_HIGH_WORD_SHIFT) | cutoffTarget;
     }
     /* The sound generator: current pitch and cutoff take their targets at once; current
        volume slews to its target across the tick, so an envelope step is not a click. */
-    voice->Cpf  = (voice->Ptrx & EMU8K_HIGH_WORD_MASK) | (voice->Cpf & EMU8K_LOW_WORD_MASK);
-    voice->Cvcf = (voice->Cvcf & EMU8K_HIGH_WORD_MASK) | (voice->Vtft & EMU8K_LOW_WORD_MASK);
+    voice->Cpf  = (voice->Ptrx & HIGH_WORD_MASK_U) | (voice->Cpf & WORD_MASK_U);
+    voice->Cvcf = (voice->Cvcf & HIGH_WORD_MASK_U) | (voice->Vtft & WORD_MASK_U);
     volumeTarget = (INT32)(voice->Vtft >> EMU8K_HIGH_WORD_SHIFT);
     currentVolume = voice->CurrentVolume;
     /* rounded AWAY from zero, so the slew ARRIVES: a truncated step settles short of the
@@ -566,7 +562,7 @@ static BOOL Emu8kIsData1DoubleWord(BYTE registerNumber, BYTE channel)
 }
 
 static DWORD Emu8kSetHalf(DWORD registerValue, INT isHighHalf, WORD value)
-{ return isHighHalf ? (registerValue & EMU8K_LOW_WORD_MASK_KEEP_HIGH) | ((DWORD)value << EMU8K_HIGH_WORD_SHIFT) : (registerValue & EMU8K_HIGH_WORD_MASK) | value; }
+{ return isHighHalf ? (registerValue & EMU8K_LOW_WORD_MASK_KEEP_HIGH) | ((DWORD)value << EMU8K_HIGH_WORD_SHIFT) : (registerValue & HIGH_WORD_MASK_U) | value; }
 static WORD Emu8kGetHalf(DWORD registerValue, INT isHighHalf) { return (WORD)(isHighHalf ? registerValue >> EMU8K_HIGH_WORD_SHIFT : registerValue); }
 
 /* DCYSUSV (p.14-15): bit 7 turns the engine off; bit 15 = these are RELEASE values. Turning
@@ -677,7 +673,7 @@ static WORD Emu8kDataRead(PEMU8K_STATE state, INT dataPort, INT isHighHalf)
         switch (registerNumber) {
         case EMU8K_DATA0_CPF: return Emu8kGetHalf(voice->Cpf, isHighHalf);
         case EMU8K_DATA0_PTRX: return Emu8kGetHalf(voice->Ptrx, isHighHalf);
-        case EMU8K_DATA0_CVCF: return Emu8kGetHalf((voice->Cvcf & EMU8K_LOW_WORD_MASK) | ((DWORD)(voice->CurrentVolume >> EMU8K_CURRENT_VOLUME_SHIFT) << EMU8K_HIGH_WORD_SHIFT), isHighHalf);
+        case EMU8K_DATA0_CVCF: return Emu8kGetHalf((voice->Cvcf & WORD_MASK_U) | ((DWORD)(voice->CurrentVolume >> EMU8K_CURRENT_VOLUME_SHIFT) << EMU8K_HIGH_WORD_SHIFT), isHighHalf);
         case EMU8K_DATA0_VTFT: return Emu8kGetHalf(voice->Vtft, isHighHalf);
         case EMU8K_DATA0_R4: return Emu8kGetHalf(voice->Data0Register4, isHighHalf);
         case EMU8K_DATA0_R5: return Emu8kGetHalf(voice->Data0Register5, isHighHalf);
@@ -811,7 +807,7 @@ static VOID Emu8kPortOut(PVOID context, WORD port, BYTE accessWidth, UINT32 valu
            that splits a word into two OUTs still lands it. */
         state->ByteIoCount++;
         if (portOffset & EMU8K_ODD_PORT) Emu8kWordOut(state, (WORD)(portOffset - EMU8K_ODD_PORT),
-                                  (WORD)(state->ByteLatch[portOffset >> EMU8K_PORT_GROUP_SHIFT] | ((value & EMU8K_LOW_BYTE_MASK) << EMU8K_HIGH_BYTE_SHIFT)));
+                                  (WORD)(state->ByteLatch[portOffset >> EMU8K_PORT_GROUP_SHIFT] | ((value & BYTE_MASK) << EMU8K_HIGH_BYTE_SHIFT)));
         else state->ByteLatch[portOffset >> EMU8K_PORT_GROUP_SHIFT] = (BYTE)value;
     }
 }
@@ -830,7 +826,7 @@ static VOID Emu8kPortIn(PVOID context, WORD port, BYTE accessWidth, UINT32 *valu
         /* a byte read of the even port reads the word; the odd port gives its high half */
         state->ByteIoCount++;
         if (portOffset & EMU8K_ODD_PORT) *value = state->ByteLatch[portOffset >> EMU8K_PORT_GROUP_SHIFT];
-        else { WORD wordRead = Emu8kWordIn(state, portOffset); state->ByteLatch[portOffset >> EMU8K_PORT_GROUP_SHIFT] = (BYTE)(wordRead >> EMU8K_HIGH_BYTE_SHIFT); *value = wordRead & EMU8K_LOW_BYTE_MASK; }
+        else { WORD wordRead = Emu8kWordIn(state, portOffset); state->ByteLatch[portOffset >> EMU8K_PORT_GROUP_SHIFT] = (BYTE)(wordRead >> EMU8K_HIGH_BYTE_SHIFT); *value = wordRead & BYTE_MASK; }
     }
 }
 
@@ -870,7 +866,7 @@ VOID VddEmu8kRenderStereo(PEMU8K_STATE state, PINT16 output, DWORD frameCount)
                 }
             }
             currentAddress = voice->Ccca & EMU8K_ADDR_MASK;
-            addressFraction  = voice->Cpf & EMU8K_LOW_WORD_MASK;
+            addressFraction  = voice->Cpf & WORD_MASK_U;
             gain  = voice->CurrentVolume >> EMU8K_CURRENT_VOLUME_SHIFT;
             if (gain > 0 && isAudible) {
                 /* CA is "one word lower than the actual audio location" (p.10): the
@@ -891,7 +887,7 @@ VOID VddEmu8kRenderStereo(PEMU8K_STATE state, PINT16 output, DWORD frameCount)
             loopEnd = voice->Csl & EMU8K_ADDR_MASK;
             if (loopEnd > loopStart && currentAddress >= loopEnd) currentAddress = loopStart + (currentAddress - loopEnd) % (loopEnd - loopStart);
             voice->Ccca = (voice->Ccca & EMU8K_CCCA_CONTROL_MASK) | currentAddress;
-            voice->Cpf  = (voice->Cpf & EMU8K_HIGH_WORD_MASK) | (step & EMU8K_LOW_WORD_MASK);
+            voice->Cpf  = (voice->Cpf & HIGH_WORD_MASK_U) | (step & WORD_MASK_U);
         }
         sampleLeft = accumulatorLeft > EMU8K_SAMPLE_MAX ? EMU8K_SAMPLE_MAX : accumulatorLeft < EMU8K_SAMPLE_MIN ? EMU8K_SAMPLE_MIN : accumulatorLeft;
         sampleRight = accumulatorRight > EMU8K_SAMPLE_MAX ? EMU8K_SAMPLE_MAX : accumulatorRight < EMU8K_SAMPLE_MIN ? EMU8K_SAMPLE_MIN : accumulatorRight;

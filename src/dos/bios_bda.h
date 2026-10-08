@@ -92,14 +92,13 @@ static inline WORD BiosBaseKbOfTop(_In_ WORD top) {
 #define BIOS_BDA_EQUIPMENT     0x10      /* WORD: the equipment word, = INT 11h       */
 #define BIOS_BDA_MEMORY_KB     0x13      /* WORD: base memory in KB,  = INT 12h       */
 #define BIOS_PARAGRAPH_SHIFT   4
-#define BIOS_LOW_BYTE_MASK     0xFF
 #define BIOS_HIGH_BYTE_SHIFT   8
 
 static inline volatile BYTE *BiosLinearAddress(_In_opt_ volatile BYTE *base, _In_ DWORD linear) {
     return (volatile BYTE *)((ULONG_PTR)base + linear);
 }
 static inline VOID BiosWriteWord(_Out_ volatile BYTE *field, _In_ WORD value) {
-    field[0] = (BYTE)(value & BIOS_LOW_BYTE_MASK);
+    field[0] = (BYTE)(value & BYTE_MASK);
     field[1] = (BYTE)(value >> BIOS_HIGH_BYTE_SHIFT);
 }
 

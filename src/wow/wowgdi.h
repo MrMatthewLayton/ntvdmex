@@ -1104,12 +1104,12 @@ static INT CALLBACK WowGdiObjectCollect(LPVOID logObject, LPARAM type)
         const LOGPEN *logPen = (const LOGPEN *)logObject;
         WowGdiPut16(blob, WOWGDI_LP16_STYLE, (LONG)logPen->lopnStyle);
         WowGdiPut16(blob, WOWGDI_LP16_WIDTH_X, logPen->lopnWidth.x); WowGdiPut16(blob, WOWGDI_LP16_WIDTH_Y, logPen->lopnWidth.y);
-        WowGdiPut16(blob, WOWGDI_LP16_COLOR, (LONG)(logPen->lopnColor & WOW_WORD_MASK));
+        WowGdiPut16(blob, WOWGDI_LP16_COLOR, (LONG)(logPen->lopnColor & WORD_MASK));
         WowGdiPut16(blob, WOWGDI_LP16_COLOR + WOW_WORD_BYTES, (LONG)(logPen->lopnColor >> WOW_WORD_SHIFT));
     } else {
         const LOGBRUSH *logBrush = (const LOGBRUSH *)logObject;
         WowGdiPut16(blob, WOWGDI_LB16_STYLE, (LONG)logBrush->lbStyle);
-        WowGdiPut16(blob, WOWGDI_LB16_COLOR, (LONG)(logBrush->lbColor & WOW_WORD_MASK));
+        WowGdiPut16(blob, WOWGDI_LB16_COLOR, (LONG)(logBrush->lbColor & WORD_MASK));
         WowGdiPut16(blob, WOWGDI_LB16_COLOR + WOW_WORD_BYTES, (LONG)(logBrush->lbColor >> WOW_WORD_SHIFT));
         WowGdiPut16(blob, WOWGDI_LB16_HATCH, (LONG)logBrush->lbHatch);
     }
@@ -2765,7 +2765,7 @@ static INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 Wow32PokeWord(blob + 0, (WORD)logPen.lopnStyle);
                 Wow32PokeWord(blob + WOWGDI_LP16_WIDTH_X, (WORD)(SHORT)logPen.lopnWidth.x);
                 Wow32PokeWord(blob + WOWGDI_LP16_WIDTH_Y, (WORD)(SHORT)logPen.lopnWidth.y);
-                Wow32PokeWord(blob + WOWGDI_LP16_COLOR, (WORD)(logPen.lopnColor & WOW_WORD_MASK));
+                Wow32PokeWord(blob + WOWGDI_LP16_COLOR, (WORD)(logPen.lopnColor & WORD_MASK));
                 Wow32PokeWord(blob + WOWGDI_LP16_COLOR + WOW_WORD_BYTES, (WORD)(logPen.lopnColor >> WOW_WORD_SHIFT));
             }
         } else if (type == OBJ_BRUSH) {
@@ -2775,7 +2775,7 @@ static INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 description = "LOGBRUSH";
                 itemCount = WOWGDI_LOGBRUSH16_SIZE;
                 Wow32PokeWord(blob + 0, (WORD)logBrush.lbStyle);
-                Wow32PokeWord(blob + WOWGDI_LB16_COLOR, (WORD)(logBrush.lbColor & WOW_WORD_MASK));
+                Wow32PokeWord(blob + WOWGDI_LB16_COLOR, (WORD)(logBrush.lbColor & WORD_MASK));
                 Wow32PokeWord(blob + WOWGDI_LB16_COLOR + WOW_WORD_BYTES, (WORD)(logBrush.lbColor >> WOW_WORD_SHIFT));
                 Wow32PokeWord(blob + WOWGDI_LB16_HATCH, (WORD)logBrush.lbHatch);
             }
@@ -3648,14 +3648,14 @@ static INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                          (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_CF_ARG_ESCAPE),
                          (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_CF_ARG_ORIENT),
                          (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_CF_ARG_WEIGHT),
-                         (DWORD)(Wow32ArgWord(frame, WOWGDI_CF_ARG_ITALIC) & WOW_BYTE_MASK),
-                         (DWORD)(Wow32ArgWord(frame, WOWGDI_CF_ARG_UNDER)  & WOW_BYTE_MASK),
-                         (DWORD)(Wow32ArgWord(frame, WOWGDI_CF_ARG_STRIKE) & WOW_BYTE_MASK),
-                         (DWORD)(Wow32ArgWord(frame, WOWGDI_CF_ARG_CHARSET) & WOW_BYTE_MASK),
-                         (DWORD)(Wow32ArgWord(frame, WOWGDI_CF_ARG_OUTPREC) & WOW_BYTE_MASK),
-                         (DWORD)(Wow32ArgWord(frame, WOWGDI_CF_ARG_CLIPPREC) & WOW_BYTE_MASK),
-                         (DWORD)(Wow32ArgWord(frame, WOWGDI_CF_ARG_QUALITY) & WOW_BYTE_MASK),
-                         (DWORD)(Wow32ArgWord(frame, WOWGDI_CF_ARG_PITCH) & WOW_BYTE_MASK),
+                         (DWORD)(Wow32ArgWord(frame, WOWGDI_CF_ARG_ITALIC) & BYTE_MASK),
+                         (DWORD)(Wow32ArgWord(frame, WOWGDI_CF_ARG_UNDER)  & BYTE_MASK),
+                         (DWORD)(Wow32ArgWord(frame, WOWGDI_CF_ARG_STRIKE) & BYTE_MASK),
+                         (DWORD)(Wow32ArgWord(frame, WOWGDI_CF_ARG_CHARSET) & BYTE_MASK),
+                         (DWORD)(Wow32ArgWord(frame, WOWGDI_CF_ARG_OUTPREC) & BYTE_MASK),
+                         (DWORD)(Wow32ArgWord(frame, WOWGDI_CF_ARG_CLIPPREC) & BYTE_MASK),
+                         (DWORD)(Wow32ArgWord(frame, WOWGDI_CF_ARG_QUALITY) & BYTE_MASK),
+                         (DWORD)(Wow32ArgWord(frame, WOWGDI_CF_ARG_PITCH) & BYTE_MASK),
                          faceName[0] ? faceName : NULL);
         token = font ? WowGdiH16((HGDIOBJ)font, WOWGDI_KIND_OBJ) : 0;
         WowNotePut(note, noteCapacity, &noteLength, "CreateFont h=");
@@ -3908,7 +3908,7 @@ static INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             record = g_WowGdiMetafile.Bits + g_WowGdiMetafile.RecordOffset;
             WowNotePut(note, noteCapacity, &noteLength, " [the truncated record, played from the snapshot]");
         } else {
-            if (recordWords > WOWGDI_MF_RECORD_MAX_WORDS || (recordFar & WOW_WORD_MASK) + recordWords * WOWCONV_BYTES_PER_WORD > WOWGDI_SEGMENT_SIZE) {
+            if (recordWords > WOWGDI_MF_RECORD_MAX_WORDS || (recordFar & WORD_MASK) + recordWords * WOWCONV_BYTES_PER_WORD > WOWGDI_SEGMENT_SIZE) {
                 WowNotePut(note, noteCapacity, &noteLength, " -- ★ THE RECORD RUNS PAST ITS SEGMENT"
                                            " (a huge record); REFUSED, FALSE");
                 return 1;

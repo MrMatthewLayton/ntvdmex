@@ -412,9 +412,9 @@ static VOID WowMsgWrite(volatile BYTE *bytes, PCWOWMSG message)
     Wow32PokeWord(bytes + WOWMSG_FIELD_HWND,    message->Window);
     Wow32PokeWord(bytes + WOWMSG_FIELD_MESSAGE, message->Message);
     Wow32PokeWord(bytes + WOWMSG_FIELD_WPARAM,  message->WParam);
-    Wow32PokeWord(bytes + WOWMSG_FIELD_LPARAM,     (WORD)(message->LParam & WOW_WORD_MASK));
+    Wow32PokeWord(bytes + WOWMSG_FIELD_LPARAM,     (WORD)(message->LParam & WORD_MASK));
     Wow32PokeWord(bytes + WOWMSG_FIELD_LPARAM + WOW_WORD_BYTES, (WORD)(message->LParam >> WOW_WORD_SHIFT));
-    Wow32PokeWord(bytes + WOWMSG_FIELD_TIME,       (WORD)(message->Time & WOW_WORD_MASK));
+    Wow32PokeWord(bytes + WOWMSG_FIELD_TIME,       (WORD)(message->Time & WORD_MASK));
     Wow32PokeWord(bytes + WOWMSG_FIELD_TIME + WOW_WORD_BYTES,   (WORD)(message->Time >> WOW_WORD_SHIFT));
     Wow32PokeWord(bytes + WOWMSG_FIELD_POINT,     message->PointX);
     Wow32PokeWord(bytes + WOWMSG_FIELD_POINT + WOW_WORD_BYTES, message->PointY);

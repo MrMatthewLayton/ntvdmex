@@ -104,7 +104,6 @@
 #define DOS_CDS_FLAG_NETWORK  0x8000
 
 /* The values the builders below write. */
-#define DOS_SYSVARS_LOW_BYTE_MASK   0xFF
 #define DOS_SYSVARS_HIGH_BYTE_SHIFT 8
 #define DOS_SYSVARS_FAR_SEGMENT     2       /* a far pointer: offset WORD, then segment WORD */
 #define DOS_CHAIN_END               0xFFFF  /* FFFF:FFFF ends a DPB or device chain           */
@@ -127,8 +126,8 @@
    builder of the five, and a plain `static` would warn for every unused one. */
 static inline VOID DosSysVarsWriteWord(_Out_ PBYTE buffer, _In_ UINT offset, _In_ UINT value)
 {
-    buffer[offset] = (BYTE)(value & DOS_SYSVARS_LOW_BYTE_MASK);
-    buffer[offset + 1] = (BYTE)((value >> DOS_SYSVARS_HIGH_BYTE_SHIFT) & DOS_SYSVARS_LOW_BYTE_MASK);
+    buffer[offset] = (BYTE)(value & BYTE_MASK);
+    buffer[offset + 1] = (BYTE)((value >> DOS_SYSVARS_HIGH_BYTE_SHIFT) & BYTE_MASK);
 }
 
 static inline VOID DosSysVarsWriteFarPointer(_Out_ PBYTE buffer, _In_ UINT offset, _In_ UINT segment,
