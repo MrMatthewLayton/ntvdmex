@@ -291,14 +291,14 @@ static WORD WowWinDrop16(HDROP drop, PSTR reason, INT reasonCapacity)
     }
     buffer[offset++] = 0;
     buffer[0] = WOWWIN_DROPFILES_HEADER; buffer[1] = 0;
-    buffer[WOWWIN_DROPFILES_POINT_X] = (BYTE)point.x; buffer[WOWWIN_DROPFILES_POINT_X + 1] = (BYTE)((WORD)point.x >> WOW_BYTE_SHIFT);
-    buffer[WOWWIN_DROPFILES_POINT_Y] = (BYTE)point.y; buffer[WOWWIN_DROPFILES_POINT_Y + 1] = (BYTE)((WORD)point.y >> WOW_BYTE_SHIFT);
+    buffer[WOWWIN_DROPFILES_POINT_X] = (BYTE)point.x; buffer[WOWWIN_DROPFILES_POINT_X + 1] = (BYTE)((WORD)point.x >> BYTE_SHIFT);
+    buffer[WOWWIN_DROPFILES_POINT_Y] = (BYTE)point.y; buffer[WOWWIN_DROPFILES_POINT_Y + 1] = (BYTE)((WORD)point.y >> BYTE_SHIFT);
     buffer[WOWWIN_DROPFILES_NONCLIENT] = (BYTE)(isInside ? 0 : 1); buffer[WOWWIN_DROPFILES_NONCLIENT + 1] = 0;
     handle16 = (WORD)g_WowWinGlobal16(WOWWIN_GLOBAL16_ALLOC, WOWWIN_GMEM_SHARE_MOVEABLE_ZEROINIT, offset);
     if (!handle16) { lstrcpynA(reason, "GlobalAlloc refused", reasonCapacity); return 0; }
     farPointer = g_WowWinGlobal16(WOWWIN_GLOBAL16_LOCK, handle16, 0);
-    bytes = (farPointer >> WOW_WORD_SHIFT) ? (volatile BYTE *)(ULONG_PTR)(DpmiSelectorBase((WORD)(farPointer >> WOW_WORD_SHIFT)) + (farPointer & WORD_MASK)) : NULL;
-    if (!bytes || !(farPointer >> WOW_WORD_SHIFT) || !DpmiSelectorBase((WORD)(farPointer >> WOW_WORD_SHIFT))) {
+    bytes = (farPointer >> WORD_SHIFT) ? (volatile BYTE *)(ULONG_PTR)(DpmiSelectorBase((WORD)(farPointer >> WORD_SHIFT)) + (farPointer & WORD_MASK)) : NULL;
+    if (!bytes || !(farPointer >> WORD_SHIFT) || !DpmiSelectorBase((WORD)(farPointer >> WORD_SHIFT))) {
         g_WowWinGlobal16(WOWWIN_GLOBAL16_FREE, handle16, 0);
         lstrcpynA(reason, "GlobalLock refused", reasonCapacity);
         return 0;
@@ -786,7 +786,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
         if (window16) {
             UINT setFocusCountBefore = g_WowWinSetFocusCount;
             WowWinSendOrPost(window16, (WORD)message, LOWORD(wParam),
-                                ((DWORD)(HIWORD(wParam) ? 1 : 0) << WOW_WORD_SHIFT)
+                                ((DWORD)(HIWORD(wParam) ? 1 : 0) << WORD_SHIFT)
                                 | WowWinHwnd16((HWND)lParam), pointX, pointY);
             /* ── s93: A PROGRAM THAT PLACES THE FOCUS ITSELF KEEPS IT. Win32's
                  DefWindowProc gives an activated window the focus -- after WRITE's
@@ -844,7 +844,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             WORD gaining = lParam ? WowWinHwnd16((HWND)lParam) : 0;
             WORD losing = wParam ? WowWinHwnd16((HWND)wParam) : 0;
             WowWinSendOrPost(window16, (WORD)message, (WORD)((HWND)lParam == window ? 1 : 0),
-                                ((DWORD)losing << WOW_WORD_SHIFT) | gaining, pointX, pointY);
+                                ((DWORD)losing << WORD_SHIFT) | gaining, pointX, pointY);
         }
         break;
     case WM_MENUSELECT:
@@ -859,8 +859,8 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             WORD result;
             INT index;
             for (index = 0; index < WOWWIN_MINMAXINFO_POINTS; ++index) {
-                buffer[index * WOWWIN_POINT16_SIZE] = (BYTE)points[index].x; buffer[index * WOWWIN_POINT16_SIZE + 1] = (BYTE)(points[index].x >> WOW_BYTE_SHIFT);
-                buffer[index * WOWWIN_POINT16_SIZE + WOWWIN_POINT16_Y] = (BYTE)points[index].y; buffer[index * WOWWIN_POINT16_SIZE + WOWWIN_POINT16_Y + 1] = (BYTE)(points[index].y >> WOW_BYTE_SHIFT);
+                buffer[index * WOWWIN_POINT16_SIZE] = (BYTE)points[index].x; buffer[index * WOWWIN_POINT16_SIZE + 1] = (BYTE)(points[index].x >> BYTE_SHIFT);
+                buffer[index * WOWWIN_POINT16_SIZE + WOWWIN_POINT16_Y] = (BYTE)points[index].y; buffer[index * WOWWIN_POINT16_SIZE + WOWWIN_POINT16_Y + 1] = (BYTE)(points[index].y >> BYTE_SHIFT);
             }
             INT isSent, slot, isBusy = 0;
             for (slot = 0; slot < g_WowWinSendingCount; ++slot)
@@ -872,8 +872,8 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             --g_WowWinSendingCount;
             if (isSent) {
                 for (index = 1; index < WOWWIN_MINMAXINFO_POINTS; ++index) {   /* ptReserved is not the guest's to set */
-                    points[index].x = (LONG)(SHORT)(buffer[index * WOWWIN_POINT16_SIZE] | (buffer[index * WOWWIN_POINT16_SIZE + 1] << WOW_BYTE_SHIFT));
-                    points[index].y = (LONG)(SHORT)(buffer[index * WOWWIN_POINT16_SIZE + WOWWIN_POINT16_Y] | (buffer[index * WOWWIN_POINT16_SIZE + WOWWIN_POINT16_Y + 1] << WOW_BYTE_SHIFT));
+                    points[index].x = (LONG)(SHORT)(buffer[index * WOWWIN_POINT16_SIZE] | (buffer[index * WOWWIN_POINT16_SIZE + 1] << BYTE_SHIFT));
+                    points[index].y = (LONG)(SHORT)(buffer[index * WOWWIN_POINT16_SIZE + WOWWIN_POINT16_Y] | (buffer[index * WOWWIN_POINT16_SIZE + WOWWIN_POINT16_Y + 1] << BYTE_SHIFT));
                 }
                 return 0;
             }
@@ -959,7 +959,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             WORD menu16 = WowUserMenu16((HMENU)wParam);
             WowMsgPost(window16, (WORD)message, menu16,
                         (message == WM_INITMENUPOPUP)
-                            ? ((DWORD)LOWORD(lParam) | ((DWORD)HIWORD(lParam) << WOW_WORD_SHIFT))
+                            ? ((DWORD)LOWORD(lParam) | ((DWORD)HIWORD(lParam) << WORD_SHIFT))
                             : 0,
                         GetTickCount(), pointX, pointY);
             ++g_WowWinMessages;
@@ -1021,7 +1021,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             WORD code  = (WORD)LOWORD(wParam);
             WORD position   = (WORD)HIWORD(wParam);
             WORD control16 = lParam ? WowWinHwnd16((HWND)(ULONG_PTR)lParam) : 0;
-            DWORD lParam16 = (DWORD)position | ((DWORD)control16 << WOW_WORD_SHIFT);
+            DWORD lParam16 = (DWORD)position | ((DWORD)control16 << WORD_SHIFT);
             WORD  result16;
             ++g_WowWinMessages;
             if (g_WowWinSend16 && g_WowWinSend16(window16, (WORD)message, code, lParam16, &result16)) return 0;
@@ -1035,7 +1035,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             WORD notifyCode = (WORD)HIWORD(wParam);
             WORD control16  = lParam ? WowWinHwnd16((HWND)(ULONG_PTR)lParam) : 0;
             WowMsgPost(window16, (WORD)WM_COMMAND16, id,
-                        (DWORD)control16 | ((DWORD)notifyCode << WOW_WORD_SHIFT),
+                        (DWORD)control16 | ((DWORD)notifyCode << WORD_SHIFT),
                         GetTickCount(), pointX, pointY);
             ++g_WowWinMessages;
         }

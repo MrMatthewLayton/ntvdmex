@@ -96,9 +96,9 @@ static VOID McbTestCheck(BOOL passed, PCSTR description)
     else        { printf("  FAIL  %s\n", description); g_Failures++; }
 }
 
-static BYTE McbTestSignature(WORD mcbSegment) { return g_Memory[(DWORD)mcbSegment << DOS_PARAGRAPH_SHIFT]; }
-static WORD McbTestOwner(WORD mcbSegment) { return DosMcbReadWord(g_Memory + (((DWORD)mcbSegment << DOS_PARAGRAPH_SHIFT) + DOS_MCB_OWNER)); }
-static WORD McbTestSize(WORD mcbSegment) { return DosMcbReadWord(g_Memory + (((DWORD)mcbSegment << DOS_PARAGRAPH_SHIFT) + DOS_MCB_SIZE)); }
+static BYTE McbTestSignature(WORD mcbSegment) { return g_Memory[(DWORD)mcbSegment << PARAGRAPH_SHIFT]; }
+static WORD McbTestOwner(WORD mcbSegment) { return DosMcbReadWord(g_Memory + (((DWORD)mcbSegment << PARAGRAPH_SHIFT) + DOS_MCB_OWNER)); }
+static WORD McbTestSize(WORD mcbSegment) { return DosMcbReadWord(g_Memory + (((DWORD)mcbSegment << PARAGRAPH_SHIFT) + DOS_MCB_SIZE)); }
 
 static VOID McbTestDumpChain(WORD firstMcb) {
     WORD mcbSegment = firstMcb; INT walkCount = 0;
@@ -269,13 +269,13 @@ INT main(VOID) {
          * 0x41 - 0x21 - 1 = 0x1F free tail at paragraph 0x322. */
         McbTestCheck(status == DOS_MCB_SUCCESS && segment == MCB_TEST_MINI_DATA,
                      "merge-on-alloc: adjacent free blocks merged to satisfy 0x21");
-        McbTestCheck(miniMemory[(DWORD)MCB_TEST_MINI_FIRST << DOS_PARAGRAPH_SHIFT] == DOS_MCB_MEMBER
-                     && DosMcbReadWord(miniMemory + (((DWORD)MCB_TEST_MINI_FIRST << DOS_PARAGRAPH_SHIFT) + DOS_MCB_OWNER)) == DOS_PSP_SEG
-                     && DosMcbReadWord(miniMemory + (((DWORD)MCB_TEST_MINI_FIRST << DOS_PARAGRAPH_SHIFT) + DOS_MCB_SIZE)) == MCB_TEST_MINI_ALLOC,
+        McbTestCheck(miniMemory[(DWORD)MCB_TEST_MINI_FIRST << PARAGRAPH_SHIFT] == DOS_MCB_MEMBER
+                     && DosMcbReadWord(miniMemory + (((DWORD)MCB_TEST_MINI_FIRST << PARAGRAPH_SHIFT) + DOS_MCB_OWNER)) == DOS_PSP_SEG
+                     && DosMcbReadWord(miniMemory + (((DWORD)MCB_TEST_MINI_FIRST << PARAGRAPH_SHIFT) + DOS_MCB_SIZE)) == MCB_TEST_MINI_ALLOC,
                      "merge-on-alloc: allocated block = M / PSP / 0x21");
-        McbTestCheck(miniMemory[(DWORD)MCB_TEST_MINI_TAIL << DOS_PARAGRAPH_SHIFT] == DOS_MCB_MEMBER
-                     && DosMcbReadWord(miniMemory + (((DWORD)MCB_TEST_MINI_TAIL << DOS_PARAGRAPH_SHIFT) + DOS_MCB_OWNER)) == DOS_MCB_OWNER_FREE
-                     && DosMcbReadWord(miniMemory + (((DWORD)MCB_TEST_MINI_TAIL << DOS_PARAGRAPH_SHIFT) + DOS_MCB_SIZE)) == MCB_TEST_MINI_TAIL_PARAS,
+        McbTestCheck(miniMemory[(DWORD)MCB_TEST_MINI_TAIL << PARAGRAPH_SHIFT] == DOS_MCB_MEMBER
+                     && DosMcbReadWord(miniMemory + (((DWORD)MCB_TEST_MINI_TAIL << PARAGRAPH_SHIFT) + DOS_MCB_OWNER)) == DOS_MCB_OWNER_FREE
+                     && DosMcbReadWord(miniMemory + (((DWORD)MCB_TEST_MINI_TAIL << PARAGRAPH_SHIFT) + DOS_MCB_SIZE)) == MCB_TEST_MINI_TAIL_PARAS,
                      "merge-on-alloc: free tail = M / free / 0x1F");
         McbTestCheck(DosMcbCheckChain(miniMemory, MCB_TEST_MINI_FIRST, MCB_TEST_MINI_TOP) == DOS_MCB_CHAIN_OK,
                      "merge-on-alloc: mini-chain consistent");
@@ -284,7 +284,7 @@ INT main(VOID) {
     /* T10: PSP builder (src/dos/dos_psp.h) --------------------------------- */
     {
         static BYTE pspMemory[MCB_TEST_IMAGE_SIZE];
-        volatile BYTE *psp = pspMemory + ((DWORD)MCB_TEST_PSP << DOS_PARAGRAPH_SHIFT);
+        volatile BYTE *psp = pspMemory + ((DWORD)MCB_TEST_PSP << PARAGRAPH_SHIFT);
         DosPspBuild(pspMemory, MCB_TEST_PSP, MCB_TEST_ENV_SEGMENT, MCB_TEST_TOP_640K);
         McbTestCheck(psp[DOS_PSP_INT20] == DOS_PSP_OPCODE_INT && psp[DOS_PSP_INT20 + 1] == DOS_PSP_INT20_VECTOR, "psp: INT 20h at offset 0");
         McbTestCheck(DosMcbReadWord(psp + DOS_PSP_MEMORY_TOP) == MCB_TEST_TOP_640K, "psp: top-of-mem segment = 0xA000");
@@ -298,7 +298,7 @@ INT main(VOID) {
     {
         static BYTE comMemory[MCB_TEST_IMAGE_SIZE];
         static const BYTE comFile[] = { 0xB4, 0x09, 0xCD, 0x21, 0xC3 };   /* mov ah,09 ; int 21h ; ret */
-        volatile BYTE *code = comMemory + ((DWORD)MCB_TEST_PSP << DOS_PARAGRAPH_SHIFT) + DOS_COM_ENTRY;
+        volatile BYTE *code = comMemory + ((DWORD)MCB_TEST_PSP << PARAGRAPH_SHIFT) + DOS_COM_ENTRY;
         DOS_IMAGE image = DosLoadImage(comMemory, comFile, (DWORD)sizeof(comFile), MCB_TEST_PSP);
         McbTestCheck(!image.IsExe && image.CodeSegment == MCB_TEST_PSP && image.InstructionPointer == DOS_COM_ENTRY
                      && image.StackSegment == MCB_TEST_PSP && image.StackPointer == DOS_COM_INITIAL_SP,
@@ -321,7 +321,7 @@ INT main(VOID) {
             0x00,0x00                      /* image[0..1] = 0x0000           */
         };
         WORD loadSegment = (WORD)(MCB_TEST_PSP + DOS_PSP_PARAGRAPHS);          /* 0x110 */
-        volatile BYTE *imageBytes = exeMemory + ((DWORD)loadSegment << DOS_PARAGRAPH_SHIFT);
+        volatile BYTE *imageBytes = exeMemory + ((DWORD)loadSegment << PARAGRAPH_SHIFT);
         DOS_IMAGE image = DosLoadImage(exeMemory, exeFile, (DWORD)sizeof(exeFile), MCB_TEST_PSP);
         McbTestCheck(image.IsExe && image.CodeSegment == loadSegment && image.InstructionPointer == MCB_TEST_EXE_IP
                      && image.StackSegment == loadSegment && image.StackPointer == MCB_TEST_EXE_SP,
@@ -451,7 +451,7 @@ INT main(VOID) {
     /* T14: PSP command-tail builder (src/dos/dos_psp.h) --------------------- */
     {
         static BYTE tailMemory[MCB_TEST_TAIL_MEMORY_SIZE];
-        volatile BYTE *psp = tailMemory + ((DWORD)MCB_TEST_PSP << DOS_PARAGRAPH_SHIFT);
+        volatile BYTE *psp = tailMemory + ((DWORD)MCB_TEST_PSP << PARAGRAPH_SHIFT);
         DosPspBuildCommandTail(tailMemory, MCB_TEST_PSP, "HELLO");
         McbTestCheck(psp[DOS_PSP_COMMAND_TAIL_LENGTH] == MCB_TEST_HELLO_LENGTH && psp[DOS_PSP_COMMAND_TAIL] == ' ' && psp[DOS_PSP_COMMAND_TAIL + 1] == 'H'
                      && psp[MCB_TEST_HELLO_LAST] == 'O' && psp[MCB_TEST_HELLO_LAST + 1] == DOS_PSP_COMMAND_TAIL_END,

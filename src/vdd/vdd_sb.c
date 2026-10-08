@@ -87,7 +87,6 @@
 #define SB_DMA16_FIRST              5
 #define SB_DMA16_LAST               7
 /* Samples. */
-#define SB_BYTE_SHIFT               8
 #define SB_DMA_CHANNEL_MASK         7
 #define SB_FRAME_BYTES_MAX          4       /* a 16-bit stereo frame                     */
 #define SB_SAMPLE16_BYTES           2u
@@ -207,7 +206,7 @@ static VOID SbExecute(PSB_STATE state)
         INT is16Bit   = (command & SB_DSP_PROGRAMMED_TYPE_MASK) == SB_DSP_PROGRAMMED_16BIT;
         INT isAutoInit = (command & SB_DSP_PROGRAMMED_AUTO_INIT) != 0;
         INT isInput  = (command & SB_DSP_PROGRAMMED_INPUT) != 0;   /* A/D: we do not record           */
-        UINT32 units = (UINT32)arguments[1] | ((UINT32)arguments[2] << SB_BYTE_SHIFT);
+        UINT32 units = (UINT32)arguments[1] | ((UINT32)arguments[2] << BYTE_SHIFT);
         state->Is16Bit  = (BYTE)is16Bit;
         state->IsSigned = (arguments[0] & SB_DSP_MODE_SIGNED) ? 1 : 0;
         state->IsStereo = (arguments[0] & SB_DSP_MODE_STEREO) ? 1 : 0;
@@ -229,7 +228,7 @@ static VOID SbExecute(PSB_STATE state)
     case SB_DSP_DMA8_SINGLE: case SB_DSP_DMA8_SINGLE_X16: case SB_DSP_DMA8_SINGLE_X17:            /* 8-bit single-cycle DMA output  */
         state->Is16Bit = 0; state->IsSigned = 0; state->IsLegacyTransfer = 1;
         state->IsStereo = (state->Mixer[SB_MIXER_STEREO_SWITCH] & SB_MIXER_STEREO_BIT) ? 1 : 0;
-        SbStartBlock(state, ((UINT32)arguments[0] | ((UINT32)arguments[1] << SB_BYTE_SHIFT)) + 1, 0);
+        SbStartBlock(state, ((UINT32)arguments[0] | ((UINT32)arguments[1] << BYTE_SHIFT)) + 1, 0);
         break;
     case SB_DSP_DMA8_AUTO: case SB_DSP_DMA8_AUTO_X2C: case SB_DSP_DMA8_AUTO_HIGH_SPEED:            /* 8-bit auto-init (0x90: high-speed) */
         state->Is16Bit = 0; state->IsSigned = 0; state->IsLegacyTransfer = 1;
@@ -245,10 +244,10 @@ static VOID SbExecute(PSB_STATE state)
         state->RateHz = SbRateFromTimeConstant(arguments[0]);
         break;
     case SB_DSP_OUTPUT_RATE: case SB_DSP_INPUT_RATE:                       /* rate is BIG-endian here         */
-        state->RateHz = ((UINT32)arguments[0] << SB_BYTE_SHIFT) | arguments[1];
+        state->RateHz = ((UINT32)arguments[0] << BYTE_SHIFT) | arguments[1];
         break;
     case SB_DSP_BLOCK_SIZE:                                  /* block size for auto-init        */
-        state->BlockLength = ((UINT32)arguments[0] | ((UINT32)arguments[1] << SB_BYTE_SHIFT)) + 1;
+        state->BlockLength = ((UINT32)arguments[0] | ((UINT32)arguments[1] << BYTE_SHIFT)) + 1;
         break;
     case SB_DSP_PAUSE_DMA8: state->IsPaused = 1; break;      /* pause 8-bit DMA                 */
     case SB_DSP_SPEAKER_ON: state->IsSpeakerOn = 1; break;
@@ -483,8 +482,8 @@ static INT16 SbFetchSample(PSB_STATE state, INT *isEnded)
     }
 
     if (state->Is16Bit) {
-        left = (INT16)((WORD)rawBytes[0] | ((WORD)rawBytes[1] << SB_BYTE_SHIFT));
-        right = state->IsStereo ? (INT16)((WORD)rawBytes[2] | ((WORD)rawBytes[3] << SB_BYTE_SHIFT)) : left;
+        left = (INT16)((WORD)rawBytes[0] | ((WORD)rawBytes[1] << BYTE_SHIFT));
+        right = state->IsStereo ? (INT16)((WORD)rawBytes[2] | ((WORD)rawBytes[3] << BYTE_SHIFT)) : left;
     } else {
         left = state->IsSigned ? (INT8)rawBytes[0] * SB_SAMPLE8_SCALE : ((INT32)rawBytes[0] - SB_SAMPLE8_SILENCE) * SB_SAMPLE8_SCALE;
         right = state->IsStereo

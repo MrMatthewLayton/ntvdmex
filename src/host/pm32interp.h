@@ -44,16 +44,11 @@
 #define PM32_WORD        2
 #define PM32_DWORD       4
 #define PM32_PUSHAD_BYTES 32      /* eight DWORD registers                      */
-#define PM32_BITS_PER_BYTE 8
 #define PM32_LOW_BYTE    0xFF      /* int-typed, where the expression is signed */
 #define PM32_LOW_WORD    0xFFFF
 #define PM32_BYTE_SIGN   0x80u
 #define PM32_WORD_SIGN   0x8000u
 #define PM32_DWORD_SIGN  0x80000000u
-#define PM32_BYTE_SHIFT  8
-#define PM32_WORD_SHIFT  16
-#define PM32_HIGH_BYTE_SHIFT 24
-#define PM32_DWORD_SHIFT 32
 /* Register numbers, in the instruction set's own order. */
 #define PM32_EAX 0
 #define PM32_ECX 1
@@ -251,14 +246,14 @@ static UINT32 Pm32Mask(INT width) { return width == 1 ? BYTE_MASK_U : width == P
 static UINT32 Pm32SignBit(INT width) { return width == 1 ? PM32_BYTE_SIGN : width == PM32_WORD ? PM32_WORD_SIGN : PM32_DWORD_SIGN; }
 static UINT32 Pm32GetRegister(const PM32_CPU *cpu, INT registerIndex, INT width)
 {
-    if (width == 1) return (registerIndex < PM32_BYTE_REGISTERS) ? (cpu->Registers[registerIndex] & PM32_LOW_BYTE) : ((cpu->Registers[registerIndex - PM32_BYTE_REGISTERS] >> PM32_BYTE_SHIFT) & PM32_LOW_BYTE);
+    if (width == 1) return (registerIndex < PM32_BYTE_REGISTERS) ? (cpu->Registers[registerIndex] & PM32_LOW_BYTE) : ((cpu->Registers[registerIndex - PM32_BYTE_REGISTERS] >> BYTE_SHIFT) & PM32_LOW_BYTE);
     return cpu->Registers[registerIndex & PM32_REGISTER_MASK] & Pm32Mask(width);
 }
 static VOID Pm32SetRegister(PM32_CPU *cpu, INT registerIndex, INT width, UINT32 value)
 {
     if (width == 1) {
         if (registerIndex < PM32_BYTE_REGISTERS) cpu->Registers[registerIndex] = (cpu->Registers[registerIndex] & PM32_CLEAR_LOW_BYTE) | (value & PM32_LOW_BYTE);
-        else       cpu->Registers[registerIndex - PM32_BYTE_REGISTERS] = (cpu->Registers[registerIndex - PM32_BYTE_REGISTERS] & PM32_CLEAR_SECOND_BYTE) | ((value & PM32_LOW_BYTE) << PM32_BYTE_SHIFT);
+        else       cpu->Registers[registerIndex - PM32_BYTE_REGISTERS] = (cpu->Registers[registerIndex - PM32_BYTE_REGISTERS] & PM32_CLEAR_SECOND_BYTE) | ((value & PM32_LOW_BYTE) << BYTE_SHIFT);
     } else if (width == PM32_WORD) cpu->Registers[registerIndex & PM32_REGISTER_MASK] = (cpu->Registers[registerIndex & PM32_REGISTER_MASK] & PM32_CLEAR_LOW_WORD) | (value & PM32_LOW_WORD);
     else cpu->Registers[registerIndex & PM32_REGISTER_MASK] = value;
 }
@@ -267,15 +262,15 @@ static VOID Pm32SetRegister(PM32_CPU *cpu, INT registerIndex, INT width, UINT32 
 static UINT32 Pm32ReadMemory(UINT32 linear, INT width)
 {
     UINT32 value = Pm32HostRead8(linear);
-    if (width >= PM32_WORD) value |= (UINT32)Pm32HostRead8(linear + 1) << PM32_BYTE_SHIFT;
-    if (width == PM32_DWORD) { value |= (UINT32)Pm32HostRead8(linear + 2) << PM32_WORD_SHIFT; value |= (UINT32)Pm32HostRead8(linear + 3) << PM32_HIGH_BYTE_SHIFT; }
+    if (width >= PM32_WORD) value |= (UINT32)Pm32HostRead8(linear + 1) << BYTE_SHIFT;
+    if (width == PM32_DWORD) { value |= (UINT32)Pm32HostRead8(linear + 2) << WORD_SHIFT; value |= (UINT32)Pm32HostRead8(linear + 3) << TOP_BYTE_SHIFT; }
     return value;
 }
 static VOID Pm32WriteMemory(UINT32 linear, INT width, UINT32 value)
 {
     Pm32HostWrite8(linear, (BYTE)value);
-    if (width >= PM32_WORD) Pm32HostWrite8(linear + 1, (BYTE)(value >> PM32_BYTE_SHIFT));
-    if (width == PM32_DWORD) { Pm32HostWrite8(linear + 2, (BYTE)(value >> PM32_WORD_SHIFT)); Pm32HostWrite8(linear + 3, (BYTE)(value >> PM32_HIGH_BYTE_SHIFT)); }
+    if (width >= PM32_WORD) Pm32HostWrite8(linear + 1, (BYTE)(value >> BYTE_SHIFT));
+    if (width == PM32_DWORD) { Pm32HostWrite8(linear + 2, (BYTE)(value >> WORD_SHIFT)); Pm32HostWrite8(linear + 3, (BYTE)(value >> TOP_BYTE_SHIFT)); }
 }
 
 /* ---- flags ---------------------------------------------------------------------- */
@@ -295,7 +290,7 @@ static UINT32 Pm32Add(UINT32 *flags, UINT32 first, UINT32 second, UINT32 carryIn
     UINT32 mask = Pm32Mask(width), signBit = Pm32SignBit(width);
     UINT64 full = (UINT64)(first & mask) + (UINT64)(second & mask) + carryIn;
     UINT32 result = (UINT32)full & mask, newFlags = Pm32SzpFlags(result, width);
-    if (full >> (width * PM32_BITS_PER_BYTE)) newFlags |= PM32_CF;
+    if (full >> (width * BITS_PER_BYTE)) newFlags |= PM32_CF;
     if (((first ^ second ^ result) & PM32_AUXILIARY_BIT)) newFlags |= PM32_AF;
     if ((~(first ^ second) & (first ^ result)) & signBit) newFlags |= PM32_OF;
     *flags = (*flags & ~PM32_ARITH) | newFlags;
@@ -364,8 +359,8 @@ static BYTE Pm32CodeByte(const PM32_CPU *cpu, UINT32 offset) { return Pm32HostRe
 static UINT32 Pm32CodeImmediate(const PM32_CPU *cpu, UINT32 offset, INT width)
 {
     UINT32 value = Pm32CodeByte(cpu, offset);
-    if (width >= PM32_WORD) value |= (UINT32)Pm32CodeByte(cpu, offset + 1) << PM32_BYTE_SHIFT;
-    if (width == PM32_DWORD) { value |= (UINT32)Pm32CodeByte(cpu, offset + 2) << PM32_WORD_SHIFT; value |= (UINT32)Pm32CodeByte(cpu, offset + 3) << PM32_HIGH_BYTE_SHIFT; }
+    if (width >= PM32_WORD) value |= (UINT32)Pm32CodeByte(cpu, offset + 1) << BYTE_SHIFT;
+    if (width == PM32_DWORD) { value |= (UINT32)Pm32CodeByte(cpu, offset + 2) << WORD_SHIFT; value |= (UINT32)Pm32CodeByte(cpu, offset + 3) << TOP_BYTE_SHIFT; }
     return value;
 }
 
@@ -408,7 +403,7 @@ static UINT32 Pm32Pop(PM32_CPU *cpu, INT width) { UINT32 value = Pm32ReadMemory(
 static INT Pm32Shift(UINT32 *flags, INT operation, UINT32 value, UINT count, INT width, UINT32 *out)
 {
     UINT32 mask = Pm32Mask(width), signBit = Pm32SignBit(width), result = value & mask, newFlags;
-    UINT bits = (UINT)width * PM32_BITS_PER_BYTE;
+    UINT bits = (UINT)width * BITS_PER_BYTE;
     count &= PM32_SHIFT_COUNT_MASK;
     if (!count) { *out = result; return 1; }                 /* count 0: nothing, flags untouched */
     newFlags = *flags;
@@ -687,7 +682,7 @@ static INT Pm32Step(PM32_CPU *cpu)
     }
     /* ---- RET / RET imm16 (C3/C2) ---- */
     if (opcode == PM32_OP_RET || opcode == PM32_OP_RET_IMM) {
-        UINT32 target, extraPop = (opcode == PM32_OP_RET_IMM) ? (Pm32CodeByte(cpu, offset) | ((UINT32)Pm32CodeByte(cpu, offset + 1) << PM32_BYTE_SHIFT)) : 0;
+        UINT32 target, extraPop = (opcode == PM32_OP_RET_IMM) ? (Pm32CodeByte(cpu, offset) | ((UINT32)Pm32CodeByte(cpu, offset + 1) << BYTE_SHIFT)) : 0;
         if (isOperand16 || !Pm32HostCanAccess(cpu->SegmentBases[PM32_SS] + cpu->Registers[PM32_ESP], PM32_DWORD, 0)) return 0;
         target = Pm32Pop(cpu, PM32_DWORD);
         cpu->Registers[PM32_ESP] += extraPop;
@@ -748,17 +743,17 @@ static INT Pm32Step(PM32_CPU *cpu)
                 UINT32 product = (modrm.Register == PM32_GROUP3_MUL) ? (cpu->Registers[PM32_EAX] & PM32_LOW_BYTE) * operand
                                           : (UINT32)((INT32)(INT8)cpu->Registers[PM32_EAX] * (INT32)(INT8)operand) & PM32_LOW_WORD;
                 Pm32SetRegister(cpu, PM32_EAX, PM32_WORD, product);
-                isOverflow = (modrm.Register == PM32_GROUP3_MUL) ? (product >> PM32_BYTE_SHIFT) != 0 : (INT16)product != (INT8)product;
+                isOverflow = (modrm.Register == PM32_GROUP3_MUL) ? (product >> BYTE_SHIFT) != 0 : (INT16)product != (INT8)product;
             } else if (width == PM32_WORD) {
                 UINT32 product = (modrm.Register == PM32_GROUP3_MUL) ? (cpu->Registers[PM32_EAX] & PM32_LOW_WORD) * operand
                                           : (UINT32)((INT32)(INT16)cpu->Registers[PM32_EAX] * (INT32)(INT16)operand);
-                Pm32SetRegister(cpu, PM32_EAX, PM32_WORD, product); Pm32SetRegister(cpu, PM32_EDX, PM32_WORD, product >> PM32_WORD_SHIFT);
-                isOverflow = (modrm.Register == PM32_GROUP3_MUL) ? (product >> PM32_WORD_SHIFT) != 0 : (INT32)product != (INT16)product;
+                Pm32SetRegister(cpu, PM32_EAX, PM32_WORD, product); Pm32SetRegister(cpu, PM32_EDX, PM32_WORD, product >> WORD_SHIFT);
+                isOverflow = (modrm.Register == PM32_GROUP3_MUL) ? (product >> WORD_SHIFT) != 0 : (INT32)product != (INT16)product;
             } else {
                 UINT64 product = (modrm.Register == PM32_GROUP3_MUL) ? (UINT64)cpu->Registers[PM32_EAX] * operand
                                           : (UINT64)((INT64)(INT32)cpu->Registers[PM32_EAX] * (INT64)(INT32)operand);
-                cpu->Registers[PM32_EAX] = (UINT32)product; cpu->Registers[PM32_EDX] = (UINT32)(product >> PM32_DWORD_SHIFT);
-                isOverflow = (modrm.Register == PM32_GROUP3_MUL) ? (product >> PM32_DWORD_SHIFT) != 0 : (INT64)product != (INT32)product;
+                cpu->Registers[PM32_EAX] = (UINT32)product; cpu->Registers[PM32_EDX] = (UINT32)(product >> DWORD_SHIFT);
+                isOverflow = (modrm.Register == PM32_GROUP3_MUL) ? (product >> DWORD_SHIFT) != 0 : (INT64)product != (INT32)product;
             }
             cpu->Flags &= ~(PM32_CF | PM32_OF);
             if (isOverflow) cpu->Flags |= PM32_CF | PM32_OF;
@@ -768,17 +763,17 @@ static INT Pm32Step(PM32_CPU *cpu)
             if (width == 1) {
                 UINT32 dividend = cpu->Registers[PM32_EAX] & PM32_LOW_WORD;
                 if (modrm.Register == PM32_GROUP3_DIV) { UINT32 quotient = dividend / operand, remainder = dividend % operand; if (quotient > PM32_LOW_BYTE) return 0;
-                                  Pm32SetRegister(cpu, PM32_EAX, PM32_WORD, quotient | (remainder << PM32_BYTE_SHIFT)); }
+                                  Pm32SetRegister(cpu, PM32_EAX, PM32_WORD, quotient | (remainder << BYTE_SHIFT)); }
                 else { INT32 signedDividend = (INT16)dividend, divisor = (INT8)operand, quotient = signedDividend / divisor, remainder = signedDividend % divisor;
-                       if (quotient > PM32_INT8_MAX || quotient < PM32_INT8_MIN) return 0; Pm32SetRegister(cpu, PM32_EAX, PM32_WORD, (quotient & PM32_LOW_BYTE) | ((remainder & PM32_LOW_BYTE) << PM32_BYTE_SHIFT)); }
+                       if (quotient > PM32_INT8_MAX || quotient < PM32_INT8_MIN) return 0; Pm32SetRegister(cpu, PM32_EAX, PM32_WORD, (quotient & PM32_LOW_BYTE) | ((remainder & PM32_LOW_BYTE) << BYTE_SHIFT)); }
             } else if (width == PM32_WORD) {
-                UINT32 dividend = ((cpu->Registers[PM32_EDX] & PM32_LOW_WORD) << PM32_WORD_SHIFT) | (cpu->Registers[PM32_EAX] & PM32_LOW_WORD);
+                UINT32 dividend = ((cpu->Registers[PM32_EDX] & PM32_LOW_WORD) << WORD_SHIFT) | (cpu->Registers[PM32_EAX] & PM32_LOW_WORD);
                 if (modrm.Register == PM32_GROUP3_DIV) { UINT32 quotient = dividend / operand, remainder = dividend % operand; if (quotient > PM32_LOW_WORD) return 0;
                                   Pm32SetRegister(cpu, PM32_EAX, PM32_WORD, quotient); Pm32SetRegister(cpu, PM32_EDX, PM32_WORD, remainder); }
                 else { INT32 signedDividend = (INT32)dividend, divisor = (INT16)operand, quotient = signedDividend / divisor, remainder = signedDividend % divisor;
                        if (quotient > PM32_INT16_MAX || quotient < PM32_INT16_MIN) return 0; Pm32SetRegister(cpu, PM32_EAX, PM32_WORD, (UINT32)quotient); Pm32SetRegister(cpu, PM32_EDX, PM32_WORD, (UINT32)remainder); }
             } else {
-                UINT64 dividend = ((UINT64)cpu->Registers[PM32_EDX] << PM32_DWORD_SHIFT) | cpu->Registers[PM32_EAX];
+                UINT64 dividend = ((UINT64)cpu->Registers[PM32_EDX] << DWORD_SHIFT) | cpu->Registers[PM32_EAX];
                 if (modrm.Register == PM32_GROUP3_DIV) { UINT64 quotient = dividend / operand, remainder = dividend % operand; if (quotient > DWORD_MASK_U) return 0;
                                   cpu->Registers[PM32_EAX] = (UINT32)quotient; cpu->Registers[PM32_EDX] = (UINT32)remainder; }
                 else { INT64 signedDividend = (INT64)dividend, divisor = (INT32)operand, quotient, remainder;
@@ -860,7 +855,7 @@ static INT Pm32Step(PM32_CPU *cpu)
             PM32_DONE(offset + (UINT32)modrm.Length);
         }
         if (opcode2 == PM32_OP2_SHLD_IMM || opcode2 == PM32_OP2_SHLD_CL || opcode2 == PM32_OP2_SHRD_IMM || opcode2 == PM32_OP2_SHRD_CL) {  /* SHLD / SHRD */
-            PM32_MODRM modrm; UINT32 next, count, destinationValue, sourceValue, result, flags, bits = (UINT32)operandSize * PM32_BITS_PER_BYTE, mask = Pm32Mask(operandSize);
+            PM32_MODRM modrm; UINT32 next, count, destinationValue, sourceValue, result, flags, bits = (UINT32)operandSize * BITS_PER_BYTE, mask = Pm32Mask(operandSize);
             Pm32Decode(cpu, offset, segmentOverride, &modrm);
             next = offset + (UINT32)modrm.Length;
             if (opcode2 == PM32_OP2_SHLD_IMM || opcode2 == PM32_OP2_SHRD_IMM) { count = Pm32CodeByte(cpu, next); next += 1; } else count = cpu->Registers[PM32_ECX] & PM32_LOW_BYTE;

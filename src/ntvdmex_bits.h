@@ -1,4 +1,4 @@
-/* ntvdmex_bits.h -- the masks that select a byte, word or dword of a value (#333).
+/* ntvdmex_bits.h -- the masks and shifts that select a byte, word or dword of a value (#333).
  *
  * One name per meaning, defined once (docs/STYLE.md, section 3). Each mask exists in the
  * C type the code already used it in: the plain form is an `int` literal, the `_U` form is
@@ -17,5 +17,15 @@
 #define WORD_MASK_U         0xFFFFu
 #define HIGH_WORD_MASK_U    0xFFFF0000u     /* bits 16-31                           */
 #define DWORD_MASK_U        0xFFFFFFFFu     /* all 32 bits                          */
+
+#define NIBBLE_SHIFT        4               /* one hex digit                        */
+#define BYTE_SHIFT          8               /* one byte up: bits 8-15               */
+#define WORD_SHIFT          16              /* the high word: bits 16-31            */
+#define TOP_BYTE_SHIFT      24              /* the top byte of a dword: bits 24-31  */
+#define DWORD_SHIFT         32              /* the high dword of a 64-bit value     */
+#define BITS_PER_BYTE       8
+
+/* x86 real-mode addressing: linear = segment * 16 + offset. */
+#define PARAGRAPH_SHIFT     4
 
 #endif /* NTVDMEX_BITS_H */

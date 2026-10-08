@@ -35,7 +35,6 @@
 #define PIT_STATUS_MODE_SHIFT   1
 #define PIT_STATUS_LOW          0
 /* Bytes of a 16-bit count. */
-#define PIT_BYTE_SHIFT          8
 #define PIT_LOW_BYTE            0xFF
 /* Ports. */
 #define PIT_COUNTER0_PORT       0x40
@@ -224,10 +223,10 @@ static VOID PitCounterWriteCount(PPIT_STATE state, PPIT_COUNTER counter, BYTE by
 {
     WORD count;
     if (counter->Access == PIT_ACCESS_LOW)      count = byteValue;                        /* lo only         */
-    else if (counter->Access == PIT_ACCESS_HIGH) count = (WORD)(byteValue << PIT_BYTE_SHIFT);       /* hi only         */
+    else if (counter->Access == PIT_ACCESS_HIGH) count = (WORD)(byteValue << BYTE_SHIFT);       /* hi only         */
     else {                                                   /* lo then hi      */
         if (!counter->IsWriteHighNext) { counter->WriteLow = byteValue; counter->IsWriteHighNext = 1; return; }
-        count = (WORD)((byteValue << PIT_BYTE_SHIFT) | counter->WriteLow);
+        count = (WORD)((byteValue << BYTE_SHIFT) | counter->WriteLow);
         counter->IsWriteHighNext = 0;
     }
     counter->Reload = PitCountValue(counter->IsBcd, count);   /* BCD in, binary stored */
@@ -247,10 +246,10 @@ static VOID PitCounterReadCount(PPIT_STATE state, PPIT_COUNTER counter, UINT32 *
     WORD count = PitCountBytes(counter->IsBcd, counter->IsLatched ? counter->Latch : PitCounterCount(state, counter));
     BYTE accessMode = counter->Access ? counter->Access : PIT_ACCESS_LOW_HIGH;
     if (accessMode == PIT_ACCESS_LOW)      { *value = count & PIT_LOW_BYTE;        counter->IsLatched = 0; }
-    else if (accessMode == PIT_ACCESS_HIGH) { *value = (count >> PIT_BYTE_SHIFT) & PIT_LOW_BYTE; counter->IsLatched = 0; }
+    else if (accessMode == PIT_ACCESS_HIGH) { *value = (count >> BYTE_SHIFT) & PIT_LOW_BYTE; counter->IsLatched = 0; }
     else {
         if (!counter->IsReadHighNext) { *value = count & PIT_LOW_BYTE; counter->IsReadHighNext = 1; }
-        else { *value = (count >> PIT_BYTE_SHIFT) & PIT_LOW_BYTE; counter->IsReadHighNext = 0; counter->IsLatched = 0; }
+        else { *value = (count >> BYTE_SHIFT) & PIT_LOW_BYTE; counter->IsReadHighNext = 0; counter->IsLatched = 0; }
     }
 }
 
@@ -533,10 +532,10 @@ static VOID PitPortOutLocked(PPIT_STATE state, WORD port, BYTE byteValue)
            "take over at the end of the period". See the note above PitLoad. */
         BYTE accessMode = state->Access ? state->Access : PIT_ACCESS_LOW_HIGH;
         if (accessMode == PIT_ACCESS_LOW)      PitLoad(state, byteValue);                        /* LSB only: MSB := 0 */
-        else if (accessMode == PIT_ACCESS_HIGH) PitLoad(state, (WORD)((WORD)byteValue << PIT_BYTE_SHIFT));  /* MSB only: LSB := 0 */
+        else if (accessMode == PIT_ACCESS_HIGH) PitLoad(state, (WORD)((WORD)byteValue << BYTE_SHIFT));  /* MSB only: LSB := 0 */
         else {                               /* lo then hi -- ONE atomic load   */
             if (!state->IsWriteHighNext) { state->WriteLow = byteValue; state->IsWriteHighNext = 1; }
-            else { PitLoad(state, (WORD)(((WORD)byteValue << PIT_BYTE_SHIFT) | state->WriteLow)); state->IsWriteHighNext = 0; }
+            else { PitLoad(state, (WORD)(((WORD)byteValue << BYTE_SHIFT) | state->WriteLow)); state->IsWriteHighNext = 0; }
         }
     } else if (port == PIT_COUNTER2_PORT) {               /* channel-2 reload (speaker tone) */
         /* ── #256: THE SPEAKER DIVISOR FOLLOWS COUNTER 0's RULE (above). ───────────
@@ -547,10 +546,10 @@ static VOID PitPortOutLocked(PPIT_STATE state, WORD port, BYTE byteValue)
              counter view below (and IRQ0) is untouched. */
         BYTE accessMode = state->Counter2Access ? state->Counter2Access : PIT_ACCESS_LOW_HIGH;
         if (accessMode == PIT_ACCESS_LOW) state->Counter2Reload = (WORD)byteValue;                     /* MSB := 0 */
-        else if (accessMode == PIT_ACCESS_HIGH) state->Counter2Reload = (WORD)((WORD)byteValue << PIT_BYTE_SHIFT);   /* LSB := 0 */
+        else if (accessMode == PIT_ACCESS_HIGH) state->Counter2Reload = (WORD)((WORD)byteValue << BYTE_SHIFT);   /* LSB := 0 */
         else {                               /* lo then hi -- ONE load          */
             if (!state->Counter2IsWriteHighNext) { state->Counter2WriteLow = byteValue; state->Counter2IsWriteHighNext = 1; }
-            else { state->Counter2Reload = (WORD)(((WORD)byteValue << PIT_BYTE_SHIFT) | state->Counter2WriteLow); state->Counter2IsWriteHighNext = 0; }
+            else { state->Counter2Reload = (WORD)(((WORD)byteValue << BYTE_SHIFT) | state->Counter2WriteLow); state->Counter2IsWriteHighNext = 0; }
         }
         /* ...and the same byte, into the COUNTER view. The speaker only ever
            wanted a divisor; a guest that programs counter 2 to MEASURE something
@@ -589,10 +588,10 @@ static VOID PitPortInLocked(PPIT_STATE state, WORD port, UINT32 *value)
     count = PitCountBytes(state->IsBcd, state->IsLatched ? state->Latch : PitCurrentCount(state));
     accessMode = state->Access ? state->Access : PIT_ACCESS_LOW_HIGH;
     if (accessMode == PIT_ACCESS_LOW) { *value = count & PIT_LOW_BYTE; state->IsLatched = 0; }
-    else if (accessMode == PIT_ACCESS_HIGH) { *value = (count >> PIT_BYTE_SHIFT) & PIT_LOW_BYTE; state->IsLatched = 0; }
+    else if (accessMode == PIT_ACCESS_HIGH) { *value = (count >> BYTE_SHIFT) & PIT_LOW_BYTE; state->IsLatched = 0; }
     else {                                   /* lo then hi                      */
         if (!state->IsReadHighNext) { *value = count & PIT_LOW_BYTE; state->IsReadHighNext = 1; }
-        else { *value = (count >> PIT_BYTE_SHIFT) & PIT_LOW_BYTE; state->IsReadHighNext = 0; state->IsLatched = 0; }
+        else { *value = (count >> BYTE_SHIFT) & PIT_LOW_BYTE; state->IsReadHighNext = 0; state->IsLatched = 0; }
     }
 }
 
@@ -683,16 +682,16 @@ static VOID PitInt1A(PVOID context, PNTVDD_REGISTERS registers)
         break;
     case PIT_1A_GET_TIME: {                             /* get RTC time, BCD               */
         PIT_RTC_READING reading; if (!PitRtc(state, &reading)) break;
-        VddSetCx(registers, (WORD)((PitToBcdByte(reading.Hour) << PIT_BYTE_SHIFT) | PitToBcdByte(reading.Minute)));
+        VddSetCx(registers, (WORD)((PitToBcdByte(reading.Hour) << BYTE_SHIFT) | PitToBcdByte(reading.Minute)));
         /* DL = daylight-saving flag. 0 = standard time; we do not track a DST rule
            the guest could act on, and saying 1 would invite one. */
-        VddSetDx(registers, (WORD)(PitToBcdByte(reading.Second) << PIT_BYTE_SHIFT));
+        VddSetDx(registers, (WORD)(PitToBcdByte(reading.Second) << BYTE_SHIFT));
         registers->CarryFlag = 0;
         break; }
     case PIT_1A_GET_DATE: {                             /* get RTC date, BCD               */
         PIT_RTC_READING reading; if (!PitRtc(state, &reading)) break;
-        VddSetCx(registers, (WORD)((PitToBcdByte(reading.Century) << PIT_BYTE_SHIFT) | PitToBcdByte(reading.Year)));
-        VddSetDx(registers, (WORD)((PitToBcdByte(reading.Month) << PIT_BYTE_SHIFT) | PitToBcdByte(reading.Day)));
+        VddSetCx(registers, (WORD)((PitToBcdByte(reading.Century) << BYTE_SHIFT) | PitToBcdByte(reading.Year)));
+        VddSetDx(registers, (WORD)((PitToBcdByte(reading.Month) << BYTE_SHIFT) | PitToBcdByte(reading.Day)));
         registers->CarryFlag = 0;
         break; }
     case PIT_1A_SET_TIME:                               /* set RTC time, BCD               */
@@ -709,7 +708,7 @@ static VOID PitInt1A(PVOID context, PNTVDD_REGISTERS registers)
              with CF=1 and the clock is left alone. DL (the DST flag) is accepted and
              not kept -- AH=02h reports standard time, see above. */
         PIT_RTC_READING requested;
-        UINT bcdCh = VddGetCx(registers) >> PIT_BYTE_SHIFT, bcdCl = VddGetCx(registers) & PIT_LOW_BYTE, bcdDh = VddGetDx(registers) >> PIT_BYTE_SHIFT, bcdDl = VddGetDx(registers) & PIT_LOW_BYTE;
+        UINT bcdCh = VddGetCx(registers) >> BYTE_SHIFT, bcdCl = VddGetCx(registers) & PIT_LOW_BYTE, bcdDh = VddGetDx(registers) >> BYTE_SHIFT, bcdDl = VddGetDx(registers) & PIT_LOW_BYTE;
         INT isDate = (VddGetAh(registers) == PIT_1A_SET_DATE);
         UINT fields[PIT_FIELD_COUNT]; UINT fieldIndex; INT isInvalid = 0;
         fields[PIT_FIELD_0] = bcdCh; fields[PIT_FIELD_1] = bcdCl; fields[PIT_FIELD_2] = bcdDh; fields[PIT_FIELD_3] = bcdDl;

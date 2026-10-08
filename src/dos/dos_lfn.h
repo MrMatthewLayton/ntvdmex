@@ -215,7 +215,6 @@ static inline BOOL DosLfnDosToFileTime(_In_ WORD dosDate, _In_ WORD dosTime, _In
 
 /* A QWORD time: its high DWORD 4 bytes in; in DOS format, the date in the high word. */
 #define DOS_LFN_FIND_TIME_HIGH      4
-#define DOS_LFN_HIGH_DWORD_SHIFT    32
 #define DOS_LFN_DOS_DATE_SHIFT      16
 
 /* A little-endian DWORD: the low byte first, then the next at +1, and so on. */
@@ -258,7 +257,7 @@ static inline VOID DosLfnPutTime(_Out_writes_bytes_(sizeof(UINT64)) PBYTE destin
     } else {
         DosLfnPutDword(destination, (DWORD)fileTime);
         DosLfnPutDword(destination + DOS_LFN_FIND_TIME_HIGH,
-                       (DWORD)(fileTime >> DOS_LFN_HIGH_DWORD_SHIFT));
+                       (DWORD)(fileTime >> DWORD_SHIFT));
     }
 }
 

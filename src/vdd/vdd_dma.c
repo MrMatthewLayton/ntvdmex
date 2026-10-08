@@ -22,7 +22,6 @@
 #define DMA_MAX_TRANSFERS           0x10001u /* a full count of 65536, plus one          */
 #define DMA_FLOATING_BYTE           0xFF
 /* The 16-bit address/count registers, written and read a byte at a time. */
-#define DMA_BYTE_SHIFT              8
 #define DMA_KEEP_LOW_BYTE           0x00FF
 #define DMA_KEEP_HIGH_BYTE          0xFF00
 /* Ports: controller 1 at 00h-0Fh, controller 2 at C0h-DFh (word-spaced), pages at 80h-8Fh. */
@@ -341,13 +340,13 @@ static VOID DmaSoftwareService(PDMA_STATE state)
    the halves and sends DMA to a wild address. */
 static VOID DmaWriteHalf(WORD *registerValue, BYTE *flipFlop, BYTE value)
 {
-    if (*flipFlop) *registerValue = (WORD)((*registerValue & DMA_KEEP_LOW_BYTE) | ((WORD)value << DMA_BYTE_SHIFT));
+    if (*flipFlop) *registerValue = (WORD)((*registerValue & DMA_KEEP_LOW_BYTE) | ((WORD)value << BYTE_SHIFT));
     else     *registerValue = (WORD)((*registerValue & DMA_KEEP_HIGH_BYTE) | value);
     *flipFlop ^= 1;
 }
 static BYTE DmaReadHalf(WORD registerValue, BYTE *flipFlop)
 {
-    BYTE value = *flipFlop ? (BYTE)(registerValue >> DMA_BYTE_SHIFT) : (BYTE)registerValue;
+    BYTE value = *flipFlop ? (BYTE)(registerValue >> BYTE_SHIFT) : (BYTE)registerValue;
     *flipFlop ^= 1;
     return value;
 }

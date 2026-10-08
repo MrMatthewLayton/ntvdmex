@@ -51,7 +51,6 @@
 #define SYSFONT_BOX_BLOCK_LAST  0x259F
 #define SYSFONT_NO_GLYPH    0xFFFF      /* GetGlyphIndices: GGI_MARK_NONEXISTING_GLYPHS */
 /* A .FON file: an NE executable whose RT_FONT resources are FNT 2.0/3.0 fonts. */
-#define SYSFONT_BYTE_SHIFT  8
 #define SYSFONT_WORD_BYTES  2
 #define SYSFONT_DWORD_BYTES 4
 #define SYSFONT_FONTS_DIRECTORY_ROOM 32 /* "\\Fonts\\" and a file name                 */
@@ -156,7 +155,7 @@ static DWORD SysFontRead(const BYTE *bytes, DWORD length, DWORD offset, INT size
 {
     DWORD value = 0; INT index;
     if (offset + (DWORD)size > length) return 0;
-    for (index = size - 1; index >= 0; --index) value = (value << SYSFONT_BYTE_SHIFT) | bytes[offset + index];
+    for (index = size - 1; index >= 0; --index) value = (value << BYTE_SHIFT) | bytes[offset + index];
     return value;
 }
 

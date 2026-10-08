@@ -1311,17 +1311,17 @@ static INT WowUserHookCall(INT slot, INT code, WORD wParam, DWORD lParam, PBYTE 
 {
     WORD arguments[WOWUSER_HOOK_ARGUMENTS];
     arguments[0] = (WORD)code; arguments[1] = wParam;
-    arguments[2] = (WORD)(lParam >> WOW_WORD_SHIFT); arguments[3] = (WORD)lParam;
+    arguments[2] = (WORD)(lParam >> WORD_SHIFT); arguments[3] = (WORD)lParam;
     return WowCall16SyncEx(g_WowUserHooks[slot].Procedure, g_WowUserHooks[slot].DataSelector, arguments, WOWUSER_HOOK_ARGUMENTS, 0, 0, result,
                               eventBlob, eventBlob ? WOWUSER_EVENTMSG16_SIZE : 0, eventBlob ? WOWUSER_HOOK_ARG_LPARAM : -1, NULL, 0);
 }
 static VOID WowUserEventTo16(const EVENTMSG *eventMessage, PBYTE blob)
 {
-    blob[WOWUSER_EVENTMSG16_MESSAGE] = (BYTE)eventMessage->message; blob[WOWUSER_EVENTMSG16_MESSAGE + 1] = (BYTE)(eventMessage->message >> WOW_BYTE_SHIFT);
-    blob[WOWUSER_EVENTMSG16_PARAML] = (BYTE)eventMessage->paramL;  blob[WOWUSER_EVENTMSG16_PARAML + 1] = (BYTE)(eventMessage->paramL >> WOW_BYTE_SHIFT);
-    blob[WOWUSER_EVENTMSG16_PARAMH] = (BYTE)eventMessage->paramH;  blob[WOWUSER_EVENTMSG16_PARAMH + 1] = (BYTE)(eventMessage->paramH >> WOW_BYTE_SHIFT);
-    blob[WOWUSER_EVENTMSG16_TIME] = (BYTE)eventMessage->time; blob[WOWUSER_EVENTMSG16_TIME + 1] = (BYTE)(eventMessage->time >> WOW_BYTE_SHIFT);
-    blob[WOWUSER_EVENTMSG16_TIME + 2] = (BYTE)(eventMessage->time >> WOW_WORD_SHIFT); blob[WOWUSER_EVENTMSG16_TIME + 3] = (BYTE)(eventMessage->time >> WOW_HIGH_BYTE_SHIFT);
+    blob[WOWUSER_EVENTMSG16_MESSAGE] = (BYTE)eventMessage->message; blob[WOWUSER_EVENTMSG16_MESSAGE + 1] = (BYTE)(eventMessage->message >> BYTE_SHIFT);
+    blob[WOWUSER_EVENTMSG16_PARAML] = (BYTE)eventMessage->paramL;  blob[WOWUSER_EVENTMSG16_PARAML + 1] = (BYTE)(eventMessage->paramL >> BYTE_SHIFT);
+    blob[WOWUSER_EVENTMSG16_PARAMH] = (BYTE)eventMessage->paramH;  blob[WOWUSER_EVENTMSG16_PARAMH + 1] = (BYTE)(eventMessage->paramH >> BYTE_SHIFT);
+    blob[WOWUSER_EVENTMSG16_TIME] = (BYTE)eventMessage->time; blob[WOWUSER_EVENTMSG16_TIME + 1] = (BYTE)(eventMessage->time >> BYTE_SHIFT);
+    blob[WOWUSER_EVENTMSG16_TIME + 2] = (BYTE)(eventMessage->time >> WORD_SHIFT); blob[WOWUSER_EVENTMSG16_TIME + 3] = (BYTE)(eventMessage->time >> TOP_BYTE_SHIFT);
 }
 static LRESULT CALLBACK WowUserHookKeyboard(INT code, WPARAM wParam, LPARAM lParam)
 {
@@ -1376,11 +1376,11 @@ static LRESULT CALLBACK WowUserHookJournalPlayback(INT code, WPARAM wParam, LPAR
         if (code == HC_GETNEXT && lParam) {
             EVENTMSG *eventMessage = (EVENTMSG *)lParam;
             if (WowUserHookCall(slot, code, (WORD)wParam, 0, blob, &result)) {
-                eventMessage->message = (UINT)(blob[WOWUSER_EVENTMSG16_MESSAGE] | (blob[WOWUSER_EVENTMSG16_MESSAGE + 1] << WOW_BYTE_SHIFT));
-                eventMessage->paramL  = (UINT)(blob[WOWUSER_EVENTMSG16_PARAML] | (blob[WOWUSER_EVENTMSG16_PARAML + 1] << WOW_BYTE_SHIFT));
-                eventMessage->paramH  = (UINT)(blob[WOWUSER_EVENTMSG16_PARAMH] | (blob[WOWUSER_EVENTMSG16_PARAMH + 1] << WOW_BYTE_SHIFT));
-                eventMessage->time    = (DWORD)blob[WOWUSER_EVENTMSG16_TIME] | ((DWORD)blob[WOWUSER_EVENTMSG16_TIME + 1] << WOW_BYTE_SHIFT) | ((DWORD)blob[WOWUSER_EVENTMSG16_TIME + 2] << WOW_WORD_SHIFT)
-                           | ((DWORD)blob[WOWUSER_EVENTMSG16_TIME + 3] << WOW_HIGH_BYTE_SHIFT);
+                eventMessage->message = (UINT)(blob[WOWUSER_EVENTMSG16_MESSAGE] | (blob[WOWUSER_EVENTMSG16_MESSAGE + 1] << BYTE_SHIFT));
+                eventMessage->paramL  = (UINT)(blob[WOWUSER_EVENTMSG16_PARAML] | (blob[WOWUSER_EVENTMSG16_PARAML + 1] << BYTE_SHIFT));
+                eventMessage->paramH  = (UINT)(blob[WOWUSER_EVENTMSG16_PARAMH] | (blob[WOWUSER_EVENTMSG16_PARAMH + 1] << BYTE_SHIFT));
+                eventMessage->time    = (DWORD)blob[WOWUSER_EVENTMSG16_TIME] | ((DWORD)blob[WOWUSER_EVENTMSG16_TIME + 1] << BYTE_SHIFT) | ((DWORD)blob[WOWUSER_EVENTMSG16_TIME + 2] << WORD_SHIFT)
+                           | ((DWORD)blob[WOWUSER_EVENTMSG16_TIME + 3] << TOP_BYTE_SHIFT);
                 eventMessage->hwnd    = NULL;
                 return (LRESULT)result;                /* the delay before it */
             }
@@ -1452,11 +1452,11 @@ static PCSTR WowUserResourceProgram(VOID)
     INT   index;
     if (!task || task == WOWUSER_TASK_NONE16 || !(taskBase = DpmiSelectorBase(task))) return g_WowCommandProgram;
     taskBytes = (const volatile BYTE *)(ULONG_PTR)taskBase;
-    module = (WORD)(taskBytes[WOWUSER_TDB_HMODULE] | (taskBytes[WOWUSER_TDB_HMODULE + 1] << WOW_BYTE_SHIFT));
+    module = (WORD)(taskBytes[WOWUSER_TDB_HMODULE] | (taskBytes[WOWUSER_TDB_HMODULE + 1] << BYTE_SHIFT));
     if (!module || !(moduleBase = DpmiSelectorBase(module))) return g_WowCommandProgram;
     moduleBytes = (const volatile BYTE *)(ULONG_PTR)moduleBase;
     if (moduleBytes[0] != 'N' || moduleBytes[1] != 'E') return g_WowCommandProgram;
-    offset = (WORD)(moduleBytes[WOWUSER_NE_FILE_INFO] | (moduleBytes[WOWUSER_NE_FILE_INFO + 1] << WOW_BYTE_SHIFT));
+    offset = (WORD)(moduleBytes[WOWUSER_NE_FILE_INFO] | (moduleBytes[WOWUSER_NE_FILE_INFO + 1] << BYTE_SHIFT));
     if (offset < WOWUSER_NE_FILE_INFO_MIN || offset > WOWUSER_NE_FILE_INFO_MAX) return g_WowCommandProgram;
     for (index = 0; index < (INT)sizeof g_WowUserResourceProgram - 1 && moduleBytes[offset + WOWUSER_OFSTRUCT_PATH + index]; ++index)
         g_WowUserResourceProgram[index] = (CHAR)moduleBytes[offset + WOWUSER_OFSTRUCT_PATH + index];
@@ -2534,7 +2534,7 @@ static PCWOWUSER_SYSPROC WowUserSystemProcedureOf(PCWOWUSER_WINDOW window)
 static PCWOWUSER_SYSPROC WowUserSystemProcedureAt(PCWOW32_FRAME frame, DWORD procedure)
 {
     INT index;
-    if (!procedure || (WORD)(procedure >> WOW_WORD_SHIFT) != frame->StubSegment) return NULL;
+    if (!procedure || (WORD)(procedure >> WORD_SHIFT) != frame->StubSegment) return NULL;
     for (index = 0; index < WOWUSER_SYSPROC_COUNT; ++index)
         if ((WORD)procedure == g_WowUserSystemProcedures[index].Offset) {
             const volatile BYTE *stub = (const volatile BYTE *)(ULONG_PTR)Wow32Flat(frame, procedure);
@@ -2589,7 +2589,7 @@ static LRESULT CALLBACK WowUserSubclassProcedure(HWND window, UINT message, WPAR
         else if (message == WM_GETDLGCODE || message == WM_TIMER)
             lParam16 = 0;                      /* Win32: an LPMSG / a TIMERPROC   */
         arguments[0] = window16; arguments[1] = (WORD)message; arguments[2] = wParam16;
-        arguments[3] = (WORD)(lParam16 >> WOW_WORD_SHIFT); arguments[4] = (WORD)(lParam16 & WORD_MASK);
+        arguments[3] = (WORD)(lParam16 >> WORD_SHIFT); arguments[4] = (WORD)(lParam16 & WORD_MASK);
         if (dataSelector && g_WowUserCall16(record->SubclassProcedure, dataSelector, arguments, WOWUSER_WNDPROC_ARGUMENTS, window16, (WORD)message, &result)) {
             ++g_WowUserSubclassSent;
             return (message == WM_NCHITTEST) ? (LRESULT)(SHORT)result : (LRESULT)result;
@@ -2628,7 +2628,7 @@ static HWND WowUserMdiClientOf(PCWOWUSER_WINDOW window)
    the address space. */
 static volatile BYTE *WowUserFarPointer(PCWOW32_FRAME frame, DWORD farPointer)
 {
-    WORD selector = (WORD)(farPointer >> WOW_WORD_SHIFT);
+    WORD selector = (WORD)(farPointer >> WORD_SHIFT);
     DWORD base;
     if (!selector || !frame->SelectorToLinear) return NULL;
     base = frame->SelectorToLinear(selector, frame->Context);
@@ -2639,7 +2639,7 @@ static volatile BYTE *WowUserFarPointer(PCWOW32_FRAME frame, DWORD farPointer)
 /* Read a NUL-terminated guest string through a 16:16 far pointer. */
 static INT WowUserFarString(PCWOW32_FRAME frame, DWORD farPointer, PSTR out, INT capacity)
 {
-    WORD selector = (WORD)(farPointer >> WOW_WORD_SHIFT);
+    WORD selector = (WORD)(farPointer >> WORD_SHIFT);
     DWORD base;
     const volatile BYTE *source;
     INT length = 0;
@@ -2655,7 +2655,7 @@ static INT WowUserFarString(PCWOW32_FRAME frame, DWORD farPointer, PSTR out, INT
 
 static WORD WowUserPeek(const volatile BYTE *bytes, INT offset)
 {
-    return (WORD)(bytes[offset] | (bytes[offset + 1] << WOW_BYTE_SHIFT));
+    return (WORD)(bytes[offset] | (bytes[offset + 1] << BYTE_SHIFT));
 }
 
 /* ── A GUEST FAR POINTER AS SOMETHING THE HOST CAN READ. ──────────────────────
@@ -2664,7 +2664,7 @@ static WORD WowUserPeek(const volatile BYTE *bytes, INT offset)
      selector the LDT cannot resolve yields NULL rather than a wild address. */
 static const volatile BYTE *WowUserFarMemory(PCWOW32_FRAME frame, DWORD farPointer)
 {
-    WORD selector = (WORD)(farPointer >> WOW_WORD_SHIFT);
+    WORD selector = (WORD)(farPointer >> WORD_SHIFT);
     DWORD base;
     if (!selector || !frame->SelectorToLinear) return NULL;
     base = frame->SelectorToLinear(selector, frame->Context);
@@ -2722,11 +2722,11 @@ static const volatile BYTE *WowUserFarMemory(PCWOW32_FRAME frame, DWORD farPoint
 
 static WORD WowDlgTemplateWord(const volatile BYTE *bytes, INT offset)
 {
-    return (WORD)(bytes[offset] | (bytes[offset + 1] << WOW_BYTE_SHIFT));
+    return (WORD)(bytes[offset] | (bytes[offset + 1] << BYTE_SHIFT));
 }
 static DWORD WowDlgTemplateDword(const volatile BYTE *bytes, INT offset)
 {
-    return (DWORD)WowDlgTemplateWord(bytes, offset) | ((DWORD)WowDlgTemplateWord(bytes, offset + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
+    return (DWORD)WowDlgTemplateWord(bytes, offset) | ((DWORD)WowDlgTemplateWord(bytes, offset + WOW_WORD_BYTES) << WORD_SHIFT);
 }
 
 /* A NUL-terminated string out of guest memory. Returns BYTES CONSUMED including
@@ -2960,7 +2960,7 @@ static VOID WowUserWantMessage(PWOW32_FRAME frame, PCWOWUSER_WINDOW window, WORD
     frame->CallbackArguments[0] = window->Window16;
     frame->CallbackArguments[1] = message;
     frame->CallbackArguments[2] = wParam;
-    frame->CallbackArguments[3] = (WORD)(lParam >> WOW_WORD_SHIFT);
+    frame->CallbackArguments[3] = (WORD)(lParam >> WORD_SHIFT);
     frame->CallbackArguments[4] = (WORD)(lParam & WORD_MASK);
     frame->CallbackArgumentCount   = WOWUSER_WNDPROC_ARGUMENTS;
     frame->CallbackReturnMode    = returnMode;
@@ -3029,7 +3029,7 @@ static VOID WowUserWantCreate(PWOW32_FRAME frame, PCWOWUSER_CLASS windowClass,
             for (index = 0; index < WOWUSER_CW_GEOMETRY; ++index)
                 if (Wow32ArgWord(frame, geometryArguments[index]) == CW_USEDEFAULT16) {
                     blob[geometryArguments[index]]     = (BYTE)(geometry[index] & BYTE_MASK);
-                    blob[geometryArguments[index] + 1] = (BYTE)(geometry[index] >> WOW_BYTE_SHIFT);
+                    blob[geometryArguments[index] + 1] = (BYTE)(geometry[index] >> BYTE_SHIFT);
                 }
         }
     }
@@ -3098,7 +3098,7 @@ static VOID WowUserWantCreate(PWOW32_FRAME frame, PCWOWUSER_CLASS windowClass,
      the address space. */
 static volatile BYTE *WowUserLinear(PCWOW32_FRAME frame, DWORD farPointer)
 {
-    WORD  selector = (WORD)(farPointer >> WOW_WORD_SHIFT);
+    WORD  selector = (WORD)(farPointer >> WORD_SHIFT);
     DWORD base;
     if (!selector || !frame->SelectorToLinear) return NULL;
     base = frame->SelectorToLinear(selector, frame->Context);
@@ -3198,12 +3198,12 @@ static INT WowUserListMessage(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD m
             INT wanted = (INT)(wParam > WOWUSER_LIST_MAX_SELECTION ? WOWUSER_LIST_MAX_SELECTION : wParam);
             structureResult = (guest && wanted) ? SendMessageA(window->Window32, message32, (WPARAM)wanted, (LPARAM)selection) : 0;
             for (index = 0; guest && index < (INT)structureResult && index < wanted; ++index) {
-                guest[index * WOW_WORD_BYTES] = (BYTE)selection[index]; guest[index * WOW_WORD_BYTES + 1] = (BYTE)(selection[index] >> WOW_BYTE_SHIFT); }
+                guest[index * WOW_WORD_BYTES] = (BYTE)selection[index]; guest[index * WOW_WORD_BYTES + 1] = (BYTE)(selection[index] >> BYTE_SHIFT); }
             break; }
         case LB_SETTABSTOPS: {                              /* LB_SETTABSTOPS: INT16[] in */
             static INT tabStops[WOWUSER_MAX_TAB_STOPS];
             INT count = (INT)(wParam > WOWUSER_MAX_TAB_STOPS ? WOWUSER_MAX_TAB_STOPS : wParam);
-            for (index = 0; guest && index < count; ++index) tabStops[index] = (INT)(SHORT)(guest[index * WOW_WORD_BYTES] | (guest[index * WOW_WORD_BYTES + 1] << WOW_BYTE_SHIFT));
+            for (index = 0; guest && index < count; ++index) tabStops[index] = (INT)(SHORT)(guest[index * WOW_WORD_BYTES] | (guest[index * WOW_WORD_BYTES + 1] << BYTE_SHIFT));
             structureResult = SendMessageA(window->Window32, message32, (WPARAM)count, count ? (LPARAM)tabStops : 0);
             break; }
         case LB_GETITEMRECT:                             /* LB_GETITEMRECT: RECT16 out */
@@ -3213,7 +3213,7 @@ static INT WowUserListMessage(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD m
             structureResult = SendMessageA(window->Window32, message32, (WPARAM)(LONG)(SHORT)wParam, (LPARAM)&rect);
             if (guest) {
                 LONG values[WOWUSER_RECT16_WORDS]; values[0] = rect.left; values[1] = rect.top; values[2] = rect.right; values[3] = rect.bottom;
-                for (index = 0; index < WOWUSER_RECT16_WORDS; ++index) { guest[index * WOW_WORD_BYTES] = (BYTE)values[index]; guest[index * WOW_WORD_BYTES + 1] = (BYTE)(values[index] >> WOW_BYTE_SHIFT); }
+                for (index = 0; index < WOWUSER_RECT16_WORDS; ++index) { guest[index * WOW_WORD_BYTES] = (BYTE)values[index]; guest[index * WOW_WORD_BYTES + 1] = (BYTE)(values[index] >> BYTE_SHIFT); }
             }
             break; }
         default: isDone = 0; break;
@@ -3253,8 +3253,8 @@ static INT WowUserListMessage(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD m
         DWORD value = 0;
         guestBuffer = WowUserLinear(frame, lParam);
         result = SendMessageA(window->Window32, message32, wParam32, (LPARAM)&value);
-        if (guestBuffer && result >= 0) { guestBuffer[0] = (BYTE)value; guestBuffer[1] = (BYTE)(value >> WOW_BYTE_SHIFT);
-                            guestBuffer[2] = (BYTE)(value >> WOW_WORD_SHIFT); guestBuffer[3] = (BYTE)(value >> WOW_HIGH_BYTE_SHIFT); }
+        if (guestBuffer && result >= 0) { guestBuffer[0] = (BYTE)value; guestBuffer[1] = (BYTE)(value >> BYTE_SHIFT);
+                            guestBuffer[2] = (BYTE)(value >> WORD_SHIFT); guestBuffer[3] = (BYTE)(value >> TOP_BYTE_SHIFT); }
     } else {
         result = SendMessageA(window->Window32, message32, wParam32, lParam32);
     }
@@ -3317,10 +3317,10 @@ static LONG WowUserDefProc(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD mess
         if (!createStruct) { WowNotePut(note, noteCapacity, &noteLength, "WM_MDICREATE: unreadable "
                                              "MDICREATESTRUCT"); return 0; }
         WowUserFarString(frame, (DWORD)WowUserPeek(createStruct, WOWUSER_MCS_SZCLASS)
-                          | ((DWORD)WowUserPeek(createStruct, WOWUSER_MCS_SZCLASS + WOW_WORD_BYTES) << WOW_WORD_SHIFT),
+                          | ((DWORD)WowUserPeek(createStruct, WOWUSER_MCS_SZCLASS + WOW_WORD_BYTES) << WORD_SHIFT),
                        className, sizeof className);
         WowUserFarString(frame, (DWORD)WowUserPeek(createStruct, WOWUSER_MCS_SZTITLE)
-                          | ((DWORD)WowUserPeek(createStruct, WOWUSER_MCS_SZTITLE + WOW_WORD_BYTES) << WOW_WORD_SHIFT),
+                          | ((DWORD)WowUserPeek(createStruct, WOWUSER_MCS_SZTITLE + WOW_WORD_BYTES) << WORD_SHIFT),
                        title, sizeof title);
         windowClass = className[0] ? WowUserFindClass(className) : NULL;
         if (!windowClass) {
@@ -3334,7 +3334,7 @@ static LONG WowUserDefProc(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD mess
         child->Class     = (WORD)(windowClass - g_WowUserClasses);
         child->WindowProcedure = windowClass->WindowProcedure;  /* per WINDOW, as at CreateWindow */
         child->Style   = (DWORD)WowUserPeek(createStruct, WOWUSER_MCS_STYLE)
-                    | ((DWORD)WowUserPeek(createStruct, WOWUSER_MCS_STYLE + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
+                    | ((DWORD)WowUserPeek(createStruct, WOWUSER_MCS_STYLE + WOW_WORD_BYTES) << WORD_SHIFT);
         child->Parent  = window->Window16;    /* ★ the MDI CLIENT is the parent */
         child->Menu    = 0;
         child->Instance   = WowUserPeek(createStruct, WOWUSER_MCS_HOWNER);
@@ -3406,7 +3406,7 @@ static LONG WowUserDefProc(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD mess
                      without this it was greyed for good. Posted, so WM_CREATE (armed
                      below) runs first. */
                 {   WORD previous16 = previous32 ? WowWinHwnd16(previous32) : 0;
-                    DWORD activateLParam = ((DWORD)previous16 << WOW_WORD_SHIFT) | child->Window16;
+                    DWORD activateLParam = ((DWORD)previous16 << WORD_SHIFT) | child->Window16;
                     if (previous16) WowMsgPost(previous16, WM_MDIACTIVATE, 0, activateLParam, GetTickCount(), 0, 0);
                     WowMsgPost(child->Window16, WM_MDIACTIVATE, 1, activateLParam, GetTickCount(), 0, 0);
                 }
@@ -3519,7 +3519,7 @@ static LONG WowUserDefProc(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD mess
             WORD active16 = WowWinHwnd16(active);
             WowNotePut(note, noteCapacity, &noteLength, "WM_MDIGETACTIVE -> 0x");
             WowNoteHex(note, noteCapacity, &noteLength, active16, WOW_HEX_WORD_DIGITS);
-            return (LONG)(((DWORD)(isMaximized ? 1 : 0) << WOW_WORD_SHIFT) | active16);
+            return (LONG)(((DWORD)(isMaximized ? 1 : 0) << WORD_SHIFT) | active16);
         }
         case WM_MDISETMENU: {
             HWND frameWindow = GetParent(window->Window32);
@@ -3563,7 +3563,7 @@ static LONG WowUserDefProc(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD mess
             WowNoteHex(note, noteCapacity, &noteLength, window->Memory16, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " to 0x");
             WowNoteHex(note, noteCapacity, &noteLength, needed, WOW_HEX_WORD_DIGITS);
-            frame->CallbackProcedure   = ((DWORD)g_WowUserKernelSegment << WOW_WORD_SHIFT) | WOWUSER_KRNL_LOCALREALLOC_OFF;
+            frame->CallbackProcedure   = ((DWORD)g_WowUserKernelSegment << WORD_SHIFT) | WOWUSER_KRNL_LOCALREALLOC_OFF;
             frame->CallbackArguments[0] = window->Memory16;
             frame->CallbackArguments[1] = needed;
             frame->CallbackArguments[2] = LMEM_MOVEABLE_ZEROINIT;
@@ -3571,7 +3571,7 @@ static LONG WowUserDefProc(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD mess
         } else {
             WowNotePut(note, noteCapacity, &noteLength, "LocalAlloc 0x");
             WowNoteHex(note, noteCapacity, &noteLength, needed, WOW_HEX_WORD_DIGITS);
-            frame->CallbackProcedure   = ((DWORD)g_WowUserKernelSegment << WOW_WORD_SHIFT) | WOWUSER_KRNL_LOCALALLOC_OFF;
+            frame->CallbackProcedure   = ((DWORD)g_WowUserKernelSegment << WORD_SHIFT) | WOWUSER_KRNL_LOCALALLOC_OFF;
             frame->CallbackArguments[0] = LMEM_MOVEABLE_ZEROINIT;
             frame->CallbackArguments[1] = needed;
             frame->CallbackArgumentCount   = WOWUSER_LOCALALLOC_ARGUMENTS;
@@ -3617,7 +3617,7 @@ static LONG WowUserDefProc(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD mess
            ⚠ EM_SETHANDLE's own answer stays 0: RET_KEEP, because the value the
              application gets back is the message's, not LocalLock's. */
         if (frame->IsCallbackAllowed && window->Window32 && window->Instance && g_WowUserKernelSegment && wParam) {
-            frame->CallbackProcedure   = ((DWORD)g_WowUserKernelSegment << WOW_WORD_SHIFT) | WOWUSER_KRNL_LOCALLOCK_OFF;
+            frame->CallbackProcedure   = ((DWORD)g_WowUserKernelSegment << WORD_SHIFT) | WOWUSER_KRNL_LOCALLOCK_OFF;
             frame->CallbackDataSelector     = window->Instance;
             frame->CallbackArguments[0] = wParam;
             frame->CallbackArgumentCount   = 1;
@@ -3688,7 +3688,7 @@ static LONG WowUserDefProc(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD mess
                                              : " -- no real control");
         if (textLength > 0 && window->Memory16 && window->Window32 && frame->IsCallbackAllowed && window->Instance
             && g_WowUserKernelSegment) {
-            frame->CallbackProcedure   = ((DWORD)g_WowUserKernelSegment << WOW_WORD_SHIFT) | WOWUSER_KRNL_LOCALREALLOC_OFF;
+            frame->CallbackProcedure   = ((DWORD)g_WowUserKernelSegment << WORD_SHIFT) | WOWUSER_KRNL_LOCALREALLOC_OFF;
             frame->CallbackDataSelector     = window->Instance;
             frame->CallbackArguments[0] = window->Memory16;
             frame->CallbackArguments[1] = (WORD)(textLength + 1);
@@ -3786,20 +3786,20 @@ static LONG WowUserDefProc(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD mess
                     RECT rect;
                     rect.left = rect.top = rect.right = rect.bottom = 0;
                     if (editIndex != WOWUSER_EM_INDEX(EM_GETRECT) && guest) {
-                        rect.left  = (SHORT)(guest[0] | (guest[1] << WOW_BYTE_SHIFT)); rect.top    = (SHORT)(guest[2] | (guest[3] << WOW_BYTE_SHIFT));
-                        rect.right = (SHORT)(guest[4] | (guest[5] << WOW_BYTE_SHIFT)); rect.bottom = (SHORT)(guest[6] | (guest[7] << WOW_BYTE_SHIFT));
+                        rect.left  = (SHORT)(guest[0] | (guest[1] << BYTE_SHIFT)); rect.top    = (SHORT)(guest[2] | (guest[3] << BYTE_SHIFT));
+                        rect.right = (SHORT)(guest[4] | (guest[5] << BYTE_SHIFT)); rect.bottom = (SHORT)(guest[6] | (guest[7] << BYTE_SHIFT));
                     }
                     result = SendMessageA(window->Window32, message32, 0, (editIndex != WOWUSER_EM_INDEX(EM_GETRECT) && !guest) ? 0 : (LPARAM)&rect);
                     if (editIndex == WOWUSER_EM_INDEX(EM_GETRECT) && guest) {
                         LONG values[WOWUSER_RECT16_WORDS]; values[0] = rect.left; values[1] = rect.top; values[2] = rect.right; values[3] = rect.bottom;
-                        for (index = 0; index < WOWUSER_RECT16_WORDS; ++index) { guest[index * WOW_WORD_BYTES] = (BYTE)values[index]; guest[index * WOW_WORD_BYTES + 1] = (BYTE)(values[index] >> WOW_BYTE_SHIFT); }
+                        for (index = 0; index < WOWUSER_RECT16_WORDS; ++index) { guest[index * WOW_WORD_BYTES] = (BYTE)values[index]; guest[index * WOW_WORD_BYTES + 1] = (BYTE)(values[index] >> BYTE_SHIFT); }
                     }
                     break; }
                 case WOWUSER_EM_INDEX(EM_SCROLL): case WOWUSER_EM_INDEX(EM_FMTLINES): case WOWUSER_EM_INDEX(EM_SETPASSWORDCHAR):
                     result = SendMessageA(window->Window32, message32, (WPARAM)wParam, (LPARAM)lParam);
                     break;
                 case WOWUSER_EM_INDEX(EM_LINESCROLL):                                        /* LINESCROLL */
-                    result = SendMessageA(window->Window32, message32, (WPARAM)(LONG)(SHORT)(lParam >> WOW_WORD_SHIFT),
+                    result = SendMessageA(window->Window32, message32, (WPARAM)(LONG)(SHORT)(lParam >> WORD_SHIFT),
                                      (LPARAM)(LONG)(SHORT)(lParam & WORD_MASK));
                     break;
                 case WOWUSER_EM_INDEX(EM_REPLACESEL): {                                      /* REPLACESEL */
@@ -3810,9 +3810,9 @@ static LONG WowUserDefProc(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD mess
                     break; }
                 case WOWUSER_EM_INDEX(EM_GETLINE): {                                      /* GETLINE    */
                     static CHAR lineBuffer[WOWUSER_EDIT_TEXT_SIZE];
-                    WORD capacity = guest ? (WORD)(guest[0] | (guest[1] << WOW_BYTE_SHIFT)) : 0;
+                    WORD capacity = guest ? (WORD)(guest[0] | (guest[1] << BYTE_SHIFT)) : 0;
                     if (capacity > sizeof lineBuffer - 1) capacity = sizeof lineBuffer - 1;
-                    lineBuffer[0] = (CHAR)capacity; lineBuffer[1] = (CHAR)(capacity >> WOW_BYTE_SHIFT);
+                    lineBuffer[0] = (CHAR)capacity; lineBuffer[1] = (CHAR)(capacity >> BYTE_SHIFT);
                     result = (guest && capacity) ? SendMessageA(window->Window32, message32, (WPARAM)(LONG)(SHORT)wParam,
                                                   (LPARAM)lineBuffer) : 0;
                     for (index = 0; guest && index < (INT)result && index < capacity; ++index) guest[index] = (BYTE)lineBuffer[index];
@@ -3820,7 +3820,7 @@ static LONG WowUserDefProc(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD mess
                 case WOWUSER_EM_INDEX(EM_SETTABSTOPS): {                                      /* SETTABSTOPS */
                     static INT tabStops[WOWUSER_MAX_TAB_STOPS];
                     INT count = (INT)(wParam > WOWUSER_MAX_TAB_STOPS ? WOWUSER_MAX_TAB_STOPS : wParam);
-                    for (index = 0; guest && index < count; ++index) tabStops[index] = (INT)(SHORT)(guest[index * WOW_WORD_BYTES] | (guest[index * WOW_WORD_BYTES + 1] << WOW_BYTE_SHIFT));
+                    for (index = 0; guest && index < count; ++index) tabStops[index] = (INT)(SHORT)(guest[index * WOW_WORD_BYTES] | (guest[index * WOW_WORD_BYTES + 1] << BYTE_SHIFT));
                     result = SendMessageA(window->Window32, message32, (WPARAM)count, count ? (LPARAM)tabStops : 0);
                     break; }
                 }
@@ -3835,7 +3835,7 @@ static LONG WowUserDefProc(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD mess
                 WPARAM wParam32 = wParam; LPARAM lParam32 = (LPARAM)lParam;
                 LRESULT result;
                 if (editIndex == WOWUSER_EM_INDEX(EM_SETSEL)) {                         /* EM_SETSEL */
-                    WORD start = (WORD)(lParam & WORD_MASK), end = (WORD)(lParam >> WOW_WORD_SHIFT);
+                    WORD start = (WORD)(lParam & WORD_MASK), end = (WORD)(lParam >> WORD_SHIFT);
                     wParam32 = (start == WOWUSER_MINUS_ONE16) ? (WPARAM)-1 : start;
                     lParam32 = (end == WOWUSER_MINUS_ONE16 || end == WOWUSER_EM_SELECT_TO_END16) ? (LPARAM)-1 : end;
                 } else if ((editIndex == WOWUSER_EM_INDEX(EM_LINEINDEX) || editIndex == WOWUSER_EM_INDEX(EM_LINELENGTH) || editIndex == WOWUSER_EM_INDEX(EM_LINEFROMCHAR)) && wParam == WOWUSER_MINUS_ONE16) {
@@ -4178,7 +4178,7 @@ static LRESULT WowUserDlgDefault(PWOWUSER_WINDOW window, WORD dialog16, WORD mes
         HWND cancelButton = GetDlgItem(window->Window32, IDCANCEL);
         WORD cancelButton16 = cancelButton ? WowWinHwnd16(cancelButton) : 0;
         WowMsgPost(dialog16, WM_COMMAND, IDCANCEL,
-                    (DWORD)cancelButton16 | ((DWORD)BN_CLICKED << WOW_WORD_SHIFT), GetTickCount(), 0, 0);
+                    (DWORD)cancelButton16 | ((DWORD)BN_CLICKED << WORD_SHIFT), GetTickCount(), 0, 0);
         WowNotePut(note, noteCapacity, &noteLength, " -> WM_CLOSE: WM_COMMAND IDCANCEL posted to the"
                                    " dialog, as Win16's DefDlgProc does");
         *noteLengthInOut = noteLength;
@@ -4374,7 +4374,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT count;
         if (!wndClass) { Wow32SetReturn(frame, 0); return 1; }  /* an unreadable WNDCLASS fails */
         WowUserFarString(frame, (DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_CLASSNAME)
-                          | ((DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_CLASSNAME + WOW_WORD_BYTES) << WOW_WORD_SHIFT),
+                          | ((DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_CLASSNAME + WOW_WORD_BYTES) << WORD_SHIFT),
                        className, sizeof className);
         if (!className[0]) { Wow32SetReturn(frame, 0); return 1; } /* no name, no class */
         windowClass = WowUserFindClass(className);
@@ -4398,7 +4398,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         }
         windowClass->Style    = WowUserPeek(wndClass, WOWUSER_WNDCLASS16_STYLE);
         windowClass->WindowProcedure  = (DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_WNDPROC)
-                    | ((DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_WNDPROC + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
+                    | ((DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_WNDPROC + WOW_WORD_BYTES) << WORD_SHIFT);
         windowClass->ClassExtra = WowUserPeek(wndClass, WOWUSER_WNDCLASS16_CLSEXTRA);
         windowClass->WindowExtra = WowUserPeek(wndClass, WOWUSER_WNDCLASS16_WNDEXTRA);
         windowClass->Instance    = WowUserPeek(wndClass, WOWUSER_WNDCLASS16_HINSTANCE);
@@ -4414,9 +4414,9 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              identical either way. */
         windowClass->MenuName[0] = 0;
         {   DWORD menuName = (DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_MENUNAME)
-                     | ((DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_MENUNAME + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
+                     | ((DWORD)WowUserPeek(wndClass, WOWUSER_WNDCLASS16_MENUNAME + WOW_WORD_BYTES) << WORD_SHIFT);
             windowClass->MenuOrdinal = 0;
-            if ((WORD)(menuName >> WOW_WORD_SHIFT) == 0) windowClass->MenuOrdinal = (WORD)menuName;  /* MAKEINTRESOURCE */
+            if ((WORD)(menuName >> WORD_SHIFT) == 0) windowClass->MenuOrdinal = (WORD)menuName;  /* MAKEINTRESOURCE */
             else WowUserFarString(frame, menuName, windowClass->MenuName, sizeof windowClass->MenuName);
         }
         /* ★★★★★ AND REGISTER A REAL Win32 CLASS BEHIND IT. (session 42) A Win16
@@ -4541,7 +4541,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT index, noteLength = 0;
 
         className[0] = 0;
-        if ((WORD)(classPointer >> WOW_WORD_SHIFT) == 0)             /* an ATOM, not a string */
+        if ((WORD)(classPointer >> WORD_SHIFT) == 0)             /* an ATOM, not a string */
             windowClass = WowUserFindClassByAtom((WORD)classPointer);
         else {
             WowUserFarString(frame, classPointer, className, sizeof className);
@@ -5064,15 +5064,15 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 INT itemIndex, titleLength = 0, createLength = 0;
                 WORD result16 = 0;
                 for (itemIndex = 0; itemIndex < (INT)sizeof createStruct; ++itemIndex) createStruct[itemIndex] = 0;
-                createStruct[WOWUSER_CS16_INSTANCE]  = (BYTE)instance;  createStruct[WOWUSER_CS16_INSTANCE + 1]  = (BYTE)(instance >> WOW_BYTE_SHIFT);  /* hInstance  */
-                createStruct[WOWUSER_CS16_MENU]  = (BYTE)itemId;    createStruct[WOWUSER_CS16_MENU + 1]  = (BYTE)(itemId >> WOW_BYTE_SHIFT);  /* hMenu = id */
-                createStruct[WOWUSER_CS16_PARENT]  = (BYTE)window->Window16; createStruct[WOWUSER_CS16_PARENT + 1] = (BYTE)(window->Window16 >> WOW_BYTE_SHIFT);  /* hwndParent */
-                createStruct[WOWUSER_CS16_HEIGHT] = (BYTE)control->Height; createStruct[WOWUSER_CS16_HEIGHT + 1] = (BYTE)(control->Height >> WOW_BYTE_SHIFT);
-                createStruct[WOWUSER_CS16_WIDTH] = (BYTE)control->Width; createStruct[WOWUSER_CS16_WIDTH + 1] = (BYTE)(control->Width >> WOW_BYTE_SHIFT);
-                createStruct[WOWUSER_CS16_Y] = (BYTE)control->PositionY;  createStruct[WOWUSER_CS16_Y + 1] = (BYTE)(control->PositionY >> WOW_BYTE_SHIFT);
-                createStruct[WOWUSER_CS16_X] = (BYTE)control->PositionX;  createStruct[WOWUSER_CS16_X + 1] = (BYTE)(control->PositionX >> WOW_BYTE_SHIFT);
-                createStruct[WOWUSER_CS16_STYLE] = (BYTE)itemStyle; createStruct[WOWUSER_CS16_STYLE + 1] = (BYTE)(itemStyle >> WOW_BYTE_SHIFT);
-                createStruct[WOWUSER_CS16_STYLE + 2] = (BYTE)(itemStyle >> WOW_WORD_SHIFT); createStruct[WOWUSER_CS16_STYLE + 3] = (BYTE)(itemStyle >> WOW_HIGH_BYTE_SHIFT);
+                createStruct[WOWUSER_CS16_INSTANCE]  = (BYTE)instance;  createStruct[WOWUSER_CS16_INSTANCE + 1]  = (BYTE)(instance >> BYTE_SHIFT);  /* hInstance  */
+                createStruct[WOWUSER_CS16_MENU]  = (BYTE)itemId;    createStruct[WOWUSER_CS16_MENU + 1]  = (BYTE)(itemId >> BYTE_SHIFT);  /* hMenu = id */
+                createStruct[WOWUSER_CS16_PARENT]  = (BYTE)window->Window16; createStruct[WOWUSER_CS16_PARENT + 1] = (BYTE)(window->Window16 >> BYTE_SHIFT);  /* hwndParent */
+                createStruct[WOWUSER_CS16_HEIGHT] = (BYTE)control->Height; createStruct[WOWUSER_CS16_HEIGHT + 1] = (BYTE)(control->Height >> BYTE_SHIFT);
+                createStruct[WOWUSER_CS16_WIDTH] = (BYTE)control->Width; createStruct[WOWUSER_CS16_WIDTH + 1] = (BYTE)(control->Width >> BYTE_SHIFT);
+                createStruct[WOWUSER_CS16_Y] = (BYTE)control->PositionY;  createStruct[WOWUSER_CS16_Y + 1] = (BYTE)(control->PositionY >> BYTE_SHIFT);
+                createStruct[WOWUSER_CS16_X] = (BYTE)control->PositionX;  createStruct[WOWUSER_CS16_X + 1] = (BYTE)(control->PositionX >> BYTE_SHIFT);
+                createStruct[WOWUSER_CS16_STYLE] = (BYTE)itemStyle; createStruct[WOWUSER_CS16_STYLE + 1] = (BYTE)(itemStyle >> BYTE_SHIFT);
+                createStruct[WOWUSER_CS16_STYLE + 2] = (BYTE)(itemStyle >> WORD_SHIFT); createStruct[WOWUSER_CS16_STYLE + 3] = (BYTE)(itemStyle >> TOP_BYTE_SHIFT);
                 while (titleLength < WOWUSER_NAME_SIZE - 1 && control->Text[titleLength] && titleLength < (INT)sizeof control->Text) { createStruct[WOWUSER_CS16_SIZE + titleLength] = (BYTE)control->Text[titleLength]; ++titleLength; }
                 while (createLength < WOWUSER_NAME_SIZE - 1 && itemClassName[createLength]) { createStruct[WOWUSER_CS16_SIZE + WOWUSER_NAME_SIZE + createLength] = (BYTE)itemClassName[createLength]; ++createLength; }
                 createStruct[WOWUSER_CS16_NAME] = WOWUSER_CS16_SIZE;  createStruct[WOWUSER_CS16_NAME + 1] = 0;  /* -> fixed up to ss:sp+34 */
@@ -5454,7 +5454,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                   Wow32SetReturn(frame, 0); return 1; }
         /* idReserved 0, idType 1 (icon) or 2 (cursor), idCount; then 14-byte
            entries ending in the WORD id. Copied out: the OS reads it as a whole. */
-        count = (WORD)(directoryBytes[WOWUSER_ICONDIR_COUNT] | (directoryBytes[WOWUSER_ICONDIR_COUNT + 1] << WOW_BYTE_SHIFT));
+        count = (WORD)(directoryBytes[WOWUSER_ICONDIR_COUNT] | (directoryBytes[WOWUSER_ICONDIR_COUNT + 1] << BYTE_SHIFT));
         if (count == 0 || count > WOWUSER_ICONDIR_MAX_ENTRIES) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ count=0x"); WowNoteHex(note, noteCapacity, &noteLength, count, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " is not a directory; answered 0");
@@ -5534,7 +5534,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteHex(note, noteCapacity, &noteLength, WowUserPeek(block, WOWUSER_NOTIFY_LPRESOURCE), WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " cb=0x");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)WowUserPeek(block, WOWUSER_NOTIFY_CBRESOURCE)
-                  | ((DWORD)WowUserPeek(block, WOWUSER_NOTIFY_CBRESOURCE + WOW_WORD_BYTES) << WOW_WORD_SHIFT), WOW_HEX_DWORD_DIGITS);
+                  | ((DWORD)WowUserPeek(block, WOWUSER_NOTIFY_CBRESOURCE + WOW_WORD_BYTES) << WORD_SHIFT), WOW_HEX_DWORD_DIGITS);
         /* Non-zero is "noted"; the handle the application gets is the guest's
            own resource handle. 1 rather than a number that looks like a handle,
            so nothing downstream can mistake it for one. */
@@ -5730,7 +5730,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WORD dataSelector = 0;
             DWORD taskBase = (g_WowUserCurrentTask && g_WowUserCurrentTask != WOWUSER_TASK_NONE16) ? DpmiSelectorBase(g_WowUserCurrentTask) : 0;
             if (taskBase) { const volatile BYTE *taskBytes = (const volatile BYTE *)(ULONG_PTR)taskBase;
-                      dataSelector = (WORD)(taskBytes[WOWUSER_TDB_HINSTANCE] | (taskBytes[WOWUSER_TDB_HINSTANCE + 1] << WOW_BYTE_SHIFT)); }
+                      dataSelector = (WORD)(taskBytes[WOWUSER_TDB_HINSTANCE] | (taskBytes[WOWUSER_TDB_HINSTANCE + 1] << BYTE_SHIFT)); }
             WowNotePut(note, noteCapacity, &noteLength, " -> a windowless timer's TIMERPROC 0x");
             WowNoteHex(note, noteCapacity, &noteLength, message.LParam, WOW_HEX_DWORD_DIGITS);
             Wow32SetReturn(frame, 0);
@@ -5739,7 +5739,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             frame->CallbackArguments[0] = 0;
             frame->CallbackArguments[1] = message.Message;
             frame->CallbackArguments[2] = message.WParam;
-            frame->CallbackArguments[3] = (WORD)(message.Time >> WOW_WORD_SHIFT);
+            frame->CallbackArguments[3] = (WORD)(message.Time >> WORD_SHIFT);
             frame->CallbackArguments[4] = (WORD)(message.Time & WORD_MASK);
             frame->CallbackArgumentCount   = WOWUSER_WNDPROC_ARGUMENTS;
             frame->CallbackReturnMode    = WOWCALL_RET_RESULT;
@@ -6236,7 +6236,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              uninitialised BITMAP and came out 9250 pixels tall. The OBM_* ids are the
              same numbers in Win32, which keeps them for exactly this; the OS's own. */
         {   DWORD nameArgument = Wow32ArgDword(frame, WOWUSER_LBM_ARG_NAME);
-            if (!size && !(nameArgument >> WOW_WORD_SHIFT) && (nameArgument & WORD_MASK)) {
+            if (!size && !(nameArgument >> WORD_SHIFT) && (nameArgument & WORD_MASK)) {
                 HBITMAP oldBitmap = LoadBitmapA(NULL, MAKEINTRESOURCEA(nameArgument & WORD_MASK));
                 bitmap16 = oldBitmap ? WowGdiH16((HGDIOBJ)oldBitmap, WOWGDI_KIND_OBJ) : 0;
                 WowNotePut(note, noteCapacity, &noteLength, " predefined #");
@@ -6256,7 +6256,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
-        headerSize = (DWORD)Wow32PeekWord(bitmapBits) | ((DWORD)Wow32PeekWord(bitmapBits + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
+        headerSize = (DWORD)Wow32PeekWord(bitmapBits) | ((DWORD)Wow32PeekWord(bitmapBits + WOW_WORD_BYTES) << WORD_SHIFT);
 
         /* ── ★★★ TWO DIB HEADERS EXIST, AND WINDOWS 3.x RESOURCES USE THE OLD
              ONE. This used to accept only `biSize == 40` (BITMAPINFOHEADER) and
@@ -6279,7 +6279,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         if (headerSize == WOWUSER_BITMAPINFOHEADER_SIZE) {
             bitCount = (INT)Wow32PeekWord(bitmapBits + WOWUSER_BIH_BITCOUNT);    /* biBitCount     */
             paletteSize  = (DWORD)Wow32PeekWord(bitmapBits + WOWUSER_BIH_CLRUSED)  /* biClrUsed      */
-                 | ((DWORD)Wow32PeekWord(bitmapBits + WOWUSER_BIH_CLRUSED + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
+                 | ((DWORD)Wow32PeekWord(bitmapBits + WOWUSER_BIH_CLRUSED + WOW_WORD_BYTES) << WORD_SHIFT);
             if (!paletteSize && bitCount <= WOWUSER_MAX_PALETTE_BITS) paletteSize = 1ul << bitCount;
             width = (DWORD)Wow32PeekWord(bitmapBits + WOWUSER_BIH_WIDTH);
             height = (DWORD)Wow32PeekWord(bitmapBits + WOWUSER_BIH_HEIGHT);
@@ -6541,7 +6541,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         {   static INT isSent = 0;
             WORD result16;
             DWORD textPointer16 = (DWORD)Wow32ArgWord(frame, WOWUSER_SWT_ARG_TEXT)
-                       | ((DWORD)Wow32ArgWord(frame, WOWUSER_SWT_ARG_TEXT + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
+                       | ((DWORD)Wow32ArgWord(frame, WOWUSER_SWT_ARG_TEXT + WOW_WORD_BYTES) << WORD_SHIFT);
             if (!isSent && g_WowUserSend16 && window->WindowProcedure && textPointer16) {
                 ++isSent;
                 if (g_WowUserSend16(window16, WM_SETTEXT16, 0, textPointer16, &result16))
@@ -6908,7 +6908,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 }
                 return 1;
             }
-            if ((WORD)(procedure >> WOW_WORD_SHIFT) == frame->StubSegment)
+            if ((WORD)(procedure >> WORD_SHIFT) == frame->StubSegment)
                 WowNotePut(note, noteCapacity, &noteLength, " -- ⚠ a USER address that is not a known"
                                            " control thunk; called as 16-bit code");
         }
@@ -7216,7 +7216,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, "GetDialogBaseUnits -> x=");
         WowNoteHex(note, noteCapacity, &noteLength, baseUnits & WORD_MASK, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " y=");
-        WowNoteHex(note, noteCapacity, &noteLength, (baseUnits >> WOW_WORD_SHIFT) & WORD_MASK, WOW_HEX_WORD_DIGITS);
+        WowNoteHex(note, noteCapacity, &noteLength, (baseUnits >> WORD_SHIFT) & WORD_MASK, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, baseUnits);
         return 1;
     }
@@ -7308,7 +7308,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         message32.message = Wow32PeekWord(messageBytes + WOWMSG_FIELD_MESSAGE);
         message32.wParam  = Wow32PeekWord(messageBytes + WOWMSG_FIELD_WPARAM);
         message32.lParam  = (LPARAM)((DWORD)Wow32PeekWord(messageBytes + WOWMSG_FIELD_LPARAM)
-                             | ((DWORD)Wow32PeekWord(messageBytes + WOWMSG_FIELD_LPARAM + WOW_WORD_BYTES) << WOW_WORD_SHIFT));
+                             | ((DWORD)Wow32PeekWord(messageBytes + WOWMSG_FIELD_LPARAM + WOW_WORD_BYTES) << WORD_SHIFT));
         message32.time    = GetTickCount();
         message32.pt.x = 0; message32.pt.y = 0;
         WowNotePut(note, noteCapacity, &noteLength, " msg=0x"); WowNoteHex(note, noteCapacity, &noteLength, message32.message, WOW_HEX_WORD_DIGITS);
@@ -7413,7 +7413,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 return 1;
             }
         }
-        frame->CallbackProcedure   = ((DWORD)g_WowUserKernelSegment << WOW_WORD_SHIFT) | WOWUSER_KRNL_GLOBALALLOC_OFF;
+        frame->CallbackProcedure   = ((DWORD)g_WowUserKernelSegment << WORD_SHIFT) | WOWUSER_KRNL_GLOBALALLOC_OFF;
         frame->CallbackDataSelector     = frame->GuestDataSelector;
         frame->CallbackArguments[0] = GMEM_MOVEABLE_DDESHARE16;
         frame->CallbackArguments[1] = 0;                              /* dwBytes, high word */
@@ -7442,7 +7442,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, " hMem=0x");
         WowNoteHex(note, noteCapacity, &noteLength, memory16, WOW_HEX_WORD_DIGITS);
         if ((format == CF_TEXT16 || format == CF_OEMTEXT16) && memory16 && frame->IsCallbackAllowed && g_WowUserKernelSegment) {
-            frame->CallbackProcedure   = ((DWORD)g_WowUserKernelSegment << WOW_WORD_SHIFT) | WOWUSER_KRNL_GLOBALLOCK_OFF;
+            frame->CallbackProcedure   = ((DWORD)g_WowUserKernelSegment << WORD_SHIFT) | WOWUSER_KRNL_GLOBALLOCK_OFF;
             frame->CallbackDataSelector     = frame->GuestDataSelector;
             frame->CallbackArguments[0] = memory16;
             frame->CallbackArgumentCount   = 1;
@@ -7754,7 +7754,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  noteLength = 0, index;
         name[0] = 0;
         WowUserEnsureSystemClasses();
-        if (!(namePointer >> WOW_WORD_SHIFT)) windowClass = WowUserFindClassByAtom((WORD)namePointer);
+        if (!(namePointer >> WORD_SHIFT)) windowClass = WowUserFindClassByAtom((WORD)namePointer);
         else if (Wow32ArgString(frame, WOWUSER_GCI_ARG_NAME, name, (INT)sizeof name)) windowClass = WowUserFindClass(name);
         WowNotePut(note, noteCapacity, &noteLength, "GetClassInfo(\"");
         WowNotePut(note, noteCapacity, &noteLength, windowClass ? windowClass->Name : name);
@@ -7768,12 +7768,12 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         {
             WORD fields[WOWUSER_WNDCLASS16_WORDS];
             fields[0] = windowClass->Style;
-            fields[1] = (WORD)(windowClass->WindowProcedure & WORD_MASK); fields[2] = (WORD)(windowClass->WindowProcedure >> WOW_WORD_SHIFT);
+            fields[1] = (WORD)(windowClass->WindowProcedure & WORD_MASK); fields[2] = (WORD)(windowClass->WindowProcedure >> WORD_SHIFT);
             fields[3] = windowClass->ClassExtra; fields[4] = windowClass->WindowExtra; fields[5] = windowClass->Instance;
             fields[6] = windowClass->Icon16; fields[7] = windowClass->Cursor16; fields[8] = windowClass->Background16;
             fields[9] = 0; fields[10] = 0;             /* lpszMenuName */
-            fields[11] = (WORD)(namePointer & WORD_MASK); fields[12] = (WORD)(namePointer >> WOW_WORD_SHIFT);
-            for (index = 0; index < WOWUSER_WNDCLASS16_WORDS; ++index) { wndClass[index * WOW_WORD_BYTES] = (BYTE)fields[index]; wndClass[index * WOW_WORD_BYTES + 1] = (BYTE)(fields[index] >> WOW_BYTE_SHIFT); }
+            fields[11] = (WORD)(namePointer & WORD_MASK); fields[12] = (WORD)(namePointer >> WORD_SHIFT);
+            for (index = 0; index < WOWUSER_WNDCLASS16_WORDS; ++index) { wndClass[index * WOW_WORD_BYTES] = (BYTE)fields[index]; wndClass[index * WOW_WORD_BYTES + 1] = (BYTE)(fields[index] >> BYTE_SHIFT); }
         }
         WowNotePut(note, noteCapacity, &noteLength, " -> TRUE proc=");
         WowNoteHex(note, noteCapacity, &noteLength, windowClass->WindowProcedure, WOW_HEX_DWORD_DIGITS);
@@ -8264,7 +8264,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             frame->CallbackArguments[0] = dialog16;
             frame->CallbackArguments[1] = message16;
             frame->CallbackArguments[2] = wParam16;
-            frame->CallbackArguments[3] = (WORD)(lParam32 >> WOW_WORD_SHIFT);
+            frame->CallbackArguments[3] = (WORD)(lParam32 >> WORD_SHIFT);
             frame->CallbackArguments[4] = (WORD)(lParam32 & WORD_MASK);
             frame->CallbackArgumentCount   = WOWUSER_WNDPROC_ARGUMENTS;
             frame->CallbackReturnMode    = WOWCALL_RET_RESULT;
@@ -8663,7 +8663,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         volatile BYTE *statBytes = Wow32ArgPointer(frame, WOWUSER_GCE_ARG_STAT);
         INT inQueue = WowCommInqueue(portId);
         if (statBytes) { statBytes[0] = 0;
-                  statBytes[WOWUSER_COMSTAT16_INQUEUE] = (BYTE)(inQueue & BYTE_MASK); statBytes[WOWUSER_COMSTAT16_INQUEUE + 1] = (BYTE)((inQueue >> WOW_BYTE_SHIFT) & BYTE_MASK);
+                  statBytes[WOWUSER_COMSTAT16_INQUEUE] = (BYTE)(inQueue & BYTE_MASK); statBytes[WOWUSER_COMSTAT16_INQUEUE + 1] = (BYTE)((inQueue >> BYTE_SHIFT) & BYTE_MASK);
                   statBytes[WOWUSER_COMSTAT16_OUTQUEUE] = 0; statBytes[WOWUSER_COMSTAT16_OUTQUEUE + 1] = 0; }
         WowNotePut(note, noteCapacity, &noteLength, "GetCommError -> 0 (no error), cbInQue=0x");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)inQueue, WOW_HEX_WORD_DIGITS);
@@ -9914,7 +9914,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                message (WowUserWindowProcedureOf). A system control: see g_WowUserSystemProcedures. */
             PCWOWUSER_SYSPROC systemProcedure = WowUserSystemProcedureOf(window);
             if (systemProcedure) {
-                DWORD thunk = ((DWORD)frame->StubSegment << WOW_WORD_SHIFT) | systemProcedure->Offset;
+                DWORD thunk = ((DWORD)frame->StubSegment << WORD_SHIFT) | systemProcedure->Offset;
                 previousValue = window->SubclassProcedure ? window->SubclassProcedure : thunk;
                 if (isSet) {
                     PCWOWUSER_SYSPROC backProcedure = WowUserSystemProcedureAt(frame, value);
@@ -9961,10 +9961,10 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 }
             }
         } else if (fieldIndex >= 0 && fieldIndex + WOWUSER_DWORD_BYTES - 1 < (INT)(WOWUSER_MAX_EXTRA * WOW_WORD_BYTES)) {
-            previousValue = (DWORD)window->Extra[fieldIndex / WOW_WORD_BYTES] | ((DWORD)window->Extra[fieldIndex / WOW_WORD_BYTES + 1] << WOW_WORD_SHIFT);
+            previousValue = (DWORD)window->Extra[fieldIndex / WOW_WORD_BYTES] | ((DWORD)window->Extra[fieldIndex / WOW_WORD_BYTES + 1] << WORD_SHIFT);
             if (isSet) {
                 window->Extra[fieldIndex / WOW_WORD_BYTES]     = (WORD)(value & WORD_MASK);
-                window->Extra[fieldIndex / WOW_WORD_BYTES + 1] = (WORD)(value >> WOW_WORD_SHIFT);
+                window->Extra[fieldIndex / WOW_WORD_BYTES + 1] = (WORD)(value >> WORD_SHIFT);
             }
         } else {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ an index this host does not keep;"
@@ -10812,7 +10812,7 @@ static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
-        if ((name >> WOW_WORD_SHIFT) == 0) {
+        if ((name >> WORD_SHIFT) == 0) {
             /* MAKEINTRESOURCE: the high word is 0, so the low word is an ordinal. */
             WowNotePut(note, noteCapacity, &noteLength, "#");
             WowNoteHex(note, noteCapacity, &noteLength, name & WORD_MASK, WOW_HEX_WORD_DIGITS);

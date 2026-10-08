@@ -142,7 +142,7 @@ INT main(VOID)
         static BYTE conventional[XMS_TEST_CONVENTIONAL_SIZE];  /* the conventional window */
         DOS_XMS_MOVE move;
         PCSTR message = XMS_TEST_MESSAGE;
-        PBYTE sourceBytes = conventional + (XMS_TEST_SOURCE_SEGMENT << DOS_XMS_PARAGRAPH_SHIFT)
+        PBYTE sourceBytes = conventional + (XMS_TEST_SOURCE_SEGMENT << PARAGRAPH_SHIFT)
                           + XMS_TEST_SOURCE_OFFSET;
         memset(conventional, 0, sizeof conventional);
         memcpy(sourceBytes, message, XMS_TEST_MESSAGE_SIZE);
@@ -166,7 +166,7 @@ INT main(VOID)
         succeeded = DosXmsMove(&state, conventional, &move, &errorCode);
         XmsTestCheck(succeeded
                      && memcmp(conventional
-                                   + (XMS_TEST_DESTINATION_SEGMENT << DOS_XMS_PARAGRAPH_SHIFT),
+                                   + (XMS_TEST_DESTINATION_SEGMENT << PARAGRAPH_SHIFT),
                                message, XMS_TEST_MESSAGE_SIZE) == 0,
                      "fn0B: move EMB -> conv (round trip)");
     }

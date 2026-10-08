@@ -69,7 +69,6 @@
 #define LFN_TEST_LONG_NAME_MAX           259
 #define LFN_TEST_FILE_SIZE_HIGH          0x11223344
 #define LFN_TEST_FILE_SIZE_LOW           0x55667788
-#define LFN_TEST_HIGH_DWORD_SHIFT        32
 #define LFN_TEST_DATE_SHIFT              16      /* SI=1: the date in the high word        */
 #define LFN_TEST_FILETIME_FORMAT         FALSE   /* SI=0                                   */
 #define LFN_TEST_DOS_FORMAT              TRUE    /* SI=1                                   */
@@ -275,13 +274,13 @@ INT main(VOID)
         LfnTestExpect("04h creation low",  LfnTestReadDword(record + LFN_TEST_CREATION_LOW),
                       (DWORD)LFN_TEST_FT_1980_01_01);
         LfnTestExpect("08h creation high", LfnTestReadDword(record + LFN_TEST_CREATION_HIGH),
-                      (DWORD)(LFN_TEST_FT_1980_01_01 >> LFN_TEST_HIGH_DWORD_SHIFT));
+                      (DWORD)(LFN_TEST_FT_1980_01_01 >> DWORD_SHIFT));
         LfnTestExpect("0Ch last access (0)", LfnTestReadDword(record + LFN_TEST_ACCESS_LOW)
                                              | LfnTestReadDword(record + LFN_TEST_ACCESS_HIGH), 0);
         LfnTestExpect("14h last write low",  LfnTestReadDword(record + LFN_TEST_WRITE_LOW),
                       (DWORD)LFN_TEST_FT_2001_09_17_123457_25);
         LfnTestExpect("18h last write high", LfnTestReadDword(record + LFN_TEST_WRITE_HIGH),
-                      (DWORD)(LFN_TEST_FT_2001_09_17_123457_25 >> LFN_TEST_HIGH_DWORD_SHIFT));
+                      (DWORD)(LFN_TEST_FT_2001_09_17_123457_25 >> DWORD_SHIFT));
         LfnTestExpect("1Ch size HIGH first", LfnTestReadDword(record + LFN_TEST_SIZE_HIGH),
                       LFN_TEST_FILE_SIZE_HIGH);
         LfnTestExpect("20h size low",        LfnTestReadDword(record + LFN_TEST_SIZE_LOW),

@@ -3,7 +3,6 @@
 #include "vdd_input.h"
 
 /* Bytes and words. */
-#define INPUT_BYTE_SHIFT            8
 #define INPUT_LOW_BYTE              0xFF
 #define INPUT_HIGH_BYTE             0xFF00
 #define INPUT_BDA_KEY_SIZE          2       /* one ring entry: AL then AH                */
@@ -124,10 +123,10 @@ static INT InputNextIndex(INT index) { return (index + 1) % INPUT_SCANCODE_QUEUE
 /* --- the BIOS keyboard ring, in guest memory at 0040:001E ------------------ */
 
 static WORD InputBdaReadWord(PCINPUT_STATE state, INT offset)
-{ return (WORD)(state->BiosData[offset] | (state->BiosData[offset + 1] << INPUT_BYTE_SHIFT)); }
+{ return (WORD)(state->BiosData[offset] | (state->BiosData[offset + 1] << BYTE_SHIFT)); }
 
 static VOID InputBdaWriteWord(PINPUT_STATE state, INT offset, WORD value)
-{ state->BiosData[offset] = (BYTE)value; state->BiosData[offset + 1] = (BYTE)(value >> INPUT_BYTE_SHIFT); }
+{ state->BiosData[offset] = (BYTE)value; state->BiosData[offset + 1] = (BYTE)(value >> BYTE_SHIFT); }
 
 /* #274: the ring's bounds, from 0040:0080/0082 (see vdd_input.h). A pair that cannot
    describe a ring -- odd, empty, inverted, or too small to hold one key -- is POST's
@@ -398,7 +397,7 @@ static WORD InputExtendedPlain(BYTE code)
 {
     if (code == INPUT_SCAN_ENTER) return INPUT_KEY_KEYPAD_ENTER;                 /* keypad Enter */
     if (code == INPUT_SCAN_SLASH) return INPUT_KEY_KEYPAD_SLASH;                 /* keypad /     */
-    return (WORD)((code << INPUT_BYTE_SHIFT) | INPUT_KEY_EXTENDED_MARKER);
+    return (WORD)((code << BYTE_SHIFT) | INPUT_KEY_EXTENDED_MARKER);
 }
 /* ...and with Ctrl: the keypad's Ctrl code with AL=E0h for the grey nav keys (Ctrl+
    grey Left = 73E0h), keypad Enter E00Ah, keypad slash 9500h (RBIL's INT 16h table). */
@@ -744,7 +743,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
     } else if (shiftFlags & INPUT_SHIFT_CTRL) {
         key = g_InputScanCodeTable[code][INPUT_COLUMN_CTRL];
         if (state->Layout && InputIsLetterOn(state, code))           /* #136: a moved letter */
-            key = (WORD)((code << INPUT_BYTE_SHIFT) | (InputKeyboardChar(state, code, 0) & INPUT_CTRL_CHARACTER_MASK));
+            key = (WORD)((code << BYTE_SHIFT) | (InputKeyboardChar(state, code, 0) & INPUT_CTRL_CHARACTER_MASK));
     } else {
         INT shifted = (shiftFlags & (INPUT_SHIFT_LEFT_SHIFT | INPUT_SHIFT_RIGHT_SHIFT)) != 0;
         /* CapsLock inverts Shift for LETTERS only; NumLock inverts it for the KEYPAD
@@ -754,7 +753,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
         key = g_InputScanCodeTable[code][shifted ? INPUT_COLUMN_SHIFT : INPUT_COLUMN_PLAIN];
         if (state->Layout && !(code >= INPUT_SCAN_KEYPAD_FIRST && code <= INPUT_SCAN_KEYPAD_LAST) && !(code == INPUT_SCAN_TAB && shifted)) {
             BYTE character = InputKeyboardChar(state, code, shifted);        /* #136: the layout's char */
-            if ((key & INPUT_LOW_BYTE) != character) key = character ? (WORD)((code << INPUT_BYTE_SHIFT) | character) : 0;
+            if ((key & INPUT_LOW_BYTE) != character) key = character ? (WORD)((code << BYTE_SHIFT) | character) : 0;
         }
     }
     if (key) VddInputPush(state, key);                  /* 0 = the BIOS stores nothing */
@@ -767,9 +766,9 @@ VOID VddInputPauseCancel(PINPUT_STATE state)
 
 WORD VddInputDosKey(WORD key)
 {
-    BYTE scanCode = (BYTE)(key >> INPUT_BYTE_SHIFT), character = (BYTE)key;
+    BYTE scanCode = (BYTE)(key >> BYTE_SHIFT), character = (BYTE)key;
     if (scanCode == INPUT_KEY_EXTENDED_MARKER) return (WORD)(((character == INPUT_CHAR_CARRIAGE_RETURN || character == INPUT_CHAR_LINE_FEED) ? INPUT_KEY_ENTER_SCAN_CODE : INPUT_KEY_SLASH_SCAN_CODE) | character);
-    if (character == INPUT_KEY_EXTENDED_MARKER && scanCode != 0) return (WORD)(scanCode << INPUT_BYTE_SHIFT);
+    if (character == INPUT_KEY_EXTENDED_MARKER && scanCode != 0) return (WORD)(scanCode << BYTE_SHIFT);
     return key;
 }
 
@@ -1022,14 +1021,14 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
      is the reference. Returns 0 = discard, 1 = deliver *key (possibly rewritten). */
 static INT InputKeyCompatible(WORD *key)
 {
-    BYTE scanCode = (BYTE)(*key >> INPUT_BYTE_SHIFT), character = (BYTE)*key;
+    BYTE scanCode = (BYTE)(*key >> BYTE_SHIFT), character = (BYTE)*key;
     if (scanCode == INPUT_KEY_EXTENDED_MARKER) {                       /* keypad Enter / keypad '/'            */
         *key = (WORD)(((character == INPUT_CHAR_CARRIAGE_RETURN || character == INPUT_CHAR_LINE_FEED) ? INPUT_KEY_ENTER_SCAN_CODE : INPUT_KEY_SLASH_SCAN_CODE) | character);
         return 1;
     }
     if (scanCode > INPUT_KEY_LAST_COMPATIBLE_SCAN) return 0;                /* F11/F12, Ctrl+arrows, Alt+Enter ...  */
     if (character == INPUT_KEY_FILL_IN) return scanCode == 0 ? 1 : 0; /* fill-ins; 00F0 is Alt+keypad 240     */
-    if (character == INPUT_KEY_EXTENDED_MARKER && scanCode != 0) *key = (WORD)(scanCode << INPUT_BYTE_SHIFT);   /* gray arrows etc.   */
+    if (character == INPUT_KEY_EXTENDED_MARKER && scanCode != 0) *key = (WORD)(scanCode << BYTE_SHIFT);   /* gray arrows etc.   */
     return 1;
 }
 

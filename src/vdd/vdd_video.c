@@ -22,7 +22,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_TEXT_PAGE_MIN           0x800u
 #define VIDEO_PAGE_ALIGN_MASK         0xFFu
 #define VIDEO_PLANE_INDEX_MASK        3
-#define VIDEO_BYTE_SHIFT              8
 /* Modes. */
 #define VIDEO_MODE_TEXT_80            0x03
 #define VIDEO_MODE_VGA_256            0x13
@@ -155,8 +154,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_ATTRIBUTE_NORMAL        0x07
 
 /* Bytes and words, assembled and taken apart. */
-#define VIDEO_WORD_SHIFT              16
-#define VIDEO_HIGH_BYTE_SHIFT         24
 #define VIDEO_OFFSET_NONE             0xFFFFFFFFu
 #define VIDEO_RGB_BYTES               3
 #define VIDEO_RGB_BLUE                2
@@ -554,7 +551,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_WRITE_MODE_2            2
 #define VIDEO_WRITE_MODE_3            3
 #define VIDEO_ROTATE_MASK             7
-#define VIDEO_BITS_PER_BYTE           8
 #define VIDEO_PLANE_3                 3
 #define VIDEO_COMPARE_ALL             0xFF
 #define VIDEO_DWORD_BYTES             4
@@ -684,7 +680,6 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_SNAPSHOT_HEADER_ROOM    8
 #define VIDEO_CHAR_PRINTABLE_FIRST    32
 #define VIDEO_CHAR_PRINTABLE_END      127
-#define VIDEO_NIBBLE_SHIFT            4
 #define VIDEO_NIBBLE_MASK             0xF
 #define VIDEO_DECIMAL_DIGITS          12
 #define VIDEO_DECIMAL_BASE            10
@@ -849,7 +844,7 @@ static VOID VideoLoadDefaultCrtc(PVIDEO_STATE state)
     const BYTE *crtc = g_VgaCrtcDefaults[g_VgaDefaultsByMode[VIDEO_DEFAULTS_CRTC_ROW][VideoDefaultsRow(state->Mode)]];
     state->CrtcIndex = 0;
     state->CrtcOffset = crtc[VGA_CRTC_OFFSET];
-    state->CrtcStart = (UINT32)(((UINT)crtc[VGA_CRTC_START_HI] << VIDEO_BYTE_SHIFT) | crtc[VGA_CRTC_START_LO]);
+    state->CrtcStart = (UINT32)(((UINT)crtc[VGA_CRTC_START_HI] << BYTE_SHIFT) | crtc[VGA_CRTC_START_LO]);
     state->CrtcStartLive = (WORD)state->CrtcStart;   /* the display follows at once */
     state->StartVs        = (WORD)state->CrtcStart;
     state->LatchTime         = 0;                           /* VideoLatch: take everything as-is */
@@ -1232,8 +1227,8 @@ static VOID VideoSetVector(PVIDEO_STATE state, BYTE vector, WORD segment, WORD o
     if (!state->Bus) return;
     value = (BYTE *)VddMapFlat(state->Bus, 0, (WORD)(vector * VIDEO_IVT_ENTRY_BYTES));
     if (!value) return;
-    value[0] = (BYTE)offset; value[1] = (BYTE)(offset >> VIDEO_BYTE_SHIFT);
-    value[2] = (BYTE)segment; value[3] = (BYTE)(segment >> VIDEO_BYTE_SHIFT);
+    value[0] = (BYTE)offset; value[1] = (BYTE)(offset >> BYTE_SHIFT);
+    value[2] = (BYTE)segment; value[3] = (BYTE)(segment >> BYTE_SHIFT);
 }
 /* INT 43h -> our ROM copy of the font a cell of `height` lines draws with. */
 static VOID VideoInt43Rom(PVIDEO_STATE state, BYTE height)
@@ -1299,9 +1294,9 @@ VOID VddVideoBdaSync(PVIDEO_STATE state)
     bda[VIDEO_BDA_MODE] = state->Mode;
     bda[VIDEO_BDA_COLUMNS] = state->Columns; bda[VIDEO_BDA_COLUMNS_HIGH] = 0;
     pageSize = VideoPageSize(state);
-    bda[VIDEO_BDA_PAGE_SIZE] = (BYTE)pageSize; bda[VIDEO_BDA_PAGE_SIZE_HIGH] = (BYTE)(pageSize >> VIDEO_BYTE_SHIFT);
+    bda[VIDEO_BDA_PAGE_SIZE] = (BYTE)pageSize; bda[VIDEO_BDA_PAGE_SIZE_HIGH] = (BYTE)(pageSize >> BYTE_SHIFT);
     { UINT pageOffset = (UINT)state->Page * pageSize;
-      bda[VIDEO_BDA_PAGE_OFFSET] = (BYTE)pageOffset; bda[VIDEO_BDA_PAGE_OFFSET_HIGH] = (BYTE)(pageOffset >> VIDEO_BYTE_SHIFT); }
+      bda[VIDEO_BDA_PAGE_OFFSET] = (BYTE)pageOffset; bda[VIDEO_BDA_PAGE_OFFSET_HIGH] = (BYTE)(pageOffset >> BYTE_SHIFT); }
     /* All eight cursors (#252) -- the active page's from CursorRow/CursorColumn, the rest
        from the per-page store. Only the active slot used to be written, so a guest
        reading another page's cursor from the BDA read whatever was left there. */
@@ -1313,10 +1308,10 @@ VOID VddVideoBdaSync(PVIDEO_STATE state)
       } }
     {   /* 0040:0060 follows the same rule as AH=03h: no text cursor in graphics. */
         WORD shape = (state->ModeKind == VIDEO_KIND_TEXT) ? state->CursorShape : 0;
-        bda[VIDEO_BDA_CURSOR_SHAPE] = (BYTE)shape; bda[VIDEO_BDA_CURSOR_SHAPE_HIGH] = (BYTE)(shape >> VIDEO_BYTE_SHIFT); }
+        bda[VIDEO_BDA_CURSOR_SHAPE] = (BYTE)shape; bda[VIDEO_BDA_CURSOR_SHAPE_HIGH] = (BYTE)(shape >> BYTE_SHIFT); }
     bda[VIDEO_BDA_ACTIVE_PAGE] = state->Page;
     { UINT crtc = (state->Mode == VIDEO_MODE_MDA) ? VIDEO_PORT_CRTC_MONO : VIDEO_PORT_CRTC_COLOUR;
-      bda[VIDEO_BDA_CRTC_PORT] = (BYTE)crtc; bda[VIDEO_BDA_CRTC_PORT_HIGH] = (BYTE)(crtc >> VIDEO_BYTE_SHIFT); }
+      bda[VIDEO_BDA_CRTC_PORT] = (BYTE)crtc; bda[VIDEO_BDA_CRTC_PORT_HIGH] = (BYTE)(crtc >> BYTE_SHIFT); }
     bda[VIDEO_BDA_ROWS] = (BYTE)(state->Rows ? state->Rows - 1 : VIDEO_TEXT_DEFAULT_ROWS - 1);
     bda[VIDEO_BDA_CHARACTER_HEIGHT] = state->CellHeight; bda[VIDEO_BDA_CHARACTER_HEIGHT_HIGH] = 0;
     /* 256K, EGA/VGA active, cursor emulation on; bit 7 = the last mode set (AH=00h AL
@@ -1415,8 +1410,8 @@ static VOID VideoGraphicsGlyph(PVIDEO_STATE state, INT page, INT column, INT row
                 for (bit = 0; bit < VIDEO_GLYPH_WIDTH; ++bit)              /* 8 pixels -> 16 bits, MSB first */
                     if (bits & (VIDEO_GLYPH_LEFT_BIT >> bit)) value |= (WORD)((colour & VIDEO_CGA_PIXEL_MASK) << (VIDEO_CGA_TOP_SHIFT - VIDEO_CGA_BITS_PER_PIXEL * bit));
                 offset += (UINT32)column * VIDEO_CGA_GLYPH_BYTES;
-                if (isXor) { memory[offset] ^= (BYTE)(value >> VIDEO_BYTE_SHIFT); memory[offset + 1] ^= (BYTE)value; }
-                else   { memory[offset]  = (BYTE)(value >> VIDEO_BYTE_SHIFT); memory[offset + 1]  = (BYTE)value; }
+                if (isXor) { memory[offset] ^= (BYTE)(value >> BYTE_SHIFT); memory[offset + 1] ^= (BYTE)value; }
+                else   { memory[offset]  = (BYTE)(value >> BYTE_SHIFT); memory[offset + 1]  = (BYTE)value; }
             }
         }
     }
@@ -1449,7 +1444,7 @@ static BYTE VideoGraphicsReadChar(PVIDEO_STATE state, INT page, INT column, INT 
             const BYTE *memory = state->VideoMemory + VIDEO_TEXT_OFFSET + ((line & 1) ? VIDEO_CGA_ODD_BANK : 0u) + (UINT32)(line >> 1) * VIDEO_CGA_BYTES_PER_LINE;
             if (state->CgaBpp == 1) bits = memory[column];
             else {
-                WORD value = (WORD)((memory[column * VIDEO_CGA_GLYPH_BYTES] << VIDEO_BYTE_SHIFT) | memory[column * VIDEO_CGA_GLYPH_BYTES + 1]);
+                WORD value = (WORD)((memory[column * VIDEO_CGA_GLYPH_BYTES] << BYTE_SHIFT) | memory[column * VIDEO_CGA_GLYPH_BYTES + 1]);
                 for (glyphX = 0; glyphX < VIDEO_GLYPH_WIDTH; ++glyphX) if ((value >> (VIDEO_CGA_TOP_SHIFT - VIDEO_CGA_BITS_PER_PIXEL * glyphX)) & VIDEO_CGA_PIXEL_MASK) bits |= (BYTE)(VIDEO_GLYPH_LEFT_BIT >> glyphX);
             }
         } else return 0;
@@ -1718,8 +1713,8 @@ static INT VideoVesaFind(WORD modeNumber, WORD *width, WORD *height, BYTE *bitsP
         }
     return 0;
 }
-static VOID VideoWrite16(BYTE *bytes, WORD value) { bytes[0] = (BYTE)value; bytes[1] = (BYTE)(value >> VIDEO_BYTE_SHIFT); }
-static VOID VideoWrite32(BYTE *bytes, UINT32 value) { bytes[0]=(BYTE)value; bytes[1]=(BYTE)(value >> VIDEO_BYTE_SHIFT); bytes[2]=(BYTE)(value >> VIDEO_WORD_SHIFT); bytes[3]=(BYTE)(value >> VIDEO_HIGH_BYTE_SHIFT); }
+static VOID VideoWrite16(BYTE *bytes, WORD value) { bytes[0] = (BYTE)value; bytes[1] = (BYTE)(value >> BYTE_SHIFT); }
+static VOID VideoWrite32(BYTE *bytes, UINT32 value) { bytes[0]=(BYTE)value; bytes[1]=(BYTE)(value >> BYTE_SHIFT); bytes[2]=(BYTE)(value >> WORD_SHIFT); bytes[3]=(BYTE)(value >> TOP_BYTE_SHIFT); }
 
 /* sync the live A0000 window into VesaVram[current bank]. */
 static VOID VideoVesaSync(PVIDEO_STATE state)
@@ -1793,7 +1788,7 @@ static VOID VideoVbePortOut(PVOID context, WORD port, BYTE width, UINT32 value)
         state->VbeStartLow = data;
         break;
     case VIDEO_VBE_INDEX_START_HIGH: {
-        UINT32 origin = (((UINT32)data << VIDEO_WORD_SHIFT) | state->VbeStartLow) * VIDEO_VBE_START_UNIT;
+        UINT32 origin = (((UINT32)data << WORD_SHIFT) | state->VbeStartLow) * VIDEO_VBE_START_UNIT;
         UINT32 bytesPerPixel = VideoVesaBytesPerPixel(state->VesaBpp);
         if (!state->IsVesa || !state->VesaStride || !VideoVesaOriginFits(state, origin)) { state->VbePmRejected++; break; }
         VideoLatch(state, 0);                     /* boundaries already passed keep the old start */
@@ -1819,7 +1814,7 @@ static VOID VideoVbePortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     case VIDEO_VBE_INDEX_BANK: registers = state->VesaBank; break;
     case VIDEO_VBE_INDEX_VIRTUAL_WIDTH: registers = (state->IsVesa && state->VesaBpp) ? state->VesaStride / VideoVesaBytesPerPixel(state->VesaBpp) : 0; break;
     case VIDEO_VBE_INDEX_START_LOW: registers = (state->VesaOrigin / VIDEO_VBE_START_UNIT) & WORD_MASK_U; break;
-    case VIDEO_VBE_INDEX_START_HIGH: registers = (state->VesaOrigin / VIDEO_VBE_START_UNIT) >> VIDEO_WORD_SHIFT; break;
+    case VIDEO_VBE_INDEX_START_HIGH: registers = (state->VesaOrigin / VIDEO_VBE_START_UNIT) >> WORD_SHIFT; break;
     default:   registers = 0; break;                  /* 00h (ID) and the rest: 0 */
     }
     *value = registers;
@@ -1858,11 +1853,11 @@ static VOID VideoVesaToArgb(PVIDEO_STATE state)
         for (column = 0; column < width; ++column) {
             UINT32 red, green, blue;
             if (state->VesaBpp == VIDEO_BPP_15) {
-                UINT32 value = (UINT32)source[column*VIDEO_BYTES_16BPP] | ((UINT32)source[column*VIDEO_BYTES_16BPP+1] << VIDEO_BYTE_SHIFT);
+                UINT32 value = (UINT32)source[column*VIDEO_BYTES_16BPP] | ((UINT32)source[column*VIDEO_BYTES_16BPP+1] << BYTE_SHIFT);
                 red = (value >> VIDEO_RGB555_RED_SHIFT) & VIDEO_RGB_5BIT_MASK; green = (value >> VIDEO_RGB5_GREEN_SHIFT) & VIDEO_RGB_5BIT_MASK; blue = value & VIDEO_RGB_5BIT_MASK;
                 red = (red << VIDEO_EXPAND5_SHIFT) | (red >> VIDEO_EXPAND5_REFILL); green = (green << VIDEO_EXPAND5_SHIFT) | (green >> VIDEO_EXPAND5_REFILL); blue = (blue << VIDEO_EXPAND5_SHIFT) | (blue >> VIDEO_EXPAND5_REFILL);
             } else if (state->VesaBpp == VIDEO_BPP_16) {
-                UINT32 value = (UINT32)source[column*VIDEO_BYTES_16BPP] | ((UINT32)source[column*VIDEO_BYTES_16BPP+1] << VIDEO_BYTE_SHIFT);
+                UINT32 value = (UINT32)source[column*VIDEO_BYTES_16BPP] | ((UINT32)source[column*VIDEO_BYTES_16BPP+1] << BYTE_SHIFT);
                 red = (value >> VIDEO_RGB565_RED_SHIFT) & VIDEO_RGB_5BIT_MASK; green = (value >> VIDEO_RGB5_GREEN_SHIFT) & VIDEO_RGB_6BIT_MASK; blue = value & VIDEO_RGB_5BIT_MASK;
                 red = (red << VIDEO_EXPAND5_SHIFT) | (red >> VIDEO_EXPAND5_REFILL); green = (green << VIDEO_EXPAND6_SHIFT) | (green >> VIDEO_EXPAND6_REFILL); blue = (blue << VIDEO_EXPAND5_SHIFT) | (blue >> VIDEO_EXPAND5_REFILL);
             } else {                                   /* 24bpp, B G R in memory */
@@ -1944,12 +1939,12 @@ static INT VideoStateLoad(PVIDEO_STATE state, const BYTE *buffer)
     if (buffer[0] != 'N' || buffer[1] != 'T' || buffer[2] != 'V' || buffer[3] != 'S') return 0;
     for (index = 0; index < sizeof modeRegisters; ++index) ((BYTE *)&modeRegisters)[index] = 0;
     if (buffer[VIDEO_SAVE_IS_VESA]) {                                   /* back into the VESA mode, no clear */
-        WORD bx = (WORD)(VIDEO_VBE_MODE_NO_CLEAR | (buffer[VIDEO_SAVE_IS_LFB] ? VIDEO_VBE_MODE_LFB : 0u) | (buffer[VIDEO_SAVE_VESA_MODE] | (buffer[VIDEO_SAVE_VESA_MODE + 1] << VIDEO_BYTE_SHIFT)));
+        WORD bx = (WORD)(VIDEO_VBE_MODE_NO_CLEAR | (buffer[VIDEO_SAVE_IS_LFB] ? VIDEO_VBE_MODE_LFB : 0u) | (buffer[VIDEO_SAVE_VESA_MODE] | (buffer[VIDEO_SAVE_VESA_MODE + 1] << BYTE_SHIFT)));
         VddSetAh(&modeRegisters, VIDEO_FUNCTION_VESA); VddSetAl(&modeRegisters, VIDEO_VBE_SET_MODE); VddSetBx(&modeRegisters, bx); VideoVesa(state, &modeRegisters);
-        state->VesaDacWidth = buffer[VIDEO_SAVE_DAC_WIDTH]; state->VesaBank = (WORD)(buffer[VIDEO_SAVE_BANK] | (buffer[VIDEO_SAVE_BANK + 1] << VIDEO_BYTE_SHIFT));
-        state->VesaStride   = (UINT32)buffer[VIDEO_SAVE_STRIDE] | ((UINT32)buffer[VIDEO_SAVE_STRIDE + 1] << VIDEO_BYTE_SHIFT) | ((UINT32)buffer[VIDEO_SAVE_STRIDE + 2] << VIDEO_WORD_SHIFT) | ((UINT32)buffer[VIDEO_SAVE_STRIDE + 3] << VIDEO_HIGH_BYTE_SHIFT);
-        state->VesaStartX  = (WORD)(buffer[VIDEO_SAVE_START_X] | (buffer[VIDEO_SAVE_START_X + 1] << VIDEO_BYTE_SHIFT));
-        state->VesaStartY  = (WORD)(buffer[VIDEO_SAVE_START_Y] | (buffer[VIDEO_SAVE_START_Y + 1] << VIDEO_BYTE_SHIFT));
+        state->VesaDacWidth = buffer[VIDEO_SAVE_DAC_WIDTH]; state->VesaBank = (WORD)(buffer[VIDEO_SAVE_BANK] | (buffer[VIDEO_SAVE_BANK + 1] << BYTE_SHIFT));
+        state->VesaStride   = (UINT32)buffer[VIDEO_SAVE_STRIDE] | ((UINT32)buffer[VIDEO_SAVE_STRIDE + 1] << BYTE_SHIFT) | ((UINT32)buffer[VIDEO_SAVE_STRIDE + 2] << WORD_SHIFT) | ((UINT32)buffer[VIDEO_SAVE_STRIDE + 3] << TOP_BYTE_SHIFT);
+        state->VesaStartX  = (WORD)(buffer[VIDEO_SAVE_START_X] | (buffer[VIDEO_SAVE_START_X + 1] << BYTE_SHIFT));
+        state->VesaStartY  = (WORD)(buffer[VIDEO_SAVE_START_Y] | (buffer[VIDEO_SAVE_START_Y + 1] << BYTE_SHIFT));
         state->VesaOrigin = state->VesaOriginVs = state->VesaOriginLive =   /* shown at once (#226) */
             VideoVesaOriginFits(state, VideoVesaXyOrigin(state, state->VesaStartX, state->VesaStartY))
                 ? VideoVesaXyOrigin(state, state->VesaStartX, state->VesaStartY) : 0u;
@@ -1961,8 +1956,8 @@ static INT VideoStateLoad(PVIDEO_STATE state, const BYTE *buffer)
                    | ((UINT32)buffer[VIDEO_SAVE_DAC + index*VIDEO_RGB_BYTES + 1] << VIDEO_GREEN_SHIFT) | (UINT32)buffer[VIDEO_SAVE_DAC + index*VIDEO_RGB_BYTES + VIDEO_RGB_BLUE];
     for (index = 0; index < VIDEO_PALETTE_REGISTERS_AND_BORDER; ++index) state->PaletteRegisters[index] = buffer[VIDEO_SAVE_PALETTE + index];
     state->AttributeMode = buffer[VIDEO_SAVE_ATTRIBUTE_MODE]; state->AttributeColorSelect = buffer[VIDEO_SAVE_COLOR_SELECT]; state->Overscan = buffer[VIDEO_SAVE_OVERSCAN];
-    state->CursorRow = buffer[VIDEO_SAVE_CURSOR_ROW]; state->CursorColumn = buffer[VIDEO_SAVE_CURSOR_COLUMN]; state->CursorShape = (WORD)(buffer[VIDEO_SAVE_CURSOR_SHAPE] | (buffer[VIDEO_SAVE_CURSOR_SHAPE + 1] << VIDEO_BYTE_SHIFT));
-    state->Page = buffer[VIDEO_SAVE_PAGE]; state->CrtcStart = (WORD)(buffer[VIDEO_SAVE_CRTC_START] | (buffer[VIDEO_SAVE_CRTC_START + 1] << VIDEO_BYTE_SHIFT)); state->CrtcOffset = buffer[VIDEO_SAVE_CRTC_OFFSET];
+    state->CursorRow = buffer[VIDEO_SAVE_CURSOR_ROW]; state->CursorColumn = buffer[VIDEO_SAVE_CURSOR_COLUMN]; state->CursorShape = (WORD)(buffer[VIDEO_SAVE_CURSOR_SHAPE] | (buffer[VIDEO_SAVE_CURSOR_SHAPE + 1] << BYTE_SHIFT));
+    state->Page = buffer[VIDEO_SAVE_PAGE]; state->CrtcStart = (WORD)(buffer[VIDEO_SAVE_CRTC_START] | (buffer[VIDEO_SAVE_CRTC_START + 1] << BYTE_SHIFT)); state->CrtcOffset = buffer[VIDEO_SAVE_CRTC_OFFSET];
     VideoPaletteRefresh(state); state->IsDirty = 1;
     return 1;
 }
@@ -1994,13 +1989,13 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
         for (index = 0; index < (isVbe2 ? VIDEO_VBE_INFO_BYTES_V2 : VIDEO_VBE_INFO_BYTES); ++index) buffer[index] = 0;
         buffer[0]='V'; buffer[1]='E'; buffer[2]='S'; buffer[3]='A';
         VideoWrite16(buffer + VIDEO_VBE_INFO_VERSION, VIDEO_VBE_VERSION_2);                      /* VBE 2.0                      */
-        VideoWrite32(buffer + VIDEO_VBE_INFO_OEM_STRING, ((UINT32)registers->Es << VIDEO_WORD_SHIFT) | (((WORD)registers->Edi + OEM) & WORD_MASK_U));    /* OEM string */
+        VideoWrite32(buffer + VIDEO_VBE_INFO_OEM_STRING, ((UINT32)registers->Es << WORD_SHIFT) | (((WORD)registers->Edi + OEM) & WORD_MASK_U));    /* OEM string */
         /* Capabilities D0 = "DAC width is switchable to 8 bits per primary" (§4.3).
            We answer 4F08 BH=8 with 8 -- and advertised 0 here, so a guest that
            follows the spec's own advice ("query capabilities before 4F08") never
            asked. Found by p_vesa against QEMU's VBE (s74b), the first oracle row. */
         VideoWrite32(buffer + VIDEO_VBE_INFO_CAPABILITIES, VIDEO_VBE_CAPABILITY_DAC_SWITCHABLE);                          /* capabilities: D0 DAC switchable */
-        VideoWrite32(buffer + VIDEO_VBE_INFO_MODE_LIST, ((UINT32)registers->Es << VIDEO_WORD_SHIFT) | (((WORD)registers->Edi + MODES) & WORD_MASK_U));  /* mode list  */
+        VideoWrite32(buffer + VIDEO_VBE_INFO_MODE_LIST, ((UINT32)registers->Es << WORD_SHIFT) | (((WORD)registers->Edi + MODES) & WORD_MASK_U));  /* mode list  */
         VideoWrite16(buffer + VIDEO_VBE_INFO_TOTAL_MEMORY, VIDEO_VESA_VRAM / VIDEO_VBE_MEMORY_UNIT);    /* total memory in 64KB units   */
         { const char *oemString = "NTVDMEX VESA"; for (index = 0; oemString[index]; ++index) buffer[OEM + index] = (BYTE)oemString[index]; buffer[OEM+index]=0; }
         if (isVbe2) {                               /* VBE 2.0 fields, only for a 2.0 caller */
@@ -2019,7 +2014,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
             UINT stringOffset = VIDEO_VBE_INFO_OEM_DATA, byteIndex;
             VideoWrite16(buffer + VIDEO_VBE_INFO_OEM_SOFTWARE_REVISION, VIDEO_VBE_OEM_REVISION_1_00);                 /* OEM software rev 1.00        */
             for (byteIndex = 0; byteIndex < VIDEO_VBE_OEM_STRINGS; ++byteIndex) {
-                VideoWrite32(buffer + pointerOffsets[byteIndex], ((UINT32)registers->Es << VIDEO_WORD_SHIFT) | (((WORD)registers->Edi + stringOffset) & WORD_MASK_U));
+                VideoWrite32(buffer + pointerOffsets[byteIndex], ((UINT32)registers->Es << WORD_SHIFT) | (((WORD)registers->Edi + stringOffset) & WORD_MASK_U));
                 for (index = 0; strings[byteIndex][index]; ++index) buffer[stringOffset++] = (BYTE)strings[byteIndex][index];
                 buffer[stringOffset++] = 0;
             }
@@ -2079,7 +2074,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
                  It was NULL ("use 4F05h"), legal, but a VBE 1.x program that far-calls it
                  without checking ran 0000:0000. Re-planted on every 4F01h, like 4F0Ah's. */
             VideoVbePmInstall(state);
-            VideoWrite32(buffer + VIDEO_MODE_INFO_WINDOW_FUNCTION, ((UINT32)VDD_VBEPM_SEG << VIDEO_WORD_SHIFT) | VDD_VBERM_OFF);
+            VideoWrite32(buffer + VIDEO_MODE_INFO_WINDOW_FUNCTION, ((UINT32)VDD_VBEPM_SEG << WORD_SHIFT) | VDD_VBERM_OFF);
             VideoWrite16(buffer + VIDEO_MODE_INFO_BYTES_PER_LINE, (WORD)pitch);        /* bytes per scan line           */
             VideoWrite16(buffer + VIDEO_MODE_INFO_X_RESOLUTION, width); VideoWrite16(buffer + VIDEO_MODE_INFO_Y_RESOLUTION, height);     /* X / Y resolution              */
             /* char cell: the BIOS font the mode's line count implies -- 8x8 at 200
@@ -2434,11 +2429,11 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
         BYTE bl8 = (BYTE)(VddGetBx(registers) & BYTE_MASK);
         if (state->IsVesa && state->VesaBpp > VIDEO_BPP_INDEXED) { VddSetAx(registers, VIDEO_VBE_INVALID_IN_MODE); break; }
         if (bl8 == VIDEO_DAC_SET) {
-            BYTE dacWidth = (BYTE)((VddGetBx(registers) >> VIDEO_BYTE_SHIFT) & BYTE_MASK);
+            BYTE dacWidth = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & BYTE_MASK);
             state->VesaDacWidth = (BYTE)(dacWidth >= VIDEO_DAC_WIDTH_8 ? VIDEO_DAC_WIDTH_8 : VIDEO_DAC_WIDTH_6);
         } else if (bl8 != VIDEO_DAC_GET) { VddSetAx(registers, VIDEO_VBE_FAILED); break; }
         if (!state->VesaDacWidth) state->VesaDacWidth = VIDEO_DAC_WIDTH_6;
-        VddSetBx(registers, (WORD)((VddGetBx(registers) & BYTE_MASK) | ((WORD)state->VesaDacWidth << VIDEO_BYTE_SHIFT)));
+        VddSetBx(registers, (WORD)((VddGetBx(registers) & BYTE_MASK) | ((WORD)state->VesaDacWidth << BYTE_SHIFT)));
         VddSetAx(registers, VIDEO_VBE_OK);
         break; }
     case VIDEO_VBE_PALETTE: {                                  /* get/set palette data          */
@@ -2496,10 +2491,10 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
            DOSBox answer), not from a VESA PDF in docs/ref -- there is no oracle for
            it. We claim all four states and remember the one set; nothing blanks,
            which is what a monitor with no power management would show too. */
-        BYTE bl = (BYTE)(VddGetBx(registers) & BYTE_MASK), bh = (BYTE)((VddGetBx(registers) >> VIDEO_BYTE_SHIFT) & BYTE_MASK);
-        if (bl == VIDEO_POWER_REPORT)      VddSetBx(registers, (WORD)((VIDEO_POWER_STATES << VIDEO_BYTE_SHIFT) | VIDEO_POWER_VERSION));
+        BYTE bl = (BYTE)(VddGetBx(registers) & BYTE_MASK), bh = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & BYTE_MASK);
+        if (bl == VIDEO_POWER_REPORT)      VddSetBx(registers, (WORD)((VIDEO_POWER_STATES << BYTE_SHIFT) | VIDEO_POWER_VERSION));
         else if (bl == VIDEO_POWER_SET) { if (bh & ~VIDEO_POWER_STATES) { VddSetAx(registers, VIDEO_VBE_NOT_SUPPORTED); break; } state->VesaPmState = bh; }
-        else if (bl == VIDEO_POWER_GET) VddSetBx(registers, (WORD)(((WORD)state->VesaPmState << VIDEO_BYTE_SHIFT) | bl));
+        else if (bl == VIDEO_POWER_GET) VddSetBx(registers, (WORD)(((WORD)state->VesaPmState << BYTE_SHIFT) | bl));
         else { VddSetAx(registers, VIDEO_VBE_FAILED); break; }
         VddSetAx(registers, VIDEO_VBE_OK);
         break; }
@@ -2565,7 +2560,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
              by the spec audit, not by a guest; there is no oracle for VESA yet.
            Window B is advertised as absent (WinBAttributes=0) so BL=01 fails; in an LFB
            mode the spec requires AH=03. */
-        BYTE bh = (BYTE)((VddGetBx(registers) >> VIDEO_BYTE_SHIFT) & BYTE_MASK), bl = (BYTE)(VddGetBx(registers) & BYTE_MASK);
+        BYTE bh = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & BYTE_MASK), bl = (BYTE)(VddGetBx(registers) & BYTE_MASK);
         if (!state->IsVesa || state->IsVesaLfb) { VddSetAx(registers, VIDEO_VBE_INVALID_IN_MODE); break; }
         if (bl != VIDEO_WINDOW_A) { VddSetAx(registers, VIDEO_VBE_FAILED); break; }
         if (bh == VIDEO_WINDOW_SET) {                         /* set window A                  */
@@ -2753,18 +2748,18 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
          active page's is CursorRow/CursorColumn, the rest PageRow/PageColumn (0040:0050). BH was
          ignored, so positioning page 1's cursor moved the one on screen. */
     case VIDEO_FUNCTION_SET_CURSOR: {
-        BYTE page = (BYTE)((VddGetBx(registers) >> VIDEO_BYTE_SHIFT) & VIDEO_PAGE_MASK);
-        if (page == (state->Page & VIDEO_PAGE_MASK)) { state->CursorRow = (BYTE)(VddGetDx(registers) >> VIDEO_BYTE_SHIFT); state->CursorColumn = (BYTE)(VddGetDx(registers) & BYTE_MASK); }
-        else { state->PageRow[page] = (BYTE)(VddGetDx(registers) >> VIDEO_BYTE_SHIFT); state->PageColumn[page] = (BYTE)(VddGetDx(registers) & BYTE_MASK); }
+        BYTE page = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & VIDEO_PAGE_MASK);
+        if (page == (state->Page & VIDEO_PAGE_MASK)) { state->CursorRow = (BYTE)(VddGetDx(registers) >> BYTE_SHIFT); state->CursorColumn = (BYTE)(VddGetDx(registers) & BYTE_MASK); }
+        else { state->PageRow[page] = (BYTE)(VddGetDx(registers) >> BYTE_SHIFT); state->PageColumn[page] = (BYTE)(VddGetDx(registers) & BYTE_MASK); }
         break; }
     case VIDEO_FUNCTION_GET_CURSOR: {
         /* THERE IS NO TEXT CURSOR IN A GRAPHICS MODE, and the BIOS says so: CX comes
            back 0000 in 06h/12h/13h, where we were still handing out the text
            underline shape 0607. Measured, p_video.asm VideoInt10.03.<mode>. The stored
            shape is left alone so returning to a text mode restores it. */
-        BYTE page = (BYTE)((VddGetBx(registers) >> VIDEO_BYTE_SHIFT) & VIDEO_PAGE_MASK);
+        BYTE page = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & VIDEO_PAGE_MASK);
         INT isActive = (page == (state->Page & VIDEO_PAGE_MASK));
-        VddSetDx(registers, (WORD)(((isActive ? state->CursorRow : state->PageRow[page]) << VIDEO_BYTE_SHIFT) | (isActive ? state->CursorColumn : state->PageColumn[page])));
+        VddSetDx(registers, (WORD)(((isActive ? state->CursorRow : state->PageRow[page]) << BYTE_SHIFT) | (isActive ? state->CursorColumn : state->PageColumn[page])));
         VddSetCx(registers, (WORD)(state->ModeKind == VIDEO_KIND_TEXT ? state->CursorShape : 0));
         break; }
     /* ── 05h: SELECT THE ACTIVE PAGE, AND SHOW IT (#252). It stored the number and the
@@ -2790,18 +2785,18 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         }
         break; }
     case VIDEO_FUNCTION_SCROLL_UP:
-        VideoScrollUp(state, al, (BYTE)(VddGetCx(registers) >> VIDEO_BYTE_SHIFT), (BYTE)(VddGetCx(registers) & BYTE_MASK),
-                  (BYTE)(VddGetDx(registers) >> VIDEO_BYTE_SHIFT), (BYTE)(VddGetDx(registers) & BYTE_MASK), (BYTE)(VddGetBx(registers) >> VIDEO_BYTE_SHIFT));
+        VideoScrollUp(state, al, (BYTE)(VddGetCx(registers) >> BYTE_SHIFT), (BYTE)(VddGetCx(registers) & BYTE_MASK),
+                  (BYTE)(VddGetDx(registers) >> BYTE_SHIFT), (BYTE)(VddGetDx(registers) & BYTE_MASK), (BYTE)(VddGetBx(registers) >> BYTE_SHIFT));
         break;
     /* ── 08h: READ THE CHARACTER AT PAGE BH's CURSOR -- from the cell in text, from
          the PIXELS in a graphics mode (VideoGraphicsReadChar), AH = 0 there. */
     case VIDEO_FUNCTION_READ_CHARACTER: {
-        BYTE page = (BYTE)((VddGetBx(registers) >> VIDEO_BYTE_SHIFT) & VIDEO_PAGE_MASK);
+        BYTE page = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & VIDEO_PAGE_MASK);
         INT isActive = (page == (state->Page & VIDEO_PAGE_MASK));
         INT row = isActive ? state->CursorRow : state->PageRow[page], column = isActive ? state->CursorColumn : state->PageColumn[page];
         if (state->ModeKind == VIDEO_KIND_TEXT) {
             BYTE *cellPointer = VideoPageCell(state, page, row, column);
-            VddSetAx(registers, (WORD)((cellPointer[1] << VIDEO_BYTE_SHIFT) | cellPointer[0]));
+            VddSetAx(registers, (WORD)((cellPointer[1] << BYTE_SHIFT) | cellPointer[0]));
         } else VddSetAx(registers, VideoGraphicsReadChar(state, page, column, row));
         break; }
     /* ── 09h/0Ah: CX copies at page BH's cursor, cursor not moved. Text: the (char,
@@ -2810,7 +2805,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
     case VIDEO_FUNCTION_WRITE_CHARACTER_ATTRIBUTE:
     case VIDEO_FUNCTION_WRITE_CHARACTER: {
         WORD count = VddGetCx(registers); BYTE attribute = (BYTE)(VddGetBx(registers) & BYTE_MASK);
-        BYTE page = (BYTE)((VddGetBx(registers) >> VIDEO_BYTE_SHIFT) & VIDEO_PAGE_MASK);
+        BYTE page = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & VIDEO_PAGE_MASK);
         INT isActive = (page == (state->Page & VIDEO_PAGE_MASK));
         INT columnIndex = isActive ? state->CursorColumn : state->PageColumn[page], row = isActive ? state->CursorRow : state->PageRow[page];
         if (!count) count = 1;
@@ -2833,7 +2828,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
             if (pixelColumn < state->GraphicsWidth && line < state->GraphicsHeight && line * state->GraphicsWidth + pixelColumn < VIDEO_APERTURE_SIZE) state->VideoMemory[line * state->GraphicsWidth + pixelColumn] = al;
         } else if (state->ModeKind == VIDEO_KIND_PLANAR) {
             if (pixelColumn < state->GraphicsWidth && line < state->GraphicsHeight) {
-                UINT32 byteOffset = (UINT32)((VddGetBx(registers) >> VIDEO_BYTE_SHIFT) & VIDEO_PAGE_MASK) * VideoPageSize(state) + line * (state->GraphicsWidth / VIDEO_PIXELS_PER_PLANE_BYTE) + (pixelColumn >> VIDEO_PLANE_BYTE_SHIFT);
+                UINT32 byteOffset = (UINT32)((VddGetBx(registers) >> BYTE_SHIFT) & VIDEO_PAGE_MASK) * VideoPageSize(state) + line * (state->GraphicsWidth / VIDEO_PIXELS_PER_PLANE_BYTE) + (pixelColumn >> VIDEO_PLANE_BYTE_SHIFT);
                 BYTE  bitMask = (BYTE)(VIDEO_PIXEL_LEFT_BIT >> (pixelColumn & VIDEO_PIXEL_IN_BYTE_MASK)), planeIndex;
                 if (byteOffset < VIDEO_PLANE_SIZE)
                     for (planeIndex = 0; planeIndex < VIDEO_PLANES; ++planeIndex) {
@@ -2868,8 +2863,8 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         /* BH is the active page; BL IS NOT DEFINED BY THIS CALL and the real BIOS
            leaves it alone -- we were zeroing the whole of BX and taking the caller's
            BL with it. Measured: the oracle returns the probe's poison in BL. */
-        VddSetAx(registers, (WORD)((state->Columns << VIDEO_BYTE_SHIFT) | state->Mode));
-        VddSetBx(registers, (WORD)((state->Page << VIDEO_BYTE_SHIFT) | (VddGetBx(registers) & BYTE_MASK)));
+        VddSetAx(registers, (WORD)((state->Columns << BYTE_SHIFT) | state->Mode));
+        VddSetBx(registers, (WORD)((state->Page << BYTE_SHIFT) | (VddGetBx(registers) & BYTE_MASK)));
         break;
     case VIDEO_FUNCTION_PALETTE:                                        /* palette / DAC            */
         /* ⚠ THE DAC CALLS BELOW GO THROUGH VideoDacPackWidth / VideoDacFrom8, i.e. AT THE DAC
@@ -2879,8 +2874,8 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         if (al == VIDEO_DAC_SET_REGISTER) {                             /* set one DAC register     */
             WORD paletteIndex = VddGetBx(registers);
             state->DacBlock[((paletteIndex & BYTE_MASK) >> VIDEO_DAC_BLOCK_SHIFT) & VIDEO_DAC_BLOCK_MASK]++;
-            state->Dac[paletteIndex & BYTE_MASK] = VideoDacPackWidth(state, (BYTE)(VddGetDx(registers) >> VIDEO_BYTE_SHIFT),
-                                             (BYTE)(VddGetCx(registers) >> VIDEO_BYTE_SHIFT), (BYTE)VddGetCx(registers));
+            state->Dac[paletteIndex & BYTE_MASK] = VideoDacPackWidth(state, (BYTE)(VddGetDx(registers) >> BYTE_SHIFT),
+                                             (BYTE)(VddGetCx(registers) >> BYTE_SHIFT), (BYTE)VddGetCx(registers));
             if (state->IsGreySum) VideoDacGrey(state, paletteIndex & BYTE_MASK, 1);   /* 12h BL=33h (#252) */
             VideoPaletteRefresh(state);
         } else if (al == VIDEO_DAC_SET_BLOCK) {                      /* set block of DAC regs    */
@@ -2894,11 +2889,11 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
             if (state->IsGreySum) VideoDacGrey(state, first, count);   /* 12h BL=33h (#252) */
             VideoPaletteRefresh(state);
         } else if (al == VIDEO_AC_SET_REGISTER) {                      /* set one palette register */
-            BYTE registerIndex = (BYTE)((VddGetBx(registers) >> VIDEO_BYTE_SHIFT) & BYTE_MASK);
+            BYTE registerIndex = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & BYTE_MASK);
             if (registerIndex < VIDEO_PALETTE_REGISTERS_AND_BORDER) { state->PaletteRegisters[registerIndex] = (BYTE)(VddGetBx(registers) & VIDEO_AR_PALETTE_MASK); state->AcBiosWrites++; }
             VideoPaletteRefresh(state);   /* AH=10h stored vpal and rendered from ega16: inert until now */
         } else if (al == VIDEO_AC_SET_BORDER) {                      /* set the border           */
-            state->PaletteRegisters[VIDEO_OVERSCAN_REGISTER] = state->Overscan = (BYTE)((VddGetBx(registers) >> VIDEO_BYTE_SHIFT) & VIDEO_AR_PALETTE_MASK);
+            state->PaletteRegisters[VIDEO_OVERSCAN_REGISTER] = state->Overscan = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & VIDEO_AR_PALETTE_MASK);
         } else if (al == VIDEO_AC_SET_ALL) {                      /* set all 16 + border      */
             BYTE *table = (BYTE *)VddMapFlat(state->Bus, registers->Es, (WORD)VddGetDx(registers));
             INT index; for (index = 0; index < VIDEO_PALETTE_REGISTERS_AND_BORDER; ++index) state->PaletteRegisters[index] = (BYTE)(table[index] & VIDEO_AR_PALETTE_MASK);
@@ -2913,19 +2908,19 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
             state->IsBlink = (BYTE)(VddGetBx(registers) & 1);
             state->AttributeMode = (BYTE)((state->AttributeMode & ~VIDEO_AR_MODE_BLINK) | (state->IsBlink ? VIDEO_AR_MODE_BLINK : 0u));
         } else if (al == VIDEO_AC_GET_REGISTER) {                      /* get one palette register */
-            BYTE registerIndex = (BYTE)((VddGetBx(registers) >> VIDEO_BYTE_SHIFT) & BYTE_MASK);
+            BYTE registerIndex = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & BYTE_MASK);
             VddSetBx(registers, (WORD)((VddGetBx(registers) & HIGH_BYTE_MASK) | (registerIndex < VIDEO_PALETTE_REGISTERS_AND_BORDER ? state->PaletteRegisters[registerIndex] : 0)));
         } else if (al == VIDEO_AC_GET_BORDER) {                      /* get the border           */
-            VddSetBx(registers, (WORD)((VddGetBx(registers) & BYTE_MASK) | ((WORD)state->PaletteRegisters[VIDEO_OVERSCAN_REGISTER] << VIDEO_BYTE_SHIFT)));
+            VddSetBx(registers, (WORD)((VddGetBx(registers) & BYTE_MASK) | ((WORD)state->PaletteRegisters[VIDEO_OVERSCAN_REGISTER] << BYTE_SHIFT)));
         } else if (al == VIDEO_AC_GET_ALL) {                      /* get all 16 + border      */
             BYTE *table = (BYTE *)VddMapFlat(state->Bus, registers->Es, (WORD)VddGetDx(registers));
             INT index; for (index = 0; index < VIDEO_PALETTE_REGISTERS_AND_BORDER; ++index) table[index] = state->PaletteRegisters[index];
         } else if (al == VIDEO_DAC_SELECT_PAGE) {                      /* select DAC page / mode   */
-            state->DacPage = (BYTE)(VddGetBx(registers) >> VIDEO_BYTE_SHIFT);
+            state->DacPage = (BYTE)(VddGetBx(registers) >> BYTE_SHIFT);
         } else if (al == VIDEO_DAC_GET_REGISTER) {                      /* get one DAC register     */
             UINT32 value = state->Dac[VddGetBx(registers) & BYTE_MASK];
-            VddSetDx(registers, (WORD)((WORD)VideoDacFrom8(state, (BYTE)(value >> VIDEO_RED_SHIFT)) << VIDEO_BYTE_SHIFT));
-            VddSetCx(registers, (WORD)(((WORD)VideoDacFrom8(state, (BYTE)(value >> VIDEO_GREEN_SHIFT)) << VIDEO_BYTE_SHIFT)
+            VddSetDx(registers, (WORD)((WORD)VideoDacFrom8(state, (BYTE)(value >> VIDEO_RED_SHIFT)) << BYTE_SHIFT));
+            VddSetCx(registers, (WORD)(((WORD)VideoDacFrom8(state, (BYTE)(value >> VIDEO_GREEN_SHIFT)) << BYTE_SHIFT)
                               | VideoDacFrom8(state, (BYTE)value)));
         } else if (al == VIDEO_DAC_GET_BLOCK) {                      /* get block of DAC regs    */
             WORD first = VddGetBx(registers), count = VddGetCx(registers), index;
@@ -2937,7 +2932,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                 table[index*VIDEO_RGB_BYTES+VIDEO_RGB_BLUE] = VideoDacFrom8(state, (BYTE)value);
             }
         } else if (al == VIDEO_DAC_GET_PAGE) {                      /* get DAC page state       */
-            VddSetBx(registers, (WORD)((state->DacPage << VIDEO_BYTE_SHIFT) | 0));
+            VddSetBx(registers, (WORD)((state->DacPage << BYTE_SHIFT) | 0));
         } else if (al == VIDEO_DAC_GREY) {                      /* convert to grey scale    */
             VideoDacGrey(state, VddGetBx(registers), VddGetCx(registers));
             VideoPaletteRefresh(state);
@@ -2948,9 +2943,9 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
     case VIDEO_FUNCTION_SCROLL_DOWN: {                                       /* scroll window DOWN      */
         /* 06h scrolled up and 07h fell through to the unimplemented default, so
            any program scrolling downwards silently did nothing. */
-        BYTE count = al, top = (BYTE)(VddGetCx(registers) >> VIDEO_BYTE_SHIFT), left = (BYTE)(VddGetCx(registers) & BYTE_MASK);
-        BYTE bottom = (BYTE)(VddGetDx(registers) >> VIDEO_BYTE_SHIFT), right = (BYTE)(VddGetDx(registers) & BYTE_MASK);
-        BYTE attribute = (BYTE)(VddGetBx(registers) >> VIDEO_BYTE_SHIFT);
+        BYTE count = al, top = (BYTE)(VddGetCx(registers) >> BYTE_SHIFT), left = (BYTE)(VddGetCx(registers) & BYTE_MASK);
+        BYTE bottom = (BYTE)(VddGetDx(registers) >> BYTE_SHIFT), right = (BYTE)(VddGetDx(registers) & BYTE_MASK);
+        BYTE attribute = (BYTE)(VddGetBx(registers) >> BYTE_SHIFT);
         INT row, column, step;
         if (state->ModeKind != VIDEO_KIND_TEXT) {              /* graphics: pixels, BH = fill colour (#252) */
             VideoGraphicsScroll(state, count, top, left, bottom, right, attribute, 0);
@@ -2991,7 +2986,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
            the LGPL/SeaVGABIOS line sets AR00 in text modes too and never AR11); (b) the
            06h foreground (taken from the CGA, the issue's reading); (c) 0066 in text. */
     case VIDEO_FUNCTION_CGA_PALETTE: {
-        BYTE bh = (BYTE)(VddGetBx(registers) >> VIDEO_BYTE_SHIFT), bl = (BYTE)(VddGetBx(registers) & BYTE_MASK);
+        BYTE bh = (BYTE)(VddGetBx(registers) >> BYTE_SHIFT), bl = (BYTE)(VddGetBx(registers) & BYTE_MASK);
         BYTE colourSelect = state->BiosData ? state->BiosData[VIDEO_BDA_CGA_PALETTE] : state->CgaSelect;
         INT isGraphics = (state->ModeKind != VIDEO_KIND_TEXT) && !state->IsVesa;
         INT isCga4 = isGraphics && (state->Mode == VIDEO_MODE_CGA_320 || state->Mode == VIDEO_MODE_CGA_320_GREY);
@@ -3027,7 +3022,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         if (state->ModeKind == VIDEO_KIND_LINEAR8) {
             if (pixelColumn < state->GraphicsWidth && line < state->GraphicsHeight) value = state->VideoMemory[line * state->GraphicsWidth + pixelColumn];
         } else if (state->ModeKind == VIDEO_KIND_PLANAR) {     /* page BH (#252) */
-            UINT32 byteIndex = (UINT32)((VddGetBx(registers) >> VIDEO_BYTE_SHIFT) & VIDEO_PAGE_MASK) * VideoPageSize(state) + line * (state->GraphicsWidth / VIDEO_PIXELS_PER_PLANE_BYTE) + (pixelColumn >> VIDEO_PLANE_BYTE_SHIFT);
+            UINT32 byteIndex = (UINT32)((VddGetBx(registers) >> BYTE_SHIFT) & VIDEO_PAGE_MASK) * VideoPageSize(state) + line * (state->GraphicsWidth / VIDEO_PIXELS_PER_PLANE_BYTE) + (pixelColumn >> VIDEO_PLANE_BYTE_SHIFT);
             BYTE  pixelMask = (BYTE)(VIDEO_PIXEL_LEFT_BIT >> (pixelColumn & VIDEO_PIXEL_IN_BYTE_MASK));
             if (byteIndex < VIDEO_PLANE_SIZE)
                 value = (BYTE)(((VideoPlaneBytes(state,0)[byteIndex] & pixelMask) ? 1 : 0)
@@ -3063,9 +3058,9 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
          happens on the active page only. */
     case VIDEO_FUNCTION_WRITE_STRING: {
         WORD count = VddGetCx(registers), index; BYTE mode = al, attribute = (BYTE)(VddGetBx(registers) & BYTE_MASK);
-        BYTE page = (BYTE)((VddGetBx(registers) >> VIDEO_BYTE_SHIFT) & VIDEO_PAGE_MASK);
+        BYTE page = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & VIDEO_PAGE_MASK);
         INT isActive = (page == (state->Page & VIDEO_PAGE_MASK));
-        INT row = (BYTE)(VddGetDx(registers) >> VIDEO_BYTE_SHIFT), column = (BYTE)(VddGetDx(registers) & BYTE_MASK);
+        INT row = (BYTE)(VddGetDx(registers) >> BYTE_SHIFT), column = (BYTE)(VddGetDx(registers) & BYTE_MASK);
         BYTE *string = (BYTE *)VddMapFlat(state->Bus, registers->Es, (WORD)registers->Ebp);
         if (!string) break;
         for (index = 0; index < count; ++index) {
@@ -3101,7 +3096,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                noise. BH: 0/1 = the INT 1Fh / INT 43h vectors, 2 = 8x14, 3 = 8x8 lower,
                4 = 8x8 upper (chars 128-255), 5 = 9x14 alt, 6 = 8x16, 7 = 9x16 alt. We hold
                two real tables and answer every code from the nearer of the two. */
-            BYTE bh = (BYTE)((VddGetBx(registers) >> VIDEO_BYTE_SHIFT) & BYTE_MASK);
+            BYTE bh = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & BYTE_MASK);
             WORD segment = VDD_FONT8X16_SEG, offset = 0, bytesPerCharacter = VGA_FONT16_HEIGHT;
             switch (bh) {
             case VIDEO_FONT_INFO_ROM_8X8: segment = VDD_FONT8X8_SEG;  offset = 0;       bytesPerCharacter = VGA_FONT8_HEIGHT;  break;
@@ -3171,7 +3166,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
             if ((al & VIDEO_FONT_LOAD_MASK) == VIDEO_FONT_LOAD_USER) {
                 WORD fontSegment = registers->Es, fontOffset = (WORD)(registers->Ebp & WORD_MASK_U);
                 WORD characterCount = (WORD)VddGetCx(registers), first = (WORD)VddGetDx(registers);
-                BYTE  bytesPerCharacter = (BYTE)((VddGetBx(registers) >> VIDEO_BYTE_SHIFT) & BYTE_MASK);
+                BYTE  bytesPerCharacter = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & BYTE_MASK);
                 const BYTE *fontSource = (const BYTE *)VddMapFlat(state->Bus, fontSegment, fontOffset);
                 if (!fontSource || bytesPerCharacter == 0 || bytesPerCharacter > VIDEO_CELL_HEIGHT) {
                     /* Cannot represent it -- a cell is VIDEO_CELL_HEIGHT tall. Say so
@@ -3319,7 +3314,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         for (index = 0; index < VIDEO_STATE_INFO_BYTES; ++index) buffer[index] = 0;
         /* static functionality table kept inside the 64-byte block (reserved tail
            at 0x2E) so we never write past the caller's buffer. */
-        VideoWrite32(buffer + VIDEO_STATE_INFO_STATIC_POINTER, ((UINT32)registers->Es << VIDEO_WORD_SHIFT) | (((WORD)registers->Edi + VIDEO_STATE_INFO_STATIC_TABLE) & WORD_MASK_U));
+        VideoWrite32(buffer + VIDEO_STATE_INFO_STATIC_POINTER, ((UINT32)registers->Es << WORD_SHIFT) | (((WORD)registers->Edi + VIDEO_STATE_INFO_STATIC_TABLE) & WORD_MASK_U));
         buffer[VIDEO_STATE_INFO_MODE] = (BYTE)state->Mode;                      /* current mode            */
         VideoWrite16(buffer + VIDEO_STATE_INFO_COLUMNS, state->Columns);                         /* columns on screen       */
         buffer[VIDEO_STATE_INFO_ROWS] = (BYTE)(state->Rows ? state->Rows : VIDEO_TEXT_DEFAULT_ROWS); /* character rows          */
@@ -3390,7 +3385,7 @@ static VOID VideoDacIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 
 /* --- VGA planar write engine (mode 12h: Sequencer 3C4/5 + GC 3CE/F) ------- */
 static BYTE VideoRotateRight(BYTE value, BYTE count)
-{ count &= VIDEO_ROTATE_MASK; return count ? (BYTE)((value >> count) | (value << (VIDEO_BITS_PER_BYTE - count))) : value; }
+{ count &= VIDEO_ROTATE_MASK; return count ? (BYTE)((value >> count) | (value << (BITS_PER_BYTE - count))) : value; }
 static BYTE VideoAlu(BYTE operation, BYTE value, BYTE latch)
 { switch (operation & VIDEO_GC_ALU_MASK) { case VIDEO_GC_ALU_AND: return (BYTE)(value & latch); case VIDEO_GC_ALU_OR: return (BYTE)(value | latch);
                     case VIDEO_GC_ALU_XOR: return (BYTE)(value ^ latch); default: return value; } }
@@ -3524,7 +3519,7 @@ BYTE VddVideoPlanarRead(PVIDEO_STATE state, UINT32 offset)
          plane is compared, so every pixel matches and the read is 0xFF -- which is the
          hardware's answer, not a failure, and worth not "fixing". */
     {   BYTE registers = 0; INT bit;
-        for (bit = 0; bit < VIDEO_BITS_PER_BYTE; ++bit) {
+        for (bit = 0; bit < BITS_PER_BYTE; ++bit) {
             INT match = 1;
             for (plane = 0; plane < VIDEO_PLANES; ++plane) {
                 if (!((state->ColorDontCare >> plane) & 1)) continue;
@@ -3726,7 +3721,7 @@ static VOID VideoIndexData(BYTE *index, BYTE width, UINT32 value,
                          VOID (*setData)(PVOID, UINT32), PVOID context)
 {
     *index = (BYTE)value;
-    if (width == VIDEO_PORT_WIDTH_WORD) setData(context, (value >> VIDEO_BYTE_SHIFT) & BYTE_MASK);
+    if (width == VIDEO_PORT_WIDTH_WORD) setData(context, (value >> BYTE_SHIFT) & BYTE_MASK);
 }
 
 /* ── ★★★ A MODE SET PROGRAMS THE REGISTER FILE, AS A REAL BIOS DOES. ────────────────
@@ -3782,7 +3777,7 @@ static VOID VideoLoadModeDefinition(PVIDEO_STATE state, BYTE mode)
            the 8-line CGA shape -- which VddCursorLines then RESCALES to lines
            14-15. So this moves the drawn cursor by one scan line, and stops
            AH=03h reporting a shape the card does not hold. */
-        state->CursorShape    = (WORD)(((WORD)definition->Crtc[VIDEO_CR_CURSOR_START] << VIDEO_BYTE_SHIFT) | definition->Crtc[VIDEO_CR_CURSOR_END]);
+        state->CursorShape    = (WORD)(((WORD)definition->Crtc[VIDEO_CR_CURSOR_START] << BYTE_SHIFT) | definition->Crtc[VIDEO_CR_CURSOR_END]);
         state->WriteMode   = (BYTE)(definition->Graphics[VIDEO_GR_MODE] & VIDEO_GC_WRITE_MODE_MASK);
         state->ReadMode    = (BYTE)((definition->Graphics[VIDEO_GR_MODE] >> VIDEO_GR5_READ_MODE_SHIFT) & 1);
         state->ColorDontCare = (BYTE)(definition->Graphics[VIDEO_GR_COLOR_DONT_CARE] & VIDEO_ALL_PLANES);
@@ -3830,7 +3825,7 @@ INT VddVideoParameterEntry(BYTE tableIndex, BYTE entry[VIDEO_PARAMETER_ENTRY_BYT
             entry[VIDEO_PARAMETER_COLUMNS] = g_VideoModes[modeIndex].Columns;
             entry[VIDEO_PARAMETER_ROWS] = (BYTE)(g_VideoModes[modeIndex].Rows - 1);
             entry[VIDEO_PARAMETER_CHARACTER_HEIGHT] = VideoModeCellHeight(mode);
-            entry[VIDEO_PARAMETER_PAGE_SIZE] = (BYTE)pageSize; entry[VIDEO_PARAMETER_PAGE_SIZE + 1] = (BYTE)(pageSize >> VIDEO_BYTE_SHIFT); }
+            entry[VIDEO_PARAMETER_PAGE_SIZE] = (BYTE)pageSize; entry[VIDEO_PARAMETER_PAGE_SIZE + 1] = (BYTE)(pageSize >> BYTE_SHIFT); }
         for (index = 0; index < VIDEO_PARAMETER_SEQUENCER_COUNT;  ++index) entry[VIDEO_PARAMETER_SEQUENCER + index] = definition->Sequencer[1 + index];     /* SR1-SR4 */
         entry[VIDEO_PARAMETER_MISC] = definition->MiscOutput;
         for (index = 0; index < VGA_MODEDEF_CRTC; ++index) entry[VIDEO_PARAMETER_CRTC + index] = definition->Crtc[index];
@@ -4025,7 +4020,7 @@ static VOID VideoCrtcSetData(PVOID context, UINT32 value)
          or page-flips, which is every scrolling game. CrtcStartHalf counts how
          often a frame was built mid-pair; CrtcStartLive is what the renderer uses. */
     case VIDEO_CR_START_HIGH: VideoLatch(state, 0);          /* boundaries passed BEFORE this write see the old value */
-               state->CrtcStart = (WORD)((state->CrtcStart & BYTE_MASK) | ((WORD)(value & BYTE_MASK) << VIDEO_BYTE_SHIFT));
+               state->CrtcStart = (WORD)((state->CrtcStart & BYTE_MASK) | ((WORD)(value & BYTE_MASK) << BYTE_SHIFT));
                state->IsCrtcSeen = 1; state->IsCrtcStartPending ^= 1; state->IsDirty = 1; break;
     case VIDEO_CR_START_LOW: VideoLatch(state, 0);
                state->CrtcStart = (WORD)((state->CrtcStart & HIGH_BYTE_MASK) | (value & BYTE_MASK));
@@ -4059,11 +4054,11 @@ static VOID VideoCrtcSetData(PVOID context, UINT32 value)
          Pascal's, QB's runtime) position the cursor this way instead of through the
          BIOS, and these registers fell into `default:` -- so the cursor sat wherever
          the last INT 10h left it, which in an editor is nowhere near the text. */
-    case VIDEO_CR_CURSOR_START: state->CursorShape = (WORD)((state->CursorShape & BYTE_MASK) | ((WORD)(value & VIDEO_CR0A_CURSOR_START_MASK) << VIDEO_BYTE_SHIFT));
+    case VIDEO_CR_CURSOR_START: state->CursorShape = (WORD)((state->CursorShape & BYTE_MASK) | ((WORD)(value & VIDEO_CR0A_CURSOR_START_MASK) << BYTE_SHIFT));
                state->IsDirty = 1; VddVideoBdaSync(state); break;
     case VIDEO_CR_CURSOR_END: state->CursorShape = (WORD)((state->CursorShape & HIGH_BYTE_MASK) | (value & VIDEO_CR0B_CURSOR_END_MASK));
                state->IsDirty = 1; VddVideoBdaSync(state); break;
-    case VIDEO_CR_CURSOR_HIGH: state->CrtcCursor = (WORD)((state->CrtcCursor & BYTE_MASK) | ((WORD)(value & BYTE_MASK) << VIDEO_BYTE_SHIFT));
+    case VIDEO_CR_CURSOR_HIGH: state->CrtcCursor = (WORD)((state->CrtcCursor & BYTE_MASK) | ((WORD)(value & BYTE_MASK) << BYTE_SHIFT));
                VideoCrtcCursorApply(state); break;
     case VIDEO_CR_CURSOR_LOW: state->CrtcCursor = (WORD)((state->CrtcCursor & HIGH_BYTE_MASK) | (value & BYTE_MASK));
                VideoCrtcCursorApply(state); break;
@@ -4075,10 +4070,10 @@ static VOID VideoCrtcIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     PVIDEO_STATE state = (PVIDEO_STATE)context; (VOID)width;
     if (port == VIDEO_PORT_CRTC_COLOUR || port == VIDEO_PORT_CRTC_MONO) { *value = state->CrtcIndex; return; }
     switch (state->CrtcIndex) {
-    case VIDEO_CR_START_HIGH: *value = (BYTE)(state->CrtcStart >> VIDEO_BYTE_SHIFT); break;
+    case VIDEO_CR_START_HIGH: *value = (BYTE)(state->CrtcStart >> BYTE_SHIFT); break;
     case VIDEO_CR_START_LOW: *value = (BYTE)(state->CrtcStart & BYTE_MASK); break;
     case VIDEO_CR_OFFSET: *value = state->CrtcOffset; break;
-    case VIDEO_CR_CURSOR_START: *value = (BYTE)((state->CursorShape >> VIDEO_BYTE_SHIFT) & VIDEO_CR0A_CURSOR_START_MASK); break;
+    case VIDEO_CR_CURSOR_START: *value = (BYTE)((state->CursorShape >> BYTE_SHIFT) & VIDEO_CR0A_CURSOR_START_MASK); break;
     case VIDEO_CR_CURSOR_END: *value = (BYTE)(state->CursorShape & VIDEO_CR0B_CURSOR_END_MASK); break;
     /* Read back what the BIOS path set, in the hardware's own units -- in TEXT modes.
        ► In a graphics mode the BIOS never writes CR0E/CR0F (there is no hardware
@@ -4086,7 +4081,7 @@ static VOID VideoCrtcIn(PVOID context, WORD port, BYTE width, UINT32 *value)
          wrote: plain storage. Deriving them there leaked the text cursor into Mode X
          (`modeX.320x240` CR0F: hardware 0x00, ours 0xA0 -- the last 1/690 VGA parity
          byte; s81, #186). The text-mode cursor paths are untouched. */
-    case VIDEO_CR_CURSOR_HIGH: *value = state->ModeKind == VIDEO_KIND_TEXT ? (BYTE)(VideoCrtcCursorOf(state) >> VIDEO_BYTE_SHIFT)
+    case VIDEO_CR_CURSOR_HIGH: *value = state->ModeKind == VIDEO_KIND_TEXT ? (BYTE)(VideoCrtcCursorOf(state) >> BYTE_SHIFT)
                                                : state->CrtcRegisters[VIDEO_CR_CURSOR_HIGH]; break;
     case VIDEO_CR_CURSOR_LOW: *value = state->ModeKind == VIDEO_KIND_TEXT ? (BYTE)(VideoCrtcCursorOf(state) & BYTE_MASK)
                                                : state->CrtcRegisters[VIDEO_CR_CURSOR_LOW]; break;
@@ -4855,7 +4850,7 @@ INT VddVideoTextSnapshot(PVIDEO_STATE state, char *output, INT capacity)
     for (row = 0; row < state->Rows; ++row) {
         for (column = 0; column < state->Columns && count < capacity - VIDEO_SNAPSHOT_HEX_ROOM; ++column) {
             BYTE attributeByte = VideoDisplayCell(state, row, column)[1];
-            output[count++] = hexDigits[(attributeByte >> VIDEO_NIBBLE_SHIFT) & VIDEO_NIBBLE_MASK]; output[count++] = hexDigits[attributeByte & VIDEO_NIBBLE_MASK];
+            output[count++] = hexDigits[(attributeByte >> NIBBLE_SHIFT) & VIDEO_NIBBLE_MASK]; output[count++] = hexDigits[attributeByte & VIDEO_NIBBLE_MASK];
         }
         if (count < capacity - VIDEO_SNAPSHOT_LINE_ROOM) output[count++] = '\n';
     }
@@ -4885,7 +4880,7 @@ VOID VddVideoTextCursor(PVIDEO_STATE state, INT column, INT row,
     if (column < 0 || row < 0 || column >= state->Columns || row >= state->Rows) return;
     cell    = VideoDisplayCell(state, row, column);
     character   = (BYTE)((cell[0] & (andMask & BYTE_MASK)) ^ (xorMask & BYTE_MASK));
-    attribute = (BYTE)((cell[1] & (andMask >> VIDEO_BYTE_SHIFT)) ^ (xorMask >> VIDEO_BYTE_SHIFT));
+    attribute = (BYTE)((cell[1] & (andMask >> BYTE_SHIFT)) ^ (xorMask >> BYTE_SHIFT));
     VideoRenderCell(state, row, column, character, attribute);
     /* The hardware cursor is drawn by the CRTC over whatever the cell holds, so it
        stays on top of the pointer when the two share a cell. */
@@ -4918,8 +4913,8 @@ static VOID VideoDrawHardwareCursor(PVIDEO_STATE state)
         INT hidden, lit = 1;
         VddCursorLines(state->CursorShape, (UINT)cellHeight, &start, &end, &hidden);
         if (state->IsCursorEmulationOff) {                  /* AH=12h BL=34h: CX as written (#252) */
-            start = (state->CursorShape >> VIDEO_BYTE_SHIFT) & VIDEO_CURSOR_LINE_MASK; end = state->CursorShape & VIDEO_CURSOR_LINE_MASK;
-            hidden = ((state->CursorShape >> VIDEO_BYTE_SHIFT) & VIDEO_CURSOR_HIDDEN) != 0 || start > end || start >= (UINT)cellHeight;
+            start = (state->CursorShape >> BYTE_SHIFT) & VIDEO_CURSOR_LINE_MASK; end = state->CursorShape & VIDEO_CURSOR_LINE_MASK;
+            hidden = ((state->CursorShape >> BYTE_SHIFT) & VIDEO_CURSOR_HIDDEN) != 0 || start > end || start >= (UINT)cellHeight;
             if (end >= (UINT)cellHeight) end = (UINT)cellHeight - 1u;
         }
         if (state->IsCursorBlink && state->TimeUs) {
@@ -4959,7 +4954,7 @@ static VOID VideoDrawHardwareCursor(PVIDEO_STATE state)
 VOID VddCursorLines(WORD shape, UINT cellHeight,
                       UINT *start, UINT *end, INT *isHidden)
 {
-    UINT character = (shape >> VIDEO_BYTE_SHIFT) & VIDEO_CURSOR_START_FIELD;
+    UINT character = (shape >> BYTE_SHIFT) & VIDEO_CURSOR_START_FIELD;
     UINT endLine =  shape       & VIDEO_CURSOR_LINE_MASK;
     *isHidden = (character & VIDEO_CURSOR_HIDDEN) != 0;                 /* CH bit 5: cursor off        */
     character &= VIDEO_CURSOR_LINE_MASK;
@@ -5108,7 +5103,7 @@ static VOID VideoRenderPlanar(PVIDEO_STATE state)
                 UINT32 planeOffset = (rowAddress + (UINT32)byteColumn) % (UINT32)VIDEO_PLANE_SIZE;
                 BYTE plane0 = VideoPlaneBytes(state,0)[planeOffset], plane1 = VideoPlaneBytes(state,1)[planeOffset];
                 BYTE plane2 = VideoPlaneBytes(state,2)[planeOffset], plane3 = VideoPlaneBytes(state,3)[planeOffset];
-                for (bit = 0; bit < VIDEO_BITS_PER_BYTE; ++bit) {
+                for (bit = 0; bit < BITS_PER_BYTE; ++bit) {
                     BYTE mask = (BYTE)(VIDEO_PIXEL_LEFT_BIT >> bit);
                     output[byteColumn*VIDEO_PIXELS_PER_PLANE_BYTE + bit] = (BYTE)(((plane0&mask)?1:0) | ((plane1&mask)?VIDEO_PLANE1_BIT:0) | ((plane2&mask)?VIDEO_PLANE2_BIT:0) | ((plane3&mask)?VIDEO_PLANE3_BIT:0));
                 }
@@ -5314,7 +5309,7 @@ VOID VddVideoPutChar(PVIDEO_STATE state, BYTE character) { VideoTeletype(state, 
 static char *VideoReadHex2(char *output, UINT value)
 {
     static const char H[] = "0123456789ABCDEF";
-    *output++ = H[(value >> VIDEO_NIBBLE_SHIFT) & VIDEO_NIBBLE_MASK]; *output++ = H[value & VIDEO_NIBBLE_MASK]; return output;
+    *output++ = H[(value >> NIBBLE_SHIFT) & VIDEO_NIBBLE_MASK]; *output++ = H[value & VIDEO_NIBBLE_MASK]; return output;
 }
 static char *VideoReadString(char *output, const char *text) { while (*text) *output++ = *text++; return output; }
 static char *VideoReadDecimal(char *output, UINT value)

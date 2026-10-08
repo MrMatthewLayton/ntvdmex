@@ -67,7 +67,7 @@ static BYTE g_File[EXEC_TEST_FILE_SIZE];
 
 static VOID ExecTestPutWord(UINT offset, UINT value)
 {
-    g_File[offset] = (BYTE)value; g_File[offset + 1] = (BYTE)(value >> DOS_HIGH_BYTE_SHIFT);
+    g_File[offset] = (BYTE)value; g_File[offset + 1] = (BYTE)(value >> BYTE_SHIFT);
 }
 
 /* an MZ file with e_lfanew = newHeader and `signature` there */

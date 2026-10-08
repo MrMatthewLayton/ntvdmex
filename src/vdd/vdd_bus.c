@@ -9,7 +9,6 @@
 #define VDD_BUS_UNCLAIMED      0
 #define VDD_BUS_FLOATING_PORT  0xFFFFFFFFu  /* an IN with no handler: an empty ISA slot */
 #define VDD_BUS_FLOATING_BYTE  0xFF
-#define VDD_BUS_SEGMENT_SHIFT  4       /* real mode: linear = segment << 4             */
 #define VDD_BUS_LAST_OFFSET    1       /* an inclusive window ends at base + size - 1 */
 
 /* --- lifecycle ------------------------------------------------------------ */
@@ -99,7 +98,7 @@ VOID VddRaiseIrq(PVDD_BUS bus, BYTE irq)
 
 PVOID VddMapFlat(PVDD_BUS bus, WORD segment, WORD offset)
 {
-    UINT32 flat = ((UINT32)segment << VDD_BUS_SEGMENT_SHIFT) + offset;     /* real-mode linear address */
+    UINT32 flat = ((UINT32)segment << PARAGRAPH_SHIFT) + offset;     /* real-mode linear address */
     return (BYTE *)bus->MemoryBase + flat;           /* base==NULL => absolute   */
 }
 

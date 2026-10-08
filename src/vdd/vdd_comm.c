@@ -27,7 +27,6 @@
 #define COMM_IIR_FIFOS_ENABLED      0xC0
 #define COMM_UNDRIVEN_BUS           0xFF
 #define COMM_LOW_BYTE               0xFF
-#define COMM_BYTE_SHIFT             8
 #define COMM_DEFAULT_DIVISOR        12      /* 9600 baud, the POST value                 */
 /* INT 14h. */
 #define COMM_INT14_VECTOR           0x14
@@ -341,9 +340,9 @@ static VOID CommInt14(PVOID context, PNTVDD_REGISTERS registers)
         static const WORD baudDivisors[COMM_INT14_BAUD_RATES] = { 1047, 768, 384, 192, 96, 48, 24, 12 };
         WORD divisor = baudDivisors[(argumentByte >> COMM_INT14_BAUD_SHIFT) & COMM_INT14_BAUD_MASK];
         uart->DivisorLow = (BYTE)(divisor & COMM_LOW_BYTE);
-        uart->DivisorHigh = (BYTE)(divisor >> COMM_BYTE_SHIFT);
+        uart->DivisorHigh = (BYTE)(divisor >> BYTE_SHIFT);
         uart->Lcr = (BYTE)(argumentByte & COMM_INT14_LINE_BITS);
-        VddSetAx(registers, (WORD)((CommLineStatus(uart) << COMM_BYTE_SHIFT) | uart->Msr));
+        VddSetAx(registers, (WORD)((CommLineStatus(uart) << BYTE_SHIFT) | uart->Msr));
         break; }
     case COMM_INT14_SEND:                                     /* send AL                   */
         ++uart->TransmitCount;
@@ -353,18 +352,18 @@ static VOID CommInt14(PVOID context, PNTVDD_REGISTERS registers)
            the same THRE interrupt the port write does. */
         uart->IsThrePending = 1;
         CommUpdateIrq(state, uart);
-        VddSetAx(registers, (WORD)((CommLineStatus(uart) << COMM_BYTE_SHIFT) | argumentByte));
+        VddSetAx(registers, (WORD)((CommLineStatus(uart) << BYTE_SHIFT) | argumentByte));
         break;
     case COMM_INT14_RECEIVE:                                     /* receive -> AL             */
         if (uart->ReceiveLength) {
             BYTE received = CommPopReceive(uart);
-            VddSetAx(registers, (WORD)((CommLineStatus(uart) << COMM_BYTE_SHIFT) | received));
+            VddSetAx(registers, (WORD)((CommLineStatus(uart) << BYTE_SHIFT) | received));
         } else {
             VddSetAx(registers, COMM_INT14_TIMEOUT);                       /* TIMEOUT: nothing waiting  */
         }
         break;
     case COMM_INT14_STATUS:                                     /* status                    */
-        VddSetAx(registers, (WORD)((CommLineStatus(uart) << COMM_BYTE_SHIFT) | uart->Msr));
+        VddSetAx(registers, (WORD)((CommLineStatus(uart) << BYTE_SHIFT) | uart->Msr));
         break;
     default:
         VddSetAx(registers, COMM_INT14_TIMEOUT);

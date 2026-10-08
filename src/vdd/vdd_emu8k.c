@@ -20,8 +20,6 @@
 #define EMU8K_Q16_FRACTION_MASK  0xFFFFu
 #define EMU8K_Q28_SHIFT          28          /* the filter's coefficients are Q28              */
 #define EMU8K_Q28_ONE_DOUBLE     268435456.0
-#define EMU8K_HIGH_BYTE_SHIFT    8
-#define EMU8K_HIGH_WORD_SHIFT    16
 #define EMU8K_LOW_WORD_MASK_KEEP_HIGH 0x0000FFFFu
 #define EMU8K_WORD_MAX           0xFFFF
 
@@ -48,10 +46,10 @@ static DWORD Emu8kExp2(INT32 exponent)
 {
     INT32  octave = exponent >> EMU8K_Q16_SHIFT;           /* arithmetic: floor           */
     DWORD  fraction = (DWORD)exponent & EMU8K_Q16_FRACTION_MASK,
-           tableIndex = fraction >> EMU8K_HIGH_BYTE_SHIFT, mantissa;
+           tableIndex = fraction >> BYTE_SHIFT, mantissa;
     mantissa = g_Emu8kExp2Table[tableIndex]
              + (DWORD)(((UINT64)(g_Emu8kExp2Table[tableIndex + 1] - g_Emu8kExp2Table[tableIndex])
-                        * (fraction & BYTE_MASK)) >> EMU8K_HIGH_BYTE_SHIFT);
+                        * (fraction & BYTE_MASK)) >> BYTE_SHIFT);
     if (octave >= EMU8K_EXP2_MAX_OCTAVE) return EMU8K_EXP2_SATURATED;
     if (octave >= 0)  return mantissa << octave;
     if (octave <= EMU8K_EXP2_MIN_OCTAVE) return 0;
@@ -71,8 +69,8 @@ static INT32 Emu8kLog2(DWORD value)
         if (g_Emu8kExp2Table[tableIndex] <= value) lowIndex = tableIndex; else highIndex = tableIndex;
     }
     tableIndex = lowIndex;
-    return octave * EMU8K_Q16_ONE + (INT32)(tableIndex << EMU8K_HIGH_BYTE_SHIFT)
-         + (INT32)(((UINT64)(value - g_Emu8kExp2Table[tableIndex]) << EMU8K_HIGH_BYTE_SHIFT)
+    return octave * EMU8K_Q16_ONE + (INT32)(tableIndex << BYTE_SHIFT)
+         + (INT32)(((UINT64)(value - g_Emu8kExp2Table[tableIndex]) << BYTE_SHIFT)
                    / (g_Emu8kExp2Table[tableIndex + 1] - g_Emu8kExp2Table[tableIndex]));
 }
 
@@ -288,14 +286,14 @@ static DWORD Emu8kEnvelopeTick(PEMU8K_ENVELOPE envelope, WORD delayRegister, WOR
         /* fall through */
     case EMU8K_ENV_HOLD: {
         /* p.16: bits 14-8 in 92 ms steps, 7Fh = no hold, 00h = 11.68 s. */
-        DWORD holdTicks = ((EMU8K_HOLD_NONE_CODE - ((attackHold >> EMU8K_HIGH_BYTE_SHIFT) & EMU8K_HOLD_CODE_MASK)) * EMU8K_HOLD_STEP_US_X10) / EMU8K_TICK_US_X10;
+        DWORD holdTicks = ((EMU8K_HOLD_NONE_CODE - ((attackHold >> BYTE_SHIFT) & EMU8K_HOLD_CODE_MASK)) * EMU8K_HOLD_STEP_US_X10) / EMU8K_TICK_US_X10;
         if (envelope->TickCount < holdTicks) { envelope->TickCount++; return EMU8K_Q16_ONE_UNSIGNED; }
         envelope->Phase = EMU8K_ENV_DECAY;
     }   /* fall through */
     case EMU8K_ENV_DECAY: {
         /* p.14-15: sustain bits 14-8 in 0.75 dB steps below peak (7Fh = 0 dB, 0 = silence);
            decay bits 6-0 as a time per dB, 0 = no decay. dB-linear: the fall is exponential. */
-        DWORD sustainCode = (decaySustain >> EMU8K_HIGH_BYTE_SHIFT) & EMU8K_SUSTAIN_CODE_MASK;
+        DWORD sustainCode = (decaySustain >> BYTE_SHIFT) & EMU8K_SUSTAIN_CODE_MASK;
         INT32 sustainLevel = sustainCode ? (INT32)((EMU8K_SUSTAIN_TOP_CODE - sustainCode) * EMU8K_SUSTAIN_STEP_DB_Q16) : (INT32)(EMU8K_SILENCE_DB << EMU8K_Q16_SHIFT);  /* 0.75 dB = 49152 */
         if (envelope->Attenuation < sustainLevel) { envelope->Attenuation += g_Emu8kDecayStep[decaySustain & EMU8K_RATE_CODE_MASK]; if (envelope->Attenuation > sustainLevel) envelope->Attenuation = sustainLevel; }
         return Emu8kDbToGain(envelope->Attenuation); }
@@ -435,9 +433,9 @@ static VOID Emu8kVoiceTick(PEMU8K_VOICE voice)
         /* pitch: IP E000h = unity, 1000h per octave (p.16) -> Q16 octaves; then ENV1 ×
            PEFE hi (±1 oct), LFO1 × FMMOD hi (±1 oct), LFO2 × FM2FRQ2 hi (±1 oct) */
         octaves  = ((INT32)voice->Ip - EMU8K_PITCH_UNITY) * EMU8K_PITCH_TO_Q16_OCTAVES;
-        octaves += (INT32)(((INT64)modulation * (INT8)(voice->Pefe >> EMU8K_HIGH_BYTE_SHIFT)) / EMU8K_MODULATION_FULL_SCALE);
-        octaves += (INT32)(((INT64)lfo1  * (INT8)(voice->Fmmod >> EMU8K_HIGH_BYTE_SHIFT)) / EMU8K_MODULATION_FULL_SCALE);
-        octaves += (INT32)(((INT64)lfo2  * (INT8)(voice->Fm2frq2 >> EMU8K_HIGH_BYTE_SHIFT)) / EMU8K_MODULATION_FULL_SCALE);
+        octaves += (INT32)(((INT64)modulation * (INT8)(voice->Pefe >> BYTE_SHIFT)) / EMU8K_MODULATION_FULL_SCALE);
+        octaves += (INT32)(((INT64)lfo1  * (INT8)(voice->Fmmod >> BYTE_SHIFT)) / EMU8K_MODULATION_FULL_SCALE);
+        octaves += (INT32)(((INT64)lfo2  * (INT8)(voice->Fm2frq2 >> BYTE_SHIFT)) / EMU8K_MODULATION_FULL_SCALE);
         pitchTarget = (DWORD)(((UINT64)Emu8kExp2(octaves) * EMU8K_CP_UNITY) >> EMU8K_Q16_SHIFT); /* 4000h = unity (p.7) */
         if (octaves >= (EMU8K_PITCH_MAX_OCTAVES << EMU8K_Q16_SHIFT) || pitchTarget > EMU8K_WORD_MAX) pitchTarget = EMU8K_WORD_MAX;
         /* cutoff: IFATN hi, ENV1 × PEFE lo (±6 oct), LFO1 × FMMOD lo (±3 oct) */
@@ -447,18 +445,18 @@ static VOID Emu8kVoiceTick(PEMU8K_VOICE voice)
         cutoffTarget = cutoff < 0 ? 0 : cutoff > EMU8K_WORD_MAX ? EMU8K_WORD_MAX : (DWORD)cutoff;
         /* volume: ENV2 × IFATN lo (0.375 dB steps) × LFO1 tremolo (TREMFRQ hi, ±12 dB) */
         attenuation  = (INT32)(voice->Ifatn & BYTE_MASK) * EMU8K_ATTENUATION_STEP_DB_Q16;  /* 0.375 dB = 24576 Q16    */
-        attenuation -= (INT32)(((INT64)lfo1 * (INT8)(voice->Tremfrq >> EMU8K_HIGH_BYTE_SHIFT) * EMU8K_TREMOLO_DB) / EMU8K_MODULATION_FULL_SCALE);
+        attenuation -= (INT32)(((INT64)lfo1 * (INT8)(voice->Tremfrq >> BYTE_SHIFT) * EMU8K_TREMOLO_DB) / EMU8K_MODULATION_FULL_SCALE);
         gain = (DWORD)(((UINT64)volumeLevel * Emu8kDbToGain(attenuation)) >> EMU8K_Q16_SHIFT);
         if (attenuation < 0) gain = (DWORD)(((UINT64)volumeLevel * Emu8kExp2((INT32)(((INT64)-attenuation * EMU8K_OCTAVES_PER_DB_Q16) >> EMU8K_Q16_SHIFT))) >> EMU8K_Q16_SHIFT);
         volumeTarget = gain >= EMU8K_Q16_ONE_UNSIGNED ? EMU8K_WORD_MAX : (INT32)gain;
-        voice->Ptrx = (pitchTarget << EMU8K_HIGH_WORD_SHIFT) | (voice->Ptrx & WORD_MASK_U);
-        voice->Vtft = ((DWORD)volumeTarget << EMU8K_HIGH_WORD_SHIFT) | cutoffTarget;
+        voice->Ptrx = (pitchTarget << WORD_SHIFT) | (voice->Ptrx & WORD_MASK_U);
+        voice->Vtft = ((DWORD)volumeTarget << WORD_SHIFT) | cutoffTarget;
     }
     /* The sound generator: current pitch and cutoff take their targets at once; current
        volume slews to its target across the tick, so an envelope step is not a click. */
     voice->Cpf  = (voice->Ptrx & HIGH_WORD_MASK_U) | (voice->Cpf & WORD_MASK_U);
     voice->Cvcf = (voice->Cvcf & HIGH_WORD_MASK_U) | (voice->Vtft & WORD_MASK_U);
-    volumeTarget = (INT32)(voice->Vtft >> EMU8K_HIGH_WORD_SHIFT);
+    volumeTarget = (INT32)(voice->Vtft >> WORD_SHIFT);
     currentVolume = voice->CurrentVolume;
     /* rounded AWAY from zero, so the slew ARRIVES: a truncated step settles short of the
        target (FFFEh for FFFFh) and never moves again. The render clamps the overshoot. */
@@ -562,8 +560,8 @@ static BOOL Emu8kIsData1DoubleWord(BYTE registerNumber, BYTE channel)
 }
 
 static DWORD Emu8kSetHalf(DWORD registerValue, INT isHighHalf, WORD value)
-{ return isHighHalf ? (registerValue & EMU8K_LOW_WORD_MASK_KEEP_HIGH) | ((DWORD)value << EMU8K_HIGH_WORD_SHIFT) : (registerValue & HIGH_WORD_MASK_U) | value; }
-static WORD Emu8kGetHalf(DWORD registerValue, INT isHighHalf) { return (WORD)(isHighHalf ? registerValue >> EMU8K_HIGH_WORD_SHIFT : registerValue); }
+{ return isHighHalf ? (registerValue & EMU8K_LOW_WORD_MASK_KEEP_HIGH) | ((DWORD)value << WORD_SHIFT) : (registerValue & HIGH_WORD_MASK_U) | value; }
+static WORD Emu8kGetHalf(DWORD registerValue, INT isHighHalf) { return (WORD)(isHighHalf ? registerValue >> WORD_SHIFT : registerValue); }
 
 /* DCYSUSV (p.14-15): bit 7 turns the engine off; bit 15 = these are RELEASE values. Turning
    the engine ON with a decay (bit 15 clear) is what starts a note -- §6 writes it last but
@@ -673,7 +671,7 @@ static WORD Emu8kDataRead(PEMU8K_STATE state, INT dataPort, INT isHighHalf)
         switch (registerNumber) {
         case EMU8K_DATA0_CPF: return Emu8kGetHalf(voice->Cpf, isHighHalf);
         case EMU8K_DATA0_PTRX: return Emu8kGetHalf(voice->Ptrx, isHighHalf);
-        case EMU8K_DATA0_CVCF: return Emu8kGetHalf((voice->Cvcf & WORD_MASK_U) | ((DWORD)(voice->CurrentVolume >> EMU8K_CURRENT_VOLUME_SHIFT) << EMU8K_HIGH_WORD_SHIFT), isHighHalf);
+        case EMU8K_DATA0_CVCF: return Emu8kGetHalf((voice->Cvcf & WORD_MASK_U) | ((DWORD)(voice->CurrentVolume >> EMU8K_CURRENT_VOLUME_SHIFT) << WORD_SHIFT), isHighHalf);
         case EMU8K_DATA0_VTFT: return Emu8kGetHalf(voice->Vtft, isHighHalf);
         case EMU8K_DATA0_R4: return Emu8kGetHalf(voice->Data0Register4, isHighHalf);
         case EMU8K_DATA0_R5: return Emu8kGetHalf(voice->Data0Register5, isHighHalf);
@@ -798,7 +796,7 @@ static VOID Emu8kPortOut(PVOID context, WORD port, BYTE accessWidth, UINT32 valu
     state->IoWrites++;
     if (accessWidth >= EMU8K_DOUBLEWORD_ACCESS) {    /* a doubleword: LS word, then MS    */
         Emu8kWordOut(state, portOffset, (WORD)value);
-        Emu8kWordOut(state, (WORD)(portOffset + EMU8K_HIGH_WORD_PORT), (WORD)(value >> EMU8K_HIGH_WORD_SHIFT));
+        Emu8kWordOut(state, (WORD)(portOffset + EMU8K_HIGH_WORD_PORT), (WORD)(value >> WORD_SHIFT));
     } else if (accessWidth == EMU8K_WORD_ACCESS) {
         Emu8kWordOut(state, portOffset, (WORD)value);
     } else {
@@ -807,7 +805,7 @@ static VOID Emu8kPortOut(PVOID context, WORD port, BYTE accessWidth, UINT32 valu
            that splits a word into two OUTs still lands it. */
         state->ByteIoCount++;
         if (portOffset & EMU8K_ODD_PORT) Emu8kWordOut(state, (WORD)(portOffset - EMU8K_ODD_PORT),
-                                  (WORD)(state->ByteLatch[portOffset >> EMU8K_PORT_GROUP_SHIFT] | ((value & BYTE_MASK) << EMU8K_HIGH_BYTE_SHIFT)));
+                                  (WORD)(state->ByteLatch[portOffset >> EMU8K_PORT_GROUP_SHIFT] | ((value & BYTE_MASK) << BYTE_SHIFT)));
         else state->ByteLatch[portOffset >> EMU8K_PORT_GROUP_SHIFT] = (BYTE)value;
     }
 }
@@ -819,14 +817,14 @@ static VOID Emu8kPortIn(PVOID context, WORD port, BYTE accessWidth, UINT32 *valu
     state->IoReads++;
     if (accessWidth >= EMU8K_DOUBLEWORD_ACCESS) {
         UINT32 lowWord = Emu8kWordIn(state, portOffset);
-        *value = lowWord | ((UINT32)Emu8kWordIn(state, (WORD)(portOffset + EMU8K_HIGH_WORD_PORT)) << EMU8K_HIGH_WORD_SHIFT);
+        *value = lowWord | ((UINT32)Emu8kWordIn(state, (WORD)(portOffset + EMU8K_HIGH_WORD_PORT)) << WORD_SHIFT);
     } else if (accessWidth == EMU8K_WORD_ACCESS) {
         *value = Emu8kWordIn(state, portOffset);
     } else {
         /* a byte read of the even port reads the word; the odd port gives its high half */
         state->ByteIoCount++;
         if (portOffset & EMU8K_ODD_PORT) *value = state->ByteLatch[portOffset >> EMU8K_PORT_GROUP_SHIFT];
-        else { WORD wordRead = Emu8kWordIn(state, portOffset); state->ByteLatch[portOffset >> EMU8K_PORT_GROUP_SHIFT] = (BYTE)(wordRead >> EMU8K_HIGH_BYTE_SHIFT); *value = wordRead & BYTE_MASK; }
+        else { WORD wordRead = Emu8kWordIn(state, portOffset); state->ByteLatch[portOffset >> EMU8K_PORT_GROUP_SHIFT] = (BYTE)(wordRead >> BYTE_SHIFT); *value = wordRead & BYTE_MASK; }
     }
 }
 
@@ -859,7 +857,7 @@ VOID VddEmu8kRenderStereo(PEMU8K_STATE state, PINT16 output, DWORD frameCount)
             if (voice->Ccca & EMU8K_CCCA_DMA) continue;     /* a DMA channel makes no sound       */
             /* current volume slews to its target (clamped: the step is a rounded division) */
             if (voice->CurrentVolumeStep) {
-                INT32 target = (INT32)(voice->Vtft >> EMU8K_HIGH_WORD_SHIFT) << EMU8K_CURRENT_VOLUME_SHIFT;
+                INT32 target = (INT32)(voice->Vtft >> WORD_SHIFT) << EMU8K_CURRENT_VOLUME_SHIFT;
                 voice->CurrentVolume += voice->CurrentVolumeStep;
                 if ((voice->CurrentVolumeStep > 0 && voice->CurrentVolume > target) || (voice->CurrentVolumeStep < 0 && voice->CurrentVolume < target)) {
                     voice->CurrentVolume = target; voice->CurrentVolumeStep = 0;
@@ -881,7 +879,7 @@ VOID VddEmu8kRenderStereo(PEMU8K_STATE state, PINT16 output, DWORD frameCount)
             }
             /* advance: CP 4000h = one word per sample (p.7), so the step in 1/65536 words
                is CP × 4. Then ALWAYS loop (§5): passing CSL returns to PSST. */
-            step = addressFraction + ((voice->Cpf >> EMU8K_HIGH_WORD_SHIFT) << EMU8K_CP_TO_STEP_SHIFT);
+            step = addressFraction + ((voice->Cpf >> WORD_SHIFT) << EMU8K_CP_TO_STEP_SHIFT);
             currentAddress = (currentAddress + (step >> EMU8K_Q16_SHIFT)) & EMU8K_ADDR_MASK;
             loopStart = voice->Psst & EMU8K_ADDR_MASK;
             loopEnd = voice->Csl & EMU8K_ADDR_MASK;

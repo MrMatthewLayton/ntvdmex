@@ -94,13 +94,13 @@
 static DWORD WowCdlgPeekDword(const volatile BYTE *bytes, INT offset)
 {
     return (DWORD)Wow32PeekWord((volatile BYTE *)bytes + offset)
-         | ((DWORD)Wow32PeekWord((volatile BYTE *)bytes + offset + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
+         | ((DWORD)Wow32PeekWord((volatile BYTE *)bytes + offset + WOW_WORD_BYTES) << WORD_SHIFT);
 }
 
 static VOID WowCdlgPokeDword(volatile BYTE *bytes, INT offset, DWORD value)
 {
     Wow32PokeWord(bytes + offset,     (WORD)(value & WORD_MASK));
-    Wow32PokeWord(bytes + offset + WOW_WORD_BYTES, (WORD)(value >> WOW_WORD_SHIFT));
+    Wow32PokeWord(bytes + offset + WOW_WORD_BYTES, (WORD)(value >> WORD_SHIFT));
 }
 
 /* ── #294: the rest of COMMDLG's table. Ids = export ordinals (see the top). */
@@ -552,7 +552,7 @@ static INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     case WOWCDLG_FINDTEXT:
     case WOWCDLG_REPLACETEXT: {
         volatile BYTE *guest = Wow32ArgPointer(frame, WOWCDLG_ARG_LPSTRUCT);
-        DWORD guest16 = (DWORD)Wow32ArgWord(frame, WOWCDLG_ARG_LPSTRUCT) | ((DWORD)Wow32ArgWord(frame, WOWCDLG_ARG_LPSTRUCT + WOW_WORD_BYTES) << WOW_WORD_SHIFT);
+        DWORD guest16 = (DWORD)Wow32ArgWord(frame, WOWCDLG_ARG_LPSTRUCT) | ((DWORD)Wow32ArgWord(frame, WOWCDLG_ARG_LPSTRUCT + WOW_WORD_BYTES) << WORD_SHIFT);
         INT isReplace = (frame->Id == WOWCDLG_REPLACETEXT);
         PWOWCDLG_FIND slot = NULL;
         PWOWUSER_WINDOW ownerWindow, window;

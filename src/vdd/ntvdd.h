@@ -44,18 +44,17 @@ typedef struct _NTVDD_REGISTERS {
 typedef const NTVDD_REGISTERS *PCNTVDD_REGISTERS;
 
 /* 8/16-bit sub-register accessors (keep call sites readable). */
-#define VDD_HIGH_BYTE_SHIFT     8
 #define VDD_KEEP_ALL_BUT_AL     0xFFFFFF00u
 #define VDD_KEEP_ALL_BUT_AH     0xFFFF00FFu
 #define VDD_KEEP_HIGH_WORD      0xFFFF0000u
 static inline BYTE VddGetAl(PCNTVDD_REGISTERS registers){ return (BYTE)(registers->Eax); }
-static inline BYTE VddGetAh(PCNTVDD_REGISTERS registers){ return (BYTE)(registers->Eax >> VDD_HIGH_BYTE_SHIFT); }
+static inline BYTE VddGetAh(PCNTVDD_REGISTERS registers){ return (BYTE)(registers->Eax >> BYTE_SHIFT); }
 static inline WORD VddGetAx(PCNTVDD_REGISTERS registers){ return (WORD)(registers->Eax); }
 static inline WORD VddGetBx(PCNTVDD_REGISTERS registers){ return (WORD)(registers->Ebx); }
 static inline WORD VddGetCx(PCNTVDD_REGISTERS registers){ return (WORD)(registers->Ecx); }
 static inline WORD VddGetDx(PCNTVDD_REGISTERS registers){ return (WORD)(registers->Edx); }
 static inline VOID VddSetAl(PNTVDD_REGISTERS registers, BYTE value){ registers->Eax = (registers->Eax & VDD_KEEP_ALL_BUT_AL) | value; }
-static inline VOID VddSetAh(PNTVDD_REGISTERS registers, BYTE value){ registers->Eax = (registers->Eax & VDD_KEEP_ALL_BUT_AH) | ((UINT32)value << VDD_HIGH_BYTE_SHIFT); }
+static inline VOID VddSetAh(PNTVDD_REGISTERS registers, BYTE value){ registers->Eax = (registers->Eax & VDD_KEEP_ALL_BUT_AH) | ((UINT32)value << BYTE_SHIFT); }
 static inline VOID VddSetAx(PNTVDD_REGISTERS registers, WORD value){ registers->Eax = (registers->Eax & VDD_KEEP_HIGH_WORD) | value; }
 static inline VOID VddSetBx(PNTVDD_REGISTERS registers, WORD value){ registers->Ebx = (registers->Ebx & VDD_KEEP_HIGH_WORD) | value; }
 static inline VOID VddSetCx(PNTVDD_REGISTERS registers, WORD value){ registers->Ecx = (registers->Ecx & VDD_KEEP_HIGH_WORD) | value; }

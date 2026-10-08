@@ -157,7 +157,7 @@ static const BYTE g_OracleDpb[] = {
 
 static UINT SysVarsTestWordAt(PCBYTE bytes)
 {
-    return bytes[0] | (bytes[1] << DOS_SYSVARS_HIGH_BYTE_SHIFT);
+    return bytes[0] | (bytes[1] << BYTE_SHIFT);
 }
 static UINT SysVarsTestWord(INT offset) { return SysVarsTestWordAt(&SYSVARS_TEST_BYTE(offset)); }
 

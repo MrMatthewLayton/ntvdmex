@@ -10,7 +10,6 @@
 #define AUDIO_WAVE_MS_PER_SECOND    1000
 #define AUDIO_WAVE_MIN_BUFFERS      2
 #define AUDIO_WAVE_BITS_PER_SAMPLE  16
-#define AUDIO_WAVE_BITS_PER_BYTE    8
 #define AUDIO_WAVE_WAKE_MS          5       /* a buffer is ~11.6 ms: wake well inside it */
 #define AUDIO_WAVE_RETRY_MS         5
 #define AUDIO_WAVE_DIRECT_SOUND_POLL_MS 2
@@ -332,7 +331,7 @@ INT AudioWaveStart(PAUDIO_WAVE wave, UINT32 sampleHz, PAUDIO_WAVE_FILL_ROUTINE f
         format.nChannels = AUDIO_WAVE_CHANNELS;          /* #189 */
         format.nSamplesPerSec = wave->SampleHz;
         format.wBitsPerSample = AUDIO_WAVE_BITS_PER_SAMPLE;
-        format.nBlockAlign = (WORD)(format.nChannels * format.wBitsPerSample / AUDIO_WAVE_BITS_PER_BYTE);
+        format.nBlockAlign = (WORD)(format.nChannels * format.wBitsPerSample / BITS_PER_BYTE);
         format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
         format.cbSize = 0;
         wave->Event = CreateEventA(NULL, FALSE, FALSE, NULL);

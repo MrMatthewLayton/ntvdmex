@@ -116,7 +116,6 @@
 #define EMU8K_TEST_INTERPOLATOR_OFFSET 1     /* the registers hold the address minus one   */
 #define EMU8K_TEST_SMA_FLAG          0x80000000u  /* EMPTY / FULL                          */
 #define EMU8K_TEST_ADDRESS_MASK      0xFFFFFF
-#define EMU8K_TEST_HIGH_WORD_SHIFT   16
 
 /* The DMA stream modes for CCCA (bits 26-24: DMA, write, right). */
 #define EMU8K_TEST_STREAM_LEFT_READ   0x04000000u
@@ -192,27 +191,27 @@ static VOID Emu8kTestData0Write(INT registerNumber, INT channel, DWORD value)
 {
     Emu8kTestSelect(registerNumber, channel);
     Emu8kTestOutWord(EMU8K_TEST_DATA0, (WORD)value);
-    Emu8kTestOutWord(EMU8K_TEST_DATA0_HIGH, (WORD)(value >> EMU8K_TEST_HIGH_WORD_SHIFT));
+    Emu8kTestOutWord(EMU8K_TEST_DATA0_HIGH, (WORD)(value >> WORD_SHIFT));
 }
 static DWORD Emu8kTestData0Read(INT registerNumber, INT channel)
 {
     DWORD lowWord;
     Emu8kTestSelect(registerNumber, channel);
     lowWord = Emu8kTestInWord(EMU8K_TEST_DATA0);
-    return lowWord | ((DWORD)Emu8kTestInWord(EMU8K_TEST_DATA0_HIGH) << EMU8K_TEST_HIGH_WORD_SHIFT);
+    return lowWord | ((DWORD)Emu8kTestInWord(EMU8K_TEST_DATA0_HIGH) << WORD_SHIFT);
 }
 static VOID Emu8kTestData1WriteDword(INT registerNumber, INT channel, DWORD value)
 {
     Emu8kTestSelect(registerNumber, channel);
     Emu8kTestOutWord(EMU8K_TEST_DATA1, (WORD)value);
-    Emu8kTestOutWord(EMU8K_TEST_DATA1_HIGH_DATA2, (WORD)(value >> EMU8K_TEST_HIGH_WORD_SHIFT));
+    Emu8kTestOutWord(EMU8K_TEST_DATA1_HIGH_DATA2, (WORD)(value >> WORD_SHIFT));
 }
 static DWORD Emu8kTestData1ReadDword(INT registerNumber, INT channel)
 {
     DWORD lowWord;
     Emu8kTestSelect(registerNumber, channel);
     lowWord = Emu8kTestInWord(EMU8K_TEST_DATA1);
-    return lowWord | ((DWORD)Emu8kTestInWord(EMU8K_TEST_DATA1_HIGH_DATA2) << EMU8K_TEST_HIGH_WORD_SHIFT);
+    return lowWord | ((DWORD)Emu8kTestInWord(EMU8K_TEST_DATA1_HIGH_DATA2) << WORD_SHIFT);
 }
 static VOID Emu8kTestData1Write(INT registerNumber, INT channel, WORD value)
 { Emu8kTestSelect(registerNumber, channel); Emu8kTestOutWord(EMU8K_TEST_DATA1, value); }
@@ -231,7 +230,7 @@ static WORD Emu8kTestWallClock(VOID) { return Emu8kTestData2Read(EMU8K_TEST_GLOB
 static VOID Emu8kTestSetStreamAddress(INT stream, DWORD address)
 { Emu8kTestData1WriteDword(EMU8K_TEST_GLOBALS, stream, address); }
 static WORD Emu8kTestCurrentVolume(INT channel)
-{ return (WORD)(Emu8kTestData0Read(EMU8K_TEST_CVCF, channel) >> EMU8K_TEST_HIGH_WORD_SHIFT); }
+{ return (WORD)(Emu8kTestData0Read(EMU8K_TEST_CVCF, channel) >> WORD_SHIFT); }
 
 /* ---- rendering --------------------------------------------------------------------- */
 
@@ -469,7 +468,7 @@ INT main(VOID)
     Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, 7, 0);
     /* E+402h: CCCA's MS word when r0 is selected, the Data2 word register otherwise */
     Emu8kTestSelect(EMU8K_TEST_CCCA, 8); Emu8kTestOutWord(EMU8K_TEST_DATA1_HIGH_DATA2, 0x1234);
-    Emu8kTestCheck((Emu8kTestData1ReadDword(EMU8K_TEST_CCCA, 8) >> EMU8K_TEST_HIGH_WORD_SHIFT) == 0x1234
+    Emu8kTestCheck((Emu8kTestData1ReadDword(EMU8K_TEST_CCCA, 8) >> WORD_SHIFT) == 0x1234
                    && Emu8kTestData2Read(EMU8K_TEST_ATKHLDV, 8) == 0,
                    "E+402h with r0 selected is CCCA's MS word, not ATKHLDV");
     Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, 8, 0);
@@ -562,8 +561,8 @@ INT main(VOID)
                    && g_Dram[EMU8K_TEST_TONE_ADDRESS - EMU8K_DRAM_BASE + EMU8K_TEST_LOOP_WORDS] == 0, "tone uploaded");
     Emu8kTestPlayTone(EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PAN_CENTRE, EMU8K_TEST_OPEN_FILTER, EMU8K_TEST_FLAT_ENVELOPE);
     Emu8kTestRender(EMU8K_TEST_TENTH_SECOND);
-    Emu8kTestCheck((Emu8kTestData0Read(EMU8K_TEST_CPF, EMU8K_TEST_TONE_CHANNEL) >> EMU8K_TEST_HIGH_WORD_SHIFT) == EMU8K_TEST_CP_UNITY
-                   && (Emu8kTestData0Read(EMU8K_TEST_PTRX, EMU8K_TEST_TONE_CHANNEL) >> EMU8K_TEST_HIGH_WORD_SHIFT) == EMU8K_TEST_CP_UNITY,
+    Emu8kTestCheck((Emu8kTestData0Read(EMU8K_TEST_CPF, EMU8K_TEST_TONE_CHANNEL) >> WORD_SHIFT) == EMU8K_TEST_CP_UNITY
+                   && (Emu8kTestData0Read(EMU8K_TEST_PTRX, EMU8K_TEST_TONE_CHANNEL) >> WORD_SHIFT) == EMU8K_TEST_CP_UNITY,
                    "IP E000h: pitch target and current pitch = 4000h (unity)");
     { DWORD currentAddress = Emu8kTestData1ReadDword(EMU8K_TEST_CCCA, EMU8K_TEST_TONE_CHANNEL) & EMU8K_TEST_ADDRESS_MASK;
       Emu8kTestCheck(currentAddress >= EMU8K_TEST_TONE_ADDRESS + EMU8K_TEST_LOOP_WORDS - EMU8K_TEST_INTERPOLATOR_OFFSET
@@ -633,7 +632,7 @@ INT main(VOID)
                      "release 5Ch: ~10 dB per 20 ms (1.97 ms/dB)");
       Emu8kTestRender(EMU8K_TEST_RATE / 4);
       Emu8kTestCheck(Emu8kTestCurrentVolume(EMU8K_TEST_TONE_CHANNEL) == 0
-                     && (Emu8kTestData0Read(EMU8K_TEST_VTFT, EMU8K_TEST_TONE_CHANNEL) >> EMU8K_TEST_HIGH_WORD_SHIFT) == 0,
+                     && (Emu8kTestData0Read(EMU8K_TEST_VTFT, EMU8K_TEST_TONE_CHANNEL) >> WORD_SHIFT) == 0,
                      "release: silent (CV = VT = 0) within 250 ms"); }
     Emu8kTestPlayTone(EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PAN_CENTRE, EMU8K_TEST_ATTENUATION_12DB, EMU8K_TEST_FLAT_ENVELOPE);
     Emu8kTestRender(EMU8K_TEST_TENTH_SECOND);
@@ -642,7 +641,7 @@ INT main(VOID)
       Emu8kTestCheck(currentVolume > 16100 && currentVolume < 16800, message); }
     Emu8kTestNoteKill(EMU8K_TEST_TONE_CHANNEL);
     Emu8kTestCheck(Emu8kTestCurrentVolume(EMU8K_TEST_TONE_CHANNEL) == 0
-                   && (Emu8kTestData0Read(EMU8K_TEST_VTFT, EMU8K_TEST_TONE_CHANNEL) >> EMU8K_TEST_HIGH_WORD_SHIFT) == 0,
+                   && (Emu8kTestData0Read(EMU8K_TEST_VTFT, EMU8K_TEST_TONE_CHANNEL) >> WORD_SHIFT) == 0,
                    "§7 abrupt end: engine off, VT and CV zero at once");
 
     /* ---- T7: the filter ---- */
@@ -657,7 +656,7 @@ INT main(VOID)
         Emu8kTestSelect(EMU8K_TEST_CCCA, EMU8K_TEST_TONE_CHANNEL);
         Emu8kTestOutWord(EMU8K_TEST_DATA1_HIGH_DATA2,
                          (WORD)((EMU8K_TEST_Q_MAX << EMU8K_TEST_Q_SHIFT_IN_HIGH)
-                                | ((ccca >> EMU8K_TEST_HIGH_WORD_SHIFT) & EMU8K_TEST_CCCA_HIGH_KEEP))); }
+                                | ((ccca >> WORD_SHIFT) & EMU8K_TEST_CCCA_HIGH_KEEP))); }
       Emu8kTestRender(2 * EMU8K_TEST_TENTH_SECOND); Emu8kTestPeaks(EMU8K_TEST_TENTH_SECOND, &peakResonant, &unusedRight);
       printf("        peak: open %d   cutoff 00h %d   cutoff 68h Q0 %d   Q15 %d\n",
              peakOpen, peakLowCutoff, peakOnTone, peakResonant);

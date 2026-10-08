@@ -57,7 +57,6 @@ static INT g_Total = 0, g_Failures = 0;
 #define AUXPRN_TEST_LOW_BYTE         0xFF
 #define AUXPRN_TEST_HIGH_WORD        0xFFFF0000u
 #define AUXPRN_TEST_AH_SHIFT         8
-#define AUXPRN_TEST_PARAGRAPH_SHIFT  4
 
 /* Layout: the driver at DOS_CTAB_SEG:DOS_AUXPRN_OFF; the BIOS "handlers" are a HLT
    (unmodelled -> the interpreter stops there) followed by an IRET; the INT 21h
@@ -128,7 +127,7 @@ static INT g_ReceiveIndex;
 /* Run from the driver entry until the caller's return HLT, answering the BIOS. */
 static INT AuxPrnTestRunEntry(PV86_CPU cpu, UINT entry, WORD callerFlags)
 {
-    DWORD stackTop = ((DWORD)AUXPRN_TEST_STACK_SEGMENT << AUXPRN_TEST_PARAGRAPH_SHIFT)
+    DWORD stackTop = ((DWORD)AUXPRN_TEST_STACK_SEGMENT << PARAGRAPH_SHIFT)
                      + AUXPRN_TEST_STACK_TOP;
     INT steps = 0;
     g_CallCount = 0;
@@ -174,7 +173,7 @@ static INT AuxPrnTestRunEntry(PV86_CPU cpu, UINT entry, WORD callerFlags)
 
 static DWORD AuxPrnTestLinear(WORD segment, WORD offset)
 {
-    return ((DWORD)segment << AUXPRN_TEST_PARAGRAPH_SHIFT) + offset;
+    return ((DWORD)segment << PARAGRAPH_SHIFT) + offset;
 }
 
 static V86_CPU AuxPrnTestSetup(VOID)
@@ -232,7 +231,7 @@ static BOOL AuxPrnTestCallIs(INT callIndex, INT vector, WORD ax, WORD dx)
 INT main(VOID)
 {
     V86_CPU cpu;
-    DWORD dataBase = (DWORD)AUXPRN_TEST_DATA_SEGMENT << AUXPRN_TEST_PARAGRAPH_SHIFT;
+    DWORD dataBase = (DWORD)AUXPRN_TEST_DATA_SEGMENT << PARAGRAPH_SHIFT;
     printf("== auxprn_test: DOS AUX/PRN driver code (#251)\n");
     AUXPRN_TEST_CHECK(sizeof g_DosAuxPrnCode <= DOS_AUXPRN_LEN, "fits its reservation");
     AUXPRN_TEST_CHECK(DOS_AUXPRN_OFF >= DOS_SYSCONF_OFF + AUXPRN_TEST_SYSCONF_SIZE

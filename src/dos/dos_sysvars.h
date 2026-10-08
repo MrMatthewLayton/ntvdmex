@@ -104,7 +104,6 @@
 #define DOS_CDS_FLAG_NETWORK  0x8000
 
 /* The values the builders below write. */
-#define DOS_SYSVARS_HIGH_BYTE_SHIFT 8
 #define DOS_SYSVARS_FAR_SEGMENT     2       /* a far pointer: offset WORD, then segment WORD */
 #define DOS_CHAIN_END               0xFFFF  /* FFFF:FFFF ends a DPB or device chain           */
 #define DOS_DPB_DEFAULT_SECTOR_SIZE 512     /* what a sector size of 0 is taken as            */
@@ -127,7 +126,7 @@
 static inline VOID DosSysVarsWriteWord(_Out_ PBYTE buffer, _In_ UINT offset, _In_ UINT value)
 {
     buffer[offset] = (BYTE)(value & BYTE_MASK);
-    buffer[offset + 1] = (BYTE)((value >> DOS_SYSVARS_HIGH_BYTE_SHIFT) & BYTE_MASK);
+    buffer[offset + 1] = (BYTE)((value >> BYTE_SHIFT) & BYTE_MASK);
 }
 
 static inline VOID DosSysVarsWriteFarPointer(_Out_ PBYTE buffer, _In_ UINT offset, _In_ UINT segment,

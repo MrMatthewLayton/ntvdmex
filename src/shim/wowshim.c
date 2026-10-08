@@ -25,6 +25,7 @@
  *   host's nested run, so they work on the guest thread only.
  */
 #include <windows.h>
+#include "../ntvdmex_bits.h"
 
 #define SHIM_API_VERSION        3       /* host + bin\wowshim\ must agree (STYLE.md §7)   */
 
@@ -171,7 +172,6 @@ enum { SHIM_EAX, SHIM_EBX, SHIM_ECX, SHIM_EDX, SHIM_ESI, SHIM_EDI, SHIM_EBP, SHI
 #define SHIM_KEEP_HIGH_WORD         0xFFFF0000u
 #define SHIM_KEEP_ALL_BUT_LOW_BYTE  0xFFFFFF00u
 #define SHIM_KEEP_ALL_BUT_HIGH_BYTE 0xFFFF00FFu
-#define SHIM_HIGH_BYTE_SHIFT        8
 #define SHIM_FLAG_MASK              1
 #define SHIM_FLAG_BIT               1u
 #define SHIM_CARRY_FLAG             0       /* EFLAGS bit numbers                         */
@@ -197,8 +197,8 @@ static VOID  ShimSetRegister(INT registerIndex, DWORD value) { if (g_HasShimApi 
     __declspec(dllexport) UCHAR WINAPI get##name(VOID) { return (UCHAR)ShimGetRegister(registerIndex); } \
     __declspec(dllexport) VOID WINAPI set##name(UCHAR value) { ShimSetRegister(registerIndex, (ShimGetRegister(registerIndex) & SHIM_KEEP_ALL_BUT_LOW_BYTE) | value); }
 #define SHIM_HIGH_BYTE_REGISTER(name, registerIndex) \
-    __declspec(dllexport) UCHAR WINAPI get##name(VOID) { return (UCHAR)(ShimGetRegister(registerIndex) >> SHIM_HIGH_BYTE_SHIFT); } \
-    __declspec(dllexport) VOID WINAPI set##name(UCHAR value) { ShimSetRegister(registerIndex, (ShimGetRegister(registerIndex) & SHIM_KEEP_ALL_BUT_HIGH_BYTE) | ((DWORD)value << SHIM_HIGH_BYTE_SHIFT)); }
+    __declspec(dllexport) UCHAR WINAPI get##name(VOID) { return (UCHAR)(ShimGetRegister(registerIndex) >> BYTE_SHIFT); } \
+    __declspec(dllexport) VOID WINAPI set##name(UCHAR value) { ShimSetRegister(registerIndex, (ShimGetRegister(registerIndex) & SHIM_KEEP_ALL_BUT_HIGH_BYTE) | ((DWORD)value << BYTE_SHIFT)); }
 #define SHIM_FLAG(name, bit) \
     __declspec(dllexport) ULONG WINAPI get##name(VOID) { return (ShimGetRegister(SHIM_EFLAGS) >> bit) & SHIM_FLAG_MASK; } \
     __declspec(dllexport) VOID WINAPI set##name(ULONG value) { ShimSetRegister(SHIM_EFLAGS, (ShimGetRegister(SHIM_EFLAGS) & ~(SHIM_FLAG_BIT << bit)) | ((value & SHIM_FLAG_MASK) << bit)); }

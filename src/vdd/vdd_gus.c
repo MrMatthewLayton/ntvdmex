@@ -26,7 +26,6 @@
 #define GUS_PORT_HIGH_LAST            0x107
 #define GUS_FLOATING_BUS              0xFF
 #define GUS_FAILED                    (-1)
-#define GUS_BYTE_SHIFT                8
 #define GUS_WORD_WIDTH                2       /* a 16-bit port access                     */
 #define GUS_WORD_BYTES                2u
 #define GUS_DMA_CHANNEL_MASK          7
@@ -725,7 +724,7 @@ static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
         state->LowByteLatch = (WORD)(value & BYTE_MASK);
         break;
     case GUS_PORT_DATA_HIGH:
-        if (GusIsRegister16(state->RegisterSelect)) GusRegisterWrite(state, state->RegisterSelect, (WORD)(((value & BYTE_MASK) << GUS_BYTE_SHIFT) | state->LowByteLatch));
+        if (GusIsRegister16(state->RegisterSelect)) GusRegisterWrite(state, state->RegisterSelect, (WORD)(((value & BYTE_MASK) << BYTE_SHIFT) | state->LowByteLatch));
         else                    GusRegisterWrite(state, state->RegisterSelect, (WORD)(value & BYTE_MASK));
         break;
     case GUS_PORT_DRAM:
@@ -770,7 +769,7 @@ static VOID GusPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     case GUS_PORT_DATA_HIGH: {
         BYTE select = state->RegisterSelect;
         if (select < GUS_REGISTER_GLOBAL_FIRST) select |= GUS_REGISTER_READ;           /* voice regs read at 80h+ (ref §2.2) */
-        result = GusIsRegister16(state->RegisterSelect) ? (UINT32)(GusRegisterRead(state, select) >> GUS_BYTE_SHIFT) : (UINT32)(GusRegisterRead(state, select) & BYTE_MASK);
+        result = GusIsRegister16(state->RegisterSelect) ? (UINT32)(GusRegisterRead(state, select) >> BYTE_SHIFT) : (UINT32)(GusRegisterRead(state, select) & BYTE_MASK);
         break; }
     case GUS_PORT_DRAM:
         result = state->Dram ? state->Dram[state->DramIoAddress & (GUS_DRAM_SIZE - 1)] : GUS_FLOATING_BUS;
@@ -803,9 +802,9 @@ static INT32 GusFetch(PCGUS_STATE state, PCGUS_VOICE voice, UINT32 address)
 {
     if (voice->Control & GUS_VOICE_16BIT) {                     /* 16-bit: the address is translated */
         UINT32 offset = GusUntranslate16(address & GUS_DRAM_ADDRESS_MASK) & (GUS_DRAM_SIZE - GUS_WORD_BYTES);
-        return (INT16)(state->Dram[offset] | (state->Dram[offset + 1] << GUS_BYTE_SHIFT));
+        return (INT16)(state->Dram[offset] | (state->Dram[offset + 1] << BYTE_SHIFT));
     }
-    return (INT32)(INT8)state->Dram[address & (GUS_DRAM_SIZE - 1)] << GUS_BYTE_SHIFT;
+    return (INT32)(INT8)state->Dram[address & (GUS_DRAM_SIZE - 1)] << BYTE_SHIFT;
 }
 
 static VOID GusVoiceStep(PGUS_STATE state, PGUS_VOICE voice)

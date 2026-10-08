@@ -108,13 +108,13 @@ typedef INT (*PNE_IMPORT)(PVOID context, const NE_MODULE *module, WORD moduleRef
                             PWORD selector, PWORD offset);
 
 /* ── little-endian readers, bounds-checked ──────────────────────────────────────── */
-static WORD NeRead16(PCBYTE bytes) { return (WORD)(bytes[0] | (bytes[1] << NE_BYTE_SHIFT)); }
+static WORD NeRead16(PCBYTE bytes) { return (WORD)(bytes[0] | (bytes[1] << BYTE_SHIFT)); }
 static UINT32 NeRead32(PCBYTE bytes)
 {
-    return (UINT32)bytes[0] | ((UINT32)bytes[1] << NE_BYTE_SHIFT)
-         | ((UINT32)bytes[2] << NE_WORD_SHIFT) | ((UINT32)bytes[3] << NE_HIGH_BYTE_SHIFT);
+    return (UINT32)bytes[0] | ((UINT32)bytes[1] << BYTE_SHIFT)
+         | ((UINT32)bytes[2] << WORD_SHIFT) | ((UINT32)bytes[3] << TOP_BYTE_SHIFT);
 }
-static VOID NeWrite16(PBYTE bytes, WORD value) { bytes[0] = (BYTE)value; bytes[1] = (BYTE)(value >> NE_BYTE_SHIFT); }
+static VOID NeWrite16(PBYTE bytes, WORD value) { bytes[0] = (BYTE)value; bytes[1] = (BYTE)(value >> BYTE_SHIFT); }
 
 static INT NeInBounds(PCNE_MODULE module, UINT32 offset, UINT32 length)
 {

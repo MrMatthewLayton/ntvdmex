@@ -48,8 +48,6 @@ static VOID KeyboardActionTestCheck(BOOL passed, PCSTR message)
 #define KBDACT_TEST_IVT_ENTRY_SIZE   4
 #define KBDACT_TEST_IVT_SEGMENT      2      /* the segment word in an IVT entry */
 #define KBDACT_TEST_IVT_SEGMENT_HIGH 3
-#define KBDACT_TEST_PARAGRAPH_SHIFT  4
-#define KBDACT_TEST_HIGH_BYTE_SHIFT  8
 #define KBDACT_TEST_HLT              0xF4
 #define KBDACT_TEST_IRET             0xCF
 #define KBDACT_TEST_BOP_BYTE         0xC4   /* C4 C4 09: BOP 09h */
@@ -128,32 +126,32 @@ static V86_CPU KeyboardActionTestSetup(UINT entry)
 {
     V86_CPU cpu; INT vector;
     memset(&cpu, 0, sizeof cpu); memset(g_GuestMemory, 0, sizeof g_GuestMemory);
-    memcpy(g_GuestMemory + ((DWORD)DOS_CTAB_SEG << KBDACT_TEST_PARAGRAPH_SHIFT) + DOS_KBDACT_OFF,
+    memcpy(g_GuestMemory + ((DWORD)DOS_CTAB_SEG << PARAGRAPH_SHIFT) + DOS_KBDACT_OFF,
            g_BiosKeyboardActionCode, sizeof g_BiosKeyboardActionCode);
     for (vector = 0; vector < KBDACT_TEST_VECTOR_COUNT; ++vector) {
         g_GuestMemory[vector * KBDACT_TEST_IVT_ENTRY_SIZE] =
             (BYTE)(vector * KBDACT_TEST_HANDLER_STRIDE);
         g_GuestMemory[vector * KBDACT_TEST_IVT_ENTRY_SIZE + 1] =
-            (BYTE)((vector * KBDACT_TEST_HANDLER_STRIDE) >> KBDACT_TEST_HIGH_BYTE_SHIFT);
+            (BYTE)((vector * KBDACT_TEST_HANDLER_STRIDE) >> BYTE_SHIFT);
         g_GuestMemory[vector * KBDACT_TEST_IVT_ENTRY_SIZE + KBDACT_TEST_IVT_SEGMENT] =
             KBDACT_TEST_HANDLER_SEGMENT & BYTE_MASK;
         g_GuestMemory[vector * KBDACT_TEST_IVT_ENTRY_SIZE + KBDACT_TEST_IVT_SEGMENT_HIGH] =
-            KBDACT_TEST_HANDLER_SEGMENT >> KBDACT_TEST_HIGH_BYTE_SHIFT;
-        g_GuestMemory[((DWORD)KBDACT_TEST_HANDLER_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT)
+            KBDACT_TEST_HANDLER_SEGMENT >> BYTE_SHIFT;
+        g_GuestMemory[((DWORD)KBDACT_TEST_HANDLER_SEGMENT << PARAGRAPH_SHIFT)
                       + vector * KBDACT_TEST_HANDLER_STRIDE] = KBDACT_TEST_HLT;
-        g_GuestMemory[((DWORD)KBDACT_TEST_HANDLER_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT)
+        g_GuestMemory[((DWORD)KBDACT_TEST_HANDLER_SEGMENT << PARAGRAPH_SHIFT)
                       + vector * KBDACT_TEST_HANDLER_STRIDE + 1] = KBDACT_TEST_IRET;
     }
-    g_GuestMemory[(DWORD)KBDACT_TEST_RETURN_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT] =
+    g_GuestMemory[(DWORD)KBDACT_TEST_RETURN_SEGMENT << PARAGRAPH_SHIFT] =
         KBDACT_TEST_HLT;
     cpu.Segments[KBDACT_TEST_SS] = KBDACT_TEST_STACK_SEGMENT;
     cpu.Registers[KBDACT_TEST_SP] = KBDACT_TEST_STACK_TOP - KBDACT_TEST_FRAME_SIZE;
-    g_GuestMemory[((DWORD)KBDACT_TEST_STACK_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT)
+    g_GuestMemory[((DWORD)KBDACT_TEST_STACK_SEGMENT << PARAGRAPH_SHIFT)
                   + KBDACT_TEST_FRAME_CS] = KBDACT_TEST_RETURN_SEGMENT & BYTE_MASK;
-    g_GuestMemory[((DWORD)KBDACT_TEST_STACK_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT)
+    g_GuestMemory[((DWORD)KBDACT_TEST_STACK_SEGMENT << PARAGRAPH_SHIFT)
                   + KBDACT_TEST_FRAME_CS_HIGH] =
-        KBDACT_TEST_RETURN_SEGMENT >> KBDACT_TEST_HIGH_BYTE_SHIFT;
-    g_GuestMemory[((DWORD)KBDACT_TEST_STACK_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT)
+        KBDACT_TEST_RETURN_SEGMENT >> BYTE_SHIFT;
+    g_GuestMemory[((DWORD)KBDACT_TEST_STACK_SEGMENT << PARAGRAPH_SHIFT)
                   + KBDACT_TEST_FRAME_FLAGS] = KBDACT_TEST_CALLER_FLAGS;
     cpu.Segments[KBDACT_TEST_CS] = DOS_CTAB_SEG; cpu.Ip = (WORD)(DOS_KBDACT_OFF + entry);
     cpu.Flags = KBDACT_TEST_INITIAL_FLAGS; cpu.Registers[KBDACT_TEST_AX] = KBDACT_TEST_SAVED_AX;
@@ -180,7 +178,7 @@ static INT KeyboardActionTestRun(PV86_CPU cpu, INT budget, INT clearPauseAfter)
             g_LastAx = (WORD)cpu->Registers[KBDACT_TEST_AX]; ++g_CallCount;
             g_InterruptFlagAtCall = 0;
             if (g_LastVector == g_ClearCarryVector)   /* the IRET pops FLAGS at SS:SP+4 */
-                g_GuestMemory[((DWORD)cpu->Segments[KBDACT_TEST_SS] << KBDACT_TEST_PARAGRAPH_SHIFT)
+                g_GuestMemory[((DWORD)cpu->Segments[KBDACT_TEST_SS] << PARAGRAPH_SHIFT)
                               + (WORD)(cpu->Registers[KBDACT_TEST_SP] + KBDACT_TEST_FLAGS_POP_OFFSET)]
                     &= (BYTE)~KBDACT_TEST_FLAG_CF;
             cpu->Ip = (WORD)(cpu->Ip + 1);
@@ -194,9 +192,9 @@ static INT KeyboardActionTestRun(PV86_CPU cpu, INT budget, INT clearPauseAfter)
 static VOID KeyboardActionTestPushSavedAx(PV86_CPU cpu)
 {
     cpu->Registers[KBDACT_TEST_SP] -= KBDACT_TEST_WORD_SIZE;
-    g_GuestMemory[((DWORD)KBDACT_TEST_STACK_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT)
+    g_GuestMemory[((DWORD)KBDACT_TEST_STACK_SEGMENT << PARAGRAPH_SHIFT)
                   + cpu->Registers[KBDACT_TEST_SP]] = KBDACT_TEST_SAVED_AX_LOW;
-    g_GuestMemory[((DWORD)KBDACT_TEST_STACK_SEGMENT << KBDACT_TEST_PARAGRAPH_SHIFT)
+    g_GuestMemory[((DWORD)KBDACT_TEST_STACK_SEGMENT << PARAGRAPH_SHIFT)
                   + cpu->Registers[KBDACT_TEST_SP] + 1] = KBDACT_TEST_SAVED_AX_HIGH;
 }
 

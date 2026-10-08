@@ -10,9 +10,6 @@
 #include "../ntvdmex_types.h"
 
 /* Little-endian words and dwords. */
-#define NE_BYTE_SHIFT      8
-#define NE_WORD_SHIFT      16
-#define NE_HIGH_BYTE_SHIFT 24
 #define NE_WORD_BYTES      2
 #define NE_WORD_BYTES_U    2u
 #define NE_FARADDR_BYTES   4u

@@ -21,7 +21,6 @@
 #define NETB_NCB_LANA              0x30
 #define NETB_NCB_CMD_CPLT          0x31
 #define NETB_HIGH_BYTE             1      /* a little-endian word's second byte       */
-#define NETB_BYTE_SHIFT            8
 #define NETB_NO_WAIT_BIT           0x80   /* command bit 7: no-wait form              */
 #define NETB_COMMAND_MASK          0x7F
 #define NETB_IMMEDIATE_ACCEPTED    0      /* AL for a no-wait command that was taken  */
@@ -50,7 +49,7 @@ BYTE VddNetBiosService(PNETBIOS_STATE state, BYTE *ncb, BYTE *buffer)
     request.LocalSession     = ncb[NETB_NCB_LSN];
     request.NameNumber     = ncb[NETB_NCB_NUM];
     request.Buffer  = buffer;
-    request.Length  = (WORD)(ncb[NETB_NCB_LENGTH] | (ncb[NETB_NCB_LENGTH + NETB_HIGH_BYTE] << NETB_BYTE_SHIFT));
+    request.Length  = (WORD)(ncb[NETB_NCB_LENGTH] | (ncb[NETB_NCB_LENGTH + NETB_HIGH_BYTE] << BYTE_SHIFT));
     memcpy(request.CallName, ncb + NETB_NCB_CALLNAME, NETB_NAME_SIZE);
     memcpy(request.Name,     ncb + NETB_NCB_NAME, NETB_NAME_SIZE);
     request.ReceiveTimeout  = ncb[NETB_NCB_RTO];
@@ -67,7 +66,7 @@ BYTE VddNetBiosService(PNETBIOS_STATE state, BYTE *ncb, BYTE *buffer)
     ncb[NETB_NCB_RETCODE] = returnCode;
     ncb[NETB_NCB_LSN] = request.LocalSession;
     ncb[NETB_NCB_NUM] = request.NameNumber;
-    ncb[NETB_NCB_LENGTH] = (BYTE)request.Length; ncb[NETB_NCB_LENGTH + NETB_HIGH_BYTE] = (BYTE)(request.Length >> NETB_BYTE_SHIFT);
+    ncb[NETB_NCB_LENGTH] = (BYTE)request.Length; ncb[NETB_NCB_LENGTH + NETB_HIGH_BYTE] = (BYTE)(request.Length >> BYTE_SHIFT);
     /* CALL/LISTEN/RECEIVE ANY report the far end's name in callname */
     memcpy(ncb + NETB_NCB_CALLNAME, request.CallName, NETB_NAME_SIZE);
     ncb[NETB_NCB_CMD_CPLT] = returnCode;                       /* cmd_cplt: complete */
@@ -75,8 +74,8 @@ BYTE VddNetBiosService(PNETBIOS_STATE state, BYTE *ncb, BYTE *buffer)
     if (isNoWait) {
         ++state->NoWaitCalls;
         if (ncb[NETB_NCB_POST_OFFSET] | ncb[NETB_NCB_POST_OFFSET + NETB_HIGH_BYTE] | ncb[NETB_NCB_POST_SEGMENT] | ncb[NETB_NCB_POST_SEGMENT + NETB_HIGH_BYTE]) {
-            state->PostOffset = (WORD)(ncb[NETB_NCB_POST_OFFSET] | (ncb[NETB_NCB_POST_OFFSET + NETB_HIGH_BYTE] << NETB_BYTE_SHIFT));
-            state->PostSegment = (WORD)(ncb[NETB_NCB_POST_SEGMENT] | (ncb[NETB_NCB_POST_SEGMENT + NETB_HIGH_BYTE] << NETB_BYTE_SHIFT));
+            state->PostOffset = (WORD)(ncb[NETB_NCB_POST_OFFSET] | (ncb[NETB_NCB_POST_OFFSET + NETB_HIGH_BYTE] << BYTE_SHIFT));
+            state->PostSegment = (WORD)(ncb[NETB_NCB_POST_SEGMENT] | (ncb[NETB_NCB_POST_SEGMENT + NETB_HIGH_BYTE] << BYTE_SHIFT));
             if (state->IsPostPending) ++state->PostsOwed;   /* the previous one was never run */
             state->IsPostPending = TRUE;
         }
@@ -94,8 +93,8 @@ static VOID VddNetBiosInt5C(PVOID context, PNTVDD_REGISTERS registers)
     BYTE *buffer = NULL;
     WORD bufferOffset, bufferSegment;
     if (!ncb) { VddSetAl(registers, NETB_RC_INVALID_BUFFER); return; }
-    bufferOffset = (WORD)(ncb[NETB_NCB_BUFFER_OFFSET] | (ncb[NETB_NCB_BUFFER_OFFSET + NETB_HIGH_BYTE] << NETB_BYTE_SHIFT));
-    bufferSegment = (WORD)(ncb[NETB_NCB_BUFFER_SEGMENT] | (ncb[NETB_NCB_BUFFER_SEGMENT + NETB_HIGH_BYTE] << NETB_BYTE_SHIFT));
+    bufferOffset = (WORD)(ncb[NETB_NCB_BUFFER_OFFSET] | (ncb[NETB_NCB_BUFFER_OFFSET + NETB_HIGH_BYTE] << BYTE_SHIFT));
+    bufferSegment = (WORD)(ncb[NETB_NCB_BUFFER_SEGMENT] | (ncb[NETB_NCB_BUFFER_SEGMENT + NETB_HIGH_BYTE] << BYTE_SHIFT));
     if (bufferOffset | bufferSegment) buffer = (BYTE *)VddMapFlat(state->Bus, bufferSegment, bufferOffset);
     VddSetAl(registers, VddNetBiosService(state, ncb, buffer));
 }

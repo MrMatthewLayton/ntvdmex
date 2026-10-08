@@ -72,7 +72,6 @@
 #define CMOS_CHECKSUM_HIGH      0x2E
 #define CMOS_CHECKSUM_LOW       0x2F
 #define CMOS_LOW_BYTE           0xFF
-#define CMOS_HIGH_BYTE_SHIFT    8
 #define CMOS_OK                 0
 #define CMOS_FAILED             (-1)
 #define CMOS_NOT_A_CLOCK_REGISTER 0
@@ -407,13 +406,13 @@ VOID VddCmosReset(PVOID context)
     /* Base memory FITTED: 640 KB (0280h) unless Settings > Conventional Memory says less
        (#136). The EBDA and INT 12h's 639 are carved out of this by the BIOS, not here. */
     {   WORD baseMemoryKb = state->BaseKb ? state->BaseKb : CMOS_DEFAULT_BASE_KB;
-        state->Ram[CMOS_BASE_KB_LOW] = (BYTE)(baseMemoryKb & CMOS_LOW_BYTE); state->Ram[CMOS_BASE_KB_HIGH] = (BYTE)(baseMemoryKb >> CMOS_HIGH_BYTE_SHIFT); }
+        state->Ram[CMOS_BASE_KB_LOW] = (BYTE)(baseMemoryKb & CMOS_LOW_BYTE); state->Ram[CMOS_BASE_KB_HIGH] = (BYTE)(baseMemoryKb >> BYTE_SHIFT); }
     /* ── EXTENDED MEMORY, AS POST WOULD HAVE COUNTED IT (s81, #182). 17h/18h are the
          configured and 30h/31h the POST-detected KB above 1 MB; a real BIOS answers
          INT 15h AH=88h from the latter. Ours answers 88h with 0x3C00 (15 MB, main.c),
          so CMOS says the same -- two views of one machine must not disagree. */
-    state->Ram[CMOS_EXTENDED_KB_LOW] = (BYTE)(CMOS_EXTENDED_KB & CMOS_LOW_BYTE); state->Ram[CMOS_EXTENDED_KB_HIGH] = (BYTE)(CMOS_EXTENDED_KB >> CMOS_HIGH_BYTE_SHIFT);
-    state->Ram[CMOS_POST_EXTENDED_LOW] = (BYTE)(CMOS_EXTENDED_KB & CMOS_LOW_BYTE); state->Ram[CMOS_POST_EXTENDED_HIGH] = (BYTE)(CMOS_EXTENDED_KB >> CMOS_HIGH_BYTE_SHIFT);
+    state->Ram[CMOS_EXTENDED_KB_LOW] = (BYTE)(CMOS_EXTENDED_KB & CMOS_LOW_BYTE); state->Ram[CMOS_EXTENDED_KB_HIGH] = (BYTE)(CMOS_EXTENDED_KB >> BYTE_SHIFT);
+    state->Ram[CMOS_POST_EXTENDED_LOW] = (BYTE)(CMOS_EXTENDED_KB & CMOS_LOW_BYTE); state->Ram[CMOS_POST_EXTENDED_HIGH] = (BYTE)(CMOS_EXTENDED_KB >> BYTE_SHIFT);
     /* ── THE CHECKSUM OVER 10h-2Dh, WHICH A BIOS VERIFIES AT BOOT. ───────────
          A setup program that writes a configuration byte and does not fix this
          makes the BIOS declare the CMOS invalid next time. We are not that
@@ -423,7 +422,7 @@ VOID VddCmosReset(PVOID context)
          range invalidates it, exactly as on a real machine. */
     { UINT byteIndex, checksum = 0;
       for (byteIndex = CMOS_CHECKSUM_FIRST; byteIndex <= CMOS_CHECKSUM_LAST; ++byteIndex) checksum += state->Ram[byteIndex];
-      state->Ram[CMOS_CHECKSUM_HIGH] = (BYTE)(checksum >> CMOS_HIGH_BYTE_SHIFT);
+      state->Ram[CMOS_CHECKSUM_HIGH] = (BYTE)(checksum >> BYTE_SHIFT);
       state->Ram[CMOS_CHECKSUM_LOW] = (BYTE)(checksum & CMOS_LOW_BYTE); }
 }
 

@@ -398,11 +398,11 @@ static INT WowMsgCountFor(WORD task)
    the four fields a window procedure is called with are taken. */
 static VOID WowMsgRead(const volatile BYTE *bytes, PWOWMSG message)
 {
-    message->Window   = (WORD)(bytes[WOWMSG_FIELD_HWND]    | (bytes[WOWMSG_FIELD_HWND + 1]    << WOW_BYTE_SHIFT));
-    message->Message    = (WORD)(bytes[WOWMSG_FIELD_MESSAGE] | (bytes[WOWMSG_FIELD_MESSAGE + 1] << WOW_BYTE_SHIFT));
-    message->WParam = (WORD)(bytes[WOWMSG_FIELD_WPARAM]  | (bytes[WOWMSG_FIELD_WPARAM + 1]  << WOW_BYTE_SHIFT));
-    message->LParam = (DWORD)(bytes[WOWMSG_FIELD_LPARAM] | (bytes[WOWMSG_FIELD_LPARAM + 1] << WOW_BYTE_SHIFT))
-              | ((DWORD)(bytes[WOWMSG_FIELD_LPARAM + WOW_WORD_BYTES] | (bytes[WOWMSG_FIELD_LPARAM + WOW_WORD_BYTES + 1] << WOW_BYTE_SHIFT)) << WOW_WORD_SHIFT);
+    message->Window   = (WORD)(bytes[WOWMSG_FIELD_HWND]    | (bytes[WOWMSG_FIELD_HWND + 1]    << BYTE_SHIFT));
+    message->Message    = (WORD)(bytes[WOWMSG_FIELD_MESSAGE] | (bytes[WOWMSG_FIELD_MESSAGE + 1] << BYTE_SHIFT));
+    message->WParam = (WORD)(bytes[WOWMSG_FIELD_WPARAM]  | (bytes[WOWMSG_FIELD_WPARAM + 1]  << BYTE_SHIFT));
+    message->LParam = (DWORD)(bytes[WOWMSG_FIELD_LPARAM] | (bytes[WOWMSG_FIELD_LPARAM + 1] << BYTE_SHIFT))
+              | ((DWORD)(bytes[WOWMSG_FIELD_LPARAM + WOW_WORD_BYTES] | (bytes[WOWMSG_FIELD_LPARAM + WOW_WORD_BYTES + 1] << BYTE_SHIFT)) << WORD_SHIFT);
     message->Time   = 0; message->PointX = 0; message->PointY = 0;
 }
 
@@ -413,9 +413,9 @@ static VOID WowMsgWrite(volatile BYTE *bytes, PCWOWMSG message)
     Wow32PokeWord(bytes + WOWMSG_FIELD_MESSAGE, message->Message);
     Wow32PokeWord(bytes + WOWMSG_FIELD_WPARAM,  message->WParam);
     Wow32PokeWord(bytes + WOWMSG_FIELD_LPARAM,     (WORD)(message->LParam & WORD_MASK));
-    Wow32PokeWord(bytes + WOWMSG_FIELD_LPARAM + WOW_WORD_BYTES, (WORD)(message->LParam >> WOW_WORD_SHIFT));
+    Wow32PokeWord(bytes + WOWMSG_FIELD_LPARAM + WOW_WORD_BYTES, (WORD)(message->LParam >> WORD_SHIFT));
     Wow32PokeWord(bytes + WOWMSG_FIELD_TIME,       (WORD)(message->Time & WORD_MASK));
-    Wow32PokeWord(bytes + WOWMSG_FIELD_TIME + WOW_WORD_BYTES,   (WORD)(message->Time >> WOW_WORD_SHIFT));
+    Wow32PokeWord(bytes + WOWMSG_FIELD_TIME + WOW_WORD_BYTES,   (WORD)(message->Time >> WORD_SHIFT));
     Wow32PokeWord(bytes + WOWMSG_FIELD_POINT,     message->PointX);
     Wow32PokeWord(bytes + WOWMSG_FIELD_POINT + WOW_WORD_BYTES, message->PointY);
 }

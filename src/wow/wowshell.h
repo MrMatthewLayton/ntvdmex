@@ -327,7 +327,7 @@ static INT WowShellPutDword(PCWOW32_FRAME frame, INT argumentOffset, DWORD value
     volatile BYTE *bytes = Wow32ArgPointer(frame, argumentOffset);
     if (!bytes) return 0;
     Wow32PokeWord(bytes,     (WORD)(value & WORD_MASK));
-    Wow32PokeWord(bytes + WOW_WORD_BYTES, (WORD)(value >> WOW_WORD_SHIFT));
+    Wow32PokeWord(bytes + WOW_WORD_BYTES, (WORD)(value >> WORD_SHIFT));
     return 1;
 }
 
@@ -469,7 +469,7 @@ static INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
-        if (indexPointer) itemIndex = (WORD)(indexPointer[0] | (indexPointer[1] << WOW_BYTE_SHIFT));
+        if (indexPointer) itemIndex = (WORD)(indexPointer[0] | (indexPointer[1] << BYTE_SHIFT));
         WowNoteQuoted(note, noteCapacity, &noteLength, path);
         WowNotePut(note, noteCapacity, &noteLength, " index ");
         WowNoteHex(note, noteCapacity, &noteLength, itemIndex, WOW_HEX_WORD_DIGITS);
@@ -488,7 +488,7 @@ static INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             if (index == MAX_PATH - 1)
                 WowNotePut(note, noteCapacity, &noteLength, " [★ path TRUNCATED at MAX_PATH]");
         }
-        if (indexPointer) { indexPointer[0] = (BYTE)(itemIndex & BYTE_MASK); indexPointer[1] = (BYTE)(itemIndex >> WOW_BYTE_SHIFT); }
+        if (indexPointer) { indexPointer[0] = (BYTE)(itemIndex & BYTE_MASK); indexPointer[1] = (BYTE)(itemIndex >> BYTE_SHIFT); }
         token = WowUserSystemResourceMintIcon(icon);
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
         WowNoteQuoted(note, noteCapacity, &noteLength, path);
@@ -623,7 +623,7 @@ static INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             string[index] = 0;
             WowNotePut(note, noteCapacity, &noteLength, " -> ");
             WowNoteQuoted(note, noteCapacity, &noteLength, output);
-            Wow32SetReturn(frame, ((DWORD)(WORD)index << WOW_WORD_SHIFT) | (DWORD)byteCount);
+            Wow32SetReturn(frame, ((DWORD)(WORD)index << WORD_SHIFT) | (DWORD)byteCount);
         } else {
             /* Too long, or nothing to do: leave the guest's buffer alone and
                report the original length. Truncating in place would hand the
@@ -631,7 +631,7 @@ static INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WowNotePut(note, noteCapacity, &noteLength, expandedLength ? " -- ★ result does not fit; buffer"
                                              " left UNCHANGED"
                                            : " -- no substitution");
-            Wow32SetReturn(frame, ((DWORD)(WORD)count << WOW_WORD_SHIFT) | (DWORD)byteCount);
+            Wow32SetReturn(frame, ((DWORD)(WORD)count << WORD_SHIFT) | (DWORD)byteCount);
         }
         return 1;
     }
@@ -718,7 +718,7 @@ static INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD bufferSize   = Wow32ArgWord(frame, WOWSHELL_DRAGQUERYFILE_ARG_CCH);
         volatile BYTE *output = Wow32ArgPointer(frame, WOWSHELL_DRAGQUERYFILE_ARG_BUF);
         DWORD farPointer = g_WowWinGlobal16 ? g_WowWinGlobal16(WOWWIN_GLOBAL16_LOCK, drop16, 0) : 0;
-        DWORD segmentBase = (farPointer >> WOW_WORD_SHIFT) ? DpmiSelectorBase((WORD)(farPointer >> WOW_WORD_SHIFT)) : 0;
+        DWORD segmentBase = (farPointer >> WORD_SHIFT) ? DpmiSelectorBase((WORD)(farPointer >> WORD_SHIFT)) : 0;
         volatile BYTE *dropBytes = segmentBase ? (volatile BYTE *)(ULONG_PTR)(segmentBase + (farPointer & WORD_MASK)) : NULL;
         DWORD result = 0;
         INT noteLength = 0;
@@ -731,7 +731,7 @@ static INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
-        {   WORD offset = (WORD)(dropBytes[0] | (dropBytes[1] << WOW_BYTE_SHIFT)), count = 0;
+        {   WORD offset = (WORD)(dropBytes[0] | (dropBytes[1] << BYTE_SHIFT)), count = 0;
             INT  guard = 0;
             while (offset < WOWSHELL_DROP_MAX_OFFSET && dropBytes[offset] && guard++ < WOWSHELL_DROP_MAX_FILES) {       /* walk to entry idx */
                 WORD length = 0;
@@ -981,7 +981,7 @@ static INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWSHELL_ERR_INVALID);
             return 1;
         }
-        capacity = (LONG)((DWORD)Wow32PeekWord(byteCountPointer) | ((DWORD)Wow32PeekWord(byteCountPointer + WOW_WORD_BYTES) << WOW_WORD_SHIFT));
+        capacity = (LONG)((DWORD)Wow32PeekWord(byteCountPointer) | ((DWORD)Wow32PeekWord(byteCountPointer + WOW_WORD_BYTES) << WORD_SHIFT));
         result = RegQueryValueA(parent, subkey, valueBuffer, &byteCount);
         if (result != ERROR_SUCCESS) {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT PRESENT (rc=0x");

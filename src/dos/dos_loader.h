@@ -38,7 +38,6 @@ typedef const DOS_IMAGE *PCDOS_IMAGE;
 #define DOS_MZ_PAGE_PARAGRAPHS     32u    /* 512 / 16                                   */
 #define DOS_MZ_RELOCATION_ENTRY    4      /* each: WORD offset, then WORD segment       */
 #define DOS_MZ_RELOCATION_SEGMENT  2
-#define DOS_LOADER_HIGH_WORD_SHIFT 16
 
 /* A flat .COM: loaded at PSP:100h, with the stack at the top of its segment. */
 #define DOS_COM_MAX_BYTES          0xFE00
@@ -55,7 +54,7 @@ typedef const DOS_IMAGE *PCDOS_IMAGE;
 #define DOS_NE_OS_WINDOWS          2
 
 static inline WORD DosLoaderReadWord(_In_reads_bytes_(2) PCBYTE field) {
-    return (WORD)((WORD)field[0] | ((WORD)field[1] << DOS_HIGH_BYTE_SHIFT));
+    return (WORD)((WORD)field[0] | ((WORD)field[1] << BYTE_SHIFT));
 }
 
 /* Place `file` (bytesRead bytes) into conventional memory at `base`:
@@ -89,7 +88,7 @@ static inline DOS_IMAGE DosLoadImageAt(_In_opt_ volatile BYTE *base, _In_reads_b
             DWORD fixupOffset = DosLoaderReadWord(file + relocationTable + index * DOS_MZ_RELOCATION_ENTRY);
             DWORD fixupSegment = DosLoaderReadWord(file + relocationTable + index * DOS_MZ_RELOCATION_ENTRY + DOS_MZ_RELOCATION_SEGMENT);
             volatile BYTE *fixup = (volatile BYTE *)((ULONG_PTR)base
-                                    + (((DWORD)(loadSegment + fixupSegment)) << DOS_PARAGRAPH_SHIFT) + fixupOffset);
+                                    + (((DWORD)(loadSegment + fixupSegment)) << PARAGRAPH_SHIFT) + fixupOffset);
             DosMcbWriteWord(fixup, (WORD)(DosMcbReadWord(fixup) + loadSegment));
         }
         image.CodeSegment = (WORD)(loadSegment + DosLoaderReadWord(file + DOS_MZ_INITIAL_CS));     /* e_cs */
@@ -194,7 +193,7 @@ static inline INT DosExeKind(_In_reads_bytes_(bytesRead) PCBYTE file, _In_ DWORD
     DWORD newHeader;
     *subsystem = 0;
     if (bytesRead < DOS_MZ_NEW_HEADER_MIN || file[0] != 'M' || file[1] != 'Z') return DOS_EXE_DOS;
-    newHeader = (DWORD)DosLoaderReadWord(file + DOS_MZ_NEW_HEADER) | ((DWORD)DosLoaderReadWord(file + DOS_MZ_NEW_HEADER + 2) << DOS_LOADER_HIGH_WORD_SHIFT);
+    newHeader = (DWORD)DosLoaderReadWord(file + DOS_MZ_NEW_HEADER) | ((DWORD)DosLoaderReadWord(file + DOS_MZ_NEW_HEADER + 2) << WORD_SHIFT);
     if (newHeader < DOS_MZ_NEW_HEADER_MIN || newHeader > bytesRead - DOS_PE_SIGNATURE_BYTES) return DOS_EXE_DOS;
     if (file[newHeader] == 'P' && file[newHeader + 1] == 'E' && file[newHeader + 2] == 0 && file[newHeader + 3] == 0) {
         if (newHeader + DOS_PE_SUBSYSTEM_END <= bytesRead) *subsystem = DosLoaderReadWord(file + newHeader + DOS_PE_SUBSYSTEM);
@@ -245,7 +244,7 @@ static inline DWORD DosLoadOverlay(_In_opt_ volatile BYTE *base, _In_reads_bytes
         DWORD fixupOffset = DosLoaderReadWord(file + relocationTable + index * DOS_MZ_RELOCATION_ENTRY);
         DWORD fixupSegment = DosLoaderReadWord(file + relocationTable + index * DOS_MZ_RELOCATION_ENTRY + DOS_MZ_RELOCATION_SEGMENT);
         volatile BYTE *fixup = (volatile BYTE *)((ULONG_PTR)base
-                                + (((DWORD)(loadSegment + fixupSegment)) << DOS_PARAGRAPH_SHIFT) + fixupOffset);
+                                + (((DWORD)(loadSegment + fixupSegment)) << PARAGRAPH_SHIFT) + fixupOffset);
         DosMcbWriteWord(fixup, (WORD)(DosMcbReadWord(fixup) + relocationFactor));
     }
     return imageSize;

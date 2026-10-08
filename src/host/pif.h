@@ -37,7 +37,6 @@
 #define PIF_EXT_HEADER_SIZE   22
 #define PIF_EXT_LAST          0xFFFF
 #define PIF_EXT_MAX_SECTIONS  16    /* a malformed chain cannot loop past this */
-#define PIF_BYTE_SHIFT        8
 
 typedef struct _PIF_INFO {
     char Program[PIF_PROG_LEN + 1];       /* char, not CHAR: the spelling moves code (#333) */
@@ -83,9 +82,9 @@ static INT PifParse(PCBYTE bytes, unsigned long length, PPIF_INFO out)
     offset = PIF_BASIC_LEN;
     for (guard = 0; guard < PIF_EXT_MAX_SECTIONS && offset + PIF_EXT_HEADER_SIZE <= length; ++guard) {
         PCBYTE header = bytes + offset;
-        unsigned next = (unsigned)(header[PIF_EXT_NEXT] | (header[PIF_EXT_NEXT + 1] << PIF_BYTE_SHIFT));
-        unsigned dataOffset = (unsigned)(header[PIF_EXT_DATA_OFFSET] | (header[PIF_EXT_DATA_OFFSET + 1] << PIF_BYTE_SHIFT));
-        unsigned dataLength = (unsigned)(header[PIF_EXT_DATA_LENGTH] | (header[PIF_EXT_DATA_LENGTH + 1] << PIF_BYTE_SHIFT));
+        unsigned next = (unsigned)(header[PIF_EXT_NEXT] | (header[PIF_EXT_NEXT + 1] << BYTE_SHIFT));
+        unsigned dataOffset = (unsigned)(header[PIF_EXT_DATA_OFFSET] | (header[PIF_EXT_DATA_OFFSET + 1] << BYTE_SHIFT));
+        unsigned dataLength = (unsigned)(header[PIF_EXT_DATA_LENGTH] | (header[PIF_EXT_DATA_LENGTH + 1] << BYTE_SHIFT));
         if (PifIsSectionName(header, "WINDOWS 386 3.0") && dataLength >= PIF_W386_PARAMS + PIF_PARAMS_LEN
             && (unsigned long)dataOffset + dataLength <= length) {
             CHAR parameters386[PIF_PARAMS_LEN + 1];

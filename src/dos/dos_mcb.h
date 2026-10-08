@@ -36,12 +36,10 @@
 #define DOS_MEM_TOP 0x9FC0u     /* conventional top in paragraphs: 640K - 1K EBDA */
 
 /* A paragraph is 16 bytes: segment << 4 is its linear address. */
-#define DOS_PARAGRAPH_SHIFT       4
 #define DOS_PARAGRAPH_BYTES       16
 #define DOS_PARAGRAPH_LAST_BYTE   15     /* added before dividing, to round up to a paragraph */
 
 /* A little-endian WORD: the low byte first, then the high byte. */
-#define DOS_HIGH_BYTE_SHIFT       8
 
 /* The MCB's fields (see the layout above). */
 #define DOS_MCB_SIGNATURE         0      /* 'M' or 'Z'                                    */
@@ -73,14 +71,14 @@
 
 static inline volatile BYTE *DosMcbSegmentAddress(_In_opt_ volatile BYTE *base,
                                                   _In_ WORD segment) {
-    return (volatile BYTE *)((ULONG_PTR)base + ((DWORD)segment << DOS_PARAGRAPH_SHIFT));
+    return (volatile BYTE *)((ULONG_PTR)base + ((DWORD)segment << PARAGRAPH_SHIFT));
 }
 static inline WORD DosMcbReadWord(_In_ volatile BYTE *field) {
-    return (WORD)((WORD)field[0] | ((WORD)field[1] << DOS_HIGH_BYTE_SHIFT));
+    return (WORD)((WORD)field[0] | ((WORD)field[1] << BYTE_SHIFT));
 }
 static inline VOID DosMcbWriteWord(_Out_ volatile BYTE *field, _In_ WORD value) {
     field[0] = (BYTE)(value & BYTE_MASK);
-    field[1] = (BYTE)(value >> DOS_HIGH_BYTE_SHIFT);
+    field[1] = (BYTE)(value >> BYTE_SHIFT);
 }
 static inline VOID DosMcbWriteHeader(_In_opt_ volatile BYTE *base, _In_ WORD mcbSegment,
                                      _In_ BYTE signature, _In_ WORD owner,

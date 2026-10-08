@@ -298,7 +298,7 @@ static VOID WowCallPush(DWORD stackBase, PWORD stackPointer, WORD value)
     *stackPointer = (WORD)(*stackPointer - WOW_WORD_BYTES);
     bytes = (volatile BYTE *)(ULONG_PTR)(stackBase + *stackPointer);
     bytes[0] = (BYTE)(value & BYTE_MASK);
-    bytes[1] = (BYTE)(value >> WOW_BYTE_SHIFT);
+    bytes[1] = (BYTE)(value >> BYTE_SHIFT);
 }
 
 /*
@@ -327,7 +327,7 @@ static INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector
     WORD stackPointer;
     INT index;
     if (g_WowCallDepth >= WOWCALL_MAX_DEPTH) return 0;
-    if (!stackBase || !returnSelector || !(procedure >> WOW_WORD_SHIFT)) return 0;
+    if (!stackBase || !returnSelector || !(procedure >> WORD_SHIFT)) return 0;
     if (argumentWordCount < 0 || argumentWordCount > WOWCALL_MAX_ARGW) return 0;
     if (blobLength < 0 || blobLength > WOWCALL_MAX_BLOB) return 0;
     for (index = 0; index < argumentWordCount; ++index) arguments[index] = argumentWords[index];
@@ -399,7 +399,7 @@ static INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector
          are about to enter on pops it and faults on OUR behalf. Same order as
          the return address above: CS first, so IP ends up at [SP]. */
     if (isAbsent) {
-        WowCallPush(stackBase, &stackPointer, (WORD)(procedure >> WOW_WORD_SHIFT));
+        WowCallPush(stackBase, &stackPointer, (WORD)(procedure >> WORD_SHIFT));
         WowCallPush(stackBase, &stackPointer, (WORD)(procedure & WORD_MASK));
     }
     VDM_SET16(tib, VTIB_ESP, stackPointer);
@@ -417,7 +417,7 @@ static INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector
         VDM_SET16(tib, VTIB_CS,  returnSelector);
         VDM_REG(tib, VTIB_EIP) = (DWORD)WOWCALL_RETF_OFF;
     } else {
-        VDM_SET16(tib, VTIB_CS,  (WORD)(procedure >> WOW_WORD_SHIFT));
+        VDM_SET16(tib, VTIB_CS,  (WORD)(procedure >> WORD_SHIFT));
         VDM_REG(tib, VTIB_EIP) = (DWORD)(procedure & WORD_MASK);
     }
     ++g_WowCallCount;
@@ -462,8 +462,8 @@ static PWOWCALL_FRAME WowCallLeave(volatile BYTE *tib, DWORD result)
         }
         if (isWrite) {
             frame->Written = value;
-            hole[0] = (BYTE)(value & BYTE_MASK);        hole[1] = (BYTE)((value >> WOW_BYTE_SHIFT)  & BYTE_MASK);
-            hole[2] = (BYTE)((value >> WOW_WORD_SHIFT) & BYTE_MASK); hole[3] = (BYTE)((value >> WOW_HIGH_BYTE_SHIFT) & BYTE_MASK);
+            hole[0] = (BYTE)(value & BYTE_MASK);        hole[1] = (BYTE)((value >> BYTE_SHIFT)  & BYTE_MASK);
+            hole[2] = (BYTE)((value >> WORD_SHIFT) & BYTE_MASK); hole[3] = (BYTE)((value >> TOP_BYTE_SHIFT) & BYTE_MASK);
         }
     }
     return frame;

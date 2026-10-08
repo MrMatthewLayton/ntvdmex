@@ -324,8 +324,8 @@ static INT WowDlgEnd(WORD window, WORD result)
 static VOID WowDlgUnwind(PWOWDLG_MODAL dialog, DWORD value)
 {
     volatile BYTE *hole = (volatile BYTE *)(ULONG_PTR)dialog->ReturnLinear;
-    hole[0] = (BYTE)(value & BYTE_MASK);         hole[1] = (BYTE)((value >> WOW_BYTE_SHIFT)  & BYTE_MASK);
-    hole[2] = (BYTE)((value >> WOW_WORD_SHIFT) & BYTE_MASK); hole[3] = (BYTE)((value >> WOW_HIGH_BYTE_SHIFT) & BYTE_MASK);
+    hole[0] = (BYTE)(value & BYTE_MASK);         hole[1] = (BYTE)((value >> BYTE_SHIFT)  & BYTE_MASK);
+    hole[2] = (BYTE)((value >> WORD_SHIFT) & BYTE_MASK); hole[3] = (BYTE)((value >> TOP_BYTE_SHIFT) & BYTE_MASK);
     /* GH #279: give the owner back BEFORE the dialog goes, so activation returns
        to it rather than to whatever window Windows picks next. */
     if (dialog->Owner32 && IsWindow(dialog->Owner32)) EnableWindow(dialog->Owner32, TRUE);
@@ -663,7 +663,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         arguments[0] = target;
         arguments[1] = messageNumber;
         arguments[2] = wParam;
-        arguments[3] = (WORD)(lParam >> WOW_WORD_SHIFT);
+        arguments[3] = (WORD)(lParam >> WORD_SHIFT);
         arguments[4] = (WORD)(lParam & WORD_MASK);
 
         /* Is the procedure's code segment loaded? Not present means we must go
@@ -672,7 +672,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
            session on CARDFILE. See WOWCALL_RETF_OFF in wowcall.h.
            ⚠ ASKED, NOT COMPUTED HERE: the LDT is the host's, and this file has
              no business reaching into it. main.c answers. */
-        isAbsent = WowDlgIsSelectorAbsent((WORD)(procedure >> WOW_WORD_SHIFT));
+        isAbsent = WowDlgIsSelectorAbsent((WORD)(procedure >> WORD_SHIFT));
 
         if (!returnSelector || !stackBase
             || !WowCallEnter(tib, stackBase, returnSelector, procedure, dialog->DataSelector, arguments, WOWDLG_PROCEDURE_ARGUMENTS,
@@ -700,7 +700,7 @@ static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         }
         ++dialog->Messages;
         WowNotePut(note, noteCapacity, &noteLength, "-> 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, procedure >> WOW_WORD_SHIFT, WOW_HEX_WORD_DIGITS);
+        WowNoteHex(note, noteCapacity, &noteLength, procedure >> WORD_SHIFT, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ":0x");
         WowNoteHex(note, noteCapacity, &noteLength, procedure & WORD_MASK, WOW_HEX_WORD_DIGITS);
         if (isAbsent) WowNotePut(note, noteCapacity, &noteLength, " [segment not present -- via the RETF"

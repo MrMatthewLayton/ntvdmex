@@ -74,7 +74,7 @@ static CHAR   g_WowResPath[WOWRES_PATH_MAX];
 static WORD WowResReadWord(DWORD offset)
 {
     if (offset + WOW_WORD_BYTES > g_WowResLength) return 0;
-    return (WORD)(g_WowResImage[offset] | (g_WowResImage[offset + 1] << WOW_BYTE_SHIFT));
+    return (WORD)(g_WowResImage[offset] | (g_WowResImage[offset + 1] << BYTE_SHIFT));
 }
 
 /* Read the application's file once. Returns 1 if there is an image to search.
@@ -154,8 +154,8 @@ static DWORD WowResFind(WORD type, WORD id, PDWORD length)
     DWORD header, resourceTable, position;
     WORD shift;
     if (!g_WowResImage) return 0;
-    header = (DWORD)(g_WowResImage[WOWRES_MZ_NE_OFFSET] | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 1] << WOW_BYTE_SHIFT)
-              | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 2] << WOW_WORD_SHIFT) | ((DWORD)g_WowResImage[WOWRES_MZ_NE_OFFSET + 3] << WOW_HIGH_BYTE_SHIFT));
+    header = (DWORD)(g_WowResImage[WOWRES_MZ_NE_OFFSET] | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 1] << BYTE_SHIFT)
+              | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 2] << WORD_SHIFT) | ((DWORD)g_WowResImage[WOWRES_MZ_NE_OFFSET + 3] << TOP_BYTE_SHIFT));
     if (header + WOWRES_NE_HEADER_SIZE > g_WowResLength || g_WowResImage[header] != 'N' || g_WowResImage[header + 1] != 'E') return 0;
     resourceTable = header + WowResReadWord(header + WOWRES_NE_RESOURCE_TABLE);
     if (resourceTable + WOW_WORD_BYTES > g_WowResLength) return 0;
@@ -187,8 +187,8 @@ static DWORD WowResFindAny(WORD type, PWORD idOutput, PDWORD length)
     DWORD header, resourceTable, position;
     WORD shift;
     if (!g_WowResImage) return 0;
-    header = (DWORD)(g_WowResImage[WOWRES_MZ_NE_OFFSET] | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 1] << WOW_BYTE_SHIFT)
-              | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 2] << WOW_WORD_SHIFT) | ((DWORD)g_WowResImage[WOWRES_MZ_NE_OFFSET + 3] << WOW_HIGH_BYTE_SHIFT));
+    header = (DWORD)(g_WowResImage[WOWRES_MZ_NE_OFFSET] | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 1] << BYTE_SHIFT)
+              | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 2] << WORD_SHIFT) | ((DWORD)g_WowResImage[WOWRES_MZ_NE_OFFSET + 3] << TOP_BYTE_SHIFT));
     if (header + WOWRES_NE_HEADER_SIZE > g_WowResLength || g_WowResImage[header] != 'N' || g_WowResImage[header + 1] != 'E') return 0;
     resourceTable = header + WowResReadWord(header + WOWRES_NE_RESOURCE_TABLE);
     if (resourceTable + WOW_WORD_BYTES > g_WowResLength) return 0;
@@ -222,8 +222,8 @@ static INT WowResAccelFirst(PWOWRES_ACCEL output, INT capacity, PWORD resourceId
     while (count < capacity && (DWORD)(count * WOWRES_ACCEL_ENTRY_SIZE + WOWRES_ACCEL_ENTRY_SIZE) <= length) {
         PCBYTE entry = g_WowResImage + offset + count * WOWRES_ACCEL_ENTRY_SIZE;
         output[count].Flags = entry[0];
-        output[count].Key   = (WORD)(entry[WOWRES_ACCEL_FIELD_KEY] | (entry[WOWRES_ACCEL_FIELD_KEY + 1] << WOW_BYTE_SHIFT));
-        output[count].Id    = (WORD)(entry[WOWRES_ACCEL_FIELD_ID] | (entry[WOWRES_ACCEL_FIELD_ID + 1] << WOW_BYTE_SHIFT));
+        output[count].Key   = (WORD)(entry[WOWRES_ACCEL_FIELD_KEY] | (entry[WOWRES_ACCEL_FIELD_KEY + 1] << BYTE_SHIFT));
+        output[count].Id    = (WORD)(entry[WOWRES_ACCEL_FIELD_ID] | (entry[WOWRES_ACCEL_FIELD_ID + 1] << BYTE_SHIFT));
         ++count;
         if (entry[0] & WOWRES_ACCEL_LAST) break;
     }
@@ -275,8 +275,8 @@ static DWORD WowResFindNamed(WORD type, PCSTR name, PDWORD length)
     DWORD header, resourceTable, position;
     WORD shift;
     if (!g_WowResImage || !name || !name[0]) return 0;
-    header = (DWORD)(g_WowResImage[WOWRES_MZ_NE_OFFSET] | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 1] << WOW_BYTE_SHIFT)
-              | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 2] << WOW_WORD_SHIFT) | ((DWORD)g_WowResImage[WOWRES_MZ_NE_OFFSET + 3] << WOW_HIGH_BYTE_SHIFT));
+    header = (DWORD)(g_WowResImage[WOWRES_MZ_NE_OFFSET] | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 1] << BYTE_SHIFT)
+              | (g_WowResImage[WOWRES_MZ_NE_OFFSET + 2] << WORD_SHIFT) | ((DWORD)g_WowResImage[WOWRES_MZ_NE_OFFSET + 3] << TOP_BYTE_SHIFT));
     if (header + WOWRES_NE_HEADER_SIZE > g_WowResLength || g_WowResImage[header] != 'N' || g_WowResImage[header + 1] != 'E') return 0;
     resourceTable = header + WowResReadWord(header + WOWRES_NE_RESOURCE_TABLE);
     if (resourceTable + WOW_WORD_BYTES > g_WowResLength) return 0;

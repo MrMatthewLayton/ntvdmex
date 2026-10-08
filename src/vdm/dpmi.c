@@ -45,7 +45,6 @@ VOID DpmiBuildDescriptor(DWORD base, DWORD limit, BYTE access, BYTE flags,
         | (((base >> DPMI_DESCRIPTOR_BASE_HIGH_SHIFT) & BYTE_MASK) << DPMI_DESCRIPTOR_BASE_HIGH_SHIFT);
 }
 
-#define DPMI_SEGMENT_SHIFT           4         /* real mode: linear = segment << 4         */
 #define DPMI_FAR_RETURN_CS_OFFSET    2         /* 16-bit FAR CALL frame: [SP]=IP, [SP+2]=CS */
 #define DPMI_FAR_RETURN_FRAME_SIZE   4
 #define DPMI_CODE_ACCESS             0xFA      /* present, DPL 3, code exec/read            */
@@ -68,7 +67,7 @@ INT DpmiSwitchToProtectedMode(volatile BYTE *tib, INT isClient32,
     WORD stackSegment = (WORD)(VDM_REG(tib, VTIB_SS)  & WORD_MASK);
     WORD stackPointer = (WORD)(VDM_REG(tib, VTIB_ESP) & WORD_MASK);
     WORD dataSegment = (WORD)(VDM_REG(tib, VTIB_DS)  & WORD_MASK);
-    DWORD frameLinear = ((DWORD)stackSegment << DPMI_SEGMENT_SHIFT) + stackPointer;      /* linear addr of the far-call frame  */
+    DWORD frameLinear = ((DWORD)stackSegment << PARAGRAPH_SHIFT) + stackPointer;      /* linear addr of the far-call frame  */
     /* 16-bit FAR CALL pushed IP then CS: [SP]=retIP, [SP+2]=retCS. */
     WORD returnOffset = *(volatile WORD *)frameLinear;
     WORD returnSegment = *(volatile WORD *)(frameLinear + DPMI_FAR_RETURN_CS_OFFSET);
@@ -78,9 +77,9 @@ INT DpmiSwitchToProtectedMode(volatile BYTE *tib, INT isClient32,
     WORD dataSelector  = DPMI_SELECTOR(DPMI_IDX_DATA);
     WORD stackSelector = DPMI_SELECTOR(DPMI_IDX_STACK);
     DWORD codeLow, codeHigh, dataLow, dataHigh, stackLow, stackHigh;
-    DWORD codeBase  = (DWORD)returnSegment << DPMI_SEGMENT_SHIFT;           /* linear base of the guest CS  */
-    DWORD dataBase  = (DWORD)dataSegment     << DPMI_SEGMENT_SHIFT;           /* linear base of the guest DS  */
-    DWORD stackBase = (DWORD)stackSegment     << DPMI_SEGMENT_SHIFT;           /* linear base of the guest SS  */
+    DWORD codeBase  = (DWORD)returnSegment << PARAGRAPH_SHIFT;           /* linear base of the guest CS  */
+    DWORD dataBase  = (DWORD)dataSegment     << PARAGRAPH_SHIFT;           /* linear base of the guest DS  */
+    DWORD stackBase = (DWORD)stackSegment     << PARAGRAPH_SHIFT;           /* linear base of the guest SS  */
     DWORD linearEip = codeBase  + returnOffset;             /* linear code addr             */
     DWORD linearEsp = stackBase + newStackPointer;             /* linear stack addr            */
     LONG status;

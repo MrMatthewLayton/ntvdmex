@@ -51,7 +51,7 @@ static VOID BdaTestCheck(BOOL passed, PCSTR description)
 
 static UINT BdaTestReadWord(DWORD linear)
 {
-    return (UINT)(g_Memory[linear] | (g_Memory[linear + 1] << BIOS_HIGH_BYTE_SHIFT));
+    return (UINT)(g_Memory[linear] | (g_Memory[linear + 1] << BYTE_SHIFT));
 }
 
 INT main(VOID)

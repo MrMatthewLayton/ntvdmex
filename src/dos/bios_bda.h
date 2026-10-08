@@ -91,15 +91,13 @@ static inline WORD BiosBaseKbOfTop(_In_ WORD top) {
 #define BIOS_BDA_EBDA_SEGMENT  0x0E      /* WORD: EBDA segment (AT and later)          */
 #define BIOS_BDA_EQUIPMENT     0x10      /* WORD: the equipment word, = INT 11h       */
 #define BIOS_BDA_MEMORY_KB     0x13      /* WORD: base memory in KB,  = INT 12h       */
-#define BIOS_PARAGRAPH_SHIFT   4
-#define BIOS_HIGH_BYTE_SHIFT   8
 
 static inline volatile BYTE *BiosLinearAddress(_In_opt_ volatile BYTE *base, _In_ DWORD linear) {
     return (volatile BYTE *)((ULONG_PTR)base + linear);
 }
 static inline VOID BiosWriteWord(_Out_ volatile BYTE *field, _In_ WORD value) {
     field[0] = (BYTE)(value & BYTE_MASK);
-    field[1] = (BYTE)(value >> BIOS_HIGH_BYTE_SHIFT);
+    field[1] = (BYTE)(value >> BYTE_SHIFT);
 }
 
 /* 0040:0010 only -- the live half, for a setting (the joystick type) that changes the
@@ -118,7 +116,7 @@ static inline VOID BiosBdaSetEquipment(_In_opt_ volatile BYTE *base, _In_ WORD e
 /* #136: `top` is the EBDA's segment = the end of DOS's arena (BiosConventionalTopParagraph). */
 static inline VOID BiosBdaInitializeWithTop(_In_opt_ volatile BYTE *base, _In_ WORD equipment,
                                             _In_ WORD top) {
-    volatile BYTE *ebda = BiosLinearAddress(base, (DWORD)top << BIOS_PARAGRAPH_SHIFT);
+    volatile BYTE *ebda = BiosLinearAddress(base, (DWORD)top << PARAGRAPH_SHIFT);
     UINT byteIndex;
     BiosWriteWord(BiosLinearAddress(base, BIOS_BDA_BASE + BIOS_BDA_EBDA_SEGMENT), top);
     BiosBdaSetEquipment(base, equipment);
