@@ -18,10 +18,10 @@
 
 #include <windows.h>
 #include <stdint.h>
+#include "audio_format.h"    /* defines only: AUDIO_STEREO_CHANNELS */
 
 #define AUDIO_WAVE_BUFFERS      24      /* CAP on buffers in flight (storage is sized to it) */
 #define AUDIO_WAVE_FRAMES      512      /* CAP on frames per buffer                          */
-#define AUDIO_WAVE_CHANNELS    2        /* #189: stereo; a frame is an L/R pair of samples   */
 /* ⚠ THE CAP AND THE DEFAULT MUST BE SEPARATE CONSTANTS. They used to be one: the
      clamp read `if (want_bufs < 2) want_bufs = AUDIO_WAVE_BUFFERS;`, i.e. "0 means use them
      all", which was 6 and therefore also the default. Raising the cap to 24 without
@@ -122,7 +122,7 @@ typedef struct _AUDIO_WAVE {
 
     /* WAVEHDR + sample storage, allocated inline to avoid a heap dependency */
     BYTE Headers[AUDIO_WAVE_BUFFERS][AUDIO_WAVE_HEADER_BYTES];  /* WAVEHDR is 32 bytes on win32          */
-    INT16   Buffers[AUDIO_WAVE_BUFFERS][AUDIO_WAVE_FRAMES * AUDIO_WAVE_CHANNELS];   /* interleaved L/R */
+    INT16   Buffers[AUDIO_WAVE_BUFFERS][AUDIO_WAVE_FRAMES * AUDIO_STEREO_CHANNELS];   /* interleaved L/R */
 } AUDIO_WAVE, *PAUDIO_WAVE;
 typedef const AUDIO_WAVE *PCAUDIO_WAVE;
 

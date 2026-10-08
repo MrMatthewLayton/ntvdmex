@@ -28,6 +28,8 @@
 #define SYSFONT_H
 
 #include <windows.h>
+#include "../ntvdmex_x86.h"     /* defines only: X86_WORD_SIZE / DWORD_SIZE */
+#include "../ntvdmex_ascii.h"   /* defines only: ASCII_SPACE */
 #include "vga_font.h"
 
 #define SYSFONT_MAX_HEIGHT 32
@@ -40,7 +42,6 @@
 #define SYSFONT_STAGE_COLOURS 2
 #define SYSFONT_WHITE_LEVEL 255
 /* Characters and code pages. */
-#define SYSFONT_SPACE       0x20
 #define SYSFONT_DELETE      0x7F
 #define SYSFONT_BLANK_FF    0xFF        /* blank in every font                        */
 #define SYSFONT_CODE_PAGE_437  437
@@ -51,8 +52,6 @@
 #define SYSFONT_BOX_BLOCK_LAST  0x259F
 #define SYSFONT_NO_GLYPH    0xFFFF      /* GetGlyphIndices: GGI_MARK_NONEXISTING_GLYPHS */
 /* A .FON file: an NE executable whose RT_FONT resources are FNT 2.0/3.0 fonts. */
-#define SYSFONT_WORD_BYTES  2
-#define SYSFONT_DWORD_BYTES 4
 #define SYSFONT_FONTS_DIRECTORY_ROOM 32 /* "\\Fonts\\" and a file name                 */
 #define SYSFONT_FON_MIN_SIZE 0x80
 #define SYSFONT_FON_MAX_SIZE (4u << 20)
@@ -178,24 +177,24 @@ static INT SysFontOpenFon(SYSFONT_FACE *face, PCSTR fileName, INT wantedHeight)
     if (!bytes) { CloseHandle(file); return 0; }
     ReadFile(file, bytes, size, &read, NULL);
     CloseHandle(file);
-    neHeader = SysFontRead(bytes, read, SYSFONT_MZ_NE_OFFSET, SYSFONT_DWORD_BYTES);
+    neHeader = SysFontRead(bytes, read, SYSFONT_MZ_NE_OFFSET, X86_DWORD_SIZE);
     if (read != size || bytes[0] != 'M' || bytes[1] != 'Z' || neHeader + SYSFONT_NE_HEADER_SIZE > size || bytes[neHeader] != 'N' || bytes[neHeader + 1] != 'E') {
         HeapFree(GetProcessHeap(), 0, bytes); return 0;
     }
-    resourceTable = neHeader + SysFontRead(bytes, size, neHeader + SYSFONT_NE_RESOURCE_TABLE, SYSFONT_WORD_BYTES);              /* resource table */
-    alignShift = SysFontRead(bytes, size, resourceTable, SYSFONT_WORD_BYTES);
-    offset = resourceTable + SYSFONT_WORD_BYTES;
+    resourceTable = neHeader + SysFontRead(bytes, size, neHeader + SYSFONT_NE_RESOURCE_TABLE, X86_WORD_SIZE);              /* resource table */
+    alignShift = SysFontRead(bytes, size, resourceTable, X86_WORD_SIZE);
+    offset = resourceTable + X86_WORD_SIZE;
     while (!isFound && offset + SYSFONT_RESOURCE_TYPE_SIZE <= size) {
-        DWORD type = SysFontRead(bytes, size, offset, SYSFONT_WORD_BYTES), count = SysFontRead(bytes, size, offset + SYSFONT_WORD_BYTES, SYSFONT_WORD_BYTES), index;
+        DWORD type = SysFontRead(bytes, size, offset, X86_WORD_SIZE), count = SysFontRead(bytes, size, offset + X86_WORD_SIZE, X86_WORD_SIZE), index;
         if (!type) break;
         offset += SYSFONT_RESOURCE_TYPE_SIZE;
         for (index = 0; index < count && offset + SYSFONT_RESOURCE_ENTRY_SIZE <= size; ++index, offset += SYSFONT_RESOURCE_ENTRY_SIZE) {
-            DWORD fontOffset = SysFontRead(bytes, size, offset, SYSFONT_WORD_BYTES) << alignShift, version, pixelWidth, pixelHeight, charset, firstChar, lastChar, charTable, character;
+            DWORD fontOffset = SysFontRead(bytes, size, offset, X86_WORD_SIZE) << alignShift, version, pixelWidth, pixelHeight, charset, firstChar, lastChar, charTable, character;
             if (type != SYSFONT_RT_FONT || isFound || fontOffset + SYSFONT_FNT3_HEADER_SIZE > size) continue;   /* RT_FONT only */
-            version = SysFontRead(bytes, size, fontOffset, SYSFONT_WORD_BYTES);
+            version = SysFontRead(bytes, size, fontOffset, X86_WORD_SIZE);
             charset  = bytes[fontOffset + SYSFONT_FNT_CHARSET];
-            pixelWidth  = SysFontRead(bytes, size, fontOffset + SYSFONT_FNT_PIXEL_WIDTH, SYSFONT_WORD_BYTES);
-            pixelHeight  = SysFontRead(bytes, size, fontOffset + SYSFONT_FNT_PIXEL_HEIGHT, SYSFONT_WORD_BYTES);
+            pixelWidth  = SysFontRead(bytes, size, fontOffset + SYSFONT_FNT_PIXEL_WIDTH, X86_WORD_SIZE);
+            pixelHeight  = SysFontRead(bytes, size, fontOffset + SYSFONT_FNT_PIXEL_HEIGHT, X86_WORD_SIZE);
             firstChar = bytes[fontOffset + SYSFONT_FNT_FIRST_CHAR]; lastChar = bytes[fontOffset + SYSFONT_FNT_LAST_CHAR];
             if ((version != SYSFONT_FNT_VERSION_2 && version != SYSFONT_FNT_VERSION_3) || charset != OEM_CHARSET || pixelWidth != SYSFONT_CELL_WIDTH
                 || (INT)pixelHeight != wantedHeight || pixelHeight > SYSFONT_MAX_HEIGHT) continue;
@@ -205,7 +204,7 @@ static INT SysFontOpenFon(SYSFONT_FACE *face, PCSTR fileName, INT wantedHeight)
                 for (row = 0; row < SYSFONT_MAX_HEIGHT; ++row) face->Glyphs[character][row] = 0;
                 if (character < firstChar || character > lastChar) continue;
                 entry  = charTable + (character - firstChar) * (version == SYSFONT_FNT_VERSION_3 ? SYSFONT_FNT3_ENTRY_SIZE : SYSFONT_FNT2_ENTRY_SIZE);
-                glyphOffset = fontOffset + (version == SYSFONT_FNT_VERSION_3 ? SysFontRead(bytes, size, entry + SYSFONT_FNT_ENTRY_OFFSET, SYSFONT_DWORD_BYTES) : SysFontRead(bytes, size, entry + SYSFONT_FNT_ENTRY_OFFSET, SYSFONT_WORD_BYTES));
+                glyphOffset = fontOffset + (version == SYSFONT_FNT_VERSION_3 ? SysFontRead(bytes, size, entry + SYSFONT_FNT_ENTRY_OFFSET, X86_DWORD_SIZE) : SysFontRead(bytes, size, entry + SYSFONT_FNT_ENTRY_OFFSET, X86_WORD_SIZE));
                 for (row = 0; row < pixelHeight && glyphOffset + row < size; ++row) face->Glyphs[character][row] = bytes[glyphOffset + row];
             }
             face->Width = SYSFONT_CELL_WIDTH; face->Height = (INT)pixelHeight; face->IsOk = 1; isFound = 1;
@@ -222,7 +221,7 @@ static INT SysFontIsText(UINT character, BYTE *ansi)
     WCHAR wide = 0;
     BOOL isDefaultUsed = FALSE;
     CHAR out = 0;
-    if (character < SYSFONT_SPACE || character == SYSFONT_DELETE) return 0;               /* CP437 symbols there, not text */
+    if (character < ASCII_SPACE || character == SYSFONT_DELETE) return 0;               /* CP437 symbols there, not text */
     if (character < SYSFONT_DELETE) { *ansi = (BYTE)character; return 1; }
     if (MultiByteToWideChar(SYSFONT_CODE_PAGE_437, MB_USEGLYPHCHARS, &oem, 1, &wide, 1) != 1) return 0;
     if (wide >= SYSFONT_SYMBOLS_FIRST && wide <= SYSFONT_SYMBOLS_LAST) return 0;       /* arrows, maths, boxes, blocks, shapes */
@@ -325,7 +324,7 @@ static INT SysFontUser(HDC dc, BYTE *bits, SYSFONT_FACE *face, PCSTR faceName,
         INT row;
         hasGlyph[character] = 0;
         for (row = 0; row < SYSFONT_MAX_HEIGHT; ++row) face->Glyphs[character][row] = 0;
-        if (character == 0 || character == SYSFONT_SPACE || character == SYSFONT_BLANK_FF) continue;         /* blank in every font */
+        if (character == 0 || character == ASCII_SPACE || character == SYSFONT_BLANK_FF) continue;         /* blank in every font */
         FillRect(dc, &rect, (HBRUSH)GetStockObject(BLACK_BRUSH));
         SetTextColor(dc, RGB(SYSFONT_WHITE_LEVEL, SYSFONT_WHITE_LEVEL, SYSFONT_WHITE_LEVEL));
         SetBkColor(dc, RGB(0, 0, 0));

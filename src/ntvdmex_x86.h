@@ -79,6 +79,9 @@
 #define X86_OP_OUTSB            0x6E
 #define X86_OP_OUTS             0x6F        /* OUTSW / OUTSD                            */
 #define X86_PREFIXES_MAX        4           /* a decoder gives up after this many       */
+#define X86_SELECTOR_INDEX_SHIFT 3          /* a selector's descriptor index starts at bit 3 */
+#define X86_DESCRIPTOR_FLAGS_SHIFT 20      /* the flags nibble: bits 20-23 of the high dword */
+#define X86_WORD_SIZE_U         2u
 #define X86_SELECTOR_NULL_MASK  0xFFFC      /* a selector is null when these bits are   */
 
 /* The real-mode interrupt vector table: at 0000:0000, one 4-byte entry per vector -- the

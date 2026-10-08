@@ -25,6 +25,7 @@
 
 #include <windows.h>
 #include <stdint.h>
+#include "audio_format.h"    /* defines only: AUDIO_STEREO_CHANNELS */
 
 /* The canonical 44-byte PCM .WAV header (AudioRecorderHeader). */
 #define AUDIO_RECORDER_HEADER_BYTES       44
@@ -36,7 +37,6 @@
 #define AUDIO_RECORDER_FORMAT_OFFSET      20
 #define AUDIO_RECORDER_FORMAT_PCM         1
 #define AUDIO_RECORDER_CHANNELS_OFFSET    22
-#define AUDIO_RECORDER_CHANNELS           2
 #define AUDIO_RECORDER_RATE_OFFSET        24
 #define AUDIO_RECORDER_BYTE_RATE_OFFSET   28
 #define AUDIO_RECORDER_BLOCK_ALIGN_OFFSET 32
@@ -76,7 +76,7 @@ static VOID AudioRecorderHeader(BYTE header[AUDIO_RECORDER_HEADER_BYTES], UINT32
     AudioRecorderPut32(header + AUDIO_RECORDER_RIFF_SIZE_OFFSET, AUDIO_RECORDER_RIFF_SIZE_BASE + dataBytes);
     AudioRecorderPut32(header + AUDIO_RECORDER_FMT_SIZE_OFFSET, AUDIO_RECORDER_FMT_CHUNK_BYTES);     /* fmt chunk size   */
     AudioRecorderPut16(header + AUDIO_RECORDER_FORMAT_OFFSET, AUDIO_RECORDER_FORMAT_PCM);      /* PCM              */
-    AudioRecorderPut16(header + AUDIO_RECORDER_CHANNELS_OFFSET, AUDIO_RECORDER_CHANNELS);      /* stereo (#189)    */
+    AudioRecorderPut16(header + AUDIO_RECORDER_CHANNELS_OFFSET, AUDIO_STEREO_CHANNELS);      /* stereo (#189)    */
     AudioRecorderPut32(header + AUDIO_RECORDER_RATE_OFFSET, sampleHz);
     AudioRecorderPut32(header + AUDIO_RECORDER_BYTE_RATE_OFFSET, sampleHz * AUDIO_RECORDER_FRAME_BYTES);              /* bytes per second */
     AudioRecorderPut16(header + AUDIO_RECORDER_BLOCK_ALIGN_OFFSET, AUDIO_RECORDER_FRAME_BYTES);      /* block align: L+R */

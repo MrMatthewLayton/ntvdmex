@@ -71,7 +71,6 @@
 #define DPMI_PM_BOP_LENGTH        2
 #define DPMI_SELECTOR_TI          4    /* the table indicator: 1 = the LDT         */
 #define DPMI_SELECTOR_RPL_USER    3    /* requested privilege level 3: a client's  */
-#define DPMI_SELECTOR_INDEX_SHIFT 3
 /* Descriptor access bytes: present, DPL 3, and a readable code or a writable data segment. */
 #define DPMI_ACCESS_CODE  0xFA
 #define DPMI_ACCESS_DATA  0xF2
@@ -87,10 +86,9 @@
 #define DPMI_INITIAL_SELECTOR_COUNT 3
 #define DPMI_FIRST_CLIENT_INDEX     4      /* a client's own allocations start here */
 /* A client's LDT selector for descriptor `index`, and the descriptor index of a selector. */
-#define DPMI_LDT_SELECTOR(index)      (((index) << DPMI_SELECTOR_INDEX_SHIFT) | (DPMI_SELECTOR_TI | DPMI_SELECTOR_RPL_USER))
-#define DPMI_SELECTOR_INDEX(selector) ((selector) >> DPMI_SELECTOR_INDEX_SHIFT)
+#define DPMI_LDT_SELECTOR(index)      (((index) << X86_SELECTOR_INDEX_SHIFT) | (DPMI_SELECTOR_TI | DPMI_SELECTOR_RPL_USER))
+#define DPMI_SELECTOR_INDEX(selector) ((selector) >> X86_SELECTOR_INDEX_SHIFT)
 /* The flags nibble (G, D/B, L, AVL) is bits 20-23 of a descriptor's high dword. */
-#define DPMI_DESCRIPTOR_FLAGS_SHIFT 20
 #define DPMI_DESCRIPTOR_FLAGS_MASK  0x0F
 #define DPMI_DESCRIPTOR_FLAG_BIG    0x4    /* D/B: a 32-bit segment                 */
 #define DPMI_DESCRIPTOR_FLAG_GRANULARITY 0x8   /* G: the limit counts pages         */

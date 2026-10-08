@@ -145,11 +145,10 @@ static INT RmcsSimIntRoute(UINT vector, WORD ivtSegment, WORD ivtOffset,
    ⚠ SP = 0 IS A FULL 64 KB, not an empty stack: the first push wraps it to FFFEh. */
 #define RMCS_STACK_FULL  0x10000u   /* SP = 0: all 64 KB                            */
 #define RMCS_DEFAULT_SP  0xFF00     /* SS:SP = 0:0 -> the host's stack, SP here       */
-#define RMCS_WORD_BYTES  2u
 static INT RmcsStackPlan(WORD stackPointer, UINT words, UINT frame, PWORD stackPointerAfter)
 {
     DWORD available = stackPointer ? (DWORD)stackPointer : RMCS_STACK_FULL;
-    DWORD needed = (DWORD)words * RMCS_WORD_BYTES;
+    DWORD needed = (DWORD)words * X86_WORD_SIZE_U;
     if (needed + frame > available) { *stackPointerAfter = stackPointer; return 0; }
     *stackPointerAfter = (WORD)(available - needed);
     return 1;

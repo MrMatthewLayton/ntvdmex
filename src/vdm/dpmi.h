@@ -15,6 +15,7 @@
 #define NTVDMEX_VDM_DPMI_H
 
 #include <windows.h>
+#include "../ntvdmex_x86.h"     /* defines only: X86_SELECTOR_INDEX_SHIFT */
 
 /* Diagnostic snapshot of the last switch: {return CS, return linear, code desc lo, hi}. */
 #define DPMI_DEBUG_RETURN_CS       0
@@ -41,10 +42,9 @@ extern DWORD g_DpmiSegmentBase[DPMI_INITIAL_SELECTORS];
 extern INT g_DpmiIsClient32;
 
 /* An LDT selector: (index<<3) | TI(=1,LDT) | RPL(=3, ring-3 client). */
-#define DPMI_SELECTOR_INDEX_SHIFT  3
 #define DPMI_SELECTOR_TI_LDT       0x4
 #define DPMI_SELECTOR_RPL3         0x3
-#define DPMI_SELECTOR(index)  (WORD)(((index) << DPMI_SELECTOR_INDEX_SHIFT) | DPMI_SELECTOR_TI_LDT | DPMI_SELECTOR_RPL3)
+#define DPMI_SELECTOR(index)  (WORD)(((index) << X86_SELECTOR_INDEX_SHIFT) | DPMI_SELECTOR_TI_LDT | DPMI_SELECTOR_RPL3)
 
 /* Build the two dwords of an LDT descriptor for [base, +limit] with the given access
    byte (0xFA code exec/read DPL3, 0xF2 data r/w DPL3) and flags nibble (bit3=G,

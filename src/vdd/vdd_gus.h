@@ -13,6 +13,7 @@
 #define NTVDMEX_VDD_GUS_H
 #include "vdd_bus.h"
 #include "vdd_dma.h"
+#include "audio_format.h"    /* defines only: AUDIO_STEREO_CHANNELS */
 
 #define GUS_DEFAULT_BASE 0x240      /* 220h is the Sound Blaster's (ref §1)          */
 #define GUS_DEFAULT_IRQ  11         /* user decision 2026-09-25; slave delivery s80  */
@@ -31,7 +32,6 @@
 #define GUS_SECOND_FALLBACK_DMA 6    /* when the SB holds DMA 1 as well */
 #define GUS_DRAM_SIZE    (1024u * 1024u)   /* 20 address bits (ref §3)               */
 #define GUS_VOICES       32
-#define GUS_STEREO_CHANNELS 2
 #define GUS_DEVICE_NAME  "gus"
 
 /* #190: the GUS's own MIDI port is a 6850 UART (ref §9): it transmits BYTES, not
@@ -144,7 +144,7 @@ UINT32 VddGusRateHz(_In_ PCGUS_STATE state);
    timer by that much GF1 time, and raising the interrupts that time produces. */
 VOID VddGusRender(_Inout_ PGUS_STATE state, _Out_writes_(count) INT16 *output, _In_ UINT32 count);
 /* #189: the same, as panned interleaved L/R pairs (2*count samples). */
-VOID VddGusRenderStereo(_Inout_ PGUS_STATE state, _Out_writes_(GUS_STEREO_CHANNELS * count) INT16 *output, _In_ UINT32 count);
+VOID VddGusRenderStereo(_Inout_ PGUS_STATE state, _Out_writes_(AUDIO_STEREO_CHANNELS * count) INT16 *output, _In_ UINT32 count);
 
 /* The linear gain (Q16) of a 12-bit GF1 volume (ref §7). Exposed for the test. */
 UINT32 VddGusVolumeGain(_In_ WORD volume12);

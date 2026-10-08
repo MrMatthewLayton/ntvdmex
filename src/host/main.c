@@ -19429,7 +19429,7 @@ static INT DpmiSelectorDescriptor(WORD selector, UINT32 *accessRights, UINT32 *l
 {
     INT index = DPMI_SELECTOR_INDEX(selector & WORD_MASK);
     if (index < 1 || index >= DPMI_LDT_LEGACY_LIMIT || g_Ldt[index].Access == 0) return 0;
-    if (accessRights)    *accessRights    = ((UINT32)g_Ldt[index].Access << BYTE_SHIFT) | ((UINT32)(g_Ldt[index].Flags & DPMI_DESCRIPTOR_FLAGS_MASK) << DPMI_DESCRIPTOR_FLAGS_SHIFT);
+    if (accessRights)    *accessRights    = ((UINT32)g_Ldt[index].Access << BYTE_SHIFT) | ((UINT32)(g_Ldt[index].Flags & DPMI_DESCRIPTOR_FLAGS_MASK) << X86_DESCRIPTOR_FLAGS_SHIFT);
     if (limit) *limit = (UINT32)g_Ldt[index].Limit;
     return 1;
 }
@@ -21569,7 +21569,7 @@ static INT WowShadowSync(PSTR *logCursor)
                 g_Ldt[index].Base   = descriptorBase;
                 g_Ldt[index].Limit  = descriptorLimit;
                 g_Ldt[index].Access = (BYTE)((descriptorHigh >> BYTE_SHIFT) & BYTE_MASK);
-                g_Ldt[index].Flags  = (BYTE)((descriptorHigh >> DPMI_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK);
+                g_Ldt[index].Flags  = (BYTE)((descriptorHigh >> X86_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK);
             }
             ++count; ++g_WowSyncWrites;
             if (cursor && count <= 6) {
@@ -25051,7 +25051,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                                         | ((entry[1] & BYTE_MASK_U) << WORD_SHIFT) | (entry[0] >> WORD_SHIFT);
                                         g_Ldt[ldtEntry].Limit  = (entry[0] & WORD_MASK_U) | (entry[1] & X86_DESCRIPTOR_LIMIT_HIGH_U);
                                         g_Ldt[ldtEntry].Access = (BYTE)((entry[1] >> BYTE_SHIFT) & BYTE_MASK);
-                                        g_Ldt[ldtEntry].Flags  = (BYTE)((entry[1] >> DPMI_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK);
+                                        g_Ldt[ldtEntry].Flags  = (BYTE)((entry[1] >> X86_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK);
                                         DpmiInstall(ldtEntry);       /* force-types idx 2 and 3 */
                                         ++done;
                                         continue;
@@ -25062,7 +25062,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                                     | ((entry[1] & BYTE_MASK_U) << WORD_SHIFT) | (entry[0] >> WORD_SHIFT);
                                     g_Ldt[ldtEntry].Limit  = (entry[0] & WORD_MASK_U) | (entry[1] & X86_DESCRIPTOR_LIMIT_HIGH_U);
                                     g_Ldt[ldtEntry].Access = (BYTE)((entry[1] >> BYTE_SHIFT) & BYTE_MASK);
-                                    g_Ldt[ldtEntry].Flags  = (BYTE)((entry[1] >> DPMI_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK);
+                                    g_Ldt[ldtEntry].Flags  = (BYTE)((entry[1] >> X86_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK);
                                     if (ldtEntry >= g_LdtNext) g_LdtNext = ldtEntry + 1;
                                     ++done;
                                 }
@@ -25686,7 +25686,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             g_Ldt[ldtIndex].Base   = ((low >> WORD_SHIFT) & WORD_MASK) | ((high & BYTE_MASK) << WORD_SHIFT)
                                               | (((high >> TOP_BYTE_SHIFT) & BYTE_MASK) << TOP_BYTE_SHIFT);
                             g_Ldt[ldtIndex].Access = (BYTE)((high >> BYTE_SHIFT) & BYTE_MASK);
-                            g_Ldt[ldtIndex].Flags  = (BYTE)((high >> DPMI_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK);
+                            g_Ldt[ldtIndex].Flags  = (BYTE)((high >> X86_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK);
                             DpmiInstall(ldtIndex);
                             if (DPMI_ACC_IS_CODE(g_Ldt[ldtIndex].Access)) { /* same rule as 0009 */
                                 DpmiPatchCodeRegion(g_Ldt[ldtIndex].Base, g_Ldt[ldtIndex].Limit,
@@ -26189,7 +26189,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 if (RmcsStackPlan(realSp, (UINT)stackWordsToCopy, (ax == DPMI_FN_CALL_REAL_MODE_IRET) ? X86_IRET16_SIZE : X86_FAR_RETURN16_SIZE, &newSp)
                                     && HostReadable(source, stackWordsToCopy * 2u)) {
                                     DWORD item;
-                                    for (item = 0; item < stackWordsToCopy * RMCS_WORD_BYTES; ++item)
+                                    for (item = 0; item < stackWordsToCopy * X86_WORD_SIZE_U; ++item)
                                         *(volatile BYTE *)(ULONG_PTR)(((DWORD)realSs << PARAGRAPH_SHIFT) + (WORD)(newSp + item)) = source[item];
                                     realSp = newSp;
                                     cursor = LogPut(cursor, " words");
@@ -34755,7 +34755,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                      is evidence; picking the first match would be a guess. */
                                 UINT32 guestAccessRights = 0;
                                 INT guestPresent = DpmiSelectorDescriptor(frame[DPMI_FRAME_CS], &guestAccessRights, NULL);
-                                INT guestIs32    = guestPresent && (((guestAccessRights >> DPMI_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK) & DPMI_DESCRIPTOR_FLAG_BIG);
+                                INT guestIs32    = guestPresent && (((guestAccessRights >> X86_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK) & DPMI_DESCRIPTOR_FLAG_BIG);
                                 INT guestTruncated   = guestIs32 && guestCodeBase == 0;   /* EIP *is* the linear addr */
                                 INT guestCandidates    = 0;
                                 DWORD guestLinear   = guestCodeBase + frame[DPMI_FRAME_IP];

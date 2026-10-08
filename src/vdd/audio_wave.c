@@ -105,11 +105,11 @@ static DWORD WINAPI AudioWaveThread(LPVOID parameter)
     for (bufferIndex = 0; bufferIndex < wave->BufferCount && !wave->IsSilent; ++bufferIndex) {
         PAUDIO_WAVE_HEADER header = AudioWaveHeader(wave, bufferIndex);
         header->lpData = (LPSTR)wave->Buffers[bufferIndex];
-        header->dwBufferLength = wave->FrameCount * AUDIO_WAVE_CHANNELS * sizeof(INT16);
+        header->dwBufferLength = wave->FrameCount * AUDIO_STEREO_CHANNELS * sizeof(INT16);
         header->dwFlags = 0; header->dwLoops = 0; header->dwUser = 0;
         g_WaveOutPrepareHeader(wave->WaveOut, header, sizeof(AUDIO_WAVE_HEADER));
         wave->Fill(wave->Context, wave->Buffers[bufferIndex], wave->FrameCount);
-        AudioRecorderFeed(wave->Buffers[bufferIndex], wave->FrameCount * AUDIO_WAVE_CHANNELS);
+        AudioRecorderFeed(wave->Buffers[bufferIndex], wave->FrameCount * AUDIO_STEREO_CHANNELS);
         g_WaveOutWrite(wave->WaveOut, header, sizeof(AUDIO_WAVE_HEADER));
     }
 
@@ -118,7 +118,7 @@ static DWORD WINAPI AudioWaveThread(LPVOID parameter)
             /* No device: still pump the mixer at real-time pace, because that is
                what advances SB playback and raises its IRQ. */
             wave->Fill(wave->Context, wave->Buffers[0], wave->FrameCount);
-            AudioRecorderFeed(wave->Buffers[0], wave->FrameCount * AUDIO_WAVE_CHANNELS);
+            AudioRecorderFeed(wave->Buffers[0], wave->FrameCount * AUDIO_STEREO_CHANNELS);
             Sleep((wave->FrameCount * MILLISECONDS_PER_SECOND) / (wave->SampleHz ? wave->SampleHz : AUDIO_WAVE_DEFAULT_HZ));
             continue;
         }
@@ -137,7 +137,7 @@ static DWORD WINAPI AudioWaveThread(LPVOID parameter)
             if (!(header->dwFlags & WHDR_DONE)) continue;
             header->dwFlags &= ~WHDR_DONE;
             wave->Fill(wave->Context, wave->Buffers[bufferIndex], wave->FrameCount);
-        AudioRecorderFeed(wave->Buffers[bufferIndex], wave->FrameCount * AUDIO_WAVE_CHANNELS);
+        AudioRecorderFeed(wave->Buffers[bufferIndex], wave->FrameCount * AUDIO_STEREO_CHANNELS);
             if (g_WaveOutWrite(wave->WaveOut, header, sizeof(AUDIO_WAVE_HEADER)) != 0) wave->Underruns++;
         }
         /* Wake early and often: a full buffer is ~11.6 ms, so a 20 ms timeout could miss a
@@ -181,7 +181,7 @@ static INT AudioWaveDirectSoundOpen(PAUDIO_WAVE wave, PCAUDIO_WAVE_FORMAT format
     waveFormat.nBlockAlign = format->nBlockAlign; waveFormat.nAvgBytesPerSec = format->nAvgBytesPerSec;
     ZeroMemory(&description, sizeof description); description.dwSize = sizeof description;
     description.dwFlags = DSBCAPS_GLOBALFOCUS | DSBCAPS_GETCURRENTPOSITION2;
-    wave->DirectSoundBytes = wave->BufferCount * wave->FrameCount * AUDIO_WAVE_CHANNELS * (UINT32)sizeof(INT16);
+    wave->DirectSoundBytes = wave->BufferCount * wave->FrameCount * AUDIO_STEREO_CHANNELS * (UINT32)sizeof(INT16);
     description.dwBufferBytes = wave->DirectSoundBytes; description.lpwfxFormat = &waveFormat;
     if (FAILED(IDirectSound_CreateSoundBuffer(directSound, &description, &buffer, NULL))) {
         IDirectSound_Release(directSound); return 0;
@@ -203,7 +203,7 @@ static DWORD WINAPI AudioWaveDirectSoundThread(LPVOID parameter)
 {
     PAUDIO_WAVE wave = (PAUDIO_WAVE)parameter;
     LPDIRECTSOUNDBUFFER buffer = (LPDIRECTSOUNDBUFFER)wave->DirectSoundBuffer;
-    UINT32 chunk = wave->FrameCount * AUDIO_WAVE_CHANNELS * (UINT32)sizeof(INT16);
+    UINT32 chunk = wave->FrameCount * AUDIO_STEREO_CHANNELS * (UINT32)sizeof(INT16);
     if (!SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL))
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
     while (wave->IsRunning) {
@@ -219,7 +219,7 @@ static DWORD WINAPI AudioWaveDirectSoundThread(LPVOID parameter)
         while (space >= chunk) {
             PVOID part1, part2; DWORD length1, length2;
             wave->Fill(wave->Context, wave->Buffers[0], wave->FrameCount);
-            AudioRecorderFeed(wave->Buffers[0], wave->FrameCount * AUDIO_WAVE_CHANNELS);
+            AudioRecorderFeed(wave->Buffers[0], wave->FrameCount * AUDIO_STEREO_CHANNELS);
             if (SUCCEEDED(IDirectSoundBuffer_Lock(buffer, wave->DirectSoundWritePosition, chunk, &part1, &length1, &part2, &length2, 0))) {
                 CopyMemory(part1, wave->Buffers[0], length1);
                 if (part2) CopyMemory(part2, (BYTE *)wave->Buffers[0] + length1, length2);
@@ -327,7 +327,7 @@ INT AudioWaveStart(PAUDIO_WAVE wave, UINT32 sampleHz, PAUDIO_WAVE_FILL_ROUTINE f
 
     if (!wave->IsForcedSilent && AudioWaveBind(wave)) {
         format.wFormatTag = WAVE_FORMAT_PCM;
-        format.nChannels = AUDIO_WAVE_CHANNELS;          /* #189 */
+        format.nChannels = AUDIO_STEREO_CHANNELS;          /* #189 */
         format.nSamplesPerSec = wave->SampleHz;
         format.wBitsPerSample = AUDIO_WAVE_BITS_PER_SAMPLE;
         format.nBlockAlign = (WORD)(format.nChannels * format.wBitsPerSample / BITS_PER_BYTE);

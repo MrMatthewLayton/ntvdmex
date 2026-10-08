@@ -29,7 +29,6 @@
 #include "vdd_speaker.h"
 
 #define AUDIO_OUTPUT_HZ    44100u /* host output rate                            */
-#define AUDIO_STEREO_CHANNELS 2         /* the mix is interleaved L/R             */
 #define AUDIO_CHUNK      512u     /* output frames the mixer works in            */
 /* Worst-case source frames for one chunk: the OPL's 49716 Hz is the fastest
    source, plus a couple of samples of interpolation headroom. */

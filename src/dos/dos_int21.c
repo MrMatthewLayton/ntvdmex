@@ -12,7 +12,6 @@
 #include "dos_lfn.h"      /* #210: the long-filename API's pure half */
 
 /* Characters, drives, paths. */
-#define DOS_INT21_DRIVES          26
 #define DOS_INT21_PATH_SIZE       300
 #define DOS_INT21_DRIVE_ROOT_SIZE 3       /* "A:"                                      */
 #define DOS_INT21_DRIVE_VARIABLE_SIZE 5   /* "=A:", the drive's current directory      */
@@ -623,8 +622,8 @@ static INT DosHandleDrive(HANDLE file)
 {
     static DOS_NT_QUERY_OBJECT queryObject;
     union { DOS_UNICODE_STRING String; BYTE Raw[DOS_INT21_OBJECT_NAME_SIZE]; } objectName;
-    CHAR name[DOS_INT21_NT_NAME_SIZE], deviceBuffers[DOS_INT21_DRIVES][DOS_INT21_DEVICE_NAME_SIZE];
-    PCSTR devices[DOS_INT21_DRIVES];
+    CHAR name[DOS_INT21_NT_NAME_SIZE], deviceBuffers[DOS_DRIVE_LETTERS][DOS_INT21_DEVICE_NAME_SIZE];
+    PCSTR devices[DOS_DRIVE_LETTERS];
     ULONG returned = 0;
     DWORD drives = GetLogicalDrives();
     INT drive, length;
@@ -638,7 +637,7 @@ static INT DosHandleDrive(HANDLE file)
     length = WideCharToMultiByte(CP_ACP, 0, objectName.String.Buffer, objectName.String.Length / DOS_INT21_WCHAR_BYTES, name, sizeof(name) - 1, NULL, NULL);
     if (length <= 0) return -1;
     name[length] = 0;
-    for (drive = 0; drive < DOS_INT21_DRIVES; ++drive) {
+    for (drive = 0; drive < DOS_DRIVE_LETTERS; ++drive) {
         CHAR root[DOS_INT21_DRIVE_ROOT_SIZE] = { (CHAR)('A' + drive), ':', 0 };
         devices[drive] = NULL;
         if (!(drives & (1u << drive))) continue;
@@ -682,13 +681,13 @@ BYTE DosInt21CurrentDrive(PCDOS_MACHINE machine) { return DosCurrentDrive(machin
 
 /* #165: 6901h's serial, label and file-system type, per drive, for this session only
    (see the 6901h arm). 23 bytes = the 6900h/6901h block from offset 2. */
-static BYTE g_DosSerialIsSet[DOS_INT21_DRIVES];
-static BYTE g_DosSerialInfo[DOS_INT21_DRIVES][DOS_INT21_SERIAL_INFO_SIZE];
+static BYTE g_DosSerialIsSet[DOS_DRIVE_LETTERS];
+static BYTE g_DosSerialInfo[DOS_DRIVE_LETTERS][DOS_INT21_SERIAL_INFO_SIZE];
 /* BL as 69h takes it: 0 = the default drive, 1 = A:, ... -> 0-based, 26 if invalid. */
 static BYTE DosSerialDrive(PCDOS_MACHINE machine, BYTE driveNumber)
 {
     if (driveNumber == 0) return DosCurrentDrive(machine);
-    return (BYTE)(driveNumber <= DOS_INT21_DRIVES ? driveNumber - 1 : DOS_INT21_DRIVES);
+    return (BYTE)(driveNumber <= DOS_DRIVE_LETTERS ? driveNumber - 1 : DOS_DRIVE_LETTERS);
 }
 
 /* Keep Win32's per-drive current directory in step. GetFullPathNameA("X:") and
@@ -2045,7 +2044,7 @@ INT DosInt21(PDOS_MACHINE machine)
         CHAR root[DOS_INT21_ROOT_PATH_SIZE]; PSTR rootPointer = 0;
         if (driveNumber) { root[0] = (CHAR)('A' + driveNumber - 1); root[1] = ':';
                     root[2] = '\\'; root[3] = 0; rootPointer = root; }
-        if (driveNumber > DOS_INT21_DRIVES || !GetDiskFreeSpaceA(rootPointer, &sectorsPerCluster, &bytesPerSector, &freeClusters, &totalClusters)) {
+        if (driveNumber > DOS_DRIVE_LETTERS || !GetDiskFreeSpaceA(rootPointer, &sectorsPerCluster, &bytesPerSector, &freeClusters, &totalClusters)) {
             SETAX((R_AX & HIGH_BYTE_MASK) | DOS_INT21_INVALID_DRIVE_AL);
         } else {
             /* ── #48: THE SAME BUILDER AS THE AH=52h CHAIN, so the two DPBs a program
@@ -2609,7 +2608,7 @@ INT DosInt21(PDOS_MACHINE machine)
             for (index = 0; index < DOS_INT21_LABEL_SIZE; ++index) label[index] = 0;
             for (index = 0; index < DOS_INT21_FILE_SYSTEM_SIZE; ++index) fileSystemType[index] = 0;
             BYTE drive = DosSerialDrive(machine, (BYTE)(R_BX & BYTE_MASK));
-            if (drive < DOS_INT21_DRIVES && g_DosSerialIsSet[drive]) {     /* #165: set this session */
+            if (drive < DOS_DRIVE_LETTERS && g_DosSerialIsSet[drive]) {     /* #165: set this session */
                 for (index = 0; index < DOS_INT21_SERIAL_INFO_SIZE; ++index) buffer[DOS_INT21_SERIAL_INFO + index] = g_DosSerialInfo[drive][index];
                 OKCF();
             } else if (GetVolumeInformationA(NULL, label, sizeof(label), &serial,
@@ -2632,7 +2631,7 @@ INT DosInt21(PDOS_MACHINE machine)
             const volatile BYTE *source = (const volatile BYTE *)((R_DS << PARAGRAPH_SHIFT) + (R_DX & WORD_MASK));
             BYTE drive = DosSerialDrive(machine, (BYTE)(R_BX & BYTE_MASK));
             INT index;
-            if (drive < DOS_INT21_DRIVES) {
+            if (drive < DOS_DRIVE_LETTERS) {
                 for (index = 0; index < DOS_INT21_SERIAL_INFO_SIZE; ++index) g_DosSerialInfo[drive][index] = source[DOS_INT21_SERIAL_INFO + index];
                 g_DosSerialIsSet[drive] = 1;
                 trace = LogPut(trace, "  INT21 AX=6901 set serial -- kept for this session only\r\n");
@@ -2682,7 +2681,7 @@ INT DosInt21(PDOS_MACHINE machine)
              ask for the drive the caller named, and keep the honest refusal for a
              drive that genuinely is not there (GetLogicalDrives), which is the
              error DOS itself returns. GH #32. */
-        if (count && driveNumber && driveNumber != currentDrive && driveNumber <= DOS_INT21_DRIVES) {
+        if (count && driveNumber && driveNumber != currentDrive && driveNumber <= DOS_DRIVE_LETTERS) {
             if (GetLogicalDrives() & (1u << (driveNumber - 1))) {
                 CHAR driveSpec[DOS_INT21_ROOT_PATH_SIZE]; driveSpec[0] = (CHAR)('A' + driveNumber - 1); driveSpec[1] = ':';
                 driveSpec[2] = 0;
@@ -2762,7 +2761,7 @@ INT DosInt21(PDOS_MACHINE machine)
         if (!driveNumber && machine->VirtualDrive >= 0) driveNumber = (BYTE)(machine->VirtualDrive + 1);
         if (driveNumber) { root[0] = (CHAR)('A' + driveNumber - 1); root[1] = ':'; root[2] = '\\';
                     root[3] = 0; rootPointer = root; }
-        if (driveNumber <= DOS_INT21_DRIVES && GetDiskFreeSpaceA(rootPointer, &sectorsPerCluster, &bytesPerSector, &freeClusters, &totalClusters)) {
+        if (driveNumber <= DOS_DRIVE_LETTERS && GetDiskFreeSpaceA(rootPointer, &sectorsPerCluster, &bytesPerSector, &freeClusters, &totalClusters)) {
             SETAX((WORD)sectorsPerCluster);
             SET16(R_BX, freeClusters > WORD_MASK ? WORD_MASK : freeClusters);
             SET16(R_CX, (WORD)bytesPerSector);
@@ -2892,7 +2891,7 @@ INT DosInt21(PDOS_MACHINE machine)
             BYTE drive = (BYTE)(handle & BYTE_MASK);      /* 0 = default drive           */
             UINT type = 0;
             if (!drive) drive = (BYTE)(DosCurrentDrive(machine) + 1);
-            if (drive >= 1 && drive <= DOS_INT21_DRIVES && (GetLogicalDrives() & (1u << (drive - 1)))) {
+            if (drive >= 1 && drive <= DOS_DRIVE_LETTERS && (GetLogicalDrives() & (1u << (drive - 1)))) {
                 CHAR root[DOS_INT21_ROOT_PATH_SIZE]; root[0] = (CHAR)('A' + drive - 1); root[1] = ':';
                 root[2] = '\\'; root[3] = 0;
                 type = GetDriveTypeA(root);
@@ -3042,7 +3041,7 @@ INT DosInt21(PDOS_MACHINE machine)
              and every relative path goes to that drive (DosGuestPath), where the access
              fails as DOS's would. */
         BYTE driveNumber = (BYTE)(R_DX & BYTE_MASK);
-        if (driveNumber < DOS_INT21_DRIVES && (GetLogicalDrives() & (1u << driveNumber))) {
+        if (driveNumber < DOS_DRIVE_LETTERS && (GetLogicalDrives() & (1u << driveNumber))) {
             CHAR driveSpec[DOS_INT21_DRIVE_ROOT_SIZE], currentDirectory[DOS_INT21_PATH_SIZE];
             driveSpec[0] = (CHAR)('A' + driveNumber); driveSpec[1] = ':'; driveSpec[2] = 0;
             /* remember the directory we are leaving; "X:" resolves through =X: */
@@ -3277,7 +3276,7 @@ INT DosInt21(PDOS_MACHINE machine)
                     CHAR driveSpec[DOS_INT21_DRIVE_ROOT_SIZE]; driveSpec[0] = (CHAR)('A' + machine->VirtualDrive); driveSpec[1] = ':'; driveSpec[2] = 0;
                     count = GetFullPathNameA(driveSpec, sizeof(currentDirectory), currentDirectory, NULL);
                 } else count = GetCurrentDirectoryA(sizeof(currentDirectory), currentDirectory);
-            } else if (driveNumber <= DOS_INT21_DRIVES && (GetLogicalDrives() & (1u << (driveNumber - 1)))) {
+            } else if (driveNumber <= DOS_DRIVE_LETTERS && (GetLogicalDrives() & (1u << (driveNumber - 1)))) {
                 CHAR driveSpec[DOS_INT21_DRIVE_ROOT_SIZE]; driveSpec[0] = (CHAR)('A' + driveNumber - 1); driveSpec[1] = ':'; driveSpec[2] = 0;
                 count = GetFullPathNameA(driveSpec, sizeof(currentDirectory), currentDirectory, NULL);
             }
@@ -3469,9 +3468,9 @@ INT DosInt21(PDOS_MACHINE machine)
             BYTE action = (BYTE)((R_BX >> BYTE_SHIFT) & BYTE_MASK), driveNumber = (BYTE)(R_BX & BYTE_MASK);
             CHAR driveSpec[DOS_INT21_DRIVE_ROOT_SIZE], target[DOS_INT21_PATH_SIZE];
             BYTE drive = (BYTE)(driveNumber ? driveNumber - 1 : DosCurrentDrive(machine));
-            driveSpec[0] = (CHAR)('A' + (drive < DOS_INT21_DRIVES ? drive : 0)); driveSpec[1] = ':'; driveSpec[2] = 0;
+            driveSpec[0] = (CHAR)('A' + (drive < DOS_DRIVE_LETTERS ? drive : 0)); driveSpec[1] = ':'; driveSpec[2] = 0;
             target[0] = 0;
-            if (drive >= DOS_INT21_DRIVES || action > DOS_INT21_SUBST_QUERY) { SETAX(action > DOS_INT21_SUBST_QUERY ? DOS_ERR_INVALID_FUNCTION : DOS_ERR_INVALID_DRIVE); ERRCF(); }
+            if (drive >= DOS_DRIVE_LETTERS || action > DOS_INT21_SUBST_QUERY) { SETAX(action > DOS_INT21_SUBST_QUERY ? DOS_ERR_INVALID_FUNCTION : DOS_ERR_INVALID_DRIVE); ERRCF(); }
             else if (action == 0) {
                 CHAR input[DOS_INT21_PATH_SIZE], fullPath[DOS_INT21_PATH_SIZE];
                 DWORD count;

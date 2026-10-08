@@ -474,7 +474,7 @@ static VOID GusDmaTry(PGUS_STATE state)
    bus. */
 static VOID GusRecord(PGUS_STATE state, UINT32 nanoseconds)
 {
-    BYTE channel = GusRecordDma(state), buffer[GUS_STEREO_CHANNELS];
+    BYTE channel = GusRecordDma(state), buffer[AUDIO_STEREO_CHANNELS];
     UINT32 rate, period, unit;
     INT isTerminalCount = 0;
     if (!(state->SampleControl & GUS_SAMPLE_GO)) return;
@@ -485,7 +485,7 @@ static VOID GusRecord(PGUS_STATE state, UINT32 nanoseconds)
     state->SampleAccumulatorNs += nanoseconds;
     while (state->SampleAccumulatorNs >= period && (state->SampleControl & GUS_SAMPLE_GO)) {
         state->SampleAccumulatorNs -= period;
-        state->SamplePending = (BYTE)(state->SamplePending + ((state->SampleControl & GUS_SAMPLE_STEREO) ? GUS_STEREO_CHANNELS : 1));
+        state->SamplePending = (BYTE)(state->SamplePending + ((state->SampleControl & GUS_SAMPLE_STEREO) ? AUDIO_STEREO_CHANNELS : 1));
         while (state->SamplePending >= unit) {
             UINT32 moved;
             buffer[0] = buffer[1] = (state->SampleControl & GUS_SAMPLE_INVERT_MSB) ? GUS_ADC_MIDSCALE_SIGNED : GUS_ADC_MIDSCALE;
@@ -932,7 +932,7 @@ static VOID GusRender(PGUS_STATE state, INT16 *output, UINT32 count, INT isStere
            run -- the GF1 does not know the amplifier is off -- but nothing is heard. */
         if (state->MixControl & GUS_MIX_LINE_OUT_OFF) { sum = sumLeft = sumRight = 0; state->OutputMuted++; }
         mono = GusClip(sum >> 1);                    /* headroom for many voices */
-        if (isStereo) { output[GUS_STEREO_CHANNELS*sampleIndex] = GusClip(sumLeft >> 1); output[GUS_STEREO_CHANNELS*sampleIndex+1] = GusClip(sumRight >> 1); }
+        if (isStereo) { output[AUDIO_STEREO_CHANNELS*sampleIndex] = GusClip(sumLeft >> 1); output[AUDIO_STEREO_CHANNELS*sampleIndex+1] = GusClip(sumRight >> 1); }
         else          output[sampleIndex] = mono;
         if (mono) {                                  /* is anything actually audible? */
             UINT32 magnitude = (UINT32)(mono < 0 ? -mono : mono);

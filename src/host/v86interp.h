@@ -60,7 +60,6 @@
 #define V86_THIRD_BYTE     2      /* byte offsets of a dword's upper half        */
 #define V86_FOURTH_BYTE    3
 #define V86_PARITY_TABLE   0x6996u
-#define V86_NIBBLE_MASK    0xFu
 #define V86_OFFSET_MAX     0xFFFFu    /* the last offset of a 64 KB segment */
 #define V86_INT8_MAX       127
 #define V86_INT8_MIN       (-128)
@@ -179,7 +178,7 @@ typedef struct _V86_CPU {
 
 /* PF = even parity of the low byte. 0x6996 is the 16-entry odd-parity table as a bit
    string: one fold to a nibble and a shift, instead of three folds. Same answer. */
-V86_INLINE int V86Parity(BYTE value) { value ^= value >> NIBBLE_SHIFT; return !((V86_PARITY_TABLE >> (value & V86_NIBBLE_MASK)) & 1u); }
+V86_INLINE int V86Parity(BYTE value) { value ^= value >> NIBBLE_SHIFT; return !((V86_PARITY_TABLE >> (value & NIBBLE_MASK_U)) & 1u); }
 
 /* Operand-width helpers: w is 1/2/4 bytes. The 4-byte path exists for 16-bit code
    that uses the 0x66 operand-size prefix (386 32-bit register math -- e.g. a C

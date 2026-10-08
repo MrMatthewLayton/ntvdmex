@@ -25,12 +25,10 @@ INT g_DpmiIsClient32 = FALSE;
 #define DPMI_IDX_STACK 3
 
 /* The x86 segment descriptor's fields (Intel SDM vol. 3, "Segment Descriptors"). */
-#define DPMI_DESCRIPTOR_NIBBLE_MASK      0xF
 #define DPMI_DESCRIPTOR_BASE_LOW_SHIFT   16    /* low dword: base 15-0 in bits 31-16     */
 #define DPMI_DESCRIPTOR_BASE_MID_SHIFT   16    /* base 23-16 -> high dword bits 7-0      */
 #define DPMI_DESCRIPTOR_ACCESS_SHIFT     8     /* access byte -> high dword bits 15-8    */
 #define DPMI_DESCRIPTOR_LIMIT_HIGH_SHIFT 16    /* limit 19-16, in and out                */
-#define DPMI_DESCRIPTOR_FLAGS_SHIFT      20    /* G|D/B|0|AVL -> high dword bits 23-20   */
 #define DPMI_DESCRIPTOR_BASE_HIGH_SHIFT  24    /* base 31-24, in and out                 */
 
 VOID DpmiBuildDescriptor(DWORD base, DWORD limit, BYTE access, BYTE flags,
@@ -41,8 +39,8 @@ VOID DpmiBuildDescriptor(DWORD base, DWORD limit, BYTE access, BYTE flags,
     *descriptorLow = (limit & WORD_MASK) | ((base & WORD_MASK) << DPMI_DESCRIPTOR_BASE_LOW_SHIFT);
     *descriptorHigh = ((base >> DPMI_DESCRIPTOR_BASE_MID_SHIFT) & BYTE_MASK)
         | ((DWORD)access << DPMI_DESCRIPTOR_ACCESS_SHIFT)
-        | (((limit >> DPMI_DESCRIPTOR_LIMIT_HIGH_SHIFT) & DPMI_DESCRIPTOR_NIBBLE_MASK) << DPMI_DESCRIPTOR_LIMIT_HIGH_SHIFT)
-        | (((DWORD)flags & DPMI_DESCRIPTOR_NIBBLE_MASK) << DPMI_DESCRIPTOR_FLAGS_SHIFT)
+        | (((limit >> DPMI_DESCRIPTOR_LIMIT_HIGH_SHIFT) & NIBBLE_MASK) << DPMI_DESCRIPTOR_LIMIT_HIGH_SHIFT)
+        | (((DWORD)flags & NIBBLE_MASK) << X86_DESCRIPTOR_FLAGS_SHIFT)
         | (((base >> DPMI_DESCRIPTOR_BASE_HIGH_SHIFT) & BYTE_MASK) << DPMI_DESCRIPTOR_BASE_HIGH_SHIFT);
 }
 
