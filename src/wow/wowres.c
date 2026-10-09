@@ -18,7 +18,7 @@
 static HICON WowResIconAt(DWORD groupOffset, DWORD groupLength, PINT picked, INT width, INT height);
 
 
-/* Forward declarations for the single translation unit (they were in wowres.h). */
+/* Forward declarations, from when this file was part of main.c's unit (they were in wowres.h). */
 /* ── ★★★★★ AND THE GROUP CAN BE NAMED. (session 47) ─────────────────────────
      MS Paint showed no icon at all -- Windows fell back to the generic
      application icon -- and the cause is the one session 45 already found for

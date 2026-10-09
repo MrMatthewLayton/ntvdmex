@@ -17,7 +17,7 @@
 #include "host_wow.h"
 
 
-/* Forward declarations for the single translation unit (they were in wow32.h). */
+/* Forward declarations, from when this file was part of main.c's unit (they were in wow32.h). */
 VOID Wow32CurrentDirectorySet(PCSTR dir);  /* #164: main.c's per-task directory table */
 
 /* ---- note building (shared by EVERY id space's dispatcher) --------------

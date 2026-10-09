@@ -21,7 +21,7 @@
 #include "host_dpmi.h"
 
 
-/* Forward declarations for the single translation unit (they were in wowwin.h). */
+/* Forward declarations, from when this file was part of main.c's unit (they were in wowwin.h). */
 WORD  WowWinHwnd16(HWND window);
 PWOWUSER_WINDOW WowUserFindWindow(WORD window16);
 INT   WowUserIsMdiChild(PCWOWUSER_WINDOW window);

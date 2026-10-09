@@ -18,7 +18,7 @@
 #include "wowenum.h"
 
 
-/* Forward declarations for the single translation unit (they were in wowcall.h). */
+/* Forward declarations, from when this file was part of main.c's unit (they were in wowcall.h). */
 INT  WowEnumBusy(VOID);
 INT  WowEnumBegin(INT kind, DWORD procedure, WORD dataSelector, DWORD lParam,
                           DWORD returnLinear, WORD parent);

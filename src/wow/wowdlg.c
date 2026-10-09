@@ -18,7 +18,7 @@
 #include "host_wow.h"
 
 
-/* Forward declarations for the single translation unit (they were in wowdlg.h). */
+/* Forward declarations, from when this file was part of main.c's unit (they were in wowdlg.h). */
 /* Defined in main.c, which owns the LDT: is this code selector NOT PRESENT?
    See the call site, and WOWCALL_RETF_OFF in wowcall.h for what it decides. */
 INT WowDlgIsSelectorAbsent(WORD selector);

@@ -23,7 +23,7 @@ static INT WowUserHookUnset(SHORT hookId, DWORD procedure);
 static INT WowUserDestroy(WORD window16, PSTR note, INT noteCapacity, PINT noteLengthInOut);
 
 
-/* Forward declarations for the single translation unit (they were in wowuser.h). */
+/* Forward declarations, from when this file was part of main.c's unit (they were in wowuser.h). */
 /* ── s93: THE HOOK BRIDGE (see SetWindowsHook). One entry per Win16 hook; the
      Win32 hook's callback finds its entry by kind and calls the 16-bit procedure
      through the nested run, with the procedure's own DS (its module's DGROUP). */
