@@ -14,6 +14,7 @@
 
 #ifndef NTVDMEX_HOST_REPORT_H
 #define NTVDMEX_HOST_REPORT_H
+
 #include "host_state.h"
 
 PSTR ReportStartMode(PSTR cursor);

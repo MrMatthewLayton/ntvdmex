@@ -13,13 +13,15 @@
 
 #ifndef NTVDMEX_HOST_SETTINGS_H
 #define NTVDMEX_HOST_SETTINGS_H
+
 #include "host_state.h"
 
 extern INT g_JoystickPovMap;
 
 extern INT g_DosVersionForced;
-VOID SettingsNoteOverride(INT settingId, PCSTR source, DWORD value);
 extern PCSTR g_ShellOverride;
+
+VOID SettingsNoteOverride(INT settingId, PCSTR source, DWORD value);
 VOID SettingsLogSources(VOID);
 VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live);
 VOID SettingsApplyPresent(PRESENT_DDRAW *present, const NTVDMEX_SETTINGS *settings);
@@ -28,4 +30,5 @@ UINT32 SettingsOutputHz(const NTVDMEX_SETTINGS *settings);
 VOID SettingsApplyLive(HWND window);
 INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam);
 INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam);
+
 #endif

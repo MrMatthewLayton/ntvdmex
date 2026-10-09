@@ -14,6 +14,7 @@
 #define NTVDMEX_VDM_CSRSS_H
 
 #include <windows.h>
+
 #include "ntvdm.h"
 
 /* The next command's buffers (see CsrssTaskDone). */
@@ -24,6 +25,14 @@
 #define CSRSS_STD_IN                0
 #define CSRSS_STD_OUT               1
 #define CSRSS_STD_ERR               2
+
+/* If CsrssTaskDone returned TRUE, CSRSS handed us the console's NEXT command
+ * (a program launched into this console before ExitVDM); these hold it.
+ */
+extern CHAR g_CsrssNextApp[CSRSS_APP_NAME_SIZE];
+extern CHAR g_CsrssNextCommand[CSRSS_COMMAND_LINE_SIZE];
+extern CHAR g_CsrssNextDirectory[CSRSS_DIRECTORY_SIZE];
+extern HANDLE g_CsrssNextStandardHandles[CSRSS_STANDARD_HANDLES];
 
 /* Parse the task id ntvdm's launcher passed as "-i<hex>" on our command line
  * (the last one wins). GetNextVDMCommand's first-command lookup keys on this
@@ -58,13 +67,6 @@ BOOL CsrssTaskDone(
     _In_ ULONG exitCode,
     _Out_opt_ DWORD *lastError,
     _Out_opt_ BOOL *didExitVdm);
-/* If CsrssTaskDone returned TRUE, CSRSS handed us the console's NEXT command
- * (a program launched into this console before ExitVDM); these hold it.
- */
-extern CHAR g_CsrssNextApp[CSRSS_APP_NAME_SIZE];
-extern CHAR g_CsrssNextCommand[CSRSS_COMMAND_LINE_SIZE];
-extern CHAR g_CsrssNextDirectory[CSRSS_DIRECTORY_SIZE];
-extern HANDLE g_CsrssNextStandardHandles[CSRSS_STANDARD_HANDLES];
 /* ExitVDM(FALSE, 0): a DOS VDM leaving its console. Separate so a hang in either
  * call names itself in the log.
  */

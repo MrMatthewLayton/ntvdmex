@@ -17,6 +17,9 @@
 #ifndef NTVDMEX_VDD_INPUT_H
 #define NTVDMEX_VDD_INPUT_H
 
+#include "vdd_bus.h"
+#include "../dos/bios_bda_fields.h"     /* the BDA's fields */
+
 /* A key event's flags, as the host passes them on. */
 #define INPUT_KEY_MAKE          0
 #define INPUT_KEY_BREAK         1
@@ -26,9 +29,6 @@
 #define INPUT_PRESSED           1
 #define INPUT_KEY_UNSHIFTED     0
 #define INPUT_KEY_SHIFTED       1
-
-#include "vdd_bus.h"
-#include "../dos/bios_bda_fields.h"     /* the BDA's fields */
 
 #ifndef INPUT_SCANCODE_QUEUE_SIZE
 #define INPUT_SCANCODE_QUEUE_SIZE   32  /* Ring capacity (power of two not required) */
@@ -71,6 +71,20 @@
 #define INPUT_LAYOUT_LAST               3       /* Layout: 0 US, 1 UK, 2 German, 3 French */
 #define INPUT_DEVICE_NAME               "input"
 #define INPUT_HOST_KEY_BYTES_MAX        6       /* VddInputHostKeyBytes: the Pause sequence */
+
+/* #254: WHAT THE BIOS INT 09h DOES BESIDES STORE A KEY:
+ * VddInputBiosConsume() returns one of these; the caller that can run guest code
+ * (the V86 INT 09h arm) resumes the guest in the matching BIOS routine -- INT 1Bh for
+ * Ctrl-Break, INT 05h for Print Screen, INT 15h AH=85h for SysReq, the pause loop.
+ * The BDA side (ring flush, 0040:0071, 0040:0018) is already done by then.
+ */
+#define INPUT_ACTION_NONE               0
+#define INPUT_ACTION_BREAK              1       /* Ctrl-Break: INT 1Bh (0000h stored, 0071h bit 7) */
+#define INPUT_ACTION_PRINT_SCREEN       2       /* Print Screen: INT 05h */
+#define INPUT_ACTION_SYSREQ_DOWN        3       /* SysReq pressed: INT 15h AX=8500h */
+#define INPUT_ACTION_SYSREQ_UP          4       /* SysReq released: INT 15h AX=8501h */
+#define INPUT_ACTION_PAUSE              5       /* Pause: spin until 0040:0018 bit 3 clears */
+#define INPUT_KEYBOARD_TRANSFER_US      900u    /* ~11 bits at the keyboard's ~12 kHz clock */
 
 typedef struct _INPUT_STATE
 {
@@ -181,19 +195,6 @@ typedef struct _INPUT_STATE
 
 typedef const INPUT_STATE *PCINPUT_STATE;
 
-/* #254: WHAT THE BIOS INT 09h DOES BESIDES STORE A KEY:
- * VddInputBiosConsume() returns one of these; the caller that can run guest code
- * (the V86 INT 09h arm) resumes the guest in the matching BIOS routine -- INT 1Bh for
- * Ctrl-Break, INT 05h for Print Screen, INT 15h AH=85h for SysReq, the pause loop.
- * The BDA side (ring flush, 0040:0071, 0040:0018) is already done by then.
- */
-#define INPUT_ACTION_NONE           0
-#define INPUT_ACTION_BREAK          1   /* Ctrl-Break: INT 1Bh (0000h stored, 0071h bit 7) */
-#define INPUT_ACTION_PRINT_SCREEN   2   /* Print Screen: INT 05h */
-#define INPUT_ACTION_SYSREQ_DOWN    3   /* SysReq pressed: INT 15h AX=8500h */
-#define INPUT_ACTION_SYSREQ_UP      4   /* SysReq released: INT 15h AX=8501h */
-#define INPUT_ACTION_PAUSE          5   /* Pause: spin until 0040:0018 bit 3 clears */
-
 /* The pause flag must not outlive a caller that cannot run the loop (PM, nested). */
 VOID VddInputPauseCancel(PINPUT_STATE state);
 /* #254: a ring entry as DOS's CON reads it -- the grey-key E0 forms folded to the
@@ -201,7 +202,6 @@ VOID VddInputPauseCancel(PINPUT_STATE state);
  * DOS line editor never sees 0E0h as a character.
  */
 WORD VddInputDosKey(WORD key);
-#define INPUT_KEYBOARD_TRANSFER_US  900u    /* ~11 bits at the keyboard's ~12 kHz clock */
 
 /* Present the next queued byte once the transfer delay has passed: raises IRQ1 if one
  * is not already up. Cheap when nothing is queued; the host calls it every exec-loop
@@ -279,6 +279,7 @@ VOID VddInputReset(PVOID context);
  */
 VOID VddInputSetA20(PINPUT_STATE state, INT isOn);
 INT  VddInputGetA20(PCINPUT_STATE state);
+
 static inline NTVDD_DEVICE VddInputDevice(PINPUT_STATE state)
 { NTVDD_DEVICE device;
 device.Name = INPUT_DEVICE_NAME;

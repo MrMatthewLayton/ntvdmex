@@ -52,8 +52,27 @@
 #define NTVDMEX_WOWENUM_H
 
 /* WowEnumStep: the first call of an enumeration, or the next. */
-#define WOWENUM_NEXT    0
-#define WOWENUM_FIRST   1
+#define WOWENUM_NEXT                    0
+#define WOWENUM_FIRST                   1
+
+/* The callbacks' argument blocks, in words, and the structures they point at. */
+#define WOWENUM_MAX_ARGUMENTS           8
+#define WOWENUM_LPARAM_WORDS            2
+#define WOWENUM_LINE_ARGUMENTS          2       /* X, y -- lpData follows */
+#define WOWENUM_PAIR_ARGUMENTS          4       /* EnumObjects, EnumProps */
+#define WOWENUM_FONT_ARGUMENTS          7
+#define WOWENUM_FONT_ARG_METRICS        2       /* Lpntm: the second far pointer */
+#define WOWENUM_METAFILE_ARGUMENTS      8
+#define WOWENUM_METAFILE_ARG_RECORD     3       /* Lpmr: the blob itself */
+#define WOWENUM_ELF_FACE_NAME           18      /* LOGFONT16.lfFaceName */
+#define WOWENUM_ELF_FACE_NAME_END       50
+#define WOWENUM_LOGPEN16_SIZE           10
+#define WOWENUM_LOGBRUSH16_SIZE         8
+#define WOWENUM_PROP_NAME_MAX           31
+#define WOWENUM_LINE_MAX_STEPS          4096
+#define WOWENUM_INSTANCE_STACK_TOP      0x0A    /* INSTANCEDATA.pStackTop */
+#define WOWENUM_STACK_RESERVE           512
+#define WOWENUM_HEX_RECORD_DIGITS       6
 
 /* [CAUTION]: THE CONSTANTS AND THE THREE ENTRY POINTS THE SERVICES CALL LIVE IN
  * wowcall.h, NOT HERE, and the reason is the include order: wowgdi.h and
@@ -80,25 +99,6 @@ typedef struct _WOWENUM
     DWORD Calls;                             /* how many callbacks were made, for the log */
 } WOWENUM, *PWOWENUM;
 
-/* The callbacks' argument blocks, in words, and the structures they point at. */
-#define WOWENUM_MAX_ARGUMENTS           8
-#define WOWENUM_LPARAM_WORDS            2
-#define WOWENUM_LINE_ARGUMENTS          2       /* X, y -- lpData follows */
-#define WOWENUM_PAIR_ARGUMENTS          4       /* EnumObjects, EnumProps */
-#define WOWENUM_FONT_ARGUMENTS          7
-#define WOWENUM_FONT_ARG_METRICS        2       /* Lpntm: the second far pointer */
-#define WOWENUM_METAFILE_ARGUMENTS      8
-#define WOWENUM_METAFILE_ARG_RECORD     3       /* Lpmr: the blob itself */
-#define WOWENUM_ELF_FACE_NAME           18      /* LOGFONT16.lfFaceName */
-#define WOWENUM_ELF_FACE_NAME_END       50
-#define WOWENUM_LOGPEN16_SIZE           10
-#define WOWENUM_LOGBRUSH16_SIZE         8
-#define WOWENUM_PROP_NAME_MAX           31
-#define WOWENUM_LINE_MAX_STEPS          4096
-#define WOWENUM_INSTANCE_STACK_TOP      0x0A    /* INSTANCEDATA.pStackTop */
-#define WOWENUM_STACK_RESERVE           512
-#define WOWENUM_HEX_RECORD_DIGITS       6
-
 /* Defined in wowenum.c (#335). */
 INT WowEnumBusy(VOID);
 INT WowEnumBegin(
@@ -117,4 +117,5 @@ INT WowEnumStep(
     DWORD result,
     PSTR note,
     INT noteCapacity);
+
 #endif /* NTVDMEX_WOWENUM_H */

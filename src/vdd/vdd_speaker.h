@@ -27,6 +27,8 @@
 #define SPEAKER_TONE_BITS       0x03    /* Bits 0-1: gate AND speaker data = a tone */
 #define SPEAKER_DEVICE_NAME     "speaker"
 
+#define SPEAKER_NO_TONE         0
+
 typedef struct _SPEAKER_STATE
 {
     PVDD_BUS        Bus;
@@ -37,7 +39,8 @@ typedef struct _SPEAKER_STATE
 
 typedef const SPEAKER_STATE *PCSPEAKER_STATE;
 
-#define SPEAKER_NO_TONE     0
+INT  VddSpeakerInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
+VOID VddSpeakerReset(_In_ PVOID context);
 
 /* The speaker emits a tone iff the timer-2 gate (bit 0) AND speaker-data (bit 1)
  * are both set; the tone is PIT channel 2's output frequency.
@@ -52,8 +55,6 @@ static inline UINT32 VddSpeakerHz(_In_ PCSPEAKER_STATE state)
     return state->Pit ? VddPitCounter2Hz(state->Pit) : SPEAKER_NO_TONE;
 }
 
-INT  VddSpeakerInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
-VOID VddSpeakerReset(_In_ PVOID context);
 static inline NTVDD_DEVICE VddSpeakerDevice(_In_ PSPEAKER_STATE state)
 { NTVDD_DEVICE device;
 device.Name = SPEAKER_DEVICE_NAME;

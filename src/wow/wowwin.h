@@ -110,11 +110,6 @@
 #define WOWWIN_POINT16_SIZE                     4
 #define WOWWIN_POINT16_Y                        2
 
-/* Forward: the window table this proc maps through. All defined in wowuser.h,
- * which owns the table and is included after this file.
- */
-typedef struct _WOWUSER_WINDOW WOWUSER_WINDOW, *PWOWUSER_WINDOW; typedef const WOWUSER_WINDOW *PCWOWUSER_WINDOW;
-
 /* OUR WINDOW PROCEDURE FOR EVERY Win16 WINDOW:
  * Deliberately thin. The chrome -- border, caption, sizing, minimise, close --
  * is DefWindowProc's, i.e. the OS's, which is the entire reason for doing this
@@ -146,7 +141,39 @@ typedef struct _WOWUSER_WINDOW WOWUSER_WINDOW, *PWOWUSER_WINDOW; typedef const W
  * replacing would silently drop the area from the earlier one, which is the
  * kind of loss that shows up as "it only redraws sometimes".
  */
-#define WOWWIN_MAXPAINT     32
+#define WOWWIN_MAXPAINT                         32
+
+#define WOWWIN_GLOBAL16_ALLOC                   0
+#define WOWWIN_GLOBAL16_FREE                    1
+#define WOWWIN_GLOBAL16_LOCK                    2
+#define WOWWIN_GLOBAL16_UNLOCK                  3
+
+/* -- s93: A WM_CHAR EXISTS ONLY IF THE PROGRAM ASKS FOR IT. On Win16 the character
+ * comes from TranslateMessage, which the program calls -- or does not, for a key it
+ * handles itself. Win32 had already translated every key on this thread, and the
+ * relay posted that WM_CHAR unconditionally: WRITE handles Backspace in WM_KEYDOWN
+ * and never translates it, so it ALSO received a WM_CHAR 08h and inserted it -- the
+ * user's "Backspace enters a square". So a WM_CHAR is held here and released by the
+ * guest's own TranslateMessage on the matching key-down (same window, same scan
+ * code), into the queue where Win16's TranslateMessage would post it. 16 held,
+ * oldest overwritten: a program that never translates loses nothing it would have
+ * had on Win16.
+ */
+#define WOWWIN_MAX_HELD_CHARS                   16
+
+/* -- s93: TIMERS WITH NO WINDOW. Win16's SetTimer(NULL, 0, ms, proc) is legal and
+ * common in a program that has no window of its own to time with -- RECORDER, while
+ * recording, times itself this way, and was answered 0 ("refused"). Win32 has the
+ * same thing: a THREAD timer, whose WM_TIMER arrives with hwnd NULL. The pumps turn
+ * that into a Win16 WM_TIMER with hwnd 0, the timer's id in wParam and the TIMERPROC
+ * in lParam -- exactly what Win16 queues -- and DispatchMessage calls the proc.
+ */
+#define WOWWIN_MAX_THREAD_TIMERS                16
+
+/* Forward: the window table this proc maps through. All defined in wowuser.h,
+ * which owns the table and is included after this file.
+ */
+typedef struct _WOWUSER_WINDOW WOWUSER_WINDOW, *PWOWUSER_WINDOW; typedef const WOWUSER_WINDOW *PCWOWUSER_WINDOW;
 typedef struct _WOWWIN_PAINT
 {
     WORD Window16;
@@ -154,12 +181,6 @@ typedef struct _WOWWIN_PAINT
     INT IsErase;
     INT IsPending;
 } WOWWIN_PAINT, *PWOWWIN_PAINT;
-
-#define WOWWIN_GLOBAL16_ALLOC   0
-#define WOWWIN_GLOBAL16_FREE    1
-#define WOWWIN_GLOBAL16_LOCK    2
-#define WOWWIN_GLOBAL16_UNLOCK  3
-DWORD DpmiSelectorBase(WORD selector);            /* main.c: a selector's linear base */
 
 /* Send if the nested run can, else post -- the M9 messages' delivery. */
 /* [CAUTION]: NOT RE-ENTRANTLY (s91, the final regression run): maximizing an MDI child SENT
@@ -173,18 +194,6 @@ typedef struct _WOWWIN_SENDING
     WORD Window16;
     WORD Message;
 } WOWWIN_SENDING;
-/* -- s93: A WM_CHAR EXISTS ONLY IF THE PROGRAM ASKS FOR IT. On Win16 the character
- * comes from TranslateMessage, which the program calls -- or does not, for a key it
- * handles itself. Win32 had already translated every key on this thread, and the
- * relay posted that WM_CHAR unconditionally: WRITE handles Backspace in WM_KEYDOWN
- * and never translates it, so it ALSO received a WM_CHAR 08h and inserted it -- the
- * user's "Backspace enters a square". So a WM_CHAR is held here and released by the
- * guest's own TranslateMessage on the matching key-down (same window, same scan
- * code), into the queue where Win16's TranslateMessage would post it. 16 held,
- * oldest overwritten: a program that never translates loses nothing it would have
- * had on Win16.
- */
-#define WOWWIN_MAX_HELD_CHARS   16
 typedef struct _WOWWIN_HELD_CHAR
 {
     WORD Window16;
@@ -192,15 +201,6 @@ typedef struct _WOWWIN_HELD_CHAR
     DWORD LParam;
     DWORD Sequence;
 } WOWWIN_HELD_CHAR;
-
-/* -- s93: TIMERS WITH NO WINDOW. Win16's SetTimer(NULL, 0, ms, proc) is legal and
- * common in a program that has no window of its own to time with -- RECORDER, while
- * recording, times itself this way, and was answered 0 ("refused"). Win32 has the
- * same thing: a THREAD timer, whose WM_TIMER arrives with hwnd NULL. The pumps turn
- * that into a Win16 WM_TIMER with hwnd 0, the timer's id in wParam and the TIMERPROC
- * in lParam -- exactly what Win16 queues -- and DispatchMessage calls the proc.
- */
-#define WOWWIN_MAX_THREAD_TIMERS    16
 typedef struct _WOWWIN_THREAD_TIMER
 {
     UINT_PTR Id32;
@@ -211,20 +211,28 @@ typedef struct _WOWWIN_THREAD_TIMER
 extern DWORD (*g_WowWinGlobal16)(INT operation, DWORD first, DWORD second);
 extern DWORD g_WowWinThread;
 extern DWORD g_WowWinPumped;
-INT WowWinThreadTimerFire(const MSG *message);
 extern DWORD g_WowWinMessages;
 extern DWORD g_WowWinCreated;
 extern DWORD g_WowWinPaintMs;
-INT WowWinPaintTake(WORD window16, PRECT output, PINT isErase);
 extern INT g_WowWinIsDialogBounced;
 extern INT g_WowWinInDialogMessage;
 extern HWND g_WowWinDialogWindow;
 extern UINT g_WowWinDialogMessage;
+extern UINT g_WowWinSetFocusCount;
+extern HWND g_WowWinSetFocusWindow;
+extern LRESULT (*g_WowWinCtlColor)(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam, PINT isHandled);
+extern INT (*g_WowWinSend16)(WORD window16, WORD message, WORD wParam, DWORD lParam, PWORD result);
+extern LRESULT (*g_WowWinOwnerDraw)(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam, PINT isHandled);
+extern INT (*g_WowWinSend16Blob)(WORD window16, WORD message, WORD wParam, PBYTE blob, INT blobLength, const INT *fixups, INT fixupCount, PWORD result);
+extern LONGLONG g_WowWinPumpTicks;
+extern DWORD g_WowWinPumpCalls;
+
+DWORD DpmiSelectorBase(WORD selector);            /* main.c: a selector's linear base */
+INT WowWinThreadTimerFire(const MSG *message);
+INT WowWinPaintTake(WORD window16, PRECT output, PINT isErase);
 INT WowWinReleaseChars(WORD window16, DWORD keyLParam);
 INT WowWinThreadTimerAdd(UINT_PTR id32, DWORD procedure);
 INT WowWinThreadTimerKill(UINT_PTR id32);
-extern UINT g_WowWinSetFocusCount;
-extern HWND g_WowWinSetFocusWindow;
 VOID WowWinMenuReplay(PCWOWMSG replay);
 INT WowWinRegister(
     PCSTR name16,
@@ -236,11 +244,6 @@ INT WowWinRegister(
     PINT isCursorDefaulted,
     HBRUSH background);
 INT WowWinCoordinate(WORD value);
-extern LRESULT (*g_WowWinCtlColor)(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam, PINT isHandled);
-extern INT (*g_WowWinSend16)(WORD window16, WORD message, WORD wParam, DWORD lParam, PWORD result);
-extern LRESULT (*g_WowWinOwnerDraw)(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam, PINT isHandled);
-extern INT (*g_WowWinSend16Blob)(WORD window16, WORD message, WORD wParam, PBYTE blob, INT blobLength, const INT *fixups, INT fixupCount, PWORD result);
-extern LONGLONG g_WowWinPumpTicks;
-extern DWORD g_WowWinPumpCalls;
 INT WowWinPump(INT budget);
+
 #endif /* NTVDMEX_WOWWIN_H */

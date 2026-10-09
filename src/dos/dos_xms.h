@@ -106,6 +106,23 @@
 /* A real-mode far pointer as a Move offset: low word = offset, high word = segment. */
 #define DOS_XMS_FAR_SEGMENT_SHIFT               16
 
+/* --- fn 0Bh: move a block -------------------------------------------------- *
+ * Copies move->Length bytes from the source endpoint to the destination. An
+ * endpoint with handle 0 is conventional memory: its offset is a real-mode far
+ * pointer (low word = offset, high word = segment) resolved against
+ * `conventionalBase` (NULL => absolute V86 addressing: linear = (seg<<4)+off). An
+ * endpoint with a nonzero handle is an EMB: its offset is a byte offset into that
+ * block. Returns TRUE on success; FALSE with *errorCode set on a bad
+ * handle/offset/length.
+ */
+/* s84: THE MOVE MUST STAY INSIDE WHAT IT NAMES. `offset + len > size` wrapped at 32
+ * bits (offset FFFFF000h, length 2000h passed), and a conventional endpoint had no
+ * limit at all -- either one let a DOS program read or write the HOST's memory past
+ * the block or past the first megabyte. A real-mode far pointer reaches at most
+ * FFFF:FFFF = 10FFEFh, so that is the conventional ceiling.
+ */
+#define DOS_XMS_CONVENTIONAL_LIMIT              0x10FFF0u
+
 /* One Extended Memory Block. */
 typedef struct _DOS_XMS_HANDLE
 {
@@ -444,22 +461,6 @@ static inline BOOL DosXmsUnlock(
     return TRUE;
 }
 
-/* --- fn 0Bh: move a block -------------------------------------------------- *
- * Copies move->Length bytes from the source endpoint to the destination. An
- * endpoint with handle 0 is conventional memory: its offset is a real-mode far
- * pointer (low word = offset, high word = segment) resolved against
- * `conventionalBase` (NULL => absolute V86 addressing: linear = (seg<<4)+off). An
- * endpoint with a nonzero handle is an EMB: its offset is a byte offset into that
- * block. Returns TRUE on success; FALSE with *errorCode set on a bad
- * handle/offset/length.
- */
-/* s84: THE MOVE MUST STAY INSIDE WHAT IT NAMES. `offset + len > size` wrapped at 32
- * bits (offset FFFFF000h, length 2000h passed), and a conventional endpoint had no
- * limit at all -- either one let a DOS program read or write the HOST's memory past
- * the block or past the first megabyte. A real-mode far pointer reaches at most
- * FFFF:FFFF = 10FFEFh, so that is the conventional ceiling.
- */
-#define DOS_XMS_CONVENTIONAL_LIMIT  0x10FFF0u
 static inline BOOL DosXmsMove(
     _Inout_ PDOS_XMS_STATE state,
     _In_opt_ volatile BYTE *conventionalBase,

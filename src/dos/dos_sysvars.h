@@ -143,6 +143,72 @@
 #define DOS_CDS_ROOT_SLASH_INDEX            2       /* "A:\" -- the backslash is at index 2 */
 #define DOS_DEVICE_NAME_LEN                 8
 
+/* #48: THE DEVICE DRIVER CHAIN:
+ * NUL (inline in SysVars) used to TERMINATE the chain: "we install no drivers". But
+ * DOS's own drivers are not installed, they are IO.SYS, and every DOS has them --
+ * MEM /D on 6.22 lists, in chain order (runs/s81_mem/oracle_memd.txt):
+ *     CON AUX PRN CLOCK$ "A: - C:" COM1 LPT1 LPT2 LPT3 COM2 COM3 COM4
+ * and the order of the first five is pinned by measured pointers, not by that
+ * listing alone: SysVars+0x0C = CON at 0070:0023, +0x08 = CLOCK$ at 0070:0059, the
+ * 6.22 SFT's AUX/PRN entries name 0070:0035 and 0070:0047 (lolprobe-msdos622.txt),
+ * and its floppy DPB names the block driver at 0070:006B -- five 18-byte headers
+ * back to back. So NUL now links to the same twelve, in that order, and the last
+ * terminates (FFFF:FFFF).
+ *
+ * [CAUTION]: THE ATTRIBUTE WORDS ARE NOT MEASURED. They are the documented IO.SYS values
+ * (RBIL "Format of device driver header", and the bits each device's behaviour
+ * implies): CON 8013h (char | fast INT 29h output -- we serve INT 29h -- | stdout |
+ * stdin), AUX/COMn 8000h, PRN/LPTn A0C0h (char | output-until-busy | IOCTL query |
+ * generic IOCTL), CLOCK$ 8008h, the block driver 08C2h with byte 0 of its name = the
+ * unit count. tests/probes/dos/p_devchn.asm reads every one of them back off the oracle.
+ *
+ * [CAUTION]: AND NONE OF THEM CAN BE CALLED AS A DRIVER. Our devices are served by the INT 21h
+ * layer, not by request packets. A program that calls a header's strategy/interrupt
+ * pair directly (rare: a few TSRs and diagnostics do) gets status 8103h -- error,
+ * done, "unknown command" -- written by the strategy entry, and a bare RETF from the
+ * interrupt entry. That is a truthful refusal; an entry of 0000 (what NUL had) is a
+ * far call into whatever the segment holds at offset 0.
+ */
+#define DOS_DEVICE_HEADER_NEXT              0x00
+#define DOS_DEVICE_HEADER_ATTRIBUTE         0x04
+#define DOS_DEVICE_HEADER_STRATEGY          0x06
+#define DOS_DEVICE_HEADER_INTERRUPT         0x08
+#define DOS_DEVICE_HEADER_NAME              0x0A
+#define DOS_DEVICE_HEADER_LEN               0x12    /* 18, as DOS_SYSVARS_NUL_LEN -- the stride 6.22's are at */
+#define DOS_DEVICE_OFFSET(index)            ((UINT)(index) * DOS_DEVICE_HEADER_LEN) /* 0x00 .. 0xC6 */
+
+/* The entry stubs, after the headers (12 x 18 = 0xD8 bytes). Strategy routines are
+ * FAR-called with ES:BX = the request header, whose status word is at +3.
+ */
+#define DOS_DEVICE_STUB_UNKNOWN             0xE0    /* Mov word [es:bx+3],8103h ; retf -- 7 bytes */
+#define DOS_DEVICE_STUB_RETF                0xE7    /* Retf -- every interrupt entry */
+#define DOS_DEVICE_AREA_LEN                 0xE8
+#define DOS_DEVICE_ATTRIBUTE_CON            0x8013
+#define DOS_DEVICE_ATTRIBUTE_AUX            0x8000
+#define DOS_DEVICE_ATTRIBUTE_PRN            0xA0C0
+#define DOS_DEVICE_ATTRIBUTE_CLOCK          0x8008
+#define DOS_DEVICE_ATTRIBUTE_BLOCK          0x08C2
+#define DOS_DEVICE_ATTRIBUTE_NUL            0x8004  /* Measured: 6.22's NUL header, sysvars_test.c */
+
+/* NUL's own two entries live in ITS segment (a header's strategy/interrupt are
+ * offsets in the header's own segment, and NUL's is SysVars'): `mov word [es:bx+3],
+ * 0100h ; retf` then `retf`, 8 bytes at DOS_SYSVARS_SEG:DOS_NULSTUB_OFF. NUL accepts
+ * every request and does nothing, which is what "done, no error" says.
+ */
+#define DOS_NULSTUB_LEN                     8
+#define DOS_NULSTUB_STRAT                   0       /* Offsets within the 8 bytes */
+#define DOS_NULSTUB_INTR                    7
+
+/* Build the NUL device header, inline at SysVars+0x22. Attribute 0x8004 is 6.22's
+ * (bit 15 = character device, bit 2 = NUL). `next` links on to CON (#48; it
+ * TERMINATED here, FFFF:FFFF, while no other header existed -- see above).
+ */
+#define DOS_NUL_NAME                        "NUL     "
+
+enum { DOS_DEVICE_CON, DOS_DEVICE_AUX, DOS_DEVICE_PRN, DOS_DEVICE_CLOCK, DOS_DEVICE_BLOCK,
+       DOS_DEVICE_COM1, DOS_DEVICE_LPT1, DOS_DEVICE_LPT2, DOS_DEVICE_LPT3, DOS_DEVICE_COM2,
+       DOS_DEVICE_COM3, DOS_DEVICE_COM4, DOS_DEVICE_COUNT };
+
 /* static INLINE: dos_int21.c includes this for AH=1Fh/32h's DPB (#48) and uses one
  * builder of the five, and a plain `static` would warn for every unused one.
  */
@@ -311,56 +377,6 @@ static inline VOID DosCdsBuild(
     DosSysVarsWriteWord(cds, DOS_CDS_SLASH, DOS_CDS_ROOT_SLASH_INDEX);              /* "A:\" -- the backslash is at index 2 */
 }
 
-/* #48: THE DEVICE DRIVER CHAIN:
- * NUL (inline in SysVars) used to TERMINATE the chain: "we install no drivers". But
- * DOS's own drivers are not installed, they are IO.SYS, and every DOS has them --
- * MEM /D on 6.22 lists, in chain order (runs/s81_mem/oracle_memd.txt):
- *     CON AUX PRN CLOCK$ "A: - C:" COM1 LPT1 LPT2 LPT3 COM2 COM3 COM4
- * and the order of the first five is pinned by measured pointers, not by that
- * listing alone: SysVars+0x0C = CON at 0070:0023, +0x08 = CLOCK$ at 0070:0059, the
- * 6.22 SFT's AUX/PRN entries name 0070:0035 and 0070:0047 (lolprobe-msdos622.txt),
- * and its floppy DPB names the block driver at 0070:006B -- five 18-byte headers
- * back to back. So NUL now links to the same twelve, in that order, and the last
- * terminates (FFFF:FFFF).
- *
- * [CAUTION]: THE ATTRIBUTE WORDS ARE NOT MEASURED. They are the documented IO.SYS values
- * (RBIL "Format of device driver header", and the bits each device's behaviour
- * implies): CON 8013h (char | fast INT 29h output -- we serve INT 29h -- | stdout |
- * stdin), AUX/COMn 8000h, PRN/LPTn A0C0h (char | output-until-busy | IOCTL query |
- * generic IOCTL), CLOCK$ 8008h, the block driver 08C2h with byte 0 of its name = the
- * unit count. tests/probes/dos/p_devchn.asm reads every one of them back off the oracle.
- *
- * [CAUTION]: AND NONE OF THEM CAN BE CALLED AS A DRIVER. Our devices are served by the INT 21h
- * layer, not by request packets. A program that calls a header's strategy/interrupt
- * pair directly (rare: a few TSRs and diagnostics do) gets status 8103h -- error,
- * done, "unknown command" -- written by the strategy entry, and a bare RETF from the
- * interrupt entry. That is a truthful refusal; an entry of 0000 (what NUL had) is a
- * far call into whatever the segment holds at offset 0.
- */
-#define DOS_DEVICE_HEADER_NEXT          0x00
-#define DOS_DEVICE_HEADER_ATTRIBUTE     0x04
-#define DOS_DEVICE_HEADER_STRATEGY      0x06
-#define DOS_DEVICE_HEADER_INTERRUPT     0x08
-#define DOS_DEVICE_HEADER_NAME          0x0A
-#define DOS_DEVICE_HEADER_LEN           0x12    /* 18, as DOS_SYSVARS_NUL_LEN -- the stride 6.22's are at */
-enum { DOS_DEVICE_CON, DOS_DEVICE_AUX, DOS_DEVICE_PRN, DOS_DEVICE_CLOCK, DOS_DEVICE_BLOCK,
-       DOS_DEVICE_COM1, DOS_DEVICE_LPT1, DOS_DEVICE_LPT2, DOS_DEVICE_LPT3, DOS_DEVICE_COM2,
-       DOS_DEVICE_COM3, DOS_DEVICE_COM4, DOS_DEVICE_COUNT };
-#define DOS_DEVICE_OFFSET(index)    ((UINT)(index) * DOS_DEVICE_HEADER_LEN)     /* 0x00 .. 0xC6 */
-
-/* The entry stubs, after the headers (12 x 18 = 0xD8 bytes). Strategy routines are
- * FAR-called with ES:BX = the request header, whose status word is at +3.
- */
-#define DOS_DEVICE_STUB_UNKNOWN     0xE0 /* Mov word [es:bx+3],8103h ; retf -- 7 bytes */
-#define DOS_DEVICE_STUB_RETF        0xE7                                        /* Retf -- every interrupt entry */
-#define DOS_DEVICE_AREA_LEN         0xE8
-#define DOS_DEVICE_ATTRIBUTE_CON    0x8013
-#define DOS_DEVICE_ATTRIBUTE_AUX    0x8000
-#define DOS_DEVICE_ATTRIBUTE_PRN    0xA0C0
-#define DOS_DEVICE_ATTRIBUTE_CLOCK  0x8008
-#define DOS_DEVICE_ATTRIBUTE_BLOCK  0x08C2
-#define DOS_DEVICE_ATTRIBUTE_NUL    0x8004 /* Measured: 6.22's NUL header, sysvars_test.c */
-
 static inline VOID DosDeviceHeaderBuild(
     _Out_writes_bytes_(DOS_DEVICE_HEADER_LEN) PBYTE header,
     _In_ UINT nextSegment,
@@ -424,14 +440,6 @@ static inline VOID DosDeviceChainBuild(
         area[DOS_DEVICE_STUB_UNKNOWN + index] = stubs[index];
 }
 
-/* NUL's own two entries live in ITS segment (a header's strategy/interrupt are
- * offsets in the header's own segment, and NUL's is SysVars'): `mov word [es:bx+3],
- * 0100h ; retf` then `retf`, 8 bytes at DOS_SYSVARS_SEG:DOS_NULSTUB_OFF. NUL accepts
- * every request and does nothing, which is what "done, no error" says.
- */
-#define DOS_NULSTUB_LEN     8
-#define DOS_NULSTUB_STRAT   0   /* Offsets within the 8 bytes */
-#define DOS_NULSTUB_INTR    7
 static inline VOID DosNulStubBuild(_Out_writes_bytes_(DOS_NULSTUB_LEN) PBYTE stub)
 {
     static const BYTE stubBytes[DOS_NULSTUB_LEN] =
@@ -441,11 +449,6 @@ static inline VOID DosNulStubBuild(_Out_writes_bytes_(DOS_NULSTUB_LEN) PBYTE stu
         stub[index] = stubBytes[index];
 }
 
-/* Build the NUL device header, inline at SysVars+0x22. Attribute 0x8004 is 6.22's
- * (bit 15 = character device, bit 2 = NUL). `next` links on to CON (#48; it
- * TERMINATED here, FFFF:FFFF, while no other header existed -- see above).
- */
-#define DOS_NUL_NAME    "NUL     "
 static inline VOID DosNulHeaderBuild(
     _Out_writes_bytes_(DOS_DEVICE_HEADER_LEN) PBYTE header,
     _In_ UINT nextSegment,

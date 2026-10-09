@@ -52,6 +52,7 @@
 
 #ifndef NTVDMEX_WOWCONV_H
 #define NTVDMEX_WOWCONV_H
+
 #include "../ntvdmex_types.h"
 
 /* Little-endian bytes, signed 16-bit words, and the Win16 structure fields read here. */
@@ -99,6 +100,100 @@
 #define WOWCONV_MF_RECORD_MIN_WORDS     3
 #define WOWCONV_MF_FUNCTION_FIELD       4
 
+/* WNDCLASS.hbrBackground:
+ * Three cases, and the third is why this is not a boolean:
+ *   0                     NO background erase. Must STAY 0 -- a class that
+ *                         says it paints its own background must not be
+ *                         painted over.
+ *   1 .. COLORMAX+1       a COLOR_* system index, biased by one so that 0 can
+ *                         mean "none". Win 3.1's last was COLOR_BTNHIGHLIGHT
+ *                         = 20.
+ *   anything else         a real brush handle the program made.
+ *
+ * [CAUTION]: The bias is the trap: COLOR_WINDOW is 5 and a class naming it stores 6.
+ */
+#define WOWCONV_COLOR_MAX               20
+#define WOWCONV_HBR_NONE                0
+#define WOWCONV_HBR_SYSCOLOR            1
+#define WOWCONV_HBR_HANDLE              2
+
+/* A Win16 RECT IS 8 BYTES:
+ * Four 16-bit SIGNED ints, in the order left, top, right, bottom. Kept here
+ * with the sign extension explicit because a rectangle read unsigned lays a
+ * window out at 65488 instead of -48.
+ */
+#define WOWCONV_RECT16_SIZE             8
+
+/* WHEN A MODAL LOOP MUST STOP. (session 57) (Importance = 5):
+ * `DialogBox` is defined as not returning until `EndDialog`, so the host runs
+ * a message loop on the guest's behalf -- and the one way to make that worse
+ * than doing nothing is for the loop to have a state in which it neither runs
+ * nor exits. Session 56 said so when it declined to write the loop: "a
+ * half-built modal loop that never returns is worse than an honest immediate
+ * return, because it hangs the guest instead of ending it."
+ *
+ * So the decision is a pure function of four facts, it is total (every
+ * combination returns something), and the battery pins it. The loop itself
+ * cannot hang unless this returns RUN forever, and this returns RUN only when
+ * the dialog is alive, drivable and not yet finished.
+ *
+ * [CAUTION]: THE ORDER IS LOAD-BEARING, in one place especially: `isEnded` OUTRANKS a
+ * destroyed window. A dialog procedure that calls EndDialog and whose window
+ * the OS then tears down has ANSWERED, and the caller is entitled to that
+ * answer -- checking liveness first would throw away the result of the dialog
+ * the user just clicked OK on and return 0 instead.
+ */
+#define WOWCONV_MODAL_RUN               0   /* Keep pumping */
+#define WOWCONV_MODAL_END               1   /* EndDialog: the caller gets nResult */
+#define WOWCONV_MODAL_GONE              2   /* The window is destroyed: 0 */
+#define WOWCONV_MODAL_NOPROC            3   /* Nothing to dispatch to: 0, immediately */
+#define WOWCONV_MODAL_EXPIRED           4   /* The bounded input wait ran out: 0 */
+
+/* [CAUTION]: THE `ABC` STRUCTURE IS SIX BYTES IN Win16 AND TWELVE IN Win32 (Importance = 2):
+ * The same shape of trap as RECT above, and worse in one way: RECT is wrong by
+ * a factor of two on ONE structure, this is wrong by a factor of two on an
+ * ARRAY -- one entry per character in the range, so measuring a 224-glyph font
+ * into a guest's buffer would write 2,688 bytes where 1,344 were reserved.
+ * Win16  short abcA; unsigned short abcB; short abcC;   =  6
+ * Win32  LONG  abcA; UINT           abcB; LONG  abcC;   = 12
+ * The values themselves are the same numbers: A and C are signed and may be
+ * negative (an italic glyph overhangs), B is a width and cannot be. So this is
+ * purely a narrowing, and the only judgement in it is what to do when a value
+ * does not fit -- which is to CLAMP, because a 16-bit field that wraps turns a
+ * small overhang into a huge one and lays the text out catastrophically rather
+ * than slightly wrongly.
+ */
+#define WOWCONV_ABC16_SIZE              6
+#define WOWCONV_ABC32_SIZE              12
+
+/* WINDOWS METAFILE BYTES: THE HEADER AND ONE RECORD. (#295):
+ * EnumMetaFile hands the guest one METARECORD at a time, and a Win32 WMF is the
+ * SAME BYTES a Win16 metafile is -- the format was frozen in 3.0 and Win32 only
+ * wraps it -- so no field is converted here. What is checked is the walk, which
+ * is the part that can go wrong silently:
+ *   METAHEADER (18 bytes)              METARECORD
+ *     +0  WORD  mtType  (1 mem, 2 disk)  +0 DWORD rdSize  -- in WORDS, header incl.
+ *     +2  WORD  mtHeaderSize (= 9 words) +4 WORD  rdFunction (0 = META_EOF)
+ *     +4  WORD  mtVersion                +6 WORD  rdParm[rdSize - 3]
+ *     +6  DWORD mtSize  (WORDS, header incl.)
+ *     +10 WORD  mtNoObjects  -- the HANDLETABLE's length, the callback's nObj
+ *     +12 DWORD mtMaxRecord
+ *     +16 WORD  mtNoParameters
+ *
+ * [CAUTION]: SIZES ARE IN WORDS. A walk that treats rdSize as bytes steps into the middle
+ * of the second record and reads parameters as a function number -- a wrong
+ * sequence that still looks like a sequence.
+ *
+ * [CAUTION]: A RECORD SHORTER THAN ITS OWN HEADER (rdSize < 3) WOULD NEVER ADVANCE, and a
+ * record that claims more than the buffer holds would read past it; both are
+ * REFUSED (0), never clamped. The version word is not checked: 0x0100 and 0x0300
+ * both exist and nothing here depends on it.
+ * The bound is the smaller of the buffer and mtSize, so trailing bytes after the
+ * metafile proper are not walked as records.
+ */
+#define WOWCONV_MF_HDR                  18
+#define WOWCONV_MF_RECHDR               6
+
 /* NUMCOLORS:
  * Win16's meaning is "how many entries in this device's colour table", and a
  * Win16 caller compares it with 2 -- Solitaire for equality, Minesweeper as a
@@ -118,22 +213,6 @@ static INT WowConvNumColors(INT bitsPerPixel)
     return WOWCONV_NUMCOLORS_DIRECT;
 }
 
-/* WNDCLASS.hbrBackground:
- * Three cases, and the third is why this is not a boolean:
- *   0                     NO background erase. Must STAY 0 -- a class that
- *                         says it paints its own background must not be
- *                         painted over.
- *   1 .. COLORMAX+1       a COLOR_* system index, biased by one so that 0 can
- *                         mean "none". Win 3.1's last was COLOR_BTNHIGHLIGHT
- *                         = 20.
- *   anything else         a real brush handle the program made.
- *
- * [CAUTION]: The bias is the trap: COLOR_WINDOW is 5 and a class naming it stores 6.
- */
-#define WOWCONV_COLOR_MAX       20
-#define WOWCONV_HBR_NONE        0
-#define WOWCONV_HBR_SYSCOLOR    1
-#define WOWCONV_HBR_HANDLE      2
 static INT WowConvBackgroundBrushKind(UINT value)
 {
     if (!value)
@@ -143,12 +222,6 @@ static INT WowConvBackgroundBrushKind(UINT value)
     return WOWCONV_HBR_HANDLE;
 }
 
-/* A Win16 RECT IS 8 BYTES:
- * Four 16-bit SIGNED ints, in the order left, top, right, bottom. Kept here
- * with the sign extension explicit because a rectangle read unsigned lays a
- * window out at 65488 instead of -48.
- */
-#define WOWCONV_RECT16_SIZE     8
 static INT WowConvRect16Get(PCBYTE rect, INT index)
 {
     INT value = (INT)((UINT)rect[index * WOWCONV_RECT16_FIELD_BYTES] | ((UINT)rect[index * WOWCONV_RECT16_FIELD_BYTES + 1] << BYTE_SHIFT));
@@ -261,30 +334,6 @@ static UINT WowConvWindowProcedure(UINT windowProcedure, UINT dialogProcedure)
     return windowProcedure ? windowProcedure : dialogProcedure;
 }
 
-/* WHEN A MODAL LOOP MUST STOP. (session 57) (Importance = 5):
- * `DialogBox` is defined as not returning until `EndDialog`, so the host runs
- * a message loop on the guest's behalf -- and the one way to make that worse
- * than doing nothing is for the loop to have a state in which it neither runs
- * nor exits. Session 56 said so when it declined to write the loop: "a
- * half-built modal loop that never returns is worse than an honest immediate
- * return, because it hangs the guest instead of ending it."
- *
- * So the decision is a pure function of four facts, it is total (every
- * combination returns something), and the battery pins it. The loop itself
- * cannot hang unless this returns RUN forever, and this returns RUN only when
- * the dialog is alive, drivable and not yet finished.
- *
- * [CAUTION]: THE ORDER IS LOAD-BEARING, in one place especially: `isEnded` OUTRANKS a
- * destroyed window. A dialog procedure that calls EndDialog and whose window
- * the OS then tears down has ANSWERED, and the caller is entitled to that
- * answer -- checking liveness first would throw away the result of the dialog
- * the user just clicked OK on and return 0 instead.
- */
-#define WOWCONV_MODAL_RUN       0   /* Keep pumping */
-#define WOWCONV_MODAL_END       1   /* EndDialog: the caller gets nResult */
-#define WOWCONV_MODAL_GONE      2   /* The window is destroyed: 0 */
-#define WOWCONV_MODAL_NOPROC    3   /* Nothing to dispatch to: 0, immediately */
-#define WOWCONV_MODAL_EXPIRED   4   /* The bounded input wait ran out: 0 */
 static INT WowConvModalExit(INT isEnded, INT isWindowAlive, INT hasProcedure, INT isWaitExpired)
 {
     if (isEnded)
@@ -298,22 +347,6 @@ static INT WowConvModalExit(INT isEnded, INT isWindowAlive, INT hasProcedure, IN
     return WOWCONV_MODAL_RUN;
 }
 
-/* [CAUTION]: THE `ABC` STRUCTURE IS SIX BYTES IN Win16 AND TWELVE IN Win32 (Importance = 2):
- * The same shape of trap as RECT above, and worse in one way: RECT is wrong by
- * a factor of two on ONE structure, this is wrong by a factor of two on an
- * ARRAY -- one entry per character in the range, so measuring a 224-glyph font
- * into a guest's buffer would write 2,688 bytes where 1,344 were reserved.
- * Win16  short abcA; unsigned short abcB; short abcC;   =  6
- * Win32  LONG  abcA; UINT           abcB; LONG  abcC;   = 12
- * The values themselves are the same numbers: A and C are signed and may be
- * negative (an italic glyph overhangs), B is a width and cannot be. So this is
- * purely a narrowing, and the only judgement in it is what to do when a value
- * does not fit -- which is to CLAMP, because a 16-bit field that wraps turns a
- * small overhang into a huge one and lays the text out catastrophically rather
- * than slightly wrongly.
- */
-#define WOWCONV_ABC16_SIZE  6
-#define WOWCONV_ABC32_SIZE  12
 static INT WowConvClamp16(long value)
 {
     if (value >  WOWCONV_INT16_MAX)
@@ -339,33 +372,6 @@ static VOID WowConvAbc32To16(const long *abc32, PBYTE abc16)
     abc16[WOWCONV_ABC16_C + 1] = (BYTE)((widthC >> BYTE_SHIFT) & BYTE_MASK);
 }
 
-/* WINDOWS METAFILE BYTES: THE HEADER AND ONE RECORD. (#295):
- * EnumMetaFile hands the guest one METARECORD at a time, and a Win32 WMF is the
- * SAME BYTES a Win16 metafile is -- the format was frozen in 3.0 and Win32 only
- * wraps it -- so no field is converted here. What is checked is the walk, which
- * is the part that can go wrong silently:
- *   METAHEADER (18 bytes)              METARECORD
- *     +0  WORD  mtType  (1 mem, 2 disk)  +0 DWORD rdSize  -- in WORDS, header incl.
- *     +2  WORD  mtHeaderSize (= 9 words) +4 WORD  rdFunction (0 = META_EOF)
- *     +4  WORD  mtVersion                +6 WORD  rdParm[rdSize - 3]
- *     +6  DWORD mtSize  (WORDS, header incl.)
- *     +10 WORD  mtNoObjects  -- the HANDLETABLE's length, the callback's nObj
- *     +12 DWORD mtMaxRecord
- *     +16 WORD  mtNoParameters
- *
- * [CAUTION]: SIZES ARE IN WORDS. A walk that treats rdSize as bytes steps into the middle
- * of the second record and reads parameters as a function number -- a wrong
- * sequence that still looks like a sequence.
- *
- * [CAUTION]: A RECORD SHORTER THAN ITS OWN HEADER (rdSize < 3) WOULD NEVER ADVANCE, and a
- * record that claims more than the buffer holds would read past it; both are
- * REFUSED (0), never clamped. The version word is not checked: 0x0100 and 0x0300
- * both exist and nothing here depends on it.
- * The bound is the smaller of the buffer and mtSize, so trailing bytes after the
- * metafile proper are not walked as records.
- */
-#define WOWCONV_MF_HDR      18
-#define WOWCONV_MF_RECHDR   6
 static unsigned long WowConvRead32(PCBYTE bytes)
 {
     return (unsigned long)bytes[0] | ((unsigned long)bytes[1] << BYTE_SHIFT)

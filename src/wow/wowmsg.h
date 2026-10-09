@@ -175,30 +175,13 @@
  */
 #define WOWMSG_WAIT_MS                          6000
 
-typedef struct _WOWMSG
-{
-    WORD Window;
-    WORD Message;
-    WORD WParam;
-    DWORD LParam;
-    DWORD Time;
-    WORD PointX;
-    WORD PointY;
-} WOWMSG, *PWOWMSG;
-typedef const WOWMSG *PCWOWMSG;
-
 /* [CAUTION]: ONE PENDING QUIT PER TASK, CLEARED WHEN IT IS TAKEN -- Win16's queue flag. A
  * single slot lost Calc's: Calc posted its quit, WinHelp (closing because Calc
  * told it to) posted its own before Calc collected, WinHelp got WM_QUIT and Calc
  * waited forever with the host alive (#306's own symptom). Cleared on delivery
  * so a later task on the same TDB selector does not inherit it.
  */
-#define WOWMSG_MAXQUIT  8
-typedef struct _WOWMSG_QUIT
-{
-    WORD Task;
-    WORD Code;
-} WOWMSG_QUIT;
+#define WOWMSG_MAXQUIT                          8
 
 /* Take the oldest message matching the filter, or return 0.
  * `window` 0 means "any window", which is what every loop this host has read
@@ -241,7 +224,37 @@ typedef struct _WOWMSG_QUIT
  * the GetMessage/PeekMessage service to run (not here: the menu loop posts into
  * this very ring). 0xBF7E sits in a range Win16 never allocates.
  */
-#define WOWMSG_MENUREPLAY   0xBF7Eu
+#define WOWMSG_MENUREPLAY                       0xBF7Eu
+
+typedef struct _WOWMSG
+{
+    WORD Window;
+    WORD Message;
+    WORD WParam;
+    DWORD LParam;
+    DWORD Time;
+    WORD PointX;
+    WORD PointY;
+} WOWMSG, *PWOWMSG;
+typedef const WOWMSG *PCWOWMSG;
+typedef struct _WOWMSG_QUIT
+{
+    WORD Task;
+    WORD Code;
+} WOWMSG_QUIT;
+
+extern DWORD g_WowMsgWaitMs;
+extern volatile LONG g_WowMsgInWait;
+extern INT g_WowMsgCount;
+extern DWORD g_WowMsgPosted;
+extern DWORD g_WowMsgTaken;
+extern WORD g_WowMsgQuitCode;
+extern WORD g_WowMsgTaker;
+extern WORD (*g_WowMsgOwner)(WORD window);
+extern WORD g_WowMsgFocus;
+extern INT g_WowMsgIsReplayDue;
+extern WOWMSG g_WowMsgReplay;
+extern INT g_WowMsgIsWaitAnnounced;
 
 /* Defined in wowmsg.c (#335). */
 INT WowMsgPost(
@@ -252,21 +265,10 @@ INT WowMsgPost(
     DWORD time,
     WORD pointX,
     WORD pointY);
-extern DWORD g_WowMsgWaitMs;
-extern volatile LONG g_WowMsgInWait;
-extern INT g_WowMsgCount;
 INT WowMsgTake(WORD window, WORD filterMin, WORD filterMax, INT isRemove, PWOWMSG output);
-extern DWORD g_WowMsgPosted;
-extern DWORD g_WowMsgTaken;
-extern WORD g_WowMsgQuitCode;
-extern WORD g_WowMsgTaker;
-extern WORD (*g_WowMsgOwner)(WORD window);
 VOID WowMsgPostQuit(WORD task, WORD code);
 INT WowMsgQuitFor(WORD task);
 WORD WowMsgTakeQuit(INT quitNumber);
-extern WORD g_WowMsgFocus;
-extern INT g_WowMsgIsReplayDue;
-extern WOWMSG g_WowMsgReplay;
 VOID WowMsgRead(const volatile BYTE *bytes, PWOWMSG message);
 VOID WowMsgWrite(volatile BYTE *bytes, PCWOWMSG message);
 INT WowMsgPostMove(
@@ -277,6 +279,6 @@ INT WowMsgPostMove(
     DWORD time,
     WORD pointX,
     WORD pointY);
-extern INT g_WowMsgIsWaitAnnounced;
 INT WowMsgCountFor(WORD task);
+
 #endif /* NTVDMEX_WOWMSG_H */

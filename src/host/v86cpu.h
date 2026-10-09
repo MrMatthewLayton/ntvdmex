@@ -13,6 +13,7 @@
 
 #ifndef V86CPU_H
 #define V86CPU_H
+
 #include "../ntvdmex_types.h"
 #include "../ntvdmex_x86.h"
 

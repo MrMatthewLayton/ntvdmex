@@ -48,26 +48,26 @@
 #ifndef NTVDMEX_PCSPEAKER_H
 #define NTVDMEX_PCSPEAKER_H
 
+#include <windows.h>
+
 #define PCSPEAKER_DEVICE_GLOBALROOT     "\\\\?\\GLOBALROOT\\Device\\Beep"   /* The Beep driver, by its NT name ... */
 #define PCSPEAKER_DEVICE_DOS            "\\\\.\\Beep"                       /* ... or its DOS device name */
 
-#include <windows.h>
-
-#define PCSPEAKER_IOCTL_BEEP_SET    0x00010000u
+#define PCSPEAKER_IOCTL_BEEP_SET        0x00010000u
 
 /* Beep.sys accepts 37..32767 Hz. Outside that it fails the request, so clamp
  * rather than hand it something it will refuse -- a refused IOCTL and a silent
  * speaker look identical from here.
  */
-#define PCSPEAKER_HZ_MIN            37u
-#define PCSPEAKER_HZ_MAX            32767u
-#define PCSPEAKER_FOREVER           0xFFFFFFFFu
-#define PCSPEAKER_PATHS             2
+#define PCSPEAKER_HZ_MIN                37u
+#define PCSPEAKER_HZ_MAX                32767u
+#define PCSPEAKER_FOREVER               0xFFFFFFFFu
+#define PCSPEAKER_PATHS                 2
 
 /* OpenState: whether the device has been opened. */
-#define PCSPEAKER_NOT_TRIED         0
-#define PCSPEAKER_OPENED            1
-#define PCSPEAKER_OPEN_FAILED       (-1)
+#define PCSPEAKER_NOT_TRIED             0
+#define PCSPEAKER_OPENED                1
+#define PCSPEAKER_OPEN_FAILED           (-1)
 
 typedef struct _PCSPEAKER
 {

@@ -48,4 +48,5 @@
 
 /* Defined in wowsound.c (#335). */
 INT WowSoundCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity);
+
 #endif /* NTVDMEX_WOWSOUND_H */

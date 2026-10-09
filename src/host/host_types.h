@@ -12,6 +12,10 @@
 #ifndef NTVDMEX_HOST_TYPES_H
 #define NTVDMEX_HOST_TYPES_H
 
+#include <wownt32.h>    /* declarations only: WOW_TYPE_*, the handle types WOWHandle32/16 are given */
+
+#include "../shim/shim_api.h"   /* defines only: the host/shim contract (SHIM_API_VERSION, SHIM_GLOBAL_*) */
+
 /* HOW "JUST OPEN NTVDMEX" WORKS, AND WHY IT NEEDS A FOUR-BYTE DOS PROGRAM (Importance = 1):
  * Run with no arguments -- double-clicked, or from a shortcut -- this process CANNOT
  * become a VDM. Measured on the rig, 2026-09-25:
@@ -193,15 +197,8 @@
  */
 #define DPMI_FAULT_SITE(i) (((DOS_CTAB_SEG << PARAGRAPH_SHIFT) - (DOS_HDLR_SEG << PARAGRAPH_SHIFT)) \
                             + DOS_FLTSITE_OFF + (i) * DOS_FLTSITE_SIZE)
-#define DPMI_FLTRET_COFF    (((DOS_CTAB_SEG << PARAGRAPH_SHIFT) - (DOS_HDLR_SEG << PARAGRAPH_SHIFT)) + DOS_FLTRET_OFF)
-enum
-{
-    WOW_SHIMS = 2, SHIM_NOT_TRIED = 0, SHIM_LOADED = 1, SHIM_NO_LOAD = 2, SHIM_INIT_REFUSED = 3
-};   /* WOW32.DLL and NTVDM.EXE's shims, and how each went */
-enum
-{
-    WOWFOLD_MUTE_NONE = 0, WOWFOLD_MUTE_FOLD = 1, WOWFOLD_MUTE_DROP = 2
-};   /* g_WowFoldMute: log in full, fold to the verdict, drop */
+#define DPMI_FLTRET_COFF                (((DOS_CTAB_SEG << PARAGRAPH_SHIFT) - (DOS_HDLR_SEG << PARAGRAPH_SHIFT)) + DOS_FLTRET_OFF)
+
 /* Floor on how often the WM_TIMER body may do its frame work, in ms. 15 is the ~64 Hz
  * this always actually ran at under XP's default granularity. Knob: uitick.txt.
  *
@@ -211,14 +208,11 @@ enum
  * only a fallback (floor = 90% of the mode's frame period) for a guest that never
  * looks at the retrace. Two clocks became one; see present_hook in vdd_video.h.
  */
-#define UITICK_AUTO     0
-enum
-{
-    KEYIRQ_RETRY_OFF = 0, KEYIRQ_RETRY_ON = 1, KEYIRQ_RETRY_CLOCK_ON_SCHEDULE = 2, KEYIRQ_RETRY_ONE_YIELD = 3
-};   /* keyirq.txt; 2 is refuted (see HostPitDeliver) */
+#define UITICK_AUTO                     0
+
 /* __LINE__ gives every site its own identity without touching 28 call sites by hand. */
-#define HOST_LOCK()         HostLockEnter(__LINE__)
-#define HOST_UNLOCK()       HostLockLeave()
+#define HOST_LOCK()                     HostLockEnter(__LINE__)
+#define HOST_UNLOCK()                   HostLockLeave()
 
 /* THE INT->BOP PATCH MAP, KEYED BY LINEAR ADDRESS:
  * It used to be keyed by OFFSET INTO A SINGLE 64K WINDOW at g_DpmiCodeBase, and that
@@ -246,22 +240,15 @@ enum
  * unpatch/repatch used to sweep up to 1.1 MB of array per INT 31h 0301/0302, and now
  * sweep 64K slots.
  */
-#define DPMI_PMAP_SLOTS     65536u  /* Power of two, open addressing */
-enum
-{
-    BREAKPOINT_MODE_INT3 = 1, BREAKPOINT_MODE_WOW_SEGMENT = 2, BREAKPOINT_MODE_DUMP_DS = 4, BREAKPOINT_MODE_LE_CODE = 8
-};   /* pmbreak.txt column 4: 2 takes the segment number in bits 4-7 */
-#define DPMI_BP_VEC     0xEE    /* Sentinel in g_int_vec[]: not a real vector */
-#define DPMI_BP_MAX     32
+#define DPMI_PMAP_SLOTS                 65536u                      /* Power of two, open addressing */
+#define DPMI_BP_VEC                     0xEE                        /* Sentinel in g_int_vec[]: not a real vector */
+#define DPMI_BP_MAX                     32
 
 /* And the same for every segment: krnl386 copies each one to a block of its own and
  * commits a code selector over it. Indexed by segment number - 1; 0 = not seen yet.
  */
-#define WOW_PMBASE_MAX  8
-enum
-{
-    CAPTURE_MS_DEFAULT = 300
-};   /* capture.flag empty: a shot this often */
+#define WOW_PMBASE_MAX                  8
+
 /* IS THE GUEST'S CLOCK EVEN? A TOTAL CANNOT ANSWER THAT (Importance = 1):
  * The user reports Skyroads "slow down / speed up" -- a RATE THAT VARIES -- and
  * every instrument this host has for IRQ0 is a COUNT. `irq0_inj 4485` is the same
@@ -285,26 +272,23 @@ enum
  * [CAUTION]: FIXED WINDOW, so a long run cannot grow it. Past IRQ0TL_SECS the timeline
  * simply stops recording; the gap histogram keeps going.
  */
-#define IRQ0TL_SECS     90
-#define IO_HOT_MAX      48  /* 12 filled up before the hottest port was even seen */
-#define EV_HIST_MAX     16
+#define IRQ0TL_SECS                     90
+#define IO_HOT_MAX                      48 /* 12 filled up before the hottest port was even seen */
+#define EV_HIST_MAX                     16
 
 /* ...and the same, second by second, so a run with two phases (3DBench: a title wait
  * spinning on INT 16h, then the benchmark) is not read as one average. Cumulative
  * snapshots at the first VdmRunGuest return of each second; the report prints deltas.
  */
-#define XS_SECS         40
-enum
-{
-    XS_RAISE, XS_ASYNC, XS_COOP, XS_NIE, XS_BOP, XS_IO, XS_HOSTMS, XS_PACE, XS_N
-};
+#define XS_SECS                         40
+
 /* The cooperative IRQ0 gate's IF refusals inside one of our stubs, by the caller's
  * return CS:IP (the INT's frame) and the stub offset.
  */
-#define SKIPIF_SITES                6
-#define IO_UNCLAIMED_MAX            24
-#define PM_HEADLESS_MS_DEFAULT      30000   /* Headless exec-loop wall-clock cap (an infinite visual demo self-exits) */
-#define PM_HEADLESS_MS              g_HeadlessMs
+#define SKIPIF_SITES                    6
+#define IO_UNCLAIMED_MAX                24
+#define PM_HEADLESS_MS_DEFAULT          30000 /* Headless exec-loop wall-clock cap (an infinite visual demo self-exits) */
+#define PM_HEADLESS_MS                  g_HeadlessMs
 
 /* THE HOST'S DEFAULT PROTECTED-MODE INTERRUPT HANDLERS:
  * 0204 (get PM interrupt vector) used to return 0000:0000 for anything the client had
@@ -327,7 +311,7 @@ enum
  * `code` marks a block that holds one of the program's EXECUTABLE objects, matched by
  * size against the LE object table -- see DpmiLeLearn().
  */
-#define DPMI_MEMBLK_MAX             64
+#define DPMI_MEMBLK_MAX                 64
 
 /* WHAT THE CLIENT OWNS, SO IT CAN BE GIVEN BACK WHEN IT EXITS. (s80):
  * g_DpmiBlock[] is the patcher's list: capped at 64 and never told about 0502, so it
@@ -340,8 +324,8 @@ enum
  * overflow any more: 0501h refuses (8016h) when it is full. 4096 live blocks is ~36x
  * the most any shelf guest has held (ZAR, 114 allocations in a whole run).
  */
-#define DPMI_OWNED_MAX              4096
-#define DPMI_DOSBLK_MAX             64
+#define DPMI_OWNED_MAX                  4096
+#define DPMI_DOSBLK_MAX                 64
 
 /* THE CLIENT'S EXECUTABLE DECLARES WHICH OF ITS MEMORY IS CODE:
  * A flat code selector (base 0, limit 4 GB) cannot be scanned for INT sites, so an
@@ -365,13 +349,13 @@ enum
  *   which the 0009/000C path already patches -- so the size key is only ever asked to
  *   identify the big flat-addressed image, where it is distinctive.
  */
-#define DPMI_LE_MAX                 16
+#define DPMI_LE_MAX                     16
 
 /* When the client last installed a PM INT 08h handler, and how long IRQ0 injection must
  * then hold off. One 18.2 Hz tick period is 54.9 ms -- the shortest gap real hardware can
  * put between "the vector exists" and "the timer fires". See INT 31h 0205.
  */
-#define DPMI_IRQ0_ARM_QUIET_MS      55
+#define DPMI_IRQ0_ARM_QUIET_MS          55
 
 /* Where an injected IRQ should actually land. For the timer on a 32-bit client that is the
  * application's own ISR once we have seen it installed; otherwise the vector table.
@@ -387,14 +371,11 @@ enum
  * still recorded, because it is what makes that judgement possible and it is the thing
  * to print when this goes wrong again.
  */
-#define DPMI_IRQ_TARGET_SEL(iv)     (g_PmInt[iv].Selector)
-#define DPMI_IRQ_TARGET_OFF(iv)     (g_PmInt[iv].Offset)
-#define DPMI_PMDEF_STRIDE           3
-#define PROGRAM_NAME_SIZE           64
-enum
-{
-    DPMI_FAULT_TABLE_ENTRY = 0x10, DPMI_FAULT_TABLE_OFFSET = 4
-};   /* g_FaultTable: per class, the code selector then the offset DWORD */
+#define DPMI_IRQ_TARGET_SEL(iv)         (g_PmInt[iv].Selector)
+#define DPMI_IRQ_TARGET_OFF(iv)         (g_PmInt[iv].Offset)
+#define DPMI_PMDEF_STRIDE               3
+#define PROGRAM_NAME_SIZE               64
+
 /* DPMI LDT descriptor allocator. Indices 0=null,1=code(0x0F),2=data(0x17) are the
  * switch's; DPMI clients allocate from 3+. We keep base/limit/access so INT 31h
  * 06/07/08/09 can get/modify them and reinstall via svc 10 (NtSetLdtEntries).
@@ -408,31 +389,16 @@ enum
  * being stubbed is a RESOURCE.
  * The table is also bigger: 512 was an arbitrary bound from the spike era.
  */
-#define DPMI_LDT_MAX        2048
+#define DPMI_LDT_MAX                    2048
 
 /* Indices below this belong to the host: 0 null, 1/2 the initial CS/DS, and 3 which
  * DpmiInstall() force-types to writable data. INT 31h 0001 refuses to free them and
  * the WOW selector stage refuses to allocate them -- one constant so the two agree.
  */
-#define DPMI_LDT_RESERVED   6
-#define DPMI_HOSTPOOL_HI    0x2b
-#define DPMI_LDT_FIRSTFREE  (DPMI_HOSTPOOL_HI + 1)
-enum
-{
-    SETTINGS_APPLY_STARTUP = 0, SETTINGS_APPLY_LIVE = 1
-};   /* SettingsApply: before anything is built, or on a running VM */
-enum
-{
-    IFV_PATH_LIVE = 0, IFV_PATH_VTIB_IRQ01 = 1, IFV_PATH_VTIB_DEVICE = 2, IFV_PATHS = 3
-};   /* the IF/VIF census's paths: live (async), IRQ 0/1 via the VTIB, a device IRQ via the VTIB */
-enum
-{
-    ASYNC_WHY_NOT_IN_EXEC = 20, ASYNC_WHY_PIC_REFUSE = 21, ASYNC_WHY_UNHOOKED = 22, ASYNC_WHY_SUSPEND_FAIL = 23, ASYNC_WHY_GETCTX_FAIL = 24, ASYNC_WHY_V86_IF_OFF = 25, ASYNC_WHY_IN_OUR_HANDLER = 26, ASYNC_WHY_OBSERVED = 27, ASYNC_WHY_CTX_BUSY = 28, ASYNC_WHY_LEFT_EXEC = 29, ASYNC_WHY_SIMINT_RM = 30, ASYNC_WHY_NESTED_TICK = 31, ASYNC_WHY_PM_ONLY_LINE = 32, ASYNC_WHY_BAD_IRQ = 40
-};   /* 20+: AsyncInjectIrq's early exits; 32 and 40 are past the histogram */
-enum
-{
-    ASYNC_DELIVERED = 0, ASYNC_WHY_BAD_VECTOR = 1, ASYNC_WHY_IN_PM_IRQ = 2, ASYNC_WHY_PM_NO_IRQ = 3, ASYNC_WHY_NO_CATCHER = 4, ASYNC_WHY_UNHOOKED_PM = 5, ASYNC_WHY_NO_APP_TIMER = 6, ASYNC_WHY_VIF_OFF = 7, ASYNC_WHY_IF_OFF = 8, ASYNC_WHY_ARM_QUIET = 9, ASYNC_WHY_IN_FLIGHT = 10, ASYNC_WHY_HOST_STACK = 11, ASYNC_WHY_NOT_32 = 12, ASYNC_WHY_SETCTX_FAIL = 13, ASYNC_WHY_HOST_CS = 14
-};   /* g_AsyncWhy: AsyncWhyReport's whyNames, 0-14 */
+#define DPMI_LDT_RESERVED               6
+#define DPMI_HOSTPOOL_HI                0x2b
+#define DPMI_LDT_FIRSTFREE              (DPMI_HOSTPOOL_HI + 1)
+
 /* ...AND `g_AsyncWhy` ALONE STILL CANNOT ANSWER THE QUESTION THAT MATTERS:
  * It holds the LAST refusal, so a run can say "62 attempts, 56 delivered" and not say
  * which clause consumed the other six -- nor, far more importantly, what the refusal
@@ -455,7 +421,7 @@ enum
  * timer/UI thread is the only writer; a torn count would cost a unit, not a wrong
  * conclusion) and no I/O, so it costs nothing at the PIT's rate.
  */
-#define ASYNC_WHY_MAX               32
+#define ASYNC_WHY_MAX                   32
 
 /* Deliveries, with the gate's view of them: enough to see a handler re-entered and what
  * the flags said when it was. A delivery that lands within 0x60 bytes past its OWN
@@ -463,15 +429,15 @@ enum
  * counted per line and always traced (the first eight of any kind are traced too, for
  * context). This is the instrument that found irq8.nested's path; it stays as a detector.
  */
-#define IFV_TRACE_MAX               40
-#define DPMI_WATCH_MAX              4
+#define IFV_TRACE_MAX                   40
+#define DPMI_WATCH_MAX                  4
 
 /* ...and when `decl` dominates (it did once the latch was fixed: tried=0x171c decl=0x169d),
  * WHICH refusal inside DpmiInjectPmIrq: [0] the interrupted CS is 16-bit (the
  * extender's code), [1] the application has no timer hook. Per second on IRQ0TL's clock,
  * and the 16-bit sites by CS:EIP, so the refusals can be laid against the quit wait.
  */
-#define PMINJ_SITES                 6
+#define PMINJ_SITES                     6
 
 /* Record and (boundedly) report an async attempt that gave up BEFORE the guest context
  * was ever inspected. Bounded for the same reason the PM bail log is: these fire at the
@@ -481,33 +447,22 @@ enum
 /* Enough to show WHEN the bails start and what the first ones are; the totals live in
  * g_AsyncWhyHistogram, which costs nothing. See AsyncEarlyBail() for what 4000 cost.
  */
-#define ASYNC_EARLY_BAIL_LOG_MAX    32
+#define ASYNC_EARLY_BAIL_LOG_MAX        32
 
 /* Paired with the InterlockedCompareExchange below; every path that resumed the guest
  * must drop ownership. See g_AsyncContextWrite.
  */
-#define ASYNC_CTX_RELEASE()         InterlockedExchange(&g_AsyncContextWrite, 0)
+#define ASYNC_CTX_RELEASE()             InterlockedExchange(&g_AsyncContextWrite, 0)
 
 /* -- #153: FILE > OPEN RECENT. Every program this host was started with, and every one
  * opened from the menu, newest first, `Recent1`..`Recent8` beside the settings.
  * (A Win16 program started from Windows is not recorded: its path arrives inside
  * WOW, not here.)
  */
-#define MRU_MAX                     8
-enum
-{
-    INSTALL_VERB_NONE = -1, INSTALL_VERB_INSTALL = 0, INSTALL_VERB_UNINSTALL = 1, INSTALL_VERB_STATUS = 2, INSTALL_VERBS = 3
-};   /* InstallVerb: the verbs[] index */
-enum
-{
-    INPUT_KEY_WAIT_MS = 50
-};   /* a blocking key read's wait for the next key */
+#define MRU_MAX                         8
 #define TYPEMATIC_DEFAULT_PERIOD_US     92000u
-#define TYPEMATIC_DEFAULT_DELAY_US      500000u     /* Until XP's own setting is read at startup */
-enum
-{
-    I33_FALLBACK_X = 320, I33_FALLBACK_Y = 240, I33_ABSOLUTE_DELTA_SCALE = 8
-};   /* I33TakeMotion's absolute-derived fallback */
+#define TYPEMATIC_DEFAULT_DELAY_US      500000u                     /* Until XP's own setting is read at startup */
+
 /* `i33oth=1079` IS NOT A MEASUREMENT, IT IS A BUCKET:
  * A thousand INT 33h calls arrive with AX >= 0x10 and the histogram above lumps
  * every one of them together, so it cannot tell the two live explanations apart --
@@ -545,14 +500,14 @@ enum
  * on disk without another run. That diff is the session-21 method and it found the
  * last mis-patch inside an hour.
  */
-#define I33_AXN         24  /* Distinct AX values kept */
-#define I33_SITEN       12  /* Distinct caller sites kept */
+#define I33_AXN                         24                          /* Distinct AX values kept */
+#define I33_SITEN                       12                          /* Distinct caller sites kept */
 
 /* Which arm called us -- a mis-patch can only arrive through the PM BOP, and 0300's
  * site is the INT 31h thunk rather than a `CD 33` at all, so the path is evidence.
  */
-#define I33_SRC_V86     1   /* V86 BOP (patched `CD 33` in real mode) */
-#define I33_SRC_PM      2   /* PM BOP (patched `CD 33` in PM code) */
+#define I33_SRC_V86                     1                           /* V86 BOP (patched `CD 33` in real mode) */
+#define I33_SRC_PM                      2                           /* PM BOP (patched `CD 33` in PM code) */
 
 /* A CLICK IS AN EVENT, AND WE WERE ONLY EVER REPORTING A LEVEL (Importance = 2):
  * `g_MouseButtons` is a sample of the MK_* bits taken whenever a mouse message happens to
@@ -573,11 +528,8 @@ enum
  * called with dwFlags = 0, so the legacy WM_?BUTTON* messages still arrive as well,
  * and counting both would double every click. Legacy is the single writer.
  */
-#define MS_BTNS         3   /* Left, right, middle */
-enum
-{
-    MOUSE_CB_WHY_IN_FLIGHT = 0, MOUSE_CB_WHY_NO_EVENTS = 1, MOUSE_CB_WHY_NO_HANDLER = 2, MOUSE_CB_WHY_IN_STUB = 3, MOUSE_CB_WHY_IF_OFF = 4, MOUSE_CB_WHY_STUB_CLOBBERED = 5, MOUSE_CB_WHY_COUNT = 6
-};   /* g_MouseCallbackWhy */
+#define MS_BTNS                         3                           /* Left, right, middle */
+
 /* ...AND NOW IT IS CALLED (s71) (Importance = 1):
  * QB.EXE, edit.com and every other Microsoft text-mode UI take their mouse THROUGH
  * THIS HANDLER: they install it with 0Ch and then poll their own flags, calling 03h
@@ -625,15 +577,9 @@ enum
  * re-verified at every injection (MouseCallbackTry), because segment 0x50 is guest-writable and a
  * fixed offset is a hope, not a guarantee -- the check turns a crash into a counted, named refusal.
  */
-#define MS_CB_RET_OFF   0x00E0  /* DOS_HDLR_SEG:00E0 = BOP MS_CB_BOP ; iret */
-#define MS_CB_BOP       0x35
-typedef struct
-{
-    LONG Bits;
-    LONG Buttons;
-    LONG X;
-    LONG Y;
-} MOUSE_EVENT_ENTRY;
+#define MS_CB_RET_OFF                   0x00E0                      /* DOS_HDLR_SEG:00E0 = BOP MS_CB_BOP ; iret */
+#define MS_CB_BOP                       0x35
+
 /* WE CANNOT HAND A WIN16 LAUNCH BACK. MEASURED, THREE WAYS:
  * This function used to try. It does not any more, because relaunching stock
  * ntvdm is not merely unimplemented -- it is impossible through this mechanism,
@@ -681,9 +627,9 @@ typedef struct
  *    wow_load_modules()   -- parse, allocate, copy bytes.  NO relocation.
  *    wow_bind_modules()   -- selectors for everything, then relocate ONCE.
  */
-#define WOW_MAX_MOD         16      /* krnl386 + the ten siblings, with headroom */
-#define WOW_PATH_PARAS      0x20    /* The path buffer: one paragraph-run, one purpose */
-#define WOW_ENV_PARAS       0x100   /* 4 KB -- a DOS environment and then some */
+#define WOW_MAX_MOD                     16                          /* krnl386 + the ten siblings, with headroom */
+#define WOW_PATH_PARAS                  0x20 /* The path buffer: one paragraph-run, one purpose */
+#define WOW_ENV_PARAS                   0x100                       /* 4 KB -- a DOS environment and then some */
 
 /* -- EVERY PSP THIS HOST BUILDS, SO ITS ENVIRONMENT FIELD CAN BE RE-READ LATER.
  * `PSP+0x2c` is the field two separate faults turned on, and the question that
@@ -692,12 +638,9 @@ typedef struct
  * enough to print the answer at every fault, which is the difference between
  * watching the field and inferring it from the code that might write it.
  */
-#define WOW_PSP_TRACK       4
-#define HOST_KEY_DOWN_BIT   0x8000  /* GetKeyState / GetAsyncKeyState: held now */
-enum
-{
-    HOST_INSTANCES_MAX = 16, HOST_INSTANCE_WAIT_MS = 200, CAPTURE_MS_MIN = 50, CAPTURE_MS_MAX = 60000, CAPTURE_DELAY_MS_MAX = 600000, HEADLESS_MS_MAX = 3600000
-};   /* startup limits: instance numbers, knob ranges */
+#define WOW_PSP_TRACK                   4
+#define HOST_KEY_DOWN_BIT               0x8000                      /* GetKeyState / GetAsyncKeyState: held now */
+
 /* The display half. Separate because the UI thread builds its presenter long after
  * WinMain reads the registry, and PresentDdrawInitialize() zeroes its own struct.
  */
@@ -709,13 +652,13 @@ enum
  * Kept as a knob rather than deleted because "no tearing" was the exclusive path's
  * original argument and a file is enough to get it back for a comparison.
  */
-#define DDRAWFS_FLAG            CFG_(KNOB_FILE_DDRAWFS)
-#define WINDOW_SETTING_UNSET_U  0xFFFFFFFFu                 /* g_WindowSizeLive / g_AspectLive: nothing applied yet */
+#define DDRAWFS_FLAG                    CFG_(KNOB_FILE_DDRAWFS)
+#define WINDOW_SETTING_UNSET_U          0xFFFFFFFFu /* g_WindowSizeLive / g_AspectLive: nothing applied yet */
 
 /* What follows the guests' 3DAh reads, site by site: the loops RetraceIdle() must recognise
  * are the ones real programs use, so they are MEASURED here, not assumed (STAGE2).
  */
-#define RT_SITES                8
+#define RT_SITES                        8
 
 /* PM variant of HostTryIo (GH #18 run 72). A real-CPU PROTECTED-MODE IN/OUT is
  * trapped by the kernel and reflected to us as VTIB_EVENT=0 -- the SAME I/O event as
@@ -728,7 +671,7 @@ enum
  * read it per-selector and offset EIP by its full 32-bit value when D=1, so this decoder
  * serves both classes; for every existing D=0 client the behaviour is unchanged.
  */
-#define DMAPOLL_MAX             8
+#define DMAPOLL_MAX                     8
 
 /* WHO CALLS THE POLL? THE STACK KNOWS, AND THE IMAGE DOES NOT:
  * DMX dispatches through a card-driver vtable -- four position routines of identical
@@ -748,8 +691,8 @@ enum
  *   blocks and the 31%-vs-30% agreement is a coincidence. This decides that, and it is
  *   the difference between a cause and a pattern match.
  */
-#define POLLSTK_MAX             48
-#define MODEY_ROW_BYTES         80u                         /* A mode-Y row: 320 pixels across four planes */
+#define POLLSTK_MAX                     48
+#define MODEY_ROW_BYTES                 80u                         /* A mode-Y row: 320 pixels across four planes */
 
 /* MODE-Y PLANE BACKING: POINT A0000 AT THE PLANE THE MASK SELECTS:
  *
@@ -784,8 +727,8 @@ enum
  *   map-mask write, i.e. with the guest stopped. The renderer runs on the UI thread and
  *   only ever READS the host-side views, which stay mapped whatever is at A0000.
  */
-#define MODEY_WIN               0x10000u                    /* 64K: A0000..AFFFF and B0000..BFFFF */
-#define MODEY_NSEC              6                           /* 0-3 planes, 4 chained/linear, 5 scratch */
+#define MODEY_WIN                       0x10000u                    /* 64K: A0000..AFFFF and B0000..BFFFF */
+#define MODEY_NSEC                      6                           /* 0-3 planes, 4 chained/linear, 5 scratch */
 
 /* NORTH STAR 1: WHAT DOES MODE Y COST, PER SECOND? (s80) (Importance = 1):
  * The mode-Y fix was parked on a performance judgement -- "arming the A0000 trap makes
@@ -807,7 +750,7 @@ enum
  * this runs ~10^5 times a second in Doom's low detail; two QPCs a call would perturb
  * the thing measured. Cycles are converted to us once, at report time, against QPC.
  */
-#define YTL_SECS                90
+#define YTL_SECS                        90
 
 /* DOES THE FAN-OUT ITSELF CREATE THE STATUS BAR'S FOUR-WAY COLLAPSE?:
  * `bar_planes_equal` says ~1709 of 2560 bar offsets hold the SAME byte in all four
@@ -830,9 +773,9 @@ enum
  *   otherwise. One bit per (page, bar offset) = 960 bytes, set in a loop that already
  *   runs only over CHANGED bytes.
  */
-#define YBAR_OFF_LO             (168u * MODEY_ROW_BYTES)    /* First bar byte within a page */
-#define YBAR_OFF_MID            (184u * MODEY_ROW_BYTES)    /* Band split: rows 184..199 */
-#define YBAR_OFF_HI             (200u * MODEY_ROW_BYTES)
+#define YBAR_OFF_LO                     (168u * MODEY_ROW_BYTES)    /* First bar byte within a page */
+#define YBAR_OFF_MID                    (184u * MODEY_ROW_BYTES)    /* Band split: rows 184..199 */
+#define YBAR_OFF_HI                     (200u * MODEY_ROW_BYTES)
 
 /* IS THE GUEST WRITING THE SAME BYTES TO EVERY PLANE?:
  * Everything else is now excluded by measurement: the fan-out writes 0 bar bytes, the
@@ -883,26 +826,101 @@ enum
  *   actually CHANGED (247 times a run, measured), so the compare is free and a wider
  *   window is a tighter rate.
  */
-#define YSMP_LEN                256u
+#define YSMP_LEN                        256u
 
 /* The interpreter's per-instruction code pointer (v86interp.h, V86I_CODE_PTR): the 16
  * bytes at `lin` sit in one already-probed page of plain RAM below 1 MB, outside the
  * aperture -- exactly the bytes V86HostRead8's fast path would have read one at a time.
  */
-#define V86I_CODE_PTR           1
-#define WOW_ID_NONE             0xFFFF                      /* g_WowLastId: no WOW32 call entered yet */
-#define WOW_SHADOW_ENTRIES      DPMI_LDT_MAX
+#define V86I_CODE_PTR                   1
+#define WOW_ID_NONE                     0xFFFF                      /* g_WowLastId: no WOW32 call entered yet */
+#define WOW_SHADOW_ENTRIES              DPMI_LDT_MAX
+
+/* Our BIOS/driver stub BOPs, serviced in one place for the exec loop AND the nested DPMI
+ * real-mode loop -- defined just above WinMain, where its arms used to live. (GH #247)
+ */
+#define V86BOP_NONE                     0                           /* Not one of V86BiosBop's numbers */
+#define INT15_WAIT_SLEEP_MS             3 /* INT 15h AH=86h: sleep only while more than this is left */
+#define ISV_MAX_HOOKS                   16
+
+/* A non-BOP planar-bail site (g_P12Site): where, how often, and the bytes there. */
+#define P12_SITE_MAX                    24
+
+enum
+{
+    WOW_SHIMS = 2, SHIM_NOT_TRIED = 0, SHIM_LOADED = 1, SHIM_NO_LOAD = 2, SHIM_INIT_REFUSED = 3
+};   /* WOW32.DLL and NTVDM.EXE's shims, and how each went */
+enum
+{
+    WOWFOLD_MUTE_NONE = 0, WOWFOLD_MUTE_FOLD = 1, WOWFOLD_MUTE_DROP = 2
+};   /* g_WowFoldMute: log in full, fold to the verdict, drop */
+enum
+{
+    KEYIRQ_RETRY_OFF = 0, KEYIRQ_RETRY_ON = 1, KEYIRQ_RETRY_CLOCK_ON_SCHEDULE = 2, KEYIRQ_RETRY_ONE_YIELD = 3
+};   /* keyirq.txt; 2 is refuted (see HostPitDeliver) */
+enum
+{
+    BREAKPOINT_MODE_INT3 = 1, BREAKPOINT_MODE_WOW_SEGMENT = 2, BREAKPOINT_MODE_DUMP_DS = 4, BREAKPOINT_MODE_LE_CODE = 8
+};   /* pmbreak.txt column 4: 2 takes the segment number in bits 4-7 */
+enum
+{
+    CAPTURE_MS_DEFAULT = 300
+};   /* capture.flag empty: a shot this often */
+enum
+{
+    XS_RAISE, XS_ASYNC, XS_COOP, XS_NIE, XS_BOP, XS_IO, XS_HOSTMS, XS_PACE, XS_N
+};
+enum
+{
+    DPMI_FAULT_TABLE_ENTRY = 0x10, DPMI_FAULT_TABLE_OFFSET = 4
+};   /* g_FaultTable: per class, the code selector then the offset DWORD */
+enum
+{
+    SETTINGS_APPLY_STARTUP = 0, SETTINGS_APPLY_LIVE = 1
+};   /* SettingsApply: before anything is built, or on a running VM */
+enum
+{
+    IFV_PATH_LIVE = 0, IFV_PATH_VTIB_IRQ01 = 1, IFV_PATH_VTIB_DEVICE = 2, IFV_PATHS = 3
+};   /* the IF/VIF census's paths: live (async), IRQ 0/1 via the VTIB, a device IRQ via the VTIB */
+enum
+{
+    ASYNC_WHY_NOT_IN_EXEC = 20, ASYNC_WHY_PIC_REFUSE = 21, ASYNC_WHY_UNHOOKED = 22, ASYNC_WHY_SUSPEND_FAIL = 23, ASYNC_WHY_GETCTX_FAIL = 24, ASYNC_WHY_V86_IF_OFF = 25, ASYNC_WHY_IN_OUR_HANDLER = 26, ASYNC_WHY_OBSERVED = 27, ASYNC_WHY_CTX_BUSY = 28, ASYNC_WHY_LEFT_EXEC = 29, ASYNC_WHY_SIMINT_RM = 30, ASYNC_WHY_NESTED_TICK = 31, ASYNC_WHY_PM_ONLY_LINE = 32, ASYNC_WHY_BAD_IRQ = 40
+};   /* 20+: AsyncInjectIrq's early exits; 32 and 40 are past the histogram */
+enum
+{
+    ASYNC_DELIVERED = 0, ASYNC_WHY_BAD_VECTOR = 1, ASYNC_WHY_IN_PM_IRQ = 2, ASYNC_WHY_PM_NO_IRQ = 3, ASYNC_WHY_NO_CATCHER = 4, ASYNC_WHY_UNHOOKED_PM = 5, ASYNC_WHY_NO_APP_TIMER = 6, ASYNC_WHY_VIF_OFF = 7, ASYNC_WHY_IF_OFF = 8, ASYNC_WHY_ARM_QUIET = 9, ASYNC_WHY_IN_FLIGHT = 10, ASYNC_WHY_HOST_STACK = 11, ASYNC_WHY_NOT_32 = 12, ASYNC_WHY_SETCTX_FAIL = 13, ASYNC_WHY_HOST_CS = 14
+};   /* g_AsyncWhy: AsyncWhyReport's whyNames, 0-14 */
+enum
+{
+    INSTALL_VERB_NONE = -1, INSTALL_VERB_INSTALL = 0, INSTALL_VERB_UNINSTALL = 1, INSTALL_VERB_STATUS = 2, INSTALL_VERBS = 3
+};   /* InstallVerb: the verbs[] index */
+enum
+{
+    INPUT_KEY_WAIT_MS = 50
+};   /* a blocking key read's wait for the next key */
+enum
+{
+    I33_FALLBACK_X = 320, I33_FALLBACK_Y = 240, I33_ABSOLUTE_DELTA_SCALE = 8
+};   /* I33TakeMotion's absolute-derived fallback */
+enum
+{
+    MOUSE_CB_WHY_IN_FLIGHT = 0, MOUSE_CB_WHY_NO_EVENTS = 1, MOUSE_CB_WHY_NO_HANDLER = 2, MOUSE_CB_WHY_IN_STUB = 3, MOUSE_CB_WHY_IF_OFF = 4, MOUSE_CB_WHY_STUB_CLOBBERED = 5, MOUSE_CB_WHY_COUNT = 6
+};   /* g_MouseCallbackWhy */
+typedef struct
+{
+    LONG Bits;
+    LONG Buttons;
+    LONG X;
+    LONG Y;
+} MOUSE_EVENT_ENTRY;
+enum
+{
+    HOST_INSTANCES_MAX = 16, HOST_INSTANCE_WAIT_MS = 200, CAPTURE_MS_MIN = 50, CAPTURE_MS_MAX = 60000, CAPTURE_DELAY_MS_MAX = 600000, HEADLESS_MS_MAX = 3600000
+};   /* startup limits: instance numbers, knob ranges */
 enum
 {
     NESTED_V86_ROUNDS_MAX = 128, PM_INT21_HANDLE_LIMIT = 24, PM_INT21_LOCK_REGION = 0xFF80
 };   /* DpmiServicePmIntBody: 0301h's nested run, PM INT 21h */
-/* Our BIOS/driver stub BOPs, serviced in one place for the exec loop AND the nested DPMI
- * real-mode loop -- defined just above WinMain, where its arms used to live. (GH #247)
- */
-#define V86BOP_NONE             0   /* Not one of V86BiosBop's numbers */
-#define INT15_WAIT_SLEEP_MS     3   /* INT 15h AH=86h: sleep only while more than this is left */
-#include <wownt32.h>            /* declarations only: WOW_TYPE_*, the handle types WOWHandle32/16 are given */
-#include "../shim/shim_api.h"   /* defines only: the host/shim contract (SHIM_API_VERSION, SHIM_GLOBAL_*) */
 typedef struct
 {
     PVOID InByte;
@@ -914,7 +932,6 @@ typedef struct
     PVOID OutStringByte;
     PVOID OutStringWord;
 } ISV_IO_HANDLERS;
-#define ISV_MAX_HOOKS   16
 
 /* What a step of a long function tells its caller to do next (#335): carry on, or leave the
  * enclosing loop, start its next pass, or return from the enclosing function.
@@ -1035,8 +1052,6 @@ enum
 {
     PM_GATE_NO_LATCH = 0, PM_GATE_VIF_OFF = 1, PM_GATE_NO_HOOK = 2, PM_GATE_IN_PM_IRQ = 3, PM_GATE_NO_IRQ = 4, PM_GATE_ASYNC_IN_FLIGHT = 5, PM_GATE_ARMED = 6, PM_GATE_TRIED = 7, PM_GATE_CLAIM_REFUSED = 8, PM_GATE_DECLINED = 9, PM_GATES = 10
 };
-/* A non-BOP planar-bail site (g_P12Site): where, how often, and the bytes there. */
-#define P12_SITE_MAX    24
 typedef struct _P12_SITE
 {
     DWORD Cs;
@@ -1044,4 +1059,5 @@ typedef struct _P12_SITE
     DWORD Count;
     BYTE Bytes[8];
 } P12_SITE, *PP12_SITE;
+
 #endif

@@ -18,6 +18,7 @@
 #define HOST_LOG_H
 
 #include <windows.h>
+
 #include "../ntvdmex_bits.h"    /* defines only: NIBBLE_SHIFT/MASK */
 #include "../ntvdmex_ascii.h"   /* defines only: DECIMAL_RADIX */
 
@@ -28,6 +29,36 @@
 #define LOG_HEX_TOP_SHIFT       28      /* The first of a DWORD's eight digits */
 #define LOG_DECIMAL_DIGITS      10
 #define LOG_DUMP_ROW_MASK       0xF     /* LogDump: sixteen bytes a line */
+
+/* THE LOG'S PATH LIVES WITH THE LOG. (session 56):
+ * It used to be defined in main.c AFTER the headers that want it, so anything
+ * included earlier -- wow32.h, for one -- could call LogAppend but had no
+ * name for the file to pass it. Two copies of a path is how one of them goes
+ * stale; one definition, beside the function that opens it.
+ */
+#ifndef LOG_PATH
+#define LOG_PATH    "C:\\ntvdmex\\ntvdmhost.log"
+#endif
+
+#define LOG_MAX_BYTES (256u * 1024u * 1024u)  /* 4 MB -> 32 MB -> 256 MB. A client that RUNS
+                                                 produces a long trace, and truncating it hides
+                                                 exactly the part that matters. Measured: with
+                                                 pmverbose.flag, Doom past the D/B fix fills 32 MB
+                                                 BEFORE it dies, so the cap looked like the
+                                                 stopping point -- an instrument lying by
+                                                 omission. On a silent VDM teardown nothing runs
+                                                 afterwards, so anything not already flushed is
+                                                 gone: the ceiling has to clear the whole run. */
+
+extern INT      g_LogIsQuiet;                           /* see log.c: what quiet stops */
+extern LONGLONG g_LogQpc;                               /* time spent in LogAppend (QPC) */
+/* LogAppend calls and bytes */
+extern DWORD g_LogCalls;
+extern DWORD g_LogBytes;
+
+/* The log's writers and the state other files read; all defined in log.c. */
+VOID LogWrite(PCSTR path, PCSTR buffer, PCSTR end);     /* truncate: a run's first line */
+VOID LogAppend(PCSTR path, PCSTR buffer, PCSTR end);    /* append, under the size cap */
 
 static inline PSTR LogPut(PSTR cursor, PCSTR text)
 {
@@ -105,33 +136,5 @@ static inline PSTR LogDump(PSTR cursor, LPCVOID bytes, UINT length)
     *cursor = 0;
     return cursor;
 }
-
-/* THE LOG'S PATH LIVES WITH THE LOG. (session 56):
- * It used to be defined in main.c AFTER the headers that want it, so anything
- * included earlier -- wow32.h, for one -- could call LogAppend but had no
- * name for the file to pass it. Two copies of a path is how one of them goes
- * stale; one definition, beside the function that opens it.
- */
-#ifndef LOG_PATH
-#define LOG_PATH    "C:\\ntvdmex\\ntvdmhost.log"
-#endif
-
-#define LOG_MAX_BYTES (256u * 1024u * 1024u)  /* 4 MB -> 32 MB -> 256 MB. A client that RUNS
-                                                 produces a long trace, and truncating it hides
-                                                 exactly the part that matters. Measured: with
-                                                 pmverbose.flag, Doom past the D/B fix fills 32 MB
-                                                 BEFORE it dies, so the cap looked like the
-                                                 stopping point -- an instrument lying by
-                                                 omission. On a silent VDM teardown nothing runs
-                                                 afterwards, so anything not already flushed is
-                                                 gone: the ceiling has to clear the whole run. */
-/* The log's writers and the state other files read; all defined in log.c. */
-VOID LogWrite(PCSTR path, PCSTR buffer, PCSTR end);     /* truncate: a run's first line */
-VOID LogAppend(PCSTR path, PCSTR buffer, PCSTR end);    /* append, under the size cap */
-extern INT      g_LogIsQuiet;                           /* see log.c: what quiet stops */
-extern LONGLONG g_LogQpc;                               /* time spent in LogAppend (QPC) */
-/* LogAppend calls and bytes */
-extern DWORD g_LogCalls;
-extern DWORD g_LogBytes;
 
 #endif /* HOST_LOG_H */

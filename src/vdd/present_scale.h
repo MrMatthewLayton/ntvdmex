@@ -25,11 +25,11 @@
 #ifndef NTVDMEX_PRESENT_SCALE_H
 #define NTVDMEX_PRESENT_SCALE_H
 
-/* PresentLayout: laying out for a window or for the whole screen. */
-#define PRESENT_LAYOUT_WINDOW   0
-#define PRESENT_LAYOUT_SCREEN   1
-
 #include "../ntvdmex_types.h"
+
+/* PresentLayout: laying out for a window or for the whole screen. */
+#define PRESENT_LAYOUT_WINDOW           0
+#define PRESENT_LAYOUT_SCREEN           1
 
 /* A frame with no size yet is laid out as the 720x400 text screen (9:5). */
 #define PRESENT_DEFAULT_FRAME_WIDTH     720
@@ -61,6 +61,10 @@
 #define PRESENT_SEPIA_SPAN_RED          225u    /* 255 - the black: full scale stays full */
 #define PRESENT_SEPIA_SPAN_GREEN        233u
 #define PRESENT_SEPIA_SPAN_BLUE         243u
+#define PRESENT_ASPECT_ITEMS            "Native (square pixels)|4:3|16:9|16:10|Stretch"
+#define PRESENT_FIT_ITEMS               "Whole pixels|Fill"
+#define PRESENT_FILTER_ITEMS            "Nearest|Bilinear|Sharp"
+#define PRESENT_TINT_ITEMS              "Default|Sepia|Monochrome white|Monochrome green|Monochrome orange"
 
 /* Scaler ids -- the indices of the Scaler combo in settings.h, so the setting is
  * the value and there is no translation table to disagree with the list.
@@ -73,14 +77,6 @@ enum
     PRESENT_SCALER_SCANLINES,
     PRESENT_SCALER_CRT          /* = SCALE2X + SCANLINES */
 };
-
-/* Does this scaler double the source buffer before the stretch? */
-INT PresentScalerDoubles(INT scaler);
-
-/* Does it mask alternate DESTINATION rows? (a scanline is a property of the
- * screen, not of the frame, so it is applied after the stretch, not before)
- */
-INT PresentScalerHasScanlines(INT scaler);
 
 /* #325: THE ASPECT CHOICES, AND THEY ARE ALSO THE REGISTRY VALUE:
  * NATIVE is the default: square pixels, the frame's own width:height -- 320x200 is
@@ -102,14 +98,12 @@ enum
     PRESENT_ASPECT_STRETCH,
     PRESENT_ASPECT_COUNT
 };
-#define PRESENT_ASPECT_ITEMS    "Native (square pixels)|4:3|16:9|16:10|Stretch"
 
 /* How a picture fills an area the user did not size (maximised or fullscreen). */
 enum
 {
     PRESENT_FIT_WHOLE = 0, PRESENT_FIT_FILL
 };
-#define PRESENT_FIT_ITEMS   "Whole pixels|Fill"
 
 /* Filtering -- only consulted when the picture is NOT a whole multiple of the frame
  * (every filter agrees on a whole multiple: point-sampled). Sharp enlarges by the
@@ -119,7 +113,41 @@ enum
 {
     PRESENT_FILTER_NEAREST = 0, PRESENT_FILTER_BILINEAR, PRESENT_FILTER_SHARP
 };
-#define PRESENT_FILTER_ITEMS    "Nearest|Bilinear|Sharp"
+
+/* -- #229: COLOUR FILTERS (docs/EMULATION.md). Default, Sepia, and the three
+ * monochrome monitors of the period -- white (paper-white), green (P1 phosphor) and
+ * orange (amber). Applied per COLOUR, never per pixel where a palette exists: the
+ * presenter recolours the 256 palette entries (and the split-palette tables), so an
+ * 8-bit frame costs 256 operations whatever its size. Direct-colour frames pay per
+ * pixel, and only when a filter is chosen.
+ * Monochrome is luminance (Rec. 601: 0.299 R + 0.587 G + 0.114 B) scaled into the
+ * phosphor's colour.
+ * Sepia is WASHED-OUT COLOUR, not a brown monochrome (user, s84: "I was hoping for
+ * washed out color (sepia color), not black and off-white" -- the first cut was the
+ * usual photo matrix, which throws the hue away). Three steps, in integers:
+ * 1. keep 40% of each channel's distance from the luminance (the hue survives);
+ * 2. a warm cast: red x1.08, green x0.98, blue x0.80;
+ * 3. fade: lift black to a dark brown (30,22,12), as an old print's blacks fade.
+ * So pure red stays the reddest thing on the screen, only muted and warm; white is
+ * cream; black is brown.
+ */
+enum
+{
+    PRESENT_TINT_DEFAULT = 0,
+    PRESENT_TINT_SEPIA,
+    PRESENT_TINT_MONO_WHITE,
+    PRESENT_TINT_MONO_GREEN,
+    PRESENT_TINT_MONO_ORANGE,
+    PRESENT_TINT_COUNT
+};
+
+/* Does this scaler double the source buffer before the stretch? */
+INT PresentScalerDoubles(INT scaler);
+
+/* Does it mask alternate DESTINATION rows? (a scanline is a property of the
+ * screen, not of the frame, so it is applied after the stretch, not before)
+ */
+INT PresentScalerHasScanlines(INT scaler);
 
 /* The ratio a FORCED setting stands for; 0/0 for Native and Stretch (no ratio of its
  * own). Used by PresentFit, where 0/0 means "fill".
@@ -229,34 +257,6 @@ VOID PresentScale2x8(
     INT sourceHeight,
     INT sourceStride,
     BYTE *destination);
-
-/* -- #229: COLOUR FILTERS (docs/EMULATION.md). Default, Sepia, and the three
- * monochrome monitors of the period -- white (paper-white), green (P1 phosphor) and
- * orange (amber). Applied per COLOUR, never per pixel where a palette exists: the
- * presenter recolours the 256 palette entries (and the split-palette tables), so an
- * 8-bit frame costs 256 operations whatever its size. Direct-colour frames pay per
- * pixel, and only when a filter is chosen.
- * Monochrome is luminance (Rec. 601: 0.299 R + 0.587 G + 0.114 B) scaled into the
- * phosphor's colour.
- * Sepia is WASHED-OUT COLOUR, not a brown monochrome (user, s84: "I was hoping for
- * washed out color (sepia color), not black and off-white" -- the first cut was the
- * usual photo matrix, which throws the hue away). Three steps, in integers:
- * 1. keep 40% of each channel's distance from the luminance (the hue survives);
- * 2. a warm cast: red x1.08, green x0.98, blue x0.80;
- * 3. fade: lift black to a dark brown (30,22,12), as an old print's blacks fade.
- * So pure red stays the reddest thing on the screen, only muted and warm; white is
- * cream; black is brown.
- */
-enum
-{
-    PRESENT_TINT_DEFAULT = 0,
-    PRESENT_TINT_SEPIA,
-    PRESENT_TINT_MONO_WHITE,
-    PRESENT_TINT_MONO_GREEN,
-    PRESENT_TINT_MONO_ORANGE,
-    PRESENT_TINT_COUNT
-};
-#define PRESENT_TINT_ITEMS  "Default|Sepia|Monochrome white|Monochrome green|Monochrome orange"
 
 UINT32 PresentTint(UINT32 argb, INT tint);
 

@@ -34,21 +34,6 @@
 
 #include "vdd_bus.h"
 
-/* Host-injected microsecond clock. NULL is legal (off-VM default): the
- * one-shots then never time out, which reads as "no joystick" to a guest.
- */
-typedef UINT64 (*PJOYSTICK_CLOCK_ROUTINE)(PVOID context);
-
-/* Mirrors the JoystickType setting: what the emulated ADAPTER is fitted with.
- * The HOST stick (IsPresent) is a separate fact -- an adapter with nothing
- * plugged in is exactly how an absent axis reads on real hardware.
- * (JOYSTICK_, not JOY_: mmsystem.h owns the JOY_ names.)
- */
-enum
-{
-    JOYSTICK_TYPE_NONE = 0, JOYSTICK_TYPE_2AXIS = 1, JOYSTICK_TYPE_4AXIS = 2
-};
-
 #define JOYSTICK_AXES               4       /* A(x,y) then B(x,y) */
 #define JOYSTICK_2AXIS_WIRED        2       /* Axes and buttons a 2-axis adapter wires */
 #define JOYSTICK_4AXIS_WIRED        4
@@ -68,6 +53,28 @@ enum
 #define JOYSTICK_POV_SOUTH          4
 #define JOYSTICK_POV_SOUTH_WEST     5
 #define JOYSTICK_POV_NORTH_WEST     7
+
+/* One-shot duration for an axis position, in microseconds: 25..1045, centre
+ * ~537 -- inside the ~1.12 ms a real gameport spans, and wide enough that a
+ * guest polling through the port trap still gets ~200 samples across it.
+ */
+#define JOYSTICK_PULSE_BASE_US      25u
+#define JOYSTICK_PULSE_US_PER_STEP  4u
+
+/* Host-injected microsecond clock. NULL is legal (off-VM default): the
+ * one-shots then never time out, which reads as "no joystick" to a guest.
+ */
+typedef UINT64 (*PJOYSTICK_CLOCK_ROUTINE)(PVOID context);
+
+/* Mirrors the JoystickType setting: what the emulated ADAPTER is fitted with.
+ * The HOST stick (IsPresent) is a separate fact -- an adapter with nothing
+ * plugged in is exactly how an absent axis reads on real hardware.
+ * (JOYSTICK_, not JOY_: mmsystem.h owns the JOY_ names.)
+ */
+enum
+{
+    JOYSTICK_TYPE_NONE = 0, JOYSTICK_TYPE_2AXIS = 1, JOYSTICK_TYPE_4AXIS = 2
+};
 
 typedef struct _JOYSTICK_STATE
 {
@@ -93,12 +100,9 @@ typedef struct _JOYSTICK_STATE
 
 typedef const JOYSTICK_STATE *PCJOYSTICK_STATE;
 
-/* One-shot duration for an axis position, in microseconds: 25..1045, centre
- * ~537 -- inside the ~1.12 ms a real gameport spans, and wide enough that a
- * guest polling through the port trap still gets ~200 samples across it.
- */
-#define JOYSTICK_PULSE_BASE_US      25u
-#define JOYSTICK_PULSE_US_PER_STEP  4u
+INT  VddJoystickInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
+VOID VddJoystickReset(_In_ PVOID context);
+
 static inline UINT32 VddJoystickAxisMicroseconds(BYTE position)
 {
     return JOYSTICK_PULSE_BASE_US + (UINT32)position * JOYSTICK_PULSE_US_PER_STEP;
@@ -121,8 +125,6 @@ static inline INT VddJoystickIsLive(_In_ PCJOYSTICK_STATE state)
     return state->Type != JOYSTICK_TYPE_NONE && state->IsPresent;
 }
 
-INT  VddJoystickInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
-VOID VddJoystickReset(_In_ PVOID context);
 static inline NTVDD_DEVICE VddJoystickDevice(_In_ PJOYSTICK_STATE state)
 { NTVDD_DEVICE device;
 device.Name = JOYSTICK_DEVICE_NAME;

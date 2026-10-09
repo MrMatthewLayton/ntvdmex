@@ -81,6 +81,109 @@
 #define DOS_ABSOLUTE_SECTOR_NOT_FOUND       0x0208  /* INT 25h/26h AX: AH=02h, AL=08h sector not found */
 #define DOS_ERR_FILE_EXISTS                 0x50
 #define DOS_ERR_FAIL_I24                    0x53    /* 59h after a FAILed critical error: "fail on INT 24" */
+#define DOS_ERR_ROWS                        (sizeof(g_DosErrTable) / sizeof(g_DosErrTable[0]))
+
+/* WIN32 -> DOS, FOR EVERY CALL THAT FAILS THROUGH CreateFileA. (s72):
+ * AH=3Dh answered **2 ("file not found") for every possible failure**, because
+ * the handler read `f == INVALID_HANDLE_VALUE` and stopped asking. Measured by
+ * tests/probes/dos/p_err.asm against MS-DOS 6.22, that is wrong twice over:
+ *
+ * CASE=err.after.3D.readonly  oracle AX=0005  ours AX=0002   access denied
+ * CASE=err.after.3D.baddrive  oracle AX=0003  ours AX=0002   path not found
+ *
+ * and it is not cosmetic -- a program that gets "not found" for a file that is
+ * plainly there goes looking for it instead of reporting the real problem. The
+ * note beside the 0x0F row above records the same trap from the other side: the
+ * DOS answer for opening "Y:\..." is 3, NOT 15, so this table must not "improve"
+ * on it. The comment at AH=3Ch/3Dh already blamed this collapse for the GDI.EXE
+ * wall; the sharing half was fixed then and the mapping half was left.
+ *
+ * [CAUTION]: BOTH SIDES OF EVERY ROW ARE MEASURED. The DOS side is the oracle CASE= line
+ * quoted beside it; the WIN32 side is what the rig actually reported, read off
+ * the handler's own `win32=0x..` log during the run that closed these rows:
+ *
+ *   INT21 AH=3d [ZZNOSUCH.XYZ]    FAILED win32=0x2 -> AX=0x2
+ *   INT21 AH=3d [ZZRDONLY.TMP]    FAILED win32=0x5 -> AX=0x5
+ *   INT21 AH=3d [Y:\ZZNOSUCH.XYZ] FAILED win32=0x3 -> AX=0x3
+ *
+ * An unmapped code is logged `UNMAPPED` and keeps the old answer rather than
+ * being collapsed silently, exactly as DosErrClassify() refuses to invent a
+ * class.
+ *
+ * [CAUTION]: THERE IS DELIBERATELY NO ERROR_INVALID_DRIVE (15) ROW. The obvious guess is
+ * that "Y:\..." arrives as 15 and should map to DOS 3 -- but measured, it
+ * arrives as **win32=3**, so a 15 row would be an unexercised invention
+ * dressed as evidence. If a door is ever found that does produce 15, provoke
+ * it and add the row then, in that order.
+ *
+ * Numeric rather than the ERROR_* macros, which the off-VM build (no windows.h)
+ * does not have, so tests/unit/err_test.c can keep pinning it off-VM.
+ */
+#define DOS_ERR_WIN32_FILE_NOT_FOUND        2u
+#define DOS_ERR_WIN32_PATH_NOT_FOUND        3u
+#define DOS_ERR_WIN32_TOO_MANY_OPEN         4u
+#define DOS_ERR_WIN32_ACCESS_DENIED         5u
+#define DOS_ERR_WIN32_FILE_EXISTS           80u
+#define DOS_ERR_WIN32_ALREADY_EXISTS        183u
+
+/* -- #34: THE HARDWARE ERRORS, 19-31: the same numbers in DOS and Win32 (see below). Named
+ * as winerror.h names them.
+ */
+#define DOS_ERR_WRITE_PROTECT               19
+#define DOS_ERR_BAD_UNIT                    20
+#define DOS_ERR_NOT_READY                   21
+#define DOS_ERR_BAD_COMMAND                 22
+#define DOS_ERR_CRC                         23
+#define DOS_ERR_BAD_LENGTH                  24
+#define DOS_ERR_SEEK                        25
+#define DOS_ERR_NOT_DOS_DISK                26
+#define DOS_ERR_SECTOR_NOT_FOUND            27
+#define DOS_ERR_OUT_OF_PAPER                28
+#define DOS_ERR_WRITE_FAULT                 29
+#define DOS_ERR_READ_FAULT                  30
+#define DOS_ERR_GEN_FAILURE                 31
+#define DOS_ERR_HARDWARE_FIRST              DOS_ERR_WRITE_PROTECT
+#define DOS_ERR_HARDWARE_LAST               DOS_ERR_GEN_FAILURE
+
+/* #34: THE CRITICAL-ERROR CONTRACT (INT 24h), the pure half:
+ * A DOS error 19-31 from a disk call is a HARDWARE error, and DOS does not just
+ * return it: it calls INT 24h with
+ *  AH  bit 7 = 0 (a disk); bit 0 = 1 for a WRITE; bits 2-1 = the area (0 DOS
+ *      system, 1 FAT, 2 directory, 3 data); bits 3/4/5 = FAIL/RETRY/IGNORE are
+ *      allowed answers
+ *  AL  the drive (0 = A:)      DI  the error, low byte = code - 19 (2 = not ready)
+ * and the handler answers 0 IGNORE, 1 RETRY, 2 ABORT, 3 FAIL. Every value below is
+ * a row p_crit.asm measured on 6.22 (QEMU) and PCem with drive A: failed "not
+ * ready" -- see the evidence beside each.
+ */
+/* INT 24h's answer in AL, and what DOS makes of it. */
+#define DOS_CRIT_ACTION_IGNORE              0
+#define DOS_CRIT_ACTION_RETRY               1
+#define DOS_CRIT_ACTION_ABORT               2
+#define DOS_CRIT_ACTION_FAIL                3
+#define DOS_TERM_NORMAL                     0       /* AH of AH=4Dh: how the child ended */
+#define DOS_TERM_CRITICAL_ABORT             2
+#define DOS_CRIT_ABORT_RETURN_CODE          0x00    /* AL of AH=4Dh after an abort: PCem crit.abort.4d=0200 */
+
+/* The INT 24h answer bits (AH bits 3-5), named as DOS's own source names them. */
+#define DOS_CRIT_ALLOW_FAIL                 0x08
+#define DOS_CRIT_ALLOW_RETRY                0x10
+#define DOS_CRIT_ALLOW_IGNORE               0x20
+
+/* The rest of INT 24h's AH: bit 0 = a WRITE, bits 2-1 = the area. */
+#define DOS_CRIT_WRITE                      1
+#define DOS_CRIT_AREA_SHIFT                 1
+#define DOS_CRIT_AREA_DATA                  3
+#define DOS_CRIT_AH_PATH_CALL               0x1A    /* p_crit crit.*.int24 BX=1A00 */
+
+/* The INT 21h functions on an already-open file that DosCritInt24Ah tells apart. */
+#define DOS_CRIT_FUNCTION_READ              0x3F
+#define DOS_CRIT_FUNCTION_WRITE             0x40
+
+/* The drive letters A: to Z:, and what DosCritDriveFromNtName answers for no match. */
+#define DOS_CRIT_DRIVE_COUNT                26
+#define DOS_CRIT_NO_DRIVE                   (-1)
+#define DOS_CRIT_PATH_SEPARATOR             '\\'
 
 /* One measured row. `ClassAndAction` is BH:BL packed as DOS returns it, `Locus` the
  * locus (CH).
@@ -142,7 +245,6 @@ static const DOS_ERR_ROW g_DosErrTable[] = {
       DOS_ERR_CLASS_ACTION(DOS_ERR_CLASS_FAIL_I24, DOS_ERR_ACTION_ABORT),
       DOS_ERR_LOCUS_UNKNOWN, "crit.4e.fail.59"        },
 };
-#define DOS_ERR_ROWS    (sizeof(g_DosErrTable) / sizeof(g_DosErrTable[0]))
 
 /* Look up a code. Returns TRUE and fills classAndAction/locus when the pairing was
  * measured; returns FALSE and zeroes them when it was not -- see the warning at the top
@@ -152,109 +254,12 @@ static const DOS_ERR_ROW g_DosErrTable[] = {
  */
 BOOL DosErrClassify(_In_ WORD errorCode, _Out_ PWORD classAndAction, _Out_ PBYTE locus);
 
-/* WIN32 -> DOS, FOR EVERY CALL THAT FAILS THROUGH CreateFileA. (s72):
- * AH=3Dh answered **2 ("file not found") for every possible failure**, because
- * the handler read `f == INVALID_HANDLE_VALUE` and stopped asking. Measured by
- * tests/probes/dos/p_err.asm against MS-DOS 6.22, that is wrong twice over:
- *
- * CASE=err.after.3D.readonly  oracle AX=0005  ours AX=0002   access denied
- * CASE=err.after.3D.baddrive  oracle AX=0003  ours AX=0002   path not found
- *
- * and it is not cosmetic -- a program that gets "not found" for a file that is
- * plainly there goes looking for it instead of reporting the real problem. The
- * note beside the 0x0F row above records the same trap from the other side: the
- * DOS answer for opening "Y:\..." is 3, NOT 15, so this table must not "improve"
- * on it. The comment at AH=3Ch/3Dh already blamed this collapse for the GDI.EXE
- * wall; the sharing half was fixed then and the mapping half was left.
- *
- * [CAUTION]: BOTH SIDES OF EVERY ROW ARE MEASURED. The DOS side is the oracle CASE= line
- * quoted beside it; the WIN32 side is what the rig actually reported, read off
- * the handler's own `win32=0x..` log during the run that closed these rows:
- *
- *   INT21 AH=3d [ZZNOSUCH.XYZ]    FAILED win32=0x2 -> AX=0x2
- *   INT21 AH=3d [ZZRDONLY.TMP]    FAILED win32=0x5 -> AX=0x5
- *   INT21 AH=3d [Y:\ZZNOSUCH.XYZ] FAILED win32=0x3 -> AX=0x3
- *
- * An unmapped code is logged `UNMAPPED` and keeps the old answer rather than
- * being collapsed silently, exactly as DosErrClassify() refuses to invent a
- * class.
- *
- * [CAUTION]: THERE IS DELIBERATELY NO ERROR_INVALID_DRIVE (15) ROW. The obvious guess is
- * that "Y:\..." arrives as 15 and should map to DOS 3 -- but measured, it
- * arrives as **win32=3**, so a 15 row would be an unexercised invention
- * dressed as evidence. If a door is ever found that does produce 15, provoke
- * it and add the row then, in that order.
- *
- * Numeric rather than the ERROR_* macros, which the off-VM build (no windows.h)
- * does not have, so tests/unit/err_test.c can keep pinning it off-VM.
- */
-#define DOS_ERR_WIN32_FILE_NOT_FOUND    2u
-#define DOS_ERR_WIN32_PATH_NOT_FOUND    3u
-#define DOS_ERR_WIN32_TOO_MANY_OPEN     4u
-#define DOS_ERR_WIN32_ACCESS_DENIED     5u
-#define DOS_ERR_WIN32_FILE_EXISTS       80u
-#define DOS_ERR_WIN32_ALREADY_EXISTS    183u
-
-/* -- #34: THE HARDWARE ERRORS, 19-31: the same numbers in DOS and Win32 (see below). Named
- * as winerror.h names them.
- */
-#define DOS_ERR_WRITE_PROTECT           19
-#define DOS_ERR_BAD_UNIT                20
-#define DOS_ERR_NOT_READY               21
-#define DOS_ERR_BAD_COMMAND             22
-#define DOS_ERR_CRC                     23
-#define DOS_ERR_BAD_LENGTH              24
-#define DOS_ERR_SEEK                    25
-#define DOS_ERR_NOT_DOS_DISK            26
-#define DOS_ERR_SECTOR_NOT_FOUND        27
-#define DOS_ERR_OUT_OF_PAPER            28
-#define DOS_ERR_WRITE_FAULT             29
-#define DOS_ERR_READ_FAULT              30
-#define DOS_ERR_GEN_FAILURE             31
-#define DOS_ERR_HARDWARE_FIRST          DOS_ERR_WRITE_PROTECT
-#define DOS_ERR_HARDWARE_LAST           DOS_ERR_GEN_FAILURE
-
 BOOL DosErrFromWin32(_In_ DWORD win32Error, _Out_ PWORD dosError);
-
-/* #34: THE CRITICAL-ERROR CONTRACT (INT 24h), the pure half:
- * A DOS error 19-31 from a disk call is a HARDWARE error, and DOS does not just
- * return it: it calls INT 24h with
- *  AH  bit 7 = 0 (a disk); bit 0 = 1 for a WRITE; bits 2-1 = the area (0 DOS
- *      system, 1 FAT, 2 directory, 3 data); bits 3/4/5 = FAIL/RETRY/IGNORE are
- *      allowed answers
- *  AL  the drive (0 = A:)      DI  the error, low byte = code - 19 (2 = not ready)
- * and the handler answers 0 IGNORE, 1 RETRY, 2 ABORT, 3 FAIL. Every value below is
- * a row p_crit.asm measured on 6.22 (QEMU) and PCem with drive A: failed "not
- * ready" -- see the evidence beside each.
- */
-/* INT 24h's answer in AL, and what DOS makes of it. */
-#define DOS_CRIT_ACTION_IGNORE      0
-#define DOS_CRIT_ACTION_RETRY       1
-#define DOS_CRIT_ACTION_ABORT       2
-#define DOS_CRIT_ACTION_FAIL        3
-#define DOS_TERM_NORMAL             0       /* AH of AH=4Dh: how the child ended */
-#define DOS_TERM_CRITICAL_ABORT     2
-#define DOS_CRIT_ABORT_RETURN_CODE  0x00    /* AL of AH=4Dh after an abort: PCem crit.abort.4d=0200 */
 
 static inline BOOL DosCritIsHardwareError(_In_ WORD errorCode)
 {
     return errorCode >= DOS_ERR_HARDWARE_FIRST && errorCode <= DOS_ERR_HARDWARE_LAST;
 }
-
-/* The INT 24h answer bits (AH bits 3-5), named as DOS's own source names them. */
-#define DOS_CRIT_ALLOW_FAIL         0x08
-#define DOS_CRIT_ALLOW_RETRY        0x10
-#define DOS_CRIT_ALLOW_IGNORE       0x20
-
-/* The rest of INT 24h's AH: bit 0 = a WRITE, bits 2-1 = the area. */
-#define DOS_CRIT_WRITE              1
-#define DOS_CRIT_AREA_SHIFT         1
-#define DOS_CRIT_AREA_DATA          3
-#define DOS_CRIT_AH_PATH_CALL       0x1A    /* p_crit crit.*.int24 BX=1A00 */
-
-/* The INT 21h functions on an already-open file that DosCritInt24Ah tells apart. */
-#define DOS_CRIT_FUNCTION_READ      0x3F
-#define DOS_CRIT_FUNCTION_WRITE     0x40
 
 /* AH for INT 24h, from the INT 21h function that failed.
  *
@@ -333,11 +338,6 @@ static inline WORD DosCritIgnoreCount(
     }
     return requestedCount;
 }
-
-/* The drive letters A: to Z:, and what DosCritDriveFromNtName answers for no match. */
-#define DOS_CRIT_DRIVE_COUNT        26
-#define DOS_CRIT_NO_DRIVE           (-1)
-#define DOS_CRIT_PATH_SEPARATOR     '\\'
 
 /* #275: AL for a handle call -- the drive the OPEN FILE lives on, not the current
  * drive (DOS takes it from the DPB the SFT names; we have no SFT). The host asks

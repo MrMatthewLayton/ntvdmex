@@ -131,20 +131,6 @@
 
 /* One recorded planar write -- see `Watch` in VIDEO_STATE. */
 #define VIDEO_WATCH_MAX                 32
-typedef struct _VIDEO_WATCH_RECORD
-{
-    UINT32 Pc;                        /* guest (CS<<16)|IP at the write */
-    BYTE WriteMode;
-    BYTE MapMask;
-    BYTE EnableSetReset;
-    BYTE SetReset;
-    BYTE FunctionRotate;
-    BYTE BitMask;
-    BYTE Cpu;
-    BYTE  Latch[VIDEO_PLANES];                  /* the latches the write combined with */
-    BYTE  After[VIDEO_PLANES];                  /* the four plane bytes it left behind */
-} VIDEO_WATCH_RECORD, *PVIDEO_WATCH_RECORD;
-typedef const VIDEO_WATCH_RECORD *PCVIDEO_WATCH_RECORD;
 
 /* WHO WRITES THE SCREEN, AND WHERE:
  * A watchpoint answers "how was THIS byte made" and needs the byte's address; a
@@ -164,16 +150,8 @@ typedef const VIDEO_WATCH_RECORD *PCVIDEO_WATCH_RECORD;
  * unrolled bodies are only a few bytes apart, so the low bits alone put them all in
  * the same slot and the table reported two sites where there were dozens.
  */
-#define VIDEO_SITES             256
-#define VIDEO_SITE_HASH(pc)     ((((pc) >> 1) ^ ((pc) >> 7) ^ ((pc) >> 13)) & (VIDEO_SITES - 1))
-typedef struct _VIDEO_SITE
-{
-    UINT32 Pc;
-    UINT32 Count;
-    UINT32 Low;
-    UINT32 High;
-} VIDEO_SITE, *PVIDEO_SITE;
-typedef const VIDEO_SITE *PCVIDEO_SITE;
+#define VIDEO_SITES                     256
+#define VIDEO_SITE_HASH(pc)             ((((pc) >> 1) ^ ((pc) >> 7) ^ ((pc) >> 13)) & (VIDEO_SITES - 1))
 
 /* THE OFF-SCREEN SPRITE-CACHE WITNESS:
  * VIDEO_CACHE_LOW is a floor, not a measurement of any particular guest: it is chosen
@@ -185,8 +163,83 @@ typedef const VIDEO_SITE *PCVIDEO_SITE;
  * the table did see. Direction is part of the key: the same routine reading and
  * writing the cache is two facts, and the toolbar question is about reads.
  */
-#define VIDEO_CACHE_LOW     0xF000u
-#define VIDEO_CACHE_SITES   10
+#define VIDEO_CACHE_LOW                 0xF000u
+#define VIDEO_CACHE_SITES               10
+
+#define VIDEO_UNIMPLEMENTED_SET(bm, n)  ((bm)[((n) & 0xFF) >> 3] |= (BYTE)(1u << ((n) & 7)))
+#define VIDEO_UNIMPLEMENTED_GET(bm, n)  (((bm)[((n) & 0xFF) >> 3] >> ((n) & 7)) & 1u)
+
+/* WHERE THE BIOS FONTS LIVE IN GUEST MEMORY.
+ * INT 10h AH=11h AL=30h hands the caller a POINTER to the character generator, and plenty of
+ * DOS games take it and render text themselves rather than going through the BIOS. We were
+ * answering that call with the metrics (CX, DL) but never setting ES:BP -- so the caller drew
+ * from whatever ES:BP happened to hold, which is exactly the glyph-shaped noise Skyroads put
+ * on screen in place of "ROAD COMPLETED". The tables therefore need a real address the guest
+ * can read. The B0000 half of the text aperture is already mapped as RAM and is untouched by
+ * a VGA game (our text output lives at B8000), so the fonts go there.
+ */
+#define VDD_FONT8X16_SEG                0xB000                              /* 256 chars * 16 bytes = 0x1000 */
+#define VDD_FONT8X8_SEG                 0xB100                              /* 256 chars * 8 bytes = 0x0800 */
+#define VDD_FONT8X14_SEG                0xB180 /* 256 chars * 14 bytes = 0x0E00 (B1800..B25FF) */
+
+/* #53: the VBE 2.0 protected-mode interface block (vbe_pm.h, < 256 bytes) right after the
+ * fonts, for the same reason they are here: real-mode-addressable RAM a VGA game leaves
+ * alone. 4F0Ah returns B260:0000; VddVideoInstallFonts writes it, and 4F0Ah writes it
+ * again on every call so a guest that scribbled on it gets a good copy.
+ */
+#define VDD_VBEPM_SEG                   0xB260                              /* B2600..B26FF */
+
+/* #273: the real-mode WinFuncPtr stub (vbe_rm.asm, 34 bytes) in the same 256 bytes, after
+ * the 186-byte block: B260:00C0. VideoVbePmInstall writes both.
+ */
+#define VDD_VBERM_OFF                   0x00C0
+
+/* #266: the VGA BIOS's pointer tables, after the VBE block and for the same reason --
+ * B270:0000 the Video Save Pointer table (0040:00A8 points here; 7 far pointers),
+ * B270:0020 the secondary save pointer table (VGA, 1Ah bytes), B270:0040 the display
+ * combination code table (36 bytes), B270:0080 the 29 x 64-byte video parameter table.
+ * Ends at B2EC0. VddVideoInstallFonts writes them and the 0040:00A8 pointer.
+ */
+#define VDD_VIDTAB_SEG                  0xB270
+#define VDD_SAVEPTR_OFF                 0x0000
+#define VDD_SAVEPTR2_OFF                0x0020
+#define VDD_DCC_OFF                     0x0040
+#define VDD_VPARAM_OFF                  0x0080
+#define VDD_VPARAM_N                    29
+
+/* #265: THE INT 33h DRIVER'S OWN DATA, the 512 bytes after #266's tables (B2F00..B30FF;
+ * s92: both branches first claimed B270). 2Ch and 2Dh
+ * answer with ES:SI INTO the driver (the acceleration-profile block, a profile's name)
+ * and 34h with ES:DX at the MOUSE.INI name, so those bytes need a real-mode address a
+ * guest can read -- the same reason the fonts and the VBE block are here. Not owned by
+ * the video model: mouse_int33 (main.c) rewrites it on every call that hands it out.
+ */
+#define VDD_MOUSE_SEG                   0xB2F0                              /* B2F00..B30FF */
+#define VDD_MOUSE_ACC                   0x0000 /* The 144h-byte profile block (i33_driver.h) */
+#define VDD_MOUSE_INI                   0x0150                              /* "MOUSE.INI", ASCIIZ */
+
+typedef struct _VIDEO_WATCH_RECORD
+{
+    UINT32 Pc;                        /* guest (CS<<16)|IP at the write */
+    BYTE WriteMode;
+    BYTE MapMask;
+    BYTE EnableSetReset;
+    BYTE SetReset;
+    BYTE FunctionRotate;
+    BYTE BitMask;
+    BYTE Cpu;
+    BYTE  Latch[VIDEO_PLANES];                  /* the latches the write combined with */
+    BYTE  After[VIDEO_PLANES];                  /* the four plane bytes it left behind */
+} VIDEO_WATCH_RECORD, *PVIDEO_WATCH_RECORD;
+typedef const VIDEO_WATCH_RECORD *PCVIDEO_WATCH_RECORD;
+typedef struct _VIDEO_SITE
+{
+    UINT32 Pc;
+    UINT32 Count;
+    UINT32 Low;
+    UINT32 High;
+} VIDEO_SITE, *PVIDEO_SITE;
+typedef const VIDEO_SITE *PCVIDEO_SITE;
 typedef struct _VIDEO_CACHE_SITE
 {
     UINT32 Pc;
@@ -930,9 +983,6 @@ BYTE VddGraphicsFontRows(_In_ BYTE bl, _In_ BYTE dl);
  */
 INT     VddVideoParameterEntry(_In_ BYTE tableIndex, _Out_writes_(64) BYTE entry[64]);
 
-#define VIDEO_UNIMPLEMENTED_SET(bm, n)  ((bm)[((n) & 0xFF) >> 3] |= (BYTE)(1u << ((n) & 7)))
-#define VIDEO_UNIMPLEMENTED_GET(bm, n)  (((bm)[((n) & 0xFF) >> 3] >> ((n) & 7)) & 1u)
-
 INT  VddVideoInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddVideoReset(_In_ PVOID context);
 /* Stamp the frame with the current frame number and the raster-split arrays. The
@@ -940,14 +990,6 @@ VOID VddVideoReset(_In_ PVOID context);
  * before resolving colours with VddFramePaletteAt.
  */
 VOID VddVideoFrameTouch(_Inout_ PVIDEO_STATE state);
-static inline NTVDD_DEVICE VddVideoDevice(_In_ PVIDEO_STATE state)
-{ NTVDD_DEVICE device;
-device.Name = "video";
-device.Initialize = VddVideoInitialize;
-device.Reset = VddVideoReset;
-  device.Shutdown = 0;
-  device.Context = state;
-  return device; }
 
 VOID VddVideoRender(_Inout_ PVIDEO_STATE state);                /* text glyph render */
 /* The text screen as the GUEST wrote it (characters, then attributes in hex) --
@@ -1038,55 +1080,6 @@ UINT32 VddVideoFrameUs(_In_ PCVIDEO_STATE state);   /* 16667 or 14286 (s73) */
  */
 UINT32 VddVideoInt10WaitUs(_Inout_ PVIDEO_STATE state);
 
-/* WHERE THE BIOS FONTS LIVE IN GUEST MEMORY.
- * INT 10h AH=11h AL=30h hands the caller a POINTER to the character generator, and plenty of
- * DOS games take it and render text themselves rather than going through the BIOS. We were
- * answering that call with the metrics (CX, DL) but never setting ES:BP -- so the caller drew
- * from whatever ES:BP happened to hold, which is exactly the glyph-shaped noise Skyroads put
- * on screen in place of "ROAD COMPLETED". The tables therefore need a real address the guest
- * can read. The B0000 half of the text aperture is already mapped as RAM and is untouched by
- * a VGA game (our text output lives at B8000), so the fonts go there.
- */
-#define VDD_FONT8X16_SEG    0xB000  /* 256 chars * 16 bytes = 0x1000 */
-#define VDD_FONT8X8_SEG     0xB100  /* 256 chars * 8 bytes = 0x0800 */
-#define VDD_FONT8X14_SEG    0xB180  /* 256 chars * 14 bytes = 0x0E00 (B1800..B25FF) */
-
-/* #53: the VBE 2.0 protected-mode interface block (vbe_pm.h, < 256 bytes) right after the
- * fonts, for the same reason they are here: real-mode-addressable RAM a VGA game leaves
- * alone. 4F0Ah returns B260:0000; VddVideoInstallFonts writes it, and 4F0Ah writes it
- * again on every call so a guest that scribbled on it gets a good copy.
- */
-#define VDD_VBEPM_SEG       0xB260  /* B2600..B26FF */
-
-/* #273: the real-mode WinFuncPtr stub (vbe_rm.asm, 34 bytes) in the same 256 bytes, after
- * the 186-byte block: B260:00C0. VideoVbePmInstall writes both.
- */
-#define VDD_VBERM_OFF       0x00C0
-
-/* #266: the VGA BIOS's pointer tables, after the VBE block and for the same reason --
- * B270:0000 the Video Save Pointer table (0040:00A8 points here; 7 far pointers),
- * B270:0020 the secondary save pointer table (VGA, 1Ah bytes), B270:0040 the display
- * combination code table (36 bytes), B270:0080 the 29 x 64-byte video parameter table.
- * Ends at B2EC0. VddVideoInstallFonts writes them and the 0040:00A8 pointer.
- */
-#define VDD_VIDTAB_SEG      0xB270
-#define VDD_SAVEPTR_OFF     0x0000
-#define VDD_SAVEPTR2_OFF    0x0020
-#define VDD_DCC_OFF         0x0040
-#define VDD_VPARAM_OFF      0x0080
-#define VDD_VPARAM_N        29
-
-/* #265: THE INT 33h DRIVER'S OWN DATA, the 512 bytes after #266's tables (B2F00..B30FF;
- * s92: both branches first claimed B270). 2Ch and 2Dh
- * answer with ES:SI INTO the driver (the acceleration-profile block, a profile's name)
- * and 34h with ES:DX at the MOUSE.INI name, so those bytes need a real-mode address a
- * guest can read -- the same reason the fonts and the VBE block are here. Not owned by
- * the video model: mouse_int33 (main.c) rewrites it on every call that hands it out.
- */
-#define VDD_MOUSE_SEG       0xB2F0  /* B2F00..B30FF */
-#define VDD_MOUSE_ACC       0x0000  /* The 144h-byte profile block (i33_driver.h) */
-#define VDD_MOUSE_INI       0x0150  /* "MOUSE.INI", ASCIIZ */
-
 /* `Int10Ah11Calls` is counted so the next round is not another guess: the font-pointer fix
  * assumed the guest asks for its glyphs with INT 10h AH=11h, and the text is still garbled.
  * If it stays at zero, Skyroads never asks -- it is reading a font from a hard-coded ROM
@@ -1113,5 +1106,14 @@ INT VddVideoRegistersDump(
     _In_ PCVIDEO_STATE state,
     _Out_writes_(capacity) PSTR output,
     _In_ INT capacity);
+
+static inline NTVDD_DEVICE VddVideoDevice(_In_ PVIDEO_STATE state)
+{ NTVDD_DEVICE device;
+device.Name = "video";
+device.Initialize = VddVideoInitialize;
+device.Reset = VddVideoReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 #endif /* NTVDMEX_VDD_VIDEO_H */

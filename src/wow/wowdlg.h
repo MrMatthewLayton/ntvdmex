@@ -107,44 +107,14 @@
  * WM_COMMAND (0x111); COMMDLG's dialog procedures handle the pair together
  * (see wowmsg.h).
  */
-#define WM_INITDIALOG16     0x0110
+#define WM_INITDIALOG16             0x0110
 
 /* Four is not a guess: a modal dialog may put up another one (a File > Open
  * inside an Options dialog, a message box inside a validation handler), and a
  * host that nested deeper than this would be looping rather than working. The
  * same reasoning, and the same number's worth of it, as WOWCALL_MAX_DEPTH.
  */
-#define WOWDLG_MAX_MODAL    4
-
-typedef struct _WOWDLG_MODAL
-{
-    WORD  Window;          /* the dialog's Win16 handle -- the loop's identity */
-    DWORD ReturnLinear;    /* THE RETURN HOLE of the DialogBox call we parked */
-    DWORD DialogProcedure; /* the guest's dialog procedure, or 0 */
-    DWORD WindowProcedure; /* its class's window procedure, or 0 */
-    WORD  DataSelector;    /* the DS/AX both must be entered with */
-    INT   IsInitialised;   /* WM_INITDIALOG has been sent */
-    INT   IsShowDeferred;  /* the template said WS_VISIBLE and we DEFERRED it */
-    INT   IsEnded;         /* EndDialog was called for this dialog */
-    WORD  Result;          /* ...and this is the nResult it passed */
-    DWORD Messages;        /* messages dispatched into it, for the log */
-    /* [CAUTION]: THE WIN32 TRACE BUDGET IS PER DIALOG, NOT PER WAIT, and that distinction
-     * is the difference between an instrument and a flood: the wait below is
-     * re-entered after EVERY message, so a budget living there would re-arm
-     * 48 lines each time and a mouse crossing the dialog would write a line
-     * per move. TERMINAL's 158 MB log is what that looks like.
-     */
-    INT   TraceBudget;
-    DWORD StartTime;       /* when it went up -- so the log can say how long it ran */
-    /* GH #279: the top-level window DialogBox disabled, re-enabled at unwind.
-     * NULL when there was no owner or it was ALREADY disabled -- a nested dialog
-     * whose owner is the outer dialog must not enable a window it did not
-     * disable.
-     */
-    HWND  Owner32;
-    DWORD InitParameter;   /* DialogBoxParam's lParam, for WM_INITDIALOG (s89) */
-    WORD  FirstFocus;      /* the first WS_TABSTOP control, WM_INITDIALOG's wParam */
-} WOWDLG_MODAL, *PWOWDLG_MODAL;
+#define WOWDLG_MAX_MODAL            4
 
 /* [CAUTION]: NO FORWARD DECLARATIONS HERE, unlike wowwin.h. That file is included BEFORE
  * wowuser.h and has to declare what it borrows; this one is included AFTER, so
@@ -181,9 +151,40 @@ typedef struct _WOWDLG_MODAL
 #define WOWDLG_SLOW_BEAT_MS         60000
 #define WOWDLG_PROCEDURE_ARGUMENTS  5   /* Hwnd, msg, wParam, lParam (2 words) */
 
+typedef struct _WOWDLG_MODAL
+{
+    WORD  Window;          /* the dialog's Win16 handle -- the loop's identity */
+    DWORD ReturnLinear;    /* THE RETURN HOLE of the DialogBox call we parked */
+    DWORD DialogProcedure; /* the guest's dialog procedure, or 0 */
+    DWORD WindowProcedure; /* its class's window procedure, or 0 */
+    WORD  DataSelector;    /* the DS/AX both must be entered with */
+    INT   IsInitialised;   /* WM_INITDIALOG has been sent */
+    INT   IsShowDeferred;  /* the template said WS_VISIBLE and we DEFERRED it */
+    INT   IsEnded;         /* EndDialog was called for this dialog */
+    WORD  Result;          /* ...and this is the nResult it passed */
+    DWORD Messages;        /* messages dispatched into it, for the log */
+    /* [CAUTION]: THE WIN32 TRACE BUDGET IS PER DIALOG, NOT PER WAIT, and that distinction
+     * is the difference between an instrument and a flood: the wait below is
+     * re-entered after EVERY message, so a budget living there would re-arm
+     * 48 lines each time and a mouse crossing the dialog would write a line
+     * per move. TERMINAL's 158 MB log is what that looks like.
+     */
+    INT   TraceBudget;
+    DWORD StartTime;       /* when it went up -- so the log can say how long it ran */
+    /* GH #279: the top-level window DialogBox disabled, re-enabled at unwind.
+     * NULL when there was no owner or it was ALREADY disabled -- a nested dialog
+     * whose owner is the outer dialog must not enable a window it did not
+     * disable.
+     */
+    HWND  Owner32;
+    DWORD InitParameter;   /* DialogBoxParam's lParam, for WM_INITDIALOG (s89) */
+    WORD  FirstFocus;      /* the first WS_TABSTOP control, WM_INITDIALOG's wParam */
+} WOWDLG_MODAL, *PWOWDLG_MODAL;
+
 /* Defined in wowdlg.c (#335). */
 extern INT g_WowDlgIsDialogCall[WOWCALL_MAX_DEPTH];
 extern WORD g_WowDlgMessage[WOWCALL_MAX_DEPTH];
+
 INT WowDlgActive(VOID);
 INT WowDlgPush(
     WORD window,
@@ -202,4 +203,5 @@ INT WowDlgStep(
     const volatile LONG *running,
     PSTR note,
     INT noteCapacity);
+
 #endif /* NTVDMEX_WOWDLG_H */

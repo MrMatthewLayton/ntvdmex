@@ -171,6 +171,7 @@
 #define WOWCDLG_PD16_CUSTDATA           0x1c
 #define WOWCDLG_PD16_HOOKBITS  (0x00001000UL | 0x00002000UL | 0x00004000UL | 0x00008000UL \
                         | 0x00010000UL | 0x00020000UL)
+
 /* PD_ENABLEPRINTHOOK | PD_ENABLESETUPHOOK | PD_ENABLE{PRINT,SETUP}TEMPLATE[HANDLE] */
 
 /* Win16 LOGFONT: five INT16s, eight BYTEs, a 32-byte face -- 50 bytes. */
@@ -194,6 +195,7 @@
  * to for the dialog's whole life, and how to reach the guest's copy.
  */
 #define WOWCDLG_MAX_FIND                4
+
 typedef struct _WOWCDLG_FIND
 {
     HWND           Dialog;       /* NULL = free */
@@ -208,4 +210,5 @@ typedef struct _WOWCDLG_FIND
 INT WowCdlgRelay(UINT message, LPARAM lParam);
 INT WowCdlgIsDialogMessage(PMSG message);
 INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity);
+
 #endif /* NTVDMEX_WOWCOMMDLG_H */

@@ -21,6 +21,7 @@
 #define NTVDMEX_VDM_V86_H
 
 #include <windows.h>
+
 #include "ntvdm.h"
 
 /* TEB self-pointer (fs:[0x18]) without the CRT/winternl. */

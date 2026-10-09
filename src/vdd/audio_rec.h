@@ -32,6 +32,7 @@
 
 #include <windows.h>
 #include <stdint.h>
+
 #include "audio_format.h"   /* defines only: AUDIO_STEREO_CHANNELS */
 
 /* The canonical 44-byte PCM .WAV header (AudioRecorderHeader). */

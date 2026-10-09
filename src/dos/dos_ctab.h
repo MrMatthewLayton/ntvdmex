@@ -47,19 +47,6 @@ static const BYTE g_DosCtabUpper[DOS_CTAB_UPPER_TABLE_SIZE] = {
     0xFE, 0xFF
 };
 
-/* One character through the table above: ASCII a-z directly, 80h-FFh by lookup.
- * Used by AH=65h AL=20h-23h, so capitalising through DOS and reading the table
- * agree by construction.
- */
-static inline BYTE DosCtabUpcase437(_In_ BYTE character)
-{
-    if (character >= 'a' && character <= 'z')
-        return (BYTE)(character - ASCII_CASE_BIT);
-    if (character >= ASCII_HIGH_FIRST)
-        return g_DosCtabUpper[X86_WORD_SIZE + (character - ASCII_HIGH_FIRST)];
-    return character;
-}
-
 /* AL=04 filename uppercase (same data as AL=02 on 6.22) */
 static const BYTE g_DosCtabFileNameUpper[DOS_CTAB_FILE_NAME_UPPER_TABLE_SIZE] = {
     0x80, 0x00, 0x80, 0x9A, 0x45, 0x41, 0x8E, 0x41, 0x8F, 0x80, 0x45, 0x45, 0x45, 0x49, 0x49, 0x49,
@@ -104,5 +91,18 @@ static const BYTE g_DosCtabCollate[DOS_CTAB_COLLATE_TABLE_SIZE] = {
 static const BYTE g_DosCtabDbcs[DOS_CTAB_DBCS_TABLE_SIZE] = {
     0x00, 0x00, 0x00, 0x00
 };
+
+/* One character through the table above: ASCII a-z directly, 80h-FFh by lookup.
+ * Used by AH=65h AL=20h-23h, so capitalising through DOS and reading the table
+ * agree by construction.
+ */
+static inline BYTE DosCtabUpcase437(_In_ BYTE character)
+{
+    if (character >= 'a' && character <= 'z')
+        return (BYTE)(character - ASCII_CASE_BIT);
+    if (character >= ASCII_HIGH_FIRST)
+        return g_DosCtabUpper[X86_WORD_SIZE + (character - ASCII_HIGH_FIRST)];
+    return character;
+}
 
 #endif /* NTVDMEX_DOS_CTAB_H */

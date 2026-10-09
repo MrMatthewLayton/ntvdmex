@@ -35,13 +35,26 @@
 #include "vdd_emu8k.h"
 #include "vdd_speaker.h"
 
-#define AUDIO_OUTPUT_HZ     44100u  /* Host output rate */
-#define AUDIO_CHUNK         512u    /* output frames the mixer works in */
+#define AUDIO_OUTPUT_HZ         44100u  /* Host output rate */
+#define AUDIO_CHUNK             512u    /* output frames the mixer works in */
 
 /* Worst-case source frames for one chunk: the OPL's 49716 Hz is the fastest
  * source, plus a couple of samples of interpolation headroom.
  */
-#define AUDIO_SOURCE_MAX    (AUDIO_CHUNK * 2u + 4u)
+#define AUDIO_SOURCE_MAX        (AUDIO_CHUNK * 2u + 4u)
+
+/* THE PC SPEAKER IS A THIRD SOURCE, AND IT USED TO BE SILENT:
+ * vdd_speaker.c models port 0x61 and reports the tone, and nothing ever turned
+ * that into a sample -- so every beep a guest made went nowhere while the score
+ * line said "SB16 PCM, OPL2/3 FM, MPU-401, speaker". It is a square wave gated
+ * by two bits, which is exactly what the hardware does, so it is a dozen lines
+ * here rather than a device of its own. Amplitude is deliberately WELL below
+ * full scale: a real speaker is a 1-inch cone, not a line output, and a
+ * full-scale square would sit on the clip rail over everything else.
+ */
+#define AUDIO_SPEAKER_LEVEL     6000    /* Peak sample for an active speaker tone */
+#define AUDIO_SPEAKER_HZ_MIN    20u     /* Below this it is a click train, not a tone */
+#define AUDIO_SPEAKER_HZ_MAX    20000u  /* Above it, nothing at 44.1 kHz is audible */
 
 /* A linear-interpolating resampler from `SourceHz` to the output rate. */
 typedef struct _AUDIO_RESAMPLER
@@ -58,19 +71,6 @@ typedef struct _AUDIO_RESAMPLER
     INT      IsPrimed;
 } AUDIO_RESAMPLER, *PAUDIO_RESAMPLER;
 typedef const AUDIO_RESAMPLER *PCAUDIO_RESAMPLER;
-
-/* THE PC SPEAKER IS A THIRD SOURCE, AND IT USED TO BE SILENT:
- * vdd_speaker.c models port 0x61 and reports the tone, and nothing ever turned
- * that into a sample -- so every beep a guest made went nowhere while the score
- * line said "SB16 PCM, OPL2/3 FM, MPU-401, speaker". It is a square wave gated
- * by two bits, which is exactly what the hardware does, so it is a dozen lines
- * here rather than a device of its own. Amplitude is deliberately WELL below
- * full scale: a real speaker is a 1-inch cone, not a line output, and a
- * full-scale square would sit on the clip rail over everything else.
- */
-#define AUDIO_SPEAKER_LEVEL     6000    /* Peak sample for an active speaker tone */
-#define AUDIO_SPEAKER_HZ_MIN    20u     /* Below this it is a click train, not a tone */
-#define AUDIO_SPEAKER_HZ_MAX    20000u  /* Above it, nothing at 44.1 kHz is audible */
 
 typedef struct _AUDIO_STATE
 {

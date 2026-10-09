@@ -51,6 +51,7 @@
 
 #ifndef HOST_X86LEN_H
 #define HOST_X86LEN_H
+
 #include "../ntvdmex_types.h"
 
 /* imm kinds. `z` = 2 bytes with a 16-bit operand size, 4 with a 32-bit one. */
@@ -88,16 +89,16 @@
 #define X86_MAX_INSTRUCTION         16u     /* Longer than any real instruction */
 #define X86_VOTE_FRACTION           4       /* A quarter of the streams must agree */
 
-/* Length in bytes of the instruction at b[i], or 0 if it cannot be decoded / runs off
- * the end.  `d32` is the code segment's D/B bit (1 = 32-bit default operand+address).
- */
-UINT X86InstructionLength(const BYTE *bytes, UINT offset, UINT length, INT isDefault32);
-
 /* Does an instruction START at b[off]?  Decodes forward from each of the preceding
  * `span` bytes and counts how many streams land exactly on `off`.  See the header
  * commentary for the measured separation and why the threshold is a quarter.
  */
-#define X86_BOUNDARY_SPAN   48u
+#define X86_BOUNDARY_SPAN           48u
+
+/* Length in bytes of the instruction at b[i], or 0 if it cannot be decoded / runs off
+ * the end.  `d32` is the code segment's D/B bit (1 = 32-bit default operand+address).
+ */
+UINT X86InstructionLength(const BYTE *bytes, UINT offset, UINT length, INT isDefault32);
 
 INT X86IsInstructionStart(const BYTE *bytes, UINT offset, UINT length, INT isDefault32);
 

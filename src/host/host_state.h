@@ -12,7 +12,9 @@
 
 #ifndef NTVDMEX_HOST_STATE_H
 #define NTVDMEX_HOST_STATE_H
+
 #include <windows.h>
+
 #include "ntvdm.h"
 #include "host_core.h"  /* the PFN_* types of the run-time imports */
 #include "../ntvdmex_x86.h"
@@ -272,4 +274,5 @@ extern ISV_IO_HOOK g_IsvHooks[ISV_MAX_HOOKS];
 extern BYTE  g_FaultTable[DOS_FLTSITE_N * DPMI_FAULT_TABLE_ENTRY];
 extern BYTE  g_FaultStack[DPMI_FAULT_STK_SIZE];
 extern DPMI_DESCRIPTOR g_Ldt[DPMI_LDT_MAX];
+
 #endif

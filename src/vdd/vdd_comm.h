@@ -120,6 +120,37 @@
 #define COMM_IER_LINE_STATUS        0x04    /* Receiver line status */
 #define COMM_IER_MODEM_STATUS       0x08    /* Modem status */
 
+/* THE PARALLEL PORT, WHICH IS THREE REGISTERS AND A STROBE:
+ * INT 17h has printed to a spool file since GH #45, but the PORTS were
+ * unclaimed -- so a program that drives the hardware directly read 0xFF from
+ * 0x379 and saw BUSY low, PAPER OUT high and no ACK: a printer that is out of
+ * paper and never ready. That is most DOS printing utilities and every
+ * "print screen" TSR, because bit-banging the port is faster than INT 17h.
+ * The Centronics handshake is the whole device: the program writes a byte to
+ * the DATA register (0x378), then PULSES STROBE (bit 0 of the CONTROL
+ * register, 0x37A) low-to-high, and the printer latches the byte on that
+ * edge. So the byte is emitted on the STROBE EDGE, not on the data write --
+ * getting that wrong prints every byte twice, or prints whatever was left in
+ * the latch when the program only meant to read the status.
+ *
+ * [CAUTION]: STATUS BIT 7 (BUSY) IS INVERTED ON THE WIRE: a ready printer reads it as
+ * 1. Bit 6 (ACK) is active low and pulses after each byte; we present it as
+ * idle-high, which is what a polling driver reads between bytes.
+ */
+#define LPT_MAX_PORTS               1
+
+#define LPT_STATUS_ERROR            0x08    /* Active low: 1 = no error */
+#define LPT_STATUS_SELECT           0x10    /* 1 = printer selected/online */
+#define LPT_STATUS_PAPER_OUT        0x20    /* 1 = OUT OF PAPER */
+#define LPT_STATUS_ACK              0x40    /* Active low, pulses per byte; idle high */
+#define LPT_STATUS_BUSY             0x80    /* INVERTED: 1 = not busy */
+
+#define LPT_CONTROL_STROBE          0x01
+#define LPT_CONTROL_AUTO_LINE_FEED  0x02
+#define LPT_CONTROL_INIT            0x04    /* Active low */
+#define LPT_CONTROL_SELECT          0x08
+#define LPT_CONTROL_IRQ_ENABLE      0x10
+
 /* A byte the guest transmitted, on its way to whatever the host has attached.
  * `port` is the index, not the base -- the sink does not care where it lives.
  */
@@ -155,37 +186,6 @@ typedef struct _COMM_PORT
 } COMM_PORT, *PCOMM_PORT;
 
 typedef const COMM_PORT *PCCOMM_PORT;
-
-/* THE PARALLEL PORT, WHICH IS THREE REGISTERS AND A STROBE:
- * INT 17h has printed to a spool file since GH #45, but the PORTS were
- * unclaimed -- so a program that drives the hardware directly read 0xFF from
- * 0x379 and saw BUSY low, PAPER OUT high and no ACK: a printer that is out of
- * paper and never ready. That is most DOS printing utilities and every
- * "print screen" TSR, because bit-banging the port is faster than INT 17h.
- * The Centronics handshake is the whole device: the program writes a byte to
- * the DATA register (0x378), then PULSES STROBE (bit 0 of the CONTROL
- * register, 0x37A) low-to-high, and the printer latches the byte on that
- * edge. So the byte is emitted on the STROBE EDGE, not on the data write --
- * getting that wrong prints every byte twice, or prints whatever was left in
- * the latch when the program only meant to read the status.
- *
- * [CAUTION]: STATUS BIT 7 (BUSY) IS INVERTED ON THE WIRE: a ready printer reads it as
- * 1. Bit 6 (ACK) is active low and pulses after each byte; we present it as
- * idle-high, which is what a polling driver reads between bytes.
- */
-#define LPT_MAX_PORTS               1
-
-#define LPT_STATUS_ERROR            0x08    /* Active low: 1 = no error */
-#define LPT_STATUS_SELECT           0x10    /* 1 = printer selected/online */
-#define LPT_STATUS_PAPER_OUT        0x20    /* 1 = OUT OF PAPER */
-#define LPT_STATUS_ACK              0x40    /* Active low, pulses per byte; idle high */
-#define LPT_STATUS_BUSY             0x80    /* INVERTED: 1 = not busy */
-
-#define LPT_CONTROL_STROBE          0x01
-#define LPT_CONTROL_AUTO_LINE_FEED  0x02
-#define LPT_CONTROL_INIT            0x04    /* Active low */
-#define LPT_CONTROL_SELECT          0x08
-#define LPT_CONTROL_IRQ_ENABLE      0x10
 
 typedef struct _LPT_PORT
 {

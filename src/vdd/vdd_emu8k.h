@@ -41,6 +41,7 @@
 
 #ifndef NTVDMEX_VDD_EMU8K_H
 #define NTVDMEX_VDD_EMU8K_H
+
 #include "../ntvdmex_types.h"
 #include "vdd_bus.h"
 
@@ -202,6 +203,21 @@ typedef const EMU8K_STATE *PCEMU8K_STATE;
 
 INT  VddEmu8kInitialize(_In_ VDD_BUS *bus, _In_ PVOID context);
 VOID VddEmu8kReset(_In_ PVOID context);
+
+/* Render `frameCount` stereo frames (2*frameCount interleaved L/R samples) at VddEmu8kRateHz(),
+ * advancing every channel, envelope, LFO and the sample counter by that much chip time.
+ */
+VOID VddEmu8kRenderStereo(
+    _Inout_ PEMU8K_STATE state,
+    _Out_writes_(2 * frameCount) PINT16 output,
+    _In_ DWORD frameCount);
+
+/* Exposed for the test: the attack time (us) of ATKHLDV/ATKHLD bits 6-0, and the decay /
+ * release time per dB (us) of DCYSUSV/DCYSUS bits 6-0. 0 = never / no decay.
+ */
+DWORD VddEmu8kAttackMicroseconds(_In_ BYTE rateCode);
+DWORD VddEmu8kDecayMicrosecondsPerDb(_In_ BYTE rateCode);
+
 static inline NTVDD_DEVICE VddEmu8kDevice(_In_ PEMU8K_STATE state)
 { NTVDD_DEVICE device;
 device.Name = EMU8K_DEVICE_NAME;
@@ -217,19 +233,5 @@ static inline DWORD VddEmu8kRateHz(_In_ PCEMU8K_STATE state)
     (VOID)state;
     return EMU8K_RATE_HZ;
 }
-
-/* Render `frameCount` stereo frames (2*frameCount interleaved L/R samples) at VddEmu8kRateHz(),
- * advancing every channel, envelope, LFO and the sample counter by that much chip time.
- */
-VOID VddEmu8kRenderStereo(
-    _Inout_ PEMU8K_STATE state,
-    _Out_writes_(2 * frameCount) PINT16 output,
-    _In_ DWORD frameCount);
-
-/* Exposed for the test: the attack time (us) of ATKHLDV/ATKHLD bits 6-0, and the decay /
- * release time per dB (us) of DCYSUSV/DCYSUS bits 6-0. 0 = never / no decay.
- */
-DWORD VddEmu8kAttackMicroseconds(_In_ BYTE rateCode);
-DWORD VddEmu8kDecayMicrosecondsPerDb(_In_ BYTE rateCode);
 
 #endif /* NTVDMEX_VDD_EMU8K_H */

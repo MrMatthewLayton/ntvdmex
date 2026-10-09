@@ -37,6 +37,7 @@
 #define SYSFONT_H
 
 #include <windows.h>
+
 #include "../ntvdmex_x86.h"     /* defines only: X86_WORD_SIZE / DWORD_SIZE */
 #include "../ntvdmex_ascii.h"   /* defines only: ASCII_SPACE */
 #include "vga_font.h"
@@ -92,6 +93,8 @@
 #define SYSFONT_FNT2_ENTRY_SIZE         4               /* Width WORD, offset WORD */
 #define SYSFONT_FNT3_ENTRY_SIZE         6               /* Width WORD, offset DWORD */
 #define SYSFONT_FNT_ENTRY_OFFSET        2
+#define SYSFONT_LINE_SIZE               400
+#define SYSFONT_TABLE_COUNT             3               /* 8x8, 8x14, 8x16 */
 
 typedef struct _SYSFONT_FACE
 {
@@ -120,8 +123,6 @@ enum
 {
     SYSFONT_USER_NONE = 0, SYSFONT_USER_OK, SYSFONT_USER_MISSING, SYSFONT_USER_NOSIZE
 };
-#define SYSFONT_LINE_SIZE       400
-#define SYSFONT_TABLE_COUNT     3   /* 8x8, 8x14, 8x16 */
 typedef struct _SYSFONT_REPORT
 {
     char Line[SYSFONT_LINE_SIZE];  /* char, not CHAR: the spelling moves code (#333) */

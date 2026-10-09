@@ -12,6 +12,7 @@
 
 #ifndef NTVDMEX_MAIN_H
 #define NTVDMEX_MAIN_H
+
 #include "host_state.h"
 
 extern INT g_GusOn;
@@ -115,4 +116,5 @@ extern DWORD g_PmDeviceIrqFail;
 extern DWORD g_PmDeviceIrqDrop;
 extern DWORD g_PmStretchMaximumMicroseconds;
 extern DOS_START_MODE g_StartMode;
+
 #endif

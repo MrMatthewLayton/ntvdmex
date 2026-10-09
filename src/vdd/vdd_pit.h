@@ -64,43 +64,6 @@ typedef struct _PIT_RTC_READING
 
 typedef const PIT_RTC_READING *PCPIT_RTC_READING;
 
-/* BCD IS A BOUNDARY FORMAT, NOT A SECOND SET OF ARITHMETIC (Importance = 3):
- * Control Word bit 0 selects four-decade BCD counting: the counter runs
- * 9999 -> 0000 and a written count of 0000 means 10000, not 65536 (Intel 8254,
- * 231164-005, "Control Word Format" and "Write Operations"). The naive shape is
- * to teach every count law to step in decimal; the cheap and exactly equivalent
- * one is to keep ALL internal state binary -- reload, latch, the count laws,
- * the IRQ0 divisor -- and convert only where a guest's bytes cross the port:
- * DECODE on a count write, ENCODE on a count read. The counting element is then
- * the same code in both modes, which is the point: a second arithmetic path is a
- * second thing to get wrong, and only one of the two would ever be exercised.
- *
- * [CAUTION]: INVALID DIGITS ARE NOT DEFINED BY THE DATASHEET. A guest may write 0x1A into a
- * decade that only has states 0-9. We decode each nibble AT ITS DECADE WEIGHT
- * (0x1A -> 20), because that reproduces what four decade down-counters actually
- * do next -- 0x1A, 0x19, 0x18 ... -- rather than inventing a clamp. The value
- * re-enters the legal range within ten clocks and stays there.
- *
- * [CAUTION]: docs/ref/pit.md 3 is the paragraph this implements; docs/inventory/pit.md 2
- * records that NO oracle we have models BCD, so this is spec-implemented and
- * UNVERIFIABLE against a machine. It is the one surface here where the
- * datasheet outranks the emulators.
- */
-static inline UINT32 PitFromBcd(WORD value)
-{ return (UINT32)((value & PIT_BCD_DIGIT) + ((value >> PIT_BCD_TENS_SHIFT) & PIT_BCD_DIGIT) * PIT_BCD_TEN
-                  + ((value >> PIT_BCD_HUNDREDS_SHIFT) & PIT_BCD_DIGIT) * PIT_BCD_HUNDRED + ((value >> PIT_BCD_THOUSANDS_SHIFT) & PIT_BCD_DIGIT) * PIT_BCD_THOUSAND); }
-
-static inline WORD PitToBcd(UINT32 value)
-{ value %= PIT_BCD_WRAP;                      /* 10000 (the BCD maximum) reads back as 0000 */
-  return (WORD)((((value / PIT_BCD_THOUSAND) % PIT_BCD_TEN) << PIT_BCD_THOUSANDS_SHIFT) | (((value / PIT_BCD_HUNDRED) % PIT_BCD_TEN) << PIT_BCD_HUNDREDS_SHIFT)
-                  | (((value / PIT_BCD_TEN) % PIT_BCD_TEN) << PIT_BCD_TENS_SHIFT) | (value % PIT_BCD_TEN)); }
-
-/* The wrap of the counting element: where a count that runs past zero comes back. */
-static inline UINT32 PitWrap(BYTE isBcd)
-{
-    return isBcd ? PIT_BCD_WRAP : PIT_BINARY_WRAP;
-}
-
 /* COUNTERS 1 AND 2, AS COUNTERS:
  * Counter 0 keeps its own flat fields below and is DELIBERATELY not folded in
  * here. It carries the IRQ0 engine, the accumulator and the pacer's guard, it is
@@ -236,6 +199,68 @@ typedef struct _PIT_STATE
 
 typedef const PIT_STATE *PCPIT_STATE;
 
+/* Build the device descriptor to hand to VddBusAdd(). */
+INT  VddPitInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
+VOID VddPitReset(_In_ PVOID context);
+
+/* Seed 0040:006C from rtc_now (the same clock INT 1Ah AH=02h answers from, so the
+ * two halves of INT 1Ah cannot disagree about the time) and clear the midnight flag
+ * at 0040:0070. Returns 1 if seeded; 0 -- touching nothing -- when there is no clock
+ * or it read an impossible time, which leaves the old count rather than a made-up one.
+ * Call once the PIT is on the bus (it writes through the bus's flat map).
+ */
+INT  VddPitSeedTimeOfDay(_Inout_ PPIT_STATE state);
+
+/* Advance time by `clocks` PIT input clocks, emitting IRQ0 per elapsed reload.
+ * Exposed (not just driven by the frame tick) so tests can feed exact counts.
+ */
+VOID VddPitAddClocks(_Inout_ PPIT_STATE state, _In_ UINT32 clocks);
+
+/* COUNTER 2'S GATE AND OUT PIN -- the PC's only software-visible pair:
+ * The speaker VDD owns port 61h, so it pushes bit 0 in here and reads bit 5 back
+ * out. Keeping the PIT ignorant of the speaker (rather than having it reach for
+ * port 61h itself) is what lets the off-VM battery drive the gate directly.
+ */
+VOID VddPitCounter2Gate(_Inout_ PPIT_STATE state, _In_ INT isHigh);
+INT  VddPitCounter2Out(_In_ PCPIT_STATE state);
+
+/* BCD IS A BOUNDARY FORMAT, NOT A SECOND SET OF ARITHMETIC (Importance = 3):
+ * Control Word bit 0 selects four-decade BCD counting: the counter runs
+ * 9999 -> 0000 and a written count of 0000 means 10000, not 65536 (Intel 8254,
+ * 231164-005, "Control Word Format" and "Write Operations"). The naive shape is
+ * to teach every count law to step in decimal; the cheap and exactly equivalent
+ * one is to keep ALL internal state binary -- reload, latch, the count laws,
+ * the IRQ0 divisor -- and convert only where a guest's bytes cross the port:
+ * DECODE on a count write, ENCODE on a count read. The counting element is then
+ * the same code in both modes, which is the point: a second arithmetic path is a
+ * second thing to get wrong, and only one of the two would ever be exercised.
+ *
+ * [CAUTION]: INVALID DIGITS ARE NOT DEFINED BY THE DATASHEET. A guest may write 0x1A into a
+ * decade that only has states 0-9. We decode each nibble AT ITS DECADE WEIGHT
+ * (0x1A -> 20), because that reproduces what four decade down-counters actually
+ * do next -- 0x1A, 0x19, 0x18 ... -- rather than inventing a clamp. The value
+ * re-enters the legal range within ten clocks and stays there.
+ *
+ * [CAUTION]: docs/ref/pit.md 3 is the paragraph this implements; docs/inventory/pit.md 2
+ * records that NO oracle we have models BCD, so this is spec-implemented and
+ * UNVERIFIABLE against a machine. It is the one surface here where the
+ * datasheet outranks the emulators.
+ */
+static inline UINT32 PitFromBcd(WORD value)
+{ return (UINT32)((value & PIT_BCD_DIGIT) + ((value >> PIT_BCD_TENS_SHIFT) & PIT_BCD_DIGIT) * PIT_BCD_TEN
+                  + ((value >> PIT_BCD_HUNDREDS_SHIFT) & PIT_BCD_DIGIT) * PIT_BCD_HUNDRED + ((value >> PIT_BCD_THOUSANDS_SHIFT) & PIT_BCD_DIGIT) * PIT_BCD_THOUSAND); }
+
+static inline WORD PitToBcd(UINT32 value)
+{ value %= PIT_BCD_WRAP;                      /* 10000 (the BCD maximum) reads back as 0000 */
+  return (WORD)((((value / PIT_BCD_THOUSAND) % PIT_BCD_TEN) << PIT_BCD_THOUSANDS_SHIFT) | (((value / PIT_BCD_HUNDRED) % PIT_BCD_TEN) << PIT_BCD_HUNDREDS_SHIFT)
+                  | (((value / PIT_BCD_TEN) % PIT_BCD_TEN) << PIT_BCD_TENS_SHIFT) | (value % PIT_BCD_TEN)); }
+
+/* The wrap of the counting element: where a count that runs past zero comes back. */
+static inline UINT32 PitWrap(BYTE isBcd)
+{
+    return isBcd ? PIT_BCD_WRAP : PIT_BINARY_WRAP;
+}
+
 /* -- THE BIOS TICK (INT 08h's bookkeeping), the ONE body for every place that does it:
  * PitInt08, and the host's two inline bumps for a guest that cannot take IRQ0 right
  * now (main.c: nested real-mode calls, a flat PM client with no INT 08h hook). Each of
@@ -328,10 +353,6 @@ static inline UINT32 VddPitCounter2Hz(PCPIT_STATE state)
   if (!reload)
       reload = PitWrap(state->Counter2.IsBcd);
   return PIT_INPUT_HZ / reload; }
-
-/* Build the device descriptor to hand to VddBusAdd(). */
-INT  VddPitInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
-VOID VddPitReset(_In_ PVOID context);
 static inline NTVDD_DEVICE VddPitDevice(_In_ PPIT_STATE state)
 { NTVDD_DEVICE device;
 device.Name = PIT_DEVICE_NAME;
@@ -354,26 +375,5 @@ device.Reset = VddPitReset;
 static inline UINT32 VddPitTicksSinceMidnight(UINT hour, UINT minute, UINT second)
 { UINT64 seconds = (UINT64)hour * PIT_SECONDS_PER_HOUR + (UINT64)minute * PIT_SECONDS_PER_MINUTE + second;
   return (UINT32)((seconds * PIT_INPUT_HZ) / PIT_CLOCKS_PER_TICK); }
-
-/* Seed 0040:006C from rtc_now (the same clock INT 1Ah AH=02h answers from, so the
- * two halves of INT 1Ah cannot disagree about the time) and clear the midnight flag
- * at 0040:0070. Returns 1 if seeded; 0 -- touching nothing -- when there is no clock
- * or it read an impossible time, which leaves the old count rather than a made-up one.
- * Call once the PIT is on the bus (it writes through the bus's flat map).
- */
-INT  VddPitSeedTimeOfDay(_Inout_ PPIT_STATE state);
-
-/* Advance time by `clocks` PIT input clocks, emitting IRQ0 per elapsed reload.
- * Exposed (not just driven by the frame tick) so tests can feed exact counts.
- */
-VOID VddPitAddClocks(_Inout_ PPIT_STATE state, _In_ UINT32 clocks);
-
-/* COUNTER 2'S GATE AND OUT PIN -- the PC's only software-visible pair:
- * The speaker VDD owns port 61h, so it pushes bit 0 in here and reads bit 5 back
- * out. Keeping the PIT ignorant of the speaker (rather than having it reach for
- * port 61h itself) is what lets the off-VM battery drive the gate directly.
- */
-VOID VddPitCounter2Gate(_Inout_ PPIT_STATE state, _In_ INT isHigh);
-INT  VddPitCounter2Out(_In_ PCPIT_STATE state);
 
 #endif /* NTVDMEX_VDD_PIT_H */

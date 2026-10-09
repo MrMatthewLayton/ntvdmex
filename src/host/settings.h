@@ -46,6 +46,7 @@
 #define NTVDMEX_SETTINGS_H
 
 #include <windows.h>
+
 #include "../../res/settings_ids.h"
 #include "cpuspeed.h"               /* GH #56: the speed list SET_SPEEDMODE selects from */
 #include "../vdd/present_scale.h"   /* the aspect list SET_ASPECT selects from */
@@ -55,6 +56,13 @@
 #define SETTINGS_DOS_MAJOR_MAX  255         /* "major.minor": a byte, then two digits */
 #define SETTINGS_DOS_MINOR_MAX  99
 #define SETTINGS_UNSIGNED_MAX   100000000u  /* An edit box's absurd value */
+#define SPKOUT_TO_CARD(v)       ((v) == SPKOUT_CARD || (v) == SPKOUT_BOTH)
+#define SPKOUT_TO_REAL(v)       ((v) == SPKOUT_REAL || (v) == SPKOUT_BOTH)
+
+/* Named access, so callers read like they used to:
+ * settings_apply() says g_set.Values[SET_MSENS], not g_set.Values[37].
+ */
+#define SETV(settings, id)      ((settings)->Values[(id)])
 
 /* THE NUMERIC SETTINGS:
  * Order here must match g_SetDefinitions below; SET_COUNT closes the array and is what
@@ -125,8 +133,6 @@ enum
 {
     SPKOUT_OFF = 0, SPKOUT_CARD, SPKOUT_REAL, SPKOUT_BOTH
 };
-#define SPKOUT_TO_CARD(v)   ((v) == SPKOUT_CARD || (v) == SPKOUT_BOTH)
-#define SPKOUT_TO_REAL(v)   ((v) == SPKOUT_REAL || (v) == SPKOUT_BOTH)
 
 enum
 {
@@ -157,15 +163,6 @@ typedef struct _SET_STR_DEF
     PCSTR       Default;
 } SET_STR_DEF;
 
-/* [CAUTION]: SB defaults are the card we actually emulate (vdd_sb.h: base 0x220, IRQ 5,
- * DMA 1/5) and the audio path really does run at 44100 (audio_wave.h). They are
- * not folklore: a default that disagrees with the hardware would have the dialog
- * describing a machine that does not exist.
- */
-extern const SET_DEF g_SetDefinitions[SET_COUNT];
-
-extern const SET_STR_DEF g_SetStringDefinitions[SET_STR_COUNT];
-
 /* WHERE A VALUE CAME FROM. (GH #144):
  * The DOS version once read 5.00 on every rig run from a registry value nobody had
  * looked at, because only the FILE override ever printed a line. Every row now
@@ -186,10 +183,14 @@ typedef struct _NTVDMEX_SETTINGS
     BYTE  StringSources[SET_STR_COUNT];
 } NTVDMEX_SETTINGS, *PNTVDMEX_SETTINGS; typedef const NTVDMEX_SETTINGS *PCNTVDMEX_SETTINGS;
 
-/* Named access, so callers read like they used to:
- * settings_apply() says g_set.Values[SET_MSENS], not g_set.Values[37].
+/* [CAUTION]: SB defaults are the card we actually emulate (vdd_sb.h: base 0x220, IRQ 5,
+ * DMA 1/5) and the audio path really does run at 44100 (audio_wave.h). They are
+ * not folklore: a default that disagrees with the hardware would have the dialog
+ * describing a machine that does not exist.
  */
-#define SETV(settings, id)  ((settings)->Values[(id)])
+extern const SET_DEF g_SetDefinitions[SET_COUNT];
+
+extern const SET_STR_DEF g_SetStringDefinitions[SET_STR_COUNT];
 
 VOID SettingsCopyString(PSTR destination, PCSTR source, INT capacity);
 

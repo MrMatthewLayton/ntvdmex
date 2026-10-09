@@ -63,12 +63,14 @@ typedef struct _WOW_ANCHOR
 } WOW_ANCHOR, *PWOW_ANCHOR;
 typedef const WOW_ANCHOR *PCWOW_ANCHOR;
 
-/* Defined in wowanchors.c (#335). */
-INT WowAnchorHit(PCWOW_ANCHOR table, INT count, WORD id, WORD argumentBytes, WORD returnStub);
 extern const WOW_ANCHOR g_WowShellAnchors[34];
 extern const WOW_ANCHOR g_WowGdiAnchors[367];
 extern const WOW_ANCHOR g_WowCommdlgAnchors[8];
 extern const WOW_ANCHOR g_WowKeyboardAnchors[11];
 extern const WOW_ANCHOR g_WowSoundAnchors[17];
 extern const WOW_ANCHOR g_WowMmediaAnchors[2];
+
+/* Defined in wowanchors.c (#335). */
+INT WowAnchorHit(PCWOW_ANCHOR table, INT count, WORD id, WORD argumentBytes, WORD returnStub);
+
 #endif /* NTVDMEX_WOWANCHORS_H */

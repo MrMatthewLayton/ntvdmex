@@ -81,12 +81,6 @@
  * on the command line; a few images are kept and the current one is selected.
  */
 #define WOWRES_CACHE                6
-typedef struct _WOWRES_CACHE_ENTRY
-{
-    CHAR Path[WOWRES_PATH_MAX];
-    PBYTE Image;
-    DWORD Length;
-} WOWRES_CACHE_ENTRY;
 
 /* THE ACCELERATOR TABLE, AND WHY IT IS READ FROM THE FILE (Importance = 3):
  * `LoadAccelerators` is USER's own 16-bit code: it loads the resource itself
@@ -116,12 +110,6 @@ typedef struct _WOWRES_CACHE_ENTRY
 #define WOWRES_ACCEL_ENTRY_SIZE     5
 #define WOWRES_ACCEL_FIELD_KEY      1
 #define WOWRES_ACCEL_FIELD_ID       3
-typedef struct _WOWRES_ACCEL
-{
-    BYTE Flags;
-    WORD Key;
-    WORD Id;
-} WOWRES_ACCEL, *PWOWRES_ACCEL;
 
 /* THE APPLICATION'S OWN ICON (Importance = 2):
  * A GROUP_ICON resource is a directory: {WORD reserved, WORD type, WORD count}
@@ -169,6 +157,19 @@ typedef struct _WOWRES_ACCEL
 #define WOWRES_RT_CURSOR            1
 #define WOWRES_RT_GROUP_CURSOR      12
 
+typedef struct _WOWRES_CACHE_ENTRY
+{
+    CHAR Path[WOWRES_PATH_MAX];
+    PBYTE Image;
+    DWORD Length;
+} WOWRES_CACHE_ENTRY;
+typedef struct _WOWRES_ACCEL
+{
+    BYTE Flags;
+    WORD Key;
+    WORD Id;
+} WOWRES_ACCEL, *PWOWRES_ACCEL;
+
 /* Defined in wowres.c (#335). */
 INT WowResOpen(PCSTR path);
 INT WowResAccelFirst(PWOWRES_ACCEL output, INT capacity, PWORD resourceId);
@@ -178,4 +179,5 @@ HICON WowResIconNamed(PCSTR name, PINT picked, INT width, INT height);
 HICON WowResIcon(WORD groupId, PINT picked, INT width, INT height);
 HCURSOR WowResCursorNamed(PCSTR name);
 HCURSOR WowResCursor(WORD groupId);
+
 #endif /* NTVDMEX_WOWRES_H */

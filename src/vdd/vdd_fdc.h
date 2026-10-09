@@ -153,6 +153,13 @@ typedef const FDC_STATE *PCFDC_STATE;
 INT  VddFdcInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddFdcReset(PVOID context);
 
+/* Exposed for the off-VM battery, which drives the chip through the same two
+ * doors the guest does rather than reaching into the struct.
+ */
+VOID    VddFdcPortOut(_In_ PVOID context, _In_ WORD port, _In_ BYTE width, _In_ UINT32 value);
+VOID    VddFdcPortIn(_In_ PVOID context, _In_ WORD port, _In_ BYTE width, _Out_ UINT32 *value);
+BYTE VddFdcMainStatus(_In_ PCFDC_STATE state);
+
 static inline NTVDD_DEVICE VddFdcDevice(_In_ PFDC_STATE state)
 { NTVDD_DEVICE device;
 device.Name = FDC_DEVICE_NAME;
@@ -161,12 +168,5 @@ device.Reset = VddFdcReset;
   device.Shutdown = 0;
   device.Context = state;
   return device; }
-
-/* Exposed for the off-VM battery, which drives the chip through the same two
- * doors the guest does rather than reaching into the struct.
- */
-VOID    VddFdcPortOut(_In_ PVOID context, _In_ WORD port, _In_ BYTE width, _In_ UINT32 value);
-VOID    VddFdcPortIn(_In_ PVOID context, _In_ WORD port, _In_ BYTE width, _Out_ UINT32 *value);
-BYTE VddFdcMainStatus(_In_ PCFDC_STATE state);
 
 #endif /* NTVDMEX_VDD_FDC_H */

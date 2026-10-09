@@ -53,8 +53,18 @@
 
 #include "../ntvdmex_types.h"
 
-#define DOS_RECOVERY_SAFE_MODE_FAILURES     2   /* This many consecutive failures -> safe mode */
-#define DOS_RECOVERY_UNINSTALL_FAILURES     3   /* ...and this many -> take ourselves out */
+#define DOS_RECOVERY_SAFE_MODE_FAILURES     2       /* This many consecutive failures -> safe mode */
+#define DOS_RECOVERY_UNINSTALL_FAILURES     3       /* ...and this many -> take ourselves out */
+
+/* The counter file's text: decimal digits, perhaps after blanks. */
+#define DOS_RECOVERY_FIRST_DIGIT            '0'
+#define DOS_RECOVERY_LAST_DIGIT             '9'
+#define DOS_RECOVERY_DECIMAL_BASE           10
+#define DOS_RECOVERY_MAX_DIGITS             4       /* More than this is absurd -> zero */
+#define DOS_RECOVERY_SPACE                  ' '     /* The blanks skipped before the count */
+#define DOS_RECOVERY_CARRIAGE_RETURN        '\r'
+#define DOS_RECOVERY_LINE_FEED              '\n'
+#define DOS_RECOVERY_TAB                    '\t'
 
 typedef enum _DOS_START_MODE
 {
@@ -62,11 +72,6 @@ typedef enum _DOS_START_MODE
     DOS_START_SAFE   = 1,
     DOS_START_UNINSTALL = 2
 } DOS_START_MODE, *PDOS_START_MODE;
-
-/* `failureCount` is the number of consecutive starts that did NOT end cleanly, read
- * before this one is counted.
- */
-DOS_START_MODE DosRecoveryDecideStartMode(_In_ UINT failureCount);
 
 /* SAFE MODE: WHAT IT SKIPS. (s90, the remainder of #132):
  * Two failed starts in a row mean something in start-up is wedging or crashing
@@ -99,17 +104,12 @@ typedef struct _DOS_SAFE_SKIPS
 
 typedef const DOS_SAFE_SKIPS *PCDOS_SAFE_SKIPS;
 
-DOS_SAFE_SKIPS DosRecoveryGetSafeSkips(_In_ DOS_START_MODE startMode);
+/* `failureCount` is the number of consecutive starts that did NOT end cleanly, read
+ * before this one is counted.
+ */
+DOS_START_MODE DosRecoveryDecideStartMode(_In_ UINT failureCount);
 
-/* The counter file's text: decimal digits, perhaps after blanks. */
-#define DOS_RECOVERY_FIRST_DIGIT        '0'
-#define DOS_RECOVERY_LAST_DIGIT         '9'
-#define DOS_RECOVERY_DECIMAL_BASE       10
-#define DOS_RECOVERY_MAX_DIGITS         4       /* More than this is absurd -> zero */
-#define DOS_RECOVERY_SPACE              ' '     /* The blanks skipped before the count */
-#define DOS_RECOVERY_CARRIAGE_RETURN    '\r'
-#define DOS_RECOVERY_LINE_FEED          '\n'
-#define DOS_RECOVERY_TAB                '\t'
+DOS_SAFE_SKIPS DosRecoveryGetSafeSkips(_In_ DOS_START_MODE startMode);
 
 /* Parse the counter file's contents. Anything unreadable counts as ZERO, not as
  * a failure: a corrupt counter must not be able to uninstall us on its own, and

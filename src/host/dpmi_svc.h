@@ -220,7 +220,6 @@
 #define DPMI_FREE_INFO_LINEAR_FREE              7
 #define DPMI_FREE_INFO_PAGING_FILE              8
 #define DPMI_STATE_SAVE_SIZE                    0x0040  /* 0305h: nominal, see the handler */
-INT DpmiIsSelectorValid(WORD selector, INT indexLimit, INT isAllocated, INT isGuestOwnedTable);
 
 /* REAL-MODE CALLBACKS: SIXTEEN, AND THEY CAN BE GIVEN BACK. (0303h/0304h):
  * The spec has a host provide AT LEAST 16 callbacks per client; we had 4, and no 0304h,
@@ -238,16 +237,8 @@ INT DpmiIsSelectorValid(WORD selector, INT indexLimit, INT isAllocated, INT isGu
  *   `EIP += 3` themselves); an address inside the 4-byte stub maps to the same slot by
  *   the integer division, so a caller that has already stepped is not misread.
  */
-#define DPMI_CB_SLOTS   16
-#define DPMI_CB_STRIDE  4
-
-WORD DpmiCallbackEntry(WORD base, INT slot);
-/* The slot whose BOP is executing at CS:IP, or -1. For the trap path. */
-INT DpmiCallbackSlotAt(WORD base, WORD codeSegment, WORD wantedSegment, WORD instructionPointer);
-/* 0304h: the slot whose ADDRESS is exactly CX:DX, or -1. Stricter than the trap path:
- * the client must hand back the address it was given, not something inside the stub.
- */
-INT DpmiCallbackSlotOf(WORD base, WORD codeSegment, WORD wantedSegment, WORD offset);
+#define DPMI_CB_SLOTS                           16
+#define DPMI_CB_STRIDE                          4
 
 /* 0503h RESIZE MEMORY BLOCK: STAY PUT IF IT FITS, OTHERWISE MOVE AND COPY:
  * The spec lets the host move the block (it returns a new linear address AND a new
@@ -259,9 +250,19 @@ INT DpmiCallbackSlotOf(WORD base, WORD codeSegment, WORD wantedSegment, WORD off
  * otherwise                       -> a new block, copy min(old, new), free the old.
  * `committed` is the allocation's page-rounded size as the OS reports it.
  */
-#define DPMI_RESIZE_BAD         0
-#define DPMI_RESIZE_INPLACE     1
-#define DPMI_RESIZE_MOVE        2
+#define DPMI_RESIZE_BAD                         0
+#define DPMI_RESIZE_INPLACE                     1
+#define DPMI_RESIZE_MOVE                        2
+
+INT DpmiIsSelectorValid(WORD selector, INT indexLimit, INT isAllocated, INT isGuestOwnedTable);
+
+WORD DpmiCallbackEntry(WORD base, INT slot);
+/* The slot whose BOP is executing at CS:IP, or -1. For the trap path. */
+INT DpmiCallbackSlotAt(WORD base, WORD codeSegment, WORD wantedSegment, WORD instructionPointer);
+/* 0304h: the slot whose ADDRESS is exactly CX:DX, or -1. Stricter than the trap path:
+ * the client must hand back the address it was given, not something inside the stub.
+ */
+INT DpmiCallbackSlotOf(WORD base, WORD codeSegment, WORD wantedSegment, WORD offset);
 INT DpmiResizePlan(UINT32 newSize, UINT32 committed, UINT32 *copy);
 
 #endif /* NTVDMEX_DPMI_SVC_H */

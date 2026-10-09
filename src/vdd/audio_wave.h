@@ -25,6 +25,7 @@
 
 #include <windows.h>
 #include <stdint.h>
+
 #include "audio_format.h"   /* defines only: AUDIO_STEREO_CHANNELS */
 
 #define AUDIO_WAVE_BUFFERS          24      /* CAP on buffers in flight (storage is sized to it) */

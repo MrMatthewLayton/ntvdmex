@@ -12,8 +12,11 @@
 
 #ifndef INTERP_XCPU_H
 #define INTERP_XCPU_H
+
 #include "../../src/ntvdmex_types.h"
+
 #define XMEM_SIZE   0x110000u
+
 typedef struct _INTERP_XCPU
 {
     UINT32 Registers[8];
@@ -22,4 +25,5 @@ typedef struct _INTERP_XCPU
     UINT32 Flags;
 } INTERP_XCPU, *PINTERP_XCPU;
 typedef const INTERP_XCPU *PCINTERP_XCPU;
+
 #endif

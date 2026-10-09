@@ -43,11 +43,6 @@
 #define MPU_MIDI_DATA_BYTES         2       /* The most data bytes a short message carries */
 #define MPU_DEVICE_NAME             "mpu401"
 
-/* A complete MIDI message, ready for the host synth. `msg` is packed as
- * status | data1<<8 | data2<<16 (the layout midiOutShortMsg wants).
- */
-typedef VOID (*PMPU_MIDI_SINK)(PVOID context, UINT32 message);
-
 /* #136: SYSTEM EXCLUSIVE, FOR A SYNTH THAT NEEDS IT:
  * SysEx has always been SWALLOWED here, and for XP's GS Wavetable synth that is the
  * right call -- it is what every build so far has sent it. An MT-32 is a different
@@ -62,7 +57,12 @@ typedef VOID (*PMPU_MIDI_SINK)(PVOID context, UINT32 message);
  * DT1 has a wrong checksum and an MT-32 rejects it anyway, and a cut bulk dump that
  * happened to checksum would write garbage into the synth's memory.
  */
-#define MPU_SYSEX_MAX   4096
+#define MPU_SYSEX_MAX               4096
+
+/* A complete MIDI message, ready for the host synth. `msg` is packed as
+ * status | data1<<8 | data2<<16 (the layout midiOutShortMsg wants).
+ */
+typedef VOID (*PMPU_MIDI_SINK)(PVOID context, UINT32 message);
 typedef VOID (*PMPU_SYSEX_SINK)(PVOID context, const BYTE *message, UINT32 length);
 
 typedef struct _MPU_STATE
@@ -108,6 +108,7 @@ VOID VddMpuReset(_In_ PVOID context);
  * other's running status.
  */
 VOID VddMpuFeed(_Inout_ PMPU_STATE state, _In_ BYTE value);
+
 static inline NTVDD_DEVICE VddMpuDevice(_In_ PMPU_STATE state)
 { NTVDD_DEVICE device;
 device.Name = MPU_DEVICE_NAME;

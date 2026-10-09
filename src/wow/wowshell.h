@@ -303,4 +303,5 @@
 
 /* Defined in wowshell.c (#335). */
 INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity);
+
 #endif /* NTVDMEX_WOWSHELL_H */

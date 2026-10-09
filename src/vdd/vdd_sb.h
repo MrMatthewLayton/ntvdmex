@@ -34,14 +34,15 @@
 #ifndef NTVDMEX_VDD_SB_H
 #define NTVDMEX_VDD_SB_H
 
-/* SbStartBlock: a DMA block's mode. */
-#define SB_SINGLE_CYCLE     0
-#define SB_AUTO_INIT        1
 #include "audio_format.h"   /* defines only: AUDIO_MONO / AUDIO_STEREO for SbRender */
 
 #include "vdd_bus.h"
 #include "vdd_dma.h"
 #include "vdd_opl.h"
+
+/* SbStartBlock: a DMA block's mode. */
+#define SB_SINGLE_CYCLE             0
+#define SB_AUTO_INIT                1
 
 #define SB_DEFAULT_BASE             0x220
 #define SB_DEFAULT_IRQ              5
@@ -72,34 +73,18 @@
 #define SB_DSP_VERSION_SBPRO_MINOR  2
 #define SB_DSP_VERSION_AWE32_MINOR  12      /* 4.12 */
 
-/* ...AND THAT CHOICE SELECTS THE GUEST'S ENTIRE DRIVER PATH:
- * DMX branches on it in two places that matter. Its SB interrupt handler
- * (DOOM.EXE 0x53024) tests `version >= 4.00` and, if so, asks MIXER REGISTER 0x82
- * whether the interrupt was really the card's before refilling; below 4.00 it
- * skips that check entirely. And 4.xx is what makes it use the SB16 programmed
- * transfer commands (0xC6 = 8-bit auto-init, measured, issued once) instead of the
- * older 0x48 + 0x1C pair.
- * So the version is not cosmetic -- it picks which of two quite different guest
- * code paths runs against this VDD, and only one of them has ever been exercised.
- * Runtime override so both can be heard without a rebuild; the default is
- * unchanged.
- */
-extern BYTE g_SbVersionMajor;
-extern BYTE g_SbVersionMinor;
-extern INT g_SbGate;    /* ACK gate, opt-in: deviates from the hardware. See vdd_sb.c */
-
-#define SB_DEVICE_NAME          "sb16"
-#define SB_STEREO_CHANNELS      2u
-#define SB_RUN_BUCKETS          8   /* Run-length histograms */
-#define SB_DSP_OPCODES          256
-#define SB_MIXER_REGISTERS      256
+#define SB_DEVICE_NAME              "sb16"
+#define SB_STEREO_CHANNELS          2u
+#define SB_RUN_BUCKETS              8       /* Run-length histograms */
+#define SB_DSP_OPCODES              256
+#define SB_MIXER_REGISTERS          256
 
 /* GateMode: the ACK/POLL gate (vdd_sb.c), opt-in through g_SbGate. */
-#define SB_GATE_OFF             0
-#define SB_GATE_ACK             1   /* VDMSound's: hold until the block IRQ is acked */
-#define SB_GATE_POLL            2   /* Hold until the guest polls the DMA position */
-#define SB_OUTPUT_QUEUE_MAX     8   /* Bytes the DSP can have waiting to be read */
-#define SB_ARGUMENTS_MAX        4   /* Longest command argument list we accept */
+#define SB_GATE_OFF                 0
+#define SB_GATE_ACK                 1       /* VDMSound's: hold until the block IRQ is acked */
+#define SB_GATE_POLL                2       /* Hold until the guest polls the DMA position */
+#define SB_OUTPUT_QUEUE_MAX         8       /* Bytes the DSP can have waiting to be read */
+#define SB_ARGUMENTS_MAX            4       /* Longest command argument list we accept */
 
 /* Playback state of the DSP's transfer engine. */
 enum
@@ -307,19 +292,32 @@ typedef struct _SB_STATE
 } SB_STATE, *PSB_STATE;
 typedef const SB_STATE *PCSB_STATE;
 
+/* ...AND THAT CHOICE SELECTS THE GUEST'S ENTIRE DRIVER PATH:
+ * DMX branches on it in two places that matter. Its SB interrupt handler
+ * (DOOM.EXE 0x53024) tests `version >= 4.00` and, if so, asks MIXER REGISTER 0x82
+ * whether the interrupt was really the card's before refilling; below 4.00 it
+ * skips that check entirely. And 4.xx is what makes it use the SB16 programmed
+ * transfer commands (0xC6 = 8-bit auto-init, measured, issued once) instead of the
+ * older 0x48 + 0x1C pair.
+ * So the version is not cosmetic -- it picks which of two quite different guest
+ * code paths runs against this VDD, and only one of them has ever been exercised.
+ * Runtime override so both can be heard without a rebuild; the default is
+ * unchanged.
+ */
+extern BYTE g_SbVersionMajor;
+extern BYTE g_SbVersionMinor;
+extern INT g_SbGate;    /* ACK gate, opt-in: deviates from the hardware. See vdd_sb.c */
+
+/* nosb.flag: when set, the DSP reset handshake withholds its 0xAA so a detect
+ * fails, i.e. the machine reports no Sound Blaster fitted. See vdd_sb.c.
+ */
+extern INT g_SbAbsent;
+
 /* Build the device descriptor to hand to VddBusAdd(). Set base/irq/dma and the
  * dma/opl back-pointers before adding.
  */
 INT  VddSbInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddSbReset(_In_ PVOID context);
-static inline NTVDD_DEVICE VddSbDevice(_In_ PSB_STATE state)
-{ NTVDD_DEVICE device;
-device.Name = SB_DEVICE_NAME;
-device.Initialize = VddSbInitialize;
-device.Reset = VddSbReset;
-  device.Shutdown = 0;
-  device.Context = state;
-  return device; }
 
 /* Pull up to `frames` samples of playback into `output` (mono 16-bit at the card's
  * current rate), fetching through the DMA controller and raising the completion
@@ -339,15 +337,19 @@ UINT32 VddSbRenderStereo(
  */
 UINT32 VddSbFrameHz(_In_ PCSB_STATE state);
 
+static inline NTVDD_DEVICE VddSbDevice(_In_ PSB_STATE state)
+{ NTVDD_DEVICE device;
+device.Name = SB_DEVICE_NAME;
+device.Initialize = VddSbInitialize;
+device.Reset = VddSbReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
+
 /* True while a programmed transfer is running (test/mixer convenience). */
 static inline INT VddSbIsActive(_In_ PCSB_STATE state)
 {
     return state->TransferMode != SB_TRANSFER_IDLE && !state->IsPaused;
 }
-
-/* nosb.flag: when set, the DSP reset handshake withholds its 0xAA so a detect
- * fails, i.e. the machine reports no Sound Blaster fitted. See vdd_sb.c.
- */
-extern INT g_SbAbsent;
 
 #endif /* NTVDMEX_VDD_SB_H */

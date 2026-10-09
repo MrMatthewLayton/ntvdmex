@@ -78,6 +78,18 @@
 /* status register (read 0x08 / 0xD0) */
 #define DMA_STATUS_TERMINAL_COUNT       0x0F    /* Terminal count, ch 0-3 of this controller; clear on read */
 #define DMA_STATUS_REQUEST              0xF0    /* Request pending, ch 0-3 of this controller; DERIVED */
+#define DMA_DREQ_MAX                    4
+
+#define DMA_CHANNELS                    8       /* Two 8237s: channels 0-3 and 4-7 */
+#define DMA_CONTROLLER_8BIT             0       /* The first 8237: channels 0-3 */
+#define DMA_CONTROLLER_16BIT            1       /* The second: channels 4-7 */
+#define DMA_PORT_CHANNEL1_COUNT         0x03    /* The 8-bit SB channel's count: the poll port */
+#define DMA_FIRST_16BIT_CHANNEL         4       /* Channels 0-3 are 8-bit, 4-7 16-bit */
+#define DMA_CONTROLLERS                 2
+#define DMA_PAGE_PORTS                  16      /* 80h-8Fh */
+
+/* Build the device descriptor to hand to VddBusAdd(). */
+#define DMA_DEVICE_NAME                 "dma"
 
 /* WHO IS ASSERTING DREQ? THE DEVICE KNOWS; THE 8237 ONLY SEES THE PIN:
  * Status bits 7:4 report each channel's DREQ input. On the bus that is a wire the
@@ -96,15 +108,6 @@
  * clear does not unplug the sound card.
  */
 typedef BYTE (*PDMA_DREQ_ROUTINE)(PCVOID context);
-#define DMA_DREQ_MAX                4
-
-#define DMA_CHANNELS                8       /* Two 8237s: channels 0-3 and 4-7 */
-#define DMA_CONTROLLER_8BIT         0       /* The first 8237: channels 0-3 */
-#define DMA_CONTROLLER_16BIT        1       /* The second: channels 4-7 */
-#define DMA_PORT_CHANNEL1_COUNT     0x03    /* The 8-bit SB channel's count: the poll port */
-#define DMA_FIRST_16BIT_CHANNEL     4       /* Channels 0-3 are 8-bit, 4-7 16-bit */
-#define DMA_CONTROLLERS             2
-#define DMA_PAGE_PORTS              16      /* 80h-8Fh */
 
 typedef struct _DMA_CHANNEL
 {
@@ -207,19 +210,8 @@ typedef struct _DMA_STATE
 
 typedef const DMA_STATE *PCDMA_STATE;
 
-/* Build the device descriptor to hand to VddBusAdd(). */
-#define DMA_DEVICE_NAME     "dma"
-
 INT  VddDmaInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddDmaReset(_In_ PVOID context);
-static inline NTVDD_DEVICE VddDmaDevice(_In_ PDMA_STATE state)
-{ NTVDD_DEVICE device;
-device.Name = DMA_DEVICE_NAME;
-device.Initialize = VddDmaInitialize;
-device.Reset = VddDmaReset;
-  device.Shutdown = 0;
-  device.Context = state;
-  return device; }
 
 /* The physical address the next transfer on `ch` will touch. */
 UINT32 VddDmaCurrentPhysical(_In_ PCDMA_STATE state, _In_ BYTE channelNumber);
@@ -279,5 +271,14 @@ UINT32 VddDmaWrite(
     _In_reads_(byteCount) const BYTE *source,
     _In_ UINT32 byteCount,
     _Out_opt_ INT *isTerminalCount);
+
+static inline NTVDD_DEVICE VddDmaDevice(_In_ PDMA_STATE state)
+{ NTVDD_DEVICE device;
+device.Name = DMA_DEVICE_NAME;
+device.Initialize = VddDmaInitialize;
+device.Reset = VddDmaReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 #endif /* NTVDMEX_VDD_DMA_H */

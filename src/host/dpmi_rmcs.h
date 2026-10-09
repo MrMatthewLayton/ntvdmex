@@ -36,23 +36,67 @@
 
 #include "../ntvdmex_types.h"
 
-#define RMCS_EDI    0x00
-#define RMCS_ESI    0x04
-#define RMCS_EBP    0x08
-#define RMCS_EBX    0x10
-#define RMCS_EDX    0x14
-#define RMCS_ECX    0x18
-#define RMCS_EAX    0x1C
-#define RMCS_FLAGS  0x20
-#define RMCS_ES     0x22
-#define RMCS_DS     0x24
-#define RMCS_FS     0x26
-#define RMCS_GS     0x28
-#define RMCS_IP     0x2A
-#define RMCS_CS     0x2C
-#define RMCS_SP     0x2E
-#define RMCS_SS     0x30
-#define RMCS_SIZE   0x32
+#define RMCS_EDI            0x00
+#define RMCS_ESI            0x04
+#define RMCS_EBP            0x08
+#define RMCS_EBX            0x10
+#define RMCS_EDX            0x14
+#define RMCS_ECX            0x18
+#define RMCS_EAX            0x1C
+#define RMCS_FLAGS          0x20
+#define RMCS_ES             0x22
+#define RMCS_DS             0x24
+#define RMCS_FS             0x26
+#define RMCS_GS             0x28
+#define RMCS_IP             0x2A
+#define RMCS_CS             0x2C
+#define RMCS_SP             0x2E
+#define RMCS_SS             0x30
+#define RMCS_SIZE           0x32
+
+/* HOW 0300h SERVICES VECTOR `vec`, GIVEN WHAT IVT[vec] HOLDS:
+ * The spec has ONE rule: run whatever the REAL-MODE IVT points at -- our BIOS/DOS stub,
+ * a TSR's hook, a driver the guest installed itself. SIMINT_RUN is that rule, done
+ * for real through the 0302h nested-V86 machinery.
+ * - SIMINT_FAST is the SAME ANSWER, computed without the trip into V86, and it is only
+ *   taken where it provably is the same: the IVT still holds our own stub (`our_seg`),
+ *   so "run the stub" and "call what the stub calls" are one thing. 0300h with BL=33h
+ *   is Doom's mouse, twice a frame; a full PM->V86->PM round trip with the INT-site
+ *   unpatch/repatch is not something to pay there for nothing.
+ *
+ * [CAUTION]: INT 21h IS ALWAYS FAST, EVEN WHEN A GUEST HAS HOOKED THE REAL-MODE VECTOR. That is a
+ * known deviation, kept deliberately: every DOS/4GW, DOS/16M and krnl386 guest on the
+ * shelf was validated through the host-side INT 21h path, and a hooked real-mode INT 21h
+ * is exactly the case none of them has been seen to exercise. Changing it is its own
+ * ticket, with its own gate.
+ *
+ * [CAUTION]: `reflect_on` = 0 (cfg\simintrefl_off.flag) is the pre-#247 shape, kept as the rig's
+ * rollback lever: 21h/33h/10h host-side whoever owns them, everything else not run.
+ *
+ * [CAUTION]: A NULL VECTOR IS NOT RUN. 0000:0000 is the IVT itself; executing it as code is the
+ * GH #27 landmine. Startup points every null vector at our IRET stub, so this only
+ * fires if a guest zeroed one -- and then "not serviced" is the honest answer.
+ */
+#define SIMINT_FAST         1           /* Host-side: dos_int21 / mouse_int33 / the video VDD */
+#define SIMINT_RUN          2           /* Run IVT[vec] in V86 with an IRET frame (the 0302h machinery) */
+#define SIMINT_NONE         3           /* Not run; counted in `STAGE2: simInt (DPMI 0300) UNHANDLED` */
+
+/* CX WORDS OF THE PROTECTED-MODE STACK, COPIED TO THE REAL-MODE ONE:
+ * DPMI 0.9: 0300h/0301h/0302h take CX = "number of words to copy from the protected-
+ * mode stack to the real-mode stack". They go ABOVE the return frame, in the same
+ * order, so a procedure that reads its arguments at [bp+6]... finds them where a
+ * real-mode caller would have pushed them.
+ * - Returns the new SP (below the copied words, above the frame) in *sp_after, and 1 --
+ *   or 0 when `words` plus the `frame` bytes do not fit below `sp`. The caller then
+ *   copies NOTHING and carries on exactly as before #247 (when CX was ignored), and
+ *   says so in the log: a client passing a stale CX by accident must not be refused a
+ *   call that has always worked, and one passing 30000 words is not asking for a copy
+ *   any host could make.
+ *
+ * [CAUTION]: SP = 0 IS A FULL 64 KB, not an empty stack: the first push wraps it to FFFEh.
+ */
+#define RMCS_STACK_FULL     0x10000u    /* SP = 0: all 64 KB */
+#define RMCS_DEFAULT_SP     0xFF00      /* SS:SP = 0:0 -> the host's stack, SP here */
 
 /* The register file a real-mode service sees and answers in. No CS:IP/SS:SP: those
  * are the CALL's plumbing, not its inputs or outputs (see above).
@@ -84,51 +128,7 @@ VOID RmcsRead(const volatile BYTE *structure, PRMCS_REGS out);
  */
 VOID RmcsWrite(volatile BYTE *structure, PCRMCS_REGS in);
 
-/* HOW 0300h SERVICES VECTOR `vec`, GIVEN WHAT IVT[vec] HOLDS:
- * The spec has ONE rule: run whatever the REAL-MODE IVT points at -- our BIOS/DOS stub,
- * a TSR's hook, a driver the guest installed itself. SIMINT_RUN is that rule, done
- * for real through the 0302h nested-V86 machinery.
- * - SIMINT_FAST is the SAME ANSWER, computed without the trip into V86, and it is only
- *   taken where it provably is the same: the IVT still holds our own stub (`our_seg`),
- *   so "run the stub" and "call what the stub calls" are one thing. 0300h with BL=33h
- *   is Doom's mouse, twice a frame; a full PM->V86->PM round trip with the INT-site
- *   unpatch/repatch is not something to pay there for nothing.
- *
- * [CAUTION]: INT 21h IS ALWAYS FAST, EVEN WHEN A GUEST HAS HOOKED THE REAL-MODE VECTOR. That is a
- * known deviation, kept deliberately: every DOS/4GW, DOS/16M and krnl386 guest on the
- * shelf was validated through the host-side INT 21h path, and a hooked real-mode INT 21h
- * is exactly the case none of them has been seen to exercise. Changing it is its own
- * ticket, with its own gate.
- *
- * [CAUTION]: `reflect_on` = 0 (cfg\simintrefl_off.flag) is the pre-#247 shape, kept as the rig's
- * rollback lever: 21h/33h/10h host-side whoever owns them, everything else not run.
- *
- * [CAUTION]: A NULL VECTOR IS NOT RUN. 0000:0000 is the IVT itself; executing it as code is the
- * GH #27 landmine. Startup points every null vector at our IRET stub, so this only
- * fires if a guest zeroed one -- and then "not serviced" is the honest answer.
- */
-#define SIMINT_FAST     1   /* Host-side: dos_int21 / mouse_int33 / the video VDD */
-#define SIMINT_RUN      2   /* Run IVT[vec] in V86 with an IRET frame (the 0302h machinery) */
-#define SIMINT_NONE     3   /* Not run; counted in `STAGE2: simInt (DPMI 0300) UNHANDLED` */
-
 INT RmcsSimIntRoute(UINT vector, WORD ivtSegment, WORD ivtOffset, INT isReflectOn, WORD ourSegment);
-
-/* CX WORDS OF THE PROTECTED-MODE STACK, COPIED TO THE REAL-MODE ONE:
- * DPMI 0.9: 0300h/0301h/0302h take CX = "number of words to copy from the protected-
- * mode stack to the real-mode stack". They go ABOVE the return frame, in the same
- * order, so a procedure that reads its arguments at [bp+6]... finds them where a
- * real-mode caller would have pushed them.
- * - Returns the new SP (below the copied words, above the frame) in *sp_after, and 1 --
- *   or 0 when `words` plus the `frame` bytes do not fit below `sp`. The caller then
- *   copies NOTHING and carries on exactly as before #247 (when CX was ignored), and
- *   says so in the log: a client passing a stale CX by accident must not be refused a
- *   call that has always worked, and one passing 30000 words is not asking for a copy
- *   any host could make.
- *
- * [CAUTION]: SP = 0 IS A FULL 64 KB, not an empty stack: the first push wraps it to FFFEh.
- */
-#define RMCS_STACK_FULL     0x10000u    /* SP = 0: all 64 KB */
-#define RMCS_DEFAULT_SP     0xFF00      /* SS:SP = 0:0 -> the host's stack, SP here */
 INT RmcsStackPlan(WORD stackPointer, UINT words, UINT frame, PWORD stackPointerAfter);
 
 #endif /* NTVDMEX_DPMI_RMCS_H */

@@ -13,11 +13,10 @@
 
 #ifndef NTVDMEX_HOST_IRQ_H
 #define NTVDMEX_HOST_IRQ_H
+
 #include "host_state.h"
 
 extern DWORD g_Irq1AsyncInjected;
-VOID SkipIfSiteNote(DWORD codeSegment, DWORD instructionPointer, DWORD stub);
-UINT IrqPmVector(UINT irq);
 extern DWORD g_IrqRaisedAny;
 extern DWORD g_QiBits;
 extern INT g_QiKeysAsync;
@@ -31,17 +30,20 @@ extern DWORD g_IfvStarveCount;
 extern DWORD g_IfvStarveT0;
 extern DWORD g_IfvStarveMaximumMs;
 extern INT g_IfvStarveOpen;
-VOID IfvNote(INT path, DWORD flags);
 extern DWORD g_AsyncPmInjected;
 extern DWORD g_AsyncInjectedLine[PIC_LINES];
 extern DWORD g_PmWatch[DPMI_WATCH_MAX];
 extern BYTE g_PmWatchRel[DPMI_WATCH_MAX];
-DWORD PmWatchAddress(INT index);
 extern DWORD g_PmInjectDecl[2];
 extern DWORD g_PmInjectDeclTl[IRQ0TL_SECS];
-VOID PmInjectDeclineNote(INT why, WORD cs, DWORD eip);
 extern INT g_AsyncSiteCount;
 extern INT g_AsyncSiteFull;
+
+VOID SkipIfSiteNote(DWORD codeSegment, DWORD instructionPointer, DWORD stub);
+UINT IrqPmVector(UINT irq);
+VOID IfvNote(INT path, DWORD flags);
+DWORD PmWatchAddress(INT index);
+VOID PmInjectDeclineNote(INT why, WORD cs, DWORD eip);
 INT AsyncInjectIrq(UINT irq);
 INT AsyncVectorIsOurStub(UINT irq);
 VOID HostIrqSink(PVOID context, BYTE irq);

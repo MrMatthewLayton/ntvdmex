@@ -13,7 +13,24 @@
 
 #ifndef NTVDMEX_HOST_WOW_H
 #define NTVDMEX_HOST_WOW_H
+
 #include "host_state.h"
+
+extern INT g_WowFoldMute;
+extern DWORD g_WowFoldDropped;
+extern DWORD g_IcaRaised;
+extern DWORD g_IcaNoHandler;
+extern DWORD g_IcaDelivered;
+extern DWORD g_ShimState[WOW_SHIMS];
+extern DWORD g_ShimError[WOW_SHIMS];
+extern CHAR g_WowName[WOW_MAX_MOD][16];
+extern WORD g_WowEntryCx;
+extern WORD g_WowPspSegment;
+extern WORD g_WowPathSegment;
+extern WORD g_WowEnvironmentSegment;
+extern DWORD g_WowCallbackLinear;
+extern WORD g_WowDgroupSelector;
+extern INT g_WowCallOn;
 
 PVOID ShimMapFlat(WORD segment, DWORD offset, INT isProtectedMode);
 VOID WowShimsLoad(VOID);
@@ -48,16 +65,8 @@ INT WowCall16SyncEx(
     const INT *fix,
     INT fixupCount);
 VOID Wow32CurrentDirectorySet(PCSTR directory);
-extern INT g_WowFoldMute;
-extern DWORD g_WowFoldDropped;
-extern DWORD g_IcaRaised;
-extern DWORD g_IcaNoHandler;
-extern DWORD g_IcaDelivered;
-extern DWORD g_ShimState[WOW_SHIMS];
-extern DWORD g_ShimError[WOW_SHIMS];
 VOID WowLogFlush(PSTR base, PSTR *logCursor);
 INT LaunchIsWow(PCSTR command);
-extern CHAR g_WowName[WOW_MAX_MOD][16];
 INT WowModuleOfSelector(WORD selector);
 INT WowUserAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub);
 INT WowShellAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub);
@@ -67,11 +76,6 @@ INT WowSoundAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub);
 INT WowGdiAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub);
 INT WowKernel2Stub(WORD thunkId, WORD returnStub);
 WORD WowHostAllocate(WORD paras);
-extern WORD g_WowEntryCx;
-extern WORD g_WowPspSegment;
-extern WORD g_WowPathSegment;
-extern WORD g_WowEnvironmentSegment;
-extern DWORD g_WowCallbackLinear;
 PSTR WowPspEnvironmentCheck(PSTR cursor, PCSTR where);
 VOID WowProbeLoad(PCSTR command);
 INT WowRefuse(PCSTR command);
@@ -89,7 +93,6 @@ DWORD Wow32ReturnOverride(WORD thunkId);
 INT Wow32ModeOverride(WORD thunkId);
 VOID Wow32ModeLoad(VOID);
 VOID Wow32ReturnLoad(VOID);
-extern WORD g_WowDgroupSelector;
 INT WowSchedFree(VOID);
 INT WowSchedPick(WORD current);
 INT WowSchedRunnable(WORD current, INT depth);
@@ -108,7 +111,6 @@ VOID WowSchedUntarget(WORD prev);
 INT WowSchedInterTaskLive(VOID);
 VOID WowQuietLoad(VOID);
 VOID WowSchedLoad(VOID);
-extern INT g_WowCallOn;
 VOID WowCallLoad(VOID);
 DWORD Wow32HostSelectorToLinear(WORD selector, PVOID context);
 VOID WowShadowPut(INT index);
@@ -148,4 +150,5 @@ INT WowSend16Blob(
     WORD *result);
 INT WowSend16Now(WORD window16, WORD message, WORD wParam, DWORD lParam, WORD *result);
 VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
+
 #endif

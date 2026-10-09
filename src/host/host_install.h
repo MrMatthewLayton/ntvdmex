@@ -12,6 +12,7 @@
 
 #ifndef NTVDMEX_HOST_INSTALL_H
 #define NTVDMEX_HOST_INSTALL_H
+
 #include "host_state.h"
 
 UINT RecoveryRead(VOID);

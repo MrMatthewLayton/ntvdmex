@@ -37,6 +37,7 @@
 
 #ifndef NTVDMEX_VDD_NET_H
 #define NTVDMEX_VDD_NET_H
+
 #include "vdd_bus.h"
 
 #define NETB_NCB_SIZE               64

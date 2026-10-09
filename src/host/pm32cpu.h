@@ -13,6 +13,7 @@
 
 #ifndef PM32CPU_H
 #define PM32CPU_H
+
 #include "../ntvdmex_types.h"
 #include "../ntvdmex_x86.h"
 

@@ -49,11 +49,11 @@
 #ifndef NTVDMEX_VDD_OPL_H
 #define NTVDMEX_VDD_OPL_H
 
-/* VddOplOperatorIndex: which operator of a channel. */
-#define OPL_MODULATOR   0
-#define OPL_CARRIER     1
-
 #include "vdd_bus.h"
+
+/* VddOplOperatorIndex: which operator of a channel. */
+#define OPL_MODULATOR                       0
+#define OPL_CARRIER                         1
 
 #define OPL_PORT_FIRST                      0x388
 
@@ -205,20 +205,30 @@
 #define OPL_TIMER_CONTROL_T1_MASK           0x40
 #define OPL_TIMER_CONTROL_IRQ_RESET         0x80
 
-/* envelope generator phase */
-enum
-{
-    OPL_ENVELOPE_OFF = 0, OPL_ENVELOPE_ATTACK, OPL_ENVELOPE_DECAY, OPL_ENVELOPE_SUSTAIN, OPL_ENVELOPE_RELEASE
-};
-
 /* The envelope counts ATTENUATION, so 0 is full volume and OPL_ENVELOPE_MAX is silence
  * -- the opposite of the intuitive reading, and the direction that matters when
  * initialising it. Carried in fixed point because the slowest rate advances only
  * one unit per 4096 samples; 511 << 20 still fits an int32. See vdd_opl_synth.c.
  */
-#define OPL_ENVELOPE_MAX    511     /* Fully attenuated */
-#define OPL_ENVELOPE_SHIFT  20      /* Fractional bits */
-#define OPL_ENVELOPE_FULL   ((INT32)OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT)
+#define OPL_ENVELOPE_MAX                    511     /* Fully attenuated */
+#define OPL_ENVELOPE_SHIFT                  20      /* Fractional bits */
+#define OPL_ENVELOPE_FULL                   ((INT32)OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT)
+
+/* Render `frames` samples at the chip's NATIVE 49716 Hz (vdd_opl_synth.c); the
+ * mixer resamples to the host rate. Rendering at the native rate keeps the phase
+ * arithmetic exact, which is what makes the pitch correct.
+ *   VddOplRender     mono. OPL2 (or OPL3 with NEW clear): exactly the chip's
+ *                      one output. OPL3 with NEW set: (left + right) / 2.
+ *   VddOplRenderStereo  interleaved L/R, 2*frames samples. Without NEW both sides
+ *                      carry the mono signal, identical to VddOplRender.
+ */
+#define OPL_NATIVE_HZ                       49716u
+
+/* envelope generator phase */
+enum
+{
+    OPL_ENVELOPE_OFF = 0, OPL_ENVELOPE_ATTACK, OPL_ENVELOPE_DECAY, OPL_ENVELOPE_SUSTAIN, OPL_ENVELOPE_RELEASE
+};
 
 typedef struct _OPL_OPERATOR
 {
@@ -362,17 +372,12 @@ typedef struct _OPL_STATE
 } OPL_STATE, *POPL_STATE;
 typedef const OPL_STATE *PCOPL_STATE;
 
+/* nosb.flag: when set, the status port floats (0xFF) so an AdLib detect fails. */
+extern INT g_OplAbsent;
+
 /* Build the device descriptor to hand to VddBusAdd(). */
 INT  VddOplInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddOplReset(_In_ PVOID context);
-static inline NTVDD_DEVICE VddOplDevice(_In_ POPL_STATE state)
-{ NTVDD_DEVICE device;
-device.Name = "opl2";
-device.Initialize = VddOplInitialize;
-device.Reset = VddOplReset;
-  device.Shutdown = 0;
-  device.Context = state;
-  return device; }
 
 /* Advance the timers by `microseconds`, raising status flags on overflow.
  * Exposed rather than driven by a clock inside the device so tests can step it
@@ -416,23 +421,19 @@ INT  VddOplOperatorIndex(_In_ INT channel, _In_ INT isCarrier);
  * second channel, 0 for an ordinary two-operator channel.
  */
 INT  OplFourOperatorRole(_In_ PCOPL_STATE state, _In_ INT channel);
-
-/* Render `frames` samples at the chip's NATIVE 49716 Hz (vdd_opl_synth.c); the
- * mixer resamples to the host rate. Rendering at the native rate keeps the phase
- * arithmetic exact, which is what makes the pitch correct.
- *   VddOplRender     mono. OPL2 (or OPL3 with NEW clear): exactly the chip's
- *                      one output. OPL3 with NEW set: (left + right) / 2.
- *   VddOplRenderStereo  interleaved L/R, 2*frames samples. Without NEW both sides
- *                      carry the mono signal, identical to VddOplRender.
- */
-#define OPL_NATIVE_HZ   49716u
 VOID VddOplRender(_Inout_ POPL_STATE state, _Out_writes_(frames) INT16 *output, _In_ UINT32 frames);
 VOID VddOplRenderStereo(
     _Inout_ POPL_STATE state,
     _Out_writes_(OPL_STEREO_CHANNELS * frames) INT16 *output,
     _In_ UINT32 frames);
 
-/* nosb.flag: when set, the status port floats (0xFF) so an AdLib detect fails. */
-extern INT g_OplAbsent;
+static inline NTVDD_DEVICE VddOplDevice(_In_ POPL_STATE state)
+{ NTVDD_DEVICE device;
+device.Name = "opl2";
+device.Initialize = VddOplInitialize;
+device.Reset = VddOplReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 #endif /* NTVDMEX_VDD_OPL_H */

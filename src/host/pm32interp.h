@@ -37,9 +37,20 @@
 
 #ifndef PM32INTERP_H
 #define PM32INTERP_H
+
 #include "../ntvdmex_types.h"
 
 #include "pm32cpu.h"    /* the CPU state and the constants its users share */
+
+/* ---- decode ---------------------------------------------------------------------- */
+typedef struct _PM32_MODRM
+{
+    INT      IsMemory;     /* 1 = memory operand at Linear */
+    UINT32 Linear;
+    INT      Register;        /* the /r field */
+    INT      RegisterMemory;         /* register number when !IsMemory */
+    INT      Length;        /* bytes consumed by ModRM + SIB + displacement */
+} PM32_MODRM;
 
 /* ---- register views ------------------------------------------------------------- */
 static UINT32 Pm32Mask(INT width)
@@ -249,16 +260,6 @@ static INT Pm32Condition(UINT32 flags, INT condition)
     }
     return (condition & 1) ? !isTrue : isTrue;
 }
-
-/* ---- decode ---------------------------------------------------------------------- */
-typedef struct _PM32_MODRM
-{
-    INT      IsMemory;     /* 1 = memory operand at Linear */
-    UINT32 Linear;
-    INT      Register;        /* the /r field */
-    INT      RegisterMemory;         /* register number when !IsMemory */
-    INT      Length;        /* bytes consumed by ModRM + SIB + displacement */
-} PM32_MODRM;
 
 /* Code fetch: CS base + EIP + i. */
 static BYTE Pm32CodeByte(const PM32_CPU *cpu, UINT32 offset)

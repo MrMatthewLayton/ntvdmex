@@ -17,17 +17,18 @@
 #ifndef DOS_INT21_H
 #define DOS_INT21_H
 
-/* DosFileTimeZoned: which clock a time is read in. */
-#define DOS_TIME_UTC    0
-#define DOS_TIME_LOCAL  1
-
 #include <windows.h>
 #include <stdint.h>
+
 #include "ntvdm.h"
 #include "dos_layout.h"     /* DOS_MAX_FILES -- the capacity fh[] must match */
 #include "dos_clock.h"      /* the VDM's own clock -- GH #250 */
 #include "dos_psp.h"        /* DOS_PSP_JFT_HANDLES -- a JFT's size */
 #include "dos_sizes.h"      /* name and path sizes */
+
+/* DosFileTimeZoned: which clock a time is read in. */
+#define DOS_TIME_UTC                            0
+#define DOS_TIME_LOCAL                          1
 
 /* INT 21h function numbers (AH), by their documented names. */
 #define DOS_FN_TERMINATE                        0x00
@@ -218,6 +219,9 @@
 #define DOS_SERVICE_BITS                        32      /* One bit per AH: 256 services */
 #define DOS_CONSOLE_LINE_SIZE                   130     /* 127 characters + CR LF + room */
 #define DOS_SFT_INDEXES                         256     /* A JFT entry is a byte */
+#define DOS_INT53_COUNT                         8
+#define DOS_INT53_SHELL_LOOP                    0x02    /* AX=5302h: the top of each pass of XP's shell loop */
+#define DOS_INT53_STARTUP                       0x05    /* AX=5305h: asked once at start-up */
 
 /* One saved handle table -- see DOS_MACHINE::HandleStack. */
 typedef struct _DOS_HANDLE_FRAME
@@ -435,18 +439,40 @@ typedef struct _DOS_MACHINE
     INT      CanRaiseCrit;
 } DOS_MACHINE, *PDOS_MACHINE; typedef const DOS_MACHINE *PCDOS_MACHINE;
 
-/* GH #250: the host's local time as fields, and the VDM's reading of a clock that is
- * `off` centiseconds from it (g_DosClock.DosOffset / .RtcOffset). Win32 lives here, the
- * arithmetic in dos_clock.h.
+/* INT 21h AH=53h, THE PRIVATE SUB-FUNCTIONS, AS A TABLE RATHER THAN A SWITCH:
+ * Documented AH=53h is BPB->DPB and has no AL selector; NT's NTDOS.SYS overloads it
+ * as a private query and XP's COMMAND.COM reads the answer out of AL. The defaults
+ * here are the values MEASURED against stock ntvdm (see the handler), but that
+ * measurement was taken by a probe whose output was REDIRECTED TO A FILE, and at
+ * least one of these sub-functions is suspected of depending on exactly that -- so
+ * the table is a knob (`cfg\int53.txt`) and not a constant. Index = AL, 0..7; AL>7
+ * keeps DOS's "invalid function" (AX=1, CF=1).
  */
-VOID DosClockHostNow(_Out_ PDOS_CLOCK_TIME time);
-VOID DosClockRead(_In_ INT64 offset, _Out_ PDOS_CLOCK_TIME out);
+typedef struct _DOS_INT53_ANSWER
+{
+    WORD Ax;
+    BYTE IsCarry;
+} DOS_INT53_ANSWER;
+
 /* GH #262: the PIT's "was 0040:006C set by anything but the BIOS?" (vdd_pit_tick_take,
  * wired by the host; NULL off-VM), DOS's clock re-derived from a count (DosClockFollowTicks
  * on g_DosClock.DosOffset), and the two together -- called before any read or set of
  * DOS's clock.
  */
 extern INT (*g_DosTickTake)(_Out_ UINT32 *ticks, _Out_ UINT32 *wraps, _Out_ UINT32 *since);
+
+/* Service one INT 21h BOP (function in AH). Returns 1 to continue the guest, 0 to
+ * terminate (AH=4Ch). Appends a trace via m->tp; writes console output to m->out.
+ */
+extern INT g_DosInt21IsProtectedMode;      /* 1 = client is in protected mode (DPMI) */
+extern DOS_INT53_ANSWER g_DosInt53Answers[DOS_INT53_COUNT];
+
+/* GH #250: the host's local time as fields, and the VDM's reading of a clock that is
+ * `off` centiseconds from it (g_DosClock.DosOffset / .RtcOffset). Win32 lives here, the
+ * arithmetic in dos_clock.h.
+ */
+VOID DosClockHostNow(_Out_ PDOS_CLOCK_TIME time);
+VOID DosClockRead(_In_ INT64 offset, _Out_ PDOS_CLOCK_TIME out);
 VOID DosClockFollow(_In_ UINT32 ticks, _In_ UINT32 wraps, _In_ UINT32 since);
 VOID DosClockSync(VOID);
 /* GH #263: stamp a just-created or just-written file with DOS's clock (a no-op while no
@@ -469,11 +495,6 @@ VOID DosHandlesPop(_Inout_ PDOS_MACHINE machine, _In_ INT isTsr);
  * holds the same Win32 handle. Use instead of CloseHandle(m->fh[slot]).
  */
 VOID DosHandleRelease(_Inout_ PDOS_MACHINE machine, _In_ UINT slot);
-
-/* Service one INT 21h BOP (function in AH). Returns 1 to continue the guest, 0 to
- * terminate (AH=4Ch). Appends a trace via m->tp; writes console output to m->out.
- */
-extern INT g_DosInt21IsProtectedMode;      /* 1 = client is in protected mode (DPMI) */
 VOID DosInt21SetProtectedMode(_In_ INT isOn);  /* CF/ZF -> live VTIB_EFLAGS, not a V86 FLAGS frame */
 /* The reported DOS version, which is a LIE THE GUEST GETS TO CHOOSE -- real DOS has
  * SETVER for exactly this. Default is 6.22 (the oracle), and that default is what
@@ -492,25 +513,6 @@ VOID DosInt21SetShellPsp(_Inout_ PDOS_MACHINE machine, _In_ WORD psp, _In_ INT i
  * is how `vdrive` would have been silently dropped.
  */
 BYTE DosInt21CurrentDrive(_In_ PCDOS_MACHINE machine);
-
-/* INT 21h AH=53h, THE PRIVATE SUB-FUNCTIONS, AS A TABLE RATHER THAN A SWITCH:
- * Documented AH=53h is BPB->DPB and has no AL selector; NT's NTDOS.SYS overloads it
- * as a private query and XP's COMMAND.COM reads the answer out of AL. The defaults
- * here are the values MEASURED against stock ntvdm (see the handler), but that
- * measurement was taken by a probe whose output was REDIRECTED TO A FILE, and at
- * least one of these sub-functions is suspected of depending on exactly that -- so
- * the table is a knob (`cfg\int53.txt`) and not a constant. Index = AL, 0..7; AL>7
- * keeps DOS's "invalid function" (AX=1, CF=1).
- */
-typedef struct _DOS_INT53_ANSWER
-{
-    WORD Ax;
-    BYTE IsCarry;
-} DOS_INT53_ANSWER;
-#define DOS_INT53_COUNT         8
-#define DOS_INT53_SHELL_LOOP    0x02    /* AX=5302h: the top of each pass of XP's shell loop */
-#define DOS_INT53_STARTUP       0x05    /* AX=5305h: asked once at start-up */
-extern DOS_INT53_ANSWER g_DosInt53Answers[DOS_INT53_COUNT];
 
 INT DosInt21(_Inout_ PDOS_MACHINE machine);
 

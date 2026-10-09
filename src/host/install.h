@@ -38,6 +38,7 @@
 
 #ifndef NTVDMEX_INSTALL_H
 #define NTVDMEX_INSTALL_H
+
 #include "../ntvdmex_types.h"
 
 /* The IFEO value we own. One definition, because a typo in either half of this is
@@ -45,13 +46,17 @@
  */
 #define INSTALL_KEY  "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\" \
                      "Image File Execution Options\\ntvdm.exe"
-#define INSTALL_VAL         "Debugger"
+#define INSTALL_VAL                 "Debugger"
 
 /* Where the displaced value is kept so uninstall can put it back. Under HKCU
  * alongside the settings, not under the IFEO key: writing our own bookkeeping into
  * somebody else's key is how you leave litter that outlives the uninstall.
  */
-#define INSTALL_PREV_VAL    "PreviousDebugger"
+#define INSTALL_PREV_VAL            "PreviousDebugger"
+
+/* The name an ntvdmex host goes by, in any folder (InstallNamesNtvdmex). */
+#define INSTALL_HOST_NAME           "ntvdmhost.exe"
+#define INSTALL_HOST_NAME_LENGTH    13
 
 typedef enum _INSTALL_STATE
 {
@@ -59,22 +64,6 @@ typedef enum _INSTALL_STATE
     INSTALL_OURS,         /* it points at this exe -- we are the VDM */
     INSTALL_OTHER         /* it points at something else -- NOT ours to delete */
 } INSTALL_STATE;
-
-/* The name an ntvdmex host goes by, in any folder (InstallNamesNtvdmex). */
-#define INSTALL_HOST_NAME           "ntvdmhost.exe"
-#define INSTALL_HOST_NAME_LENGTH    13
-
-/* PATH COMPARISON, THE WAY THE REGISTRY ACTUALLY HOLDS THEM:
- * Windows paths are case-insensitive, the value may or may not be quoted, and a
- * hand-written one usually has a stray space. Compare on those terms or the
- * answer is wrong for the most common way this value gets set: by a person.
- */
-INT InstallIsSamePath(PCSTR first, PCSTR second);
-
-/* `current` is the Debugger value as read (NULL or "" when there is none); `self` is
- * this executable's full path.
- */
-INSTALL_STATE InstallClassify(PCSTR current, PCSTR self);
 
 /* What an install would DO from here -- so the caller reports the same thing it is
  * about to perform, rather than the two being decided in different places.
@@ -87,6 +76,18 @@ typedef enum _INSTALL_ACTION
     INSTALL_ACT_DELETE,       /* remove the value entirely */
     INSTALL_ACT_REFUSE        /* somebody else's value -- not ours to touch */
 } INSTALL_ACTION;
+
+/* PATH COMPARISON, THE WAY THE REGISTRY ACTUALLY HOLDS THEM:
+ * Windows paths are case-insensitive, the value may or may not be quoted, and a
+ * hand-written one usually has a stray space. Compare on those terms or the
+ * answer is wrong for the most common way this value gets set: by a person.
+ */
+INT InstallIsSamePath(PCSTR first, PCSTR second);
+
+/* `current` is the Debugger value as read (NULL or "" when there is none); `self` is
+ * this executable's full path.
+ */
+INSTALL_STATE InstallClassify(PCSTR current, PCSTR self);
 
 /* -- IS THE VALUE ANOTHER COPY OF US? (s81, #195) A Debugger value naming some OTHER
  * ntvdmhost.exe -- installed from an extracted zip, then uninstalling from bin\ -- was

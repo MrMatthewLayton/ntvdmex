@@ -23,54 +23,15 @@
 
 #include <windows.h>
 
-/* ===========================================================================
- * GetNextVDMCommand -- pull the program-to-run from the CSRSS VDM queue.
- * VDM_COMMAND_INFO matches the ~0xA0-byte struct ntvdm passes (layout from
- * ReactOS sdk/include/reactos/subsys/win/vdm.h, cross-checked against ntvdm).
- * ========================================================================
- */
-typedef struct
-{
-    ULONG  TaskId;
-    ULONG  CreationFlags;
-    ULONG  ExitCode;
-    ULONG  CodePage;
-    HANDLE StdIn;
-    HANDLE StdOut;
-    HANDLE StdErr;
-    LPSTR CmdLine;
-    LPSTR AppName;
-    LPSTR PifFile;
-    LPSTR CurDirectory;
-    LPSTR Env;
-    ULONG  EnvLen;
-    STARTUPINFOA StartupInfo;
-    LPSTR  Desktop;
-    ULONG DesktopLen;
-    LPSTR  Title;
-    ULONG TitleLen;
-    LPVOID Reserved;
-    ULONG ReservedLen;
-    USHORT CmdLen;
-    USHORT AppLen;
-    USHORT PifLen;
-    USHORT CurDirectoryLen;
-    USHORT VDMState;
-    USHORT CurrentDrive;
-    BOOLEAN ComingFromBat;
-} VDM_COMMAND_INFO;
-
-#define VDM_GET_FIRST_COMMAND   0x100
-#define VDM_GET_ENVIRONMENT     0x400
+#define VDM_GET_FIRST_COMMAND       0x100
+#define VDM_GET_ENVIRONMENT         0x400
 
 /* VDMState flags, as the code's own call shapes name them (rig, s73). */
-#define VDM_FLAG_FIRST_TASK     0x01
-#define VDM_FLAG_WOW            0x02
-#define VDM_FLAG_DOS            0x04    /* Also: a DOS VDM reporting its exit */
-#define VDM_FLAG_RETRY          0x08
-#define VDM_FLAG_DONT_WAIT      0x20
-
-typedef BOOL (WINAPI *PFN_GetNextVDMCommand)(VDM_COMMAND_INFO *);
+#define VDM_FLAG_FIRST_TASK         0x01
+#define VDM_FLAG_WOW                0x02
+#define VDM_FLAG_DOS                0x04            /* Also: a DOS VDM reporting its exit */
+#define VDM_FLAG_RETRY              0x08
+#define VDM_FLAG_DONT_WAIT          0x20
 
 /* ===========================================================================
  * NtVdmControl(VdmInitialize) -- register this process as a VDM with the kernel
@@ -78,8 +39,8 @@ typedef BOOL (WINAPI *PFN_GetNextVDMCommand)(VDM_COMMAND_INFO *);
  * and so VdmStartExecution can run the guest. Contract as stock ntvdm uses it.
  * ========================================================================
  */
-#define VDM_SVC_VdmInitialize           3
-#define VDM_SVC_VdmStartExecution       0               /* NtVdmControl(0, NULL) runs the V86 CONTEXT */
+#define VDM_SVC_VdmInitialize       3
+#define VDM_SVC_VdmStartExecution   0               /* NtVdmControl(0, NULL) runs the V86 CONTEXT */
 
 /* VdmQueueInterrupt -- the ASYNC preemption lever (RE'd from XP ntoskrnl this session;
  * see docs/research/dpmi-under-ntvdmcontrol.md). ServiceData is NOT a pointer: it is a
@@ -92,15 +53,15 @@ typedef BOOL (WINAPI *PFN_GetNextVDMCommand)(VDM_COMMAND_INFO *);
  * VDM_INT_TIMER. Returns STATUS_INVALID_PARAMETER_1 (0xC00000EF) if the thread is not
  * ours or the process was never VdmInitialize'd.
  */
-#define VDM_SVC_VdmQueueInterrupt       1
+#define VDM_SVC_VdmQueueInterrupt   1
 
 /* DPMI plumbing services (recovered from the ntvdm call-site scan, 2026-07-31 --
  * see research/dpmi-under-ntvdmcontrol.md). Service 10's ServiceData is the
  * NtSetLdtEntries 6-dword block; service 13 virtualises the PM client interrupt flag.
  */
-#define VDM_SVC_VdmSetLdtEntries        10
-#define VDM_SVC_VdmSetProcessLdtInfo    11
-#define VDM_SVC_VdmPMCliControl         13
+#define VDM_SVC_VdmSetLdtEntries    10
+#define VDM_SVC_VdmSetProcessLdtInfo 11
+#define VDM_SVC_VdmPMCliControl     13
 
 /* ===========================================================================
  * The kernel's VIRTUAL 8259 (ICA). VdmInitialize hands the kernel pointers to
@@ -120,71 +81,20 @@ typedef BOOL (WINAPI *PFN_GetNextVDMCommand)(VDM_COMMAND_INFO *);
  * OUT 0x20,0x20 has to reach us (see the PIC VDD).
  * ========================================================================
  */
-#define ICA_COUNT(line)                 ((line) * 4)    /* Dword per line: dispatches remaining */
-#define ICA_BASE                        0x28            /* Word: vector base (master 0x08) */
-#define ICA_HIPRI                       0x2A            /* Word: priority rotation start */
-#define ICA_MODE                        0x2C            /* Byte: mode bits (0x20 tested by kernel) */
-#define ICA_MODE2                       0x2D            /* Byte: &3 -> ignore ISR priority block */
-#define ICA_IRR                         0x2F            /* Byte: interrupt REQUEST mask */
-#define ICA_ISR                         0x30            /* Byte: IN-SERVICE mask (cleared by EOI) */
-#define ICA_IMR                         0x31            /* Byte: interrupt MASK register */
-#define ICA_SLAVE_MASK                  0x32            /* Byte: lines with a slave attached (IRQ2) */
-#define ICA_STRUCT_SIZE                 0x40            /* Generous: kernel touches up to 0x32 */
+#define ICA_COUNT(line)             ((line) * 4)    /* Dword per line: dispatches remaining */
+#define ICA_BASE                    0x28            /* Word: vector base (master 0x08) */
+#define ICA_HIPRI                   0x2A            /* Word: priority rotation start */
+#define ICA_MODE                    0x2C            /* Byte: mode bits (0x20 tested by kernel) */
+#define ICA_MODE2                   0x2D            /* Byte: &3 -> ignore ISR priority block */
+#define ICA_IRR                     0x2F            /* Byte: interrupt REQUEST mask */
+#define ICA_ISR                     0x30            /* Byte: IN-SERVICE mask (cleared by EOI) */
+#define ICA_IMR                     0x31            /* Byte: interrupt MASK register */
+#define ICA_SLAVE_MASK              0x32            /* Byte: lines with a slave attached (IRQ2) */
+#define ICA_STRUCT_SIZE             0x40            /* Generous: kernel touches up to 0x32 */
 
-typedef struct              /* VDMICAUSERDATA -- 9 pointers (XP ntvdm fills 9) */
-{
-    PVOID pIcaLock;
-    PVOID pIcaMaster;
-    PVOID pIcaSlave;
-    PVOID pDelayIrq;
-    PVOID pUndelayIrq;
-    PVOID pDelayIret;
-    PVOID pIretHooked;
-    PVOID pAddrIretBopTable;
-    PVOID p9;
-} VDMICAUSERDATA;
-
-typedef struct              /* VDM_INITIALIZE_DATA */
-{
-    PVOID TrapcHandler;
-    VDMICAUSERDATA *IcaUserData;
-} VDM_INITIALIZE_DATA;
-
-typedef LONG (WINAPI *PFN_NtVdmControl)(ULONG Service, PVOID ServiceData);
-
-/* RegisterConsoleVDM (kernel32) -- register as the console VDM with CSRSS. 11
- * args, as stock ntvdm calls it; DOS passes flag 1 and 0 for the
- * video-state buffer/size (args 8,9).
- */
-typedef BOOL (WINAPI *PFN_RegisterConsoleVDM)(DWORD, HANDLE, HANDLE, HANDLE,
-            DWORD, PVOID, PVOID, PVOID, DWORD, PVOID, PVOID);
-
-/* ===========================================================================
- * V86 low-memory address space (set up right before VdmInitialize -- without it
- * VdmInitialize access-violates). Create a section,
- * release the default low reservations, then map the section X-RW into low memory.
- * ========================================================================
- */
-typedef struct                  /* OBJECT_ATTRIBUTES (24 bytes) */
-{
-    ULONG Length;
-    PVOID RootDirectory;
-    PVOID ObjectName;
-    ULONG Attributes;
-    PVOID SecurityDescriptor;
-    PVOID SecurityQOS;
-} OBJ_ATTR;
-
-typedef LONG (WINAPI *PFN_NtCreateSection)(PHANDLE, ULONG, OBJ_ATTR *,
-            LARGE_INTEGER *, ULONG, ULONG, HANDLE);
-typedef LONG (WINAPI *PFN_NtFreeVirtualMemory)(HANDLE, PVOID *, SIZE_T *, ULONG);
-typedef LONG (WINAPI *PFN_NtMapViewOfSection)(HANDLE, HANDLE, PVOID *, ULONG,
-            SIZE_T, LARGE_INTEGER *, SIZE_T *, ULONG, ULONG, ULONG);
-typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
-
-#define MEM_RELEASE_NT      0x8000
-#define SEC_RESERVE_NT      0x04000000
-#define VDM_MAP_FLAG        0x40000000  /* Ntvdm's AllocationType for the V86 map */
+#define MEM_RELEASE_NT              0x8000
+#define SEC_RESERVE_NT              0x04000000
+#define VDM_MAP_FLAG                0x40000000      /* Ntvdm's AllocationType for the V86 map */
 
 /* ===========================================================================
  * VDM_TIB + embedded V86 CONTEXT. ntvdm allocates the VDM_TIB itself and stores
@@ -194,26 +104,26 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
  * VDM_TIB offsets (e.g. AX = *(DWORD*)(tib + VTIB_EAX)).
  * ========================================================================
  */
-#define TEB_VDM_TIB         0xF18       /* TEB offset of the VDM_TIB pointer */
-#define VTIB_SIZE_VALUE     0x674       /* Value stored in VDM_TIB.Size (+0x000) */
-#define VTIB_CONTEXT        0x2D8       /* CONTEXT.ContextFlags */
-#define VTIB_CTXFLAGS_VAL   0x10007     /* ContextFlags the host sets (full V86 ctx) */
-#define VTIB_GS             0x364
-#define VTIB_FS             0x368
-#define VTIB_ES             0x36C
-#define VTIB_DS             0x370
-#define VTIB_EDI            0x374
-#define VTIB_ESI            0x378
-#define VTIB_EBX            0x37C
-#define VTIB_EDX            0x380
-#define VTIB_ECX            0x384
-#define VTIB_EAX            0x388
-#define VTIB_EBP            0x38C
-#define VTIB_EIP            0x390
-#define VTIB_CS             0x394
-#define VTIB_EFLAGS         0x398
-#define VTIB_ESP            0x39C
-#define VTIB_SS             0x3A0
+#define TEB_VDM_TIB                 0xF18           /* TEB offset of the VDM_TIB pointer */
+#define VTIB_SIZE_VALUE             0x674           /* Value stored in VDM_TIB.Size (+0x000) */
+#define VTIB_CONTEXT                0x2D8           /* CONTEXT.ContextFlags */
+#define VTIB_CTXFLAGS_VAL           0x10007         /* ContextFlags the host sets (full V86 ctx) */
+#define VTIB_GS                     0x364
+#define VTIB_FS                     0x368
+#define VTIB_ES                     0x36C
+#define VTIB_DS                     0x370
+#define VTIB_EDI                    0x374
+#define VTIB_ESI                    0x378
+#define VTIB_EBX                    0x37C
+#define VTIB_EDX                    0x380
+#define VTIB_ECX                    0x384
+#define VTIB_EAX                    0x388
+#define VTIB_EBP                    0x38C
+#define VTIB_EIP                    0x390
+#define VTIB_CS                     0x394
+#define VTIB_EFLAGS                 0x398
+#define VTIB_ESP                    0x39C
+#define VTIB_SS                     0x3A0
 
 /* EFlags: VM + IF + reserved bit, IOPL=0. IF MATTERS: a DOS program is entered by
  * DOS with interrupts already enabled and, having no reason to think otherwise,
@@ -225,7 +135,7 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
  * init, FM music, PCM block timing) hung. Note VTIB_EFLAGS_PM below always had IF
  * set, which is why the protected-mode timer path worked while real mode did not.
  */
-#define VTIB_EFLAGS_V86     0x20202
+#define VTIB_EFLAGS_V86             0x20202
 
 /* PROTECTED-MODE EFLAGS: IOPL MUST BE 3, AND IT IS NOT A DETAIL:
  * The guest runs at CPL 3. With IOPL 0, `STI`, `CLI`, `IN`, `OUT` and `INT n` to a
@@ -378,5 +288,95 @@ typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 #define NTVDM_CMD_TYPE_OTHER            9       /* Anything else, or a name this short: */
 #define NTVDM_CMD_SHORT_NAME_MAX        6
 #define NTVDM_CMD_STARTUP_PATH_MAX      0x3F    /* Sub 0D: XP's own cap */
+
+/* ===========================================================================
+ * GetNextVDMCommand -- pull the program-to-run from the CSRSS VDM queue.
+ * VDM_COMMAND_INFO matches the ~0xA0-byte struct ntvdm passes (layout from
+ * ReactOS sdk/include/reactos/subsys/win/vdm.h, cross-checked against ntvdm).
+ * ========================================================================
+ */
+typedef struct
+{
+    ULONG  TaskId;
+    ULONG  CreationFlags;
+    ULONG  ExitCode;
+    ULONG  CodePage;
+    HANDLE StdIn;
+    HANDLE StdOut;
+    HANDLE StdErr;
+    LPSTR CmdLine;
+    LPSTR AppName;
+    LPSTR PifFile;
+    LPSTR CurDirectory;
+    LPSTR Env;
+    ULONG  EnvLen;
+    STARTUPINFOA StartupInfo;
+    LPSTR  Desktop;
+    ULONG DesktopLen;
+    LPSTR  Title;
+    ULONG TitleLen;
+    LPVOID Reserved;
+    ULONG ReservedLen;
+    USHORT CmdLen;
+    USHORT AppLen;
+    USHORT PifLen;
+    USHORT CurDirectoryLen;
+    USHORT VDMState;
+    USHORT CurrentDrive;
+    BOOLEAN ComingFromBat;
+} VDM_COMMAND_INFO;
+
+typedef BOOL (WINAPI *PFN_GetNextVDMCommand)(VDM_COMMAND_INFO *);
+
+typedef struct              /* VDMICAUSERDATA -- 9 pointers (XP ntvdm fills 9) */
+{
+    PVOID pIcaLock;
+    PVOID pIcaMaster;
+    PVOID pIcaSlave;
+    PVOID pDelayIrq;
+    PVOID pUndelayIrq;
+    PVOID pDelayIret;
+    PVOID pIretHooked;
+    PVOID pAddrIretBopTable;
+    PVOID p9;
+} VDMICAUSERDATA;
+
+typedef struct              /* VDM_INITIALIZE_DATA */
+{
+    PVOID TrapcHandler;
+    VDMICAUSERDATA *IcaUserData;
+} VDM_INITIALIZE_DATA;
+
+typedef LONG (WINAPI *PFN_NtVdmControl)(ULONG Service, PVOID ServiceData);
+
+/* RegisterConsoleVDM (kernel32) -- register as the console VDM with CSRSS. 11
+ * args, as stock ntvdm calls it; DOS passes flag 1 and 0 for the
+ * video-state buffer/size (args 8,9).
+ */
+typedef BOOL (WINAPI *PFN_RegisterConsoleVDM)(DWORD, HANDLE, HANDLE, HANDLE,
+            DWORD, PVOID, PVOID, PVOID, DWORD, PVOID, PVOID);
+
+/* ===========================================================================
+ * V86 low-memory address space (set up right before VdmInitialize -- without it
+ * VdmInitialize access-violates). Create a section,
+ * release the default low reservations, then map the section X-RW into low memory.
+ * ========================================================================
+ */
+typedef struct                  /* OBJECT_ATTRIBUTES (24 bytes) */
+{
+    ULONG Length;
+    PVOID RootDirectory;
+    PVOID ObjectName;
+    ULONG Attributes;
+    PVOID SecurityDescriptor;
+    PVOID SecurityQOS;
+} OBJ_ATTR;
+
+typedef LONG (WINAPI *PFN_NtCreateSection)(PHANDLE, ULONG, OBJ_ATTR *,
+            LARGE_INTEGER *, ULONG, ULONG, HANDLE);
+typedef LONG (WINAPI *PFN_NtFreeVirtualMemory)(HANDLE, PVOID *, SIZE_T *, ULONG);
+typedef LONG (WINAPI *PFN_NtMapViewOfSection)(HANDLE, HANDLE, PVOID *, ULONG,
+            SIZE_T, LARGE_INTEGER *, SIZE_T *, ULONG, ULONG, ULONG);
+typedef LONG (WINAPI *PFN_NtUnmapViewOfSection)(HANDLE, PVOID);
 
 #endif /* NTVDMEX_VDM_NTVDM_H */

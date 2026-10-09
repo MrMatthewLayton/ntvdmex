@@ -69,19 +69,20 @@
 #define NTVDMEX_WOW32_H
 
 #include <windows.h>
+
 /* For DOS_CURRENT_DRIVE -- the WOW32 select-drive thunk and INT 21h AH=19h
  * must answer the same thing; see the note on the constant.
  */
 #include "dos_layout.h"
 
 /* Where each field sits relative to the thunk's BP. See the frame diagram above. */
-#define WOW32_OFF_ID            6
-#define WOW32_OFF_ARGB          10
-#define WOW32_OFF_FROM          12      /* Return address into krnl386 -- WHICH call site */
-#define WOW32_OFF_ARGS          16
-#define WOW32_OFF_RETURN_STUB   2       /* [bp+2]: the return offset into the per-function stub */
-#define WOW32_OFF_STUB_SEGMENT  4       /* [bp+4]: that stub's segment -- whose id space this is */
-#define WOW32_OFF_RET           (-16)   /* The return slot: low word, then high */
+#define WOW32_OFF_ID                                6
+#define WOW32_OFF_ARGB                              10
+#define WOW32_OFF_FROM                              12              /* Return address into krnl386 -- WHICH call site */
+#define WOW32_OFF_ARGS                              16
+#define WOW32_OFF_RETURN_STUB                       2 /* [bp+2]: the return offset into the per-function stub */
+#define WOW32_OFF_STUB_SEGMENT                      4 /* [bp+4]: that stub's segment -- whose id space this is */
+#define WOW32_OFF_RET                               (-16)           /* The return slot: low word, then high */
 
 /* THE SECOND RETURN CHANNEL: THE EPILOGUE MODE. (GH #128, session 38) (Importance = 3):
  * The return path the 16-bit side takes after the BOP is selected by a word on
@@ -109,123 +110,21 @@
  * `LoadModule` finish. Opt-in; see that file for the two moments and the one
  * ordering that works.
  */
-#define WOW32_OFF_MODE          (-24)
-#define WOW32_MODE_ORDINARY     0
-#define WOW32_MODE_SWITCHBACK   25
+#define WOW32_OFF_MODE                              (-24)
+#define WOW32_MODE_ORDINARY                         0
+#define WOW32_MODE_SWITCHBACK                       25
 
 /* The BOP is `C4 C4 51`. Resuming the guest anywhere but past all three bytes
  * restarts it mid-instruction.
  */
-#define WOW32_BOP               0x51    /* C4 C4 51: a krnl386 call out to WOW32 (3 bytes) */
-#define WOW32_BOP_DISPATCH      0x53    /* C4 C4 53 sub (4 bytes) */
-#define WOW32_DISPATCH_POINTER  0x03    /* 53/03: a far pointer to a 32-bit dispatch routine */
-#define WOW32_TASK_LAUNCH       0x74    /* Named from its use: made on the new task's stack */
-
-typedef DWORD (*PWOW32_SELECTOR_TO_LINEAR)(WORD selector, PVOID context);
+#define WOW32_BOP                                   0x51 /* C4 C4 51: a krnl386 call out to WOW32 (3 bytes) */
+#define WOW32_BOP_DISPATCH                          0x53            /* C4 C4 53 sub (4 bytes) */
+#define WOW32_DISPATCH_POINTER                      0x03 /* 53/03: a far pointer to a 32-bit dispatch routine */
+#define WOW32_TASK_LAUNCH                           0x74 /* Named from its use: made on the new task's stack */
 
 /* What a service may ask the host to push for a 16-bit callback (see below). */
-#define WOW32_CALLBACK_MAX_ARGUMENTS    6
-#define WOW32_CALLBACK_BLOB_MAX         64
-
-typedef struct _WOW32_FRAME
-{
-    volatile BYTE *FrameBase;                       /* linear address of SS:BP inside the thunk */
-    WORD             Id;
-    WORD             ArgumentBytes;
-    WORD             CallSite;                        /* caller's return offset [bp+12] -- the CALL SITE */
-    WORD             StubSegment;                     /* [bp+4]: the SEGMENT of the per-function stub */
-    PWOW32_SELECTOR_TO_LINEAR SelectorToLinear;       /* selector -> linear base (host's LDT view) */
-    PVOID Context;
-    /* THE ID SPACE IS PER MODULE, AND THIS SAYS WHOSE. (session 38) (Importance = 3):
-     * Every id in this file is one krnl386 sends. USER, GDI and the drivers send
-     * their OWN ids, with their own numbering, to the same BOP -- so an id is
-     * only meaningful together with the module it came from, and the module is
-     * named by `StubSegment`.
-     *
-     * [CAUTION]: MEASURED, AFTER GETTING IT WRONG. WOWEXEC's `RegisterClass(&WNDCLASS)`
-     * arrives as id `0x39` with `retstub=0x0c25` and **4** argument bytes, from
-     * USER's segment. krnl386's `0x39` is `GetProfileInt`, `retstub=0xb537`, **10**
-     * argument bytes. We serviced the first with `GetProfileIntA` and handed
-     * WOWEXEC the answer -- a function answered by an unrelated function, which is
-     * the "runs but lies" class this project treats as the most expensive kind.
-     *
-     * 1 only when the stub's segment ([bp+4]) is the segment the BOP is executing
-     * in -- krnl386's first code segment, the id space this file describes.
-     * krnl386 also reaches the BOP from a SECOND code segment of its own, with a
-     * numbering that is also not this one, so "not ours" is about the SEGMENT,
-     * not about the module.
-     * Everything here is gated on it; anything else gets the honest
-     * "unimplemented", which is a missing answer instead of a wrong one.
-     */
-    INT              IsKernel;
-    /* Filled in by the host so a service can talk back about what it did. */
-    DWORD            Result;
-    INT              IsServiced;
-    /* A 16-BIT CALL THE SERVICE WANTS MADE. (GH #128, session 40) (Importance = 3):
-     * A service cannot make one itself: entering guest code means replacing the
-     * whole guest context, which only the BOP handler is in a position to do
-     * and undo. So a service ASKS, by filling these in, and the handler acts on
-     * the request after the service has returned and its answer is already in
-     * the return hole. See src/wow/wowcall.h.
-     *
-     * [CAUTION]: `IsCallbackAllowed` is the host's permission, not the service's opinion: the
-     * machinery is opt-in (wowcall.txt), and a service that requested a callback the host will not
-     * make must not then describe one in its log note.
-     */
-    INT              IsCallbackAllowed;               /* 1 = the host can call 16-bit code now */
-    DWORD            CallbackProcedure;               /* 16:16 procedure to call; 0 = none asked */
-    WORD             CallbackDataSelector;            /* the DS it must be entered with */
-    WORD             CallbackArguments[WOW32_CALLBACK_MAX_ARGUMENTS];            /* words to push, in DECLARED order */
-    INT              CallbackArgumentCount;
-    INT              CallbackReturnMode;              /* WOWCALL_RET_KEEP / _RESULT -- whose
-                                        answer the caller's return value is    */
-    PWORD CallbackSink;                    /* optional: where the host keeps the answer */
-    INT              CallbackAction;                  /* WOWCALL_ACT_* -- what to DO with it */
-    WORD             CallbackActionArgument;          /* what that action is about */
-    /* for the log; 0/0 when not a message */
-    WORD CallbackWindow;
-    WORD CallbackMessage;
-    /* A STRUCTURE TO PUT WHERE THE GUEST CAN REACH IT (Importance = 3):
-     * Some messages carry a POINTER, not a value -- WM_CREATE's lParam is an
-     * LPCREATESTRUCT -- and a 16-bit program can only follow a pointer that
-     * lives behind a selector it already has. The host has no 16-bit heap of
-     * its own, so the structure is placed on the GUEST'S OWN STACK just below
-     * the arguments, which is where real USER puts it and which needs no
-     * allocator: the stack selector is already valid for the guest, and the
-     * bytes die with the call, which is exactly their lifetime.
-     * `CallbackBlobArgument` is the index in CallbackArguments[] of the HIGH word of the far pointer
-     * that should be made to point at it -- filled in by WowCallEnter, which
-     * is the first code that knows what SS:SP will be. -1 = no blob.
-     */
-    BYTE             CallbackBlob[WOW32_CALLBACK_BLOB_MAX];
-    INT              CallbackBlobLength;              /* bytes of CallbackBlob to place; 0 = none */
-    INT              CallbackBlobArgument;            /* CallbackArguments[] index to receive SEG:OFF, or -1 */
-    /* "DO NOT RETURN TO THE CALLER AT ALL." (session 57) (Importance = 3):
-     * Every other field here describes a call to make BEFORE resuming the
-     * guest; this one says the guest must not be resumed past its BOP yet,
-     * because the service it asked for -- DialogBox -- is defined as not
-     * returning until a dialog is dismissed. The host runs the modal loop
-     * instead and completes this call much later, out of the same BOP handler.
-     *
-     * [CAUTION]: THE SERVICE STILL WRITES A RETURN VALUE, and it is deliberately the one
-     * session 56 wrote: if the host declines to run the loop (callbacks off,
-     * stack full) the guest gets the old behaviour rather than a hole nobody
-     * filled. See src/wow/wowdlg.h.
-     */
-    INT              IsModalDialog;                   /* 1 = a modal dialog was parked by this call */
-    /* 1 = an ENUMERATION was armed (wowenum.h) and its first call is owed. Same
-     * "do not simply resume the guest" meaning as `IsModalDialog`, different
-     * continuation; a service sets exactly one of them.
-     */
-    INT              IsEnumerationRequested;
-    /* [INFO]: THE GUEST'S OWN DS AT THE BOP. A service that has to call back into
-     * application code with no class or window to take an instance from --
-     * LineDDA is the first -- needs the data segment the guest is actually
-     * running on. Filled by the handler because only it can see the TIB.
-     */
-    WORD             GuestDataSelector;
-} WOW32_FRAME, *PWOW32_FRAME;
-typedef const WOW32_FRAME *PCWOW32_FRAME;
+#define WOW32_CALLBACK_MAX_ARGUMENTS                6
+#define WOW32_CALLBACK_BLOB_MAX                     64
 
 /* Hex widths for WowNoteHex: a byte, a word, a dword. */
 #define WOW_HEX_BYTE_DIGITS                         2
@@ -489,15 +388,6 @@ typedef const WOW32_FRAME *PCWOW32_FRAME;
 #define WOW32_LOWER_TO_UPPER                        32
 #define WOW32_COMMAND_TAIL_ROOM                     3               /* The CR, the LF and the NUL */
 
-/* What the host learned from a REGISTERDOSDATA call, for the log and for anyone
- * who later wants to reconcile krnl386's view of DOS with ours.
- */
-typedef struct _WOW32_DOSDATA
-{
-    INT   IsSeen;
-    DWORD FarPointer;                     /* the 16:16 the guest passed */
-} WOW32_DOSDATA, *PWOW32_DOSDATA;
-
 /* THE WIN16 PROGRAM THIS VDM EXISTS TO RUN:
  * Filled in by the host once it knows what it was launched for, and handed to
  * the guest by WOW32 0x70 (WowGetNextVDMCommand) -- see that case for the
@@ -512,23 +402,23 @@ typedef struct _WOW32_DOSDATA
  * [INFO]: EMPTY IS A LEGITIMATE STATE and it has a correct answer: "no command", which
  * is NOT the same as an error. See the 0x70 case.
  */
-#define WOW32_COMMAND_PROGRAM_MAX               512
-#define WOW32_COMMAND_ARGUMENTS_MAX             192
-#define WOW32_SHORT_PATH_BUFFER                 (MAX_PATH + 16)
+#define WOW32_COMMAND_PROGRAM_MAX                   512
+#define WOW32_COMMAND_ARGUMENTS_MAX                 192
+#define WOW32_SHORT_PATH_BUFFER                     (MAX_PATH + 16)
 
 /* Field offsets of the command structure -- derived in the 0x70 case, which is
  * the only place they are used and the only place the derivation makes sense.
  */
-#define WOWCMD_LPCMDLINE                        0x00
-#define WOWCMD_LPAPPNAME                        0x04
-#define WOWCMD_LPENV                            0x08
-#define WOWCMD_CBCMDLINE                        0x10
-#define WOWCMD_CBAPPNAME                        0x12
-#define WOWCMD_CBENV                            0x14
-#define WOWCMD_CURDRIVE                         0x16
-#define WOWCMD_LPBUFC                           0x18
-#define WOWCMD_CBBUFC                           0x1c
-#define WOWCMD_NCMDSHOW                         0x1e
+#define WOWCMD_LPCMDLINE                            0x00
+#define WOWCMD_LPAPPNAME                            0x04
+#define WOWCMD_LPENV                                0x08
+#define WOWCMD_CBCMDLINE                            0x10
+#define WOWCMD_CBAPPNAME                            0x12
+#define WOWCMD_CBENV                                0x14
+#define WOWCMD_CURDRIVE                             0x16
+#define WOWCMD_LPBUFC                               0x18
+#define WOWCMD_CBBUFC                               0x1c
+#define WOWCMD_NCMDSHOW                             0x1e
 
 /* DECLINING IS A REAL ANSWER, AND krnl386 ALREADY HANDLES IT (Importance = 1):
  * krnl386 hooks INT 21h in protected mode and offers some functions to its
@@ -556,24 +446,24 @@ typedef struct _WOW32_DOSDATA
  *   and it is one line to change later -- but it IS a difference, so it is
  *   written down rather than discovered.
  */
-#define WOW32_DECLINE                           0xFFFFFFFFu
+#define WOW32_DECLINE                               0xFFFFFFFFu
 
 /* Verified declinable. All seven are the INT 21h file family; declining 0x97 and
  * 0x6f makes krnl386 re-issue a plain AH=3Fh / AH=40h to DOS, visible in the run
  * log as the INT 21h line that follows the call.
  */
-#define WOW32_FILE_OPEN                         0xc1            /* AH=3Dh */
-#define WOW32_FILE_READ                         0x97            /* -> AH=3Fh on decline */
-#define WOW32_FILE_READ_ARG_COUNT               8               /* DWORD */
-#define WOW32_FILE_READ_ARG_BUFFER_OFFSET       12
-#define WOW32_FILE_READ_ARG_BUFFER_SELECTOR     14
-#define WOW32_FILE_READ_ARG_HANDLE              16
-#define WOW32_FILE_READ_FAILED_U                0xFFFFFFFFu     /* DX:AX: a real failure, never a short read */
-#define WOW32_FILE_CLOSE                        0xc2            /* AH=3Eh */
-#define WOW32_FILE_GETATTR                      0xc7            /* AH=43h AL=0 */
-#define WOW32_FILE_7E                           0x7e            /*  */
-#define WOW32_FILE_GETDATE                      0x89            /* AH=57h AL=0 */
-#define WOW32_FILE_WRITE                        0x6f            /* -> AH=40h on decline */
+#define WOW32_FILE_OPEN                             0xc1            /* AH=3Dh */
+#define WOW32_FILE_READ                             0x97            /* -> AH=3Fh on decline */
+#define WOW32_FILE_READ_ARG_COUNT                   8               /* DWORD */
+#define WOW32_FILE_READ_ARG_BUFFER_OFFSET           12
+#define WOW32_FILE_READ_ARG_BUFFER_SELECTOR         14
+#define WOW32_FILE_READ_ARG_HANDLE                  16
+#define WOW32_FILE_READ_FAILED_U                    0xFFFFFFFFu     /* DX:AX: a real failure, never a short read */
+#define WOW32_FILE_CLOSE                            0xc2            /* AH=3Eh */
+#define WOW32_FILE_GETATTR                          0xc7            /* AH=43h AL=0 */
+#define WOW32_FILE_7E                               0x7e            /*  */
+#define WOW32_FILE_GETDATE                          0x89            /* AH=57h AL=0 */
+#define WOW32_FILE_WRITE                            0x6f            /* -> AH=40h on decline */
 
 /* THE SEEK, AND WHY IT WAS MISSED. (GH #128, session 34) (Importance = 1):
  * The first list of declinable sites was incomplete: 0x98 was not on it, and
@@ -590,32 +480,7 @@ typedef struct _WOW32_DOSDATA
  * Declining restores the original AX (AH=42h) and chains to real DOS, which our
  * PM thunk already serves.
  */
-#define WOW32_FILE_SEEK                         0x98            /* -> AH=42h on decline */
-
-/* DECLINING IS A PROPERTY OF THE CALL SITE, NOT OF THE ID (Importance = 2):
- * This was keyed by ID, and that is measurably wrong: krnl386 calls 0x97 (read)
- * from TWO places with OPPOSITE meanings --
- *   one where 0xFFFF means "ask real DOS": an `INT21h AH=3F` follows the
- *     decline in the log. A decline is a true statement.
- *   one where 0xFFFF is RETURNED TO THE CALLER as a failure: nothing follows.
- *     A decline here turns "we did not implement this" into "the read failed",
- *     which is a WRONG ANSWER rather than a missing one.
- *
- * Session 34's failing run declined at `from=0x8a51` -- the second kind -- and the
- * log shows what that looks like: no `INT21h AH=3F` follows it, unlike every other
- * read in the run. 0x6f (write) has the same split.
- *
- * [CAUTION]: THE VALUES BELOW ARE krnl386 CALL-SITE RETURN OFFSETS -- what the frame carries
- * at WOW32_OFF_FROM, as seen in the run log's `from=` -- each one checked to be
- * followed by the chained INT 21h request when declined. They are specific to the
- * XP krnl386.exe build. Anything not listed is not declined -- an unknown site
- * gets the honest "unimplemented" rather than a guess.
- */
-typedef struct _WOW32_DECLINE_SITE
-{
-    WORD Id;
-    WORD CallSite;
-} WOW32_DECLINE_SITE;
+#define WOW32_FILE_SEEK                             0x98            /* -> AH=42h on decline */
 
 /* ---- the services ------------------------------------------------------- */
 /* Returns 1 if this ID was serviced (the caller then advances EIP past the BOP),
@@ -649,8 +514,149 @@ typedef struct _WOW32_DECLINE_SITE
  * [CAUTION]: The mask's bit order is taken from the probe run against stock
  * (tests/probes/win16/w_gthunk, 16/16), not from the documentation.
  */
-#define WOW_GT_MAX_PARAMETERS       32
-#define WOW32_RAW_ARGUMENTS_MAX     0x200   /* The furthest a raw argument read may reach */
+#define WOW_GT_MAX_PARAMETERS                       32
+#define WOW32_RAW_ARGUMENTS_MAX                     0x200           /* The furthest a raw argument read may reach */
+
+typedef DWORD (*PWOW32_SELECTOR_TO_LINEAR)(WORD selector, PVOID context);
+
+typedef struct _WOW32_FRAME
+{
+    volatile BYTE *FrameBase;                       /* linear address of SS:BP inside the thunk */
+    WORD             Id;
+    WORD             ArgumentBytes;
+    WORD             CallSite;                        /* caller's return offset [bp+12] -- the CALL SITE */
+    WORD             StubSegment;                     /* [bp+4]: the SEGMENT of the per-function stub */
+    PWOW32_SELECTOR_TO_LINEAR SelectorToLinear;       /* selector -> linear base (host's LDT view) */
+    PVOID Context;
+    /* THE ID SPACE IS PER MODULE, AND THIS SAYS WHOSE. (session 38) (Importance = 3):
+     * Every id in this file is one krnl386 sends. USER, GDI and the drivers send
+     * their OWN ids, with their own numbering, to the same BOP -- so an id is
+     * only meaningful together with the module it came from, and the module is
+     * named by `StubSegment`.
+     *
+     * [CAUTION]: MEASURED, AFTER GETTING IT WRONG. WOWEXEC's `RegisterClass(&WNDCLASS)`
+     * arrives as id `0x39` with `retstub=0x0c25` and **4** argument bytes, from
+     * USER's segment. krnl386's `0x39` is `GetProfileInt`, `retstub=0xb537`, **10**
+     * argument bytes. We serviced the first with `GetProfileIntA` and handed
+     * WOWEXEC the answer -- a function answered by an unrelated function, which is
+     * the "runs but lies" class this project treats as the most expensive kind.
+     *
+     * 1 only when the stub's segment ([bp+4]) is the segment the BOP is executing
+     * in -- krnl386's first code segment, the id space this file describes.
+     * krnl386 also reaches the BOP from a SECOND code segment of its own, with a
+     * numbering that is also not this one, so "not ours" is about the SEGMENT,
+     * not about the module.
+     * Everything here is gated on it; anything else gets the honest
+     * "unimplemented", which is a missing answer instead of a wrong one.
+     */
+    INT              IsKernel;
+    /* Filled in by the host so a service can talk back about what it did. */
+    DWORD            Result;
+    INT              IsServiced;
+    /* A 16-BIT CALL THE SERVICE WANTS MADE. (GH #128, session 40) (Importance = 3):
+     * A service cannot make one itself: entering guest code means replacing the
+     * whole guest context, which only the BOP handler is in a position to do
+     * and undo. So a service ASKS, by filling these in, and the handler acts on
+     * the request after the service has returned and its answer is already in
+     * the return hole. See src/wow/wowcall.h.
+     *
+     * [CAUTION]: `IsCallbackAllowed` is the host's permission, not the service's opinion: the
+     * machinery is opt-in (wowcall.txt), and a service that requested a callback the host will not
+     * make must not then describe one in its log note.
+     */
+    INT              IsCallbackAllowed;               /* 1 = the host can call 16-bit code now */
+    DWORD            CallbackProcedure;               /* 16:16 procedure to call; 0 = none asked */
+    WORD             CallbackDataSelector;            /* the DS it must be entered with */
+    WORD             CallbackArguments[WOW32_CALLBACK_MAX_ARGUMENTS];            /* words to push, in DECLARED order */
+    INT              CallbackArgumentCount;
+    INT              CallbackReturnMode;              /* WOWCALL_RET_KEEP / _RESULT -- whose
+                                        answer the caller's return value is    */
+    PWORD CallbackSink;                    /* optional: where the host keeps the answer */
+    INT              CallbackAction;                  /* WOWCALL_ACT_* -- what to DO with it */
+    WORD             CallbackActionArgument;          /* what that action is about */
+    /* for the log; 0/0 when not a message */
+    WORD CallbackWindow;
+    WORD CallbackMessage;
+    /* A STRUCTURE TO PUT WHERE THE GUEST CAN REACH IT (Importance = 3):
+     * Some messages carry a POINTER, not a value -- WM_CREATE's lParam is an
+     * LPCREATESTRUCT -- and a 16-bit program can only follow a pointer that
+     * lives behind a selector it already has. The host has no 16-bit heap of
+     * its own, so the structure is placed on the GUEST'S OWN STACK just below
+     * the arguments, which is where real USER puts it and which needs no
+     * allocator: the stack selector is already valid for the guest, and the
+     * bytes die with the call, which is exactly their lifetime.
+     * `CallbackBlobArgument` is the index in CallbackArguments[] of the HIGH word of the far pointer
+     * that should be made to point at it -- filled in by WowCallEnter, which
+     * is the first code that knows what SS:SP will be. -1 = no blob.
+     */
+    BYTE             CallbackBlob[WOW32_CALLBACK_BLOB_MAX];
+    INT              CallbackBlobLength;              /* bytes of CallbackBlob to place; 0 = none */
+    INT              CallbackBlobArgument;            /* CallbackArguments[] index to receive SEG:OFF, or -1 */
+    /* "DO NOT RETURN TO THE CALLER AT ALL." (session 57) (Importance = 3):
+     * Every other field here describes a call to make BEFORE resuming the
+     * guest; this one says the guest must not be resumed past its BOP yet,
+     * because the service it asked for -- DialogBox -- is defined as not
+     * returning until a dialog is dismissed. The host runs the modal loop
+     * instead and completes this call much later, out of the same BOP handler.
+     *
+     * [CAUTION]: THE SERVICE STILL WRITES A RETURN VALUE, and it is deliberately the one
+     * session 56 wrote: if the host declines to run the loop (callbacks off,
+     * stack full) the guest gets the old behaviour rather than a hole nobody
+     * filled. See src/wow/wowdlg.h.
+     */
+    INT              IsModalDialog;                   /* 1 = a modal dialog was parked by this call */
+    /* 1 = an ENUMERATION was armed (wowenum.h) and its first call is owed. Same
+     * "do not simply resume the guest" meaning as `IsModalDialog`, different
+     * continuation; a service sets exactly one of them.
+     */
+    INT              IsEnumerationRequested;
+    /* [INFO]: THE GUEST'S OWN DS AT THE BOP. A service that has to call back into
+     * application code with no class or window to take an instance from --
+     * LineDDA is the first -- needs the data segment the guest is actually
+     * running on. Filled by the handler because only it can see the TIB.
+     */
+    WORD             GuestDataSelector;
+} WOW32_FRAME, *PWOW32_FRAME;
+typedef const WOW32_FRAME *PCWOW32_FRAME;
+
+/* What the host learned from a REGISTERDOSDATA call, for the log and for anyone
+ * who later wants to reconcile krnl386's view of DOS with ours.
+ */
+typedef struct _WOW32_DOSDATA
+{
+    INT   IsSeen;
+    DWORD FarPointer;                     /* the 16:16 the guest passed */
+} WOW32_DOSDATA, *PWOW32_DOSDATA;
+
+/* DECLINING IS A PROPERTY OF THE CALL SITE, NOT OF THE ID (Importance = 2):
+ * This was keyed by ID, and that is measurably wrong: krnl386 calls 0x97 (read)
+ * from TWO places with OPPOSITE meanings --
+ *   one where 0xFFFF means "ask real DOS": an `INT21h AH=3F` follows the
+ *     decline in the log. A decline is a true statement.
+ *   one where 0xFFFF is RETURNED TO THE CALLER as a failure: nothing follows.
+ *     A decline here turns "we did not implement this" into "the read failed",
+ *     which is a WRONG ANSWER rather than a missing one.
+ *
+ * Session 34's failing run declined at `from=0x8a51` -- the second kind -- and the
+ * log shows what that looks like: no `INT21h AH=3F` follows it, unlike every other
+ * read in the run. 0x6f (write) has the same split.
+ *
+ * [CAUTION]: THE VALUES BELOW ARE krnl386 CALL-SITE RETURN OFFSETS -- what the frame carries
+ * at WOW32_OFF_FROM, as seen in the run log's `from=` -- each one checked to be
+ * followed by the chained INT 21h request when declined. They are specific to the
+ * XP krnl386.exe build. Anything not listed is not declined -- an unknown site
+ * gets the honest "unimplemented" rather than a guess.
+ */
+typedef struct _WOW32_DECLINE_SITE
+{
+    WORD Id;
+    WORD CallSite;
+} WOW32_DECLINE_SITE;
+
+extern CHAR g_WowCommandProgram[WOW32_COMMAND_PROGRAM_MAX];
+extern CHAR g_WowCommandArguments[WOW32_COMMAND_ARGUMENTS_MAX];
+extern CHAR g_WowCommandDirectory[MAX_PATH];
+extern INT g_WowCommandIsTaken;
 
 /* Defined in wow32.c (#335). */
 VOID WowNotePut(PSTR buffer, INT capacity, PINT length, PCSTR text);
@@ -665,14 +671,11 @@ WORD Wow32PeekWord(volatile BYTE *bytes);
 VOID Wow32PokeWord(volatile BYTE *bytes, WORD value);
 volatile BYTE *Wow32FarAt(PCWOW32_FRAME frame, volatile BYTE *base, INT offset);
 INT Wow32ArgString(PCWOW32_FRAME frame, INT offset, PSTR output, INT capacity);
-extern CHAR g_WowCommandProgram[WOW32_COMMAND_PROGRAM_MAX];
 DWORD Wow32Flat(PCWOW32_FRAME frame, DWORD farPointer);
 DWORD Wow32PeekReturn(PCWOW32_FRAME frame);
 PCSTR Wow32Name(WORD id);
-extern CHAR g_WowCommandArguments[WOW32_COMMAND_ARGUMENTS_MAX];
-extern CHAR g_WowCommandDirectory[MAX_PATH];
-extern INT g_WowCommandIsTaken;
 VOID WowShorten(PSTR path, UINT capacity);
 INT Wow32MayDecline(WORD id, WORD callSite);
 INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData);
+
 #endif /* NTVDMEX_WOW32_H */

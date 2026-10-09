@@ -13,24 +13,11 @@
 
 #ifndef NTVDMEX_HOST_DPMI_H
 #define NTVDMEX_HOST_DPMI_H
+
 #include "host_state.h"
 
-INT DpmiSelectorIs32(WORD selector);
-DWORD DpmiSelectorBase(WORD selector);
-
-INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context);
-WORD DpmiSegmentToDescriptor(WORD segment);
-INT DpmiSelectorDescriptor(WORD selector, UINT32 *accessRights, UINT32 *limit);
-INT DpmiServicePmInt(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
 /* Defined in host_dpmi.c (#335). */
 extern WORD g_PmTransferParagraphs;
-INT DpmiHostIndex(VOID);
-VOID DpmiInstall(INT index);
-VOID DpmiArmFaultTrampoline(volatile BYTE *tib, WORD flag);
-DWORD DpmiBopVector(DWORD csValue, DWORD eip);
-DWORD DpmiPmEip(volatile BYTE *tib);
-INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip);
-INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interruptVector, UINT steps);
 extern UINT g_DpmiCpMaximum;
 extern DWORD g_BreakpointDump[DPMI_BP_MAX];
 extern DWORD g_BreakpointSkip[DPMI_BP_MAX];
@@ -48,6 +35,23 @@ extern INT g_PmWatchCount;
 extern DWORD g_PmCooperativeLine[PIC_LINES_PER_CHIP];
 extern INT g_HostPoolSpill;
 extern WORD g_DpmiHandlerSelector;
+extern BYTE g_PmDispatch[IVT_VECTORS];
+extern DWORD g_PmDispatchCount[IVT_VECTORS][BYTE_VALUES];
+
+INT DpmiSelectorIs32(WORD selector);
+DWORD DpmiSelectorBase(WORD selector);
+
+INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context);
+WORD DpmiSegmentToDescriptor(WORD segment);
+INT DpmiSelectorDescriptor(WORD selector, UINT32 *accessRights, UINT32 *limit);
+INT DpmiServicePmInt(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
+INT DpmiHostIndex(VOID);
+VOID DpmiInstall(INT index);
+VOID DpmiArmFaultTrampoline(volatile BYTE *tib, WORD flag);
+DWORD DpmiBopVector(DWORD csValue, DWORD eip);
+DWORD DpmiPmEip(volatile BYTE *tib);
+INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip);
+INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interruptVector, UINT steps);
 WORD DpmiHandlerCodeSelector(VOID);
 VOID DpmiSegmentToDescriptorForget(WORD selector);
 VOID DpmiInstallDefaultPmHandlers(DOS_MACHINE *machine);
@@ -65,8 +69,6 @@ INT DpmiBreakpointDisarm(DWORD linear);
 VOID DpmiUnpatch(VOID);
 VOID DpmiRepatch(VOID);
 VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slot);
-extern BYTE g_PmDispatch[IVT_VECTORS];
-extern DWORD g_PmDispatchCount[IVT_VECTORS][BYTE_VALUES];
 INT DpmiDispatchToPmHandler(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
 DWORD DpmiCallerOffset(volatile BYTE *tib, DWORD offset);
 DWORD DpmiRmcsPointer(volatile BYTE *tib, DWORD esBase);
@@ -83,4 +85,5 @@ INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vector);
 VOID DpmiEnsurePmReturnSelector(VOID);
 INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
 VOID DpmiClientTeardown(VOID);
+
 #endif

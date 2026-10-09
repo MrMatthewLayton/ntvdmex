@@ -139,6 +139,46 @@ typedef INT (*PNE_IMPORT)(PVOID context, const NE_MODULE *module, WORD moduleRef
                             WORD ordinalOrName, INT isByName,
                             PWORD selector, PWORD offset);
 
+/* THE REGISTRY: resolving imports BETWEEN loaded modules:
+ * A relocation record names a module by a per-module reference index and an export
+ * by ordinal (or by name). Turning that into an address needs the OTHER module, so
+ * something has to hold them all. That is this.
+ * Keyed on each module's OWN name from its resident table -- KERNEL, USER, GDI --
+ * because that is the name importers use, and it is not the file name (krnl386.exe
+ * is KERNEL).
+ *
+ * [CAUTION]: ORDERING, AND IT IS NOT OPTIONAL. A resolved import is written as
+ * target-selector : offset, so every module's runtime `Selector` values must be FINAL
+ * before ANY module is relocated. The sequence is:
+ *    1. NeParse + copy segment bytes, for every module
+ *    2. assign every segment its selector
+ *    3. NeApplyRelocations, for every module
+ * Relocating in step 1 and hoping to redo it later works only because relocation
+ * records are read from the untouched file image, not from the patched segment --
+ * but a chained record walks links THROUGH the segment, and the first pass
+ * overwrites those links with addresses. So a second pass over an already-patched
+ * segment follows garbage. Load once, select, then relocate once.
+ *
+ * [CAUTION]: MOVEABLE EXPORTS ARE RESOLVED DIRECT, NOT THROUGH THEIR THUNK. Every moveable
+ * entry in the real binaries begins `CD 3F` (INT 3Fh) -- Windows hands importers
+ * the address of that 3-byte thunk so the kernel can fault a discarded segment in
+ * on first call, then rewrite the thunk as a direct jump. We do not move or discard
+ * segments, so there is nothing to fault in and the indirection would buy only a
+ * per-call interrupt. Resolving straight to segment:offset is therefore correct
+ * HERE and would stop being correct the moment segment discarding is implemented.
+ * Written down because the day that changes, this is the line that breaks.
+ */
+typedef struct _NE_REGISTRY
+{
+    PNE_MODULE Modules[NE_MAX_MOD];
+    char       Names[NE_MAX_MOD][NE_MAX_NAME];  /* char, not CHAR: the spelling moves code (#333) */
+    INT        Count;
+    /* Diagnostics for the failure that actually happens: which import gave up. */
+    char FailedModule[NE_MAX_NAME];
+    char FailedFunction[NE_MAX_NAME];
+    WORD   FailedOrdinal;
+} NE_REGISTRY, *PNE_REGISTRY; typedef const NE_REGISTRY *PCNE_REGISTRY;
+
 /* little-endian readers, bounds-checked: */
 WORD NeRead16(PCBYTE bytes);
 
@@ -183,46 +223,6 @@ INT NeExportByOrdinal(PCNE_MODULE module, WORD ordinal, PWORD segmentNumber, PWO
  * the segment's file data: a WORD count, then 8 bytes each.
  */
 INT NeApplyRelocations(PNE_MODULE module, INT index, PNE_IMPORT importer, PVOID context);
-
-/* THE REGISTRY: resolving imports BETWEEN loaded modules:
- * A relocation record names a module by a per-module reference index and an export
- * by ordinal (or by name). Turning that into an address needs the OTHER module, so
- * something has to hold them all. That is this.
- * Keyed on each module's OWN name from its resident table -- KERNEL, USER, GDI --
- * because that is the name importers use, and it is not the file name (krnl386.exe
- * is KERNEL).
- *
- * [CAUTION]: ORDERING, AND IT IS NOT OPTIONAL. A resolved import is written as
- * target-selector : offset, so every module's runtime `Selector` values must be FINAL
- * before ANY module is relocated. The sequence is:
- *    1. NeParse + copy segment bytes, for every module
- *    2. assign every segment its selector
- *    3. NeApplyRelocations, for every module
- * Relocating in step 1 and hoping to redo it later works only because relocation
- * records are read from the untouched file image, not from the patched segment --
- * but a chained record walks links THROUGH the segment, and the first pass
- * overwrites those links with addresses. So a second pass over an already-patched
- * segment follows garbage. Load once, select, then relocate once.
- *
- * [CAUTION]: MOVEABLE EXPORTS ARE RESOLVED DIRECT, NOT THROUGH THEIR THUNK. Every moveable
- * entry in the real binaries begins `CD 3F` (INT 3Fh) -- Windows hands importers
- * the address of that 3-byte thunk so the kernel can fault a discarded segment in
- * on first call, then rewrite the thunk as a direct jump. We do not move or discard
- * segments, so there is nothing to fault in and the indirection would buy only a
- * per-call interrupt. Resolving straight to segment:offset is therefore correct
- * HERE and would stop being correct the moment segment discarding is implemented.
- * Written down because the day that changes, this is the line that breaks.
- */
-typedef struct _NE_REGISTRY
-{
-    PNE_MODULE Modules[NE_MAX_MOD];
-    char       Names[NE_MAX_MOD][NE_MAX_NAME];  /* char, not CHAR: the spelling moves code (#333) */
-    INT        Count;
-    /* Diagnostics for the failure that actually happens: which import gave up. */
-    char FailedModule[NE_MAX_NAME];
-    char FailedFunction[NE_MAX_NAME];
-    WORD   FailedOrdinal;
-} NE_REGISTRY, *PNE_REGISTRY; typedef const NE_REGISTRY *PCNE_REGISTRY;
 
 INT NeRegistryAdd(PNE_REGISTRY registry, PNE_MODULE module);
 

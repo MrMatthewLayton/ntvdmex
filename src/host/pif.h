@@ -27,7 +27,9 @@
 
 #ifndef NTVDMEX_PIF_H
 #define NTVDMEX_PIF_H
+
 #include "../ntvdmex_types.h"
+
 #define PIF_SECTION_WINDOWS_386     "WINDOWS 386 3.0"   /* The 386-enhanced extension block */
 
 #define PIF_BASIC_LEN               0x171

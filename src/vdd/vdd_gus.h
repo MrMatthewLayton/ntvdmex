@@ -19,6 +19,7 @@
 
 #ifndef NTVDMEX_VDD_GUS_H
 #define NTVDMEX_VDD_GUS_H
+
 #include "vdd_bus.h"
 #include "vdd_dma.h"
 #include "audio_format.h"   /* defines only: AUDIO_STEREO_CHANNELS */
@@ -45,6 +46,12 @@
 #define GUS_VOICES                  32
 #define GUS_DEVICE_NAME             "gus"
 
+/* 6850 status bits (ref section 9) */
+#define GUS_ACIA_RECEIVE_FULL       0x01                /* Receive data register full */
+#define GUS_ACIA_TRANSMIT_EMPTY     0x02                /* Transmit data register empty */
+#define GUS_ACIA_OVERRUN            0x20                /* Receiver overrun */
+#define GUS_ACIA_IRQ                0x80                /* The ACIA is requesting an interrupt */
+
 /* #190: the GUS's own MIDI port is a 6850 UART (ref section 9): it transmits BYTES, not
  * messages. The card hands every transmitted byte to this sink, exactly as the wire
  * would carry it. The host turns bytes into messages for the synth by feeding a
@@ -53,12 +60,6 @@
  * running status. No sink = bytes go nowhere, as with nothing plugged into MIDI OUT.
  */
 typedef VOID (*PGUS_MIDI_SINK_ROUTINE)(PVOID context, BYTE value);
-
-/* 6850 status bits (ref section 9) */
-#define GUS_ACIA_RECEIVE_FULL       0x01    /* Receive data register full */
-#define GUS_ACIA_TRANSMIT_EMPTY     0x02    /* Transmit data register empty */
-#define GUS_ACIA_OVERRUN            0x20    /* Receiver overrun */
-#define GUS_ACIA_IRQ                0x80    /* The ACIA is requesting an interrupt */
 
 typedef struct _GUS_VOICE
 {
@@ -184,14 +185,6 @@ typedef const GUS_STATE *PCGUS_STATE;
 
 INT  VddGusInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddGusReset(_In_ PVOID context);
-static inline NTVDD_DEVICE VddGusDevice(_In_ PGUS_STATE state)
-{ NTVDD_DEVICE device;
-device.Name = GUS_DEVICE_NAME;
-device.Initialize = VddGusInitialize;
-device.Reset = VddGusReset;
-  device.Shutdown = 0;
-  device.Context = state;
-  return device; }
 
 /* The GF1's output rate for the current active-voice count (ref section 4), in Hz. */
 UINT32 VddGusRateHz(_In_ PCGUS_STATE state);
@@ -208,5 +201,14 @@ VOID VddGusRenderStereo(
 
 /* The linear gain (Q16) of a 12-bit GF1 volume (ref section 7). Exposed for the test. */
 UINT32 VddGusVolumeGain(_In_ WORD volume12);
+
+static inline NTVDD_DEVICE VddGusDevice(_In_ PGUS_STATE state)
+{ NTVDD_DEVICE device;
+device.Name = GUS_DEVICE_NAME;
+device.Initialize = VddGusInitialize;
+device.Reset = VddGusReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 #endif /* NTVDMEX_VDD_GUS_H */

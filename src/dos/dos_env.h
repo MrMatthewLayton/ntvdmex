@@ -22,13 +22,6 @@
 #include "../ntvdmex_types.h"
 #include "dos_mcb.h"
 
-static inline volatile BYTE *DosEnvPutString(_Out_ volatile BYTE *cursor, _In_ PCSTR text)
-{
-    while (*text)
-        *cursor++ = (BYTE)*text++;
-    return cursor;
-}
-
 /* Build a standard environment at environmentSegment and append the program path. Returns the
  * number of bytes written (fits in the 0x10-paragraph env block laid by DosMcbInitialize).
  */
@@ -58,43 +51,7 @@ static inline volatile BYTE *DosEnvPutString(_Out_ volatile BYTE *cursor, _In_ P
  * follows it is the DOS block's MCB header at linear 0x8F0 (DOS_RESBLK_MCB) -- an
  * overrun now breaks the MCB chain instead of [0x714]. Different landmine, same cap.
  */
-#define DOS_ENV_CAP     0x100
-
-static inline volatile BYTE *DosEnvPutBounded(
-    _Out_ volatile BYTE *cursor,
-    _In_ volatile BYTE *end,
-    _In_ PCSTR text)
-{
-    while (*text && cursor < end)
-        *cursor++ = (BYTE)*text++;
-    return cursor;
-}
-
-/* THE CARD THE BLASTER VARIABLE DESCRIBES:
- * The Audio settings page can move the Sound Blaster's port, IRQ and DMA
- * channel, and the moment it can, a hard-coded BLASTER string becomes a LIE
- * told to every guest that reads it -- the exact failure the note below warns
- * about, just arriving from the dialog instead of from a typo. So the string is
- * built from the same numbers vdd_sb is configured with, and there is one
- * struct that carries them.
- *
- * [CAUTION]: `Dma16Channel` is advertised as H only when it is set. The default card has a 16-bit
- * channel (5) that this string has never mentioned, and Doom's audio was tuned
- * against the string as it stands; adding H unasked would change what DMX sees
- * on the one guest whose sound is user-confirmed.
- */
-typedef struct _DOS_SB_CONFIG
-{
-    WORD IoBase;        /* I/O base, e.g. 0x220 -> "A220" */
-    BYTE Irq;
-    BYTE Dma8Channel;   /* 8-bit DMA channel -> "D" */
-    BYTE Dma16Channel;  /* 16-bit channel -> "H"; 0 = do not advertise one */
-    BYTE Type;          /* BLASTER "T" value */
-    WORD MpuBase;       /* #231: MPU-401 base -> "P330"; 0 = do not advertise one */
-    WORD Emu8kBase;     /* #233: EMU8000 base -> "E620"; 0 = no AWE wavetable fitted */
-} DOS_SB_CONFIG, *PDOS_SB_CONFIG;
-
-typedef const DOS_SB_CONFIG *PCDOS_SB_CONFIG;
+#define DOS_ENV_CAP                 0x100
 
 /* T3 = an SB 2.0-class card. [CAUTION] THAT DISAGREES WITH THE DSP VERSION WE REPORT
  * (4.05, an SB16, which would be T6) and it has done since the string was
@@ -127,6 +84,49 @@ typedef const DOS_SB_CONFIG *PCDOS_SB_CONFIG;
 #define DOS_ENV_TAIL_RESERVE        8       /* Room kept for the tail: see DosEnvBuildWithCard */
 #define DOS_ENV_STRING_COUNT_LOW    0x01    /* WORD: one string follows */
 #define DOS_ENV_STRING_COUNT_HIGH   0x00
+
+/* THE CARD THE BLASTER VARIABLE DESCRIBES:
+ * The Audio settings page can move the Sound Blaster's port, IRQ and DMA
+ * channel, and the moment it can, a hard-coded BLASTER string becomes a LIE
+ * told to every guest that reads it -- the exact failure the note below warns
+ * about, just arriving from the dialog instead of from a typo. So the string is
+ * built from the same numbers vdd_sb is configured with, and there is one
+ * struct that carries them.
+ *
+ * [CAUTION]: `Dma16Channel` is advertised as H only when it is set. The default card has a 16-bit
+ * channel (5) that this string has never mentioned, and Doom's audio was tuned
+ * against the string as it stands; adding H unasked would change what DMX sees
+ * on the one guest whose sound is user-confirmed.
+ */
+typedef struct _DOS_SB_CONFIG
+{
+    WORD IoBase;        /* I/O base, e.g. 0x220 -> "A220" */
+    BYTE Irq;
+    BYTE Dma8Channel;   /* 8-bit DMA channel -> "D" */
+    BYTE Dma16Channel;  /* 16-bit channel -> "H"; 0 = do not advertise one */
+    BYTE Type;          /* BLASTER "T" value */
+    WORD MpuBase;       /* #231: MPU-401 base -> "P330"; 0 = do not advertise one */
+    WORD Emu8kBase;     /* #233: EMU8000 base -> "E620"; 0 = no AWE wavetable fitted */
+} DOS_SB_CONFIG, *PDOS_SB_CONFIG;
+
+typedef const DOS_SB_CONFIG *PCDOS_SB_CONFIG;
+
+static inline volatile BYTE *DosEnvPutString(_Out_ volatile BYTE *cursor, _In_ PCSTR text)
+{
+    while (*text)
+        *cursor++ = (BYTE)*text++;
+    return cursor;
+}
+
+static inline volatile BYTE *DosEnvPutBounded(
+    _Out_ volatile BYTE *cursor,
+    _In_ volatile BYTE *end,
+    _In_ PCSTR text)
+{
+    while (*text && cursor < end)
+        *cursor++ = (BYTE)*text++;
+    return cursor;
+}
 
 static inline volatile BYTE *DosEnvPutDecimal(
     _Out_ volatile BYTE *cursor,

@@ -32,11 +32,13 @@
 #ifndef NTVDMEX_VDD_PIC_H
 #define NTVDMEX_VDD_PIC_H
 
+#include "ntvdd.h"
+
 /* PicIsLineOpen: which 8259. */
 #define PIC_CHIP_SLAVE      0
 #define PIC_CHIP_MASTER     1
 
-#include "ntvdd.h"
+#define PIC_DEVICE_NAME     "pic"
 
 typedef struct _PIC_CHIP
 {
@@ -76,8 +78,6 @@ typedef struct _PIC_STATE
     PIC_CHIP Master;
     PIC_CHIP Slave;
 } PIC_STATE, *PPIC_STATE;
-
-#define PIC_DEVICE_NAME     "pic"
 
 INT  VddPicInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddPicReset(_In_ PVOID context);

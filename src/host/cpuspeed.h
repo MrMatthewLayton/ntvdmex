@@ -53,6 +53,7 @@
 
 #ifndef CPUSPEED_H
 #define CPUSPEED_H
+
 #include "../ntvdmex_types.h"
 
 /* THE LIST, AND IT IS ALSO THE REGISTRY VALUE:
@@ -87,8 +88,7 @@
 #define CPUSPEED_BP_FULL_UL             10000ul
 #define CPUSPEED_DEFAULT_ROUND_TRIP_US  100ul       /* Unmeasured: a sane placeholder */
 #define CPUSPEED_MAX_DEBT_US            100000ll    /* 100 ms ceiling on one debt */
-extern const UINT g_CpuSpeedMhz[CPUSPEED_COUNT];
-extern PCSTR const g_CpuSpeedNames[CPUSPEED_COUNT];
+
 /* The '|'-separated form SET_DEFS wants. Kept adjacent to the table above so the
  * two cannot drift; cpuspeed_test.c checks that they still agree.
  */
@@ -97,11 +97,6 @@ extern PCSTR const g_CpuSpeedNames[CPUSPEED_COUNT];
     "Intel Pentium II 300 MHz|Intel Pentium MMX 200 MHz|Intel Pentium 133 MHz|" \
     "Intel 486DX4 100 MHz|Intel 486DX2 66 MHz|Intel 486DX 50 MHz|" \
     "Intel 386DX 33 MHz|Intel 386DX 16 MHz"
-
-/* Can THIS PC offer rung `idx`? Host is always there; a rung is only a real throttle
- * below the host's own clock (`host_mhz`, 0 = unknown -> offer everything).
- */
-INT CpuSpeedIsAvailable(UINT index, UINT hostMhz);
 
 /* THE ONE CALIBRATION CONSTANT:
  * "How fast does an unthrottled NTVDMEX look to a DOS program, in MHz?"
@@ -179,8 +174,6 @@ INT CpuSpeedIsAvailable(UINT index, UINT hostMhz);
  */
 #define CPUSPEED_FPS_PER_KMHZ10     730u
 
-UINT CpuSpeedDutyBp(UINT index, UINT referenceMhz);
-
 /* #225: A REAL-MODE PROGRAM GETS ITS OWN SHARE:
  * The ladder above is Doom's: 32-bit protected-mode code, verified on the rig (the
  * 486DX2-66 run counted 62.0 s of Doom time in 63.3 s of wall, incl. load; no
@@ -198,8 +191,7 @@ UINT CpuSpeedDutyBp(UINT index, UINT referenceMhz);
  * against published real-486 results, blocked on #238 (it times itself on a 1 kHz
  * timer we deliver ~44% of).
  */
-#define CPUSPEED_RM_PCT     200u
-UINT CpuSpeedRealModeDutyBp(UINT protectedModeBp);
+#define CPUSPEED_RM_PCT             200u
 
 /* THE V86 HALF: HOW LONG THE GUEST RUNS, AND HOW LONG IT IS HELD:
  * One millisecond is the floor: Sleep() cannot express less even with the
@@ -227,8 +219,8 @@ UINT CpuSpeedRealModeDutyBp(UINT protectedModeBp);
  * only finer lever is a cycle-counting interpreter, which is the thing this
  * project exists not to be.
  */
-#define CPUSPEED_WAIT_MS        1u              /* Legacy: superseded by the granularity lever */
-#define CPUSPEED_MAX_OFF_MS     1000u           /* A hold longer than this is a hang, not a knob */
+#define CPUSPEED_WAIT_MS            1u              /* Legacy: superseded by the granularity lever */
+#define CPUSPEED_MAX_OFF_MS         1000u           /* A hold longer than this is a hang, not a knob */
 
 /* GRANULARITY: THE LEVER THAT DECIDES WHETHER A SETTING IS PLAYABLE (Importance = 4):
  *
@@ -267,10 +259,10 @@ UINT CpuSpeedRealModeDutyBp(UINT protectedModeBp);
  * else is running and on whether the target is inside a syscall -- the whole
  * reason a constant was wrong the first three times this feature was tuned.
  */
-#define CPUSPEED_GRAN_AUTO      0u              /* 0 = measure the round trip and choose */
-#define CPUSPEED_GRAN_MIN_MS    2u              /* Finer than this is round trips, not speed */
-#define CPUSPEED_GRAN_MAX_MS    250u            /* Coarser than this is the old slideshow */
-#define CPUSPEED_GRAN_DEFAULT   16u             /* One 60 Hz frame: the bar to clear */
+#define CPUSPEED_GRAN_AUTO          0u              /* 0 = measure the round trip and choose */
+#define CPUSPEED_GRAN_MIN_MS        2u              /* Finer than this is round trips, not speed */
+#define CPUSPEED_GRAN_MAX_MS        250u            /* Coarser than this is the old slideshow */
+#define CPUSPEED_GRAN_DEFAULT       16u             /* One 60 Hz frame: the bar to clear */
 
 /* THE RUN PHASE IS MEASURED, NOT ASSUMED, AND THAT IS THE WHOLE DESIGN (Importance = 1):
  * The second cut asked for a 1 ms run and computed the hold from that constant.
@@ -328,7 +320,7 @@ UINT CpuSpeedRealModeDutyBp(UINT protectedModeBp);
  * caught up, so under saturation they grow; E*10000 stays inside 64 bits for the
  * life of any session.
  */
-#define CPUSPEED_MAX_WINDOW_US  60000000ull     /* Force a rebaseline after this, bounded */
+#define CPUSPEED_MAX_WINDOW_US      60000000ull     /* Force a rebaseline after this, bounded */
 
 /* -- WHERE THE 1 ms RUN-PHASE FLOOR KICKS IN (see the throttle loop). Above this
  * duty the immediate-catch hold is too small to swamp the per-period catch cost, so
@@ -337,7 +329,40 @@ UINT CpuSpeedRealModeDutyBp(UINT protectedModeBp);
  * (22 bp) must NOT floor -- it over-runs 1.5x if it does -- and 16 MHz (44 bp) must;
  * the threshold sits between. Keyed on duty, which already carries the reference.
  */
-#define CPUSPEED_RUN_FLOOR_BP   32u
+#define CPUSPEED_RUN_FLOOR_BP       32u
+
+/* Instructions per second a setting allows. 0 = unlimited.
+ *
+ * [CAUTION]: CPUSPEED_CPI IS AN ASSUMPTION AND IS LABELLED AS ONE: 486 mixed code averages
+ * somewhere around three cycles per instruction once memory is in the picture.
+ * It is the only unmeasured number in this file. It affects the interpreter path
+ * only, and it is a scale factor -- if the interpreter comes out uniformly fast
+ * or slow against the V86 path at the same setting, this is the constant to move.
+ */
+#define CPUSPEED_CPI                3u
+
+/* THE INTERPRETER HALF: PACE BY INSTRUCTIONS, NOT BY DUTY:
+ * Here we know exactly how much work was done, so the throttle can be precise
+ * rather than statistical. Charge the instructions a slice really executed
+ * against the budget the setting allows, and carry the remainder in MICROSECONDS
+ * so a debt smaller than a millisecond is never rounded away -- rounding it away
+ * is how a throttle silently becomes a no-op at the fast settings.
+ */
+typedef struct _CPUSPEED_PACE
+{
+    INT64 OwedUs;
+} CPUSPEED_PACE, *PCPUSPEED_PACE;
+
+extern const UINT g_CpuSpeedMhz[CPUSPEED_COUNT];
+extern PCSTR const g_CpuSpeedNames[CPUSPEED_COUNT];
+
+/* Can THIS PC offer rung `idx`? Host is always there; a rung is only a real throttle
+ * below the host's own clock (`host_mhz`, 0 = unknown -> offer everything).
+ */
+INT CpuSpeedIsAvailable(UINT index, UINT hostMhz);
+
+UINT CpuSpeedDutyBp(UINT index, UINT referenceMhz);
+UINT CpuSpeedRealModeDutyBp(UINT protectedModeBp);
 
 UINT64 CpuSpeedHoldFor(UINT64 executedUs, UINT64 wallUs, UINT dutyBp);
 
@@ -362,28 +387,6 @@ UINT64 CpuSpeedStep(UINT64 executedUs, UINT64 wallUs, UINT dutyBp, UINT64 capUs,
  * requested duty so the two can disagree in the open rather than the label lying.
  */
 UINT CpuSpeedDeliveredBp(UINT64 executedUs, UINT64 wallUs);
-
-/* THE INTERPRETER HALF: PACE BY INSTRUCTIONS, NOT BY DUTY:
- * Here we know exactly how much work was done, so the throttle can be precise
- * rather than statistical. Charge the instructions a slice really executed
- * against the budget the setting allows, and carry the remainder in MICROSECONDS
- * so a debt smaller than a millisecond is never rounded away -- rounding it away
- * is how a throttle silently becomes a no-op at the fast settings.
- */
-typedef struct _CPUSPEED_PACE
-{
-    INT64 OwedUs;
-} CPUSPEED_PACE, *PCPUSPEED_PACE;
-
-/* Instructions per second a setting allows. 0 = unlimited.
- *
- * [CAUTION]: CPUSPEED_CPI IS AN ASSUMPTION AND IS LABELLED AS ONE: 486 mixed code averages
- * somewhere around three cycles per instruction once memory is in the picture.
- * It is the only unmeasured number in this file. It affects the interpreter path
- * only, and it is a scale factor -- if the interpreter comes out uniformly fast
- * or slow against the V86 path at the same setting, this is the constant to move.
- */
-#define CPUSPEED_CPI    3u
 unsigned long CpuSpeedInstructionsPerSecond(UINT index);
 
 /* Charge `ran` instructions that really took `elapsed_us`, and return how many

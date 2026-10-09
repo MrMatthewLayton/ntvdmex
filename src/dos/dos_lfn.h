@@ -101,6 +101,159 @@
 #define DOS_LFN_MONTH_DAYS_DENOMINATOR          5
 #define DOS_LFN_CIVIL_EPOCH_DAYS                719468
 
+/* THE FIND RECORD 714Eh/714Fh WRITE AT ES:DI:
+ * RBIL's "Windows95 long filename find record", which is WIN32_FIND_DATAA byte for
+ * byte -- 318 (13Eh) bytes:
+ *   00h DWORD attributes      04h QWORD creation time   0Ch QWORD last access
+ *   14h QWORD last write      1Ch DWORD size HIGH       20h DWORD size LOW
+ *   24h 8 bytes reserved      2Ch 260 bytes long name   130h 14 bytes short name
+ * SI on the call picks the time format: 0 = 64-bit FILETIME, 1 = DOS date/time
+ * (RBIL: "date in high word, time in low word" of the first DWORD).
+ *
+ * [CAUTION]: UNMEASURED, and the probe prints each: (1) the attribute DWORD is passed as Win32
+ * reports it (a plain NTFS file reads 20h ARCHIVE; a file with none set would read
+ * 80h NORMAL); (2) in DOS format the QWORD's HIGH dword is written 0; (3) the short
+ * name is Win32's cAlternateFileName, i.e. EMPTY when the long name is already a
+ * valid 8.3 name; (4) everything past each name's NUL is zeroed, so the record is
+ * deterministic (Win32 leaves garbage there).
+ */
+#define DOS_LFN_FIND_ATTRIBUTES                 0x00
+#define DOS_LFN_FIND_CREATION_TIME              0x04
+#define DOS_LFN_FIND_ACCESS_TIME                0x0C
+#define DOS_LFN_FIND_WRITE_TIME                 0x14
+#define DOS_LFN_FIND_SIZE_HIGH                  0x1C
+#define DOS_LFN_FIND_SIZE_LOW                   0x20
+#define DOS_LFN_FIND_LONG_NAME                  0x2C
+#define DOS_LFN_FIND_SHORT_NAME                 0x130
+#define DOS_LFN_FIND_LONG_NAME_CHARS            259             /* The 260-byte field, less its NUL */
+#define DOS_LFN_FIND_SHORT_NAME_CHARS           13              /* The 14-byte field, less its NUL */
+
+/* A QWORD time: its high DWORD 4 bytes in; in DOS format, the date in the high word. */
+#define DOS_LFN_FIND_TIME_HIGH                  4
+#define DOS_LFN_DOS_DATE_SHIFT                  16
+
+/* A little-endian DWORD: the low byte first, then the next at +1, and so on. */
+#define DOS_LFN_BYTE1                           1
+#define DOS_LFN_BYTE2                           2
+#define DOS_LFN_BYTE3                           3
+
+/* 714Eh / 7141h ATTRIBUTE MASKS. CL = ALLOWED, CH = REQUIRED (RBIL):
+ * The allowed half is DOS's own find rule -- a hidden, system or directory entry
+ * appears only when CL asks for it, ordinary files always (dta_match in dos_int21.c
+ * is the 4Eh twin) -- and every bit in CH must be present. Read-only and archive
+ * never exclude (RBIL: "bits 0 and 5 ignored" in CL).
+ */
+#define DOS_LFN_ATTRIBUTE_HIDDEN                0x02
+#define DOS_LFN_ATTRIBUTE_SYSTEM                0x04
+#define DOS_LFN_ATTRIBUTE_DIRECTORY             0x10
+#define DOS_LFN_ATTRIBUTE_MASK                  0x3F
+
+/* 71A8h: A SHORT NAME FOR A LONG ONE:
+ * Output both forms: `shortName` "NAME.EXT" ASCIIZ (DH=1) and `fcbName` 11 bytes
+ * space-padded with no dot (DH=0).
+ * A name that is ALREADY a legal 8.3 name comes back as itself, upper-cased. Anything
+ * else gets NT's generated form (RtlGenerate8dot3Name, the first alias NTFS hands
+ * out): blanks and every '.' but the last dropped from the base, the characters
+ * DOS forbids in a short name ( + , ; = [ ] ) turned into '_', upper-cased, the
+ * first SIX kept, then "~1"; the extension is the first three characters after the
+ * LAST dot, cleaned the same way. "A long file name.txt" -> "ALONGF~1.TXT".
+ *
+ * [CAUTION]: UNMEASURED AGAINST STOCK, and the first thing p_lfn asks. Windows 95's 71A8h is
+ * documented (RBIL) as generating the BASIS name; whether it -- or NTVDM -- adds the
+ * numeric tail is exactly the question. The "~1" form is what NT's own generator
+ * produces and what the file system would assign a lone file of that name.
+ */
+#define DOS_LFN_BASE_CHARS                      8               /* An 8.3 name: 8 of base ... */
+#define DOS_LFN_EXTENSION_CHARS                 3               /* ... and 3 of extension */
+#define DOS_LFN_BASE_BUFFER_SIZE                9
+#define DOS_LFN_EXTENSION_BUFFER_SIZE           4
+#define DOS_LFN_NO_EXTENSION                    (-1)            /* No dot seen yet */
+#define DOS_LFN_ALIAS_BASE_CHARS                6               /* The generated form keeps the first SIX... */
+#define DOS_LFN_ALIAS_TILDE                     '~'             /* ...then "~1" */
+#define DOS_LFN_ALIAS_TAIL                      '1'
+#define DOS_LFN_REPLACEMENT_CHAR                '_'
+#define DOS_LFN_EXTENSION_DOT                   '.'
+#define DOS_LFN_FCB_PAD                         ' '
+
+/* 6Ch / 716Ch / 71A9h: THE ACTION WORD:
+ * DX bits 0-3 = what to do if the file EXISTS (0 fail, 1 open, 2 truncate), bits
+ * 4-7 if it does NOT (0 fail, 1 create). Returned as Win32's CreateFile disposition
+ * NUMBER (windows.h-free; the values are Win32's own):
+ *   CREATE_NEW 1   CREATE_ALWAYS 2   OPEN_EXISTING 3   OPEN_ALWAYS 4
+ *   TRUNCATE_EXISTING 5
+ *
+ * [CAUTION]: An action DOS has no meaning for (0x00, 0x13, ...) falls to OPEN_EXISTING -- what
+ * AH=6Ch has always answered here; unmeasured, and kept so the refactor that moved
+ * this out of dos_int21.c changes no behaviour.
+ */
+#define DOS_EXT_OPEN_CREATE_NEW                 1u
+#define DOS_EXT_OPEN_CREATE_ALWAYS              2u
+#define DOS_EXT_OPEN_OPEN_EXISTING              3u
+#define DOS_EXT_OPEN_OPEN_ALWAYS                4u
+#define DOS_EXT_OPEN_TRUNCATE_EXISTING          5u
+
+/* The action word's two halves (above). */
+#define DOS_EXT_OPEN_ACTION_MASK                0x0F
+#define DOS_EXT_OPEN_IF_MISSING_SHIFT           4
+#define DOS_EXT_OPEN_IF_EXISTS_FAIL             0
+#define DOS_EXT_OPEN_IF_EXISTS_OPEN             1
+#define DOS_EXT_OPEN_IF_EXISTS_TRUNCATE         2
+#define DOS_EXT_OPEN_IF_MISSING_FAIL            0
+#define DOS_EXT_OPEN_IF_MISSING_CREATE          1
+
+/* CX on success: 1 opened, 2 created, 3 replaced (truncated). `didExist` = the file was
+ * there before the call (Win32: GetLastError() == ERROR_ALREADY_EXISTS after an
+ * OPEN_ALWAYS / CREATE_ALWAYS that succeeded).
+ * - #210: CREATE_ALWAYS ON A FILE THAT WAS NOT THERE IS "CREATED" (2), not "replaced".
+ *   This answered 3 for every CREATE_ALWAYS -- RBIL's own table says otherwise, and
+ *   716Ch "create or truncate" of a new long name is the probe's very first create.
+ */
+#define DOS_EXT_OPEN_TAKEN_OPENED               1
+#define DOS_EXT_OPEN_TAKEN_CREATED              2
+#define DOS_EXT_OPEN_TAKEN_REPLACED             3
+
+/* BX bits 0-2: 0 read, 1 write, 2 read/write -> GENERIC_READ 80000000h / GENERIC_WRITE
+ * 40000000h. Only bits 0-1 are looked at, as AH=6Ch always has (mode 3, "no access",
+ * is not a mode DOS defines and falls to read, exactly as AH=6Ch always has).
+ */
+#define DOS_EXT_OPEN_ACCESS_MASK                3
+#define DOS_EXT_OPEN_ACCESS_WRITE               1
+#define DOS_EXT_OPEN_ACCESS_READ_WRITE          2
+#define DOS_EXT_OPEN_GENERIC_READ               0x80000000ul
+#define DOS_EXT_OPEN_GENERIC_WRITE              0x40000000ul
+#define DOS_EXT_OPEN_GENERIC_READ_WRITE         0xC0000000ul
+
+/* WHAT AN LFN CALL ANSWERS FOR A WIN32 FAILURE:
+ * dos_err.h's measured table first (2, 3, 5, 4, 80, 19-31). Then the identities the
+ * LFN calls meet that the 6.22 calls never did -- each is the SAME number on both
+ * sides, labelled as such, NOT provoked on stock:
+ * 6  invalid handle (71A1h/714Fh/71A6h on a dead handle)
+ * 17 not same device (7156h across drives)
+ * 18 no more files (714Eh/714Fh)
+ * and two translations, both UNMEASURED:
+ * 123 ERROR_INVALID_NAME -> 3 (RBIL 7160h: "03h malformed path")
+ * 145 ERROR_DIR_NOT_EMPTY -> 5 (what 3Ah answers for a full directory)
+ * Anything else: 2, and the caller logs the Win32 code.
+ */
+#define DOS_LFN_WIN32_INVALID_HANDLE            6
+#define DOS_LFN_WIN32_NOT_SAME_DEVICE           17
+#define DOS_LFN_WIN32_NO_MORE_FILES             18
+#define DOS_LFN_WIN32_INVALID_NAME              123
+#define DOS_LFN_WIN32_DIR_NOT_EMPTY             145
+
+typedef struct _DOS_LFN_FIND_ENTRY
+{
+    DWORD  Attributes;
+    UINT64 CreationTime, LastAccessTime, LastWriteTime;  /* FILETIMEs, in whatever zone the
+                                                            caller wants                    */
+    DWORD SizeHigh;
+    DWORD SizeLow;
+    PCSTR  LongName;
+    PCSTR  ShortName;            /* "" when the long name is already 8.3 */
+} DOS_LFN_FIND_ENTRY, *PDOS_LFN_FIND_ENTRY;
+
+typedef const DOS_LFN_FIND_ENTRY *PCDOS_LFN_FIND_ENTRY;
+
 /* Days since 1970-01-01 of a proleptic Gregorian date (H. Hinnant's days_from_civil). */
 static inline INT64 DosLfnDaysFromCivil(_In_ INT64 year, _In_ UINT month, _In_ UINT day)
 {
@@ -231,55 +384,6 @@ static inline BOOL DosLfnDosToFileTime(
     return TRUE;
 }
 
-/* THE FIND RECORD 714Eh/714Fh WRITE AT ES:DI:
- * RBIL's "Windows95 long filename find record", which is WIN32_FIND_DATAA byte for
- * byte -- 318 (13Eh) bytes:
- *   00h DWORD attributes      04h QWORD creation time   0Ch QWORD last access
- *   14h QWORD last write      1Ch DWORD size HIGH       20h DWORD size LOW
- *   24h 8 bytes reserved      2Ch 260 bytes long name   130h 14 bytes short name
- * SI on the call picks the time format: 0 = 64-bit FILETIME, 1 = DOS date/time
- * (RBIL: "date in high word, time in low word" of the first DWORD).
- *
- * [CAUTION]: UNMEASURED, and the probe prints each: (1) the attribute DWORD is passed as Win32
- * reports it (a plain NTFS file reads 20h ARCHIVE; a file with none set would read
- * 80h NORMAL); (2) in DOS format the QWORD's HIGH dword is written 0; (3) the short
- * name is Win32's cAlternateFileName, i.e. EMPTY when the long name is already a
- * valid 8.3 name; (4) everything past each name's NUL is zeroed, so the record is
- * deterministic (Win32 leaves garbage there).
- */
-#define DOS_LFN_FIND_ATTRIBUTES         0x00
-#define DOS_LFN_FIND_CREATION_TIME      0x04
-#define DOS_LFN_FIND_ACCESS_TIME        0x0C
-#define DOS_LFN_FIND_WRITE_TIME         0x14
-#define DOS_LFN_FIND_SIZE_HIGH          0x1C
-#define DOS_LFN_FIND_SIZE_LOW           0x20
-#define DOS_LFN_FIND_LONG_NAME          0x2C
-#define DOS_LFN_FIND_SHORT_NAME         0x130
-#define DOS_LFN_FIND_LONG_NAME_CHARS    259     /* The 260-byte field, less its NUL */
-#define DOS_LFN_FIND_SHORT_NAME_CHARS   13      /* The 14-byte field, less its NUL */
-
-/* A QWORD time: its high DWORD 4 bytes in; in DOS format, the date in the high word. */
-#define DOS_LFN_FIND_TIME_HIGH          4
-#define DOS_LFN_DOS_DATE_SHIFT          16
-
-/* A little-endian DWORD: the low byte first, then the next at +1, and so on. */
-#define DOS_LFN_BYTE1                   1
-#define DOS_LFN_BYTE2                   2
-#define DOS_LFN_BYTE3                   3
-
-typedef struct _DOS_LFN_FIND_ENTRY
-{
-    DWORD  Attributes;
-    UINT64 CreationTime, LastAccessTime, LastWriteTime;  /* FILETIMEs, in whatever zone the
-                                                            caller wants                    */
-    DWORD SizeHigh;
-    DWORD SizeLow;
-    PCSTR  LongName;
-    PCSTR  ShortName;            /* "" when the long name is already 8.3 */
-} DOS_LFN_FIND_ENTRY, *PDOS_LFN_FIND_ENTRY;
-
-typedef const DOS_LFN_FIND_ENTRY *PCDOS_LFN_FIND_ENTRY;
-
 static inline VOID DosLfnPutDword(
     _Out_writes_bytes_(sizeof(DWORD)) PBYTE destination,
     _In_ DWORD value)
@@ -342,17 +446,6 @@ static inline VOID DosLfnFindPack(
         record[DOS_LFN_FIND_SHORT_NAME + byteIndex] = (BYTE)entry->ShortName[byteIndex];
 }
 
-/* 714Eh / 7141h ATTRIBUTE MASKS. CL = ALLOWED, CH = REQUIRED (RBIL):
- * The allowed half is DOS's own find rule -- a hidden, system or directory entry
- * appears only when CL asks for it, ordinary files always (dta_match in dos_int21.c
- * is the 4Eh twin) -- and every bit in CH must be present. Read-only and archive
- * never exclude (RBIL: "bits 0 and 5 ignored" in CL).
- */
-#define DOS_LFN_ATTRIBUTE_HIDDEN        0x02
-#define DOS_LFN_ATTRIBUTE_SYSTEM        0x04
-#define DOS_LFN_ATTRIBUTE_DIRECTORY     0x10
-#define DOS_LFN_ATTRIBUTE_MASK          0x3F
-
 static inline BOOL DosLfnAttributesOk(_In_ DWORD attributes, _In_ BYTE allowed, _In_ BYTE required)
 {
     if ((attributes & DOS_LFN_ATTRIBUTE_DIRECTORY) && !(allowed & DOS_LFN_ATTRIBUTE_DIRECTORY))
@@ -364,33 +457,6 @@ static inline BOOL DosLfnAttributesOk(_In_ DWORD attributes, _In_ BYTE allowed, 
     return (attributes & (required & DOS_LFN_ATTRIBUTE_MASK))
            == (DWORD)(required & DOS_LFN_ATTRIBUTE_MASK);
 }
-
-/* 71A8h: A SHORT NAME FOR A LONG ONE:
- * Output both forms: `shortName` "NAME.EXT" ASCIIZ (DH=1) and `fcbName` 11 bytes
- * space-padded with no dot (DH=0).
- * A name that is ALREADY a legal 8.3 name comes back as itself, upper-cased. Anything
- * else gets NT's generated form (RtlGenerate8dot3Name, the first alias NTFS hands
- * out): blanks and every '.' but the last dropped from the base, the characters
- * DOS forbids in a short name ( + , ; = [ ] ) turned into '_', upper-cased, the
- * first SIX kept, then "~1"; the extension is the first three characters after the
- * LAST dot, cleaned the same way. "A long file name.txt" -> "ALONGF~1.TXT".
- *
- * [CAUTION]: UNMEASURED AGAINST STOCK, and the first thing p_lfn asks. Windows 95's 71A8h is
- * documented (RBIL) as generating the BASIS name; whether it -- or NTVDM -- adds the
- * numeric tail is exactly the question. The "~1" form is what NT's own generator
- * produces and what the file system would assign a lone file of that name.
- */
-#define DOS_LFN_BASE_CHARS              8       /* An 8.3 name: 8 of base ... */
-#define DOS_LFN_EXTENSION_CHARS         3       /* ... and 3 of extension */
-#define DOS_LFN_BASE_BUFFER_SIZE        9
-#define DOS_LFN_EXTENSION_BUFFER_SIZE   4
-#define DOS_LFN_NO_EXTENSION            (-1)    /* No dot seen yet */
-#define DOS_LFN_ALIAS_BASE_CHARS        6       /* The generated form keeps the first SIX... */
-#define DOS_LFN_ALIAS_TILDE             '~'     /* ...then "~1" */
-#define DOS_LFN_ALIAS_TAIL              '1'
-#define DOS_LFN_REPLACEMENT_CHAR        '_'
-#define DOS_LFN_EXTENSION_DOT           '.'
-#define DOS_LFN_FCB_PAD                 ' '
 
 static inline BOOL DosLfnIsBadShortNameChar(_In_ BYTE character)
 {
@@ -526,32 +592,6 @@ static inline VOID DosLfnShortName(
         shortName[baseLength] = 0;
 }
 
-/* 6Ch / 716Ch / 71A9h: THE ACTION WORD:
- * DX bits 0-3 = what to do if the file EXISTS (0 fail, 1 open, 2 truncate), bits
- * 4-7 if it does NOT (0 fail, 1 create). Returned as Win32's CreateFile disposition
- * NUMBER (windows.h-free; the values are Win32's own):
- *   CREATE_NEW 1   CREATE_ALWAYS 2   OPEN_EXISTING 3   OPEN_ALWAYS 4
- *   TRUNCATE_EXISTING 5
- *
- * [CAUTION]: An action DOS has no meaning for (0x00, 0x13, ...) falls to OPEN_EXISTING -- what
- * AH=6Ch has always answered here; unmeasured, and kept so the refactor that moved
- * this out of dos_int21.c changes no behaviour.
- */
-#define DOS_EXT_OPEN_CREATE_NEW             1u
-#define DOS_EXT_OPEN_CREATE_ALWAYS          2u
-#define DOS_EXT_OPEN_OPEN_EXISTING          3u
-#define DOS_EXT_OPEN_OPEN_ALWAYS            4u
-#define DOS_EXT_OPEN_TRUNCATE_EXISTING      5u
-
-/* The action word's two halves (above). */
-#define DOS_EXT_OPEN_ACTION_MASK            0x0F
-#define DOS_EXT_OPEN_IF_MISSING_SHIFT       4
-#define DOS_EXT_OPEN_IF_EXISTS_FAIL         0
-#define DOS_EXT_OPEN_IF_EXISTS_OPEN         1
-#define DOS_EXT_OPEN_IF_EXISTS_TRUNCATE     2
-#define DOS_EXT_OPEN_IF_MISSING_FAIL        0
-#define DOS_EXT_OPEN_IF_MISSING_CREATE      1
-
 static inline UINT DosExtOpenDisposition(_In_ UINT action)
 {
     UINT ifExists = action & DOS_EXT_OPEN_ACTION_MASK;
@@ -567,17 +607,6 @@ static inline UINT DosExtOpenDisposition(_In_ UINT action)
         return DOS_EXT_OPEN_TRUNCATE_EXISTING;
     return DOS_EXT_OPEN_OPEN_EXISTING;
 }
-
-/* CX on success: 1 opened, 2 created, 3 replaced (truncated). `didExist` = the file was
- * there before the call (Win32: GetLastError() == ERROR_ALREADY_EXISTS after an
- * OPEN_ALWAYS / CREATE_ALWAYS that succeeded).
- * - #210: CREATE_ALWAYS ON A FILE THAT WAS NOT THERE IS "CREATED" (2), not "replaced".
- *   This answered 3 for every CREATE_ALWAYS -- RBIL's own table says otherwise, and
- *   716Ch "create or truncate" of a new long name is the probe's very first create.
- */
-#define DOS_EXT_OPEN_TAKEN_OPENED       1
-#define DOS_EXT_OPEN_TAKEN_CREATED      2
-#define DOS_EXT_OPEN_TAKEN_REPLACED     3
 
 static inline UINT DosExtOpenActionTaken(
     _In_ UINT disposition,
@@ -609,17 +638,6 @@ static inline UINT DosExtOpenActionTaken(
     }
 }
 
-/* BX bits 0-2: 0 read, 1 write, 2 read/write -> GENERIC_READ 80000000h / GENERIC_WRITE
- * 40000000h. Only bits 0-1 are looked at, as AH=6Ch always has (mode 3, "no access",
- * is not a mode DOS defines and falls to read, exactly as AH=6Ch always has).
- */
-#define DOS_EXT_OPEN_ACCESS_MASK            3
-#define DOS_EXT_OPEN_ACCESS_WRITE           1
-#define DOS_EXT_OPEN_ACCESS_READ_WRITE      2
-#define DOS_EXT_OPEN_GENERIC_READ           0x80000000ul
-#define DOS_EXT_OPEN_GENERIC_WRITE          0x40000000ul
-#define DOS_EXT_OPEN_GENERIC_READ_WRITE     0xC0000000ul
-
 static inline DWORD DosExtOpenAccess(_In_ UINT mode)
 {
     mode &= DOS_EXT_OPEN_ACCESS_MASK;
@@ -627,24 +645,6 @@ static inline DWORD DosExtOpenAccess(_In_ UINT mode)
          : (mode == DOS_EXT_OPEN_ACCESS_READ_WRITE) ? DOS_EXT_OPEN_GENERIC_READ_WRITE
          : DOS_EXT_OPEN_GENERIC_READ;
 }
-
-/* WHAT AN LFN CALL ANSWERS FOR A WIN32 FAILURE:
- * dos_err.h's measured table first (2, 3, 5, 4, 80, 19-31). Then the identities the
- * LFN calls meet that the 6.22 calls never did -- each is the SAME number on both
- * sides, labelled as such, NOT provoked on stock:
- * 6  invalid handle (71A1h/714Fh/71A6h on a dead handle)
- * 17 not same device (7156h across drives)
- * 18 no more files (714Eh/714Fh)
- * and two translations, both UNMEASURED:
- * 123 ERROR_INVALID_NAME -> 3 (RBIL 7160h: "03h malformed path")
- * 145 ERROR_DIR_NOT_EMPTY -> 5 (what 3Ah answers for a full directory)
- * Anything else: 2, and the caller logs the Win32 code.
- */
-#define DOS_LFN_WIN32_INVALID_HANDLE    6
-#define DOS_LFN_WIN32_NOT_SAME_DEVICE   17
-#define DOS_LFN_WIN32_NO_MORE_FILES     18
-#define DOS_LFN_WIN32_INVALID_NAME      123
-#define DOS_LFN_WIN32_DIR_NOT_EMPTY     145
 
 static inline BOOL DosLfnErrFromWin32(_In_ DWORD win32Error, _Out_ PWORD dosError)
 {

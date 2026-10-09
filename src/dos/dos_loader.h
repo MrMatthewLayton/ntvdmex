@@ -18,20 +18,6 @@
 #include "../ntvdmex_types.h"
 #include "dos_mcb.h"    /* DosMcbSegmentAddress / DosMcbReadWord / DosMcbWriteWord paragraph addressing */
 
-typedef struct _DOS_IMAGE
-{
-    /* entry CS:IP */
-    WORD CodeSegment;
-    WORD InstructionPointer;
-    /* entry SS:SP */
-    WORD StackSegment;
-    WORD StackPointer;
-    BOOL     IsExe;         /* 1 = MZ .EXE, 0 = flat .COM */
-    DWORD    ImageSize;     /* bytes placed in conventional memory */
-} DOS_IMAGE, *PDOS_IMAGE;
-
-typedef const DOS_IMAGE *PCDOS_IMAGE;
-
 /* The MZ header's fields, as offsets into the file. */
 #define DOS_MZ_LAST_PAGE_BYTES      2       /* e_cblp: bytes used in the last page */
 #define DOS_MZ_PAGE_COUNT           4       /* e_cp */
@@ -66,6 +52,44 @@ typedef const DOS_IMAGE *PCDOS_IMAGE;
 #define DOS_NE_TARGET_OS_END        0x37
 #define DOS_NE_OS_UNSPECIFIED       0       /* Windows 1.x/2.x programs */
 #define DOS_NE_OS_WINDOWS           2
+
+/* IS THIS A DOS PROGRAM AT ALL? (GH #255) (Importance = 1):
+ * A Windows program is an MZ file too: its MZ part is a STUB ("This program
+ * cannot be run in DOS mode" / "requires Microsoft Windows"), and e_lfanew at 3Ch
+ * points at the real header. MS-DOS runs the stub, because to DOS that is the
+ * program. NTVDM does not: an NE goes to WOW and a PE to Win32, so on stock XP
+ * typing NOTEPAD at COMMAND.COM starts Notepad. We are the NTVDM replacement, so
+ * EXEC asks this before loading anything.
+ *
+ * [CAUTION]: ONLY WINDOWS'S OWN TWO SIGNATURES, AND ONLY A WINDOWS NE. The 3Ch slot is read
+ * whatever the file is, so anything else must stay a DOS program:
+ *   "LE"/"LX"  -- a DOS/4GW-bound game (Doom, Duke3D): the stub IS the extender;
+ *   NE with target OS 1 (OS/2) -- a BIND'ed "family API" program, whose stub IS
+ *              the DOS version of the program (XP has no OS/2 subsystem either);
+ *   an e_lfanew below 40h or past the end of what was read -- an old DOS .EXE
+ *              with whatever happens to sit at 3Ch.
+ * NE target OS (ne_exetyp, NE+36h): 2 = Windows; 0 = unspecified, which is what
+ * Windows 1.x/2.x programs carry (the field came later) -- both are WOW's.
+ * Out (PE only): *subsystem = the PE optional header's Subsystem (2 GUI, 3 console),
+ * which decides whether EXEC waits for it.
+ */
+#define DOS_EXE_DOS                 0       /* Load it ourselves: .COM, plain MZ, LE/LX, OS/2 NE */
+#define DOS_EXE_NE                  1       /* A Windows NE: WOW's */
+#define DOS_EXE_PE                  2       /* A PE: Win32's */
+
+typedef struct _DOS_IMAGE
+{
+    /* entry CS:IP */
+    WORD CodeSegment;
+    WORD InstructionPointer;
+    /* entry SS:SP */
+    WORD StackSegment;
+    WORD StackPointer;
+    BOOL     IsExe;         /* 1 = MZ .EXE, 0 = flat .COM */
+    DWORD    ImageSize;     /* bytes placed in conventional memory */
+} DOS_IMAGE, *PDOS_IMAGE;
+
+typedef const DOS_IMAGE *PCDOS_IMAGE;
 
 static inline WORD DosLoaderReadWord(_In_reads_bytes_(2) PCBYTE field)
 {
@@ -232,29 +256,6 @@ static inline INT DosExecSize(
     return DOS_MCB_SUCCESS;
 }
 
-/* IS THIS A DOS PROGRAM AT ALL? (GH #255) (Importance = 1):
- * A Windows program is an MZ file too: its MZ part is a STUB ("This program
- * cannot be run in DOS mode" / "requires Microsoft Windows"), and e_lfanew at 3Ch
- * points at the real header. MS-DOS runs the stub, because to DOS that is the
- * program. NTVDM does not: an NE goes to WOW and a PE to Win32, so on stock XP
- * typing NOTEPAD at COMMAND.COM starts Notepad. We are the NTVDM replacement, so
- * EXEC asks this before loading anything.
- *
- * [CAUTION]: ONLY WINDOWS'S OWN TWO SIGNATURES, AND ONLY A WINDOWS NE. The 3Ch slot is read
- * whatever the file is, so anything else must stay a DOS program:
- *   "LE"/"LX"  -- a DOS/4GW-bound game (Doom, Duke3D): the stub IS the extender;
- *   NE with target OS 1 (OS/2) -- a BIND'ed "family API" program, whose stub IS
- *              the DOS version of the program (XP has no OS/2 subsystem either);
- *   an e_lfanew below 40h or past the end of what was read -- an old DOS .EXE
- *              with whatever happens to sit at 3Ch.
- * NE target OS (ne_exetyp, NE+36h): 2 = Windows; 0 = unspecified, which is what
- * Windows 1.x/2.x programs carry (the field came later) -- both are WOW's.
- * Out (PE only): *subsystem = the PE optional header's Subsystem (2 GUI, 3 console),
- * which decides whether EXEC waits for it.
- */
-#define DOS_EXE_DOS     0   /* Load it ourselves: .COM, plain MZ, LE/LX, OS/2 NE */
-#define DOS_EXE_NE      1   /* A Windows NE: WOW's */
-#define DOS_EXE_PE      2   /* A PE: Win32's */
 static inline INT DosExeKind(
     _In_reads_bytes_(bytesRead) PCBYTE file,
     _In_ DWORD bytesRead,

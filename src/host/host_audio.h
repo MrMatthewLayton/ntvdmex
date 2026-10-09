@@ -12,19 +12,21 @@
 
 #ifndef NTVDMEX_HOST_AUDIO_H
 #define NTVDMEX_HOST_AUDIO_H
+
 #include "host_state.h"
 
-VOID GusReport(VOID);
 extern DWORD g_OplTraceCount;
 extern DWORD g_OplTraceDrop;
 extern INT g_OplTraceOn;
+extern MPU_STATE g_GusMidi;
+
+VOID GusReport(VOID);
 VOID OplTraceWrite(BYTE registerIndex, BYTE value);
 VOID OplTraceDump(VOID);
 VOID OplPumpTime(VOID);
 VOID HostAudioFill(PVOID context, INT16 *out, UINT32 frames);
 VOID HostMidiSink(PVOID context, UINT32 message);
 VOID HostMidiSysEx(PVOID context, const BYTE *message, UINT32 length);
-extern MPU_STATE g_GusMidi;
 VOID GusMidiToSynth(PVOID context, BYTE byteValue);
 
 #endif

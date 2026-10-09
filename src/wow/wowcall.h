@@ -261,12 +261,6 @@
 #define WOWENUM_ELF16       146
 #define WOWENUM_NTM16       41
 #define WOWENUM_MAXFONT     256
-typedef struct _WOWENUM_FONT
-{
-    BYTE Blob[WOWENUM_ELF16 + WOWENUM_NTM16];
-    WORD FontType;
-} WOWENUM_FONT, *PWOWENUM_FONT;
-typedef const WOWENUM_FONT *PCWOWENUM_FONT;
 
 /* Six words is not a guess about Win16 -- it is what the two things this host
  * calls actually push: a window procedure's 5 (hwnd, msg, wParam, lParam hi+lo)
@@ -274,6 +268,13 @@ typedef const WOWENUM_FONT *PCWOWENUM_FONT;
  */
 #define WOWCALL_MAX_ARGW  32  /* s89: EnumFontFamilies' callback takes 7 words; s91: WOWCallback16Ex
                                  allows 64 argument bytes (WCB16_MAX_CBARGS) */
+
+typedef struct _WOWENUM_FONT
+{
+    BYTE Blob[WOWENUM_ELF16 + WOWENUM_NTM16];
+    WORD FontType;
+} WOWENUM_FONT, *PWOWENUM_FONT;
+typedef const WOWENUM_FONT *PCWOWENUM_FONT;
 
 typedef struct _WOWCALL_FRAME
 {
@@ -309,6 +310,11 @@ extern WOWENUM_FONT g_WowEnumFonts[WOWENUM_MAXFONT];
 extern INT g_WowEnumFontCount;
 extern WOWCALL_FRAME g_WowCallFrames[WOWCALL_MAX_DEPTH];
 extern INT g_WowCallDepth;
+extern WORD (*g_WowCallCurrentTask)(VOID);
+extern INT (*g_WowCallRetarget)(WORD window, PWORD stackSelector, PWORD stackPointer, PDWORD stackBase, PWORD previousTask);
+extern VOID (*g_WowCallUntarget)(WORD previousTask);
+extern DWORD g_WowCallLastResult;
+
 INT WowCallEnter(
     volatile BYTE *tib,
     DWORD stackBase,
@@ -326,9 +332,6 @@ INT WowCallEnter(
     INT blobLength,
     INT blobArgument,
     INT isAbsent);
-extern WORD (*g_WowCallCurrentTask)(VOID);
-extern INT (*g_WowCallRetarget)(WORD window, PWORD stackSelector, PWORD stackPointer, PDWORD stackBase, PWORD previousTask);
-extern VOID (*g_WowCallUntarget)(WORD previousTask);
-extern DWORD g_WowCallLastResult;
 PWOWCALL_FRAME WowCallLeave(volatile BYTE *tib, DWORD result);
+
 #endif /* NTVDMEX_WOWCALL_H */

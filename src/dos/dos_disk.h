@@ -35,19 +35,6 @@
 
 #include "../ntvdmex_types.h"
 
-typedef struct _DOS_DISK_GEOMETRY
-{
-    WORD     BytesPerSector;
-    WORD     SectorsPerTrack;
-    WORD     Heads;
-    DWORD    TotalSectors;
-    WORD     Cylinders;        /* derived: total / (sectors per track * heads) */
-    BYTE     DriveType;        /* AH=08h's BL */
-    BOOL     IsValid;
-} DOS_DISK_GEOMETRY, *PDOS_DISK_GEOMETRY;
-
-typedef const DOS_DISK_GEOMETRY *PCDOS_DISK_GEOMETRY;
-
 /* BIOS drive types, as AH=08h reports them in BL. 4 is the one that matters
  * here and it is measured: 6.22 answered BX=0004 for a 1.44MB floppy.
  */
@@ -96,6 +83,19 @@ typedef const DOS_DISK_GEOMETRY *PCDOS_DISK_GEOMETRY;
 #define DOS_DISK_CX_CYLINDER_HIGH_MASK      0x300
 #define DOS_DISK_CX_CYLINDER_HIGH_SHIFT     2
 #define DOS_DISK_CX_SECTOR_MASK             0x3F
+
+typedef struct _DOS_DISK_GEOMETRY
+{
+    WORD     BytesPerSector;
+    WORD     SectorsPerTrack;
+    WORD     Heads;
+    DWORD    TotalSectors;
+    WORD     Cylinders;        /* derived: total / (sectors per track * heads) */
+    BYTE     DriveType;        /* AH=08h's BL */
+    BOOL     IsValid;
+} DOS_DISK_GEOMETRY, *PDOS_DISK_GEOMETRY;
+
+typedef const DOS_DISK_GEOMETRY *PCDOS_DISK_GEOMETRY;
 
 /* Read the geometry out of a boot sector's BPB. Returns FALSE and leaves
  * geometry->IsValid FALSE if the sector is not a plausible BPB -- an image whose

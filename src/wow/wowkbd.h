@@ -88,4 +88,5 @@
 
 /* Defined in wowkbd.c (#335). */
 INT WowKeyboardCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity);
+
 #endif /* NTVDMEX_WOWKBD_H */

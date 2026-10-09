@@ -41,28 +41,6 @@
 
 #include "../ntvdmex_types.h"
 
-typedef struct _DOS_CLOCK_TIME
-{
-    /* full year (1999, not 99); month/day 1-based */
-    UINT Year;
-    UINT Month;
-    UINT Day;
-    UINT Hour;
-    UINT Minute;
-    UINT Second;
-    UINT Hundredths;
-    UINT DayOfWeek;                     /* 0 = Sunday, as INT 21h AH=2Ah returns it */
-} DOS_CLOCK_TIME, *PDOS_CLOCK_TIME;
-
-typedef const DOS_CLOCK_TIME *PCDOS_CLOCK_TIME;
-
-/* Centiseconds the guest is AHEAD of the host (negative = behind). Zero = the host. */
-typedef struct _DOS_CLOCK_STATE
-{
-    INT64 DosOffset;                    /* INT 21h AH=2Ah/2Ch -- DOS's clock */
-    INT64 RtcOffset;                    /* INT 1Ah AH=02h/04h and CMOS 00h-09h -- the RTC */
-} DOS_CLOCK_STATE, *PDOS_CLOCK_STATE;
-
 /* The calendar. */
 #define DOS_CLOCK_JANUARY                       1
 #define DOS_CLOCK_FEBRUARY                      2
@@ -116,6 +94,31 @@ typedef struct _DOS_CLOCK_STATE
 #define DOS_CLOCK_PIT_DIVISOR_CS    6553600u    /* 65536 * 100 */
 #define DOS_CLOCK_TICKS_PER_DAY     0x1800B0u   /* The BIOS's day length (below) */
 #define DOS_CLOCK_LAST_TICK_OF_DAY  0x1800AFu
+
+typedef struct _DOS_CLOCK_TIME
+{
+    /* full year (1999, not 99); month/day 1-based */
+    UINT Year;
+    UINT Month;
+    UINT Day;
+    UINT Hour;
+    UINT Minute;
+    UINT Second;
+    UINT Hundredths;
+    UINT DayOfWeek;                     /* 0 = Sunday, as INT 21h AH=2Ah returns it */
+} DOS_CLOCK_TIME, *PDOS_CLOCK_TIME;
+
+typedef const DOS_CLOCK_TIME *PCDOS_CLOCK_TIME;
+
+/* Centiseconds the guest is AHEAD of the host (negative = behind). Zero = the host. */
+typedef struct _DOS_CLOCK_STATE
+{
+    INT64 DosOffset;                    /* INT 21h AH=2Ah/2Ch -- DOS's clock */
+    INT64 RtcOffset;                    /* INT 1Ah AH=02h/04h and CMOS 00h-09h -- the RTC */
+} DOS_CLOCK_STATE, *PDOS_CLOCK_STATE;
+
+/* The one clock the whole VDM shares (defined in dos_int21.c). */
+extern DOS_CLOCK_STATE g_DosClock;
 
 static inline BOOL DosClockIsLeapYear(_In_ UINT year)
 {
@@ -419,8 +422,5 @@ static inline VOID DosClockFollowTicks(
         + (INT64)timeOfDay
         - hostPacked;
 }
-
-/* The one clock the whole VDM shares (defined in dos_int21.c). */
-extern DOS_CLOCK_STATE g_DosClock;
 
 #endif /* NTVDMEX_DOS_CLOCK_H */

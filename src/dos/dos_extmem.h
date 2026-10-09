@@ -36,13 +36,10 @@
 #include "../ntvdmex_types.h"
 #include "dos_xms.h"
 
-#define DOS_EXTMEM_DIRECT_END   0x0010FFF0u     /* FFFF:FFFF + 1: top of the HMA */
-#define DOS_EXTMEM_RAW_BASE     0x00100000u     /* Raw buffer index 0 = linear 1 MB */
-#define DOS_EXTMEM_RAW_END      0x01000000u     /* 16 MB: 1 MB + AH=88h's 15 MB */
-#define DOS_EXTMEM_RAW_LENGTH   (DOS_EXTMEM_RAW_END - DOS_EXTMEM_RAW_BASE)
-
-enum { DOS_EXTMEM_REGION_NONE = 0, DOS_EXTMEM_REGION_DIRECT, DOS_EXTMEM_REGION_EMB,
-       DOS_EXTMEM_REGION_RAW };
+#define DOS_EXTMEM_DIRECT_END               0x0010FFF0u     /* FFFF:FFFF + 1: top of the HMA */
+#define DOS_EXTMEM_RAW_BASE                 0x00100000u     /* Raw buffer index 0 = linear 1 MB */
+#define DOS_EXTMEM_RAW_END                  0x01000000u     /* 16 MB: 1 MB + AH=88h's 15 MB */
+#define DOS_EXTMEM_RAW_LENGTH               (DOS_EXTMEM_RAW_END - DOS_EXTMEM_RAW_BASE)
 
 /* An AH=87h GDT descriptor (8 bytes; the GDT holds six) and where its base sits:
  * bits 0-23 in bytes 2-4, bits 24-31 in byte 7.
@@ -51,6 +48,9 @@ enum { DOS_EXTMEM_REGION_NONE = 0, DOS_EXTMEM_REGION_DIRECT, DOS_EXTMEM_REGION_E
 #define DOS_EXTMEM_DESCRIPTOR_BASE_BYTE1    3
 #define DOS_EXTMEM_DESCRIPTOR_BASE_BYTE2    4
 #define DOS_EXTMEM_DESCRIPTOR_BASE_BYTE3    7
+
+enum { DOS_EXTMEM_REGION_NONE = 0, DOS_EXTMEM_REGION_DIRECT, DOS_EXTMEM_REGION_EMB,
+       DOS_EXTMEM_REGION_RAW };
 
 /* Which region [linearAddress, linearAddress+length) lies in. length > 0. */
 static inline INT DosExtMemClassify(

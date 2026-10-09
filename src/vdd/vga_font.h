@@ -18,6 +18,7 @@
 
 #ifndef VGA_FONT_H
 #define VGA_FONT_H
+
 #include "../ntvdmex_types.h"
 
 /* The tables' shape. */

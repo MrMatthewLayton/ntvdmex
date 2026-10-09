@@ -63,11 +63,21 @@
 
 #ifndef NTVDMEX_WOWSCHED_H
 #define NTVDMEX_WOWSCHED_H
+
 #include <windows.h>
 
-#define WOWSCHED_CTX_LO     0x364   /* VTIB_GS -- the low end of the block */
-#define WOWSCHED_CTX_LEN    0x40    /* .. through VTIB_SS inclusive */
-#define WOWSCHED_VTIB_EIP   0x390   /* The saved EIP within the block */
+#define WOWSCHED_CTX_LO             0x364   /* VTIB_GS -- the low end of the block */
+#define WOWSCHED_CTX_LEN            0x40    /* .. through VTIB_SS inclusive */
+#define WOWSCHED_VTIB_EIP           0x390   /* The saved EIP within the block */
+
+/* s92 (#306): THE RUN QUEUE. One slot was "the task that is not running" -- complete
+ * for two tasks and wrong for a third: Calc's WinHelp (WOWEXEC + Calc + WINHELP) was
+ * created and never scheduled, and the process could not end. Every task that is not
+ * running is parked in one of these; the running one is never in the table.
+ */
+#define WOWSCHED_MAX                8
+
+#define WOWSCHED_RETLIN(modelin)    ((modelin) + (DWORD)(WOW32_OFF_RET - WOW32_OFF_MODE))
 
 typedef struct _WOWSCHED_SLOT
 {
@@ -90,13 +100,6 @@ typedef const WOWSCHED_SLOT *PCWOWSCHED_SLOT;
 
 /* The running task's base depth -- see `BaseDepth`. */
 extern INT g_WowSchedCurrentBase;
-
-/* s92 (#306): THE RUN QUEUE. One slot was "the task that is not running" -- complete
- * for two tasks and wrong for a third: Calc's WinHelp (WOWEXEC + Calc + WINHELP) was
- * created and never scheduled, and the process could not end. Every task that is not
- * running is parked in one of these; the running one is never in the table.
- */
-#define WOWSCHED_MAX    8
 
 /* Save the live guest context. `eipAdjust` is added to the saved EIP, which is how
  * a context saved AT a BOP resumes AFTER it -- the guest must not re-execute the
@@ -136,7 +139,5 @@ VOID WowSchedSwap(
  * apart, so one recorded address locates both.
  */
 VOID WowSchedPoke(DWORD linear, WORD value);
-
-#define WOWSCHED_RETLIN(modelin)    ((modelin) + (DWORD)(WOW32_OFF_RET - WOW32_OFF_MODE))
 
 #endif /* NTVDMEX_WOWSCHED_H */

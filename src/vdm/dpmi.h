@@ -23,6 +23,7 @@
 #define NTVDMEX_VDM_DPMI_H
 
 #include <windows.h>
+
 #include "../ntvdmex_x86.h"     /* defines only: X86_SELECTOR_INDEX_SHIFT */
 
 /* Diagnostic snapshot of the last switch: {return CS, return linear, code desc lo, hi}. */
@@ -31,17 +32,23 @@
 #define DPMI_DEBUG_CODE_LOW         2
 #define DPMI_DEBUG_CODE_HIGH        3
 #define DPMI_DEBUG_ENTRIES          4
-extern DWORD g_DpmiDebug[DPMI_DEBUG_ENTRIES];
 
 /* Linear bases of the three initial selectors the switch installs, published so the
  * host can record them for dpmi_sel_base(): [0]=code (CS, sel 0x0F), [1]=data (DS,
  * sel 0x17), [2]=stack (SS, sel 0x1F). For a .COM these are equal; for a real .EXE
  * (CS!=DS!=SS) they diverge, which is why they are tracked per-selector.
  */
-#define DPMI_INITIAL_CODE       0
-#define DPMI_INITIAL_DATA       1
-#define DPMI_INITIAL_STACK      2
-#define DPMI_INITIAL_SELECTORS  3
+#define DPMI_INITIAL_CODE           0
+#define DPMI_INITIAL_DATA           1
+#define DPMI_INITIAL_STACK          2
+#define DPMI_INITIAL_SELECTORS      3
+
+/* An LDT selector: (index<<3) | TI(=1,LDT) | RPL(=3, ring-3 client). */
+#define DPMI_SELECTOR_TI_LDT        0x4
+#define DPMI_SELECTOR_RPL3          0x3
+#define DPMI_SELECTOR(index)        (WORD)(((index) << X86_SELECTOR_INDEX_SHIFT) | DPMI_SELECTOR_TI_LDT | DPMI_SELECTOR_RPL3)
+
+extern DWORD g_DpmiDebug[DPMI_DEBUG_ENTRIES];
 extern DWORD g_DpmiSegmentBase[DPMI_INITIAL_SELECTORS];
 
 /* Client width from the mode-switch AX bit0 (1 = 32-bit client, e.g. DOS/4GW). NOTE:
@@ -50,11 +57,6 @@ extern DWORD g_DpmiSegmentBase[DPMI_INITIAL_SELECTORS];
  * See the note in DpmiSwitchToProtectedMode(). Kept for DPMI API register widths.
  */
 extern INT g_DpmiIsClient32;
-
-/* An LDT selector: (index<<3) | TI(=1,LDT) | RPL(=3, ring-3 client). */
-#define DPMI_SELECTOR_TI_LDT    0x4
-#define DPMI_SELECTOR_RPL3      0x3
-#define DPMI_SELECTOR(index)    (WORD)(((index) << X86_SELECTOR_INDEX_SHIFT) | DPMI_SELECTOR_TI_LDT | DPMI_SELECTOR_RPL3)
 
 /* Build the two dwords of an LDT descriptor for [base, +limit] with the given access
  * byte (0xFA code exec/read DPL3, 0xF2 data r/w DPL3) and flags nibble (bit3=G,
