@@ -96,6 +96,7 @@ endif()
 # maps), CUI/4.0 subsystem, ASLR/NX cleared. No CRT (src/runtime.c).
 add_executable(ntvdmhost
     src/host/main.c
+    src/host/log.c
     src/vdm/v86.c
     src/vdm/dpmi.c
     src/vdm/dpmi_enter.S
