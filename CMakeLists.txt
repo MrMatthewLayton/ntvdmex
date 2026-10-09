@@ -108,6 +108,11 @@ add_executable(ntvdmhost
     src/host/cpuspeed.c
     src/host/pcspeaker.c
     src/host/settings.c
+    src/host/sysfont.c
+    src/host/x86len.c
+    src/host/dpmi_rmcs.c
+    src/host/i33_driver.c
+    src/host/pif.c
     src/vdd/present_scale.c
     src/vdm/v86.c
     src/vdm/dpmi.c
@@ -115,6 +120,8 @@ add_executable(ntvdmhost
     src/vdm/csrss.c
     src/dos/dos_int21.c
     src/dos/dos_recovery.c
+    src/dos/dos_disk.c
+    src/dos/dos_err.c
     src/wow/ne.c
     src/wow/wowsched.c
     src/vdd/vdd_bus.c
