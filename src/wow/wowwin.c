@@ -181,21 +181,29 @@ static VOID WowWinPaintWant(WORD window16, const RECT *rect, INT isErase)
         {
             if (rect->left   < g_WowWinPaints[index].Rect.left)
                 g_WowWinPaints[index].Rect.left   = rect->left;
+
             if (rect->top    < g_WowWinPaints[index].Rect.top)
                 g_WowWinPaints[index].Rect.top    = rect->top;
+
             if (rect->right  > g_WowWinPaints[index].Rect.right)
                 g_WowWinPaints[index].Rect.right  = rect->right;
+
             if (rect->bottom > g_WowWinPaints[index].Rect.bottom)
                 g_WowWinPaints[index].Rect.bottom = rect->bottom;
+
             if (isErase)
                 g_WowWinPaints[index].IsErase = 1;
+
             return;
         }
+
         if (!g_WowWinPaints[index].IsPending && freeSlot < 0)
             freeSlot = index;
     }
+
     if (freeSlot < 0)
         return;                  /* full: the guest still gets the
+
                                               message, just no rectangle */
     g_WowWinPaints[freeSlot].Window16 = window16;
     g_WowWinPaints[freeSlot].Rect = *rect;
@@ -212,11 +220,14 @@ INT WowWinPaintTake(WORD window16, PRECT output, PINT isErase)
         if (g_WowWinPaints[index].IsPending && g_WowWinPaints[index].Window16 == window16)
         {
             *output = g_WowWinPaints[index].Rect;
+
             if (isErase)
                 *isErase = g_WowWinPaints[index].IsErase;
+
             g_WowWinPaints[index].IsPending = 0;
             return 1;
         }
+
     return 0;
 }
 
@@ -249,23 +260,31 @@ static WORD WowWinDrop16(HDROP drop, PSTR reason, INT reasonCapacity)
         lstrcpynA(reason, "no 16-bit heap entry", reasonCapacity);
         return 0;
     }
+
     count = DragQueryFileA(drop, WOWWIN_DRAGQUERY_COUNT, NULL, 0);
     isInside = DragQueryPoint(drop, &point);
+
     for (index = 0; index < count; ++index)
     {
         CHAR longPath[MAX_PATH];
         CHAR shortPath[MAX_PATH];
         INT  length;
+
         if (!DragQueryFileA(drop, index, longPath, sizeof longPath))
             continue;
+
         if (!GetShortPathNameA(longPath, shortPath, sizeof shortPath))
             lstrcpynA(shortPath, longPath, sizeof shortPath);
+
         length = lstrlenA(shortPath);
+
         if (offset + (UINT)length + WOWWIN_DROP_TERMINATORS > sizeof buffer)
             break;                                                                        /* a 2 KB list; the rest dropped */
+
         CopyMemory(buffer + offset, shortPath, (SIZE_T)length + 1);
         offset += (UINT)length + 1;
     }
+
     buffer[offset++] = 0;
     buffer[0] = WOWWIN_DROPFILES_HEADER;
     buffer[1] = 0;
@@ -276,21 +295,26 @@ static WORD WowWinDrop16(HDROP drop, PSTR reason, INT reasonCapacity)
     buffer[WOWWIN_DROPFILES_NONCLIENT] = (BYTE)(isInside ? 0 : 1);
     buffer[WOWWIN_DROPFILES_NONCLIENT + 1] = 0;
     handle16 = (WORD)g_WowWinGlobal16(WOWWIN_GLOBAL16_ALLOC, WOWWIN_GMEM_SHARE_MOVEABLE_ZEROINIT, offset);
+
     if (!handle16)
     {
         lstrcpynA(reason, "GlobalAlloc refused", reasonCapacity);
         return 0;
     }
+
     farPointer = g_WowWinGlobal16(WOWWIN_GLOBAL16_LOCK, handle16, 0);
     bytes = (farPointer >> WORD_SHIFT) ? (volatile BYTE *)(ULONG_PTR)(DpmiSelectorBase((WORD)(farPointer >> WORD_SHIFT)) + (farPointer & WORD_MASK)) : NULL;
+
     if (!bytes || !(farPointer >> WORD_SHIFT) || !DpmiSelectorBase((WORD)(farPointer >> WORD_SHIFT)))
     {
         g_WowWinGlobal16(WOWWIN_GLOBAL16_FREE, handle16, 0);
         lstrcpynA(reason, "GlobalLock refused", reasonCapacity);
         return 0;
     }
+
     for (index = 0; index < offset; ++index)
         bytes[index] = buffer[index];
+
     g_WowWinGlobal16(WOWWIN_GLOBAL16_UNLOCK, handle16, 0);
     wsprintfA(reason, "%u file(s), %u bytes, pt=(%d,%d)%s", count, offset, (INT)point.x, (INT)point.y,
               isInside ? "" : " non-client");
@@ -309,9 +333,11 @@ static VOID WowWinHoldChar(WORD window16, WORD character, DWORD lParam)
             oldest = index;
             break;
         }
+
         if (g_WowWinHeldChars[index].Sequence < g_WowWinHeldChars[oldest].Sequence)
             oldest = index;
     }
+
     g_WowWinHeldChars[oldest].Window16 = window16;
     g_WowWinHeldChars[oldest].Character = character;
     g_WowWinHeldChars[oldest].LParam = lParam;
@@ -327,13 +353,16 @@ INT WowWinReleaseChars(WORD window16, DWORD keyLParam)
     {
         INT index;
         INT best = -1;
+
         for (index = 0; index < WOWWIN_MAX_HELD_CHARS; ++index)
             if (g_WowWinHeldChars[index].Sequence && g_WowWinHeldChars[index].Window16 == window16
                 && ((g_WowWinHeldChars[index].LParam >> WOWWIN_SCAN_CODE_SHIFT) & WOWWIN_SCAN_CODE_MASK) == ((keyLParam >> WOWWIN_SCAN_CODE_SHIFT) & WOWWIN_SCAN_CODE_MASK)
                 && (best < 0 || g_WowWinHeldChars[index].Sequence < g_WowWinHeldChars[best].Sequence))
                 best = index;
+
         if (best < 0)
             return count;
+
         WowMsgPost(window16, WM_CHAR16, g_WowWinHeldChars[best].Character, g_WowWinHeldChars[best].LParam,
                     GetTickCount(), 0, 0);
         g_WowWinHeldChars[best].Sequence = 0;
@@ -352,6 +381,7 @@ INT WowWinThreadTimerAdd(UINT_PTR id32, DWORD procedure)
             g_WowWinThreadTimers[index].Procedure = procedure;
             return 1;
         }
+
     return 0;
 }
 
@@ -366,6 +396,7 @@ INT WowWinThreadTimerKill(UINT_PTR id32)
             g_WowWinThreadTimers[index].Procedure = 0;
             return 1;
         }
+
     return 0;
 }
 
@@ -376,6 +407,7 @@ INT WowWinThreadTimerFire(const MSG *message)
 
     if (message->message != WM_TIMER || message->hwnd)
         return 0;
+
     for (index = 0; index < WOWWIN_MAX_THREAD_TIMERS; ++index)
         if (g_WowWinThreadTimers[index].Id32 && g_WowWinThreadTimers[index].Id32 == message->wParam)
         {
@@ -384,6 +416,7 @@ INT WowWinThreadTimerFire(const MSG *message)
                 || WowMsgPost(0, WM_TIMER16, (WORD)message->wParam, g_WowWinThreadTimers[index].Procedure, message->time, 0, 0);
             return 1;
         }
+
     return 0;
 }
 
@@ -409,6 +442,7 @@ static VOID WowWinSendOrPost(
     for (index = 0; index < g_WowWinSendingCount; ++index)
         if (g_WowWinSending[index].Window16 == window16 && g_WowWinSending[index].Message == message)
             ++busyCount;
+
     if (busyCount < limit && g_WowWinSend16 && g_WowWinSendingCount < WOWWIN_MAX_SENDING)
     {
         INT isSent;
@@ -417,9 +451,11 @@ static VOID WowWinSendOrPost(
         ++g_WowWinSendingCount;
         isSent = g_WowWinSend16(window16, message, wParam, lParam, &result);
         --g_WowWinSendingCount;
+
         if (isSent)
             return;
     }
+
     WowMsgPost(window16, message, wParam, lParam, GetTickCount(), pointX, pointY);
 }
 
@@ -431,15 +467,19 @@ static LRESULT WowWinDefProc(HWND window, WORD window16, UINT message, WPARAM wP
     if (window16)
     {
         PWOWUSER_WINDOW record = WowUserFindWindow(window16);
+
         if (record)
         {
             HWND client = WowUserMdiClientOf(record);
+
             if (client)
                 return DefFrameProcA(window, client, message, wParam, lParam);
+
             if (WowUserIsMdiChild(record))
                 return DefMDIChildProcA(window, message, wParam, lParam);
         }
     }
+
     return DefWindowProcA(window, message, wParam, lParam);
 }
 
@@ -455,9 +495,11 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
         g_WowWinIsDialogBounced = 1;
         return 0;
     }
+
     GetCursorPos(&cursor);
     pointX = (WORD)(SHORT)cursor.x;
     pointY = (WORD)(SHORT)cursor.y;
+
     switch (message)
     {
     case WM_CHAR:
@@ -466,6 +508,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             WowWinHoldChar(window16, (WORD)wParam, (DWORD)lParam);
             return 0;
         }
+
         break;
 
     case WM_KEYDOWN:
@@ -481,6 +524,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             ++g_WowWinMessages;
             return 0;
         }
+
         break;
 
     /* -- THE SYSTEM KEYS ARE THE SYSTEM'S, AND SWALLOWING THEM BROKE THE MENU.
@@ -535,17 +579,20 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
         if (message == WM_SYSKEYDOWN && (wParam == VK_MENU || wParam == VK_F10))
         {
             HWND capture = GetCapture();
+
             if (capture && WowWinHwnd16(capture))
             {
                 ReleaseCapture();
                 ++g_WowWinMenuUncaptures;
             }
         }
+
         if (window16)
         {
             WowMsgPost(window16, (WORD)message, (WORD)wParam, (DWORD)lParam, GetTickCount(), pointX, pointY);
             ++g_WowWinMessages;
         }
+
         break;
 
     /* -- WM_PAINT, WHICH THIS FILE SAID IT WOULD RELAY "THE DAY" GDI'S ID
@@ -581,6 +628,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
     case WM_ERASEBKGND:
         if (window16)
             return 0;
+
         break;
 
     case WM_CTLCOLORMSGBOX:
@@ -594,9 +642,11 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
         {
             INT isHandled = 0;
             LRESULT result = g_WowWinCtlColor(window, window16, message, wParam, lParam, &isHandled);
+
             if (isHandled)
                 return result;
         }
+
         break;
 
     case WM_PAINT:
@@ -604,6 +654,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
         {
             PAINTSTRUCT paint;
             HDC dc = BeginPaint(window, &paint);
+
             if (dc)
             {
                 WowWinPaintWant(window16, &paint.rcPaint, paint.fErase);
@@ -616,6 +667,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                 g_WowWinPaintMs = GetTickCount();
                 EndPaint(window, &paint);
             }
+
             if (g_WowWinPaintsLogged < WOWWIN_PAINT_LOG_MAX)       /* s92: what the OS reported, and how it went */
             {
                 CHAR paintLog[WOWWIN_LOG_LINE_MAX];
@@ -630,13 +682,16 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                 paintCursor = LogPut(paintCursor, g_WowWinSizeMove ? " SENT\r\n" : " posted\r\n");
                 LogAppend(LOG_PATH, paintLog, paintCursor);
             }
+
             if (g_WowWinSizeMove)
                 WowWinSendOrPost(window16, WM_PAINT16, 0, 0, pointX, pointY);
             else
                 WowMsgPost(window16, WM_PAINT16, 0, 0, GetTickCount(), pointX, pointY);
+
             ++g_WowWinMessages;
             return 0;
         }
+
         break;
 
     case WM_ENTERSIZEMOVE:
@@ -653,8 +708,10 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
     case WM_EXITSIZEMOVE:
         if (g_WowWinSizeMove > 0)
             --g_WowWinSizeMove;
+
         if (window16)
             RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+
         break;
 
     /* THE MOUSE. WITHOUT THIS A PAINT PROGRAM CANNOT PAINT (Importance = 5):
@@ -733,10 +790,12 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                 bufferCursor = LogPut(bufferCursor, " lp=0x"); bufferCursor = LogHex(bufferCursor, (DWORD)lParam); bufferCursor = LogPut(bufferCursor, "\r\n");
                 LogAppend(LOG_PATH, buffer, bufferCursor);
             }
+
             WowMsgPost(window16, (WORD)message, (WORD)wParam, (DWORD)lParam, GetTickCount(), pointX, pointY);
             ++g_WowWinMessages;
             return 0;
         }
+
         break;
 
     case WM_MOUSEMOVE:
@@ -746,9 +805,11 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                                   GetTickCount(), pointX, pointY))
                 WowMsgPost(window16, (WORD)message, (WORD)wParam, (DWORD)lParam,
                             GetTickCount(), pointX, pointY);
+
             ++g_WowWinMessages;
             return 0;
         }
+
         break;
 
     case WM_LBUTTONDOWN:
@@ -766,6 +827,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             ++g_WowWinMessages;
             return 0;
         }
+
         break;
 
     case WM_CLOSE:
@@ -781,9 +843,11 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             closeCursor = LogPut(closeCursor, window16 ? " -- posted to the guest\r\n"
                               : " -- NO Win16 window for it, falling through to DefWindowProc\r\n");
             LogAppend(LOG_PATH, closeLog, closeCursor); }
+
         if (window16) { WowMsgPost(window16, (WORD)message, 0, 0, GetTickCount(), pointX, pointY);
                    ++g_WowWinMessages;
                    return 0; }
+
         break;
 
     /* s92 (#305 M12): a drop on a window that called DragAcceptFiles. POSTED, as the
@@ -799,20 +863,25 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             DragFinish((HDROP)wParam);
             dropCursor = LogPut(dropCursor, "WOWWIN: WM_DROPFILES on h16=0x"); dropCursor = LogHex(dropCursor, window16);
             dropCursor = LogPut(dropCursor, drop16 ? " -> HDROP16 0x" : " -- ★ NOT DELIVERED: ");
+
             if (drop16)
             {
                 dropCursor = LogHex(dropCursor, drop16);
                 dropCursor = LogPut(dropCursor, " ");
             }
+
             dropCursor = LogPut(dropCursor, reason); dropCursor = LogPut(dropCursor, "\r\n");
             LogAppend(LOG_PATH, dropLog, dropCursor);
+
             if (drop16)
             {
                 WowMsgPost(window16, WM_DROPFILES16, drop16, 0, GetTickCount(), pointX, pointY);
                 ++g_WowWinMessages;
             }
+
             return 0;
         }
+
         break;
 
     /* WM_TIMER. THE OS IS THE TIMER ENGINE; THIS IS THE WHOLE RELAY (Importance = 2):
@@ -838,6 +907,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             ++g_WowWinMessages;
             return 0;
         }
+
         break;
 
     /* FOCUS AND SIZE, BECAUSE THE GUEST ACTS ON THEM (Importance = 1):
@@ -891,6 +961,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
     case WM_SHOWWINDOW:
         if (window16)
             WowWinSendOrPost(window16, (WORD)message, (WORD)wParam, (DWORD)lParam, pointX, pointY);
+
         break;
 
     case WM_ACTIVATE:
@@ -916,6 +987,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                 SetFocus(g_WowWinSetFocusWindow);
                 return result;
             }
+
             /* -- s93: A DIALOG KEEPS ITS CONTROL'S FOCUS ACROSS ACTIVATION, as
              * DefDlgProc does (it saves the focus on deactivation and restores it
              * on activation). Our dialogs are our own class on DefWindowProc, which
@@ -928,6 +1000,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                     if (LOWORD(wParam) == WA_INACTIVE)
                     {
                         HWND focus = GetFocus();
+
                         if (focus && IsChild(window, focus))
                             SetPropA(window, "NTVDMEX16.DlgFocus", (HANDLE)focus);
                     }
@@ -935,19 +1008,24 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                     {
                         LRESULT result = WowWinDefProc(window, window16, message, wParam, lParam);
                         HWND focus = GetFocus();
+
                         if (!focus || focus == window || !IsChild(window, focus))
                         {
                             HWND saved = (HWND)GetPropA(window, "NTVDMEX16.DlgFocus");
+
                             if (!saved || !IsWindow(saved) || !IsChild(window, saved))
                                 saved = GetNextDlgTabItem(window, NULL, FALSE);
+
                             if (saved)
                                 SetFocus(saved);
                         }
+
                         return result;
                     }
                 }
             }
         }
+
         break;
 
     case WM_NCDESTROY:
@@ -957,6 +1035,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
     case WM_ACTIVATEAPP:
         if (window16)
             WowWinSendOrPost(window16, (WORD)message, (WORD)(wParam ? 1 : 0), 0, pointX, pointY);
+
         break;
 
     /* -- s93: WM_MDIACTIVATE, TO THE CHILD -- AND THE TWO PACKINGS DIFFER. Win32 gives
@@ -974,11 +1053,13 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             WowWinSendOrPost(window16, (WORD)message, (WORD)((HWND)lParam == window ? 1 : 0),
                                 ((DWORD)losing << WORD_SHIFT) | gaining, pointX, pointY);
         }
+
         break;
 
     case WM_MENUSELECT:
         if (window16) WowWinSendOrPost(window16, (WORD)message, LOWORD(wParam),
                                      (DWORD)HIWORD(wParam), pointX, pointY);
+
         break;
 
     case WM_GETMINMAXINFO:
@@ -989,6 +1070,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             BYTE buffer[WOWWIN_MINMAXINFO16_SIZE];
             WORD result;
             INT index;
+
             for (index = 0; index < WOWWIN_MINMAXINFO_POINTS; ++index)
             {
                 buffer[index * WOWWIN_POINT16_SIZE] = (BYTE)points[index].x;
@@ -996,19 +1078,24 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                 buffer[index * WOWWIN_POINT16_SIZE + WOWWIN_POINT16_Y] = (BYTE)points[index].y;
                 buffer[index * WOWWIN_POINT16_SIZE + WOWWIN_POINT16_Y + 1] = (BYTE)(points[index].y >> BYTE_SHIFT);
             }
+
             INT isSent;
             INT slot;
             INT isBusy = 0;
+
             for (slot = 0; slot < g_WowWinSendingCount; ++slot)
                 if (g_WowWinSending[slot].Window16 == window16 && g_WowWinSending[slot].Message == (WORD)message)
                     isBusy = 1;
+
             if (isBusy)
                 break;
+
             g_WowWinSending[g_WowWinSendingCount].Window16 = window16;
             g_WowWinSending[g_WowWinSendingCount].Message = (WORD)message;
             ++g_WowWinSendingCount;
             isSent = g_WowWinSend16Blob(window16, (WORD)message, 0, buffer, WOWWIN_MINMAXINFO16_SIZE, NULL, 0, &result);
             --g_WowWinSendingCount;
+
             if (isSent)
             {
                 for (index = 1; index < WOWWIN_MINMAXINFO_POINTS; ++index)     /* ptReserved is not the guest's to set */
@@ -1016,14 +1103,17 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                     points[index].x = (LONG)(SHORT)(buffer[index * WOWWIN_POINT16_SIZE] | (buffer[index * WOWWIN_POINT16_SIZE + 1] << BYTE_SHIFT));
                     points[index].y = (LONG)(SHORT)(buffer[index * WOWWIN_POINT16_SIZE + WOWWIN_POINT16_Y] | (buffer[index * WOWWIN_POINT16_SIZE + WOWWIN_POINT16_Y + 1] << BYTE_SHIFT));
                 }
+
                 return 0;
             }
         }
+
         break;
 
     case WM_SYSCHAR:
         if (window16) { WowMsgPost(window16, (WORD)message, (WORD)wParam, (DWORD)lParam, GetTickCount(), pointX, pointY);
                    ++g_WowWinMessages; }
+
         break;
 
     case WM_SETFOCUS:
@@ -1042,6 +1132,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                 WowWinSendOrPost(window16, (WORD)message, wParam16, (DWORD)lParam, pointX, pointY);
             else
                 WowMsgPost(window16, (WORD)message, wParam16, (DWORD)lParam, GetTickCount(), pointX, pointY);
+
             ++g_WowWinMessages;
             /* -- s93: A DIALOG PASSES THE FOCUS ON, as DefDlgProc does on
              * WM_SETFOCUS -- to the control that last had it, else its first tab
@@ -1053,8 +1144,10 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             if (message == WM_SETFOCUS && WowUserIsDialog16(window16))
             {
                 HWND saved = (HWND)GetPropA(window, "NTVDMEX16.DlgFocus");
+
                 if (!saved || !IsWindow(saved) || !IsChild(window, saved))
                     saved = GetNextDlgTabItem(window, NULL, FALSE);
+
                 if (saved && saved != window)
                 {
                     SetFocus(saved);
@@ -1062,6 +1155,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                 }
             }
         }
+
         break;
 
     /* WM_COMMAND -- THE MENU STOPS BEING DECORATION. (session 44) (Importance = 3):
@@ -1127,6 +1221,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                         GetTickCount(), pointX, pointY);
             ++g_WowWinMessages;
         }
+
         break;
 
     /* #160: THE MENU MUST WAIT FOR THE APPLICATION TO SET IT UP (Importance = 3):
@@ -1155,18 +1250,22 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             INT itemCount = GetMenuItemCount(menuBar);
             DWORD time = GetTickCount();
             WowMsgPost(window16, WM_INITMENU16, WowUserMenu16(menuBar), 0, time, pointX, pointY);
+
             for (index = 0; index < itemCount && index < WOWWIN_MENU_POPUPS_MAX; ++index)
             {
                 HMENU submenu = GetSubMenu(menuBar, index);
+
                 if (submenu) WowMsgPost(window16, WM_INITMENUPOPUP16,
                                      WowUserMenu16(submenu), (DWORD)index, time, pointX, pointY);
             }
+
             if (WowMsgPost(window16, (WORD)WOWMSG_MENUREPLAY, (WORD)wParam, (DWORD)lParam, time, pointX, pointY))
             {
                 ++g_WowWinMenuDeferred;
                 return 0;                       /* opened later, by the replay */
             }
         }
+
         break;
 
     /* -- #300 (M1): SCROLL BARS. Never relayed before, so a program's own scroll
@@ -1191,9 +1290,11 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             INT isHandled = 0;
             LRESULT result = g_WowWinOwnerDraw(window, window16, message, wParam, lParam, &isHandled);
             ++g_WowWinMessages;
+
             if (isHandled)
                 return result;
         }
+
         break;
 
     case WM_HSCROLL:
@@ -1206,11 +1307,14 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             DWORD lParam16 = (DWORD)position | ((DWORD)control16 << WORD_SHIFT);
             WORD  result16;
             ++g_WowWinMessages;
+
             if (g_WowWinSend16 && g_WowWinSend16(window16, (WORD)message, code, lParam16, &result16))
                 return 0;
+
             WowMsgPost(window16, (WORD)message, code, lParam16, GetTickCount(), pointX, pointY);
             return 0;
         }
+
         break;
 
     case WM_COMMAND:
@@ -1224,11 +1328,13 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                         GetTickCount(), pointX, pointY);
             ++g_WowWinMessages;
         }
+
         break;
 
     default:
         break;
     }
+
     /* THE RIGHT DEFAULT PROCEDURE, WHICH IS WHAT MAKES MDI WORK (Importance = 1):
      * Win32 has three, and which one a window needs is a property of where it
      * sits in the tree, not of anything the guest tells us: an MDI FRAME must
@@ -1243,6 +1349,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
      */
     if (window16 && message >= WOWWIN_REGISTERED_MESSAGE_FIRST && WowCdlgRelay(message, lParam))
         return 0;
+
     return WowWinDefProc(window, window16, message, wParam, lParam);
 }
 
@@ -1255,19 +1362,25 @@ INT WowWinPump(INT budget)
 
     if (!g_WowWinCreated)
         return 0;
+
     QueryPerformanceCounter(&startTicks);
     ++g_WowWinPumpCalls;
+
     while (count < budget && PeekMessageA(&message, NULL, 0, 0, PM_REMOVE))
     {
         ++count;
         ++g_WowWinPumped;
+
         if (WowWinThreadTimerFire(&message))
             continue;                                           /* s93: a windowless Win16 timer */
+
         if (WowCdlgIsDialogMessage(&message))
             continue;                                          /* #294: Find dialog's Tab/Enter */
+
         TranslateMessage(&message);
         DispatchMessageA(&message);
     }
+
     QueryPerformanceCounter(&endTicks);
     g_WowWinPumpTicks += endTicks.QuadPart - startTicks.QuadPart;
     return count;
@@ -1282,6 +1395,7 @@ VOID WowWinMenuReplay(PCWOWMSG replay)
 
     if (!window || !IsWindow(window))
         return;
+
     g_WowWinIsReplaying = 1;
     SendMessageA(window, WM_SYSCOMMAND, (WPARAM)replay->WParam, (LPARAM)replay->LParam);
     g_WowWinIsReplaying = 0;
@@ -1332,20 +1446,25 @@ INT WowWinRegister(
 
     for (index = 0; WOWWIN_CLASS_PREFIX[index] && length < capacity - 1; ++index)
         className32[length++] = WOWWIN_CLASS_PREFIX[index];
+
     for (index = 0; name16[index] && length < capacity - 1; ++index)
         className32[length++] = name16[index];
+
     className32[length] = 0;
     ZeroMemory(&windowClass, sizeof windowClass);
     windowClass.cbSize        = sizeof windowClass;
     windowClass.lpfnWndProc   = WowWinProc;
     windowClass.hInstance     = GetModuleHandleA(NULL);
     windowClass.hCursor       = cursor;
+
     if (!windowClass.hCursor)
     {
         if (isCursorDefaulted)
             *isCursorDefaulted = 1;
+
         windowClass.hCursor = LoadCursorA(NULL, IDC_ARROW);
     }
+
     windowClass.hIcon   = icon;        /* built by the caller: predefined, or the app's own */
     windowClass.hIconSm = smallIcon;         /* and the 16x16 built at 16x16, not shrunk later */
     /* -- THE CLASS'S OWN BACKGROUND BRUSH, AND IT USED TO BE THROWN AWAY.
@@ -1368,8 +1487,10 @@ INT WowWinRegister(
      */
     windowClass.hbrBackground = background ? background : (HBRUSH)(COLOR_WINDOW + 1);
     windowClass.lpszClassName = className32;
+
     if (RegisterClassExA(&windowClass))
         return 1;
+
     /* Already registered is success: a program may register a class name twice
      * across two instances, and Win32 says so with ERROR_CLASS_ALREADY_EXISTS.
      */

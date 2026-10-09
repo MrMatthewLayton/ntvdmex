@@ -208,8 +208,10 @@ static INT WowConvNumColors(INT bitsPerPixel)
 {
     if (bitsPerPixel <= 0)
         return WOWCONV_NUMCOLORS_FLOOR;                              /* nonsense in, the safe floor out */
+
     if (bitsPerPixel <= WOWCONV_BPP_8)
         return 1 << bitsPerPixel;
+
     return WOWCONV_NUMCOLORS_DIRECT;
 }
 
@@ -217,8 +219,10 @@ static INT WowConvBackgroundBrushKind(UINT value)
 {
     if (!value)
         return WOWCONV_HBR_NONE;
+
     if (value <= (UINT)WOWCONV_COLOR_MAX + 1)
         return WOWCONV_HBR_SYSCOLOR;
+
     return WOWCONV_HBR_HANDLE;
 }
 
@@ -277,21 +281,29 @@ static UINT WowConvDibCoreToInfo(
 
     if (!core || !output || length < WOWCONV_CORE_HEADER_SIZE)
         return 0;
+
     if (WowConvDibHeaderSize(core) != WOWCONV_CORE_HEADER_SIZE)
         return 0;
+
     width  = (UINT)core[WOWCONV_CORE_WIDTH]  | ((UINT)core[WOWCONV_CORE_WIDTH + 1]  << BYTE_SHIFT);
     height  = (UINT)core[WOWCONV_CORE_HEIGHT]  | ((UINT)core[WOWCONV_CORE_HEIGHT + 1]  << BYTE_SHIFT);
     bitCount = (UINT)core[WOWCONV_CORE_BIT_COUNT] | ((UINT)core[WOWCONV_CORE_BIT_COUNT + 1] << BYTE_SHIFT);
+
     if (bitCount != 1 && bitCount != WOWCONV_BPP_4 && bitCount != WOWCONV_BPP_8 && bitCount != WOWCONV_BPP_24)
         return 0;
+
     paletteEntries    = (bitCount <= WOWCONV_BPP_8) ? (1u << bitCount) : 0u;
     pixelOffset = WOWCONV_CORE_HEADER_SIZE + paletteEntries * WOWCONV_RGBTRIPLE_SIZE;
+
     if (pixelOffset >= length)
         return 0;                                      /* no room for any pixels */
+
     if (capacity < WOWCONV_INFO_HEADER_SIZE + paletteEntries * WOWCONV_RGBQUAD_SIZE)
         return 0;
+
     for (index = 0; index < WOWCONV_INFO_HEADER_SIZE; ++index)
         output[index] = 0;
+
     output[0] = WOWCONV_INFO_HEADER_SIZE;                                            /* biSize */
     output[WOWCONV_INFO_WIDTH] = (BYTE)(width & BYTE_MASK);
     output[WOWCONV_INFO_WIDTH + 1] = (BYTE)((width >> BYTE_SHIFT) & BYTE_MASK);            /* biWidth */
@@ -310,8 +322,10 @@ static UINT WowConvDibCoreToInfo(
         output[WOWCONV_INFO_HEADER_SIZE + index * WOWCONV_RGBQUAD_SIZE + WOWCONV_RGB_RED] = core[WOWCONV_CORE_HEADER_SIZE + index * WOWCONV_RGBTRIPLE_SIZE + WOWCONV_RGB_RED];
         output[WOWCONV_INFO_HEADER_SIZE + index * WOWCONV_RGBQUAD_SIZE + WOWCONV_RGBQUAD_RESERVED] = 0;
     }
+
     if (paletteCount)
         *paletteCount = paletteEntries;
+
     return pixelOffset;
 }
 
@@ -338,12 +352,16 @@ static INT WowConvModalExit(INT isEnded, INT isWindowAlive, INT hasProcedure, IN
 {
     if (isEnded)
         return WOWCONV_MODAL_END;
+
     if (!isWindowAlive)
         return WOWCONV_MODAL_GONE;
+
     if (!hasProcedure)
         return WOWCONV_MODAL_NOPROC;
+
     if (isWaitExpired)
         return WOWCONV_MODAL_EXPIRED;
+
     return WOWCONV_MODAL_RUN;
 }
 
@@ -351,8 +369,10 @@ static INT WowConvClamp16(long value)
 {
     if (value >  WOWCONV_INT16_MAX)
         return  WOWCONV_INT16_MAX;
+
     if (value < WOWCONV_INT16_MIN)
         return WOWCONV_INT16_MIN;
+
     return (INT)value;
 }
 
@@ -364,6 +384,7 @@ static VOID WowConvAbc32To16(const long *abc32, PBYTE abc16)
 
     if (widthB > WOWCONV_UINT16_MAX)
         widthB = WOWCONV_UINT16_MAX;
+
     abc16[WOWCONV_ABC16_A] = (BYTE)(widthA & BYTE_MASK);
     abc16[WOWCONV_ABC16_A + 1] = (BYTE)((widthA >> BYTE_SHIFT) & BYTE_MASK);
     abc16[WOWCONV_ABC16_B] = (BYTE)(widthB & BYTE_MASK);
@@ -393,20 +414,29 @@ static unsigned long WowConvMetafileHeader(
 
     if (!bytes || length < WOWCONV_MF_HDR)
         return 0;
+
     type = (UINT)(bytes[0] | (bytes[1] << BYTE_SHIFT));
     headerWords  = (UINT)(bytes[WOWCONV_MF_HEADER_SIZE_FIELD] | (bytes[WOWCONV_MF_HEADER_SIZE_FIELD + 1] << BYTE_SHIFT));
+
     if ((type != WOWCONV_MF_TYPE_MEMORY && type != WOWCONV_MF_TYPE_DISK) || headerWords != WOWCONV_MF_HEADER_WORDS)
         return 0;
+
     metafileBytes = WowConvRead32(bytes + WOWCONV_MF_SIZE_FIELD);
+
     if (metafileBytes > WOWCONV_MF_SIZE_MAX / WOWCONV_BYTES_PER_WORD)
         return 0;
+
     metafileBytes *= WOWCONV_BYTES_PER_WORD;
+
     if (metafileBytes < WOWCONV_MF_HDR)
         return 0;                                           /* says it has no room for itself */
+
     if (objectCount)
         *objectCount = (UINT)(bytes[WOWCONV_MF_OBJECTS_FIELD] | (bytes[WOWCONV_MF_OBJECTS_FIELD + 1] << BYTE_SHIFT));
+
     if (recordsEnd)
         *recordsEnd  = (metafileBytes < length) ? metafileBytes : length;
+
     return WOWCONV_MF_HDR;
 }
 
@@ -424,13 +454,18 @@ static INT WowConvMetafileRecord(
 
     if (!metafile || offset >= recordsEnd || recordsEnd - offset < WOWCONV_MF_RECHDR)
         return 0;
+
     recordWords = WowConvRead32(metafile + offset);
+
     if (recordWords < WOWCONV_MF_RECORD_MIN_WORDS || recordWords > (recordsEnd - offset) / WOWCONV_BYTES_PER_WORD)
         return 0;
+
     if (recordBytes)
         *recordBytes = recordWords * WOWCONV_BYTES_PER_WORD;
+
     if (function)
         *function  = (UINT)(metafile[offset + WOWCONV_MF_FUNCTION_FIELD] | (metafile[offset + WOWCONV_MF_FUNCTION_FIELD + 1] << BYTE_SHIFT));
+
     return 1;
 }
 

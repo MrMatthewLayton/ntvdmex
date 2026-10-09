@@ -63,11 +63,15 @@ INT VddIdeInitialize(PVDD_BUS bus, PVOID context)
     /* [WARNING]: 3F7h IS NOT CLAIMED HERE -- the FDC owns it (DIR bit 7). See vdd_ide.h. */
     if (VddClaimPorts(bus, IDE_PRIMARY_COMMAND, IDE_PRIMARY_COMMAND + IDE_COMMAND_REGISTER, VddIdePortIn, VddIdePortOut, state))
         return IDE_FAILED;
+
     if (VddClaimPorts(bus, IDE_PRIMARY_CONTROL, IDE_PRIMARY_CONTROL,     VddIdePortIn, VddIdePortOut, state))
         return IDE_FAILED;
+
     if (VddClaimPorts(bus, IDE_SECONDARY_COMMAND, IDE_SECONDARY_COMMAND + IDE_COMMAND_REGISTER, VddIdePortIn, VddIdePortOut, state))
         return IDE_FAILED;
+
     if (VddClaimPorts(bus, IDE_SECONDARY_CONTROL, IDE_SECONDARY_CONTROL + IDE_DRIVE_ADDRESS, VddIdePortIn, VddIdePortOut, state))
         return IDE_FAILED;
+
     return IDE_OK;
 }

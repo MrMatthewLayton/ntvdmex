@@ -61,6 +61,7 @@ static INT g_Failures = 0;
 static VOID XmsTestCheck(BOOL passed, PCSTR description)
 {
     g_Checks++;
+
     if (passed)
     {
         printf("  PASS  %s\n", description);
@@ -326,9 +327,11 @@ INT main(VOID)
     /* T12: handle exhaustion --------------------------------------------- */
     {
         INT allocatedCount = 0;
+
         for (attempt = 0; attempt < DOS_XMS_MAX_HANDLES + XMS_TEST_EXTRA_ATTEMPTS; ++attempt)
         {
             WORD handle;
+
             if (DosXmsAllocate(&state, 0, &handle, &errorCode))
                 ++allocatedCount;
             else
@@ -338,6 +341,7 @@ INT main(VOID)
                 break;
             }
         }
+
         XmsTestCheck(allocatedCount == DOS_XMS_MAX_HANDLES,
                      "fn09: exactly XMS_MAX_HANDLES 0KB blocks allocatable");
     }

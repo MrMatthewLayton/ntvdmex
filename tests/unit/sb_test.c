@@ -67,8 +67,10 @@ static INT SbTestDspReset(VOID)
 {
     SbTestWrite(BASE + 0x6, 1);
     SbTestWrite(BASE + 0x6, 0);
+
     if (!(SbTestRead(BASE + 0xE) & 0x80))
         return 0;                                       /* no byte waiting -> no card */
+
     return SbTestRead(BASE + 0xA) == 0xAA;
 }
 
@@ -156,6 +158,7 @@ INT main(VOID)
     /* T5: single-cycle 8-bit DMA playback ---------------------------------- */
     for (index = 0; index < 256; ++index)
         g_GuestMemory[0x30000 + index] = (BYTE)index;                                     /* ramp */
+
     SbTestDmaProgram(0x30000, 256, 0);
     g_IrqCount = 0;
     SbTestWrite(BASE + 0xC, 0x14);
@@ -188,6 +191,7 @@ INT main(VOID)
     /* T7: auto-init keeps streaming and IRQs per block ---------------------- */
     for (index = 0; index < 64; ++index)
         g_GuestMemory[0x31000 + index] = 0x80;
+
     SbTestDmaProgram(0x31000, 64, 1);
     g_IrqCount = 0;
     SbTestWrite(BASE + 0xC, 0x48);
@@ -215,6 +219,7 @@ INT main(VOID)
         g_GuestMemory[0x32000 + index]     = 0x00;
         g_GuestMemory[0x32000 + index + 1] = 0x40;                 /* 0x4000 = +16384 */
     }
+
     SbTestDmaProgram(0x32000, 64, 0);
     g_Sb.Dma16 = 1;                                       /* point 16-bit at ch 1 */
     g_IrqCount = 0;
@@ -295,8 +300,10 @@ INT main(VOID)
      * dropped to IDLE so re-enabling resumed nothing.
      */
     {   UINT32 noDackBefore, status;
+
         for (index = 0; index < 64; ++index)
             g_GuestMemory[0x33000 + index] = (BYTE)index;
+
         SbTestDmaProgram(0x33000, 64, 1);
         g_IrqCount = 0;
         SbTestWrite(BASE + 0xC, 0x48);

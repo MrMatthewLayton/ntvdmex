@@ -187,31 +187,40 @@ static DWORD WINAPI AudioWaveThread(LPVOID parameter)
             Sleep((wave->FrameCount * MILLISECONDS_PER_SECOND) / (wave->SampleHz ? wave->SampleHz : AUDIO_WAVE_DEFAULT_HZ));
             continue;
         }
+
         /* How much of the queue has the driver already given back? Sampled BEFORE we
          * refill anything, so it is the true low-water mark of this pass. See the note
          * on `Starved` in audio_wave.h: waveOutWrite succeeding tells us nothing.
          */
         { UINT32 handedBack = 0;
+
           for (bufferIndex = 0; bufferIndex < wave->BufferCount; ++bufferIndex)
               if (AudioWaveHeader(wave, bufferIndex)->dwFlags & WHDR_DONE)
                   ++handedBack;
+
           if (handedBack > wave->DrainMax)
               wave->DrainMax = handedBack;
+
           if (handedBack >= wave->BufferCount)
               ++wave->Starved;
+
           wave->DrainHistogram[handedBack <= AUDIO_WAVE_BUFFERS ? handedBack : AUDIO_WAVE_BUFFERS]++; }
 
         for (bufferIndex = 0; bufferIndex < wave->BufferCount; ++bufferIndex)
         {
             PAUDIO_WAVE_HEADER header = AudioWaveHeader(wave, bufferIndex);
+
             if (!(header->dwFlags & WHDR_DONE))
                 continue;
+
             header->dwFlags &= ~WHDR_DONE;
             wave->Fill(wave->Context, wave->Buffers[bufferIndex], wave->FrameCount);
         AudioRecorderFeed(wave->Buffers[bufferIndex], wave->FrameCount * AUDIO_STEREO_CHANNELS);
+
             if (g_WaveOutWrite(wave->WaveOut, header, sizeof(AUDIO_WAVE_HEADER)) != 0)
                 wave->Underruns++;
         }
+
         /* Wake early and often: a full buffer is ~11.6 ms, so a 20 ms timeout could miss a
          * whole buffer's deadline if the completion event is late.
          */
@@ -221,9 +230,11 @@ static DWORD WINAPI AudioWaveThread(LPVOID parameter)
     if (!wave->IsSilent)
     {
         g_WaveOutReset(wave->WaveOut);
+
         for (bufferIndex = 0; bufferIndex < wave->BufferCount; ++bufferIndex)
             g_WaveOutUnprepareHeader(wave->WaveOut, AudioWaveHeader(wave, bufferIndex), sizeof(AUDIO_WAVE_HEADER));
     }
+
     return 0;
 }
 
@@ -252,14 +263,18 @@ static INT AudioWaveDirectSoundOpen(PAUDIO_WAVE wave, PCAUDIO_WAVE_FORMAT format
 
     if (!module)
         return 0;
+
     directSoundCreate = (PFN_DIRECT_SOUND_CREATE)GetProcAddress(module, AUDIO_EXPORT_DIRECT_SOUND_CREATE);
+
     if (!directSoundCreate || FAILED(directSoundCreate(NULL, &directSound, NULL)))
         return 0;
+
     if (FAILED(IDirectSound_SetCooperativeLevel(directSound, GetDesktopWindow(), DSSCL_NORMAL)))
     {
         IDirectSound_Release(directSound);
         return 0;
     }
+
     ZeroMemory(&waveFormat, sizeof waveFormat);
     waveFormat.wFormatTag = WAVE_FORMAT_PCM;
     waveFormat.nChannels = format->nChannels;
@@ -273,22 +288,28 @@ static INT AudioWaveDirectSoundOpen(PAUDIO_WAVE wave, PCAUDIO_WAVE_FORMAT format
     wave->DirectSoundBytes = wave->BufferCount * wave->FrameCount * AUDIO_STEREO_CHANNELS * (UINT32)sizeof(INT16);
     description.dwBufferBytes = wave->DirectSoundBytes;
     description.lpwfxFormat = &waveFormat;
+
     if (FAILED(IDirectSound_CreateSoundBuffer(directSound, &description, &buffer, NULL)))
     {
         IDirectSound_Release(directSound);
         return 0;
     }
+
     /* Start from silence; the thread fills ahead of the cursor from here. */
     if (SUCCEEDED(IDirectSoundBuffer_Lock(buffer, 0, wave->DirectSoundBytes, &part1, &length1, &part2, &length2, 0)))
     {
         ZeroMemory(part1, length1);
+
         if (part2)
             ZeroMemory(part2, length2);
+
         IDirectSoundBuffer_Unlock(buffer, part1, length1, part2, length2);
     }
+
     wave->DirectSound = directSound;
     wave->DirectSoundBuffer = buffer;
     wave->DirectSoundWritePosition = 0;
+
     if (FAILED(IDirectSoundBuffer_Play(buffer, 0, 0, DSBPLAY_LOOPING)))
     {
         IDirectSoundBuffer_Release(buffer);
@@ -296,6 +317,7 @@ static INT AudioWaveDirectSoundOpen(PAUDIO_WAVE wave, PCAUDIO_WAVE_FORMAT format
         wave->DirectSound = wave->DirectSoundBuffer = NULL;
         return 0;
     }
+
     return 1;
 }
 
@@ -307,25 +329,33 @@ static DWORD WINAPI AudioWaveDirectSoundThread(LPVOID parameter)
 
     if (!SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL))
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+
     while (wave->IsRunning)
     {
         DWORD playCursor = 0;
         DWORD writeCursor = 0;
         UINT32 ahead;
         UINT32 space;
+
         if (FAILED(IDirectSoundBuffer_GetCurrentPosition(buffer, &playCursor, &writeCursor)))
         {
             Sleep(AUDIO_WAVE_RETRY_MS);
             continue;
         }
+
         ahead = (wave->DirectSoundWritePosition + wave->DirectSoundBytes - playCursor) % wave->DirectSoundBytes;   /* queued, not played */
         space = wave->DirectSoundBytes - ahead;
+
         if (ahead < chunk)
             ++wave->Starved;                            /* the cursor caught up with us */
+
         {   UINT32 queuedBuffers = ahead / chunk, handedBack = wave->BufferCount - (queuedBuffers < wave->BufferCount ? queuedBuffers : wave->BufferCount);
+
             if (handedBack > wave->DrainMax)
                 wave->DrainMax = handedBack;
+
             wave->DrainHistogram[handedBack <= AUDIO_WAVE_BUFFERS ? handedBack : AUDIO_WAVE_BUFFERS]++; }
+
         while (space >= chunk)
         {
             PVOID part1;
@@ -334,20 +364,26 @@ static DWORD WINAPI AudioWaveDirectSoundThread(LPVOID parameter)
             DWORD length2;
             wave->Fill(wave->Context, wave->Buffers[0], wave->FrameCount);
             AudioRecorderFeed(wave->Buffers[0], wave->FrameCount * AUDIO_STEREO_CHANNELS);
+
             if (SUCCEEDED(IDirectSoundBuffer_Lock(buffer, wave->DirectSoundWritePosition, chunk, &part1, &length1, &part2, &length2, 0)))
             {
                 CopyMemory(part1, wave->Buffers[0], length1);
+
                 if (part2)
                     CopyMemory(part2, (BYTE *)wave->Buffers[0] + length1, length2);
+
                 IDirectSoundBuffer_Unlock(buffer, part1, length1, part2, length2);
             }
             else
                 wave->Underruns++;
+
             wave->DirectSoundWritePosition = (wave->DirectSoundWritePosition + chunk) % wave->DirectSoundBytes;
             space -= chunk;
         }
+
         Sleep(AUDIO_WAVE_DIRECT_SOUND_POLL_MS);
     }
+
     IDirectSoundBuffer_Stop(buffer);
     return 0;
 }
@@ -355,8 +391,10 @@ static DWORD WINAPI AudioWaveDirectSoundThread(LPVOID parameter)
 static INT AudioWaveBind(PAUDIO_WAVE wave)
 {
     wave->Module = LoadLibraryA(AUDIO_MODULE_WINMM);
+
     if (!wave->Module)
         return 0;
+
     g_WaveOutOpen       = (PFN_WAVE_OUT_OPEN) GetProcAddress(wave->Module, AUDIO_EXPORT_WAVE_OUT_OPEN);
     g_WaveOutPrepareHeader    = (PFN_WAVE_OUT_HEADER)  GetProcAddress(wave->Module, AUDIO_EXPORT_WAVE_OUT_PREPARE_HEADER);
     g_WaveOutUnprepareHeader  = (PFN_WAVE_OUT_HEADER)  GetProcAddress(wave->Module, AUDIO_EXPORT_WAVE_OUT_UNPREPARE_HEADER);
@@ -389,6 +427,7 @@ static VOID AudioWaveMidiOpen(PAUDIO_WAVE wave)
 
     if (!g_MidiOutOpen)
         return;
+
     if (wave->MidiChoice != MIDI_ROUTE_GM && g_MidiOutGetNumDevs && g_MidiOutGetDevCapsA)
     {
         static CHAR names[AUDIO_WAVE_MIDI_DEVICES_MAX][AUDIO_MIDI_NAME_LENGTH];
@@ -398,33 +437,43 @@ static VOID AudioWaveMidiOpen(PAUDIO_WAVE wave)
         INT pick;
         INT characterIndex;
         wave->MidiDeviceCount = deviceCount;
+
         if (deviceCount > AUDIO_WAVE_MIDI_DEVICES_MAX)
             deviceCount = AUDIO_WAVE_MIDI_DEVICES_MAX;
+
         for (deviceIndex = 0; deviceIndex < deviceCount; ++deviceIndex)
         {
             AUDIO_MIDI_OUT_CAPS capabilities;
             names[deviceIndex][0] = 0;
+
             if (g_MidiOutGetDevCapsA(deviceIndex, &capabilities, sizeof capabilities) == 0)
             {
                 for (characterIndex = 0; characterIndex < AUDIO_MIDI_NAME_CHARS && capabilities.szPname[characterIndex]; ++characterIndex)
                     names[deviceIndex][characterIndex] = capabilities.szPname[characterIndex];
+
                 names[deviceIndex][characterIndex] = 0;
             }
+
             namePointers[deviceIndex] = names[deviceIndex];
         }
+
         pick = MidiRoutePick(wave->MidiChoice, namePointers, (INT)deviceCount);
+
         if (pick >= 0)
         {
             device = (UINT)pick;
             wave->IsMidiExternal = 1;
         }
+
         if (device < deviceCount)
         {
             for (characterIndex = 0; characterIndex < AUDIO_MIDI_NAME_CHARS && names[device][characterIndex]; ++characterIndex)
                 wave->MidiName[characterIndex] = names[device][characterIndex];
+
             wave->MidiName[characterIndex] = 0;
         }
     }
+
     if (g_MidiOutOpen(&wave->MidiOut, device, 0, 0, 0) == 0)
         wave->MidiDevice = (INT)device;
     else
@@ -453,18 +502,25 @@ INT AudioWaveStart(PAUDIO_WAVE wave, UINT32 sampleHz, PAUDIO_WAVE_FILL_ROUTINE f
 
     for (byteIndex = 0; byteIndex < sizeof(*wave); ++byteIndex)
         bytes[byteIndex] = 0;
+
     if (!wantBuffers)
         wantBuffers   = AUDIO_WAVE_DEFAULT_BUFFERS;                     /* 0 = "leave it alone" */
+
     if (wantBuffers < AUDIO_WAVE_MIN_BUFFERS)
         wantBuffers = AUDIO_WAVE_MIN_BUFFERS;
+
     if (wantBuffers > AUDIO_WAVE_BUFFERS)
         wantBuffers = AUDIO_WAVE_BUFFERS;
+
     if (!wantFrames)
         wantFrames = AUDIO_WAVE_DEFAULT_FRAMES;
+
     if (wantFrames < AUDIO_WAVE_MIN_FRAMES)
         wantFrames = AUDIO_WAVE_MIN_FRAMES;
+
     if (wantFrames > AUDIO_WAVE_FRAMES)
         wantFrames = AUDIO_WAVE_FRAMES;
+
     wave->BufferCount   = wantBuffers;
     wave->FrameCount = wantFrames;
     wave->WantsDirectSound = wantsDirectSound;
@@ -487,6 +543,7 @@ INT AudioWaveStart(PAUDIO_WAVE wave, UINT32 sampleHz, PAUDIO_WAVE_FILL_ROUTINE f
         format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
         format.cbSize = 0;
         wave->Event = CreateEventA(NULL, FALSE, FALSE, NULL);
+
         if (wave->WantsDirectSound && AudioWaveDirectSoundOpen(wave, &format))       /* #234: DirectSound first... */
         {
             wave->IsUsingDirectSound = 1;
@@ -495,6 +552,7 @@ INT AudioWaveStart(PAUDIO_WAVE wave, UINT32 sampleHz, PAUDIO_WAVE_FILL_ROUTINE f
         else if (g_WaveOutOpen(&wave->WaveOut, WAVE_MAPPER, &format,  /* ...WinMM otherwise */
                           (DWORD_PTR)wave->Event, 0, CALLBACK_EVENT) == 0)
             wave->IsSilent = 0;
+
         /* [CAUTION]: ASK THE DRIVER WHAT ITS VOLUME IS. Every other counter here can read
          * perfect while the machine is silent, because Windows' own WAVE slider
          * attenuates after us. Read, never written -- see audio_wave.h.
@@ -502,23 +560,27 @@ INT AudioWaveStart(PAUDIO_WAVE wave, UINT32 sampleHz, PAUDIO_WAVE_FILL_ROUTINE f
         if (!wave->IsSilent && !wave->IsUsingDirectSound && g_WaveOutGetVolume)
         {
             DWORD volume = 0;
+
             if (g_WaveOutGetVolume(wave->WaveOut, &volume) == 0)
             {
                 wave->DeviceVolume = (UINT32)volume;
                 wave->IsDeviceVolumeKnown = 1;
             }
         }
+
         /* MIDI is optional and independent: XP's GS Wavetable synth is device 0. */
         AudioWaveMidiOpen(wave);            /* #136: or the device the setting names */
     }
 
     wave->IsRunning = 1;
     wave->Thread = CreateThread(NULL, 0, wave->IsUsingDirectSound ? AudioWaveDirectSoundThread : AudioWaveThread, wave, 0, NULL);
+
     if (!wave->Thread)
     {
         wave->IsRunning = 0;
         return 1;
     }
+
     return wave->IsSilent ? 1 : 0;
 }
 
@@ -526,41 +588,53 @@ VOID AudioWaveStop(PAUDIO_WAVE wave)
 {
     if (!wave->IsRunning)
         return;
+
     InterlockedExchange(&wave->IsRunning, 0);
+
     if (wave->Event)
         SetEvent(wave->Event);
+
     if (wave->Thread)
     {
         WaitForSingleObject(wave->Thread, AUDIO_WAVE_STOP_TIMEOUT_MS);
         CloseHandle(wave->Thread);
     }
+
     if (!wave->IsSilent && wave->WaveOut && g_WaveOutClose)
         g_WaveOutClose(wave->WaveOut);
+
     if (wave->DirectSoundBuffer)
     {
         IDirectSoundBuffer_Release((LPDIRECTSOUNDBUFFER)wave->DirectSoundBuffer);
         wave->DirectSoundBuffer = NULL;
     }
+
     if (wave->DirectSound)
     {
         IDirectSound_Release((LPDIRECTSOUND)wave->DirectSound);
         wave->DirectSound = NULL;
     }
+
     AudioWaveMidiSilence(wave);           /* #214: a held note must not outlive us */
     /* #136: midiOutReset (in the silence above) hands every queued SysEx buffer back,
      * and a prepared header must be unprepared before its device closes.
      */
     {   UINT slot;
+
         for (slot = 0; slot < AUDIO_WAVE_SYSEX_SLOTS; ++slot)
             if ((g_AudioWaveSysExHeaders[slot].dwFlags & AUDIO_WAVE_MHDR_PREPARED) && wave->MidiOut && g_MidiOutUnprepareHeader)
                 g_MidiOutUnprepareHeader(wave->MidiOut, &g_AudioWaveSysExHeaders[slot], sizeof g_AudioWaveSysExHeaders[slot]);
     }
+
     if (wave->MidiOut && g_MidiOutClose)
         g_MidiOutClose(wave->MidiOut);
+
     if (wave->Event)
         CloseHandle(wave->Event);
+
     if (wave->Module)
         FreeLibrary(wave->Module);
+
     wave->Thread = 0;
     wave->Event = 0;
     wave->WaveOut = 0;
@@ -582,43 +656,54 @@ VOID AudioWaveMidiLong(PAUDIO_WAVE wave, const BYTE *message, UINT32 length)
 
     if (!wave->MidiOut || !g_MidiOutLongMsg || !g_MidiOutPrepareHeader || !g_MidiOutUnprepareHeader)
         return;
+
     if (!length || length > MPU_SYSEX_MAX)
     {
         wave->SysExDropped++;
         return;
     }
+
     for (attempt = 0; attempt < AUDIO_WAVE_SYSEX_SLOTS; ++attempt)
     {
         slot = (g_AudioWaveSysExNext + attempt) % AUDIO_WAVE_SYSEX_SLOTS;
         header = &g_AudioWaveSysExHeaders[slot];
+
         if (header->dwFlags & AUDIO_WAVE_MHDR_PREPARED)
         {
             if (!(header->dwFlags & AUDIO_WAVE_MHDR_DONE))
                 continue;                                                      /* the driver still has it */
+
             g_MidiOutUnprepareHeader(wave->MidiOut, header, sizeof *header);
         }
+
         {   UINT32 byteIndex;
+
             for (byteIndex = 0; byteIndex < length; ++byteIndex)
                 g_AudioWaveSysExBuffers[slot][byteIndex] = (CHAR)message[byteIndex]; }
+
         ZeroMemory(header, sizeof *header);
         header->lpData = g_AudioWaveSysExBuffers[slot];
         header->dwBufferLength = length;
         header->dwBytesRecorded = length;
+
         if (g_MidiOutPrepareHeader(wave->MidiOut, header, sizeof *header) != 0)
         {
             wave->SysExDropped++;
             return;
         }
+
         if (g_MidiOutLongMsg(wave->MidiOut, header, sizeof *header) != 0)
         {
             g_MidiOutUnprepareHeader(wave->MidiOut, header, sizeof *header);
             wave->SysExDropped++;
             return;
         }
+
         g_AudioWaveSysExNext = (slot + 1) % AUDIO_WAVE_SYSEX_SLOTS;
         wave->SysExSent++;
         return;
     }
+
     wave->SysExDropped++;                                        /* every slot in flight */
 }
 
@@ -636,6 +721,7 @@ VOID AudioWaveMidiSilence(PAUDIO_WAVE wave)
 
     if (!wave->MidiOut || !g_MidiOutShortMsg)
         return;
+
     for (channel = 0; channel < AUDIO_MIDI_CHANNELS; ++channel)
     {
         g_MidiOutShortMsg(wave->MidiOut, AUDIO_MIDI_CONTROL_CHANGE | channel | (AUDIO_MIDI_CC_SUSTAIN  << AUDIO_MIDI_DATA1_SHIFT));    /* sustain 0 */
@@ -643,6 +729,7 @@ VOID AudioWaveMidiSilence(PAUDIO_WAVE wave)
         g_MidiOutShortMsg(wave->MidiOut, AUDIO_MIDI_CONTROL_CHANGE | channel | (AUDIO_MIDI_CC_ALL_NOTES_OFF << AUDIO_MIDI_DATA1_SHIFT));    /* notes off */
         g_MidiOutShortMsg(wave->MidiOut, AUDIO_MIDI_CONTROL_CHANGE | channel | (AUDIO_MIDI_CC_RESET_CONTROLLERS << AUDIO_MIDI_DATA1_SHIFT));    /* reset CCs */
     }
+
     if (g_MidiOutReset)
         g_MidiOutReset(wave->MidiOut);
 }

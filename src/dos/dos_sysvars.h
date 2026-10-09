@@ -314,11 +314,13 @@ static inline VOID DosDpbBuild(
 
     for (byteIndex = 0; byteIndex < DOS_DPB_LEN; ++byteIndex)
         dpb[byteIndex] = 0;
+
     while (remaining > 1)
     {
         remaining >>= 1;
         ++shift;
     }
+
     dpb[DOS_DPB_DRIVE] = (BYTE)drive;
     dpb[DOS_DPB_UNIT]  = (BYTE)drive;
     DosSysVarsWriteWord(dpb, DOS_DPB_SECTOR_SIZE, bytesPerSector);
@@ -362,16 +364,19 @@ static inline VOID DosCdsBuild(
 
     for (byteIndex = 0; byteIndex < DOS_CDS_LEN; ++byteIndex)
         cds[byteIndex] = 0;
+
     cds[DOS_CDS_PATH + 0] = (BYTE)('A' + drive);
     cds[DOS_CDS_PATH + 1] = ':';
     cds[DOS_CDS_PATH + 2] = '\\';
     DosSysVarsWriteWord(cds, DOS_CDS_FLAGS, flags);
+
     if (!flags)
         DosSysVarsWriteFarPointer(cds, DOS_CDS_DPB, DOS_CDS_NO_DPB, DOS_CDS_NO_DPB);
     else if (flags & DOS_CDS_FLAG_NETWORK)
         DosSysVarsWriteFarPointer(cds, DOS_CDS_DPB, DOS_CDS_REDIRECTED_DPB, DOS_CDS_REDIRECTED_DPB);
     else
         DosSysVarsWriteFarPointer(cds, DOS_CDS_DPB, dpbSegment, dpbOffset);
+
     DosSysVarsWriteWord(cds, DOS_CDS_UNKNOWN, DOS_CDS_UNKNOWN_FILL);
     DosSysVarsWriteWord(cds, DOS_CDS_UNKNOWN + 2, DOS_CDS_UNKNOWN_FILL);
     DosSysVarsWriteWord(cds, DOS_CDS_SLASH, DOS_CDS_ROOT_SLASH_INDEX);              /* "A:\" -- the backslash is at index 2 */
@@ -392,6 +397,7 @@ static inline VOID DosDeviceHeaderBuild(
     DosSysVarsWriteWord(header, DOS_DEVICE_HEADER_ATTRIBUTE, attribute);
     DosSysVarsWriteWord(header, DOS_DEVICE_HEADER_STRATEGY, strategyEntry);
     DosSysVarsWriteWord(header, DOS_DEVICE_HEADER_INTERRUPT, interruptEntry);
+
     for (characterIndex = 0; characterIndex < DOS_DEVICE_NAME_LEN; ++characterIndex)
         header[DOS_DEVICE_HEADER_NAME + characterIndex] = (BYTE)name[characterIndex];
 }
@@ -425,8 +431,10 @@ static inline VOID DosDeviceChainBuild(
         0xCB,                                            /* DOS_DEVICE_STUB_RETF */
     };
     UINT index;
+
     for (index = 0; index < DOS_DEVICE_AREA_LEN; ++index)
         area[index] = 0;
+
     for (index = 0; index < DOS_DEVICE_COUNT; ++index)
     {
         BOOL isLast = (index + 1 == DOS_DEVICE_COUNT);
@@ -435,7 +443,9 @@ static inline VOID DosDeviceChainBuild(
                              isLast ? DOS_CHAIN_END : DOS_DEVICE_OFFSET(index + 1), devices[index].Attribute,
                              DOS_DEVICE_STUB_UNKNOWN, DOS_DEVICE_STUB_RETF, devices[index].Name);
     }
+
     area[DOS_DEVICE_OFFSET(DOS_DEVICE_BLOCK) + DOS_DEVICE_HEADER_NAME] = (BYTE)units;
+
     for (index = 0; index < sizeof stubs; ++index)
         area[DOS_DEVICE_STUB_UNKNOWN + index] = stubs[index];
 }
@@ -445,6 +455,7 @@ static inline VOID DosNulStubBuild(_Out_writes_bytes_(DOS_NULSTUB_LEN) PBYTE stu
     static const BYTE stubBytes[DOS_NULSTUB_LEN] =
         { 0x26, 0xC7, 0x47, 0x03, 0x00, 0x01, 0xCB, 0xCB };
     UINT index;
+
     for (index = 0; index < DOS_NULSTUB_LEN; ++index)
         stub[index] = stubBytes[index];
 }

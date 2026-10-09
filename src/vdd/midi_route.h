@@ -56,19 +56,24 @@ static inline INT MidiRouteHas(_In_opt_ PCSTR haystack, _In_opt_ PCSTR needle)
 
     if (!haystack || !needle || !needle[0])
         return 0;
+
     for (start = 0; haystack[start]; ++start)
     {
         for (offset = 0; needle[offset]; ++offset)
         {
             CHAR character = haystack[start + offset];
+
             if (character >= 'a' && character <= 'z')
                 character = (CHAR)(character - MIDI_ROUTE_UPPER_CASE_OFFSET);
+
             if (character != needle[offset])
                 break;
         }
+
         if (!needle[offset])
             return 1;
     }
+
     return 0;
 }
 
@@ -87,16 +92,19 @@ static inline INT MidiRoutePick(
     const PCSTR *wanted;
     INT deviceIndex;
     INT nameIndex;
+
     if (choice == MIDI_ROUTE_MT32)
         wanted = mt32Names;
     else if (choice == MIDI_ROUTE_SF2)
         wanted = soundFontNames;
     else
         return 0;
+
     for (deviceIndex = 0; deviceIndex < deviceCount; ++deviceIndex)
         for (nameIndex = 0; wanted[nameIndex]; ++nameIndex)
             if (MidiRouteHas(names[deviceIndex], wanted[nameIndex]))
                 return deviceIndex;
+
     return -1;
 }
 

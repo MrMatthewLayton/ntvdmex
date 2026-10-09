@@ -456,6 +456,7 @@ VOID WowLogFlush(PSTR base, PSTR *logCursor)
         *logCursor = base;
         return;
     }
+
     if (g_WowFoldMute && end > base)
     {
         /* [CAUTION]: KEEP THE VERDICT LINE. DROPPING IT WOULD BREAK THE GATE (Importance = 2):
@@ -470,8 +471,10 @@ VOID WowLogFlush(PSTR base, PSTR *logCursor)
          * a ~1 KB block, and it leaves every count in the log exact.
          */
         PSTR lineStart = end - 1;
+
         while (lineStart > base && (lineStart[-1] != '\n'))
             --lineStart;
+
         /* `ls` is now the start of the final line. If the block is one line
          * already there is nothing to save, and emitting it is correct.
          */
@@ -480,6 +483,7 @@ VOID WowLogFlush(PSTR base, PSTR *logCursor)
         *logCursor = base;
         return;
     }
+
     LogAppend(LOG_PATH, base, end); SerialOut(base, end); *logCursor = base;
 }
 
@@ -492,16 +496,22 @@ INT WowCommOpen(PCSTR device)
      */
     if (!device)
         return WOWUSER_COMM_FAILED;                                                 /* IE_BADID */
+
     if ((device[0] != 'C' && device[0] != 'c') || (device[1] != 'O' && device[1] != 'o')
         || (device[2] != 'M' && device[2] != 'm'))
         return WOWUSER_COMM_FAILED;
+
     index = device[3] - '1';
+
     if (index < 0 || index >= WOWCOMM_MAX)
         return WOWUSER_COMM_FAILED;                                                  /* no such port */
+
     if (!VddCommIsFitted(&g_Comm, index))
         return WOWUSER_COMM_FAILED;
+
     if (g_WowCommOpen[index])
         return WOWUSER_COMM_ALREADY_OPEN;                                                    /* IE_OPEN */
+
     g_WowCommOpen[index] = 1;
     g_WowCommEvent[index] = 0;
     return index;                                                 /* the comm id */
@@ -516,6 +526,7 @@ INT WowCommClose(INT port)
 {
     if (!WowCommValid(port))
         return WOWUSER_COMM_FAILED;
+
     g_WowCommOpen[port] = 0;
     return 0;
 }
@@ -526,6 +537,7 @@ INT WowCommRead(INT port, BYTE *buffer, INT count)
 
     if (!WowCommValid(port))
         return WOWUSER_COMM_FAILED;
+
     /* Straight off the same receive ring the guest would see through RBR. */
     while (got < count && g_Comm.Ports[port].ReceiveLength)
     {
@@ -533,6 +545,7 @@ INT WowCommRead(INT port, BYTE *buffer, INT count)
         VddBusIo(&g_Bus, (WORD)(g_Comm.Ports[port].BasePort + COMM_RBR), 1, VDD_IO_IN, &value);
         buffer[got++] = (BYTE)value;
     }
+
     return got;
 }
 
@@ -542,11 +555,13 @@ INT WowCommWrite(INT port, const BYTE *buffer, INT count)
 
     if (!WowCommValid(port))
         return WOWUSER_COMM_FAILED;
+
     for (index = 0; index < count; ++index)
     {
         UINT32 value = buffer[index];
         VddBusIo(&g_Bus, (WORD)(g_Comm.Ports[port].BasePort + COMM_RBR), 1, VDD_IO_OUT, &value);
     }
+
     return count;
 }
 
@@ -565,6 +580,7 @@ static VOID WowCommMcr(INT port, UINT set, UINT clear)
 
     if (!WowCommValid(port))
         return;
+
     VddBusIo(&g_Bus, (WORD)(g_Comm.Ports[port].BasePort + COMM_MCR), 1, VDD_IO_IN, &value);
     value = (value | set) & ~clear;
     VddBusIo(&g_Bus, (WORD)(g_Comm.Ports[port].BasePort + COMM_MCR), 1, VDD_IO_OUT, &value);
@@ -596,11 +612,14 @@ INT LaunchIsWow(PCSTR command)
     {
         if ((cursor[0] == '-' || cursor[0] == '/') && cursor[1] == 'w' && (cursor[2] == 0 || cursor[2] == ' '))
             return 1;
+
         if (*cursor == '"')
         {
             ++cursor;
+
             while (*cursor && *cursor != '"')
                 ++cursor;
+
             if (*cursor)
                 ++cursor;
         }
@@ -609,8 +628,10 @@ INT LaunchIsWow(PCSTR command)
             while (*cursor && *cursor != ' ')
                 ++cursor;
         }
+
         while (*cursor == ' ') ++cursor;
     }
+
     return 0;
 }
 
@@ -627,10 +648,12 @@ INT WowModuleOfSelector(WORD selector)
 
     if (!selector)
         return -1;
+
     for (module = 0; module < g_WowModuleCount; ++module)
         for (segment = 0; segment < (INT)g_WowModule[module].SegmentCount; ++segment)
             if (g_WowModule[module].Segments[segment].Selector == selector)
                 return module;
+
     return -1;
 }
 
@@ -699,9 +722,12 @@ INT WowKernel2Stub(WORD thunkId, WORD returnStub)
 
     if (g_WowModuleCount < 1 || !g_WowImage[0] || g_WowModule[0].SegmentCount < 2)
         return 0;
+
     segment = &g_WowModule[0].Segments[1];
+
     if (!segment->Sector || returnStub < WOW_K2_STUB_LENGTH || (DWORD)returnStub > segment->Length)
         return 0;
+
     image = g_WowImage[0] + segment->FileOffset;
     offset   = (DWORD)returnStub - WOW_K2_STUB_LENGTH;
     return image[offset] == X86_OP_PUSH_IMM
@@ -715,6 +741,7 @@ WORD WowHostAllocate(WORD paras)
 
     if (!g_WowPoolSegment || g_WowPoolNext + paras > WOW_HOSTPOOL_PARAS)
         return 0;
+
     segment = (WORD)(g_WowPoolSegment + g_WowPoolNext);
     g_WowPoolNext = (WORD)(g_WowPoolNext + paras);
     return segment;
@@ -743,8 +770,10 @@ PSTR WowPspEnvironmentCheck(PSTR cursor, PCSTR where)
         DWORD linear = DpmiSelectorBase(g_WowPspSelector[index]);
         const volatile BYTE *psp = (const volatile BYTE *)(ULONG_PTR)linear;
         WORD now;
+
         if (!linear || !HostReadable((const VOID *)psp, DOS_PSP_ENVIRONMENT + sizeof(WORD)))
             continue;
+
         if (linear != g_WowPspLinear[index])
         {
             cursor = LogPut(cursor, "PSPENV REBASED: sel 0x"); cursor = LogHex(cursor, g_WowPspSelector[index]);
@@ -753,15 +782,19 @@ PSTR WowPspEnvironmentCheck(PSTR cursor, PCSTR where)
             cursor = LogPut(cursor, " (the PSP we built is at the OLD address)\r\n");
             g_WowPspLinear[index] = linear;
         }
+
         now = (WORD)(psp[DOS_PSP_ENVIRONMENT] | (psp[DOS_PSP_ENVIRONMENT + 1] << BYTE_SHIFT));
+
         if (g_WowPspEnvironment[index] == now)
             continue;
+
         cursor = LogPut(cursor, "PSPENV CHANGED: sel 0x"); cursor = LogHex(cursor, g_WowPspSelector[index]);
         cursor = LogPut(cursor, " +0x2c 0x"); cursor = LogHex(cursor, g_WowPspEnvironment[index]);
         cursor = LogPut(cursor, " -> 0x"); cursor = LogHex(cursor, now);
         cursor = LogPut(cursor, " (seen at "); cursor = LogPut(cursor, where); cursor = LogPut(cursor, ")\r\n");
         g_WowPspEnvironment[index] = now;
     }
+
     return cursor;
 }
 
@@ -775,16 +808,20 @@ static INT WowArgumentA(PCSTR command, PSTR out, INT cap)
     INT index = 0;
 
     out[0] = 0;
+
     while (*cursor)
     {
         if ((cursor[0] == '-' || cursor[0] == '/') && cursor[1] == 'a' && (cursor[2] == 0 || cursor[2] == ' '))
         {
             cursor += 2;
+
             while (*cursor == ' ')
                 ++cursor;
+
             if (*cursor == '"')
             {
                 ++cursor;
+
                 while (*cursor && *cursor != '"' && index < cap - 1)
                     out[index++] = *cursor++;
             }
@@ -793,14 +830,18 @@ static INT WowArgumentA(PCSTR command, PSTR out, INT cap)
                 while (*cursor && *cursor != ' '  && index < cap - 1)
                     out[index++] = *cursor++;
             }
+
             out[index] = 0;
             return index ? 0 : -1;
         }
+
         if (*cursor == '"')
         {
             ++cursor;
+
             while (*cursor && *cursor != '"')
                 ++cursor;
+
             if (*cursor)
                 ++cursor;
         }
@@ -809,8 +850,10 @@ static INT WowArgumentA(PCSTR command, PSTR out, INT cap)
             while (*cursor && *cursor != ' ')
                 ++cursor;
         }
+
         while (*cursor == ' ') ++cursor;
     }
+
     return -1;
 }
 
@@ -825,11 +868,14 @@ static VOID WowSibling(PCSTR path, PCSTR leaf, PSTR out, INT cap)
     for (index = 0; path[index] && index < cap - 1; ++index)
     {
         out[index] = path[index];
+
         if (path[index] == '\\' || path[index] == '/')
             cut = index + 1;
     }
+
     for (index = 0; leaf[index] && cut < cap - 1; ++index)
         out[cut++] = leaf[index];
+
     out[cut] = 0;
 }
 
@@ -850,9 +896,11 @@ static INT WowLoadOne(PCSTR path)
 
     if (slot >= WOW_MAX_MOD)
         return -1;
+
     module = &g_WowModule[slot];
 
     file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+
     if (file == INVALID_HANDLE_VALUE)
     {
         cursor = message; cursor = LogPut(cursor, "WOWTRY: cannot open "); cursor = LogPut(cursor, path);
@@ -861,8 +909,10 @@ static INT WowLoadOne(PCSTR path)
         LogAppend(LOG_PATH, message, cursor);
         return -1;
     }
+
     size = GetFileSize(file, NULL);
     image = (BYTE *)VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+
     if (!image || !ReadFile(file, image, size, &got, NULL) || got != size)
     {
         CloseHandle(file);
@@ -871,6 +921,7 @@ static INT WowLoadOne(PCSTR path)
         LogAppend(LOG_PATH, message, cursor);
         return -1;
     }
+
     CloseHandle(file);
 
     if (NeParse(module, image, size) != 0)
@@ -881,6 +932,7 @@ static INT WowLoadOne(PCSTR path)
         LogAppend(LOG_PATH, message, cursor);
         return -1;
     }
+
     if (NeOwnName(module, g_WowName[slot], sizeof g_WowName[slot]) != 0)
         g_WowName[slot][0] = 0;
 
@@ -908,16 +960,19 @@ static INT WowLoadOne(PCSTR path)
         segment->Memory = (BYTE *)VirtualAlloc(NULL, need, MEM_COMMIT | MEM_RESERVE,
                                          PAGE_READWRITE);
         segment->Selector = 0;                          /* NO selector yet -- phase 2 assigns it */
+
         if (!segment->Memory)
         {
             cursor = message; cursor = LogPut(cursor, "WOWTRY: seg alloc failed\r\n");
             LogAppend(LOG_PATH, message, cursor);
             return -1;
         }
+
         if (segment->Sector)
             for (byteIndex = 0; byteIndex < segment->Length; ++byteIndex)
                 segment->Memory[byteIndex] = image[segment->FileOffset + byteIndex];
     }
+
     g_WowImage[slot] = image;
     ++g_WowModuleCount;
     return slot;
@@ -964,16 +1019,21 @@ VOID WowProbeLoad(PCSTR command)
         LogAppend(LOG_PATH, message, cursor);
         return;
     }
+
     {   INT length = 0;                       /* keep it: krnl386 needs its own path */
+
         while (path[length] && length < (INT)sizeof g_WowKernelPath - 1)
         {
             g_WowKernelPath[length] = path[length];
             ++length;
         }
+
         g_WowKernelPath[length] = 0;
     }
+
     if (WowLoadOne(path) < 0)
         return;
+
     for (index = 0; index < sizeof sibling / sizeof sibling[0]; ++index)
     {
         WowSibling(path, sibling[index], siblingPath, sizeof siblingPath);
@@ -1033,11 +1093,15 @@ WORD WowCallbackSelector(VOID)
 
     if (g_WowCallbackSelector)
         return g_WowCallbackSelector;
+
     if (!g_WowCallbackSegment)
         return 0;
+
     index = DpmiHostIndex();       /* host-private: the guest returns THROUGH this */
+
     if (index < 0)
         return 0;
+
     g_Ldt[index].Base   = g_WowCallbackLinear;
     g_Ldt[index].Limit  = WOW_CALLBACK_STUB_LIMIT;
     g_Ldt[index].Access = DPMI_ACCESS_CODE;                /* present, DPL3, code, readable */
@@ -1080,6 +1144,7 @@ VOID WowProbeLdtMatrix(PCSTR tag)
     CHAR message[300];
     CHAR *cursor;
     SIZE_T caseIndex;
+
     for (caseIndex = 0; caseIndex < sizeof cases / sizeof cases[0]; ++caseIndex)
     {
         DWORD low;
@@ -1119,6 +1184,7 @@ static DWORD WowFindLdtBase(VOID)
 
     if (g_WowLdtBase)
         return g_WowLdtBase;
+
     if (g_LdtNext + WOW_LDT_PROBES >= DPMI_LDT_MAX)
         return 0;
 
@@ -1165,6 +1231,7 @@ static DWORD WowFindLdtBase(VOID)
         cursor = LogPut(cursor, " | idx 0x"); cursor = LogHex(cursor, (DWORD)index2);
         cursor = LogPut(cursor, isValid2 ? " LAR ok ar=0x" : " LAR FAILED ar=0x"); cursor = LogHex(cursor, accessRights2);
         cursor = LogPut(cursor, "\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
+
         if (!isValid1 || !isValid2)
         {
             cursor = message; cursor = LogPut(cursor, "WOWLDT: a probe did NOT install -- search skipped, a "
@@ -1181,22 +1248,29 @@ static DWORD WowFindLdtBase(VOID)
             && (protection == PAGE_READONLY || protection == PAGE_READWRITE
                 || protection == PAGE_WRITECOPY || protection == PAGE_EXECUTE_READ
                 || protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY);
+
         if (readable)
         {
             DWORD regionBase = (DWORD)(ULONG_PTR)memoryInfo.BaseAddress;
             DWORD regionSize = (DWORD)memoryInfo.RegionSize;
             DWORD offset;
+
             for (offset = 0; offset + X86_DESCRIPTOR_SIZE <= regionSize; offset += X86_DESCRIPTOR_SIZE)            /* descriptors are 8-aligned */
             {
                 DWORD cand = regionBase + offset;
+
                 if (!WowLdtPeek(cand, low1, high1))
                     continue;
+
                 {   DWORD tableBase = cand - (DWORD)index1 * X86_DESCRIPTOR_SIZE;
                     DWORD other = tableBase + (DWORD)index2 * X86_DESCRIPTOR_SIZE;
+
                     if (other < regionBase || other + X86_DESCRIPTOR_SIZE > regionBase + regionSize)
                         continue;                                                                                /* same region only */
+
                     if (!WowLdtPeek(other, low2, high2))
                         continue;                                    /* one hit is chance */
+
                     g_WowLdtBase = tableBase;
                     cursor = message;
                     cursor = LogPut(cursor, "WOWLDT: descriptor table FOUND at linear 0x");
@@ -1210,10 +1284,13 @@ static DWORD WowFindLdtBase(VOID)
                 }
             }
         }
+
         address = (BYTE *)memoryInfo.BaseAddress + memoryInfo.RegionSize;
+
         if ((DWORD)(ULONG_PTR)address >= NT_USER_SPACE_END_U)
             break;
     }
+
     cursor = message; cursor = LogPut(cursor, "WOWLDT: descriptor table NOT in our own address space "
                        "(probes verified installed) -- a real LDT window is not "
                        "available this way\r\n");
@@ -1375,8 +1452,10 @@ INT WowPlaceV86(
      * memory belongs below the guest's, not in the middle of it.
      */
     {   WORD hostPoolSegment = 0, hostPoolMaximum = 0;
+
         if (DosMcbAllocate(NULL, machine->FirstMcb, WOW_HOSTPOOL_PARAS, &hostPoolSegment, &hostPoolMaximum) == 0 && hostPoolSegment)
             g_WowPoolSegment = hostPoolSegment;
+
         cursor = message; cursor = LogPut(cursor, "WOWV86: host pool reserved at para 0x");
         cursor = LogHex(cursor, g_WowPoolSegment); cursor = LogPut(cursor, " size 0x");
         cursor = LogHex(cursor, (DWORD)WOW_HOSTPOOL_PARAS);
@@ -1398,6 +1477,7 @@ INT WowPlaceV86(
         volatile BYTE *sysVars = (volatile BYTE *)(ULONG_PTR)
                             (((DWORD)DOS_SYSVARS_SEG << PARAGRAPH_SHIFT) + DOS_SYSVARS_OFF);
         cursor = message; cursor = LogPut(cursor, "WOWV86: SFT ");
+
         if (!sft)
         {
             cursor = LogPut(cursor, "NOT ALLOCATED -- host pool exhausted; krnl386 will spin on "
@@ -1407,8 +1487,10 @@ INT WowPlaceV86(
         {
             volatile BYTE *sftBlock = (volatile BYTE *)(ULONG_PTR)((DWORD)sft << PARAGRAPH_SHIFT);
             UINT byteIndex;
+
             for (byteIndex = 0; byteIndex < (UINT)DOS_SFT_BYTES; ++byteIndex)
                 sftBlock[byteIndex] = 0;
+
             *(volatile WORD *)(sftBlock + DOS_SFT_NEXT_OFFSET) = DOS_SFT_LAST;              /* next offset: last block */
             *(volatile WORD *)(sftBlock + DOS_SFT_NEXT_SEGMENT) = DOS_SFT_LAST;              /* next segment */
             *(volatile WORD *)(sftBlock + DOS_SFT_COUNT) = DOS_SFT_ENTRIES;     /* entries in this block */
@@ -1418,14 +1500,17 @@ INT WowPlaceV86(
             cursor = LogPut(cursor, ":0000, "); cursor = LogHex(cursor, (DWORD)DOS_SFT_ENTRIES);
             cursor = LogPut(cursor, " entries, next=FFFF:FFFF -> SysVars+4\r\n");
         }
+
         LogAppend(LDTLOG_PATH, message, cursor);
     }
     {   WORD transferSegment = 0, transferMaximum = 0;
+
         if (DosMcbAllocate(NULL, machine->FirstMcb, PM_TRANSFER_PARAGRAPHS, &transferSegment, &transferMaximum) == 0 && transferSegment)
         {
             g_PmTransferSegment = transferSegment;
             g_PmTransferParagraphs = PM_TRANSFER_PARAGRAPHS;
         }
+
         cursor = message;
         cursor = LogPut(cursor, "WOWV86: PM->V86 transfer buffer at para 0x"); cursor = LogHex(cursor, g_PmTransferSegment);
         cursor = LogPut(cursor, " (0x"); cursor = LogHex(cursor, (DWORD)g_PmTransferParagraphs * PARAGRAPH_SIZE_U);
@@ -1442,8 +1527,10 @@ INT WowPlaceV86(
      * a wrong filename somewhere far from here. One paragraph, one purpose.
      */
     {   WORD pathSegment = 0, pathMaximum = 0;
+
         if (DosMcbAllocate(NULL, machine->FirstMcb, WOW_PATH_PARAS, &pathSegment, &pathMaximum) == 0 && pathSegment)
             g_WowPathSegment = pathSegment;
+
         cursor = message;
         cursor = LogPut(cursor, "WOWV86: module-path scratch at para 0x"); cursor = LogHex(cursor, g_WowPathSegment);
         cursor = LogPut(cursor, " (0x200 bytes; largest free was 0x");
@@ -1457,8 +1544,10 @@ INT WowPlaceV86(
      * whole life, and both buffers above are reused on the very next call.
      */
     {   WORD environmentSegment = 0, environmentMaximum = 0;
+
         if (DosMcbAllocate(NULL, machine->FirstMcb, WOW_ENV_PARAS, &environmentSegment, &environmentMaximum) == 0 && environmentSegment)
             g_WowEnvironmentSegment = environmentSegment;
+
         cursor = message;
         cursor = LogPut(cursor, "WOWV86: task-environment block at para 0x"); cursor = LogHex(cursor, g_WowEnvironmentSegment);
         cursor = LogPut(cursor, " (0x"); cursor = LogHex(cursor, (DWORD)WOW_ENV_PARAS * PARAGRAPH_SIZE_U);
@@ -1480,6 +1569,7 @@ INT WowPlaceV86(
      * in, so it is built at the first callback and cached.
      */
     {   WORD callStubSegment = 0, callStubMaximum = 0;
+
         if (DosMcbAllocate(NULL, machine->FirstMcb, 1, &callStubSegment, &callStubMaximum) == 0 && callStubSegment)
         {
             volatile BYTE *callStub = (volatile BYTE *)(ULONG_PTR)((DWORD)callStubSegment << PARAGRAPH_SHIFT);
@@ -1495,6 +1585,7 @@ INT WowPlaceV86(
              */
             callStub[WOWCALL_RETF_OFF] = WOWCALL_RETF_BYTE;
         }
+
         cursor = message;
         cursor = LogPut(cursor, "WOWV86: 16-bit callback return stub at para 0x");
         cursor = LogHex(cursor, g_WowCallbackSegment);
@@ -1518,13 +1609,16 @@ INT WowPlaceV86(
         if (neSegment->Sector && (neSegment->Flags & NE_SEG_RELOCS))
         {
             UINT32 relocationOffset = neSegment->FileOffset + neSegment->Length;
+
             if (relocationOffset + NE_RELOC_COUNT_SIZE <= module->ImageLength)
             {
                 UINT32 relocationBytes = NE_RELOC_COUNT_SIZE + (UINT32)(image[relocationOffset] | (image[relocationOffset + 1] << BYTE_SHIFT)) * NE_RELOC_SIZE;
+
                 if (neSegment->Length + relocationBytes > need)
                     need = neSegment->Length + relocationBytes;
             }
         }
+
         /* DGROUP IS BIGGER THAN THE SEGMENT IN THE FILE:
          * For the automatic data segment a Win16 loader allocates the segment's
          * length PLUS ne_heap PLUS ne_stack -- the local heap and stack live above
@@ -1537,8 +1631,10 @@ INT WowPlaceV86(
         if (module->AutoData && index == (INT)module->AutoData - 1)
         {
             UINT32 dgroupSize = need + module->Heap + module->Stack;
+
             if (dgroupSize > X86_SEGMENT_SIZE_U)
                 dgroupSize = X86_SEGMENT_SIZE_U;
+
             if (dgroupSize > need)
             {
                 cursor = message;
@@ -1551,6 +1647,7 @@ INT WowPlaceV86(
                 need = dgroupSize;
             }
         }
+
         if (DosMcbAllocate(NULL, machine->FirstMcb, (WORD)((need + PARAGRAPH_LAST_BYTE) >> PARAGRAPH_SHIFT), &segment, &maximum) || !segment)
         {
             cursor = message; cursor = LogPut(cursor, "WOWV86: no conventional memory for seg ");
@@ -1558,12 +1655,16 @@ INT WowPlaceV86(
             cursor = LogPut(cursor, " paras\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
             return -1;
         }
+
         destination = (volatile BYTE *)(ULONG_PTR)((DWORD)segment << PARAGRAPH_SHIFT);
+
         for (byteIndex = 0; byteIndex < need; ++byteIndex)
             destination[byteIndex] = 0;
+
         if (neSegment->Sector)
             for (byteIndex = 0; byteIndex < neSegment->Length; ++byteIndex)
                 destination[byteIndex] = image[neSegment->FileOffset + byteIndex];
+
         /* AND THE RELOCATION RECORDS, WHICH LIVE AFTER THE SEGMENT DATA (Importance = 1):
          * An NE segment with NE_SEG_RELOCS is followed in the FILE by a WORD count
          * and that many 8-byte records. A conventional loader applies them and
@@ -1580,13 +1681,16 @@ INT WowPlaceV86(
         if (neSegment->Sector && (neSegment->Flags & NE_SEG_RELOCS))
         {
             UINT32 relocationOffset = neSegment->FileOffset + neSegment->Length;
+
             if (relocationOffset + NE_RELOC_COUNT_SIZE <= module->ImageLength)
             {
                 UINT32 relocationCount = (UINT32)(image[relocationOffset] | (image[relocationOffset + 1] << BYTE_SHIFT));
                 UINT32 relocationBytes   = NE_RELOC_COUNT_SIZE + relocationCount * NE_RELOC_SIZE;
+
                 if (relocationOffset + relocationBytes <= module->ImageLength && neSegment->Length + relocationBytes <= need)
                     for (byteIndex = 0; byteIndex < relocationBytes; ++byteIndex)
                         destination[neSegment->Length + byteIndex] = image[relocationOffset + byteIndex];
+
                 cursor = message;
                 cursor = LogPut(cursor, "WOWV86:   + "); cursor = LogHex(cursor, relocationCount);
                 cursor = LogPut(cursor, " relocation records ("); cursor = LogHex(cursor, relocationBytes);
@@ -1596,6 +1700,7 @@ INT WowPlaceV86(
                 LogAppend(LDTLOG_PATH, message, cursor);
             }
         }
+
         neSegment->Memory = (BYTE *)(ULONG_PTR)((DWORD)segment << PARAGRAPH_SHIFT);   /* relocate in place */
         neSegment->Selector = segment;                                        /* a PARAGRAPH now */
 
@@ -1682,6 +1787,7 @@ INT WowPlaceV86(
     {   WORD fillerSegment = 0, fillerMaximum = 0, want;
         (VOID)DosMcbAllocate(NULL, machine->FirstMcb, DOS_MCB_LARGEST_REQUEST, &fillerSegment, &fillerMaximum);   /* ask -> largest free */
         want = (WORD)(WOW_STACK_PARAS + windowParas);
+
         if (fillerMaximum > want + WOW_FILLER_SLACK_PARAS)
         {
             /* -1 for the MCB header DOS puts in front of the second allocation: without
@@ -1689,6 +1795,7 @@ INT WowPlaceV86(
              * allocation fails outright ("no memory for the stack + header image").
              */
             WORD fill = (WORD)(fillerMaximum - want - 1);
+
             if (DosMcbAllocate(NULL, machine->FirstMcb, fill, &fillerSegment, &fillerMaximum) == 0 && fillerSegment)
             {
                 cursor = message; cursor = LogPut(cursor, "WOWV86: filler 0x"); cursor = LogHex(cursor, fill);
@@ -1701,18 +1808,22 @@ INT WowPlaceV86(
         }
         else
             fillerSegment = 0;
+
         if (DosMcbAllocate(NULL, machine->FirstMcb, (WORD)(WOW_STACK_PARAS + windowParas),
                       &stackBlockSegment, &stackBlockMaximum) || !stackBlockSegment)
             stackBlockSegment = 0;
+
         if (fillerSegment)
             DosMcbFree(NULL, fillerSegment);                         /* give the low region back */
     }
+
     if (!stackBlockSegment)
     {
         cursor = message; cursor = LogPut(cursor, "WOWV86: no memory for the stack + header image\r\n");
         LogAppend(LDTLOG_PATH, message, cursor);
         return -1;
     }
+
     /* ZERO IT. A loader hands out clean memory, and here it is load-bearing rather
      * than tidy: krnl386's scratch selector starts inside this block, and whatever
      * was left in it is read back as structured data. Uninitialised memory that gets
@@ -1720,6 +1831,7 @@ INT WowPlaceV86(
      */
     {   volatile BYTE *stackBytes = (volatile BYTE *)(ULONG_PTR)((DWORD)stackBlockSegment << PARAGRAPH_SHIFT);
         DWORD byteIndex;
+
         for (byteIndex = 0; byteIndex < (DWORD)WOW_STACK_PARAS * PARAGRAPH_SIZE_U; ++byteIndex)
             stackBytes[byteIndex] = 0; }
 
@@ -1756,6 +1868,7 @@ INT WowPlaceV86(
          */
         for (byteIndex = 0; byteIndex < (DWORD)windowParas * PARAGRAPH_SIZE_U; ++byteIndex)
             headerBytes[byteIndex] = 0;
+
         for (byteIndex = 0; byteIndex < loadLength; ++byteIndex)
             headerBytes[byteIndex] = image[module->Header + byteIndex];
 
@@ -1946,12 +2059,14 @@ INT WowPlaceV86(
      */
     {   WORD pathSegment = 0, pathMaximum = 0;
         (VOID)DosMcbAllocate(NULL, machine->FirstMcb, DOS_MCB_LARGEST_REQUEST, &pathSegment, &pathMaximum);  /* ask -> get max */
+
         if (!pathMaximum || DosMcbAllocate(NULL, machine->FirstMcb, pathMaximum, &pathSegment, &pathMaximum) || !pathSegment)
         {
             cursor = message; cursor = LogPut(cursor, "WOWV86: no arena left for krnl386's PSP block\r\n");
             LogAppend(LDTLOG_PATH, message, cursor);
             return -1;
         }
+
         /* -- ZERO THE ARENA. The same rule the header-image block already states,
          * applied where it was measurably needed: krnl386 carves everything from
          * `ES + 0x10` upward without asking DOS, and it PARSES what it finds there
@@ -1984,8 +2099,10 @@ INT WowPlaceV86(
         {   volatile BYTE *arena = (volatile BYTE *)(ULONG_PTR)((DWORD)pathSegment << PARAGRAPH_SHIFT);
             DWORD arenaBytes = (DWORD)pathMaximum * PARAGRAPH_SIZE_U;
             DWORD index2;
+
             for (index2 = DOS_PSP_SIZE; index2 < arenaBytes; ++index2)
                 arena[index2] = 0;
+
             cursor = message; cursor = LogPut(cursor, "WOWV86: arena zeroed, 0x"); cursor = LogHex(cursor, arenaBytes - DOS_PSP_SIZE);
             cursor = LogPut(cursor, " bytes above the PSP\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
         }
@@ -2024,14 +2141,19 @@ INT WowPlaceV86(
              * through `extra`, whose cap note keeps the tail krnl386 reads.
              */
             CHAR systemRootVariable[MAX_PATH + 16] = HOST_ENV_SYSTEMROOT_ASSIGN;
+
             if (!GetWindowsDirectoryA(systemRootVariable + sizeof HOST_ENV_SYSTEMROOT_ASSIGN - 1, MAX_PATH))
                 systemRootVariable[0] = 0;
+
             length = GetSystemDirectoryA(pathValue, MAX_PATH);
+
             if (length && length < MAX_PATH) { pathValue[length] = ';';
+
                 if (!GetWindowsDirectoryA(pathValue + length + 1, MAX_PATH))
                     pathValue[length] = 0; }
             else
                 pathValue[0] = 0;
+
             /* [CAUTION]: NO dosenv.txt ON THE WOW PATH, deliberately. This block is krnl386's,
              * it is rebuilt after the fact, and the note above records how narrowly
              * it fits: krnl386 finds its own executable by scanning past the strings
@@ -2088,6 +2210,7 @@ VOID WowProbeSelectors(VOID)
 
     if (!g_WowModuleCount)
         return;
+
     cursor = message; cursor = LogPut(cursor, "WOWTRY: selector stage, modules="); cursor = LogHex(cursor, (DWORD)g_WowModuleCount);
     cursor = LogPut(cursor, "\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
     WowProbeLdtMatrix("wow-late");
@@ -2137,18 +2260,21 @@ VOID WowProbeSelectors(VOID)
     for (moduleIndex = 0; moduleIndex < g_WowModuleCount; ++moduleIndex)
     {
         NE_MODULE *module = &g_WowModule[moduleIndex];
+
         for (index = 0; index < (INT)module->SegmentCount; ++index)
         {
             NE_SEGMENT *segment = &module->Segments[index];
             INT isCode = !(segment->Flags & NE_SEG_DATA);
             UINT32 need = NeSegmentAllocSize(segment);
             INT ldtIndex;
+
             if (g_LdtNext >= DPMI_LDT_MAX)
             {
                 cursor = message; cursor = LogPut(cursor, "  LDT POOL EXHAUSTED\r\n");
                 LogAppend(LDTLOG_PATH, message, cursor);
                 return;
             }
+
             ldtIndex = g_LdtNext++;
             g_Ldt[ldtIndex].Base   = (DWORD)(ULONG_PTR)segment->Memory;
             g_Ldt[ldtIndex].Limit  = need - 1;
@@ -2178,6 +2304,7 @@ VOID WowProbeSelectors(VOID)
             }
             cursor = LogPut(cursor, "\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
         }
+
         NeRegistryAdd(&g_WowRegistry, module);
     }
 
@@ -2192,10 +2319,13 @@ VOID WowProbeSelectors(VOID)
         NE_MODULE *module = &g_WowModule[moduleIndex];
         INT status = 0;
         module->Sites = 0;
+
         for (index = 0; index < (INT)module->SegmentCount && status == 0; ++index)
             status = NeApplyRelocations(module, index, NeRegistryResolve, &g_WowRegistry);
+
         cursor = message;
         cursor = LogPut(cursor, "  RELOC "); cursor = LogPut(cursor, g_WowName[moduleIndex]);
+
         if (status == 0)
         {
             cursor = LogPut(cursor, " ALL RESOLVED sites=0x"); cursor = LogHex(cursor, module->Sites);
@@ -2206,6 +2336,7 @@ VOID WowProbeSelectors(VOID)
             cursor = LogPut(cursor, " sites, at ne.h line "); cursor = LogHex(cursor, (DWORD)module->Error);
             cursor = LogPut(cursor, ", needed ");             cursor = LogPut(cursor, g_WowRegistry.FailedModule);
             cursor = LogPut(cursor, ".");
+
             if (g_WowRegistry.FailedFunction[0])
                 cursor = LogPut(cursor, g_WowRegistry.FailedFunction);
             else
@@ -2214,6 +2345,7 @@ VOID WowProbeSelectors(VOID)
                 cursor = LogHex(cursor, g_WowRegistry.FailedOrdinal);
             }
         }
+
         cursor = LogPut(cursor, "\r\n"); LogAppend(LDTLOG_PATH, message, cursor);
     }
 
@@ -2232,6 +2364,7 @@ DWORD Wow32ReturnOverride(WORD thunkId)
     for (index = 0; index < g_Wow32ReturnCount; ++index)
         if (g_Wow32ReturnId[index] == thunkId)
             return g_Wow32ReturnValue[index];
+
     return (DWORD)WOW32_UNIMPL_RET;
 }
 
@@ -2243,6 +2376,7 @@ INT Wow32ModeOverride(WORD thunkId)
     for (index = 0; index < g_Wow32ModeCount; ++index)
         if (g_Wow32ModeId[index] == thunkId)
             return (INT)g_Wow32ModeValue[index];
+
     return -1;
 }
 
@@ -2258,52 +2392,68 @@ VOID Wow32ModeLoad(VOID)
 
     if (handle == INVALID_HANDLE_VALUE)
         return;
+
     ReadFile(handle, buffer, sizeof buffer - 1, &bytesRead, NULL);
     CloseHandle(handle);
+
     if (bytesRead >= sizeof buffer - 1)
     {
         cursor = LogPut(cursor, "WOWMODE: !! wowmode.txt TRUNCATED AT THE BUFFER -- LINES DROPPED\r\n");
         LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor); cursor = lineBuffer;
     }
+
     while (index < bytesRead && g_Wow32ModeCount < WOWMODE_MAX)
     {
         DWORD values[WOW32_KNOB_COLUMNS] = { 0, 0 };
         INT column = 0;
+
         while (index < bytesRead && (buffer[index] == '\r' || buffer[index] == '\n'))
             ++index;
+
         if (index >= bytesRead)
             break;
+
         if (buffer[index] == '#')
         {
             while (index < bytesRead && buffer[index] != '\n')
                 ++index;
+
             continue;
         }
+
         while (index < bytesRead && buffer[index] != '\r' && buffer[index] != '\n' && column < WOW32_KNOB_COLUMNS)
         {
             INT digits = 0;
+
             while (index < bytesRead && (buffer[index] == ' ' || buffer[index] == '\t'))
                 ++index;
+
             if (index >= bytesRead || buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == '#')
                 break;
+
             while (index < bytesRead)
             {
                 CHAR character = buffer[index];
                 INT digit = (character >= '0' && character <= '9') ? character - '0'
                       : (character >= 'a' && character <= 'f') ? character - 'a' + HEX_DIGIT_A_VALUE
                       : (character >= 'A' && character <= 'F') ? character - 'A' + HEX_DIGIT_A_VALUE : -1;
+
                 if (digit < 0)
                     break;
+
                 values[column] = (values[column] << NIBBLE_SHIFT) | (DWORD)digit;
                 ++digits;
                 ++index;
             }
+
             if (digits)
                 ++column;
             else
                 ++index;
         }
+
         while (index < bytesRead && buffer[index] != '\n') ++index;
+
         if (column >= WOW32_KNOB_COLUMNS)
         {
             g_Wow32ModeId[g_Wow32ModeCount]  = (WORD)values[0];
@@ -2311,15 +2461,18 @@ VOID Wow32ModeLoad(VOID)
             ++g_Wow32ModeCount;
         }
     }
+
     if (g_Wow32ModeCount)
     {
         INT entry;
         cursor = LogPut(cursor, "WOWMODE: ** EXPERIMENT ** returning");
+
         for (entry = 0; entry < g_Wow32ModeCount; ++entry)
         {
             cursor = LogPut(cursor, " 0x"); cursor = LogHexByte(cursor, (BYTE)g_Wow32ModeId[entry]);
             cursor = LogPut(cursor, " through epilogue mode "); cursor = LogHex(cursor, g_Wow32ModeValue[entry]);
         }
+
         cursor = LogPut(cursor, "\r\n");
         LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
     }
@@ -2346,52 +2499,68 @@ VOID Wow32ReturnLoad(VOID)
 
     if (handle == INVALID_HANDLE_VALUE)
         return;
+
     ReadFile(handle, buffer, sizeof buffer - 1, &bytesRead, NULL);
     CloseHandle(handle);
+
     if (bytesRead >= sizeof buffer - 1)
     {
         cursor = LogPut(cursor, "WOW32RET: !! wow32ret.txt TRUNCATED AT THE BUFFER -- LINES DROPPED\r\n");
         LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor); cursor = lineBuffer;
     }
+
     while (index < bytesRead && g_Wow32ReturnCount < WOW32RET_MAX)
     {
         DWORD values[WOW32_KNOB_COLUMNS] = { 0, 0 };
         INT column = 0;
+
         while (index < bytesRead && (buffer[index] == '\r' || buffer[index] == '\n'))
             ++index;
+
         if (index >= bytesRead)
             break;
+
         if (buffer[index] == '#')
         {
             while (index < bytesRead && buffer[index] != '\n')
                 ++index;
+
             continue;
         }
+
         while (index < bytesRead && buffer[index] != '\r' && buffer[index] != '\n' && column < WOW32_KNOB_COLUMNS)
         {
             INT digits = 0;
+
             while (index < bytesRead && (buffer[index] == ' ' || buffer[index] == '\t'))
                 ++index;
+
             if (index >= bytesRead || buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == '#')
                 break;
+
             while (index < bytesRead)
             {
                 CHAR character = buffer[index];
                 INT digit = (character >= '0' && character <= '9') ? character - '0'
                       : (character >= 'a' && character <= 'f') ? character - 'a' + HEX_DIGIT_A_VALUE
                       : (character >= 'A' && character <= 'F') ? character - 'A' + HEX_DIGIT_A_VALUE : -1;
+
                 if (digit < 0)
                     break;
+
                 values[column] = (values[column] << NIBBLE_SHIFT) | (DWORD)digit;
                 ++digits;
                 ++index;
             }
+
             if (digits)
                 ++column;
             else
                 ++index;
         }
+
         while (index < bytesRead && buffer[index] != '\n') ++index;
+
         if (column >= WOW32_KNOB_COLUMNS)
         {
             g_Wow32ReturnId[g_Wow32ReturnCount]  = (WORD)values[0];
@@ -2399,15 +2568,18 @@ VOID Wow32ReturnLoad(VOID)
             ++g_Wow32ReturnCount;
         }
     }
+
     if (g_Wow32ReturnCount)
     {
         INT entry;
         cursor = LogPut(cursor, "WOW32RET: ** EXPERIMENT ** overriding");
+
         for (entry = 0; entry < g_Wow32ReturnCount; ++entry)
         {
             cursor = LogPut(cursor, " 0x"); cursor = LogHexByte(cursor, (BYTE)g_Wow32ReturnId[entry]);
             cursor = LogPut(cursor, "->0x"); cursor = LogHex(cursor, g_Wow32ReturnValue[entry]);
         }
+
         cursor = LogPut(cursor, "\r\n");
         LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
     }
@@ -2420,6 +2592,7 @@ INT WowSchedFree(VOID)
     for (index = 0; index < WOWSCHED_MAX; ++index)
         if (!g_WowSchedSlots[index].IsUsed)
             return index;
+
     return -1;
 }
 
@@ -2432,12 +2605,14 @@ INT WowSchedPick(WORD current)
     for (step = 1; step <= WOWSCHED_MAX; ++step)
     {
         index = (g_WowSchedRoundRobin + step) % WOWSCHED_MAX;
+
         if (g_WowSchedSlots[index].IsUsed && g_WowSchedSlots[index].Task != current)
         {
             g_WowSchedRoundRobin = index;
             return index;
         }
     }
+
     return -1;
 }
 
@@ -2451,6 +2626,7 @@ static INT WowSchedFresh(WORD current)
     for (index = 0; index < WOWSCHED_MAX; ++index)
         if (g_WowSchedSlots[index].IsUsed && g_WowSchedSlots[index].IsFresh && g_WowSchedSlots[index].Task != current)
             return index;
+
     return -1;
 }
 
@@ -2470,6 +2646,7 @@ INT WowSchedRunnable(WORD current, INT depth)
                     && (g_WowSchedSlots[index].CallbackDepth == g_WowSchedSlots[index].BaseDepth
                         || g_WowSchedSlots[index].CallbackDepth == depth))))
             return index;
+
     return -1;
 }
 
@@ -2492,9 +2669,12 @@ WORD WowSchedCurrentTask(VOID)
 
     if (!g_WowDgroupSelector)
         return WOWUSER_TASK_NONE16;
+
     base = DpmiSelectorBase(g_WowDgroupSelector);
+
     if (!base)
         return WOWUSER_TASK_NONE16;
+
     dgroup = (const volatile BYTE *)(ULONG_PTR)base;
     return (WORD)(dgroup[WOWUSER_KRNL_CURRENT_TASK] | (dgroup[WOWUSER_KRNL_CURRENT_TASK + 1] << BYTE_SHIFT));
 }
@@ -2506,19 +2686,24 @@ static VOID WowTaskDirectoryNote(WORD task, PCSTR directory)
 
     if (!task || task == WOWUSER_TASK_NONE16)
         return;
+
     for (index = 0; index < WOW_TASK_DIRS; ++index)
     {
         if (g_WowTaskDirectory[index].Task == task)
             break;
+
         if (!g_WowTaskDirectory[index].Task && freeK < 0)
             freeK = index;
     }
+
     if (index == WOW_TASK_DIRS)
     {
         if (freeK < 0)
             return;
+
         index = freeK;
     }
+
     g_WowTaskDirectory[index].Task = task;
     lstrcpynA(g_WowTaskDirectory[index].Directory, directory, sizeof g_WowTaskDirectory[index].Directory);
 }
@@ -2544,9 +2729,12 @@ VOID WowTaskChdir(WORD task, PSTR *logCursor)
     for (index = 0; index < WOW_TASK_DIRS; ++index)
         if (g_WowTaskDirectory[index].Task == task)
             break;
+
     if (index == WOW_TASK_DIRS)
         return;
+
     {   INT isOk = SetCurrentDirectoryA(g_WowTaskDirectory[index].Directory) != 0;
+
         if (logged < 12)
         {
             ++logged;
@@ -2582,9 +2770,12 @@ VOID WowSchedSetCurrent(WORD task)
 
     if (!g_WowDgroupSelector)
         return;
+
     base = DpmiSelectorBase(g_WowDgroupSelector);
+
     if (!base)
         return;
+
     dgroup = (volatile BYTE *)(ULONG_PTR)base;
     dgroup[WOWUSER_KRNL_CURRENT_TASK] = (BYTE)(task & BYTE_MASK);
     dgroup[WOWUSER_KRNL_CURRENT_TASK + 1] = (BYTE)(task >> BYTE_SHIFT);
@@ -2620,12 +2811,15 @@ INT WowSchedRetarget(
 
     if (!owner || !current || current == WOWUSER_TASK_NONE16 || owner == current)
         return 0;
+
     for (index = 0; index < WOWSCHED_MAX; ++index)
         if (g_WowSchedSlots[index].IsUsed && g_WowSchedSlots[index].Task == owner)
             contexts[count++] = g_WowSchedSlots[index].Context;
+
     for (index = g_WowCallDepth - 2; index >= 0; --index)         /* the newest frame is the one being built */
         if (g_WowCallFrames[index].EnteredTask == owner)
             contexts[count++] = g_WowCallFrames[index].Saved.Context;
+
     /* [CAUTION]: THE DEEPEST ONE. Calls that bounce between two tasks leave the owner's
      * stack in use below its parked SP; the lowest SP known is the free edge.
      */
@@ -2633,21 +2827,30 @@ INT WowSchedRetarget(
     {
         WORD contextSs = (WORD)(contexts[index][VTIB_SS - WOWSCHED_CTX_LO] | (contexts[index][VTIB_SS - WOWSCHED_CTX_LO + 1] << BYTE_SHIFT));
         WORD contextSp = (WORD)(contexts[index][VTIB_ESP - WOWSCHED_CTX_LO] | (contexts[index][VTIB_ESP - WOWSCHED_CTX_LO + 1] << BYTE_SHIFT));
+
         if (foundStackSegment && (contextSs & ~X86_SELECTOR_RPL_MASK_U) != (foundStackSegment & ~X86_SELECTOR_RPL_MASK_U))
             return 0;                                                                                                                  /* two stacks: do not guess */
+
         foundStackSegment = contextSs;
+
         if (contextSp < lowestStackPointer)
             lowestStackPointer = contextSp;
     }
+
     if (!count)
         return 0;
+
     *stackSegment = foundStackSegment;
     *stackPointer = (WORD)((lowestStackPointer - WOW_RETARGET_HEADROOM) & ~X86_WORD_ALIGN_MASK_U);
+
     if (*stackPointer < WOW_RETARGET_STACK_MIN)
         return 0;                                                            /* no room: run where it always did */
+
     *stackSegmentBase = DpmiSelectorBase(*stackSegment);
+
     if (!*stackSegmentBase)
         return 0;
+
     *prev = current;
     WowSchedSetCurrent(owner);
     ++g_WowSchedInterTask;
@@ -2669,6 +2872,7 @@ INT WowSchedInterTaskLive(VOID)
     for (index = 0; index < g_WowCallDepth; ++index)
         if (g_WowCallFrames[index].PreviousTask)
             return 1;
+
     return 0;
 }
 
@@ -2681,6 +2885,7 @@ VOID WowQuietLoad(VOID)
 
     if (handle == INVALID_HANDLE_VALUE)
         return;
+
     CloseHandle(handle);
     /* Say so BEFORE going quiet, or the run leaves no evidence of why it is
      * silent -- a log that just stops looks like a crash.
@@ -2701,6 +2906,7 @@ VOID WowSchedLoad(VOID)
 
     if (handle == INVALID_HANDLE_VALUE)
         return;
+
     CloseHandle(handle);
     g_WowSchedOn = 1;
     cursor = LogPut(cursor, "WOWSCHED: ** ON ** -- Win16 tasks will be interleaved by the host "
@@ -2718,6 +2924,7 @@ VOID WowCallLoad(VOID)
 
     if (handle == INVALID_HANDLE_VALUE)
         return;
+
     CloseHandle(handle);
     g_WowCallOn = 1;
     cursor = LogPut(cursor, "WOWCALL: ** ON ** -- the host will CALL 16-bit code: CreateWindow "
@@ -2746,11 +2953,13 @@ VOID WowShadowPut(INT index)      /* g_Ldt[idx] -> shadow */
 
     if (!g_WowShadow || index < 0 || index >= WOW_SHADOW_ENTRIES)
         return;
+
     DpmiBuildDescriptor(g_Ldt[index].Base, g_Ldt[index].Limit,
                     g_Ldt[index].Access, g_Ldt[index].Flags, &low, &high);
     entry = (DWORD *)(g_WowShadow + index * X86_DESCRIPTOR_SIZE);
     entry[0] = low;
     entry[1] = high;
+
     if (g_WowSeen)
     {
         entry = (DWORD *)(g_WowSeen + index * X86_DESCRIPTOR_SIZE);
@@ -2769,8 +2978,10 @@ INT WowShadowSync(PSTR *logCursor)
 
     if (!g_WowShadow || !g_WowSeen)
         return 0;
+
     if (top > WOW_SHADOW_ENTRIES)
         top = WOW_SHADOW_ENTRIES;
+
     for (index = DPMI_LDT_RESERVED; index < top; ++index)
     {
         DWORD low;
@@ -2779,8 +2990,10 @@ INT WowShadowSync(PSTR *logCursor)
         DWORD *seen = (DWORD *)(g_WowSeen + index * X86_DESCRIPTOR_SIZE);
         low = seen[0];
         high = seen[1];
+
         if (entry[0] == low && entry[1] == high)
             continue;                                           /* the guest did not touch it */
+
         seen[0] = entry[0];
         seen[1] = entry[1];                  /* acknowledged either way */
         {   WORD selector = (WORD)DPMI_LDT_SELECTOR(index);
@@ -2806,8 +3019,10 @@ INT WowShadowSync(PSTR *logCursor)
                 g_Ldt[index].Access = (BYTE)((descriptorHigh >> BYTE_SHIFT) & BYTE_MASK);
                 g_Ldt[index].Flags  = (BYTE)((descriptorHigh >> X86_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK);
             }
+
             ++count;
             ++g_WowSyncWrites;
+
             if (cursor && count <= 6)
             {
                 cursor = LogPut(cursor, "  LDTSYNC idx 0x"); cursor = LogHex(cursor, (DWORD)index);
@@ -2820,8 +3035,10 @@ INT WowShadowSync(PSTR *logCursor)
             }
         }
     }
+
     if (logCursor)
         *logCursor = cursor;
+
     return count;
 }
 
@@ -2832,27 +3049,35 @@ static WORD WowShadowSelector(VOID)
 
     if (g_WowShadowSelector)
         return g_WowShadowSelector;
+
     if (g_LdtNext >= DPMI_LDT_MAX)
         return 0;
+
     g_WowShadow = (BYTE *)VirtualAlloc(NULL, WOW_SHADOW_ENTRIES * X86_DESCRIPTOR_SIZE,
                                         MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+
     if (!g_WowShadow)
         return 0;
+
     /* The `seen` copy is host-private and is NEVER handed to the guest -- that is
      * the point of it. See WowShadowSync for what went wrong without it.
      */
     g_WowSeen = (BYTE *)VirtualAlloc(NULL, WOW_SHADOW_ENTRIES * X86_DESCRIPTOR_SIZE,
                                       MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+
     if (!g_WowSeen) { VirtualFree(g_WowShadow, 0, MEM_RELEASE);
                        g_WowShadow = NULL;
                        return 0; }
+
     for (index = 0; index < WOW_SHADOW_ENTRIES * X86_DESCRIPTOR_SIZE; ++index)
     {
         g_WowShadow[index] = 0;
         g_WowSeen[index] = 0;
     }
+
     for (index = 0; index < WOW_SHADOW_ENTRIES; ++index)
         WowShadowPut(index);
+
     ldtIndex = g_LdtNext++;
     g_Ldt[ldtIndex].Base   = (DWORD)(ULONG_PTR)g_WowShadow;
     g_Ldt[ldtIndex].Limit  = WOW_SHADOW_ENTRIES * X86_DESCRIPTOR_SIZE - 1;
@@ -2892,14 +3117,18 @@ INT WowVendorApiEntry(DOS_MACHINE *machine, WORD *selector, WORD *offset)
     INT index;
 
     *offset = 0;
+
     if (g_WowVendorSelector)
     {
         *selector = g_WowVendorSelector;
         return 0;
     }
+
     shadow = WowShadowSelector();
+
     if (!shadow)
         return -1;
+
     /* Its own paragraph rather than a corner of DOS_HDLR_SEG: that segment is at
      * linear 0x500 and DOS_DEV_SEG (was DOS_ENV_SEG) starts at 0x600, so it has 0x100 bytes total and
      * the map in the header shows them nearly all spoken for.
@@ -2910,15 +3139,21 @@ INT WowVendorApiEntry(DOS_MACHINE *machine, WORD *selector, WORD *offset)
      * treats a missing vendor API as "Inadequate DPMI Server" and exits.
      */
     segment = WowHostAllocate(1);
+
     if (!segment && (DosMcbAllocate(NULL, machine->FirstMcb, 1, &segment, &maximum) || !segment))
         return -1;
+
     bytes = (volatile BYTE *)(ULONG_PTR)((DWORD)segment << PARAGRAPH_SHIFT);
+
     for (index = 0; index < (INT)sizeof stub; ++index)
         bytes[index] = stub[index];
+
     bytes[WOW_VENDOR_STUB_SELECTOR] = (BYTE)shadow;
     bytes[WOW_VENDOR_STUB_SELECTOR + 1] = (BYTE)(shadow >> BYTE_SHIFT);   /* the returned selector */
+
     if (g_LdtNext >= DPMI_LDT_MAX)
         return -1;
+
     ldtIndex = g_LdtNext++;
     g_Ldt[ldtIndex].Base   = (DWORD)segment << PARAGRAPH_SHIFT;
     g_Ldt[ldtIndex].Limit  = WOW_VENDOR_STUB_LIMIT;
@@ -2970,13 +3205,16 @@ static VOID ShimLog(PCSTR what)
 static PVOID ShimGetVdmPointer(DWORD segmentedAddress, DWORD byteCount, BOOL isProtectedMode)
 {
     (VOID)byteCount;
+
     if (!segmentedAddress)
         return NULL;
+
     if (isProtectedMode)
     {
         DWORD base = DpmiSelectorBase((WORD)(segmentedAddress >> WORD_SHIFT));
         return base ? (VOID *)(ULONG_PTR)(base + (segmentedAddress & WORD_MASK)) : NULL;
     }
+
     return (VOID *)(ULONG_PTR)(((segmentedAddress >> WORD_SHIFT) << PARAGRAPH_SHIFT) + (segmentedAddress & WORD_MASK));
 }
 
@@ -2989,6 +3227,7 @@ static HANDLE ShimHandle32(WORD handle16, DWORD type)
 
     if (!handle16)
         return NULL;
+
     switch (type)
     {
     case WOW_TYPE_HWND:
@@ -3011,6 +3250,7 @@ static HANDLE ShimHandle32(WORD handle16, DWORD type)
     case WOW_TYPE_HPEN:
         return (HANDLE)WowGdiH32(handle16, &kind);
     }
+
     ShimLog("WOWHandle32: a handle type this host does not map -- 0");
     return NULL;
 }
@@ -3019,6 +3259,7 @@ static WORD ShimHandle16(HANDLE handle, DWORD type)
 {
     if (!handle)
         return 0;
+
     switch (type)
     {
     case WOW_TYPE_HWND:
@@ -3037,6 +3278,7 @@ static WORD ShimHandle16(HANDLE handle, DWORD type)
     case WOW_TYPE_HPEN:
         return WowGdiH16((HGDIOBJ)handle, WOWGDI_KIND_OBJ);
     }
+
     ShimLog("WOWHandle16: a handle type this host does not map -- 0");
     return 0;
 }
@@ -3044,9 +3286,12 @@ static WORD ShimHandle16(HANDLE handle, DWORD type)
 static VOID ShimIcaInterrupt(INT isSlave, BYTE line, INT count)
 {
     (VOID)count;
+
     if (line >= PIC_LINES_PER_CHIP)
         return;
+
     InterlockedOr(&g_IcaPending, (LONG)(1u << ((isSlave ? PIC_LINES_PER_CHIP : 0) + line)));
+
     if (++g_IcaRaised <= 8)
     {
         CHAR buffer[96];
@@ -3056,6 +3301,7 @@ static VOID ShimIcaInterrupt(INT isSlave, BYTE line, INT count)
         cursor = LogHex(cursor, GetCurrentThreadId()); cursor = LogPut(cursor, "\r\n");
         LogAppend(LOG_PATH, buffer, cursor);
     }
+
     /* wake a GetMessage wait parked in MsgWaitForMultipleObjects */
     if (g_GuestThreadId && GetCurrentThreadId() != g_GuestThreadId)
         PostThreadMessageA(g_GuestThreadId, WM_NULL, 0, 0);
@@ -3089,21 +3335,26 @@ static BOOL ShimCallback16Ex(
     INT index;
 
     (VOID)flags;
+
     if ((byteCount & 1) || wordCount > WOWCALL_MAX_ARGW || (byteCount && !argumentBytes) || !g_TibDebug)
     {
         ShimLog("WOWCallback16Ex: refused (odd or > 64 argument bytes)");
         return FALSE;
     }
+
     for (index = 0; index < wordCount; ++index)
         args[index] = (WORD)(argumentBytes[byteCount - WOW_WORD_BYTES - WOW_WORD_BYTES * index] | (argumentBytes[byteCount - 1 - WOW_WORD_BYTES * index] << BYTE_SHIFT));
+
     if (!WowCall16Sync(targetProcedure, (WORD)VDM_REG16(g_TibDebug, VTIB_DS),
                          args, wordCount, 0, 0, &callResult))
     {
         ShimLog("WOWCallback16Ex: the nested run could not make the call");
         return FALSE;
     }
+
     if (result)
         *result = g_WowCallLastResult;
+
     return TRUE;
 }
 
@@ -3119,8 +3370,10 @@ DWORD ShimGlobal16(INT operation, DWORD firstArgument, DWORD secondArgument)
     WORD args[3];
     WORD result = 0;
     INT argumentCount;
+
     if (operation < 0 || operation >= SHIM_GLOBAL_OPERATIONS || !g_WowUserKernelSegment || !g_TibDebug)
         return 0;
+
     if (operation == SHIM_GLOBAL_ALLOC)
     {
         args[0] = (WORD)firstArgument;
@@ -3133,9 +3386,11 @@ DWORD ShimGlobal16(INT operation, DWORD firstArgument, DWORD secondArgument)
         args[0] = (WORD)firstArgument;
         argumentCount = 1;
     }
+
     if (!WowCall16Sync(((DWORD)g_WowUserKernelSegment << WORD_SHIFT) | offset[operation],
                          (WORD)VDM_REG16(g_TibDebug, VTIB_DS), args, argumentCount, 0, 0, &result))
         return 0;
+
     /* GlobalLock / GlobalSize / GlobalHandle answer in DX:AX; the rest in AX */
     return (operation == SHIM_GLOBAL_LOCK || operation == SHIM_GLOBAL_SIZE || operation == SHIM_GLOBAL_HANDLE) ? g_WowCallLastResult : (DWORD)(WORD)g_WowCallLastResult;
 }
@@ -3146,12 +3401,16 @@ static DWORD ShimGetRegister(INT registerIndex)
 
     if (!tib)
         return 0;
+
     if (registerIndex == SHIM_R_MSW)
         return g_DpmiPm ? 1u : 0u;
+
     if (registerIndex < 0 || registerIndex > SHIM_R_EFL)
         return 0;
+
     if (registerIndex >= SHIM_R_CS && registerIndex <= SHIM_R_GS)
         return VDM_REG16(tib, g_ShimTibOffsets[registerIndex]);
+
     return VDM_REG(tib, g_ShimTibOffsets[registerIndex]);
 }
 
@@ -3161,6 +3420,7 @@ static VOID ShimSetRegister(INT registerIndex, DWORD value)
 
     if (!tib || registerIndex < 0 || registerIndex > SHIM_R_EFL)
         return;
+
     if (registerIndex >= SHIM_R_CS && registerIndex <= SHIM_R_GS)
         VDM_SET16(tib, g_ShimTibOffsets[registerIndex], (WORD)value);
     else
@@ -3174,6 +3434,7 @@ PVOID ShimMapFlat(WORD segment, DWORD offset, INT isProtectedMode)
         DWORD base = DpmiSelectorBase(segment);
         return base ? (VOID *)(ULONG_PTR)(base + offset) : NULL;
     }
+
     return (VOID *)(ULONG_PTR)(((DWORD)segment << PARAGRAPH_SHIFT) + (offset & WORD_MASK));
 }
 
@@ -3186,10 +3447,12 @@ static BOOL ShimInstallIoHook(HANDLE vddHandle, WORD rangeCount, PCVOID ranges, 
 
     if (!ranges || !handlers)
         return FALSE;
+
     for (index2 = 0; index2 < rangeCount; ++index2)
     {
         INT index;
         INT slot = -1;
+
         for (index = 0; index < ISV_MAX_HOOKS; ++index)
             if (!g_IsvHooks[index].VddHandle || (g_IsvHooks[index].VddHandle == vddHandle && !g_IsvHooks[index].IsLive
                                         && g_IsvHooks[index].FirstPort == ranges16[index2 * 2]))
@@ -3197,12 +3460,15 @@ static BOOL ShimInstallIoHook(HANDLE vddHandle, WORD rangeCount, PCVOID ranges, 
                 slot = index;
                 break;
             }
+
         if (slot < 0)
             return FALSE;
+
         if (!g_IsvHooks[slot].VddHandle
             && VddClaimPorts(&g_Bus, ranges16[index2 * 2], ranges16[index2 * 2 + 1], IsvIoIn, IsvIoOut,
                                (VOID *)(ULONG_PTR)slot) != 0)
             return FALSE;
+
         g_IsvHooks[slot].VddHandle = vddHandle;
         g_IsvHooks[slot].FirstPort = ranges16[index2 * 2];
         g_IsvHooks[slot].LastPort = ranges16[index2 * 2 + 1];
@@ -3212,6 +3478,7 @@ static BOOL ShimInstallIoHook(HANDLE vddHandle, WORD rangeCount, PCVOID ranges, 
         cursor = LogPut(cursor, "-0x"); cursor = LogHex(cursor, ranges16[index2 * 2 + 1]); cursor = LogPut(cursor, " installed\r\n");
         LogAppend(LOG_PATH, buffer, cursor);
     }
+
     return TRUE;
 }
 
@@ -3223,6 +3490,7 @@ static VOID ShimRemoveIoHook(HANDLE vddHandle, WORD rangeCount, PCVOID ranges)
 
     if (!ranges)
         return;
+
     for (index2 = 0; index2 < rangeCount; ++index2)
         for (index = 0; index < ISV_MAX_HOOKS; ++index)
             if (g_IsvHooks[index].VddHandle == vddHandle && g_IsvHooks[index].FirstPort == ranges16[index2 * 2])
@@ -3238,14 +3506,17 @@ VOID WowShimsLoad(VOID)
     CHAR buffer[MAX_PATH + 160];
     CHAR *cursor;
     UINT index;
+
     if (done)
         return;
+
     done = 1;
     /* SAFE MODE (#132): read the counter here -- this runs before the recovery
      * decision is taken further down WinMain, and must not wait for it.
      */
     if (DosRecoveryGetSafeSkips(DosRecoveryDecideStartMode(RecoveryRead())).WowShims)
         return;
+
     shimApi.Version = SHIM_API_VERSION;
     shimApi.GetVdmPointer = ShimGetVdmPointer;
     shimApi.Handle32 = ShimHandle32;
@@ -3260,25 +3531,33 @@ VOID WowShimsLoad(VOID)
     shimApi.MapFlat = ShimMapFlat;
     shimApi.InstallIoHook = ShimInstallIoHook;
     shimApi.RemoveIoHook = ShimRemoveIoHook;
+
     for (index = 0; index < WOW_SHIMS; ++index)
     {
         HMODULE module;
         BOOL (WINAPI *initialize)(const NTVDMEX_SHIM_API *);
         INT length = 0;
         PCSTR source = NTVDMEX_DIR;
+
         while (*source && length < MAX_PATH - 40)
             path[length++] = *source++;
+
         source = HOST_SHIM_SUBDIRECTORY;
+
         while (*source)
             path[length++] = *source++;
+
         source = names[index];
+
         while (*source)
             path[length++] = *source++;
+
         path[length] = 0;
         module = LoadLibraryExA(path, NULL, 0);
         initialize = module ? (BOOL (WINAPI *)(const NTVDMEX_SHIM_API *))GetProcAddress(module, HOST_EXPORT_SHIM_INIT)
                  : NULL;
         cursor = buffer; cursor = LogPut(cursor, "WOWSHIM: "); cursor = LogPut(cursor, names[index]);
+
         if (!module) { g_ShimState[index] = SHIM_NO_LOAD;
         g_ShimError[index] = GetLastError();
                   cursor = LogPut(cursor, " NOT LOADED from ["); cursor = LogPut(cursor, path);
@@ -3292,6 +3571,7 @@ VOID WowShimsLoad(VOID)
             cursor = LogPut(cursor, " loaded at 0x");
             cursor = LogHex(cursor, (DWORD)(ULONG_PTR)module);
         }
+
         cursor = LogPut(cursor, "\r\n");
         LogAppend(LOG_PATH, buffer, cursor);
     }
@@ -3322,25 +3602,33 @@ INT WowCall16SyncEx(
 
     if (!tib || !g_DpmiPm || !g_WowLaunch || !g_DosMachine || !g_Running)
         return 0;
+
     if (GetCurrentThreadId() != g_GuestThreadId)
         return 0;
+
     if (g_WowCallDepth >= WOWCALL_MAX_DEPTH - 1 || g_WowWindowNested >= WOW_WINDOW_NESTING_MAX || !(proc >> WORD_SHIFT))
         return 0;
+
     callbackSelector = WowCallbackSelector();
     stackSegmentBase  = DpmiSelectorBase((WORD)VDM_REG16(tib, VTIB_SS));
+
     if (!callbackSelector || !stackSegmentBase)
         return 0;
+
     if (blob && blobLength > 0)
     {
         WORD ss = (WORD)VDM_REG16(tib, VTIB_SS);
         INT fixIndex;
         blobStackPointer = (WORD)(VDM_REG16(tib, VTIB_ESP) - ((blobLength + 1) & ~1));
+
         for (fixIndex = 0; fix && fixIndex < fixupCount; ++fixIndex)
         {
             INT fixOffset = fix[fixIndex];
             WORD fixupValue;
+
             if (fixOffset < 0 || fixOffset + X86_FAR_POINTER_SIZE > blobLength)
                 continue;
+
             fixupValue = (WORD)(blob[fixOffset] | (blob[fixOffset + 1] << BYTE_SHIFT));
             fixupValue = (WORD)(blobStackPointer + fixupValue);
             blob[fixOffset] = (BYTE)fixupValue;
@@ -3349,11 +3637,14 @@ INT WowCall16SyncEx(
             blob[fixOffset + X86_FAR_POINTER_SEGMENT + 1] = (BYTE)(ss >> BYTE_SHIFT);
         }
     }
+
     if (!WowCallEnter(tib, stackSegmentBase, callbackSelector, proc, ds, args, argumentCount, 0, WOWCALL_RET_KEEP, &sink,
                        hwnd, message, blob, blob ? blobLength : 0, blob ? blobArgument : -1,
                        WowDlgIsSelectorAbsent((WORD)(proc >> WORD_SHIFT))))
         return 0;
+
     ++g_WowWindowNested;
+
     for (phase = 0; phase < WOW_CALL16_PHASE_MAX && g_WowCallDepth > depthBefore && g_Running; ++phase)
     {
         DWORD event;
@@ -3364,45 +3655,59 @@ INT WowCall16SyncEx(
         DpmiEnterProtectedMode(tib);
         event  = VDM_REG(tib, VTIB_EVENT);
         eip = DpmiPmEip(tib);
+
         if (event == 3)
             continue;
+
         if (event == VDM_EVENT_IO || event == VDM_EVENT_IO_HW || event == VDM_EVENT_GPFAULT)
         {
             INT ioHandled;
             HOST_LOCK();
             ioHandled = HostTryIoPm(tib, &g_Bus);
             HOST_UNLOCK();
+
             if (ioHandled)
                 continue;
         }
+
         if (DpmiNestedFault(tib, event, eip))
             continue;                                        /* s90: see the helper */
+
         vector = (event == VDM_EVENT_BOP) ? DpmiBopVector(VDM_REG16(tib, VTIB_CS), eip) : 0;
         status = DpmiServicePmInt(g_DosMachine, tib, vector, 0);
+
         if (status <= 0)
             break;
     }
+
     --g_WowWindowNested;
     isOk = (g_WowCallDepth == depthBefore);
+
     if (!isOk)
     {
         CHAR buffer[160];
         CHAR *cursor = buffer;
+
         while (g_WowCallDepth > depthBefore)
             WowCallLeave(tib, 0);
+
         cursor = LogPut(cursor, "WOWNEST: ★ the nested call to 0x"); cursor = LogHex(cursor, proc);
         cursor = LogPut(cursor, " (msg 0x"); cursor = LogHex(cursor, message);
         cursor = LogPut(cursor, ") did not return -- frame unwound, Windows' default used\r\n");
         LogAppend(LOG_PATH, buffer, cursor);
     }
+
     if (isOk && blob && blobLength > 0)
     {
         INT index;
+
         for (index = 0; index < blobLength; ++index)
             blob[index] = *(volatile BYTE *)(ULONG_PTR)(stackSegmentBase + (DWORD)(WORD)(blobStackPointer + index));
     }
+
     if (result)
         *result = sink;
+
     return isOk;
 }
 
@@ -3434,17 +3739,22 @@ LRESULT WowControlColour(
     HGDIOBJ brush;
 
     *handled = 0;
+
     if (!proc)
         return 0;
+
     child = WowWinHwnd16((HWND)lParam);
     deviceContext16  = WowGdiH16((HGDIOBJ)wParam, WOWGDI_KIND_DC);
+
     if (!deviceContext16)
         return 0;
+
     /* A Win32 read-only edit reports WM_CTLCOLORSTATIC; a Win16 edit is always
      * CTLCOLOR_EDIT -- Calc's display is one, and its default is the window colour.
      */
     {   CHAR className[16];
         type = (WORD)(message - WM_CTLCOLORMSGBOX);
+
         if (type == CTLCOLOR_STATIC && GetClassNameA((HWND)lParam, className, sizeof className) && !lstrcmpiA(className, WC_EDITA))
             type = 1;
     }
@@ -3456,15 +3766,18 @@ LRESULT WowControlColour(
     made = WowCall16Sync(proc, wowWindow->Instance ? wowWindow->Instance : g_WowUserClasses[wowWindow->Class].Instance,
                            args, WOW_WNDPROC_ARGUMENTS, window16, WM_CTLCOLOR16, &result);
     WowGdiForget(deviceContext16);
+
     if (made && result)
     {
         brush = WowGdiH32(result, &kind);
+
         if (brush && kind == WOWGDI_KIND_OBJ)
         {
             *handled = 1;
             return (LRESULT)brush;
         }
     }
+
     /* -- THE DEFAULT A 3.x PROGRAM GETS, as stock's USER32 gives it (measured against
      * stock on the rig, s89): edit and list boxes are the WINDOW colour; static
      * text and buttons are the 3-D face inside a DIALOG (16-bit dialogs get the 3-D
@@ -3479,6 +3792,7 @@ LRESULT WowControlColour(
         *handled = 1;
         return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
     }
+
     return 0;
 }
 
@@ -3532,18 +3846,23 @@ LRESULT WowOwnerDraw(
     INT made;
 
     *handled = 0;
+
     if (!proc || !lParam)
         return 0;
+
     for (index = 0; index < (INT)sizeof bytes; ++index)
         bytes[index] = 0;
+
     switch (message)
     {
     case WM_DRAWITEM:
     {
         const DRAWITEMSTRUCT *drawItem = (const DRAWITEMSTRUCT *)lParam;
         deviceContext16 = WowGdiH16((HGDIOBJ)drawItem->hDC, WOWGDI_KIND_DC);
+
         if (!deviceContext16)
             return 0;
+
         OwnerDrawPutWord(bytes, WOWUSER_OWNERDRAW16_CTLTYPE, (WORD)drawItem->CtlType);
         OwnerDrawPutWord(bytes, WOWUSER_OWNERDRAW16_CTLID, (WORD)drawItem->CtlID);
         OwnerDrawPutWord(bytes, WOWUSER_DRAWITEM16_ITEMID, (WORD)drawItem->itemID);
@@ -3602,6 +3921,7 @@ LRESULT WowOwnerDraw(
     default:
         return 0;
     }
+
     args[0] = window16;
     args[1] = (WORD)message;
     args[2] = (WORD)wParam;
@@ -3609,11 +3929,15 @@ LRESULT WowOwnerDraw(
     args[4] = 0;                    /* lParam: the structure's far pointer */
     made = WowCall16SyncEx(proc, wowWindow->Instance ? wowWindow->Instance : g_WowUserClasses[wowWindow->Class].Instance,
                               args, ARRAYSIZE(args), window16, (WORD)message, &result, bytes, length, WOWUSER_WNDPROC_ARG_LPARAM, NULL, 0);
+
     if (deviceContext16)
         WowGdiForget(deviceContext16);
+
     if (!made)
         return 0;
+
     *handled = 1;
+
     if (message == WM_MEASUREITEM)
     {
         MEASUREITEMSTRUCT *measureItem = (MEASUREITEMSTRUCT *)lParam;
@@ -3621,8 +3945,10 @@ LRESULT WowOwnerDraw(
         measureItem->itemHeight = OwnerDrawGetWord(bytes, WOWUSER_MEASUREITEM16_ITEMHEIGHT);
         return TRUE;
     }
+
     if (message == WM_COMPAREITEM)
         return (LRESULT)(INT16)result;
+
     return (LRESULT)(result ? TRUE : FALSE);
 }
 
@@ -3647,6 +3973,7 @@ INT WowSend16Blob(
 
     if (!proc)
         return 0;
+
     args[0] = window16;
     args[1] = message;
     args[2] = wParam;
@@ -3664,6 +3991,7 @@ INT WowSend16Now(WORD window16, WORD message, WORD wParam, DWORD lParam, WORD *r
 
     if (!proc)
         return 0;
+
     args[0] = window16;
     args[1] = message;
     args[2] = wParam;
@@ -3687,23 +4015,31 @@ VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps)
 
     if (!g_IcaPending || g_InPmIrq || g_PmNoIrq || g_AsyncPmActive)
         return;
+
     bits = InterlockedExchange(&g_IcaPending, 0);
+
     for (line = 0; line < PIC_LINES; ++line)
     {
         UINT interruptVector;
+
         if (!(bits & (1L << line)))
             continue;
+
         interruptVector = (line < PIC_LINES_PER_CHIP) ? PIC_MASTER_VECTOR_BASE + line : PIC_SLAVE_VECTOR_BASE + (line - PIC_LINES_PER_CHIP);
+
         if (!g_PmInt[interruptVector].Client)
         {
             ++g_IcaNoHandler;
             continue;
         }
+
         g_InPmIrq = 1;
+
         if (DpmiInjectPmIrq(machine, tib, interruptVector, steps))
             ++g_IcaDelivered;
         else
             InterlockedOr(&g_IcaPending, (LONG)(1L << line));        /* retry later */
+
         g_InPmIrq = 0;
     }
 }

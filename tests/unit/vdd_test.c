@@ -49,6 +49,7 @@ static VOID VddTestPitOut(PVOID self, WORD port, BYTE width, UINT32 value)
     FAKE_PIT *pit = (FAKE_PIT *)self;
 
     (VOID)width;
+
     if (port == 0x40)
         pit->Reload = (BYTE)value;
 }
@@ -96,12 +97,16 @@ static INT VddTestPitInit(PVDD_BUS bus, PVOID self)
     FAKE_PIT *pit = (FAKE_PIT *)self;
 
     pit->Bus = bus;
+
     if (VddClaimPorts(bus, 0x40, 0x43, VddTestPitIn, VddTestPitOut, pit))
         return -1;
+
     if (VddClaimInterrupt(bus, 0x1A, VddTestPitInt1a, pit))
         return -1;
+
     if (VddOnFrame(bus, VddTestPitFrame, pit))
         return -1;
+
     return 0;
 }
 

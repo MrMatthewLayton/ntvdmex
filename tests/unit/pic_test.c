@@ -45,6 +45,7 @@ extern INT VddPicInitialize(PVDD_BUS bus, PVOID context);
 static VOID PicTestCheck(INT condition, PCSTR description)
 {
     ++g_Checks;
+
     if (!condition)
     {
         ++g_Failures;
@@ -251,6 +252,7 @@ INT main(VOID)
         INT imr;
         INT same = 1;
         static const BYTE imrs[] = { 0x00, 0xFC, 0x08, 0xA5 };
+
         for (imr = 0; imr < 4; ++imr)
             for (isr = 0; isr < 256; ++isr)
                 for (line = 0; line < 8; ++line)
@@ -261,9 +263,11 @@ INT main(VOID)
                     pic.Master.Imr = imrs[imr];
                     pic.Master.Isr = (BYTE)isr;
                     old = !(pic.Master.Imr & bit) && !(pic.Master.Isr & ((bit << 1) - 1));
+
                     if (old != VddPicCanDeliver(&pic, (BYTE)line))
                         same = 0;
                 }
+
         PicTestCheck(same, "default: master resolver == the old lowest-bit-first rule, all ISR x 4 IMRs");
         VddPicReset(&pic);
         PicTestCheck(pic.Master.LowestPriority == 7 && pic.Slave.LowestPriority == 7, "default: IR7 lowest on both chips (no rotation)");

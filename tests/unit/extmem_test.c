@@ -49,6 +49,7 @@ static INT g_Failures = 0;
 static VOID ExtMemTestCheck(BOOL passed, PCSTR description)
 {
     g_Checks++;
+
     if (passed)
     {
         printf("  PASS  %s\n", description);

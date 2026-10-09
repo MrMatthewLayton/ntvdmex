@@ -27,6 +27,7 @@ VOID WowSchedSave(
 
     for (index = 0; index < WOWSCHED_CTX_LEN; ++index)
         slot->Context[index] = source[index];
+
     *(DWORD *)(slot->Context + (WOWSCHED_VTIB_EIP - WOWSCHED_CTX_LO)) += (DWORD)eipAdjust;   /* VTIB_EIP */
     slot->ModeLinear = modeLinear;
     slot->Task    = task;
@@ -45,6 +46,7 @@ VOID WowSchedRestore(PWOWSCHED_SLOT slot, volatile BYTE *tib)
 
     for (index = 0; index < WOWSCHED_CTX_LEN; ++index)
         destination[index] = slot->Context[index];
+
     slot->IsUsed = 0;
     g_WowSchedCurrentBase = slot->BaseDepth;          /* a top-level resume is re-based by the caller */
 }

@@ -150,8 +150,10 @@ static inline VOID BiosBdaInitializeWithTop(
     BiosWriteWord(BiosLinearAddress(base, BIOS_BDA_BASE + BIOS_BDA_EBDA_SEGMENT), top);
     BiosBdaSetEquipment(base, equipment);
     BiosWriteWord(BiosLinearAddress(base, BIOS_BDA_BASE + BIOS_BDA_MEMORY_KB), BiosBaseKbOfTop(top));
+
     for (byteIndex = 0; byteIndex < BIOS_EBDA_KB * BIOS_BYTES_PER_KB; ++byteIndex)
         ebda[byteIndex] = 0;
+
     ebda[0] = (BYTE)BIOS_EBDA_KB;
 }
 

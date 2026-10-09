@@ -109,20 +109,26 @@ static VOID ProbeLoadInto(PCSTR path, WORD *out, INT *outCount)
                            NULL, OPEN_EXISTING, 0, NULL);
 
     *outCount = 0;
+
     if (handle == INVALID_HANDLE_VALUE)
         return;
+
     ReadFile(handle, buffer, sizeof buffer - 1, &bytesRead, NULL);
     CloseHandle(handle);
     buffer[bytesRead < sizeof buffer ? bytesRead : sizeof buffer - 1] = 0;
+
     while (buffer[index] && *outCount < DSPROBE_MAX)
     {
         UINT value = 0;
         INT got = 0;
+
         while (buffer[index] == ' ' || buffer[index] == '\t' || buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == ',')
             ++index;
+
         while (buffer[index])
         {
             CHAR character = buffer[index];
+
             if      (character >= '0' && character <= '9')
                 value = (value << NIBBLE_SHIFT) | (UINT)(character - '0');
             else if (character >= 'a' && character <= 'f')
@@ -131,9 +137,11 @@ static VOID ProbeLoadInto(PCSTR path, WORD *out, INT *outCount)
                 value = (value << NIBBLE_SHIFT) | (UINT)(character - 'A' + HEX_DIGIT_A_VALUE);
             else
                 break;
+
             ++got;
             ++index;
         }
+
         if (got)
             out[(*outCount)++] = (WORD)value;
         else if (buffer[index])
@@ -152,20 +160,26 @@ VOID DsProbeLoad(VOID)
     handle = CreateFileA(DSPROBE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, OPEN_EXISTING, 0, NULL);
     g_DsProbeCount = 0;
+
     if (handle == INVALID_HANDLE_VALUE)
         return;
+
     ReadFile(handle, buffer, sizeof buffer - 1, &bytesRead, NULL);
     CloseHandle(handle);
     buffer[bytesRead < sizeof buffer ? bytesRead : sizeof buffer - 1] = 0;
+
     while (buffer[index] && g_DsProbeCount < DSPROBE_MAX)
     {
         UINT value = 0;
         INT got = 0;
+
         while (buffer[index] == ' ' || buffer[index] == '\t' || buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == ',')
             ++index;
+
         while (buffer[index])
         {
             CHAR character = buffer[index];
+
             if      (character >= '0' && character <= '9')
                 value = (value << NIBBLE_SHIFT) | (UINT)(character - '0');
             else if (character >= 'a' && character <= 'f')
@@ -174,9 +188,11 @@ VOID DsProbeLoad(VOID)
                 value = (value << NIBBLE_SHIFT) | (UINT)(character - 'A' + HEX_DIGIT_A_VALUE);
             else
                 break;
+
             ++got;
             ++index;
         }
+
         if (got)
             g_DsProbe[g_DsProbeCount++] = (WORD)value;
         else if (buffer[index])
@@ -215,22 +231,29 @@ VOID AsyncWhyReport(VOID)
     cursor = LogPut(cursor, " (cap "); cursor = LogHex(cursor, ASYNC_EARLY_BAIL_LOG_MAX);
     cursor = LogPut(cursor, " -- these are FILE I/O UNDER g_lock; see async_early_bail)\r\n");
     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+
     for (line = 0; line < 8; ++line)       /* one line per IRQ, flushed each: <= 32 x 24 chars */
     {
         UINT total = 0;
+
         for (reason = 0; reason < ASYNC_WHY_MAX; ++reason)
             total += g_AsyncWhyHistogram[line][reason];
+
         if (!total)
             continue;
+
         cursor = LogPut(cursor, "STAGE2: async why irq"); cursor = LogHexByte(cursor, (BYTE)line);
         cursor = LogPut(cursor, " total=");               cursor = LogHex(cursor, total);
+
         for (reason = 0; reason < ASYNC_WHY_MAX; ++reason)
         {
             if (!g_AsyncWhyHistogram[line][reason])
                 continue;
+
             cursor = LogPut(cursor, " "); cursor = LogPut(cursor, whyNames[reason]);
             cursor = LogPut(cursor, "="); cursor = LogHex(cursor, g_AsyncWhyHistogram[line][reason]);
         }
+
         cursor = LogPut(cursor, "\r\n");
         LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
     }
@@ -247,42 +270,56 @@ VOID IfvReport(VOID)
   { INT path, state, line;
   DWORD starveMaximumMs = g_IfvStarveMaximumMs;
     static PCSTR const stateNames[8] = { "000","001","010","011","100","101","110","111" };
+
     if (g_IfvStarveOpen && GetTickCount() - g_IfvStarveT0 > starveMaximumMs)
         starveMaximumMs = GetTickCount() - g_IfvStarveT0;
+
     cursor = LogPut(cursor, "STAGE2: IFV census (IF,VIF,S714)");
+
     for (path = 0; path < IFV_PATHS; ++path)
     {
         cursor = LogPut(cursor, path == 0 ? " live{" : path == 1 ? " vtib01{" : " vtibdev{");
+
         for (state = 0; state < 8; ++state)
         {
             if (!g_IfvCensus[path][state])
                 continue;
+
             cursor = LogPut(cursor, " "); cursor = LogPut(cursor, stateNames[state]); cursor = LogPut(cursor, "=");
             cursor = LogHex(cursor, g_IfvCensus[path][state]);
         }
+
         cursor = LogPut(cursor, " }");
     }
+
     cursor = LogPut(cursor, " starve_max_ms="); cursor = LogHex(cursor, starveMaximumMs);
     cursor = LogPut(cursor, " stretches=");     cursor = LogHex(cursor, g_IfvStarveCount);
     cursor = LogPut(cursor, " shadow{");
+
     for (line = 0; line < 16; ++line)
     {
         if (!g_IfvShadow[line])
             continue;
+
         cursor = LogPut(cursor, " irq"); cursor = LogHexByte(cursor, (BYTE)line);
         cursor = LogPut(cursor, "=");    cursor = LogHex(cursor, g_IfvShadow[line]);
     }
+
     cursor = LogPut(cursor, " } reenter{");
+
     for (line = 0; line < 16; ++line)
     {
         if (!g_IfvReenter[line])
             continue;
+
         cursor = LogPut(cursor, " irq"); cursor = LogHexByte(cursor, (BYTE)line);
         cursor = LogPut(cursor, "=");    cursor = LogHex(cursor, g_IfvReenter[line]);
     }
+
     cursor = LogPut(cursor, " }\r\n");
     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
     { LONG index, count = g_IfvTraceCount < IFV_TRACE_MAX ? g_IfvTraceCount : IFV_TRACE_MAX;
+
       for (index = 0; index < count; ++index)
       {
           cursor = LogPut(cursor, "STAGE2: IFV irq"); cursor = LogHexByte(cursor, g_IfvTrace[index].Irq);
@@ -293,6 +330,7 @@ VOID IfvReport(VOID)
           cursor = LogPut(cursor, ":");      cursor = LogHex(cursor, g_IfvTrace[index].Ip);
           cursor = LogPut(cursor, "\r\n");
       }
+
       LogAppend(LOG_PATH, base, cursor);
       SerialOut(base, cursor);
       cursor = base; } }
@@ -319,12 +357,14 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
                           : "\r\nHOST FATAL (real-mode guest): exception code=0x");
     cursor = LogHex(cursor, record->ExceptionCode);
     cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, (UINT)(ULONG_PTR)record->ExceptionAddress);
+
     if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= EXCEPTION_AV_PARAMETERS)
     {
         cursor = LogPut(cursor, " av{op=0x");  cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[EXCEPTION_AV_OPERATION]);
         cursor = LogPut(cursor, " addr=0x");   cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[EXCEPTION_AV_ADDRESS]);
         cursor = LogPut(cursor, "}");
     }
+
     cursor = LogPut(cursor, "\r\n  CS:EIP=0x"); cursor = LogHex(cursor, context->SegCs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, context->Eip);
     cursor = LogPut(cursor, " SS:ESP=0x"); cursor = LogHex(cursor, context->SegSs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, context->Esp);
     cursor = LogPut(cursor, " EFL=0x"); cursor = LogHex(cursor, context->EFlags); cursor = LogPut(cursor, "\r\n");
@@ -335,6 +375,7 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
     cursor = LogPut(cursor, "\r\n");
     { const BYTE *faultBytes = (const BYTE *)(ULONG_PTR)(record->ExceptionAddress);
       cursor = LogPut(cursor, "  bytes@fault: ");
+
       if (HostReadable(faultBytes, 16))
           cursor = LogDump(cursor, faultBytes, 16);
           else
@@ -356,6 +397,7 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
         cursor = LogPut(cursor, " ax=0x"); cursor = LogHex(cursor, cpu->Registers[0]); cursor = LogPut(cursor, " cx=0x"); cursor = LogHex(cursor, cpu->Registers[1]);
         cursor = LogPut(cursor, "\r\n");
     }
+
     /* Where the GUEST was when the host died. For a real-mode crash this is the
      * line that names the suspect -- e.g. a CLI poll of an unclaimed port.
      */
@@ -367,6 +409,7 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
         cursor = LogPut(cursor, " eax=0x"); cursor = LogHex(cursor, VDM_REG(tibDebug, VTIB_EAX));
         cursor = LogPut(cursor, " edx=0x"); cursor = LogHex(cursor, VDM_REG(tibDebug, VTIB_EDX)); cursor = LogPut(cursor, "}");
     }
+
     cursor = LogPut(cursor, "\r\n");
     /* WHO CALLED INTO THIS? (GH #128, session 38) (Importance = 2):
      * A fault inside ntdll or kernel32 is OUR bug at one remove -- some host call
@@ -382,6 +425,7 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
      */
     cursor = LogPut(cursor, "  last WOW32 call ENTERED: id=0x"); cursor = LogHex(cursor, g_WowLastId);
     { PCSTR name = Wow32Name(g_WowLastId);
+
       if (name)
       {
           cursor = LogPut(cursor, " ");
@@ -399,22 +443,28 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
     cursor = LogPut(cursor, "\r\n  frames:");
     {   DWORD framePointer = context->Ebp;
     INT index;
+
         for (index = 0; index < 12 && framePointer; ++index)
         {
             const DWORD *frame = (const DWORD *)(ULONG_PTR)framePointer;
+
             if (!HostReadable(frame, 8))
             {
                 cursor = LogPut(cursor, " <unreadable>");
                 break;
             }
+
             cursor = LogPut(cursor, " 0x"); cursor = LogHex(cursor, frame[1]);
+
             if (frame[0] <= framePointer)
             {
                 cursor = LogPut(cursor, " <chain ends>");
                 break;
             }
+
             framePointer = frame[0];
         }
+
         cursor = LogPut(cursor, "\r\n");
     }
     /* [INFO]: AND THE RAW STACK, because the frame chain is only as good as EBP. A leaf
@@ -426,6 +476,7 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
     {   const DWORD *stack = (const DWORD *)(ULONG_PTR)context->Esp;
     INT index;
         cursor = LogPut(cursor, "  @esp:");
+
         for (index = 0; index < 24; ++index)
         {
             if (!HostReadable(stack + index, 4))
@@ -433,8 +484,10 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
                 cursor = LogPut(cursor, " <unreadable>");
                 break;
             }
+
             cursor = LogPut(cursor, " 0x"); cursor = LogHex(cursor, stack[index]);
         }
+
         cursor = LogPut(cursor, "\r\n");
     }
     LogAppend(LOG_PATH, lineBuffer, cursor);
@@ -472,33 +525,40 @@ LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
             || record->ExceptionCode == EXCEPTION_SINGLE_STEP)
         {
             LONG faultNumber = InterlockedIncrement(&g_RmFaultSeen);
+
             if (faultNumber <= 32)
             {
                 cursor = LogPut(cursor, "HOSTFAULT #"); cursor = LogHex(cursor, (UINT)faultNumber);
                 cursor = LogPut(cursor, ": exc=0x"); cursor = LogHex(cursor, record->ExceptionCode);
                 cursor = LogPut(cursor, " at=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)record->ExceptionAddress);
+
                 if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= EXCEPTION_AV_PARAMETERS)
                 {
                     cursor = LogPut(cursor, " av{op=0x"); cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[EXCEPTION_AV_OPERATION]);
                     cursor = LogPut(cursor, " addr=0x"); cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[EXCEPTION_AV_ADDRESS]);
                     cursor = LogPut(cursor, "}");
                 }
+
                 cursor = LogPut(cursor, " cs:eip=0x"); cursor = LogHex(cursor, context->SegCs);
                 cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, context->Eip);
                 cursor = LogPut(cursor, " tid=0x"); cursor = LogHex(cursor, GetCurrentThreadId());
                 cursor = LogPut(cursor, (GetCurrentThreadId() == g_GuestThreadId) ? " (guest thread)" : " (worker)");
+
                 if (g_TibDebug)
                 {
                     volatile BYTE *tibDebug = g_TibDebug;
                     cursor = LogPut(cursor, " tib{cs:ip=0x"); cursor = LogHex(cursor, VDM_REG16(tibDebug, VTIB_CS));
                     cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, VDM_REG(tibDebug, VTIB_EIP)); cursor = LogPut(cursor, "}");
                 }
+
                 cursor = LogPut(cursor, "\r\n");
                 LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
             }
         }
+
         return EXCEPTION_CONTINUE_SEARCH;
     }
+
     InterlockedIncrement(&g_VehAny);                   /* run 52: prove ANY PM fault reaches us */
 
     /* --- Reflected PM software interrupt = the DPMI INT 31h dispatch (run 26) ---------
@@ -567,18 +627,21 @@ LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
          */
         cursor = LogPut(cursor, " exc=0x"); cursor = LogHex(cursor, record->ExceptionCode);
         cursor = LogPut(cursor, " at=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)record->ExceptionAddress);
+
         if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= EXCEPTION_AV_PARAMETERS)
         {
             cursor = LogPut(cursor, " av{op=0x");  cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[EXCEPTION_AV_OPERATION]);
             cursor = LogPut(cursor, " addr=0x");   cursor = LogHex(cursor, (DWORD)record->ExceptionInformation[EXCEPTION_AV_ADDRESS]);
             cursor = LogPut(cursor, "}");
         }
+
         { const BYTE *faultBytes = (const BYTE *)(ULONG_PTR)(g_DpmiCodeBase + (context->Eip & WORD_MASK));
           cursor = LogPut(cursor, " b@eip=");
           cursor = LogDump(cursor, faultBytes, 6); }
         cursor = LogPut(cursor, " ctx{ss:esp=0x"); cursor = LogHex(cursor, context->SegSs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, context->Esp);
         cursor = LogPut(cursor, " ds=0x"); cursor = LogHex(cursor, context->SegDs); cursor = LogPut(cursor, " es=0x"); cursor = LogHex(cursor, context->SegEs);
         cursor = LogPut(cursor, " edi=0x"); cursor = LogHex(cursor, context->Edi); cursor = LogPut(cursor, "}");
+
         if (g_TibDebug)
         {
             volatile BYTE *tibDebug = g_TibDebug;
@@ -587,6 +650,7 @@ LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
             cursor = LogPut(cursor, " eax=0x"); cursor = LogHex(cursor, VDM_REG(tibDebug, VTIB_EAX));
             cursor = LogPut(cursor, " edx=0x"); cursor = LogHex(cursor, VDM_REG(tibDebug, VTIB_EDX)); cursor = LogPut(cursor, "}");
         }
+
         /* IS THIS A REFLECTED `INT nn` AT ALL? ASK THE INSTRUCTION, NOT THE ARM:
          * Measured under `pmkernel.flag` (build/pmk5.log, 8 hits, one per PM entry):
          * SIX carry exc=0xC0000005 and TWO exc=0xC000001E, and the bytes at the
@@ -603,6 +667,7 @@ LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
          * Service ONLY what is provably an INT: `CD nn` at the faulting EIP.
          */
         { const BYTE *faultInstruction = (const BYTE *)(ULONG_PTR)(g_DpmiCodeBase + (context->Eip & WORD_MASK));
+
           if (faultInstruction[0] != X86_OP_INT)
           {
               /* - WE ARE A FIRST-CHANCE HANDLER. ARE WE STEALING A FAULT THE KERNEL
@@ -626,6 +691,7 @@ LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
                   LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
                   return EXCEPTION_CONTINUE_SEARCH;
               }
+
               /* RESUME WHERE THE GUEST ACTUALLY IS, NOT WHERE THE RECORD SAYS:
                * The reported EIP is unreliable: E+0, E+1 and E+3 all measured, and
                * pmal.com and pmstep.com report DIFFERENT offsets for byte-identical
@@ -671,6 +737,7 @@ LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
                   cursor = LogPut(cursor, "\r\n");
                   goto fatalDump;                       /* the label flushes cb */
               }
+
               if (g_PmEntryEip >= 0 && (DWORD)g_PmEntryEip != context->Eip)
               {
                   cursor = LogPut(cursor, " -> FAULT, not an INT: resuming at ENTRY 0x");
@@ -681,13 +748,16 @@ LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
               {
                   cursor = LogPut(cursor, " -> FAULT, not an INT: resuming untouched");
               }
+
               cursor = LogPut(cursor, "\r\n");
               LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
               context->SegCs = DPMI_INITIAL_CODE_SELECTOR;
               context->SegSs = DPMI_INITIAL_DATA_SELECTOR;       /* guest selectors back; regs intact */
               return EXCEPTION_CONTINUE_EXECUTION;
           } }
+
         context->EFlags &= ~EFLAGS_CF_U;                              /* default: CF=0 (success) */
+
         switch (functionNumber)
         {
         case DPMI_FN_GET_VERSION:                                    /* get DPMI version */
@@ -711,6 +781,7 @@ LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
             cursor = LogPut(cursor, " -> UNSUPPORTED (CF=1)");
             break;
         }
+
         cursor = LogPut(cursor, "\r\n");
         LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
         context->SegCs = DPMI_INITIAL_CODE_SELECTOR;
@@ -746,10 +817,12 @@ LONG WINAPI HostUnhandledFilter(EXCEPTION_POINTERS *pointers)
     {
         if (DpmiCrashVeh(pointers) == EXCEPTION_CONTINUE_EXECUTION)
             return EXCEPTION_CONTINUE_EXECUTION;
+
         /* DpmiCrashVeh's fatal arm has already dumped and exited when it applies;
          * anything that falls out of it is the real-mode/host case below.
          */
     }
+
     cursor = LogPut(cursor, "\r\nHOST UNHANDLED EXCEPTION (last chance; no SEH claimed it):\r\n");
     LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
     HostFatalDump(pointers->ExceptionRecord, pointers->ContextRecord);
@@ -813,6 +886,7 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
      */
     { UINT tick = 0, frozen = 0;
     INT watchdogSaidWait = 0;
+
       for (;;)
       {
         LONG iter;
@@ -821,18 +895,21 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
         DWORD base;
         const BYTE *entryBytes;
         Sleep(DPMI_WATCHDOG_TICK_MS);
+
         if (g_DpmiDone)                                /* client exited cleanly -> keep the window */
         {
             cursor = LogPut(cursor, "STAGE3-DPMI: watchdog stand-down (client done)\r\n");
             LogAppend(WDLOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
             return 0;
         }
+
         if (g_DpmiWatchdogGeneration != modeYGeneration)                    /* its client went back to a parent */
         {
             cursor = LogPut(cursor, "STAGE3-DPMI: watchdog stand-down (client returned to its parent)\r\n");
             LogAppend(WDLOG_PATH, lineBuffer, cursor); LogAppend(LOG_PATH, lineBuffer, cursor);
             return 0;
         }
+
         /* [CAUTION]: A TICK MARKER, so "no samples" can be told apart from "never woke up".
          * Printed AFTER Sleep and BEFORE anything else, for the first 24 iterations.
          * If wd[0] is followed by tick 1 but no sample, the fault is below; if there
@@ -845,6 +922,7 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
             cursor = LogPut(cursor, "  wdtick "); cursor = LogHex(cursor, tick); cursor = LogPut(cursor, "\r\n");
             LogAppend(WDLOG_PATH, lineBuffer, cursor); cursor = lineBuffer;
         }
+
         iter   = g_DpmiIteration;
         frozen = (iter == prev) ? (frozen + 1) : 0;
         /* A Win16 TASK WAITING FOR THE USER IS NOT WEDGED (Importance = 3):
@@ -863,6 +941,7 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
          */
         if (g_PauseWant && frozen)
             frozen = 0;                          /* #219: paused, not wedged */
+
         if (g_WowMsgInWait && frozen)
         {
             if (!watchdogSaidWait)
@@ -873,8 +952,10 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
                             " for as long as it waits\r\n");
                 LogAppend(WDLOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor); cursor = lineBuffer;
             }
+
             frozen = 0;
         }
+
         if (tick < 12 || frozen)                           /* diagnostic window + any freeze */
         {
             enCs  = g_DpmiEnterCs;
@@ -918,6 +999,7 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
             if (frozen)
             {
               cursor = LogPut(cursor, "  wd["); cursor = LogHex(cursor, tick); cursor = LogPut(cursor, "]+");
+
               if (g_DpmiPm)                             /* wedged: dump the guest bytes there */
               {
                 base = DpmiSelectorBase((WORD)enCs);
@@ -944,6 +1026,7 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
                     cursor = LogPut(cursor, " does not resolve>");
                 }
               }
+
             /* AND WHERE IT ACTUALLY IS, NOT WHERE IT WENT IN (Importance = 1):
              * `enter=` is the CS:EIP we HANDED to DpmiEnterProtectedMode. The PM heartbeat
              * prints the same thing, so when a WOW run's log stops, all it licenses
@@ -969,6 +1052,7 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
                 DWORD guestFlags = 0;
                 INT got = 0;
                 context.ContextFlags = CONTEXT_CONTROL;
+
                 if (SuspendThread(g_HostCpu) != (DWORD)-1)
                 {
                     if (GetThreadContext(g_HostCpu, &context))
@@ -980,8 +1064,10 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
                         guestFlags  = context.EFlags;
                         got = 1;
                     }
+
                     ResumeThread(g_HostCpu);
                 }
+
                 if (!got)
                 {
                     cursor = LogPut(cursor, " LIVE=<thread sample failed>");
@@ -996,10 +1082,12 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
                     cursor = LogPut(cursor, ":");              cursor = LogHex(cursor, guestEsp);
                     cursor = LogPut(cursor, " efl=");          cursor = LogHex(cursor, guestFlags);
                     cursor = LogPut(cursor, " csbase=");       cursor = LogHex(cursor, liveBase);
+
                     if (liveBase && MemoryReadable((ULONG_PTR)liveBytes, 8))
                     {
                         cursor = LogPut(cursor, " b@live="); cursor = LogDump(cursor, liveBytes, 8);
                     }
+
                     /* -- A GUEST THAT IS MOVING IS NOT WEDGED. (s74c, Duke3D's SETUP)
                      * `iter` counts PM ENTRIES, so a flat client that runs natively
                      * without trapping -- SETMAIN hooks the keyboard, not the timer,
@@ -1013,18 +1101,22 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
                      * new EIP resets the streak, exactly as the Win16 wait does.
                      */
                     { static DWORD watchdogLivePrevious = 0;
+
                       if ((guestCs & DPMI_SELECTOR_TI) && guestEip != watchdogLivePrevious)
                       {
                           frozen = 0;
                           cursor = LogPut(cursor, " (moving -> not wedged)");
                       }
+
                       watchdogLivePrevious = guestEip; }
                 }
               }
+
               cursor = LogPut(cursor, "\r\n");
               LogAppend(WDLOG_PATH, lineBuffer, cursor); cursor = lineBuffer;    /* the enrichment, as its own line */
             }
         }
+
         prev = iter;
         ++tick;
         /* [CAUTION]: ON A WOW RUN A FREEZE IS THE MEASUREMENT, NOT A FAULT TO BE CLEANED UP.
@@ -1059,23 +1151,29 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
         DWORD total = (DWORD)g_Machine->OutputLength;
         cursor = lineBuffer; cursor = LogPut(cursor, "  ==> DOS OUTPUT (wedged): [\r\n");
         LogAppend(WDLOG_PATH, lineBuffer, cursor);
+
         while (offset < total)
         {
             DWORD length = total - offset;
             CHAR slice[257];
+
             if (length > 256)
                 length = 256;
+
             {
                 DWORD index;
+
                 for (index = 0; index < length; ++index)
                     slice[index] = g_Machine->Output[offset + index];
             }
             LogAppend(WDLOG_PATH, slice, slice + length);
             offset += length;
         }
+
         cursor = lineBuffer; cursor = LogPut(cursor, "\r\n]\r\n");
         LogAppend(WDLOG_PATH, lineBuffer, cursor);
     }
+
     /* [CAUTION]: TAKE THE TRAY ICON WITH US. TerminateProcess runs NO cleanup at all, so
      * an icon left installed here becomes a genuine GHOST -- it sits in the
      * tray pointing at a dead process until the user happens to mouse over it

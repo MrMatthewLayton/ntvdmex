@@ -54,6 +54,7 @@ static INT g_Failures = 0;
 static VOID BdaTestCheck(BOOL passed, PCSTR description)
 {
     g_Total++;
+
     if (passed)
     {
         printf("  PASS  %s\n", description);
@@ -96,9 +97,11 @@ INT main(VOID)
     BdaTestCheck(BdaTestReadWord(BIOS_BDA_BASE + BIOS_BDA_MEMORY_KB) == BDA_TEST_BASE_KB_640,    "0040:0013 = 639 (INT 12h's)");
     BdaTestCheck(g_Memory[BDA_TEST_EBDA_LINEAR_640] == BDA_TEST_EBDA_KB,      "EBDA:0000 = its own size in KB");
     dirtyBytes = 0;
+
     for (byteIndex = 1; byteIndex < BDA_TEST_EBDA_BYTES; ++byteIndex)
         if (g_Memory[BDA_TEST_EBDA_LINEAR_640 + byteIndex])
             ++dirtyBytes;
+
     BdaTestCheck(dirtyBytes == 0, "EBDA:0001..03FF zeroed");
     BdaTestCheck(g_Memory[BDA_TEST_LPT3_SLOT] == BDA_TEST_POISON && g_Memory[BDA_TEST_LPT3_SLOT + 1] == BDA_TEST_POISON
                  && g_Memory[BDA_TEST_ABOVE_MEMORY_KB] == BDA_TEST_POISON,

@@ -98,9 +98,11 @@ static INT PicTopLine(PCPIC_CHIP chip, BYTE mask)
     for (rank = 0; rank < PIC_LINES_PER_CHIP; ++rank)
     {
         INT line = ((INT)chip->LowestPriority + 1 + rank) & PIC_LINE_MASK;
+
         if (mask & (1u << line))
             return line;
     }
+
     return PIC_NO_LINE;
 }
 
@@ -127,15 +129,19 @@ static BYTE PicBlockers(PCPIC_CHIP chip, INT line, INT isMaster)
 
     if (chip->IsSpecialMaskMode)
         effective = (BYTE)(effective & ~chip->Imr);
+
     for (otherLine = 0; otherLine < PIC_LINES_PER_CHIP; ++otherLine)
     {
         if (!(effective & (1u << otherLine)))
             continue;
+
         if (isMaster && chip->IsSpecialFullyNested && line == PIC_CASCADE_LINE && otherLine == PIC_CASCADE_LINE)
             continue;
+
         if (PicRank(chip, otherLine) <= lineRank)
             blockers = (BYTE)(blockers | (1u << otherLine));
     }
+
     return blockers;
 }
 
@@ -146,6 +152,7 @@ static INT PicIsLineOpen(PCPIC_CHIP chip, INT line, INT isMaster)
 {
     if (chip->Imr & (1u << line))
         return FALSE;
+
     return PicBlockers(chip, line, isMaster) == 0;
 }
 
@@ -217,17 +224,21 @@ static VOID PicCommandWrite(PPIC_CHIP chip, BYTE value)
             chip->IsAutoEoi = FALSE;
             chip->IsSpecialFullyNested = FALSE;
         }
+
         return;
     }
+
     if (value & PIC_OCW3)                       /* OCW3 */
     {
         if (value & PIC_OCW3_RR)
             chip->IsIsrSelected = (BYTE)(value & PIC_OCW3_RIS);                        /* 0=IRR, 1=ISR */
+
         /* Special Mask Mode: ESMM (bit 6) enables the SMM bit (bit 5) to mean
          * anything; ESMM clear leaves the mode alone. 11 = set, 10 = clear.
          */
         if (value & PIC_OCW3_ESMM)
             chip->IsSpecialMaskMode = (BYTE)((value & PIC_OCW3_SMM) ? TRUE : FALSE);
+
         /* -- THE POLL COMMAND, AND WHY DROPPING IT WAS THE "RUNS BUT LIES"
          * SHAPE. A poll read and a status read are THE SAME `IN` ON THE SAME
          * PORT; the only thing that tells them apart is which OCW3 was written
@@ -247,8 +258,10 @@ static VOID PicCommandWrite(PPIC_CHIP chip, BYTE value)
          */
         if (value & PIC_OCW3_POLL)
             chip->IsPollArmed = TRUE;
+
         return;
     }
+
     /* OCW2: the EOI family. */
     /* [CAUTION]: NON-SPECIFIC EOI CLEARS THE HIGHEST-PRIORITY IN-SERVICE BIT IN THE CURRENT
      * ROTATION, against the full ISR -- Special Mask Mode does not hide masked
@@ -261,8 +274,10 @@ static VOID PicCommandWrite(PPIC_CHIP chip, BYTE value)
     case PIC_OCW2_NONSPECIFIC_EOI:                              /* non-specific EOI */
     {
         INT topLine = PicTopLine(chip, chip->Isr);
+
         if (topLine >= 0)
             PIC_ISR_CLEAR(chip, 1u << topLine);
+
         break; }
 
     case PIC_OCW2_SPECIFIC_EOI:             /* specific EOI */
@@ -275,11 +290,13 @@ static VOID PicCommandWrite(PPIC_CHIP chip, BYTE value)
     case PIC_OCW2_ROTATE_NONSPECIFIC_EOI:
     {
         INT topLine = PicTopLine(chip, chip->Isr);
+
         if (topLine >= 0)
         {
             PIC_ISR_CLEAR(chip, 1u << topLine);
             chip->LowestPriority = (BYTE)topLine;
         }
+
         break; }
 
     /* ROTATE ON SPECIFIC EOI. IT IS STILL AN EOI, AND THIS USED TO BE A NOP:
@@ -358,6 +375,7 @@ static VOID PicPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
     BYTE byteValue = (BYTE)value;
 
     (VOID)width;
+
     switch (port)
     {
     case PIC_MASTER_COMMAND:
@@ -399,6 +417,7 @@ static BYTE PicPollRead(PPIC_CHIP chip, INT isMaster)
 
     if (topLine < 0 || !PicIsLineOpen(chip, topLine, isMaster))
         return PIC_POLL_NONE;                    /* bit 7 clear: none takeable */
+
     PIC_IRR_CLEAR(chip, 1u << topLine);
     PicInterruptAcknowledge(chip, topLine);
     return (BYTE)(PIC_POLL_PENDING | topLine);
@@ -410,11 +429,13 @@ static VOID PicPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     PPIC_CHIP chip = (port < PIC_SLAVE_COMMAND) ? &state->Master : &state->Slave;
 
     (VOID)width;
+
     if (port == PIC_MASTER_DATA || port == PIC_SLAVE_DATA)
     {
         *value = chip->Imr;
         return;
     }
+
     /* A POLL IS A ONE-SHOT: OCW3's P bit arms the NEXT read only, and this read
      * consumes it. Leaving it armed would mean a guest that polls once never sees
      * a status byte again.
@@ -425,6 +446,7 @@ static VOID PicPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
         *value = PicPollRead(chip, chip == &state->Master);
         return;
     }
+
     *value = chip->IsIsrSelected ? chip->Isr : chip->Irr;
 }
 
@@ -444,12 +466,14 @@ INT VddPicCanDeliver(PPIC_STATE state, BYTE irq)
 
     if (irq >= PIC_LINES)
         return FALSE;
+
     chip   = (irq < PIC_LINES_PER_CHIP) ? &state->Master : &state->Slave;
     /* Masked, or in service at this or higher priority, blocks delivery -- this is
      * what stops a handler being re-entered before it EOIs.
      */
     if (!PicIsLineOpen(chip, irq & PIC_LINE_MASK, irq < PIC_LINES_PER_CHIP))
         return FALSE;
+
     /* -- A SLAVE LINE MUST ALSO GET THROUGH THE MASTER'S IR2, AND IN FULLY NESTED
      * MODE IR2 IN SERVICE IS A "NO". (#174) --------------------------------------
      * This used to test the master's mask and its bits 0:1 only, so a second slave
@@ -466,6 +490,7 @@ INT VddPicCanDeliver(PPIC_STATE state, BYTE irq)
      */
     if (irq >= PIC_LINES_PER_CHIP && !PicIsLineOpen(&state->Master, PIC_CASCADE_LINE, PIC_CHIP_MASTER))
         return FALSE;
+
     return TRUE;
 }
 
@@ -476,10 +501,12 @@ VOID VddPicAcknowledge(PPIC_STATE state, BYTE irq)
 
     if (irq >= PIC_LINES)
         return;
+
     chip   = (irq < PIC_LINES_PER_CHIP) ? &state->Master : &state->Slave;
     bit = (BYTE)(1u << (irq & PIC_LINE_MASK));
     PIC_IRR_CLEAR(chip, bit);
     PicInterruptAcknowledge(chip, irq & PIC_LINE_MASK);
+
     if (irq >= PIC_LINES_PER_CHIP)
         PicInterruptAcknowledge(&state->Master, PIC_CASCADE_LINE);                                   /* the cascade: IR2 in service */
 }
@@ -505,6 +532,7 @@ VOID VddPicAcknowledgeAutoEoi(PPIC_STATE state, BYTE irq)
         VddPicEndOfInterrupt(state, irq);
         return;
     }
+
     PIC_IRR_CLEAR(&state->Master, 1u << irq);
     /* The acknowledge half of a chip in rotate-in-AEOI mode moves the priority; the
      * host's specific EOI that follows does not. A single byte store, and never taken
@@ -518,9 +546,11 @@ VOID VddPicEndOfInterrupt(PPIC_STATE state, BYTE irq)
 {
     if (irq >= PIC_LINES)
         return;
+
     if (irq < PIC_LINES_PER_CHIP)
         PIC_ISR_CLEAR(&state->Master, 1u << irq);
     else       { PIC_ISR_CLEAR(&state->Slave, 1u << (irq - PIC_LINES_PER_CHIP));
+
                  if (!state->Slave.Isr)
                      PIC_ISR_CLEAR(&state->Master, PIC_CASCADE_BIT); }   /* release the cascade */
 }
@@ -529,8 +559,10 @@ BYTE VddPicVector(PPIC_STATE state, BYTE irq)
 {
     if (irq < PIC_LINES_PER_CHIP)
         return (BYTE)(state->Master.VectorBase + irq);
+
     if (irq < PIC_LINES)
         return (BYTE)(state->Slave.VectorBase + (irq - PIC_LINES_PER_CHIP));
+
     return PIC_NO_VECTOR;
 }
 
@@ -557,9 +589,12 @@ INT VddPicInitialize(PVDD_BUS bus, PVOID context)
     state->Bus = bus;
     VddPicReset(state);
     state->Bus = bus;
+
     if (VddClaimPorts(bus, PIC_MASTER_COMMAND, PIC_MASTER_DATA, PicPortIn, PicPortOut, state))
         return PIC_FAILED;
+
     if (VddClaimPorts(bus, PIC_SLAVE_COMMAND, PIC_SLAVE_DATA, PicPortIn, PicPortOut, state))
         return PIC_FAILED;
+
     return PIC_OK;
 }

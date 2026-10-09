@@ -61,17 +61,21 @@ static INT WowDlgPump(INT budget, PINT traceBudget)
             traceCursor = LogPut(traceCursor, " wp=0x");     traceCursor = LogHex(traceCursor, (DWORD)message.wParam);
             traceCursor = LogPut(traceCursor, " lp=0x");     traceCursor = LogHex(traceCursor, (DWORD)message.lParam);
             traceCursor = LogPut(traceCursor, " -> win16 0x"); traceCursor = LogHex(traceCursor, window16);
+
             if (!window16) traceCursor = LogPut(traceCursor, " (★ NOT ONE OF OURS -- nothing will be"
                                     " posted for it)");
+
             traceCursor = LogPut(traceCursor, "\r\n");
             LogAppend(LOG_PATH, traceBuffer, traceCursor);
         }
+
         if (WowWinThreadTimerFire(&message)) /* s93 */
         {
             ++count;
             ++g_WowWinPumped;
             continue;
         }
+
         /* #305 M11 (s91): THE DIALOG MANAGER'S KEYS. DialogBox's own loop gives a modal
          * dialog Tab / Shift+Tab between its controls, Enter = the default button and
          * Esc = IDCANCEL -- without the program asking. This loop dispatched keys raw,
@@ -93,14 +97,17 @@ static INT WowDlgPump(INT budget, PINT traceBudget)
             if (dialog && message.hwnd == dialog && message.message == WM_KEYDOWN)
             {
                 HWND saved = (HWND)GetPropA(dialog, "NTVDMEX16.DlgFocus");
+
                 if (!saved || !IsWindow(saved) || !IsChild(dialog, saved))
                     saved = GetNextDlgTabItem(dialog, NULL, FALSE);
+
                 if (saved && saved != dialog)
                 {
                     SetFocus(saved);
                     message.hwnd = saved;
                 }
             }
+
             if (dialog && IsWindow(dialog) && (message.hwnd == dialog || IsChild(dialog, message.hwnd))
                 && IsDialogMessageA(dialog, &message))
             {
@@ -109,11 +116,13 @@ static INT WowDlgPump(INT budget, PINT traceBudget)
                 continue;
             }
         }
+
         TranslateMessage(&message);
         DispatchMessageA(&message);
         ++count;
         ++g_WowWinPumped;
     }
+
     return count;
 }
 
@@ -149,8 +158,10 @@ INT WowDlgPush(
 
     if (g_WowDlgDepth >= WOWDLG_MAX_MODAL)
         return 0;
+
     if (!window || !returnLinear)
         return 0;
+
     dialog = &g_WowDlgModals[g_WowDlgDepth++];
     dialog->Window    = window;
     dialog->ReturnLinear  = returnLinear;
@@ -175,17 +186,21 @@ INT WowDlgPush(
     dialog->Owner32 = NULL;
     dialog->InitParameter = 0;
     dialog->FirstFocus = 0;     /* the caller sets them after the push */
+
     if (owner32)
     {
         HWND top = GetAncestor(owner32, GA_ROOT);
+
         if (!top)
             top = owner32;
+
         if (IsWindowEnabled(top))
         {
             EnableWindow(top, FALSE);
             dialog->Owner32 = top;
         }
     }
+
     return 1;
 }
 
@@ -194,6 +209,7 @@ VOID WowDlgSetInit(DWORD initParameter, WORD firstFocus)
 {
     if (g_WowDlgDepth <= 0)
         return;
+
     g_WowDlgModals[g_WowDlgDepth - 1].InitParameter  = initParameter;
     g_WowDlgModals[g_WowDlgDepth - 1].FirstFocus = firstFocus;
 }
@@ -219,6 +235,7 @@ INT WowDlgEnd(WORD window, WORD result)
             g_WowDlgModals[index].Result = result;
             return 1;
         }
+
     return 0;
 }
 
@@ -239,7 +256,9 @@ static VOID WowDlgUnwind(PWOWDLG_MODAL dialog, DWORD value)
      */
     if (dialog->Owner32 && IsWindow(dialog->Owner32))
         EnableWindow(dialog->Owner32, TRUE);
+
     dialog->Owner32 = NULL;
+
     if (g_WowDlgDepth > 0)
         --g_WowDlgDepth;
 }
@@ -284,6 +303,7 @@ INT WowDlgStep(
 
         if (!dialog)
             return 0;
+
         window = WowUserFindWindow(dialog->Window);
         target = dialog->Window;
 
@@ -422,9 +442,11 @@ INT WowDlgStep(
                  * and selects an edit's text as DialogBox does.
                  */
                 {   HWND focus = GetFocus();
+
                     if (!focus || focus == window->Window32 || !IsChild(window->Window32, focus))
                     {
                         HWND firstTabStop = GetNextDlgTabItem(window->Window32, NULL, FALSE);
+
                         if (firstTabStop)
                         {
                             /* [CAUTION]: NOT WM_NEXTDLGCTL: only the real DefDlgProc acts on
@@ -433,13 +455,16 @@ INT WowDlgStep(
                              */
                             CHAR className[WOWDLG_CLASS_NAME_MAX];
                             SetFocus(firstTabStop);
+
                             if (GetClassNameA(firstTabStop, className, sizeof className) && !lstrcmpiA(className, "Edit"))
                                 SendMessageA(firstTabStop, EM_SETSEL, 0, -1);
+
                             WowNotePut(note, noteCapacity, &noteLength, "Focus -> its first tab stop. ");
                         }
                     }
                 }
             }
+
             /* -- WAIT FOR SOMETHING TO HAPPEN, WHICH IS WHAT MODAL MEANS.
              * The dialog's controls are real Win32 windows on this thread, so
              * a click on one becomes a Win32 message here, which WowWinProc
@@ -466,20 +491,24 @@ INT WowDlgStep(
                 waitCursor = LogPut(waitCursor, "     WOWDLG: modal 0x"); waitCursor = LogHex(waitCursor, dialog->Window);
                 waitCursor = LogPut(waitCursor, " is WAITING for input -- the guest is parked"
                               " inside DialogBox on purpose, ");
+
                 if (g_WowMsgWaitMs) { waitCursor = LogPut(waitCursor, "for at most 0x");
                                         waitCursor = LogHex(waitCursor, g_WowMsgWaitMs);
                                         waitCursor = LogPut(waitCursor, " ms"); }
                 else                    waitCursor = LogPut(waitCursor, "for as long as it takes"
                                                       " (wowidle.txt = 0)");
+
                 waitCursor = LogPut(waitCursor, "\r\n");
                 LogAppend(LOG_PATH, waitBuffer, waitCursor);
             }
             g_WowMsgInWait = 1;
+
             while ((!running || *running) && !g_WowMsgCount
                    && (!g_WowMsgWaitMs || GetTickCount() - startTime < g_WowMsgWaitMs))
             {
                 if (!WowDlgPump(WOWDLG_PUMP_BUDGET, &dialog->TraceBudget))
                     MsgWaitForMultipleObjects(0, NULL, FALSE, WOWDLG_WAIT_SLICE_MS, QS_ALLINPUT);
+
                 /* -- THE HEARTBEAT NAMES THE THREAD, AND THAT IS THE POINT.
                  * (session 57, first run) The first cut of this loop printed a
                  * running total and a queue depth, and both were FROZEN --
@@ -499,6 +528,7 @@ INT WowDlgStep(
                  * warns about, and I shipped it anyway.
                  */
                 {   DWORD interval = (beatCount < WOWDLG_FAST_BEATS) ? WOWDLG_FAST_BEAT_MS : WOWDLG_SLOW_BEAT_MS;
+
                     if (GetTickCount() - lastBeat >= interval)
                     {
                         CHAR beatBuffer[WOWDLG_BEAT_LINE_MAX];
@@ -518,10 +548,12 @@ INT WowDlgStep(
                         beatCursor = LogHex(beatCursor, GetCurrentThreadId());
                         beatCursor = LogPut(beatCursor, ", the windows' thread 0x");
                         beatCursor = LogHex(beatCursor, g_WowWinThread);
+
                         if (g_WowWinThread && g_WowWinThread != GetCurrentThreadId())
                             beatCursor = LogPut(beatCursor, " -- ★★ DIFFERENT: PeekMessage is"
                                           " PER-THREAD, so this loop can never see"
                                           " their input");
+
                         beatCursor = LogPut(beatCursor, "\r\n");
                         LogAppend(LOG_PATH, beatBuffer, beatCursor);
                     }
@@ -537,7 +569,9 @@ INT WowDlgStep(
                 if (dialog->IsEnded || !IsWindow(window->Window32))
                     break;
             }
+
             g_WowMsgInWait = 0;
+
             if (dialog->IsEnded || !IsWindow(window->Window32))
                 continue;
 
@@ -557,6 +591,7 @@ INT WowDlgStep(
                 if (WowConvModalExit(dialog->IsEnded, TRUE, TRUE, TRUE)
                         != WOWCONV_MODAL_EXPIRED)
                     continue;
+
                 ++g_WowDlgRefused;
                 WowNotePut(note, noteCapacity, &noteLength, "MODAL 0x");
                 WowNoteHex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
@@ -584,6 +619,7 @@ INT WowDlgStep(
             messageNumber = message.Message;
             wParam = message.WParam;
             lParam = message.LParam;
+
             if (message.Window == dialog->Window)
             {
                 procedure = (DWORD)WowConvWindowProcedure((UINT)dialog->WindowProcedure,
@@ -593,14 +629,17 @@ INT WowDlgStep(
             {
                 PWOWUSER_WINDOW targetWindow = message.Window ? WowUserFindWindow(message.Window) : NULL;
                 DWORD targetProcedure = targetWindow ? WowUserWindowProcedureOf(targetWindow) : 0;
+
                 if (!targetProcedure)
                 {
                     ++dialog->Messages;
                     continue;            /* nowhere to put it; take the next one */
                 }
+
                 procedure = targetProcedure;
                 target  = message.Window;
             }
+
             WowNotePut(note, noteCapacity, &noteLength, "MODAL 0x");
             WowNoteHex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " -> hwnd=0x");
@@ -658,6 +697,7 @@ INT WowDlgStep(
             WowDlgUnwind(dialog, 0);
             continue;
         }
+
         if (g_WowCallDepth > 0)
         {
             g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_MODALPUMP;
@@ -671,13 +711,16 @@ INT WowDlgStep(
             g_WowUserDlgDefaults[g_WowCallDepth - 1].WParam = wParam;
             g_WowUserDlgDefaults[g_WowCallDepth - 1].LParam = lParam;
         }
+
         ++dialog->Messages;
         WowNotePut(note, noteCapacity, &noteLength, "-> 0x");
         WowNoteHex(note, noteCapacity, &noteLength, procedure >> WORD_SHIFT, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ":0x");
         WowNoteHex(note, noteCapacity, &noteLength, procedure & WORD_MASK, WOW_HEX_WORD_DIGITS);
+
         if (isAbsent) WowNotePut(note, noteCapacity, &noteLength, " [segment not present -- via the RETF"
                                            " trampoline]");
+
         return 1;
     }
 }

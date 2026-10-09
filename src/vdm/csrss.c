@@ -59,22 +59,28 @@ ULONG CsrssParseTaskId(PCSTR commandLine)
         {
             PCSTR digit = cursor + CSRSS_TASK_ID_FIRST_DIGIT;
             taskId = CSRSS_NO_TASK_ID;
+
             while (*digit == CSRSS_SPACE)
                 ++digit;
+
             for (;;)
             {
                 CHAR character = *digit;
+
                 if (character >= '0' && character <= '9')
                     taskId = taskId * CSRSS_HEX_RADIX + (ULONG)(character - '0');
                 else if ((character | CSRSS_LOWER_CASE_BIT) >= 'a' && (character | CSRSS_LOWER_CASE_BIT) <= 'f')
                     taskId = taskId * CSRSS_HEX_RADIX + (ULONG)((character | CSRSS_LOWER_CASE_BIT) - 'a' + CSRSS_HEX_LETTER_VALUE);
                 else
                     break;
+
                 ++digit;
             }
         }
+
         ++cursor;
     }
+
     return taskId;          /* last -i<n> on the line */
 }
 
@@ -90,8 +96,10 @@ BOOL CsrssRegisterConsole(VOID)
     DWORD tenthOut = 0;
     PVOID seventhOut = NULL;
     PVOID eleventhOut = NULL;
+
     if (!RegisterConsoleVDM)
         return FALSE;
+
     startEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
     endEvent   = CreateEventA(NULL, TRUE, FALSE, NULL);
     errorEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
@@ -106,15 +114,20 @@ BOOL CsrssGetCommand(VDM_COMMAND_INFO *commandInfo, DWORD *lastError)
         (PFN_GetNextVDMCommand)GetProcAddress(
             GetModuleHandleA(CSRSS_KERNEL32_NAME), CSRSS_GET_NEXT_VDM_COMMAND);
     BOOL succeeded;
+
     if (!GetNextVDMCommand)
     {
         if (lastError)
             *lastError = ERROR_PROC_NOT_FOUND;
+
         return FALSE;
     }
+
     succeeded = GetNextVDMCommand(commandInfo);
+
     if (lastError)
         *lastError = GetLastError();
+
     return succeeded;
 }
 
@@ -132,14 +145,18 @@ BOOL CsrssTaskDone(ULONG taskId, ULONG exitCode, DWORD *lastError, BOOL *didExit
     VDM_COMMAND_INFO commandInfo;
     BOOL succeeded = FALSE;
     INT charIndex;
+
     if (didExitVdm)
         *didExitVdm = FALSE;
+
     if (!GetNextVDMCommand)
     {
         if (lastError)
             *lastError = ERROR_PROC_NOT_FOUND;
+
         return FALSE;
     }
+
     ZeroMemory(&commandInfo, sizeof commandInfo);
     g_CsrssNextApp[0] = g_CsrssNextCommand[0] = g_CsrssNextDirectory[0] = CSRSS_END_OF_STRING;
     g_CsrssNextStandardHandles[CSRSS_STD_IN] = g_CsrssNextStandardHandles[CSRSS_STD_OUT] = g_CsrssNextStandardHandles[CSRSS_STD_ERR] = NULL;
@@ -169,23 +186,29 @@ BOOL CsrssTaskDone(ULONG taskId, ULONG exitCode, DWORD *lastError, BOOL *didExit
      */
     commandInfo.VDMState = VDM_FLAG_DOS;
     succeeded = GetNextVDMCommand(&commandInfo);
+
     if (lastError)
         *lastError = GetLastError();
+
     g_CsrssNextApp[sizeof g_CsrssNextApp - CSRSS_LAST_CHAR_OFFSET] = CSRSS_END_OF_STRING;
     g_CsrssNextCommand[sizeof g_CsrssNextCommand - CSRSS_LAST_CHAR_OFFSET] = CSRSS_END_OF_STRING;
+
     if (succeeded)
     {
         g_CsrssNextStandardHandles[CSRSS_STD_IN] = commandInfo.StdIn;
         g_CsrssNextStandardHandles[CSRSS_STD_OUT] = commandInfo.StdOut;
         g_CsrssNextStandardHandles[CSRSS_STD_ERR] = commandInfo.StdErr;
     }
+
     for (charIndex = 0; g_CsrssNextCommand[charIndex]; ++charIndex) if (g_CsrssNextCommand[charIndex] == CSRSS_CARRIAGE_RETURN || g_CsrssNextCommand[charIndex] == CSRSS_LINE_FEED)
     {
         g_CsrssNextCommand[charIndex] = CSRSS_END_OF_STRING;
         break;
     }
+
     if (ExitVDM && didExitVdm)
         *didExitVdm = ExitVDM(FALSE, CSRSS_EXIT_VDM_FLAGS);
+
     return succeeded;
 }
 
@@ -193,10 +216,12 @@ BOOL CsrssExitVdm(VOID)
 {
     typedef BOOL (WINAPI *PFN_ExitVDM)(BOOL, ULONG);
     PFN_ExitVDM ExitVDM = (PFN_ExitVDM)GetProcAddress(GetModuleHandleA(CSRSS_KERNEL32_NAME), CSRSS_EXIT_VDM);
+
     if (!ExitVDM)
     {
         SetLastError(ERROR_PROC_NOT_FOUND);
         return FALSE;
     }
+
     return ExitVDM(FALSE, CSRSS_EXIT_VDM_FLAGS);
 }

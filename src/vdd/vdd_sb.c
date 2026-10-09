@@ -121,6 +121,7 @@ static VOID SbOutputQueuePush(PSB_STATE state, BYTE value)
 {
     if (state->OutputQueueLength >= SB_OUTPUT_QUEUE_MAX)
         return;
+
     state->OutputQueue[(state->OutputQueueHead + state->OutputQueueLength) % SB_OUTPUT_QUEUE_MAX] = value;
     state->OutputQueueLength++;
 }
@@ -131,6 +132,7 @@ static BYTE SbOutputQueuePop(PSB_STATE state)
 
     if (!state->OutputQueueLength)
         return SB_FLOATING_BUS;                            /* nothing waiting: bus floats */
+
     value = state->OutputQueue[state->OutputQueueHead];
     state->OutputQueueHead = (BYTE)((state->OutputQueueHead + 1) % SB_OUTPUT_QUEUE_MAX);
     state->OutputQueueLength--;
@@ -199,8 +201,10 @@ static BYTE SbCommandArguments(PCSB_STATE state, BYTE command)
 {
     if (state->Model == SB_MODEL_SBPRO && SbIsSb16Only(command))
         return 0;                                                            /* #231 */
+
     if (command >= SB_DSP_PROGRAMMED_FIRST && command <= SB_DSP_PROGRAMMED_LAST)
         return SB_ARGUMENTS_PROGRAMMED;                                                                                /* mode byte + 16-bit length */
+
     switch (command)
     {
     case SB_DSP_DIRECT_DAC:
@@ -246,6 +250,7 @@ static VOID SbExecute(PSB_STATE state)
      * and it has never been recorded.
      */
     state->CommandHistogram[command]++;
+
     if (state->Model == SB_MODEL_SBPRO && SbIsSb16Only(command))
         return;                                                              /* #231: not a 3.02 command */
 
@@ -259,14 +264,17 @@ static VOID SbExecute(PSB_STATE state)
         state->IsSigned = (arguments[0] & SB_DSP_MODE_SIGNED) ? 1 : 0;
         state->IsStereo = (arguments[0] & SB_DSP_MODE_STEREO) ? 1 : 0;
         state->IsLegacyTransfer = 0;            /* SB16: the rate IS the frame rate */
+
         if (isInput)
         {
             state->TransferMode = SB_TRANSFER_IDLE;
             return;
         }
+
         SbStartBlock(state, (units + 1) * (is16Bit ? SB_SAMPLE16_BYTES : 1u), isAutoInit);
         return;
     }
+
     switch (command)
     {
     case SB_DSP_DIRECT_DAC:                                  /* direct DAC write: no DMA */
@@ -349,6 +357,7 @@ static VOID SbExecute(PSB_STATE state)
     case SB_DSP_EXIT_AUTO_DMA16:                       /* leave auto-init after this block */
         if (state->TransferMode == SB_TRANSFER_AUTO)
             state->TransferMode = SB_TRANSFER_SINGLE;
+
         break;
 
     case SB_DSP_IDENTIFY:                                  /* identify: reply with ~arg */
@@ -378,10 +387,12 @@ static VOID SbExecute(PSB_STATE state)
 static VOID SbDspWrite(PSB_STATE state, BYTE value)
 {
     state->DspWrites++;
+
     if (state->ArgumentsWanted)                 /* collecting arguments */
     {
         if (state->ArgumentCount < SB_ARGUMENTS_MAX)
             state->Arguments[state->ArgumentCount++] = value;
+
         if (state->ArgumentCount >= state->ArgumentsWanted)
         {
             SbExecute(state);
@@ -389,11 +400,14 @@ static VOID SbDspWrite(PSB_STATE state, BYTE value)
             state->ArgumentsWanted = 0;
             state->ArgumentCount = 0;
         }
+
         return;
     }
+
     state->Command = value;
     state->ArgumentCount = 0;
     state->ArgumentsWanted = SbCommandArguments(state, value);
+
     if (!state->ArgumentsWanted)
     {
         SbExecute(state);
@@ -409,6 +423,7 @@ static VOID SbPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
     BYTE byteValue = (BYTE)value;
 
     (VOID)width;
+
     switch (offset)
     {
     /* -- FM. 2x8/2x9 are the AdLib-compatible pair (0x388/0x389) on every card.
@@ -422,11 +437,13 @@ static VOID SbPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
     case SB_PORT_ADLIB_ADDRESS:                         /* FM address, array 0 */
         if (state->Opl)
             VddOplWriteAddress(state->Opl, 0, byteValue);
+
         break;
 
     case SB_PORT_FM_ADDRESS_HIGH:                                   /* FM address, array 1 on an OPL3 */
         if (state->Opl)
             VddOplWriteAddress(state->Opl, state->Opl->IsOpl3 ? 1 : 0, byteValue);
+
         break;
 
     case SB_PORT_FM_DATA:
@@ -434,6 +451,7 @@ static VOID SbPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
     case SB_PORT_ADLIB_DATA:               /* FM data */
         if (state->Opl)
             VddOplWriteData(state->Opl, byteValue);
+
         break;
 
     case SB_PORT_MIXER_ADDRESS:
@@ -468,6 +486,7 @@ static VOID SbPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
             if (!g_SbAbsent)
                 SbOutputQueuePush(state, SB_DSP_READY);
         }
+
         break;
 
     case SB_PORT_DSP_WRITE:
@@ -485,6 +504,7 @@ static VOID SbPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     BYTE offset = (BYTE)(port - state->BasePort);
 
     (VOID)width;
+
     switch (offset)
     {
     case SB_PORT_FM_ADDRESS:
@@ -515,8 +535,10 @@ static VOID SbPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
              */
             BYTE status82 = (BYTE)(state->IsIrqPending ? (state->Is16Bit ? SB_IRQ_STATUS_DMA16 : SB_IRQ_STATUS_DMA8) : SB_IRQ_STATUS_NONE);
             state->Mixer82Reads++;
+
             if (!status82)
                 state->Mixer82Zero++;
+
             *value = status82;
         }
         /* -- 0x80 / 0x81 ARE "WHICH IRQ AND DMA AM I ON?", AND WE ANSWERED
@@ -552,6 +574,7 @@ static VOID SbPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
         else if (state->MixerIndex == SB_MIXER_IRQ_SELECT)
         {
             BYTE mask = 0;
+
             if (state->Irq == 2)
                 mask = SB_IRQ_SELECT_2;
             else if (state->Irq == 5)
@@ -560,19 +583,24 @@ static VOID SbPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
                 mask = SB_IRQ_SELECT_7;
             else if (state->Irq == 10)
                 mask = SB_IRQ_SELECT_10;
+
             *value = mask;
         }
         else if (state->MixerIndex == SB_MIXER_DMA_SELECT)
         {
             BYTE mask = 0;
+
             if (state->Dma8 < SB_DMA8_CHANNELS)
                 mask |= (BYTE)(1u << state->Dma8);
+
             if (state->Dma16 >= SB_DMA16_FIRST && state->Dma16 <= SB_DMA16_LAST)
                 mask |= (BYTE)(1u << state->Dma16);
+
             *value = mask;
         }
         else
             *value = state->Mixer[state->MixerIndex];
+
         break;
 
     case SB_PORT_DSP_READ:
@@ -585,8 +613,10 @@ static VOID SbPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 
     case SB_PORT_DSP_READ_STATUS:                                   /* read status + 8-bit IRQ ack */
         *value = (BYTE)(state->OutputQueueLength ? SB_DSP_DATA_AVAILABLE : SB_DSP_NO_DATA);   /* bit 7 = data available */
+
         if (!state->Is16Bit)
             state->IsIrqPending = 0;
+
         break;
 
     case SB_PORT_DSP_ACK16:                                   /* 16-bit IRQ ack */
@@ -617,6 +647,7 @@ static INT16 SbFetchSample(PSB_STATE state, INT *isEnded)
     INT isTerminalCount = 0;
 
     *isEnded = 0;
+
     if (!state->Dma)
         return 0;
 
@@ -628,6 +659,7 @@ static INT16 SbFetchSample(PSB_STATE state, INT *isEnded)
     { PCDMA_CHANNEL channelState = &state->Dma->Channels[channel & SB_DMA_CHANNEL_MASK];
       UINT32 ringLength = (UINT32)channelState->BaseCount + 1u;
       UINT32 ringOffset = (UINT32)(WORD)(channelState->CurrentAddress - channelState->BaseAddress);
+
       if (ringLength != state->LapLength)     /* (re)programmed: start a fresh lap */
       {
           state->LapLength  = ringLength;
@@ -635,12 +667,15 @@ static INT16 SbFetchSample(PSB_STATE state, INT *isEnded)
           state->BlockSame = state->BlockBytes = 0;
           state->BlockMin  = SB_BLOCK_MIN_EMPTY;
           state->BlockMax = 0;
+
           if (ringLength > SB_LAP_MAX)
               ++state->LapTooBig;
       }
+
       state->LapOffset = (ringLength && ringLength <= SB_LAP_MAX) ? (ringOffset % ringLength) : SB_LAP_OFFSET_NONE; }
 
     bytesRead = VddDmaRead(state->Dma, channel, rawBytes, bytesWanted, &isTerminalCount);
+
     if (bytesRead < bytesWanted)
     {
         *isEnded = 1;
@@ -650,6 +685,7 @@ static INT16 SbFetchSample(PSB_STATE state, INT *isEnded)
     if (state->LapOffset != SB_LAP_OFFSET_NONE)
     {
         UINT32 byteIndex;
+
         for (byteIndex = 0; byteIndex < bytesWanted; ++byteIndex)
         {
             UINT32 lapIndex = (state->LapOffset + byteIndex) % state->LapLength;
@@ -660,19 +696,24 @@ static INT16 SbFetchSample(PSB_STATE state, INT *isEnded)
             {
                 ++state->BlockBytes;
                 ++state->LapTotal;
+
                 if (state->LapBuffer[lapIndex] == rawBytes[byteIndex])
                 {
                     ++state->BlockSame;
                     ++state->LapSame;
                 }
+
                 /* The block's own dynamic range, from the bytes already in hand. */
                 if (rawBytes[byteIndex] < state->BlockMin)
                     state->BlockMin = rawBytes[byteIndex];
+
                 if (rawBytes[byteIndex] > state->BlockMax)
                     state->BlockMax = rawBytes[byteIndex];
             }
+
             state->LapBuffer[lapIndex] = rawBytes[byteIndex];
         }
+
         state->LapSeen += bytesWanted;
     }
 
@@ -688,12 +729,15 @@ static INT16 SbFetchSample(PSB_STATE state, INT *isEnded)
               ? (state->IsSigned ? (INT8)rawBytes[1] * SB_SAMPLE8_SCALE : ((INT32)rawBytes[1] - SB_SAMPLE8_SILENCE) * SB_SAMPLE8_SCALE)
               : left;
     }
+
     if (state->CaptureBuffer && state->CaptureLength + bytesWanted <= state->CaptureCapacity)
     {
         UINT32 byteIndex;
+
         for (byteIndex = 0; byteIndex < bytesWanted; ++byteIndex)
             state->CaptureBuffer[state->CaptureLength++] = rawBytes[byteIndex];
     }
+
     state->BlockRemaining = (state->BlockRemaining > bytesWanted) ? (state->BlockRemaining - bytesWanted) : 0;
     state->LastLeft = (INT16)left;
     state->LastRight = (INT16)right;   /* #189: the pair, for stereo */
@@ -713,16 +757,20 @@ static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isSter
     for (frame = 0; frame < frames; ++frame)
     {
         INT isEnded = 0;
+
         if (state->TransferMode == SB_TRANSFER_IDLE || state->IsPaused)
         {
             SB_PUT(frame, 0, 0, 0);
+
             if (state->IsPaused)
                 state->OutputPaused++;
             else
                 state->OutputIdle++;
+
             state->IdleRun++;
             continue;
         }
+
         /* -- [CAUTION] THE ACK GATE. DO NOT ENTER THE NEXT BLOCK UNTIL THE GUEST HAS
          * ACKNOWLEDGED THE LAST ONE. ---------------------------------------------
          * Straight from VDMSound (SBCompatCtl.cpp HandleTransfer):
@@ -785,8 +833,10 @@ static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isSter
                 SB_PUT(frame, state->LastSample, state->LastLeft, state->LastRight);
                 continue;
             }
+
             state->GateForced++;
         }
+
         if (state->GateMode == SB_GATE_ACK && state->IsIrqPending && !state->Is16Bit)
         {
             if (state->GateWait < state->BlockLength * SB_GATE_SAFETY_BLOCKS)
@@ -798,8 +848,10 @@ static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isSter
                                                    a silence notch is a click */
                 continue;
             }
+
             state->GateForced++;                /* guest stopped acking -- yield */
         }
+
         state->GateWait = 0;
 
         /* #176: NO DACK, NO SAMPLE -- AND NO END OF BLOCK:
@@ -826,19 +878,24 @@ static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isSter
         {
             UINT32 runLength = state->IdleRun;
             UINT32 bucket = 0;
+
             while (runLength > 1 && bucket < SB_RUN_LAST_BUCKET)
             {
                 runLength >>= 1;
                 ++bucket;
             }
+
             state->IdleRuns[bucket]++;
             state->IdleRun = 0;
         }
+
         state->OutputActive++;
 
         state->LastSample = SbFetchSample(state, &isEnded);
+
         if (isEnded)
             state->LastLeft = state->LastRight = 0;                   /* the fetch returned 0: no pair */
+
         SB_PUT(frame, state->LastSample, state->LastLeft, state->LastRight);
 
         if (state->BlockRemaining == 0 || isEnded)
@@ -874,6 +931,7 @@ static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isSter
                 record->Reloaded   = (BYTE)(channelState->CurrentAddress == channelState->BaseAddress);
                 state->BlockLogCount  = state->Blocks + 1;      /* entries actually filled */
             }
+
             /* Score the block that just finished: >=90% identical to the same ring
              * offsets one lap ago means DMX never rewrote it and we played the
              * previous lap's audio again -- one echo, 186 ms after the original.
@@ -888,12 +946,16 @@ static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isSter
                 INT isReplayed = (state->BlockSame * SB_REPLAY_DENOMINATOR >= state->BlockBytes * SB_REPLAY_NUMERATOR);
                 INT isFlat     = (state->BlockMax - state->BlockMin) <= SB_FLAT_RANGE;
                 ++state->BlocksChecked;
+
                 if (isReplayed)
                     ++state->BlocksReplayed;
+
                 if (isFlat)
                     ++state->BlocksFlat;
+
                 if (isReplayed && !isFlat)
                     ++state->BlocksReplayedLoud;
+
                 /* A SILENT BLOCK IS NOT A DEFECT. AN ISOLATED SILENT BLOCK IS:
                  * 20% of blocks are flat, but the demo is genuinely quiet much of
                  * the time, so the raw count cannot say how much of that the user
@@ -911,6 +973,7 @@ static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isSter
                 {
                     UINT32 runLength = state->FlatRun;
                     UINT32 bucket;
+
                     if      (runLength < 4)
                         bucket = runLength - 1;                               /* 1, 2, 3 exactly */
                     else if (runLength < 8)
@@ -923,9 +986,11 @@ static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isSter
                         bucket = 6;
                     else
                         bucket = 7;
+
                     ++state->FlatRuns[bucket];
                     state->FlatRun = 0;
                 }
+
                 /* Close the run on the first block that is NOT an audible repeat --
                  * flat blocks end it too, since a silent block carries no evidence
                  * either way and bridging across one would invent a longer run.
@@ -933,6 +998,7 @@ static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isSter
                 if (isReplayed && !isFlat)
                 {
                     ++state->ReplayRun;
+
                     if (state->ReplayRun > state->ReplayRunMax)
                         state->ReplayRunMax = state->ReplayRun;
                 }
@@ -940,6 +1006,7 @@ static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isSter
                 {
                     UINT32 runLength = state->ReplayRun;
                     UINT32 bucket;
+
                     if      (runLength < 4)
                         bucket = runLength - 1;                               /* 1, 2, 3 exactly */
                     else if (runLength < 8)
@@ -952,24 +1019,30 @@ static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isSter
                         bucket = 6;
                     else
                         bucket = 7;
+
                     ++state->ReplayRuns[bucket];
                     state->ReplayRun = 0;
                 }
             }
+
             state->BlockSame = state->BlockBytes = 0;
             state->BlockMin = SB_BLOCK_MIN_EMPTY;
             state->BlockMax = 0;
             state->IsIrqPending = 1;
             state->Blocks++;
+
             if (state->Dma)
                 state->GateMark = state->Dma->CountReads;              /* gate mode 2 */
+
             VddRaiseIrq(state->Bus, state->Irq);
+
             if (state->TransferMode == SB_TRANSFER_AUTO && !isEnded)
                 state->BlockRemaining = state->BlockLength;
             else
                 state->TransferMode  = SB_TRANSFER_IDLE;
         }
     }
+
     return frames;
 }
 
@@ -1008,6 +1081,7 @@ VOID VddSbReset(PVOID context)
 
     for (byteIndex = 0; byteIndex < sizeof(*state); ++byteIndex)
         bytes[byteIndex] = 0;
+
     state->Bus = bus;
     state->Dma = dma;
     state->Opl = opl;
@@ -1040,6 +1114,7 @@ static BYTE SbDreq(PCVOID context)
 
     if (!VddSbIsActive(state))
         return 0;
+
     channel = state->Is16Bit ? state->Dma16 : state->Dma8;
     return (BYTE)(1u << (channel & SB_DMA_CHANNEL_MASK));
 }
@@ -1049,21 +1124,30 @@ INT VddSbInitialize(PVDD_BUS bus, PVOID context)
     PSB_STATE state = (PSB_STATE)context;
 
     state->Bus = bus;
+
     if (state->Dma)
         VddDmaAddDreq(state->Dma, SbDreq, state);
+
     if (!state->BasePort)
         state->BasePort  = SB_DEFAULT_BASE;
+
     if (!state->Irq)
         state->Irq   = SB_DEFAULT_IRQ;
+
     if (!state->Dma8)
         state->Dma8  = SB_DEFAULT_DMA8;
+
     if (!state->Dma16)
         state->Dma16 = SB_DEFAULT_DMA16;
+
     if (!state->RateHz)
         state->RateHz = SB_DEFAULT_RATE_HZ;
+
     if (!state->BlockLength)
         state->BlockLength = 1;
+
     if (VddClaimPorts(bus, state->BasePort, (WORD)(state->BasePort + SB_PORT_LAST), SbPortIn, SbPortOut, state))
         return SB_FAILED;
+
     return 0;
 }

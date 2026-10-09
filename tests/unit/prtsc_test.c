@@ -80,6 +80,7 @@ static INT g_OutputCount;
 static VOID PrintScreenTestCheck(BOOL passed, PCSTR message)
 {
     g_Checks++;
+
     if (passed)
     {
         printf("  PASS  %s\n", (message));
@@ -112,14 +113,18 @@ static INT PrintScreenTestRunJob(
     g_OutputCount = 0;
     g_CellReads = 0;
     BiosPrintScreenBegin(job, columns, bdaRowsMinusOne, PRTSC_TEST_PAGE, PRTSC_TEST_CURSOR);
+
     for (;;)
     {
         result = BiosPrintScreenStep(job, printerStatus, PrintScreenTestReadCell,
                                      PRTSC_TEST_NO_CONTEXT, &nextByte);
+
         if (result != BIOS_PRINT_SCREEN_STEP_EMIT)
             return result;
+
         if (g_OutputCount < (INT)sizeof g_Output)
             g_Output[g_OutputCount] = nextByte;
+
         ++g_OutputCount;
         printerStatus = (failAt && g_OutputCount == failAt) ? failStatus : PRTSC_TEST_PRINTER_READY;
     }
@@ -134,10 +139,12 @@ INT main(VOID)
     BOOL passed;
 
     printf("== prtsc_test: the default INT 05h (#274) ==\n");
+
     for (row = 0; row < PRTSC_TEST_SCREEN_ROWS; ++row)
         for (column = 0; column < PRTSC_TEST_SCREEN_COLUMNS; ++column)
             g_Screen[row][column] =
                 (BYTE)(PRTSC_TEST_FIRST_LETTER + (row + column) % PRTSC_TEST_LETTER_COUNT);
+
     g_Screen[0][0] = PRTSC_TEST_NUL_CELL;                 /* a NUL cell */
 
     result = PrintScreenTestRunJob(&job, PRTSC_TEST_COLUMNS_80, PRTSC_TEST_BDA_ROWS_25,

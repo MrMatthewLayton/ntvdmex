@@ -44,8 +44,10 @@ static PVOID const g_Bound = (PVOID)(SIZE_T)FH_TEST_BOUND_VALUE;
 static VOID FhTestExpect(PCSTR description, LONG actual, LONG expected)
 {
     ++g_Checks;
+
     if (actual == expected)
         return;
+
     ++g_Failures;
     printf("  FAIL %-52s got %ld, want %ld\n", description, (long)actual, (long)expected);
 }
@@ -116,8 +118,10 @@ INT main(VOID)
      */
     FhTestStandardTable(fileHandles, &deviceMask);
     deviceMask = FH_TEST_NONE;
+
     for (slot = 0; slot < DOS_MAX_FILES; ++slot)
         fileHandles[slot] = g_Bound;
+
     FhTestExpect("full table -> DOS_MAX_FILES", DosHandleAllocate(fileHandles, deviceMask), DOS_MAX_FILES);
 
     /* RULE 2: A BOUND HANDLE IS A FILE, WHATEVER ITS NUMBER:

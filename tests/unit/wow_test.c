@@ -213,12 +213,14 @@ static VOID WowTestScanHeader(PCSTR root, PCSTR relativePath)
 
     snprintf(path, sizeof path, "%s/%s", root, relativePath);
     file = fopen(path, "r");
+
     if (!file)
     {
         ++g_Skips;
         printf("  SKIP  %s not found\n", relativePath);
         return;
     }
+
     while (fgets(line, sizeof line, file))
     {
         CHAR name[128];
@@ -226,27 +228,40 @@ static VOID WowTestScanHeader(PCSTR root, PCSTR relativePath)
         PSTR cursor = line;
         PSTR nameCursor;
         ++lineNumber;
+
         while (*cursor == ' ' || *cursor == '\t')
             ++cursor;
+
         if (strncmp(cursor, "#define", 7))
             continue;
+
         cursor += 7;
+
         while (*cursor == ' ' || *cursor == '\t')
             ++cursor;
+
         nameCursor = name;
+
         while (*cursor && *cursor != ' ' && *cursor != '\t' && (nameCursor - name) < (INT)sizeof name - 1)
             *nameCursor++ = *cursor++;
+
         *nameCursor = 0;
+
         if (!strstr(name, "_ARG_"))
             continue;
+
         while (*cursor == ' ' || *cursor == '\t')
             ++cursor;
+
         if (*cursor == '(')
             continue;                                 /* not a plain number */
+
         {   PSTR end;
         value = strtol(cursor, &end, 0);
+
             if (end == cursor)
                 continue; }
+
         if (g_DefinitionCount >= MAXDEF)
         {
             /* Not `continue`. See the MAXDEF note: dropping a macro here makes
@@ -258,12 +273,14 @@ static VOID WowTestScanHeader(PCSTR root, PCSTR relativePath)
                             "reported as 'not defined'.\n", MAXDEF);
             exit(2);
         }
+
         snprintf(g_Definitions[g_DefinitionCount].Name, sizeof g_Definitions[g_DefinitionCount].Name, "%s", name);
         snprintf(g_Definitions[g_DefinitionCount].File, sizeof g_Definitions[g_DefinitionCount].File, "%s", relativePath);
         g_Definitions[g_DefinitionCount].Value = value;
         g_Definitions[g_DefinitionCount].Line = lineNumber;
         ++g_DefinitionCount;
     }
+
     fclose(file);
 }
 
@@ -276,13 +293,16 @@ static long WowTestDefinitionValue(PCSTR name, PINT found)
 
     if (found)
         *found = 0;
+
     for (index = 0; index < g_DefinitionCount; ++index)
         if (!strcmp(g_Definitions[index].Name, name))
         {
             if (found)
                 *found = 1;
+
             return g_Definitions[index].Value;
         }
+
     return -1;
 }
 
@@ -294,12 +314,14 @@ static VOID WowTestMacroHygiene(VOID)
     CHAR description[256];
 
     printf("\n-- part 1: no `*_ARG_*` macro may be defined twice --\n");
+
     for (first = 0; first < g_DefinitionCount; ++first)
     {
         for (second = first + 1; second < g_DefinitionCount; ++second)
         {
             if (strcmp(g_Definitions[first].Name, g_Definitions[second].Name))
                 continue;
+
             ++duplicateCount;
             snprintf(description, sizeof description,
                      "%s defined twice: %s:%d = %ld and %s:%d = %ld"
@@ -309,6 +331,7 @@ static VOID WowTestMacroHygiene(VOID)
             WowTestCheck(0, description);
         }
     }
+
     if (!duplicateCount)
     {
         snprintf(description, sizeof description,
@@ -323,6 +346,7 @@ static VOID WowTestOffsetTiling(VOID)
     CHAR description[320];
 
     printf("\n-- part 2: every argument offset table must tile its width --\n");
+
     for (serviceIndex = 0; serviceIndex < sizeof g_Services / sizeof g_Services[0]; ++serviceIndex)
     {
         const WOW_TEST_SERVICE *service = &g_Services[serviceIndex];
@@ -332,16 +356,19 @@ static VOID WowTestOffsetTiling(VOID)
         INT coveredBytes = 0;
         INT missingCount = 0;
         memset(cover, 0, sizeof cover);
+
         if (service->Width > (INT)sizeof cover)
         {
             ++g_Skips;
             continue;
         }
+
         for (fieldIndex = 0; fieldIndex < 14 && service->Fields[fieldIndex].Macro; ++fieldIndex)
         {
             INT found = 0;
             INT byteIndex;
             long offset = WowTestDefinitionValue(service->Fields[fieldIndex].Macro, &found);
+
             if (!found)
             {
                 snprintf(description, sizeof description, "%s: macro %s is not defined",
@@ -351,10 +378,13 @@ static VOID WowTestOffsetTiling(VOID)
                 isBad = 1;
                 continue;
             }
+
             coveredBytes += service->Fields[fieldIndex].Size;
+
             for (byteIndex = 0; byteIndex < service->Fields[fieldIndex].Size; ++byteIndex)
             {
                 long byteOffset = offset + byteIndex;
+
                 if (byteOffset < 0 || byteOffset >= service->Width)
                 {
                     snprintf(description, sizeof description,
@@ -364,6 +394,7 @@ static VOID WowTestOffsetTiling(VOID)
                     isBad = 1;
                     break;
                 }
+
                 if (cover[byteOffset])
                 {
                     snprintf(description, sizeof description,
@@ -373,11 +404,14 @@ static VOID WowTestOffsetTiling(VOID)
                     isBad = 1;
                     break;
                 }
+
                 cover[byteOffset] = 1;
             }
         }
+
         if (missingCount)
             continue;
+
         if (!isBad && coveredBytes != service->Width)
         {
             snprintf(description, sizeof description,
@@ -386,6 +420,7 @@ static VOID WowTestOffsetTiling(VOID)
             WowTestCheck(0, description);
             isBad = 1;
         }
+
         if (!isBad)
         {
             for (fieldIndex = 0; fieldIndex < service->Width; ++fieldIndex)
@@ -399,6 +434,7 @@ static VOID WowTestOffsetTiling(VOID)
                     break;
                 }
         }
+
         if (!isBad)
         {
             snprintf(description, sizeof description, "%s: %d bytes, tiled exactly",
@@ -565,19 +601,24 @@ static VOID WowTestModal(VOID)
      */
     for (isExpired = 0; isExpired < 5; ++isExpired)
         seen[isExpired] = 0;
+
     for (isEnded = 0; isEnded < 2; ++isEnded) for (isAlive = 0; isAlive < 2; ++isAlive)
     for (hasProcedure = 0; hasProcedure < 2; ++hasProcedure) for (isExpired = 0; isExpired < 2; ++isExpired)
     {
         INT verdict = WowConvModalExit(isEnded, isAlive, hasProcedure, isExpired);
+
         if (verdict < 0 || verdict > 4)
         {
             WowTestCheck(0, "modal: a verdict outside the five");
             return;
         }
+
         ++seen[verdict];
+
         if (verdict == WOWCONV_MODAL_RUN)
             ++runCount;
     }
+
     WowTestCheck(runCount == 1, "modal: EXACTLY ONE of the 16 states keeps pumping");
     WowTestCheck(seen[WOWCONV_MODAL_END] + seen[WOWCONV_MODAL_GONE]
        + seen[WOWCONV_MODAL_NOPROC] + seen[WOWCONV_MODAL_EXPIRED] == 15,
@@ -649,9 +690,11 @@ static VOID WowTestMetafile(VOID)
     for (offset = first; count < 8 && WowConvMetafileRecord(metafile, end, offset, &bytes, &function); offset += bytes)
     {
         sequence[count++] = function;
+
         if (function == 0)
             break;
     }
+
     WowTestCheck(count == 4 && sequence[0] == 0x02FA && sequence[1] == 0x012D && sequence[2] == 0x041B && sequence[3] == 0,
        "WMF: four records in order -- rdSize is WORDS, so each step lands on a header");
     WowTestCheck(bytes == 6, "WMF: META_EOF is a 3-WORD record");
@@ -692,13 +735,16 @@ INT main(INT argc, PSTR *argv)
     UINT index;
 
     printf("== WOW32 translation-layer battery (GH #128) ==\n");
+
     for (index = 0; index < sizeof g_Headers / sizeof g_Headers[0]; ++index)
         WowTestScanHeader(root, g_Headers[index]);
+
     if (!g_DefinitionCount)
     {
         printf("  FAIL  no argument-offset macros found under %s -- wrong root?\n", root);
         return 1;
     }
+
     WowTestMacroHygiene();
     WowTestOffsetTiling();
     WowTestConversions();

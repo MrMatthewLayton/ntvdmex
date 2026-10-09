@@ -63,8 +63,10 @@ static inline INT DosExtMemClassify(
 
     if (length == 0 || end < linearAddress)
         return DOS_EXTMEM_REGION_NONE;                                        /* wraps 4 GB */
+
     if (end <= DOS_EXTMEM_DIRECT_END)
         return DOS_EXTMEM_REGION_DIRECT;
+
     if (xmsState)
     {
         for (handleIndex = 0; handleIndex < DOS_XMS_MAX_HANDLES; ++handleIndex)
@@ -72,16 +74,21 @@ static inline INT DosExtMemClassify(
             PCDOS_XMS_HANDLE handleEntry = &xmsState->Handles[handleIndex];
             DWORD blockBase;
             DWORD blockEnd;
+
             if (!handleEntry->InUse || !handleEntry->Memory || !handleEntry->SizeKb)
                 continue;
+
             blockBase = (DWORD)(UINT_PTR)handleEntry->Memory;
             blockEnd = blockBase + handleEntry->SizeKb * DOS_XMS_BYTES_PER_KB;
+
             if (linearAddress >= blockBase && end <= blockEnd && blockEnd > blockBase)
                 return DOS_EXTMEM_REGION_EMB;
         }
     }
+
     if (linearAddress >= DOS_EXTMEM_DIRECT_END && end <= DOS_EXTMEM_RAW_END)
         return DOS_EXTMEM_REGION_RAW;
+
     return DOS_EXTMEM_REGION_NONE;
 }
 

@@ -89,10 +89,12 @@ PCSTR NtvdmexRoot(VOID)
         INT index;
         INT last = -1;
         INT prev = -1;
+
         if (length == 0 || length >= sizeof self - 2)
         {
             for (index = 0; NTVDMEX_DIR_DEFAULT[index]; ++index)
                 root[index] = NTVDMEX_DIR_DEFAULT[index];
+
             root[index] = 0;
         }
         else
@@ -102,6 +104,7 @@ PCSTR NtvdmexRoot(VOID)
                 prev = last;
                 last = index;
             }
+
             if (last < 0)
             {
                 root[0] = '.';
@@ -115,19 +118,24 @@ PCSTR NtvdmexRoot(VOID)
                  * parent. bm is the pre-s73 name; an installed s72 zip still has it.
                  */
                 INT directoryLength = last - prev;                /* dir name length + 1 */
+
                 if (prev >= 0 && (self[prev + 1] | ASCII_CASE_BIT) == 'b'
                     && ((directoryLength == 3 && (self[prev + 2] | ASCII_CASE_BIT) == 'm')
                         || (directoryLength == 4 && (self[prev + 2] | ASCII_CASE_BIT) == 'i'
                                     && (self[prev + 3] | ASCII_CASE_BIT) == 'n')))
                     cut = prev;
+
                 for (index = 0; index < cut; ++index)
                     root[index] = self[index];
+
                 root[cut] = '\\';
                 root[cut + 1] = 0;
             }
         }
+
         ready = 1;
     }
+
     return root;
 }
 
@@ -140,29 +148,39 @@ PCSTR NtvdmexPath(PCSTR subdirectory, PCSTR name)
     if (g_PathTls < 0)
     {
         LONG tlsIndex = (LONG)TlsAlloc();
+
         if (InterlockedCompareExchange(&g_PathTls, tlsIndex, -1) != -1)
             TlsFree((DWORD)tlsIndex);
     }
+
     ring = (PSTR)TlsGetValue((DWORD)g_PathTls);
+
     if (!ring)
     {
         ring = (PSTR)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
                                  NTVDMEX_PATH_SLOTS * NTVDMEX_PATH_SLOT + sizeof(UINT));
+
         if (!ring)
             return "";                            /* out of memory: an empty path fails loudly downstream */
+
         TlsSetValue((DWORD)g_PathTls, ring);
     }
+
     next = (UINT *)(ring + NTVDMEX_PATH_SLOTS * NTVDMEX_PATH_SLOT);
     slot = ring + ((*next)++ & (NTVDMEX_PATH_SLOTS - 1)) * NTVDMEX_PATH_SLOT;
     PCSTR root = NtvdmexRoot();
     INT length = 0;
     INT index;
+
     for (index = 0; root[index] && length < MAX_PATH + 90; ++index)
         slot[length++] = root[index];
+
     for (index = 0; subdirectory[index] && length < MAX_PATH + 90; ++index)
         slot[length++] = subdirectory[index];
+
     for (index = 0; name[index] && length < MAX_PATH + 94; ++index)
         slot[length++] = name[index];
+
     slot[length] = 0;
     return slot;
 }
@@ -178,18 +196,23 @@ INT StrStrNoCase(PCSTR block, PCSTR name)
     {
         PCSTR cursor = line;
         PCSTR nameCursor = name;
+
         while (*nameCursor && *cursor && ((*cursor | ASCII_CASE_BIT) == (*nameCursor | ASCII_CASE_BIT) || (*cursor == *nameCursor)))
         {
             ++cursor;
             ++nameCursor;
         }
+
         if (!*nameCursor)
             return 1;
+
         while (*line && *line != '\n')
             ++line;
+
         if (*line)
             ++line;
     }
+
     return 0;
 }
 
@@ -197,6 +220,7 @@ UINT32 QpcMicroseconds(LONGLONG ticks)
 {
     if (!g_QpcFrequency.QuadPart || ticks <= 0)
         return 0;
+
     return (UINT32)((ticks * MICROSECONDS_PER_SECOND) / g_QpcFrequency.QuadPart);
 }
 
@@ -208,6 +232,7 @@ UINT64 QpcMicroseconds64(LONGLONG ticks)
 {
     if (!g_QpcFrequency.QuadPart || ticks <= 0)
         return 0ull;
+
     return (UINT64)((ticks * MICROSECONDS_PER_SECOND_LL) / g_QpcFrequency.QuadPart);
 }
 
@@ -220,21 +245,25 @@ VOID HostLockEnter(INT site)
 
     QueryPerformanceCounter(&waitStart);
     EnterCriticalSection(&g_Lock);
+
     if (!nested)
     {
         UINT32 waitMicroseconds;
         QueryPerformanceCounter(&acquired);
         waitMicroseconds = QpcMicroseconds(acquired.QuadPart - waitStart.QuadPart);
+
         if (waitMicroseconds > g_LockWaitMicroseconds)
         {
             g_LockWaitMicroseconds = waitMicroseconds;
             g_LockWaitSite = site;
         }
+
         g_LockOwner = threadId;
         g_LockSince = acquired.QuadPart;
         g_LockSite = site;
         g_LockDepth = 0;
     }
+
     g_LockDepth++;
 }
 
@@ -246,14 +275,17 @@ VOID HostLockLeave(VOID)
         UINT32 holdMicroseconds;
         QueryPerformanceCounter(&now);
         holdMicroseconds = QpcMicroseconds(now.QuadPart - g_LockSince);
+
         if (holdMicroseconds > g_LockHoldMicroseconds)
         {
             g_LockHoldMicroseconds = holdMicroseconds;
             g_LockHoldSite = g_LockSite;
         }
+
         g_LockOwner = 0;                 /* clear BEFORE releasing: the next owner
                                            must not see us as the holder */
     }
+
     LeaveCriticalSection(&g_Lock);
 }
 
@@ -272,6 +304,7 @@ INT HostLockTry(INT site)
 
     if (!TryEnterCriticalSection(&g_Lock))
         return 0;
+
     if (!nested)
     {
         LARGE_INTEGER acquired;
@@ -281,6 +314,7 @@ INT HostLockTry(INT site)
         g_LockSite = site;
         g_LockDepth = 0;
     }
+
     g_LockDepth++;
     return 1;
 }
@@ -297,14 +331,18 @@ BYTE PatchMapGet(DWORD linear)
 
     if (!linear)
         return 0;
+
     for (probe = 0; probe < DPMI_PMAP_SLOTS; ++probe)
     {
         DWORD slot = (start + probe) & DPMI_PMAP_MASK;
+
         if (!g_PatchMapLinear[slot])
             return 0;
+
         if (g_PatchMapLinear[slot] == linear)
             return g_PatchMapVector[slot];
     }
+
     return 0;
 }
 
@@ -315,9 +353,11 @@ VOID PatchMapSet(DWORD linear, BYTE vector)
 
     if (!linear || g_PatchMapCount >= DPMI_PMAP_SLOTS - PATCH_MAP_HEADROOM)
         return;                                                                       /* leave headroom, never fill */
+
     for (probe = 0; probe < DPMI_PMAP_SLOTS; ++probe)
     {
         DWORD slot = (start + probe) & DPMI_PMAP_MASK;
+
         if (!g_PatchMapLinear[slot])
         {
             g_PatchMapLinear[slot] = linear;
@@ -325,6 +365,7 @@ VOID PatchMapSet(DWORD linear, BYTE vector)
             ++g_PatchMapCount;
             return;
         }
+
         if (g_PatchMapLinear[slot] == linear)
         {
             g_PatchMapVector[slot] = vector;
@@ -345,8 +386,10 @@ VOID PatchMapClear(DWORD linear)
     for (probe = 0; probe < DPMI_PMAP_SLOTS; ++probe)
     {
         DWORD slot = (start + probe) & DPMI_PMAP_MASK;
+
         if (!g_PatchMapLinear[slot])
             return;
+
         if (g_PatchMapLinear[slot] == linear)
         {
             g_PatchMapVector[slot] = 0;
@@ -367,14 +410,18 @@ INT MemoryReadable(ULONG_PTR address, SIZE_T length)
 
     if (VirtualQuery((LPCVOID)address, &memoryInfo, sizeof memoryInfo) != sizeof memoryInfo)
         return 0;
+
     if (memoryInfo.State != MEM_COMMIT)
         return 0;
+
     if (memoryInfo.Protect & PAGE_GUARD)
         return 0;
+
     if (!(memoryInfo.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY
                       | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE
                       | PAGE_EXECUTE_WRITECOPY)))
         return 0;
+
     /* the region must also COVER the whole span, not merely start inside it */
     return (address + length) <= ((ULONG_PTR)memoryInfo.BaseAddress + memoryInfo.RegionSize);
 }
@@ -411,24 +458,30 @@ WORD PeekWord(DWORD linear)
 /* Width-selected guest memory access (1/2/4 bytes) for the string-I/O servicer. */
 DWORD PeekWidth(DWORD linear, INT width)
 { const volatile BYTE *memory = (const volatile BYTE *)0;
+
   if (width == 1)
       return memory[linear];
+
   if (width == X86_WORD_SIZE)
       return PeekWord(linear);
+
   return (DWORD)PeekWord(linear) | ((DWORD)PeekWord(linear + X86_WORD_SIZE) << WORD_SHIFT); }
 
 VOID PokeWidth(DWORD linear, DWORD value, INT width)
 { volatile BYTE *memory = (volatile BYTE *)0;
+
   if (width == 1)
   {
       memory[linear] = (BYTE)value;
       return;
   }
+
   if (width == X86_WORD_SIZE)
   {
       PokeWord(linear, (WORD)value);
       return;
   }
+
   PokeDword(linear, value); }
 
 LONGLONG QpcTicks(UINT32 microseconds)
@@ -443,6 +496,7 @@ INT StringsEqual(PCSTR first, PCSTR second)
         ++first;
         ++second;
     }
+
     return *first == *second;
 }
 
@@ -453,15 +507,20 @@ INT HostReadable(PCVOID pointer, SIZE_T length)
 
     if (!address || length == 0)
         return 0;
+
     if (VirtualQuery((LPCVOID)address, &memoryInfo, sizeof(memoryInfo)) != sizeof(memoryInfo))
         return 0;
+
     if (memoryInfo.State != MEM_COMMIT)
         return 0;
+
     if (memoryInfo.Protect & (PAGE_NOACCESS | PAGE_GUARD))
         return 0;
+
     if (!(memoryInfo.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
                          PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
         return 0;
+
     /* the span must not run off the end of this region into an unmapped one */
     return (address + length) <= ((ULONG_PTR)memoryInfo.BaseAddress + memoryInfo.RegionSize);
 }
@@ -478,14 +537,19 @@ INT HostWritable(PVOID pointer, SIZE_T length)
 
     if (!address || length == 0)
         return 0;
+
     if (VirtualQuery((LPCVOID)address, &memoryInfo, sizeof(memoryInfo)) != sizeof(memoryInfo))
         return 0;
+
     if (memoryInfo.State != MEM_COMMIT)
         return 0;
+
     if (memoryInfo.Protect & (PAGE_NOACCESS | PAGE_GUARD))
         return 0;
+
     if (!(memoryInfo.Protect & (PAGE_READWRITE | PAGE_WRITECOPY |
                          PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
         return 0;
+
     return (address + length) <= ((ULONG_PTR)memoryInfo.BaseAddress + memoryInfo.RegionSize);
 }

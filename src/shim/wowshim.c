@@ -138,6 +138,7 @@ __declspec(dllexport) BOOL WINAPI NtvdmexShimInit(PCNTVDMEX_SHIM_API api)
 {
     if (!api || api->Version != SHIM_API_VERSION)
         return FALSE;
+
     g_ShimApi = *api;
     g_HasShimApi = TRUE;
     return TRUE;
@@ -190,6 +191,7 @@ __declspec(dllexport) BOOL WINAPI WOWCallback16Ex(
 {
     if (g_HasShimApi && g_ShimApi.Callback16Ex)
         return g_ShimApi.Callback16Ex(segmentedFunction, flags, argumentBytes, arguments, returnValue);
+
     ShimReportMissing(SHIM_MISSING_CALLBACK16EX);
     return FALSE;
 }
@@ -201,6 +203,7 @@ __declspec(dllexport) DWORD WINAPI WOWCallback16(DWORD segmentedFunction, DWORD 
     /* WCB16_PASCAL (0), one DWORD argument */
     if (!WOWCallback16Ex(segmentedFunction, SHIM_WCB16_PASCAL, SHIM_ONE_DWORD_ARGUMENT, &argument, &returnValue))
         return SHIM_NO_RESULT;
+
     return returnValue;
 }
 
@@ -220,6 +223,7 @@ static DWORD ShimGlobal16(INT operation, DWORD firstArgument, DWORD secondArgume
 {
     if (g_HasShimApi && g_ShimApi.Global16)
         return g_ShimApi.Global16(operation, firstArgument, secondArgument);
+
     ShimReportMissing(SHIM_MISSING_GLOBAL16);
     return SHIM_NO_RESULT;
 }
@@ -257,6 +261,7 @@ __declspec(dllexport) DWORD WINAPI WOWGlobalAllocLock16(
 
     if (handle16Out)
         *handle16Out = handle16;
+
     return handle16 ? ShimGlobal16(SHIM_GLOBAL_LOCK, handle16, SHIM_NO_ARGUMENT) : SHIM_NO_RESULT;
 }
 
@@ -266,6 +271,7 @@ __declspec(dllexport) WORD WINAPI WOWGlobalUnlockFree16(DWORD segmentedAddress)
 
     if (!handle16)
         return SHIM_NO_HANDLE16;
+
     ShimGlobal16(SHIM_GLOBAL_UNLOCK, handle16, SHIM_NO_ARGUMENT);
     return (WORD)(ShimGlobal16(SHIM_GLOBAL_FREE, handle16, SHIM_NO_ARGUMENT) == SHIM_GLOBAL_FREED);
 }
@@ -274,6 +280,7 @@ __declspec(dllexport) DWORD WINAPI WOWGlobalLockSize16(WORD handle16, PDWORD byt
 {
     if (byteCount)
         *byteCount = ShimGlobal16(SHIM_GLOBAL_SIZE, handle16, SHIM_NO_ARGUMENT);
+
     return ShimGlobal16(SHIM_GLOBAL_LOCK, handle16, SHIM_NO_ARGUMENT);
 }
 
@@ -362,6 +369,7 @@ __declspec(dllexport) BOOL WINAPI VDDInstallIOHook(
 {
     if (g_HasShimApi && g_ShimApi.InstallIoHook)
         return g_ShimApi.InstallIoHook(vddHandle, rangeCount, ranges, handlers);
+
     ShimReportMissing(SHIM_MISSING_IO_HOOK);
     return FALSE;
 }

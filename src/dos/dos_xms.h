@@ -195,6 +195,7 @@ static inline VOID DosXmsInitialize(
     state->IsHmaAllocated = FALSE;
     state->TotalKb = totalKb;
     state->UsedKb = 0;
+
     for (handleIndex = 0; handleIndex < DOS_XMS_MAX_HANDLES; ++handleIndex)
     {
         state->Handles[handleIndex].InUse = 0;
@@ -202,6 +203,7 @@ static inline VOID DosXmsInitialize(
         state->Handles[handleIndex].SizeKb = 0;
         state->Handles[handleIndex].Memory = 0;
     }
+
     state->Allocate = allocate;
     state->Free = free;
     state->Context = context;
@@ -212,8 +214,10 @@ static inline PDOS_XMS_HANDLE DosXmsGetHandle(_In_ PDOS_XMS_STATE state, _In_ WO
 {
     if (handle == DOS_XMS_CONVENTIONAL_HANDLE || handle > DOS_XMS_MAX_HANDLES)
         return 0;
+
     if (!state->Handles[handle - DOS_XMS_FIRST_HANDLE].InUse)
         return 0;
+
     return &state->Handles[handle - DOS_XMS_FIRST_HANDLE];
 }
 
@@ -230,6 +234,7 @@ static inline VOID DosXmsQueryFreeMemory(
 
     if (largestKb)
         *largestKb = freeKb;
+
     if (totalKb)
         *totalKb   = freeKb;
 }
@@ -252,34 +257,44 @@ static inline BOOL DosXmsAllocate(
     {
         if (errorCode)
             *errorCode = DOS_XMS_ERROR_OUT_OF_MEMORY;
+
         return FALSE;
     }
+
     for (handleIndex = 0; handleIndex < DOS_XMS_MAX_HANDLES; ++handleIndex)
         if (!state->Handles[handleIndex].InUse)
             break;
+
     if (handleIndex == DOS_XMS_MAX_HANDLES)
     {
         if (errorCode)
             *errorCode = DOS_XMS_ERROR_NO_HANDLES;
+
         return FALSE;
     }
+
     if (kilobytes > 0)
     {
         buffer = state->Allocate ? state->Allocate(state->Context, kilobytes) : 0;
+
         if (!buffer)
         {
             if (errorCode)
                 *errorCode = DOS_XMS_ERROR_OUT_OF_MEMORY;
+
             return FALSE;
         }
     }
+
     state->Handles[handleIndex].InUse = 1;
     state->Handles[handleIndex].LockCount = 0;
     state->Handles[handleIndex].SizeKb = kilobytes;
     state->Handles[handleIndex].Memory = buffer;
     state->UsedKb += kilobytes;
+
     if (newHandle)
         *newHandle = (WORD)(handleIndex + DOS_XMS_FIRST_HANDLE);
+
     return TRUE;
 }
 
@@ -297,16 +312,21 @@ static inline BOOL DosXmsFree(
     {
         if (errorCode)
             *errorCode = DOS_XMS_ERROR_INVALID_HANDLE;
+
         return FALSE;
     }
+
     if (handleEntry->LockCount)
     {
         if (errorCode)
             *errorCode = DOS_XMS_ERROR_LOCKED;
+
         return FALSE;
     }
+
     if (handleEntry->Memory && state->Free)
         state->Free(state->Context, handleEntry->Memory, handleEntry->SizeKb);
+
     state->UsedKb -= handleEntry->SizeKb;
     handleEntry->InUse = 0;
     handleEntry->LockCount = 0;
@@ -333,39 +353,52 @@ static inline BOOL DosXmsReallocate(
     {
         if (errorCode)
             *errorCode = DOS_XMS_ERROR_INVALID_HANDLE;
+
         return FALSE;
     }
+
     if (handleEntry->LockCount)
     {
         if (errorCode)
             *errorCode = DOS_XMS_ERROR_LOCKED;
+
         return FALSE;
     }
+
     if (newKb == handleEntry->SizeKb)
         return TRUE;
+
     if (newKb > handleEntry->SizeKb &&
         state->UsedKb - handleEntry->SizeKb + newKb > state->TotalKb)
     {
         if (errorCode)
             *errorCode = DOS_XMS_ERROR_OUT_OF_MEMORY;
+
         return FALSE;
     }
+
     if (newKb > 0)
     {
         newBuffer = state->Allocate ? state->Allocate(state->Context, newKb) : 0;
+
         if (!newBuffer)
         {
             if (errorCode)
                 *errorCode = DOS_XMS_ERROR_OUT_OF_MEMORY;
+
             return FALSE;
         }
+
         bytesToKeep = (newKb < handleEntry->SizeKb ? newKb : handleEntry->SizeKb)
                     * DOS_XMS_BYTES_PER_KB;
+
         for (byteIndex = 0; byteIndex < bytesToKeep; ++byteIndex)
             ((PBYTE)newBuffer)[byteIndex] = ((PBYTE)handleEntry->Memory)[byteIndex];
     }
+
     if (handleEntry->Memory && state->Free)
         state->Free(state->Context, handleEntry->Memory, handleEntry->SizeKb);
+
     state->UsedKb = state->UsedKb - handleEntry->SizeKb + newKb;
     handleEntry->Memory = newBuffer;
     handleEntry->SizeKb = newKb;
@@ -390,18 +423,25 @@ static inline BOOL DosXmsGetHandleInformation(
     {
         if (errorCode)
             *errorCode = DOS_XMS_ERROR_INVALID_HANDLE;
+
         return FALSE;
     }
+
     handleEntry = &state->Handles[handle - DOS_XMS_FIRST_HANDLE];
+
     for (handleIndex = 0; handleIndex < DOS_XMS_MAX_HANDLES; ++handleIndex)
         if (!state->Handles[handleIndex].InUse)
             ++freeHandleCount;
+
     if (lockCount)
         *lockCount   = handleEntry->LockCount;
+
     if (freeHandles) *freeHandles = (BYTE)(freeHandleCount > DOS_XMS_MAX_FREE_HANDLES
                                            ? DOS_XMS_MAX_FREE_HANDLES : freeHandleCount);
+
     if (sizeKb)
         *sizeKb      = handleEntry->SizeKb;
+
     return TRUE;
 }
 
@@ -424,17 +464,23 @@ static inline BOOL DosXmsLock(
     {
         if (errorCode)
             *errorCode = DOS_XMS_ERROR_INVALID_HANDLE;
+
         return FALSE;
     }
+
     if (handleEntry->LockCount == DOS_XMS_MAX_LOCK_COUNT)
     {
         if (errorCode)
             *errorCode = DOS_XMS_ERROR_LOCK_OVERFLOW;
+
         return FALSE;
     }
+
     ++handleEntry->LockCount;
+
     if (linearAddress)
         *linearAddress = (DWORD)(UINT_PTR)handleEntry->Memory;
+
     return TRUE;
 }
 
@@ -449,14 +495,18 @@ static inline BOOL DosXmsUnlock(
     {
         if (errorCode)
             *errorCode = DOS_XMS_ERROR_INVALID_HANDLE;
+
         return FALSE;
     }
+
     if (handleEntry->LockCount == 0)
     {
         if (errorCode)
             *errorCode = DOS_XMS_ERROR_NOT_LOCKED;
+
         return FALSE;
     }
+
     --handleEntry->LockCount;
     return TRUE;
 }
@@ -474,10 +524,12 @@ static inline BOOL DosXmsMove(
 
     if (length == 0)
         return TRUE;                        /* a 0-length move is a legal no-op */
+
     if (length & DOS_XMS_ODD_LENGTH_MASK)
     {
         if (errorCode)
             *errorCode = DOS_XMS_ERROR_INVALID_LENGTH;
+
         return FALSE;
     }
 
@@ -485,65 +537,83 @@ static inline BOOL DosXmsMove(
     {
         DWORD segment = (move->SourceOffset >> DOS_XMS_FAR_SEGMENT_SHIFT) & WORD_MASK;
         DWORD offset = move->SourceOffset & WORD_MASK;
+
         if ((segment << PARAGRAPH_SHIFT) + offset + length > DOS_XMS_CONVENTIONAL_LIMIT)
         {
             if (errorCode)
                 *errorCode = DOS_XMS_ERROR_INVALID_SOURCE_OFFSET;
+
             return FALSE;
         }
+
         source = (volatile BYTE *)((UINT_PTR)conventionalBase
                                    + (segment << PARAGRAPH_SHIFT) + offset);
     }
     else
     {
         PDOS_XMS_HANDLE handleEntry = DosXmsGetHandle(state, move->SourceHandle);
+
         if (!handleEntry)
         {
             if (errorCode)
                 *errorCode = DOS_XMS_ERROR_INVALID_SOURCE_HANDLE;
+
             return FALSE;
         }
+
         if (move->SourceOffset > handleEntry->SizeKb * DOS_XMS_BYTES_PER_KB
             || length > handleEntry->SizeKb * DOS_XMS_BYTES_PER_KB - move->SourceOffset)
         {
             if (errorCode)
                 *errorCode = DOS_XMS_ERROR_INVALID_SOURCE_OFFSET;
+
             return FALSE;
         }   /* no 32-bit wrap */
+
         source = (volatile BYTE *)((PBYTE)handleEntry->Memory + move->SourceOffset);
     }
+
     if (move->DestinationHandle == DOS_XMS_CONVENTIONAL_HANDLE)
     {
         DWORD segment = (move->DestinationOffset >> DOS_XMS_FAR_SEGMENT_SHIFT)
                       & WORD_MASK,
               offset = move->DestinationOffset & WORD_MASK;
+
         if ((segment << PARAGRAPH_SHIFT) + offset + length > DOS_XMS_CONVENTIONAL_LIMIT)
         {
             if (errorCode)
                 *errorCode = DOS_XMS_ERROR_INVALID_DESTINATION_OFFSET;
+
             return FALSE;
         }
+
         destination = (volatile BYTE *)((UINT_PTR)conventionalBase
                                         + (segment << PARAGRAPH_SHIFT) + offset);
     }
     else
     {
         PDOS_XMS_HANDLE handleEntry = DosXmsGetHandle(state, move->DestinationHandle);
+
         if (!handleEntry)
         {
             if (errorCode)
                 *errorCode = DOS_XMS_ERROR_INVALID_DESTINATION_HANDLE;
+
             return FALSE;
         }
+
         if (move->DestinationOffset > handleEntry->SizeKb * DOS_XMS_BYTES_PER_KB
             || length > handleEntry->SizeKb * DOS_XMS_BYTES_PER_KB - move->DestinationOffset)
         {
             if (errorCode)
                 *errorCode = DOS_XMS_ERROR_INVALID_DESTINATION_OFFSET;
+
             return FALSE;
         }   /* no 32-bit wrap */
+
         destination = (volatile BYTE *)((PBYTE)handleEntry->Memory + move->DestinationOffset);
     }
+
     /* Overlap-safe copy (real HIMEM permits an overlapping move within a block). */
     if (destination <= source)
         for (byteIndex = 0; byteIndex < length; ++byteIndex)
@@ -551,6 +621,7 @@ static inline BOOL DosXmsMove(
     else
         for (byteIndex = length; byteIndex-- > 0; )
             destination[byteIndex] = source[byteIndex];
+
     return TRUE;
 }
 

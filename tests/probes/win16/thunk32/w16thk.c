@@ -106,10 +106,13 @@ __declspec(dllexport) DWORD WINAPI T_CbEx(DWORD callback16)
     arguments[0] = THUNK_ARGUMENT_C;
     arguments[1] = THUNK_ARGUMENT_B;
     arguments[2] = THUNK_ARGUMENT_A;
+
     if (!callback)
         return THUNK_NOT_FOUND;
+
     if (!callback(callback16, WCB16_PASCAL, sizeof arguments, arguments, &result))
         return THUNK_CALL_FAILED;
+
     return result;
 }
 
@@ -132,50 +135,70 @@ __declspec(dllexport) DWORD WINAPI T_Glob(void)
 
     if (!globalAlloc || !globalFree || !globalLock || !globalUnlock || !globalAllocLock || !globalUnlockFree || !globalLockSize || !getVdmPointer)
         return THUNK_NOT_FOUND;
+
     handle = globalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, THUNK_BLOCK_SIZE);
+
     if (handle)
         answers |= THUNK_ALLOCATED;
+
     pointer16 = handle ? globalLock(handle) : 0;
+
     if (pointer16)
         answers |= THUNK_LOCKED;
+
     bytes = pointer16 ? (BYTE *)getVdmPointer(pointer16, THUNK_BLOCK_SIZE, TRUE) : NULL;
+
     if (bytes && bytes[0] == 0 && bytes[THUNK_BLOCK_SIZE - 1] == 0)
         answers |= THUNK_ZEROED;                                                                        /* ZEROINIT honoured */
+
     if (bytes)
     {
         bytes[0] = THUNK_MARK_FIRST;
         bytes[1] = THUNK_MARK_SECOND;
     }
+
     if (handle && globalLockSize(handle, &size) == pointer16 && size >= THUNK_BLOCK_SIZE)
         answers |= THUNK_SIZED;                                                                                      /* same block, its size */
+
     if (bytes && ((BYTE *)getVdmPointer(globalLock(handle), THUNK_MARK_LENGTH, TRUE))[1] == THUNK_MARK_SECOND)
         answers |= THUNK_WRITTEN;
+
     if (handle) /* three locks taken */
     {
         globalUnlock(handle);
         globalUnlock(handle);
         globalUnlock(handle);
     }
+
     {   WORD freeResult = handle ? globalFree(handle) : THUNK_NO_HANDLE;
+
         if (freeResult == 0)
             answers |= THUNK_FREED;                                                   /* GlobalFree: 0 = freed */
+
         answers |= (DWORD)(freeResult == 0 ? THUNK_ANSWER_ZERO : freeResult == handle ? THUNK_ANSWER_HANDLE : THUNK_ANSWER_OTHER) << THUNK_FREE_CODE_SHIFT;  /* what it said instead */
+
         if (freeResult != 0 && freeResult != handle)
             answers |= (DWORD)(freeResult & THUNK_LOW_BYTE) << THUNK_FREE_BYTE_SHIFT;                                           /* ...and its low byte */
     }
     pointer16 = globalAllocLock(GMEM_FIXED, THUNK_FIXED_SIZE, &fixedHandle);
+
     if (pointer16 && fixedHandle)
         answers |= THUNK_ALLOC_LOCKED;
+
     if (pointer16)
     {
         WORD freeResult = globalUnlockFree(pointer16);
+
         if (freeResult == 0)
             answers |= THUNK_UNLOCK_FREED;
+
         answers |= (DWORD)(freeResult == 0 ? THUNK_ANSWER_ZERO : freeResult == fixedHandle ? THUNK_ANSWER_HANDLE
                            : freeResult == (WORD)(pointer16 >> THUNK_SELECTOR_SHIFT) ? THUNK_ANSWER_SELECTOR : THUNK_ANSWER_UNKNOWN) << THUNK_UNLOCK_FREE_CODE_SHIFT;
+
         if (freeResult != 0 && freeResult != fixedHandle && freeResult != (WORD)(pointer16 >> THUNK_SELECTOR_SHIFT))
             answers |= (DWORD)(freeResult & THUNK_LOW_BYTE) << THUNK_UNLOCK_FREE_BYTE_SHIFT;
     }
+
     return answers;     /* low byte: a bit per documented answer; bits 8-11: the free codes */
 }
 

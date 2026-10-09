@@ -102,10 +102,12 @@ static BOOL DosHandleSetDevice(_Inout_ PUINT deviceMask, _In_ UINT handle, _In_ 
 {
     if (handle >= DOS_DEV_SLOTS)
         return FALSE;
+
     if (isDevice)
         *deviceMask |= (1u << handle);
     else
         *deviceMask &= ~(1u << handle);
+
     return TRUE;
 }
 
@@ -128,10 +130,13 @@ static UINT DosHandleAllocate(
     {
         if (fileHandles[slot])
             continue;                                                      /* bound */
+
         if (DosHandleIsDevice(fileHandles, deviceMask, slot))
             continue;                                                      /* device */
+
         break;
     }
+
     return slot;
 }
 

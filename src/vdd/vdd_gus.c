@@ -252,8 +252,10 @@ static INT GusIsRegister16(BYTE registerNumber)
 
     if (registerNumber == GUS_REGISTER_DMA_ADDRESS || registerNumber == GUS_REGISTER_DRAM_IO_LOW)
         return 1;
+
     if (registerNumber >= GUS_REGISTER_GLOBAL_FIRST && registerNumber < GUS_REGISTER_READ)
         return 0;                                                                                                /* the other globals are 8-bit */
+
     voiceRegister = (BYTE)(registerNumber & GUS_REGISTER_NUMBER_MASK);   /* voice regs: write 0xh, read 8xh */
     return voiceRegister == GUS_REGISTER_FREQUENCY || (voiceRegister >= GUS_REGISTER_START_HIGH && voiceRegister <= GUS_REGISTER_END_LOW) || voiceRegister == GUS_REGISTER_VOLUME || voiceRegister == GUS_REGISTER_POSITION_HIGH || voiceRegister == GUS_REGISTER_POSITION_LOW;
 }
@@ -296,6 +298,7 @@ static BYTE GusCodeOf(const BYTE *map, BYTE line)
     for (code = 1; code < GUS_LATCH_CODES; ++code)
         if (map[code] && map[code] == line)
             return code;
+
     return 0;
 }
 
@@ -367,6 +370,7 @@ static INT GusIsVoicePending(PCGUS_STATE state)
     for (voiceIndex = 0; voiceIndex < GUS_VOICES; ++voiceIndex)
         if ((state->Voices[voiceIndex].Control & GUS_VOICE_IRQ_PENDING) || (state->Voices[voiceIndex].VolumeControl & GUS_RAMP_IRQ_PENDING))
             return 1;
+
     return 0;
 }
 
@@ -381,23 +385,32 @@ static BYTE GusIrqStatus(PCGUS_STATE state)            /* 2X6 */
     {
         if (state->Voices[voiceIndex].Control & GUS_VOICE_IRQ_PENDING)
             isWave = 1;
+
         if (state->Voices[voiceIndex].VolumeControl & GUS_RAMP_IRQ_PENDING)
             isVolume = 1;
     }
+
     if (GusMidiTransmitIrq(state))
         status |= GUS_IRQ_MIDI_TRANSMIT;                              /* #190: the UART's two sources */
+
     if (GusMidiReceiveIrq(state))
         status |= GUS_IRQ_MIDI_RECEIVE;
+
     if (state->IsTimer1Expired)
         status |= GUS_IRQ_TIMER1;
+
     if (state->IsTimer2Expired)
         status |= GUS_IRQ_TIMER2;
+
     if (isWave)
         status |= GUS_IRQ_WAVE;
+
     if (isVolume)
         status |= GUS_IRQ_VOLUME;
+
     if (state->IsDmaTerminalCount || state->IsSampleTerminalCount)
         status |= GUS_IRQ_DMA;
+
     return status;
 }
 
@@ -408,11 +421,13 @@ static VOID GusLine(PGUS_STATE state, BYTE line, INT level, BYTE *isUp)
 {
     if (!line)
         level = 0;
+
     if (level && !*isUp && state->Bus)
     {
         VddRaiseIrq(state->Bus, line);
         state->IrqsRaised++;
     }
+
     *isUp = (BYTE)(level != 0);
 }
 
@@ -434,6 +449,7 @@ static VOID GusIrqUpdate(PGUS_STATE state)
 
     if (!(state->ResetRegister & GUS_RESET_MASTER_IRQ) || !GusAreDriversOn(state))
         isGf1 = isMidi = 0;
+
     if (midiLine == gf1Line)
     {
         GusLine(state, gf1Line, isGf1 || isMidi, &state->IsLineUp);
@@ -454,22 +470,28 @@ static BYTE GusIrqFifo(PGUS_STATE state)
     UINT voiceIndex;
 
     state->FifoReads++;
+
     for (voiceIndex = 0; voiceIndex < GUS_VOICES; ++voiceIndex)
     {
         PGUS_VOICE voice = &state->Voices[voiceIndex];
+
         if ((voice->Control & GUS_VOICE_IRQ_PENDING) || (voice->VolumeControl & GUS_RAMP_IRQ_PENDING))
         {
             BYTE result = (BYTE)(GUS_FIFO_ALWAYS_SET | voiceIndex);
+
             if (!(voice->Control & GUS_VOICE_IRQ_PENDING))
                 result |= GUS_FIFO_NO_WAVE;
+
             if (!(voice->VolumeControl & GUS_RAMP_IRQ_PENDING))
                 result |= GUS_FIFO_NO_VOLUME;
+
             voice->Control  &= GUS_VOICE_CONTROL_BITS;
             voice->VolumeControl &= GUS_RAMP_CONTROL_BITS;
             GusIrqUpdate(state);
             return result;
         }
     }
+
     return GUS_FIFO_EMPTY;
 }
 
@@ -504,11 +526,15 @@ static BYTE GusDreq(PCVOID context)
     BYTE channel;
 
     channel = GusDramDma(state);
+
     if (state->IsDmaWaiting && channel)
         mask |= (BYTE)(1u << (channel & GUS_DMA_CHANNEL_MASK));
+
     channel = GusRecordDma(state);
+
     if ((state->SampleControl & GUS_SAMPLE_GO) && channel)
         mask |= (BYTE)(1u << (channel & GUS_DMA_CHANNEL_MASK));
+
     return mask;
 }
 
@@ -532,30 +558,38 @@ static VOID GusDmaTry(PGUS_STATE state)
 
     if (!state->IsDmaWaiting || !state->Dram || !GusIsDmaReady(state, channel))
         return;
+
     remaining = VddDmaRemaining(state->Dma, channel);
     isCardToPc = (state->DmaControl & GUS_DMA_TO_PC) != 0;
     address = (UINT32)state->DmaAddress << GUS_DMA_ADDRESS_SHIFT;
+
     if (state->DmaControl & GUS_DMA_CHANNEL_16BIT)
         address = GusUntranslate16(address);
+
     while (remaining && !isTerminalCount)
     {
         UINT32 byteIndex;
         UINT32 chunk = remaining > sizeof buffer ? (UINT32)sizeof buffer : remaining;
+
         if (isCardToPc)
         {
             for (byteIndex = 0; byteIndex < chunk; ++byteIndex)
             {
                 BYTE byteValue = state->Dram[(address + byteIndex) & (GUS_DRAM_SIZE - 1)];
+
                 if ((state->DmaControl & GUS_DMA_INVERT_MSB) && (!(state->DmaControl & GUS_DMA_DATA_16BIT) || ((address + byteIndex) & 1)))
                     byteValue ^= GUS_SAMPLE_MSB;
+
                 buffer[byteIndex] = byteValue;
             }
+
             moved = VddDmaWrite(state->Dma, channel, buffer, chunk, &isTerminalCount);
             state->DmaDownloadBytes += moved;
         }
         else
         {
             moved = VddDmaRead(state->Dma, channel, buffer, chunk, &isTerminalCount);
+
             for (byteIndex = 0; byteIndex < moved; ++byteIndex)
             {
                 BYTE byteValue = buffer[byteIndex];
@@ -567,20 +601,27 @@ static VOID GusDmaTry(PGUS_STATE state)
                     if (!(state->DmaControl & GUS_DMA_DATA_16BIT) || ((address + byteIndex) & 1))
                         byteValue ^= GUS_SAMPLE_MSB;
                 }
+
                 state->Dram[(address + byteIndex) & (GUS_DRAM_SIZE - 1)] = byteValue;
             }
+
             state->DmaBytes += moved;
         }
+
         if (!moved)
             break;
+
         address += moved;
         remaining -= moved;
     }
+
     state->IsDmaWaiting = 0;
+
     if (isCardToPc)
         state->DmaDownloads++;
     else
         state->DmaUploads++;
+
     state->IsDmaTerminalCount = 1;
     GusIrqUpdate(state);
 }
@@ -609,25 +650,32 @@ static VOID GusRecord(PGUS_STATE state, UINT32 nanoseconds)
 
     if (!(state->SampleControl & GUS_SAMPLE_GO))
         return;
+
     if (!GusIsDmaReady(state, channel))
         return;
+
     unit = (channel & GUS_DMA_16BIT_CHANNELS) ? GUS_WORD_BYTES : 1u;                  /* a 16-bit channel moves words */
     rate = GUS_ADC_CLOCK_HZ / (GUS_ADC_DIVIDER * ((UINT32)state->SampleFrequency + GUS_ADC_RATE_OFFSET));
     period  = NANOSECONDS_PER_SECOND_U / (rate ? rate : 1u);
     state->SampleAccumulatorNs += nanoseconds;
+
     while (state->SampleAccumulatorNs >= period && (state->SampleControl & GUS_SAMPLE_GO))
     {
         state->SampleAccumulatorNs -= period;
         state->SamplePending = (BYTE)(state->SamplePending + ((state->SampleControl & GUS_SAMPLE_STEREO) ? AUDIO_STEREO_CHANNELS : 1));
+
         while (state->SamplePending >= unit)
         {
             UINT32 moved;
             buffer[0] = buffer[1] = (state->SampleControl & GUS_SAMPLE_INVERT_MSB) ? GUS_ADC_MIDSCALE_SIGNED : GUS_ADC_MIDSCALE;
             moved = VddDmaWrite(state->Dma, channel, buffer, unit, &isTerminalCount);
+
             if (!moved)
                 return;                              /* masked under us: hold the ADC */
+
             state->SamplePending = (BYTE)(state->SamplePending - moved);
             state->SampleBytes += moved;
+
             if (isTerminalCount)
             {
                 state->SampleControl &= (BYTE)~GUS_SAMPLE_GO;
@@ -661,6 +709,7 @@ static VOID GusChipReset(PGUS_STATE state)
         voice->Pan = GUS_PAN_CENTRE;
         voice->RampDivider = 0;
     }
+
     state->ActiveVoices = GUS_MIN_ACTIVE_VOICES;
     state->DmaControl = 0;
     state->IsDmaTerminalCount = 0;
@@ -690,12 +739,16 @@ static VOID GusRegisterWrite(PGUS_STATE state, BYTE registerNumber, WORD value)
     {
         INT wasStopped = (voice->Control & GUS_VOICE_STOP_BITS) != 0;
         voice->Control = (BYTE)((byteValue & GUS_VOICE_CONTROL_BITS) | (voice->Control & GUS_VOICE_IRQ_PENDING));
+
         if (byteValue & GUS_VOICE_STOP)
             voice->Control |= GUS_VOICE_STOPPED;                                           /* stop -> stopped */
+
         if (!(byteValue & GUS_VOICE_IRQ_ENABLE))
             voice->Control &= GUS_VOICE_CONTROL_BITS;                                                 /* IRQ disabled: nothing pending */
+
         if (wasStopped && !(voice->Control & GUS_VOICE_STOP_BITS))
             state->VoiceStarts++;
+
         GusIrqUpdate(state);
         break; }
 
@@ -749,10 +802,13 @@ static VOID GusRegisterWrite(PGUS_STATE state, BYTE registerNumber, WORD value)
 
     case GUS_REGISTER_VOLUME_CONTROL:
         voice->VolumeControl = (BYTE)((byteValue & GUS_RAMP_CONTROL_BITS) | (voice->VolumeControl & GUS_RAMP_IRQ_PENDING));
+
         if (byteValue & GUS_RAMP_STOP)
             voice->VolumeControl |= GUS_RAMP_STOPPED;
+
         if (!(byteValue & GUS_RAMP_IRQ_ENABLE))
             voice->VolumeControl &= GUS_RAMP_CONTROL_BITS;
+
         GusIrqUpdate(state);
         break;
 
@@ -765,6 +821,7 @@ static VOID GusRegisterWrite(PGUS_STATE state, BYTE registerNumber, WORD value)
     /* global (ref section 2.1) */
     case GUS_REGISTER_DMA_CONTROL:
         state->DmaControl = byteValue;
+
         if (byteValue & GUS_DMA_GO)
         {
             state->IsDmaWaiting = 1;
@@ -772,6 +829,7 @@ static VOID GusRegisterWrite(PGUS_STATE state, BYTE registerNumber, WORD value)
         }
         else
             state->IsDmaWaiting = 0;
+
         break;
 
     case GUS_REGISTER_DMA_ADDRESS:
@@ -788,10 +846,13 @@ static VOID GusRegisterWrite(PGUS_STATE state, BYTE registerNumber, WORD value)
 
     case GUS_REGISTER_TIMER_CONTROL:
         state->TimerControl = byteValue;
+
         if (!(byteValue & GUS_TIMER1_IRQ_ENABLE))
             state->IsTimer1Expired = 0;
+
         if (!(byteValue & GUS_TIMER2_IRQ_ENABLE))
             state->IsTimer2Expired = 0;
+
         GusIrqUpdate(state);
         break;
 
@@ -817,6 +878,7 @@ static VOID GusRegisterWrite(PGUS_STATE state, BYTE registerNumber, WORD value)
             state->SamplePending = 0;
             state->SampleTakes++;
         }
+
         state->SampleControl = byteValue;
         GusIrqUpdate(state);
         break;
@@ -828,6 +890,7 @@ static VOID GusRegisterWrite(PGUS_STATE state, BYTE registerNumber, WORD value)
     case GUS_REGISTER_RESET:
         if (!(byteValue & GUS_RESET_RUN))
             GusChipReset(state);
+
         state->ResetRegister = byteValue;
         GusIrqUpdate(state);
         break;
@@ -925,6 +988,7 @@ static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
     INT isArm = 0;
 
     state->IoWrites++;
+
     switch (offset)
     {
     case GUS_PORT_MIX:
@@ -954,20 +1018,24 @@ static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
                 GusIrqUpdate(state);
                 break;
             }
+
             state->AdlibMask = (BYTE)(value & GUS_ADLIB_MASK_BITS);
             state->IsTimer1Running = (BYTE)(value & 1);
             state->IsTimer2Running = (BYTE)((value >> 1) & 1);
+
             if (state->IsTimer1Running)
             {
                 state->Timer1Value = state->Timer1Load;
                 state->Timer1AccumulatorNs = 0;
             }
+
             if (state->IsTimer2Running)
             {
                 state->Timer2Value = state->Timer2Load;
                 state->Timer2AccumulatorNs = 0;
             }
         }
+
         break;
 
     case GUS_PORT_LATCH:
@@ -977,6 +1045,7 @@ static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
             state->LatchLockedOut++;
             break;
         }
+
         /* #190: 2XF picks the bank behind 2XB (board rev 3.4+, ref section 5). */
         switch (state->RegisterControl)
         {
@@ -985,6 +1054,7 @@ static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
                 state->IrqLatch = (BYTE)(value & GUS_LATCH_MASK);
             else
                 state->DmaLatch = (BYTE)(value & GUS_LATCH_MASK);
+
             GusLatchDecode(state);
             GusIrqUpdate(state);
             GusDmaTry(state);
@@ -996,11 +1066,13 @@ static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
              * afterwards interrupts afresh on the next update.
              */
             state->RegisterClear = (BYTE)value;
+
             if (!(value & BYTE_MASK))
             {
                 state->IsLineUp = 0;
                 state->IsMidiLineUp = 0;
             }
+
             break;
 
         case GUS_REGCTL_JUMPER:                                      /* the jumper register */
@@ -1010,6 +1082,7 @@ static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
         default:
             break;                              /* no register behind the rest */
         }
+
         break;
 
     case GUS_PORT_REGISTER_CONTROL:
@@ -1022,12 +1095,15 @@ static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
          */
         if (!GusIsMidiDecoded(state))
             break;
+
         state->MidiControl = (BYTE)value;
+
         if ((value & GUS_ACIA_MASTER_RESET) == GUS_ACIA_MASTER_RESET)
         {
             state->MidiStatus = GUS_ACIA_TRANSMIT_EMPTY;
             state->MidiReceive = 0;
         }
+
         GusIrqUpdate(state);
         break;
 
@@ -1041,20 +1117,25 @@ static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
          * not reach MIDI OUT.
          */
         BYTE dataByte = (BYTE)value;
+
         if (!GusIsMidiDecoded(state) || (state->MidiControl & GUS_ACIA_MASTER_RESET) == GUS_ACIA_MASTER_RESET)
             break;
+
         state->MidiStatus &= (BYTE)~GUS_ACIA_TRANSMIT_EMPTY;
         GusIrqUpdate(state);
+
         if (state->MixControl & GUS_MIX_MIDI_LOOPBACK)
         {
             if (state->MidiStatus & GUS_ACIA_RECEIVE_FULL)
                 state->MidiStatus |= GUS_ACIA_OVERRUN;
+
             state->MidiReceive = dataByte;
             state->MidiStatus |= GUS_ACIA_RECEIVE_FULL;
             state->MidiReceivedBytes++;
         }
         else if (state->MidiSink)
             state->MidiSink(state->MidiSinkContext, dataByte);
+
         state->MidiTransmitted++;
         state->MidiStatus |= GUS_ACIA_TRANSMIT_EMPTY;
         GusIrqUpdate(state);
@@ -1074,6 +1155,7 @@ static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
             GusRegisterWrite(state, state->RegisterSelect, (WORD)value);
             break;
         }
+
         /* A byte to 3X4 is the LOW half of a 16-bit register: latched, and the write
          * to 3X5 that follows completes it (ref section 2).
          */
@@ -1085,17 +1167,20 @@ static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
             GusRegisterWrite(state, state->RegisterSelect, (WORD)(((value & BYTE_MASK) << BYTE_SHIFT) | state->LowByteLatch));
         else
             GusRegisterWrite(state, state->RegisterSelect, (WORD)(value & BYTE_MASK));
+
         break;
 
     case GUS_PORT_DRAM:
         if (state->Dram)
             state->Dram[state->DramIoAddress & (GUS_DRAM_SIZE - 1)] = (BYTE)value;
+
         state->DramPokes++;
         break;
 
     default:
         break;
     }
+
     state->IsLatchArmed = (BYTE)isArm;
 }
 
@@ -1106,6 +1191,7 @@ static VOID GusPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     UINT32 result = GUS_FLOATING_BUS;
 
     state->IoReads++;
+
     switch (offset)
     {
     case GUS_PORT_IRQ_STATUS:
@@ -1115,8 +1201,10 @@ static VOID GusPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     case GUS_PORT_ADLIB_INDEX:
         result = (UINT32)((state->IsTimer1Expired && !(state->AdlibMask & GUS_ADLIB_MASK_TIMER1) ? GUS_ADLIB_TIMER1_EXPIRED : 0)
                              | (state->IsTimer2Expired && !(state->AdlibMask & GUS_ADLIB_MASK_TIMER2) ? GUS_ADLIB_TIMER2_EXPIRED : 0));
+
                 if (result)
                     result |= GUS_ADLIB_IRQ;
+
                 break;
 
     case GUS_PORT_REGISTER_CONTROL:
@@ -1126,14 +1214,18 @@ static VOID GusPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     case GUS_PORT_MIDI_CONTROL:                                      /* 6850 status (ref section 9) */
         if (!GusIsMidiDecoded(state))
             break;
+
         result = state->MidiStatus;
+
         if (GusMidiTransmitIrq(state) || GusMidiReceiveIrq(state))
             result |= GUS_ACIA_IRQ;
+
         break;
 
     case GUS_PORT_MIDI_DATA:                                      /* 6850 receive: clears RDRF, OVRN */
         if (!GusIsMidiDecoded(state))
             break;
+
         result = state->MidiReceive;
         state->MidiStatus &= (BYTE)~(GUS_ACIA_RECEIVE_FULL | GUS_ACIA_OVERRUN);
         GusIrqUpdate(state);
@@ -1156,8 +1248,10 @@ static VOID GusPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     case GUS_PORT_DATA_HIGH:
     {
         BYTE select = state->RegisterSelect;
+
         if (select < GUS_REGISTER_GLOBAL_FIRST)
             select |= GUS_REGISTER_READ;                                               /* voice regs read at 80h+ (ref section 2.2) */
+
         result = GusIsRegister16(state->RegisterSelect) ? (UINT32)(GusRegisterRead(state, select) >> BYTE_SHIFT) : (UINT32)(GusRegisterRead(state, select) & BYTE_MASK);
         break; }
 
@@ -1169,6 +1263,7 @@ static VOID GusPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     default:
         break;
     }
+
     *value = result;
 }
 
@@ -1184,6 +1279,7 @@ UINT32 VddGusVolumeGain(WORD volume12)
 
     if (!volume12)
         return 0;
+
     return (((GUS_VOLUME_MANTISSA_ONE + mantissa) << exponent) >> GUS_VOLUME_MANTISSA_SHIFT);   /* Q16: 0xFFF -> 65408 ~ 1.0 */
 }
 
@@ -1202,6 +1298,7 @@ static INT32 GusFetch(PCGUS_STATE state, PCGUS_VOICE voice, UINT32 address)
         UINT32 offset = GusUntranslate16(address & GUS_DRAM_ADDRESS_MASK) & (GUS_DRAM_SIZE - GUS_WORD_BYTES);
         return (INT16)(state->Dram[offset] | (state->Dram[offset + 1] << BYTE_SHIFT));
     }
+
     return (INT32)(INT8)state->Dram[address & (GUS_DRAM_SIZE - 1)] << BYTE_SHIFT;
 }
 
@@ -1212,9 +1309,11 @@ static VOID GusVoiceStep(PGUS_STATE state, PGUS_VOICE voice)
 
     if (voice->Control & GUS_VOICE_STOP_BITS)
         return;                                                     /* stopped: holds its place */
+
     if (voice->Control & GUS_VOICE_DECREASING)                       /* decreasing */
     {
         voice->Position = (oldPosition >= increment) ? oldPosition - increment : 0;
+
         if (oldPosition > voice->Start && voice->Position <= voice->Start)
         {
             if (voice->VolumeControl & GUS_RAMP_ROLLOVER)
@@ -1231,6 +1330,7 @@ static VOID GusVoiceStep(PGUS_STATE state, PGUS_VOICE voice)
                 }
                 else
                     voice->Position = voice->End - (voice->Start - voice->Position);
+
                 if (voice->Control & GUS_VOICE_IRQ_ENABLE)
                     voice->Control |= GUS_VOICE_IRQ_PENDING;
             }
@@ -1238,6 +1338,7 @@ static VOID GusVoiceStep(PGUS_STATE state, PGUS_VOICE voice)
             {
                 voice->Control |= GUS_VOICE_STOPPED;
                 voice->Position = voice->Start;
+
                 if (voice->Control & GUS_VOICE_IRQ_ENABLE)
                     voice->Control |= GUS_VOICE_IRQ_PENDING;
             }
@@ -1246,6 +1347,7 @@ static VOID GusVoiceStep(PGUS_STATE state, PGUS_VOICE voice)
     else
     {
         voice->Position = oldPosition + increment;
+
         if (oldPosition < voice->End && voice->Position >= voice->End)
         {
             if (voice->VolumeControl & GUS_RAMP_ROLLOVER) /* rollover */
@@ -1262,6 +1364,7 @@ static VOID GusVoiceStep(PGUS_STATE state, PGUS_VOICE voice)
                 }
                 else
                     voice->Position = voice->Start + (voice->Position - voice->End);
+
                 if (voice->Control & GUS_VOICE_IRQ_ENABLE)
                     voice->Control |= GUS_VOICE_IRQ_PENDING;
             }
@@ -1269,6 +1372,7 @@ static VOID GusVoiceStep(PGUS_STATE state, PGUS_VOICE voice)
             {
                 voice->Control |= GUS_VOICE_STOPPED;
                 voice->Position = voice->End;
+
                 if (voice->Control & GUS_VOICE_IRQ_ENABLE)
                     voice->Control |= GUS_VOICE_IRQ_PENDING;
             }
@@ -1283,18 +1387,23 @@ static VOID GusRampStep(PGUS_VOICE voice)
     INT32 low;
     INT32 high;
     INT32 step;
+
     if (voice->VolumeControl & GUS_RAMP_STOP_BITS)
         return;
+
     if (++voice->RampDivider < divider[(voice->RampRate >> GUS_RAMP_RATE_SHIFT) & GUS_RAMP_RATE_MASK])
         return;
+
     voice->RampDivider = 0;
     step = voice->RampRate & GUS_RAMP_STEP_MASK;
     volume12 = voice->Volume >> GUS_VOLUME_SHIFT;
     low = (INT32)voice->RampStart << GUS_VOLUME_SHIFT;
     high = (INT32)voice->RampEnd << GUS_VOLUME_SHIFT;
+
     if (voice->VolumeControl & GUS_RAMP_DECREASING)                 /* decreasing */
     {
         volume12 -= step;
+
         if (volume12 <= low)
         {
             if (voice->VolumeControl & GUS_RAMP_LOOP)
@@ -1312,6 +1421,7 @@ static VOID GusRampStep(PGUS_VOICE voice)
                 volume12 = low;
                 voice->VolumeControl |= GUS_RAMP_STOPPED;
             }
+
             if (voice->VolumeControl & GUS_RAMP_IRQ_ENABLE)
                 voice->VolumeControl |= GUS_RAMP_IRQ_PENDING;
         }
@@ -1319,6 +1429,7 @@ static VOID GusRampStep(PGUS_VOICE voice)
     else
     {
         volume12 += step;
+
         if (volume12 >= high)
         {
             if (voice->VolumeControl & GUS_RAMP_LOOP)
@@ -1336,14 +1447,18 @@ static VOID GusRampStep(PGUS_VOICE voice)
                 volume12 = high;
                 voice->VolumeControl |= GUS_RAMP_STOPPED;
             }
+
             if (voice->VolumeControl & GUS_RAMP_IRQ_ENABLE)
                 voice->VolumeControl |= GUS_RAMP_IRQ_PENDING;
         }
     }
+
     if (volume12 < 0)
         volume12 = 0;
+
     if (volume12 > GUS_VOLUME_MAX)
         volume12 = GUS_VOLUME_MAX;
+
     voice->Volume = (WORD)(volume12 << GUS_VOLUME_SHIFT);
 }
 
@@ -1352,26 +1467,33 @@ static VOID GusTimers(PGUS_STATE state, UINT32 nanoseconds)
     if (state->IsTimer1Running)
     {
         state->Timer1AccumulatorNs += nanoseconds;
+
         while (state->Timer1AccumulatorNs >= GUS_TIMER1_PERIOD_NS)              /* 80 us a tick (ref section 9) */
         {
             state->Timer1AccumulatorNs -= GUS_TIMER1_PERIOD_NS;
+
             if (++state->Timer1Value == 0)
             {
                 state->Timer1Value = state->Timer1Load;
+
                 if (!(state->AdlibMask & GUS_ADLIB_MASK_TIMER1))
                     state->IsTimer1Expired = 1;
             }
         }
     }
+
     if (state->IsTimer2Running)
     {
         state->Timer2AccumulatorNs += nanoseconds;
+
         while (state->Timer2AccumulatorNs >= GUS_TIMER2_PERIOD_NS)             /* 320 us */
         {
             state->Timer2AccumulatorNs -= GUS_TIMER2_PERIOD_NS;
+
             if (++state->Timer2Value == 0)
             {
                 state->Timer2Value = state->Timer2Load;
+
                 if (!(state->AdlibMask & GUS_ADLIB_MASK_TIMER2))
                     state->IsTimer2Expired = 1;
             }
@@ -1415,12 +1537,14 @@ static VOID GusRender(PGUS_STATE state, INT16 *output, UINT32 count, INT isStere
 
     state->Renders++;
     GusDmaTry(state);                                /* a DMA that was waiting on the 8237 */
+
     for (sampleIndex = 0; sampleIndex < count; ++sampleIndex)
     {
         INT32 sum = 0;
         INT32 sumLeft = 0;
         INT32 sumRight = 0;
         INT16 mono;
+
         if (state->Dram && (state->ResetRegister & GUS_RESET_RUNNING) == GUS_RESET_RUNNING)     /* running, DAC enabled */
         {
             for (voiceIndex = 0; voiceIndex < state->ActiveVoices && voiceIndex < GUS_VOICES; ++voiceIndex)
@@ -1433,6 +1557,7 @@ static VOID GusRender(PGUS_STATE state, INT16 *output, UINT32 count, INT isStere
                 INT32 sample;
                 INT32 gain;
                 gain = (INT32)VddGusVolumeGain((WORD)(voice->Volume >> GUS_VOLUME_SHIFT));
+
                 if (gain)
                 {
                     sample0 = GusFetch(state, voice, address);
@@ -1440,13 +1565,16 @@ static VOID GusRender(PGUS_STATE state, INT16 *output, UINT32 count, INT isStere
                     sample  = sample0 + (((sample1 - sample0) * (INT32)fraction) >> GUS_POSITION_FRACTION_BITS);
                     sample  = (sample * gain) >> GUS_GAIN_SHIFT;
                     sum += sample;
+
                     if (isStereo) { sumLeft += (sample * GusPanLeft(voice->Pan)) >> GUS_PAN_SHIFT;
                                   sumRight += (sample * GusPanRight(voice->Pan)) >> GUS_PAN_SHIFT; }
                 }
+
                 GusVoiceStep(state, voice);
                 GusRampStep(voice);
             }
         }
+
         GusTimers(state, nanoseconds);
         GusRecord(state, nanoseconds);
         /* #190: 2X0 bit 1 = line out DISABLED (active-high, ref section 5). The voices still
@@ -1457,7 +1585,9 @@ static VOID GusRender(PGUS_STATE state, INT16 *output, UINT32 count, INT isStere
             sum = sumLeft = sumRight = 0;
             state->OutputMuted++;
         }
+
         mono = GusClip(sum >> 1);                    /* headroom for many voices */
+
         if (isStereo)
         {
             output[AUDIO_STEREO_CHANNELS*sampleIndex] = GusClip(sumLeft >> 1);
@@ -1465,14 +1595,17 @@ static VOID GusRender(PGUS_STATE state, INT16 *output, UINT32 count, INT isStere
         }
         else
             output[sampleIndex] = mono;
+
         if (mono)                                    /* is anything actually audible? */
         {
             UINT32 magnitude = (UINT32)(mono < 0 ? -mono : mono);
             state->OutputNonZero++;
+
             if (magnitude > state->OutputPeak)
                 state->OutputPeak = magnitude;
         }
     }
+
     state->SamplesOut += count;
     GusIrqUpdate(state);
 }
@@ -1537,18 +1670,26 @@ INT VddGusInitialize(PVDD_BUS bus, PVOID context)
     PGUS_STATE state = (PGUS_STATE)context;
 
     state->Bus = bus;
+
     if (!state->BasePort)
         state->BasePort   = GUS_DEFAULT_BASE;
+
     if (!state->Irq)
         state->Irq    = GUS_DEFAULT_IRQ;
+
     if (!state->DmaChannel)
         state->DmaChannel = GUS_DEFAULT_DMA;
+
     if (state->Dma)
         VddDmaAddDreq(state->Dma, GusDreq, state);
+
     VddGusReset(state);
+
     if (VddClaimPorts(bus, state->BasePort, (WORD)(state->BasePort + GUS_PORT_LOW_LAST), GusPortIn, GusPortOut, state))
         return GUS_FAILED;
+
     if (VddClaimPorts(bus, (WORD)(state->BasePort + GUS_PORT_HIGH_FIRST), (WORD)(state->BasePort + GUS_PORT_HIGH_LAST), GusPortIn, GusPortOut, state))
         return GUS_FAILED;
+
     return 0;
 }

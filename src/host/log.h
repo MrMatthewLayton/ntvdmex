@@ -64,6 +64,7 @@ static inline PSTR LogPut(PSTR cursor, PCSTR text)
 {
     while (*text)
         *cursor++ = *text++;
+
     *cursor = 0;
     return cursor;
 }
@@ -75,11 +76,13 @@ static inline PSTR LogHex(PSTR cursor, UINT value)
     CHAR digits[LOG_HEX_DIGITS + 1];
 
     digits[LOG_HEX_DIGITS] = 0;
+
     for (index = LOG_HEX_DIGITS - 1; index >= 0; --index)
     {
         digits[index] = HEX_DIGITS_LOWER[value & NIBBLE_MASK];
         value >>= NIBBLE_SHIFT;
     }
+
     return LogPut(cursor, digits);
 }
 
@@ -112,12 +115,15 @@ static inline PSTR LogDecimal(PSTR cursor, UINT value)
         *cursor = 0;
         return cursor;
     }
+
     while (value && count < LOG_DECIMAL_DIGITS)
     {
         digits[count++] = (CHAR)('0' + value % DECIMAL_RADIX);
         value /= DECIMAL_RADIX;
     }
+
     while (count) *cursor++ = digits[--count];
+
     *cursor = 0;
     return cursor;
 }
@@ -133,6 +139,7 @@ static inline PSTR LogDump(PSTR cursor, LPCVOID bytes, UINT length)
         *cursor++ = HEX_DIGITS_LOWER[source[index] & NIBBLE_MASK];
         *cursor++ = ((index & LOG_DUMP_ROW_MASK) == LOG_DUMP_ROW_MASK) ? '\n' : ' ';
     }
+
     *cursor = 0;
     return cursor;
 }

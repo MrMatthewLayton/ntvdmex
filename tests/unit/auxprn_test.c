@@ -173,14 +173,18 @@ static INT AuxPrnTestRunEntry(PV86_CPU cpu, UINT entry, WORD callerFlags)
     g_Memory[stackTop - AUXPRN_TEST_FRAME_FLAGS_HIGH] = HIBYTE(callerFlags);
     cpu->Segments[AUXPRN_TEST_CS] = DOS_CTAB_SEG;
     cpu->Ip = (WORD)(DOS_AUXPRN_OFF + entry);
+
     for (;;)
     {
         if (++steps > AUXPRN_TEST_STEP_LIMIT)
             return AUXPRN_TEST_RAN_AWAY;
+
         if (V86Step(cpu))
             continue;
+
         if (cpu->Segments[AUXPRN_TEST_CS] == AUXPRN_TEST_RETURN_SEGMENT && cpu->Ip == AUXPRN_TEST_HLT_IP)
             return AUXPRN_TEST_RETURNED;                                    /* back home */
+
         if ((cpu->Segments[AUXPRN_TEST_CS] == AUXPRN_TEST_INT17_SEGMENT
              || cpu->Segments[AUXPRN_TEST_CS] == AUXPRN_TEST_INT14_SEGMENT)
             && cpu->Ip == AUXPRN_TEST_HLT_IP)
@@ -189,6 +193,7 @@ static INT AuxPrnTestRunEntry(PV86_CPU cpu, UINT entry, WORD callerFlags)
                          ? AUXPRN_TEST_INT17 : AUXPRN_TEST_INT14;
             WORD ax = (WORD)cpu->Registers[AUXPRN_TEST_AX];
             WORD ah = ax >> AUXPRN_TEST_AH_SHIFT;
+
             if (g_CallCount < AUXPRN_TEST_MAX_CALLS)
             {
                 g_Calls[g_CallCount].Vector = vector;
@@ -196,6 +201,7 @@ static INT AuxPrnTestRunEntry(PV86_CPU cpu, UINT entry, WORD callerFlags)
                 g_Calls[g_CallCount].Dx = (WORD)cpu->Registers[AUXPRN_TEST_DX];
                 ++g_CallCount;
             }
+
             if (vector == AUXPRN_TEST_INT17)
                 ax = (WORD)(AUXPRN_TEST_PRINTER_STATUS | (ax & AUXPRN_TEST_LOW_BYTE));
             else if (ah == AUXPRN_TEST_SERIAL_SEND)
@@ -204,10 +210,12 @@ static INT AuxPrnTestRunEntry(PV86_CPU cpu, UINT entry, WORD callerFlags)
                 ax = (WORD)(g_ReceiveScript[g_ReceiveIndex++] & AUXPRN_TEST_LOW_BYTE);
             else if (ah == AUXPRN_TEST_SERIAL_STATUS)
                 ax = AUXPRN_TEST_LINE_STATUS;
+
             cpu->Registers[AUXPRN_TEST_AX] = (cpu->Registers[AUXPRN_TEST_AX] & AUXPRN_TEST_HIGH_WORD) | ax;
             cpu->Ip = AUXPRN_TEST_IRET_IP;                                  /* the IRET */
             continue;
         }
+
         return AUXPRN_TEST_DERAILED;
     }
 }

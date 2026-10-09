@@ -40,8 +40,10 @@ INT WowSoundCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         "SetVoiceThreshold", "DoBeep",
     };
     INT noteLength = 0;
+
     if (noteCapacity)
         note[0] = 0;
+
     switch (frame->Id)
     {
     case WOWSND_OPENSOUND:
@@ -75,5 +77,6 @@ INT WowSoundCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         Wow32SetReturn(frame, 0);
         return 1;
     }
+
     return 0;
 }

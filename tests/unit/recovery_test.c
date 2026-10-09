@@ -27,8 +27,10 @@ static INT g_Failures;
 static VOID RecoveryTestExpect(PCSTR description, LONG actual, LONG expected)
 {
     ++g_Checks;
+
     if (actual == expected)
         return;
+
     ++g_Failures;
     printf("  FAIL %-58s got %ld, want %ld\n", description, (long)actual, (long)expected);
 }

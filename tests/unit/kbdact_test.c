@@ -61,6 +61,7 @@ static INT g_Failures = 0;
 static VOID KeyboardActionTestCheck(BOOL passed, PCSTR message)
 {
     g_Checks++;
+
     if (passed)
     {
         printf("  PASS  %s\n", (message));
@@ -165,6 +166,7 @@ static V86_CPU KeyboardActionTestSetup(UINT entry)
     memset(g_GuestMemory, 0, sizeof g_GuestMemory);
     memcpy(g_GuestMemory + ((DWORD)DOS_CTAB_SEG << PARAGRAPH_SHIFT) + DOS_KBDACT_OFF,
            g_BiosKeyboardActionCode, sizeof g_BiosKeyboardActionCode);
+
     for (vector = 0; vector < KBDACT_TEST_VECTOR_COUNT; ++vector)
     {
         g_GuestMemory[vector * KBDACT_TEST_IVT_ENTRY_SIZE] =
@@ -180,6 +182,7 @@ static V86_CPU KeyboardActionTestSetup(UINT entry)
         g_GuestMemory[((DWORD)KBDACT_TEST_HANDLER_SEGMENT << PARAGRAPH_SHIFT)
                       + vector * KBDACT_TEST_HANDLER_STRIDE + 1] = KBDACT_TEST_IRET;
     }
+
     g_GuestMemory[(DWORD)KBDACT_TEST_RETURN_SEGMENT << PARAGRAPH_SHIFT] =
         KBDACT_TEST_HLT;
     cpu.Segments[KBDACT_TEST_SS] = KBDACT_TEST_STACK_SEGMENT;
@@ -210,28 +213,36 @@ static INT KeyboardActionTestRun(PV86_CPU cpu, INT budget, INT clearPauseAfter)
     {
         if (++stepCount > budget)
             return KBDACT_TEST_OUT_OF_BUDGET;
+
         if (clearPauseAfter && stepCount == clearPauseAfter)
             g_GuestMemory[KBDACT_TEST_PAUSE_FLAGS_LINEAR] &= (BYTE)~KBDACT_TEST_PAUSE_BIT;
+
         if (g_StopOffset >= 0 && cpu->Segments[KBDACT_TEST_CS] == DOS_CTAB_SEG
             && cpu->Ip == (WORD)g_StopOffset)
             return KBDACT_TEST_STOPPED;
+
         if (V86Step(cpu))
             continue;
+
         if (cpu->Segments[KBDACT_TEST_CS] == KBDACT_TEST_RETURN_SEGMENT && cpu->Ip == 0)
             return KBDACT_TEST_RETURNED;
+
         if (cpu->Segments[KBDACT_TEST_CS] == KBDACT_TEST_HANDLER_SEGMENT)
         {
             g_LastVector = cpu->Ip / KBDACT_TEST_HANDLER_STRIDE;
             g_LastAx = (WORD)cpu->Registers[KBDACT_TEST_AX];
             ++g_CallCount;
             g_InterruptFlagAtCall = 0;
+
             if (g_LastVector == g_ClearCarryVector)   /* the IRET pops FLAGS at SS:SP+4 */
                 g_GuestMemory[((DWORD)cpu->Segments[KBDACT_TEST_SS] << PARAGRAPH_SHIFT)
                               + (WORD)(cpu->Registers[KBDACT_TEST_SP] + KBDACT_TEST_FLAGS_POP_OFFSET)]
                     &= (BYTE)~KBDACT_TEST_FLAG_CF;
+
             cpu->Ip = (WORD)(cpu->Ip + 1);
             continue;
         }
+
         return KBDACT_TEST_LOST;
     }
 }

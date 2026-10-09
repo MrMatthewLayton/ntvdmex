@@ -73,13 +73,17 @@ INT RmcsSimIntRoute(UINT vector, WORD ivtSegment, WORD ivtOffset, INT isReflectO
 {
     if (vector == VECTOR_DOS)
         return SIMINT_FAST;
+
     if (vector == VECTOR_MOUSE || vector == VECTOR_VIDEO)
         if (ivtSegment == ourSegment || !isReflectOn)
             return SIMINT_FAST;
+
     if (!isReflectOn)
         return SIMINT_NONE;
+
     if (ivtSegment == 0 && ivtOffset == 0)
         return SIMINT_NONE;
+
     return SIMINT_RUN;
 }
 
@@ -93,6 +97,7 @@ INT RmcsStackPlan(WORD stackPointer, UINT words, UINT frame, PWORD stackPointerA
         *stackPointerAfter = stackPointer;
         return 0;
     }
+
     *stackPointerAfter = (WORD)(available - needed);
     return 1;
 }

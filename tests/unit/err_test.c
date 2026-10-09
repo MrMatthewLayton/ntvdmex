@@ -90,8 +90,10 @@ static INT g_Failures;
 static VOID ErrTestExpect(PCSTR description, INT32 actual, INT32 expected)
 {
     ++g_Checks;
+
     if (actual == expected)
         return;
+
     ++g_Failures;
     printf("  FAIL %-56s got 0x%04lX, want 0x%04lX\n", description, (long)actual, (long)expected);
 }
@@ -106,12 +108,14 @@ static VOID ErrTestRow(PCSTR description, UINT code, UINT expectedBx, UINT expec
 
     snprintf(label, sizeof(label), "%s -> BX", description);
     ++g_Checks;
+
     if (!isMeasured)
     {
         ++g_Failures;
         printf("  FAIL %-56s reported UNMEASURED\n", label);
         return;
     }
+
     --g_Checks;                                 /* ErrTestExpect() below counts it */
     ErrTestExpect(label, classAndAction, expectedBx);
     snprintf(label, sizeof(label), "%s -> CH", description);
@@ -173,11 +177,13 @@ INT main(VOID)
      * as an unmeasured gap.
      */
     ++g_Checks;
+
     if (!DosErrClassify(DOS_ERR_NONE, &classAndAction, &locus))
     {
         ++g_Failures;
         printf("  FAIL %-56s reported UNMEASURED\n", "code 0 is not an error");
     }
+
     ErrTestExpect("code 0 -> BX is zero", classAndAction, 0);
     ErrTestExpect("code 0 -> CH is zero", locus, 0);
 
@@ -189,11 +195,13 @@ INT main(VOID)
     ++g_Checks;
     classAndAction = ERR_TEST_POISON_WORD;
     locus = ERR_TEST_POISON_BYTE;
+
     if (DosErrClassify(ERR_TEST_UNMEASURED_CODE, &classAndAction, &locus))
     {
         ++g_Failures;
         printf("  FAIL %-56s claimed to know it\n", "code 0x21 is UNMEASURED");
     }
+
     ErrTestExpect("unmeasured code zeroes BX (never a guess)", classAndAction, 0);
     ErrTestExpect("unmeasured code zeroes CH (never a guess)", locus, 0);
 
@@ -202,11 +210,14 @@ INT main(VOID)
      */
     {
         UINT rowIndex;
+
         for (rowIndex = 0; rowIndex < DOS_ERR_ROWS; ++rowIndex)
         {
             ++g_Checks;
+
             if (g_DosErrTable[rowIndex].Evidence && g_DosErrTable[rowIndex].Evidence[0])
                 continue;
+
             ++g_Failures;
             printf("  FAIL row %u (code 0x%02X) has no oracle evidence string\n",
                    rowIndex, g_DosErrTable[rowIndex].Code);
@@ -224,20 +235,26 @@ INT main(VOID)
         printf("== INT 21h AH=3Dh: Win32 failure -> DOS code (dos_err_from_win32)\n");
 
         ++g_Checks;
+
         if (!DosErrFromWin32(DOS_ERR_WIN32_FILE_NOT_FOUND, &dosError)) { ++g_Failures;
             printf("  FAIL %-56s not mapped\n", "win32=2 is a measured row"); }
+
         ErrTestExpect("win32=2  -> 2   [err.after.3D.missing  AX=0002]", dosError,
                       ERR_TEST_FILE_NOT_FOUND);
 
         ++g_Checks;
+
         if (!DosErrFromWin32(DOS_ERR_WIN32_PATH_NOT_FOUND, &dosError)) { ++g_Failures;
             printf("  FAIL %-56s not mapped\n", "win32=3 is a measured row"); }
+
         ErrTestExpect("win32=3  -> 3   [err.after.3D.baddrive AX=0003]", dosError,
                       ERR_TEST_PATH_NOT_FOUND);
 
         ++g_Checks;
+
         if (!DosErrFromWin32(DOS_ERR_WIN32_ACCESS_DENIED, &dosError)) { ++g_Failures;
             printf("  FAIL %-56s not mapped\n", "win32=5 is a measured row"); }
+
         ErrTestExpect("win32=5  -> 5   [err.after.3D.readonly AX=0005]", dosError,
                       ERR_TEST_ACCESS_DENIED);
 
@@ -254,6 +271,7 @@ INT main(VOID)
             DosErrFromWin32(DOS_ERR_WIN32_PATH_NOT_FOUND, &pathNotFound);
             DosErrFromWin32(DOS_ERR_WIN32_ACCESS_DENIED,  &accessDenied);
             ++g_Checks;
+
             if (fileNotFound == pathNotFound || pathNotFound == accessDenied
                 || fileNotFound == accessDenied) { ++g_Failures;
                 printf("  FAIL %-56s %u/%u/%u\n",
@@ -263,8 +281,10 @@ INT main(VOID)
 
         ++g_Checks;
         dosError = 0;
+
         if (!DosErrFromWin32(DOS_ERR_WIN32_FILE_EXISTS, &dosError)) { ++g_Failures;
             printf("  FAIL %-56s unmapped\n", "win32 FILE_EXISTS"); }
+
         ErrTestExpect("6Ch exists+fail -> 0x50 (p_file int21.6C.exists)", dosError,
                       ERR_TEST_FILE_EXISTS);
 
@@ -274,8 +294,10 @@ INT main(VOID)
          */
         ++g_Checks;
         dosError = ERR_TEST_POISON_WORD;
+
         if (DosErrFromWin32(ERR_TEST_UNMAPPED_WIN32, &dosError)) { ++g_Failures;
             printf("  FAIL %-56s claimed to know it\n", "win32=1234 is unmapped"); }
+
         ErrTestExpect("unmapped keeps the historical 2 (no invention)", dosError,
                       ERR_TEST_FILE_NOT_FOUND);
     }

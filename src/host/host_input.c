@@ -132,6 +132,7 @@ static VOID KeyLatencyBucket(DWORD *histogram, DWORD milliseconds)
 
     while (bucket < 7 && milliseconds >= (DWORD)(1u << bucket))
         ++bucket;                                                           /* 0,1,2,4,8,16,32,64+ */
+
     histogram[bucket]++;
 }
 
@@ -142,6 +143,7 @@ static VOID KeyLatencyPush(VOID)                      /* UI thread: a scancode w
 
     if (!QueryPerformanceCounter(&now))
         return;
+
     g_KeyLatencyTimes[head & (KEYLAT_RING - 1)] = now.QuadPart;
     g_KeyLatencyHead = head + 1;
 }
@@ -153,14 +155,18 @@ VOID KeyLatencyPop(VOID)                       /* exec thread: INT 09h went in *
 
     if (tail == g_KeyLatencyHead)
         return;                                          /* nothing outstanding */
+
     if (QueryPerformanceCounter(&now))
     {
         DWORD milliseconds = QpcMicroseconds(now.QuadPart - g_KeyLatencyTimes[tail & (KEYLAT_RING - 1)]) / MICROSECONDS_PER_MILLISECOND_U;
         KeyLatencyBucket(g_KeyDeliveryHistogram, milliseconds);
+
         if (milliseconds > g_KeyDeliveryMaximumMs)
             g_KeyDeliveryMaximumMs = milliseconds;
+
         ++g_KeyDeliveryCount;
     }
+
     g_KeyLatencyTail = tail + 1;
 }
 
@@ -182,8 +188,10 @@ VOID KeyLatencyPop(VOID)                       /* exec thread: INT 09h went in *
 VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak)
 {
     HOST_LOCK();
+
     if (extended)
         VddInputPushScanCode(&g_Input, INPUT_SCAN_PREFIX_E0);
+
     VddInputPushScanCode(&g_Input, isBreak ? (BYTE)(rawScancode | INPUT_SCAN_BREAK_BIT) : rawScancode);
     HOST_UNLOCK();
     KeyLatencyPush();                  /* start the clock on this keystroke's delivery */
@@ -207,12 +215,16 @@ VOID HostKeyTypematicInitialize(VOID)
 
     if (!SystemParametersInfoA(SPI_GETKEYBOARDDELAY, 0, &delay, 0))
         delay = 1;
+
     if (!SystemParametersInfoA(SPI_GETKEYBOARDSPEED, 0, &speed, 0))
         speed = KEYBOARD_SPEED_MAX;
+
     if (delay > KEYBOARD_DELAY_MAX)
         delay = KEYBOARD_DELAY_MAX;
+
     if (speed > KEYBOARD_SPEED_MAX)
         speed = KEYBOARD_SPEED_MAX;
+
     g_TypematicSpiDelay = delay;
     g_TypematicSpiSpeed = speed;
     g_TypematicDelayMicroseconds  = (delay + 1) * TYPEMATIC_DELAY_STEP_US;
@@ -245,6 +257,7 @@ VOID HostKeyPresent(VOID)
 {
     if (g_Input.ScanCodeHead == g_Input.ScanCodeTail || g_Input.IsScanCodeIrqUp)
         return;                                                                            /* racy, benign */
+
     HOST_LOCK();
     VddInputPoll(&g_Input);
     HOST_UNLOCK();
@@ -256,9 +269,12 @@ VOID HostKeyTypematic(VOID)
 
     if (!g_TypematicOn || !g_QpcFrequency.QuadPart)
         return;
+
     QueryPerformanceCounter(&now);
+
     if (now.QuadPart < g_TypematicDue)
         return;
+
     /* A stall must not turn into a burst of makes: schedule from NOW, not from the
      * missed deadline, so we never try to "catch up" the repeats we owe. That is
      * the same mistake the PIT catch-up made, and it is worse here -- a burst of
@@ -281,6 +297,7 @@ DWORD WINAPI SynthKeyThread(LPVOID parameter)
     /* A script on the share wins, if there is one: it can aim at a particular screen. */
     { HANDLE handle = CreateFileA(KEYS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, OPEN_EXISTING, 0, NULL);
+
       if (handle != INVALID_HANDLE_VALUE)
       {
           CHAR script[1024];
@@ -289,15 +306,19 @@ DWORD WINAPI SynthKeyThread(LPVOID parameter)
           ReadFile(handle, script, sizeof script - 1, &bytesRead, NULL);
           CloseHandle(handle);
           script[bytesRead] = 0;
+
           while (index < bytesRead && g_Running)
           {
               INT extended = 0;
               DWORD value = 0;
               INT digits = 0;
+
               while (index < bytesRead && (script[index] == ' ' || script[index] == '\t' || script[index] == '\r' || script[index] == '\n'))
                   ++index;
+
               if (index >= bytesRead)
                   break;
+
               /* m<0|1|2> -- a full click of that button (left/right/middle). Not a
                * keystroke, but it belongs in the same script: the point of the script
                * is to reach a screen, and mouse-driven guests cannot be reached with
@@ -308,31 +329,38 @@ DWORD WINAPI SynthKeyThread(LPVOID parameter)
               {
                   INT button = 0;
                   ++index;
+
                   if (index < bytesRead && script[index] >= '0' && script[index] <= '2')
                   {
                       button = script[index] - '0';
                       ++index;
                   }
+
                   HostMouseButton(button, INPUT_PRESSED);
                   Sleep(SYNTHKEY_HOLD_MS);
                   HostMouseButton(button, INPUT_RELEASED);
                   Sleep(SYNTHKEY_GAP_MS);
                   continue;
               }
+
               if (script[index] == 'w' || script[index] == 'W')             /* w<decimal ms> */
               {
                   ++index;
+
                   while (index < bytesRead && script[index] >= '0' && script[index] <= '9')
                   {
                       value = value*DECIMAL_RADIX + (DWORD)(script[index]-'0');
                       ++index;
                   }
+
                   { DWORD slept = 0;                       /* sleep in slices so a wind-down
                                                               is not stuck behind a long wait */
                     while (slept < value && g_Running) { Sleep(value - slept > SYNTHKEY_SLEEP_SLICE_MS ? SYNTHKEY_SLEEP_SLICE_MS : value - slept);
                                                      slept += SYNTHKEY_SLEEP_SLICE_MS; } }
+
                   continue;
               }
+
               /* A MODIFIER HAS TO BE HELD, AND EVERY TOKEN HERE WAS A TAP:
                * Each token below is sent as make-then-break, which is right for a
                * character and useless for SHIFT: `2a 34 aa` released shift before
@@ -345,68 +373,84 @@ DWORD WINAPI SynthKeyThread(LPVOID parameter)
               {
                   INT isUp = (script[index] == 'u' || script[index] == 'U');
                   ++index;
+
                   if (index < bytesRead && (script[index] == 'e' || script[index] == 'E'))
                   {
                       extended = 1;
                       ++index;
                   }
+
                   while (index < bytesRead && digits < SYNTHKEY_HEX_DIGITS_MAX)
                   {
                       CHAR character = script[index];
                       INT digit = -1;
+
                       if (character >= '0' && character <= '9')
                           digit = character - '0';
                       else if (character >= 'a' && character <= 'f')
                           digit = character - 'a' + HEX_DIGIT_A_VALUE;
                       else if (character >= 'A' && character <= 'F')
                           digit = character - 'A' + HEX_DIGIT_A_VALUE;
+
                       if (digit < 0)
                           break;
+
                       value = (value << NIBBLE_SHIFT) | (DWORD)digit;
                       ++index;
                       ++digits;
                   }
+
                   if (!digits)
                       continue;
+
                   HostKeyScancode((BYTE)value, extended, isUp);
                   Sleep(SYNTHKEY_TAP_MS);
                   continue;
               }
+
               if (script[index] == 'e' || script[index] == 'E')
               {
                   extended = 1;
                   ++index;
               }
+
               while (index < bytesRead && digits < SYNTHKEY_HEX_DIGITS_MAX)                 /* up to two hex digits */
               {
                   CHAR character = script[index];
                   INT digit = -1;
+
                   if (character >= '0' && character <= '9')
                       digit = character - '0';
                   else if (character >= 'a' && character <= 'f')
                       digit = character - 'a' + HEX_DIGIT_A_VALUE;
                   else if (character >= 'A' && character <= 'F')
                       digit = character - 'A' + HEX_DIGIT_A_VALUE;
+
                   if (digit < 0)
                       break;
+
                   value = (value << NIBBLE_SHIFT) | (DWORD)digit;
                   ++index;
                   ++digits;
               }
+
               if (!digits) /* skip a token we do not grok */
               {
                   ++index;
                   continue;
               }
+
               HostKeyScancode((BYTE)value, extended, INPUT_KEY_MAKE);
               Sleep(SYNTHKEY_HOLD_MS);                                    /* a human-length hold */
               HostKeyScancode((BYTE)value, extended, INPUT_KEY_BREAK);
               Sleep(SYNTHKEY_GAP_MS);
           }
+
           return 0;
       } }
 
     Sleep(SYNTHKEY_MENU_DELAY_MS);
+
     for (round = 0; round < SYNTHKEY_MENU_ROUNDS && g_Running; ++round)
     {
         /* An EXTENDED key (the arrows a player actually holds) at the OS auto-repeat rate,
@@ -425,6 +469,7 @@ DWORD WINAPI SynthKeyThread(LPVOID parameter)
         HostKeyScancode(INPUT_SCANCODE_DOWN, INPUT_KEY_EXTENDED, INPUT_KEY_BREAK);                   /* release each time */
         Sleep(SYNTHKEY_GAP_MS);
     }
+
     return 0;
 }
 
@@ -446,7 +491,9 @@ LRESULT CALLBACK LowLevelKeyboardProcedure(INT code, WPARAM wParam, LPARAM lPara
          */
         if (!down) { if (hook->vkCode == VK_LWIN || hook->vkCode == VK_RWIN)
                          InterlockedExchange(&g_WindowsKeyDown, 0);
+
                      return CallNextHookEx(g_LowLevelKeyboard, code, wParam, lParam); }
+
         /* Swallow only, and deliberately do NOT push these to the guest from here: a
          * low-level hook that blocks is torn down by Windows, and HostKeyScancode
          * takes g_Lock. Losing Alt+Tab to the guest costs nothing; stalling the hook
@@ -461,11 +508,14 @@ LRESULT CALLBACK LowLevelKeyboardProcedure(INT code, WPARAM wParam, LPARAM lPara
             InterlockedExchange(&g_WindowsKeyDown, 1);
             return 1;
         }
+
         if (hook->vkCode == VK_TAB    && altDown)
             return 1;
+
         if (hook->vkCode == VK_ESCAPE && (ctrl || altDown))
             return 1;
     }
+
     return CallNextHookEx(g_LowLevelKeyboard, code, wParam, lParam);
 }
 
@@ -541,6 +591,7 @@ static DWORD WINAPI JoystickPollThread(LPVOID param)
      * pacer (g_PitPacePriority = NORMAL) and the exec thread always win.
      */
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+
     for (;;)
     {
         if (g_Joystick.Type == JOYSTICK_TYPE_NONE)
@@ -549,11 +600,14 @@ static DWORD WINAPI JoystickPollThread(LPVOID param)
             Sleep(JOYSTICK_ABSENT_POLL_MS);
             continue;
         }
+
         if (!getPositionEx)
         {
             if (!module)
                 module = LoadLibraryA(HOST_MODULE_WINMM);
+
             getPositionEx = module ? (PFN_JOY_GET_POS_EX)GetProcAddress(module, HOST_EXPORT_JOY_GET_POS_EX) : NULL;
+
             if (!getPositionEx)
             {
                 g_Joystick.IsPresent = 0;
@@ -561,11 +615,13 @@ static DWORD WINAPI JoystickPollThread(LPVOID param)
                 continue;
             }
         }
+
         {   JOYINFOEX info;
         UINT axes[JOYSTICK_AXES];
         INT index;
             info.dwSize = sizeof info;
             info.dwFlags = JOY_RETURNALL;                    /* JOY_RETURNALL: X Y Z R U V POV buttons */
+
             if (getPositionEx(0, &info) == 0)              /* JOYSTICKID1, JOYERR_NOERROR */
             {
                 /* winmm's view of a 360 pad on XP: X/Y = left stick, U/R = right
@@ -575,6 +631,7 @@ static DWORD WINAPI JoystickPollThread(LPVOID param)
                 axes[1] = (info.dwYpos >> BYTE_SHIFT) & BYTE_MASK;
                 axes[2] = (info.dwUpos >> BYTE_SHIFT) & BYTE_MASK;
                 axes[3] = (info.dwRpos >> BYTE_SHIFT) & BYTE_MASK;
+
                 if (g_JoystickPovMap && info.dwPOV < JOYSTICK_POV_FULL_CIRCLE)
                 {
                     /* Hundredths of a degree, 0 = up. Snap the eight sectors
@@ -583,17 +640,23 @@ static DWORD WINAPI JoystickPollThread(LPVOID param)
                      * pin the axis, not average with a centred stick.
                      */
                     INT povOctant = (INT)(((info.dwPOV + JOYSTICK_POV_OCTANT_U / 2) / JOYSTICK_POV_OCTANT_U) & JOYSTICK_POV_OCTANT_MASK);
+
                     if (povOctant == JOYSTICK_POV_NORTH_WEST || povOctant == JOYSTICK_POV_NORTH || povOctant == JOYSTICK_POV_NORTH_EAST)
                         axes[1] = JOYSTICK_AXIS_MIN;
+
                     if (povOctant >= JOYSTICK_POV_SOUTH_EAST && povOctant <= JOYSTICK_POV_SOUTH_WEST)
                         axes[1] = JOYSTICK_AXIS_MAX;
+
                     if (povOctant >= JOYSTICK_POV_NORTH_EAST && povOctant <= JOYSTICK_POV_SOUTH_EAST)
                         axes[0] = JOYSTICK_AXIS_MAX;
+
                     if (povOctant >= JOYSTICK_POV_SOUTH_WEST && povOctant <= JOYSTICK_POV_NORTH_WEST)
                         axes[0] = JOYSTICK_AXIS_MIN;
                 }
+
                 for (index = 0; index < JOYSTICK_AXES; ++index)
                     g_Joystick.Axis[index] = (BYTE)axes[index];
+
                 g_Joystick.Buttons = (BYTE)(info.dwButtons & JOYSTICK_BUTTON_MASK);
                 g_Joystick.IsPresent = 1;
             }
@@ -610,9 +673,12 @@ VOID JoystickPollEnsure(VOID)
 {
     if (g_Joystick.Type == JOYSTICK_TYPE_NONE || g_Safe.Joystick)
         return;                                                             /* s90 #132 */
+
     if (InterlockedExchange(&g_JoystickThreadStarted, 1))
         return;                                                     /* once */
+
     { HANDLE thread = CreateThread(NULL, 0, JoystickPollThread, NULL, 0, NULL);
+
       if (thread)
           CloseHandle(thread);
       else
@@ -631,8 +697,10 @@ VOID KeyMessageNote(VOID)
 
     if ((LONG)queueDelay < 0)
         queueDelay = 0;
+
     KeyLatencyBucket(g_KeyMessageHistogram, queueDelay);
     ++g_KeyMessageCount;
+
     if (queueDelay > g_KeyMessageMaximumMs)
         g_KeyMessageMaximumMs = queueDelay;
 }
@@ -654,19 +722,25 @@ static INT HostKeySpecial(BYTE rawScancode, INT extended, INT isBreak)
     INT index;
 
     count = VddInputHostKeyBytes(rawScancode, extended, isBreak, bytes, &noReport);
+
     if (!noReport)
         return 0;
+
     if (count)
     {
         g_TypematicOn = 0;
         HOST_LOCK();
+
         for (index = 0; index < count; ++index)
             VddInputPushScanCode(&g_Input, bytes[index]);
+
         HOST_UNLOCK();
         KeyLatencyPush();
+
         if (g_KeyEvent)
             SetEvent(g_KeyEvent);
     }
+
     return 1;
 }
 
@@ -689,8 +763,10 @@ static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down)
         else if (rawScancode == INPUT_SCAN_ALT)
             bit = MODIFIER_RIGHT_ALT;
     }
+
     if (bit < 0)
         return;
+
     if (down)
         g_ModifiersDown |= (BYTE)(1u << bit);
     else
@@ -712,8 +788,10 @@ VOID KeyPushMake(LPARAM lParam)
         g_TypematicOsRepeats++;
         return;
     }
+
     if (rawScancode && HostKeySpecial(rawScancode, extended, INPUT_KEY_MAKE))
         return;                                                                         /* #274: Pause, Ctrl+Break */
+
     if (rawScancode) { HostKeyScancode(rawScancode, extended, INPUT_KEY_MAKE);
     HostKeyTypematicPress(rawScancode, extended);
                  ModifierTrack(rawScancode, extended, INPUT_PRESSED); }
@@ -726,6 +804,7 @@ VOID KeyPushBreak(LPARAM lParam)
 
     if (rawScancode && HostKeySpecial(rawScancode, extended, INPUT_KEY_BREAK))
         return;                                                                          /* #274: they send no break */
+
     if (rawScancode) { HostKeyTypematicRelease(rawScancode, extended);   /* stop repeating first */
                  HostKeyScancode(rawScancode, extended, INPUT_KEY_BREAK);
                  ModifierTrack(rawScancode, extended, INPUT_RELEASED); }
@@ -742,11 +821,13 @@ VOID HostReleaseModifiers(VOID)
     mods[MODIFIER_KEYS] =
         { {INPUT_SCAN_LEFT_SHIFT,0}, {INPUT_SCAN_RIGHT_SHIFT,0}, {INPUT_SCAN_CTRL,0}, {INPUT_SCAN_CTRL,1}, {INPUT_SCAN_ALT,0}, {INPUT_SCAN_ALT,1} };
     INT index;
+
     for (index = 0; index < MODIFIER_KEYS; ++index)
         if (g_ModifiersDown & (1u << index))
         {
             HostKeyTypematicRelease(mods[index].ScanCode, mods[index].IsExtended);
             HostKeyScancode(mods[index].ScanCode, mods[index].IsExtended, INPUT_KEY_BREAK);
         }
+
     g_ModifiersDown = 0;
 }

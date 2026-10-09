@@ -100,8 +100,10 @@ static inline BYTE DosCtabUpcase437(_In_ BYTE character)
 {
     if (character >= 'a' && character <= 'z')
         return (BYTE)(character - ASCII_CASE_BIT);
+
     if (character >= ASCII_HIGH_FIRST)
         return g_DosCtabUpper[X86_WORD_SIZE + (character - ASCII_HIGH_FIRST)];
+
     return character;
 }
 

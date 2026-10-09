@@ -52,8 +52,10 @@ static BYTE V86HostRead8(UINT32 linear)
 static VOID V86HostWrite8(UINT32 linear, BYTE value)
 {
     InterpSideEffect(((UINT64)linear << 8) | value);
+
     if (linear >= sizeof g_Memory)
         return;
+
     if (g_IsUndoOn)
     {
         if (g_UndoCount < UNDO_MAX)
@@ -65,6 +67,7 @@ static VOID V86HostWrite8(UINT32 linear, BYTE value)
         else
             g_IsUndoOverflow = 1;
     }
+
     g_Memory[linear] = value;
 }
 
@@ -100,9 +103,12 @@ static INT InterpSideSelectorDescriptor(WORD selector, UINT32 *accessRights, UIN
 
     if (!(selector & 4) || index == 0 || kind == 3)
         return 0;
+
     *accessRights = (kind == 1 ? 0xF2u : 0xFAu) << 8;
+
     if (kind == 2)
         *accessRights |= 0x4u << 20;                               /* D = 1 */
+
     *limit = (index & 4) ? 0x7FFFu : 0xFFFFu;
     return 1;
 }
@@ -138,16 +144,21 @@ INT FN(Step)(PINTERP_XCPU state, UINT64 *effects)
 
     for (index = 0; index < 8; ++index)
         cpu.Registers[index] = state->Registers[index];
+
     for (index = 0; index < 6; ++index)
         cpu.Segments[index] = state->Segments[index];
+
     cpu.Ip = state->Ip;
     cpu.Flags = state->Flags;
     g_Effects = 1469598103934665603ULL;
     isOk = V86Step(&cpu);
+
     for (index = 0; index < 8; ++index)
         state->Registers[index] = cpu.Registers[index];
+
     for (index = 0; index < 6; ++index)
         state->Segments[index] = cpu.Segments[index];
+
     state->Ip = cpu.Ip;
     state->Flags = cpu.Flags;
     *effects = g_Effects;
@@ -169,11 +180,13 @@ INT FN(UndoRollback)(VOID)
     UINT32 index = g_UndoCount;
 
     g_IsUndoOn = 0;
+
     while (index)
     {
         --index;
         g_Memory[g_UndoLinear[index]] = g_UndoOld[index];
     }
+
     return !g_IsUndoOverflow;
 }
 

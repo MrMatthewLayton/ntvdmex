@@ -314,12 +314,16 @@ static DWORD Emu8kExp2(INT32 exponent)
     mantissa = g_Emu8kExp2Table[tableIndex]
              + (DWORD)(((UINT64)(g_Emu8kExp2Table[tableIndex + 1] - g_Emu8kExp2Table[tableIndex])
                         * (fraction & BYTE_MASK)) >> BYTE_SHIFT);
+
     if (octave >= EMU8K_EXP2_MAX_OCTAVE)
         return EMU8K_EXP2_SATURATED;
+
     if (octave >= 0)
         return mantissa << octave;
+
     if (octave <= EMU8K_EXP2_MIN_OCTAVE)
         return 0;
+
     return mantissa >> -octave;
 }
 
@@ -335,24 +339,29 @@ static INT32 Emu8kLog2(DWORD value)
 
     if (!value)
         return -(EMU8K_LOG2_OF_ZERO_OCTAVES << EMU8K_Q16_SHIFT);
+
     while (value >= EMU8K_EXP2_TABLE_TOP)
     {
         value >>= 1;
         ++octave;
     }
+
     while (value <  EMU8K_Q16_ONE_UNSIGNED)
     {
         value <<= 1;
         --octave;
     }
+
     while (highIndex - lowIndex > 1)
     {
         tableIndex = (lowIndex + highIndex) >> 1;
+
         if (g_Emu8kExp2Table[tableIndex] <= value)
             lowIndex = tableIndex;
         else
             highIndex = tableIndex;
     }
+
     tableIndex = lowIndex;
     return octave * EMU8K_Q16_ONE + (INT32)(tableIndex << BYTE_SHIFT)
          + (INT32)(((UINT64)(value - g_Emu8kExp2Table[tableIndex]) << BYTE_SHIFT)
@@ -363,8 +372,10 @@ static DWORD Emu8kDbToGain(INT32 attenuationQ16)
 {
     if (attenuationQ16 <= 0)
         return EMU8K_Q16_ONE_UNSIGNED;
+
     if (attenuationQ16 >= (INT32)(EMU8K_SILENCE_DB << EMU8K_Q16_SHIFT))
         return 0;
+
     return Emu8kExp2(-(INT32)(((INT64)attenuationQ16 * EMU8K_OCTAVES_PER_DB_Q16) >> EMU8K_Q16_SHIFT));
 }
 
@@ -372,8 +383,10 @@ DWORD VddEmu8kAttackMicroseconds(BYTE rateCode)
 {
     /* p.16: 0x01 = 11.88 s, 0x7F = 6 ms, 0 = never. log2(6 ms / 11.88 s) = -10.9513. */
     rateCode &= EMU8K_RATE_CODE_MASK;
+
     if (!rateCode)
         return 0;
+
     return (DWORD)(((UINT64)EMU8K_ATTACK_SLOWEST_US
                     * Emu8kExp2(-(INT32)((EMU8K_ATTACK_LOG2_SPAN_Q16 * (rateCode - EMU8K_RATE_CODE_SLOWEST))
                                          / EMU8K_RATE_CODE_SPAN))) >> EMU8K_Q16_SHIFT);
@@ -386,8 +399,10 @@ DWORD VddEmu8kDecayMicrosecondsPerDb(BYTE rateCode)
      * lands at 1.97 ms/dB here: about 50 dB of fall in 100 ms.
      */
     rateCode &= EMU8K_RATE_CODE_MASK;
+
     if (!rateCode)
         return 0;
+
     return (DWORD)(((UINT64)EMU8K_DECAY_SLOWEST_US_PER_DB
                     * Emu8kExp2(-(INT32)((EMU8K_DECAY_LOG2_SPAN_Q16 * (rateCode - EMU8K_RATE_CODE_SLOWEST))
                                          / EMU8K_RATE_CODE_SPAN))) >> EMU8K_Q16_SHIFT);
@@ -401,25 +416,32 @@ static VOID Emu8kBuildTables(VOID)
 
     if (g_Emu8kTablesBuilt)
         return;
+
     for (entry = 0; entry <= EMU8K_EXP2_STEPS; ++entry)
     {
         g_Emu8kExp2Table[entry] = (DWORD)(power * EMU8K_Q16_ONE_DOUBLE + EMU8K_EXP2_ROUND_HALF);
         power *= EMU8K_EXP2_STEP_RATIO;
     }
+
     g_Emu8kExp2Table[EMU8K_EXP2_STEPS] = EMU8K_EXP2_TABLE_TOP;
     g_Emu8kAttackStep[0] = 0;
     g_Emu8kDecayStep[0] = 0;
+
     for (entry = EMU8K_RATE_CODE_SLOWEST; entry < EMU8K_RATE_CODES; ++entry)
     {
         DWORD attackMicroseconds = VddEmu8kAttackMicroseconds((BYTE)entry);
         DWORD decayMicrosecondsPerDb = VddEmu8kDecayMicrosecondsPerDb((BYTE)entry);
         g_Emu8kAttackStep[entry] = (DWORD)(((UINT64)EMU8K_Q16_ONE_UNSIGNED * EMU8K_TICK_US_X10) / ((UINT64)attackMicroseconds * EMU8K_TICK_US_SCALE));
+
         if (!g_Emu8kAttackStep[entry])
             g_Emu8kAttackStep[entry] = EMU8K_MINIMUM_STEP;
+
         g_Emu8kDecayStep[entry]  = (INT32)(((UINT64)EMU8K_Q16_ONE_UNSIGNED * EMU8K_TICK_US_X10) / ((UINT64)decayMicrosecondsPerDb * EMU8K_TICK_US_SCALE));
+
         if (!g_Emu8kDecayStep[entry])
             g_Emu8kDecayStep[entry] = EMU8K_MINIMUM_STEP;
     }
+
     g_Emu8kTablesBuilt = 1;
 }
 
@@ -432,8 +454,10 @@ static VOID Emu8kBuildTables(VOID)
 static INT16 Emu8kReadMemory(PCEMU8K_STATE state, DWORD address)
 {
     address &= EMU8K_ADDR_MASK;
+
     if (address < EMU8K_DRAM_BASE)
         return (state->Rom && address < state->RomWords) ? (INT16)state->Rom[address] : 0;
+
     address -= EMU8K_DRAM_BASE;
     return (state->Dram && address < state->DramWords) ? (INT16)state->Dram[address] : 0;
 }
@@ -441,12 +465,15 @@ static INT16 Emu8kReadMemory(PCEMU8K_STATE state, DWORD address)
 static VOID Emu8kWriteMemory(PEMU8K_STATE state, DWORD address, WORD value)
 {
     address &= EMU8K_ADDR_MASK;
+
     if (address < EMU8K_DRAM_BASE) /* ROM: the write goes nowhere */
     {
         state->SoundMemoryRomWrites++;
         return;
     }
+
     address -= EMU8K_DRAM_BASE;
+
     if (state->Dram && address < state->DramWords)
         state->Dram[address] = value;
 }
@@ -459,6 +486,7 @@ static BOOL Emu8kIsStreamAllocated(PCEMU8K_STATE state, UINT stream)
         if ((state->Voices[voiceIndex].Ccca & EMU8K_CCCA_DMA)
             && ((state->Voices[voiceIndex].Ccca >> EMU8K_CCCA_STREAM_SHIFT) & EMU8K_CCCA_STREAM_MASK) == stream)
             return TRUE;
+
     return FALSE;
 }
 
@@ -479,6 +507,7 @@ static VOID Emu8kServiceStreams(PEMU8K_STATE state)
             state->SoundMemoryFull[side] = FALSE;
             state->SoundMemoryWordsWritten++;
         }
+
         if (state->SoundMemoryEmpty[side] && Emu8kIsStreamAllocated(state, side))
         {
             state->SoundMemoryReadLatch[side] = (WORD)Emu8kReadMemory(state, state->SoundMemoryAddress[side]);
@@ -493,6 +522,7 @@ static VOID Emu8kServiceStreams(PEMU8K_STATE state)
 static VOID Emu8kSoundMemoryWrite(PEMU8K_STATE state, UINT side, WORD value)
 {
     state->SoundMemoryWriteLatch[side] = value;
+
     if (Emu8kIsStreamAllocated(state, EMU8K_FIRST_WRITE_STREAM + side))
     {
         Emu8kWriteMemory(state, state->SoundMemoryAddress[EMU8K_FIRST_WRITE_STREAM + side], value);
@@ -524,6 +554,7 @@ static WORD Emu8kSoundMemoryRead(PEMU8K_STATE state, UINT side)
     }
     else
         state->SoundMemoryEmpty[side] = TRUE;
+
     return heldWord;
 }
 
@@ -532,6 +563,7 @@ static WORD Emu8kGetWallClock(PCEMU8K_STATE state)
     /* p.13: "continuously incrementing at the sample rate ... no mechanism to reset". */
     if (state->Clock)
         return (WORD)((state->Clock(state->ClockContext) * EMU8K_WALL_CLOCK_NUMERATOR) / EMU8K_WALL_CLOCK_DENOMINATOR);
+
     return (WORD)state->WallClock;
 }
 
@@ -548,11 +580,13 @@ static VOID Emu8kEnvelopeRelease(PEMU8K_ENVELOPE envelope)
 {
     if (envelope->Phase == EMU8K_ENV_OFF || envelope->Phase == EMU8K_ENV_DONE)
         return;
+
     if (envelope->Phase == EMU8K_ENV_DELAY)
     {
         envelope->Phase = EMU8K_ENV_DONE;
         return;
     }
+
     if (envelope->Phase == EMU8K_ENV_ATTACK)
     {
         if (envelope->Amplitude <= 0)
@@ -560,11 +594,14 @@ static VOID Emu8kEnvelopeRelease(PEMU8K_ENVELOPE envelope)
             envelope->Phase = EMU8K_ENV_DONE;
             return;
         }
+
         /* dB = -20-log10(amp) = -6.0206-log2(amp) */
         envelope->Attenuation = (INT32)(-((INT64)Emu8kLog2((DWORD)envelope->Amplitude) * EMU8K_DB_PER_OCTAVE_Q16) >> EMU8K_Q16_SHIFT);
+
         if (envelope->Attenuation < 0)
             envelope->Attenuation = 0;
     }
+
     envelope->Phase = EMU8K_ENV_RELEASE;
 }
 
@@ -583,11 +620,13 @@ static DWORD Emu8kEnvelopeTick(
     {
         /* p.14: 8000h = no delay; below that, 725 us units -- one engine tick each. */
         DWORD delayTicks = delayRegister >= EMU8K_DELAY_NONE ? 0 : (DWORD)EMU8K_DELAY_NONE - delayRegister;
+
         if (envelope->TickCount < delayTicks)
         {
             envelope->TickCount++;
             return 0;
         }
+
         envelope->Phase = EMU8K_ENV_ATTACK;
         envelope->TickCount = 0;
         envelope->Amplitude = 0;
@@ -596,8 +635,10 @@ static DWORD Emu8kEnvelopeTick(
     case EMU8K_ENV_ATTACK:
         /* p.16: bits 6-0, 0 = never attack. The rise is linear in amplitude over the time. */
         envelope->Amplitude += (INT32)g_Emu8kAttackStep[attackHold & EMU8K_RATE_CODE_MASK];
+
         if (envelope->Amplitude < EMU8K_Q16_ONE)
             return (DWORD)envelope->Amplitude;
+
         envelope->Amplitude = EMU8K_Q16_ONE;
         envelope->Attenuation = 0;
         envelope->Phase = EMU8K_ENV_HOLD;
@@ -608,11 +649,13 @@ static DWORD Emu8kEnvelopeTick(
     {
         /* p.16: bits 14-8 in 92 ms steps, 7Fh = no hold, 00h = 11.68 s. */
         DWORD holdTicks = ((EMU8K_HOLD_NONE_CODE - ((attackHold >> BYTE_SHIFT) & EMU8K_HOLD_CODE_MASK)) * EMU8K_HOLD_STEP_US_X10) / EMU8K_TICK_US_X10;
+
         if (envelope->TickCount < holdTicks)
         {
             envelope->TickCount++;
             return EMU8K_Q16_ONE_UNSIGNED;
         }
+
         envelope->Phase = EMU8K_ENV_DECAY;
     }   /* fall through */
 
@@ -623,21 +666,26 @@ static DWORD Emu8kEnvelopeTick(
          */
         DWORD sustainCode = (decaySustain >> BYTE_SHIFT) & EMU8K_SUSTAIN_CODE_MASK;
         INT32 sustainLevel = sustainCode ? (INT32)((EMU8K_SUSTAIN_TOP_CODE - sustainCode) * EMU8K_SUSTAIN_STEP_DB_Q16) : (INT32)(EMU8K_SILENCE_DB << EMU8K_Q16_SHIFT);  /* 0.75 dB = 49152 */
+
         if (envelope->Attenuation < sustainLevel)
         {
             envelope->Attenuation += g_Emu8kDecayStep[decaySustain & EMU8K_RATE_CODE_MASK];
+
             if (envelope->Attenuation > sustainLevel)
                 envelope->Attenuation = sustainLevel;
         }
+
         return Emu8kDbToGain(envelope->Attenuation); }
 
     case EMU8K_ENV_RELEASE:
         envelope->Attenuation += g_Emu8kDecayStep[decaySustain & EMU8K_RATE_CODE_MASK];
+
         if (envelope->Attenuation >= (INT32)(EMU8K_RELEASE_FLOOR_DB << EMU8K_Q16_SHIFT))
         {
             envelope->Phase = EMU8K_ENV_DONE;
             return 0;
         }
+
         return Emu8kDbToGain(envelope->Attenuation);
 
     default:
@@ -654,13 +702,17 @@ static INT32 Emu8kLfoTick(PDWORD phase, PDWORD delay, BYTE frequency)
         (*delay)--;
         return 0;
     }
+
     phaseHigh = *phase >> EMU8K_Q16_SHIFT;
     /* phase step per tick = 2^32 x (frq x 10.72/255 Hz) x 725.6 us = frq x 131008 */
     *phase += (DWORD)frequency * EMU8K_LFO_PHASE_STEP;
+
     if (phaseHigh < EMU8K_LFO_QUARTER_CYCLE)
         return (INT32)(phaseHigh * EMU8K_LFO_SLOPE);
+
     if (phaseHigh < EMU8K_LFO_THREE_QUARTERS)
         return EMU8K_LFO_HALF_CYCLE_LEVEL - (INT32)(phaseHigh * EMU8K_LFO_SLOPE);
+
     return (INT32)(phaseHigh * EMU8K_LFO_SLOPE) - EMU8K_LFO_FULL_CYCLE_LEVEL;
 }
 
@@ -687,19 +739,24 @@ static VOID Emu8kFilterSetup(PEMU8K_VOICE voice, WORD cutoff, BYTE resonance)
 
     if (voice->FilterIsValid && voice->FilterCutoff == cutoff && voice->FilterQ == resonance)
         return;
+
     voice->FilterCutoff = cutoff;
     voice->FilterQ = resonance;
     voice->FilterIsValid = TRUE;
     /* p.17: Q 0 and cutoff FFh = "the filter does not alter the signal". Exactly that. */
     voice->FilterIsBypassed = (BYTE)(resonance == EMU8K_FILTER_FLAT_Q && cutoff >= EMU8K_FILTER_OPEN_CUTOFF);
+
     if (voice->FilterIsBypassed)
     {
         voice->X1 = voice->X2 = voice->Y1 = voice->Y2 = 0;
         return;
     }
+
     cutoffHz = EMU8K_CUTOFF_BASE_HZ * (double)Emu8kExp2((INT32)(((DWORD)cutoff << EMU8K_Q16_SHIFT) / EMU8K_CUTOFF_OCTAVE)) / EMU8K_Q16_ONE_DOUBLE;
+
     if (cutoffHz > EMU8K_CUTOFF_MAX_FRACTION * EMU8K_RATE_HZ)
         cutoffHz = EMU8K_CUTOFF_MAX_FRACTION * EMU8K_RATE_HZ;
+
     angularFrequency = EMU8K_RADIANS_PER_CYCLE * cutoffHz / EMU8K_RATE_HZ;
     sine = Emu8kSin(angularFrequency);
     cosine = Emu8kCos(angularFrequency);
@@ -724,13 +781,16 @@ static INT32 Emu8kFilterRun(PEMU8K_VOICE voice, INT32 input)
 
     if (voice->FilterIsBypassed)
         return input;
+
     accumulator = (INT64)voice->B0 * input + (INT64)voice->B1 * voice->X1 + (INT64)voice->B2 * voice->X2
                 - (INT64)voice->A1 * voice->Y1 - (INT64)voice->A2 * voice->Y2;
     output = (INT32)(accumulator >> EMU8K_Q28_SHIFT);
+
     if (output > EMU8K_FILTER_HEADROOM_MAX)
         output = EMU8K_FILTER_HEADROOM_MAX;
     else if (output < EMU8K_FILTER_HEADROOM_MIN)
         output = EMU8K_FILTER_HEADROOM_MIN;                                            /* resonance headroom */
+
     voice->X2 = voice->X1;
     voice->X1 = input;
     voice->Y2 = voice->Y1;
@@ -763,8 +823,10 @@ static VOID Emu8kVoiceTick(PEMU8K_VOICE voice)
         octaves += (INT32)(((INT64)lfo1  * (INT8)(voice->Fmmod >> BYTE_SHIFT)) / EMU8K_MODULATION_FULL_SCALE);
         octaves += (INT32)(((INT64)lfo2  * (INT8)(voice->Fm2frq2 >> BYTE_SHIFT)) / EMU8K_MODULATION_FULL_SCALE);
         pitchTarget = (DWORD)(((UINT64)Emu8kExp2(octaves) * EMU8K_CP_UNITY) >> EMU8K_Q16_SHIFT); /* 4000h = unity (p.7) */
+
         if (octaves >= (EMU8K_PITCH_MAX_OCTAVES << EMU8K_Q16_SHIFT) || pitchTarget > EMU8K_WORD_MAX)
             pitchTarget = EMU8K_WORD_MAX;
+
         /* cutoff: IFATN hi, ENV1 x PEFE lo (+/-6 oct), LFO1 x FMMOD lo (+/-3 oct) */
         cutoff  = (INT32)(voice->Ifatn & HIGH_BYTE_MASK);
         cutoff += (INT32)(((INT64)modulation * (INT8)voice->Pefe  * EMU8K_CUTOFF_ENVELOPE_OCTAVES * EMU8K_CUTOFF_OCTAVE / EMU8K_MODULATION_FULL_SCALE) >> EMU8K_Q16_SHIFT);
@@ -774,12 +836,15 @@ static VOID Emu8kVoiceTick(PEMU8K_VOICE voice)
         attenuation  = (INT32)(voice->Ifatn & BYTE_MASK) * EMU8K_ATTENUATION_STEP_DB_Q16;  /* 0.375 dB = 24576 Q16 */
         attenuation -= (INT32)(((INT64)lfo1 * (INT8)(voice->Tremfrq >> BYTE_SHIFT) * EMU8K_TREMOLO_DB) / EMU8K_MODULATION_FULL_SCALE);
         gain = (DWORD)(((UINT64)volumeLevel * Emu8kDbToGain(attenuation)) >> EMU8K_Q16_SHIFT);
+
         if (attenuation < 0)
             gain = (DWORD)(((UINT64)volumeLevel * Emu8kExp2((INT32)(((INT64)-attenuation * EMU8K_OCTAVES_PER_DB_Q16) >> EMU8K_Q16_SHIFT))) >> EMU8K_Q16_SHIFT);
+
         volumeTarget = gain >= EMU8K_Q16_ONE_UNSIGNED ? EMU8K_WORD_MAX : (INT32)gain;
         voice->Ptrx = (pitchTarget << WORD_SHIFT) | (voice->Ptrx & WORD_MASK_U);
         voice->Vtft = ((DWORD)volumeTarget << WORD_SHIFT) | cutoffTarget;
     }
+
     /* The sound generator: current pitch and cutoff take their targets at once; current
      * volume slews to its target across the tick, so an envelope step is not a click.
      */
@@ -810,8 +875,10 @@ static BOOL Emu8kIsData1DoubleWord(BYTE registerNumber, BYTE channel)
 {
     if (registerNumber == EMU8K_DATA1_CCCA)
         return TRUE;
+
     if (registerNumber != EMU8K_DATA1_R1)
         return FALSE;
+
     return channel == EMU8K_CHANNEL_HWCF4 || channel == EMU8K_CHANNEL_HWCF5 || channel == EMU8K_CHANNEL_HWCF6 || (channel >= EMU8K_CHANNEL_SMALR && channel <= EMU8K_CHANNEL_SMARW);
 }
 
@@ -834,14 +901,17 @@ static VOID Emu8kWriteDcysusv(PEMU8K_VOICE voice, WORD value, PEMU8K_STATE state
     INT wasOff = (voice->Dcysusv & EMU8K_DCYSUSV_ENGINE_OFF) != 0;
 
     voice->Dcysusv = value;
+
     if (value & EMU8K_DCYSUSV_ENGINE_OFF)
         return;                                             /* engine off: nothing more moves */
+
     if (value & EMU8K_DCYSUSV_RELEASE)
     {
         Emu8kEnvelopeRelease(&voice->VolumeEnvelope);
         state->Releases++;
         return;
     }
+
     if (wasOff || voice->VolumeEnvelope.Phase == EMU8K_ENV_OFF || voice->VolumeEnvelope.Phase == EMU8K_ENV_DONE)
     {
         Emu8kEnvelopeStart(&voice->VolumeEnvelope);
@@ -873,11 +943,13 @@ static VOID Emu8kDataWrite(PEMU8K_STATE state, INT dataPort, INT isHighHalf, WOR
 
         case EMU8K_DATA0_CVCF:
             voice->Cvcf = Emu8kSetHalf(voice->Cvcf, isHighHalf, value);
+
                 if (isHighHalf)
                 {
                     voice->CurrentVolume = (INT32)value << EMU8K_CURRENT_VOLUME_SHIFT;
                     voice->CurrentVolumeStep = 0;
                 }
+
                 break;
 
         case EMU8K_DATA0_VTFT:
@@ -900,8 +972,10 @@ static VOID Emu8kDataWrite(PEMU8K_STATE state, INT dataPort, INT isHighHalf, WOR
             voice->Csl  = Emu8kSetHalf(voice->Csl, isHighHalf, value);
         break;
         }
+
         return;
     }
+
     if (dataPort == EMU8K_DATA1)                     /* Data1 */
     {
         switch (registerNumber)
@@ -955,6 +1029,7 @@ static VOID Emu8kDataWrite(PEMU8K_STATE state, INT dataPort, INT isHighHalf, WOR
                 state->Data1Register1[channel] = Emu8kSetHalf(state->Data1Register1[channel], isHighHalf, value);
             break;
             }
+
             break;
 
         case EMU8K_DATA1_INIT1:
@@ -979,12 +1054,16 @@ static VOID Emu8kDataWrite(PEMU8K_STATE state, INT dataPort, INT isHighHalf, WOR
 
         case EMU8K_DATA1_DCYSUS:                     /* DCYSUS: bit 7 is always zero */
             voice->Dcysus = (WORD)(value & ~EMU8K_ALWAYS_ZERO_BIT);
+
             if (value & EMU8K_DCYSUSV_RELEASE)
                 Emu8kEnvelopeRelease(&voice->ModulationEnvelope);
+
             break;
         }
+
         return;
     }
+
     if (dataPort == EMU8K_DATA2)                     /* Data2: all words */
     {
         switch (registerNumber)
@@ -994,6 +1073,7 @@ static VOID Emu8kDataWrite(PEMU8K_STATE state, INT dataPort, INT isHighHalf, WOR
                 Emu8kSoundMemoryWrite(state, EMU8K_RIGHT, value);                                  /* SMRD */
             else if (channel != EMU8K_CHANNEL_WC)
                 state->Data2Register1[channel] = value;                                       /* WC is read-only */
+
             break;
 
         case EMU8K_DATA2_INIT2:
@@ -1023,8 +1103,10 @@ static VOID Emu8kDataWrite(PEMU8K_STATE state, INT dataPort, INT isHighHalf, WOR
         default:
             break;
         }
+
         return;
     }
+
     switch (registerNumber)                          /* Data3: all words */
     {
     case EMU8K_DATA3_IP:
@@ -1096,6 +1178,7 @@ static WORD Emu8kDataRead(PEMU8K_STATE state, INT dataPort, INT isHighHalf)
             return Emu8kGetHalf(voice->Csl, isHighHalf);
         }
     }
+
     if (dataPort == EMU8K_DATA1)
     {
         switch (registerNumber)
@@ -1163,6 +1246,7 @@ static WORD Emu8kDataRead(PEMU8K_STATE state, INT dataPort, INT isHighHalf)
             return voice->Dcysus;
         }
     }
+
     if (dataPort == EMU8K_DATA2)
     {
         switch (registerNumber)
@@ -1170,8 +1254,10 @@ static WORD Emu8kDataRead(PEMU8K_STATE state, INT dataPort, INT isHighHalf)
         case EMU8K_DATA2_R1:
             if (channel == EMU8K_CHANNEL_SMLD)
                 return Emu8kSoundMemoryRead(state, EMU8K_RIGHT);
+
             if (channel == EMU8K_CHANNEL_WC)
                 return Emu8kGetWallClock(state);
+
             return state->Data2Register1[channel];
 
         case EMU8K_DATA2_INIT2:
@@ -1196,6 +1282,7 @@ static WORD Emu8kDataRead(PEMU8K_STATE state, INT dataPort, INT isHighHalf)
             return 0;
         }
     }
+
     switch (registerNumber)
     {
     case EMU8K_DATA3_IP:
@@ -1249,6 +1336,7 @@ static VOID Emu8kWordOut(PEMU8K_STATE state, WORD portOffset, WORD value)
             Emu8kDataWrite(state, EMU8K_DATA1, EMU8K_HIGH_HALF, value);
                 else
                     Emu8kDataWrite(state, EMU8K_DATA2, EMU8K_LOW_HALF, value);
+
                 break;
 
     case EMU8K_PORT_DATA3:
@@ -1303,6 +1391,7 @@ static VOID Emu8kPortOut(PVOID context, WORD port, BYTE accessWidth, UINT32 valu
     WORD portOffset = (WORD)(port - state->BasePort);
 
     state->IoWrites++;
+
     if (accessWidth >= EMU8K_DOUBLEWORD_ACCESS)      /* a doubleword: LS word, then MS */
     {
         Emu8kWordOut(state, portOffset, (WORD)value);
@@ -1319,6 +1408,7 @@ static VOID Emu8kPortOut(PVOID context, WORD port, BYTE accessWidth, UINT32 valu
          * that splits a word into two OUTs still lands it.
          */
         state->ByteIoCount++;
+
         if (portOffset & EMU8K_ODD_PORT) Emu8kWordOut(state, (WORD)(portOffset - EMU8K_ODD_PORT),
                                   (WORD)(state->ByteLatch[portOffset >> EMU8K_PORT_GROUP_SHIFT] | ((value & BYTE_MASK) << BYTE_SHIFT)));
         else
@@ -1332,6 +1422,7 @@ static VOID Emu8kPortIn(PVOID context, WORD port, BYTE accessWidth, UINT32 *valu
     WORD portOffset = (WORD)(port - state->BasePort);
 
     state->IoReads++;
+
     if (accessWidth >= EMU8K_DOUBLEWORD_ACCESS)
     {
         UINT32 lowWord = Emu8kWordIn(state, portOffset);
@@ -1345,6 +1436,7 @@ static VOID Emu8kPortIn(PVOID context, WORD port, BYTE accessWidth, UINT32 *valu
     {
         /* a byte read of the even port reads the word; the odd port gives its high half */
         state->ByteIoCount++;
+
         if (portOffset & EMU8K_ODD_PORT)
             *value = state->ByteLatch[portOffset >> EMU8K_PORT_GROUP_SHIFT];
         else
@@ -1363,16 +1455,20 @@ VOID VddEmu8kRenderStereo(PEMU8K_STATE state, PINT16 output, DWORD frameCount)
     INT isAudible = (state->Hwcf3 & EMU8K_HWCF3_AUDIO_ENABLE) != 0;  /* section 4: HWCF3 enables audio output */
 
     state->Renders++;
+
     for (frame = 0; frame < frameCount; ++frame)
     {
         INT32 accumulatorLeft = 0;
         INT32 accumulatorRight = 0;
         INT32 sampleLeft;
         INT32 sampleRight;
+
         if (state->TickPosition == 0)
             for (voiceIndex = 0; voiceIndex < EMU8K_VOICES; ++voiceIndex)
                 Emu8kVoiceTick(&state->Voices[voiceIndex]);
+
         state->TickPosition = (state->TickPosition + 1) % EMU8K_TICK;
+
         for (voiceIndex = 0; voiceIndex < EMU8K_VOICES; ++voiceIndex)
         {
             PEMU8K_VOICE voice = &state->Voices[voiceIndex];
@@ -1382,22 +1478,27 @@ VOID VddEmu8kRenderStereo(PEMU8K_STATE state, PINT16 output, DWORD frameCount)
             DWORD loopEnd;
             DWORD step;
             INT32 gain;
+
             if (voice->Ccca & EMU8K_CCCA_DMA)
                 continue;                                   /* a DMA channel makes no sound */
+
             /* current volume slews to its target (clamped: the step is a rounded division) */
             if (voice->CurrentVolumeStep)
             {
                 INT32 target = (INT32)(voice->Vtft >> WORD_SHIFT) << EMU8K_CURRENT_VOLUME_SHIFT;
                 voice->CurrentVolume += voice->CurrentVolumeStep;
+
                 if ((voice->CurrentVolumeStep > 0 && voice->CurrentVolume > target) || (voice->CurrentVolumeStep < 0 && voice->CurrentVolume < target))
                 {
                     voice->CurrentVolume = target;
                     voice->CurrentVolumeStep = 0;
                 }
             }
+
             currentAddress = voice->Ccca & EMU8K_ADDR_MASK;
             addressFraction  = voice->Cpf & WORD_MASK_U;
             gain  = voice->CurrentVolume >> EMU8K_CURRENT_VOLUME_SHIFT;
+
             if (gain > 0 && isAudible)
             {
                 /* CA is "one word lower than the actual audio location" (p.10): the
@@ -1413,6 +1514,7 @@ VOID VddEmu8kRenderStereo(PEMU8K_STATE state, PINT16 output, DWORD frameCount)
                 accumulatorLeft += (sample * voice->GainLeft) >> EMU8K_GAIN_SHIFT;
                 accumulatorRight += (sample * voice->GainRight) >> EMU8K_GAIN_SHIFT;
             }
+
             /* advance: CP 4000h = one word per sample (p.7), so the step in 1/65536 words
              * is CP x 4. Then ALWAYS loop (section 5): passing CSL returns to PSST.
              */
@@ -1420,27 +1522,35 @@ VOID VddEmu8kRenderStereo(PEMU8K_STATE state, PINT16 output, DWORD frameCount)
             currentAddress = (currentAddress + (step >> EMU8K_Q16_SHIFT)) & EMU8K_ADDR_MASK;
             loopStart = voice->Psst & EMU8K_ADDR_MASK;
             loopEnd = voice->Csl & EMU8K_ADDR_MASK;
+
             if (loopEnd > loopStart && currentAddress >= loopEnd)
                 currentAddress = loopStart + (currentAddress - loopEnd) % (loopEnd - loopStart);
+
             voice->Ccca = (voice->Ccca & EMU8K_CCCA_CONTROL_MASK) | currentAddress;
             voice->Cpf  = (voice->Cpf & HIGH_WORD_MASK_U) | (step & WORD_MASK_U);
         }
+
         sampleLeft = accumulatorLeft > EMU8K_SAMPLE_MAX ? EMU8K_SAMPLE_MAX : accumulatorLeft < EMU8K_SAMPLE_MIN ? EMU8K_SAMPLE_MIN : accumulatorLeft;
         sampleRight = accumulatorRight > EMU8K_SAMPLE_MAX ? EMU8K_SAMPLE_MAX : accumulatorRight < EMU8K_SAMPLE_MIN ? EMU8K_SAMPLE_MIN : accumulatorRight;
         output[EMU8K_STEREO_SIDES * frame] = (INT16)sampleLeft;
         output[EMU8K_STEREO_SIDES * frame + EMU8K_RIGHT] = (INT16)sampleRight;
+
         if (sampleLeft || sampleRight)
         {
             DWORD magnitudeLeft = (DWORD)(sampleLeft < 0 ? -sampleLeft : sampleLeft);
             DWORD magnitudeRight = (DWORD)(sampleRight < 0 ? -sampleRight : sampleRight);
             state->NonZeroSamplesOut++;
+
             if (magnitudeLeft > state->PeakSampleOut)
                 state->PeakSampleOut = magnitudeLeft;
+
             if (magnitudeRight > state->PeakSampleOut)
                 state->PeakSampleOut = magnitudeRight;
         }
+
         state->WallClock++;
     }
+
     state->SamplesOut += frameCount;
 }
 
@@ -1452,23 +1562,30 @@ VOID VddEmu8kReset(PVOID context)
 
     Emu8kBuildTables();
     bytes = (PBYTE)state->Voices;
+
     for (index = 0; index < sizeof state->Voices; ++index)
         bytes[index] = 0;
+
     for (index = 0; index < EMU8K_VOICES; ++index)
     {
         state->Voices[index].Dcysusv = EMU8K_RESET_DCYSUSV;                   /* section 4 step 1: engine off */
         state->Voices[index].GainLeft = state->Voices[index].GainRight = EMU8K_GAIN_CENTRE;
     }
+
     bytes = (PBYTE)state->EffectsInit;
+
     for (index = 0; index < sizeof state->EffectsInit; ++index)
         bytes[index] = 0;
+
     for (index = 0; index < EMU8K_VOICES; ++index)
     {
         state->Data1Register1[index] = 0;
         state->Data2Register1[index] = 0;
     }
+
     for (index = 0; index < EMU8K_STREAMS; ++index)
         state->SoundMemoryAddress[index] = 0;
+
     state->SoundMemoryReadLatch[EMU8K_LEFT] = state->SoundMemoryReadLatch[EMU8K_RIGHT] = state->SoundMemoryWriteLatch[EMU8K_LEFT] = state->SoundMemoryWriteLatch[EMU8K_RIGHT] = 0;
     state->SoundMemoryEmpty[EMU8K_LEFT] = state->SoundMemoryEmpty[EMU8K_RIGHT] = state->SoundMemoryFull[EMU8K_LEFT] = state->SoundMemoryFull[EMU8K_RIGHT] = 0;
     state->Hwcf1 = EMU8K_RESET_HWCF1;
@@ -1488,15 +1605,20 @@ INT VddEmu8kInitialize(VDD_BUS *bus, PVOID context)
     PEMU8K_STATE state = (PEMU8K_STATE)context;
 
     state->Bus = bus;
+
     if (!state->BasePort)
         state->BasePort = EMU8K_DEFAULT_BASE;
+
     VddEmu8kReset(state);
     /* section 2: three groups of four ports. */
     if (VddClaimPorts(bus, state->BasePort, (WORD)(state->BasePort + EMU8K_GROUP_LAST_PORT), Emu8kPortIn, Emu8kPortOut, state))
         return EMU8K_INITIALIZE_FAILED;
+
     if (VddClaimPorts(bus, (WORD)(state->BasePort + EMU8K_DATA1_GROUP), (WORD)(state->BasePort + EMU8K_DATA1_GROUP_LAST), Emu8kPortIn, Emu8kPortOut, state))
         return EMU8K_INITIALIZE_FAILED;
+
     if (VddClaimPorts(bus, (WORD)(state->BasePort + EMU8K_DATA3_GROUP), (WORD)(state->BasePort + EMU8K_DATA3_GROUP_LAST), Emu8kPortIn, Emu8kPortOut, state))
         return EMU8K_INITIALIZE_FAILED;
+
     return EMU8K_INITIALIZE_OK;
 }

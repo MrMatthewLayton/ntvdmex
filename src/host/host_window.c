@@ -671,30 +671,37 @@ static VOID HostScreenshot(VOID)
     height = g_Video.Frame.Height;
     bitsPerPixel = g_Video.Frame.BitsPerPixel;
     source = g_Video.Frame.Pixels;
+
     if (!source || !width || !height || (bitsPerPixel != BMP_PALETTED_BPP && bitsPerPixel != BMP_XRGB_BPP))
     {
         HOST_UNLOCK();
         return;
     }
+
     stride = (bitsPerPixel == BMP_PALETTED_BPP) ? ((width + BMP_ROW_PAD) & ~BMP_ROW_ALIGN_MASK) : width * BMP_XRGB_PIXEL_BYTES;    /* DIB rows are 4-byte aligned */
     palCount  = (bitsPerPixel == BMP_PALETTED_BPP) ? BMP_PALETTE_ENTRIES : 0;
     imageSize = stride * height;
     dibSize = sizeof(BITMAPINFOHEADER) + palCount * BMP_QUAD_BYTES + imageSize;
     memoryHandle = GlobalAlloc(GMEM_MOVEABLE, dibSize);
+
     if (!memoryHandle)
     {
         HOST_UNLOCK();
         return;
     }
+
     dib = (BYTE *)GlobalLock(memoryHandle);
+
     if (!dib)
     {
         GlobalFree(memoryHandle);
         HOST_UNLOCK();
         return;
     }
+
     {
         UINT index;
+
         for (index = 0; index < dibSize; ++index)
             dib[index] = 0;
     }
@@ -710,6 +717,7 @@ static VOID HostScreenshot(VOID)
     bitmapHeader->biClrImportant = palCount;
     { DWORD index;
     BYTE *palette = dib + sizeof(BITMAPINFOHEADER);
+
       for (index = 0; index < palCount; ++index)
       {
           UINT32 colour = g_Video.Frame.Palette ? g_Video.Frame.Palette[index] : 0;
@@ -718,18 +726,23 @@ static VOID HostScreenshot(VOID)
           palette[index*BMP_QUAD_BYTES+2] = (BYTE)((colour >> WORD_SHIFT) & BYTE_MASK);  /* R */
           palette[index*BMP_QUAD_BYTES+3] = 0;
       } }
+
     bits = dib + sizeof(BITMAPINFOHEADER) + palCount * BMP_QUAD_BYTES;
     { DWORD row, column, rowBytes = (bitsPerPixel == BMP_PALETTED_BPP) ? width : width * BMP_XRGB_PIXEL_BYTES;
+
       for (row = 0; row < height; ++row)                      /* flip: DIB row 0 is the bottom */
       {
           const BYTE *sourceRow = source + (SIZE_T)(height - 1 - row) * g_Video.Frame.Stride;
           BYTE *destinationRow = bits + (SIZE_T)row * stride;
+
           for (column = 0; column < rowBytes; ++column)
               destinationRow[column] = sourceRow[column];
+
           if (bitsPerPixel == BMP_XRGB_BPP)
               for (column = BMP_XRGB_ALPHA_OFFSET; column < rowBytes; column += BMP_XRGB_PIXEL_BYTES)
                   destinationRow[column] = 0;                                                                                                                     /* XRGB: no alpha */
       } }
+
     HOST_UNLOCK();
 
     /* The file FIRST, while the block is still ours. It used to be written after the
@@ -741,19 +754,24 @@ static VOID HostScreenshot(VOID)
         PCSTR directory = NTVDMEX_OUT;   /* screenshots are output, not clutter in the root */
         INT index = 0;
         INT index2;
+
         while (directory[index] && index < MAX_PATH - SCREENSHOT_NAME_ROOM)
         {
             path[index] = directory[index];
             ++index;
         }
+
         { PCSTR name = HOST_MANUAL_SHOT_NAME;
+
           for (index2 = 0; name[index2]; ++index2)
               path[index + index2] = name[index2];
+
           path[index + SCREENSHOT_NAME_DIGITS] = (CHAR)('0' + (sequence / DECIMAL_RADIX) % DECIMAL_RADIX);
           path[index + SCREENSHOT_NAME_DIGITS + 1] = (CHAR)('0' + sequence % DECIMAL_RADIX);
           path[index + index2] = 0; }
         ++sequence;
         { HANDLE file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+
           if (file != INVALID_HANDLE_VALUE)
           {
               BYTE fileHeader[BMP_FILE_HEADER_BYTES];
@@ -777,11 +795,14 @@ static VOID HostScreenshot(VOID)
           } }
     }
     GlobalUnlock(memoryHandle);
+
     if (OpenClipboard(g_Window))                     /* paste-into-Paint path */
     {
         EmptyClipboard();
+
         if (!SetClipboardData(CF_DIB, memoryHandle))
             GlobalFree(memoryHandle);                                            /* else clipboard owns it */
+
         CloseClipboard();
     }
     else
@@ -803,11 +824,13 @@ static VOID HostRecordToggle(VOID)
         HostRecordFinish();
         return;
     }
+
     cursor = LogPut(path, NTVDMEX_OUT); cursor = LogPut(cursor, "capture_audio_");
     *cursor++ = (CHAR)('0' + (sequence / DECIMAL_RADIX) % DECIMAL_RADIX);
     *cursor++ = (CHAR)('0' + sequence % DECIMAL_RADIX);
     cursor = LogPut(cursor, ".wav");
     ++sequence;
+
     if (AudioWaveRecordStart(path, g_Wave.SampleHz) == 0)
     {
         CHAR lineBuffer[MAX_PATH + 64];
@@ -828,9 +851,12 @@ static VOID HostOpenCaptureFolder(VOID)
     INT index;
 
     cursor = LogPut(command, HOST_EXPLORER_COMMAND); cursor = LogPut(cursor, NTVDMEX_OUT); cursor = LogPut(cursor, "\"");
+
     for (index = 0; index < (INT)sizeof startupInfo; ++index)
         ((PSTR)&startupInfo)[index] = 0;
+
     startupInfo.cb = sizeof startupInfo;
+
     if (CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startupInfo, &processInfo))
     {
         CloseHandle(processInfo.hThread);
@@ -851,6 +877,7 @@ VOID HostRecordFinish(VOID)
 
     if (!AudioWaveIsRecording())
         return;
+
     dropped = AudioWaveRecordDropped();
     frames  = AudioWaveRecordStop();
     lineCursor = LogPut(lineCursor, "STAGE2: audio recording closed: frames=0x"); lineCursor = LogHex(lineCursor, frames);   /* stereo L/R pairs (#189) */
@@ -892,6 +919,7 @@ static VOID MenuCombo(HMENU parent, PCSTR label, INT set, UINT base)
     for (index = 0; index < IDM_COMBO_SPAN
                 && SettingsItem(g_SetDefinitions[set].Items, index, item, (INT)sizeof item); ++index)
         MenuItem(submenu, item, base + (UINT)index);
+
     MenuSubmenu(parent, label, submenu);
 }
 
@@ -1030,9 +1058,11 @@ static HMENU BuildMenu(VOID)
     /* user, s81: with only two items left, Machine is flattened into Tools itself. */
     MenuCombo(tools, MENU_TEXT_LIMIT_SPEED, SET_SPEEDMODE, IDM_SPEED_0);
     {   UINT speed;                                  /* #224: faster than this PC -> grey */
+
         for (speed = 1; speed < CPUSPEED_COUNT; ++speed)
             if (!CpuSpeedIsAvailable(speed, HostCpuMhz()))
                 EnableMenuItem(tools, IDM_SPEED_0 + speed, MF_BYCOMMAND | MF_GRAYED); }
+
     /* The accelerator column names the RELEASE, because that is the one a captured
      * user needs and cannot look up -- the menu is unreachable while capture is held.
      */
@@ -1079,8 +1109,10 @@ static HMENU BuildMenu(VOID)
 VOID HostPresentHook(PVOID context)
 {
     (VOID)context;
+
     if (g_UiTickMinimumMs != UITICK_AUTO || !g_Window)
         return;
+
     if (InterlockedCompareExchange(&g_UiPresentPending, 1, 0) == 0)
         PostMessageA(g_Window, WM_APP_PRESENT, 0, 0);
 }
@@ -1093,6 +1125,7 @@ static VOID TrayAdd(HINSTANCE instance, HWND window)
 
     if (g_TrayOn)
         return;
+
     ZeroMemory(&notifyIconData, sizeof notifyIconData);
     notifyIconData.cbSize           = sizeof notifyIconData;
     notifyIconData.hWnd             = window;
@@ -1100,10 +1133,13 @@ static VOID TrayAdd(HINSTANCE instance, HWND window)
     notifyIconData.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     notifyIconData.uCallbackMessage = WM_TRAY;
     notifyIconData.hIcon            = LoadIconA(instance, MAKEINTRESOURCEA(IDI_MAINICON));
+
     if (!notifyIconData.hIcon)
         notifyIconData.hIcon = LoadIconA(NULL, IDI_APPLICATION);
+
     for (index = 0; tip[index] && index < (INT)sizeof notifyIconData.szTip - 1; ++index)
         notifyIconData.szTip[index] = tip[index];
+
     notifyIconData.szTip[index] = 0;
     g_TrayOn = Shell_NotifyIconA(NIM_ADD, &notifyIconData) ? 1 : 0;
 }
@@ -1114,6 +1150,7 @@ VOID TrayRemove(HWND window)
 
     if (!g_TrayOn)
         return;
+
     ZeroMemory(&notifyIconData, sizeof notifyIconData);
     notifyIconData.cbSize = sizeof notifyIconData;
     notifyIconData.hWnd = window;
@@ -1138,28 +1175,38 @@ static VOID ManagerName(PSTR out, HWND *show)
 
     raw[0] = 0;
     *show = g_Window;
+
     if (g_WowLaunch)
     {
         static PFN_INTGETWT internalGetWindowText;
+
         if (!internalGetWindowText) internalGetWindowText = (PFN_INTGETWT)(ULONG_PTR)GetProcAddress(GetModuleHandleA(HOST_MODULE_USER32),
                                                                   HOST_EXPORT_INTERNAL_GET_WINDOW_TEXT);
+
         *show = NULL;
+
         for (index = 0; index < WOWUSER_MAX_WIN; ++index)
         {
             const WOWUSER_WINDOW *wowWindow = &g_WowUserWindows[index];
             HWND window = wowWindow->Window32;
+
             if (!wowWindow->Window16 || wowWindow->Parent || wowWindow->IsDying || wowWindow->IsForeign || !window || !IsWindowVisible(window))
                 continue;
+
             *show = window;
+
             if (internalGetWindowText)
             {
                 WCHAR wideBuffer[MGR_NAME_SIZE];
                 INT length16 = internalGetWindowText(window, wideBuffer, MGR_NAME_SIZE);
+
                 if (length16 > 0)
                     WideCharToMultiByte(CP_ACP, 0, wideBuffer, length16 + 1, raw, sizeof raw, NULL, NULL);
             }
+
             break;
         }
+
         if (!raw[0])
             source = g_WowCommandProgram;
     }
@@ -1167,23 +1214,28 @@ static VOID ManagerName(PSTR out, HWND *show)
     {
         source = g_ProgramName;
     }
+
     if (source)
     {
         PCSTR baseName = source;
         PCSTR cursor;
+
         for (cursor = source; *cursor; ++cursor)
             if (*cursor == '\\' || *cursor == '/')
                 baseName = cursor + 1;
+
         if (!*baseName || !lstrcmpiA(baseName, HOST_COMMAND_COM) || !lstrcmpiA(baseName, HOST_CMD_EXE)
             || !lstrcmpA(baseName, HOST_PROGRAM_NONE))
         {
             lstrcpynA(out, g_WowLaunch ? HOST_MANAGER_WIN16_NAME : HOST_MANAGER_DOS_NAME, MGR_NAME_SIZE);
             return;
         }
+
         /* "DOOM.EXE" -> "Doom": the base name, first letter up, the rest down. */
         for (index = 0; baseName[index] && baseName[index] != '.' && length < MGR_NAME_SIZE - 1; ++index)
         {
             CHAR character = baseName[index];
+
             if (length == 0)
             {
                 if (character >= 'a' && character <= 'z')
@@ -1194,17 +1246,22 @@ static VOID ManagerName(PSTR out, HWND *show)
                 if (character >= 'A' && character <= 'Z')
                     character = (CHAR)(character + ASCII_CASE_BIT);
             }
+
             raw[length++] = character;
         }
+
         raw[length] = 0;
     }
+
     raw[MGR_NAME_SIZE - 1] = 0;
+
     for (index = 0; raw[index]; ++index)                         /* "Notepad - (Untitled)" -> "Notepad" */
         if (raw[index] == ' ' && raw[index + 1] == '-' && raw[index + 2] == ' ')
         {
             raw[index] = 0;
             break;
         }
+
     lstrcpynA(out, raw[0] ? raw : HOST_PRODUCT_NAME, MGR_NAME_SIZE);
 }
 
@@ -1213,12 +1270,15 @@ static DWORD WINAPI ManagerThread(LPVOID unused)
     DWORD lastLaunch = 0;
 
     (VOID)unused;
+
     while (g_Window && IsWindow(g_Window))
     {
         HWND manager = FindWindowA(MGR_CLASS, NULL);
+
         if (!manager)
         {
             DWORD now = GetTickCount();
+
             if (!lastLaunch || now - lastLaunch >= MANAGER_RELAUNCH_MS)
             {
                 STARTUPINFOA startupInfo;
@@ -1230,6 +1290,7 @@ static DWORD WINAPI ManagerThread(LPVOID unused)
                 commandLine[0] = '"';
                 lstrcpynA(commandLine + 1, g_ManagerExe, MAX_PATH);
                 lstrcatA(commandLine, "\"");
+
                 if (CreateProcessA(g_ManagerExe, commandLine, NULL, NULL, FALSE, DETACHED_PROCESS,
                                    NULL, NULL, &startupInfo, &processInfo))
                 {
@@ -1238,9 +1299,11 @@ static DWORD WINAPI ManagerThread(LPVOID unused)
                     CloseHandle(processInfo.hProcess);
                 }
             }
+
             Sleep(MANAGER_START_WAIT_MS);                              /* give it a moment to appear */
             continue;
         }
+
         {   MGR_MESSAGE message;
         COPYDATASTRUCT copyData;
         HWND show;
@@ -1258,12 +1321,14 @@ static DWORD WINAPI ManagerThread(LPVOID unused)
             copyData.dwData = MGR_MAGIC;
             copyData.cbData = sizeof message;
             copyData.lpData = &message;
+
             if (SendMessageTimeoutA(manager, WM_COPYDATA, (WPARAM)g_Window, (LPARAM)&copyData,
                                     SMTO_ABORTIFHUNG, MANAGER_SEND_TIMEOUT_MS, &result) && result)
                 ++g_ManagerHellos;
         }
         Sleep(MANAGER_POLL_MS);
     }
+
     return 0;
 }
 
@@ -1273,16 +1338,23 @@ static VOID ManagerStart(VOID)
     HANDLE thread;
 
     g_ManagerCommandMessage = RegisterWindowMessageA(MGR_CMD_MSGNAME);
+
     if (!GetModuleFileNameA(NULL, g_ManagerExe, sizeof g_ManagerExe))
         return;
+
     for (cursor = g_ManagerExe + lstrlenA(g_ManagerExe); cursor > g_ManagerExe && cursor[-1] != '\\'; --cursor) ;
+
     if (cursor - g_ManagerExe + lstrlenA(MGR_EXE) >= (INT)sizeof g_ManagerExe)
         return;
+
     lstrcpyA(cursor, MGR_EXE);
+
     if (GetFileAttributesA(g_ManagerExe) == INVALID_FILE_ATTRIBUTES)
         return;
+
     g_ManagerAvailable = 1;
     thread = CreateThread(NULL, 0, ManagerThread, NULL, 0, NULL);
+
     if (thread)
     {
         SetThreadPriority(thread, THREAD_PRIORITY_LOWEST);
@@ -1304,6 +1376,7 @@ static VOID TrayMenu(HWND window)
 
     if (!menu)
         return;
+
     /* s88 (user): a Win16 host's machine window is never shown, so there is no
      * "Show NTVDMEX Window" here any more (this menu only exists for Win16).
      */
@@ -1340,18 +1413,26 @@ static INT StatusTextWidth(PCSTR text)
 
     if (!g_Status || !text)
         return 0;
+
     while (text[length])
         ++length;
+
     deviceContext = GetDC(g_Status);
+
     if (!deviceContext)
         return 0;
+
     font = (HFONT)SendMessageA(g_Status, WM_GETFONT, 0, 0);
+
     if (font)
         old = (HFONT)SelectObject(deviceContext, font);
+
     if (GetTextExtentPoint32A(deviceContext, text, length, &extent))
         width = extent.cx;
+
     if (old)
         SelectObject(deviceContext, old);
+
     ReleaseDC(g_Status, deviceContext);
     return width;
 }
@@ -1372,16 +1453,21 @@ static VOID StatusSetParts(PCSTR const *text, int count) /* stays int: INT here 
 
     if (!g_Status || count < 1 || count > STATUS_PARTS)
         return;
+
     for (index = 0; index < count; ++index)
     {
         INT width = StatusTextWidth(text[index]) + STATUS_TEXT_INSET;       /* the control's own left inset */
+
         if (index == STATUS_PART_PROGRAM && width > STATUS_PROGRAM_WIDTH_MAX)
             width = STATUS_PROGRAM_WIDTH_MAX;
+
         if (width < STATUS_PART_WIDTH_MIN)
             width = STATUS_PART_WIDTH_MIN;
+
         right += width;
         parts[index] = (index == count - 1) ? STATUS_PART_TO_EDGE : right;
     }
+
     SendMessageA(g_Status, SB_SETPARTS, (WPARAM)count, (LPARAM)parts);
 }
 
@@ -1396,6 +1482,7 @@ static VOID StatusSpeedText(PSTR out)
         LogPut(out, HOST_SPEED_UNLIMITED);
         return;
     }
+
     if (mhz >= MEGAHERTZ_PER_GIGAHERTZ_U && mhz % MEGAHERTZ_PER_GIGAHERTZ_U == 0u)
     {
         cursor = LogDecimal(cursor, mhz / MEGAHERTZ_PER_GIGAHERTZ_U);
@@ -1424,6 +1511,7 @@ static VOID StatusUpdate(VOID)
 
     if (!g_Status)
         return;
+
     text[STATUS_PART_PROGRAM] = g_ProgramName;
     /* One field, because they are one fact: 32-bit only ever means a DPMI client in
      * protected mode. Title case (user, s84).
@@ -1437,6 +1525,7 @@ static VOID StatusUpdate(VOID)
                       : g_DpmiPm                      ? STATUS_TEXT_PM16
                                                        : STATUS_TEXT_REAL_MODE;
         PSTR cursor = LogPut(modeText, mode);
+
         if (g_PresentDdraw.IsSnapshotValid && g_PresentDdraw.SnapshotWidth > 0 && g_PresentDdraw.SnapshotHeight > 0 && g_PresentDdraw.LastDestinationWidth > 0)
         {
             INT snapshotWidth = g_PresentDdraw.SnapshotWidth;
@@ -1444,6 +1533,7 @@ static VOID StatusUpdate(VOID)
             INT destinationWidth = g_PresentDdraw.LastDestinationWidth;
             INT destinationHeight = g_PresentDdraw.LastDestinationHeight;
             cursor = LogPut(cursor, ", ");  cursor = LogDecimal(cursor, (UINT)snapshotWidth); cursor = LogPut(cursor, "x"); cursor = LogDecimal(cursor, (UINT)snapshotHeight);
+
             if (destinationWidth % snapshotWidth == 0 && destinationHeight % snapshotHeight == 0 && destinationWidth / snapshotWidth == destinationHeight / snapshotHeight)
             {
                 cursor = LogPut(cursor, " at "); cursor = LogDecimal(cursor, (UINT)(destinationWidth / snapshotWidth)); cursor = LogPut(cursor, "x");
@@ -1451,6 +1541,7 @@ static VOID StatusUpdate(VOID)
             else
                 cursor = LogPut(cursor, g_FitDown ? " (scaled to fit)" : " (scaled)");
         }
+
         text[STATUS_PART_MODE] = modeText;
     }
     StatusSpeedText(speed);
@@ -1462,15 +1553,18 @@ static VOID StatusUpdate(VOID)
            : CaptureAllowed() ? STATUS_TEXT_CAPTURE_MOUSE
                                : STATUS_TEXT_NONE;
     parts = text[STATUS_PART_CAPTURE][0] ? STATUS_PARTS : STATUS_PARTS - 1;
+
     if (StringsEqual(text[STATUS_PART_PROGRAM], g_StatusLeft) && StringsEqual(text[STATUS_PART_MODE], g_StatusMode) &&
         StringsEqual(text[STATUS_PART_SPEED], g_StatusSpeed) && StringsEqual(text[STATUS_PART_CAPTURE], g_StatusRight))
         return;
+
     StatusSetParts(text, parts);
     LogPut(g_StatusLeft, text[STATUS_PART_PROGRAM]); LogPut(g_StatusMode, text[STATUS_PART_MODE]);
     LogPut(g_StatusSpeed, text[STATUS_PART_SPEED]); LogPut(g_StatusRight, text[STATUS_PART_CAPTURE]);
     SendMessageA(g_Status, SB_SETTEXTA, STATUS_PART_PROGRAM, (LPARAM)text[STATUS_PART_PROGRAM]);
     SendMessageA(g_Status, SB_SETTEXTA, STATUS_PART_MODE, (LPARAM)text[STATUS_PART_MODE]);
     SendMessageA(g_Status, SB_SETTEXTA, STATUS_PART_SPEED, (LPARAM)text[STATUS_PART_SPEED]);
+
     if (parts == STATUS_PARTS)
         SendMessageA(g_Status, SB_SETTEXTA, STATUS_PART_CAPTURE, (LPARAM)text[STATUS_PART_CAPTURE]);
 }
@@ -1485,8 +1579,10 @@ static VOID MakeStatus(HWND parent, HINSTANCE instance)
     g_Status = CreateWindowExA(0, STATUSCLASSNAME, NULL,
                                WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
                                0, 0, 0, 0, parent, NULL, instance, NULL);
+
     if (!g_Status)
         return;
+
     /* Dock it to the parent's width BEFORE cutting the parts: a status bar created
      * at 0x0 has a zero client rect, so the split would be computed against nothing
      * and would stay wrong until the first user resize.
@@ -1495,6 +1591,7 @@ static VOID MakeStatus(HWND parent, HINSTANCE instance)
     g_StatusLeft[0] = 0;                       /* force the first cut + push */
     StatusUpdate();
     GetWindowRect(g_Status, &statusRect);
+
     if (statusRect.bottom > statusRect.top)
         g_PresentDdraw.StatusHeight = statusRect.bottom - statusRect.top;
 }
@@ -1509,6 +1606,7 @@ static VOID MenuCheck(HWND window, UINT commandId, INT isOn)
 
     if (!menu)
         menu = g_FsMenu;
+
     if (menu)
         CheckMenuItem(menu, commandId, MF_BYCOMMAND | (UINT)(isOn ? MF_CHECKED : MF_UNCHECKED));
 }
@@ -1535,10 +1633,13 @@ static INT CloseProgramAvailable(VOID)
 {
     if (!g_Running || g_WoundDown)
         return 0;
+
     if (g_WowLaunch)
         return 1;
+
     if (g_DpmiDone)
         return 0;
+
     return g_ExecDepth > 0 || !g_TopIsShell;
 }
 
@@ -1553,8 +1654,10 @@ static VOID SelectionPublish(VOID)
 
     if (cols < 1)
         cols = 1;
+
     if (rows < 1)
         rows = 1;
+
     g_PresentDdraw.IsSelection = g_SelectionOn;
     {   /* in FRAME pixels: the live cell -- 9 dots wide (#324), and cell_h tall, which
            is 8 in a 50-line screen (this used VIDEO_CELL_HEIGHT, so a 50-line selection was
@@ -1569,6 +1672,7 @@ static VOID SelectionPublish(VOID)
     HOST_LOCK();
     g_Video.IsDirty = 1;
     HOST_UNLOCK();
+
     if (g_PresentDdraw.Window)
         InvalidateRect(g_PresentDdraw.Window, NULL, FALSE);
 }
@@ -1588,18 +1692,24 @@ static INT ClientToCell(INT clientX, INT clientY, INT *column, INT *row)
 
     if (g_PresentDdraw.LastDestinationWidth <= 0 || g_PresentDdraw.LastDestinationHeight <= 0 || g_Video.Columns < 1 || g_Video.Rows < 1)
         return 0;
+
     sourceX = (clientX - g_PresentDdraw.LastDestinationX) * g_PresentDdraw.LastSourceWidth / g_PresentDdraw.LastDestinationWidth;
     sourceY = (clientY - g_PresentDdraw.LastDestinationY) * g_PresentDdraw.LastSourceHeight / g_PresentDdraw.LastDestinationHeight;
     *column = sourceX / VddVideoTextCellWidth(&g_Video);
     *row = sourceY / (g_Video.CellHeight ? g_Video.CellHeight : VIDEO_CELL_HEIGHT);
+
     if (*column < 0)
         *column = 0;
+
     if (*row < 0)
         *row = 0;
+
     if (*column >= g_Video.Columns)
         *column = g_Video.Columns - 1;
+
     if (*row >= g_Video.Rows)
         *row = g_Video.Rows - 1;
+
     return 1;
 }
 
@@ -1618,6 +1728,7 @@ static VOID TextCopy(HWND window, INT all)
 
     if (g_Video.ModeKind != VIDEO_KIND_TEXT || !g_Video.VideoMemory)
         return;
+
     if (all || !g_SelectionOn)
     {
         column0 = 0;
@@ -1632,42 +1743,57 @@ static VOID TextCopy(HWND window, INT all)
         row0 = g_SelectionRow0 < g_SelectionRow1 ? g_SelectionRow0 : g_SelectionRow1;
         row1 = g_SelectionRow0 < g_SelectionRow1 ? g_SelectionRow1 : g_SelectionRow0;
     }
+
     HOST_LOCK();
+
     for (row = row0; row <= row1 && length < (INT)sizeof text - 140; ++row)
     {
         INT start = length;
+
         for (column = column0; column <= column1; ++column)
         {
             BYTE ch = g_Video.VideoMemory[VIDEO_TEXT_OFFSET + ((g_Video.CrtcStartLive * VIDEO_TEXT_CELL_BYTES_U + (UINT)(row * g_Video.Columns + column) * VIDEO_TEXT_CELL_BYTES_U) & VIDEO_TEXT_WINDOW_MASK_U)];   /* the DISPLAYED page (#252) */
             text[length++] = (CHAR)(ch ? ch : ' ');
         }
+
         while (length > start && text[length - 1] == ' ') --length;          /* right-trim the line */
+
         if (row < row1)
         {
             text[length++] = '\r';
             text[length++] = '\n';
         }
     }
+
     HOST_UNLOCK();
+
     while (length >= 2 && text[length - 2] == '\r' && text[length - 1] == '\n')
         length -= 2;                                                                           /* the empty rows below */
+
     text[length] = 0;
     memory = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)length + 1);
     destination = memory ? (PSTR)GlobalLock(memory) : NULL;
+
     if (!destination)
     {
         if (memory)
             GlobalFree(memory);
+
         return;
     }
+
     for (column = 0; column <= length; ++column)
         destination[column] = text[column];
+
     GlobalUnlock(memory);
+
     if (OpenClipboard(window))
     {
         EmptyClipboard();
+
         if (!SetClipboardData(CF_OEMTEXT, memory))
             GlobalFree(memory);
+
         CloseClipboard();
     }
     else
@@ -1688,9 +1814,11 @@ static DWORD WINAPI PasteThread(LPVOID parameter)
         BYTE ch = (BYTE)text[index];
         BYTE scan = 0;
         BYTE isShifted = 0;
+
         if (ch == '\r')
         {
             scan = INPUT_SCAN_ENTER;
+
             if (text[index + 1] == '\n')
                 ++index;
         }
@@ -1700,23 +1828,30 @@ static DWORD WINAPI PasteThread(LPVOID parameter)
             scan = INPUT_SCAN_TAB;
         else { BYTE scanCode;
         INT shift;                           /* #136: on the active layout */
+
                if (VddInputCharToKey(&g_Input, ch, &scanCode, &shift))
                {
                    scan = scanCode;
                    isShifted = (BYTE)shift;
                }
                }
+
         if (!scan)
             continue;                                         /* not typeable: skipped */
+
         if (isShifted)
             HostKeyScancode(INPUT_SCAN_LEFT_SHIFT, INPUT_KEY_NORMAL, INPUT_KEY_MAKE);
+
         HostKeyScancode(scan, INPUT_KEY_NORMAL, INPUT_KEY_MAKE);
         Sleep(PASTE_KEY_HOLD_MS);
         HostKeyScancode(scan, INPUT_KEY_NORMAL, INPUT_KEY_BREAK);
+
         if (isShifted)
             HostKeyScancode(INPUT_SCAN_LEFT_SHIFT, INPUT_KEY_NORMAL, INPUT_KEY_BREAK);
+
         Sleep(PASTE_KEY_GAP_MS);
     }
+
     HeapFree(GetProcessHeap(), 0, text);
     InterlockedExchange(&g_PasteBusy, 0);
     return 0;
@@ -1731,14 +1866,17 @@ static VOID TextPaste(HWND window)
 
     if (InterlockedExchange(&g_PasteBusy, 1))
         return;
+
     if (!OpenClipboard(window))
     {
         InterlockedExchange(&g_PasteBusy, 0);
         return;
     }
+
     clipboard = GetClipboardData(CF_TEXT);
     source = clipboard ? (PCSTR)GlobalLock(clipboard) : NULL;
     copy = source ? (PSTR)HeapAlloc(GetProcessHeap(), 0, PASTE_TEXT_MAX + 1) : NULL;
+
     if (copy)
     {
         while (length < PASTE_TEXT_MAX && source[length])
@@ -1746,19 +1884,26 @@ static VOID TextPaste(HWND window)
             copy[length] = source[length];
             ++length;
         }
+
         copy[length] = 0;
     }
+
     if (source)
         GlobalUnlock(clipboard);
+
     CloseClipboard();
+
     if (!copy || !length)
     {
         if (copy)
             HeapFree(GetProcessHeap(), 0, copy);
+
         InterlockedExchange(&g_PasteBusy, 0);
         return;
     }
+
     { HANDLE thread = CreateThread(NULL, 0, PasteThread, copy, 0, NULL);
+
       if (thread)
           CloseHandle(thread);
       else
@@ -1779,21 +1924,27 @@ static VOID MenuSyncModal(HWND window, HMENU popup)
     /* The tray menu is its own popup, not a child of the menu bar: grey it directly. */
     if (popup) EnableMenuItem(popup, IDM_FILE_CLOSEPROG, MF_BYCOMMAND
                               | (CloseProgramAvailable() ? MF_ENABLED : MF_GRAYED));
+
     if (!menu)
         menu = g_FsMenu;
+
     if (!menu)
         return;
+
     EnableMenuItem(menu, IDM_FILE_CLOSEPROG, MF_BYCOMMAND
                    | (CloseProgramAvailable() ? MF_ENABLED : MF_GRAYED));
     flag = (g_Video.ModeKind == VIDEO_KIND_TEXT) ? MF_ENABLED : (MF_GRAYED | MF_DISABLED);
+
     for (index = 0; index < sizeof textOnly / sizeof textOnly[0]; ++index)
         EnableMenuItem(menu, textOnly[index], MF_BYCOMMAND | flag);
+
     CheckMenuItem(menu, IDM_CAP_AUDIO, MF_BYCOMMAND | (AudioWaveIsRecording() ? MF_CHECKED : MF_UNCHECKED));
     /* #154: Copy needs a selection; Paste needs text, and not a paste already typing. */
     if (flag == MF_ENABLED)
     {
         if (!g_SelectionOn)
             EnableMenuItem(menu, IDM_EDIT_COPY, MF_BYCOMMAND | MF_GRAYED);
+
         if (g_PasteBusy || !IsClipboardFormatAvailable(CF_TEXT))
             EnableMenuItem(menu, IDM_EDIT_PASTE, MF_BYCOMMAND | MF_GRAYED);
     }
@@ -1858,6 +2009,7 @@ static INT IsPointOverVideo(HWND window, INT clientX, INT clientY)
 
     if (!GetClientRect(window, &clientRect))
         return 0;
+
     videoHeight = clientRect.bottom - (g_PresentDdraw.StatusHeight ? g_PresentDdraw.StatusHeight : PRESENT_STATUS_HEIGHT);
     return clientX >= 0 && clientX < clientRect.right && clientY >= 0 && clientY < videoHeight;
 }
@@ -1879,10 +2031,13 @@ static INT HostCursorVisibleAt(INT overVideo)
 {
     if (g_Captured)
         return 0;
+
     if (!overVideo || g_HostCursorMode == HOSTCUR_ALWAYS)
         return 1;                                                     /* s84 */
+
     if (g_HostCursorMode == HOSTCUR_NEVER)
         return 0;
+
     /* #218: fullscreen no longer hides it outright -- a program that does not use the
      * mouse keeps a usable pointer there too, and the idle rule applies to both.
      */
@@ -1903,9 +2058,12 @@ static VOID HostCursorRefresh(HWND window)
 
     if (!window || !GetCursorPos(&point))
         return;
+
     under = WindowFromPoint(point);
+
     if (under != window && GetParent(under) != window)
         return;
+
     client = point;
     ScreenToClient(window, &client);
     SetCursor(HostCursorVisibleAt(IsPointOverVideo(window, client.x, client.y))
@@ -1938,6 +2096,7 @@ static VOID CaptureClipApply(HWND window)
 
     if (!window || !g_Captured)
         return;
+
     CaptureClipRect(window, &clip);
     ClipCursor(&clip);
 }
@@ -1949,9 +2108,12 @@ static VOID CaptureClipGuard(HWND window)
 
     if (!window || !g_Captured || g_InSizeMove || GetForegroundWindow() != window)
         return;
+
     CaptureClipRect(window, &want);
+
     if (!GetClipCursor(&current))
         return;
+
     if (current.left != want.left || current.top != want.top ||
         current.right != want.right || current.bottom != want.bottom)
     {
@@ -1975,11 +2137,15 @@ VOID InputCaptureSet(HWND window, INT isOn)
      */
     if (isOn && !CaptureAllowed())
         return;
+
     if (isOn == g_Captured)
         return;
+
     InterlockedExchange(&g_Captured, isOn ? 1 : 0);
+
     if (isOn && g_PresentDdraw.IsFullscreen)
         FullscreenReleaseHint();
+
     if (isOn)
     {
         /* [WARNING]: THIS HOOK CAN JAM THE WHOLE MACHINE, SO IT IS OFF BY DEFAULT (Importance = 2):
@@ -2003,23 +2169,28 @@ VOID InputCaptureSet(HWND window, INT isOn)
         if (!g_LowLevelKeyboard && g_LowLevelKeyboardOn)
             g_LowLevelKeyboard = SetWindowsHookExA(WH_KEYBOARD_LL, LowLevelKeyboardProcedure,
                                         GetModuleHandleA(NULL), 0);
+
         CaptureClipApply(window);
     }
     else
     {
         ClipCursor(NULL);
+
         if (g_LowLevelKeyboard)
         {
             UnhookWindowsHookEx(g_LowLevelKeyboard);
             g_LowLevelKeyboard = NULL;
         }
+
         /* RULE 6: the UP that follows will not reach the guest, so report any held
          * button as released NOW -- edges and all, so 06h sees it.
          */
         {   LONG prev = InterlockedExchange(&g_MouseButtons, 0);
+
             if (prev)
                 MouseButtonEdges(prev, 0); }
     }
+
     MenuCheck(window, IDM_INPUT_CAPTURE, isOn);
     HostCursorRefresh(window);              /* apply the pointer change now, not on next move */
     /* The status strip says how to get back out. It is repainted from the UI tick,
@@ -2037,20 +2208,25 @@ INT OtherHostsRunning(VOID)
     {
         HANDLE mutex;
         PSTR cursor = LogPut(name, HOST_INSTANCE_MUTEX);
+
         if (instance == g_Instance)
             continue;
+
         if (instance > 1)
         {
             *cursor++ = '_';
             cursor = LogDecimal(cursor, (UINT)instance);
         }
+
         mutex = OpenMutexA(SYNCHRONIZE, FALSE, name);
+
         if (mutex)
         {
             CloseHandle(mutex);
             return 1;
         }
     }
+
     return 0;
 }
 
@@ -2073,20 +2249,26 @@ static INT OpenIsDosImage(PCSTR path)
 
     if (length >= DOS_DOT_EXTENSION_LENGTH && (!lstrcmpiA(path + length - DOS_DOT_EXTENSION_LENGTH, HOST_EXTENSION_COM) || !lstrcmpiA(path + length - DOS_DOT_EXTENSION_LENGTH, HOST_EXTENSION_BAT)))
         return 1;
+
     file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+
     if (file == INVALID_HANDLE_VALUE)
         return 0;
+
     if (!ReadFile(file, header, sizeof header, &got, NULL) || got < sizeof header || header[0] != 'M' || header[1] != 'Z')
     {
         CloseHandle(file);
         return 0; }
+
     newHeaderOffset = *(const DWORD *)(header + DOS_MZ_NEW_HEADER);
+
     if (newHeaderOffset >= DOS_MZ_NEW_HEADER_MIN && SetFilePointer(file, (LONG)newHeaderOffset, NULL, FILE_BEGIN) == newHeaderOffset
         && ReadFile(file, signature, DOS_EXE_SIGNATURE_SIZE, &signatureBytesRead, NULL) && signatureBytesRead == DOS_EXE_SIGNATURE_SIZE
         && ((signature[0] == 'N' && signature[1] == 'E') || (signature[0] == 'P' && signature[1] == 'E')))
     {
         CloseHandle(file);
         return 0; }
+
     CloseHandle(file);
     return 1;
 }
@@ -2104,25 +2286,36 @@ static INT OpenPromptLine(PCSTR shortPath, INT backspaceCount, PSTR out, INT cap
     for (index = 0; index < length; ++index)
         if (shortPath[index] == '\\')
             slash = index;
+
     if (length < 4 || shortPath[1] != ':' || shortPath[2] != '\\' || slash < 2)
         return 0;
+
     directoryLength = (slash == 2) ? 1 : slash - 2;                     /* "\" or "\DIR\SUB" */
+
     if (directoryLength > DOS_DIRECTORY_MAX || length - slash - 1 > DOS_SHORT_NAME_SIZE - 1 || backspaceCount + length + 16 > cap)
         return 0;
+
     for (index = 0; index < backspaceCount; ++index)
         *cursor++ = ASCII_BACKSPACE;
+
     *cursor++ = shortPath[0];
     *cursor++ = ':';
     *cursor++ = '\r';
     cursor = LogPut(cursor, "CD ");
+
     for (index = 2; index < (slash == 2 ? 3 : slash); ++index)
         *cursor++ = shortPath[index];
+
     *cursor++ = '\r';
+
     for (index = slash + 1; index < length; ++index)
         *cursor++ = shortPath[index];
+
     *cursor++ = '\r';
+
     if (cursor > end)
         return 0;
+
     *cursor = 0;
     return 1;
 }
@@ -2148,10 +2341,14 @@ static VOID OpenProgram(HWND window, PCSTR path)
         MessageBoxA(window, message, HOST_PRODUCT_NAME, MB_OK | MB_ICONEXCLAMATION);
         return;
     }
+
     MruAdd(path);
+
     if (g_Captured)
         InputCaptureSet(window, FALSE);
+
     shortLength = GetShortPathNameA(path, shortPath, sizeof shortPath);
+
     if (OpenAtPrompt() && shortLength && shortLength < sizeof shortPath && OpenIsDosImage(path)
         && OpenPromptLine(shortPath, g_Machine->LineLength, line, (INT)sizeof line)
         && TypeInPush(line))
@@ -2162,18 +2359,25 @@ static VOID OpenProgram(HWND window, PCSTR path)
         LogAppend(LOG_PATH, lineBuffer, lineCursor);
         return;
     }
+
     lstrcpynA(directory, path, sizeof directory);
+
     for (index = 0; directory[index]; ++index)
         if (directory[index] == '\\')
             cut = index;
+
     if (cut >= 0)
         directory[cut == 2 ? 3 : cut] = 0;
+
     command[0] = '"';
     lstrcpynA(command + 1, path, MAX_PATH);
     LogPut(command + lstrlenA(command), "\"");
+
     for (index = 0; index < (INT)sizeof startupInfo; ++index)
         ((PSTR)&startupInfo)[index] = 0;
+
     startupInfo.cb = sizeof startupInfo;
+
     if (CreateProcessA(NULL, command, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL,
                        cut >= 0 ? directory : NULL, &startupInfo, &processInfo))
     {
@@ -2200,8 +2404,10 @@ static VOID OpenProgramDialog(HWND window)
     INT index;
 
     file[0] = 0;
+
     for (index = 0; index < (INT)sizeof openFile; ++index)
         ((PSTR)&openFile)[index] = 0;
+
     openFile.lStructSize = sizeof openFile;
     openFile.hwndOwner   = window;
     openFile.lpstrFilter = HOST_OPEN_FILTER;
@@ -2209,8 +2415,10 @@ static VOID OpenProgramDialog(HWND window)
     openFile.nMaxFile    = sizeof file;
     openFile.lpstrTitle  = HOST_OPEN_TITLE;
     openFile.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+
     if (g_Captured)
         InputCaptureSet(window, FALSE);               /* the dialog needs the pointer */
+
     if (GetOpenFileNameA(&openFile))
         OpenProgram(window, file);
 }
@@ -2226,14 +2434,18 @@ static VOID MenuRecentFill(VOID)
 
     if (!g_RecentMenu)
         return;
+
     while (GetMenuItemCount(g_RecentMenu) > 0)
         DeleteMenu(g_RecentMenu, 0, MF_BYPOSITION);
+
     count = MruLoad(list);
+
     if (!count)
     {
         AppendMenuA(g_RecentMenu, MF_STRING | MF_GRAYED, IDM_RECENT_0, MENU_TEXT_RECENT_EMPTY);
         return;
     }
+
     for (index = 0; index < count; ++index)
     {
         CHAR text[2 * MAX_PATH + 8];
@@ -2242,12 +2454,15 @@ static VOID MenuRecentFill(VOID)
         *cursor++ = '&';
         *cursor++ = (CHAR)('1' + index);
         *cursor++ = ' ';
+
         for (source = list[index]; *source; ++source) /* a literal & */
         {
             if (*source == '&')
                 *cursor++ = '&';
+
             *cursor++ = *source;
         }
+
         *cursor = 0;
         AppendMenuA(g_RecentMenu, MF_STRING, IDM_RECENT_0 + (UINT)index, text);
     }
@@ -2273,12 +2488,15 @@ static VOID MenuRecentFill(VOID)
 VOID HostPanicRelease(VOID)
 {
     ClipCursor(NULL);
+
     if (g_LowLevelKeyboard)
     {
         UnhookWindowsHookEx(g_LowLevelKeyboard);
         g_LowLevelKeyboard = NULL;
     }
+
     InterlockedExchange(&g_Captured, 0);
+
     if (g_HostCpu)
     {
         INT guard = 0;
@@ -2286,6 +2504,7 @@ VOID HostPanicRelease(VOID)
          * Bounded so a bad handle cannot spin here forever.
          */
         while (guard++ < HOST_PANIC_RESUME_MAX) { DWORD prev = ResumeThread(g_HostCpu);
+
                                if (prev == (DWORD)-1 || prev <= 1)
                                    break; }
     }
@@ -2297,30 +2516,37 @@ DWORD WINAPI CaptureWatchdogThread(LPVOID parameter)
     DWORD lastMs = GetTickCount();
 
     (VOID)parameter;
+
     while (g_Running)
     {
         Sleep(CAPTURE_WATCH_MS);
+
         if (!g_Captured)
         {
             last = g_UiBeat;
             lastMs = GetTickCount();
             continue;
         }
+
         if (g_UiBeat != last)
         {
             last = g_UiBeat;
             lastMs = GetTickCount();
             continue;
         }
+
         if (GetTickCount() - lastMs < CAPWD_STALL_MS)
             continue;
+
         {   CHAR lineBuffer[192], *lineCursor = lineBuffer;
             ClipCursor(NULL);
+
             if (g_LowLevelKeyboard)
             {
                 UnhookWindowsHookEx(g_LowLevelKeyboard);
                 g_LowLevelKeyboard = NULL;
             }
+
             InterlockedExchange(&g_Captured, 0);
             ++g_CaptureWatchdogReleased;
             lineCursor = LogPut(lineCursor, "CAPTURE-WATCHDOG: UI thread silent for ");
@@ -2330,6 +2556,7 @@ DWORD WINAPI CaptureWatchdogThread(LPVOID parameter)
             SerialOut(lineBuffer, lineCursor); }
         lastMs = GetTickCount();
     }
+
     return 0;
 }
 
@@ -2343,10 +2570,13 @@ static VOID CursorIdleNoteMove(HWND window)
 
     if (!GetCursorPos(&point))
         return;
+
     if (point.x == g_CursorLastPoint.x && point.y == g_CursorLastPoint.y)
         return;
+
     g_CursorLastPoint = point;
     g_CursorMovedMs = GetTickCount();
+
     if (g_CursorIdle)
     {
         g_CursorIdle = 0;
@@ -2366,29 +2596,39 @@ static VOID CursorIdleTick(HWND window)
 
     if (g_CursorIdle || g_Captured || CaptureAllowed())
         return;
+
     if (g_HostCursorMode != HOSTCUR_SMART)
         return;                                             /* s84: the idle rule is Smart's */
+
     if (!g_CursorMovedMs)
     {
         g_CursorMovedMs = GetTickCount();
         return;
     }
+
     if (GetTickCount() - g_CursorMovedMs < CURSOR_IDLE_MS)
         return;
+
     if (!GetCursorPos(&point))
         return;
+
     if (point.x != g_CursorLastPoint.x || point.y != g_CursorLastPoint.y)     /* moved elsewhere */
     {
         g_CursorLastPoint = point;
         g_CursorMovedMs = GetTickCount();
         return; }
+
     under = WindowFromPoint(point);
+
     if (under != window)
         return;
+
     client = point;
     ScreenToClient(window, &client);
+
     if (!IsPointOverVideo(window, client.x, client.y))
         return;
+
     g_CursorIdle = 1;
     HostCursorRefresh(window);
 }
@@ -2401,24 +2641,30 @@ static VOID HostFullscreenToggleRestore(HWND window)
 {
     if (g_Status) { ShowWindow(g_Status, SW_SHOW);
                     SendMessageA(g_Status, WM_SIZE, 0, 0); }   /* re-dock at the bottom */
+
     if (g_FsMenu)
     {
         SetMenu(window, g_FsMenu);
         g_FsMenu = NULL;
     }
+
     if (g_FullscreenStyle)
         SetWindowLongA(window, GWL_STYLE, g_FullscreenStyle);
+
     if (g_FullscreenExStyle)
         SetWindowLongA(window, GWL_EXSTYLE, g_FullscreenExStyle);
+
     /* SWP_FRAMECHANGED before the placement: the frame has to exist again for
      * SetWindowPlacement's rect to mean the same thing it did when we saved it.
      */
     SetWindowPos(window, NULL, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
                  | SWP_FRAMECHANGED);
+
     if (g_FullscreenSaved) { g_FullscreenPlace.length = sizeof g_FullscreenPlace;
                       SetWindowPlacement(window, &g_FullscreenPlace);
                       g_FullscreenSaved = 0; }
+
     g_FullscreenStyle = g_FullscreenExStyle = 0;
     DrawMenuBar(window);
     InvalidateRect(window, NULL, TRUE);
@@ -2428,7 +2674,9 @@ static VOID HostFullscreenToggle(HWND window)
 {
     if (g_Safe.Fullscreen && !g_PresentDdraw.IsFullscreen)
         return;                                                      /* s90 #132: SAFE MODE stays windowed */
+
     INT want = !g_PresentDdraw.IsFullscreen;
+
     if (want)
     {
         g_FullscreenPlace.length = sizeof g_FullscreenPlace;
@@ -2452,9 +2700,11 @@ static VOID HostFullscreenToggle(HWND window)
          */
         if (g_Status)
             ShowWindow(g_Status, SW_HIDE);
+
         SetWindowPos(window, HWND_TOP, 0, 0,
                      GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
                      SWP_FRAMECHANGED | SWP_NOACTIVATE);
+
         if (PresentDdrawSetFullscreen(&g_PresentDdraw, TRUE) != 0)
         {
             /* No DirectDraw, or it refused. Do not leave the user in a chromeless
@@ -2463,6 +2713,7 @@ static VOID HostFullscreenToggle(HWND window)
             HostFullscreenToggleRestore(window);
             return;
         }
+
         if (g_Captured)
             FullscreenReleaseHint();                      /* #138 */
     }
@@ -2471,6 +2722,7 @@ static VOID HostFullscreenToggle(HWND window)
         PresentDdrawSetFullscreen(&g_PresentDdraw, FALSE);
         HostFullscreenToggleRestore(window);
     }
+
     /* The window just changed shape. If the guest holds the mouse, the ClipCursor
      * rect is now describing the window we USED to be -- re-fence it. Alt+Enter is
      * reachable while captured (see WM_SYSKEYDOWN), so this is a live path, not a
@@ -2500,17 +2752,20 @@ static VOID HostFullscreenToggle(HWND window)
         RECT clientRect;
         INT clientWidth = 0;
         INT clientHeight = 0;
+
         if (GetClientRect(window, &clientRect))
         {
             clientWidth = clientRect.right;
             clientHeight = clientRect.bottom;
         }
+
         lineCursor = LogPut(lineCursor, "FULLSCREEN: path=");
         lineCursor = LogPut(lineCursor, (g_PresentDdraw.DirectDraw && g_PresentDdraw.Back) ? "ddraw-exclusive" : "gdi-borderless");
         lineCursor = LogPut(lineCursor, " client=");           lineCursor = LogDecimal(lineCursor, (UINT)clientWidth);
         lineCursor = LogPut(lineCursor, "x");                  lineCursor = LogDecimal(lineCursor, (UINT)clientHeight);
         lineCursor = LogPut(lineCursor, " frame=");            lineCursor = LogDecimal(lineCursor, (UINT)g_Video.Frame.Width);
         lineCursor = LogPut(lineCursor, "x");                  lineCursor = LogDecimal(lineCursor, (UINT)g_Video.Frame.Height);
+
         if (g_Video.Frame.Width && g_Video.Frame.Height)
         {
             INT frameX;
@@ -2528,6 +2783,7 @@ static VOID HostFullscreenToggle(HWND window)
             lineCursor = LogPut(lineCursor, " rem=");   lineCursor = LogDecimal(lineCursor, (UINT)(frameWidth % (INT)g_Video.Frame.Width));
             lineCursor = LogPut(lineCursor, ",");       lineCursor = LogDecimal(lineCursor, (UINT)(frameHeight % (INT)g_Video.Frame.Height));
         }
+
         lineCursor = LogPut(lineCursor, " aspect=");  lineCursor = LogDecimal(lineCursor, (UINT)g_PresentDdraw.Aspect);
         lineCursor = LogPut(lineCursor, "\r\n");
         LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
@@ -2540,14 +2796,18 @@ static VOID HostAutoFullscreenConsider(HWND window, INT graphics)
 
     if (g_AutoFullscreenDone || g_WowLaunch || g_Headless)
         return;
+
     if (mode == AUTOFS_NEVER)
     {
         g_AutoFullscreenDone = 1;
         return;
     }
+
     if (mode == AUTOFS_GRAPHICS && !graphics)
         return;
+
     g_AutoFullscreenDone = 1;
+
     if (!g_PresentDdraw.IsFullscreen)
         HostFullscreenToggle(window);
 }
@@ -2569,12 +2829,14 @@ static VOID HostFrameSize(INT *frameWidth, INT *frameHeight)
         *frameHeight = g_PresentDdraw.SnapshotHeight;
         return;
     }
+
     if (g_Video.Frame.Width && g_Video.Frame.Height)
     {
         *frameWidth = (INT)g_Video.Frame.Width;
         *frameHeight = (INT)g_Video.Frame.Height;
         return;
     }
+
     *frameWidth = VIDEO_TEXT_FRAME_WIDTH;
     *frameHeight = VIDEO_TEXT_FRAME_HEIGHT;                          /* before the first frame: VGA text */
 }
@@ -2627,6 +2889,7 @@ static VOID HostWorkRoom(INT *roomWidth, INT *roomHeight)
     INT extraHeight;
 
     HostWorkArea(&workArea);
+
     if (g_PresentDdraw.Window)
         HostFrameExtra(g_PresentDdraw.Window, &extraWidth, &extraHeight);
     else
@@ -2637,6 +2900,7 @@ static VOID HostWorkRoom(INT *roomWidth, INT *roomHeight)
         extraWidth = frame.right - frame.left;
         extraHeight = (frame.bottom - frame.top) + PRESENT_STATUS_HEIGHT;
     }
+
     *roomWidth = (workArea.right - workArea.left) - extraWidth;
     *roomHeight = (workArea.bottom - workArea.top) - extraHeight;
 }
@@ -2671,20 +2935,26 @@ VOID MenuViewSync(HWND window)
 
     if (!menu)
         menu = g_FsMenu;
+
     if (!menu)
         return;
+
     for (index = 0; index < MENU_COMBO_N; ++index)
     {
         UINT base = g_MenuCombos[index].Base;
         const SET_DEF *definition = &g_SetDefinitions[g_MenuCombos[index].IsSet];
         DWORD value = g_Settings.Values[g_MenuCombos[index].IsSet];
+
         if (value > definition->High)
             value = definition->Low;
+
         CheckMenuRadioItem(menu, base, base + (UINT)definition->High, base + (UINT)value, MF_BYCOMMAND);
     }
+
     for (index = 0; index < MENU_CHECK_N; ++index)
         CheckMenuItem(menu, g_MenuChecks[index].Id, MF_BYCOMMAND
                       | (g_Settings.Values[g_MenuChecks[index].IsSet] ? MF_CHECKED : MF_UNCHECKED));
+
     /* -- A SCALE THAT CANNOT FIT THE DISPLAY IS GREYED, NOT SILENTLY SUBSTITUTED.
      * HostApplyScale() steps down until the window fits, which is the right
      * thing to DO and the wrong thing to say nothing about: picking 3x on a
@@ -2699,9 +2969,11 @@ VOID MenuViewSync(HWND window)
      * a taskbar that auto-hides, a second monitor, a resolution change.
      */
     {   INT scale;
+
         for (scale = 2; scale <= HOST_SCALE_MAX; ++scale)          /* #325: 1x is always offered (scaled to fit if need be) */
             EnableMenuItem(menu, IDM_WINSIZE_0 + (UINT)(scale - 1), MF_BYCOMMAND
                            | (WindowScaleFits(scale) ? MF_ENABLED : MF_GRAYED)); }
+
     /* -- RULE 1, SAID IN THE MENU. Same argument as the scale items above and NOT the
      * scaffold-stub case: Capture Mouse is implemented, and it is impossible for a
      * guest that has never called INT 33h -- there is nothing to capture the mouse
@@ -2747,17 +3019,23 @@ static VOID HostApplyScale(HWND window, INT scale)
 
     if (!window || g_PresentDdraw.IsFullscreen)
         return;                                           /* fullscreen owns the size */
+
     if (IsZoomed(window))
         ShowWindow(window, SW_RESTORE);
+
     if (scale < 1)
         scale = 1;
+
     g_ScaleWant = scale;
+
     while (scale > 1 && !WindowScaleFits(scale))
         --scale;
+
     g_ScaleFactor = scale;
     HostPicture(scale, &pictureWidth, &pictureHeight);
     HostWorkRoom(&roomWidth, &roomHeight);
     g_FitDown = 0;
+
     if (pictureWidth > roomWidth || pictureHeight > roomHeight)
     {
         INT fitX;
@@ -2765,6 +3043,7 @@ static VOID HostApplyScale(HWND window, INT scale)
         PresentFitRatio(roomWidth, roomHeight, pictureWidth, pictureHeight, &fitX, &fitY, &pictureWidth, &pictureHeight);
         g_FitDown = 1;
     }
+
     HostFrameExtra(window, &extraWidth, &extraHeight);
     windowWidth = pictureWidth + extraWidth;
     windowHeight = pictureHeight + extraHeight;
@@ -2772,25 +3051,34 @@ static VOID HostApplyScale(HWND window, INT scale)
     HostWorkArea(&workArea);
     left = windowRect.left;
     top = windowRect.top;
+
     if (left + windowWidth > workArea.right)
         left = workArea.right - windowWidth;
+
     if (top + windowHeight > workArea.bottom)
         top = workArea.bottom - windowHeight;
+
     if (left < workArea.left)
         left = workArea.left;
+
     if (top < workArea.top)
         top = workArea.top;
+
     SetWindowPos(window, NULL, left, top, windowWidth, windowHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+
     for (index = 0; index < 2 && GetClientRect(window, &clientRect); ++index)
     {
         INT deltaWidth = pictureWidth - clientRect.right;
         INT deltaHeight = (pictureHeight + (g_PresentDdraw.StatusHeight ? g_PresentDdraw.StatusHeight : PRESENT_STATUS_HEIGHT)) - clientRect.bottom;
+
         if (!deltaWidth && !deltaHeight)
             break;
+
         windowWidth += deltaWidth;
         windowHeight += deltaHeight;
         SetWindowPos(window, NULL, 0, 0, windowWidth, windowHeight, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
+
     HostFrameSize(&g_WindowFrameWidth, &g_WindowFrameHeight);
 }
 
@@ -2816,12 +3104,15 @@ static VOID HostFollowFrame(HWND window)
 
     if (!window || g_PresentDdraw.IsFullscreen || IsZoomed(window) || IsIconic(window) || !g_PresentDdraw.IsSnapshotValid)
         return;
+
     HostFrameSize(&frameWidth, &frameHeight);
+
     if (frameWidth == g_WindowFrameWidth && frameHeight == g_WindowFrameHeight)
     {
         pendW = pendH = 0;
         return;
     }
+
     if (frameWidth != pendW || frameHeight != pendH)
     {
         pendW = frameWidth;
@@ -2829,8 +3120,10 @@ static VOID HostFollowFrame(HWND window)
         pendT = GetTickCount();
         return;
     }
+
     if (GetTickCount() - pendT < WINDOW_RESIZE_SETTLE_MS)
         return;
+
     HostApplyScale(window, g_ScaleWant ? g_ScaleWant : (INT)g_Settings.Values[SET_WINSIZE] + 1);
 }
 
@@ -2861,37 +3154,47 @@ static VOID HostPauseSet(INT isOn)
     if (isOn)
     {
         DWORD index;
+
         if (g_PauseWant || g_Headless || g_WowLaunch || !g_HostCpu)
             return;
+
         InterlockedExchange(&g_PauseWant, 1);
         g_PauseMs = GetTickCount();
         ++g_PauseCount;
         AudioWaveMidiSilence(&g_Wave);
+
         if (g_SpeakerReal)
             PcSpeakerSet(&g_PcSpeaker, 0);
+
         for (index = 0; index < PAUSE_SUSPEND_TRIES && g_PauseWant; ++index)
         {
             CONTEXT context;
+
             if (InterlockedCompareExchange(&g_AsyncContextWrite, 1, 0) != 0)
             {
                 Sleep(1);
                 continue;
             }
+
             if (SuspendThread(g_HostCpu) == (DWORD)-1)
             {
                 ASYNC_CTX_RELEASE();
                 break;
             }
+
             context.ContextFlags = CONTEXT_CONTROL;
+
             if (GetThreadContext(g_HostCpu, &context) && g_InExec == 1)
             {
                 g_PauseSuspended = 1;
                 break;
             }
+
             ResumeThread(g_HostCpu);
             ASYNC_CTX_RELEASE();
             Sleep(1);
         }
+
         if (g_Window)
             InvalidateRect(g_Window, NULL, FALSE);
     }
@@ -2899,12 +3202,14 @@ static VOID HostPauseSet(INT isOn)
     {
         if (!g_PauseWant)
             return;
+
         if (g_PauseSuspended)
         {
             g_PauseSuspended = 0;
             ResumeThread(g_HostCpu);
             ASYNC_CTX_RELEASE();
         }
+
         InterlockedExchange(&g_PauseWant, 0);
         {   CHAR buffer[160], *cursor = buffer;
             cursor = LogPut(cursor, "PAUSE: resumed after "); cursor = LogDecimal(cursor, GetTickCount() - g_PauseMs);
@@ -2928,7 +3233,9 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         case MGR_COMMAND_SHOW:
             if (!g_WowLaunch) { if (IsIconic(window))
                 ShowWindow(window, SW_RESTORE);
+
                                  SetForegroundWindow(window); }
+
             return 0;
 
         case MGR_COMMAND_SETTINGS:
@@ -2943,8 +3250,10 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             PostMessageA(window, WM_COMMAND, IDM_FILE_EXIT, 0);
         return 0;
         }
+
         return 0;
     }
+
     switch (message)
     {
     case WM_APP_PRESENT:
@@ -2991,12 +3300,14 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                                 ? (UINT32)g_UiTickMinimumMs * MICROSECONDS_PER_MILLISECOND_U
                                 : VddVideoFrameUs(&g_Video) * UI_TICK_FRAME_NUMERATOR / UI_TICK_FRAME_DENOMINATOR;
             QueryPerformanceCounter(&bodyNow);
+
             if (!g_UiForced && body.QuadPart &&
                 QpcMicroseconds(bodyNow.QuadPart - body.QuadPart) < floorMicroseconds)
             {
                 ++g_UiTickSkips;
                 return 0;
             }
+
             body = bodyNow;
         }
         /* DO NOT MAKE THE MEASUREMENT DEPEND ON A CLEAN EXIT:
@@ -3028,19 +3339,23 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 UINT index;
                 lastKeyDump = nowTicks;
                 keyCursor = LogPut(keyCursor, "KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
+
                 for (index = 0; index < ARRAYSIZE(g_KeyMessageHistogram); ++index)
                 {
                     keyCursor = LogPut(keyCursor, index ? "," : "");
                     keyCursor = LogHex(keyCursor, g_KeyMessageHistogram[index]);
                 }
+
                 keyCursor = LogPut(keyCursor, " n=");      keyCursor = LogHex(keyCursor, g_KeyMessageCount);
                 keyCursor = LogPut(keyCursor, " max_ms="); keyCursor = LogHex(keyCursor, g_KeyMessageMaximumMs);
                 keyCursor = LogPut(keyCursor, " || deliver_ms=");
+
                 for (index = 0; index < ARRAYSIZE(g_KeyDeliveryHistogram); ++index)
                 {
                     keyCursor = LogPut(keyCursor, index ? "," : "");
                     keyCursor = LogHex(keyCursor, g_KeyDeliveryHistogram[index]);
                 }
+
                 keyCursor = LogPut(keyCursor, " n=");      keyCursor = LogHex(keyCursor, g_KeyDeliveryCount);
                 keyCursor = LogPut(keyCursor, " max_ms="); keyCursor = LogHex(keyCursor, g_KeyDeliveryMaximumMs);
                 keyCursor = LogPut(keyCursor, " || MOUSE raw_ok="); keyCursor = LogHex(keyCursor, (DWORD)g_MouseRawOk);
@@ -3056,11 +3371,13 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 keyCursor = LogPut(keyCursor, " captured=");  keyCursor = LogHex(keyCursor, (DWORD)g_Captured);
                 keyCursor = LogPut(keyCursor, " simint_unh="); keyCursor = LogHex(keyCursor, g_SimIntUnhandled);
                 { UINT vector;
+
                 for (vector = 0; vector < ARRAYSIZE(g_SimIntVector); ++vector) if (g_SimIntVector[vector])
                 {
                       keyCursor = LogPut(keyCursor, " v"); keyCursor = LogHexByte(keyCursor, (BYTE)vector);
                       keyCursor = LogPut(keyCursor, "x");
                       keyCursor = LogHex(keyCursor, g_SimIntVector[vector]); } }
+
                 keyCursor = LogPut(keyCursor, " || ui_gap_us="); keyCursor = LogHex(keyCursor, g_UiGapMicroseconds);
                 keyCursor = LogPut(keyCursor, " lk_wait_us="); keyCursor = LogHex(keyCursor, g_LockWaitMicroseconds);
                 keyCursor = LogPut(keyCursor, " in_first="); keyCursor = LogHex(keyCursor, g_UiInputFirst);
@@ -3074,6 +3391,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 keyCursor = LogPut(keyCursor, "\r\n");
                 LogAppend(LOG_PATH, keyLine, keyCursor);
             } }
+
         /* THE INT 33h DETAIL, ON ITS OWN GATE AND ITS OWN LINES:
          * Two rules learned the hard way, both of them here on purpose:
          * 1. GATE IT ON WHAT IT MEASURES. The block above only runs once a KEY has
@@ -3087,6 +3405,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
          */
         {   static DWORD lastMouseDump;
             DWORD nowTicks = GetTickCount();
+
             if (g_MouseI33SiteCount && (DWORD)(nowTicks - lastMouseDump) >= HOST_DUMP_INTERVAL_MS)
             {
                 CHAR mouseLine[768];
@@ -3094,12 +3413,14 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 UINT index;
                 lastMouseDump = nowTicks;
                 mouseCursor = LogPut(mouseCursor, "MOUSEI33 ax:");
+
                 for (index = 0; index < I33_AXN && g_MouseI33Ax[index].Count; ++index)
                 {
                     mouseCursor = LogPut(mouseCursor, " "); mouseCursor = LogHexByte(mouseCursor, (g_MouseI33Ax[index].Ax >> BYTE_SHIFT) & BYTE_MASK);
                     mouseCursor = LogHexByte(mouseCursor, g_MouseI33Ax[index].Ax & BYTE_MASK);
                     mouseCursor = LogPut(mouseCursor, "x"); mouseCursor = LogHex(mouseCursor, g_MouseI33Ax[index].Count);
                 }
+
                 mouseCursor = LogPut(mouseCursor, " ax_ovf="); mouseCursor = LogHex(mouseCursor, g_MouseI33AxOverflow);
                 mouseCursor = LogPut(mouseCursor, " sites="); mouseCursor = LogHex(mouseCursor, g_MouseI33SiteCount);
                 mouseCursor = LogPut(mouseCursor, " site_ovf="); mouseCursor = LogHex(mouseCursor, g_MouseI33SiteOverflow);
@@ -3139,6 +3460,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 mouseCursor = LogPut(mouseCursor, " cb_why[fly,none,nohdl,stub,if,clob]=");
                 {
                     INT reason;
+
                     for (reason = 0; reason < ARRAYSIZE(g_MouseCallbackWhy); ++reason)
                     {
                         mouseCursor = LogHex(mouseCursor, g_MouseCallbackWhy[reason]);
@@ -3174,6 +3496,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 mouseCursor = LogPut(mouseCursor, " msy=");   mouseCursor = LogHex(mouseCursor, (DWORD)g_MouseY);
                 mouseCursor = LogPut(mouseCursor, "\r\n");
                 LogAppend(LOG_PATH, mouseLine, mouseCursor);
+
                 for (index = 0; index < g_MouseI33SiteCount && index < I33_SITEN; ++index)
                 {
                     CHAR siteLine[256];
@@ -3189,6 +3512,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                     LogAppend(LOG_PATH, siteLine, siteCursor);
                 }
             } }
+
         /* THE GUEST ASKED FOR THE MOUSE: TAKE IT (Importance = 1):
          * Raised on the exec thread by MouseInt33 and performed here, because
          * ClipCursor / SetWindowsHookEx / SetCursor belong to the window's own
@@ -3202,6 +3526,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
          */
         if (InterlockedExchange(&g_MouseWantRelease, 0) && g_Captured)
             InputCaptureSet(window, FALSE);      /* the program that owned it has exited */
+
         if (CaptureAllowed() && !g_MouseAutoCaptureDone && !g_Captured   /* #136: not seamless */
             && GetForegroundWindow() == window)
         {
@@ -3209,6 +3534,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             ++g_MouseAutoCaptureFired;
             InputCaptureSet(window, TRUE);
         }
+
         StatusUpdate();          /* program name / width / mode / capture, on the UI thread */
         /* Drive the PIT from REAL elapsed time so the BIOS tick (0040:006C) and
          * INT 1Ah track wall-clock regardless of WM_TIMER jitter; clamp after a
@@ -3227,12 +3553,15 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         {   static LARGE_INTEGER previous;
             LARGE_INTEGER numerator;
             QueryPerformanceCounter(&numerator);
+
             if (previous.QuadPart)
             {
                 UINT32 gap = QpcMicroseconds(numerator.QuadPart - previous.QuadPart);
+
                 if (gap > g_UiGapMicroseconds)
                     g_UiGapMicroseconds = gap;
             }
+
             previous = numerator; }
         g_Pit.FrameMicroseconds = 0;
         HostPitSync();
@@ -3251,6 +3580,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
          */
         if (g_SpeakerReal)
             g_SpeakerRealHz = VddSpeakerIsActive(&g_Speaker) ? VddSpeakerHz(&g_Speaker) : 0;
+
         /* PRESENT IN PHASE WITH THE GUEST'S FRAME, not on our own timer.
          * This tick used to run at 30 Hz and snapshot whenever it happened to fire.
          * Once the guest was correctly paced to 60/70 Hz that meant sampling once
@@ -3275,13 +3605,16 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             int timerOk = g_UiTickMinimumMs == UITICK_AUTO /* stays int: INT here moves the compiled code */
                            ? ((DWORD)(nowTicks - lastPresent) >= UI_PRESENT_STALE_FRAMES * (VddVideoFrameUs(&g_Video) / MICROSECONDS_PER_MILLISECOND_U))
                            : (VddVideoIsPresentReady(&g_Video) || stale);
+
             if (g_UiForced || timerOk)
             {
                 lastPresent = nowTicks;
+
                 if (g_UiForced)
                     ++g_UiHookPresents;
                 else
                     ++g_UiTimerPresents;
+
                 /* THE DRIVER CURSOR. In a text mode it is not a sprite at all: the real
                  * driver inverts the character cell under the pointer (0Ah masks), and
                  * stamping a 16x16 arrow into a text frame is what "a graphical mouse
@@ -3289,12 +3622,14 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                  * buffer every present, so this one may be drawn into the frame.
                  */
                 INT msText = (g_Video.ModeKind == VIDEO_KIND_TEXT && !g_Video.IsVesa);
+
                 if (g_MouseHidden == 0 && msText && g_Video.Frame.BitsPerPixel == VIDEO_BPP_INDEXED && g_Video.Frame.Pixels)
                 {
                     INT clientHeight = g_Video.CellHeight ? g_Video.CellHeight : VIDEO_CELL_HEIGHT;
                     VddVideoTextCursor(&g_Video, (INT)(g_MouseX / VIDEO_CELL_WIDTH), (INT)(g_MouseY / clientHeight),
                                           (WORD)g_MouseTextCursorAnd, (WORD)g_MouseTextCursorXor);
                 }
+
                 VddVideoFrameTouch(&g_Video);               /* raster-split state + frame no. */
                 g_PresentDdraw.IsModeVesa = g_Video.IsVesa;             /* #228: Auto aspect needs it */
                 PresentDdrawSnapshot(&g_PresentDdraw, &g_Video.Frame); /* consistent copy UNDER lock */
@@ -3324,6 +3659,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                  */
                 if (g_MouseHidden == 0 && !msText && g_PresentDdraw.IsSnapshotValid && g_PresentDdraw.SnapshotBpp == VIDEO_BPP_INDEXED)
                     MouseDrawGraphicsCursor(g_PresentDdraw.Snapshot, g_PresentDdraw.SnapshotWidth, g_PresentDdraw.SnapshotHeight, g_PresentDdraw.SnapshotWidth);
+
                 HOST_UNLOCK();
                 HostFollowFrame(window);                        /* #325: the window follows the mode */
                 /* FRAME SKIP DROPS THE BLIT, NOT THE SNAPSHOT:
@@ -3334,6 +3670,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                  * blit gives back exactly what the blit costs.
                  */
                 {   static UINT frameSkipCounter;
+
                     if (g_FrameSkip <= 0 || (frameSkipCounter++ % (UINT)(g_FrameSkip + 1)) == 0)
                         PresentDdrawPresent(&g_PresentDdraw);  /* vsync'd blit OUTSIDE the lock */
                 }
@@ -3342,12 +3679,16 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             {
                 HOST_UNLOCK();  /* not our phase: keep the last frame up */
             }
+
             g_UiForced = 0;
         }
+
         if (!g_AutoFullscreenDone)                   /* "Graphics only": the first graphics mode */
             HostAutoFullscreenConsider(g_Window, g_Video.ModeKind != VIDEO_KIND_TEXT || g_Video.IsVesa);
+
         if (g_SpeakerReal && !g_PauseWant)
             PcSpeakerSet(&g_PcSpeaker, g_SpeakerRealHz);                                  /* outside the lock */
+
         /* Headless remote visual capture (session-9): the host screenshots ITSELF to
          * C:\ntvdmex\shotNN.bmp every ~2s so a graphical run (Skyroads, the PM demos)
          * is verifiable off the SMB share -- VNC capture is dead on the real box. The
@@ -3409,10 +3750,12 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                     shotName[CAPTURE_NAME_DIGITS] = name[CAPTURE_NAME_DIGITS];
                     shotName[CAPTURE_NAME_DIGITS + 1] = name[CAPTURE_NAME_DIGITS + 1];
                     textLength = VddVideoTextSnapshot(&g_Video, textSnapshot, sizeof textSnapshot);
+
                     if (textLength > 0)
                     {
                         HANDLE textFile = CreateFileA(OUT_(shotName), GENERIC_WRITE, 0, NULL,
                                                 CREATE_ALWAYS, 0, NULL);
+
                         if (textFile != INVALID_HANDLE_VALUE)
                         {
                             DWORD bytesWritten = 0;
@@ -3421,10 +3764,13 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                         }
                     }
                 }
+
                 path = OUT_(name);
+
                 if (PresentDdrawSaveBmp(&g_PresentDdraw, path) == 0)
                 {
                     ++captureSequence;
+
                     if (GetFileAttributesA(PLANEDUMP_FLAG) != INVALID_FILE_ATTRIBUTES)
                         PlanesDumpBeside(path);
                 }
@@ -3444,6 +3790,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 }
             }
         }
+
         return 0;
 
     case WM_ERASEBKGND:
@@ -3465,14 +3812,17 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             SetCursor(NULL);
             return TRUE;
         }
+
         /* #218: otherwise only the idle rule hides it, and only over the video. */
         if ((HWND)wParam == window && LOWORD(lParam) == HTCLIENT
             && (g_CursorIdle || g_HostCursorMode == HOSTCUR_NEVER))
         {
             POINT client;
+
             if (GetCursorPos(&client))
             {
                 ScreenToClient(window, &client);
+
                 if (!HostCursorVisibleAt(IsPointOverVideo(window, client.x, client.y)))
                 {
                     SetCursor(NULL);
@@ -3480,6 +3830,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 }
             }
         }
+
         /* Fullscreen has no frame, so the default would be whatever class cursor is
          * there; give it the plain arrow a usable pointer means.
          */
@@ -3488,6 +3839,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             SetCursor(LoadCursorA(NULL, IDC_ARROW));
             return TRUE;
         }
+
         break;
 
     case WM_PAINT:                       /* re-blit the last snapshot on expose/move */
@@ -3524,10 +3876,13 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             HostFrameSize(&sourceWidth, &sourceHeight);
             viewWidth = (sizingRect->right - sizingRect->left) - extraWidth;
             viewHeight = (sizingRect->bottom - sizingRect->top) - extraHeight;
+
             if (viewWidth < 1)
                 viewWidth = 1;
+
             if (viewHeight < 1)
                 viewHeight = 1;
+
             if (PresentIsNative((INT)g_Settings.Values[SET_ASPECT]))
             {
                 /* -- #325: NATIVE SNAPS TO WHOLE MULTIPLES while the frame is dragged --
@@ -3536,8 +3891,10 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                  */
                 INT scale = (wParam == WMSZ_TOP || wParam == WMSZ_BOTTOM) ? (viewHeight + sourceHeight / 2) / sourceHeight
                                                               : (viewWidth + sourceWidth / 2) / sourceWidth;
+
                 if (scale < 1)
                     scale = 1;
+
                 PresentWindowPicture((INT)g_Settings.Values[SET_ASPECT], sourceWidth, sourceHeight, scale, &viewWidth, &viewHeight);
                 g_ScaleFactor = g_ScaleWant = scale;
                 g_FitDown = 0;
@@ -3545,6 +3902,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             else
             {
                 PresentTargetRatio((INT)g_Settings.Values[SET_ASPECT], sourceWidth, sourceHeight, &numerator, &denominator);
+
                 switch (wParam)
                 {
                 case WMSZ_LEFT:
@@ -3562,16 +3920,20 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                     break;   /* a corner: width wins */
                 }
             }
+
             if (wParam == WMSZ_LEFT || wParam == WMSZ_TOPLEFT || wParam == WMSZ_BOTTOMLEFT)
                 sizingRect->left  = sizingRect->right - (viewWidth + extraWidth);
             else
                 sizingRect->right = sizingRect->left  + (viewWidth + extraWidth);
+
             if (wParam == WMSZ_TOP || wParam == WMSZ_TOPLEFT || wParam == WMSZ_TOPRIGHT)
                 sizingRect->top    = sizingRect->bottom - (viewHeight + extraHeight);
             else
                 sizingRect->bottom = sizingRect->top    + (viewHeight + extraHeight);
+
             return TRUE;
         }
+
         break;
 
     /* #325: the floor is the picture at 1x (it was 640x480 on-aspect, which made 1x of a
@@ -3590,16 +3952,19 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             INT roomHeight;
             HostPicture(1, &pictureWidth, &pictureHeight);
             HostWorkRoom(&roomWidth, &roomHeight);
+
             if (pictureWidth > roomWidth || pictureHeight > roomHeight)
             {
                 pictureWidth = HOST_MINIMUM_PICTURE_WIDTH;
                 pictureHeight = HOST_MINIMUM_PICTURE_HEIGHT;
             }
+
             HostFrameExtra(window, &extraWidth, &extraHeight);
             minMax->ptMinTrackSize.x = pictureWidth + extraWidth;
             minMax->ptMinTrackSize.y = pictureHeight + extraHeight;
             return 0;
         }
+
         break;
 
     case WM_SIZE:
@@ -3609,6 +3974,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             g_StatusLeft[0] = 0;       /* force a re-cut; the last part follows the width */
             StatusUpdate();         /* re-partitioning blanks them; fill them again */
         }
+
         return 0;
 
     /* The one moment a menu's enable state is guaranteed to be current: the guest
@@ -3618,6 +3984,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
     case WM_INITMENUPOPUP:
         if ((HMENU)wParam == g_RecentMenu)
             MenuRecentFill();
+
         MenuSyncModal(window, (HMENU)wParam);
         return 0;
 
@@ -3640,20 +4007,25 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
          */
         {   UINT commandId = (UINT)LOWORD(wParam);
             INT itemIndex;
+
             for (itemIndex = 0; itemIndex < MENU_COMBO_N; ++itemIndex)
             {
                 UINT base = g_MenuCombos[itemIndex].Base;
+
                 if (commandId >= base && commandId < base + IDM_COMBO_SPAN)
                 {
                     DWORD value = (DWORD)(commandId - base);
+
                     if (value <= g_SetDefinitions[g_MenuCombos[itemIndex].IsSet].High)
                     {
                         g_Settings.Values[g_MenuCombos[itemIndex].IsSet] = value;
                         SettingsApplyLive(window);
                     }
+
                     return 0;
                 }
             }
+
             for (itemIndex = 0; itemIndex < MENU_CHECK_N; ++itemIndex)
             {
                 if (commandId == g_MenuChecks[itemIndex].Id)
@@ -3670,10 +4042,13 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             CHAR list[MRU_MAX][MAX_PATH];
             INT numerator = MruLoad(list);
             INT itemIndex = LOWORD(wParam) - IDM_RECENT_0;
+
             if (itemIndex < numerator)
                 OpenProgram(window, list[itemIndex]);
+
             return 0;
         }
+
         switch (LOWORD(wParam))
         {
         case IDM_FILE_EXIT:
@@ -3690,6 +4065,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             {
                 if (g_Captured)
                     InputCaptureSet(window, FALSE);               /* the drag needs the pointer */
+
                 g_MarkMode = 1;
                 g_MarkDrag = 0;
                 g_SelectionOn = 0;
@@ -3697,6 +4073,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 g_PresentDdraw.HintText  = HOST_MARK_HINT_TEXT;
                 g_PresentDdraw.HintUntil = GetTickCount() + FULLSCREEN_HINT_MS;
             }
+
             return 0;
 
         case IDM_EDIT_SELECTALL:
@@ -3711,6 +4088,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 g_MarkDrag = 0;
                 SelectionPublish();
             }
+
             return 0;
 
         case IDM_EDIT_COPY:
@@ -3729,13 +4107,16 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         case IDM_FILE_CLOSEPROG:                       /* #152 -- see CloseProgramNow */
             if (!CloseProgramAvailable())
                 return 0;                               /* greyed; belt and braces */
+
             if (g_WowLaunch) /* Win16: the same as Exit */
             {
                 DestroyWindow(window);
                 return 0;
             }
+
             if (g_Captured)
                 InputCaptureSet(window, FALSE);               /* the shell does not own the mouse */
+
             InterlockedExchange(&g_CloseRequest, 1);
             return 0;
 
@@ -3761,9 +4142,11 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
 #define HOST_UNINSTALL_CONFIRM_TEXT "Remove NTVDMEX from the launch path?\n\n" \
                       "This machine will go back to using its own ntvdm.exe for " \
                       "MS-DOS and 16-bit Windows programs."
+
             if (MessageBoxA(window, want ? HOST_INSTALL_CONFIRM_TEXT : HOST_UNINSTALL_CONFIRM_TEXT,
                             HOST_PRODUCT_NAME, MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
                 return 0;
+
             message[0] = 0;
             isOk = InstallPerform(want, INSTALL_UNFORCED, message, sizeof message);
             MessageBoxA(window, message, HOST_PRODUCT_NAME,
@@ -3854,6 +4237,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             TrayMenu(window);
             return 0;
         }
+
         /* s88: double-click no longer shows the hidden Win16 machine window. */
         return 0;
 
@@ -3888,11 +4272,13 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             HostFullscreenToggle(window);
             return 0;
         }
+
         /* Alt+F4 stays Windows' while uncaptured: there must always be a way to close
          * the window that does not require knowing a chord. Captured, it is the guest's.
          */
         if (wParam == VK_F4 && !g_Captured)
             break;
+
         KeyMessageNote();
         KeyPushMake(lParam);
         return 0;                        /* never let DefWindowProc open the menu bar */
@@ -3900,6 +4286,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
     case WM_SYSKEYUP:
         if (wParam == VK_F4 && !g_Captured)
             break;
+
         KeyMessageNote();
         KeyPushBreak(lParam);
         return 0;
@@ -3937,6 +4324,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
          */
         if (LOWORD(wParam) != WA_INACTIVE)
             InputCaptureSet(window, TRUE);
+
         HostPauseSet(LOWORD(wParam) == WA_INACTIVE);   /* #219 */
         break;                           /* let DefWindowProc do the focus bookkeeping */
 
@@ -3946,6 +4334,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
          */
         if (GetMessageExtraInfo() == (LPARAM)HOST_INJECT_TAG)
             return 0;
+
         /* #154: while marking, Esc cancels and Enter copies -- the Windows console's own
          * keys -- and nothing typed reaches the guest until the mark is over.
          */
@@ -3957,10 +4346,13 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             {
                 if (g_SelectionOn)
                     TextCopy(window, TEXT_COPY_SELECTION);
+
                 SelectionClear();
             }
+
             return 0;
         }
+
         KeyMessageNote();
         /* RULE 4: THE WINDOWS KEY ALONE RELEASES THE CAPTURE (Importance = 1):
          * The lineage, because each step was a real fix: Ctrl+F10 (broken twice over
@@ -3984,6 +4376,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         {
             if (g_Captured)
                 InputCaptureSet(window, FALSE);
+
             /* SUPPRESS THE START MENU WITHOUT THE SYSTEM-WIDE HOOK. (s69, user ask) (Importance = 1):
              * The Windows equivalent of e.preventDefault() for a keystroke is a
              * WH_KEYBOARD_LL hook returning nonzero -- and we HAVE that (LowLevelKeyboardProcedure,
@@ -4010,6 +4403,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
               SendInput(ARRAYSIZE(inputs), inputs, sizeof(INPUT)); }
             return 0;
         }
+
         /* [CAUTION]: Scroll Lock was the alternative capture toggle. Retired with Win+F10 for
          * the same reason: rule 4 says the release is the Windows key, and rule 1
          * says a guest that never hooked the mouse cannot capture at all -- so a
@@ -4024,16 +4418,19 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             KeyPushMake(lParam);
             break;
         }
+
         if (wParam == VK_F11)
         {
             HostFullscreenToggle(window);
             return 0;
         }
+
         if (wParam == VK_F5 && (GetKeyState(VK_CONTROL) & HOST_KEY_DOWN_BIT))
         {
             HostScreenshot();
             return 0;
         }
+
         /* [CAUTION]: Ctrl+F8 (host cursor on/off) WAS REMOVED WITH ITS MENU ITEM. Its
          * argument was "fullscreen is when you most want it and there is no menu
          * bar to reach" -- which is true of EXCLUSIVE MODE, and that is a mode, not
@@ -4061,6 +4458,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
          */
         if (GetMessageExtraInfo() == (LPARAM)HOST_INJECT_TAG)
             return 0;
+
         /* The Windows key is the HOST's (rule 4) and its DOWN is never forwarded -- so
          * its UP must not be either. It was: the guest got a lone E0 DB break code for
          * a key that did not exist when it was written (QB's scancode tables stop at
@@ -4068,6 +4466,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
          */
         if (wParam == VK_LWIN || wParam == VK_RWIN)
             return 0;
+
         KeyMessageNote();
         KeyPushBreak(lParam);
         break;
@@ -4084,6 +4483,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
     {
         RAWINPUT rawInput;
         UINT size = sizeof rawInput;
+
         if (g_PfnGetRawInput
                 && g_PfnGetRawInput((HRAWINPUT)lParam, RID_INPUT, &rawInput, &size, sizeof(RAWINPUTHEADER))
                 != (UINT)-1
@@ -4101,16 +4501,21 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
              */
             if (!MouseGoesToGuest())
                 break;
+
             /* #136: seamless -- only while Windows' pointer is over our picture. */
             if (g_MouseSeamless && !g_Captured)
             {
                 POINT cursorPoint;
+
                 if (!GetCursorPos(&cursorPoint) || WindowFromPoint(cursorPoint) != window)
                     break;
+
                 ScreenToClient(window, &cursorPoint);
+
                 if (!IsPointOverVideo(window, cursorPoint.x, cursorPoint.y))
                     break;
             }
+
             InterlockedExchangeAdd(&g_MouseDx, (LONG)rawInput.data.mouse.lLastX);
             InterlockedExchangeAdd(&g_MouseDy, (LONG)rawInput.data.mouse.lLastY);
             /* While captured the pointer is clipped, so WM_MOUSEMOVE stops telling the
@@ -4134,22 +4539,27 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 LONG newY = g_MouseY + scaledY / PERCENT;
                 remainderX = scaledX % PERCENT;
                 remainderY = scaledY % PERCENT;
+
                 if (newX < 0)
                     newX = 0;
                 else if (newX >= (LONG)I33Width())
                     newX = (LONG)I33Width() - 1;
+
                 if (newY < 0)
                     newY = 0;
                 else if (newY >= (LONG)I33Height())
                     newY = (LONG)I33Height() - 1;
+
                 if (newX != g_MouseX || newY != g_MouseY)
                     MouseEventRaise(1);                                         /* motion event */
+
                 InterlockedExchange(&g_MouseX, newX);
                 InterlockedExchange(&g_MouseY, newY);
             }
         }
         else if (rawInput.header.dwType == RIM_TYPEMOUSE)
             ++g_MouseRawAbsolute;
+
         break; }                         /* DefWindowProc must run: WM_INPUT cleanup */
 
     case WM_MOUSEMOVE:                   /* map client -> guest pixels, + buttons */
@@ -4167,8 +4577,10 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         INT frameWidth;
         INT frameHeight;
         LONG buttons = 0;
+
         if (message == WM_MOUSEMOVE)
             CursorIdleNoteMove(window);                                   /* #218 */
+
         /* #154: Mark owns the mouse until the selection is copied or cancelled. The
          * guest sees none of it -- a drag that also clicked in the program would do two
          * things at once. A right click cancels, as in the console.
@@ -4179,11 +4591,13 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             INT cellRow;
             INT clientX = (INT16)LOWORD(lParam);
             INT clientY = (INT16)HIWORD(lParam);
+
             if (message == WM_RBUTTONDOWN)
             {
                 SelectionClear();
                 return 0;
             }
+
             if (message == WM_LBUTTONDOWN && ClientToCell(clientX, clientY, &cellColumn, &cellRow))
             {
                 SetCapture(window);
@@ -4207,8 +4621,10 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 g_MarkDrag = 0;
                 ReleaseCapture();
             }
+
             return 0;
         }
+
         /* RULE 5: A CLICK IN THE VIDEO RE-CAPTURES. ONLY THE VIDEO (Importance = 1):
          * This replaces Win+Click (s63), which was a toggle and needed a modifier
          * precisely BECAUSE it was one -- a plain click that could also release
@@ -4237,11 +4653,13 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             InputCaptureSet(window, TRUE);
             return 0;
         }
+
         /* RULE 6: a mouse-using guest that is released sees no position and no
          * buttons. Not consumed -- DefWindowProc still gets its ordinary click.
          */
         if (!MouseGoesToGuest())
             break;
+
         /* -- #325: g_MouseX/y are in the MODE's extent (gw x gh -- what the driver reports,
          * 640 wide in text whatever the cell width), mapped through the rectangle the
          * picture was actually drawn into. It used the whole client, which put the
@@ -4254,6 +4672,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         { INT originX = 0, originY = 0, frameX, frameY;
           clientWidth = clientRect.right;
           clientHeight = clientRect.bottom - (g_PresentDdraw.StatusHeight ? g_PresentDdraw.StatusHeight : PRESENT_STATUS_HEIGHT);
+
           if (g_PresentDdraw.LastDestinationWidth > 0 && g_PresentDdraw.LastDestinationHeight > 0)
           {
               originX = g_PresentDdraw.LastDestinationX;
@@ -4261,37 +4680,50 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
               clientWidth = g_PresentDdraw.LastDestinationWidth;
               clientHeight = g_PresentDdraw.LastDestinationHeight;
           }
+
           if (clientWidth < 1)
               clientWidth = 1;
+
           if (clientHeight < 1)
               clientHeight = 1;
+
           frameX = ((INT16)LOWORD(lParam) - originX) * frameWidth / clientWidth;
           frameY = ((INT16)HIWORD(lParam) - originY) * frameHeight / clientHeight;
+
           if (frameX < 0)
               frameX = 0;
           else if (frameX >= frameWidth)
               frameX = frameWidth - 1;
+
           if (frameY < 0)
               frameY = 0;
           else if (frameY >= frameHeight)
               frameY = frameHeight - 1;
+
           if (!g_Captured) { if (frameX != g_MouseX || frameY != g_MouseY)
               MouseEventRaise(1);                                                               /* motion */
+
                              InterlockedExchange(&g_MouseX, frameX);   /* captured: WM_INPUT owns it */
                              InterlockedExchange(&g_MouseY, frameY); } }
+
         if (wParam & MK_LBUTTON)
             buttons |= I33_BUTTON_LEFT_BIT;
+
         if (wParam & MK_RBUTTON)
             buttons |= I33_BUTTON_RIGHT_BIT;
+
         if (wParam & MK_MBUTTON)
             buttons |= I33_BUTTON_MIDDLE_BIT;
+
         /* THE EDGE, NOT JUST THE LEVEL -- see MouseButtonEdges. The exchange must
          * happen first: the transition is recorded against the position we have
          * just written above, which is what 05h/06h are required to report.
          */
         {   LONG prev = InterlockedExchange(&g_MouseButtons, buttons);
+
             if (prev != buttons)
                 MouseButtonEdges(prev, buttons); }
+
         return 0; }
 
     case WM_DESTROY:
@@ -4329,17 +4761,21 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             closeCursor = LogHex(closeCursor, g_Irq0AnomalyYield);
             closeCursor = LogPut(closeCursor, " gap_ms[<1,1,2,4,8,16,32,64+]=");
             { UINT bucket;
+
             for (bucket = 0; bucket < ARRAYSIZE(g_Irq0GapHistogram); ++bucket)
             {
                 closeCursor = LogPut(closeCursor, bucket ? "," : "");
                 closeCursor = LogHex(closeCursor, g_Irq0GapHistogram[bucket]); } }
+
             closeCursor = LogPut(closeCursor, " gap_max=");  closeCursor = LogHex(closeCursor, g_Irq0GapMaximumMs);
             closeCursor = LogPut(closeCursor, " keydel_ms[0,1,2,4,8,16,32,64+]=");
             { UINT histogramIndex;
+
             for (histogramIndex = 0; histogramIndex < ARRAYSIZE(g_KeyDeliveryHistogram); ++histogramIndex)
             {
                 closeCursor = LogPut(closeCursor, histogramIndex ? "," : "");
                 closeCursor = LogHex(closeCursor, g_KeyDeliveryHistogram[histogramIndex]); } }
+
             closeCursor = LogPut(closeCursor, " keydel_max="); closeCursor = LogHex(closeCursor, g_KeyDeliveryMaximumMs);
             closeCursor = LogPut(closeCursor, " cour_inj=");   closeCursor = LogHex(closeCursor, g_CourierInjected);
             closeCursor = LogPut(closeCursor, " capwd=");      closeCursor = LogHex(closeCursor, g_CaptureWatchdogReleased);
@@ -4386,18 +4822,23 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             closeCursor = LogPut(closeCursor, " p3da=");        closeCursor = LogHex(closeCursor, g_Video.Port3DaReads);
             closeCursor = LogPut(closeCursor, " clip_repairs=");closeCursor = LogHex(closeCursor, g_ClipRepairs);
             closeCursor = LogPut(closeCursor, " irq0tl=");
+
             for (second = 0; second < IRQ0TL_SECS; ++second)
                 if (g_Irq0TimeLast[second])
                     last = second;
+
             for (second = 0; second <= last && second < IRQ0TL_SECS; ++second)
             {
                 closeCursor = LogPut(closeCursor, second ? "," : "");
                 closeCursor = LogHex(closeCursor, g_Irq0TimeLast[second]);
             }
+
             closeCursor = LogPut(closeCursor, "\r\n");
             LogAppend(LOG_PATH, closeLine, closeCursor);
+
             if (g_CpuSpeedPeriods)
                 CpuSpeedTimelineDump("CLOSE2:"); }
+
         /* PANIC-STOP THE SOUND, HERE, BEFORE ANYTHING ELSE UNWINDS.
          * Closing the window used to leave notes sounding until the host was
          * restarted (user, 2026-08-21). Nothing ever called AudioWaveStop -- it
@@ -4422,11 +4863,14 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         HOST_LOCK();
         VddOplReset(&g_Opl);                    /* all voices off, registers clear */
         HOST_UNLOCK();
+
         if (g_KeyEvent)
             SetEvent(g_KeyEvent);               /* unblock the V86 thread */
+
         PostQuitMessage(0);
         return 0;
     }
+
     return DefWindowProcA(window, message, wParam, lParam);
 }
 
@@ -4449,16 +4893,20 @@ DWORD WINAPI UiThread(LPVOID argument)
     windowClass.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     windowClass.hIcon = LoadIconA(instance, MAKEINTRESOURCEA(IDI_MAINICON));    /* IDI_MAINICON: title bar + taskbar */
     windowClass.lpszClassName = HOST_WINDOW_CLASS;
+
     if (!RegisterClassA(&windowClass))
         return 1;
+
     /* The initial size. Same helper the View menu and the dialog resize through, so
      * "what 2x means" has one definition rather than one per call site.
      */
     {   INT scale = (INT)g_Settings.Values[SET_WINSIZE] + 1, pictureWidth, pictureHeight;
         g_WindowSizeLive = g_Settings.Values[SET_WINSIZE];   /* the window is now AT this size */
         g_AspectLive  = g_Settings.Values[SET_ASPECT];    /* ...and in this shape */
+
         while (scale > 1 && !WindowScaleFits(scale))
             --scale;
+
         g_ScaleFactor = scale;
         g_ScaleWant = (INT)g_Settings.Values[SET_WINSIZE] + 1;
         HostPicture(scale, &pictureWidth, &pictureHeight);           /* #325: 720x400 text until a frame */
@@ -4470,8 +4918,10 @@ DWORD WINAPI UiThread(LPVOID argument)
     g_Window = CreateWindowA(windowClass.lpszClassName, VDM_WIN_TITLE, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                            CW_USEDEFAULT, CW_USEDEFAULT, rect.right - rect.left, rect.bottom - rect.top,
                            NULL, NULL, instance, NULL);
+
     if (!g_Window)
         return 1;
+
     {   RAWINPUTDEVICE rawInputDevice;              /* generic desktop / mouse */
         rawInputDevice.usUsagePage = HID_USAGE_PAGE_GENERIC_DESKTOP;
         rawInputDevice.usUsage = HID_USAGE_GENERIC_MOUSE;
@@ -4500,14 +4950,17 @@ DWORD WINAPI UiThread(LPVOID argument)
         CHAR *createCursor = createLine;
         INT pageIndex;
         HINSTANCE moduleInstance = GetModuleHandleA(NULL);
+
         for (pageIndex = 0; pageIndex < NTVDMEX_PAGE_COUNT; ++pageIndex)
         {
             HWND page = CreateDialogParamA(moduleInstance, MAKEINTRESOURCEA(g_SettingsPages[pageIndex]),
                                          g_Window, SettingsPageProcedure, 0);
             createCursor = LogPut(createCursor, "DLGCHECK page="); createCursor = LogHex(createCursor, (DWORD)g_SettingsPages[pageIndex]);
             createCursor = LogPut(createCursor, page ? " CREATED" : " **FAILED** err=");
+
             if (!page)
                 createCursor = LogHex(createCursor, GetLastError());
+
             if (page)
             {
                 /* A control that must exist on THIS page, by id, so "the page was
@@ -4522,12 +4975,15 @@ DWORD WINAPI UiThread(LPVOID argument)
                 createCursor = LogPut(createCursor, " pitpace=");createCursor = LogHex(createCursor, GetDlgItem(page, IDC_S_PITPACE) ? 1u : 0u);
                 DestroyWindow(page);
             }
+
             createCursor = LogPut(createCursor, "\r\n");
             LogAppend(LOG_PATH, createLine, createCursor); createCursor = createLine;
         }
     }
+
     if (GetFileAttributesA(SETSHOT_PATH) != INVALID_FILE_ATTRIBUTES)   /* s84, test-only */
         PostMessageA(g_Window, WM_COMMAND, IDM_FILE_SETTINGS, 0);
+
     PresentDdrawInitialize(&g_PresentDdraw, g_Window);          /* GDI windowed; DDraw for fullscreen */
     SettingsApplyPresent(&g_PresentDdraw, &g_Settings);      /* ...which zeroes its own struct */
     g_PresentDdraw.IsFlipDriverTimed = GetFileAttributesA(DDFLIP_DRIVER_FLAG) != INVALID_FILE_ATTRIBUTES;
@@ -4566,6 +5022,7 @@ DWORD WINAPI UiThread(LPVOID argument)
         ShowWindow(g_Window, SW_SHOW);
         UpdateWindow(g_Window);
     }
+
     /* [INFO]: THE START HAS SUCCEEDED -- say so NOW, not at exit. (GH #132, 2026-09-12)
      * From here the user can close us, so the "no working VDM on the box" failure
      * the three-strikes counter defends against can no longer happen. Clearing it
@@ -4597,6 +5054,7 @@ DWORD WINAPI UiThread(LPVOID argument)
         if (message.message == WM_APP_PRESENT)
         {
             MSG pending;
+
             while (PeekMessageA(&pending, NULL, 0, 0, PM_REMOVE |
                                 (((UINT)QS_KEY | (UINT)QS_MOUSEMOVE | (UINT)QS_MOUSEBUTTON | (UINT)QS_RAWINPUT) << WORD_SHIFT)))    /* KEY MOUSEMOVE MOUSEBUTTON RAWINPUT */
             {
@@ -4605,14 +5063,17 @@ DWORD WINAPI UiThread(LPVOID argument)
                     PostQuitMessage((INT)pending.wParam);
                     break;
                 }
+
                 ++g_UiInputFirst;
                 TranslateMessage(&pending);
                 DispatchMessageA(&pending);
             }
         }
+
         TranslateMessage(&message);
         DispatchMessageA(&message);
     }
+
     TrayRemove(g_Window);            /* or the icon outlives the process */
     PresentDdrawShutdown(&g_PresentDdraw);
     /* [WARNING]: THE WINDOW CLOSING MUST KILL THE PROCESS, NOT JUST THIS THREAD. (s63) (Importance

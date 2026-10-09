@@ -40,6 +40,7 @@ void *memset(void *buffer, int fillValue, size_t byteCount)
 
     while (byteCount--)
         *destination++ = (BYTE)fillValue;
+
     return buffer;
 }
 
@@ -57,9 +58,11 @@ void *memmove(void *destinationBuffer, const void *sourceBuffer, size_t byteCoun
     {
         destination += byteCount;
         source += byteCount;
+
         while (byteCount--)
             *--destination = *--source;
     }
+
     return destinationBuffer;
 }
 

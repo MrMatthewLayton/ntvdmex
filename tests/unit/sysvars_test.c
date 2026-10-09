@@ -155,8 +155,10 @@ static const BYTE g_OracleDpb[] = {
 static VOID SysVarsTestExpect(PCSTR description, LONG actual, LONG expected)
 {
     ++g_Checks;
+
     if (actual == expected)
         return;
+
     ++g_Failures;
     printf("  FAIL %-54s got 0x%lX, want 0x%lX\n", description, (long)actual, (long)expected);
 }
@@ -205,10 +207,12 @@ INT main(VOID)
      * If DOS_SYSVARS_NUL were wrong by even a byte this reads as garbage.
      */
     ++g_Checks;
+
     if (memcmp(&SYSVARS_TEST_BYTE(DOS_SYSVARS_NUL) + DOS_DEVICE_HEADER_NAME, DOS_NUL_NAME, DOS_DEVICE_NAME_LEN) != 0)
     {
         SysVarsTestFail("+22 is the NUL header (name mismatch)");
     }
+
     SysVarsTestExpect("+22 NUL attribute = 0x8004", SysVarsTestWord(DOS_SYSVARS_NUL + DOS_DEVICE_HEADER_ATTRIBUTE), SYSVARS_TEST_NUL_ATTRIBUTE);
     SysVarsTestExpect("NUL header is 18 bytes", DOS_SYSVARS_NUL_LEN, SYSVARS_TEST_NUL_LEN);
     SysVarsTestExpect("SysVars proper is 0x34 bytes", DOS_SYSVARS_NUL_END, SYSVARS_TEST_NUL_END);
@@ -248,10 +252,12 @@ INT main(VOID)
     memset(buffer, SYSVARS_TEST_FILL, sizeof(buffer));
     DosCdsBuild(buffer, SYSVARS_TEST_DRIVE_C /* C: */, DOS_CDS_FLAG_PHYSICAL, SYSVARS_TEST_DPB_PAIR_SEGMENT, SYSVARS_TEST_DPB_PAIR_OFFSET);
     ++g_Checks;
+
     if (memcmp(buffer, "C:\\", 4) != 0)
     {
         SysVarsTestFail("built CDS path is 'C:\\'");
     }
+
     SysVarsTestExpect("built CDS flags = 0x4000 (physical)",
                       SysVarsTestWordAt(buffer + DOS_CDS_FLAGS), DOS_CDS_FLAG_PHYSICAL);
     SysVarsTestExpect("built CDS DPB segment", SysVarsTestWordAt(buffer + DOS_CDS_DPB + X86_FAR_POINTER_SEGMENT), SYSVARS_TEST_DPB_PAIR_SEGMENT);
@@ -295,12 +301,15 @@ INT main(VOID)
                 SYSVARS_TEST_IO_SEGMENT, SYSVARS_TEST_BLOCK_DRIVER, SYSVARS_TEST_DPB_SEGMENT,
                 SYSVARS_TEST_NEXT_DPB_OFFSET);
     {   INT byteIndex, badByte = SYSVARS_TEST_NO_BYTE;
+
         for (byteIndex = 0; byteIndex < DOS_DPB_LEN; ++byteIndex) if (buffer[byteIndex] != g_OracleDpb[byteIndex])
         {
             badByte = byteIndex;
             break;
         }
+
         ++g_Checks;
+
         if (badByte >= 0)
         {
             ++g_Failures;
@@ -358,11 +367,13 @@ INT main(VOID)
             UINT nextSegment = SysVarsTestWordAt(header + DOS_DEVICE_HEADER_NEXT + X86_FAR_POINTER_SEGMENT);
             UINT attribute = SysVarsTestWordAt(header + DOS_DEVICE_HEADER_ATTRIBUTE);
             ++g_Checks;
+
             if (headerCount >= DOS_DEVICE_COUNT)
             {
                 SysVarsTestFail("device chain runs past 12");
                 break;
             }
+
             if (expectedNames[headerCount])
             {
                 if (memcmp(header + DOS_DEVICE_HEADER_NAME, expectedNames[headerCount], DOS_DEVICE_NAME_LEN) != 0 || !(attribute & SYSVARS_TEST_CHARACTER_DEVICE))
@@ -375,13 +386,17 @@ INT main(VOID)
             {
                 SysVarsTestFail("block driver: attr bit 15 clear, name[0] = units");
             }
+
             SysVarsTestExpect("strategy entry = the 'unknown command' stub", SysVarsTestWordAt(header + DOS_DEVICE_HEADER_STRATEGY), DOS_DEVICE_STUB_UNKNOWN);
             SysVarsTestExpect("interrupt entry = the RETF stub", SysVarsTestWordAt(header + DOS_DEVICE_HEADER_INTERRUPT), DOS_DEVICE_STUB_RETF);
             ++headerCount;
+
             if (nextOffset == DOS_CHAIN_END)
                 break;
+
             SysVarsTestExpect("next segment is the area's own", nextSegment, segment);
             headerOffset = nextOffset;
+
             if (headerOffset + DOS_DEVICE_HEADER_LEN > DOS_DEVICE_STUB_UNKNOWN)
             {
                 ++g_Failures;
@@ -389,6 +404,7 @@ INT main(VOID)
                 break;
             }
         }
+
         SysVarsTestExpect("the walk visits exactly 12 headers, then FFFF", headerCount, DOS_DEVICE_COUNT);
         SysVarsTestExpect("CON  attr 8013h", SysVarsTestWordAt(buffer + DOS_DEVICE_OFFSET(DOS_DEVICE_CON) + DOS_DEVICE_HEADER_ATTRIBUTE), SYSVARS_TEST_ATTRIBUTE_CON);
         SysVarsTestExpect("PRN  attr A0C0h", SysVarsTestWordAt(buffer + DOS_DEVICE_OFFSET(DOS_DEVICE_PRN) + DOS_DEVICE_HEADER_ATTRIBUTE), SYSVARS_TEST_ATTRIBUTE_PRN);
@@ -397,10 +413,12 @@ INT main(VOID)
         /* the stubs: mov word [es:bx+3],8103h / retf, then retf */
         {   static const BYTE expectedStubs[] = { 0x26,0xC7,0x47,0x03,0x03,0x81,0xCB, 0xCB };
             ++g_Checks;
+
             if (memcmp(buffer + DOS_DEVICE_STUB_UNKNOWN, expectedStubs, sizeof expectedStubs) != 0)
             {
                 SysVarsTestFail("device stubs encode 8103h-and-RETF / RETF");
             }
+
             SysVarsTestExpect("RETF stub is the byte after the unknown-command stub", DOS_DEVICE_STUB_RETF, DOS_DEVICE_STUB_UNKNOWN + SYSVARS_TEST_UNKNOWN_STUB_LEN);
             SysVarsTestExpect("the area ends just past the RETF stub", DOS_DEVICE_AREA_LEN, DOS_DEVICE_STUB_RETF + 1);
             SysVarsTestExpect("headers end before the stubs", DOS_DEVICE_OFFSET(DOS_DEVICE_COUNT) <= DOS_DEVICE_STUB_UNKNOWN, TRUE);
@@ -410,10 +428,12 @@ INT main(VOID)
     memset(buffer, SYSVARS_TEST_FILL, sizeof(buffer));
     DosNulHeaderBuild(buffer, SYSVARS_TEST_DEVICE_SEGMENT, DOS_DEVICE_OFFSET(DOS_DEVICE_CON), SYSVARS_TEST_NUL_STRATEGY, SYSVARS_TEST_NUL_INTERRUPT);
     ++g_Checks;
+
     if (memcmp(buffer + DOS_DEVICE_HEADER_NAME, DOS_NUL_NAME, DOS_DEVICE_NAME_LEN) != 0)
     {
         SysVarsTestFail("built NUL header carries the name");
     }
+
     SysVarsTestExpect("built NUL attribute = 0x8004", SysVarsTestWordAt(buffer + DOS_DEVICE_HEADER_ATTRIBUTE), SYSVARS_TEST_NUL_ATTRIBUTE);
     SysVarsTestExpect("built NUL links on to CON (was FFFF:FFFF)", SysVarsTestWordAt(buffer + DOS_DEVICE_HEADER_NEXT + X86_FAR_POINTER_SEGMENT), SYSVARS_TEST_DEVICE_SEGMENT);
     SysVarsTestExpect("built NUL strategy entry", SysVarsTestWordAt(buffer + DOS_DEVICE_HEADER_STRATEGY), SYSVARS_TEST_NUL_STRATEGY);
@@ -421,10 +441,12 @@ INT main(VOID)
         static const BYTE expectedStub[] = { 0x26,0xC7,0x47,0x03,0x00,0x01,0xCB,0xCB };
         DosNulStubBuild(nulStub);
         ++g_Checks;
+
         if (memcmp(nulStub, expectedStub, sizeof expectedStub) != 0)
         {
             SysVarsTestFail("NUL stubs encode done-0100h-and-RETF / RETF");
         }
+
         SysVarsTestExpect("NUL's interrupt entry is its RETF", nulStub[DOS_NULSTUB_INTR], SYSVARS_TEST_RETF);
     }
 
@@ -489,37 +511,50 @@ INT main(VOID)
             SysVarsTestExpect("env block above the SDA", DOS_ENV_SEG * SYSVARS_TEST_PARAGRAPH >= sdaEnd, TRUE);
         }
         ++g_Checks;
+
         if (sysVarsStart < SYSVARS_TEST_KERNEL_DWORD_END && sysVarsEnd > SYSVARS_TEST_KERNEL_DWORD)
         {
             SysVarsTestFail("SysVars must not touch the kernel's [0x714]");
         }
+
         ++g_Checks;
+
         if (sysVarsEnd > DOS_CTAB_SEG * SYSVARS_TEST_PARAGRAPH)
         {
             SysVarsTestFail("SysVars must end below DOS_CTAB_SEG");
         }
+
         ++g_Checks;
+
         if (sysVarsStart < sdaEnd && sdaStart < sysVarsEnd)
         {
             SysVarsTestFail("the SDA must not land on SysVars (this WAS GH #47)");
         }
+
         ++g_Checks;
+
         if (DOS_SDA_SEG * SYSVARS_TEST_PARAGRAPH + DOS_INDOS_OFF
             == DOS_SYSVARS_SEG * SYSVARS_TEST_PARAGRAPH + DOS_SYSVARS_OFF + SYSVARS_TEST_INDOS_COLLISION)
         {
             SysVarsTestFail("InDOS is back on SysVars+0x45 (GH #47 regressed)");
         }
+
         ++g_Checks;
+
         if (sdaEnd > DOS_CTAB_SEG * SYSVARS_TEST_PARAGRAPH || sdaStart < SYSVARS_TEST_KERNEL_DWORD_END)
         {
             SysVarsTestFail("the SDA must sit in free DOS data space (s81)");
         }
+
         ++g_Checks;   /* s81: the stubs planted in DOS_HDLR_SEG sat on the old SDA */
+
         if (sdaStart < DOS_HDLR_SEG * SYSVARS_TEST_PARAGRAPH + SYSVARS_TEST_HANDLER_SLOTS && sdaEnd > DOS_HDLR_SEG * SYSVARS_TEST_PARAGRAPH)
         {
             SysVarsTestFail("the SDA must not share DOS_HDLR_SEG's stub space");
         }
+
         ++g_Checks;
+
         if (DOS_CTAB_SEG * SYSVARS_TEST_PARAGRAPH + DOS_WOW_TBL_OFF < DOS_SYSVARS_SEG * SYSVARS_TEST_PARAGRAPH)
         {
             SysVarsTestFail("krnl386's table must be reachable from SysVars' segment");

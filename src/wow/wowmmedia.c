@@ -37,6 +37,7 @@ INT WowMultimediaCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
 
     if (noteCapacity)
         note[0] = 0;
+
     switch (frame->Id)
     {
     case WOWMM_CALLPROC32:
@@ -56,12 +57,16 @@ INT WowMultimediaCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         WowNoteHex(note, noteCapacity, &noteLength, arguments[0], WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", msg=0x");
         WowNoteHex(note, noteCapacity, &noteLength, arguments[1], WOW_HEX_WORD_DIGITS);
+
         if (directoryChange)
             WowNotePut(note, noteCapacity, &noteLength, ", dirchange");
+
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!procedure) { WowNotePut(note, noteCapacity, &noteLength, " -- NULL procedure; 0");
                    Wow32SetReturn(frame, 0);
                    return 1; }
+
         result = WowGenericThunkInvoke(procedure, arguments, WOWMM_CALLPROC32_ARGUMENTS);
         WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
         WowNoteHex(note, noteCapacity, &noteLength, result, WOW_HEX_DWORD_DIGITS);
@@ -75,5 +80,6 @@ INT WowMultimediaCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         Wow32SetReturn(frame, 0);
         return 1;
     }
+
     return 0;
 }

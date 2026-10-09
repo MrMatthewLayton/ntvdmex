@@ -18,16 +18,20 @@ BOOL DosErrClassify(_In_ WORD errorCode, _Out_ PWORD classAndAction, _Out_ PBYTE
 
     *classAndAction = 0;
     *locus = 0;
+
     if (!errorCode)
         return TRUE;                            /* no error: zeroes are correct */
+
     for (rowIndex = 0; rowIndex < DOS_ERR_ROWS; ++rowIndex)
     {
         if (g_DosErrTable[rowIndex].Code != errorCode)
             continue;
+
         *classAndAction = g_DosErrTable[rowIndex].ClassAndAction;
         *locus = g_DosErrTable[rowIndex].Locus;
         return TRUE;
     }
+
     return FALSE;                               /* caller logs UNMEASURED */
 }
 

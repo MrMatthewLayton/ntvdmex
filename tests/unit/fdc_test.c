@@ -58,6 +58,7 @@ static INT g_SendFailures;
 static VOID FdcTestIrqSink(PVOID context, BYTE irq)
 {
     (VOID)context;
+
     if (irq == 6)
         g_Irq6Count++;
 }
@@ -87,6 +88,7 @@ static INT FdcTestDriverSend(PVDD_BUS bus, BYTE byte)
             FdcTestWrite(bus, FDC_FIFO, byte);
             return 1;
         }
+
     g_SendFailures++;
     return 0;
 }
@@ -103,11 +105,14 @@ static INT FdcTestDriverDrain(PVDD_BUS bus, PBYTE output, INT maximum)
     for (spin = 0; spin < 10000 && count < maximum; ++spin)
     {
         BYTE status = FdcTestRead(bus, FDC_MSR);
+
         if (!(status & FDC_MSR_CB))
             break;
+
         if ((status & 0xC0) == 0xC0)
             output[count++] = FdcTestRead(bus, FDC_FIFO);
     }
+
     return count;
 }
 
@@ -254,13 +259,16 @@ INT main(VOID)
     {
         INT index;
         INT isOk = 1;
+
         for (index = 0; index < 4; ++index)
         {
             FdcTestDriverSend(&bus, 0x08);
             count = FdcTestDriverDrain(&bus, result, 16);
+
             if (count != 2 || result[0] != (BYTE)(0xC0 | index))
                 isOk = 0;
         }
+
         CHECK(isOk, "reset: four sense-interrupts, C0h|drive, one per drive");
         FdcTestDriverSend(&bus, 0x08);
         count = FdcTestDriverDrain(&bus, result, 16);

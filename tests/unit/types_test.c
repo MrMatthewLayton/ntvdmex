@@ -25,6 +25,7 @@ static INT g_Failures = 0;
 static VOID TypesTestCheck(BOOL condition, PCSTR description)
 {
     g_Total++;
+
     if (condition)
     {
         printf("  PASS  %s\n", description);

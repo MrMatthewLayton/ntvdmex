@@ -111,8 +111,10 @@ static UINT32 NeTestLibraryString(UINT32 offset, PCSTR text, WORD ordinal)
     UINT32 index;
 
     g_LibraryImage[offset] = (BYTE)length;
+
     for (index = 0; index < length; ++index)
         g_LibraryImage[offset+1+index] = (BYTE)text[index];
+
     NeTestLibraryWrite16(offset + 1 + length, ordinal);
     return offset + 1 + length + 2;
 }
@@ -277,6 +279,7 @@ static VOID NeTestBuild(INT imports)
 
     if (!imports)
         return;
+
     /* (e) IMPORTORDINAL: TESTLIB ordinal 1 -> site 0x34 (0x30 is (c)'s sentinel) */
     g_Image[relocations+34+0] = NE_ADDR_FARADDR;
     g_Image[relocations+34+1] = NE_REL_IMPORTORD;
@@ -556,21 +559,25 @@ INT main(VOID)
             PBYTE buffer;
             long size;
             CHAR name[NE_MAX_NAME];
+
             if (!file)
             {
                 CHAR alternatePath[256];
                 snprintf(alternatePath, sizeof alternatePath, "../../%s", realModules[moduleIndex].Path);
                 file = fopen(alternatePath, "rb");
             }
+
             if (!file)
             {
                 NeTestSkip(realModules[moduleIndex].OwnName);
                 continue;
             }
+
             fseek(file, 0, SEEK_END);
             size = ftell(file);
             fseek(file, 0, SEEK_SET);
             buffer = malloc((size_t)size);
+
             if (!buffer || fread(buffer, 1, (size_t)size, file) != (size_t)size)
             {
                 fclose(file);
@@ -578,6 +585,7 @@ INT main(VOID)
                 NeTestSkip(realModules[moduleIndex].OwnName);
                 continue;
             }
+
             fclose(file);
             printf("  -- %s\n", realModules[moduleIndex].Path);
             NeTestCheck(NeParse(&modules[moduleIndex], buffer, (UINT32)size) == 0, "  parses");
@@ -601,13 +609,16 @@ INT main(VOID)
                 PNE_SEGMENT segment = &modules[moduleIndex].Segments[index];
                 UINT32 needed = NeSegmentAllocSize(segment);
                 segment->Memory = (PBYTE)calloc(1, needed);
+
                 if (segment->Sector)
                     memcpy(segment->Memory, buffer + segment->FileOffset, segment->Length);
+
                 /* step 2: a selector, distinct per module and segment. Real values
                  * come from the LDT on the host; only their distinctness matters.
                  */
                 segment->Selector = (WORD)(((moduleIndex + 1) << 8) | ((index + 1) << 3) | 7);
             }
+
             NeTestCheck(NeRegistryAdd(&registry, &modules[moduleIndex]) == 0, "  registers under its own name");
             present[moduleIndex] = 1;
         }
@@ -646,11 +657,15 @@ INT main(VOID)
         {
             CHAR description[128];
             INT status = 0;
+
             if (!present[moduleIndex])
                 continue;
+
             modules[moduleIndex].Sites = 0;
+
             for (index = 0; index < (INT)modules[moduleIndex].SegmentCount && status == 0; ++index)
                 status = NeApplyRelocations(&modules[moduleIndex], index, NeRegistryResolve, &registry);
+
             if (realModules[moduleIndex].MissingModule)
             {
                 snprintf(description, sizeof description, "%s: relocation stops at %s, the module we "
@@ -666,9 +681,11 @@ INT main(VOID)
                  * to expect rather than assuming every module has fixups.
                  */
                 INT hasRelocations = 0;
+
                 for (index = 0; index < (INT)modules[moduleIndex].SegmentCount; ++index)
                     if ((modules[moduleIndex].Segments[index].Flags & NE_SEG_RELOCS) && modules[moduleIndex].Segments[index].Sector)
                         hasRelocations = 1;
+
                 snprintf(description, sizeof description,
                          "%s: EVERY relocation resolved (%u sites)", realModules[moduleIndex].OwnName, modules[moduleIndex].Sites);
                 NeTestCheck(status == 0, description);

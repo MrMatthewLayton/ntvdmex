@@ -289,9 +289,11 @@ static inline BYTE DosCritInt24Ah(_In_ BYTE function)
     if (function == DOS_CRIT_FUNCTION_READ)
         return DOS_CRIT_ALLOW_FAIL | DOS_CRIT_ALLOW_RETRY | DOS_CRIT_ALLOW_IGNORE
                | (DOS_CRIT_AREA_DATA << DOS_CRIT_AREA_SHIFT);                       /* 3Eh */
+
     if (function == DOS_CRIT_FUNCTION_WRITE)
         return DOS_CRIT_ALLOW_FAIL | DOS_CRIT_ALLOW_RETRY | DOS_CRIT_ALLOW_IGNORE
                | (DOS_CRIT_AREA_DATA << DOS_CRIT_AREA_SHIFT) | DOS_CRIT_WRITE;      /* 3Fh */
+
     return DOS_CRIT_AH_PATH_CALL;                /* p_crit crit.*.int24 BX=1A00 */
 }
 
@@ -310,8 +312,10 @@ static inline BYTE DosCritInt24Ah(_In_ BYTE function)
 static inline WORD DosCritFailAx(_In_ BYTE function, _In_ BYTE errorCode)
 {
     (VOID)errorCode;
+
     if (function == DOS_CRIT_FUNCTION_READ || function == DOS_CRIT_FUNCTION_WRITE)
         return DOS_ERR_ACCESS_DENIED;
+
     return DOS_ERR_PATH_NOT_FOUND;
 }
 
@@ -336,6 +340,7 @@ static inline WORD DosCritIgnoreCount(
         DWORD bytesLeft = (fileSize > filePosition) ? fileSize - filePosition : 0;
         return (WORD)(bytesLeft < requestedCount ? bytesLeft : requestedCount);
     }
+
     return requestedCount;
 }
 
@@ -355,29 +360,38 @@ static inline INT DosCritDriveFromNtName(
 
     if (!ntName)
         return DOS_CRIT_NO_DRIVE;
+
     for (driveIndex = 0; driveIndex < DOS_CRIT_DRIVE_COUNT; ++driveIndex)
     {
         PCSTR devicePosition = devices[driveIndex];
         PCSTR namePosition = ntName;
+
         if (!devicePosition || !*devicePosition)
             continue;
+
         while (*devicePosition && *namePosition)
         {
             CHAR deviceChar = *devicePosition;
             CHAR nameChar = *namePosition;
+
             if (deviceChar >= 'A' && deviceChar <= 'Z')
                 deviceChar = (CHAR)(deviceChar + ASCII_CASE_BIT);
+
             if (nameChar >= 'A' && nameChar <= 'Z')
                 nameChar = (CHAR)(nameChar + ASCII_CASE_BIT);
+
             if (deviceChar != nameChar)
                 break;
+
             ++devicePosition;
             ++namePosition;
         }
+
         if (!*devicePosition
             && (*namePosition == DOS_CRIT_PATH_SEPARATOR || *namePosition == 0))
             return driveIndex;
     }
+
     return DOS_CRIT_NO_DRIVE;
 }
 

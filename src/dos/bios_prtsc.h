@@ -159,8 +159,10 @@ static inline INT BiosPrintScreenStep(
         character = readCell(context, job->Row, job->Column);
         *nextByte = character ? character : (BYTE)BIOS_PRINT_SCREEN_BLANK_CELL;
         job->ShouldTestStatus = TRUE;
+
         if (++job->Column >= job->Columns)
             job->Phase = BIOS_PRINT_SCREEN_PHASE_LF;
+
         return BIOS_PRINT_SCREEN_STEP_EMIT;
 
     case BIOS_PRINT_SCREEN_PHASE_LF:

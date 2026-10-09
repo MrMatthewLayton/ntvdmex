@@ -111,6 +111,7 @@ static UINT X86TwoByteEntry(BYTE opcode)
     default:
         if (opcode >= X86_JCC_NEAR_FIRST && opcode <= X86_JCC_NEAR_LAST)
             return XL_IZ;                                                                          /* jcc rel16/32 */
+
         return XL_MR | XL_NONE;
     }
 }
@@ -125,25 +126,31 @@ static UINT X86ModrmLength(const BYTE *bytes, UINT offset, UINT length, INT isAd
 
     if (offset >= length)
         return 0;
+
     modrm = bytes[offset];
     mode = (UINT)(modrm >> X86_MODRM_MODE_SHIFT);
     registerMemory = (UINT)(modrm & X86_MODRM_FIELD_MASK);
+
     if (mode == X86_MODE_REGISTER)
         return 1;
+
     if (isAddress32)
     {
         if (registerMemory == X86_RM_SIB)                                     /* sib */
         {
             if (offset + 1 >= length)
                 return 0;
+
             if (mode == 0 && (bytes[offset + 1] & X86_MODRM_FIELD_MASK) == X86_RM_DISP32)
                 modrmLength += X86_DISP32_SIZE;
+
             modrmLength += 1;
         }
         else if (mode == 0 && registerMemory == X86_RM_DISP32)
         {
             modrmLength += X86_DISP32_SIZE;
         }
+
         if      (mode == X86_MODE_DISP8)
             modrmLength += 1;
         else if (mode == X86_MODE_DISP_FULL)
@@ -153,11 +160,13 @@ static UINT X86ModrmLength(const BYTE *bytes, UINT offset, UINT length, INT isAd
     {
         if (mode == 0 && registerMemory == X86_RM16_DISP16)
             modrmLength += X86_DISP16_SIZE;
+
         if      (mode == X86_MODE_DISP8)
             modrmLength += 1;
         else if (mode == X86_MODE_DISP_FULL)
             modrmLength += X86_DISP16_SIZE;
     }
+
     return modrmLength;
 }
 
@@ -178,51 +187,73 @@ UINT X86InstructionLength(const BYTE *bytes, UINT offset, UINT length, INT isDef
             isOperand32 = !isDefault32;
         else if (bytes[offset] == X86_PREFIX_ADDRESS_SIZE)
             isAddress32 = !isDefault32;
+
         ++offset;
+
         if (++prefixCount > X86_MAX_PREFIXES)
             return 0;                                                          /* prefix soup: not code */
     }
+
     if (offset >= length)
         return 0;
+
     opcode = bytes[offset++];
+
     if (opcode == X86_ESCAPE)
     {
         BYTE opcode2;
+
         if (offset >= length)
             return 0;
+
         opcode2 = bytes[offset++];
+
         if (opcode2 == X86_ESCAPE_38 || opcode2 == X86_ESCAPE_3A)                    /* 3-byte escapes */
         {
             UINT modrmLength;
+
             if (offset >= length)
                 return 0;
+
             ++offset;
             modrmLength = X86ModrmLength(bytes, offset, length, isAddress32);
+
             if (!modrmLength)
                 return 0;
+
             offset += modrmLength;
+
             if (opcode2 == X86_ESCAPE_3A)
                 ++offset;
+
             return (offset <= length) ? offset - start : 0;
         }
+
         entry = X86TwoByteEntry(opcode2);
     }
     else
     {
         entry = g_X86OneByteTable[opcode];
     }
+
     if (entry & XL_MR)
     {
         UINT modrmLength;
+
         if (offset >= length)
             return 0;
+
         registerField = (INT)((bytes[offset] >> X86_MODRM_REG_SHIFT) & X86_MODRM_FIELD_MASK);
         modrmLength = X86ModrmLength(bytes, offset, length, isAddress32);
+
         if (!modrmLength)
             return 0;
+
         offset += modrmLength;
     }
+
     immediateSize = isOperand32 ? X86_IMM32_SIZE : X86_IMM16_SIZE;
+
     switch (entry & XL_KIND_MASK)
     {
     case XL_NONE:
@@ -255,16 +286,19 @@ UINT X86InstructionLength(const BYTE *bytes, UINT offset, UINT length, INT isDef
     case XL_G3B:
         if (registerField >= 0 && registerField < X86_GROUP3_IMMEDIATE_FORMS)
             offset += 1;
+
     break;
 
     case XL_G3Z:
         if (registerField >= 0 && registerField < X86_GROUP3_IMMEDIATE_FORMS)
             offset += immediateSize;
+
     break;
 
     default:
         return 0;
     }
+
     return (offset <= length) ? offset - start : 0;
 }
 
@@ -277,22 +311,29 @@ INT X86IsInstructionStart(const BYTE *bytes, UINT offset, UINT length, INT isDef
 
     if (offset >= length)
         return 0;
+
     for (streamStart = offset - span; streamStart < offset; ++streamStart)
     {
         UINT position = streamStart;
         ++tries;
+
         while (position < offset)
         {
             UINT instructionLength = X86InstructionLength(bytes, position, length, isDefault32);
+
             if (!instructionLength)
                 break;                                                 /* not a decodable stream */
+
             position += instructionLength;
         }
+
         if (position == offset)
             ++votes;
     }
+
     if (!tries)
         return 1;                                        /* at the very start: trust it */
+
     return votes * X86_VOTE_FRACTION >= tries;
 }
 
@@ -302,11 +343,14 @@ INT X86IsIntSiteReal(const BYTE *bytes, UINT offset, UINT length, INT isDefault3
 
     if (X86IsInstructionStart(bytes, offset, length, isDefault32))
         return 1;
+
     for (back = 1; back < X86_MAX_INSTRUCTION && back <= offset; ++back)
     {
         UINT instructionLength = X86InstructionLength(bytes, offset - back, length, isDefault32);
+
         if (instructionLength > back && X86IsInstructionStart(bytes, offset - back, length, isDefault32))
             return 0;               /* an instruction owns it -> it is an OPERAND */
     }
+
     return 1;                       /* nothing owns it -> keep */
 }

@@ -42,10 +42,12 @@ static HKEY WowShellRoot(VOID)
 
     if (g_WowShellRoot)
         return g_WowShellRoot;
+
     if (RegCreateKeyExA(HKEY_CURRENT_USER, WOWSHELL_REG_PATH, 0, NULL,
                         REG_OPTION_NON_VOLATILE, KEY_READ | KEY_WRITE,
                         NULL, &key, &disposition) != ERROR_SUCCESS)
         return NULL;
+
     g_WowShellRoot = key;
     return key;
 }
@@ -57,11 +59,15 @@ static HKEY WowShellKey32(DWORD key16)
 
     if (key16 == WOWSHELL_HKCR16 || key16 == WOWSHELL_HKCR32)
         return WowShellRoot();
+
     if (key16 < WOWSHELL_KEYTOK_BASE)
         return NULL;
+
     index = key16 - WOWSHELL_KEYTOK_BASE;
+
     if (index >= (DWORD)g_WowShellKeyCount)
         return NULL;
+
     return g_WowShellKeys[index];
 }
 
@@ -72,15 +78,19 @@ static DWORD WowShellKey16(HKEY key)
 
     if (!key)
         return 0;
+
     for (index = 0; index < g_WowShellKeyCount; ++index)
         if (!g_WowShellKeys[index])
             break;                                               /* reuse a closed slot */
+
     if (index == g_WowShellKeyCount)
     {
         if (g_WowShellKeyCount >= WOWSHELL_KEYTOK_MAX)
             return 0;
+
         index = g_WowShellKeyCount++;
     }
+
     g_WowShellKeys[index] = key;
     return WOWSHELL_KEYTOK_BASE + (DWORD)index;
 }
@@ -94,6 +104,7 @@ static INT WowShellPutDword(PCWOW32_FRAME frame, INT argumentOffset, DWORD value
 
     if (!bytes)
         return 0;
+
     Wow32PokeWord(bytes,     (WORD)(value & WORD_MASK));
     Wow32PokeWord(bytes + WOW_WORD_BYTES, (WORD)(value >> WORD_SHIFT));
     return 1;
@@ -119,8 +130,10 @@ static VOID WowShellNoteKey(
     WowNotePut(note, noteCapacity, noteLength, name);
     WowNotePut(note, noteCapacity, noteLength, " key=0x");
     WowNoteHex(note, noteCapacity, noteLength, key16, WOW_HEX_DWORD_DIGITS);
+
     if (key16 == WOWSHELL_HKCR16 || key16 == WOWSHELL_HKCR32)
         WowNotePut(note, noteCapacity, noteLength, "(HKEY_CLASSES_ROOT)");
+
     WowNotePut(note, noteCapacity, noteLength, " sub=");
     WowNoteQuoted(note, noteCapacity, noteLength, subkey ? subkey : "(the key itself)");
 }
@@ -133,6 +146,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 {
     if (noteCapacity)
         note[0] = 0;
+
     switch (frame->Id)
     {
 
@@ -199,6 +213,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD token;
         (VOID)instance;
         WowNotePut(note, noteCapacity, &noteLength, "ExtractIcon ");
+
         if (!Wow32ArgString(frame, WOWSHELL_EXTRACTICON_ARG_FILE, fileName, sizeof fileName) || !fileName[0])
         {
             WowNotePut(note, noteCapacity, &noteLength, "-- ★ no file name; answered 0 (no such"
@@ -206,9 +221,11 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNoteQuoted(note, noteCapacity, &noteLength, fileName);
         WowNotePut(note, noteCapacity, &noteLength, " index ");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)itemIndex, WOW_HEX_WORD_DIGITS);
+
         if (itemIndex == -1)
         {
             /* A COUNT QUERY. Win32 answers it the same way and it mints
@@ -221,7 +238,9 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, (DWORD)(count & WORD_MASK));
             return 1;
         }
+
         icon = ExtractIconA(GetModuleHandleA(NULL), fileName, (UINT)itemIndex);
+
         if ((ULONG_PTR)icon == 1)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- the file has NO icons (1), which is"
@@ -229,18 +248,22 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 1);
             return 1;
         }
+
         if (!icon)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- no such file or no such index -> 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         token = WowUserSystemResourceMintIcon(icon);
         WowNotePut(note, noteCapacity, &noteLength, " -> token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
+
         if (!token) WowNotePut(note, noteCapacity, &noteLength, " -- ★ THE TOKEN TABLE IS FULL, so"
                                              " the icon exists and the guest"
                                              " cannot be given it");
+
         Wow32SetReturn(frame, token);
         return 1;
     }
@@ -256,24 +279,29 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD token;
         HICON icon;
         WowNotePut(note, noteCapacity, &noteLength, "ExtractAssociatedIcon ");
+
         if (!Wow32ArgString(frame, WOWSHELL_EXTRACTASSOCIATEDICON_ARG_PATH, path, sizeof path) || !path[0])
         {
             WowNotePut(note, noteCapacity, &noteLength, "-- ★ no path; answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (indexPointer)
             itemIndex = (WORD)(indexPointer[0] | (indexPointer[1] << BYTE_SHIFT));
+
         WowNoteQuoted(note, noteCapacity, &noteLength, path);
         WowNotePut(note, noteCapacity, &noteLength, " index ");
         WowNoteHex(note, noteCapacity, &noteLength, itemIndex, WOW_HEX_WORD_DIGITS);
         icon = ExtractAssociatedIconA(GetModuleHandleA(NULL), path, &itemIndex);
+
         if (!icon)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- nothing associated -> 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         /* [INFO]: BOTH OUT-PARAMETERS GO BACK, because the caller reads them: the path
          * is now the file the icon came from (which may be a different file
          * entirely) and the index is where in it.
@@ -282,15 +310,19 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         {
             for (index = 0; index < MAX_PATH - 1 && path[index]; ++index)
                 pathPointer[index] = (BYTE)path[index];
+
             pathPointer[index] = 0;
+
             if (index == MAX_PATH - 1)
                 WowNotePut(note, noteCapacity, &noteLength, " [★ path TRUNCATED at MAX_PATH]");
         }
+
         if (indexPointer)
         {
             indexPointer[0] = (BYTE)(itemIndex & BYTE_MASK);
             indexPointer[1] = (BYTE)(itemIndex >> BYTE_SHIFT);
         }
+
         token = WowUserSystemResourceMintIcon(icon);
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
         WowNoteQuoted(note, noteCapacity, &noteLength, path);
@@ -338,6 +370,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         hasOperation  = Wow32ArgString(frame, WOWSHELL_SHELLEXECUTE_ARG_OP,     operation,     sizeof operation);
         hasParameters = Wow32ArgString(frame, WOWSHELL_SHELLEXECUTE_ARG_PARAMS, parameters, sizeof parameters);
         hasDirectory = Wow32ArgString(frame, WOWSHELL_SHELLEXECUTE_ARG_DIR,    directory,    sizeof directory);
+
         if (!Wow32ArgString(frame, WOWSHELL_SHELLEXECUTE_ARG_FILE, fileName, sizeof fileName) || !fileName[0])
         {
             WowNotePut(note, noteCapacity, &noteLength, "ShellExecute -- ★ no lpFile; answered "
@@ -345,14 +378,18 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWSHELL_SE_ERR_FNF);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, "ShellExecute ");
         WowNoteQuoted(note, noteCapacity, &noteLength, hasOperation && operation[0] ? operation : "(open)");
         WowNotePut(note, noteCapacity, &noteLength, " ");
         WowNoteQuoted(note, noteCapacity, &noteLength, fileName);
+
         if (hasParameters && parameters[0]) { WowNotePut(note, noteCapacity, &noteLength, " args ");
                                     WowNoteQuoted(note, noteCapacity, &noteLength, parameters); }
+
         if (hasDirectory && directory[0])    { WowNotePut(note, noteCapacity, &noteLength, " in ");
                                     WowNoteQuoted(note, noteCapacity, &noteLength, directory); }
+
         result = (DWORD)(ULONG_PTR)ShellExecuteA(window ? window->Window32 : NULL,
                                              (hasOperation && operation[0]) ? operation : NULL,
                                              fileName,
@@ -368,6 +405,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
          */
         if (result > WORD_MASK)
             result = WORD_MASK;
+
         Wow32SetReturn(frame, result);
         return 1;
     }
@@ -387,6 +425,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         DWORD result;
         output[0] = 0;
         hasDirectory = Wow32ArgString(frame, WOWSHELL_FINDEXECUTABLE_ARG_DIR, directory, sizeof directory);
+
         if (!Wow32ArgString(frame, WOWSHELL_FINDEXECUTABLE_ARG_FILE, fileName, sizeof fileName) || !fileName[0] || !resultPointer)
         {
             WowNotePut(note, noteCapacity, &noteLength, "FindExecutable -- ★ no lpFile or no "
@@ -394,15 +433,18 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWSHELL_SE_ERR_FNF);
             return 1;
         }
+
         result = (DWORD)(ULONG_PTR)FindExecutableA(fileName,
                                                (hasDirectory && directory[0]) ? directory : NULL,
                                                output);
         WowNotePut(note, noteCapacity, &noteLength, "FindExecutable ");
         WowNoteQuoted(note, noteCapacity, &noteLength, fileName);
+
         if (result > WOWSHELL_SE_ERR_LAST)
         {
             for (index = 0; index < (INT)sizeof output && output[index]; ++index)
                 resultPointer[index] = (BYTE)output[index];
+
             resultPointer[index] = 0;
             WowNotePut(note, noteCapacity, &noteLength, " -> ");
             WowNoteQuoted(note, noteCapacity, &noteLength, output);
@@ -414,8 +456,10 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WowNoteHex(note, noteCapacity, &noteLength, result, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, ")");
         }
+
         if (result > WORD_MASK)
             result = WORD_MASK;
+
         Wow32SetReturn(frame, result);
         return 1;
     }
@@ -438,26 +482,32 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT index;
         INT count;
         DWORD expandedLength;
+
         if (!string || !byteCount)
         {
             WowNotePut(note, noteCapacity, &noteLength, "DoEnvironmentSubst -- ★ no buffer");
             Wow32SetReturn(frame, (DWORD)byteCount);
             return 1;
         }
+
         count = 0;
+
         while (count < (INT)sizeof input - 1 && count < (INT)byteCount && string[count])
         {
             input[count] = (CHAR)string[count];
             ++count;
         }
+
         input[count] = 0;
         expandedLength = ExpandEnvironmentStringsA(input, output, (DWORD)sizeof output);
         WowNotePut(note, noteCapacity, &noteLength, "DoEnvironmentSubst ");
         WowNoteQuoted(note, noteCapacity, &noteLength, input);
+
         if (expandedLength && expandedLength <= (DWORD)byteCount)
         {
             for (index = 0; index < (INT)expandedLength && output[index]; ++index)
                 string[index] = (BYTE)output[index];
+
             string[index] = 0;
             WowNotePut(note, noteCapacity, &noteLength, " -> ");
             WowNoteQuoted(note, noteCapacity, &noteLength, output);
@@ -474,6 +524,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                            : " -- no substitution");
             Wow32SetReturn(frame, ((DWORD)(WORD)count << WORD_SHIFT) | (DWORD)byteCount);
         }
+
         return 1;
     }
 
@@ -502,12 +553,15 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteQuoted(note, noteCapacity, &noteLength, otherText);
         WowNotePut(note, noteCapacity, &noteLength, " owner=0x");
         WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
+
         if (!window)          WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO SUCH WINDOW; the box"
                                                     " comes up UNOWNED");
         else if (!owner) WowNotePut(note, noteCapacity, &noteLength, " -- no real window behind it;"
                                                     " the box comes up UNOWNED");
+
         WowNotePut(note, noteCapacity, &noteLength, " icon=0x");
         WowNoteHex(note, noteCapacity, &noteLength, iconToken, WOW_HEX_WORD_DIGITS);
+
         if (icon)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -> the app's own (");
@@ -518,6 +572,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- NOT RESOLVED; the system icon is used");
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -- ★ MODAL: the VDM is stopped until it is"
                                    " dismissed");
         result = ShellAboutA(owner, application, otherText, icon);
@@ -545,12 +600,14 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, isAccept ? "DragAcceptFiles ACCEPT 0x"
                                        : "DragAcceptFiles REFUSE 0x");
         WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
+
         if (!window || !window->Window32)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- no real window");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         DragAcceptFiles(window->Window32, isAccept ? TRUE : FALSE);
         WowNotePut(note, noteCapacity, &noteLength, " -> the OS's (drops arrive as WM_DROPFILES, s92)");
         Wow32SetReturn(frame, 0);
@@ -582,19 +639,24 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteHex(note, noteCapacity, &noteLength, drop16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " index 0x");
         WowNoteHex(note, noteCapacity, &noteLength, itemIndex, WOW_HEX_WORD_DIGITS);
+
         if (!dropBytes)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ the handle does not lock; 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         {   WORD offset = (WORD)(dropBytes[0] | (dropBytes[1] << BYTE_SHIFT)), count = 0;
             INT  guard = 0;
+
             while (offset < WOWSHELL_DROP_MAX_OFFSET && dropBytes[offset] && guard++ < WOWSHELL_DROP_MAX_FILES)         /* walk to entry idx */
             {
                 WORD length = 0;
+
                 while (length < MAX_PATH && dropBytes[offset + length])
                     ++length;
+
                 if (itemIndex != WOWSHELL_DRAGQUERYFILE_COUNT && count == itemIndex)
                 {
                     if (!output)
@@ -603,24 +665,31 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                     {
                         WORD copied = (WORD)(length < bufferSize ? length : bufferSize - 1);
                         WORD cursor;
+
                         for (cursor = 0; cursor < copied; ++cursor)
                             output[cursor] = dropBytes[offset + cursor];
+
                         output[copied] = 0;
                         result = copied;
                         WowNotePut(note, noteCapacity, &noteLength, " -> \"");
                         {   CHAR name[WOWSHELL_LOG_NAME_MAX];
                         WORD nameIndex;
+
                             for (nameIndex = 0; nameIndex < copied && nameIndex < WOWSHELL_LOG_NAME_MAX - 1; ++nameIndex)
                                 name[nameIndex] = (CHAR)output[nameIndex];
+
                             name[nameIndex] = 0;
                             WowNotePut(note, noteCapacity, &noteLength, name); }
                         WowNotePut(note, noteCapacity, &noteLength, "\"");
                     }
+
                     break;
                 }
+
                 ++count;
                 offset = (WORD)(offset + length + 1);
             }
+
             if (itemIndex == WOWSHELL_DRAGQUERYFILE_COUNT)
                 result = count;
         }
@@ -664,6 +733,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT   noteLength = 0;
         WowShellNoteKey(note, noteCapacity, &noteLength,
                           isCreate ? "RegCreateKey" : "RegOpenKey", key16, subkey);
+
         if (!parent)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT A KEY THIS HOST ISSUED;"
@@ -672,8 +742,10 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWSHELL_ERR_BADKEY);
             return 1;
         }
+
         result = isCreate ? RegCreateKeyA(parent, subkey, &output)
                     : RegOpenKeyA(parent, subkey, &output);
+
         if (result != ERROR_SUCCESS || !output)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- the registry refused it, rc=0x");
@@ -683,7 +755,9 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                    : WOWSHELL_ERR_CANTOPEN);
             return 1;
         }
+
         token = WowShellKey16(output);
+
         if (!token)
         {
             RegCloseKey(output);
@@ -694,10 +768,13 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWSHELL_ERR_OUTOFMEMORY);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> key token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_DWORD_DIGITS);
+
         if (!WowShellPutDword(frame, WOWSHELL_REGOPENKEY_ARG_RESULT, token))
             WowNotePut(note, noteCapacity, &noteLength, " -- ⚠ BUT phkResult WAS NOT WRITABLE");
+
         Wow32SetReturn(frame, 0);
         return 1;
     }
@@ -714,16 +791,19 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT   noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "RegCloseKey 0x");
         WowNoteHex(note, noteCapacity, &noteLength, key16, WOW_HEX_DWORD_DIGITS);
+
         if (key16 == WOWSHELL_HKCR16 || key16 == WOWSHELL_HKCR32)
         {
             WowNotePut(note, noteCapacity, &noteLength, " (HKEY_CLASSES_ROOT -- kept open)");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (key16 >= WOWSHELL_KEYTOK_BASE
             && key16 - WOWSHELL_KEYTOK_BASE < (DWORD)g_WowShellKeyCount)
         {
             DWORD index = key16 - WOWSHELL_KEYTOK_BASE;
+
             if (g_WowShellKeys[index])
             {
                 RegCloseKey(g_WowShellKeys[index]);
@@ -733,6 +813,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 return 1;
             }
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT AN OPEN KEY OF OURS; ERROR_BADKEY");
         Wow32SetReturn(frame, WOWSHELL_ERR_BADKEY);
         return 1;
@@ -755,6 +836,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         LONG  result;
         INT   noteLength = 0;
         WowShellNoteKey(note, noteCapacity, &noteLength, "RegDeleteKey", key16, subkey);
+
         if (!parent || !subkey)
         {
             WowNotePut(note, noteCapacity, &noteLength, !parent
@@ -763,7 +845,9 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWSHELL_ERR_BADKEY);
             return 1;
         }
+
         result = RegDeleteKeyA(parent, subkey);
+
         if (result != ERROR_SUCCESS)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- refused, rc=0x");
@@ -773,6 +857,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWSHELL_ERR_CANTWRITE);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> deleted");
         Wow32SetReturn(frame, 0);
         return 1;
@@ -809,6 +894,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowShellNoteKey(note, noteCapacity, &noteLength, "RegSetValue", key16, subkey);
         WowNotePut(note, noteCapacity, &noteLength, " = ");
         WowNoteQuoted(note, noteCapacity, &noteLength, dataBuffer);
+
         if (!parent)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT A KEY THIS HOST ISSUED;"
@@ -816,6 +902,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWSHELL_ERR_BADKEY);
             return 1;
         }
+
         if (type != REG_SZ)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ TYPE IS NOT REG_SZ (0x");
@@ -826,7 +913,9 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWSHELL_ERR_INVALID);
             return 1;
         }
+
         result = RegSetValueA(parent, subkey, REG_SZ, dataBuffer, 0);
+
         if (result != ERROR_SUCCESS)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- the registry refused it, rc=0x");
@@ -834,6 +923,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWSHELL_ERR_CANTWRITE);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> stored");
         Wow32SetReturn(frame, 0);
         return 1;
@@ -872,6 +962,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT index;
         INT cursor;
         WowShellNoteKey(note, noteCapacity, &noteLength, "RegQueryValue", key16, subkey);
+
         if (!parent)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT A KEY THIS HOST ISSUED;"
@@ -879,6 +970,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWSHELL_ERR_BADKEY);
             return 1;
         }
+
         if (!byteCountPointer || !destination)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NO BUFFER (lpValue or lpcbValue is"
@@ -886,8 +978,10 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWSHELL_ERR_INVALID);
             return 1;
         }
+
         capacity = (LONG)((DWORD)Wow32PeekWord(byteCountPointer) | ((DWORD)Wow32PeekWord(byteCountPointer + WOW_WORD_BYTES) << WORD_SHIFT));
         result = RegQueryValueA(parent, subkey, valueBuffer, &byteCount);
+
         if (result != ERROR_SUCCESS)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT PRESENT (rc=0x");
@@ -898,12 +992,16 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWSHELL_ERR_BADKEY);
             return 1;
         }
+
         valueBuffer[sizeof valueBuffer - 1] = 0;
+
         for (index = 0; valueBuffer[index]; ++index) /* length, no CRT here */
         {
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
         WowNoteQuoted(note, noteCapacity, &noteLength, valueBuffer);
+
         if (capacity <= index)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ BUT THE GUEST'S BUFFER IS 0x");
@@ -914,8 +1012,10 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWSHELL_ERR_CANTREAD);
             return 1;
         }
+
         for (cursor = 0; cursor <= index; ++cursor)
             destination[cursor] = (BYTE)valueBuffer[cursor];                                           /* the NUL travels too */
+
         WowShellPutDword(frame, WOWSHELL_REGQUERYVALUE_ARG_CBVALUE, (DWORD)index);
         Wow32SetReturn(frame, 0);
         return 1;
@@ -946,13 +1046,16 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteHex(note, noteCapacity, &noteLength, key16, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " index=0x");
         WowNoteHex(note, noteCapacity, &noteLength, itemIndex, WOW_HEX_WORD_DIGITS);
+
         if (!parent || !destination || !capacity)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ no key or no buffer; ERROR_BADKEY");
             Wow32SetReturn(frame, WOWSHELL_ERR_BADKEY);
             return 1;
         }
+
         result = RegEnumKeyA(parent, itemIndex, nameBuffer, (DWORD)sizeof nameBuffer);
+
         if (result != ERROR_SUCCESS)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- no such subkey (the end of the"
@@ -960,10 +1063,13 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWSHELL_ERR_BADKEY);
             return 1;
         }
+
         nameBuffer[sizeof nameBuffer - 1] = 0;
+
         for (index = 0; nameBuffer[index]; ++index)
         {
         }
+
         if ((DWORD)index + 1 > capacity)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ the name does not fit the guest's"
@@ -972,10 +1078,13 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWSHELL_ERR_CANTREAD);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
         WowNoteQuoted(note, noteCapacity, &noteLength, nameBuffer);
+
         for (cursor = 0; cursor <= index; ++cursor)
             destination[cursor] = (BYTE)nameBuffer[cursor];                                           /* the NUL travels too */
+
         Wow32SetReturn(frame, 0);
         return 1;
     }

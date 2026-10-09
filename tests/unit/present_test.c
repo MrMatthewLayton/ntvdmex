@@ -101,14 +101,18 @@ INT main(VOID)
         INT isOk = 1;
         memset(destination, 0xEE, sizeof destination);
         PresentScale2x8(flat3, 3, 3, 3, destination);
+
         for (index = 0; index < 36; ++index)
             if (destination[index] != 7)
                 isOk = 0;
+
         CHECK(isOk, "Scale2x: a flat field doubles to the same flat field");
         isOk = 1;
+
         for (index = 36; index < (INT)sizeof destination; ++index)
             if (destination[index] != 0xEE)
                 isOk = 0;
+
         CHECK(isOk, "Scale2x: writes exactly (2w x 2h) bytes and not one more");
     }
     {
@@ -160,9 +164,11 @@ INT main(VOID)
         INT index;
         INT isOk = 1;
         PresentScale2x8(padded, 3, 3, 5, destination);
+
         for (index = 0; index < 36; ++index)
             if (destination[index] != 3)
                 isOk = 0;
+
         CHECK(isOk, "Scale2x: a stride wider than the width is respected");
     }
 

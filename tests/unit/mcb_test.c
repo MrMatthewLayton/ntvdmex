@@ -101,6 +101,7 @@ static INT g_Failures = 0;
 static VOID McbTestCheck(BOOL passed, PCSTR description)
 {
     g_Total++;
+
     if (passed)
     {
         printf("  PASS  %s\n", description);
@@ -133,6 +134,7 @@ static VOID McbTestDumpChain(WORD firstMcb)
     INT walkCount = 0;
 
     printf("  chain:");
+
     for (;;)
     {
         BYTE signature = McbTestSignature(mcbSegment);
@@ -140,10 +142,13 @@ static VOID McbTestDumpChain(WORD firstMcb)
         WORD blockSize = McbTestSize(mcbSegment);
         printf(" [%04X %c o=%04X sz=%04X]", mcbSegment,
                (signature >= MCB_TEST_PRINTABLE_FIRST && signature < MCB_TEST_PRINTABLE_END) ? signature : '?', owner, blockSize);
+
         if (signature == DOS_MCB_LAST || ++walkCount > MCB_TEST_WALK_LIMIT)
             break;
+
         mcbSegment = (WORD)(mcbSegment + 1 + blockSize);
     }
+
     printf("\n");
 }
 
@@ -155,6 +160,7 @@ static INT McbTestFind(PCBYTE block, INT blockSize, PCSTR name, INT nameLength)
     for (index = 0; index < blockSize - nameLength; ++index)
         if (memcmp(block + index, name, nameLength) == 0)
             return index;
+
     return 0;
 }
 
@@ -389,9 +395,11 @@ INT main(VOID)
         DWORD blockLength = DosEnvBuild(envMemory, MCB_TEST_ENV_SEGMENT_ZERO, path);
         McbTestCheck(blockLength > 0 && envMemory[0] == 'C' && envMemory[1] == 'O' && envMemory[2] == 'M' && envMemory[3] == 'S',
                      "env: starts with COMSPEC=");
+
         for (characterIndex = 0; characterIndex < pathLength; ++characterIndex)
             if (envMemory[blockLength - 1 - pathLength + characterIndex] != (BYTE)path[characterIndex])
                 isPathIntact = FALSE;
+
         McbTestCheck(isPathIntact && envMemory[blockLength - 1] == 0, "env: program path is the final ASCIIZ string");
         McbTestCheck(envMemory[blockLength - 1 - pathLength - 2] == DOS_ENV_STRING_COUNT_LOW && envMemory[blockLength - 1 - pathLength - 1] == DOS_ENV_STRING_COUNT_HIGH,
                      "env: WORD count 0x0001 precedes the program path");
@@ -507,12 +515,14 @@ INT main(VOID)
             McbTestCheck(found > 0, "dosenv: CRLF lines are split, blank lines skipped");
             McbTestCheck(found > 0 && strcmp((PCSTR)envMemory + found + MCB_TEST_SHORT_PREFIX, "B=2") == 0,
                          "dosenv: the next variable follows immediately after the NUL");
+
             for (byteIndex = 0, found = 0; byteIndex < (INT)sizeof envMemory - 2; ++byteIndex)
                 if (envMemory[byteIndex] == '#')
                 {
                     found = 1;
                     break;
                 }
+
             McbTestCheck(!found, "dosenv: a '#' line is a comment and never reaches the guest");
 
             /* An entry that does not fit is dropped WHOLE. Half an environment

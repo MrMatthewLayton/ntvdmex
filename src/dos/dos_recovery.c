@@ -16,8 +16,10 @@ DOS_START_MODE DosRecoveryDecideStartMode(_In_ UINT failureCount)
 {
     if (failureCount >= DOS_RECOVERY_UNINSTALL_FAILURES)
         return DOS_START_UNINSTALL;
+
     if (failureCount >= DOS_RECOVERY_SAFE_MODE_FAILURES)
         return DOS_START_SAFE;
+
     return DOS_START_NORMAL;
 }
 
@@ -43,6 +45,7 @@ UINT DosRecoveryParseFailureCount(_In_reads_opt_(length) PCSTR text, _In_ UINT l
 
     if (!text)
         return 0;
+
     for (characterIndex = 0; characterIndex < length; ++characterIndex)
     {
         if (text[characterIndex] >= DOS_RECOVERY_FIRST_DIGIT
@@ -50,6 +53,7 @@ UINT DosRecoveryParseFailureCount(_In_reads_opt_(length) PCSTR text, _In_ UINT l
         {
             value = value * DOS_RECOVERY_DECIMAL_BASE
                   + (UINT)(text[characterIndex] - DOS_RECOVERY_FIRST_DIGIT);
+
             if (++digitCount > DOS_RECOVERY_MAX_DIGITS)
                 return 0;                                          /* absurd -> treat as zero */
         }
@@ -61,5 +65,6 @@ UINT DosRecoveryParseFailureCount(_In_reads_opt_(length) PCSTR text, _In_ UINT l
                  && text[characterIndex] != DOS_RECOVERY_TAB)
             return 0;                                /* leading junk -> zero */
     }
+
     return value;
 }

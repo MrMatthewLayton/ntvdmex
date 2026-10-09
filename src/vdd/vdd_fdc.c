@@ -125,11 +125,14 @@ BYTE VddFdcMainStatus(PCFDC_STATE state)
      */
     if (state->IsInReset)
         return FDC_MSR_IN_RESET;
+
     status = FDC_MSR_RQM;
+
     if (state->Phase == FDC_PHASE_RESULT)
         status |= FDC_MSR_DIO | FDC_MSR_CB;
     else if (state->CommandLength)
         status |= FDC_MSR_CB;
+
     /* Bits 3:0 are "drive n is seeking". Our seeks complete inside the OUT that
      * starts them, so no drive is ever mid-seek when software can look.
      */
@@ -147,6 +150,7 @@ static VOID FdcRaiseIrq(PFDC_STATE state)
      */
     if (!(state->Dor & FDC_DOR_DMA_GATE))
         return;
+
     if (state->Bus)
         VddRaiseIrq(state->Bus, FDC_IRQ);
 }
@@ -224,6 +228,7 @@ static VOID FdcResult(PFDC_STATE state, const BYTE *bytes, BYTE count)
 
     for (byteIndex = 0; byteIndex < count && byteIndex < sizeof(state->Result); ++byteIndex)
         state->Result[byteIndex] = bytes[byteIndex];
+
     state->ResultLength = byteIndex;
     state->ResultPosition = 0;
     /* A command with no result bytes is over the moment its last parameter
@@ -280,12 +285,14 @@ static VOID FdcSoftReset(PFDC_STATE state)
     state->CommandWanted = 0;
     state->ResultLength = 0;
     state->ResultPosition = 0;
+
     if (!state->IsLocked)
     {
         state->ConfigureByte2 = 0;
         state->ConfigurePrecompTrack = 0;
         state->Perpendicular = 0;
     }
+
     /* Drive polling: four sense-interrupts are now owed, one per drive. */
     state->PollDrive = state->IsPollDisabled ? FDC_DRIVES : 0;
     state->IsIrqPending = 0;
@@ -339,6 +346,7 @@ static VOID FdcExecute(PFDC_STATE state)
     BYTE head;
 
     state->Commands++;
+
     switch (opcode)
     {
 
@@ -394,8 +402,10 @@ static VOID FdcExecute(PFDC_STATE state)
          * writing (INT 13h writes through it).
          */
         resultByte = (BYTE)(FDC_ST3_READY_TWO_SIDE | (head << FDC_HEAD_SHIFT) | drive);
+
         if (!state->PresentCylinder[drive])
             resultByte |= FDC_ST3_TRACK_0;
+
         FdcResult(state, &resultByte, 1);
         break;
     }
@@ -508,11 +518,15 @@ static VOID FdcFifoWrite(PFDC_STATE state, BYTE value)
      */
     if (state->Phase == FDC_PHASE_RESULT)
         return;
+
     if (!state->CommandLength)
         state->CommandWanted = FdcCommandLength(value);
+
     if (state->CommandLength < sizeof(state->Command))
         state->Command[state->CommandLength] = value;
+
     state->CommandLength++;
+
     if (state->CommandLength >= state->CommandWanted)
         FdcExecute(state);
 }
@@ -527,7 +541,9 @@ static BYTE FdcFifoRead(PFDC_STATE state)
      */
     if (state->Phase != FDC_PHASE_RESULT)
         return state->ResultLength ? state->Result[state->ResultLength - 1] : FDC_ST0_INVALID_COMMAND;
+
     value = state->Result[state->ResultPosition++];
+
     if (state->ResultPosition >= state->ResultLength)
     {
         /* The last result byte has been read: CMD BSY clears and the chip is
@@ -541,6 +557,7 @@ static BYTE FdcFifoRead(PFDC_STATE state)
         state->Phase = FDC_PHASE_COMMAND;
         state->ResultPosition = 0;
     }
+
     return value;
 }
 
@@ -550,6 +567,7 @@ VOID VddFdcPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
     BYTE byteValue = (BYTE)value;
 
     (VOID)width;
+
     switch (port)
     {
     case FDC_DOR:
@@ -569,6 +587,7 @@ VOID VddFdcPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
             state->IsInReset = 0;
             FdcSoftReset(state);
         }
+
         break;
     }
 
@@ -578,6 +597,7 @@ VOID VddFdcPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 
     case FDC_MSR:                               /* the WRITE side is DSR */
         state->Dsr = byteValue;
+
         if (byteValue & FDC_DSR_SOFTWARE_RESET)                           /* bit 7: software reset */
         {
             /* Self-clearing: the datasheet's reset bit resets and releases. The
@@ -588,6 +608,7 @@ VOID VddFdcPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
             state->IsInReset = 0;
             FdcSoftReset(state);
         }
+
         break;
 
     case FDC_FIFO:
@@ -608,6 +629,7 @@ VOID VddFdcPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     PFDC_STATE state = (PFDC_STATE)context;
 
     (VOID)width;
+
     switch (port)
     {
     case FDC_DOR:
@@ -656,6 +678,7 @@ VOID VddFdcReset(PVOID context)
 
     for (byteIndex = 0; byteIndex < sizeof(*state); ++byteIndex)
         ((BYTE *)state)[byteIndex] = 0;
+
     state->Bus = bus;
     /* WHAT POST LEAVES:
      * Out of reset, DMA and interrupts gated through, drive 0 selected, motors
@@ -683,8 +706,10 @@ INT VddFdcInitialize(PVDD_BUS bus, PVOID context)
     PFDC_STATE state = (PFDC_STATE)context;
 
     state->Bus = bus;
+
     if (!state->Dor)
         VddFdcReset(state);                         /* the host builds us zeroed */
+
     state->Bus = bus;
     /* TWO CLAIMS, AND THE GAPS ARE DELIBERATE:
      * 3F0h/3F1h (SRA/SRB) are driven ONLY by a part strapped for PS/2 mode. We
@@ -702,7 +727,9 @@ INT VddFdcInitialize(PVDD_BUS bus, PVOID context)
      */
     if (VddClaimPorts(bus, FDC_DOR, FDC_FIFO, VddFdcPortIn, VddFdcPortOut, state))
         return FDC_FAILED;
+
     if (VddClaimPorts(bus, FDC_DIR, FDC_DIR,  VddFdcPortIn, VddFdcPortOut, state))
         return FDC_FAILED;
+
     return FDC_OK;
 }

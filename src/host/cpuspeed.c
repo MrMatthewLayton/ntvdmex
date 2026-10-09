@@ -51,6 +51,7 @@ INT CpuSpeedIsAvailable(UINT index, UINT hostMhz)
 {
     if (index == 0u || index >= CPUSPEED_COUNT)
         return index == 0u;
+
     return hostMhz == 0u || g_CpuSpeedMhz[index] < hostMhz;
 }
 
@@ -61,12 +62,17 @@ UINT CpuSpeedDutyBp(UINT index, UINT referenceMhz)
 
     if (index >= CPUSPEED_COUNT || referenceMhz == 0u)
         return CPUSPEED_BP_FULL_U;
+
     fps10 = g_CpuSpeedDoomFps10[index];
+
     if (fps10 == 0u)
         return CPUSPEED_BP_FULL_U;
+
     ceiling10 = (UINT64)CPUSPEED_FPS_PER_KMHZ10 * referenceMhz / (UINT64)MEGAHERTZ_PER_GIGAHERTZ_U;
+
     if (ceiling10 == 0ull || fps10 >= ceiling10)
         return CPUSPEED_BP_FULL_U;                                            /* a ceiling, never a boost */
+
     /* Round UP, and never to zero: a duty of 0 would stop the guest dead. */
     {   UINT64 dutyBp = ((UINT64)fps10 * (UINT64)CPUSPEED_BP_FULL_U + ceiling10 - 1ull) / ceiling10;
         return dutyBp ? (UINT)dutyBp : 1u; }
@@ -78,6 +84,7 @@ UINT CpuSpeedRealModeDutyBp(UINT protectedModeBp)
 
     if (protectedModeBp == 0u || protectedModeBp >= CPUSPEED_BP_FULL_U)
         return CPUSPEED_BP_FULL_U;
+
     dutyBp = (UINT64)protectedModeBp * CPUSPEED_RM_PCT / PERCENT_U;
     return dutyBp >= (UINT64)CPUSPEED_BP_FULL_U ? CPUSPEED_BP_FULL_U : (UINT)dutyBp;
 }
@@ -96,17 +103,24 @@ static UINT CpuSpeedPeriodFloorMs(UINT dutyBp, unsigned long roundTripUs)
 
     if (!dutyBp || dutyBp >= CPUSPEED_BP_FULL_U)
         return CPUSPEED_GRAN_MIN_MS;
+
     if (!roundTripUs)
         roundTripUs = CPUSPEED_DEFAULT_ROUND_TRIP_US;                                    /* unmeasured: a sane placeholder */
+
     byRun  = (roundTripUs * (unsigned long)CPUSPEED_BP_FULL_U + dutyBp - 1ul) / dutyBp / (unsigned long)MICROSECONDS_PER_MILLISECOND_U;  /* ms */
     byHold = ((unsigned long)CPUSPEED_BP_FULL_U + (CPUSPEED_BP_FULL_U - dutyBp) - 1ul) / (CPUSPEED_BP_FULL_U - dutyBp);
+
     if (byHold < 1ul)
         byHold = 1ul;
+
     { unsigned long floorMs = byRun > byHold ? byRun : byHold;
+
       if (floorMs < CPUSPEED_GRAN_MIN_MS)
           floorMs = CPUSPEED_GRAN_MIN_MS;
+
       if (floorMs > CPUSPEED_GRAN_MAX_MS)
           floorMs = CPUSPEED_GRAN_MAX_MS;
+
       return (UINT)floorMs; }
 }
 
@@ -118,6 +132,7 @@ static unsigned long CpuSpeedRunUs(UINT dutyBp, UINT periodMs)
 {
     if (!dutyBp || dutyBp >= CPUSPEED_BP_FULL_U)
         return 0ul;
+
     return ((unsigned long)periodMs * (unsigned long)MICROSECONDS_PER_MILLISECOND_U * dutyBp) / (unsigned long)CPUSPEED_BP_FULL_U;
 }
 
@@ -127,6 +142,7 @@ UINT64 CpuSpeedHoldFor(UINT64 executedUs, UINT64 wallUs, UINT dutyBp)
 
     if (dutyBp == 0u || dutyBp >= CPUSPEED_BP_FULL_U)
         return 0ull;                                                 /* unlimited: never hold */
+
     targetUs = (executedUs * (UINT64)CPUSPEED_BP_FULL_U) / (UINT64)dutyBp;
     return targetUs > wallUs ? targetUs - wallUs : 0ull;
 }
@@ -144,6 +160,7 @@ UINT CpuSpeedDeliveredBp(UINT64 executedUs, UINT64 wallUs)
 {
     if (!wallUs)
         return 0u;
+
     return (UINT)((executedUs * (UINT64)CPUSPEED_BP_FULL_U) / wallUs);
 }
 
@@ -151,6 +168,7 @@ unsigned long CpuSpeedInstructionsPerSecond(UINT index)
 {
     if (index == 0u || index >= CPUSPEED_COUNT)
         return 0ul;
+
     return (unsigned long)g_CpuSpeedMhz[index] * (unsigned long)HERTZ_PER_MEGAHERTZ_U / CPUSPEED_CPI;
 }
 
@@ -167,14 +185,19 @@ INT CpuSpeedCharge(
     {
         if (pace->OwedUs < 0)
             pace->OwedUs = 0;
+
         return 0;
     }
+
     wantedUs = ((INT64)ran * (INT64)MICROSECONDS_PER_SECOND_U) / (INT64)instructionsPerSecond;
     pace->OwedUs += wantedUs - elapsedUs;
+
     if (pace->OwedUs < 0)
         pace->OwedUs = 0;                                /* no credit for running fast */
+
     if (pace->OwedUs > CPUSPEED_MAX_DEBT_US)
         pace->OwedUs = CPUSPEED_MAX_DEBT_US;                                      /* 100 ms ceiling on one debt */
+
     milliseconds = pace->OwedUs / (INT64)MICROSECONDS_PER_MILLISECOND_U;
     pace->OwedUs -= milliseconds * (INT64)MICROSECONDS_PER_MILLISECOND_U;
     return (INT)milliseconds;

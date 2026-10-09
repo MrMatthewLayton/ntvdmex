@@ -65,7 +65,7 @@ INT NeParse(PNE_MODULE module, PCBYTE image, UINT32 length)
         module->Error = __LINE__;
         return -1;
     }
-    
+
     module->Header = header;
 
     module->EntryTable    = NeRead16(image + header + NE_HDR_ENTRY_TABLE);
@@ -93,11 +93,13 @@ INT NeParse(PNE_MODULE module, PCBYTE image, UINT32 length)
 
     if (!module->AlignShift)
         module->AlignShift = NE_DEFAULT_ALIGN_SHIFT;                               /* 0 means 512, not 1 */
+
     if (module->SegmentCount > NE_MAX_SEG)
     {
         module->Error = __LINE__;
         return -1;
     }
+
     if (!NeInBounds(module, header + module->SegmentTable, (UINT32)module->SegmentCount * NE_SEGENT_SIZE))
     {
         module->Error = __LINE__;
@@ -115,13 +117,16 @@ INT NeParse(PNE_MODULE module, PCBYTE image, UINT32 length)
         /* A zero length means 64K -- but only if the segment has file data at all. */
         if (!segment->Length && segment->Sector)
             segment->Length = NE_SEGMENT_64K;
+
         segment->FileOffset = (UINT32)segment->Sector << module->AlignShift;
+
         if (segment->Sector && !NeInBounds(module, segment->FileOffset, segment->Length))
         {
             module->Error = __LINE__;
             return -1;
         }
     }
+
     return 0;
 }
 
@@ -156,39 +161,50 @@ static INT NeEntryLookupEx(
 
     if (!ordinal || !NeInBounds(module, position, module->EntryLength))
         return -1;
+
     while (position + NE_BUNDLE_HEADER_SIZE <= end)
     {
         BYTE count = module->Image[position];
         BYTE indicator = module->Image[position + 1];
         UINT32 record = position + NE_BUNDLE_HEADER_SIZE;
         UINT32 step;
+
         if (!count)
             break;                               /* count 0 terminates */
+
         step = (indicator == NE_ENT_MOVEABLE) ? NE_ENTRY_MOVEABLE_SIZE : (indicator == 0 ? 0u : NE_ENTRY_FIXED_SIZE);
+
         if (!step) /* null bundle */
         {
             position = record;
             current = (WORD)(current + count);
             continue;
         }
+
         if (ordinal >= current && ordinal < current + count)
         {
             UINT32 entry = record + (UINT32)(ordinal - current) * step;
+
             if (!NeInBounds(module, entry, step))
                 return -1;
+
             if (entryFlags)
                 *entryFlags = module->Image[entry];
+
             if (indicator == NE_ENT_MOVEABLE)      { *segmentNumber = module->Image[entry + NE_ENTRY_MOVEABLE_SEGMENT];
                                                *offset = NeRead16(module->Image + entry + NE_ENTRY_MOVEABLE_OFFSET); }
             else if (indicator == NE_ENT_ABSOLUTE) { *segmentNumber = 0;
                                                *offset = NeRead16(module->Image + entry + 1); }
             else                             { *segmentNumber = indicator;
                                                *offset = NeRead16(module->Image + entry + 1); }
+
             return 0;
         }
+
         current = (WORD)(current + count);
         position = record + (UINT32)count * step;
     }
+
     return -1;
 }
 
@@ -222,14 +238,20 @@ static INT NeNameAt(PCNE_MODULE module, UINT32 offset, PSTR output, INT capacity
 
     if (capacity <= 0)
         return -1;
+
     output[0] = 0;
+
     if (!NeInBounds(module, offset, 1))
         return -1;
+
     length = module->Image[offset];
+
     if (!NeInBounds(module, offset + 1, length) || (INT)length >= capacity)
         return -1;
+
     for (index = 0; index < length; ++index)
         output[index] = (CHAR)module->Image[offset + 1 + index];
+
     output[length] = 0;
     return 0;
 }
@@ -245,9 +267,11 @@ static INT NeEqualIgnoreCase(PCSTR left, PCSTR right)
     {
         if (NeUpper(*left) != NeUpper(*right))
             return 0;
+
         ++left;
         ++right;
     }
+
     return *left == *right;
 }
 
@@ -262,11 +286,15 @@ INT NeRefName(PCNE_MODULE module, WORD reference, PSTR output, INT capacity)
 
     if (capacity > 0)
         output[0] = 0;
+
     if (!reference || reference > module->ModuleCount)
         return -1;
+
     entry = module->Header + module->ModuleTable + (UINT32)(reference - 1) * NE_WORD_BYTES;
+
     if (!NeInBounds(module, entry, NE_WORD_BYTES))
         return -1;
+
     return NeNameAt(module, module->Header + module->ImportTable + NeRead16(module->Image + entry), output, capacity);
 }
 
@@ -291,22 +319,28 @@ static INT NeNamesFind(
 
     if (!length || !NeInBounds(module, offset, length))
         return -1;
+
     while (position + NE_NAME_MIN_RECORD <= end)
     {
         CHAR name[NE_MAX_NAME];
         UINT32 nameLength = module->Image[position];
+
         if (!nameLength)
             break;                                               /* a zero length terminates */
+
         if (!NeInBounds(module, position + 1, nameLength + NE_ORDINAL_BYTES))
             return -1;
+
         if (NeNameAt(module, position, name, sizeof name) == 0 && !isFirst && NeEqualIgnoreCase(name, wanted))
         {
             *ordinal = NeRead16(module->Image + position + 1 + nameLength);
             return 0;
         }
+
         isFirst = 0;
         position += 1 + nameLength + NE_ORDINAL_BYTES;
     }
+
     return -1;
 }
 
@@ -319,6 +353,7 @@ INT NeExportByName(PCNE_MODULE module, PCSTR name, PWORD ordinal)
 
     if (residentTable < module->ImageLength && NeNamesFind(module, residentTable, module->ImageLength - residentTable, name, ordinal) == 0)
         return 0;
+
     return NeNamesFind(module, module->NonResidentOffset, module->NonResidentLength, name, ordinal);
 }
 
@@ -328,8 +363,10 @@ INT NeExportByOrdinal(PCNE_MODULE module, WORD ordinal, PWORD segmentNumber, PWO
 
     if (NeEntryLookupEx(module, ordinal, segmentNumber, offset, &flags) != 0)
         return -1;
+
     if (!(flags & NE_ENT_EXPORTED))
         return -1;
+
     return 0;
 }
 
@@ -342,14 +379,18 @@ INT NeApplyRelocations(PNE_MODULE module, INT index, PNE_IMPORT importer, PVOID 
 
     if (!(segment->Flags & NE_SEG_RELOCS) || !segment->Sector)
         return 0;
+
     position = segment->FileOffset + segment->Length;
+
     if (!NeInBounds(module, position, NE_WORD_BYTES))
     {
         module->Error = __LINE__;
         return -1;
     }
+
     count = NeRead16(module->Image + position);
     position += NE_WORD_BYTES;
+
     if (!NeInBounds(module, position, count * NE_RELOC_SIZE))
     {
         module->Error = __LINE__;
@@ -373,16 +414,19 @@ INT NeApplyRelocations(PNE_MODULE module, INT index, PNE_IMPORT importer, PVOID 
             if ((fieldA & BYTE_MASK) == NE_ENT_MOVEABLE)             /* target names an entry ordinal */
             {
                 WORD segmentNumber;
+
                 if (NeEntryLookup(module, fieldB, &segmentNumber, &targetOffset) != 0)
                 {
                     module->Error = __LINE__;
                     return -1;
                 }
+
                 if (!segmentNumber || segmentNumber > module->SegmentCount)
                 {
                     module->Error = __LINE__;
                     return -1;
                 }
+
                 targetSelector = module->Segments[segmentNumber - 1].Selector;
             }
             else
@@ -392,9 +436,11 @@ INT NeApplyRelocations(PNE_MODULE module, INT index, PNE_IMPORT importer, PVOID 
                     module->Error = __LINE__;
                     return -1;
                 }
+
                 targetSelector = module->Segments[fieldA - 1].Selector;
                 targetOffset = fieldB;
             }
+
             break;
 
         case NE_REL_IMPORTORD:
@@ -409,6 +455,7 @@ INT NeApplyRelocations(PNE_MODULE module, INT index, PNE_IMPORT importer, PVOID 
                 module->Error = __LINE__;
                 return -1;
             }
+
             break;
 
         default:
@@ -440,9 +487,12 @@ INT NeApplyRelocations(PNE_MODULE module, INT index, PNE_IMPORT importer, PVOID 
         {
             WORD next;
             INT isAdditive = (relocationType & NE_REL_ADDITIVE) != 0;
+
             if (site + NE_WORD_BYTES_U > segment->Length)
                 break;                                              /* a chain may run off the end */
+
             next = NeRead16(segment->Memory + site);
+
             switch (addressType)
             {
             case NE_ADDR_SEGMENT:
@@ -456,6 +506,7 @@ INT NeApplyRelocations(PNE_MODULE module, INT index, PNE_IMPORT importer, PVOID 
             case NE_ADDR_FARADDR:
                 if (site + NE_FARADDR_BYTES > segment->Length)
                     break;
+
                 NeWrite16(segment->Memory + site, (WORD)(isAdditive ? next + targetOffset : targetOffset));
                 NeWrite16(segment->Memory + site + NE_WORD_BYTES, targetSelector);
                 break;
@@ -468,14 +519,19 @@ INT NeApplyRelocations(PNE_MODULE module, INT index, PNE_IMPORT importer, PVOID 
                 module->Error = __LINE__;
             return -1;
             }
+
             ++module->Sites;
+
             if (isAdditive)
                 break;                                  /* additive records are not chained */
+
             if (next == NE_CHAIN_END)
                 break;
+
             site = next;
         }
     }
+
     return 0;
 }
 
@@ -483,8 +539,10 @@ INT NeRegistryAdd(PNE_REGISTRY registry, PNE_MODULE module)
 {
     if (registry->Count >= NE_MAX_MOD)
         return -1;
+
     if (NeOwnName(module, registry->Names[registry->Count], NE_MAX_NAME) != 0)
         return -1;
+
     registry->Modules[registry->Count] = module;
     ++registry->Count;
     return 0;
@@ -497,6 +555,7 @@ PNE_MODULE NeRegistryFind(PCNE_REGISTRY registry, PCSTR name)
     for (index = 0; index < registry->Count; ++index)
         if (NeEqualIgnoreCase(registry->Names[index], name))
             return registry->Modules[index];
+
     return 0;
 }
 
@@ -522,12 +581,15 @@ INT NeRegistryResolve(
     registry->FailedModule[0] = 0;
     registry->FailedFunction[0] = 0;
     registry->FailedOrdinal = 0;
+
     if (NeRefName(module, moduleReference, moduleName, sizeof moduleName) != 0)
         return -1;
+
     for (index = 0; index < NE_MAX_NAME; ++index)
         registry->FailedModule[index] = moduleName[index] ? moduleName[index] : 0;
 
     target = NeRegistryFind(registry, moduleName);
+
     if (!target)
         return -1;                                /* module not loaded -- fail_mod names it */
 
@@ -535,14 +597,19 @@ INT NeRegistryResolve(
     {
         if (NeImportedName(module, ordinalOrName, functionName, sizeof functionName) != 0)
             return -1;
+
         for (index = 0; index < NE_MAX_NAME; ++index)
             registry->FailedFunction[index] = functionName[index] ? functionName[index] : 0;
+
         if (NeExportByName(target, functionName, &ordinal) != 0)
             return -1;
     }
+
     registry->FailedOrdinal = ordinal;
+
     if (NeExportByOrdinal(target, ordinal, &segmentNumber, &segmentOffset) != 0)
         return -1;
+
     /* An ABSOLUTE export has no segment. Hand the constant back in BOTH halves so the
      * relocation gets it whichever field its addr_type patches: __A000H wants 0xA000
      * in the segment word, __AHINCR wants 8 in the offset word, and neither knows
@@ -554,13 +621,16 @@ INT NeRegistryResolve(
         *offset = segmentOffset;
         return 0;
     }
+
     if (segmentNumber > target->SegmentCount)
         return -1;
+
     /* A selector of 0 means step 2 above was skipped: the target module's segments
      * have no address yet, so this "resolved" import would be a call to 0000:xxxx.
      */
     if (!target->Segments[segmentNumber - 1].Selector)
         return -1;
+
     *selector = target->Segments[segmentNumber - 1].Selector;
     *offset = segmentOffset;
     return 0;
@@ -572,7 +642,9 @@ UINT32 NeSegmentAllocSize(PCNE_SEGMENT segment)
 
     if (segment->MinAlloc && segment->MinAlloc > size)
         size = segment->MinAlloc;
+
     if (!size)
         size = 1;
+
     return size;
 }

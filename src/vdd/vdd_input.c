@@ -382,6 +382,7 @@ static VOID InputKeyboardBounds(PCINPUT_STATE state, WORD *bufferStart, WORD *bu
         startPointer = BIOS_BDA_KEYBOARD_BUFFER;
         endPointer = BIOS_BDA_KEYBOARD_BUFFER_END;
     }
+
     *bufferStart = startPointer;
     *bufferEnd = endPointer;
 }
@@ -403,6 +404,7 @@ INT VddInputPush(PINPUT_STATE state, WORD key)
 
     if (!state->BiosData)
         return 0;                                 /* no guest memory yet: nowhere to put it */
+
     InputKeyboardBounds(state, &bufferStart, &bufferEnd);
     head = InputBdaReadWord(state, BIOS_BDA_KEYBOARD_HEAD);
     tail = InputBdaReadWord(state, BIOS_BDA_KEYBOARD_TAIL);
@@ -415,9 +417,12 @@ INT VddInputPush(PINPUT_STATE state, WORD key)
         head = tail = bufferStart;
         InputBdaWriteWord(state, BIOS_BDA_KEYBOARD_HEAD, head);
     }
+
     nextTail = InputBdaNext(tail, bufferStart, bufferEnd);
+
     if (nextTail == head)
         return 0;              /* full -> discard the NEW key: the real BIOS
+
                                              beeps and throws it away. Dropping the OLDEST
                                              instead would split a keystroke stream.
                                              The RESULT is the answer INT 16h AH=05h owes
@@ -437,13 +442,17 @@ INT VddInputPop(PINPUT_STATE state, WORD *key)
 
     if (!state->BiosData)
         return 0;
+
     InputKeyboardBounds(state, &bufferStart, &bufferEnd);
     head = InputBdaReadWord(state, BIOS_BDA_KEYBOARD_HEAD);
     tail = InputBdaReadWord(state, BIOS_BDA_KEYBOARD_TAIL);
+
     if (head == tail)
         return 0;
+
     if (head < bufferStart || head >= bufferEnd || ((head - bufferStart) & 1))
         return 0;
+
     *key = InputBdaReadWord(state, head);
     InputBdaWriteWord(state, BIOS_BDA_KEYBOARD_HEAD, InputBdaNext(head, bufferStart, bufferEnd));
     return 1;
@@ -458,13 +467,17 @@ INT VddInputPeek(PINPUT_STATE state, WORD *key)
 
     if (!state->BiosData)
         return 0;
+
     InputKeyboardBounds(state, &bufferStart, &bufferEnd);
     head = InputBdaReadWord(state, BIOS_BDA_KEYBOARD_HEAD);
     tail = InputBdaReadWord(state, BIOS_BDA_KEYBOARD_TAIL);
+
     if (head == tail)
         return 0;
+
     if (head < bufferStart || head >= bufferEnd || ((head - bufferStart) & 1))
         return 0;
+
     *key = InputBdaReadWord(state, head);
     return 1;
 }
@@ -485,8 +498,10 @@ static INT InputScanCodeAvailable(PCINPUT_STATE state)
 {
     if (state->ScanCodeHead == state->ScanCodeTail)
         return 0;
+
     if (state->TimeMicroseconds && state->TimeMicroseconds() < state->ScanCodeHoldUntil)
         return 0;
+
     return 1;
 }
 
@@ -500,8 +515,10 @@ static BYTE InputScanCodePop(PINPUT_STATE state)
     state->ScanCodeTail = InputNextIndex(state->ScanCodeTail);
     state->LastScanCode = scanCode;
     state->IsScanCodeIrqUp = 0;
+
     if (state->TimeMicroseconds)
         state->ScanCodeHoldUntil = state->TimeMicroseconds() + INPUT_KEYBOARD_TRANSFER_US;
+
     return scanCode;
 }
 
@@ -510,8 +527,10 @@ VOID VddInputPoll(PINPUT_STATE state)
 {
     if (state->IsScanCodeIrqUp || !InputScanCodeAvailable(state))
         return;
+
     state->IsScanCodeIrqUp = 1;
     state->BiosScanCodesOwed = 0;       /* the buffer now holds THIS byte; the old one is gone */
+
     if (state->Bus)
         VddRaiseIrq(state->Bus, 1);
 }
@@ -522,6 +541,7 @@ INT VddInputScanCodesQueued(PCINPUT_STATE state)
 
     if (depth < 0)
         depth += (INT)INPUT_SCANCODE_QUEUE_SIZE;
+
     return depth;
 }
 
@@ -531,11 +551,13 @@ VOID VddInputPushScanCode(PINPUT_STATE state, BYTE scanCode)
     INT nextHead = InputNextIndex(state->ScanCodeHead);
 
     state->ScanCodesPushed++;
+
     if (nextHead == state->ScanCodeTail) /* full -> drop oldest */
     {
         state->ScanCodesDropped++;
         state->ScanCodeTail = InputNextIndex(state->ScanCodeTail);
     }
+
     state->ScanCodeQueue[state->ScanCodeHead] = scanCode;
     state->ScanCodeHead = nextHead;
     /* HOW FULL DID IT EVER GET. sc_dropped only fires once the ring has ALREADY
@@ -549,10 +571,13 @@ VOID VddInputPushScanCode(PINPUT_STATE state, BYTE scanCode)
      *   would quietly stop being an arrow.
      */
     { INT depth = state->ScanCodeHead - state->ScanCodeTail;
+
       if (depth < 0)
           depth += (INT)INPUT_SCANCODE_QUEUE_SIZE;
+
       if ((UINT32)depth > state->ScanCodeHighWater)
           state->ScanCodeHighWater = (UINT32)depth; }
+
     /* empty -> full: announce it now if the keyboard may send yet, else the poll will
      * when the transfer delay from the last pop has passed.
      */
@@ -623,8 +648,10 @@ static WORD InputExtendedPlain(BYTE code)
 {
     if (code == INPUT_SCAN_ENTER)
         return INPUT_KEY_KEYPAD_ENTER;                                           /* keypad Enter */
+
     if (code == INPUT_SCAN_SLASH)
         return INPUT_KEY_KEYPAD_SLASH;                                           /* keypad / */
+
     return (WORD)((code << BYTE_SHIFT) | INPUT_KEY_EXTENDED_MARKER);
 }
 
@@ -635,10 +662,13 @@ static WORD InputExtendedCtrl(BYTE code)
 {
     if (code == INPUT_SCAN_ENTER)
         return INPUT_KEY_CTRL_KEYPAD_ENTER;
+
     if (code == INPUT_SCAN_SLASH)
         return INPUT_KEY_CTRL_KEYPAD_SLASH;
+
     if (code >= INPUT_SCAN_KEYPAD_FIRST && code <= INPUT_SCAN_KEYPAD_LAST && code != INPUT_SCAN_KEYPAD_MINUS && code != INPUT_SCAN_KEYPAD_5 && code != INPUT_SCAN_KEYPAD_PLUS)
         return (WORD)((g_InputScanCodeTable[code][INPUT_COLUMN_CTRL] & INPUT_HIGH_BYTE) | INPUT_KEY_EXTENDED_MARKER);
+
     return 0;
 }
 
@@ -650,8 +680,10 @@ static BYTE InputKeyboardChar(PCINPUT_STATE state, BYTE code, INT shift)
     for (; override && override->ScanCode; ++override)
         if (override->ScanCode == code)
             return shift ? override->Shifted : override->Plain;
+
     if (code > INPUT_SCANCODE_TABLE_LAST)
         return 0;
+
     return (BYTE)(g_InputScanCodeTable[code][shift ? INPUT_COLUMN_SHIFT : INPUT_COLUMN_PLAIN] & INPUT_LOW_BYTE);
 }
 
@@ -672,8 +704,10 @@ INT VddInputCharToKey(PCINPUT_STATE state, BYTE character, BYTE *scanCode, INT *
         {
             if (code == INPUT_SCAN_TAB && isShifted)
                 continue;                                               /* Shift+Tab is back-tab, not a char */
+
             if (code >= INPUT_SCAN_KEYPAD_FIRST && code <= INPUT_SCAN_KEYPAD_LAST)
                 continue;                                                                      /* the keypad: NumLock decides it */
+
             if (InputKeyboardChar(state, code, isShifted) == character)
             {
                 *scanCode = code;
@@ -681,6 +715,7 @@ INT VddInputCharToKey(PCINPUT_STATE state, BYTE character, BYTE *scanCode, INT *
                 return 1;
             }
         }
+
     return 0;
 }
 
@@ -693,6 +728,7 @@ static VOID InputSetShiftFlag(PINPUT_STATE state, BYTE bit, INT isOn)
 {
     if (!state->BiosData)
         return;
+
     if (isOn)
         state->BiosData[BIOS_BDA_SHIFT_FLAGS] = (BYTE)(state->BiosData[BIOS_BDA_SHIFT_FLAGS] | bit);
     else
@@ -708,6 +744,7 @@ static VOID InputSetBdaFlag(PINPUT_STATE state, INT offset, BYTE bit, INT isOn)
 {
     if (!state->BiosData)
         return;
+
     if (isOn)
         state->BiosData[offset] = (BYTE)(state->BiosData[offset] | bit);
     else
@@ -722,8 +759,10 @@ static VOID InputLockKey(PINPUT_STATE state, BYTE lockBit, BYTE heldBit, INT isB
         InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, heldBit, FALSE);
         return;
     }
+
     if (InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & heldBit)
         return;                                                                 /* typematic repeat */
+
     InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, heldBit, TRUE);
     InputSetShiftFlag(state, lockBit, !(InputShiftFlags(state) & lockBit));
 }
@@ -800,6 +839,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
         InputSetBdaFlag(state, BIOS_BDA_KEYBOARD_FLAGS3, INPUT_FLAGS3_E0, TRUE);
         return INPUT_ACTION_NONE;
     }
+
     if (scanCode == INPUT_SCAN_PREFIX_E1)                                    /* Pause: E1 1D 45 / E1 9D C5 */
     {
         state->IsExtendedPending = 0;
@@ -807,8 +847,10 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
         InputSetBdaFlag(state, BIOS_BDA_KEYBOARD_FLAGS3, INPUT_FLAGS3_E1, TRUE);
         return INPUT_ACTION_NONE;
     }
+
     state->IsExtendedPending = 0;
     InputSetBdaFlag(state, BIOS_BDA_KEYBOARD_FLAGS3, INPUT_FLAGS3_E0 | INPUT_FLAGS3_E1, FALSE);
+
     if (state->E1Pending)
     {
         /* -- PAUSE. The make sequence is E1 1D 45, the break E1 9D C5, and neither is
@@ -818,8 +860,10 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
          */
         if (--state->E1Pending)
             return INPUT_ACTION_NONE;                          /* the 1D / 9D */
+
         if (isBreak || (InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & INPUT_SHIFT2_PAUSE))
             return INPUT_ACTION_NONE;
+
         InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_PAUSE, TRUE);
         state->BiosActions[INPUT_ACTION_PAUSE]++;
         return INPUT_ACTION_PAUSE;
@@ -830,6 +874,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
     case INPUT_SCAN_LEFT_SHIFT:
         if (!isExtended)
             InputSetShiftFlag(state, INPUT_SHIFT_LEFT_SHIFT, !isBreak);
+
     return INPUT_ACTION_NONE;
 
                /* E0 2A is the fake shift the controller brackets some extended keys
@@ -838,6 +883,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
     case INPUT_SCAN_RIGHT_SHIFT:
         if (!isExtended)
             InputSetShiftFlag(state, INPUT_SHIFT_RIGHT_SHIFT, !isBreak);
+
     return INPUT_ACTION_NONE;
 
     case INPUT_SCAN_CTRL:
@@ -845,6 +891,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
             InputSetBdaFlag(state, BIOS_BDA_KEYBOARD_FLAGS3, INPUT_FLAGS3_RIGHT_CTRL, !isBreak);
         else
             InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_LEFT_CTRL, !isBreak);
+
         InputSetShiftFlag(state, INPUT_SHIFT_CTRL, (InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & INPUT_SHIFT2_LEFT_CTRL) || (InputBdaByte(state, BIOS_BDA_KEYBOARD_FLAGS3) & INPUT_FLAGS3_RIGHT_CTRL));
         return INPUT_ACTION_NONE;
 
@@ -853,14 +900,18 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
             InputSetBdaFlag(state, BIOS_BDA_KEYBOARD_FLAGS3, INPUT_FLAGS3_RIGHT_ALT, !isBreak);
         else
             InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_LEFT_ALT, !isBreak);
+
         InputSetShiftFlag(state, INPUT_SHIFT_ALT, (InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & INPUT_SHIFT2_LEFT_ALT) || (InputBdaByte(state, BIOS_BDA_KEYBOARD_FLAGS3) & INPUT_FLAGS3_RIGHT_ALT));
+
         if (isBreak && !(InputShiftFlags(state) & INPUT_SHIFT_ALT) && state->BiosData)     /* #274: Alt+keypad ends */
         {
             BYTE value = state->BiosData[BIOS_BDA_ALT_KEYPAD];
             state->BiosData[BIOS_BDA_ALT_KEYPAD] = 0;
+
             if (value)
                 VddInputPush(state, value);                     /* AH=00h AL=the code */
         }
+
         return INPUT_ACTION_NONE;
 
     case INPUT_SCAN_CAPS_LOCK:
@@ -876,10 +927,12 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
         {
             if (InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & INPUT_SHIFT2_PAUSE)
                 return INPUT_ACTION_NONE;
+
             InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_PAUSE, TRUE);
             state->BiosActions[INPUT_ACTION_PAUSE]++;
             return INPUT_ACTION_PAUSE;
         }
+
         InputLockKey(state, INPUT_SHIFT_NUM_LOCK, INPUT_SHIFT2_NUM_HELD, isBreak);
         return INPUT_ACTION_NONE;
 
@@ -896,12 +949,15 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
                 state->BiosData[BIOS_BDA_KEYBOARD_HEAD + 1] = state->BiosData[BIOS_BDA_KEYBOARD_TAIL + 1];
                 state->BiosData[BIOS_BDA_BREAK_FLAG] = (BYTE)(state->BiosData[BIOS_BDA_BREAK_FLAG] | INPUT_BREAK_FLAG_SET);
             }
+
             VddInputPush(state, INPUT_KEY_CTRL_BREAK);
             state->BiosActions[INPUT_ACTION_BREAK]++;
             return INPUT_ACTION_BREAK;
         }
+
         if (isExtended)
             return INPUT_ACTION_NONE;                               /* E0 46 without Ctrl: nothing */
+
         InputLockKey(state, INPUT_SHIFT_SCROLL_LOCK, INPUT_SHIFT2_SCROLL_HELD, isBreak);
         return INPUT_ACTION_NONE;
 
@@ -913,12 +969,15 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
         {
             if (!(InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & INPUT_SHIFT2_SYSREQ))
                 return INPUT_ACTION_NONE;
+
             InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_SYSREQ, FALSE);
             state->BiosActions[INPUT_ACTION_SYSREQ_UP]++;
             return INPUT_ACTION_SYSREQ_UP;
         }
+
         if (InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & INPUT_SHIFT2_SYSREQ)
             return INPUT_ACTION_NONE;                                                                     /* repeat */
+
         InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_SYSREQ, TRUE);
         state->BiosActions[INPUT_ACTION_SYSREQ_DOWN]++;
         return INPUT_ACTION_SYSREQ_DOWN;
@@ -933,35 +992,44 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
             InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_INSERT_HELD, FALSE);
             return INPUT_ACTION_NONE;
         }
+
         shiftFlags = InputShiftFlags(state);
+
         if (!(InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & INPUT_SHIFT2_INSERT_HELD) && !(shiftFlags & (INPUT_SHIFT_ALT | INPUT_SHIFT_CTRL))
             && (isExtended || !(shiftFlags & INPUT_SHIFT_NUM_LOCK) == !(shiftFlags & (INPUT_SHIFT_LEFT_SHIFT | INPUT_SHIFT_RIGHT_SHIFT))))
             InputSetShiftFlag(state, INPUT_SHIFT_INSERT, !(shiftFlags & INPUT_SHIFT_INSERT));
+
         InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_INSERT_HELD, TRUE);
         break;
 
     default:
         break;
     }
+
     if (isBreak)
         return INPUT_ACTION_NONE;                           /* releases change no buffer content */
+
     /* -- WHILE PAUSED, the next keystroke ends the pause and is thrown away. */
     if (InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & INPUT_SHIFT2_PAUSE)
     {
         InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_PAUSE, FALSE);
         return INPUT_ACTION_NONE;
     }
+
     /* -- #274: ALT + A KEYPAD DIGIT ACCUMULATES; ANY OTHER KEY UNDER ALT CLEARS IT. */
     if ((InputShiftFlags(state) & INPUT_SHIFT_ALT) && state->BiosData)
     {
         INT keypadDigit = isExtended ? INPUT_NOT_A_DIGIT : InputKeypadDigit(code);
+
         if (keypadDigit >= 0)
         {
             state->BiosData[BIOS_BDA_ALT_KEYPAD] = (BYTE)(state->BiosData[BIOS_BDA_ALT_KEYPAD] * INPUT_ALT_KEYPAD_RADIX + keypadDigit);
             return INPUT_ACTION_NONE;
         }
+
         state->BiosData[BIOS_BDA_ALT_KEYPAD] = 0;
     }
+
     /* -- PRINT SCREEN: E0 37 (the grey key). Ctrl+PrtSc is the 7200h keystroke; on
      * its own it calls INT 05h and stores nothing (it used to store 3700h).
      */
@@ -972,11 +1040,14 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
             VddInputPush(state, INPUT_KEY_CTRL_PRINT_SCREEN);
             return INPUT_ACTION_NONE;
         }
+
         if (InputShiftFlags(state) & INPUT_SHIFT_ALT)
             return INPUT_ACTION_NONE;
+
         state->BiosActions[INPUT_ACTION_PRINT_SCREEN]++;
         return INPUT_ACTION_PRINT_SCREEN;
     }
+
     if (code > INPUT_SCANCODE_TABLE_LAST || code == 0)
         return INPUT_ACTION_NONE;
 
@@ -1001,6 +1072,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
     else if (shiftFlags & INPUT_SHIFT_CTRL)
     {
         key = g_InputScanCodeTable[code][INPUT_COLUMN_CTRL];
+
         if (state->Layout && InputIsLetterOn(state, code))           /* #136: a moved letter */
             key = (WORD)((code << BYTE_SHIFT) | (InputKeyboardChar(state, code, INPUT_KEY_UNSHIFTED) & INPUT_CTRL_CHARACTER_MASK));
     }
@@ -1012,18 +1084,24 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
          */
         if ((shiftFlags & INPUT_SHIFT_CAPS_LOCK) && InputIsLetterOn(state, code))
             shifted = !shifted;
+
         if ((shiftFlags & INPUT_SHIFT_NUM_LOCK) && code >= INPUT_SCAN_KEYPAD_FIRST && code <= INPUT_SCAN_KEYPAD_LAST)
             shifted = !shifted;
+
         key = g_InputScanCodeTable[code][shifted ? INPUT_COLUMN_SHIFT : INPUT_COLUMN_PLAIN];
+
         if (state->Layout && !(code >= INPUT_SCAN_KEYPAD_FIRST && code <= INPUT_SCAN_KEYPAD_LAST) && !(code == INPUT_SCAN_TAB && shifted))
         {
             BYTE character = InputKeyboardChar(state, code, shifted);        /* #136: the layout's char */
+
             if ((key & INPUT_LOW_BYTE) != character)
                 key = character ? (WORD)((code << BYTE_SHIFT) | character) : 0;
         }
     }
+
     if (key)
         VddInputPush(state, key);                       /* 0 = the BIOS stores nothing */
+
     (VOID)ascii;
     return INPUT_ACTION_NONE;
 }
@@ -1040,8 +1118,10 @@ WORD VddInputDosKey(WORD key)
 
     if (scanCode == INPUT_KEY_EXTENDED_MARKER)
         return (WORD)(((character == INPUT_CHAR_CARRIAGE_RETURN || character == INPUT_CHAR_LINE_FEED) ? INPUT_KEY_ENTER_SCAN_CODE : INPUT_KEY_SLASH_SCAN_CODE) | character);
+
     if (character == INPUT_KEY_EXTENDED_MARKER && scanCode != 0)
         return (WORD)(scanCode << BYTE_SHIFT);
+
     return key;
 }
 
@@ -1065,8 +1145,10 @@ INT VddInputBiosFetch(PINPUT_STATE state)
         state->OwedScanCodesServed++;
         return state->LastScanCode;
     }
+
     if (!InputScanCodeAvailable(state))
         return INPUT_NO_SCAN_CODE;                                           /* spurious: nothing presented */
+
     scanCode = InputScanCodePop(state);
     VddInputPoll(state);                     /* next byte: now (no clock) or after the hold */
     return scanCode;
@@ -1094,29 +1176,38 @@ INT VddInputHostKeyBytes(
     INT byteCount = 0;
 
     *isNoRepeat = 0;
+
     if (rawScanCode == INPUT_SCAN_NUM_LOCK && !isExtended)              /* Pause: the whole sequence on the press */
     {
         static const BYTE pauseSequence[INPUT_PAUSE_SEQUENCE_LENGTH] = { 0xE1, 0x1D, 0x45, 0xE1, 0x9D, 0xC5 };
         *isNoRepeat = 1;
+
         if (isBreak)
             return 0;
+
         for (byteCount = 0; byteCount < INPUT_PAUSE_SEQUENCE_LENGTH; ++byteCount)
             bytes[byteCount] = pauseSequence[byteCount];
+
         return INPUT_PAUSE_SEQUENCE_LENGTH;
     }
+
     if (rawScanCode == INPUT_SCAN_SCROLL_LOCK && isExtended)               /* Ctrl+Break: make AND break on the press */
     {
         *isNoRepeat = 1;
+
         if (isBreak)
             return 0;
+
         bytes[0] = INPUT_SCAN_PREFIX_E0;
         bytes[1] = INPUT_SCAN_SCROLL_LOCK;
         bytes[2] = INPUT_SCAN_PREFIX_E0;
         bytes[3] = INPUT_SCAN_SCROLL_LOCK_BREAK;
         return INPUT_CTRL_BREAK_SEQUENCE_LENGTH;
     }
+
     if (isExtended)
         bytes[byteCount++] = INPUT_SCAN_PREFIX_E0;
+
     bytes[byteCount++] = isBreak ? (BYTE)(rawScanCode | INPUT_SCAN_BREAK_BIT) : rawScanCode;
     return byteCount;
 }
@@ -1189,8 +1280,10 @@ static VOID InputSystemControlPortOut(PVOID context, WORD port, BYTE width, UINT
 
     (VOID)port;
     (VOID)width;
+
     if (value & INPUT_PORT92_FAST_RESET)
         state->ControllerResetsAsked++;
+
     VddInputSetA20(state, (value & INPUT_PORT92_A20) ? 1 : 0);
 }
 
@@ -1203,6 +1296,7 @@ static VOID InputKeyboardPortIn(PVOID context, WORD port, BYTE width, UINT32 *va
     PINPUT_STATE state = (PINPUT_STATE)context;
 
     (VOID)width;
+
     if (port == INPUT_PORT_COMMAND)                         /* status register */
     {
         /* SEVEN OF THE EIGHT STATUS BITS USED TO BE ZERO (Importance = 3):
@@ -1222,13 +1316,17 @@ static VOID InputKeyboardPortIn(PVOID context, WORD port, BYTE width, UINT32 *va
          * N/A-by-luck rather than left to be rediscovered.
          */
         BYTE status = INPUT_STATUS_IDLE;                /* SYS (POST done) + INH (not held) */
+
         if (state->IsControllerReplyReady || InputScanCodeAvailable(state))
             status |= INPUT_STATUS_OUTPUT_FULL;                                                                   /* OBF */
+
         if (state->IsLastWriteCommand)
             status |= INPUT_STATUS_LAST_WRITE_COMMAND;                                           /* A2 */
+
         *value = status;
         return;
     }
+
     /* port 0x60: data register.
      *
      * [WARNING]: A CONTROLLER REPLY COMES OUT BEFORE ANY SCANCODE, and it is kept in its
@@ -1243,7 +1341,9 @@ static VOID InputKeyboardPortIn(PVOID context, WORD port, BYTE width, UINT32 *va
         *value = state->ControllerReply;
         return;
     }
+
     state->Port60Reads++;
+
     if (InputScanCodeAvailable(state))
     {
         (VOID)InputScanCodePop(state);
@@ -1258,6 +1358,7 @@ static VOID InputKeyboardPortIn(PVOID context, WORD port, BYTE width, UINT32 *va
     {
         state->ScanCodeHeldReads++;                /* re-read inside the hold: same byte */
     }
+
     *value = state->LastScanCode;
 }
 
@@ -1273,15 +1374,19 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
     BYTE byteValue = (BYTE)value;
 
     (VOID)width;
+
     if (!state)
         return;
+
     state->KeyboardPortWrites++;
+
     if (state->KeyboardPortLogCount < INPUT_PORT_LOG_ENTRIES)
     {
         state->KeyboardPortLog[state->KeyboardPortLogCount][0] = (BYTE)(port & INPUT_LOW_BYTE);
         state->KeyboardPortLog[state->KeyboardPortLogCount][1] = byteValue;
         state->KeyboardPortLogCount++;
     }
+
     state->IsLastWriteCommand = (BYTE)(port == INPUT_PORT_COMMAND);      /* status bit 3 (A2) */
 
     if (port == INPUT_PORT_COMMAND)
@@ -1293,6 +1398,7 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
          * The period-correct machine is the one with the feature here.
          */
         state->ControllerCommand = 0;
+
         switch (byteValue)
         {
         case INPUT_KBC_SELF_TEST:
@@ -1346,6 +1452,7 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
         default:
             break;
         }
+
         return;
     }
 
@@ -1356,6 +1463,7 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
         state->ControllerCommand = 0;
         return;
     }
+
     if (state->ControllerCommand == INPUT_KBC_WRITE_KEYBOARD_BUFFER)
     {
         /* -- #244: D2h, WRITE KEYBOARD OUTPUT BUFFER. The byte comes out at port 60h
@@ -1371,6 +1479,7 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
         VddInputPushScanCode(state, byteValue);
         return;
     }
+
     if (state->ControllerCommand == INPUT_KBC_WRITE_OUTPUT_PORT)
     {
         /* THE OUTPUT PORT, WHICH IS WHERE A20 LIVES (Importance = 3):
@@ -1381,11 +1490,14 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
          * told yes, or it concludes the machine cannot do XMS at all.
          */
         state->ControllerCommand = 0;
+
         if (!(byteValue & INPUT_OUTPUT_PORT_RESET))
             state->ControllerResetsAsked++;                                              /* bit 0 low = reset request */
+
         state->ControllerOutputPort = (BYTE)(byteValue | INPUT_OUTPUT_PORT_RESET);       /* we never actually reset */
         return;
     }
+
     if (state->IsKeyboardRateExpected)                /* the byte after 0xF3 is the rate */
     {
         state->TypematicByte = byteValue;
@@ -1417,12 +1529,16 @@ static INT InputKeyCompatible(WORD *key)
         *key = (WORD)(((character == INPUT_CHAR_CARRIAGE_RETURN || character == INPUT_CHAR_LINE_FEED) ? INPUT_KEY_ENTER_SCAN_CODE : INPUT_KEY_SLASH_SCAN_CODE) | character);
         return 1;
     }
+
     if (scanCode > INPUT_KEY_LAST_COMPATIBLE_SCAN)
         return 0;                                                           /* F11/F12, Ctrl+arrows, Alt+Enter ... */
+
     if (character == INPUT_KEY_FILL_IN)
         return scanCode == 0 ? 1 : 0;                                 /* fill-ins; 00F0 is Alt+keypad 240 */
+
     if (character == INPUT_KEY_EXTENDED_MARKER && scanCode != 0)
         *key = (WORD)(scanCode << BYTE_SHIFT);                                                            /* gray arrows etc. */
+
     return 1;
 }
 
@@ -1456,10 +1572,12 @@ static VOID InputInt16(PVOID context, PNTVDD_REGISTERS registers)
         state->Int16Calls[INPUT_INT16_GROUP_OTHER]++;
     break;
     }
+
     switch (VddGetAh(registers))
     {
     case INPUT_INT16_READ:                              /* read key (host blocks on empty) */
         registers->ZeroFlag = 1;                          /* #188: enhanced-only codes discarded */
+
         while (VddInputPop(state, &key))
             if (InputKeyCompatible(&key))
             {
@@ -1467,6 +1585,7 @@ static VOID InputInt16(PVOID context, PNTVDD_REGISTERS registers)
                 registers->ZeroFlag = 0;
                 break;
             }
+
         break;
 
     case INPUT_INT16_READ_ENHANCED:                              /* read key, enhanced (101-key) */
@@ -1477,10 +1596,12 @@ static VOID InputInt16(PVOID context, PNTVDD_REGISTERS registers)
         }
         else
             registers->ZeroFlag = 1;
+
         break;
 
     case INPUT_INT16_STATUS:                              /* check key (non-blocking) */
         registers->ZeroFlag = 1;                          /* ZF=1 => no key (QB's INKEY$ -> "") */
+
         while (VddInputPeek(state, &key))    /* #188: a discard CONSUMES the entry */
         {
             if (InputKeyCompatible(&key))
@@ -1489,8 +1610,10 @@ static VOID InputInt16(PVOID context, PNTVDD_REGISTERS registers)
                 registers->ZeroFlag = 0;
                 break;
             }
+
             (VOID)VddInputPop(state, &key);
         }
+
         break;
 
     case INPUT_INT16_STATUS_ENHANCED:                              /* check key, enhanced (101-key) */
@@ -1501,6 +1624,7 @@ static VOID InputInt16(PVOID context, PNTVDD_REGISTERS registers)
         }
         else
             registers->ZeroFlag = 1;
+
         break;
 
     case INPUT_INT16_SHIFT_STATUS:                              /* shift status, from 0040:0017 */
@@ -1603,6 +1727,7 @@ VOID VddInputReset(PVOID context)
     state->IsLastWriteCommand = 1;
     state->ControllerCommandByte = INPUT_COMMAND_BYTE_POST;                 /* IRQ1 on, translation on, SYS set */
     state->ControllerOutputPort = INPUT_OUTPUT_PORT_POST;                 /* reset line high, A20 enabled */
+
     if (state->BiosData)                            /* an empty ring is head==tail at its start */
     {
         InputBdaWriteWord(state, BIOS_BDA_KEYBOARD_HEAD, BIOS_BDA_KEYBOARD_BUFFER);
@@ -1628,13 +1753,18 @@ INT VddInputInitialize(PVDD_BUS bus, PVOID context)
 
     state->Bus = bus;
     VddInputReset(state);
+
     if (VddClaimInterrupt(bus, INPUT_INT16_VECTOR, InputInt16, state))
         return INPUT_FAILED;
+
     if (VddClaimPorts(bus, INPUT_PORT_DATA, INPUT_PORT_DATA, InputKeyboardPortIn, InputKeyboardPortOut, state))
         return INPUT_FAILED;                                                                                                          /* data */
+
     if (VddClaimPorts(bus, INPUT_PORT_COMMAND, INPUT_PORT_COMMAND, InputKeyboardPortIn, InputKeyboardPortOut, state))
         return INPUT_FAILED;                                                                                                                /* status */
+
     if (VddClaimPorts(bus, INPUT_PORT_SYSTEM_CONTROL, INPUT_PORT_SYSTEM_CONTROL, InputSystemControlPortIn, InputSystemControlPortOut, state))
         return INPUT_FAILED;                                                                                                                                        /* A20 */
+
     return 0;
 }

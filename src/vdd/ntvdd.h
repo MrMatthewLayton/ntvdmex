@@ -234,6 +234,7 @@ static inline UINT32 VddFramePaletteAt(PCNTVDD_FRAME frame, UINT row, UINT palet
     if (frame->SplitRow && frame->SplitRow[paletteIndex]
         && (UINT32)(frame->FrameNumber - frame->SplitFrame[paletteIndex]) <= NTVDD_SPLIT_MAX_AGE)
         return (row >= frame->SplitRow[paletteIndex]) ? frame->PaletteSplit[paletteIndex] : frame->PaletteBase[paletteIndex];
+
     return frame->Palette[paletteIndex];
 }
 
@@ -246,9 +247,11 @@ static inline INT VddFrameHasSplit(PCNTVDD_FRAME frame)
 
     if (!frame->SplitRow)
         return FALSE;
+
     for (paletteIndex = 0; paletteIndex < NTVDD_PALETTE_ENTRIES; ++paletteIndex)
         if (frame->SplitRow[paletteIndex] && (UINT32)(frame->FrameNumber - frame->SplitFrame[paletteIndex]) <= NTVDD_SPLIT_MAX_AGE)
             return TRUE;
+
     return FALSE;
 }
 

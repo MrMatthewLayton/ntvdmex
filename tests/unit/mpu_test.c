@@ -46,6 +46,7 @@ static INT      g_SysExCount;
 static VOID MpuTestSink(PVOID context, UINT32 message)
 {
     (VOID)context;
+
     if (g_MessageCount < CAP)
         g_Messages[g_MessageCount++] = message;
 }
@@ -176,8 +177,10 @@ INT main(VOID)
     {   static const BYTE dt1Message[] = { 0xF0, 0x41, 0x10, 0x16, 0x12, 0x10, 0x00, 0x01,
                                        0x02, 0x6D, 0xF7 };
         UINT index;
+
         for (index = 0; index < sizeof dt1Message; ++index)
             MpuTestWrite(BASE, dt1Message[index]);
+
         CHECK(g_SysExCount == 1 && g_SysExLength == sizeof dt1Message && memcmp(g_SysEx, dt1Message, sizeof dt1Message) == 0,
               "sysex sink: one MT-32 DT1 delivered whole, F0..F7");
         CHECK(g_MessageCount == 0, "sysex sink: no short message leaks out of it");
@@ -211,8 +214,10 @@ INT main(VOID)
     {   UINT32 droppedBefore = g_Mpu.SysExDropped;
     UINT index;
         MpuTestWrite(BASE, 0xF0);
+
         for (index = 0; index < MPU_SYSEX_MAX + 10; ++index)
             MpuTestWrite(BASE, 0x11);
+
         MpuTestWrite(BASE, 0xF7);
         CHECK(g_SysExCount == 0 && g_Mpu.SysExDropped == droppedBefore + 1, "sysex sink: oversize message dropped, not cut");
         MpuTestWrite(BASE, 0xF0);

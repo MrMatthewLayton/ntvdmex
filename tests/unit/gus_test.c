@@ -62,8 +62,10 @@ static VOID GusTestMessageSink(PVOID context, UINT32 message)
 static VOID GusTestCapture(PVOID context, BYTE byteValue)
 {
     (VOID)context;
+
     if (g_CapturedCount < 64)
         g_Transmitted[g_CapturedCount] = byteValue;
+
     g_CapturedCount++;
     VddMpuFeed(&g_Assembler, byteValue);
 }
@@ -197,6 +199,7 @@ INT main(VOID)
     /* ---- T3: a voice plays to its end, stops, and interrupts through 8Fh ---- */
     for (index = 0; index < 256; ++index)
         g_Dram[0x1000 + index] = (BYTE)(index < 128 ? 0x40 : 0xC0);
+
     GusTestSetRegister8(0x4C, 0x07);                                  /* run, DAC, master IRQ */
     GusTestWrite(B + 0x102, 0);
     GusTestVoiceAddress(0x02, 0x1000);
@@ -209,9 +212,11 @@ INT main(VOID)
     GusTestSetRegister8(0x00, 0x20);                                  /* go, 8-bit, IRQ at end */
     VddGusRender(&g_Gus, output, 64);
     { INT isNonZero = 0;
+
     for (index = 0; index < 64; ++index)
         if (output[index])
             isNonZero = 1;
+
       CHECK(isNonZero && output[10] > 0, "a playing voice reaches the output with its sign"); }
     VddGusRender(&g_Gus, output, 400);
     CHECK((GusTestGetRegister8(0x80) & 0x01) != 0, "at end with no loop: the voice STOPPED");
@@ -273,6 +278,7 @@ INT main(VOID)
     /* ---- T8: DRAM DMA upload through the 8237 channel 3 (ref section 3) ---- */
     for (index = 0; index < 64; ++index)
         g_GuestMemory[0x20000 + index] = (BYTE)(0x80 + index);
+
     { UINT32 value;
       value = 0;
       VddBusIo(&g_Bus, 0x0C, 1, 0, &value);
@@ -327,6 +333,7 @@ INT main(VOID)
             GusTestSetRegister8(0x00, 0x03);
             GusTestSetRegister16(0x09, 0);
         }
+
         for (panIndex = 0; panIndex < 3; ++panIndex)
         {
             BYTE pan = (BYTE)(panIndex == 0 ? 0 : panIndex == 1 ? 7 : 15);
@@ -340,23 +347,28 @@ INT main(VOID)
             GusTestSetRegister8(0x0C, pan);
             GusTestSetRegister8(0x00, 0x08);                          /* go, 8-bit, LOOP, no IRQ */
             VddGusRenderStereo(&g_Gus, stereo, 64);
+
             if (panIndex == 0)
             {
                 left0 = stereo[20];
                 right0 = stereo[21];
             }
+
             if (panIndex == 1)
             {
                 left7 = stereo[20];
                 right7 = stereo[21];
             }
+
             if (panIndex == 2)
             {
                 left15 = stereo[20];
                 right15 = stereo[21];
             }
+
             GusTestSetRegister8(0x00, 0x03);                          /* stop it again */
         }
+
         printf("        pan 0: L=%d R=%d   pan 7: L=%d R=%d   pan 15: L=%d R=%d\n",
                left0, right0, left7, right7, left15, right15);
         CHECK(left0 > 0 && right0 == 0, "pan 0: hard LEFT -- the right channel is silent");
@@ -378,6 +390,7 @@ INT main(VOID)
     (VOID)GusTestGetRegister8(0x49);
     {
         INT voice;
+
         for (voice = 0; voice < 32; ++voice)
         {
             GusTestWrite(B + 0x102, (BYTE)voice);
@@ -386,9 +399,11 @@ INT main(VOID)
             GusTestSetRegister16(0x09, 0);
         }
     }
+
     while (GusTestGetRegister8(0x8F) != 0xE0)
     {
     }
+
     CHECK(GusTestRead(B + 0x006) == 0x00, "#190 setup: 2X6 reads nothing pending");
 
     /* ---- T10: the IRQ latch decides the line (ref section 5) ---- */
@@ -497,8 +512,10 @@ INT main(VOID)
         GusTestWrite(B + 0x000, 0x09);
         GusTestWrite(B + 0x00B, (BYTE)(0x01 | (0x02 << 3)));  /* DRAM DMA 1, record DMA 3 */
         CHECK(g_Gus.DramDmaLine == 1 && g_Gus.RecordDmaLine == 3, "DMA latch decodes: DRAM -> DMA 1, record -> DMA 3");
+
         for (index = 0; index < 16; ++index)
             g_GuestMemory[0x30000 + index] = (BYTE)(0x10 + index);
+
         memset(g_Dram + 0x4000, 0, 16);
         DMAW(0x0C, 0);
         DMAW(0x02, 0x00);
@@ -519,6 +536,7 @@ INT main(VOID)
         /* ---- T15: card -> PC, a DRAM read through the 8237 (41h bit 1) ---- */
         for (index = 0; index < 32; ++index)
             g_Dram[0x5000 + index] = (BYTE)(0xC0 + index);
+
         memset(g_GuestMemory + 0x31000, 0xEE, 40);
         DMAW(0x0C, 0);
         DMAW(0x02, 0x00);
@@ -587,8 +605,10 @@ INT main(VOID)
          * mask does, and the waiting DREQ shows in the 8237's status bits 7:4 ----
          */
         {   UINT32 status;
+
             for (index = 0; index < 16; ++index)
                 g_GuestMemory[0x33000 + index] = (BYTE)(0x50 + index);
+
             memset(g_Dram + 0x6000, 0, 16);
             DMAW(0x08, 0x04);                                  /* command: disable ctrl 1 */
             DMAW(0x0C, 0);
@@ -654,14 +674,18 @@ INT main(VOID)
         GusTestSetRegister8(0x0C, 7);
         GusTestSetRegister8(0x00, 0x08);
         VddGusRender(&g_Gus, output, 64);
+
         for (index = 0; index < 64; ++index)
             if (output[index])
                 isNonZeroOn++;
+
         GusTestWrite(B + 0x000, 0x09 | 0x02);
         VddGusRender(&g_Gus, output, 64);
+
         for (index = 0; index < 64; ++index)
             if (output[index])
                 isNonZeroOff++;
+
         CHECK(isNonZeroOn > 0 && isNonZeroOff == 0 && g_Gus.OutputMuted >= 64, "2X0 bit 1: line out disabled -> silence");
         CHECK(!(GusTestGetRegister8(0x80) & 0x01), "...while the voice itself keeps running");
         GusTestWrite(B + 0x000, 0x09);

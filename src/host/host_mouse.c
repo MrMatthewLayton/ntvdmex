@@ -296,6 +296,7 @@ static DWORD MouseI33Offset(volatile BYTE *tib, INT source, DWORD offset)
 {
     if (source == I33_SRC_PM && DpmiSelectorIs32((WORD)VDM_REG16(tib, VTIB_CS)))
         return offset;
+
     return offset & WORD_MASK;
 }
 
@@ -405,6 +406,7 @@ VOID MouseEventRaise(LONG bits)
     if (bits == 1 && head != tail)
     {
         LONG last = (head + MS_EVQ - 1) % MS_EVQ;
+
         if (g_MouseEventQueue[last].Bits == 1)
         {
             g_MouseEventQueue[last].X = g_MouseX;
@@ -414,11 +416,13 @@ VOID MouseEventRaise(LONG bits)
             return;
         }
     }
+
     if ((head + 1) % MS_EVQ == tail) /* full: drop the newest */
     {
         ++g_MouseEventQueueDropped;
         return;
     }
+
     g_MouseEventQueue[head].Bits = bits;
     g_MouseEventQueue[head].Buttons = g_MouseButtons;
     g_MouseEventQueue[head].X = g_MouseX;
@@ -442,9 +446,11 @@ VOID MouseButtonEdges(LONG prev, LONG now)
     for (index = 0; index < MS_BTNS; ++index)
     {
         LONG bit = 1L << index;
+
         if ((prev ^ now) & bit)
         {
             ++g_MouseEdges;
+
             if (now & bit) { InterlockedIncrement(&g_MousePressCount[index]);
                              g_MousePressX[index] = g_MouseX;
                              g_MousePressY[index] = g_MouseY;
@@ -469,15 +475,20 @@ VOID HostMouseButton(INT button, INT down)
 
     if (button < 0 || button >= MS_BTNS)
         return;
+
     bit = 1L << button;
+
     for (;;)
     {
         LONG prev = g_MouseButtons;
         LONG now  = down ? (prev | bit) : (prev & ~bit);
+
         if (InterlockedCompareExchange(&g_MouseButtons, now, prev) != prev)
             continue;
+
         if (prev != now)
             MouseButtonEdges(prev, now);
+
         return;
     }
 }
@@ -516,6 +527,7 @@ static VOID I33GraphicsCursorDefine(const WORD *screen, const WORD *current)
         g_MouseGraphicsCursorScreen[buffer][row] = screen[row];
         g_MouseGraphicsCursorCurrent[buffer][row] = current[row];
     }
+
     InterlockedExchange(&g_MouseGraphicsCursorBuffer, buffer);
 }
 
@@ -563,10 +575,13 @@ static VOID I33SetRange(volatile LONG *low, volatile LONG *high, LONG first, LON
         first = second;
         second = swap;
     }
+
     if (first < 0)
         first = 0;
+
     if (second < first)
         second = first;
+
     InterlockedExchange(low, first);
     InterlockedExchange(high, second);
 }
@@ -599,6 +614,7 @@ static VOID I33StateSave(volatile BYTE *destination)
     state.GraphicsCursorDefined = g_MouseGraphicsCursorDefined;
     state.AccelerationCurrent = g_MouseAccelerationCurrent;
     { INT row, buffer = (INT)(g_MouseGraphicsCursorBuffer & 1);
+
       for (row = 0; row < I33_GC_ROWS; ++row)
       {
           state.GraphicsCursorScreen[row] = g_MouseGraphicsCursorScreen[buffer][row];
@@ -608,6 +624,7 @@ static VOID I33StateSave(volatile BYTE *destination)
     memcpy(state.Alt, g_MouseAlt, sizeof state.Alt);
     { UINT index;
     const BYTE *bytes = (const BYTE *)&state;
+
       for (index = 0; index < sizeof state; ++index)
           destination[index] = bytes[index]; }
 }
@@ -618,13 +635,16 @@ static VOID I33StateLoad(volatile BYTE *source)
 
     { UINT index;
     BYTE *bytes = (BYTE *)&state;
+
       for (index = 0; index < sizeof state; ++index)
           bytes[index] = source[index]; }
+
     if (state.Magic != I33_STATE_MAGIC)
     {
         ++g_MouseStateBadPointer;
         return;
     }
+
     InterlockedExchange(&g_MouseX, state.X);
     InterlockedExchange(&g_MouseY, state.Y);
     InterlockedExchange(&g_MouseHidden, state.Hidden);
@@ -647,8 +667,10 @@ static VOID I33StateLoad(volatile BYTE *source)
     InterlockedExchange(&g_MouseRate, state.Rate);
     I33GraphicsCursorDefine(state.GraphicsCursorScreen, state.GraphicsCursorCurrent);
     InterlockedExchange(&g_MouseGraphicsCursorDefined, state.GraphicsCursorDefined ? 1 : 0);
+
     if (state.AccelerationCurrent >= 1 && state.AccelerationCurrent <= I33_ACC_N)
         g_MouseAccelerationCurrent = state.AccelerationCurrent;
+
     memcpy(g_MouseAlt, state.Alt, sizeof g_MouseAlt);
 }
 
@@ -671,8 +693,10 @@ static volatile BYTE *I33GuestPointer(
     (VOID)tib;
     linear = (source == I33_SRC_PM) ? (ULONG_PTR)(DpmiSelectorBase(segment) + offset)
                               : (ULONG_PTR)(((DWORD)segment << PARAGRAPH_SHIFT) + offset);
+
     if (!linear || !MemoryReadable(linear, length))
         return NULL;
+
     /* 16h WRITES, and MemoryReadable says nothing about that -- a read-only page passes
      * it and then faults the HOST on the first store. Ask separately rather than
      * assume a guest buffer is writable because it usually is.
@@ -680,12 +704,15 @@ static volatile BYTE *I33GuestPointer(
     if (forWrite)
     {
         MEMORY_BASIC_INFORMATION memoryInfo;
+
         if (VirtualQuery((LPCVOID)linear, &memoryInfo, sizeof memoryInfo) != sizeof memoryInfo)
             return NULL;
+
         if (!(memoryInfo.Protect & (PAGE_READWRITE | PAGE_WRITECOPY
                           | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
             return NULL;
     }
+
     return (volatile BYTE *)linear;
 }
 
@@ -728,11 +755,13 @@ VOID I33ResetState(VOID)
     I33AccelerationDefaults(g_MouseAcceleration);
     g_MouseAccelerationCurrent = I33_ACC_DEFAULT;
     g_MouseAccelerationOk = 1;
+
     for (index = 0; index < MS_BTNS; ++index)
     {
         InterlockedExchange(&g_MousePressCount[index], 0);
         InterlockedExchange(&g_MouseReleaseCount[index], 0);
     }
+
     InterlockedExchange(&g_MouseDx, 0);
     InterlockedExchange(&g_MouseDy, 0);
     /* A RESET PUTS THE POINTER IN THE MIDDLE OF THE SCREEN:
@@ -777,14 +806,17 @@ static VOID I33TakeMotion(LONG positionX, LONG positionY, LONG *outDeltaX, LONG 
         lastX = positionX;
         lastY = positionY;
     }
+
     if (deltaX >  INT16_MAX_VALUE)
         deltaX =  INT16_MAX_VALUE;
     else if (deltaX < INT16_MIN_VALUE)
         deltaX = INT16_MIN_VALUE;
+
     if (deltaY >  INT16_MAX_VALUE)
         deltaY =  INT16_MAX_VALUE;
     else if (deltaY < INT16_MIN_VALUE)
         deltaY = INT16_MIN_VALUE;
+
     *outDeltaX = deltaX;
     *outDeltaY = deltaY;
 }
@@ -843,6 +875,7 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
         g_MouseI33[ax]++;
     else
         g_MouseI33Other++;
+
     /* The real histogram, and the caller. See the commentary on g_MouseI33Ax. */
     {   DWORD cs  = VDM_REG16(tib, VTIB_CS);
         DWORD eip = VDM_REG(tib, VTIB_EIP);
@@ -852,9 +885,11 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
         DWORD linear = (source == I33_SRC_V86) ? ((cs << PARAGRAPH_SHIFT) + (eip & WORD_MASK))
                                          : (DpmiSelectorBase((WORD)cs) + eip);
         UINT index;
+
         for (index = 0; index < I33_AXN && g_MouseI33Ax[index].Count; ++index)
             if (g_MouseI33Ax[index].Ax == (WORD)ax)
                 break;
+
         if (index < I33_AXN)
         {
             g_MouseI33Ax[index].Ax = (WORD)ax;
@@ -862,9 +897,11 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
         }
         else
             ++g_MouseI33AxOverflow;
+
         for (index = 0; index < g_MouseI33SiteCount; ++index)
             if (g_MouseI33Site[index].Linear == linear)
                 break;
+
         if (index < I33_SITEN)
         {
             if (index == g_MouseI33SiteCount)                    /* first call from this site */
@@ -881,11 +918,14 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
                 if (MemoryReadable((ULONG_PTR)(linear - I33_SITE_CONTEXT_BEFORE), sizeof g_MouseI33Site[index].Context))
                 {
                     UINT byteIndex;
+
                     for (byteIndex = 0; byteIndex < sizeof g_MouseI33Site[index].Context; ++byteIndex)
                         g_MouseI33Site[index].Context[byteIndex] = ((volatile BYTE *)(ULONG_PTR)(linear - I33_SITE_CONTEXT_BEFORE))[byteIndex];
                 }
+
                 ++g_MouseI33SiteCount;
             }
+
             ++g_MouseI33Site[index].Count;
         }
         else
@@ -906,6 +946,7 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
         || ax == I33_FN_SET_X_RANGE || ax == I33_FN_SET_Y_RANGE || ax == I33_FN_READ_MOTION
         || ax == I33_FN_SET_EVENT_HANDLER || ax == I33_FN_EXCHANGE_EVENT_HANDLER || ax == I33_FN_SET_ALTERNATE_HANDLER)
         InterlockedExchange(&g_MouseWantCapture, 1);
+
     switch (ax)
     {
     case I33_FN_RESET:                                        /* reset + get status */
@@ -914,6 +955,7 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
             VDM_SET16(tib, VTIB_EAX, I33_NOT_INSTALLED);
             break;
         }
+
         VDM_SET16(tib, VTIB_EAX, I33_INSTALLED);               /* driver installed */
         VDM_SET16(tib, VTIB_EBX, I33_BUTTON_COUNT);               /* 2 buttons */
         I33ResetState();
@@ -922,6 +964,7 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
     case I33_FN_SHOW_CURSOR:                                        /* show cursor (dec count) */
         if (g_MouseHidden > 0)
             InterlockedDecrement(&g_MouseHidden);
+
         break;
 
     case I33_FN_HIDE_CURSOR:                                        /* hide cursor (inc count) */
@@ -958,14 +1001,18 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
         volatile LONG *pressX;
         volatile LONG *pressY;
         LONG count;
+
         if (button >= MS_BTNS)
             button = 0;                                         /* driver clamps, not faults */
+
         counter = isRelease ? &g_MouseReleaseCount[button]   : &g_MousePressCount[button];
         pressX  = isRelease ? &g_MouseReleaseX[button]   : &g_MousePressX[button];
         pressY  = isRelease ? &g_MouseReleaseY[button]   : &g_MousePressY[button];
         count   = InterlockedExchange(counter, 0);
+
         if (count > MAXSHORT)
             count = MAXSHORT;
+
         VDM_SET16(tib, VTIB_EAX, (WORD)buttons);
         VDM_SET16(tib, VTIB_EBX, (WORD)count);
         /* No transition yet: the documented answer is the CURRENT position, not a
@@ -1005,18 +1052,22 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
         InterlockedExchange(&g_MouseHotX, (LONG)(SHORT)VDM_REG16(tib, VTIB_EBX));
         InterlockedExchange(&g_MouseHotY, (LONG)(SHORT)VDM_REG16(tib, VTIB_ECX));
         ++g_MouseShapeSets;
+
         if (!guest)
         {
             ++g_MouseGraphicsCursorBadPointer;
             break;
         }
+
         {   WORD screen[I33_GC_ROWS], current[I33_GC_ROWS];
         INT row;
+
             for (row = 0; row < I33_GC_ROWS; ++row)
             {
                 screen[row] = (WORD)(guest[X86_WORD_SIZE * row] | (guest[X86_WORD_SIZE * row + 1] << BYTE_SHIFT));
                 current[row] = (WORD)(guest[I33_GC_CURSOR_MASK_OFFSET + X86_WORD_SIZE * row] | (guest[I33_GC_CURSOR_MASK_OFFSET + X86_WORD_SIZE * row + 1] << BYTE_SHIFT));
             }
+
             I33GraphicsCursorDefine(screen, current);
             InterlockedExchange(&g_MouseGraphicsCursorDefined, 1); }
         break; }
@@ -1042,6 +1093,7 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
             InterlockedExchange(&g_MouseTcHardware, 1);
             ++g_MouseShapeSets;
         }
+
         break;
 
     case I33_FN_READ_MOTION:                                        /* read relative motion */
@@ -1084,10 +1136,13 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
     case I33_FN_SET_MICKEY_RATIO:                                        /* mickeys per 8 pixels */
         {   LONG mickeysX = (LONG)VDM_REG16(tib, VTIB_ECX);
             LONG mickeysY = (LONG)VDM_REG16(tib, VTIB_EDX);
+
             if (mickeysX > 0)
                 InterlockedExchange(&g_MouseMickeyX, mickeysX);
+
             if (mickeysY > 0)
                 InterlockedExchange(&g_MouseMickeyY, mickeysY); }
+
         break;
 
     case I33_FN_CONDITIONAL_OFF:                                        /* conditional-off region */
@@ -1114,15 +1169,18 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
                                          (WORD)VDM_REG16(tib, VTIB_ES),
                                          (WORD)VDM_REG16(tib, VTIB_EDX),
                                          sizeof(I33_STATE), ax == I33_FN_SAVE_STATE);
+
         if (!guest) /* refuse, do not fault */
         {
             ++g_MouseStateBadPointer;
             break;
         }
+
         if (ax == I33_FN_SAVE_STATE)
             I33StateSave(guest);
         else
             I33StateLoad(guest);
+
         break; }
 
     case I33_FN_SET_SENSITIVITY:                                        /* set sensitivity (SPEED) */
@@ -1148,8 +1206,10 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
      */
     case I33_FN_SET_INTERRUPT_RATE:                                        /* set interrupt rate */
         {   LONG rate = (LONG)VDM_REG16(tib, VTIB_EBX);
+
             if (rate <= I33_RATE_MAX)
                 InterlockedExchange(&g_MouseRate, rate); }
+
         break;
 
     case I33_FN_SET_DISPLAY_PAGE:                                        /* set display page */
@@ -1194,22 +1254,27 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
         }
         else
             VDM_SET16(tib, VTIB_EAX, I33_FAILED);
+
         break;
 
     case I33_FN_GET_ALTERNATE_HANDLER:
     {
         INT byteIndex = I33AlternateFind(g_MouseAlt, (WORD)VDM_REG16(tib, VTIB_ECX));
+
         if (byteIndex < 0)
         {
             VDM_SET16(tib, VTIB_ECX, I33_NO_ALTERNATE_HANDLER);
             break;
         }
+
         VDM_SET16(tib, VTIB_ECX, g_MouseAlt[byteIndex].Mask);
         VDM_SET16(tib, VTIB_EBX, g_MouseAlt[byteIndex].Segment);
+
         if (source == I33_SRC_PM)
             VDM_REG(tib, VTIB_EDX) = g_MouseAlt[byteIndex].Offset;
         else
             VDM_SET16(tib, VTIB_EDX, (WORD)g_MouseAlt[byteIndex].Offset);
+
         break; }
 
     /* -- 20h ENABLE IS NOT A RESET. (#249) It shared 21h's arm, so enabling the driver
@@ -1338,6 +1403,7 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
         WORD bx = (WORD)VDM_REG16(tib, VTIB_EBX);
         ++g_MouseAccelerationCalls;
         I33AccelerationReady();
+
         if (bx == I33_ACCELERATION_RESTORE_DEFAULTS)
         {
             I33AccelerationDefaults(g_MouseAcceleration);
@@ -1349,14 +1415,17 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
                                              MouseI33Offset(tib, source, VDM_REG(tib, VTIB_ESI)),
                                              I33_ACC_LEN, X86_ACCESS_READ);
             UINT index;
+
             if (!guest)
             {
                 ++g_MouseStateBadPointer;
                 VDM_SET16(tib, VTIB_EAX, I33_ACCELERATION_ERROR);
                 break;
             }
+
             for (index = 0; index < I33_ACC_LEN; ++index)
                 g_MouseAcceleration[index] = guest[index];
+
             g_MouseAccelerationCurrent = bx;
         }
         else
@@ -1364,6 +1433,7 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
             VDM_SET16(tib, VTIB_EAX, I33_ACCELERATION_ERROR);
             break;
         }
+
         VDM_SET16(tib, VTIB_EAX, I33_SUCCESS);
         break; }
 
@@ -1376,8 +1446,10 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
         UINT index;
         ++g_MouseAccelerationCalls;
         I33AccelerationReady();
+
         for (index = 0; index < I33_ACC_LEN; ++index)
             driverData[VDD_MOUSE_ACC + index] = g_MouseAcceleration[index];
+
         VDM_SET16(tib, VTIB_EAX, I33_SUCCESS);
         VDM_SET16(tib, VTIB_EBX, (WORD)g_MouseAccelerationCurrent);
         I33ResultPointer(tib, source, VTIB_ESI, VDD_MOUSE_ACC);
@@ -1394,16 +1466,20 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
         UINT index;
         ++g_MouseAccelerationCalls;
         I33AccelerationReady();
+
         if (bx != I33_ACCELERATION_QUERY && (bx < 1 || bx > I33_ACC_N))
         {
             VDM_SET16(tib, VTIB_EAX, I33_ACCELERATION_ERROR);
             VDM_SET16(tib, VTIB_EBX, (WORD)g_MouseAccelerationCurrent);
             break;
         }
+
         if (bx != I33_ACCELERATION_QUERY)
             g_MouseAccelerationCurrent = bx;
+
         for (index = 0; index < I33_ACC_LEN; ++index)
             driverData[VDD_MOUSE_ACC + index] = g_MouseAcceleration[index];
+
         VDM_SET16(tib, VTIB_EAX, I33_SUCCESS);
         VDM_SET16(tib, VTIB_EBX, (WORD)g_MouseAccelerationCurrent);
         I33ResultPointer(tib, source, VTIB_ESI,
@@ -1424,21 +1500,25 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
         UINT index;
         ++g_MouseAccelerationCalls;
         I33AccelerationReady();
+
         if (!guest)
         {
             ++g_MouseStateBadPointer;
             VDM_SET16(tib, VTIB_EAX, I33_ACCELERATION_ERROR);
             break;
         }
+
         if (fill)
         {
             I33AccelerationDefaultNames(g_MouseAcceleration + I33_ACC_NAMES);
+
             for (index = 0; index < I33_ACC_N * I33_ACC_NAMELEN; ++index)
                 guest[index] = g_MouseAcceleration[I33_ACC_NAMES + index];
         }
         else
             for (index = 0; index < I33_ACC_N * I33_ACC_NAMELEN; ++index)
                 g_MouseAcceleration[I33_ACC_NAMES + index] = guest[index];
+
         VDM_SET16(tib, VTIB_EAX, I33_SUCCESS);
         break; }
 
@@ -1456,16 +1536,21 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
         volatile BYTE *guest = NULL;
         ++g_MouseAccelerationCalls;
         I33AccelerationReady();
+
         if (cap > I33_SET_LEN)
             cap = I33_SET_LEN;
+
         if (cap) guest = I33GuestPointer(tib, source, (WORD)VDM_REG16(tib, VTIB_ES),
                                    MouseI33Offset(tib, source, VDM_REG(tib, VTIB_EDX)), cap, X86_ACCESS_WRITE);
+
         if (!guest)
         {
             if (cap)
                 ++g_MouseStateBadPointer;
+
             cap = 0;
         }
+
         settings.Type = I33_MOUSE_TYPE_PS2;
         settings.Language = I33_LANGUAGE_ENGLISH;
         settings.HorizontalSpeed = (BYTE)g_MouseSpeedX;
@@ -1474,8 +1559,10 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
         settings.Curve = (BYTE)g_MouseAccelerationCurrent;
         settings.Rate = (BYTE)g_MouseRate;
         count = I33SettingsBlock(block, cap, &settings, g_MouseAcceleration);
+
         for (index = 0; index < count; ++index)
             guest[index] = block[index];
+
         VDM_SET16(tib, VTIB_EAX, I33_SUCCESS);
         VDM_SET16(tib, VTIB_ECX, (WORD)count);
         break; }
@@ -1491,8 +1578,10 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
         volatile BYTE *driverData = I33DriverData();
         UINT index;
         ++g_MouseAccelerationCalls;
+
         for (index = 0; index < sizeof iniName; ++index)
             driverData[VDD_MOUSE_INI + index] = (BYTE)iniName[index];
+
         VDM_SET16(tib, VTIB_EAX, I33_SUCCESS);
         I33ResultPointer(tib, source, VTIB_EDX, VDD_MOUSE_INI);
         break; }
@@ -1577,11 +1666,15 @@ INT MouseEventQueueTake(MOUSE_EVENT_ENTRY *event, LONG *outAx, WORD *segment, DW
         *event = g_MouseEventQueue[tail];
         g_MouseEventQueueTail = (tail + 1) % MS_EVQ;
         handlerChoice = I33PickHandler(g_MouseAlt, (UINT)event->Bits, shiftFlags, mainMask, &handlerAx);
+
         if (handlerChoice == I33_PICK_NOBODY)
             continue;
+
         if (g_MouseEventQueueTail == g_MouseEventQueueHead)
             InterlockedExchange(&g_MouseEventPend, 0);
+
         *outAx = (LONG)handlerAx;
+
         if (handlerChoice >= 0)
         {
             *segment = g_MouseAlt[handlerChoice].Segment;
@@ -1593,10 +1686,13 @@ INT MouseEventQueueTake(MOUSE_EVENT_ENTRY *event, LONG *outAx, WORD *segment, DW
             *segment = (WORD)g_MouseEventSegment;
             *offset = (DWORD)g_MouseEventOffset;
         }
+
         return 1;
     }
+
     if (g_MouseEventQueueTail == g_MouseEventQueueHead)
         InterlockedExchange(&g_MouseEventPend, 0);
+
     return 0;
 }
 
@@ -1614,6 +1710,7 @@ VOID MouseCallbackTry(volatile BYTE *tib)
     DWORD ss;
     DWORD sp;
     MOUSE_EVENT_ENTRY event = { 0, 0, 0, 0 };
+
     if (g_MouseCallbackActive)                            /* a handler that never came back */
     {
         if ((DWORD)(GetTickCount() - (g_MouseCallbackSince & ~1u)) > MS_CB_TIMEOUT_MS)
@@ -1621,20 +1718,24 @@ VOID MouseCallbackTry(volatile BYTE *tib)
             g_MouseCallbackActive = 0;
             ++g_MouseCallbackLost;
         }
+
         ++g_MouseCallbackWhy[MOUSE_CB_WHY_IN_FLIGHT];
         return;
     }
+
     /* 18h's handlers count as handlers (#265): a guest with only those still gets calls. */
     if ((!g_MouseEventMask && !I33AlternateAny(g_MouseAlt)) || g_MouseEventQueueHead == g_MouseEventQueueTail)
     {
         ++g_MouseCallbackWhy[MOUSE_CB_WHY_NO_EVENTS];
         return;
     }
+
     if (!MouseAnyHandler())
     {
         ++g_MouseCallbackWhy[MOUSE_CB_WHY_NO_HANDLER];
         return;
     }
+
     if (g_DpmiPm) {                               /* PM client: DpmiInjectPmMouseCallback()
                                                       delivers from the PM loop; leave the
                                                       queue for it (s74c -- it used to be
@@ -1642,10 +1743,12 @@ VOID MouseCallbackTry(volatile BYTE *tib)
         ++g_MouseCallbackPm;
         return;
     }
+
     cs = VDM_REG16(tib, VTIB_CS);
     ip = VDM_REG16(tib, VTIB_EIP);
     ss = VDM_REG16(tib, VTIB_SS);
     sp = VDM_REG16(tib, VTIB_ESP);
+
     if (cs == DOS_HDLR_SEG)
     {
         /* THE STUBS ARE WHERE THE EXEC LOOP ACTUALLY RUNS FOR THIS GUEST:
@@ -1665,6 +1768,7 @@ VOID MouseCallbackTry(volatile BYTE *tib)
             ++g_MouseCallbackWhy[MOUSE_CB_WHY_IN_STUB];
             return;
         }
+
         if ((ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END) || ip == DOS_HDLR_INT09_STUB_OFF + VDM_BOP_LENGTH)
             flags = EFLAGS_IF;                                                                                                                    /* stub about to IRET: deliver */
         else
@@ -1672,16 +1776,19 @@ VOID MouseCallbackTry(volatile BYTE *tib)
     }
     else
         flags = VDM_REG(tib, VTIB_EFLAGS);
+
     if (!IfOrVif(flags)) /* interrupts off: like an IRQ, wait */
     {
         ++g_MouseCallbackWhy[MOUSE_CB_WHY_IF_OFF];
         return;
     }
+
     /* -- THE RETURN STUB, RE-VERIFIED EVERY TIME (see MS_CB_RET_OFF). A guest that has
      * written over it would be sent into data by its own RETF; refusing is the
      * lesser harm, and the refusal is counted and named.
      */
     {   const volatile BYTE *returnStub = (const volatile BYTE *)(ULONG_PTR)((DOS_HDLR_SEG << PARAGRAPH_SHIFT) + MS_CB_RET_OFF);
+
         if (returnStub[0] != VDM_BOP0 || returnStub[1] != VDM_BOP1 || returnStub[VDM_BOP_NUMBER_OFFSET] != MS_CB_BOP)
         {
             if (g_MouseCallbackWhy[MOUSE_CB_WHY_STUB_CLOBBERED] < 4)
@@ -1693,6 +1800,7 @@ VOID MouseCallbackTry(volatile BYTE *tib)
                 lineCursor = LogDump(lineCursor, (const VOID *)returnStub, 4); lineCursor = LogPut(lineCursor, "\r\n");
                 LogAppend(LOG_PATH, lineBuffer, lineCursor);
             }
+
             ++g_MouseCallbackWhy[MOUSE_CB_WHY_STUB_CLOBBERED];
             g_MouseEventQueueTail = g_MouseEventQueueHead;
             InterlockedExchange(&g_MouseEventPend, 0);
@@ -1702,6 +1810,7 @@ VOID MouseCallbackTry(volatile BYTE *tib)
     /* The oldest queued event a handler asked for, and which handler (MouseEventQueueTake). */
     if (!MouseEventQueueTake(&event, &pend, &handlerSegment, &handlerOffset) || !pend)
         return;
+
     /* Save the whole interrupted context host-side. */
     g_MouseCallbackSaved.Eax = VDM_REG(tib, VTIB_EAX);
     g_MouseCallbackSaved.Ebx = VDM_REG(tib, VTIB_EBX);
@@ -1735,8 +1844,10 @@ VOID MouseCallbackTry(volatile BYTE *tib)
     g_MouseCallbackActive = 1;
     g_MouseCallbackSince = GetTickCount() | 1;
     ++g_MouseCallbackInjected;
+
     if (g_MouseCallbackInjected <= 3)
         g_MouseCallbackTrace = 10;                                   /* see g_MouseCallbackTrace: the next VM events */
+
     if (g_MouseCallbackInjected <= 16)                         /* the first few, with where from */
     {
         CHAR lineBuffer[384];
@@ -1795,6 +1906,7 @@ VOID MouseCallbackReturn(volatile BYTE *tib)
         LogAppend(LOG_PATH, lineBuffer, lineCursor);
         return;
     }
+
     if (g_MouseCallbackDone < 16)
     {
         CHAR lineBuffer[96];
@@ -1802,6 +1914,7 @@ VOID MouseCallbackReturn(volatile BYTE *tib)
         lineCursor = LogPut(lineCursor, "MOUSECB return #"); lineCursor = LogHex(lineCursor, g_MouseCallbackDone + 1);
         lineCursor = LogPut(lineCursor, " ok\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor);
     }
+
     VDM_REG(tib, VTIB_EAX) = g_MouseCallbackSaved.Eax;
     VDM_REG(tib, VTIB_EBX) = g_MouseCallbackSaved.Ebx;
     VDM_REG(tib, VTIB_ECX) = g_MouseCallbackSaved.Ecx;
@@ -1829,14 +1942,18 @@ static VOID OverlayCursor(BYTE *pixels, INT width, INT height, INT stride, INT c
         PCSTR shapeRow = g_MouseCursorShape[row];
         INT column;
         INT screenRow = cursorY + row;
+
         if (screenRow < 0 || screenRow >= height)
             continue;
+
         for (column = 0; shapeRow[column]; ++column)
         {
             INT screenColumn = cursorX + column;
             CHAR shape = shapeRow[column];
+
             if (shape == ' ' || screenColumn < 0 || screenColumn >= width)
                 continue;
+
             pixels[screenRow * stride + screenColumn] = (shape == 'o') ? OVERLAY_CURSOR_OUTLINE : OVERLAY_CURSOR_FILL;     /* black outline / white fill */
         }
     }
@@ -1869,9 +1986,12 @@ VOID MouseDrawGraphicsCursor(BYTE *pixels, INT width, INT height, INT stride)
         OverlayCursor(pixels, width, height, stride, cursorX, cursorY);
         return;
     }
+
     buffer = (INT)(g_MouseGraphicsCursorBuffer & 1);
+
     if (g_Video.ModeKind == VIDEO_KIND_CGA && !g_Video.IsVesa && g_Video.CgaBpp != 1)
         cga4Map = VddVideoCga4Map(&g_Video);
+
     I33GraphicsCursorDraw(pixels, width, height, stride, cursorX, cursorY, (INT)g_MouseHotX, (INT)g_MouseHotY,
                 g_MouseGraphicsCursorScreen[buffer], g_MouseGraphicsCursorCurrent[buffer], I33_GC_ONES_COLOUR, cga4Map);
 }

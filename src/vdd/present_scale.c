@@ -56,6 +56,7 @@ VOID PresentTargetRatio(
     INT *ratioHeight)
 {
     PresentAspectRatio(aspect, ratioWidth, ratioHeight);
+
     if (!*ratioWidth || !*ratioHeight)
     {
         *ratioWidth = sourceWidth > 0 ? sourceWidth : PRESENT_DEFAULT_RATIO_WIDTH;
@@ -83,8 +84,10 @@ VOID PresentFitRatio(
 
     if (destinationWidth < 1)
         destinationWidth = 1;
+
     if (destinationHeight < 1)
         destinationHeight = 1;
+
     if (ratioWidth < 1 || ratioHeight < 1)
     {
         *left = 0;
@@ -93,17 +96,22 @@ VOID PresentFitRatio(
         *height = destinationHeight;
         return;
     }
+
     fitWidth = destinationWidth;
     fitHeight = (long)destinationWidth * ratioHeight / ratioWidth;
+
     if (fitHeight > destinationHeight)
     {
         fitHeight = destinationHeight;
         fitWidth = (long)destinationHeight * ratioWidth / ratioHeight;
     }
+
     if (fitWidth < 1)
         fitWidth = 1;
+
     if (fitHeight < 1)
         fitHeight = 1;
+
     *width = (INT)fitWidth;
     *height = (INT)fitHeight;
     *left = (destinationWidth - *width) / 2;
@@ -128,8 +136,10 @@ VOID PresentLayout(
 
     if (destinationWidth < 1)
         destinationWidth = 1;
+
     if (destinationHeight < 1)
         destinationHeight = 1;
+
     if (aspect == PRESENT_ASPECT_STRETCH && isScreen)
     {
         *left = 0;
@@ -138,7 +148,9 @@ VOID PresentLayout(
         *height = destinationHeight;
         return;
     }
+
     PresentTargetRatio(aspect, sourceWidth, sourceHeight, &ratioWidth, &ratioHeight);
+
     if (sourceWidth > 0 && sourceHeight > 0 && fit == PRESENT_FIT_WHOLE)
     {
         if (PresentIsNative(aspect))
@@ -146,6 +158,7 @@ VOID PresentLayout(
             INT scaleX = destinationWidth / sourceWidth;
             INT scaleY = destinationHeight / sourceHeight;
             INT scale = scaleX < scaleY ? scaleX : scaleY;
+
             if (scale >= 1)
             {
                 *width = sourceWidth * scale;
@@ -161,15 +174,19 @@ VOID PresentLayout(
             INT bestScaleX = 0;
             INT bestScaleY = 0;
             INT scaleX;
+
             for (scaleX = 1; (long)sourceWidth * scaleX <= destinationWidth; ++scaleX)
             {
                 /* ny = num/den */
                 long numerator = (long)sourceWidth * scaleX * ratioHeight;
                 long denominator = (long)sourceHeight * ratioWidth;
+
                 if (numerator % denominator)
                     continue;
+
                 if ((long)sourceHeight * (numerator / denominator) > destinationHeight || numerator / denominator < 1)
                     continue;
+
                 if ((long)sourceWidth * scaleX * sourceHeight * (numerator / denominator) > bestArea)
                 {
                     bestArea = (long)sourceWidth * scaleX * sourceHeight * (numerator / denominator);
@@ -177,6 +194,7 @@ VOID PresentLayout(
                     bestScaleY = (INT)(numerator / denominator);
                 }
             }
+
             if (bestArea)
             {
                 *width = sourceWidth * bestScaleX;
@@ -187,6 +205,7 @@ VOID PresentLayout(
             }
         }
     }
+
     PresentFitRatio(destinationWidth, destinationHeight, ratioWidth, ratioHeight, left, top, width, height);
 }
 
@@ -203,17 +222,21 @@ VOID PresentWindowPicture(
 
     if (scale < 1)
         scale = 1;
+
     if (sourceWidth < 1 || sourceHeight < 1)
     {
         sourceWidth = PRESENT_DEFAULT_FRAME_WIDTH;
         sourceHeight = PRESENT_DEFAULT_FRAME_HEIGHT;
     }
+
     *width = sourceWidth * scale;
+
     if (PresentIsNative(aspect))
     {
         *height = sourceHeight * scale;
         return;
     }
+
     PresentTargetRatio(aspect, sourceWidth, sourceHeight, &ratioWidth, &ratioHeight);
     *height = (INT)(((long)*width * ratioHeight + ratioWidth / 2) / ratioWidth);
 }
@@ -234,9 +257,12 @@ VOID PresentFit(
 
     if (destinationWidth < 1)
         destinationWidth = 1;
+
     if (destinationHeight < 1)
         destinationHeight = 1;
+
     PresentAspectRatio(aspect, &ratioWidth, &ratioHeight);
+
     if (!ratioWidth || !ratioHeight)
     {
         *left = 0;
@@ -245,17 +271,22 @@ VOID PresentFit(
         *height = destinationHeight;
         return;
     }
+
     fitWidth = destinationWidth;
     fitHeight = destinationWidth * ratioHeight / ratioWidth;              /* as wide as possible... */
+
     if (fitHeight > destinationHeight) /* ...unless too tall */
     {
         fitHeight = destinationHeight;
         fitWidth = destinationHeight * ratioWidth / ratioHeight;
     }
+
     if (fitWidth < 1)
         fitWidth = 1;
+
     if (fitHeight < 1)
         fitHeight = 1;
+
     *width = fitWidth;
     *height = fitHeight;
     *left = (destinationWidth - fitWidth) / 2;
@@ -280,6 +311,7 @@ VOID PresentScale2x8(
         const BYTE *rowBelow  = source + (SIZE_T)(row < sourceHeight - 1   ? row + 1 : sourceHeight - 1) * sourceStride;
         BYTE *outputRow0 = destination + (SIZE_T)(row * PRESENT_SCALE2X_FACTOR)     * destinationStride;
         BYTE *outputRow1 = destination + (SIZE_T)(row * PRESENT_SCALE2X_FACTOR + 1) * destinationStride;
+
         for (column = 0; column < sourceWidth; ++column)
         {
             BYTE centre = sourceRow[column];
@@ -291,17 +323,22 @@ VOID PresentScale2x8(
             BYTE topRight = centre;
             BYTE bottomLeft = centre;
             BYTE bottomRight = centre;
+
             if (above != below && left != right)
             {
                 if (left == above)
                     topLeft = left;
+
                 if (above == right)
                     topRight = right;
+
                 if (left == below)
                     bottomLeft = left;
+
                 if (below == right)
                     bottomRight = right;
             }
+
             outputRow0[column * PRESENT_SCALE2X_FACTOR] = topLeft;
             outputRow0[column * PRESENT_SCALE2X_FACTOR + 1] = topRight;
             outputRow1[column * PRESENT_SCALE2X_FACTOR] = bottomLeft;
@@ -333,18 +370,25 @@ UINT32 PresentTint(UINT32 argb, INT tint)
         sepiaRed = sepiaRed * PRESENT_SEPIA_WARM_RED / PERCENT;
         sepiaGreen = sepiaGreen * PRESENT_SEPIA_WARM_GREEN / PERCENT;
         sepiaBlue = sepiaBlue * PRESENT_SEPIA_WARM_BLUE / PERCENT;
+
         if (sepiaRed > PRESENT_CHANNEL_MAX)
             sepiaRed = PRESENT_CHANNEL_MAX;
+
         if (sepiaGreen > PRESENT_CHANNEL_MAX)
             sepiaGreen = PRESENT_CHANNEL_MAX;
+
         if (sepiaBlue > PRESENT_CHANNEL_MAX)
             sepiaBlue = PRESENT_CHANNEL_MAX;
+
         if (sepiaRed < 0)
             sepiaRed = 0;
+
         if (sepiaGreen < 0)
             sepiaGreen = 0;
+
         if (sepiaBlue < 0)
             sepiaBlue = 0;
+
         /* 3. fade: black -> (30,22,12), full scale stays full scale */
         outputRed = PRESENT_SEPIA_BLACK_RED + (UINT32)sepiaRed * PRESENT_SEPIA_SPAN_RED / PRESENT_CHANNEL_SCALE;
         outputGreen = PRESENT_SEPIA_BLACK_GREEN + (UINT32)sepiaGreen * PRESENT_SEPIA_SPAN_GREEN / PRESENT_CHANNEL_SCALE;
@@ -372,5 +416,6 @@ UINT32 PresentTint(UINT32 argb, INT tint)
     default:
         return argb;
     }
+
     return alpha | (((luminance * outputRed) / PRESENT_CHANNEL_SCALE) << PRESENT_RED_SHIFT) | (((luminance * outputGreen) / PRESENT_CHANNEL_SCALE) << PRESENT_GREEN_SHIFT) | ((luminance * outputBlue) / PRESENT_CHANNEL_SCALE);
 }

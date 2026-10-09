@@ -62,6 +62,7 @@ BYTE VddNetBiosService(PNETBIOS_STATE state, BYTE *ncb, BYTE *buffer)
     request.ReceiveTimeout  = ncb[NETB_NCB_RTO];
     request.SendTimeout  = ncb[NETB_NCB_STO];
     request.Adapter = ncb[NETB_NCB_LANA];
+
     if (!state->Submit)
     {
         /* No NetBIOS on this host at all: the answer a NetBIOS-less adapter
@@ -74,6 +75,7 @@ BYTE VddNetBiosService(PNETBIOS_STATE state, BYTE *ncb, BYTE *buffer)
     {
         returnCode = state->Submit(state->SubmitContext, &request);
     }
+
     ncb[NETB_NCB_RETCODE] = returnCode;
     ncb[NETB_NCB_LSN] = request.LocalSession;
     ncb[NETB_NCB_NUM] = request.NameNumber;
@@ -84,22 +86,28 @@ BYTE VddNetBiosService(PNETBIOS_STATE state, BYTE *ncb, BYTE *buffer)
     ncb[NETB_NCB_CMD_CPLT] = returnCode;                       /* cmd_cplt: complete */
     state->LastCommand = command;
     state->LastReturnCode = returnCode;
+
     if (isNoWait)
     {
         ++state->NoWaitCalls;
+
         if (ncb[NETB_NCB_POST_OFFSET] | ncb[NETB_NCB_POST_OFFSET + NETB_HIGH_BYTE] | ncb[NETB_NCB_POST_SEGMENT] | ncb[NETB_NCB_POST_SEGMENT + NETB_HIGH_BYTE])
         {
             state->PostOffset = (WORD)(ncb[NETB_NCB_POST_OFFSET] | (ncb[NETB_NCB_POST_OFFSET + NETB_HIGH_BYTE] << BYTE_SHIFT));
             state->PostSegment = (WORD)(ncb[NETB_NCB_POST_SEGMENT] | (ncb[NETB_NCB_POST_SEGMENT + NETB_HIGH_BYTE] << BYTE_SHIFT));
+
             if (state->IsPostPending)
                 ++state->PostsOwed;                         /* the previous one was never run */
+
             state->IsPostPending = TRUE;
         }
+
         /* the immediate code: accepted. A command refused outright (invalid
          * command / adapter) is refused immediately as well.
          */
         return (returnCode == NETB_RC_INVALID_COMMAND || returnCode == NETB_RC_INVALID_ADAPTER) ? returnCode : NETB_IMMEDIATE_ACCEPTED;
     }
+
     return returnCode;
 }
 
@@ -116,10 +124,13 @@ static VOID VddNetBiosInt5C(PVOID context, PNTVDD_REGISTERS registers)
         VddSetAl(registers, NETB_RC_INVALID_BUFFER);
         return;
     }
+
     bufferOffset = (WORD)(ncb[NETB_NCB_BUFFER_OFFSET] | (ncb[NETB_NCB_BUFFER_OFFSET + NETB_HIGH_BYTE] << BYTE_SHIFT));
     bufferSegment = (WORD)(ncb[NETB_NCB_BUFFER_SEGMENT] | (ncb[NETB_NCB_BUFFER_SEGMENT + NETB_HIGH_BYTE] << BYTE_SHIFT));
+
     if (bufferOffset | bufferSegment)
         buffer = (BYTE *)VddMapFlat(state->Bus, bufferSegment, bufferOffset);
+
     VddSetAl(registers, VddNetBiosService(state, ncb, buffer));
 }
 
@@ -160,8 +171,10 @@ INT VddNetBiosInitialize(PVDD_BUS bus, PVOID context)
     PNETBIOS_STATE state = (PNETBIOS_STATE)context;
 
     state->Bus = bus;
+
     if (VddClaimInterrupt(bus, VECTOR_NETBIOS, VddNetBiosInt5C, state) != NETB_OK)
         return NETB_FAILED;
+
     return VddClaimInterrupt(bus, VECTOR_NETWORK, VddNetBiosInt2A, state) != NETB_OK ? NETB_FAILED : NETB_OK;
 }
 

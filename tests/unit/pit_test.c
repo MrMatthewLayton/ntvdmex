@@ -63,6 +63,7 @@ static UINT PitTestLatchedCounter2(PVDD_BUS bus)
 static VOID PitTestIrqSink(PVOID context, BYTE irq)
 {
     (VOID)context;
+
     if (irq == 0)
         g_Irq0Count++;
 }
@@ -208,6 +209,7 @@ INT main(VOID)
     /* 60 frames ~= 1 second ~= 18 ticks (18.2065 Hz) */
     {
         INT frame;
+
         for (frame = 0; frame < 60; ++frame)
             VddBusFrame(&bus);
     }
@@ -420,12 +422,15 @@ INT main(VOID)
         VddBusIo(&bus, 0x40, 1, 0, &value);
         value = (UINT32)(reload >> 8);
         VddBusIo(&bus, 0x40, 1, 0, &value);
+
         for (tick = 0; tick < 10; ++tick)
         {
             INT before = g_Irq0Count;
             VddPitAddClocks(&pit, (UINT32)(reload - 1));
+
             if (g_Irq0Count != before)
                 break;                                          /* early: free-running */
+
             VddPitAddClocks(&pit, 1);                  /* the IRQ: ISR entered */
             VddPitAddClocks(&pit, (UINT32)spin);     /* ISR spins for retrace */
             value = 0x36;
@@ -435,6 +440,7 @@ INT main(VOID)
             value = (UINT32)(reload >> 8);
             VddBusIo(&bus, 0x40, 1, 0, &value);
         }
+
         CHECK(g_Irq0Count == 10, "8254 Lemmings shape: exactly one IRQ0 per (N + spin), locked");
     }
 
@@ -835,14 +841,17 @@ INT main(VOID)
          * no sample of a BCD count may contain a nibble above 9.
          */
         isAllBcd = 1;
+
         for (index = 0; index < 400; ++index)
         {
             pit.TotalClocks = pit.Counter2.LoadClocks + (UINT64)index * 37u;
             value = PitTestLatchedCounter2(&bus);
+
             if ((value & 0xF) > 9 || ((value >> 4) & 0xF) > 9
              || ((value >> 8) & 0xF) > 9 || ((value >> 12) & 0xF) > 9)
                 isAllBcd = 0;
         }
+
         CHECK(isAllBcd, "bcd: 400 spread samples, every nibble a decimal digit");
 
         /* -- and the NEGATIVE control, without which the above proves nothing.
@@ -856,14 +865,17 @@ INT main(VOID)
         portValue = 0x99;
         VddBusIo(&bus, 0x42, 1, 0, &portValue);
         isAllBcd = 1;
+
         for (index = 0; index < 400; ++index)
         {
             pit.TotalClocks = pit.Counter2.LoadClocks + (UINT64)index * 37u;
             value = PitTestLatchedCounter2(&bus);
+
             if ((value & 0xF) > 9 || ((value >> 4) & 0xF) > 9
              || ((value >> 8) & 0xF) > 9 || ((value >> 12) & 0xF) > 9)
                 isAllBcd = 0;
         }
+
         CHECK(!isAllBcd, "bcd: the SAME counter in binary walks through non-decimal nibbles");
 
         /* -- a count of zero is 10000 in BCD, and it is the IRQ0 divisor. ---- */
@@ -999,6 +1011,7 @@ INT main(VOID)
         UINT32 portValue;
         INT round;
         unsigned long steps[2];
+
         for (round = 0; round < 2; ++round)
         {
             VddPitCounter2Gate(&pit, 0);
@@ -1010,12 +1023,14 @@ INT main(VOID)
             VddBusIo(&bus, 0x42, 1, 0, &portValue);          /* 0xFFFF */
             VddPitCounter2Gate(&pit, 1);
             steps[round] = 0;
+
             while (!VddPitCounter2Out(&pit) && steps[round] < 100000ul)
             {
                 VddPitAddClocks(&pit, 64);
                 ++steps[round];
             }
         }
+
         CHECK(steps[0] >= 1020 && steps[0] <= 1025, "counter 2 mode 0: a 0xFFFF wait takes 65535 clocks");
         CHECK(steps[1] == steps[0], "counter 2 mode 0: the SECOND wait is as long -- a new count clears the gate-frozen elapsed");
     }
@@ -1046,6 +1061,7 @@ INT main(VOID)
             { 0x3A,  0, "mode 5: NO IRQ0 -- counter 0's GATE never rises" },
         };
         UINT index;
+
         for (index = 0; index < sizeof modes / sizeof modes[0]; ++index)
         {
             portValue = modes[index].ControlWord;
@@ -1057,6 +1073,7 @@ INT main(VOID)
             g_Irq0Count = 0;
             VddPitAddClocks(&pit, 64u * 0x1000u);
             CHECK(g_Irq0Count == modes[index].ExpectedIrqs, modes[index].Description);
+
             if (modes[index].ControlWord == 0x30)                                 /* bare rewrite */
             {
                 portValue = 0x00;
@@ -1070,6 +1087,7 @@ INT main(VOID)
                 CHECK(g_Irq0Count == 1, "mode 0 bare rewrite after TC: ONE more IRQ0 (all three oracles)");
             }
         }
+
         /* The BIOS's own mode comes back periodic: a one-shot must not leave it latched. */
         portValue = 0x34;
         VddBusIo(&bus, 0x43, 1, 0, &portValue);

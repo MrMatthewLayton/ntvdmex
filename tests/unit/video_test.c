@@ -67,8 +67,10 @@ static VOID VideoTestFillFonts(VOID)
                                          : ((character * (multiplier) + (row) * 11) >> 1)) & 0x0F) << 1)
         for (row = 0; row < 16; ++row)
             g_VgaFont8x16[character][row] = blank ? 0 : TEST_ROW(row, 37);
+
         for (row = 0; row < 14; ++row)
             g_VgaFont8x14[character][row] = blank ? 0 : TEST_ROW(row, 29);
+
         for (row = 0; row < 8;  ++row)
             g_VgaFont8x8 [character][row] = blank ? 0 : TEST_ROW(row, 23);
 #undef TEST_ROW
@@ -83,6 +85,7 @@ static INT VideoTestClaimsPort(const VDD_BUS *bus, WORD port)
     for (index = 0; index < bus->PortCount; ++index)
         if (port >= bus->Ports[index].First && port <= bus->Ports[index].Last)
             return 1;
+
     return 0;
 }
 
@@ -187,6 +190,7 @@ INT main(VOID)
     {
         PCSTR text="Hi";
         INT index;
+
         for(index=0;text[index];++index)
         {
             memset(&registers,0,sizeof registers);
@@ -243,17 +247,22 @@ INT main(VOID)
     VddVideoRender(&g_Video);
     { INT glyphRow,glyphColumn,mismatches=0;
     PCBYTE glyph=g_VgaFont8x16['A'];
+
       for(glyphRow=0;glyphRow<VIDEO_CELL_HEIGHT;++glyphRow)for(glyphColumn=0;glyphColumn<VIDEO_CELL_WIDTH;++glyphColumn)
       {
           BYTE expected=(glyph[glyphRow]&(0x80>>glyphColumn))?15:0;
+
           if(g_Video.FrameBuffer[glyphRow*TXW+glyphColumn]!=expected)
               mismatches++; }
+
       CHECK(mismatches==0, "render: text cell matches font glyph 'A'");
       /* #324: a VGA text cell is NINE dots; the ninth is background for 'A'... */
       CHECK(VddVideoTextCellWidth(&g_Video) == 9, "render: mode 3 text cells are 9 dots wide (SR01 bit 0 clear)");
+
       for (mismatches = 0, glyphRow = 0; glyphRow < VIDEO_CELL_HEIGHT; ++glyphRow)
           if (g_Video.FrameBuffer[glyphRow*TXW + 8] != 0)
               mismatches++;
+
       CHECK(mismatches==0, "render: column 9 of 'A' is background"); }
 
     /* T4b: A USER-LOADED FONT MUST CHANGE WHAT IS DRAWN.  GH #52 -----------
@@ -281,9 +290,11 @@ INT main(VOID)
       VddBusDeliverInterrupt(&bus,0x10,&registers);
       CHECK(g_Video.IsUserFontOn == 1, "int10/11/00: a user font load is recorded");
       VddVideoRender(&g_Video);
+
       for(glyphRow=0;glyphRow<VIDEO_CELL_HEIGHT;++glyphRow)for(glyphColumn=0;glyphColumn<VIDEO_CELL_WIDTH;++glyphColumn)
           if(g_Video.FrameBuffer[glyphRow*TXW+glyphColumn] != 15)
               solid = 0;
+
       CHECK(solid, "int10/11/00: the USER glyph is drawn, not the ROM one");
 
       /* A character the caller did NOT supply must still draw as itself --
@@ -314,11 +325,14 @@ INT main(VOID)
       CHECK(VideoTestCellCharacter(0,1)=='B', "int10/09: 'B' landed at row 0 col 1");
       { INT mismatches2=0;
       PCBYTE glyph2=g_VgaFont8x16['B'];
+
         for(glyphRow=0;glyphRow<VIDEO_CELL_HEIGHT;++glyphRow)for(glyphColumn=0;glyphColumn<VIDEO_CELL_WIDTH;++glyphColumn)
         {
             BYTE expected=(glyph2[glyphRow]&(0x80>>glyphColumn))?15:0;
+
             if(g_Video.FrameBuffer[glyphRow*TXW + 9 + glyphColumn]!=expected)
                 mismatches2++; }
+
         CHECK(mismatches2==0, "int10/11/00: unsupplied chars keep their ROM glyphs"); }
 
       /* AL=02h selects a ROM font, which is a request to go BACK -- it must
@@ -333,11 +347,14 @@ INT main(VOID)
       VddVideoRender(&g_Video);
       { INT mismatches3=0;
       PCBYTE glyph3=g_VgaFont8x16['A'];
+
         for(glyphRow=0;glyphRow<VIDEO_CELL_HEIGHT;++glyphRow)for(glyphColumn=0;glyphColumn<VIDEO_CELL_WIDTH;++glyphColumn)
         {
             BYTE expected=(glyph3[glyphRow]&(0x80>>glyphColumn))?15:0;
+
             if(g_Video.FrameBuffer[glyphRow*TXW+glyphColumn]!=expected)
                 mismatches3++; }
+
         CHECK(mismatches3==0, "int10/11/02: ...and 'A' is the ROM glyph again"); }
 
       /* A cell is VIDEO_CELL_HEIGHT tall, so a font taller than that cannot be drawn.
@@ -375,13 +392,16 @@ INT main(VOID)
       VideoTestTextCell(5,1)[0] = 0xB3;
       VideoTestTextCell(5,1)[1] = 0x0F;          /* | */
       VddVideoRender(&g_Video);
+
       for (glyphRow = 0; glyphRow < 16; ++glyphRow)
       {
           if (g_Video.FrameBuffer[(5*16+glyphRow)*TXW + 8] != g_Video.FrameBuffer[(5*16+glyphRow)*TXW + 7])
               isNinthColumnOk = 0;
+
           if (g_Video.FrameBuffer[(5*16+glyphRow)*TXW + 9 + 8] != 0)
               isNinthColumnBackground = 0;
       }
+
       CHECK(isNinthColumnOk, "render: C4h repeats column 8 into column 9 (line graphics, AR10 bit 2)");
       CHECK(isNinthColumnBackground, "render: B3h (outside C0h-DFh) leaves column 9 background");
       VideoTestTextCell(5,0)[0] = ' ';
@@ -455,9 +475,11 @@ INT main(VOID)
       CHECK((buffer[(modeListOffset&0xFFFF)]|(buffer[(modeListOffset&0xFFFF)+1]<<8))==0x100, "vesa/4F00: mode list starts 0x100");
       CHECK((buffer[16]|(buffer[17]<<8))==segment && (buffer[8]|(buffer[9]<<8))==segment, "vesa/4F00: pointers are in the caller's segment");
       CHECK(modeListOffset>=34 && modeListOffset<256 && oemStringOffset>=34 && oemStringOffset<256, "vesa/4F00: mode list and OEM string inside the 256-byte block");
+
       for (index=256;index<512;++index)
           if (buffer[index]!=0xAA)
               clean=0;
+
       CHECK(clean, "vesa/4F00: nothing written past 256 bytes without 'VBE2'");
       /* With "VBE2" preset the block is 512 bytes and may be used in full. */
       memset(buffer, 0xAA, 512);
@@ -478,15 +500,19 @@ INT main(VOID)
        * are copied into OemData (+100h). They all pointed at one string at +22h. #226
        */
       { UINT pointerOffsets[4] = { 6, 22, 26, 30 }, index, inside = 1, distinct = 1;
+
         for (index = 0; index < 4; ++index)
         {
           UINT pointerOffset = buffer[pointerOffsets[index]] | (buffer[pointerOffsets[index]+1] << 8);
           UINT pointerSegment = buffer[pointerOffsets[index]+2] | (buffer[pointerOffsets[index]+3] << 8);
+
           if (pointerSegment != segment || pointerOffset < 0x100 || pointerOffset >= 0x200)
               inside = 0;
+
           if (index && pointerOffset == (UINT)(buffer[pointerOffsets[index-1]] | (buffer[pointerOffsets[index-1]+1] << 8)))
               distinct = 0;
         }
+
         CHECK(inside && distinct && memcmp(&buffer[buffer[6]|(buffer[7]<<8)], "NTVDMEX VESA", 13)==0
               && memcmp(&buffer[buffer[22]|(buffer[23]<<8)], "NTVDMEX", 8)==0,
               "vesa/4F00 (VBE2): OEM/vendor/product/rev strings are four strings in OemData (+100h)"); } }
@@ -763,9 +789,11 @@ INT main(VOID)
       registers.Es=segment;
       registers.Ebx=0;
       VddBusDeliverInterrupt(&bus,0x10,&registers);
+
       for (index = blocks*64u; index < 4096; ++index)
           if (stateBuffer[index] != 0xA5)
               ++spill;
+
       CHECK(VddGetAx(&registers)==0x004F && spill==0, "vesa/4F04 DL=01 save: nothing written past the reported size");
       /* disturb everything, then restore */
       memset(&registers,0,sizeof registers);
@@ -1082,8 +1110,10 @@ INT main(VOID)
       registers.Es=segment;
       registers.Edi=0;
       VddBusDeliverInterrupt(&bus,0x10,&registers);
+
       for (index = 0; index < 128; ++index)
           sum += edid[index];
+
       CHECK(VddGetAx(&registers)==0x004F && edid[0]==0x00 && edid[1]==0xFF && edid[6]==0xFF && edid[7]==0x00 && (sum & 0xFF)==0
             && edid[18]==1 && edid[19]>=3 && edid[126]==0 && edid[128]==0xEE,
             "vesa/4F15 BL=01: EDID header, version 1.3+, checksum 0, no extensions, exactly 128 bytes written");
@@ -1721,15 +1751,18 @@ INT main(VOID)
        * that waits for it to clear stalls. Sample a whole frame. --------
        */
       highCount = lowCount = 0;
+
       for (index = 0; index < 1000; index++)
       {
           g_FakeMicroseconds = (UINT64)(index * 16667 / 1000);       /* one 60 Hz frame */
           VddBusIo(&bus, 0x3DA, 1, 1, &value);
+
           if (value & 0x08)
               highCount++;
           else
               lowCount++;
       }
+
       CHECK(highCount > 0 && lowCount > 0, "3DA: retrace both asserted and clear across a frame");
       CHECK(highCount < lowCount / 4, "3DA: retrace is a small minority of the frame (~9%)");
 
@@ -1747,15 +1780,18 @@ INT main(VOID)
       VideoTestWriteCrtc(&bus, 0x12, 0x8F);
       VideoTestWriteCrtc(&bus, 0x15, 0x96);
       highCount = lowCount = 0;
+
       for (index = 0; index < 1000; index++)
       {
           g_FakeMicroseconds = (UINT64)(index * 14286 / 1000);       /* one 70 Hz frame */
           VddBusIo(&bus, 0x3DA, 1, 1, &value);
+
           if (value & 0x08)
               highCount++;
           else
               lowCount++;
       }
+
       CHECK(highCount > 0 && lowCount > 0, "3DA: 70 Hz modes also retrace once per frame");
 
       /* --- #225: a THROTTLED guest held across a whole retrace is owed it, once.
@@ -1774,10 +1810,12 @@ INT main(VOID)
          * successive retrace starts, then poll 2 ms before one (active picture).
          */
         g_Video.IsVblOweOn = 0;
+
         for (time = 0; time < 100000 && !secondRetrace; ++time)
         {
             g_FakeMicroseconds = time;
             VddBusIo(&bus, 0x3DA, 1, 1, &firstRead);
+
             if ((firstRead & 0x08) && time && !(thirdRead & 0x08))
             {
                 if (!firstRetrace)
@@ -1785,8 +1823,10 @@ INT main(VOID)
                 else
                     secondRetrace = time;
             }
+
             thirdRead = firstRead;
         }
+
         framePeriod = secondRetrace - firstRetrace;
         pollTime = secondRetrace + 10*framePeriod - 2000;       /* active, well clear of the blank */
         g_Video.IsPort3DaHaveLast = 0;
@@ -1821,14 +1861,18 @@ INT main(VOID)
       { INT changed = 0;
       UINT32 prev = 0xFF;
         g_Video.GraphicsHeight = 480;
+
         for (index = 0; index < 40; index++)                          /* ~1.3 scanlines */
         {
             g_FakeMicroseconds = (UINT64)index;                      /* 1 us steps */
             VddBusIo(&bus, 0x3DA, 1, 1, &value);
+
             if (prev != 0xFF && (value & 1) != (prev & 1))
                 changed = 1;
+
             prev = value;
         }
+
         CHECK(changed, "3DA: display-disabled (bit 0) toggles within a scanline"); }
       /* --- No clock injected -> the legacy toggle still applies, so off-VM
        * callers that never set a clock are unaffected. ------------------
@@ -1886,19 +1930,23 @@ INT main(VOID)
          * old model gave 49 of 449 = 10.9%, so a >15% floor separates them.
          */
         highCount = lowCount = 0;
+
         for (index = 0; index < 1000; index++)
         {
             g_FakeMicroseconds = (UINT64)((double)index * (1000000.0 / 70.0) / 1000.0);
             VddBusIo(&bus, 0x3DA, 1, 1, &value);
+
             if (value & 0x08)
             {
                 highCount++;
+
                 if (lowEdge < 0)
                     lowEdge = index;
             }
             else
                 lowCount++;
         }
+
         CHECK(highCount > 150 && highCount < 260, "3DA/CRTC: 640x350 blanks for ~20.9% of the frame");
         CHECK(lowCount > 0, "3DA/CRTC: 640x350 still shows a picture for most of the frame");
 
@@ -1909,15 +1957,18 @@ INT main(VOID)
          */
         VideoTestWriteCrtc(&bus, 0x15, 0x10);          /* blank start 16, well above the picture */
         highCount = lowCount = 0;
+
         for (index = 0; index < 200; index++)
         {
             g_FakeMicroseconds = (UINT64)((double)index * (1000000.0 / 70.0) / 200.0);
             VddBusIo(&bus, 0x3DA, 1, 1, &value);
+
             if (value & 0x08)
                 highCount++;
             else
                 lowCount++;
         }
+
         CHECK(highCount > 0 && lowCount > highCount, "3DA/CRTC: an impossible blank start falls back, still sane");
         g_Video.TimeUs = 0;
     }
@@ -2093,13 +2144,16 @@ INT main(VOID)
                     g_Video.Planes[plane][sourceOffset + step] = (BYTE)(step * 7u + plane * 61u + 1u);
                     g_Video.Planes[plane][destinationOffset + step] = 0x00;      /* a black panel to start from */
                 }
+
             VideoTestWriteSequencer(&bus, 0x02, 0x0F);            /* Map Mask = 0x0F */
             VideoTestWriteGraphics(&bus, 0x05, 0x01);            /* GR5 = write mode 1 */
+
             for (step = 0; step < length; ++step)         /* rep movsb, byte for byte */
             {
                 (VOID)VddVideoPlanarRead(&g_Video, sourceOffset + step);
                 VddVideoPlanarWrite(&g_Video, destinationOffset + step, 0x00);  /* CPU byte is ignored */
             }
+
             for (step = 0; step < length && same; ++step)
                 for (plane = 0; plane < 4; ++plane)
                     if (g_Video.Planes[plane][destinationOffset + step] != g_Video.Planes[plane][sourceOffset + step])
@@ -2107,6 +2161,7 @@ INT main(VOID)
                         same = 0;
                         break;
                     }
+
             CHECK(same, "lemmings panel: the 1760-byte rep movsb reproduces all four planes");
             /* A stale-latch model passes a one-byte check and fails this one: it would
              * leave every destination byte equal to the FIRST source group.
@@ -2144,21 +2199,26 @@ INT main(VOID)
                 g_Video.Planes[plane][offscreenOffset] = (BYTE)(0xA0 + plane);
                 g_Video.Planes[plane][visibleOffset] = (BYTE)(0x50 + plane);
             }
+
             memset(&registers, 0, sizeof registers);
             VddSetAh(&registers, 0x00);
             VddSetAl(&registers, 0x8D);   /* mode 0Dh, PRESERVE */
             VddBusDeliverInterrupt(&bus, 0x10, &registers);
             CHECK(g_Video.Mode == 0x0D, "mode set: AL=0x8D still selects mode 0Dh (bit 7 is not the mode)");
             {   INT kept = 1;
+
                 for (plane = 0; plane < 4; ++plane)
                     if (g_Video.Planes[plane][offscreenOffset] != (BYTE)(0xA0 + plane))
                         kept = 0;
+
                 CHECK(kept, "mode set: AL bit 7 PRESERVES the off-screen sprite cache");
             }
             {   INT kept = 1;
+
                 for (plane = 0; plane < 4; ++plane)
                     if (g_Video.Planes[plane][visibleOffset] != (BYTE)(0x50 + plane))
                         kept = 0;
+
                 CHECK(kept, "mode set: ...and the visible page too -- it is ALL of display memory");
             }
             /* AND THE DEFAULT MUST STILL CLEAR, or every guest that relies on a mode
@@ -2169,9 +2229,11 @@ INT main(VOID)
             VddSetAl(&registers, 0x0D);   /* mode 0Dh, CLEAR */
             VddBusDeliverInterrupt(&bus, 0x10, &registers);
             {   INT cleared = 1;
+
                 for (plane = 0; plane < 4; ++plane)
                     if (g_Video.Planes[plane][offscreenOffset] || g_Video.Planes[plane][visibleOffset])
                         cleared = 0;
+
                 CHECK(cleared, "mode set: WITHOUT bit 7 the planes are cleared, as before");
             }
         }
@@ -2205,32 +2267,40 @@ INT main(VOID)
             g_FakePc = composePc;                     /* the compositor fills it */
             VideoTestWriteGraphics(&bus, 0x05, 0x00);                     /* write mode 0, plain bytes */
             VideoTestWriteSequencer(&bus, 0x02, 0x0F);
+
             for (step = 0; step < 64; ++step)
                 VddVideoPlanarWrite(&g_Video, sourceOffset + step, (BYTE)step);
+
             g_FakePc = blitPc;                        /* ...then the blit reads it */
             VideoTestWriteGraphics(&bus, 0x05, 0x01);
+
             for (step = 0; step < 64; ++step)
             {
                 (VOID)VddVideoPlanarRead(&g_Video, sourceOffset + step);
                 VddVideoPlanarWrite(&g_Video, destinationOffset + step, 0x00);
             }
+
             for (index = 0; index < VIDEO_CACHE_SITES; ++index)
             {
                 if (!g_Video.CacheSites[index].Count)
                     continue;
+
                 if (g_Video.CacheSites[index].IsWrite)
                 {
                     writeCount++;
+
                     if (g_Video.CacheSites[index].Pc == composePc)
                         firstWrite = g_Video.CacheSites[index].First;
                 }
                 else
                 {
                     readCount++;
+
                     if (g_Video.CacheSites[index].Pc == blitPc)
                         firstRead = g_Video.CacheSites[index].First;
                 }
             }
+
             CHECK(writeCount == 1 && readCount == 1 && !g_Video.CacheSitesLost,
                   "cache sites: the compositor and the blit are BOTH named, none lost");
             CHECK(firstWrite && firstRead && firstWrite < firstRead,
@@ -2240,9 +2310,11 @@ INT main(VOID)
              * would report the blitter as its own compositor and invert the ordering.
              */
             {   INT below = 0;
+
                 for (index = 0; index < VIDEO_CACHE_SITES; ++index)
                     if (g_Video.CacheSites[index].Count && g_Video.CacheSites[index].Low < VIDEO_CACHE_LOW)
                         below = 1;
+
                 CHECK(!below && destinationOffset < VIDEO_CACHE_LOW,
                       "cache sites: the visible page is below the floor, so it is ignored");
             }
@@ -2252,6 +2324,7 @@ INT main(VOID)
                 g_FakePc = 0x02000000u + step * 0x100u;
                 (VOID)VddVideoPlanarRead(&g_Video, sourceOffset);
             }
+
             CHECK(g_Video.CacheSitesLost > 0, "cache sites: overflow is REPORTED, never dropped in silence");
 
             memset(g_Video.CacheSites, 0, sizeof g_Video.CacheSites);
@@ -2326,9 +2399,11 @@ INT main(VOID)
         VddSetAh(&registers,0x00);
         VddSetAl(&registers,0x0D);
         VddBusDeliverInterrupt(&bus,0x10,&registers);
+
         for (index = 0, isOk = 1; index < 16; ++index)
             if (g_Video.PaletteRegisters[index] != cgaAttributes[index])
                 isOk = 0;
+
         CHECK(isOk, "mode 0Dh leaves the CGA attribute table (6 at index 6, 10h..17h high)");
         /* Mode 0Dh's DAC repeats the same sixteen colours four times over 0..0x3F.
          * That repetition is why card 11 could not tell 0x10..0x17 from 0x38..0x3F.
@@ -2340,15 +2415,18 @@ INT main(VOID)
              */
             if (g_Video.Dac[index] != g_Video.Dac[(index & 7) | (((index >> 4) & 1) << 4)])
                 isOk = 0;
+
         CHECK(isOk, "mode 0Dh's default DAC is the 16 CGA colours, repeated four times");
 
         memset(&registers,0,sizeof registers);
         VddSetAh(&registers,0x00);
         VddSetAl(&registers,0x10);
         VddBusDeliverInterrupt(&bus,0x10,&registers);
+
         for (index = 0, isOk = 1; index < 16; ++index)
             if (g_Video.PaletteRegisters[index] != egaAttributes[index])
                 isOk = 0;
+
         CHECK(isOk, "mode 10h leaves the EGA attribute table (0x14 at index 6)");
         CHECK(g_Video.Dac[0x14] == 0xFFAA5500u, "mode 10h: DAC 0x14 is EGA brown");
         CHECK(g_Video.Dac[0x06] == 0xFFAAAA00u, "mode 10h: DAC 0x06 is dark yellow, not brown");
@@ -2374,9 +2452,11 @@ INT main(VOID)
         VddSetAh(&registers,0x00);
         VddSetAl(&registers,0x13);
         VddBusDeliverInterrupt(&bus,0x10,&registers);
+
         for (index = 0, isOk = 1; index < 16; ++index)
             if (g_Video.PaletteRegisters[index] != index)
                 isOk = 0;
+
         CHECK(isOk, "mode 13h leaves the identity attribute table");
         /* 13h's default is the real 256-colour palette, not a grey ramp: greys sit
          * at 0x10..0x1F and the colour wheel starts at 0x20.
@@ -2414,9 +2494,11 @@ INT main(VOID)
         VddSetAh(&registers,0x00);
         VddSetAl(&registers,0x90);
         VddBusDeliverInterrupt(&bus,0x10,&registers);
+
         for (index = 0, isOk = 1; index < 16; ++index)
             if (g_Video.PaletteRegisters[index] != egaAttributes[index])
                 isOk = 0;
+
         CHECK(isOk, "AL=90h is mode 10h: bit 7 does not change the palette load"); }
 
     /* T21: READ MODE 1 -- COLOUR COMPARE. ------------------------------------
@@ -2443,14 +2525,18 @@ INT main(VOID)
          * Plane p bit (7-k) is bit p of pixel k's colour.
          */
         {   INT index, plane;
+
             for (plane = 0; plane < 4; ++plane)
             {
                 BYTE byteValue = 0;
+
                 for (index = 0; index < 8; ++index)
                     if ((index >> plane) & 1)
                         byteValue = (BYTE)(byteValue | (0x80 >> index));
+
                 g_Video.Planes[plane][0] = byteValue;
             } }
+
         value = 5;
         VddBusIo(&bus,0x3CE,1,0,&value);            /* GR5 Mode */
         value = 0x08;
@@ -2663,6 +2749,7 @@ INT main(VOID)
       time = 0;
       g_FakeMicroseconds = 0;
       VddBusIo(&bus, 0x3DA, 1, 1, &value); /* prime: line 0, active */
+
       for (iteration = 0; iteration < 320; ++iteration)                          /* the guest's loop, 12us/in */
       {
           do
@@ -2671,6 +2758,7 @@ INT main(VOID)
               g_FakeMicroseconds = time;
               VddBusIo(&bus, 0x3DA, 1, 1, &value);
           } while (value & 1);
+
           do
           {
               time += 12;
@@ -2678,11 +2766,13 @@ INT main(VOID)
               VddBusIo(&bus, 0x3DA, 1, 1, &value);
           } while (!(value & 1));
       }
+
       /* 320 lines at 14285us/449 = 10181us; a missed line is +32us. */
       CHECK(time >= 10150 && time <= 10230, "3DA: a 12us poll loop counts EVERY scanline (320 in ~10.18ms)");
       time = 0;
       g_FakeMicroseconds = 0;
       VddBusIo(&bus, 0x3DA, 1, 1, &value);
+
       for (iteration = 0; iteration < 320; ++iteration)                          /* a 4us poller sees each blank */
       {
           do
@@ -2691,6 +2781,7 @@ INT main(VOID)
               g_FakeMicroseconds = time;
               VddBusIo(&bus, 0x3DA, 1, 1, &value);
           } while (value & 1);
+
           do
           {
               time += 4;
@@ -2698,6 +2789,7 @@ INT main(VOID)
               VddBusIo(&bus, 0x3DA, 1, 1, &value);
           } while (!(value & 1));
       }
+
       CHECK(time >= 10150 && time <= 10230, "3DA: ...and a 4us poll loop counts the same 320");
       /* A HOST STALL MID-COUNT: the guest is not polled for 330us (~10 lines) at
        * iteration 100. Every line crossed is a blank owed and the count must still
@@ -2707,16 +2799,19 @@ INT main(VOID)
       time = 0;
       g_FakeMicroseconds = 0;
       VddBusIo(&bus, 0x3DA, 1, 1, &value);
+
       for (iteration = 0; iteration < 320; ++iteration)
       {
           if (iteration == 100)
               time += 330;                                               /* the stall */
+
           do
           {
               time += 12;
               g_FakeMicroseconds = time;
               VddBusIo(&bus, 0x3DA, 1, 1, &value);
           } while (value & 1);
+
           do
           {
               time += 12;
@@ -2724,6 +2819,7 @@ INT main(VOID)
               VddBusIo(&bus, 0x3DA, 1, 1, &value);
           } while (!(value & 1));
       }
+
       /* Honest expectation (two exact repayment schemes measured wrong, see VideoStatusIn):
        * the stall is repaid ONE line and never over-repaid -- the count ends between
        * 320 lines' time and 320 lines + the stall.
@@ -2904,17 +3000,21 @@ INT main(VOID)
         VddVideoRender(&g_Video);
         { PCBYTE glyph = g_VgaFont8x16['A'];
         INT litCount = 0;
+
           for (glyphRow=0;glyphRow<16;++glyphRow) for (glyphColumn=0;glyphColumn<8;++glyphColumn)
               if ((glyph[glyphRow]&(0x80>>glyphColumn)) && g_Video.FrameBuffer[glyphRow*TXW+glyphColumn]==7)
                   litCount++;
+
           CHECK(litCount > 0, "blink: in the on phase the glyph is drawn"); }
         g_FakeMicroseconds = 700000;
         VddVideoRender(&g_Video);
         { INT anyCount = 0;
+
         for (glyphRow=0;glyphRow<16;++glyphRow)
             for (glyphColumn=0;glyphColumn<8;++glyphColumn)
                 if (g_Video.FrameBuffer[glyphRow*TXW+glyphColumn]!=0)
                     anyCount++;
+
           CHECK(anyCount == 0, "blink: in the off phase the glyph hides (fg == bg)"); }
         g_Video.TimeUs = 0;
         VideoTestTextCell(0,0)[1]=0x07;
@@ -2935,11 +3035,14 @@ INT main(VOID)
         VddVideoRender(&g_Video);
         { PCBYTE glyph = g_VgaFont8x8['A'];
         INT mismatches = 0;
+
           for (glyphRow=0;glyphRow<8;++glyphRow) for (glyphColumn=0;glyphColumn<8;++glyphColumn)
           {
               BYTE expected=(glyph[glyphRow]&(0x80>>glyphColumn))?15:0;
+
               if (g_Video.FrameBuffer[(392+glyphRow)*TXW+glyphColumn]!=expected)
                   mismatches++; }
+
           CHECK(mismatches==0, "render(50-line): row 49 is an 8x8 ROM glyph at scan line 392"); }
         memset(&registers,0,sizeof registers);
         VddSetAh(&registers,0x11);
@@ -3003,11 +3106,14 @@ INT main(VOID)
         VddVideoTextCursor(&g_Video, 3, 2, 0x77FF, 0x7700); /* the driver's defaults */
         { PCBYTE glyph = g_VgaFont8x16['X'];
         INT mismatches = 0;
+
           for (glyphRow=0;glyphRow<16;++glyphRow) for (glyphColumn=0;glyphColumn<8;++glyphColumn)
           {
               BYTE expected=(glyph[glyphRow]&(0x80>>glyphColumn))?0:6;
+
               if (g_Video.FrameBuffer[(2*16+glyphRow)*TXW+3*9+glyphColumn]!=expected)
                   mismatches++; }
+
           CHECK(mismatches==0, "int33 text cursor: cell (3,2) redrawn with (1F & 77) ^ 77 = 60h: black on brown"); }
         CHECK(VideoTestTextCell(2,3)[1] == 0x1F, "int33 text cursor: VRAM itself is untouched (no trail)");
         VddVideoTextCursor(&g_Video, 80, 2, 0x77FF, 0x7700);
@@ -3034,11 +3140,14 @@ INT main(VOID)
         VddVideoRender(&g_Video);
         { PCBYTE glyph = g_VgaFont8x16['A'];
         INT mismatches = 0;
+
           for (glyphRow=0;glyphRow<16;++glyphRow) for (glyphColumn=0;glyphColumn<8;++glyphColumn)
           {
               BYTE expected=(glyph[glyphRow]&(0x80>>glyphColumn))?15:0;
+
               if (g_Video.FrameBuffer[(16+glyphRow)*360+glyphColumn]!=expected)
                   mismatches++; }
+
           CHECK(mismatches==0, "render(40-col): row 1 is at stride 360 -- 40 nine-dot cells (#324)"); }
         CHECK(textBiosData[0x4A]==40 && textBiosData[0x49]==1, "bda: mode 1 -> 40 columns");
         memset(&registers,0,sizeof registers);
@@ -3167,6 +3276,7 @@ INT main(VOID)
         VddSetAh(&registers2, 0x00);
         VddSetAl(&registers2, 0x03);
         VddBusDeliverInterrupt(&bus, 0x10, &registers2);
+
         for (index = 0; index < sizeof registerCases / sizeof registerCases[0]; ++index)
         {
             CHAR description[80];
@@ -3178,6 +3288,7 @@ INT main(VOID)
                     registerCases[index].Name, registerCases[index].Expected);
             CHECK(value == registerCases[index].Expected, description);
         }
+
         VddBusIo(&bus, 0x3DA, 1, 1, &value);                   /* reset the AC flip-flop */
         value = 0x10;
         VddBusIo(&bus, 0x3C0, 1, 0, &value);
@@ -3243,10 +3354,13 @@ INT main(VOID)
         I10(0x0013, 0, 0, 0);
         memset(g_VideoMemory, 0x55, 8 * 320);
         I10(0x0941, 0x000E, 1, 0);
+
         for (isOk = 1, row = 0; row < 8; ++row) { INT column;
+
             for (column = 0; column < 8; ++column)
                 if (g_VideoMemory[row * 320 + column] != ((g_VgaFont8x8['A'][row] & (0x80 >> column)) ? 0x0E : 0x00))
                     isOk = 0; }
+
         CHECK(isOk, "#252 13h: AH=09h draws the 8x8 glyph at A000:0, background 00h (was (char,attr) at B800:0)");
         CHECK(g_VideoMemory[VIDEO_TEXT_OFFSET] != 'A' || g_VideoMemory[VIDEO_TEXT_OFFSET + 1] != 0x0E,
               "#252 13h: ...and nothing is written to B800:0 as a text cell");
@@ -3270,17 +3384,21 @@ INT main(VOID)
         /* mode 04h: two bits a pixel across the interleaved banks */
         I10(0x0004, 0, 0, 0);
         I10(0x0941, 0x0003, 1, 0);
+
         for (isOk = 1, row = 0; row < 8; ++row)
         {
             UINT32 offset = VIDEO_TEXT_OFFSET + ((row & 1) ? 0x2000u : 0u) + (UINT32)(row >> 1) * 80u;
             WORD word = 0;
             INT index;
+
             for (index = 0; index < 8; ++index)
                 if (g_VgaFont8x8['A'][row] & (0x80 >> index))
                     word |= (WORD)(3u << (14 - 2 * index));
+
             if (g_VideoMemory[offset] != (BYTE)(word >> 8) || g_VideoMemory[offset + 1] != (BYTE)word)
                 isOk = 0;
         }
+
         CHECK(isOk, "#252 04h: AH=09h draws 'A' two bits a pixel, even lines at B800:0, odd at B800:2000");
         I10(0x0941, 0x0083, 1, 0);
         CHECK(g_VideoMemory[VIDEO_TEXT_OFFSET] == 0 && g_VideoMemory[VIDEO_TEXT_OFFSET + 0x2000] == 0, "#252 04h: BL bit 7 XORs it off again");
@@ -3292,15 +3410,19 @@ INT main(VOID)
         I10(0x000D, 0, 0, 0);
         I10(0x0200, 0, 0, 0x0001);
         I10(0x0941, 0x001E, 1, 0);
+
         for (isOk = 1, row = 0; row < 8; ++row)
         {
             if (g_Video.Planes[0][row * 40 + 1] != 0)
                 isOk = 0;
+
             if (g_Video.Planes[1][row * 40 + 1] != g_VgaFont8x8['A'][row])
                 isOk = 0;
+
             if (g_Video.Planes[3][row * 40 + 1] != g_VgaFont8x8['A'][row])
                 isOk = 0;
         }
+
         CHECK(isOk, "#252 0Dh: 'A' in colour Eh at 40 bytes a line, 8 lines; plane 0 stays 0 (BL bit 4 is not a background)");
         /* 05h: page 1 of 0Dh = CRTC start 2000h, and a write to page 1 lands there */
         I10(0x0501, 0, 0, 0);
@@ -3314,9 +3436,11 @@ INT main(VOID)
         I10(0x0010, 0, 0, 0);
         I10(0x0200, 0, 0, 0x0101);
         I10(0x0941, 0x000E, 1, 0);
+
         for (isOk = 1, row = 0; row < 14; ++row)
             if (g_Video.Planes[1][(14 + row) * 80 + 1] != g_VgaFont8x14['A'][row])
                 isOk = 0;
+
         CHECK(isOk, "#252 10h: 'A' is the 8x14 glyph at row 1 (line 14), 80 bytes a line (was 8x16 at 640/8 of 480)");
         /* mode 3 pages */
         I10(0x0003, 0, 0, 0);
@@ -3338,10 +3462,13 @@ INT main(VOID)
         g_VideoMemory[VIDEO_TEXT_OFFSET + (2 * 80 + 3) * 2] = 'W';      /* page 0, same cell: must NOT show */
         g_VideoMemory[VIDEO_TEXT_OFFSET + (2 * 80 + 3) * 2 + 1] = 0x1F;
         VddVideoRender(&g_Video);
+
         for (isOk = 1, row = 0; row < 16; ++row) { INT column;
+
             for (column = 0; column < 8; ++column)
                 if (g_Video.FrameBuffer[(2 * 16 + row) * TXW + 3 * 9 + column] != ((g_VgaFont8x16['Q'][row] & (0x80 >> column)) ? 0x0F : 0x01))
                     isOk = 0; }
+
         CHECK(isOk, "#252 03h: the renderer SHOWS page 1 (from the CRTC start) -- 'Q' in 1Fh at row 2, column 3");
         I10(0x0500, 0, 0, 0);
         /* AH=12h */
@@ -3449,8 +3576,10 @@ INT main(VOID)
         /* AH=11h AL=03h: SR3 gets BL, and a loaded user font is NOT dropped */
         { static BYTE userFont[16];
         INT index;
+
         for (index = 0; index < 16; ++index)
             userFont[index] = 0xAA;
+
           memcpy(g_GuestMemory + 0x40000, userFont, 16);
           memset(&registers2, 0, sizeof registers2);
           registers2.Eax = 0x1100;
@@ -3490,8 +3619,10 @@ INT main(VOID)
           /* 21h: the caller's font, drawn from where INT 43h points */
           {
               INT index;
+
               for (index = 0; index < 256 * 10; ++index)
                   g_GuestMemory[0x50000 + index] = 0;
+
               for (index = 0; index < 10; ++index)
                   g_GuestMemory[0x50000 + 'Q' * 10 + index] = 0x81;
           }
@@ -3514,9 +3645,11 @@ INT main(VOID)
           I10(0x0200, 0, 0, 0x0001);
           I10(0x0951, 0x000F, 1, 0);
           { INT isOk2 = 1;
+
           for (row = 0; row < 10; ++row)
               if (g_Video.Planes[0][row * 80 + 1] != 0x81)
                   isOk2 = 0;
+
             CHECK(isOk2 && g_Video.Planes[0][10 * 80 + 1] == 0, "#266 12h: AH=09h draws 'Q' from the caller's 10-line table at INT 43h"); }
           /* 20h: INT 1Fh */
           memset(&registers2, 0, sizeof registers2);
@@ -3559,12 +3692,15 @@ INT main(VOID)
                 "#266 param slot 18h (mode 3+): 80 cols, 25 rows, 16 high, 1000h; misc 67h, CR00 5Fh, CR13 28h, AR06 14h, GR6 0Eh");
           CHECK(mode13Entry[0] == 40 && mode13Entry[2] == 8 && mode13Entry[9] == 0x63 && mode13Entry[0x05 + 3] == 0x0E && mode13Entry[0x37 + 5] == 0x40,
                 "#266 param slot 1Ch (13h): 40 cols, 8 high, misc 63h, SR4 0Eh (chain-4), GR5 40h");
+
           for (isOk3 = 1, row = 0; row < 29; ++row)
           {
               (VOID)VddVideoParameterEntry((BYTE)row, reference);
+
               if (memcmp(reference, parameterTable + row * 64, 64))
                   isOk3 = 0;
           }
+
           CHECK(isOk3 && parameterTable[3 * 64] == 0 && parameterTable[0x11 * 64] == 0,
                 "#266 the table in memory is vdd_video_param_entry's; slot 03h (200-line) and 11h (0Fh) are zero -- unmeasured");
           CHECK(savePointer[0x10] == VDD_SAVEPTR2_OFF && savePointer[0x04] == 0 && g_GuestMemory[((UINT32)VDD_VIDTAB_SEG << 4) + VDD_DCC_OFF] == 16,
@@ -3615,6 +3751,7 @@ INT main(VOID)
         UINT index;
         INT badCount = 0;
         NTVDD_REGISTERS modeRegisters;
+
         for (index = 0; index < sizeof graphicsModes / sizeof graphicsModes[0]; ++index)
         {
             INT graphicsWidth;
@@ -3626,6 +3763,7 @@ INT main(VOID)
             g_Video.IsDirty = 1;
             VddBusFrame(&bus);
             VddVideoGeometry(&g_Video, &graphicsWidth, &graphicsHeight);
+
             if (!g_Video.IsGeometryRegistersOk || graphicsWidth != graphicsModes[index].Width || graphicsHeight != graphicsModes[index].Height
                 || g_Video.Frame.Width != graphicsModes[index].Width || g_Video.Frame.Height != graphicsModes[index].Height)
             {
@@ -3634,6 +3772,7 @@ INT main(VOID)
                 badCount++;
             }
         }
+
         CHECK(badCount == 0, "#325 geometry: CRTC-derived size == the mode table for 0Dh 0Eh 10h 11h 12h 13h");
         /* Mode X: 13h, unchained, then the classic 240-line CRTC program. */
         memset(&modeRegisters, 0, sizeof modeRegisters);

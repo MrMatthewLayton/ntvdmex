@@ -54,6 +54,7 @@ static void PortEchoIn(void *self, uint16_t port, uint8_t width, uint32_t *value
     PPORTECHO_STATE state = (PPORTECHO_STATE)self;
 
     (void)width;
+
     switch (port - PORTECHO_BASE)
     {
     case PORTECHO_ID_REGISTER:
@@ -87,6 +88,7 @@ static void PortEchoOut(void *self, uint16_t port, uint8_t width, uint32_t value
     PPORTECHO_STATE state = (PPORTECHO_STATE)self;
 
     (void)width;
+
     if ((port - PORTECHO_BASE) == PORTECHO_ID_REGISTER)
     {
         state->Latch = (uint8_t)value;
@@ -104,6 +106,7 @@ NTVDMEX_VDD_EXPORT int NtvdmexVddInit(const ntvdmex_vdd_api *api, ntvdmex_vdd_bu
      */
     if (!api || api->version != NTVDMEX_VDD_ABI_VERSION)
         return -1;
+
     if (api->size < sizeof *api)
         return -1;
 
@@ -124,6 +127,7 @@ NTVDMEX_VDD_EXPORT int NtvdmexVddInit(const ntvdmex_vdd_api *api, ntvdmex_vdd_bu
                  " this device is NOT on the bus");
         return -1;
     }
+
     api->log("portecho: 0x2E0..0x2E7 claimed (id=0x4E)");
     return 0;
 }

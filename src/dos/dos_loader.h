@@ -129,11 +129,15 @@ static inline DOS_IMAGE DosLoadImageAt(
         DWORD totalUsed = pageCount ? ((DWORD)(pageCount - 1) * DOS_MZ_PAGE_BYTES + (lastPageBytes ? lastPageBytes : DOS_MZ_PAGE_BYTES))
                                   : bytesRead;
         DWORD imageSize;
+
         if (totalUsed > bytesRead)
             totalUsed = bytesRead;
+
         imageSize = totalUsed > headerSize ? totalUsed - headerSize : 0;
+
         for (index = 0; index < imageSize; ++index)
             imageBytes[index] = file[headerSize + index];
+
         for (index = 0; index < relocationCount; ++index)                              /* apply relocations */
         {
             DWORD fixupOffset = DosLoaderReadWord(file + relocationTable + index * DOS_MZ_RELOCATION_ENTRY);
@@ -142,6 +146,7 @@ static inline DOS_IMAGE DosLoadImageAt(
                                     + (((DWORD)(loadSegment + fixupSegment)) << PARAGRAPH_SHIFT) + fixupOffset);
             DosMcbWriteWord(fixup, (WORD)(DosMcbReadWord(fixup) + loadSegment));
         }
+
         image.CodeSegment = (WORD)(loadSegment + DosLoaderReadWord(file + DOS_MZ_INITIAL_CS));     /* e_cs */
         image.InstructionPointer = DosLoaderReadWord(file + DOS_MZ_INITIAL_IP);                            /* e_ip */
         image.StackSegment = (WORD)(loadSegment + DosLoaderReadWord(file + DOS_MZ_INITIAL_SS));     /* e_ss */
@@ -153,8 +158,10 @@ static inline DOS_IMAGE DosLoadImageAt(
     {
         DWORD comSize = bytesRead > DOS_COM_MAX_BYTES ? DOS_COM_MAX_BYTES : bytesRead;
         volatile BYTE *code = DosMcbSegmentAddress(base, pspSegment) + DOS_COM_ENTRY;   /* pspSegment:0x100 */
+
         for (index = 0; index < comSize; ++index)
             code[index] = file[index];
+
         image.CodeSegment = pspSegment;
         image.InstructionPointer = DOS_COM_ENTRY;
         image.StackSegment = pspSegment;
@@ -162,6 +169,7 @@ static inline DOS_IMAGE DosLoadImageAt(
         image.IsExe = FALSE;
         image.ImageSize = comSize;
     }
+
     return image;
 }
 
@@ -191,6 +199,7 @@ static inline WORD DosImageParagraphs(_In_reads_bytes_(bytesRead) PCBYTE file, _
 
     if (bytesRead < DOS_MZ_HEADER_MIN || file[0] != 'M' || file[1] != 'Z')
         return 0;
+
     pageParagraphs = (DWORD)DosLoaderReadWord(file + DOS_MZ_PAGE_COUNT) * DOS_MZ_PAGE_PARAGRAPHS;
     headerParagraphs   = DosLoaderReadWord(file + DOS_MZ_HEADER_PARAGRAPHS);
     return (WORD)(pageParagraphs > headerParagraphs ? pageParagraphs - headerParagraphs : 0);
@@ -232,26 +241,33 @@ static inline INT DosExecSize(
     WORD maximumAlloc;
 
     *loadHigh = FALSE;
+
     if (bytesRead < DOS_MZ_HEADER_MIN || file[0] != 'M' || file[1] != 'Z')
     {
         *allocation = largest;
         return DOS_MCB_SUCCESS;
     }
+
     imageParagraphs = DosImageParagraphs(file, bytesRead);
     minimumAlloc = DosLoaderReadWord(file + DOS_MZ_MIN_ALLOC);
     maximumAlloc = DosLoaderReadWord(file + DOS_MZ_MAX_ALLOC);
     needed = DOS_PSP_PARAGRAPHS + imageParagraphs + minimumAlloc;
+
     if (needed > largest)
         return DOS_MCB_ERROR_INSUFFICIENT_MEMORY;
+
     if (minimumAlloc == 0 && maximumAlloc == 0)
     {
         *loadHigh = TRUE;
         *allocation = largest;
         return DOS_MCB_SUCCESS;
     }
+
     wanted = DOS_PSP_PARAGRAPHS + imageParagraphs + maximumAlloc;
+
     if (wanted < needed)
         wanted = needed;                               /* a maxalloc below minalloc */
+
     *allocation = (WORD)(wanted < largest ? wanted : largest);
     return DOS_MCB_SUCCESS;
 }
@@ -264,23 +280,31 @@ static inline INT DosExeKind(
     DWORD newHeader;
 
     *subsystem = 0;
+
     if (bytesRead < DOS_MZ_NEW_HEADER_MIN || file[0] != 'M' || file[1] != 'Z')
         return DOS_EXE_DOS;
+
     newHeader = (DWORD)DosLoaderReadWord(file + DOS_MZ_NEW_HEADER) | ((DWORD)DosLoaderReadWord(file + DOS_MZ_NEW_HEADER + 2) << WORD_SHIFT);
+
     if (newHeader < DOS_MZ_NEW_HEADER_MIN || newHeader > bytesRead - DOS_PE_SIGNATURE_BYTES)
         return DOS_EXE_DOS;
+
     if (file[newHeader] == 'P' && file[newHeader + 1] == 'E' && file[newHeader + 2] == 0 && file[newHeader + 3] == 0)
     {
         if (newHeader + DOS_PE_SUBSYSTEM_END <= bytesRead)
             *subsystem = DosLoaderReadWord(file + newHeader + DOS_PE_SUBSYSTEM);
+
         return DOS_EXE_PE;
     }
+
     if (file[newHeader] == 'N' && file[newHeader + 1] == 'E' && newHeader + DOS_NE_TARGET_OS_END <= bytesRead)
     {
         BYTE targetOs = file[newHeader + DOS_NE_TARGET_OS];
+
         if (targetOs == DOS_NE_OS_WINDOWS || targetOs == DOS_NE_OS_UNSPECIFIED)
             return DOS_EXE_NE;
     }
+
     return DOS_EXE_DOS;
 }
 
@@ -319,22 +343,29 @@ static inline DWORD DosLoadOverlay(
     {
         /* A .COM overlay is the file, verbatim, with nothing to relocate. */
         imageBytes = DosMcbSegmentAddress(base, loadSegment);
+
         for (index = 0; index < bytesRead; ++index)
             imageBytes[index] = file[index];
+
         return bytesRead;
     }
+
     headerSize  = (DWORD)DosLoaderReadWord(file + DOS_MZ_HEADER_PARAGRAPHS) * PARAGRAPH_SIZE;
     relocationCount   = DosLoaderReadWord(file + DOS_MZ_RELOCATION_COUNT);
     relocationTable = DosLoaderReadWord(file + DOS_MZ_RELOCATION_TABLE);
     lastPageBytes   = DosLoaderReadWord(file + DOS_MZ_LAST_PAGE_BYTES);
     pageCount     = DosLoaderReadWord(file + DOS_MZ_PAGE_COUNT);
     totalUsed = pageCount ? ((DWORD)(pageCount - 1) * DOS_MZ_PAGE_BYTES + (lastPageBytes ? lastPageBytes : DOS_MZ_PAGE_BYTES)) : bytesRead;
+
     if (totalUsed > bytesRead)
         totalUsed = bytesRead;
+
     imageSize = totalUsed > headerSize ? totalUsed - headerSize : 0;
     imageBytes = DosMcbSegmentAddress(base, loadSegment);
+
     for (index = 0; index < imageSize; ++index)
         imageBytes[index] = file[headerSize + index];
+
     for (index = 0; index < relocationCount; ++index)
     {
         DWORD fixupOffset = DosLoaderReadWord(file + relocationTable + index * DOS_MZ_RELOCATION_ENTRY);
@@ -343,6 +374,7 @@ static inline DWORD DosLoadOverlay(
                                 + (((DWORD)(loadSegment + fixupSegment)) << PARAGRAPH_SHIFT) + fixupOffset);
         DosMcbWriteWord(fixup, (WORD)(DosMcbReadWord(fixup) + relocationFactor));
     }
+
     return imageSize;
 }
 

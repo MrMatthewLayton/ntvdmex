@@ -115,6 +115,7 @@ static inline volatile BYTE *DosEnvPutString(_Out_ volatile BYTE *cursor, _In_ P
 {
     while (*text)
         *cursor++ = (BYTE)*text++;
+
     return cursor;
 }
 
@@ -125,6 +126,7 @@ static inline volatile BYTE *DosEnvPutBounded(
 {
     while (*text && cursor < end)
         *cursor++ = (BYTE)*text++;
+
     return cursor;
 }
 
@@ -140,14 +142,18 @@ static inline volatile BYTE *DosEnvPutDecimal(
     {
         if (cursor < end)
             *cursor++ = '0';
+
         return cursor;
     }
+
     while (value && digitCount < (INT)sizeof digits)
     {
         digits[digitCount++] = (CHAR)('0' + value % DECIMAL_RADIX);
         value /= DECIMAL_RADIX;
     }
+
     while (digitCount-- > 0 && cursor < end) *cursor++ = (BYTE)digits[digitCount];
+
     return cursor;
 }
 
@@ -165,6 +171,7 @@ static inline volatile BYTE *DosEnvPutThreeHexDigits(
     for (shift = DOS_ENV_HEX_FIRST_SHIFT; shift >= 0; shift -= NIBBLE_SHIFT)
         if (cursor < end)
             *cursor++ = (BYTE)hexDigits[(value >> shift) & NIBBLE_MASK];
+
     return cursor;
 }
 
@@ -190,27 +197,32 @@ static inline volatile BYTE *DosEnvPutBlaster(
         defaultCard.Emu8kBase = DOS_SB_NOT_ADVERTISED;
         card = &defaultCard;
     }
+
     cursor = DosEnvPutBounded(cursor, end, "BLASTER=A");
     cursor = DosEnvPutThreeHexDigits(cursor, end, card->IoBase);
     cursor = DosEnvPutBounded(cursor, end, " I");
     cursor = DosEnvPutDecimal(cursor, end, card->Irq);
     cursor = DosEnvPutBounded(cursor, end, " D");
     cursor = DosEnvPutDecimal(cursor, end, card->Dma8Channel);
+
     if (card->Dma16Channel)
     {
         cursor = DosEnvPutBounded(cursor, end, " H");
         cursor = DosEnvPutDecimal(cursor, end, card->Dma16Channel);
     }
+
     if (card->MpuBase)
     {
         cursor = DosEnvPutBounded(cursor, end, " P");
         cursor = DosEnvPutThreeHexDigits(cursor, end, card->MpuBase);
     }
+
     if (card->Emu8kBase)
     {
         cursor = DosEnvPutBounded(cursor, end, " E");
         cursor = DosEnvPutThreeHexDigits(cursor, end, card->Emu8kBase);
     }
+
     cursor = DosEnvPutBounded(cursor, end, " T");
     cursor = DosEnvPutDecimal(cursor, end, card->Type);
     return cursor;
@@ -281,28 +293,36 @@ static inline DWORD DosEnvBuildWithCard(
      */
     cursor = DosEnvPutBlaster(cursor, variablesEnd, card);
     *cursor++ = 0;
+
     if (extra)
     {
         PCSTR remaining = extra;
+
         while (*remaining)
         {
             PCSTR line = remaining;
             INT lineLength = 0;
             INT characterIndex;
+
             while (line[lineLength] && line[lineLength] != '\n' && line[lineLength] != '\r' && line[lineLength] != ';')
                 ++lineLength;
+
             /* Drop the entry WHOLE if it cannot fit -- see the cap note above. */
             if (lineLength > 0 && line[0] != '#' && cursor + lineLength + 1 <= variablesEnd)
             {
                 for (characterIndex = 0; characterIndex < lineLength; ++characterIndex)
                     *cursor++ = (BYTE)line[characterIndex];
+
                 *cursor++ = 0;
             }
+
             remaining = line + lineLength;
+
             while (*remaining == '\n' || *remaining == '\r' || *remaining == ';')
                 ++remaining;
         }
     }
+
     *cursor++ = 0;                                       /* trailing \0 ends the var list */
     *cursor++ = DOS_ENV_STRING_COUNT_LOW;
     *cursor++ = DOS_ENV_STRING_COUNT_HIGH;                       /* WORD: one string follows */

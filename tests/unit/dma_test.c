@@ -81,6 +81,7 @@ static VOID DmaTestProgram(PVDD_BUS bus, INT channel, UINT32 physical, WORD coun
         pagePort = 0x8A;
     break;
     }
+
     value = 0;
     VddBusIo(bus, flipFlopPort,   1, 0, &value);
     value = address & 0xFF;
@@ -147,6 +148,7 @@ INT main(VOID)
     /* T3: a plain single-cycle read transfer (memory -> device) ------------- */
     for (index = 0; index < 256; ++index)
         g_GuestMemory[0x71000 + index] = (BYTE)index;
+
     DmaTestProgram(&bus, 1, 0x71000, 99, DMA_MODE_TRANSFER_READ);   /* 100 bytes */
     CHECK(dma.Channels[1].IsMasked == 0, "unmask via single-mask register");
     CHECK(VddDmaRemaining(&dma, 1) == 100, "remaining = count+1 bytes");
@@ -187,6 +189,7 @@ INT main(VOID)
     /* T6: auto-init wraps and keeps streaming (the audio ring buffer) ------- */
     for (index = 0; index < 16; ++index)
         g_GuestMemory[0x72000 + index] = (BYTE)(0xA0 + index);
+
     DmaTestProgram(&bus, 1, 0x72000, 15, DMA_MODE_TRANSFER_READ | DMA_MODE_AUTOINIT);
     memset(buffer, 0, sizeof buffer);
     actual = VddDmaRead(&dma, 1, buffer, 40, &isTerminalCount);
@@ -200,8 +203,10 @@ INT main(VOID)
 
     /* T7: decrement mode walks the address downwards ------------------------ */
     DmaTestProgram(&bus, 3, 0x73100, 3, DMA_MODE_TRANSFER_READ | DMA_MODE_DECREMENT);
+
     for (index = 0; index < 4; ++index)
         g_GuestMemory[0x73100 - index] = (BYTE)(0x10 + index);
+
     memset(buffer, 0, sizeof buffer);
     actual = VddDmaRead(&dma, 3, buffer, 4, &isTerminalCount);
     CHECK(actual == 4, "decrement: 4 bytes transferred");
@@ -211,6 +216,7 @@ INT main(VOID)
     /* T8: 16-bit controller -- word addressing, word counts ----------------- */
     for (index = 0; index < 32; ++index)
         g_GuestMemory[0x84000 + index] = (BYTE)(0x40 + index);
+
     DmaTestProgram(&bus, 5, 0x84000, 7, DMA_MODE_TRANSFER_READ);    /* 8 words = 16 bytes */
     CHECK(dma.Channels[5].BaseAddress == 0x2000, "16-bit channel: address register is a WORD address");
     CHECK(VddDmaCurrentPhysical(&dma, 5) == 0x84000, "16-bit channel: phys = (page&0xFE)<<16|addr<<1");
@@ -223,8 +229,10 @@ INT main(VOID)
 
     /* T9: device -> memory (recording direction) ---------------------------- */
     DmaTestProgram(&bus, 1, 0x75000, 7, DMA_MODE_TRANSFER_WRITE);
+
     for (index = 0; index < 8; ++index)
         buffer[index] = (BYTE)(0xE0 + index);
+
     actual = VddDmaWrite(&dma, 1, buffer, 8, &isTerminalCount);
     CHECK(actual == 8, "write direction: 8 bytes accepted");
     CHECK(g_GuestMemory[0x75000] == 0xE0 && g_GuestMemory[0x75007] == 0xE7,
@@ -342,8 +350,10 @@ INT main(VOID)
      */
     {
         UINT32 status;
+
         for (index = 0; index < 64; ++index)
             g_GuestMemory[0x77000 + index] = (BYTE)(0x80 + index);
+
         DmaTestProgram(&bus, 1, 0x77000, 31, DMA_MODE_TRANSFER_READ);         /* 32 bytes */
         actual = VddDmaRead(&dma, 1, buffer, 8, &isTerminalCount);
         CHECK(actual == 8 && buffer[7] == 0x87, "disable: 8 bytes move while enabled");
@@ -371,6 +381,7 @@ INT main(VOID)
         /* the other controller is not affected */
         for (index = 0; index < 4; ++index)
             g_GuestMemory[0x86000 + index] = (BYTE)(0x60 + index);
+
         DmaTestProgram(&bus, 5, 0x86000, 1, DMA_MODE_TRANSFER_READ);          /* 2 words */
         actual = VddDmaRead(&dma, 5, buffer, 4, &isTerminalCount);
         CHECK(actual == 4 && buffer[0] == 0x60, "disable 08h: controller 2's channel 5 still moves");
@@ -444,8 +455,10 @@ INT main(VOID)
     {
         UINT32 status;
         VddDmaReset(&dma);
+
         for (index = 0; index < 32; ++index)
             g_GuestMemory[0x78000 + index] = (BYTE)(0x40 + index);
+
         DmaTestProgram(&bus, 1, 0x78000, 15, 0x80 /* block */ | DMA_MODE_TRANSFER_VERIFY);
         value = 0x05;
         VddBusIo(&bus, 0x0A, 1, 0, &value);                /* MASK ch1 */
@@ -528,11 +541,13 @@ INT main(VOID)
     {
         UINT32 status;
         VddDmaReset(&dma);
+
         for (index = 0; index < 16; ++index)
         {
             g_GuestMemory[0x79000 + index] = (BYTE)(0xA0 + index);
             g_GuestMemory[0x7A000 + index] = 0;
         }
+
         DmaTestProgram(&bus, 0, 0x79000, 0xFFFF, 0x80 | DMA_MODE_TRANSFER_READ);  /* source */
         DmaTestProgram(&bus, 1, 0x7A000, 9, 0x80 | DMA_MODE_TRANSFER_WRITE);      /* 10 dest */
         value = DMA_COMMAND_MEMORY_TO_MEMORY;

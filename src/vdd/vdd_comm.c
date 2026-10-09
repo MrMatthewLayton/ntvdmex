@@ -92,17 +92,23 @@ static BYTE CommInterruptIdentification(PCOMM_PORT uart)
 {
     if ((uart->Ier & COMM_IER_LINE_STATUS)  && (uart->Lsr & (COMM_LSR_OVERRUN | COMM_LSR_PARITY_ERROR | COMM_LSR_FRAMING_ERROR | COMM_LSR_BREAK)))
         return COMM_IIR_LINE_STATUS;
+
     if ((uart->Ier & COMM_IER_RECEIVED_DATA)  && (uart->Lsr & COMM_LSR_DATA_READY))
     {
         WORD fifoCount = (WORD)(uart->ReceiveLength < COMM_FIFO_DEPTH ? uart->ReceiveLength : COMM_FIFO_DEPTH);
+
         if (!(uart->Fcr & COMM_FCR_ENABLE) || fifoCount >= CommReceiveTrigger(uart))
             return COMM_IIR_RECEIVED_DATA;
+
         return COMM_IIR_CHARACTER_TIMEOUT;                              /* character timeout (FIFO mode) */
     }
+
     if ((uart->Ier & COMM_IER_THR_EMPTY) && uart->IsThrePending)
         return COMM_IIR_THR_EMPTY;
+
     if ((uart->Ier & COMM_IER_MODEM_STATUS)   && (uart->Msr & COMM_MSR_DELTAS))
         return COMM_IIR_MODEM_STATUS;
+
     return COMM_IIR_NO_INTERRUPT;                                  /* bit 0 set = nothing owed */
 }
 
@@ -141,10 +147,13 @@ static VOID CommUpdateIrq(PCOMM_STATE state, PCOMM_PORT uart)
 {
     if (!state->Bus || !uart->IsFitted)
         return;
+
     if (!(uart->Mcr & COMM_MCR_OUT2) || (uart->Mcr & COMM_MCR_LOOP))
         return;
+
     if (CommInterruptIdentification(uart) & COMM_IIR_NO_INTERRUPT)
         return;                                                                          /* nothing pending */
+
     VddRaiseIrq(state->Bus, uart->Irq);
 }
 
@@ -166,12 +175,16 @@ static BYTE CommLoopbackModemStatus(BYTE modemControl)
 
     if (modemControl & COMM_MCR_DTR)
         lines |= COMM_MSR_DSR;
+
     if (modemControl & COMM_MCR_RTS)
         lines |= COMM_MSR_CTS;
+
     if (modemControl & COMM_MCR_OUT1)
         lines |= COMM_MSR_RI;
+
     if (modemControl & COMM_MCR_OUT2)
         lines |= COMM_MSR_DCD;
+
     return lines;
 }
 
@@ -190,9 +203,11 @@ static VOID CommSetModemStatus(PCOMM_PORT uart, BYTE lines)
     if (deltas & COMM_MSR_TRAILING_RI)
     {
         deltas &= (BYTE)~COMM_MSR_TRAILING_RI;
+
         if (oldLines & COMM_MSR_RI)
             deltas |= COMM_MSR_TRAILING_RI;
     }
+
     uart->Msr = (BYTE)((lines & COMM_MSR_LINES) | ((uart->Msr & COMM_MSR_DELTAS) | deltas));
 }
 
@@ -203,6 +218,7 @@ static VOID CommPushReceive(PCOMM_PORT uart, BYTE value)
         uart->Lsr |= COMM_LSR_OVERRUN;
         return;
     }
+
     uart->Receive[(uart->ReceiveHead + uart->ReceiveLength) % COMM_RECEIVE_RING_SIZE] = value;
     ++uart->ReceiveLength;
     uart->Lsr |= COMM_LSR_DATA_READY;
@@ -215,11 +231,14 @@ static BYTE CommPopReceive(PCOMM_PORT uart)
 
     if (!uart->ReceiveLength)
         return uart->Rbr;
+
     value = uart->Receive[uart->ReceiveHead];
     uart->ReceiveHead = (WORD)((uart->ReceiveHead + 1) % COMM_RECEIVE_RING_SIZE);
     --uart->ReceiveLength;
+
     if (!uart->ReceiveLength)
         uart->Lsr &= (BYTE)~COMM_LSR_DATA_READY;
+
     uart->Rbr = value;
     return value;
 }
@@ -231,12 +250,14 @@ static PCOMM_PORT CommFind(PCOMM_STATE state, WORD port, BYTE *registerIndex)
     for (portIndex = 0; portIndex < COMM_MAX_PORTS; ++portIndex)
     {
         PCOMM_PORT uart = &state->Ports[portIndex];
+
         if (uart->IsFitted && port >= uart->BasePort && port < (WORD)(uart->BasePort + COMM_REGISTERS))
         {
             *registerIndex = (BYTE)(port - uart->BasePort);
             return uart;
         }
     }
+
     return 0;
 }
 
@@ -247,11 +268,13 @@ static VOID CommPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     PCOMM_PORT uart = CommFind(state, port, &registerIndex);
 
     (VOID)width;
+
     if (!uart)
     {
         *value = COMM_UNDRIVEN_BUS;
         return;
     }
+
     switch (registerIndex)
     {
     case COMM_RBR:
@@ -260,6 +283,7 @@ static VOID CommPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
             *value = uart->DivisorLow;
             break;
         }
+
         *value = CommPopReceive(uart);
         break;
 
@@ -270,14 +294,17 @@ static VOID CommPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     case COMM_IIR:
     {
         BYTE identification = CommInterruptIdentification(uart);
+
         if (identification == COMM_IIR_THR_EMPTY)
             uart->IsThrePending = 0;                                              /* the read IS the clear */
+
         /* Bits 6-7 report an ENABLED FIFO. Answering 0xC0 when the guest never
          * enabled one would tell a 16550-aware driver it may write 16 bytes
          * between interrupts on a part that is behaving like an 8250.
          */
         if (uart->Fcr & COMM_FCR_ENABLE)
             identification |= COMM_IIR_FIFOS_ENABLED;
+
         *value = identification;
         break; }
 
@@ -320,8 +347,10 @@ static VOID CommPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
     PCOMM_PORT uart = CommFind(state, port, &registerIndex);
 
     (VOID)width;
+
     if (!uart)
         return;
+
     switch (registerIndex)
     {
     case COMM_RBR:                                 /* transmit holding */
@@ -330,6 +359,7 @@ static VOID CommPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
             uart->DivisorLow = byteValue;
             break;
         }
+
         ++uart->TransmitCount;
         /* [CAUTION]: THE TRANSMITTER IS NEVER BUSY HERE, and that is a decision. A real
          * part clears THRE while the byte shifts out; we complete instantly,
@@ -340,6 +370,7 @@ static VOID CommPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
             CommPushReceive(uart, byteValue);
         else if (state->Sink)
             state->Sink(state->SinkContext, (INT)(uart - state->Ports), byteValue);
+
         uart->IsThrePending = 1;
         CommUpdateIrq(state, uart);
         break;
@@ -350,6 +381,7 @@ static VOID CommPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
             uart->DivisorHigh = byteValue;
             break;
         }
+
         /* #245: ENABLING THRE WITH THE HOLDING REGISTER ALREADY EMPTY IS ITSELF A
          * THRE INTERRUPT (PC16550D: the source is "THRE set AND ETBEI set", so the
          * 0->1 write makes it true). Drivers rely on it -- the classic kick-start
@@ -358,17 +390,20 @@ static VOID CommPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
          */
         if (!(uart->Ier & COMM_IER_THR_EMPTY) && (byteValue & COMM_IER_THR_EMPTY) && (uart->Lsr & COMM_LSR_THR_EMPTY))
             uart->IsThrePending = 1;
+
         uart->Ier = (BYTE)(byteValue & COMM_IER_VALID_BITS);
         CommUpdateIrq(state, uart);
         break;
 
     case COMM_IIR:                                 /* write side is FCR */
         uart->Fcr = byteValue;
+
         if (byteValue & COMM_FCR_RX_RESET)
         {
             uart->ReceiveHead = uart->ReceiveLength = 0;
             uart->Lsr &= (BYTE)~COMM_LSR_DATA_READY;
         }
+
         break;
 
     case COMM_LCR:
@@ -381,18 +416,23 @@ static VOID CommPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
          */
         BYTE previousLcr = uart->Lcr;
         uart->Lcr = byteValue;
+
         if (!(previousLcr & COMM_LCR_BREAK) && (byteValue & COMM_LCR_BREAK))
         {
             ++uart->Breaks;
+
             if (uart->Mcr & COMM_MCR_LOOP)
             {
                 CommPushReceive(uart, COMM_BREAK_BYTE);
                 uart->Lsr |= COMM_LSR_BREAK;
+
                 if (uart->Fcr & COMM_FCR_ENABLE)
                     uart->Lsr |= COMM_LSR_FIFO_ERROR;
+
                 CommUpdateIrq(state, uart);
             }
         }
+
         break; }
 
     case COMM_MCR:
@@ -454,7 +494,9 @@ static VOID CommInt14(PVOID context, PNTVDD_REGISTERS registers)
         VddSetAx(registers, COMM_INT14_TIMEOUT);
         return;
     }
+
     uart = &state->Ports[portIndex];
+
     switch (functionCode)
     {
     case COMM_INT14_INITIALIZE:                                     /* initialise */
@@ -474,10 +516,12 @@ static VOID CommInt14(PVOID context, PNTVDD_REGISTERS registers)
 
     case COMM_INT14_SEND:                                     /* send AL */
         ++uart->TransmitCount;
+
         if (uart->Mcr & COMM_MCR_LOOP)
             CommPushReceive(uart, (BYTE)argumentByte);
         else if (state->Sink)
             state->Sink(state->SinkContext, (INT)portIndex, (BYTE)argumentByte);
+
         /* #245: the same byte through the BIOS is the same write to THR -- it owes
          * the same THRE interrupt the port write does.
          */
@@ -496,6 +540,7 @@ static VOID CommInt14(PVOID context, PNTVDD_REGISTERS registers)
         {
             VddSetAx(registers, COMM_INT14_TIMEOUT);                       /* TIMEOUT: nothing waiting */
         }
+
         break;
 
     case COMM_INT14_STATUS:                                     /* status */
@@ -516,12 +561,14 @@ static PLPT_PORT LptFind(PCOMM_STATE state, WORD port, BYTE *registerIndex)
     for (portIndex = 0; portIndex < LPT_MAX_PORTS; ++portIndex)
     {
         PLPT_PORT printer = &state->Printers[portIndex];
+
         if (printer->IsFitted && port >= printer->BasePort && port < (WORD)(printer->BasePort + LPT_REGISTERS))
         {
             *registerIndex = (BYTE)(port - printer->BasePort);
             return printer;
         }
     }
+
     return 0;
 }
 
@@ -532,11 +579,13 @@ static VOID LptPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     PLPT_PORT printer = LptFind(state, port, &registerIndex);
 
     (VOID)width;
+
     if (!printer)
     {
         *value = COMM_UNDRIVEN_BUS;
         return;
     }
+
     switch (registerIndex)
     {
     case LPT_DATA_REGISTER:
@@ -569,8 +618,10 @@ static VOID LptPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
     PLPT_PORT printer = LptFind(state, port, &registerIndex);
 
     (VOID)width;
+
     if (!printer)
         return;
+
     switch (registerIndex)
     {
     case LPT_DATA_REGISTER:
@@ -589,12 +640,15 @@ static VOID LptPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
          */
         BYTE previousControl = printer->Control;
         printer->Control = byteValue;
+
         if (!(previousControl & LPT_CONTROL_STROBE) && (byteValue & LPT_CONTROL_STROBE))
         {
             ++printer->BytesPrinted;
+
             if (state->PrinterSink)
                 state->PrinterSink(state->PrinterSinkContext, (INT)(printer - state->Printers), printer->Data);
         }
+
         break; }
 
     default:
@@ -606,6 +660,7 @@ INT VddLptIsFitted(PCCOMM_STATE state, INT port)
 {
     if (port < 0 || port >= LPT_MAX_PORTS)
         return 0;
+
     return state->Printers[port].IsFitted ? 1 : 0;
 }
 
@@ -613,6 +668,7 @@ INT VddCommIsFitted(PCCOMM_STATE state, INT port)
 {
     if (port < 0 || port >= COMM_MAX_PORTS)
         return 0;
+
     return state->Ports[port].IsFitted ? 1 : 0;
 }
 
@@ -622,13 +678,16 @@ INT VddCommReceive(PCOMM_STATE state, INT port, BYTE byte)
 
     if (port < 0 || port >= COMM_MAX_PORTS || !state->Ports[port].IsFitted)
         return -1;
+
     uart = &state->Ports[port];
+
     if (uart->ReceiveLength >= COMM_RECEIVE_RING_SIZE)
     {
         uart->Lsr |= COMM_LSR_OVERRUN;
         ++uart->Overruns;
         return -1;
     }
+
     CommPushReceive(uart, byte);
     CommUpdateIrq(state, uart);
     return 0;
@@ -665,6 +724,7 @@ VOID VddCommReset(PVOID context)
         uart->Irq = irq;
         uart->IsFitted = fitted;
     }
+
     for (portIndex = 0; portIndex < LPT_MAX_PORTS; ++portIndex)
     {
         /* The DATA LATCH SURVIVES A RESET on real hardware -- it is a latch,
@@ -684,11 +744,14 @@ INT VddCommInitialize(PVDD_BUS bus, PVOID context)
     INT anyFitted = 0;
 
     state->Bus = bus;
+
     for (portIndex = 0; portIndex < COMM_MAX_PORTS; ++portIndex)
     {
         PCOMM_PORT uart = &state->Ports[portIndex];
+
         if (!uart->IsFitted)
             continue;
+
         if (VddClaimPorts(bus, uart->BasePort, (WORD)(uart->BasePort + COMM_LAST_REGISTER),
                             CommPortIn, CommPortOut, state) != 0)
         {
@@ -700,27 +763,34 @@ INT VddCommInitialize(PVDD_BUS bus, PVOID context)
             uart->IsFitted = 0;
             continue;
         }
+
         anyFitted = 1;
     }
+
     for (portIndex = 0; portIndex < LPT_MAX_PORTS; ++portIndex)
     {
         PLPT_PORT printer = &state->Printers[portIndex];
+
         if (!printer->IsFitted)
             continue;
+
         if (VddClaimPorts(bus, printer->BasePort, (WORD)(printer->BasePort + LPT_LAST_REGISTER),
                             LptPortIn, LptPortOut, state) != 0)
         {
             printer->IsFitted = 0;
             continue;
         }
+
         anyFitted = 1;
     }
+
     /* INT 14h is claimed even with no port fitted, so that "no such port"
      * is answered by the part that knows, in one place, rather than by a
      * fallback in the host that could disagree with it.
      */
     if (VddClaimInterrupt(bus, VECTOR_SERIAL, CommInt14, state) != 0)
         return COMM_FAILED;
+
     VddCommReset(state);
     return anyFitted ? 0 : 0;
 }

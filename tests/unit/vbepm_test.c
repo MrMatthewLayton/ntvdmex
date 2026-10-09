@@ -117,18 +117,22 @@ static INT VbePmTestCallPm(
     cpu.Eip = COPY + offset;
     cpu.Flags = 0x202;
     cpu.SegmentBases[0] = esBase;                    /* ES; CS/SS/DS flat 0 */
+
     for (step = 0; step < 2000000; ++step)
     {
         if (cpu.Eip == RETADR)
             break;
+
         if (!Pm32Step(&cpu))
         {
             printf("    declined at +%#x (op %02X)\n", cpu.Eip - COPY, g_GuestMemory[cpu.Eip]);
             return 0;
         }
     }
+
     if (output)
         *output = cpu;
+
     return cpu.Eip == RETADR && cpu.Registers[4] == STACK;
 }
 
@@ -189,14 +193,18 @@ INT main(VOID)
         INT has3da = 0;
         INT count = 0;
         UINT32 listAddress = block + portsOffset;
+
         for (;;) { WORD port = (WORD)(g_GuestMemory[listAddress] | (g_GuestMemory[listAddress + 1] << 8));
         listAddress += 2;
+
                    if (port == 0xFFFF || ++count > 16)
                        break;
+
                    has1ce |= port == 0x1CE;
                    has1cf |= port == 0x1CF;
                    has3c9 |= port == 0x3C9;
                    has3da |= port == 0x3DA; }
+
         CHECK(has1ce && has1cf && has3c9 && has3da && g_GuestMemory[listAddress] == 0xFF && g_GuestMemory[listAddress + 1] == 0xFF,
               "table +6: every port the code touches, FFFFh, then an empty memory list (FFFFh)");
     }
@@ -278,9 +286,11 @@ INT main(VOID)
 
     /* ---- the block in guest memory is restored by every 4F0Ah call ---- */
     VbePmTestInt10(0x4F0A, 0x0000, 0, 0, &registers);
+
     for (index = 0; index < length; ++index)
         if (g_GuestMemory[block + index] != g_GuestMemory[COPY + index])
             break;
+
     CHECK(index == length, "4F0Ah again: the block at B260:0000 is rewritten, byte for byte");
 
     printf("\n%d checks, %d failed\n", g_Total, g_Failures);

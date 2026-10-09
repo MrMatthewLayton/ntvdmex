@@ -56,11 +56,13 @@ static VOID CmosTestFakeRtc(PVOID context, PPIT_RTC_READING output)
 static INT CmosTestFakeSet(PVOID context, PCPIT_RTC_READING input, INT fields)
 {
     (VOID)context;
+
     if (g_SetCount < 4)
     {
         g_SetReadings[g_SetCount] = *input;
         g_SetFields[g_SetCount] = fields;
     }
+
     g_SetCount++;
     return 1;
 }
@@ -68,6 +70,7 @@ static INT CmosTestFakeSet(PVOID context, PCPIT_RTC_READING input, INT fields)
 static VOID CmosTestIrqSink(PVOID context, BYTE irq)
 {
     (VOID)context;
+
     if (irq == 8)
         g_Irq8Count++;
 }
@@ -212,8 +215,10 @@ INT main(VOID)
         VddCmosReset(&cmos);
         CHECK(cmos.BaseKb == 512 && cmos.Ram[0x15] == 0x00 && cmos.Ram[0x16] == 0x02,
               "base_kb 512: 15h/16h = 0200h, and the field survives reset");
+
         for (index = 0x10; index <= 0x2D; ++index)
             sum += cmos.Ram[index];
+
         CHECK(cmos.Ram[0x2E] == (BYTE)(sum >> 8) && cmos.Ram[0x2F] == (BYTE)sum,
               "base_kb 512: checksum 2Eh/2Fh still matches 10h-2Dh");
         cmos.BaseKb = 0;
@@ -397,8 +402,10 @@ INT main(VOID)
         UINT index;
         UINT sum = 0;
         VddCmosReset(&cmos);
+
         for (index = 0x10; index <= 0x2D; ++index)
             sum += CmosTestRead(&bus, (BYTE)index);
+
         CHECK(CmosTestRead(&bus, 0x2E) == ((sum >> 8) & 0xFF) && CmosTestRead(&bus, 0x2F) == (sum & 0xFF),
               "cmos: the checksum at 2Eh/2Fh covers 10h-2Dh");
     }

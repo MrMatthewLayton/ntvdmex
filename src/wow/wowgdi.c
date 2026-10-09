@@ -56,11 +56,13 @@ WORD WowGdiH16(HGDIOBJ object, INT kind)
 
     if (!object)
         return 0;
+
     for (index = 0; index < g_WowGdiObjectCount; ++index)
         if (g_WowGdiObjects[index].Object == object)
         {
             if (g_WowGdiObjects[index].Kind == kind)
                 return g_WowGdiObjects[index].Handle16;
+
             /* -- SAME ADDRESS, DIFFERENT KIND: THE ENTRY IS STALE, AND
              * THIS WAS SOLITAIRE'S BLACK CARDS. Win32 RECYCLES HGDIOBJ VALUES.
              * A memory DC is deleted, a bitmap is created, and the OS hands
@@ -86,15 +88,19 @@ WORD WowGdiH16(HGDIOBJ object, INT kind)
             g_WowGdiObjects[index].Object = NULL;
             g_WowGdiObjects[index].Handle16 = 0;
         }
+
     for (index = 0; index < g_WowGdiObjectCount; ++index)                    /* reuse a freed slot */
         if (!g_WowGdiObjects[index].Handle16 && !g_WowGdiObjects[index].Object)
             break;
+
     if (index == g_WowGdiObjectCount)
     {
         if (g_WowGdiObjectCount >= WOWGDI_MAX)
             return 0;
+
         index = g_WowGdiObjectCount++;
     }
+
     g_WowGdiObjects[index].Object = object;
     g_WowGdiObjects[index].Kind = kind;
     g_WowGdiObjects[index].Handle16 = (WORD)(WOWGDI_BASE + index * WOWGDI_STEP);
@@ -107,15 +113,19 @@ HGDIOBJ WowGdiH32(WORD handle16, PINT kind)
 
     if (kind)
         *kind = -1;
+
     if (!handle16)
         return NULL;
+
     for (index = 0; index < g_WowGdiObjectCount; ++index)
         if (g_WowGdiObjects[index].Handle16 == handle16)
         {
             if (kind)
                 *kind = g_WowGdiObjects[index].Kind;
+
             return g_WowGdiObjects[index].Object;
         }
+
     return NULL;
 }
 
@@ -174,11 +184,15 @@ static INT CALLBACK WowGdiFontCollect(
     INT index;
 
     (VOID)unused;
+
     if (g_WowEnumFontCount >= WOWENUM_MAXFONT)
         return 0;
+
     entry = &g_WowEnumFonts[g_WowEnumFontCount++];
+
     for (index = 0; index < (INT)sizeof entry->Blob; ++index)
         entry->Blob[index] = 0;
+
     blob = entry->Blob;
     WowGdiPut16(blob, WOWGDI_LF16_HEIGHT, logFont->lfHeight);
     WowGdiPut16(blob, WOWGDI_LF16_WIDTH, logFont->lfWidth);
@@ -193,15 +207,19 @@ static INT CALLBACK WowGdiFontCollect(
     blob[WOWGDI_LF16_CLIPPRECISION] = logFont->lfClipPrecision;
     blob[WOWGDI_LF16_QUALITY] = logFont->lfQuality;
     blob[WOWGDI_LF16_PITCHANDFAMILY] = logFont->lfPitchAndFamily;
+
     for (index = 0; index < WOWGDI_LF16_FACESIZE - 1 && logFont->lfFaceName[index]; ++index)
         blob[WOWGDI_LF16_FACENAME + index] = (BYTE)logFont->lfFaceName[index];
+
     if (!g_WowGdiFontIsPlain)
     {
         for (index = 0; index < WOWGDI_ELF16_FULLNAME_SIZE - 1 && enumLogFont->elfFullName[index]; ++index)
             blob[WOWGDI_ELF16_FULLNAME + index] = enumLogFont->elfFullName[index];
+
         for (index = 0; index < WOWGDI_ELF16_STYLE_SIZE - 1 && enumLogFont->elfStyle[index]; ++index)
             blob[WOWGDI_ELF16_STYLE + index] = enumLogFont->elfStyle[index];
     }
+
     metrics = blob + WOWENUM_ELF16;
     WowGdiPut16(metrics, WOWGDI_NTM16_HEIGHT, textMetric->tmHeight);
     WowGdiPut16(metrics, WOWGDI_NTM16_ASCENT, textMetric->tmAscent);
@@ -223,6 +241,7 @@ static INT CALLBACK WowGdiFontCollect(
     WowGdiPut16(metrics, WOWGDI_NTM16_OVERHANG, textMetric->tmOverhang);
     WowGdiPut16(metrics, WOWGDI_NTM16_DIGITIZEDASPECTX, textMetric->tmDigitizedAspectX);
     WowGdiPut16(metrics, WOWGDI_NTM16_DIGITIZEDASPECTY, textMetric->tmDigitizedAspectY);
+
     if ((type & TRUETYPE_FONTTYPE) && !g_WowGdiFontIsPlain)   /* the NEW part: TrueType's */
     {
         metrics[WOWGDI_NTM16_FLAGS] = (BYTE)newTextMetric->ntmFlags;
@@ -233,6 +252,7 @@ static INT CALLBACK WowGdiFontCollect(
         WowGdiPut16(metrics, WOWGDI_NTM16_CELLHEIGHT, (LONG)newTextMetric->ntmCellHeight);
         WowGdiPut16(metrics, WOWGDI_NTM16_AVGWIDTH, (LONG)newTextMetric->ntmAvgWidth);
     }
+
     entry->FontType = (WORD)type;
     return 1;
 }
@@ -245,9 +265,12 @@ static INT CALLBACK WowGdiObjectCollect(LPVOID logObject, LPARAM type)
 
     if (g_WowEnumFontCount >= WOWENUM_MAXFONT)
         return 0;
+
     blob = g_WowEnumFonts[g_WowEnumFontCount].Blob;
+
     for (index = 0; index < WOWGDI_OBJECT_BLOB_CLEAR; ++index)
         blob[index] = 0;
+
     if (type == OBJ_PEN)
     {
         const LOGPEN *logPen = (const LOGPEN *)logObject;
@@ -265,6 +288,7 @@ static INT CALLBACK WowGdiObjectCollect(LPVOID logObject, LPARAM type)
         WowGdiPut16(blob, WOWGDI_LB16_COLOR + WOW_WORD_BYTES, (LONG)(logBrush->lbColor >> WORD_SHIFT));
         WowGdiPut16(blob, WOWGDI_LB16_HATCH, (LONG)logBrush->lbHatch);
     }
+
     g_WowEnumFonts[g_WowEnumFontCount].FontType = (WORD)type;
     ++g_WowEnumFontCount;
     return 1;
@@ -281,17 +305,21 @@ INT WowGdiMetafileReadBack(VOID)
 
     if (!g_WowGdiMetafile.IsActive || !g_WowGdiMetafile.TableLinear)
         return 0;
+
     for (index = 0; index < g_WowGdiMetafile.ObjectCount; ++index)
     {
         WORD token = WowGdiPeek((const volatile BYTE *)(ULONG_PTR)g_WowGdiMetafile.TableLinear, (INT)(index * WOW_WORD_BYTES));
         INT  kind = -1;
+
         if (token == g_WowGdiMetafile.Tokens[index])
             continue;
+
         if (!token || (WowGdiH32(token, &kind) && kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
             g_WowGdiMetafile.Tokens[index] = token;
         else
             ++badCount;
     }
+
     g_WowGdiMetafile.TableLinear = 0;
     return badCount;
 }
@@ -303,28 +331,36 @@ VOID WowGdiMetafileEnd(VOID)
 
     if (!g_WowGdiMetafile.IsActive)
         return;
+
     if (g_WowGdiMetafile.Dc)
     {
         if (g_WowGdiMetafile.OriginalPen)
             SelectObject(g_WowGdiMetafile.Dc, g_WowGdiMetafile.OriginalPen);
+
         if (g_WowGdiMetafile.OriginalBrush)
             SelectObject(g_WowGdiMetafile.Dc, g_WowGdiMetafile.OriginalBrush);
+
         if (g_WowGdiMetafile.OriginalFont)
             SelectObject(g_WowGdiMetafile.Dc, g_WowGdiMetafile.OriginalFont);
     }
+
     for (index = 0; index < g_WowGdiMetafile.ObjectCount; ++index)
     {
         INT kind = -1;
         HGDIOBJ object = g_WowGdiMetafile.Tokens[index] ? WowGdiH32(g_WowGdiMetafile.Tokens[index], &kind) : NULL;
+
         if (object && kind == WOWGDI_KIND_OBJ)
         {
             DeleteObject(object);
             WowGdiForget(g_WowGdiMetafile.Tokens[index]);
         }
+
         g_WowGdiMetafile.Tokens[index] = 0;
     }
+
     if (g_WowGdiMetafile.Bits)
         HeapFree(GetProcessHeap(), 0, g_WowGdiMetafile.Bits);
+
     g_WowGdiMetafile.Bits = NULL;
     g_WowGdiMetafile.IsActive = 0;
     g_WowGdiMetafile.TableLinear = g_WowGdiMetafile.RecordLinear = 0;
@@ -344,33 +380,43 @@ INT WowGdiMetafileNext(INT room, PINT blobLength, PINT tableOffset, UINT *functi
     INT index;
 
     *function = 0;
+
     if (!g_WowGdiMetafile.IsActive || g_WowGdiMetafile.Offset >= g_WowGdiMetafile.End)
         return 0;
+
     if (!WowConvMetafileRecord(g_WowGdiMetafile.Bits, g_WowGdiMetafile.End, g_WowGdiMetafile.Offset, &recordBytes, &recordFunction))
     {
         *function = WOWGDI_MF_MALFORMED;
         return 0;
     }
+
     if (recordFunction == 0 && !WOWMF_PASS_EOF)
         return 0;
+
     if (room < tableBytes + WOWCONV_MF_RECHDR)
     {
         *function = WOWGDI_MF_NO_ROOM;
         return 0;
     }
+
     copyBytes = (INT)recordBytes;
     g_WowGdiMetafile.IsTruncated = 0;
+
     if (copyBytes > room - tableBytes)
     {
         copyBytes = (room - tableBytes) & ~1;
         g_WowGdiMetafile.IsTruncated = 1;
     }
+
     for (index = 0; index < copyBytes; ++index)
         g_WowGdiMetafileBlob[index] = g_WowGdiMetafile.Bits[g_WowGdiMetafile.Offset + (DWORD)index];
+
     for (index = 0; index < (INT)g_WowGdiMetafile.ObjectCount; ++index)
         WowGdiPut16(g_WowGdiMetafileBlob, copyBytes + index * WOW_WORD_BYTES, g_WowGdiMetafile.Tokens[index]);
+
     if (!g_WowGdiMetafile.ObjectCount)
         WowGdiPut16(g_WowGdiMetafileBlob, copyBytes, 0);
+
     g_WowGdiMetafile.RecordOffset = g_WowGdiMetafile.Offset;
     g_WowGdiMetafile.RecordBytes = (DWORD)recordBytes;
     g_WowGdiMetafile.Offset = (recordFunction == 0) ? g_WowGdiMetafile.End : g_WowGdiMetafile.Offset + (DWORD)recordBytes;    /* EOF is last */
@@ -385,6 +431,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 {
     if (noteCapacity)
         note[0] = 0;
+
     switch (frame->Id)
     {
 
@@ -410,6 +457,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", 0x");
         WowNoteHex(note, noteCapacity, &noteLength, itemIndex, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || !isDc)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR GDI DC TOKENS (the"
@@ -418,6 +466,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         value = GetDeviceCaps((HDC)object, (INT)itemIndex);
 
         /* -- NUMCOLORS: -1 IS A Win32 SENTINEL AND NO Win16 PROGRAM HAS
@@ -458,6 +507,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WowNoteHex(note, noteCapacity, &noteLength, (DWORD)value, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, "; a Win16 caller reads -1 as MONOCHROME]");
         }
+
         /* [CAUTION]: REFUTED, session 45, and recorded so it is not re-tried: forcing
          * HORZRES/HORZSIZE to stock's 2.0 (from our 2.625) changed MS Paint's
          * toolbox by NOTHING -- pbTool stayed 163x731 to the pixel. Paint
@@ -511,6 +561,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)sourceY, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ") rop=0x");
         WowNoteHex(note, noteCapacity, &noteLength, rasterOp, WOW_HEX_DWORD_DIGITS);
+
         if (!destination || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ THE DESTINATION IS NOT ONE OF OUR"
@@ -518,6 +569,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         /* [CAUTION]: A NULL SOURCE IS LEGAL for the rops that do not read one (BLACKNESS,
          * WHITENESS, PATCOPY...), so a zero handle is passed through as NULL
          * rather than refused; a NON-zero handle that we cannot name is a
@@ -530,6 +582,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         isOk = BitBlt((HDC)destination, positionX, positionY, width, height, sourceDc16 ? (HDC)source : NULL, sourceX, sourceY, rasterOp)
              ? 1 : 0;
         WowNotePut(note, noteCapacity, &noteLength, isOk ? " -> blitted" : " -- ★ the OS refused it");
@@ -580,6 +633,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)sourceHeight, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " rop=0x");
         WowNoteHex(note, noteCapacity, &noteLength, rasterOp, WOW_HEX_DWORD_DIGITS);
+
         if (!destination || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ THE DESTINATION IS NOT ONE OF OUR"
@@ -587,6 +641,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (sourceDc16 && (!source || (sourceKind != WOWGDI_KIND_DC && sourceKind != WOWGDI_KIND_WINDC)))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ THE SOURCE IS NOT ONE OF OUR DC"
@@ -594,6 +649,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         isOk = StretchBlt((HDC)destination, positionX, positionY, width, height, sourceDc16 ? (HDC)source : NULL,
                         sourceX, sourceY, sourceWidth, sourceHeight, rasterOp) ? 1 : 0;
         WowNotePut(note, noteCapacity, &noteLength, isOk ? " -> stretched"
@@ -619,6 +675,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                             : "UnrealizeObject(0x");
         WowNoteHex(note, noteCapacity, &noteLength, handle16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR GDI TOKENS;"
@@ -626,12 +683,14 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (isDc && kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ THAT IS NOT A DC; answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (frame->Id == WOWGDI_UNREALIZEOBJ)
         {
             INT result = UnrealizeObject(object) ? 1 : 0;
@@ -639,11 +698,14 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, (DWORD)result);
             return 1;
         }
+
         point.x = point.y = 0;
+
         if (frame->Id == WOWGDI_GETBRUSHORG)
             GetBrushOrgEx((HDC)object, &point);
         else
             GetDCOrgEx((HDC)object, &point);
+
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)point.x, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ",");
@@ -670,6 +732,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ",");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionY, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -677,6 +740,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         result = PtVisible((HDC)object, positionX, positionY) ? 1 : 0;
         WowNotePut(note, noteCapacity, &noteLength, result ? " -> visible" : " -> NOT visible");
         Wow32SetReturn(frame, (DWORD)result);
@@ -707,6 +771,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", ");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)itemCount, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " points)");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || !pointBytes)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS, or no"
@@ -714,6 +779,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         /* [CAUTION]: BOUNDED. The count comes from the guest and the scratch array does
          * not grow; a longer run is refused rather than overrunning.
          */
@@ -723,11 +789,13 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         for (index = 0; index < count; ++index)
         {
             points[index].x = (INT)(SHORT)Wow32PeekWord(pointBytes + index * WOWGDI_POINT16_SIZE);
             points[index].y = (INT)(SHORT)Wow32PeekWord(pointBytes + index * WOWGDI_POINT16_SIZE + WOWGDI_POINT16_Y);
         }
+
         /* [INFO]: Polygon DRAWS and writes nothing back; LPtoDP TRANSFORMS IN PLACE.
          * Same block, opposite data flow -- so they share the read and part
          * company here.
@@ -740,6 +808,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, (DWORD)result);
             return 1;
         }
+
         /* [INFO]: DPtoLP is LPtoDP's inverse and nothing else differs -- same block,
          * same in-place write-back, opposite transform.
          */
@@ -750,11 +819,13 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         for (index = 0; index < count; ++index)
         {
             Wow32PokeWord(pointBytes + index * WOWGDI_POINT16_SIZE,     (WORD)(SHORT)points[index].x);
             Wow32PokeWord(pointBytes + index * WOWGDI_POINT16_SIZE + WOWGDI_POINT16_Y, (WORD)(SHORT)points[index].y);
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)points[0].x, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ",");
@@ -787,6 +858,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ",");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)height, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -794,6 +866,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (!isBitmap)
         {
             POINT previous;
@@ -803,8 +876,10 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                             | (DWORD)(WORD)(SHORT)previous.x);
             return 1;
         }
+
         {   HBITMAP bitmap;
             WORD token;
+
             if (width <= 0 || height <= 0)
             {
                 WowNotePut(note, noteCapacity, &noteLength, " -- ★ A DIMENSION IS NOT POSITIVE;"
@@ -812,17 +887,21 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 Wow32SetReturn(frame, 0);
                 return 1;
             }
+
             bitmap = CreateDiscardableBitmap((HDC)object, width, height);
             token = bitmap ? WowGdiH16((HGDIOBJ)bitmap, WOWGDI_KIND_OBJ) : 0;
+
             if (!token)
             {
                 if (bitmap)
                     DeleteObject((HGDIOBJ)bitmap);
+
                 WowNotePut(note, noteCapacity, &noteLength, " -- ★ refused, or the token map is"
                                            " full; answered 0");
                 Wow32SetReturn(frame, 0);
                 return 1;
             }
+
             WowNotePut(note, noteCapacity, &noteLength, " -> bitmap token 0x");
             WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
             Wow32SetReturn(frame, token);
@@ -852,6 +931,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ",");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)bottom, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -859,6 +939,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         Wow32SetReturn(frame, (DWORD)(Rectangle((HDC)object, left, top, right, bottom) ? 1 : 0));
         return 1;
     }
@@ -883,6 +964,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", 0x");
         WowNoteHex(note, noteCapacity, &noteLength, color, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -890,6 +972,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         previous = isText ? SetTextColor((HDC)object, (COLORREF)color)
                       : SetBkColor((HDC)object, (COLORREF)color);
         Wow32SetReturn(frame, (DWORD)previous);
@@ -928,6 +1011,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", ");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)mode, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -935,6 +1019,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         previous = frame->Id == WOWGDI_SETROP2        ? SetROP2((HDC)object, mode)
              : frame->Id == WOWGDI_SETSTRETCHMODE ? SetStretchBltMode((HDC)object, mode)
              : frame->Id == WOWGDI_SETBKMODE      ? SetBkMode((HDC)object, mode)
@@ -962,6 +1047,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ",");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionY, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -969,6 +1055,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         previous.x = previous.y = 0;
         SetWindowOrgEx((HDC)object, positionX, positionY, &previous);
         Wow32SetReturn(frame, ((DWORD)(WORD)(SHORT)previous.y << WORD_SHIFT)
@@ -996,12 +1083,15 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT result;
         WowNotePut(note, noteCapacity, &noteLength, isSave ? "SaveDC(0x" : "RestoreDC(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
+
         if (!isSave)
         {
             WowNotePut(note, noteCapacity, &noteLength, ", level ");
             WowNoteHex(note, noteCapacity, &noteLength, (DWORD)level, WOW_HEX_WORD_DIGITS);
         }
+
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -1009,6 +1099,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         result = isSave ? SaveDC((HDC)object) : (RestoreDC((HDC)object, level) ? 1 : 0);
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, WOW_HEX_WORD_DIGITS);
@@ -1035,6 +1126,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ",");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionY, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -1042,11 +1134,13 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (isLine)
         {
             Wow32SetReturn(frame, (DWORD)(LineTo((HDC)object, positionX, positionY) ? 1 : 0));
             return 1;
         }
+
         previous.x = previous.y = 0;
         MoveToEx((HDC)object, positionX, positionY, &previous);
         /* [INFO]: y in the HIGH word, x in the LOW -- Win16's MAKELONG order. */
@@ -1083,6 +1177,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, " rop=0x");
         WowNoteHex(note, noteCapacity, &noteLength, rasterOp, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -1090,6 +1185,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         Wow32SetReturn(frame, (DWORD)(PatBlt((HDC)object, positionX, positionY, width, height, rasterOp) ? 1 : 0));
         return 1;
     }
@@ -1117,6 +1213,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, "GetStockObject(0x");
         WowNoteHex(note, noteCapacity, &noteLength, itemIndex, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (itemIndex > WOWGDI_STOCK_OBJECT_LAST)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT A Win16 STOCK OBJECT (they stop"
@@ -1124,6 +1221,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         object = GetStockObject((INT)itemIndex);
         /* [CAUTION]: "NO SUCH OBJECT" AND "NO ROOM" ARE DIFFERENT FACTS, and the first
          * cut of this printed the second for both -- so a run reported "THE
@@ -1140,7 +1238,9 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         token = WowGdiH16(object, WOWGDI_KIND_STOCK);
+
         if (!token)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ THE GDI TOKEN MAP IS FULL;"
@@ -1148,6 +1248,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, token);
@@ -1186,26 +1287,33 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         Wow32ArgString(frame, WOWGDI_CDC_ARG_DEVICE, deviceName, sizeof deviceName);
         WowNotePut(note, noteCapacity, &noteLength, isCreateDc ? "CreateIC driver=" : "CreateDC driver=");
         WowNoteQuoted(note, noteCapacity, &noteLength, driverName);
+
         if (deviceName[0])
         {
             WowNotePut(note, noteCapacity, &noteLength, " device=");
             WowNoteQuoted(note, noteCapacity, &noteLength, deviceName);
         }
+
         /* Case-insensitively "DISPLAY" -- the guest writes it lower case. */
         isDisplay = 1;
+
         for (index = 0; index < WOWGDI_DISPLAY_NAME_LENGTH; ++index)
         {
             CHAR letter = driverName[index];
+
             if (letter >= 'a' && letter <= 'z')
                 letter = (CHAR)(letter - WOWGDI_LOWER_TO_UPPER);
+
             if (letter != "DISPLAY"[index])
             {
                 isDisplay = 0;
                 break;
             }
         }
+
         if (isDisplay && driverName[WOWGDI_DISPLAY_NAME_LENGTH])
             isDisplay = 0;
+
         if (!isDisplay)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT THE DISPLAY. That names a"
@@ -1216,9 +1324,11 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (initData)
             WowNotePut(note, noteCapacity, &noteLength, " -- ⚠ lpInitData IS NOT NULL and is being"
                                        " ignored (it carries a DEVMODE)");
+
         /* [INFO]: An INFORMATION context is asked for by name and answered with one:
          * it is cheaper than a DC and a guest that draws on one is doing
          * something Windows would refuse too, so the distinction is kept
@@ -1227,16 +1337,19 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         dc = isCreateDc ? CreateICA("DISPLAY", NULL, NULL, NULL)
                   : CreateDCA("DISPLAY", NULL, NULL, NULL);
         token = dc ? WowGdiH16((HGDIOBJ)dc, WOWGDI_KIND_DC) : 0;
+
         if (!token)
         {
             if (dc)
                 DeleteDC(dc);
+
             WowNotePut(note, noteCapacity, &noteLength, dc ? " -- ★ THE GDI TOKEN MAP IS FULL; the"
                                             " DC was deleted again and 0 answered"
                                           : " -- ★ THE OS REFUSED IT; answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> screen DC token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, token);
@@ -1263,6 +1376,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, "CreateCompatibleDC(0x");
         WowNoteHex(note, noteCapacity, &noteLength, sourceDc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (sourceDc16 && (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ THAT IS NOT ONE OF OUR DC TOKENS;"
@@ -1270,20 +1384,25 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (!sourceDc16)
             WowNotePut(note, noteCapacity, &noteLength, " (compatible with the SCREEN)");
+
         dc = CreateCompatibleDC(sourceDc16 ? (HDC)object : NULL);
         token = dc ? WowGdiH16((HGDIOBJ)dc, WOWGDI_KIND_DC) : 0;
+
         if (!token)
         {
             if (dc)
                 DeleteDC(dc);             /* never issue a DC we cannot name */
+
             WowNotePut(note, noteCapacity, &noteLength, dc ? " -- ★ THE GDI TOKEN MAP IS FULL; the"
                                             " DC was deleted again and 0 answered"
                                           : " -- ★ THE OS REFUSED IT; answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> DC token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, token);
@@ -1331,11 +1450,13 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", count=");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)count, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (escape == WOWGDI_ESC_QUERYESCSUPPORT)
         {
             /* lpInData points at the escape number being asked about. */
             if (input)
                 wanted = (INT)(WORD)(input[0] | (input[1] << BYTE_SHIFT));
+
             WowNotePut(note, noteCapacity, &noteLength, " -- QUERYESCSUPPORT for ");
             WowNoteHex(note, noteCapacity, &noteLength, (DWORD)wanted, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, ": this DC supports QUERYESCSUPPORT and"
@@ -1344,6 +1465,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, (DWORD)(wanted == WOWGDI_ESC_QUERYESCSUPPORT ? 1 : 0));
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT IMPLEMENTED BY THIS DRIVER, which"
                                    " is what 0 MEANS for Escape (a screen DC has"
                                    " no printing escapes). A real printing path"
@@ -1371,6 +1493,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         DWORD bits;
         HBITMAP bitmap;
         WowNotePut(note, noteCapacity, &noteLength, "CreateBitmapIndirect ");
+
         if (!bitmap16)
         {
             WowNotePut(note, noteCapacity, &noteLength, "-- ★ the BITMAP far pointer does not"
@@ -1378,6 +1501,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         width   = (INT)(SHORT)WowGdiPeek(bitmap16, WOWGDI_CBI_OFF_WIDTH);
         height   = (INT)(SHORT)WowGdiPeek(bitmap16, WOWGDI_CBI_OFF_HEIGHT);
         planes  = bitmap16[WOWGDI_CBI_OFF_PLANES];
@@ -1391,6 +1515,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteHex(note, noteCapacity, &noteLength, planes, WOW_HEX_BYTE_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " bpp=");
         WowNoteHex(note, noteCapacity, &noteLength, bitsPerPixel, WOW_HEX_BYTE_DIGITS);
+
         if (width <= 0 || height <= 0 || !planes || !bitsPerPixel)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ A DIMENSION OR FORMAT IS NOT"
@@ -1398,6 +1523,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         /* [CAUTION]: bmBits IS IGNORED HERE ON PURPOSE, and the log says so: the pointer
          * is a guest far pointer whose bytes we would have to resolve and
          * validate exactly as CreateBitmap does. No guest measured passes one
@@ -1407,6 +1533,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         if (bits) WowNotePut(note, noteCapacity, &noteLength, " [★ bmBits IS NON-ZERO and is NOT"
                                              " being read -- the bitmap comes"
                                              " back UNINITIALISED]");
+
         bitmap = CreateBitmap(width, height, planes, bitsPerPixel, NULL);
         token = WowGdiH16((HGDIOBJ)bitmap, WOWGDI_KIND_OBJ);
         WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
@@ -1443,6 +1570,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteHex(note, noteCapacity, &noteLength, lastChar, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         itemCount = (INT)lastChar - (INT)firstChar + 1;
+
         if (!dc || !output || itemCount <= 0 || itemCount > WOWGDI_ABC_MAX)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ no DC, no buffer, or a range this"
@@ -1451,8 +1579,10 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         {   static ABC abcWidths[WOWGDI_ABC_MAX];
             isOk = GetCharABCWidthsA(dc, firstChar, lastChar, abcWidths) ? 1 : 0;
+
             if (isOk)
             {
                 for (index = 0; index < itemCount; ++index)
@@ -1464,9 +1594,11 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                     value[1] = (long)abcWidths[index].abcB;
                     value[WOWCONV_ABC_C] = (long)abcWidths[index].abcC;
                     WowConvAbc32To16(value, abc16);
+
                     for (byteIndex = 0; byteIndex < WOWCONV_ABC16_SIZE; ++byteIndex)
                         output[index * WOWCONV_ABC16_SIZE + byteIndex] = abc16[byteIndex];
                 }
+
                 WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
                 WowNoteHex(note, noteCapacity, &noteLength, (DWORD)itemCount, WOW_HEX_WORD_DIGITS);
                 WowNotePut(note, noteCapacity, &noteLength, " glyph(s), narrowed 12 bytes -> 6");
@@ -1505,14 +1637,17 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", n=");
         WowNoteHex(note, noteCapacity, &noteLength, count, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!palette || GetObjectType((HGDIOBJ)palette) != OBJ_PAL || !input)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR PALETTES (or no entries); 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (count > WOWGDI_PALETTE_MAX)
             count = WOWGDI_PALETTE_MAX;
+
         for (index = 0; index < count; ++index)               /* four bytes in both: a copy */
         {
             paletteEntry[index].peRed = input[index * WOWGDI_PALETTEENTRY16_SIZE];
@@ -1520,6 +1655,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             paletteEntry[index].peBlue = input[index * WOWGDI_PALETTEENTRY16_SIZE + WOWGDI_PE16_BLUE];
             paletteEntry[index].peFlags = input[index * WOWGDI_PALETTEENTRY16_SIZE + WOWGDI_PE16_FLAGS];
         }
+
         returned = SetPaletteEntries(palette, startIndex, count, paletteEntry);
         WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
         WowNoteHex(note, noteCapacity, &noteLength, returned, WOW_HEX_WORD_DIGITS);
@@ -1544,6 +1680,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, callName);
         WowNoteHex(note, noteCapacity, &noteLength, handle16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (object && frame->Id == WOWGDI_GETBITMAPDIMENSION)
         {
             if (GetObjectType(object) == OBJ_BITMAP)
@@ -1554,6 +1691,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             isOk = frame->Id == WOWGDI_GETVIEWPORTEXT ? GetViewportExtEx((HDC)object, &size)
                                                 : GetWindowExtEx((HDC)object, &size);
         }
+
         if (!isOk)
         {
             size.cx = size.cy = 0;
@@ -1563,6 +1701,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)size.cx, WOW_HEX_WORD_DIGITS);
                WowNotePut(note, noteCapacity, &noteLength, "x");
                WowNoteHex(note, noteCapacity, &noteLength, (DWORD)size.cy, WOW_HEX_WORD_DIGITS); }
+
         Wow32SetReturn(frame, ((DWORD)(WORD)size.cy << WORD_SHIFT) | (WORD)size.cx);
         return 1;
     }
@@ -1583,12 +1722,14 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", n=");
         WowNoteHex(note, noteCapacity, &noteLength, count, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!palette)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR PALETTES; answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         /* [CAUTION]: A NULL buffer is not an error: it is how a caller ASKS HOW MANY
          * entries the palette has, and Win32 answers the same way.
          */
@@ -1600,11 +1741,14 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, returned);
             return 1;
         }
+
         if (count > WOWGDI_PALETTE_MAX)
             count = WOWGDI_PALETTE_MAX;
+
         {   static PALETTEENTRY paletteEntry[WOWGDI_PALETTE_MAX];
             UINT index;
             returned = GetPaletteEntries(palette, startIndex, count, paletteEntry);
+
             for (index = 0; index < returned; ++index)
             {
                 output[index * WOWGDI_PALETTEENTRY16_SIZE] = paletteEntry[index].peRed;
@@ -1646,7 +1790,9 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         Wow32SetReturn(frame, 1);                 /* the walk revises it to 0 on a stop */
+
         if (object && (kind == WOWGDI_KIND_DC || kind == WOWGDI_KIND_WINDC))
             dc = (HDC)object;
         else
@@ -1654,30 +1800,39 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             dc = GetDC(NULL);
             isOwned = 1;
         }
+
         g_WowEnumFontCount = 0;
+
         if (dc)
         {
             EnumObjects(dc, objectType, (GOBJENUMPROC)WowGdiObjectCollect, (LPARAM)objectType);
+
             if (isOwned)
                 ReleaseDC(NULL, dc);
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)g_WowEnumFontCount, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " object(s)");
+
         if (!g_WowEnumFontCount || !frame->IsCallbackAllowed)
         {
             if (!frame->IsCallbackAllowed)
                 WowNotePut(note, noteCapacity, &noteLength, " -- callbacks are not armed");
+
             if (!g_WowEnumFontCount)
                 Wow32SetReturn(frame, 0);
+
             return 1;
         }
+
         if (WowEnumBusy())
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ AN ENUMERATION IS ALREADY RUNNING; REFUSED");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (!WowEnumBegin(WOWENUM_OBJECTS, procedure, frame->GuestDataSelector, lParam,
                            (DWORD)(ULONG_PTR)(frame->FrameBase + WOW32_OFF_RET), 0))
         {
@@ -1685,6 +1840,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         frame->IsEnumerationRequested = 1;
         return 1;
     }
@@ -1706,13 +1862,16 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, isPlain ? "EnumFonts(0x" : "EnumFontFamilies(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, hasFamily ? ", \"" : ", NULL");
+
         if (hasFamily)
         {
             WowNotePut(note, noteCapacity, &noteLength, family);
             WowNotePut(note, noteCapacity, &noteLength, "\"");
         }
+
         WowNotePut(note, noteCapacity, &noteLength, ")");
         Wow32SetReturn(frame, 1);                 /* the walk revises it to 0 on a stop */
+
         if (object && (kind == WOWGDI_KIND_DC || kind == WOWGDI_KIND_WINDC))
             dc = (HDC)object;
         else
@@ -1720,38 +1879,49 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             dc = GetDC(NULL);
             isOwned = 1;
         }
+
         g_WowEnumFontCount = 0;
+
         if (dc)
         {
             g_WowGdiFontIsPlain = isPlain;
+
             if (isPlain) EnumFontsA(dc, hasFamily ? family : NULL,
                                   (FONTENUMPROCA)WowGdiFontCollect, 0);
             else
                 EnumFontFamiliesA(dc, hasFamily ? family : NULL, WowGdiFontCollect, 0);
+
             g_WowGdiFontIsPlain = 0;
+
             if (isOwned)
                 ReleaseDC(NULL, dc);
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)g_WowEnumFontCount, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " font(s)");
+
         if (!g_WowEnumFontCount || !frame->IsCallbackAllowed)
         {
             if (!frame->IsCallbackAllowed)
                 WowNotePut(note, noteCapacity, &noteLength, " -- callbacks are not armed");
+
             return 1;
         }
+
         if (WowEnumBusy())
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ AN ENUMERATION IS ALREADY RUNNING; REFUSED");
             return 1;
         }
+
         if (!WowEnumBegin(WOWENUM_FONTS, procedure, frame->GuestDataSelector, lParam,
                            (DWORD)(ULONG_PTR)(frame->FrameBase + WOW32_OFF_RET), 0))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ the callback is not a usable far pointer");
             return 1;
         }
+
         frame->IsEnumerationRequested = 1;
         return 1;
     }
@@ -1776,18 +1946,21 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ") proc=0x");
         WowNoteHex(note, noteCapacity, &noteLength, procedure, WOW_HEX_DWORD_DIGITS);
         Wow32SetReturn(frame, 0);                       /* the function returns void */
+
         if (!frame->IsCallbackAllowed)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- callbacks are not armed; no point was"
                                        " visited");
             return 1;
         }
+
         if (WowEnumBusy())
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ AN ENUMERATION IS ALREADY RUNNING;"
                                        " REFUSED rather than sharing a cursor");
             return 1;
         }
+
         /* [CAUTION]: THE DS IS THE CALLER'S OWN. A LineDDA callback is application code in
          * the application's data segment, and this host has no class or window
          * to take an instance from here -- so it is entered with the DS the
@@ -1802,6 +1975,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                        " pointer");
             return 1;
         }
+
         WowEnumLine(startX, startY, endX, endY);
         frame->IsEnumerationRequested = 1;
         return 1;
@@ -1826,6 +2000,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, " bpp=");
         WowNoteHex(note, noteCapacity, &noteLength, bitsPerPixel, WOW_HEX_BYTE_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, bits ? " with bits" : " uninitialised");
+
         if (width <= 0 || handle16 <= 0 || !planes || !bitsPerPixel)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ A DIMENSION OR FORMAT IS NOT"
@@ -1833,9 +2008,11 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (bits)
         {
             DWORD stride = ((((DWORD)width * planes * bitsPerPixel) + (WOWGDI_WORD_BITS - 1)) / WOWGDI_WORD_BITS) * WOW_WORD_BYTES;
+
             if (stride * (DWORD)handle16 > 0x10000ul)
             {
                 WowNotePut(note, noteCapacity, &noteLength, " -- ★ THE BITS WOULD RUN PAST A 64K"
@@ -1845,19 +2022,23 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 return 1;
             }
         }
+
         bitmap = CreateBitmap(width, handle16, (UINT)planes, (UINT)bitsPerPixel,
                           bits ? (const VOID *)(PCBYTE )bits : NULL);
         token = bitmap ? WowGdiH16((HGDIOBJ)bitmap, WOWGDI_KIND_OBJ) : 0;
+
         if (!token)
         {
             if (bitmap)
                 DeleteObject((HGDIOBJ)bitmap);
+
             WowNotePut(note, noteCapacity, &noteLength, bitmap ? " -- ★ THE GDI TOKEN MAP IS FULL; the"
                                             " bitmap was freed and 0 answered"
                                           : " -- ★ THE OS REFUSED IT; answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> bitmap token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, token);
@@ -1895,6 +2076,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, "x");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)handle16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ THAT IS NOT ONE OF OUR DC TOKENS;"
@@ -1902,6 +2084,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (width <= 0 || handle16 <= 0)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ A DIMENSION IS NOT POSITIVE;"
@@ -1910,18 +2093,22 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         bitmap = CreateCompatibleBitmap((HDC)object, width, handle16);
         token = bitmap ? WowGdiH16((HGDIOBJ)bitmap, WOWGDI_KIND_OBJ) : 0;
+
         if (!token)
         {
             if (bitmap)
                 DeleteObject((HGDIOBJ)bitmap);
+
             WowNotePut(note, noteCapacity, &noteLength, bitmap ? " -- ★ THE GDI TOKEN MAP IS FULL; the"
                                             " bitmap was freed and 0 answered"
                                           : " -- ★ THE OS REFUSED IT; answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> bitmap token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, token);
@@ -1940,15 +2127,18 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, "CreateSolidBrush(0x");
         WowNoteHex(note, noteCapacity, &noteLength, color, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!token)
         {
             if (brush)
                 DeleteObject((HGDIOBJ)brush);
+
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ refused or the token map is full;"
                                        " answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> brush token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, token);
@@ -1986,6 +2176,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", obj 0x");
         WowNoteHex(note, noteCapacity, &noteLength, object16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!dcObject || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ THE DC IS NOT ONE OF OUR TOKENS;"
@@ -1993,6 +2184,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (!object)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ THE OBJECT IS NOT ONE OF OUR TOKENS;"
@@ -2000,6 +2192,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (objectKind == WOWGDI_KIND_DC || objectKind == WOWGDI_KIND_WINDC)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ THAT IS A DC, NOT A DRAWING OBJECT;"
@@ -2007,7 +2200,9 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         previous = SelectObject((HDC)dcObject, object);
+
         if (!previous)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ THE OS REFUSED THE SELECTION;"
@@ -2015,12 +2210,15 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         token = WowGdiH16(previous, WOWGDI_KIND_OBJ);
         WowNotePut(note, noteCapacity, &noteLength, " -> previous 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
+
         if (!token)
             WowNotePut(note, noteCapacity, &noteLength, " -- ⚠ THE MAP IS FULL, so the guest cannot"
                                        " select it back");
+
         Wow32SetReturn(frame, token);
         return 1;
     }
@@ -2044,6 +2242,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteHex(note, noteCapacity, &noteLength, handle16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " cb=0x");
         WowNoteHex(note, noteCapacity, &noteLength, wanted, WOW_HEX_WORD_DIGITS);
+
         if (!object)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR GDI TOKENS;"
@@ -2051,12 +2250,16 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         for (index = 0; index < (INT)sizeof blob; ++index)
             blob[index] = 0;
+
         type = GetObjectType(object);
+
         if (type == OBJ_BITMAP)
         {
             BITMAP bitmap;
+
             if (!GetObject(object, (INT)sizeof bitmap, &bitmap))
                 type = 0;
             else
@@ -2102,6 +2305,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         else if (type == OBJ_FONT)
         {
             LOGFONTA logFont;
+
             if (!GetObjectA(object, (INT)sizeof logFont, &logFont))
                 type = 0;
             else
@@ -2121,17 +2325,21 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 blob[WOWGDI_LF16_CLIPPRECISION] = logFont.lfClipPrecision;
                 blob[WOWGDI_LF16_QUALITY] = logFont.lfQuality;
                 blob[WOWGDI_LF16_PITCHANDFAMILY] = logFont.lfPitchAndFamily;
+
                 for (index = 0; index < WOWGDI_LF16_FACESIZE && logFont.lfFaceName[index]; ++index)
                     blob[WOWGDI_LF16_FACENAME + index] = (BYTE)logFont.lfFaceName[index];
+
                 /* [INFO]: THE FIELDS, NOT JUST THE TYPE. MS Paint sizes its whole
                  * toolbox from the system font's metrics, so lfHeight is
                  * load-bearing geometry and a log that only says "LOGFONT"
                  * cannot be compared against an oracle.
                  */
                 {   INT innerIndex = 0;
+
                     for (innerIndex = 0; innerIndex < WOWGDI_LF16_FACESIZE && logFont.lfFaceName[innerIndex]; ++innerIndex)
                     {
                     }
+
                     WowNotePut(note, noteCapacity, &noteLength, " h=");
                     WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(WORD)(SHORT)logFont.lfHeight, WOW_HEX_WORD_DIGITS);
                     WowNotePut(note, noteCapacity, &noteLength, " w=");
@@ -2146,6 +2354,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         else if (type == OBJ_PEN || type == OBJ_EXTPEN)
         {
             LOGPEN logPen;
+
             if (!GetObject(object, (INT)sizeof logPen, &logPen))
                 type = 0;
             else
@@ -2162,6 +2371,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         else if (type == OBJ_BRUSH)
         {
             LOGBRUSH logBrush;
+
             if (!GetObject(object, (INT)sizeof logBrush, &logBrush))
                 type = 0;
             else
@@ -2178,6 +2388,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         {
             type = 0;
         }
+
         if (!type || !itemCount)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ THE OS WILL NOT DESCRIBE THAT OBJECT"
@@ -2186,6 +2397,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
         WowNotePut(note, noteCapacity, &noteLength, description);
         WowNotePut(note, noteCapacity, &noteLength, " (Win16 form is 0x");
@@ -2199,13 +2411,16 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, (DWORD)itemCount);
             return 1;
         }
+
         if ((INT)wanted < itemCount)
         {
             itemCount = (INT)wanted;                 /* a partial read is allowed */
             WowNotePut(note, noteCapacity, &noteLength, " -- PARTIAL, the guest asked for less");
         }
+
         for (index = 0; index < itemCount; ++index)
             destination[index] = blob[index];
+
         Wow32SetReturn(frame, (DWORD)itemCount);
         return 1;
     }
@@ -2233,6 +2448,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT wantedKind = isDeleteDc ? WOWGDI_KIND_DC : WOWGDI_KIND_OBJ;
         WowNotePut(note, noteCapacity, &noteLength, isDeleteDc ? "DeleteDC 0x" : "DeleteObject 0x");
         WowNoteHex(note, noteCapacity, &noteLength, handle16, WOW_HEX_WORD_DIGITS);
+
         if (!object)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR GDI TOKENS;"
@@ -2240,6 +2456,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         /* [CAUTION]: A STOCK OBJECT IS NOT DESTROYED, AND THE CALL STILL SUCCEEDS. The
          * system owns it; Windows makes DeleteObject on one a no-op that
          * reports success, and answering anything else would make a guest
@@ -2254,6 +2471,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 1);
             return 1;
         }
+
         /* [CAUTION]: A BORROWED DC IS THE INTERESTING REFUSAL. DeleteDC on a DC that came
          * from GetDC does not fail visibly on Win32 -- it damages the window's
          * DC cache and the symptom surfaces somewhere else entirely. Say which
@@ -2271,9 +2489,12 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         isOk = isDeleteDc ? (DeleteDC((HDC)object) ? 1 : 0) : (DeleteObject(object) ? 1 : 0);
+
         if (isOk)
             WowGdiForget(handle16);
+
         WowNotePut(note, noteCapacity, &noteLength, isOk ? " -> deleted, token released"
                                       : " -- ★ the OS refused the delete");
         Wow32SetReturn(frame, (DWORD)isOk);
@@ -2310,6 +2531,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ",");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)bottom, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -2317,6 +2539,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (isEllipse)
         {
             Wow32SetReturn(frame, (DWORD)(Ellipse((HDC)object, left, top, right, bottom) ? 1 : 0));
@@ -2328,6 +2551,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WowNoteHex(note, noteCapacity, &noteLength, (DWORD)regionResult, WOW_HEX_WORD_DIGITS);
             Wow32SetReturn(frame, (DWORD)(WORD)regionResult);
         }
+
         return 1;
     }
 
@@ -2359,6 +2583,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, "x");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)ellipseHeight, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -2366,6 +2591,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         Wow32SetReturn(frame, (DWORD)(RoundRect((HDC)object, left, top, right, bottom, ellipseWidth, ellipseHeight) ? 1 : 0));
         return 1;
     }
@@ -2402,6 +2628,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, " colour 0x");
         WowNoteHex(note, noteCapacity, &noteLength, color, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, type ? " SURFACE)" : " BORDER)");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -2409,6 +2636,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         isOk = ExtFloodFill((HDC)object, positionX, positionY, (COLORREF)color, (UINT)type) ? 1 : 0;
         WowNotePut(note, noteCapacity, &noteLength, isOk ? " -> filled" : " -> the OS filled NOTHING");
         Wow32SetReturn(frame, (DWORD)isOk);
@@ -2439,26 +2667,31 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD token;
         WowNotePut(note, noteCapacity, &noteLength, isPen ? "CreatePen(style " : "CreateHatchBrush(index ");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(isPen ? style : width), WOW_HEX_WORD_DIGITS);
+
         if (isPen)
         {
             WowNotePut(note, noteCapacity, &noteLength, ", width ");
             WowNoteHex(note, noteCapacity, &noteLength, (DWORD)width, WOW_HEX_WORD_DIGITS);
         }
+
         WowNotePut(note, noteCapacity, &noteLength, ", 0x");
         WowNoteHex(note, noteCapacity, &noteLength, color, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
         createdObject = isPen ? (HGDIOBJ)CreatePen(style, width, (COLORREF)color)
                     : (HGDIOBJ)CreateHatchBrush(width, (COLORREF)color);
         token = createdObject ? WowGdiH16(createdObject, WOWGDI_KIND_OBJ) : 0;
+
         if (!token)
         {
             if (createdObject)
                 DeleteObject(createdObject);
+
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ the OS refused it (or the token map"
                                        " is full); answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, isPen ? " -> pen token 0x" : " -> brush token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, token);
@@ -2490,6 +2723,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, " 0x");
         WowNoteHex(note, noteCapacity, &noteLength, color, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -2497,6 +2731,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWGDI_CLR_INVALID);
             return 1;
         }
+
         actual = SetPixel((HDC)object, positionX, positionY, (COLORREF)color);
         Wow32SetReturn(frame, (DWORD)actual);
         return 1;
@@ -2514,6 +2749,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, "CreatePatternBrush(0x");
         WowNoteHex(note, noteCapacity, &noteLength, bitmap16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_OBJ && kind != WOWGDI_KIND_STOCK))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR BITMAP TOKENS;"
@@ -2521,17 +2757,21 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         brush = CreatePatternBrush((HBITMAP)object);
         token = brush ? WowGdiH16((HGDIOBJ)brush, WOWGDI_KIND_OBJ) : 0;
+
         if (!token)
         {
             if (brush)
                 DeleteObject((HGDIOBJ)brush);
+
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ no brush (or the token map is"
                                        " full); answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> brush token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, token);
@@ -2560,6 +2800,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ",");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionY, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -2567,6 +2808,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, WOWGDI_CLR_INVALID);
             return 1;
         }
+
         color = GetPixel((HDC)object, positionX, positionY);
         WowNotePut(note, noteCapacity, &noteLength, " = 0x");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)color, WOW_HEX_DWORD_DIGITS);
@@ -2602,6 +2844,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                            : "UpdateColors(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -2609,6 +2852,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (frame->Id == WOWGDI_GETBKCOLOR || frame->Id == WOWGDI_GETTEXTCOLOR)
         {
             COLORREF color = frame->Id == WOWGDI_GETBKCOLOR ? GetBkColor((HDC)object)
@@ -2632,6 +2876,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         {
             Wow32SetReturn(frame, (DWORD)(UpdateColors((HDC)object) ? 1 : 0));
         }
+
         return 1;
     }
 
@@ -2662,15 +2907,18 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ",");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)bottom, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!token)
         {
             if (region)
                 DeleteObject((HGDIOBJ)region);
+
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ no region (or the token map is"
                                        " full); answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> region token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, token);
@@ -2692,6 +2940,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", 0x");
         WowNoteHex(note, noteCapacity, &noteLength, region16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!dcObject || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -2699,6 +2948,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (region16 && !region)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR REGION TOKENS;"
@@ -2707,8 +2957,10 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (!region16)
             WowNotePut(note, noteCapacity, &noteLength, " -- NULL = remove the clip region");
+
         regionResult = SelectClipRgn((HDC)dcObject, (HRGN)region);
         WowNotePut(note, noteCapacity, &noteLength, " -> region complexity ");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)regionResult, WOW_HEX_WORD_DIGITS);
@@ -2745,6 +2997,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", mode ");
         WowNoteHex(note, noteCapacity, &noteLength, mode, WOW_HEX_BYTE_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!destination || !source1 || (source2Handle && !source2))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR REGION TOKENS;"
@@ -2752,6 +3005,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);                       /* ERROR */
             return 1;
         }
+
         regionResult = CombineRgn((HRGN)destination, (HRGN)source1, (HRGN)source2, (INT)(SHORT)mode);
         WowNotePut(note, noteCapacity, &noteLength, " -> complexity ");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)regionResult, WOW_HEX_WORD_DIGITS);
@@ -2769,26 +3023,31 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HRGN region;
         WORD token;
         WowNotePut(note, noteCapacity, &noteLength, "CreateRectRgnIndirect");
+
         if (!rectBytes)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NULL lpRect; answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         region = CreateRectRgn((INT)(SHORT)WowGdiPeek(rectBytes, 0),
                             (INT)(SHORT)WowGdiPeek(rectBytes, WOWGDI_RECT16_TOP),
                             (INT)(SHORT)WowGdiPeek(rectBytes, WOWGDI_RECT16_RIGHT),
                             (INT)(SHORT)WowGdiPeek(rectBytes, WOWGDI_RECT16_BOTTOM));
         token = region ? WowGdiH16((HGDIOBJ)region, WOWGDI_KIND_OBJ) : 0;
+
         if (!token)
         {
             if (region)
                 DeleteObject((HGDIOBJ)region);
+
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ no region (or the token map is"
                                        " full); answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> region token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, token);
@@ -2809,6 +3068,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, "SetRectRgn(0x");
         WowNoteHex(note, noteCapacity, &noteLength, region16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!region)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR REGION TOKENS;"
@@ -2816,6 +3076,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         SetRectRgn((HRGN)region,
                    (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_SRR_ARG_LEFT),
                    (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_SRR_ARG_TOP),
@@ -2850,6 +3111,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", mode ");
         WowNoteHex(note, noteCapacity, &noteLength, mode, WOW_HEX_BYTE_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!pointBytes || !itemCount || itemCount > WOWGDI_MAX_POLYPTS)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NULL points or count out of range"
@@ -2859,21 +3121,26 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         for (index = 0; index < (INT)itemCount; ++index)
         {
             points[index].x = (LONG)(SHORT)WowGdiPeek(pointBytes, index * WOWGDI_POINT16_SIZE);
             points[index].y = (LONG)(SHORT)WowGdiPeek(pointBytes, index * WOWGDI_POINT16_SIZE + WOWGDI_POINT16_Y);
         }
+
         region = CreatePolygonRgn(points, (INT)itemCount, (INT)(SHORT)mode);
         token = region ? WowGdiH16((HGDIOBJ)region, WOWGDI_KIND_OBJ) : 0;
+
         if (!token)
         {
             if (region)
                 DeleteObject((HGDIOBJ)region);
+
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ no region; answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> region token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, token);
@@ -2893,12 +3160,14 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, "GetClipBox(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!rectBytes)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NULL lpRect; nothing written");
             Wow32SetReturn(frame, 0);                       /* ERROR */
             return 1;
         }
+
         if (!dcObject || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC))
         {
             INT index;
@@ -2908,10 +3177,12 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              */
             for (index = 0; index < WOWCONV_RECT16_SIZE; ++index)
                 rectBytes[index] = 0;
+
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS; zeroed");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         regionResult = GetClipBox((HDC)dcObject, &rect32);
         Wow32PokeWord(rectBytes + 0, (WORD)(SHORT)rect32.left);
         Wow32PokeWord(rectBytes + WOWGDI_RECT16_TOP, (WORD)(SHORT)rect32.top);
@@ -2949,6 +3220,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", ");
         WowNoteHex(note, noteCapacity, &noteLength, count, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!buffer16 || !count || !dcObject
             || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC))
         {
@@ -2957,16 +3229,21 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         returned = (INT)GetTextFaceA((HDC)dcObject, (INT)sizeof faceName, faceName);
+
         if (returned <= 0)
         {
             faceName[0] = 0;
             returned = 0;
         }
+
         if (returned > (INT)count - 1)
             returned = (INT)count - 1;
+
         for (index = 0; index < returned; ++index)
             buffer16[index] = (BYTE)faceName[index];
+
         buffer16[returned] = 0;
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
         WowNoteQuoted(note, noteCapacity, &noteLength, faceName);
@@ -2993,6 +3270,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", breaks ");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)breakCount, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!dcObject || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -3000,6 +3278,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         regionResult = SetTextJustification((HDC)dcObject, extra, breakCount);
         Wow32SetReturn(frame, (DWORD)(WORD)(regionResult ? 1 : 0));
         return 1;
@@ -3041,6 +3320,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ",");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionY, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (isBitmap ? (kind != WOWGDI_KIND_OBJ && kind != WOWGDI_KIND_STOCK)
                         : (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)))
         {
@@ -3050,8 +3330,10 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         size.cx = size.cy = 0;
         point.x = point.y = 0;
+
         if (frame->Id == WOWGDI_SETWINDOWEXT)
             SetWindowExtEx((HDC)object, positionX, positionY, &size);
         else if (frame->Id == WOWGDI_SETVIEWPORTEXT)
@@ -3066,6 +3348,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         {
             SetBitmapDimensionEx((HBITMAP)object, positionX, positionY, &size);
         }
+
         Wow32SetReturn(frame, ((DWORD)(WORD)(SHORT)size.cy << WORD_SHIFT)
                         | (DWORD)(WORD)(SHORT)size.cx);
         return 1;
@@ -3109,9 +3392,11 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 Wow32SetReturn(frame, 0);
                 return 1;
             }
+
             Wow32SetReturn(frame, (DWORD)GetNearestPaletteIndex((HPALETTE)object, (COLORREF)color));
             return 1;
         }
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS;"
@@ -3119,6 +3404,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, color);
             return 1;
         }
+
         color = (DWORD)GetNearestColor((HDC)object, (COLORREF)color);
         WowNotePut(note, noteCapacity, &noteLength, " = 0x");
         WowNoteHex(note, noteCapacity, &noteLength, color, WOW_HEX_DWORD_DIGITS);
@@ -3146,12 +3432,14 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "IntersectClipRect(0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, ") -- ★ NOT ONE OF OUR DC TOKENS; 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         regionResult = IntersectClipRect((HDC)object, left, top, right, bottom);
         WowNotePut(note, noteCapacity, &noteLength, ") -> region kind ");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)regionResult, WOW_HEX_BYTE_DIGITS);
@@ -3172,14 +3460,17 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "RectVisible(0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || !rectBytes)
         {
             WowNotePut(note, noteCapacity, &noteLength, ") -- ★ NOT ONE OF OUR DC TOKENS, or no rect; 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         for (index = 0; index < WOWCONV_RECT16_SIZE; ++index)
             rect16[index] = (BYTE)rectBytes[index];
+
         result.left  = WowConvRect16Get(rect16, WOWCONV_RECT16_LEFT);
         result.top    = WowConvRect16Get(rect16, WOWCONV_RECT16_TOP);
         result.right = WowConvRect16Get(rect16, WOWCONV_RECT16_RIGHT);
@@ -3220,8 +3511,10 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, faceName[0] ? faceName : "(any)");
         WowNotePut(note, noteCapacity, &noteLength, "\" -> token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
+
         if (font && !token) { DeleteObject((HGDIOBJ)font);
                           WowNotePut(note, noteCapacity, &noteLength, " -- ★ TOKEN MAP FULL; font deleted"); }
+
         Wow32SetReturn(frame, (DWORD)token);
         return 1;
     }
@@ -3245,6 +3538,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteHex(note, noteCapacity, &noteLength, firstChar, WOW_HEX_BYTE_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, "..");
         WowNoteHex(note, noteCapacity, &noteLength, lastChar, WOW_HEX_BYTE_DIGITS);
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || !buffer16
             || lastChar < firstChar || (INT)(lastChar - firstChar) >= WOWGDI_CHAR_WIDTHS_MAX)
         {
@@ -3253,16 +3547,21 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         itemCount  = (INT)(lastChar - firstChar) + 1;
         isOk = GetCharWidth32A((HDC)object, firstChar, lastChar, widths32) ? 1 : 0;
+
         if (!isOk)
             isOk = GetCharWidthA((HDC)object, firstChar, lastChar, widths32) ? 1 : 0;
+
         if (!isOk) { WowNotePut(note, noteCapacity, &noteLength, ") -- GDI refused; nothing written");
                    Wow32SetReturn(frame, 0);
                    return 1; }
+
         /* [CAUTION]: ONE WORD PER CHARACTER. See the note by the ids. */
         for (index = 0; index < itemCount; ++index)
             Wow32PokeWord(buffer16 + index * WOW_WORD_BYTES, (WORD)(SHORT)widths32[index]);
+
         WowNotePut(note, noteCapacity, &noteLength, ") -> ");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)itemCount, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " widths, one WORD each");
@@ -3299,12 +3598,14 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "CloseMetaFile(0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
+
         if (!object || kind != WOWGDI_KIND_DC)
         {
             WowNotePut(note, noteCapacity, &noteLength, ") -- ★ NOT A METAFILE DC TOKEN; 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         metafile = CloseMetaFile((HDC)object);
         WowGdiForget(token);              /* the DC is gone whatever happened */
         /* [CAUTION]: A METAFILE IS NOT A DC. It gets an OBJ token so that a guest which
@@ -3326,11 +3627,13 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT result = 0;
         WowNotePut(note, noteCapacity, &noteLength, "DeleteMetaFile(0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
+
         if (object && kind == WOWGDI_KIND_OBJ)
         {
             result = DeleteMetaFile((HMETAFILE)object) ? 1 : 0;
             WowGdiForget(token);
         }
+
         WowNotePut(note, noteCapacity, &noteLength, result ? ") -> deleted"
                                      : ") -- ★ NOT ONE OF OUR METAFILE TOKENS; FALSE");
         Wow32SetReturn(frame, (DWORD)result);
@@ -3358,6 +3661,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!dc || !(objectKind == WOWGDI_KIND_DC || objectKind == WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS; FALSE");
@@ -3371,6 +3675,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             result = PlayMetaFile((HDC)dc, (HMETAFILE)metafile) ? 1 : 0;
             WowNotePut(note, noteCapacity, &noteLength, result ? " -> played" : " -> FAILED");
         }
+
         Wow32SetReturn(frame, (DWORD)result);
         return 1;
     }
@@ -3408,35 +3713,43 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
          * empty, which is the wrong answer rather than a missing one.
          */
         Wow32SetReturn(frame, 0);
+
         if (!metafile || metafileKind != WOWGDI_KIND_OBJ || GetObjectType(metafile) != OBJ_METAFILE)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR METAFILE TOKENS; 0");
             return 1;
         }
+
         if (!frame->IsCallbackAllowed)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- callbacks are not armed; 0");
             return 1;
         }
+
         if (WowEnumBusy() || g_WowGdiMetafile.IsActive)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ AN ENUMERATION IS ALREADY RUNNING; REFUSED");
             return 1;
         }
+
         itemCount = GetMetaFileBitsEx((HMETAFILE)metafile, 0, NULL);
         bits = itemCount ? (PBYTE)HeapAlloc(GetProcessHeap(), 0, itemCount) : NULL;
+
         if (!bits || GetMetaFileBitsEx((HMETAFILE)metafile, itemCount, bits) != itemCount)
         {
             if (bits)
                 HeapFree(GetProcessHeap(), 0, bits);
+
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ GetMetaFileBitsEx FAILED; 0");
             return 1;
         }
+
         firstRecord = WowConvMetafileHeader(bits, itemCount, &objectCount, &recordsEnd);
         WowNotePut(note, noteCapacity, &noteLength, " bytes=0x");
         WowNoteHex(note, noteCapacity, &noteLength, itemCount, WOWGDI_HEX_SIZE_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " nObj=0x");
         WowNoteHex(note, noteCapacity, &noteLength, objectCount, WOW_HEX_WORD_DIGITS);
+
         if (!firstRecord || objectCount > WOWMF_MAXOBJ)
         {
             HeapFree(GetProcessHeap(), 0, bits);
@@ -3444,6 +3757,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                               : " -- ★ MORE OBJECTS THAN WOWMF_MAXOBJ; REFUSED, 0");
             return 1;
         }
+
         if (!WowEnumBegin(WOWENUM_METAFILE, procedure, frame->GuestDataSelector, lParam,
                            (DWORD)(ULONG_PTR)(frame->FrameBase + WOW32_OFF_RET), dc16))
         {
@@ -3451,6 +3765,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ the callback is not a usable far pointer; 0");
             return 1;
         }
+
         memset(&g_WowGdiMetafile, 0, sizeof g_WowGdiMetafile);
         g_WowGdiMetafile.IsActive = 1;
         g_WowGdiMetafile.Bits = bits;
@@ -3469,6 +3784,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             g_WowGdiMetafile.OriginalBrush = GetCurrentObject((HDC)dc, OBJ_BRUSH);
             g_WowGdiMetafile.OriginalFont  = GetCurrentObject((HDC)dc, OBJ_FONT);
         }
+
         Wow32SetReturn(frame, 1);
         frame->IsEnumerationRequested = 1;
         return 1;
@@ -3506,11 +3822,13 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", n=0x");
         WowNoteHex(note, noteCapacity, &noteLength, handleCount, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, 0);
+
         if (!dc || !(objectKind == WOWGDI_KIND_DC || objectKind == WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, ") -- ★ NOT ONE OF OUR DC TOKENS; FALSE");
             return 1;
         }
+
         if (!recordGuest || (handleCount && !handleTable) || handleCount > WOWMF_MAXOBJ)
         {
             WowNotePut(note, noteCapacity, &noteLength, handleCount > WOWMF_MAXOBJ
@@ -3518,17 +3836,20 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 : ") -- ★ A NULL RECORD OR TABLE POINTER; FALSE");
             return 1;
         }
+
         recordWords = (DWORD)WowGdiPeek(recordGuest, 0) | ((DWORD)WowGdiPeek(recordGuest, WOW_WORD_BYTES) << WORD_SHIFT);
         WowNotePut(note, noteCapacity, &noteLength, ", fn=0x");
         WowNoteHex(note, noteCapacity, &noteLength, WowGdiPeek(recordGuest, WOWCONV_MF_FUNCTION_FIELD), WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " size=0x");
         WowNoteHex(note, noteCapacity, &noteLength, recordWords, WOWGDI_HEX_SIZE_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (recordWords < WOWCONV_MF_RECORD_MIN_WORDS)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ rdSize < 3; FALSE");
             return 1;
         }
+
         /* [INFO]: A RECORD WHOSE CALLBACK COPY WAS CUT SHORT is played from the snapshot,
          * recognised by ADDRESS: it is the record the enumeration is in.
          */
@@ -3546,32 +3867,43 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                            " (a huge record); REFUSED, FALSE");
                 return 1;
             }
+
             bytes = recordWords * WOWCONV_BYTES_PER_WORD;
+
             for (index = 0; index < (INT)bytes; ++index)
                 g_WowGdiMetafileRecord[index] = recordGuest[index];
+
             record = g_WowGdiMetafileRecord;
         }
+
         for (index = 0; index < (INT)handleCount; ++index)
         {
             INT regionKind = -1;
             HGDIOBJ object;
             tokens[index] = WowGdiPeek(handleTable, index * WOW_WORD_BYTES);
             object = tokens[index] ? WowGdiH32(tokens[index], &regionKind) : NULL;
+
             if (object && (regionKind == WOWGDI_KIND_DC || regionKind == WOWGDI_KIND_WINDC))
                 object = NULL;
+
             g_WowGdiMetafileHandles[index] = objectsBefore[index] = object;
         }
+
         result = PlayMetaFileRecord((HDC)dc, (HANDLETABLE *)g_WowGdiMetafileHandles,
                                (METARECORD *)(VOID *)record, handleCount) ? 1 : 0;
+
         for (index = 0; index < (INT)handleCount; ++index)
         {
             if (g_WowGdiMetafileHandles[index] == objectsBefore[index])
                 continue;
+
             if (g_WowGdiMetafileHandles[index])
             {
                 WORD newToken = WowGdiH16(g_WowGdiMetafileHandles[index], WOWGDI_KIND_OBJ);
+
                 if (!newToken)
                     ++isFull;
+
                 Wow32PokeWord(handleTable + index * WOW_WORD_BYTES, newToken);
                 ++created;
             }
@@ -3579,19 +3911,25 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             {
                 if (tokens[index])
                     WowGdiForget(tokens[index]);
+
                 Wow32PokeWord(handleTable + index * WOW_WORD_BYTES, 0);
                 ++deleted;
             }
         }
+
         WowNotePut(note, noteCapacity, &noteLength, result ? " -> played" : " -> FAILED");
+
         if (created) { WowNotePut(note, noteCapacity, &noteLength, ", +0x");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)created, WOW_HEX_BYTE_DIGITS);
                     WowNotePut(note, noteCapacity, &noteLength, " object(s)"); }
+
         if (deleted) { WowNotePut(note, noteCapacity, &noteLength, ", -0x");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)deleted, WOW_HEX_BYTE_DIGITS);
                     WowNotePut(note, noteCapacity, &noteLength, " deleted"); }
+
         if (isFull) WowNotePut(note, noteCapacity, &noteLength, " -- ★★ THE TOKEN MAP IS FULL: a new object got"
                                              " token 0 and is unreachable (leaked)");
+
         Wow32SetReturn(frame, (DWORD)result);
         return 1;
     }
@@ -3610,12 +3948,14 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         isNamed = Wow32ArgString(frame, WOWGDI_CPMF_ARG_FILE, path, (INT)sizeof path);
         WowNotePut(note, noteCapacity, &noteLength, "CopyMetaFile(0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
+
         if (!object || kind != WOWGDI_KIND_OBJ)
         {
             WowNotePut(note, noteCapacity, &noteLength, ") -- ★ NOT ONE OF OUR METAFILE TOKENS; 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         metafile  = CopyMetaFileA((HMETAFILE)object, (isNamed && path[0]) ? path : NULL);
         metafileToken = metafile ? WowGdiH16((HGDIOBJ)metafile, WOWGDI_KIND_OBJ) : 0;
         WowNotePut(note, noteCapacity, &noteLength, ") -> 0x");
@@ -3654,23 +3994,30 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteHex(note, noteCapacity, &noteLength, options, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " n=");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)itemCount, WOW_HEX_WORD_DIGITS);
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS; answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (count < 0)
             count = 0;
+
         if (count > (INT)sizeof buffer)
             count = (INT)sizeof buffer;
+
         for (index = 0; index < count; ++index)
             buffer[index] = string ? (CHAR)string[index] : ' ';
+
         if (rectBytes)
         {
             BYTE rect16[WOWCONV_RECT16_SIZE];
+
             for (index = 0; index < WOWCONV_RECT16_SIZE; ++index)
                 rect16[index] = (BYTE)rectBytes[index];
+
             regionResult.left   = WowConvRect16Get(rect16, WOWCONV_RECT16_LEFT);
             regionResult.top    = WowConvRect16Get(rect16, WOWCONV_RECT16_TOP);
             regionResult.right  = WowConvRect16Get(rect16, WOWCONV_RECT16_RIGHT);
@@ -3685,12 +4032,15 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WowNotePut(note, noteCapacity, &noteLength, ",");
             WowNoteHex(note, noteCapacity, &noteLength, (DWORD)regionResult.bottom, WOW_HEX_WORD_DIGITS);
         }
+
         if (spacingBytes && count)
         {
             for (index = 0; index < count; ++index)
                 spacing[index] = (INT)(SHORT)((WORD)spacingBytes[index * WOW_WORD_BYTES] | ((WORD)spacingBytes[index * WOW_WORD_BYTES + 1] << BYTE_SHIFT));
+
             WowNotePut(note, noteCapacity, &noteLength, " +spacing");
         }
+
         isOk = ExtTextOutA((HDC)object, positionX, positionY, (UINT)options, clipRect,
                          count ? buffer : NULL, (UINT)count,
                          (spacingBytes && count) ? spacing : NULL) ? 1 : 0;
@@ -3717,6 +4067,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         SIZE size;
         WowNotePut(note, noteCapacity, &noteLength, isTextOut ? "TextOut(0x" : "GetTextExtent(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
+
         if (isTextOut)
         {
             WowNotePut(note, noteCapacity, &noteLength, ", ");
@@ -3724,9 +4075,11 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WowNotePut(note, noteCapacity, &noteLength, ",");
             WowNoteHex(note, noteCapacity, &noteLength, (DWORD)positionY, WOW_HEX_WORD_DIGITS);
         }
+
         WowNotePut(note, noteCapacity, &noteLength, ", ");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)itemCount, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " chars)");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || !text)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS, or no"
@@ -3734,12 +4087,16 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (count < 0)
             count = 0;
+
         if (count > (INT)sizeof buffer)
             count = (INT)sizeof buffer;
+
         for (index = 0; index < count; ++index)
             buffer[index] = (CHAR)text[index];
+
         if (isTextOut)
         {
             INT result = TextOutA((HDC)object, positionX, positionY, buffer, count) ? 1 : 0;
@@ -3747,6 +4104,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, (DWORD)result);
             return 1;
         }
+
         size.cx = size.cy = 0;
         GetTextExtentPoint32A((HDC)object, buffer, count, &size);
         WowNotePut(note, noteCapacity, &noteLength, " = ");
@@ -3777,6 +4135,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, "GetTextMetrics(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || !destination)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS, or no"
@@ -3784,14 +4143,17 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         if (!GetTextMetricsA((HDC)object, &textMetric))
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ the OS refused it; answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         for (index = 0; index < (INT)sizeof blob; ++index)
             blob[index] = 0;
+
         Wow32PokeWord(blob +  0, (WORD)(SHORT)textMetric.tmHeight);
         Wow32PokeWord(blob + WOWGDI_NTM16_ASCENT, (WORD)(SHORT)textMetric.tmAscent);
         Wow32PokeWord(blob + WOWGDI_NTM16_DESCENT, (WORD)(SHORT)textMetric.tmDescent);
@@ -3818,8 +4180,10 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         Wow32PokeWord(blob + WOWGDI_NTM16_OVERHANG, (WORD)(SHORT)textMetric.tmOverhang);
         Wow32PokeWord(blob + WOWGDI_NTM16_DIGITIZEDASPECTX, (WORD)(SHORT)textMetric.tmDigitizedAspectX);
         Wow32PokeWord(blob + WOWGDI_NTM16_DIGITIZEDASPECTY, (WORD)(SHORT)textMetric.tmDigitizedAspectY);
+
         for (index = 0; index < (INT)sizeof blob; ++index)
             destination[index] = blob[index];
+
         WowNotePut(note, noteCapacity, &noteLength, " h=");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)(WORD)(SHORT)textMetric.tmHeight, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " extlead=");
@@ -3844,14 +4208,17 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HFONT font;
         WORD token;
         WowNotePut(note, noteCapacity, &noteLength, "CreateFontIndirect(");
+
         if (!argument)
         {
             WowNotePut(note, noteCapacity, &noteLength, "NULL) -- ★ no LOGFONT; answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         for (index = 0; index < (INT)sizeof logFont; ++index)
             ((PBYTE)&logFont)[index] = 0;
+
         logFont.lfHeight     = (LONG)(SHORT)Wow32PeekWord(argument + 0);
         logFont.lfWidth      = (LONG)(SHORT)Wow32PeekWord(argument + WOWGDI_LF16_WIDTH);
         logFont.lfEscapement = (LONG)(SHORT)Wow32PeekWord(argument + WOWGDI_LF16_ESCAPEMENT);
@@ -3865,13 +4232,16 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         logFont.lfClipPrecision = argument[WOWGDI_LF16_CLIPPRECISION];
         logFont.lfQuality      = argument[WOWGDI_LF16_QUALITY];
         logFont.lfPitchAndFamily = argument[WOWGDI_LF16_PITCHANDFAMILY];
+
         for (index = 0; index < WOWGDI_LF16_FACESIZE - 1; ++index)
         {
             BYTE character = argument[WOWGDI_LF16_FACENAME + index];
             logFont.lfFaceName[index] = (CHAR)character;
+
             if (!character)
                 break;
         }
+
         logFont.lfFaceName[WOWGDI_LF16_FACESIZE - 1] = 0;
         WowNoteQuoted(note, noteCapacity, &noteLength, logFont.lfFaceName);
         WowNotePut(note, noteCapacity, &noteLength, " h=");
@@ -3879,15 +4249,18 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ")");
         font = CreateFontIndirectA(&logFont);
         token = font ? WowGdiH16((HGDIOBJ)font, WOWGDI_KIND_OBJ) : 0;
+
         if (!token)
         {
             if (font)
                 DeleteObject((HGDIOBJ)font);
+
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ no font (or the token map is full);"
                                        " answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> font token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, token);
@@ -3918,6 +4291,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", ");
         WowNoteHex(note, noteCapacity, &noteLength, count, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " bytes)");
+
         if (!object || (kind != WOWGDI_KIND_OBJ && kind != WOWGDI_KIND_STOCK) || !bits)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR BITMAP TOKENS, or no"
@@ -3925,6 +4299,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         returned = isGet ? GetBitmapBits((HBITMAP)object, (LONG)count, (LPVOID)(ULONG_PTR)bits)
                     : SetBitmapBits((HBITMAP)object, (DWORD)count, (const VOID *)(ULONG_PTR)bits);
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
@@ -3977,6 +4352,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, "+");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)lineCount, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, bits ? ")" : ", bits=NULL = a size QUERY)");
+
         if (!dcObject || (dcKind != WOWGDI_KIND_DC && dcKind != WOWGDI_KIND_WINDC)
                || !bitmapObject || (bitmapKind != WOWGDI_KIND_OBJ && bitmapKind != WOWGDI_KIND_STOCK) || !bitmapInfo)
         {
@@ -3985,6 +4361,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         result = isGet
             ? GetDIBits((HDC)dcObject, (HBITMAP)bitmapObject, startIndex, lineCount,
                         (LPVOID)(ULONG_PTR)bits, (BITMAPINFO *)(ULONG_PTR)bitmapInfo, usage)
@@ -4015,25 +4392,30 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HPALETTE palette;
         WORD token;
         WowNotePut(note, noteCapacity, &noteLength, "CreatePalette(");
+
         if (!argument)
         {
             WowNotePut(note, noteCapacity, &noteLength, "NULL) -- ★ no LOGPALETTE; answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)Wow32PeekWord(argument + WOWGDI_LOGPALETTE_ENTRIES), WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " entries)");
         palette = CreatePalette((const LOGPALETTE *)(ULONG_PTR)argument);
         token = palette ? WowGdiH16((HGDIOBJ)palette, WOWGDI_KIND_OBJ) : 0;
+
         if (!token)
         {
             if (palette)
                 DeleteObject((HGDIOBJ)palette);
+
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ the OS refused it (or the token map"
                                        " is full); answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> palette token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, token);
@@ -4076,6 +4458,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, " rop=0x");
         WowNoteHex(note, noteCapacity, &noteLength, rasterOp, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)
                || !bitmapInfo || !bits)
         {
@@ -4084,6 +4467,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         result = StretchDIBits((HDC)object, destX, destY, destWidth, destHeight, sourceX, sourceY, sourceWidth, sourceHeight,
                           (const VOID *)(ULONG_PTR)bits,
                           (const BITMAPINFO *)(ULONG_PTR)bitmapInfo, usage, rasterOp);
@@ -4122,6 +4506,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", init 0x");
         WowNoteHex(note, noteCapacity, &noteLength, initData, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC) || !bitmapInfoHeader)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ NOT ONE OF OUR DC TOKENS, or no"
@@ -4129,18 +4514,22 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         bitmap = CreateDIBitmap((HDC)object,
                             (const BITMAPINFOHEADER *)(ULONG_PTR)bitmapInfoHeader, initData,
                             (initData && bits) ? (const VOID *)(ULONG_PTR)bits : NULL,
                             (initData && bitmapInfo)  ? (const BITMAPINFO *)(ULONG_PTR)bitmapInfo : NULL,
                             usage);
+
         if (!bitmap)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- ★ GDI REFUSED; answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         token = WowGdiH16((HGDIOBJ)bitmap, WOWGDI_KIND_OBJ);
+
         if (!token)
         {
             /* [CAUTION]: NO TOKEN LEFT MEANS THE BITMAP LEAKS IF WE JUST RETURN 0 -- the
@@ -4153,6 +4542,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNotePut(note, noteCapacity, &noteLength, " -> 0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)token);
@@ -4193,6 +4583,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, "x");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)handle16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!object || (kind != WOWGDI_KIND_DC && kind != WOWGDI_KIND_WINDC)
                || !bitmapInfo || !bits)
         {
@@ -4201,6 +4592,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         result = SetDIBitsToDevice((HDC)object, destX, destY, width, handle16,
                               sourceX, sourceY, startIndex, scanCount,
                               (const VOID *)(ULONG_PTR)bits,

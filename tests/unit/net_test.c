@@ -36,12 +36,16 @@ static BYTE NetTestFakeBackend(PVOID context, PNETBIOS_REQUEST request)
     ++g_Calls;
     request->LocalSession = g_LocalSession;
     request->NameNumber = g_NameNumber;
+
     if (g_Length)
         request->Length = g_Length;
+
     if (request->Command == 0x10 /* CALL */)
         memcpy(request->CallName, "FAREND          ", 16);
+
     if (request->Buffer && request->Length)
         request->Buffer[0] = 0xAB;
+
     request->ReturnCode = g_ReturnCode;
     return g_ReturnCode;
 }

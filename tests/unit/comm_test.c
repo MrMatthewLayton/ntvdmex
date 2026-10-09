@@ -65,6 +65,7 @@ static VOID CommTestSink(PVOID context, INT port, BYTE byteValue)
 {
     (VOID)context;
     (VOID)port;
+
     if (g_TransmittedCount < CAP)
         g_Transmitted[g_TransmittedCount++] = byteValue;
 }
@@ -72,6 +73,7 @@ static VOID CommTestSink(PVOID context, INT port, BYTE byteValue)
 static VOID CommTestIrqSink(PVOID context, BYTE irq)
 {
     (VOID)context;
+
     if (irq < 16)
         ++g_IrqCounts[irq];
 }
@@ -80,6 +82,7 @@ static VOID CommTestPrinterSink(PVOID context, INT port, BYTE byteValue)
 {
     (VOID)context;
     (VOID)port;
+
     if (g_PrinterCount < CAP)
         g_PrinterBytes[g_PrinterCount++] = byteValue;
 }
@@ -359,6 +362,7 @@ INT main(VOID)
     CommTestWrite(BASE + COMM_IIR, 0xC1);                     /* trigger = 14 */
     {
         INT index;
+
         for (index = 0; index < 20; ++index)
             VddCommReceive(&g_Comm, 0, (BYTE)('a' + index));
     }

@@ -111,12 +111,16 @@ INT main(VOID)
      */
     { INT index;
     InputTestFresh(&input, &bus);
+
       for (index = 0; index < 20; ++index)
           VddInputPush(&input, (WORD)(0x100 + index));                                   /* 15 fit */
+
       CHECK(VddInputPop(&input, &key) == 1 && key == 0x100, "ring: full -> oldest KEPT");
       { INT count = 1;
+
       while (VddInputPop(&input, &key))
           count++;
+
         CHECK(count == 15, "ring: holds 15 keys (16 slots, one always empty)"); }
     }
 
@@ -422,6 +426,7 @@ INT main(VOID)
          * guest has already been told about.
          */
         VddInputReset(&input);
+
         for (index = 0; index < 15; ++index)
         {
             memset(&registers, 0, sizeof registers);
@@ -429,9 +434,11 @@ INT main(VOID)
             VddSetAl(&registers, 0xB1);
             registers.Ecx = (UINT32)(0x3930 + (index % 10));
             VddBusDeliverInterrupt(&bus, 0x16, &registers);
+
             if (VddGetAl(&registers) != 0)
                 break;
         }
+
         CHECK(index == 15, "int16/05: fifteen entries fit a sixteen-slot ring");
         memset(&registers, 0, sizeof registers);
         VddSetAh(&registers, 0x05);
@@ -848,15 +855,19 @@ INT main(VOID)
         SET16(BIOS_BDA_KEYBOARD_HEAD, 0x0200);
         SET16(BIOS_BDA_KEYBOARD_TAIL, 0x0200);
         isOk = 1;
+
         for (index = 0; index < 63; ++index)
             isOk &= VddInputPush(&input, (WORD)(0x1E00 + index));
+
         CHECK(isOk && VddInputPush(&input, 0x1E61) == 0,
               "bounds: an enlarged ring at 0200h..0280h holds 63 keys, then is full");
         CHECK(W16(0x0200) == 0x1E00 && W16(0x027C) == 0x1E3E,
               "bounds: the keys are stored IN the relocated buffer");
         isOk = 1;
+
         for (index = 0; index < 63; ++index)
             isOk &= (VddInputPop(&input, &key) && key == (WORD)(0x1E00 + index));
+
         CHECK(isOk && VddInputPop(&input, &key) == 0, "bounds: ...and come back out in order");
         /* a pair that cannot describe a ring falls back to POST's */
         SET16(0x80, 0x0021);
@@ -1010,24 +1021,30 @@ INT main(VOID)
         InputTestFresh(&input, &bus);
         count = VddInputHostKeyBytes(0x45, 0, 0, bytes, &noRepeat);
         action = INPUT_ACTION_NONE;
+
         for (index = 0; index < count; ++index)
         {
             INT keyAction = KEY(bytes[index]);
+
             if (keyAction != INPUT_ACTION_NONE)
                 action = keyAction;
         }
+
         CHECK(action == INPUT_ACTION_PAUSE && (g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS2] & 0x08) && !(g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x20),
               "host+bios: the Pause key now PAUSES (0018 bit 3) instead of toggling NumLock");
         VddInputPauseCancel(&input);
         KEY(0x1D);                                              /* Ctrl down */
         count = VddInputHostKeyBytes(0x46, 1, 0, bytes, &noRepeat);
         action = INPUT_ACTION_NONE;
+
         for (index = 0; index < count; ++index)
         {
             INT keyAction = KEY(bytes[index]);
+
             if (keyAction != INPUT_ACTION_NONE)
                 action = keyAction;
         }
+
         KEY(0x9D);
         CHECK(action == INPUT_ACTION_BREAK && (g_BiosDataArea[0x71] & 0x80), "host+bios: Ctrl+Break -> INT 1Bh action, 0071h bit 7");
         EXPECT(0x0000, "host+bios: ...0000h in the ring");

@@ -37,28 +37,34 @@ static VOID VddJoystickPortIn(PVOID context, WORD port, BYTE width, UINT32 *valu
     INT axisIndex;
     INT wiredAxes = VddJoystickAxes(state);
     state->PortReads++;
+
     if (state->Type == JOYSTICK_TYPE_NONE)
     {
         *value = JOYSTICK_NO_CARD;
         return;
     }
+
     if (VddJoystickIsLive(state))
     {
         BYTE buttonMask = (BYTE)((1u << VddJoystickButtonsWired(state)) - 1u);
         result = (BYTE)((BYTE)(~(state->Buttons & buttonMask)) << JOYSTICK_BUTTON_SHIFT);
     }
+
     if (state->HasFired)
     {
         UINT64 elapsed = state->NowMicroseconds
                     ? state->NowMicroseconds(state->ClockContext) - state->TriggerMicroseconds
                     : JOYSTICK_NO_ELAPSED_TIME;  /* no clock: pulses never end */
+
         for (axisIndex = 0; axisIndex < JOYSTICK_AXES; ++axisIndex)
         {
             INT isStuck = (axisIndex >= wiredAxes) || !state->IsPresent || !state->NowMicroseconds;
+
             if (isStuck || elapsed < VddJoystickAxisMicroseconds(state->Axis[axisIndex]))
                 result |= (BYTE)(1u << axisIndex);
         }
     }
+
     *value = result;
 }
 
@@ -71,8 +77,10 @@ static VOID VddJoystickPortOut(PVOID context, WORD port, BYTE width, UINT32 valu
     (VOID)width;
     (VOID)value;
     state->PortWrites++;
+
     if (state->Type == JOYSTICK_TYPE_NONE)
         return;                                      /* no card, nothing to fire */
+
     state->HasFired = TRUE;
     state->TriggerMicroseconds = state->NowMicroseconds ? state->NowMicroseconds(state->ClockContext) : 0;
 }

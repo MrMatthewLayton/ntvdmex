@@ -105,8 +105,10 @@ __declspec(dllexport) VOID IsvDispatch(VOID)
         USHORT count = getCX();
         USHORT sum = 0;
         USHORT index;
+
         for (index = 0; bytes && index < count; ++index)
             sum = (USHORT)(sum + bytes[index]);
+
         setCX(sum);
         setCF(bytes ? 0 : 1);
         break; }
@@ -120,7 +122,9 @@ __declspec(dllexport) VOID IsvDispatch(VOID)
 BOOL WINAPI DllMainCRTStartup(HINSTANCE module, DWORD reason, LPVOID reserved)
 {
     (void)reserved;
+
     if (reason == DLL_PROCESS_ATTACH)
         g_IsvModule = module;
+
     return TRUE;
 }

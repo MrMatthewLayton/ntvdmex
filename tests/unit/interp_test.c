@@ -47,6 +47,7 @@ static UINT32 V86HostIn(WORD port, INT width)
 static VOID V86HostOut(WORD port, INT width, UINT32 value)
 {
     (VOID)width;
+
     if (port == 0x3C5)
         g_Port3C5 = (BYTE)value;
 }
@@ -71,6 +72,7 @@ static VOID InterpTestLoad(
 
     cpu->Segments[1] = codeSegment;
     cpu->Ip = instructionPointer;
+
     for (index = 0; index < count; index++)
         g_Memory[linear + index] = bytes[index];
 }
@@ -82,6 +84,7 @@ static INT InterpTestRun(PV86_CPU cpu)
 
     while (steps < 10000000 && V86Step(cpu))
         steps++;
+
     return steps;
 }
 
@@ -110,15 +113,19 @@ static INT InterpTestLarLslDescriptor(WORD selector, PUINT32 accessRights, PUINT
     case 0x08:
         if (accessRights)
             *accessRights = (0xFAu << 8);
+
     if (limit)
         *limit = 0xFFFF;
+
     return 1;
 
     case 0x10:
         if (accessRights)
             *accessRights = (0xF3u << 8) | (0x4u << 20);
+
     if (limit)
         *limit = 0x25CF;
+
     return 1;
 
     default:
@@ -547,22 +554,29 @@ static VOID InterpTestO32Replay(VOID)
     printf("== #194: p_o32.com replayed through the interpreter vs the rig ==\n");
     file = fopen("p_o32.com", "rb");
     CHECK(file != NULL, "p_o32.com present (run from tests/unit)");
+
     if (!file)
         return;
+
     size = fread(comImage, 1, sizeof comImage, file);
     fclose(file);
     file = fopen("p_o32.ref.txt", "r");
     CHECK(file != NULL, "p_o32.ref.txt present (the rig's dump)");
+
     if (!file)
         return;
+
     while (fgets(line, sizeof line, file))
     {
         PSTR cursor = strstr(line, "BUF=res ");
+
         if (!cursor)
             continue;
+
         for (cursor += 8; InterpTestHexValue(cursor[0]) >= 0 && InterpTestHexValue(cursor[1]) >= 0 && referenceCount < (INT)sizeof reference; cursor += 2)
             reference[referenceCount++] = (BYTE)(InterpTestHexValue(cursor[0]) * 16 + InterpTestHexValue(cursor[1]));
     }
+
     fclose(file);
     measureOffset = (WORD)(comImage[3] | (comImage[4] << 8));
     resultOffset     = (WORD)(comImage[7] | (comImage[8] << 8));
@@ -571,28 +585,35 @@ static VOID InterpTestO32Replay(VOID)
     memset(g_Memory + 0x10000, 0, 0x10000);
     memcpy(g_Memory + 0x10100, comImage, size);
     cpu = InterpTestMakeCpu();
+
     for (index = 0; index < 4; ++index)
         cpu.Segments[index] = 0x1000;
+
     cpu.Flags = 0x0202;                                  /* IF=1, as the rig ran it */
     cpu.Registers[4] = 0xFFFC;
     g_Memory[0x1FFFC] = 0xF0;
     g_Memory[0x1FFFD] = 0xFF;   /* return to FFF0: the end */
     cpu.Ip = measureOffset;
+
     while (cpu.Ip != 0xFFF0 && steps < 200000 && V86Step(&cpu))
         ++steps;
+
     if (cpu.Ip != 0xFFF0)
     {
         UINT32 linear = ((UINT32)cpu.Segments[1] << 4) + cpu.Ip;
         printf("  bailed at %04X:%04X bytes %02X %02X %02X %02X after %ld steps\n",
                cpu.Segments[1], cpu.Ip, g_Memory[linear], g_Memory[linear + 1], g_Memory[linear + 2], g_Memory[linear + 3], steps);
     }
+
     CHECK(cpu.Ip == 0xFFF0, "the whole measure section runs in the interpreter (no bail)");
+
     for (index = 0; index < referenceCount && index < resultLength; ++index)
         if (g_Memory[0x10000 + resultOffset + index] != reference[index])
         {
             first = index;
             break;
         }
+
     if (first >= 0)
     {
         INT item = first / 4;
@@ -600,6 +621,7 @@ static VOID InterpTestO32Replay(VOID)
                g_Memory[0x10000 + resultOffset + 4*item], g_Memory[0x10000 + resultOffset + 4*item + 1], g_Memory[0x10000 + resultOffset + 4*item + 2], g_Memory[0x10000 + resultOffset + 4*item + 3],
                reference[4*item], reference[4*item + 1], reference[4*item + 2], reference[4*item + 3]);
     }
+
     CHECK(first < 0 && referenceCount == resultLength, "res buffer identical to the rig's, byte for byte");
 }
 
@@ -786,6 +808,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);                                      /* MOV CX,5 */
       {
           INT guard = 0;
+
           while (cpu.Ip != 6 && guard++ < 100)
               InterpTestStepOnce(&cpu);
       }
@@ -1788,8 +1811,10 @@ INT main(VOID)
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xF3, 0xAA };     /* REP STOSB */
       UINT32 index;
+
       for (index = 0; index < 16; ++index)
           g_Memory[0x20000 + index] = 0;
+
       cpu.Segments[0] = 0x2000;
       cpu.Registers[7] = 0xABCD0000u;
       cpu.Registers[1] = 0x00010003u;

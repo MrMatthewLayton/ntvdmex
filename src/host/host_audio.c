@@ -81,16 +81,20 @@ VOID GusReport(VOID)
 
     if (done)
         return;
+
     done = 1;
+
     if (!g_GusOn)
     {
         cursor = LogPut(cursor, "STAGE2: GUS off (nogus.flag)\r\n");
         LogAppend(LOG_PATH, buffer, cursor);
         return;
     }
+
     for (voice = 0; voice < GUS_VOICES; ++voice)
         if (!(g_Gus.Voices[voice].Control & GUS_VOICE_STOPPED_MASK))
             ++running;
+
     cursor = LogPut(cursor, "STAGE2: GUS io_w=");  cursor = LogHex(cursor, g_Gus.IoWrites);
     cursor = LogPut(cursor, " io_r=");            cursor = LogHex(cursor, g_Gus.IoReads);
     cursor = LogPut(cursor, " reset=0x");         cursor = LogHexByte(cursor, g_Gus.ResetRegister);
@@ -123,6 +127,7 @@ VOID OplTraceWrite(BYTE registerIndex, BYTE value)
         g_OplTraceDrop++;
         return;
     }
+
     g_OplTrace[g_OplTraceCount].Microseconds  = (DWORD)HostTimeMicroseconds();
     g_OplTrace[g_OplTraceCount].Register = registerIndex;
     g_OplTrace[g_OplTraceCount].Value = value;
@@ -141,15 +146,19 @@ VOID OplTraceDump(VOID)
 
     if (!g_OplTraceOn || !g_OplTraceCount)
         return;
+
     handle = CreateFileA(OPLTRACE_PATH, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
     if (handle == INVALID_HANDLE_VALUE)
         return;
+
     { PSTR cursor = buffer;
       cursor = LogPut(cursor, "# opl2 register trace: us reg val (hex). writes=");
       cursor = LogHex(cursor, g_OplTraceCount); cursor = LogPut(cursor, " dropped="); cursor = LogHex(cursor, g_OplTraceDrop);
       cursor = LogPut(cursor, "\r\n");
       WriteFile(handle, buffer, (DWORD)(cursor - buffer), &bytesWritten, NULL); }
+
     for (index = 0; index < g_OplTraceCount; ++index)
     {
         PSTR cursor = buffer;
@@ -158,6 +167,7 @@ VOID OplTraceDump(VOID)
         cursor = LogHexByte(cursor, g_OplTrace[index].Value); cursor = LogPut(cursor, "\r\n");
         WriteFile(handle, buffer, (DWORD)(cursor - buffer), &bytesWritten, NULL);
     }
+
     CloseHandle(handle);
 }
 
@@ -173,18 +183,25 @@ VOID OplPumpTime(VOID)
     {
         if (!QueryPerformanceFrequency(&frequency))
             return;
+
         QueryPerformanceCounter(&last);
         return;
     }
+
     QueryPerformanceCounter(&now);
     delta = now.QuadPart - last.QuadPart;
+
     if (delta <= 0)
         return;
+
     if (delta > frequency.QuadPart)
         delta = frequency.QuadPart;                                   /* clamp a long stall to 1s */
+
     microseconds = (DWORD)((delta * MICROSECONDS_PER_SECOND) / frequency.QuadPart);
+
     if (microseconds < OPL_PUMP_QUANTUM_US)
         return;                                                                    /* carry sub-quantum time */
+
     last = now;
     HOST_LOCK();
     VddOplAddMicroseconds(&g_Opl, microseconds);
@@ -207,17 +224,22 @@ static VOID DmxSample(VOID)
     if (!isOk)
     {
         MEMORY_BASIC_INFORMATION memoryInfo;
+
         if (!(VirtualQuery((LPCVOID)tasks, &memoryInfo, sizeof memoryInfo) == sizeof memoryInfo
               && memoryInfo.State == MEM_COMMIT && !(memoryInfo.Protect & (PAGE_NOACCESS | PAGE_GUARD))))
             return;
+
         isOk = 1;
     }
+
     /* the mixer must be where the addressing predicts, or none of this means anything */
     if (*(const volatile DWORD *)(tasks + DMX_MIXER_I * 32u) == 0x56884u + 0x03AEDFECu)
         g_DmxMixerOk = 1;
     else
         return;
+
     ++g_DmxSamples;
+
     for (task = 0; task < 12; ++task)
     {
         if (tasks[task * 32u + 0x1c])
@@ -226,13 +248,17 @@ static VOID DmxSample(VOID)
             anyBusy = 1;
         }
     }
+
     if (anyBusy)
         ++g_DmxAnyBusy;
+
     { DWORD due = *(const volatile DWORD *)(tasks + DMX_MIXER_I * 32u + 0x14), now = *clock;
+
       if ((LONG)(now - due) >= 0)              /* armed and still not serviced */
       {
           DWORD late = now - due;
           ++g_DmxOverdue;
+
           if (late > g_DmxOverdueMaximum)
               g_DmxOverdueMaximum = late;
       } }
@@ -248,10 +274,13 @@ VOID HostAudioFill(PVOID context, INT16 *out, UINT32 frames)
     if (g_PauseWant)
     {
         UINT32 index;
+
         for (index = 0; index < frames * AUDIO_STEREO_CHANNELS; ++index)
             out[index] = 0;
+
         return;
     }
+
     DmxSample();
     HOST_LOCK();
     VddAudioMixStereo(&g_Audio, out, frames);   /* #189: interleaved L/R, as waveOut is opened */

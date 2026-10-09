@@ -280,15 +280,19 @@ static inline VOID VddPitBiosTick(
         state->TickWraps = 0;
         state->TickSince = 0;
     }
+
     if (++count >= PIT_TICKS_PER_DAY)
     {
         count = 0;
         *midnightFlag = 1;
+
         if (state->IsTickForeign)
             state->TickWraps++;
     }
+
     if (state->IsTickForeign)
         state->TickSince++;
+
     *tickCount = count;
     state->TickWitness = count;
 }
@@ -316,11 +320,13 @@ static inline INT VddPitTickTake(
 {
     if (!state->IsTickForeign && count == state->TickWitness)
         return 0;
+
     if (!state->IsTickForeign) /* stored just now */
     {
         state->TickWraps = 0;
         state->TickSince = 0;
     }
+
     *takenTicks = count;
     *takenWraps = state->TickWraps;
     *takenSince = state->TickSince;
@@ -350,8 +356,10 @@ static inline UINT32 VddPitCounterEffectiveReload(PCPIT_COUNTER counter)
  */
 static inline UINT32 VddPitCounter2Hz(PCPIT_STATE state)
 { UINT32 reload = state->Counter2.IsBcd ? PitFromBcd(state->Counter2Reload) : state->Counter2Reload;
+
   if (!reload)
       reload = PitWrap(state->Counter2.IsBcd);
+
   return PIT_INPUT_HZ / reload; }
 static inline NTVDD_DEVICE VddPitDevice(_In_ PPIT_STATE state)
 { NTVDD_DEVICE device;

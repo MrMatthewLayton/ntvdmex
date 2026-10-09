@@ -61,6 +61,7 @@ static PBYTE VgaRomTestReadFile(PCSTR relativePath, long *length)
 {
     PCSTR prefixes[] = { "", "../../" };
     UINT index;
+
     for (index = 0; index < 2; ++index)
     {
         CHAR path[512];
@@ -69,22 +70,27 @@ static PBYTE VgaRomTestReadFile(PCSTR relativePath, long *length)
         long size;
         snprintf(path, sizeof path, "%s%s", prefixes[index], relativePath);
         file = fopen(path, "rb");
+
         if (!file)
             continue;
+
         fseek(file, 0, SEEK_END);
         size = ftell(file);
         fseek(file, 0, SEEK_SET);
         bytes = (PBYTE)malloc((size_t)size);
+
         if (!bytes || fread(bytes, 1, (size_t)size, file) != (size_t)size)
         {
             fclose(file);
             free(bytes);
             return NULL;
         }
+
         fclose(file);
         *length = size;
         return bytes;
     }
+
     return NULL;
 }
 
@@ -99,9 +105,11 @@ static long VgaRomTestFind(PCBYTE haystack, long haystackLength, PCBYTE needle, 
 
     if (needleLength > haystackLength)
         return -1;
+
     for (index = 0; index + needleLength <= haystackLength; ++index)
         if (!memcmp(haystack + index, needle, (size_t)needleLength))
             return index;
+
     return -1;
 }
 
@@ -111,6 +119,7 @@ INT main(VOID)
     PBYTE rom = VgaRomTestReadFile("PCem-ROMs-master/ibm_vga.bin", &romLength);
 
     printf("== VGA tables vs the genuine IBM VGA BIOS (oracle-gated) ==\n");
+
     if (!rom)
     {
         VgaRomTestSkip("ibm_vga.bin absent -- VGA font/table claims UNVERIFIED this run");
@@ -118,6 +127,7 @@ INT main(VOID)
         printf("\n%d checks, %d failed, %d skipped\n", g_Passes + g_Failures, g_Failures, g_Skips);
         return 0;
     }
+
     VgaRomTestCheck(romLength == 32768, "ibm_vga.bin is the expected 32KB image");
 
     /* -- THE THREE FONTS are no longer IBM's (#322): NTVDMEX ships no font data and
@@ -136,13 +146,16 @@ INT main(VOID)
     {   UINT row;
     INT found = 0;
     INT tried = 0;
+
         for (row = 0; row < 9; ++row)
         {
             long offset = VgaRomTestFind(rom, romLength, g_VgaCrtcDefaults[row], 25);
             ++tried;
+
             if (offset >= 0)
                 ++found;
         }
+
         VgaRomTestCheck(found >= 7, "per-mode CRTC rows are present in the ROM's parameter table");
         printf("        (%d of %d CRTC rows located in the real BIOS)\n", found, tried);
     }

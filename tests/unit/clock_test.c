@@ -63,8 +63,10 @@ static INT g_Failures;
 static VOID ClockTestExpect(PCSTR description, INT64 actual, INT64 expected)
 {
     ++g_Checks;
+
     if (actual == expected)
         return;
+
     ++g_Failures;
     printf("  FAIL %-58s got %lld, want %lld\n", description, actual, expected);
 }
@@ -154,6 +156,7 @@ INT main(VOID)
         UINT mismatches = 0;
         UINT dayCount = 0;
         INT64 previous = 0;
+
         for (year = CLOCK_TEST_FIRST_YEAR; year <= CLOCK_TEST_LAST_YEAR; ++year)
             for (month = DOS_CLOCK_JANUARY; month <= DOS_CLOCK_DECEMBER; ++month)
                 for (day = DOS_CLOCK_FIRST_DAY; day <= DosClockDaysInMonth(year, month); ++day)
@@ -162,15 +165,19 @@ INT main(VOID)
                     DOS_CLOCK_TIME unpacked;
                     INT64 packed = DosClockPack(&time);
                     DosClockUnpack(packed, &unpacked);
+
                     if (unpacked.Year != year || unpacked.Month != month || unpacked.Day != day
                         || unpacked.Hour != 13 || unpacked.Minute != 7 || unpacked.Second != 41
                         || unpacked.Hundredths != 59)
                         ++mismatches;
+
                     if (dayCount && packed - previous != DOS_CLOCK_HUNDREDTHS_PER_DAY)
                         ++mismatches;                                  /* contiguous days */
+
                     previous = packed;
                     ++dayCount;
                 }
+
         ClockTestExpect("round trip, every day 1980..2099", mismatches, 0);
         ClockTestExpect("days in 1980..2099", dayCount, CLOCK_TEST_DAYS_1980_TO_2099);
     }

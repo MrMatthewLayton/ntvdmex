@@ -41,8 +41,10 @@ static INT g_Failures;
 static VOID DiskTestExpect(PCSTR description, LONG actual, LONG expected)
 {
     ++g_Checks;
+
     if (actual == expected)
         return;
+
     ++g_Failures;
     printf("  FAIL %-56s got 0x%lX, want 0x%lX\n", description, (long)actual, (long)expected);
 }

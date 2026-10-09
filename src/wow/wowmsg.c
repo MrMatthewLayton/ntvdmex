@@ -96,6 +96,7 @@ static INT WowMsgIsFor(WORD window, WORD task)
 
     if (!task || !window || !g_WowMsgOwner)
         return 1;
+
     owner = g_WowMsgOwner(window);
     return !owner || owner == task;
 }
@@ -107,16 +108,20 @@ VOID WowMsgPostQuit(WORD task, WORD code)
     for (index = 0; index < g_WowMsgQuitCount; ++index)
         if (g_WowMsgQuits[index].Task == task)
             break;
+
     if (index == g_WowMsgQuitCount)
     {
         if (g_WowMsgQuitCount == WOWMSG_MAXQUIT)            /* full: the oldest goes */
         {
             for (index = 1; index < g_WowMsgQuitCount; ++index)
                 g_WowMsgQuits[index - 1] = g_WowMsgQuits[index];
+
             --g_WowMsgQuitCount;
         }
+
         index = g_WowMsgQuitCount++;
     }
+
     g_WowMsgQuits[index].Task = task;
     g_WowMsgQuits[index].Code = code;
     g_WowMsgIsQuit = 1;
@@ -131,6 +136,7 @@ INT WowMsgQuitFor(WORD task)
     for (index = 0; index < g_WowMsgQuitCount; ++index)
         if (!task || !g_WowMsgQuits[index].Task || g_WowMsgQuits[index].Task == task)
             return index + 1;
+
     return 0;
 }
 
@@ -142,9 +148,12 @@ WORD WowMsgTakeQuit(INT quitNumber)
 
     if (quitNumber < 1 || quitNumber > g_WowMsgQuitCount)
         return 0;
+
     code = g_WowMsgQuits[quitNumber - 1].Code;
+
     for (index = quitNumber; index < g_WowMsgQuitCount; ++index)
         g_WowMsgQuits[index - 1] = g_WowMsgQuits[index];
+
     --g_WowMsgQuitCount;
     g_WowMsgIsQuit = g_WowMsgQuitCount > 0;
     return code;
@@ -171,6 +180,7 @@ INT WowMsgPost(
         ++g_WowMsgDropped;
         return 0;
     }
+
     entry = &g_WowMsgRing[g_WowMsgTail];
     entry->Window = window;
     entry->Message = message;
@@ -215,6 +225,7 @@ INT WowMsgPostMove(
     if (g_WowMsgCount)
     {
         newest = (g_WowMsgTail + WOWMSG_MAX - 1) % WOWMSG_MAX;    /* the newest entry */
+
         if (g_WowMsgRing[newest].Window == window && g_WowMsgRing[newest].Message == message)
         {
             g_WowMsgRing[newest].WParam = wParam;
@@ -225,6 +236,7 @@ INT WowMsgPostMove(
             return 1;
         }
     }
+
     return 0;
 }
 
@@ -235,39 +247,51 @@ INT WowMsgTake(WORD window, WORD filterMin, WORD filterMax, INT isRemove, PWOWMS
 
     if (!g_WowMsgCount)
         return 0;
+
     for (position = 0; position < g_WowMsgCount; ++position)
     {
         PWOWMSG entry = &g_WowMsgRing[(g_WowMsgHead + position) % WOWMSG_MAX];
+
         if (entry->Message == WOWMSG_MENUREPLAY)
         {
             g_WowMsgReplay = *entry;
             g_WowMsgIsReplayDue = 1;
+
             for (index = position; index > 0; --index)
                 g_WowMsgRing[(g_WowMsgHead + index) % WOWMSG_MAX] =
                     g_WowMsgRing[(g_WowMsgHead + index - 1) % WOWMSG_MAX];
+
             g_WowMsgHead = (g_WowMsgHead + 1) % WOWMSG_MAX;
             --g_WowMsgCount;
             --position;                          /* the next entry now sits at n */
             continue;
         }
+
         if (window && entry->Window != window)
             continue;
+
         if ((filterMin || filterMax) && (entry->Message < filterMin || entry->Message > filterMax))
             continue;
+
         if (!WowMsgIsFor(entry->Window, g_WowMsgTaker))
             continue;                                                      /* s92 #306 */
+
         *output = *entry;
+
         if (isRemove)
         {
             for (index = position; index > 0; --index)
                 g_WowMsgRing[(g_WowMsgHead + index) % WOWMSG_MAX] =
                     g_WowMsgRing[(g_WowMsgHead + index - 1) % WOWMSG_MAX];
+
             g_WowMsgHead = (g_WowMsgHead + 1) % WOWMSG_MAX;
             --g_WowMsgCount;
             ++g_WowMsgTaken;
         }
+
         return 1;
     }
+
     return 0;
 }
 
@@ -280,6 +304,7 @@ INT WowMsgCountFor(WORD task)
     for (position = 0; position < g_WowMsgCount; ++position)
         if (WowMsgIsFor(g_WowMsgRing[(g_WowMsgHead + position) % WOWMSG_MAX].Window, task))
             ++count;
+
     return count;
 }
 

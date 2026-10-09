@@ -118,13 +118,16 @@ static INT LogIsSamePath(PCSTR first, PCSTR second)
 {
     if (first == second)
         return 1;
+
     if (!first || !second)
         return 0;
+
     while (*first && *first == *second)
     {
         ++first;
         ++second;
     }
+
     return *first == *second;
 }
 
@@ -132,6 +135,7 @@ static VOID LogClose(VOID)
 {
     if (g_LogHandle != INVALID_HANDLE_VALUE)
         CloseHandle(g_LogHandle);
+
     g_LogHandle = INVALID_HANDLE_VALUE;
     g_LogHandlePath = 0;
 }
@@ -156,23 +160,31 @@ static INT LogIsBadRange(PCSTR path, PCSTR buffer, PCSTR end)
 
     if (end >= buffer && (unsigned long)(end - buffer) < LOG_MAX_RANGE)
         return 0;
+
     for (index = 0; "\r\n[log: BAD RANGE from a caller: buf=0x"[index]; ++index)
         *cursor++ = "\r\n[log: BAD RANGE from a caller: buf=0x"[index];
+
     for (value = (UINT)(ULONG_PTR)buffer, index = LOG_HEX_TOP_SHIFT; index >= 0; index -= NIBBLE_SHIFT)
         *cursor++ = HEX_DIGITS_LOWER[(value >> index) & NIBBLE_MASK];
+
     for (index = 0; " end=0x"[index]; ++index)
         *cursor++ = " end=0x"[index];
+
     for (value = (UINT)(ULONG_PTR)end, index = LOG_HEX_TOP_SHIFT; index >= 0; index -= NIBBLE_SHIFT)
         *cursor++ = HEX_DIGITS_LOWER[(value >> index) & NIBBLE_MASK];
+
     for (index = 0; " -- line dropped, run continues]\r\n"[index]; ++index)
         *cursor++ = " -- line dropped, run continues]\r\n"[index];
+
     file = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                     NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
     if (file != INVALID_HANDLE_VALUE)
     {
         WriteFile(file, message, (DWORD)(cursor - message), &written, NULL);
         CloseHandle(file);
     }
+
     return 1;
 }
 
@@ -184,10 +196,13 @@ static VOID LogRotationName(PSTR out, PCSTR path, INT length, INT stem, INT numb
 
     for (index = 0; index < stem; ++index)
         *cursor++ = path[index];
+
     *cursor++ = '-';
     *cursor++ = (CHAR)('0' + number);
+
     for (index = stem; index < length; ++index)
         *cursor++ = path[index];
+
     *cursor = 0;
 }
 
@@ -201,25 +216,34 @@ static VOID LogRotateOnce(PCSTR path)
 
     if (g_LogIsRotated)
         return;
+
     g_LogIsRotated = 1;
+
     while (path[length])
         ++length;
+
     if (length < LOG_EXTENSION_LENGTH || length + LOG_ROTATION_SUFFIX >= (INT)sizeof from)
         return;
+
     if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES)
         return;                                                        /* nothing to keep */
+
     stem = length;
+
     if (path[length-LOG_EXTENSION_LENGTH] == '.' && (path[length-3] | ASCII_CASE_BIT) == 'l' && (path[length-2] | ASCII_CASE_BIT) == 'o'
         && (path[length-1] | ASCII_CASE_BIT) == 'g')
         stem = length - LOG_EXTENSION_LENGTH;
+
     LogRotationName(to, path, length, stem, LOG_KEEP);
     DeleteFileA(to);                                        /* the oldest falls off */
+
     for (number = LOG_KEEP - 1; number >= 1; --number)
     {
         LogRotationName(from, path, length, stem, number);
         LogRotationName(to,   path, length, stem, number + 1);
         MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING);
     }
+
     LogRotationName(to, path, length, stem, 1);
     MoveFileExA(path, to, MOVEFILE_REPLACE_EXISTING);       /* last run -> -1 */
 }
@@ -230,12 +254,14 @@ VOID LogWrite(PCSTR path, PCSTR buffer, PCSTR end)
 
     if (LogIsBadRange(path, buffer, end))
         return;
+
     LogRotateOnce(path);
     LogClose();                       /* the cached handle names the OLD file */
     file = CreateFileA(path, GENERIC_WRITE, 0, NULL,
                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     g_LogTotal = (unsigned long)(end - buffer);
     g_LogIsCapped = 0;
+
     if (file != INVALID_HANDLE_VALUE)
     {
         DWORD written;
@@ -253,28 +279,36 @@ VOID LogAppend(PCSTR path, PCSTR buffer, PCSTR end)
 
     if (g_LogIsQuiet)
         return;
+
     if (LogIsBadRange(path, buffer, end))
         return;
+
     QueryPerformanceCounter(&start);
     ++g_LogCalls;
     g_LogBytes += length;
+
     if (g_LogIsCapped)
         return;
+
     if (g_LogTotal + length > LOG_MAX_BYTES)
     {
         static const CHAR mark[] = "\r\n[log capped at LOG_MAX_BYTES: runaway guest output suppressed]\r\n";
         file = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                         NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
         if (file != INVALID_HANDLE_VALUE)
         {
             DWORD written;
             WriteFile(file, mark, (DWORD)(sizeof(mark) - 1), &written, NULL);
             CloseHandle(file);
         }
+
         g_LogIsCapped = 1;
         return;
     }
+
     g_LogTotal += length;
+
     if (g_LogHandle == INVALID_HANDLE_VALUE || !LogIsSamePath(g_LogHandlePath, path))
     {
         LogClose();
@@ -289,18 +323,23 @@ VOID LogAppend(PCSTR path, PCSTR buffer, PCSTR end)
         file = CreateFileA(path, FILE_APPEND_DATA,
                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                         NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
         if (file == INVALID_HANDLE_VALUE)
             return;
+
         {   UINT index = 0;
+
             while (path[index] && index < sizeof g_LogHandlePathBuffer - 1)
             {
                 g_LogHandlePathBuffer[index] = path[index];
                 ++index;
             }
+
             g_LogHandlePathBuffer[index] = 0; }
         g_LogHandle = file;
         g_LogHandlePath = g_LogHandlePathBuffer;
     }
+
     {
         DWORD written;
         WriteFile(g_LogHandle, buffer, length, &written, NULL);

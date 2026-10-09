@@ -162,15 +162,20 @@ static inline VOID DosMcbSetOwnerName(
     for (cursor = path; *cursor; ++cursor)
         if (*cursor == '\\' || *cursor == '/' || *cursor == ':')
             baseName = cursor + 1;
+
     for (index = 0; index < DOS_MCB_NAME_LENGTH; ++index)
     {
         CHAR character = baseName[index];
+
         if (!character || character == '.' || character == ' ')
             break;
+
         if (character >= 'a' && character <= 'z')
             character = (CHAR)(character - ASCII_CASE_BIT);
+
         mcb[DOS_MCB_NAME + index] = (BYTE)character;
     }
+
     for (; index < DOS_MCB_NAME_LENGTH; ++index)
         mcb[DOS_MCB_NAME + index] = 0;
 }
@@ -223,31 +228,39 @@ static inline WORD DosMcbReserveTop(
     {
         volatile BYTE *mcb = DosMcbSegmentAddress(base, mcbSegment);
         WORD blockSize = DosMcbReadWord(mcb + DOS_MCB_SIZE);
+
         if (mcb[DOS_MCB_SIGNATURE] == DOS_MCB_LAST && DosMcbReadWord(mcb + DOS_MCB_OWNER) == DOS_MCB_OWNER_DOS && hasPrevious)
         {
             volatile BYTE *previousMcb = DosMcbSegmentAddress(base, previousSegment);
             WORD previousSize = DosMcbReadWord(previousMcb + DOS_MCB_SIZE);
             WORD newSegment;
+
             if (previousSize < (WORD)(paragraphs + 2))
                 return DOS_MCB_NO_SEGMENT;
+
             DosMcbWriteWord(previousMcb + DOS_MCB_SIZE, (WORD)(previousSize - paragraphs - 1));
             newSegment = (WORD)(previousSegment + 1 + (previousSize - paragraphs - 1));          /* ends exactly at mcbSegment */
             DosMcbWriteHeader(base, newSegment, DOS_MCB_MEMBER, DOS_MCB_OWNER_DOS, paragraphs);
             return (WORD)(newSegment + 1);
         }
+
         if (mcb[DOS_MCB_SIGNATURE] == DOS_MCB_LAST)
         {
             WORD newTop;
+
             if (blockSize < (WORD)(paragraphs + 2))
                 return DOS_MCB_NO_SEGMENT;
+
             DosMcbWriteWord(mcb + DOS_MCB_SIZE, (WORD)(blockSize - paragraphs - 1));
             mcb[DOS_MCB_SIGNATURE] = DOS_MCB_MEMBER;
             newTop = (WORD)(mcbSegment + 1 + (blockSize - paragraphs - 1));     /* the new 'Z' MCB */
             DosMcbWriteHeader(base, newTop, DOS_MCB_LAST, DOS_MCB_OWNER_DOS, paragraphs);
             return (WORD)(newTop + 1);
         }
+
         if (mcb[DOS_MCB_SIGNATURE] != DOS_MCB_MEMBER || ++walkCount > DOS_MCB_WALK_LIMIT)
             return DOS_MCB_NO_SEGMENT;
+
         previousSegment = mcbSegment;
         hasPrevious = TRUE;
         mcbSegment = (WORD)(mcbSegment + 1 + blockSize);
@@ -276,6 +289,7 @@ static inline INT DosMcbAllocate(
         BYTE signature = mcb[DOS_MCB_SIGNATURE];
         WORD owner = DosMcbReadWord(mcb + DOS_MCB_OWNER);
         WORD blockSize  = DosMcbReadWord(mcb + DOS_MCB_SIZE);
+
         if (owner == DOS_MCB_OWNER_FREE)                                   /* free block */
         {
             /* merge-on-alloc: coalesce following free blocks before sizing, so two
@@ -285,17 +299,22 @@ static inline INT DosMcbAllocate(
             while (signature == DOS_MCB_MEMBER)
             {
                 volatile BYTE *nextMcb = DosMcbSegmentAddress(base, (WORD)(mcbSegment + 1 + blockSize));
+
                 if (DosMcbReadWord(nextMcb + DOS_MCB_OWNER) != DOS_MCB_OWNER_FREE)
                     break;                                                                      /* next block owned */
+
                 if (nextMcb[DOS_MCB_SIGNATURE] != DOS_MCB_MEMBER && nextMcb[DOS_MCB_SIGNATURE] != DOS_MCB_LAST)
                     break;                                                                                            /* next is not an MCB */
+
                 blockSize = (WORD)(blockSize + 1 + DosMcbReadWord(nextMcb + DOS_MCB_SIZE));
                 DosMcbWriteWord(mcb + DOS_MCB_SIZE, blockSize);
                 signature = nextMcb[DOS_MCB_SIGNATURE];                            /* may become 'Z' */
                 mcb[DOS_MCB_SIGNATURE] = signature;
             }
+
             if (blockSize > biggest)
                 biggest = blockSize;
+
             if (blockSize >= requested)
             {
                 if (blockSize >= (WORD)(requested + 1))         /* split off a free tail */
@@ -308,23 +327,30 @@ static inline INT DosMcbAllocate(
                     mcb[DOS_MCB_SIGNATURE] = DOS_MCB_MEMBER;
                     DosMcbWriteWord(mcb + DOS_MCB_SIZE, requested);
                 }
+
                 DosMcbWriteWord(mcb + DOS_MCB_OWNER, DOS_PSP_SEG);
                 result = (WORD)(mcbSegment + 1);
                 isDone = TRUE;
             }
         }
+
         if (isDone || signature == DOS_MCB_LAST)
             break;
+
         mcbSegment = (WORD)(mcbSegment + 1 + blockSize);
     }
+
     if (!isDone)
     {
         if (largestFree)
             *largestFree = biggest;
+
         return DOS_MCB_ERROR_INSUFFICIENT_MEMORY;
     }
+
     if (allocatedSegment)
         *allocatedSegment = result;
+
     return DOS_MCB_SUCCESS;
 }
 
@@ -339,18 +365,24 @@ static inline INT DosMcbFree(_In_opt_ volatile BYTE *base, _In_ WORD blockSegmen
 
     if (mcb[DOS_MCB_SIGNATURE] != DOS_MCB_MEMBER && mcb[DOS_MCB_SIGNATURE] != DOS_MCB_LAST)
         return DOS_MCB_ERROR_INVALID_BLOCK;
+
     DosMcbWriteWord(mcb + DOS_MCB_OWNER, DOS_MCB_OWNER_FREE);                                /* mark free */
+
     while (mcb[DOS_MCB_SIGNATURE] == DOS_MCB_MEMBER)                                /* coalesce forward */
     {
         WORD blockSize = DosMcbReadWord(mcb + DOS_MCB_SIZE);
         volatile BYTE *nextMcb = DosMcbSegmentAddress(base, (WORD)(mcbSegment + 1 + blockSize));
+
         if (DosMcbReadWord(nextMcb + DOS_MCB_OWNER) != DOS_MCB_OWNER_FREE)
             break;                                                                             /* neighbour owned */
+
         if (nextMcb[DOS_MCB_SIGNATURE] != DOS_MCB_MEMBER && nextMcb[DOS_MCB_SIGNATURE] != DOS_MCB_LAST)
             break;                                                                                                   /* neighbour not an MCB */
+
         DosMcbWriteWord(mcb + DOS_MCB_SIZE, (WORD)(blockSize + 1 + DosMcbReadWord(nextMcb + DOS_MCB_SIZE)));
         mcb[DOS_MCB_SIGNATURE] = nextMcb[DOS_MCB_SIGNATURE];                                 /* absorb (may become 'Z') */
     }
+
     return DOS_MCB_SUCCESS;
 }
 
@@ -370,9 +402,11 @@ static inline INT DosMcbResize(
 
     if (mcb[DOS_MCB_SIGNATURE] != DOS_MCB_MEMBER && mcb[DOS_MCB_SIGNATURE] != DOS_MCB_LAST)
         return DOS_MCB_ERROR_INVALID_BLOCK;
+
     WORD currentSize = DosMcbReadWord(mcb + DOS_MCB_SIZE);
     BYTE signature = mcb[DOS_MCB_SIGNATURE];
     BOOL isResized = FALSE;
+
     if (requested <= currentSize)                                   /* shrink (free the tail) */
     {
         if ((WORD)(currentSize - requested) >= 1)
@@ -385,14 +419,17 @@ static inline INT DosMcbResize(
             mcb[DOS_MCB_SIGNATURE] = DOS_MCB_MEMBER;
             DosMcbWriteWord(mcb + DOS_MCB_SIZE, requested);
         }
+
         isResized = TRUE;
     }
     else if (signature == DOS_MCB_MEMBER)                              /* grow into a free neighbour */
     {
         volatile BYTE *nextMcb = DosMcbSegmentAddress(base, (WORD)(mcbSegment + 1 + currentSize));
+
         if (DosMcbReadWord(nextMcb + DOS_MCB_OWNER) == DOS_MCB_OWNER_FREE)
         {
             WORD available = (WORD)(currentSize + 1 + DosMcbReadWord(nextMcb + DOS_MCB_SIZE));
+
             if (available >= requested)
             {
                 if ((WORD)(available - requested) >= 1)
@@ -410,23 +447,30 @@ static inline INT DosMcbResize(
                     DosMcbWriteWord(mcb + DOS_MCB_SIZE, available);
                     mcb[DOS_MCB_SIGNATURE] = nextMcb[DOS_MCB_SIGNATURE];
                 }
+
                 isResized = TRUE;
             }
         }
     }
+
     if (!isResized)                                            /* fail: report max available */
     {
         WORD largest = currentSize;
+
         if (signature == DOS_MCB_MEMBER)
         {
             volatile BYTE *nextMcb = DosMcbSegmentAddress(base, (WORD)(mcbSegment + 1 + currentSize));
+
             if (DosMcbReadWord(nextMcb + DOS_MCB_OWNER) == DOS_MCB_OWNER_FREE)
                 largest = (WORD)(currentSize + 1 + DosMcbReadWord(nextMcb + DOS_MCB_SIZE));
         }
+
         if (largestAvailable)
             *largestAvailable = largest;
+
         return DOS_MCB_ERROR_INSUFFICIENT_MEMORY;
     }
+
     return DOS_MCB_SUCCESS;
 }
 
@@ -449,14 +493,19 @@ static inline INT DosMcbCheckChain(
         BYTE  signature  = mcb[DOS_MCB_SIGNATURE];
         WORD  blockSize   = DosMcbReadWord(mcb + DOS_MCB_SIZE);
         DWORD nextSegment = (DWORD)mcbSegment + 1 + blockSize;
+
         if (++walkCount > DOS_MCB_WALK_LIMIT)
             return DOS_MCB_CHAIN_RUNAWAY;
+
         if (signature != DOS_MCB_MEMBER && signature != DOS_MCB_LAST)
             return DOS_MCB_CHAIN_CORRUPT_SIGNATURE;
+
         if (nextSegment > topParagraph)
             return DOS_MCB_CHAIN_OVERRUNS_TOP;
+
         if (signature == DOS_MCB_LAST)
             return (nextSegment == topParagraph) ? DOS_MCB_CHAIN_OK : DOS_MCB_CHAIN_LAST_MISPLACED;
+
         mcbSegment = (WORD)nextSegment;
     }
 }

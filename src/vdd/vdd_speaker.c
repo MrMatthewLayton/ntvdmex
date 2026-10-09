@@ -41,6 +41,7 @@ static VOID VddSpeakerPortOut(PVOID context, WORD port, BYTE width, UINT32 value
 (VOID)port;
 (VOID)width;
   state->Port61 = (BYTE)value;
+
   if (state->Pit)
       VddPitCounter2Gate(state->Pit, state->Port61 & SPEAKER_GATE_BIT); }
 

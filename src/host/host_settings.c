@@ -178,6 +178,7 @@ static INT SettingsIsLive(INT settingId)
     for (index = 0; index < sizeof g_SettingsLiveIds; ++index)
         if (g_SettingsLiveIds[index] == settingId)
             return 1;
+
     return 0;
 }
 
@@ -231,40 +232,49 @@ VOID SettingsLogSources(VOID)
     CHAR item[64];
     INT index;
     cursor = LogPut(cursor, "STAGE2: settings -- value, source, and whether the host uses it (GH #144)\r\n");
+
     for (index = 0; index < SET_COUNT; ++index)
     {
         const SET_DEF *definition = &g_SetDefinitions[index];
         cursor = LogPut(cursor, "  "); cursor = LogPut(cursor, definition->RegistryName); cursor = LogPut(cursor, " = ");
         cursor = LogDecimal(cursor, g_Settings.Values[index]);
+
         if (definition->Kind == SK_COMBO && SettingsItem(definition->Items, (INT)g_Settings.Values[index], item, sizeof item))
         {
             cursor = LogPut(cursor, " \""); cursor = LogPut(cursor, item); cursor = LogPut(cursor, "\"");
         }
+
         cursor = LogPut(cursor, " ["); cursor = LogPut(cursor, source[g_Settings.Sources[index] < 3 ? g_Settings.Sources[index] : 0]); cursor = LogPut(cursor, "]");
+
         if (g_SettingsOverrideBy[index])
         {
             cursor = LogPut(cursor, " OVERRIDDEN by "); cursor = LogPut(cursor, g_SettingsOverrideBy[index]);
             cursor = LogPut(cursor, " -> "); cursor = LogDecimal(cursor, g_SettingsOverrideValue[index]);
         }
+
         if (SettingsIsLive(index))
             cursor = LogPut(cursor, "\r\n");
         else { cursor = LogPut(cursor, " (stored only -- "); cursor = LogPut(cursor, SettingsDeadWhy(index));
                cursor = LogPut(cursor, ", GH #136)\r\n"); }
     }
+
     for (index = 0; index < SET_STR_COUNT; ++index)
     {
         cursor = LogPut(cursor, "  "); cursor = LogPut(cursor, g_SetStringDefinitions[index].RegistryName); cursor = LogPut(cursor, " = \"");
         cursor = LogPut(cursor, g_Settings.Strings[index]); cursor = LogPut(cursor, "\" [");
         cursor = LogPut(cursor, source[g_Settings.StringSources[index] < 3 ? g_Settings.StringSources[index] : 0]); cursor = LogPut(cursor, "]");
+
         if (index == SET_STR_SHELL && g_ShellOverride)
         {
             cursor = LogPut(cursor, " OVERRIDDEN by "); cursor = LogPut(cursor, g_ShellOverride);
         }
+
         if (index == SET_STR_FLOPPYA || index == SET_STR_SHELL || index == SET_STR_TEXTFONT)
             cursor = LogPut(cursor, "\r\n");
         else { cursor = LogPut(cursor, " (stored only -- "); cursor = LogPut(cursor, SettingsDeadWhyText(index));
                cursor = LogPut(cursor, ", GH #136)\r\n"); }
     }
+
     LogAppend(LOG_PATH, buffer, cursor);
 }
 
@@ -321,6 +331,7 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
      */
     if (settings->Values[SET_TYPEMATIC] >= TYPEMATIC_RATE_MIN)
         g_TypematicPeriodMicroseconds = MICROSECONDS_PER_SECOND_U / (UINT32)settings->Values[SET_TYPEMATIC];
+
     /* s84 (user): the physical drive, or a mounted image. The physical one needs no
      * setting -- DOS already reaches the host's A: -- so only IMAGE mode (chosen, or
      * forced because this PC has no floppy drive) names a file here. A blank image
@@ -337,8 +348,10 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
      * capture that the policy can no longer release by clicking.
      */
     InterlockedExchange(&g_MouseSeamless, settings->Values[SET_SEAMLESS] ? 1 : 0);
+
     if (live && window && g_MouseSeamless && g_Captured)
         InputCaptureSet(window, FALSE);
+
     /* The SbDma list is 1|3|5, and 5 is not an 8-bit channel on any real 8237 --
      * on an SB16 it is the SIXTEEN-bit one. Selecting it therefore moves H and
      * leaves D where it was, rather than pointing the 8-bit engine at a channel
@@ -349,6 +362,7 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
       static const BYTE dmas[3] = { 1, 3, 5 };
       BYTE ch = dmas[settings->Values[SET_SBDMA] < ARRAYSIZE(dmas) ? settings->Values[SET_SBDMA] : 0];
       g_SbConfig.Irq = irqs[settings->Values[SET_SBIRQ] & SB_IRQ_CHOICE_MASK];
+
       if (ch < DMA_FIRST_16BIT_CHANNEL)
       {
           g_SbConfig.Dma8Channel = ch;
@@ -372,11 +386,13 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
     {   BYTE model = (BYTE)(settings->Values[SET_SBMODEL] <= SB_MODEL_LAST ? settings->Values[SET_SBMODEL] : 0);
         g_Sb.Model = model;
         g_SbConfig.Emu8kBase = (model == SB_MODEL_AWE32) ? (WORD)(g_SbConfig.IoBase + SB_EMU8K_PORT_OFFSET) : 0;  /* #233 */
+
         if (model == SB_MODEL_SBPRO)
         {
             g_SbConfig.Type = SB_BLASTER_TYPE_SBPRO;
             g_SbConfig.Dma16Channel = 0;
             g_SbConfig.MpuBase = 0;
+
             if (!g_DspVersionForced)
             {
                 g_SbVersionMajor = SB_DSP_VERSION_SBPRO_MAJOR;
@@ -388,20 +404,24 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
             {   static const WORD mpuBases[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };
                 g_SbConfig.Type = SB_BLASTER_TYPE_SB16;                         /* P follows the MPU's port (#235) */
                 g_SbConfig.MpuBase = mpuBases[settings->Values[SET_MPUADDR] <= ARRAYSIZE(mpuBases) - 1 ? settings->Values[SET_MPUADDR] : MPU_DEFAULT_BASE_CHOICE]; }
+
             if (!g_SbConfig.Dma16Channel)
                 g_SbConfig.Dma16Channel = SB_DEFAULT_DMA16;
+
             if (!g_DspVersionForced)
             {
                 g_SbVersionMajor = SB_DSP_VERSION_MAJOR;
                 g_SbVersionMinor = model == SB_MODEL_AWE32 ? SB_DSP_VERSION_AWE32_MINOR : SB_DSP_VERSION_MINOR;
             }
         } }
+
     /* Not over a FORCED version: XP's COMMAND.COM (5.00) and cfg\dosver.txt both win at
      * startup, so they win here too -- pushing 6.22 into a session whose shell requires
      * 5.00 is how its next command would say "Incorrect DOS version".
      */
     if (g_DosMachine && !g_DosVersionForced) DosInt21SetVersion(g_DosMachine, (BYTE)settings->Values[SET_DOSMAJ],
                                                               (BYTE)settings->Values[SET_DOSMIN]);
+
     /* [CAUTION]: THROTTLE GRANULARITY AND CORE-AFFINITY ARE NO LONGER SETTINGS (session 60).
      * Granularity defaults to AUTO (g_CpuSpeedGranularityMs = 0), which is the behaviour
      * that made a slow speed smooth, so it needs no control; cpugran.txt still
@@ -454,6 +474,7 @@ VOID SettingsApplyDevices(const NTVDMEX_SETTINGS *settings)
      */
     if (!g_SpeakerReal)
         PcSpeakerSet(&g_PcSpeaker, 0);
+
     SettingsApplyPresent(&g_PresentDdraw, settings);
 }
 
@@ -479,6 +500,7 @@ static VOID SettingsApplyTextFont(VOID)
 
     if (!lstrcmpA(g_TextFontLive, g_Settings.Strings[SET_STR_TEXTFONT]))
         return;
+
     lstrcpynA(g_TextFontLive, g_Settings.Strings[SET_STR_TEXTFONT], sizeof g_TextFontLive);
     lineCursor = LogPut(lineCursor, "settings: text font changed -- ");
     lineCursor = LogPut(lineCursor, SysFontBuild(g_TextFontLive, &g_SysFontReport));
@@ -503,6 +525,7 @@ VOID SettingsApplyLive(HWND window)
         g_AspectLive  = g_Settings.Values[SET_ASPECT];
         HostApplyWindowSize(window, g_WindowSizeLive);
     }
+
     MenuViewSync(window);
 }
 
@@ -518,9 +541,11 @@ static HWND SettingsControl(INT controlId)
     for (index = 0; index < NTVDMEX_PAGE_COUNT; ++index)
     {
         HWND control = g_SettingsPage[index] ? GetDlgItem(g_SettingsPage[index], controlId) : NULL;
+
         if (control)
             return control;
     }
+
     return NULL;
 }
 
@@ -531,30 +556,39 @@ static VOID SettingsFillCombos(VOID)
     INT index;
     INT index2;
     HWND control;
+
     for (index = 0; index < SET_COUNT; ++index)
     {
         const SET_DEF *definition = &g_SetDefinitions[index];
+
         if (definition->Kind != SK_COMBO || !definition->ControlId)
             continue;
+
         control = SettingsControl(definition->ControlId);
+
         if (!control)
             continue;
+
         for (index2 = 0; SettingsItem(definition->Items, index2, item, (INT)sizeof item); ++index2)
             SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)item);
     }
+
     /* The version list is a convenience, not a constraint: that combo is EDITABLE
      * (CBS_DROPDOWN) because the next guest to refuse to start will want some number
      * nobody has thought of yet. That is also why it is not an SK_COMBO index.
      */
     control = SettingsControl(IDC_S_DOSVER);
+
     if (control) for (index = 0; index < (INT)(sizeof versions / sizeof versions[0]); ++index)
         SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)versions[index]);
+
     /* s84: the Video tab's three-column boxes are narrow; let their LISTS open wide
      * enough for the longest item ("Monochrome orange", "Graphics only").
      */
     {   static const INT narrow[] = { IDC_S_RENDERER, IDC_S_WINSIZE, IDC_S_AUTOFS,
                                       IDC_S_SCALER, IDC_S_FILTER, IDC_S_ASPECT,
                                       IDC_S_TINT, IDC_S_FRAMESKIP, IDC_S_FIT };
+
         for (index = 0; index < (INT)(sizeof narrow / sizeof narrow[0]); ++index)
             if ((control = SettingsControl(narrow[index])) != NULL)
                 SendMessageA(control, CB_SETDROPPEDWIDTH, SETTINGS_COMBO_DROPPED_WIDTH, 0);
@@ -571,10 +605,13 @@ static VOID SettingsShellRadios(INT own)
 
     if (xpShell)
         SendMessageA(xpShell, BM_SETCHECK, own ? BST_UNCHECKED : BST_CHECKED, 0);
+
     if (ownShell)
         SendMessageA(ownShell, BM_SETCHECK, own ? BST_CHECKED : BST_UNCHECKED, 0);
+
     if (edit)
         EnableWindow(edit, own);
+
     if (browse)
         EnableWindow(browse, own);
 }
@@ -590,10 +627,13 @@ static VOID SettingsBrowse(HWND page, INT editId, PCSTR filter, PCSTR title)
     HWND edit = SettingsControl(editId);
 
     file[0] = 0;
+
     if (edit)
         GetWindowTextA(edit, file, sizeof file);
+
     for (index = 0; index < (INT)sizeof openFile; ++index)
         ((PSTR)&openFile)[index] = 0;
+
     openFile.lStructSize = sizeof openFile;
     openFile.hwndOwner   = GetParent(page);
     openFile.lpstrFilter = filter;
@@ -601,6 +641,7 @@ static VOID SettingsBrowse(HWND page, INT editId, PCSTR filter, PCSTR title)
     openFile.nMaxFile    = sizeof file;
     openFile.lpstrTitle  = title;
     openFile.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+
     if (GetOpenFileNameA(&openFile) && edit)
         SetWindowTextA(edit, file);
 }
@@ -632,15 +673,19 @@ static VOID SettingsDriveRadios(
 
     if (!have)
         isPhysical = 0;
+
     if (physical)
     {
         EnableWindow(physical, have);
         SendMessageA(physical, BM_SETCHECK, isPhysical ? BST_CHECKED : BST_UNCHECKED, 0);
     }
+
     if (image)
         SendMessageA(image, BM_SETCHECK, isPhysical ? BST_UNCHECKED : BST_CHECKED, 0);
+
     if (edit)
         EnableWindow(edit, !isPhysical);
+
     if (browse)
         EnableWindow(browse, !isPhysical);
 }
@@ -667,10 +712,13 @@ static INT CALLBACK SettingsFontEnum(
 
     (VOID)textMetric;
     (VOID)type;
+
     if ((logFont->lfPitchAndFamily & LOGFONT_PITCH_MASK) != FIXED_PITCH || logFont->lfFaceName[0] == '@')
         return 1;
+
     if (SendMessageA(control, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)logFont->lfFaceName) == CB_ERR)
         SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)logFont->lfFaceName);
+
     return 1;
 }
 
@@ -682,12 +730,15 @@ static VOID SettingsTextFontFill(VOID)
 
     if (!control)
         return;
+
     SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)TEXTFONT_DEFAULT_ITEM);
     ZeroMemory(&logFont, sizeof logFont);
     logFont.lfCharSet = DEFAULT_CHARSET;
     deviceContext = GetDC(NULL);
+
     if (deviceContext) { EnumFontFamiliesExA(deviceContext, &logFont, (FONTENUMPROCA)SettingsFontEnum, (LPARAM)control, 0);
               ReleaseDC(NULL, deviceContext); }
+
     SendMessageA(control, CB_SETDROPPEDWIDTH, SETTINGS_FONT_DROPPED_WIDTH, 0);
 }
 
@@ -699,10 +750,13 @@ static VOID SettingsTextFontGet(PSTR out, INT cap)
     CHAR text[NTVDMEX_PATH_MAX];
 
     out[0] = 0;
+
     if (selector == CB_ERR)
         return;
+
     text[0] = 0;
     SendMessageA(control, CB_GETLBTEXT, (WPARAM)selector, (LPARAM)text);
+
     if (lstrcmpA(text, TEXTFONT_DEFAULT_ITEM))
         lstrcpynA(out, text, cap);
 }
@@ -716,6 +770,7 @@ static VOID SettingsTextFontPreview(VOID)
 
     SettingsTextFontGet(face, sizeof face);
     SysFontBuildInto(face, &g_TextFontPreview, &g_TextFontPreviewReport);
+
     if (!face[0])
         lstrcpyA(text, SETTINGS_FONT_DEFAULT_TEXT);
     else if (g_TextFontPreviewReport.User == SYSFONT_USER_OK && g_TextFontPreviewReport.UserCodePage)
@@ -728,10 +783,13 @@ static VOID SettingsTextFontPreview(VOID)
         lstrcpyA(text, SETTINGS_FONT_NO_8_PIXEL);
     else
         lstrcpyA(text, SETTINGS_FONT_MISSING);
+
     if (SysFontIsDefaultDegraded(&g_TextFontPreviewReport))
         lstrcatA(text, SETTINGS_FONT_437_MISSING);
+
     if (info)
         SetWindowTextA(info, text);
+
     if (view)
         InvalidateRect(view, NULL, TRUE);
 }
@@ -743,10 +801,13 @@ static VOID SettingsTextFontSelect(PCSTR face)
 
     if (!control)
         return;
+
     found = SendMessageA(control, CB_FINDSTRINGEXACT, (WPARAM)-1,
                      (LPARAM)(face[0] ? face : TEXTFONT_DEFAULT_ITEM));
+
     if (found == CB_ERR && face[0])              /* stored, but no longer installed: keep it */
         found = SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)face);
+
     SendMessageA(control, CB_SETCURSEL, (WPARAM)(found == CB_ERR ? 0 : found), 0);
     SettingsTextFontPreview();
 }
@@ -767,14 +828,17 @@ static VOID SettingsTextFontDraw(const DRAWITEMSTRUCT *drawItem)
     INT left;
     INT top;
     RECT rect = drawItem->rcItem;
+
     for (index = 0; index < FONT_PREVIEW_COLUMNS; ++index)
     {
         row[0][index] = (BYTE)(index < (INT)sizeof text - 1 ? text[index] : FONT_PREVIEW_HIGH_FIRST + (index - (INT)sizeof text + 1));
         row[1][index] = (BYTE)(index < FONT_PREVIEW_BOX_COUNT ? FONT_PREVIEW_BOX_FIRST + index : FONT_PREVIEW_GREEK_FIRST + (index - FONT_PREVIEW_BOX_COUNT));
     }
+
     for (pixelRow = 0; pixelRow < FONT_PREVIEW_HEIGHT; ++pixelRow)
         for (index = 0; index < FONT_PREVIEW_COLUMNS; ++index)
             pixels[pixelRow][index] = g_TextFontPreview.Table16[row[pixelRow / FONT_PREVIEW_CELL_HEIGHT][index]][pixelRow % FONT_PREVIEW_CELL_HEIGHT];
+
     ZeroMemory(&bitmapInfo, sizeof bitmapInfo);
     bitmapInfo.Header.biSize = sizeof bitmapInfo.Header;
     bitmapInfo.Header.biWidth = FONT_PREVIEW_WIDTH;
@@ -785,11 +849,15 @@ static VOID SettingsTextFontDraw(const DRAWITEMSTRUCT *drawItem)
     bitmapInfo.Palette[1].rgbRed = bitmapInfo.Palette[1].rgbGreen = bitmapInfo.Palette[1].rgbBlue = FONT_PREVIEW_GREY;
     FillRect(drawItem->hDC, &rect, (HBRUSH)GetStockObject(BLACK_BRUSH));
     left = rect.left + ((rect.right - rect.left) - FONT_PREVIEW_WIDTH) / 2;
+
     if (left < rect.left)
         left = rect.left;
+
     top = rect.top + ((rect.bottom - rect.top) - FONT_PREVIEW_HEIGHT) / 2;
+
     if (top < rect.top)
         top = rect.top;
+
     SetDIBitsToDevice(drawItem->hDC, left, top, FONT_PREVIEW_WIDTH, FONT_PREVIEW_HEIGHT, 0, 0, 0, FONT_PREVIEW_HEIGHT, pixels, (BITMAPINFO *)&bitmapInfo, DIB_RGB_COLORS);
 }
 
@@ -802,8 +870,10 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
     {
         const SET_DEF *definition = &g_SetDefinitions[index];
         HWND control = definition->ControlId ? SettingsControl(definition->ControlId) : NULL;
+
         if (!control)
             continue;
+
         switch (definition->Kind)
         {
         case SK_CHECK:
@@ -821,11 +891,13 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
             SendMessageA(control, TBM_SETRANGE, FALSE, MAKELPARAM(definition->Low, definition->High));
             SendMessageA(control, TBM_SETPAGESIZE, 0, SETTINGS_SLIDER_PAGE);
             SendMessageA(control, TBM_SETPOS, TRUE, (LPARAM)settings->Values[index]);
+
             if (label)
             {
                 wsprintfA(text, SETTINGS_FORMAT_PERCENT, (UINT)settings->Values[index]);
                 SetWindowTextA(label, text);
             }
+
             break; }
 
         case SK_COMBO:
@@ -844,12 +916,15 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
             break;                      /* SK_DERIVED has no control of its own */
         }
     }
+
     for (index = 0; index < SET_STR_COUNT; ++index)
     {
         HWND control = SettingsControl(g_SetStringDefinitions[index].ControlId);
+
         if (control)
             SetWindowTextA(control, settings->Strings[index]);
     }
+
     SettingsShellRadios(settings->Strings[SET_STR_SHELL][0] != 0);
     SettingsTextFontSelect(settings->Strings[SET_STR_TEXTFONT]);                 /* #321 */
     SettingsFloppyRadios(settings->Values[SET_FLOPPYPHYS] != 0);                /* s84 */
@@ -867,12 +942,15 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
      * forces a different number than the setting, which file.
      */
     {   HWND dosVersionNow = SettingsControl(IDC_S_DOSVER_NOW);
+
         if (dosVersionNow && g_DosMachine)
         {
             wsprintfA(text, SETTINGS_DOS_VERSION_FORMAT,
                       (UINT)g_DosMachine->VersionMajor, (UINT)g_DosMachine->VersionMinor);
+
             if (g_DosVersionForced && g_DosVersionWhy)
                 lstrcatA(text, SETTINGS_DOS_VERSION_FORCED);
+
             SetWindowTextA(dosVersionNow, text);
         }
     }
@@ -891,8 +969,10 @@ static VOID SettingsFromDialog(NTVDMEX_SETTINGS *settings)
     {
         const SET_DEF *definition = &g_SetDefinitions[index];
         HWND control = definition->ControlId ? SettingsControl(definition->ControlId) : NULL;
+
         if (!control)
             continue;
+
         switch (definition->Kind)
         {
         case SK_CHECK:
@@ -902,49 +982,63 @@ static VOID SettingsFromDialog(NTVDMEX_SETTINGS *settings)
         case SK_UINT:
         {
             DWORD value;
+
             if (!GetWindowTextA(control, text, 32))
                 break;
+
             if (!SettingsParseUnsigned(text, &value))
                 break;
+
             if (value >= definition->Low && value <= definition->High)
                 settings->Values[index] = value;
+
             break; }
 
         case SK_COMBO:
         {
             LRESULT selector = SendMessageA(control, CB_GETCURSEL, 0, 0);
+
             if (selector != CB_ERR && (DWORD)selector <= definition->High)
                 settings->Values[index] = (DWORD)selector;
+
             break; }
 
         case SK_SLIDER:
         {
             LRESULT value = SendMessageA(control, TBM_GETPOS, 0, 0);
+
             if ((DWORD)value >= definition->Low && (DWORD)value <= definition->High)
                 settings->Values[index] = (DWORD)value;
+
             break; }
 
         case SK_VER:
             if (GetWindowTextA(control, text, 32))
                 SettingsParseVersion(text, &settings->Values[index], &settings->Values[index + 1]);
+
             break;
 
         default:
             break;
         }
     }
+
     for (index = 0; index < SET_STR_COUNT; ++index)
     {
         HWND control = SettingsControl(g_SetStringDefinitions[index].ControlId);
+
         if (!control)
             continue;
+
         GetWindowTextA(control, text, NTVDMEX_PATH_MAX);
         SettingsCopyString(settings->Strings[index], text, NTVDMEX_PATH_MAX);
     }
+
     /* #321: a drop-list's text is its item; the default item stores as "". */
     SettingsTextFontGet(settings->Strings[SET_STR_TEXTFONT], NTVDMEX_PATH_MAX);
     /* #203: "Windows XP's own" means the empty string, whatever the greyed box holds. */
     {   HWND xpShell = SettingsControl(IDC_S_SHELL_XP);
+
         if (xpShell && SendMessageA(xpShell, BM_GETCHECK, 0, 0) == BST_CHECKED)
             settings->Strings[SET_STR_SHELL][0] = 0;
     }
@@ -968,24 +1062,31 @@ static VOID SettingsFillCpuInfo(HWND dialog)
 
     if (!control)
         return;
+
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
             HOST_REG_CPU_KEY,
             0, KEY_READ, &key) != ERROR_SUCCESS)
         return;
+
     if (RegQueryValueExA(key, HOST_REG_CPU_NAME, NULL, &type,
                          (BYTE *)name, &size) == ERROR_SUCCESS
         && type == REG_SZ && size)
     {
         name[size < sizeof name ? size : sizeof name - 1] = 0;
+
         while (*source == ' ')
             ++source;                                    /* Intel pads the string with spaces */
+
         {   PSTR cursor = out;                     /* ...inside it too: "CPU     E8600  @" */
+
             for (; *source && cursor < out + sizeof out - 1; ++source)
                 if (*source != ' ' || (cursor > out && cursor[-1] != ' '))
                     *cursor++ = *source;
+
             *cursor = 0; }                          /* s84: the row's label says what it is */
         SetWindowTextA(control, out);
     }
+
     RegCloseKey(key);
 }
 
@@ -998,27 +1099,34 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
     {
         INT controlId = GetDlgCtrlID((HWND)lParam);
         HWND label = controlId ? GetDlgItem(dialog, controlId + IDC_S_SLIDER_VALUE_OFFSET) : NULL;
+
         if (label)
         {
             CHAR text[16];
             wsprintfA(text, SETTINGS_FORMAT_PERCENT, (UINT)SendMessageA((HWND)lParam, TBM_GETPOS, 0, 0));
             SetWindowTextA(label, text);
         }
+
         return TRUE;
     }
+
     if (message == WM_INITDIALOG)
     {
         if (!g_UxTheme)
         {
             g_UxTheme = LoadLibraryA(HOST_MODULE_UXTHEME);
+
             if (g_UxTheme)
                 g_EnableThemeDialogTexture = (PFN_ENABLE_THEME_DIALOG_TEXTURE)GetProcAddress(g_UxTheme, HOST_EXPORT_ENABLE_THEME_DIALOG_TEXTURE);
         }
+
         if (g_EnableThemeDialogTexture)
             g_EnableThemeDialogTexture(dialog, THEME_ETDT_ENABLE | THEME_ETDT_USETABTEXTURE);                               /* ETDT_ENABLE | ETDT_USETABTEXTURE */
+
         SettingsFillCpuInfo(dialog);            /* no-op on pages without the static */
         return TRUE;
     }
+
     /* -- #224: THE SPEED LIST, OWNER-DRAWN. A rung at or above this PC's own clock
      * cannot be a throttle, so it is drawn greyed and choosing it snaps back to the
      * last rung that can. Host shows the PC's own speed beside it.
@@ -1028,6 +1136,7 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
         ((MEASUREITEMSTRUCT *)lParam)->itemHeight = SETTINGS_ITEM_HEIGHT;
         return TRUE;
     }
+
     if (message == WM_DRAWITEM && ((DRAWITEMSTRUCT *)lParam)->CtlID == IDC_S_SPEEDMODE)
     {
         DRAWITEMSTRUCT *drawItem = (DRAWITEMSTRUCT *)lParam;
@@ -1035,39 +1144,49 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
         INT selector = (drawItem->itemState & ODS_SELECTED) != 0;
         INT isOk  = (INT)drawItem->itemID < 0 || CpuSpeedIsAvailable((UINT)drawItem->itemID, HostCpuMhz());
         FillRect(drawItem->hDC, &drawItem->rcItem, GetSysColorBrush(selector && isOk ? COLOR_HIGHLIGHT : COLOR_WINDOW));
+
         if ((INT)drawItem->itemID >= 0)
         {
             SendMessageA(drawItem->hwndItem, CB_GETLBTEXT, drawItem->itemID, (LPARAM)text);
+
             if (drawItem->itemID == 0 && HostCpuMhz())
                 wsprintfA(text + lstrlenA(text), SETTINGS_FORMAT_THIS_PC, HostCpuMhz());
+
             SetBkMode(drawItem->hDC, TRANSPARENT);
             SetTextColor(drawItem->hDC, GetSysColor(!isOk ? COLOR_GRAYTEXT
                                               : selector ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
             drawItem->rcItem.left += SETTINGS_ITEM_INSET;
             DrawTextA(drawItem->hDC, text, -1, &drawItem->rcItem, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
         }
+
         return TRUE;
     }
+
     if (message == WM_DRAWITEM && ((DRAWITEMSTRUCT *)lParam)->CtlID == IDC_S_TEXTFONT_VIEW)
     {
         SettingsTextFontDraw((DRAWITEMSTRUCT *)lParam);                 /* #321 */
         return TRUE;
     }
+
     if (message == WM_COMMAND && LOWORD(wParam) == IDC_S_TEXTFONT && HIWORD(wParam) == CBN_SELCHANGE)
     {
         SettingsTextFontPreview();
         return TRUE;
     }
+
     if (message == WM_COMMAND && LOWORD(wParam) == IDC_S_SPEEDMODE && HIWORD(wParam) == CBN_SELCHANGE)
     {
         static LRESULT lastOk = 0;
         LRESULT selection = SendMessageA((HWND)lParam, CB_GETCURSEL, 0, 0);
+
         if (selection != CB_ERR && !CpuSpeedIsAvailable((UINT)selection, HostCpuMhz()))
             SendMessageA((HWND)lParam, CB_SETCURSEL, (WPARAM)lastOk, 0);
         else if (selection != CB_ERR)
             lastOk = selection;
+
         return TRUE;
     }
+
     if (message == WM_COMMAND && HIWORD(wParam) == BN_CLICKED)     /* #203, the General page */
     {
         switch (LOWORD(wParam))
@@ -1117,6 +1236,7 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
             return TRUE;
         }
     }
+
     return FALSE;
 }
 
@@ -1142,6 +1262,7 @@ static LRESULT CALLBACK SettingsMessageFilter(INT code, WPARAM wParam, LPARAM lP
         INT current = (INT)SendMessageA(tabControl, TCM_GETCURSEL, 0, 0);
         INT back = (message->wParam == VK_PRIOR)
                 || (message->wParam == VK_TAB && (GetKeyState(VK_SHIFT) & HOST_KEY_DOWN_BIT));
+
         if (count > 0)
         {
             INT next = (current + (back ? count - 1 : 1)) % count;
@@ -1150,6 +1271,7 @@ static LRESULT CALLBACK SettingsMessageFilter(INT code, WPARAM wParam, LPARAM lP
             return 1;                                  /* eaten: not a focus move */
         }
     }
+
     return CallNextHookEx(g_SettingsHook, code, wParam, lParam);
 }
 
@@ -1161,19 +1283,23 @@ INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wPara
     {
         HWND tabControl = GetDlgItem(dialog, IDC_S_TAB);
         g_SettingsDialog = dialog;
+
         if (!g_SettingsHook)
             g_SettingsHook = SetWindowsHookExA(WH_MSGFILTER, SettingsMessageFilter, NULL,
                                                 GetCurrentThreadId());
+
         HINSTANCE instance = GetModuleHandleA(NULL);
         RECT tabRect;
         TCITEMA tabItem;
         INT index;
+
         for (index = 0; index < NTVDMEX_PAGE_COUNT; ++index)
         {
             tabItem.mask = TCIF_TEXT;
             tabItem.pszText = (LPSTR)g_SettingsTabs[index];
             SendMessageA(tabControl, TCM_INSERTITEMA, (WPARAM)index, (LPARAM)&tabItem);
         }
+
         /* WHERE THE PAGES GO: the tab control's own rectangle in dialog coordinates,
          * less the strip the tabs themselves occupy. TCM_ADJUSTRECT computes the
          * second part and is the only sound way to get it -- the height of a tab row
@@ -1183,18 +1309,22 @@ INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wPara
         GetWindowRect(tabControl, &tabRect);
         MapWindowPoints(NULL, dialog, (POINT *)&tabRect, 2);
         SendMessageA(tabControl, TCM_ADJUSTRECT, FALSE, (LPARAM)&tabRect);
+
         for (index = 0; index < NTVDMEX_PAGE_COUNT; ++index)
         {
             g_SettingsPage[index] = CreateDialogParamA(instance, MAKEINTRESOURCEA(g_SettingsPages[index]),
                                             dialog, SettingsPageProcedure, 0);
+
             if (!g_SettingsPage[index])
                 continue;
+
             /* HWND_TOP, not the tab: a page placed BELOW the tab control in z-order
              * is drawn over by the tab's own background and never seen.
              */
             SetWindowPos(g_SettingsPage[index], HWND_TOP, tabRect.left, tabRect.top,
                          tabRect.right - tabRect.left, tabRect.bottom - tabRect.top, SWP_HIDEWINDOW);
         }
+
         SettingsFillCombos();
         SettingsTextFontFill();                 /* #321: the installed fonts */
         /* [CAUTION]: THE SAVED COPY, NOT THE LIVE ONE. This dialog edits the configuration
@@ -1209,6 +1339,7 @@ INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wPara
         INT page;          /* SETSHOT_PATH: start on page N */
             HANDLE file = CreateFileA(SETSHOT_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
                                    OPEN_EXISTING, 0, NULL);
+
             if (file != INVALID_HANDLE_VALUE)
             {
                 if (ReadFile(file, buffer, 1, &got, NULL) && got && buffer[0] >= '0'
@@ -1217,8 +1348,10 @@ INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wPara
                     SendMessageA(tabControl, TCM_SETCURSEL, (WPARAM)page, 0);
                     SettingsShowPage(page);
                 }
+
                 CloseHandle(file);
             } }
+
         return TRUE; }
 
     case WM_NOTIFY:
@@ -1228,6 +1361,7 @@ INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wPara
                                                 TCM_GETCURSEL, 0, 0));
             return TRUE;
         }
+
         return FALSE;
 
     case WM_COMMAND:
@@ -1273,6 +1407,7 @@ INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wPara
                 SettingsToDialog(&g_SettingsDisk);   /* the clamped values, and the session row */
                 return TRUE;
             }
+
             EndDialog(dialog, IDOK);
             return TRUE; }
 
@@ -1280,28 +1415,35 @@ INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wPara
             EndDialog(dialog, IDCANCEL);
             return TRUE;
         }
+
         return FALSE;
 
     case WM_DESTROY:
     {
         INT index;                                /* so a second open cannot use stale HWNDs */
+
         if (g_SettingsHook)
         {
             UnhookWindowsHookEx(g_SettingsHook);
             g_SettingsHook = 0;
         }
+
         g_SettingsDialog = 0;
+
         for (index = 0; index < NTVDMEX_PAGE_COUNT; ++index)
         {
             if (g_SettingsPage[index])
                 DestroyWindow(g_SettingsPage[index]);
+
             g_SettingsPage[index] = NULL;
         }
+
         return FALSE; }
 
     case WM_CLOSE:
         EndDialog(dialog, IDCANCEL);
         return TRUE;
     }
+
     return FALSE;
 }

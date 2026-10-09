@@ -38,6 +38,7 @@ VOID VddBusInitialize(PVDD_BUS bus, PVOID memoryBase)
      * with garbage in the one counter that says a device failed to get on.
      */
     bus->ClaimFailures = 0;
+
     for (vector = 0; vector < VDD_INTERRUPT_VECTORS; ++vector)
     {
         bus->Interrupts[vector].Service = 0;
@@ -65,6 +66,7 @@ INT VddBusAdd(PVDD_BUS bus, PNTVDD_DEVICE device)
         bus->ClaimFailures++;
         return VDD_BUS_FAILED;
     }
+
     bus->Devices[bus->DeviceCount++] = device;
     return device->Initialize ? device->Initialize(bus, device->Context) : VDD_BUS_OK;
 }
@@ -103,6 +105,7 @@ INT VddClaimPorts(
         bus->ClaimFailures++;
         return VDD_BUS_FAILED;
     }
+
     entry = &bus->Ports[bus->PortCount++];
     entry->First = firstPort;
     entry->Last = lastPort;
@@ -127,6 +130,7 @@ INT VddClaimMemory(
         bus->ClaimFailures++;
         return VDD_BUS_FAILED;
     }
+
     entry = &bus->Memory[bus->MemoryCount++];
     entry->Base = base;
     entry->End = base + size - VDD_BUS_LAST_OFFSET;
@@ -144,6 +148,7 @@ INT VddClaimInterrupt(
 {
     if (bus->Interrupts[vector].Service)
         return VDD_BUS_FAILED;                                         /* already claimed */
+
     bus->Interrupts[vector].Service = serviceRoutine;
     bus->Interrupts[vector].Context = context;
     return VDD_BUS_OK;
@@ -158,6 +163,7 @@ INT VddOnFrame(PVDD_BUS bus, PVDD_FRAME_ROUTINE frameRoutine, PVOID context)
         bus->ClaimFailures++;
         return VDD_BUS_FAILED;
     }
+
     entry = &bus->FrameSubscribers[bus->FrameCount++];
     entry->Routine = frameRoutine;
     entry->Context = context;
@@ -197,8 +203,10 @@ INT VddBusIo(PVDD_BUS bus, WORD port, BYTE width, INT isIn, UINT32 *value)
     for (entryIndex = 0; entryIndex < bus->PortCount; ++entryIndex)
     {
         PVDD_PORT_ENTRY entry = &bus->Ports[entryIndex];
+
         if (port < entry->First || port > entry->Last)
             continue;
+
         if (isIn)
         {
             if (entry->In)
@@ -214,8 +222,10 @@ INT VddBusIo(PVDD_BUS bus, WORD port, BYTE width, INT isIn, UINT32 *value)
             if (entry->Out)
                 entry->Out(entry->Context, port, width, *value);
         }
+
         return VDD_BUS_CLAIMED;
     }
+
     return VDD_BUS_UNCLAIMED;
 }
 
@@ -226,11 +236,14 @@ INT VddBusMemoryRead(PVDD_BUS bus, UINT32 address, BYTE *value)
     for (entryIndex = 0; entryIndex < bus->MemoryCount; ++entryIndex)
     {
         PVDD_MEMORY_ENTRY entry = &bus->Memory[entryIndex];
+
         if (address < entry->Base || address > entry->End)
             continue;
+
         *value = entry->Read ? entry->Read(entry->Context, address - entry->Base) : VDD_BUS_FLOATING_BYTE;
         return VDD_BUS_CLAIMED;
     }
+
     return VDD_BUS_UNCLAIMED;
 }
 
@@ -241,12 +254,16 @@ INT VddBusMemoryWrite(PVDD_BUS bus, UINT32 address, BYTE value)
     for (entryIndex = 0; entryIndex < bus->MemoryCount; ++entryIndex)
     {
         PVDD_MEMORY_ENTRY entry = &bus->Memory[entryIndex];
+
         if (address < entry->Base || address > entry->End)
             continue;
+
         if (entry->Write)
             entry->Write(entry->Context, address - entry->Base, value);
+
         return VDD_BUS_CLAIMED;
     }
+
     return VDD_BUS_UNCLAIMED;
 }
 
@@ -254,6 +271,7 @@ INT VddBusDeliverInterrupt(PVDD_BUS bus, BYTE vector, PNTVDD_REGISTERS registers
 {
     if (!bus->Interrupts[vector].Service)
         return VDD_BUS_UNCLAIMED;
+
     bus->Interrupts[vector].Service(bus->Interrupts[vector].Context, registers);
     return VDD_BUS_CLAIMED;
 }

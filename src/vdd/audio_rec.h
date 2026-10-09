@@ -100,6 +100,7 @@ static VOID AudioRecorderHeader(
 
     for (byteIndex = 0; byteIndex < AUDIO_RECORDER_TAG_BYTES; ++byteIndex)
         header[byteIndex] = (BYTE)tag[byteIndex];
+
     AudioRecorderPut32(header + AUDIO_RECORDER_RIFF_SIZE_OFFSET, AUDIO_RECORDER_RIFF_SIZE_BASE + dataBytes);
     AudioRecorderPut32(header + AUDIO_RECORDER_FMT_SIZE_OFFSET, AUDIO_RECORDER_FMT_CHUNK_BYTES);     /* fmt chunk size */
     AudioRecorderPut16(header + AUDIO_RECORDER_FORMAT_OFFSET, AUDIO_RECORDER_FORMAT_PCM);      /* PCM */
@@ -124,8 +125,10 @@ static VOID AudioRecorderDrain(PAUDIO_RECORDER recorder)
         LONG head = recorder->Head;
         DWORD count;
         DWORD written = 0;
+
         if (tail == head)
             return;
+
         count = (DWORD)((head > tail) ? (head - tail) : ((LONG)AUDIO_RECORDER_RING - tail));   /* contiguous run */
         WriteFile(recorder->File, &recorder->Ring[tail], count * sizeof(INT16), &written, NULL);
         recorder->DataBytes += written;
@@ -138,11 +141,13 @@ static DWORD WINAPI AudioRecorderWriter(LPVOID parameter)
     PAUDIO_RECORDER recorder = (PAUDIO_RECORDER)parameter;
 
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+
     while (!recorder->IsStopping)
     {
         AudioRecorderDrain(recorder);
         Sleep(AUDIO_RECORDER_DRAIN_MS);
     }
+
     AudioRecorderDrain(recorder);
     return 0;
 }
@@ -161,13 +166,16 @@ static INT AudioRecorderStart(PCSTR path, UINT32 sampleHz)
 
     if (recorder->IsActive || recorder->File)
         return -1;
+
     recorder->File = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
                           FILE_ATTRIBUTE_NORMAL, NULL);
+
     if (recorder->File == INVALID_HANDLE_VALUE)
     {
         recorder->File = 0;
         return -1;
     }
+
     recorder->SampleHz = sampleHz ? sampleHz : AUDIO_RECORDER_DEFAULT_HZ;
     recorder->Head = recorder->Tail = 0;
     recorder->DataBytes = 0;
@@ -176,12 +184,14 @@ static INT AudioRecorderStart(PCSTR path, UINT32 sampleHz)
     AudioRecorderHeader(header, recorder->SampleHz, 0);
     WriteFile(recorder->File, header, sizeof header, &written, NULL);
     recorder->Thread = CreateThread(NULL, 0, AudioRecorderWriter, recorder, 0, NULL);
+
     if (!recorder->Thread)
     {
         CloseHandle(recorder->File);
         recorder->File = 0;
         return -1;
     }
+
     InterlockedExchange(&recorder->IsActive, 1);
     return 0;
 }
@@ -197,6 +207,7 @@ static UINT32 AudioRecorderStop(VOID)
 
     if (!recorder->File)
         return 0;
+
     InterlockedExchange(&recorder->IsActive, 0);        /* the audio thread stops feeding */
     InterlockedExchange(&recorder->IsStopping, 1);
     WaitForSingleObject(recorder->Thread, AUDIO_RECORDER_STOP_TIMEOUT_MS);
@@ -222,16 +233,20 @@ static VOID AudioRecorderFeed(const INT16 *samples, UINT32 count)
 
     if (!recorder->IsActive)
         return;
+
     head = recorder->Head;
     tail = recorder->Tail;
     room = (LONG)(AUDIO_RECORDER_RING - 1) - ((head - tail) & (LONG)(AUDIO_RECORDER_RING - 1));
+
     if ((LONG)count > room)
     {
         recorder->Dropped += count;
         return;
     }
+
     for (sampleIndex = 0; sampleIndex < count; ++sampleIndex)
         recorder->Ring[(head + (LONG)sampleIndex) & (AUDIO_RECORDER_RING - 1)] = samples[sampleIndex];
+
     InterlockedExchange(&recorder->Head, (LONG)((head + (LONG)count) & (AUDIO_RECORDER_RING - 1)));
 }
 

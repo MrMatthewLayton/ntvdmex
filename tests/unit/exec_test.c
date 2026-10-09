@@ -69,8 +69,10 @@ static BYTE g_File[EXEC_TEST_FILE_SIZE];
 static VOID ExecTestExpect(PCSTR description, LONG actual, LONG expected)
 {
     ++g_Checks;
+
     if (actual == expected)
         return;
+
     ++g_Failures;
     printf("  FAIL %-58s got 0x%lX, want 0x%lX\n", description, (long)actual, (long)expected);
 }
@@ -90,8 +92,10 @@ static VOID ExecTestMakeStub(UINT newHeader, PCSTR signature, UINT extraOffset, 
     ExecTestPutWord(DOS_MZ_HEADER_PARAGRAPHS, EXEC_TEST_STUB_HEADER_PARAS);    /* 64-byte header */
     ExecTestPutWord(DOS_MZ_RELOCATION_TABLE, EXEC_TEST_STUB_RELOCATIONS);      /* e_lfarlc */
     ExecTestPutWord(DOS_MZ_NEW_HEADER, newHeader);
+
     if (signature)
         memcpy(g_File + newHeader, signature, strlen(signature));
+
     if (extraOffset)
         ExecTestPutWord(newHeader + extraOffset, extraValue);
 }

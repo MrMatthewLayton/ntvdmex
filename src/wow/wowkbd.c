@@ -33,6 +33,7 @@ INT WowKeyboardCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
 {
     if (noteCapacity)
         note[0] = 0;
+
     switch (frame->Id)
     {
 
@@ -91,18 +92,23 @@ INT WowKeyboardCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ", cch=");
         WowNoteHex(note, noteCapacity, &noteLength, bufferSize, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ")");
+
         if (!destination || !bufferSize)
         {
             WowNotePut(note, noteCapacity, &noteLength, " -- no buffer; answered 0");
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         nameLength = GetKeyNameTextA((LONG)keyParameter, keyName, (INT)(bufferSize < sizeof keyName ? bufferSize
                                                                     : sizeof keyName));
+
         if (nameLength < 0)
             nameLength = 0;
+
         for (index = 0; index < nameLength && index < (INT)bufferSize - 1; ++index)
             destination[index] = (BYTE)keyName[index];
+
         destination[index] = 0;
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
         WowNoteQuoted(note, noteCapacity, &noteLength, keyName);
@@ -135,6 +141,7 @@ INT WowKeyboardCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         INT noteLength = 0;
         INT isConverted;
         WowNotePut(note, noteCapacity, &noteLength, isToOem ? "AnsiToOem " : "OemToAnsi ");
+
         if (!source || !destination)
         {
             WowNotePut(note, noteCapacity, &noteLength, "-- ★ NULL pointer (src or dst); nothing"
@@ -142,6 +149,7 @@ INT WowKeyboardCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
+
         WowNoteQuoted(note, noteCapacity, &noteLength, (PCSTR)source);
         isConverted = isToOem ? CharToOemA((LPCSTR)source, (LPSTR)destination)
                    : OemToCharA((LPCSTR)source, (LPSTR)destination);

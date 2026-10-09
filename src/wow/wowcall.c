@@ -129,12 +129,16 @@ INT WowCallEnter(
 
     if (g_WowCallDepth >= WOWCALL_MAX_DEPTH)
         return 0;
+
     if (!stackBase || !returnSelector || !(procedure >> WORD_SHIFT))
         return 0;
+
     if (argumentWordCount < 0 || argumentWordCount > WOWCALL_MAX_ARGW)
         return 0;
+
     if (blobLength < 0 || blobLength > WOWCALL_MAX_BLOB)
         return 0;
+
     for (index = 0; index < argumentWordCount; ++index)
         arguments[index] = argumentWords[index];
 
@@ -150,11 +154,13 @@ INT WowCallEnter(
     frame->ActionArgument  = 0;
     frame->EnteredTask   = g_WowCallCurrentTask ? g_WowCallCurrentTask() : 0;
     frame->PreviousTask = 0;
+
     if (window && g_WowCallRetarget)            /* s92 #306: see g_WowCallRetarget */
     {
         WORD newStackSelector = 0;
         WORD newStackPointer = 0;
         DWORD newStackBase = 0;
+
         if (g_WowCallRetarget(window, &newStackSelector, &newStackPointer, &newStackBase, &frame->PreviousTask) && newStackBase)
         {
             VDM_SET16(tib, VTIB_SS,  newStackSelector);
@@ -192,16 +198,20 @@ INT WowCallEnter(
      * a host linear address and means nothing to 16-bit code.
      */
     g_WowCallBlobLinear = 0;
+
     if (blob && blobLength > 0 && blobArgument >= 0 && blobArgument + 1 < argumentWordCount)
     {
         WORD stackSelector = (WORD)(VDM_REG(tib, VTIB_SS) & WORD_MASK);
         INT  blobBytes  = (blobLength + 1) & ~1;
         stackPointer = (WORD)(stackPointer - blobBytes);
+
         for (index = 0; index < blobLength; ++index)
             *(volatile BYTE *)(ULONG_PTR)(stackBase + (DWORD)(WORD)(stackPointer + index)) = blob[index];
+
         arguments[blobArgument]     = stackSelector;                       /* the far pointer's HIGH */
         arguments[blobArgument + 1] = stackPointer;                       /* ... and its offset */
         g_WowCallBlobLinear    = stackBase + (DWORD)stackPointer;
+
         if (g_WowCallBlob2Argument >= 0 && g_WowCallBlob2Argument + 1 < argumentWordCount
             && g_WowCallBlob2Offset > 0 && g_WowCallBlob2Offset < blobLength)
         {
@@ -209,11 +219,13 @@ INT WowCallEnter(
             arguments[g_WowCallBlob2Argument + 1] = (WORD)(stackPointer + g_WowCallBlob2Offset);
         }
     }
+
     g_WowCallBlob2Argument = -1;
     g_WowCallBlob2Offset = 0;
 
     for (index = 0; index < argumentWordCount; ++index)
         WowCallPush(stackBase, &stackPointer, arguments[index]);
+
     WowCallPush(stackBase, &stackPointer, returnSelector);       /* the far return address: CS ... */
     WowCallPush(stackBase, &stackPointer, 0);            /* ... then IP, at offset 0 */
     /* [INFO]: AND, IF THE SEGMENT IS NOT LOADED, THE TARGET ITSELF -- so the RETF we
@@ -225,6 +237,7 @@ INT WowCallEnter(
         WowCallPush(stackBase, &stackPointer, (WORD)(procedure >> WORD_SHIFT));
         WowCallPush(stackBase, &stackPointer, (WORD)(procedure & WORD_MASK));
     }
+
     VDM_SET16(tib, VTIB_ESP, stackPointer);
 
     /* DS is the contract (see the header note); AX carries the same value so
@@ -234,6 +247,7 @@ INT WowCallEnter(
      */
     VDM_SET16(tib, VTIB_EAX, dataSelector);
     VDM_SET16(tib, VTIB_DS,  dataSelector);
+
     if (isAbsent)
     {
         /* Enter on the RETF, which is in a segment that IS present. Its own #NP
@@ -248,6 +262,7 @@ INT WowCallEnter(
         VDM_SET16(tib, VTIB_CS,  (WORD)(procedure >> WORD_SHIFT));
         VDM_REG(tib, VTIB_EIP) = (DWORD)(procedure & WORD_MASK);
     }
+
     ++g_WowCallCount;
     return 1;
 }
@@ -258,14 +273,19 @@ PWOWCALL_FRAME WowCallLeave(volatile BYTE *tib, DWORD result)
 
     if (g_WowCallDepth <= 0)
         return NULL;
+
     frame = &g_WowCallFrames[--g_WowCallDepth];
     WowSchedRestore(&frame->Saved, tib);
+
     if (frame->PreviousTask && g_WowCallUntarget)
         g_WowCallUntarget(frame->PreviousTask);
+
     if (frame->Sink)
         *frame->Sink = (WORD)result;
+
     g_WowCallLastResult = result;            /* s91 #309: DX:AX, for WOWCallback16Ex */
     frame->Written = 0;
+
     if (frame->ReturnLinear)
     {
         volatile BYTE *hole = (volatile BYTE *)(ULONG_PTR)frame->ReturnLinear;
@@ -291,6 +311,7 @@ PWOWCALL_FRAME WowCallLeave(volatile BYTE *tib, DWORD result)
             value = (frame->ReturnMode == WOWCALL_RET_RESULTW) ? (result & WORD_MASK) : result;
             isWrite = 1;                  /* SendMessage: the procedure's answer */
         }
+
         if (isWrite)
         {
             frame->Written = value;
@@ -300,5 +321,6 @@ PWOWCALL_FRAME WowCallLeave(volatile BYTE *tib, DWORD result)
             hole[3] = (BYTE)((value >> TOP_BYTE_SHIFT) & BYTE_MASK);
         }
     }
+
     return frame;
 }

@@ -36,6 +36,7 @@ static INT MouseTestAllEqual(PCBYTE bytes, INT count, BYTE value)
     for (index = 0; index < count; ++index)
         if (bytes[index] != value)
             return 0;
+
     return 1;
 }
 
@@ -76,15 +77,19 @@ INT main(VOID)
 
     /* ---- CGA 4-colour: 8 pixels, a bit PAIR each, through the renderer's palette ---- */
     memset(row, 0, sizeof row);
+
     for (INT index = 0; index < 8; ++index)
         row[index] = cga[2];                                                 /* colour 2 everywhere */
+
     I33GraphicsCursorRow(row, 40, 0, 0xFFFF, 0x0000, 0x0F, cga);
     CHECK(MouseTestAllEqual(row, 8, cga[2]), "CGA: screen FFFF keeps the 2-bit colour (mapped back through the palette)");
     I33GraphicsCursorRow(row, 40, 0, 0x0000, 0xC000, 0x0F, cga);
     CHECK(row[0] == cga[3] && MouseTestAllEqual(row + 1, 7, cga[0]),
           "CGA: cursor C000h = colour 3 in pixel 0 only, screen 0000 clears the other seven");
+
     for (INT index = 0; index < 8; ++index)
         row[index] = cga[1];
+
     I33GraphicsCursorRow(row, 40, 0, 0xAAAA, 0x0000, 0x0F, cga);         /* AND 10b: 01 -> 00 */
     CHECK(MouseTestAllEqual(row, 8, cga[0]) && row[8] == 0,
           "CGA: AND per bit pair (01 & 10 = 00), and only eight pixels wide (UNMEASURED: MS Programmer's Ref.)");

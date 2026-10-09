@@ -258,14 +258,18 @@ INT main(VOID)
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 2);
       INT index;
       UINT32 stackPointer = cpu.Registers[4];
+
       for (index = 0; index < 8; ++index)
           if (index != 4)
               cpu.Registers[index] = 0x1000 + (UINT32)index;
+
       Pm32Step(&cpu);
       CHECK(cpu.Registers[4] == stackPointer - 32, "pushad: 32 bytes");
+
       for (index = 0; index < 8; ++index)
           if (index != 4)
               cpu.Registers[index] = 0;
+
       Pm32Step(&cpu);
       CHECK(cpu.Registers[4] == stackPointer && cpu.Registers[0] == 0x1000 && cpu.Registers[7] == 0x1007 && cpu.Registers[5] == 0x1005, "popad: restores all, ESP back"); }
 
@@ -313,11 +317,14 @@ INT main(VOID)
       cpu.Registers[3] = 0xAB;
       cpu.Registers[7] = 0x1234;
       g_OutCount = 0;
+
       while (cpu.Eip != 0x2000 && count < 1000 && Pm32Step(&cpu))
           ++count;
+
       for (index = 0; index < 4; ++index)
           if (g_Memory[0x5400 + 0x50 * index] != 0xAB)
               break;
+
       CHECK(cpu.Eip == 0x2000 && cpu.Registers[4] == stackPointer + 4, "drawer: runs to its ret and returns to the caller");
       CHECK(index == 4, "drawer: all four column bytes stored");
       CHECK(g_OutCount == 1 && g_OutValue == 3 && cpu.Registers[7] == 0x1234, "drawer: mask OUT seen once, registers restored by popad"); }

@@ -100,11 +100,13 @@ int main(void)
      * expensive path every time rather than flattering it.
      */
     clock_gettime(CLOCK_MONOTONIC, &start);
+
     for (poll = 0; poll < BENCH_POLLS; ++poll)
     {
         g_TimeUs += 1;
         VddBusIo(&bus, BENCH_INPUT_STATUS_PORT, 1, 1, &value);
     }
+
     clock_gettime(CLOCK_MONOTONIC, &end);
 
     nanoseconds = ((double)(end.tv_sec - start.tv_sec) * BENCH_NS_PER_SECOND + (double)(end.tv_nsec - start.tv_nsec)) / (double)BENCH_POLLS;

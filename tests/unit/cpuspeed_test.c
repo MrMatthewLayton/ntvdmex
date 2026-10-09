@@ -38,6 +38,7 @@ static UINT CpuSpeedTestIndexOf(UINT mhz)
     for (index = 0; index < CPUSPEED_COUNT; ++index)
         if (g_CpuSpeedMhz[index] == mhz)
             return index;
+
     return CPUSPEED_COUNT;   /* not found: an off-end index, never a silent 0 */
 }
 
@@ -83,12 +84,14 @@ static UINT CpuSpeedTestSimulateDelivered(
         wallUs += sliceWallUs;               /* the run slice */
         hold = CpuSpeedStep(executedUs - executedBaseline, wallUs - wallBaseline, dutyBp, capUs, &reset);
         wallUs += hold;                         /* the guest is held */
+
         if (reset) /* rebaseline at the real post-hold clock */
         {
             executedBaseline = executedUs;
             wallBaseline = wallUs;
         }
     }
+
     return CpuSpeedDeliveredBp(executedUs, wallUs);     /* the same ratio the host reports */
 }
 
@@ -118,9 +121,11 @@ INT main(VOID)
 
     /* Fastest first: the old "Maximum" (1) lands on the fastest throttled speed. */
     {   INT isDescending = 1;
+
         for (index = 2; index < CPUSPEED_COUNT; ++index)
             if (g_CpuSpeedMhz[index] >= g_CpuSpeedMhz[index - 1])
                 isDescending = 0;
+
         CHECK(isDescending, "speeds run fastest-first, which is what makes the migration sane"); }
 
     /* The '|' string and the name table are two spellings of one list. They are
@@ -131,16 +136,20 @@ INT main(VOID)
     {   PCSTR item = CPUSPEED_ITEMS;
     INT count = 0;
     INT isOk = 1;
+
         for (index = 0; index < CPUSPEED_COUNT; ++index)
         {
             size_t length = strlen(g_CpuSpeedNames[index]);
+
             if (strncmp(item, g_CpuSpeedNames[index], length) != 0)
             {
                 isOk = 0;
                 break;
             }
+
             item += length;
             ++count;
+
             if (index + 1 < CPUSPEED_COUNT)
             {
                 if (*item != '|')
@@ -148,9 +157,11 @@ INT main(VOID)
                     isOk = 0;
                     break;
                 }
+
                 ++item;
             }
         }
+
         CHECK(isOk && count == CPUSPEED_COUNT && *item == 0,
               "CPUSPEED_ITEMS spells out exactly CPUSPEED_NAMES, in order"); }
 
@@ -179,20 +190,25 @@ INT main(VOID)
      * because the session-60 ladder tops out at 100 MHz.)
      */
     {   INT isMonotonic = 1, flatOutCount = 0;
+
         for (index = 2; index < CPUSPEED_COUNT; ++index)
         {
             UINT faster = CpuSpeedDutyBp(index - 1, 50);
             UINT slower = CpuSpeedDutyBp(index, 50);
+
             if (g_CpuSpeedMhz[index - 1] >= 50u)
             {
                 if (faster != 10000u)
                     isMonotonic = 0;
+
                 flatOutCount++;
                 continue;
             }
+
             if (slower >= faster)
                 isMonotonic = 0;
         }
+
         CHECK(isMonotonic, "below the reference a slower setting is always a smaller duty");
         CHECK(flatOutCount > 0, "...and the speeds above it are all flat out, which is why"); }
 
@@ -217,10 +233,12 @@ INT main(VOID)
         CHECK(CpuSpeedRealModeDutyBp(10000u) == 10000u, "#225: Unlimited is Unlimited in real mode too");
         CHECK(CpuSpeedRealModeDutyBp(9000u) == 10000u, "#225: a scaled share past 100% clamps to flat out");
         {   INT isMonotonic = 1;
+
             for (index = 2; index < CPUSPEED_COUNT; ++index)
                 if (CpuSpeedRealModeDutyBp(CpuSpeedDutyBp(index, CPUSPEED_REF_MHZ_DEFAULT)) >
                     CpuSpeedRealModeDutyBp(CpuSpeedDutyBp(index - 1, CPUSPEED_REF_MHZ_DEFAULT)))
                     isMonotonic = 0;
+
             CHECK(isMonotonic, "#225: the real-mode ladder still gets slower rung by rung"); } }
 
     printf("== CPU speed: the throttle delivers the requested duty (deterministic) ==\n");
@@ -242,6 +260,7 @@ INT main(VOID)
          */
         {   INT isOk = 1;
         UINT badIndex = 0;
+
             for (index = 1; index < CPUSPEED_COUNT; ++index)
             {
                 UINT duty   = CpuSpeedDutyBp(index, CPUSPEED_REF_MHZ_DEFAULT);
@@ -249,12 +268,14 @@ INT main(VOID)
                 /* Reachable at 2 ms slices iff one slice's hold fits the cap. */
                 if ((unsigned long long)2000 * 10000ull / duty - 2000ull > capUs)
                     continue;
+
                 if (!CpuSpeedTestIsNear(actual, duty, 2))
                 {
                     isOk = 0;
                     badIndex = index;
                 }
             }
+
             CHECK(isOk, "every reachable ladder speed is delivered to within 2 bp of its duty");
             (VOID)badIndex; }
 
@@ -333,12 +354,14 @@ INT main(VOID)
     INT sleepMs;
     INT totalMs = 0;
         memset(&pace, 0, sizeof pace);
+
         for (slice = 0; slice < 10; ++slice)
         {
             /* 3300 instructions at 11M/s = 300us of budget, executed in 0us. */
             sleepMs = CpuSpeedCharge(&pace, 3300ul, CpuSpeedInstructionsPerSecond(CpuSpeedTestIndexOf(33)), 0ll);
             totalMs += sleepMs;
         }
+
         CHECK(totalMs == 3, "ten 300us debts accumulate into 3 ms, rather than rounding to nothing"); }
 
     /* Running SLOWER than the setting must not bank credit: a guest that stalled for

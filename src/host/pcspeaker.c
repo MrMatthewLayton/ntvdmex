@@ -23,12 +23,14 @@ static INT PcSpeakerIoctl(PPCSPEAKER speaker, DWORD hz)
     DWORD returned = 0;
     beep.Frequency = hz;
     beep.Duration  = hz ? PCSPEAKER_FOREVER : 0;
+
     if (!DeviceIoControl(speaker->Handle, PCSPEAKER_IOCTL_BEEP_SET, &beep, sizeof beep,
                          NULL, 0, &returned, NULL))
     {
         speaker->FailedCount++;
         return -1;
     }
+
     speaker->IoctlCount++;
     return 0;
 }
@@ -40,8 +42,10 @@ VOID PcSpeakerSet(PPCSPEAKER speaker, DWORD hz)
         if (hz < PCSPEAKER_HZ_MIN || hz > PCSPEAKER_HZ_MAX)
             hz = 0;                                                   /* refuse, don't alias */
     }
+
     if (hz == speaker->CurrentHz)
         return;
+
     if (!speaker->OpenState)
     {
         /* [CAUTION]: THERE IS NO `\\.\Beep`. MEASURED, session 53 (Importance = 1):
@@ -61,28 +65,36 @@ VOID PcSpeakerSet(PPCSPEAKER speaker, DWORD hz)
             PCSPEAKER_DEVICE_GLOBALROOT, PCSPEAKER_DEVICE_DOS
         };
         INT index;
+
         if (!hz)
             return;                            /* nothing to say: stay unopened */
+
         for (index = 0; index < PCSPEAKER_PATHS; ++index)
         {
             speaker->Handle = CreateFileA(paths[index], GENERIC_WRITE, 0, NULL,
                                OPEN_EXISTING, 0, NULL);
+
             if (speaker->Handle != INVALID_HANDLE_VALUE)
             {
                 speaker->OpenPath = index;
                 break;
             }
+
             speaker->OpenError = GetLastError();
         }
+
         if (speaker->Handle == INVALID_HANDLE_VALUE)
         {
             speaker->OpenState = PCSPEAKER_OPEN_FAILED;
             return;
         }
+
         speaker->OpenState = PCSPEAKER_OPENED;
     }
+
     if (speaker->OpenState != PCSPEAKER_OPENED)
         return;
+
     if (PcSpeakerIoctl(speaker, hz) == 0)
         speaker->CurrentHz = hz;
 }
@@ -93,8 +105,10 @@ VOID PcSpeakerClose(PPCSPEAKER speaker)
     {
         if (speaker->CurrentHz)
             PcSpeakerIoctl(speaker, 0);                          /* [CAUTION] or it sounds after we exit */
+
         CloseHandle(speaker->Handle);
     }
+
     speaker->Handle = INVALID_HANDLE_VALUE;
     speaker->CurrentHz = 0;
     speaker->OpenState = PCSPEAKER_NOT_TRIED;

@@ -41,6 +41,7 @@ static void IntEchoInterrupt(void *self, ntvdmex_regs *registers)
     unsigned function = (registers->eax >> INTECHO_FUNCTION_SHIFT) & INTECHO_BYTE_MASK;
 
     (void)self;
+
     if (function == INTECHO_PRESENCE)
     {
         registers->eax = (registers->eax & INTECHO_HIGH_WORD) | INTECHO_SIGNATURE;
@@ -53,13 +54,16 @@ static void IntEchoInterrupt(void *self, ntvdmex_regs *registers)
         uint32_t count = registers->ecx & INTECHO_COUNT_MASK;
         uint32_t index;
         uint16_t sum = 0;
+
         if (!bytes)
         {
             registers->cf = 1;
             return;
         }
+
         for (index = 0; index < count; ++index)
             sum = (uint16_t)(sum + bytes[index]);
+
         registers->ecx = (registers->ecx & INTECHO_HIGH_WORD) | sum;
         registers->cf = 0;
     }
@@ -73,13 +77,16 @@ NTVDMEX_VDD_EXPORT int NtvdmexVddInit(const ntvdmex_vdd_api *api, ntvdmex_vdd_bu
 {
     if (!api || api->version != NTVDMEX_VDD_ABI_VERSION || api->size < sizeof *api)
         return -1;
+
     g_IntEchoApi = api;
     g_IntEchoBus = bus;
+
     if (api->claim_int(bus, INTECHO_VECTOR, IntEchoInterrupt, 0) != 0)
     {
         api->log("intecho: claim_int(61h) REFUSED -- already claimed");
         return -1;
     }
+
     api->log("intecho: INT 61h claimed");
     return 0;
 }

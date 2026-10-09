@@ -201,17 +201,22 @@ INT DpmiSwitchToProtectedMode(
         entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_STACK] = stackLow;
         entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_STACK + DPMI_DESCRIPTOR_HIGH] = stackHigh;     /* index 3: stack (selector 0x1F) */
         status = VdmRegisterLdtTable(DPMI_LDT_FIRST_SELECTOR, entries, DPMI_LDT_TABLE_ENTRIES);
+
         if (registerStatus)
             *registerStatus = status;
     }
 
     /* Then set the individual entries too (service 10; two selectors per call). */
     status = VdmInstallLdtEntries(codeSelector, codeLow, codeHigh, dataSelector, dataLow, dataHigh);
+
     if (setStatus)
         *setStatus = status;
+
     if (status < 0)
         return DPMI_SWITCH_FAILED;
+
     status = VdmInstallLdtEntries(stackSelector, stackLow, stackHigh, stackSelector, stackLow, stackHigh);
+
     if (status < 0)
         return DPMI_SWITCH_FAILED;
 
@@ -257,8 +262,10 @@ VOID DpmiRunProtectedMode(volatile BYTE *tib)
     PFN_NtContinue NtContinue = (PFN_NtContinue)GetProcAddress(ntdll, DPMI_NT_CONTINUE);
     BYTE *contextBytes = (BYTE *)&context;
     UINT byteIndex;
+
     for (byteIndex = 0; byteIndex < sizeof context; ++byteIndex)
         contextBytes[byteIndex] = 0;
+
     context.ContextFlags = VTIB_CTXFLAGS_VAL;  /* CONTEXT_CONTROL|INTEGER|SEGMENTS (0x10007) */
     context.SegGs = VDM_REG(tib, VTIB_GS) & WORD_MASK;
     context.SegFs = VDM_REG(tib, VTIB_FS) & WORD_MASK;
@@ -276,6 +283,7 @@ VOID DpmiRunProtectedMode(volatile BYTE *tib)
     context.Eip = VDM_REG(tib, VTIB_EIP);
     context.Esp = VDM_REG(tib, VTIB_ESP);
     context.EFlags = VDM_REG(tib, VTIB_EFLAGS);
+
     if (NtContinue)
         NtContinue(&context, FALSE);
 }

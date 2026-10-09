@@ -47,8 +47,10 @@ UINT RecoveryRead(VOID)
 
     if (handle == INVALID_HANDLE_VALUE)
         return 0;
+
     if (ReadFile(handle, buffer, sizeof(buffer) - 1, &bytesRead, NULL))
         value = DosRecoveryParseFailureCount(buffer, bytesRead);
+
     CloseHandle(handle);
     return value;
 }
@@ -63,8 +65,10 @@ VOID RecoveryWrite(UINT value)
 
     if (handle == INVALID_HANDLE_VALUE)
         return;
+
     if (value >= DECIMAL_RADIX)
         buffer[index++] = (CHAR)('0' + (value / DECIMAL_RADIX) % DECIMAL_RADIX);
+
     buffer[index++] = (CHAR)('0' + value % DECIMAL_RADIX);
     buffer[index++] = '\r';
     buffer[index++] = '\n';
@@ -101,17 +105,22 @@ static INT InstallRead(PSTR buffer, DWORD cap)
     LONG status = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INSTALL_KEY, 0, KEY_QUERY_VALUE, &key);
 
     buffer[0] = 0;
+
     if (status != ERROR_SUCCESS)
         return 0;
+
     status = RegQueryValueExA(key, INSTALL_VAL, NULL, &valueType, (LPBYTE)buffer, &size);
     RegCloseKey(key);
+
     if (status != ERROR_SUCCESS || valueType != REG_SZ)
     {
         buffer[0] = 0;
         return 0;
     }
+
     if (size >= cap)
         size = cap - 1;
+
     buffer[size] = 0;
     return 1;
 }
@@ -125,17 +134,22 @@ static INT InstallPreviousRead(PSTR buffer, DWORD cap)
     LONG status = RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_QUERY_VALUE, &key);
 
     buffer[0] = 0;
+
     if (status != ERROR_SUCCESS)
         return 0;
+
     status = RegQueryValueExA(key, INSTALL_PREV_VAL, NULL, &valueType, (LPBYTE)buffer, &size);
     RegCloseKey(key);
+
     if (status != ERROR_SUCCESS || valueType != REG_SZ || !buffer[0])
     {
         buffer[0] = 0;
         return 0;
     }
+
     if (size >= cap)
         size = cap - 1;
+
     buffer[size] = 0;
     return 1;
 }
@@ -148,17 +162,21 @@ static VOID InstallPreviousWrite(PCSTR value)
     if (RegCreateKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, NULL, 0,
                         KEY_SET_VALUE, NULL, &key, &disposition) != ERROR_SUCCESS)
         return;
+
     if (value && value[0])
     {
         DWORD length = 0;
+
         while (value[length])
             ++length;
+
         RegSetValueExA(key, INSTALL_PREV_VAL, 0, REG_SZ, (const BYTE *)value, length + 1);
     }
     else
     {
         RegDeleteValueA(key, INSTALL_PREV_VAL);
     }
+
     RegCloseKey(key);
 }
 
@@ -170,6 +188,7 @@ INT MruLoad(CHAR out[MRU_MAX][MAX_PATH])
 
     if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
         return 0;
+
     for (index = 0; index < MRU_MAX; ++index)
     {
         CHAR name[16];
@@ -177,13 +196,17 @@ INT MruLoad(CHAR out[MRU_MAX][MAX_PATH])
         DWORD valueType = 0;
         DWORD size = MAX_PATH;
         cursor = LogDecimal(cursor, (DWORD)(index + 1)); *cursor = 0;
+
         if (RegQueryValueExA(key, name, NULL, &valueType, (LPBYTE)out[count], &size) != ERROR_SUCCESS
             || valueType != REG_SZ || size < 2)
             continue;
+
         out[count][size < MAX_PATH ? size : MAX_PATH - 1] = 0;
+
         if (out[count][0])
             ++count;
     }
+
     RegCloseKey(key);
     return count;
 }
@@ -202,29 +225,39 @@ VOID MruAdd(PCSTR path)
 
     if (!path || !path[0] || lstrlenA(path) >= MAX_PATH)
         return;
+
     /* CSRSS hands us 8.3 names; the menu is for a person. */
     longLength = GetLongPathNameA(path, longPath, sizeof longPath);
+
     if (longLength && longLength < sizeof longPath)
         path = longPath;
+
     for (baseName = path, index = 0; path[index]; ++index)
         if (path[index] == '\\')
             baseName = path + index + 1;
+
     if (!lstrcmpiA(baseName, LAUNCH_STUB_NAME) || !lstrcmpiA(baseName, HOST_HARNESS_STUB_NAME))
         return;                                                                                           /* ours */
+
     count = MruLoad(list);
+
     if (RegCreateKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, NULL, 0,
                         KEY_SET_VALUE, NULL, &key, &disposition) != ERROR_SUCCESS)
         return;
+
     for (index = -1; index < count && written < MRU_MAX; ++index)
     {
         PCSTR value = (index < 0) ? path : list[index];
         CHAR name[16];
         CHAR *cursor = LogPut(name, HOST_REG_RECENT_PREFIX);
+
         if (index >= 0 && !lstrcmpiA(value, path))
             continue;                                                 /* moved to the front */
+
         cursor = LogDecimal(cursor, (DWORD)(++written)); *cursor = 0;
         RegSetValueExA(key, name, 0, REG_SZ, (const BYTE *)value, (DWORD)lstrlenA(value) + 1);
     }
+
     RegCloseKey(key);
 }
 
@@ -239,15 +272,21 @@ static LONG InstallWrite(PCSTR value)
 
     status = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INSTALL_KEY, 0, NULL, 0,
                          KEY_SET_VALUE, NULL, &key, &disposition);
+
     if (status != ERROR_SUCCESS)
         return status;
+
     if (value) { DWORD length = 0;
+
     while (value[length])
         ++length;
+
              status = RegSetValueExA(key, INSTALL_VAL, 0, REG_SZ, (const BYTE *)value, length + 1); }
     else   { status = RegDeleteValueA(key, INSTALL_VAL);
+
              if (status == ERROR_FILE_NOT_FOUND)
                  status = ERROR_SUCCESS; }
+
     RegCloseKey(key);
     return status;
 }
@@ -283,25 +322,32 @@ static INT InstallResidentVdms(VOID)
 
     if (snap == INVALID_HANDLE_VALUE)
         return -1;
+
     entry.dwSize = sizeof entry;
+
     if (Process32First(snap, &entry))
     {
         do
         {
             static const CHAR want[] = HOST_STOCK_NTVDM_NAME;
             INT index;
+
             for (index = 0; want[index]; ++index)
             {
                 CHAR character = entry.szExeFile[index];
+
                 if (character >= 'A' && character <= 'Z')
                     character = (CHAR)(character - 'A' + 'a');
+
                 if (character != want[index])
                     break;
             }
+
             if (!want[index] && !entry.szExeFile[index])
                 ++count;
         } while (Process32Next(snap, &entry));
     }
+
     CloseHandle(snap);
     return count;
 }
@@ -311,8 +357,10 @@ static PSTR InstallResidentText(PSTR cursor, INT count)
 {
     if (count == 0)
         return cursor;
+
     if (count < 0) return LogPut(cursor, "(Could not read the process list, so whether one of "
                               "Windows' own ntvdm.exe is still running is unknown.)\r\n");
+
     cursor = LogPut(cursor, "\r\n!! ");
     cursor = LogDecimal(cursor, (UINT)count);
     cursor = LogPut(cursor, count == 1 ? " copy of Windows' own ntvdm.exe is still running."
@@ -360,6 +408,7 @@ INT InstallPerform(INT want, INT force, PSTR message, DWORD cap)
      */
     if (havePrevious && InstallNamesNtvdmex(prev))
         havePrevious = 0;
+
     state  = InstallClassify(current[0] ? current : NULL, self);
     oldState = state; LogPut(currentBefore, current);                      /* what was there, for the report */
     installAction = InstallPlanEx(state, want, havePrevious, InstallNamesNtvdmex(current), force);
@@ -386,13 +435,16 @@ INT InstallPerform(INT want, INT force, PSTR message, DWORD cap)
          */
         if (state == INSTALL_OTHER && !InstallNamesNtvdmex(current))
             InstallPreviousWrite(current);
+
         status = InstallWrite(self);
         break;
 
     case INSTALL_ACT_RESTORE:
         status = InstallWrite(prev);
+
         if (status == ERROR_SUCCESS)
             InstallPreviousWrite(NULL);
+
         break;
 
     case INSTALL_ACT_DELETE:
@@ -407,29 +459,35 @@ INT InstallPerform(INT want, INT force, PSTR message, DWORD cap)
               "Installing changes a machine-wide setting, so it needs an "
               "Administrator account.\r\n"
             : "FAILED: could not write the registry (error 0x");
+
         if (status != ERROR_ACCESS_DENIED)
         {
             cursor = LogHex(cursor, (DWORD)status);
             cursor = LogPut(cursor, ").\r\n");
         }
+
         return 0;
     }
+
     if (installAction == INSTALL_ACT_NOTHING)
         return 1;
 
     /* -- THE READ-BACK. */
     InstallRead(current, sizeof current);
     state = InstallClassify(current[0] ? current : NULL, self);
+
     if (want && state != INSTALL_OURS)
     {
         cursor = LogPut(cursor, "FAILED: the value was written but does not read back as ours.\r\n");
         return 0;
     }
+
     if (!want && state == INSTALL_OURS)
     {
         cursor = LogPut(cursor, "FAILED: the value was removed but still reads back as ours.\r\n");
         return 0;
     }
+
     if (want)
     {
         cursor = LogPut(cursor, "INSTALLED. Every MS-DOS and 16-bit Windows launch on this "
@@ -443,11 +501,13 @@ INT InstallPerform(INT want, INT force, PSTR message, DWORD cap)
         cursor = LogPut(cursor, installAction == INSTALL_ACT_RESTORE
             ? "UNINSTALLED, and the Debugger value we displaced has been put back:\r\n    "
             : "UNINSTALLED. This machine uses its own ntvdm.exe again.\r\n");
+
         if (installAction == INSTALL_ACT_RESTORE)
         {
             cursor = LogPut(cursor, current);
             cursor = LogPut(cursor, "\r\n");
         }
+
         if (oldState == INSTALL_OTHER)                   /* #195: say what we removed */
         {
             cursor = LogPut(cursor, "Removed a Debugger value that named ");
@@ -456,6 +516,7 @@ INT InstallPerform(INT want, INT force, PSTR message, DWORD cap)
             cursor = LogPut(cursor, currentBefore); cursor = LogPut(cursor, "\r\n");
         }
     }
+
     return 1;
 }
 
@@ -478,6 +539,7 @@ INSTALL_STATE InstallStatusText(PSTR message, DWORD cap)
     InstallRead(current, sizeof current);
     state = InstallClassify(current[0] ? current : NULL, self);
     cursor = LogPut(cursor, "This executable:\r\n    "); cursor = LogPut(cursor, self); cursor = LogPut(cursor, "\r\n\r\n");
+
     switch (state)
     {
     case INSTALL_OURS:
@@ -497,6 +559,7 @@ INSTALL_STATE InstallStatusText(PSTR message, DWORD cap)
         cursor = LogPut(cursor, "NOT INSTALLED -- this machine uses its own ntvdm.exe.\r\n");
         break;
     }
+
     return state;
 }
 
@@ -508,14 +571,18 @@ INT InstallVerb(PCSTR command)
     static PCSTR const verbs[INSTALL_VERBS] = { "install", "uninstall", "status" };
     INT index;
     INT characterIndex;
+
     if (!command)
         return INSTALL_VERB_NONE;
+
     /* Step over argv[0], quoted or not. */
     if (*command == '"')
     {
         ++command;
+
         while (*command && *command != '"')
             ++command;
+
         if (*command)
             ++command;
     }
@@ -524,24 +591,32 @@ INT InstallVerb(PCSTR command)
         while (*command && *command != ' ' && *command != '\t')
             ++command;
     }
+
     while (*command == ' ' || *command == '\t') ++command;
+
     if (*command != '/' && *command != '-')
         return INSTALL_VERB_NONE;
+
     while (*command == '/' || *command == '-')
         ++command;
+
     for (index = 0; index < INSTALL_VERBS; ++index)
     {
         for (characterIndex = 0; verbs[index][characterIndex]; ++characterIndex)
         {
             CHAR character = command[characterIndex];
+
             if (character >= 'A' && character <= 'Z')
                 character = (CHAR)(character - 'A' + 'a');
+
             if (character != verbs[index][characterIndex])
                 break;
         }
+
         if (!verbs[index][characterIndex] && (!command[characterIndex] || command[characterIndex] == ' ' || command[characterIndex] == '\t'))
             return index;
     }
+
     return INSTALL_VERB_NONE;
 }
 
@@ -554,11 +629,13 @@ INT CommandLineHasForce(PCSTR command)
 
     if (!command)
         return 0;
+
     for (cursor = command; *cursor; ++cursor)
         if ((*cursor == '/' || *cursor == '-') && (cursor[1]|ASCII_CASE_BIT) == 'f' && (cursor[2]|ASCII_CASE_BIT) == 'o'
             && (cursor[3]|ASCII_CASE_BIT) == 'r' && (cursor[4]|ASCII_CASE_BIT) == 'c' && (cursor[5]|ASCII_CASE_BIT) == 'e'
             && (!cursor[6] || cursor[6] == ' ' || cursor[6] == '\t' || cursor[6] == '"'))
             return 1;
+
     return 0;
 }
 
@@ -571,11 +648,14 @@ INT CommandLineBare(PCSTR command)
 {
     if (!command)
         return 0;
+
     if (*command == '"')
     {
         ++command;
+
         while (*command && *command != '"')
             ++command;
+
         if (*command)
             ++command;
     }
@@ -584,7 +664,9 @@ INT CommandLineBare(PCSTR command)
         while (*command && *command != ' ' && *command != '\t')
             ++command;
     }
+
     while (*command == ' ' || *command == '\t') ++command;
+
     return *command == 0;
 }
 
@@ -615,6 +697,7 @@ INT LaunchShellVdm(VOID)
     PROCESS_INFORMATION processInfo;
 
     {   INSTALL_STATE state = InstallStatusText(message, sizeof message);
+
         if (state != INSTALL_OURS)
         {
             /* The status text says WHICH of the two it is; add what to do about it. */
@@ -627,20 +710,24 @@ INT LaunchShellVdm(VOID)
         } }
 
     length = GetTempPathA(MAX_PATH, stub);
+
     if (!length || length > MAX_PATH)
     {
         LogPut(stub, HOST_DEFAULT_DRIVE_ROOT);
         length = 3;
     }
+
     if (stub[length - 1] != '\\')
     {
         stub[length++] = '\\';
         stub[length] = 0;
     }
+
     LogPut(stub + length, LAUNCH_STUB_NAME);
 
     handle = CreateFileA(stub, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                     FILE_ATTRIBUTE_NORMAL, NULL);
+
     if (handle == INVALID_HANDLE_VALUE)
     {
         LogPut(message, HOST_STUB_WRITE_FAILED_TEXT);
@@ -648,6 +735,7 @@ INT LaunchShellVdm(VOID)
         InstallReport(message, FALSE);
         return 1;
     }
+
     {   static const BYTE exitStub[] = { X86_OP_MOV_AH_IMM, DOS_FN_EXIT, X86_OP_INT, VECTOR_DOS };   /* mov ah,4Ch; int 21h */
         BOOL isWritten = WriteFile(handle, exitStub, sizeof exitStub, &bytesWritten, NULL);
         CloseHandle(handle);
@@ -664,10 +752,12 @@ INT LaunchShellVdm(VOID)
 
     {
         INT index;
+
         for (index = 0; index < (INT)sizeof startupInfo; ++index)
             ((PSTR)&startupInfo)[index] = 0;
     }
     startupInfo.cb = sizeof startupInfo;
+
     if (!CreateProcessA(stub, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &startupInfo, &processInfo))
     {
         LogPut(message, HOST_SESSION_START_FAILED_TEXT);
@@ -681,6 +771,7 @@ INT LaunchShellVdm(VOID)
         InstallReport(message, FALSE);
         return 1;
     }
+
     CloseHandle(processInfo.hThread);
     CloseHandle(processInfo.hProcess);
     /* [CAUTION]: We exit immediately and deliberately. The VDM is a SEPARATE process and owns
@@ -699,11 +790,14 @@ VOID InstallReport(PCSTR message, INT isOk)
     {
         DWORD length = 0;
         DWORD bytesWritten;
+
         while (message[length])
             ++length;
+
         WriteFile(handle, message, length, &bytesWritten, NULL);
         return;
     }
+
     MessageBoxA(NULL, message, HOST_PRODUCT_NAME,
                 MB_OK | (isOk ? MB_ICONINFORMATION : MB_ICONERROR));
 }
@@ -720,11 +814,13 @@ VOID RecoveryUninstall(PSTR *logCursor)
     status = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
         INSTALL_KEY,
         0, KEY_SET_VALUE, &key);
+
     if (status == ERROR_SUCCESS)
     {
         status = RegDeleteValueA(key, INSTALL_VAL);
         RegCloseKey(key);
     }
+
     *logCursor = LogPut(*logCursor, status == ERROR_SUCCESS
         ? "STAGE0: RECOVERY -- IFEO Debugger REMOVED, the machine's own ntvdm "
           "takes over. Re-install when the fault is fixed. (GH #132)\r\n"
@@ -746,8 +842,10 @@ PCSTR CommandLineAfterArgv0(PCSTR cursor)
     if (*cursor == '"')
     {
         ++cursor;
+
         while (*cursor && *cursor != '"')
             ++cursor;
+
         if (*cursor)
             ++cursor;
     }
@@ -756,6 +854,8 @@ PCSTR CommandLineAfterArgv0(PCSTR cursor)
         while (*cursor && *cursor != ' ')
             ++cursor;
     }
+
     while (*cursor == ' ') ++cursor;
+
     return cursor;
 }

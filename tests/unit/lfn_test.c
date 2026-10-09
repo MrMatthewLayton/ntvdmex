@@ -144,8 +144,10 @@ static INT g_Failures;
 static VOID LfnTestExpect(PCSTR description, UINT64 actual, UINT64 expected)
 {
     ++g_Checks;
+
     if (actual == expected)
         return;
+
     ++g_Failures;
     printf("  FAIL %-58s got 0x%llX, want 0x%llX\n", description, actual, expected);
 }
@@ -153,8 +155,10 @@ static VOID LfnTestExpect(PCSTR description, UINT64 actual, UINT64 expected)
 static VOID LfnTestExpectString(PCSTR description, PCSTR actual, PCSTR expected)
 {
     ++g_Checks;
+
     if (!strcmp(actual, expected))
         return;
+
     ++g_Failures;
     printf("  FAIL %-58s got \"%s\", want \"%s\"\n", description, actual, expected);
 }
@@ -175,8 +179,10 @@ static VOID LfnTestFileTimeToDos(
 
     snprintf(label, sizeof label, "%s: converts", description);
     LfnTestExpect(label, didConvert, shouldConvert);
+
     if (!shouldConvert || !didConvert)
         return;
+
     snprintf(label, sizeof label, "%s: DX date", description);
     LfnTestExpect(label, dosDate, expectedDate);
     snprintf(label, sizeof label, "%s: CX time", description);
@@ -199,6 +205,7 @@ static VOID LfnTestDosToFileTime(
 
     snprintf(label, sizeof label, "%s: converts", description);
     LfnTestExpect(label, didConvert, shouldConvert);
+
     if (shouldConvert && didConvert)
     {
         snprintf(label, sizeof label, "%s: FILETIME", description);
@@ -324,9 +331,11 @@ INT main(VOID)
         LfnTestExpectString("2Ch long name", (PCSTR)record + LFN_TEST_LONG_NAME,
                             "A long file name.txt");
         LfnTestExpectString("130h short name", (PCSTR)record + LFN_TEST_SHORT_NAME, "ALONGF~1.TXT");
+
         for (byteIndex = LFN_TEST_LONG_NAME + LFN_TEST_LONG_NAME_WITH_NUL;
              byteIndex < LFN_TEST_SHORT_NAME; ++byteIndex)
             strayBits |= record[byteIndex];
+
         LfnTestExpect("long name field zero past its NUL", strayBits, 0);
         /* SI=1: DOS date in the high word, time in the low word; high dword 0. */
         DosLfnFindPack(record, &entry, LFN_TEST_DOS_FORMAT);

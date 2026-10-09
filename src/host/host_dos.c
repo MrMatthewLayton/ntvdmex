@@ -386,11 +386,14 @@ static INT DosEnvironmentNameIs(PCSTR name, UINT length, PCSTR literal)
     for (index = 0; index < length; ++index)
     {
         CHAR character = name[index];
+
         if (character >= 'a' && character <= 'z')
             character = (CHAR)(character - ASCII_CASE_BIT);
+
         if (character != literal[index])
             return 0;
     }
+
     return literal[length] == 0;
 }
 
@@ -408,23 +411,30 @@ UINT LauncherCompilerVariables(
     PCSTR entry = environment;
     UINT count = 0;
     DWORD outLength = 0;
+
     if (out && outCapacity)
         out[0] = 0;
+
     if (!environment || environmentCapacity < 2 || !environment[0] || !out)
         return 0;
+
     while (entry < environment + environmentCapacity && *entry)
     {
         PCSTR equals = entry;
         UINT nameLength;
         UINT wanted;
+
         while (*equals && *equals != '=')
             ++equals;
+
         if (*equals != '=' || equals == entry)
         {
             entry += lstrlenA(entry) + 1;
             continue;
         }
+
         nameLength = (UINT)(equals - entry);
+
         for (wanted = 0; want[wanted]; ++wanted) if (DosEnvironmentNameIs(entry, nameLength, want[wanted]))
         {
             CHAR shortValue[512];
@@ -432,19 +442,25 @@ UINT LauncherCompilerVariables(
             DWORD shortLength = GetShortPathNameA(value, shortValue, sizeof shortValue);
             UINT valueLength;
             UINT need;
+
             if (shortLength && shortLength < sizeof shortValue)
                 value = shortValue;
+
             valueLength = (UINT)lstrlenA(value);
             need = (UINT)lstrlenA(want[wanted]) + 1 + valueLength + 1;   /* NAME=VALUE\n */
+
             if (outLength + need + 1 < outCapacity)
             {
                 outLength += (DWORD)wsprintfA(out + outLength, HOST_ENV_LINE_FORMAT, want[wanted], value);
                 ++count;
             }
+
             break;
         }
+
         entry += lstrlenA(entry) + 1;
     }
+
     return count;
 }
 
@@ -466,8 +482,10 @@ VOID HmaTry(VOID)
         g_HmaError = GetLastError();
         return;
     }
+
     g_HmaState = memoryInfo.State;
     g_HmaProtection = memoryInfo.Protect;
+
     if (memoryInfo.State == MEM_COMMIT)
     {
         if (memoryInfo.Protect & (PAGE_NOACCESS | PAGE_GUARD))
@@ -475,21 +493,26 @@ VOID HmaTry(VOID)
             g_HmaError = HMA_ERROR_PROTECTED;
             return;
         }
+
         g_Hma = want;                       /* already ours -- nothing to do */
         return;
     }
+
     g_Hma = VirtualAlloc(want, DOS_HMA_ALLOCATION_U,
                          (memoryInfo.State == MEM_RESERVE) ? MEM_COMMIT
                                                     : (MEM_COMMIT | MEM_RESERVE),
                          PAGE_READWRITE);
+
     if (g_Hma != want)
     {
         g_HmaError = GetLastError();
         g_Hma = 0;
         return;
     }
+
     { UINT index;
     volatile BYTE *hma = (volatile BYTE *)(ULONG_PTR)DOS_HMA_BASE_U;
+
       for (index = 0; index < DOS_HMA_ALLOCATION_U; ++index)
           hma[index] = 0; }
 }
@@ -528,12 +551,17 @@ static INT ExecWindows(DOS_MACHINE *machine, INT kind, UINT subsystem, PSTR *log
     *cursor++ = '"';
     cursor = LogPut(cursor, machine->ExecPath);
     *cursor++ = '"';
+
     for (index = 0; index < tailLength && tail[1 + index] != DOS_PSP_COMMAND_TAIL_END; ++index)
         *cursor++ = (CHAR)tail[1 + index];
+
     *cursor = 0;
+
     for (index = 0; index < (INT)sizeof startupInfo; ++index)
         ((PSTR)&startupInfo)[index] = 0;
+
     startupInfo.cb = sizeof startupInfo;
+
     if (!CreateProcessA(NULL, command, NULL, NULL, FALSE,
                         wait ? CREATE_NEW_CONSOLE : 0, NULL, NULL, &startupInfo, &processInfo))
     {
@@ -542,18 +570,23 @@ static INT ExecWindows(DOS_MACHINE *machine, INT kind, UINT subsystem, PSTR *log
         *logCursor = LogPut(*logCursor, ") -- running its MZ stub, as DOS would\r\n");
         return 0;
     }
+
     *logCursor = LogPut(*logCursor, kind == DOS_EXE_NE ? "  EXEC: a Windows (NE) program -> handed to Windows/WOW"
                                        : "  EXEC: a Win32 (PE) program -> handed to Windows");
     *logCursor = LogPut(*logCursor, wait ? ", console: waiting for it\r\n" : ", started, not waited for\r\n");
+
     if (wait)
     {
         while (WaitForSingleObject(processInfo.hProcess, EXEC_WINDOWS_POLL_MS) == WAIT_TIMEOUT)
             if (!g_Running || g_WoundDown)
                 break;                                  /* the host is closing */
+
         if (!GetExitCodeProcess(processInfo.hProcess, &exitCode) || exitCode == STILL_ACTIVE)
             exitCode = 0;
+
         *logCursor = LogPut(*logCursor, "  EXEC: it exited, rc=0x"); *logCursor = LogHex(*logCursor, exitCode); *logCursor = LogPut(*logCursor, "\r\n");
     }
+
     CloseHandle(processInfo.hThread);
     CloseHandle(processInfo.hProcess);
     machine->ChildReturnCode = (WORD)(exitCode & BYTE_MASK);                 /* AH=4Dh: AH=0 normal end */
@@ -566,6 +599,7 @@ static VOID ExecMachineSave(INT depth)
 
     for (index = 0; index < IVT_SIZE / X86_WORD_SIZE; ++index)
         g_ExecMachine[depth].Ivt[index] = PeekWord(index * X86_WORD_SIZE);
+
     g_ExecMachine[depth].ImrMaster = g_Pic.Master.Imr;
     g_ExecMachine[depth].ImrSlave = g_Pic.Slave.Imr;
     g_ExecMachine[depth].VideoMode = *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_VIDEO_MODE);   /* BDA current mode */
@@ -600,8 +634,10 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
         VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         return cursor;
     }
+
     fileHandle = CreateFileA(machine->ExecPath, GENERIC_READ, FILE_SHARE_READ, NULL,
                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+
     if (fileHandle == INVALID_HANDLE_VALUE)
     {
         cursor = LogPut(cursor, "  EXEC: file not found\r\n");
@@ -610,6 +646,7 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
         VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         return cursor;
     }
+
     ReadFile(fileHandle, g_ExecFileBuffer, sizeof(g_ExecFileBuffer), &bytesRead, NULL);
     CloseHandle(fileHandle);
 
@@ -621,6 +658,7 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     {
         UINT subsystem = 0;
         INT kind = DosExeKind(g_ExecFileBuffer, bytesRead, &subsystem);
+
         if (kind != DOS_EXE_DOS && ExecWindows(machine, kind, subsystem, &cursor))
         {
             VDM_REG(tib, VTIB_EAX) &= HIGH_WORD_MASK_U;
@@ -681,13 +719,16 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
         DWORD total;
         DWORD index;
         volatile BYTE *childEnvironment;
+
         if (parentEnvironment[0] == 0)
             environmentLength = 1;                                              /* empty: one NUL ends the list */
         else
         {
             for (environmentLength = 0; environmentLength < DOS_ENV_SCAN_MAX && !(parentEnvironment[environmentLength] == 0 && parentEnvironment[environmentLength + 1] == 0); ++environmentLength) ;
+
             environmentLength += 2;
         }
+
         PCSTR executableName = machine->ExecName;
         /* THE 64-BYTE argv[0] RULE, AT EXEC TOO. (s81, #208) (Importance = 1):
          * DOS/4GW 1.97 copies its own path into a 64-byte buffer (see the start-up
@@ -701,6 +742,7 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
          */
         while (executableName[nameLength] && nameLength < sizeof(machine->ExecName) - 1)
             ++nameLength;
+
         if (nameLength >= DOS_EXTENDER_ARGV0_MAX)
         {
             CHAR currentDirectory[MAX_PATH];
@@ -709,11 +751,14 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
             DWORD shortCurrentDirectoryLength;
             PCSTR executableBaseName = executableName;
             PCSTR scan;
+
             for (scan = executableName; *scan; ++scan)
                 if (*scan == '\\')
                     executableBaseName = scan + 1;
+
             currentDirectoryLength = GetCurrentDirectoryA(sizeof currentDirectory, currentDirectory);
             shortCurrentDirectoryLength = (currentDirectoryLength && currentDirectoryLength < sizeof currentDirectory) ? GetShortPathNameA(currentDirectory, shortCurrentDirectory, sizeof shortCurrentDirectory) : 0;
+
             if (shortCurrentDirectoryLength && shortCurrentDirectoryLength < sizeof shortCurrentDirectory && executableBaseName > executableName
                 && (DWORD)(executableBaseName - executableName - 1) == shortCurrentDirectoryLength && CompareStringA(LOCALE_SYSTEM_DEFAULT,
                        NORM_IGNORECASE, executableName, (INT)shortCurrentDirectoryLength, shortCurrentDirectory, (INT)shortCurrentDirectoryLength) == CSTR_EQUAL)
@@ -721,10 +766,13 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
                 cursor = LogPut(cursor, "  EXEC: argv[0] is 64+ chars -- past DOS/4GW's buffer; the bare name [");
                 cursor = LogPut(cursor, executableBaseName); cursor = LogPut(cursor, "] (it is in the current directory)\r\n");
                 executableName = executableBaseName;
+
                 for (nameLength = 0; executableName[nameLength]; ++nameLength) ;
             }
         }
+
         total = environmentLength + X86_WORD_SIZE + nameLength + 1;
+
         if (DosMcbAllocate(NULL, machine->FirstMcb, (WORD)((total + PARAGRAPH_LAST_BYTE) >> PARAGRAPH_SHIFT), &environmentBlock, &maximumParagraphs) != 0)
         {
             cursor = LogPut(cursor, "  EXEC: no memory for the environment copy\r\n");
@@ -733,13 +781,18 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
             VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
             return cursor;
         }
+
         childEnvironment = (volatile BYTE *)((DWORD)environmentBlock << PARAGRAPH_SHIFT);
+
         for (index = 0; index < environmentLength; ++index)
             childEnvironment[index] = parentEnvironment[index];
+
         childEnvironment[environmentLength] = 1;
         childEnvironment[environmentLength + 1] = 0;             /* count word 0001 */
+
         for (index = 0; index <= nameLength; ++index)
             childEnvironment[environmentLength + X86_WORD_SIZE + index] = (BYTE)executableName[index];
+
         environmentSegment = environmentBlock;
         cursor = LogPut(cursor, "  EXEC: env copied from 0x"); cursor = LogHex(cursor, parentEnvironmentSegment);
         cursor = LogPut(cursor, " to 0x"); cursor = LogHex(cursor, environmentBlock);
@@ -758,26 +811,33 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
      */
     if (DosMcbAllocate(NULL, machine->FirstMcb, DOS_MCB_LARGEST_REQUEST, &child, &maximumParagraphs) == 0)
         maximumParagraphs = 0;
+
     want = 0;
+
     if (maximumParagraphs && DosExecSize(g_ExecFileBuffer, bytesRead, maximumParagraphs, &want, &loadHigh) != 0)
     {
         cursor = LogPut(cursor, "  EXEC: e_minalloc does not fit -- largest block 0x"); cursor = LogHex(cursor, maximumParagraphs);
         cursor = LogPut(cursor, " paras -> error 8, not loaded\r\n");
         want = 0;
     }
+
     if (!want || DosMcbAllocate(NULL, machine->FirstMcb, want, &child, &maximumParagraphs) != 0)
     {
         cursor = LogPut(cursor, "  EXEC: no memory\r\n");
+
         if (environmentBlock)
             DosMcbFree(NULL, environmentBlock);
+
         VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & HIGH_WORD_MASK_U) | DOS_ERR_INSUFFICIENT_MEMORY;
         *flagsPointer |= EFLAGS_CF;
         VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         return cursor;
     }
+
     /* The env block belongs to the child, as DOS records it (MCB owner = its PSP). */
     if (environmentBlock)
         DosMcbWriteWord((volatile BYTE *)((DWORD)(environmentBlock - 1) << PARAGRAPH_SHIFT) + 1, child);
+
     /* #243: AND SO DOES THE PROGRAM'S OWN BLOCK. (s86):
      * DosMcbAllocate stamps DOS_PSP_SEG (0100h) on what it hands out, and only the env
      * block was put right -- so a child's own memory read as the SHELL's (measured,
@@ -814,11 +874,14 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
      * is -- the same image test as at start-up: >= 8 NTVDM `C4 C4 54` sites.
      */
     {   DWORD index, bopCount = 0;
+
         for (index = 0; index + VDM_BOP_LENGTH < bytesRead; ++index)
             if (g_ExecFileBuffer[index] == VDM_BOP0 && g_ExecFileBuffer[index+1] == VDM_BOP1 && g_ExecFileBuffer[index+2] == NTVDM_BOP_CMD)
                 ++bopCount;
+
         if (bopCount >= EXEC_SHELL_BOP_SITES_MIN)
             DosInt21SetShellPsp(machine, child, TRUE); }
+
     /* ...and so is every program in Windows' own SYSTEM directory. (s81, user: `mem` ->
      * "Incorrect DOS version".) Those are XP's DOS tools -- MEM, EDIT, DEBUG, EDLIN,
      * EXE2BIN -- built for the DOS 5.00 that stock reports to everything; MEM checks for
@@ -830,12 +893,16 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     DWORD shortSystemLength = 0;
     DWORD directoryLength = 0;
     PCSTR scan;
+
         for (scan = machine->ExecPath; *scan; ++scan)
             if (*scan == '\\')
                 directoryLength = (DWORD)(scan - machine->ExecPath);
+
         systemLength = GetSystemDirectoryA(systemDirectory, sizeof systemDirectory);
+
         if (systemLength && systemLength < sizeof systemDirectory)
             shortSystemLength = GetShortPathNameA(systemDirectory, shortSystemDirectory, sizeof shortSystemDirectory);
+
         if (directoryLength && ((systemLength && systemLength < sizeof systemDirectory && directoryLength == systemLength
                     && CompareStringA(LOCALE_SYSTEM_DEFAULT, NORM_IGNORECASE,
                                       machine->ExecPath, (INT)directoryLength, systemDirectory, (INT)systemLength) == CSTR_EQUAL)
@@ -846,6 +913,7 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
             DosInt21SetShellPsp(machine, child, TRUE);
             cursor = LogPut(cursor, "  EXEC: an XP DOS tool (Windows' system directory) -- told DOS 5.00, as SETVER would\r\n");
         } }
+
     /* The child gets the vectors as they stand NOW, so whatever it installs is
      * unwound to the parent's when it exits -- that is the whole contract, and it
      * matters most for INT 24h. (GH #34)
@@ -856,8 +924,10 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
           ((machine->ExecTailSegment << PARAGRAPH_SHIFT) + machine->ExecTailOffset);
       INT index;
       INT count = tail[0] > DOS_PSP_COMMAND_TAIL_MAX ? DOS_PSP_COMMAND_TAIL_MAX : tail[0];
+
       for (index = 0; index <= count; ++index)
           childPsp[DOS_PSP_COMMAND_TAIL_LENGTH + index] = tail[index];
+
       childPsp[DOS_PSP_COMMAND_TAIL + count] = DOS_PSP_COMMAND_TAIL_END;
       childPsp[DOS_PSP_PARENT] = (BYTE)(machine->PspSegment & BYTE_MASK);       /* parent PSP */
       childPsp[DOS_PSP_PARENT + 1] = (BYTE)(machine->PspSegment >> BYTE_SHIFT); }
@@ -865,6 +935,7 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     /* Load high puts the image at the top of the block; the PSP stays at the bottom. */
     image = DosLoadImageAt(NULL, g_ExecFileBuffer, bytesRead, child,
                       loadHigh ? (WORD)(child + want - DosImageParagraphs(g_ExecFileBuffer, bytesRead)) : 0);
+
     if (loadHigh) { cursor = LogPut(cursor, "  EXEC: e_minalloc = e_maxalloc = 0 -> loaded HIGH at 0x");
                      cursor = LogHex(cursor, image.CodeSegment);
                      cursor = LogPut(cursor, "\r\n"); }
@@ -922,16 +993,21 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
      */
     {   PCSTR programBaseName = machine->ExecPath, scan;
     INT index = 0;
+
         for (index = 0; index < ARRAYSIZE(g_ProgramName) - 1 && g_ProgramName[index]; ++index)
             g_ExecMachine[depth].ProgramName[index] = g_ProgramName[index];
+
         g_ExecMachine[depth].ProgramName[index] = 0;
+
         for (scan = machine->ExecPath; *scan; ++scan)
             if (*scan == '\\' || *scan == '/' || *scan == ':')
                 programBaseName = scan + 1;
+
         if (*programBaseName)
         {
             for (index = 0; programBaseName[index] && index < ARRAYSIZE(g_ProgramName) - 1; ++index)
                 g_ProgramName[index] = programBaseName[index];
+
             g_ProgramName[index] = 0;
         }
         }
@@ -1021,14 +1097,19 @@ INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor)
 
     swappableDataArea[0] = 0;
     machine->IsCritActive = 0;
+
     if (criticalAction > DOS_CRIT_ACTION_FAIL)
         criticalAction = DOS_CRIT_ACTION_FAIL;
+
     if (criticalAction == DOS_CRIT_ACTION_IGNORE && !(allowed & DOS_CRIT_ALLOW_IGNORE))
         criticalAction = DOS_CRIT_ACTION_FAIL;                                                                                               /* ignore not allowed -> fail */
+
     if (criticalAction == DOS_CRIT_ACTION_RETRY && !(allowed & DOS_CRIT_ALLOW_RETRY))
         criticalAction = DOS_CRIT_ACTION_FAIL;                                                                                             /* retry not allowed  -> fail */
+
     if (criticalAction == DOS_CRIT_ACTION_FAIL && !(allowed & DOS_CRIT_ALLOW_FAIL))
         criticalAction = DOS_CRIT_ACTION_ABORT;                                                                                           /* fail not allowed   -> abort */
+
     *logCursor = LogPut(*logCursor, "  INT24 answered AL=0x"); *logCursor = LogHexByte(*logCursor, said);
     *logCursor = LogPut(*logCursor, criticalAction == DOS_CRIT_ACTION_IGNORE ? " -> IGNORE" : criticalAction == DOS_CRIT_ACTION_RETRY ? " -> RETRY"
                   : criticalAction == DOS_CRIT_ACTION_ABORT ? " -> ABORT" : " -> FAIL");
@@ -1045,14 +1126,17 @@ INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor)
     VDM_SET16(tib, VTIB_CS, g_Critical.Cs);
     VDM_SET16(tib, VTIB_DS, g_Critical.Ds);
     VDM_SET16(tib, VTIB_ES, g_Critical.Es);
+
     if (criticalAction == DOS_CRIT_ACTION_RETRY)
         return 0;                                                                       /* RETRY: the BOP runs again */
+
     if (criticalAction == DOS_CRIT_ACTION_ABORT)                                        /* ABORT */
     {
         machine->ExitCode = DOS_CRIT_ABORT_RETURN_CODE;
         machine->TermType = DOS_TERM_CRITICAL_ABORT;
         return 1;
     }
+
     /* CF goes on the FLAGS its INT pushed, as every INT 21h answer does. */
     flagsPointer = (volatile WORD *)((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT)
                             + ((VDM_REG16(tib, VTIB_ESP) + X86_FRAME16_FLAGS) & WORD_MASK));
@@ -1072,8 +1156,10 @@ INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor)
         DWORD size = GetFileSize(fileHandle, NULL);
         WORD ignoreCount = DosCritIgnoreCount(g_Critical.Function, (WORD)(g_Critical.Ecx & WORD_MASK), position, size,
                                        position != INVALID_SET_FILE_POINTER && size != INVALID_FILE_SIZE);
+
         if (position != INVALID_SET_FILE_POINTER)
             SetFilePointer(fileHandle, (LONG)ignoreCount, NULL, FILE_CURRENT);
+
         VDM_SET16(tib, VTIB_EAX, ignoreCount);
         *flagsPointer &= (WORD)~EFLAGS_CF_U;
         *logCursor = LogPut(*logCursor, "  INT24 IGNORE: the call reports 0x"); *logCursor = LogHex(*logCursor, ignoreCount);
@@ -1081,6 +1167,7 @@ INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor)
         VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;                     /* past the BOP -> the IRET */
         return 0;
     }
+
     /* FAIL (and an IGNORE with no handle left to ignore on): the call returns an error. */
     VDM_SET16(tib, VTIB_EAX, DosCritFailAx(g_Critical.Function, machine->CritCode));
     *flagsPointer |= EFLAGS_CF;
@@ -1108,6 +1195,7 @@ INT PmRwHardwareFail(
 
     if (!win32Error || !DosErrFromWin32((DWORD)win32Error, &dosError) || !DosCritIsHardwareError(dosError))
         return 0;
+
     VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
     VDM_SET16(tib, VTIB_EAX, DosCritFailAx(function, (BYTE)(dosError - DOS_ERR_WRITE_PROTECT)));
     machine->LastError = DOS_ERR_FAIL_I24;
@@ -1160,6 +1248,7 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
     PSTR cursor = *logCursor;
 
     (VOID)cursor;
+
             if (g_ExecDepth > 0)
             {
         /* A CHILD terminated, not the program we were asked to run.
@@ -1170,14 +1259,18 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
         /* AH = how it ended (#34): 0 normally, 2 when its INT 24h answered ABORT. */
         machine->ChildReturnCode = (WORD)(((WORD)machine->TermType << BYTE_SHIFT) | (machine->ExitCode & BYTE_MASK));
         machine->TermType = DOS_TERM_NORMAL;
+
         if (g_ExecMachine[depth].ProgramName[0])             /* the strip names the parent again */
             LogPut(g_ProgramName, g_ExecMachine[depth].ProgramName);
+
         /* s81: the parent's handle table back, the child's leftover files closed (not
          * a TSR's). Without this Doom's SETUP closed the shell's stdout for good.
          */
         DosHandlesPop(machine, machine->IsTsrPending);
+
         if (g_Exec[depth].ChildSegment && !machine->IsTsrPending)
             DosInt21SetShellPsp(machine, g_Exec[depth].ChildSegment, FALSE);   /* #208: its PSP is gone */
+
         MouseChildExited();          /* s81: the shell does not own the mouse */
         /* #214: A PROGRAM THAT HAS ENDED MUST NOT KEEP SOUNDING. Close Program on Doom
          * left its MIDI notes hanging: the emulated MPU-401 was reset, but the notes
@@ -1196,6 +1289,7 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
             VddOplAllNotesOff(&g_Opl);              /* both banks, and the rhythm drums (#232) */
             HOST_UNLOCK();
         }
+
         if (machine->IsTsrPending)
         {
             /* TERMINATE AND STAY RESIDENT. (GH #49):
@@ -1214,8 +1308,10 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
             *logCursor = LogPut(*logCursor, "  TSR: seg=0x"); *logCursor = LogHex(*logCursor, g_Exec[depth].ChildSegment);
             *logCursor = LogPut(*logCursor, " stays resident, 0x"); *logCursor = LogHex(*logCursor, keep);
             *logCursor = LogPut(*logCursor, " paras");
+
             if (resizeResult)
                 *logCursor = LogPut(*logCursor, " -- RESIZE FAILED, block kept whole");
+
             *logCursor = LogPut(*logCursor, ", vectors left installed\r\n");
             machine->IsTsrPending = 0;
             machine->TsrKeep = 0;
@@ -1232,8 +1328,10 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
          */
         if (g_Exec[depth].ChildSegment)
             DosPspRestoreVectors(NULL, g_Exec[depth].ChildSegment);
+
         if (g_Exec[depth].ChildSegment)
             DosMcbFree(NULL, g_Exec[depth].ChildSegment);
+
         /* ...and every OTHER block it still owns, as DOS does on terminate (s80).
          * AH=48h now stamps the child's PSP as owner; a program that exits without
          * freeing its allocations would otherwise shrink the parent's memory for
@@ -1251,57 +1349,74 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
                 WORD mcbSegment = machine->FirstMcb;
                 WORD hit = 0;
                 INT guard = 0;
+
                 for (;;)
                 {
                     volatile BYTE *mcb = DosMcbSegmentAddress(NULL, mcbSegment);
+
                     if ((mcb[DOS_MCB_SIGNATURE] != DOS_MCB_MEMBER && mcb[DOS_MCB_SIGNATURE] != DOS_MCB_LAST) || ++guard > DOS_TERMINATE_MCB_GUARD)
                         break;
+
                     if (DosMcbReadWord(mcb + 1) == g_Exec[depth].ChildSegment)
                     {
                         hit = (WORD)(mcbSegment + 1);
                         break;
                     }
+
                     if (mcb[DOS_MCB_SIGNATURE] == DOS_MCB_LAST)
                         break;
+
                     mcbSegment = (WORD)(mcbSegment + 1 + DosMcbReadWord(mcb + DOS_MCB_SIZE));
                 }
+
                 if (!hit || DosMcbFree(NULL, hit))
                     break;
+
                 ++freedCount;
             }
+
             if (freedCount)
             {
                 *logCursor = LogPut(*logCursor, "  EXEC: freed 0x"); *logCursor = LogHex(*logCursor, (DWORD)freedCount);
                 *logCursor = LogPut(*logCursor, " more block(s) the child still owned\r\n");
             }
         }
+
         /* The chain as the parent will find it: what a child LEFT is exactly what the
          * next program cannot have, and a leak is invisible in any one line above.
          */
         {   WORD mcbSegment = machine->FirstMcb;
         INT guard = 0;
             *logCursor = LogPut(*logCursor, "  EXEC: chain after exit:");
+
             for (;;)
             {
                 volatile BYTE *mcb = DosMcbSegmentAddress(NULL, mcbSegment);
                 WORD owner;
                 WORD size;
+
                 if ((mcb[DOS_MCB_SIGNATURE] != DOS_MCB_MEMBER && mcb[DOS_MCB_SIGNATURE] != DOS_MCB_LAST) || ++guard > DOS_MCB_DUMP_GUARD)
                 {
                     *logCursor = LogPut(*logCursor, " <broken>");
                     break;
                 }
+
                 owner = DosMcbReadWord(mcb + DOS_MCB_OWNER);
                 size = DosMcbReadWord(mcb + DOS_MCB_SIZE);
                 *logCursor = LogPut(*logCursor, " "); *logCursor = LogHex(*logCursor, mcbSegment);
                 *logCursor = LogPut(*logCursor, owner ? "/own=" : "/FREE");
+
                 if (owner)
                     *logCursor = LogHex(*logCursor, owner);
+
                 *logCursor = LogPut(*logCursor, "/sz="); *logCursor = LogHex(*logCursor, size);
+
                 if (mcb[0] == 'Z')
                     break;
+
                 mcbSegment = (WORD)(mcbSegment + 1 + size);
             }
+
             *logCursor = LogPut(*logCursor, "\r\n");
             LogAppend(LOG_PATH, base, *logCursor); *logCursor = base;
         }
@@ -1314,6 +1429,7 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
             g_Exec[depth].EnvironmentSegment = 0;
         }
         }
+
         VDM_REG(tib, VTIB_EAX) = g_Exec[depth].Eax;
         VDM_REG(tib, VTIB_EBX) = g_Exec[depth].Ebx;
         VDM_REG(tib, VTIB_ECX) = g_Exec[depth].Ecx;
@@ -1346,6 +1462,7 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
         LogAppend(LOG_PATH, base, *logCursor); *logCursor = base;
         return 1;                    /* the parent is back: carry on */
     }
+
     VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
     LogAppend(LOG_PATH, base, *logCursor); *logCursor = base;
     return 0;                        /* top-level program: the run is over */
@@ -1376,10 +1493,13 @@ INT HostHasCdrom(VOID)
     {
         if (!(drives & (1u << drive)))
             continue;
+
         root[0] = (CHAR)('A' + drive);
+
         if (GetDriveTypeA(root) == DRIVE_CDROM)
             return 1;
     }
+
     return 0;
 }
 
@@ -1392,19 +1512,25 @@ PDOS_DISK_GEOMETRY DiskFor(UINT drive)
 
     if (drive != 0)
         return NULL;                             /* only A: is backed today */
+
     if (g_DiskGeometry[0].IsValid)
         return &g_DiskGeometry[0];
+
     if (g_DiskTried[0])
         return NULL;
+
     g_DiskTried[0] = 1;
     oldErrorMode = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
     g_DiskHandle[0] = CreateFileA(FloppyImagePath(), GENERIC_READ | GENERIC_WRITE,
                               FILE_SHARE_READ, NULL, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, NULL);
     SetErrorMode(oldErrorMode);
+
     if (g_DiskHandle[0] == INVALID_HANDLE_VALUE)
         return NULL;
+
     size = GetFileSize(g_DiskHandle[0], NULL);
+
     if (!ReadFile(g_DiskHandle[0], boot, DOS_SECTOR_SIZE, &got, NULL) || got != DOS_SECTOR_SIZE
         || !DosDiskGeometryFromBpb(boot, size, &g_DiskGeometry[0]))
     {
@@ -1421,6 +1547,7 @@ PDOS_DISK_GEOMETRY DiskFor(UINT drive)
         g_DiskHandle[0] = INVALID_HANDLE_VALUE;
         return NULL;
     }
+
     { CHAR lineBuffer[200], *lineCursor = lineBuffer;
       lineCursor = LogPut(lineCursor, "  INT13 drive 0 = "); lineCursor = LogPut(lineCursor, FloppyImagePath()); lineCursor = LogPut(lineCursor, ", ");
       lineCursor = LogHex(lineCursor, g_DiskGeometry[0].Cylinders); lineCursor = LogPut(lineCursor, " cyl x ");
@@ -1443,13 +1570,16 @@ INT DiskIo(UINT drive, UINT32 lba, UINT count, BYTE *guest, INT write)
 
     if (drive != 0 || g_DiskHandle[0] == INVALID_HANDLE_VALUE || !count)
         return 0;
+
     if (SetFilePointer(g_DiskHandle[0], (LONG)(lba * DOS_SECTOR_SIZE), NULL, FILE_BEGIN)
         == INVALID_SET_FILE_POINTER)
         return 0;
+
     if (write)
     {
         if (!WriteFile(g_DiskHandle[0], guest, want, &moved, NULL))
             return 0;
+
         FlushFileBuffers(g_DiskHandle[0]);
     }
     else
@@ -1457,6 +1587,7 @@ INT DiskIo(UINT drive, UINT32 lba, UINT count, BYTE *guest, INT write)
         if (!ReadFile(g_DiskHandle[0], guest, want, &moved, NULL))
             return 0;
     }
+
     return moved == want;
 }
 
@@ -1466,6 +1597,7 @@ VOID StdioFlush(VOID)
 
     if (g_Stdio != INVALID_HANDLE_VALUE && g_StdioLength)
         WriteFile(g_Stdio, g_StdioBuffer, g_StdioLength, &bytesWritten, NULL);
+
     g_StdioLength = 0;
 }
 
@@ -1477,13 +1609,16 @@ static INT StdinReadByte(VOID)
 
     if (!g_StdinHandle)
         return -1;
+
     if (g_StdinEof)
         return ASCII_END_OF_FILE;
+
     if (!ReadFile(g_StdinHandle, &byteValue, 1, &got, NULL) || got != 1)
     {
         g_StdinEof = 1;
         return ASCII_END_OF_FILE;
     }
+
     ++g_StdinBytes;
     return byteValue;
 }
@@ -1507,22 +1642,30 @@ static HANDLE StdioPebStdout(HANDLE proc)
     ULONG_PTR params = 0;
     HANDLE out = NULL;
     SIZE_T bytesRead = 0;
+
     if (!queryInformationProcess) queryInformationProcess = (PFN_NT_QUERY_INFORMATION_PROCESS)(ULONG_PTR)GetProcAddress(
                         GetModuleHandleA(HOST_MODULE_NTDLL), HOST_EXPORT_NT_QUERY_INFORMATION_PROCESS);
+
     if (!queryInformationProcess || !proc)
         return NULL;
+
     if (queryInformationProcess(proc, 0 /* ProcessBasicInformation */, &basicInfo, sizeof basicInfo, &got) < 0)
         return NULL;
+
     if (!basicInfo.PebBase)
         return NULL;
+
     if (!ReadProcessMemory(proc, (BYTE *)basicInfo.PebBase + PEB_OFF_PROCESSPARAMS,
                            &params, sizeof params, &bytesRead) || bytesRead != sizeof params)
         return NULL;
+
     if (!params)
         return NULL;
+
     if (!ReadProcessMemory(proc, (BYTE *)params + RUPP_OFF_STDOUT,
                            &out, sizeof out, &bytesRead) || bytesRead != sizeof out)
         return NULL;
+
     return out;
 }
 
@@ -1547,18 +1690,24 @@ static HANDLE StdioPebHandle(HANDLE proc, UINT offset)
     ULONG_PTR params = 0;
     HANDLE out = NULL;
     SIZE_T bytesRead = 0;
+
     if (!queryInformationProcess) queryInformationProcess = (PFN_NT_QUERY_INFORMATION_PROCESS)(ULONG_PTR)GetProcAddress(
                         GetModuleHandleA(HOST_MODULE_NTDLL), HOST_EXPORT_NT_QUERY_INFORMATION_PROCESS);
+
     if (!queryInformationProcess || !proc)
         return NULL;
+
     if (queryInformationProcess(proc, 0, &basicInfo, sizeof basicInfo, &got) < 0 || !basicInfo.PebBase)
         return NULL;
+
     if (!ReadProcessMemory(proc, (BYTE *)basicInfo.PebBase + PEB_OFF_PROCESSPARAMS,
                            &params, sizeof params, &bytesRead) || !params)
         return NULL;
+
     if (!ReadProcessMemory(proc, (BYTE *)params + offset, &out, sizeof out, &bytesRead)
         || bytesRead != sizeof out)
         return NULL;
+
     return out;
 }
 
@@ -1576,8 +1725,10 @@ static INT StdioPebLayoutOk(INT *sawNull)
 
     if (sawNull)
         *sawNull = (!mine && !pebStdout);
+
     if (!mine && !pebStdout)
         return 0;                                   /* nothing to compare -- unproven */
+
     return mine == pebStdout;
 }
 
@@ -1609,47 +1760,64 @@ static INT StdioParentIs(HANDLE proc, DWORD parentProcessId)
     INT length;
     HANDLE snap;
     want[0] = 0;
+
     if (!queryInformationProcess) queryInformationProcess = (PFN_NT_QUERY_INFORMATION_PROCESS)(ULONG_PTR)GetProcAddress(
                         GetModuleHandleA(HOST_MODULE_NTDLL), HOST_EXPORT_NT_QUERY_INFORMATION_PROCESS);
+
     if (!queryInformationProcess)
         return 0;
+
     /* What the process list says this pid is. */
     snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+
     if (snap != INVALID_HANDLE_VALUE)
     {
         PROCESSENTRY32 entry;
         entry.dwSize = sizeof entry;
+
         if (Process32First(snap, &entry))
         {
             do { if (entry.th32ProcessID == parentProcessId)
             {
                      for (index = 0; index < MAX_PATH - 1 && entry.szExeFile[index]; ++index)
                          want[index] = entry.szExeFile[index];
+
                      want[index] = 0;
                      break; }
             } while (Process32Next(snap, &entry));
         }
+
         CloseHandle(snap);
     }
+
     if (!want[0])
         return 0;
+
     if (queryInformationProcess(proc, 0, &basicInfo, sizeof basicInfo, &got) < 0 || !basicInfo.PebBase)
         return 0;
+
     if (!ReadProcessMemory(proc, (BYTE *)basicInfo.PebBase + PEB_OFF_PROCESSPARAMS,
                            &params, sizeof params, &bytesRead) || !params)
         return 0;
+
     if (!ReadProcessMemory(proc, (BYTE *)params + RUPP_OFF_IMAGEPATH,
                            &imagePath, sizeof imagePath, &bytesRead) || bytesRead != sizeof imagePath)
         return 0;
+
     if (!imagePath.Buffer || !imagePath.Length || imagePath.Length >= sizeof path)
         return 0;
+
     if (!ReadProcessMemory(proc, imagePath.Buffer, path, imagePath.Length, &bytesRead) || bytesRead != imagePath.Length)
         return 0;
+
     length = (INT)(imagePath.Length / sizeof(WCHAR));
+
     if (length >= MAX_PATH)
         length = MAX_PATH - 1;
+
     for (index = 0; index < length; ++index)
         narrow[index] = (path[index] < ASCII_HIGH_FIRST) ? (CHAR)path[index] : '?';
+
     narrow[length] = 0;
     /* Compare the FILE NAME, case-insensitively: the list gives a name, the PEB
      * gives a full path, and it is the tail that has to agree.
@@ -1658,20 +1826,27 @@ static INT StdioParentIs(HANDLE proc, DWORD parentProcessId)
      * is counted here rather than borrowed from a library that is not there.
      */
     {   INT wantLength = 0, nameLength = length;
+
         while (want[wantLength])
             ++wantLength;
+
         {
         PCSTR tail = narrow + (nameLength > wantLength ? nameLength - wantLength : 0);
+
         if (nameLength < wantLength)
             return 0;
+
         for (index = 0; index < wantLength; ++index)
         {
             CHAR tailCharacter = tail[index];
             CHAR wantCharacter = want[index];
+
             if (tailCharacter >= 'A' && tailCharacter <= 'Z')
                 tailCharacter = (CHAR)(tailCharacter + ASCII_CASE_BIT);
+
             if (wantCharacter >= 'A' && wantCharacter <= 'Z')
                 wantCharacter = (CHAR)(wantCharacter + ASCII_CASE_BIT);
+
             if (tailCharacter != wantCharacter)
                 return 0;
         }
@@ -1690,20 +1865,24 @@ static PCSTR StdioFromParent(DWORD parentProcessId)
 
     if (!proc)
         return "none (no console, no redirect)";
+
     if (!StdioParentIs(proc, parentProcessId))           /* the offsets did not check out */
     {
         CloseHandle(proc);
         return "none (no console, no redirect)";
     }
+
     /* -- THE INPUT HANDLE, TAKEN IN THE SAME BREATH. Only a FILE or a PIPE:
      * see the note on g_StdinHandle. Failure here is silent on purpose -- it must
      * never cost the output handle, which is the one being measured.
      */
     {   HANDLE parentStdin = StdioPebHandle(proc, RUPP_OFF_STDIN), duplicateStdin = NULL;
+
         if (parentStdin && DuplicateHandle(proc, parentStdin, GetCurrentProcess(), &duplicateStdin, 0, FALSE,
                                    DUPLICATE_SAME_ACCESS))
         {
             DWORD inputType = GetFileType(duplicateStdin);
+
             if (inputType == FILE_TYPE_DISK || inputType == FILE_TYPE_PIPE)
                 g_StdinHandle = duplicateStdin;
             else
@@ -1711,29 +1890,35 @@ static PCSTR StdioFromParent(DWORD parentProcessId)
         }
     }
     remote = StdioPebStdout(proc);
+
     if (!remote)
     {
         CloseHandle(proc);
         return "none (no console, no redirect)";
     }
+
     if (!DuplicateHandle(proc, remote, GetCurrentProcess(), &duplicate, 0, FALSE,
                          DUPLICATE_SAME_ACCESS))
     {
         CloseHandle(proc);
         return "none (no console, no redirect)";
     }
+
     CloseHandle(proc);
     valueType = GetFileType(duplicate);
+
     if (valueType == FILE_TYPE_DISK || valueType == FILE_TYPE_PIPE)
     {
         g_Stdio = duplicate;
         return "duplicated from the parent (REDIRECTED)";
     }
+
     if (valueType == FILE_TYPE_CHAR)
     {
         g_Stdio = duplicate;
         return "duplicated from the parent (its console)";
     }
+
     CloseHandle(duplicate);
     return "none (no console, no redirect)";
 }
@@ -1748,18 +1933,22 @@ PCSTR StdioInitialize(VOID)
         g_Stdio = handle;                       /* redirected: write straight to it */
         return "inherited (redirected)";
     }
+
     if (valueType == FILE_TYPE_CHAR)
     {
         g_Stdio = handle;
         return "inherited console";
     }
+
     if (OsCompatAttachConsole(ATTACH_PARENT_PROCESS))
     {
         g_Stdio = CreateFileA(HOST_DEVICE_CONSOLE_OUTPUT, GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
                               OPEN_EXISTING, 0, NULL);
+
         if (g_Stdio != INVALID_HANDLE_VALUE)
             return "attached parent console";
     }
+
     /* ATTACH_PARENT_PROCESS FAILED. FIND THE PARENT OURSELVES. (GH #131):
      * That constant asks the kernel for "the process that created me", and an
      * IFEO-substituted image is not created the way a normal child is -- which
@@ -1771,10 +1960,12 @@ PCSTR StdioInitialize(VOID)
     {   HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         DWORD threadId = GetCurrentProcessId();
         DWORD parentProcessId = 0;
+
         if (snap != INVALID_HANDLE_VALUE)
         {
             PROCESSENTRY32 entry;
             entry.dwSize = sizeof(entry);
+
             if (Process32First(snap, &entry))
             {
                 do
@@ -1787,15 +1978,19 @@ PCSTR StdioInitialize(VOID)
                 }
                 while (Process32Next(snap, &entry));
             }
+
             CloseHandle(snap);
         }
+
         if (parentProcessId && OsCompatAttachConsole(parentProcessId))
         {
             g_Stdio = CreateFileA(HOST_DEVICE_CONSOLE_OUTPUT, GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
                                   OPEN_EXISTING, 0, NULL);
+
             if (g_Stdio != INVALID_HANDLE_VALUE)
                 return "attached console by parent pid";
         }
+
         g_StdioParentProcessId = parentProcessId;              /* reported at exit either way */
 
         /* -- ROUTE SIX: TAKE IT OUT OF THE PARENT. (GH #131, session 57)
@@ -1832,6 +2027,7 @@ PCSTR StdioInitialize(VOID)
         if (parentProcessId)
         {
             PCSTR why = StdioFromParent(parentProcessId);
+
             if (g_Stdio != INVALID_HANDLE_VALUE && g_Stdio)
                 return why;
         }
@@ -1869,9 +2065,12 @@ static PCSTR StdioAdopt(HANDLE handle)
 
     if (!handle || handle == INVALID_HANDLE_VALUE)
         return NULL;
+
     valueType = GetFileType(handle) & ~FILE_TYPE_REMOTE;
+
     if (valueType == FILE_TYPE_UNKNOWN)
         return NULL;
+
     g_Stdio = handle;
     return (valueType == FILE_TYPE_DISK) ? "redirected to a file"
          : (valueType == FILE_TYPE_PIPE) ? "a pipe"
@@ -1884,16 +2083,19 @@ PCSTR StdioInitializeVdm(VOID)
 
     if (g_Stdio != INVALID_HANDLE_VALUE)
         return g_StdioHow;                                    /* never downgrade */
+
     if ((what = StdioAdopt(g_CommandInfo.StdOut)) != NULL)
     {
         g_StdioSource = "CSRSS VDM StdOut";
         return what;
     }
+
     if ((what = StdioAdopt(g_CommandInfo.StartupInfo.hStdOutput)) != NULL)
     {
         g_StdioSource = "CSRSS StartupInfo";
         return what;
     }
+
     return g_StdioHow;
 }
 
@@ -1910,13 +2112,16 @@ VOID HostConsoleOut(PVOID context, BYTE ch)
     (VOID)context;
     HOST_LOCK();
     VddVideoPutChar(&g_Video, ch);
+
     if (g_Stdio != INVALID_HANDLE_VALUE)
     {
         if (g_StdioLength < sizeof(g_StdioBuffer))
             g_StdioBuffer[g_StdioLength++] = (CHAR)ch;
+
         if (ch == '\n' || g_StdioLength >= sizeof(g_StdioBuffer))
             StdioFlush();
     }
+
     HOST_UNLOCK();
 }
 
@@ -1926,35 +2131,43 @@ INT HostConsoleIn(PVOID context)
     INT got;
 
     (VOID)context;
+
     if (g_ConsoleInPending >= 0)
     {
         INT pending = g_ConsoleInPending;
         g_ConsoleInPending = -1;
         return pending;
     }
+
     /* [INFO]: A REDIRECTED STDIN OUTRANKS THE KEYBOARD, and must: a program run as
      * `prog < file` is not waiting for a human, and blocking on the key event
      * would hang a batch that has no console at all. See g_StdinHandle.
      */
     if (g_StdinHandle)
         return StdinReadByte();
+
     for (;;)
     {
         HOST_LOCK();
         got = VddInputPop(&g_Input, &key);
         HOST_UNLOCK();
+
         if (got)
         {
             key = VddInputDosKey(key);           /* #254: grey-key E0 forms -> 83-key */
+
             if ((key & BYTE_MASK) == 0)
             {
                 g_ConsoleInPending = (key >> BYTE_SHIFT) & BYTE_MASK;
                 return ASCII_NUL;
             }
+
             return key & BYTE_MASK;
         }
+
         if (!g_Running)
             return ASCII_ESCAPE;                        /* window gone -> unblock as ESC */
+
         WaitForSingleObject(g_KeyEvent, INPUT_KEY_WAIT_MS);
     }
 }
@@ -1968,6 +2181,7 @@ static INT TypeInPop(VOID)
         character = (BYTE)g_TypeIn[g_TypeInHead];
         g_TypeInHead = (g_TypeInHead + 1) % TYPEIN_CAP;
     }
+
     return character;
 }
 
@@ -1980,16 +2194,19 @@ INT TypeInPush(PCSTR text)
 
     HOST_LOCK();
     used = (g_TypeInTail - g_TypeInHead + TYPEIN_CAP) % TYPEIN_CAP;
+
     if (used + length >= TYPEIN_CAP - 1)
     {
         HOST_UNLOCK();
         return 0;
     }
+
     for (index = 0; index < length; ++index)
     {
         g_TypeIn[g_TypeInTail] = text[index];
         g_TypeInTail = (g_TypeInTail + 1) % TYPEIN_CAP;
     }
+
     HOST_UNLOCK();
     return 1;
 }
@@ -2001,17 +2218,21 @@ INT HostConsoleInNoBlock(PVOID context)
     INT got;
 
     (VOID)context;
+
     if (g_ConsoleInPending >= 0)
     {
         INT pending = g_ConsoleInPending;
         g_ConsoleInPending = -1;
         return pending;
     }
+
     if (g_StdinHandle)
         return StdinReadByte();                  /* a file is always ready */
+
     HOST_LOCK();
     {
         INT pending = TypeInPop();
+
         if (pending >= 0)
         {
             HOST_UNLOCK();
@@ -2020,14 +2241,18 @@ INT HostConsoleInNoBlock(PVOID context)
     }
     got = VddInputPop(&g_Input, &key);
     HOST_UNLOCK();
+
     if (!got)
         return -1;
+
     key = VddInputDosKey(key);                   /* #254: grey-key E0 forms -> 83-key */
+
     if ((key & BYTE_MASK) == 0)
     {
         g_ConsoleInPending = (key >> BYTE_SHIFT) & BYTE_MASK;
         return ASCII_NUL;
     }
+
     return key & BYTE_MASK;
 }
 
@@ -2041,8 +2266,10 @@ INT HostConsolePeek(PVOID context)
     INT got;
 
     (VOID)context;
+
     if (g_ConsoleInPending >= 0)
         return 1;
+
     /* [CAUTION]: A REDIRECTED INPUT IS ALWAYS "READY", INCLUDING AT END OF FILE -- the
      * read that follows returns Ctrl-Z immediately. Answering "not ready"
      * there would park a polling program forever on a file that has nothing
@@ -2050,12 +2277,15 @@ INT HostConsolePeek(PVOID context)
      */
     if (g_StdinHandle)
         return 1;
+
     HOST_LOCK();
+
     if (g_TypeInHead != g_TypeInTail)
     {
         HOST_UNLOCK();
         return 1;
     }
+
     got = VddInputPeek(&g_Input, &key);
     HOST_UNLOCK();
     return got;
@@ -2073,6 +2303,7 @@ VOID HostSetFlags(volatile BYTE *tib, BYTE carryFlag, BYTE zeroFlag)
         *flagsPointer |= EFLAGS_CF;
     else
         *flagsPointer &= (WORD)~EFLAGS_CF;
+
     if (zeroFlag)
         *flagsPointer |= EFLAGS_ZF;
     else
@@ -2095,6 +2326,7 @@ VOID XmsHostFree(PVOID context, PVOID memory, DWORD kilobytes)
 {
     (VOID)context;
     (VOID)kilobytes;
+
     if (memory)
         VirtualFree(memory, 0, MEM_RELEASE);
 }
@@ -2157,6 +2389,7 @@ VOID HostXms(volatile BYTE *tib)
             X_SETAX(1);
             X_SETBL(0);
         }
+
         break;
 
     case DOS_XMS_FN_RELEASE_HMA:                                  /* release HMA */
@@ -2170,6 +2403,7 @@ VOID HostXms(volatile BYTE *tib)
             X_SETAX(1);
             X_SETBL(0);
         }
+
         break;
 
     /* A20 IS ONE WIRE AND XMS IS ONLY ONE OF ITS THREE DOORS (Importance = 3):
@@ -2218,6 +2452,7 @@ VOID HostXms(volatile BYTE *tib)
          */
         if (g_BehaveDos622)
             X_SETBH(DOS_XMS_HIMEM622_QUERY_BH);
+
         break;
 
     case DOS_XMS_FN_ALLOCATE:                                  /* allocate EMB: DX=KB */
@@ -2228,6 +2463,7 @@ VOID HostXms(volatile BYTE *tib)
         }
         else
             X_FAIL(error);
+
         break;
 
     case DOS_XMS_FN_FREE:                                  /* free EMB: DX=handle */
@@ -2235,6 +2471,7 @@ VOID HostXms(volatile BYTE *tib)
             X_SETAX(1);
         else
             X_FAIL(error);
+
         break;
 
     case DOS_XMS_FN_MOVE:                                  /* move EMB: DS:SI -> move struct */
@@ -2248,14 +2485,17 @@ VOID HostXms(volatile BYTE *tib)
         move.SourceOffset = (DWORD)source[DOS_XMS_MOVE_SOURCE_OFFSET] | ((DWORD)source[DOS_XMS_MOVE_SOURCE_OFFSET + 1] << BYTE_SHIFT) | ((DWORD)source[DOS_XMS_MOVE_SOURCE_OFFSET + 2] << WORD_SHIFT) | ((DWORD)source[DOS_XMS_MOVE_SOURCE_OFFSET + 3] << TOP_BYTE_SHIFT);
         move.DestinationHandle = (WORD)(source[DOS_XMS_MOVE_DESTINATION_HANDLE] | (source[DOS_XMS_MOVE_DESTINATION_HANDLE + 1] << BYTE_SHIFT));
         move.DestinationOffset = (DWORD)source[DOS_XMS_MOVE_DESTINATION_OFFSET] | ((DWORD)source[DOS_XMS_MOVE_DESTINATION_OFFSET + 1] << BYTE_SHIFT) | ((DWORD)source[DOS_XMS_MOVE_DESTINATION_OFFSET + 2] << WORD_SHIFT) | ((DWORD)source[DOS_XMS_MOVE_DESTINATION_OFFSET + 3] << TOP_BYTE_SHIFT);
+
         if (DosXmsMove(&g_Xms, NULL, &move, &error))
             X_SETAX(1);
         else
             X_FAIL(error);
+
         break; }
 
     case DOS_XMS_FN_LOCK:                                  /* lock EMB: DX=handle -> DX:BX linear */
         handle = (WORD)VDM_REG16(tib, VTIB_EDX);
+
         if (DosXmsLock(&g_Xms, handle, &linear, &error))
         {
             X_SETAX(1);
@@ -2264,6 +2504,7 @@ VOID HostXms(volatile BYTE *tib)
         }
         else
             X_FAIL(error);
+
         break;
 
     case DOS_XMS_FN_UNLOCK:                                  /* unlock EMB: DX=handle */
@@ -2271,10 +2512,12 @@ VOID HostXms(volatile BYTE *tib)
             X_SETAX(1);
         else
             X_FAIL(error);
+
         break;
 
     case DOS_XMS_FN_GET_HANDLE_INFO:                                  /* get handle info: DX=handle */
         handle = (WORD)VDM_REG16(tib, VTIB_EDX);
+
         if (DosXmsGetHandleInformation(&g_Xms, handle, &lock, &freeHandles, &sizeKb, &error))
         {
             X_SETAX(1);
@@ -2284,14 +2527,17 @@ VOID HostXms(volatile BYTE *tib)
         }
         else
             X_FAIL(error);
+
         break;
 
     case DOS_XMS_FN_REALLOCATE:                                  /* reallocate EMB: BX=new KB, DX=handle */
         handle = (WORD)VDM_REG16(tib, VTIB_EDX);
+
         if (DosXmsReallocate(&g_Xms, handle, VDM_REG16(tib, VTIB_EBX), &error))
             X_SETAX(1);
         else
             X_FAIL(error);
+
         break;
 
     case DOS_XMS_FN_REQUEST_UMB:
@@ -2332,6 +2578,7 @@ VOID EmsHostFree(PVOID context, PVOID memory, DWORD pages)
 {
     (VOID)context;
     (VOID)pages;
+
     if (memory)
         VirtualFree(memory, 0, MEM_RELEASE);
 }
@@ -2376,6 +2623,7 @@ VOID HostEms(volatile BYTE *tib)
         }
         else
             E_SETAH(error);
+
         break;
 
     case DOS_EMS_FN_MAP:                                          /* map: AL=phys BX=logical DX=handle */
@@ -2385,6 +2633,7 @@ VOID HostEms(volatile BYTE *tib)
             E_SETAH(DOS_EMS_STATUS_OK);
         else
             E_SETAH(error);
+
         break;
 
     case DOS_EMS_FN_DEALLOCATE:                                          /* deallocate DX handle */
@@ -2392,6 +2641,7 @@ VOID HostEms(volatile BYTE *tib)
             E_SETAH(DOS_EMS_STATUS_OK);
         else
             E_SETAH(error);
+
         break;
 
     case DOS_EMS_FN_GET_VERSION:
@@ -2404,6 +2654,7 @@ VOID HostEms(volatile BYTE *tib)
             E_SETAH(DOS_EMS_STATUS_OK);
         else
             E_SETAH(error);
+
         break;
 
     case DOS_EMS_FN_RESTORE_PAGE_MAP:                                          /* restore page map: DX handle */
@@ -2411,6 +2662,7 @@ VOID HostEms(volatile BYTE *tib)
             E_SETAH(DOS_EMS_STATUS_OK);
         else
             E_SETAH(error);
+
         break;
 
     case DOS_EMS_FN_GET_HANDLE_COUNT:
@@ -2426,6 +2678,7 @@ VOID HostEms(volatile BYTE *tib)
         }
         else
             E_SETAH(error);
+
         break;
 
     case DOS_EMS_FN_GET_ALL_HANDLE_PAGES:                                          /* all handle pages -> ES:DI, BX */
@@ -2435,8 +2688,10 @@ VOID HostEms(volatile BYTE *tib)
             ((VDM_REG16(tib, VTIB_ES) << PARAGRAPH_SHIFT) + VDM_REG16(tib, VTIB_EDI));
         INT count = DosEmsGetAllHandlePages(&g_Ems, pairs);
         INT index;
+
         for (index = 0; index < count * DOS_EMS_HANDLE_PAGES_ENTRY; ++index)
             destination[index] = pairs[index];
+
         E_SETBX((WORD)count);
         E_SETAH(DOS_EMS_STATUS_OK);
         break; }
@@ -2447,6 +2702,7 @@ VOID HostEms(volatile BYTE *tib)
         volatile BYTE *nameBuffer = (int53Al == 0)
             ? (volatile BYTE *)(ULONG_PTR)((VDM_REG16(tib, VTIB_ES) << PARAGRAPH_SHIFT) + VDM_REG16(tib, VTIB_EDI))
             : (volatile BYTE *)(ULONG_PTR)((VDM_REG16(tib, VTIB_DS) << PARAGRAPH_SHIFT) + VDM_REG16(tib, VTIB_ESI));
+
         if (int53Al > DOS_EMS_HANDLE_NAME_SET)
             E_SETAH(DOS_EMS_ERROR_INVALID_SUBFUNCTION);                                                       /* LIM: invalid subfunction */
         else if (DosEmsGetSetHandleName(&g_Ems, (WORD)VDM_REG16(tib, VTIB_EDX),
@@ -2454,6 +2710,7 @@ VOID HostEms(volatile BYTE *tib)
             E_SETAH(DOS_EMS_STATUS_OK);
         else
             E_SETAH(error);
+
         break; }
 
     case DOS_EMS_FN_REALLOCATE:                                          /* reallocate: BX pages, DX handle */
@@ -2466,6 +2723,7 @@ VOID HostEms(volatile BYTE *tib)
         }
         else
             E_SETAH(error);
+
         break;
 
     default:
@@ -2487,13 +2745,16 @@ VOID ExecMachineRestore(INT depth, PSTR *logCursor)
     INT needsModeSet;
 
     HOST_LOCK();
+
     for (index = 0; index < IVT_SIZE / X86_WORD_SIZE; ++index)
         PokeWord(index * X86_WORD_SIZE, g_ExecMachine[depth].Ivt[index]);
+
     g_Pic.Master.Imr = g_ExecMachine[depth].ImrMaster;
     g_Pic.Slave.Imr = g_ExecMachine[depth].ImrSlave;
     g_Pic.Master.Isr = 0;
     g_Pic.Slave.Isr = 0;           /* a handler it never finished */
     g_Irq0IsrSince = 0;
+
     if (VddPitEffectiveReload(&g_Pit) != g_ExecMachine[depth].Pit0)     /* a game's fast timer */
     {
         UINT32 value = PIT_CONTROL_CHANNEL0_SQUARE;
@@ -2504,18 +2765,22 @@ VOID ExecMachineRestore(INT depth, PSTR *logCursor)
         value = (reload >> BYTE_SHIFT) & BYTE_MASK;
         VddBusIo(&g_Bus, PIT_PORT_COUNTER0, 1, VDD_IO_OUT, &value);
     }
+
     /* Silence: an auto-init DMA block or a held OPL note would otherwise play on
      * into the shell.
      */
     VddSbReset(&g_Sb);
     VddOplReset(&g_Opl);
     VddGusReset(&g_Gus);
+
     if (g_AweOn)
         VddEmu8kReset(&g_Emu8K);             /* #233 */
+
     VddMpuReset(&g_Mpu);
     VddSpeakerReset(&g_Speaker);
     needsModeSet = (*(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_VIDEO_MODE) != g_ExecMachine[depth].VideoMode
               || g_Video.ModeKind != VIDEO_KIND_TEXT);
+
     if (needsModeSet)
     {
         NTVDD_REGISTERS registers;
@@ -2523,15 +2788,19 @@ VOID ExecMachineRestore(INT depth, PSTR *logCursor)
         registers.Eax = g_ExecMachine[depth].VideoMode;           /* AH=00h set mode */
         VddBusDeliverInterrupt(&g_Bus, VECTOR_VIDEO, &registers);
     }
+
     HOST_UNLOCK();
+
     if (needsModeSet)
         VideoTrapSync();
+
     /* Its mouse event handler lives in the block about to be freed. */
     g_MouseCallbackActive = 0;
     I33ResetState();
     InterlockedExchange(&g_MouseWantCapture, 0);
     *logCursor = LogPut(*logCursor, "CLOSEPROG: machine restored to the parent's (IVT, PIC, PIT");
     *logCursor = LogPut(*logCursor, needsModeSet ? ", video mode 0x" : ")\r\n");
+
     if (needsModeSet)
     {
         *logCursor = LogHexByte(*logCursor, g_ExecMachine[depth].VideoMode);
@@ -2549,12 +2818,15 @@ INT CloseProgramNow(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
         *logCursor = LogPut(*logCursor, "CLOSEPROG: ending the program at depth ");
         *logCursor = LogHexByte(*logCursor, (UINT)g_ExecDepth); *logCursor = LogPut(*logCursor, " (File > Close Program)\r\n");
         ExecMachineRestore(g_ExecDepth - 1, logCursor);
+
         if (g_Routed && g_ExecDepth == 1)
             g_BackToPrompt = 1;                                 /* #208 */
+
         machine->IsTsrPending = 0;
         machine->ExitCode = 0;
         return DosTerminate(machine, tib, logCursor, base);
     }
+
     *logCursor = LogPut(*logCursor, "CLOSEPROG: ending the top-level program -- the run is over\r\n");
     LogAppend(LOG_PATH, base, *logCursor); *logCursor = base;
     machine->ExitCode = 0;
@@ -2598,6 +2870,7 @@ VOID DosWowPublish(volatile BYTE *handlerArea, volatile BYTE *controlTable, UINT
 
     for (index = 0; index < DOS_WOW_VARS_LEN; ++index)
         variables[index] = 0;
+
     variables[0] = (BYTE)currentDrive;                        /* 0 = A:, as INT 21h AH=19h */
 
     /* Every entry points somewhere valid, not just the six that are read. An
@@ -2608,6 +2881,7 @@ VOID DosWowPublish(volatile BYTE *handlerArea, volatile BYTE *controlTable, UINT
         *(volatile WORD *)(tableBytes + index * X86_FAR_POINTER_SIZE) = variablesOffset;
         *(volatile WORD *)(tableBytes + index * X86_FAR_POINTER_SIZE + X86_FAR_POINTER_SEGMENT) = DOS_SYSVARS_SEG;
     }
+
     *(volatile WORD *)(tableBytes + DOS_WOW_E_LASTDRV) = (WORD)(DOS_SYSVARS_OFF + DOS_SYSVARS_LASTDRIVE);
     *(volatile WORD *)(tableBytes + DOS_WOW_E_CURDRV)  = (WORD)(variablesOffset + DOS_WOW_VAR_CURDRV);
     *(volatile WORD *)(tableBytes + DOS_WOW_E_C)       = (WORD)(variablesOffset + DOS_WOW_VAR_C);

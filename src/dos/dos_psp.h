@@ -80,6 +80,7 @@ static inline VOID DosPspBuild(
 
     for (byteIndex = 0; byteIndex < DOS_PSP_SIZE; ++byteIndex)
         psp[byteIndex] = 0;
+
     psp[DOS_PSP_INT20] = X86_OP_INT;
     psp[DOS_PSP_INT20 + 1] = VECTOR_TERMINATE;                /* INT 20h (legacy exit) */
     DosMcbWriteWord(psp + DOS_PSP_MEMORY_TOP, topSegment);                     /* segment of top-of-memory */
@@ -88,8 +89,10 @@ static inline VOID DosPspBuild(
     psp[DOS_PSP_JFT + 2] = DOS_PSP_JFT_STDERR_ENTRY;       /* JFT: std handles open */
     psp[DOS_PSP_JFT + 3] = DOS_PSP_JFT_AUX_ENTRY;
     psp[DOS_PSP_JFT + 4] = DOS_PSP_JFT_PRN_ENTRY;
+
     for (byteIndex = DOS_PSP_JFT_FIRST_CLOSED; byteIndex < DOS_PSP_JFT_END; ++byteIndex)
         psp[byteIndex] = DOS_PSP_JFT_CLOSED;                                                                                        /* remaining JFT = closed */
+
     DosMcbWriteWord(psp + DOS_PSP_ENVIRONMENT, environmentSegment);                     /* environment segment */
     DosMcbWriteWord(psp + DOS_PSP_JFT_SIZE, DOS_PSP_JFT_HANDLES);                        /* JFT size (20 handles) */
     DosMcbWriteWord(psp + DOS_PSP_JFT_POINTER, DOS_PSP_JFT);                        /* JFT pointer: offset */
@@ -121,9 +124,11 @@ static inline VOID DosPspBuildCommandTail(
     if (arguments && arguments[0])
     {
         psp[DOS_PSP_COMMAND_TAIL + length++] = ' ';                         /* conventional leading space */
+
         for (argumentIndex = 0; arguments[argumentIndex] && length < DOS_PSP_COMMAND_TAIL_MAX; ++argumentIndex)
             psp[DOS_PSP_COMMAND_TAIL + length++] = (BYTE)arguments[argumentIndex];
     }
+
     psp[DOS_PSP_COMMAND_TAIL_LENGTH] = (BYTE)length;
     psp[DOS_PSP_COMMAND_TAIL + length] = DOS_PSP_COMMAND_TAIL_END;
 }
@@ -148,9 +153,11 @@ static inline VOID DosPspSaveVectors(
     volatile BYTE *ivt = DosMcbSegmentAddress(base, IVT_BASE_SEGMENT);
     UINT vectorIndex;
     UINT byteIndex;
+
     for (vectorIndex = 0; vectorIndex < DOS_PSP_SAVED_VECTORS; ++vectorIndex)
         for (byteIndex = 0; byteIndex < IVT_ENTRY_SIZE; ++byteIndex)
             psp[copyOffsets[vectorIndex] + byteIndex] = ivt[vectors[vectorIndex] * IVT_ENTRY_SIZE + byteIndex];
+
     DosMcbWriteWord(psp + DOS_PSP_PARENT, parentPsp);          /* the parent's PSP segment */
 }
 
@@ -166,6 +173,7 @@ static inline VOID DosPspRestoreVectors(_In_opt_ volatile BYTE *base, _In_ WORD 
     volatile BYTE *ivt = DosMcbSegmentAddress(base, IVT_BASE_SEGMENT);
     UINT vectorIndex;
     UINT byteIndex;
+
     for (vectorIndex = 0; vectorIndex < DOS_PSP_SAVED_VECTORS; ++vectorIndex)
         for (byteIndex = 0; byteIndex < IVT_ENTRY_SIZE; ++byteIndex)
             ivt[vectors[vectorIndex] * IVT_ENTRY_SIZE + byteIndex] = psp[copyOffsets[vectorIndex] + byteIndex];

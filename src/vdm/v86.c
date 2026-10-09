@@ -173,6 +173,7 @@ LONG VdmSetupMemory(VOID)
 
     for (byteIndex = 0; byteIndex < sizeof(objectAttributes); ++byteIndex)
         attributeBytes[byteIndex] = 0;
+
     objectAttributes.Length = VDM_OBJECT_ATTRIBUTES_SIZE;
     maximumSize.QuadPart = VDM_SECTION_SIZE;
     NtCreateSection(&g_V86Section, VDM_SECTION_ACCESS, &objectAttributes, &maximumSize, PAGE_EXECUTE_READWRITE,
@@ -246,6 +247,7 @@ DWORD VdmMapEmsFrame(VOID)
 
     if (!g_V86Section)
         return VDM_NO_EMS_FRAME;
+
     for (candidateIndex = 0; candidateIndex < sizeof(candidateFrames) / sizeof(candidateFrames[0]); ++candidateIndex)
     {
         MEMORY_BASIC_INFORMATION memoryInfo;
@@ -253,18 +255,23 @@ DWORD VdmMapEmsFrame(VOID)
         PVOID baseAddress;
         SIZE_T viewSize;
         LONG status;
+
         if (!VirtualQuery((LPCVOID)candidateFrames[candidateIndex], &memoryInfo, sizeof(memoryInfo)))
             continue;
+
         if (memoryInfo.State != MEM_FREE || memoryInfo.RegionSize < VDM_SEGMENT_SIZE)
             continue;                                                                            /* need 64KB free */
+
         baseAddress = (PVOID)candidateFrames[candidateIndex];
         viewSize = VDM_SEGMENT_SIZE;
         sectionOffset.QuadPart = candidateFrames[candidateIndex];
         status = NtMapViewOfSection(g_V86Section, VDM_CURRENT_PROCESS, &baseAddress, 0, VDM_SEGMENT_SIZE, &sectionOffset, &viewSize, VDM_VIEW_UNMAP,
                                     VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
+
         if (status >= 0)
             return candidateFrames[candidateIndex];                /* mapped: linear base of the 64KB frame */
     }
+
     return VDM_NO_EMS_FRAME;
 }
 
@@ -306,6 +313,7 @@ VOID VdmIcaRaise(UINT irq)
      */
     *(volatile DWORD *)(ica + ICA_COUNT(line)) = VDM_ICA_SINGLE_DISPATCH;
     ica[ICA_IRR] |= (BYTE)(1u << line);
+
     if (irq >= VDM_ICA_LINES_PER_PIC)
         g_IcaMaster[ICA_IRR] |= VDM_ICA_CASCADE_BIT;                                 /* cascade through IRQ2 */
 }
@@ -315,6 +323,7 @@ VOID VdmIcaEndOfInterrupt(UINT irq)
     BYTE *ica = (irq < VDM_ICA_LINES_PER_PIC) ? g_IcaMaster : g_IcaSlave;
 
     ica[ICA_ISR] &= (BYTE)~(1u << (irq & VDM_ICA_LINE_MASK));
+
     if (irq >= VDM_ICA_LINES_PER_PIC)
         g_IcaMaster[ICA_ISR] &= (BYTE)~VDM_ICA_CASCADE_BIT;
 }
@@ -355,8 +364,10 @@ LONG VdmRegisterWithKernel(VOID)
 
     g_NtVdmControl = (PFN_NtVdmControl)GetProcAddress(
                      GetModuleHandleA(VDM_NTDLL_NAME), VDM_NT_VDM_CONTROL);
+
     if (!g_NtVdmControl)
         return VDM_NO_NT_VDM_CONTROL;
+
     return g_NtVdmControl(VDM_SVC_VdmInitialize, &g_InitializeData);
 }
 
@@ -367,7 +378,9 @@ volatile BYTE *VdmGetTib(VOID)
 
     if (!teb)
         return NULL;
+
     tib = *(BYTE **)(teb + TEB_VDM_TIB);
+
     if (!tib)
     {
         /* ntvdm allocates the VDM_TIB itself, registers TEB[0xF18], then inits it
@@ -386,6 +399,7 @@ volatile BYTE *VdmGetTib(VOID)
         tib[VTIB_FLAG_670] = VTIB_FLAG_670_VALUE;
         *(BYTE **)(teb + TEB_VDM_TIB) = tib;         /* register with our TEB */
     }
+
     return tib;
 }
 
@@ -422,6 +436,7 @@ DWORD VdmRunGuest(volatile BYTE *tib, LONG *status)
 
     if (status)
         *status = controlStatus;
+
     return (DWORD)VDM_REG(tib, VTIB_EVENT);
 }
 
@@ -429,6 +444,7 @@ LONG VdmControl(ULONG service, PVOID serviceData)
 {
     if (!g_NtVdmControl)
         return VDM_NO_NT_VDM_CONTROL;
+
     return g_NtVdmControl(service, serviceData);
 }
 
@@ -464,13 +480,16 @@ LONG VdmRegisterLdtTable(WORD startSelector, const DWORD *entries, INT count)
 
     if (entryDwords > (INT)(sizeof(ldtInformation)/sizeof(ldtInformation[0])) - VDM_LDT_INFO_HEADER_DWORDS)
         return VDM_LDT_TABLE_TOO_LARGE;
+
     /* PROCESS_LDT_INFORMATION { ULONG Start; ULONG Length; LDT_ENTRY Entries[] }.
      * Start = byte offset into the LDT; Length = byte count of the entries.
      */
     ldtInformation[VDM_LDT_INFO_START] = startSelector;
     ldtInformation[VDM_LDT_INFO_LENGTH] = (DWORD)(count * VDM_LDT_BYTES_PER_ENTRY);        /* Length: bytes of descriptor entries */
+
     for (dwordIndex = 0; dwordIndex < entryDwords; ++dwordIndex)
         ldtInformation[VDM_LDT_INFO_HEADER_DWORDS + dwordIndex] = entries[dwordIndex];
+
     serviceData[VDM_LDT_SERVICE_BUFFER] = (DWORD)(ULONG_PTR)ldtInformation;
     /* NtSetInformationProcess(ProcessLdtInformation) wants the TOTAL byte size:
      * FIELD_OFFSET(Entries)=8 + Length. Passing the count gave INFO_LENGTH_MISMATCH
