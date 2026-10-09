@@ -20,16 +20,31 @@ def rdata_at(offset):
     chunk = rdata[offset:end if end >= 0 else offset + 16]
     return '<rdata:' + chunk.hex() + '>'
 
-cur = None; lines = []
+cur = None; lines = []; addrs = []   # addrs[i] = address of lines[i] (None for reloc lines)
 def flush():
-    if cur: open(os.path.join(out, cur), 'w').write('\n'.join(lines) + '\n')
+    if not cur: return
+    # A jump inside the function names its target by offset, so one changed instruction would
+    # shift every later target: name the target by the INDEX of the instruction it lands on.
+    index_of = {a: n for n, a in enumerate(a for a in addrs if a is not None)}
+    base = cur_base
+    def local(m):
+        offset = int(m.group(1), 16)
+        return f'<@{index_of.get(base + offset, "?%x" % offset)}>'
+    pattern = re.compile(r'<' + re.escape(cur_raw) + r'\+0x([0-9a-f]+)>')
+    out = [pattern.sub(local, l) for l in lines]
+    open(os.path.join(out_dir, cur), 'w').write('\n'.join(out) + '\n')
 
+out_dir = out
+cur_raw = cur_base = None
 for raw in sys.stdin:
     s = raw.rstrip()
-    m = re.match(r'^[0-9a-f]+ <(.+)>:$', s.strip())
+    m = re.match(r'^([0-9a-f]+) <(.+)>:$', s.strip())
     if m:
-        flush(); cur = re.sub(r'\.\d+$', '', m.group(1)).replace('/', '_'); lines = []; continue
+        flush(); cur_raw = m.group(2); cur_base = int(m.group(1), 16)
+        cur = re.sub(r'\.\d+$', '', cur_raw).replace('/', '_'); lines = []; addrs = []; continue
     if cur is None: continue
+    am = re.match(r'^\s*([0-9a-f]+):\s*', s)
+    address = int(am.group(1), 16) if am else None
     s = re.sub(r'^\s*[0-9a-f]+:\s*', '', s)
     if not s or s.startswith("Disassembly of section"): continue
     reloc = re.match(r'(dir32|DISP32|secrel32|rva32)\s+(\S+)', s)
@@ -45,8 +60,9 @@ for raw in sys.stdin:
             s = 'reloc .rdata'
         else:
             s = 'reloc ' + re.sub(r'\.\d+\b', '', target)
-        lines.append(s); continue
-    s = re.sub(r'\b[0-9a-f]+ <([^>]+)>', lambda m: '<' + re.sub(r'\.\d+(?=\+|$)', '', m.group(1)) + '>', s)
+        lines.append(s); addrs.append(None); continue
+    # branch targets keep the symbol (and offset) only; the address before it goes
+    s = re.sub(r'\b[0-9a-f]+ <([^>]+)>', lambda m: '<' + m.group(1) + '>', s)
     s = re.sub(r'\.L\w+', '.L', s)
-    lines.append(s)
+    lines.append(s); addrs.append(address)
 flush()

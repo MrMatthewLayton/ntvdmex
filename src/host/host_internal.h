@@ -1331,6 +1331,10 @@ static BYTE *g_WowShadow;
 static DWORD g_WowSyncWrites;
 static DWORD g_PmIrqRmReflects, g_PmIrqRmFail;
 
+/* What a step of a long function tells its caller to do next (#335): carry on, or leave the
+   enclosing loop, start its next pass, or return from the enclosing function. */
+enum { HOST_FLOW_NEXT = 0, HOST_FLOW_BREAK, HOST_FLOW_CONTINUE, HOST_FLOW_RETURN };
+
 /* Functions called from a file other than their own. */
 static VOID OsCompatBind(VOID);
 static BOOL OsCompatAttachConsole(DWORD processId);

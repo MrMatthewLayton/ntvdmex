@@ -34,6 +34,9 @@
 #   IDENTICAL), a one-token code change, a changed string literal and a changed table value
 #   (each must say DIFFERENT, and name the function or section).
 #
+# FNCMP_CFLAGS adds flags to BOTH builds -- e.g. raising GCC's inlining limits, so that a
+# function split into called-once static helpers is inlined back and compares equal.
+#
 # The compile flags are the host's from CMakeLists.txt; keep them in step.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -59,7 +62,7 @@ build() {
     local root="$1" tag="$2"
     "$CC" -DWINVER=0x0501 -D_WIN32_WINNT=0x0501 -O3 -DNDEBUG -std=gnu99 -ffreestanding \
         -Wno-array-bounds -Wno-builtin-macro-redefined -w \
-        -ffunction-sections -fdata-sections -include "$OUT/pin.h" \
+        -ffunction-sections -fdata-sections -include "$OUT/pin.h" ${FNCMP_CFLAGS:-} \
         -I"$root/src/host" -I"$root/src/vdm" -I"$root/src/dos" -I"$root/src/vdd" -I"$root/src/wow" \
         -c "$root/src/host/main.c" -o "$OUT/$tag.obj"
     "${PREFIX}objcopy" -O binary --only-section=.rdata "$OUT/$tag.obj" "$OUT/$tag.rdata.bin"

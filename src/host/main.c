@@ -969,12 +969,378 @@ static HANDLE CsrssOpenSplit(PSTR path, PSTR *argumentsOut)
     }
     return INVALID_HANDLE_VALUE;
 }
+
+/* End of run: where stdout went, and the DOS output -- echoed to the console when nothing live carried it. */
+static PSTR ReportStdoutAndDosOutput(PSTR cursor, DOS_MACHINE *machine)
+{
+    cursor = LogPut(cursor, "STAGE2: stdout -> ");
+    if (g_StdioSource[0]) { cursor = LogPut(cursor, g_StdioSource); cursor = LogPut(cursor, " -> "); }
+    cursor = LogPut(cursor, g_StdioHow);
+    cursor = LogPut(cursor, g_Stdio != INVALID_HANDLE_VALUE ? " [LIVE]" : " [buffered only]");
+    cursor = LogPut(cursor, " ppid=0x"); cursor = LogHex(cursor, g_StdioParentProcessId); cursor = LogPut(cursor, "\r\n");
+    {
+        HANDLE consoleHandle = (g_Stdio == INVALID_HANDLE_VALUE)
+            ? CreateFileA(HOST_DEVICE_CONSOLE_OUTPUT, GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
+                          OPEN_EXISTING, 0, NULL)
+            : INVALID_HANDLE_VALUE;
+        if (machine->OutputLength > 0) {
+            machine->Output[machine->OutputLength] = 0;
+            if (consoleHandle != INVALID_HANDLE_VALUE) { DWORD consoleWritten; WriteFile(consoleHandle, machine->Output, machine->OutputLength, &consoleWritten, NULL); }
+            cursor = LogPut(cursor, "  ==> DOS OUTPUT: ["); cursor = LogPut(cursor, machine->Output);
+            if (machine->IsOutputTruncated) cursor = LogPut(cursor, "\r\n<<<OUTPUT TRUNCATED>>>");
+            cursor = LogPut(cursor, "]\r\n");
+        }
+        if (consoleHandle != INVALID_HANDLE_VALUE) CloseHandle(consoleHandle);
+    }
+    return cursor;
+}
+
+
+/* End of run: what the guest did with VESA -- the framebuffer it wrote, the mode it set, the calls and queries it made, and the modes nobody supports. */
+static PSTR ReportVesa(PSTR cursor, PSTR const base)
+{
+    INT index;
+    INT count;
+    if (g_Video.VramNonZero) {
+        UINT32 pitch = g_Video.VesaStride ? g_Video.VesaStride : 1;
+        cursor = LogPut(cursor, "STAGE2: VESA framebuffer WRITTEN: lo=0x"); cursor = LogHex(cursor, g_Video.VramLow);
+        cursor = LogPut(cursor, " hi=0x"); cursor = LogHex(cursor, g_Video.VramHigh);
+        cursor = LogPut(cursor, " nonzero=0x"); cursor = LogHex(cursor, g_Video.VramNonZero);
+        cursor = LogPut(cursor, "  => row "); cursor = LogHex(cursor, g_Video.VramLow / pitch);
+        cursor = LogPut(cursor, " col "); cursor = LogHex(cursor, (g_Video.VramLow % pitch) / (pitch / (g_Video.VesaWidth ? g_Video.VesaWidth : 1)));
+        cursor = LogPut(cursor, " .. row "); cursor = LogHex(cursor, g_Video.VramHigh / pitch);
+        cursor = LogPut(cursor, "\r\n");
+    }
+    cursor = LogPut(cursor, "STAGE2: VESA mode SET (4F02): ");
+    if (!g_Video.IsVesaSetSeen) cursor = LogPut(cursor, "never called");
+    else { cursor = LogPut(cursor, "BX=0x"); cursor = LogHex(cursor, (DWORD)g_Video.VesaSetBx);
+           cursor = LogPut(cursor, g_Video.IsVesaSetOk ? " ACCEPTED" : " REFUSED");
+           cursor = LogPut(cursor, (g_Video.VesaSetBx & 0x4000) ? " [LFB]" : " [banked]");
+           cursor = LogPut(cursor, " -> "); cursor = LogHex(cursor, (DWORD)g_Video.VesaWidth);
+           cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, (DWORD)g_Video.VesaHeight);
+           cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, (DWORD)g_Video.VesaBpp);
+           cursor = LogPut(cursor, " stride=0x"); cursor = LogHex(cursor, g_Video.VesaStride); }
+    cursor = LogPut(cursor, "\r\n");
+    cursor = LogPut(cursor, "STAGE2: VESA calls by sub-function:");
+    { INT any = 0;
+      for (index = 0; index < 0x16; ++index) if (g_Video.VesaCalls[index]) {
+          UINT barIndex; any = 1;
+          cursor = LogPut(cursor, " 4F"); cursor = LogHexByte(cursor, (UINT)index); cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Video.VesaCalls[index]);
+          if (g_Video.VesaBl[index]) {
+              cursor = LogPut(cursor, "(bl:");
+              for (barIndex = 0; barIndex < 16; ++barIndex) if (g_Video.VesaBl[index] & (1u << barIndex)) { cursor = LogHexByte(cursor, barIndex == 15 ? 0x80u : barIndex); cursor = LogPut(cursor, ","); }
+              cursor = LogPut(cursor, ")");
+          }
+      }
+      if (!any) cursor = LogPut(cursor, " none");
+      if (g_Video.VesaCalls[7]) {
+          cursor = LogPut(cursor, " | 4F07 max start=("); cursor = LogHex(cursor, (DWORD)g_Video.Vesa07MaxX);
+          cursor = LogPut(cursor, ","); cursor = LogHex(cursor, (DWORD)g_Video.Vesa07MaxY);
+          cursor = LogPut(cursor, ") refused="); cursor = LogHex(cursor, g_Video.Vesa07Rejected);
+      }
+      /* #53: the 4F0Ah block's port writes -- a client switching banks without INT 10h
+         shows here and NOT in the 4F05 count above. */
+      if (g_Video.VbePmBankCount | g_Video.VbePmStartCount | g_Video.VbePmRejected) {
+          cursor = LogPut(cursor, " | 4F0A-block banks=0x"); cursor = LogHex(cursor, g_Video.VbePmBankCount);
+          cursor = LogPut(cursor, " starts=0x"); cursor = LogHex(cursor, g_Video.VbePmStartCount);
+          cursor = LogPut(cursor, " refused=0x"); cursor = LogHex(cursor, g_Video.VbePmRejected);
+      }
+      cursor = LogPut(cursor, "\r\n");
+      LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
+    cursor = LogPut(cursor, "STAGE2: VESA mode queries (4F01/4F02):");
+    if (!g_Video.VesaQueryCount) cursor = LogPut(cursor, " none");
+    else for (index = 0; index < g_Video.VesaQueryCount; ++index) {
+        cursor = LogPut(cursor, " 4F"); cursor = LogHexByte(cursor, (UINT)g_Video.VesaQueryFunction[index]);
+        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, (DWORD)g_Video.VesaQueries[index]);
+        cursor = LogPut(cursor, g_Video.VesaQueryOk[index] ? "=OK" : "=UNSUPPORTED");
+    }
+    cursor = LogPut(cursor, "\r\n");
+    cursor = LogPut(cursor, "STAGE2: video modes unsupported:");
+    for (index = 0, count = 0; index < 256; ++index)
+        if (VIDEO_UNIMPLEMENTED_GET(g_Video.UnimplementedModes, index)) { cursor = LogPut(cursor, " 0x"); cursor = LogHexByte(cursor, (UINT)index); ++count; }
+    if (!count) cursor = LogPut(cursor, " none");
+    cursor = LogPut(cursor, "\r\n");
+    return cursor;
+}
+
+
+/* End of run: Mode Y -- the remap's counters, the fan-out bar, GR4 and the latches, the plane snapshots and the write-mode and map-mask histograms. */
+static PSTR ReportModeY(PSTR cursor)
+{
+    INT index;
+    /* ► THE MODE-Y ARRAYS, NOT THE PLANAR ONES. "plane-nonzero" above counts
+         g_Video.plane[] -- the 16-colour planar buffer, which an unchained 256-colour
+         mode never touches -- so it has reported four zeroes for every mode-Y run
+         ever made and told us nothing. These are the arrays a mode-Y frame is
+         actually built from, plus the map-mask values the program really used. */
+    ModeYTimelineReport();   /* NORTH STAR 1's measurement -- see g_ytl_* */
+    cursor = LogPut(cursor, "STAGE2: modeY remap="); cursor = LogHex(cursor, (DWORD)g_ModeYRemap);
+    cursor = LogPut(cursor, " swaps="); cursor = LogHex(cursor, g_ModeYSwaps);
+    cursor = LogPut(cursor, " fanouts="); cursor = LogHex(cursor, g_ModeYFanouts);
+    cursor = LogPut(cursor, " failed="); cursor = LogHex(cursor, g_ModeYFail);
+    /* ► ARE THE PLANES COLLAPSED, OR DOES THE RENDER COLLAPSE THEM? The oracle says
+         62% of the status bar's four-pixel groups hold one value where the reference
+         holds four. That can only come from the four PLANES agreeing, or from the
+         render reading one plane four times. Ask the planes directly, over the bar's
+         own offsets in the page the CRTC is displaying. If they disagree here and the
+         screen shows agreement, the fault is downstream of the planes. */
+    if (g_ModeYRemap) {
+        /* ► PER PAGE, because "we are displaying the wrong buffer" and "the buffer is
+             wrong" look identical from one page. Doom triple-buffers at 0, 0x4000 and
+             0x8000; if one page's bar is intact and the one the CRTC points at is not,
+             the fault is in following the page flip, not in the writes. */
+        UINT32 page;
+        cursor = LogPut(cursor, " bar_planes_equal_per_page:");
+        for (page = 0; page < 3; ++page) {
+            UINT32 position, equalCount = 0, total = 0, base = page * 0x4000u;
+            for (position = base + 168u * 80u; position < base + 200u * 80u; ++position) {
+                UINT32 windowOffset = position & (MODEY_WIN - 1u);
+                BYTE plane0Byte = ((BYTE *)g_ModeYView[0])[windowOffset], plane1Byte = ((BYTE *)g_ModeYView[1])[windowOffset];
+                BYTE plane2Byte = ((BYTE *)g_ModeYView[2])[windowOffset], plane3Byte = ((BYTE *)g_ModeYView[3])[windowOffset];
+                ++total; if (plane0Byte == plane1Byte && plane1Byte == plane2Byte && plane2Byte == plane3Byte) ++equalCount;
+            }
+            cursor = LogPut(cursor, " p"); cursor = LogHexByte(cursor, page); cursor = LogPut(cursor, "=");
+            cursor = LogHex(cursor, equalCount); cursor = LogPut(cursor, "/"); cursor = LogHex(cursor, total);
+        }
+    }
+    /* ► THE FAN-OUT'S OWN CONTRIBUTION TO THE COLLAPSE, by row band. Compare
+         `distinct` against bar_planes_equal above: near it means this path IS the
+         four-way collapse; near zero exonerates it properly. Band A is rows 168-183,
+         which no write-mode-1 burst ever reaches and which session 23 measured as the
+         WORSE half; band B is 184-199, where every burst lands. */
+    cursor = LogPut(cursor, " fanout_bar[A=rows168-183,B=184-199]: writes=");
+    cursor = LogHex(cursor, g_ModeYFanoutBarWrites[0]); cursor = LogPut(cursor, "/"); cursor = LogHex(cursor, g_ModeYFanoutBarWrites[1]);
+    cursor = LogPut(cursor, " distinct=");
+    cursor = LogHex(cursor, g_ModeYFanoutBarDistinct[0]); cursor = LogPut(cursor, "/"); cursor = LogHex(cursor, g_ModeYFanoutBarDistinct[1]);
+    cursor = LogPut(cursor, " of "); cursor = LogHex(cursor, YBAR_OFF_MID - YBAR_OFF_LO);
+    cursor = LogPut(cursor, "/");    cursor = LogHex(cursor, YBAR_OFF_HI - YBAR_OFF_MID);
+    cursor = LogPut(cursor, " per page, 4way=");
+    cursor = LogHex(cursor, g_ModeYFanoutBar4Way[0]); cursor = LogPut(cursor, "/"); cursor = LogHex(cursor, g_ModeYFanoutBar4Way[1]);
+    /* ► DOES THE GUEST WRITE THE SAME BYTES TO DIFFERENT PLANES? See ModeYSampleCheck().
+         Read `eqb` (PER-BYTE agreement), not `cross_same` (per-window, kept only so
+         the old number stays comparable and visibly useless). Compare eqb against the
+         two figures printed above and by bandprof.py:
+           ~67%  matches bar_planes_equal  => the planes are RECEIVING collapsed data
+                                              and the fault is upstream of them
+           ~12%  matches an intact bar     => they receive distinct data and something
+                                              downstream collapses it
+         p1eq is the same rate against PLANE 1's last window specifically, per plane,
+         because the hypothesis names plane 1. p1eq[1] is the self-baseline: how much
+         plane 1 agrees with its own previous content, i.e. how much of this window is
+         static anyway. A p1eq[0/2/3] near p1eq[1] is the collapse; well below it is
+         not. All rates are percent, printed in hex. */
+    { INT band; for (band = 0; band < 2; ++band) {
+        INT probeIndex2;
+        cursor = LogPut(cursor, band ? " ysmpB[184-199]:" : " ysmpA[168-183]:");
+        cursor = LogPut(cursor, " writes="); cursor = LogHex(cursor, g_ModeYSampleWrites[band]);
+        cursor = LogPut(cursor, " cross_same="); cursor = LogHex(cursor, g_ModeYSampleCrossSame[band]);
+        cursor = LogPut(cursor, " cross_diff="); cursor = LogHex(cursor, g_ModeYSampleCrossDiff[band]);
+        cursor = LogPut(cursor, " cross_eqb=");
+        cursor = LogHex(cursor, g_ModeYSampleCrossEqualBytes[band]); cursor = LogPut(cursor, "/");
+        cursor = LogHex(cursor, g_ModeYSampleCrossTotalBytes[band]);
+        if (g_ModeYSampleCrossTotalBytes[band]) {
+            cursor = LogPut(cursor, "(");
+            cursor = LogHex(cursor, g_ModeYSampleCrossEqualBytes[band] * 100u / g_ModeYSampleCrossTotalBytes[band]);
+            cursor = LogPut(cursor, "% STATE-not-delivery)");
+        }
+        /* ► THE DELIVERY RATE -- CHANGED BYTES ONLY. This is the one to read:
+             high => the guest handed the same byte to two different planes. */
+        cursor = LogPut(cursor, " delivered_eq=");
+        cursor = LogHex(cursor, g_ModeYSampleDeliveredEqual[band]); cursor = LogPut(cursor, "/");
+        cursor = LogHex(cursor, g_ModeYSampleDeliveredTotal[band]);
+        if (g_ModeYSampleDeliveredTotal[band]) {
+            cursor = LogPut(cursor, "(");
+            cursor = LogHex(cursor, g_ModeYSampleDeliveredEqual[band] * 100u / g_ModeYSampleDeliveredTotal[band]);
+            cursor = LogPut(cursor, "%)");
+        }
+        cursor = LogPut(cursor, " p1eq=");
+        for (probeIndex2 = 0; probeIndex2 < 4; ++probeIndex2) {
+            cursor = LogPut(cursor, probeIndex2 ? "/" : "");
+            if (g_ModeYSampleP1Total[band][probeIndex2])
+                cursor = LogHex(cursor, g_ModeYSampleP1Equal[band][probeIndex2] * 100u / g_ModeYSampleP1Total[band][probeIndex2]);
+            else cursor = LogPut(cursor, "-");
+        }
+        cursor = LogPut(cursor, "% n=");
+        for (probeIndex2 = 0; probeIndex2 < 4; ++probeIndex2) {
+            cursor = LogPut(cursor, probeIndex2 ? "/" : "");
+            cursor = LogHex(cursor, g_ModeYSampleP1Total[band][probeIndex2] / YSMP_LEN);
+        } } }
+    /* ► THE MAP-MASK IDENTITY. See g_ModeYSelectorCalls. Both lines must balance exactly;
+         a residual is a path nobody has accounted for. */
+    { DWORD maskWrites = 0, residual;
+      for (index = 0; index < 16; ++index) maskWrites += g_Video.MaskHistogram[index];
+      /* ⚠ `skip_same` LEFT THIS IDENTITY WHEN THE GR4 FIX LANDED. A map-mask write
+           whose value is unchanged now still calls select -- it has to, because a read
+           may have moved the window since -- so it is no longer a bucket that
+           ACCOUNTS for a write, just a note about how many writes were redundant.
+           Leaving it in the sum printed a **UNACCOUNTED** residual of exactly
+           -skip_same, which is a counter describing the code as it used to be. */
+      cursor = LogPut(cursor, " maskacct: writes="); cursor = LogHex(cursor, maskWrites);
+      cursor = LogPut(cursor, " = sel_calls="); cursor = LogHex(cursor, g_ModeYSelectorCalls);
+      cursor = LogPut(cursor, " - c4sel="); cursor = LogHex(cursor, g_Video.Chain4Selects);
+      cursor = LogPut(cursor, " c4xfer="); cursor = LogHex(cursor, g_Video.Chain4Transfers);
+      cursor = LogPut(cursor, " + skip_chain4="); cursor = LogHex(cursor, g_Video.MaskSkipChain4);
+      cursor = LogPut(cursor, " [redundant_same="); cursor = LogHex(cursor, g_Video.MaskSkipSame);
+      cursor = LogPut(cursor, ", informational]");
+      residual = maskWrites - (g_ModeYSelectorCalls - g_Video.Chain4Selects) - g_Video.MaskSkipChain4;
+      cursor = LogPut(cursor, " residual="); cursor = LogHex(cursor, residual);
+      cursor = LogPut(cursor, residual ? " **UNACCOUNTED**" : " (balanced)");
+      cursor = LogPut(cursor, " | sel_calls = swaps="); cursor = LogHex(cursor, g_ModeYSwaps);
+      cursor = LogPut(cursor, " + sel_same="); cursor = LogHex(cursor, g_ModeYSelectorSame);
+      cursor = LogPut(cursor, " + sel_zero="); cursor = LogHex(cursor, g_ModeYSelectorZero);
+      cursor = LogPut(cursor, " + failed="); cursor = LogHex(cursor, g_ModeYFail);
+      residual = g_ModeYSelectorCalls - g_ModeYSwaps - g_ModeYSelectorSame - g_ModeYSelectorZero - g_ModeYFail;
+      cursor = LogPut(cursor, " residual="); cursor = LogHex(cursor, residual);
+      cursor = LogPut(cursor, residual ? " **UNACCOUNTED**" : " (balanced)"); }
+    /* ► THE READ PLANE. See ModeYRemapReadMap(). `mismatch` counts GR4 writes that
+         named a plane other than the one mapped at A0000 -- every guest read between
+         such a write and the next mask change returns the WRONG PLANE'S BYTES, and no
+         write-side instrument can see it. `pair` is the (GR4, mapped) matrix, so a
+         mismatch can be attributed rather than just counted: a column concentrated on
+         one mapped plane means the guest cycled GR4 while the window sat still, which
+         is exactly the I_ReadScreen shape. Section 4 is linear, 5 is the scratch. */
+    cursor = LogPut(cursor, " gr4: writes="); cursor = LogHex(cursor, g_ModeYGr4Calls);
+    cursor = LogPut(cursor, " mismatch="); cursor = LogHex(cursor, g_ModeYGr4Mismatch);
+    cursor = LogPut(cursor, " WINDOW_MOVES="); cursor = LogHex(cursor, g_ModeYGr4Moves);
+    cursor = LogPut(cursor, " hist=");
+    for (index = 0; index < 4; ++index) { cursor = LogPut(cursor, index ? "/" : ""); cursor = LogHex(cursor, g_Video.Gr4Histogram[index]); }
+    cursor = LogPut(cursor, " pair[gr4->mapped]:");
+    { UINT pairA, pairB;
+      for (pairA = 0; pairA < 4; ++pairA)
+        for (pairB = 0; pairB < 6; ++pairB)
+          if (g_ModeYGr4Pair[pairA][pairB]) {
+              cursor = LogPut(cursor, " r"); cursor = LogHexByte(cursor, pairA);
+              cursor = LogPut(cursor, "->m"); cursor = LogHexByte(cursor, pairB);
+              cursor = LogPut(cursor, "="); cursor = LogHex(cursor, g_ModeYGr4Pair[pairA][pairB]); } }
+    /* ► THE ONE THAT DECIDES IT. GR4 writes between consecutive mask changes:
+         1 = the ordinary blit (window moves before any read -- harmless)
+         4 = a PURE READ PASS with the window stranded (the collapse)          */
+    cursor = LogPut(cursor, " gr4_runs[n GR4 per select]:");
+    { UINT row2; for (row2 = 1; row2 < 10; ++row2)
+        if (g_ModeYGr4Runs[row2]) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, row2);
+                               cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_ModeYGr4Runs[row2]); } }
+    cursor = LogPut(cursor, " stranded_on_plane=");
+    for (index = 0; index < 4; ++index) { cursor = LogPut(cursor, index ? "/" : ""); cursor = LogHex(cursor, g_ModeYGr4RunPlanes[index]); }
+    /* ► IS THE LINEAR SECTION EVEN OCCUPIED? One number, ahead of the dump: how many
+         of the bar region's 10240 linear bytes are non-zero. Zero means nothing was
+         ever written to A0000 while the window pointed at the linear section, and the
+         candidate dies here without parsing anything. */
+    { UINT32 offset2, nonZero = 0; const BYTE *latchView = (const BYTE *)g_ModeYView[4];
+      for (offset2 = 168u * 320u; offset2 < 200u * 320u; ++offset2)
+          if (latchView[offset2 & (MODEY_WIN - 1u)]) ++nonZero;
+      cursor = LogPut(cursor, " linear_bar_nonzero="); cursor = LogHex(cursor, nonZero);
+      cursor = LogPut(cursor, "/"); cursor = LogHex(cursor, 32u * 320u); }
+    cursor = LogPut(cursor, " latch_solved="); cursor = LogHex(cursor, g_ModeYLatchOk);
+    cursor = LogPut(cursor, " latch_UNSOLVED="); cursor = LogHex(cursor, g_ModeYLatchUnsolved);
+    cursor = LogPut(cursor, " gap="); cursor = LogHex(cursor, g_Video.ModeYGap);
+    cursor = LogPut(cursor, " attributed="); cursor = LogHex(cursor, g_Video.YNonZero[0]);
+    cursor = LogPut(cursor, " crtc_seen="); cursor = LogHexByte(cursor, g_Video.IsCrtcSeen);
+    cursor = LogPut(cursor, " crtc_start=0x"); cursor = LogHex(cursor, g_Video.CrtcStart);
+    cursor = LogPut(cursor, "\r\n");
+    cursor = LogPut(cursor, "STAGE2: modeY snaps:");
+    for (index = 0; index < 4; ++index) {
+        cursor = LogPut(cursor, " p"); cursor = LogHexByte(cursor, (UINT)index);
+        cursor = LogPut(cursor, "="); cursor = LogHex(cursor, g_Video.YSnapshots[index]);
+        cursor = LogPut(cursor, "/nz="); cursor = LogHex(cursor, g_Video.YNonZero[index]);
+    }
+    cursor = LogPut(cursor, " wmode hist:");
+    for (index = 0; index < 4; ++index) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, (UINT)index);
+                              cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Video.WriteModeHistogram[index]); }
+    cursor = LogPut(cursor, "\r\nSTAGE2: modeY (wmode,mask) pairs:");
+    { UINT writeMode, mask;
+      for (writeMode = 0; writeMode < 4; ++writeMode)
+        for (mask = 0; mask < 16; ++mask)
+          if (g_Video.ModeMaskHistogram[writeMode * 16 + mask]) {
+              cursor = LogPut(cursor, " w"); cursor = LogHexByte(cursor, writeMode);
+              cursor = LogPut(cursor, "/m"); cursor = LogHexByte(cursor, mask);
+              cursor = LogPut(cursor, "="); cursor = LogHex(cursor, g_Video.ModeMaskHistogram[writeMode * 16 + mask]); } }
+    cursor = LogPut(cursor, "\r\nSTAGE2: modeY mapmask hist:");
+    for (index = 0; index < 16; ++index)
+        if (g_Video.MaskHistogram[index]) { cursor = LogPut(cursor, " 0x"); cursor = LogHexByte(cursor, (UINT)index);
+                                  cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Video.MaskHistogram[index]); }
+    cursor = LogPut(cursor, "\r\n");
+    return cursor;
+}
+
+
+/* End of run: every video mode the guest set or asked about. */
+static PSTR ReportModeSets(PSTR cursor)
+{
+    INT index;
+    cursor = LogPut(cursor, "STAGE2: mode sets:");
+    for (index = 0; index < g_Video.ModeQueryCount; ++index) {
+        cursor = LogPut(cursor, " mode=0x"); cursor = LogHexByte(cursor, g_Video.ModeQueries[index].Mode);
+        cursor = LogPut(cursor, "/kind="); cursor = LogHexByte(cursor, g_Video.ModeQueries[index].Kind);
+        cursor = LogPut(cursor, "/"); cursor = LogHex(cursor, g_Video.ModeQueries[index].Width);
+        cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Video.ModeQueries[index].Height);
+    }
+    if (!g_Video.ModeQueryCount) cursor = LogPut(cursor, " none");
+    cursor = LogPut(cursor, "\r\n");
+    return cursor;
+}
+
+
+/* End of run: the V86 interpreter's to-do list -- every non-BOP site it declined, with the bytes there. */
+static PSTR ReportInterpreterBailSites(PSTR cursor, PSTR const base, PCSTR const reportEnd)
+{
+    /* The interpreter's to-do list: every non-BOP site it declined, with the bytes. */
+    { UINT index4;
+      LogAppend(LOG_PATH, base, cursor); cursor = base;      /* flush: the table may be long */
+      cursor = LogPut(cursor, "STAGE2: P12 non-BOP bail sites="); cursor = LogDecimal(cursor, g_P12SiteCount);
+      cursor = LogPut(cursor, " lost="); cursor = LogDecimal(cursor, g_P12SiteLost); cursor = LogPut(cursor, "\r\n");
+      for (index4 = 0; index4 < g_P12SiteCount; ++index4) {
+          UINT index5;
+          cursor = LogPut(cursor, "  bail cs:ip="); cursor = LogHex(cursor, g_P12Site[index4].Cs);
+          cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, g_P12Site[index4].Ip);
+          cursor = LogPut(cursor, " n="); cursor = LogDecimal(cursor, g_P12Site[index4].Count); cursor = LogPut(cursor, " bytes:");
+          for (index5 = 0; index5 < 8; ++index5) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, g_P12Site[index4].Bytes[index5]); }
+          cursor = LogPut(cursor, "\r\n");
+          if (cursor > reportEnd - 256) { LogAppend(LOG_PATH, base, cursor); cursor = base; }
+      } }
+    LogAppend(LOG_PATH, base, cursor); cursor = base;
+    return cursor;
+}
+
+
+/* End of run: the guest as it was left -- the timer and tick vectors, the bytes at CS:IP, and the async-injection and interpreter counters. */
+static PSTR ReportGuestStateAtExit(PSTR cursor, PSTR const base, volatile BYTE * const tib)
+{
+    /* ⚠ FLUSH FIRST. The rsite/crtc/video-now block above can fill the 8 KB report
+         on its own, and LogAppend writes [buf,end) UNCLAMPED: the ivt08 line was
+         cut at `bail=000`, the next two blocks vanished, and the overrun went onto
+         the stack. (s68 -- the third truncation of this report in two sessions.) */
+    LogAppend(LOG_PATH, base, cursor); cursor = base;
+    { const volatile BYTE *zeroPage = (const volatile BYTE *)0;
+      DWORD cs2 = VDM_REG16(tib, VTIB_CS), ip2 = VDM_REG16(tib, VTIB_EIP);
+      const volatile BYTE *codeView = (const volatile BYTE *)((cs2 << PARAGRAPH_SHIFT) + ip2);
+      UINT index3;
+      cursor = LogPut(cursor, "STAGE2: ivt08="); cursor = LogHex(cursor, (DWORD)zeroPage[0x22] | ((DWORD)zeroPage[0x23] << BYTE_SHIFT));
+      cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, (DWORD)zeroPage[0x20] | ((DWORD)zeroPage[0x21] << BYTE_SHIFT));
+      cursor = LogPut(cursor, " ivt1C="); cursor = LogHex(cursor, (DWORD)zeroPage[0x72] | ((DWORD)zeroPage[0x73] << BYTE_SHIFT));
+      cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, (DWORD)zeroPage[0x70] | ((DWORD)zeroPage[0x71] << BYTE_SHIFT));
+      cursor = LogPut(cursor, " at-cs:ip=");
+      for (index3 = 0; index3 < 8; ++index3) { cursor = LogHexByte(cursor, codeView[index3]); cursor = LogPut(cursor, " "); }
+      cursor = LogPut(cursor, " asyncinj="); cursor = LogHex(cursor, g_AsyncInjected);
+      cursor = LogPut(cursor, " interp-refused="); cursor = LogHex(cursor, g_InterpRefused);
+      cursor = LogPut(cursor, " p12-batches="); cursor = LogHex(cursor, g_P12Batches);
+      cursor = LogPut(cursor, " p12-instrs=");  cursor = LogHex(cursor, g_P12Instructions);
+      cursor = LogPut(cursor, " p12-bails=");   cursor = LogHex(cursor, g_P12Bails);
+      cursor = LogPut(cursor, " bail="); cursor = LogHex(cursor, g_AsyncBail);
+      cursor = LogPut(cursor, " nestblk="); cursor = LogHex(cursor, g_AsyncNestBlocked);
+      cursor = LogPut(cursor, " asyncsites="); cursor = LogHex(cursor, (DWORD)g_AsyncSiteCount);
+      cursor = LogPut(cursor, (g_AsyncSiteFull ? "(FULL)" : ""));
+      cursor = LogPut(cursor, " pmstretch_max_us="); cursor = LogHex(cursor, g_PmStretchMaximumMicroseconds);
+      cursor = LogPut(cursor, "\r\n"); }
+    return cursor;
+}
+
 enum { INSTALL_EXIT_OK = 0, INSTALL_EXIT_FAILED = 1, INSTALL_STATUS_EXIT_OURS = 0, INSTALL_STATUS_EXIT_NONE = 1, INSTALL_STATUS_EXIT_OTHER = 2 };   /* the install verbs' exit codes */
 enum { PENDING_INT_RETRIES_MAX = 0x10000 };   /* event 3 ("interrupt pending, not entered"): retries before giving up */
 enum { EXEC_HANDLED_RUN_OVER = 2, EXEC_HANDLED_CHILD_EXITED = 3 };   /* WinMain's DosTerminate outcomes: the run ends, or a child returned to its parent */
 INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR commandLineText, INT showCommand)
 {
     CHAR report[8192]; PSTR cursor = report; PSTR base;
+    PCSTR const reportEnd = report + sizeof report;   /* the guards below keep a line's worth short of it */
     INT wowCommandFromCsrss = 0;         /* s73: the Win16 program came from CSRSS, not target.txt */
     INT wantShell = 0;                 /* s79: our own launcher stub asked for a SHELL (see LAUNCH_STUB_NAME) */
     INT wasShell  = 0;                 /* s79: we actually loaded a shell, not a named program */
@@ -7557,25 +7923,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     PcSpeakerClose(&g_PcSpeaker);               /* ⚠ a headless run never sees WM_DESTROY,
                                             and Beep.sys outlives the process */
     RecoveryOk();                       /* GH #132: this run ended cleanly */
-    cursor = LogPut(cursor, "STAGE2: stdout -> ");
-    if (g_StdioSource[0]) { cursor = LogPut(cursor, g_StdioSource); cursor = LogPut(cursor, " -> "); }
-    cursor = LogPut(cursor, g_StdioHow);
-    cursor = LogPut(cursor, g_Stdio != INVALID_HANDLE_VALUE ? " [LIVE]" : " [buffered only]");
-    cursor = LogPut(cursor, " ppid=0x"); cursor = LogHex(cursor, g_StdioParentProcessId); cursor = LogPut(cursor, "\r\n");
-    {
-        HANDLE consoleHandle = (g_Stdio == INVALID_HANDLE_VALUE)
-            ? CreateFileA(HOST_DEVICE_CONSOLE_OUTPUT, GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
-                          OPEN_EXISTING, 0, NULL)
-            : INVALID_HANDLE_VALUE;
-        if (machine.OutputLength > 0) {
-            machine.Output[machine.OutputLength] = 0;
-            if (consoleHandle != INVALID_HANDLE_VALUE) { DWORD consoleWritten; WriteFile(consoleHandle, machine.Output, machine.OutputLength, &consoleWritten, NULL); }
-            cursor = LogPut(cursor, "  ==> DOS OUTPUT: ["); cursor = LogPut(cursor, machine.Output);
-            if (machine.IsOutputTruncated) cursor = LogPut(cursor, "\r\n<<<OUTPUT TRUNCATED>>>");
-            cursor = LogPut(cursor, "]\r\n");
-        }
-        if (consoleHandle != INVALID_HANDLE_VALUE) CloseHandle(consoleHandle);
-    }
+    cursor = ReportStdoutAndDosOutput(cursor, &machine);
     /* Exec-loop accounting: how much of the run went on port-I/O round trips, how
        much the burst fast path absorbed, and whether timer IRQs actually landed. */
     /* The count the rate-limit above hides. An absence here means no guest issued one;
@@ -8365,7 +8713,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 /* `base` points PAST the preamble, not at report[0], so bound against
                    the array itself -- p - base would let this overrun by the preamble's
                    length. */
-                if (cursor > report + sizeof report - 512) {
+                if (cursor > reportEnd - 512) {
                     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                 }
             }
@@ -8550,7 +8898,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 cursor = LogPut(cursor, " after=");
                 for (item = 0; item < 4; ++item) cursor = LogHexByte(cursor, watch->After[item]);
                 cursor = LogPut(cursor, "\r\n");
-                if (cursor > report + sizeof report - 256) break;
+                if (cursor > reportEnd - 256) break;
             }
         }
         /* ► Does this guest use OFF-SCREEN VRAM? Above 38400 used to read back as
@@ -8585,7 +8933,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     cursor = LogPut(cursor, "..0x");    cursor = LogHex(cursor, videoSite->High);
                     cursor = LogPut(cursor, "\r\n");
                 }
-                if (cursor > report + sizeof report - 256) break;
+                if (cursor > reportEnd - 256) break;
             }         }
         /* ► THE OFF-SCREEN SPRITE CACHE, WITHOUT THE COLLISION CAVEAT. The report
              above is drawn from 256-slot hashes that lost 249,630 reads on the run
@@ -8622,7 +8970,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                     cursor = LogPut(cursor, " first=");  cursor = LogDecimal(cursor, cacheSite->First);
                     cursor = LogPut(cursor, " last=");   cursor = LogDecimal(cursor, cacheSite->Last);
                     cursor = LogPut(cursor, "\r\n");
-                    if (cursor > report + sizeof report - 512) break;
+                    if (cursor > reportEnd - 512) break;
                 }
                 /* ► THE LIST MUST ACCOUNT FOR EVERY ACCESS IT COUNTED. n's + lost has
                      to equal seq; if it does not, lines are MISSING and the absence of
@@ -8646,7 +8994,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 cursor = LogPut(cursor, "..0x");    cursor = LogHex(cursor, g_Video.WriteSites[best].High);
                 cursor = LogPut(cursor, "\r\n");
                 g_Video.WriteSites[best].Count = 0;            /* report is the last use of it */
-                if (cursor > report + sizeof report - 512) break;
+                if (cursor > reportEnd - 512) break;
             }
             /* ► THE COLOUR-COMPARE READ SITES: a guest asking "where is the ground". */
         { LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
@@ -8666,7 +9014,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 cursor = LogPut(cursor, " ones="); cursor = LogDecimal(cursor, g_Video.CompareSitesOnes[best]);
                 cursor = LogPut(cursor, "\r\n");
                 g_Video.CompareSites[best].Count = 0;
-                if (cursor > report + sizeof report - 512) break;
+                if (cursor > reportEnd - 512) break;
             }
             /* ► HOW MANY SITES THIS TOP-N LEFT OUT. Without it a truncated list
                  reads as a complete enumeration of who touches VRAM, and "pc X is not
@@ -8690,7 +9038,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                 cursor = LogPut(cursor, "..0x");    cursor = LogHex(cursor, g_Video.ReadSites[best].High);
                 cursor = LogPut(cursor, "\r\n");
                 g_Video.ReadSites[best].Count = 0;
-                if (cursor > report + sizeof report - 512) break;
+                if (cursor > reportEnd - 512) break;
             }
             /* ► HOW MANY SITES THIS TOP-N LEFT OUT. Without it a truncated list
                  reads as a complete enumeration of who touches VRAM, and "pc X is not
@@ -8754,306 +9102,12 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         cursor = LogPut(cursor, " plane-nonzero=");
         for (plane = 0; plane < VIDEO_PLANES; ++plane) { cursor = LogHex(cursor, nonZero[plane]); cursor = LogPut(cursor, plane<VIDEO_PLANES - 1?"/":""); }
         cursor = LogPut(cursor, "\r\n"); }
-      /* ⚠ FLUSH FIRST. The rsite/crtc/video-now block above can fill the 8 KB report
-           on its own, and LogAppend writes [buf,end) UNCLAMPED: the ivt08 line was
-           cut at `bail=000`, the next two blocks vanished, and the overrun went onto
-           the stack. (s68 -- the third truncation of this report in two sessions.) */
-      LogAppend(LOG_PATH, base, cursor); cursor = base;
-      { const volatile BYTE *zeroPage = (const volatile BYTE *)0;
-        DWORD cs2 = VDM_REG16(tib, VTIB_CS), ip2 = VDM_REG16(tib, VTIB_EIP);
-        const volatile BYTE *codeView = (const volatile BYTE *)((cs2 << PARAGRAPH_SHIFT) + ip2);
-        UINT index3;
-        cursor = LogPut(cursor, "STAGE2: ivt08="); cursor = LogHex(cursor, (DWORD)zeroPage[0x22] | ((DWORD)zeroPage[0x23] << BYTE_SHIFT));
-        cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, (DWORD)zeroPage[0x20] | ((DWORD)zeroPage[0x21] << BYTE_SHIFT));
-        cursor = LogPut(cursor, " ivt1C="); cursor = LogHex(cursor, (DWORD)zeroPage[0x72] | ((DWORD)zeroPage[0x73] << BYTE_SHIFT));
-        cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, (DWORD)zeroPage[0x70] | ((DWORD)zeroPage[0x71] << BYTE_SHIFT));
-        cursor = LogPut(cursor, " at-cs:ip=");
-        for (index3 = 0; index3 < 8; ++index3) { cursor = LogHexByte(cursor, codeView[index3]); cursor = LogPut(cursor, " "); }
-        cursor = LogPut(cursor, " asyncinj="); cursor = LogHex(cursor, g_AsyncInjected);
-        cursor = LogPut(cursor, " interp-refused="); cursor = LogHex(cursor, g_InterpRefused);
-        cursor = LogPut(cursor, " p12-batches="); cursor = LogHex(cursor, g_P12Batches);
-        cursor = LogPut(cursor, " p12-instrs=");  cursor = LogHex(cursor, g_P12Instructions);
-        cursor = LogPut(cursor, " p12-bails=");   cursor = LogHex(cursor, g_P12Bails);
-        cursor = LogPut(cursor, " bail="); cursor = LogHex(cursor, g_AsyncBail);
-        cursor = LogPut(cursor, " nestblk="); cursor = LogHex(cursor, g_AsyncNestBlocked);
-        cursor = LogPut(cursor, " asyncsites="); cursor = LogHex(cursor, (DWORD)g_AsyncSiteCount);
-        cursor = LogPut(cursor, (g_AsyncSiteFull ? "(FULL)" : ""));
-        cursor = LogPut(cursor, " pmstretch_max_us="); cursor = LogHex(cursor, g_PmStretchMaximumMicroseconds);
-        cursor = LogPut(cursor, "\r\n"); }
-      /* The interpreter's to-do list: every non-BOP site it declined, with the bytes. */
-      { UINT index4;
-        LogAppend(LOG_PATH, base, cursor); cursor = base;      /* flush: the table may be long */
-        cursor = LogPut(cursor, "STAGE2: P12 non-BOP bail sites="); cursor = LogDecimal(cursor, g_P12SiteCount);
-        cursor = LogPut(cursor, " lost="); cursor = LogDecimal(cursor, g_P12SiteLost); cursor = LogPut(cursor, "\r\n");
-        for (index4 = 0; index4 < g_P12SiteCount; ++index4) {
-            UINT index5;
-            cursor = LogPut(cursor, "  bail cs:ip="); cursor = LogHex(cursor, g_P12Site[index4].Cs);
-            cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, g_P12Site[index4].Ip);
-            cursor = LogPut(cursor, " n="); cursor = LogDecimal(cursor, g_P12Site[index4].Count); cursor = LogPut(cursor, " bytes:");
-            for (index5 = 0; index5 < 8; ++index5) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, g_P12Site[index4].Bytes[index5]); }
-            cursor = LogPut(cursor, "\r\n");
-            if (cursor > report + sizeof report - 256) { LogAppend(LOG_PATH, base, cursor); cursor = base; }
-        } }
-      LogAppend(LOG_PATH, base, cursor); cursor = base;
-      cursor = LogPut(cursor, "STAGE2: mode sets:");
-      for (index = 0; index < g_Video.ModeQueryCount; ++index) {
-          cursor = LogPut(cursor, " mode=0x"); cursor = LogHexByte(cursor, g_Video.ModeQueries[index].Mode);
-          cursor = LogPut(cursor, "/kind="); cursor = LogHexByte(cursor, g_Video.ModeQueries[index].Kind);
-          cursor = LogPut(cursor, "/"); cursor = LogHex(cursor, g_Video.ModeQueries[index].Width);
-          cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Video.ModeQueries[index].Height);
-      }
-      if (!g_Video.ModeQueryCount) cursor = LogPut(cursor, " none");
-      cursor = LogPut(cursor, "\r\n");
-      /* ► THE MODE-Y ARRAYS, NOT THE PLANAR ONES. "plane-nonzero" above counts
-           g_Video.plane[] -- the 16-colour planar buffer, which an unchained 256-colour
-           mode never touches -- so it has reported four zeroes for every mode-Y run
-           ever made and told us nothing. These are the arrays a mode-Y frame is
-           actually built from, plus the map-mask values the program really used. */
-      ModeYTimelineReport();   /* NORTH STAR 1's measurement -- see g_ytl_* */
-      cursor = LogPut(cursor, "STAGE2: modeY remap="); cursor = LogHex(cursor, (DWORD)g_ModeYRemap);
-      cursor = LogPut(cursor, " swaps="); cursor = LogHex(cursor, g_ModeYSwaps);
-      cursor = LogPut(cursor, " fanouts="); cursor = LogHex(cursor, g_ModeYFanouts);
-      cursor = LogPut(cursor, " failed="); cursor = LogHex(cursor, g_ModeYFail);
-      /* ► ARE THE PLANES COLLAPSED, OR DOES THE RENDER COLLAPSE THEM? The oracle says
-           62% of the status bar's four-pixel groups hold one value where the reference
-           holds four. That can only come from the four PLANES agreeing, or from the
-           render reading one plane four times. Ask the planes directly, over the bar's
-           own offsets in the page the CRTC is displaying. If they disagree here and the
-           screen shows agreement, the fault is downstream of the planes. */
-      if (g_ModeYRemap) {
-          /* ► PER PAGE, because "we are displaying the wrong buffer" and "the buffer is
-               wrong" look identical from one page. Doom triple-buffers at 0, 0x4000 and
-               0x8000; if one page's bar is intact and the one the CRTC points at is not,
-               the fault is in following the page flip, not in the writes. */
-          UINT32 page;
-          cursor = LogPut(cursor, " bar_planes_equal_per_page:");
-          for (page = 0; page < 3; ++page) {
-              UINT32 position, equalCount = 0, total = 0, base = page * 0x4000u;
-              for (position = base + 168u * 80u; position < base + 200u * 80u; ++position) {
-                  UINT32 windowOffset = position & (MODEY_WIN - 1u);
-                  BYTE plane0Byte = ((BYTE *)g_ModeYView[0])[windowOffset], plane1Byte = ((BYTE *)g_ModeYView[1])[windowOffset];
-                  BYTE plane2Byte = ((BYTE *)g_ModeYView[2])[windowOffset], plane3Byte = ((BYTE *)g_ModeYView[3])[windowOffset];
-                  ++total; if (plane0Byte == plane1Byte && plane1Byte == plane2Byte && plane2Byte == plane3Byte) ++equalCount;
-              }
-              cursor = LogPut(cursor, " p"); cursor = LogHexByte(cursor, page); cursor = LogPut(cursor, "=");
-              cursor = LogHex(cursor, equalCount); cursor = LogPut(cursor, "/"); cursor = LogHex(cursor, total);
-          }
-      }
-      /* ► THE FAN-OUT'S OWN CONTRIBUTION TO THE COLLAPSE, by row band. Compare
-           `distinct` against bar_planes_equal above: near it means this path IS the
-           four-way collapse; near zero exonerates it properly. Band A is rows 168-183,
-           which no write-mode-1 burst ever reaches and which session 23 measured as the
-           WORSE half; band B is 184-199, where every burst lands. */
-      cursor = LogPut(cursor, " fanout_bar[A=rows168-183,B=184-199]: writes=");
-      cursor = LogHex(cursor, g_ModeYFanoutBarWrites[0]); cursor = LogPut(cursor, "/"); cursor = LogHex(cursor, g_ModeYFanoutBarWrites[1]);
-      cursor = LogPut(cursor, " distinct=");
-      cursor = LogHex(cursor, g_ModeYFanoutBarDistinct[0]); cursor = LogPut(cursor, "/"); cursor = LogHex(cursor, g_ModeYFanoutBarDistinct[1]);
-      cursor = LogPut(cursor, " of "); cursor = LogHex(cursor, YBAR_OFF_MID - YBAR_OFF_LO);
-      cursor = LogPut(cursor, "/");    cursor = LogHex(cursor, YBAR_OFF_HI - YBAR_OFF_MID);
-      cursor = LogPut(cursor, " per page, 4way=");
-      cursor = LogHex(cursor, g_ModeYFanoutBar4Way[0]); cursor = LogPut(cursor, "/"); cursor = LogHex(cursor, g_ModeYFanoutBar4Way[1]);
-      /* ► DOES THE GUEST WRITE THE SAME BYTES TO DIFFERENT PLANES? See ModeYSampleCheck().
-           Read `eqb` (PER-BYTE agreement), not `cross_same` (per-window, kept only so
-           the old number stays comparable and visibly useless). Compare eqb against the
-           two figures printed above and by bandprof.py:
-             ~67%  matches bar_planes_equal  => the planes are RECEIVING collapsed data
-                                                and the fault is upstream of them
-             ~12%  matches an intact bar     => they receive distinct data and something
-                                                downstream collapses it
-           p1eq is the same rate against PLANE 1's last window specifically, per plane,
-           because the hypothesis names plane 1. p1eq[1] is the self-baseline: how much
-           plane 1 agrees with its own previous content, i.e. how much of this window is
-           static anyway. A p1eq[0/2/3] near p1eq[1] is the collapse; well below it is
-           not. All rates are percent, printed in hex. */
-      { INT band; for (band = 0; band < 2; ++band) {
-          INT probeIndex2;
-          cursor = LogPut(cursor, band ? " ysmpB[184-199]:" : " ysmpA[168-183]:");
-          cursor = LogPut(cursor, " writes="); cursor = LogHex(cursor, g_ModeYSampleWrites[band]);
-          cursor = LogPut(cursor, " cross_same="); cursor = LogHex(cursor, g_ModeYSampleCrossSame[band]);
-          cursor = LogPut(cursor, " cross_diff="); cursor = LogHex(cursor, g_ModeYSampleCrossDiff[band]);
-          cursor = LogPut(cursor, " cross_eqb=");
-          cursor = LogHex(cursor, g_ModeYSampleCrossEqualBytes[band]); cursor = LogPut(cursor, "/");
-          cursor = LogHex(cursor, g_ModeYSampleCrossTotalBytes[band]);
-          if (g_ModeYSampleCrossTotalBytes[band]) {
-              cursor = LogPut(cursor, "(");
-              cursor = LogHex(cursor, g_ModeYSampleCrossEqualBytes[band] * 100u / g_ModeYSampleCrossTotalBytes[band]);
-              cursor = LogPut(cursor, "% STATE-not-delivery)");
-          }
-          /* ► THE DELIVERY RATE -- CHANGED BYTES ONLY. This is the one to read:
-               high => the guest handed the same byte to two different planes. */
-          cursor = LogPut(cursor, " delivered_eq=");
-          cursor = LogHex(cursor, g_ModeYSampleDeliveredEqual[band]); cursor = LogPut(cursor, "/");
-          cursor = LogHex(cursor, g_ModeYSampleDeliveredTotal[band]);
-          if (g_ModeYSampleDeliveredTotal[band]) {
-              cursor = LogPut(cursor, "(");
-              cursor = LogHex(cursor, g_ModeYSampleDeliveredEqual[band] * 100u / g_ModeYSampleDeliveredTotal[band]);
-              cursor = LogPut(cursor, "%)");
-          }
-          cursor = LogPut(cursor, " p1eq=");
-          for (probeIndex2 = 0; probeIndex2 < 4; ++probeIndex2) {
-              cursor = LogPut(cursor, probeIndex2 ? "/" : "");
-              if (g_ModeYSampleP1Total[band][probeIndex2])
-                  cursor = LogHex(cursor, g_ModeYSampleP1Equal[band][probeIndex2] * 100u / g_ModeYSampleP1Total[band][probeIndex2]);
-              else cursor = LogPut(cursor, "-");
-          }
-          cursor = LogPut(cursor, "% n=");
-          for (probeIndex2 = 0; probeIndex2 < 4; ++probeIndex2) {
-              cursor = LogPut(cursor, probeIndex2 ? "/" : "");
-              cursor = LogHex(cursor, g_ModeYSampleP1Total[band][probeIndex2] / YSMP_LEN);
-          } } }
-      /* ► THE MAP-MASK IDENTITY. See g_ModeYSelectorCalls. Both lines must balance exactly;
-           a residual is a path nobody has accounted for. */
-      { DWORD maskWrites = 0, residual;
-        for (index = 0; index < 16; ++index) maskWrites += g_Video.MaskHistogram[index];
-        /* ⚠ `skip_same` LEFT THIS IDENTITY WHEN THE GR4 FIX LANDED. A map-mask write
-             whose value is unchanged now still calls select -- it has to, because a read
-             may have moved the window since -- so it is no longer a bucket that
-             ACCOUNTS for a write, just a note about how many writes were redundant.
-             Leaving it in the sum printed a **UNACCOUNTED** residual of exactly
-             -skip_same, which is a counter describing the code as it used to be. */
-        cursor = LogPut(cursor, " maskacct: writes="); cursor = LogHex(cursor, maskWrites);
-        cursor = LogPut(cursor, " = sel_calls="); cursor = LogHex(cursor, g_ModeYSelectorCalls);
-        cursor = LogPut(cursor, " - c4sel="); cursor = LogHex(cursor, g_Video.Chain4Selects);
-        cursor = LogPut(cursor, " c4xfer="); cursor = LogHex(cursor, g_Video.Chain4Transfers);
-        cursor = LogPut(cursor, " + skip_chain4="); cursor = LogHex(cursor, g_Video.MaskSkipChain4);
-        cursor = LogPut(cursor, " [redundant_same="); cursor = LogHex(cursor, g_Video.MaskSkipSame);
-        cursor = LogPut(cursor, ", informational]");
-        residual = maskWrites - (g_ModeYSelectorCalls - g_Video.Chain4Selects) - g_Video.MaskSkipChain4;
-        cursor = LogPut(cursor, " residual="); cursor = LogHex(cursor, residual);
-        cursor = LogPut(cursor, residual ? " **UNACCOUNTED**" : " (balanced)");
-        cursor = LogPut(cursor, " | sel_calls = swaps="); cursor = LogHex(cursor, g_ModeYSwaps);
-        cursor = LogPut(cursor, " + sel_same="); cursor = LogHex(cursor, g_ModeYSelectorSame);
-        cursor = LogPut(cursor, " + sel_zero="); cursor = LogHex(cursor, g_ModeYSelectorZero);
-        cursor = LogPut(cursor, " + failed="); cursor = LogHex(cursor, g_ModeYFail);
-        residual = g_ModeYSelectorCalls - g_ModeYSwaps - g_ModeYSelectorSame - g_ModeYSelectorZero - g_ModeYFail;
-        cursor = LogPut(cursor, " residual="); cursor = LogHex(cursor, residual);
-        cursor = LogPut(cursor, residual ? " **UNACCOUNTED**" : " (balanced)"); }
-      /* ► THE READ PLANE. See ModeYRemapReadMap(). `mismatch` counts GR4 writes that
-           named a plane other than the one mapped at A0000 -- every guest read between
-           such a write and the next mask change returns the WRONG PLANE'S BYTES, and no
-           write-side instrument can see it. `pair` is the (GR4, mapped) matrix, so a
-           mismatch can be attributed rather than just counted: a column concentrated on
-           one mapped plane means the guest cycled GR4 while the window sat still, which
-           is exactly the I_ReadScreen shape. Section 4 is linear, 5 is the scratch. */
-      cursor = LogPut(cursor, " gr4: writes="); cursor = LogHex(cursor, g_ModeYGr4Calls);
-      cursor = LogPut(cursor, " mismatch="); cursor = LogHex(cursor, g_ModeYGr4Mismatch);
-      cursor = LogPut(cursor, " WINDOW_MOVES="); cursor = LogHex(cursor, g_ModeYGr4Moves);
-      cursor = LogPut(cursor, " hist=");
-      for (index = 0; index < 4; ++index) { cursor = LogPut(cursor, index ? "/" : ""); cursor = LogHex(cursor, g_Video.Gr4Histogram[index]); }
-      cursor = LogPut(cursor, " pair[gr4->mapped]:");
-      { UINT pairA, pairB;
-        for (pairA = 0; pairA < 4; ++pairA)
-          for (pairB = 0; pairB < 6; ++pairB)
-            if (g_ModeYGr4Pair[pairA][pairB]) {
-                cursor = LogPut(cursor, " r"); cursor = LogHexByte(cursor, pairA);
-                cursor = LogPut(cursor, "->m"); cursor = LogHexByte(cursor, pairB);
-                cursor = LogPut(cursor, "="); cursor = LogHex(cursor, g_ModeYGr4Pair[pairA][pairB]); } }
-      /* ► THE ONE THAT DECIDES IT. GR4 writes between consecutive mask changes:
-           1 = the ordinary blit (window moves before any read -- harmless)
-           4 = a PURE READ PASS with the window stranded (the collapse)          */
-      cursor = LogPut(cursor, " gr4_runs[n GR4 per select]:");
-      { UINT row2; for (row2 = 1; row2 < 10; ++row2)
-          if (g_ModeYGr4Runs[row2]) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, row2);
-                                 cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_ModeYGr4Runs[row2]); } }
-      cursor = LogPut(cursor, " stranded_on_plane=");
-      for (index = 0; index < 4; ++index) { cursor = LogPut(cursor, index ? "/" : ""); cursor = LogHex(cursor, g_ModeYGr4RunPlanes[index]); }
-      /* ► IS THE LINEAR SECTION EVEN OCCUPIED? One number, ahead of the dump: how many
-           of the bar region's 10240 linear bytes are non-zero. Zero means nothing was
-           ever written to A0000 while the window pointed at the linear section, and the
-           candidate dies here without parsing anything. */
-      { UINT32 offset2, nonZero = 0; const BYTE *latchView = (const BYTE *)g_ModeYView[4];
-        for (offset2 = 168u * 320u; offset2 < 200u * 320u; ++offset2)
-            if (latchView[offset2 & (MODEY_WIN - 1u)]) ++nonZero;
-        cursor = LogPut(cursor, " linear_bar_nonzero="); cursor = LogHex(cursor, nonZero);
-        cursor = LogPut(cursor, "/"); cursor = LogHex(cursor, 32u * 320u); }
-      cursor = LogPut(cursor, " latch_solved="); cursor = LogHex(cursor, g_ModeYLatchOk);
-      cursor = LogPut(cursor, " latch_UNSOLVED="); cursor = LogHex(cursor, g_ModeYLatchUnsolved);
-      cursor = LogPut(cursor, " gap="); cursor = LogHex(cursor, g_Video.ModeYGap);
-      cursor = LogPut(cursor, " attributed="); cursor = LogHex(cursor, g_Video.YNonZero[0]);
-      cursor = LogPut(cursor, " crtc_seen="); cursor = LogHexByte(cursor, g_Video.IsCrtcSeen);
-      cursor = LogPut(cursor, " crtc_start=0x"); cursor = LogHex(cursor, g_Video.CrtcStart);
-      cursor = LogPut(cursor, "\r\n");
-      cursor = LogPut(cursor, "STAGE2: modeY snaps:");
-      for (index = 0; index < 4; ++index) {
-          cursor = LogPut(cursor, " p"); cursor = LogHexByte(cursor, (UINT)index);
-          cursor = LogPut(cursor, "="); cursor = LogHex(cursor, g_Video.YSnapshots[index]);
-          cursor = LogPut(cursor, "/nz="); cursor = LogHex(cursor, g_Video.YNonZero[index]);
-      }
-      cursor = LogPut(cursor, " wmode hist:");
-      for (index = 0; index < 4; ++index) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, (UINT)index);
-                                cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Video.WriteModeHistogram[index]); }
-      cursor = LogPut(cursor, "\r\nSTAGE2: modeY (wmode,mask) pairs:");
-      { UINT writeMode, mask;
-        for (writeMode = 0; writeMode < 4; ++writeMode)
-          for (mask = 0; mask < 16; ++mask)
-            if (g_Video.ModeMaskHistogram[writeMode * 16 + mask]) {
-                cursor = LogPut(cursor, " w"); cursor = LogHexByte(cursor, writeMode);
-                cursor = LogPut(cursor, "/m"); cursor = LogHexByte(cursor, mask);
-                cursor = LogPut(cursor, "="); cursor = LogHex(cursor, g_Video.ModeMaskHistogram[writeMode * 16 + mask]); } }
-      cursor = LogPut(cursor, "\r\nSTAGE2: modeY mapmask hist:");
-      for (index = 0; index < 16; ++index)
-          if (g_Video.MaskHistogram[index]) { cursor = LogPut(cursor, " 0x"); cursor = LogHexByte(cursor, (UINT)index);
-                                    cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Video.MaskHistogram[index]); }
-      cursor = LogPut(cursor, "\r\n");
-      if (g_Video.VramNonZero) {
-          UINT32 pitch = g_Video.VesaStride ? g_Video.VesaStride : 1;
-          cursor = LogPut(cursor, "STAGE2: VESA framebuffer WRITTEN: lo=0x"); cursor = LogHex(cursor, g_Video.VramLow);
-          cursor = LogPut(cursor, " hi=0x"); cursor = LogHex(cursor, g_Video.VramHigh);
-          cursor = LogPut(cursor, " nonzero=0x"); cursor = LogHex(cursor, g_Video.VramNonZero);
-          cursor = LogPut(cursor, "  => row "); cursor = LogHex(cursor, g_Video.VramLow / pitch);
-          cursor = LogPut(cursor, " col "); cursor = LogHex(cursor, (g_Video.VramLow % pitch) / (pitch / (g_Video.VesaWidth ? g_Video.VesaWidth : 1)));
-          cursor = LogPut(cursor, " .. row "); cursor = LogHex(cursor, g_Video.VramHigh / pitch);
-          cursor = LogPut(cursor, "\r\n");
-      }
-      cursor = LogPut(cursor, "STAGE2: VESA mode SET (4F02): ");
-      if (!g_Video.IsVesaSetSeen) cursor = LogPut(cursor, "never called");
-      else { cursor = LogPut(cursor, "BX=0x"); cursor = LogHex(cursor, (DWORD)g_Video.VesaSetBx);
-             cursor = LogPut(cursor, g_Video.IsVesaSetOk ? " ACCEPTED" : " REFUSED");
-             cursor = LogPut(cursor, (g_Video.VesaSetBx & 0x4000) ? " [LFB]" : " [banked]");
-             cursor = LogPut(cursor, " -> "); cursor = LogHex(cursor, (DWORD)g_Video.VesaWidth);
-             cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, (DWORD)g_Video.VesaHeight);
-             cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, (DWORD)g_Video.VesaBpp);
-             cursor = LogPut(cursor, " stride=0x"); cursor = LogHex(cursor, g_Video.VesaStride); }
-      cursor = LogPut(cursor, "\r\n");
-      cursor = LogPut(cursor, "STAGE2: VESA calls by sub-function:");
-      { INT any = 0;
-        for (index = 0; index < 0x16; ++index) if (g_Video.VesaCalls[index]) {
-            UINT barIndex; any = 1;
-            cursor = LogPut(cursor, " 4F"); cursor = LogHexByte(cursor, (UINT)index); cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Video.VesaCalls[index]);
-            if (g_Video.VesaBl[index]) {
-                cursor = LogPut(cursor, "(bl:");
-                for (barIndex = 0; barIndex < 16; ++barIndex) if (g_Video.VesaBl[index] & (1u << barIndex)) { cursor = LogHexByte(cursor, barIndex == 15 ? 0x80u : barIndex); cursor = LogPut(cursor, ","); }
-                cursor = LogPut(cursor, ")");
-            }
-        }
-        if (!any) cursor = LogPut(cursor, " none");
-        if (g_Video.VesaCalls[7]) {
-            cursor = LogPut(cursor, " | 4F07 max start=("); cursor = LogHex(cursor, (DWORD)g_Video.Vesa07MaxX);
-            cursor = LogPut(cursor, ","); cursor = LogHex(cursor, (DWORD)g_Video.Vesa07MaxY);
-            cursor = LogPut(cursor, ") refused="); cursor = LogHex(cursor, g_Video.Vesa07Rejected);
-        }
-        /* #53: the 4F0Ah block's port writes -- a client switching banks without INT 10h
-           shows here and NOT in the 4F05 count above. */
-        if (g_Video.VbePmBankCount | g_Video.VbePmStartCount | g_Video.VbePmRejected) {
-            cursor = LogPut(cursor, " | 4F0A-block banks=0x"); cursor = LogHex(cursor, g_Video.VbePmBankCount);
-            cursor = LogPut(cursor, " starts=0x"); cursor = LogHex(cursor, g_Video.VbePmStartCount);
-            cursor = LogPut(cursor, " refused=0x"); cursor = LogHex(cursor, g_Video.VbePmRejected);
-        }
-        cursor = LogPut(cursor, "\r\n");
-        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
-      cursor = LogPut(cursor, "STAGE2: VESA mode queries (4F01/4F02):");
-      if (!g_Video.VesaQueryCount) cursor = LogPut(cursor, " none");
-      else for (index = 0; index < g_Video.VesaQueryCount; ++index) {
-          cursor = LogPut(cursor, " 4F"); cursor = LogHexByte(cursor, (UINT)g_Video.VesaQueryFunction[index]);
-          cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, (DWORD)g_Video.VesaQueries[index]);
-          cursor = LogPut(cursor, g_Video.VesaQueryOk[index] ? "=OK" : "=UNSUPPORTED");
-      }
-      cursor = LogPut(cursor, "\r\n");
-      cursor = LogPut(cursor, "STAGE2: video modes unsupported:");
-      for (index = 0, count = 0; index < 256; ++index)
-          if (VIDEO_UNIMPLEMENTED_GET(g_Video.UnimplementedModes, index)) { cursor = LogPut(cursor, " 0x"); cursor = LogHexByte(cursor, (UINT)index); ++count; }
-      if (!count) cursor = LogPut(cursor, " none");
-      cursor = LogPut(cursor, "\r\n"); }
+      cursor = ReportGuestStateAtExit(cursor, base, tib);
+      cursor = ReportInterpreterBailSites(cursor, base, reportEnd);
+      cursor = ReportModeSets(cursor);
+      cursor = ReportModeY(cursor);
+      cursor = ReportVesa(cursor, base);
+    }
     /* ── DUMP THE BAR'S FOUR PLANES SO THE WAD CAN JUDGE THEM. ──────────────────────
          Everything measured so far describes the SCREEN, and the screen is planes plus
          a render. The oracle can only say "this pixel is wrong"; it cannot say which
