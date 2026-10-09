@@ -1117,6 +1117,798 @@ static PSTR TaskReportExitToCsrss(PSTR cursor, PSTR const base, DOS_MACHINE *mac
 
 
 
+
+/* A #GP through an IDT gate is an unserviced INT nn the client issued, not an exception it asked for: reflect it as the interrupt, and patch the site so the next pass takes the BOP path. */
+static INT DpmiServiceIdtGateFault(PSTR *cursorIo, PSTR const base, volatile WORD * const frame, const DWORD faultEsp, const DWORD faultSs, const DWORD faultEip, volatile BYTE * const tib, DOS_MACHINE *machine, const UINT steps)
+{
+    PSTR cursor = *cursorIo;
+    if ((frame[DPMI_FRAME_ERROR] & X86_ERROR_CODE_IDT) && HostReadable((const VOID *)frame, DPMI_FRAME16_SIZE)) {
+        DWORD gateVector = (DWORD)(DPMI_SELECTOR_INDEX(frame[DPMI_FRAME_ERROR])) & BYTE_MASK;
+        DWORD guestCodeBase  = DpmiSelectorBase(frame[DPMI_FRAME_CS]);
+        volatile BYTE *guestInstruction = (volatile BYTE *)(ULONG_PTR)(guestCodeBase + frame[DPMI_FRAME_IP]);
+        /* ── ⚠⚠⚠ WHAT MAKES THE FRAME'S IP TRUSTWORTHY IS THE
+             SELECTOR'S BASE, NOT ITS WIDTH. (s74)
+             This began as `if (guestCodeBase && ...)`. DpmiSelectorBase() returns
+             g_Ldt[idx].base, so a base of 0 -- exactly what a FLAT
+             32-bit client runs on (`desc 0x0000ffff:0x00cffa00`, base 0,
+             limit 4 GB, D/B=1) -- was being read as "no selector" and
+             those faults declined by accident.
+             ⚠ The first attempt at this replaced the test with "decline
+               any 32-bit CS", and THAT WAS A REGRESSION, measured: the
+               serviced count on heaven7 fell 62 -> 43, because a 32-bit
+               CS with a NON-ZERO base (0x287, base ~0x48000) has a
+               perfectly good IP and had been serviced all along. Width
+               was never the issue.
+             The real issue is narrow and it is this: NT hands us a
+             16-BIT exception frame whatever the client is, so when the
+             base is 0 the EIP *is* the linear address and arrives with
+             its top 16 bits gone -- heaven7 reports 0x231c for an
+             instruction living at ~0x0433231c. Then `guestCodeBase + fr[3]` names
+             LOW MEMORY, and a chance `CD nn` match there would make us
+             write C4 C4 into an innocent page: the eager patcher's own
+             failure mode, relocated.
+           ⇒ So: trust `guestCodeBase + fr[3]` whenever the base is non-zero (as
+             before), and for the flat base-0 case RECONSTRUCT the
+             address from the client's own 0501 blocks, requiring a
+             UNIQUE hit that actually holds `CD <vec>`. Unique-or-decline
+             is evidence; picking the first match would be a guess. */
+        UINT32 guestAccessRights = 0;
+        INT guestPresent = DpmiSelectorDescriptor(frame[DPMI_FRAME_CS], &guestAccessRights, NULL);
+        INT guestIs32    = guestPresent && (((guestAccessRights >> X86_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK) & DPMI_DESCRIPTOR_FLAG_BIG);
+        INT guestTruncated   = guestIs32 && guestCodeBase == 0;   /* EIP *is* the linear addr */
+        INT guestCandidates    = 0;
+        DWORD guestLinear   = guestCodeBase + frame[DPMI_FRAME_IP];
+        DWORD guestRecovered   = 0;
+        INT   guestSource   = GUEST_EIP_FROM_FRAME;                   /* 0 frame, 1 TIB slot, 2 blocks */
+        INT   guestSsIs32  = DpmiSelectorIs32(frame[DPMI_FRAME_SS]);
+        /* the slot must agree with the frame's low halves, or it is not
+           the slot we calibrated -- then we do not resume on it */
+        INT   guestEspOk = !guestSsIs32 || ((faultEsp & WORD_MASK_U) == frame[DPMI_FRAME_SP] && (faultSs & WORD_MASK_U) == frame[DPMI_FRAME_SS]);
+        /* ── ★★ THE FULL-WIDTH REGISTERS ARE IN THE TIB; THE FRAME IS
+             THE TRUNCATED COPY. (s74, second pass) ─────────────────────
+             The kernel saves the faulting SS:ESP and EIP at full width
+             BEFORE it builds the 16-bit DPMI frame: `faultSs:faultEsp` (from the misnamed
+             VTIB_FLT_SAVCS/SAVEIP) is SS:ESP and `faultEip` (VTIB_FLT_SAV3) is EIP. That is
+             not a reading of the layout, it is three faults with every
+             field known independently, from one heaven7 run:
+                 based CS 0x287:0x0119   sav3=0x00000119  savSS:ESP=0x297:0x5874
+                 flat  CS 0x347 -> lin 0x04332335 (blocks, unique)
+                                         sav3=0x04332335  savSS:ESP=0x34f:0x8610
+               and the frame's fr[7]:fr[6] equalled the low halves each time.
+             So the flat base-0 EIP need not be REBUILT from the client's
+             0501 blocks; it is in the slot. The block walk stays as a
+             CROSS-CHECK (logged: agree / disagree / ambiguous) and as the
+             fallback if the slot's address does not hold `CD vec`.
+           ⚠ AND THE SAME TRUNCATION APPLIES TO ESP, which this arm had
+             been restoring from fr[6] -- 16 bits -- while its own comment
+             claimed a flat-SS client was "declined above". Nothing declined
+             it. heaven7 survived only because its SS is BASED with SP <
+             64 KB; a Watcom flat-model client (Doom: DS=SS=flat, ESP ~
+             0x0043xxxx) resumed through here would have lost the top half
+             of its stack pointer on the first lazily-serviced INT. Restore
+             ESP from the slot whenever SS is 32-bit, and refuse to resume
+             if the slot and the frame disagree in the low half -- that is
+             the one check that would catch a mis-identified slot. */
+        if (guestTruncated) {
+            guestRecovered = DpmiRecoverFlatEip((DWORD)frame[DPMI_FRAME_IP], (BYTE)gateVector, &guestCandidates);
+            if ((faultEip & WORD_MASK_U) == frame[DPMI_FRAME_IP]
+                && HostReadable((const VOID *)(ULONG_PTR)faultEip, X86_INT_LENGTH)
+                && ((const volatile BYTE *)(ULONG_PTR)faultEip)[0] == X86_OP_INT
+                && ((const volatile BYTE *)(ULONG_PTR)faultEip)[1] == (BYTE)gateVector) {
+                guestLinear = faultEip; guestSource = GUEST_EIP_FROM_TIB_SLOT;
+            } else {
+                guestLinear = guestRecovered; guestSource = GUEST_EIP_FROM_BLOCKS;      /* 0 = ambiguous or absent */
+            }
+            guestInstruction   = (volatile BYTE *)(ULONG_PTR)guestLinear;
+            if (!guestLinear && !g_Fault32Warned) {
+                CHAR wowLine3[288], *wowCursor3 = wowLine3;
+                g_Fault32Warned = 1;
+                wowCursor3 = LogPut(wowCursor3, "  EXC: #GP(IDT) vec=0x"); wowCursor3 = LogHex(wowCursor3, gateVector);
+                wowCursor3 = LogPut(wowCursor3, " in a FLAT base-0 32-bit CS 0x");
+                wowCursor3 = LogHex(wowCursor3, frame[DPMI_FRAME_CS]);
+                wowCursor3 = LogPut(wowCursor3, ": NT's frame is 16-bit so the EIP arrived"
+                              " truncated (0x"); wowCursor3 = LogHex(wowCursor3, frame[DPMI_FRAME_IP]);
+                wowCursor3 = LogPut(wowCursor3, "); TIB sav3=0x"); wowCursor3 = LogHex(wowCursor3, faultEip);
+                wowCursor3 = LogPut(wowCursor3, " does not hold CD "); wowCursor3 = LogHexByte(wowCursor3, (UINT)gateVector);
+                wowCursor3 = LogPut(wowCursor3, ", and reconstruction from the client's"
+                              " 0501 blocks found "); wowCursor3 = LogHex(wowCursor3, (DWORD)guestCandidates);
+                wowCursor3 = LogPut(wowCursor3, " candidates -- need exactly 1. Reflecting instead.\r\n");
+                LogAppend(LOG_PATH, wowLine3, wowCursor3); SerialOut(wowLine3, wowCursor3);
+            }
+        }
+        if (guestSsIs32 && !guestEspOk && !g_Fault32Warned) {
+            CHAR wowLine4[224], *wowCursor4 = wowLine4;
+            g_Fault32Warned = 1;
+            wowCursor4 = LogPut(wowCursor4, "  EXC: #GP(IDT) vec=0x"); wowCursor4 = LogHex(wowCursor4, gateVector);
+            wowCursor4 = LogPut(wowCursor4, " with a 32-bit SS 0x"); wowCursor4 = LogHex(wowCursor4, frame[DPMI_FRAME_SS]);
+            wowCursor4 = LogPut(wowCursor4, ": TIB savSS:savESP=0x"); wowCursor4 = LogHex(wowCursor4, faultSs);
+            wowCursor4 = LogPut(wowCursor4, ":0x"); wowCursor4 = LogHex(wowCursor4, faultEsp);
+            wowCursor4 = LogPut(wowCursor4, " does not match the frame's 0x"); wowCursor4 = LogHex(wowCursor4, frame[DPMI_FRAME_SS]);
+            wowCursor4 = LogPut(wowCursor4, ":0x"); wowCursor4 = LogHex(wowCursor4, frame[DPMI_FRAME_SP]);
+            wowCursor4 = LogPut(wowCursor4, " -- cannot restore a full ESP. Reflecting instead.\r\n");
+            LogAppend(LOG_PATH, wowLine4, wowCursor4); SerialOut(wowLine4, wowCursor4);
+        }
+        if (guestPresent && guestLinear && guestEspOk
+            && HostReadable((const VOID *)guestInstruction, X86_INT_LENGTH)
+            && guestInstruction[0] == X86_OP_INT && guestInstruction[1] == (BYTE)gateVector) {
+            /* ── ★★★★★ THIS IS THE PASS THAT RE-PATCHED CALC'S FP SITE.
+                 (session 56 -- the question session 55 left open.)
+                 Session 55 put a 34h..3Fh guard in the SCANNER and the
+                 guard was right, but it was in the wrong place: the
+                 scanner never touched CALC's site. THIS did. Measured,
+                 from the session-55 CALC log:
+
+                   EXC: #GP(IDT) is a RAW INT 0x39 at 0x0b77:0x05c6
+                        lin=0x03d15b66 -- servicing + patching     x120,673
+
+                 The comment below is right that the CPU's error code
+                 names the vector and the address, and that this is the
+                 strongest evidence a byte pair is really an INT. It is
+                 still not evidence that the byte pair is an INTERRUPT.
+                 `CD 39` in FP-emulator code IS the x87 instruction, and
+                 the fault is how the emulator is ENTERED, not a failure.
+                 Rewriting it to a BOP destroys the guest's own encoding
+                 -- which is exactly what the scanner was stopped from
+                 doing, by a guard this path did not have. */
+            INT guestResult;
+            INT isFloatingPointVector = (gateVector >= VECTOR_FLOATING_POINT_FIRST && gateVector <= VECTOR_FLOATING_POINT_LAST);
+            INT floatingPointHooked = isFloatingPointVector && g_PmInt[gateVector].Client;
+            cursor = LogPut(cursor, "  EXC: #GP(IDT) is a RAW INT 0x"); cursor = LogHex(cursor, gateVector);
+            cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_CS]);
+            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_IP]);
+            cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, guestLinear);
+            if (guestTruncated) {
+                cursor = LogPut(cursor, guestSource == GUEST_EIP_FROM_TIB_SLOT ? " (flat base-0 CS: EIP from TIB sav3,"
+                                        " blocks cross-check "
+                                      : " (flat base-0 CS: EIP RECONSTRUCTED"
+                                        " from blocks, TIB sav3=0x");
+                if (guestSource == GUEST_EIP_FROM_TIB_SLOT) {
+                    if (!guestRecovered)             { cursor = LogPut(cursor, "ambiguous n="); cursor = LogHex(cursor, (DWORD)guestCandidates); }
+                    else if (guestRecovered == guestLinear)   cursor = LogPut(cursor, "AGREE");
+                    else                   { cursor = LogPut(cursor, "DISAGREE 0x"); cursor = LogHex(cursor, guestRecovered); }
+                } else cursor = LogHex(cursor, faultEip);
+                cursor = LogPut(cursor, ")");
+            }
+            if (guestSsIs32) {
+                cursor = LogPut(cursor, " SS32 esp=0x"); cursor = LogHex(cursor, faultEsp);
+                if ((faultEsp & WORD_MASK_U) != frame[DPMI_FRAME_SP]) cursor = LogPut(cursor, " ⚠ slot/frame DISAGREE");
+            }
+            if (floatingPointHooked) {
+                cursor = LogPut(cursor, " -- FP EMULATOR RANGE: reflecting to the"
+                            " handler the guest installed, 0x");
+                cursor = LogHex(cursor, g_PmInt[gateVector].Selector);
+                cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, g_PmInt[gateVector].Offset);
+                cursor = LogPut(cursor, " (not patched, not serviced)\r\n");
+            } else {
+                cursor = LogPut(cursor, isFloatingPointVector ? " -- FP EMULATOR RANGE but NO handler"
+                                  " installed; servicing without patching\r\n"
+                                : " -- servicing + patching\r\n");
+            }
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+            /* put the guest back where it faulted, EIP ON the INT.
+               ⚠ For the flat base-0 case the frame's IP is TRUNCATED, so
+                 resume on the full linear address (TIB slot, or the block
+                 reconstruction) -- writing fr[3] back there would be a
+                 wild jump into low memory. The frame's SP is truncated the
+                 same way: for a 32-bit SS take ESP from the TIB slot, which
+                 `guestEspOk` has just checked against the frame's low half. */
+            VDM_SET16(tib, VTIB_SS, frame[DPMI_FRAME_SS]);
+            VDM_REG(tib, VTIB_ESP) = guestSsIs32 ? faultEsp : (DWORD)frame[DPMI_FRAME_SP];
+            VDM_SET16(tib, VTIB_CS, frame[DPMI_FRAME_CS]);
+            VDM_REG(tib, VTIB_EIP) = guestTruncated ? (guestLinear - guestCodeBase) : (DWORD)frame[DPMI_FRAME_IP];
+            VDM_SET16(tib, VTIB_EFLAGS, frame[DPMI_FRAME_FLAGS]);
+            /* ── ★★★★ REFLECT IT, DO NOT SERVICE IT. ─────────────────
+                 An FP `CD nn` is not a request to the host; it is the
+                 guest's own emulator being entered, and the ONLY thing
+                 that knows where to resume is that emulator. It reads
+                 the modrm and displacement that FOLLOW the two bytes,
+                 then REWRITES THE RETURN IP ON THE STACK to step over
+                 them. So build the frame the CPU would have built --
+                 flags, CS, IP-past-the-INT, on the GUEST's stack -- and
+                 let its IRET decide where it goes. Every host-side
+                 mechanism we have (BOP + trampoline, or a service arm
+                 that IRETs) throws that adjustment away.
+               ⚠ IF stays as the guest had it. An INT gate would clear
+                 it, but the emulator is not an ISR: it runs as part of
+                 the guest's own instruction stream, and this host's
+                 V86/VME rules make silently clearing IF a real hazard
+                 (see [[vme-vif-interrupt-gating]]). TF is cleared,
+                 which is what a gate does and costs nothing. */
+            if (floatingPointHooked) {
+                DWORD stackBase   = DpmiSelectorBase(frame[DPMI_FRAME_SS]);
+                INT   ss32 = guestSsIs32;
+                DWORD stackPointer   = ss32 ? faultEsp : (DWORD)frame[DPMI_FRAME_SP];   /* full width, see guestEspOk */
+                stackPointer = ss32 ? stackPointer - X86_WORD_SIZE : ((stackPointer - X86_WORD_SIZE) & WORD_MASK);
+                PokeWord(stackBase + stackPointer, frame[DPMI_FRAME_FLAGS]);                    /* FLAGS      */
+                stackPointer = ss32 ? stackPointer - X86_WORD_SIZE : ((stackPointer - X86_WORD_SIZE) & WORD_MASK);
+                PokeWord(stackBase + stackPointer, frame[DPMI_FRAME_CS]);                    /* return CS  */
+                stackPointer = ss32 ? stackPointer - X86_WORD_SIZE : ((stackPointer - X86_WORD_SIZE) & WORD_MASK);
+                PokeWord(stackBase + stackPointer, (WORD)(frame[DPMI_FRAME_IP] + X86_INT_LENGTH));        /* return IP  */
+                VDM_REG(tib, VTIB_ESP) = stackPointer;
+                VDM_SET16(tib, VTIB_CS, g_PmInt[gateVector].Selector);
+                VDM_REG(tib, VTIB_EIP) = g_PmInt[gateVector].Offset & WORD_MASK;
+                VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_TF_U;     /* TF */
+                { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+            }
+            if (!isFloatingPointVector && HostWritable((VOID *)(ULONG_PTR)guestInstruction, X86_INT_LENGTH)) {
+                guestInstruction[0] = VDM_BOP0; guestInstruction[1] = VDM_BOP1;
+                PatchMapSet(guestLinear, (BYTE)gateVector);   /* the REAL site (s74) */
+            }
+            guestResult = DpmiServicePmInt(machine, tib, gateVector, steps);
+            if (guestResult > 0) { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }      /* serviced -> keep running */
+            if (guestResult == 0) { g_DpmiDone = 1; }
+            { *cursorIo = cursor; return HOST_FLOW_BREAK; }
+        }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* Deliver a PM fault to the exception handler the client registered (INT 31h 0203h): build its exception frame -- in the client's width, not the handler selector's -- and re-enter the client there. */
+static INT DpmiDeliverToClientHandler(PSTR *cursorIo, PSTR const base, const DWORD esp, const DWORD stackBase, volatile WORD * const frame, volatile BYTE * const tib, const INT exception)
+{
+    PSTR cursor = *cursorIo;
+    /* ── ★★★★★ THE EXCEPTION FRAME'S WIDTH FOLLOWS THE CLIENT'S
+         MODE, NOT THE HANDLER SELECTOR'S D BIT. This is the same
+         rule DpmiDispatchToPmHandler() already documents for
+         INTERRUPT frames, and it was never applied here -- so a
+         32-bit client got a 16-bit exception frame and read its
+         fields off the end of it.
+       ► MEASURED, ZAR (GH #23). NT builds a SIXTEEN-BIT frame on
+         the fault stack (8 words; the bytes are only coherent read
+         that way). DOS/4GW declares itself 32-bit at the mode
+         switch, so its #GP handler (entered at 0x0f:0x6abb) reads
+         the faulting EIP and CS at frame +0x0C and +0x10 -- the DPMI
+         32-BIT frame's slots (observed in its fault registers). In
+         our 16-byte frame there is nothing at +0x10, so DS loaded
+         ZERO and the handler faulted on its own first memory read --
+         which re-entered it, for ever, until the log capped.
+       ► AND THE RETURN CONFIRMS IT INDEPENDENTLY: the handler leaves
+         with a 32-bit far return, popping EIGHT bytes -- the same
+         tell (as with IRETD) that identified the interrupt-frame
+         case.
+       ► WHY THIS IS A REBUILD AND NOT A WIDER READ: the frame is the
+         KERNEL'S, and it is 16-bit whatever the client is. So the
+         32-bit frame is built BELOW NT's (which is left intact, so
+         the logging above still reads the kernel's own values) and
+         ESP is moved onto it.
+       ⚠ NT's fields ARE 16-BIT, so a fault in 32-bit code with an
+         EIP above 0xFFFF would arrive here already truncated by the
+         kernel -- this widens the frame, it cannot recover bits that
+         were never handed to us. Both of ZAR's faults are in 16-bit
+         DOS/4GW selectors (0x1a7 and 0x0f, both D/B=0) where the
+         question does not arise; a 32-bit-CS fault that resumes
+         wrongly should suspect this line first. */
+    if (g_DpmiIsClient32) {
+        DWORD newSp = (esp - DPMI_FRAME32_SIZE) & WORD_MASK;
+        volatile DWORD *d32 =
+            (volatile DWORD *)(ULONG_PTR)(stackBase + newSp);
+        if (HostReadable((const VOID *)d32, DPMI_FRAME32_SIZE)) {
+            d32[DPMI_FRAME_RETURN_IP] = (DWORD)DPMI_FLTRET_COFF;  /* return EIP */
+            d32[DPMI_FRAME_RETURN_CS] = g_DpmiFaultCodeSelector;      /* return CS  */
+            d32[DPMI_FRAME_ERROR] = frame[DPMI_FRAME_ERROR];                    /* error code */
+            d32[DPMI_FRAME_IP] = frame[DPMI_FRAME_IP];                    /* fault EIP  */
+            d32[DPMI_FRAME_CS] = frame[DPMI_FRAME_CS];                    /* fault CS   */
+            d32[DPMI_FRAME_FLAGS] = frame[DPMI_FRAME_FLAGS];                    /* EFLAGS     */
+            d32[DPMI_FRAME_SP] = frame[DPMI_FRAME_SP];                    /* fault ESP  */
+            d32[DPMI_FRAME_SS] = frame[DPMI_FRAME_SS];                    /* fault SS   */
+            VDM_REG(tib, VTIB_ESP) =
+                (VDM_REG(tib, VTIB_ESP) & HIGH_WORD_MASK_U) | newSp;
+        } else {
+            cursor = LogPut(cursor, "  EXC: !! 32-bit frame site unreadable at 0x");
+            cursor = LogHex(cursor, stackBase + newSp);
+            cursor = LogPut(cursor, " -- delivering the KERNEL'S 16-bit frame, which"
+                        " a 32-bit client will misread\r\n");
+            frame[DPMI_FRAME_RETURN_IP] = (WORD)DPMI_FLTRET_COFF;
+            frame[DPMI_FRAME_RETURN_CS] = g_DpmiFaultCodeSelector;
+        }
+    } else {
+        frame[DPMI_FRAME_RETURN_IP] = (WORD)DPMI_FLTRET_COFF;      /* return IP */
+        frame[DPMI_FRAME_RETURN_CS] = g_DpmiFaultCodeSelector;         /* return CS */
+    }
+    VDM_SET16(tib, VTIB_CS,  g_PmException[exception].Selector);
+    VDM_REG(tib, VTIB_EIP) = g_PmException[exception].Offset;
+    cursor = LogPut(cursor, "  EXC: -> client handler for 0x"); cursor = LogHex(cursor, (DWORD)exception);
+    cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, g_PmException[exception].Selector);
+    cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, g_PmException[exception].Offset);
+    cursor = LogPut(cursor, " frame{err=0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_ERROR]);
+    cursor = LogPut(cursor, " cs:ip=0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_CS]);
+    cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_IP]);
+    cursor = LogPut(cursor, " fl=0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_FLAGS]);
+    cursor = LogPut(cursor, " ss:sp=0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_SS]);
+    cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_SP]);
+    cursor = LogPut(cursor, "} retf-> 0x"); cursor = LogHex(cursor, g_DpmiFaultCodeSelector);
+    cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, (DWORD)DPMI_FLTRET_COFF);
+    /* ── ★ WHAT THE FAULTING INSTRUCTION WAS LOOKING AT. ─────
+         The frame says WHERE it faulted; on a #GP that is half
+         the question, because the other half is always "which
+         selector, and did the offset fit inside it". Session 34
+         spent a run on a krnl386 #GP through ES unable to
+         say whether ES was the wrong selector or the right one
+         with too small a limit -- from a log that had already
+         printed the address. The reflect leaves the guest's GPRs
+         and DS/ES alone (only CS/SS/ESP move), so this is free.
+         Print the bytes at the fault too: a fault you can decode
+         is a fault you can attribute without a second run. */
+    cursor = LogPut(cursor, "\r\n       fault regs: eax=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EAX));
+    cursor = LogPut(cursor, " ebx=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EBX));
+    cursor = LogPut(cursor, " ecx=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_ECX));
+    cursor = LogPut(cursor, " edx=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EDX));
+    cursor = LogPut(cursor, " esi=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_ESI));
+    cursor = LogPut(cursor, " edi=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EDI));
+    cursor = LogPut(cursor, " ebp=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EBP));
+    { WORD selectors[2]; PCSTR registerNames[2] = { " ds", " es" }; INT selectorIndex;
+      selectors[0] = (WORD)VDM_REG16(tib, VTIB_DS);
+      selectors[1] = (WORD)VDM_REG16(tib, VTIB_ES);
+      for (selectorIndex = 0; selectorIndex < 2; ++selectorIndex) {
+          UINT32 accessRights = 0, descriptorLimit = 0;
+          cursor = LogPut(cursor, registerNames[selectorIndex]); cursor = LogPut(cursor, "=0x"); cursor = LogHex(cursor, selectors[selectorIndex]);
+          if (DpmiSelectorDescriptor(selectors[selectorIndex], &accessRights, &descriptorLimit)) {
+              cursor = LogPut(cursor, "{base=0x"); cursor = LogHex(cursor, DpmiSelectorBase(selectors[selectorIndex]));
+              cursor = LogPut(cursor, " lim=0x"); cursor = LogHex(cursor, descriptorLimit);
+              cursor = LogPut(cursor, " ar=0x"); cursor = LogHex(cursor, accessRights); cursor = LogPut(cursor, "}");
+          } else cursor = LogPut(cursor, "{NO DESCRIPTOR}");
+      } }
+    /* ── AND WHAT ES POINTS AT. On a #GP through a selector,
+         the object is the evidence. Session 34's fault reads
+         `es:[0x28]` -- the in-memory module database's
+         ne_modtab -- and got 0x38a where the layout says 0x7c;
+         whether that database is malformed or simply is not at
+         ES cannot be decided from a register dump, only from
+         the bytes. 0x40 of them is the whole NE header. */
+    { DWORD extraBase = DpmiSelectorBase((WORD)VDM_REG16(tib, VTIB_ES));
+      const volatile BYTE *extraOrigin = (const volatile BYTE *)(ULONG_PTR)extraBase;
+      cursor = LogPut(cursor, "\r\n       @es:0000 = ");
+      if (extraBase && HostReadable((const VOID *)extraOrigin, 0x40))
+           cursor = LogDump(cursor, (const VOID *)extraOrigin, 0x40);
+      else cursor = LogPut(cursor, "<unreadable>"); }
+    /* ── ★ AND THE SAME FOR DS, for the same reason. ES is dumped
+         because a #GP is usually ABOUT a selector; DS is dumped
+         because the bottom of a guest's data segment is where its
+         own state lives, and "which branch did it take, and on
+         what" is answerable from those bytes when it is not
+         answerable from the registers. (ZAR, GH #23: DOS/16M keeps
+         its memory-manager INTERRUPT VECTOR at ds:0x34 -- 0x15
+         means "size memory with INT 15h AH=88h", anything else
+         means "use my own manager", and the second path is the one
+         that faults. One dump says which we are on.) */
+    { DWORD dataBase = DpmiSelectorBase((WORD)VDM_REG16(tib, VTIB_DS));
+      const volatile BYTE *dataOrigin = (const volatile BYTE *)(ULONG_PTR)dataBase;
+      cursor = LogPut(cursor, "\r\n       @ds:0000 = ");
+      if (dataBase && HostReadable((const VOID *)dataOrigin, 0x40))
+           cursor = LogDump(cursor, (const VOID *)dataOrigin, 0x40);
+      else cursor = LogPut(cursor, "<unreadable>");
+      /* The named offsets from dsprobe.txt -- see the knob's
+         note. Four bytes each, so a WORD and the word after it
+         (a far pointer's two halves) both read in one line. */
+      if (g_DsProbeCount && dataBase) {
+          INT dataProbeIndex;
+          cursor = LogPut(cursor, "\r\n       dsprobe:");
+          for (dataProbeIndex = 0; dataProbeIndex < g_DsProbeCount; ++dataProbeIndex) {
+              const volatile BYTE *dataProbeBytes = dataOrigin + g_DsProbe[dataProbeIndex];
+              cursor = LogPut(cursor, " ds[0x"); cursor = LogHex(cursor, g_DsProbe[dataProbeIndex]);
+              cursor = LogPut(cursor, "]=");
+              if (HostReadable((const VOID *)dataProbeBytes, 4))
+                   cursor = LogDump(cursor, (const VOID *)dataProbeBytes, 4);
+              else cursor = LogPut(cursor, "?? ");
+          }
+      }
+      /* csprobe: the same against the FAULTING CODE SEGMENT, six
+         bytes each -- enough for `e8 rel16` plus what follows, which
+         is the shape being checked against the file on disk. */
+      if (g_CsProbeCount) {
+          DWORD codeBase2 = DpmiSelectorBase(frame[DPMI_FRAME_CS]);
+          const volatile BYTE *codeOrigin =
+              (const volatile BYTE *)(ULONG_PTR)codeBase2;
+          INT codeProbeIndex;
+          cursor = LogPut(cursor, "\r\n       csprobe:");
+          for (codeProbeIndex = 0; codeProbeIndex < g_CsProbeCount; ++codeProbeIndex) {
+              const volatile BYTE *codeProbeBytes = codeOrigin + g_CsProbe[codeProbeIndex];
+              cursor = LogPut(cursor, " cs[0x"); cursor = LogHex(cursor, g_CsProbe[codeProbeIndex]);
+              cursor = LogPut(cursor, "]=");
+              if (codeBase2 && HostReadable((const VOID *)codeProbeBytes, 6))
+                   cursor = LogDump(cursor, (const VOID *)codeProbeBytes, 6);
+              else cursor = LogPut(cursor, "?? ");
+          }
+      } }
+    { DWORD frameCodeBase = DpmiSelectorBase(frame[DPMI_FRAME_CS]);
+      const volatile BYTE *fi2 =
+          (const volatile BYTE *)(ULONG_PTR)(frameCodeBase + frame[DPMI_FRAME_IP]);
+      cursor = LogPut(cursor, " bytes@fault=");
+      if (HostReadable((const VOID *)fi2, 8)) cursor = LogDump(cursor, (const VOID *)fi2, 8);
+      else                                     cursor = LogPut(cursor, "<unreadable>");
+      /* ── ★ THE CODE AROUND THE FAULT, AND THE SELECTOR'S BASE.
+           Eight bytes AT the fault identify the instruction; they
+           do not identify WHERE IN THE GUEST'S IMAGE it came from,
+           and that is the question as soon as you start matching a
+           fault against a file on disk. A window either side can be
+           searched for in the binary, which either confirms the
+           file<->guest mapping or refutes it -- and this
+           investigation (GH #23) has now had TWO conclusions rest
+           on a mapping derived from a single 8-byte match.
+           The base is printed for the same reason: it is what turns
+           a selector:offset into the linear address pmbp.txt wants. */
+      cursor = LogPut(cursor, "\r\n       csbase=0x"); cursor = LogHex(cursor, frameCodeBase);
+      cursor = LogPut(cursor, " code[ip-0x20..ip+0x20]=");
+      { const volatile BYTE *codeWindow =
+            (const volatile BYTE *)(ULONG_PTR)(frameCodeBase + ((frame[DPMI_FRAME_IP] - 0x20) & WORD_MASK));
+        if (frame[DPMI_FRAME_IP] >= 0x20 && HostReadable((const VOID *)codeWindow, 0x40))
+             cursor = LogDump(cursor, (const VOID *)codeWindow, 0x40);
+        else cursor = LogPut(cursor, "<unreadable>"); } }
+    /* ── ★ AND WHO CALLED. The frame says WHERE it faulted; on a
+         #GP inside a subroutine that is only half the question,
+         because the other half is always "how did the guest get
+         here" -- and a routine that faults on its FIRST memory
+         access has usually been entered in the wrong state rather
+         than gone wrong on its own. The return address is sitting
+         on the faulting stack, a few words up from SS:SP, and it
+         costs one dump to have it instead of a second run and a
+         breakpoint. (ZAR, GH #23: `push 8 / pop es` in DOS/16M.) */
+    { DWORD sb2 = DpmiSelectorBase(frame[DPMI_FRAME_SS]);
+      const volatile BYTE *stackBytes2 =
+          (const volatile BYTE *)(ULONG_PTR)(sb2 + frame[DPMI_FRAME_SP]);
+      cursor = LogPut(cursor, "\r\n       @ss:sp = ");
+      if (sb2 && HostReadable((const VOID *)stackBytes2, 0x20))
+           cursor = LogDump(cursor, (const VOID *)stackBytes2, 0x20);
+      else cursor = LogPut(cursor, "<unreadable>"); }
+    cursor = LogPut(cursor, "\r\n");
+    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }                 /* re-arm + re-enter, now in the handler */
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* The client's exception handler returned through our fault-return address: take IP, CS, FLAGS, SP and SS from the frame it left, drop the error code, and resume the client there. */
+static INT DpmiResumeAfterClientHandler(PSTR *cursorIo, PSTR const base, const DWORD event, const DWORD currentCs, const DWORD eip, volatile BYTE * const tib)
+{
+    PSTR cursor = *cursorIo;
+    /* ── The client's exception handler has finished: its `retf` landed here. ──
+         DPMI 0.9: the handler returns through the CS:IP at the bottom of the
+         frame, having optionally rewritten the CS:IP / FLAGS / SS:SP above it
+         to say where execution should resume. krnl386's handler does exactly
+         that (observed) -- it points the resume elsewhere rather than back at its
+         own invalid opcode, which is the whole reason it raised one. After the
+         `retf` popped two words, SS:SP is at the error code, so what is left is
+             +0x00 error code   +0x02 IP   +0x04 CS
+             +0x06 FLAGS        +0x08 SP   +0x0a SS
+         and the resume is: take those, drop the error code, run.
+       ⚠ FLAGS IS SIXTEEN BITS. Assigning it to EFLAGS whole would clear the
+         high half -- VM, IOPL's neighbours, the lot -- so merge it. */
+    if (event == VDM_EVENT_BOP && currentCs == (g_DpmiFaultCodeSelector & WORD_MASK)
+        && eip == DPMI_FLTRET_COFF) {
+        DWORD stackBase  = DpmiSelectorBase(g_DpmiFaultSelector);
+        DWORD esp = VDM_REG16(tib, VTIB_ESP);
+        volatile WORD *frame = (volatile WORD *)(ULONG_PTR)(stackBase + esp);
+        if (!HostReadable((const VOID *)frame, DPMI_RETURNED16_SIZE)) {
+            cursor = LogPut(cursor, "GH#128: EXC RETURN but the frame at SS:SP is unreadable "
+                        "-- stopping\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+            { *cursorIo = cursor; return HOST_FLOW_BREAK; }
+        }
+        /* ── ★ AND THE RETURN IS THE SAME QUESTION, SO IT GETS THE SAME
+             ANSWER. A 32-bit client's handler leaves by RETFD, which pops
+             EIGHT bytes, so ESP lands on the error code of a DWORD frame:
+                 +0x00 err  +0x04 EIP  +0x08 CS
+                 +0x0c EFLAGS  +0x10 ESP  +0x14 SS
+             Reading that as words would take the resume address from the
+             top half of the error code.
+           ► THE FRAME IS READ BACK, NOT REMEMBERED, because rewriting it is
+             the handler's documented lever: DOS/4GW's #GP handler resumes AT
+             THE FAULTING INSTRUCTION having stored 0 over the bad selector on
+             the faulting stack (it takes that stack from +0x18/+0x1c, which
+             only exist in the 32-bit frame), so the `pop es` re-executes and
+             succeeds. Resuming from anywhere we cached would defeat it. */
+        if (g_DpmiIsClient32) {
+            volatile DWORD *d32 = (volatile DWORD *)(ULONG_PTR)(stackBase + esp);
+            if (!HostReadable((const VOID *)d32, DPMI_RETURNED32_SIZE)) {
+                cursor = LogPut(cursor, "GH#128: EXC RETURN (32) but the frame at SS:ESP is "
+                            "unreadable -- stopping\r\n");
+                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+                { *cursorIo = cursor; return HOST_FLOW_BREAK; }
+            }
+            cursor = LogPut(cursor, "GH#128: EXC RETURN(32) -> resume 0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_CS]);
+            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_IP]);
+            cursor = LogPut(cursor, " fl=0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_FLAGS]);
+            cursor = LogPut(cursor, " ss:esp=0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_SS]);
+            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_SP]);
+            cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_ERROR]);
+            cursor = LogPut(cursor, "\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+            VDM_SET16(tib, VTIB_SS,  (WORD)d32[DPMI_RETURNED_SS]);
+            VDM_REG(tib, VTIB_ESP) = d32[DPMI_RETURNED_SP];
+            VDM_SET16(tib, VTIB_CS,  (WORD)d32[DPMI_RETURNED_CS]);
+            VDM_REG(tib, VTIB_EIP) = d32[DPMI_RETURNED_IP];
+            /* ⚠ FLAGS: still merged as sixteen bits. The high half carries VM
+                 and IOPL's neighbours, and this frame's EFLAGS came from a
+                 kernel frame that only ever held a word. */
+            VDM_SET16(tib, VTIB_EFLAGS, (WORD)d32[DPMI_RETURNED_FLAGS]);
+            { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+        }
+        cursor = LogPut(cursor, "GH#128: EXC RETURN -> resume 0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_CS]);
+        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_IP]);
+        cursor = LogPut(cursor, " fl=0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_FLAGS]);
+        cursor = LogPut(cursor, " ss:sp=0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_SS]);
+        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_SP]);
+        cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_ERROR]);
+        cursor = LogPut(cursor, "\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        VDM_SET16(tib, VTIB_SS,  frame[DPMI_RETURNED_SS]); VDM_REG(tib, VTIB_ESP) = frame[DPMI_RETURNED_SP];
+        VDM_SET16(tib, VTIB_CS,  frame[DPMI_RETURNED_CS]); VDM_REG(tib, VTIB_EIP) = frame[DPMI_RETURNED_IP];
+        VDM_SET16(tib, VTIB_EFLAGS, frame[DPMI_RETURNED_FLAGS]);
+        { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* A PM fault the kernel reflected to our handler code selector (GH #18): decode it and report it, then service an unserviced INT nn, deliver the fault to the client's own handler, or end the run. */
+static INT DpmiHandleReflectedFault(PSTR *cursorIo, PSTR const base, const DWORD event, const DWORD currentCs, const DWORD eip, volatile BYTE * const tib, DOS_MACHINE *machine, const UINT steps)
+{
+    PSTR cursor = *cursorIo;
+    /* GH #18: the raw-PM-#GP reflect landed on our handler code selector. THIS
+       is the proof point: the kernel reflected a fault it used to swallow. */
+    if (event == VDM_EVENT_BOP && currentCs == (g_DpmiFaultCodeSelector & WORD_MASK)
+        && (eip == DPMI_FAULT_COFF
+            || (eip >= DPMI_FAULT_SITE(0)
+                && eip <  DPMI_FAULT_SITE(DOS_FLTSITE_N)
+                && ((eip - DPMI_FAULT_SITE(0)) & (DOS_FLTSITE_SIZE - 1)) == 0))) {
+        /* Which class the kernel dispatched through -- the site it landed on
+           names it. -1 = the legacy shared site, which now means "a class we
+           did not fill", not "we do not know". */
+        INT faultClass = (eip == DPMI_FAULT_COFF)
+                   ? -1 : (INT)((eip - DPMI_FAULT_SITE(0)) / DOS_FLTSITE_SIZE);
+        DWORD faultSs  = *(volatile WORD  *)(tib + VTIB_FLT_SAVCS);
+        DWORD faultEsp = *(volatile DWORD *)(tib + VTIB_FLT_SAVEIP);
+        DWORD faultEip = *(volatile DWORD *)(tib + VTIB_FLT_SAV3);
+        /* ⚠ THESE TWO FIELDS ARE **NOT** CS:EIP, WHATEVER THEIR NAMES SAY.
+             Measured (session 19): the pair reads 0x00c7:0x...6f1e while the
+             guest's CS was 0x6f and its SS:ESP was 0x00c7:0x...6f14 -- i.e.
+             SS and ESP+0xa. Proved by accident and decisively: clearing the
+             junk top half of ESP changed this "EIP" from 0xb33b6f1e to
+             0x00006f1e. A field that tracks ESP is not EIP. The raw window
+             below shows the layout; `sav3` (tib+0x640, 0x36af here) is the
+             likelier faulting EIP. Do not resume anything on faultSs:faultEsp until
+             the slots are calibrated against a fault at a KNOWN address --
+             pmfault's HLT/INT3 cannot do it (they die without reflecting),
+             so that needs a new variant that loads a bad selector. */
+        cursor = LogPut(cursor, "GH#18: PM-FAULT REFLECTED class=");
+        if (faultClass < 0) cursor = LogPut(cursor, "SHARED-SITE");
+        else            cursor = LogHex(cursor, (DWORD)faultClass);
+        cursor = LogPut(cursor, " -- savSS:savESP=0x");
+        cursor = LogHex(cursor, faultSs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, faultEsp);
+        cursor = LogPut(cursor, " (MISNAMED VTIB_FLT_SAVCS/SAVEIP) sav3=0x"); cursor = LogHex(cursor, faultEip);
+        cursor = LogPut(cursor, " nest=0x"); cursor = LogHex(cursor, *(volatile WORD *)(tib + VTIB_FLT_NEST));
+        /* ── ★ THE KERNEL BUILDS A FRAME AND WE HAVE NEVER LOOKED AT IT. ──
+             The reflect sets SS:ESP = [TIB+0x638]:0x1000 and then PUSHES:
+             session 33's run came out of it with liveESP = ...0x0fd0, i.e.
+             0x30 bytes below the top. That frame is the only place the
+             faulting CS, the flags and the trap/error code can be -- the
+             VTIB_FLT_SAV* slots hold three values and we need six.
+           ⚠ THIS IS A DUMP, NOT A DECODE. Nothing here claims to know the
+             layout. It is printed against a fault whose every field is
+             already known independently -- krnl386's deliberate `0f ff`
+             (UD0) at CS:IP 0x01cf:0xc5f0, SS:SP=0x001f:0x0fea, #UD =
+             DPMI exception 6 -- so each slot can be identified by the value
+             in it rather than by a guess about the shape. Offsets are
+             printed with the dwords for exactly that reason: a dump whose
+             columns you have to count is half an instrument.
+             Read it, THEN write the decode. */
+        { DWORD faultStackBase = (DWORD)(ULONG_PTR)g_FaultStack;
+          const volatile DWORD *frame = (const volatile DWORD *)(ULONG_PTR)(faultStackBase + 0x0FC0);
+          INT frameIndex;
+          cursor = LogPut(cursor, "\r\n  FLTSTK sel=0x"); cursor = LogHex(cursor, g_DpmiFaultSelector);
+          cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, faultStackBase);
+          cursor = LogPut(cursor, " top=0x1000 espNOW=0x");
+          cursor = LogHex(cursor, VDM_REG(tib, VTIB_ESP));
+          if (!HostReadable((const VOID *)frame, 0x40)) cursor = LogPut(cursor, " <unreadable>");
+          else for (frameIndex = 0; frameIndex < 16; ++frameIndex) {
+              cursor = LogPut(cursor, "\r\n    +0x"); cursor = LogHex(cursor, 0x0FC0 + frameIndex * 4);
+              cursor = LogPut(cursor, " = 0x"); cursor = LogHex(cursor, frame[frameIndex]);
+          }
+          cursor = LogPut(cursor, "\r\n "); }
+        /* ► READ THE LAYOUT OFF THE TIB INSTEAD OF TRUSTING THE OFFSETS.
+             VTIB_FLT_SAVCS/SAVEIP were reverse-engineered in an earlier
+             session, and what they return does not look like a code
+             address: the argument-run fault reported CS=0x00c7 -- which is
+             the guest's SS, not its CS (0x6f) -- and EIP=0xb33b6f1e, which
+             is that run's ESP (0xb33b6f14) plus 0xa. Dump the window so the
+             real slots can be identified by looking for the KNOWN CS and a
+             plausible EIP, rather than by guessing a frame shape. */
+        { const BYTE *frameWords = (const BYTE *)(ULONG_PTR)(tib + 0x630);
+          cursor = LogPut(cursor, " tib[630..64f]=");
+          if (!HostReadable(frameWords, 0x20)) cursor = LogPut(cursor, "<unreadable>");
+          else                          cursor = LogDump(cursor, frameWords, 0x20); }
+        cursor = LogPut(cursor, " liveCS=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_CS));
+        cursor = LogPut(cursor, " liveSS=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_SS));
+        cursor = LogPut(cursor, " liveESP=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_ESP));
+        cursor = LogPut(cursor, " -- REAL-CPU PM fault reflect WORKS\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        /* ── ★★ DELIVER IT TO THE CLIENT'S INT 31h 0203 HANDLER. ────────────
+             This `break` used to end the run here, which is why "DOS/4GW quits
+             on a command-line argument": ANY real PM fault produced a tidy
+             `exec loop exited -> flushing` that read exactly like the client
+             choosing to exit. It was not quitting; we were stopping it.
+
+           ★ THE FRAME IS ALREADY BUILT, AND NOT BY US. Measured on the rig
+             (session 34, against krnl386's deliberate `0f ff` at 0x01cf:0xc5f0
+             whose every field was known in advance): the kernel switches to
+             [TIB+0x638]:0x1000, pushes 0x10 bytes, and what it pushes IS the
+             DPMI 0.9 16-bit exception frame --
+
+               SS:SP+0x00  return IP   } LEFT ZERO for the host to fill
+               SS:SP+0x02  return CS   }
+               SS:SP+0x04  error code        0000
+               SS:SP+0x06  faulting IP       c5f0   <- the UD0
+               SS:SP+0x08  faulting CS       01cf
+               SS:SP+0x0a  FLAGS             3246
+               SS:SP+0x0c  faulting SP       0fea
+               SS:SP+0x0e  faulting SS       001f
+
+             -- which is not a coincidence: this machinery exists in NT FOR
+             ntvdm's DPMI, so it emits the shape DPMI specifies. krnl386's own
+             handler confirms the layout independently (observed): it rewrites
+             exactly the faulting IP and CS slots with a resume address and
+             leaves by `retf`, as DPMI 0.9 prescribes.
+             ⇒ So delivery is: fill the two return words with a BOP of ours,
+               point CS:EIP at the registered handler, and leave the kernel's
+               SS:ESP alone. The handler runs on the host stack the kernel
+               chose, and its `retf` comes back to us at DPMI_FLTRET_COFF.
+
+           ⚠ THE EXCEPTION NUMBER IS THE TABLE INDEX, AND THAT IS A READING,
+             NOT A MEASUREMENT. The frame carries no trap number; the only
+             channel is which entry of g_FaultTable the kernel dispatched
+             through. #UD (vector 6) arrived at index 6 -- consistent with
+             "index == vector", and equally consistent with "index == an NT
+             fault class that happens to cover #UD as well as the #GP this
+             table was first built for". Hence the guard below: deliver ONLY
+             to an exception the client has actually registered a handler
+             for. krnl386 registers one at a time and faults immediately, so
+             a wrong reading stops the run with a line that says which index
+             had no handler -- it does not call the wrong handler. */
+        {
+            INT exception = faultClass;
+            DWORD stackBase  = DpmiSelectorBase(g_DpmiFaultSelector);
+            DWORD esp = VDM_REG16(tib, VTIB_ESP);
+            volatile WORD *frame = (volatile WORD *)(ULONG_PTR)(stackBase + esp);
+            /* ── ★★ A #GP THROUGH AN IDT GATE IS AN UNSERVICED `INT nn`. ────
+                 Not an exception the client asked for -- a software interrupt
+                 the host failed to intercept. The #GP error code says so
+                 exactly: bit 1 (IDT) set and bits 3..15 the vector.
+
+               ⚠ WHY PATCHING ON COMMIT CANNOT COVER THIS. Our INT->BOP scan
+                 runs when the client declares a region CODE, and krnl386
+                 declares it BEFORE it copies the code in: measured, `04F2 ...
+                 installed idx 1 base=0x03b30000 acc=0xfb` is preceded by
+                 `code region 0x03b30000..0x03b3045f -> patched 00000000 INT
+                 sites` -- the region was empty at declaration time. It then
+                 copies SYSTEM.DRV in and executes a raw `cd 21` at
+                 0x000f:0x01f7. No commit-time hook can see content that has
+                 not arrived, and session 33 hit the mirror image of this
+                 (krnl386 copying code we HAD patched, carrying the `C4 C4`
+                 but leaving the address-keyed vector behind).
+
+               ⇒ So service it HERE, where the CPU has just told us both the
+                 vector and the address, and confirm against the instruction
+                 bytes before believing the error code. This retires the whole
+                 class: any `CD nn` in protected mode, in any code we never
+                 scanned, becomes serviceable instead of fatal. It is also what
+                 a DPMI host is supposed to do -- reflect the interrupt -- and
+                 it is strictly better than a scan, which can only ever cover
+                 memory it was pointed at while the content was there.
+                 The site is patched on the way past, so the second execution
+                 takes the fast BOP path: `C4 C4` in place (same length, as
+                 always) plus the vector in the address-keyed map. That patch
+                 needs no length heuristic -- the CPU just executed these two
+                 bytes AS an interrupt, which is the strongest evidence the
+                 x86len vote was ever trying to approximate. */
+            {
+                INT flow = DpmiServiceIdtGateFault(&cursor, base, frame, faultEsp, faultSs, faultEip, tib, machine, steps);
+                if (flow == HOST_FLOW_BREAK) { *cursorIo = cursor; return HOST_FLOW_BREAK; }
+                if (flow == HOST_FLOW_CONTINUE) { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+            }
+            /* ── ★★★ (C) THE MACHINE FELL IDLE: START THE PARKED TASK.
+                 krnl386's creating task ends itself (observed: its
+                 record goes, the current-task word at DGROUP 0x228
+                 becomes 0, and it moves to a private kernel stack) --
+                 and from then on the machine belongs to the scheduler.
+                 The first code to touch the current task then loads
+                 that 0 as a selector and reads through it -- a #GP
+                 with err=0. That fault is not a defect,
+                 it is the cue: nobody is running and somebody is
+                 waiting. Resume them instead of reflecting.
+               ⚠ THIS TRUNCATES THE CREATOR. It had already retired, but
+                 it was still freeing selectors when we took the machine
+                 away, and those leak. Logged as the truncation it is,
+                 because the honest fix is to park the creator too and
+                 give it the rest of its turn later. */
+            /* ★ Every PSP we built, and what its environment field
+                 holds NOW. Two faults in this epic were that field;
+                 printing it at the fault turns "who wrote 1 there"
+                 from a reading of candidate code into a reading of
+                 the log. */
+            if (g_WowPspCount) {
+                INT probeIndex3;
+                cursor = LogPut(cursor, "  PSPENV:");
+                for (probeIndex3 = 0; probeIndex3 < g_WowPspCount; ++probeIndex3) {
+                    const volatile BYTE *pspBytes = (const volatile BYTE *)
+                        (ULONG_PTR)DpmiSelectorBase(g_WowPspSelector[probeIndex3]);
+                    cursor = LogPut(cursor, " sel 0x"); cursor = LogHex(cursor, g_WowPspSelector[probeIndex3]);
+                    cursor = LogPut(cursor, "->+0x2c=0x");
+                    if (HostReadable((const VOID *)pspBytes, DOS_PSP_ENVIRONMENT + sizeof(WORD)))
+                        cursor = LogHex(cursor, (DWORD)(pspBytes[DOS_PSP_ENVIRONMENT] | (pspBytes[DOS_PSP_ENVIRONMENT + 1] << BYTE_SHIFT)));
+                    else cursor = LogPut(cursor, "??unreadable");
+                }
+                cursor = LogPut(cursor, "\r\n");
+            }
+            INT schedSlot = g_WowSchedOn ? WowSchedPick(0) : -1;
+            if (schedSlot >= 0 && WowSchedCurrentTask() == 0) {
+                cursor = LogPut(cursor, "  WOWSCHED: [0x228]==0 -- the creator retired "
+                            "and task 0x");
+                cursor = LogHex(cursor, g_WowSchedSlots[schedSlot].Task);
+                cursor = LogPut(cursor, " is parked. Resuming it INSTEAD of reflecting this "
+                            "fault; the creator's remaining teardown is "
+                            "ABANDONED (selectors leak).\r\n");
+                /* ★ VERIFY THE LAUNCH RESULT WE INVENTED AT (A). By now
+                     InitTask has NOT run for this task (it runs after we
+                     resume), so TDB+0x1c is still zero -- but the moment
+                     it is not, this line proves or breaks the SS&~1
+                     invariant, and a wrong hInstance is exactly the kind
+                     of thing that would otherwise fail three walls later
+                     with no trace back to here. */
+                {   DWORD taskBase = DpmiSelectorBase(g_WowSchedSlots[schedSlot].Task);
+                    if (taskBase) {
+                        const volatile BYTE *taskBytes =
+                            (const volatile BYTE *)(ULONG_PTR)taskBase;
+                        WORD handle = (WORD)(taskBytes[WOW_TDB_INSTANCE] | (taskBytes[WOW_TDB_INSTANCE + 1] << BYTE_SHIFT));
+                        cursor = LogPut(cursor, "  WOWSCHED: TDB+0x1c now reads 0x");
+                        cursor = LogHex(cursor, handle);
+                        cursor = LogPut(cursor, " (0 = InitTask has not run yet)\r\n");
+                    }
+                }
+                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+                WowSchedPoke(g_WowSchedSlots[schedSlot].ModeLinear, WOW32_MODE_ORDINARY);
+                {   WORD toTask = g_WowSchedSlots[schedSlot].Task;
+                    INT isTopLevel = WowSchedTopLevel(&g_WowSchedSlots[schedSlot]);
+                    if (!g_WowSchedShell) g_WowSchedShell = toTask;   /* s92: WOWEXEC */
+                    WowSchedRestore(&g_WowSchedSlots[schedSlot], tib);
+                    if (isTopLevel) g_WowSchedCurrentBase = g_WowCallDepth;
+                    /* ★ AND PUT THE CURRENT-TASK WORD BACK WITH IT.
+                         The creator zeroed it on its way out; the
+                         frame we are resuming was parked when it
+                         held this task. Restoring registers alone
+                         resumed the new task's code with krnl386
+                         still believing nobody is current -- see
+                         WowSchedSetCurrent for why that is part of the
+                         context and not the ruled-out "write
+                         [0x228] to yield". */
+                    WowSchedSetCurrent(toTask);
+                    WowTaskChdir(toTask, &cursor);   /* #164 */
+                }
+                ++g_WowSchedSwitches;
+                { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+            }
+            if (exception < 0 || exception > X86_EXCEPTIONS - 1) {
+                cursor = LogPut(cursor, "  EXC: no class (shared site) -- cannot name the "
+                            "exception, stopping\r\n");
+            } else if (!HostReadable((const VOID *)frame, DPMI_FRAME16_SIZE)) {
+                cursor = LogPut(cursor, "  EXC: frame at SS:SP is not readable, stopping\r\n");
+            } else if (!g_PmException[exception].IsSet) {
+                cursor = LogPut(cursor, "  EXC: exception 0x"); cursor = LogHex(cursor, (DWORD)exception);
+                cursor = LogPut(cursor, " has NO client handler (INT 31h 0203 never called "
+                            "for it) -- stopping rather than guessing\r\n");
+            } else {
+                {
+                    INT flow = DpmiDeliverToClientHandler(&cursor, base, esp, stackBase, frame, tib, exception);
+                    if (flow == HOST_FLOW_CONTINUE) { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+                }
+            }
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        }
+        { *cursorIo = cursor; return HOST_FLOW_BREAK; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
 #include "host_report.c"   /* the end-of-run report: ReportEndOfRun and its sections */
 enum { INSTALL_EXIT_OK = 0, INSTALL_EXIT_FAILED = 1, INSTALL_STATUS_EXIT_OURS = 0, INSTALL_STATUS_EXIT_NONE = 1, INSTALL_STATUS_EXIT_OTHER = 2 };   /* the install verbs' exit codes */
 enum { PENDING_INT_RETRIES_MAX = 0x10000 };   /* event 3 ("interrupt pending, not entered"): retries before giving up */
@@ -6014,756 +6806,15 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                         }
                         /* retry budget exhausted -> fall through and report an unexpected stop */
                     }
-                    /* GH #18: the raw-PM-#GP reflect landed on our handler code selector. THIS
-                       is the proof point: the kernel reflected a fault it used to swallow. */
-                    if (event == VDM_EVENT_BOP && currentCs == (g_DpmiFaultCodeSelector & WORD_MASK)
-                        && (eip == DPMI_FAULT_COFF
-                            || (eip >= DPMI_FAULT_SITE(0)
-                                && eip <  DPMI_FAULT_SITE(DOS_FLTSITE_N)
-                                && ((eip - DPMI_FAULT_SITE(0)) & (DOS_FLTSITE_SIZE - 1)) == 0))) {
-                        /* Which class the kernel dispatched through -- the site it landed on
-                           names it. -1 = the legacy shared site, which now means "a class we
-                           did not fill", not "we do not know". */
-                        INT faultClass = (eip == DPMI_FAULT_COFF)
-                                   ? -1 : (INT)((eip - DPMI_FAULT_SITE(0)) / DOS_FLTSITE_SIZE);
-                        DWORD faultSs  = *(volatile WORD  *)(tib + VTIB_FLT_SAVCS);
-                        DWORD faultEsp = *(volatile DWORD *)(tib + VTIB_FLT_SAVEIP);
-                        DWORD faultEip = *(volatile DWORD *)(tib + VTIB_FLT_SAV3);
-                        /* ⚠ THESE TWO FIELDS ARE **NOT** CS:EIP, WHATEVER THEIR NAMES SAY.
-                             Measured (session 19): the pair reads 0x00c7:0x...6f1e while the
-                             guest's CS was 0x6f and its SS:ESP was 0x00c7:0x...6f14 -- i.e.
-                             SS and ESP+0xa. Proved by accident and decisively: clearing the
-                             junk top half of ESP changed this "EIP" from 0xb33b6f1e to
-                             0x00006f1e. A field that tracks ESP is not EIP. The raw window
-                             below shows the layout; `sav3` (tib+0x640, 0x36af here) is the
-                             likelier faulting EIP. Do not resume anything on faultSs:faultEsp until
-                             the slots are calibrated against a fault at a KNOWN address --
-                             pmfault's HLT/INT3 cannot do it (they die without reflecting),
-                             so that needs a new variant that loads a bad selector. */
-                        cursor = LogPut(cursor, "GH#18: PM-FAULT REFLECTED class=");
-                        if (faultClass < 0) cursor = LogPut(cursor, "SHARED-SITE");
-                        else            cursor = LogHex(cursor, (DWORD)faultClass);
-                        cursor = LogPut(cursor, " -- savSS:savESP=0x");
-                        cursor = LogHex(cursor, faultSs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, faultEsp);
-                        cursor = LogPut(cursor, " (MISNAMED VTIB_FLT_SAVCS/SAVEIP) sav3=0x"); cursor = LogHex(cursor, faultEip);
-                        cursor = LogPut(cursor, " nest=0x"); cursor = LogHex(cursor, *(volatile WORD *)(tib + VTIB_FLT_NEST));
-                        /* ── ★ THE KERNEL BUILDS A FRAME AND WE HAVE NEVER LOOKED AT IT. ──
-                             The reflect sets SS:ESP = [TIB+0x638]:0x1000 and then PUSHES:
-                             session 33's run came out of it with liveESP = ...0x0fd0, i.e.
-                             0x30 bytes below the top. That frame is the only place the
-                             faulting CS, the flags and the trap/error code can be -- the
-                             VTIB_FLT_SAV* slots hold three values and we need six.
-                           ⚠ THIS IS A DUMP, NOT A DECODE. Nothing here claims to know the
-                             layout. It is printed against a fault whose every field is
-                             already known independently -- krnl386's deliberate `0f ff`
-                             (UD0) at CS:IP 0x01cf:0xc5f0, SS:SP=0x001f:0x0fea, #UD =
-                             DPMI exception 6 -- so each slot can be identified by the value
-                             in it rather than by a guess about the shape. Offsets are
-                             printed with the dwords for exactly that reason: a dump whose
-                             columns you have to count is half an instrument.
-                             Read it, THEN write the decode. */
-                        { DWORD faultStackBase = (DWORD)(ULONG_PTR)g_FaultStack;
-                          const volatile DWORD *frame = (const volatile DWORD *)(ULONG_PTR)(faultStackBase + 0x0FC0);
-                          INT frameIndex;
-                          cursor = LogPut(cursor, "\r\n  FLTSTK sel=0x"); cursor = LogHex(cursor, g_DpmiFaultSelector);
-                          cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, faultStackBase);
-                          cursor = LogPut(cursor, " top=0x1000 espNOW=0x");
-                          cursor = LogHex(cursor, VDM_REG(tib, VTIB_ESP));
-                          if (!HostReadable((const VOID *)frame, 0x40)) cursor = LogPut(cursor, " <unreadable>");
-                          else for (frameIndex = 0; frameIndex < 16; ++frameIndex) {
-                              cursor = LogPut(cursor, "\r\n    +0x"); cursor = LogHex(cursor, 0x0FC0 + frameIndex * 4);
-                              cursor = LogPut(cursor, " = 0x"); cursor = LogHex(cursor, frame[frameIndex]);
-                          }
-                          cursor = LogPut(cursor, "\r\n "); }
-                        /* ► READ THE LAYOUT OFF THE TIB INSTEAD OF TRUSTING THE OFFSETS.
-                             VTIB_FLT_SAVCS/SAVEIP were reverse-engineered in an earlier
-                             session, and what they return does not look like a code
-                             address: the argument-run fault reported CS=0x00c7 -- which is
-                             the guest's SS, not its CS (0x6f) -- and EIP=0xb33b6f1e, which
-                             is that run's ESP (0xb33b6f14) plus 0xa. Dump the window so the
-                             real slots can be identified by looking for the KNOWN CS and a
-                             plausible EIP, rather than by guessing a frame shape. */
-                        { const BYTE *frameWords = (const BYTE *)(ULONG_PTR)(tib + 0x630);
-                          cursor = LogPut(cursor, " tib[630..64f]=");
-                          if (!HostReadable(frameWords, 0x20)) cursor = LogPut(cursor, "<unreadable>");
-                          else                          cursor = LogDump(cursor, frameWords, 0x20); }
-                        cursor = LogPut(cursor, " liveCS=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_CS));
-                        cursor = LogPut(cursor, " liveSS=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_SS));
-                        cursor = LogPut(cursor, " liveESP=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_ESP));
-                        cursor = LogPut(cursor, " -- REAL-CPU PM fault reflect WORKS\r\n");
-                        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                        /* ── ★★ DELIVER IT TO THE CLIENT'S INT 31h 0203 HANDLER. ────────────
-                             This `break` used to end the run here, which is why "DOS/4GW quits
-                             on a command-line argument": ANY real PM fault produced a tidy
-                             `exec loop exited -> flushing` that read exactly like the client
-                             choosing to exit. It was not quitting; we were stopping it.
-
-                           ★ THE FRAME IS ALREADY BUILT, AND NOT BY US. Measured on the rig
-                             (session 34, against krnl386's deliberate `0f ff` at 0x01cf:0xc5f0
-                             whose every field was known in advance): the kernel switches to
-                             [TIB+0x638]:0x1000, pushes 0x10 bytes, and what it pushes IS the
-                             DPMI 0.9 16-bit exception frame --
-
-                               SS:SP+0x00  return IP   } LEFT ZERO for the host to fill
-                               SS:SP+0x02  return CS   }
-                               SS:SP+0x04  error code        0000
-                               SS:SP+0x06  faulting IP       c5f0   <- the UD0
-                               SS:SP+0x08  faulting CS       01cf
-                               SS:SP+0x0a  FLAGS             3246
-                               SS:SP+0x0c  faulting SP       0fea
-                               SS:SP+0x0e  faulting SS       001f
-
-                             -- which is not a coincidence: this machinery exists in NT FOR
-                             ntvdm's DPMI, so it emits the shape DPMI specifies. krnl386's own
-                             handler confirms the layout independently (observed): it rewrites
-                             exactly the faulting IP and CS slots with a resume address and
-                             leaves by `retf`, as DPMI 0.9 prescribes.
-                             ⇒ So delivery is: fill the two return words with a BOP of ours,
-                               point CS:EIP at the registered handler, and leave the kernel's
-                               SS:ESP alone. The handler runs on the host stack the kernel
-                               chose, and its `retf` comes back to us at DPMI_FLTRET_COFF.
-
-                           ⚠ THE EXCEPTION NUMBER IS THE TABLE INDEX, AND THAT IS A READING,
-                             NOT A MEASUREMENT. The frame carries no trap number; the only
-                             channel is which entry of g_FaultTable the kernel dispatched
-                             through. #UD (vector 6) arrived at index 6 -- consistent with
-                             "index == vector", and equally consistent with "index == an NT
-                             fault class that happens to cover #UD as well as the #GP this
-                             table was first built for". Hence the guard below: deliver ONLY
-                             to an exception the client has actually registered a handler
-                             for. krnl386 registers one at a time and faults immediately, so
-                             a wrong reading stops the run with a line that says which index
-                             had no handler -- it does not call the wrong handler. */
-                        {
-                            INT exception = faultClass;
-                            DWORD stackBase  = DpmiSelectorBase(g_DpmiFaultSelector);
-                            DWORD esp = VDM_REG16(tib, VTIB_ESP);
-                            volatile WORD *frame = (volatile WORD *)(ULONG_PTR)(stackBase + esp);
-                            /* ── ★★ A #GP THROUGH AN IDT GATE IS AN UNSERVICED `INT nn`. ────
-                                 Not an exception the client asked for -- a software interrupt
-                                 the host failed to intercept. The #GP error code says so
-                                 exactly: bit 1 (IDT) set and bits 3..15 the vector.
-
-                               ⚠ WHY PATCHING ON COMMIT CANNOT COVER THIS. Our INT->BOP scan
-                                 runs when the client declares a region CODE, and krnl386
-                                 declares it BEFORE it copies the code in: measured, `04F2 ...
-                                 installed idx 1 base=0x03b30000 acc=0xfb` is preceded by
-                                 `code region 0x03b30000..0x03b3045f -> patched 00000000 INT
-                                 sites` -- the region was empty at declaration time. It then
-                                 copies SYSTEM.DRV in and executes a raw `cd 21` at
-                                 0x000f:0x01f7. No commit-time hook can see content that has
-                                 not arrived, and session 33 hit the mirror image of this
-                                 (krnl386 copying code we HAD patched, carrying the `C4 C4`
-                                 but leaving the address-keyed vector behind).
-
-                               ⇒ So service it HERE, where the CPU has just told us both the
-                                 vector and the address, and confirm against the instruction
-                                 bytes before believing the error code. This retires the whole
-                                 class: any `CD nn` in protected mode, in any code we never
-                                 scanned, becomes serviceable instead of fatal. It is also what
-                                 a DPMI host is supposed to do -- reflect the interrupt -- and
-                                 it is strictly better than a scan, which can only ever cover
-                                 memory it was pointed at while the content was there.
-                                 The site is patched on the way past, so the second execution
-                                 takes the fast BOP path: `C4 C4` in place (same length, as
-                                 always) plus the vector in the address-keyed map. That patch
-                                 needs no length heuristic -- the CPU just executed these two
-                                 bytes AS an interrupt, which is the strongest evidence the
-                                 x86len vote was ever trying to approximate. */
-                            if ((frame[DPMI_FRAME_ERROR] & X86_ERROR_CODE_IDT) && HostReadable((const VOID *)frame, DPMI_FRAME16_SIZE)) {
-                                DWORD gateVector = (DWORD)(DPMI_SELECTOR_INDEX(frame[DPMI_FRAME_ERROR])) & BYTE_MASK;
-                                DWORD guestCodeBase  = DpmiSelectorBase(frame[DPMI_FRAME_CS]);
-                                volatile BYTE *guestInstruction = (volatile BYTE *)(ULONG_PTR)(guestCodeBase + frame[DPMI_FRAME_IP]);
-                                /* ── ⚠⚠⚠ WHAT MAKES THE FRAME'S IP TRUSTWORTHY IS THE
-                                     SELECTOR'S BASE, NOT ITS WIDTH. (s74)
-                                     This began as `if (guestCodeBase && ...)`. DpmiSelectorBase() returns
-                                     g_Ldt[idx].base, so a base of 0 -- exactly what a FLAT
-                                     32-bit client runs on (`desc 0x0000ffff:0x00cffa00`, base 0,
-                                     limit 4 GB, D/B=1) -- was being read as "no selector" and
-                                     those faults declined by accident.
-                                     ⚠ The first attempt at this replaced the test with "decline
-                                       any 32-bit CS", and THAT WAS A REGRESSION, measured: the
-                                       serviced count on heaven7 fell 62 -> 43, because a 32-bit
-                                       CS with a NON-ZERO base (0x287, base ~0x48000) has a
-                                       perfectly good IP and had been serviced all along. Width
-                                       was never the issue.
-                                     The real issue is narrow and it is this: NT hands us a
-                                     16-BIT exception frame whatever the client is, so when the
-                                     base is 0 the EIP *is* the linear address and arrives with
-                                     its top 16 bits gone -- heaven7 reports 0x231c for an
-                                     instruction living at ~0x0433231c. Then `guestCodeBase + fr[3]` names
-                                     LOW MEMORY, and a chance `CD nn` match there would make us
-                                     write C4 C4 into an innocent page: the eager patcher's own
-                                     failure mode, relocated.
-                                   ⇒ So: trust `guestCodeBase + fr[3]` whenever the base is non-zero (as
-                                     before), and for the flat base-0 case RECONSTRUCT the
-                                     address from the client's own 0501 blocks, requiring a
-                                     UNIQUE hit that actually holds `CD <vec>`. Unique-or-decline
-                                     is evidence; picking the first match would be a guess. */
-                                UINT32 guestAccessRights = 0;
-                                INT guestPresent = DpmiSelectorDescriptor(frame[DPMI_FRAME_CS], &guestAccessRights, NULL);
-                                INT guestIs32    = guestPresent && (((guestAccessRights >> X86_DESCRIPTOR_FLAGS_SHIFT) & DPMI_DESCRIPTOR_FLAGS_MASK) & DPMI_DESCRIPTOR_FLAG_BIG);
-                                INT guestTruncated   = guestIs32 && guestCodeBase == 0;   /* EIP *is* the linear addr */
-                                INT guestCandidates    = 0;
-                                DWORD guestLinear   = guestCodeBase + frame[DPMI_FRAME_IP];
-                                DWORD guestRecovered   = 0;
-                                INT   guestSource   = GUEST_EIP_FROM_FRAME;                   /* 0 frame, 1 TIB slot, 2 blocks */
-                                INT   guestSsIs32  = DpmiSelectorIs32(frame[DPMI_FRAME_SS]);
-                                /* the slot must agree with the frame's low halves, or it is not
-                                   the slot we calibrated -- then we do not resume on it */
-                                INT   guestEspOk = !guestSsIs32 || ((faultEsp & WORD_MASK_U) == frame[DPMI_FRAME_SP] && (faultSs & WORD_MASK_U) == frame[DPMI_FRAME_SS]);
-                                /* ── ★★ THE FULL-WIDTH REGISTERS ARE IN THE TIB; THE FRAME IS
-                                     THE TRUNCATED COPY. (s74, second pass) ─────────────────────
-                                     The kernel saves the faulting SS:ESP and EIP at full width
-                                     BEFORE it builds the 16-bit DPMI frame: `faultSs:faultEsp` (from the misnamed
-                                     VTIB_FLT_SAVCS/SAVEIP) is SS:ESP and `faultEip` (VTIB_FLT_SAV3) is EIP. That is
-                                     not a reading of the layout, it is three faults with every
-                                     field known independently, from one heaven7 run:
-                                         based CS 0x287:0x0119   sav3=0x00000119  savSS:ESP=0x297:0x5874
-                                         flat  CS 0x347 -> lin 0x04332335 (blocks, unique)
-                                                                 sav3=0x04332335  savSS:ESP=0x34f:0x8610
-                                       and the frame's fr[7]:fr[6] equalled the low halves each time.
-                                     So the flat base-0 EIP need not be REBUILT from the client's
-                                     0501 blocks; it is in the slot. The block walk stays as a
-                                     CROSS-CHECK (logged: agree / disagree / ambiguous) and as the
-                                     fallback if the slot's address does not hold `CD vec`.
-                                   ⚠ AND THE SAME TRUNCATION APPLIES TO ESP, which this arm had
-                                     been restoring from fr[6] -- 16 bits -- while its own comment
-                                     claimed a flat-SS client was "declined above". Nothing declined
-                                     it. heaven7 survived only because its SS is BASED with SP <
-                                     64 KB; a Watcom flat-model client (Doom: DS=SS=flat, ESP ~
-                                     0x0043xxxx) resumed through here would have lost the top half
-                                     of its stack pointer on the first lazily-serviced INT. Restore
-                                     ESP from the slot whenever SS is 32-bit, and refuse to resume
-                                     if the slot and the frame disagree in the low half -- that is
-                                     the one check that would catch a mis-identified slot. */
-                                if (guestTruncated) {
-                                    guestRecovered = DpmiRecoverFlatEip((DWORD)frame[DPMI_FRAME_IP], (BYTE)gateVector, &guestCandidates);
-                                    if ((faultEip & WORD_MASK_U) == frame[DPMI_FRAME_IP]
-                                        && HostReadable((const VOID *)(ULONG_PTR)faultEip, X86_INT_LENGTH)
-                                        && ((const volatile BYTE *)(ULONG_PTR)faultEip)[0] == X86_OP_INT
-                                        && ((const volatile BYTE *)(ULONG_PTR)faultEip)[1] == (BYTE)gateVector) {
-                                        guestLinear = faultEip; guestSource = GUEST_EIP_FROM_TIB_SLOT;
-                                    } else {
-                                        guestLinear = guestRecovered; guestSource = GUEST_EIP_FROM_BLOCKS;      /* 0 = ambiguous or absent */
-                                    }
-                                    guestInstruction   = (volatile BYTE *)(ULONG_PTR)guestLinear;
-                                    if (!guestLinear && !g_Fault32Warned) {
-                                        CHAR wowLine3[288], *wowCursor3 = wowLine3;
-                                        g_Fault32Warned = 1;
-                                        wowCursor3 = LogPut(wowCursor3, "  EXC: #GP(IDT) vec=0x"); wowCursor3 = LogHex(wowCursor3, gateVector);
-                                        wowCursor3 = LogPut(wowCursor3, " in a FLAT base-0 32-bit CS 0x");
-                                        wowCursor3 = LogHex(wowCursor3, frame[DPMI_FRAME_CS]);
-                                        wowCursor3 = LogPut(wowCursor3, ": NT's frame is 16-bit so the EIP arrived"
-                                                      " truncated (0x"); wowCursor3 = LogHex(wowCursor3, frame[DPMI_FRAME_IP]);
-                                        wowCursor3 = LogPut(wowCursor3, "); TIB sav3=0x"); wowCursor3 = LogHex(wowCursor3, faultEip);
-                                        wowCursor3 = LogPut(wowCursor3, " does not hold CD "); wowCursor3 = LogHexByte(wowCursor3, (UINT)gateVector);
-                                        wowCursor3 = LogPut(wowCursor3, ", and reconstruction from the client's"
-                                                      " 0501 blocks found "); wowCursor3 = LogHex(wowCursor3, (DWORD)guestCandidates);
-                                        wowCursor3 = LogPut(wowCursor3, " candidates -- need exactly 1. Reflecting instead.\r\n");
-                                        LogAppend(LOG_PATH, wowLine3, wowCursor3); SerialOut(wowLine3, wowCursor3);
-                                    }
-                                }
-                                if (guestSsIs32 && !guestEspOk && !g_Fault32Warned) {
-                                    CHAR wowLine4[224], *wowCursor4 = wowLine4;
-                                    g_Fault32Warned = 1;
-                                    wowCursor4 = LogPut(wowCursor4, "  EXC: #GP(IDT) vec=0x"); wowCursor4 = LogHex(wowCursor4, gateVector);
-                                    wowCursor4 = LogPut(wowCursor4, " with a 32-bit SS 0x"); wowCursor4 = LogHex(wowCursor4, frame[DPMI_FRAME_SS]);
-                                    wowCursor4 = LogPut(wowCursor4, ": TIB savSS:savESP=0x"); wowCursor4 = LogHex(wowCursor4, faultSs);
-                                    wowCursor4 = LogPut(wowCursor4, ":0x"); wowCursor4 = LogHex(wowCursor4, faultEsp);
-                                    wowCursor4 = LogPut(wowCursor4, " does not match the frame's 0x"); wowCursor4 = LogHex(wowCursor4, frame[DPMI_FRAME_SS]);
-                                    wowCursor4 = LogPut(wowCursor4, ":0x"); wowCursor4 = LogHex(wowCursor4, frame[DPMI_FRAME_SP]);
-                                    wowCursor4 = LogPut(wowCursor4, " -- cannot restore a full ESP. Reflecting instead.\r\n");
-                                    LogAppend(LOG_PATH, wowLine4, wowCursor4); SerialOut(wowLine4, wowCursor4);
-                                }
-                                if (guestPresent && guestLinear && guestEspOk
-                                    && HostReadable((const VOID *)guestInstruction, X86_INT_LENGTH)
-                                    && guestInstruction[0] == X86_OP_INT && guestInstruction[1] == (BYTE)gateVector) {
-                                    /* ── ★★★★★ THIS IS THE PASS THAT RE-PATCHED CALC'S FP SITE.
-                                         (session 56 -- the question session 55 left open.)
-                                         Session 55 put a 34h..3Fh guard in the SCANNER and the
-                                         guard was right, but it was in the wrong place: the
-                                         scanner never touched CALC's site. THIS did. Measured,
-                                         from the session-55 CALC log:
-
-                                           EXC: #GP(IDT) is a RAW INT 0x39 at 0x0b77:0x05c6
-                                                lin=0x03d15b66 -- servicing + patching     x120,673
-
-                                         The comment below is right that the CPU's error code
-                                         names the vector and the address, and that this is the
-                                         strongest evidence a byte pair is really an INT. It is
-                                         still not evidence that the byte pair is an INTERRUPT.
-                                         `CD 39` in FP-emulator code IS the x87 instruction, and
-                                         the fault is how the emulator is ENTERED, not a failure.
-                                         Rewriting it to a BOP destroys the guest's own encoding
-                                         -- which is exactly what the scanner was stopped from
-                                         doing, by a guard this path did not have. */
-                                    INT guestResult;
-                                    INT isFloatingPointVector = (gateVector >= VECTOR_FLOATING_POINT_FIRST && gateVector <= VECTOR_FLOATING_POINT_LAST);
-                                    INT floatingPointHooked = isFloatingPointVector && g_PmInt[gateVector].Client;
-                                    cursor = LogPut(cursor, "  EXC: #GP(IDT) is a RAW INT 0x"); cursor = LogHex(cursor, gateVector);
-                                    cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_CS]);
-                                    cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_IP]);
-                                    cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, guestLinear);
-                                    if (guestTruncated) {
-                                        cursor = LogPut(cursor, guestSource == GUEST_EIP_FROM_TIB_SLOT ? " (flat base-0 CS: EIP from TIB sav3,"
-                                                                " blocks cross-check "
-                                                              : " (flat base-0 CS: EIP RECONSTRUCTED"
-                                                                " from blocks, TIB sav3=0x");
-                                        if (guestSource == GUEST_EIP_FROM_TIB_SLOT) {
-                                            if (!guestRecovered)             { cursor = LogPut(cursor, "ambiguous n="); cursor = LogHex(cursor, (DWORD)guestCandidates); }
-                                            else if (guestRecovered == guestLinear)   cursor = LogPut(cursor, "AGREE");
-                                            else                   { cursor = LogPut(cursor, "DISAGREE 0x"); cursor = LogHex(cursor, guestRecovered); }
-                                        } else cursor = LogHex(cursor, faultEip);
-                                        cursor = LogPut(cursor, ")");
-                                    }
-                                    if (guestSsIs32) {
-                                        cursor = LogPut(cursor, " SS32 esp=0x"); cursor = LogHex(cursor, faultEsp);
-                                        if ((faultEsp & WORD_MASK_U) != frame[DPMI_FRAME_SP]) cursor = LogPut(cursor, " ⚠ slot/frame DISAGREE");
-                                    }
-                                    if (floatingPointHooked) {
-                                        cursor = LogPut(cursor, " -- FP EMULATOR RANGE: reflecting to the"
-                                                    " handler the guest installed, 0x");
-                                        cursor = LogHex(cursor, g_PmInt[gateVector].Selector);
-                                        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, g_PmInt[gateVector].Offset);
-                                        cursor = LogPut(cursor, " (not patched, not serviced)\r\n");
-                                    } else {
-                                        cursor = LogPut(cursor, isFloatingPointVector ? " -- FP EMULATOR RANGE but NO handler"
-                                                          " installed; servicing without patching\r\n"
-                                                        : " -- servicing + patching\r\n");
-                                    }
-                                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                                    /* put the guest back where it faulted, EIP ON the INT.
-                                       ⚠ For the flat base-0 case the frame's IP is TRUNCATED, so
-                                         resume on the full linear address (TIB slot, or the block
-                                         reconstruction) -- writing fr[3] back there would be a
-                                         wild jump into low memory. The frame's SP is truncated the
-                                         same way: for a 32-bit SS take ESP from the TIB slot, which
-                                         `guestEspOk` has just checked against the frame's low half. */
-                                    VDM_SET16(tib, VTIB_SS, frame[DPMI_FRAME_SS]);
-                                    VDM_REG(tib, VTIB_ESP) = guestSsIs32 ? faultEsp : (DWORD)frame[DPMI_FRAME_SP];
-                                    VDM_SET16(tib, VTIB_CS, frame[DPMI_FRAME_CS]);
-                                    VDM_REG(tib, VTIB_EIP) = guestTruncated ? (guestLinear - guestCodeBase) : (DWORD)frame[DPMI_FRAME_IP];
-                                    VDM_SET16(tib, VTIB_EFLAGS, frame[DPMI_FRAME_FLAGS]);
-                                    /* ── ★★★★ REFLECT IT, DO NOT SERVICE IT. ─────────────────
-                                         An FP `CD nn` is not a request to the host; it is the
-                                         guest's own emulator being entered, and the ONLY thing
-                                         that knows where to resume is that emulator. It reads
-                                         the modrm and displacement that FOLLOW the two bytes,
-                                         then REWRITES THE RETURN IP ON THE STACK to step over
-                                         them. So build the frame the CPU would have built --
-                                         flags, CS, IP-past-the-INT, on the GUEST's stack -- and
-                                         let its IRET decide where it goes. Every host-side
-                                         mechanism we have (BOP + trampoline, or a service arm
-                                         that IRETs) throws that adjustment away.
-                                       ⚠ IF stays as the guest had it. An INT gate would clear
-                                         it, but the emulator is not an ISR: it runs as part of
-                                         the guest's own instruction stream, and this host's
-                                         V86/VME rules make silently clearing IF a real hazard
-                                         (see [[vme-vif-interrupt-gating]]). TF is cleared,
-                                         which is what a gate does and costs nothing. */
-                                    if (floatingPointHooked) {
-                                        DWORD stackBase   = DpmiSelectorBase(frame[DPMI_FRAME_SS]);
-                                        INT   ss32 = guestSsIs32;
-                                        DWORD stackPointer   = ss32 ? faultEsp : (DWORD)frame[DPMI_FRAME_SP];   /* full width, see guestEspOk */
-                                        stackPointer = ss32 ? stackPointer - X86_WORD_SIZE : ((stackPointer - X86_WORD_SIZE) & WORD_MASK);
-                                        PokeWord(stackBase + stackPointer, frame[DPMI_FRAME_FLAGS]);                    /* FLAGS      */
-                                        stackPointer = ss32 ? stackPointer - X86_WORD_SIZE : ((stackPointer - X86_WORD_SIZE) & WORD_MASK);
-                                        PokeWord(stackBase + stackPointer, frame[DPMI_FRAME_CS]);                    /* return CS  */
-                                        stackPointer = ss32 ? stackPointer - X86_WORD_SIZE : ((stackPointer - X86_WORD_SIZE) & WORD_MASK);
-                                        PokeWord(stackBase + stackPointer, (WORD)(frame[DPMI_FRAME_IP] + X86_INT_LENGTH));        /* return IP  */
-                                        VDM_REG(tib, VTIB_ESP) = stackPointer;
-                                        VDM_SET16(tib, VTIB_CS, g_PmInt[gateVector].Selector);
-                                        VDM_REG(tib, VTIB_EIP) = g_PmInt[gateVector].Offset & WORD_MASK;
-                                        VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_TF_U;     /* TF */
-                                        continue;
-                                    }
-                                    if (!isFloatingPointVector && HostWritable((VOID *)(ULONG_PTR)guestInstruction, X86_INT_LENGTH)) {
-                                        guestInstruction[0] = VDM_BOP0; guestInstruction[1] = VDM_BOP1;
-                                        PatchMapSet(guestLinear, (BYTE)gateVector);   /* the REAL site (s74) */
-                                    }
-                                    guestResult = DpmiServicePmInt(&machine, tib, gateVector, steps);
-                                    if (guestResult > 0) continue;      /* serviced -> keep running */
-                                    if (guestResult == 0) { g_DpmiDone = 1; }
-                                    break;
-                                }
-                            }
-                            /* ── ★★★ (C) THE MACHINE FELL IDLE: START THE PARKED TASK.
-                                 krnl386's creating task ends itself (observed: its
-                                 record goes, the current-task word at DGROUP 0x228
-                                 becomes 0, and it moves to a private kernel stack) --
-                                 and from then on the machine belongs to the scheduler.
-                                 The first code to touch the current task then loads
-                                 that 0 as a selector and reads through it -- a #GP
-                                 with err=0. That fault is not a defect,
-                                 it is the cue: nobody is running and somebody is
-                                 waiting. Resume them instead of reflecting.
-                               ⚠ THIS TRUNCATES THE CREATOR. It had already retired, but
-                                 it was still freeing selectors when we took the machine
-                                 away, and those leak. Logged as the truncation it is,
-                                 because the honest fix is to park the creator too and
-                                 give it the rest of its turn later. */
-                            /* ★ Every PSP we built, and what its environment field
-                                 holds NOW. Two faults in this epic were that field;
-                                 printing it at the fault turns "who wrote 1 there"
-                                 from a reading of candidate code into a reading of
-                                 the log. */
-                            if (g_WowPspCount) {
-                                INT probeIndex3;
-                                cursor = LogPut(cursor, "  PSPENV:");
-                                for (probeIndex3 = 0; probeIndex3 < g_WowPspCount; ++probeIndex3) {
-                                    const volatile BYTE *pspBytes = (const volatile BYTE *)
-                                        (ULONG_PTR)DpmiSelectorBase(g_WowPspSelector[probeIndex3]);
-                                    cursor = LogPut(cursor, " sel 0x"); cursor = LogHex(cursor, g_WowPspSelector[probeIndex3]);
-                                    cursor = LogPut(cursor, "->+0x2c=0x");
-                                    if (HostReadable((const VOID *)pspBytes, DOS_PSP_ENVIRONMENT + sizeof(WORD)))
-                                        cursor = LogHex(cursor, (DWORD)(pspBytes[DOS_PSP_ENVIRONMENT] | (pspBytes[DOS_PSP_ENVIRONMENT + 1] << BYTE_SHIFT)));
-                                    else cursor = LogPut(cursor, "??unreadable");
-                                }
-                                cursor = LogPut(cursor, "\r\n");
-                            }
-                            INT schedSlot = g_WowSchedOn ? WowSchedPick(0) : -1;
-                            if (schedSlot >= 0 && WowSchedCurrentTask() == 0) {
-                                cursor = LogPut(cursor, "  WOWSCHED: [0x228]==0 -- the creator retired "
-                                            "and task 0x");
-                                cursor = LogHex(cursor, g_WowSchedSlots[schedSlot].Task);
-                                cursor = LogPut(cursor, " is parked. Resuming it INSTEAD of reflecting this "
-                                            "fault; the creator's remaining teardown is "
-                                            "ABANDONED (selectors leak).\r\n");
-                                /* ★ VERIFY THE LAUNCH RESULT WE INVENTED AT (A). By now
-                                     InitTask has NOT run for this task (it runs after we
-                                     resume), so TDB+0x1c is still zero -- but the moment
-                                     it is not, this line proves or breaks the SS&~1
-                                     invariant, and a wrong hInstance is exactly the kind
-                                     of thing that would otherwise fail three walls later
-                                     with no trace back to here. */
-                                {   DWORD taskBase = DpmiSelectorBase(g_WowSchedSlots[schedSlot].Task);
-                                    if (taskBase) {
-                                        const volatile BYTE *taskBytes =
-                                            (const volatile BYTE *)(ULONG_PTR)taskBase;
-                                        WORD handle = (WORD)(taskBytes[WOW_TDB_INSTANCE] | (taskBytes[WOW_TDB_INSTANCE + 1] << BYTE_SHIFT));
-                                        cursor = LogPut(cursor, "  WOWSCHED: TDB+0x1c now reads 0x");
-                                        cursor = LogHex(cursor, handle);
-                                        cursor = LogPut(cursor, " (0 = InitTask has not run yet)\r\n");
-                                    }
-                                }
-                                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                                WowSchedPoke(g_WowSchedSlots[schedSlot].ModeLinear, WOW32_MODE_ORDINARY);
-                                {   WORD toTask = g_WowSchedSlots[schedSlot].Task;
-                                    INT isTopLevel = WowSchedTopLevel(&g_WowSchedSlots[schedSlot]);
-                                    if (!g_WowSchedShell) g_WowSchedShell = toTask;   /* s92: WOWEXEC */
-                                    WowSchedRestore(&g_WowSchedSlots[schedSlot], tib);
-                                    if (isTopLevel) g_WowSchedCurrentBase = g_WowCallDepth;
-                                    /* ★ AND PUT THE CURRENT-TASK WORD BACK WITH IT.
-                                         The creator zeroed it on its way out; the
-                                         frame we are resuming was parked when it
-                                         held this task. Restoring registers alone
-                                         resumed the new task's code with krnl386
-                                         still believing nobody is current -- see
-                                         WowSchedSetCurrent for why that is part of the
-                                         context and not the ruled-out "write
-                                         [0x228] to yield". */
-                                    WowSchedSetCurrent(toTask);
-                                    WowTaskChdir(toTask, &cursor);   /* #164 */
-                                }
-                                ++g_WowSchedSwitches;
-                                continue;
-                            }
-                            if (exception < 0 || exception > X86_EXCEPTIONS - 1) {
-                                cursor = LogPut(cursor, "  EXC: no class (shared site) -- cannot name the "
-                                            "exception, stopping\r\n");
-                            } else if (!HostReadable((const VOID *)frame, DPMI_FRAME16_SIZE)) {
-                                cursor = LogPut(cursor, "  EXC: frame at SS:SP is not readable, stopping\r\n");
-                            } else if (!g_PmException[exception].IsSet) {
-                                cursor = LogPut(cursor, "  EXC: exception 0x"); cursor = LogHex(cursor, (DWORD)exception);
-                                cursor = LogPut(cursor, " has NO client handler (INT 31h 0203 never called "
-                                            "for it) -- stopping rather than guessing\r\n");
-                            } else {
-                                /* ── ★★★★★ THE EXCEPTION FRAME'S WIDTH FOLLOWS THE CLIENT'S
-                                     MODE, NOT THE HANDLER SELECTOR'S D BIT. This is the same
-                                     rule DpmiDispatchToPmHandler() already documents for
-                                     INTERRUPT frames, and it was never applied here -- so a
-                                     32-bit client got a 16-bit exception frame and read its
-                                     fields off the end of it.
-                                   ► MEASURED, ZAR (GH #23). NT builds a SIXTEEN-BIT frame on
-                                     the fault stack (8 words; the bytes are only coherent read
-                                     that way). DOS/4GW declares itself 32-bit at the mode
-                                     switch, so its #GP handler (entered at 0x0f:0x6abb) reads
-                                     the faulting EIP and CS at frame +0x0C and +0x10 -- the DPMI
-                                     32-BIT frame's slots (observed in its fault registers). In
-                                     our 16-byte frame there is nothing at +0x10, so DS loaded
-                                     ZERO and the handler faulted on its own first memory read --
-                                     which re-entered it, for ever, until the log capped.
-                                   ► AND THE RETURN CONFIRMS IT INDEPENDENTLY: the handler leaves
-                                     with a 32-bit far return, popping EIGHT bytes -- the same
-                                     tell (as with IRETD) that identified the interrupt-frame
-                                     case.
-                                   ► WHY THIS IS A REBUILD AND NOT A WIDER READ: the frame is the
-                                     KERNEL'S, and it is 16-bit whatever the client is. So the
-                                     32-bit frame is built BELOW NT's (which is left intact, so
-                                     the logging above still reads the kernel's own values) and
-                                     ESP is moved onto it.
-                                   ⚠ NT's fields ARE 16-BIT, so a fault in 32-bit code with an
-                                     EIP above 0xFFFF would arrive here already truncated by the
-                                     kernel -- this widens the frame, it cannot recover bits that
-                                     were never handed to us. Both of ZAR's faults are in 16-bit
-                                     DOS/4GW selectors (0x1a7 and 0x0f, both D/B=0) where the
-                                     question does not arise; a 32-bit-CS fault that resumes
-                                     wrongly should suspect this line first. */
-                                if (g_DpmiIsClient32) {
-                                    DWORD newSp = (esp - DPMI_FRAME32_SIZE) & WORD_MASK;
-                                    volatile DWORD *d32 =
-                                        (volatile DWORD *)(ULONG_PTR)(stackBase + newSp);
-                                    if (HostReadable((const VOID *)d32, DPMI_FRAME32_SIZE)) {
-                                        d32[DPMI_FRAME_RETURN_IP] = (DWORD)DPMI_FLTRET_COFF;  /* return EIP */
-                                        d32[DPMI_FRAME_RETURN_CS] = g_DpmiFaultCodeSelector;      /* return CS  */
-                                        d32[DPMI_FRAME_ERROR] = frame[DPMI_FRAME_ERROR];                    /* error code */
-                                        d32[DPMI_FRAME_IP] = frame[DPMI_FRAME_IP];                    /* fault EIP  */
-                                        d32[DPMI_FRAME_CS] = frame[DPMI_FRAME_CS];                    /* fault CS   */
-                                        d32[DPMI_FRAME_FLAGS] = frame[DPMI_FRAME_FLAGS];                    /* EFLAGS     */
-                                        d32[DPMI_FRAME_SP] = frame[DPMI_FRAME_SP];                    /* fault ESP  */
-                                        d32[DPMI_FRAME_SS] = frame[DPMI_FRAME_SS];                    /* fault SS   */
-                                        VDM_REG(tib, VTIB_ESP) =
-                                            (VDM_REG(tib, VTIB_ESP) & HIGH_WORD_MASK_U) | newSp;
-                                    } else {
-                                        cursor = LogPut(cursor, "  EXC: !! 32-bit frame site unreadable at 0x");
-                                        cursor = LogHex(cursor, stackBase + newSp);
-                                        cursor = LogPut(cursor, " -- delivering the KERNEL'S 16-bit frame, which"
-                                                    " a 32-bit client will misread\r\n");
-                                        frame[DPMI_FRAME_RETURN_IP] = (WORD)DPMI_FLTRET_COFF;
-                                        frame[DPMI_FRAME_RETURN_CS] = g_DpmiFaultCodeSelector;
-                                    }
-                                } else {
-                                    frame[DPMI_FRAME_RETURN_IP] = (WORD)DPMI_FLTRET_COFF;      /* return IP */
-                                    frame[DPMI_FRAME_RETURN_CS] = g_DpmiFaultCodeSelector;         /* return CS */
-                                }
-                                VDM_SET16(tib, VTIB_CS,  g_PmException[exception].Selector);
-                                VDM_REG(tib, VTIB_EIP) = g_PmException[exception].Offset;
-                                cursor = LogPut(cursor, "  EXC: -> client handler for 0x"); cursor = LogHex(cursor, (DWORD)exception);
-                                cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, g_PmException[exception].Selector);
-                                cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, g_PmException[exception].Offset);
-                                cursor = LogPut(cursor, " frame{err=0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_ERROR]);
-                                cursor = LogPut(cursor, " cs:ip=0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_CS]);
-                                cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_IP]);
-                                cursor = LogPut(cursor, " fl=0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_FLAGS]);
-                                cursor = LogPut(cursor, " ss:sp=0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_SS]);
-                                cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[DPMI_FRAME_SP]);
-                                cursor = LogPut(cursor, "} retf-> 0x"); cursor = LogHex(cursor, g_DpmiFaultCodeSelector);
-                                cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, (DWORD)DPMI_FLTRET_COFF);
-                                /* ── ★ WHAT THE FAULTING INSTRUCTION WAS LOOKING AT. ─────
-                                     The frame says WHERE it faulted; on a #GP that is half
-                                     the question, because the other half is always "which
-                                     selector, and did the offset fit inside it". Session 34
-                                     spent a run on a krnl386 #GP through ES unable to
-                                     say whether ES was the wrong selector or the right one
-                                     with too small a limit -- from a log that had already
-                                     printed the address. The reflect leaves the guest's GPRs
-                                     and DS/ES alone (only CS/SS/ESP move), so this is free.
-                                     Print the bytes at the fault too: a fault you can decode
-                                     is a fault you can attribute without a second run. */
-                                cursor = LogPut(cursor, "\r\n       fault regs: eax=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EAX));
-                                cursor = LogPut(cursor, " ebx=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EBX));
-                                cursor = LogPut(cursor, " ecx=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_ECX));
-                                cursor = LogPut(cursor, " edx=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EDX));
-                                cursor = LogPut(cursor, " esi=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_ESI));
-                                cursor = LogPut(cursor, " edi=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EDI));
-                                cursor = LogPut(cursor, " ebp=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EBP));
-                                { WORD selectors[2]; PCSTR registerNames[2] = { " ds", " es" }; INT selectorIndex;
-                                  selectors[0] = (WORD)VDM_REG16(tib, VTIB_DS);
-                                  selectors[1] = (WORD)VDM_REG16(tib, VTIB_ES);
-                                  for (selectorIndex = 0; selectorIndex < 2; ++selectorIndex) {
-                                      UINT32 accessRights = 0, descriptorLimit = 0;
-                                      cursor = LogPut(cursor, registerNames[selectorIndex]); cursor = LogPut(cursor, "=0x"); cursor = LogHex(cursor, selectors[selectorIndex]);
-                                      if (DpmiSelectorDescriptor(selectors[selectorIndex], &accessRights, &descriptorLimit)) {
-                                          cursor = LogPut(cursor, "{base=0x"); cursor = LogHex(cursor, DpmiSelectorBase(selectors[selectorIndex]));
-                                          cursor = LogPut(cursor, " lim=0x"); cursor = LogHex(cursor, descriptorLimit);
-                                          cursor = LogPut(cursor, " ar=0x"); cursor = LogHex(cursor, accessRights); cursor = LogPut(cursor, "}");
-                                      } else cursor = LogPut(cursor, "{NO DESCRIPTOR}");
-                                  } }
-                                /* ── AND WHAT ES POINTS AT. On a #GP through a selector,
-                                     the object is the evidence. Session 34's fault reads
-                                     `es:[0x28]` -- the in-memory module database's
-                                     ne_modtab -- and got 0x38a where the layout says 0x7c;
-                                     whether that database is malformed or simply is not at
-                                     ES cannot be decided from a register dump, only from
-                                     the bytes. 0x40 of them is the whole NE header. */
-                                { DWORD extraBase = DpmiSelectorBase((WORD)VDM_REG16(tib, VTIB_ES));
-                                  const volatile BYTE *extraOrigin = (const volatile BYTE *)(ULONG_PTR)extraBase;
-                                  cursor = LogPut(cursor, "\r\n       @es:0000 = ");
-                                  if (extraBase && HostReadable((const VOID *)extraOrigin, 0x40))
-                                       cursor = LogDump(cursor, (const VOID *)extraOrigin, 0x40);
-                                  else cursor = LogPut(cursor, "<unreadable>"); }
-                                /* ── ★ AND THE SAME FOR DS, for the same reason. ES is dumped
-                                     because a #GP is usually ABOUT a selector; DS is dumped
-                                     because the bottom of a guest's data segment is where its
-                                     own state lives, and "which branch did it take, and on
-                                     what" is answerable from those bytes when it is not
-                                     answerable from the registers. (ZAR, GH #23: DOS/16M keeps
-                                     its memory-manager INTERRUPT VECTOR at ds:0x34 -- 0x15
-                                     means "size memory with INT 15h AH=88h", anything else
-                                     means "use my own manager", and the second path is the one
-                                     that faults. One dump says which we are on.) */
-                                { DWORD dataBase = DpmiSelectorBase((WORD)VDM_REG16(tib, VTIB_DS));
-                                  const volatile BYTE *dataOrigin = (const volatile BYTE *)(ULONG_PTR)dataBase;
-                                  cursor = LogPut(cursor, "\r\n       @ds:0000 = ");
-                                  if (dataBase && HostReadable((const VOID *)dataOrigin, 0x40))
-                                       cursor = LogDump(cursor, (const VOID *)dataOrigin, 0x40);
-                                  else cursor = LogPut(cursor, "<unreadable>");
-                                  /* The named offsets from dsprobe.txt -- see the knob's
-                                     note. Four bytes each, so a WORD and the word after it
-                                     (a far pointer's two halves) both read in one line. */
-                                  if (g_DsProbeCount && dataBase) {
-                                      INT dataProbeIndex;
-                                      cursor = LogPut(cursor, "\r\n       dsprobe:");
-                                      for (dataProbeIndex = 0; dataProbeIndex < g_DsProbeCount; ++dataProbeIndex) {
-                                          const volatile BYTE *dataProbeBytes = dataOrigin + g_DsProbe[dataProbeIndex];
-                                          cursor = LogPut(cursor, " ds[0x"); cursor = LogHex(cursor, g_DsProbe[dataProbeIndex]);
-                                          cursor = LogPut(cursor, "]=");
-                                          if (HostReadable((const VOID *)dataProbeBytes, 4))
-                                               cursor = LogDump(cursor, (const VOID *)dataProbeBytes, 4);
-                                          else cursor = LogPut(cursor, "?? ");
-                                      }
-                                  }
-                                  /* csprobe: the same against the FAULTING CODE SEGMENT, six
-                                     bytes each -- enough for `e8 rel16` plus what follows, which
-                                     is the shape being checked against the file on disk. */
-                                  if (g_CsProbeCount) {
-                                      DWORD codeBase2 = DpmiSelectorBase(frame[DPMI_FRAME_CS]);
-                                      const volatile BYTE *codeOrigin =
-                                          (const volatile BYTE *)(ULONG_PTR)codeBase2;
-                                      INT codeProbeIndex;
-                                      cursor = LogPut(cursor, "\r\n       csprobe:");
-                                      for (codeProbeIndex = 0; codeProbeIndex < g_CsProbeCount; ++codeProbeIndex) {
-                                          const volatile BYTE *codeProbeBytes = codeOrigin + g_CsProbe[codeProbeIndex];
-                                          cursor = LogPut(cursor, " cs[0x"); cursor = LogHex(cursor, g_CsProbe[codeProbeIndex]);
-                                          cursor = LogPut(cursor, "]=");
-                                          if (codeBase2 && HostReadable((const VOID *)codeProbeBytes, 6))
-                                               cursor = LogDump(cursor, (const VOID *)codeProbeBytes, 6);
-                                          else cursor = LogPut(cursor, "?? ");
-                                      }
-                                  } }
-                                { DWORD frameCodeBase = DpmiSelectorBase(frame[DPMI_FRAME_CS]);
-                                  const volatile BYTE *fi2 =
-                                      (const volatile BYTE *)(ULONG_PTR)(frameCodeBase + frame[DPMI_FRAME_IP]);
-                                  cursor = LogPut(cursor, " bytes@fault=");
-                                  if (HostReadable((const VOID *)fi2, 8)) cursor = LogDump(cursor, (const VOID *)fi2, 8);
-                                  else                                     cursor = LogPut(cursor, "<unreadable>");
-                                  /* ── ★ THE CODE AROUND THE FAULT, AND THE SELECTOR'S BASE.
-                                       Eight bytes AT the fault identify the instruction; they
-                                       do not identify WHERE IN THE GUEST'S IMAGE it came from,
-                                       and that is the question as soon as you start matching a
-                                       fault against a file on disk. A window either side can be
-                                       searched for in the binary, which either confirms the
-                                       file<->guest mapping or refutes it -- and this
-                                       investigation (GH #23) has now had TWO conclusions rest
-                                       on a mapping derived from a single 8-byte match.
-                                       The base is printed for the same reason: it is what turns
-                                       a selector:offset into the linear address pmbp.txt wants. */
-                                  cursor = LogPut(cursor, "\r\n       csbase=0x"); cursor = LogHex(cursor, frameCodeBase);
-                                  cursor = LogPut(cursor, " code[ip-0x20..ip+0x20]=");
-                                  { const volatile BYTE *codeWindow =
-                                        (const volatile BYTE *)(ULONG_PTR)(frameCodeBase + ((frame[DPMI_FRAME_IP] - 0x20) & WORD_MASK));
-                                    if (frame[DPMI_FRAME_IP] >= 0x20 && HostReadable((const VOID *)codeWindow, 0x40))
-                                         cursor = LogDump(cursor, (const VOID *)codeWindow, 0x40);
-                                    else cursor = LogPut(cursor, "<unreadable>"); } }
-                                /* ── ★ AND WHO CALLED. The frame says WHERE it faulted; on a
-                                     #GP inside a subroutine that is only half the question,
-                                     because the other half is always "how did the guest get
-                                     here" -- and a routine that faults on its FIRST memory
-                                     access has usually been entered in the wrong state rather
-                                     than gone wrong on its own. The return address is sitting
-                                     on the faulting stack, a few words up from SS:SP, and it
-                                     costs one dump to have it instead of a second run and a
-                                     breakpoint. (ZAR, GH #23: `push 8 / pop es` in DOS/16M.) */
-                                { DWORD sb2 = DpmiSelectorBase(frame[DPMI_FRAME_SS]);
-                                  const volatile BYTE *stackBytes2 =
-                                      (const volatile BYTE *)(ULONG_PTR)(sb2 + frame[DPMI_FRAME_SP]);
-                                  cursor = LogPut(cursor, "\r\n       @ss:sp = ");
-                                  if (sb2 && HostReadable((const VOID *)stackBytes2, 0x20))
-                                       cursor = LogDump(cursor, (const VOID *)stackBytes2, 0x20);
-                                  else cursor = LogPut(cursor, "<unreadable>"); }
-                                cursor = LogPut(cursor, "\r\n");
-                                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                                continue;                 /* re-arm + re-enter, now in the handler */
-                            }
-                            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                        }
-                        break;
+                    {
+                        INT flow = DpmiHandleReflectedFault(&cursor, base, event, currentCs, eip, tib, &machine, steps);
+                        if (flow == HOST_FLOW_BREAK) break;
+                        if (flow == HOST_FLOW_CONTINUE) continue;
                     }
-                    /* ── The client's exception handler has finished: its `retf` landed here. ──
-                         DPMI 0.9: the handler returns through the CS:IP at the bottom of the
-                         frame, having optionally rewritten the CS:IP / FLAGS / SS:SP above it
-                         to say where execution should resume. krnl386's handler does exactly
-                         that (observed) -- it points the resume elsewhere rather than back at its
-                         own invalid opcode, which is the whole reason it raised one. After the
-                         `retf` popped two words, SS:SP is at the error code, so what is left is
-                             +0x00 error code   +0x02 IP   +0x04 CS
-                             +0x06 FLAGS        +0x08 SP   +0x0a SS
-                         and the resume is: take those, drop the error code, run.
-                       ⚠ FLAGS IS SIXTEEN BITS. Assigning it to EFLAGS whole would clear the
-                         high half -- VM, IOPL's neighbours, the lot -- so merge it. */
-                    if (event == VDM_EVENT_BOP && currentCs == (g_DpmiFaultCodeSelector & WORD_MASK)
-                        && eip == DPMI_FLTRET_COFF) {
-                        DWORD stackBase  = DpmiSelectorBase(g_DpmiFaultSelector);
-                        DWORD esp = VDM_REG16(tib, VTIB_ESP);
-                        volatile WORD *frame = (volatile WORD *)(ULONG_PTR)(stackBase + esp);
-                        if (!HostReadable((const VOID *)frame, DPMI_RETURNED16_SIZE)) {
-                            cursor = LogPut(cursor, "GH#128: EXC RETURN but the frame at SS:SP is unreadable "
-                                        "-- stopping\r\n");
-                            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            break;
-                        }
-                        /* ── ★ AND THE RETURN IS THE SAME QUESTION, SO IT GETS THE SAME
-                             ANSWER. A 32-bit client's handler leaves by RETFD, which pops
-                             EIGHT bytes, so ESP lands on the error code of a DWORD frame:
-                                 +0x00 err  +0x04 EIP  +0x08 CS
-                                 +0x0c EFLAGS  +0x10 ESP  +0x14 SS
-                             Reading that as words would take the resume address from the
-                             top half of the error code.
-                           ► THE FRAME IS READ BACK, NOT REMEMBERED, because rewriting it is
-                             the handler's documented lever: DOS/4GW's #GP handler resumes AT
-                             THE FAULTING INSTRUCTION having stored 0 over the bad selector on
-                             the faulting stack (it takes that stack from +0x18/+0x1c, which
-                             only exist in the 32-bit frame), so the `pop es` re-executes and
-                             succeeds. Resuming from anywhere we cached would defeat it. */
-                        if (g_DpmiIsClient32) {
-                            volatile DWORD *d32 = (volatile DWORD *)(ULONG_PTR)(stackBase + esp);
-                            if (!HostReadable((const VOID *)d32, DPMI_RETURNED32_SIZE)) {
-                                cursor = LogPut(cursor, "GH#128: EXC RETURN (32) but the frame at SS:ESP is "
-                                            "unreadable -- stopping\r\n");
-                                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                                break;
-                            }
-                            cursor = LogPut(cursor, "GH#128: EXC RETURN(32) -> resume 0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_CS]);
-                            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_IP]);
-                            cursor = LogPut(cursor, " fl=0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_FLAGS]);
-                            cursor = LogPut(cursor, " ss:esp=0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_SS]);
-                            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_SP]);
-                            cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, d32[DPMI_RETURNED_ERROR]);
-                            cursor = LogPut(cursor, "\r\n");
-                            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_SET16(tib, VTIB_SS,  (WORD)d32[DPMI_RETURNED_SS]);
-                            VDM_REG(tib, VTIB_ESP) = d32[DPMI_RETURNED_SP];
-                            VDM_SET16(tib, VTIB_CS,  (WORD)d32[DPMI_RETURNED_CS]);
-                            VDM_REG(tib, VTIB_EIP) = d32[DPMI_RETURNED_IP];
-                            /* ⚠ FLAGS: still merged as sixteen bits. The high half carries VM
-                                 and IOPL's neighbours, and this frame's EFLAGS came from a
-                                 kernel frame that only ever held a word. */
-                            VDM_SET16(tib, VTIB_EFLAGS, (WORD)d32[DPMI_RETURNED_FLAGS]);
-                            continue;
-                        }
-                        cursor = LogPut(cursor, "GH#128: EXC RETURN -> resume 0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_CS]);
-                        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_IP]);
-                        cursor = LogPut(cursor, " fl=0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_FLAGS]);
-                        cursor = LogPut(cursor, " ss:sp=0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_SS]);
-                        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_SP]);
-                        cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, frame[DPMI_RETURNED_ERROR]);
-                        cursor = LogPut(cursor, "\r\n");
-                        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                        VDM_SET16(tib, VTIB_SS,  frame[DPMI_RETURNED_SS]); VDM_REG(tib, VTIB_ESP) = frame[DPMI_RETURNED_SP];
-                        VDM_SET16(tib, VTIB_CS,  frame[DPMI_RETURNED_CS]); VDM_REG(tib, VTIB_EIP) = frame[DPMI_RETURNED_IP];
-                        VDM_SET16(tib, VTIB_EFLAGS, frame[DPMI_RETURNED_FLAGS]);
-                        continue;
+                    {
+                        INT flow = DpmiResumeAfterClientHandler(&cursor, base, event, currentCs, eip, tib);
+                        if (flow == HOST_FLOW_BREAK) break;
+                        if (flow == HOST_FLOW_CONTINUE) continue;
                     }
                     /* GH#18 run 72: a real-CPU PROTECTED-MODE I/O insn (IN/OUT) reflects as
                        event 0 -- the SAME VDD-trap event as V86 (VM-confirmed by outprobe.com,
