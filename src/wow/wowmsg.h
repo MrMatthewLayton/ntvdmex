@@ -212,4 +212,17 @@ extern DWORD g_WowMsgWaitMs;
 extern volatile LONG g_WowMsgInWait;
 extern INT g_WowMsgCount;
 INT WowMsgTake(WORD window, WORD filterMin, WORD filterMax, INT isRemove, PWOWMSG output);
+extern DWORD g_WowMsgPosted;
+extern DWORD g_WowMsgTaken;
+extern WORD g_WowMsgQuitCode;
+extern WORD g_WowMsgTaker;
+extern WORD (*g_WowMsgOwner)(WORD window);
+VOID WowMsgPostQuit(WORD task, WORD code);
+INT WowMsgQuitFor(WORD task);
+WORD WowMsgTakeQuit(INT quitNumber);
+extern WORD g_WowMsgFocus;
+extern INT g_WowMsgIsReplayDue;
+extern WOWMSG g_WowMsgReplay;
+VOID WowMsgRead(const volatile BYTE *bytes, PWOWMSG message);
+VOID WowMsgWrite(volatile BYTE *bytes, PCWOWMSG message);
 #endif /* NTVDMEX_WOWMSG_H */

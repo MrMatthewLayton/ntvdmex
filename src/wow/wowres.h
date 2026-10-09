@@ -146,4 +146,13 @@ typedef struct _WOWRES_ACCEL { BYTE Flags; WORD Key, Id; } WOWRES_ACCEL, *PWOWRE
 #define WOWRES_RT_CURSOR        1
 #define WOWRES_RT_GROUP_CURSOR 12
 
+/* Defined in wowres.c (#335). */
+INT WowResOpen(PCSTR path);
+INT WowResAccelFirst(PWOWRES_ACCEL output, INT capacity, PWORD resourceId);
+HMENU WowResMenu(WORD id, PINT items);
+HMENU WowResMenuByName(PCSTR name, PINT items);
+HICON WowResIconNamed(PCSTR name, PINT picked, INT width, INT height);
+HICON WowResIcon(WORD groupId, PINT picked, INT width, INT height);
+HCURSOR WowResCursorNamed(PCSTR name);
+HCURSOR WowResCursor(WORD groupId);
 #endif /* NTVDMEX_WOWRES_H */

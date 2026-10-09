@@ -32,7 +32,7 @@ static WORD WowResReadWord(DWORD offset)
 static WOWRES_CACHE_ENTRY g_WowResCache[WOWRES_CACHE];
 static INT g_WowResCacheCount = 0;
 
-static INT WowResOpen(PCSTR path)
+INT WowResOpen(PCSTR path)
 {
     HANDLE file;
     DWORD size = 0, bytesRead = 0;
@@ -132,7 +132,7 @@ static DWORD WowResFindAny(WORD type, PWORD idOutput, PDWORD length)
 }
 
 /* Parse the module's accelerator table. Returns the number of entries. */
-static INT WowResAccelFirst(PWOWRES_ACCEL output, INT capacity, PWORD resourceId)
+INT WowResAccelFirst(PWOWRES_ACCEL output, INT capacity, PWORD resourceId)
 {
     DWORD length = 0, offset = WowResFindAny(WOWRES_RT_ACCEL, resourceId, &length);
     INT count = 0;
@@ -275,7 +275,7 @@ static HMENU WowResMenuAt(DWORD offset, DWORD length, PINT items)
     return menu;
 }
 
-static HMENU WowResMenu(WORD id, PINT items)
+HMENU WowResMenu(WORD id, PINT items)
 {
     DWORD length = 0, offset = WowResFind(WOWRES_RT_MENU, id, &length);
     return WowResMenuAt(offset, length, items);
@@ -283,19 +283,19 @@ static HMENU WowResMenu(WORD id, PINT items)
 
 /* ★ The same menu, asked for by NAME -- see WowResFindNamed. MS Paint's is
    "PBrush2"; Notepad's is #1, and both paths end in the same builder. */
-static HMENU WowResMenuByName(PCSTR name, PINT items)
+HMENU WowResMenuByName(PCSTR name, PINT items)
 {
     DWORD length = 0, offset = WowResFindNamed(WOWRES_RT_MENU, name, &length);
     return WowResMenuAt(offset, length, items);
 }
 
-static HICON WowResIconNamed(PCSTR name, PINT picked, INT width, INT height)
+HICON WowResIconNamed(PCSTR name, PINT picked, INT width, INT height)
 {
     DWORD groupLength = 0, groupOffset = WowResFindNamed(WOWRES_RT_GROUP_ICON, name, &groupLength);
     return WowResIconAt(groupOffset, groupLength, picked, width, height);
 }
 
-static HICON WowResIcon(WORD groupId, PINT picked, INT width, INT height)
+HICON WowResIcon(WORD groupId, PINT picked, INT width, INT height)
 {
     DWORD groupLength = 0, groupOffset = WowResFind(WOWRES_RT_GROUP_ICON, groupId, &groupLength);
     return WowResIconAt(groupOffset, groupLength, picked, width, height);
@@ -317,14 +317,14 @@ static HCURSOR WowResCursorAt(DWORD groupOffset, DWORD groupLength)
                                              WOWRES_ICON_VERSION, 0, 0, LR_DEFAULTCOLOR);
 }
 
-static HCURSOR WowResCursorNamed(PCSTR name)
+HCURSOR WowResCursorNamed(PCSTR name)
 {
     DWORD groupLength = 0, groupOffset = WowResFindNamed(WOWRES_RT_GROUP_CURSOR, name, &groupLength);
     return WowResCursorAt(groupOffset, groupLength);
 }
 
 /* s89 (#216): the same, for a cursor group asked for by ordinal. */
-static HCURSOR WowResCursor(WORD groupId)
+HCURSOR WowResCursor(WORD groupId)
 {
     DWORD groupLength = 0, groupOffset = WowResFind(WOWRES_RT_GROUP_CURSOR, groupId, &groupLength);
     return WowResCursorAt(groupOffset, groupLength);

@@ -203,7 +203,7 @@ static PCSTR Wow32Name(WORD id)
     }
 }
 
-static CHAR g_WowCommandProgram[WOW32_COMMAND_PROGRAM_MAX] = { 0 };   /* full path of the Win16 program   */
+CHAR g_WowCommandProgram[WOW32_COMMAND_PROGRAM_MAX] = { 0 };   /* full path of the Win16 program   */
 static CHAR g_WowCommandArguments[WOW32_COMMAND_ARGUMENTS_MAX] = { 0 };   /* its arguments, without a leading space */
 static CHAR g_WowCommandDirectory[MAX_PATH] = { 0 }; /* #164: the launch directory, 8.3; "" = none */
 
@@ -257,7 +257,7 @@ static DWORD Wow32RawArgDword(PCWOW32_FRAME frame, INT offset)
     return (DWORD)Wow32RawArgWord(frame, offset) | ((DWORD)Wow32RawArgWord(frame, offset + WOW_WORD_BYTES) << WORD_SHIFT);
 }
 /* A protected-mode 16:16 far pointer -> the host address it names (0 for NULL). */
-static DWORD Wow32Flat(PCWOW32_FRAME frame, DWORD farPointer)
+DWORD Wow32Flat(PCWOW32_FRAME frame, DWORD farPointer)
 {
     WORD selector = (WORD)(farPointer >> WORD_SHIFT);
     DWORD base;

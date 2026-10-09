@@ -2471,7 +2471,7 @@ VOID WowShimsLoad(VOID)
         LogAppend(LOG_PATH, buffer, cursor);
     }
 }
-static INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCount,
+INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCount,
                               WORD hwnd, WORD message, WORD *result,
                               BYTE *blob, INT blobLength, INT blobArgument,
                               const INT *fix, INT fixupCount)

@@ -1,13 +1,33 @@
 /* wowuser.c -- USER.EXE's half of the WOW32 interface. GH #128, session 38.
  *
- * The code of wowuser.h (#335): its functions and state, in their original order. Part of
- * the host's single translation unit: #included by main.c straight after wowuser.h. */
+ * The code of wowuser.h (#335): its functions and state, in their original order;
+ * its own translation unit, declared in wowuser.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "wowdlg.h"
+#include "wowenum.h"
+#include "host_wow.h"
+#include "host_dpmi.h"
+/* Used before their definitions below. */
+static INT WowUserHookUnset(SHORT hookId, DWORD procedure);
+static INT WowUserDestroy(WORD window16, PSTR note, INT noteCapacity, PINT noteLengthInOut);
+
 
 /* Forward declarations for the single translation unit (they were in wowuser.h). */
 /* ── s93: THE HOOK BRIDGE (see SetWindowsHook). One entry per Win16 hook; the
      Win32 hook's callback finds its entry by kind and calls the 16-bit procedure
      through the nested run, with the procedure's own DS (its module's DGROUP). */
-static INT WowCall16SyncEx(DWORD proc, WORD ds, PCWORD args, INT n,
+INT WowCall16SyncEx(DWORD proc, WORD ds, PCWORD args, INT n,
                               WORD hwnd, WORD msg, PWORD res,
                               PBYTE blob, INT blobLength, INT blobArgument,
                               const INT *fix, INT nfix);
@@ -84,9 +104,9 @@ static PCSTR WowUserSystemResourceName(WORD handle16)
     return NULL;
 }
 
-static CHAR g_WowUserClipboard[WOWUSER_CLIPBOARD_SIZE];
-static INT  g_WowUserClipboardLength;
-static WORD g_WowUserClipboardFormat;  /* SetClipboardData's format, for the put */
+CHAR g_WowUserClipboard[WOWUSER_CLIPBOARD_SIZE];
+INT  g_WowUserClipboardLength;
+WORD g_WowUserClipboardFormat;  /* SetClipboardData's format, for the put */
 
 static WOWUSER_PROP g_WowUserProps[WOWUSER_MAX_PROP];
 static INT            g_WowUserPropCount = 0;
@@ -96,7 +116,7 @@ static INT            g_WowUserPropCount = 0;
    observed at run time (session 38) to hold the running task's handle -- which
    the dispatcher already reads at every BOP for the log -- this just keeps the
    last value where `GetWindowTask` can see it. 0 until the first BOP. */
-static WORD g_WowUserCurrentTask = 0;
+WORD g_WowUserCurrentTask = 0;
 
 static WOWUSER_HOOK g_WowUserHooks[WOWUSER_HOOKS];
 
@@ -253,7 +273,7 @@ static INT            g_WowUserMenuCount = 0;
 
 /* One token per HMENU: the OS hands back the same handle for the same menu, and
    a program that asks twice must get one answer, the way it does for a cursor. */
-static WORD WowUserMenu16(HMENU menu)
+WORD WowUserMenu16(HMENU menu)
 {
     INT index;
     if (!menu) return 0;
@@ -266,7 +286,7 @@ static WORD WowUserMenu16(HMENU menu)
     return g_WowUserMenus[index].Handle16;
 }
 
-static HMENU WowUserMenu32(WORD handle16)
+HMENU WowUserMenu32(WORD handle16)
 {
     INT index;
     if (!handle16) return NULL;
@@ -538,7 +558,7 @@ static INT           g_WowUserWindowCount = 0;
 WORD          g_WowUserEnumTask = 0;
 
 /* s93: is this one of our windows driven by a DIALOG procedure? (wowwin.h) */
-static INT WowUserIsDialog16(WORD window16)
+INT WowUserIsDialog16(WORD window16)
 {
     INT index;
     for (index = 0; index < g_WowUserWindowCount; ++index)
@@ -547,7 +567,7 @@ static INT WowUserIsDialog16(WORD window16)
 }
 
 /* s92 (#306): whose queue a window's messages are in -- wowmsg.h's g_WowMsgOwner. */
-static WORD WowUserOwner16(WORD window16)
+WORD WowUserOwner16(WORD window16)
 {
     INT index;
     for (index = 0; index < g_WowUserWindowCount; ++index)
@@ -562,7 +582,7 @@ static WORD WowUserOwner16(WORD window16)
      looking it up -- `wow_module_of_sel()` is a bind-stage table and cannot name
      a selector krnl386 allocated at run time, which is the same trap that made
      the id-space label print `?` about a segment the dispatcher had identified. */
-static WORD g_WowUserKernelSegment = 0;
+WORD g_WowUserKernelSegment = 0;
 
 static const WOWUSER_SYSPROC g_WowUserSystemProcedures[] = {
     { "BUTTON",    0x43f4, 3 }, { "COMBOBOX",  0x4434, 4 }, { "EDIT",      0x4474, 5 },
@@ -571,7 +591,7 @@ static const WOWUSER_SYSPROC g_WowUserSystemProcedures[] = {
 };
 
 /* main.c: a 16-bit procedure, now, through the nested run (WowCall16Sync). */
-static INT (*g_WowUserCall16)(DWORD procedure, WORD dataSelector, PCWORD arguments, INT argumentCount,
+INT (*g_WowUserCall16)(DWORD procedure, WORD dataSelector, PCWORD arguments, INT argumentCount,
                               WORD window16, WORD message, PWORD result);
 static HWND g_WowUserSubclassBypass;  /* CallWindowProc(thunk) in progress for this HWND */
 static UINT g_WowUserSubclassSent, g_WowUserSubclassDirect, g_WowUserSubclassChained;  /* for the STAGE2 line */
@@ -758,7 +778,7 @@ static LRESULT CALLBACK WowUserSubclassProcedure(HWND window, UINT message, WPAR
 
 /* Is this window's parent an MDI client? Decides which default procedure the OS
    should run for it -- see WowWinProc. */
-static INT WowUserIsMdiChild(PCWOWUSER_WINDOW window)
+INT WowUserIsMdiChild(PCWOWUSER_WINDOW window)
 {
     PCWOWUSER_WINDOW parent = window->Parent ? WowUserFindWindow(window->Parent) : NULL;
     return parent && g_WowUserClasses[parent->Class].IsSystemClass
@@ -767,7 +787,7 @@ static INT WowUserIsMdiChild(PCWOWUSER_WINDOW window)
 
 /* The MDI client owned by this window, if it has one -- a frame window has to
    pass it to DefFrameProc, which is how Win32 makes an MDI frame behave. */
-static HWND WowUserMdiClientOf(PCWOWUSER_WINDOW window)
+HWND WowUserMdiClientOf(PCWOWUSER_WINDOW window)
 {
     INT index;
     for (index = 0; index < g_WowUserWindowCount; ++index) {
@@ -1010,7 +1030,7 @@ static VOID WowUserTimerClear(WORD window16, WORD timerId)
 }
 
 /* Declared in wowwin.h, which is included first and relays WM_TIMER. */
-static DWORD WowUserTimerProcedure(WORD window16, WORD timerId)
+DWORD WowUserTimerProcedure(WORD window16, WORD timerId)
 {
     INT index;
     for (index = 0; index < WOWUSER_MAXTIMER; ++index)
@@ -1887,10 +1907,10 @@ static LONG WowUserDefProc(PWOW32_FRAME frame, PWOWUSER_WINDOW window, WORD mess
 /* s89 (#305 M10): send a message to a guest window NOW, through the nested run
    (main.c wires this to WowCall16Sync with the window's own procedure and
    instance, exactly as DispatchMessage would choose them). 0 = could not. */
-static INT (*g_WowUserSend16)(WORD window16, WORD message, WORD wParam, DWORD lParam, PWORD result);
+INT (*g_WowUserSend16)(WORD window16, WORD message, WORD wParam, DWORD lParam, PWORD result);
 /* ...and with a structure as lParam, placed on the guest's stack; `fix` lists the
    far pointers inside it that point back into it (main.c: WowSend16Blob). */
-static INT (*g_WowUserSend16Blob)(WORD window16, WORD message, WORD wParam, PBYTE blob, INT blobLength,
+INT (*g_WowUserSend16Blob)(WORD window16, WORD message, WORD wParam, PBYTE blob, INT blobLength,
                                   const INT *fix, INT fixCount, PWORD result);
 /* s89 (#302): the modeless dialog whose WM_INITDIALOG is running right now, and
    whether the program called ShowWindow on it meanwhile (CreateDialog, below). */
@@ -2109,7 +2129,7 @@ static LRESULT WowUserDef32(INT kind, HWND window, HWND client, WORD message, WO
     return result;
 }
 
-static LRESULT WowUserDlgDefault(PWOWUSER_WINDOW window, WORD dialog16, WORD message, WORD wParam16,
+LRESULT WowUserDlgDefault(PWOWUSER_WINDOW window, WORD dialog16, WORD message, WORD wParam16,
                                    DWORD lParam32, PSTR note, INT noteCapacity, PINT noteLengthInOut)
 {
     INT noteLength = *noteLengthInOut;
@@ -2179,7 +2199,7 @@ static HWND WowUserFindWindowByClass(PCSTR className, PCSTR windowName)
     return window ? window : FindWindowA(className, windowName);
 }
 
-static INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
+INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 {
     g_WowUserCurrentFrame = frame;      /* s91: for WowUserDef32's 16:16 reads */
     if (noteCapacity) note[0] = 0;

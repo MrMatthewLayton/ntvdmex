@@ -1017,4 +1017,8 @@ extern BYTE g_WowGdiMetafileBlob[WOWCALL_MAX_BLOB];
 INT WowGdiMetafileReadBack(VOID);
 VOID WowGdiMetafileEnd(VOID);
 INT WowGdiMetafileNext(INT room, PINT blobLength, PINT tableOffset, UINT *function);
+extern WOWGDI_OBJECT g_WowGdiObjects[WOWGDI_MAX];
+extern INT g_WowGdiObjectCount;
+HGDIOBJ WowGdiH32(WORD handle16, PINT kind);
+VOID WowGdiForget(WORD handle16);
 #endif /* NTVDMEX_WOWGDI_H */

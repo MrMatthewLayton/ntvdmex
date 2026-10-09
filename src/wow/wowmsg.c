@@ -33,11 +33,11 @@ static WOWMSG g_WowMsgRing[WOWMSG_MAX];
 static INT      g_WowMsgHead = 0;      /* next to take */
 static INT      g_WowMsgTail = 0;      /* next to fill */
 INT      g_WowMsgCount = 0;
-static DWORD    g_WowMsgPosted = 0;    /* how many went in, for the run summary   */
-static DWORD    g_WowMsgTaken  = 0;    /* ...and how many came out                */
+DWORD    g_WowMsgPosted = 0;    /* how many went in, for the run summary   */
+DWORD    g_WowMsgTaken  = 0;    /* ...and how many came out                */
 static DWORD    g_WowMsgDropped = 0;   /* ring full -- LOUD, see WOWMSG_MAX       */
 static INT      g_WowMsgIsQuit = 0;      /* PostQuitMessage was called              */
-static WORD     g_WowMsgQuitCode = 0;
+WORD     g_WowMsgQuitCode = 0;
 /* ── s92 (#306): ONE RING, BUT EVERY TASK SEES ONLY ITS OWN MESSAGES. ─────────
      The note at the top came true: with the run queue, Calc's GetMessage took a
      message WinHelp had posted to ITS OWN window, and DispatchMessage ran WinHelp's
@@ -47,8 +47,8 @@ static WORD     g_WowMsgQuitCode = 0;
      old behaviour), `g_WowMsgOwner` names a window's task (0 = unknown, anyone's).
      A thread message (hwnd 0) is anyone's too. And PostQuitMessage ends the loop
      of the task that called it, not every task's. */
-static WORD     g_WowMsgTaker = 0;
-static WORD   (*g_WowMsgOwner)(WORD window) = 0;
+WORD     g_WowMsgTaker = 0;
+WORD   (*g_WowMsgOwner)(WORD window) = 0;
 
 static WOWMSG_QUIT g_WowMsgQuits[WOWMSG_MAXQUIT];
 static INT      g_WowMsgQuitCount = 0;
@@ -60,7 +60,7 @@ static INT WowMsgIsFor(WORD window, WORD task)
     owner = g_WowMsgOwner(window);
     return !owner || owner == task;
 }
-static VOID WowMsgPostQuit(WORD task, WORD code)
+VOID WowMsgPostQuit(WORD task, WORD code)
 {
     INT index;
     for (index = 0; index < g_WowMsgQuitCount; ++index) if (g_WowMsgQuits[index].Task == task) break;
@@ -75,7 +75,7 @@ static VOID WowMsgPostQuit(WORD task, WORD code)
     g_WowMsgIsQuit = 1; g_WowMsgQuitCode = code;
 }
 /* 1 + the index of `task`'s pending quit (a task-0 quit is anyone's), or 0. */
-static INT WowMsgQuitFor(WORD task)
+INT WowMsgQuitFor(WORD task)
 {
     INT index;
     for (index = 0; index < g_WowMsgQuitCount; ++index)
@@ -83,7 +83,7 @@ static INT WowMsgQuitFor(WORD task)
     return 0;
 }
 /* Deliver it: the exit code, and the flag is cleared. */
-static WORD WowMsgTakeQuit(INT quitNumber)
+WORD WowMsgTakeQuit(INT quitNumber)
 {
     WORD code;
     INT index;
@@ -99,7 +99,7 @@ static WORD WowMsgTakeQuit(INT quitNumber)
      focus the target is 0, and USER's own DispatchMessage `jcxz`es a null hwnd
      -- so a key with nowhere to go is discarded BY THE GUEST, correctly, and
      this host does not have to invent a destination. */
-static WORD     g_WowMsgFocus = 0;
+WORD     g_WowMsgFocus = 0;
 
 /* Put one message in the queue. ⚠ CALLED FROM THE UI THREAD as well as the exec
    thread (a keystroke arrives on whichever thread owns the host window), so
@@ -150,8 +150,8 @@ static INT WowMsgPostMove(WORD window, WORD message, WORD wParam, DWORD lParam,
     return 0;
 }
 
-static INT      g_WowMsgIsReplayDue = 0;
-static WOWMSG g_WowMsgReplay;
+INT      g_WowMsgIsReplayDue = 0;
+WOWMSG g_WowMsgReplay;
 
 INT WowMsgTake(WORD window, WORD filterMin, WORD filterMax, INT isRemove, PWOWMSG output)
 {
@@ -197,7 +197,7 @@ static INT WowMsgCountFor(WORD task)
 /* Read an 18-byte MSG back out of guest memory -- the guest owns this one; it is
    the buffer GetMessage filled and the loop then handed to DispatchMessage. Only
    the four fields a window procedure is called with are taken. */
-static VOID WowMsgRead(const volatile BYTE *bytes, PWOWMSG message)
+VOID WowMsgRead(const volatile BYTE *bytes, PWOWMSG message)
 {
     message->Window   = (WORD)(bytes[WOWMSG_FIELD_HWND]    | (bytes[WOWMSG_FIELD_HWND + 1]    << BYTE_SHIFT));
     message->Message    = (WORD)(bytes[WOWMSG_FIELD_MESSAGE] | (bytes[WOWMSG_FIELD_MESSAGE + 1] << BYTE_SHIFT));
@@ -208,7 +208,7 @@ static VOID WowMsgRead(const volatile BYTE *bytes, PWOWMSG message)
 }
 
 /* Write an 18-byte MSG through the far pointer the guest handed us. */
-static VOID WowMsgWrite(volatile BYTE *bytes, PCWOWMSG message)
+VOID WowMsgWrite(volatile BYTE *bytes, PCWOWMSG message)
 {
     Wow32PokeWord(bytes + WOWMSG_FIELD_HWND,    message->Window);
     Wow32PokeWord(bytes + WOWMSG_FIELD_MESSAGE, message->Message);

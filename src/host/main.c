@@ -49,7 +49,6 @@
 #include "../wow/wowgdi.h" /* GH #128: GDI.EXE's id space -- where MS Paint begins */
 #include "../wow/wowgdi.c"
 #include "../wow/wowuser.h" /* GH #128: USER.EXE's id space -- a DIFFERENT one; see the file */
-#include "../wow/wowuser.c"
 /* ⚠ AFTER wowuser.h, and that order is load-bearing too: the modal loop reads
      the window table and the procedure rule that file owns. USER's DialogBox and
      EndDialog arms reach it through the three prototypes declared there. */

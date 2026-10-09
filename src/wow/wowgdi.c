@@ -10,8 +10,8 @@ WORD WowGdiPeek(const volatile BYTE *bytes, INT offset)
     return (WORD)(bytes[offset] | (bytes[offset + 1] << BYTE_SHIFT));
 }
 
-static WOWGDI_OBJECT g_WowGdiObjects[WOWGDI_MAX];
-static INT          g_WowGdiObjectCount = 0;
+WOWGDI_OBJECT g_WowGdiObjects[WOWGDI_MAX];
+INT          g_WowGdiObjectCount = 0;
 
 /* One token per object. `kind` is kept because DeleteDC, DeleteObject and
    ReleaseDC are three different calls with three different rules, and handing an
@@ -59,7 +59,7 @@ WORD WowGdiH16(HGDIOBJ object, INT kind)
     return g_WowGdiObjects[index].Handle16;
 }
 
-static HGDIOBJ WowGdiH32(WORD handle16, PINT kind)
+HGDIOBJ WowGdiH32(WORD handle16, PINT kind)
 {
     INT index;
     if (kind) *kind = -1;
@@ -83,7 +83,7 @@ static HGDIOBJ WowGdiH32(WORD handle16, PINT kind)
    after a reuse, name a DIFFERENT object instead of failing. That is exactly
    what Win32 does with its own handles, so a guest that does it is already
    broken on real Windows. */
-static VOID WowGdiForget(WORD handle16)
+VOID WowGdiForget(WORD handle16)
 {
     INT index;
     for (index = 0; index < g_WowGdiObjectCount; ++index)

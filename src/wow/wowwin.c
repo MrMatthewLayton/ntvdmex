@@ -6,21 +6,21 @@
 /* Forward declarations for the single translation unit (they were in wowwin.h). */
 WORD  WowWinHwnd16(HWND window);
 PWOWUSER_WINDOW WowUserFindWindow(WORD window16);
-static INT   WowUserIsMdiChild(PCWOWUSER_WINDOW window);
-static HWND  WowUserMdiClientOf(PCWOWUSER_WINDOW window);
+INT   WowUserIsMdiChild(PCWOWUSER_WINDOW window);
+HWND  WowUserMdiClientOf(PCWOWUSER_WINDOW window);
 HWND  WowUserHwnd32(WORD window16);
-static WORD  WowUserMenu16(HMENU menu);  /* the 16-bit name for a real menu */
+WORD  WowUserMenu16(HMENU menu);  /* the 16-bit name for a real menu */
 /* #294: COMMDLG's modeless Find/Replace dialogs -- wowcommdlg.h, included later. */
 INT   WowCdlgRelay(UINT message, LPARAM lParam);
 INT   WowCdlgIsDialogMessage(PMSG message);
-static DWORD WowUserTimerProcedure(WORD window16, WORD timerId);  /* 0 if none installed */
+DWORD WowUserTimerProcedure(WORD window16, WORD timerId);  /* 0 if none installed */
 
-static INT WowUserIsDialog16(WORD h16);          /* wowuser.h: a dialog procedure? */
+INT WowUserIsDialog16(WORD h16);          /* wowuser.h: a dialog procedure? */
 
 /* Set once the exec thread has a window: the thread id that owns them all, so a
    pump on the wrong thread can be refused rather than silently doing nothing. */
 DWORD g_WowWinThread = 0;
-static DWORD g_WowWinCreated = 0, g_WowWinMessages = 0;
+DWORD g_WowWinCreated = 0, g_WowWinMessages = 0;
 /* #160: menus held back until the guest set them up, and the replay's re-entry flag. */
 static DWORD g_WowWinMenuDeferred = 0;
 static INT   g_WowWinIsReplaying = 0;
@@ -34,7 +34,7 @@ DWORD g_WowWinPumped = 0;
 
 static WOWWIN_PAINT g_WowWinPaints[WOWWIN_MAXPAINT];
 /* Tick at which the most recent WM_PAINT was posted to the Win16 queue. */
-static DWORD g_WowWinPaintMs = 0;
+DWORD g_WowWinPaintMs = 0;
 
 static VOID WowWinPaintWant(WORD window16, const RECT *rect, INT isErase)
 {
@@ -59,7 +59,7 @@ static VOID WowWinPaintWant(WORD window16, const RECT *rect, INT isErase)
 }
 
 /* Take the pending rectangle for a window, or 0 if there is none. */
-static INT WowWinPaintTake(WORD window16, PRECT output, PINT isErase)
+INT WowWinPaintTake(WORD window16, PRECT output, PINT isErase)
 {
     INT index;
     for (index = 0; index < WOWWIN_MAXPAINT; ++index)
@@ -99,9 +99,9 @@ static INT WowWinPaintTake(WORD window16, PRECT output, PINT isErase)
      FALSE, so the guest's loop dispatches it to its own 16-bit procedure, which is where
      it belongs. What the dialog manager GENERATES (Enter -> WM_COMMAND for the default
      button, focus moving to a real control) still flows as before. */
-static INT  g_WowWinInDialogMessage, g_WowWinIsDialogBounced;
-static HWND g_WowWinDialogWindow;
-static UINT g_WowWinDialogMessage;
+INT  g_WowWinInDialogMessage, g_WowWinIsDialogBounced;
+HWND g_WowWinDialogWindow;
+UINT g_WowWinDialogMessage;
 
 /* ── s89 (#162): MESSAGES WINDOWS SENDS AND NEEDS AN ANSWER TO, NOW. ─────────────
      WM_CTLCOLOR* arrives from inside a control's paint and wants a brush back
@@ -205,7 +205,7 @@ static VOID WowWinHoldChar(WORD window16, WORD character, DWORD lParam)
     g_WowWinHeldChars[oldest].Sequence = ++g_WowWinHeldCharSequence;
 }
 /* Post, oldest first, every held character for this key-down; returns how many. */
-static INT WowWinReleaseChars(WORD window16, DWORD keyLParam)
+INT WowWinReleaseChars(WORD window16, DWORD keyLParam)
 {
     INT count = 0;
     for (;;) {
@@ -223,7 +223,7 @@ static INT WowWinReleaseChars(WORD window16, DWORD keyLParam)
 }
 
 static WOWWIN_THREAD_TIMER g_WowWinThreadTimers[WOWWIN_MAX_THREAD_TIMERS];
-static INT WowWinThreadTimerAdd(UINT_PTR id32, DWORD procedure)
+INT WowWinThreadTimerAdd(UINT_PTR id32, DWORD procedure)
 {
     INT index;
     for (index = 0; index < WOWWIN_MAX_THREAD_TIMERS; ++index)
@@ -232,7 +232,7 @@ static INT WowWinThreadTimerAdd(UINT_PTR id32, DWORD procedure)
         }
     return 0;
 }
-static INT WowWinThreadTimerKill(UINT_PTR id32)
+INT WowWinThreadTimerKill(UINT_PTR id32)
 {
     INT index;
     for (index = 0; index < WOWWIN_MAX_THREAD_TIMERS; ++index)
@@ -256,8 +256,8 @@ INT WowWinThreadTimerFire(const MSG *message)
 
 /* s93: the guest's SetFocus calls, counted, and the real window of the last one --
    so WM_ACTIVATE can tell that the program placed the focus itself (wowuser.h). */
-static UINT g_WowWinSetFocusCount;
-static HWND     g_WowWinSetFocusWindow;
+UINT g_WowWinSetFocusCount;
+HWND     g_WowWinSetFocusWindow;
 
 static VOID WowWinSendOrPost(WORD window16, WORD message, WORD wParam, DWORD lParam, WORD pointX, WORD pointY)
 {
@@ -933,7 +933,7 @@ static INT WowWinPump(INT budget)
 
 /* #160: open the menu a WM_SYSCOMMAND was held back for (see that case). Runs the
    real modal menu loop here, on this thread, exactly where the pump would have. */
-static VOID WowWinMenuReplay(PCWOWMSG replay)
+VOID WowWinMenuReplay(PCWOWMSG replay)
 {
     HWND window = WowUserHwnd32(replay->Window);
     if (!window || !IsWindow(window)) return;
@@ -961,7 +961,7 @@ static VOID WowWinMenuReplay(PCWOWMSG replay)
      resources in its own file, so a paint program's pointer never changed shape.
      One asymmetry removed: whoever knows the token resolves it, and this only
      decides what to do when there is nothing. */
-static INT WowWinRegister(PCSTR name16, PSTR className32, INT capacity,
+INT WowWinRegister(PCSTR name16, PSTR className32, INT capacity,
                            HCURSOR cursor, HICON icon, HICON smallIcon, PINT isCursorDefaulted,
                            HBRUSH background)
 {
@@ -1009,7 +1009,7 @@ static INT WowWinRegister(PCSTR name16, PSTR className32, INT capacity,
 }
 
 /* Win16 CW_USEDEFAULT -> Win32's. Different values; see the header note. */
-static INT WowWinCoordinate(WORD value)
+INT WowWinCoordinate(WORD value)
 {
     return (value == CW_USEDEFAULT16) ? CW_USEDEFAULT32 : (INT)(SHORT)value;
 }

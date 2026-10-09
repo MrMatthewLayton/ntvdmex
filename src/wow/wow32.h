@@ -605,4 +605,6 @@ WORD Wow32PeekWord(volatile BYTE *bytes);
 VOID Wow32PokeWord(volatile BYTE *bytes, WORD value);
 volatile BYTE *Wow32FarAt(PCWOW32_FRAME frame, volatile BYTE *base, INT offset);
 INT Wow32ArgString(PCWOW32_FRAME frame, INT offset, PSTR output, INT capacity);
+extern CHAR g_WowCommandProgram[WOW32_COMMAND_PROGRAM_MAX];
+DWORD Wow32Flat(PCWOW32_FRAME frame, DWORD farPointer);
 #endif /* NTVDMEX_WOW32_H */
