@@ -97,6 +97,7 @@ endif()
 add_executable(ntvdmhost
     src/host/main.c
     src/host/log.c
+    src/host/pcspeaker.c
     src/vdm/v86.c
     src/vdm/dpmi.c
     src/vdm/dpmi_enter.S
