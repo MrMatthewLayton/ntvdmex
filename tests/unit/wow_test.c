@@ -91,7 +91,7 @@ static WOW_TEST_DEFINITION g_Definitions[MAXDEF];
 static INT   g_DefinitionCount;
 
 static PCSTR g_Headers[] = {
-    "src/wow/wowuser.h", "src/wow/wowgdi.h", "src/wow/wow32.h",
+    "src/wow/wowuser.h", "src/wow/wowuser_calls.h", "src/wow/wowgdi.h", "src/wow/wowgdi_calls.h", "src/wow/wow32.h",
     "src/wow/wowres.h",  "src/wow/wowcommdlg.h", "src/wow/wowshell.h",
 };
 
