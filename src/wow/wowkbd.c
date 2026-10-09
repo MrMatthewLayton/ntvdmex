@@ -1,9 +1,27 @@
 /* wowkbd.c -- ★ KEYBOARD.DRV's OWN ID SPACE.  GH #128, session 44.
  *
- * The code of wowkbd.h (#335): its functions and state, in their original order. Part of
- * the host's single translation unit: #included by main.c straight after wowkbd.h. */
+ * The code of wowkbd.h (#335): its functions and state, in their original order;
+ * its own translation unit, declared in wowkbd.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "wowdlg.h"
+#include "wowenum.h"
+#include "wowshell.h"
+#include "wowcommdlg.h"
+#include "wowkbd.h"
 
-static INT WowKeyboardCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
+
+INT WowKeyboardCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
 {
     if (noteCapacity) note[0] = 0;
     switch (frame->Id) {

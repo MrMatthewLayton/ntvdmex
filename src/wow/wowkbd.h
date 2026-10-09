@@ -75,4 +75,6 @@
 #define WOWKBD_KEY_NAME_MAX         64
 #define WOWKBD_CHARACTER_MASK       0xFF
 
+/* Defined in wowkbd.c (#335). */
+INT WowKeyboardCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity);
 #endif /* NTVDMEX_WOWKBD_H */

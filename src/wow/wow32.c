@@ -31,7 +31,7 @@ VOID WowNoteHex(PSTR buffer, INT capacity, PINT length, DWORD value, INT digits)
 }
 
 /* A quoted string, with the quotes, truncated rather than dropped. */
-static VOID WowNoteQuoted(PSTR buffer, INT capacity, PINT length, PCSTR text)
+VOID WowNoteQuoted(PSTR buffer, INT capacity, PINT length, PCSTR text)
 {
     WowNotePut(buffer, capacity, length, "\"");
     WowNotePut(buffer, capacity, length, text);
@@ -50,7 +50,7 @@ static VOID Wow32PokeWord(volatile BYTE *bytes, WORD value)
 }
 
 /* Argument WORD at byte offset `off` into the argument block. */
-static WORD Wow32ArgWord(PCWOW32_FRAME frame, INT offset)
+WORD Wow32ArgWord(PCWOW32_FRAME frame, INT offset)
 {
     if (offset < 0 || offset + WOW_WORD_BYTES > (INT)frame->ArgumentBytes) return 0;
     return Wow32PeekWord(frame->FrameBase + WOW32_OFF_ARGS + offset);
@@ -65,7 +65,7 @@ DWORD Wow32ArgDword(PCWOW32_FRAME frame, INT offset)
 /* A 16:16 far pointer argument, resolved to a host linear address.
    ⚠ Returns 0 for a null selector rather than the LDT base, so a caller that
      forgets to check cannot scribble at the bottom of the address space. */
-static volatile BYTE *Wow32ArgPointer(PCWOW32_FRAME frame, INT offset)
+volatile BYTE *Wow32ArgPointer(PCWOW32_FRAME frame, INT offset)
 {
     DWORD farPointer = Wow32ArgDword(frame, offset);
     WORD  selector = (WORD)(farPointer >> WORD_SHIFT);

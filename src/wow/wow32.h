@@ -598,4 +598,7 @@ VOID WowNoteHex(PSTR buffer, INT capacity, PINT length, DWORD value, INT digits)
 DWORD Wow32ArgDword(PCWOW32_FRAME frame, INT offset);
 VOID Wow32SetReturn(PWOW32_FRAME frame, DWORD value);
 DWORD WowGenericThunkInvoke(DWORD procedure, PCDWORD arguments, INT count);
+VOID WowNoteQuoted(PSTR buffer, INT capacity, PINT length, PCSTR text);
+WORD Wow32ArgWord(PCWOW32_FRAME frame, INT offset);
+volatile BYTE *Wow32ArgPointer(PCWOW32_FRAME frame, INT offset);
 #endif /* NTVDMEX_WOW32_H */
