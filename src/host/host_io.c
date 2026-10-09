@@ -1,7 +1,15 @@
 /* host_io.c -- port I/O: the trap dispatcher, the fast paths, and the VDD plug-in surface
  *   (third-party VDDs and the ISV I/O hooks).
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): declared in host_io.h. */
+#include "host_state.h"
+#include "log.h"
+#include "host_io.h"
+#include "host_timing.h"
+#include "host_bios.h"
+#include "host_dpmi.h"
+#include "host_wow.h"
+
 
 /* Async-preemption experiment knob, also on the share so it can be changed between
    runs without a rebuild. One digit: bits 0-1 = the FIXED_NTVDMSTATE pending bits to
@@ -24,7 +32,7 @@ typedef UCHAR (APIENTRY *PNETBIOS_ROUTINE)(PNCB);
 static PNETBIOS_ROUTINE g_Netbios;
 static LANA_ENUM  g_NetLanas;
 static BYTE       g_NetReady[MAX_LANA + 1];
-static BYTE NetSubmit(PVOID context, NETBIOS_REQUEST *request)
+BYTE NetSubmit(PVOID context, NETBIOS_REQUEST *request)
 {
     NCB enumBlock;
     UCHAR lana;
@@ -75,7 +83,7 @@ static BYTE NetSubmit(PVOID context, NETBIOS_REQUEST *request)
     return request->ReturnCode;
 }
 static DWORD          g_PitReloadLog = 0;
-static WORD g_IoLastPort = 0;      /* port the last serviced access touched */
+WORD g_IoLastPort = 0;      /* port the last serviced access touched */
 static DWORD g_IoSiteLogged = 0;
 /* ── ★★★★ THIRD-PARTY VDDs: LOAD THEM. (GH #11, ADR-0008) ────────────────────
      ADR-0008 chose a "clean internal plugin ABI that all our own devices use"
@@ -120,7 +128,7 @@ static const ntvdmex_vdd_api g_VddApi = {
     VddLogLine
 };
 
-static VOID VddLoadThirdParty(VOID)
+VOID VddLoadThirdParty(VOID)
 {
     HANDLE handle;
     CHAR buffer[4096];
@@ -184,7 +192,7 @@ static VOID VddLoadThirdParty(VOID)
 /* Count-register reads split by whether an ASYNC injection was in flight. Note the
    pair does NOT have to sum to the device's own rd_count[1]: this sees only reads
    dispatched through HostIoDo, and a gap between the two is itself informative. */
-static UINT32 g_DmaPollInAsync, g_DmaPollMainline;
+UINT32 g_DmaPollInAsync, g_DmaPollMainline;
 /* Record the first few DISTINCT ports the guest touches that no VDD claims. A game
    hunting for hardware probes a fixed set of addresses, so this names the device it
    wants -- e.g. 0x220-0x22F is a Sound Blaster looking for its DSP. Distinct-only
@@ -196,7 +204,7 @@ static UINT32 g_DmaPollInAsync, g_DmaPollMainline;
    says which INSTRUCTION IDIOM it is, and that is what a fast path has to match. (The
    existing burst only collapses `IN/OUT` + `LOOP rel8`, and io_burst was 4828 of 4.5M, so
    Skyroads' delay loop is plainly a different shape.) */
-static VOID IoHotNote(WORD port, DWORD cs, DWORD ip)
+VOID IoHotNote(WORD port, DWORD cs, DWORD ip)
 {
     INT index;
     for (index = 0; index < g_IoHotCount; ++index)
@@ -361,7 +369,7 @@ static DWORD HostIoLoopBurst(volatile BYTE *tib, VDD_BUS *bus,
     g_IoExtra += iterations;
     return iterations;
 }
-static INT HostTryIo(volatile BYTE *tib, VDD_BUS *bus)
+INT HostTryIo(volatile BYTE *tib, VDD_BUS *bus)
 {
     DWORD cs = VDM_REG16(tib, VTIB_CS);
     DWORD ip = VDM_REG16(tib, VTIB_EIP);
@@ -405,7 +413,7 @@ static INT HostTryIo(volatile BYTE *tib, VDD_BUS *bus)
    we decode the IN/OUT that ENDS at CS:IP and service it WITHOUT advancing EIP: a DX-form
    (1 byte: EC/ED/EE/EF at IP-1, optional 66 prefix at IP-2) or an imm-form (2 bytes:
    E4-E7 at IP-2, port imm at IP-1). Returns 1 if serviced. */
-static INT HostTryIoRetro(volatile BYTE *tib, VDD_BUS *bus)
+INT HostTryIoRetro(volatile BYTE *tib, VDD_BUS *bus)
 {
     DWORD cs = VDM_REG16(tib, VTIB_CS);
     DWORD ip = VDM_REG16(tib, VTIB_EIP);
@@ -449,7 +457,7 @@ static INT HostTryIoRetro(volatile BYTE *tib, VDD_BUS *bus)
    most IO_BURST_MAX units per reflect and only step past the instruction once CX
    drains -- leaving EIP on the REP otherwise, exactly as a real CPU resumes an
    interrupted string op, which keeps a 64K transfer from monopolising the monitor. */
-static INT HostTryIoString(volatile BYTE *tib, VDD_BUS *bus)
+INT HostTryIoString(volatile BYTE *tib, VDD_BUS *bus)
 {
     DWORD cs = VDM_REG16(tib, VTIB_CS);
     DWORD ip = VDM_REG16(tib, VTIB_EIP);
@@ -511,12 +519,12 @@ static INT HostTryIoString(volatile BYTE *tib, VDD_BUS *bus)
     return 1;
 }
 
-static DWORD g_DmaPollEip[DMAPOLL_MAX], g_DmaPollHits[DMAPOLL_MAX];
-static UINT g_DmaPollCount = 0, g_DmaPollOverflow = 0;
-static DWORD g_PollStack[POLLSTK_MAX], g_PollStackHits[POLLSTK_MAX];
-static DWORD g_PollGap[10], g_PollGapMaximumMicroseconds = 0;
-static UINT g_PollStackCount = 0, g_PollStackOverflow = 0;
-static INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
+DWORD g_DmaPollEip[DMAPOLL_MAX], g_DmaPollHits[DMAPOLL_MAX];
+UINT g_DmaPollCount = 0, g_DmaPollOverflow = 0;
+DWORD g_PollStack[POLLSTK_MAX], g_PollStackHits[POLLSTK_MAX];
+DWORD g_PollGap[10], g_PollGapMaximumMicroseconds = 0;
+UINT g_PollStackCount = 0, g_PollStackOverflow = 0;
+INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
 {
     DWORD csValue = VDM_REG16(tib, VTIB_CS);
     DWORD eip = VDM_REG(tib, VTIB_EIP);
@@ -628,7 +636,7 @@ static INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
    (the bus has no release) and answers as an empty slot: FFh in, writes dropped. */
 typedef VOID (WINAPI *PISV_IN_BYTE_ROUTINE)(WORD, BYTE *);   typedef VOID (WINAPI *PISV_IN_WORD_ROUTINE)(WORD, WORD *);
 typedef VOID (WINAPI *PISV_OUT_BYTE_ROUTINE)(WORD, BYTE);    typedef VOID (WINAPI *PISV_OUT_WORD_ROUTINE)(WORD, WORD);
-static VOID IsvIoIn(PVOID self, WORD port, BYTE width, UINT32 *value)
+VOID IsvIoIn(PVOID self, WORD port, BYTE width, UINT32 *value)
 {
     INT index = (INT)(ULONG_PTR)self;
     BYTE lowByte = VDD_UNCLAIMED_READ_BYTE, highByte = VDD_UNCLAIMED_READ_BYTE; WORD word = VDD_UNCLAIMED_READ_WORD;
@@ -644,7 +652,7 @@ static VOID IsvIoIn(PVOID self, WORD port, BYTE width, UINT32 *value)
         *value = (UINT32)lowByte | ((UINT32)highByte << BYTE_SHIFT);
     }
 }
-static VOID IsvIoOut(PVOID self, WORD port, BYTE width, UINT32 value)
+VOID IsvIoOut(PVOID self, WORD port, BYTE width, UINT32 value)
 {
     INT index = (INT)(ULONG_PTR)self;
     if (!g_IsvHooks[index].IsLive) return;
@@ -660,7 +668,7 @@ enum { ISV_STRING_DLL = 0, ISV_STRING_INIT = 1, ISV_STRING_DISPATCH = 2, ISV_STR
    LIVE flags -- a BOP is not an INT, nothing was pushed. Handles are 1-based. */
 #define ISV_MAX_MODS 8
 static struct { HMODULE Module; FARPROC Dispatch; } g_IsvModules[ISV_MAX_MODS];
-static VOID IsvBop(volatile BYTE *tib, DWORD subfunction, PSTR *logCursor)
+VOID IsvBop(volatile BYTE *tib, DWORD subfunction, PSTR *logCursor)
 {
     PSTR cursor = *logCursor;
     DWORD ds = VDM_REG16(tib, VTIB_DS);

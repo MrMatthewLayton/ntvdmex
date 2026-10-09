@@ -254,7 +254,7 @@ static DWORD (*g_WowWinGlobal16)(INT operation, DWORD first, DWORD second);
 #define WOWWIN_GLOBAL16_FREE   1
 #define WOWWIN_GLOBAL16_LOCK   2
 #define WOWWIN_GLOBAL16_UNLOCK 3
-static DWORD DpmiSelectorBase(WORD selector);            /* main.c: a selector's linear base */
+DWORD DpmiSelectorBase(WORD selector);            /* main.c: a selector's linear base */
 
 /* ── s92 (#305 M12): WM_DROPFILES -- A WIN16 HDROP IS A REAL GLOBAL BLOCK. ─────────
      DragQueryPoint (SHELL ord 13) and DragFinish (ord 12) never reach us -- they

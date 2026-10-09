@@ -2391,7 +2391,7 @@ static VOID ShimSetRegister(INT registerIndex, DWORD value)
     if (registerIndex >= SHIM_R_CS && registerIndex <= SHIM_R_GS) VDM_SET16(tib, g_ShimTibOffsets[registerIndex], (WORD)value);
     else VDM_REG(tib, g_ShimTibOffsets[registerIndex]) = value;
 }
-static PVOID ShimMapFlat(WORD segment, DWORD offset, INT isProtectedMode)
+PVOID ShimMapFlat(WORD segment, DWORD offset, INT isProtectedMode)
 {
     if (isProtectedMode) { DWORD base = DpmiSelectorBase(segment); return base ? (VOID *)(ULONG_PTR)(base + offset) : NULL; }
     return (VOID *)(ULONG_PTR)(((DWORD)segment << PARAGRAPH_SHIFT) + (offset & WORD_MASK));
@@ -2431,7 +2431,7 @@ static VOID ShimRemoveIoHook(HANDLE vddHandle, WORD rangeCount, PCVOID ranges)
             if (g_IsvHooks[index].VddHandle == vddHandle && g_IsvHooks[index].FirstPort == ranges16[index2 * 2]) g_IsvHooks[index].IsLive = 0;
 }
 enum { WOW_WNDPROC_ARGUMENTS = 5 };   /* a Win16 window procedure: hwnd, msg, wParam, lParam high, low */
-static VOID WowShimsLoad(VOID)
+VOID WowShimsLoad(VOID)
 {
     static INT done;
     static NTVDMEX_SHIM_API shimApi;

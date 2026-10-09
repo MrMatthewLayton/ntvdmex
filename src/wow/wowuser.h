@@ -1478,7 +1478,7 @@ static INT WowUserHookUnset(SHORT hookId, DWORD procedure)
 #define WOWUSER_NE_FILE_INFO_MAX   0x8000
 #define WOWUSER_OFSTRUCT_PATH      8       /* OFSTRUCT.szPathName                */
 #define WOWUSER_MIN_FULL_PATH      4       /* "C:\x"                             */
-static DWORD DpmiSelectorBase(WORD selector);
+DWORD DpmiSelectorBase(WORD selector);
 static CHAR g_WowUserResourceProgram[MAX_PATH];
 static PCSTR WowUserResourceProgram(VOID)
 {

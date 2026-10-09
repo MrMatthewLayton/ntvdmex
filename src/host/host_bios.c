@@ -146,7 +146,7 @@ static VOID SerialInitialize(VOID)
     SetCommTimeouts(g_Serial, &timeouts);
 }
 /* Write [buf..end) to COM1 (and it's already in the file log via log_*). */
-static VOID SerialOut(PCSTR buffer, PCSTR end)
+VOID SerialOut(PCSTR buffer, PCSTR end)
 {
     DWORD wrote;
     if (g_Serial != INVALID_HANDLE_VALUE && end > buffer) {

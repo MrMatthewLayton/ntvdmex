@@ -286,7 +286,7 @@ static DWORD g_Irq0IsrAuto     = 0;   /* acknowledges that auto-EOI'd (stub or f
 static INT   g_Irq0AutoEoi      = 0;   /* fallback engaged: this guest does not EOI IRQ0    */
 
 static UINT32 g_PitRestartsSeen = 0;
-static VOID HostPitResyncCheck(VOID)
+VOID HostPitResyncCheck(VOID)
 {
     UINT32 restarts = g_Pit.Restarts;             /* monotonic; a stale read only defers us */
     if (restarts == g_PitRestartsSeen) return;
@@ -1933,7 +1933,7 @@ static VOID HostPitDeliver(VOID)
 }
 
 /* One clock, two concerns: callers that used to call HostPitSync still can. */
-static VOID HostPitSync(VOID)
+VOID HostPitSync(VOID)
 {
     HostPitGenerate();
     HostPitDeliver();
@@ -1947,7 +1947,7 @@ static VOID HostPitSync(VOID)
      two counter-0 latches only. Read it as: gaps over ~32us straddle a whole line,
      and a `..:00` followed by `..:01` in a later line is a synthesised owed blank.
      `cmd` is the byte written to 0x43; a counter-0 latch is SC=00, RW=00. */
-static VOID PitLatchNote(BYTE command)
+VOID PitLatchNote(BYTE command)
 {
     UINT32 total, count, first, base, index, column = 0;
     CHAR buffer[1200], *cursor = buffer;
@@ -2015,7 +2015,7 @@ static VOID Int10WaitAfter(VOID)
 enum { RETRACE_IDLE_PATTERN_LENGTH = 4, RETRACE_IDLE_BACK_MAX = 3 };   /* RetraceIdle: test/and al ; jcc back to the IN */
 static volatile DWORD g_RetracePending, g_RetraceCs, g_RetraceIp, g_RetraceAl, g_RetraceCx, g_RetraceIdles;
 static INT g_RetraceOffset = -1;
-static VOID RetraceNote(volatile BYTE *tib, WORD port, INT isIn, DWORD cs, DWORD ipAfter)
+VOID RetraceNote(volatile BYTE *tib, WORD port, INT isIn, DWORD cs, DWORD ipAfter)
 {
     if (!isIn || port != VIDEO_PORT_STATUS1_COLOUR) return;
     {   INT slot;

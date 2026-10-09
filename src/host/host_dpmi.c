@@ -125,7 +125,7 @@ static WORD      g_PmTransferParagraphs = 0;
 /* True if selector `sel`'s descriptor has the D/B (32-bit default) bit set. The bit
    lives in g_Ldt[].flags bit 2 (descriptor byte-6 bit 6). All 16-bit DPMI clients leave
    it 0; a DOS/4GW-class 32-bit code selector sets it (via INT 31h 0009). */
-static INT DpmiSelectorIs32(WORD selector)
+INT DpmiSelectorIs32(WORD selector)
 {
     INT index = DPMI_SELECTOR_INDEX(selector & WORD_MASK);
     if (index < 1 || index >= DPMI_LDT_LEGACY_LIMIT) return 0;
@@ -498,7 +498,7 @@ static VOID DpmiArmFaultTrampoline(volatile BYTE *tib, WORD flag)
 }
 
 /* Linear base of a selector, for INT 21h pointer thunks. */
-static DWORD DpmiSelectorBase(WORD selector)
+DWORD DpmiSelectorBase(WORD selector)
 {
     INT index = DPMI_SELECTOR_INDEX(selector & WORD_MASK);
     /* Indices 1..3 are the switch's code/data/stack selectors (recorded in g_Ldt[]

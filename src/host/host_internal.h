@@ -6,6 +6,10 @@
 
 #include "host_types.h"
 #include "host_state.h"
+#include "host_io.h"
+#include "host_bios.h"
+#include "host_dpmi.h"
+#include "host_wow.h"
 #include "host_input.h"
 #include "host_mouse.h"
 #include "host_window.h"
@@ -22,13 +26,11 @@ static INT  ModeYInterpServes(VOID);      /* fwd: north star 1, design C */
 static VOID ModeYRingDump(PCSTR why);  /* fwd: north star 1, design C */
 static VOID ModeYRingNoteIrq(UINT vector, WORD cs, WORD ip, WORD ss, WORD sp);
 static INT InterpreterMemoryPageOk(UINT32 linear);        /* fwd: page-validity guard, defined with V86HostRead8 */
-static DWORD DpmiSelectorBase(WORD selector);       /* fwd: watchdog resolves the frozen selector base */
 static VOID ExecMachineSave(INT depth);    /* fwd: defined with CloseProgramNow */
 static BYTE  g_FaultTable[DOS_FLTSITE_N * DPMI_FAULT_TABLE_ENTRY] __attribute__((aligned(16)));
 static BYTE  g_FaultStack[DPMI_FAULT_STK_SIZE] __attribute__((aligned(16)));   /* #205 */
 static struct _DPMI_DESCRIPTOR { DWORD Base, Limit; BYTE Access, Flags; } g_Ldt[DPMI_LDT_MAX];
 static INT AsyncVectorIsOurStub(UINT irq);
-static VOID HostPitSync(VOID);             /* fwd: the guest's clock, driven by both threads */
 static VOID HostPitGenerate(VOID);         /* fwd: the crystal half (g_PitCs only)  */
 static VOID HostPitDeliver(VOID);          /* fwd: the attempt half (g_Lock, by TRY) */
 static INT  V86DeliverDeviceIrq(volatile BYTE *tib);  /* fwd: shared by the main and nested V86 loops */
@@ -36,7 +38,6 @@ static INT  DpmiAsyncInjectPm(UINT irq, CONTEXT *context);
 static VOID MouseChildExited(VOID);          /* fwd: see g_MouseWantRelease */
 static HANDLE StdioPebHandle(HANDLE proc, UINT offset);
 static VOID HostRecordFinish(VOID);        /* below: patches the header, logs */
-static INT DpmiSelectorIs32(WORD selector);
 static VOID VideoTrapSync(VOID);             /* fwd */
 static WORD DpmiSegmentToDescriptor(WORD segment);
 static VOID HostFullscreenToggle(HWND window);
@@ -150,7 +151,6 @@ static DWORD g_Irq1Injected;
 static DWORD g_PmIrqReflects;
 static DWORD g_IrqNInjected;
 static DWORD g_IrqNRefuseTotal;
-static WORD g_IoLastPort;
 static DWORD g_EventHistogram[EV_HIST_MAX];
 static DWORD g_V86MicrosecondsTotal, g_HostMicrosecondsEvent[EV_HIST_MAX];
 static DWORD g_BopHistogram[BYTE_VALUES];
@@ -227,7 +227,6 @@ static INT g_PmWatchCount;
 static BYTE g_PmWatchRel[DPMI_WATCH_MAX];
 static DWORD g_PmCooperativeLine[PIC_LINES_PER_CHIP];
 static DWORD g_PmInjectDecl[2], g_PmInjectDeclTl[IRQ0TL_SECS];
-static UINT32 g_DmaPollInAsync, g_DmaPollMainline;
 static DWORD g_AsyncEarlyBailLogged;
 static INT g_AsyncSiteCount;
 static INT g_AsyncSiteFull;
@@ -302,11 +301,8 @@ static UINT32 g_PitCatchupClamped;
 static UINT32 g_PitGapMaximum;
 static DWORD g_VbeWaits;
 static volatile DWORD g_RetracePending, g_RetraceCs, g_RetraceIp, g_RetraceAl, g_RetraceCx, g_RetraceIdles;
-static DWORD g_DmaPollEip[DMAPOLL_MAX], g_DmaPollHits[DMAPOLL_MAX];
-static UINT g_DmaPollCount, g_DmaPollOverflow;
-static DWORD g_PollStack[POLLSTK_MAX], g_PollStackHits[POLLSTK_MAX];
-static DWORD g_PollGap[10], g_PollGapMaximumMicroseconds;
-static UINT g_PollStackCount, g_PollStackOverflow;
+static UINT g_DmaPollOverflow;
+static UINT g_PollStackOverflow;
 static PVOID g_ModeYView[MODEY_NSEC];
 static INT g_ModeYRemap;
 static DWORD g_ModeYSwaps, g_ModeYFanouts, g_ModeYFail;
@@ -346,7 +342,6 @@ static DWORD g_WowSyncWrites;
 /* Functions called from a file other than their own. */
 static VOID DsProbeLoad(VOID);
 static UINT LauncherCompilerVariables(PCSTR environment, DWORD environmentCapacity, PSTR out, DWORD outCapacity);
-static BYTE NetSubmit(PVOID context, NETBIOS_REQUEST *request);
 static VOID HmaTry(VOID);
 static VOID Irq0Latch(VOID);
 static INT PmTickTake(VOID);
@@ -362,8 +357,6 @@ static VOID ComTransmitSink(PVOID context, INT port, BYTE byteValue);
 static WORD BiosEquipmentWord(VOID);
 static VOID BiosBdaRefreshEquipment(VOID);
 static VOID SerialInitialize(VOID);
-static VOID SerialOut(PCSTR buffer, PCSTR end);
-static VOID VddLoadThirdParty(VOID);
 static VOID WowLogFlush(PSTR base, PSTR *logCursor);
 static INT LptSpoolPut(BYTE character);
 static VOID LptTransmitSink(PVOID context, INT port, BYTE byteValue);
@@ -372,7 +365,6 @@ static INT KeyboardActionEntry(INT keyboardAction);
 static INT Int15Hooked(VOID);
 static VOID DosAuxOut(PVOID context, BYTE character);
 static UINT IrqPmVector(UINT irq);
-static VOID HostPitResyncCheck(VOID);
 static INT Irq0CanDeliver(VOID);
 static VOID Irq0Ack(VOID);
 static INT Irq0PmClaim(VOID);
@@ -487,7 +479,6 @@ static INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARA
 static DWORD WINAPI UiThread(LPVOID argument);
 static VOID RegistersLoad(NTVDD_REGISTERS *registers, volatile BYTE *tib);
 static VOID RegistersStore(NTVDD_REGISTERS *registers, volatile BYTE *tib);
-static VOID IoHotNote(WORD port, DWORD cs, DWORD ip);
 static VOID HostRtcNow(PVOID context, PIT_RTC_READING *out);
 static INT HostRtcSet(PVOID context, const PIT_RTC_READING *reading, INT what);
 static INT HostTickTake(UINT32 *ticks, UINT32 *wraps, UINT32 *since);
@@ -496,16 +487,8 @@ static VOID HostSetTicks(PVOID context, UINT32 ticks);
 static VOID HostPitGuard(PVOID context, INT enter);
 static VOID HostPitGenerate(VOID);
 static VOID HostPitDeliver(VOID);
-static VOID HostPitSync(VOID);
-static VOID PitLatchNote(BYTE command);
 static VOID Int10WaitAfter(VOID);
-static VOID RetraceNote(volatile BYTE *tib, WORD port, INT isIn, DWORD cs, DWORD ipAfter);
 static VOID RetraceIdle(VOID);
-static INT HostTryIo(volatile BYTE *tib, VDD_BUS *bus);
-static INT HostTryIoRetro(volatile BYTE *tib, VDD_BUS *bus);
-static INT HostTryIoString(volatile BYTE *tib, VDD_BUS *bus);
-static INT DpmiSelectorIs32(WORD selector);
-static INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus);
 static UINT64 ModeYTimelineRdtsc(VOID);
 static VOID ModeYRemapFlushReport(VOID);
 static INT ModeYRemapInitialize(VOID);
@@ -545,7 +528,6 @@ static VOID DpmiInstallDefaultPmHandlers(DOS_MACHINE *machine);
 static VOID DpmiInstall(INT index);
 static VOID DpmiInstallFaultTrampoline(VOID);
 static VOID DpmiArmFaultTrampoline(volatile BYTE *tib, WORD flag);
-static DWORD DpmiSelectorBase(WORD selector);
 static DWORD DpmiRecoverFlatEip(DWORD lo16, BYTE vector, INT *candidateCount);
 static INT DpmiSelectorDescriptor(WORD selector, UINT32 *accessRights, UINT32 *limit);
 static DWORD DpmiBopVector(DWORD csValue, DWORD eip);
@@ -603,11 +585,6 @@ static VOID DpmiEnsurePmReturnSelector(VOID);
 static INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context);
 static INT WowCall16Sync(DWORD proc, WORD ds, const WORD *args, INT argumentCount, WORD hwnd, WORD message, WORD *result);
 static DWORD ShimGlobal16(INT operation, DWORD firstArgument, DWORD secondArgument);
-static PVOID ShimMapFlat(WORD segment, DWORD offset, INT isProtectedMode);
-static VOID IsvIoIn(PVOID self, WORD port, BYTE width, UINT32 *value);
-static VOID IsvIoOut(PVOID self, WORD port, BYTE width, UINT32 value);
-static VOID WowShimsLoad(VOID);
-static VOID IsvBop(volatile BYTE *tib, DWORD subfunction, PSTR *logCursor);
 static INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip);
 static INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCount, WORD hwnd, WORD message, WORD *result, BYTE *blob, INT blobLength, INT blobArgument, const INT *fix, INT fixupCount);
 static LRESULT WowControlColour(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam, INT *handled);

@@ -7,4 +7,8 @@
 
 UINT64 HostTimeMicroseconds(VOID);
 
+VOID HostPitResyncCheck(VOID);
+VOID HostPitSync(VOID);
+VOID PitLatchNote(BYTE command);
+VOID RetraceNote(volatile BYTE *tib, WORD port, INT isIn, DWORD cs, DWORD ipAfter);
 #endif
