@@ -9,6 +9,40 @@
  * SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Matthew Layton
  */
+#include "host_state.h"
+#include "log.h"
+#include "dos_ctab.h"
+#include "bios_kbdact.h"
+#include "dos_auxprn.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "host_startup.h"
+#include "main.h"
+#include "host_audio.h"
+#include "host_bios.h"
+#include "host_diag.h"
+#include "host_dos.h"
+#include "host_dpmi.h"
+#include "host_dpmi_int.h"
+#include "host_input.h"
+#include "host_install.h"
+#include "host_io.h"
+#include "host_irq.h"
+#include "host_mouse.h"
+#include "host_settings.h"
+#include "host_timing.h"
+#include "host_video.h"
+#include "host_window.h"
+#include "host_wow.h"
+
 
 /* PACE THE PIT:
  * HostPitSync() advances the emulated 8254 by however much wall-clock has elapsed
@@ -2270,7 +2304,7 @@ static INT StartupLatchWowLaunch(PSTR *cursorIo, CHAR *report, INT *exitCodeOut)
 }
 
 /* Claim an instance slot (#211): the first host writes to debug\out\, the Nth to debug\out\N\; refuse once all are taken. */
-static INT StartupClaimInstance(INT *exitCodeOut)
+INT StartupClaimInstance(INT *exitCodeOut)
 {
     /* [WARNING]: ONE HOST AT A TIME (Importance = 2):
      * Nothing stopped a second instance, and two of them fight over things that
@@ -2388,7 +2422,7 @@ static INT StartupClaimInstance(INT *exitCodeOut)
 }
 
 /* The install verbs (/install, /uninstall, /status), run before anything else exists, and exit. */
-static INT StartupRunInstallVerb(INT *exitCodeOut)
+INT StartupRunInstallVerb(INT *exitCodeOut)
 {
     /* THE INSTALL VERBS, BEFORE ANYTHING ELSE EXISTS. (GH #13) (Importance = 1):
      * `ntvdmhost.exe /install`, `/uninstall`, `/status`. They run and exit without
@@ -2863,7 +2897,7 @@ static PSTR StartupFetchCommandDetails(PSTR cursor)
 }
 
 /* Get the guest ready to run: hide the inherited console, back Mode Y's planes before the UI thread exists, start the UI thread and the headless and probe threads, set the entry state (krnl386's for a Win16 launch), check the INT 21h stub, report the start, the VDD vector claims, the A0000 region and the bus, and enter the program's directory. */
-static VOID StartupStartGuest(
+VOID StartupStartGuest(
     PSTR *cursorIo,
     PSTR *baseIo,
     HANDLE *uiThreadIo,
@@ -3150,7 +3184,7 @@ static VOID StartupStartGuest(
 }
 
 /* Connect DOS to the host: console output to the video VDD, console input from the keyboard, the tick and printer hooks, and the DOS-trace and simulated-interrupt switches. */
-static VOID StartupConnectDosToHost(DOS_MACHINE *machine)
+VOID StartupConnectDosToHost(DOS_MACHINE *machine)
 {
     machine->ConsoleOut = HostConsoleOut;
     machine->ConsoleOutContext = NULL;    /* DOS console out -> video */
@@ -3187,7 +3221,7 @@ static VOID StartupConnectDosToHost(DOS_MACHINE *machine)
 }
 
 /* Start the host's services: the PIT pacer (or the tick it replaces), the capture watchdog, the CPU-speed governor, the audio output and its MIDI route, and wavrec.flag's recording. */
-static PSTR StartupStartServices(PSTR cursor)
+PSTR StartupStartServices(PSTR cursor)
 {
     if (g_PitPaceOn)
     {
@@ -3318,7 +3352,7 @@ static PSTR StartupStartServices(PSTR cursor)
 }
 
 /* Read the cfg\ tuning files: the audio lead (awbufs, awframes), the PIT pacer, the keyboard hook and IRQ, the tick courier, the UI tick, WOW idling, mouse sensitivity, and the CPU reference, speed, granularity and affinity. */
-static VOID StartupLoadTuningKnobs(VOID)
+VOID StartupLoadTuningKnobs(VOID)
 {
     /* THE AUDIO LEAD, AS A CONTROLLED VARIABLE (awbufs.txt):
      * Each queued waveOut buffer is ~11.6 ms that our DMA read pointer runs ahead of
@@ -3650,7 +3684,7 @@ static VOID StartupLoadTuningKnobs(VOID)
 }
 
 /* Put the machine on the bus: the host lock; the PIC and the PIT with its clock hooks; CMOS, FDC, IDE and video; the system font; the keyboard; the serial ports, declared in the BIOS data area, which is then initialised; NetBIOS, the speaker, the gameport, DMA, OPL, Sound Blaster, MPU-401, GUS and AWE32; the WOW callbacks; then the mixer, which also drives the SB's DMA. */
-static PSTR StartupAttachDevices(PSTR cursor)
+PSTR StartupAttachDevices(PSTR cursor)
 {
     /* Stand up the device bus (NULL base => absolute V86 addresses) with the PIT
      * (ports 0x40-0x43, INT 08h/1Ah) and the video VDD (B8000 + INT 10h text +
@@ -3979,7 +4013,7 @@ static PSTR StartupAttachDevices(PSTR cursor)
 }
 
 /* Build DOS in conventional memory: load the program, plant the INT 21h and BIOS stubs, fill the IVT, build the environment, the command tail, the MCB chain and the List of Lists, settle the version, plant the country and drive tables, and start XMS and EMS. */
-static VOID StartupBuildDos(
+VOID StartupBuildDos(
     PSTR *cursorIo,
     const DWORD readCount,
     DOS_IMAGE *image,
@@ -4483,7 +4517,7 @@ static VOID StartupBuildDos(
 }
 
 /* Find and load the program: CSRSS's application, cfg\target.txt, the title path, a PIF, XP's COMMAND.COM (#208) or a shell; then count the NTVDM BOP sites an NTVDM-aware shell carries. */
-static VOID StartupLoadProgram(
+VOID StartupLoadProgram(
     PSTR *cursorIo,
     DWORD *readCountIo,
     CHAR *programPathBuffer,
@@ -4751,7 +4785,7 @@ static VOID StartupLoadProgram(
 }
 
 /* Become the VDM: set up its memory, register with the kernel's VDM support, give [0x714] a defined value, fetch the command from CSRSS (DOS or Win16), and take the VDM_TIB -- or stop if there is none. */
-static INT StartupRegisterVdm(
+INT StartupRegisterVdm(
     PSTR *cursorIo,
     LONG *vdmStatusIo,
     INT *wowCommandFromCsrssIo,
@@ -4869,7 +4903,7 @@ static INT StartupRegisterVdm(
 }
 
 /* Start the log and its COM1 mirror, take stdio, run the recovery counter (safe mode after repeated failed starts), read Settings and the cfg\ knobs, install the fault handlers, and log the STAGE0 state. */
-static INT StartupConfigure(PSTR *cursorIo, CHAR *report, INT *exitCodeOut)
+INT StartupConfigure(PSTR *cursorIo, CHAR *report, INT *exitCodeOut)
 {
     PSTR cursor = *cursorIo;
 

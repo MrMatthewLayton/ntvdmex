@@ -82,7 +82,6 @@ typedef CHAR BIOS_KBDACT_FITS[(sizeof(g_BiosKeyboardActionCode) <= DOS_KBDACT_LE
 #include "dos_recovery.h"   /* GH #132: what to do when we will not start */
 #include "dos_err.h"        /* #34: the INT 24h contract (dos_crit_*) */
 #include "dos_sysvars.h"    /* GH #48: the List of Lists, built to the measured 6.22 layout */
-#include "dos_ctab.h"
 #include "dos_xms.h"
 #include "dos_extmem.h"     /* GH #54: INT 15h AH=87h address resolution */
 #include "dos_ems.h"
@@ -118,6 +117,7 @@ CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 /* The host's other modules: what each one offers main.c (#335). */
 #include "host_types.h"
 #include "host_state.h"
+#include "host_startup.h"
 #include "host_exec.h"
 #include "host_dpmi_client.h"
 #include "host_report.h"
@@ -156,37 +156,37 @@ DWORD g_NtvdmBopCount = 0;   /* how many guest-issued NTVDM BOPs this run servic
  * g_GuestNtAware means "we loaded this as a shell AND it talks to NTVDM", which is
  * what earns it DOS 5.00 and the private AH=53h answers.
  */
-static DWORD g_GuestNtvdmBops = 0;
+DWORD g_GuestNtvdmBops = 0;
 INT   g_GuestNtAware    = 0;
 INT   g_ShellGetNextCount  = 0;
 CHAR  g_ShellPath[300];         /* the shell we loaded, for its COMSPEC (s81) */   /* BOP 54 sub 01 calls this session -- see its arm (s81) */
 CHAR  g_FirstProgram[300];         /* its 8.3 path -- the sub 01 NAME field */
 CHAR  g_FirstTail[128];         /* its arguments -- the sub 01 command TAIL */
 
-static DWORD g_EmsFrameLinear;                        /* set by VdmMapEmsFrame */
+DWORD g_EmsFrameLinear;                        /* set by VdmMapEmsFrame */
 
 /* CSRSS receive buffers + program image (no CRT heap; static = zero-init). */
-static CHAR g_CommandLine[1024];
-static CHAR g_Application[1024];
-static CHAR g_CurrentDirectory[512];
-static CHAR g_PifPath[512];
-static WORD g_CdsSegment;                       /* the CDS array's reserved block, 0 = none */
-static WORD g_SftSegment;                       /* the SFT block for a DOS guest, 0 = none */
+CHAR g_CommandLine[1024];
+CHAR g_Application[1024];
+CHAR g_CurrentDirectory[512];
+CHAR g_PifPath[512];
+WORD g_CdsSegment;                       /* the CDS array's reserved block, 0 = none */
+WORD g_SftSegment;                       /* the SFT block for a DOS guest, 0 = none */
 
-static CHAR g_Environment[8192];
-static CHAR g_Desktop[512];
-static CHAR g_Title[512];
-static CHAR g_Reserved[512];
+CHAR g_Environment[8192];
+CHAR g_Desktop[512];
+CHAR g_Title[512];
+CHAR g_Reserved[512];
 VDM_COMMAND_INFO g_CommandInfo;
 /* The SECOND fetch (s72): what CSRSS actually queued -- AppName is the program's
  * full path, CmdLine its argument tail (CR LF terminated), Env the launcher's Win32
  * environment block. See csrss_fetch_command().
  */
 CHAR g_Application2[1024];
-static CHAR g_CommandLine2[1024];
-static CHAR g_CurrentDirectory2[512];
-static CHAR g_Environment2[8192];
-static INT  g_Fetch2Ok = 0;
+CHAR g_CommandLine2[1024];
+CHAR g_CurrentDirectory2[512];
+CHAR g_Environment2[8192];
+INT  g_Fetch2Ok = 0;
 
 static volatile LONG g_ReportGotNext = 0;   /* the report call returned TRUE: a command was queued to us */
 static DWORD WINAPI CsrssReportThread(LPVOID parameter)
@@ -200,16 +200,16 @@ static DWORD WINAPI CsrssReportThread(LPVOID parameter)
     return exitCode;
 }
 
-static BYTE g_FileBuffer[0x80000];   /* 512KB: hold a real game's MZ image (DOS/4GW stub etc.), run 85 */
+BYTE g_FileBuffer[0x80000];   /* 512KB: hold a real game's MZ image (DOS/4GW stub etc.), run 85 */
 
-static FDC_STATE    g_Fdc;       static NTVDD_DEVICE g_FdcDevice;
-static IDE_STATE    g_Ide;       static NTVDD_DEVICE g_IdeDevice;
-DMA_STATE    g_Dma;       static NTVDD_DEVICE g_DmaDevice;
-static BYTE      g_GusDram[GUS_DRAM_SIZE];
+FDC_STATE    g_Fdc;       NTVDD_DEVICE g_FdcDevice;
+IDE_STATE    g_Ide;       NTVDD_DEVICE g_IdeDevice;
+DMA_STATE    g_Dma;       NTVDD_DEVICE g_DmaDevice;
+BYTE      g_GusDram[GUS_DRAM_SIZE];
 INT          g_GusOn = 0;
-static WORD     g_Emu8KDram[EMU8K_DRAM_WORDS];
+WORD     g_Emu8KDram[EMU8K_DRAM_WORDS];
 PCSTR g_DosVersionWhy = 0;
-static INT          g_DosVersionShell = 0;      /* #208: an XP shell is present, told 5.00 itself */
+INT          g_DosVersionShell = 0;      /* #208: an XP shell is present, told 5.00 itself */
 UINT32 g_PitAsyncAttempts;
 DWORD g_KeyPmLogged  = 0;           /* bounded KEYPM account; see the PM exec loop */
 INT g_PmIrq0Latch = 0;             /* #2b: a virtual IRQ0 awaiting injection into the PM hook */
@@ -265,7 +265,7 @@ DWORD g_V86StringMaximumIp;
 DWORD g_V86StringMaximumEvent;
 DWORD          g_HeartbeatDs = 0;            /* guest DS sampled by the heartbeat (s69 fade dump) */
 DWORD          g_EventIoString      = 0;  /* REP INS/OUTS (event 1) reflects serviced */
-static HANDLE         g_OnceMutex    = NULL; /* the single-instance mutex (WinMain); handed
+HANDLE         g_OnceMutex    = NULL; /* the single-instance mutex (WinMain); handed
                                                  over before a relaunch, see task-done */
 /* [CAUTION]: AN INTERMITTENT I/O STORM, NOT YET EXPLAINED (session 53) (Importance = 1):
  * Some runs of tests/probes/dos/spktest.com report 1.87 MILLION serviced I/O
@@ -341,9 +341,9 @@ DWORD g_PrintScreenJobs;
 DWORD g_PrintScreenErrors;
 BYTE       g_PrintScreenStatus = BIOS_PRINT_SCREEN_STATUS_OK;   /* what 0050:0000 would hold */
 DWORD          g_ExecPriority     = 0;   /* guest thread priority class; see EXECPRIO_PATH */
-static INT            g_QiRaise      = 0;
+INT            g_QiRaise      = 0;
 INT            g_QiVif        = 0;   /* start the guest with EFLAGS.VIF set */
-static INT            g_QiKeys       = 0;   /* synthesise keypresses (repro the hang) */
+INT            g_QiKeys       = 0;   /* synthesise keypresses (repro the hang) */
 DWORD          g_InterpRefused = 0;  /* interpreter declined the faulting opcode */
 /* A TIMER RE-ARMED FROM INSIDE ITS OWN HANDLER DISCARDS THE TICK QUEUED BEHIND IT (Importance = 4):
  * s70, the user's by-hand Lemmings run: the fade completed, then "it stalled when the
@@ -422,14 +422,14 @@ DWORD g_DmxMixerOk;
 DWORD g_DmxOverdue;
 DWORD g_DmxOverdueMaximum;
 DWORD g_DmxAnyBusy;
-static HANDLE g_PitPaceThread;
+HANDLE g_PitPaceThread;
 /* #256: 1 while the TOP-LEVEL PM loop is dispatching -- the one place a PM BIOS wait may
  * re-execute its BOP (every nested loop counts its passes). See the PM INT 15h 86h arm.
  */
 INT g_PmTopDispatch;   /* set by the top-level loop before it dispatches */
-static HANDLE g_CourierThread;
+HANDLE g_CourierThread;
 UINT g_CpuSpeedReferenceMhz = CPUSPEED_REF_MHZ_DEFAULT;  /* cpuref.txt */
-static HANDLE g_CpuSpeedThread;
+HANDLE g_CpuSpeedThread;
 /* TYPEMATIC REPEAT: WE ARE THE KEYBOARD, SO WE MUST DO ITS REPEATING:
  * THE BUG (user, reported twice): crash the ship in Skyroads while holding the up
  * arrow and, on real DOS or stock ntvdm, the restarted level accelerates
@@ -485,8 +485,8 @@ DWORD g_TypematicSpiSpeed;
  * RETF landing on the return BOP; anything else names the wrong turn. Bounded.
  */
 INT    g_MouseCallbackTrace;            /* VM events still to log after an injection */
-static WORD      g_WowEntryDs = 0;   /* krnl386's autodata paragraph */
-static INT       g_WowEntering = 0;   /* the guest is krnl386, not DOS */
+WORD      g_WowEntryDs = 0;   /* krnl386's autodata paragraph */
+INT       g_WowEntering = 0;   /* the guest is krnl386, not DOS */
 /* #153: FILE > OPEN EXECUTABLE / OPEN RECENT:
  * User decision (s81): if this window is sitting at the top-level shell's prompt,
  * TYPE the program into it -- drive, `CD`, name -- so it runs here and the prompt
@@ -605,7 +605,7 @@ INT g_DpmiUseInterp = 0;             /* run 53 toggle (1 = interp fallback, 0 = 
  * skipped, or NULL when there were none. Returns INVALID_HANDLE_VALUE if no split
  * names a real file, leaving `path` as it was found.
  */
-static HANDLE CsrssOpenSplit(PSTR path, PSTR *argumentsOut)
+HANDLE CsrssOpenSplit(PSTR path, PSTR *argumentsOut)
 {
     HANDLE fileHandle;
     INT index;
@@ -824,7 +824,6 @@ static PSTR TaskReportExitToCsrss(PSTR cursor, PSTR const base, DOS_MACHINE *mac
 
 
 
-#include "host_startup.c"
 
 INT WINAPI WinMain(
     HINSTANCE instance,
