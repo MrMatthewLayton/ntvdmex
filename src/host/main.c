@@ -14,57 +14,7 @@
 #include <windows.h>
 #include <commctrl.h>
 #include "ntvdm.h"
-/* ── ★★ ONE FOLDER HOLDS THE WHOLE RIG. (s61, at the user's instruction) ──────────
-     Everything this host reads or writes lives under ONE directory, and NOTHING is
-     written to C:. Before this, the rig was spread over five places -- 52 knob and
-     flag files loose in the share ROOT, results and screenshots beside them, and
-     C:\ntvdmex holding the log, target.txt, autoexit, sb.raw, PRINTOUT.TXT,
-     SERIAL*.TXT, the floppy image and three probe logs -- plus C:\test and C:\game
-     recreated per run and rt.bat dropped into C:\WINDOWS. The user cleared the box
-     and asked for that not to happen again; this is the half of it that is the
-     HOST'S doing rather than the scripts'.
-
-       <dir>\cfg\        everything we READ: knobs, flags, target.txt, the floppy image
-       <dir>\debug\out\  everything we WRITE: the log, screenshots, traces, probe dumps
-       <dir>\bin\        this binary                       (bm\ = the pre-s73 name)
-       <dir>\debug\rig\  the harness                       (scripts' business, not ours)
-       <dir>\demo\msdos\ the user's games and demos, run IN PLACE (never copied)
-
-   ⚠ The directories are created at startup: a knob read may legitimately find
-     nothing, but a WRITE to a missing debug\out\ would fail silently and take the
-     log with it -- which is the one instrument that explains every other failure.
-     debug\ is created before debug\out\ -- CreateDirectoryA makes ONE level. */
-/* ── ★ THE FOLDER IS WHEREVER THE HOST WAS EXTRACTED. (s71, the 17th deliverable) ────
-     This was a compile-time string naming the rig's share, so a copy of NTVDMEX on any
-     other machine wrote its log nowhere, read no knobs and found no target -- a zip
-     that "works on my machine" and nowhere else. The root is now derived once from
-     the host's own path: the exe lives in <root>\bin\ (or the older <root>\bm\), so
-     the root is that folder's parent; an exe anywhere else uses its own directory.
-     The old share path is only the fallback for a GetModuleFileName that fails, which
-     it does not. s73 renamed bm\ to bin\ for the release layout; bm\ stays accepted so
-     an already-installed s72 zip keeps finding its cfg\.
-   The macros keep their names and their call sites: each expands to a call that
-   composes the path into one of a ring of buffers, so `CreateFileA(CFG_("x.txt"))`
-   reads as before. A returned pointer is good for the next 15 calls from any thread,
-   which covers every use here (all immediate). */
-#define NTVDMEX_DIR_DEFAULT "C:\\Documents and Settings\\All Users\\Documents\\ntvdmex\\"
-static PCSTR NtvdmexRoot(VOID);                    /* "<root>\", trailing slash */
-static PCSTR NtvdmexPath(PCSTR subdirectory, PCSTR name);
-#define NTVDMEX_DIR NtvdmexRoot()
-#define NTVDMEX_CFG   NtvdmexPath("cfg\\", "")
-#define NTVDMEX_DEBUG NtvdmexPath("debug\\", "")        /* parent of out\; created first */
-#include "host_strings.h"   /* defines only: the strings that are not log text */
-/* #211: the FIRST host writes to debug\out\ as always; a second one at the same time writes
-   to debug\out\2\, and so on (the instance claim in WinMain) -- so no host clears another's log. */
-static CHAR g_OutSubdirectory[24] = HOST_OUT_SUBDIRECTORY;
-static INT  g_Instance = 1, g_InstanceAbandoned;
-
-#define NTVDMEX_OUT   NtvdmexPath(g_OutSubdirectory, "")
-#define CFG_(n)       NtvdmexPath("cfg\\", n)
-#define OUT_(n)       NtvdmexPath(g_OutSubdirectory, n)
-/* The log is the one path log.h owns; define it before including so its #ifndef
-   defers to us rather than putting the log back on C:. */
-#define LOG_PATH    OUT_("ntvdmhost.log")
+#include "host_core.h"     /* the folder and its paths, the host lock, guest-memory access */
 #include "v86.h"
 #include "dpmi.h"
 #include "csrss.h"
@@ -156,7 +106,6 @@ static CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "present_ddraw.h"
 
 #include "host_internal.h"
-#include "host_core.c"
 #include "host_diag.c"
 #include "host_timing.c"
 #include "host_irq.c"
@@ -174,7 +123,6 @@ static CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "host_settings.c"
 #include "host_window.c"
 
-static DWORD                       g_OsVersion;       /* GetVersion(): 0x0500 = 2000, 0x0501 = XP */
 
 /* LOG_PATH now lives in log.h -- see the note there. */
 /* Both are written by the runner and READ by us, so they are cfg, not out. */

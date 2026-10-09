@@ -9,13 +9,11 @@
 
 static VOID HostProfileDump(VOID);
 static VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
-static UINT32 QpcMicroseconds(LONGLONG ticks);          /* fwd: defined with the lock instruments */
 static VOID ModeYTimelineReport(VOID);          /* fwd: north star 1, with the mode-Y remap */
 static VOID GusReport(VOID);               /* fwd: north star 2, with the GUS globals */
 static INT  ModeYInterpServes(VOID);      /* fwd: north star 1, design C */
 static VOID ModeYRingDump(PCSTR why);  /* fwd: north star 1, design C */
 static VOID ModeYRingNoteIrq(UINT vector, WORD cs, WORD ip, WORD ss, WORD sp);
-static INT HostReadable(PCVOID pointer, SIZE_T length);  /* fwd: defined with the VEH */
 static INT InterpreterMemoryPageOk(UINT32 linear);        /* fwd: page-validity guard, defined with V86HostRead8 */
 static struct { WORD Cs, Ip, Stub; DWORD Count; } g_SkipIfSite[SKIPIF_SITES];
 static struct { WORD Port; DWORD Count; } g_IoHot[IO_HOT_MAX];
@@ -49,8 +47,6 @@ static BYTE  g_FaultTable[DOS_FLTSITE_N * DPMI_FAULT_TABLE_ENTRY] __attribute__(
 static BYTE  g_FaultStack[DPMI_FAULT_STK_SIZE] __attribute__((aligned(16)));   /* #205 */
 static struct _DPMI_DESCRIPTOR { DWORD Base, Limit; BYTE Access, Flags; } g_Ldt[DPMI_LDT_MAX];
 static INT AsyncVectorIsOurStub(UINT irq);
-static VOID PokeWord(DWORD linear, WORD value);        /* fwd: guest-memory helpers, defined below */
-static WORD PeekWord(DWORD linear);
 static VOID HostPitSync(VOID);             /* fwd: the guest's clock, driven by both threads */
 static VOID HostPitGenerate(VOID);         /* fwd: the crystal half (g_PitCs only)  */
 static VOID HostPitDeliver(VOID);          /* fwd: the attempt half (g_Lock, by TRY) */
@@ -69,8 +65,6 @@ static struct { DWORD Linear, Eip, Count; WORD Cs, Ax; BYTE Source; BYTE Context
 static INT DpmiSelectorIs32(WORD selector);
 static VOID VideoTrapSync(VOID);             /* fwd */
 static WORD DpmiSegmentToDescriptor(WORD segment);
-static INT HostReadable(PCVOID pointer, SIZE_T length);   /* fwd: defined with the
-                                                             other memory probes */
 static VOID HostFullscreenToggle(HWND window);
 static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down);
 static struct { DWORD Cs, Ip, Count; BYTE Bytes[10]; } g_RetraceSite[RT_SITES];
@@ -116,8 +110,6 @@ static VOID Pm32HostOut(WORD port, INT width, UINT32 value);
 #include "v86interp.h"
 #include "pm32interp.h"
 /* State used from a file other than its owner's (tentative definitions). */
-static PFN_ATTACH_CONSOLE g_PfnAttachConsole;
-static DWORD g_OsVersion;
 static WORD g_DsProbe[DSPROBE_MAX];
 static INT g_DsProbeCount;
 static WORD g_CsProbe[DSPROBE_MAX];
@@ -151,14 +143,12 @@ static LONG g_PmTickOwedMaximum;
 static UINT32 g_PmOwedHistogram[9];
 static DWORD g_TickGap[12], g_TickGapMaximumMicroseconds, g_TickGapOver;
 static INT g_PmIrq0Latch;
-static CRITICAL_SECTION g_Lock;
 static DWORD g_UiTickSkips;
 static DWORD g_UiHookPresents, g_UiTimerPresents;
 static DWORD g_Irq1Checks, g_Irq1NoIf, g_Irq1In08, g_Irq1In09;
 static DWORD g_Irq1AsyncInjected;
 static DWORD g_Irq1AsyncRetry;
 static CRITICAL_SECTION g_PitCs;
-static DWORD g_PatchMapCount;
 static INT g_PmVehPass;
 static UINT g_DpmiCpMaximum;
 static DWORD g_WowPmBase[WOW_PMBASE_MAX];
@@ -396,28 +386,15 @@ static DWORD g_PmDispatchCount[IVT_VECTORS][BYTE_VALUES];
 static DWORD g_Wow32Serviced, g_Wow32Unimplemented, g_Wow32Declined;
 static DWORD g_WowSyncWrites;
 /* Functions called from a file other than their own. */
-static VOID OsCompatBind(VOID);
-static BOOL OsCompatAttachConsole(DWORD processId);
 static VOID DsProbeLoad(VOID);
-static PCSTR NtvdmexRoot(VOID);
-static PCSTR NtvdmexPath(PCSTR subdirectory, PCSTR name);
 static UINT LauncherCompilerVariables(PCSTR environment, DWORD environmentCapacity, PSTR out, DWORD outCapacity);
 static VOID GusReport(VOID);
-static INT StrStrNoCase(PCSTR block, PCSTR name);
 static BYTE NetSubmit(PVOID context, NETBIOS_REQUEST *request);
 static VOID HmaTry(VOID);
 static VOID Irq0Latch(VOID);
 static INT PmTickTake(VOID);
 static VOID TickDeliveredNote(VOID);
 static VOID KeyLatencyPop(VOID);
-static UINT32 QpcMicroseconds(LONGLONG ticks);
-static UINT64 QpcMicroseconds64(LONGLONG ticks);
-static VOID HostLockEnter(INT site);
-static VOID HostLockLeave(VOID);
-static INT HostLockTry(INT site);
-static BYTE PatchMapGet(DWORD linear);
-static VOID PatchMapSet(DWORD linear, BYTE vector);
-static VOID PatchMapClear(DWORD linear);
 static VOID Irq0DeliveredNote(VOID);
 static VOID SkipIfSiteNote(DWORD codeSegment, DWORD instructionPointer, DWORD stub);
 static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor);
@@ -438,7 +415,6 @@ static INT DosPrnOut(PVOID context, BYTE character);
 static INT KeyboardActionEntry(INT keyboardAction);
 static INT Int15Hooked(VOID);
 static VOID DosAuxOut(PVOID context, BYTE character);
-static INT MemoryReadable(ULONG_PTR address, SIZE_T length);
 static UINT IrqPmVector(UINT irq);
 static VOID HostPitResyncCheck(VOID);
 static INT Irq0CanDeliver(VOID);
@@ -451,13 +427,8 @@ static VOID PmInjectDeclineNote(INT why, WORD cs, DWORD eip);
 static INT AsyncInjectIrq(UINT irq);
 static INT AsyncVectorIsOurStub(UINT irq);
 static VOID HostIrqSink(PVOID context, BYTE irq);
-static VOID PokeWord(DWORD linear, WORD value);
-static VOID PokeDword(DWORD linear, DWORD value);
-static WORD PeekWord(DWORD linear);
 static INT IfOrVif(DWORD flags);
 static INT IsOurStubCsIp(DWORD cs, DWORD ip);
-static DWORD PeekWidth(DWORD linear, INT width);
-static VOID PokeWidth(DWORD linear, DWORD value, INT width);
 static VOID VdmStateSample(PCSTR label, volatile BYTE *tib, INT *budget);
 static VOID InjectInt(volatile BYTE *tib, UINT vector);
 static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base);
@@ -506,7 +477,6 @@ static VOID GusMidiToSynth(PVOID context, BYTE byteValue);
 static VOID PlanesDumpBeside(PCSTR bitmapPath);
 static VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak);
 static VOID HostKeyTypematicInitialize(VOID);
-static LONGLONG QpcTicks(UINT32 microseconds);
 static VOID HostKeyPresent(VOID);
 static VOID HostKeyTypematic(VOID);
 static DWORD WINAPI SynthKeyThread(LPVOID parameter);
@@ -569,7 +539,6 @@ static VOID WowProbeLoad(PCSTR command);
 static INT WowRefuse(PCSTR command);
 static VOID HostPresentHook(PVOID context);
 static VOID TrayRemove(HWND window);
-static INT StringsEqual(PCSTR first, PCSTR second);
 static LRESULT CALLBACK LowLevelKeyboardProcedure(INT code, WPARAM wParam, LPARAM lParam);
 static VOID InputCaptureSet(HWND window, INT isOn);
 static INT OtherHostsRunning(VOID);
@@ -641,8 +610,6 @@ static VOID ModeYRingNoteIrq(UINT vector, WORD cs, WORD ip, WORD ss, WORD sp);
 static VOID HostProfileStart(VOID);
 static VOID HostProfileDump(VOID);
 static INT32 HostInterpPaced(volatile BYTE *tib, INT32 cap);
-static INT HostReadable(PCVOID pointer, SIZE_T length);
-static INT HostWritable(PVOID pointer, SIZE_T length);
 static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers);
 static LONG WINAPI HostUnhandledFilter(EXCEPTION_POINTERS *pointers);
 static DWORD WINAPI DpmiWatchdog(LPVOID param);

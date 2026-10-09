@@ -98,6 +98,7 @@ add_executable(ntvdmhost
     src/host/main.c
     src/host/log.c
     src/host/host_state.c
+    src/host/host_core.c
     src/host/cpuspeed.c
     src/host/pcspeaker.c
     src/host/settings.c

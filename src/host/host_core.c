@@ -1,10 +1,22 @@
 /* host_core.c -- the host's foundations: its folder and paths, the OS imports bound at run time,
  *   the host lock, guest-memory peeks and pokes, and small utilities.
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): declared in host_core.h. */
+#include <windows.h>
+#include "ntvdm.h"
+#include "host_core.h"
+#include "log.h"
+#include "host_types.h"
+#include "host_state.h"
 
-static PFN_ATTACH_CONSOLE           g_PfnAttachConsole;
-static VOID OsCompatBind(VOID)
+/* #211: the FIRST host writes to debug\out\ as always; a second one at the same time writes
+   to debug\out\2\, and so on (the instance claim in WinMain) -- so no host clears another's log. */
+CHAR g_OutSubdirectory[24] = HOST_OUT_SUBDIRECTORY;
+INT  g_Instance = 1, g_InstanceAbandoned;
+DWORD g_OsVersion;       /* GetVersion(): 0x0500 = 2000, 0x0501 = XP */
+
+PFN_ATTACH_CONSOLE           g_PfnAttachConsole;
+VOID OsCompatBind(VOID)
 {
     HMODULE kernel32 = GetModuleHandleA(HOST_MODULE_KERNEL32), user32 = GetModuleHandleA(HOST_MODULE_USER32);
     g_OsVersion = GetVersion();
@@ -14,14 +26,14 @@ static VOID OsCompatBind(VOID)
     g_PfnGetRawInput   = user32 ? (PFN_GET_RAW_INPUT_DATA)(ULONG_PTR)GetProcAddress(user32, HOST_EXPORT_GET_RAW_INPUT_DATA) : 0;
 }
 /* AttachConsole on an OS without it: fail, and let the next route try. */
-static BOOL OsCompatAttachConsole(DWORD processId)
+BOOL OsCompatAttachConsole(DWORD processId)
 {
     return g_PfnAttachConsole ? g_PfnAttachConsole(processId) : FALSE;
 }
 
 /* See NTVDMEX_DIR. No CRT here (the host links without one), so the string work is
    spelled out. */
-static PCSTR NtvdmexRoot(VOID)
+PCSTR NtvdmexRoot(VOID)
 {
     static CHAR root[MAX_PATH + 16];
     static volatile LONG ready;
@@ -66,7 +78,7 @@ static PCSTR NtvdmexRoot(VOID)
 #define NTVDMEX_PATH_SLOTS 8
 #define NTVDMEX_PATH_SLOT  (MAX_PATH + 96)
 static volatile LONG g_PathTls = -1;             /* TlsAlloc'd on first use (no __thread: no libgcc) */
-static PCSTR NtvdmexPath(PCSTR subdirectory, PCSTR name)
+PCSTR NtvdmexPath(PCSTR subdirectory, PCSTR name)
 {
     PSTR ring; UINT *next; PSTR slot;
     if (g_PathTls < 0) {
@@ -92,7 +104,7 @@ static PCSTR NtvdmexPath(PCSTR subdirectory, PCSTR name)
 }
 /* Does a newline-separated NAME=VALUE block already set `name` (case-insensitive, at
    the start of a line)? No C runtime here, so no strstr. */
-static INT StrStrNoCase(PCSTR block, PCSTR name)
+INT StrStrNoCase(PCSTR block, PCSTR name)
 {
     PCSTR line = block;
     while (*line) {
@@ -104,10 +116,10 @@ static INT StrStrNoCase(PCSTR block, PCSTR name)
     }
     return 0;
 }
-static CRITICAL_SECTION g_Lock;             /* serialises all bus dispatch       */
+CRITICAL_SECTION g_Lock;             /* serialises all bus dispatch       */
 static DWORD    g_LockOwner, g_LockDepth;
 static LONGLONG g_LockSince;
-static UINT32 QpcMicroseconds(LONGLONG ticks)
+UINT32 QpcMicroseconds(LONGLONG ticks)
 {
     if (!g_QpcFrequency.QuadPart || ticks <= 0) return 0;
     return (UINT32)((ticks * MICROSECONDS_PER_SECOND) / g_QpcFrequency.QuadPart);
@@ -115,13 +127,13 @@ static UINT32 QpcMicroseconds(LONGLONG ticks)
 /* 64-bit form, for the throttle's windowed wall total (a 32-bit us wraps at 71 min
    and the window can be up to CPUSPEED_MAX_WINDOW_US). d is bounded to one window, so
    d*1e6 stays far inside 64 bits. */
-static UINT64 QpcMicroseconds64(LONGLONG ticks)
+UINT64 QpcMicroseconds64(LONGLONG ticks)
 {
     if (!g_QpcFrequency.QuadPart || ticks <= 0) return 0ull;
     return (UINT64)((ticks * MICROSECONDS_PER_SECOND_LL) / g_QpcFrequency.QuadPart);
 }
 
-static VOID HostLockEnter(INT site)
+VOID HostLockEnter(INT site)
 {
     LARGE_INTEGER waitStart, acquired;
     DWORD threadId = GetCurrentThreadId();
@@ -138,7 +150,7 @@ static VOID HostLockEnter(INT site)
     g_LockDepth++;
 }
 enum { PATCH_MAP_HASH_SHIFT = 8, PATCH_MAP_HEADROOM = 16 };   /* PatchMapHash / PatchMapSet */
-static VOID HostLockLeave(VOID)
+VOID HostLockLeave(VOID)
 {
     if (g_LockDepth && --g_LockDepth == 0) {
         LARGE_INTEGER now;
@@ -158,7 +170,7 @@ static VOID HostLockLeave(VOID)
      the tick is already latched and the cooperative path delivers it at the guest's
      next trap. Bookkeeping matches HostLockEnter minus the wait tracking, which is
      meaningless here: a try never waits. */
-static INT HostLockTry(INT site)
+INT HostLockTry(INT site)
 {
     DWORD threadId = GetCurrentThreadId();
     INT nested = (g_LockOwner == threadId && g_LockDepth != 0);
@@ -171,11 +183,11 @@ static INT HostLockTry(INT site)
     return 1;
 }
 #define DPMI_PMAP_MASK  (DPMI_PMAP_SLOTS - 1u)
-static DWORD g_PatchMapCount;
+DWORD g_PatchMapCount;
 
 static DWORD PatchMapHash(DWORD linear) { return ((linear * KNUTH_HASH_MULTIPLIER_U) >> PATCH_MAP_HASH_SHIFT) & DPMI_PMAP_MASK; }
 
-static BYTE PatchMapGet(DWORD linear)
+BYTE PatchMapGet(DWORD linear)
 {
     DWORD start = PatchMapHash(linear), probe;
     if (!linear) return 0;
@@ -187,7 +199,7 @@ static BYTE PatchMapGet(DWORD linear)
     return 0;
 }
 
-static VOID PatchMapSet(DWORD linear, BYTE vector)
+VOID PatchMapSet(DWORD linear, BYTE vector)
 {
     DWORD start = PatchMapHash(linear), probe;
     if (!linear || g_PatchMapCount >= DPMI_PMAP_SLOTS - PATCH_MAP_HEADROOM) return;   /* leave headroom, never fill */
@@ -201,7 +213,7 @@ static VOID PatchMapSet(DWORD linear, BYTE vector)
 /* Clearing leaves the key in place with vec=0: a tombstone, so probe chains that ran
    through this slot still find what is past it. Slots are never reused, which is fine
    at these counts and is the whole reason for the headroom check above. */
-static VOID PatchMapClear(DWORD linear)
+VOID PatchMapClear(DWORD linear)
 {
     DWORD start = PatchMapHash(linear), probe;
     for (probe = 0; probe < DPMI_PMAP_SLOTS; ++probe) {
@@ -215,7 +227,7 @@ static VOID PatchMapClear(DWORD linear)
    under every other guest it is not, and an unguarded read takes the whole host down
    with an access violation. Ask, don't assume -- and don't reach for SEH to paper over
    it, because a fault we swallow is a fault we stop seeing. */
-static INT MemoryReadable(ULONG_PTR address, SIZE_T length)
+INT MemoryReadable(ULONG_PTR address, SIZE_T length)
 {
     MEMORY_BASIC_INFORMATION memoryInfo;
     if (VirtualQuery((LPCVOID)address, &memoryInfo, sizeof memoryInfo) != sizeof memoryInfo) return 0;
@@ -234,35 +246,35 @@ static INT MemoryReadable(ULONG_PTR address, SIZE_T length)
    hardware interrupt: push FLAGS/CS/IP, clear IF+TF, and vector CS:IP through the
    real-mode IVT. The guest's handler IRETs back normally. (`CD nn` software ints
    still vector natively via VME; this is only for asynchronous IRQ delivery.) */
-static VOID PokeWord(DWORD linear, WORD value)
+VOID PokeWord(DWORD linear, WORD value)
 { volatile BYTE *memory = (volatile BYTE *)0; memory[linear] = (BYTE)value; memory[linear + 1] = (BYTE)(value >> BYTE_SHIFT); }
-static VOID PokeDword(DWORD linear, DWORD value)   /* dword store: 32-bit IRET frame slots (GH #18 run 83) */
+VOID PokeDword(DWORD linear, DWORD value)   /* dword store: 32-bit IRET frame slots (GH #18 run 83) */
 { volatile BYTE *memory = (volatile BYTE *)0;
   memory[linear] = (BYTE)value; memory[linear+1] = (BYTE)(value >> BYTE_SHIFT); memory[linear+2] = (BYTE)(value >> WORD_SHIFT); memory[linear+3] = (BYTE)(value >> TOP_BYTE_SHIFT); }
-static WORD PeekWord(DWORD linear)
+WORD PeekWord(DWORD linear)
 { const volatile BYTE *memory = (const volatile BYTE *)0; return (WORD)(memory[linear] | (memory[linear + 1] << BYTE_SHIFT)); }
 /* Width-selected guest memory access (1/2/4 bytes) for the string-I/O servicer. */
-static DWORD PeekWidth(DWORD linear, INT width)
+DWORD PeekWidth(DWORD linear, INT width)
 { const volatile BYTE *memory = (const volatile BYTE *)0;
   if (width == 1) return memory[linear];
   if (width == X86_WORD_SIZE) return PeekWord(linear);
   return (DWORD)PeekWord(linear) | ((DWORD)PeekWord(linear + X86_WORD_SIZE) << WORD_SHIFT); }
-static VOID PokeWidth(DWORD linear, DWORD value, INT width)
+VOID PokeWidth(DWORD linear, DWORD value, INT width)
 { volatile BYTE *memory = (volatile BYTE *)0;
   if (width == 1) { memory[linear] = (BYTE)value; return; }
   if (width == X86_WORD_SIZE) { PokeWord(linear, (WORD)value); return; }
   PokeDword(linear, value); }
 
-static LONGLONG QpcTicks(UINT32 microseconds)
+LONGLONG QpcTicks(UINT32 microseconds)
 { return g_QpcFrequency.QuadPart ? (LONGLONG)((g_QpcFrequency.QuadPart / MILLISECONDS_PER_SECOND) * microseconds / MICROSECONDS_PER_MILLISECOND) : 0; }
 
-static INT StringsEqual(PCSTR first, PCSTR second)
+INT StringsEqual(PCSTR first, PCSTR second)
 {
     while (*first && *first == *second) { ++first; ++second; }
     return *first == *second;
 }
 
-static INT HostReadable(PCVOID pointer, SIZE_T length)
+INT HostReadable(PCVOID pointer, SIZE_T length)
 {
     MEMORY_BASIC_INFORMATION memoryInfo;
     ULONG_PTR address = (ULONG_PTR)pointer;
@@ -281,7 +293,7 @@ static INT HostReadable(PCVOID pointer, SIZE_T length)
    same reason not to use IsBadWritePtr -- see the note above. Used before filling a
    guest buffer on the guest's behalf (WOW32 0x97), where getting the selector wrong
    would otherwise scribble on whatever the bad base happened to name. */
-static INT HostWritable(PVOID pointer, SIZE_T length)
+INT HostWritable(PVOID pointer, SIZE_T length)
 {
     MEMORY_BASIC_INFORMATION memoryInfo;
     ULONG_PTR address = (ULONG_PTR)pointer;

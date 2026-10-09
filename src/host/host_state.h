@@ -3,6 +3,35 @@
  * Declarations only (#335): every variable is defined, with its comment, in host_state.c. */
 #ifndef NTVDMEX_HOST_STATE_H
 #define NTVDMEX_HOST_STATE_H
+#include <windows.h>
+#include "ntvdm.h"
+#include "host_core.h"        /* the PFN_* types of the run-time imports */
+#include "../ntvdmex_x86.h"
+#include "../ntvdmex_units.h"
+#include "settings.h"
+#include "pcspeaker.h"
+#include "../wow/ne.h"
+#include "../wow/wowsched.h"
+#include "dos_int21.h"
+#include "dos_env.h"
+#include "dos_xms.h"
+#include "dos_recovery.h"
+#include "vdd_bus.h"
+#include "vdd_pit.h"
+#include "vdd_pic.h"
+#include "vdd_video.h"
+#include "vdd_input.h"
+#include "vdd_speaker.h"
+#include "vdd_joy.h"
+#include "vdd_opl.h"
+#include "vdd_sb.h"
+#include "vdd_gus.h"
+#include "vdd_comm.h"
+#include "vdd_audio.h"
+#include "audio_wave.h"
+#include "present_ddraw.h"
+#include "host_types.h"
+
 
 extern PFN_ADD_VECTORED_EXCEPTION_HANDLER g_PfnAddVeh;
 extern PFN_REGISTER_RAW_INPUT_DEVICES g_PfnRegisterRawInput;

@@ -2,33 +2,8 @@
  *   CPU context and the run-wide flags.
  *
  * Its own translation unit (#335): the variables are declared in host_state.h. */
-#include <windows.h>
-#include "ntvdm.h"
-#include "host_strings.h"   /* defines only: the initialisers' text */
-#include "settings.h"
-#include "pcspeaker.h"
-#include "../wow/ne.h"
-#include "../wow/wowsched.h"
-#include "dos_int21.h"
-#include "dos_env.h"
-#include "dos_xms.h"
-#include "dos_recovery.h"
-#include "vdd_bus.h"
-#include "vdd_pit.h"
-#include "vdd_pic.h"
-#include "vdd_video.h"
-#include "vdd_input.h"
-#include "vdd_speaker.h"
-#include "vdd_joy.h"
-#include "vdd_opl.h"
-#include "vdd_sb.h"
-#include "vdd_gus.h"
-#include "vdd_comm.h"
-#include "vdd_audio.h"
-#include "audio_wave.h"
-#include "present_ddraw.h"
-#include "host_types.h"
 #include "host_state.h"
+#include "host_strings.h"   /* defines only: the initialisers' text */
 
 PFN_ADD_VECTORED_EXCEPTION_HANDLER                  g_PfnAddVeh;
 PFN_REGISTER_RAW_INPUT_DEVICES g_PfnRegisterRawInput;
