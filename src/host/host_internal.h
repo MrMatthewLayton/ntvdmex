@@ -6,6 +6,7 @@
 
 #include "host_types.h"
 #include "host_state.h"
+#include "host_dpmi_int.h"
 #include "host_dos.h"
 #include "host_irq.h"
 #include "host_video.h"
@@ -33,17 +34,12 @@ static VOID DpmiBreakpointArm(VOID);               /* fwd: a new region may hold
 static VOID DpmiBreakpointRearmPending(DWORD currentLinear);   /* fwd: re-plant stepped-over breakpoints */
 static VOID DpmiEnsurePmReturnSelector(VOID);   /* fwd: shared PM-return catcher installer (#2b + 0303) */
 /* State used from a file other than its owner's (tentative definitions). */
-static WORD g_DsProbe[DSPROBE_MAX];
-static INT g_DsProbeCount;
-static WORD g_CsProbe[DSPROBE_MAX];
-static INT g_CsProbeCount;
 static INT g_WowFoldMute;
 static DWORD g_WowFoldDropped;
 static DWORD g_IcaRaised, g_IcaDelivered, g_IcaNoHandler;
 static DWORD g_WowIdleWaits;
 static DWORD g_ShimState[WOW_SHIMS], g_ShimError[WOW_SHIMS];
 static INT g_PmIrq0Latch;
-static INT g_PmVehPass;
 static UINT g_DpmiCpMaximum;
 static DWORD g_WowPmBase[WOW_PMBASE_MAX];
 static DWORD g_PmWatchOffset;
@@ -54,14 +50,9 @@ static DWORD g_BreakpointMode[DPMI_BP_MAX];
 static BYTE g_BreakpointPending[DPMI_BP_MAX];
 static DWORD g_BreakpointReport[DPMI_BP_MAX];
 static BYTE g_BreakpointDone[DPMI_BP_MAX];
-static volatile LONG g_DpmiWatchdogGeneration;
 static DWORD g_PmIrqReflects;
 static INT g_NoPmPatch;
 static DWORD g_NoPmPatchMinimum;
-static volatile DWORD g_DpmiEnterCs;
-static volatile DWORD g_DpmiEnterEip;
-static volatile DWORD g_DpmiLastEvent;
-static volatile DWORD g_DpmiLastVector;
 static INT g_DpmiBlockCount;
 static DWORD g_DpmiOwned[DPMI_OWNED_MAX];
 static INT g_DpmiOwnedCount;
@@ -92,8 +83,6 @@ static WORD g_WowPspEnvironment[WOW_PSP_TRACK];
 static WORD g_PmTransferParagraphs;
 static UINT g_DmaPollOverflow;
 static UINT g_PollStackOverflow;
-static WORD g_WowLastId;
-static WORD g_WowLastFrom;
 static INT g_HostPoolSpill;
 static WORD g_DpmiHandlerSelector;
 static WORD g_WowDgroupSelector;
@@ -105,7 +94,6 @@ static DWORD g_PmDispatchCount[IVT_VECTORS][BYTE_VALUES];
 static DWORD g_Wow32Serviced, g_Wow32Unimplemented, g_Wow32Declined;
 static DWORD g_WowSyncWrites;
 /* Functions called from a file other than their own. */
-static VOID DsProbeLoad(VOID);
 static VOID WowLogFlush(PSTR base, PSTR *logCursor);
 static INT LaunchIsWow(PCSTR command);
 static INT WowModuleOfSelector(WORD selector);
@@ -120,9 +108,6 @@ static WORD WowHostAllocate(WORD paras);
 static PSTR WowPspEnvironmentCheck(PSTR cursor, PCSTR where);
 static VOID WowProbeLoad(PCSTR command);
 static INT WowRefuse(PCSTR command);
-static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers);
-static LONG WINAPI HostUnhandledFilter(EXCEPTION_POINTERS *pointers);
-static DWORD WINAPI DpmiWatchdog(LPVOID param);
 static INT DpmiHostIndex(VOID);
 static WORD DpmiHandlerCodeSelector(VOID);
 static WORD WowCallbackSelector(VOID);

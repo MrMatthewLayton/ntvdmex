@@ -1,7 +1,28 @@
 /* host_diag.c -- crash handling and diagnostics: the fatal dump, the PM-fault handler, the
  *   watchdog, the end-of-run reports and the probe loaders.
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): declared in host_diag.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "host_diag.h"
+#include "main.h"
+#include "host_dpmi_int.h"
+#include "host_bios.h"
+#include "host_dpmi.h"
+#include "host_irq.h"
+#include "host_video.h"
+#include "host_window.h"
+
 
 /* ── ★ THE WATCHDOG WRITES HERE, AND NOWHERE ELSE. ────────────────────────────────
      It is the one instrument whose whole job is to speak when the main thread cannot,
@@ -51,7 +72,7 @@ static VOID ProbeLoadInto(PCSTR path, WORD *out, INT *outCount)
     }
 }
 
-static VOID DsProbeLoad(VOID)
+VOID DsProbeLoad(VOID)
 {
     CHAR buffer[256]; DWORD bytesRead = 0; INT index = 0;
     HANDLE handle;
@@ -77,17 +98,17 @@ static VOID DsProbeLoad(VOID)
         if (got) g_DsProbe[g_DsProbeCount++] = (WORD)value; else if (buffer[index]) ++index;
     }
 }
-static INT g_PmVehPass = 0;   /* pmvehpass.flag: let a non-INT PM fault fall THROUGH the VEH */
+INT g_PmVehPass = 0;   /* pmvehpass.flag: let a non-INT PM fault fall THROUGH the VEH */
 /* ⛔ A CLIENT THAT RETURNS TO ITS PARENT NEVER SET g_DpmiDone -- the run is not over --
      so its watchdog stayed armed over the shell. An idle prompt does not bump
      g_DpmiIteration and V86 code never counts as "moving", so quitting Doom to the prompt
      got the host TerminateProcess'd 3 s later (found s81 testing #152). Each watchdog
      now owns a generation and stands down when the client it watched is gone. */
-static volatile LONG  g_DpmiWatchdogGeneration   = 0;
-static volatile DWORD g_DpmiEnterCs = 0;  /* guest CS handed to the last DpmiEnterProtectedMode    */
-static volatile DWORD g_DpmiEnterEip= 0;  /* guest EIP handed to the last DpmiEnterProtectedMode   */
-static volatile DWORD g_DpmiLastEvent  = 0;  /* VTIB_EVENT reported by the last return        */
-static volatile DWORD g_DpmiLastVector = 0;  /* vector serviced on the last iteration         */
+volatile LONG  g_DpmiWatchdogGeneration   = 0;
+volatile DWORD g_DpmiEnterCs = 0;  /* guest CS handed to the last DpmiEnterProtectedMode    */
+volatile DWORD g_DpmiEnterEip= 0;  /* guest EIP handed to the last DpmiEnterProtectedMode   */
+volatile DWORD g_DpmiLastEvent  = 0;  /* VTIB_EVENT reported by the last return        */
+volatile DWORD g_DpmiLastVector = 0;  /* vector serviced on the last iteration         */
 static volatile LONG  g_VehAny       = 0;  /* # PM-context exceptions delivered to the VEH  */
 static volatile LONG  g_VehFatal     = 0;  /* # of those that took the non-reflect fatal path */
 LONG g_IfvTraceCount;
@@ -305,7 +326,7 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
 /* First-chance sightings of real-mode/host faults -- see the arm in the VEH below. */
 static LONG g_RmFaultSeen = 0;
 #define DPMI_SPIKE_BASE_SELECTOR 0x001F   /* the spike's 0000h answer */
-static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
+LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
 {
     static CHAR lineBuffer[1024]; PSTR cursor = lineBuffer;
     EXCEPTION_RECORD *record = pointers->ExceptionRecord;
@@ -558,7 +579,7 @@ fatalDump:
      on -- so if no SEH frame claims it, it arrives here, where WER used to eat it
      and the log just stopped. Same dump, same clean exit, so the batch and the
      rig watcher collect the evidence either way. */
-static LONG WINAPI HostUnhandledFilter(EXCEPTION_POINTERS *pointers)
+LONG WINAPI HostUnhandledFilter(EXCEPTION_POINTERS *pointers)
 {
     static CHAR lineBuffer[128]; PSTR cursor = lineBuffer;
     /* ── NO VEH ON THIS OS (Windows 2000): the filter IS the VEH. ─────────────────
@@ -580,7 +601,7 @@ enum { DPMI_WATCHDOG_TICK_MS = 250, DPMI_WATCHDOG_EXIT_CODE = 0xDD0, DPMI_WATCHD
 /* DPMI test watchdog: if the PM guest neither faults to the VEH nor exits within a few
    seconds (the kernel skip+resumes PM faults, so the guest spins), terminate cleanly so
    the batch dumps the log and locks release. Makes every DPMI run self-terminating. */
-static DWORD WINAPI DpmiWatchdog(LPVOID param)
+DWORD WINAPI DpmiWatchdog(LPVOID param)
 {
     static CHAR lineBuffer[512]; PSTR cursor = lineBuffer; LONG prev = -1;
     LONG modeYGeneration = (LONG)(ULONG_PTR)param;          /* see g_DpmiWatchdogGeneration */

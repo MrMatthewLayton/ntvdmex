@@ -67,4 +67,9 @@ extern DWORD g_ModeYLatchDescriptor;
 extern DWORD g_ModeYLatchUnsolved;
 extern DWORD g_ModeYLatchOk;
 extern INT g_A000Protection;
+/* Defined in main.c (#335). */
+extern WORD g_DsProbe[DSPROBE_MAX];
+extern INT g_DsProbeCount;
+extern WORD g_CsProbe[DSPROBE_MAX];
+extern INT g_CsProbeCount;
 #endif

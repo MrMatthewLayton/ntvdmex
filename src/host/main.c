@@ -106,7 +106,6 @@ CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "present_ddraw.h"
 
 #include "host_internal.h"
-#include "host_diag.c"
 #include "host_dpmi.c"
 #include "host_dpmi_int.c"
 #include "host_wow.c"
@@ -267,10 +266,10 @@ static INT  g_TrampolineSaved;
    See DosEnvBuildWithCard for why this exists -- a DOS program configured through its
    environment could not be configured at all before it. */
 #define DOSENV_PATH      CFG_("dosenv.txt")
-static WORD g_DsProbe[DSPROBE_MAX];
-static INT  g_DsProbeCount = 0;
-static WORD g_CsProbe[DSPROBE_MAX];
-static INT  g_CsProbeCount = 0;
+WORD g_DsProbe[DSPROBE_MAX];
+INT  g_DsProbeCount = 0;
+WORD g_CsProbe[DSPROBE_MAX];
+INT  g_CsProbeCount = 0;
 
 #define DOSTRACE_FLAG    CFG_("dostrace.flag")
 /* The XMS pool, in KB. Named because SysVars+0x45 must report the SAME

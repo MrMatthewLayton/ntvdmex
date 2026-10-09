@@ -186,8 +186,8 @@ static WORD      g_WowPspEnvironment[WOW_PSP_TRACK];   /* last seen +0x2c, for t
    ⇒ Record the id and call site on entry. This is "the last call ENTERED", not "the
      call in flight" -- if the run ended cleanly it names a call that completed. The
      fatal dump says so rather than implying more than it knows. */
-static WORD g_WowLastId   = WOW_ID_NONE;
-static WORD g_WowLastFrom = 0;
+WORD g_WowLastId   = WOW_ID_NONE;
+WORD g_WowLastFrom = 0;
 
 /* A descriptor access byte names CODE iff it is a segment (S, bit 4) and executable
    (bit 3). 0xFB -- what DOS/4GW writes -- is present/DPL3/S/code/readable/accessed. */
