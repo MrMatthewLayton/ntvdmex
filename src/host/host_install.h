@@ -1,6 +1,15 @@
-/* host_install.h -- installation and recovery: becoming the machine's VDM, reversibly; the recent list; the command line.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- * Declarations only (#335): defined in host_install.c. */
+ * Installation and recovery: becoming the machine's VDM, reversibly; the recent list; the command line.
+ *
+ * Declarations only (#335): defined in host_install.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_HOST_INSTALL_H
 #define NTVDMEX_HOST_INSTALL_H
 #include "host_state.h"

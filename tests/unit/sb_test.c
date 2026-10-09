@@ -1,4 +1,6 @@
-/* sb_test.c -- off-VM unit battery for the Sound Blaster 16 VDD (vdd_sb.c).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM unit battery for the Sound Blaster 16 VDD (vdd_sb.c).
  *
  * T1 is the one that matters most right now: the DSP reset handshake. Skyroads
  * sweeps every standard base address (0x210-0x260) writing 1 then 0 to base+6 and
@@ -12,7 +14,13 @@
  *
  * Runs entirely off-VM: a plain array is guest memory, and the IRQ sink counts
  * interrupts instead of raising them.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include "vdd_sb.h"
@@ -29,29 +37,44 @@ static SB_STATE  g_Sb;
 static INT g_IrqCount, g_IrqLast;
 
 static VOID SbTestIrqSink(PVOID context, BYTE irq)
-{ (VOID)context; g_IrqCount++; g_IrqLast = irq; }
+{
+    (VOID)context;
+    g_IrqCount++;
+    g_IrqLast = irq;
+}
 
-static VOID SbTestWrite(WORD port, BYTE byteValue) { UINT32 value = byteValue; VddBusIo(&g_Bus, port, 1, 0, &value); }
-static BYTE SbTestRead(WORD port) { UINT32 value = 0; VddBusIo(&g_Bus, port, 1, 1, &value); return (BYTE)value; }
+static VOID SbTestWrite(WORD port, BYTE byteValue)
+{
+    UINT32 value = byteValue;
+    VddBusIo(&g_Bus, port, 1, 0, &value);
+}
 
-#define BASE 0x220
+static BYTE SbTestRead(WORD port)
+{
+    UINT32 value = 0;
+    VddBusIo(&g_Bus, port, 1, 1, &value);
+    return (BYTE)value;
+}
+
+#define BASE    0x220
 
 /* The canonical SB detect, exactly as a DOS game performs it. */
 static INT SbTestDspReset(VOID)
 {
     SbTestWrite(BASE + 0x6, 1);
     SbTestWrite(BASE + 0x6, 0);
-    if (!(SbTestRead(BASE + 0xE) & 0x80)) return 0;     /* no byte waiting -> no card      */
+    if (!(SbTestRead(BASE + 0xE) & 0x80)) return 0;     /* no byte waiting -> no card */
     return SbTestRead(BASE + 0xA) == 0xAA;
 }
 
 /* Program DMA channel 1 for `len` bytes at `phys`, auto-init optional.
-   NOTE the mode byte carries the CHANNEL in bits 0-1: 0x48 alone programs
-   channel 0, which silently leaves channel 1 single-cycle. */
+ * NOTE the mode byte carries the CHANNEL in bits 0-1: 0x48 alone programs
+ * channel 0, which silently leaves channel 1 single-cycle.
+ */
 static VOID SbTestDmaProgram(UINT32 physical, WORD length, INT isAutoInit)
 {
     UINT32 value;
-    value = 0;                 VddBusIo(&g_Bus, 0x0C, 1, 0, &value);   /* clear flip-flop  */
+    value = 0;                 VddBusIo(&g_Bus, 0x0C, 1, 0, &value);   /* clear flip-flop */
     value = physical & 0xFF;       VddBusIo(&g_Bus, 0x02, 1, 0, &value);
     value = (physical >> 8) & 0xFF;VddBusIo(&g_Bus, 0x02, 1, 0, &value);
     value = (length - 1) & 0xFF;  VddBusIo(&g_Bus, 0x03, 1, 0, &value);
@@ -74,15 +97,24 @@ INT main(VOID)
     memset(&g_Sb,  0, sizeof g_Sb);
     VddBusInitialize(&g_Bus, g_GuestMemory);
     VddBusSetSinks(&g_Bus, SbTestIrqSink, 0, 0, 0);
-    { NTVDD_DEVICE device = VddDmaDevice(&g_Dma); CHECK(VddBusAdd(&g_Bus, &device) == 0, "add: dma ok"); }
-    { NTVDD_DEVICE device = VddOplDevice(&g_Opl); CHECK(VddBusAdd(&g_Bus, &device) == 0, "add: opl ok"); }
+    {
+        NTVDD_DEVICE device = VddDmaDevice(&g_Dma);
+        CHECK(VddBusAdd(&g_Bus, &device) == 0, "add: dma ok");
+    }
+    {
+        NTVDD_DEVICE device = VddOplDevice(&g_Opl);
+        CHECK(VddBusAdd(&g_Bus, &device) == 0, "add: opl ok");
+    }
     g_Sb.Dma = &g_Dma; g_Sb.Opl = &g_Opl; g_Sb.BasePort = BASE;
-    { NTVDD_DEVICE device = VddSbDevice(&g_Sb); CHECK(VddBusAdd(&g_Bus, &device) == 0, "add: sb16 ok"); }
+    {
+        NTVDD_DEVICE device = VddSbDevice(&g_Sb);
+        CHECK(VddBusAdd(&g_Bus, &device) == 0, "add: sb16 ok");
+    }
 
     /* T1: THE DETECTION HANDSHAKE ------------------------------------------ */
     CHECK(SbTestDspReset(), "detect: reset handshake returns 0xAA  <-- THE TEST");
     CHECK(!(SbTestRead(BASE + 0xE) & 0x80), "detect: status clear once the byte is read");
-    /* a bare read with no reset must NOT look like a card                     */
+    /* a bare read with no reset must NOT look like a card */
     CHECK(SbTestRead(BASE + 0xA) == 0xFF, "detect: empty DSP queue reads 0xFF");
 
     /* T2: DSP version must look like an SB16 ------------------------------- */
@@ -96,13 +128,13 @@ INT main(VOID)
     CHECK(SbTestRead(BASE + 0xA) == (BYTE)~0x5A, "identify: returns the complement");
 
     /* T4: sample rate, both ways ------------------------------------------- */
-    SbTestWrite(BASE + 0xC, 0x40); SbTestWrite(BASE + 0xC, 165);          /* time constant        */
+    SbTestWrite(BASE + 0xC, 0x40); SbTestWrite(BASE + 0xC, 165);          /* time constant */
     CHECK(g_Sb.RateHz > 10000 && g_Sb.RateHz < 12000, "rate: time constant 165 -> ~11 kHz");
     SbTestWrite(BASE + 0xC, 0x41); SbTestWrite(BASE + 0xC, 0x56); SbTestWrite(BASE + 0xC, 0x22);  /* 22050 = 0x5622 BE */
     CHECK(g_Sb.RateHz == 22050, "rate: command 0x41 is big-endian -> 22050 Hz");
 
     /* T5: single-cycle 8-bit DMA playback ---------------------------------- */
-    for (index = 0; index < 256; ++index) g_GuestMemory[0x30000 + index] = (BYTE)index;   /* ramp        */
+    for (index = 0; index < 256; ++index) g_GuestMemory[0x30000 + index] = (BYTE)index;   /* ramp */
     SbTestDmaProgram(0x30000, 256, 0);
     g_IrqCount = 0;
     SbTestWrite(BASE + 0xC, 0x14); SbTestWrite(BASE + 0xC, 0xFF); SbTestWrite(BASE + 0xC, 0x00);  /* 256 bytes */
@@ -110,10 +142,10 @@ INT main(VOID)
 
     VddSbRender(&g_Sb, pcm, 128);
     CHECK(g_IrqCount == 0, "single-cycle: no IRQ half way through the block");
-    /* 8-bit SB data is UNSIGNED: 0x00 is the bottom of the range, 0x80 silence  */
+    /* 8-bit SB data is UNSIGNED: 0x00 is the bottom of the range, 0x80 silence */
     CHECK(pcm[0] == (INT16)(-128 * 256), "single-cycle: unsigned 0x00 maps to full negative");
 
-    VddSbRender(&g_Sb, pcm, 128);               /* bytes 128..255 of the ramp     */
+    VddSbRender(&g_Sb, pcm, 128);               /* bytes 128..255 of the ramp */
     CHECK(pcm[0] == 0, "single-cycle: unsigned 0x80 maps to silence");
     CHECK(g_IrqCount == 1, "single-cycle: exactly one IRQ at end of block");
     CHECK(g_IrqLast == SB_DEFAULT_IRQ, "single-cycle: raised on IRQ 5");
@@ -121,7 +153,10 @@ INT main(VOID)
 
     /* T6: the IRQ is acknowledged by reading 2xE --------------------------- */
     CHECK(g_Sb.IsIrqPending, "irq: pending until acknowledged");
-    { BYTE status = SbTestRead(BASE + 0x5); (VOID)status; }
+    {
+        BYTE status = SbTestRead(BASE + 0x5);
+        (VOID)status;
+    }
     SbTestWrite(BASE + 0x4, 0x82);
     CHECK((SbTestRead(BASE + 0x5) & 0x01) != 0, "irq: mixer 0x82 reports the 8-bit IRQ");
     SbTestRead(BASE + 0xE);
@@ -149,15 +184,16 @@ INT main(VOID)
     CHECK(VddSbIsActive(&g_Sb), "continue: 0xD4 resumes playback");
 
     /* T9: SB16 16-bit signed transfer --------------------------------------- */
-    for (index = 0; index < 64; index += 2) {
+    for (index = 0; index < 64; index += 2)
+    {
         g_GuestMemory[0x32000 + index]     = 0x00;
-        g_GuestMemory[0x32000 + index + 1] = 0x40;                 /* 0x4000 = +16384       */
+        g_GuestMemory[0x32000 + index + 1] = 0x40;                 /* 0x4000 = +16384 */
     }
     SbTestDmaProgram(0x32000, 64, 0);
-    g_Sb.Dma16 = 1;                                       /* point 16-bit at ch 1  */
+    g_Sb.Dma16 = 1;                                       /* point 16-bit at ch 1 */
     g_IrqCount = 0;
-    SbTestWrite(BASE + 0xC, 0xB0); SbTestWrite(BASE + 0xC, 0x10);         /* 16-bit, signed, mono  */
-    SbTestWrite(BASE + 0xC, 0x1F); SbTestWrite(BASE + 0xC, 0x00);         /* 32 samples            */
+    SbTestWrite(BASE + 0xC, 0xB0); SbTestWrite(BASE + 0xC, 0x10);         /* 16-bit, signed, mono */
+    SbTestWrite(BASE + 0xC, 0x1F); SbTestWrite(BASE + 0xC, 0x00);         /* 32 samples */
     VddSbRender(&g_Sb, pcm, 32);
     CHECK(pcm[0] == 16384, "16-bit: signed little-endian sample decoded");
     CHECK(g_IrqCount == 1, "16-bit: IRQ at end of block");
@@ -168,10 +204,10 @@ INT main(VOID)
     CHECK(g_IrqCount == 1, "0xF2: forces an IRQ immediately");
 
     /* T11: the FM mirror reaches the OPL ------------------------------------ */
-    SbTestWrite(BASE + 0x8, 0x02);                               /* OPL timer-1 preset    */
+    SbTestWrite(BASE + 0x8, 0x02);                               /* OPL timer-1 preset */
     SbTestWrite(BASE + 0x9, 0xFF);
     CHECK(g_Opl.Timer1Preset == 0xFF, "FM mirror: 2x8/2x9 writes reach the OPL");
-    SbTestWrite(BASE + 0x8, 0x04); SbTestWrite(BASE + 0x9, 0x01);         /* start timer 1         */
+    SbTestWrite(BASE + 0x8, 0x04); SbTestWrite(BASE + 0x9, 0x01);         /* start timer 1 */
     VddOplAddMicroseconds(&g_Opl, 80);
     CHECK((SbTestRead(BASE + 0x8) & OPL_STATUS_TIMER1) != 0, "FM mirror: OPL status readable at 2x8");
 
@@ -196,27 +232,29 @@ INT main(VOID)
     CHECK(!VddSbIsActive(&g_Sb), "reset: transfer stopped");
 
     /* #231: as an SB Pro (DSP 3.02) the SB16-only commands are unknown opcodes -- ignored
-       and taking NO argument bytes -- so the byte after C6h is a command in its own right. */
+     * and taking NO argument bytes -- so the byte after C6h is a command in its own right.
+     */
     {   extern BYTE g_SbVersionMajor, g_SbVersionMinor;
         BYTE oldMajor = g_SbVersionMajor, oldMinor = g_SbVersionMinor, major, minor;
         g_SbVersionMajor = 3; g_SbVersionMinor = 2;
         g_Sb.Model = SB_MODEL_SBPRO;
         SbTestDspReset();
         SbTestWrite(BASE + 0xC, 0xC6);                   /* SB16 8-bit auto-init: not on an SB Pro */
-        SbTestWrite(BASE + 0xC, 0xE1);                   /* ...so this is read as a command        */
+        SbTestWrite(BASE + 0xC, 0xE1);                   /* ...so this is read as a command */
         major = SbTestRead(BASE + 0xA); minor = SbTestRead(BASE + 0xA);
         CHECK(major == 3 && minor == 2, "SB Pro: C6h is ignored with no arguments; E1h answers 3.02");
         CHECK(g_Sb.TransferMode == SB_TRANSFER_IDLE, "SB Pro: ...and no transfer started");
         g_Sb.Model = SB_MODEL_SB16; g_SbVersionMajor = oldMajor; g_SbVersionMinor = oldMinor;
         SbTestDspReset(); }
 
-    /* ── T13: #176 -- NO DACK, NO SAMPLE, AND NO END OF BLOCK. ─────────────────
-       With the 8237 refusing the channel (command bit 2, or the mask bit) the DSP
-       waits on its DREQ: silence, no IRQ, the transfer still armed, the 8237's
-       address standing still -- and the DREQ visible in status bit 5. Re-enabling
-       resumes at the byte it stopped on. Before #176 the refused fetch was taken
-       for the end of the block: an IRQ the card never raises, and the transfer
-       dropped to IDLE so re-enabling resumed nothing. */
+    /* T13: #176 -- NO DACK, NO SAMPLE, AND NO END OF BLOCK:
+     * With the 8237 refusing the channel (command bit 2, or the mask bit) the DSP
+     * waits on its DREQ: silence, no IRQ, the transfer still armed, the 8237's
+     * address standing still -- and the DREQ visible in status bit 5. Re-enabling
+     * resumes at the byte it stopped on. Before #176 the refused fetch was taken
+     * for the end of the block: an IRQ the card never raises, and the transfer
+     * dropped to IDLE so re-enabling resumed nothing.
+     */
     {   UINT32 noDackBefore, status;
         for (index = 0; index < 64; ++index) g_GuestMemory[0x33000 + index] = (BYTE)index;
         SbTestDmaProgram(0x33000, 64, 1);
@@ -239,17 +277,17 @@ INT main(VOID)
         status = SbTestRead(0x08);
         CHECK((status & 0x20) != 0 && (status & 0x02) == 0, "8237 disable: status shows DRQ1 pending, no TC1");
 
-        SbTestWrite(0x08, 0x00);                                  /* re-enable               */
+        SbTestWrite(0x08, 0x00);                                  /* re-enable */
         VddSbRender(&g_Sb, pcm, 1);
         CHECK(pcm[0] == (INT16)((8 - 128) * 256), "8237 re-enable: resumes at byte 8, not the base");
         VddSbRender(&g_Sb, pcm, 23);
         CHECK(g_IrqCount == 1, "8237 re-enable: the block ends where it would have -- one IRQ");
 
-        SbTestWrite(0x0A, 0x05);                                  /* mask channel 1          */
+        SbTestWrite(0x0A, 0x05);                                  /* mask channel 1 */
         VddSbRender(&g_Sb, pcm, 16);
         CHECK(g_IrqCount == 1 && VddSbIsActive(&g_Sb) && pcm[0] == 0,
               "8237 mask: the same hold -- silence, no IRQ, still armed");
-        SbTestWrite(0x0A, 0x01);                                  /* unmask                  */
+        SbTestWrite(0x0A, 0x01);                                  /* unmask */
         VddSbRender(&g_Sb, pcm, 1);
         CHECK(pcm[0] == (INT16)((32 - 128) * 256), "8237 unmask: resumes where it stopped");
 

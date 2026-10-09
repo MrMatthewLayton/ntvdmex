@@ -1,7 +1,16 @@
-/* host_irq.h -- interrupt injection: the asynchronous IRQ path into V86 and protected mode,
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Interrupt injection: the asynchronous IRQ path into V86 and protected mode,
  *   IF/VIF, and the host's IRQ sink.
  *
- * Declarations only (#335): defined in host_irq.c. */
+ * Declarations only (#335): defined in host_irq.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_HOST_IRQ_H
 #define NTVDMEX_HOST_IRQ_H
 #include "host_state.h"

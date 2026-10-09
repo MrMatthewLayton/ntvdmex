@@ -1,6 +1,15 @@
-/* host_input.h -- keyboard and joystick input: scancodes, typematic repeat, the synthetic-key driver, modifier tracking and the low-level keyboard hook.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- * Declarations only (#335): defined in host_input.c. */
+ * Keyboard and joystick input: scancodes, typematic repeat, the synthetic-key driver, modifier tracking and the low-level keyboard hook.
+ *
+ * Declarations only (#335): defined in host_input.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_HOST_INPUT_H
 #define NTVDMEX_HOST_INPUT_H
 #include "host_state.h"

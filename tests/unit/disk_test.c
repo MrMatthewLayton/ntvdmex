@@ -1,4 +1,6 @@
-/* disk_test.c -- INT 13h geometry and CHS<->LBA, pinned off-VM.  GH #44.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * INT 13h geometry and CHS<->LBA, pinned off-VM.  GH #44.
  *
  * Expectations come from tests/probes/dos/p_disk.asm run on MS-DOS 6.22 against a
  * real 1.44MB floppy, quoted in the check names. The arithmetic is where this
@@ -6,26 +8,32 @@
  * not -- so it gets pinned rather than trusted.
  *
  *   cc -std=c99 -I src -I src/dos -o disk_test tests/unit/disk_test.c && ./disk_test
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include "dos_disk.h"
 
 /* The two floppy images the checks build: their sizes, and the geometry 6.22 reported. */
-#define DISK_TEST_1440K_IMAGE_SIZE     1474560u
-#define DISK_TEST_720K_IMAGE_SIZE      737280u
-#define DISK_TEST_TRUNCATED_IMAGE_SIZE 1024u
-#define DISK_TEST_1440K_TOTAL_SECTORS  2880
-#define DISK_TEST_720K_TOTAL_SECTORS   1440
-#define DISK_TEST_FLOPPY_CYLINDERS     80
-#define DISK_TEST_LAST_CYLINDER        79
-#define DISK_TEST_LAST_HEAD            1
-#define DISK_TEST_ODD_SECTOR_SIZE      1024u
-#define DISK_TEST_ORACLE_CX_1440K      0x4F12  /* int13.08.params: CH=79, CL=18           */
-#define DISK_TEST_ORACLE_CX_720K       0x4F09
-#define DISK_TEST_LAST_LBA_1440K       2879
-#define DISK_TEST_REFUSED              (-1L)   /* what lbaOrRefused reports for a refusal */
-#define DISK_TEST_EMPTY                0       /* a zeroed field: "none"                  */
+#define DISK_TEST_1440K_IMAGE_SIZE      1474560u
+#define DISK_TEST_720K_IMAGE_SIZE       737280u
+#define DISK_TEST_TRUNCATED_IMAGE_SIZE  1024u
+#define DISK_TEST_1440K_TOTAL_SECTORS   2880
+#define DISK_TEST_720K_TOTAL_SECTORS    1440
+#define DISK_TEST_FLOPPY_CYLINDERS      80
+#define DISK_TEST_LAST_CYLINDER         79
+#define DISK_TEST_LAST_HEAD             1
+#define DISK_TEST_ODD_SECTOR_SIZE       1024u
+#define DISK_TEST_ORACLE_CX_1440K       0x4F12  /* int13.08.params: CH=79, CL=18 */
+#define DISK_TEST_ORACLE_CX_720K        0x4F09
+#define DISK_TEST_LAST_LBA_1440K        2879
+#define DISK_TEST_REFUSED               (-1L)   /* What lbaOrRefused reports for a refusal */
+#define DISK_TEST_EMPTY                 0       /* A zeroed field: "none" */
 
 static INT g_Checks, g_Failures;
 
@@ -82,7 +90,7 @@ INT main(VOID)
     /* Oracle: BX=0004, i.e. BL=4 = 1.44MB. */
     DiskTestExpect("AH=08h drive type = 4 (1.44MB)", geometry.DriveType, DOS_DRIVE_1440K);
 
-    /* ── CHS -> LBA. ★ THE SECTOR IS 1-BASED; cylinder and head are not. */
+    /* -- CHS -> LBA. THE SECTOR IS 1-BASED; cylinder and head are not. */
     DiskTestExpect("C0 H0 S1 is LBA 0 (the boot sector)",
                    DiskTestLbaOrRefused(&geometry, 0, 0, DOS_DISK_FIRST_SECTOR), 0);
     DiskTestExpect("C0 H0 S2 is LBA 1",
@@ -98,8 +106,9 @@ INT main(VOID)
                                         DOS_FLOPPY_1440K_SECTORS),
                    DISK_TEST_LAST_LBA_1440K);
 
-    /* ⚠ SECTOR 0 DOES NOT EXIST. A host that accepts it reads one sector early
-       for every access and reports success -- silently wrong data, not an error. */
+    /* [CAUTION]: SECTOR 0 DOES NOT EXIST. A host that accepts it reads one sector early
+     * for every access and reports success -- silently wrong data, not an error.
+     */
     DiskTestExpect("sector 0 is REFUSED",
                    DiskTestLbaOrRefused(&geometry, 0, 0, DOS_DISK_FIRST_SECTOR - 1),
                    DISK_TEST_REFUSED);
@@ -114,7 +123,7 @@ INT main(VOID)
                                         DOS_DISK_FIRST_SECTOR),
                    DISK_TEST_REFUSED);
 
-    /* ── AN IMAGE WE CANNOT TRUST IS ABSENT, NOT GUESSED AT. */
+    /* -- AN IMAGE WE CANNOT TRUST IS ABSENT, NOT GUESSED AT. */
     DiskTestBuild1440kBpb(bootSector);
     DiskTestExpect("a TRUNCATED image is refused",
                    DosDiskGeometryFromBpb(bootSector, DISK_TEST_TRUNCATED_IMAGE_SIZE, &geometry),
@@ -136,7 +145,8 @@ INT main(VOID)
                    DosDiskGeometryFromBpb(bootSector, DISK_TEST_1440K_IMAGE_SIZE, &geometry), FALSE);
 
     /* A 720K disk is a different geometry from the same file size class, which
-       is exactly why the BPB is read rather than the size inspected. */
+     * is exactly why the BPB is read rather than the size inspected.
+     */
     DiskTestBuild1440kBpb(bootSector);
     DiskTestPutWord(bootSector + DOS_BPB_TOTAL_SECTORS_16, DISK_TEST_720K_TOTAL_SECTORS);
     DiskTestPutWord(bootSector + DOS_BPB_SECTORS_PER_TRACK, DOS_FLOPPY_720K_SECTORS);

@@ -1,6 +1,15 @@
-/* ntvdmex_ascii.h -- the ASCII control characters and text bytes the host uses (#333).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * The ASCII control characters and text bytes the host uses (#333).
+ *
  * Defines only; included by ntvdmex_types.h.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #ifndef NTVDMEX_ASCII_H
 #define NTVDMEX_ASCII_H
 
@@ -9,12 +18,12 @@
 #define ASCII_TAB           9
 #define ASCII_LF            0x0A
 #define ASCII_CR            0x0D
-#define ASCII_END_OF_FILE   0x1A    /* ^Z                                        */
-#define ASCII_SPACE         0x20    /* and the first printable character         */
-#define ASCII_CASE_BIT      0x20    /* 'a' - 'A'                                 */
-#define ASCII_DELETE        0x7F    /* one past the last printable character     */
+#define ASCII_END_OF_FILE   0x1A    /* ^Z */
+#define ASCII_SPACE         0x20    /* And the first printable character */
+#define ASCII_CASE_BIT      0x20    /* 'a' - 'A' */
+#define ASCII_DELETE        0x7F    /* One past the last printable character */
 #define ASCII_ESCAPE        0x1B
-#define ASCII_HIGH_FIRST    0x80    /* the first byte that is not 7-bit ASCII    */
+#define ASCII_HIGH_FIRST    0x80    /* The first byte that is not 7-bit ASCII */
 
 /* Reading a number from text, one digit at a time. */
 #define DECIMAL_RADIX       10

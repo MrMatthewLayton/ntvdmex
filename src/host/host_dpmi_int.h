@@ -1,7 +1,16 @@
-/* host_dpmi_int.h -- protected mode: DPMI's interrupt service -- INT 31h and the PM INT 21h/2Fh/33h
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Protected mode: DPMI's interrupt service -- INT 31h and the PM INT 21h/2Fh/33h
  *   paths, in DpmiServicePmIntBody.
  *
- * Declarations only (#335): defined in host_dpmi_int.c. */
+ * Declarations only (#335): defined in host_dpmi_int.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_HOST_DPMI_INT_H
 #define NTVDMEX_HOST_DPMI_INT_H
 #include "host_state.h"

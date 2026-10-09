@@ -1,4 +1,6 @@
-/* dos_auxprn.h -- DOS's AUX and PRN drivers, as guest code the host plants. GH #251.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * DOS's AUX and PRN drivers, as guest code the host plants. GH #251.
  *
  * Assembled from dos_auxprn.asm (the source, with the measured call sequences and
  * the reason this is guest code at all). INT 21h AH=03h/04h/05h, and AH=3Fh/40h on
@@ -7,22 +9,28 @@
  * INT 17h through the IVT and IRETs to the caller.
  * Lives in the DOS-resident block at DOS_CTAB_SEG:DOS_AUXPRN_OFF (dos_layout.h).
  * tests/unit/auxprn_test.c runs these bytes and holds them to the oracle's logs.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #ifndef NTVDMEX_DOS_AUXPRN_H
 #define NTVDMEX_DOS_AUXPRN_H
 
 #include "../ntvdmex_types.h"
 
 /* Entry offsets within the block (nasm listing of dos_auxprn.asm). */
-#define DOS_AUXPRN_PRN_OUTPUT  0x00    /* AH=05h  PRN output, DL            */
-#define DOS_AUXPRN_AUX_OUTPUT  0x1E    /* AH=04h  AUX output, DL            */
-#define DOS_AUXPRN_AUX_INPUT   0x37    /* AH=03h  AUX input -> AL           */
-#define DOS_AUXPRN_PRN_WRITE   0x48    /* AH=40h  handle 4, DS:DX, CX bytes */
-#define DOS_AUXPRN_AUX_WRITE   0x69    /* AH=40h  handle 3                  */
-#define DOS_AUXPRN_AUX_READ    0x83    /* AH=3Fh  handle 3                  */
+#define DOS_AUXPRN_PRN_OUTPUT   0x00    /* AH=05h PRN output, DL */
+#define DOS_AUXPRN_AUX_OUTPUT   0x1E    /* AH=04h AUX output, DL */
+#define DOS_AUXPRN_AUX_INPUT    0x37    /* AH=03h AUX input -> AL */
+#define DOS_AUXPRN_PRN_WRITE    0x48    /* AH=40h handle 4, DS:DX, CX bytes */
+#define DOS_AUXPRN_AUX_WRITE    0x69    /* AH=40h handle 3 */
+#define DOS_AUXPRN_AUX_READ     0x83    /* AH=3Fh handle 3 */
 
 /* The assembled block's length. */
-#define DOS_AUXPRN_CODE_SIZE   174
+#define DOS_AUXPRN_CODE_SIZE    174
 
 static const BYTE g_DosAuxPrnCode[DOS_AUXPRN_CODE_SIZE] = {
   0xfb, 0x52, 0x50, 0x31, 0xd2, 0xb8, 0x00, 0x02, 0xcd, 0x17, 0xb8, 0x00,

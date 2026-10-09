@@ -1,14 +1,23 @@
-/* dpmi_svc.c -- INT 31h's spec-decided answers: selector validity, the real-mode callback slots, and resize plans.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- * The function definitions of dpmi_svc.h, which keeps their declarations and doc comments (#335). */
+ * INT 31h's spec-decided answers: selector validity, the real-mode callback slots, and resize plans.
+ *
+ * The function definitions of dpmi_svc.h, which keeps their declarations and doc comments (#335).
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #include "dpmi_svc.h"
 
 INT DpmiIsSelectorValid(WORD selector, INT indexLimit, INT isAllocated, INT isGuestOwnedTable)
 {
     INT index = DPMI_SELECTOR_INDEX(selector);
-    if (!(selector & DPMI_SELECTOR_TI)) return 0;    /* TI = 0: GDT          */
+    if (!(selector & DPMI_SELECTOR_TI)) return 0;    /* TI = 0: GDT */
     if (index < 1 || index >= indexLimit) return 0;  /* null, or off the end */
-    if (!isAllocated && !isGuestOwnedTable) return 0;   /* never handed out     */
+    if (!isAllocated && !isGuestOwnedTable) return 0;   /* never handed out */
     return 1;
 }
 

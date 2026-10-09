@@ -1,78 +1,98 @@
-/* prtsc_test.c -- off-VM battery for the default INT 05h's byte sequencer (#274).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM battery for the default INT 05h's byte sequencer (#274).
  *
  * src/dos/bios_prtsc.h decides which byte the guest's p5 loop (bios_kbdact.asm) prints
  * next through INT 17h, and whether INT 17h's answer ends the job. Driven here with a
  * fake screen and a fake printer status.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include "bios_prtsc.h"
 
 /* The fake screen: the largest mode the checks print, filled with letters. */
-#define PRTSC_TEST_SCREEN_ROWS       50
-#define PRTSC_TEST_SCREEN_COLUMNS    132
-#define PRTSC_TEST_FIRST_LETTER      'A'
-#define PRTSC_TEST_LETTER_COUNT      26
-#define PRTSC_TEST_NUL_CELL          0
+#define PRTSC_TEST_SCREEN_ROWS          50
+#define PRTSC_TEST_SCREEN_COLUMNS       132
+#define PRTSC_TEST_FIRST_LETTER         'A'
+#define PRTSC_TEST_LETTER_COUNT         26
+#define PRTSC_TEST_NUL_CELL             0
 
 /* The job's parameters: columns, 0040:0084 (rows - 1), the page and the saved cursor. */
-#define PRTSC_TEST_COLUMNS_80        80
-#define PRTSC_TEST_COLUMNS_132       132
-#define PRTSC_TEST_NO_COLUMNS        0
-#define PRTSC_TEST_BDA_ROWS_25       24
-#define PRTSC_TEST_BDA_ROWS_50       49
-#define PRTSC_TEST_BDA_ROWS_UNSET    0
-#define PRTSC_TEST_PAGE              0
-#define PRTSC_TEST_CURSOR            0x1234
+#define PRTSC_TEST_COLUMNS_80           80
+#define PRTSC_TEST_COLUMNS_132          132
+#define PRTSC_TEST_NO_COLUMNS           0
+#define PRTSC_TEST_BDA_ROWS_25          24
+#define PRTSC_TEST_BDA_ROWS_50          49
+#define PRTSC_TEST_BDA_ROWS_UNSET       0
+#define PRTSC_TEST_PAGE                 0
+#define PRTSC_TEST_CURSOR               0x1234
 
 /* The printer's answers (INT 17h AH). */
-#define PRTSC_TEST_PRINTER_READY     0x90   /* 90h: selected, not busy */
-#define PRTSC_TEST_FIRST_STATUS      0
-#define PRTSC_TEST_NEVER_FAIL        0      /* fail at no byte                 */
-#define PRTSC_TEST_NO_STATUS         0
-#define PRTSC_TEST_TIME_OUT          0x01   /* AH bit 0 */
-#define PRTSC_TEST_IO_ERROR          0x08   /* AH bit 3 */
-#define PRTSC_TEST_OUT_OF_PAPER      0x20   /* AH bit 5 */
-#define PRTSC_TEST_NOT_ERROR_BITS    0xD6   /* every bit but 29h */
-#define PRTSC_TEST_ALL_ERROR_BITS    0x29
+#define PRTSC_TEST_PRINTER_READY        0x90    /* 90h: selected, not busy */
+#define PRTSC_TEST_FIRST_STATUS         0
+#define PRTSC_TEST_NEVER_FAIL           0       /* Fail at no byte */
+#define PRTSC_TEST_NO_STATUS            0
+#define PRTSC_TEST_TIME_OUT             0x01    /* AH bit 0 */
+#define PRTSC_TEST_IO_ERROR             0x08    /* AH bit 3 */
+#define PRTSC_TEST_OUT_OF_PAPER         0x20    /* AH bit 5 */
+#define PRTSC_TEST_NOT_ERROR_BITS       0xD6    /* Every bit but 29h */
+#define PRTSC_TEST_ALL_ERROR_BITS       0x29
 
 /* The bytes a job sends, and where the checks look in them. */
-#define PRTSC_TEST_OUTPUT_SIZE       8000
-#define PRTSC_TEST_LINE_END_BYTES    2      /* LF, CR */
-#define PRTSC_TEST_ROWS_25           25
-#define PRTSC_TEST_ROWS_50           50
-#define PRTSC_TEST_BYTES_80X25       2052
-#define PRTSC_TEST_LAST_COLUMN_80    79
-#define PRTSC_TEST_ROW_0_END         82     /* 2 + 80: the first byte after row 0's cells */
-#define PRTSC_TEST_INDEX_CELL_0_0    2      /* where row 0, columns 0, 1 and 79 land      */
-#define PRTSC_TEST_INDEX_CELL_0_1    3
-#define PRTSC_TEST_INDEX_CELL_0_79   81
-#define PRTSC_TEST_LF                0x0A
-#define PRTSC_TEST_CR                0x0D
-#define PRTSC_TEST_SPACE             ' '
-#define PRTSC_TEST_FIRST_CELL_BYTE   3      /* byte number (1-based) of the 1st cell      */
-#define PRTSC_TEST_MIDDLE_BYTE       50
-#define PRTSC_TEST_LATER_BYTE        100
-#define PRTSC_TEST_INITIAL_LF_BYTE   1
-#define PRTSC_TEST_LAST_CELL_OF_ROW_0 82
-#define PRTSC_TEST_NO_CONTEXT        0
+#define PRTSC_TEST_OUTPUT_SIZE          8000
+#define PRTSC_TEST_LINE_END_BYTES       2       /* LF, CR */
+#define PRTSC_TEST_ROWS_25              25
+#define PRTSC_TEST_ROWS_50              50
+#define PRTSC_TEST_BYTES_80X25          2052
+#define PRTSC_TEST_LAST_COLUMN_80       79
+#define PRTSC_TEST_ROW_0_END            82      /* 2 + 80: the first byte after row 0's cells */
+#define PRTSC_TEST_INDEX_CELL_0_0       2       /* Where row 0, columns 0, 1 and 79 land */
+#define PRTSC_TEST_INDEX_CELL_0_1       3
+#define PRTSC_TEST_INDEX_CELL_0_79      81
+#define PRTSC_TEST_LF                   0x0A
+#define PRTSC_TEST_CR                   0x0D
+#define PRTSC_TEST_SPACE                ' '
+#define PRTSC_TEST_FIRST_CELL_BYTE      3       /* Byte number (1-based) of the 1st cell */
+#define PRTSC_TEST_MIDDLE_BYTE          50
+#define PRTSC_TEST_LATER_BYTE           100
+#define PRTSC_TEST_INITIAL_LF_BYTE      1
+#define PRTSC_TEST_LAST_CELL_OF_ROW_0   82
+#define PRTSC_TEST_NO_CONTEXT           0
 
 static INT g_Checks = 0, g_Failures = 0;
 
 static VOID PrintScreenTestCheck(BOOL passed, PCSTR message)
 {
     g_Checks++;
-    if (passed) { printf("  PASS  %s\n", (message)); }
-    else { printf("  FAIL  %s\n", (message)); g_Failures++; }
+    if (passed)
+    {
+        printf("  PASS  %s\n", (message));
+    }
+    else
+    {
+        printf("  FAIL  %s\n", (message));
+        g_Failures++;
+    }
 }
 
 static BYTE g_Screen[PRTSC_TEST_SCREEN_ROWS][PRTSC_TEST_SCREEN_COLUMNS];
 static INT g_CellReads;
 static BYTE PrintScreenTestReadCell(PVOID context, BYTE row, BYTE column)
-{ (VOID)context; ++g_CellReads; return g_Screen[row][column]; }
+{
+    (VOID)context;
+    ++g_CellReads;
+    return g_Screen[row][column];
+}
 
 /* Run a whole job; the printer answers PRTSC_TEST_PRINTER_READY for every byte except byte
-   number `failAt` (1-based, 0 = never), which gets `failStatus`. Returns the final result. */
+ * number `failAt` (1-based, 0 = never), which gets `failStatus`. Returns the final result.
+ */
 static BYTE g_Output[PRTSC_TEST_OUTPUT_SIZE];
 static INT g_OutputCount;
 static INT PrintScreenTestRunJob(PBIOS_PRINT_SCREEN_JOB job, BYTE columns, BYTE bdaRowsMinusOne,
@@ -82,7 +102,8 @@ static INT PrintScreenTestRunJob(PBIOS_PRINT_SCREEN_JOB job, BYTE columns, BYTE 
     INT result;
     g_OutputCount = 0; g_CellReads = 0;
     BiosPrintScreenBegin(job, columns, bdaRowsMinusOne, PRTSC_TEST_PAGE, PRTSC_TEST_CURSOR);
-    for (;;) {
+    for (;;)
+    {
         result = BiosPrintScreenStep(job, printerStatus, PrintScreenTestReadCell,
                                      PRTSC_TEST_NO_CONTEXT, &nextByte);
         if (result != BIOS_PRINT_SCREEN_STEP_EMIT) return result;

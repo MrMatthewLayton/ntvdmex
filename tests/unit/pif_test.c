@@ -1,7 +1,16 @@
-/* pif_test.c -- off-VM battery for src/host/pif.h: reading the program, directory and
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM battery for src/host/pif.h: reading the program, directory and
  * parameters out of a PIF. The bytes below are the first 0x231 of the user's own
  * C:\QB45\QB.PIF (s85), which names C:\qb45\QB.EXE in C:\qb45 with `/L` -- the
- * argument QuickBASIC needs for CALL ABSOLUTE, and the reason this exists. */
+ * argument QuickBASIC needs for CALL ABSOLUTE, and the reason this exists.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #include <stdio.h>
 #include <string.h>
 

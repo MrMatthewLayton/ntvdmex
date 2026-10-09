@@ -1,8 +1,17 @@
-/* wowsched.c -- the Win16 task scheduler's context switch: save, restore and swap a task's VDM context, and poke its mode word.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- * The function definitions of wowsched.h, which keeps their declarations and doc comments (#335). */
+ * The Win16 task scheduler's context switch: save, restore and swap a task's VDM context, and poke its mode word.
+ *
+ * The function definitions of wowsched.h, which keeps their declarations and doc comments (#335).
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #include "wowsched.h"
-#include "../ntvdmex_bits.h"   /* defines only: BYTE_MASK, BYTE_SHIFT */
+#include "../ntvdmex_bits.h"    /* defines only: BYTE_MASK, BYTE_SHIFT */
 
 INT g_WowSchedCurrentBase = 0;   /* see wowsched.h */
 
@@ -17,7 +26,7 @@ VOID WowSchedSave(PWOWSCHED_SLOT slot, volatile BYTE *tib,
     slot->Task    = task;
     slot->IsUsed    = 1;
     slot->IsFresh   = 0;                  /* the caller marks a launch-parked task fresh */
-    slot->IsRunnable = 0;                 /* ...and a mid-work one runnable              */
+    slot->IsRunnable = 0;                 /* ...and a mid-work one runnable */
     slot->CallbackDepth  = 0;
     slot->IsWaitingForMessage  = 0;
     slot->BaseDepth     = g_WowSchedCurrentBase;

@@ -1,6 +1,15 @@
-/* host_io.h -- port I/O: the trap dispatcher, the fast paths, and the VDD plug-in surface (third-party VDDs and the ISV I/O hooks).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- * Declarations only (#335): defined in host_io.c. */
+ * Port I/O: the trap dispatcher, the fast paths, and the VDD plug-in surface (third-party VDDs and the ISV I/O hooks).
+ *
+ * Declarations only (#335): defined in host_io.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_HOST_IO_H
 #define NTVDMEX_HOST_IO_H
 #include "host_state.h"

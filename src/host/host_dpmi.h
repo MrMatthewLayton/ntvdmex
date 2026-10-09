@@ -1,7 +1,16 @@
-/* host_dpmi.h -- protected mode: the DPMI host -- descriptors and the LDT, fault trampolines,
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Protected mode: the DPMI host -- descriptors and the LDT, fault trampolines,
  *   code patching and breakpoints, callbacks, PM IRQ injection, client teardown.
  *
- * Declarations only (#335): defined in host_dpmi.c. */
+ * Declarations only (#335): defined in host_dpmi.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_HOST_DPMI_H
 #define NTVDMEX_HOST_DPMI_H
 #include "host_state.h"

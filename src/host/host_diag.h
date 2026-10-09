@@ -1,7 +1,16 @@
-/* host_diag.h -- crash handling and diagnostics: the fatal dump, the PM-fault handler, the
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Crash handling and diagnostics: the fatal dump, the PM-fault handler, the
  *   watchdog, the end-of-run reports and the probe loaders.
  *
- * Declarations only (#335): defined in host_diag.c. */
+ * Declarations only (#335): defined in host_diag.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_HOST_DIAG_H
 #define NTVDMEX_HOST_DIAG_H
 #include "host_state.h"

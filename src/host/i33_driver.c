@@ -1,14 +1,25 @@
-/* i33_driver.c -- INT 33h: cursor masks, acceleration profiles, alternate handlers.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- * The function definitions of i33_driver.h, which keeps their declarations and doc comments (#335). */
+ * INT 33h: cursor masks, acceleration profiles, alternate handlers.
+ *
+ * The function definitions of i33_driver.h, which keeps their declarations and doc comments (#335).
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #include "i33_driver.h"
 
 VOID I33GraphicsCursorRow(BYTE *row, INT width, INT left, WORD screenMask, WORD cursorMask,
                        BYTE ones, const BYTE *colourMap)
 {
     INT index;
-    if (!colourMap) {
-        for (index = 0; index < I33_GC_PIXELS; ++index) {
+    if (!colourMap)
+    {
+        for (index = 0; index < I33_GC_PIXELS; ++index)
+        {
             INT column = left + index;
             WORD bit = (WORD)(I33_GC_LEFT_BIT >> index);
             BYTE value;
@@ -19,12 +30,17 @@ VOID I33GraphicsCursorRow(BYTE *row, INT width, INT left, WORD screenMask, WORD 
         }
         return;
     }
-    for (index = 0; index < I33_GC_CGA_PIXELS; ++index) {
+    for (index = 0; index < I33_GC_CGA_PIXELS; ++index)
+    {
         INT column = left + index, colour;
         UINT shift = (UINT)(I33_GC_CGA_LEFT_SHIFT - I33_GC_CGA_BITS * index);
         UINT screenBits = (screenMask >> shift) & I33_GC_CGA_MASK, cursorBits = (cursorMask >> shift) & I33_GC_CGA_MASK, valueBits = 0;
         if (column < 0 || column >= width) continue;
-        for (colour = 0; colour < I33_GC_CGA_COLOURS; ++colour) if (colourMap[colour] == row[column]) { valueBits = (UINT)colour; break; }
+        for (colour = 0; colour < I33_GC_CGA_COLOURS; ++colour) if (colourMap[colour] == row[column])
+        {
+            valueBits = (UINT)colour;
+            break;
+        }
         valueBits = (valueBits & screenBits) ^ cursorBits;
         row[column] = colourMap[valueBits & I33_GC_CGA_MASK];
     }
@@ -38,7 +54,8 @@ VOID I33GraphicsCursorDraw(BYTE *pixels, INT width, INT height, INT stride, INT 
     INT left = pointerX - (colourMap ? hotX / I33_GC_CGA_BITS : hotX);
     INT top = pointerY - hotY;
     if (!pixels || width <= 0 || height <= 0) return;
-    for (rowIndex = 0; rowIndex < I33_GC_ROWS; ++rowIndex) {
+    for (rowIndex = 0; rowIndex < I33_GC_ROWS; ++rowIndex)
+    {
         INT row = top + rowIndex;
         if (row < 0 || row >= height) continue;
         I33GraphicsCursorRow(pixels + (long)row * stride, width, left, screenMask[rowIndex], cursorMask[rowIndex], ones, colourMap);
@@ -59,9 +76,11 @@ VOID I33AccelerationDefaultNames(BYTE *names)
 VOID I33AccelerationDefaults(BYTE *acceleration)
 {
     INT profile, index;
-    for (profile = 0; profile < I33_ACC_N; ++profile) {
+    for (profile = 0; profile < I33_ACC_N; ++profile)
+    {
         acceleration[I33_ACC_LENS + profile] = 1;
-        for (index = 0; index < I33_ACC_ENTRIES; ++index) {
+        for (index = 0; index < I33_ACC_ENTRIES; ++index)
+        {
             acceleration[I33_ACC_THRESH + profile * I33_ACC_ENTRIES + index] = I33_ACC_UNUSED_THRESHOLD;
             acceleration[I33_ACC_FACTOR + profile * I33_ACC_ENTRIES + index] = I33_ACC_FACTOR_ONE;
         }
@@ -94,11 +113,16 @@ INT I33AlternateSet(I33_ALTERNATE *alternates, WORD mask, WORD segment, UINT32 o
     INT index, freeIndex = -1;
     UINT shifts = mask & I33_ALT_SHIFTS;
     if (!shifts) return 0;                                  /* needs one of Shift/Ctrl/Alt */
-    for (index = 0; index < I33_ALT_N; ++index) {
+    for (index = 0; index < I33_ALT_N; ++index)
+    {
         if (alternates[index].Mask && (alternates[index].Mask & I33_ALT_SHIFTS) == shifts) break;
         if (!alternates[index].Mask && freeIndex < 0) freeIndex = index;
     }
-    if (index == I33_ALT_N) { if (freeIndex < 0) return 0; index = freeIndex; }
+    if (index == I33_ALT_N)
+    {
+        if (freeIndex < 0) return 0;
+        index = freeIndex;
+    }
     alternates[index].Mask = mask; alternates[index].Segment = segment; alternates[index].Offset = offset;
     return 1;
 }
@@ -126,14 +150,20 @@ INT I33PickHandler(const I33_ALTERNATE *alternates, UINT events, BYTE keyboardFl
     UINT shifts = I33ShiftBits(keyboardFlags);
     INT index;
     if (shifts)
-        for (index = 0; index < I33_ALT_N; ++index) {
+        for (index = 0; index < I33_ALT_N; ++index)
+        {
             UINT mask = alternates[index].Mask;
-            if (mask && (mask & I33_ALT_SHIFTS) == shifts && (events & mask & I33_ALT_EVENTS)) {
+            if (mask && (mask & I33_ALT_SHIFTS) == shifts && (events & mask & I33_ALT_EVENTS))
+            {
                 *conditions = (events & mask & I33_ALT_EVENTS) | shifts;
                 return index;
             }
         }
-    if (events & mainMask) { *conditions = events & mainMask; return I33_PICK_MAIN; }
+    if (events & mainMask)
+    {
+        *conditions = events & mainMask;
+        return I33_PICK_MAIN;
+    }
     *conditions = 0;
     return I33_PICK_NOBODY;
 }

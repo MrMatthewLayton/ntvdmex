@@ -1,11 +1,18 @@
-/*
- * net_test.c -- the NetBIOS device (src/vdd/vdd_net.c), off-VM.  GH #8, s91.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * The NetBIOS device (src/vdd/vdd_net.c), off-VM.  GH #8, s91.
  *
  * The device's job is the DOS side: read the 64-byte NCB, hand the backend the right
  * fields, and write the answer back where DOS keeps it. A fake backend records what
  * it was given and answers what the test tells it to, so every field crossing is
  * checked both ways without a network.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include "vdd_net.h"
@@ -38,7 +45,7 @@ INT main(VOID)
     BYTE returnCode;
     memset(&state, 0, sizeof state);
 
-    /* ── no backend: an error, never silence ── */
+    /* no backend: an error, never silence: */
     memset(controlBlock, 0, sizeof controlBlock); controlBlock[0] = 0x7F;
     returnCode = VddNetBiosService(&state, controlBlock, NULL);
     CHECK(returnCode == NETB_RC_INVALID_ADAPTER && controlBlock[1] == NETB_RC_INVALID_ADAPTER, "no host NetBIOS: invalid adapter (23h) in AL and retcode");
@@ -46,7 +53,7 @@ INT main(VOID)
 
     VddNetBiosSetBackend(&state, NetTestFakeBackend, NULL);
 
-    /* ── a wait command: every field in, every answer out ── */
+    /* a wait command: every field in, every answer out: */
     memset(controlBlock, 0, sizeof controlBlock);
     controlBlock[0] = 0x30;                                 /* ADD NAME */
     memcpy(controlBlock + 0x1A, "NTVDMEXPROBE    ", 16);
@@ -62,7 +69,7 @@ INT main(VOID)
     CHECK(returnCode == 0 && controlBlock[1] == 0 && controlBlock[0x31] == 0, "success: AL, retcode and cmd_cplt all 00");
     CHECK(controlBlock[2] == 0x11 && controlBlock[3] == 0x22, "the lsn and name number the backend gave are written back");
 
-    /* ── a buffer and its length ── */
+    /* a buffer and its length: */
     memset(controlBlock, 0, sizeof controlBlock); memset(buffer, 0, sizeof buffer);
     controlBlock[0] = 0x33; controlBlock[0x0A] = '*'; controlBlock[8] = 64; controlBlock[9] = 0;
     g_Length = 60;
@@ -72,17 +79,17 @@ INT main(VOID)
     CHECK(controlBlock[8] == 60 && controlBlock[9] == 0, "the length actually returned (60) is written back to +08");
     g_Length = 0;
 
-    /* ── an error retcode ── */
+    /* an error retcode: */
     memset(controlBlock, 0, sizeof controlBlock); controlBlock[0] = 0x7F; g_ReturnCode = NETB_RC_INVALID_COMMAND;
     returnCode = VddNetBiosService(&state, controlBlock, NULL);
     CHECK(returnCode == NETB_RC_INVALID_COMMAND && controlBlock[1] == NETB_RC_INVALID_COMMAND, "invalid command: 03h in AL and retcode (the presence test)");
 
-    /* ── CALL returns the far end's name ── */
+    /* CALL returns the far end's name: */
     memset(controlBlock, 0, sizeof controlBlock); controlBlock[0] = 0x10; g_ReturnCode = 0;
     returnCode = VddNetBiosService(&state, controlBlock, NULL);
     CHECK(!memcmp(controlBlock + 0x0A, "FAREND          ", 16), "CALL: callname comes back from the backend");
 
-    /* ── no-wait ── */
+    /* no-wait: */
     memset(controlBlock, 0, sizeof controlBlock); controlBlock[0] = 0x80 | 0x30; g_ReturnCode = 0x0D;   /* duplicate name */
     returnCode = VddNetBiosService(&state, controlBlock, NULL);
     CHECK(g_SeenRequest.Command == 0x30, "no-wait: the backend sees the WAIT form (bit 7 stripped)");

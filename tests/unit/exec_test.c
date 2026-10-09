@@ -1,57 +1,65 @@
-/* exec_test.c -- EXEC's two header questions, pinned off-VM.  GH #255.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- *   1. DosExeKind: is this a DOS program, or a Windows one EXEC must hand to
- *      Windows? Built from synthetic headers -- including the three that must NOT be
- *      taken for Windows (an LE-bound DOS/4GW game, a BIND'ed OS/2 family program,
- *      an old .EXE with junk at 3Ch).
- *   2. DosExecSize: how much memory the header buys. The expectations are the
- *      rows p_exmem.asm measured on MS-DOS 6.22, PCem and DOSBox-X, quoted by name;
- *      the children are p_exmemc.asm's header, rebuilt here (one 512-byte page, a
- *      32-byte header, 130h bytes of image -- which DOS counts as 1Eh paragraphs).
+ * EXEC's two header questions, pinned off-VM.  GH #255.
  *
- *   cc -std=c99 -I src -I src/dos -o exec_test tests/unit/exec_test.c && ./exec_test
+ * 1. DosExeKind: is this a DOS program, or a Windows one EXEC must hand to
+ *    Windows? Built from synthetic headers -- including the three that must NOT be
+ *    taken for Windows (an LE-bound DOS/4GW game, a BIND'ed OS/2 family program,
+ *    an old .EXE with junk at 3Ch).
+ * 2. DosExecSize: how much memory the header buys. The expectations are the
+ *    rows p_exmem.asm measured on MS-DOS 6.22, PCem and DOSBox-X, quoted by name;
+ *    the children are p_exmemc.asm's header, rebuilt here (one 512-byte page, a
+ *    32-byte header, 130h bytes of image -- which DOS counts as 1Eh paragraphs).
+ *
+ * cc -std=c99 -I src -I src/dos -o exec_test tests/unit/exec_test.c && ./exec_test
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include "dos_loader.h"
 
 /* The synthetic files. */
-#define EXEC_TEST_FILE_SIZE          0x400
-#define EXEC_TEST_NEW_HEADER         0x80     /* where e_lfanew points                    */
-#define EXEC_TEST_LOW_NEW_HEADER     0x20     /* an e_lfanew below 40h                    */
-#define EXEC_TEST_SHORT_READ         0x81     /* stops one byte into the new header       */
-#define EXEC_TEST_BROKEN_PE_NUL      0x83     /* the second of "PE\0\0"'s NULs            */
-#define EXEC_TEST_STUB_HEADER_PARAS  4        /* 64-byte header                           */
-#define EXEC_TEST_STUB_RELOCATIONS   0x40     /* e_lfarlc                                 */
-#define EXEC_TEST_PE_GUI             2
-#define EXEC_TEST_PE_CONSOLE         3
-#define EXEC_TEST_NE_OS2             1
-#define EXEC_TEST_NO_EXTRA           0
+#define EXEC_TEST_FILE_SIZE             0x400
+#define EXEC_TEST_NEW_HEADER            0x80    /* Where e_lfanew points */
+#define EXEC_TEST_LOW_NEW_HEADER        0x20    /* An e_lfanew below 40h */
+#define EXEC_TEST_SHORT_READ            0x81    /* Stops one byte into the new header */
+#define EXEC_TEST_BROKEN_PE_NUL         0x83    /* The second of "PE\0\0"'s NULs */
+#define EXEC_TEST_STUB_HEADER_PARAS     4       /* 64-byte header */
+#define EXEC_TEST_STUB_RELOCATIONS      0x40    /* e_lfarlc */
+#define EXEC_TEST_PE_GUI                2
+#define EXEC_TEST_PE_CONSOLE            3
+#define EXEC_TEST_NE_OS2                1
+#define EXEC_TEST_NO_EXTRA              0
 
 /* p_exmemc.asm's child. */
-#define EXEC_TEST_CHILD_HEADER_BYTES 0x20
-#define EXEC_TEST_CHILD_IMAGE_BYTES  0x130
-#define EXEC_TEST_CHILD_HEADER_PARAS 2
-#define EXEC_TEST_CHILD_RELOCATIONS  0x1C
-#define EXEC_TEST_CHILD_INITIAL_SP   0x130
-#define EXEC_TEST_CHILD_IMAGE_PARAS  0x1E     /* one page less the header                 */
+#define EXEC_TEST_CHILD_HEADER_BYTES    0x20
+#define EXEC_TEST_CHILD_IMAGE_BYTES     0x130
+#define EXEC_TEST_CHILD_HEADER_PARAS    2
+#define EXEC_TEST_CHILD_RELOCATIONS     0x1C
+#define EXEC_TEST_CHILD_INITIAL_SP      0x130
+#define EXEC_TEST_CHILD_IMAGE_PARAS     0x1E    /* One page less the header */
 
 /* The memory each row measured, in paragraphs. */
-#define EXEC_TEST_LARGEST            0x8000
-#define EXEC_TEST_SMALL_BLOCK        0x100
-#define EXEC_TEST_EXACT_BLOCK        0x12E    /* 10h + 1Eh + 100h                         */
-#define EXEC_TEST_SHORT_BLOCK        0x12D
-#define EXEC_TEST_MIN_100            0x100
-#define EXEC_TEST_MAX_200            0x200
-#define EXEC_TEST_MIN_F000           0xF000
-#define EXEC_TEST_MAX_FFFF           0xFFFF
-#define EXEC_TEST_MAX_10             0x10
-#define EXEC_TEST_MIN_40             0x40
-#define EXEC_TEST_ALLOC_A            0x22E    /* 10h + 1Eh + 200h                         */
-#define EXEC_TEST_ALLOC_E            0x3E     /* 10h + 1Eh + 10h                          */
-#define EXEC_TEST_ALLOC_MIN_WINS     0x6E     /* 10h + 1Eh + 40h                          */
-#define EXEC_TEST_COM_FIRST_BYTE     0xB4
-#define EXEC_TEST_COM_SIZE           0x100
+#define EXEC_TEST_LARGEST               0x8000
+#define EXEC_TEST_SMALL_BLOCK           0x100
+#define EXEC_TEST_EXACT_BLOCK           0x12E   /* 10h + 1Eh + 100h */
+#define EXEC_TEST_SHORT_BLOCK           0x12D
+#define EXEC_TEST_MIN_100               0x100
+#define EXEC_TEST_MAX_200               0x200
+#define EXEC_TEST_MIN_F000              0xF000
+#define EXEC_TEST_MAX_FFFF              0xFFFF
+#define EXEC_TEST_MAX_10                0x10
+#define EXEC_TEST_MIN_40                0x40
+#define EXEC_TEST_ALLOC_A               0x22E   /* 10h + 1Eh + 200h */
+#define EXEC_TEST_ALLOC_E               0x3E    /* 10h + 1Eh + 10h */
+#define EXEC_TEST_ALLOC_MIN_WINS        0x6E    /* 10h + 1Eh + 40h */
+#define EXEC_TEST_COM_FIRST_BYTE        0xB4
+#define EXEC_TEST_COM_SIZE              0x100
 
 static INT g_Checks, g_Failures;
 
@@ -103,7 +111,7 @@ INT main(VOID)
     WORD allocation; BOOL loadHigh; INT status;
     DWORD length;
 
-    /* ── 1. what kind of program ── */
+    /* 1. what kind of program: */
     ExecTestMakeStub(EXEC_TEST_NEW_HEADER, "PE\0\0", DOS_PE_SUBSYSTEM, EXEC_TEST_PE_GUI);
     ExecTestExpect("PE, GUI subsystem -> PE",        DosExeKind(g_File, sizeof g_File, &subsystem), DOS_EXE_PE);
     ExecTestExpect("PE, GUI subsystem -> subsys 2",  subsystem, EXEC_TEST_PE_GUI);
@@ -131,7 +139,7 @@ INT main(VOID)
     ExecTestMakeStub(EXEC_TEST_NEW_HEADER, "PE\0\0", EXEC_TEST_NO_EXTRA, 0); g_File[0] = 'Z'; g_File[1] = 'M';
     ExecTestExpect("not MZ -> DOS (a .COM)", DosExeKind(g_File, sizeof g_File, &subsystem), DOS_EXE_DOS);
 
-    /* ── 2. how much memory (largest free block 8000h paragraphs) ── */
+    /* 2. how much memory (largest free block 8000h paragraphs): */
     length = ExecTestMakeChild(EXEC_TEST_MIN_100, EXEC_TEST_MAX_200);
     ExecTestExpect("image paras of p_exmemc's child: one page less the header", DosImageParagraphs(g_File, length), EXEC_TEST_CHILD_IMAGE_PARAS);
     status = DosExecSize(g_File, length, EXEC_TEST_LARGEST, &allocation, &loadHigh);

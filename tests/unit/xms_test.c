@@ -1,4 +1,6 @@
-/* xms_test.c -- off-VM unit battery for the XMS core (src/dos/dos_xms.h).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM unit battery for the XMS core (src/dos/dos_xms.h).
  *
  * Layer-1 test for M4 slice 1, in the same style as mcb_test.c: the XMS
  * allocator + Move logic run against host memory with malloc/free backing
@@ -7,52 +9,66 @@
  * accounting + handle exhaustion, realloc (grow/shrink/content-preserve),
  * lock/unlock (incl. free-while-locked), and the Move function across all
  * four endpoint combinations (conv<->EMB, EMB<->EMB) plus error paths.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "dos_xms.h"
 
 /* The pool the checks build, and the blocks they allocate in it, in KB. */
-#define XMS_TEST_POOL_KB              1024     /* 1 MB                                  */
-#define XMS_TEST_FIRST_BLOCK_KB       64
-#define XMS_TEST_SECOND_BLOCK_KB      128
-#define XMS_TEST_OVERSIZED_KB         2048
-#define XMS_TEST_GROWN_KB             128
-#define XMS_TEST_SHRUNK_KB            16
-#define XMS_TEST_SECOND_HANDLE        2
-#define XMS_TEST_THIRD_HANDLE         3
-#define XMS_TEST_UNKNOWN_HANDLE       99
-#define XMS_TEST_EXTRA_ATTEMPTS       4        /* tries past the handle limit          */
+#define XMS_TEST_POOL_KB                1024            /* 1 MB */
+#define XMS_TEST_FIRST_BLOCK_KB         64
+#define XMS_TEST_SECOND_BLOCK_KB        128
+#define XMS_TEST_OVERSIZED_KB           2048
+#define XMS_TEST_GROWN_KB               128
+#define XMS_TEST_SHRUNK_KB              16
+#define XMS_TEST_SECOND_HANDLE          2
+#define XMS_TEST_THIRD_HANDLE           3
+#define XMS_TEST_UNKNOWN_HANDLE         99
+#define XMS_TEST_EXTRA_ATTEMPTS         4               /* Tries past the handle limit */
 
 /* The Move checks: a conventional window, the far pointers into it, and what moves. */
-/* ⚠ It was 128KB, and 2000:0000 below is linear 20000h -- exactly 128KB -- so the
-   round trip wrote 16 bytes past the window (AddressSanitizer: global-buffer-overflow).
-   Harmless only while whatever followed the array was unused. */
-#define XMS_TEST_CONVENTIONAL_SIZE    0x30000  /* 192KB conventional window            */
-#define XMS_TEST_SOURCE_SEGMENT       0x1000u  /* conv far ptr 1000:0010               */
-#define XMS_TEST_SOURCE_OFFSET        0x0010u
-#define XMS_TEST_DESTINATION_SEGMENT  0x2000u  /* conv far ptr 2000:0000               */
-#define XMS_TEST_DESTINATION_OFFSET   0x0000u
-#define XMS_TEST_MESSAGE              "XMS round trip!"
-#define XMS_TEST_MESSAGE_SIZE         16       /* the message and its terminator       */
-#define XMS_TEST_EMB_MIDDLE           1024     /* into the middle of the second block  */
-#define XMS_TEST_ODD_LENGTH           15
-#define XMS_TEST_WRAP_LENGTH          0x2000
-#define XMS_TEST_WRAPPING_OFFSET      0xFFFFF000u  /* near 4 GB: wraps past the bounds check */
-#define XMS_TEST_LAST_FAR_SEGMENT     0xFFFF0000u  /* FFFF:FFF0                         */
-#define XMS_TEST_LAST_FAR_OFFSET      0xFFF0u
-#define XMS_TEST_PAST_HMA_LENGTH      0x20
-#define XMS_TEST_FIRST_MARK           0xAB
-#define XMS_TEST_LAST_MARK            0xCD
+/* [CAUTION]: It was 128KB, and 2000:0000 below is linear 20000h -- exactly 128KB -- so the
+ * round trip wrote 16 bytes past the window (AddressSanitizer: global-buffer-overflow).
+ * Harmless only while whatever followed the array was unused.
+ */
+#define XMS_TEST_CONVENTIONAL_SIZE      0x30000         /* 192KB conventional window */
+#define XMS_TEST_SOURCE_SEGMENT         0x1000u         /* Conv far ptr 1000:0010 */
+#define XMS_TEST_SOURCE_OFFSET          0x0010u
+#define XMS_TEST_DESTINATION_SEGMENT    0x2000u         /* Conv far ptr 2000:0000 */
+#define XMS_TEST_DESTINATION_OFFSET     0x0000u
+#define XMS_TEST_MESSAGE                "XMS round trip!"
+#define XMS_TEST_MESSAGE_SIZE           16              /* The message and its terminator */
+#define XMS_TEST_EMB_MIDDLE             1024            /* Into the middle of the second block */
+#define XMS_TEST_ODD_LENGTH             15
+#define XMS_TEST_WRAP_LENGTH            0x2000
+#define XMS_TEST_WRAPPING_OFFSET        0xFFFFF000u     /* Near 4 GB: wraps past the bounds check */
+#define XMS_TEST_LAST_FAR_SEGMENT       0xFFFF0000u     /* FFFF:FFF0 */
+#define XMS_TEST_LAST_FAR_OFFSET        0xFFF0u
+#define XMS_TEST_PAST_HMA_LENGTH        0x20
+#define XMS_TEST_FIRST_MARK             0xAB
+#define XMS_TEST_LAST_MARK              0xCD
 
 static INT g_Checks = 0, g_Failures = 0;
 
 static VOID XmsTestCheck(BOOL passed, PCSTR description)
 {
     g_Checks++;
-    if (passed) { printf("  PASS  %s\n", description); }
-    else { printf("  FAIL  %s\n", description); g_Failures++; }
+    if (passed)
+    {
+        printf("  PASS  %s\n", description);
+    }
+    else
+    {
+        printf("  FAIL  %s\n", description);
+        g_Failures++;
+    }
 }
 
 /* Backing hooks: real host heap, KB-sized. */
@@ -89,14 +105,15 @@ INT main(VOID)
     DosXmsInitialize(&state, XMS_TEST_POOL_KB, XmsTestAllocate, XmsTestFree, NULL);
 
     /* T1: fresh state ----------------------------------------------------- */
-    /* ── A20 STARTS OPEN, AND THIS CHECK USED TO PIN THE LIE. ─────────────────
-         It asserted IsA20Enabled == 0, i.e. AH=07h answers "A20 disabled" until
-         some guest happens to call AH=03h. An NT VDM does not wrap at 1 MB, so the
-         line is effectively always open, and extended memory is unreachable
-         while it is reported masked.
-       Oracle, tests/probes/dos/p_xms.asm on 6.22 with HIMEM.SYS:
-         CASE=xms.07.query.a20 SIG=AX,BX AX=0001    (enabled)
-       Ours answered AX=0000. (GH #47) */
+    /* A20 STARTS OPEN, AND THIS CHECK USED TO PIN THE LIE:
+     * It asserted IsA20Enabled == 0, i.e. AH=07h answers "A20 disabled" until
+     * some guest happens to call AH=03h. An NT VDM does not wrap at 1 MB, so the
+     * line is effectively always open, and extended memory is unreachable
+     * while it is reported masked.
+     * Oracle, tests/probes/dos/p_xms.asm on 6.22 with HIMEM.SYS:
+     * CASE=xms.07.query.a20 SIG=AX,BX AX=0001    (enabled)
+     * Ours answered AX=0000. (GH #47)
+     */
     XmsTestCheck(state.IsA20Enabled == TRUE && state.IsHmaAllocated == FALSE,
                  "init: A20 open (as the VDM really is), HMA free");
     DosXmsQueryFreeMemory(&state, &largestKb, &totalFreeKb);
@@ -190,7 +207,8 @@ INT main(VOID)
     {
         DOS_XMS_MOVE move;
         /* s84: an offset near 4 GB used to WRAP past the bounds check and a conventional
-           endpoint had no ceiling -- both reached host memory outside the guest's. */
+         * endpoint had no ceiling -- both reached host memory outside the guest's.
+         */
         move.Length = XMS_TEST_WRAP_LENGTH; move.SourceHandle = firstHandle;
         move.SourceOffset = XMS_TEST_WRAPPING_OFFSET;
         move.DestinationHandle = secondHandle; move.DestinationOffset = 0;
@@ -280,10 +298,12 @@ INT main(VOID)
     /* T12: handle exhaustion --------------------------------------------- */
     {
         INT allocatedCount = 0;
-        for (attempt = 0; attempt < DOS_XMS_MAX_HANDLES + XMS_TEST_EXTRA_ATTEMPTS; ++attempt) {
+        for (attempt = 0; attempt < DOS_XMS_MAX_HANDLES + XMS_TEST_EXTRA_ATTEMPTS; ++attempt)
+        {
             WORD handle;
             if (DosXmsAllocate(&state, 0, &handle, &errorCode)) ++allocatedCount;
-            else {
+            else
+            {
                 XmsTestCheck(errorCode == DOS_XMS_ERROR_NO_HANDLES,
                              "fn09: exhausting handles fails (A1)");
                 break;

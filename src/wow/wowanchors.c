@@ -1,7 +1,16 @@
-/* wowanchors.c -- ★★★ HOW THE HOST RECOGNISES A THUNK MODULE'S CODE SEGMENT.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * HOW THE HOST RECOGNISES A THUNK MODULE'S CODE SEGMENT.
  *
  * The code of wowanchors.h (#335): its functions and state, in their original order;
- * its own translation unit, declared in wowanchors.h. */
+ * its own translation unit, declared in wowanchors.h.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #include "host_state.h"
 #include "log.h"
 #include "ne.h"
@@ -15,7 +24,6 @@
 #include "wowgdi.h"
 #include "wowuser.h"
 
-
 INT WowAnchorHit(PCWOW_ANCHOR table, INT count,
                           WORD id, WORD argumentBytes, WORD returnStub)
 {
@@ -26,8 +34,9 @@ INT WowAnchorHit(PCWOW_ANCHOR table, INT count,
     return 0;
 }
 
-/* ── SHELL: every stub in the module, generated. ──────────────────────
-     Regenerate with `tools/ne/wowthunks.py --anchor <the module>`. */
+/* SHELL: every stub in the module, generated:
+ * Regenerate with `tools/ne/wowthunks.py --anchor <the module>`.
+ */
 const WOW_ANCHOR g_WowShellAnchors[] = {
     { 0x001,  12, 0x002b },
     { 0x002,  12, 0x0038 },
@@ -65,8 +74,9 @@ const WOW_ANCHOR g_WowShellAnchors[] = {
     { 0x035,  10, 0x01d8 },
 };
 
-/* ── GDI: every stub in the module, generated. ──────────────────────
-     Regenerate with `tools/ne/wowthunks.py --anchor <the module>`. */
+/* GDI: every stub in the module, generated:
+ * Regenerate with `tools/ne/wowthunks.py --anchor <the module>`.
+ */
 const WOW_ANCHOR g_WowGdiAnchors[] = {
     { 0x001,   6, 0x0a3f },
     { 0x002,   4, 0x0a4c },
@@ -437,17 +447,19 @@ const WOW_ANCHOR g_WowGdiAnchors[] = {
     { 0x2080,   0, 0x00b5 },
 };
 
-/* ── COMMDLG: the whole seg1 table (s89, #294). ─────────────────────────────
-     ⚠ It was TWO rows -- GetOpenFileName and GetSaveFileName -- the exact trap
-       this file's header describes for SHELL, met again: Notepad's Search > Find
-       is FindText, and a Notepad that had not opened a file first never had
-       COMMDLG identified, so FindText was logged "?'s table" and stepped over.
-     Hand-filtered from `tools/ne/wowthunks.py --anchor guest/ne/commdlg.dll`:
-       that output also lists seg3 "stubs" (ids 0x0/0x7f00, 255 argument bytes)
-       which are data matching the byte pattern; only the eight real seg1 stubs
-       are here, each one an export (ids = ordinals): GetOpenFileName (0x01),
-       GetSaveFileName (0x02), FindText (0x0b), ReplaceText (0x0c), ChooseColor
-       (0x05), ChooseFont (0x0f), PrintDlg (0x14), CommDlgExtendedError (0x1a). */
+/* COMMDLG: the whole seg1 table (s89, #294):
+ *
+ * [CAUTION]: It was TWO rows -- GetOpenFileName and GetSaveFileName -- the exact trap
+ * this file's header describes for SHELL, met again: Notepad's Search > Find
+ * is FindText, and a Notepad that had not opened a file first never had
+ * COMMDLG identified, so FindText was logged "?'s table" and stepped over.
+ * Hand-filtered from `tools/ne/wowthunks.py --anchor guest/ne/commdlg.dll`:
+ * that output also lists seg3 "stubs" (ids 0x0/0x7f00, 255 argument bytes)
+ * which are data matching the byte pattern; only the eight real seg1 stubs
+ * are here, each one an export (ids = ordinals): GetOpenFileName (0x01),
+ * GetSaveFileName (0x02), FindText (0x0b), ReplaceText (0x0c), ChooseColor
+ * (0x05), ChooseFont (0x0f), PrintDlg (0x14), CommDlgExtendedError (0x1a).
+ */
 const WOW_ANCHOR g_WowCommdlgAnchors[] = {
     { 0x001,   4, 0x0012 }, { 0x002,   4, 0x0024 },
     { 0x00b,   4, 0x0036 }, { 0x00c,   4, 0x0048 },
@@ -455,9 +467,10 @@ const WOW_ANCHOR g_WowCommdlgAnchors[] = {
     { 0x014,   4, 0x007e }, { 0x01a,   0, 0x0090 },
 };
 
-/* ── KEYBOARD: every stub in the module, generated (s89) -- same reason: it was
-     two rows (AnsiToOem / OemToAnsi). Regenerate with
-     `tools/ne/wowthunks.py --anchor guest/ne/keyboard.drv`. */
+/* -- KEYBOARD: every stub in the module, generated (s89) -- same reason: it was
+ * two rows (AnsiToOem / OemToAnsi). Regenerate with
+ * `tools/ne/wowthunks.py --anchor guest/ne/keyboard.drv`.
+ */
 const WOW_ANCHOR g_WowKeyboardAnchors[] = {
     { 0x004,  14, 0x006c }, { 0x005,   8, 0x0079 }, { 0x006,   8, 0x0086 },
     { 0x080,   2, 0x0093 }, { 0x081,   2, 0x00a0 }, { 0x082,   2, 0x00ad },
@@ -465,8 +478,9 @@ const WOW_ANCHOR g_WowKeyboardAnchors[] = {
     { 0x086,  10, 0x00e1 }, { 0x087,  10, 0x00ee },
 };
 
-/* ── SOUND: every stub in the module, generated (s90, #299). Regenerate with
-     `tools/ne/wowthunks.py --anchor guest/ne/sound.drv`. */
+/* -- SOUND: every stub in the module, generated (s90, #299). Regenerate with
+ * `tools/ne/wowthunks.py --anchor guest/ne/sound.drv`.
+ */
 const WOW_ANCHOR g_WowSoundAnchors[] = {
     { 0x001,   0, 0x001d }, { 0x002,   0, 0x002a }, { 0x003,   4, 0x0037 },
     { 0x004,   8, 0x0044 }, { 0x005,  10, 0x0051 }, { 0x006,   6, 0x005e },
@@ -476,8 +490,9 @@ const WOW_ANCHOR g_WowSoundAnchors[] = {
     { 0x010,   4, 0x00e0 }, { 0x011,   0, 0x00ed },
 };
 
-/* ── MMSYSTEM (s90, #278): its whole WOW table is two stubs -- id 2 (28 argument
-     bytes) and id 1 (none). See src/wow/wowmmedia.h. */
+/* -- MMSYSTEM (s90, #278): its whole WOW table is two stubs -- id 2 (28 argument
+ * bytes) and id 1 (none). See src/wow/wowmmedia.h.
+ */
 const WOW_ANCHOR g_WowMmediaAnchors[] = {
     { 0x002,  28, 0x061e }, { 0x001,   0, 0x062b },
 };

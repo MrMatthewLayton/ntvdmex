@@ -1,5 +1,6 @@
-/*
- * w16thk.c -- W16THK.DLL, the 32-bit half of tests/probes/win16/w_wcb (s91, #309).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * W16THK.DLL, the 32-bit half of tests/probes/win16/w_wcb (s91, #309).
  *
  * A 32-bit thunk DLL of the kind wownt32.h is for: 16-bit code reaches it through
  * the generic thunks (LoadLibraryEx32W / CallProc32W), and it calls BACK into the
@@ -15,7 +16,13 @@
  *                                UnlockFree -- a bit per step that answered as documented
  *
  * Build: tests/probes/win16/thunk32/build.sh  (i686-w64-mingw32, no CRT)
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <windows.h>
 
 typedef BOOL   (WINAPI *PWOW_CALLBACK16_EX)(DWORD, DWORD, DWORD, PVOID, PDWORD);
@@ -29,40 +36,42 @@ typedef WORD   (WINAPI *PWOW_GLOBAL_UNLOCK_FREE16)(DWORD);
 typedef DWORD  (WINAPI *PWOW_GLOBAL_LOCK_SIZE16)(WORD, PDWORD);
 typedef LPVOID (WINAPI *PWOW_GET_VDM_POINTER)(DWORD, DWORD, BOOL);
 
-#define WCB16_PASCAL          0             /* wownt32.h */
-#define THUNK_NOT_FOUND       0xDEAD0001u   /* WOW32.DLL or the export is missing */
-#define THUNK_CALL_FAILED     0xDEAD0002u
-#define THUNK_ARGUMENT_COUNT  3
-#define THUNK_ARGUMENT_A      1             /* the callee answers a*100+b*10+c */
-#define THUNK_ARGUMENT_B      2
-#define THUNK_ARGUMENT_C      3
-#define THUNK_BLOCK_SIZE      100
-#define THUNK_FIXED_SIZE      32
-#define THUNK_MARK_LENGTH     2
-#define THUNK_MARK_FIRST      'O'
-#define THUNK_MARK_SECOND     'K'
-#define THUNK_NO_HANDLE       0xFFFF
-#define THUNK_LOW_BYTE        0xFF
-#define THUNK_SELECTOR_SHIFT  16            /* a 16:16 pointer's selector */
+#define WCB16_PASCAL                    0               /* wownt32.h */
+#define THUNK_NOT_FOUND                 0xDEAD0001u     /* WOW32.DLL or the export is missing */
+#define THUNK_CALL_FAILED               0xDEAD0002u
+#define THUNK_ARGUMENT_COUNT            3
+#define THUNK_ARGUMENT_A                1               /* The callee answers a*100+b*10+c */
+#define THUNK_ARGUMENT_B                2
+#define THUNK_ARGUMENT_C                3
+#define THUNK_BLOCK_SIZE                100
+#define THUNK_FIXED_SIZE                32
+#define THUNK_MARK_LENGTH               2
+#define THUNK_MARK_FIRST                'O'
+#define THUNK_MARK_SECOND               'K'
+#define THUNK_NO_HANDLE                 0xFFFF
+#define THUNK_LOW_BYTE                  0xFF
+#define THUNK_SELECTOR_SHIFT            16              /* A 16:16 pointer's selector */
+
 /* T_Glob's answer: a bit per step that answered as documented... */
-#define THUNK_ALLOCATED       1
-#define THUNK_LOCKED          2
-#define THUNK_ZEROED          4
-#define THUNK_SIZED           8
-#define THUNK_WRITTEN         0x10
-#define THUNK_FREED           0x20
-#define THUNK_ALLOC_LOCKED    0x40
-#define THUNK_UNLOCK_FREED    0x80
+#define THUNK_ALLOCATED                 1
+#define THUNK_LOCKED                    2
+#define THUNK_ZEROED                    4
+#define THUNK_SIZED                     8
+#define THUNK_WRITTEN                   0x10
+#define THUNK_FREED                     0x20
+#define THUNK_ALLOC_LOCKED              0x40
+#define THUNK_UNLOCK_FREED              0x80
+
 /* ...and, where one did not, what it said instead. */
-#define THUNK_FREE_CODE_SHIFT          8
-#define THUNK_UNLOCK_FREE_CODE_SHIFT   10
-#define THUNK_FREE_BYTE_SHIFT          16
-#define THUNK_UNLOCK_FREE_BYTE_SHIFT   24
-#define THUNK_ANSWER_ZERO      0
-#define THUNK_ANSWER_HANDLE    1
-#define THUNK_ANSWER_OTHER     2            /* GlobalFree16                       */
-#define THUNK_ANSWER_SELECTOR  2            /* GlobalUnlockFree16: the selector   */
-#define THUNK_ANSWER_UNKNOWN   3            /* GlobalUnlockFree16: anything else  */
+#define THUNK_FREE_CODE_SHIFT           8
+#define THUNK_UNLOCK_FREE_CODE_SHIFT    10
+#define THUNK_FREE_BYTE_SHIFT           16
+#define THUNK_UNLOCK_FREE_BYTE_SHIFT    24
+#define THUNK_ANSWER_ZERO               0
+#define THUNK_ANSWER_HANDLE             1
+#define THUNK_ANSWER_OTHER              2               /* GlobalFree16 */
+#define THUNK_ANSWER_SELECTOR           2               /* GlobalUnlockFree16: the selector */
+#define THUNK_ANSWER_UNKNOWN            3               /* GlobalUnlockFree16: anything else */
 
 static FARPROC ThunkWow32Procedure(const char *name)
 {
@@ -108,18 +117,28 @@ __declspec(dllexport) DWORD WINAPI T_Glob(void)
     if (pointer16) answers |= THUNK_LOCKED;
     bytes = pointer16 ? (BYTE *)getVdmPointer(pointer16, THUNK_BLOCK_SIZE, TRUE) : NULL;
     if (bytes && bytes[0] == 0 && bytes[THUNK_BLOCK_SIZE - 1] == 0) answers |= THUNK_ZEROED;            /* ZEROINIT honoured */
-    if (bytes) { bytes[0] = THUNK_MARK_FIRST; bytes[1] = THUNK_MARK_SECOND; }
+    if (bytes)
+    {
+        bytes[0] = THUNK_MARK_FIRST;
+        bytes[1] = THUNK_MARK_SECOND;
+    }
     if (handle && globalLockSize(handle, &size) == pointer16 && size >= THUNK_BLOCK_SIZE) answers |= THUNK_SIZED;    /* same block, its size */
     if (bytes && ((BYTE *)getVdmPointer(globalLock(handle), THUNK_MARK_LENGTH, TRUE))[1] == THUNK_MARK_SECOND) answers |= THUNK_WRITTEN;
-    if (handle) { globalUnlock(handle); globalUnlock(handle); globalUnlock(handle); }   /* three locks taken */
+    if (handle) /* three locks taken */
+    {
+        globalUnlock(handle);
+        globalUnlock(handle);
+        globalUnlock(handle);
+    }
     {   WORD freeResult = handle ? globalFree(handle) : THUNK_NO_HANDLE;
         if (freeResult == 0) answers |= THUNK_FREED;                                  /* GlobalFree: 0 = freed */
-        answers |= (DWORD)(freeResult == 0 ? THUNK_ANSWER_ZERO : freeResult == handle ? THUNK_ANSWER_HANDLE : THUNK_ANSWER_OTHER) << THUNK_FREE_CODE_SHIFT;  /* what it said instead  */
+        answers |= (DWORD)(freeResult == 0 ? THUNK_ANSWER_ZERO : freeResult == handle ? THUNK_ANSWER_HANDLE : THUNK_ANSWER_OTHER) << THUNK_FREE_CODE_SHIFT;  /* what it said instead */
         if (freeResult != 0 && freeResult != handle) answers |= (DWORD)(freeResult & THUNK_LOW_BYTE) << THUNK_FREE_BYTE_SHIFT;  /* ...and its low byte */
     }
     pointer16 = globalAllocLock(GMEM_FIXED, THUNK_FIXED_SIZE, &fixedHandle);
     if (pointer16 && fixedHandle) answers |= THUNK_ALLOC_LOCKED;
-    if (pointer16) {
+    if (pointer16)
+    {
         WORD freeResult = globalUnlockFree(pointer16);
         if (freeResult == 0) answers |= THUNK_UNLOCK_FREED;
         answers |= (DWORD)(freeResult == 0 ? THUNK_ANSWER_ZERO : freeResult == fixedHandle ? THUNK_ANSWER_HANDLE
@@ -130,4 +149,9 @@ __declspec(dllexport) DWORD WINAPI T_Glob(void)
 }
 
 BOOL WINAPI DllMainCRTStartup(HINSTANCE module, DWORD reason, LPVOID reserved)
-{ (void)module; (void)reason; (void)reserved; return TRUE; }
+{
+    (void)module;
+    (void)reason;
+    (void)reserved;
+    return TRUE;
+}

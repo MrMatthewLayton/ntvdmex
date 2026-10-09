@@ -1,47 +1,62 @@
-/* extmem_test.c -- INT 15h AH=87h address resolution (src/dos/dos_extmem.h). GH #54.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * INT 15h AH=87h address resolution (src/dos/dos_extmem.h). GH #54.
  *
  * The resolver is the only thing between a DOS program's GDT and the host's own
  * memory, so what matters most here is what it REFUSES: a range that straddles two
  * regions, one past 16 MB, one that wraps. The acceptance round trip itself is
  * measured on the rig by p_int15.asm against three oracles.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "dos_extmem.h"
 
 /* A fake EMB at a 32-bit address: classification only, never dereferenced. */
-#define EXTMEM_TEST_EMB_SLOT             3
-#define EXTMEM_TEST_EMB_BASE             0x02000000u
-#define EXTMEM_TEST_EMB_KB               4
-#define EXTMEM_TEST_EMB_BYTES            (EXTMEM_TEST_EMB_KB * DOS_XMS_BYTES_PER_KB)
+#define EXTMEM_TEST_EMB_SLOT    3
+#define EXTMEM_TEST_EMB_BASE    0x02000000u
+#define EXTMEM_TEST_EMB_KB      4
+#define EXTMEM_TEST_EMB_BYTES   (EXTMEM_TEST_EMB_KB * DOS_XMS_BYTES_PER_KB)
 #define EXTMEM_TEST_EMB_TAIL             (EXTMEM_TEST_EMB_BASE + EXTMEM_TEST_EMB_BYTES \
                                           - EXTMEM_TEST_TAIL_LENGTH)   /* its last 256 bytes */
 
 /* The addresses and lengths the checks classify. */
-#define EXTMEM_TEST_CONVENTIONAL_ADDRESS 0x500
-#define EXTMEM_TEST_HMA_LENGTH           (DOS_EXTMEM_DIRECT_END - DOS_EXTMEM_RAW_BASE)
-#define EXTMEM_TEST_TAIL_LENGTH          256
-#define EXTMEM_TEST_SHORT_LENGTH         16
-#define EXTMEM_TEST_STRADDLE_LENGTH      32
-#define EXTMEM_TEST_WORD_LENGTH          4
-#define EXTMEM_TEST_BOUNDARY_LENGTH      2             /* the byte before a region and its first */
-#define EXTMEM_TEST_UNOWNED_ADDRESS      0x30000000u   /* an arbitrary high address      */
-#define EXTMEM_TEST_WRAPPING_ADDRESS     0xFFFFFFF0u   /* 32 bytes from here wraps 4 GB  */
-#define EXTMEM_TEST_DIRECT_ADDRESS       0x1234
-#define EXTMEM_TEST_RAW_ADDRESS          0x200000u     /* 2 MB                           */
+#define EXTMEM_TEST_CONVENTIONAL_ADDRESS    0x500
+#define EXTMEM_TEST_HMA_LENGTH              (DOS_EXTMEM_DIRECT_END - DOS_EXTMEM_RAW_BASE)
+#define EXTMEM_TEST_TAIL_LENGTH             256
+#define EXTMEM_TEST_SHORT_LENGTH            16
+#define EXTMEM_TEST_STRADDLE_LENGTH         32
+#define EXTMEM_TEST_WORD_LENGTH             4
+#define EXTMEM_TEST_BOUNDARY_LENGTH         2               /* The byte before a region and its first */
+#define EXTMEM_TEST_UNOWNED_ADDRESS         0x30000000u     /* An arbitrary high address */
+#define EXTMEM_TEST_WRAPPING_ADDRESS        0xFFFFFFF0u     /* 32 bytes from here wraps 4 GB */
+#define EXTMEM_TEST_DIRECT_ADDRESS          0x1234
+#define EXTMEM_TEST_RAW_ADDRESS             0x200000u       /* 2 MB */
 
 /* An AH=87h descriptor whose base is 02101234h: bytes 2-4 and 7. */
-#define EXTMEM_TEST_DESCRIPTOR_BASE      0x02101234u
-#define EXTMEM_TEST_DESCRIPTOR           { 0xFF, 0xFF, 0x34, 0x12, 0x10, 0x93, 0x00, 0x02 }
+#define EXTMEM_TEST_DESCRIPTOR_BASE         0x02101234u
+#define EXTMEM_TEST_DESCRIPTOR              { 0xFF, 0xFF, 0x34, 0x12, 0x10, 0x93, 0x00, 0x02 }
 
 static INT g_Checks = 0, g_Failures = 0;
 
 static VOID ExtMemTestCheck(BOOL passed, PCSTR description)
 {
     g_Checks++;
-    if (passed) { printf("  PASS  %s\n", description); }
-    else { printf("  FAIL  %s\n", description); g_Failures++; }
+    if (passed)
+    {
+        printf("  PASS  %s\n", description);
+    }
+    else
+    {
+        printf("  FAIL  %s\n", description);
+        g_Failures++;
+    }
 }
 
 INT main(VOID)

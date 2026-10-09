@@ -1,16 +1,24 @@
-/* mouse_test.c -- off-VM battery for the INT 33h driver's pure logic (src/host/i33_driver.h).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM battery for the INT 33h driver's pure logic (src/host/i33_driver.h).
  *
  * GH #264 (09h: the guest graphics cursor) and #265 (2Bh-2Eh/33h profile and settings
  * blocks; 18h/19h alternate handlers and which handler an event goes to). The header is
  * the code the host runs; these checks pin the arithmetic so a later edit cannot quietly
  * change which pixel a mask bit lands on or which handler a Shift-click reaches.
  *
- * ⚠ What is checked here is OUR READING of RBIL (see the header). Where that reading is
- *   unmeasured the check says so in its name; tests/probes/dos/p_mouse3.asm is the probe
- *   that asks the oracles.
+ * [CAUTION]: What is checked here is OUR READING of RBIL (see the header). Where that reading is
+ * unmeasured the check says so in its name; tests/probes/dos/p_mouse3.asm is the probe
+ * that asks the oracles.
  *
- *   cc -std=c99 -I src/host -o mouse_test tests/unit/mouse_test.c   (or ./scripts/offvm.sh mouse)
+ * cc -std=c99 -I src/host -o mouse_test tests/unit/mouse_test.c   (or ./scripts/offvm.sh mouse)
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -21,7 +29,11 @@ static INT g_Total = 0, g_Failures = 0;
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 static INT MouseTestAllEqual(PCBYTE bytes, INT count, BYTE value)
-{ INT index; for (index = 0; index < count; ++index) if (bytes[index] != value) return 0; return 1; }
+{
+    INT index;
+    for (index = 0; index < count; ++index) if (bytes[index] != value) return 0;
+    return 1;
+}
 
 INT main(VOID)
 {
@@ -81,7 +93,8 @@ INT main(VOID)
         memset(frameBuffer, 7, sizeof frameBuffer);
         I33GraphicsCursorDraw(frameBuffer, 32, 32, 32, 10, 10, 4, 2, g_I33DefaultScreenMask, g_I33DefaultCursorMask, 0x0F, NULL);
         /* origin (6,8): row 0 (3FFFh) clears x=6,7; row 2 (0FFFh / 6000h) at y=10 clears
-           x=6..9, whitens x=7,8, keeps x=10. */
+         * x=6..9, whitens x=7,8, keeps x=10.
+         */
         CHECK(frameBuffer[8 * 32 + 6] == 0 && frameBuffer[8 * 32 + 7] == 0 && frameBuffer[8 * 32 + 8] == 7 && frameBuffer[8 * 32 + 5] == 7,
               "hot spot (4,2): the bitmap's origin is 4 left and 2 up of the pointer (screen pixels; UNMEASURED)");
         CHECK(frameBuffer[10 * 32 + 7] == 0x0F && frameBuffer[10 * 32 + 9] == 0 && frameBuffer[10 * 32 + 10] == 7,

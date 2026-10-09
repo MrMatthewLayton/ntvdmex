@@ -1,64 +1,75 @@
-/* bench3da.c -- what ONE 0x3DA poll costs.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- * ── WHY THIS EXISTS (session 67) ─────────────────────────────────────────────────
- *   0x3DA is the port a guest lives in. Lemmings reads it 73.8 MILLION times in a
- *   45-second run -- 1.6M/s -- and in its menu phase it does essentially NOTHING ELSE
- *   (measured poll-loop occupancy 101.5%). So work added inside VideoStatusIn is
- *   multiplied by a number nothing else in the system comes close to.
+ * What ONE 0x3DA poll costs.
  *
- *   Session 67 added a correctness fix -- deriving the vertical geometry from the CRTC
- *   registers instead of guessing it from the displayed height -- and paid for it by
- *   reassembling three scattered 10-bit fields, revalidating them and dividing, ON
- *   EVERY POLL:
+ * WHY THIS EXISTS (session 67):
+ * 0x3DA is the port a guest lives in. Lemmings reads it 73.8 MILLION times in a
+ * 45-second run -- 1.6M/s -- and in its menu phase it does essentially NOTHING ELSE
+ * (measured poll-loop occupancy 101.5%). So work added inside VideoStatusIn is
+ * multiplied by a number nothing else in the system comes close to.
  *
- *       1d1df10  16.0 ns     before
- *       12e3269  20.0 ns     +25%, and on the rig 77.0M polls/run -> 73.6M
- *       6e8fd70  16.1 ns     after caching it in VideoCrtcVerticalTimingRecompute() -- recovered
+ * Session 67 added a correctness fix -- deriving the vertical geometry from the CRTC
+ * registers instead of guessing it from the displayed height -- and paid for it by
+ * reassembling three scattered 10-bit fields, revalidating them and dividing, ON
+ * EVERY POLL:
  *
- * ⚠⚠ THAT LAST NUMBER WAS 17.2 UNTIL I MEASURED IT HONESTLY. I first timed HEAD
- *   minutes after timing the baseline, with a test battery in between, and reported a
- *   1.2ns residual that does not exist. Rebuilding BOTH from source and running them
- *   ALTERNATELY gives old 16.51/16.32/16.46 against new 16.37/16.15/16.07 -- HEAD is
- *   at or just under the baseline. A benchmark compared against a number taken at a
- *   different moment on a machine doing different work is not a comparison; it is two
- *   unrelated measurements subtracted. Interleave them, always.
+ *     1d1df10  16.0 ns     before
+ *     12e3269  20.0 ns     +25%, and on the rig 77.0M polls/run -> 73.6M
+ *     6e8fd70  16.1 ns     after caching it in VideoCrtcVerticalTimingRecompute() -- recovered
  *
- * ⚠ NOTHING ELSE WOULD HAVE CAUGHT THAT. The off-VM battery is pass/fail and was
- *   green throughout; the rig counters all looked normal because the guest still hit
- *   70 Hz -- it simply got less done between retraces. The only witness is a
- *   benchmark aimed at this one port.
+ * [CAUTION]: THAT LAST NUMBER WAS 17.2 UNTIL I MEASURED IT HONESTLY. I first timed HEAD
+ * minutes after timing the baseline, with a test battery in between, and reported a
+ * 1.2ns residual that does not exist. Rebuilding BOTH from source and running them
+ * ALTERNATELY gives old 16.51/16.32/16.46 against new 16.37/16.15/16.07 -- HEAD is
+ * at or just under the baseline. A benchmark compared against a number taken at a
+ * different moment on a machine doing different work is not a comparison; it is two
+ * unrelated measurements subtracted. Interleave them, always.
  *
- * ── USE ──────────────────────────────────────────────────────────────────────────
- *   Run it BY HAND, before and after any change to VideoStatusIn. It is deliberately NOT
- *   in run.sh: a wall-clock measurement on a shared machine is not a pass/fail check,
- *   and a battery that fails because something else was compiling is a battery people
- *   learn to ignore.
+ * [CAUTION]: NOTHING ELSE WOULD HAVE CAUGHT THAT. The off-VM battery is pass/fail and was
+ * green throughout; the rig counters all looked normal because the guest still hit
+ * 70 Hz -- it simply got less done between retraces. The only witness is a
+ * benchmark aimed at this one port.
  *
- *       cc -std=c99 -O2 -I src/vdd -o /tmp/bench3da tests/probes/dos/bench3da.c \
- *          src/vdd/vdd_video.c src/vdd/vdd_bus.c && /tmp/bench3da
+ * USE:
+ * Run it BY HAND, before and after any change to VideoStatusIn. It is deliberately NOT
+ * in run.sh: a wall-clock measurement on a shared machine is not a pass/fail check,
+ * and a battery that fails because something else was compiling is a battery people
+ * learn to ignore.
  *
- *   Run it twice and take the second; compare against the numbers above, and against
- *   the SAME binary rebuilt from the commit you are comparing to -- not against a
- *   figure quoted in a commit message, because the host machine is not a constant.
+ *     cc -std=c99 -O2 -I src/vdd -o /tmp/bench3da tests/probes/dos/bench3da.c \
+ *        src/vdd/vdd_video.c src/vdd/vdd_bus.c && /tmp/bench3da
+ *
+ * Run it twice and take the second; compare against the numbers above, and against
+ * the SAME binary rebuilt from the commit you are comparing to -- not against a
+ * figure quoted in a commit message, because the host machine is not a constant.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 #include "vdd_bus.h"
 #include "vdd_video.h"
 
-#define BENCH_GUEST_MEMORY_SIZE 0x100000
-#define BENCH_POLLS             20000000L
-#define BENCH_VIDEO_INTERRUPT   0x10
-#define BENCH_MODE_0DH          0x000D      /* AH=00h set mode, AL=0Dh */
-#define BENCH_INPUT_STATUS_PORT 0x3DA
-#define BENCH_NS_PER_SECOND     1e9
+#define BENCH_GUEST_MEMORY_SIZE     0x100000
+#define BENCH_POLLS                 20000000L
+#define BENCH_VIDEO_INTERRUPT       0x10
+#define BENCH_MODE_0DH              0x000D  /* AH=00h set mode, AL=0Dh */
+#define BENCH_INPUT_STATUS_PORT     0x3DA
+#define BENCH_NS_PER_SECOND         1e9
 
 static BYTE g_VideoMemory[VIDEO_APERTURE_SIZE];
 static BYTE g_GuestMemory[BENCH_GUEST_MEMORY_SIZE];   /* guest memory: init writes the IVT's font vectors */
 static VIDEO_STATE g_Video;
 static UINT64 g_TimeUs = 0;
-static UINT64 BenchClock(void) { return g_TimeUs; }
+static UINT64 BenchClock(void)
+{
+    return g_TimeUs;
+}
 
 int main(void)
 {
@@ -71,16 +82,22 @@ int main(void)
     VddVideoInitialize(&bus, &g_Video);
 
     /* Mode 0Dh: Lemmings' gameplay mode, so the CRTC path under test is the one a
-       real guest drives -- 449 total / 400 active / 406 blank start. */
+     * real guest drives -- 449 total / 400 active / 406 blank start.
+     */
     memset(&registers, 0, sizeof registers); registers.Eax = BENCH_MODE_0DH;
     VddBusDeliverInterrupt(&bus, BENCH_VIDEO_INTERRUPT, &registers);
     g_Video.TimeUs = BenchClock;
 
     /* The clock advances a microsecond per poll, which is FASTER than a real guest
-       manages (it sees no advance at all on 77% of polls) -- so this exercises the
-       expensive path every time rather than flattering it. */
+     * manages (it sees no advance at all on 77% of polls) -- so this exercises the
+     * expensive path every time rather than flattering it.
+     */
     clock_gettime(CLOCK_MONOTONIC, &start);
-    for (poll = 0; poll < BENCH_POLLS; ++poll) { g_TimeUs += 1; VddBusIo(&bus, BENCH_INPUT_STATUS_PORT, 1, 1, &value); }
+    for (poll = 0; poll < BENCH_POLLS; ++poll)
+    {
+        g_TimeUs += 1;
+        VddBusIo(&bus, BENCH_INPUT_STATUS_PORT, 1, 1, &value);
+    }
     clock_gettime(CLOCK_MONOTONIC, &end);
 
     nanoseconds = ((double)(end.tv_sec - start.tv_sec) * BENCH_NS_PER_SECOND + (double)(end.tv_nsec - start.tv_nsec)) / (double)BENCH_POLLS;

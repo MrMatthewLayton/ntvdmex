@@ -1,4 +1,6 @@
-/* err_test.c -- INT 21h AH=59h's class/action/locus table, pinned off-VM.  GH #34.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * INT 21h AH=59h's class/action/locus table, pinned off-VM.  GH #34.
  *
  * Every expectation is a CASE= line from tests/probes/dos/p_err.asm run on the
  * genuine MS-DOS 6.22 oracle, quoted in the check's name. Nothing here is
@@ -8,73 +10,79 @@
  * branches on it.
  *
  *   cc -std=c99 -I src/dos -o err_test tests/unit/err_test.c && ./err_test
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include "dos_err.h"
 
 /* The DOS error codes the checks provoke (AX). */
-#define ERR_TEST_FILE_NOT_FOUND       0x02
-#define ERR_TEST_PATH_NOT_FOUND       0x03
-#define ERR_TEST_ACCESS_DENIED        0x05
-#define ERR_TEST_INVALID_HANDLE       0x06
-#define ERR_TEST_INVALID_DRIVE        0x0F
-#define ERR_TEST_NO_MORE_FILES        0x12
-#define ERR_TEST_NOT_READY            21
-#define ERR_TEST_GENERAL_FAILURE      31
-#define ERR_TEST_SHARING_VIOLATION    32
-#define ERR_TEST_FILE_EXISTS          0x50
-#define ERR_TEST_FAIL_I24             0x53
-#define ERR_TEST_UNMEASURED_CODE      0x21    /* lock violation: real DOS, never provoked */
-#define ERR_TEST_UNMAPPED_WIN32       0x4D2   /* 1234                                     */
+#define ERR_TEST_FILE_NOT_FOUND         0x02
+#define ERR_TEST_PATH_NOT_FOUND         0x03
+#define ERR_TEST_ACCESS_DENIED          0x05
+#define ERR_TEST_INVALID_HANDLE         0x06
+#define ERR_TEST_INVALID_DRIVE          0x0F
+#define ERR_TEST_NO_MORE_FILES          0x12
+#define ERR_TEST_NOT_READY              21
+#define ERR_TEST_GENERAL_FAILURE        31
+#define ERR_TEST_SHARING_VIOLATION      32
+#define ERR_TEST_FILE_EXISTS            0x50
+#define ERR_TEST_FAIL_I24               0x53
+#define ERR_TEST_UNMEASURED_CODE        0x21    /* Lock violation: real DOS, never provoked */
+#define ERR_TEST_UNMAPPED_WIN32         0x4D2   /* 1234 */
 
 /* What the oracle answered: BX = class:action, CH = the locus. */
-#define ERR_TEST_BX_NOT_FOUND         0x0803
-#define ERR_TEST_BX_INVALID_HANDLE    0x0704
-#define ERR_TEST_BX_ACCESS_DENIED     0x0303
-#define ERR_TEST_BX_FILE_EXISTS       0x0C03
-#define ERR_TEST_BX_FAIL_I24          0x0D04
-#define ERR_TEST_CH_BLOCK_DEVICE      0x02
-#define ERR_TEST_CH_UNKNOWN           0x01
+#define ERR_TEST_BX_NOT_FOUND           0x0803
+#define ERR_TEST_BX_INVALID_HANDLE      0x0704
+#define ERR_TEST_BX_ACCESS_DENIED       0x0303
+#define ERR_TEST_BX_FILE_EXISTS         0x0C03
+#define ERR_TEST_BX_FAIL_I24            0x0D04
+#define ERR_TEST_CH_BLOCK_DEVICE        0x02
+#define ERR_TEST_CH_UNKNOWN             0x01
 
 /* Poison: what the out-parameters hold before a call that must overwrite them. */
-#define ERR_TEST_POISON_WORD          0xDEAD
-#define ERR_TEST_POISON_BYTE          0xEE
+#define ERR_TEST_POISON_WORD            0xDEAD
+#define ERR_TEST_POISON_BYTE            0xEE
 
 /* INT 21h functions, and the INT 24h AH each one gets. */
-#define ERR_TEST_CREATE               0x3C
-#define ERR_TEST_OPEN                 0x3D
-#define ERR_TEST_READ                 0x3F
-#define ERR_TEST_WRITE                0x40
-#define ERR_TEST_FIND_FIRST           0x4E
-#define ERR_TEST_AH_PATH_CALL         0x1A
-#define ERR_TEST_AH_READ              0x3E
-#define ERR_TEST_AH_WRITE             0x3F
-#define ERR_TEST_AH_WRITE_BIT         1
-#define ERR_TEST_AH_AREA_SHIFT        1
-#define ERR_TEST_AH_AREA_MASK         3
-#define ERR_TEST_AH_AREA_DATA         3
-#define ERR_TEST_AH_ALLOW_FAIL        0x08
-#define ERR_TEST_AH_ALLOW_RETRY       0x10
-#define ERR_TEST_AH_ALLOW_IGNORE      0x20
-#define ERR_TEST_AH_CHARACTER_DEVICE  0x80
-#define ERR_TEST_NOT_READY_INDEX      2       /* DI's low byte: code - 19              */
-#define ERR_TEST_AX_PATH_NOT_FOUND    0x0003
-#define ERR_TEST_AX_ACCESS_DENIED     0x0005
+#define ERR_TEST_CREATE                 0x3C
+#define ERR_TEST_OPEN                   0x3D
+#define ERR_TEST_READ                   0x3F
+#define ERR_TEST_WRITE                  0x40
+#define ERR_TEST_FIND_FIRST             0x4E
+#define ERR_TEST_AH_PATH_CALL           0x1A
+#define ERR_TEST_AH_READ                0x3E
+#define ERR_TEST_AH_WRITE               0x3F
+#define ERR_TEST_AH_WRITE_BIT           1
+#define ERR_TEST_AH_AREA_SHIFT          1
+#define ERR_TEST_AH_AREA_MASK           3
+#define ERR_TEST_AH_AREA_DATA           3
+#define ERR_TEST_AH_ALLOW_FAIL          0x08
+#define ERR_TEST_AH_ALLOW_RETRY         0x10
+#define ERR_TEST_AH_ALLOW_IGNORE        0x20
+#define ERR_TEST_AH_CHARACTER_DEVICE    0x80
+#define ERR_TEST_NOT_READY_INDEX        2       /* DI's low byte: code - 19 */
+#define ERR_TEST_AX_PATH_NOT_FOUND      0x0003
+#define ERR_TEST_AX_ACCESS_DENIED       0x0005
 
 /* An IGNOREd transfer: the request, a file, and where in it. */
-#define ERR_TEST_REQUEST              0x200
-#define ERR_TEST_FILE_SIZE            0x1000
-#define ERR_TEST_NEAR_EOF             0xF80
-#define ERR_TEST_LEFT_NEAR_EOF        0x80
-#define ERR_TEST_PAST_EOF             0x1200
+#define ERR_TEST_REQUEST                0x200
+#define ERR_TEST_FILE_SIZE              0x1000
+#define ERR_TEST_NEAR_EOF               0xF80
+#define ERR_TEST_LEFT_NEAR_EOF          0x80
+#define ERR_TEST_PAST_EOF               0x1200
 
 /* Drive letters, as DosCritDriveFromNtName counts them. */
-#define ERR_TEST_DRIVE_A              0
-#define ERR_TEST_DRIVE_C              2
-#define ERR_TEST_DRIVE_D              3
-#define ERR_TEST_DRIVE_E              4
+#define ERR_TEST_DRIVE_A                0
+#define ERR_TEST_DRIVE_C                2
+#define ERR_TEST_DRIVE_D                3
+#define ERR_TEST_DRIVE_E                4
 
-#define ERR_TEST_LABEL_SIZE           128
+#define ERR_TEST_LABEL_SIZE             128
 
 static INT g_Checks, g_Failures;
 
@@ -95,7 +103,12 @@ static VOID ErrTestRow(PCSTR description, UINT code, UINT expectedBx, UINT expec
 
     snprintf(label, sizeof(label), "%s -> BX", description);
     ++g_Checks;
-    if (!isMeasured) { ++g_Failures; printf("  FAIL %-56s reported UNMEASURED\n", label); return; }
+    if (!isMeasured)
+    {
+        ++g_Failures;
+        printf("  FAIL %-56s reported UNMEASURED\n", label);
+        return;
+    }
     --g_Checks;                                 /* ErrTestExpect() below counts it */
     ErrTestExpect(label, classAndAction, expectedBx);
     snprintf(label, sizeof(label), "%s -> CH", description);
@@ -108,10 +121,11 @@ INT main(VOID)
 
     printf("== INT 21h AH=59h error classification (dos_err.h), measured on 6.22\n");
 
-    /* ── THE NOT-FOUND FAMILY. Three different codes, one classification.
-       CASE=err.after.3D.missing AX=0002 BX=0803 CX=02C1
-       CASE=err.after.4E.nopath  AX=0003 BX=0803 CX=02C1
-       CASE=err.after.4E.nofile  AX=0012 BX=0803 CX=02C1 */
+    /* -- THE NOT-FOUND FAMILY. Three different codes, one classification.
+     * CASE=err.after.3D.missing AX=0002 BX=0803 CX=02C1
+     * CASE=err.after.4E.nopath  AX=0003 BX=0803 CX=02C1
+     * CASE=err.after.4E.nofile  AX=0012 BX=0803 CX=02C1
+     */
     ErrTestRow("code 2  file not found  [3D on a missing file]", ERR_TEST_FILE_NOT_FOUND,
                ERR_TEST_BX_NOT_FOUND, ERR_TEST_CH_BLOCK_DEVICE);
     ErrTestRow("code 3  path not found  [4E into a missing dir]", ERR_TEST_PATH_NOT_FOUND,
@@ -120,48 +134,57 @@ INT main(VOID)
                ERR_TEST_BX_NOT_FOUND, ERR_TEST_CH_BLOCK_DEVICE);
 
     /* CASE=err.after.3F.badhandle AX=0006 BX=0704 CX=01C1
-       The odd one out on BOTH fields, which is why it is worth a check of its
-       own: class 07 (bad request), action 04 (abort), locus 01 (unknown)
-       where the not-found family is 08/03 locus 02. */
+     * The odd one out on BOTH fields, which is why it is worth a check of its
+     * own: class 07 (bad request), action 04 (abort), locus 01 (unknown)
+     * where the not-found family is 08/03 locus 02.
+     */
     ErrTestRow("code 6  invalid handle  [3Fh on handle 20]", ERR_TEST_INVALID_HANDLE,
                ERR_TEST_BX_INVALID_HANDLE, ERR_TEST_CH_UNKNOWN);
 
-    /* ── MEASURED IN SESSION 52. Both of these returned zeroes and logged
-       UNMEASURED before p_err.asm learned to provoke them.
-       CASE=err.after.3D.readonly AX=0005 BX=0303 CX=02C1
-       CASE=err.after.5B.exists   AX=0050 BX=0C03 CX=02C1
-       ★ Note code 5's action is 03 (retry after USER intervention -- take the
-       read-only flag off), not 04 (abort). A guess would very likely have said
-       abort, and a program that aborts where DOS says "ask the user" is exactly
-       the silent wrong branch this table exists to prevent. */
+    /* -- MEASURED IN SESSION 52. Both of these returned zeroes and logged
+     * UNMEASURED before p_err.asm learned to provoke them.
+     * CASE=err.after.3D.readonly AX=0005 BX=0303 CX=02C1
+     * CASE=err.after.5B.exists   AX=0050 BX=0C03 CX=02C1
+     *
+     * [INFO]: Note code 5's action is 03 (retry after USER intervention -- take the
+     * read-only flag off), not 04 (abort). A guess would very likely have said
+     * abort, and a program that aborts where DOS says "ask the user" is exactly
+     * the silent wrong branch this table exists to prevent.
+     */
     ErrTestRow("code 5  access denied   [3D write on a read-only file]", ERR_TEST_ACCESS_DENIED,
                ERR_TEST_BX_ACCESS_DENIED, ERR_TEST_CH_BLOCK_DEVICE);
     ErrTestRow("code 80 file exists     [5Bh over an existing file]", ERR_TEST_FILE_EXISTS,
                ERR_TEST_BX_FILE_EXISTS, ERR_TEST_CH_BLOCK_DEVICE);
     /* CASE=err.after.47.baddrive AX=000F BX=0803 CX=02C1
-       ⚠ Provoked through AH=47h, NOT through an open: "Y:\..." to 3Dh returns 3
-       (path not found). A code can need a particular door, and picking the wrong
-       one is how it stays "unprovokable" and unmeasured. */
+     *
+     * [CAUTION]: Provoked through AH=47h, NOT through an open: "Y:\..." to 3Dh returns 3
+     * (path not found). A code can need a particular door, and picking the wrong
+     * one is how it stays "unprovokable" and unmeasured.
+     */
     ErrTestRow("code 15 invalid drive    [47h on a drive with nothing behind it]",
                ERR_TEST_INVALID_DRIVE, ERR_TEST_BX_NOT_FOUND, ERR_TEST_CH_BLOCK_DEVICE);
 
-    /* ── CODE 0 IS NOT AN ERROR. 59h after a successful call reports AX=0 with
-       class and locus zero, so it must be classified (return TRUE), not reported
-       as an unmeasured gap. */
+    /* -- CODE 0 IS NOT AN ERROR. 59h after a successful call reports AX=0 with
+     * class and locus zero, so it must be classified (return TRUE), not reported
+     * as an unmeasured gap.
+     */
     ++g_Checks;
-    if (!DosErrClassify(DOS_ERR_NONE, &classAndAction, &locus)) {
+    if (!DosErrClassify(DOS_ERR_NONE, &classAndAction, &locus))
+    {
         ++g_Failures; printf("  FAIL %-56s reported UNMEASURED\n", "code 0 is not an error");
     }
     ErrTestExpect("code 0 -> BX is zero", classAndAction, 0);
     ErrTestExpect("code 0 -> CH is zero", locus, 0);
 
-    /* ── AN UNMEASURED CODE MUST SAY SO AND ZERO THE FIELDS. This is the check
-       that keeps the table honest: the moment it starts inventing a plausible
-       class for anything it has not seen, it stops being evidence. Code 0x21
-       (lock violation) is real DOS but has never been provoked here. */
+    /* -- AN UNMEASURED CODE MUST SAY SO AND ZERO THE FIELDS. This is the check
+     * that keeps the table honest: the moment it starts inventing a plausible
+     * class for anything it has not seen, it stops being evidence. Code 0x21
+     * (lock violation) is real DOS but has never been provoked here.
+     */
     ++g_Checks;
     classAndAction = ERR_TEST_POISON_WORD; locus = ERR_TEST_POISON_BYTE;
-    if (DosErrClassify(ERR_TEST_UNMEASURED_CODE, &classAndAction, &locus)) {
+    if (DosErrClassify(ERR_TEST_UNMEASURED_CODE, &classAndAction, &locus))
+    {
         ++g_Failures;
         printf("  FAIL %-56s claimed to know it\n", "code 0x21 is UNMEASURED");
     }
@@ -169,10 +192,12 @@ INT main(VOID)
     ErrTestExpect("unmeasured code zeroes CH (never a guess)", locus, 0);
 
     /* Every row must carry the oracle case it came from -- an evidence string is
-       not decoration here, it is how the next person re-runs the measurement. */
+     * not decoration here, it is how the next person re-runs the measurement.
+     */
     {
         UINT rowIndex;
-        for (rowIndex = 0; rowIndex < DOS_ERR_ROWS; ++rowIndex) {
+        for (rowIndex = 0; rowIndex < DOS_ERR_ROWS; ++rowIndex)
+        {
             ++g_Checks;
             if (g_DosErrTable[rowIndex].Evidence && g_DosErrTable[rowIndex].Evidence[0]) continue;
             ++g_Failures;
@@ -181,11 +206,12 @@ INT main(VOID)
         }
     }
 
-    /* ── WIN32 -> DOS, the mapping AH=3Dh used to skip entirely. (s72) ────────
-         Every expectation below is a pair of measured lines: the oracle's answer
-         for the situation, and the `win32=0x..` the rig's own handler logged for
-         the same probe case. Before this existed AH=3Dh answered 2 for every
-         cause, so a read-only file read as "not found". */
+    /* WIN32 -> DOS, the mapping AH=3Dh used to skip entirely. (s72):
+     * Every expectation below is a pair of measured lines: the oracle's answer
+     * for the situation, and the `win32=0x..` the rig's own handler logged for
+     * the same probe case. Before this existed AH=3Dh answered 2 for every
+     * cause, so a read-only file read as "not found".
+     */
     {
         WORD dosError;
         printf("== INT 21h AH=3Dh: Win32 failure -> DOS code (dos_err_from_win32)\n");
@@ -208,10 +234,11 @@ INT main(VOID)
         ErrTestExpect("win32=5  -> 5   [err.after.3D.readonly AX=0005]", dosError,
                       ERR_TEST_ACCESS_DENIED);
 
-        /* ⚠ THE POINT OF THE WHOLE EXERCISE: these three must be DISTINCT. The
-             bug was not a wrong constant, it was three causes collapsing to one
-             answer, and a table that mapped them all to 5 would pass any test
-             that only checked "not 2". */
+        /* [CAUTION]: THE POINT OF THE WHOLE EXERCISE: these three must be DISTINCT. The
+         * bug was not a wrong constant, it was three causes collapsing to one
+         * answer, and a table that mapped them all to 5 would pass any test
+         * that only checked "not 2".
+         */
         {
             WORD fileNotFound, pathNotFound, accessDenied;
             DosErrFromWin32(DOS_ERR_WIN32_FILE_NOT_FOUND, &fileNotFound);
@@ -233,8 +260,9 @@ INT main(VOID)
                       ERR_TEST_FILE_EXISTS);
 
         /* An unmapped code must NOT invent an answer: it keeps the old 2 and
-           reports FALSE so the handler can log UNMAPPED -- the same refusal
-           DosErrClassify() makes for an unmeasured class. */
+         * reports FALSE so the handler can log UNMAPPED -- the same refusal
+         * DosErrClassify() makes for an unmeasured class.
+         */
         ++g_Checks;
         dosError = ERR_TEST_POISON_WORD;
         if (DosErrFromWin32(ERR_TEST_UNMAPPED_WIN32, &dosError)) { ++g_Failures;
@@ -272,9 +300,10 @@ INT main(VOID)
             ErrTestExpect("...value", dosError, ERR_TEST_NOT_READY); }
     }
 
-    /* #275: 3Fh/40h on an open handle. ⚠ SPEC-DERIVED (MS-DOS 4.0 kernel source, see
-       dos_err.h), NOT YET MEASURED: p_crit2.asm asks 6.22 and PCem. When it has, the
-       expectations below are replaced by its rows, not the other way round. */
+    /* #275: 3Fh/40h on an open handle. [CAUTION] SPEC-DERIVED (MS-DOS 4.0 kernel source, see
+     * dos_err.h), NOT YET MEASURED: p_crit2.asm asks 6.22 and PCem. When it has, the
+     * expectations below are replaced by its rows, not the other way round.
+     */
     {
         BYTE readAh = DosCritInt24Ah(ERR_TEST_READ), writeAh = DosCritInt24Ah(ERR_TEST_WRITE);
         ErrTestExpect("3Fh AH=3E (data area, read, F+R+I)", readAh, ERR_TEST_AH_READ);

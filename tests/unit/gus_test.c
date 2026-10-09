@@ -1,4 +1,6 @@
-/* gus_test.c -- off-VM battery for the Gravis UltraSound (src/vdd/vdd_gus.c).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM battery for the Gravis UltraSound (src/vdd/vdd_gus.c).
  *
  * Every expectation is from docs/ref/gus.md (the UltraSound SDK v2.22), written before
  * the model was run: detection exactly as the SDK's UltraProbe/UltraPing do it, the
@@ -8,7 +10,13 @@
  * #190 (T10-T17): the latches DRIVE the lines and channels they select, the 6850 UART
  * (to a byte sink, and through VddMpuFeed to a message), 2XF banks 5/6, 2X0's driver
  * power and line-out mute, card -> PC DRAM reads, and the record path's paced silence.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include "vdd_gus.h"
@@ -24,34 +32,106 @@ static VDD_BUS g_Bus;
 static DMA_STATE g_Dma;
 static GUS_STATE g_Gus;
 static INT g_IrqCount, g_IrqLast;
-static VOID GusTestIrqSink(PVOID context, BYTE irq) { (VOID)context; g_IrqCount++; g_IrqLast = irq; }
+static VOID GusTestIrqSink(PVOID context, BYTE irq)
+{
+    (VOID)context;
+    g_IrqCount++;
+    g_IrqLast = irq;
+}
 
 /* #190: the host's wiring, reproduced -- the UART's bytes into a PRIVATE MPU assembler
-   whose sink is "the synth". */
+ * whose sink is "the synth".
+ */
 static BYTE   g_Transmitted[64];
 static INT       g_CapturedCount;
 static MPU_STATE g_Assembler;
 static UINT32  g_Message; static INT g_MessageCount;
-static VOID GusTestMessageSink(PVOID context, UINT32 message) { (VOID)context; g_Message = message; g_MessageCount++; }
-static VOID GusTestCapture(PVOID context, BYTE byteValue)
-{ (VOID)context; if (g_CapturedCount < 64) g_Transmitted[g_CapturedCount] = byteValue; g_CapturedCount++; VddMpuFeed(&g_Assembler, byteValue); }
+static VOID GusTestMessageSink(PVOID context, UINT32 message)
+{
+    (VOID)context;
+    g_Message = message;
+    g_MessageCount++;
+}
 
-#define B 0x240
-static VOID GusTestWrite(WORD port, BYTE byteValue) { UINT32 value = byteValue; VddBusIo(&g_Bus, port, 1, 0, &value); }
-static VOID GusTestWriteWord(WORD port, WORD wordValue) { UINT32 value = wordValue; VddBusIo(&g_Bus, port, 2, 0, &value); }
-static BYTE GusTestRead(WORD port) { UINT32 value = 0; VddBusIo(&g_Bus, port, 1, 1, &value); return (BYTE)value; }
-static WORD GusTestReadWord(WORD port) { UINT32 value = 0; VddBusIo(&g_Bus, port, 2, 1, &value); return (WORD)value; }
-static VOID GusTestSetRegister8(BYTE registerIndex, BYTE byteValue)   { GusTestWrite(B + 0x103, registerIndex); GusTestWrite(B + 0x105, byteValue); }
-static VOID GusTestSetRegister16(BYTE registerIndex, WORD wordValue) { GusTestWrite(B + 0x103, registerIndex); GusTestWriteWord(B + 0x104, wordValue); }
-static BYTE  GusTestGetRegister8(BYTE registerIndex)  { GusTestWrite(B + 0x103, registerIndex); return GusTestRead(B + 0x105); }
-static WORD GusTestGetRegister16(BYTE registerIndex) { GusTestWrite(B + 0x103, registerIndex); return GusTestReadWord(B + 0x104); }
+static VOID GusTestCapture(PVOID context, BYTE byteValue)
+{
+    (VOID)context;
+    if (g_CapturedCount < 64) g_Transmitted[g_CapturedCount] = byteValue;
+    g_CapturedCount++;
+    VddMpuFeed(&g_Assembler, byteValue);
+}
+
+#define B   0x240
+static VOID GusTestWrite(WORD port, BYTE byteValue)
+{
+    UINT32 value = byteValue;
+    VddBusIo(&g_Bus, port, 1, 0, &value);
+}
+
+static VOID GusTestWriteWord(WORD port, WORD wordValue)
+{
+    UINT32 value = wordValue;
+    VddBusIo(&g_Bus, port, 2, 0, &value);
+}
+
+static BYTE GusTestRead(WORD port)
+{
+    UINT32 value = 0;
+    VddBusIo(&g_Bus, port, 1, 1, &value);
+    return (BYTE)value;
+}
+
+static WORD GusTestReadWord(WORD port)
+{
+    UINT32 value = 0;
+    VddBusIo(&g_Bus, port, 2, 1, &value);
+    return (WORD)value;
+}
+
+static VOID GusTestSetRegister8(BYTE registerIndex, BYTE byteValue)
+{
+    GusTestWrite(B + 0x103, registerIndex);
+    GusTestWrite(B + 0x105, byteValue);
+}
+
+static VOID GusTestSetRegister16(BYTE registerIndex, WORD wordValue)
+{
+    GusTestWrite(B + 0x103, registerIndex);
+    GusTestWriteWord(B + 0x104, wordValue);
+}
+
+static BYTE  GusTestGetRegister8(BYTE registerIndex)
+{
+    GusTestWrite(B + 0x103, registerIndex);
+    return GusTestRead(B + 0x105);
+}
+
+static WORD GusTestGetRegister16(BYTE registerIndex)
+{
+    GusTestWrite(B + 0x103, registerIndex);
+    return GusTestReadWord(B + 0x104);
+}
+
 static VOID GusTestPoke(UINT32 address, BYTE byteValue)
-{ GusTestSetRegister16(0x43, (WORD)address); GusTestSetRegister8(0x44, (BYTE)(address >> 16)); GusTestWrite(B + 0x107, byteValue); }
+{
+    GusTestSetRegister16(0x43, (WORD)address);
+    GusTestSetRegister8(0x44, (BYTE)(address >> 16));
+    GusTestWrite(B + 0x107, byteValue);
+}
+
 static BYTE GusTestPeek(UINT32 address)
-{ GusTestSetRegister16(0x43, (WORD)address); GusTestSetRegister8(0x44, (BYTE)(address >> 16)); return GusTestRead(B + 0x107); }
-/* A voice address in the start/end register layout (ref §2.2). */
+{
+    GusTestSetRegister16(0x43, (WORD)address);
+    GusTestSetRegister8(0x44, (BYTE)(address >> 16));
+    return GusTestRead(B + 0x107);
+}
+
+/* A voice address in the start/end register layout (ref section 2.2). */
 static VOID GusTestVoiceAddress(BYTE highRegister, UINT32 address)
-{ GusTestSetRegister16(highRegister, (WORD)((address >> 7) & 0x1FFF)); GusTestSetRegister16((BYTE)(highRegister + 1), (WORD)((address & 0x7F) << 9)); }
+{
+    GusTestSetRegister16(highRegister, (WORD)((address >> 7) & 0x1FFF));
+    GusTestSetRegister16((BYTE)(highRegister + 1), (WORD)((address & 0x7F) << 9));
+}
 
 INT main(VOID)
 {
@@ -62,11 +142,17 @@ INT main(VOID)
     memset(&g_Dma, 0, sizeof g_Dma); memset(&g_Gus, 0, sizeof g_Gus);
     VddBusInitialize(&g_Bus, g_GuestMemory);
     VddBusSetSinks(&g_Bus, GusTestIrqSink, 0, 0, 0);
-    { NTVDD_DEVICE device = VddDmaDevice(&g_Dma); CHECK(VddBusAdd(&g_Bus, &device) == 0, "add: dma"); }
+    {
+        NTVDD_DEVICE device = VddDmaDevice(&g_Dma);
+        CHECK(VddBusAdd(&g_Bus, &device) == 0, "add: dma");
+    }
     g_Gus.Dma = &g_Dma; g_Gus.Dram = g_Dram; g_Gus.BasePort = B;
-    { NTVDD_DEVICE device = VddGusDevice(&g_Gus); CHECK(VddBusAdd(&g_Bus, &device) == 0, "add: gus at 240h (two port ranges)"); }
+    {
+        NTVDD_DEVICE device = VddGusDevice(&g_Gus);
+        CHECK(VddBusAdd(&g_Bus, &device) == 0, "add: gus at 240h (two port ranges)");
+    }
 
-    /* ---- T1: detection, exactly as the SDK's UltraProbe + UltraPing (ref §8) ---- */
+    /* ---- T1: detection, exactly as the SDK's UltraProbe + UltraPing (ref section 8) ---- */
     GusTestSetRegister8(0x4C, 0x00); GusTestSetRegister8(0x4C, 0x01);
     GusTestPoke(0, 0xAA); GusTestPoke(1, 0x55);
     CHECK(GusTestPeek(0) == 0xAA && GusTestPeek(1) == 0x55, "detect: AAh/55h through 43h/44h/3X7 read back  <-- THE TEST");
@@ -141,9 +227,10 @@ INT main(VOID)
     { BYTE irqSource = GusTestGetRegister8(0x8F);
       CHECK((irqSource & 0x1F) == 2 && !(irqSource & 0x40) && (irqSource & 0x80), "8Fh: voice 2, volume IRQ (bit 6 active-low)"); }
 
-    /* ---- T7: the 2XB lock-out (ref §5) ---- */
+    /* ---- T7: the 2XB lock-out (ref section 5) ---- */
     /* 2X0 = 09h: line in off, LINE OUT ON (bit 1 clear), latches on -- the SDK's final
-       write. (This used 0Bh, which per ref §5 turns line out OFF and now mutes.) */
+     * write. (This used 0Bh, which per ref section 5 turns line out OFF and now mutes.)
+     */
     GusTestWrite(B + 0x000, 0x09 | 0x40); GusTestWrite(B + 0x00B, 0x05);   /* IRQ latch: GF1 on IRQ 11 (5) */
     CHECK(g_Gus.IrqLatch == 0x05, "2X0 bit 6 then 2XB: the IRQ latch");
     GusTestWrite(B + 0x000, 0x09 | 0x40); GusTestWrite(B + 0x102, 0); GusTestWrite(B + 0x00B, 0x07);
@@ -151,7 +238,7 @@ INT main(VOID)
     GusTestWrite(B + 0x000, 0x09); GusTestWrite(B + 0x00B, 0x02);          /* DMA latch: DMA 3 (code 2) */
     CHECK(g_Gus.DmaLatch == 0x02, "2X0 bit 6 clear then 2XB: the DMA latch");
 
-    /* ---- T8: DRAM DMA upload through the 8237 channel 3 (ref §3) ---- */
+    /* ---- T8: DRAM DMA upload through the 8237 channel 3 (ref section 3) ---- */
     for (index = 0; index < 64; ++index) g_GuestMemory[0x20000 + index] = (BYTE)(0x80 + index);
     { UINT32 value;
       value = 0;    VddBusIo(&g_Bus, 0x0C, 1, 0, &value);
@@ -176,13 +263,21 @@ INT main(VOID)
     CHECK((GusTestRead(B + 0x006) & 0x04) && g_IrqCount >= 1, "timer 1: expired, 2X6 bit 2, IRQ");
 
     /* ---- #189: PAN. The same kind of voice, looped, at three pan positions, rendered
-       in stereo. Balance law: the near side keeps full level, the far side falls. */
+     * in stereo. Balance law: the near side keeps full level, the far side falls.
+     */
     {   static INT16 stereo[2 * 64];
         INT panIndex, left0 = 0, right0 = 0, left7 = 0, right7 = 0, left15 = 0, right15 = 0, voice;
         /* All other voices silent: a STOPPED GF1 voice still outputs its held sample at
-           its volume (programs ramp to zero), so stop AND mute. */
-        for (voice = 0; voice < 32; ++voice) { GusTestWrite(B + 0x102, (BYTE)voice); GusTestSetRegister8(0x00, 0x03); GusTestSetRegister16(0x09, 0); }
-        for (panIndex = 0; panIndex < 3; ++panIndex) {
+         * its volume (programs ramp to zero), so stop AND mute.
+         */
+        for (voice = 0; voice < 32; ++voice)
+        {
+            GusTestWrite(B + 0x102, (BYTE)voice);
+            GusTestSetRegister8(0x00, 0x03);
+            GusTestSetRegister16(0x09, 0);
+        }
+        for (panIndex = 0; panIndex < 3; ++panIndex)
+        {
             BYTE pan = (BYTE)(panIndex == 0 ? 0 : panIndex == 1 ? 7 : 15);
             GusTestWrite(B + 0x102, 5);
             GusTestVoiceAddress(0x02, 0x1000); GusTestVoiceAddress(0x04, 0x1000 + 120); GusTestVoiceAddress(0x0A, 0x1000);
@@ -190,9 +285,21 @@ INT main(VOID)
             GusTestSetRegister8(0x0C, pan);
             GusTestSetRegister8(0x00, 0x08);                          /* go, 8-bit, LOOP, no IRQ */
             VddGusRenderStereo(&g_Gus, stereo, 64);
-            if (panIndex == 0) { left0 = stereo[20]; right0 = stereo[21]; }
-            if (panIndex == 1) { left7 = stereo[20]; right7 = stereo[21]; }
-            if (panIndex == 2) { left15 = stereo[20]; right15 = stereo[21]; }
+            if (panIndex == 0)
+            {
+                left0 = stereo[20];
+                right0 = stereo[21];
+            }
+            if (panIndex == 1)
+            {
+                left7 = stereo[20];
+                right7 = stereo[21];
+            }
+            if (panIndex == 2)
+            {
+                left15 = stereo[20];
+                right15 = stereo[21];
+            }
             GusTestSetRegister8(0x00, 0x03);                          /* stop it again */
         }
         printf("        pan 0: L=%d R=%d   pan 7: L=%d R=%d   pan 15: L=%d R=%d\n",
@@ -206,14 +313,26 @@ INT main(VOID)
     /* ==== #190: the remainder -- latches applied, mix control, the UART, record, reads ==== */
 
     /* Quiet the card: timer 1 stopped and its flag cleared, DMA TC read away, all
-       voices stopped and silent. */
+     * voices stopped and silent.
+     */
     GusTestWrite(B + 0x008, 0x04); GusTestWrite(B + 0x009, 0x00); GusTestWrite(B + 0x009, 0x80);
     GusTestSetRegister8(0x45, 0x00); (VOID)GusTestGetRegister8(0x41); (VOID)GusTestGetRegister8(0x49);
-    { INT voice; for (voice = 0; voice < 32; ++voice) { GusTestWrite(B + 0x102, (BYTE)voice); GusTestSetRegister8(0x00, 0x03); GusTestSetRegister8(0x0D, 0x03); GusTestSetRegister16(0x09, 0); } }
-    while (GusTestGetRegister8(0x8F) != 0xE0) {}
+    {
+        INT voice;
+        for (voice = 0; voice < 32; ++voice)
+        {
+            GusTestWrite(B + 0x102, (BYTE)voice);
+            GusTestSetRegister8(0x00, 0x03);
+            GusTestSetRegister8(0x0D, 0x03);
+            GusTestSetRegister16(0x09, 0);
+        }
+    }
+    while (GusTestGetRegister8(0x8F) != 0xE0)
+    {
+    }
     CHECK(GusTestRead(B + 0x006) == 0x00, "#190 setup: 2X6 reads nothing pending");
 
-    /* ---- T10: the IRQ latch decides the line (ref §5) ---- */
+    /* ---- T10: the IRQ latch decides the line (ref section 5) ---- */
     /* GF1 on IRQ 5 (code 2), MIDI on IRQ 7 (code 4 in bits 5-3), not combined. */
     GusTestWrite(B + 0x000, 0x09 | 0x40); GusTestWrite(B + 0x00B, (BYTE)(0x02 | (0x04 << 3)));
     CHECK(g_Gus.Gf1IrqLine == 5 && g_Gus.MidiIrqLine == 7, "IRQ latch decodes: GF1 -> IRQ 5, MIDI -> IRQ 7");
@@ -224,7 +343,7 @@ INT main(VOID)
     CHECK(g_IrqCount == 1 && g_IrqLast == 5, "timer 1 interrupts on the LATCHED line, IRQ 5 -- not the default 11");
     GusTestWrite(B + 0x009, 0x00); GusTestWrite(B + 0x009, 0x80); GusTestSetRegister8(0x45, 0x00);
 
-    /* ---- T11: the MIDI UART (ref §9) ---- */
+    /* ---- T11: the MIDI UART (ref section 9) ---- */
     {   memset(&g_Assembler, 0, sizeof g_Assembler); g_Assembler.Sink = GusTestMessageSink;
         g_Gus.MidiSink = 0;
         GusTestWrite(B + 0x100, 0x03);                                   /* master reset */
@@ -364,7 +483,8 @@ INT main(VOID)
         (VOID)GusTestGetRegister8(0x49);
 
         /* ---- T16b: #176 -- the 8237's CONTROLLER DISABLE holds the card exactly as the
-           mask does, and the waiting DREQ shows in the 8237's status bits 7:4 ---- */
+         * mask does, and the waiting DREQ shows in the 8237's status bits 7:4 ----
+         */
         {   UINT32 status;
             for (index = 0; index < 16; ++index) g_GuestMemory[0x33000 + index] = (BYTE)(0x50 + index);
             memset(g_Dram + 0x6000, 0, 16);
@@ -406,7 +526,7 @@ INT main(VOID)
         #undef DMAW
     }
 
-    /* ---- T17: 2X0 bit 1 = line out OFF mutes the output (ref §5) ---- */
+    /* ---- T17: 2X0 bit 1 = line out OFF mutes the output (ref section 5) ---- */
     {   INT isNonZeroOn = 0, isNonZeroOff = 0;
         GusTestWrite(B + 0x102, 5);
         GusTestVoiceAddress(0x02, 0x1000); GusTestVoiceAddress(0x04, 0x1000 + 120); GusTestVoiceAddress(0x0A, 0x1000);

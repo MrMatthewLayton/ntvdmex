@@ -1,23 +1,55 @@
-/* pm32interp_test.c -- off-VM battery for the flat 32-bit interpreter (src/host/pm32interp.h).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM battery for the flat 32-bit interpreter (src/host/pm32interp.h).
  *
  * s80, north star 1: Doom's low-detail drawers run here while a multi-plane map mask is
  * live. What matters: exact results, exact flags (the drawers branch on them), exact
  * EIP, and an EXACT DECLINE -- an unmodelled instruction must change nothing, because
  * the real CPU re-executes it. Flat memory, every segment base 0.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
-#include "ntvdmex_types.h"   /* the host hooks below are written before pm32interp.h brings it */
+#include "ntvdmex_types.h"  /* the host hooks below are written before pm32interp.h brings it */
 
-#define MEMSZ 0x200000u
+#define MEMSZ   0x200000u
 static BYTE g_Memory[MEMSZ];
 static UINT32 g_OutPort, g_OutValue, g_OutCount;
-static BYTE  Pm32HostRead8(UINT32 linear) { return linear < MEMSZ ? g_Memory[linear] : 0xFF; }
-static VOID     Pm32HostWrite8(UINT32 linear, BYTE value) { if (linear < MEMSZ) g_Memory[linear] = value; }
-static INT      Pm32HostCanAccess(UINT32 linear, INT width, INT isWrite) { (VOID)isWrite; return linear < MEMSZ && linear + (UINT32)width <= MEMSZ; }
-static UINT32 Pm32HostIn(WORD port, INT width) { (VOID)width; return port == 0x3DA ? 0x08 : 0; }
-static VOID     Pm32HostOut(WORD port, INT width, UINT32 value) { (VOID)width; g_OutPort = port; g_OutValue = value; g_OutCount++; }
+static BYTE  Pm32HostRead8(UINT32 linear)
+{
+    return linear < MEMSZ ? g_Memory[linear] : 0xFF;
+}
+
+static VOID     Pm32HostWrite8(UINT32 linear, BYTE value)
+{
+    if (linear < MEMSZ) g_Memory[linear] = value;
+}
+
+static INT      Pm32HostCanAccess(UINT32 linear, INT width, INT isWrite)
+{
+    (VOID)isWrite;
+    return linear < MEMSZ && linear + (UINT32)width <= MEMSZ;
+}
+
+static UINT32 Pm32HostIn(WORD port, INT width)
+{
+    (VOID)width;
+    return port == 0x3DA ? 0x08 : 0;
+}
+
+static VOID     Pm32HostOut(WORD port, INT width, UINT32 value)
+{
+    (VOID)width;
+    g_OutPort = port;
+    g_OutValue = value;
+    g_OutCount++;
+}
 
 #include "../../src/host/pm32interp.h"
 
@@ -25,7 +57,7 @@ static INT g_Total = 0, g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
-#define CODE 0x1000u
+#define CODE    0x1000u
 static PM32_CPU Pm32InterpTestMakeCpu(PCBYTE code, INT length)
 {
     PM32_CPU cpu; memset(&cpu, 0, sizeof cpu);
@@ -165,8 +197,9 @@ INT main(VOID)
       CHECK(!Pm32Step(&cpu) && !memcmp(&cpu, &before, sizeof cpu), "0x67 prefix: declines"); }
 
     /* ---- a drawer, end to end: the shape of Doom's R_DrawColumnLow ------------------
-       pushad; mov edx,3C5h; mov eax,3; out dx,al; mov edi,5400h; mov ecx,4;
-       L: mov [edi],bl; add edi,50h; dec ecx; jne L; popad; ret                        */
+     * pushad; mov edx,3C5h; mov eax,3; out dx,al; mov edi,5400h; mov ecx,4;
+     * L: mov [edi],bl; add edi,50h; dec ecx; jne L; popad; ret
+     */
     { BYTE code[] = { 0x60, 0xBA, 0xC5, 0x03, 0x00, 0x00, 0xB8, 0x03, 0x00, 0x00, 0x00, 0xEE,
                       0xBF, 0x00, 0x54, 0x00, 0x00, 0xB9, 0x04, 0x00, 0x00, 0x00,
                       0x88, 0x1F, 0x83, 0xC7, 0x50, 0x49, 0x75, 0xF8, 0x61, 0xC3 };

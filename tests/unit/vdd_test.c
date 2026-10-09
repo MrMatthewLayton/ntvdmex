@@ -1,11 +1,19 @@
-/* vdd_test.c -- off-VM unit battery for the VDD device bus (vdd_bus.c/ntvdd.h).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM unit battery for the VDD device bus (vdd_bus.c/ntvdd.h).
  *
  * Slice-1 of M3 (ADR-0008): prove the bus routes hardware events to whichever
  * VDD claimed them -- I/O ports, memory windows, software interrupts, the frame
  * tick -- and that the service callbacks (raise_irq, map_flat, present) work,
  * all natively on the build host with no XP VM. A stand-in "fake PIT" VDD
  * exercises the same claim surface the real vdd_pit will use.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include "vdd_bus.h"
@@ -18,28 +26,55 @@ static INT g_Total = 0, g_Failures = 0;
     } while (0)
 
 /* ---- a fake device: claims the PIT ports, INT 1Ah, and a frame tick ------ */
-typedef struct {
+typedef struct
+{
     PVDD_BUS Bus;
-    BYTE  Reload;        /* last byte OUT to port 0x40                       */
-    UINT32 Ticks;         /* incremented each frame; raises IRQ0             */
+    BYTE  Reload;        /* last byte OUT to port 0x40 */
+    UINT32 Ticks;         /* incremented each frame; raises IRQ0 */
     INT      ResetCalls;
     BYTE  LastInPort;
 } FAKE_PIT;
 
 static VOID VddTestPitOut(PVOID self, WORD port, BYTE width, UINT32 value)
-{ FAKE_PIT *pit = (FAKE_PIT *)self; (VOID)width; if (port == 0x40) pit->Reload = (BYTE)value; }
+{
+    FAKE_PIT *pit = (FAKE_PIT *)self;
+    (VOID)width;
+    if (port == 0x40) pit->Reload = (BYTE)value;
+}
 
 static VOID VddTestPitIn(PVOID self, WORD port, BYTE width, PUINT32 value)
-{ FAKE_PIT *pit = (FAKE_PIT *)self; (VOID)width; pit->LastInPort = (BYTE)port; *value = pit->Reload; }
+{
+    FAKE_PIT *pit = (FAKE_PIT *)self;
+    (VOID)width;
+    pit->LastInPort = (BYTE)port;
+    *value = pit->Reload;
+}
 
 static VOID VddTestPitInt1a(PVOID self, PNTVDD_REGISTERS registers)
-{ FAKE_PIT *pit = (FAKE_PIT *)self; if (VddGetAh(registers) == 0) { VddSetCx(registers, (WORD)(pit->Ticks >> 16)); VddSetDx(registers, (WORD)pit->Ticks); registers->CarryFlag = 0; } }
+{
+    FAKE_PIT *pit = (FAKE_PIT *)self;
+    if (VddGetAh(registers) == 0)
+    {
+        VddSetCx(registers, (WORD)(pit->Ticks >> 16));
+        VddSetDx(registers, (WORD)pit->Ticks);
+        registers->CarryFlag = 0;
+    }
+}
 
 static VOID VddTestPitFrame(PVOID self)
-{ FAKE_PIT *pit = (FAKE_PIT *)self; pit->Ticks++; VddRaiseIrq(pit->Bus, 0); }
+{
+    FAKE_PIT *pit = (FAKE_PIT *)self;
+    pit->Ticks++;
+    VddRaiseIrq(pit->Bus, 0);
+}
 
 static VOID VddTestPitReset(PVOID self)
-{ FAKE_PIT *pit = (FAKE_PIT *)self; pit->ResetCalls++; pit->Reload = 0; pit->Ticks = 0; }
+{
+    FAKE_PIT *pit = (FAKE_PIT *)self;
+    pit->ResetCalls++;
+    pit->Reload = 0;
+    pit->Ticks = 0;
+}
 
 static INT VddTestPitInit(PVDD_BUS bus, PVOID self)
 {
@@ -53,14 +88,34 @@ static INT VddTestPitInit(PVDD_BUS bus, PVOID self)
 
 /* ---- a fake video-ish device: claims a memory window at 0xB8000 ---------- */
 static BYTE g_FakeVram[0x8000];
-static BYTE VddTestMemoryRead(PVOID self, UINT32 offset) { (VOID)self; return g_FakeVram[offset & 0x7FFF]; }
-static VOID    VddTestMemoryWrite(PVOID self, UINT32 offset, BYTE value) { (VOID)self; g_FakeVram[offset & 0x7FFF] = value; }
+static BYTE VddTestMemoryRead(PVOID self, UINT32 offset)
+{
+    (VOID)self;
+    return g_FakeVram[offset & 0x7FFF];
+}
+
+static VOID    VddTestMemoryWrite(PVOID self, UINT32 offset, BYTE value)
+{
+    (VOID)self;
+    g_FakeVram[offset & 0x7FFF] = value;
+}
 
 /* ---- host-injected sinks (count effects so the test can assert) ---------- */
 static INT  g_IrqCount = 0; static BYTE g_LastIrq = 0xFF;
-static VOID VddTestIrqSink(PVOID context, BYTE irq) { (VOID)context; g_IrqCount++; g_LastIrq = irq; }
+static VOID VddTestIrqSink(PVOID context, BYTE irq)
+{
+    (VOID)context;
+    g_IrqCount++;
+    g_LastIrq = irq;
+}
+
 static INT  g_PresentCount = 0; static NTVDD_FRAME g_LastFrame;
-static VOID VddTestPresentSink(PVOID context, PCNTVDD_FRAME frame) { (VOID)context; g_PresentCount++; g_LastFrame = *frame; }
+static VOID VddTestPresentSink(PVOID context, PCNTVDD_FRAME frame)
+{
+    (VOID)context;
+    g_PresentCount++;
+    g_LastFrame = *frame;
+}
 
 INT main(VOID)
 {

@@ -1,10 +1,12 @@
-/* ide_test.c -- off-VM battery for the empty IDE/ATA adapter (vdd_ide.c). GH #179.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- * ⛔ The gap this device closed was a HANG. With nothing on 1F0h-1F7h/3F6h the ISA
- *   default FFh reads as BSY=1, and the ATA's own wait -- `test al,80h / jnz` --
- *   never exits. See vdd_ide.h and docs/inventory/ide.md.
+ * Off-VM battery for the empty IDE/ATA adapter (vdd_ide.c). GH #179.
  *
- * ── HOW THESE CHECKS WERE WRITTEN. ─────────────────────────────────────────────
+ * [WARNING]: The gap this device closed was a HANG. With nothing on 1F0h-1F7h/3F6h the ISA
+ * default FFh reads as BSY=1, and the ATA's own wait -- `test al,80h / jnz` --
+ * never exits. See vdd_ide.h and docs/inventory/ide.md.
+ *
+ * HOW THESE CHECKS WERE WRITTEN:
  * From ATA-3 (X3T13/2008D rev 7b) -- Table 2 note 3 (pull-down on DD7), 8.7.1 (h)
  * (an absent device's status is 00h after reset), 8.7.2's host note (the write-
  * then-read-back presence test) -- and from the three things a DETECTION ROUTINE
@@ -12,7 +14,13 @@
  * wait for DRQ. `IdeTestHostIn` reproduces the host's unclaimed-port rule (main.c,
  * host_io_do: FFh when no VDD owns the port), so the negative control below is
  * the machine as it was before this device, not an assumption about it.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include "vdd_ide.h"
@@ -25,7 +33,12 @@ static INT g_Total = 0, g_Failures = 0;
     } while (0)
 
 static INT g_IrqCount;
-static VOID IdeTestIrqSink(PVOID context, BYTE irq) { (VOID)context; (VOID)irq; g_IrqCount++; }
+static VOID IdeTestIrqSink(PVOID context, BYTE irq)
+{
+    (VOID)context;
+    (VOID)irq;
+    g_IrqCount++;
+}
 
 /* The host's rule for an IN: a VDD's answer, or FFh(s) when nobody claims it. */
 static UINT32 IdeTestHostIn(PVDD_BUS bus, WORD port, BYTE width)
@@ -34,8 +47,12 @@ static UINT32 IdeTestHostIn(PVDD_BUS bus, WORD port, BYTE width)
     if (!VddBusIo(bus, port, width, 1, &value)) value = 0xFFFFFFFFu;
     return width == 1 ? (value & 0xFF) : width == 2 ? (value & 0xFFFF) : value;
 }
+
 static VOID IdeTestHostOut(PVDD_BUS bus, WORD port, BYTE byteValue)
-{ UINT32 value = byteValue; VddBusIo(bus, port, 1, 0, &value); }
+{
+    UINT32 value = byteValue;
+    VddBusIo(bus, port, 1, 0, &value);
+}
 
 /* The datasheet's BSY wait, bounded. 1 = it would have exited. */
 static INT IdeTestBusyWaitExits(PVDD_BUS bus, WORD port)
@@ -63,20 +80,21 @@ INT main(VOID)
     INT channel, spin, sawDataRequest;
     WORD port;
 
-    /* ── NEGATIVE CONTROL: the machine before this device. ── */
+    /* NEGATIVE CONTROL: the machine before this device: */
     VddBusInitialize(&bus, NULL);
     CHECK(IdeTestHostIn(&bus, IDE_PRIMARY_CONTROL, 1) == 0xFF, "control: unclaimed 3F6h floats to FFh");
     CHECK(!IdeTestBusyWaitExits(&bus, IDE_PRIMARY_CONTROL),
           "control: on FFh the BSY wait NEVER exits (the hang this closes)");
 
-    /* ── the adapter, fitted ── */
+    /* the adapter, fitted: */
     memset(&state, 0, sizeof state);
     VddBusInitialize(&bus, NULL);
     VddBusSetSinks(&bus, IdeTestIrqSink, NULL, NULL, NULL);
     device = VddIdeDevice(&state);
     CHECK(VddBusAdd(&bus, &device) == 0 && bus.ClaimFailures == 0, "adapter claims both channels");
 
-    for (channel = 0; channel < 2; ++channel) {
+    for (channel = 0; channel < 2; ++channel)
+    {
         WORD commandPort = channels[channel][0], controlPort = channels[channel][1];
         CHAR description[96];
         sprintf(description, "%03Xh: alternate status reads 00h (BSY clear, DD7 pulled down)", controlPort);
@@ -94,7 +112,7 @@ INT main(VOID)
           CHECK(all0, description); }
         sprintf(description, "%03Xh: 16-bit data read is 0000h, 32-bit is 0", commandPort);
         CHECK(IdeTestHostIn(&bus, commandPort, 2) == 0 && IdeTestHostIn(&bus, commandPort, 4) == 0, description);
-        /* ⛔ the presence test must NOT find a drive */
+        /* [WARNING]: the presence test must NOT find a drive */
         sprintf(description, "%03Xh: 55h/AAh write-read-back does not echo (no false drive)", commandPort + 2);
         CHECK(!IdeTestLatches(&bus, commandPort), description);
         /* device 1 selected: ATA-3 8.7.1(h) -- an absent device's status is 00h */
@@ -119,7 +137,7 @@ INT main(VOID)
         CHECK(IdeTestHostIn(&bus, commandPort + 1, 1) == 0x00, description);
     }
 
-    /* ── the edges of the claim ── */
+    /* the edges of the claim: */
     CHECK(IdeTestHostIn(&bus, 0x3F7, 1) == 0xFF, "3F7h is NOT ours -- left for the FDC (DIR)");
     CHECK(IdeTestHostIn(&bus, 0x377, 1) == 0x00, "377h, the secondary drive-address register, is");
     CHECK(IdeTestHostIn(&bus, 0x1EF, 1) == 0xFF && IdeTestHostIn(&bus, 0x1F8, 1) == 0xFF,

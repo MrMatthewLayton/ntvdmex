@@ -1,20 +1,29 @@
-/* cpuspeed.c -- the CPU-speed governor's arithmetic: the speed list, duty cycles, pacing and the instruction budget.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- * The function definitions of cpuspeed.h, which keeps their declarations and doc comments (#335). */
+ * The CPU-speed governor's arithmetic: the speed list, duty cycles, pacing and the instruction budget.
+ *
+ * The function definitions of cpuspeed.h, which keeps their declarations and doc comments (#335).
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #include "cpuspeed.h"
 
 const UINT g_CpuSpeedMhz[CPUSPEED_COUNT] = {
-    0,      /*  0: Host (Unlimited) -- the default                                */
-    1000,   /*  1: Intel Pentium III 1 GHz                                        */
-    600,    /*  2: Intel Pentium III 600 MHz                                      */
-    300,    /*  3: Intel Pentium II 300 MHz                                       */
-    200,    /*  4: Intel Pentium MMX 200 MHz                                      */
-    133,    /*  5: Intel Pentium 133 MHz                                          */
-    100,    /*  6: Intel 486DX4 100 MHz                                           */
-    66,     /*  7: Intel 486DX2 66 MHz                                            */
-    50,     /*  8: Intel 486DX 50 MHz                                             */
-    33,     /*  9: Intel 386DX 33 MHz                                             */
-    16      /* 10: Intel 386DX 16 MHz                                             */
+    0,      /*  0: Host (Unlimited) -- the default */
+    1000,   /*  1: Intel Pentium III 1 GHz */
+    600,    /*  2: Intel Pentium III 600 MHz */
+    300,    /*  3: Intel Pentium II 300 MHz */
+    200,    /*  4: Intel Pentium MMX 200 MHz */
+    133,    /*  5: Intel Pentium 133 MHz */
+    100,    /*  6: Intel 486DX4 100 MHz */
+    66,     /*  7: Intel 486DX2 66 MHz */
+    50,     /*  8: Intel 486DX 50 MHz */
+    33,     /*  9: Intel 386DX 33 MHz */
+    16      /* 10: Intel 386DX 16 MHz */
 };
 
 PCSTR const g_CpuSpeedNames[CPUSPEED_COUNT] = {
@@ -25,19 +34,18 @@ PCSTR const g_CpuSpeedNames[CPUSPEED_COUNT] = {
 };
 
 static const UINT g_CpuSpeedDoomFps10[CPUSPEED_COUNT] = {
-    0,      /*  0: Host -- unthrottled                                           */
-    2100,   /*  1: Pentium III 1 GHz   (TU Wien PIII-800 188-202; above any cap)  */
-    1900,   /*  2: Pentium III 600     (TU Wien PIII-500 183-191)                 */
-    1150,   /*  3: Pentium II 300      (between PII-233 105.4 and PII-350 122.4)  */
-    976,    /*  4: Pentium MMX 200     (thandor 97.63)                            */
-    802,    /*  5: Pentium 133         (thandor 80.23)                            */
-    438,    /*  6: 486DX4 100          (thandor 43.75)                            */
-    331,    /*  7: 486DX2 66           (thandor 33.12)                            */
-    280,    /*  8: 486DX 50            (thandor 28.00)                            */
-    75,     /*  9: 386DX 33            (thandor Am386DX-33 7.47)                  */
-    29      /* 10: 386DX 16            (386DX-25 4.58 scaled by clock, 16/25)     */
+    0,      /*  0: Host -- unthrottled */
+    2100,   /*  1: Pentium III 1 GHz   (TU Wien PIII-800 188-202; above any cap) */
+    1900,   /*  2: Pentium III 600     (TU Wien PIII-500 183-191) */
+    1150,   /*  3: Pentium II 300      (between PII-233 105.4 and PII-350 122.4) */
+    976,    /*  4: Pentium MMX 200     (thandor 97.63) */
+    802,    /*  5: Pentium 133         (thandor 80.23) */
+    438,    /*  6: 486DX4 100          (thandor 43.75) */
+    331,    /*  7: 486DX2 66           (thandor 33.12) */
+    280,    /*  8: 486DX 50            (thandor 28.00) */
+    75,     /*  9: 386DX 33            (thandor Am386DX-33 7.47) */
+    29      /* 10: 386DX 16            (386DX-25 4.58 scaled by clock, 16/25) */
 };
-
 
 INT CpuSpeedIsAvailable(UINT index, UINT hostMhz)
 {
@@ -68,10 +76,12 @@ UINT CpuSpeedRealModeDutyBp(UINT protectedModeBp)
 }
 
 /* The finest period this host can actually deliver at `duty_bp`, given a measured
-   round-trip cost. Below rt_us/duty there is no run phase left to shorten.
-   ⚠ ALSO FLOORED BY THE HOLD: Sleep cannot express less than a millisecond, so a
-     period whose OFF phase rounds to zero delivers no throttling at all -- the debt
-     carries, but the guest runs free meanwhile. Hence the second term. */
+ * round-trip cost. Below rt_us/duty there is no run phase left to shorten.
+ *
+ * [CAUTION]: ALSO FLOORED BY THE HOLD: Sleep cannot express less than a millisecond, so a
+ * period whose OFF phase rounds to zero delivers no throttling at all -- the debt
+ * carries, but the guest runs free meanwhile. Hence the second term.
+ */
 static UINT CpuSpeedPeriodFloorMs(UINT dutyBp, unsigned long roundTripUs)
 {
     unsigned long byRun, byHold;
@@ -87,8 +97,9 @@ static UINT CpuSpeedPeriodFloorMs(UINT dutyBp, unsigned long roundTripUs)
 }
 
 /* How long to let the guest run this period, in MICROSECONDS, for a target period.
-   Returns 0 when the answer is "do not wait at all -- reach for it immediately",
-   which is the fine end of the slider and the whole point of it. */
+ * Returns 0 when the answer is "do not wait at all -- reach for it immediately",
+ * which is the fine end of the slider and the whole point of it.
+ */
 static unsigned long CpuSpeedRunUs(UINT dutyBp, UINT periodMs)
 {
     if (!dutyBp || dutyBp >= CPUSPEED_BP_FULL_U) return 0ul;
@@ -132,7 +143,11 @@ INT CpuSpeedCharge(CPUSPEED_PACE *pace, unsigned long ran, unsigned long instruc
                            INT64 elapsedUs)
 {
     INT64 wantedUs, milliseconds;
-    if (!instructionsPerSecond || !ran) { if (pace->OwedUs < 0) pace->OwedUs = 0; return 0; }
+    if (!instructionsPerSecond || !ran)
+    {
+        if (pace->OwedUs < 0) pace->OwedUs = 0;
+        return 0;
+    }
     wantedUs = ((INT64)ran * (INT64)MICROSECONDS_PER_SECOND_U) / (INT64)instructionsPerSecond;
     pace->OwedUs += wantedUs - elapsedUs;
     if (pace->OwedUs < 0) pace->OwedUs = 0;              /* no credit for running fast */

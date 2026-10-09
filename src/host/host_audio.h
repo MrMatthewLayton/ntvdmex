@@ -1,6 +1,15 @@
-/* host_audio.h -- the host side of the sound devices: OPL tracing and pumping, the audio fill, MIDI sinks and the GUS report.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- * Declarations only (#335): defined in host_audio.c. */
+ * The host side of the sound devices: OPL tracing and pumping, the audio fill, MIDI sinks and the GUS report.
+ *
+ * Declarations only (#335): defined in host_audio.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_HOST_AUDIO_H
 #define NTVDMEX_HOST_AUDIO_H
 #include "host_state.h"

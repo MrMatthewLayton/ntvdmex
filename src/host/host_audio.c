@@ -1,17 +1,27 @@
-/* host_audio.c -- the host side of the sound devices: OPL tracing and pumping, the audio fill,
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * The host side of the sound devices: OPL tracing and pumping, the audio fill,
  *   MIDI sinks and the GUS report.
  *
- * Its own translation unit (#335): declared in host_audio.h. */
+ * Its own translation unit (#335): declared in host_audio.h.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #include "host_state.h"
 #include "log.h"
 #include "host_audio.h"
 #include "main.h"
 #include "host_timing.h"
 
+#define OPLTRACE_PATH   CFG_("opltrace.txt")
 
-#define OPLTRACE_PATH CFG_("opltrace.txt")
 /* One line: did the guest find the card, fill it, play it, and take its interrupts?
-   Printed from both exits, once. */
+ * Printed from both exits, once.
+ */
 VOID GusReport(VOID)
 {
     static INT done = 0;
@@ -19,7 +29,12 @@ VOID GusReport(VOID)
     UINT voice, running = 0;
     if (done) return;
     done = 1;
-    if (!g_GusOn) { cursor = LogPut(cursor, "STAGE2: GUS off (nogus.flag)\r\n"); LogAppend(LOG_PATH, buffer, cursor); return; }
+    if (!g_GusOn)
+    {
+        cursor = LogPut(cursor, "STAGE2: GUS off (nogus.flag)\r\n");
+        LogAppend(LOG_PATH, buffer, cursor);
+        return;
+    }
     for (voice = 0; voice < GUS_VOICES; ++voice) if (!(g_Gus.Voices[voice].Control & GUS_VOICE_STOPPED_MASK)) ++running;
     cursor = LogPut(cursor, "STAGE2: GUS io_w=");  cursor = LogHex(cursor, g_Gus.IoWrites);
     cursor = LogPut(cursor, " io_r=");            cursor = LogHex(cursor, g_Gus.IoReads);
@@ -41,27 +56,40 @@ VOID GusReport(VOID)
     cursor = LogPut(cursor, " peak=");            cursor = LogHex(cursor, g_Gus.OutputPeak);
     cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor);
 }
+
 /* OPL register trace (opltrace.flag). One entry per write; a busy run is ~6k
-   writes a minute, so the cap is far above anything real and exists only so a
-   runaway cannot eat memory. Dropped writes are reported, never silently lost. */
-#define OPLTRACE_MAX 262144
-static struct { DWORD Microseconds; BYTE Register, Value; } g_OplTrace[OPLTRACE_MAX];
+ * writes a minute, so the cap is far above anything real and exists only so a
+ * runaway cannot eat memory. Dropped writes are reported, never silently lost.
+ */
+#define OPLTRACE_MAX    262144
+static struct
+{
+    DWORD Microseconds;
+    BYTE Register, Value;
+} g_OplTrace[OPLTRACE_MAX];
 DWORD          g_OplTraceCount    = 0;
 DWORD          g_OplTraceDrop = 0;
 INT            g_OplTraceOn   = 0;
 /* The trace hook handed to the OPL VDD. Timestamped from the same clock the CRT
-   and PIT use, so a replay reproduces the guest's real WRITE TIMING -- which is
-   most of what makes music sound like itself. */
+ * and PIT use, so a replay reproduces the guest's real WRITE TIMING -- which is
+ * most of what makes music sound like itself.
+ */
 VOID OplTraceWrite(BYTE registerIndex, BYTE value)
 {
-    if (g_OplTraceCount >= OPLTRACE_MAX) { g_OplTraceDrop++; return; }
+    if (g_OplTraceCount >= OPLTRACE_MAX)
+    {
+        g_OplTraceDrop++;
+        return;
+    }
     g_OplTrace[g_OplTraceCount].Microseconds  = (DWORD)HostTimeMicroseconds();
     g_OplTrace[g_OplTraceCount].Register = registerIndex;
     g_OplTrace[g_OplTraceCount].Value = value;
     g_OplTraceCount++;
 }
+
 /* Write the trace out as text: one `us reg val` triple per line, hex. Text so it
-   is diffable and survives the SMB round trip; a long run is well under a MB. */
+ * is diffable and survives the SMB round trip; a long run is well under a MB.
+ */
 VOID OplTraceDump(VOID)
 {
     HANDLE handle; DWORD index, bytesWritten;
@@ -75,7 +103,8 @@ VOID OplTraceDump(VOID)
       cursor = LogHex(cursor, g_OplTraceCount); cursor = LogPut(cursor, " dropped="); cursor = LogHex(cursor, g_OplTraceDrop);
       cursor = LogPut(cursor, "\r\n");
       WriteFile(handle, buffer, (DWORD)(cursor - buffer), &bytesWritten, NULL); }
-    for (index = 0; index < g_OplTraceCount; ++index) {
+    for (index = 0; index < g_OplTraceCount; ++index)
+    {
         PSTR cursor = buffer;
         cursor = LogHex(cursor, g_OplTrace[index].Microseconds); cursor = LogPut(cursor, " ");
         cursor = LogHexByte(cursor, g_OplTrace[index].Register); cursor = LogPut(cursor, " ");
@@ -84,14 +113,19 @@ VOID OplTraceDump(VOID)
     }
     CloseHandle(handle);
 }
-enum { OPL_PUMP_QUANTUM_US = 20 };   /* OplPumpTime: shorter is carried to the next pump */
+
+enum
+{
+    OPL_PUMP_QUANTUM_US = 20
+};   /* OplPumpTime: shorter is carried to the next pump */
 VOID OplPumpTime(VOID)
 {
     static LARGE_INTEGER frequency, last;
     LARGE_INTEGER now;
     LONGLONG delta;
     DWORD microseconds;
-    if (!frequency.QuadPart) {
+    if (!frequency.QuadPart)
+    {
         if (!QueryPerformanceFrequency(&frequency)) return;
         QueryPerformanceCounter(&last);
         return;
@@ -101,42 +135,47 @@ VOID OplPumpTime(VOID)
     if (delta <= 0) return;
     if (delta > frequency.QuadPart) delta = frequency.QuadPart;       /* clamp a long stall to 1s */
     microseconds = (DWORD)((delta * MICROSECONDS_PER_SECOND) / frequency.QuadPart);
-    if (microseconds < OPL_PUMP_QUANTUM_US) return;                                /* carry sub-quantum time   */
+    if (microseconds < OPL_PUMP_QUANTUM_US) return;                                /* carry sub-quantum time */
     last = now;
     HOST_LOCK();
     VddOplAddMicroseconds(&g_Opl, microseconds);
     HOST_UNLOCK();
 }
+
 /* The audio thread's fill callback. Mixing touches the DMA controller, guest
-   memory and the IRQ path, so it takes the same lock the exec thread uses. */
-/* ── WATCH DMX'S TASK TABLE FROM OUTSIDE. ────────────────────────────────────────
-     The SB interrupt only ARMS the mixer (sets next_due = now, DOOM.EXE 0x571b4);
-     the TIMER services it, and the scheduler's first act on a busy task is
-     `jne 0x572ed` -- the loop EXIT, not the next task -- so ONE busy task abandons
-     the whole pass and there are up to 12. Doom runs a MIDI task alongside the PCM
-     mixer, so a task that overruns can starve the refill wholesale.
-     Addresses are settled and self-checked: the IRQ table was FOUND at 0x03bc81ac and
-     the code says it lives at virtual 0x281ac, so data guest = virtual + 0x03BA0000.
-     That puts the task table at 0x03bc86a0 and the tick clock at 0x03bc8820 -- and it
-     predicts the mixer task at index 4 (0x03bc8720), which is exactly where the
-     earlier structure search found it. `mixer_ok` re-checks that in-run; if it is 0
-     every number here is meaningless.
-     Sampled from the audio fill, which runs ~86 times a second -- one sample per
-     block, i.e. exactly the rate the refill is supposed to happen at. */
-#define DMX_TASKS   0x03bc86a0u
-#define DMX_CLOCK   0x03bc8820u
-#define DMX_MIXER_I 4u
+ * memory and the IRQ path, so it takes the same lock the exec thread uses.
+ */
+/* WATCH DMX'S TASK TABLE FROM OUTSIDE:
+ * The SB interrupt only ARMS the mixer (sets next_due = now, DOOM.EXE 0x571b4);
+ * the TIMER services it, and the scheduler's first act on a busy task is
+ * `jne 0x572ed` -- the loop EXIT, not the next task -- so ONE busy task abandons
+ * the whole pass and there are up to 12. Doom runs a MIDI task alongside the PCM
+ * mixer, so a task that overruns can starve the refill wholesale.
+ * Addresses are settled and self-checked: the IRQ table was FOUND at 0x03bc81ac and
+ * the code says it lives at virtual 0x281ac, so data guest = virtual + 0x03BA0000.
+ * That puts the task table at 0x03bc86a0 and the tick clock at 0x03bc8820 -- and it
+ * predicts the mixer task at index 4 (0x03bc8720), which is exactly where the
+ * earlier structure search found it. `mixer_ok` re-checks that in-run; if it is 0
+ * every number here is meaningless.
+ * Sampled from the audio fill, which runs ~86 times a second -- one sample per
+ * block, i.e. exactly the rate the refill is supposed to happen at.
+ */
+#define DMX_TASKS       0x03bc86a0u
+#define DMX_CLOCK       0x03bc8820u
+#define DMX_MIXER_I     4u
 static VOID DmxSample(VOID)
 {
     static INT isOk = 0;
     const volatile BYTE *tasks = (const volatile BYTE *)(ULONG_PTR)DMX_TASKS;
     const volatile DWORD *clock = (const volatile DWORD *)(ULONG_PTR)DMX_CLOCK;
     UINT task; INT anyBusy = 0;
-    /* ⚠ RE-PROBE UNTIL IT APPEARS. Probing once latched a failure: this runs from the
-         audio thread, which starts long before the guest has allocated the zone this
-         table lives in, so the first call always sees unmapped memory and a one-shot
-         probe would report `ok=0` for the whole run -- which is exactly what it did. */
-    if (!isOk) {
+    /* [CAUTION]: RE-PROBE UNTIL IT APPEARS. Probing once latched a failure: this runs from the
+     * audio thread, which starts long before the guest has allocated the zone this
+     * table lives in, so the first call always sees unmapped memory and a one-shot
+     * probe would report `ok=0` for the whole run -- which is exactly what it did.
+     */
+    if (!isOk)
+    {
         MEMORY_BASIC_INFORMATION memoryInfo;
         if (!(VirtualQuery((LPCVOID)tasks, &memoryInfo, sizeof memoryInfo) == sizeof memoryInfo
               && memoryInfo.State == MEM_COMMIT && !(memoryInfo.Protect & (PAGE_NOACCESS | PAGE_GUARD))))
@@ -148,24 +187,33 @@ static VOID DmxSample(VOID)
         g_DmxMixerOk = 1;
     else return;
     ++g_DmxSamples;
-    for (task = 0; task < 12; ++task) {
-        if (tasks[task * 32u + 0x1c]) { g_DmxBusy[task]++; anyBusy = 1; }
+    for (task = 0; task < 12; ++task)
+    {
+        if (tasks[task * 32u + 0x1c])
+        {
+            g_DmxBusy[task]++;
+            anyBusy = 1;
+        }
     }
     if (anyBusy) ++g_DmxAnyBusy;
     { DWORD due = *(const volatile DWORD *)(tasks + DMX_MIXER_I * 32u + 0x14), now = *clock;
-      if ((LONG)(now - due) >= 0) {            /* armed and still not serviced */
+      if ((LONG)(now - due) >= 0)              /* armed and still not serviced */
+      {
           DWORD late = now - due;
           ++g_DmxOverdue;
           if (late > g_DmxOverdueMaximum) g_DmxOverdueMaximum = late;
       } }
 }
+
 VOID HostAudioFill(PVOID context, INT16 *out, UINT32 frames)
 {
     (VOID)context;
     /* #219: paused -> silence, and the devices are NOT rendered, so a Sound Blaster
-       block, the OPL envelopes and the GUS voices all stand still and carry on from
-       the same sample on resume. */
-    if (g_PauseWant) {
+     * block, the OPL envelopes and the GUS voices all stand still and carry on from
+     * the same sample on resume.
+     */
+    if (g_PauseWant)
+    {
         UINT32 index;
         for (index = 0; index < frames * AUDIO_STEREO_CHANNELS; ++index) out[index] = 0;
         return;
@@ -182,9 +230,11 @@ VOID HostMidiSink(PVOID context, UINT32 message)
     (VOID)context;
     AudioWaveMidi(&g_Wave, message);
 }
+
 /* #136: whole SysEx messages, wired ONLY when Settings > Audio > MIDI found an external
-   synth by name (g_Wave.IsMidiExternal) -- see midi_route.h. Otherwise SysEx is swallowed in
-   vdd_mpu exactly as it always was. */
+ * synth by name (g_Wave.IsMidiExternal) -- see midi_route.h. Otherwise SysEx is swallowed in
+ * vdd_mpu exactly as it always was.
+ */
 VOID HostMidiSysEx(PVOID context, const BYTE *message, UINT32 length)
 {
     (VOID)context;
@@ -192,7 +242,12 @@ VOID HostMidiSysEx(PVOID context, const BYTE *message, UINT32 length)
 }
 
 /* #190: the GUS's 6850 MIDI UART sends raw bytes; a PRIVATE message assembler (never on
-   the bus) turns them into MIDI messages for the same synth. Its own, not g_Mpu's: two
-   byte streams through one assembler would corrupt each other's running status. */
+ * the bus) turns them into MIDI messages for the same synth. Its own, not g_Mpu's: two
+ * byte streams through one assembler would corrupt each other's running status.
+ */
 MPU_STATE g_GusMidi;
-VOID GusMidiToSynth(PVOID context, BYTE byteValue) { (VOID)context; VddMpuFeed(&g_GusMidi, byteValue); }
+VOID GusMidiToSynth(PVOID context, BYTE byteValue)
+{
+    (VOID)context;
+    VddMpuFeed(&g_GusMidi, byteValue);
+}

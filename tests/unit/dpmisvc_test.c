@@ -1,4 +1,6 @@
-/* dpmisvc_test.c -- off-VM battery for src/host/dpmi_svc.h (GH #248): the INT 31h answers
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM battery for src/host/dpmi_svc.h (GH #248): the INT 31h answers
  * the DPMI specification decides.
  *
  * WHAT IS PINNED, AND WHY EACH ONE IS HERE.
@@ -14,7 +16,13 @@
  *     a bigger one moves and copies all of the old block.
  *
  *   cc -std=c99 -I src/host -o dpmisvc_test tests/unit/dpmisvc_test.c && ./dpmisvc_test
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <stdint.h>
 
@@ -24,9 +32,9 @@ static INT g_Total = 0, g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
-#define HDLR   0x0050          /* DOS_HDLR_SEG -- passed in, so the test needs no layout header */
-#define CBBASE 0x0090          /* DPMI_CB_BASE_OFF in main.c */
-#define LDTMAX 2048
+#define HDLR    0x0050  /* DOS_HDLR_SEG -- passed in, so the test needs no layout header */
+#define CBBASE  0x0090  /* DPMI_CB_BASE_OFF in main.c */
+#define LDTMAX  2048
 
 INT main(VOID)
 {
@@ -58,11 +66,12 @@ INT main(VOID)
     /* ---- callbacks ---- */
     CHECK(DPMI_CB_SLOTS >= 16, "at least 16 callbacks (the spec's minimum; was 4)");
     isOk = 1;
-    for (slot = 0; slot < DPMI_CB_SLOTS; ++slot) {
+    for (slot = 0; slot < DPMI_CB_SLOTS; ++slot)
+    {
         WORD entry = DpmiCallbackEntry(CBBASE, slot);
-        if (DpmiCallbackSlotAt(CBBASE, HDLR, HDLR, entry) != slot) isOk = 0;          /* trap at the BOP   */
+        if (DpmiCallbackSlotAt(CBBASE, HDLR, HDLR, entry) != slot) isOk = 0;          /* trap at the BOP */
         if (DpmiCallbackSlotAt(CBBASE, HDLR, HDLR, (WORD)(entry + 3)) != slot) isOk = 0; /* past the BOP */
-        if (DpmiCallbackSlotOf(CBBASE, HDLR, HDLR, entry) != slot) isOk = 0;          /* 0304h            */
+        if (DpmiCallbackSlotOf(CBBASE, HDLR, HDLR, entry) != slot) isOk = 0;          /* 0304h */
     }
     CHECK(isOk, "every slot's address decodes back to that slot (trap at BOP, past BOP, 0304h)");
     CHECK(DpmiCallbackEntry(CBBASE, DPMI_CB_SLOTS - 1) + 3 <= 0xD0,

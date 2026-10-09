@@ -1,7 +1,16 @@
-/* host_core.c -- the host's foundations: its folder and paths, the OS imports bound at run time,
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * The host's foundations: its folder and paths, the OS imports bound at run time,
  *   the host lock, guest-memory peeks and pokes, and small utilities.
  *
- * Its own translation unit (#335): declared in host_core.h. */
+ * Its own translation unit (#335): declared in host_core.h.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #include <windows.h>
 #include "ntvdm.h"
 #include "host_core.h"
@@ -10,7 +19,8 @@
 #include "host_state.h"
 
 /* #211: the FIRST host writes to debug\out\ as always; a second one at the same time writes
-   to debug\out\2\, and so on (the instance claim in WinMain) -- so no host clears another's log. */
+ * to debug\out\2\, and so on (the instance claim in WinMain) -- so no host clears another's log.
+ */
 CHAR g_OutSubdirectory[24] = HOST_OUT_SUBDIRECTORY;
 INT  g_Instance = 1, g_InstanceAbandoned;
 DWORD g_OsVersion;       /* GetVersion(): 0x0500 = 2000, 0x0501 = XP */
@@ -25,6 +35,7 @@ VOID OsCompatBind(VOID)
     g_PfnRegisterRawInput   = user32 ? (PFN_REGISTER_RAW_INPUT_DEVICES)(ULONG_PTR)GetProcAddress(user32, HOST_EXPORT_REGISTER_RAW_INPUT_DEVICES) : 0;
     g_PfnGetRawInput   = user32 ? (PFN_GET_RAW_INPUT_DATA)(ULONG_PTR)GetProcAddress(user32, HOST_EXPORT_GET_RAW_INPUT_DATA) : 0;
 }
+
 /* AttachConsole on an OS without it: fail, and let the next route try. */
 BOOL OsCompatAttachConsole(DWORD processId)
 {
@@ -32,25 +43,41 @@ BOOL OsCompatAttachConsole(DWORD processId)
 }
 
 /* See NTVDMEX_DIR. No CRT here (the host links without one), so the string work is
-   spelled out. */
+ * spelled out.
+ */
 PCSTR NtvdmexRoot(VOID)
 {
     static CHAR root[MAX_PATH + 16];
     static volatile LONG ready;
-    if (!ready) {
+    if (!ready)
+    {
         CHAR self[MAX_PATH + 16];
         DWORD length = GetModuleFileNameA(NULL, self, sizeof self - 2);
         INT index, last = -1, prev = -1;
-        if (length == 0 || length >= sizeof self - 2) {
+        if (length == 0 || length >= sizeof self - 2)
+        {
             for (index = 0; NTVDMEX_DIR_DEFAULT[index]; ++index) root[index] = NTVDMEX_DIR_DEFAULT[index];
             root[index] = 0;
-        } else {
-            for (index = 0; index < (INT)length; ++index) if (self[index] == '\\') { prev = last; last = index; }
-            if (last < 0) { root[0] = '.'; root[1] = '\\'; root[2] = 0; }
-            else {
+        }
+        else
+        {
+            for (index = 0; index < (INT)length; ++index) if (self[index] == '\\')
+            {
+                prev = last;
+                last = index;
+            }
+            if (last < 0)
+            {
+                root[0] = '.';
+                root[1] = '\\';
+                root[2] = 0;
+            }
+            else
+            {
                 INT cut = last;                      /* ...\bin\ntvdmhost.exe -> ...\bin */
                 /* the exe's directory is "bin" or "bm" (any case) -> the root is its
-                   parent. bm is the pre-s73 name; an installed s72 zip still has it. */
+                 * parent. bm is the pre-s73 name; an installed s72 zip still has it.
+                 */
                 INT directoryLength = last - prev;                /* dir name length + 1 */
                 if (prev >= 0 && (self[prev + 1] | ASCII_CASE_BIT) == 'b'
                     && ((directoryLength == 3 && (self[prev + 2] | ASCII_CASE_BIT) == 'm')
@@ -65,28 +92,32 @@ PCSTR NtvdmexRoot(VOID)
     }
     return root;
 }
-/* ── ⛔ THE RING IS PER-THREAD, BECAUSE A SHARED ONE WROTE A LOG LINE INTO A FLAG FILE.
-     (s74c) The watchdog thread built WDLOG_PATH here, and before its CreateFile ran the
-     other threads had taken 16 more slots -- so the pointer it held now read
-     `cfg\pmnoirq.flag` (the PM loop's GetFileAttributes at entry), and the watchdog's
-     "started" line CREATED the knob that suppresses every PM IRQ. From that run on,
-     Duke3D failed its sound-IRQ test ("Playback failed, possibly due to an invalid or
-     conflicting IRQ"), heaven7 and ZAR ran with time stopped, and nothing said why:
-     the file's CONTENTS were the only clue. A caller may legitimately hold a few paths
-     at once (LOG_PATH inside LogAppend while building another), so keep a small ring,
-     but never let another thread's path land in it. */
-#define NTVDMEX_PATH_SLOTS 8
-#define NTVDMEX_PATH_SLOT  (MAX_PATH + 96)
+
+/* -- [WARNING] THE RING IS PER-THREAD, BECAUSE A SHARED ONE WROTE A LOG LINE INTO A FLAG FILE.
+ * (s74c) The watchdog thread built WDLOG_PATH here, and before its CreateFile ran the
+ * other threads had taken 16 more slots -- so the pointer it held now read
+ * `cfg\pmnoirq.flag` (the PM loop's GetFileAttributes at entry), and the watchdog's
+ * "started" line CREATED the knob that suppresses every PM IRQ. From that run on,
+ * Duke3D failed its sound-IRQ test ("Playback failed, possibly due to an invalid or
+ * conflicting IRQ"), heaven7 and ZAR ran with time stopped, and nothing said why:
+ * the file's CONTENTS were the only clue. A caller may legitimately hold a few paths
+ * at once (LOG_PATH inside LogAppend while building another), so keep a small ring,
+ * but never let another thread's path land in it.
+ */
+#define NTVDMEX_PATH_SLOTS  8
+#define NTVDMEX_PATH_SLOT   (MAX_PATH + 96)
 static volatile LONG g_PathTls = -1;             /* TlsAlloc'd on first use (no __thread: no libgcc) */
 PCSTR NtvdmexPath(PCSTR subdirectory, PCSTR name)
 {
     PSTR ring; UINT *next; PSTR slot;
-    if (g_PathTls < 0) {
+    if (g_PathTls < 0)
+    {
         LONG tlsIndex = (LONG)TlsAlloc();
         if (InterlockedCompareExchange(&g_PathTls, tlsIndex, -1) != -1) TlsFree((DWORD)tlsIndex);
     }
     ring = (PSTR)TlsGetValue((DWORD)g_PathTls);
-    if (!ring) {
+    if (!ring)
+    {
         ring = (PSTR)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
                                  NTVDMEX_PATH_SLOTS * NTVDMEX_PATH_SLOT + sizeof(UINT));
         if (!ring) return "";                     /* out of memory: an empty path fails loudly downstream */
@@ -102,21 +133,29 @@ PCSTR NtvdmexPath(PCSTR subdirectory, PCSTR name)
     slot[length] = 0;
     return slot;
 }
+
 /* Does a newline-separated NAME=VALUE block already set `name` (case-insensitive, at
-   the start of a line)? No C runtime here, so no strstr. */
+ * the start of a line)? No C runtime here, so no strstr.
+ */
 INT StrStrNoCase(PCSTR block, PCSTR name)
 {
     PCSTR line = block;
-    while (*line) {
+    while (*line)
+    {
         PCSTR cursor = line, nameCursor = name;
-        while (*nameCursor && *cursor && ((*cursor | ASCII_CASE_BIT) == (*nameCursor | ASCII_CASE_BIT) || (*cursor == *nameCursor))) { ++cursor; ++nameCursor; }
+        while (*nameCursor && *cursor && ((*cursor | ASCII_CASE_BIT) == (*nameCursor | ASCII_CASE_BIT) || (*cursor == *nameCursor)))
+        {
+            ++cursor;
+            ++nameCursor;
+        }
         if (!*nameCursor) return 1;
         while (*line && *line != '\n') ++line;
         if (*line) ++line;
     }
     return 0;
 }
-CRITICAL_SECTION g_Lock;             /* serialises all bus dispatch       */
+
+CRITICAL_SECTION g_Lock;             /* serialises all bus dispatch */
 static DWORD    g_LockOwner, g_LockDepth;
 static LONGLONG g_LockSince;
 UINT32 QpcMicroseconds(LONGLONG ticks)
@@ -124,9 +163,11 @@ UINT32 QpcMicroseconds(LONGLONG ticks)
     if (!g_QpcFrequency.QuadPart || ticks <= 0) return 0;
     return (UINT32)((ticks * MICROSECONDS_PER_SECOND) / g_QpcFrequency.QuadPart);
 }
+
 /* 64-bit form, for the throttle's windowed wall total (a 32-bit us wraps at 71 min
-   and the window can be up to CPUSPEED_MAX_WINDOW_US). d is bounded to one window, so
-   d*1e6 stays far inside 64 bits. */
+ * and the window can be up to CPUSPEED_MAX_WINDOW_US). d is bounded to one window, so
+ * d*1e6 stays far inside 64 bits.
+ */
 UINT64 QpcMicroseconds64(LONGLONG ticks)
 {
     if (!g_QpcFrequency.QuadPart || ticks <= 0) return 0ull;
@@ -140,58 +181,80 @@ VOID HostLockEnter(INT site)
     INT nested = (g_LockOwner == threadId && g_LockDepth != 0);
     QueryPerformanceCounter(&waitStart);
     EnterCriticalSection(&g_Lock);
-    if (!nested) {
+    if (!nested)
+    {
         UINT32 waitMicroseconds;
         QueryPerformanceCounter(&acquired);
         waitMicroseconds = QpcMicroseconds(acquired.QuadPart - waitStart.QuadPart);
-        if (waitMicroseconds > g_LockWaitMicroseconds) { g_LockWaitMicroseconds = waitMicroseconds; g_LockWaitSite = site; }
+        if (waitMicroseconds > g_LockWaitMicroseconds)
+        {
+            g_LockWaitMicroseconds = waitMicroseconds;
+            g_LockWaitSite = site;
+        }
         g_LockOwner = threadId; g_LockSince = acquired.QuadPart; g_LockSite = site; g_LockDepth = 0;
     }
     g_LockDepth++;
 }
-enum { PATCH_MAP_HASH_SHIFT = 8, PATCH_MAP_HEADROOM = 16 };   /* PatchMapHash / PatchMapSet */
+
+enum
+{
+    PATCH_MAP_HASH_SHIFT = 8, PATCH_MAP_HEADROOM = 16
+};   /* PatchMapHash / PatchMapSet */
 VOID HostLockLeave(VOID)
 {
-    if (g_LockDepth && --g_LockDepth == 0) {
+    if (g_LockDepth && --g_LockDepth == 0)
+    {
         LARGE_INTEGER now;
         UINT32 holdMicroseconds;
         QueryPerformanceCounter(&now);
         holdMicroseconds = QpcMicroseconds(now.QuadPart - g_LockSince);
-        if (holdMicroseconds > g_LockHoldMicroseconds) { g_LockHoldMicroseconds = holdMicroseconds; g_LockHoldSite = g_LockSite; }
+        if (holdMicroseconds > g_LockHoldMicroseconds)
+        {
+            g_LockHoldMicroseconds = holdMicroseconds;
+            g_LockHoldSite = g_LockSite;
+        }
         g_LockOwner = 0;                 /* clear BEFORE releasing: the next owner
                                            must not see us as the holder */
     }
     LeaveCriticalSection(&g_Lock);
 }
-/* ── A NON-BLOCKING ACQUIRE, for a caller that would rather SKIP than QUEUE. ──────
-     The tick generator uses this for its delivery attempts: an attempt needs g_Lock
-     (the never-suspend-a-lock-holder interlock), but the CLOCK must never stand in
-     line behind the renderer to make one -- a skipped attempt costs nothing, because
-     the tick is already latched and the cooperative path delivers it at the guest's
-     next trap. Bookkeeping matches HostLockEnter minus the wait tracking, which is
-     meaningless here: a try never waits. */
+
+/* A NON-BLOCKING ACQUIRE, for a caller that would rather SKIP than QUEUE:
+ * The tick generator uses this for its delivery attempts: an attempt needs g_Lock
+ * (the never-suspend-a-lock-holder interlock), but the CLOCK must never stand in
+ * line behind the renderer to make one -- a skipped attempt costs nothing, because
+ * the tick is already latched and the cooperative path delivers it at the guest's
+ * next trap. Bookkeeping matches HostLockEnter minus the wait tracking, which is
+ * meaningless here: a try never waits.
+ */
 INT HostLockTry(INT site)
 {
     DWORD threadId = GetCurrentThreadId();
     INT nested = (g_LockOwner == threadId && g_LockDepth != 0);
     if (!TryEnterCriticalSection(&g_Lock)) return 0;
-    if (!nested) {
+    if (!nested)
+    {
         LARGE_INTEGER acquired; QueryPerformanceCounter(&acquired);
         g_LockOwner = threadId; g_LockSince = acquired.QuadPart; g_LockSite = site; g_LockDepth = 0;
     }
     g_LockDepth++;
     return 1;
 }
+
 #define DPMI_PMAP_MASK  (DPMI_PMAP_SLOTS - 1u)
 DWORD g_PatchMapCount;
 
-static DWORD PatchMapHash(DWORD linear) { return ((linear * KNUTH_HASH_MULTIPLIER_U) >> PATCH_MAP_HASH_SHIFT) & DPMI_PMAP_MASK; }
+static DWORD PatchMapHash(DWORD linear)
+{
+    return ((linear * KNUTH_HASH_MULTIPLIER_U) >> PATCH_MAP_HASH_SHIFT) & DPMI_PMAP_MASK;
+}
 
 BYTE PatchMapGet(DWORD linear)
 {
     DWORD start = PatchMapHash(linear), probe;
     if (!linear) return 0;
-    for (probe = 0; probe < DPMI_PMAP_SLOTS; ++probe) {
+    for (probe = 0; probe < DPMI_PMAP_SLOTS; ++probe)
+    {
         DWORD slot = (start + probe) & DPMI_PMAP_MASK;
         if (!g_PatchMapLinear[slot]) return 0;
         if (g_PatchMapLinear[slot] == linear) return g_PatchMapVector[slot];
@@ -203,30 +266,49 @@ VOID PatchMapSet(DWORD linear, BYTE vector)
 {
     DWORD start = PatchMapHash(linear), probe;
     if (!linear || g_PatchMapCount >= DPMI_PMAP_SLOTS - PATCH_MAP_HEADROOM) return;   /* leave headroom, never fill */
-    for (probe = 0; probe < DPMI_PMAP_SLOTS; ++probe) {
+    for (probe = 0; probe < DPMI_PMAP_SLOTS; ++probe)
+    {
         DWORD slot = (start + probe) & DPMI_PMAP_MASK;
-        if (!g_PatchMapLinear[slot]) { g_PatchMapLinear[slot] = linear; g_PatchMapVector[slot] = vector; ++g_PatchMapCount; return; }
-        if (g_PatchMapLinear[slot] == linear) { g_PatchMapVector[slot] = vector; return; }
+        if (!g_PatchMapLinear[slot])
+        {
+            g_PatchMapLinear[slot] = linear;
+            g_PatchMapVector[slot] = vector;
+            ++g_PatchMapCount;
+            return;
+        }
+        if (g_PatchMapLinear[slot] == linear)
+        {
+            g_PatchMapVector[slot] = vector;
+            return;
+        }
     }
 }
 
 /* Clearing leaves the key in place with vec=0: a tombstone, so probe chains that ran
-   through this slot still find what is past it. Slots are never reused, which is fine
-   at these counts and is the whole reason for the headroom check above. */
+ * through this slot still find what is past it. Slots are never reused, which is fine
+ * at these counts and is the whole reason for the headroom check above.
+ */
 VOID PatchMapClear(DWORD linear)
 {
     DWORD start = PatchMapHash(linear), probe;
-    for (probe = 0; probe < DPMI_PMAP_SLOTS; ++probe) {
+    for (probe = 0; probe < DPMI_PMAP_SLOTS; ++probe)
+    {
         DWORD slot = (start + probe) & DPMI_PMAP_MASK;
         if (!g_PatchMapLinear[slot]) return;
-        if (g_PatchMapLinear[slot] == linear) { g_PatchMapVector[slot] = 0; return; }
+        if (g_PatchMapLinear[slot] == linear)
+        {
+            g_PatchMapVector[slot] = 0;
+            return;
+        }
     }
 }
+
 /* Is [addr, addr+len) committed and readable RIGHT NOW? For probes that dereference
-   an address derived from one guest's memory map: under that guest the page is there,
-   under every other guest it is not, and an unguarded read takes the whole host down
-   with an access violation. Ask, don't assume -- and don't reach for SEH to paper over
-   it, because a fault we swallow is a fault we stop seeing. */
+ * an address derived from one guest's memory map: under that guest the page is there,
+ * under every other guest it is not, and an unguarded read takes the whole host down
+ * with an access violation. Ask, don't assume -- and don't reach for SEH to paper over
+ * it, because a fault we swallow is a fault we stop seeing.
+ */
 INT MemoryReadable(ULONG_PTR address, SIZE_T length)
 {
     MEMORY_BASIC_INFORMATION memoryInfo;
@@ -241,18 +323,28 @@ INT MemoryReadable(ULONG_PTR address, SIZE_T length)
 }
 
 /* Real/synthesised real-mode interrupt dispatch. The guest runs cooperatively
-   (we only regain control at event boundaries), so when a hardware IRQ becomes
-   pending and the guest's IF is set, we do here exactly what the CPU does on a
-   hardware interrupt: push FLAGS/CS/IP, clear IF+TF, and vector CS:IP through the
-   real-mode IVT. The guest's handler IRETs back normally. (`CD nn` software ints
-   still vector natively via VME; this is only for asynchronous IRQ delivery.) */
+ * (we only regain control at event boundaries), so when a hardware IRQ becomes
+ * pending and the guest's IF is set, we do here exactly what the CPU does on a
+ * hardware interrupt: push FLAGS/CS/IP, clear IF+TF, and vector CS:IP through the
+ * real-mode IVT. The guest's handler IRETs back normally. (`CD nn` software ints
+ * still vector natively via VME; this is only for asynchronous IRQ delivery.)
+ */
 VOID PokeWord(DWORD linear, WORD value)
-{ volatile BYTE *memory = (volatile BYTE *)0; memory[linear] = (BYTE)value; memory[linear + 1] = (BYTE)(value >> BYTE_SHIFT); }
+{
+    volatile BYTE *memory = (volatile BYTE *)0;
+    memory[linear] = (BYTE)value;
+    memory[linear + 1] = (BYTE)(value >> BYTE_SHIFT);
+}
+
 VOID PokeDword(DWORD linear, DWORD value)   /* dword store: 32-bit IRET frame slots (GH #18 run 83) */
 { volatile BYTE *memory = (volatile BYTE *)0;
   memory[linear] = (BYTE)value; memory[linear+1] = (BYTE)(value >> BYTE_SHIFT); memory[linear+2] = (BYTE)(value >> WORD_SHIFT); memory[linear+3] = (BYTE)(value >> TOP_BYTE_SHIFT); }
 WORD PeekWord(DWORD linear)
-{ const volatile BYTE *memory = (const volatile BYTE *)0; return (WORD)(memory[linear] | (memory[linear + 1] << BYTE_SHIFT)); }
+{
+    const volatile BYTE *memory = (const volatile BYTE *)0;
+    return (WORD)(memory[linear] | (memory[linear + 1] << BYTE_SHIFT));
+}
+
 /* Width-selected guest memory access (1/2/4 bytes) for the string-I/O servicer. */
 DWORD PeekWidth(DWORD linear, INT width)
 { const volatile BYTE *memory = (const volatile BYTE *)0;
@@ -261,16 +353,30 @@ DWORD PeekWidth(DWORD linear, INT width)
   return (DWORD)PeekWord(linear) | ((DWORD)PeekWord(linear + X86_WORD_SIZE) << WORD_SHIFT); }
 VOID PokeWidth(DWORD linear, DWORD value, INT width)
 { volatile BYTE *memory = (volatile BYTE *)0;
-  if (width == 1) { memory[linear] = (BYTE)value; return; }
-  if (width == X86_WORD_SIZE) { PokeWord(linear, (WORD)value); return; }
+  if (width == 1)
+  {
+      memory[linear] = (BYTE)value;
+      return;
+  }
+  if (width == X86_WORD_SIZE)
+  {
+      PokeWord(linear, (WORD)value);
+      return;
+  }
   PokeDword(linear, value); }
 
 LONGLONG QpcTicks(UINT32 microseconds)
-{ return g_QpcFrequency.QuadPart ? (LONGLONG)((g_QpcFrequency.QuadPart / MILLISECONDS_PER_SECOND) * microseconds / MICROSECONDS_PER_MILLISECOND) : 0; }
+{
+    return g_QpcFrequency.QuadPart ? (LONGLONG)((g_QpcFrequency.QuadPart / MILLISECONDS_PER_SECOND) * microseconds / MICROSECONDS_PER_MILLISECOND) : 0;
+}
 
 INT StringsEqual(PCSTR first, PCSTR second)
 {
-    while (*first && *first == *second) { ++first; ++second; }
+    while (*first && *first == *second)
+    {
+        ++first;
+        ++second;
+    }
     return *first == *second;
 }
 
@@ -290,9 +396,10 @@ INT HostReadable(PCVOID pointer, SIZE_T length)
 }
 
 /* The same question for a destination we are about to WRITE. Same reasoning and the
-   same reason not to use IsBadWritePtr -- see the note above. Used before filling a
-   guest buffer on the guest's behalf (WOW32 0x97), where getting the selector wrong
-   would otherwise scribble on whatever the bad base happened to name. */
+ * same reason not to use IsBadWritePtr -- see the note above. Used before filling a
+ * guest buffer on the guest's behalf (WOW32 0x97), where getting the selector wrong
+ * would otherwise scribble on whatever the bad base happened to name.
+ */
 INT HostWritable(PVOID pointer, SIZE_T length)
 {
     MEMORY_BASIC_INFORMATION memoryInfo;

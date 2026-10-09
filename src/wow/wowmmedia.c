@@ -1,7 +1,16 @@
-/* wowmmedia.c -- ★ MMSYSTEM.DLL's OWN ID SPACE (WOW32's "MMEDIA" table).  #278, s90.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * MMSYSTEM.DLL's OWN ID SPACE (WOW32's "MMEDIA" table).  #278, s90.
  *
  * The code of wowmmedia.h (#335): its functions and state, in their original order;
- * its own translation unit, declared in wowmmedia.h. */
+ * its own translation unit, declared in wowmmedia.h.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #include "host_state.h"
 #include "log.h"
 #include "ne.h"
@@ -22,13 +31,14 @@
 #include "wowsound.h"
 #include "wowmmedia.h"
 
-
 INT WowMultimediaCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
 {
     INT noteLength = 0;
     if (noteCapacity) note[0] = 0;
-    switch (frame->Id) {
-    case WOWMM_CALLPROC32: {
+    switch (frame->Id)
+    {
+    case WOWMM_CALLPROC32:
+    {
         DWORD arguments[WOWMM_CALLPROC32_ARGUMENTS];
         DWORD procedure  = Wow32ArgDword(frame, WOWMM_CALLPROC32_ARG_PROCEDURE);
         DWORD directoryChange = Wow32ArgDword(frame, WOWMM_CALLPROC32_ARG_DIRCHANGE);

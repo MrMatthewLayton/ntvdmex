@@ -1,6 +1,15 @@
-/* main.h -- what main.c offers the host's other files.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- * Declarations only (#335): defined in main.c. */
+ * What main.c offers the host's other files.
+ *
+ * Declarations only (#335): defined in main.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_MAIN_H
 #define NTVDMEX_MAIN_H
 #include "host_state.h"

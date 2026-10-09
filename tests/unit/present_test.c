@@ -1,4 +1,6 @@
-/* present_test.c -- off-VM battery for the Display settings' arithmetic
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM battery for the Display settings' arithmetic
  * (src/vdd/present_scale.h).
  *
  * present_ddraw.c cannot be built here: it wants <ddraw.h>, an HWND and a
@@ -7,7 +9,13 @@
  * integer arithmetic on a buffer, and they are checked here, on the build
  * machine, so "the knob is wired" and "the knob is wired and right" are not the
  * same claim.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -23,10 +31,11 @@ INT main(VOID)
 
     printf("== Display settings: aspect fit + Scale2x (present_scale.h) ==\n");
 
-    /* ── ASPECT OFF IS THE HISTORICAL BEHAVIOUR AND MUST STAY EXACT. ───────────
-         Every present this host has ever done filled the client area. A setting
-         that is off has to leave that byte-for-byte alone, or turning the
-         feature on becomes the safe option and nobody trusts the default. */
+    /* ASPECT OFF IS THE HISTORICAL BEHAVIOUR AND MUST STAY EXACT:
+     * Every present this host has ever done filled the client area. A setting
+     * that is off has to leave that byte-for-byte alone, or turning the
+     * feature on becomes the safe option and nobody trusts the default.
+     */
     PresentFit(1024, 600, 0, &left, &top, &width, &height);
     CHECK(left == 0 && top == 0 && width == 1024 && height == 600,
           "aspect off: the frame fills the client area, exactly as before");
@@ -42,7 +51,8 @@ INT main(VOID)
     CHECK(left == 0 && top == 60,    "...centred, so the bars are equal top and bottom");
 
     /* Exactly 4:3 -> no bars at all, and no off-by-one that would leave a
-       one-pixel line of stale frame down one edge. */
+     * one-pixel line of stale frame down one edge.
+     */
     PresentFit(640, 480, 1, &left, &top, &width, &height);
     CHECK(left == 0 && top == 0 && width == 640 && height == 480,
           "aspect on, a 4:3 client: no bars and no off-by-one");
@@ -50,15 +60,17 @@ INT main(VOID)
     CHECK(left == 0 && top == 0 && width == 1280 && height == 960, "...at any 4:3 size");
 
     /* A client area can genuinely be zero-sized -- a minimised window reports it
-       -- and the result still has to be something StretchDIBits will accept. */
+     * -- and the result still has to be something StretchDIBits will accept.
+     */
     PresentFit(0, 0, 1, &left, &top, &width, &height);
     CHECK(width >= 1 && height >= 1, "a zero-sized client still yields a blittable rectangle");
     PresentFit(0, 0, 0, &left, &top, &width, &height);
     CHECK(width >= 1 && height >= 1, "...with aspect off too");
 
-    /* ── WHICH SCALER DOES WHAT. ──────────────────────────────────────────────
-         The ids ARE the Scaler combo's indices (settings.h), so a wrong answer
-         here is a knob that silently selects the neighbouring effect. */
+    /* WHICH SCALER DOES WHAT:
+     * The ids ARE the Scaler combo's indices (settings.h), so a wrong answer
+     * here is a knob that silently selects the neighbouring effect.
+     */
     CHECK(!PresentScalerDoubles(PRESENT_SCALER_NONE)
        && !PresentScalerHasScanlines(PRESENT_SCALER_NONE), "scaler None does nothing");
     CHECK(PresentScalerDoubles(PRESENT_SCALER_SCALE2X)
@@ -67,15 +79,17 @@ INT main(VOID)
        && PresentScalerHasScanlines(PRESENT_SCALER_SCANLINES), "Scanlines masks, no doubling");
     CHECK(PresentScalerDoubles(PRESENT_SCALER_CRT)
        && PresentScalerHasScanlines(PRESENT_SCALER_CRT), "CRT is both");
-    /* ⚠ hq2x is NOT implemented. It must behave as None -- visibly nothing --
-         rather than half-selecting one of the effects it is not. */
+    /* [CAUTION]: hq2x is NOT implemented. It must behave as None -- visibly nothing --
+     * rather than half-selecting one of the effects it is not.
+     */
     CHECK(!PresentScalerDoubles(PRESENT_SCALER_HQ2X)
        && !PresentScalerHasScanlines(PRESENT_SCALER_HQ2X),
           "hq2x is unimplemented and presents as None, not as something else");
 
-    /* ── SCALE2X. ─────────────────────────────────────────────────────────────
-         The rule is an EQUALITY test between neighbours, so running it on
-         palette indices rather than colours is exact, not an approximation. */
+    /* SCALE2X:
+     * The rule is an EQUALITY test between neighbours, so running it on
+     * palette indices rather than colours is exact, not an approximation.
+     */
     {
         static const BYTE flat3[9] = { 7,7,7, 7,7,7, 7,7,7 };
         BYTE destination[6 * 6 + 8];
@@ -90,8 +104,9 @@ INT main(VOID)
     }
     {
         /* An isolated pixel has no neighbour it agrees with, so it must survive
-           as a clean 2x2 block. Blurring it would be the failure mode that turns
-           a mouse cursor or a 1-pixel font stem into mush. */
+         * as a clean 2x2 block. Blurring it would be the failure mode that turns
+         * a mouse cursor or a 1-pixel font stem into mush.
+         */
         static const BYTE dot[9] = { 1,1,1, 1,2,1, 1,1,1 };
         BYTE destination[36];
         PresentScale2x8(dot, 3, 3, 3, destination);
@@ -100,8 +115,9 @@ INT main(VOID)
     }
     {
         /* The whole point: a staircase edge gains its corner. Centre pixel has
-           B=D=2 and F=H=1, so the top-left quarter becomes 2 and the other three
-           stay 1 -- the diagonal, not the step. */
+         * B=D=2 and F=H=1, so the top-left quarter becomes 2 and the other three
+         * stay 1 -- the diagonal, not the step.
+         */
         static const BYTE diag[9] = { 2,2,1,
                                          2,1,1,
                                          1,1,1 };
@@ -113,8 +129,9 @@ INT main(VOID)
     }
     {
         /* Edges clamp their neighbours, so the border doubles plainly. This is
-           also the read-past-the-buffer check: the source here is exactly 9
-           bytes with a guard after it. */
+         * also the read-past-the-buffer check: the source here is exactly 9
+         * bytes with a guard after it.
+         */
         static const BYTE guarded[9 + 4] = { 2,2,1, 2,1,1, 1,1,1, 0,0,0,0 };
         BYTE destination[36];
         PresentScale2x8(guarded, 3, 3, 3, destination);
@@ -124,8 +141,9 @@ INT main(VOID)
     }
     {
         /* A source with a STRIDE wider than its width -- which is what a real
-           framebuffer row looks like -- must be walked by the stride, not the
-           width, or every row after the first is shifted. */
+         * framebuffer row looks like -- must be walked by the stride, not the
+         * width, or every row after the first is shifted.
+         */
         static const BYTE padded[3 * 5] = { 3,3,3, 9,9,
                                                3,3,3, 9,9,
                                                3,3,3, 9,9 };
@@ -136,12 +154,12 @@ INT main(VOID)
         CHECK(isOk, "Scale2x: a stride wider than the width is respected");
     }
 
-
     printf("== Display: the aspect lock and the minimum window ==\n");
 
-    /* ── #325: THE ASPECT LIST. Native (square pixels) is index 0 and the default; the
-         forced ratios keep their indices; Stretch is last. (The registry NAME changed
-         with the meaning of 0, in settings.h, so no stored value is reinterpreted.) */
+    /* -- #325: THE ASPECT LIST. Native (square pixels) is index 0 and the default; the
+     * forced ratios keep their indices; Stretch is last. (The registry NAME changed
+     * with the meaning of 0, in settings.h, so no stored value is reinterpreted.)
+     */
     CHECK(PRESENT_ASPECT_NATIVE == 0 && PRESENT_ASPECT_4_3 == 1 && PRESENT_ASPECT_STRETCH == 4,
           "aspect indices: Native 0, 4:3 1, Stretch 4");
     {   INT numerator = 0, denominator = 0;
@@ -156,7 +174,7 @@ INT main(VOID)
     PresentFit(1000, 400, PRESENT_ASPECT_16_9, &left, &top, &width, &height);
     CHECK(width == 711 && height == 400, "16:9 in a 1000x400 client is 711x400, height-bound");
 
-    /* ── #325: THE PICTURE A WINDOW IS SIZED TO. 1x = one desktop pixel per frame pixel. */
+    /* -- #325: THE PICTURE A WINDOW IS SIZED TO. 1x = one desktop pixel per frame pixel. */
     {   INT pictureWidth, pictureHeight;
         PresentWindowPicture(PRESENT_ASPECT_NATIVE, 320, 200, 1, &pictureWidth, &pictureHeight);
         CHECK(pictureWidth == 320 && pictureHeight == 200, "window: 320x200 at 1x is 320x200 -- no 640x480 floor");
@@ -171,7 +189,7 @@ INT main(VOID)
         PresentWindowPicture(PRESENT_ASPECT_16_9, 640, 200, 1, &pictureWidth, &pictureHeight);
         CHECK(pictureWidth == 640 && pictureHeight == 360, "window: forced 16:9 -- 640x200 at 1x is 640x360"); }
 
-    /* ── #325: WHERE THE PICTURE GOES. */
+    /* -- #325: WHERE THE PICTURE GOES. */
     PresentLayout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_WHOLE, 1, 1680, 1050, 320, 200, &left, &top, &width, &height);
     CHECK(width == 1600 && height == 1000 && left == 40 && top == 25,
           "layout: 320x200 on 1680x1050, whole pixels -> 5x = 1600x1000, centred");

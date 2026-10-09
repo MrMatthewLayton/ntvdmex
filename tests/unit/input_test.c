@@ -1,9 +1,17 @@
-/* input_test.c -- off-VM unit battery for the keyboard input VDD (vdd_input.c).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM unit battery for the keyboard input VDD (vdd_input.c).
  *
  * M3 slice-6: exercise the key ring buffer + INT 16h servicer (ZF "key ready"
  * semantics) natively, no VM. The host owns blocking (INT 16h AH=00 waits on a
  * key event); here we test the pure non-blocking core.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include "vdd_input.h"
@@ -13,14 +21,22 @@ static INT g_Total = 0, g_Failures = 0;
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 /* Stand-in for guest segment 0x40. The ring lives in the GUEST's BIOS data area now, so a
-   test that leaves this NULL is testing nothing at all -- every push would be discarded. */
+ * test that leaves this NULL is testing nothing at all -- every push would be discarded.
+ */
 /* #274: the whole of segment 0x40, because 0040:0080/0082 may move the ring anywhere in it. */
 static BYTE g_BiosDataArea[0x10000];
 /* A fake clock for the keyboard transfer-time tests (T11), and an IRQ counter. */
 static UINT64 g_FakeMicroseconds = 0;
-static UINT64 InputTestFakeClock(VOID) { return g_FakeMicroseconds; }
+static UINT64 InputTestFakeClock(VOID)
+{
+    return g_FakeMicroseconds;
+}
+
 static UINT32 g_Irq1Count = 0;
-static VOID InputTestCountIrq(PVOID context, BYTE irq) { if (irq == 1) ++*(PUINT32)context; }
+static VOID InputTestCountIrq(PVOID context, BYTE irq)
+{
+    if (irq == 1) ++*(PUINT32)context;
+}
 
 static VOID InputTestFresh(PINPUT_STATE input, PVDD_BUS bus)
 {
@@ -79,7 +95,8 @@ INT main(VOID)
     /* T5: ring wraps; a FULL buffer discards the NEWEST key, as the BIOS does ---
      * (It used to drop the oldest. In a ring of whole keystrokes that merely loses the
      * wrong key; in the scancode FIFO the same rule deleted E0 prefixes and stranded
-     * break codes, which is what "arrows dead, space stuck" was made of.) */
+     * break codes, which is what "arrows dead, space stuck" was made of.)
+     */
     { INT index; InputTestFresh(&input, &bus);
       for (index = 0; index < 20; ++index) VddInputPush(&input, (WORD)(0x100 + index));  /* 15 fit */
       CHECK(VddInputPop(&input, &key) == 1 && key == 0x100, "ring: full -> oldest KEPT");
@@ -102,7 +119,8 @@ INT main(VOID)
 
     /* T7: INT 09h translation -- the step the stub never performed -------- *
      * A scancode is not a keystroke: it needs the E0 prefix, the shift state and the
-     * make/break distinction applied before it means anything to a program.          */
+     * make/break distinction applied before it means anything to a program.
+     */
     { InputTestFresh(&input, &bus);
       VddInputPushScanCode(&input, 0x1E); VddInputBiosConsume(&input);      /* 'a' */
       CHECK(VddInputPop(&input, &key) == 1 && key == 0x1E61, "int09: 1E -> AH=1E AL='a'");
@@ -114,11 +132,12 @@ INT main(VOID)
       CHECK((g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x02) != 0, "int09: LShift sets 0040:0017 bit 1");
       VddInputPushScanCode(&input, 0x1E); VddInputBiosConsume(&input);
       CHECK(VddInputPop(&input, &key) == 1 && key == 0x1E41, "int09: shift+1E -> 'A'");
-      VddInputPushScanCode(&input, 0xAA); VddInputBiosConsume(&input);      /* LShift up  */
+      VddInputPushScanCode(&input, 0xAA); VddInputBiosConsume(&input);      /* LShift up */
       CHECK((g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x02) == 0, "int09: LShift release clears the flag");
 
       /* The whole point: an arrow is E0 + code, and must arrive as AL=0 so the guest can
-         tell it from a character. This is the Skyroads menu case, end to end. */
+       * tell it from a character. This is the Skyroads menu case, end to end.
+       */
       VddInputPushScanCode(&input, 0xE0); VddInputBiosConsume(&input);
       CHECK(VddInputPop(&input, &key) == 0, "int09: E0 prefix alone stores nothing");
       VddInputPushScanCode(&input, 0x48); VddInputBiosConsume(&input);
@@ -132,13 +151,14 @@ INT main(VOID)
       memset(&registers, 0, sizeof registers); VddSetAh(&registers, 0x02);
       VddBusDeliverInterrupt(&bus, 0x16, &registers);
       CHECK(VddGetAl(&registers) == 0x04, "int16/02: reports Ctrl held from 0040:0017");
-      VddInputPushScanCode(&input, 0x2E); VddInputBiosConsume(&input);      /* Ctrl+C    */
+      VddInputPushScanCode(&input, 0x2E); VddInputBiosConsume(&input);      /* Ctrl+C */
       CHECK(VddInputPop(&input, &key) == 1 && key == 0x2E03, "int09: Ctrl+C -> AL=03");
     }
 
     /* T8: enhanced fns AH=10/11 mirror 00/01; unknown fn never phantom-keys *
      * (regression: QuickBasic INKEY$ uses AH=11h; a default ZF=0 made it     *
-     * read a phantom key and exit -- BLIT.EXE drew nothing.)                 */
+     * read a phantom key and exit -- BLIT.EXE drew nothing.)
+     */
     InputTestFresh(&input, &bus);
     memset(&registers, 0, sizeof registers); VddSetAh(&registers, 0x11);            /* enhanced check, empty */
     VddBusDeliverInterrupt(&bus, 0x16, &registers);
@@ -155,15 +175,16 @@ INT main(VOID)
     VddBusDeliverInterrupt(&bus, 0x16, &registers);
     CHECK(registers.ZeroFlag == 1, "int16/unknown: ZF=1, never a phantom key");
 
-    /* T9: ★ A GUEST THAT READS PORT 60h AND THEN CHAINS TO THE BIOS STILL GETS A KEY.
+    /* T9: A GUEST THAT READS PORT 60h AND THEN CHAINS TO THE BIOS STILL GETS A KEY.
      * QB.EXE 4.5's INT 09h hook (1DDB1h) does `in al,60h`, inspects the byte, and for
      * every ordinary key runs `int 0EFh` -- the BIOS handler it saved. On an 8042 the
      * BIOS's own `in al,60h` reads the SAME byte again. Ours had popped it, so the BIOS
-     * arm stored nothing and QBasic could not be typed into. */
+     * arm stored nothing and QBasic could not be typed into.
+     */
     { UINT32 value = 0;
       InputTestFresh(&input, &bus);
-      VddInputPushScanCode(&input, 0x1E);                      /* 'a' arrives         */
-      VddBusIo(&bus, 0x60, 1, 1, &value);                        /* the HOOK reads it   */
+      VddInputPushScanCode(&input, 0x1E);                      /* 'a' arrives */
+      VddBusIo(&bus, 0x60, 1, 1, &value);                        /* the HOOK reads it */
       CHECK(value == 0x1E, "int09-chain: the guest hook reads 1E from port 60h");
       CHECK(VddInputScanCodePending(&input) == 0, "int09-chain: ...and the FIFO is now empty");
       VddInputBiosConsume(&input);                             /* it chains to the BIOS */
@@ -174,9 +195,10 @@ INT main(VOID)
       VddInputBiosConsume(&input);
       CHECK(VddInputPop(&input, &key) == 0, "int09-chain: an owed byte is served ONCE");
       /* A hook that does NOT chain (Doom's) leaves nothing behind for a later key:
-         the next scancode supersedes the owed one, so one key press = one key. */
+       * the next scancode supersedes the owed one, so one key press = one key.
+       */
       VddInputPushScanCode(&input, 0x1F); VddBusIo(&bus, 0x60, 1, 1, &value);  /* 's', not chained */
-      VddInputPushScanCode(&input, 0x20); VddInputBiosConsume(&input);       /* 'd', BIOS path   */
+      VddInputPushScanCode(&input, 0x20); VddInputBiosConsume(&input);       /* 'd', BIOS path */
       CHECK(VddInputPop(&input, &key) == 1 && key == 0x2064, "int09-chain: a newer byte supersedes the owed one");
       CHECK(VddInputPop(&input, &key) == 0, "int09-chain: ...and the un-chained 's' is not resurrected");
       /* The break code of a key the hook read must not become a key either. */
@@ -187,45 +209,46 @@ INT main(VOID)
 
     /* T10: THE FOUR BIOS COLUMNS -- Shift, Ctrl and ALT, per the IBM table. Alt was
      * never consulted before, so Alt+F typed an 'f' where every DOS editor's menu bar
-     * expects 2100h. These are the exact codes editors bind. */
+     * expects 2100h. These are the exact codes editors bind.
+     */
     { InputTestFresh(&input, &bus);
-#define KEY(scanCode) (VddInputPushScanCode(&input, (BYTE)(scanCode)), VddInputBiosConsume(&input))
-#define EXPECT(code, message) CHECK(VddInputPop(&input, &key) == 1 && key == (code), message)
-#define NOKEY(message) CHECK(VddInputPop(&input, &key) == 0, message)
-      KEY(0x38); KEY(0x21); KEY(0xA1); KEY(0xB8);              /* Alt+F               */
+#define KEY(scanCode)           (VddInputPushScanCode(&input, (BYTE)(scanCode)), VddInputBiosConsume(&input))
+#define EXPECT(code, message)   CHECK(VddInputPop(&input, &key) == 1 && key == (code), message)
+#define NOKEY(message)          CHECK(VddInputPop(&input, &key) == 0, message)
+      KEY(0x38); KEY(0x21); KEY(0xA1); KEY(0xB8);              /* Alt+F */
       EXPECT(0x2100, "int09: Alt+F -> 2100h (a menu accelerator, NOT the letter f)");
-      KEY(0x38); KEY(0x3B); KEY(0xBB); KEY(0xB8);              /* Alt+F1              */
+      KEY(0x38); KEY(0x3B); KEY(0xBB); KEY(0xB8);              /* Alt+F1 */
       EXPECT(0x6800, "int09: Alt+F1 -> 6800h");
-      KEY(0x2A); KEY(0x3B); KEY(0xBB); KEY(0xAA);              /* Shift+F1            */
+      KEY(0x2A); KEY(0x3B); KEY(0xBB); KEY(0xAA);              /* Shift+F1 */
       EXPECT(0x5400, "int09: Shift+F1 -> 5400h");
-      KEY(0x1D); KEY(0x3B); KEY(0xBB); KEY(0x9D);              /* Ctrl+F1             */
+      KEY(0x1D); KEY(0x3B); KEY(0xBB); KEY(0x9D);              /* Ctrl+F1 */
       EXPECT(0x5E00, "int09: Ctrl+F1 -> 5E00h");
       KEY(0x1D); KEY(0xE0); KEY(0x4B); KEY(0xE0); KEY(0xCB); KEY(0x9D);   /* Ctrl+Left */
       EXPECT(0x73E0, "int09: Ctrl+grey Left (E0 4B) -> 73E0h (#254: AH=00h folds it to 7300h)");
-      KEY(0x38); KEY(0xE0); KEY(0x4B); KEY(0xE0); KEY(0xCB); KEY(0xB8);   /* Alt+Left  */
+      KEY(0x38); KEY(0xE0); KEY(0x4B); KEY(0xE0); KEY(0xCB); KEY(0xB8);   /* Alt+Left */
       EXPECT(0x9B00, "int09: Alt+Left -> 9B00h (enhanced BIOS)");
-      KEY(0x1D); KEY(0x02); KEY(0x82); KEY(0x9D);              /* Ctrl+1              */
+      KEY(0x1D); KEY(0x02); KEY(0x82); KEY(0x9D);              /* Ctrl+1 */
       NOKEY("int09: Ctrl+1 stores NOTHING, as the BIOS does");
-      KEY(0x1D); KEY(0x0E); KEY(0x8E); KEY(0x9D);              /* Ctrl+Backspace      */
+      KEY(0x1D); KEY(0x0E); KEY(0x8E); KEY(0x9D);              /* Ctrl+Backspace */
       EXPECT(0x0E7F, "int09: Ctrl+Backspace -> 0E7Fh");
-      KEY(0x38); KEY(0x39); KEY(0xB9); KEY(0xB8);              /* Alt+Space           */
+      KEY(0x38); KEY(0x39); KEY(0xB9); KEY(0xB8);              /* Alt+Space */
       EXPECT(0x3920, "int09: Alt+Space -> 3920h (Alt does not silence Space)");
-      KEY(0x3A); KEY(0xBA);                                    /* CapsLock on         */
+      KEY(0x3A); KEY(0xBA);                                    /* CapsLock on */
       KEY(0x1E); KEY(0x9E);
       EXPECT(0x1E41, "int09: CapsLock + a -> 'A'");
       KEY(0x2A); KEY(0x1E); KEY(0x9E); KEY(0xAA);
       EXPECT(0x1E61, "int09: CapsLock + Shift + a -> 'a' (Caps inverts Shift for letters)");
       KEY(0x02); KEY(0x82);
       EXPECT(0x0231, "int09: CapsLock leaves '1' alone");
-      KEY(0x3A); KEY(0xBA);                                    /* CapsLock off        */
+      KEY(0x3A); KEY(0xBA);                                    /* CapsLock off */
       KEY(0x47); KEY(0xC7);
       EXPECT(0x4700, "int09: keypad 7 with NumLock off -> Home (4700h)");
-      KEY(0x45); KEY(0xC5);                                    /* NumLock on          */
+      KEY(0x45); KEY(0xC5);                                    /* NumLock on */
       KEY(0x47); KEY(0xC7);
       EXPECT(0x4737, "int09: keypad 7 with NumLock on -> '7'");
       KEY(0x2A); KEY(0x47); KEY(0xC7); KEY(0xAA);
       EXPECT(0x4700, "int09: Shift undoes NumLock -> Home again");
-      KEY(0xE0); KEY(0x1C); KEY(0xE0); KEY(0x9C);              /* keypad Enter        */
+      KEY(0xE0); KEY(0x1C); KEY(0xE0); KEY(0x9C);              /* keypad Enter */
       EXPECT(0xE00D, "int09: keypad Enter (E0 1C) -> E00Dh (#254: AH=00h folds it to 1C0Dh)");
       KEY(0x57); KEY(0xD7);
       EXPECT(0x8500, "int09: F11 -> 8500h");
@@ -235,27 +258,28 @@ INT main(VOID)
 #undef NOKEY
     }
 
-    /* T11: ★ THE KEYBOARD'S TRANSFER TIME -- two reads in one handler see ONE byte.
+    /* T11: THE KEYBOARD'S TRANSFER TIME -- two reads in one handler see ONE byte.
      * QB.EXE layers two INT 09h hooks and then chains the BIOS; all three read port 60h
      * for the same interrupt. With bytes already queued our FIFO handed each a different
      * one. With a clock the next byte is held for INPUT_KEYBOARD_TRANSFER_US after a pop, exactly as the
-     * keyboard cannot send while the 8042's buffer is full. */
+     * keyboard cannot send while the 8042's buffer is full.
+     */
     { UINT32 value = 0; INT irqsBefore;
       InputTestFresh(&input, &bus);
       input.TimeMicroseconds = InputTestFakeClock; g_FakeMicroseconds = 1000000;
       VddBusSetSinks(&bus, InputTestCountIrq, &g_Irq1Count, 0, 0); g_Irq1Count = 0;
-      VddInputPushScanCode(&input, 0x38);                      /* Alt make            */
-      VddInputPushScanCode(&input, 0x21);                      /* F make              */
-      VddInputPushScanCode(&input, 0xA1);                      /* F break             */
-      VddInputPushScanCode(&input, 0xB8);                      /* Alt break           */
+      VddInputPushScanCode(&input, 0x38);                      /* Alt make */
+      VddInputPushScanCode(&input, 0x21);                      /* F make */
+      VddInputPushScanCode(&input, 0xA1);                      /* F break */
+      VddInputPushScanCode(&input, 0xB8);                      /* Alt break */
       CHECK(g_Irq1Count == 1, "hold: four bytes queued at once raise ONE interrupt");
-      VddBusIo(&bus, 0x60, 1, 1, &value);                        /* hook 1 reads        */
+      VddBusIo(&bus, 0x60, 1, 1, &value);                        /* hook 1 reads */
       CHECK(value == 0x38, "hold: the first hook reads 38 (Alt make)");
-      VddBusIo(&bus, 0x60, 1, 1, &value);                        /* hook 2 re-reads     */
+      VddBusIo(&bus, 0x60, 1, 1, &value);                        /* hook 2 re-reads */
       CHECK(value == 0x38 && input.ScanCodeHeldReads == 1, "hold: the second hook reads the SAME byte (was 21: the sequence scrambled)");
       VddBusIo(&bus, 0x64, 1, 1, &value);
       CHECK((value & 1) == 0, "hold: OBF reads clear while the keyboard is still sending the next byte");
-      VddInputBiosConsume(&input);                             /* BIOS chained        */
+      VddInputBiosConsume(&input);                             /* BIOS chained */
       CHECK(VddInputPop(&input, &key) == 0 && (g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x08),
             "hold: the chained BIOS translates the owed 38 -> Alt flag set, no key, FIFO untouched");
       CHECK(VddInputScanCodesQueued(&input) == 3, "hold: three bytes still queued");
@@ -280,14 +304,15 @@ INT main(VOID)
       input.TimeMicroseconds = 0; VddBusSetSinks(&bus, 0, 0, 0, 0);
     }
 
-    /* T12: ★ THE WRITE SIDE OF THE RING -- INT 16h AH=05h, AH=09h, AH=03h.
-         All three fell into the `default` arm, which sets ZF and leaves AX exactly
-         as the caller passed it. So a key-stuffing program read its OWN byte back
-         out of AL and took it for "stored, success", and nothing was ever queued.
-         Found by p_kbd.asm against the 6.22 oracle -- and only once that probe
-         POISONED AL, because "untouched" and "answered 00" are the same picture
-         otherwise. This is the whole of DOSKEY, of an installer that pre-answers
-         its own prompt, and of every TSR that drives another program. */
+    /* T12: THE WRITE SIDE OF THE RING -- INT 16h AH=05h, AH=09h, AH=03h.
+     * All three fell into the `default` arm, which sets ZF and leaves AX exactly
+     * as the caller passed it. So a key-stuffing program read its OWN byte back
+     * out of AL and took it for "stored, success", and nothing was ever queued.
+     * Found by p_kbd.asm against the 6.22 oracle -- and only once that probe
+     * POISONED AL, because "untouched" and "answered 00" are the same picture
+     * otherwise. This is the whole of DOSKEY, of an installer that pre-answers
+     * its own prompt, and of every TSR that drives another program.
+     */
     {   INT index;
         VddInputReset(&input);
         memset(&registers, 0, sizeof registers); VddSetAh(&registers, 0x05); VddSetAl(&registers, 0xB1);
@@ -298,10 +323,12 @@ INT main(VOID)
               "int16/05: ...and the key is really in the ring, in order");
 
         /* FULL is the other half of the contract: a 16-slot ring takes fifteen and
-           then REFUSES, rather than overwriting the head and losing a keystroke the
-           guest has already been told about. */
+         * then REFUSES, rather than overwriting the head and losing a keystroke the
+         * guest has already been told about.
+         */
         VddInputReset(&input);
-        for (index = 0; index < 15; ++index) {
+        for (index = 0; index < 15; ++index)
+        {
             memset(&registers, 0, sizeof registers); VddSetAh(&registers, 0x05); VddSetAl(&registers, 0xB1);
             registers.Ecx = (UINT32)(0x3930 + (index % 10));
             VddBusDeliverInterrupt(&bus, 0x16, &registers);
@@ -316,8 +343,9 @@ INT main(VOID)
               "int16/05: ...and the OLDEST key survived the refusal");
 
         /* AH=09h: MEASURED, not derived -- the bit definitions disagree between
-           references. #188: 0xB1 on PCem's genuine AMI BIOS (and DOSBox-X); the old
-           0x30 was QEMU's SeaBIOS. Bit 4 promises AH=0Ah, so that answers too. */
+         * references. #188: 0xB1 on PCem's genuine AMI BIOS (and DOSBox-X); the old
+         * 0x30 was QEMU's SeaBIOS. Bit 4 promises AH=0Ah, so that answers too.
+         */
         memset(&registers, 0, sizeof registers); VddSetAh(&registers, 0x09); VddSetAl(&registers, 0xB1);
         VddBusDeliverInterrupt(&bus, 0x16, &registers);
         CHECK(VddGetAl(&registers) == 0xB1, "int16/09: supported-function mask = B1 (PCem AMI BIOS)");
@@ -326,8 +354,9 @@ INT main(VOID)
         CHECK((registers.Ebx & 0xFFFF) == 0x41AB, "int16/0A: keyboard ID 41AB (MF2), as 09h bit 4 promises");
 
         /* #188: AH=00h/01h DISCARD a code only a 101-key keyboard makes (F11 = 8500h),
-           consuming it -- p_kbd 16.01.enh on PCem: empty, head moved on -- while
-           AH=11h still sees it. Gray-key E0 forms are rewritten for 00h/01h. */
+         * consuming it -- p_kbd 16.01.enh on PCem: empty, head moved on -- while
+         * AH=11h still sees it. Gray-key E0 forms are rewritten for 00h/01h.
+         */
         VddInputReset(&input);
         VddInputPush(&input, 0x8500);
         memset(&registers, 0, sizeof registers); VddSetAh(&registers, 0x11);
@@ -347,38 +376,43 @@ INT main(VOID)
         VddInputReset(&input);
 
         /* AH=03h stores nothing, but it must be ANSWERED: a guest that sets the
-           typematic rate and gets CF=1 can conclude there is no BIOS here at all. */
+         * typematic rate and gets CF=1 can conclude there is no BIOS here at all.
+         */
         memset(&registers, 0, sizeof registers); VddSetAh(&registers, 0x03); VddSetAl(&registers, 0x05); registers.CarryFlag = 1;
         VddBusDeliverInterrupt(&bus, 0x16, &registers);
         CHECK(registers.CarryFlag == 0, "int16/03: set typematic rate is accepted (CF=0)");
         VddInputReset(&input);
     }
 
-    /* ── THE 8042 AS A CONTROLLER. docs/ref/kbc.md; docs/inventory/kbc.md. ─────
-       Everything above is the keyboard's byte stream. These are the chip it
-       passes through -- and two of the things it controls have nothing to do
-       with typing. Marked from the code first, so every one was predicted to
-       fail; p_kbc.asm asks the same questions of three real machines. */
+    /* THE 8042 AS A CONTROLLER. docs/ref/kbc.md; docs/inventory/kbc.md:
+     * Everything above is the keyboard's byte stream. These are the chip it
+     * passes through -- and two of the things it controls have nothing to do
+     * with typing. Marked from the code first, so every one was predicted to
+     * fail; p_kbc.asm asks the same questions of three real machines.
+     */
     {
         UINT32 value;
         VddInputReset(&input);
 
-        /* THE STATUS REGISTER. ★ ALL THREE ORACLES ANSWER 0x1C with OBF and AUXB
-           masked off (p_kbc kbc.status.idle) -- 6.22, dosbox-x and PCem alike.
-           Unanimous, so no judgement was needed; we answered 0x00. Bit 2 is SYS,
-           which POST sets on any machine DOS runs on. */
+        /* THE STATUS REGISTER. ALL THREE ORACLES ANSWER 0x1C with OBF and AUXB
+         * masked off (p_kbc kbc.status.idle) -- 6.22, dosbox-x and PCem alike.
+         * Unanimous, so no judgement was needed; we answered 0x00. Bit 2 is SYS,
+         * which POST sets on any machine DOS runs on.
+         */
         VddBusIo(&bus, 0x64, 1, 1, &value);
-        /* ⚠ 0x1C, NOT 0x14. This check was written as 0x14 -- SYS and INH -- and
-             the probe then measured 0x1C on ALL THREE oracles. The extra bit is
-             A2 (bit 3): "the last write went to 64h", which on a machine DOS is
-             running on was POST's own last command. Writing the expectation from
-             the datasheet's bit list got the bits right and their POST STATE
-             wrong, which is exactly what an oracle is for. */
+        /* [CAUTION]: 0x1C, NOT 0x14. This check was written as 0x14 -- SYS and INH -- and
+         * the probe then measured 0x1C on ALL THREE oracles. The extra bit is
+         * A2 (bit 3): "the last write went to 64h", which on a machine DOS is
+         * running on was POST's own last command. Writing the expectation from
+         * the datasheet's bit list got the bits right and their POST STATE
+         * wrong, which is exactly what an oracle is for.
+         */
         CHECK((value & 0xDE) == 0x1C, "8042: idle status has SYS, INH and A2 set");
         CHECK((value & 0x01) == 0, "8042: ...and OBF clear with nothing buffered");
 
         /* A COMMAND IS ANSWERED. PCem, on a real AMI BIOS, replies 0x55 to the
-           self test; QEMU and dosbox-x do not answer it at all. */
+         * self test; QEMU and dosbox-x do not answer it at all.
+         */
         value = 0xAA; VddBusIo(&bus, 0x64, 1, 0, &value);
         VddBusIo(&bus, 0x64, 1, 1, &value);
         CHECK((value & 0x01) != 0, "8042: AAh self test presents a reply (OBF set)");
@@ -388,13 +422,14 @@ INT main(VOID)
         CHECK((value & 0x01) == 0, "8042: ...consumed by the read, so OBF clears");
 
         /* A CONTROLLER REPLY MUST NOT BE A SCANCODE. This is the whole reason
-           the reply lives in its own byte: with a key queued AND a command
-           pending, the command's answer comes first. Getting this wrong hands a
-           driver a KEYSTROKE where it asked for the output port, and it reads
-           bit 1 of it as the state of the A20 gate. */
+         * the reply lives in its own byte: with a key queued AND a command
+         * pending, the command's answer comes first. Getting this wrong hands a
+         * driver a KEYSTROKE where it asked for the output port, and it reads
+         * bit 1 of it as the state of the A20 gate.
+         */
         VddInputReset(&input);
-        VddInputPushScanCode(&input, 0x1E);          /* 'a' waiting             */
-        value = 0xD0; VddBusIo(&bus, 0x64, 1, 0, &value);  /* read output port        */
+        VddInputPushScanCode(&input, 0x1E);          /* 'a' waiting */
+        value = 0xD0; VddBusIo(&bus, 0x64, 1, 0, &value);  /* read output port */
         VddBusIo(&bus, 0x60, 1, 1, &value);
         CHECK(value != 0x1E, "8042: a command reply is not the queued scancode");
         CHECK((value & 0x01) != 0, "8042: the output port has the reset line HIGH");
@@ -404,21 +439,22 @@ INT main(VOID)
         VddInputReset(&input);
         CHECK(VddInputGetA20(&input) == 1, "a20: open after POST, as on a real machine");
 
-        value = 0xD1; VddBusIo(&bus, 0x64, 1, 0, &value);  /* write output port       */
+        value = 0xD1; VddBusIo(&bus, 0x64, 1, 0, &value);  /* write output port */
         value = 0xDD; VddBusIo(&bus, 0x60, 1, 0, &value);  /* A20 OFF, reset line high */
         CHECK(VddInputGetA20(&input) == 0, "a20: the 8042 output port closes it");
         VddBusIo(&bus, 0x92, 1, 1, &value);
         CHECK((value & 0x02) == 0, "a20: ...and port 92h agrees it is shut");
 
-        value = 0x02; VddBusIo(&bus, 0x92, 1, 0, &value);  /* fast A20 opens it       */
+        value = 0x02; VddBusIo(&bus, 0x92, 1, 0, &value);  /* fast A20 opens it */
         CHECK(VddInputGetA20(&input) == 1, "a20: port 92h opens it");
         value = 0xD0; VddBusIo(&bus, 0x64, 1, 0, &value);
         VddBusIo(&bus, 0x60, 1, 1, &value);
         CHECK((value & 0x02) != 0, "a20: ...and the 8042 output port agrees it is open");
 
-        /* ⛔ A RESET REQUEST IS COUNTED, NOT OBEYED. A VDD cannot reboot the
-           machine it is a guest on, and pretending to would be worse than the
-           count -- but dropping it silently is worse still. */
+        /* [WARNING]: A RESET REQUEST IS COUNTED, NOT OBEYED. A VDD cannot reboot the
+         * machine it is a guest on, and pretending to would be worse than the
+         * count -- but dropping it silently is worse still.
+         */
         {
             UINT32 before = input.ControllerResetsAsked;
             value = 0xFE; VddBusIo(&bus, 0x64, 1, 0, &value);
@@ -459,13 +495,14 @@ INT main(VOID)
     }
 
     /* T12: #254 -- the grey-key E0 forms, AH=12h's layout, and what the BIOS INT 09h
-     * does besides store a key (Ctrl-Break, Print Screen, SysReq, Pause, Insert). */
+     * does besides store a key (Ctrl-Break, Print Screen, SysReq, Pause, Insert).
+     */
     { INT action;
       InputTestFresh(&input, &bus);
-#define KEY(scanCode) (VddInputPushScanCode(&input, (BYTE)(scanCode)), VddInputBiosConsume(&input))
-#define EXPECT(code, message) CHECK(VddInputPop(&input, &key) == 1 && key == (code), message)
-#define NOKEY(message) CHECK(VddInputPop(&input, &key) == 0, message)
-#define AH12() (memset(&registers, 0, sizeof registers), VddSetAh(&registers, 0x12), VddBusDeliverInterrupt(&bus, 0x16, &registers), (BYTE)(VddGetAx(&registers) >> 8))
+#define KEY(scanCode)           (VddInputPushScanCode(&input, (BYTE)(scanCode)), VddInputBiosConsume(&input))
+#define EXPECT(code, message)   CHECK(VddInputPop(&input, &key) == 1 && key == (code), message)
+#define NOKEY(message)          CHECK(VddInputPop(&input, &key) == 0, message)
+#define AH12()                  (memset(&registers, 0, sizeof registers), VddSetAh(&registers, 0x12), VddBusDeliverInterrupt(&bus, 0x16, &registers), (BYTE)(VddGetAx(&registers) >> 8))
       KEY(0xE0); KEY(0x4B); KEY(0xE0); KEY(0xCB);
       EXPECT(0x4BE0, "e0: grey Left -> 4BE0h");
       KEY(0x4B); KEY(0xCB);
@@ -574,25 +611,27 @@ INT main(VOID)
     }
 
     /* T13: #244 / #274 -- the keyboard BIOS remainders.
-         (a) the ring's bounds come from 0040:0080/0082, not from two constants;
-         (b) Alt + keypad digits = the character with that decimal code (0040:0019);
-         (c) the INT 09h handler split around INT 15h AH=4Fh: fetch() + translate();
-         (d) 8042 command D2h puts a byte in the output buffer as if typed, IRQ1 included;
-         (e) the bytes the host sends for Pause and Ctrl+Break. */
+     * (a) the ring's bounds come from 0040:0080/0082, not from two constants;
+     * (b) Alt + keypad digits = the character with that decimal code (0040:0019);
+     * (c) the INT 09h handler split around INT 15h AH=4Fh: fetch() + translate();
+     * (d) 8042 command D2h puts a byte in the output buffer as if typed, IRQ1 included;
+     * (e) the bytes the host sends for Pause and Ctrl+Break.
+     */
     {   WORD alValue;
         UINT32 value;
         BYTE  bytes[6];
         INT      count, noRepeat, scanCode, action, index, isOk;
-#define KEY(scanCode) (VddInputPushScanCode(&input, (BYTE)(scanCode)), VddInputBiosConsume(&input))
-#define EXPECT(code, message) CHECK(VddInputPop(&input, &key) == 1 && key == (code), message)
-#define NOKEY(message) CHECK(VddInputPop(&input, &key) == 0, message)
-#define W16(offset) ((WORD)(g_BiosDataArea[(offset)] | (g_BiosDataArea[(offset) + 1] << 8)))
-#define SET16(offset, word) (g_BiosDataArea[(offset)] = (BYTE)(word), g_BiosDataArea[(offset) + 1] = (BYTE)((word) >> 8))
+#define KEY(scanCode)           (VddInputPushScanCode(&input, (BYTE)(scanCode)), VddInputBiosConsume(&input))
+#define EXPECT(code, message)   CHECK(VddInputPop(&input, &key) == 1 && key == (code), message)
+#define NOKEY(message)          CHECK(VddInputPop(&input, &key) == 0, message)
+#define W16(offset)             ((WORD)(g_BiosDataArea[(offset)] | (g_BiosDataArea[(offset) + 1] << 8)))
+#define SET16(offset, word)     (g_BiosDataArea[(offset)] = (BYTE)(word), g_BiosDataArea[(offset) + 1] = (BYTE)((word) >> 8))
+
         /* (a) */
         InputTestFresh(&input, &bus);
         CHECK(W16(0x80) == 0x001E && W16(0x82) == 0x003E,
               "bounds: reset writes POST's 0040:0080 = 001Eh, 0040:0082 = 003Eh (nothing wrote them)");
-        SET16(0x82, 0x0026);                                    /* a 4-slot ring          */
+        SET16(0x82, 0x0026);                                    /* a 4-slot ring */
         CHECK(VddInputPush(&input, 0x1E61) && VddInputPush(&input, 0x3062) && VddInputPush(&input, 0x2E63),
               "bounds: a 4-slot ring (1E..26) takes three keys");
         CHECK(VddInputPush(&input, 0x2064) == 0, "bounds: ...and refuses the fourth (full = 3, not 15)");
@@ -617,11 +656,11 @@ INT main(VOID)
         for (index = 0; index < 63; ++index) isOk &= (VddInputPop(&input, &key) && key == (WORD)(0x1E00 + index));
         CHECK(isOk && VddInputPop(&input, &key) == 0, "bounds: ...and come back out in order");
         /* a pair that cannot describe a ring falls back to POST's */
-        SET16(0x80, 0x0021); SET16(0x82, 0x0010);               /* odd and inverted       */
+        SET16(0x80, 0x0021); SET16(0x82, 0x0010);               /* odd and inverted */
         CHECK(VddInputPush(&input, 0x1E61) && W16(BIOS_BDA_KEYBOARD_HEAD) == 0x001E && W16(BIOS_BDA_KEYBOARD_TAIL) == 0x0020,
               "bounds: an odd / inverted pair is ignored -> the 001E..003E ring (head/tail reset into it)");
         CHECK(VddInputPop(&input, &key) && key == 0x1E61, "bounds: ...and the key is readable there");
-        SET16(0x80, 0x001E); SET16(0x82, 0x0022);               /* 2 slots: one key        */
+        SET16(0x80, 0x001E); SET16(0x82, 0x0022);               /* 2 slots: one key */
         memset(&registers, 0, sizeof registers); VddSetAh(&registers, 0x05); registers.Ecx = 0x1E61; VddBusDeliverInterrupt(&bus, 0x16, &registers);
         alValue = (WORD)VddGetAl(&registers);
         memset(&registers, 0, sizeof registers); VddSetAh(&registers, 0x05); registers.Ecx = 0x3062; VddBusDeliverInterrupt(&bus, 0x16, &registers);
@@ -650,7 +689,7 @@ INT main(VOID)
         KEY(0x38); KEY(0xE0); KEY(0x4F); KEY(0xE0); KEY(0xCF); KEY(0xB8);  /* Alt + grey End */
         EXPECT(0x9F00, "altnum: a GREY key is not a keypad digit (Alt+grey End = 9F00h)");
         NOKEY("altnum: ...and accumulates nothing");
-        KEY(0x45); KEY(0xC5);                                   /* NumLock on: no effect  */
+        KEY(0x45); KEY(0xC5);                                   /* NumLock on: no effect */
         KEY(0xE0); KEY(0x38); KEY(0x48); KEY(0xC8); KEY(0xE0); KEY(0xB8);  /* right Alt 8 */
         EXPECT(0x0008, "altnum: right Alt works too, whatever NumLock says (Alt+8 -> 0008h)");
         KEY(0x38); KEY(0xE0); KEY(0x38); KEY(0x49); KEY(0xC9); KEY(0xB8);  /* both Alts, 9 */
@@ -709,14 +748,22 @@ INT main(VOID)
         InputTestFresh(&input, &bus);
         count = VddInputHostKeyBytes(0x45, 0, 0, bytes, &noRepeat);
         action = INPUT_ACTION_NONE;
-        for (index = 0; index < count; ++index) { INT keyAction = KEY(bytes[index]); if (keyAction != INPUT_ACTION_NONE) action = keyAction; }
+        for (index = 0; index < count; ++index)
+        {
+            INT keyAction = KEY(bytes[index]);
+            if (keyAction != INPUT_ACTION_NONE) action = keyAction;
+        }
         CHECK(action == INPUT_ACTION_PAUSE && (g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS2] & 0x08) && !(g_BiosDataArea[BIOS_BDA_SHIFT_FLAGS] & 0x20),
               "host+bios: the Pause key now PAUSES (0018 bit 3) instead of toggling NumLock");
         VddInputPauseCancel(&input);
-        KEY(0x1D);                                              /* Ctrl down           */
+        KEY(0x1D);                                              /* Ctrl down */
         count = VddInputHostKeyBytes(0x46, 1, 0, bytes, &noRepeat);
         action = INPUT_ACTION_NONE;
-        for (index = 0; index < count; ++index) { INT keyAction = KEY(bytes[index]); if (keyAction != INPUT_ACTION_NONE) action = keyAction; }
+        for (index = 0; index < count; ++index)
+        {
+            INT keyAction = KEY(bytes[index]);
+            if (keyAction != INPUT_ACTION_NONE) action = keyAction;
+        }
         KEY(0x9D);
         CHECK(action == INPUT_ACTION_BREAK && (g_BiosDataArea[0x71] & 0x80), "host+bios: Ctrl+Break -> INT 1Bh action, 0071h bit 7");
         EXPECT(0x0000, "host+bios: ...0000h in the ring");

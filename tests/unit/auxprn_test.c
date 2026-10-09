@@ -1,4 +1,6 @@
-/* auxprn_test.c -- off-VM battery for DOS's AUX/PRN driver code (GH #251).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM battery for DOS's AUX/PRN driver code (GH #251).
  *
  * src/dos/dos_auxprn.h is guest code the host resumes the V86 guest in for INT 21h
  * AH=03h/04h/05h and AH=3Fh/40h on handles 3/4. It is RUN here, in the host's own
@@ -15,22 +17,45 @@
  *
  * The interpreter's own names (icpu, istep, EFLAGS_CF_U) and the four callbacks it requires of
  * its includer (V86HostRead8, V86HostWrite8, V86HostIn, V86HostOut) are v86interp.h's, not this test's.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>                     /* v86interp.h needs the fixed-width types ... */
-#include "../../src/ntvdmex_types.h"    /* ... and BYTE                                */
+#include "../../src/ntvdmex_types.h"    /* ... and BYTE */
 
-#define AUXPRN_TEST_MEMORY_SIZE      0x110000    /* 1MB + HMA                           */
-#define AUXPRN_TEST_FLOATING_BUS     0xFF        /* what a port nobody answers reads    */
+#define AUXPRN_TEST_MEMORY_SIZE     0x110000    /* 1MB + HMA */
+#define AUXPRN_TEST_FLOATING_BUS    0xFF        /* What a port nobody answers reads */
 
 static BYTE g_Memory[AUXPRN_TEST_MEMORY_SIZE];
-static BYTE V86HostRead8(DWORD linear) { return (linear < sizeof g_Memory) ? g_Memory[linear] : 0; }
+static BYTE V86HostRead8(DWORD linear)
+{
+    return (linear < sizeof g_Memory) ? g_Memory[linear] : 0;
+}
+
 static VOID V86HostWrite8(DWORD linear, BYTE value)
-{ if (linear < sizeof g_Memory) g_Memory[linear] = value; }
+{
+    if (linear < sizeof g_Memory) g_Memory[linear] = value;
+}
+
 static DWORD V86HostIn(WORD port, INT width)
-{ (VOID)port; (VOID)width; return AUXPRN_TEST_FLOATING_BUS; }
-static VOID V86HostOut(WORD port, INT width, DWORD value) { (VOID)port; (VOID)width; (VOID)value; }
+{
+    (VOID)port;
+    (VOID)width;
+    return AUXPRN_TEST_FLOATING_BUS;
+}
+
+static VOID V86HostOut(WORD port, INT width, DWORD value)
+{
+    (VOID)port;
+    (VOID)width;
+    (VOID)value;
+}
 
 #include "../../src/host/v86interp.h"
 #include "dos_layout.h"
@@ -42,79 +67,81 @@ static INT g_Total = 0, g_Failures = 0;
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 /* The interpreter's register numbering (icpu.r[] and icpu.seg[]). */
-#define AUXPRN_TEST_AX               0
-#define AUXPRN_TEST_CX               1
-#define AUXPRN_TEST_DX               2
-#define AUXPRN_TEST_BX               3
-#define AUXPRN_TEST_SP               4
-#define AUXPRN_TEST_BP               5
-#define AUXPRN_TEST_SI               6
-#define AUXPRN_TEST_ES               0
-#define AUXPRN_TEST_CS               1
-#define AUXPRN_TEST_SS               2
-#define AUXPRN_TEST_DS               3
-#define AUXPRN_TEST_INITIAL_FLAGS    0x0002
-#define AUXPRN_TEST_LOW_BYTE         0xFF
-#define AUXPRN_TEST_HIGH_WORD        0xFFFF0000u
-#define AUXPRN_TEST_AH_SHIFT         8
+#define AUXPRN_TEST_AX                      0
+#define AUXPRN_TEST_CX                      1
+#define AUXPRN_TEST_DX                      2
+#define AUXPRN_TEST_BX                      3
+#define AUXPRN_TEST_SP                      4
+#define AUXPRN_TEST_BP                      5
+#define AUXPRN_TEST_SI                      6
+#define AUXPRN_TEST_ES                      0
+#define AUXPRN_TEST_CS                      1
+#define AUXPRN_TEST_SS                      2
+#define AUXPRN_TEST_DS                      3
+#define AUXPRN_TEST_INITIAL_FLAGS           0x0002
+#define AUXPRN_TEST_LOW_BYTE                0xFF
+#define AUXPRN_TEST_HIGH_WORD               0xFFFF0000u
+#define AUXPRN_TEST_AH_SHIFT                8
 
 /* Layout: the driver at DOS_CTAB_SEG:DOS_AUXPRN_OFF; the BIOS "handlers" are a HLT
-   (unmodelled -> the interpreter stops there) followed by an IRET; the INT 21h
-   caller's return address is another HLT. */
-#define AUXPRN_TEST_INT17_SEGMENT    0x2000
-#define AUXPRN_TEST_INT14_SEGMENT    0x2100
-#define AUXPRN_TEST_RETURN_SEGMENT   0x3000
-#define AUXPRN_TEST_DATA_SEGMENT     0x4000
-#define AUXPRN_TEST_STACK_SEGMENT    0x5000
-#define AUXPRN_TEST_HLT              0xF4
-#define AUXPRN_TEST_IRET             0xCF
-#define AUXPRN_TEST_HLT_IP           0        /* each handler: HLT at 0 ...            */
-#define AUXPRN_TEST_IRET_IP          1        /* ... then IRET                         */
-#define AUXPRN_TEST_INT14            0x14
-#define AUXPRN_TEST_INT17            0x17
-#define AUXPRN_TEST_VECTOR_SIZE      4        /* an IVT entry: offset, then segment    */
-#define AUXPRN_TEST_VECTOR_SEGMENT   2
-#define AUXPRN_TEST_VECTOR_SEGMENT_HIGH 3
+ * (unmodelled -> the interpreter stops there) followed by an IRET; the INT 21h
+ * caller's return address is another HLT.
+ */
+#define AUXPRN_TEST_INT17_SEGMENT           0x2000
+#define AUXPRN_TEST_INT14_SEGMENT           0x2100
+#define AUXPRN_TEST_RETURN_SEGMENT          0x3000
+#define AUXPRN_TEST_DATA_SEGMENT            0x4000
+#define AUXPRN_TEST_STACK_SEGMENT           0x5000
+#define AUXPRN_TEST_HLT                     0xF4
+#define AUXPRN_TEST_IRET                    0xCF
+#define AUXPRN_TEST_HLT_IP                  0       /* Each handler: HLT at 0 ... */
+#define AUXPRN_TEST_IRET_IP                 1       /* ... then IRET */
+#define AUXPRN_TEST_INT14                   0x14
+#define AUXPRN_TEST_INT17                   0x17
+#define AUXPRN_TEST_VECTOR_SIZE             4       /* An IVT entry: offset, then segment */
+#define AUXPRN_TEST_VECTOR_SEGMENT          2
+#define AUXPRN_TEST_VECTOR_SEGMENT_HIGH     3
 
 /* The INT 21h frame the stub leaves on the stack: IP, CS, FLAGS, below the top. */
-#define AUXPRN_TEST_STACK_TOP        0xFFF0
-#define AUXPRN_TEST_FRAME_SIZE       6
-#define AUXPRN_TEST_FRAME_IP         6
-#define AUXPRN_TEST_FRAME_IP_HIGH    5
-#define AUXPRN_TEST_FRAME_CS         4
-#define AUXPRN_TEST_FRAME_CS_HIGH    3
-#define AUXPRN_TEST_FRAME_FLAGS      2
-#define AUXPRN_TEST_FRAME_FLAGS_HIGH 1
+#define AUXPRN_TEST_STACK_TOP               0xFFF0
+#define AUXPRN_TEST_FRAME_SIZE              6
+#define AUXPRN_TEST_FRAME_IP                6
+#define AUXPRN_TEST_FRAME_IP_HIGH           5
+#define AUXPRN_TEST_FRAME_CS                4
+#define AUXPRN_TEST_FRAME_CS_HIGH           3
+#define AUXPRN_TEST_FRAME_FLAGS             2
+#define AUXPRN_TEST_FRAME_FLAGS_HIGH        1
 
 /* What the recording BIOS answers. */
-#define AUXPRN_TEST_PRINTER_STATUS   0x9000   /* INT 17h: AH = 90h                     */
-#define AUXPRN_TEST_SERIAL_SEND      1        /* INT 14h AH=01h: send AL               */
-#define AUXPRN_TEST_SERIAL_RECEIVE   2        /* INT 14h AH=02h: receive -> AL         */
-#define AUXPRN_TEST_SERIAL_STATUS    3        /* INT 14h AH=03h: status                */
-#define AUXPRN_TEST_SEND_STATUS      0x6000
-#define AUXPRN_TEST_LINE_STATUS      0x6130
-#define AUXPRN_TEST_RECEIVE_SCRIPT   "Qr\rwxyz"
+#define AUXPRN_TEST_PRINTER_STATUS          0x9000  /* INT 17h: AH = 90h */
+#define AUXPRN_TEST_SERIAL_SEND             1       /* INT 14h AH=01h: send AL */
+#define AUXPRN_TEST_SERIAL_RECEIVE          2       /* INT 14h AH=02h: receive -> AL */
+#define AUXPRN_TEST_SERIAL_STATUS           3       /* INT 14h AH=03h: status */
+#define AUXPRN_TEST_SEND_STATUS             0x6000
+#define AUXPRN_TEST_LINE_STATUS             0x6130
+#define AUXPRN_TEST_RECEIVE_SCRIPT          "Qr\rwxyz"
 
 /* AuxPrnTestRunEntry's answers. */
-#define AUXPRN_TEST_RETURNED         0
-#define AUXPRN_TEST_RAN_AWAY         (-1)
-#define AUXPRN_TEST_DERAILED         (-2)
-#define AUXPRN_TEST_STEP_LIMIT       100000
-#define AUXPRN_TEST_MAX_CALLS        64
+#define AUXPRN_TEST_RETURNED                0
+#define AUXPRN_TEST_RAN_AWAY                (-1)
+#define AUXPRN_TEST_DERAILED                (-2)
+#define AUXPRN_TEST_STEP_LIMIT              100000
+#define AUXPRN_TEST_MAX_CALLS               64
 
 /* Registers the driver must give back unchanged. */
-#define AUXPRN_TEST_POISON_BX        0xB1B1
-#define AUXPRN_TEST_POISON_CX        0xC1C1
-#define AUXPRN_TEST_POISON_SI        0x5151
-#define AUXPRN_TEST_POISON_BP        0xBBBB
-#define AUXPRN_TEST_POISON_ES        0xE5E5
-#define AUXPRN_TEST_BUFFER_POISON    0xEE
+#define AUXPRN_TEST_POISON_BX               0xB1B1
+#define AUXPRN_TEST_POISON_CX               0xC1C1
+#define AUXPRN_TEST_POISON_SI               0x5151
+#define AUXPRN_TEST_POISON_BP               0xBBBB
+#define AUXPRN_TEST_POISON_ES               0xE5E5
+#define AUXPRN_TEST_BUFFER_POISON           0xEE
 
 /* Where the C0h table and the DOS-resident block end. */
-#define AUXPRN_TEST_SYSCONF_SIZE     10
-#define AUXPRN_TEST_BLOCK_END        0x6F0
+#define AUXPRN_TEST_SYSCONF_SIZE            10
+#define AUXPRN_TEST_BLOCK_END               0x6F0
 
-typedef struct _AUXPRN_TEST_CALL {
+typedef struct _AUXPRN_TEST_CALL
+{
     INT  Vector;
     WORD Ax, Dx;
 } AUXPRN_TEST_CALL, *PAUXPRN_TEST_CALL;
@@ -141,18 +168,21 @@ static INT AuxPrnTestRunEntry(PV86_CPU cpu, UINT entry, WORD callerFlags)
     g_Memory[stackTop - AUXPRN_TEST_FRAME_FLAGS] = LOBYTE(callerFlags);
     g_Memory[stackTop - AUXPRN_TEST_FRAME_FLAGS_HIGH] = HIBYTE(callerFlags);
     cpu->Segments[AUXPRN_TEST_CS] = DOS_CTAB_SEG; cpu->Ip = (WORD)(DOS_AUXPRN_OFF + entry);
-    for (;;) {
+    for (;;)
+    {
         if (++steps > AUXPRN_TEST_STEP_LIMIT) return AUXPRN_TEST_RAN_AWAY;
         if (V86Step(cpu)) continue;
         if (cpu->Segments[AUXPRN_TEST_CS] == AUXPRN_TEST_RETURN_SEGMENT && cpu->Ip == AUXPRN_TEST_HLT_IP)
             return AUXPRN_TEST_RETURNED;                                    /* back home */
         if ((cpu->Segments[AUXPRN_TEST_CS] == AUXPRN_TEST_INT17_SEGMENT
              || cpu->Segments[AUXPRN_TEST_CS] == AUXPRN_TEST_INT14_SEGMENT)
-            && cpu->Ip == AUXPRN_TEST_HLT_IP) {
+            && cpu->Ip == AUXPRN_TEST_HLT_IP)
+        {
             INT vector = (cpu->Segments[AUXPRN_TEST_CS] == AUXPRN_TEST_INT17_SEGMENT)
                          ? AUXPRN_TEST_INT17 : AUXPRN_TEST_INT14;
             WORD ax = (WORD)cpu->Registers[AUXPRN_TEST_AX], ah = ax >> AUXPRN_TEST_AH_SHIFT;
-            if (g_CallCount < AUXPRN_TEST_MAX_CALLS) {
+            if (g_CallCount < AUXPRN_TEST_MAX_CALLS)
+            {
                 g_Calls[g_CallCount].Vector = vector; g_Calls[g_CallCount].Ax = ax;
                 g_Calls[g_CallCount].Dx = (WORD)cpu->Registers[AUXPRN_TEST_DX]; ++g_CallCount;
             }
@@ -211,22 +241,22 @@ static BOOL AuxPrnTestCallIs(INT callIndex, INT vector, WORD ax, WORD dx)
 }
 
 /* The registers each case loads, and what it expects back. */
-#define AUXPRN_TEST_AX_05H           0x05A5   /* AH=05h, AL poisoned                   */
-#define AUXPRN_TEST_AX_04H           0x04A5
-#define AUXPRN_TEST_AX_03H           0x03A5
-#define AUXPRN_TEST_AX_40H           0x4000
-#define AUXPRN_TEST_AX_3FH           0x3F00
-#define AUXPRN_TEST_DX_CHAR_P        0xD150   /* DL = 'P'                              */
-#define AUXPRN_TEST_DX_CHAR_A        0xD141   /* DL = 'A'                              */
-#define AUXPRN_TEST_DX_POISON        0xD1D1
-#define AUXPRN_TEST_HANDLE_AUX       3
-#define AUXPRN_TEST_HANDLE_PRN       4
-#define AUXPRN_TEST_BUFFER           0x0100
-#define AUXPRN_TEST_READ_BUFFER      0x0200
-#define AUXPRN_TEST_READ_BUFFER_SIZE 8
-#define AUXPRN_TEST_FLAGS_CF_SET     0x0003
-#define AUXPRN_TEST_FLAGS_CF_CLEAR   0x0002
-#define AUXPRN_TEST_CR               0x0D
+#define AUXPRN_TEST_AX_05H              0x05A5  /* AH=05h, AL poisoned */
+#define AUXPRN_TEST_AX_04H              0x04A5
+#define AUXPRN_TEST_AX_03H              0x03A5
+#define AUXPRN_TEST_AX_40H              0x4000
+#define AUXPRN_TEST_AX_3FH              0x3F00
+#define AUXPRN_TEST_DX_CHAR_P           0xD150  /* DL = 'P' */
+#define AUXPRN_TEST_DX_CHAR_A           0xD141  /* DL = 'A' */
+#define AUXPRN_TEST_DX_POISON           0xD1D1
+#define AUXPRN_TEST_HANDLE_AUX          3
+#define AUXPRN_TEST_HANDLE_PRN          4
+#define AUXPRN_TEST_BUFFER              0x0100
+#define AUXPRN_TEST_READ_BUFFER         0x0200
+#define AUXPRN_TEST_READ_BUFFER_SIZE    8
+#define AUXPRN_TEST_FLAGS_CF_SET        0x0003
+#define AUXPRN_TEST_FLAGS_CF_CLEAR      0x0002
+#define AUXPRN_TEST_CR                  0x0D
 
 INT main(VOID)
 {

@@ -1,10 +1,9 @@
-#ifndef NTVDMEX_WOWANCHORS_H
-#define NTVDMEX_WOWANCHORS_H
-/*
- * wowanchors.h -- ★★★ HOW THE HOST RECOGNISES A THUNK MODULE'S CODE SEGMENT.
- *                 GH #128, session 45.  GENERATED -- see the regenerate line.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- * ── THE PROBLEM ─────────────────────────────────────────────────────────────
+ * HOW THE HOST RECOGNISES A THUNK MODULE'S CODE SEGMENT.
+ *               GH #128, session 45.  GENERATED -- see the regenerate line.
+ *
+ * THE PROBLEM:
  * Every thunk module (USER, GDI, SHELL, COMMDLG, KEYBOARD, krnl386's two
  * segments) has an id space ALL ITS OWN -- `0x44` is `ReleaseDC` in USER's
  * numbering and `DeleteDC` in GDI's -- so a call can only be dispatched once the
@@ -14,7 +13,7 @@
  * LEARNS a module's code segment by recognising a call that could only have come
  * from it, and dispatches that id space from then on.
  *
- * ── ★★★ WHY THE ANCHOR IS THE WHOLE STUB TABLE AND NOT ONE CALL ─────────────
+ * WHY THE ANCHOR IS THE WHOLE STUB TABLE AND NOT ONE CALL (Importance = 3):
  * Because a one-call anchor only identifies the module for the programs that
  * happen to make THAT call, and the cost of that was measured rather than
  * imagined. `wow_shell_anchor()` recognised SHELL from `ShellAbout` alone. MS
@@ -25,7 +24,7 @@
  * 44. A missing service and an unidentified module read identically in the log;
  * only the anchor tells them apart.
  *
- * ── WHY MATCHING ANY ROW IS STILL SAFE ──────────────────────────────────────
+ * WHY MATCHING ANY ROW IS STILL SAFE:
  * A WOW32 stub is 13 bytes and pushes both of the things it is matched on --
  * the argument byte count, a zero word and the id -- then far-calls the
  * module's common thunk, so the return address the call carries is the stub
@@ -35,20 +34,33 @@
  * consults a table after excluding every segment already identified as another
  * module's, so an ambiguity between two tables cannot silently pick one.
  *
- * ⚠ THREE ROWS ARE PROBABLY NOT STUBS AT ALL -- `{ 0x2080, 0, ... }`, one in
- *   GDI and two in USER. An id of 0x2080 taking no arguments is out of family
- *   with every other row, and the likeliest reading is ordinary 16-bit code
- *   that happens to match the stub's byte shape.
- *   They are LEFT IN rather than filtered, because the filter would be a guess
- *   too and these are harmless: a row only ever fires if a real call carries
- *   that exact triple, and nothing does.
+ * [CAUTION]: THREE ROWS ARE PROBABLY NOT STUBS AT ALL -- `{ 0x2080, 0, ... }`, one in
+ * GDI and two in USER. An id of 0x2080 taking no arguments is out of family
+ * with every other row, and the likeliest reading is ordinary 16-bit code
+ * that happens to match the stub's byte shape.
+ * They are LEFT IN rather than filtered, because the filter would be a guess
+ * too and these are harmless: a row only ever fires if a real call carries
+ * that exact triple, and nothing does.
  *
- * ── REGENERATE ──────────────────────────────────────────────────────────────
- *      tools/ne/wowthunks.py --anchor guest/win16/shell.dll
- *      tools/ne/wowthunks.py --anchor guest/win16/gdi.exe
+ * REGENERATE:
+ *    tools/ne/wowthunks.py --anchor guest/win16/shell.dll
+ *    tools/ne/wowthunks.py --anchor guest/win16/gdi.exe
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
 
-typedef struct _WOW_ANCHOR { WORD Id; WORD ArgumentBytes; WORD ReturnStub; } WOW_ANCHOR, *PWOW_ANCHOR;
+#ifndef NTVDMEX_WOWANCHORS_H
+#define NTVDMEX_WOWANCHORS_H
+
+typedef struct _WOW_ANCHOR
+{
+    WORD Id;
+    WORD ArgumentBytes;
+    WORD ReturnStub;
+} WOW_ANCHOR, *PWOW_ANCHOR;
 typedef const WOW_ANCHOR *PCWOW_ANCHOR;
 
 /* Defined in wowanchors.c (#335). */

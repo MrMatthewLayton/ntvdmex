@@ -1,4 +1,6 @@
-/* vbepm_test.c -- off-VM battery for the VBE 2.0 protected-mode interface (#53).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM battery for the VBE 2.0 protected-mode interface (#53).
  *
  * INT 10h AX=4F0Ah hands a protected-mode client a block of 32-bit code to COPY and CALL.
  * The only honest test of that is to do what a client does: take ES:DI and CX, copy the
@@ -6,11 +8,17 @@
  * host's own flat 32-bit interpreter (src/host/pm32interp.h), whose port hooks go to the
  * real video VDD on a bus. Then compare with what the INT 10h forms (4F05h/4F07h/4F09h)
  * do to the same machine. No oracle runs this: both real BIOSes we can execute answer
- * 4F0Ah with AX=0100h. The expectations are VBE 2.0 §4.13's.
+ * 4F0Ah with AX=0100h. The expectations are VBE 2.0 section 4.13's.
  *
  * Every expectation was written before the 4F0Ah arm existed and fails on that code
  * (4F0Ah -> AX=0100h, no block, no ports at 01CEh/01CFh).
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -21,31 +29,61 @@ static BYTE g_VideoMemory[VIDEO_APERTURE_SIZE];
 static VIDEO_STATE g_Video;
 static VDD_BUS g_Bus;
 static UINT64 g_FakeMicroseconds = 1000000;
-static UINT64 VbePmTestFakeClock(VOID) { return g_FakeMicroseconds; }
+static UINT64 VbePmTestFakeClock(VOID)
+{
+    return g_FakeMicroseconds;
+}
 
 /* The interpreter's host hooks: flat memory, and port I/O onto the VDD bus. Each IN
-   advances the fake clock 50 us, so a retrace wait on 3DAh makes progress. */
+ * advances the fake clock 50 us, so a retrace wait on 3DAh makes progress.
+ */
 static UINT32 g_InCount, g_OutCount;
-static BYTE  Pm32HostRead8(UINT32 linear) { return linear < sizeof g_GuestMemory ? g_GuestMemory[linear] : 0xFF; }
-static VOID     Pm32HostWrite8(UINT32 linear, BYTE value) { if (linear < sizeof g_GuestMemory) g_GuestMemory[linear] = value; }
-static INT      Pm32HostCanAccess(UINT32 linear, INT width, INT isWrite) { (VOID)isWrite; return linear + (UINT32)width <= sizeof g_GuestMemory; }
+static BYTE  Pm32HostRead8(UINT32 linear)
+{
+    return linear < sizeof g_GuestMemory ? g_GuestMemory[linear] : 0xFF;
+}
+
+static VOID     Pm32HostWrite8(UINT32 linear, BYTE value)
+{
+    if (linear < sizeof g_GuestMemory) g_GuestMemory[linear] = value;
+}
+
+static INT      Pm32HostCanAccess(UINT32 linear, INT width, INT isWrite)
+{
+    (VOID)isWrite;
+    return linear + (UINT32)width <= sizeof g_GuestMemory;
+}
+
 static UINT32 Pm32HostIn(WORD port, INT width)
-{ UINT32 value = 0; g_FakeMicroseconds += 50; ++g_InCount; VddBusIo(&g_Bus, port, (BYTE)width, 1, &value); return value; }
+{
+    UINT32 value = 0;
+    g_FakeMicroseconds += 50;
+    ++g_InCount;
+    VddBusIo(&g_Bus, port, (BYTE)width, 1, &value);
+    return value;
+}
+
 static VOID     Pm32HostOut(WORD port, INT width, UINT32 value)
-{ UINT32 busValue = value; ++g_OutCount; VddBusIo(&g_Bus, port, (BYTE)width, 0, &busValue); }
+{
+    UINT32 busValue = value;
+    ++g_OutCount;
+    VddBusIo(&g_Bus, port, (BYTE)width, 0, &busValue);
+}
+
 #include "../../src/host/pm32interp.h"
 
 static INT g_Total = 0, g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
-#define COPY   0x150000u                   /* where the "client" copies the block       */
-#define STACK  0x180000u
-#define RETADR 0x1F0000u                   /* a return address nothing executes          */
+#define COPY    0x150000u   /* Where the "client" copies the block */
+#define STACK   0x180000u
+#define RETADR  0x1F0000u   /* A return address nothing executes */
 
 /* Near-call entry `off` of the copied block with these registers; run to the RET.
-   1 = returned to RETADR with ESP balanced; 0 = the interpreter declined something
-   (the code used an instruction outside its set) or it never returned. */
+ * 1 = returned to RETADR with ESP balanced; 0 = the interpreter declined something
+ * (the code used an instruction outside its set) or it never returned.
+ */
 static INT VbePmTestCallPm(UINT32 offset, UINT32 ebx, UINT32 ecx, UINT32 edx, UINT32 edi,
                    UINT32 esBase, PPM32_CPU output)
 {
@@ -57,9 +95,14 @@ static INT VbePmTestCallPm(UINT32 offset, UINT32 ebx, UINT32 ecx, UINT32 edx, UI
     g_GuestMemory[STACK - 2] = (BYTE)(RETADR >> 16); g_GuestMemory[STACK - 1] = (BYTE)(RETADR >> 24);
     cpu.Eip = COPY + offset; cpu.Flags = 0x202;
     cpu.SegmentBases[0] = esBase;                    /* ES; CS/SS/DS flat 0 */
-    for (step = 0; step < 2000000; ++step) {
+    for (step = 0; step < 2000000; ++step)
+    {
         if (cpu.Eip == RETADR) break;
-        if (!Pm32Step(&cpu)) { printf("    declined at +%#x (op %02X)\n", cpu.Eip - COPY, g_GuestMemory[cpu.Eip]); return 0; }
+        if (!Pm32Step(&cpu))
+        {
+            printf("    declined at +%#x (op %02X)\n", cpu.Eip - COPY, g_GuestMemory[cpu.Eip]);
+            return 0;
+        }
     }
     if (output) *output = cpu;
     return cpu.Eip == RETADR && cpu.Registers[4] == STACK;
@@ -125,7 +168,7 @@ INT main(VOID)
     /* ---- 640x480x8 banked ---- */
     VbePmTestInt10(0x4F02, 0x0101, 0, 0, &registers);
     CHECK((registers.Eax & 0xFFFF) == 0x004F && g_Video.IsVesa && !g_Video.IsVesaLfb, "4F02h 0101h: banked 640x480x8");
-    memset(g_VideoMemory, 0x11, VIDEO_VESA_WINDOW);       /* the client draws bank 0 ...                */
+    memset(g_VideoMemory, 0x11, VIDEO_VESA_WINDOW);       /* the client draws bank 0 ... */
     CHECK(VbePmTestCallPm(windowEntry, 0x0000, 0, 2, 0, 0, &cpu), "SetWindow (copied, near-called) returns to the caller, ESP balanced");
     CHECK(g_Video.VesaBank == 2 && g_Video.VbePmBankCount == 1, "SetWindow DX=2: window A is bank 2");
     CHECK(g_Video.VesaVram[0] == 0x11 && g_Video.VesaVram[VIDEO_VESA_WINDOW - 1] == 0x11,

@@ -1,24 +1,35 @@
-/* types_test.c -- src/ntvdmex_types.h gives the Windows types the Windows widths (#333).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Src/ntvdmex_types.h gives the Windows types the Windows widths (#333).
  *
  * The header already refuses to compile on a wrong width; this test states the same facts at
  * run time, adds signedness (which a size check cannot see), and pins the byte/word macros the
  * device models use on every register access.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include "ntvdmex_types.h"
 
-#define TYPES_TEST_SIGNED_MINUS_ONE (-1)
-#define TYPES_TEST_WORD_VALUE       0x1234
-#define TYPES_TEST_DWORD_VALUE      0x89ABCDEFu
+#define TYPES_TEST_SIGNED_MINUS_ONE     (-1)
+#define TYPES_TEST_WORD_VALUE           0x1234
+#define TYPES_TEST_DWORD_VALUE          0x89ABCDEFu
 
 static INT g_Total = 0, g_Failures = 0;
 
 static VOID TypesTestCheck(BOOL condition, PCSTR description)
 {
     g_Total++;
-    if (condition) {
+    if (condition)
+    {
         printf("  PASS  %s\n", description);
-    } else {
+    }
+    else
+    {
         printf("  FAIL  %s\n", description);
         g_Failures++;
     }

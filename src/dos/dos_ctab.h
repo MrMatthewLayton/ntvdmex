@@ -1,4 +1,6 @@
-/* dos_ctab.h -- MS-DOS 6.22 / code page 437 character tables for INT 21h AH=65h.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * MS-DOS 6.22 / code page 437 character tables for INT 21h AH=65h.
  *
  * NOT SYNTHESISED.  Every byte here was dumped off the 6.22 oracle by following
  * the FAR pointer each AH=65h subfunction hands back (tests/probes/dos/p_ctab.asm).
@@ -13,18 +15,24 @@
  * AL=02 (uppercase) and AL=04 (filename uppercase) returned IDENTICAL data on
  * 6.22, but they are kept as separate tables because that is an observation
  * about this code page, not a guarantee.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #ifndef NTVDMEX_DOS_CTAB_H
 #define NTVDMEX_DOS_CTAB_H
 
 #include "../ntvdmex_types.h"
 
 /* Each table's size: its length word and its entries. */
-#define DOS_CTAB_UPPER_TABLE_SIZE                  130
-#define DOS_CTAB_FILE_NAME_UPPER_TABLE_SIZE        130
-#define DOS_CTAB_FILE_NAME_TERMINATORS_TABLE_SIZE  24
-#define DOS_CTAB_COLLATE_TABLE_SIZE                258
-#define DOS_CTAB_DBCS_TABLE_SIZE                   4
+#define DOS_CTAB_UPPER_TABLE_SIZE                   130
+#define DOS_CTAB_FILE_NAME_UPPER_TABLE_SIZE         130
+#define DOS_CTAB_FILE_NAME_TERMINATORS_TABLE_SIZE   24
+#define DOS_CTAB_COLLATE_TABLE_SIZE                 258
+#define DOS_CTAB_DBCS_TABLE_SIZE                    4
 
 /* AL=02 uppercase: length word 128, then chars 0x80-0xFF */
 static const BYTE g_DosCtabUpper[DOS_CTAB_UPPER_TABLE_SIZE] = {
@@ -39,10 +47,10 @@ static const BYTE g_DosCtabUpper[DOS_CTAB_UPPER_TABLE_SIZE] = {
     0xFE, 0xFF
 };
 
-
 /* One character through the table above: ASCII a-z directly, 80h-FFh by lookup.
-   Used by AH=65h AL=20h-23h, so capitalising through DOS and reading the table
-   agree by construction. */
+ * Used by AH=65h AL=20h-23h, so capitalising through DOS and reading the table
+ * agree by construction.
+ */
 static inline BYTE DosCtabUpcase437(_In_ BYTE character)
 {
     if (character >= 'a' && character <= 'z') return (BYTE)(character - ASCII_CASE_BIT);

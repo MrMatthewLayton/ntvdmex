@@ -1,4 +1,6 @@
-/* rmcs_test.c -- off-VM battery for src/host/dpmi_rmcs.h (GH #247): the DPMI real-mode
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM battery for src/host/dpmi_rmcs.h (GH #247): the DPMI real-mode
  * call structure and how INT 31h 0300h routes a vector.
  *
  * WHAT IS PINNED, AND WHY EACH ONE IS HERE.
@@ -17,7 +19,13 @@
  *     SP = 0 meaning a full 64 KB.
  *
  *   cc -std=c99 -I src/host -o rmcs_test tests/unit/rmcs_test.c && ./rmcs_test
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -28,9 +36,13 @@ static INT g_Total = 0, g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
-#define OURS 0x0050          /* DOS_HDLR_SEG -- passed in, so the test needs no layout header */
+#define OURS    0x0050  /* DOS_HDLR_SEG -- passed in, so the test needs no layout header */
 
-static VOID RmcsTestFillPattern(PBYTE bytes, UINT count) { UINT index; for (index = 0; index < count; ++index) bytes[index] = (BYTE)(0x11 + index * 7); }
+static VOID RmcsTestFillPattern(PBYTE bytes, UINT count)
+{
+    UINT index;
+    for (index = 0; index < count; ++index) bytes[index] = (BYTE)(0x11 + index * 7);
+}
 
 INT main(VOID)
 {

@@ -1,4 +1,6 @@
-/* interp_test.c -- off-VM unit battery for the mode-12h fill-loop interpreter
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM unit battery for the mode-12h fill-loop interpreter
  * (src/host/v86interp.h).
  *
  * The interpreter is the fast path that runs QuickBASIC's per-pixel PAINT/LINE
@@ -7,23 +9,46 @@
  * We exercise it over a flat 1MB+ memory array (no VGA planar engine -- that's
  * host-specific; here every address is plain RAM), so the decode, the flag
  * maths, the string ops, and the control flow are all checkable natively.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
 
-#include "ntvdmex_types.h"   /* the host hooks below are written before v86interp.h brings it */
+#include "ntvdmex_types.h"  /* the host hooks below are written before v86interp.h brings it */
 
 static BYTE g_Memory[0x110000];
 /* The host hooks v86interp.h requires (flat RAM, range-guarded). */
-static BYTE V86HostRead8(UINT32 linear) { return (linear < sizeof g_Memory) ? g_Memory[linear] : 0; }
-static VOID    V86HostWrite8(UINT32 linear, BYTE value) { if (linear < sizeof g_Memory) g_Memory[linear] = value; }
+static BYTE V86HostRead8(UINT32 linear)
+{
+    return (linear < sizeof g_Memory) ? g_Memory[linear] : 0;
+}
+
+static VOID    V86HostWrite8(UINT32 linear, BYTE value)
+{
+    if (linear < sizeof g_Memory) g_Memory[linear] = value;
+}
 
 /* Port-I/O hooks: a tiny model so the IN/OUT opcodes are exercised. Port 0x60
-   returns a canned byte; writes to 0x3C5 are recorded for the OUT test. */
+ * returns a canned byte; writes to 0x3C5 are recorded for the OUT test.
+ */
 static BYTE g_Port3C5 = 0;
-static UINT32 V86HostIn(WORD port, INT width) { (VOID)width; return (port == 0x60) ? 0xA5 : 0; }
-static VOID V86HostOut(WORD port, INT width, UINT32 value) { (VOID)width; if (port == 0x3C5) g_Port3C5 = (BYTE)value; }
+static UINT32 V86HostIn(WORD port, INT width)
+{
+    (VOID)width;
+    return (port == 0x60) ? 0xA5 : 0;
+}
+
+static VOID V86HostOut(WORD port, INT width, UINT32 value)
+{
+    (VOID)width;
+    if (port == 0x3C5) g_Port3C5 = (BYTE)value;
+}
 
 #include "../../src/host/v86interp.h"
 
@@ -38,6 +63,7 @@ static VOID InterpTestLoad(PV86_CPU cpu, WORD codeSegment, WORD instructionPoint
     cpu->Segments[1] = codeSegment; cpu->Ip = instructionPointer;
     for (index = 0; index < count; index++) g_Memory[linear + index] = bytes[index];
 }
+
 /* Run until istep bails (unmodeled) or a generous cap; return steps taken. */
 static INT InterpTestRun(PV86_CPU cpu)
 {
@@ -45,8 +71,12 @@ static INT InterpTestRun(PV86_CPU cpu)
     while (steps < 10000000 && V86Step(cpu)) steps++;
     return steps;
 }
+
 /* Single-step exactly once. */
-static INT InterpTestStepOnce(PV86_CPU cpu) { return V86Step(cpu); }
+static INT InterpTestStepOnce(PV86_CPU cpu)
+{
+    return V86Step(cpu);
+}
 
 static V86_CPU InterpTestMakeCpu(VOID)
 {
@@ -56,34 +86,48 @@ static V86_CPU InterpTestMakeCpu(VOID)
 }
 
 /* Tiny descriptor table for the LAR/LSL battery (run 55): sel 0x08 = code 0xFA
-   limit 0xFFFF; sel 0x10 = data 0xF3 (G/D nibble 0x4) limit 0x25CF; else invalid. */
+ * limit 0xFFFF; sel 0x10 = data 0xF3 (G/D nibble 0x4) limit 0x25CF; else invalid.
+ */
 static INT InterpTestLarLslDescriptor(WORD selector, PUINT32 accessRights, PUINT32 limit)
 {
-    switch (selector & 0xFFF8) {
+    switch (selector & 0xFFF8)
+    {
     case 0x08: if (accessRights) *accessRights = (0xFAu << 8);                        if (limit) *limit = 0xFFFF; return 1;
     case 0x10: if (accessRights) *accessRights = (0xF3u << 8) | (0x4u << 20);         if (limit) *limit = 0x25CF; return 1;
     default:   return 0;
     }
 }
 
-/* ── #194: THE 0x66 STACK / STRING / CONTROL-TRANSFER FORMS, AND IRET IN PM. ─────────
-   Expectations are the SDM's where it decides, and the rig's (tests/probes/dos/p_o32.com,
-   runs/s87_dpmi) where it does not: a 32-bit PUSH sreg keeps the slot's upper half, a
-   32-bit far CALL zero-extends its CS slot, MOV r32,sreg zero-extends, and PUSHFD's
-   upper half is the NT V86 monitor's (VM|RF, VIF = IF, AC/ID as they stand). */
-static UINT32 InterpTestSegmentToLinear(WORD selector) { return 0x30000u + (UINT32)(selector & 0xFFF8u) * 0x100u; }
+/* #194: THE 0x66 STACK / STRING / CONTROL-TRANSFER FORMS, AND IRET IN PM:
+ * Expectations are the SDM's where it decides, and the rig's (tests/probes/dos/p_o32.com,
+ * runs/s87_dpmi) where it does not: a 32-bit PUSH sreg keeps the slot's upper half, a
+ * 32-bit far CALL zero-extends its CS slot, MOV r32,sreg zero-extends, and PUSHFD's
+ * upper half is the NT V86 monitor's (VM|RF, VIF = IF, AC/ID as they stand).
+ */
+static UINT32 InterpTestSegmentToLinear(WORD selector)
+{
+    return 0x30000u + (UINT32)(selector & 0xFFF8u) * 0x100u;
+}
+
 /* 0x08: 16-bit code, limit 0x7FFF. 0x10: data. 0x18: 32-bit code. Anything else invalid. */
 static INT InterpTestSelectorDescriptor(WORD selector, PUINT32 accessRights, PUINT32 limit)
 {
-    switch (selector & 0xFFF8) {
+    switch (selector & 0xFFF8)
+    {
     case 0x08: *accessRights = 0xFAu << 8;                  *limit = 0x7FFF; return 1;
     case 0x10: *accessRights = 0xF2u << 8;                  *limit = 0xFFFF; return 1;
     case 0x18: *accessRights = (0xFAu << 8) | (0x4u << 20); *limit = 0xFFFF; return 1;
     default: return 0;
     }
 }
+
 static VOID InterpTestPut32(UINT32 linear, UINT32 value)
-{ g_Memory[linear] = (BYTE)value; g_Memory[linear+1] = (BYTE)(value >> 8); g_Memory[linear+2] = (BYTE)(value >> 16); g_Memory[linear+3] = (BYTE)(value >> 24); }
+{
+    g_Memory[linear] = (BYTE)value;
+    g_Memory[linear+1] = (BYTE)(value >> 8);
+    g_Memory[linear+2] = (BYTE)(value >> 16);
+    g_Memory[linear+3] = (BYTE)(value >> 24);
+}
 
 static VOID InterpTestO32Battery(VOID)
 {
@@ -273,14 +317,16 @@ static VOID InterpTestO32Battery(VOID)
     g_V86SegmentToLinear = 0; g_V86SelectorDescriptor = 0;
 }
 
-/* ── #194: REPLAY p_o32.com THROUGH THE INTERPRETER AND COMPARE WITH THE RIG'S CPU. ────
-   p_o32's `measure` section is pure computation into `res` (no INT, no I/O, no absolute
-   segment value stored), so the very bytes the rig ran under XP's V86 monitor can be run
-   here. p_o32.ref.txt is the rig's `BUF=res` line, recorded by
-   `dosdiff.py tests/probes/dos/p_o32.com --host ntvdmex` (runs/s87_dpmi). Equal buffers =
-   the interpreter answers every case as the machine it stands in for does -- including
-   the parts the manual leaves to the implementation.
-   ⚠ A missing .COM or reference is a FAILURE, not a skip (offvm.sh's rule). */
+/* #194: REPLAY p_o32.com THROUGH THE INTERPRETER AND COMPARE WITH THE RIG'S CPU:
+ * p_o32's `measure` section is pure computation into `res` (no INT, no I/O, no absolute
+ * segment value stored), so the very bytes the rig ran under XP's V86 monitor can be run
+ * here. p_o32.ref.txt is the rig's `BUF=res` line, recorded by
+ * `dosdiff.py tests/probes/dos/p_o32.com --host ntvdmex` (runs/s87_dpmi). Equal buffers =
+ * the interpreter answers every case as the machine it stands in for does -- including
+ * the parts the manual leaves to the implementation.
+ *
+ * [CAUTION]: A missing .COM or reference is a FAILURE, not a skip (offvm.sh's rule).
+ */
 static INT InterpTestHexValue(INT character) { return (character >= '0' && character <= '9') ? character - '0' : (character >= 'A' && character <= 'F') ? character - 'A' + 10
                                    : (character >= 'a' && character <= 'f') ? character - 'a' + 10 : -1; }
 static VOID InterpTestO32Replay(VOID)
@@ -295,7 +341,8 @@ static VOID InterpTestO32Replay(VOID)
     file = fopen("p_o32.ref.txt", "r");
     CHECK(file != NULL, "p_o32.ref.txt present (the rig's dump)");
     if (!file) return;
-    while (fgets(line, sizeof line, file)) {
+    while (fgets(line, sizeof line, file))
+    {
         PSTR cursor = strstr(line, "BUF=res ");
         if (!cursor) continue;
         for (cursor += 8; InterpTestHexValue(cursor[0]) >= 0 && InterpTestHexValue(cursor[1]) >= 0 && referenceCount < (INT)sizeof reference; cursor += 2)
@@ -314,15 +361,21 @@ static VOID InterpTestO32Replay(VOID)
     cpu.Registers[4] = 0xFFFC; g_Memory[0x1FFFC] = 0xF0; g_Memory[0x1FFFD] = 0xFF;   /* return to FFF0: the end */
     cpu.Ip = measureOffset;
     while (cpu.Ip != 0xFFF0 && steps < 200000 && V86Step(&cpu)) ++steps;
-    if (cpu.Ip != 0xFFF0) {
+    if (cpu.Ip != 0xFFF0)
+    {
         UINT32 linear = ((UINT32)cpu.Segments[1] << 4) + cpu.Ip;
         printf("  bailed at %04X:%04X bytes %02X %02X %02X %02X after %ld steps\n",
                cpu.Segments[1], cpu.Ip, g_Memory[linear], g_Memory[linear + 1], g_Memory[linear + 2], g_Memory[linear + 3], steps);
     }
     CHECK(cpu.Ip == 0xFFF0, "the whole measure section runs in the interpreter (no bail)");
     for (index = 0; index < referenceCount && index < resultLength; ++index)
-        if (g_Memory[0x10000 + resultOffset + index] != reference[index]) { first = index; break; }
-    if (first >= 0) {
+        if (g_Memory[0x10000 + resultOffset + index] != reference[index])
+        {
+            first = index;
+            break;
+        }
+    if (first >= 0)
+    {
         INT item = first / 4;
         printf("  first difference in item %d: interp %02X%02X%02X%02X rig %02X%02X%02X%02X (bytes, LE)\n", item,
                g_Memory[0x10000 + resultOffset + 4*item], g_Memory[0x10000 + resultOffset + 4*item + 1], g_Memory[0x10000 + resultOffset + 4*item + 2], g_Memory[0x10000 + resultOffset + 4*item + 3],
@@ -451,7 +504,10 @@ INT main(VOID)
       BYTE bytes[] = { 0xB9, 0x05, 0x00, 0x90, 0xE2, 0xFD };
       InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
       InterpTestStepOnce(&cpu);                                      /* MOV CX,5 */
-      { INT guard = 0; while (cpu.Ip != 6 && guard++ < 100) InterpTestStepOnce(&cpu); }
+      {
+          INT guard = 0;
+          while (cpu.Ip != 6 && guard++ < 100) InterpTestStepOnce(&cpu);
+      }
       CHECK(cpu.Registers[1] == 0, "loop: CX decremented to 0");
       CHECK(cpu.Ip == 6, "loop: fell through after CX hit 0"); }
 
@@ -463,7 +519,8 @@ INT main(VOID)
     /* ---- T18: bail on an unmodeled opcode leaves state exactly at it ------ *
      * The load-bearing case is the VDM BOP, `C4 C4 nn`. C4 is LES, and LES is  *
      * deliberately NOT modeled: bailing on it is how a DOS/BIOS call reaches   *
-     * the kernel as a BOP event instead of being swallowed here.               */
+     * the kernel as a BOP event instead of being swallowed here.
+     */
     { V86_CPU cpu = InterpTestMakeCpu(); BYTE bytes[] = { 0x90, 0xC4, 0xC4, 0x21 };   /* NOP; BOP 21h */
       InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
       CHECK(InterpTestStepOnce(&cpu) == 1 && cpu.Ip == 1, "bail: NOP runs");
@@ -473,15 +530,16 @@ INT main(VOID)
      * Continuous interpretation in mode 12h means the interpreter has to run    *
      * the guest THROUGH its own interrupt handlers; before this it stopped at   *
      * the first INT and handed the guest back to V86, where its A0000 writes    *
-     * are invisible to us. Vectoring goes through the real IVT at linear 0.     */
+     * are invisible to us. Vectoring goes through the real IVT at linear 0.
+     */
     { V86_CPU cpu = InterpTestMakeCpu();
-      BYTE bytes[] = { 0xFB, 0xCD, 0x21 };                  /* STI; INT 21h        */
-      BYTE handler[] = { 0xCF };                              /* handler: IRET       */
+      BYTE bytes[] = { 0xFB, 0xCD, 0x21 };                  /* STI; INT 21h */
+      BYTE handler[] = { 0xCF };                              /* handler: IRET */
       g_Memory[0x21 * 4] = 0x34; g_Memory[0x21 * 4 + 1] = 0x12;   /* IVT[21h] = 5000:1234 */
       g_Memory[0x21 * 4 + 2] = 0x00; g_Memory[0x21 * 4 + 3] = 0x50;
       InterpTestLoad(&cpu, 0x5000, 0x1234, handler, sizeof handler);
       InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
-      cpu.Segments[2] = 0x2000; cpu.Registers[4] = 0x0100;               /* SS:SP = 2000:0100   */
+      cpu.Segments[2] = 0x2000; cpu.Registers[4] = 0x0100;               /* SS:SP = 2000:0100 */
       CHECK(InterpTestStepOnce(&cpu) == 1 && (cpu.Flags & 0x200u), "sti: IF set in the flag image");
       CHECK(InterpTestStepOnce(&cpu) == 1, "CD 21: INT is modeled");
       CHECK(cpu.Segments[1] == 0x5000 && cpu.Ip == 0x1234, "int: vectored via IVT[21h]");
@@ -510,7 +568,8 @@ INT main(VOID)
     /* ---- T19: 32-bit operand-size (0x66) -- run 54 --------------------- *
      * A C runtime under DPMI does 32-bit register math in a 16-bit segment  *
      * via the 0x66 prefix (run 53's I310102 stopped on MOVZX ESI,SI). These *
-     * exercise the widened register file + width-aware helpers.             */
+     * exercise the widened register file + width-aware helpers.
+     */
     { V86_CPU cpu = InterpTestMakeCpu(); BYTE bytes[] = { 0x66, 0x0F, 0xB7, 0xF6 };   /* MOVZX ESI,SI */
       InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes); cpu.Registers[6] = 0x1234ABCD;
       CHECK(InterpTestStepOnce(&cpu) == 1 && cpu.Ip == 4, "66 0F B7: MOVZX ESI,SI runs, ip += 4");
@@ -588,7 +647,8 @@ INT main(VOID)
 
     /* ---- T20: LAR/LSL descriptor introspection -- run 55 --------------- *
      * A DPMI C runtime reads a descriptor's access byte with LAR;CX / SHR.  *
-     * In V86 (g_V86SelectorDescriptor==NULL) these bail; with the hook they consult it.  */
+     * In V86 (g_V86SelectorDescriptor==NULL) these bail; with the hook they consult it.
+     */
     g_V86SelectorDescriptor = InterpTestLarLslDescriptor;
     { V86_CPU cpu = InterpTestMakeCpu(); BYTE bytes[] = { 0x66, 0x0F, 0x02, 0xC9 };   /* LAR ECX,CX */
       InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes); cpu.Registers[1] = 0x0008;         /* CX = sel 0x08 (code 0xFA) */
@@ -614,17 +674,18 @@ INT main(VOID)
     /* ---- T20: full read-scan fill loop, exit by counter ---------------- *
      * MOV AL,ES:[SI] / OR AL,AL / JNZ found / INC SI / DEC DI / JNZ loop    *
      * with all-zero pixels and DI=4: runs 4 iterations, then falls to a     *
-     * bail opcode -- exactly the BUBBLES PAINT pattern, all in the host.    */
+     * bail opcode -- exactly the BUBBLES PAINT pattern, all in the host.
+     */
     { V86_CPU cpu = InterpTestMakeCpu();
       BYTE bytes[] = {
-        /*00*/ 0x26, 0x8A, 0x04,    /* MOV AL, ES:[SI] */
-        /*03*/ 0x0A, 0xC0,          /* OR  AL, AL      */
-        /*05*/ 0x75, 0x06,          /* JNZ found(+6 -> 0x0D) */
-        /*07*/ 0x46,                /* INC SI          */
-        /*08*/ 0x4F,                /* DEC DI          */
-        /*09*/ 0x75, 0xF5,          /* JNZ loop(-11 -> 0x00) */
-        /*0B*/ 0x90, 0x90,          /* (pad)           */
-        /*0D*/ 0xF4                 /* HLT (unmodeled -> bail) */
+        /*00 */ 0x26, 0x8A, 0x04,    /* MOV AL, ES:[SI] */
+        /*03 */ 0x0A, 0xC0,          /* OR  AL, AL */
+        /*05 */ 0x75, 0x06,          /* JNZ found(+6 -> 0x0D) */
+        /*07 */ 0x46,                /* INC SI */
+        /*08 */ 0x4F,                /* DEC DI */
+        /*09 */ 0x75, 0xF5,          /* JNZ loop(-11 -> 0x00) */
+        /*0B */ 0x90, 0x90,          /* (pad) */
+        /*0D */ 0xF4                 /* HLT (unmodeled -> bail) */
       };
       cpu.Segments[0] = 0xA000; cpu.Registers[6] = 0; cpu.Registers[7] = 4;       /* ES, SI, DI */
       /* pixels all zero already (MEM is zeroed) */
@@ -680,7 +741,8 @@ INT main(VOID)
       InterpTestStepOnce(&cpu); CHECK((cpu.Registers[0] & 0xFF) == 0xA5, "in: AL <- port 0x60 via bus"); }
 
     /* ---- T26: CALL near relative + RET round-trip ---------------------- *
-     * 00 MOV AX,1234 / 03 CALL +4 / 06 INC AX / 07 HLT / 0A INC BX / 0B RET */
+     * 00 MOV AX,1234 / 03 CALL +4 / 06 INC AX / 07 HLT / 0A INC BX / 0B RET
+     */
     { V86_CPU cpu = InterpTestMakeCpu();
       BYTE bytes[] = { 0xB8,0x34,0x12, 0xE8,0x04,0x00, 0x40, 0xF4, 0x90,0x90, 0x43, 0xC3 };
       cpu.Segments[2] = 0x9000; cpu.Registers[4] = 0x0200;             /* SS, SP */
@@ -691,7 +753,8 @@ INT main(VOID)
       CHECK(cpu.Ip == 0x07, "call/ret: bailed on HLT after return"); }
 
     /* ---- T27: CALL near indirect via register (FF /2) ------------------ *
-     * 00 CALL SI(=06) / 02 INC AX / 03 HLT / 06 RET                        */
+     * 00 CALL SI(=06) / 02 INC AX / 03 HLT / 06 RET
+     */
     { V86_CPU cpu = InterpTestMakeCpu();
       BYTE bytes[] = { 0xFF,0xD6, 0x40, 0xF4, 0x90,0x90, 0xC3 };
       cpu.Segments[2] = 0x9000; cpu.Registers[4] = 0x0200; cpu.Registers[6] = 0x0006;   /* SS, SP, SI */
@@ -742,7 +805,8 @@ INT main(VOID)
       CHECK(cpu.Registers[0] == 0x001A, "lea: AX = BX+DI+6 = 0x1A (offset, not [0x1A])"); }
 
     /* ---- T35: PUSH imm16 (68) writes a W-wide slot; SP -= 2 -- run 56 ---- *
-     * The exact opcode run 55 stopped on: 68 3a 02 = PUSH 0x023A.           */
+     * The exact opcode run 55 stopped on: 68 3a 02 = PUSH 0x023A.
+     */
     { V86_CPU cpu = InterpTestMakeCpu(); BYTE bytes[] = { 0x68, 0x3A, 0x02 };   /* PUSH 0x023A */
       cpu.Segments[2] = 0x8000; cpu.Registers[4] = 0x0100;                  /* SS, SP */
       InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
@@ -774,7 +838,8 @@ INT main(VOID)
             "push imm32: dword 0x12345678 written at SS:SP"); }
 
     /* ---- T39: RETF (CB) pops offset then a 2-byte selector into CS -- run 57 - *
-     * The far-return that follows run 56's `PUSH seg; PUSH off; RETF` idiom.    */
+     * The far-return that follows run 56's `PUSH seg; PUSH off; RETF` idiom.
+     */
     { V86_CPU cpu = InterpTestMakeCpu(); BYTE bytes[] = { 0xCB };               /* RETF */
       cpu.Segments[2] = 0x8000; cpu.Registers[4] = 0x0100;                  /* SS, SP */
       g_Memory[((UINT32)0x8000<<4)+0x100] = 0x34;             /* [SP]   = offset 0x1234 */
@@ -795,11 +860,12 @@ INT main(VOID)
       CHECK(cpu.Registers[4] == 0x010C, "retf imm16: SP += 4 + 8"); }
 
     /* ---- T41: the full idiom -- PUSH seg; PUSH off; RETF far-transfers -------- *
-     * V86SegmentBase = seg<<4 here (g_V86SegmentToLinear NULL), so CS=0x0800 lands code at 0x8000. */
+     * V86SegmentBase = seg<<4 here (g_V86SegmentToLinear NULL), so CS=0x0800 lands code at 0x8000.
+     */
     { V86_CPU cpu = InterpTestMakeCpu();
       BYTE code[] = { 0x68, 0x00, 0x08,   /* PUSH 0x0800 (target segment) */
-                      0x68, 0x00, 0x01,   /* PUSH 0x0100 (target offset)  */
-                      0xCB };             /* RETF -> 0x0800:0x0100        */
+                      0x68, 0x00, 0x01,   /* PUSH 0x0100 (target offset) */
+                      0xCB };             /* RETF -> 0x0800:0x0100 */
       cpu.Segments[2] = 0x9000; cpu.Registers[4] = 0x0200;                 /* SS, SP */
       InterpTestLoad(&cpu, 0x1000, 0, code, sizeof code);
       g_Memory[((UINT32)0x0800<<4)+0x100] = 0xF4;            /* HLT at the target -> run() bails */
@@ -809,7 +875,8 @@ INT main(VOID)
 
     /* ---- T42: LEAVE (C9) -- MOV SP,BP; POP BP, the callee epilogue -- run 58 - *
      * SP starts below BP (locals allocated); LEAVE discards them (SP<-BP) then   *
-     * pops the caller's BP. Paired with ENTER / `PUSH BP; MOV BP,SP`.            */
+     * pops the caller's BP. Paired with ENTER / `PUSH BP; MOV BP,SP`.
+     */
     { V86_CPU cpu = InterpTestMakeCpu(); BYTE bytes[] = { 0xC9 };               /* LEAVE */
       cpu.Segments[2] = 0x8000; cpu.Registers[4] = 0x00F8; cpu.Registers[5] = 0x0100;  /* SS, SP (locals), BP */
       g_Memory[((UINT32)0x8000<<4)+0x100] = 0xBC;             /* [BP] = caller's BP 0x0ABC */
@@ -828,7 +895,8 @@ INT main(VOID)
             "leave: E-reg high halves of SP/BP preserved (16-bit LEAVE)"); }
 
     /* ---- T44: PUSHF (9C) -- push the modeled FLAGS + reserved bit 1 -- run 59 - *
-     * SP -= 2; [SP] = (flags & modeled-mask) | 0x0002. IF/TF/IOPL/NT not modeled. */
+     * SP -= 2; [SP] = (flags & modeled-mask) | 0x0002. IF/TF/IOPL/NT not modeled.
+     */
     { V86_CPU cpu = InterpTestMakeCpu(); BYTE bytes[] = { 0x9C };               /* PUSHF */
       cpu.Segments[2] = 0x8000; cpu.Registers[4] = 0x0100;
       cpu.Flags = EFLAGS_CF_U | EFLAGS_ZF_U | EFLAGS_SF_U | EFLAGS_DF_U;                /* 0x04C1 + reserved */
@@ -936,7 +1004,11 @@ INT main(VOID)
     /* ---- T58: DIV by zero bails (return 0 -> InterpTestStepOnce no-op, IP unchanged) ----- */
     { V86_CPU cpu = InterpTestMakeCpu(); BYTE bytes[] = { 0xF7, 0xF1 };        /* DIV CX, CX=0 */
       cpu.Registers[0] = 5; cpu.Registers[2] = 0; cpu.Registers[1] = 0; InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
-      { INT advanced = InterpTestStepOnce(&cpu); CHECK(advanced == 0 && cpu.Ip == 0, "div by zero: interp bails (no UB), IP unchanged"); } }
+      {
+          INT advanced = InterpTestStepOnce(&cpu);
+          CHECK(advanced == 0 && cpu.Ip == 0, "div by zero: interp bails (no UB), IP unchanged");
+      }
+      }
 
     /* ---- T59: PUSHA (60) -- push AX,CX,DX,BX,SP,BP,SI,DI; saved SP = pre-push - */
     { V86_CPU cpu = InterpTestMakeCpu(); BYTE bytes[] = { 0x60 };              /* PUSHA */
@@ -950,7 +1022,7 @@ INT main(VOID)
         CHECK((g_Memory[base+0xF6] | (g_Memory[base+0xF7]<<8)) == 0x0100, "pusha: saved-SP slot = pre-push SP");
         CHECK((g_Memory[base+0xF0] | (g_Memory[base+0xF1]<<8)) == 0x8888, "pusha: DI at bottom slot [SP]"); } }
 
-    /* ---- T60: PUSHA/POPA round-trip -- POPA restores AX..DI, discards saved SP  */
+    /* ---- T60: PUSHA/POPA round-trip -- POPA restores AX..DI, discards saved SP */
     { V86_CPU cpu = InterpTestMakeCpu(); BYTE bytes[] = { 0x60, 0x61 };        /* PUSHA; POPA */
       cpu.Segments[2] = 0x8000; cpu.Registers[4] = 0x0100;
       cpu.Registers[0]=0x1111; cpu.Registers[1]=0x2222; cpu.Registers[2]=0x3333; cpu.Registers[3]=0x4444;
@@ -975,10 +1047,11 @@ INT main(VOID)
       CHECK((cpu.Registers[4] & 0xFFFF) == 0x0200, "popad: SP back to 0x0200"); }
 
     /* ---- T62: LEMMINGS' DIRTY-MAP SCAN -- `repne scasb` (F2 AE) MUST BE MODELLED.
-         (s68) The erase engine is: mov al,1 / mov cx,0x28 / repne scasb / jz found.
-         Unmodelled, the scasb bailed to V86 and the latch copies that followed it
-         landed in the unprotected A0000 window, so no sprite was ever erased.
-         Pinned as the guest's own idiom: ES:DI over a 40-byte row with a 1 at [5]. */
+     * (s68) The erase engine is: mov al,1 / mov cx,0x28 / repne scasb / jz found.
+     * Unmodelled, the scasb bailed to V86 and the latch copies that followed it
+     * landed in the unprotected A0000 window, so no sprite was ever erased.
+     * Pinned as the guest's own idiom: ES:DI over a 40-byte row with a 1 at [5].
+     */
     { V86_CPU cpu = InterpTestMakeCpu(); BYTE bytes[] = { 0xF2, 0xAE, 0x74, 0x02, 0xB0, 0x55, 0xB0, 0xAA };
       /* repne scasb; jz +2; mov al,55h; mov al,AAh */
       UINT32 base = (UINT32)0x2000 << 4;
@@ -1028,8 +1101,8 @@ INT main(VOID)
     /* ---- T67: repe cmpsw (F3 A7) with DF=1 walks DOWN by words ---------------- */
     { V86_CPU cpu = InterpTestMakeCpu(); BYTE bytes[] = { 0xF3, 0xA7 };
       UINT32 sourceBase = (UINT32)0x3000 << 4, destinationBase = (UINT32)0x4000 << 4;
-      g_Memory[sourceBase+8]=0x11; g_Memory[sourceBase+9]=0x22; g_Memory[destinationBase+8]=0x11; g_Memory[destinationBase+9]=0x22;   /* equal   */
-      g_Memory[sourceBase+6]=0x33; g_Memory[sourceBase+7]=0x44; g_Memory[destinationBase+6]=0x33; g_Memory[destinationBase+7]=0x45;   /* differ  */
+      g_Memory[sourceBase+8]=0x11; g_Memory[sourceBase+9]=0x22; g_Memory[destinationBase+8]=0x11; g_Memory[destinationBase+9]=0x22;   /* equal */
+      g_Memory[sourceBase+6]=0x33; g_Memory[sourceBase+7]=0x44; g_Memory[destinationBase+6]=0x33; g_Memory[destinationBase+7]=0x45;   /* differ */
       cpu.Segments[3] = 0x3000; cpu.Segments[0] = 0x4000; cpu.Registers[6] = 8; cpu.Registers[7] = 8; cpu.Registers[1] = 4;
       cpu.Flags |= EFLAGS_DF_U;
       InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes); InterpTestStepOnce(&cpu);
@@ -1080,8 +1153,9 @@ INT main(VOID)
       CHECK((cpu.Flags & 0xD5) == (EFLAGS_PF_U | EFLAGS_AF_U), "9E: SAHF loads PF/AF from AH, clears the rest"); }
 
     /* ---- s80, north star 1: what Wolf3D and Mario declined under a multi-plane mask.
-       A declined instruction runs natively UNTIL THE NEXT TRAP, and any A0000 store in
-       that stretch reaches one plane only -- so these are correctness, not speed. ---- */
+     * A declined instruction runs natively UNTIL THE NEXT TRAP, and any A0000 store in
+     * that stretch reaches one plane only -- so these are correctness, not speed. ----
+     */
     /* CDQ (66 99): Wolf3D's FixedByFrac `cdq / idiv dword [bp+0Ah]`, 1,074 declines. */
     { V86_CPU cpu = InterpTestMakeCpu(); BYTE bytes[] = { 0x66, 0x99 };
       cpu.Registers[0] = 0x80000000u; cpu.Registers[2] = 0x12345678u; InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
@@ -1122,8 +1196,9 @@ INT main(VOID)
             "imul 66 6B: eax*10 wraps to A0000000h, CF=OF=1"); }
 
     /* ---- #183: 16-bit address size counts in CX and walks SI/DI, and the HIGH halves
-       of ECX/ESI/EDI are the guest's (s80 carries all 32 bits). The interpreter took
-       the REP count from ECX -- up to 4G stores -- and zeroed the high halves after. */
+     * of ECX/ESI/EDI are the guest's (s80 carries all 32 bits). The interpreter took
+     * the REP count from ECX -- up to 4G stores -- and zeroed the high halves after.
+     */
     { V86_CPU cpu = InterpTestMakeCpu(); BYTE bytes[] = { 0xF3, 0xAA };     /* REP STOSB */
       UINT32 index;
       for (index = 0; index < 16; ++index) g_Memory[0x20000 + index] = 0;

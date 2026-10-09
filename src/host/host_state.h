@@ -1,11 +1,20 @@
-/* host_state.h -- the machine's state that the whole host shares: the virtual devices, the guest CPU context and the run-wide flags.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- * Declarations only (#335): every variable is defined, with its comment, in host_state.c. */
+ * The machine's state that the whole host shares: the virtual devices, the guest CPU context and the run-wide flags.
+ *
+ * Declarations only (#335): every variable is defined, with its comment, in host_state.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_HOST_STATE_H
 #define NTVDMEX_HOST_STATE_H
 #include <windows.h>
 #include "ntvdm.h"
-#include "host_core.h"        /* the PFN_* types of the run-time imports */
+#include "host_core.h"  /* the PFN_* types of the run-time imports */
 #include "../ntvdmex_x86.h"
 #include "../ntvdmex_units.h"
 #include "settings.h"
@@ -31,7 +40,8 @@
 #include "audio_wave.h"
 #include "present_ddraw.h"
 /* ...and the rest of the machine's declaration-only headers, so a module that includes this one
-   compiles whichever of them it needs. */
+ * compiles whichever of them it needs.
+ */
 #include "csrss.h"
 #include "v86.h"
 #include "dpmi.h"
@@ -67,7 +77,6 @@
 #include "v86cpu.h"
 #include "pm32cpu.h"
 #include "host_types.h"
-
 
 extern PFN_ADD_VECTORED_EXCEPTION_HANDLER g_PfnAddVeh;
 extern PFN_REGISTER_RAW_INPUT_DEVICES g_PfnRegisterRawInput;

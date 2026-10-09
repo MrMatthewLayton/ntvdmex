@@ -1,6 +1,15 @@
-/* pif.c -- a .PIF's program, directory and parameters.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- * The function definitions of pif.h, which keeps their declarations and doc comments (#335). */
+ * A .PIF's program, directory and parameters.
+ *
+ * The function definitions of pif.h, which keeps their declarations and doc comments (#335).
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #include "pif.h"
 
 /* Copy a fixed field, stopping at NUL, then trim trailing (and leading) blanks. */
@@ -10,7 +19,11 @@ static VOID PifCopyField(PSTR destination, PCBYTE source, unsigned length)
     while (end < length && source[end]) ++end;
     while (start < end && (source[start] == ' ' || source[start] == '\t')) ++start;
     while (end > start && (source[end - 1] == ' ' || source[end - 1] == '\t')) --end;
-    { unsigned index; for (index = 0; index < end - start; ++index) destination[index] = (CHAR)source[start + index]; destination[end - start] = 0; }
+    {
+        unsigned index;
+        for (index = 0; index < end - start; ++index) destination[index] = (CHAR)source[start + index];
+        destination[end - start] = 0;
+    }
 }
 
 static INT PifIsSectionName(PCBYTE header, PCSTR name)
@@ -32,18 +45,22 @@ INT PifParse(PCBYTE bytes, unsigned long length, PPIF_INFO out)
     PifCopyField(out->Parameters, bytes + PIF_PARAMS_OFF, PIF_PARAMS_LEN);
     if (!out->Program[0]) return 0;
     /* Extension sections, if the file has them. Bounded both by the file and by a
-       count, so a malformed chain cannot loop. */
+     * count, so a malformed chain cannot loop.
+     */
     offset = PIF_BASIC_LEN;
-    for (guard = 0; guard < PIF_EXT_MAX_SECTIONS && offset + PIF_EXT_HEADER_SIZE <= length; ++guard) {
+    for (guard = 0; guard < PIF_EXT_MAX_SECTIONS && offset + PIF_EXT_HEADER_SIZE <= length; ++guard)
+    {
         PCBYTE header = bytes + offset;
         unsigned next = (unsigned)(header[PIF_EXT_NEXT] | (header[PIF_EXT_NEXT + 1] << BYTE_SHIFT));
         unsigned dataOffset = (unsigned)(header[PIF_EXT_DATA_OFFSET] | (header[PIF_EXT_DATA_OFFSET + 1] << BYTE_SHIFT));
         unsigned dataLength = (unsigned)(header[PIF_EXT_DATA_LENGTH] | (header[PIF_EXT_DATA_LENGTH + 1] << BYTE_SHIFT));
         if (PifIsSectionName(header, PIF_SECTION_WINDOWS_386) && dataLength >= PIF_W386_PARAMS + PIF_PARAMS_LEN
-            && (unsigned long)dataOffset + dataLength <= length) {
+            && (unsigned long)dataOffset + dataLength <= length)
+        {
             CHAR parameters386[PIF_PARAMS_LEN + 1];
             PifCopyField(parameters386, bytes + dataOffset + PIF_W386_PARAMS, PIF_PARAMS_LEN);
-            if (parameters386[0]) {
+            if (parameters386[0])
+            {
                 unsigned index;
                 for (index = 0; parameters386[index]; ++index) out->Parameters[index] = parameters386[index];
                 out->Parameters[index] = 0;

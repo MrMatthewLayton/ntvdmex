@@ -1,4 +1,6 @@
-/* ntvdmex_types.h -- the Windows types, on every platform this code is built for (#333).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * The Windows types, on every platform this code is built for (#333).
  *
  * NTVDMEX is written with the Windows types (docs/STYLE.md, section 1). On Windows they come
  * from <windows.h>. The off-VM tests build the device models on macOS, where there is no
@@ -8,7 +10,13 @@
  * time below, on both platforms, and again by tests/unit/types_test.c.
  *
  * Include this instead of <stdint.h> / <windows.h> for the base types.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #ifndef NTVDMEX_TYPES_H
 #define NTVDMEX_TYPES_H
 
@@ -71,24 +79,25 @@ typedef WCHAR  *PWSTR;
 typedef const WCHAR *PCWSTR;
 typedef SIZE_T *PSIZE_T;
 
-#define VOID  void
-#define CONST const
+#define VOID    void
+#define CONST   const
 #ifndef TRUE
-#define TRUE  1
-#define FALSE 0
+#define TRUE    1
+#define FALSE   0
 #endif
 
-#define LOBYTE(w)        ((BYTE)((w) & 0xFF))
-#define HIBYTE(w)        ((BYTE)(((w) >> 8) & 0xFF))
-#define LOWORD(l)        ((WORD)((l) & 0xFFFF))
-#define HIWORD(l)        ((WORD)(((l) >> 16) & 0xFFFF))
-#define MAKEWORD(lo, hi) ((WORD)(((BYTE)(lo)) | ((WORD)((BYTE)(hi))) << 8))
-#define MAKELONG(lo, hi) ((LONG)(((WORD)(lo)) | ((DWORD)((WORD)(hi))) << 16))
+#define LOBYTE(w)           ((BYTE)((w) & 0xFF))
+#define HIBYTE(w)           ((BYTE)(((w) >> 8) & 0xFF))
+#define LOWORD(l)           ((WORD)((l) & 0xFFFF))
+#define HIWORD(l)           ((WORD)(((l) >> 16) & 0xFFFF))
+#define MAKEWORD(lo, hi)    ((WORD)(((BYTE)(lo)) | ((WORD)((BYTE)(hi))) << 8))
+#define MAKELONG(lo, hi)    ((LONG)(((WORD)(lo)) | ((DWORD)((WORD)(hi))) << 16))
 
-#define FORCEINLINE static inline __attribute__((always_inline))
+#define FORCEINLINE         static inline __attribute__((always_inline))
 
 /* SAL annotations document a function's contract to Microsoft's analyser; here they are
-   documentation only, and expand to nothing. */
+ * documentation only, and expand to nothing.
+ */
 #define _In_
 #define _In_opt_
 #define _Out_
@@ -110,17 +119,19 @@ typedef SIZE_T *PSIZE_T;
 
 #endif /* _WIN32 */
 
-/* ── THE POINTER-TO-CONST FORMS THE SDK DOES NOT HAVE. Windows defines PCSTR and PCWSTR but
-     no PC form for the basic integer types or for void (only LPCVOID, and the LP prefix is
-     not used here). Added on both platforms, so `PC…` means pointer-to-const everywhere. */
+/* -- THE POINTER-TO-CONST FORMS THE SDK DOES NOT HAVE. Windows defines PCSTR and PCWSTR but
+ * no PC form for the basic integer types or for void (only LPCVOID, and the LP prefix is
+ * not used here). Added on both platforms, so `PC...` means pointer-to-const everywhere.
+ */
 typedef const VOID  *PCVOID;
 typedef const BYTE  *PCBYTE;
 typedef const WORD  *PCWORD;
 typedef const DWORD *PCDWORD;
 
-/* ── EVERY WIDTH, CHECKED WHERE IT IS COMPILED. A wrong width does not fail loudly at run
-     time: it silently truncates a register or misreads guest memory. So a wrong one fails
-     the BUILD, on whichever platform got it wrong. */
+/* -- EVERY WIDTH, CHECKED WHERE IT IS COMPILED. A wrong width does not fail loudly at run
+ * time: it silently truncates a register or misreads guest memory. So a wrong one fails
+ * the BUILD, on whichever platform got it wrong.
+ */
 #define NTVDMEX_TYPES_ASSERT_SIZE(type, bytes) \
     typedef char NTVDMEX_TYPES_SIZE_OF_##type[(sizeof(type) == (bytes)) ? 1 : -1]
 NTVDMEX_TYPES_ASSERT_SIZE(BYTE, 1);
@@ -138,9 +149,9 @@ NTVDMEX_TYPES_ASSERT_SIZE(ULONG, 4);
 NTVDMEX_TYPES_ASSERT_SIZE(BOOL, 4);
 NTVDMEX_TYPES_ASSERT_SIZE(UINT_PTR, sizeof(PVOID));
 
-#include "ntvdmex_bits.h"       /* the byte/word/dword masks and shifts */
-#include "ntvdmex_x86.h"        /* the x86 layout: paragraphs, pages, the IVT */
-#include "ntvdmex_units.h"      /* time and frequency units */
-#include "ntvdmex_ascii.h"      /* control characters */
+#include "ntvdmex_bits.h"   /* the byte/word/dword masks and shifts */
+#include "ntvdmex_x86.h"    /* the x86 layout: paragraphs, pages, the IVT */
+#include "ntvdmex_units.h"  /* time and frequency units */
+#include "ntvdmex_ascii.h"  /* control characters */
 
 #endif /* NTVDMEX_TYPES_H */

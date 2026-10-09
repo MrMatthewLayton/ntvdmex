@@ -1,4 +1,6 @@
-/* comm_test.c -- off-VM unit battery for the 8250/16550A serial VDD (vdd_comm.c).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM unit battery for the 8250/16550A serial VDD (vdd_comm.c).
  *
  * The battery is built around LOCAL LOOPBACK, because that is the one part of a
  * UART whose correctness can be established with no peer, no cable and no host
@@ -24,7 +26,13 @@
  *     pending source raises at once (GH #181)
  *   - COM3 (3E8h) and COM4 (2E8h) are four slots of one device, each with its
  *     own registers, on the line it shares with COM1/COM2 (GH #181)
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include "vdd_comm.h"
@@ -36,27 +44,50 @@ static INT g_Total = 0, g_Failures = 0;
 static VDD_BUS    g_Bus;
 static COMM_STATE g_Comm;
 
-#define CAP 64
+#define CAP     64
 static BYTE g_Transmitted[CAP];
 static INT     g_TransmittedCount;
 static VOID CommTestSink(PVOID context, INT port, BYTE byteValue)
-{ (VOID)context; (VOID)port; if (g_TransmittedCount < CAP) g_Transmitted[g_TransmittedCount++] = byteValue; }
+{
+    (VOID)context;
+    (VOID)port;
+    if (g_TransmittedCount < CAP) g_Transmitted[g_TransmittedCount++] = byteValue;
+}
 
 /* Every IRQ the device raised, by line. The device has no "lower" -- the PIC
-   sees an edge per raise -- so a COUNT is the whole observable. */
+ * sees an edge per raise -- so a COUNT is the whole observable.
+ */
 static INT g_IrqCounts[16];
 static VOID CommTestIrqSink(PVOID context, BYTE irq)
-{ (VOID)context; if (irq < 16) ++g_IrqCounts[irq]; }
+{
+    (VOID)context;
+    if (irq < 16) ++g_IrqCounts[irq];
+}
 
 static BYTE g_PrinterBytes[CAP];
 static INT     g_PrinterCount;
 static VOID CommTestPrinterSink(PVOID context, INT port, BYTE byteValue)
-{ (VOID)context; (VOID)port; if (g_PrinterCount < CAP) g_PrinterBytes[g_PrinterCount++] = byteValue; }
+{
+    (VOID)context;
+    (VOID)port;
+    if (g_PrinterCount < CAP) g_PrinterBytes[g_PrinterCount++] = byteValue;
+}
 
-#define BASE 0x3F8
-static VOID CommTestWrite(WORD port, BYTE byteValue){ UINT32 value=byteValue; VddBusIo(&g_Bus,port,1,0,&value); }
-static BYTE CommTestRead(WORD port){ UINT32 value=0; VddBusIo(&g_Bus,port,1,1,&value); return (BYTE)value; }
-#define wr8(port,value) CommTestWrite((port),(value))
+#define BASE    0x3F8
+static VOID CommTestWrite(WORD port, BYTE byteValue)
+{
+    UINT32 value=byteValue;
+    VddBusIo(&g_Bus,port,1,0,&value);
+}
+
+static BYTE CommTestRead(WORD port)
+{
+    UINT32 value=0;
+    VddBusIo(&g_Bus,port,1,1,&value);
+    return (BYTE)value;
+}
+
+#define wr8(port,value)     CommTestWrite((port),(value))
 
 static VOID CommTestInt14(BYTE ah, BYTE al, WORD dx, PNTVDD_REGISTERS registers)
 {
@@ -80,7 +111,10 @@ INT main(VOID)
     g_Comm.Sink = CommTestSink; g_Comm.SinkContext = 0;
     g_Comm.PrinterSink = CommTestPrinterSink; g_Comm.PrinterSinkContext = 0;
     VddBusInitialize(&g_Bus, 0);
-    { NTVDD_DEVICE device = VddCommDevice(&g_Comm); VddBusAdd(&g_Bus, &device); }
+    {
+        NTVDD_DEVICE device = VddCommDevice(&g_Comm);
+        VddBusAdd(&g_Bus, &device);
+    }
     VddBusSetSinks(&g_Bus, CommTestIrqSink, 0, 0, 0);
 
     /* ---- reset state ------------------------------------------------------ */
@@ -99,12 +133,12 @@ INT main(VOID)
     CHECK(CommTestRead(BASE + COMM_SCR) == 0xA5, "scratch register holds a second, different byte");
 
     /* ---- DLAB ------------------------------------------------------------- */
-    CommTestWrite(BASE + COMM_LCR, 0x83);                 /* DLAB + 8N1                    */
-    CommTestWrite(BASE + COMM_RBR, 0x0C);                 /* divisor low  = 12 (9600)      */
-    CommTestWrite(BASE + COMM_IER, 0x00);                 /* divisor high                  */
+    CommTestWrite(BASE + COMM_LCR, 0x83);                 /* DLAB + 8N1 */
+    CommTestWrite(BASE + COMM_RBR, 0x0C);                 /* divisor low  = 12 (9600) */
+    CommTestWrite(BASE + COMM_IER, 0x00);                 /* divisor high */
     CHECK(CommTestRead(BASE + COMM_RBR) == 0x0C, "with DLAB set, base+0 reads the divisor LOW byte");
     CHECK(CommTestRead(BASE + COMM_IER) == 0x00, "with DLAB set, base+1 reads the divisor HIGH byte");
-    CommTestWrite(BASE + COMM_LCR, 0x03);                 /* DLAB off, 8N1                 */
+    CommTestWrite(BASE + COMM_LCR, 0x03);                 /* DLAB off, 8N1 */
     CHECK(CommTestRead(BASE + COMM_LCR) == 0x03, "LCR reads back what was written");
     CommTestWrite(BASE + COMM_IER, 0x0F);
     CHECK(CommTestRead(BASE + COMM_IER) == 0x0F, "with DLAB clear, base+1 is the interrupt enable");
@@ -127,7 +161,8 @@ INT main(VOID)
     CHECK((CommTestRead(BASE + COMM_LSR) & COMM_LSR_DATA_READY) == 0, "reading RBR clears DATA READY");
 
     /* the four control->status pairings, checked ONE AT A TIME so a swapped
-       pair cannot hide behind another bit being right */
+     * pair cannot hide behind another bit being right
+     */
     CommTestWrite(BASE + COMM_MCR, (BYTE)(COMM_MCR_LOOP | COMM_MCR_DTR));
     CHECK((CommTestRead(BASE + COMM_MSR) & 0xF0) == COMM_MSR_DSR,  "loopback: DTR -> DSR, alone");
     CommTestWrite(BASE + COMM_MCR, (BYTE)(COMM_MCR_LOOP | COMM_MCR_RTS));
@@ -138,7 +173,7 @@ INT main(VOID)
     CHECK((CommTestRead(BASE + COMM_MSR) & 0xF0) == COMM_MSR_DCD,  "loopback: OUT2 -> DCD, alone");
 
     /* ---- MSR delta bits latch until the register is READ ------------------- */
-    CommTestWrite(BASE + COMM_MCR, COMM_MCR_LOOP);                 /* drop every line           */
+    CommTestWrite(BASE + COMM_MCR, COMM_MCR_LOOP);                 /* drop every line */
     CommTestRead(BASE + COMM_MSR);                           /* acknowledge, deltas clear */
     CommTestWrite(BASE + COMM_MCR, (BYTE)(COMM_MCR_LOOP | COMM_MCR_DTR | COMM_MCR_RTS));
     { BYTE modemStatus = CommTestRead(BASE + COMM_MSR);
@@ -147,9 +182,9 @@ INT main(VOID)
       CHECK((CommTestRead(BASE + COMM_MSR) & 0x0F) == 0, "reading MSR is the acknowledgement: deltas clear"); }
 
     /* TERI is a TRAILING edge -- set on 1->0, not on 0->1 */
-    CommTestWrite(BASE + COMM_MCR, (BYTE)(COMM_MCR_LOOP | COMM_MCR_OUT1));   /* RI 0 -> 1         */
+    CommTestWrite(BASE + COMM_MCR, (BYTE)(COMM_MCR_LOOP | COMM_MCR_OUT1));   /* RI 0 -> 1 */
     CHECK((CommTestRead(BASE + COMM_MSR) & COMM_MSR_TRAILING_RI) == 0, "RI going HIGH does NOT set TERI");
-    CommTestWrite(BASE + COMM_MCR, COMM_MCR_LOOP);                          /* RI 1 -> 0        */
+    CommTestWrite(BASE + COMM_MCR, COMM_MCR_LOOP);                          /* RI 1 -> 0 */
     CHECK((CommTestRead(BASE + COMM_MSR) & COMM_MSR_TRAILING_RI) == COMM_MSR_TRAILING_RI, "RI going LOW DOES set TERI");
 
     /* ---- IIR: priority, and reading it clears THRE ------------------------- */
@@ -157,23 +192,24 @@ INT main(VOID)
     CommTestWrite(BASE + COMM_IER, 0x00);
     CHECK((CommTestRead(BASE + COMM_IIR) & 0x01) == 1, "with every source masked, IIR reports nothing pending");
     CommTestWrite(BASE + COMM_IER, COMM_IER_THR_EMPTY);
-    CommTestWrite(BASE + COMM_RBR, 'x');                      /* transmit -> THRE owed     */
+    CommTestWrite(BASE + COMM_RBR, 'x');                      /* transmit -> THRE owed */
     { BYTE first = CommTestRead(BASE + COMM_IIR);
       /* RX data available outranks THRE, and the loopback byte is now waiting,
-         so with BOTH enabled the answer must be 0x04. */
+       * so with BOTH enabled the answer must be 0x04.
+       */
       CommTestWrite(BASE + COMM_IER, (BYTE)(COMM_IER_THR_EMPTY | COMM_IER_RECEIVED_DATA));
       CHECK(first == 0x02, "IIR reports THRE (0x02) when only THRE is enabled");
       CHECK(CommTestRead(BASE + COMM_IIR) == 0x04,
             "received-data-available (0x04) OUTRANKS THRE -- IIR is a priority encoder"); }
-    CommTestRead(BASE + COMM_RBR);                           /* drain the byte            */
+    CommTestRead(BASE + COMM_RBR);                           /* drain the byte */
     CHECK((CommTestRead(BASE + COMM_IIR) & 0x01) == 1,
           "reading IIR cleared THRE, so once the byte is drained nothing is owed "
           "(an IIR that keeps reporting THRE is an interrupt storm)");
 
     /* ---- LSR clears errors on read, but not data-ready --------------------- */
     CommTestWrite(BASE + COMM_IER, 0x00);
-    CommTestWrite(BASE + COMM_RBR, 'q');                      /* loopback: DR set          */
-    g_Comm.Ports[0].Lsr |= COMM_LSR_OVERRUN;                        /* pretend an overrun        */
+    CommTestWrite(BASE + COMM_RBR, 'q');                      /* loopback: DR set */
+    g_Comm.Ports[0].Lsr |= COMM_LSR_OVERRUN;                        /* pretend an overrun */
     { BYTE lineStatus = CommTestRead(BASE + COMM_LSR);
       CHECK((lineStatus & COMM_LSR_OVERRUN) == COMM_LSR_OVERRUN, "LSR reports the overrun");
       CHECK((CommTestRead(BASE + COMM_LSR) & COMM_LSR_OVERRUN) == 0, "reading LSR clears the ERROR bits");
@@ -184,7 +220,7 @@ INT main(VOID)
     /* ---- the FIFO control register resets the receiver --------------------- */
     CommTestWrite(BASE + COMM_RBR, '1'); CommTestWrite(BASE + COMM_RBR, '2');
     CHECK((CommTestRead(BASE + COMM_LSR) & COMM_LSR_DATA_READY) == COMM_LSR_DATA_READY, "two loopback bytes are waiting");
-    CommTestWrite(BASE + COMM_IIR, 0x02);                     /* FCR: clear receive FIFO   */
+    CommTestWrite(BASE + COMM_IIR, 0x02);                     /* FCR: clear receive FIFO */
     CHECK((CommTestRead(BASE + COMM_LSR) & COMM_LSR_DATA_READY) == 0, "FCR bit 1 clears the receive FIFO");
     CHECK((CommTestRead(BASE + COMM_IIR) & 0xC0) == 0,
           "IIR does not claim an enabled FIFO until FCR bit 0 is set");
@@ -193,16 +229,17 @@ INT main(VOID)
     CommTestWrite(BASE + COMM_IIR, 0x00);
 
     /* ---- host -> guest ----------------------------------------------------- */
-    CommTestWrite(BASE + COMM_MCR, 0x00);                     /* out of loopback           */
+    CommTestWrite(BASE + COMM_MCR, 0x00);                     /* out of loopback */
     CHECK(VddCommReceive(&g_Comm, 0, 'H') == 0, "the host can push a received byte");
     CHECK((CommTestRead(BASE + COMM_LSR) & COMM_LSR_DATA_READY) == COMM_LSR_DATA_READY, "...which sets data-ready");
     CHECK(CommTestRead(BASE + COMM_RBR) == 'H', "...and reads out of RBR");
 
     /* ---- OUT2 GATES THE LINE, NOT THE PART (GH #181) ------------------------
-       All out of loopback, deliberately: whether loopback closes the gate is
-       the one question here the datasheets and the Super I/O parts answer
-       differently, and it is not pinned until an oracle is asked. */
-    CommTestWrite(BASE + COMM_MCR, 0x00);                     /* OUT2 clear                */
+     * All out of loopback, deliberately: whether loopback closes the gate is
+     * the one question here the datasheets and the Super I/O parts answer
+     * differently, and it is not pinned until an oracle is asked.
+     */
+    CommTestWrite(BASE + COMM_MCR, 0x00);                     /* OUT2 clear */
     CommTestWrite(BASE + COMM_IER, COMM_IER_RECEIVED_DATA);
     memset(g_IrqCounts, 0, sizeof g_IrqCounts);
     VddCommReceive(&g_Comm, 0, 'i');
@@ -222,11 +259,11 @@ INT main(VOID)
     CHECK(g_IrqCounts[4] == 2, "OUT2 set: a received byte with RDA enabled raises IRQ4");
     CHECK(g_IrqCounts[3] == 0, "...on COM1's line only, not COM2's");
     CommTestRead(BASE + COMM_RBR);
-    CommTestWrite(BASE + COMM_MCR, 0x00);                     /* close the gate again      */
+    CommTestWrite(BASE + COMM_MCR, 0x00);                     /* close the gate again */
     CommTestWrite(BASE + COMM_IER, COMM_IER_THR_EMPTY);
     memset(g_IrqCounts, 0, sizeof g_IrqCounts);
     g_TransmittedCount = 0;
-    CommTestWrite(BASE + COMM_RBR, 't');                      /* to the sink: THRE owed    */
+    CommTestWrite(BASE + COMM_RBR, 't');                      /* to the sink: THRE owed */
     CHECK(g_TransmittedCount == 1 && g_IrqCounts[4] == 0,
           "OUT2 clear: a transmit with THRE enabled raises NO IRQ either");
     CHECK(CommTestRead(BASE + COMM_IIR) == 0x02,
@@ -282,7 +319,7 @@ INT main(VOID)
     /* THE RECEIVE FIFO'S TRIGGER LEVEL, out of loopback */
     CommTestWrite(BASE + COMM_MCR, COMM_MCR_OUT2);
     CommTestWrite(BASE + COMM_IER, COMM_IER_RECEIVED_DATA);
-    CommTestWrite(BASE + COMM_IIR, 0x41);                     /* FCR: FIFO on, trigger = 4  */
+    CommTestWrite(BASE + COMM_IIR, 0x41);                     /* FCR: FIFO on, trigger = 4 */
     VddCommReceive(&g_Comm, 0, '1'); VddCommReceive(&g_Comm, 0, '2');
     CHECK(CommTestRead(BASE + COMM_IIR) == 0xCC, "#245: 2 bytes below a trigger of 4 -> CHARACTER "
                                        "TIMEOUT (IIR 0xCC with the FIFO bits)");
@@ -292,14 +329,17 @@ INT main(VOID)
     CHECK(CommTestRead(BASE + COMM_IIR) == 0xCC, "...3 left, below the trigger again -> timeout");
     CommTestRead(BASE + COMM_RBR); CommTestRead(BASE + COMM_RBR); CommTestRead(BASE + COMM_RBR);
     CHECK((CommTestRead(BASE + COMM_IIR) & 0x0F) == 0x01, "...drained: nothing owed");
-    CommTestWrite(BASE + COMM_IIR, 0xC1);                     /* trigger = 14               */
-    { INT index; for (index = 0; index < 20; ++index) VddCommReceive(&g_Comm, 0, (BYTE)('a' + index)); }
+    CommTestWrite(BASE + COMM_IIR, 0xC1);                     /* trigger = 14 */
+    {
+        INT index;
+        for (index = 0; index < 20; ++index) VddCommReceive(&g_Comm, 0, (BYTE)('a' + index));
+    }
     CHECK(CommTestRead(BASE + COMM_IIR) == 0xC4, "20 queued, 16 in the FIFO >= 14 -> RDA");
     CHECK((CommTestRead(BASE + COMM_LSR) & COMM_LSR_OVERRUN) == 0,
           "...and the 4 beyond the FIFO wait on the WIRE: no overrun for a burst the host queued");
-    CommTestWrite(BASE + COMM_IIR, 0x07);                     /* clear both FIFOs, FIFO on  */
+    CommTestWrite(BASE + COMM_IIR, 0x07);                     /* clear both FIFOs, FIFO on */
     CHECK((CommTestRead(BASE + COMM_LSR) & COMM_LSR_DATA_READY) == 0, "FCR bit 1 empties the receiver");
-    CommTestWrite(BASE + COMM_IIR, 0x00);                     /* back to 8250 behaviour     */
+    CommTestWrite(BASE + COMM_IIR, 0x00);                     /* back to 8250 behaviour */
     VddCommReceive(&g_Comm, 0, 'z');
     CHECK(CommTestRead(BASE + COMM_IIR) == 0x04, "FIFO off: one byte is RDA, no timeout, no FIFO bits");
     CommTestRead(BASE + COMM_RBR);
@@ -308,7 +348,7 @@ INT main(VOID)
 
     /* ---- INT 14h describes THE SAME PART ----------------------------------- */
     CommTestWrite(BASE + COMM_MCR, COMM_MCR_LOOP);
-    CommTestInt14(0x01, 'Z', 0, &registers);                       /* BIOS send, in loopback    */
+    CommTestInt14(0x01, 'Z', 0, &registers);                       /* BIOS send, in loopback */
     CHECK((CommTestRead(BASE + COMM_LSR) & COMM_LSR_DATA_READY) == COMM_LSR_DATA_READY,
           "a byte sent through INT 14h in loopback arrives in the SAME receiver");
     CHECK(CommTestRead(BASE + COMM_RBR) == 'Z', "...and reads out of RBR");
@@ -321,7 +361,7 @@ INT main(VOID)
     CHECK((registers.Eax & 0xFFFF) == 0x8000,
           "INT 14h AH=02 with nothing waiting reports TIMEOUT (and does not hang the guest)");
 
-    CommTestInt14(0x00, 0xE3, 0, &registers);                      /* 9600 8N1                  */
+    CommTestInt14(0x00, 0xE3, 0, &registers);                      /* 9600 8N1 */
     CommTestWrite(BASE + COMM_LCR, 0x83);
     CHECK(CommTestRead(BASE + COMM_RBR) == 12,
           "INT 14h AH=00 at 9600 baud leaves divisor 12, readable through DLAB -- "
@@ -364,13 +404,17 @@ INT main(VOID)
     CommTestWrite(0x2E8 + COMM_IER, 0); CommTestWrite(0x2E8 + COMM_MCR, 0);
 
     /* A slot that is NOT fitted -- the host's default for COM3/COM4 -- must be
-       absent on every route at once: no registers, no INT 14h, not counted. */
+     * absent on every route at once: no registers, no INT 14h, not counted.
+     */
     { static VDD_BUS otherBus; static COMM_STATE otherComm; NTVDD_REGISTERS otherRegisters; UINT32 value = 0;
       memset(&otherComm, 0, sizeof otherComm);
       otherComm.Ports[0].BasePort = BASE;  otherComm.Ports[0].Irq = 4; otherComm.Ports[0].IsFitted = 1;
       otherComm.Ports[1].BasePort = 0x2F8; otherComm.Ports[1].Irq = 3; otherComm.Ports[1].IsFitted = 1;
       VddBusInitialize(&otherBus, 0);
-      { NTVDD_DEVICE device = VddCommDevice(&otherComm); VddBusAdd(&otherBus, &device); }
+      {
+          NTVDD_DEVICE device = VddCommDevice(&otherComm);
+          VddBusAdd(&otherBus, &device);
+      }
       CHECK(VddBusIo(&otherBus, 0x3E8 + COMM_SCR, 1, 1, &value) == 0,
             "an unfitted COM3 leaves 3E8h unclaimed (the guest reads the bus float)");
       CHECK(VddCommIsFitted(&otherComm, 2) == 0 && VddCommIsFitted(&otherComm, 3) == 0,
@@ -389,18 +433,19 @@ INT main(VOID)
     wr8(0x378, 'P');
     CHECK(CommTestRead(0x378) == 'P', "the LPT data latch reads back");
     CHECK(g_PrinterCount == 0, "writing DATA alone prints NOTHING -- the byte is only latched");
-    wr8(0x37A, LPT_CONTROL_STROBE);                 /* 0 -> 1: the latching edge     */
+    wr8(0x37A, LPT_CONTROL_STROBE);                 /* 0 -> 1: the latching edge */
     CHECK(g_PrinterCount == 1 && g_PrinterBytes[0] == 'P', "the RISING edge of STROBE prints the latched byte");
-    wr8(0x37A, LPT_CONTROL_STROBE);                 /* still high: no new edge       */
+    wr8(0x37A, LPT_CONTROL_STROBE);                 /* still high: no new edge */
     CHECK(g_PrinterCount == 1, "holding STROBE high does not print it again");
     wr8(0x37A, 0);
     CHECK(g_PrinterCount == 1, "the falling edge does not print either");
     wr8(0x378, 'Q'); wr8(0x37A, LPT_CONTROL_STROBE);
     CHECK(g_PrinterCount == 2 && g_PrinterBytes[1] == 'Q', "the next latch+strobe prints the next byte");
 
-    /* ⚠ In a dialect scripts/offvm.sh parses. This line used to read "N/M checks
-         passed", which the runner does not know -- so the whole battery ran on
-         its exit status and was counted as 0 checks. */
+    /* [CAUTION]: In a dialect scripts/offvm.sh parses. This line used to read "N/M checks
+     * passed", which the runner does not know -- so the whole battery ran on
+     * its exit status and was counted as 0 checks.
+     */
     printf("\n== %d checks, %d failed\n", g_Total, g_Failures);
     return g_Failures ? 1 : 0;
 }

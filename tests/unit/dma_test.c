@@ -1,4 +1,6 @@
-/* dma_test.c -- off-VM unit battery for the ISA DMA controller VDD (vdd_dma.c).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM unit battery for the ISA DMA controller VDD (vdd_dma.c).
  *
  * The first device of the sound epic: Sound Blaster playback is DMA, so the SB
  * VDD is only as correct as this one. The cases below target the things that are
@@ -8,7 +10,13 @@
  * streams continuous audio).
  *
  * Entirely off-VM: the bus is given a plain 1MB array as guest memory.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include "vdd_dma.h"
@@ -21,10 +29,14 @@ static BYTE g_GuestMemory[0x100000];
 
 /* A stand-in for a sound card's DREQ lines (#176): the test sets the mask. */
 static BYTE g_DreqMask;
-static BYTE DmaTestFakeDreq(PCVOID context) { return *(PCBYTE )context; }
+static BYTE DmaTestFakeDreq(PCVOID context)
+{
+    return *(PCBYTE )context;
+}
 
 /* Program a channel the way a DOS sound driver does: clear the flip-flop, write
-   address lo/hi, count lo/hi, the page, then the mode, then unmask. */
+ * address lo/hi, count lo/hi, the page, then the mode, then unmask.
+ */
 static VOID DmaTestProgram(PVDD_BUS bus, INT channel, UINT32 physical, WORD count, BYTE mode)
 {
     INT isSecondController = (channel >= 4);
@@ -37,7 +49,8 @@ static VOID DmaTestProgram(PVDD_BUS bus, INT channel, UINT32 physical, WORD coun
     WORD address   = isSecondController ? (WORD)((physical >> 1) & 0xFFFF) : (WORD)(physical & 0xFFFF);
     UINT32 value;
 
-    switch (channel) {
+    switch (channel)
+    {
     case 0: pagePort = 0x87; break;  case 1: pagePort = 0x83; break;
     case 2: pagePort = 0x81; break;  case 3: pagePort = 0x82; break;
     case 5: pagePort = 0x8B; break;  case 6: pagePort = 0x89; break;
@@ -74,23 +87,23 @@ INT main(VOID)
     CHECK(actual == 0, "masked channel transfers nothing");
 
     /* T2: flip-flop + page wiring ------------------------------------------ */
-    value = 0;    VddBusIo(&bus, 0x0C, 1, 0, &value);      /* clear byte pointer      */
-    value = 0x34; VddBusIo(&bus, 0x02, 1, 0, &value);      /* ch1 addr lo             */
-    value = 0x12; VddBusIo(&bus, 0x02, 1, 0, &value);      /* ch1 addr hi             */
+    value = 0;    VddBusIo(&bus, 0x0C, 1, 0, &value);      /* clear byte pointer */
+    value = 0x34; VddBusIo(&bus, 0x02, 1, 0, &value);      /* ch1 addr lo */
+    value = 0x12; VddBusIo(&bus, 0x02, 1, 0, &value);      /* ch1 addr hi */
     CHECK(dma.Channels[1].BaseAddress == 0x1234, "flip-flop: lo then hi -> 0x1234");
     CHECK(dma.Channels[1].CurrentAddress == 0x1234, "current address loaded from base");
-    value = 0x07; VddBusIo(&bus, 0x83, 1, 0, &value);      /* ch1 page (port 0x83!)   */
+    value = 0x07; VddBusIo(&bus, 0x83, 1, 0, &value);      /* ch1 page (port 0x83!) */
     CHECK(dma.Channels[1].Page == 0x07, "page register 0x83 maps to channel 1");
     CHECK(VddDmaCurrentPhysical(&dma, 1) == 0x71234, "8-bit channel: phys = page<<16|addr");
 
-    /* the flip-flop must alternate, not latch: a second lo/hi pair works too  */
+    /* the flip-flop must alternate, not latch: a second lo/hi pair works too */
     value = 0x78; VddBusIo(&bus, 0x02, 1, 0, &value);
     value = 0x56; VddBusIo(&bus, 0x02, 1, 0, &value);
     CHECK(dma.Channels[1].BaseAddress == 0x5678, "flip-flop alternates across writes");
 
     /* T3: a plain single-cycle read transfer (memory -> device) ------------- */
     for (index = 0; index < 256; ++index) g_GuestMemory[0x71000 + index] = (BYTE)index;
-    DmaTestProgram(&bus, 1, 0x71000, 99, DMA_MODE_TRANSFER_READ);   /* 100 bytes           */
+    DmaTestProgram(&bus, 1, 0x71000, 99, DMA_MODE_TRANSFER_READ);   /* 100 bytes */
     CHECK(dma.Channels[1].IsMasked == 0, "unmask via single-mask register");
     CHECK(VddDmaRemaining(&dma, 1) == 100, "remaining = count+1 bytes");
 
@@ -109,8 +122,9 @@ INT main(VOID)
     CHECK(dma.Channels[1].IsMasked == 1, "8237 masks a non-auto-init channel at TC");
     CHECK(buffer[59] == 99, "last byte of the block is correct");
     /* #246: "TC when the word count goes from 0000h to FFFFh" -- the count wraps,
-       and a driver polling it for FFFFh to see a single-cycle block end needs it to.
-       It rested at 0000h before; p_dma2's TC rows made that visible. */
+     * and a driver polling it for FFFFh to see a single-cycle block end needs it to.
+     * It rested at 0000h before; p_dma2's TC rows made that visible.
+     */
     { UINT32 low = 0, high = 0;
       value = 0; VddBusIo(&bus, 0x0C, 1, 0, &value);
       VddBusIo(&bus, 0x03, 1, 1, &low); VddBusIo(&bus, 0x03, 1, 1, &high);
@@ -148,7 +162,7 @@ INT main(VOID)
 
     /* T8: 16-bit controller -- word addressing, word counts ----------------- */
     for (index = 0; index < 32; ++index) g_GuestMemory[0x84000 + index] = (BYTE)(0x40 + index);
-    DmaTestProgram(&bus, 5, 0x84000, 7, DMA_MODE_TRANSFER_READ);    /* 8 words = 16 bytes  */
+    DmaTestProgram(&bus, 5, 0x84000, 7, DMA_MODE_TRANSFER_READ);    /* 8 words = 16 bytes */
     CHECK(dma.Channels[5].BaseAddress == 0x2000, "16-bit channel: address register is a WORD address");
     CHECK(VddDmaCurrentPhysical(&dma, 5) == 0x84000, "16-bit channel: phys = (page&0xFE)<<16|addr<<1");
     CHECK(VddDmaRemaining(&dma, 5) == 16, "16-bit channel: remaining counts BYTES (8 words)");
@@ -172,13 +186,15 @@ INT main(VOID)
     value = 0x00; VddBusIo(&bus, 0x0E, 1, 0, &value);          /* clear mask register */
     CHECK(!dma.Channels[0].IsMasked && !dma.Channels[3].IsMasked, "clear-mask unmasks every channel");
 
-    /* ── THE PAGE PORTS THAT MAP TO NO CHANNEL. docs/ref/dma.md 3. ────────────
-       Seven of the sixteen ports at 80h-8Fh carry a channel's high address bits;
-       the other nine are read/write latches on a PC anyway, because the address
-       decoder does not bother to leave them out.
-       ★ MEASURED: dosbox-x and PCem (real AMI BIOS) both read back a written
-         0x5A at port 80h; only 6.22-under-QEMU answers 0xFF. We answered 0xFF --
-         an empty bus rather than a machine. */
+    /* THE PAGE PORTS THAT MAP TO NO CHANNEL. docs/ref/dma.md 3:
+     * Seven of the sixteen ports at 80h-8Fh carry a channel's high address bits;
+     * the other nine are read/write latches on a PC anyway, because the address
+     * decoder does not bother to leave them out.
+     *
+     * [INFO]: MEASURED: dosbox-x and PCem (real AMI BIOS) both read back a written
+     * 0x5A at port 80h; only 6.22-under-QEMU answers 0xFF. We answered 0xFF --
+     * an empty bus rather than a machine.
+     */
     {
         UINT32 value;
         value = 0x5A; VddBusIo(&bus, 0x80, 1, 0, &value);
@@ -190,51 +206,55 @@ INT main(VOID)
         CHECK(value == 0xA5, "page: so is 8Ch");
 
         /* ...and the mapped ones are unaffected: the spare latches must not be
-           the same storage, or writing scratch would move a channel's page. */
-        value = 0x33; VddBusIo(&bus, 0x83, 1, 0, &value);      /* channel 1's page    */
+         * the same storage, or writing scratch would move a channel's page.
+         */
+        value = 0x33; VddBusIo(&bus, 0x83, 1, 0, &value);      /* channel 1's page */
         CHECK(dma.Channels[1].Page == 0x33, "page: 83h still reaches channel 1");
         value = 0;    VddBusIo(&bus, 0x80, 1, 1, &value);
         CHECK(value == 0x5A, "page: ...and did not disturb the spare at 80h");
     }
 
-    /* ── T11: STATUS BITS 7:4 -- "REQUEST PENDING". #176. ──────────────────────
-       8237A datasheet: bits 4-7 "are set whenever their corresponding channel is
-       requesting service". They read 0 always before #176. A stand-in device
-       drives the DREQ lines through the same registration a sound card uses. */
+    /* T11: STATUS BITS 7:4 -- "REQUEST PENDING". #176:
+     * 8237A datasheet: bits 4-7 "are set whenever their corresponding channel is
+     * requesting service". They read 0 always before #176. A stand-in device
+     * drives the DREQ lines through the same registration a sound card uses.
+     */
     {
         UINT32 status;
         CHECK(VddDmaAddDreq(&dma, DmaTestFakeDreq, &g_DreqMask) == 0, "dreq: a device registers its lines");
         CHECK(VddDmaAddDreq(&dma, DmaTestFakeDreq, &g_DreqMask) == 0 && dma.DreqCount == 1,
               "dreq: registering the same device twice is one registration");
 
-        value = 0; VddBusIo(&bus, 0x0D, 1, 0, &value);         /* master clear ctrl 1   */
-        value = 0; VddBusIo(&bus, 0xDA, 1, 0, &value);         /* master clear ctrl 2   */
+        value = 0; VddBusIo(&bus, 0x0D, 1, 0, &value);         /* master clear ctrl 1 */
+        value = 0; VddBusIo(&bus, 0xDA, 1, 0, &value);         /* master clear ctrl 2 */
         /* ...which masks channel 4, the cascade, and so disconnects controller 1
-           (#246). Put it back the way POST does: cascade mode, unmasked. */
+         * (#246). Put it back the way POST does: cascade mode, unmasked.
+         */
         value = 0xC0; VddBusIo(&bus, 0xD6, 1, 0, &value);
         value = 0x00; VddBusIo(&bus, 0xD4, 1, 0, &value);
         g_DreqMask = 0;
         VddBusIo(&bus, 0x08, 1, 1, &status);
         CHECK((status & DMA_STATUS_REQUEST) == 0, "status 08h: no device requesting -> bits 7:4 clear");
 
-        g_DreqMask = 0x0A;                                    /* DREQ 1 and 3          */
+        g_DreqMask = 0x0A;                                    /* DREQ 1 and 3 */
         VddBusIo(&bus, 0x08, 1, 1, &status);
         CHECK((status & DMA_STATUS_REQUEST) == 0xA0, "status 08h: DREQ1+DREQ3 -> bits 5 and 7");
         CHECK(dma.Channels[1].IsMasked && dma.Channels[3].IsMasked,
               "...and that is with both channels MASKED: a refused request is still pending");
 
-        g_DreqMask = 0xA0;                                    /* DREQ 5 and 7          */
+        g_DreqMask = 0xA0;                                    /* DREQ 5 and 7 */
         VddBusIo(&bus, 0x08, 1, 1, &status);
         CHECK((status & DMA_STATUS_REQUEST) == 0, "status 08h: controller 2's requests are not controller 1's");
         VddBusIo(&bus, 0xD0, 1, 1, &status);
         CHECK((status & DMA_STATUS_REQUEST) == 0xA0, "status D0h: DREQ5+DREQ7 -> bits 5 and 7");
 
         /* channel 4 is the CASCADE: controller 1's HRQ, raised only for a request
-           controller 1 would serve. A device cannot drive it itself. */
+         * controller 1 would serve. A device cannot drive it itself.
+         */
         g_DreqMask = 0x10;
         VddBusIo(&bus, 0xD0, 1, 1, &status);
         CHECK((status & 0x10) == 0, "status D0h: a device's claim on channel 4 is dropped");
-        g_DreqMask = 0x02;                                    /* DREQ1, ch1 masked     */
+        g_DreqMask = 0x02;                                    /* DREQ1, ch1 masked */
         VddBusIo(&bus, 0xD0, 1, 1, &status);
         CHECK((status & 0x10) == 0, "status D0h bit 4: masked ch1 request -> no HRQ, no DREQ4");
         DmaTestProgram(&bus, 1, 0x76000, 15, DMA_MODE_TRANSFER_READ);
@@ -253,14 +273,15 @@ INT main(VOID)
         CHECK(status == 0x00, "status: DRQ1 falls when the device stops requesting");
     }
 
-    /* ── T12: COMMAND BIT 2 -- CONTROLLER DISABLE. #176. ───────────────────────
-       Stored and read by nothing before #176. With it set the 8237 gives no DACK
-       on any of the controller's channels: no byte moves, the address and count
-       stand still, no TC -- and re-enabling resumes exactly where it stopped. */
+    /* T12: COMMAND BIT 2 -- CONTROLLER DISABLE. #176:
+     * Stored and read by nothing before #176. With it set the 8237 gives no DACK
+     * on any of the controller's channels: no byte moves, the address and count
+     * stand still, no TC -- and re-enabling resumes exactly where it stopped.
+     */
     {
         UINT32 status;
         for (index = 0; index < 64; ++index) g_GuestMemory[0x77000 + index] = (BYTE)(0x80 + index);
-        DmaTestProgram(&bus, 1, 0x77000, 31, DMA_MODE_TRANSFER_READ);         /* 32 bytes   */
+        DmaTestProgram(&bus, 1, 0x77000, 31, DMA_MODE_TRANSFER_READ);         /* 32 bytes */
         actual = VddDmaRead(&dma, 1, buffer, 8, &isTerminalCount);
         CHECK(actual == 8 && buffer[7] == 0x87, "disable: 8 bytes move while enabled");
         CHECK(VddDmaGrants(&dma, 1), "grants: unmasked + enabled -> served");
@@ -285,22 +306,23 @@ INT main(VOID)
 
         /* the other controller is not affected */
         for (index = 0; index < 4; ++index) g_GuestMemory[0x86000 + index] = (BYTE)(0x60 + index);
-        DmaTestProgram(&bus, 5, 0x86000, 1, DMA_MODE_TRANSFER_READ);          /* 2 words    */
+        DmaTestProgram(&bus, 5, 0x86000, 1, DMA_MODE_TRANSFER_READ);          /* 2 words */
         actual = VddDmaRead(&dma, 5, buffer, 4, &isTerminalCount);
         CHECK(actual == 4 && buffer[0] == 0x60, "disable 08h: controller 2's channel 5 still moves");
 
-        value = 0; VddBusIo(&bus, 0x08, 1, 0, &value);                   /* re-enable  */
+        value = 0; VddBusIo(&bus, 0x08, 1, 0, &value);                   /* re-enable */
         actual = VddDmaRead(&dma, 1, buffer, 64, &isTerminalCount);
         CHECK(actual == 24 && isTerminalCount, "re-enable: the remaining 24 bytes move, then TC");
         CHECK(buffer[0] == 0x88 && buffer[23] == 0x9F, "re-enable: resumed at byte 8, not the base");
 
         /* controller 2's own bit, at D0h, stops channel 5 -- AND, on an AT, channel
-           1 as well: controller 1 reaches the bus only through channel 4 (#246).
-           Before #246 this case asserted the opposite ("the cascade is not
-           modelled"); that was a statement about our model, not the board. */
+         * 1 as well: controller 1 reaches the bus only through channel 4 (#246).
+         * Before #246 this case asserted the opposite ("the cascade is not
+         * modelled"); that was a statement about our model, not the board.
+         */
         DmaTestProgram(&bus, 5, 0x86000, 1, DMA_MODE_TRANSFER_READ);
         DmaTestProgram(&bus, 1, 0x77000, 3, DMA_MODE_TRANSFER_READ);
-        value = 0; VddBusIo(&bus, 0x08, 1, 1, &value);                   /* drop TC1   */
+        value = 0; VddBusIo(&bus, 0x08, 1, 1, &value);                   /* drop TC1 */
         value = DMA_COMMAND_DISABLE; VddBusIo(&bus, 0xD0, 1, 0, &value);
         CHECK(!VddDmaGrants(&dma, 5) && !VddDmaGrants(&dma, 1) && !VddDmaGrants(&dma, 3),
               "disable D0h: refuses channels 4-7 AND, through the cascade, 0-3");
@@ -313,10 +335,10 @@ INT main(VOID)
         CHECK((value & 0x10) != 0,
               "disable D0h: controller 1 still RAISES HRQ (DREQ4) -- it is the far end that refuses");
         g_DreqMask = 0;
-        value = 0; VddBusIo(&bus, 0xD0, 1, 0, &value);                   /* re-enable  */
+        value = 0; VddBusIo(&bus, 0xD0, 1, 0, &value);                   /* re-enable */
         CHECK(VddDmaGrants(&dma, 1), "enable D0h: channel 1 is served again");
         /* masking channel 4 alone does the same thing */
-        value = 0x04; VddBusIo(&bus, 0xD4, 1, 0, &value);                /* mask ch4   */
+        value = 0x04; VddBusIo(&bus, 0xD4, 1, 0, &value);                /* mask ch4 */
         CHECK(!VddDmaGrants(&dma, 1) && VddDmaGrants(&dma, 5),
               "cascade: masking channel 4 starves channel 1, not channel 5");
         value = 0x00; VddBusIo(&bus, 0xD4, 1, 0, &value);                /* unmask ch4 */
@@ -325,7 +347,8 @@ INT main(VOID)
         CHECK(actual == 4 && isTerminalCount, "cascade: and the stalled 4-byte block then completes");
 
         /* master clear clears the command register -- the controller is enabled
-           again, and every channel masked (datasheet) */
+         * again, and every channel masked (datasheet)
+         */
         value = 0; VddBusIo(&bus, 0xDA, 1, 0, &value);
         CHECK(dma.Command[1] == 0 && dma.Channels[5].IsMasked, "master clear D0h: enabled again, channel masked");
         value = 0x01; VddBusIo(&bus, 0xD4, 1, 0, &value);                /* unmask ch5 */
@@ -339,18 +362,19 @@ INT main(VOID)
               "reset: channel 4 in cascade mode and unmasked, as POST leaves it");
     }
 
-    /* ── T13: THE REQUEST REGISTER (09h). #246. ───────────────────────────────
-       8237A datasheet: a request bit per channel, set/reset by bits 2 and 1:0,
-       NON-MASKABLE, cleared at TC and by master clear. With no device on DACK the
-       controller carries the cycles out itself. Channel 1 in VERIFY mode: the walk
-       happens, memory is not touched, TC latches. */
+    /* T13: THE REQUEST REGISTER (09h). #246:
+     * 8237A datasheet: a request bit per channel, set/reset by bits 2 and 1:0,
+     * NON-MASKABLE, cleared at TC and by master clear. With no device on DACK the
+     * controller carries the cycles out itself. Channel 1 in VERIFY mode: the walk
+     * happens, memory is not touched, TC latches.
+     */
     {
         UINT32 status;
         VddDmaReset(&dma);
         for (index = 0; index < 32; ++index) g_GuestMemory[0x78000 + index] = (BYTE)(0x40 + index);
         DmaTestProgram(&bus, 1, 0x78000, 15, 0x80 /* block */ | DMA_MODE_TRANSFER_VERIFY);
-        value = 0x05; VddBusIo(&bus, 0x0A, 1, 0, &value);                /* MASK ch1   */
-        value = 0x05; VddBusIo(&bus, 0x09, 1, 0, &value);                /* request 1  */
+        value = 0x05; VddBusIo(&bus, 0x0A, 1, 0, &value);                /* MASK ch1 */
+        value = 0x05; VddBusIo(&bus, 0x09, 1, 0, &value);                /* request 1 */
         CHECK(dma.Channels[1].CurrentCount == 0xFFFF && dma.Channels[1].CurrentAddress == 0x8010,
               "request: a masked channel is served anyway -- 16 verify cycles, count FFFFh");
         CHECK(g_GuestMemory[0x78000] == 0x40 && g_GuestMemory[0x7800F] == 0x4F, "request: verify touched no memory");
@@ -367,13 +391,13 @@ INT main(VOID)
 
         /* held off by a disabled controller: pending, visible, then served */
         DmaTestProgram(&bus, 1, 0x78000, 7, 0x80 | DMA_MODE_TRANSFER_VERIFY);
-        value = 0; VddBusIo(&bus, 0x08, 1, 1, &value);                   /* drop TCs   */
+        value = 0; VddBusIo(&bus, 0x08, 1, 1, &value);                   /* drop TCs */
         value = DMA_COMMAND_DISABLE; VddBusIo(&bus, 0x08, 1, 0, &value);
         value = 0x05; VddBusIo(&bus, 0x09, 1, 0, &value);
         CHECK(dma.Channels[1].CurrentCount == 7, "request + disabled controller: nothing moves");
         VddBusIo(&bus, 0x08, 1, 1, &status);
         CHECK(status == 0x20, "request + disabled controller: status bit 5 -- pending");
-        value = 0; VddBusIo(&bus, 0x08, 1, 0, &value);                   /* enable     */
+        value = 0; VddBusIo(&bus, 0x08, 1, 0, &value);                   /* enable */
         CHECK(dma.Channels[1].CurrentCount == 0xFFFF && dma.Channels[1].CurrentAddress == 0x8008 && dma.Request[0] == 0,
               "request: served the moment the controller is enabled");
 
@@ -404,16 +428,21 @@ INT main(VOID)
         value = 0x03; VddBusIo(&bus, 0x09, 1, 0, &value);
     }
 
-    /* ── T14: MEMORY-TO-MEMORY + THE TEMPORARY REGISTER. #246. ────────────────
-       Command bit 0; started by channel 0's software request; byte by byte through
-       the temporary register from channel 0's address to channel 1's; channel 1's
-       count runs and its TC ends it. The temporary register then reads the LAST
-       byte moved. */
+    /* T14: MEMORY-TO-MEMORY + THE TEMPORARY REGISTER. #246:
+     * Command bit 0; started by channel 0's software request; byte by byte through
+     * the temporary register from channel 0's address to channel 1's; channel 1's
+     * count runs and its TC ends it. The temporary register then reads the LAST
+     * byte moved.
+     */
     {
         UINT32 status;
         VddDmaReset(&dma);
-        for (index = 0; index < 16; ++index) { g_GuestMemory[0x79000 + index] = (BYTE)(0xA0 + index); g_GuestMemory[0x7A000 + index] = 0; }
-        DmaTestProgram(&bus, 0, 0x79000, 0xFFFF, 0x80 | DMA_MODE_TRANSFER_READ);  /* source  */
+        for (index = 0; index < 16; ++index)
+        {
+            g_GuestMemory[0x79000 + index] = (BYTE)(0xA0 + index);
+            g_GuestMemory[0x7A000 + index] = 0;
+        }
+        DmaTestProgram(&bus, 0, 0x79000, 0xFFFF, 0x80 | DMA_MODE_TRANSFER_READ);  /* source */
         DmaTestProgram(&bus, 1, 0x7A000, 9, 0x80 | DMA_MODE_TRANSFER_WRITE);      /* 10 dest */
         value = DMA_COMMAND_MEMORY_TO_MEMORY; VddBusIo(&bus, 0x08, 1, 0, &value);
         value = 0x04; VddBusIo(&bus, 0x09, 1, 0, &value);                    /* req ch0 */
@@ -457,7 +486,7 @@ INT main(VOID)
         CHECK(value == 0, "temporary register: master clear clears it");
     }
 
-    /* ── T15: STATUS SHOWS A SOFTWARE REQUEST, AND IT RAISES HRQ. #246. ───────── */
+    /* T15: STATUS SHOWS A SOFTWARE REQUEST, AND IT RAISES HRQ. #246: */
     {
         UINT32 status;
         VddDmaReset(&dma);

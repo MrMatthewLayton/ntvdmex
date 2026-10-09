@@ -1,7 +1,16 @@
-/* host_bios.h -- the BIOS and the devices it fronts: serial and parallel ports, keyboard actions,
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * The BIOS and the devices it fronts: serial and parallel ports, keyboard actions,
  *   INT 15h, print screen, and the BIOS BOP dispatcher.
  *
- * Declarations only (#335): defined in host_bios.c. */
+ * Declarations only (#335): defined in host_bios.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_HOST_BIOS_H
 #define NTVDMEX_HOST_BIOS_H
 #include "host_state.h"

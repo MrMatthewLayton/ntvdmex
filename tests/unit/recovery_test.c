@@ -1,17 +1,25 @@
-/* recovery_test.c -- the startup-failure policy, pinned off-VM.  GH #132.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * The startup-failure policy, pinned off-VM.  GH #132.
  *
  * The value of this policy is entirely in its edges: too eager and a machine
  * loses its VDM after one bad day, too lazy and a wedged host leaves every
  * 16-bit program on the box broken until someone edits the registry by hand.
  *
  *   cc -std=c99 -I src -I src/dos -o recovery_test tests/unit/recovery_test.c
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include "dos_recovery.h"
 
-#define RECOVERY_TEST_MANY_FAILURES  99     /* a count that has kept rising          */
-#define RECOVERY_TEST_SKIP_COUNT     6      /* the subsystems DOS_SAFE_SKIPS names   */
+#define RECOVERY_TEST_MANY_FAILURES     99  /* A count that has kept rising */
+#define RECOVERY_TEST_SKIP_COUNT        6   /* The subsystems DOS_SAFE_SKIPS names */
 
 static INT g_Checks, g_Failures;
 
@@ -49,9 +57,10 @@ INT main(VOID)
     RecoveryTestExpect("3 failures -> UNINSTALL",
                        DosRecoveryDecideStartMode(DOS_RECOVERY_UNINSTALL_FAILURES),
                        DOS_START_UNINSTALL);
-    /* ⚠ AND IT MUST NOT COME BACK DOWN. A count that keeps rising has to stay
-       uninstalled -- an off-by-one that wrapped to NORMAL at 4 would put a
-       known-broken host back in the path. */
+    /* [CAUTION]: AND IT MUST NOT COME BACK DOWN. A count that keeps rising has to stay
+     * uninstalled -- an off-by-one that wrapped to NORMAL at 4 would put a
+     * known-broken host back in the path.
+     */
     RecoveryTestExpect("4 failures -> still UNINSTALL",
                        DosRecoveryDecideStartMode(DOS_RECOVERY_UNINSTALL_FAILURES + 1),
                        DOS_START_UNINSTALL);
@@ -59,7 +68,7 @@ INT main(VOID)
                        DosRecoveryDecideStartMode(RECOVERY_TEST_MANY_FAILURES),
                        DOS_START_UNINSTALL);
 
-    /* ── PARSING. A corrupt counter must not be able to uninstall us by itself. */
+    /* -- PARSING. A corrupt counter must not be able to uninstall us by itself. */
     RecoveryTestExpect("\"0\" parses as 0", RecoveryTestParse("0"), 0);
     RecoveryTestExpect("\"2\" parses as 2", RecoveryTestParse("2"), 2);
     RecoveryTestExpect("\"3\\r\\n\" parses as 3", RecoveryTestParse("3\r\n"), 3);
@@ -70,7 +79,8 @@ INT main(VOID)
                        RecoveryTestParse("garbage"), 0);
     RecoveryTestExpect("\"x3\" parses as 0 (leading junk, not a 3)", RecoveryTestParse("x3"), 0);
     /* An absurd count is far more likely to be a corrupt file than a machine
-       that really failed 99999 times, and it must not read as "uninstall". */
+     * that really failed 99999 times, and it must not read as "uninstall".
+     */
     RecoveryTestExpect("\"99999\" parses as 0 (absurd -> corrupt)",
                        RecoveryTestParse("99999"), 0);
     RecoveryTestExpect("\"12\" still parses as 12", RecoveryTestParse("12"), 12);

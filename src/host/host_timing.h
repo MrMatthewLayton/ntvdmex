@@ -1,7 +1,16 @@
-/* host_timing.h -- time: the PIT and its pacer, BIOS ticks, IRQ0 delivery, the CPU-speed governor,
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Time: the PIT and its pacer, BIOS ticks, IRQ0 delivery, the CPU-speed governor,
  *   the RTC and vertical retrace.
  *
- * Declarations only (#335): defined in host_timing.c. */
+ * Declarations only (#335): defined in host_timing.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_HOST_TIMING_H
 #define NTVDMEX_HOST_TIMING_H
 #include "host_state.h"

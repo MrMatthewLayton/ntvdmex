@@ -1,4 +1,6 @@
-/* midiroute_test.c -- off-VM battery for Settings > Audio > MIDI (src/vdd/midi_route.h,
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM battery for Settings > Audio > MIDI (src/vdd/midi_route.h,
  * GH #136).
  *
  * The setting picks a HOST midiOut device by name, so what is pinned here is the choice:
@@ -6,7 +8,13 @@
  * find their drivers by the names those drivers really register, and a machine with
  * neither says -1 so the host can fall back AND log it. The device names below are the
  * ones the drivers ship with; "Microsoft GS Wavetable SW Synth" is XP's own.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include "midi_route.h"
 

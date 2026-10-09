@@ -1,7 +1,16 @@
-/* host_dos.h -- the DOS side of the host: EXEC and termination, INT 24h, disks, stdio and the
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * The DOS side of the host: EXEC and termination, INT 24h, disks, stdio and the
  *   console, and the XMS/EMS host calls.
  *
- * Declarations only (#335): defined in host_dos.c. */
+ * Declarations only (#335): defined in host_dos.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_HOST_DOS_H
 #define NTVDMEX_HOST_DOS_H
 #include "host_state.h"

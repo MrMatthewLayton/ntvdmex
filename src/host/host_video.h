@@ -1,7 +1,16 @@
-/* host_video.h -- video: Mode Y, the A000 trap, the instruction interpreters' host callbacks
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Video: Mode Y, the A000 trap, the instruction interpreters' host callbacks
  *   (v86interp.h, pm32interp.h) and the profiler.
  *
- * Declarations only (#335): defined in host_video.c. */
+ * Declarations only (#335): defined in host_video.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_HOST_VIDEO_H
 #define NTVDMEX_HOST_VIDEO_H
 #include "host_state.h"

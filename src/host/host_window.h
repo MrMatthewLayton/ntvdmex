@@ -1,7 +1,16 @@
-/* host_window.h -- the window: menus, the tray, the status strip, the clipboard, mouse capture,
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * The window: menus, the tray, the status strip, the clipboard, mouse capture,
  *   fullscreen, scaling and the window procedure.
  *
- * Declarations only (#335): defined in host_window.c. */
+ * Declarations only (#335): defined in host_window.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_HOST_WINDOW_H
 #define NTVDMEX_HOST_WINDOW_H
 #include "host_state.h"

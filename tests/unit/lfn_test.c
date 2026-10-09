@@ -1,4 +1,6 @@
-/* lfn_test.c -- INT 21h AH=71h (the long-filename API), the pure half, pinned off-VM. (#210)
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * INT 21h AH=71h (the long-filename API), the pure half, pinned off-VM. (#210)
  *
  * What this pins is ARITHMETIC AND LAYOUT, not stock NTVDM's behaviour: the FILETIME
  * expectations are computed independently (Python's calendar.timegm + the 1601 epoch
@@ -8,127 +10,133 @@
  * asks it -- a green run here is not a claim of parity.
  *
  *   cc -std=c99 -I src/dos -o lfn_test tests/unit/lfn_test.c && ./lfn_test
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include "dos_lfn.h"
 
 /* FILETIMEs, from calendar.timegm (above). */
-#define LFN_TEST_FT_1980_01_01           119600064000000000ull  /* the DOS epoch         */
-#define LFN_TEST_FT_1979_12_31_235959    119600063990000000ull
-#define LFN_TEST_FT_2000_02_29_060708    125962780280000000ull
-#define LFN_TEST_FT_2001_09_17_123456    126452036960000000ull
-#define LFN_TEST_FT_2001_09_17_123457_25 126452036972500000ull  /* ...57.250            */
-#define LFN_TEST_FT_2107_12_31_235958    159992927980000000ull  /* the last DOS second  */
-#define LFN_TEST_FT_2108_01_01           159992928000000000ull
-#define LFN_TEST_FT_2026_10_04_120000    0x01DD53F7E1B8E000ull  /* p_lfn's value        */
+#define LFN_TEST_FT_1980_01_01              119600064000000000ull   /* The DOS epoch */
+#define LFN_TEST_FT_1979_12_31_235959       119600063990000000ull
+#define LFN_TEST_FT_2000_02_29_060708       125962780280000000ull
+#define LFN_TEST_FT_2001_09_17_123456       126452036960000000ull
+#define LFN_TEST_FT_2001_09_17_123457_25    126452036972500000ull   /* ...57.250 */
+#define LFN_TEST_FT_2107_12_31_235958       159992927980000000ull   /* The last DOS second */
+#define LFN_TEST_FT_2108_01_01              159992928000000000ull
+#define LFN_TEST_FT_2026_10_04_120000       0x01DD53F7E1B8E000ull   /* p_lfn's value */
 
 /* The same instants as DOS date (DX), time (CX) and BH. */
-#define LFN_TEST_YEAR_SHIFT              9
-#define LFN_TEST_MONTH_SHIFT             5
-#define LFN_TEST_HOUR_SHIFT              11
-#define LFN_TEST_MINUTE_SHIFT            5
+#define LFN_TEST_YEAR_SHIFT                 9
+#define LFN_TEST_MONTH_SHIFT                5
+#define LFN_TEST_HOUR_SHIFT                 11
+#define LFN_TEST_MINUTE_SHIFT               5
 #define LFN_TEST_DOS_DATE(yearsSince1980, month, day) \
     (((yearsSince1980) << LFN_TEST_YEAR_SHIFT) | ((month) << LFN_TEST_MONTH_SHIFT) | (day))
 #define LFN_TEST_DOS_TIME(hour, minute, halfSeconds) \
     (((hour) << LFN_TEST_HOUR_SHIFT) | ((minute) << LFN_TEST_MINUTE_SHIFT) | (halfSeconds))
-#define LFN_TEST_DATE_1980_01_01         0x0021
-#define LFN_TEST_TIME_MIDNIGHT           0x0000
-#define LFN_TEST_DATE_2001_09_17         0x2B31
-#define LFN_TEST_TIME_12_34_56           0x645C
-#define LFN_TEST_DATE_2026_10_04         0x5D44
-#define LFN_TEST_TIME_12_00_00           0x6000
-#define LFN_TEST_BH_ODD_SECOND_250MS     125     /* 100 + 25                              */
-#define LFN_TEST_BH_TOO_BIG              200
-#define LFN_TEST_BH_NONE                 0
+#define LFN_TEST_DATE_1980_01_01            0x0021
+#define LFN_TEST_TIME_MIDNIGHT              0x0000
+#define LFN_TEST_DATE_2001_09_17            0x2B31
+#define LFN_TEST_TIME_12_34_56              0x645C
+#define LFN_TEST_DATE_2026_10_04            0x5D44
+#define LFN_TEST_TIME_12_00_00              0x6000
+#define LFN_TEST_BH_ODD_SECOND_250MS        125     /* 100 + 25 */
+#define LFN_TEST_BH_TOO_BIG                 200
+#define LFN_TEST_BH_NONE                    0
 
 /* Poison, written before a call that must overwrite it. */
-#define LFN_TEST_POISON_WORD             0xEEEE
-#define LFN_TEST_POISON_BYTE             0xEE
-#define LFN_TEST_POISON_FILETIME         0xEEEEEEEEull
-#define LFN_TEST_POISON_CHAR             'Z'
+#define LFN_TEST_POISON_WORD                0xEEEE
+#define LFN_TEST_POISON_BYTE                0xEE
+#define LFN_TEST_POISON_FILETIME            0xEEEEEEEEull
+#define LFN_TEST_POISON_CHAR                'Z'
 
 /* The find record, by WIN32_FIND_DATAA's offsets. */
-#define LFN_TEST_RECORD_SIZE             318
-#define LFN_TEST_GUARD_BYTES             4
-#define LFN_TEST_GUARD                   0xCC
-#define LFN_TEST_ATTRIBUTES              0x00
-#define LFN_TEST_CREATION_LOW            0x04
-#define LFN_TEST_CREATION_HIGH           0x08
-#define LFN_TEST_ACCESS_LOW              0x0C
-#define LFN_TEST_ACCESS_HIGH             0x10
-#define LFN_TEST_WRITE_LOW               0x14
-#define LFN_TEST_WRITE_HIGH              0x18
-#define LFN_TEST_SIZE_HIGH               0x1C
-#define LFN_TEST_SIZE_LOW                0x20
-#define LFN_TEST_RESERVED_0              0x24
-#define LFN_TEST_RESERVED_1              0x28
-#define LFN_TEST_LONG_NAME               0x2C
-#define LFN_TEST_SHORT_NAME              0x130
-#define LFN_TEST_LONG_NAME_WITH_NUL      21      /* "A long file name.txt" and its NUL     */
-#define LFN_TEST_LONG_NAME_MAX           259
-#define LFN_TEST_FILE_SIZE_HIGH          0x11223344
-#define LFN_TEST_FILE_SIZE_LOW           0x55667788
-#define LFN_TEST_DATE_SHIFT              16      /* SI=1: the date in the high word        */
-#define LFN_TEST_FILETIME_FORMAT         FALSE   /* SI=0                                   */
-#define LFN_TEST_DOS_FORMAT              TRUE    /* SI=1                                   */
-#define LFN_TEST_OVERLONG_BUFFER         400
-#define LFN_TEST_OVERLONG_LENGTH         300
-#define LFN_TEST_OVERLONG_CHAR           'x'
+#define LFN_TEST_RECORD_SIZE                318
+#define LFN_TEST_GUARD_BYTES                4
+#define LFN_TEST_GUARD                      0xCC
+#define LFN_TEST_ATTRIBUTES                 0x00
+#define LFN_TEST_CREATION_LOW               0x04
+#define LFN_TEST_CREATION_HIGH              0x08
+#define LFN_TEST_ACCESS_LOW                 0x0C
+#define LFN_TEST_ACCESS_HIGH                0x10
+#define LFN_TEST_WRITE_LOW                  0x14
+#define LFN_TEST_WRITE_HIGH                 0x18
+#define LFN_TEST_SIZE_HIGH                  0x1C
+#define LFN_TEST_SIZE_LOW                   0x20
+#define LFN_TEST_RESERVED_0                 0x24
+#define LFN_TEST_RESERVED_1                 0x28
+#define LFN_TEST_LONG_NAME                  0x2C
+#define LFN_TEST_SHORT_NAME                 0x130
+#define LFN_TEST_LONG_NAME_WITH_NUL         21      /* "A long file name.txt" and its NUL */
+#define LFN_TEST_LONG_NAME_MAX              259
+#define LFN_TEST_FILE_SIZE_HIGH             0x11223344
+#define LFN_TEST_FILE_SIZE_LOW              0x55667788
+#define LFN_TEST_DATE_SHIFT                 16      /* SI=1: the date in the high word */
+#define LFN_TEST_FILETIME_FORMAT            FALSE   /* SI=0 */
+#define LFN_TEST_DOS_FORMAT                 TRUE    /* SI=1 */
+#define LFN_TEST_OVERLONG_BUFFER            400
+#define LFN_TEST_OVERLONG_LENGTH            300
+#define LFN_TEST_OVERLONG_CHAR              'x'
 
 /* A little-endian DWORD's bytes. */
-#define LFN_TEST_BYTE1                   1
-#define LFN_TEST_BYTE2                   2
-#define LFN_TEST_BYTE3                   3
-#define LFN_TEST_BYTE1_SHIFT             8
-#define LFN_TEST_BYTE2_SHIFT             16
-#define LFN_TEST_BYTE3_SHIFT             24
+#define LFN_TEST_BYTE1                      1
+#define LFN_TEST_BYTE2                      2
+#define LFN_TEST_BYTE3                      3
+#define LFN_TEST_BYTE1_SHIFT                8
+#define LFN_TEST_BYTE2_SHIFT                16
+#define LFN_TEST_BYTE3_SHIFT                24
 
 /* Attribute bits, and CL / CH. */
-#define LFN_TEST_NONE                    0x00
-#define LFN_TEST_READ_ONLY               0x01
-#define LFN_TEST_HIDDEN                  0x02
-#define LFN_TEST_SYSTEM                  0x04
-#define LFN_TEST_DIRECTORY               0x10
-#define LFN_TEST_ARCHIVE                 0x20
-#define LFN_TEST_NORMAL                  0x80
+#define LFN_TEST_NONE                       0x00
+#define LFN_TEST_READ_ONLY                  0x01
+#define LFN_TEST_HIDDEN                     0x02
+#define LFN_TEST_SYSTEM                     0x04
+#define LFN_TEST_DIRECTORY                  0x10
+#define LFN_TEST_ARCHIVE                    0x20
+#define LFN_TEST_NORMAL                     0x80
 
 /* 6Ch / 716Ch: the action word, what CX reports, and BX's access mode. */
-#define LFN_TEST_ACTION_MEANINGLESS      0x00
-#define LFN_TEST_ACTION_OPEN_FAIL        0x01
-#define LFN_TEST_ACTION_TRUNCATE_FAIL    0x02
-#define LFN_TEST_ACTION_FAIL_CREATE      0x10
-#define LFN_TEST_ACTION_OPEN_CREATE      0x11
-#define LFN_TEST_ACTION_TRUNCATE_CREATE  0x12
-#define LFN_TEST_TAKEN_OPENED            1
-#define LFN_TEST_TAKEN_CREATED           2
-#define LFN_TEST_TAKEN_REPLACED          3
-#define LFN_TEST_EXISTED                 TRUE
-#define LFN_TEST_NEW                     FALSE
-#define LFN_TEST_LFN_CALL                TRUE    /* 716Ch                                  */
-#define LFN_TEST_DOS_CALL                FALSE   /* 6Ch                                    */
-#define LFN_TEST_MODE_READ               0
-#define LFN_TEST_MODE_WRITE              1
-#define LFN_TEST_MODE_READ_WRITE         2
-#define LFN_TEST_MODE_SHARED_READ_WRITE  0x2042
-#define LFN_TEST_GENERIC_READ            0x80000000ul
-#define LFN_TEST_GENERIC_WRITE           0x40000000ul
-#define LFN_TEST_GENERIC_READ_WRITE      0xC0000000ul
+#define LFN_TEST_ACTION_MEANINGLESS         0x00
+#define LFN_TEST_ACTION_OPEN_FAIL           0x01
+#define LFN_TEST_ACTION_TRUNCATE_FAIL       0x02
+#define LFN_TEST_ACTION_FAIL_CREATE         0x10
+#define LFN_TEST_ACTION_OPEN_CREATE         0x11
+#define LFN_TEST_ACTION_TRUNCATE_CREATE     0x12
+#define LFN_TEST_TAKEN_OPENED               1
+#define LFN_TEST_TAKEN_CREATED              2
+#define LFN_TEST_TAKEN_REPLACED             3
+#define LFN_TEST_EXISTED                    TRUE
+#define LFN_TEST_NEW                        FALSE
+#define LFN_TEST_LFN_CALL                   TRUE    /* 716Ch */
+#define LFN_TEST_DOS_CALL                   FALSE   /* 6Ch */
+#define LFN_TEST_MODE_READ                  0
+#define LFN_TEST_MODE_WRITE                 1
+#define LFN_TEST_MODE_READ_WRITE            2
+#define LFN_TEST_MODE_SHARED_READ_WRITE     0x2042
+#define LFN_TEST_GENERIC_READ               0x80000000ul
+#define LFN_TEST_GENERIC_WRITE              0x40000000ul
+#define LFN_TEST_GENERIC_READ_WRITE         0xC0000000ul
 
 /* Win32 errors in, DOS errors out. */
-#define LFN_TEST_WIN32_FILE_NOT_FOUND    2
-#define LFN_TEST_WIN32_INVALID_HANDLE    6
-#define LFN_TEST_WIN32_NO_MORE_FILES     18
-#define LFN_TEST_WIN32_INVALID_PARAMETER 87
-#define LFN_TEST_WIN32_DIR_NOT_EMPTY     145
-#define LFN_TEST_WIN32_ALREADY_EXISTS    183
-#define LFN_TEST_DOS_FILE_NOT_FOUND      2
-#define LFN_TEST_DOS_ACCESS_DENIED       5
-#define LFN_TEST_DOS_INVALID_HANDLE      6
-#define LFN_TEST_DOS_NO_MORE_FILES       18
-#define LFN_TEST_DOS_FILE_EXISTS         0x50
+#define LFN_TEST_WIN32_FILE_NOT_FOUND       2
+#define LFN_TEST_WIN32_INVALID_HANDLE       6
+#define LFN_TEST_WIN32_NO_MORE_FILES        18
+#define LFN_TEST_WIN32_INVALID_PARAMETER    87
+#define LFN_TEST_WIN32_DIR_NOT_EMPTY        145
+#define LFN_TEST_WIN32_ALREADY_EXISTS       183
+#define LFN_TEST_DOS_FILE_NOT_FOUND         2
+#define LFN_TEST_DOS_ACCESS_DENIED          5
+#define LFN_TEST_DOS_INVALID_HANDLE         6
+#define LFN_TEST_DOS_NO_MORE_FILES          18
+#define LFN_TEST_DOS_FILE_EXISTS            0x50
 
-#define LFN_TEST_LABEL_SIZE              160
+#define LFN_TEST_LABEL_SIZE                 160
 
 static INT g_Checks, g_Failures;
 
@@ -174,7 +182,8 @@ static VOID LfnTestDosToFileTime(PCSTR description, UINT dosDate, UINT dosTime, 
     BOOL didConvert = DosLfnDosToFileTime((WORD)dosDate, (WORD)dosTime, (BYTE)tenMs, &fileTime);
     snprintf(label, sizeof label, "%s: converts", description);
     LfnTestExpect(label, didConvert, shouldConvert);
-    if (shouldConvert && didConvert) {
+    if (shouldConvert && didConvert)
+    {
         snprintf(label, sizeof label, "%s: FILETIME", description);
         LfnTestExpect(label, fileTime, expectedFileTime);
     }
@@ -204,7 +213,7 @@ INT main(VOID)
 {
     printf("== INT 21h AH=71h long-filename API, pure half (dos_lfn.h)\n");
 
-    /* ── 71A7h BL=0: FILETIME -> DOS. Constants from calendar.timegm. ──────────── */
+    /* 71A7h BL=0: FILETIME -> DOS. Constants from calendar.timegm: */
     LfnTestFileTimeToDos("1980-01-01 00:00:00 (DOS epoch)", LFN_TEST_FT_1980_01_01, TRUE,
                          LFN_TEST_DATE_1980_01_01, LFN_TEST_TIME_MIDNIGHT, LFN_TEST_BH_NONE);
     /* The stamp p_file sets with 5701h: 12:34:56 2001-09-17. */
@@ -227,7 +236,7 @@ INT main(VOID)
     LfnTestFileTimeToDos("2026-10-04 12:00:00 (p_lfn's value)", LFN_TEST_FT_2026_10_04_120000,
                          TRUE, LFN_TEST_DATE_2026_10_04, LFN_TEST_TIME_12_00_00, LFN_TEST_BH_NONE);
 
-    /* ── 71A7h BL=1: DOS -> FILETIME, and the round trip. ──────────────────────── */
+    /* 71A7h BL=1: DOS -> FILETIME, and the round trip: */
     LfnTestDosToFileTime("DOS epoch", LFN_TEST_DATE_1980_01_01, LFN_TEST_TIME_MIDNIGHT,
                          LFN_TEST_BH_NONE, TRUE, LFN_TEST_FT_1980_01_01);
     LfnTestDosToFileTime("2001-09-17 12:34:56", LFN_TEST_DATE_2001_09_17, LFN_TEST_TIME_12_34_56,
@@ -254,7 +263,7 @@ INT main(VOID)
         LfnTestExpect("round trip FILETIME -> DOS -> FILETIME (10 ms exact)", roundTrip,
                       LFN_TEST_FT_2001_09_17_123457_25); }
 
-    /* ── 714Eh/714Fh: the 318-byte record. ─────────────────────────────────────── */
+    /* 714Eh/714Fh: the 318-byte record: */
     {   BYTE record[DOS_LFN_FIND_RECORD_SIZE + LFN_TEST_GUARD_BYTES];
         DOS_LFN_FIND_ENTRY entry;
         INT byteIndex, strayBits = 0;
@@ -318,7 +327,7 @@ INT main(VOID)
                           'A'); }
     }
 
-    /* ── CL allowed / CH required. ─────────────────────────────────────────────── */
+    /* CL allowed / CH required: */
     LfnTestExpect("plain file, CL=0",
                   DosLfnAttributesOk(LFN_TEST_ARCHIVE, LFN_TEST_NONE, LFN_TEST_NONE), TRUE);
     LfnTestExpect("directory, CL=0 -> hidden",
@@ -344,7 +353,7 @@ INT main(VOID)
     LfnTestExpect("Win32 NORMAL (80h) is a file",
                   DosLfnAttributesOk(LFN_TEST_NORMAL, LFN_TEST_NONE, LFN_TEST_NONE), TRUE);
 
-    /* ── 71A8h. ────────────────────────────────────────────────────────────────── */
+    /* 71A8h: */
     LfnTestShortName("A long file name.txt", "ALONGF~1.TXT", "ALONGF~1TXT");
     LfnTestShortName("Long Directory Name",  "LONGDI~1",     "LONGDI~1   ");
     LfnTestShortName("readme.txt",           "README.TXT",   "README  TXT");   /* already 8.3 */
@@ -357,7 +366,7 @@ INT main(VOID)
     LfnTestShortName("NAME.",                "NAME~1",       "NAME~1     ");
     LfnTestShortName("toolongname.txt",      "TOOLON~1.TXT", "TOOLON~1TXT");
 
-    /* ── 6Ch / 716Ch action word. ─────────────────────────────────────────────── */
+    /* 6Ch / 716Ch action word: */
     LfnTestExpect("action 01h open|fail", DosExtOpenDisposition(LFN_TEST_ACTION_OPEN_FAIL),
                   DOS_EXT_OPEN_OPEN_EXISTING);
     LfnTestExpect("action 10h fail|create", DosExtOpenDisposition(LFN_TEST_ACTION_FAIL_CREATE),
@@ -407,7 +416,7 @@ INT main(VOID)
     LfnTestExpect("BX 0x2042 (share bits) -> r|w",
                   DosExtOpenAccess(LFN_TEST_MODE_SHARED_READ_WRITE), LFN_TEST_GENERIC_READ_WRITE);
 
-    /* ── errors. ────────────────────────────────────────────────────────────────── */
+    /* errors: */
     {   WORD dosError = 0;
         LfnTestExpect("w32 2 -> 2 (measured row)",
                       DosLfnErrFromWin32(LFN_TEST_WIN32_FILE_NOT_FOUND, &dosError)

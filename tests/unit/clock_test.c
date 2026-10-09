@@ -1,4 +1,6 @@
-/* clock_test.c -- the VDM clock (src/dos/dos_clock.h), pinned off-VM.  GH #250.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * The VDM clock (src/dos/dos_clock.h), pinned off-VM.  GH #250.
  *
  * The validity rules are the ones p_clock.asm measured on MS-DOS 6.22 (QEMU), PCem
  * (real AMI BIOS) and DOSBox-X -- each check names its probe row. The days of the
@@ -8,46 +10,52 @@
  *
  * Dates and times are written as their year, month, day, hour, minute, second and
  * hundredths, the way each check's name reads them.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include "dos_clock.h"
 
 DOS_CLOCK_STATE g_DosClock;
 
 /* Days of the week as 2Ah's AL numbers them. */
-#define CLOCK_TEST_SUNDAY             0
-#define CLOCK_TEST_TUESDAY            2
-#define CLOCK_TEST_THURSDAY           4
-#define CLOCK_TEST_FRIDAY             5
-#define CLOCK_TEST_SATURDAY           6
+#define CLOCK_TEST_SUNDAY               0
+#define CLOCK_TEST_TUESDAY              2
+#define CLOCK_TEST_THURSDAY             4
+#define CLOCK_TEST_FRIDAY               5
+#define CLOCK_TEST_SATURDAY             6
 
 /* The round trip: its years, and how many days they hold. */
-#define CLOCK_TEST_FIRST_YEAR         1980
-#define CLOCK_TEST_LAST_YEAR          2099
-#define CLOCK_TEST_DAYS_1980_TO_2099  43830
+#define CLOCK_TEST_FIRST_YEAR           1980
+#define CLOCK_TEST_LAST_YEAR            2099
+#define CLOCK_TEST_DAYS_1980_TO_2099    43830
 
 /* Combine fields into one number so a check can compare them at once. */
-#define CLOCK_TEST_YEAR_SCALE         10000
-#define CLOCK_TEST_MONTH_SCALE        100
-#define CLOCK_TEST_HOUR_SCALE         10000
-#define CLOCK_TEST_MINUTE_SCALE       100
-#define CLOCK_TEST_SECOND_SCALE       100     /* seconds * 100 + hundredths              */
-#define CLOCK_TEST_HMS_HOUR_SCALE     1000000 /* hour, minute, second and hundredths     */
-#define CLOCK_TEST_HMS_MINUTE_SCALE   10000
-#define CLOCK_TEST_DAY_SCALE          100000000LL
+#define CLOCK_TEST_YEAR_SCALE           10000
+#define CLOCK_TEST_MONTH_SCALE          100
+#define CLOCK_TEST_HOUR_SCALE           10000
+#define CLOCK_TEST_MINUTE_SCALE         100
+#define CLOCK_TEST_SECOND_SCALE         100         /* Seconds * 100 + hundredths */
+#define CLOCK_TEST_HMS_HOUR_SCALE       1000000     /* hour, minute, second and hundredths */
+#define CLOCK_TEST_HMS_MINUTE_SCALE     10000
+#define CLOCK_TEST_DAY_SCALE            100000000LL
 
 /* BIOS tick counts (0040:006C). */
-#define CLOCK_TEST_TICKS_12_34_10     823844
-#define CLOCK_TEST_TICKS_HIGH_SHIFT   16      /* CX, as INT 1Ah AH=00h splits the count  */
-#define CLOCK_TEST_TICKS_HIGH_12_34   0xC     /* clk.1a00.after.2d CX=000C               */
-#define CLOCK_TEST_TICKS_10_00_29     0x000A026Cu
-#define CLOCK_TEST_TICKS_11_30_30     0x000B8277u
-#define CLOCK_TEST_TICKS_PER_DAY      0x1800B0u
-#define CLOCK_TEST_TICKS_NONSENSE     0xFFFFFFFFu
-#define CLOCK_TEST_HUNDREDTHS_IN_TICK 5
-#define CLOCK_TEST_HUNDREDTHS_IN_DAY  8639985 /* 0x1800B0 ticks: 24h - 0.15 s             */
-#define CLOCK_TEST_TICKS_5_SECONDS    91      /* ~5 s of ticks                           */
-#define CLOCK_TEST_TICKS_10_SECONDS   182     /* ~10 s of ticks                          */
+#define CLOCK_TEST_TICKS_12_34_10       823844
+#define CLOCK_TEST_TICKS_HIGH_SHIFT     16          /* CX, as INT 1Ah AH=00h splits the count */
+#define CLOCK_TEST_TICKS_HIGH_12_34     0xC         /* Clk.1a00.after.2d CX=000C */
+#define CLOCK_TEST_TICKS_10_00_29       0x000A026Cu
+#define CLOCK_TEST_TICKS_11_30_30       0x000B8277u
+#define CLOCK_TEST_TICKS_PER_DAY        0x1800B0u
+#define CLOCK_TEST_TICKS_NONSENSE       0xFFFFFFFFu
+#define CLOCK_TEST_HUNDREDTHS_IN_TICK   5
+#define CLOCK_TEST_HUNDREDTHS_IN_DAY    8639985     /* 0x1800B0 ticks: 24h - 0.15 s */
+#define CLOCK_TEST_TICKS_5_SECONDS      91          /* ~5 s of ticks */
+#define CLOCK_TEST_TICKS_10_SECONDS     182         /* ~10 s of ticks */
 
 static INT g_Checks, g_Failures;
 
@@ -78,7 +86,7 @@ static VOID ClockTestDayOfWeek(PCSTR description, UINT year, UINT month, UINT da
 
 INT main(VOID)
 {
-    /* ── validity: p_clock clk.2b.* / clk.2d.* (AL=00 taken, AL=FF refused) ── */
+    /* validity: p_clock clk.2b.* / clk.2d.* (AL=00 taken, AL=FF refused): */
     ClockTestExpect("clk.2b.19991231 taken",        DosClockIsDosDateValid(1999, 12, 31), TRUE);
     ClockTestExpect("clk.2b.feb30 refused",         DosClockIsDosDateValid(2001, 2, 30), FALSE);
     ClockTestExpect("clk.2b.leap2000 taken",        DosClockIsDosDateValid(2000, 2, 29), TRUE);
@@ -101,7 +109,7 @@ INT main(VOID)
     ClockTestExpect("clk.2d.s60 refused",           DosClockIsTimeValid(12, 0, 60, 0), FALSE);
     ClockTestExpect("clk.2d.cs100 refused",         DosClockIsTimeValid(12, 0, 0, 100), FALSE);
 
-    /* ── day of week, 2Ah's AL (0 = Sunday) ── */
+    /* day of week, 2Ah's AL (0 = Sunday): */
     ClockTestDayOfWeek("1999-12-31 is a Friday (clk.2a.after.19991231)", 1999, 12, 31,
                        CLOCK_TEST_FRIDAY);
     ClockTestDayOfWeek("2000-02-29 is a Tuesday (clk.2a.after.leap2000)", 2000, 2, 29,
@@ -117,13 +125,14 @@ INT main(VOID)
     ClockTestDayOfWeek("2026-10-02 is a Friday",                         2026, 10, 2,
                        CLOCK_TEST_FRIDAY);
 
-    /* ── pack/unpack round trip over every day 1980..2099 ── */
+    /* pack/unpack round trip over every day 1980..2099: */
     {
         UINT year, month, day, mismatches = 0, dayCount = 0;
         INT64 previous = 0;
         for (year = CLOCK_TEST_FIRST_YEAR; year <= CLOCK_TEST_LAST_YEAR; ++year)
             for (month = DOS_CLOCK_JANUARY; month <= DOS_CLOCK_DECEMBER; ++month)
-                for (day = DOS_CLOCK_FIRST_DAY; day <= DosClockDaysInMonth(year, month); ++day) {
+                for (day = DOS_CLOCK_FIRST_DAY; day <= DosClockDaysInMonth(year, month); ++day)
+                {
                     DOS_CLOCK_TIME time = ClockTestMake(year, month, day, 13, 7, 41, 59), unpacked;
                     INT64 packed = DosClockPack(&time);
                     DosClockUnpack(packed, &unpacked);
@@ -138,7 +147,7 @@ INT main(VOID)
         ClockTestExpect("days in 1980..2099", dayCount, CLOCK_TEST_DAYS_1980_TO_2099);
     }
 
-    /* ── the offset: setting date/time moves the GUEST reading only ── */
+    /* the offset: setting date/time moves the GUEST reading only: */
     {
         DOS_CLOCK_TIME hostNow = ClockTestMake(2026, 10, 2, 9, 15, 30, 25), guestNow;
         INT64 offset = 0;
@@ -177,7 +186,7 @@ INT main(VOID)
         ClockTestExpect("host untouched (year)", hostNow.Year, 2026);
     }
 
-    /* ── ticks since midnight (0040:006C after 2Dh) ── */
+    /* ticks since midnight (0040:006C after 2Dh): */
     ClockTestExpect("ticks 00:00:00.00", DosClockTicksFromTime(0, 0, 0, 0), 0);
     ClockTestExpect("ticks 12:34:10.00 (clk.1a00.after.2d CX=000C)",
                     DosClockTicksFromTime(12, 34, 10, 0) >> CLOCK_TEST_TICKS_HIGH_SHIFT,
@@ -210,7 +219,7 @@ INT main(VOID)
                     DosClockHundredthsFromTicks(CLOCK_TEST_TICKS_PER_DAY),
                     CLOCK_TEST_HUNDREDTHS_IN_DAY);
 
-    /* ── #262 case B: DOS's clock follows a count the BIOS did not write ── */
+    /* #262 case B: DOS's clock follows a count the BIOS did not write: */
     {
         DOS_CLOCK_TIME hostNow = ClockTestMake(2026, 10, 2, 9, 15, 30, 25), guestNow;
         INT64 offset = 0;
@@ -231,8 +240,9 @@ INT main(VOID)
                         guestNow.Second * CLOCK_TEST_SECOND_SCALE + guestNow.Hundredths, 3195);
 
         /* a store at 23:59:59 on the guest's 1999-12-31; the count wraps once, read
-           5 s of ticks after the store: 2000-01-01 00:00:04 -- and the date is the
-           STORE's day + 1, though host-now + offset had not crossed midnight. */
+         * 5 s of ticks after the store: 2000-01-01 00:00:04 -- and the date is the
+         * STORE's day + 1, though host-now + offset had not crossed midnight.
+         */
         hostNow = ClockTestMake(2026, 10, 2, 9, 0, 0, 0); offset = 0;
         DosClockSetDate(&hostNow, &offset, 1999, 12, 31);
         DosClockSetTime(&hostNow, &offset, 12, 0, 0, 0);
@@ -248,11 +258,12 @@ INT main(VOID)
                         + guestNow.Minute * CLOCK_TEST_MINUTE_SCALE + guestNow.Second, 3);
         ClockTestExpect("wrap: Saturday", guestNow.DayOfWeek, CLOCK_TEST_SATURDAY);
 
-        /* ★ the trap the `since` argument exists for: the guest's own clock crossed
-           midnight AFTER the store (it read 23:59:58 then; now 00:00:08 next day), and
-           the count wrapped once. Taking "today" from host-now + offset would add the
-           wrap to a day that already contains it -- 2000-01-02. DOS's day number is the
-           store's day plus the wraps: 2000-01-01. */
+        /* [INFO]: the trap the `since` argument exists for: the guest's own clock crossed
+         * midnight AFTER the store (it read 23:59:58 then; now 00:00:08 next day), and
+         * the count wrapped once. Taking "today" from host-now + offset would add the
+         * wrap to a day that already contains it -- 2000-01-02. DOS's day number is the
+         * store's day plus the wraps: 2000-01-01.
+         */
         hostNow = ClockTestMake(2026, 10, 2, 9, 0, 0, 0); offset = 0;
         DosClockSetDate(&hostNow, &offset, 1999, 12, 31);
         DosClockSetTime(&hostNow, &offset, 23, 59, 58, 0);
@@ -277,7 +288,8 @@ INT main(VOID)
                         guestNow.Hour * CLOCK_TEST_MINUTE_SCALE + guestNow.Minute, 102);
 
         /* the day's length itself (a count the BIOS never holds) reads 23:59:59.85;
-           a nonsense count past it is clamped to the last hundredth, never a next day */
+         * a nonsense count past it is clamped to the last hundredth, never a next day
+         */
         hostNow = ClockTestMake(2026, 10, 2, 9, 0, 0, 0); offset = 0;
         DosClockFollowTicks(&hostNow, &offset, CLOCK_TEST_TICKS_PER_DAY, 0, 0);
         DosClockApplyOffset(&hostNow, offset, &guestNow);

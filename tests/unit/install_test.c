@@ -1,4 +1,7 @@
-/* install_test.c -- off-VM battery for the install/uninstall decision (install.h).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM battery for the install/uninstall decision (install.h).
+ *
  * GH #13, #130.
  *
  * The registry calls need a machine. WHAT STATE WE ARE IN, and what to do about it,
@@ -10,7 +13,13 @@
  *     was not, leaving a box nobody can hand back to Microsoft;
  *   - delete somebody else's Debugger value, breaking a tool we never installed
  *     and cannot name afterwards.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include "install.h"
@@ -35,9 +44,10 @@ INT main(VOID)
     CHECK(InstallClassify("C:\\ntvdmex\\ntvdmhost.exe", hostPath) == INSTALL_OURS,
           "the exact path is OURS");
 
-    /* ⚠ THE FOUR WAYS A HAND-WRITTEN VALUE DIFFERS FROM OURS. Every one of these is
-         what a person actually types, and getting any of them wrong means uninstall
-         refuses to remove a value we put there. */
+    /* [CAUTION]: THE FOUR WAYS A HAND-WRITTEN VALUE DIFFERS FROM OURS. Every one of these is
+     * what a person actually types, and getting any of them wrong means uninstall
+     * refuses to remove a value we put there.
+     */
     CHECK(InstallClassify("\"C:\\ntvdmex\\ntvdmhost.exe\"", hostPath) == INSTALL_OURS,
           "QUOTED is ours -- reg add with a quoted path is the documented form");
     CHECK(InstallClassify("C:\\NTVDMEX\\NTVDMHOST.EXE", hostPath) == INSTALL_OURS,
@@ -80,9 +90,10 @@ INT main(VOID)
     CHECK(InstallPlan(INSTALL_OURS, 0, 1) == INSTALL_ACT_RESTORE,
           "uninstall RESTORES whatever we displaced -- that is what reversible means");
 
-    /* ⚠ THE ONE THAT PROTECTS SOMEBODY ELSE'S MACHINE. `Debugger` is a general
-         Windows facility and something else may be using it. Deleting a value we
-         did not write would break that tool and leave no record of what it was. */
+    /* [CAUTION]: THE ONE THAT PROTECTS SOMEBODY ELSE'S MACHINE. `Debugger` is a general
+     * Windows facility and something else may be using it. Deleting a value we
+     * did not write would break that tool and leave no record of what it was.
+     */
     CHECK(InstallPlan(INSTALL_OTHER, 0, 0) == INSTALL_ACT_REFUSE,
           "uninstall REFUSES to delete a Debugger value that is not ours");
     CHECK(InstallPlan(INSTALL_OTHER, 0, 1) == INSTALL_ACT_REFUSE,
@@ -91,7 +102,8 @@ INT main(VOID)
     printf("== install: the key and value names ==\n");
 
     /* A typo in either half is an install that appears to succeed and routes
-       nothing -- the exact failure the rig has hit from a hand-typed reg add. */
+     * nothing -- the exact failure the rig has hit from a hand-typed reg add.
+     */
     CHECK(strcmp(INSTALL_KEY,
           "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution "
           "Options\\ntvdm.exe") == 0,
@@ -100,7 +112,8 @@ INT main(VOID)
 
     printf("\n%s: %d/%d\n", g_Failures ? "FAILURES" : "ALL PASS", g_Total - g_Failures, g_Total);
     /* The runner (scripts/offvm.sh) reads this dialect; without it the battery counted
-       this whole test as 0 checks, which reads as a pass that asserted nothing. (s81) */
+     * this whole test as 0 checks, which reads as a pass that asserted nothing. (s81)
+     */
     printf("== %d checks, %d failed\n", g_Total, g_Failures);
     return g_Failures ? 1 : 0;
 }

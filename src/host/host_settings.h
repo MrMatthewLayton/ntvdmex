@@ -1,7 +1,16 @@
-/* host_settings.h -- the Settings dialog: applying, loading and showing every setting and where its
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * The Settings dialog: applying, loading and showing every setting and where its
  *   value came from.
  *
- * Declarations only (#335): defined in host_settings.c. */
+ * Declarations only (#335): defined in host_settings.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_HOST_SETTINGS_H
 #define NTVDMEX_HOST_SETTINGS_H
 #include "host_state.h"

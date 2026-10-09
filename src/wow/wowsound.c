@@ -1,7 +1,16 @@
-/* wowsound.c -- ★ SOUND.DRV's OWN ID SPACE.  GH #299, session 90.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * SOUND.DRV's OWN ID SPACE.  GH #299, session 90.
  *
  * The code of wowsound.h (#335): its functions and state, in their original order;
- * its own translation unit, declared in wowsound.h. */
+ * its own translation unit, declared in wowsound.h.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #include "host_state.h"
 #include "log.h"
 #include "ne.h"
@@ -21,7 +30,6 @@
 #include "wowkbd.h"
 #include "wowsound.h"
 
-
 INT WowSoundCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
 {
     static const PCSTR functionNames[] = {
@@ -33,7 +41,8 @@ INT WowSoundCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
     };
     INT noteLength = 0;
     if (noteCapacity) note[0] = 0;
-    switch (frame->Id) {
+    switch (frame->Id)
+    {
     case WOWSND_OPENSOUND:
     case WOWSND_CLOSESOUND:
     case WOWSND_SETVOICEQUEUESIZE:
@@ -55,9 +64,10 @@ INT WowSoundCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
                                    " (w_sound, 23/23)");
         Wow32SetReturn(frame, 0);
         return 1;
-    /* ⚠ GetThresholdEvent returns an LPINT (DX:AX). Stock's answer for it is
-         UNMEASURED -- the probe's OUT shows AX only -- so it is a NULL far pointer
-         here, which is what a 0-everything WOW gives, and it is flagged. */
+    /* [CAUTION]: GetThresholdEvent returns an LPINT (DX:AX). Stock's answer for it is
+     * UNMEASURED -- the probe's OUT shows AX only -- so it is a NULL far pointer
+     * here, which is what a 0-everything WOW gives, and it is flagged.
+     */
     case WOWSND_GETTHRESHOLDEVENT:
         WowNotePut(note, noteCapacity, &noteLength, "GetThresholdEvent -- NULL (DX not measured on stock)");
         Wow32SetReturn(frame, 0);

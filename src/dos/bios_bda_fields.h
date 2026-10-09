@@ -1,4 +1,4 @@
-/* NTDVMEX — An NTVDM replacement for Microsoft Windows
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
  * The BIOS data area's fields, as offsets from 0040:0000 (#333).
  *
@@ -7,27 +7,8 @@
  *
  *
  *
- * MIT License
- *
+ * SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Matthew Layton
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
  */
 
 #ifndef NTVDMEX_DOS_BIOS_BDA_FIELDS_H
@@ -57,8 +38,8 @@
 #define BIOS_BDA_ALT_KEYPAD                 0x19        /* The Alt+keypad accumulator (#274) */
 #define BIOS_BDA_KEYBOARD_HEAD              0x1A        /* Offsets from 0040:0000 */
 #define BIOS_BDA_KEYBOARD_TAIL              0x1C
-#define BIOS_BDA_KEYBOARD_BUFFER            0x1E        /* 16 entries, 2 bytes each — POST's bounds */
-#define BIOS_BDA_KEYBOARD_BUFFER_END        0x3E        /* One past the last entry — POST's bounds */
+#define BIOS_BDA_KEYBOARD_BUFFER            0x1E        /* 16 entries, 2 bytes each -- POST's bounds */
+#define BIOS_BDA_KEYBOARD_BUFFER_END        0x3E        /* One past the last entry -- POST's bounds */
 #define BIOS_BDA_VIDEO_MODE                 0x49
 #define BIOS_BDA_VIDEO_COLUMNS              0x4A
 #define BIOS_BDA_VIDEO_COLUMNS_HIGH         0x4B

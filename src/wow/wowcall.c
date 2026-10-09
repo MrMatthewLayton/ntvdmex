@@ -1,7 +1,16 @@
-/* wowcall.c -- ★ CALLING 16-BIT CODE FROM THE HOST. GH #128, session 40.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * CALLING 16-BIT CODE FROM THE HOST. GH #128, session 40.
  *
  * The code of wowcall.h (#335): its functions and state, in their original order;
- * its own translation unit, declared in wowcall.h. */
+ * its own translation unit, declared in wowcall.h.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #include "host_state.h"
 #include "log.h"
 #include "ne.h"
@@ -17,7 +26,6 @@
 #include "wowdlg.h"
 #include "wowenum.h"
 
-
 /* Forward declarations, from when this file was part of main.c's unit (they were in wowcall.h). */
 INT  WowEnumBusy(VOID);
 INT  WowEnumBegin(INT kind, DWORD procedure, WORD dataSelector, DWORD lParam,
@@ -25,28 +33,31 @@ INT  WowEnumBegin(INT kind, DWORD procedure, WORD dataSelector, DWORD lParam,
 VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY);
 
 /* s89: a SECOND far pointer into the same stack block. EnumFontFamilies' callback
-   takes two structures (ENUMLOGFONT, NEWTEXTMETRIC); they travel as one blob and
-   this names the argument (HIGH word index) that points `off` bytes into it. Set
-   just before WowCallEnter, which consumes and clears it. -1 = none. */
+ * takes two structures (ENUMLOGFONT, NEWTEXTMETRIC); they travel as one blob and
+ * this names the argument (HIGH word index) that points `off` bytes into it. Set
+ * just before WowCallEnter, which consumes and clears it. -1 = none.
+ */
 INT  g_WowCallBlob2Argument = -1;
 INT  g_WowCallBlob2Offset = 0;
 /* #295: where the LAST blob went, as a host linear address (ssbase + SP), 0 if the
-   last call placed none. EnumMetaFile reads the guest's handle table back out of
-   it after the callback returns -- see wowgdi.h's g_WowGdiMetafile note. */
+ * last call placed none. EnumMetaFile reads the guest's handle table back out of
+ * it after the callback returns -- see wowgdi.h's g_WowGdiMetafile note.
+ */
 DWORD g_WowCallBlobLinear = 0;
 
 WOWENUM_FONT g_WowEnumFonts[WOWENUM_MAXFONT];
 INT g_WowEnumFontCount;
 
-/* ── s92 (#306): A MESSAGE FOR ANOTHER TASK'S WINDOW RUNS AS THAT TASK. Win16's
-     SendMessage across tasks is a directed yield: the receiver's procedure runs on
-     the receiver's stack with the receiver current, and the sender waits. Run on
-     the sender's stack instead, WinHelp's WM_WINHELP handler asked GetCurrentTask,
-     got Notepad, enumerated Notepad's windows and sent Notepad a WM_COMMAND; and a
-     near pointer to a local reads garbage when SS is not the procedure's DS. The
-     host knows where the receiver's stack is free -- below where it is parked --
-     so main.c (ws_retarget) answers "which SS:SP, and switch the task word";
-     `g_WowCallUntarget` switches it back when the procedure returns. */
+/* -- s92 (#306): A MESSAGE FOR ANOTHER TASK'S WINDOW RUNS AS THAT TASK. Win16's
+ * SendMessage across tasks is a directed yield: the receiver's procedure runs on
+ * the receiver's stack with the receiver current, and the sender waits. Run on
+ * the sender's stack instead, WinHelp's WM_WINHELP handler asked GetCurrentTask,
+ * got Notepad, enumerated Notepad's windows and sent Notepad a WM_COMMAND; and a
+ * near pointer to a local reads garbage when SS is not the procedure's DS. The
+ * host knows where the receiver's stack is free -- below where it is parked --
+ * so main.c (ws_retarget) answers "which SS:SP, and switch the task word";
+ * `g_WowCallUntarget` switches it back when the procedure returns.
+ */
 WORD (*g_WowCallCurrentTask)(VOID) = 0;
 INT  (*g_WowCallRetarget)(WORD window, PWORD stackSelector, PWORD stackPointer, PDWORD stackBase, PWORD previousTask) = 0;
 VOID (*g_WowCallUntarget)(WORD previousTask) = 0;
@@ -65,8 +76,7 @@ static VOID WowCallPush(DWORD stackBase, PWORD stackPointer, WORD value)
     bytes[1] = (BYTE)(value >> BYTE_SHIFT);
 }
 
-/*
- * Enter a 16-bit FAR PASCAL window procedure. The caller must ALREADY have
+/* Enter a 16-bit FAR PASCAL window procedure. The caller must ALREADY have
  * advanced EIP past its own BOP -- what we save here is where the guest goes
  * when the callback returns, and a context saved on the BOP would execute it
  * a second time.
@@ -78,7 +88,8 @@ static VOID WowCallPush(DWORD stackBase, PWORD stackPointer, WORD value)
  * Returns 1 if the guest is now standing at the procedure's first instruction.
  */
 /* `isAbsent` = the target's code selector is NOT PRESENT, so we must reach it
-   through the RETF trampoline rather than by writing CS. See WOWCALL_RETF_OFF. */
+ * through the RETF trampoline rather than by writing CS. See WOWCALL_RETF_OFF.
+ */
 INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                          DWORD procedure, WORD dataSelector, PCWORD argumentWords, INT argumentWordCount,
                          DWORD returnLinear, INT returnMode, PWORD sink,
@@ -108,48 +119,58 @@ INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
     frame->ActionArgument  = 0;
     frame->EnteredTask   = g_WowCallCurrentTask ? g_WowCallCurrentTask() : 0;
     frame->PreviousTask = 0;
-    if (window && g_WowCallRetarget) {          /* s92 #306: see g_WowCallRetarget */
+    if (window && g_WowCallRetarget)            /* s92 #306: see g_WowCallRetarget */
+    {
         WORD newStackSelector = 0, newStackPointer = 0; DWORD newStackBase = 0;
-        if (g_WowCallRetarget(window, &newStackSelector, &newStackPointer, &newStackBase, &frame->PreviousTask) && newStackBase) {
+        if (g_WowCallRetarget(window, &newStackSelector, &newStackPointer, &newStackBase, &frame->PreviousTask) && newStackBase)
+        {
             VDM_SET16(tib, VTIB_SS,  newStackSelector);
             VDM_SET16(tib, VTIB_ESP, newStackPointer);
             stackBase = newStackBase;
-        } else frame->PreviousTask = 0;
+        }
+        else frame->PreviousTask = 0;
     }
 
     /* Pascal order: the FIRST declared argument is pushed FIRST, so it ends up
-       at the highest address -- which is what `[bp+0x0e] == hwnd` in a window
-       procedure means under the documented Pascal convention. A DWORD is two words, high first, for the same reason. The caller
-       hands them in declared order and this pushes them in that order. */
+     * at the highest address -- which is what `[bp+0x0e] == hwnd` in a window
+     * procedure means under the documented Pascal convention. A DWORD is two words, high first, for the same reason. The caller
+     * hands them in declared order and this pushes them in that order.
+     */
     stackPointer = (WORD)(VDM_REG(tib, VTIB_ESP) & WORD_MASK);
 
-    /* ── ★★★ THE STRUCTURE GOES DOWN FIRST, BELOW THE ARGUMENTS. ─────────────
-         A pointer argument has to point at memory the GUEST can address, and the
-         only such memory this host can hand out for the duration of one call is
-         the guest's own stack. So the bytes are placed below the current SP and
-         the far pointer that names them is written into the argument that was
-         reserved for it -- which cannot be done by the caller, because SS:SP is
-         only known here.
-       ⚠ IT MUST GO BELOW THE ARGUMENTS, NOT ABOVE. The procedure returns with
-         `retf 0x0a`, which discards exactly the argument bytes; anything placed
-         above them would still be on the stack afterwards and would silently
-         move SP for whoever we interrupted.
-       ⚠ SP IS KEPT EVEN. A 16-bit stack that goes odd costs an access penalty on
-         every push for the rest of the call and is a trap for the next reader.
-       ⚠ AND IT IS THE SELECTOR, NOT THE BASE, THAT THE GUEST NEEDS: `ssbase` is
-         a host linear address and means nothing to 16-bit code. */
+    /* THE STRUCTURE GOES DOWN FIRST, BELOW THE ARGUMENTS (Importance = 3):
+     * A pointer argument has to point at memory the GUEST can address, and the
+     * only such memory this host can hand out for the duration of one call is
+     * the guest's own stack. So the bytes are placed below the current SP and
+     * the far pointer that names them is written into the argument that was
+     * reserved for it -- which cannot be done by the caller, because SS:SP is
+     * only known here.
+     *
+     * [CAUTION]: IT MUST GO BELOW THE ARGUMENTS, NOT ABOVE. The procedure returns with
+     * `retf 0x0a`, which discards exactly the argument bytes; anything placed
+     * above them would still be on the stack afterwards and would silently
+     * move SP for whoever we interrupted.
+     *
+     * [CAUTION]: SP IS KEPT EVEN. A 16-bit stack that goes odd costs an access penalty on
+     * every push for the rest of the call and is a trap for the next reader.
+     *
+     * [CAUTION]: AND IT IS THE SELECTOR, NOT THE BASE, THAT THE GUEST NEEDS: `ssbase` is
+     * a host linear address and means nothing to 16-bit code.
+     */
     g_WowCallBlobLinear = 0;
-    if (blob && blobLength > 0 && blobArgument >= 0 && blobArgument + 1 < argumentWordCount) {
+    if (blob && blobLength > 0 && blobArgument >= 0 && blobArgument + 1 < argumentWordCount)
+    {
         WORD stackSelector = (WORD)(VDM_REG(tib, VTIB_SS) & WORD_MASK);
         INT  blobBytes  = (blobLength + 1) & ~1;
         stackPointer = (WORD)(stackPointer - blobBytes);
         for (index = 0; index < blobLength; ++index)
             *(volatile BYTE *)(ULONG_PTR)(stackBase + (DWORD)(WORD)(stackPointer + index)) = blob[index];
         arguments[blobArgument]     = stackSelector;                       /* the far pointer's HIGH */
-        arguments[blobArgument + 1] = stackPointer;                       /* ... and its offset     */
+        arguments[blobArgument + 1] = stackPointer;                       /* ... and its offset */
         g_WowCallBlobLinear    = stackBase + (DWORD)stackPointer;
         if (g_WowCallBlob2Argument >= 0 && g_WowCallBlob2Argument + 1 < argumentWordCount
-            && g_WowCallBlob2Offset > 0 && g_WowCallBlob2Offset < blobLength) {
+            && g_WowCallBlob2Offset > 0 && g_WowCallBlob2Offset < blobLength)
+        {
             arguments[g_WowCallBlob2Argument]     = stackSelector;
             arguments[g_WowCallBlob2Argument + 1] = (WORD)(stackPointer + g_WowCallBlob2Offset);
         }
@@ -158,29 +179,36 @@ INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
 
     for (index = 0; index < argumentWordCount; ++index) WowCallPush(stackBase, &stackPointer, arguments[index]);
     WowCallPush(stackBase, &stackPointer, returnSelector);       /* the far return address: CS ... */
-    WowCallPush(stackBase, &stackPointer, 0);            /* ... then IP, at offset 0       */
-    /* ★ AND, IF THE SEGMENT IS NOT LOADED, THE TARGET ITSELF -- so the RETF we
-         are about to enter on pops it and faults on OUR behalf. Same order as
-         the return address above: CS first, so IP ends up at [SP]. */
-    if (isAbsent) {
+    WowCallPush(stackBase, &stackPointer, 0);            /* ... then IP, at offset 0 */
+    /* [INFO]: AND, IF THE SEGMENT IS NOT LOADED, THE TARGET ITSELF -- so the RETF we
+     * are about to enter on pops it and faults on OUR behalf. Same order as
+     * the return address above: CS first, so IP ends up at [SP].
+     */
+    if (isAbsent)
+    {
         WowCallPush(stackBase, &stackPointer, (WORD)(procedure >> WORD_SHIFT));
         WowCallPush(stackBase, &stackPointer, (WORD)(procedure & WORD_MASK));
     }
     VDM_SET16(tib, VTIB_ESP, stackPointer);
 
     /* DS is the contract (see the header note); AX carries the same value so
-       that a MakeProcInstance-style `mov ds,ax` prologue is satisfied too. One
-       assignment cannot be right for one form and wrong for the other, because
-       both forms read the same register. */
+     * that a MakeProcInstance-style `mov ds,ax` prologue is satisfied too. One
+     * assignment cannot be right for one form and wrong for the other, because
+     * both forms read the same register.
+     */
     VDM_SET16(tib, VTIB_EAX, dataSelector);
     VDM_SET16(tib, VTIB_DS,  dataSelector);
-    if (isAbsent) {
+    if (isAbsent)
+    {
         /* Enter on the RETF, which is in a segment that IS present. Its own #NP
-           on the popped selector is restartable, so krnl386 loads the segment
-           and the retry lands in the procedure with this identical stack. */
+         * on the popped selector is restartable, so krnl386 loads the segment
+         * and the retry lands in the procedure with this identical stack.
+         */
         VDM_SET16(tib, VTIB_CS,  returnSelector);
         VDM_REG(tib, VTIB_EIP) = (DWORD)WOWCALL_RETF_OFF;
-    } else {
+    }
+    else
+    {
         VDM_SET16(tib, VTIB_CS,  (WORD)(procedure >> WORD_SHIFT));
         VDM_REG(tib, VTIB_EIP) = (DWORD)(procedure & WORD_MASK);
     }
@@ -188,8 +216,7 @@ INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
     return 1;
 }
 
-/*
- * The procedure returned. `result` is DX:AX, read by the caller before this.
+/* The procedure returned. `result` is DX:AX, read by the caller before this.
  * Puts the interrupted context back and hands the result to whoever asked.
  * Returns the frame that was in flight, or NULL if there was none -- and "none"
  * is not a curiosity, it means something executed our return stub that we did
@@ -206,25 +233,32 @@ PWOWCALL_FRAME WowCallLeave(volatile BYTE *tib, DWORD result)
     if (frame->Sink) *frame->Sink = (WORD)result;
     g_WowCallLastResult = result;            /* s91 #309: DX:AX, for WOWCallback16Ex */
     frame->Written = 0;
-    if (frame->ReturnLinear) {
+    if (frame->ReturnLinear)
+    {
         volatile BYTE *hole = (volatile BYTE *)(ULONG_PTR)frame->ReturnLinear;
         DWORD value = 0;
         INT isWrite = 0;
-        /* ★ WM_CREATE MAY REFUSE. Returning -1 from WM_CREATE is the documented
-             way for a window procedure to abort its own creation, and the host
-             must honour it: the call that made the window comes back 0. The
-             return hole is guest memory and outlives the context switch, so
-             revising it is a four-byte write, not a special case. */
-        if (frame->ReturnMode == WOWCALL_RET_KEEP) {
+        /* [INFO]: WM_CREATE MAY REFUSE. Returning -1 from WM_CREATE is the documented
+         * way for a window procedure to abort its own creation, and the host
+         * must honour it: the call that made the window comes back 0. The
+         * return hole is guest memory and outlives the context switch, so
+         * revising it is a four-byte write, not a special case.
+         */
+        if (frame->ReturnMode == WOWCALL_RET_KEEP)
+        {
             if (frame->Message == WM_CREATE16 && (WORD)result == WOWCALL_CREATE_REFUSED) isWrite = 1;
-        } else {
-            /* ⚠ MASK A WORD RETURN. DX is not the high half of a WORD result --
-                 see WOWCALL_RET_RESULTW above, and the LocalAlloc call that
-                 proved it. */
+        }
+        else
+        {
+            /* [CAUTION]: MASK A WORD RETURN. DX is not the high half of a WORD result --
+             * see WOWCALL_RET_RESULTW above, and the LocalAlloc call that
+             * proved it.
+             */
             value = (frame->ReturnMode == WOWCALL_RET_RESULTW) ? (result & WORD_MASK) : result;
             isWrite = 1;                  /* SendMessage: the procedure's answer */
         }
-        if (isWrite) {
+        if (isWrite)
+        {
             frame->Written = value;
             hole[0] = (BYTE)(value & BYTE_MASK);        hole[1] = (BYTE)((value >> BYTE_SHIFT)  & BYTE_MASK);
             hole[2] = (BYTE)((value >> WORD_SHIFT) & BYTE_MASK); hole[3] = (BYTE)((value >> TOP_BYTE_SHIFT) & BYTE_MASK);

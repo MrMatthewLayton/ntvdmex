@@ -1,11 +1,13 @@
-/* settings_ids.h -- dialog + control IDs for the tabbed Settings dialog.
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Dialog + control IDs for the tabbed Settings dialog.
  *
  * Included by BOTH res/ntvdmhost.rc (which windres compiles) and src/host/settings.h.
  * That is why it contains nothing but #defines: windres understands the preprocessor
  * and nothing else, so a stray declaration here breaks the resource build rather than
  * the C build, which is a confusing place to find out.
  *
- * ── THE SHAPE. ──────────────────────────────────────────────────────────────────
+ * THE SHAPE:
  * IDD_SETTINGS is a frame: a tab control, OK, Cancel and Restore Defaults. Each tab
  * is its OWN child dialog resource (IDD_PAGE_*, style DS_CONTROL | WS_CHILD), created
  * at WM_INITDIALOG and parked in the tab's display rectangle. That is the standard
@@ -15,125 +17,138 @@
  * Control IDs are unique ACROSS ALL PAGES, not just within one. settings.h looks a
  * control up by asking every page for it (see settings_ctl in main.c), so a duplicate
  * ID would silently resolve to whichever page was searched first.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #ifndef NTVDMEX_SETTINGS_IDS_H
 #define NTVDMEX_SETTINGS_IDS_H
 
-#define IDD_SETTINGS          200
-#define IDC_S_TAB             201   /* the SysTabControl32 that owns the pages        */
-#define IDC_S_DEFAULTS        202   /* button:   restore every page's defaults        */
-#define IDC_S_APPLY           203   /* button:   commit without closing (s84 redesign) */
+#define IDD_SETTINGS        200
+#define IDC_S_TAB           201     /* The SysTabControl32 that owns the pages */
+#define IDC_S_DEFAULTS      202     /* Button: restore every page's defaults */
+#define IDC_S_APPLY         203     /* Button: commit without closing (s84 redesign) */
 
 /* s84 (the user's redesign): six tabs in a 640 x 480 dialog -- MS-DOS, Machine, Video,
-   Audio, Input, Drives. The ids are only numbers, so the old names are kept. */
-#define IDD_PAGE_GENERAL      210   /* the "MS-DOS" tab                               */
-#define IDD_PAGE_CPU          211   /* the "Machine" tab: processor, memory, timing   */
-#define IDD_PAGE_DISPLAY      212   /* the "Video" tab                                */
-#define IDD_PAGE_AUDIO        213
-#define IDD_PAGE_INPUT        214
-#define IDD_PAGE_DRIVES       215
-#define NTVDMEX_PAGE_COUNT      6
+ * Audio, Input, Drives. The ids are only numbers, so the old names are kept.
+ */
+#define IDD_PAGE_GENERAL    210     /* The "MS-DOS" tab */
+#define IDD_PAGE_CPU        211     /* The "Machine" tab: processor, memory, timing */
+#define IDD_PAGE_DISPLAY    212     /* The "Video" tab */
+#define IDD_PAGE_AUDIO      213
+#define IDD_PAGE_INPUT      214
+#define IDD_PAGE_DRIVES     215
+#define NTVDMEX_PAGE_COUNT  6
 
-/* ── General ──────────────────────────────────────────────────────────────────── */
+/* General: */
 /* The main icon (also defined by ntvdmhost.rc itself, ahead of its include of this file). */
 #ifndef IDI_MAINICON
-#define IDI_MAINICON 101
+#define IDI_MAINICON    101
 #endif
 /* A slider's value label is its control id + this (SK_SLIDER). */
-#define IDC_S_SLIDER_VALUE_OFFSET 1000
-#define IDC_S_DOSVER          230   /* combo:    reported MS-DOS version, "6.22"      */
-#define IDC_S_DOSVER_NOTE     231   /* static:   why the version is a knob            */
-#define IDC_S_DOSVER_NOW      294   /* static:   the version THIS session reports (s81) */
-#define IDC_S_BEHAVE          293   /* combo:    #167 behave like NTVDM / MS-DOS 6.22  */
+#define IDC_S_SLIDER_VALUE_OFFSET   1000
+#define IDC_S_DOSVER                230     /* Combo: reported MS-DOS version, "6.22" */
+#define IDC_S_DOSVER_NOTE           231     /* Static: why the version is a knob */
+#define IDC_S_DOSVER_NOW            294     /* Static: the version THIS session reports (s81) */
+#define IDC_S_BEHAVE                293     /* Combo: #167 behave like NTVDM / MS-DOS 6.22 */
+
 /* #203: which COMMAND.COM the DOS prompt runs. The radios are not table rows -- the
-   path edit IS the setting (empty = Windows XP's own) and the radios show that. */
-#define IDC_S_SHELL_XP        296   /* radio:    Windows XP's own COMMAND.COM         */
-#define IDC_S_SHELL_OWN       297   /* radio:    a COMMAND.COM the user chooses       */
-#define IDC_S_SHELL           298   /* edit:     its path (the stored string)         */
-#define IDC_S_SHELL_BROWSE    299   /* button:   Browse...                            */
+ * path edit IS the setting (empty = Windows XP's own) and the radios show that.
+ */
+#define IDC_S_SHELL_XP              296     /* Radio: Windows XP's own COMMAND.COM */
+#define IDC_S_SHELL_OWN             297     /* Radio: a COMMAND.COM the user chooses */
+#define IDC_S_SHELL                 298     /* Edit: its path (the stored string) */
+#define IDC_S_SHELL_BROWSE          299     /* Button: Browse... */
 
-/* ── Advanced (was on General) ──────────────────────────────────────────────────
-     Internal pacing knobs. They are not "General" and they are certainly not the
-     "Processor" -- they tune how the host paces the emulated timer and its own
-     render loop, which is diagnostic. Most people never touch them. */
-#define IDC_S_PITPACE         232   /* checkbox: pace the PIT from a 1 kHz thread     */
-#define IDC_S_UITICK          233   /* combo:    screen update: Auto / 5 / 10 / 15 / 20 ms */
+/* Advanced (was on General):
+ * Internal pacing knobs. They are not "General" and they are certainly not the
+ * "Processor" -- they tune how the host paces the emulated timer and its own
+ * render loop, which is diagnostic. Most people never touch them.
+ */
+#define IDC_S_PITPACE               232     /* Checkbox: pace the PIT from a 1 kHz thread */
+#define IDC_S_UITICK                233     /* Combo: screen update: Auto / 5 / 10 / 15 / 20 ms */
 
-/* ── Processor ──────────────────────────────────────────────────────────────────
-     ⚠ THE OLD CPU PAGE WAS MOSTLY FICTION (session 60). CpuType, Core and Cycles
-       were DOSBox vocabulary that this host reads nowhere -- it runs on the real
-       CPU, so there is no emulated processor to configure. FPU and Turbo were live
-       but pointless as user controls (we always have a real FPU; "unlimited" is
-       already turbo). The smoothness slider and core-affinity box were mine and did
-       not earn their place. All removed. What is left is one honest control. */
-#define IDC_S_CPUINFO         240   /* static:   this PC's real CPU, filled at init   */
-#define IDC_S_SPEEDMODE       243   /* combo:    optional speed LIMIT (see cpuspeed.h)*/
+/* Processor:
+ *
+ * [CAUTION]: THE OLD CPU PAGE WAS MOSTLY FICTION (session 60). CpuType, Core and Cycles
+ * were DOSBox vocabulary that this host reads nowhere -- it runs on the real
+ * CPU, so there is no emulated processor to configure. FPU and Turbo were live
+ * but pointless as user controls (we always have a real FPU; "unlimited" is
+ * already turbo). The smoothness slider and core-affinity box were mine and did
+ * not earn their place. All removed. What is left is one honest control.
+ */
+#define IDC_S_CPUINFO               240     /* Static: this PC's real CPU, filled at init */
+#define IDC_S_SPEEDMODE             243     /* Combo: optional speed LIMIT (see cpuspeed.h) */
 
-/* ── Memory (split out of CPU, session 60) ──────────────────────────────────────── */
-#define IDC_S_CONVKB          246
-#define IDC_S_XMS             247
-#define IDC_S_EMS             248
-#define IDC_S_UMB             249
-#define IDC_S_A20             250
+/* Memory (split out of CPU, session 60): */
+#define IDC_S_CONVKB                246
+#define IDC_S_XMS                   247
+#define IDC_S_EMS                   248
+#define IDC_S_UMB                   249
+#define IDC_S_A20                   250
 
-/* ── Display ──────────────────────────────────────────────────────────────────── */
-#define IDC_S_WINSIZE         260
-#define IDC_S_RENDERER        261
-#define IDC_S_SCALER          262
-#define IDC_S_FILTER          263
-#define IDC_S_ASPECT          264
-#define IDC_S_FRAMESKIP       265
-#define IDC_S_VSYNC           266
-#define IDC_S_BLINKCURSOR     267   /* checkbox: blink the text-mode cursor           */
-#define IDC_S_OSD             269   /* checkbox: #217 show on-screen messages          */
-#define IDC_S_BUFFERED        270   /* checkbox: #217 compose off-screen, blit once    */
-#define IDC_S_TINT            271   /* combo:    #229 colour filter                    */
-#define IDC_S_AUDIOAPI        292   /* combo:    #234 WinMM / DirectSound              */
-#define IDC_S_GUSADDR         272   /* combo:    #235 GUS base                         */
-#define IDC_S_GUSIRQ          273   /* combo:    #235 GUS IRQ                          */
-#define IDC_S_GUSDMA          274   /* combo:    #235 GUS DMA                          */
-#define IDC_S_MPUADDR         275   /* combo:    #235 MPU-401 base                     */
-#define IDC_S_AUTOFS          268   /* combo: start fullscreen Always/Graphics/Never  */
-#define IDC_S_TEXTFONT        276   /* combo:    #321 text-mode font (the stored string) */
-#define IDC_S_TEXTFONT_INFO   277   /* static:   #321 what the chosen font supplies      */
-#define IDC_S_TEXTFONT_VIEW   278   /* static:   #321 owner-drawn preview                */
-#define IDC_S_FIT             279   /* combo:    #325 maximised/fullscreen fit           */
+/* Display: */
+#define IDC_S_WINSIZE               260
+#define IDC_S_RENDERER              261
+#define IDC_S_SCALER                262
+#define IDC_S_FILTER                263
+#define IDC_S_ASPECT                264
+#define IDC_S_FRAMESKIP             265
+#define IDC_S_VSYNC                 266
+#define IDC_S_BLINKCURSOR           267     /* Checkbox: blink the text-mode cursor */
+#define IDC_S_OSD                   269     /* Checkbox: #217 show on-screen messages */
+#define IDC_S_BUFFERED              270     /* Checkbox: #217 compose off-screen, blit once */
+#define IDC_S_TINT                  271     /* Combo: #229 colour filter */
+#define IDC_S_AUDIOAPI              292     /* Combo: #234 WinMM / DirectSound */
+#define IDC_S_GUSADDR               272     /* Combo: #235 GUS base */
+#define IDC_S_GUSIRQ                273     /* Combo: #235 GUS IRQ */
+#define IDC_S_GUSDMA                274     /* Combo: #235 GUS DMA */
+#define IDC_S_MPUADDR               275     /* Combo: #235 MPU-401 base */
+#define IDC_S_AUTOFS                268     /* Combo: start fullscreen Always/Graphics/Never */
+#define IDC_S_TEXTFONT              276     /* Combo: #321 text-mode font (the stored string) */
+#define IDC_S_TEXTFONT_INFO         277     /* Static: #321 what the chosen font supplies */
+#define IDC_S_TEXTFONT_VIEW         278     /* Static: #321 owner-drawn preview */
+#define IDC_S_FIT                   279     /* Combo: #325 maximised/fullscreen fit */
 
-/* ── Audio ────────────────────────────────────────────────────────────────────── */
-#define IDC_S_VOLUME          280
-#define IDC_S_MUTE            281
-#define IDC_S_RATE            282
-#define IDC_S_SBMODEL         283
-#define IDC_S_SBADDR          284
-#define IDC_S_SBIRQ           285
-#define IDC_S_SBDMA           286
-#define IDC_S_OPL             287
-#define IDC_S_MIDI            288
-#define IDC_S_SOUNDFONT       289
-#define IDC_S_SPEAKER         290
-#define IDC_S_GUS             291
+/* Audio: */
+#define IDC_S_VOLUME                280
+#define IDC_S_MUTE                  281
+#define IDC_S_RATE                  282
+#define IDC_S_SBMODEL               283
+#define IDC_S_SBADDR                284
+#define IDC_S_SBIRQ                 285
+#define IDC_S_SBDMA                 286
+#define IDC_S_OPL                   287
+#define IDC_S_MIDI                  288
+#define IDC_S_SOUNDFONT             289
+#define IDC_S_SPEAKER               290
+#define IDC_S_GUS                   291
+
 /* 292 was IDC_S_TANDY (Tandy / CMS, removed s80); reused s84 for IDC_S_AUDIOAPI. */
 
-/* ── Input ────────────────────────────────────────────────────────────────────── */
-#define IDC_S_HOSTCURSOR      310   /* combo:    s84 show host cursor Always/Never/Smart */
-#define IDC_S_SEAMLESS        311
-#define IDC_S_MSENS           312   /* trackbar: mouse sensitivity, percent (#291)    */
-#define IDC_S_MSENS_VAL       1312  /* static:   its value, "100%" -- SK_SLIDER's ctl+1000 */
-#define IDC_S_KBLAYOUT        313
-#define IDC_S_TYPEMATIC       314
-#define IDC_S_JOYTYPE         315
-#define IDC_S_JOYPAD          316
+/* Input: */
+#define IDC_S_HOSTCURSOR            310     /* Combo: s84 show host cursor Always/Never/Smart */
+#define IDC_S_SEAMLESS              311
+#define IDC_S_MSENS                 312     /* Trackbar: mouse sensitivity, percent (#291) */
+#define IDC_S_MSENS_VAL             1312    /* Static: its value, "100%" -- SK_SLIDER's ctl+1000 */
+#define IDC_S_KBLAYOUT              313
+#define IDC_S_TYPEMATIC             314
+#define IDC_S_JOYTYPE               315
+#define IDC_S_JOYPAD                316
 
-/* ── Drives ───────────────────────────────────────────────────────────────────── */
+/* Drives: */
 /* s84 (user): physical drive, or a mounted image. The PHYS radio is the table row. */
-#define IDC_S_FLOPPY_PHYS     330   /* radio:    use the physical floppy drive        */
-#define IDC_S_FLOPPYA         331   /* edit:     the floppy image path                */
-#define IDC_S_CDROM           332   /* edit:     the ISO image path                   */
-#define IDC_S_FLOPPY_IMG      333   /* radio:    mount a floppy disk image            */
-#define IDC_S_FLOPPY_BROWSE   334
-#define IDC_S_CD_PHYS         335   /* radio:    use the physical CD-ROM drive        */
-#define IDC_S_CD_IMG          336   /* radio:    mount an ISO disk image              */
-#define IDC_S_CD_BROWSE       337
-#define IDC_S_SF_BROWSE       338   /* button:   SoundFont Browse...                  */
+#define IDC_S_FLOPPY_PHYS           330     /* Radio: use the physical floppy drive */
+#define IDC_S_FLOPPYA               331     /* Edit: the floppy image path */
+#define IDC_S_CDROM                 332     /* Edit: the ISO image path */
+#define IDC_S_FLOPPY_IMG            333     /* Radio: mount a floppy disk image */
+#define IDC_S_FLOPPY_BROWSE         334
+#define IDC_S_CD_PHYS               335     /* Radio: use the physical CD-ROM drive */
+#define IDC_S_CD_IMG                336     /* Radio: mount an ISO disk image */
+#define IDC_S_CD_BROWSE             337
+#define IDC_S_SF_BROWSE             338     /* Button: SoundFont Browse... */
 
 #endif

@@ -1,11 +1,19 @@
-/* speaker_test.c -- off-VM unit battery for the PC-speaker VDD (vdd_speaker.c).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM unit battery for the PC-speaker VDD (vdd_speaker.c).
  *
  * The third device on the bus, proving the VDD ABI generalises. The speaker is
  * PIT channel 2 (tone) gated by port 0x61. We program channel 2 through the PIT
  * VDD, drive port 0x61 through the speaker VDD, and check the reported tone +
  * active state -- entirely off-VM, like the other batteries. No audio is
  * produced (that's M7); this validates the device model + the port plumbing.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include "vdd_speaker.h"
@@ -36,7 +44,8 @@ INT main(VOID)
     CHECK(!VddSpeakerIsActive(&spk), "init: speaker inactive");
 
     /* T2: program PIT channel 2 to 1000 Hz (reload = 1193182/1000 = 1193) -- *
-     * 0x43 = 10 11 011 0 = 0xB6 (ch2, lo/hi, mode 3); then lo, hi of 1193.   */
+     * 0x43 = 10 11 011 0 = 0xB6 (ch2, lo/hi, mode 3); then lo, hi of 1193.
+     */
     value = 0xB6; VddBusIo(&bus, 0x43, 1, 0, &value);
     value = 1193 & 0xFF;  VddBusIo(&bus, 0x42, 1, 0, &value);     /* lo */
     value = 1193 >> 8;    VddBusIo(&bus, 0x42, 1, 0, &value);     /* hi -> reload 1193 */

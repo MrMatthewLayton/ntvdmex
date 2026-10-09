@@ -1,7 +1,16 @@
-/* host_mouse.h -- the mouse: INT 33h, its coordinate model, event queue and callbacks, and the
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * The mouse: INT 33h, its coordinate model, event queue and callbacks, and the
  *   graphics cursor.
  *
- * Declarations only (#335): defined in host_mouse.c. */
+ * Declarations only (#335): defined in host_mouse.c.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
 #ifndef NTVDMEX_HOST_MOUSE_H
 #define NTVDMEX_HOST_MOUSE_H
 #include "host_state.h"

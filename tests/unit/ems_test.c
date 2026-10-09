@@ -1,4 +1,6 @@
-/* ems_test.c -- off-VM unit battery for the EMS core (src/dos/dos_ems.h).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * Off-VM unit battery for the EMS core (src/dos/dos_ems.h).
  *
  * Layer-1 test for M4 slice 2, in the style of xms_test.c. A 64 KB buffer
  * stands in for the page-frame window (the host maps real 0xE0000 RAM there);
@@ -8,53 +10,66 @@
  * back to the logical page so they survive -- this is how EMS works without a
  * memory trap. Also covers counts/alloc/dealloc, realloc grow/shrink, the
  * logical/physical range errors, and save/restore page maps.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "dos_ems.h"
 
 /* The pool the checks build, and the handles' sizes. */
-#define EMS_TEST_FRAME_SEGMENT        0xE000
-#define EMS_TEST_POOL_PAGES           256      /* 4 MB                                  */
-#define EMS_TEST_HANDLE_PAGES         8
-#define EMS_TEST_OVERSIZED_PAGES      1000     /* more than the whole pool             */
-#define EMS_TEST_TOO_MANY_FREE_PAGES  250      /* within the pool, beyond what is free */
-#define EMS_TEST_GROWN_PAGES          16
-#define EMS_TEST_SHRUNK_PAGES         4
-#define EMS_TEST_UNKNOWN_HANDLE       99
-#define EMS_TEST_UNUSED_HANDLE        200
-#define EMS_TEST_FIRST_LISTED_PAGES   3
-#define EMS_TEST_SECOND_LISTED_PAGES  5
-#define EMS_TEST_HANDLE_NAME          "GAME"
+#define EMS_TEST_FRAME_SEGMENT          0xE000
+#define EMS_TEST_POOL_PAGES             256     /* 4 MB */
+#define EMS_TEST_HANDLE_PAGES           8
+#define EMS_TEST_OVERSIZED_PAGES        1000    /* More than the whole pool */
+#define EMS_TEST_TOO_MANY_FREE_PAGES    250     /* Within the pool, beyond what is free */
+#define EMS_TEST_GROWN_PAGES            16
+#define EMS_TEST_SHRUNK_PAGES           4
+#define EMS_TEST_UNKNOWN_HANDLE         99
+#define EMS_TEST_UNUSED_HANDLE          200
+#define EMS_TEST_FIRST_LISTED_PAGES     3
+#define EMS_TEST_SECOND_LISTED_PAGES    5
+#define EMS_TEST_HANDLE_NAME            "GAME"
 
 /* The windows and logical pages the shadowing checks use. */
-#define EMS_TEST_SECOND_WINDOW        1
-#define EMS_TEST_THIRD_WINDOW         2
-#define EMS_TEST_SECOND_WINDOW_PAGE   2
-#define EMS_TEST_THIRD_WINDOW_PAGE    3
-#define EMS_TEST_PERTURB_PAGE         4
-#define EMS_TEST_PERTURB_PAGE_TOO     5
+#define EMS_TEST_SECOND_WINDOW          1
+#define EMS_TEST_THIRD_WINDOW           2
+#define EMS_TEST_SECOND_WINDOW_PAGE     2
+#define EMS_TEST_THIRD_WINDOW_PAGE      3
+#define EMS_TEST_PERTURB_PAGE           4
+#define EMS_TEST_PERTURB_PAGE_TOO       5
 
 /* Where in a window the guest writes, and what. */
-#define EMS_TEST_FIRST_BYTE           0x0000
-#define EMS_TEST_LAST_BYTE            (DOS_EMS_PAGE_SIZE - 1)
-#define EMS_TEST_MARK_OFFSET          0x10
-#define EMS_TEST_DIRTY_OFFSET         0x20
-#define EMS_TEST_PAGE0_FIRST_MARK     0xA1
-#define EMS_TEST_PAGE0_LAST_MARK      0xA2
-#define EMS_TEST_PAGE1_MARK           0xB1
-#define EMS_TEST_SECOND_WINDOW_MARK   0xC3
-#define EMS_TEST_THIRD_WINDOW_MARK    0xD4
-#define EMS_TEST_DIRTY_MARK           0x5A
+#define EMS_TEST_FIRST_BYTE             0x0000
+#define EMS_TEST_LAST_BYTE              (DOS_EMS_PAGE_SIZE - 1)
+#define EMS_TEST_MARK_OFFSET            0x10
+#define EMS_TEST_DIRTY_OFFSET           0x20
+#define EMS_TEST_PAGE0_FIRST_MARK       0xA1
+#define EMS_TEST_PAGE0_LAST_MARK        0xA2
+#define EMS_TEST_PAGE1_MARK             0xB1
+#define EMS_TEST_SECOND_WINDOW_MARK     0xC3
+#define EMS_TEST_THIRD_WINDOW_MARK      0xD4
+#define EMS_TEST_DIRTY_MARK             0x5A
 
 static INT g_Checks = 0, g_Failures = 0;
 
 static VOID EmsTestCheck(BOOL passed, PCSTR description)
 {
     g_Checks++;
-    if (passed) { printf("  PASS  %s\n", description); }
-    else { printf("  FAIL  %s\n", description); g_Failures++; }
+    if (passed)
+    {
+        printf("  PASS  %s\n", description);
+    }
+    else
+    {
+        printf("  FAIL  %s\n", description);
+        g_Failures++;
+    }
 }
 
 static PVOID EmsTestAllocate(PVOID context, DWORD pages)
@@ -93,7 +108,7 @@ static WORD EmsTestEntryPages(PCBYTE entry)
 
 INT main(VOID)
 {
-    static BYTE frame[DOS_EMS_FRAME_SIZE];   /* the 64 KB page-frame window       */
+    static BYTE frame[DOS_EMS_FRAME_SIZE];   /* the 64 KB page-frame window */
     DOS_EMS_STATE state;
     WORD firstHandle, secondHandle, freePages, totalPages, pages;
     BYTE errorCode;
@@ -145,7 +160,8 @@ INT main(VOID)
                  && errorCode == DOS_EMS_ERROR_INVALID_HANDLE, "fn44: bad handle rejected (83h)");
 
     /* T6: SHADOWING -- map page 0 into window 0, write it, remap, verify it  *
-     * was written back to the logical page (the heart of EMS).            */
+     * was written back to the logical page (the heart of EMS).
+     */
     succeeded = DosEmsMapPage(&state, 0, 0, firstHandle, &errorCode);
     EmsTestCheck(succeeded, "fn44: map logical 0 -> window 0");
     /* guest writes the window */

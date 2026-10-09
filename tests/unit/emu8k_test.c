@@ -1,161 +1,169 @@
-/* emu8k_test.c -- off-VM battery for the AWE32's EMU8000 (src/vdd/vdd_emu8k.c, #233).
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- * Every expectation is from the AWE32/EMU8000 Programmer's Guide rev 1.00 (§n, p.n), written
+ * Off-VM battery for the AWE32's EMU8000 (src/vdd/vdd_emu8k.c, #233).
+ *
+ * Every expectation is from the AWE32/EMU8000 Programmer's Guide rev 1.00 (section n, p.n), written
  * before the model was run, and every access goes through the PORTS exactly as a DOS program
  * makes it -- the pointer at E+802h, then the data port:
- *   T1  detection as the period drivers do it (HWCF1/HWCF2 read-back) and the §4 procedure
+ *   T1  detection as the period drivers do it (HWCF1/HWCF2 read-back) and the section 4 procedure
  *   T2  the wall clock WC advancing at the sample rate
  *   T3  register read-back, per channel, word and doubleword, and E+402h's two meanings
  *   T4  sound memory: DMA-stream upload through SMALW/SMLD and SMARW/SMRD, read-back through
  *       SMALR/SMLD with the stale prefetch word, the ROM region, a stream with no channel
- *   T5  a looping channel started by §6's recipe: pitch from IP, octave up/down, pan
+ *   T5  a looping channel started by section 6's recipe: pitch from IP, octave up/down, pan
  *   T6  the volume envelope: attack shape, IFATN attenuation, release shape and end
  *   T7  the filter: low cutoff attenuates, Q resonates, Q0/FFh is transparent
  *   T8  output gating: HWCF3's audio enable, a DMA channel is silent
  *   T9  the mixer hook: VddAudioSetEmu8k puts the chip into the host's stereo mix
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
  */
+
 #include <stdio.h>
 #include <string.h>
 #include "vdd_emu8k.h"
 #include "vdd_audio.h"
 
-/* ---- the chip's ports and register map (§2, p.6-7) ---------------------------------- */
+/* ---- the chip's ports and register map (section 2, p.6-7) ---------------------------------- */
 
-#define EMU8K_TEST_BASE              0x620   /* E: SB 220h + 400h                          */
-#define EMU8K_TEST_DATA0             (EMU8K_TEST_BASE + 0x000)
-#define EMU8K_TEST_DATA0_HIGH        (EMU8K_TEST_BASE + 0x002)
-#define EMU8K_TEST_DATA1             (EMU8K_TEST_BASE + 0x400)
-#define EMU8K_TEST_DATA1_HIGH_DATA2  (EMU8K_TEST_BASE + 0x402)
-#define EMU8K_TEST_DATA3             (EMU8K_TEST_BASE + 0x800)
-#define EMU8K_TEST_POINTER           (EMU8K_TEST_BASE + 0x802)
-#define EMU8K_TEST_POINTER_REGISTER_SHIFT 5
-#define EMU8K_TEST_POINTER_LOW_BYTE  0xFF
+#define EMU8K_TEST_BASE                     0x620           /* E: SB 220h + 400h */
+#define EMU8K_TEST_DATA0                    (EMU8K_TEST_BASE + 0x000)
+#define EMU8K_TEST_DATA0_HIGH               (EMU8K_TEST_BASE + 0x002)
+#define EMU8K_TEST_DATA1                    (EMU8K_TEST_BASE + 0x400)
+#define EMU8K_TEST_DATA1_HIGH_DATA2         (EMU8K_TEST_BASE + 0x402)
+#define EMU8K_TEST_DATA3                    (EMU8K_TEST_BASE + 0x800)
+#define EMU8K_TEST_POINTER                  (EMU8K_TEST_BASE + 0x802)
+#define EMU8K_TEST_POINTER_REGISTER_SHIFT   5
+#define EMU8K_TEST_POINTER_LOW_BYTE         0xFF
 
 /* The bus's access widths and directions (VddBusIo). */
-#define EMU8K_TEST_WORD              2
-#define EMU8K_TEST_DOUBLEWORD        4
-#define EMU8K_TEST_OUT               0
-#define EMU8K_TEST_IN                1
+#define EMU8K_TEST_WORD                     2
+#define EMU8K_TEST_DOUBLEWORD               4
+#define EMU8K_TEST_OUT                      0
+#define EMU8K_TEST_IN                       1
 
 /* Register numbers behind each data port. */
-#define EMU8K_TEST_CPF       0       /* Data0 */
-#define EMU8K_TEST_PTRX      1
-#define EMU8K_TEST_CVCF      2
-#define EMU8K_TEST_VTFT      3
-#define EMU8K_TEST_PSST      6
-#define EMU8K_TEST_CSL       7
-#define EMU8K_TEST_CCCA      0       /* Data1 */
-#define EMU8K_TEST_GLOBALS   1       /* Data1/Data2 r1: the registers named by channel   */
-#define EMU8K_TEST_INIT_LOW  2       /* Data1 r2 = INIT1, Data2 r2 = INIT2               */
-#define EMU8K_TEST_INIT_HIGH 3       /* Data1 r3 = INIT3, Data2 r3 = INIT4               */
-#define EMU8K_TEST_ENVVOL    4
-#define EMU8K_TEST_DCYSUSV   5
-#define EMU8K_TEST_ENVVAL    6
-#define EMU8K_TEST_DCYSUS    7
-#define EMU8K_TEST_ATKHLDV   4       /* Data2 */
-#define EMU8K_TEST_LFO1VAL   5
-#define EMU8K_TEST_ATKHLD    6
-#define EMU8K_TEST_LFO2VAL   7
-#define EMU8K_TEST_IP        0       /* Data3 */
-#define EMU8K_TEST_IFATN     1
-#define EMU8K_TEST_PEFE      2
-#define EMU8K_TEST_FMMOD     3
-#define EMU8K_TEST_TREMFRQ   4
-#define EMU8K_TEST_FM2FRQ2   5
+#define EMU8K_TEST_CPF                      0               /* Data0 */
+#define EMU8K_TEST_PTRX                     1
+#define EMU8K_TEST_CVCF                     2
+#define EMU8K_TEST_VTFT                     3
+#define EMU8K_TEST_PSST                     6
+#define EMU8K_TEST_CSL                      7
+#define EMU8K_TEST_CCCA                     0               /* Data1 */
+#define EMU8K_TEST_GLOBALS                  1               /* Data1/Data2 r1: the registers named by channel */
+#define EMU8K_TEST_INIT_LOW                 2               /* Data1 r2 = INIT1, Data2 r2 = INIT2 */
+#define EMU8K_TEST_INIT_HIGH                3               /* Data1 r3 = INIT3, Data2 r3 = INIT4 */
+#define EMU8K_TEST_ENVVOL                   4
+#define EMU8K_TEST_DCYSUSV                  5
+#define EMU8K_TEST_ENVVAL                   6
+#define EMU8K_TEST_DCYSUS                   7
+#define EMU8K_TEST_ATKHLDV                  4               /* Data2 */
+#define EMU8K_TEST_LFO1VAL                  5
+#define EMU8K_TEST_ATKHLD                   6
+#define EMU8K_TEST_LFO2VAL                  7
+#define EMU8K_TEST_IP                       0               /* Data3 */
+#define EMU8K_TEST_IFATN                    1
+#define EMU8K_TEST_PEFE                     2
+#define EMU8K_TEST_FMMOD                    3
+#define EMU8K_TEST_TREMFRQ                  4
+#define EMU8K_TEST_FM2FRQ2                  5
 
 /* The global registers at r1, by channel (p.10-13). */
-#define EMU8K_TEST_HWCF4     9
-#define EMU8K_TEST_HWCF5     10
-#define EMU8K_TEST_HWCF6     13
-#define EMU8K_TEST_SMALR     20
-#define EMU8K_TEST_SMARR     21
-#define EMU8K_TEST_SMALW     22
-#define EMU8K_TEST_SMARW     23
-#define EMU8K_TEST_SMLD      26      /* Data1: SMLD; Data2: SMRD                          */
-#define EMU8K_TEST_WC        27
-#define EMU8K_TEST_HWCF1     29
-#define EMU8K_TEST_HWCF2     30
-#define EMU8K_TEST_HWCF3     31
+#define EMU8K_TEST_HWCF4                    9
+#define EMU8K_TEST_HWCF5                    10
+#define EMU8K_TEST_HWCF6                    13
+#define EMU8K_TEST_SMALR                    20
+#define EMU8K_TEST_SMARR                    21
+#define EMU8K_TEST_SMALW                    22
+#define EMU8K_TEST_SMARW                    23
+#define EMU8K_TEST_SMLD                     26              /* Data1: SMLD; Data2: SMRD */
+#define EMU8K_TEST_WC                       27
+#define EMU8K_TEST_HWCF1                    29
+#define EMU8K_TEST_HWCF2                    30
+#define EMU8K_TEST_HWCF3                    31
 
 /* Register values from the guide. */
-#define EMU8K_TEST_HWCF1_INIT        0x0059  /* §4                                         */
-#define EMU8K_TEST_HWCF1_PROBE_MASK  0x007E  /* what the period drivers mask the read with */
-#define EMU8K_TEST_HWCF1_PROBE_VALUE 0x0058
-#define EMU8K_TEST_HWCF2_INIT        0x0020
-#define EMU8K_TEST_HWCF2_PROBE_BITS  0x0003
-#define EMU8K_TEST_HWCF3_AUDIO_OFF   0x0000
-#define EMU8K_TEST_HWCF3_AUDIO_ON    0x0004
-#define EMU8K_TEST_HWCF4_INIT        0
-#define EMU8K_TEST_HWCF5_INIT        0x00000083u
-#define EMU8K_TEST_HWCF6_INIT        0x00008000u
-#define EMU8K_TEST_ENGINE_OFF        0x0080  /* DCYSUSV bit 7                              */
-#define EMU8K_TEST_RELEASE           0x8000  /* DCYSUSV bit 15                             */
-#define EMU8K_TEST_NO_DELAY          0x8000  /* ENVVOL/ENVVAL/LFOnVAL: 8000h = no delay    */
-#define EMU8K_TEST_FLAT_ENVELOPE     0x7F7F  /* fastest rate, no hold / full sustain       */
-#define EMU8K_TEST_LFO_FREQUENCY     0x0010
-#define EMU8K_TEST_UNITY_CP          0x40000000u  /* CP 4000h: one word per sample (p.7)   */
-#define EMU8K_TEST_FULL_TARGET       0x0000FFFFu  /* VTFT/CVCF: volume 0, cutoff FFFFh      */
-#define EMU8K_TEST_PITCH_UNITY       0xE000  /* IP E000h = unity                           */
-#define EMU8K_TEST_PITCH_OCTAVE_UP   0xF000
-#define EMU8K_TEST_PITCH_OCTAVE_DOWN 0xD000
-#define EMU8K_TEST_CP_UNITY          0x4000
-#define EMU8K_TEST_OPEN_FILTER       0xFF00  /* IFATN: cutoff FFh, no attenuation          */
-#define EMU8K_TEST_RELEASE_5C        0x805C  /* §7's release example                       */
-#define EMU8K_TEST_ATTACK_40         0x7F40
-#define EMU8K_TEST_ATTENUATION_12DB  0xFF20  /* IFATN 20h: 32 x 0.375 dB                   */
-#define EMU8K_TEST_CUTOFF_LOW        0x0000
-#define EMU8K_TEST_CUTOFF_ON_TONE    0x6800
-#define EMU8K_TEST_Q_MAX             0xF
-#define EMU8K_TEST_Q_SHIFT_IN_HIGH   12      /* CCCA bits 31-28, in its MS word            */
-#define EMU8K_TEST_CCCA_HIGH_KEEP    0x0FFF
-#define EMU8K_TEST_Q_SHIFT           28
-#define EMU8K_TEST_PAN_SHIFT         24
-#define EMU8K_TEST_PAN_LEFT          0xFF
-#define EMU8K_TEST_PAN_RIGHT         0x00
-#define EMU8K_TEST_PAN_CENTRE        0x80
-#define EMU8K_TEST_INTERPOLATOR_OFFSET 1     /* the registers hold the address minus one   */
-#define EMU8K_TEST_SMA_FLAG          0x80000000u  /* EMPTY / FULL                          */
-#define EMU8K_TEST_ADDRESS_MASK      0xFFFFFF
+#define EMU8K_TEST_HWCF1_INIT               0x0059          /* Section 4 */
+#define EMU8K_TEST_HWCF1_PROBE_MASK         0x007E          /* What the period drivers mask the read with */
+#define EMU8K_TEST_HWCF1_PROBE_VALUE        0x0058
+#define EMU8K_TEST_HWCF2_INIT               0x0020
+#define EMU8K_TEST_HWCF2_PROBE_BITS         0x0003
+#define EMU8K_TEST_HWCF3_AUDIO_OFF          0x0000
+#define EMU8K_TEST_HWCF3_AUDIO_ON           0x0004
+#define EMU8K_TEST_HWCF4_INIT               0
+#define EMU8K_TEST_HWCF5_INIT               0x00000083u
+#define EMU8K_TEST_HWCF6_INIT               0x00008000u
+#define EMU8K_TEST_ENGINE_OFF               0x0080          /* DCYSUSV bit 7 */
+#define EMU8K_TEST_RELEASE                  0x8000          /* DCYSUSV bit 15 */
+#define EMU8K_TEST_NO_DELAY                 0x8000          /* ENVVOL/ENVVAL/LFOnVAL: 8000h = no delay */
+#define EMU8K_TEST_FLAT_ENVELOPE            0x7F7F          /* Fastest rate, no hold / full sustain */
+#define EMU8K_TEST_LFO_FREQUENCY            0x0010
+#define EMU8K_TEST_UNITY_CP                 0x40000000u     /* CP 4000h: one word per sample (p.7) */
+#define EMU8K_TEST_FULL_TARGET              0x0000FFFFu     /* VTFT/CVCF: volume 0, cutoff FFFFh */
+#define EMU8K_TEST_PITCH_UNITY              0xE000          /* IP E000h = unity */
+#define EMU8K_TEST_PITCH_OCTAVE_UP          0xF000
+#define EMU8K_TEST_PITCH_OCTAVE_DOWN        0xD000
+#define EMU8K_TEST_CP_UNITY                 0x4000
+#define EMU8K_TEST_OPEN_FILTER              0xFF00          /* IFATN: cutoff FFh, no attenuation */
+#define EMU8K_TEST_RELEASE_5C               0x805C          /* Section 7's release example */
+#define EMU8K_TEST_ATTACK_40                0x7F40
+#define EMU8K_TEST_ATTENUATION_12DB         0xFF20          /* IFATN 20h: 32 x 0.375 dB */
+#define EMU8K_TEST_CUTOFF_LOW               0x0000
+#define EMU8K_TEST_CUTOFF_ON_TONE           0x6800
+#define EMU8K_TEST_Q_MAX                    0xF
+#define EMU8K_TEST_Q_SHIFT_IN_HIGH          12              /* CCCA bits 31-28, in its MS word */
+#define EMU8K_TEST_CCCA_HIGH_KEEP           0x0FFF
+#define EMU8K_TEST_Q_SHIFT                  28
+#define EMU8K_TEST_PAN_SHIFT                24
+#define EMU8K_TEST_PAN_LEFT                 0xFF
+#define EMU8K_TEST_PAN_RIGHT                0x00
+#define EMU8K_TEST_PAN_CENTRE               0x80
+#define EMU8K_TEST_INTERPOLATOR_OFFSET      1               /* The registers hold the address minus one */
+#define EMU8K_TEST_SMA_FLAG                 0x80000000u     /* EMPTY / FULL */
+#define EMU8K_TEST_ADDRESS_MASK             0xFFFFFF
 
 /* The DMA stream modes for CCCA (bits 26-24: DMA, write, right). */
-#define EMU8K_TEST_STREAM_LEFT_READ   0x04000000u
-#define EMU8K_TEST_STREAM_RIGHT_READ  0x05000000u
-#define EMU8K_TEST_STREAM_LEFT_WRITE  0x06000000u
-#define EMU8K_TEST_STREAM_RIGHT_WRITE 0x07000000u
-#define EMU8K_TEST_CCCA_DMA           0x04000000u
+#define EMU8K_TEST_STREAM_LEFT_READ         0x04000000u
+#define EMU8K_TEST_STREAM_RIGHT_READ        0x05000000u
+#define EMU8K_TEST_STREAM_LEFT_WRITE        0x06000000u
+#define EMU8K_TEST_STREAM_RIGHT_WRITE       0x07000000u
+#define EMU8K_TEST_CCCA_DMA                 0x04000000u
 
 /* The channels each part uses. */
-#define EMU8K_TEST_TONE_CHANNEL       0
-#define EMU8K_TEST_SECOND_CHANNEL     1
-#define EMU8K_TEST_LAST_CHANNEL       31
-#define EMU8K_TEST_LEFT_WRITE_CHANNEL 30
-#define EMU8K_TEST_RIGHT_WRITE_CHANNEL 29
-#define EMU8K_TEST_LEFT_READ_CHANNEL  28
-#define EMU8K_TEST_RIGHT_READ_CHANNEL 27
+#define EMU8K_TEST_TONE_CHANNEL             0
+#define EMU8K_TEST_SECOND_CHANNEL           1
+#define EMU8K_TEST_LAST_CHANNEL             31
+#define EMU8K_TEST_LEFT_WRITE_CHANNEL       30
+#define EMU8K_TEST_RIGHT_WRITE_CHANNEL      29
+#define EMU8K_TEST_LEFT_READ_CHANNEL        28
+#define EMU8K_TEST_RIGHT_READ_CHANNEL       27
 
 /* Sound memory. */
-#define EMU8K_TEST_DRAM_START         0x200000u
-#define EMU8K_TEST_TONE_ADDRESS       0x201000u   /* where the test tone lives in DRAM     */
-#define EMU8K_TEST_LOOP_WORDS         64
-#define EMU8K_TEST_TONE_WORDS         192         /* three periods of the loop             */
-#define EMU8K_TEST_TONE_QUARTER       16
-#define EMU8K_TEST_TONE_THREE_QUARTERS 48
-#define EMU8K_TEST_TONE_STEP          1024
-#define EMU8K_TEST_TONE_HALF_CYCLE    32768
-#define EMU8K_TEST_TONE_FULL_CYCLE    65536
-#define EMU8K_TEST_TONE_PEAK          16383
+#define EMU8K_TEST_DRAM_START               0x200000u
+#define EMU8K_TEST_TONE_ADDRESS             0x201000u       /* Where the test tone lives in DRAM */
+#define EMU8K_TEST_LOOP_WORDS               64
+#define EMU8K_TEST_TONE_WORDS               192             /* Three periods of the loop */
+#define EMU8K_TEST_TONE_QUARTER             16
+#define EMU8K_TEST_TONE_THREE_QUARTERS      48
+#define EMU8K_TEST_TONE_STEP                1024
+#define EMU8K_TEST_TONE_HALF_CYCLE          32768
+#define EMU8K_TEST_TONE_FULL_CYCLE          65536
+#define EMU8K_TEST_TONE_PEAK                16383
 
 /* Timing. */
-#define EMU8K_TEST_RATE               44100       /* one second of samples                 */
-#define EMU8K_TEST_TENTH_SECOND       4410
-#define EMU8K_TEST_ENGINE_TICK        64          /* a render that crosses an engine tick  */
-#define EMU8K_TEST_INIT_WAIT_SAMPLES  1024        /* §4 step: "wait 1024 sample periods"   */
-#define EMU8K_TEST_INIT_WAIT_RENDERS  16          /* ...in renders of 64                   */
-#define EMU8K_TEST_SPIN_LIMIT         1000
-#define EMU8K_TEST_MICROSECONDS_TO_SAMPLES_NUMERATOR   441u
+#define EMU8K_TEST_RATE                     44100           /* One second of samples */
+#define EMU8K_TEST_TENTH_SECOND             4410
+#define EMU8K_TEST_ENGINE_TICK              64              /* A render that crosses an engine tick */
+#define EMU8K_TEST_INIT_WAIT_SAMPLES        1024            /* Section 4 step: "wait 1024 sample periods" */
+#define EMU8K_TEST_INIT_WAIT_RENDERS        16              /* ...in renders of 64 */
+#define EMU8K_TEST_SPIN_LIMIT               1000
+#define EMU8K_TEST_MICROSECONDS_TO_SAMPLES_NUMERATOR 441u
 #define EMU8K_TEST_MICROSECONDS_TO_SAMPLES_DENOMINATOR 10000u
-#define EMU8K_TEST_TWENTY_MS          882         /* samples                               */
-#define EMU8K_TEST_FULL_VOLUME        0xFFFF
+#define EMU8K_TEST_TWENTY_MS                882             /* Samples */
+#define EMU8K_TEST_FULL_VOLUME              0xFFFF
 
 static INT    g_Checks, g_Failures;
 static BYTE   g_GuestMemory[0x10000];
@@ -168,7 +176,11 @@ static UINT64 g_FakeMicroseconds;
 static VOID Emu8kTestCheck(BOOL passed, PCSTR description)
 {
     ++g_Checks;
-    if (passed) { printf("  PASS  %s\n", description); return; }
+    if (passed)
+    {
+        printf("  PASS  %s\n", description);
+        return;
+    }
     printf("  FAIL  %s\n", description);
     ++g_Failures;
 }
@@ -176,23 +188,44 @@ static VOID Emu8kTestCheck(BOOL passed, PCSTR description)
 /* ---- port access, exactly as a DOS program makes it ----------------------------------- */
 
 static VOID Emu8kTestOutWord(WORD port, WORD value)
-{ UINT32 busValue = value; VddBusIo(&g_Bus, port, EMU8K_TEST_WORD, EMU8K_TEST_OUT, &busValue); }
-static WORD Emu8kTestInWord(WORD port)
-{ UINT32 busValue = 0; VddBusIo(&g_Bus, port, EMU8K_TEST_WORD, EMU8K_TEST_IN, &busValue); return (WORD)busValue; }
-static VOID Emu8kTestOutDword(WORD port, DWORD value)
-{ UINT32 busValue = value; VddBusIo(&g_Bus, port, EMU8K_TEST_DOUBLEWORD, EMU8K_TEST_OUT, &busValue); }
-static DWORD Emu8kTestInDword(WORD port)
-{ UINT32 busValue = 0; VddBusIo(&g_Bus, port, EMU8K_TEST_DOUBLEWORD, EMU8K_TEST_IN, &busValue); return busValue; }
-static VOID Emu8kTestSelect(INT registerNumber, INT channel)
-{ Emu8kTestOutWord(EMU8K_TEST_POINTER, (WORD)((registerNumber << EMU8K_TEST_POINTER_REGISTER_SHIFT) | channel)); }
+{
+    UINT32 busValue = value;
+    VddBusIo(&g_Bus, port, EMU8K_TEST_WORD, EMU8K_TEST_OUT, &busValue);
+}
 
-/* a doubleword is the LS word to the port, then the MS word two higher (§2) */
+static WORD Emu8kTestInWord(WORD port)
+{
+    UINT32 busValue = 0;
+    VddBusIo(&g_Bus, port, EMU8K_TEST_WORD, EMU8K_TEST_IN, &busValue);
+    return (WORD)busValue;
+}
+
+static VOID Emu8kTestOutDword(WORD port, DWORD value)
+{
+    UINT32 busValue = value;
+    VddBusIo(&g_Bus, port, EMU8K_TEST_DOUBLEWORD, EMU8K_TEST_OUT, &busValue);
+}
+
+static DWORD Emu8kTestInDword(WORD port)
+{
+    UINT32 busValue = 0;
+    VddBusIo(&g_Bus, port, EMU8K_TEST_DOUBLEWORD, EMU8K_TEST_IN, &busValue);
+    return busValue;
+}
+
+static VOID Emu8kTestSelect(INT registerNumber, INT channel)
+{
+    Emu8kTestOutWord(EMU8K_TEST_POINTER, (WORD)((registerNumber << EMU8K_TEST_POINTER_REGISTER_SHIFT) | channel));
+}
+
+/* a doubleword is the LS word to the port, then the MS word two higher (section 2) */
 static VOID Emu8kTestData0Write(INT registerNumber, INT channel, DWORD value)
 {
     Emu8kTestSelect(registerNumber, channel);
     Emu8kTestOutWord(EMU8K_TEST_DATA0, (WORD)value);
     Emu8kTestOutWord(EMU8K_TEST_DATA0_HIGH, (WORD)(value >> WORD_SHIFT));
 }
+
 static DWORD Emu8kTestData0Read(INT registerNumber, INT channel)
 {
     DWORD lowWord;
@@ -200,12 +233,14 @@ static DWORD Emu8kTestData0Read(INT registerNumber, INT channel)
     lowWord = Emu8kTestInWord(EMU8K_TEST_DATA0);
     return lowWord | ((DWORD)Emu8kTestInWord(EMU8K_TEST_DATA0_HIGH) << WORD_SHIFT);
 }
+
 static VOID Emu8kTestData1WriteDword(INT registerNumber, INT channel, DWORD value)
 {
     Emu8kTestSelect(registerNumber, channel);
     Emu8kTestOutWord(EMU8K_TEST_DATA1, (WORD)value);
     Emu8kTestOutWord(EMU8K_TEST_DATA1_HIGH_DATA2, (WORD)(value >> WORD_SHIFT));
 }
+
 static DWORD Emu8kTestData1ReadDword(INT registerNumber, INT channel)
 {
     DWORD lowWord;
@@ -213,30 +248,64 @@ static DWORD Emu8kTestData1ReadDword(INT registerNumber, INT channel)
     lowWord = Emu8kTestInWord(EMU8K_TEST_DATA1);
     return lowWord | ((DWORD)Emu8kTestInWord(EMU8K_TEST_DATA1_HIGH_DATA2) << WORD_SHIFT);
 }
-static VOID Emu8kTestData1Write(INT registerNumber, INT channel, WORD value)
-{ Emu8kTestSelect(registerNumber, channel); Emu8kTestOutWord(EMU8K_TEST_DATA1, value); }
-static WORD Emu8kTestData1Read(INT registerNumber, INT channel)
-{ Emu8kTestSelect(registerNumber, channel); return Emu8kTestInWord(EMU8K_TEST_DATA1); }
-static VOID Emu8kTestData2Write(INT registerNumber, INT channel, WORD value)
-{ Emu8kTestSelect(registerNumber, channel); Emu8kTestOutWord(EMU8K_TEST_DATA1_HIGH_DATA2, value); }
-static WORD Emu8kTestData2Read(INT registerNumber, INT channel)
-{ Emu8kTestSelect(registerNumber, channel); return Emu8kTestInWord(EMU8K_TEST_DATA1_HIGH_DATA2); }
-static VOID Emu8kTestData3Write(INT registerNumber, INT channel, WORD value)
-{ Emu8kTestSelect(registerNumber, channel); Emu8kTestOutWord(EMU8K_TEST_DATA3, value); }
-static WORD Emu8kTestData3Read(INT registerNumber, INT channel)
-{ Emu8kTestSelect(registerNumber, channel); return Emu8kTestInWord(EMU8K_TEST_DATA3); }
 
-static WORD Emu8kTestWallClock(VOID) { return Emu8kTestData2Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_WC); }
+static VOID Emu8kTestData1Write(INT registerNumber, INT channel, WORD value)
+{
+    Emu8kTestSelect(registerNumber, channel);
+    Emu8kTestOutWord(EMU8K_TEST_DATA1, value);
+}
+
+static WORD Emu8kTestData1Read(INT registerNumber, INT channel)
+{
+    Emu8kTestSelect(registerNumber, channel);
+    return Emu8kTestInWord(EMU8K_TEST_DATA1);
+}
+
+static VOID Emu8kTestData2Write(INT registerNumber, INT channel, WORD value)
+{
+    Emu8kTestSelect(registerNumber, channel);
+    Emu8kTestOutWord(EMU8K_TEST_DATA1_HIGH_DATA2, value);
+}
+
+static WORD Emu8kTestData2Read(INT registerNumber, INT channel)
+{
+    Emu8kTestSelect(registerNumber, channel);
+    return Emu8kTestInWord(EMU8K_TEST_DATA1_HIGH_DATA2);
+}
+
+static VOID Emu8kTestData3Write(INT registerNumber, INT channel, WORD value)
+{
+    Emu8kTestSelect(registerNumber, channel);
+    Emu8kTestOutWord(EMU8K_TEST_DATA3, value);
+}
+
+static WORD Emu8kTestData3Read(INT registerNumber, INT channel)
+{
+    Emu8kTestSelect(registerNumber, channel);
+    return Emu8kTestInWord(EMU8K_TEST_DATA3);
+}
+
+static WORD Emu8kTestWallClock(VOID)
+{
+    return Emu8kTestData2Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_WC);
+}
+
 static VOID Emu8kTestSetStreamAddress(INT stream, DWORD address)
-{ Emu8kTestData1WriteDword(EMU8K_TEST_GLOBALS, stream, address); }
+{
+    Emu8kTestData1WriteDword(EMU8K_TEST_GLOBALS, stream, address);
+}
+
 static WORD Emu8kTestCurrentVolume(INT channel)
-{ return (WORD)(Emu8kTestData0Read(EMU8K_TEST_CVCF, channel) >> WORD_SHIFT); }
+{
+    return (WORD)(Emu8kTestData0Read(EMU8K_TEST_CVCF, channel) >> WORD_SHIFT);
+}
 
 /* ---- rendering --------------------------------------------------------------------- */
 
 static VOID Emu8kTestRender(DWORD frameCount)
 {
-    while (frameCount) {
+    while (frameCount)
+    {
         DWORD chunk = frameCount > EMU8K_TEST_RATE ? EMU8K_TEST_RATE : frameCount;
         VddEmu8kRenderStereo(&g_Emu8k, g_Samples, chunk);
         frameCount -= chunk;
@@ -244,12 +313,14 @@ static VOID Emu8kTestRender(DWORD frameCount)
 }
 
 /* rising zero crossings of (L+R) over `frameCount` frames = the frequency in Hz when
-   frameCount = 44100 */
+ * frameCount = 44100
+ */
 static INT Emu8kTestCrossings(DWORD frameCount)
 {
     DWORD frame; INT crossingCount = 0, previous = 0;
     VddEmu8kRenderStereo(&g_Emu8k, g_Samples, frameCount);
-    for (frame = 0; frame < frameCount; ++frame) {
+    for (frame = 0; frame < frameCount; ++frame)
+    {
         INT sum = g_Samples[EMU8K_STEREO_SIDES * frame] + g_Samples[EMU8K_STEREO_SIDES * frame + 1];
         if (previous < 0 && sum >= 0) crossingCount++;
         previous = sum;
@@ -257,13 +328,17 @@ static INT Emu8kTestCrossings(DWORD frameCount)
     return crossingCount;
 }
 
-static INT Emu8kTestMagnitude(INT16 sample) { return sample < 0 ? -sample : sample; }
+static INT Emu8kTestMagnitude(INT16 sample)
+{
+    return sample < 0 ? -sample : sample;
+}
 
 static VOID Emu8kTestPeaks(DWORD frameCount, PINT peakLeft, PINT peakRight)
 {
     DWORD frame; INT left = 0, right = 0;
     VddEmu8kRenderStereo(&g_Emu8k, g_Samples, frameCount);
-    for (frame = 0; frame < frameCount; ++frame) {
+    for (frame = 0; frame < frameCount; ++frame)
+    {
         INT magnitudeLeft = Emu8kTestMagnitude(g_Samples[EMU8K_STEREO_SIDES * frame]);
         INT magnitudeRight = Emu8kTestMagnitude(g_Samples[EMU8K_STEREO_SIDES * frame + 1]);
         if (magnitudeLeft > left) left = magnitudeLeft;
@@ -272,11 +347,15 @@ static VOID Emu8kTestPeaks(DWORD frameCount, PINT peakLeft, PINT peakRight)
     *peakLeft = left; *peakRight = right;
 }
 
-static UINT64 Emu8kTestFakeClock(PVOID context) { (VOID)context; return g_FakeMicroseconds; }
+static UINT64 Emu8kTestFakeClock(PVOID context)
+{
+    (VOID)context;
+    return g_FakeMicroseconds;
+}
 
 /* ---- the guide's recipes ----------------------------------------------------------- */
 
-/* §5: allocate `channel` to a DMA stream -- the guide's seven steps in its order. */
+/* section 5: allocate `channel` to a DMA stream -- the guide's seven steps in its order. */
 static VOID Emu8kTestAllocateStream(INT channel, DWORD mode)
 {
     Emu8kTestData1Write(EMU8K_TEST_DCYSUSV, channel, EMU8K_TEST_ENGINE_OFF);
@@ -289,8 +368,9 @@ static VOID Emu8kTestAllocateStream(INT channel, DWORD mode)
     Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, channel, mode);
 }
 
-/* §6: start a sound on `channel`. Addresses are the ACTUAL audio locations; the registers
-   get them minus one (the interpolator offset). */
+/* section 6: start a sound on `channel`. Addresses are the ACTUAL audio locations; the registers
+ * get them minus one (the interpolator offset).
+ */
 static VOID Emu8kTestNoteOn(INT channel, DWORD start, DWORD loopStart, DWORD loopEnd, BYTE pan,
                             WORD pitch, WORD filterAttenuation, WORD attackHold,
                             WORD decaySustain, BYTE resonance)
@@ -336,7 +416,7 @@ static VOID Emu8kTestPlayTone(INT channel, BYTE pan, WORD filterAttenuation, WOR
                     EMU8K_TEST_FLAT_ENVELOPE, 0);
 }
 
-/* §7: an abrupt end. */
+/* section 7: an abrupt end. */
 static VOID Emu8kTestNoteKill(INT channel)
 {
     Emu8kTestData1Write(EMU8K_TEST_DCYSUSV, channel, EMU8K_TEST_ENGINE_OFF);
@@ -368,10 +448,11 @@ INT main(VOID)
     Emu8kTestCheck((Emu8kTestInWord(EMU8K_TEST_POINTER) & EMU8K_TEST_POINTER_LOW_BYTE)
                    == ((EMU8K_TEST_DCYSUSV << EMU8K_TEST_POINTER_REGISTER_SHIFT) | 17),
                    "pointer: reg/channel read back in the low byte");
-    /* §4, the whole initialisation procedure, as AWEUTIL /S would run it */
+    /* section 4, the whole initialisation procedure, as AWEUTIL /S would run it */
     for (channel = 0; channel < EMU8K_VOICES; ++channel)
         Emu8kTestData1Write(EMU8K_TEST_DCYSUSV, channel, EMU8K_TEST_ENGINE_OFF);
-    for (channel = 0; channel < EMU8K_VOICES; ++channel) {
+    for (channel = 0; channel < EMU8K_VOICES; ++channel)
+    {
         Emu8kTestData1Write(EMU8K_TEST_ENVVOL, channel, 0);
         Emu8kTestData1Write(EMU8K_TEST_ENVVAL, channel, 0);
         Emu8kTestData1Write(EMU8K_TEST_DCYSUS, channel, 0);
@@ -391,14 +472,16 @@ INT main(VOID)
         Emu8kTestData0Write(EMU8K_TEST_CSL, channel, 0);
         Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, channel, 0);
     }
-    for (channel = 0; channel < EMU8K_VOICES; ++channel) {
+    for (channel = 0; channel < EMU8K_VOICES; ++channel)
+    {
         Emu8kTestData0Write(EMU8K_TEST_CPF, channel, 0);
         Emu8kTestData0Write(EMU8K_TEST_CVCF, channel, 0);
     }
     Emu8kTestSetStreamAddress(EMU8K_TEST_SMALR, 0); Emu8kTestSetStreamAddress(EMU8K_TEST_SMARR, 0);
     Emu8kTestSetStreamAddress(EMU8K_TEST_SMALW, 0); Emu8kTestSetStreamAddress(EMU8K_TEST_SMARW, 0);
     /* a distinct marker per INIT array and channel, so each array is seen to be its own */
-    for (channel = 0; channel < EMU8K_VOICES; ++channel) {
+    for (channel = 0; channel < EMU8K_VOICES; ++channel)
+    {
         Emu8kTestData1Write(EMU8K_TEST_INIT_LOW, channel, (WORD)(0x1000 + channel));
         Emu8kTestData2Write(EMU8K_TEST_INIT_LOW, channel, (WORD)(0x2000 + channel));
         Emu8kTestData1Write(EMU8K_TEST_INIT_HIGH, channel, (WORD)(0x3000 + channel));
@@ -406,7 +489,11 @@ INT main(VOID)
     }
     { WORD startClock = Emu8kTestWallClock(); INT spins = 0;
       while ((WORD)(Emu8kTestWallClock() - startClock) < EMU8K_TEST_INIT_WAIT_SAMPLES
-             && spins < EMU8K_TEST_SPIN_LIMIT) { Emu8kTestRender(EMU8K_TEST_ENGINE_TICK); spins++; }
+             && spins < EMU8K_TEST_SPIN_LIMIT)
+      {
+          Emu8kTestRender(EMU8K_TEST_ENGINE_TICK);
+          spins++;
+      }
       Emu8kTestCheck(spins == EMU8K_TEST_INIT_WAIT_RENDERS,
                      "§4: a guest waiting 1024 samples on WC gets out, in 1024 samples"); }
     Emu8kTestData1WriteDword(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF4, EMU8K_TEST_HWCF4_INIT);
@@ -473,7 +560,7 @@ INT main(VOID)
                    "E+402h with r0 selected is CCCA's MS word, not ATKHLDV");
     Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, 8, 0);
 
-    /* ---- T4: sound memory (§5) ---- */
+    /* ---- T4: sound memory (section 5) ---- */
     VddEmu8kReset(&g_Emu8k);
     Emu8kTestAllocateStream(EMU8K_TEST_LEFT_WRITE_CHANNEL, EMU8K_TEST_STREAM_LEFT_WRITE);
     Emu8kTestCheck(!(Emu8kTestData1ReadDword(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMALW) & EMU8K_TEST_SMA_FLAG),
@@ -493,7 +580,7 @@ INT main(VOID)
                    "SMRD/SMARW: the right stream writes too");
     Emu8kTestAllocateStream(EMU8K_TEST_LEFT_READ_CHANNEL, EMU8K_TEST_STREAM_LEFT_READ);
     Emu8kTestSetStreamAddress(EMU8K_TEST_SMALR, EMU8K_TEST_DRAM_START);
-    (VOID)Emu8kTestData1Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD);       /* the stale word (§5) */
+    (VOID)Emu8kTestData1Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD);       /* the stale word (section 5) */
     { BOOL allMatch = TRUE;
       for (wordIndex = 0; wordIndex < 256; ++wordIndex)
           if (Emu8kTestData1Read(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMLD) != (WORD)(0xA500 + wordIndex)) allMatch = FALSE;
@@ -544,10 +631,11 @@ INT main(VOID)
     Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, EMU8K_TEST_LEFT_WRITE_CHANNEL, 0);
 
     /* ---- T5: a looping channel: pitch and pan ---- */
-    /* Three periods of a 64-word triangle, ±16384, so the loop seam is continuous. */
+    /* Three periods of a 64-word triangle, +/-16384, so the loop seam is continuous. */
     Emu8kTestSetStreamAddress(EMU8K_TEST_SMALW, EMU8K_TEST_TONE_ADDRESS);
     Emu8kTestAllocateStream(EMU8K_TEST_LEFT_WRITE_CHANNEL, EMU8K_TEST_STREAM_LEFT_WRITE);
-    for (wordIndex = 0; wordIndex < EMU8K_TEST_TONE_WORDS; ++wordIndex) {
+    for (wordIndex = 0; wordIndex < EMU8K_TEST_TONE_WORDS; ++wordIndex)
+    {
         DWORD phase = wordIndex & (EMU8K_TEST_LOOP_WORDS - 1);
         INT32 level = phase < EMU8K_TEST_TONE_QUARTER ? (INT32)phase * EMU8K_TEST_TONE_STEP
                     : phase < EMU8K_TEST_TONE_THREE_QUARTERS ? EMU8K_TEST_TONE_HALF_CYCLE - (INT32)phase * EMU8K_TEST_TONE_STEP
@@ -661,7 +749,8 @@ INT main(VOID)
       printf("        peak: open %d   cutoff 00h %d   cutoff 68h Q0 %d   Q15 %d\n",
              peakOpen, peakLowCutoff, peakOnTone, peakResonant);
       /* the negative peak: -16383 x FFFFh >> 16 = -16383 (the shift floors), x pan 80h's
-         128/256 = -8192. Bit-exact, or something filtered it. */
+       * 128/256 = -8192. Bit-exact, or something filtered it.
+       */
       Emu8kTestCheck(peakOpen == 8192, "Q 0 + cutoff FFh: the filter does not alter the signal (p.17) -- bit-exact peak");
       Emu8kTestCheck(peakLowCutoff < peakOpen * 15 / 100, "cutoff 00h (125 Hz): a 689 Hz tone is cut to under 15%");
       Emu8kTestCheck(peakResonant > peakOnTone * 3, "Q 15 at a cutoff on the tone: resonance lifts it more than 3x");
@@ -699,7 +788,8 @@ INT main(VOID)
       VddAudioSetEmu8k(&audio, &g_Emu8k);
       Emu8kTestPlayTone(EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PAN_LEFT, EMU8K_TEST_OPEN_FILTER, EMU8K_TEST_FLAT_ENVELOPE);
       VddAudioMixStereo(&audio, mixed, 1024);
-      for (frame = 0; frame < 1024; ++frame) {
+      for (frame = 0; frame < 1024; ++frame)
+      {
           if (mixed[EMU8K_STEREO_SIDES * frame]) hasLeft = TRUE;
           if (mixed[EMU8K_STEREO_SIDES * frame + 1]) hasRight = TRUE;
       }
