@@ -340,6 +340,7 @@ static struct { WORD Selector; DWORD Offset; BYTE Client; } g_PmInt[IVT_VECTORS]
    `code` marks a block that holds one of the program's EXECUTABLE objects, matched by
    size against the LE object table -- see DpmiLeLearn(). */
 #define DPMI_MEMBLK_MAX 64
+static struct { DWORD Base, Size; BYTE Code; } g_DpmiBlock[DPMI_MEMBLK_MAX];
 /* ── WHAT THE CLIENT OWNS, SO IT CAN BE GIVEN BACK WHEN IT EXITS. (s80) ─────────────
      g_DpmiBlock[] is the patcher's list: capped at 64 and never told about 0502, so it
      cannot say what is still live. These two can. DpmiClientTeardown() releases
@@ -402,6 +403,11 @@ static struct { WORD Selector; DWORD Offset; BYTE Client; } g_PmInt[IVT_VECTORS]
    Doom's DOS/4GW makes 45 of these calls -- the biggest single block of UNSUP in the
    session-16 trace -- installing its own fault handlers before it runs the game. */
 static struct { WORD Selector; DWORD Offset; INT IsSet; } g_PmException[X86_EXCEPTIONS];
+/* DPMI 0303 real-mode callbacks: each slot records the client's PM handler (sel:off)
+   and the RMCS buffer (sel:off) to marshal register state through. g_PmReturnSelector is a
+   code selector based at DOS_HDLR_SEG (0x500) so the PM handler's IRET lands on the
+   planted DPMI_PMRET catcher; allocated lazily on the first 0303. */
+static struct { WORD PmSelector; DWORD PmOffset; WORD RmEs; DWORD RmDi; INT IsUsed; } g_Callbacks[DPMI_CB_SLOTS];
 #define PROGRAM_NAME_SIZE 64
 static VOID ExecMachineSave(INT depth);    /* fwd: defined with CloseProgramNow */
 enum { DPMI_FAULT_TABLE_ENTRY = 0x10, DPMI_FAULT_TABLE_OFFSET = 4 };   /* g_FaultTable: per class, the code selector then the offset DWORD */
@@ -964,6 +970,7 @@ static UINT32 g_PmOwedHistogram[9];
 static volatile LONG g_PmTickOwed;
 static DWORD g_TickGap[12], g_TickGapMaximumMicroseconds, g_TickGapOver;
 static volatile LONG g_Irq1Pending;
+static INT g_PmIrq0Latch;
 static INT g_InPmIrq;
 static CRITICAL_SECTION g_Lock;
 static LARGE_INTEGER g_QpcFrequency;
@@ -990,6 +997,14 @@ static DWORD g_PatchMapCount;
 static INT g_PmNoIrq;
 static INT g_PmVehPass;
 static volatile LONG g_PmEntryEip;
+static UINT g_DpmiCpMaximum;
+static DWORD g_WowPmBase[WOW_PMBASE_MAX];
+static DWORD g_BreakpointDump[DPMI_BP_MAX];
+static DWORD g_BreakpointSkip[DPMI_BP_MAX];
+static DWORD g_BreakpointMode[DPMI_BP_MAX];
+static BYTE g_BreakpointPending[DPMI_BP_MAX];
+static DWORD g_BreakpointReport[DPMI_BP_MAX];
+static BYTE g_BreakpointDone[DPMI_BP_MAX];
 static INT g_BreakpointCount;
 static volatile LONG g_DpmiIteration;
 static volatile LONG g_DpmiDone;
@@ -1030,6 +1045,8 @@ static INT g_IoHotCount;
 static WORD g_Unclaimed[IO_UNCLAIMED_MAX];
 static INT g_UnclaimedCount;
 static INT g_NoA000;
+static INT g_NoPmPatch;
+static DWORD g_NoPmPatchMinimum;
 static DWORD g_MemoryDumpLinear, g_MemoryDumpLength;
 static INT g_P12Offset;
 static DWORD g_OplTraceCount;
@@ -1048,8 +1065,19 @@ static volatile DWORD g_DpmiLastEvent;
 static volatile DWORD g_DpmiLastCs;
 static volatile DWORD g_DpmiLastEip;
 static volatile DWORD g_DpmiLastVector;
+static INT g_DpmiBlockCount;
+static DWORD g_DpmiOwned[DPMI_OWNED_MAX];
+static INT g_DpmiOwnedCount;
+static WORD g_DpmiDosBlock[DPMI_DOSBLK_MAX];
+static INT g_DpmiDosBlockCount;
+static INT g_LdtClientMark;
+static DWORD g_LeCodeSize[DPMI_LE_MAX];
+static INT g_LeCodeCount;
 static DWORD g_PmVector8ArmedMs;
 static INT g_PmAppHookedTimer;
+static WORD g_PmAppTimerSelector;
+static DWORD g_PmAppTimerOffset;
+static WORD g_PmDefaultSelector;
 static INT g_DpmiVi;
 static BYTE g_BiosUnimplemented[BYTE_VALUES];
 static INT g_ExecDepth;
@@ -1058,6 +1086,8 @@ static WORD g_PmReturnSelector;
 static WORD g_DpmiFaultSelector;
 static WORD g_DpmiFaultCodeSelector;
 static INT g_LdtNext;
+static WORD g_LdtFree[DPMI_LDT_MAX];
+static INT g_LdtFreeCount;
 static volatile BYTE *g_TibDebug;
 static HANDLE g_ComSpool[COMM_MAX_PORTS];
 static INT g_ComFailed[COMM_MAX_PORTS];
@@ -1105,8 +1135,10 @@ static WORD g_AsyncPmCs, g_AsyncPmSs;
 static DWORD g_AsyncPmInjected;
 static DWORD g_AsyncInjectedLine[PIC_LINES];
 static DWORD g_PmWatch[DPMI_WATCH_MAX];
+static INT g_PmWatchCount;
 static BYTE g_PmWatchRel[DPMI_WATCH_MAX];
 static DWORD g_LeLoadBase;
+static DWORD g_PmCooperativeLine[PIC_LINES_PER_CHIP];
 static DWORD g_PmInjectDecl[2], g_PmInjectDeclTl[IRQ0TL_SECS];
 static UINT32 g_DmaPollInAsync, g_DmaPollMainline;
 static DWORD g_AsyncEarlyBailLogged;
@@ -1128,6 +1160,8 @@ static volatile LONGLONG g_Int15WaitEnd;
 static volatile LONGLONG g_Int15EventEnd;
 static volatile DWORD g_Int15EventLinear;
 static DWORD g_Int15Waits, g_Int15Events, g_Int15Posted, g_Int15Busy;
+static INT g_PmTopDispatch;
+static INT g_PmDispatchTop;
 static INT g_CourierOn;
 static DWORD g_CourierWakes, g_CourierInjected, g_CourierTries, g_CourierGiveUp;
 static INT g_CpuSpeedIndex;
@@ -1192,6 +1226,7 @@ static INT g_WowModuleCount;
 static WORD g_PmTransferSegment;
 static WORD g_WowPspSelector[WOW_PSP_TRACK];
 static INT g_WowPspCount;
+static WORD g_PmTransferParagraphs;
 static INT g_WowLaunch;
 static HHOOK g_LowLevelKeyboard;
 static HANDLE g_ExecThread;
@@ -1238,9 +1273,13 @@ static const V86_CPU *g_InterpreterCpu;
 static DWORD g_GuestThreadId;
 static WORD g_WowLastId;
 static WORD g_WowLastFrom;
+static INT g_HostPoolSpill;
+static WORD g_DpmiHandlerSelector;
 static INT g_WowSchedOn;
 static WOWSCHED_SLOT g_WowSchedSlots[WOWSCHED_MAX];
 static INT g_WowWindowNested;
+static BYTE g_PmDispatch[IVT_VECTORS];
+static DWORD g_PmDispatchCount[IVT_VECTORS][BYTE_VALUES];
 static BYTE *g_WowShadow;
 static DWORD g_PmIrqRmReflects, g_PmIrqRmFail;
 
@@ -1389,6 +1428,7 @@ static INT MouseEventQueueTake(MOUSE_EVENT_ENTRY *event, LONG *outAx, WORD *segm
 static VOID MouseCallbackTry(volatile BYTE *tib);
 static VOID MouseCallbackReturn(volatile BYTE *tib);
 static VOID MouseDrawGraphicsCursor(BYTE *pixels, INT width, INT height, INT stride);
+static WORD WowHostAllocate(WORD paras);
 static VOID TrayRemove(HWND window);
 static INT StringsEqual(PCSTR first, PCSTR second);
 static LRESULT CALLBACK LowLevelKeyboardProcedure(INT code, WPARAM wParam, LPARAM lParam);
@@ -1452,12 +1492,46 @@ static INT HostWritable(PVOID pointer, SIZE_T length);
 static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers);
 static LONG WINAPI HostUnhandledFilter(EXCEPTION_POINTERS *pointers);
 static DWORD WINAPI DpmiWatchdog(LPVOID param);
+static INT DpmiHostIndex(VOID);
+static WORD DpmiHandlerCodeSelector(VOID);
 static WORD DpmiSegmentToDescriptor(WORD segment);
+static VOID DpmiSegmentToDescriptorForget(WORD selector);
+static VOID DpmiInstallDefaultPmHandlers(DOS_MACHINE *machine);
 static VOID DpmiInstall(INT index);
+static VOID DpmiInstallFaultTrampoline(VOID);
+static VOID DpmiArmFaultTrampoline(volatile BYTE *tib, WORD flag);
 static DWORD DpmiSelectorBase(WORD selector);
+static DWORD DpmiRecoverFlatEip(DWORD lo16, BYTE vector, INT *candidateCount);
+static INT DpmiSelectorDescriptor(WORD selector, UINT32 *accessRights, UINT32 *limit);
+static DWORD DpmiBopVector(DWORD csValue, DWORD eip);
+static DWORD DpmiPmEip(volatile BYTE *tib);
+static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion);
+static VOID DpmiLeLearn(const BYTE *buffer, DWORD length);
+static VOID DpmiScanCodeBlocks(VOID);
+static VOID DpmiBreakpointLoad(VOID);
+static VOID DpmiBreakpointResolveCodeBase(DWORD base);
+static VOID DpmiBreakpointResolveSegment(UINT segmentNumber, DWORD base);
 static VOID DpmiBreakpointArm(VOID);
 static VOID DpmiBreakpointRearmPending(DWORD currentLinear);
+static INT DpmiBreakpointDisarm(DWORD linear);
+static VOID DpmiUnpatch(VOID);
+static VOID DpmiRepatch(VOID);
+static VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slot);
+static INT DpmiDispatchToPmHandler(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
+static DWORD DpmiCallerOffset(volatile BYTE *tib, DWORD offset);
+static DWORD DpmiRmcsPointer(volatile BYTE *tib, DWORD esBase);
+static VOID RmcsToTib(volatile BYTE *tib, const RMCS_REGS *registers);
+static VOID TibToRmcs(volatile BYTE *tib, RMCS_REGS *registers, WORD flags);
+static VOID DpmiRmcsProbe(volatile BYTE *tib, DWORD esBase, UINT slot, DWORD interruptNumber);
+static INT DpmiOwnedFind(DWORD handle);
+static VOID DpmiLdtRelease(INT index);
+static INT DpmiLdtTake(VOID);
+static INT DpmiClientSelectorOk(WORD selector);
 static VOID WowShadowPut(INT index);
+static PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, PSTR cursor);
+static PSTR PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor);
+static INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vector);
+static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
 static INT DpmiServicePmInt(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
 static VOID DpmiEnsurePmReturnSelector(VOID);
 static INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context);
@@ -1466,8 +1540,13 @@ static VOID IsvIoIn(PVOID self, WORD port, BYTE width, UINT32 *value);
 static VOID IsvIoOut(PVOID self, WORD port, BYTE width, UINT32 value);
 static VOID WowShimsLoad(VOID);
 static VOID IsvBop(volatile BYTE *tib, DWORD subfunction, PSTR *logCursor);
+static INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip);
 static INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCount, WORD hwnd, WORD message, WORD *result, BYTE *blob, INT blobLength, INT blobArgument, const INT *fix, INT fixupCount);
+static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interruptVector, UINT steps);
 static VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
+static INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
+static VOID DpmiClientTeardown(VOID);
+static INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib);
 static VOID DosWowPublish(volatile BYTE *handlerArea, volatile BYTE *controlTable, UINT currentDrive);
 static INT V86DeliverDeviceIrq(volatile BYTE *tib);
 static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base);
