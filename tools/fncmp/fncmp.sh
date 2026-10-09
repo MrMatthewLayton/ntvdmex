@@ -10,6 +10,7 @@
 #   ./tools/fncmp/fncmp.sh main HEAD            # two git revisions
 #   ./tools/fncmp/fncmp.sh main .               # a revision and the working tree
 #   ./tools/fncmp/fncmp.sh ../old ../new        # two checkouts
+#   FNCMP_ALL=1 ./tools/fncmp/fncmp.sh main .   # every .c a CMake target builds, not main.c alone
 #
 # Exit status 0 = IDENTICAL, 1 = DIFFERENT (the differing functions and sections are
 # listed; FNCMP_KEEP=1 keeps the normalised disassembly for diffing).
@@ -58,18 +59,37 @@ tree() {
     echo "$OUT/$tag-src"
 }
 
-build() {
-    local root="$1" tag="$2"
+# The translation units: main.c's alone by default; FNCMP_ALL=1 takes every .c that a CMake
+# target compiles (each compared in its own directory, so file-static names cannot collide).
+units() {
+    if [[ -n "${FNCMP_ALL:-}" ]]; then
+        grep -oE '^ +src/[A-Za-z0-9_/]+\.c' "$ROOT/CMakeLists.txt" | tr -d ' ' | sort -u
+    else
+        echo src/host/main.c
+    fi
+}
+
+build_one() {
+    local root="$1" tag="$2" unit="$3" name
+    name="$(echo "$unit" | tr '/' '_')"
     "$CC" -DWINVER=0x0501 -D_WIN32_WINNT=0x0501 -O3 -DNDEBUG -std=gnu99 -ffreestanding \
         -Wno-array-bounds -Wno-builtin-macro-redefined -w \
         -ffunction-sections -fdata-sections -include "$OUT/pin.h" ${FNCMP_CFLAGS:-} \
-        -I"$root/src/host" -I"$root/src/vdm" -I"$root/src/dos" -I"$root/src/vdd" -I"$root/src/wow" \
-        -c "$root/src/host/main.c" -o "$OUT/$tag.obj"
-    "${PREFIX}objcopy" -O binary --only-section=.rdata "$OUT/$tag.obj" "$OUT/$tag.rdata.bin"
-    mkdir -p "$OUT/$tag.code"
-    "${PREFIX}objdump" -d -r --no-show-raw-insn "$OUT/$tag.obj" \
-        | python3 "$HERE/code.py" "$OUT/$tag.code" "$OUT/$tag.rdata.bin"
-    OBJDUMP="${PREFIX}objdump" python3 "$HERE/data.py" "$OUT/$tag.obj" "$OUT/$tag.data" "$OUT/$tag.rdata.bin"
+        -I"$root/src/host" -I"$root/src/vdm" -I"$root/src/dos" -I"$root/src/vdd" -I"$root/src/wow" -I"$root/src" \
+        -c "$root/$unit" -o "$OUT/$tag.$name.obj"
+    "${PREFIX}objcopy" -O binary --only-section=.rdata "$OUT/$tag.$name.obj" "$OUT/$tag.$name.rdata.bin"
+    mkdir -p "$OUT/$tag.code/$name" "$OUT/$tag.data/$name"
+    "${PREFIX}objdump" -d -r --no-show-raw-insn "$OUT/$tag.$name.obj" \
+        | python3 "$HERE/code.py" "$OUT/$tag.code/$name" "$OUT/$tag.$name.rdata.bin"
+    OBJDUMP="${PREFIX}objdump" python3 "$HERE/data.py" "$OUT/$tag.$name.obj" "$OUT/$tag.data/$name" "$OUT/$tag.$name.rdata.bin"
+}
+
+build() {
+    local root="$1" tag="$2" unit
+    for unit in $(units); do
+        [[ -f "$root/$unit" ]] || { echo "  missing in $tag: $unit"; continue; }
+        build_one "$root" "$tag" "$unit"
+    done
 }
 
 BASE="$(tree "$1" base)"
@@ -78,7 +98,7 @@ build "$BASE" base &
 build "$CAND" cand &
 wait %1 && wait %2
 
-count() { ls "$1" | wc -l | tr -d ' '; }
+count() { find "$1" -type f | wc -l | tr -d ' '; }
 echo "functions: $(count "$OUT/base.code") vs $(count "$OUT/cand.code");" \
      "data sections: $(count "$OUT/base.data") vs $(count "$OUT/cand.data")"
 status=0
@@ -86,7 +106,7 @@ for part in code data; do
     if diff -rq "$OUT/base.$part" "$OUT/cand.$part" >/dev/null; then
         echo "$part IDENTICAL"
     else
-        diff -rq "$OUT/base.$part" "$OUT/cand.$part" | sed -E 's|^Files .*/base\.[a-z]+/([^ ]+) and .*|  differs: \1|; s|^Only in .*/([a-z]+)\.[a-z]+: |  only in \1: |' || true
+        diff -rq "$OUT/base.$part" "$OUT/cand.$part" | sed -E 's|^Files .*/base\.[a-z]+/([^ ]+) and .*|  differs: \1|; s|^Only in .*/([a-z]+)\.[a-z]+(/[^:]*)?: |  only in \1\2: |' || true
         echo "$part DIFFERENT"; status=1
     fi
 done
