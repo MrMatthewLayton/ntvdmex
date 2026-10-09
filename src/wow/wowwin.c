@@ -4,11 +4,11 @@
  * the host's single translation unit: #included by main.c straight after wowwin.h. */
 
 /* Forward declarations for the single translation unit (they were in wowwin.h). */
-static WORD  WowWinHwnd16(HWND window);
+WORD  WowWinHwnd16(HWND window);
 PWOWUSER_WINDOW WowUserFindWindow(WORD window16);
 static INT   WowUserIsMdiChild(PCWOWUSER_WINDOW window);
 static HWND  WowUserMdiClientOf(PCWOWUSER_WINDOW window);
-static HWND  WowUserHwnd32(WORD window16);
+HWND  WowUserHwnd32(WORD window16);
 static WORD  WowUserMenu16(HMENU menu);  /* the 16-bit name for a real menu */
 /* #294: COMMDLG's modeless Find/Replace dialogs -- wowcommdlg.h, included later. */
 INT   WowCdlgRelay(UINT message, LPARAM lParam);
@@ -19,7 +19,7 @@ static INT WowUserIsDialog16(WORD h16);          /* wowuser.h: a dialog procedur
 
 /* Set once the exec thread has a window: the thread id that owns them all, so a
    pump on the wrong thread can be refused rather than silently doing nothing. */
-static DWORD g_WowWinThread = 0;
+DWORD g_WowWinThread = 0;
 static DWORD g_WowWinCreated = 0, g_WowWinMessages = 0;
 /* #160: menus held back until the guest set them up, and the replay's re-entry flag. */
 static DWORD g_WowWinMenuDeferred = 0;
@@ -30,7 +30,7 @@ static INT   g_WowWinIsReplaying = 0;
 static DWORD g_WowWinMenuUncaptures = 0;
 /* Win32 messages this thread has dispatched for the guest's windows. The answer to
    "is the window hung", which cannot be read off anything else. */
-static DWORD g_WowWinPumped = 0;
+DWORD g_WowWinPumped = 0;
 
 static WOWWIN_PAINT g_WowWinPaints[WOWWIN_MAXPAINT];
 /* Tick at which the most recent WM_PAINT was posted to the Win16 queue. */
@@ -240,7 +240,7 @@ static INT WowWinThreadTimerKill(UINT_PTR id32)
     return 0;
 }
 /* A Win32 thread WM_TIMER: 1 if it was one of ours (and is now queued for the guest). */
-static INT WowWinThreadTimerFire(const MSG *message)
+INT WowWinThreadTimerFire(const MSG *message)
 {
     INT index;
     if (message->message != WM_TIMER || message->hwnd) return 0;

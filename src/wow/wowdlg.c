@@ -1,7 +1,22 @@
 /* wowdlg.c -- ★★★★★ THE MODAL MESSAGE LOOP. GH #128, session 57.
  *
- * The code of wowdlg.h (#335): its functions and state, in their original order. Part of
- * the host's single translation unit: #included by main.c straight after wowdlg.h. */
+ * The code of wowdlg.h (#335): its functions and state, in their original order;
+ * its own translation unit, declared in wowdlg.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "wowdlg.h"
+#include "host_wow.h"
+
 
 /* Forward declarations for the single translation unit (they were in wowdlg.h). */
 /* Defined in main.c, which owns the LDT: is this code selector NOT PRESENT?
@@ -10,8 +25,8 @@ INT WowDlgIsSelectorAbsent(WORD selector);
 
 /* s88: per callback depth -- did the modal loop's call go to the dialog's own
    DLGPROC, and with which message. Read when the call returns (main.c). */
-static INT  g_WowDlgIsDialogCall[WOWCALL_MAX_DEPTH];
-static WORD g_WowDlgMessage[WOWCALL_MAX_DEPTH];
+INT  g_WowDlgIsDialogCall[WOWCALL_MAX_DEPTH];
+WORD g_WowDlgMessage[WOWCALL_MAX_DEPTH];
 
 static WOWDLG_MODAL g_WowDlgModals[WOWDLG_MAX_MODAL];
 static INT   g_WowDlgDepth   = 0;
@@ -79,7 +94,7 @@ static PWOWDLG_MODAL WowDlgTop(VOID)
 
 /* Is any modal dialog up? Read by the DialogBox service, so that a nested one
    is described honestly in the trace rather than looking like the first. */
-static INT WowDlgActive(VOID)
+INT WowDlgActive(VOID)
 {
     return g_WowDlgDepth;
 }
@@ -91,7 +106,7 @@ static INT WowDlgActive(VOID)
  * Returns 0 if the stack is full, in which case the caller must complete the
  * call the old way rather than pretend.
  */
-static INT WowDlgPush(WORD window, DWORD returnLinear, DWORD dialogProcedure, DWORD windowProcedure,
+INT WowDlgPush(WORD window, DWORD returnLinear, DWORD dialogProcedure, DWORD windowProcedure,
                        WORD dataSelector, INT isShowDeferred, HWND owner32)
 {
     PWOWDLG_MODAL dialog;
@@ -128,7 +143,7 @@ static INT WowDlgPush(WORD window, DWORD returnLinear, DWORD dialogProcedure, DW
 }
 
 /* s89: WM_INITDIALOG's wParam/lParam for the dialog just pushed. */
-static VOID WowDlgSetInit(DWORD initParameter, WORD firstFocus)
+VOID WowDlgSetInit(DWORD initParameter, WORD firstFocus)
 {
     if (g_WowDlgDepth <= 0) return;
     g_WowDlgModals[g_WowDlgDepth - 1].InitParameter  = initParameter;
@@ -145,7 +160,7 @@ static VOID WowDlgSetInit(DWORD initParameter, WORD firstFocus)
  *   sheet), and ending the wrong one would leave a loop with no way out.
  * Returns 1 if this handle names a modal dialog we are running.
  */
-static INT WowDlgEnd(WORD window, WORD result)
+INT WowDlgEnd(WORD window, WORD result)
 {
     INT index;
     for (index = g_WowDlgDepth - 1; index >= 0; --index)
@@ -187,7 +202,7 @@ static VOID WowDlgUnwind(PWOWDLG_MODAL dialog, DWORD value)
  * this file is included before main.c defines it, and a wait that ignores it
  * would hold a closing process open for the length of the idle timeout.
  */
-static INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
+INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                        const volatile LONG *running, PSTR note, INT noteCapacity)
 {
     INT noteLength = 0;

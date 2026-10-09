@@ -2241,4 +2241,8 @@ WORD WowUserSystemResourceMintIcon(HICON icon);
 HICON WowUserSystemResourceIcon(WORD token, PINT picked, INT width, INT height);
 extern WOWUSER_WINDOW g_WowUserWindows[WOWUSER_MAX_WIN];
 extern WORD g_WowUserEnumTask;
+DWORD WowUserWindowProcedureOf(PCWOWUSER_WINDOW window);
+WORD WowWinHwnd16(HWND window);
+HWND WowUserHwnd32(WORD window16);
+extern WOWUSER_DLGDEF g_WowUserDlgDefaults[WOWCALL_MAX_DEPTH];
 #endif /* WOWUSER_H */

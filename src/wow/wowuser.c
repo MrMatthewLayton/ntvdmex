@@ -17,11 +17,11 @@ static INT WowUserHookUnset(SHORT hookId, DWORD procedure);
 /* ── The modal dialog loop lives in wowdlg.h, which is included AFTER this file
      because it reads the window table above. These three are what USER's own
      DialogBox and EndDialog arms call into it. */
-static INT WowDlgPush(WORD window, DWORD returnLinear, DWORD dialogProcedure, DWORD windowProcedure,
+INT WowDlgPush(WORD window, DWORD returnLinear, DWORD dialogProcedure, DWORD windowProcedure,
                        WORD dataSelector, INT isShowDeferred, HWND owner32);
-static INT WowDlgEnd(WORD window, WORD result);
-static VOID WowDlgSetInit(DWORD initParameter, WORD firstFocus);
-static INT WowDlgActive(VOID);
+INT WowDlgEnd(WORD window, WORD result);
+VOID WowDlgSetInit(DWORD initParameter, WORD firstFocus);
+INT WowDlgActive(VOID);
 
 static INT WowUserDestroy(WORD window16, PSTR note, INT noteCapacity, PINT noteLengthInOut);
 
@@ -614,7 +614,7 @@ PWOWUSER_WINDOW WowUserNewWindow(VOID)
      the procedure it calls -- and the dialog procedure is what a `#32770` window
      has INSTEAD, never as well. 0 means nothing can be told about this window,
      which is a fact its callers must handle rather than paper over. */
-static DWORD WowUserWindowProcedureOf(PCWOWUSER_WINDOW window)
+DWORD WowUserWindowProcedureOf(PCWOWUSER_WINDOW window)
 {
     if (!window) return 0;
     /* ★ The rule itself is in wowconv.h and pinned by wow_test.c; this is the
@@ -650,7 +650,7 @@ PWOWUSER_WINDOW WowUserFindWindow(WORD window16)
    to say which Win16 window that is. Declared in wowwin.h, defined here because
    this is where the table lives. 0 means "not one of ours", which is not an error
    -- DefWindowProc gets it, as it should. */
-static WORD WowWinHwnd16(HWND window)
+WORD WowWinHwnd16(HWND window)
 {
     INT index;
     if (!window) return 0;
@@ -660,7 +660,7 @@ static WORD WowWinHwnd16(HWND window)
 }
 
 /* The real window behind a Win16 handle, or NULL. */
-static HWND WowUserHwnd32(WORD window16)
+HWND WowUserHwnd32(WORD window16)
 {
     PCWOWUSER_WINDOW window = WowUserFindWindow(window16);
     return window ? window->Window32 : NULL;
@@ -1999,7 +1999,7 @@ static INT WowUserDestroy(WORD window16, PSTR note, INT noteCapacity, PINT noteL
         return 1;
 }
 
-static WOWUSER_DLGDEF g_WowUserDlgDefaults[WOWCALL_MAX_DEPTH];
+WOWUSER_DLGDEF g_WowUserDlgDefaults[WOWCALL_MAX_DEPTH];
 
 static WOWUSER_GONE g_WowUserGone;
 

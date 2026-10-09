@@ -208,4 +208,8 @@ typedef struct _WOWMSG_QUIT { WORD Task, Code; } WOWMSG_QUIT;
 
 /* Defined in wowmsg.c (#335). */
 INT WowMsgPost(WORD window, WORD message, WORD wParam, DWORD lParam, DWORD time, WORD pointX, WORD pointY);
+extern DWORD g_WowMsgWaitMs;
+extern volatile LONG g_WowMsgInWait;
+extern INT g_WowMsgCount;
+INT WowMsgTake(WORD window, WORD filterMin, WORD filterMax, INT isRemove, PWOWMSG output);
 #endif /* NTVDMEX_WOWMSG_H */

@@ -172,4 +172,7 @@ typedef struct _WOWWIN_THREAD_TIMER { UINT_PTR Id32; DWORD Procedure; } WOWWIN_T
 
 /* Defined in wowwin.c (#335). */
 extern DWORD (*g_WowWinGlobal16)(INT operation, DWORD first, DWORD second);
+extern DWORD g_WowWinThread;
+extern DWORD g_WowWinPumped;
+INT WowWinThreadTimerFire(const MSG *message);
 #endif /* NTVDMEX_WOWWIN_H */

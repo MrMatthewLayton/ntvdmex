@@ -54,7 +54,6 @@
      the window table and the procedure rule that file owns. USER's DialogBox and
      EndDialog arms reach it through the three prototypes declared there. */
 #include "../wow/wowdlg.h" /* GH #128: ...and the MODAL loop -- why DialogBox does not return */
-#include "../wow/wowdlg.c"
 #include "../wow/wowenum.h" /* GH #128: ...and one callback per item -- EnumWindows, LineDDA */
 #include "../wow/wowshell.h" /* GH #128: ...and SHELL.DLL's, which is a THIRD one again */
 #include "../wow/wowcommdlg.h" /* GH #128: ...and COMMDLG.DLL's -- File > Open */

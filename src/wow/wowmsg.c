@@ -9,7 +9,7 @@
      is waiting for the user -- and quitting it after six seconds makes it
      impossible to type into. The bound stays the default so an unattended run
      still finishes. */
-static DWORD g_WowMsgWaitMs = WOWMSG_WAIT_MS;
+DWORD g_WowMsgWaitMs = WOWMSG_WAIT_MS;
 static INT   g_WowMsgIsWaitAnnounced    = 0;   /* the setting is announced once, at first use */
 
 /* ── ★★★ "THE GUEST IS PARKED HERE ON PURPOSE", FOR THE FREEZE WATCHDOG. ──────
@@ -27,12 +27,12 @@ static INT   g_WowMsgIsWaitAnnounced    = 0;   /* the setting is announced once,
      wait, which is exactly what a Win16 task waiting for input IS. The watchdog
      cannot tell that from a wedge by sampling, and it does not have to -- the
      host put it there and can simply say so. */
-static volatile LONG g_WowMsgInWait = 0;
+volatile LONG g_WowMsgInWait = 0;
 
 static WOWMSG g_WowMsgRing[WOWMSG_MAX];
 static INT      g_WowMsgHead = 0;      /* next to take */
 static INT      g_WowMsgTail = 0;      /* next to fill */
-static INT      g_WowMsgCount = 0;
+INT      g_WowMsgCount = 0;
 static DWORD    g_WowMsgPosted = 0;    /* how many went in, for the run summary   */
 static DWORD    g_WowMsgTaken  = 0;    /* ...and how many came out                */
 static DWORD    g_WowMsgDropped = 0;   /* ring full -- LOUD, see WOWMSG_MAX       */
@@ -153,7 +153,7 @@ static INT WowMsgPostMove(WORD window, WORD message, WORD wParam, DWORD lParam,
 static INT      g_WowMsgIsReplayDue = 0;
 static WOWMSG g_WowMsgReplay;
 
-static INT WowMsgTake(WORD window, WORD filterMin, WORD filterMax, INT isRemove, PWOWMSG output)
+INT WowMsgTake(WORD window, WORD filterMin, WORD filterMax, INT isRemove, PWOWMSG output)
 {
     INT position, index;
     if (!g_WowMsgCount) return 0;
