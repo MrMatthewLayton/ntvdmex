@@ -1,10 +1,24 @@
 /* wow32.c -- the 32-bit half of WOW: krnl386's calls out to Win32.  GH #128.
  *
- * The code of wow32.h (#335): its functions and state, in their original order. Part of
- * the host's single translation unit: #included by main.c straight after wow32.h. */
+ * The code of wow32.h (#335): its functions and state, in their original order;
+ * its own translation unit, declared in wow32.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "host_wow.h"
+
 
 /* Forward declarations for the single translation unit (they were in wow32.h). */
-static VOID Wow32CurrentDirectorySet(PCSTR dir);  /* #164: main.c's per-task directory table */
+VOID Wow32CurrentDirectorySet(PCSTR dir);  /* #164: main.c's per-task directory table */
 
 /* ---- note building (shared by EVERY id space's dispatcher) --------------
    These live here rather than in wowuser.h because five module files build
@@ -143,13 +157,13 @@ VOID Wow32SetReturn(PWOW32_FRAME frame, DWORD value)
    non-zero taken as failure inside LoadModule. Reading the slot back and PRINTING
    it is what lets a later reader tell "krnl386 decided this" from "our litter
    decided this". */
-static DWORD Wow32PeekReturn(PCWOW32_FRAME frame)
+DWORD Wow32PeekReturn(PCWOW32_FRAME frame)
 {
     return (DWORD)Wow32PeekWord(frame->FrameBase + WOW32_OFF_RET)
          | ((DWORD)Wow32PeekWord(frame->FrameBase + WOW32_OFF_RET + WOW_WORD_BYTES) << WORD_SHIFT);
 }
 
-static PCSTR Wow32Name(WORD id)
+PCSTR Wow32Name(WORD id)
 {
     switch (id) {
     case WOW32_FATALEXIT:              return "FatalExit";
@@ -204,10 +218,10 @@ static PCSTR Wow32Name(WORD id)
 }
 
 CHAR g_WowCommandProgram[WOW32_COMMAND_PROGRAM_MAX] = { 0 };   /* full path of the Win16 program   */
-static CHAR g_WowCommandArguments[WOW32_COMMAND_ARGUMENTS_MAX] = { 0 };   /* its arguments, without a leading space */
-static CHAR g_WowCommandDirectory[MAX_PATH] = { 0 }; /* #164: the launch directory, 8.3; "" = none */
+CHAR g_WowCommandArguments[WOW32_COMMAND_ARGUMENTS_MAX] = { 0 };   /* its arguments, without a leading space */
+CHAR g_WowCommandDirectory[MAX_PATH] = { 0 }; /* #164: the launch directory, 8.3; "" = none */
 
-static INT  g_WowCommandIsTaken     = 0;       /* delivered already -- deliver once */
+INT  g_WowCommandIsTaken     = 0;       /* delivered already -- deliver once */
 /* ── ★ WIN16 SEES 8.3 NAMES, AND ONLY 8.3 NAMES. (s73) ──────────────────────────
      krnl386's loader opens the program through INT 21h, and a Win16 DOS world has no
      long file names: "C:\Documents and Settings\...\notepad\notepad.EXE" fails at
@@ -216,7 +230,7 @@ static INT  g_WowCommandIsTaken     = 0;       /* delivered already -- deliver o
      the SHORT form (a double-click's AppName arrives that way). Every path we hand
      the Win16 side -- the launch command, ResolveModulePath's answer -- goes through
      here. A path with no short form (the API returns 0) is passed as given. */
-static VOID WowShorten(PSTR path, UINT capacity)
+VOID WowShorten(PSTR path, UINT capacity)
 {
     CHAR shortPath[WOW32_SHORT_PATH_BUFFER]; DWORD length = 0;
     if (path[0]) length = GetShortPathNameA(path, shortPath, sizeof shortPath);
@@ -238,7 +252,7 @@ static const WOW32_DECLINE_SITE g_Wow32DeclineSites[] = {
     { WOW32_FILE_WRITE,    0x56bf },   /* 0x6f -> AH=40h */
 };
 
-static INT Wow32MayDecline(WORD id, WORD callSite)
+INT Wow32MayDecline(WORD id, WORD callSite)
 {
     UINT index;
     for (index = 0; index < sizeof g_Wow32DeclineSites / sizeof g_Wow32DeclineSites[0]; ++index)
@@ -289,7 +303,7 @@ DWORD WowGenericThunkInvoke(DWORD procedure, PCDWORD arguments, INT count)
     return result;
 }
 
-static INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
+INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
 {
     /* ★ NOT OUR ID SPACE, NOT OUR ANSWER. See `IsKernel` in WOW32_FRAME. */
     if (!frame->IsKernel) return 0;

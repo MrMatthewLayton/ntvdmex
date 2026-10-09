@@ -30,7 +30,6 @@
 #include "pif.h"        /* a .PIF's program, directory and parameters */
 #include "../wow/ne.h"  /* GH #128: 16-bit New Executable loader (WOW bootstrap) */
 #include "../wow/wow32.h" /* GH #128: the 32-bit half -- krnl386's calls out to Win32 */
-#include "../wow/wow32.c"
 #include "../wow/wowanchors.h" /* GH #128: ...and how a thunk module's segment is RECOGNISED */
 #include "../wow/wowsched.h" /* GH #128: ...and the Win16 task scheduler, which is also ours */
 #include "../wow/wowcall.h" /* GH #128: ...and the OTHER direction -- calling 16-bit code */

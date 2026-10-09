@@ -1861,7 +1861,7 @@ static VOID WowTaskDirectoryHere(WORD task)          /* record the host's direct
     CHAR directory[MAX_PATH];
     if (GetCurrentDirectoryA(sizeof directory, directory)) WowTaskDirectoryNote(task, directory);
 }
-static VOID Wow32CurrentDirectorySet(PCSTR directory)    /* WOW32 0x82 succeeded (wow32.h) */
+VOID Wow32CurrentDirectorySet(PCSTR directory)    /* WOW32 0x82 succeeded (wow32.h) */
 {
     WowTaskDirectoryNote(WowSchedCurrentTask(), directory);
 }

@@ -23,4 +23,5 @@ INT WowDlgIsSelectorAbsent(WORD selector);
    ⚠ Only on the guest thread, in protected mode, a Win16 session, below the callback
      depth limit. A run that stops without returning unwinds its frame and says so. */
 INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCount, WORD hwnd, WORD message, WORD *result, BYTE *blob, INT blobLength, INT blobArgument, const INT *fix, INT fixupCount);
+VOID Wow32CurrentDirectorySet(PCSTR directory);
 #endif

@@ -607,4 +607,12 @@ volatile BYTE *Wow32FarAt(PCWOW32_FRAME frame, volatile BYTE *base, INT offset);
 INT Wow32ArgString(PCWOW32_FRAME frame, INT offset, PSTR output, INT capacity);
 extern CHAR g_WowCommandProgram[WOW32_COMMAND_PROGRAM_MAX];
 DWORD Wow32Flat(PCWOW32_FRAME frame, DWORD farPointer);
+DWORD Wow32PeekReturn(PCWOW32_FRAME frame);
+PCSTR Wow32Name(WORD id);
+extern CHAR g_WowCommandArguments[WOW32_COMMAND_ARGUMENTS_MAX];
+extern CHAR g_WowCommandDirectory[MAX_PATH];
+extern INT g_WowCommandIsTaken;
+VOID WowShorten(PSTR path, UINT capacity);
+INT Wow32MayDecline(WORD id, WORD callSite);
+INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData);
 #endif /* NTVDMEX_WOW32_H */
