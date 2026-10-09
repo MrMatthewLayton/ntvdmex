@@ -120,7 +120,7 @@ static DWORD g_PmIrq0Done   = 0;           /* cooperative injections that reache
      Count the cooperative arm per VECTOR and print both arms against `raises`, so the
      line answers the question it appears to answer. */
 static DWORD g_PmCooperativeLine[PIC_LINES_PER_CHIP];
-static WORD      g_PmTransferParagraphs = 0;
+WORD      g_PmTransferParagraphs = 0;
 
 /* True if selector `sel`'s descriptor has the D/B (32-bit default) bit set. The bit
    lives in g_Ldt[].flags bit 2 (descriptor byte-6 bit 6). All 16-bit DPMI clients leave
@@ -166,7 +166,7 @@ INT DpmiSelectorIs32(WORD selector)
 static INT g_HostPoolNext = DPMI_HOSTPOOL_LO;
 static INT g_HostPoolSpill = 0;
 
-static INT DpmiHostIndex(VOID)
+INT DpmiHostIndex(VOID)
 {
     if (g_HostPoolNext <= DPMI_HOSTPOOL_HI) return g_HostPoolNext++;
     if (g_LdtNext >= DPMI_LDT_MAX) return -1;
@@ -320,7 +320,7 @@ static VOID DpmiInstallDefaultPmHandlers(DOS_MACHINE *machine)
 }
 
 /* (Re)build g_Ldt[idx]'s descriptor and install it in the process LDT via svc 10. */
-static VOID DpmiInstall(INT index)
+VOID DpmiInstall(INT index)
 {
     DWORD low, high, descriptorLimit = g_Ldt[index].Limit; BYTE flags = g_Ldt[index].Flags;
     BYTE accessRights = g_Ldt[index].Access;
@@ -488,7 +488,7 @@ static VOID DpmiInstallFaultTrampoline(VOID)
    takes the "first level, save" path only when the nest counter is 0 (then inc's it), so
    this runs before EVERY DpmiEnterProtectedMode. Sets: nest=0, the 16/32 flag, the handler STACK
    selector at [TIB+0x638], and the handler-table pointer at [VDM_TIB+8]. */
-static VOID DpmiArmFaultTrampoline(volatile BYTE *tib, WORD flag)
+VOID DpmiArmFaultTrampoline(volatile BYTE *tib, WORD flag)
 {
     if (!g_DpmiFaultSelector) return;
     *(volatile WORD  *)(tib + VTIB_FLT_NEST)  = 0;
@@ -588,7 +588,7 @@ INT DpmiSelectorDescriptor(WORD selector, UINT32 *accessRights, UINT32 *limit)
      bytes nothing has rewritten. Self-verifying, and it fires only when all three hold:
      the memory really is C4 C4, the address really is inside a segment we know the base
      of, and the file really has CD there. Then record it, so it costs one lookup once. */
-static DWORD DpmiBopVector(DWORD csValue, DWORD eip)
+DWORD DpmiBopVector(DWORD csValue, DWORD eip)
 {
     DWORD base = DpmiSelectorBase((WORD)csValue);
     DWORD linear  = base + eip;
@@ -628,7 +628,7 @@ static DWORD DpmiBopVector(DWORD csValue, DWORD eip)
    reads like a wild jump into the BIOS data area rather than what it was.
    This is the same rule the interrupt-frame width already follows: ask the descriptor,
    not the host's habits. DpmiSelectorIs32() reads the D/B bit we store for the selector. */
-static DWORD DpmiPmEip(volatile BYTE *tib)
+DWORD DpmiPmEip(volatile BYTE *tib)
 {
     DWORD currentEip = VDM_REG(tib, VTIB_EIP);
     return DpmiSelectorIs32((WORD)VDM_REG16(tib, VTIB_CS)) ? currentEip : (currentEip & WORD_MASK);
@@ -2674,7 +2674,7 @@ enum { DPMI_IRQ_TIME_CHECK_MASK = 0x3F };   /* DpmiInjectPmIrq: look at the cloc
      (possibly rewritten) frame at FLTRET. A 32-bit client, a class nobody
      registered, and a software INT reflected as #GP (IDT bit) are left exactly as
      before -- the main loop's long arm handles those, and this does not guess. */
-static INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip)
+INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip)
 {
     DWORD csValue = VDM_REG16(tib, VTIB_CS);
     DWORD stackBase, esp;
@@ -2766,7 +2766,7 @@ static INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip)
     return 0;
 }
 enum { DPMI_HOST_SELECTORS = 4 };   /* DpmiClientTeardown: the host's own LDT entries it keeps */
-static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interruptVector, UINT steps)
+INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interruptVector, UINT steps)
 {
     CHAR lineBuffer[256], *lineCursor = lineBuffer;
     if (g_PmClientExited) return 0;              /* nothing left to interrupt */

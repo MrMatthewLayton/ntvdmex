@@ -1,12 +1,32 @@
 /* host_wow.c -- Win16: the WOW glue -- module loading and anchors, the scheduler, WOW32 calls,
  *   the shims, 16-bit callbacks and owner-draw.
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): declared in host_wow.h. */
+#include "host_state.h"
+#include "log.h"
+#include <commctrl.h>
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "host_wow.h"
+#include "host_dpmi.h"
+#include "host_dpmi_int.h"
+#include "host_bios.h"
+#include "host_install.h"
+#include "host_io.h"
 
-static INT   g_WowFoldMute;
-static DWORD g_WowFoldDropped;      /* dumps folded away, reported in WOWPERF */
-static DWORD g_IcaRaised = 0, g_IcaDelivered = 0, g_IcaNoHandler = 0;
-static DWORD g_ShimState[WOW_SHIMS], g_ShimError[WOW_SHIMS];  /* 0 not tried, 1 loaded+init, 2 no load, 3 init refused */
+
+INT   g_WowFoldMute;
+DWORD g_WowFoldDropped;      /* dumps folded away, reported in WOWPERF */
+DWORD g_IcaRaised = 0, g_IcaDelivered = 0, g_IcaNoHandler = 0;
+DWORD g_ShimState[WOW_SHIMS], g_ShimError[WOW_SHIMS];  /* 0 not tried, 1 loaded+init, 2 no load, 3 init refused */
 /* ── THE WOW32 BOP BLOCK'S ONLY WAY OUT. (session 56) ────────────────────────
      Identical to LogAppend + SerialOut, except that it drops the buffer when
      the current call is a folded repeat. Deliberately NOT a change to
@@ -16,7 +36,7 @@ static DWORD g_ShimState[WOW_SHIMS], g_ShimError[WOW_SHIMS];  /* 0 not tried, 1 
      a fault, a PM interrupt, an LDT sync -- and hiding one of those to save disk
      would be trading the trace for the thing the trace exists to catch.
      `p` is reset either way, so a muted block cannot leak into the next one. */
-static VOID WowLogFlush(PSTR base, PSTR *logCursor)
+VOID WowLogFlush(PSTR base, PSTR *logCursor)
 {
     PSTR end = *logCursor;
     if (g_WowFoldMute == WOWFOLD_MUTE_DROP) { ++g_WowFoldDropped; *logCursor = base; return; }
@@ -122,7 +142,7 @@ VOID WowCommRts(INT port, INT isOn) { WowCommMcr(port, isOn ? COMM_MCR_RTS : 0u,
    program's own path can contain "-w" (…\my-widget\game.exe) and would then be
    handed silently to stock ntvdm -- a worse failure than the one this guard exists
    to prevent, because the program WOULD run and we would never hear about it. */
-static INT LaunchIsWow(PCSTR command)
+INT LaunchIsWow(PCSTR command)
 {
     PCSTR cursor = CommandLineAfterArgv0(command);
     while (*cursor) {
@@ -135,13 +155,13 @@ static INT LaunchIsWow(PCSTR command)
     return 0;
 }
 
-static CHAR      g_WowName[WOW_MAX_MOD][16];
+CHAR      g_WowName[WOW_MAX_MOD][16];
 /* ── ★ WHICH MODULE OWNS THIS SELECTOR? (GH #128, session 38) ─────────────────
      Needed because the WOW32 id space is per module: a call's stub segment names
      the table it belongs to, and the table decides whose numbering applies. The
      loader already records every module's runtime selectors, so this is a lookup
      rather than an inference. -1 = not one of ours. */
-static INT WowModuleOfSelector(WORD selector)
+INT WowModuleOfSelector(WORD selector)
 {
     INT module, segment;
     if (!selector) return -1;
@@ -156,21 +176,21 @@ static INT WowModuleOfSelector(WORD selector)
      so with only the two anchors above that call was "?'s table" and stepped over,
      the table stayed empty, and DefWindowProc forwarded nothing for the whole run.
      The triple is USER's: later calls carrying it were already dispatched as USER. */
-static INT WowUserAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
+INT WowUserAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
 {
     return (thunkId == 0x190 && argumentBytes == 0 && returnStub == 0x0659)
         || (thunkId == 0x039 && argumentBytes == 4 && returnStub == 0x0c25)
         || (thunkId == 0x217 && argumentBytes == 6 && returnStub == 0x12ea);
 }
 
-static INT WowShellAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
+INT WowShellAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
 {
     return WowAnchorHit(g_WowShellAnchors,
                           (INT)(sizeof g_WowShellAnchors / sizeof g_WowShellAnchors[0]),
                           thunkId, argumentBytes, returnStub);
 }
 
-static INT WowCommonDialogAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
+INT WowCommonDialogAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
 {
     /* s89: the whole table (wowanchors.h) -- two rows left FindText unidentified. */
     return WowAnchorHit(g_WowCommdlgAnchors,
@@ -178,7 +198,7 @@ static INT WowCommonDialogAnchor(WORD thunkId, WORD argumentBytes, WORD returnSt
                           thunkId, argumentBytes, returnStub);
 }
 
-static INT WowKeyboardAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
+INT WowKeyboardAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
 {
     /* s89: the whole table (wowanchors.h), for the same reason as COMMDLG's. */
     return WowAnchorHit(g_WowKeyboardAnchors,
@@ -186,7 +206,7 @@ static INT WowKeyboardAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
                           thunkId, argumentBytes, returnStub);
 }
 
-static INT WowSoundAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
+INT WowSoundAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
 {
     return WowAnchorHit(g_WowSoundAnchors,
                           (INT)(sizeof g_WowSoundAnchors / sizeof g_WowSoundAnchors[0]),
@@ -199,7 +219,7 @@ static INT WowSoundAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
      learned from a guest that happened to DESTROY something before it drew
      anything. Paint's first GDI calls are `CreateCompatibleDC`/`SelectObject`.
      The table is now all 367 stubs in GDI.EXE -- see src/wow/wowanchors.h. */
-static INT WowGdiAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
+INT WowGdiAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
 {
     return WowAnchorHit(g_WowGdiAnchors,
                           (INT)(sizeof g_WowGdiAnchors / sizeof g_WowGdiAnchors[0]),
@@ -207,7 +227,7 @@ static INT WowGdiAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
 }
 
 enum { WOW_K2_STUB_LENGTH = 8 };   /* WowKernel2Stub: push imm16 ; call far -- the bytes before the return */
-static INT WowKernel2Stub(WORD thunkId, WORD returnStub)
+INT WowKernel2Stub(WORD thunkId, WORD returnStub)
 {
     const NE_SEGMENT *segment;
     const BYTE *image;
@@ -254,7 +274,7 @@ static INT WowKernel2Stub(WORD thunkId, WORD returnStub)
 static WORD      g_WowPoolSegment  = 0;
 static WORD      g_WowPoolNext = 0;     /* paragraphs handed out so far          */
 #define WOW_PSP_BLOCK_PARAS 0x40               /* a WOW launch keeps only the PSP's block   */
-static WORD WowHostAllocate(WORD paras)
+WORD WowHostAllocate(WORD paras)
 {
     WORD segment;
     if (!g_WowPoolSegment || g_WowPoolNext + paras > WOW_HOSTPOOL_PARAS) return 0;
@@ -267,12 +287,12 @@ static WORD WowHostAllocate(WORD paras)
 static CHAR      g_WowKernelPath[512];
 /* Bytes of usable memory above krnl386's stack, handed to it in CX at entry. See
    the note at the entry setup and WowPlaceV86. */
-static WORD      g_WowEntryCx = 0;
-static WORD      g_WowPspSegment  = 0;
+WORD      g_WowEntryCx = 0;
+WORD      g_WowPspSegment  = 0;
 /* Where WOW32 0xc5 puts a resolved module path so the guest can point at it. Its own
    paragraph, and separate from the transfer buffer above on purpose -- see the
    allocation site and the 0xc5 service. */
-static WORD      g_WowPathSegment = 0;
+WORD      g_WowPathSegment = 0;
 /* ── ★ WHERE A LAUNCHED TASK'S ENVIRONMENT LIVES. (seg2 0xd1, session 39 part 8) ──
      A COPY, and the copy is the whole point: the parent hands its child an
      environment through its own PSP and then FREES that block the moment
@@ -282,7 +302,7 @@ static WORD      g_WowPathSegment = 0;
      calls later, which is exactly the `#GP` the first cut of the service produced.
      Its own paragraph for the same reason as the path scratch: the child keeps this
      pointer for its whole life, so it cannot share a buffer anything else reuses. */
-static WORD      g_WowEnvironmentSegment  = 0;
+WORD      g_WowEnvironmentSegment  = 0;
 /* ── ★ THE WAY BACK OUT OF 16-BIT CODE. (GH #128, session 40) ─────────────────────
      One paragraph holding `C4 C4 57`, and a 16-bit CODE selector over it. It is the
      far return address every host-made call to a Win16 procedure is given, and it is
@@ -290,14 +310,14 @@ static WORD      g_WowEnvironmentSegment  = 0;
      for the reader, the address is ours by construction and cannot be collided with
      by our own INT-site patcher, which also writes `C4 C4`. See src/wow/wowcall.h. */
 static WORD      g_WowCallbackSegment = 0;
-static DWORD     g_WowCallbackLinear = 0;
+DWORD     g_WowCallbackLinear = 0;
 static WORD      g_WowCallbackSelector = 0;          /* built at the first callback */
 /* Report any change to a tracked PSP's environment field. Called at every WOW32 BOP
    AND every protected-mode INT 21h, because the resolution of the answer is exactly
    the spacing of the sampler: sampling only at WOW32 calls put the whole of WOWEXEC's
    launcher -- LoadModule included -- inside one window, which names a suspect rather
    than a writer. */
-static PSTR WowPspEnvironmentCheck(PSTR cursor, PCSTR where)
+PSTR WowPspEnvironmentCheck(PSTR cursor, PCSTR where)
 {
     INT index;
     for (index = 0; index < g_WowPspCount; ++index) {
@@ -450,7 +470,7 @@ static INT WowLoadOne(PCSTR path)
      will want them. See WowProbeSelectors() for the correction: krnl386's init entry
      runs in V86, so a real load puts its segments in CONVENTIONAL memory and relocates
      against real-mode paragraphs. */
-static VOID WowProbeLoad(PCSTR command)
+VOID WowProbeLoad(PCSTR command)
 {
     /* The whole graph, in dependency order. Everything imports from KERNEL, USER
        also needs SYSTEM, and wowexec needs KEYBOARD -- so the drivers come before
@@ -486,7 +506,7 @@ static VOID WowProbeLoad(PCSTR command)
     LogAppend(LOG_PATH, message, cursor);
 }
 
-static INT WowRefuse(PCSTR command)
+INT WowRefuse(PCSTR command)
 {
     CHAR message[256], *cursor = message;
     cursor = LogPut(cursor, "STAGE0: WIN16/WOW -- NOT SUPPORTED and cannot be handed back "
@@ -523,7 +543,7 @@ enum { WOW_CALLBACK_STUB_LIMIT = 0x0F };   /* the callback stub's 16-byte segmen
      EXECUTE these three bytes. The limit is one paragraph on purpose -- the stub is
      three bytes and nothing may ever be reached past it, so a stray branch into this
      selector faults here rather than running off into whatever follows. */
-static WORD WowCallbackSelector(VOID)
+WORD WowCallbackSelector(VOID)
 {
     INT index;
     if (g_WowCallbackSelector) return g_WowCallbackSelector;
@@ -550,7 +570,7 @@ static WORD WowCallbackSelector(VOID)
      and compare. Same code, same moment, one variable: which kind of launch this is.
      That is the only way to tell "NtSetLdtEntries needs more VDM setup" apart from
      "a WOW launch leaves the process in a different state". */
-static VOID WowProbeLdtMatrix(PCSTR tag)
+VOID WowProbeLdtMatrix(PCSTR tag)
 {
     static const struct { PCSTR Description; DWORD Base, Limit; BYTE Access, Flags; INT Index; }
     cases[] = {
@@ -754,7 +774,7 @@ enum { WOW_FILLER_SLACK_PARAS = 2 };   /* WowPlaceV86: the MCB headers a filler 
 
    Returns 0 and fills the entry registers. krnl386 imports from nothing, so no
    importer callback is needed here; user/gdi come later and will need one. */
-static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
+INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
                          WORD *entryDs, WORD *entrySs, WORD *esp)
 {
     /* krnl386 is a LIBRARY: SS:SP = 0:0 and stack = 0 in the header, so nothing tells
@@ -1480,7 +1500,7 @@ static INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip,
     return 0;
 }
 
-static VOID WowProbeSelectors(VOID)
+VOID WowProbeSelectors(VOID)
 {
     CHAR message[600], *cursor;
     INT moduleIndex, index;
@@ -1616,7 +1636,7 @@ static WORD  g_Wow32ReturnId[WOW32RET_MAX];
 static DWORD g_Wow32ReturnValue[WOW32RET_MAX];
 static INT   g_Wow32ReturnCount = 0;
 
-static DWORD Wow32ReturnOverride(WORD thunkId)
+DWORD Wow32ReturnOverride(WORD thunkId)
 {
     INT index;
     for (index = 0; index < g_Wow32ReturnCount; ++index) if (g_Wow32ReturnId[index] == thunkId) return g_Wow32ReturnValue[index];
@@ -1642,7 +1662,7 @@ static WORD g_Wow32ModeValue[WOWMODE_MAX];
 static INT  g_Wow32ModeCount = 0;
 
 /* -1 = no override for this id (0 is a legal mode, so it cannot be the sentinel). */
-static INT Wow32ModeOverride(WORD thunkId)
+INT Wow32ModeOverride(WORD thunkId)
 {
     INT index;
     for (index = 0; index < g_Wow32ModeCount; ++index)
@@ -1650,7 +1670,7 @@ static INT Wow32ModeOverride(WORD thunkId)
     return -1;
 }
 enum { WOW32_KNOB_COLUMNS = 2 };   /* wow32mode.txt / wow32ret.txt: two hex columns a line */
-static VOID Wow32ModeLoad(VOID)
+VOID Wow32ModeLoad(VOID)
 {
     HANDLE handle = CreateFileA(WOWMODE_PATH, GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
@@ -1701,7 +1721,7 @@ static VOID Wow32ModeLoad(VOID)
     }
 }
 
-static VOID Wow32ReturnLoad(VOID)
+VOID Wow32ReturnLoad(VOID)
 {
     HANDLE handle = CreateFileA(WOW32RET_PATH, GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
@@ -1769,16 +1789,16 @@ static VOID Wow32ReturnLoad(VOID)
      reproduce the committed result exactly, so the switch is a file on the share
      and its absence costs nothing. */
 #define WOWSCHED_PATH CFG_("wowsched.txt")
-static WORD  g_WowDgroupSelector   = 0;      /* krnl386's DGROUP selector, learned at a BOP */
+WORD  g_WowDgroupSelector   = 0;      /* krnl386's DGROUP selector, learned at a BOP */
 static INT   g_WowSchedRoundRobin = 0;            /* round-robin cursor for the yields            */
-static INT WowSchedFree(VOID)
+INT WowSchedFree(VOID)
 {
     INT index;
     for (index = 0; index < WOWSCHED_MAX; ++index) if (!g_WowSchedSlots[index].IsUsed) return index;
     return -1;
 }
 /* The next parked task other than `cur`, round robin; -1 if none. */
-static INT WowSchedPick(WORD current)
+INT WowSchedPick(WORD current)
 {
     INT index, step;
     for (step = 1; step <= WOWSCHED_MAX; ++step) {
@@ -1799,7 +1819,7 @@ static INT WowSchedFresh(WORD current)
 /* A task that may take the CPU from one idling at callback depth `depth`: a fresh one
    only from the top (depth 0); a parent parked mid-work (F) only at the depth it left,
    so the host's callback frames stay last-in first-out across the swap. */
-static INT WowSchedRunnable(WORD current, INT depth)
+INT WowSchedRunnable(WORD current, INT depth)
 {
     INT index;
     for (index = 0; index < WOWSCHED_MAX; ++index)
@@ -1813,14 +1833,14 @@ static INT WowSchedRunnable(WORD current, INT depth)
 }
 /* Parked holding no host callback frame: launched and never run, or idle in its own
    top-level GetMessage. Such a task is re-based at whatever depth resumes it. */
-static INT WowSchedTopLevel(const WOWSCHED_SLOT *slot)
+INT WowSchedTopLevel(const WOWSCHED_SLOT *slot)
 {
     return slot->IsFresh || (slot->IsWaitingForMessage && slot->CallbackDepth == slot->BaseDepth);
 }
 /* krnl386's current-task word. 0xFFFF means "we do not know yet", which is NOT
    the same as 0 -- 0 is krnl386 saying "no task is current", and acting on the
    two as if they were the same would switch tasks before the guest has one. */
-static WORD WowSchedCurrentTask(VOID)
+WORD WowSchedCurrentTask(VOID)
 {
     DWORD base;
     const volatile BYTE *dgroup;
@@ -1856,7 +1876,7 @@ static VOID WowTaskDirectoryNote(WORD task, PCSTR directory)
     g_WowTaskDirectory[index].Task = task;
     lstrcpynA(g_WowTaskDirectory[index].Directory, directory, sizeof g_WowTaskDirectory[index].Directory);
 }
-static VOID WowTaskDirectoryHere(WORD task)          /* record the host's directory now */
+VOID WowTaskDirectoryHere(WORD task)          /* record the host's directory now */
 {
     CHAR directory[MAX_PATH];
     if (GetCurrentDirectoryA(sizeof directory, directory)) WowTaskDirectoryNote(task, directory);
@@ -1865,7 +1885,7 @@ VOID Wow32CurrentDirectorySet(PCSTR directory)    /* WOW32 0x82 succeeded (wow32
 {
     WowTaskDirectoryNote(WowSchedCurrentTask(), directory);
 }
-static VOID WowTaskChdir(WORD task, PSTR *logCursor)
+VOID WowTaskChdir(WORD task, PSTR *logCursor)
 {
     INT index;
     static INT logged;
@@ -1897,7 +1917,7 @@ static VOID WowTaskChdir(WORD task, PSTR *logCursor)
      switched, and this makes the guest's own bookkeeping agree with the context
      it is about to run. The value is not invented; it is the one the word held
      when that frame was parked (`slot->task`). */
-static VOID WowSchedSetCurrent(WORD task)
+VOID WowSchedSetCurrent(WORD task)
 {
     DWORD base;
     volatile BYTE *dgroup;
@@ -1918,7 +1938,7 @@ enum { WOW_RETARGET_HEADROOM = 0x40, WOW_RETARGET_STACK_MIN = 0x200 };   /* WowS
      parked SP for the frame the guest itself may still think is live. */
 static WORD WowSchedOwnerOf(WORD hwnd) { return WowUserOwner16(hwnd); }
 static DWORD g_WowSchedInterTask;
-static INT WowSchedRetarget(WORD hwnd, WORD *stackSegment, WORD *stackPointer, DWORD *stackSegmentBase, WORD *prev)
+INT WowSchedRetarget(WORD hwnd, WORD *stackSegment, WORD *stackPointer, DWORD *stackSegmentBase, WORD *prev)
 {
     WORD owner = WowSchedOwnerOf(hwnd), current = WowSchedCurrentTask();
     const BYTE *contexts[WOWSCHED_MAX + WOWCALL_MAX_DEPTH];
@@ -1949,10 +1969,10 @@ static INT WowSchedRetarget(WORD hwnd, WORD *stackSegment, WORD *stackPointer, D
     ++g_WowSchedInterTask;
     return 1;
 }
-static VOID WowSchedUntarget(WORD prev) { WowSchedSetCurrent(prev); }
+VOID WowSchedUntarget(WORD prev) { WowSchedSetCurrent(prev); }
 /* An inter-task call is in flight: the owner's parked context is BORROWED, so no
    yield may park or resume anything until it returns. */
-static INT WowSchedInterTaskLive(VOID)
+INT WowSchedInterTaskLive(VOID)
 {
     INT index;
     for (index = 0; index < g_WowCallDepth; ++index) if (g_WowCallFrames[index].PreviousTask) return 1;
@@ -1960,7 +1980,7 @@ static INT WowSchedInterTaskLive(VOID)
 }
 
 #define WOWQUIET_PATH CFG_("wowquiet.txt")
-static VOID WowQuietLoad(VOID)
+VOID WowQuietLoad(VOID)
 {
     HANDLE handle = CreateFileA(WOWQUIET_PATH, GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
@@ -1976,7 +1996,7 @@ static VOID WowQuietLoad(VOID)
     g_LogIsQuiet = 1;
 }
 
-static VOID WowSchedLoad(VOID)
+VOID WowSchedLoad(VOID)
 {
     HANDLE handle = CreateFileA(WOWSCHED_PATH, GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
@@ -1997,9 +2017,9 @@ static VOID WowSchedLoad(VOID)
      committed baseline (270 / 44 / 122 / 98) count for count, so the switch is a
      file on the share and its absence costs nothing. See src/wow/wowcall.h. */
 #define WOWCALL_PATH CFG_("wowcall.txt")
-static INT g_WowCallOn = 0;
+INT g_WowCallOn = 0;
 
-static VOID WowCallLoad(VOID)
+VOID WowCallLoad(VOID)
 {
     HANDLE handle = CreateFileA(WOWCALL_PATH, GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
@@ -2049,7 +2069,7 @@ static WORD g_WowVendorSelector = 0;
    ⚠ Goes through DpmiSelectorBase rather than g_Ldt[] directly so that a selector
      krnl386 created by writing the descriptor shadow resolves the same way here
      as everywhere else in the host. */
-static DWORD Wow32HostSelectorToLinear(WORD selector, PVOID context)
+DWORD Wow32HostSelectorToLinear(WORD selector, PVOID context)
 {
     (VOID)context;
     return DpmiSelectorBase(selector);
@@ -2073,7 +2093,7 @@ static WORD  g_WowShadowSelector = 0;
      anybody having to pretend it succeeded. */
 static BYTE *g_WowSeen = NULL;          /* last shadow contents we processed */
 
-static VOID WowShadowPut(INT index)      /* g_Ldt[idx] -> shadow */
+VOID WowShadowPut(INT index)      /* g_Ldt[idx] -> shadow */
 {
     DWORD low, high, *entry;
     if (!g_WowShadow || index < 0 || index >= WOW_SHADOW_ENTRIES) return;
@@ -2085,7 +2105,7 @@ static VOID WowShadowPut(INT index)      /* g_Ldt[idx] -> shadow */
 }
 enum { WOW_SHADOW_SCAN_SLACK = 8 };   /* WowShadowSync looks a few entries past g_LdtNext */
 /* Push anything krnl386 changed in the shadow into the real LDT. Returns the count. */
-static INT WowShadowSync(PSTR *logCursor)
+INT WowShadowSync(PSTR *logCursor)
 {
     INT index, top = g_LdtNext + WOW_SHADOW_SCAN_SLACK, count = 0;
     PSTR cursor = logCursor ? *logCursor : NULL;
@@ -2159,7 +2179,7 @@ static WORD WowShadowSelector(VOID)
     return g_WowShadowSelector;
 }
 enum { WOW_VENDOR_STUB_SELECTOR = 0x10, WOW_VENDOR_STUB_LIMIT = 0x1F };   /* WowVendorApiEntry: the mov ax,imm16's operand; the segment */
-static INT WowVendorApiEntry(DOS_MACHINE *machine, WORD *selector, WORD *offset)
+INT WowVendorApiEntry(DOS_MACHINE *machine, WORD *selector, WORD *offset)
 {
     /* The DPMI vendor-specific API entry krnl386 asks for (INT 2Fh AX=168Ah). Its
        contract, as stock answers it: AX=0 -> AX=0x0100; AX=0x0100 -> AX=a selector;
@@ -2222,7 +2242,7 @@ static INT WowVendorApiEntry(DOS_MACHINE *machine, WORD *selector, WORD *offset)
      `fix[i]` is an offset in `blob` holding a WORD offset WITHIN the blob; it is
      rewritten as the far pointer ss:(where the blob landed + that offset) -- known
      only here, because only here is SS:SP known. */
-static INT WowCall16Sync(DWORD proc, WORD ds, const WORD *args, INT argumentCount,
+INT WowCall16Sync(DWORD proc, WORD ds, const WORD *args, INT argumentCount,
                            WORD hwnd, WORD message, WORD *result)
 {
     return WowCall16SyncEx(proc, ds, args, argumentCount, hwnd, message, result, NULL, 0, -1, NULL, 0);
@@ -2344,7 +2364,7 @@ static BOOL ShimCallback16Ex(DWORD targetProcedure, DWORD flags, DWORD byteCount
      15 GlobalAlloc 3ac3, 17 GlobalFree 3adf, 18 GlobalLock 3b10, 19 GlobalUnlock
      3b63, 20 GlobalSize 3b4f, 21 GlobalHandle 3afc). The shim composes the
      AllocLock/UnlockFree/LockSize forms from these. 0 when the call cannot be made. */
-static DWORD ShimGlobal16(INT operation, DWORD firstArgument, DWORD secondArgument)
+DWORD ShimGlobal16(INT operation, DWORD firstArgument, DWORD secondArgument)
 {
     static const WORD offset[SHIM_GLOBAL_OPERATIONS] = { 0x3ac3, 0x3adf, 0x3b10, 0x3b63, 0x3b4f, 0x3afc };
     WORD args[3], result = 0;
@@ -2550,7 +2570,7 @@ INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCount,
      answers a brush token, mapped back to the real brush. 0 or a refusal leaves
      Windows' default. Calc's display, Cardfile's card bar and Packager's headers are
      drawn in colours their programs chose here. */
-static LRESULT WowControlColour(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam, INT *handled)
+LRESULT WowControlColour(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam, INT *handled)
 {
     WOWUSER_WINDOW *wowWindow = WowUserFindWindow(window16);
     DWORD proc = wowWindow ? WowUserWindowProcedureOf(wowWindow) : 0;
@@ -2610,7 +2630,7 @@ static LRESULT WowControlColour(HWND window, WORD window16, UINT message, WPARAM
 static VOID OwnerDrawPutWord(BYTE *bytes, INT offset, WORD value) { bytes[offset] = (BYTE)value; bytes[offset + 1] = (BYTE)(value >> BYTE_SHIFT); }
 static VOID OwnerDrawPutDword(BYTE *bytes, INT offset, DWORD value) { OwnerDrawPutWord(bytes, offset, (WORD)value); OwnerDrawPutWord(bytes, offset + X86_WORD_SIZE, (WORD)(value >> WORD_SHIFT)); }
 static WORD OwnerDrawGetWord(const BYTE *bytes, INT offset) { return (WORD)(bytes[offset] | (bytes[offset + 1] << BYTE_SHIFT)); }
-static LRESULT WowOwnerDraw(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam, INT *handled)
+LRESULT WowOwnerDraw(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam, INT *handled)
 {
     WOWUSER_WINDOW *wowWindow = WowUserFindWindow(window16);
     DWORD proc = wowWindow ? WowUserWindowProcedureOf(wowWindow) : 0;
@@ -2678,7 +2698,7 @@ static LRESULT WowOwnerDraw(HWND window, WORD window16, UINT message, WPARAM wPa
    instance chosen exactly as DispatchMessage chooses them. WowUserDestroy uses it
    so WM_DESTROY arrives while the window and its children still exist. */
 /* ...and with a structure as lParam (see WowCall16SyncEx for `fix`). */
-static INT WowSend16Blob(WORD window16, WORD message, WORD wParam, BYTE *blob, INT blobLength,
+INT WowSend16Blob(WORD window16, WORD message, WORD wParam, BYTE *blob, INT blobLength,
                            const INT *fix, INT fixupCount, WORD *result)
 {
     WOWUSER_WINDOW *window = WowUserFindWindow(window16);
@@ -2689,7 +2709,7 @@ static INT WowSend16Blob(WORD window16, WORD message, WORD wParam, BYTE *blob, I
     return WowCall16SyncEx(proc, window->Instance ? window->Instance : g_WowUserClasses[window->Class].Instance,
                               args, WOW_WNDPROC_ARGUMENTS, window16, message, result, blob, blobLength, 3, fix, fixupCount);
 }
-static INT WowSend16Now(WORD window16, WORD message, WORD wParam, DWORD lParam, WORD *result)
+INT WowSend16Now(WORD window16, WORD message, WORD wParam, DWORD lParam, WORD *result)
 {
     WOWUSER_WINDOW *window = WowUserFindWindow(window16);
     DWORD proc = window ? WowUserWindowProcedureOf(window) : 0;
@@ -2706,7 +2726,7 @@ static INT WowSend16Now(WORD window16, WORD message, WORD wParam, DWORD lParam, 
      parked in GetMessage, and on real hardware IRQ 10 would interrupt that idle task,
      MMSYSTEM's handler would post MM_WOM_DONE, and GetMessage would return it -- so
      the wait must deliver too, or the callback arrives never. */
-static VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps)
+VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps)
 {
     LONG bits;
     UINT line;

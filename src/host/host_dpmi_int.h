@@ -8,4 +8,8 @@
 extern WORD g_WowLastId;
 extern WORD g_WowLastFrom;
 
+/* Defined in host_dpmi_int.c (#335). */
+extern DWORD g_WowPspLinear[WOW_PSP_TRACK];
+extern WORD g_WowPspEnvironment[WOW_PSP_TRACK];
+extern DWORD g_WowSyncWrites;
 #endif

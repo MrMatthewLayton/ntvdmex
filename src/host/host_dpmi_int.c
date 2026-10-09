@@ -175,8 +175,8 @@ static WORD g_WowGdiSegment = 0;
 static WORD g_WowKernel2Segment = 0;
 /* seg2 ids. Numbered in THEIR OWN space -- 0xd1 here is not 0xd1 in wow32.h. */
 #define WOW32K2_TASKENV   0x00d1     /* the new task's environment; args: block offset 2, selector 4 */
-static DWORD     g_WowPspLinear[WOW_PSP_TRACK];
-static WORD      g_WowPspEnvironment[WOW_PSP_TRACK];   /* last seen +0x2c, for the change log */
+DWORD     g_WowPspLinear[WOW_PSP_TRACK];
+WORD      g_WowPspEnvironment[WOW_PSP_TRACK];   /* last seen +0x2c, for the change log */
 /* ── ★ WHICH WOW32 CALL WAS THE HOST INSIDE? (session 38) ─────────────────────────
      The WOWBOP log line is accumulated into `p` and only flushed WITH its result, so
      a host-side crash inside a service loses the whole line -- header included. The
@@ -260,7 +260,7 @@ static DWORD g_WowBops = 0, g_WowPerfMs = 0;
 static WOW32_DOSDATA g_WowDosData;
 static DWORD g_Wow32Serviced = 0, g_Wow32Unimplemented = 0, g_Wow32Declined = 0;
 
-static DWORD g_WowSyncWrites = 0;      /* how many entries krnl386 has changed */
+DWORD g_WowSyncWrites = 0;      /* how many entries krnl386 has changed */
 
 enum { WOW_PUMP_BUDGET = 64, WOW_PUMP_BUDGET_BRIEF = 32, WOW_INPUT_WAIT_MS = 50, WOW32K2_TASKENV_ARG_BLOCK_OFFSET = 2, WOW32K2_TASKENV_ARG_BLOCK_SELECTOR = 4 };   /* the WOW32 BOP service */
 #define DPMI_REPORTED_POOL_BYTES_U 0x04000000u   /* 0500h's answer: 64 MB */
