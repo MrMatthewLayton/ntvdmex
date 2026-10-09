@@ -99,6 +99,7 @@ add_executable(ntvdmhost
     src/host/log.c
     src/host/cpuspeed.c
     src/host/pcspeaker.c
+    src/host/settings.c
     src/vdd/present_scale.c
     src/vdm/v86.c
     src/vdm/dpmi.c
