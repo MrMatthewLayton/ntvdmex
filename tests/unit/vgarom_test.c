@@ -130,12 +130,12 @@ INT main(VOID)
 
     VgaRomTestCheck(romLength == 32768, "ibm_vga.bin is the expected 32KB image");
 
-    /* -- THE THREE FONTS are no longer IBM's (#322): NTVDMEX ships no font data and
+    /* THE THREE FONTS are no longer IBM's (#322): NTVDMEX ships no font data and
      * builds the tables from the system's fonts at start-up, so there is nothing
      * here to compare against the ROM. (The checks that did so are retired.)
      */
 
-    /* -- THE PER-MODE CRTC TABLES. vgadefs.asm read these back off a real card; the
+    /* THE PER-MODE CRTC TABLES. vgadefs.asm read these back off a real card; the
      * BIOS is where they come from in the first place, so the two must agree. A
      * mode's 25 CRTC bytes appear in the ROM's video parameter table as a run.
      *
@@ -160,7 +160,7 @@ INT main(VOID)
         printf("        (%d of %d CRTC rows located in the real BIOS)\n", found, tried);
     }
 
-    /* -- THE VERTICAL TIMING WE NOW DERIVE FROM THOSE ROWS. This is the claim the
+    /* THE VERTICAL TIMING WE NOW DERIVE FROM THOSE ROWS. This is the claim the
      * 0x3DA model rests on, so state it here in numbers rather than leaving it
      * implicit in a table: 640x350 is the mode that broke the old two-case guess.
      */

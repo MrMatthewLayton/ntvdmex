@@ -398,7 +398,7 @@
 #define WOWGDI_SCR_ARG_RGN              0
 #define WOWGDI_SCR_ARG_HDC              2
 
-/* -- THE REST OF THE REGION API, AND THE TWO TEXT CALLS THAT GO WITH IT.
+/* THE REST OF THE REGION API, AND THE TWO TEXT CALLS THAT GO WITH IT.
  * (session 55) Every one of these is a Win32 function of the same name and
  * the same meaning, so the body is a translation of handles and a call --
  * there is nothing to invent, which is exactly why they are worth doing in a
@@ -609,7 +609,7 @@
 
 #define WOWGDI_TEXTOUT                  0x0021  /* Ord 33, 12 args */
 
-/* -- ExtTextOut(hdc, x, y, opts, lprc, str, count, lpDx) -- ord 351, 22 args.
+/* ExtTextOut(hdc, x, y, opts, lprc, str, count, lpDx) -- ord 351, 22 args.
  * CLOCK's only outstanding GDI service, and the one TextOut cannot stand in
  * for: the digital face draws each string CLIPPED and OPAQUE to a rectangle so
  * the previous second is erased in the same call, and the analogue face uses
@@ -707,7 +707,7 @@
 #define WOWGDI_SDI_ARG_DSTX             28
 #define WOWGDI_SDI_ARG_HDC              30
 
-/* -- MINESWEEPER'S TWO. It keeps its digits, mines and smiley faces as DIBs in
+/* MINESWEEPER'S TWO. It keeps its digits, mines and smiley faces as DIBs in
  * its own resources and puts them on screen with these; nothing else it draws
  * needs GDI at all.
  * HBITMAP CreateDIBitmap(HDC, LPBITMAPINFOHEADER, DWORD dwInit, LPSTR lpbInit,
@@ -739,7 +739,7 @@
 #define WOWGDI_SDD_ARG_DSTX             24
 #define WOWGDI_SDD_ARG_HDC              26
 
-/* -- int Escape(HDC, int nEscape, int nCount, LPSTR lpInData, LPSTR lpOut) = 14
+/* int Escape(HDC, int nEscape, int nCount, LPSTR lpInData, LPSTR lpOut) = 14
  * The device-driver back door, and on a SCREEN DC the honest answer to almost
  * all of it is "this driver does not do that", which Escape spells 0. That is
  * not a stub: 0 is the documented in-band answer for an escape the driver does
@@ -785,7 +785,7 @@
 #define WOWGDI_ABCW_ARG_FIRST           6
 #define WOWGDI_ABCW_ARG_HDC             8
 
-/* -- UINT GetPaletteEntries(HPALETTE, UINT start, UINT n, LPPALETTEENTRY) = 10
+/* UINT GetPaletteEntries(HPALETTE, UINT start, UINT n, LPPALETTEENTRY) = 10
  *
  * [INFO]: PALETTEENTRY IS FOUR BYTES IN BOTH -- peRed, peGreen, peBlue, peFlags --
  * so this one really is a copy, and saying which structures are identical

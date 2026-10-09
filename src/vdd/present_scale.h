@@ -114,7 +114,7 @@ enum
     PRESENT_FILTER_NEAREST = 0, PRESENT_FILTER_BILINEAR, PRESENT_FILTER_SHARP
 };
 
-/* -- #229: COLOUR FILTERS (docs/EMULATION.md). Default, Sepia, and the three
+/* #229: COLOUR FILTERS (docs/EMULATION.md). Default, Sepia, and the three
  * monochrome monitors of the period -- white (paper-white), green (P1 phosphor) and
  * orange (amber). Applied per COLOUR, never per pixel where a palette exists: the
  * presenter recolours the 256 palette entries (and the split-palette tables), so an
@@ -176,7 +176,7 @@ VOID PresentFitRatio(
     INT *width,
     INT *height);
 
-/* -- #325: WHERE THE PICTURE GOES, for every path (window, maximised, fullscreen, both
+/* #325: WHERE THE PICTURE GOES, for every path (window, maximised, fullscreen, both
  * renderers). `screen` = an area the user did not size (maximised / fullscreen).
  * Stretch on a screen      -> the whole area.
  * Native, Whole pixels     -> the largest whole multiple k that fits (one k, so the
@@ -202,7 +202,7 @@ VOID PresentLayout(
     INT *width,
     INT *height);
 
-/* -- #325: THE PICTURE A WINDOW IS SIZED TO, at whole scale k (1x = one desktop pixel
+/* #325: THE PICTURE A WINDOW IS SIZED TO, at whole scale k (1x = one desktop pixel
  * per frame pixel). Native: the frame times k. Forced: k times the frame's WIDTH, and
  * the height that gives the ratio -- mode 13h at 2x and 4:3 is 640x480.
  */

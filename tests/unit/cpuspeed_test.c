@@ -279,7 +279,7 @@ INT main(VOID)
             CHECK(isOk, "every reachable ladder speed is delivered to within 2 bp of its duty");
             (VOID)badIndex; }
 
-        /* -- 2. THE OUTLIER, ABSORBED. A 19 ms descheduled slice among 2 ms ones was
+        /* 2. THE OUTLIER, ABSORBED. A 19 ms descheduled slice among 2 ms ones was
          * what made the debt carry non-monotonic. The closed loop prices each slice
          * against the running total, so the average is still the duty exactly.
          */
@@ -289,7 +289,7 @@ INT main(VOID)
             CHECK(CpuSpeedTestIsNear(rough, duty, 3), "a descheduled 19 ms outlier does not move the delivered speed");
             CHECK(CpuSpeedTestIsNear(rough, smooth, 3), "...it is within 3 bp of the jitter-free run"); }
 
-        /* -- 3. THE PORT-TRAP CEILING, WHICH IS PHYSICS, NOT A BUG. A workload that
+        /* 3. THE PORT-TRAP CEILING, WHICH IS PHYSICS, NOT A BUG. A workload that
          * only executes 40% of its wall time (the rest trapped in the host) cannot
          * be sped past 40% however high the target; a lower target is still hit.
          */
@@ -298,7 +298,7 @@ INT main(VOID)
             CHECK(CpuSpeedTestIsNear(nearForty, 4000, 20), "a 40%-overhead workload tops out near 40%, not the 50% asked");
             CHECK(CpuSpeedTestIsNear(atTwenty, 2000, 5),    "...but a target below that ceiling is delivered exactly"); }
 
-        /* -- 4. SATURATION IS HONEST, AND GRANULARITY IS ITS CURE. A duty low enough
+        /* 4. SATURATION IS HONEST, AND GRANULARITY IS ITS CURE. A duty low enough
          * that one 2 ms slice needs a hold past the 1 s cap CANNOT be reached at
          * coarse slices -- it saturates and delivers FASTER than asked -- but the
          * SAME duty at fine (100 us) slices fits the cap and lands exactly. This is
@@ -313,7 +313,7 @@ INT main(VOID)
                   "0.1% at coarse slices saturates -- delivered faster than asked, in the open");
             CHECK(CpuSpeedTestIsNear(smooth, duty, 2), "...and at fine slices it fits the cap and is delivered exactly"); }
 
-        /* -- 5. A HOLD IS BOUNDED, so an absurd setting cannot freeze the guest: even
+        /* 5. A HOLD IS BOUNDED, so an absurd setting cannot freeze the guest: even
          * at a 1 bp duty the single hold never exceeds the cap.
          */
         {   INT reset;
@@ -321,7 +321,7 @@ INT main(VOID)
             CHECK(hold <= capUs, "one hold is capped, so an unreachable setting slows but never freezes");
             CHECK(!reset, "...and a capped hold is carried, not forgiven"); }
 
-        /* -- 6. UNLIMITED NEVER HOLDS, whatever the totals. */
+        /* 6. UNLIMITED NEVER HOLDS, whatever the totals. */
         {   INT reset;
             CHECK(CpuSpeedStep(999999, 0, 10000, capUs, &reset) == 0 && reset,
                   "Unlimited holds for nothing and keeps no window"); }

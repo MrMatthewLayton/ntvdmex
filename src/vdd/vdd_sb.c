@@ -112,7 +112,7 @@
 #define SB_BLOCK_MIN_EMPTY              0xFFFFFFFFu
 #define SB_LAP_OFFSET_NONE              0xFFFFFFFFu
 
-/* --- the DSP's little output queue ---------------------------------------- */
+/* the DSP's little output queue: */
 /* Reads from 2xA come from here, and 2xE reports whether anything is waiting.
  * The reset handshake, the version query and the identify command all answer
  * through this queue, which is why detection is really a queue test.
@@ -163,7 +163,7 @@ static VOID SbDspSoftReset(PSB_STATE state)
     state->IsIrqPending = 0;
 }
 
-/* --- transfer programming ------------------------------------------------- */
+/* transfer programming: */
 static VOID SbStartBlock(PSB_STATE state, UINT32 bytes, INT isAutoInit)
 {
     /* SB16 only, exactly as VDMSound scopes it (getDSPVersion() >= 0x0400). */
@@ -280,7 +280,7 @@ static VOID SbExecute(PSB_STATE state)
     case SB_DSP_DIRECT_DAC:                                  /* direct DAC write: no DMA */
         break;
 
-    /* -- #189: THE SB PRO'S STEREO IS A MIXER SWITCH. A DSP 1.x-3.x output command is
+    /* #189: THE SB PRO'S STEREO IS A MIXER SWITCH. A DSP 1.x-3.x output command is
      * mono or stereo according to mixer register 0Eh bit 1 at the moment it starts,
      * and the time constant was programmed for BOTH channels -- so a stereo frame
      * (one byte each side) comes at half the byte rate (IsLegacyTransfer + VddSbFrameHz).
@@ -415,7 +415,7 @@ static VOID SbDspWrite(PSB_STATE state, BYTE value)
     }
 }
 
-/* --- ports ---------------------------------------------------------------- */
+/* ports: */
 static VOID SbPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
     PSB_STATE state = (PSB_STATE)context;
@@ -426,7 +426,7 @@ static VOID SbPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 
     switch (offset)
     {
-    /* -- FM. 2x8/2x9 are the AdLib-compatible pair (0x388/0x389) on every card.
+    /* FM. 2x8/2x9 are the AdLib-compatible pair (0x388/0x389) on every card.
      * 2x0-2x3 are the chip's own four ports on an SB16/AWE32's OPL3: 2x0 the
      * array-0 address, 2x2 the ARRAY-1 address (A1 high, = 0x38A), 2x1/2x3 data
      * (#232). With an OPL2 fitted there is no array 1, and 2x2 keeps its old
@@ -541,7 +541,7 @@ static VOID SbPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 
             *value = status82;
         }
-        /* -- 0x80 / 0x81 ARE "WHICH IRQ AND DMA AM I ON?", AND WE ANSWERED
+        /* 0x80 / 0x81 ARE "WHICH IRQ AND DMA AM I ON?", AND WE ANSWERED
          * **NONE**. (session 59) --------------------------------------------------
          * These fell through to the plain mixer RAM, which is zero until something
          * writes it -- and on a real SB16 a zero here does not mean "default", it
@@ -630,7 +630,7 @@ static VOID SbPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     }
 }
 
-/* --- playback ------------------------------------------------------------- */
+/* playback: */
 /* Pull one sample's worth of bytes through the DMA controller and turn it into a
  * signed 16-bit value. 8-bit SB data is UNSIGNED (0x80 is silence) unless the
  * game said otherwise; 16-bit is signed. Returns the MONO fold (the average, as it
@@ -771,7 +771,7 @@ static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isSter
             continue;
         }
 
-        /* -- [CAUTION] THE ACK GATE. DO NOT ENTER THE NEXT BLOCK UNTIL THE GUEST HAS
+        /* [CAUTION] THE ACK GATE. DO NOT ENTER THE NEXT BLOCK UNTIL THE GUEST HAS
          * ACKNOWLEDGED THE LAST ONE. ---------------------------------------------
          * Straight from VDMSound (SBCompatCtl.cpp HandleTransfer):
          *     // On SB16: if the last IRQ was not acknowledged, don't process any bytes
@@ -1063,7 +1063,7 @@ UINT32 VddSbRenderStereo(PSB_STATE state, INT16 *output, UINT32 frames)
     return SbRender(state, output, frames, AUDIO_STEREO);
 }
 
-/* --- lifecycle ------------------------------------------------------------ */
+/* lifecycle: */
 VOID VddSbReset(PVOID context)
 {
     PSB_STATE state = (PSB_STATE)context;

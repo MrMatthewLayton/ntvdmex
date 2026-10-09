@@ -106,7 +106,7 @@
 /* A real-mode far pointer as a Move offset: low word = offset, high word = segment. */
 #define DOS_XMS_FAR_SEGMENT_SHIFT               16
 
-/* --- fn 0Bh: move a block -------------------------------------------------- *
+/* fn 0Bh: move a block:
  * Copies move->Length bytes from the source endpoint to the destination. An
  * endpoint with handle 0 is conventional memory: its offset is a real-mode far
  * pointer (low word = offset, high word = segment) resolved against
@@ -170,7 +170,7 @@ typedef struct _DOS_XMS_MOVE
 
 typedef const DOS_XMS_MOVE *PCDOS_XMS_MOVE;
 
-/* --- bring-up -------------------------------------------------------------- */
+/* bring-up: */
 
 static inline VOID DosXmsInitialize(
     _Out_ PDOS_XMS_STATE state,
@@ -221,7 +221,7 @@ static inline PDOS_XMS_HANDLE DosXmsGetHandle(_In_ PDOS_XMS_STATE state, _In_ WO
     return &state->Handles[handle - DOS_XMS_FIRST_HANDLE];
 }
 
-/* --- fn 08h: query free extended memory ------------------------------------ *
+/* fn 08h: query free extended memory:
  * Returns the largest free block (KB) and the total free (KB). With a single
  * pool the largest free block is the whole remaining pool.
  */
@@ -239,7 +239,7 @@ static inline VOID DosXmsQueryFreeMemory(
         *totalKb   = freeKb;
 }
 
-/* --- fn 09h: allocate an EMB of `kilobytes` KB ----------------------------- *
+/* fn 09h: allocate an EMB of `kilobytes` KB:
  * On success returns TRUE and *newHandle = the new handle (1-based). On failure
  * returns FALSE and *errorCode = an XMS error code. A 0-KB request is legal (an
  * empty block to be grown later by Reallocate).
@@ -298,7 +298,7 @@ static inline BOOL DosXmsAllocate(
     return TRUE;
 }
 
-/* --- fn 0Ah: free an EMB --------------------------------------------------- *
+/* fn 0Ah: free an EMB:
  * Fails if the block is still locked.
  */
 static inline BOOL DosXmsFree(
@@ -335,7 +335,7 @@ static inline BOOL DosXmsFree(
     return TRUE;
 }
 
-/* --- fn 0Fh: reallocate an EMB to `newKb` KB ------------------------------- *
+/* fn 0Fh: reallocate an EMB to `newKb` KB:
  * Preserves min(old,new) bytes of content. Fails if the block is locked.
  */
 static inline BOOL DosXmsReallocate(
@@ -405,7 +405,7 @@ static inline BOOL DosXmsReallocate(
     return TRUE;
 }
 
-/* --- fn 0Eh: get EMB handle information ------------------------------------ */
+/* fn 0Eh: get EMB handle information: */
 static inline BOOL DosXmsGetHandleInformation(
     _In_ PCDOS_XMS_STATE state,
     _In_ WORD handle,
@@ -445,7 +445,7 @@ static inline BOOL DosXmsGetHandleInformation(
     return TRUE;
 }
 
-/* --- fn 0Ch / 0Dh: lock / unlock an EMB ------------------------------------ *
+/* fn 0Ch / 0Dh: lock / unlock an EMB:
  * Lock pins the block and returns its 32-bit linear address. Under our model
  * the EMB lives on the host heap, so the "linear address" is the host pointer
  * truncated to 32 bits -- meaningful only to a protected-mode/DPMI client that

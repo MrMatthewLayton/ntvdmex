@@ -48,7 +48,7 @@ DWORD    g_Irq1AsyncInjected;        /* IRQ1s placed on the ASYNC path (see abov
 DWORD          g_IrqRaisedAny = 0;
 DWORD          g_QiBits       = 0;
 INT            g_QiKeysAsync = 0;   /* opt-in: async-deliver IRQ1 (see HostIrqSink) */
-/* -- [CAUTION] ONE THREAD MAY OWN THE GUEST'S CONTEXT AT A TIME, AND UNTIL THE COURIER
+/* [CAUTION] ONE THREAD MAY OWN THE GUEST'S CONTEXT AT A TIME, AND UNTIL THE COURIER
  * THERE WAS ONLY EVER ONE. AsyncInjectIrq() reads the context, computes an IRET
  * frame from it and writes it back; two threads doing that concurrently would each
  * build a frame from a context the other had already superseded, and the two frames
@@ -549,7 +549,7 @@ INT AsyncInjectIrq(UINT irq)
 
     eflags = context.EFlags;
     cs  = context.SegCs & WORD_MASK;
-    /* -- THE OBSERVATION PASS. See AsyncSiteNew(). Protected mode only: in V86 the
+    /* THE OBSERVATION PASS. See AsyncSiteNew(). Protected mode only: in V86 the
      * guest's EIP wanders over the whole real-mode image and would fill the table with
      * noise, burying the one site this exists to catch.
      */
@@ -672,7 +672,7 @@ INT AsyncInjectIrq(UINT irq)
             lineCursor = LogPut(lineCursor, " SS:ESP=0x"); lineCursor = LogHex(lineCursor, (DWORD)g_AsyncPmSs);
             lineCursor = LogPut(lineCursor, ":0x");        lineCursor = LogHex(lineCursor, g_AsyncPmEsp);
             lineCursor = LogPut(lineCursor, " efl=0x");    lineCursor = LogHex(lineCursor, g_AsyncPmEflags);
-            /* -- WHAT CODE WAS INTERRUPTED. A timer injection reports WHERE the guest
+            /* WHAT CODE WAS INTERRUPTED. A timer injection reports WHERE the guest
              * was; when the guest is STUCK, where it was is the whole question, and the
              * address alone cannot answer it -- a spin on a memory flag, a spin on a
              * port and a spin waiting for an interrupt all look identical as a number.
@@ -961,7 +961,7 @@ VOID HostIrqSink(PVOID context, BYTE irq)
          *   Doom holds its own ISR, in which case the answer is the cooperative PM-loop
          *   path (which needs no suspend at all), not the asynchronous one.
          */
-        /* -- [CAUTION] ONE ATTEMPT PER SYNC IS RIGHT FOR A PM CLIENT AND WRONG FOR A V86 GUEST.
+        /* [CAUTION] ONE ATTEMPT PER SYNC IS RIGHT FOR A PM CLIENT AND WRONG FOR A V86 GUEST.
          * The throttle above was introduced for DOOM, whose music driver programs the
          * 8254 at 16 kHz: VddPitAddClocks then raises 800 times for a single 50 ms
          * catch-up gap, each answered with a full SuspendThread round trip inside this
@@ -1001,7 +1001,7 @@ VOID HostIrqSink(PVOID context, BYTE irq)
          * experiment, the keyboard yield and its refuted variants) moved with the
          * code.
          */
-        /* -- HAND ANY STILL-PENDING TICK TO THE COURIER. The one attempt above is
+        /* HAND ANY STILL-PENDING TICK TO THE COURIER. The one attempt above is
          * all this site can afford (see the long note), and it is exactly the
          * attempt a pending KEY takes for itself. Signalling costs a SetEvent on an
          * already-signalled auto-reset event in the common case, which is a few
@@ -1351,7 +1351,7 @@ INT V86DeliverDeviceIrq(volatile BYTE *tib)
           if (PeekWord(IVT_SEGMENT_ADDRESS(vector)) == DOS_HDLR_SEG
               && PeekWord(IVT_OFFSET_ADDRESS(vector)) == DOS_IRET_STUB_OFF)
           {
-              /* -- s92 (#239): UNHOOKED IN REAL MODE IS NOT UNHOOKED. A DPMI client that
+              /* s92 (#239): UNHOOKED IN REAL MODE IS NOT UNHOOKED. A DPMI client that
                * installed a PROTECTED-MODE handler for the line owns it whatever mode
                * the CPU is in (DPMI 0.9: a hardware interrupt is passed to the PM
                * handler if there is one). ZAR hooks IRQ5 only in PM; while its start-up

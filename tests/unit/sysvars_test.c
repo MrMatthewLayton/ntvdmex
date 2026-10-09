@@ -185,7 +185,7 @@ INT main(VOID)
 
     printf("== INT 21h AH=52h List of Lists (dos_sysvars.h) -- decoded from 6.22\n");
 
-    /* -- THE FIELD OFFSETS. Each check reads the oracle's own bytes at the
+    /* THE FIELD OFFSETS. Each check reads the oracle's own bytes at the
      * offset our header declares and asserts the value we decoded. If an offset
      * is wrong, the value read there will not be the one 6.22 reported.
      */
@@ -217,7 +217,7 @@ INT main(VOID)
     SysVarsTestExpect("NUL header is 18 bytes", DOS_SYSVARS_NUL_LEN, SYSVARS_TEST_NUL_LEN);
     SysVarsTestExpect("SysVars proper is 0x34 bytes", DOS_SYSVARS_NUL_END, SYSVARS_TEST_NUL_END);
 
-    /* -- THE DPB. Its length is a MEASUREMENT, not a recollection: 6.22's first
+    /* THE DPB. Its length is a MEASUREMENT, not a recollection: 6.22's first
      * DPB sits at 0116:136A and its own next-pointer says 0116:138B.
      */
     SysVarsTestExpect("DPB next pointer = 0x138B",
@@ -242,13 +242,13 @@ INT main(VOID)
      */
     SysVarsTestExpect("the next DPB is drive 1 (B:)", g_OracleDpb[DOS_DPB_LEN + DOS_DPB_DRIVE], SYSVARS_TEST_DRIVE_B);
 
-    /* -- THE CDS. 'B:\' began exactly 88 bytes after 'A:\' in the dump. */
+    /* THE CDS. 'B:\' began exactly 88 bytes after 'A:\' in the dump. */
     SysVarsTestExpect("CDS_LEN = 88", DOS_CDS_LEN, SYSVARS_TEST_CDS_LEN);
     SysVarsTestExpect("CDS flags at +0x43", DOS_CDS_FLAGS, SYSVARS_TEST_CDS_FLAGS);
     SysVarsTestExpect("CDS DPB pointer at +0x45", DOS_CDS_DPB, SYSVARS_TEST_CDS_DPB);
     SysVarsTestExpect("CDS backslash offset field at +0x4F", DOS_CDS_SLASH, SYSVARS_TEST_CDS_SLASH);
 
-    /* -- AND WHAT WE BUILD MUST MATCH THAT SHAPE. */
+    /* AND WHAT WE BUILD MUST MATCH THAT SHAPE. */
     memset(buffer, SYSVARS_TEST_FILL, sizeof(buffer));
     DosCdsBuild(buffer, SYSVARS_TEST_DRIVE_C /* C: */, DOS_CDS_FLAG_PHYSICAL, SYSVARS_TEST_DPB_PAIR_SEGMENT, SYSVARS_TEST_DPB_PAIR_OFFSET);
     ++g_Checks;
@@ -287,7 +287,7 @@ INT main(VOID)
     SysVarsTestExpect("built DPB: free count is FFFF, never a number we did not count",
                       SysVarsTestWordAt(buffer + DOS_DPB_FREE_COUNT), DOS_DPB_FREE_COUNT_UNKNOWN);
 
-    /* -- #48: THE DERIVED FAT LAYOUT REPRODUCES 6.22's OWN FLOPPY DPB, ALL 33 BYTES.
+    /* #48: THE DERIVED FAT LAYOUT REPRODUCES 6.22's OWN FLOPPY DPB, ALL 33 BYTES.
      * Fed only what a 1.44M floppy's GetDiskFreeSpace + FORMAT's fixed choices give
      * (512 B/sector, 1 sector/cluster, 224 root entries, highest cluster 2848, media
      * F0) plus the oracle's own pointers (device 0070:006B, next 0116:138B), the
@@ -339,7 +339,7 @@ INT main(VOID)
         SysVarsTestExpect("bytes/sector 0 is taken as 512 (the floppy again: data start 33)", dataStart, SYSVARS_TEST_DATA_START);
     }
 
-    /* -- #48: THE DEVICE CHAIN. Order and stride are MEASURED (6.22: CON 0070:0023,
+    /* #48: THE DEVICE CHAIN. Order and stride are MEASURED (6.22: CON 0070:0023,
      * AUX :0035, PRN :0047, CLOCK$ :0059, the block driver :006B -- 18 bytes apart);
      * the attribute words are RBIL's and are not (p_devchn.asm is the check).
      */
@@ -470,7 +470,7 @@ INT main(VOID)
                       DOS_UMBHEAD_OFF, SYSVARS_TEST_UMB_HEAD);
     SysVarsTestExpect("...and 0xFFFF there means NO block is upper (6.22's own value)",
                       DOS_UMBHEAD_NONE, SYSVARS_TEST_UNKNOWN);
-    /* -- s81 (#47, MEM /C): 0x8C IS NOT "A FIXED ADDRESS BESIDE SysVars". It is
+    /* s81 (#47, MEM /C): 0x8C IS NOT "A FIXED ADDRESS BESIDE SysVars". It is
      * SysVars+0x66, because 6.22 keeps SysVars at offset 0x26 of its segment -- the
      * evidence dump above says so. MEM /C reads the same word RELATIVELY, and with
      * SysVars at 0x90 it got the first MCB's reserved bytes (0000) instead.
@@ -486,7 +486,7 @@ INT main(VOID)
         UINT sysVarsEnd = DOS_SYSVARS_SEG * SYSVARS_TEST_PARAGRAPH + DOS_SYSVARS_OFF + DOS_SYSVARS_LEN;
         UINT sdaStart = DOS_SDA_SEG * SYSVARS_TEST_PARAGRAPH + DOS_SDA_OFF;
         UINT sdaEnd = sdaStart + DOS_SDA_LEN;
-        /* -- #207: SysVars' SEGMENT LIES BELOW THE FIRST MCB, AS ON 6.22 (0116 < 0253).
+        /* #207: SysVars' SEGMENT LIES BELOW THE FIRST MCB, AS ON 6.22 (0116 < 0253).
          * MEM /D prints "MSDOS System Data" = SysVars seg .. first MCB; with the chain
          * at 0x5F that was 0x5F - 0x72 paragraphs, printed as 4,294,96x. Every byte of
          * SysVars (from its -2 word) and of the SDA must sit below the first MCB header.

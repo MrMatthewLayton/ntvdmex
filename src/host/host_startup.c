@@ -2,29 +2,20 @@
  *
  * Start-up: WinMain's steps -- configuring, registering the VDM, loading the program, building DOS, attaching the devices, starting the guest.
  *
- * Part of the host's single translation unit: #included by main.c.
+ * Its own translation unit (#335): declared in host_startup.h.
  *
  *
  *
  * SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Matthew Layton
  */
+#include "host_startup.h"
 #include "host_state.h"
-#include "log.h"
 #include "dos_ctab.h"
 #include "bios_kbdact.h"
 #include "dos_auxprn.h"
-#include "ne.h"
-#include "wow32.h"
-#include "wowanchors.h"
-#include "wowsched.h"
-#include "wowcall.h"
-#include "wowmsg.h"
-#include "wowres.h"
 #include "wowwin.h"
-#include "wowgdi.h"
 #include "wowuser.h"
-#include "host_startup.h"
 #include "main.h"
 #include "host_audio.h"
 #include "host_bios.h"
@@ -43,6 +34,322 @@
 #include "host_window.h"
 #include "host_wow.h"
 
+/* LOG_PATH now lives in log.h -- see the note there. */
+/* Both are written by the runner and READ by us, so they are cfg, not out. */
+#define TARGET_PATH                 CFG_("target.txt")
+
+/* A DOS shell to run when NOTHING named a program. NOT a target: target.txt names THE
+ * test and is consulted first; this is the last resort. See the STAGE2 block.
+ */
+#define SHELL_PATH                  CFG_("shell.txt")
+
+/* #208: present = load a program started from Windows directly (the pre-#208 way)
+ * instead of handing it to XP's COMMAND.COM. An A/B switch, not a setting.
+ */
+#define DIRECTLAUNCH_FLAG           CFG_("directlaunch.flag")
+
+/* Opt-in screenshot flag. Lives on the SMB SHARE folder so the remote driver can
+ * toggle it (create it before a GRAPHICAL test, remove it otherwise). Non-graphical
+ * tests (selftest/dpmitest) then never touch the self-capture path -- keeping the
+ * common case off the capture code entirely.
+ */
+#define CAPTURE_FLAG                CFG_("capture.flag")
+
+/* Mode-Y de-interleave tuning; see modey_flush() in vdd_video.c. Contents = the run
+ * coalescing slack in dwords. Absent = the built-in default.
+ */
+#define MODEY_PATH                  CFG_("modey.txt")
+
+/* A hex VRAM byte offset. Every planar write to it is recorded with the registers
+ * that produced it and the guest CS:IP -- see the watchpoint in vdd_video.c.
+ */
+#define VWATCH_PATH                 CFG_("vwatch.txt")
+
+/* Per-plane backing for mode Y is ON by default -- see the MODE-Y PLANE BACKING block.
+ * This file DISABLES it and falls back to the de-interleave heuristic, which is worth
+ * keeping only because it is what a machine that refuses the remap will use.
+ */
+#define SBDUMP_FLAG                 CFG_("sbdump.flag")
+
+/* North star 2: present = no Gravis UltraSound (no device, no ULTRASND= in the env). */
+#define NOGUS_FLAG                  CFG_(KNOB_FILE_NOGUS)
+
+/* s81: record the audio output (audio_rec.h via AudioWaveRecord*). The flag is the harness's
+ * switch; Tools > Capture > Record Audio will drive the same recorder.
+ */
+#define WAVREC_FLAG                 CFG_("wavrec.flag")
+
+#define WAVREC_PATH                 OUT_("capture_audio.wav")
+
+#define NOREMAP_FLAG                CFG_("noremap.flag")
+
+/* Diagnostic knob: disable the mode-12h A0000 NOACCESS trap. With it off, planar
+ * writes land in the raw aperture instead of the VGA engine, so the PICTURE will
+ * be wrong -- the question it answers is whether the guest EXECUTES AT ALL.
+ * Absent = normal behaviour, so ordinary runs are untouched. Delete after use.
+ */
+#define NOA000_FLAG                 CFG_("noa000.flag")
+
+/* TURN THE PM INT-SITE PATCHER OFF. (s74, diagnostic):
+ * The patcher rewrites `CD nn` -> `C4 C4` in a client's declared code region so a
+ * protected-mode INT becomes a BOP we can service; a raw `CD nn` in PM is the one
+ * fault XP will not reflect. But the region is whatever the CLIENT calls code, and
+ * in a guest that GENERATES tables or code at runtime a stray 0xCD is just data --
+ * which is how this has now broken guests five times (Doom's jump table four, then
+ * heaven7). Present = scan nothing, so a silent death can be A/B'd against the
+ * patcher in one run instead of being argued about. Absent = normal behaviour.
+ *
+ * [CAUTION]: It is a DIAGNOSTIC, not a fix: with it on, a guest that really does execute
+ * `CD nn` in PM dies differently. Judge it on whether the guest gets FURTHER.
+ */
+#define NOPMPATCH_FLAG              CFG_("nopmpatch.flag")
+
+/* DUMP A GUEST LINEAR RANGE AT THE HEADLESS DEADLINE. (s74b, diagnostic):
+ * Contents: two hex numbers, "<linear> <size>". Written to debug\out\memdump.bin while
+ * the guest is still mapped -- the way to READ A PACKED GUEST (heaven7 unpacks itself
+ * into its 0501 block, so its strings and tables exist only in memory). Absent = off.
+ */
+#define MEMDUMP_FLAG                CFG_("memdump.flag")
+
+/* Optional CONTENTS of nopmpatch.flag: a hex byte count. Regions at least that big
+ * are not scanned; smaller ones are patched as usual. Empty = skip every region.
+ * Why a SIZE: DOS/4GW's own PM code region is ~0x5000 bytes of dense, real
+ * `mov ah,N / int 21h`, and it NEEDS patching (a raw CD in PM is the one fault XP
+ * will not reflect). heaven7's is the whole 0x3a000 LE allocation -- code object
+ * AND data object AND everything it generates into them -- and needs not to be.
+ * Size separates the two without naming an address, which changes run to run.
+ */
+/* Mode 12h WITHOUT the A0000 page trap (GH #55). Arming that trap stops the V86
+ * guest running at all -- 10 I/O events in 30s against 22.5 MILLION with it off.
+ * But we do not actually need it: in mode 12h QuickBASIC reprograms a VGA
+ * register via OUT between pixels, so the PORT traps alone hand us control
+ * constantly, and the batching interpreter can then run the pixel loop with its
+ * A0000 stores going through the planar engine. This knob keys the interpreter
+ * off "planar mode is active" instead of "the page is protected".
+ */
+#define INTERP12_FLAG               CFG_("interp12.flag")
+
+/* Escape hatch for the planar policy (GH #55): present = go back to the A0000
+ * page trap. Interpreting the guest for the whole time a planar mode is set is
+ * the DEFAULT because the page trap demonstrably freezes the guest on real
+ * hardware; this knob exists so the old path is still one file away.
+ */
+#define P12OFF_FLAG                 CFG_("p12off.flag")
+
+/* North star 1 (s80): present = do NOT interpret mode-Y multi-plane / latch windows,
+ * i.e. go back to the scratch + fan-out approximation. The A/B and rollback lever.
+ */
+#define MYINTERP_OFF_FLAG           CFG_("modeyinterp_off.flag")
+
+/* Present = record the last 64 mode-Y interpreted instructions (s80's crash finder). */
+#define MYRING_FLAG                 CFG_("myring.flag")
+
+/* North star 1 for PROTECTED-mode guests (Doom): present = do not interpret its drawers. */
+#define MYPM_OFF_FLAG               CFG_("modeypm_off.flag")
+
+/* Present = keep the scratch window while a PM guest runs NATIVELY under a multi-plane
+ * mask, so any store its own code makes there is counted (fanN) instead of assumed away.
+ */
+#define MYPM_DETECT_FLAG            CFG_("modeypm_detect.flag")
+
+/* GH #128: opt into the EXPERIMENTAL WOW load probe on a Win16 launch. Absent (the
+ * default) the host still refuses Win16 loudly -- an experiment must never become the
+ * shipped behaviour by accident.
+ */
+#define WOWTRY_FLAG                 CFG_("wowtry.flag")
+
+/* Dev-only: capture the exact OPL register stream a game sends, with timestamps,
+ * so it can be replayed offline through BOTH our synth and a reference core and
+ * the audio diffed. Counting register writes cannot say WHY an instrument sounds
+ * wrong; comparing waveforms from identical input can. Absent = no cost at all.
+ */
+#define OPLTRACE_FLAG               CFG_("opltrace.flag")
+
+#define QIMODE_PATH                 CFG_("qimode.txt")
+
+/* FIXED_NTVDMSTATE ([0x714]) initial value override, hex, up to 8 digits. Absent = 0.
+ * Exists so the rig can try a different starting word without a rebuild -- see the
+ * note at the VdmRegisterWithKernel call for why the word must be INITIALISED at all.
+ */
+#define VDMSTATE_PATH               CFG_("vdmstate.txt")
+
+/* Headless wall-clock cap override, decimal milliseconds, also on the share. The 30 s
+ * default is right for an unattended test that must not wedge the watcher, but an
+ * INTERACTIVE test on the box -- keylog, where a human walks over and presses every key
+ * -- needs minutes, and the default would kill the guest mid-typing. Absent = the
+ * default.
+ */
+#define HEADLESS_MS_PATH            CFG_("headless_ms.txt")
+
+#define AWBUFS_PATH                 CFG_("awbufs.txt")
+
+#define AWFRAMES_PATH               CFG_("awframes.txt")
+
+#define EXECPRIO_PATH               CFG_("execprio.txt")
+
+#define DSPVER_PATH                 CFG_("dspver.txt")
+
+#define SBGATE_PATH                 CFG_("sbgate.txt")
+
+#define PITPACE_PATH                CFG_(KNOB_FILE_PITPACE)
+
+#define PITPRIO_PATH                CFG_("pitprio.txt")
+
+#define PITINJ_PATH                 CFG_("pitinj.txt")
+
+#define UITICK_PATH                 CFG_(KNOB_FILE_UITICK)
+
+/* courier.txt = 0 turns the tick courier off (see TickCourierThread). 1 = as shipped. */
+#define COURIER_PATH                CFG_("courier.txt")
+
+/* llkbd.txt = 1 re-enables the SYSTEM-WIDE low-level keyboard hook. OFF by default --
+ * see InputCaptureSet for why it is the single most dangerous thing this host does.
+ */
+#define LLKBD_PATH                  CFG_("llkbd.txt")
+
+/* HOW LONG A BLOCKED Win16 TASK WAITS. (GH #128, session 43) (Importance = 1):
+ * Milliseconds, decimal; **0 means FOREVER**, which is what a real Win16 task
+ * does and what an INTERACTIVE session needs -- a program sitting in GetMessage
+ * with its window on the desktop is not stuck, it is waiting for the user, and
+ * a host that quits it after six seconds makes it impossible to type into.
+ * Absent = WOWMSG_WAIT_MS, the bound a harness run needs so that a guest which
+ * will never receive anything still lets the run finish.
+ */
+#define WOWIDLE_PATH                CFG_("wowidle.txt")
+
+#define KEYIRQ_PATH                 CFG_("keyirq.txt")
+
+#define MSENS_PATH                  CFG_(KNOB_FILE_MSENS)
+
+/* THE CPU-SPEED CALIBRATION, AS A FILE. (GH #56) (Importance = 1):
+ * Decimal MHz: how fast an UNTHROTTLED host looks to a DOS program on THIS box.
+ * Every speed on the menu is a fraction of it, so it is the one number that makes
+ * "33 MHz" mean 33 MHz here, and it is wrong on somebody else's machine by
+ * construction -- a faster box presents more. Measured by cpubench.asm; absent =
+ * CPUSPEED_REF_MHZ_DEFAULT. A knob, so re-calibrating is a run rather than a build.
+ */
+#define CPUREF_PATH                 CFG_("cpuref.txt")
+
+/* Decimal index into g_CpuSpeedMhz, overriding the registry for one run. This is how
+ * the rig sweeps every speed in a single batch without touching HKCU.
+ */
+#define CPUSPD_PATH                 CFG_(KNOB_FILE_CPUSPD)
+
+/* Throttle granularity (target run/hold period, ms). 0/absent = auto-detect. */
+#define CPUGRAN_PATH                CFG_("cpugran.txt")
+
+/* cpuaff.txt = 1 -> pin the guest to a core of its own (see CpuAffinityApply). */
+#define CPUAFF_PATH                 CFG_("cpuaff.txt")
+
+#define DOSVER_PATH                 CFG_(KNOB_FILE_DOSVER)
+
+/* INT 21h AH=53h's private AL sub-functions. A knob because the measured values are
+ * measured IN A CONTEXT (a probe whose stdout was redirected) and at least AL=5 is
+ * suspected of depending on it -- see dos_int21.c. One row per line:
+ *     <AL hex> <AX hex> <CF 0|1>        e.g.  05 5300 0
+ * `;` or `#` starts a comment; absent rows keep the built-in measured default.
+ */
+#define INT53_PATH                  CFG_("int53.txt")
+
+/* Extra guest environment variables, one NAME=VALUE per line; '#' comments a line.
+ * See DosEnvBuildWithCard for why this exists -- a DOS program configured through its
+ * environment could not be configured at all before it.
+ */
+#define DOSENV_PATH                 CFG_("dosenv.txt")
+
+#define DOSTRACE_FLAG               CFG_("dostrace.flag")
+
+/* The XMS pool, in KB. Named because SysVars+0x45 must report the SAME
+ * number to MEM.EXE (GH #47) -- two literals would drift.
+ */
+/* #48: THE POOL IS THE MACHINE'S EXTENDED MEMORY LESS THE HMA, AS HIMEM'S IS:
+ * This was 16384 on a machine whose INT 15h AH=88h, CMOS 17h/18h and 30h/31h and
+ * AH=87h address space (dos_extmem.h, 1..16 MB) all say 15360 KB of extended memory:
+ * XMS handed out more memory than the machine has, and SysVars+0x45 reported the
+ * pool, so MEM and AH=88h disagreed (#48). HIMEM on 6.22 reports the extended memory
+ * minus the 64 KB HMA it keeps for itself -- the oracle's MEM: total 15,232K, XMS free
+ * 15,168K (runs/s81_mem/oracle_memd.txt). Derived from CMOS_EXTENDED_KB so the four views
+ * (88h, CMOS, SysVars+0x45, XMS) are one number and cannot drift again.
+ *
+ * [CAUTION]: AN OBSERVABLE CHANGE: XMS AH=08h now says 15296 KB, 1088 KB less than before. No
+ * oracle pins the old figure (xms-ems.md: 08h's size is per machine, abstained), and
+ * DPMI memory does not come from this pool -- but every XMS client sees it.
+ */
+#define XMS_HMA_KB                  64
+
+#define XMS_POOL_KB                 (CMOS_EXTENDED_KB - XMS_HMA_KB)     /* 15296 */
+
+#define DPMI_PMRET_BOP              0x56
+
+/* INT 31h 0306 RAW MODE SWITCH (Doom/DOS/4GW needs it -- it tests CF from 0306 and
+ * `jmp`s to its abort path when the call fails, which is exactly where it died).
+ * Spec (DPMI 1.0 0306): returns BX:CX = real-to-protected entry, SI:(E)DI =
+ * protected-to-real entry. Both are entered by FAR JMP -- not call -- with
+ *   AX = new DS, CX = new ES, DX = new SS, (E)BX = new (E)SP,
+ *   SI = new CS, (E)DI = new (E)IP
+ * (E)BP is preserved across the switch; FS/GS read 0 afterwards; the other GPRs are
+ * undefined. So each entry is just a BOP the host traps and completes by rewriting
+ * the CONTEXT -- there is no return address to honour, which is why a FAR JMP is
+ * safe. NB offset 0x58 is DOS_IRET_STUB_OFF and BOP 0x57 is DPMI_FAULT_BOP; these
+ * take the next free slots in both namespaces.
+ */
+#define DPMI_RAW2PM_BOP             0x58                                /* Real -> protected (entered in V86) */
+
+#define DPMI_RAW2RM_BOP             0x59                                /* Protected -> real (entered in PM) */
+
+/* EMS (M4): the LIM page frame is a 64KB RAM window in the UMA. VdmMapEmsFrame
+ * scans the conventional page-frame segments AFTER VdmInitialize for a free 64KB
+ * hole and maps it there; g_EmsFrameLinear holds the linear base actually chosen
+ * (0 => none found, EMS unavailable). The guest learns the segment via AH=41.
+ */
+#define EMS_POOL_PAGES              512                                 /* 512 * 16KB = 8MB of EMS */
+
+/* "THERE IS NO MOUSE ON THIS MACHINE":
+ * INT 33h AX=0000h answers AX=0 and every other function is left alone, which is
+ * what a DOS program sees with no driver loaded. It exists to take the mouse --
+ * and with it Doom's twice-a-frame DPMI real-mode simulation -- OUT of a run, so
+ * "is that path involved in this crash at all" becomes one measurement instead of
+ * a series of guesses. A configuration, not a debug hack: a machine without a
+ * mouse is a machine a guest has to cope with.
+ */
+#define NOMOUSE_PATH                CFG_("nomouse.flag")
+
+#define TEXTDUMP_PATH               CFG_("textdump.flag")               /* shotNN.txt beside shotNN.bmp */
+
+/* REFLECT DPMI 0300 TO THE GUEST'S OWN REAL-MODE HANDLER -- ON BY DEFAULT (s81).
+ * It was off (simintrefl.flag to enable) because it wedged ZAR waiting on an SB
+ * completion the nested V86 call never delivered. s81 fixed that, and the spec says
+ * 0300 runs the real-mode handler, so it is on; simintrefl_off.flag is the opt-out.
+ * - #247: "on" now means EVERY vector -- our stubs too -- runs from the IVT (RmcsSimIntRoute
+ *   in dpmi_rmcs.h). The flag restores the pre-#247 ROUTING: 21h/33h/10h host-side,
+ *   everything else not run. (Not the pre-#247 marshalling: the full register write-back
+ *   and the INT 21h carry stay fixed either way.) The rig's rollback lever for the routing.
+ */
+#define SIMINTREFL_OFF_FLAG         CFG_("simintrefl_off.flag")
+
+#define LIVEHB_FLAG                 CFG_("livehb.flag")
+
+#define PITLATCH_FLAG               CFG_("pitlatch.flag")
+
+#define CPU_REFERENCE_MHZ_MAX_U     100000u
+
+#define CPU_REFERENCE_MHZ_MIN_U     1u
+
+#define WOW_KRNL386_ENTRY_AX        0x4B4F                              /* 'OK': what krnl386 expects in AX at entry */
+
+#define FILE_TYPE_NOT_ASKED_U       0xFFFFFFFFu                         /* The handle report: no handle to ask about */
+
+#define MODEY_GAP_MAX_U             65536u
+
+#define OS_VERSION_NOT_NT_U         0x80000000u /* GetVersion: the high bit is set on Windows 9x */
+
+/* The planted code fits its slots in the DOS-resident block (dos_layout.h). */
+typedef CHAR DOS_AUXPRN_FITS[(sizeof(g_DosAuxPrnCode) <= DOS_AUXPRN_LEN) ? 1 : -1];
+
+typedef CHAR BIOS_KBDACT_FITS[(sizeof(g_BiosKeyboardActionCode) <= DOS_KBDACT_LEN
+                               && DOS_AUXPRN_OFF + DOS_AUXPRN_LEN <= DOS_KBDACT_OFF
+                               && DOS_KBDACT_OFF + DOS_KBDACT_LEN <= DOS_GENSTUB_OFF
+                               && DOS_GENSTUB_OFF + DOS_GENSTUB_N * DOS_GENSTUB_SIZE <= DOS_CTAB_END) ? 1 : -1];
 
 /* PACE THE PIT:
  * HostPitSync() advances the emulated 8254 by however much wall-clock has elapsed
@@ -74,324 +381,15 @@
  */
 typedef MMRESULT (WINAPI *PFN_TIME_BEGIN_PERIOD)(UINT);
 
-/* LOG_PATH now lives in log.h -- see the note there. */
-/* Both are written by the runner and READ by us, so they are cfg, not out. */
-#define TARGET_PATH         CFG_("target.txt")
-
-/* A DOS shell to run when NOTHING named a program. NOT a target: target.txt names THE
- * test and is consulted first; this is the last resort. See the STAGE2 block.
- */
-#define SHELL_PATH          CFG_("shell.txt")
-
-/* #208: present = load a program started from Windows directly (the pre-#208 way)
- * instead of handing it to XP's COMMAND.COM. An A/B switch, not a setting.
- */
-#define DIRECTLAUNCH_FLAG   CFG_("directlaunch.flag")
-
-/* Opt-in screenshot flag. Lives on the SMB SHARE folder so the remote driver can
- * toggle it (create it before a GRAPHICAL test, remove it otherwise). Non-graphical
- * tests (selftest/dpmitest) then never touch the self-capture path -- keeping the
- * common case off the capture code entirely.
- */
-#define CAPTURE_FLAG        CFG_("capture.flag")
-
-/* Mode-Y de-interleave tuning; see modey_flush() in vdd_video.c. Contents = the run
- * coalescing slack in dwords. Absent = the built-in default.
- */
-#define MODEY_PATH          CFG_("modey.txt")
-
-/* A hex VRAM byte offset. Every planar write to it is recorded with the registers
- * that produced it and the guest CS:IP -- see the watchpoint in vdd_video.c.
- */
-#define VWATCH_PATH         CFG_("vwatch.txt")
-
-/* Per-plane backing for mode Y is ON by default -- see the MODE-Y PLANE BACKING block.
- * This file DISABLES it and falls back to the de-interleave heuristic, which is worth
- * keeping only because it is what a machine that refuses the remap will use.
- */
-#define SBDUMP_FLAG         CFG_("sbdump.flag")
-
-/* North star 2: present = no Gravis UltraSound (no device, no ULTRASND= in the env). */
-#define NOGUS_FLAG          CFG_(KNOB_FILE_NOGUS)
-
-/* s81: record the audio output (audio_rec.h via AudioWaveRecord*). The flag is the harness's
- * switch; Tools > Capture > Record Audio will drive the same recorder.
- */
-#define WAVREC_FLAG         CFG_("wavrec.flag")
-
-#define WAVREC_PATH         OUT_("capture_audio.wav")
-
-#define NOREMAP_FLAG        CFG_("noremap.flag")
-
-/* Diagnostic knob: disable the mode-12h A0000 NOACCESS trap. With it off, planar
- * writes land in the raw aperture instead of the VGA engine, so the PICTURE will
- * be wrong -- the question it answers is whether the guest EXECUTES AT ALL.
- * Absent = normal behaviour, so ordinary runs are untouched. Delete after use.
- */
-#define NOA000_FLAG         CFG_("noa000.flag")
-
-/* TURN THE PM INT-SITE PATCHER OFF. (s74, diagnostic):
- * The patcher rewrites `CD nn` -> `C4 C4` in a client's declared code region so a
- * protected-mode INT becomes a BOP we can service; a raw `CD nn` in PM is the one
- * fault XP will not reflect. But the region is whatever the CLIENT calls code, and
- * in a guest that GENERATES tables or code at runtime a stray 0xCD is just data --
- * which is how this has now broken guests five times (Doom's jump table four, then
- * heaven7). Present = scan nothing, so a silent death can be A/B'd against the
- * patcher in one run instead of being argued about. Absent = normal behaviour.
- *
- * [CAUTION]: It is a DIAGNOSTIC, not a fix: with it on, a guest that really does execute
- * `CD nn` in PM dies differently. Judge it on whether the guest gets FURTHER.
- */
-#define NOPMPATCH_FLAG      CFG_("nopmpatch.flag")
-
-/* DUMP A GUEST LINEAR RANGE AT THE HEADLESS DEADLINE. (s74b, diagnostic):
- * Contents: two hex numbers, "<linear> <size>". Written to debug\out\memdump.bin while
- * the guest is still mapped -- the way to READ A PACKED GUEST (heaven7 unpacks itself
- * into its 0501 block, so its strings and tables exist only in memory). Absent = off.
- */
-#define MEMDUMP_FLAG        CFG_("memdump.flag")
-
-/* Optional CONTENTS of nopmpatch.flag: a hex byte count. Regions at least that big
- * are not scanned; smaller ones are patched as usual. Empty = skip every region.
- * Why a SIZE: DOS/4GW's own PM code region is ~0x5000 bytes of dense, real
- * `mov ah,N / int 21h`, and it NEEDS patching (a raw CD in PM is the one fault XP
- * will not reflect). heaven7's is the whole 0x3a000 LE allocation -- code object
- * AND data object AND everything it generates into them -- and needs not to be.
- * Size separates the two without naming an address, which changes run to run.
- */
-/* Mode 12h WITHOUT the A0000 page trap (GH #55). Arming that trap stops the V86
- * guest running at all -- 10 I/O events in 30s against 22.5 MILLION with it off.
- * But we do not actually need it: in mode 12h QuickBASIC reprograms a VGA
- * register via OUT between pixels, so the PORT traps alone hand us control
- * constantly, and the batching interpreter can then run the pixel loop with its
- * A0000 stores going through the planar engine. This knob keys the interpreter
- * off "planar mode is active" instead of "the page is protected".
- */
-#define INTERP12_FLAG       CFG_("interp12.flag")
-
-/* Escape hatch for the planar policy (GH #55): present = go back to the A0000
- * page trap. Interpreting the guest for the whole time a planar mode is set is
- * the DEFAULT because the page trap demonstrably freezes the guest on real
- * hardware; this knob exists so the old path is still one file away.
- */
-#define P12OFF_FLAG         CFG_("p12off.flag")
-
-/* North star 1 (s80): present = do NOT interpret mode-Y multi-plane / latch windows,
- * i.e. go back to the scratch + fan-out approximation. The A/B and rollback lever.
- */
-#define MYINTERP_OFF_FLAG   CFG_("modeyinterp_off.flag")
-
-/* Present = record the last 64 mode-Y interpreted instructions (s80's crash finder). */
-#define MYRING_FLAG         CFG_("myring.flag")
-
-/* North star 1 for PROTECTED-mode guests (Doom): present = do not interpret its drawers. */
-#define MYPM_OFF_FLAG       CFG_("modeypm_off.flag")
-
-/* Present = keep the scratch window while a PM guest runs NATIVELY under a multi-plane
- * mask, so any store its own code makes there is counted (fanN) instead of assumed away.
- */
-#define MYPM_DETECT_FLAG    CFG_("modeypm_detect.flag")
-
-/* GH #128: opt into the EXPERIMENTAL WOW load probe on a Win16 launch. Absent (the
- * default) the host still refuses Win16 loudly -- an experiment must never become the
- * shipped behaviour by accident.
- */
-#define WOWTRY_FLAG         CFG_("wowtry.flag")
-
-/* Dev-only: capture the exact OPL register stream a game sends, with timestamps,
- * so it can be replayed offline through BOTH our synth and a reference core and
- * the audio diffed. Counting register writes cannot say WHY an instrument sounds
- * wrong; comparing waveforms from identical input can. Absent = no cost at all.
- */
-#define OPLTRACE_FLAG       CFG_("opltrace.flag")
-
-#define QIMODE_PATH         CFG_("qimode.txt")
-
-/* FIXED_NTVDMSTATE ([0x714]) initial value override, hex, up to 8 digits. Absent = 0.
- * Exists so the rig can try a different starting word without a rebuild -- see the
- * note at the VdmRegisterWithKernel call for why the word must be INITIALISED at all.
- */
-#define VDMSTATE_PATH       CFG_("vdmstate.txt")
-
-/* Headless wall-clock cap override, decimal milliseconds, also on the share. The 30 s
- * default is right for an unattended test that must not wedge the watcher, but an
- * INTERACTIVE test on the box -- keylog, where a human walks over and presses every key
- * -- needs minutes, and the default would kill the guest mid-typing. Absent = the
- * default.
- */
-#define HEADLESS_MS_PATH    CFG_("headless_ms.txt")
-
-#define AWBUFS_PATH         CFG_("awbufs.txt")
-
-#define AWFRAMES_PATH       CFG_("awframes.txt")
-
-#define EXECPRIO_PATH       CFG_("execprio.txt")
-
-#define DSPVER_PATH         CFG_("dspver.txt")
-
-#define SBGATE_PATH         CFG_("sbgate.txt")
-
-#define PITPACE_PATH        CFG_(KNOB_FILE_PITPACE)
-
-#define PITPRIO_PATH        CFG_("pitprio.txt")
-
-#define PITINJ_PATH         CFG_("pitinj.txt")
-
-#define UITICK_PATH         CFG_(KNOB_FILE_UITICK)
-
-/* courier.txt = 0 turns the tick courier off (see TickCourierThread). 1 = as shipped. */
-#define COURIER_PATH        CFG_("courier.txt")
-
-/* llkbd.txt = 1 re-enables the SYSTEM-WIDE low-level keyboard hook. OFF by default --
- * see InputCaptureSet for why it is the single most dangerous thing this host does.
- */
-#define LLKBD_PATH          CFG_("llkbd.txt")
-
-/* HOW LONG A BLOCKED Win16 TASK WAITS. (GH #128, session 43) (Importance = 1):
- * Milliseconds, decimal; **0 means FOREVER**, which is what a real Win16 task
- * does and what an INTERACTIVE session needs -- a program sitting in GetMessage
- * with its window on the desktop is not stuck, it is waiting for the user, and
- * a host that quits it after six seconds makes it impossible to type into.
- * Absent = WOWMSG_WAIT_MS, the bound a harness run needs so that a guest which
- * will never receive anything still lets the run finish.
- */
-#define WOWIDLE_PATH        CFG_("wowidle.txt")
-
-#define KEYIRQ_PATH         CFG_("keyirq.txt")
-
-#define MSENS_PATH          CFG_(KNOB_FILE_MSENS)
-
-/* THE CPU-SPEED CALIBRATION, AS A FILE. (GH #56) (Importance = 1):
- * Decimal MHz: how fast an UNTHROTTLED host looks to a DOS program on THIS box.
- * Every speed on the menu is a fraction of it, so it is the one number that makes
- * "33 MHz" mean 33 MHz here, and it is wrong on somebody else's machine by
- * construction -- a faster box presents more. Measured by cpubench.asm; absent =
- * CPUSPEED_REF_MHZ_DEFAULT. A knob, so re-calibrating is a run rather than a build.
- */
-#define CPUREF_PATH         CFG_("cpuref.txt")
-
-/* Decimal index into g_CpuSpeedMhz, overriding the registry for one run. This is how
- * the rig sweeps every speed in a single batch without touching HKCU.
- */
-#define CPUSPD_PATH         CFG_(KNOB_FILE_CPUSPD)
-
-/* Throttle granularity (target run/hold period, ms). 0/absent = auto-detect. */
-#define CPUGRAN_PATH        CFG_("cpugran.txt")
-
-/* cpuaff.txt = 1 -> pin the guest to a core of its own (see CpuAffinityApply). */
-#define CPUAFF_PATH         CFG_("cpuaff.txt")
-
-#define DOSVER_PATH         CFG_(KNOB_FILE_DOSVER)
-
-/* INT 21h AH=53h's private AL sub-functions. A knob because the measured values are
- * measured IN A CONTEXT (a probe whose stdout was redirected) and at least AL=5 is
- * suspected of depending on it -- see dos_int21.c. One row per line:
- *     <AL hex> <AX hex> <CF 0|1>        e.g.  05 5300 0
- * `;` or `#` starts a comment; absent rows keep the built-in measured default.
- */
-#define INT53_PATH          CFG_("int53.txt")
-
-/* Extra guest environment variables, one NAME=VALUE per line; '#' comments a line.
- * See DosEnvBuildWithCard for why this exists -- a DOS program configured through its
- * environment could not be configured at all before it.
- */
-#define DOSENV_PATH         CFG_("dosenv.txt")
-
-#define DOSTRACE_FLAG   CFG_("dostrace.flag")
-
-/* The XMS pool, in KB. Named because SysVars+0x45 must report the SAME
- * number to MEM.EXE (GH #47) -- two literals would drift.
- */
-/* #48: THE POOL IS THE MACHINE'S EXTENDED MEMORY LESS THE HMA, AS HIMEM'S IS:
- * This was 16384 on a machine whose INT 15h AH=88h, CMOS 17h/18h and 30h/31h and
- * AH=87h address space (dos_extmem.h, 1..16 MB) all say 15360 KB of extended memory:
- * XMS handed out more memory than the machine has, and SysVars+0x45 reported the
- * pool, so MEM and AH=88h disagreed (#48). HIMEM on 6.22 reports the extended memory
- * minus the 64 KB HMA it keeps for itself -- the oracle's MEM: total 15,232K, XMS free
- * 15,168K (runs/s81_mem/oracle_memd.txt). Derived from CMOS_EXTENDED_KB so the four views
- * (88h, CMOS, SysVars+0x45, XMS) are one number and cannot drift again.
- *
- * [CAUTION]: AN OBSERVABLE CHANGE: XMS AH=08h now says 15296 KB, 1088 KB less than before. No
- * oracle pins the old figure (xms-ems.md: 08h's size is per machine, abstained), and
- * DPMI memory does not come from this pool -- but every XMS client sees it.
- */
-#define XMS_HMA_KB      64
-
-#define XMS_POOL_KB     (CMOS_EXTENDED_KB - XMS_HMA_KB)     /* 15296 */
-
-#define DPMI_PMRET_BOP      0x56
-
-/* INT 31h 0306 RAW MODE SWITCH (Doom/DOS/4GW needs it -- it tests CF from 0306 and
- * `jmp`s to its abort path when the call fails, which is exactly where it died).
- * Spec (DPMI 1.0 0306): returns BX:CX = real-to-protected entry, SI:(E)DI =
- * protected-to-real entry. Both are entered by FAR JMP -- not call -- with
- *   AX = new DS, CX = new ES, DX = new SS, (E)BX = new (E)SP,
- *   SI = new CS, (E)DI = new (E)IP
- * (E)BP is preserved across the switch; FS/GS read 0 afterwards; the other GPRs are
- * undefined. So each entry is just a BOP the host traps and completes by rewriting
- * the CONTEXT -- there is no return address to honour, which is why a FAR JMP is
- * safe. NB offset 0x58 is DOS_IRET_STUB_OFF and BOP 0x57 is DPMI_FAULT_BOP; these
- * take the next free slots in both namespaces.
- */
-#define DPMI_RAW2PM_BOP     0x58    /* Real -> protected (entered in V86) */
-
-#define DPMI_RAW2RM_BOP     0x59    /* Protected -> real (entered in PM) */
-
-/* EMS (M4): the LIM page frame is a 64KB RAM window in the UMA. VdmMapEmsFrame
- * scans the conventional page-frame segments AFTER VdmInitialize for a free 64KB
- * hole and maps it there; g_EmsFrameLinear holds the linear base actually chosen
- * (0 => none found, EMS unavailable). The guest learns the segment via AH=41.
- */
-#define EMS_POOL_PAGES      512     /* 512 * 16KB = 8MB of EMS */
-
-/* "THERE IS NO MOUSE ON THIS MACHINE":
- * INT 33h AX=0000h answers AX=0 and every other function is left alone, which is
- * what a DOS program sees with no driver loaded. It exists to take the mouse --
- * and with it Doom's twice-a-frame DPMI real-mode simulation -- OUT of a run, so
- * "is that path involved in this crash at all" becomes one measurement instead of
- * a series of guesses. A configuration, not a debug hack: a machine without a
- * mouse is a machine a guest has to cope with.
- */
-#define NOMOUSE_PATH    CFG_("nomouse.flag")
-
-#define TEXTDUMP_PATH   CFG_("textdump.flag")   /* shotNN.txt beside shotNN.bmp */
-
-/* -- REFLECT DPMI 0300 TO THE GUEST'S OWN REAL-MODE HANDLER -- ON BY DEFAULT (s81).
- * It was off (simintrefl.flag to enable) because it wedged ZAR waiting on an SB
- * completion the nested V86 call never delivered. s81 fixed that, and the spec says
- * 0300 runs the real-mode handler, so it is on; simintrefl_off.flag is the opt-out.
- * - #247: "on" now means EVERY vector -- our stubs too -- runs from the IVT (RmcsSimIntRoute
- *   in dpmi_rmcs.h). The flag restores the pre-#247 ROUTING: 21h/33h/10h host-side,
- *   everything else not run. (Not the pre-#247 marshalling: the full register write-back
- *   and the INT 21h carry stay fixed either way.) The rig's rollback lever for the routing.
- */
-#define SIMINTREFL_OFF_FLAG     CFG_("simintrefl_off.flag")
-
-#define LIVEHB_FLAG     CFG_("livehb.flag")
-
-#define PITLATCH_FLAG   CFG_("pitlatch.flag")
-
-#define CPU_REFERENCE_MHZ_MAX_U     100000u
-
-#define CPU_REFERENCE_MHZ_MIN_U     1u
-
 enum
 {
     EXTENDER_ARGV0_SAFE_LENGTH = 62, ENVIRONMENT_DUMP_BYTES = 0xC0, ENVIRONMENT_DUMP_LINE = 264, ENVIRONMENT_DUMP_NULS = 2, ENVIRONMENT_DUMP_SKIP = 8, COMMAND_TAIL_DUMP_BYTES = 16, UI_TICK_MS_MAX = 100, MOUSE_SENSITIVITY_MIN = 10, MOUSE_SENSITIVITY_MAX = 1000
 };   /* WinMain: argv[0], the guest dumps, knob ranges */
 
-#define WOW_KRNL386_ENTRY_AX    0x4B4F          /* 'OK': what krnl386 expects in AX at entry */
-
-#define FILE_TYPE_NOT_ASKED_U   0xFFFFFFFFu     /* The handle report: no handle to ask about */
-
 enum
 {
     NT_AWARE_SHELL_BOPS_MIN = 8, ROUTED_PATH_MAX = 120, WOW_COMMAND_DIRECTORY_MAX = 0x10C, SHELL_HEADER_READ = 0x44, COMMAND_COM_LENGTH = 11, STD_HANDLE_REPORTS = 5
 };   /* WinMain's launch path */
-
-#define MODEY_GAP_MAX_U         65536u
-
-#define OS_VERSION_NOT_NT_U     0x80000000u     /* GetVersion: the high bit is set on Windows 9x */
 
 enum
 {
@@ -413,7 +411,7 @@ enum
  */
 static VOID StartupReportVectorWiring(VOID)
 {
-    /* -- s91 (#315): EVERY CLAIMED VECTOR GETS A WAY IN. A claim only reached its device
+    /* s91 (#315): EVERY CLAIMED VECTOR GETS A WAY IN. A claim only reached its device
      * where the host had wired a stub by number (10h 14h 16h 1Ah 08h 2Ah 5Ch), so a
      * third-party driver's claim_int on any other vector -- the SDK promises it --
      * was never delivered. Each such claim now gets a generic stub, and the IVT
@@ -778,7 +776,7 @@ static VOID StartupBuildDriveTables(
          * chain starts at segment 0". It does not. Seventh refutation.
          */
         sysVars[DOS_SYSVARS_OFF + DOS_SYSVARS_BLOCK_DEVICES] = (BYTE)driveCount;
-        /* ---- the device chain. The NUL header is INLINE at +0x22, not a pointer
+        /* the device chain. The NUL header is INLINE at +0x22, not a pointer
          * to one (measured on 6.22). #48: it no longer terminates -- it links to
          * IO.SYS's twelve (CON .. COM4) at DOS_DEV_SEG, in 6.22's order, and the
          * last of those terminates. See DosDeviceChainBuild for what is measured
@@ -811,7 +809,7 @@ static VOID StartupBuildDriveTables(
             *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CLOCK + X86_FAR_POINTER_SEGMENT) = DOS_DEV_SEG;
             *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CON)       = DOS_DEVICE_OFFSET(DOS_DEVICE_CON);
             *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CON + X86_FAR_POINTER_SEGMENT)   = DOS_DEV_SEG; }
-        /* ---- the CDS array. ONE ENTRY PER DRIVE LETTER, LASTDRIVE of them,
+        /* the CDS array. ONE ENTRY PER DRIVE LETTER, LASTDRIVE of them,
          * because it is INDEXED by drive and a walker reads all of them
          * whatever we populate. Entries for drives that exist carry flags
          * 0x4000 (physical) and a pointer to that drive's DPB; the rest are
@@ -862,7 +860,7 @@ static VOID StartupBuildDriveTables(
             *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_CDS + X86_FAR_POINTER_SEGMENT) = DOS_CDS_ARRAY_NONE;
         }
 
-        /* ---- the SYSTEM FILE TABLE: one block, terminated, entries = what our
+        /* the SYSTEM FILE TABLE: one block, terminated, entries = what our
          * INT 21h layer can really open (DOS_MACHINE::fh[]). Same shape the
          * WOW path plants -- see the reserve above for why a DOS guest needs
          * one and why 0000:0000 was worse than useless. The entries are left
@@ -1333,7 +1331,7 @@ static PSTR StartupBuildEnvironment(PSTR cursor, CHAR *programPathBuffer)
           }
       }
 
-      /* -- THE ENVIRONMENT: the four defaults + dosenv.txt + the launcher's LIB/INCLUDE,
+      /* THE ENVIRONMENT: the four defaults + dosenv.txt + the launcher's LIB/INCLUDE,
        * all in the ONE fixed 256-byte block at 0x60. The memory map does not move --
        * see LauncherCompilerVariables for why that matters (a relocated block #GP'd every
        * DOS extender). `extra` is dosenv.txt followed by the compiler vars.
@@ -1346,7 +1344,7 @@ static PSTR StartupBuildEnvironment(PSTR cursor, CHAR *programPathBuffer)
                          if (extraOffset && environmentExtra[extraOffset-1] != '\n')
                              environmentExtra[extraOffset++] = '\n'; }
 
-        /* -- ULTRASND= IS HOW A GUS PROGRAM FINDS THE CARD, AND IT LOOKS BEFORE IT PROBES.
+        /* ULTRASND= IS HOW A GUS PROGRAM FINDS THE CARD, AND IT LOOKS BEFORE IT PROBES.
          * heaven7 never touched a port without it. <base hex>,<DRAM DMA>,<record DMA>,
          * <GF1 IRQ>,<MIDI IRQ> (docs/ref/gus.md section 1) -- the numbers the device was built
          * with, so the string and the card cannot disagree. A dosenv.txt ULTRASND wins.
@@ -1370,7 +1368,7 @@ static PSTR StartupBuildEnvironment(PSTR cursor, CHAR *programPathBuffer)
         DosEnvBuildWithCard(NULL, DOS_ENV_SEG, programPathBuffer[0] ? programPathBuffer : HOST_DEFAULT_PROGRAM_PATH,
                            HOST_DEFAULT_DRIVE_ROOT, &g_SbConfig, environmentExtra[0] ? environmentExtra : NULL);        /* M2.5: env */
       }
-      /* -- READ THE BLOCK BACK OUT OF GUEST MEMORY AND PRINT IT. Not the string we
+      /* READ THE BLOCK BACK OUT OF GUEST MEMORY AND PRINT IT. Not the string we
        * passed in -- the bytes the guest will actually walk, which is a different
        * claim and the only one worth logging. A DOS environment is a run of
        * NUL-terminated strings ended by a double NUL, then a count WORD, then the
@@ -1478,7 +1476,7 @@ static VOID StartupPlantBiosStubs(VOID)
 /* Apply the Settings conventional-memory size (#136), unless the program does not fit under it. */
 static PSTR StartupApplyConventionalKb(PSTR cursor, const DWORD readCount)
 {
-    /* -- #136: HOW MUCH CONVENTIONAL MEMORY THIS MACHINE HAS. Decided here, once, before
+    /* #136: HOW MUCH CONVENTIONAL MEMORY THIS MACHINE HAS. Decided here, once, before
      * the image is laid down: the loader writes the program above the PSP with no
      * bound of its own, and the EBDA (BiosBdaInitializeWithTop, later) is zeroed at the new
      * top -- so a program that does not fit under a small setting would be loaded and
@@ -1802,7 +1800,7 @@ static VOID StartupLoadTitlePath(
     PSTR cursor = *cursorIo;
     DWORD readCount = *readCountIo;
 
-    /* -- AN ABSOLUTE TITLE IS NOT JOINED TO THE DIRECTORY. (GH #131,
+    /* AN ABSOLUTE TITLE IS NOT JOINED TO THE DIRECTORY. (GH #131,
      * session 57) This composed `g_CurrentDirectory + "\" + g_Title` unconditionally, and
      * CSRSS's title for a program named with a full path at a cmd prompt IS
      * that full path -- so `hello.com > out.txt` run in C:\test produced
@@ -2018,7 +2016,7 @@ static VOID StartupTakeCsrssCommand(PSTR *cursorIo, DWORD *errorIo)
         cursor = LogPut(cursor, " taskid=0x");             cursor = LogHex(cursor, g_CommandInfo.TaskId);
         cursor = LogPut(cursor, " codepage=0x");           cursor = LogHex(cursor, g_CommandInfo.CodePage);
         cursor = LogPut(cursor, "\r\n");
-        /* -- THE VDM'S STANDARD HANDLES COME FROM CSRSS, NOT FROM INHERITANCE.
+        /* THE VDM'S STANDARD HANDLES COME FROM CSRSS, NOT FROM INHERITANCE.
          * (GH #131) Measured on the rig: an IFEO-substituted process gets NO
          * inherited handles at all -- GetStdHandle reports FILE_TYPE_UNKNOWN
          * and AttachConsole(ATTACH_PARENT_PROCESS) fails -- so the obvious
@@ -2131,7 +2129,7 @@ static VOID StartupWowSelectorStage(VOID)
  */
 static PSTR StartupCheckInheritedVdmState(PSTR cursor)
 {
-    /* -- [WARNING] FIXED_NTVDMSTATE ([0x714]) IS INHERITED GARBAGE UNTIL SOMEONE WRITES IT.
+    /* [WARNING] FIXED_NTVDMSTATE ([0x714]) IS INHERITED GARBAGE UNTIL SOMEONE WRITES IT.
      * (2026-09-12: "no DOS app runs on the rig" after a REBOOT, host gone in <1 s.)
      * VdmInitialize does not define this word; it holds whatever the machine's
      * real-mode boot left in physical low memory, so it changes PER BOOT. Since the
@@ -2531,7 +2529,7 @@ static VOID StartupLoadTarget(
             ReadFile(thread, tempPath, sizeof(tempPath) - 1, &tempLength, NULL);
             CloseHandle(thread);
             tempPath[tempLength < sizeof(tempPath) ? tempLength : sizeof(tempPath) - 1] = 0;
-            /* -- [CAUTION] A PROGRAM PATH MAY CONTAIN SPACES, AND THIS SPLIT ON THE FIRST ONE.
+            /* [CAUTION] A PROGRAM PATH MAY CONTAIN SPACES, AND THIS SPLIT ON THE FIRST ONE.
              * Every path the rig used to hand us was C:\game\X.EXE or C:\test\X.COM,
              * so "first space starts the arguments" was never wrong -- until the rig
              * moved into the share folder, whose path contains "Documents and
@@ -3245,7 +3243,7 @@ PSTR StartupStartServices(PSTR cursor)
       if (captureWatchdog)
           CloseHandle(captureWatchdog); }
 
-    /* -- THE TICK COURIER. Auto-reset: one signal wakes exactly one pass, and a
+    /* THE TICK COURIER. Auto-reset: one signal wakes exactly one pass, and a
      * signal arriving while it is already awake is not lost -- the pass re-checks
      * g_Irq0Pending anyway. Created even when the courier is knobbed off, so the
      * raise site's SetEvent never has to test two things.
@@ -3294,7 +3292,7 @@ PSTR StartupStartServices(PSTR cursor)
     g_Wave.IsForcedSilent = g_Safe.AudioOut;                 /* s90 #132: SAFE MODE */
     g_Wave.MidiChoice = (INT)(g_Settings.Values[SET_MIDI] < MIDI_ROUTE_COUNT ? g_Settings.Values[SET_MIDI] : 0);  /* #136 */
     AudioWaveStart(&g_Wave, SettingsOutputHz(&g_Settings), HostAudioFill, NULL);
-    /* -- #136: SAY WHICH SYNTH THE MPU-401 PLAYS THROUGH, but only when it was chosen.
+    /* #136: SAY WHICH SYNTH THE MPU-401 PLAYS THROUGH, but only when it was chosen.
      * Host GM (the default) opens device 0 as it always did and logs nothing new.
      */
     if (g_Wave.MidiChoice != MIDI_ROUTE_GM)
@@ -3611,7 +3609,7 @@ VOID StartupLoadTuningKnobs(VOID)
           }
       } }
 
-    /* -- GH #56: the calibration and a one-run speed override, both from the share.
+    /* GH #56: the calibration and a one-run speed override, both from the share.
      *
      * [CAUTION]: THESE RUN BEFORE CpuSpeedRecompute() BELOW, which is the whole point: the
      * duty is computed once from whatever the registry and these two agree on,
@@ -3640,7 +3638,7 @@ VOID StartupLoadTuningKnobs(VOID)
       } }
 
     StartupLoadCpuSpeedKnob();
-    /* -- THE GRANULARITY SLIDER AS A FILE KNOB. cpugran.txt = target period in ms,
+    /* THE GRANULARITY SLIDER AS A FILE KNOB. cpugran.txt = target period in ms,
      * 0 or absent = AUTO (measure the suspend round trip and pick the finest
      * period this box can sustain). See the long note in cpuspeed.h -- this is
      * the lever that decides whether a slow setting is playable or a slideshow,
@@ -3900,7 +3898,7 @@ PSTR StartupAttachDevices(PSTR cursor)
       biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE] = (WORD)(VddLptIsFitted(&g_Comm, 0) ? LPT_DEFAULT_BASE : 0);   /* LPT1 */
       biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE + 1] = 0;
       biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE + 2] = 0; }                         /* LPT2..LPT3: none fitted */
-    /* -- 000E, 0010, 0013 AND THE EBDA, FROM THE FUNCTIONS INT 11h/12h CALL. (#253)
+    /* 000E, 0010, 0013 AND THE EBDA, FROM THE FUNCTIONS INT 11h/12h CALL. (#253)
      * 0040:000E is LPT4 on a PC and the EBDA segment on an AT and later; this block
      * used to zero it as "LPT4: none", which on an AT reads as "no EBDA" -- while
      * INT 12h said 639 KB, i.e. that one exists. bios_bda.h settles it: there is a
@@ -4346,7 +4344,7 @@ VOID StartupBuildDos(
      * PSP = our own, since nothing launched us from inside the VDM. (GH #34)
      */
     DosPspSaveVectors(NULL, DOS_PSP_SEG, DOS_PSP_SEG);
-    /* -- EXTRA ENVIRONMENT VARIABLES FROM dosenv.txt. Read here, next to the block
+    /* EXTRA ENVIRONMENT VARIABLES FROM dosenv.txt. Read here, next to the block
      * being built, so a knob that is absent costs exactly one failed open and the
      * environment is byte-identical to what it has always been.
      */
@@ -4379,7 +4377,7 @@ VOID StartupBuildDos(
     DosInt21SetVersion(machine, (BYTE)g_Settings.Values[SET_DOSMAJ], (BYTE)g_Settings.Values[SET_DOSMIN]);
     /* Two sources, and the second one silently wins -- see the note below the file read. */
     PCSTR dosVersionSource = "HKCU\\Software\\NTVDMEX (Settings dialog)";
-    /* -- THE REPORTED DOS VERSION IS A KNOB, BECAUSE IT IS A LIE THE GUEST CHOOSES.
+    /* THE REPORTED DOS VERSION IS A KNOB, BECAUSE IT IS A LIE THE GUEST CHOOSES.
      * Real DOS ships SETVER for precisely this, and the number is not a fact about
      * us: it is what a particular guest will accept. We default to 6.22 to match the
      * M9 oracle, and XP's OWN COMMAND.COM refuses that outright -- "Incorrect DOS
@@ -4610,7 +4608,7 @@ VOID StartupLoadProgram(
      * - its 8.3 path and arguments fit a DOS command line
      * - cfg\directlaunch.flag is absent (the A/B switch back to direct loading)
      */
-    /* -- #203: WHICH SHELL, DECIDED ONCE. default (XP's own) < Settings' "DOS prompt"
+    /* #203: WHICH SHELL, DECIDED ONCE. default (XP's own) < Settings' "DOS prompt"
      * (HKCU DosPrompt) < cfg\shell.txt -- the file wins, as every file knob does, so
      * the harness is never overridden by whatever was last picked in the dialog. The
      * #208 routing below and the shell load after it both read this one answer; they
@@ -5274,7 +5272,7 @@ INT StartupConfigure(PSTR *cursorIo, CHAR *report, INT *exitCodeOut)
      * 0 = leave at NORMAL (the old behaviour, for an A/B without a rebuild),
      * 2 = HIGHEST.
      */
-    /* -- WHICH DSP VERSION WE CLAIM PICKS THE GUEST'S DRIVER PATH. See vdd_sb.h.
+    /* WHICH DSP VERSION WE CLAIM PICKS THE GUEST'S DRIVER PATH. See vdd_sb.h.
      * dspver.txt holds "major minor" as two decimal numbers, e.g. "2 1" for a
      * Sound Blaster 2.01, which makes DMX skip the mixer-0x82 interrupt gate and
      * use the older 0x48/0x1C auto-init pair instead of the SB16 0xC6 command.

@@ -180,7 +180,7 @@
 #define WOWCALL_ACT_NONE            0
 #define WOWCALL_ACT_EDITTEXT        1   /* ActionArgument = the Win16 hwnd of an EDIT control */
 
-/* -- THE SAVE DIRECTION, AS A CHAIN. (session 44) EM_GETHANDLE has to hand
+/* THE SAVE DIRECTION, AS A CHAIN. (session 44) EM_GETHANDLE has to hand
  * back a block containing the control's CURRENT text, and only the guest's
  * KERNEL can touch the guest's heap -- so it takes three calls, each one
  * issued by the action of the one before:
@@ -210,7 +210,7 @@
  */
 #define WOWCALL_ACT_ENUMNEXT        5
 
-/* -- THE CLIPBOARD BRIDGE (#160). Text crosses in guest GLOBAL memory, which only
+/* THE CLIPBOARD BRIDGE (#160). Text crosses in guest GLOBAL memory, which only
  * krnl386 can hand out, so each direction is a short chain of its calls:
  * GetClipboardData: GlobalAlloc -> CLIPLOCK: GlobalLock -> CLIPFILL: copy the
  *                   host text in, GlobalUnlock.        ActionArgument = the handle
@@ -254,7 +254,7 @@
  */
 #define WOWCALL_MAX_BLOB    1024
 
-/* -- s89: THE FONTS, COLLECTED UP FRONT AS WIN16 STRUCTURES. EnumFontFamilies
+/* s89: THE FONTS, COLLECTED UP FRONT AS WIN16 STRUCTURES. EnumFontFamilies
  * asks Win32 for the list in one synchronous call (wowgdi.h) and the walk hands
  * one entry per 16-bit callback. Each entry is the callback's blob verbatim:
  * ENUMLOGFONT16 (146 bytes) then NEWTEXTMETRIC16 (41), byte-packed as Win16's

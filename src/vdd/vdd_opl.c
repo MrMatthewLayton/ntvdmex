@@ -18,7 +18,7 @@
 #define OPL_TIMER_MAX       0xFF    /* A timer overflows past this */
 #define OPL_FAILED          (-1)
 
-/* --- timers --------------------------------------------------------------- */
+/* timers: */
 /* Each timer counts UP from its preset; overflowing past 255 raises its status
  * flag (unless masked) and reloads the preset, so the period is
  * (256 - preset) * resolution. AdLib detection is exactly this measurement:
@@ -81,7 +81,7 @@ INT VddOplIsNewMode(PCOPL_STATE state)
     return state->IsOpl3 && (state->Registers[OPL3_REGISTER_NEW] & 1);
 }
 
-/* -- 4-OPERATOR PAIRS (register 0x104, OPL3 with NEW set). Six bits, six pairs,
+/* 4-OPERATOR PAIRS (register 0x104, OPL3 with NEW set). Six bits, six pairs,
  * and the pairs are fixed by the chip, not chosen: bit 0 joins channels 0 and 3,
  * bit 1 joins 1+4, bit 2 joins 2+5, and bits 3-5 do the same in array 1 (9+12,
  * 10+13, 11+14). The FIRST channel of a pair owns the voice -- its F-number,
@@ -172,7 +172,7 @@ VOID VddOplAddMicroseconds(POPL_STATE state, UINT32 microseconds)
     }
 }
 
-/* --- register file -------------------------------------------------------- */
+/* register file: */
 /* Key one OPERATOR, rather than a channel. Rhythm mode needs this: four of the five
  * percussion voices are single operators keyed independently from 0xBD, so the
  * channel-wide key-on the melodic path uses cannot express them.
@@ -297,7 +297,7 @@ static VOID OplKeyChannel(POPL_STATE state, INT channel, INT isKeyOn)
     state->Channels[channel].IsKeyOn = (BYTE)isKeyOn;
 }
 
-/* -- THE REGISTER FILE, BOTH ARRAYS. `reg` is 9 bits: bit 8 is the array (A1 on
+/* THE REGISTER FILE, BOTH ARRAYS. `reg` is 9 bits: bit 8 is the array (A1 on
  * the address write). Array 1 has the same per-operator and per-channel
  * registers as array 0 at the same offsets -- 0x120-0x135 is its AM/VIB/..., 0x1A0
  * its F-numbers -- driving operators 18-35 and channels 9-17. What it does NOT
@@ -531,7 +531,7 @@ VOID VddOplWriteRegister(POPL_STATE state, WORD registerNumber, BYTE value)
         state->ProfileWaveformSelect = 1;
 }
 
-/* --- ports 0x388-0x38B ------------------------------------------------------ */
+/* ports 0x388-0x38B: */
 /* The chip has two address lines. A0 picks address (0) or data (1); A1 picks the
  * register ARRAY for an address write -- which is why an OPL3 is four ports, and
  * why the data port does not care which of 0x389/0x38B it is: there is one 9-bit
@@ -551,7 +551,7 @@ VOID VddOplWriteData(POPL_STATE state, BYTE value)
     VddOplWriteRegister(state, state->AddressLatch, value);
 }
 
-/* -- THE STATUS BYTE, AND WHAT THE OPL3 CHANGES IN IT. Bits 7-5 are IRQ, T1, T2
+/* THE STATUS BYTE, AND WHAT THE OPL3 CHANGES IN IT. Bits 7-5 are IRQ, T1, T2
  * on both chips -- the AdLib detect (reset, read 0x00, run T1, read 0xC0) masks
  * with 0xE0 and passes identically on either. Bits 2-1 are the difference: a
  * YM3812 reads them as 1, a YMF262 as 0, and that is the OPL3 detect -- an
@@ -644,7 +644,7 @@ static VOID OplFrame(PVOID context)
     VddOplAddMicroseconds(state, state->FrameUs);
 }
 
-/* --- lifecycle ------------------------------------------------------------ */
+/* lifecycle: */
 VOID VddOplReset(PVOID context)
 {
     POPL_STATE state = (POPL_STATE)context;

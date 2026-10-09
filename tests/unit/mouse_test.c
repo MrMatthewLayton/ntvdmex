@@ -47,7 +47,7 @@ INT main(VOID)
 
     printf("== INT 33h driver logic (i33_driver.h) ==\n");
 
-    /* ---- 09h, one bit per pixel: AND then XOR, bit 15 leftmost ---- */
+    /* 09h, one bit per pixel: AND then XOR, bit 15 leftmost: */
     memset(row, 0xA5, sizeof row);
     I33GraphicsCursorRow(row, 40, 8, 0xFFFF, 0x0000, 0x0F, NULL);
     CHECK(MouseTestAllEqual(row, 40, 0xA5), "screen FFFF / cursor 0000: transparent, the row untouched");
@@ -69,13 +69,13 @@ INT main(VOID)
     CHECK(row[8] == 0x0C && row[23] == 0x0C && MouseTestAllEqual(row + 9, 14, 0x03),
           "cursor 8001h: only the first and sixteenth pixels flip");
 
-    /* ---- clipping: a bitmap hanging off either edge writes nothing outside ---- */
+    /* clipping: a bitmap hanging off either edge writes nothing outside: */
     memset(row, 0x11, sizeof row);
     I33GraphicsCursorRow(row + 4, 8, -4, 0x0000, 0x0000, 0x0F, NULL);   /* an 8-wide row at row+4 */
     CHECK(MouseTestAllEqual(row, 4, 0x11) && MouseTestAllEqual(row + 4, 8, 0x00) && MouseTestAllEqual(row + 12, 28, 0x11),
           "x0 = -4 on an 8-pixel row: the visible part drawn, not a byte outside");
 
-    /* ---- CGA 4-colour: 8 pixels, a bit PAIR each, through the renderer's palette ---- */
+    /* CGA 4-colour: 8 pixels, a bit PAIR each, through the renderer's palette: */
     memset(row, 0, sizeof row);
 
     for (INT index = 0; index < 8; ++index)
@@ -94,7 +94,7 @@ INT main(VOID)
     CHECK(MouseTestAllEqual(row, 8, cga[0]) && row[8] == 0,
           "CGA: AND per bit pair (01 & 10 = 00), and only eight pixels wide (UNMEASURED: MS Programmer's Ref.)");
 
-    /* ---- the whole bitmap: hot spot places it, the default arrow's tip ---- */
+    /* the whole bitmap: hot spot places it, the default arrow's tip: */
     {   static BYTE frameBuffer[32 * 32];
         memset(frameBuffer, 7, sizeof frameBuffer);
         I33GraphicsCursorDraw(frameBuffer, 32, 32, 32, 10, 10, 0, 0, g_I33DefaultScreenMask, g_I33DefaultCursorMask, 0x0F, NULL);
@@ -118,7 +118,7 @@ INT main(VOID)
         CHECK(frameBuffer[31 * 32 + 31] == 7 && frameBuffer[8 * 32 + 8] == 7, "...and nothing written past it");
     }
 
-    /* ---- 2Bh-2Eh / 33h: the block layouts (RBIL #03182, #03184) ---- */
+    /* 2Bh-2Eh / 33h: the block layouts (RBIL #03182, #03184): */
     {   BYTE acc[I33_ACC_LEN], output[I33_SET_LEN + 8];
         I33_SETTINGS state = { 4, 0, 50, 50, 50, 1, 3 };
         CHECK(I33_ACC_LEN == 324 && I33_SET_LEN == 340, "profile block 144h bytes, settings block 154h");
@@ -142,7 +142,7 @@ INT main(VOID)
               "33h: CX=5 gets the first five bytes, count 5 -- truncation, not an error");
     }
 
-    /* ---- 18h/19h: install, replace, refuse ---- */
+    /* 18h/19h: install, replace, refuse: */
     {   I33_ALTERNATE alternates[I33_ALT_N];
     UINT registerAx;
     INT who;

@@ -93,7 +93,7 @@ static INT FdcTestDriverSend(PVDD_BUS bus, BYTE byte)
     return 0;
 }
 
-/* -- THE LENGTH-FREE DRAIN: read while RQM=1 && DIO=1, stop when CMD BSY clears.
+/* THE LENGTH-FREE DRAIN: read while RQM=1 && DIO=1, stop when CMD BSY clears.
  * This is how a driver reads a result whose length it does not know, and it is
  * what p_fdc.asm does on the real machines. Returns the count.
  */

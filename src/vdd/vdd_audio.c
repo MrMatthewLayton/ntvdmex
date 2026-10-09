@@ -137,7 +137,7 @@ VOID VddAudioSetMaster(PAUDIO_STATE state, UINT32 percent, INT isMuted)
     state->IsMuted  = isMuted ? 1 : 0;
 }
 
-/* -- #189: STEREO. A source that has two channels now keeps them: the SB's stereo
+/* #189: STEREO. A source that has two channels now keeps them: the SB's stereo
  * transfers (they were averaged) and the GUS's per-voice pan (voices were summed).
  * The OPL (#232: an OPL3 with NEW set routes each channel left/right; otherwise one
  * output, in the middle) and the PC speaker (middle). Output
@@ -230,7 +230,7 @@ VOID VddAudioMixStereo(PAUDIO_STATE state, INT16 *output, UINT32 frames)
         for (frameIndex = 0; frameIndex < AUDIO_STEREO_CHANNELS * count; ++frameIndex)
             chunk[frameIndex] = 0;
 
-        /* --- FM: the OPL's own L/R (#232) ---------------------------------- */
+        /* FM: the OPL's own L/R (#232): */
         /* An OPL2, or an OPL3 before NEW, renders the same signal to both sides,
          * and on L == R this walk is the old mono one exactly -- so an OPL2 mixes
          * to the same samples it did as a mono source (audio_test's golden).
@@ -253,7 +253,7 @@ VOID VddAudioMixStereo(PAUDIO_STATE state, INT16 *output, UINT32 frames)
             }
         }
 
-        /* --- sampled audio: the SB's own L/R ------------------------------ */
+        /* sampled audio: the SB's own L/R: */
         /* Called even while idle: this is what walks the DMA buffer and raises
          * the block-completion IRQ the game is waiting for.
          */
@@ -275,7 +275,7 @@ VOID VddAudioMixStereo(PAUDIO_STATE state, INT16 *output, UINT32 frames)
             }
         }
 
-        /* --- the GUS, panned per voice (see vdd_gus.c) -------------------- */
+        /* the GUS, panned per voice (see vdd_gus.c): */
         if (state->Gus)
         {
             AudioResamplerSetup(&state->GusResampler, VddGusRateHz(state->Gus), state->OutputHz);
@@ -293,7 +293,7 @@ VOID VddAudioMixStereo(PAUDIO_STATE state, INT16 *output, UINT32 frames)
             }
         }
 
-        /* --- the AWE32's EMU8000, panned per channel (see vdd_emu8k.c) ----- */
+        /* the AWE32's EMU8000, panned per channel (see vdd_emu8k.c): */
         /* At its own fixed 44.1 kHz. Summed at unity, as the GUS is: the route through
          * the CT1745 mixer on a real AWE32 is not modelled (docs/inventory/emu8k.md).
          */
@@ -314,7 +314,7 @@ VOID VddAudioMixStereo(PAUDIO_STATE state, INT16 *output, UINT32 frames)
             }
         }
 
-        /* --- PC speaker (mono: both channels) ------------------------------ */
+        /* PC speaker (mono: both channels): */
         /* Gated by port 0x61 bits 0+1 -- both, which is why a program that only
          * sets the data bit to click the cone makes no tone here either.
          */
@@ -339,7 +339,7 @@ VOID VddAudioMixStereo(PAUDIO_STATE state, INT16 *output, UINT32 frames)
             }
         }
 
-        /* --- master attenuator -------------------------------------------- */
+        /* master attenuator: */
         if (state->IsMuted)
         {
             for (frameIndex = 0; frameIndex < AUDIO_STEREO_CHANNELS * count; ++frameIndex)

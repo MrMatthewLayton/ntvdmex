@@ -98,7 +98,7 @@ INT main(VOID)
     /* Oracle: BX=0004, i.e. BL=4 = 1.44MB. */
     DiskTestExpect("AH=08h drive type = 4 (1.44MB)", geometry.DriveType, DOS_DRIVE_1440K);
 
-    /* -- CHS -> LBA. THE SECTOR IS 1-BASED; cylinder and head are not. */
+    /* CHS -> LBA. THE SECTOR IS 1-BASED; cylinder and head are not. */
     DiskTestExpect("C0 H0 S1 is LBA 0 (the boot sector)",
                    DiskTestLbaOrRefused(&geometry, 0, 0, DOS_DISK_FIRST_SECTOR), 0);
     DiskTestExpect("C0 H0 S2 is LBA 1",
@@ -131,7 +131,7 @@ INT main(VOID)
                                         DOS_DISK_FIRST_SECTOR),
                    DISK_TEST_REFUSED);
 
-    /* -- AN IMAGE WE CANNOT TRUST IS ABSENT, NOT GUESSED AT. */
+    /* AN IMAGE WE CANNOT TRUST IS ABSENT, NOT GUESSED AT. */
     DiskTestBuild1440kBpb(bootSector);
     DiskTestExpect("a TRUNCATED image is refused",
                    DosDiskGeometryFromBpb(bootSector, DISK_TEST_TRUNCATED_IMAGE_SIZE, &geometry),

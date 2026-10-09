@@ -2,26 +2,16 @@
  *
  * A DPMI client session: starting it, running it in slices, reflecting its faults to its handlers, delivering its interrupts, ending it.
  *
- * Part of the host's single translation unit: #included by main.c.
+ * Its own translation unit (#335): declared in host_dpmi_client.h.
  *
  *
  *
  * SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Matthew Layton
  */
-#include "host_state.h"
-#include "log.h"
-#include "ne.h"
-#include "wow32.h"
-#include "wowanchors.h"
-#include "wowsched.h"
-#include "wowcall.h"
-#include "wowmsg.h"
-#include "wowres.h"
-#include "wowwin.h"
-#include "wowgdi.h"
-#include "wowuser.h"
 #include "host_dpmi_client.h"
+#include "host_state.h"
+#include "wowuser.h"
 #include "main.h"
 #include "host_audio.h"
 #include "host_bios.h"
@@ -37,7 +27,6 @@
 #include "host_window.h"
 #include "host_wow.h"
 
-
 #define DPMI_FLT_CLASS_GP   6   /* The kernel's fault class for a #GP (observed: 6) */
 
 /* Suppress the asynchronous IRQ0 -> PM INT 08h injection. A knob, not a feature: when a
@@ -51,7 +40,7 @@
 
 #define NOSB_PATH           CFG_("nosb.flag")
 
-/* -- A WATCH ADDRESS: ONE HEX LINEAR ADDRESS, DUMPED EITHER SIDE OF EACH INJECTED
+/* A WATCH ADDRESS: ONE HEX LINEAR ADDRESS, DUMPED EITHER SIDE OF EACH INJECTED
  * INTERRUPT. ---------------------------------------------------------------------
  * The question an injected timer tick always raises is not "did the handler run" --
  * the phases/done counters answer that -- but "did it have the EFFECT the guest is
@@ -150,6 +139,11 @@
  */
 #define PM_STRETCH_LOG_US   300u
 
+enum
+{
+    PENDING_INT_RETRIES_MAX = 0x10000
+};   /* event 3 ("interrupt pending, not entered"): retries before giving up */
+
 /* A #GP through an IDT gate is an unserviced INT nn the client issued, not an exception it asked for: reflect it as the interrupt, and patch the site so the next pass takes the BOP path. */
 static INT DpmiServiceIdtGateFault(
     PSTR *cursorIo,
@@ -169,7 +163,7 @@ static INT DpmiServiceIdtGateFault(
         DWORD gateVector = (DWORD)(DPMI_SELECTOR_INDEX(frame[DPMI_FRAME_ERROR])) & BYTE_MASK;
         DWORD guestCodeBase  = DpmiSelectorBase(frame[DPMI_FRAME_CS]);
         volatile BYTE *guestInstruction = (volatile BYTE *)(ULONG_PTR)(guestCodeBase + frame[DPMI_FRAME_IP]);
-        /* -- [CAUTION] WHAT MAKES THE FRAME'S IP TRUSTWORTHY IS THE
+        /* [CAUTION] WHAT MAKES THE FRAME'S IP TRUSTWORTHY IS THE
          * SELECTOR'S BASE, NOT ITS WIDTH. (s74)
          * This began as `if (guestCodeBase && ...)`. DpmiSelectorBase() returns
          * g_Ldt[idx].base, so a base of 0 -- exactly what a FLAT
@@ -211,7 +205,7 @@ static INT DpmiServiceIdtGateFault(
          * the slot we calibrated -- then we do not resume on it
          */
         INT   guestEspOk = !guestSsIs32 || ((faultEsp & WORD_MASK_U) == frame[DPMI_FRAME_SP] && (faultSs & WORD_MASK_U) == frame[DPMI_FRAME_SS]);
-        /* -- THE FULL-WIDTH REGISTERS ARE IN THE TIB; THE FRAME IS
+        /* THE FULL-WIDTH REGISTERS ARE IN THE TIB; THE FRAME IS
          * THE TRUNCATED COPY. (s74, second pass) ---------------------
          * The kernel saves the faulting SS:ESP and EIP at full width
          * BEFORE it builds the 16-bit DPMI frame: `faultSs:faultEsp` (from the misnamed
@@ -299,7 +293,7 @@ static INT DpmiServiceIdtGateFault(
             && HostReadable((const VOID *)guestInstruction, X86_INT_LENGTH)
             && guestInstruction[0] == X86_OP_INT && guestInstruction[1] == (BYTE)gateVector)
         {
-            /* -- THIS IS THE PASS THAT RE-PATCHED CALC'S FP SITE.
+            /* THIS IS THE PASS THAT RE-PATCHED CALC'S FP SITE.
              * (session 56 -- the question session 55 left open.)
              * Session 55 put a 34h..3Fh guard in the SCANNER and the
              * guard was right, but it was in the wrong place: the
@@ -476,7 +470,7 @@ static INT DpmiDeliverToClientHandler(
 {
     PSTR cursor = *cursorIo;
 
-    /* -- THE EXCEPTION FRAME'S WIDTH FOLLOWS THE CLIENT'S
+    /* THE EXCEPTION FRAME'S WIDTH FOLLOWS THE CLIENT'S
      * MODE, NOT THE HANDLER SELECTOR'S D BIT. This is the same
      * rule DpmiDispatchToPmHandler() already documents for
      * INTERRUPT frames, and it was never applied here -- so a
@@ -598,7 +592,7 @@ static INT DpmiDeliverToClientHandler(
               cursor = LogPut(cursor, "{NO DESCRIPTOR}");
       } }
 
-    /* -- AND WHAT ES POINTS AT. On a #GP through a selector,
+    /* AND WHAT ES POINTS AT. On a #GP through a selector,
      * the object is the evidence. Session 34's fault reads
      * `es:[0x28]` -- the in-memory module database's
      * ne_modtab -- and got 0x38a where the layout says 0x7c;
@@ -615,7 +609,7 @@ static INT DpmiDeliverToClientHandler(
       else
           cursor = LogPut(cursor, "<unreadable>"); }
 
-    /* -- AND THE SAME FOR DS, for the same reason. ES is dumped
+    /* AND THE SAME FOR DS, for the same reason. ES is dumped
      * because a #GP is usually ABOUT a selector; DS is dumped
      * because the bottom of a guest's data segment is where its
      * own state lives, and "which branch did it take, and on
@@ -692,7 +686,7 @@ static INT DpmiDeliverToClientHandler(
       else
           cursor = LogPut(cursor, "<unreadable>");
 
-      /* -- THE CODE AROUND THE FAULT, AND THE SELECTOR'S BASE.
+      /* THE CODE AROUND THE FAULT, AND THE SELECTOR'S BASE.
        * Eight bytes AT the fault identify the instruction; they
        * do not identify WHERE IN THE GUEST'S IMAGE it came from,
        * and that is the question as soon as you start matching a
@@ -714,7 +708,7 @@ static INT DpmiDeliverToClientHandler(
         else
             cursor = LogPut(cursor, "<unreadable>"); } }
 
-    /* -- AND WHO CALLED. The frame says WHERE it faulted; on a
+    /* AND WHO CALLED. The frame says WHERE it faulted; on a
      * #GP inside a subroutine that is only half the question,
      * because the other half is always "how did the guest get
      * here" -- and a routine that faults on its FIRST memory
@@ -787,7 +781,7 @@ static INT DpmiResumeAfterClientHandler(
             }
         }
 
-        /* -- AND THE RETURN IS THE SAME QUESTION, SO IT GETS THE SAME
+        /* AND THE RETURN IS THE SAME QUESTION, SO IT GETS THE SAME
          * ANSWER. A 32-bit client's handler leaves by RETFD, which pops
          * EIGHT bytes, so ESP lands on the error code of a DWORD frame:
          *     +0x00 err  +0x04 EIP  +0x08 CS
@@ -1068,7 +1062,7 @@ static INT DpmiHandleReflectedFault(
                     return HOST_FLOW_CONTINUE;
                 }
             }
-            /* -- (C) THE MACHINE FELL IDLE: START THE PARKED TASK.
+            /* (C) THE MACHINE FELL IDLE: START THE PARKED TASK.
              * krnl386's creating task ends itself (observed: its
              * record goes, the current-task word at DGROUP 0x228
              * becomes 0, and it moves to a private kernel stack) --
@@ -1690,7 +1684,7 @@ static VOID DpmiDeliverPendingIrqs(
              * the more natural place for a driver to look, and nothing
              * has excluded it. Same snapshot, same exactness.
              */
-            /* -- AND THE PIC IS TOLD BEFORE THE HANDLER RUNS, NOT AFTER (#213).
+            /* AND THE PIC IS TOLD BEFORE THE HANDLER RUNS, NOT AFTER (#213).
              * The ISR runs inside DpmiInjectPmIrq() and sends its EOI
              * from in there; acknowledging afterwards set the in-service bit
              * AFTER that EOI, so the line stayed in service for good. Until
@@ -1777,7 +1771,7 @@ static VOID DpmiDeliverKeyboardIrq(
 
         if (virtualIf && !busy && picCanDeliver)
         {
-            /* -- CLAIM THE PENDING INTERRUPT BEFORE RUNNING THE HANDLER,
+            /* CLAIM THE PENDING INTERRUPT BEFORE RUNNING THE HANDLER,
              * NOT AFTER. The client's ISR reads port 0x60 while we are
              * inside this call, and the 8042 model RE-ASSERTS the line
              * from in there whenever a byte is still queued. Decrementing
@@ -1832,7 +1826,7 @@ static PSTR DpmiLogHeartbeat(
     const UINT steps,
     volatile BYTE * const tib)
 {
-    /* -- HEARTBEAT FROM THE THREAD THAT IS DEMONSTRABLY ALIVE. (GH #128)
+    /* HEARTBEAT FROM THE THREAD THAT IS DEMONSTRABLY ALIVE. (GH #128)
      * The watchdog thread is supposed to answer "where is the guest
      * stuck", and on the WOW runs it logs its FIRST sample and then
      * nothing -- twelve were asked for. So it is not a usable
@@ -1876,7 +1870,7 @@ static PSTR DpmiLogHeartbeat(
         cursor = LogPut(cursor, " decl=0x");       cursor = LogHex(cursor, g_Wow32Declined);
         cursor = LogPut(cursor, " unimpl=0x");     cursor = LogHex(cursor, g_Wow32Unimplemented);
         cursor = LogPut(cursor, "}");
-        /* -- THE COUNTERS THAT MATTER TO A CRASH MUST NOT LIVE ONLY IN THE
+        /* THE COUNTERS THAT MATTER TO A CRASH MUST NOT LIVE ONLY IN THE
          * EXIT REPORT. (s72) The async why-histogram was printed at exit
          * and nowhere else -- so for a guest that is KILLED, which is the
          * only kind of run that needs it, the number was unreachable. I
@@ -2016,11 +2010,6 @@ static INT DpmiEndClientSession(
     return HOST_FLOW_NEXT;
 }
 
-enum
-{
-    PENDING_INT_RETRIES_MAX = 0x10000
-};   /* event 3 ("interrupt pending, not entered"): retries before giving up */
-
 /* Run the DPMI client in protected mode until it stops for good: each step delivers pending interrupts, runs the client to its next event, and services what stopped it -- a patched INT nn BOP, a fault the kernel reflected, an async interrupt's return. */
 static VOID DpmiRunClient(
     PSTR *cursorIo,
@@ -2030,7 +2019,7 @@ static VOID DpmiRunClient(
 {
     PSTR cursor = *cursorIo;
     UINT steps;
-    /* --- DPMI protected-mode execution loop -----------------------------------
+    /* DPMI protected-mode execution loop:
      * DpmiEnterProtectedMode runs the client in PM until it stops. Two stop kinds:
      * (1) a patched INT nn BOP -- the kernel reflects C4 C4 as VTIB_EVENT=4
      *     (run 32); we look up the original vector by fault EIP and dispatch.
@@ -2188,7 +2177,7 @@ static VOID DpmiRunClient(
             g_CooperativeDmaPolls += g_Dma.ChannelCountReads[SB_DEFAULT_DMA8] - dmaReadsBefore;
         }
 
-        /* -- s90 (#278): IRQs RAISED BY A 32-BIT COMPONENT (call_ica_hw_interrupt,
+        /* s90 (#278): IRQs RAISED BY A 32-BIT COMPONENT (call_ica_hw_interrupt,
          * through bin\wowshim\NTVDM.EXE) -- winmm raises IRQ 10 to tell
          * MMSYSTEM a callback is queued in their shared buffer, and
          * MMSYSTEM's handler (PM vector 72h) drains it and EOIs both PICs.
@@ -2225,7 +2214,7 @@ static VOID DpmiRunClient(
          * constantly (every INT 31h, every trapped port access), so the
          * added latency is microseconds and no new thread is involved.
          */
-        /* -- AND THE MOUSE DRIVER'S OWN CALLBACK (INT 33h 0Ch), same gate.
+        /* AND THE MOUSE DRIVER'S OWN CALLBACK (INT 33h 0Ch), same gate.
          * (s74c) ZAR's buttons travel only through this.
          */
         if (g_MouseEventPend && MouseAnyHandler()        /* 0Ch's or 18h's (#265) */
@@ -2888,7 +2877,7 @@ INT DpmiStartClientSession(
             g_LdtNext = DPMI_FIRST_CLIENT_INDEX;                                           /* client allocs start at index 4 now */
 
         g_LdtClientMark = g_LdtNext;          /* teardown gives back everything above */
-        /* -- DPMI INITIAL CLIENT STATE: ES = PSP SELECTOR, AND THE PSP'S
+        /* DPMI INITIAL CLIENT STATE: ES = PSP SELECTOR, AND THE PSP'S
          *  ENVIRONMENT POINTER CONVERTED TO A SELECTOR. --------------------
          * DpmiSwitchToProtectedMode() sets ES = DS (a second copy of the data selector),
          * and that is simply wrong. DPMI 0.9, "entering protected mode", on the

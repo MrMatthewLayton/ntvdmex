@@ -821,7 +821,7 @@ static VOID I33TakeMotion(LONG positionX, LONG positionY, LONG *outDeltaX, LONG 
     *outDeltaY = deltaY;
 }
 
-/* -- WHERE A POINTER INTO THE DRIVER GOES (#265). 2Ch/2Dh/34h hand back ES:SI / ES:DX
+/* WHERE A POINTER INTO THE DRIVER GOES (#265). 2Ch/2Dh/34h hand back ES:SI / ES:DX
  * at the driver's own bytes (VDD_MOUSE_SEG). A real-mode caller (V86, or a DPMI 0300h
  * excursion) gets the paragraph; a protected-mode caller cannot use a paragraph in ES
  * -- loading it would fault -- so it gets a data selector over the same 64 KB
@@ -1105,7 +1105,7 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
         VDM_SET16(tib, VTIB_EDX, (WORD)(SHORT)deltaY);
         break; }
 
-    /* -- 0Ch SET / 14h EXCHANGE the event handler. See the note on g_MouseEventMask:
+    /* 0Ch SET / 14h EXCHANGE the event handler. See the note on g_MouseEventMask:
      * stored and reported, NOT yet invoked. 14h must return the PREVIOUS pair or a
      * guest that chains handlers jumps to whatever we failed to tell it.
      */
@@ -1277,7 +1277,7 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
 
         break; }
 
-    /* -- 20h ENABLE IS NOT A RESET. (#249) It shared 21h's arm, so enabling the driver
+    /* 20h ENABLE IS NOT A RESET. (#249) It shared 21h's arm, so enabling the driver
      * wiped the ranges, the handler and the counts, and answered AX=FFFFh. Measured
      * (p_mouse2 i33.20.*): MOUSE.COM 6.24 and DOSBox-X both return AX untouched
      * (0020h) and keep a 07h fence across it. We are never disabled (1Fh refuses), so
@@ -1783,7 +1783,7 @@ VOID MouseCallbackTry(volatile BYTE *tib)
         return;
     }
 
-    /* -- THE RETURN STUB, RE-VERIFIED EVERY TIME (see MS_CB_RET_OFF). A guest that has
+    /* THE RETURN STUB, RE-VERIFIED EVERY TIME (see MS_CB_RET_OFF). A guest that has
      * written over it would be sent into data by its own RETF; refusing is the
      * lesser harm, and the refusal is counted and named.
      */

@@ -285,7 +285,7 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
      * tables). Live: the next keystroke uses it.
      */
     g_Input.Layout      = (BYTE)(settings->Values[SET_KBLAYOUT] <= INPUT_LAYOUT_LAST ? settings->Values[SET_KBLAYOUT] : 0);
-    /* -- THE JOYSTICK ROWS GO LIVE (session 62). The type reaches the gameport
+    /* THE JOYSTICK ROWS GO LIVE (session 62). The type reaches the gameport
      * VDD (how many axes/buttons the adapter wires); the D-pad mapping stays
      * host-side because it shapes the SAMPLE, not the device model. Live: the
      * poll thread and the port trap both re-read these on every pass.
@@ -319,7 +319,7 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
      * just "select Unlimited", which the speed list already offers directly.
      */
     CpuSpeedRecompute();
-    /* -- THE GUEST'S KEY REPEAT IS THE GUEST'S, NOT THE HOST'S. (session 57)
+    /* THE GUEST'S KEY REPEAT IS THE GUEST'S, NOT THE HOST'S. (session 57)
      * g_TypematicPeriodMicroseconds is seeded from the host's own SPI_GETKEYBOARDSPEED, which
      * is right for a Windows application and wrong for a DOS one: a DOS
      * program's repeat rate is the BIOS's, and the IBM BIOS default is about
@@ -374,7 +374,7 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
           g_SbConfig.Dma16Channel = ch;
       }
       }
-    /* -- #231: THE MODEL IS A CARD, NOT A LABEL. It was stored and read by nothing, so
+    /* #231: THE MODEL IS A CARD, NOT A LABEL. It was stored and read by nothing, so
      * all three answered as one SB16 that called itself an SB 2.0 (T3) in BLASTER.
      * Now each is itself -- the DSP version it reports, the commands it has, and
      * the BLASTER string a real one's installer writes:
@@ -462,7 +462,7 @@ VOID SettingsApplyDevices(const NTVDMEX_SETTINGS *settings)
      * because guests time delay loops off its refresh bit. The setting decides
      * only whether anything is audible.
      */
-    /* -- TWO OUTPUTS, ONE SETTING. The mixer's square wave goes out of the SOUND
+    /* TWO OUTPUTS, ONE SETTING. The mixer's square wave goes out of the SOUND
      * CARD; Beep.sys drives the transducer on the MOTHERBOARD. "Both" is both,
      * and they are genuinely independent -- a machine can have speakers plugged
      * in, a case speaker, neither, or both, and only the person at it knows.
@@ -929,7 +929,7 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
     SettingsTextFontSelect(settings->Strings[SET_STR_TEXTFONT]);                 /* #321 */
     SettingsFloppyRadios(settings->Values[SET_FLOPPYPHYS] != 0);                /* s84 */
     SettingsCdRadios(settings->Values[SET_CDPHYS] != 0);
-    /* -- SAY WHICH VERSION PROGRAMS ACTUALLY SEE. (s80, user: "if I'm in Windows XP's
+    /* SAY WHICH VERSION PROGRAMS ACTUALLY SEE. (s80, user: "if I'm in Windows XP's
      * command.com but reporting 6.22, is that right?") The box holds the SETTING; a
      * session can be running a different, forced number, and the dialog said nothing.
      */
@@ -1127,7 +1127,7 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
         return TRUE;
     }
 
-    /* -- #224: THE SPEED LIST, OWNER-DRAWN. A rung at or above this PC's own clock
+    /* #224: THE SPEED LIST, OWNER-DRAWN. A rung at or above this PC's own clock
      * cannot be a throttle, so it is drawn greyed and choosing it snaps back to the
      * last rung that can. Host shows the PC's own speed beside it.
      */

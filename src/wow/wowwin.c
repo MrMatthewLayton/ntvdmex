@@ -13,21 +13,21 @@
 
 #include "wowwin.h"
 #include "host_state.h"
-#include "log.h"
-#include "ne.h"
-#include "wow32.h"
-#include "wowanchors.h"
-#include "wowsched.h"
 #include "wowcall.h"
-#include "wowmsg.h"
-#include "wowres.h"
-#include "wowgdi.h"
-#include "wowuser.h"
-#include "wowdlg.h"
-#include "wowenum.h"
-#include "wowshell.h"
-#include "wowcommdlg.h"
-#include "host_dpmi.h"
+
+/* Forward declarations, from when this file was part of main.c's unit (they were in wowwin.h). */
+WORD  WowWinHwnd16(HWND window);
+PWOWUSER_WINDOW WowUserFindWindow(WORD window16);
+INT   WowUserIsMdiChild(PCWOWUSER_WINDOW window);
+HWND  WowUserMdiClientOf(PCWOWUSER_WINDOW window);
+HWND  WowUserHwnd32(WORD window16);
+WORD  WowUserMenu16(HMENU menu);  /* the 16-bit name for a real menu */
+/* #294: COMMDLG's modeless Find/Replace dialogs -- wowcommdlg.h, included later. */
+INT   WowCdlgRelay(UINT message, LPARAM lParam);
+INT   WowCdlgIsDialogMessage(PMSG message);
+DWORD WowUserTimerProcedure(WORD window16, WORD timerId);  /* 0 if none installed */
+
+INT WowUserIsDialog16(WORD h16);          /* wowuser.h: a dialog procedure? */
 
 /* Set once the exec thread has a window: the thread id that owns them all, so a
  * pump on the wrong thread can be refused rather than silently doing nothing.
@@ -42,7 +42,7 @@ DWORD g_WowWinPumped = 0;
 /* Tick at which the most recent WM_PAINT was posted to the Win16 queue. */
 DWORD g_WowWinPaintMs = 0;
 
-/* -- MSG.pt IS THE CURSOR IN *SCREEN* COORDINATES, AND IT WAS ALWAYS 0,0.
+/* MSG.pt IS THE CURSOR IN *SCREEN* COORDINATES, AND IT WAS ALWAYS 0,0.
  * Every WowMsgPost here passed `0, 0` for it, because nothing this host had
  * watched read the field -- wowmsg.h says exactly that, and says it was filled
  * with the cursor position, which it was not.
@@ -155,20 +155,6 @@ static WOWWIN_HELD_CHAR g_WowWinHeldChars[WOWWIN_MAX_HELD_CHARS];
 static DWORD g_WowWinHeldCharSequence;
 
 static WOWWIN_THREAD_TIMER g_WowWinThreadTimers[WOWWIN_MAX_THREAD_TIMERS];
-
-/* Forward declarations, from when this file was part of main.c's unit (they were in wowwin.h). */
-WORD  WowWinHwnd16(HWND window);
-PWOWUSER_WINDOW WowUserFindWindow(WORD window16);
-INT   WowUserIsMdiChild(PCWOWUSER_WINDOW window);
-HWND  WowUserMdiClientOf(PCWOWUSER_WINDOW window);
-HWND  WowUserHwnd32(WORD window16);
-WORD  WowUserMenu16(HMENU menu);  /* the 16-bit name for a real menu */
-/* #294: COMMDLG's modeless Find/Replace dialogs -- wowcommdlg.h, included later. */
-INT   WowCdlgRelay(UINT message, LPARAM lParam);
-INT   WowCdlgIsDialogMessage(PMSG message);
-DWORD WowUserTimerProcedure(WORD window16, WORD timerId);  /* 0 if none installed */
-
-INT WowUserIsDialog16(WORD h16);          /* wowuser.h: a dialog procedure? */
 
 static VOID WowWinPaintWant(WORD window16, const RECT *rect, INT isErase)
 {
@@ -527,7 +513,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
 
         break;
 
-    /* -- THE SYSTEM KEYS ARE THE SYSTEM'S, AND SWALLOWING THEM BROKE THE MENU.
+    /* THE SYSTEM KEYS ARE THE SYSTEM'S, AND SWALLOWING THEM BROKE THE MENU.
      * (session 44) These were in the case above, relayed to the guest and then
      * returned as HANDLED -- so DefWindowProc never saw them. But "Sys" in
      * WM_SYSKEYDOWN means exactly *"this key belongs to the system"*: it is the
@@ -546,7 +532,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
      */
     case WM_SYSKEYDOWN:
     case WM_SYSKEYUP:
-        /* -- AND ALT MUST TAKE THE MOUSE CAPTURE, OR THE MENU NEVER OPENS.
+        /* AND ALT MUST TAKE THE MOUSE CAPTURE, OR THE MENU NEVER OPENS.
          * (session 53, the "Alt stops working after a few canvas drags" defect)
          * MS Paint takes the capture on button-down and DOES NOT GIVE IT BACK --
          * measured, nine SetCapture and zero ReleaseCapture in one session, and
@@ -595,7 +581,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
 
         break;
 
-    /* -- WM_PAINT, WHICH THIS FILE SAID IT WOULD RELAY "THE DAY" GDI'S ID
+    /* WM_PAINT, WHICH THIS FILE SAID IT WOULD RELAY "THE DAY" GDI'S ID
      * SPACE WAS DISPATCHED. That day is session 45: GDI is anchored, USER's
      * GetDC issues real device contexts, and MS Paint's window is on screen
      * and empty because nothing has ever asked it to draw.
@@ -616,7 +602,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
      * guest's BeginPaint DC is clipped to that rectangle (#287, wowuser.h), as
      * a Win16 paint DC is; only a true non-rectangular update region is lost.
      */
-    /* -- s89 (#162, Clock): THE GUEST ERASES FIRST. In Win16 WM_ERASEBKGND goes to
+    /* s89 (#162, Clock): THE GUEST ERASES FIRST. In Win16 WM_ERASEBKGND goes to
      * the window's procedure, and the class brush is only DefWindowProc's
      * answer for a procedure that passes it on. Letting the OS erase here
      * painted Clock WHITE (its class brush) before Clock -- which fills the
@@ -739,7 +725,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
      * register the guest's own class style, so a guest that did not ask gets
      * two ordinary clicks -- which is correct, not a gap.
      */
-    /* -- s90 (#278): THE MULTIMEDIA NOTIFICATIONS. MM_MCINOTIFY (0x3B9), MM_WOM_*
+    /* s90 (#278): THE MULTIMEDIA NOTIFICATIONS. MM_MCINOTIFY (0x3B9), MM_WOM_
      * (0x3BB-0x3BD), MM_WIM_* (0x3BE-0x3C0), MM_MIM_ and MM_MOM_ (0x3C1-0x3C9), the
      * joystick ones (0x3A0-0x3B8). A Win16 program that opens a device with
      * CALLBACK_WINDOW gets them POSTED BY WINMM to its real window: winmm's WOW
@@ -941,7 +927,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
      * that is not a guest window is 0, as Win16 reports one from another task.
      * WM_SIZE's wParam is a SIZE_* code and passes as it is.
      */
-    /* -- #305 M9 (s91): ACTIVATION, MOVEMENT, VISIBILITY, MENU SELECTION AND THE
+    /* #305 M9 (s91): ACTIVATION, MOVEMENT, VISIBILITY, MENU SELECTION AND THE
      * SIZE LIMITS reach the guest's procedure, each in the Win16 packing:
      * WM_MOVE (0003) / WM_SHOWWINDOW (0018)  same parameters in both
      * WM_ACTIVATE (0006)   Win32 wParam=MAKELONG(state, fMinimized), lParam=hwnd
@@ -971,7 +957,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
             WowWinSendOrPost(window16, (WORD)message, LOWORD(wParam),
                                 ((DWORD)(HIWORD(wParam) ? 1 : 0) << WORD_SHIFT)
                                 | WowWinHwnd16((HWND)lParam), pointX, pointY);
-            /* -- s93: A PROGRAM THAT PLACES THE FOCUS ITSELF KEEPS IT. Win32's
+            /* s93: A PROGRAM THAT PLACES THE FOCUS ITSELF KEEPS IT. Win32's
              * DefWindowProc gives an activated window the focus -- after WRITE's
              * own WM_ACTIVATE had just put it on its document window, so every
              * key went to the frame, which ignores them: the user typed into Write
@@ -988,7 +974,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                 return result;
             }
 
-            /* -- s93: A DIALOG KEEPS ITS CONTROL'S FOCUS ACROSS ACTIVATION, as
+            /* s93: A DIALOG KEEPS ITS CONTROL'S FOCUS ACROSS ACTIVATION, as
              * DefDlgProc does (it saves the focus on deactivation and restores it
              * on activation). Our dialogs are our own class on DefWindowProc, which
              * gives the focus to the dialog WINDOW -- so Program Manager's "Program
@@ -1038,7 +1024,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
 
         break;
 
-    /* -- s93: WM_MDIACTIVATE, TO THE CHILD -- AND THE TWO PACKINGS DIFFER. Win32 gives
+    /* s93: WM_MDIACTIVATE, TO THE CHILD -- AND THE TWO PACKINGS DIFFER. Win32 gives
      * the child (wParam = the one losing, lParam = the one gaining); Win16 gives it
      * (wParam = TRUE if IT is gaining, lParam = MAKELONG(gaining, losing)). It was
      * not relayed at all, so SYSEDIT -- which keeps "the active file" from this
@@ -1134,7 +1120,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                 WowMsgPost(window16, (WORD)message, wParam16, (DWORD)lParam, GetTickCount(), pointX, pointY);
 
             ++g_WowWinMessages;
-            /* -- s93: A DIALOG PASSES THE FOCUS ON, as DefDlgProc does on
+            /* s93: A DIALOG PASSES THE FOCUS ON, as DefDlgProc does on
              * WM_SETFOCUS -- to the control that last had it, else its first tab
              * stop. A dialog window with controls never keeps the focus itself;
              * ours did (DefWindowProc), so Program Manager's Program Item
@@ -1268,7 +1254,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
 
         break;
 
-    /* -- #300 (M1): SCROLL BARS. Never relayed before, so a program's own scroll
+    /* #300 (M1): SCROLL BARS. Never relayed before, so a program's own scroll
      * bars -- Write's page, Cardfile's list, Charmap's grid -- did nothing when
      * clicked or dragged. The packing differs:
      *     Win32  wParam = MAKELONG(code, pos)   lParam = scroll-bar HWND (0 =
@@ -1467,7 +1453,7 @@ INT WowWinRegister(
 
     windowClass.hIcon   = icon;        /* built by the caller: predefined, or the app's own */
     windowClass.hIconSm = smallIcon;         /* and the 16x16 built at 16x16, not shrunk later */
-    /* -- THE CLASS'S OWN BACKGROUND BRUSH, AND IT USED TO BE THROWN AWAY.
+    /* THE CLASS'S OWN BACKGROUND BRUSH, AND IT USED TO BE THROWN AWAY.
      * This was hard-coded to COLOR_WINDOW+1 -- WHITE -- for every Win16 class
      * ever registered, while the guest's real `hbrBackground` was read into
      * `c->hbrback` and then ignored. Windows erases with this brush on every

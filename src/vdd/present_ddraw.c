@@ -183,7 +183,7 @@ static HBRUSH PresentScanlineBrush(VOID)
     return brush;
 }
 
-/* ---- windowed AND (by default) fullscreen: GDI StretchDIBits ---------------
+/* windowed AND (by default) fullscreen: GDI StretchDIBits:
  * THIS PATH IS SHARP AND THE DIRECTDRAW ONE IS NOT. (s64) (Importance = 3):
  * The user settled it with a comparison no log could have produced: "even if I
  * maximize the window on the desktop, with or without aspect ratio, the pixels stay
@@ -246,7 +246,7 @@ static VOID PresentHintDraw(
     TextOutA(dc, textX, textY, presenter->HintText, length);
 }
 
-/* -- #217: THE OFF-SCREEN PICTURE. A memory DC over a DIB section the size of the
+/* #217: THE OFF-SCREEN PICTURE. A memory DC over a DIB section the size of the
  * picture area, recreated only when that size changes. NULL = draw to the window, as
  * before (the setting is off, or GDI could not give us one).
  */
@@ -386,7 +386,7 @@ static const BYTE *PresentSnapshotDib(
     return pixels;
 }
 
-/* -- #325: DRAW THE PICTURE WITH THE CHOSEN FILTER. A whole multiple of the source is
+/* #325: DRAW THE PICTURE WITH THE CHOSEN FILTER. A whole multiple of the source is
  * always point-sampled (every filter agrees there, and it is the default case: a
  * Native window, or a Whole-pixels fit). Otherwise Nearest point-samples -- uneven
  * rows -- Bilinear smooths everything (HALFTONE), and Sharp enlarges by the largest
@@ -593,7 +593,7 @@ static VOID PresentGdi(PPRESENT_DDRAW presenter)
     ReleaseDC(presenter->Window, windowDc);
 }
 
-/* ---- fullscreen: DirectDraw 7 ------------------------------------------- */
+/* fullscreen: DirectDraw 7: */
 static VOID PresentReleaseSurface(PVOID *surface)
 {
     if (*surface)
@@ -930,7 +930,7 @@ static VOID PresentFullscreenSoftware(
     IDirectDrawSurface7_Unlock(back, NULL);
 }
 
-/* -- THE STAGING SURFACE MUST HOLD THE WHOLE FRAME. (s84, user: "fullscreen VESA --
+/* THE STAGING SURFACE MUST HOLD THE WHOLE FRAME. (s84, user: "fullscreen VESA:
  * ZAR, Duke3D, VESACUBE -- crashes NTVDMEX with DirectDraw") It was created once at
  * 640x480, and PresentFullscreenStage copies SnapshotWidth x SnapshotHeight into it: a 1024x768 or 800x600 VESA
  * frame wrote past the end of the surface (HOSTFAULT write AV in PresentFullscreen). Grow it
@@ -1015,7 +1015,7 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
     presenter->LastSourceWidth = presenter->SnapshotWidth;
     presenter->LastSourceHeight = presenter->SnapshotHeight;
 
-    /* -- SHARP PIXELS ON THE DIRECTDRAW PATH TOO. (#223; user: "Smoothness should come
+    /* SHARP PIXELS ON THE DIRECTDRAW PATH TOO. (#223; user: "Smoothness should come
      * from scaler/filter. With them off it should be stretched, sharp pixels,
      * regardless of which renderer is used.") A stretching Blt is FILTERED BY THE
      * DRIVER and DirectDraw cannot forbid it. With Filtering = Nearest the frame is
@@ -1181,7 +1181,7 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
     }
 }
 
-/* ---- public API --------------------------------------------------------- */
+/* public API: */
 INT PresentDdrawInitialize(PPRESENT_DDRAW presenter, HWND window)
 {
     PFN_DIRECT_DRAW_CREATE_EX directDrawCreateEx;

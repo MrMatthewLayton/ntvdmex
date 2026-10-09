@@ -21,7 +21,7 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #include "vbe_pm.h"
 #include "../dos/bios_bda_fields.h"     /* the BDA's fields */
 
-/* -- NAMED VALUES (#333). The VGA's own register indices and bits, and this model's
+/* NAMED VALUES (#333). The VGA's own register indices and bits, and this model's
  * arithmetic; the mode tables below stay tables.
  */
 /* Text. */
@@ -708,7 +708,7 @@ static VOID VideoLoadModeDefinition(PVIDEO_STATE state, BYTE mode);
  * what makes the width switch lossless: v<<2 >>2 is v again.
  */
 
-/* -- THE DAC WIDTH IS A PROPERTY OF THE RAMDAC, SO EVERY PATH INTO IT OBEYS IT. (#226)
+/* THE DAC WIDTH IS A PROPERTY OF THE RAMDAC, SO EVERY PATH INTO IT OBEYS IT. (#226)
  * VBE 4F08h switches the DAC between 6 and 8 bits per primary. We accepted the switch
  * and honoured it in 4F09h ONLY: port 3C9h still stored `value & 3Fh` and read back
  * `>> 2`, so a guest that did what VBE 2.0 section 4.11/section 4.12 tell it to -- check
@@ -750,7 +750,7 @@ static UINT32 VideoDacPackWidth(PCVIDEO_STATE state, BYTE red, BYTE green, BYTE 
                        | ((UINT32)VideoDacTo8(state, green) << VIDEO_GREEN_SHIFT) | (UINT32)VideoDacTo8(state, blue);
 }
 
-/* -- THE ATTRIBUTE CONTROLLER, WHICH IS WHERE A 16-COLOUR PIXEL GETS ITS COLOUR.
+/* THE ATTRIBUTE CONTROLLER, WHICH IS WHERE A 16-COLOUR PIXEL GETS ITS COLOUR.
  * A 4-bit pixel does NOT index the DAC. It indexes one of the AC's sixteen palette
  * registers (st->PaletteRegisters), and THAT six-bit value indexes the DAC. We stored vpal --
  * INT 10h AH=10h has always written it -- and then rendered straight from a fixed
@@ -816,7 +816,7 @@ static VOID VideoDefaultsFor(BYTE mode, const BYTE **attributes, const unsigned 
     *dacTable = g_VgaDacDefaults[g_VgaDefaultsByMode[VIDEO_DEFAULTS_DAC_ROW][index]];
 }
 
-/* -- A MODE SET REPROGRAMS THE CRTC, and not doing so lets one screen inherit the
+/* A MODE SET REPROGRAMS THE CRTC, and not doing so lets one screen inherit the
  * geometry of the one before it. Lemmings' gameplay sets Offset=22 (44 bytes to
  * the line, for a 352-pixel-wide scrolling window); the mode 10h screen AFTER it
  * was then drawn 44 bytes to the line instead of 80 and came out as diagonal
@@ -1000,7 +1000,7 @@ static VOID VideoPaletteSplitNote(PVIDEO_STATE state, const UINT32 *prev)
 
         if (split)
         {
-            /* -- THE BOUNDARY IS STICKY (s70, the user's HP run). The tick that writes
+            /* THE BOUNDARY IS STICKY (s70, the user's HP run). The tick that writes
              * this split is an IRQ we deliver with ~100-300 us of jitter, so its row
              * wandered 160..169 frame to frame (heartbeat `lastrow`). Drawn faithfully
              * that is a ten-row band flickering between palettes -- worse than the
@@ -1363,7 +1363,7 @@ static UINT VideoModePageSize(BYTE mode, BYTE kind, UINT columns, UINT rows)
     }
     else
     {
-        /* -- THE GRAPHICS PAGE SIZE IS PER MODE, and this was a flat 0x2000 for all
+        /* THE GRAPHICS PAGE SIZE IS PER MODE, and this was a flat 0x2000 for all
          * of them. Measured on 6.22: mode 06h is 0x4000 and mode 12h is 0xA000,
          * where we said 0x2000 either way. A program that pages by adding this to
          * its offset lands inside the previous page. 06h/12h/13h are the
@@ -1424,7 +1424,7 @@ static BYTE VideoModeCellHeight(BYTE mode)
                    : (mode == VIDEO_MODE_EGA_MONO_350 || mode == VIDEO_MODE_EGA_350) ? VGA_FONT14_HEIGHT : VGA_FONT8_HEIGHT);
 }
 
-/* -- #266: THE VECTORS THE VIDEO BIOS OWNS, KEPT IN THE IVT. INT 43h (the graphics
+/* #266: THE VECTORS THE VIDEO BIOS OWNS, KEPT IN THE IVT. INT 43h (the graphics
  * character table) and INT 1Fh (8x8 characters 80h-FFh) are pointers a program
  * READS -- to draw text itself, or to find the font the BIOS will draw with -- and
  * nothing in src/ wrote either: the IVT held whatever the VDM started with, which
@@ -1467,7 +1467,7 @@ static VOID VideoInt1FRom(PVIDEO_STATE state)
     VideoSetVector(state, VIDEO_VECTOR_FONT_HIGH, state->Int1FSegment, state->Int1FOffset);
 }
 
-/* -- #266: AH=0Bh's arithmetic, from the CGA it emulates. 0040:0066 is the CGA's colour
+/* #266: AH=0Bh's arithmetic, from the CGA it emulates. 0040:0066 is the CGA's colour
  * select register (3D9h): bits 0-3 the background (border in text, the 320x200
  * background, the 640x200 foreground), bit 4 the intensity of palette colours 1-3,
  * bit 5 the palette. A VGA does not decode 3D9h; the BIOS keeps the byte in the BDA
@@ -2057,7 +2057,7 @@ static VOID VideoTeletype(PVIDEO_STATE state, BYTE character)
     VideoTeletypeChar(state, character, VIDEO_ATTRIBUTE_NORMAL);
 }
 
-/* --- VESA VBE 2.0 (banked, packed-256) ----------------------------------- */
+/* VESA VBE 2.0 (banked, packed-256): */
 /* supported modes: {VBE number, width, height} (all 8bpp packed) */
 /* THE MODE LIST IS THE INTERFACE, AND A GUEST FILTERS ON IT. (s74) (Importance = 2):
  * This was three 8bpp modes. heaven7 calls 4F00, walks the list we publish, asks
@@ -2578,7 +2578,7 @@ static VOID VideoVesaToArgb(PVIDEO_STATE state)
     }
 }
 
-/* -- SAVE / RESTORE STATE: one block for INT 10h AH=1Ch and VBE 4F04 (section 4.7). (s74b)
+/* SAVE / RESTORE STATE: one block for INT 10h AH=1Ch and VBE 4F04 (section 4.7). (s74b)
  * AH=1Ch used to report 3 blocks (192 bytes) and then write 768 bytes of DAC into the
  * caller's buffer -- the Heretic MCB overrun again, in a different function -- and
  * 4F04 did not exist. A guest treats the buffer as opaque, so the layout is ours:
@@ -2787,7 +2787,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
 
         if (isVbe2)                                 /* VBE 2.0 fields, only for a 2.0 caller */
         {
-            /* -- THE FOUR STRINGS GO IN OemData (+100h), EACH ITS OWN (#226). section 4.3: "VBE
+            /* THE FOUR STRINGS GO IN OemData (+100h), EACH ITS OWN (#226). section 4.3: "VBE
              * 2.0 BIOS implementations must place this string [OemString] in the
              * OemData area within the VbeInfoBlock if 'VBE2' is preset", and "The
              * OemVendorName string, OemProductName string and OemProductRev string
@@ -2946,7 +2946,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
               UINT32 pageCount = pageBytes ? VIDEO_VESA_VRAM / pageBytes : 1u;
               buffer[VIDEO_MODE_INFO_IMAGE_PAGES] = (BYTE)(pageCount ? (pageCount > VIDEO_VBE_MAX_IMAGE_PAGES ? VIDEO_VBE_MAX_IMAGE_PAGES - 1u : pageCount - 1u) : 0u); }
             buffer[VIDEO_MODE_INFO_RESERVED] = 1;                            /* +30 Reserved: always 1 in VBE 2.0 */
-            /* -- DIRECT-COLOUR FIELD LAYOUT (offsets 31..38). A guest cannot pack a
+            /* DIRECT-COLOUR FIELD LAYOUT (offsets 31..38). A guest cannot pack a
              * pixel without these, and it will not trust a mode that leaves them
              * zero. 15bpp is 5:5:5 with one byte unused, 16bpp is 5:6:5, 24bpp is
              * 8:8:8 -- all little-endian, blue in the low bits, which is what every
@@ -2988,7 +2988,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
              * bit nothing reads (the ET4000/W32p ROM says 02 there; p_vesa, s74b).
              */
             buffer[VIDEO_MODE_INFO_DIRECT_COLOUR_INFO] = (BYTE)(modeBitsPerPixel == VIDEO_BPP_15 ? VIDEO_DIRECT_RESERVED_USABLE : 0x00);
-            /* -- LINEAR FRAMEBUFFER. (s74) Attribute bit 7 says a mode HAS one and
+            /* LINEAR FRAMEBUFFER. (s74) Attribute bit 7 says a mode HAS one and
              * PhysBasePtr says where; with them 0 the whole mode list reads as
              * "banked only". heaven7 enumerated all twelve modes we published,
              * including 320x200x16 and 640x480x16, and refused every one without
@@ -3128,7 +3128,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
                     state->VideoMemory[count] = 0;
             }
 
-            /* -- 4F03h REPORTS D14/D15 AS THIS CALL SET THEM, AND 40:87h BIT 7 RECORDS
+            /* 4F03h REPORTS D14/D15 AS THIS CALL SET THEM, AND 40:87h BIT 7 RECORDS
              * D15 (#226). section 4.6: BX D14 = linear, D15 = "memory not cleared at last mode
              * set", and the Version 2.x note: "Unlike version 1.x VBE implementations,
              * the memory clear flag will be returned". section 4.5: "VBE BIOS 2.0
@@ -3171,7 +3171,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
              *   zeroed; 40:87h = 60h | (D15 ? 80h : 0). VddVideoBdaSync derives all
              *   of those from the fields set here.
              */
-            /* -- #325: AND THE 256-COLOUR DEFAULT PALETTE, as a mode 13h set loads it.
+            /* #325: AND THE 256-COLOUR DEFAULT PALETTE, as a mode 13h set loads it.
              * A 4F02 left the DAC as the previous mode had it, so after a 16-colour
              * mode (0Dh) colour 15 drew grey -- seen on the rig as a grey VESA
              * checkerboard. AH=12h BL=31h (palette loading off) is still honoured
@@ -3544,7 +3544,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
         break; }
 
     case VIDEO_VBE_PM_INTERFACE:                                    /* protected-mode interface */
-        /* -- #53: BL=00h -> ES:DI = the block, CX = its length (VBE 2.0 section 4.13). See
+        /* #53: BL=00h -> ES:DI = the block, CX = its length (VBE 2.0 section 4.13). See
          * VideoVbePmInstall. It is rewritten on every call, so the copy a client takes
          * is always the real one. Any other BL: 014Fh (the function exists; that
          * subfunction does not).
@@ -3962,7 +3962,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                 {
                     INT plane;
                     UINT32 index;
-                    /* -- THE BIOS PROGRAMS THE SEQUENCER TOO. (s74b) A mode set writes
+                    /* THE BIOS PROGRAMS THE SEQUENCER TOO. (s74b) A mode set writes
                      * SR4 = 06h for the planar modes (chain-4 OFF, odd/even off) and SR2 =
                      * 0Fh; we modelled neither, so chain4 kept whatever the guest last
                      * wrote -- 1 from reset -- and the map-mask handler took its
@@ -4009,7 +4009,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                 }
             }
 
-            /* -- THE COLOURS ARE REBUILT AFTER THE MODE'S KIND IS KNOWN. (s81, user:
+            /* THE COLOURS ARE REBUILT AFTER THE MODE'S KIND IS KNOWN. (s81, user:
              * "white shows faint blue" after Doom; ENDOOM's bright words pale blue.)
              * VideoLoadDefaultPalette() above runs VideoPaletteRefresh() while mkind is still
              * the OLD mode's -- so leaving mode 13h built the text colours with the
@@ -4020,7 +4020,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
              * the same either way, which is why a shell prompt hid it. And the BIOS
              * resets the DAC pixel mask on a mode set as well.
              */
-            /* -- AH=12h BL=30h CHOSE THE SCAN LINES FOR THIS (#252). The colour text modes
+            /* AH=12h BL=30h CHOSE THE SCAN LINES FOR THIS (#252). The colour text modes
              * come up in 200, 350 or 400 lines with the font that fills 25 rows of
              * them -- 8x8, 8x14, 8x16. It answered "supported" and every text mode
              * came up at 400 regardless.
@@ -4031,7 +4031,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                 state->GraphicsHeight = (WORD)(state->Rows * state->CellHeight);
             }
 
-            /* -- #266: INT 43h FOLLOWS THE MODE. A VGA BIOS points the graphics-font
+            /* #266: INT 43h FOLLOWS THE MODE. A VGA BIOS points the graphics-font
              * vector at the table of the new mode's cell (SeaVGABIOS's vga_set_mode:
              * 8 / 14 / 16 from the mode's character height), so a program that reads
              * INT 43h after a mode set finds the font the BIOS will draw with. Nothing
@@ -4042,7 +4042,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
             VideoInt43Rom(state, state->CellHeight);
             state->DacMask = VIDEO_DAC_MASK_ALL;
             VideoPaletteRefresh(state);
-            /* -- AH=00h RETURNS A "VIDEO MODE FLAG" IN AL, NOT THE MODE. (s74b) Measured
+            /* AH=00h RETURNS A "VIDEO MODE FLAG" IN AL, NOT THE MODE. (s74b) Measured
              * on the AMI 486 ROM under PCem and on SeaBIOS alike (p_plan12: AX=0020
              * after mode 12h); RBIL documents it for Phoenix/AMI: 20h for modes > 7,
              * 30h for modes 0-5 and 7, 3Fh for mode 6. We returned AL = the mode,
@@ -4068,7 +4068,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         state->CursorShape = VddGetCx(registers);
     break;
 
-    /* -- 02h/03h: THE CURSOR OF PAGE BH (#252). Eight cursors, one per page -- the
+    /* 02h/03h: THE CURSOR OF PAGE BH (#252). Eight cursors, one per page -- the
      * active page's is CursorRow/CursorColumn, the rest PageRow/PageColumn (0040:0050). BH was
      * ignored, so positioning page 1's cursor moved the one on screen.
      */
@@ -4102,7 +4102,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         VddSetCx(registers, (WORD)(state->ModeKind == VIDEO_KIND_TEXT ? state->CursorShape : 0));
         break; }
 
-    /* -- 05h: SELECT THE ACTIVE PAGE, AND SHOW IT (#252). It stored the number and the
+    /* 05h: SELECT THE ACTIVE PAGE, AND SHOW IT (#252). It stored the number and the
      * BDA followed (oracle-verified, #188) -- but the CRTC start address never moved,
      * so the screen stayed on page 0. The BIOS loads CR0C/CR0D with the page's offset:
      * in WORDS in the text modes (page 1 of 80x25 = 0800h), in BYTES in the planar
@@ -4143,7 +4143,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                   (BYTE)(VddGetDx(registers) >> BYTE_SHIFT), (BYTE)(VddGetDx(registers) & BYTE_MASK), (BYTE)(VddGetBx(registers) >> BYTE_SHIFT));
         break;
 
-    /* -- 08h: READ THE CHARACTER AT PAGE BH's CURSOR -- from the cell in text, from
+    /* 08h: READ THE CHARACTER AT PAGE BH's CURSOR -- from the cell in text, from
      * the PIXELS in a graphics mode (VideoGraphicsReadChar), AH = 0 there.
      */
     case VIDEO_FUNCTION_READ_CHARACTER:
@@ -4163,7 +4163,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
 
         break; }
 
-    /* -- 09h/0Ah: CX copies at page BH's cursor, cursor not moved. Text: the (char,
+    /* 09h/0Ah: CX copies at page BH's cursor, cursor not moved. Text: the (char,
      * attr) pairs on THAT page. Graphics: the glyph, BL = colour (0Ah too -- RBIL:
      * "BL = colour in graphics modes"), bit 7 XOR; see VideoGraphicsGlyph.
      */
@@ -4204,7 +4204,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
 
         break; }
 
-    /* -- 0Ch/0Dh: ONE PIXEL, IN THE MODE'S OWN GEOMETRY (#252). The planar arm used a
+    /* 0Ch/0Dh: ONE PIXEL, IN THE MODE'S OWN GEOMETRY (#252). The planar arm used a
      * 640-pixel stride in every planar mode and ignored the page; the CGA modes were
      * not written at all (and read 0). AL bit 7 = XOR, except in 13h (one byte a
      * pixel: the colour is all eight bits). BH = page in the planar modes.
@@ -4279,7 +4279,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
 
         break; }
 
-    /* -- 0Eh: TELETYPE ON THE ACTIVE PAGE; BL = foreground in graphics (#252). BH is
+    /* 0Eh: TELETYPE ON THE ACTIVE PAGE; BL = foreground in graphics (#252). BH is
      * not consulted -- p_vidtxt t03.0E.which: with page 1 active a BH=0 teletype
      * lands on page 1 (PCem's IBM ROM).
      */
@@ -4487,7 +4487,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
 
         break; }
 
-    /* -- 0Bh: SET BACKGROUND / BORDER / CGA PALETTE, THROUGH THE ATTRIBUTE CONTROLLER (#266).
+    /* 0Bh: SET BACKGROUND / BORDER / CGA PALETTE, THROUGH THE ATTRIBUTE CONTROLLER (#266).
      * It wrote BL into `overscan` (not AR11, which read back unchanged) whatever the
      * mode, and BH=1 flipped a private `CgaPalette` that VideoRenderCga indexed a hard-coded
      * table with -- so the AC registers a guest reads back, and AH=10h's view of them,
@@ -4549,7 +4549,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         VideoPaletteRefresh(state);
         break; }
 
-    /* -- 04h: READ LIGHT PEN. A VGA has no light-pen input; its BIOS answers AH=00h,
+    /* 04h: READ LIGHT PEN. A VGA has no light-pen input; its BIOS answers AH=00h,
      * "not triggered" (#266). We left AH=04h -- which a caller reads as "triggered",
      * with BX/CX/DX as a position. The other registers are untouched.
      *
@@ -4620,7 +4620,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
 
         break; }
 
-    /* -- 13h WRITE STRING (#252). AL bit 0 = leave the cursor after the string (clear:
+    /* 13h WRITE STRING (#252). AL bit 0 = leave the cursor after the string (clear:
      * put it back), bit 1 = the string is (char, attr) pairs (else BL for all); BH =
      * page; DH/DL = where. BEL, BS, CR and LF are EXECUTED, as the teletype does --
      * they were stored as glyphs, the cursor was always moved, the page ignored, and
@@ -4833,7 +4833,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         }
         else if (al == VIDEO_FONT_SET_BLOCK)
         {
-            /* -- 03h: SET BLOCK SPECIFIER = the Sequencer's Character Map Select (#266).
+            /* 03h: SET BLOCK SPECIFIER = the Sequencer's Character Map Select (#266).
              * BL goes to SR3 as-is (SeaVGABIOS: stdvga_set_text_block_specifier) --
              * which font block attribute bit 3 = 0 / = 1 cells are drawn from. It was
              * caught by the ROM-font arm below as "AL & 0Fh <= 4" and reloaded the
@@ -4949,7 +4949,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         }
         else if (al >= VIDEO_FONT_GRAPHICS_INT1F && al <= VIDEO_FONT_GRAPHICS_8X16)
         {
-            /* -- 20h-24h: THE GRAPHICS-MODE FONT CALLS (#266). They answered DL and
+            /* 20h-24h: THE GRAPHICS-MODE FONT CALLS (#266). They answered DL and
              * stored nothing -- no vector, no row count -- so a program that loaded
              * its own graphics font (or asked for 43 rows of 8x8 in mode 10h) kept
              * drawing with the ROM table at the mode's own height.
@@ -5038,7 +5038,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
             state->IsDefaultPaletteOff = (BYTE)((VddGetAx(registers) & BYTE_MASK) ? 1 : 0);
             VddSetAx(registers, (WORD)((VddGetAx(registers) & HIGH_BYTE_MASK) | VIDEO_FUNCTION_ALTERNATE_SELECT));
         }
-        /* -- #252: THE REST OF THE VGA's BL TABLE, EACH DOING ITS JOB -- and anything
+        /* #252: THE REST OF THE VGA's BL TABLE, EACH DOING ITS JOB -- and anything
          * else REFUSED. The `else` used to answer AL=12h for every BL, so 30h/32h/33h/
          * 34h/36h each said "done" and did nothing. AL in = 0 enable / 1 disable (30h:
          * 0/1/2 = 200/350/400 lines); AL out = 12h. An AL out of range is refused too.
@@ -5242,7 +5242,7 @@ static VOID VideoDacIn(PVOID context, WORD port, BYTE width, UINT32 *value)
         state->DacComponent = 0;
 }
 
-/* --- VGA planar write engine (mode 12h: Sequencer 3C4/5 + GC 3CE/F) ------- */
+/* VGA planar write engine (mode 12h: Sequencer 3C4/5 + GC 3CE/F): */
 static BYTE VideoRotateRight(BYTE value, BYTE count)
 {
     count &= VIDEO_ROTATE_MASK;
@@ -5344,7 +5344,7 @@ static VOID VideoPlanarWrite1(PVIDEO_STATE state, UINT32 offset, BYTE cpu)
     }
 }
 
-/* -- THE CACHE WITNESS. A linear scan over ten slots, entered only for accesses
+/* THE CACHE WITNESS. A linear scan over ten slots, entered only for accesses
  * above VIDEO_CACHE_LOW, so its cost falls on nothing that draws the screen. It is
  * deliberately NOT a hash: the whole point is that "this pc never appeared" must
  * mean the pc never ran, and a hashed table cannot say that. See vdd_video.h.
@@ -5519,7 +5519,7 @@ BYTE VddVideoPlanarRead(PVIDEO_STATE state, UINT32 offset)
     if (!(state->ReadMode & 1))
         return VideoPlaneBytes(state,state->ReadMap & VIDEO_GC_READ_MAP_MASK)[offset];                /* read mode 0 */
 
-    /* -- READ MODE 1: COLOUR COMPARE. One bit per pixel, set where that pixel's
+    /* READ MODE 1: COLOUR COMPARE. One bit per pixel, set where that pixel's
      * colour matches GR2 in every plane GR7 selects. GR7 is "Color DON'T Care" and
      * reads backwards: a SET bit means the plane DOES take part. With GR7 = 0 no
      * plane is compared, so every pixel matches and the read is 0xFF -- which is the
@@ -5930,7 +5930,7 @@ static VOID VideoLoadModeDefinition(PVIDEO_STATE state, BYTE mode)
     }
 }
 
-/* -- #266: THE VIDEO PARAMETER TABLE, FROM THE SAME MEASURED REGISTER SETS THE MODE SET
+/* #266: THE VIDEO PARAMETER TABLE, FROM THE SAME MEASURED REGISTER SETS THE MODE SET
  * LOADS. A VGA BIOS programs a mode FROM this table, and publishes it through
  * 0040:00A8 -> Save Pointer table -> first far pointer; text utilities and mode
  * switchers read the register values out of it rather than out of the card. So
@@ -6295,7 +6295,7 @@ static VOID VideoCrtcSetData(PVOID context, UINT32 value)
 
     switch (state->CrtcIndex)
     {
-    /* -- THE START ADDRESS IS SIXTEEN BITS WRITTEN AS TWO REGISTERS, so between the
+    /* THE START ADDRESS IS SIXTEEN BITS WRITTEN AS TWO REGISTERS, so between the
      * two writes it holds a value the guest never asked for -- half of the old
      * address and half of the new. Real hardware survives that because the address
      * counter LOADS FROM THESE REGISTERS AT THE VERTICAL RETRACE, not continuously,
@@ -6592,7 +6592,7 @@ static VOID VideoSequencerSetData(PVOID context, UINT32 value)
 
         if (chain4 != state->IsChain4)
         {
-            /* -- #184: THE SAME BYTES, TWO ADDRESSINGS. A chain-4 store at CPU address A
+            /* #184: THE SAME BYTES, TWO ADDRESSINGS. A chain-4 store at CPU address A
              * lands in plane A&3 at plane offset A&~3 (docs/ref/vga.md section 8) -- so a program
              * that draws chained and then unchains (Doom, and p_vgamem's chain4.abcd)
              * must find those bytes spread across the planes. Here the chained view is the
@@ -7307,7 +7307,7 @@ static VOID VideoStatusIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     }
 
     state->Time3DaLast = now;
-    /* -- SCALE FIRST, DIVIDE ONCE. A scanline is not a whole number of microseconds:
+    /* SCALE FIRST, DIVIDE ONCE. A scanline is not a whole number of microseconds:
      * at 70 Hz it is 14285/449 = 31.8us, and taking `line_us = frame_us / vtotal`
      * truncated that to 31. Lines then ran 2.6% fast -- a frame's worth of them
      * reached 460 on a 449-line screen, which is what the clamp below was quietly
@@ -7322,7 +7322,7 @@ static VOID VideoStatusIn(PVOID context, WORD port, BYTE width, UINT32 *value)
         isInHbl = ((UINT64)(position % frameUs) * PERCENT >= (UINT64)frameUs * VIDEO_HACTIVE_PERCENT);
     }
     isInVbl = (line >= (UINT32)verticalActive);
-    /* -- #225: A RETRACE THAT STARTED AND ENDED BETWEEN TWO POLLS HAPPENED TOO -- but
+    /* #225: A RETRACE THAT STARTED AND ENDED BETWEEN TWO POLLS HAPPENED TOO -- but
      * only while the CPU throttle holds the guest (IsVblOweOn). The previous poll
      * saw the active picture of an EARLIER frame, so that frame's retrace passed
      * unseen during a hold; report it ONCE, as the bit-0 rule below does for a line,
@@ -7342,7 +7342,7 @@ static VOID VideoStatusIn(PVOID context, WORD port, BYTE width, UINT32 *value)
      * toggling the two together, as we used to, was doubly wrong.
      * The owed-blank rule below is what makes a scanline counter exact.
      */
-    /* -- A BLANK THAT PASSED BETWEEN TWO POLLS HAPPENED, WHETHER OR NOT A SAMPLE
+    /* A BLANK THAT PASSED BETWEEN TWO POLLS HAPPENED, WHETHER OR NOT A SAMPLE
      * LANDED IN IT. Bit 0 is what a scanline COUNTER reads: Lemmings' "High
      * Performance PC" calibration does `wait while set; wait while clear` 320 times
      * against the 8254 and uses the elapsed clocks as its game tick (guest
@@ -7409,7 +7409,7 @@ static VOID VideoStatusIn(PVOID context, WORD port, BYTE width, UINT32 *value)
         state->VblEdges++;
 
     state->VblPrevious = (BYTE)isInVbl;
-    /* -- RAISE THE PRESENT FROM THE GUEST'S FRAME (see PresentHook in the header).
+    /* RAISE THE PRESENT FROM THE GUEST'S FRAME (see PresentHook in the header).
      * Same window as VddVideoIsPresentReady -- the last VIDEO_PRESENT_WINDOW_PER_MILLE of
      * the frame before blanking, when a retrace-paced guest has finished drawing
      * and is parked here polling -- expressed in lines so no second clock read is
@@ -7600,7 +7600,7 @@ static const BYTE *VideoGlyphRows(PCVIDEO_STATE state, BYTE character)
     return g_VgaFont8x16[character];
 }
 
-/* -- ONE CELL. The attribute byte's top bit is BLINK OR BRIGHT BACKGROUND, and the
+/* ONE CELL. The attribute byte's top bit is BLINK OR BRIGHT BACKGROUND, and the
  * Attribute Controller (AR10 bit 3, INT 10h AX=1003h) decides which. Blink is the
  * power-on default. We always masked the bit off -- `(attr >> 4) & 7` -- so a
  * program that turned blink OFF to get sixteen background colours (every text-mode
@@ -7608,7 +7608,7 @@ static const BYTE *VideoGlyphRows(PCVIDEO_STATE state, BYTE character)
  * left blink ON and used it never blinked. `st->IsBlinkOffPhase` is the phase for this
  * render, set once per frame by VddVideoRender from the injected clock.
  */
-/* -- #324: A VGA TEXT CELL IS NINE DOTS WIDE. Sequencer Clocking Mode bit 0 picks 8 or 9
+/* #324: A VGA TEXT CELL IS NINE DOTS WIDE. Sequencer Clocking Mode bit 0 picks 8 or 9
  * (every standard VGA text mode sets 9: 80x25 is 720x400, 40x25 is 360x400). The ninth
  * column is background, except that with Line Graphics Enable (AR10 bit 2) the box-
  * drawing range C0h-DFh repeats the eighth column into it, which is what makes
@@ -7907,7 +7907,7 @@ static VOID VideoRenderCga(PVIDEO_STATE state)
     INT column;
     INT pixelsPerByte = state->CgaBpp == 1 ? VIDEO_PIXELS_PER_PLANE_BYTE : VIDEO_CGA_PIXELS_PER_BYTE;             /* pixels per byte */
 
-    /* -- #266: THE PIXEL VALUE IS AN ATTRIBUTE-CONTROLLER INDEX, as on the card: 0-3 in
+    /* #266: THE PIXEL VALUE IS AN ATTRIBUTE-CONTROLLER INDEX, as on the card: 0-3 in
      * 04h/05h (AR12 = 03h), 0-1 in 06h (AR12 = 01h), and pal[] carries it through
      * AR0n -> DAC. This drew from a private table -- pixel 1/2/3 as index 11/13/15
      * (or 10/12/14 after AH=0Bh BH=1) -- which came out right only while AR0B/0D/0F
@@ -7957,7 +7957,7 @@ static VOID VideoRenderCga(PVIDEO_STATE state)
  * [CAUTION]: Both values come from a guest register, so every plane index is wrapped into the
  * plane rather than trusted: a mid-scroll write must not read off the end.
  */
-/* -- #325: THE PICTURE'S SIZE AS THE CRTC IS PROGRAMMED, NOT AS THE MODE NUMBER SAYS.
+/* #325: THE PICTURE'S SIZE AS THE CRTC IS PROGRAMMED, NOT AS THE MODE NUMBER SAYS.
  * A game sets mode 13h and reprograms the CRTC -- Mode X is 320x240, others 360x480 --
  * and the monitor shows what the registers say. Width: Horizontal Display End (CR01)
  * + 1 character clocks of 8 dots, halved when the attribute controller pairs dots
@@ -8032,7 +8032,7 @@ static VOID VideoRenderPlanar(PVIDEO_STATE state)
                      ? (UINT32)state->CrtcOffset * VIDEO_CRTC_OFFSET_UNIT : bytes;
     /* The LATCHED start address, not the register pair -- see VideoCrtcOut case 0x0C. */
     UINT32 base  = state->IsCrtcSeen ? (UINT32)state->CrtcStartLive : 0u;
-    /* -- SPLIT SCREEN. Below Line Compare the address generator restarts at 0, which
+    /* SPLIT SCREEN. Below Line Compare the address generator restarts at 0, which
      * is how a scrolling game pins a status panel to the bottom of the screen while
      * the level pans behind it. Lemmings does exactly this, and without it the panel
      * is drawn from the scrolled address -- the striped band under an otherwise
@@ -8227,7 +8227,7 @@ static VOID VideoOnFrame(PVOID context)
     if (!state->VideoMemory)
         return;
 
-    /* -- THE START ADDRESS IS LATCHED ONCE PER FRAME, as the hardware's address
+    /* THE START ADDRESS IS LATCHED ONCE PER FRAME, as the hardware's address
      * counter loads it at the vertical retrace. Rendering straight from the
      * register pair means a frame built between the two byte writes of a page flip
      * shows half the old address and half the new. CrtcStartHalf counts the
@@ -8346,7 +8346,7 @@ static VOID VideoOnFrame(PVOID context)
         state->Frame.Palette = state->Palette;
     }
 
-    /* -- #266: SR1 BIT 5, "SCREEN OFF", BLANKS THE PICTURE. The sequencer stops feeding
+    /* #266: SR1 BIT 5, "SCREEN OFF", BLANKS THE PICTURE. The sequencer stops feeding
      * the attribute controller, so the monitor sees black for as long as the bit is
      * set -- and the picture comes back untouched when it clears, because nothing
      * in video memory moved. Programs set it to hide a redraw or a mode change, and

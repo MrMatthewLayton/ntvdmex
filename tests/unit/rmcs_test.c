@@ -58,7 +58,7 @@ INT main(VOID)
           && RMCS_GS == 0x28 && RMCS_IP == 0x2A && RMCS_CS == 0x2C && RMCS_SP == 0x2E
           && RMCS_SS == 0x30, "FLAGS ES DS FS GS IP CS SP SS at 20..30");
 
-    /* ---- read: every field, full width, little-endian, any alignment ---- */
+    /* read: every field, full width, little-endian, any alignment: */
     { BYTE buffer[RMCS_SIZE + 1];
     RMCS_REGS registers;
     PBYTE record = buffer + 1;   /* odd address */
@@ -75,7 +75,7 @@ INT main(VOID)
             "FS from +26, GS from +28 (they were never read: the 0301 arm set FS=GS=SS)");
       CHECK(registers.Flags == (WORD)(record[0x20] | record[0x21] << 8), "FLAGS from +20"); }
 
-    /* ---- write: every output, and nothing that is not one ---- */
+    /* write: every output, and nothing that is not one: */
     { BYTE record[RMCS_SIZE], before[RMCS_SIZE];
     RMCS_REGS registers;
       RmcsTestFillPattern(record, sizeof record);
@@ -109,7 +109,7 @@ INT main(VOID)
       RmcsRead(record, &readBack);
         CHECK(memcmp(&registers, &readBack, sizeof registers) == 0, "write then read is the identity"); } }
 
-    /* ---- 0300h routing ---- */
+    /* 0300h routing: */
     CHECK(RmcsSimIntRoute(0x21, OURS, 0x0000, 1, OURS) == SIMINT_FAST, "21h, ours: host-side");
     CHECK(RmcsSimIntRoute(0x21, 0x1234, 0x0010, 1, OURS) == SIMINT_FAST,
           "21h, HOOKED by a guest: still host-side (the documented deviation, kept for the shelf)");
@@ -133,7 +133,7 @@ INT main(VOID)
           && RmcsSimIntRoute(0x10, 0xC000, 0x1234, 0, OURS) == SIMINT_FAST,
           "simintrefl_off.flag: 33h/10h host-side whoever owns them (pre-#247)");
 
-    /* ---- CX words of stack ---- */
+    /* CX words of stack: */
     { WORD stackPointer;
       CHECK(RmcsStackPlan(0xFF00, 0, 6, &stackPointer) && stackPointer == 0xFF00, "CX=0: nothing copied, SP unchanged");
       CHECK(RmcsStackPlan(0xFF00, 3, 6, &stackPointer) && stackPointer == 0xFEFA, "CX=3: six bytes below SP");

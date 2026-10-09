@@ -47,7 +47,7 @@
 #define WOWUSER_AD_KIND_PREDEFINED          1
 #define WOWUSER_AD_KIND_MODULERES           3
 
-/* -- s89 (#216): WHAT `kind` ACTUALLY IS. It arrives as 1 from every
+/* s89 (#216): WHAT `kind` ACTUALLY IS. It arrives as 1 from every
  * LoadCursor -- NULL hInstance or a module's own -- and as 3 from every
  * LoadIcon. So `kind` is CURSOR (1) or ICON (3), and whether the object is a
  * PREDEFINED one or the MODULE's own is said by the hInstance at +18, which
@@ -160,7 +160,7 @@
  */
 #define WOWUSER_JREC_Q                      64
 
-/* -- s92 (#306): WHOSE FILE A RESOURCE IS IN. Every menu, icon, cursor and
+/* s92 (#306): WHOSE FILE A RESOURCE IS IN. Every menu, icon, cursor and
  * accelerator table used to be read from g_WowCommandProgram, the program on the
  * command line -- right while there was one Win16 program, wrong for the next:
  * WinHelp, started by Calc, came up with NO MENU because WINHELP.EXE's menu
@@ -423,7 +423,7 @@
 #define WOWUSER_STUB_CLASS_INDEX            0x38                        /* ...then the class's index */
 #define WOWUSER_SYSPROC_COUNT               ((INT)(sizeof g_WowUserSystemProcedures / sizeof g_WowUserSystemProcedures[0]))
 
-/* -- s89 (#270): THE DESKTOP HAS A HANDLE. GetDesktopWindow used to answer 0,
+/* s89 (#270): THE DESKTOP HAS A HANDLE. GetDesktopWindow used to answer 0,
  * on the grounds that GetDC(0) is the screen -- but a program that CENTRES a
  * dialog asks GetWindowRect(GetDesktopWindow()), and IsWindow of it must be
  * TRUE (the Win16 test `user.desktop.*`). One record outside the table: no
@@ -434,7 +434,7 @@
  */
 #define WOWUSER_HWND_DESKTOP                0x00e0
 
-/* -- THE Win16 DIALOG TEMPLATE, AND EVERY FIELD IS A DIFFERENT WIDTH
+/* THE Win16 DIALOG TEMPLATE, AND EVERY FIELD IS A DIFFERENT WIDTH
  * FROM ITS Win32 DESCENDANT. (session 55) ------------------------------------
  * This is the 16-bit DLGTEMPLATE: the item count is a BYTE, every coordinate
  * is a WORD, and the variable-length name fields come in three forms. Win32's
@@ -492,7 +492,7 @@
  */
 #define WOWDLG_MAXFONT                      8
 
-/* -- ASK FOR THE WM_CREATE. One helper, because there are now TWO places that
+/* ASK FOR THE WM_CREATE. One helper, because there are now TWO places that
  * make a window with a 16-bit procedure behind it (CreateWindow, and the MDI
  * client's WM_MDICREATE) and they must send the same message with the same
  * entry conditions. See wowcall.h for what the fields mean and for why the
@@ -813,7 +813,7 @@ typedef struct _WOWUSER_WINDOW
     WORD Menu;
     WORD Instance;
     char  Text[WOWUSER_NAME_SIZE];                   /* char, not CHAR: the spelling moves code (#333) */
-    /* -- THE WINDOW'S EXTRA BYTES -- cbWndExtra, AND THEY ARE LOAD-BEARING.
+    /* THE WINDOW'S EXTRA BYTES -- cbWndExtra, AND THEY ARE LOAD-BEARING.
      * Not storage for its own sake: SYSEDIT keeps its EDIT control's handle
      * and its file state in them. `mpchild`'s WNDCLASS declares
      * `cbWndExtra = 8` (as it arrives in RegisterClass, the same block that
@@ -894,7 +894,7 @@ typedef struct _WOWUSER_TIMER
     INT IsUsed;
 } WOWUSER_TIMER;
 
-/* -- s88: the DIALOG MANAGER'S DEFAULT for one message, once the DLGPROC has
+/* s88: the DIALOG MANAGER'S DEFAULT for one message, once the DLGPROC has
  * answered FALSE (or there is none). See WOWUSER_DEFDLGPROC. The two arms are
  * the ones this host always had:
  *

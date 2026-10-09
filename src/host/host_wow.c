@@ -87,7 +87,7 @@
 
 #define WOW_ENTRY_CX_FULL_U     0xF880u     /* krnl386's entry CX: its 64 KB selector less our header image */
 
-/* -- ANSWER AN UNIMPLEMENTED WOW32 CALL DIFFERENTLY, WITHOUT CLAIMING TO KNOW
+/* ANSWER AN UNIMPLEMENTED WOW32 CALL DIFFERENTLY, WITHOUT CLAIMING TO KNOW
  * WHAT IT MEANS. (GH #128, session 37) ------------------------------------------
  * 53 of the 82 IDs are not named by krnl386's export table, and the sentinel we
  * answer them with is load-bearing: `0` is right for "declined / not present" and
@@ -197,7 +197,7 @@ enum
     WOW_VENDOR_STUB_SELECTOR = 0x10, WOW_VENDOR_STUB_LIMIT = 0x1F
 };   /* WowVendorApiEntry: the mov ax,imm16's operand; the segment */
 
-/* -- THE WOW32.DLL / NTVDM.EXE STAND-INS (s90, #5/#278). See src/shim/wowshim.c.
+/* THE WOW32.DLL / NTVDM.EXE STAND-INS (s90, #5/#278). See src/shim/wowshim.c.
  * Loaded once, at WOW start-up, by FULL PATH from bin\wowshim\ -- a module of that
  * name must be in the process before any 32-bit thunk DLL asks for it by name
  * (winmm asks in NotifyCallbackData, the first thing MMSYSTEM calls).
@@ -415,7 +415,7 @@ static DWORD g_WowSchedInterTask;
 static WORD g_WowVendorSelector = 0;
 
 static WORD  g_WowShadowSelector = 0;
-/* -- "WHAT DID THE SHADOW LAST LOOK LIKE" IS A DIFFERENT QUESTION FROM "WHAT IS
+/* "WHAT DID THE SHADOW LAST LOOK LIKE" IS A DIFFERENT QUESTION FROM "WHAT IS
  * IN THE REAL LDT", AND CONFLATING THEM IS A BUG WE HAVE NOW MADE TWICE.
  * The sync wants to know which entries the GUEST changed, so it must diff the
  * shadow against the last shadow it saw -- not against g_Ldt[], which is the
@@ -1298,7 +1298,7 @@ static DWORD WowFindLdtBase(VOID)
     return 0;
 }
 
-/* -- WOW ENTRY STAGE: put krnl386 in CONVENTIONAL memory and relocate to PARAGRAPHS. -
+/* WOW ENTRY STAGE: put krnl386 in CONVENTIONAL memory and relocate to PARAGRAPHS:
  * This, not the selector stage below, is how krnl386 is actually entered -- see the
  * refutation there. It runs in V86 first and switches itself to protected mode via
  * INT 2Fh 1687, so what it needs at entry is exactly what a DOS program needs: real
@@ -2067,7 +2067,7 @@ INT WowPlaceV86(
             return -1;
         }
 
-        /* -- ZERO THE ARENA. The same rule the header-image block already states,
+        /* ZERO THE ARENA. The same rule the header-image block already states,
          * applied where it was measurably needed: krnl386 carves everything from
          * `ES + 0x10` upward without asking DOS, and it PARSES what it finds there
          * as structured data -- so uninitialised memory here is a bug that reads
@@ -2253,7 +2253,7 @@ VOID WowProbeSelectors(VOID)
      */
     WowFindLdtBase();
 
-    /* -- PHASE 2a: a selector for EVERY segment of EVERY module, before any
+    /* PHASE 2a: a selector for EVERY segment of EVERY module, before any
      * relocation runs. NeRegistryResolve refuses a target whose selector is still
      * 0, so getting this order wrong fails loudly instead of writing 0000:xxxx.
      */
@@ -2781,7 +2781,7 @@ VOID WowSchedSetCurrent(WORD task)
     dgroup[WOWUSER_KRNL_CURRENT_TASK + 1] = (BYTE)(task >> BYTE_SHIFT);
 }
 
-/* -- s92 (#306): THE RECEIVER'S STACK FOR AN INTER-TASK MESSAGE -- see
+/* s92 (#306): THE RECEIVER'S STACK FOR AN INTER-TASK MESSAGE -- see
  * g_WowCallRetarget in wowcall.h. The window's owner (wowuser.h records its
  * creator) must not be the running task, and must be somewhere the host knows
  * its free stack: parked in a run-queue slot, or blocked in a host callback
@@ -3165,7 +3165,7 @@ INT WowVendorApiEntry(DOS_MACHINE *machine, WORD *selector, WORD *offset)
     return 0;
 }
 
-/* -- s89 (#302): ...and WITH A STRUCTURE. `blob` (blobn bytes) is placed on the guest's
+/* s89 (#302): ...and WITH A STRUCTURE. `blob` (blobn bytes) is placed on the guest's
  * stack below the arguments and its far pointer written into args[blobarg..+1]
  * (high word first, as WowCallEnter does for WM_CREATE). After the procedure
  * returns the same bytes are copied back into `blob`: WM_MEASUREITEM's answer is
@@ -3312,7 +3312,7 @@ static VOID ShimYield(VOID)
     Sleep(0);
 }
 
-/* -- s91 (#309): WOWCallback16Ex -- a 32-bit thunk DLL calling 16-bit code. pArgs is
+/* s91 (#309): WOWCallback16Ex -- a 32-bit thunk DLL calling 16-bit code. pArgs is
  * the 16-bit STACK IMAGE, cbArgs bytes, copied as it is (wownt32.h; Wine's
  * K32WOWCallback16Ex does the same memcpy): its lowest word is what SP points at,
  * i.e. a PASCAL function's LAST argument. WowCall16Sync takes arguments in
@@ -3358,7 +3358,7 @@ static BOOL ShimCallback16Ex(
     return TRUE;
 }
 
-/* -- s91 (#309): WOWGlobal*16 -- krnl386's OWN global heap, through its exports
+/* s91 (#309): WOWGlobal*16 -- krnl386's OWN global heap, through its exports
  * (offsets in its segment 1, read off guest/win16/krnl386.exe's entry table:
  * 15 GlobalAlloc 3ac3, 17 GlobalFree 3adf, 18 GlobalLock 3b10, 19 GlobalUnlock
  * 3b63, 20 GlobalSize 3b4f, 21 GlobalHandle 3afc). The shim composes the
@@ -3711,7 +3711,7 @@ INT WowCall16SyncEx(
     return isOk;
 }
 
-/* -- WM_CTLCOLOR, ANSWERED BY THE PROGRAM (s89, #162). Win32's seven WM_CTLCOLOR*
+/* WM_CTLCOLOR, ANSWERED BY THE PROGRAM (s89, #162). Win32's seven WM_CTLCOLOR
  * are Win16's one WM_CTLCOLOR (0x0019) with the type in lParam's HIGH word
  * (MSGBOX 0 .. STATIC 6, in the same order). The program gets a DC token for the
  * real DC -- SetTextColor/SetBkColor on it land on the control's own DC -- and
@@ -3778,7 +3778,7 @@ LRESULT WowControlColour(
         }
     }
 
-    /* -- THE DEFAULT A 3.x PROGRAM GETS, as stock's USER32 gives it (measured against
+    /* THE DEFAULT A 3.x PROGRAM GETS, as stock's USER32 gives it (measured against
      * stock on the rig, s89): edit and list boxes are the WINDOW colour; static
      * text and buttons are the 3-D face inside a DIALOG (16-bit dialogs get the 3-D
      * look when its template names a font -- Charmap's labels) and the WINDOW
@@ -3796,7 +3796,7 @@ LRESULT WowControlColour(
     return 0;
 }
 
-/* -- s89 (#302 M3): OWNER-DRAW, ANSWERED BY THE PROGRAM. Windows SENDS the four
+/* s89 (#302 M3): OWNER-DRAW, ANSWERED BY THE PROGRAM. Windows SENDS the four
  * owner-draw messages to a control's parent and needs the answer before it goes
  * on -- the control's size before it is laid out (MEASUREITEM), the pixels before
  * the paint ends (DRAWITEM) -- so they go through the nested run like WM_CTLCOLOR,
@@ -4001,7 +4001,7 @@ INT WowSend16Now(WORD window16, WORD message, WORD wParam, DWORD lParam, WORD *r
                            args, WOW_WNDPROC_ARGUMENTS, window16, message, result);
 }
 
-/* -- s90 (#278): deliver IRQs a 32-bit component raised (call_ica_hw_interrupt via
+/* s90 (#278): deliver IRQs a 32-bit component raised (call_ica_hw_interrupt via
  * bin\wowshim\NTVDM.EXE) to the client's PM handlers. Called from the main PM loop
  * AND from the WOW GetMessage wait: a Win16 program spends a sound's whole playback
  * parked in GetMessage, and on real hardware IRQ 10 would interrupt that idle task,

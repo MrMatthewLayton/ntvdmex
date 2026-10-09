@@ -13,20 +13,9 @@
 
 #include "wowcommdlg.h"
 #include "host_state.h"
-#include "log.h"
-#include "ne.h"
-#include "wow32.h"
-#include "wowanchors.h"
-#include "wowsched.h"
-#include "wowcall.h"
 #include "wowmsg.h"
-#include "wowres.h"
-#include "wowwin.h"
 #include "wowgdi.h"
 #include "wowuser.h"
-#include "wowdlg.h"
-#include "wowenum.h"
-#include "wowshell.h"
 
 /* An answer CommDlgExtendedError owes for a call THIS HOST refused before comdlg32
  * saw it (a wrong lStructSize): comdlg32's own per-thread value would say 0, and
@@ -657,7 +646,7 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- #294: 0x05 ChooseColor(lpCC) -- modal, the OS's dialog. Win16
+    /* #294: 0x05 ChooseColor(lpCC) -- modal, the OS's dialog. Win16
      * CHOOSECOLOR is 0x20 bytes; lpCustColors points at the guest's own 16
      * COLORREFs, which are the same bytes in both worlds, so comdlg32 reads
      * and updates them in place. rgbResult and Flags are carried back.
@@ -713,7 +702,7 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- #294: 0x0f ChooseFont(lpCF) -- modal, the OS's dialog. Win16
+    /* #294: 0x0f ChooseFont(lpCF) -- modal, the OS's dialog. Win16
      * CHOOSEFONT is 0x2e bytes and its LOGFONT is the 16-bit one (five INT16s,
      * eight BYTEs, a 32-byte face: 50 bytes), so the font is converted both
      * ways rather than pointed at.
@@ -811,7 +800,7 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- #294 (s91): 0x14 PrintDlg(lpPD) -- modal, the OS's dialog, as WOW does.
+    /* #294 (s91): 0x14 PrintDlg(lpPD) -- modal, the OS's dialog, as WOW does.
      * Converted field by field (2-byte handles in the 16-bit struct). What comes
      * back: the page range, nCopies, Flags, and -- for PD_RETURNDC/PD_RETURNIC --
      * the printer DC as one of our GDI tokens (Win32 draws on it).

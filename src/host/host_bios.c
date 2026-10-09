@@ -97,7 +97,7 @@ VOID ComTransmitSink(PVOID context, INT port, BYTE byteValue)
       FlushFileBuffers(g_ComSpool[port]); }
 }
 
-/* -- THE EQUIPMENT WORD IS A CLAIM ABOUT HARDWARE, SO COMPUTE IT FROM THE
+/* THE EQUIPMENT WORD IS A CLAIM ABOUT HARDWARE, SO COMPUTE IT FROM THE
  * HARDWARE. (GH #9, session 56) ------------------------------------------
  * Two arms answer INT 11h -- one in PM, one in V86 -- and both used the bare
  * constant 0x4021 with a comment reading "one floppy, 80x25 colour, ONE
@@ -132,7 +132,7 @@ WORD BiosEquipmentWord(VOID)
             ++portCount;
 
     equipment = (WORD)((equipment & ~BIOS_EQUIPMENT_SERIAL_MASK_U) | ((DWORD)(portCount & BIOS_EQUIPMENT_SERIAL_COUNT_MASK) << BIOS_EQUIPMENT_SERIAL_SHIFT));
-    /* -- BIT 1 IS "A MATH COPROCESSOR IS INSTALLED", AND IT WAS ALWAYS CLEAR.
+    /* BIT 1 IS "A MATH COPROCESSOR IS INSTALLED", AND IT WAS ALWAYS CLEAR.
      * (session 57, GH #136) The guest runs 16-bit code on the REAL CPU, which
      * has had an FPU since the 486DX -- so answering "no coprocessor" was not
      * a conservative default, it was a wrong one, and a program that asks
@@ -597,7 +597,7 @@ static UINT Int15MoveBlock(volatile BYTE *tib)
 }
 
 WORD g_DosMemoryTop  = (WORD)DOS_MEM_TOP;
-/* --- guest register view <-> VDM_TIB CONTEXT (for bus interrupt dispatch) --- */
+/* guest register view <-> VDM_TIB CONTEXT (for bus interrupt dispatch): */
 VOID RegistersLoad(NTVDD_REGISTERS *registers, volatile BYTE *tib)
 {
     registers->Eax = VDM_REG(tib, VTIB_EAX);
@@ -665,7 +665,7 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
 {
     PSTR cursor = *logCursor;
 
-    /* -- GH #8 (s91): INT 2Ah / INT 5Ch, the network interface, to whichever device
+    /* GH #8 (s91): INT 2Ah / INT 5Ch, the network interface, to whichever device
      * claimed them (vdd_net.c). A bus claim on a vector with no stub behind it was
      * never delivered: INT 14h works because its BOP is wired here by number, and
      * a NetBIOS program's INT 5Ch went to an IRET. [CAUTION] Only from OUR stub -- 2Ah/5Ch
@@ -966,7 +966,7 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
             }
             else if (int15Ah == BIOS_SYSTEM_JOYSTICK)
             {
-                /* -- BIOS joystick support (session 62). DX picks the half:
+                /* BIOS joystick support (session 62). DX picks the half:
                  * 0 = switches (buttons, bits 4-7 of AL, ACTIVE LOW like
                  * the port), 1 = the four resistive inputs. The values
                  * come from the same host-fed sample the gameport VDD
@@ -1360,7 +1360,7 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
          * once, then terminates without printing, so those registers are the
          * evidence. Print them.
          */
-        /* -- [WARNING] CAPPED. The FOURTH instrument in one session to need this, and the
+        /* [WARNING] CAPPED. The FOURTH instrument in one session to need this, and the
          * last one standing after the BOP logger (268 MB, twice) and the INT 21h
          * trace (2,166,824 lines). XP's COMMAND.COM loops through its whole
          * init -- INT 2Fh included -- so an uncapped per-call line here wrote
@@ -1499,7 +1499,7 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
         }
 
-        /* -- The rest of what krnl386 asks INT 2Fh (as logged), and why leaving
+        /* The rest of what krnl386 asks INT 2Fh (as logged), and why leaving
          * it alone is the RIGHT answer rather than merely the easy one:
          *
          * 1600h  "is enhanced-mode Windows running?" AL unchanged = 0x00 =

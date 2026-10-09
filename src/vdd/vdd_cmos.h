@@ -114,7 +114,7 @@ typedef struct _CMOS_STATE
      */
     VOID   (*RtcNow)(PVOID context, PIT_RTC_READING *reading);
     PVOID    RtcContext;
-    /* -- GH #261: AND THE OTHER DIRECTION -- a guest writing the clock registers.
+    /* GH #261: AND THE OTHER DIRECTION -- a guest writing the clock registers.
      * The same hook INT 1Ah AH=03h/05h uses (vdd_pit.h): what=0 hour/min/sec,
      * what=1 cent/year/month/day, binary; it moves the VDM's RTC offset, never
      * the machine's clock. NULL = refused, as before -- which is what the off-VM

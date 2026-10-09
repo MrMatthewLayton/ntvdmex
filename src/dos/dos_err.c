@@ -53,7 +53,7 @@ BOOL DosErrFromWin32(_In_ DWORD win32Error, _Out_ PWORD dosError)
         *dosError = DOS_ERR_ACCESS_DENIED;
         return TRUE;
 
-    /* -- AN IDENTITY, NOT A MEASUREMENT, AND LABELLED AS SUCH. DOS error 4 IS
+    /* AN IDENTITY, NOT A MEASUREMENT, AND LABELLED AS SUCH. DOS error 4 IS
      * "too many open files" and the handler already answers 4 when it runs out
      * of its own slots, so the two names denote one condition. NOT provoked by
      * a probe: to promote it, extend p_err.asm to exhaust the handle table.
@@ -71,7 +71,7 @@ BOOL DosErrFromWin32(_In_ DWORD win32Error, _Out_ PWORD dosError)
         *dosError = DOS_ERR_FILE_EXISTS;
     return TRUE;
 
-    /* -- #34: THE HARDWARE ERRORS, 19-31, ARE THE SAME NUMBERS ON BOTH SIDES. Win32
+    /* #34: THE HARDWARE ERRORS, 19-31, ARE THE SAME NUMBERS ON BOTH SIDES. Win32
      * kept DOS's codes for them (ERROR_WRITE_PROTECT 19 .. ERROR_GEN_FAILURE 31;
      * an empty floppy drive is ERROR_NOT_READY, 21). An identity, and labelled as
      * one -- and the code that matters: 19-31 is what turns a failure into a

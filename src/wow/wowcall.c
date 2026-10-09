@@ -13,18 +13,18 @@
 
 #include "wowcall.h"
 #include "host_state.h"
-#include "log.h"
-#include "ne.h"
 #include "wow32.h"
-#include "wowanchors.h"
-#include "wowsched.h"
-#include "wowmsg.h"
-#include "wowres.h"
-#include "wowwin.h"
-#include "wowgdi.h"
-#include "wowuser.h"
-#include "wowdlg.h"
-#include "wowenum.h"
+
+/* Forward declarations, from when this file was part of main.c's unit (they were in wowcall.h). */
+INT  WowEnumBusy(VOID);
+INT  WowEnumBegin(
+    INT kind,
+    DWORD procedure,
+    WORD dataSelector,
+    DWORD lParam,
+    DWORD returnLinear,
+    WORD parent);
+VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY);
 
 /* s89: a SECOND far pointer into the same stack block. EnumFontFamilies' callback
  * takes two structures (ENUMLOGFONT, NEWTEXTMETRIC); they travel as one blob and
@@ -42,7 +42,7 @@ DWORD g_WowCallBlobLinear = 0;
 WOWENUM_FONT g_WowEnumFonts[WOWENUM_MAXFONT];
 INT g_WowEnumFontCount;
 
-/* -- s92 (#306): A MESSAGE FOR ANOTHER TASK'S WINDOW RUNS AS THAT TASK. Win16's
+/* s92 (#306): A MESSAGE FOR ANOTHER TASK'S WINDOW RUNS AS THAT TASK. Win16's
  * SendMessage across tasks is a directed yield: the receiver's procedure runs on
  * the receiver's stack with the receiver current, and the sender waits. Run on
  * the sender's stack instead, WinHelp's WM_WINHELP handler asked GetCurrentTask,
@@ -67,17 +67,6 @@ INT             g_WowCallDepth  = 0;
  */
 DWORD g_WowCallLastResult;   /* the last nested call's DX:AX (sink keeps only AX) */
 static DWORD           g_WowCallCount  = 0;   /* how many 16-bit calls this run made */
-
-/* Forward declarations, from when this file was part of main.c's unit (they were in wowcall.h). */
-INT  WowEnumBusy(VOID);
-INT  WowEnumBegin(
-    INT kind,
-    DWORD procedure,
-    WORD dataSelector,
-    DWORD lParam,
-    DWORD returnLinear,
-    WORD parent);
-VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY);
 
 /* Push one word onto the guest stack at ssbase:*sp, growing down. */
 static VOID WowCallPush(DWORD stackBase, PWORD stackPointer, WORD value)

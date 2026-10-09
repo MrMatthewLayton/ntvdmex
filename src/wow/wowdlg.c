@@ -13,18 +13,14 @@
 
 #include "wowdlg.h"
 #include "host_state.h"
-#include "log.h"
-#include "ne.h"
-#include "wow32.h"
-#include "wowanchors.h"
-#include "wowsched.h"
-#include "wowcall.h"
-#include "wowmsg.h"
-#include "wowres.h"
 #include "wowwin.h"
-#include "wowgdi.h"
 #include "wowuser.h"
-#include "host_wow.h"
+
+/* Forward declarations, from when this file was part of main.c's unit (they were in wowdlg.h). */
+/* Defined in main.c, which owns the LDT: is this code selector NOT PRESENT?
+ * See the call site, and WOWCALL_RETF_OFF in wowcall.h for what it decides.
+ */
+INT WowDlgIsSelectorAbsent(WORD selector);
 
 /* s88: per callback depth -- did the modal loop's call go to the dialog's own
  * DLGPROC, and with which message. Read when the call returns (main.c).
@@ -36,12 +32,6 @@ static WOWDLG_MODAL g_WowDlgModals[WOWDLG_MAX_MODAL];
 static INT   g_WowDlgDepth   = 0;
 static DWORD g_WowDlgRan     = 0;   /* modal dialogs run to completion this run */
 static DWORD g_WowDlgRefused = 0;   /* ...and ones the host could not drive */
-
-/* Forward declarations, from when this file was part of main.c's unit (they were in wowdlg.h). */
-/* Defined in main.c, which owns the LDT: is this code selector NOT PRESENT?
- * See the call site, and WOWCALL_RETF_OFF in wowcall.h for what it decides.
- */
-INT WowDlgIsSelectorAbsent(WORD selector);
 
 static INT WowDlgPump(INT budget, PINT traceBudget)
 {
@@ -88,7 +78,7 @@ static INT WowDlgPump(INT budget, PINT traceBudget)
         if (message.message >= WM_KEYFIRST && message.message <= WM_KEYLAST && g_WowDlgDepth > 0)
         {
             HWND dialog = WowUserHwnd32(g_WowDlgModals[g_WowDlgDepth - 1].Window);
-            /* -- s93: A KEY FOR THE DIALOG WINDOW ITSELF belongs to a control -- a
+            /* s93: A KEY FOR THE DIALOG WINDOW ITSELF belongs to a control -- a
              * dialog with controls never holds the focus (DefDlgProc passes it on).
              * Ours could end up holding it (Program Item Properties: the first
              * letters typed vanished, measured); the key and the focus go to the
@@ -175,7 +165,7 @@ INT WowDlgPush(
     dialog->Messages    = 0;
     dialog->TraceBudget   = WOWDLG_TRACE;
     dialog->StartTime      = GetTickCount();
-    /* -- GH #279: A MODAL DIALOG DISABLES ITS OWNER, as USER's DialogBox does.
+    /* GH #279: A MODAL DIALOG DISABLES ITS OWNER, as USER's DialogBox does.
      * Without it the main window's X stayed live under Terminal's first-run
      * "Default Serial Port" dialog and took WM_CLOSE. Disabling the REAL
      * window is the whole fix: Windows itself then ignores clicks on it,
@@ -307,7 +297,7 @@ INT WowDlgStep(
         window = WowUserFindWindow(dialog->Window);
         target = dialog->Window;
 
-        /* -- THE FOUR EXITS ARE ONE DECISION, AND IT IS A TESTED FUNCTION.
+        /* THE FOUR EXITS ARE ONE DECISION, AND IT IS A TESTED FUNCTION.
          * `WowConvModalExit` in wowconv.h is total -- every combination of
          * the four facts returns something -- so there is no state in which
          * this loop neither runs nor leaves. That is the property that makes
@@ -341,7 +331,7 @@ INT WowDlgStep(
             continue;              /* an OUTER modal dialog may still be running */
         }
 
-        /* -- EXIT 2: THE WINDOW IS GONE. Nothing can ever drive this dialog
+        /* EXIT 2: THE WINDOW IS GONE. Nothing can ever drive this dialog
          * again, so waiting for it would be the hang this file exists to
          * avoid. Real Windows answers a dialog that could not run with 0. --
          */
@@ -358,7 +348,7 @@ INT WowDlgStep(
             continue;
         }
 
-        /* -- EXIT 3: THERE IS NOTHING TO CALL. A dialog is driven by a
+        /* EXIT 3: THERE IS NOTHING TO CALL. A dialog is driven by a
          * procedure; with neither a DLGPROC nor a class window procedure
          * there is no way to tell the guest anything, so no EndDialog can
          * ever happen. Degrading to session 56's behaviour here is
@@ -385,7 +375,7 @@ INT WowDlgStep(
          */
         procedure = (DWORD)WowConvWindowProcedure((UINT)dialog->WindowProcedure, (UINT)dialog->DialogProcedure);
 
-        /* -- WM_INITDIALOG COMES FIRST, AND IT IS WHERE THE DIALOG FILLS
+        /* WM_INITDIALOG COMES FIRST, AND IT IS WHERE THE DIALOG FILLS
          * ITSELF IN. TASKMAN's task list, a Preferences page's current
          * settings, a Find dialog's last search string -- all of it is put
          * there by the procedure's WM_INITDIALOG arm, so a loop that started
@@ -410,7 +400,7 @@ INT WowDlgStep(
         }
         else
         {
-            /* -- AND *NOW* IT APPEARS. WM_INITDIALOG has returned, so the
+            /* AND *NOW* IT APPEARS. WM_INITDIALOG has returned, so the
              * dialog has finished arranging itself -- which for TASKMAN means
              * it has centred itself on the screen and filled its list -- and
              * this is the moment real USER makes it visible. Showing it here
@@ -432,7 +422,7 @@ INT WowDlgStep(
                 WowNoteHex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
                 WowNotePut(note, noteCapacity, &noteLength, " SHOWN (WM_INITDIALOG is done, so the"
                                        " dialog appears where it put itself). ");
-                /* -- s93: AND THE FOCUS GOES TO THE FIRST TAB STOP, unless the
+                /* s93: AND THE FOCUS GOES TO THE FIRST TAB STOP, unless the
                  * procedure placed it itself (it then returns FALSE, and the focus
                  * is already inside the dialog). The note above assumed this was
                  * the case we were in; the rig said otherwise: Program Manager's
@@ -465,7 +455,7 @@ INT WowDlgStep(
                 }
             }
 
-            /* -- WAIT FOR SOMETHING TO HAPPEN, WHICH IS WHAT MODAL MEANS.
+            /* WAIT FOR SOMETHING TO HAPPEN, WHICH IS WHAT MODAL MEANS.
              * The dialog's controls are real Win32 windows on this thread, so
              * a click on one becomes a Win32 message here, which WowWinProc
              * turns into a Win16 WM_COMMAND for the dialog. Pumping and
@@ -509,7 +499,7 @@ INT WowDlgStep(
                 if (!WowDlgPump(WOWDLG_PUMP_BUDGET, &dialog->TraceBudget))
                     MsgWaitForMultipleObjects(0, NULL, FALSE, WOWDLG_WAIT_SLICE_MS, QS_ALLINPUT);
 
-                /* -- THE HEARTBEAT NAMES THE THREAD, AND THAT IS THE POINT.
+                /* THE HEARTBEAT NAMES THE THREAD, AND THAT IS THE POINT.
                  * (session 57, first run) The first cut of this loop printed a
                  * running total and a queue depth, and both were FROZEN --
                  * `Win32 dispatched 0x0a` for forty seconds while a dialog sat
@@ -575,7 +565,7 @@ INT WowDlgStep(
             if (dialog->IsEnded || !IsWindow(window->Window32))
                 continue;
 
-            /* -- EXIT 4: THE WAIT EXPIRED. Only reachable with a bounded
+            /* EXIT 4: THE WAIT EXPIRED. Only reachable with a bounded
              * wowidle.txt, which is the unattended-harness setting; an
              * interactive session waits forever and never gets here. The same
              * tested decision as the three above, asked again now that the
@@ -603,7 +593,7 @@ INT WowDlgStep(
                 continue;
             }
 
-            /* -- WHOSE MESSAGE IS IT? A modal dialog's loop is the TASK's
+            /* WHOSE MESSAGE IS IT? A modal dialog's loop is the TASK's
              * loop for as long as it runs, so messages for other windows
              * arrive here too -- and they must still be delivered, or a
              * repaint of the window behind the dialog never happens. So the
@@ -649,7 +639,7 @@ INT WowDlgStep(
             WowNotePut(note, noteCapacity, &noteLength, " ");
         }
 
-        /* -- THE CALL ITSELF. Five words in declared order, the shape every
+        /* THE CALL ITSELF. Five words in declared order, the shape every
          * window and dialog procedure takes -- WowUserWantMessage builds the
          * same block for DispatchMessage, and this is that block built by
          * hand because there is no service frame here to hang it on.

@@ -151,7 +151,7 @@
 #define WOWWIN_GLOBAL16_LOCK                    2
 #define WOWWIN_GLOBAL16_UNLOCK                  3
 
-/* -- s93: A WM_CHAR EXISTS ONLY IF THE PROGRAM ASKS FOR IT. On Win16 the character
+/* s93: A WM_CHAR EXISTS ONLY IF THE PROGRAM ASKS FOR IT. On Win16 the character
  * comes from TranslateMessage, which the program calls -- or does not, for a key it
  * handles itself. Win32 had already translated every key on this thread, and the
  * relay posted that WM_CHAR unconditionally: WRITE handles Backspace in WM_KEYDOWN
@@ -164,7 +164,7 @@
  */
 #define WOWWIN_MAX_HELD_CHARS                   16
 
-/* -- s93: TIMERS WITH NO WINDOW. Win16's SetTimer(NULL, 0, ms, proc) is legal and
+/* s93: TIMERS WITH NO WINDOW. Win16's SetTimer(NULL, 0, ms, proc) is legal and
  * common in a program that has no window of its own to time with -- RECORDER, while
  * recording, times itself this way, and was answered 0 ("refused"). Win32 has the
  * same thing: a THREAD timer, whose WM_TIMER arrives with hwnd NULL. The pumps turn

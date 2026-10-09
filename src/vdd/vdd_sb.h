@@ -146,7 +146,7 @@ typedef struct _SB_STATE
 
     UINT32 DspWrites;          /* DSP command bytes accepted (diagnostics) */
     UINT32 Blocks;             /* blocks completed -> IRQs raised */
-    /* -- [CAUTION] EVERY AUDIO METRIC IN THIS PROJECT MEASURES THE RING. THE USER HEARS THE
+    /* [CAUTION] EVERY AUDIO METRIC IN THIS PROJECT MEASURES THE RING. THE USER HEARS THE
      * OUTPUT. --------------------------------------------------------------------
      * `REPLAYED`, `flat`, `byte_lap_same` all compare the guest's DMA buffer against
      * itself a lap earlier. A defect introduced BETWEEN the ring and the IsSpeakerOn is

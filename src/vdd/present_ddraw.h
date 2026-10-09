@@ -87,7 +87,7 @@ typedef struct _PRESENT_DDRAW
      * blitted (vsync'd) outside it by _present(). Removes the concurrent-write
      * tearing of the live framebuffer. 8bpp + palette (all our frames).
      */
-    /* -- THE SNAPSHOT NOW CARRIES DEPTH. (s74) VESA direct-colour modes hand us
+    /* THE SNAPSHOT NOW CARRIES DEPTH. (s74) VESA direct-colour modes hand us
      * 32-bit ARGB, not palette indices, so there are two buffers and `SnapshotBpp`
      * says which one holds this frame. The 8bpp path is byte-for-byte what it
      * always was -- Doom, Heretic, Hexen and ZAR all run through it and the
@@ -110,7 +110,7 @@ typedef struct _PRESENT_DDRAW
     UINT32 SnapshotPaletteSplit[NTVDD_PALETTE_ENTRIES];
     UINT32 SnapshotSplitFrame[NTVDD_PALETTE_ENTRIES];
     WORD SnapshotSplitRow[NTVDD_PALETTE_ENTRIES];
-    /* -- s84 (user): WHAT DOES DRAWING THE PICTURE COST? Measured before anyone builds a
+    /* s84 (user): WHAT DOES DRAWING THE PICTURE COST? Measured before anyone builds a
      * windowed DirectDraw path: per present, split by path, in microseconds (QPC).
      * `win` is the GDI path (window, or borderless fullscreen), `fs` exclusive
      * DirectDraw. Includes the VSync wait when Force VSync is on (default off).

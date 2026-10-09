@@ -70,7 +70,7 @@ static INT SysFontOpen(
     return 1;
 }
 
-/* -- THE CODE PAGE 437 TERMINAL, READ FROM ITS FILE. GDI picks "Terminal" by the
+/* THE CODE PAGE 437 TERMINAL, READ FROM ITS FILE. GDI picks "Terminal" by the
  * machine's OEM code page -- on a UK XP that is 850, whose font has accented letters
  * where 437 has some box pieces and the Greek/maths symbols (measured on the rig:
  * the charset probe showed A A A (c) where | | + belong). XP keeps the 437 fonts on

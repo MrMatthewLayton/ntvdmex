@@ -1385,7 +1385,7 @@ static VOID A000Protect(INT isOn)
         g_A000Protection = isOn;
 }
 
-/* ---- how mode 12h is intercepted (GH #55) --------------------------------- *
+/* how mode 12h is intercepted (GH #55):
  * MEASURED, twice, on the physical box: arming the A0000 page trap FREEZES the
  * guest. `PAGE_NOACCESS` and `PAGE_READONLY` behave identically (so it is not
  * reads-vs-writes, it is protecting the range at all), io_events stops at 10
@@ -1469,25 +1469,23 @@ INT ModeYNeedsInterp(VOID)
     return (mask & (BYTE)(mask - 1)) != 0 || (g_Video.WriteMode & VIDEO_WRITE_MODE_MASK) != 0;
 }
 
-/* ====================================================================== *
- *  Mode-12h fill-loop fast path: a small, bounded, flags-accurate 8086    *
- *  interpreter.                                                           *
- *                                                                         *
- *  In mode 12h the A0000 window is PAGE_NOACCESS, so every guest pixel    *
- *  touch faults to us. QuickBASIC's PAINT/LINE fills are tight per-pixel  *
- *  loops (e.g. `MOV AL,ES:[SI] / OR AL,AL / JNZ / DEC DI / JNZ`), so one  *
- *  fill = hundreds of thousands of V86 round-trips and never finishes.    *
- *                                                                         *
- *  Fix: when an A0000 access faults, run the *whole* inner loop here --   *
- *  loads/stores (planar engine for A0000, flat for normal RAM), the       *
- *  arithmetic/logic group (computing CF/PF/AF/ZF/SF/OF), INC/DEC, string  *
- *  ops (REP, honouring DF), MOV, TEST, the flag ops, and Jcc/JMP/LOOP --  *
- *  until we hit an opcode we don't model or an iteration cap. Then we     *
- *  write the architectural state back and return to V86. It NEVER         *
- *  derails: any unmodeled byte stops the interpreter with EIP exactly on  *
- *  that instruction, so V86 re-executes it. 16-bit only (0x66/0x67/LOCK   *
- *  bail). One fault now drives the entire fill instead of one-per-pixel.  *
- * ======================================================================
+/* Mode-12h fill-loop fast path: a small, bounded, flags-accurate 8086
+ * interpreter.
+ *
+ * In mode 12h the A0000 window is PAGE_NOACCESS, so every guest pixel
+ * touch faults to us. QuickBASIC's PAINT/LINE fills are tight per-pixel
+ * loops (e.g. `MOV AL,ES:[SI] / OR AL,AL / JNZ / DEC DI / JNZ`), so one
+ * fill = hundreds of thousands of V86 round-trips and never finishes.
+ *
+ * Fix: when an A0000 access faults, run the *whole* inner loop here --
+ * loads/stores (planar engine for A0000, flat for normal RAM), the
+ * arithmetic/logic group (computing CF/PF/AF/ZF/SF/OF), INC/DEC, string
+ * ops (REP, honouring DF), MOV, TEST, the flag ops, and Jcc/JMP/LOOP --
+ * until we hit an opcode we don't model or an iteration cap. Then we
+ * write the architectural state back and return to V86. It NEVER
+ * derails: any unmodeled byte stops the interpreter with EIP exactly on
+ * that instruction, so V86 re-executes it. 16-bit only (0x66/0x67/LOCK
+ * bail). One fault now drives the entire fill instead of one-per-pixel.
  */
 enum
 {
@@ -1594,7 +1592,7 @@ static inline __attribute__((always_inline)) const volatile BYTE *V86HostCodePoi
 /* Port I/O dispatched to the device bus (same path as HostTryIo). The
  * interpreter already runs under g_Lock, which is what the bus needs.
  */
-/* -- THE PIT MUST READ REAL TIME ON THIS PATH TOO (s70). The reflected port
+/* THE PIT MUST READ REAL TIME ON THIS PATH TOO (s70). The reflected port
  * path calls HostPitSync() before every 0x40-0x43 access "so a poll always reads
  * real time"; this path did not, so a count LOADED here and LATCHED here each saw
  * total_clocks as of the last pacer round -- stale by up to a period, in different
@@ -2366,7 +2364,7 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
     VDM_REG(tib, VTIB_GS) = cpu.Segments[X86_SREG_GS];
     /* update only the low 16 flag bits (arith + DF); keep VM/IOPL/IF etc. */
     VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & HIGH_WORD_MASK_U) | (cpu.Flags & WORD_MASK_U);
-    /* -- AND VIF WITH IT, FOR MODE Y. (s80) The loop's gate delivers when IF *or*
+    /* AND VIF WITH IT, FOR MODE Y. (s80) The loop's gate delivers when IF *or
      * VIF is set (GuestIfEnabled), because under VME a native STI sets VIF. An
      * interpreted CLI clears only IF here -- VIF stayed set, the gate saw "enabled",
      * and an IRQ was injected into a region the guest had closed: Wolf3D's ISR tail
@@ -2433,7 +2431,7 @@ INT32 HostInterpPaced(volatile BYTE *tib, INT32 cap)
     return ran;
 }
 
-/* -- THE 16-BIT INTERPRETER RUNNING PROTECTED-MODE CODE (run 53). It drives v86interp.h with
+/* THE 16-BIT INTERPRETER RUNNING PROTECTED-MODE CODE (run 53). It drives v86interp.h with
  * LDT bases and LAR/LSL answers from the DPMI host, so it lives with the interpreter (#335).
  */
 #define DPMI_INTERP_STEPS_MAX   20000000L   /* DpmiRunPmInterp: modelled steps before giving up */

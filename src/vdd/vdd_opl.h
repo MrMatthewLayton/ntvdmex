@@ -341,7 +341,7 @@ typedef struct _OPL_STATE
      */
     VOID (*Trace)(BYTE registerIndex, BYTE value);
 
-    /* ---- WHAT THE GAME ACTUALLY ASKS FOR (GH #21) ------------------------- *
+    /* WHAT THE GAME ACTUALLY ASKS FOR (GH #21):
      * The synth has three declared gaps -- tremolo/vibrato depth (0xBD), rhythm
      * mode (0xBD), and envelope rates anchored only to within ~2x at the extremes
      * -- and "the music sounds a bit flat" could be any of them. Rather than rank

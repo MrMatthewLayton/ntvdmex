@@ -23,7 +23,7 @@
         else      { printf("  FAIL  %s\n", (message)); g_Failures++; }  \
     } while (0)
 
-/* ---- a fake device: claims the PIT ports, INT 1Ah, and a frame tick ------ */
+/* a fake device: claims the PIT ports, INT 1Ah, and a frame tick: */
 typedef struct
 {
     PVDD_BUS Bus;
@@ -36,10 +36,10 @@ typedef struct
 static INT g_Total = 0;
 static INT g_Failures = 0;
 
-/* ---- a fake video-ish device: claims a memory window at 0xB8000 ---------- */
+/* a fake video-ish device: claims a memory window at 0xB8000: */
 static BYTE g_FakeVram[0x8000];
 
-/* ---- host-injected sinks (count effects so the test can assert) ---------- */
+/* host-injected sinks (count effects so the test can assert): */
 static INT  g_IrqCount = 0; static BYTE g_LastIrq = 0xFF;
 
 static INT  g_PresentCount = 0; static NTVDD_FRAME g_LastFrame;

@@ -106,7 +106,7 @@
 #define DOS_SDA_LEN                 0x20
 #define DOS_INDOS_OFF               (DOS_SDA_OFF + 1)
 
-/* -- [CAUTION] THE SECOND ABSOLUTE-OFFSET READ MEM.EXE MAKES, AND IT IS NOT A SYSVARS
+/* [CAUTION] THE SECOND ABSOLUTE-OFFSET READ MEM.EXE MAKES, AND IT IS NOT A SYSVARS
  * FIELD EITHER. (GH #47) ---------------------------------------------------
  * MEM asks AH=52h for SysVars, keeps the SEGMENT, THROWS THE OFFSET AWAY, and
  * uses the word at <SysVars segment>:0x008C as the conventional/upper LINE:
@@ -344,7 +344,7 @@
 #define DOS_CRIT_STUB_INT23         4                   /* IRET */
 #define DOS_CRIT_STUB_INT24         8                   /* MOV AL,3 ; IRET */
 
-/* -- GH #34: WHERE DOS CALLS THE GUEST'S INT 24h FROM. `CD 24 / C4 C4 20` -- INT 24h,
+/* GH #34: WHERE DOS CALLS THE GUEST'S INT 24h FROM. `CD 24 / C4 C4 20` -- INT 24h,
  * then BOP 20h at +2, which the exec loop recognises by its ADDRESS (not its
  * number: 20h is the INT 21h BOP) and takes as "the handler answered in AL".
  * Five bytes, 0x4DB..0x4DF: the gap between the INT 24h default stub (0x4D8..0x4DA)

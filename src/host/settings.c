@@ -114,14 +114,14 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
  */
 { "VSync",             IDC_S_VSYNC,       SK_CHECK,      0,  0,   1, NULL },
 { "BlinkTextCursor",   IDC_S_BLINKCURSOR, SK_CHECK,      1,  0,   1, NULL },
-/* -- START FULLSCREEN (s68, user ask). Always = every program starts fullscreen;
+/* START FULLSCREEN (s68, user ask). Always = every program starts fullscreen;
  * Graphics only = a program that begins in text mode (DOOM) starts in a window and
  * flips the moment it sets a graphics mode; Never = always a window. It fires ONCE
  * per process and never touches Alt+Enter -- the user can still flip by hand either
  * way. Default Never = the shipped behaviour to date. Values: AUTOFS_* below.
  */
 { "StartFullscreen",   IDC_S_AUTOFS,      SK_COMBO,      2,  0,   2, "Always|Graphics only|Never" },
-/* -- #217 (user, s83 sweep): the messages drawn over the picture (the mouse-capture
+/* #217 (user, s83 sweep): the messages drawn over the picture (the mouse-capture
  * hint, the Mark hint) FLICKERED, because the window was painted in three strokes --
  * bars, frame, then the message -- and the screen showed the frame alone in between.
  * Now the whole picture is composed off-screen and blitted once. Both are choices
@@ -156,7 +156,7 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
  * = a host DRIVER found by name (Munt, BASSMIDI...), which also gets SysEx. Start-up only.
  */
 { "Midi",              IDC_S_MIDI,        SK_COMBO,      0,  0,   2, "Host GM|MT-32|SoundFont" },
-/* -- [CAUTION] THE PC SPEAKER HAS TWO PLACES TO COME OUT OF, AND THEY ARE NOT THE SAME
+/* [CAUTION] THE PC SPEAKER HAS TWO PLACES TO COME OUT OF, AND THEY ARE NOT THE SAME
  * DEVICE. The emulated one is a square wave in the mixer, out of the SOUND
  * CARD -- which is what DOSBox does, is the only path that can be attenuated
  * by the volume above or summed with FM and PCM, and is completely inaudible
@@ -168,7 +168,7 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
  * indices those are exactly Off and Sound card, which is what they meant.
  */
 { "PcSpeaker",         IDC_S_SPEAKER,     SK_COMBO,      1,  0,   3, "Off|Sound Card|Real PC Speaker|Both" },
-/* -- THE GUS, WIRED (s80). This row was "Gus", default 0, and nothing read it -- the
+/* THE GUS, WIRED (s80). This row was "Gus", default 0, and nothing read it -- the
  * checkbox did nothing while the card was controlled by cfg\nogus.flag alone. A dialog
  * that was ever OK'd has therefore SAVED Gus=0 to HKCU, meaning nothing; reading that
  * value now would silently switch off a card the user has confirmed works. So the row
@@ -199,7 +199,7 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
 /* "BootFrom" and "DriveCPath" were REMOVED in s84 (user): both were stored and read by
  * nothing -- the VDM already reaches the host's own drives. A stored value is ignored.
  */
-/* -- #167: ONE CHOICE FOR EVERY ROW WHERE THE TWO REFERENCES DISAGREE. (user, 2026-09-28)
+/* #167: ONE CHOICE FOR EVERY ROW WHERE THE TWO REFERENCES DISAGREE. (user, 2026-09-28)
  * Some answers differ between genuine MS-DOS 6.22 and the Windows XP NTVDM this
  * project replaces, and neither is a defect. Rather than a knob per register, one
  * setting says which machine to be; each such row reads it. Default NTVDM: that is

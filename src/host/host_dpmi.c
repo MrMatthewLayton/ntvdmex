@@ -1212,7 +1212,7 @@ VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
                       if (PatchMapGet(linear))
                           continue;                        /* already patched (aliased region) */
 
-                      /* -- A JUMP/CALL TABLE IS DATA, EVEN INSIDE A CODE OBJECT.
+                      /* A JUMP/CALL TABLE IS DATA, EVEN INSIDE A CODE OBJECT.
                        * (session 72) The FOURTH instance of the patcher rewriting a
                        * non-code byte pair -- the ZAR call displacement, the
                        * R_InitTextureMapping `jle` displacement and the FP range are the
@@ -1276,7 +1276,7 @@ VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
                             }
                         } }
 
-                      /* -- INT 34h..3Fh IS NOT AN INTERRUPT RANGE, IT IS
+                      /* INT 34h..3Fh IS NOT AN INTERRUPT RANGE, IT IS
                        *   FLOATING-POINT CODE. DO NOT TOUCH IT. (session 55) ------
                        * The note above says patching any vector is safe because
                        * "our default PM handlers cover all 256 and simply IRET".
@@ -1434,7 +1434,7 @@ VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
                       if (patchedOffsetCount < 12)
                           patchedOffsets[patchedOffsetCount++] = linear - base;
 
-                      /* -- SAY WHAT WE ARE ABOUT TO OVERWRITE, BEFORE WE DO. (s74)
+                      /* SAY WHAT WE ARE ABOUT TO OVERWRITE, BEFORE WE DO. (s74)
                        * "ON ANY SILENT VDM DEATH, GET THE BYTES FIRST" -- and for five
                        * sessions the one thing this patcher never recorded was the bytes
                        * IT clobbered, so every investigation had to reconstruct them from
@@ -1751,7 +1751,7 @@ VOID DpmiBreakpointLoad(VOID)
  * segment 1 (0 is read as 1, so every existing pmbp.txt keeps working); `0x22` is
  * segment 2, `0x32` segment 3, and so on.
  */
-/* -- AND THE SAME FOR AN EXTENDED DOS GUEST: MODE BIT 8 = "OFFSET FROM THE LE
+/* AND THE SAME FOR AN EXTENDED DOS GUEST: MODE BIT 8 = "OFFSET FROM THE LE
  * CODE-OBJECT LOAD BASE". (session 59) --------------------------------------------
  * The argument is the one DpmiBreakpointResolveSegment already makes, arriving from the other
  * direction. krnl386's segment copies move every run; so does a DOS/4GW client's
@@ -2400,7 +2400,7 @@ INT DpmiDispatchToPmHandler(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vect
     WORD savedCs  = (WORD)VDM_REG(tib, VTIB_CS);
     WORD savedSs = (WORD)VDM_REG(tib, VTIB_SS);
     DWORD sEFL = VDM_REG(tib, VTIB_EFLAGS);
-    /* -- THE FRAME WIDTH FOLLOWS THE CLIENT'S MODE, NOT THE HANDLER SELECTOR'S D BIT.
+    /* THE FRAME WIDTH FOLLOWS THE CLIENT'S MODE, NOT THE HANDLER SELECTOR'S D BIT.
      * This is measured, and getting it wrong is invisible until the handler RETURNS.
      * DOS/4GW's PM INT 21h handler lives in a 16-BIT code selector (0x67, D/B=0) --
      * so DpmiSelectorIs32() says "16-bit" and we pushed a 6-byte frame -- but it ends
@@ -2594,7 +2594,7 @@ quietEntry:
                 continue;
         }
 
-        /* -- A DPMI FAULT SITE IS NOT AN INTERRUPT, AND THIS LOOP MUST NOT EAT IT.
+        /* A DPMI FAULT SITE IS NOT AN INTERRUPT, AND THIS LOOP MUST NOT EAT IT.
          * This is the SECOND protected-mode run loop -- it exists to run the client's
          * own INT handler to completion -- and it never had an arm for the case where
          * THAT HANDLER FAULTS. The kernel reflects such a fault onto our fault-site
@@ -3489,7 +3489,7 @@ INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vector)
     return done;
 }
 
-/* -- THE HANDLER'S ANSWER IS ON THE STACK, NOT IN EFLAGS. (GH #128, session 41)
+/* THE HANDLER'S ANSWER IS ON THE STACK, NOT IN EFLAGS. (GH #128, session 41)
  * Every DOS service above reports failure the way DOS does -- `CF` -- and writes it
  * into the guest's LIVE EFLAGS before stepping EIP past the BOP. For a client that
  * reached us through a PATCHED INT SITE in its own code, or through the `#GP` on a
@@ -3907,7 +3907,7 @@ INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip)
         && ((eip - DPMI_FAULT_SITE(0)) & (DOS_FLTSITE_SIZE - 1)) == 0)
     {
         INT exception = (INT)((eip - DPMI_FAULT_SITE(0)) / DOS_FLTSITE_SIZE);
-        /* -- s92: A RAW `INT nn` INSIDE A NESTED RUN. A #GP through an IDT gate (error
+        /* s92: A RAW `INT nn` INSIDE A NESTED RUN. A #GP through an IDT gate (error
          * code bit 1, vector in bits 3..15) is an interrupt nobody intercepted -- the
          * main loop's long arm services those (search "A #GP THROUGH AN IDT GATE").
          * Here it fell to the service routine, which ran the INT and then resumed the

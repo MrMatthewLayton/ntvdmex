@@ -115,6 +115,15 @@
 #define VDM_LDT_SERVICE_SIZE        1
 #define VDM_LDT_SERVICE_DWORDS      2
 
+static BYTE g_VdmTib[VDM_TIB_BUFFER_SIZE] __attribute__((aligned(VDM_TIB_ALIGNMENT)));
+
+/* VDM "trap continue" handler = VDM_INITIALIZE_DATA.TrapcHandler. The kernel calls it
+ * (ebx = VDM_TIB) to (re)enter the guest via a far return to the guest CS:EIP. ntvdm
+ * passes 0xf044820 here; ours is the faithful port DpmiTrapContinue (src/vdm/dpmi_enter.S).
+ * The old empty stub left the kernel's PM trap path unable to complete (DPMI spike).
+ */
+extern VOID DpmiTrapContinue(VOID);
+
 static BYTE g_IcaLock[VDM_ICA_BUFFER_SIZE];
 static BYTE g_IcaMaster[VDM_ICA_BUFFER_SIZE];
 static BYTE g_IcaSlave[VDM_ICA_BUFFER_SIZE];
@@ -134,15 +143,6 @@ static PFN_NtVdmControl g_NtVdmControl;
  * AFTER VdmInitialize (see VdmMapEmsFrame).
  */
 static HANDLE g_V86Section;
-
-static BYTE g_VdmTib[VDM_TIB_BUFFER_SIZE] __attribute__((aligned(VDM_TIB_ALIGNMENT)));
-
-/* VDM "trap continue" handler = VDM_INITIALIZE_DATA.TrapcHandler. The kernel calls it
- * (ebx = VDM_TIB) to (re)enter the guest via a far return to the guest CS:EIP. ntvdm
- * passes 0xf044820 here; ours is the faithful port DpmiTrapContinue (src/vdm/dpmi_enter.S).
- * The old empty stub left the kernel's PM trap path unable to complete (DPMI spike).
- */
-extern VOID DpmiTrapContinue(VOID);
 
 PVOID VdmGetTeb(VOID)
 {

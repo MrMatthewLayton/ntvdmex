@@ -173,7 +173,7 @@ INT main(VOID)
     CHECK(VddBusAdd(&g_Bus, &device) == 0, "video VDD on the bus (01CEh/01CFh claimed with the rest)");
     g_Video.TimeUs = VbePmTestFakeClock;
 
-    /* ---- 4F0Ah BL=00h: the table ---- */
+    /* 4F0Ah BL=00h: the table: */
     VbePmTestInt10(0x4F0A, 0x0000, 0xC1C1, 0, &registers);
     CHECK((registers.Eax & 0xFFFF) == 0x004F, "4F0Ah BL=00h: AX=004Fh (was 0100h, 'no such function')");
     block = ((UINT32)registers.Es << 4) + (registers.Edi & 0xFFFF);
@@ -211,16 +211,16 @@ INT main(VOID)
     VbePmTestInt10(0x4F0A, 0x0001, 0, 0, &registers);
     CHECK((registers.Eax & 0xFFFF) == 0x014F, "4F0Ah BL=01h: 014Fh (the subfunction does not exist)");
 
-    /* ---- the client copies the block somewhere else entirely ---- */
+    /* the client copies the block somewhere else entirely: */
     memcpy(g_GuestMemory + COPY, g_GuestMemory + block, length);
     memset(g_GuestMemory + block, 0xCC, length);          /* and the original is gone: nothing may point back */
 
-    /* ---- outside a VESA mode the ports refuse and change nothing ---- */
+    /* outside a VESA mode the ports refuse and change nothing: */
     {   UINT32 rejectedBefore = g_Video.VbePmRejected;
         CHECK(VbePmTestCallPm(windowEntry, 0x0000, 0, 3, 0, 0, NULL) && g_Video.VbePmRejected == rejectedBefore + 1 && g_Video.VesaBank == 0,
               "SetWindow in mode 3: returns, refused, counted (vbe_pm_rej)"); }
 
-    /* ---- 640x480x8 banked ---- */
+    /* 640x480x8 banked: */
     VbePmTestInt10(0x4F02, 0x0101, 0, 0, &registers);
     CHECK((registers.Eax & 0xFFFF) == 0x004F && g_Video.IsVesa && !g_Video.IsVesaLfb, "4F02h 0101h: banked 640x480x8");
     memset(g_VideoMemory, 0x11, VIDEO_VESA_WINDOW);       /* the client draws bank 0 ... */
@@ -239,7 +239,7 @@ INT main(VOID)
     CHECK(VbePmTestCallPm(windowEntry, 0x0000, 0, 0, 0, 0, NULL) && g_Video.VesaBank == 0 && g_VideoMemory[0] == 0x11,
           "SetWindow back to 0: bank 0's bytes come back into the window");
 
-    /* ---- SetDisplayStart: CX/DX = start in DWORDs; 4F07h BL=01h reads it back ---- */
+    /* SetDisplayStart: CX/DX = start in DWORDs; 4F07h BL=01h reads it back: */
     {   UINT32 origin = 640u * 100u + 64u;     /* (64,100) */
         CHECK(VbePmTestCallPm(startEntry, 0x0000, (origin / 4) & 0xFFFF, (origin / 4) >> 16, 0, 0, NULL)
               && g_Video.VesaOrigin == origin && g_Video.VesaOriginLive == origin && g_Video.VbePmStartCount == 1,
@@ -257,7 +257,7 @@ INT main(VOID)
               "SetDisplayStart past VRAM: refused, start unchanged");
     }
 
-    /* ---- SetPalette: ES:EDI = B,G,R,pad entries; 4F09h BL=01h reads them back ---- */
+    /* SetPalette: ES:EDI = B,G,R,pad entries; 4F09h BL=01h reads them back: */
     {   static const BYTE entries[3 * 4] = { 0x01, 0x02, 0x03, 0, 0x3F, 0x00, 0x20, 0, 0x10, 0x11, 0x12, 0 };
         /* ES base 0x100000 + EDI 0x60000 */
         UINT32 dataAddress = 0x160000u;
@@ -278,13 +278,13 @@ INT main(VOID)
         CHECK(VbePmTestCallPm(paletteEntry, 0x0080, 1, 0x41, 0x60004, 0x100000, NULL), "SetPalette BL=80h (retrace wait) returns");
     }
 
-    /* ---- the LFB form of the mode has no window to switch ---- */
+    /* the LFB form of the mode has no window to switch: */
     VbePmTestInt10(0x4F02, 0x4101, 0, 0, &registers);
     {   UINT32 rejectedBefore = g_Video.VbePmRejected;
         CHECK(VbePmTestCallPm(windowEntry, 0x0000, 0, 1, 0, 0, NULL) && g_Video.VbePmRejected == rejectedBefore + 1,
               "SetWindow in an LFB mode: refused (4F05h answers 03h there)"); }
 
-    /* ---- the block in guest memory is restored by every 4F0Ah call ---- */
+    /* the block in guest memory is restored by every 4F0Ah call: */
     VbePmTestInt10(0x4F0A, 0x0000, 0, 0, &registers);
 
     for (index = 0; index < length; ++index)

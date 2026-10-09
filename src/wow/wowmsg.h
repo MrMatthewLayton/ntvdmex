@@ -114,7 +114,7 @@
 #define WOWMSG_FIELD_POINT                      0x0e
 #define WOWMSG_SIZE                             0x12
 
-/* -- The argument blocks. Reversed as always (the base is the LAST push), and
+/* The argument blocks. Reversed as always (the base is the LAST push), and
  * GetMessage's is confirmed against a line this host has already printed for
  * SYSEDIT's GetMessage(&msg, 0, 0, 0): `args=0x0a b=(0x0000 0x0000 0x0000
  * 0x248a 0x0a9f)`. +6/+8 is the far pointer to its stack MSG, and +4/+2/+0
@@ -218,7 +218,7 @@
  * than a swap -- a swap would deliver messages out of order, and message order
  * is the one thing a Win16 program is entitled to assume.
  */
-/* -- #160: A MENU THAT WAITS FOR ITS APPLICATION. See wowwin.h, WM_SYSCOMMAND.
+/* #160: A MENU THAT WAITS FOR ITS APPLICATION. See wowwin.h, WM_SYSCOMMAND.
  * The marker is posted behind the WM_INITMENU/WM_INITMENUPOPUP it follows; when
  * a take reaches it, every one of those has been handed to the guest, so the
  * menu can open. It is ours, never the guest's: whichever take passes it

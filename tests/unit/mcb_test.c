@@ -466,7 +466,7 @@ INT main(VOID)
         McbTestCheck(found > 0 && strcmp((PCSTR)envMemory + found, "BLASTER=A280 I10 D1 T6") == 0,
                      "BLASTER: a two-digit IRQ survives, and the base is three hex digits");
 
-        /* -- EXTRA VARIABLES (dosenv.txt). The guest that needed this is ZAR, whose
+        /* EXTRA VARIABLES (dosenv.txt). The guest that needed this is ZAR, whose
          * own RUNZAR.BAT sets DOS4GVM before launching -- i.e. the game's supported
          * way to start it configures the extender through the environment, and we
          * had no way to pass one.

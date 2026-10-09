@@ -43,7 +43,7 @@
 #define AUDIO_MIDI_NAME_LENGTH      32      /* MIDIOUTCAPSA.szPname: MAXPNAMELEN */
 #define AUDIO_WAVE_MIN_FRAMES       64      /* Below this the per-buffer callback overhead wins */
 
-/* -- [CAUTION] THE BUFFER SIZE IS THE DMA POSITION'S GRANULARITY, WHICH IS A SEPARATE
+/* [CAUTION] THE BUFFER SIZE IS THE DMA POSITION'S GRANULARITY, WHICH IS A SEPARATE
  * SUSPECT FROM THE LEAD. --------------------------------------------------------
  * The guest's DMA read pointer ONLY advances while the mixer runs, and the mixer
  * runs one whole waveOut buffer at a time. At 512 frames that is 241 source bytes

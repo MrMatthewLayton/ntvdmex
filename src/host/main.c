@@ -68,22 +68,15 @@
 #include "dos_psp.h"
 #include "dos_env.h"
 #include "dos_int21.h"
-#include "dos_auxprn.h"         /* #251: AUX/PRN driver code planted at DOS_CTAB_SEG */
-typedef CHAR DOS_AUXPRN_FITS[(sizeof(g_DosAuxPrnCode) <= DOS_AUXPRN_LEN) ? 1 : -1];
-#include "bios_kbdact.h"    /* #254: INT 09h side-calls planted at DOS_CTAB_SEG */
-#include "bios_prtsc.h"     /* #274: the default INT 05h's byte sequencer */
-typedef CHAR BIOS_KBDACT_FITS[(sizeof(g_BiosKeyboardActionCode) <= DOS_KBDACT_LEN
-                               && DOS_AUXPRN_OFF + DOS_AUXPRN_LEN <= DOS_KBDACT_OFF
-                               && DOS_KBDACT_OFF + DOS_KBDACT_LEN <= DOS_GENSTUB_OFF
-                               && DOS_GENSTUB_OFF + DOS_GENSTUB_N * DOS_GENSTUB_SIZE <= DOS_CTAB_END) ? 1 : -1];
+#include "bios_prtsc.h"         /* #274: the default INT 05h's byte sequencer */
 #include "dos_layout.h"
-#include "dos_disk.h"       /* GH #44: image geometry + CHS<->LBA */
+#include "dos_disk.h"           /* GH #44: image geometry + CHS<->LBA */
 #include <tlhelp32.h>
-#include "dos_recovery.h"   /* GH #132: what to do when we will not start */
-#include "dos_err.h"        /* #34: the INT 24h contract (dos_crit_*) */
-#include "dos_sysvars.h"    /* GH #48: the List of Lists, built to the measured 6.22 layout */
+#include "dos_recovery.h"       /* GH #132: what to do when we will not start */
+#include "dos_err.h"            /* #34: the INT 24h contract (dos_crit_*) */
+#include "dos_sysvars.h"        /* GH #48: the List of Lists, built to the measured 6.22 layout */
 #include "dos_xms.h"
-#include "dos_extmem.h"     /* GH #54: INT 15h AH=87h address resolution */
+#include "dos_extmem.h"         /* GH #54: INT 15h AH=87h address resolution */
 #include "dos_ems.h"
 #include "vdd_bus.h"
 #include "vdd_pit.h"
@@ -92,10 +85,7 @@ typedef CHAR BIOS_KBDACT_FITS[(sizeof(g_BiosKeyboardActionCode) <= DOS_KBDACT_LE
 #include "vdd_ide.h"
 #include "vdd_pic.h"
 #include "vdd_video.h"
-#include "sysfont.h"        /* #322: the VGA tables from the system fonts */
-/* #321: what the last font build did (Settings shows it) and the TextFont it was for. */
-SYSFONT_REPORT g_SysFontReport;
-CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
+#include "sysfont.h"            /* #322: the VGA tables from the system fonts */
 #include "vdd_input.h"
 #include "vdd_speaker.h"
 #include "vdd_joy.h"
@@ -103,15 +93,15 @@ CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "vdd_opl.h"
 #include "vdd_sb.h"
 #include "vdd_gus.h"
-#include "vdd_emu8k.h"      /* #233: the AWE32's wavetable chip */
+#include "vdd_emu8k.h"          /* #233: the AWE32's wavetable chip */
 #include "vdd_mpu.h"
 #include "vdd_comm.h"
-#include "vdd_net.h"        /* GH #8 (s91): NetBIOS via INT 5Ch */
+#include "vdd_net.h"            /* GH #8 (s91): NetBIOS via INT 5Ch */
 #include <nb30.h>
 #include "../../sdk/include/ntvdmex-vdd.h"
 #include "vdd_audio.h"
 #include "audio_wave.h"
-#include "midi_route.h"     /* #136: Settings > Audio > MIDI -> a host device, by name */
+#include "midi_route.h"         /* #136: Settings > Audio > MIDI -> a host device, by name */
 #include "present_ddraw.h"
 
 /* The host's other modules: what each one offers main.c (#335). */
@@ -138,6 +128,10 @@ CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "main.h"
 #include "host_timing.h"
 #include "host_install.h"
+
+/* #321: what the last font build did (Settings shows it) and the TextFont it was for. */
+SYSFONT_REPORT g_SysFontReport;
+CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 
 BYTE g_TrampolineSave[DOS_HDLR_TRAMPOLINE_SIZE];
 INT  g_TrampolineSaved;
@@ -187,18 +181,6 @@ CHAR g_CommandLine2[1024];
 CHAR g_CurrentDirectory2[512];
 CHAR g_Environment2[8192];
 INT  g_Fetch2Ok = 0;
-
-static volatile LONG g_ReportGotNext = 0;   /* the report call returned TRUE: a command was queued to us */
-static DWORD WINAPI CsrssReportThread(LPVOID parameter)
-{
-    DWORD exitCode = 0;
-    BOOL isOk = CsrssTaskDone(g_CommandInfo.TaskId, (ULONG)(ULONG_PTR)parameter, &exitCode, NULL);
-
-    if (isOk)
-        InterlockedExchange(&g_ReportGotNext, 1);
-
-    return exitCode;
-}
 
 BYTE g_FileBuffer[0x80000];   /* 512KB: hold a real game's MZ image (DOS/4GW stub etc.), run 85 */
 
@@ -556,34 +538,46 @@ DWORD g_ModeYLatchOk = 0;
 DWORD g_ModeYLatchUnsolved = 0;
 DWORD g_ModeYLatchDescriptor = 0;
 
-/* --- planar mode-12h: trap direct A0000 writes through the VGA write engine -- */
+/* planar mode-12h: trap direct A0000 writes through the VGA write engine: */
 
 INT g_A000Protection = 0;
 
-/* ================================================================================ *
- *  run 53 (GH #2): host-interpreted protected mode -- the emulation path.           *
- *                                                                                    *
- *  Run 52 proved the kernel DEADLOCKS (not skip-resumes) on a plain-instruction PM  *
- *  #GP, so we cannot let the kernel execute risky PM code. Instead run 16-bit PM in  *
- *  the v86interp core (already proven on the mode-12h fill loops) with g_V86SegmentToLinear set *
- *  to an LDT-base resolver, so the SAME interpreter walks PM code -- descriptor      *
- *  bases instead of paragraph shifts -- and NEVER hands a faulting instruction to    *
- *  the kernel. An interpreter enforces no descriptor type, so the code-typed-SS      *
- *  write that #GP's the real CPU (run 51's I310102) simply succeeds here.            *
- *                                                                                    *
- *  istep() returns 0 on any opcode it doesn't model. The interpreter deliberately    *
- *  has no INT handler, so `CD nn` stops it cleanly -- we sync the icpu into the       *
- *  VDM_TIB, service the INT through the SAME DpmiServicePmInt() the kernel path    *
- *  uses, reload, and continue. ANY OTHER unmodeled opcode is logged with its bytes    *
- *  and stops the run -- that report is the spike's to-do signal (the next opcode to   *
- *  add). No BOP patch is needed in this mode (the interpreter reads the raw CD nn).   *
- * ================================================================================
+/* run 53 (GH #2): host-interpreted protected mode -- the emulation path.
+ *
+ * Run 52 proved the kernel DEADLOCKS (not skip-resumes) on a plain-instruction PM
+ * #GP, so we cannot let the kernel execute risky PM code. Instead run 16-bit PM in
+ * the v86interp core (already proven on the mode-12h fill loops) with g_V86SegmentToLinear set *
+ * to an LDT-base resolver, so the SAME interpreter walks PM code -- descriptor
+ * bases instead of paragraph shifts -- and NEVER hands a faulting instruction to
+ * the kernel. An interpreter enforces no descriptor type, so the code-typed-SS
+ * write that #GP's the real CPU (run 51's I310102) simply succeeds here.
+ *
+ * istep() returns 0 on any opcode it doesn't model. The interpreter deliberately
+ * has no INT handler, so `CD nn` stops it cleanly -- we sync the icpu into the
+ * VDM_TIB, service the INT through the SAME DpmiServicePmInt() the kernel path
+ * uses, reload, and continue. ANY OTHER unmodeled opcode is logged with its bytes
+ * and stops the run -- that report is the spike's to-do signal (the next opcode to
+ * add). No BOP patch is needed in this mode (the interpreter reads the raw CD nn).
  */
 INT g_DpmiUseInterp = 0;             /* run 53 toggle (1 = interp fallback, 0 = kernel PM path).
                                                  run 59 (GH #18): 0 to exercise the real-CPU kernel path
                                                  WITH the +0x638 PM-fault trampoline. Flip to 1 to restore
                                                  the VM-confirmed interpreter runs (i310102/DPMIBACK). */
-/* -- A TITLE IS "PROGRAM [ARGUMENTS]", AND WE OPENED THE WHOLE THING AS A
+
+static volatile LONG g_ReportGotNext = 0;   /* the report call returned TRUE: a command was queued to us */
+
+static DWORD WINAPI CsrssReportThread(LPVOID parameter)
+{
+    DWORD exitCode = 0;
+    BOOL isOk = CsrssTaskDone(g_CommandInfo.TaskId, (ULONG)(ULONG_PTR)parameter, &exitCode, NULL);
+
+    if (isOk)
+        InterlockedExchange(&g_ReportGotNext, 1);
+
+    return exitCode;
+}
+
+/* A TITLE IS "PROGRAM [ARGUMENTS]", AND WE OPENED THE WHOLE THING AS A
  * FILENAME. (session 59) `target.txt` has split `path [args]` since M2.5, but the
  * CSRSS path -- which is EVERY REAL LAUNCH, because the IFEO hook is how a program
  * reaches us on the user's machine -- never did. `ZAR.EXE -Help` therefore tried to
@@ -648,7 +642,7 @@ HANDLE CsrssOpenSplit(PSTR path, PSTR *argumentsOut)
 
 static PSTR TaskRelaunchQueuedCommand(PSTR cursor, PSTR const base)
 {
-    /* -- A COMMAND ARRIVED IN THE WINDOW. The launcher queued its next DOS program
+    /* A COMMAND ARRIVED IN THE WINDOW. The launcher queued its next DOS program
      * to THIS console's VDM (us) between the report and ExitVDM; CSRSS handed it
      * to the blocked report call. We are not going to run it in this process, and
      * CSRSS has already forgotten it: relaunch it here, in the same console, so it
@@ -692,7 +686,7 @@ static PSTR TaskRelaunchQueuedCommand(PSTR cursor, PSTR const base)
             g_OnceMutex = NULL;
         }
 
-        /* -- AND ITS REDIRECT. (s73) The command's StdIn/Out/Err came back from the
+        /* AND ITS REDIRECT. (s73) The command's StdIn/Out/Err came back from the
          * report call as handles CSRSS placed in THIS process (the launcher's
          * `LINK > file`). The child's StdioInitialize takes an inherited disk/pipe
          * standard handle first, so hand them over inheritable; a console handle
@@ -821,9 +815,6 @@ static PSTR TaskReportExitToCsrss(PSTR cursor, PSTR const base, DOS_MACHINE *mac
 
     return cursor;
 }
-
-
-
 
 INT WINAPI WinMain(
     HINSTANCE instance,

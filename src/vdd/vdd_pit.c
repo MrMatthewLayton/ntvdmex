@@ -224,7 +224,7 @@ VOID VddPitCounter2Gate(PPIT_STATE state, INT isHigh)
     if (!!isHigh == !!counter->Gate)
         return;
 
-    /* -- #175: WHAT A GATE EDGE MEANS DEPENDS ON THE MODE (docs/ref/pit.md section 5).
+    /* #175: WHAT A GATE EDGE MEANS DEPENDS ON THE MODE (docs/ref/pit.md section 5).
      * 1, 5  a rising edge TRIGGERS: (re)load the count and start; the level is
      *     otherwise ignored.
      * 2, 3  a falling edge stops the count and forces OUT high; a rising edge
@@ -425,7 +425,7 @@ static VOID PitCounterControl(PPIT_STATE state, PPIT_COUNTER counter, BYTE contr
     counter->GateElapsed = 0;             /* see PitCounterWriteCount */
 }
 
-/* --- the time engine: clocks -> IRQ0 pulses ------------------------------- */
+/* the time engine: clocks -> IRQ0 pulses: */
 VOID VddPitAddClocks(PPIT_STATE state, UINT32 clocks)
 {
     UINT32 reload = VddPitEffectiveReload(state);
@@ -637,7 +637,7 @@ static VOID PitReadBack(PPIT_STATE state, BYTE command)
     }
 }
 
-/* --- 8254 ports 0x40-0x43 ------------------------------------------------- */
+/* 8254 ports 0x40-0x43: */
 static VOID PitPortOutLocked(PPIT_STATE state, WORD port, BYTE byteValue)
 {
     if (port == PIT_CONTROL_PORT)                        /* mode/command register */
@@ -899,7 +899,7 @@ static VOID PitPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     PIT_GUARD(state, 0);
 }
 
-/* --- BIOS timer services -------------------------------------------------- */
+/* BIOS timer services: */
 /* The BIOS data area lives at segment 0x40; tick count = DWORD at 0040:006C,
  * the 24-hour-rollover flag = BYTE at 0040:0070.
  */
@@ -1102,7 +1102,7 @@ static VOID PitInt1A(PVOID context, PNTVDD_REGISTERS registers)
     }
 }
 
-/* --- lifecycle ------------------------------------------------------------ */
+/* lifecycle: */
 VOID VddPitReset(PVOID context)
 {
     PPIT_STATE state = (PPIT_STATE)context;

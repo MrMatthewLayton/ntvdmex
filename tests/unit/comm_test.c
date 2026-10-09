@@ -142,7 +142,7 @@ INT main(VOID)
     }
     VddBusSetSinks(&g_Bus, CommTestIrqSink, 0, 0, 0);
 
-    /* ---- reset state ------------------------------------------------------ */
+    /* reset state: */
     CHECK(CommTestRead(BASE + COMM_LSR) == (COMM_LSR_THR_EMPTY | COMM_LSR_TRANSMITTER_EMPTY),
           "after reset LSR = THRE|TEMT (an empty transmitter, so a driver that "
           "polls before its first write does not hang)");
@@ -151,13 +151,13 @@ INT main(VOID)
     CHECK(CommTestRead(BASE + COMM_MSR) == 0x00,
           "with nothing attached the modem lines are LOW, not a convenient DSR+CTS");
 
-    /* ---- the scratch register is how drivers probe for the part ----------- */
+    /* the scratch register is how drivers probe for the part: */
     CommTestWrite(BASE + COMM_SCR, 0x5A);
     CHECK(CommTestRead(BASE + COMM_SCR) == 0x5A, "scratch register holds a byte (the probe)");
     CommTestWrite(BASE + COMM_SCR, 0xA5);
     CHECK(CommTestRead(BASE + COMM_SCR) == 0xA5, "scratch register holds a second, different byte");
 
-    /* ---- DLAB ------------------------------------------------------------- */
+    /* DLAB: */
     CommTestWrite(BASE + COMM_LCR, 0x83);                 /* DLAB + 8N1 */
     CommTestWrite(BASE + COMM_RBR, 0x0C);                 /* divisor low  = 12 (9600) */
     CommTestWrite(BASE + COMM_IER, 0x00);                 /* divisor high */
@@ -169,14 +169,14 @@ INT main(VOID)
     CHECK(CommTestRead(BASE + COMM_IER) == 0x0F, "with DLAB clear, base+1 is the interrupt enable");
     CommTestWrite(BASE + COMM_IER, 0x00);
 
-    /* ---- transmit reaches the sink when loopback is OFF -------------------- */
+    /* transmit reaches the sink when loopback is OFF: */
     g_TransmittedCount = 0;
     CommTestWrite(BASE + COMM_RBR, 'A');
     CHECK(g_TransmittedCount == 1 && g_Transmitted[0] == 'A', "out of loopback a transmitted byte reaches the host sink");
     CHECK((CommTestRead(BASE + COMM_LSR) & COMM_LSR_DATA_READY) == 0,
           "...and does NOT appear in the receiver (the pins are connected outward)");
 
-    /* ---- LOCAL LOOPBACK: the self-test every driver runs ------------------- */
+    /* LOCAL LOOPBACK: the self-test every driver runs: */
     CommTestWrite(BASE + COMM_MCR, COMM_MCR_LOOP);
     g_TransmittedCount = 0;
     CommTestWrite(BASE + COMM_RBR, 0x5A);
@@ -197,7 +197,7 @@ INT main(VOID)
     CommTestWrite(BASE + COMM_MCR, (BYTE)(COMM_MCR_LOOP | COMM_MCR_OUT2));
     CHECK((CommTestRead(BASE + COMM_MSR) & 0xF0) == COMM_MSR_DCD,  "loopback: OUT2 -> DCD, alone");
 
-    /* ---- MSR delta bits latch until the register is READ ------------------- */
+    /* MSR delta bits latch until the register is READ: */
     CommTestWrite(BASE + COMM_MCR, COMM_MCR_LOOP);                 /* drop every line */
     CommTestRead(BASE + COMM_MSR);                           /* acknowledge, deltas clear */
     CommTestWrite(BASE + COMM_MCR, (BYTE)(COMM_MCR_LOOP | COMM_MCR_DTR | COMM_MCR_RTS));
@@ -212,7 +212,7 @@ INT main(VOID)
     CommTestWrite(BASE + COMM_MCR, COMM_MCR_LOOP);                          /* RI 1 -> 0 */
     CHECK((CommTestRead(BASE + COMM_MSR) & COMM_MSR_TRAILING_RI) == COMM_MSR_TRAILING_RI, "RI going LOW DOES set TERI");
 
-    /* ---- IIR: priority, and reading it clears THRE ------------------------- */
+    /* IIR: priority, and reading it clears THRE: */
     CommTestWrite(BASE + COMM_MCR, COMM_MCR_LOOP);
     CommTestWrite(BASE + COMM_IER, 0x00);
     CHECK((CommTestRead(BASE + COMM_IIR) & 0x01) == 1, "with every source masked, IIR reports nothing pending");
@@ -231,7 +231,7 @@ INT main(VOID)
           "reading IIR cleared THRE, so once the byte is drained nothing is owed "
           "(an IIR that keeps reporting THRE is an interrupt storm)");
 
-    /* ---- LSR clears errors on read, but not data-ready --------------------- */
+    /* LSR clears errors on read, but not data-ready: */
     CommTestWrite(BASE + COMM_IER, 0x00);
     CommTestWrite(BASE + COMM_RBR, 'q');                      /* loopback: DR set */
     g_Comm.Ports[0].Lsr |= COMM_LSR_OVERRUN;                        /* pretend an overrun */
@@ -242,7 +242,7 @@ INT main(VOID)
             "...but NOT data-ready, which is not an error and is still true"); }
     CommTestRead(BASE + COMM_RBR);
 
-    /* ---- the FIFO control register resets the receiver --------------------- */
+    /* the FIFO control register resets the receiver: */
     CommTestWrite(BASE + COMM_RBR, '1');
     CommTestWrite(BASE + COMM_RBR, '2');
     CHECK((CommTestRead(BASE + COMM_LSR) & COMM_LSR_DATA_READY) == COMM_LSR_DATA_READY, "two loopback bytes are waiting");
@@ -254,13 +254,13 @@ INT main(VOID)
     CHECK((CommTestRead(BASE + COMM_IIR) & 0xC0) == 0xC0, "with FCR bit 0 set, IIR reports a 16550 FIFO");
     CommTestWrite(BASE + COMM_IIR, 0x00);
 
-    /* ---- host -> guest ----------------------------------------------------- */
+    /* host -> guest: */
     CommTestWrite(BASE + COMM_MCR, 0x00);                     /* out of loopback */
     CHECK(VddCommReceive(&g_Comm, 0, 'H') == 0, "the host can push a received byte");
     CHECK((CommTestRead(BASE + COMM_LSR) & COMM_LSR_DATA_READY) == COMM_LSR_DATA_READY, "...which sets data-ready");
     CHECK(CommTestRead(BASE + COMM_RBR) == 'H', "...and reads out of RBR");
 
-    /* ---- OUT2 GATES THE LINE, NOT THE PART (GH #181) ------------------------
+    /* OUT2 GATES THE LINE, NOT THE PART (GH #181):
      * All out of loopback, deliberately: whether loopback closes the gate is
      * the one question here the datasheets and the Super I/O parts answer
      * differently, and it is not pinned until an oracle is asked.
@@ -300,7 +300,7 @@ INT main(VOID)
     CommTestWrite(BASE + COMM_IER, 0x00);
     CommTestWrite(BASE + COMM_MCR, 0x00);
 
-    /* ---- #245 (s90): the 16550 remainder, each line from the PC16550D --------- */
+    /* #245 (s90): the 16550 remainder, each line from the PC16550D: */
     /* enabling THRE with the holding register already empty IS a THRE interrupt */
     CommTestWrite(BASE + COMM_MCR, COMM_MCR_OUT2);
     CommTestWrite(BASE + COMM_IER, 0x00);
@@ -378,7 +378,7 @@ INT main(VOID)
     CommTestWrite(BASE + COMM_IER, 0x00);
     CommTestWrite(BASE + COMM_MCR, 0x00);
 
-    /* ---- INT 14h describes THE SAME PART ----------------------------------- */
+    /* INT 14h describes THE SAME PART: */
     CommTestWrite(BASE + COMM_MCR, COMM_MCR_LOOP);
     CommTestInt14(0x01, 'Z', 0, &registers);                       /* BIOS send, in loopback */
     CHECK((CommTestRead(BASE + COMM_LSR) & COMM_LSR_DATA_READY) == COMM_LSR_DATA_READY,
@@ -405,7 +405,7 @@ INT main(VOID)
     CommTestInt14(0x03, 0, 4, &registers);
     CHECK((registers.Eax & 0xFFFF) == 0x8000, "a port index past COM4 reports TIMEOUT");
 
-    /* ---- COM3 and COM4: two more slots of the same device (GH #181) --------- */
+    /* COM3 and COM4: two more slots of the same device (GH #181): */
     CommTestWrite(0x3E8 + COMM_SCR, 0x33);
     CommTestWrite(0x2E8 + COMM_SCR, 0x44);
     CHECK(CommTestRead(0x3E8 + COMM_SCR) == 0x33 && CommTestRead(0x2E8 + COMM_SCR) == 0x44,
@@ -466,7 +466,7 @@ INT main(VOID)
       VddBusDeliverInterrupt(&otherBus, 0x14, &otherRegisters);
       CHECK((otherRegisters.Eax & 0xFFFF) == 0x8000, "a port that is NOT fitted reports TIMEOUT"); }
 
-    /* ---- the parallel port: the byte leaves on the STROBE EDGE ------------- */
+    /* the parallel port: the byte leaves on the STROBE EDGE: */
     g_PrinterCount = 0;
     CHECK((CommTestRead(0x379) & LPT_STATUS_BUSY) == LPT_STATUS_BUSY,
           "LPT status reports NOT BUSY (bit 7 is INVERTED -- a 0 hangs every "

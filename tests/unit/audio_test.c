@@ -452,7 +452,7 @@ INT main(VOID)
         CHECK(fresh.OutputHz == 22050, "a requested output rate is honoured");
     }
 
-    /* ---- #189: AN SB16 STEREO TRANSFER KEEPS ITS TWO CHANNELS. 8-bit unsigned pairs,
+    /* #189: AN SB16 STEREO TRANSFER KEEPS ITS TWO CHANNELS. 8-bit unsigned pairs,
      * left at FFh and right at 00h: the stereo mix must put + on the left and - on the
      * right, and the mono mix -- which always averaged them -- must still average.
      */
@@ -486,7 +486,7 @@ INT main(VOID)
         VddAudioMix(&g_Mixer, g_Samples, 4096);
     }
 
-    /* ---- #189: AN SB PRO STEREO TRANSFER. Mixer 0Eh bit 1 selects stereo for the DSP
+    /* #189: AN SB PRO STEREO TRANSFER. Mixer 0Eh bit 1 selects stereo for the DSP
      * 1.x-3.x commands, and the time constant counts BOTH channels: TC 233 is ~43.5 kHz
      * of bytes = ~21.7 kHz of L/R frames. High-speed auto-init (0x90), 4096-byte blocks:
      * a second of output is ~10.6 blocks. Treating the byte rate as the frame rate would
@@ -531,7 +531,7 @@ INT main(VOID)
         VddAudioMix(&g_Mixer, g_Samples, 8192);
     }
 
-    /* -- #232: THE OPL THROUGH THE STEREO MIXER. Its own chip and mixer, so nothing
+    /* #232: THE OPL THROUGH THE STEREO MIXER. Its own chip and mixer, so nothing
      * above leaks in. Two claims: an OPL2 still mixes to EXACTLY the samples it did
      * when the mixer took it as a mono source (a golden taken from 42a9029, the
      * build before the OPL3 -- the same register sequence as opl_synth_test's), and

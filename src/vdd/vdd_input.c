@@ -122,7 +122,7 @@
 #define INPUT_INT16_CAPABILITY_BITS             0xB1
 #define INPUT_KEYBOARD_ID_MF2                   0x41AB  /* MF2 behind a translating 8042 */
 
-/* --- scancode set 1 -> the BIOS keycode (US layout) ------------------------- */
+/* scancode set 1 -> the BIOS keycode (US layout): */
 /* FOUR COLUMNS, BECAUSE THE BIOS HAS FOUR (Importance = 1):
  * Indexed by make code 0x00..0x58: what INT 09h stores for the key plain, with
  * Shift, with Ctrl and with Alt. A 0 entry means the BIOS stores NOTHING for that
@@ -355,7 +355,7 @@ static INT InputNextIndex(INT index)
     return (index + 1) % INPUT_SCANCODE_QUEUE_SIZE;
 }
 
-/* --- the BIOS keyboard ring, in guest memory at 0040:001E ------------------ */
+/* the BIOS keyboard ring, in guest memory at 0040:001E: */
 
 static WORD InputBdaReadWord(PCINPUT_STATE state, INT offset)
 {
@@ -482,7 +482,7 @@ INT VddInputPeek(PINPUT_STATE state, WORD *key)
     return 1;
 }
 
-/* --- raw AT keyboard: scancode FIFO + ports 0x60/0x64 --------------------- */
+/* raw AT keyboard: scancode FIFO + ports 0x60/0x64: */
 /* Push a scancode and assert IRQ1 the way an 8042 does: the controller holds ONE byte in
  * its output buffer and raises the line on the empty->full transition; the next byte is not
  * presented (and no further interrupt occurs) until the guest reads port 0x60. Pacing the
@@ -853,7 +853,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
 
     if (state->E1Pending)
     {
-        /* -- PAUSE. The make sequence is E1 1D 45, the break E1 9D C5, and neither is
+        /* PAUSE. The make sequence is E1 1D 45, the break E1 9D C5, and neither is
          * a Ctrl or a NumLock (the E1 is there so an old BIOS reads it as
          * Ctrl+NumLock, the 83-key pause). The BIOS sets 0018 bit 3 and spins in
          * its handler, interrupts on, until the next keystroke.
@@ -937,7 +937,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
         return INPUT_ACTION_NONE;
 
     case INPUT_SCAN_SCROLL_LOCK:
-        /* -- CTRL-BREAK. The Break key sends E0 46 with Ctrl held (and Ctrl+Scroll Lock
+        /* CTRL-BREAK. The Break key sends E0 46 with Ctrl held (and Ctrl+Scroll Lock
          * is Break on the 83-key board). The BIOS empties the ring, sets 0040:0071
          * bit 7, calls INT 1Bh, and stores 0000h. Not a Scroll Lock toggle.
          */
@@ -962,7 +962,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
         return INPUT_ACTION_NONE;
 
     case INPUT_SCAN_SYSREQ:
-        /* -- SYSREQ (Alt+Print Screen). Held bit 0018 bit 2; INT 15h AX=8500h on the
+        /* SYSREQ (Alt+Print Screen). Held bit 0018 bit 2; INT 15h AX=8500h on the
          * press, 8501h on the release. Stores nothing.
          */
         if (isBreak)
@@ -983,7 +983,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
         return INPUT_ACTION_SYSREQ_DOWN;
 
     case INPUT_SCAN_INSERT:
-        /* -- INSERT. 0018 bit 7 while held; 0017 bit 7 toggles on the press when the
+        /* INSERT. 0018 bit 7 while held; 0017 bit 7 toggles on the press when the
          * key is acting as Insert (grey, or keypad with NumLock and Shift agreeing)
          * and Alt/Ctrl are up. The keystroke is stored as well.
          */
@@ -1009,14 +1009,14 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
     if (isBreak)
         return INPUT_ACTION_NONE;                           /* releases change no buffer content */
 
-    /* -- WHILE PAUSED, the next keystroke ends the pause and is thrown away. */
+    /* WHILE PAUSED, the next keystroke ends the pause and is thrown away. */
     if (InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2) & INPUT_SHIFT2_PAUSE)
     {
         InputSetBdaFlag(state, BIOS_BDA_SHIFT_FLAGS2, INPUT_SHIFT2_PAUSE, FALSE);
         return INPUT_ACTION_NONE;
     }
 
-    /* -- #274: ALT + A KEYPAD DIGIT ACCUMULATES; ANY OTHER KEY UNDER ALT CLEARS IT. */
+    /* #274: ALT + A KEYPAD DIGIT ACCUMULATES; ANY OTHER KEY UNDER ALT CLEARS IT. */
     if ((InputShiftFlags(state) & INPUT_SHIFT_ALT) && state->BiosData)
     {
         INT keypadDigit = isExtended ? INPUT_NOT_A_DIGIT : InputKeypadDigit(code);
@@ -1030,7 +1030,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
         state->BiosData[BIOS_BDA_ALT_KEYPAD] = 0;
     }
 
-    /* -- PRINT SCREEN: E0 37 (the grey key). Ctrl+PrtSc is the 7200h keystroke; on
+    /* PRINT SCREEN: E0 37 (the grey key). Ctrl+PrtSc is the 7200h keystroke; on
      * its own it calls INT 05h and stores nothing (it used to store 3700h).
      */
     if (isExtended && code == INPUT_SCAN_PRINT_SCREEN)
@@ -1466,7 +1466,7 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
 
     if (state->ControllerCommand == INPUT_KBC_WRITE_KEYBOARD_BUFFER)
     {
-        /* -- #244: D2h, WRITE KEYBOARD OUTPUT BUFFER. The byte comes out at port 60h
+        /* #244: D2h, WRITE KEYBOARD OUTPUT BUFFER. The byte comes out at port 60h
          * exactly as if the keyboard had sent it, IRQ1 included -- which is what
          * makes the BIOS's INT 09h path testable without a finger on a key (p_kbd3
          * injects through it). PS/2-class controllers and AMI's KBC have it; the

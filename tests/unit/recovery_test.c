@@ -72,7 +72,7 @@ INT main(VOID)
                        DosRecoveryDecideStartMode(RECOVERY_TEST_MANY_FAILURES),
                        DOS_START_UNINSTALL);
 
-    /* -- PARSING. A corrupt counter must not be able to uninstall us by itself. */
+    /* PARSING. A corrupt counter must not be able to uninstall us by itself. */
     RecoveryTestExpect("\"0\" parses as 0", RecoveryTestParse("0"), 0);
     RecoveryTestExpect("\"2\" parses as 2", RecoveryTestParse("2"), 2);
     RecoveryTestExpect("\"3\\r\\n\" parses as 3", RecoveryTestParse("3\r\n"), 3);

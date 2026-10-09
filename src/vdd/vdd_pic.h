@@ -54,7 +54,7 @@ typedef struct _PIC_CHIP
                                a poll read is an ACKNOWLEDGE -- it sets ISR and
                                clears IRR exactly as a delivery would. One-shot:
                                the read consumes it. See docs/ref/pic.md 5.      */
-    /* -- THE PROGRAMMING INTERFACE A PC BIOS NEVER TOUCHES (#174). All four reset to
+    /* THE PROGRAMMING INTERFACE A PC BIOS NEVER TOUCHES (#174). All four reset to
      * the fixed-priority, fully nested chip every DOS program assumes, so a guest
      * that does not program them sees nothing new. docs/ref/pic.md 4-5.
      */
@@ -82,7 +82,7 @@ typedef struct _PIC_STATE
 INT  VddPicInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddPicReset(_In_ PVOID context);
 
-/* --- what the host asks the PIC -------------------------------------------- */
+/* what the host asks the PIC: */
 
 /* May line `irq` (0-15) be delivered right now? False if it is masked, or if it or
  * a higher-priority line is still in service. This is the whole point: it is what

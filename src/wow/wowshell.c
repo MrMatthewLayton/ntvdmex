@@ -13,20 +13,8 @@
 
 #include "wowshell.h"
 #include "host_state.h"
-#include "log.h"
-#include "ne.h"
-#include "wow32.h"
-#include "wowanchors.h"
-#include "wowsched.h"
-#include "wowcall.h"
-#include "wowmsg.h"
-#include "wowres.h"
 #include "wowwin.h"
-#include "wowgdi.h"
 #include "wowuser.h"
-#include "wowdlg.h"
-#include "wowenum.h"
-#include "host_dpmi.h"
 
 static HKEY  g_WowShellKeys[WOWSHELL_KEYTOK_MAX];
 static INT   g_WowShellKeyCount = 0;
@@ -410,7 +398,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x15 FindExecutable(lpFile, lpDirectory, lpResult) -- which program
+    /* 0x15 FindExecutable(lpFile, lpDirectory, lpResult) -- which program
      * opens this document. Same >32 convention as ShellExecute.
      */
     case WOWSHELL_FINDEXECUTABLE:
@@ -464,7 +452,7 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x25 DoEnvironmentSubst(lpszString, cbString) -- expand %VAR% IN
+    /* 0x25 DoEnvironmentSubst(lpszString, cbString) -- expand %VAR% IN
      * PLACE, inside the guest's own buffer.
      *
      * [CAUTION]: THE RETURN IS A PACKED PAIR, not a status: the HIGH word is the length

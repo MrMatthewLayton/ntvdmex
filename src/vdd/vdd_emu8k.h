@@ -79,7 +79,7 @@ enum { EMU8K_ENV_OFF = 0, EMU8K_ENV_DELAY, EMU8K_ENV_ATTACK, EMU8K_ENV_HOLD,
 
 typedef struct _EMU8K_VOICE
 {
-    /* ---- the register file, as the guest sees it (p.6-7) ---- */
+    /* the register file, as the guest sees it (p.6-7): */
     DWORD    Cpf;            /* Data0 r0: current pitch (31-16), fractional address (15-0) */
     DWORD    Ptrx;           /* Data0 r1: pitch target, reverb send, aux byte */
     DWORD    Cvcf;           /* Data0 r2: current volume (31-16), current cutoff (15-0) */
@@ -111,7 +111,7 @@ typedef struct _EMU8K_VOICE
     WORD Data3Register6;
     WORD Data3Register7;
 
-    /* ---- the engine's own state ---- */
+    /* the engine's own state: */
     /* ENV2 and ENV1 */
     EMU8K_ENVELOPE VolumeEnvelope;
     EMU8K_ENVELOPE ModulationEnvelope;

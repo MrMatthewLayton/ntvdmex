@@ -315,7 +315,7 @@ INT main(VOID)
                             && cpu.Registers[KBDACT_TEST_SP] == KBDACT_TEST_STACK_TOP,
                             "pause: AX and DS restored, stack balanced");
 
-    /* -- #244: k4f, the INT 15h AH=4Fh call. The host has pushed the interrupted AX
+    /* #244: k4f, the INT 15h AH=4Fh call. The host has pushed the interrupted AX
      * (1234h) above the INT 09h frame and loaded AX = 4F00h | scancode.
      */
     KeyboardActionTestCheck(g_BiosKeyboardActionCode[BIOS_KEYBOARD_ACTION_IRET] == KBDACT_TEST_IRET,
@@ -359,7 +359,7 @@ INT main(VOID)
                             "k4f: ...restores AX and IRETs, stack balanced");
     g_ClearCarryVector = KBDACT_TEST_NONE;
 
-    /* -- #274: p5, the default INT 05h. The host's two BOPs are simulated here: begin
+    /* #274: p5, the default INT 05h. The host's two BOPs are simulated here: begin
      * hands back one byte ('X'), next says "done" (CF=1).
      */
     KeyboardActionTestCheck(g_BiosKeyboardActionCode[BIOS_KEYBOARD_ACTION_DEFAULT_INT05_BEGIN]

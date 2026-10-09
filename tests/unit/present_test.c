@@ -174,7 +174,7 @@ INT main(VOID)
 
     printf("== Display: the aspect lock and the minimum window ==\n");
 
-    /* -- #325: THE ASPECT LIST. Native (square pixels) is index 0 and the default; the
+    /* #325: THE ASPECT LIST. Native (square pixels) is index 0 and the default; the
      * forced ratios keep their indices; Stretch is last. (The registry NAME changed
      * with the meaning of 0, in settings.h, so no stored value is reinterpreted.)
      */
@@ -192,7 +192,7 @@ INT main(VOID)
     PresentFit(1000, 400, PRESENT_ASPECT_16_9, &left, &top, &width, &height);
     CHECK(width == 711 && height == 400, "16:9 in a 1000x400 client is 711x400, height-bound");
 
-    /* -- #325: THE PICTURE A WINDOW IS SIZED TO. 1x = one desktop pixel per frame pixel. */
+    /* #325: THE PICTURE A WINDOW IS SIZED TO. 1x = one desktop pixel per frame pixel. */
     {   INT pictureWidth, pictureHeight;
         PresentWindowPicture(PRESENT_ASPECT_NATIVE, 320, 200, 1, &pictureWidth, &pictureHeight);
         CHECK(pictureWidth == 320 && pictureHeight == 200, "window: 320x200 at 1x is 320x200 -- no 640x480 floor");
@@ -207,7 +207,7 @@ INT main(VOID)
         PresentWindowPicture(PRESENT_ASPECT_16_9, 640, 200, 1, &pictureWidth, &pictureHeight);
         CHECK(pictureWidth == 640 && pictureHeight == 360, "window: forced 16:9 -- 640x200 at 1x is 640x360"); }
 
-    /* -- #325: WHERE THE PICTURE GOES. */
+    /* #325: WHERE THE PICTURE GOES. */
     PresentLayout(PRESENT_ASPECT_NATIVE, PRESENT_FIT_WHOLE, 1, 1680, 1050, 320, 200, &left, &top, &width, &height);
     CHECK(width == 1600 && height == 1000 && left == 40 && top == 25,
           "layout: 320x200 on 1680x1050, whole pixels -> 5x = 1600x1000, centred");

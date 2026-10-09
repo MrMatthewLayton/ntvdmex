@@ -237,13 +237,13 @@
 #define GUS_ACIA_RECEIVE_IRQ                0x80
 #define GUS_ACIA_CONTROL_POWER_UP           0x00
 
-/* ---- the latches (ref section 5) ---------------------------------------------------------- */
+/* the latches (ref section 5): */
 
 /* The two 3-bit codes of the 2XB latches. Code 0 is "no line" in both tables. */
 static const BYTE g_GusIrqMap[GUS_LATCH_CODES] = { 0, 2, 5, 3, 7, 11, 12, 15 };
 static const BYTE g_GusDmaMap[GUS_LATCH_CODES] = { 0, 1, 3, 5, 6, 7, 0, 0 };
 
-/* ---- register-file helpers -------------------------------------------------------- */
+/* register-file helpers: */
 
 /* Which registers are 16 bits wide (ref section 2.1, section 2.2). Everything else is 8 and lives at 3X5. */
 static INT GusIsRegister16(BYTE registerNumber)
@@ -336,7 +336,7 @@ static BYTE GusRecordDma(PCGUS_STATE state)
     return GusAreDriversOn(state) ? state->RecordDmaLine  : 0;
 }
 
-/* ---- the MIDI UART, a 6850 (ref section 9) ---------------------------------------------- */
+/* the MIDI UART, a 6850 (ref section 9): */
 
 /* The ACIA's own interrupt request: receive full with CR7 (receive IRQ enable), or
  * transmit empty with CR6-5 = 01 -- the only one of the four transmit-control codes
@@ -361,7 +361,7 @@ static INT GusIsMidiDecoded(PCGUS_STATE state)
     return (state->Jumper & GUS_JUMPER_MIDI_DECODE) != 0;
 }
 
-/* ---- interrupts (ref section 6) -------------------------------------------------------- */
+/* interrupts (ref section 6): */
 
 static INT GusIsVoicePending(PCGUS_STATE state)
 {
@@ -495,7 +495,7 @@ static BYTE GusIrqFifo(PGUS_STATE state)
     return GUS_FIFO_EMPTY;
 }
 
-/* ---- DRAM DMA (ref section 3) ---------------------------------------------------------- */
+/* DRAM DMA (ref section 3): */
 
 /* The 16-bit-channel address translation, undone (ref section 2.1). */
 static UINT32 GusUntranslate16(UINT32 translated)
@@ -626,7 +626,7 @@ static VOID GusDmaTry(PGUS_STATE state)
     GusIrqUpdate(state);
 }
 
-/* ---- the record path (ref section 2.1: 48h rate, 49h control) ------------------------------ */
+/* the record path (ref section 2.1: 48h rate, 49h control): */
 
 /* #190: sampling. 49h bit 0 starts the ADC; each sample goes card -> PC through the
  * 8237 on the RECORD DMA channel (the DMA latch's bits 5-3, or the DRAM channel when
@@ -689,7 +689,7 @@ static VOID GusRecord(PGUS_STATE state, UINT32 nanoseconds)
     }
 }
 
-/* ---- the chip reset (4Ch bit 0 = 0) ------------------------------------------------- */
+/* the chip reset (4Ch bit 0 = 0): */
 
 static VOID GusChipReset(PGUS_STATE state)
 {
@@ -725,7 +725,7 @@ static VOID GusChipReset(PGUS_STATE state)
     state->IsMidiLineUp = 0;
 }
 
-/* ---- register write / read ------------------------------------------------------- */
+/* register write / read: */
 
 static VOID GusRegisterWrite(PGUS_STATE state, BYTE registerNumber, WORD value)
 {
@@ -979,7 +979,7 @@ static WORD GusRegisterRead(PGUS_STATE state, BYTE registerNumber)
     }
 }
 
-/* ---- ports (ref section 1) ---------------------------------------------------------- */
+/* ports (ref section 1): */
 
 static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
@@ -1267,7 +1267,7 @@ static VOID GusPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     *value = result;
 }
 
-/* ---- the voice engine (ref section 4, section 7) --------------------------------------------- */
+/* the voice engine (ref section 4, section 7): */
 
 UINT32 VddGusVolumeGain(WORD volume12)
 {
@@ -1501,7 +1501,7 @@ static VOID GusTimers(PGUS_STATE state, UINT32 nanoseconds)
     }
 }
 
-/* -- #189: PAN. The GF1 places each voice at one of 16 positions (reg 0Ch: 0 = hard
+/* #189: PAN. The GF1 places each voice at one of 16 positions (reg 0Ch: 0 = hard
  * left, 15 = hard right, 7/8 = the middle). This is a BALANCE law, not a split: a side
  * stays at full level until the voice moves away from it, so a centred voice comes
  * out of each channel exactly as loud as the old mono sum -- nothing a program already
@@ -1620,7 +1620,7 @@ VOID VddGusRenderStereo(PGUS_STATE state, INT16 *output, UINT32 count)
     GusRender(state, output, count, AUDIO_STEREO);
 }
 
-/* ---- the bus ------------------------------------------------------------------- */
+/* the bus: */
 
 VOID VddGusReset(PVOID context)
 {

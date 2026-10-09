@@ -131,7 +131,7 @@ static INT DmaPageChannel(WORD port)
     }
 }
 
-/* --- address arithmetic --------------------------------------------------- */
+/* address arithmetic: */
 /* 8-bit channels address bytes directly; 16-bit channels address WORDS inside a
  * 128K page, so the address register is shifted and the page's low bit ignored.
  */
@@ -153,7 +153,7 @@ UINT32 VddDmaRemaining(PCDMA_STATE state, BYTE channelNumber)
     return ((channelNumber & DMA_CHANNEL_MASK) < DMA_CHANNELS_PER_CONTROLLER) ? units : units * DMA_WORD_UNIT;
 }
 
-/* -- ONE TRANSFER RETIRED: walk the address, count down, and at terminal count do
+/* ONE TRANSFER RETIRED: walk the address, count down, and at terminal count do
  * what the 8237 does -- latch TC, clear the channel's software request ("cleared
  * upon generation of a TC", datasheet), and either reload (auto-initialise) or set
  * the channel's own mask bit. Returns 1 if this transfer was the terminal one.
@@ -230,7 +230,7 @@ static INT DmaStep(
     return 1;
 }
 
-/* -- THE GRANT. Mask bit AND controller-disable, asked in one place (see the header).
+/* THE GRANT. Mask bit AND controller-disable, asked in one place (see the header).
  * Before #176 this was `if (c->masked) return 0;` inline, and the command register's
  * bit 2 was stored and read by nothing -- a guest that disabled the controller to
  * stop a transfer got the transfer anyway.
@@ -409,7 +409,7 @@ static VOID DmaSoftwareBlock(PDMA_STATE state, BYTE channelNumber)
     }
 }
 
-/* -- MEMORY-TO-MEMORY, controller 1 only (command bit 0). 8237A datasheet: started by
+/* MEMORY-TO-MEMORY, controller 1 only (command bit 0). 8237A datasheet: started by
  * a software request on channel 0; each byte is read at channel 0's current address
  * into the TEMPORARY register, then written at channel 1's; both addresses step
  * (channel 0's held still when command bit 1 is set -- "a single word written to a
@@ -529,7 +529,7 @@ static VOID DmaSoftwareService(PDMA_STATE state)
     }
 }
 
-/* --- register file -------------------------------------------------------- */
+/* register file: */
 /* Address and count are 16-bit registers behind an 8-bit port, so the controller
  * keeps a flip-flop selecting which half the next access hits. Software clears it
  * (port 0x0C / 0xD8) before programming a channel; forgetting to model it swaps
@@ -736,7 +736,7 @@ static VOID DmaPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
             state->Channels[channelNumber].IsTerminalCount = 0;                 /* reading status clears TC */
         }
 
-        /* -- BITS 7:4 -- "set whenever their corresponding channel is requesting
+        /* BITS 7:4 -- "set whenever their corresponding channel is requesting
          * service" (8237A datasheet). They always read 0 before #176. Derived, not
          * latched, so the read that clears TC cannot touch them: a request is still
          * pending after you look at it, until the device stops making it.
@@ -755,7 +755,7 @@ static VOID DmaPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     *value = DMA_FLOATING_BYTE;
 }
 
-/* --- lifecycle ------------------------------------------------------------ */
+/* lifecycle: */
 /* WHAT POST LEAVES ON AN AT: CHANNEL 4 IN CASCADE MODE, UNMASKED. (#246):
  * The BIOS does this once at power-on (mode C0h to D6h, then unmask channel 4 at
  * D4h), and every DOS program inherits it -- it is what connects controller 1 to

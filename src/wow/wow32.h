@@ -134,9 +134,9 @@
 /* Taking WORDs and DWORDs apart, and putting them back, as every Win16 structure needs. */
 #define WOW_WORD_BYTES                              2
 
-/* ---- frame accessors ---------------------------------------------------- */
+/* frame accessors: */
 
-/* ---- writing back through a far pointer the guest gave us --------------- */
+/* writing back through a far pointer the guest gave us: */
 
 /* WHAT AN UNIMPLEMENTED CALL ANSWERS. (GH #128, session 36) (Importance = 2):
  * Session 35 measured that a stepped-over call is not inert: krnl386 takes the
@@ -170,7 +170,7 @@
  */
 #define WOW32_UNIMPL_RET                            0u
 
-/* ---- the function IDs we can name -------------------------------------- */
+/* the function IDs we can name: */
 /* Names for the 28 that krnl386's export table names outright, plus the ones
  * worked out from their call sites. An ID with no name here is not a gap in the
  * evidence -- it is a function reached only from internal code, not yet pinned
@@ -482,7 +482,7 @@
  */
 #define WOW32_FILE_SEEK                             0x98            /* -> AH=42h on decline */
 
-/* ---- the services ------------------------------------------------------- */
+/* the services: */
 /* Returns 1 if this ID was serviced (the caller then advances EIP past the BOP),
  * 0 if it is still unimplemented (the caller logs and steps over).
  *

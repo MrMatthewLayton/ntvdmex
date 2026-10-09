@@ -74,7 +74,7 @@
  * renumbers the slower ones. The permanent fix (store MHz, not an index) is still
  * the right thing the next time this needs to change without disturbing anyone.
  */
-/* -- #224 (s84): THE USER'S LADDER, from docs/EMULATION.md -- real CPUs a person owned,
+/* #224 (s84): THE USER'S LADDER, from docs/EMULATION.md -- real CPUs a person owned,
  * fastest first, index 0 still Unlimited ("Host"). The 8 MHz rung is gone (not on
  * the list). Rungs at or above THIS PC's own speed are greyed where the list is
  * shown (CpuSpeedIsAvailable), because a throttle is a ceiling, never a boost.
@@ -113,7 +113,7 @@
  * calibrated without a rebuild -- this is the sort of constant that is wrong
  * on somebody else's machine by construction.
  */
-/* -- "HOW FAST DOES AN UNTHROTTLED GUEST LOOK, IN MHz?" -- AND IT IS THE NATIVE ALU
+/* "HOW FAST DOES AN UNTHROTTLED GUEST LOOK, IN MHz?" -- AND IT IS THE NATIVE ALU
  * RATE AGAIN, MEASURED. --------------------------------------------------------
  * The duty is delivered ACCURATELY now (session 60: the closed-loop invariant
  * holds guest execution to `duty` of wall time, delivered_bp tracks duty_bp to
@@ -281,7 +281,7 @@
  * [CAUTION]: A constant would have had to be re-derived for every machine. This does not.
  */
 
-/* -- THE CLOSED-LOOP INVARIANT: keep exec time a fixed fraction of wall time.
+/* THE CLOSED-LOOP INVARIANT: keep exec time a fixed fraction of wall time.
  * The throttle has exactly one job -- hold guest EXECUTION time E to the fraction
  * `duty` of WALL time T:  E = duty * T.  Everything the old code bookkept by hand
  * (the per-run hold, the carried debt, jitter tolerance, saturation) is a
@@ -322,7 +322,7 @@
  */
 #define CPUSPEED_MAX_WINDOW_US      60000000ull     /* Force a rebaseline after this, bounded */
 
-/* -- WHERE THE 1 ms RUN-PHASE FLOOR KICKS IN (see the throttle loop). Above this
+/* WHERE THE 1 ms RUN-PHASE FLOOR KICKS IN (see the throttle loop). Above this
  * duty the immediate-catch hold is too small to swamp the per-period catch cost, so
  * the guest must run a Sleep-able chunk first; below it, an immediate catch already
  * earns a large hold and the floor would over-run. Rig-tuned against ref 3704: 8 MHz

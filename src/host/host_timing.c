@@ -223,7 +223,7 @@ enum
     TSC_RESYNC_MIN_US = 500
 };   /* HostTimeMicroseconds: an interval long enough to re-derive the rate */
 
-/* -- #183: THE BEAM CLOCK WITHOUT A SYSCALL PER READ. Every 3DAh status read asks this
+/* #183: THE BEAM CLOCK WITHOUT A SYSCALL PER READ. Every 3DAh status read asks this
  * for the time, and a retrace-wait loop reads 3DAh flat out: s82's profiler put 40%
  * of Wolf3D's exec-thread samples in ntdll, i.e. QueryPerformanceCounter, which is a
  * system call on XP, plus a 64-bit divide. Now: the CPU's own time-stamp counter,
@@ -288,6 +288,9 @@ enum
 {
     RETRACE_IDLE_PATTERN_LENGTH = 4, RETRACE_IDLE_BACK_MAX = 3
 };   /* RetraceIdle: test/and al ; jcc back to the IN */
+
+/* Used before their definitions below. */
+static VOID HostPitDeliver(VOID);
 
 CMOS_STATE   g_Cmos;      NTVDD_DEVICE g_CmosDevice;
 
@@ -543,7 +546,7 @@ UINT32 g_PitGapMaximum;                     /* the worst one, in 8254 clocks */
  * genuine GP fault the caller should stop on. No per-call logging -- I/O traps
  * are hot (a palette set is ~768 OUTs); flushing the trace file each one stalls.
  */
-/* -- #183: A RETRACE WAIT SLEEPS INSTEAD OF SPINNING. The standing decision: make the
+/* #183: A RETRACE WAIT SLEEPS INSTEAD OF SPINNING. The standing decision: make the
  * waits cheaper. A guest waiting for vertical retrace spins `in al,dx / test al,8 /
  * jz back` against 3DAh, trapping every iteration -- 3M traps a second, a whole core,
  * and (#172) the timer's pacer starved of CPU on a small machine. The handler notes
@@ -555,7 +558,7 @@ UINT32 g_PitGapMaximum;                     /* the worst one, in 8254 clocks */
  * close it spins as before, so the edge is caught exactly. V86 only; cfg\rtidle.off
  * turns it off.
  */
-/* -- #226: VBE 4F07h BL=80h/82h "set display start DURING VERTICAL RETRACE". The
+/* #226: VBE 4F07h BL=80h/82h "set display start DURING VERTICAL RETRACE". The
  * video device answers the call and records when it may complete; the host waits
  * that out here, after dropping the lock -- sleeping while the retrace is more than
  * 1.5 ms away, spinning for the last stretch -- so a guest that flips pages with it
@@ -649,7 +652,7 @@ static volatile LONG g_ExecMicrosecondsAccumulated;      /* completed guest-exec
 static LARGE_INTEGER g_ExecQpcBase;    /* fixed at first use; never moves */
 static volatile LONG g_ExecEnterMicroseconds;    /* open interval start, us since base; 0=none */
 static volatile LONG g_ExecTimingOn;   /* only while a throttle is actually set */
-/* -- #225: THE COOPERATIVE CATCH. (user, round 11: "slow at busy times -- the
+/* #225: THE COOPERATIVE CATCH. (user, round 11: "slow at busy times -- the
  * crossfade, keyboard input") The throttle catches the guest by suspending it
  * INSIDE VdmRunGuest; a guest that is in OUR servicing (a port trap, a BOP) cannot be
  * suspended, so it ran free -- 56,820 missed catches in one Skyroads run at
@@ -669,7 +672,7 @@ static volatile LONG g_ExecTimingOn;   /* only while a throttle is actually set 
 static volatile LONG g_CpuSpeedCatchRequest;   /* throttle -> exec: park at the re-entry */
 static volatile LONG g_CpuSpeedParked;      /* exec -> throttle: parked, not in exec */
 
-/* -- #225: WHAT THE THROTTLE DID, SECOND BY SECOND, on IRQ0TL's time base, so a
+/* #225: WHAT THE THROTTLE DID, SECOND BY SECOND, on IRQ0TL's time base, so a
  * dip in the guest's clock can be read against exec / hold / missed catches /
  * port traps / timer raises in that same second. Written by the throttle thread
  * only (the io and raise columns are snapshots of counters owned elsewhere).
@@ -683,9 +686,6 @@ static DWORD g_ControlRaise[IRQ0TL_SECS];
 static DWORD g_ControlRunMicroseconds[IRQ0TL_SECS];
 static INT    g_ExecPriorityNow = EXEC_PRIORITY_UNSET;       /* what BackgroundPriorityTick last set */
 static INT g_RetraceOffset = -1;
-
-/* Used before their definitions below. */
-static VOID HostPitDeliver(VOID);
 
 static VOID PmOwedSample(LONG owed)
 {
@@ -888,7 +888,7 @@ INT Irq0CanDeliver(VOID)
     if (g_Pic.Master.Isr & 1)
     {
         DWORD since = g_Irq0IsrSince;
-        /* -- A HOST STALL IS NOT A GUEST THAT FORGOT TO EOI. s70: a headless run with
+        /* A HOST STALL IS NOT A GUEST THAT FORGOT TO EOI. s70: a headless run with
          * capture.flag hit the timeout three times and engaged the fallback -- but no
          * IRQ0-ISR-LONG line was ever written, i.e. nothing ATTEMPTED delivery during
          * those episodes: the whole host was stopped (a 24bpp shot written to the SMB
@@ -919,7 +919,7 @@ INT Irq0CanDeliver(VOID)
         }
 
         g_Irq0IsrBlocks++;
-        /* -- NAME THE LONG ONE. The s70 by-hand stall began with a single in-service
+        /* NAME THE LONG ONE. The s70 by-hand stall began with a single in-service
          * episode of >250 ms (the trapdoor moment) and the log could not say where the
          * guest was. Bounded: one line per 50 ms step of an episode, 8 lines per run.
          * cs:ip is the TIB's, i.e. the last V86 exit -- biased, but it is what the
@@ -1278,7 +1278,7 @@ static VOID HostPitDeliver(VOID)
             } }
         }
 
-    /* -- A DEVICE IRQ GETS EXACTLY ONE ASYNCHRONOUS ATTEMPT, AT THE INSTANT IT IS
+    /* A DEVICE IRQ GETS EXACTLY ONE ASYNCHRONOUS ATTEMPT, AT THE INSTANT IT IS
      * RAISED -- AND THAT IS NOT ENOUGH FOR A ONE-SHOT INTERRUPT. --------------------
      * HostIrqSink tries once when the device raises, and if the CPU thread happens
      * to be in HOST code at that microsecond the attempt bails (why=0x14) and nothing
@@ -1750,7 +1750,7 @@ static VOID CpuAffinityApply(VOID)
 
 DWORD WINAPI CpuSpeedThread(LPVOID param)
 {
-    /* -- THE CLOSED-LOOP THROTTLE. The whole control law is CpuSpeedStep (the
+    /* THE CLOSED-LOOP THROTTLE. The whole control law is CpuSpeedStep (the
      * long note in cpuspeed.h); this loop only FEEDS it two measured numbers and
      * applies the hold it returns. It replaced ~150 lines of debt bookkeeping
      * (owed_us + hold_us + pay_ms + two baselines that fell out of step and leaked
@@ -1818,7 +1818,7 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
             continue;
         }
 
-        /* -- [CAUTION] #225 (user, round 9): "the speeds degrade over time", and 100 -> 66 MHz
+        /* [CAUTION] #225 (user, round 9): "the speeds degrade over time", and 100 -> 66 MHz
          * "pretty much locked up" while Unlimited always recovered. TWO DEBTS THE
          * WINDOW NEVER FORGAVE, both of which only the Unlimited branch above cleared:
          * - A #219 PAUSE WAS BILLED AS EXECUTION. The pause suspends the guest INSIDE
@@ -1885,7 +1885,7 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
             if (duty >= CPUSPEED_RUN_FLOOR_BP && runMicroseconds < MICROSECONDS_PER_MILLISECOND_UL)
                 runMicroseconds = MICROSECONDS_PER_MILLISECOND_UL;                       /* Sleep-able floor, fast half */
 
-            /* -- #225: A CYCLE SHORTER THAN THE GUEST'S TIMER. The per-second record
+            /* #225: A CYCLE SHORTER THAN THE GUEST'S TIMER. The per-second record
              * put Skyroads' slow seconds on pure compute, IRQ0 capped at 97..133/s of
              * 180: a tick placed during a hold stays in service until the handler runs
              * in the NEXT run slice, so one run+hold cycle passes at most one tick --
@@ -1934,7 +1934,7 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
 
             /* else: immediate catch -- correct for the slow half. */
         }
-        /* -- CATCH THE GUEST INSIDE VdmRunGuest, measure, hold. The retry YIELDS rather
+        /* CATCH THE GUEST INSIDE VdmRunGuest, measure, hold. The retry YIELDS rather
          * than sleeping so it catches within microseconds of a re-entry; bounded,
          * then it gives up (a guest blocked in a host call is not executing, so
          * there is nothing to throttle -- and NOT resetting the window here is
@@ -2259,7 +2259,7 @@ DWORD WINAPI HeartbeatThread(LPVOID parameter)
                 cursor = LogPut(cursor, "<unreadable>");
         }
 
-        /* -- s69: THE PALETTE FADE, ON THE BEAT. The blank-screen bug is a black
+        /* s69: THE PALETTE FADE, ON THE BEAT. The blank-screen bug is a black
          * per-frame palette buffer (ds:0x2668) while the colours are loaded; it is
          * by-hand-only and the by-hand host dies before the exit report, so put the
          * live state where the heartbeat can carry it out. `pal2668` = the first 3

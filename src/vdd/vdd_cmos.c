@@ -238,7 +238,7 @@ static INT CmosClockRegister(PCMOS_STATE state, BYTE registerIndex, BYTE *value)
         *value = CmosClockValue(state, reading.Century);
     return CMOS_CLOCK_REGISTER;
 
-    /* -- THE DAY OF WEEK COMES FROM THE HOST, NOT A CALENDAR RULE. (s81, #182) It
+    /* THE DAY OF WEEK COMES FROM THE HOST, NOT A CALENDAR RULE. (s81, #182) It
      * was fixed at 1 (Sunday) because the clock reading carried no weekday and a
      * device model should not hold calendar arithmetic. Windows' GetLocalTime
      * already knows it, so the host passes it through (1 = Sunday, the chip's
@@ -301,7 +301,7 @@ VOID VddCmosAddClocks(PCMOS_STATE state, UINT32 clocks)
     UINT32 period;
     INT guard = 0;
 
-    /* -- THE ONCE-A-SECOND EDGE, for UF and AF. Accumulated from the same clocks
+    /* THE ONCE-A-SECOND EDGE, for UF and AF. Accumulated from the same clocks
      * the periodic divider uses rather than polled off the host clock, so
      * rtc_now is called once a SECOND instead of once a pacer tick.
      */
@@ -389,7 +389,7 @@ static BYTE CmosRead(PCMOS_STATE state, BYTE registerIndex)
     case CMOS_STATUS_A:
         return state->StatusA;
 
-    /* -- STATUS B: BCD, 24-HOUR. MEASURED 0x02 on 6.22-under-QEMU AND on
+    /* STATUS B: BCD, 24-HOUR. MEASURED 0x02 on 6.22-under-QEMU AND on
      * PCem's real AMI BIOS; dosbox-x answers 0x03, which is the same plus
      * DSE (daylight saving). Two of three, including the period-correct
      * machine, and 0x02 is what the bit definitions say a PC leaves.
@@ -409,7 +409,7 @@ static BYTE CmosRead(PCMOS_STATE state, BYTE registerIndex)
         return flags;
     }
 
-    /* -- STATUS D BIT 7 IS VRT, "valid RAM and time". CLEAR means "the battery
+    /* STATUS D BIT 7 IS VRT, "valid RAM and time". CLEAR means "the battery
      * died and everything in here is garbage", which firmware and setup
      * programs act on. With no chip at all we answered 0xFF, whose bit 7 is
      * set -- so this row was RIGHT BY ACCIDENT and agreed with all three
@@ -462,7 +462,7 @@ static VOID CmosPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 
     if (state->Index == CMOS_STATUS_B)
     {
-        /* -- GH #261: SET (bit 7). Going high freezes a copy of the clock and,
+        /* GH #261: SET (bit 7). Going high freezes a copy of the clock and,
          * per the MC146818 datasheet, CLEARS UIE -- no update-ended interrupt
          * for a clock that is not updating. Going low commits the copy: the
          * date, then the time, through the same hook INT 1Ah AH=05h/03h use.
@@ -515,7 +515,7 @@ static VOID CmosPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
         return;
     }
 
-    /* -- GH #261: THE CLOCK ITSELF. With a host hook (rtc_set) a write moves
+    /* GH #261: THE CLOCK ITSELF. With a host hook (rtc_set) a write moves
      * the VDM's RTC -- frozen copy while SET is held, committed at once when
      * it is not. The byte is decoded in the base DM selects, and the hours
      * register in the mode bit 1 selects (12-hour: bit 7 is PM).
@@ -647,7 +647,7 @@ VOID VddCmosReset(PVOID context)
     {   WORD baseMemoryKb = state->BaseKb ? state->BaseKb : CMOS_DEFAULT_BASE_KB;
         state->Ram[CMOS_BASE_KB_LOW] = (BYTE)(baseMemoryKb & CMOS_LOW_BYTE);
         state->Ram[CMOS_BASE_KB_HIGH] = (BYTE)(baseMemoryKb >> BYTE_SHIFT); }
-    /* -- EXTENDED MEMORY, AS POST WOULD HAVE COUNTED IT (s81, #182). 17h/18h are the
+    /* EXTENDED MEMORY, AS POST WOULD HAVE COUNTED IT (s81, #182). 17h/18h are the
      * configured and 30h/31h the POST-detected KB above 1 MB; a real BIOS answers
      * INT 15h AH=88h from the latter. Ours answers 88h with 0x3C00 (15 MB, main.c),
      * so CMOS says the same -- two views of one machine must not disagree.

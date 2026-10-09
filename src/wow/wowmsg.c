@@ -13,16 +13,7 @@
 
 #include "wowmsg.h"
 #include "host_state.h"
-#include "log.h"
-#include "ne.h"
 #include "wow32.h"
-#include "wowanchors.h"
-#include "wowsched.h"
-#include "wowcall.h"
-#include "wowres.h"
-#include "wowwin.h"
-#include "wowgdi.h"
-#include "wowuser.h"
 
 /* [INFO]: AND IT IS A KNOB NOW (session 43, `wowidle.txt`): **0 means forever**, which
  * is what a real Win16 task does and what an interactive session needs. A

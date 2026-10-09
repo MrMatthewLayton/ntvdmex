@@ -19,7 +19,7 @@
 
 #include "vdd_emu8k.h"
 
-/* ---- fixed-point formats --------------------------------------------------------------- */
+/* fixed-point formats: */
 
 #define EMU8K_Q16_SHIFT                 16                  /* Q16: 16 fraction bits */
 #define EMU8K_Q16_ONE                   65536               /* 1.0 in Q16 */
@@ -31,7 +31,7 @@
 #define EMU8K_LOW_WORD_MASK_KEEP_HIGH   0x0000FFFFu
 #define EMU8K_WORD_MAX                  0xFFFF
 
-/* ---- fixed-point exponentials --------------------------------------------------------- */
+/* fixed-point exponentials: */
 
 #define EMU8K_EXP2_STEPS                256                 /* Table entries per octave */
 #define EMU8K_EXP2_TABLE_START          1.0                 /* 2^0 */
@@ -84,7 +84,7 @@
 #define EMU8K_WALL_CLOCK_NUMERATOR      441u
 #define EMU8K_WALL_CLOCK_DENOMINATOR    10000u
 
-/* ---- the envelope engine (p.14-18, the diagram on p.19) ---------------------------------- */
+/* the envelope engine (p.14-18, the diagram on p.19): */
 
 #define EMU8K_DB_PER_OCTAVE_Q16         394566              /* 6.0206 dB in Q16 */
 #define EMU8K_DELAY_NONE                0x8000              /* P.14: 8000h = no delay; below, 725 us units */
@@ -106,7 +106,7 @@
 #define EMU8K_LFO_HALF_CYCLE_LEVEL      131072
 #define EMU8K_LFO_FULL_CYCLE_LEVEL      262144
 
-/* ---- the low-pass filter (CCCA Q, IFATN cutoff: p.9, p.17) --------------------------- */
+/* the low-pass filter (CCCA Q, IFATN cutoff: p.9, p.17): */
 
 /* sin/cos by series, in double: only ever called when a channel's cutoff or Q CHANGES. The
  * divisors are the series' successive n(n+1): 2-3, 4-5, ... and 1-2, 3-4, ...
@@ -157,7 +157,7 @@
 #define EMU8K_PAN_FULL                  255u                /* FFh = extreme left */
 #define EMU8K_GAIN_UNITY                256u                /* Q8 */
 
-/* ---- the register file (section 3) ------------------------------------------------------------- */
+/* the register file (section 3): */
 
 /* The Pointer register (section 2): bits 7-5 select the register, bits 4-0 the channel. */
 #define EMU8K_POINTER_REGISTER_SHIFT    5
@@ -235,7 +235,7 @@
 #define EMU8K_HWCF1_READ_MASK           0x7E                /* The VLSI read error's shape, as drivers probe */
 #define EMU8K_HWCF2_READ_SET            0x0003
 
-/* ---- ports (section 2) ------------------------------------------------------------------- */
+/* ports (section 2): */
 
 /* The port offsets from the base E (section 2). */
 #define EMU8K_PORT_DATA0_LOW            0x000
@@ -257,7 +257,7 @@
 #define EMU8K_ODD_PORT                  1
 #define EMU8K_PORT_GROUP_SHIFT          10
 
-/* ---- the render ------------------------------------------------------------------------- */
+/* the render: */
 
 #define EMU8K_HWCF3_AUDIO_ENABLE        0x0004              /* Section 4: HWCF3 enables audio output */
 #define EMU8K_INTERPOLATOR_TAP0         1                   /* P.10: CA is one word below the audio; the */
@@ -269,9 +269,9 @@
 #define EMU8K_SAMPLE_MAX                32767
 #define EMU8K_SAMPLE_MIN                (-32768)
 
-/* ---- the bus ------------------------------------------------------------------------------ */
+/* the bus: */
 
-/* -- THE RESET STATE IS THE INITIALISED CHIP, NOT POWER-UP NOISE. section 4: at power-up "most
+/* THE RESET STATE IS THE INITIALISED CHIP, NOT POWER-UP NOISE. section 4: at power-up "most
  * registers contain random data" and HWCF3's audio-enable is clear; a real machine ran
  * AWEUTIL /S from AUTOEXEC.BAT to run the section 4 procedure before any game started, and most
  * games rely on that having happened. We have no AUTOEXEC to run it from, so reset leaves
@@ -445,7 +445,7 @@ static VOID Emu8kBuildTables(VOID)
     g_Emu8kTablesBuilt = 1;
 }
 
-/* ---- sound memory (section 5) ------------------------------------------------------------- */
+/* sound memory (section 5): */
 
 /* A word of sound memory. The ROM space reads the ROM image if the host fitted one and
  * zero otherwise (we have no GM ROM -- see the inventory); DRAM above what is fitted

@@ -199,7 +199,7 @@
 #define VDM_EVENT_BOP                   4
 #define VDM_EVENT_HWIRQ                 6
 
-/* --- PM-fault reflect block (GH #18, real-CPU protected mode) --------------------------
+/* PM-fault reflect block (GH #18, real-CPU protected mode):
  * When a raw (non-BOP) protected-mode #GP faults, the NT kernel reflects the fault
  * through this VDM_TIB block (Kernel RE sessions 4-7, confirmed by the behaviour
  * below on the rig): when the nest counter is 0 it saves the interrupted CS/EIP and
@@ -251,7 +251,7 @@
 #define VDM_SET16(tib, off, v) (VDM_REG((tib), (off)) = \
         (VDM_REG((tib), (off)) & HIGH_WORD_MASK_U) | ((DWORD)(v) & WORD_MASK_U))
 
-/* -- XP's COMMAND.COM AND ITS PRIVATE BOP 54h (docs/inventory/bop.md). `C4 C4 54 sub`;
+/* XP's COMMAND.COM AND ITS PRIVATE BOP 54h (docs/inventory/bop.md). `C4 C4 54 sub`;
  * the names are the inventory's, from what each call was observed to do.
  */
 #define NTVDM_BOP_ISV                   0x58    /* A guest's third-party BOP, C4 C4 58 sub */

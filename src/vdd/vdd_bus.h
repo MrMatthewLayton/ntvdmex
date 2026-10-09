@@ -106,7 +106,7 @@ struct _VDD_BUS
     INT            ClaimFailures;          /* claims refused for want of a table slot */
 };
 
-/* --- host-side lifecycle + dispatch (the V86 loop calls these) ------------- */
+/* host-side lifecycle + dispatch (the V86 loop calls these): */
 VOID VddBusInitialize(PVDD_BUS bus, PVOID memoryBase);
 VOID VddBusSetSinks(
     PVDD_BUS bus,

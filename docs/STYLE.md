@@ -297,9 +297,15 @@ static BOOL DosDiskGeometryFromBpb(
    system headers, then the project's;
 3. private `#define`s;
 4. private types;
-5. file-scope variables -- exported first, then `static`;
-6. functions, **each `static` helper above its first caller**, so no forward declaration is
-   needed (one stays only where two functions call each other).
+5. forward declarations -- only the ones still needed: for two functions that call each other,
+   and for a function a variable's initialiser names (a table of handlers);
+6. file-scope variables -- exported first, then `static`;
+7. functions, **each `static` helper above its first caller**, so no other forward declaration
+   is needed.
+
+An `#include` that has to come after code stays where it must be: the interpreter templates
+(`v86interp.h`, `pm32interp.h`) after the host hooks they call, a header that needs a macro set
+before it.
 
 A comment travels with the item it describes; an `#if` block moves as one unit. A header that
 grows too big to read in this order is split by what it holds: the Win16 call tables (thunk ids

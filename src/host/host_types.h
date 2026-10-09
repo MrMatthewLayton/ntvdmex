@@ -454,7 +454,7 @@
  */
 #define ASYNC_CTX_RELEASE()             InterlockedExchange(&g_AsyncContextWrite, 0)
 
-/* -- #153: FILE > OPEN RECENT. Every program this host was started with, and every one
+/* #153: FILE > OPEN RECENT. Every program this host was started with, and every one
  * opened from the menu, newest first, `Recent1`..`Recent8` beside the settings.
  * (A Win16 program started from Windows is not recorded: its path arrives inside
  * WOW, not here.)
@@ -631,7 +631,7 @@
 #define WOW_PATH_PARAS                  0x20 /* The path buffer: one paragraph-run, one purpose */
 #define WOW_ENV_PARAS                   0x100                       /* 4 KB -- a DOS environment and then some */
 
-/* -- EVERY PSP THIS HOST BUILDS, SO ITS ENVIRONMENT FIELD CAN BE RE-READ LATER.
+/* EVERY PSP THIS HOST BUILDS, SO ITS ENVIRONMENT FIELD CAN BE RE-READ LATER.
  * `PSP+0x2c` is the field two separate faults turned on, and the question that
  * could not be answered from a fault dump is not "what is it now" but "who
  * changed it after we wrote it". One selector and one linear address per task is

@@ -18,7 +18,7 @@
 #include "host_types.h"
 #include "host_state.h"
 
-/* -- [WARNING] THE RING IS PER-THREAD, BECAUSE A SHARED ONE WROTE A LOG LINE INTO A FLAG FILE.
+/* [WARNING] THE RING IS PER-THREAD, BECAUSE A SHARED ONE WROTE A LOG LINE INTO A FLAG FILE.
  * (s74c) The watchdog thread built WDLOG_PATH here, and before its CreateFile ran the
  * other threads had taken 16 more slots -- so the pointer it held now read
  * `cfg\pmnoirq.flag` (the PM loop's GetFileAttributes at entry), and the watchdog's

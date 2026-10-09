@@ -119,7 +119,7 @@ typedef SIZE_T *PSIZE_T;
 
 #endif /* _WIN32 */
 
-/* -- THE POINTER-TO-CONST FORMS THE SDK DOES NOT HAVE. Windows defines PCSTR and PCWSTR but
+/* THE POINTER-TO-CONST FORMS THE SDK DOES NOT HAVE. Windows defines PCSTR and PCWSTR but
  * no PC form for the basic integer types or for void (only LPCVOID, and the LP prefix is
  * not used here). Added on both platforms, so `PC...` means pointer-to-const everywhere.
  */
@@ -128,7 +128,7 @@ typedef const BYTE  *PCBYTE;
 typedef const WORD  *PCWORD;
 typedef const DWORD *PCDWORD;
 
-/* -- EVERY WIDTH, CHECKED WHERE IT IS COMPILED. A wrong width does not fail loudly at run
+/* EVERY WIDTH, CHECKED WHERE IT IS COMPILED. A wrong width does not fail loudly at run
  * time: it silently truncates a register or misreads guest memory. So a wrong one fails
  * the BUILD, on whichever platform got it wrong.
  */

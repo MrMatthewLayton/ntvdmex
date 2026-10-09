@@ -1727,7 +1727,7 @@ INT main(VOID)
     INT lowCount;
       g_Video.TimeUs = VideoTestFakeClock;
 
-      /* --- 640x480 (mode 12h): 60 Hz, 525 lines, 480 active --------------- */
+      /* 640x480 (mode 12h): 60 Hz, 525 lines, 480 active: */
       g_Video.GraphicsHeight = 480;
       g_FakeMicroseconds = 0;                       /* line 0 = active picture */
       VddBusIo(&bus, 0x3DA, 1, 1, &value);
@@ -1738,7 +1738,7 @@ INT main(VOID)
       CHECK((value & 0x08) != 0, "3DA: retrace asserted during vertical blanking");
       CHECK((value & 0x01) != 0, "3DA: display-disabled set during vblank too");
 
-      /* --- IT DOES NOT ALTERNATE. Two reads at the SAME instant must agree; the
+      /* IT DOES NOT ALTERNATE. Two reads at the SAME instant must agree; the
        * old toggle failed exactly here, and that was the whole bug. -------
        */
       { UINT32 firstRead, secondRead;
@@ -1747,7 +1747,7 @@ INT main(VOID)
         VddBusIo(&bus, 0x3DA, 1, 1, &secondRead);
         CHECK(firstRead == secondRead, "3DA: two reads at the same instant agree (no toggle)"); }
 
-      /* --- Duty cycle: retrace must be a MINORITY of the frame, or a program
+      /* Duty cycle: retrace must be a MINORITY of the frame, or a program
        * that waits for it to clear stalls. Sample a whole frame. --------
        */
       highCount = lowCount = 0;
@@ -1766,7 +1766,7 @@ INT main(VOID)
       CHECK(highCount > 0 && lowCount > 0, "3DA: retrace both asserted and clear across a frame");
       CHECK(highCount < lowCount / 4, "3DA: retrace is a small minority of the frame (~9%)");
 
-      /* --- 320x200 / text run at 70 Hz, so the SAME wall-clock instant lands
+      /* 320x200 / text run at 70 Hz, so the SAME wall-clock instant lands
        * differently. [CAUTION] This used to key off `vid.gh` alone; the CRTC is now
        * authoritative and a mode set earlier in this battery left 12h's
        * 525-line timing behind, so the 70 Hz family has to be asked for in
@@ -1794,7 +1794,7 @@ INT main(VOID)
 
       CHECK(highCount > 0 && lowCount > 0, "3DA: 70 Hz modes also retrace once per frame");
 
-      /* --- #225: a THROTTLED guest held across a whole retrace is owed it, once.
+      /* #225: a THROTTLED guest held across a whole retrace is owed it, once.
        * Polls at 1 ms into consecutive 70 Hz frames never land in the ~1.2 ms
        * blank. Off (the default): bit 3 is never seen. On: the first poll in the
        * next frame reads it, the one after reads the true phase, and skipping
@@ -1855,7 +1855,7 @@ INT main(VOID)
         CHECK(!(thirdRead & 0x08), "3DA #225: nothing owed within one frame");
         g_Video.IsVblOweOn = 0; }
 
-      /* --- bit 0 is a DIFFERENT signal: it must change WITHIN one scanline,
+      /* bit 0 is a DIFFERENT signal: it must change WITHIN one scanline,
        * which the old code (toggling it with bit 3) could never do. -----
        */
       { INT changed = 0;
@@ -1874,7 +1874,7 @@ INT main(VOID)
         }
 
         CHECK(changed, "3DA: display-disabled (bit 0) toggles within a scanline"); }
-      /* --- No clock injected -> the legacy toggle still applies, so off-VM
+      /* No clock injected -> the legacy toggle still applies, so off-VM
        * callers that never set a clock are unaffected. ------------------
        */
       { UINT32 firstRead, secondRead;
@@ -1990,7 +1990,7 @@ INT main(VOID)
      */
     {   BYTE actual;
 
-        /* -- (1) THE MASKED SPRITE BLITTER, the colour-compare path. Set-up:
+        /* (1) THE MASKED SPRITE BLITTER, the colour-compare path. Set-up:
          *   GR5 = 0x08  read mode 1
          *   GR7 = 0x08  don't care: plane 3 only
          *   GR2 = 0x08  compare: plane 3 SET
@@ -2041,7 +2041,7 @@ INT main(VOID)
         VideoTestWriteGraphics(&bus, 0x03, 0x00);
         VideoTestWriteGraphics(&bus, 0x08, 0xFF);
 
-        /* -- (2) THE PLAIN BLITTER, which is the busier of the two (858,644 reads of
+        /* (2) THE PLAIN BLITTER, which is the busier of the two (858,644 reads of
          * the 970,000). Per byte it reads VRAM and then copies one byte in.
          * The read's VALUE IS DISCARDED -- it is there to load the latches, so that
          * the planes the Map Mask disables keep what they had. If a card lets a
@@ -2064,7 +2064,7 @@ INT main(VOID)
               g_Video.Planes[3][0x50] == 0x44,
               "lemmings blit: the other three planes are preserved exactly");
 
-        /* -- (3) THE VRAM->VRAM COPY. This is how the toolbar gets on screen, and it
+        /* (3) THE VRAM->VRAM COPY. This is how the toolbar gets on screen, and it
          * is the mechanism behind the open "panel has no icons" bug:
          *     Map Mask = 0x0F (all four planes), GR5 = WRITE MODE 1,
          *     then byte copies with source AND destination in A000.
@@ -2110,7 +2110,7 @@ INT main(VOID)
         CHECK(VddVideoPlanarRead(&g_Video, 0xF91F)==0x5A && VddVideoPlanarRead(&g_Video, 0xFFFA)==0xA5,
               "lemmings panel: the off-screen cache 0xF91F..0xFFFA reads back");
 
-        /* -- (4) THE WHOLE-PANEL BLIT -- THE ROUTINE THAT ACTUALLY PUTS THE TOOLBAR ON
+        /* (4) THE WHOLE-PANEL BLIT -- THE ROUTINE THAT ACTUALLY PUTS THE TOOLBAR ON
          * SCREEN, and the one the "missing icons" bug is about. Same set-up as (3),
          * then ONE `rep movsb` of 0x6E0 bytes (1760 = 40 rows x 44) from the panel
          * cache at 0xF91F, to BOTH pages (destination +0x1E42 on each). It runs on
@@ -3732,7 +3732,7 @@ INT main(VOID)
         g_Video.BiosData = 0;
     }
 
-    /* -- #325: THE DISPLAYED SIZE COMES FROM THE CRTC. For every graphics mode whose
+    /* #325: THE DISPLAYED SIZE COMES FROM THE CRTC. For every graphics mode whose
      * measured register set we load, the CRTC-derived size must equal the table --
      * that is the derivation's calibration -- and a guest that reprograms the CRTC
      * (Mode X) gets the size it programmed.

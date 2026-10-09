@@ -169,5 +169,7 @@ extern HANDLE g_CourierThread;
 extern HANDLE g_CpuSpeedThread;
 extern WORD g_WowEntryDs;
 extern INT g_WowEntering;
+
 HANDLE CsrssOpenSplit(PSTR path, PSTR *argumentsOut);
+
 #endif

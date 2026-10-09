@@ -2,27 +2,16 @@
  *
  * The exec loop: NTVDM's own commands and BOP service, the V86 guest's run, its I/O events and interrupts, and HostRunExecLoop.
  *
- * Part of the host's single translation unit: #included by main.c.
+ * Its own translation unit (#335): declared in host_exec.h.
  *
  *
  *
  * SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Matthew Layton
  */
-#include "host_state.h"
-#include "log.h"
-#include "bios_kbdact.h"
-#include "ne.h"
-#include "wow32.h"
-#include "wowanchors.h"
-#include "wowsched.h"
-#include "wowcall.h"
-#include "wowmsg.h"
-#include "wowres.h"
-#include "wowwin.h"
-#include "wowgdi.h"
-#include "wowuser.h"
 #include "host_exec.h"
+#include "host_state.h"
+#include "bios_kbdact.h"
 #include "main.h"
 #include "host_audio.h"
 #include "host_bios.h"
@@ -36,23 +25,22 @@
 #include "host_video.h"
 #include "host_window.h"
 
-
-#define NTVDM_BOP_DOS       0x50    /* XP's COMMAND.COM: 1 site, in its version-refusal path */
+#define NTVDM_BOP_DOS   0x50                /* XP's COMMAND.COM: 1 site, in its version-refusal path */
 
 /* How to answer an NTVDM BOP we have not implemented yet: contents of cfg\bop54.txt.
  * A knob because the right answer is UNKNOWN and is being measured -- see the handler.
  */
-#define BOP54_PATH          CFG_("bop54.txt")
+#define BOP54_PATH      CFG_("bop54.txt")
 
 /* A command line to hand the shell ONCE through BOP 0x54 sub 01, so the path can be
  * tested end-to-end rather than only 'it accepted an empty answer'.
  */
-#define BOPCMD_PATH         CFG_("bopcmd.txt")
+#define BOPCMD_PATH     CFG_("bopcmd.txt")
 
 /* The startup batch file BOP 0x54 sub 0x0D hands the shell. Stock NTVDM names
  * AUTOEXEC.NT here; ours defaults to the DOS-native AUTOEXEC.BAT. See the handler.
  */
-#define BOPAUTO_PATH        CFG_("autoexec.txt")
+#define BOPAUTO_PATH    CFG_("autoexec.txt")
 
 /* The mode-12h trap-storm escape hatch. By default V86 runs on the real CPU and
  * each VGA access (memory OR port) is emulated one-at-a-time as a device access
@@ -69,15 +57,15 @@
  * Returns the number of instructions executed (0 if the faulting instruction
  * itself is unmodeled -> caller falls through).
  */
-#define STORM_WINDOW    128         /* Faults within this PC span count as "the same loop" */
+#define STORM_WINDOW    128                 /* Faults within this PC span count as "the same loop" */
 
-#define STORM_GATE      8           /* Consecutive in-window faults -> escalate to the interpreter */
+#define STORM_GATE      8                   /* Consecutive in-window faults -> escalate to the interpreter */
 
-#define TIER1_CAP       2000000L    /* Interpreter iteration ceiling once escalated */
+#define TIER1_CAP       2000000L            /* Interpreter iteration ceiling once escalated */
 
-#define P12_SLICE       20000L      /* Planar mode: instructions per interpreter slice */
+#define P12_SLICE       20000L              /* Planar mode: instructions per interpreter slice */
 
-#define UNIMPLEMENTED_BOP_EXIT_CODE     0xBD    /* A guest killed by an unanswered BOP: never a clean 0 */
+#define UNIMPLEMENTED_BOP_EXIT_CODE 0xBD    /* A guest killed by an unanswered BOP: never a clean 0 */
 
 enum
 {
@@ -137,7 +125,7 @@ static INT NtvdmCommandStartupBatch(
                 --autoLength;
         }
 
-        /* -- s92 (#316): AND IT RUNS WITH ECHO OFF, AS STOCK's DOES. XP leaves an
+        /* s92 (#316): AND IT RUNS WITH ECHO OFF, AS STOCK's DOES. XP leaves an
          * EMPTY C:\AUTOEXEC.BAT on every machine; the shell runs it with echo ON,
          * and the end of a batch with echo on is a blank line and the PROMPT --
          * which `prog > file` from cmd captured ahead of the program's own output
@@ -275,7 +263,7 @@ static INT NtvdmCommandPrompt(
                 while (environment0[inputIndex] && inputIndex < ENVIRONMENT_SCAN_MAX)
                     ++inputIndex;
 
-                /* -- PATH IS WINDOWS' PATH, IN 8.3. (s81, user: "mem" -> "Bad command
+                /* PATH IS WINDOWS' PATH, IN 8.3. (s81, user: "mem" -> "Bad command
                  * or file name") We handed the shell `PATH=C:\`, so nothing in
                  * SYSTEM32 -- MEM, EDIT, DEBUG, every XP DOS tool -- could be run by
                  * name. Stock passes the Win32 environment; this passes its PATH,
@@ -454,7 +442,7 @@ static INT NtvdmServiceGuestBop(
             INT novel = (signature != lastSignature);
             lastSignature = signature;
             ++g_NtvdmBopCount;
-            /* -- [WARNING] A NOVELTY FILTER IS NOT A CAP, AND IT COST A SECOND 256 MB.
+            /* [WARNING] A NOVELTY FILTER IS NOT A CAP, AND IT COST A SECOND 256 MB.
              * The first rate-limit logged 16 in full and then only when the
              * register signature CHANGED. That is the right shape for a spin on
              * identical values -- and no defence at all against a LOOP, where
@@ -495,7 +483,7 @@ static INT NtvdmServiceGuestBop(
          * and which way it goes is the whole question.
          */
         cursor = LogPut(cursor, "         next="); cursor = LogDump(cursor, (const VOID *)(isvBopBytes + VDM_BOP_SUBFUNCTION_LENGTH), 12);
-        /* -- COMMAND.COM's STATE BLOCK, WHOLE, RATHER THAN ONE BYTE AT A TIME.
+        /* COMMAND.COM's STATE BLOCK, WHOLE, RATHER THAN ONE BYTE AT A TIME.
          * Its decisions about being a shell follow a handful of bytes in its
          * RESIDENT data -- around 0x2B0 and 0x320..0x333 of the
          * resident segment, 0x0100 for a .COM: the banner, "ask for a command"
@@ -858,7 +846,7 @@ static INT NtvdmServiceGuestBop(
                     nameBytes[al] = 0;
                 }
                 BW(NTVDM_CMD_BLOCK_PROGRAM_TYPE, valueType);
-            /* -- +0x1A GATES THE INTERACTIVE PATH, so it is not a field we may
+            /* +0x1A GATES THE INTERACTIVE PATH, so it is not a field we may
              * leave alone. COMMAND.COM keeps its low byte, and a non-zero value
              * takes it AWAY from the prompt. Zero.
              */
@@ -1076,7 +1064,7 @@ static INT DosServiceTerminateBop(
         }
         else if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_TERMINATE_RESIDENT))                 /* TSR, CP/M style */
         {
-            /* -- THE OLD FORM OF AH=31h, AND IT KEEPS MEMORY TOO. (GH #49) -
+            /* THE OLD FORM OF AH=31h, AND IT KEEPS MEMORY TOO. (GH #49):
              * DX is a BYTE OFFSET past the PSP here, not a paragraph
              * count -- that is the one thing this call does differently
              * and the easy thing to get wrong. Round UP to paragraphs so
@@ -1155,7 +1143,7 @@ static INT V86ServiceKeyboardBop(volatile BYTE * const tib)
     if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == VECTOR_KEYBOARD)     /* INT 09h: BIOS keyboard */
     {
         INT keyAction;
-        /* -- #244: THE SECOND HALF, AFTER INT 15h AH=4Fh SAID "PROCESS IT" (CF=1).
+        /* #244: THE SECOND HALF, AFTER INT 15h AH=4Fh SAID "PROCESS IT" (CF=1).
          * We are at bios_kbdact.asm k4f's BOP: AL is the scancode as the hook left
          * it (possibly changed), the interrupted code's AX is on the stack above
          * the INT 09h frame. Translate AL, EOI, pop that AX ourselves, and resume
@@ -1185,7 +1173,7 @@ static INT V86ServiceKeyboardBop(volatile BYTE * const tib)
             }
         }
 
-        /* -- #244: THE FIRST HALF, WHEN SOMETHING HAS HOOKED INT 15h. Take the byte
+        /* #244: THE FIRST HALF, WHEN SOMETHING HAS HOOKED INT 15h. Take the byte
          * out of the controller now (it is the BIOS's `in al,60h`), push the
          * interrupted code's AX, load AX = 4F00h | byte, and run k4f: `stc / int
          * 15h` in the guest, then back to the arm above -- or, on CF=0, k4f's own
@@ -1240,7 +1228,7 @@ static INT V86ServiceKeyboardBop(volatile BYTE * const tib)
          */
         VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_KEYBOARD);
         HOST_UNLOCK();
-        /* -- #254: AND WHAT THE BIOS CALLS FROM IT. Ctrl-Break -> INT 1Bh, Print
+        /* #254: AND WHAT THE BIOS CALLS FROM IT. Ctrl-Break -> INT 1Bh, Print
          * Screen -> INT 05h, SysReq -> INT 15h AH=85h, Pause -> the spin loop:
          * resume the guest in bios_kbdact.asm's routine (after the EOI, as the
          * BIOS does), which IRETs to the interrupted code. Only guest-side
@@ -1585,7 +1573,7 @@ static VOID V86RunGuestTimed(volatile BYTE * const tib, DWORD *eventIo, LONG *vd
             }
         }
 
-        /* -- HOW LONG DID ONE V86 RUN LAST WITHOUT GIVING US A TURN? (Skyroads
+        /* HOW LONG DID ONE V86 RUN LAST WITHOUT GIVING US A TURN? (Skyroads
          * wobble, s61.) The big timer gaps are low-I/O, so the guest is not
          * hammering ports -- it is inside ONE long VdmRunGuest stretch (a spin, a
          * cli section, or slow interpreted VGA). This is the PM stretch
@@ -1673,7 +1661,7 @@ static INT V86RunModeYSlice(volatile BYTE * const tib)
 /* Mode 12h (GH #55): while a planar mode is current, the host is the CPU -- run a slice in the interpreter, whose A0000 accesses go through the planar write engine. */
 static INT V86RunPlanarSlice(volatile BYTE * const tib)
 {
-    /* ---- MODE 12h: THE HOST IS THE CPU (GH #55) ------------------------- *
+    /* MODE 12h: THE HOST IS THE CPU (GH #55):
      * While a planar mode is current we do not hand the guest to V86 at all,
      * because on real hardware there is no way to see its A0000 writes there:
      * the page trap that would show them freezes the VDM (see VideoTrapSync).
@@ -1984,7 +1972,7 @@ VOID HostRunExecLoop(
         g_EventHistogram[event < EV_HIST_MAX ? event : EV_HIST_MAX - 1]++;
         ExecLeaveMark();               /* ...and stops. Our servicing is not its */
         InterlockedExchange(&g_InExec, 0);
-        /* -- The VM events that follow a mouse-callback injection, verbatim. See
+        /* The VM events that follow a mouse-callback injection, verbatim. See
          * g_MouseCallbackTrace. Logged before any arm below acts on the event, so what is
          * recorded is what the kernel handed back, not what we made of it.
          */
@@ -2165,7 +2153,7 @@ VOID HostRunExecLoop(
             }
         }
 
-        /* -- THIS IS THE FALL-THROUGH, AND IT ANSWERS FOR EVERY BOP IT WAS NEVER
+        /* THIS IS THE FALL-THROUGH, AND IT ANSWERS FOR EVERY BOP IT WAS NEVER
          *   GIVEN. (s78) ------------------------------------------------------
          * ev is already known to be VDM_EVENT_BOP here, and every arm above matches
          * an EXACT code -- INT 21h's own stub is `C4 C4 20` (see the bop[] table at
@@ -2267,7 +2255,7 @@ VOID HostRunExecLoop(
             break;
         }
 
-        /* -- #34: THE GUEST'S INT 24h HAS ANSWERED. Recognised by ADDRESS: BOP 20h is
+        /* #34: THE GUEST'S INT 24h HAS ANSWERED. Recognised by ADDRESS: BOP 20h is
          * also the INT 21h BOP, and this one sits at DOS_CRIT_RETURN, where only
          * CriticalRaise ever sends the guest.
          */

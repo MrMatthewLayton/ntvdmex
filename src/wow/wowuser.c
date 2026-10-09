@@ -13,20 +13,48 @@
 
 #include "wowuser.h"
 #include "host_state.h"
-#include "log.h"
-#include "ne.h"
-#include "wow32.h"
-#include "wowanchors.h"
-#include "wowsched.h"
-#include "wowcall.h"
-#include "wowmsg.h"
 #include "wowres.h"
 #include "wowwin.h"
 #include "wowgdi.h"
-#include "wowdlg.h"
 #include "wowenum.h"
-#include "host_wow.h"
-#include "host_dpmi.h"
+
+/* Used before their definitions below. */
+static INT WowUserHookUnset(SHORT hookId, DWORD procedure);
+
+/* Forward declarations, from when this file was part of main.c's unit (they were in wowuser.h). */
+/* s93: THE HOOK BRIDGE (see SetWindowsHook). One entry per Win16 hook; the
+ * Win32 hook's callback finds its entry by kind and calls the 16-bit procedure
+ * through the nested run, with the procedure's own DS (its module's DGROUP).
+ */
+INT WowCall16SyncEx(
+    DWORD proc,
+    WORD ds,
+    PCWORD args,
+    INT n,
+    WORD hwnd,
+    WORD msg,
+    PWORD res,
+    PBYTE blob,
+    INT blobLength,
+    INT blobArgument,
+    const INT *fix,
+    INT nfix);
+
+/* The modal dialog loop lives in wowdlg.h, which is included AFTER this file
+ * because it reads the window table above. These three are what USER's own
+ * DialogBox and EndDialog arms call into it.
+ */
+INT WowDlgPush(
+    WORD window,
+    DWORD returnLinear,
+    DWORD dialogProcedure,
+    DWORD windowProcedure,
+    WORD dataSelector,
+    INT isShowDeferred,
+    HWND owner32);
+INT WowDlgEnd(WORD window, WORD result);
+VOID WowDlgSetInit(DWORD initParameter, WORD firstFocus);
+INT WowDlgActive(VOID);
 
 CHAR g_WowUserClipboard[WOWUSER_CLIPBOARD_SIZE];
 INT  g_WowUserClipboardLength;
@@ -198,7 +226,7 @@ static INT  g_WowUserIsInitDialogShown = 0;
 
 static WOWUSER_GONE g_WowUserGone;
 
-/* -- s91: A Win16 DEFAULT PROCEDURE'S CALL INTO WIN32, WITH THE s91 MESSAGES TRANSLATED.
+/* s91: A Win16 DEFAULT PROCEDURE'S CALL INTO WIN32, WITH THE s91 MESSAGES TRANSLATED.
  * The default-procedure forwards handed lParam to Win32 as it came. Harmless while
  * nothing sent these messages; since #305 M9 sends WM_GETMINMAXINFO with a 16:16
  * pointer, an MDI child passing it to DefMDIChildProc made USER32 write through
@@ -206,44 +234,6 @@ static WOWUSER_GONE g_WowUserGone;
  * DefWindowProc, 1 DefFrameProc, 2 DefMDIChildProc.
  */
 static PCWOW32_FRAME g_WowUserCurrentFrame;  /* the frame being serviced (sel2lin) */
-
-/* Used before their definitions below. */
-static INT WowUserHookUnset(SHORT hookId, DWORD procedure);
-
-/* Forward declarations, from when this file was part of main.c's unit (they were in wowuser.h). */
-/* -- s93: THE HOOK BRIDGE (see SetWindowsHook). One entry per Win16 hook; the
- * Win32 hook's callback finds its entry by kind and calls the 16-bit procedure
- * through the nested run, with the procedure's own DS (its module's DGROUP).
- */
-INT WowCall16SyncEx(
-    DWORD proc,
-    WORD ds,
-    PCWORD args,
-    INT n,
-    WORD hwnd,
-    WORD msg,
-    PWORD res,
-    PBYTE blob,
-    INT blobLength,
-    INT blobArgument,
-    const INT *fix,
-    INT nfix);
-
-/* -- The modal dialog loop lives in wowdlg.h, which is included AFTER this file
- * because it reads the window table above. These three are what USER's own
- * DialogBox and EndDialog arms call into it.
- */
-INT WowDlgPush(
-    WORD window,
-    DWORD returnLinear,
-    DWORD dialogProcedure,
-    DWORD windowProcedure,
-    WORD dataSelector,
-    INT isShowDeferred,
-    HWND owner32);
-INT WowDlgEnd(WORD window, WORD result);
-VOID WowDlgSetInit(DWORD initParameter, WORD firstFocus);
-INT WowDlgActive(VOID);
 
 /* The slot behind a token, or NULL. */
 static PWOWUSER_SYSRES WowUserSystemResourceSlot(WORD handle16)
@@ -830,7 +820,7 @@ static VOID WowUserEnsureSystemClasses(VOID)
         windowClass->Name[charIndex]   = 0;
         windowClass->Atom      = (WORD)(MAXINTATOM + g_WowUserClassCount);
         windowClass->IsSystemClass  = 1;
-        /* -- `#32770` IS THE ONE SYSTEM CLASS WE MUST *NOT* USE AS-IS.
+        /* `#32770` IS THE ONE SYSTEM CLASS WE MUST *NOT* USE AS-IS.
          * (session 57, and the run named it) The rule below is right for four
          * of these five and wrong for the fifth, and the difference is exactly
          * whether the OS's implementation can reach OUR code:
@@ -1045,7 +1035,7 @@ HWND WowUserHwnd32(WORD window16)
     return window ? window->Window32 : NULL;
 }
 
-/* -- #308: the USER thunk standing for this window's system class, or NULL. */
+/* #308: the USER thunk standing for this window's system class, or NULL. */
 static PCWOWUSER_SYSPROC WowUserSystemProcedureOf(PCWOWUSER_WINDOW window)
 {
     INT index;
@@ -1827,7 +1817,7 @@ static INT WowUserListMessage(
 
     if (kind == WOWUSER_LIST_STRUCTURE)
     {
-        /* -- #304 (M6, s90): THE STRUCTURE MESSAGES, translated. Win16's INT is a
+        /* #304 (M6, s90): THE STRUCTURE MESSAGES, translated. Win16's INT is a
          * WORD and its RECT four shorts; Win32's are DWORDs and four LONGs, so
          * every one of these is a copy WITH A WIDTH CHANGE, in or out.
          */
@@ -2186,7 +2176,7 @@ static LONG WowUserDefProc(
                 && WowUserListMessage(frame, window, message, wParam, lParam, isComboBox, &listResult, note, noteCapacity, &noteLength))
                 return listResult;
 
-            /* -- #301 (M2): A BUTTON's own messages. Win16 BM_GETCHECK..BM_SETSTYLE
+            /* #301 (M2): A BUTTON's own messages. Win16 BM_GETCHECK..BM_SETSTYLE
              * are WM_USER+0..4; Win32 moved the same five, same order, to 0xF0.
              * All plain values (BM_SETSTYLE's lParam is the redraw flag in both),
              * so the number is the whole translation. Answered 0 before, so a
@@ -2334,7 +2324,7 @@ static LONG WowUserDefProc(
                  * is hidden at this point in the probe and in most programs.
                  */
                 SendMessageA(window->Window32, WM_MDIACTIVATE, (WPARAM)child->Window32, 0);
-                /* -- s93: AND THE CHILD IS TOLD. Win32's client activated it INSIDE the
+                /* s93: AND THE CHILD IS TOLD. Win32's client activated it INSIDE the
                  * WM_MDICREATE above, before ch->hwnd32 was known, so the relay had no
                  * Win16 handle for it and the WM_MDIACTIVATE was dropped -- and the
                  * SendMessage just above changes nothing (it is already active). Win16
@@ -2439,7 +2429,7 @@ static LONG WowUserDefProc(
      * allocates from the local heap of whatever DS it is entered with, and the
      * heap this handle must be valid in is the application's own.
      */
-    /* -- #305 M13 (s91): THE REST OF THE MDI CLIENT'S MESSAGES. Same numbers in
+    /* #305 M13 (s91): THE REST OF THE MDI CLIENT'S MESSAGES. Same numbers in
      * Win16 and Win32 (0x221-0x228); the child handles cross through the table.
      * Two differ in their packing:
      * WM_MDIGETACTIVE (0x229): Win16 answers DX:AX = (fMaximized, hwnd); Win32
@@ -2599,7 +2589,7 @@ static LONG WowUserDefProc(
         window->Memory16 = wParam;
         WowNotePut(note, noteCapacity, &noteLength, "EM_SETHANDLE 0x");
         WowNoteHex(note, noteCapacity, &noteLength, wParam, WOW_HEX_WORD_DIGITS);
-        /* -- AND THE REAL CONTROL HAS TO BE GIVEN THE TEXT. (session 42) -
+        /* AND THE REAL CONTROL HAS TO BE GIVEN THE TEXT. (session 42):
          * The control is a real Win32 `EDIT` now, so "the control holds the
          * text" stopped being a thing this host could just record. Real WOW has
          * the same problem and solves it the same way: the Win16 handle names a
@@ -2765,7 +2755,7 @@ static LONG WowUserDefProc(
         return 1;
     }
 
-    /* -- #160: THE EDIT MENU. Cut, Copy, Paste, Delete and Undo are parameterless
+    /* #160: THE EDIT MENU. Cut, Copy, Paste, Delete and Undo are parameterless
      * and Win16 and Win32 share their numbers, so the real control does the work
      * -- including reaching the host clipboard, which is why Notepad's copy and
      * paste need no bridge of their own.
@@ -2785,7 +2775,7 @@ static LONG WowUserDefProc(
     }
 
     default:
-        /* -- #160: THE EM_ MESSAGES AN EDIT MENU ASKS. Win16 numbers them WM_USER+n
+        /* #160: THE EM_ MESSAGES AN EDIT MENU ASKS. Win16 numbers them WM_USER+n
          * (0x400+n), Win32 0xB0+n with the same n -- EM_SETHANDLE/GETHANDLE above
          * are n=12/13 of the same list. Only for a real EDIT: 0x400+n is also
          * listbox and combobox territory, where the same number means something else.
@@ -3412,7 +3402,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                                 GetSystemMetrics(SM_CXSMICON),
                                                 GetSystemMetrics(SM_CYSMICON));
             HCURSOR cursor = WowUserSystemResourceCursor(windowClass->Cursor16, NULL);
-            /* -- THE CLASS'S BACKGROUND BRUSH -- TWO FORMS, AND BOTH ARE
+            /* THE CLASS'S BACKGROUND BRUSH -- TWO FORMS, AND BOTH ARE
              * REAL. Win16's `hbrBackground` is EITHER a real HBRUSH the program
              * made, OR a COLOR_* system index BIASED BY ONE (so that 0 can mean
              * "no background"). The two are told apart the way Windows tells
@@ -3612,7 +3602,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             for (index = 0; index < (INT)sizeof window->Text; ++index)
                 window->Text[index] = windowName[index];
 
-        /* -- AND NOW MAKE A REAL WINDOW ON THE REAL DESKTOP. (session 42)
+        /* AND NOW MAKE A REAL WINDOW ON THE REAL DESKTOP. (session 42)
          * This is what WOW is. Everything above stays -- the guest needs a
          * 16-bit handle it can hold, its window words, its class -- and the
          * thing the USER sees is now the OS's own window, with the OS's title
@@ -3653,7 +3643,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              */
             else if (!(window->Style & WS_CHILD16) && window->Menu && WowUserMenu32(window->Menu))
                 menu = WowUserMenu32(window->Menu);
-            /* -- THE CLASS'S OWN MENU, BUILT FROM THE GUEST'S RESOURCE.
+            /* THE CLASS'S OWN MENU, BUILT FROM THE GUEST'S RESOURCE.
              * A Win16 program does not have to call LoadMenu: it can name the
              * resource in its WNDCLASS and let CreateWindow attach it, which is
              * exactly what NOTEPAD does (`MENU=#0001`, and it calls LoadMenu
@@ -3781,7 +3771,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0xEF CreateDialog -- BUILD THE DIALOG AND ALL OF ITS CONTROLS.
+    /* 0xEF CreateDialog -- BUILD THE DIALOG AND ALL OF ITS CONTROLS.
      * (session 55) ------------------------------------------------------------
      * THE ARGUMENTS ARE MEASURED, not taken from a header, because there is no
      * header: this is an internal entry point. One CALC.EXE run, 22 argument
@@ -3887,7 +3877,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             pointer += WowDlgTemplateString(templateBytes, pointer, fontFace, sizeof fontFace);
         }
 
-        /* -- THE DIALOG'S OWN CLASS. A template may name one, and when it does
+        /* THE DIALOG'S OWN CLASS. A template may name one, and when it does
          * it is the APPLICATION's -- CALC's is `SciCalc`, already registered,
          * with its own window procedure, its own menu and its own icon. That
          * is the class the window must be made from, or the program gets a
@@ -3946,7 +3936,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         window->IsDialog3D  = (BYTE)((style & WOWDLG_SETFONT) ? 1 : 0);
         window->Width = MulDiv(width, baseUnitX, WOWDLG_UNITS_PER_BASE_X);
         window->Height = MulDiv(height, baseUnitY, WOWDLG_UNITS_PER_BASE_Y);
-        /* -- [CAUTION] -32768 IN A TEMPLATE'S x IS "YOU PLACE IT", NOT A COORDINATE.
+        /* [CAUTION] -32768 IN A TEMPLATE'S x IS "YOU PLACE IT", NOT A COORDINATE.
          * (session 55) A DLGTEMPLATE says "put this where you like" with
          * 0x8000 in dtX -- the same CW_USEDEFAULT value CreateWindow uses,
          * which is why WowWinCoordinate() already knows it. Scaling it as a
@@ -3999,7 +3989,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             rect.top = window->PositionY;
             rect.right = window->PositionX + window->Width;
             rect.bottom = window->PositionY + window->Height;
-            /* -- s93: A POPUP DIALOG'S POSITION IS RELATIVE TO ITS OWNER'S CLIENT
+            /* s93: A POPUP DIALOG'S POSITION IS RELATIVE TO ITS OWNER'S CLIENT
              * AREA unless the template says DS_ABSALIGN (01h) -- Windows' rule,
              * Win16's and Win32's alike. Taken as screen coordinates, Program
              * Manager's "New Program Object" opened at (32,4) where stock puts it
@@ -4048,7 +4038,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             if (isOwnerRelative)
                 OffsetRect(&rect, ownerPoint.x - rect.left, ownerPoint.y - rect.top);
 
-            /* -- A MODAL DIALOG IS CREATED HIDDEN AND SHOWN AFTERWARDS.
+            /* A MODAL DIALOG IS CREATED HIDDEN AND SHOWN AFTERWARDS.
              * (session 57) Real USER creates the dialog window, sends
              * WM_INITDIALOG, and only THEN shows it -- and the order is not a
              * detail, it is what makes the dialog's own WM_INITDIALOG work.
@@ -4121,7 +4111,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             }
         }
 
-        /* -- AND NOW THE CONTROLS. Each item is a real child window of the
+        /* AND NOW THE CONTROLS. Each item is a real child window of the
          * dialog AND a Win16 window in our table, because the guest addresses
          * them both ways: by real HWND when the OS delivers a message, and by
          * 16-bit handle the moment it calls GetDlgItem or SetDlgItemText.
@@ -4302,7 +4292,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             }
         }
 
-        /* -- AND SHOW IT, BECAUSE THE DIALOG MANAGER IS WHAT SHOWS A DIALOG.
+        /* AND SHOW IT, BECAUSE THE DIALOG MANAGER IS WHAT SHOWS A DIALOG.
          * A template whose style omits WS_VISIBLE is not a hidden dialog: it
          * is the ordinary case, and the manager shows it once the controls
          * exist. We are the manager's 32-bit half, so it falls here.
@@ -4457,7 +4447,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WowNotePut(note, noteCapacity, &noteLength, ")");
         }
 
-        /* -- +2 IS THE TEMPLATE'S LENGTH IN BYTES, AND TWO RUNS PROVE IT.
+        /* +2 IS THE TEMPLATE'S LENGTH IN BYTES, AND TWO RUNS PROVE IT.
          * It was printed as "unexplained" for exactly one session, which is
          * the right way round: CALC passed 0x0140 there and `neres.py list`
          * reports its SC dialog as 320 bytes; SOUND RECORDER passed 0x0210
@@ -4491,7 +4481,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                                " placed it]");
 
         Wow32SetReturn(frame, window->Window16);
-        /* -- [WARNING] #162 (Charmap): A MODELESS DIALOG GETS WM_INITDIALOG TOO, before
+        /* [WARNING] #162 (Charmap): A MODELESS DIALOG GETS WM_INITDIALOG TOO, before
          * CreateDialog returns. Only the modal loop (wowdlg.h) ever sent it, so
          * a program whose main window is a modeless dialog never initialised:
          * Charmap enumerates its fonts, fills its font list and builds its
@@ -4671,7 +4661,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
 
-        /* -- #302 (s89): THREE STANDARD FIELDS, from a source and from a guest.
+        /* #302 (s89): THREE STANDARD FIELDS, from a source and from a guest.
          * GWW_HINSTANCE -6, GWW_HWNDPARENT -8, GWW_ID -12 -- the values Win32
          * kept as GWL_* (Wine include/winuser.h), and Sound Recorder's SButton
          * asked -6 and passed the answer to LoadBitmap as its hInstance: with 0
@@ -4747,7 +4737,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
      * of which exactly one member has been measured -- so anything else falls
      * through to the honest "unimplemented", and the log says which kind.
      */
-    /* -- 0x16c LookupIconIdFromDirectoryEx -- see the note at the define. */
+    /* 0x16c LookupIconIdFromDirectoryEx -- see the note at the define. */
     case WOWUSER_LOOKUPICONID:
     {
         volatile BYTE *directoryBytes = Wow32ArgPointer(frame, WOWUSER_LII_ARG_DIR);
@@ -4859,7 +4849,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
 
-        /* -- s92 (#306): kind 6 -- "where is the window of this CLASS?", arriving
+        /* s92 (#306): kind 6 -- "where is the window of this CLASS?", arriving
          * from a guest's WinHelp() with the class name "MS_WINHELP" (as logged).
          * The answer is DX:AX: DX non-zero = found, and AX is the window the
          * registered WM_WINHELP is then SENT to. Stepped over it answered 0, so
@@ -5187,7 +5177,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
 
-        /* -- A WM_TIMER CARRYING A TIMERPROC GOES TO THE PROC, NOT THE
+        /* A WM_TIMER CARRYING A TIMERPROC GOES TO THE PROC, NOT THE
          * WINDOW. That is Win16's rule (and Win32 kept it), and it is the
          * ONLY place a TIMERPROC is ever called from -- see the timer table
          * above. The signature is the same five words as a window procedure,
@@ -5799,7 +5789,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, " size=0x");
         WowNoteHex(note, noteCapacity, &noteLength, size, WOW_HEX_WORD_DIGITS);
 
-        /* -- s92 (#314): LoadBitmap(NULL, OBM_*) -- A PREDEFINED BITMAP. No resource
+        /* s92 (#314): LoadBitmap(NULL, OBM_*) -- A PREDEFINED BITMAP. No resource
          * bytes, and the name is an ORDINAL (selector 0). Media Player's SScrollBar
          * loads its arrows this way in WM_CREATE; answered 0, it sized itself from an
          * uninitialised BITMAP and came out 9250 pixels tall. The OBM_* ids are the
@@ -5838,7 +5828,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 
         headerSize = (DWORD)Wow32PeekWord(bitmapBits) | ((DWORD)Wow32PeekWord(bitmapBits + WOW_WORD_BYTES) << WORD_SHIFT);
 
-        /* -- TWO DIB HEADERS EXIST, AND WINDOWS 3.x RESOURCES USE THE OLD
+        /* TWO DIB HEADERS EXIST, AND WINDOWS 3.x RESOURCES USE THE OLD
          * ONE. This used to accept only `biSize == 40` (BITMAPINFOHEADER) and
          * refuse everything else -- deliberately, because guessing at a format
          * is worse than declining it. Solitaire named the missing one on its
@@ -6188,7 +6178,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             window->Text[index] = text[index];
 
         window->Text[index] = 0;
-        /* -- #302: IN Win16, SetWindowText IS SendMessage(WM_SETTEXT). A window
+        /* #302: IN Win16, SetWindowText IS SendMessage(WM_SETTEXT). A window
          * with its own procedure sees its new text first. Measured on Sound
          * Recorder (s89): its SButton class turns "#Rewind" into BITMAP REWIND
          * in its WM_SETTEXT handler, and this call went straight to the OS, so
@@ -6385,7 +6375,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x7f ValidateRect(hWnd, lpRect) -- the other half of InvalidateRect:
+    /* 0x7f ValidateRect(hWnd, lpRect) -- the other half of InvalidateRect:
      * take an area OUT of the update region. A NULL lpRect means the whole
      * client area, exactly as it does above.
      */
@@ -6467,7 +6457,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x30 IsChild(hWndParent, hWnd) -- is one window a descendant of the
+    /* 0x30 IsChild(hWndParent, hWnd) -- is one window a descendant of the
      * other. Answered from the REAL windows, so it agrees with what the OS
      * thinks rather than with our own parent field, which a reparent would
      * leave stale.
@@ -6497,7 +6487,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0xe6 GetNextWindow(hWnd, wFlag) -- walk the sibling chain. Win16's
+    /* 0xe6 GetNextWindow(hWnd, wFlag) -- walk the sibling chain. Win16's
      * wFlag is GW_HWNDNEXT(2)/GW_HWNDPREV(3), the same values Win32 uses, so
      * it passes straight through to GetWindow.
      *
@@ -6535,7 +6525,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0xa2 HiliteMenuItem(hWnd, hMenu, idItem, uHilite). */
+    /* 0xa2 HiliteMenuItem(hWnd, hMenu, idItem, uHilite). */
     case WOWUSER_HILITEMENUITEM:
     {
         WORD window16 = Wow32ArgWord(frame, WOWUSER_HMI_ARG_HWND);
@@ -6563,7 +6553,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0xa9 GetCaretBlinkTime / 0xc0 InSendMessage -- no arguments, and both
+    /* 0xa9 GetCaretBlinkTime / 0xc0 InSendMessage -- no arguments, and both
      * are the OS's own answer rather than ours.
      *
      * [INFO]: InSendMessage is asked by a window procedure that wants to know whether
@@ -6870,7 +6860,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- THE DRAWING PATH: 0x1c, 0x20, 0x3c, 0x10 -- see the note above. */
+    /* THE DRAWING PATH: 0x1c, 0x20, 0x3c, 0x10 -- see the note above. */
     case WOWUSER_CLIENTTOSCREEN:
     {
         WORD window16 = Wow32ArgWord(frame, WOWUSER_C2S_ARG_HWND);
@@ -7078,7 +7068,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- CLOCK: BASE UNITS, ASYNC KEYS, IsZoomed, AND A MENU IT BUILDS ITSELF. */
+    /* CLOCK: BASE UNITS, ASYNC KEYS, IsZoomed, AND A MENU IT BUILDS ITSELF. */
     case WOWUSER_GETDIALOGBASEUNITS:
     {
         DWORD baseUnits = (DWORD)GetDialogBaseUnits();
@@ -7262,7 +7252,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         rect.top    = WowConvRect16Get(rect16, WOWCONV_RECT16_TOP);
         rect.right  = WowConvRect16Get(rect16, WOWCONV_RECT16_RIGHT);
         rect.bottom = WowConvRect16Get(rect16, WOWCONV_RECT16_BOTTOM);
-        /* -- #282: NOT WIN32's MapDialogRect. That only works on a window the OS
+        /* #282: NOT WIN32's MapDialogRect. That only works on a window the OS
          * built as a dialog, and none of ours is one -- every Win16 dialog here
          * is CreateWindowEx'd (CALC's is its own `SciCalc` class) -- so it
          * FAILED and left the rectangle in dialog units. Calc then drew its
@@ -7432,7 +7422,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- [WARNING] 0x24 GetWindowText(hWnd, lpString, nMaxCount) -- SOUND RECORDER'S BLANK
+    /* [WARNING] 0x24 GetWindowText(hWnd, lpString, nMaxCount) -- SOUND RECORDER'S BLANK
      * LABELS. (user, s88: "Sound Recorder is half working: UI shows, but no text")
      * USER.36 thunks to us (8 arg bytes) and was never implemented: SOUNDREC
      * calls it for each of its controls and draws what it gets back -- nothing,
@@ -7522,7 +7512,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- s90 (#297) GetClipboardFormatName(fmt, buf, cch). Format numbers cross
+    /* s90 (#297) GetClipboardFormatName(fmt, buf, cch). Format numbers cross
      * unchanged (RegisterClipboardFormat hands back the OS's own), so this is the
      * OS's answer; a predefined format has no name and answers 0 in both.
      */
@@ -7563,7 +7553,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- s90 (#297) DlgDirSelect(hDlg, lpString, nIDListBox). The list box is a
+    /* s90 (#297) DlgDirSelect(hDlg, lpString, nIDListBox). The list box is a
      * REAL one that DlgDirList filled, so the selection is the OS's to read --
      * DlgDirSelectExA, which strips the brackets and appends `\` or `:` exactly
      * as Win16's does. [CAUTION] Win16 passes no buffer size: its contract is a buffer
@@ -7607,7 +7597,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- s90 (#297) SetParent(hwndChild, hwndNewParent) -> the previous parent.
+    /* s90 (#297) SetParent(hwndChild, hwndNewParent) -> the previous parent.
      * The real windows are re-parented by the OS, and the record's own `parent`
      * follows, because GetParent answers from the record.
      */
@@ -7644,7 +7634,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- s90 (#297) ChildWindowFromPoint(hwnd, POINT) -- client coordinates of
+    /* s90 (#297) ChildWindowFromPoint(hwnd, POINT) -- client coordinates of
      * hwnd; the parent itself when no child is there, 0 when outside it. The
      * OS answers on the real windows (it does not skip hidden or disabled ones,
      * and nor did Win16's), and the answer is translated back.
@@ -7679,7 +7669,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- s90 (#297) CallMsgFilter(lpMsg, nCode) -> TRUE only if a WH_MSGFILTER /
+    /* s90 (#297) CallMsgFilter(lpMsg, nCode) -> TRUE only if a WH_MSGFILTER /
      * WH_SYSMSGFILTER hook processed the message. This host installs no Win16
      * hooks yet (SetWindowsHook, #298), so there is no filter to call and FALSE
      * is the true answer -- the same one Windows gives with no hook installed.
@@ -7696,7 +7686,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- s90 (#296) EnumProps(hwnd, proc) -- proc(hwnd, lpszName, hData) once per
+    /* s90 (#296) EnumProps(hwnd, proc) -- proc(hwnd, lpszName, hData) once per
      * property. MEASURED against stock (w_props), and three guesses were wrong:
      * the order is OLDEST FIRST; a property set by ATOM still arrives as a STRING
      * (the atom's name -- "NtvdmexGamma" -- never a null selector); and a window
@@ -7806,7 +7796,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- s90 (#297) GetClassInfo(hInst, lpszClass, lpWndClass) -> BOOL, filling
+    /* s90 (#297) GetClassInfo(hInst, lpszClass, lpWndClass) -> BOOL, filling
      * WNDCLASS16 (26 bytes): style, lpfnWndProc (16:16), cbClsExtra, cbWndExtra,
      * hInstance, hIcon, hCursor, hbrBackground, lpszMenuName, lpszClassName.
      * A program's class answers what it registered; the name pointers are the
@@ -8120,7 +8110,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- [CAUTION] WINDOWPLACEMENT IS A DIFFERENT STRUCTURE IN 16 BITS. Win16's is 22
+    /* [CAUTION] WINDOWPLACEMENT IS A DIFFERENT STRUCTURE IN 16 BITS. Win16's is 22
      * bytes of WORDs (length, flags, showCmd, ptMin, ptMax, rcNormal); Win32's
      * is 44 with LONGs. Built field by field rather than copied.
      */
@@ -8249,7 +8239,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
 
-        /* -- [CAUTION] SPI_GETICONTITLELOGFONT (0x1F): ANSWERING "FALSE" IS NOT ENOUGH.
+        /* [CAUTION] SPI_GETICONTITLELOGFONT (0x1F): ANSWERING "FALSE" IS NOT ENOUGH.
          * MPLAYER asks for it and then calls CreateFontIndirect ON THE BUFFER
          * REGARDLESS -- measured: with FALSE returned and the buffer untouched,
          * the next log line is CreateFontIndirect with a face name of stack
@@ -8417,7 +8407,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- [CAUTION] GrayString's OUTPUT FUNCTION IS A 16-BIT CALLBACK WE DO NOT RUN HERE.
+    /* [CAUTION] GrayString's OUTPUT FUNCTION IS A 16-BIT CALLBACK WE DO NOT RUN HERE.
      * Passing NULL is not a shortcut: NULL is a DOCUMENTED value meaning "use
      * TextOut", which is what every caller that supplies no proc gets anyway.
      * A guest that DID supply one is told so in the log rather than having its
@@ -8487,7 +8477,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
      * a lie, and it disappears when real dialog creation lands (USER thunk
      * 0xEF).
      */
-    /* -- [WARNING] s88: DefDlgProc CALLS THE DIALOG'S OWN PROCEDURE FIRST. (user: "some
+    /* [WARNING] s88: DefDlgProc CALLS THE DIALOG'S OWN PROCEDURE FIRST. (user: "some
      * close buttons (X) don't work") A Win16 program that uses a dialog as its
      * main window (Charmap) registers a class whose window procedure IS
      * DefDlgProc and passes its real DLGPROC to CreateDialog -- so DefDlgProc is
@@ -9198,7 +9188,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0xd0 SetCommEventMask(idComDev, fuEvtMask) -- returns a FAR POINTER to
+    /* 0xd0 SetCommEventMask(idComDev, fuEvtMask) -- returns a FAR POINTER to
      * the port's event word, which the caller then polls directly.
      *
      * [CAUTION]: ITS FAILURE VALUE IS A NULL POINTER, NOT IE_BADID. Grouping it with the
@@ -9270,7 +9260,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- [CAUTION] ExitWindows IS REFUSED, ALWAYS. A Win16 guest asking to end the
+    /* [CAUTION] ExitWindows IS REFUSED, ALWAYS. A Win16 guest asking to end the
      * Windows session must NOT be able to log the user out or restart the real
      * machine -- that is the whole desktop, not this VDM, and the guest cannot
      * tell the difference between "refused" and "the user said no", which is a
@@ -9427,7 +9417,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x21 GetClientRect(hWnd, lpRect) -- see the long note above. - */
+    /* 0x21 GetClientRect(hWnd, lpRect) -- see the long note above: */
     case WOWUSER_GETCLIENTRECT:
     {
         WORD window16 = Wow32ArgWord(frame, WOWUSER_GCR_ARG_HWND);
@@ -9474,7 +9464,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x40 SetScrollRange / 0x3e SetScrollPos -- the canvas scrollbars. */
+    /* 0x40 SetScrollRange / 0x3e SetScrollPos -- the canvas scrollbars. */
     case WOWUSER_SETSCROLLRANGE:
     {
         WORD window16 = Wow32ArgWord(frame, WOWUSER_SSR_ARG_HWND);
@@ -9606,7 +9596,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         }
 
         have = WowWinPaintTake(window16, &rect, &shouldErase);
-        /* -- [WARNING] BeginPaint VALIDATES, OR A GUEST THAT INVALIDATES IN ITS OWN WM_PAINT
+        /* [WARNING] BeginPaint VALIDATES, OR A GUEST THAT INVALIDATES IN ITS OWN WM_PAINT
          * NEVER STOPS PAINTING. (user, s88: "Clock flickers") Clock's WM_PAINT opens
          * with `InvalidateRect(hwnd, NULL, TRUE)` and only then calls BeginPaint.
          * On Windows that is harmless -- BeginPaint validates the whole update
@@ -9658,7 +9648,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             shouldErase = 1;
         }
 
-        /* -- s89 (#162, Charmap): CHILDREN CLIPPED OUT. The real controls inside
+        /* s89 (#162, Charmap): CHILDREN CLIPPED OUT. The real controls inside
          * this window are OS windows that painted themselves already; Win16's
          * order (parent erases and paints, then the children) does not hold here,
          * so an unclipped DC let the guest's erase -- now sent from this
@@ -9672,7 +9662,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         dc = GetDCEx(window->Window32, NULL, DCX_CACHE | DCX_CLIPCHILDREN
                      | ((GetWindowLongA(window->Window32, GWL_STYLE) & WS_CLIPSIBLINGS)
                         ? DCX_CLIPSIBLINGS : 0));
-        /* -- #287: CLIPPED TO THE PAINT, AS WIN16's BeginPaint DC IS. Unclipped, the
+        /* #287: CLIPPED TO THE PAINT, AS WIN16's BeginPaint DC IS. Unclipped, the
          * erase this BeginPaint now sends (DefWindowProc, Calc's WHITE class brush)
          * covered the whole client while Calc repaints its grey over rcPaint only
          * -- so an uncovered corner turned the whole calculator white. What this
@@ -9719,7 +9709,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNotePut(note, noteCapacity, &noteLength, ") -> DC token 0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, dc16);
-        /* -- #282/#162: AND BeginPaint SENDS WM_ERASEBKGND, as Win16's does, before
+        /* #282/#162: AND BeginPaint SENDS WM_ERASEBKGND, as Win16's does, before
          * it returns -- with the paint's own DC. Clock paints its face colour in
          * that handler and nowhere else (its class has no brush; the brush it
          * uses is created after RegisterClass), so ours stayed WHITE where stock
@@ -10377,7 +10367,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteHex(note, noteCapacity, &noteLength, dialog16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " result 0x");
         WowNoteHex(note, noteCapacity, &noteLength, dialogResult, WOW_HEX_WORD_DIGITS);
-        /* -- AND THIS IS WHAT THE LOOP HAS BEEN WAITING FOR. (session 57)
+        /* AND THIS IS WHAT THE LOOP HAS BEEN WAITING FOR. (session 57)
          *
          * [CAUTION]: IT DOES NOT UNWIND ANYTHING HERE, AND IT MUST NOT: we are several
          * frames down inside the guest's own dialog procedure, which has to
@@ -10439,7 +10429,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
      * menu all come from. A window whose defaults are answered `0` is a window
      * that looks right until someone uses it.
      */
-    /* -- s92 (#298): USER ids krnl386 calls from its own code (USER ids are USER's
+    /* s92 (#298): USER ids krnl386 calls from its own code (USER ids are USER's
      * ordinals). Named and answered on purpose; the call sites are in the #298 thread.
      * 0x13a SignalProc(hTask/hModule, code, uExitFn, hInstance, hQueue) -- 0x40 a DLL
      * loaded, 0x80 one unloaded, 0x20 a task exit, 0x666 a task's #GP. Every krnl386
@@ -10461,7 +10451,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x140 SysErrorBox(lpszText, lpszCaption, btn1, btn2, btn3) -- USER.320. When a
+    /* 0x140 SysErrorBox(lpszText, lpszCaption, btn1, btn2, btn3) -- USER.320. When a
      * task GP-faults, krnl386 puts up "Application Error" with btn2 = SEB_CLOSE |
      * SEB_DEFBUTTON (as logged); an answer of 1 resumes the task and anything else
      * ends it. The answer is the 1-based index of the button pressed. Stepped over it
@@ -11022,7 +11012,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x11 GetCursorPos / 0x1d ScreenToClient -- a Win16 POINT is 4 bytes. */
+    /* 0x11 GetCursorPos / 0x1d ScreenToClient -- a Win16 POINT is 4 bytes. */
     case WOWUSER_GETCURSORPOS:
     case WOWUSER_SCREENTOCLIENT:
     {
@@ -11534,7 +11524,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x10e GlobalFindAtom / 0x10f GlobalGetAtomName -- the OS's table. */
+    /* 0x10e GlobalFindAtom / 0x10f GlobalGetAtomName -- the OS's table. */
     case WOWUSER_GLOBALFINDATOM:
     {
         CHAR text[WOWUSER_STRING_SIZE];
@@ -11759,7 +11749,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- AdjustWindowRect: pure arithmetic on a rectangle, no handles at all.
+    /* AdjustWindowRect: pure arithmetic on a rectangle, no handles at all.
      *
      * [CAUTION]: A Win16 RECT IS FOUR `int`s = 8 BYTES against Win32's four LONGs = 16,
      * so it is unpacked and repacked rather than cast. Solitaire sizes its

@@ -62,13 +62,13 @@
 /* SHELL's ids. Numbered in THEIR OWN space -- 0x16 here is not 0x16 in USER's. */
 #define WOWSHELL_SHELLABOUT                         0x0016
 
-/* -- DRAG AND DROP, from neneeds.py's list. Notepad accepts dropped files.
+/* DRAG AND DROP, from neneeds.py's list. Notepad accepts dropped files.
  * `9 DRAGACCEPTFILES` -> id 0x09, 4 args (HWND, BOOL); `11 DRAGQUERYFILE` ->
  * id 0x0b, 10 args (HDROP, UINT, LPSTR, UINT) = 2+2+4+2. Both add up to what
  * their own stubs declare, and both were already named in the header above as
  * part of what made "the ids are the ordinals" a reading rather than a guess.
  */
-/* -- 0x14 ShellExecute -- ONE OF THE FOUR SINGLE CALLS THAT EACH BLOCK A
+/* 0x14 ShellExecute -- ONE OF THE FOUR SINGLE CALLS THAT EACH BLOCK A
  * GUEST. WINFILE and PACKAGER both import it, and WINFILE is a file manager:
  * "open the thing I double-clicked" is most of what it exists to do.
  * ShellExecute(hwnd, lpOperation, lpFile, lpParameters, lpDirectory, nShow)

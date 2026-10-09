@@ -561,7 +561,7 @@ LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
 
     InterlockedIncrement(&g_VehAny);                   /* run 52: prove ANY PM fault reaches us */
 
-    /* --- Reflected PM software interrupt = the DPMI INT 31h dispatch (run 26) ---------
+    /* Reflected PM software interrupt = the DPMI INT 31h dispatch (run 26):
      * Under VdmStartExecution the kernel reflects a PM INT nn by advancing EIP past it and
      * reloading FLAT CS/SS (0x1B/0x23), leaving the int OFFSET in EDX and the guest's other
      * regs intact. So: CS flat + in PM => a reflected guest INT. Read the vector from the
@@ -789,7 +789,7 @@ LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
         return EXCEPTION_CONTINUE_EXECUTION;            /* resume the guest past the INT */
     }
 
-    /* --- genuine (non-reflected) PM fault: full dump + clean exit -------------------- */
+    /* genuine (non-reflected) PM fault: full dump + clean exit: */
 fatalDump:
     LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);     /* flush the arm's context first; */
     HostFatalDump(record, context);                            /* the dump has its own buffer. The */
@@ -1088,7 +1088,7 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
                         cursor = LogPut(cursor, " b@live="); cursor = LogDump(cursor, liveBytes, 8);
                     }
 
-                    /* -- A GUEST THAT IS MOVING IS NOT WEDGED. (s74c, Duke3D's SETUP)
+                    /* A GUEST THAT IS MOVING IS NOT WEDGED. (s74c, Duke3D's SETUP)
                      * `iter` counts PM ENTRIES, so a flat client that runs natively
                      * without trapping -- SETMAIN hooks the keyboard, not the timer,
                      * draws its menu and then polls its own key buffer -- never bumps

@@ -264,7 +264,7 @@
 #define WOWUSER_HMI_ARG_MENU                4
 #define WOWUSER_HMI_ARG_HWND                6
 
-/* -- 0x7a CallWindowProc -- AND IT IS ONE OF THE FOUR SINGLE CALLS THAT
+/* 0x7a CallWindowProc -- AND IT IS ONE OF THE FOUR SINGLE CALLS THAT
  * EACH BLOCK A GUEST. (CARDFILE) -----------------------------------------
  * A subclassing program keeps the procedure it displaced and calls it for
  * everything it does not handle. The displaced procedure here can be either
@@ -567,7 +567,7 @@
 #define WOWUSER_GETLASTACTIVEPOPUP          0x011f
 #define WOWUSER_GLAP_ARG_HWND               0
 
-/* -- 0x2f IsWindow / 0x31 IsWindowVisible -- WHY THE TOOLBOX NEVER MOVED.
+/* 0x2f IsWindow / 0x31 IsWindowVisible -- WHY THE TOOLBOX NEVER MOVED.
  * Two of the smallest calls in USER, and between them they were the whole of
  * the second half of "the way it paints is completely wrong".
  *
@@ -744,7 +744,7 @@
 #define WOWUSER_WFP_ARG_X                   0       /* WindowFromPoint(POINT) */
 #define WOWUSER_WFP_ARG_Y                   2
 
-/* -- s90 (#297): the USER singles. Frames reversed as always (+0 = last param). */
+/* s90 (#297): the USER singles. Frames reversed as always (+0 = last param). */
 #define WOWUSER_GETCLIPBOARDFORMATNAME      0x0092  /* (fmt, buf, cch) 8 */
 #define WOWUSER_GCFN_ARG_CCH                0
 #define WOWUSER_GCFN_ARG_BUF                2
@@ -969,7 +969,7 @@
 #define WOWUSER_ISWINDOWVISIBLE             0x0031
 #define WOWUSER_IW_ARG_HWND                 0
 
-/* -- 0x12 SetCapture / 0x13 ReleaseCapture -- WHAT MAKES A DRAG A STROKE.
+/* 0x12 SetCapture / 0x13 ReleaseCapture -- WHAT MAKES A DRAG A STROKE.
  * From `neneeds.py`'s list for PBRUSH (ord 18 and 19, 2 and 0 argument bytes).
  * A paint program takes the capture on button-down so that the rest of the
  * stroke arrives even when the pointer leaves the canvas, and gives it back on
@@ -1136,7 +1136,7 @@
 #define WOWUSER_GSP_ARG_BAR                 0
 #define WOWUSER_GSP_ARG_HWND                2
 
-/* -- THE OLE CLUSTER -- WHAT `File > Save As` DIES ON NOW. (session 49) -
+/* THE OLE CLUSTER -- WHAT `File > Save As` DIES ON NOW. (session 49):
  * With the LDT collision fixed, MS Paint's save runs, reads its whole canvas
  * with `GetDIBits`, and then faults inside **OLESVR.DLL** -- because Paint
  * registers itself as an OLE server and OLESVR notifies its clients that the
@@ -1321,7 +1321,7 @@
 #define WOWUSER_SDIM_ARG_ID                 8
 #define WOWUSER_SDIM_ARG_HDLG               10
 
-/* -- BOOL ScrollDC(HDC, int dx, int dy, LPRECT scroll, LPRECT clip,
+/* BOOL ScrollDC(HDC, int dx, int dy, LPRECT scroll, LPRECT clip,
  *                 HRGN update, LPRECT lprcUpdate) = 20 --------------------
  * Win32 has the same call with the same seven arguments and the same meaning.
  * What is NOT the same is the RECTANGLES: a Win16 RECT is 8 bytes and Win32's
@@ -1352,7 +1352,7 @@
 #define WOWUSER_CCS_ARG_SCROLL              0
 #define WOWUSER_CCS_ARG_HWND                2
 
-/* -- THE ENUMERATIONS. (session 57) One callback per item; the mechanism is
+/* THE ENUMERATIONS. (session 57) One callback per item; the mechanism is
  * in src/wow/wowenum.h and the argument blocks are reversed as always.
  * BOOL EnumWindows(FARPROC lpEnumFunc, LPARAM lParam)              = 8
  * BOOL EnumChildWindows(HWND hParent, FARPROC, LPARAM)             = 10
@@ -1483,7 +1483,7 @@
 #define WOWUSER_CW_ARG_WINDOWNAME           22
 #define WOWUSER_CW_ARG_CLASSNAME            26
 
-/* -- 0x1c4 CreateWindowEx -- AND ITS BLOCK IS CreateWindow's WITH ONE FIELD
+/* 0x1c4 CreateWindowEx -- AND ITS BLOCK IS CreateWindow's WITH ONE FIELD
  * ON THE END. (session 55) WINFILE.EXE imports it and creates no window at
  * all without it.
  * CreateWindowEx pushes dwExStyle FIRST, and the first push sits at the

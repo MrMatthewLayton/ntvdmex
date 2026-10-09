@@ -13,17 +13,9 @@
 
 #include "wow32.h"
 #include "host_state.h"
-#include "log.h"
-#include "ne.h"
-#include "wowanchors.h"
-#include "wowsched.h"
-#include "wowcall.h"
-#include "wowmsg.h"
-#include "wowres.h"
-#include "wowwin.h"
-#include "wowgdi.h"
-#include "wowuser.h"
-#include "host_wow.h"
+
+/* Forward declarations, from when this file was part of main.c's unit (they were in wow32.h). */
+VOID Wow32CurrentDirectorySet(PCSTR dir);  /* #164: main.c's per-task directory table */
 
 CHAR g_WowCommandProgram[WOW32_COMMAND_PROGRAM_MAX] = { 0 };   /* full path of the Win16 program */
 CHAR g_WowCommandArguments[WOW32_COMMAND_ARGUMENTS_MAX] = { 0 };   /* its arguments, without a leading space */
@@ -46,10 +38,7 @@ static const WOW32_DECLINE_SITE g_Wow32DeclineSites[] = {
     { WOW32_FILE_WRITE,    0x56bf },   /* 0x6f -> AH=40h */
 };
 
-/* Forward declarations, from when this file was part of main.c's unit (they were in wow32.h). */
-VOID Wow32CurrentDirectorySet(PCSTR dir);  /* #164: main.c's per-task directory table */
-
-/* ---- note building (shared by EVERY id space's dispatcher) --------------
+/* note building (shared by EVERY id space's dispatcher):
  * These live here rather than in wowuser.h because five module files build
  * notes with them -- USER, SHELL, COMMDLG, KEYBOARD and GDI -- and their old
  * home forced an include order in which wowgdi.h had to come LAST. That order
@@ -506,7 +495,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
      * does. Handing back a plausible-looking number would fail later, further
      * from the cause.
      */
-    /* -- 0x9a LoadLibraryEx32W(lpszLibFile, hFile, dwFlags) = 12, reversed. */
+    /* 0x9a LoadLibraryEx32W(lpszLibFile, hFile, dwFlags) = 12, reversed. */
     case WOW32_LOADLIBRARYEX32W:
     {
         CHAR  path[MAX_PATH];
@@ -520,7 +509,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         return 1;
     }
 
-    /* -- 0x8c FreeLibrary32W(hInst32) = 4. */
+    /* 0x8c FreeLibrary32W(hInst32) = 4. */
     case WOW32_FREELIBRARY32W:
     {
         DWORD module = Wow32ArgDword(frame, WOW32_FREELIBRARY32W_ARG_MODULE);
@@ -528,7 +517,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         return 1;
     }
 
-    /* -- 0x8d GetProcAddress32W(hInst32, lpszProc) = 8: +0 the name (a null
+    /* 0x8d GetProcAddress32W(hInst32, lpszProc) = 8: +0 the name (a null
      * selector = an ordinal in the offset), +4 the module.
      */
     case WOW32_GETPROCADDRESS32W:
@@ -550,7 +539,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         return 1;
     }
 
-    /* -- 0x1a GetVDMPointer32W(lpAddress, fMode) = 6: +0 fMode (1 = protected
+    /* 0x1a GetVDMPointer32W(lpAddress, fMode) = 6: +0 fMode (1 = protected
      * mode, 0 = real mode), +2 the 16:16 address. Real-mode memory sits at
      * linear 0 of this process, as in NTVDM.
      */
@@ -569,7 +558,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         return 1;
     }
 
-    /* -- 0x1c CallProc32W / _CallProcEx32W. See the frame note above Wow32Call. */
+    /* 0x1c CallProc32W / _CallProcEx32W. See the frame note above Wow32Call. */
     case WOW32_CALLPROCEX32W:
     {
         DWORD countAndFlags   = Wow32RawArgDword(frame, WOW32_CALLPROCEX32W_ARG_COUNT);
@@ -707,7 +696,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         return 1;
     }
 
-    /* -- 0xd0 GetWindowsDirectory(lpBuffer, uSize) -- see the note above.
+    /* 0xd0 GetWindowsDirectory(lpBuffer, uSize) -- see the note above.
      * The real Win32 call against the real directory, for the same reason
      * GetDriveType is a pass-through: our DOS layer opens real paths on the
      * real filesystem, so the host's Windows directory IS the guest's.
@@ -893,7 +882,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
      * routes now share. When a real per-process current drive exists, this
      * changes with it and not before.
      */
-    /* -- 0x84 WowMsgBox -- THE ONE THAT MAKES A DEAD GUEST SAY WHY.
+    /* 0x84 WowMsgBox -- THE ONE THAT MAKES A DEAD GUEST SAY WHY.
      * (session 56) --------------------------------------------------------
      * This is krnl386's own error reporter: when a launch fails it calls
      * WowFailedExec (0x9d) and then this, with the text, and then
@@ -1031,7 +1020,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         return 1;
     }
 
-    /* -- 0x3a GetProfileString -- AND IT IS WHY MS PAINT WAS BLACK AND
+    /* 0x3a GetProfileString -- AND IT IS WHY MS PAINT WAS BLACK AND
      * WHITE. ----------------------------------------------------------------
      * The string twin of 0x39, 18 argument bytes = 4 + 4 + 4 + 4 + 2 and no
      * filename, so it is WIN.INI. Both the layout and the identity come from
@@ -1104,7 +1093,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         return 1;
     }
 
-    /* -- #293: THE WRITE HALF. 0x3b WriteProfileString(lpAppName, lpKeyName,
+    /* #293: THE WRITE HALF. 0x3b WriteProfileString(lpAppName, lpKeyName,
      * lpString) and 0x81 WritePrivateProfileString(..., lpFileName). ---------
      * Found by the s89 inventory (tools/ne/wowinventory.py), not by a run: 14
      * shelf programs import one or the other -- Calc's Scientific mode, Clock's
@@ -1170,7 +1159,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         Wow32SetReturn(frame, 0);
         return 1;
 
-    /* -- 0x82 SetCurrentDirectory -- AND IT IS WHERE `Save As` PUT THE
+    /* 0x82 SetCurrentDirectory -- AND IT IS WHERE `Save As` PUT THE
      * FILE. (session 49) --------------------------------------------------
      * With the LDT collision and OLESVR's null pointer fixed, MS Paint's save
      * RAN -- the log shows the whole .BMP being written: six `AH=40h` writes of
@@ -1243,7 +1232,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
      *
      * [CAUTION]: GetDriveTypeA wants a ROOT PATH ("A:\"), not a letter.
      */
-    /* -- 0x86 GetDateTime -- AND IT IS WHY THE CLOCK'S FACE IS BLANK.
+    /* 0x86 GetDateTime -- AND IT IS WHY THE CLOCK'S FACE IS BLANK.
      * (session 54) ----------------------------------------------------------
      * CLOCK.EXE asks DOS for the date the ordinary way -- `INT 21h AH=2Ah` in
      * protected mode. krnl386 owns that vector inside a WOW VDM (there is no DOS
@@ -1310,7 +1299,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         return 1;
     }
 
-    /* -- s92 (#298): THE INTERNAL IDS, NAMED FROM WHEN THEY ARRIVE. No export maps to
+    /* s92 (#298): THE INTERNAL IDS, NAMED FROM WHEN THEY ARRIVE. No export maps to
      * these; krnl386 calls them from its own code and they were stepped over with
      * the sentinel. Each is answered on purpose now -- the evidence is in the
      * #298 issue thread; the two that CHANGE behaviour are marked .
@@ -1633,7 +1622,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         Wow32SetReturn(frame, 0);
         return 1;
 
-    /* -- The INT 21h file family: decline, and let our own DOS layer serve it.
+    /* The INT 21h file family: decline, and let our own DOS layer serve it.
      * See the WOW32_DECLINE block above for why this is an answer rather than
      * a stub, and for the one behavioural difference it buys.
      *

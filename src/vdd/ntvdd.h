@@ -43,7 +43,7 @@
 #define VDD_KEEP_ALL_BUT_AH     0xFFFF00FFu
 #define VDD_KEEP_HIGH_WORD      0xFFFF0000u
 
-/* --- a finished frame the video VDD hands to the presentation layer -------- */
+/* a finished frame the video VDD hands to the presentation layer: */
 /* The largest frame the contract carries. Both ends size their buffers from this:
  * the video VDD may not advertise a mode wider or taller than the presenter can
  * show, and the presenter may not drop a frame the VDD is allowed to produce.
@@ -57,7 +57,7 @@
 /* A split older than this many frames is stale: the DAC simply holds. */
 #define NTVDD_SPLIT_MAX_AGE     2u
 
-/* --- guest register view handed to interrupt-service callbacks ------------- */
+/* guest register view handed to interrupt-service callbacks: */
 /* A flat snapshot of the V86 registers a device cares about.  On the real host
  * the bus loads this from the VDM_TIB CONTEXT before the call and stores it back
  * after; off-VM a test fills it directly.  `CarryFlag` carries the carry flag out (DOS
@@ -88,7 +88,7 @@ typedef struct _NTVDD_FRAME
     UINT32          Stride;         /* bytes per scanline of `Pixels` */
     const BYTE     *Pixels;         /* framebuffer (indices if BitsPerPixel==8) */
     const UINT32   *Palette;        /* 256 ARGB entries (8bpp only; else NULL) */
-    /* -- RASTER-SPLIT PALETTE (s70). A guest may rewrite DAC entries MID-FRAME so
+    /* RASTER-SPLIT PALETTE (s70). A guest may rewrite DAC entries MID-FRAME so
      * that the rows above the beam and the rows below it are shown in different
      * colours -- Lemmings does exactly this from its timer tick at row 160 (the
      * level in one palette, the toolbar in another). One palette per frame
@@ -108,7 +108,7 @@ typedef struct _NTVDD_FRAME
 
 typedef const NTVDD_FRAME *PCNTVDD_FRAME;
 
-/* --- device-supplied callback signatures ---------------------------------- */
+/* device-supplied callback signatures: */
 /* UINT32, not DWORD, for the port value: it is the same type as the uint32_t the
  * devices not yet migrated implement their handlers with.
  */
@@ -119,10 +119,10 @@ typedef VOID (*PVDD_MEMORY_WRITE_ROUTINE)(PVOID context, UINT32 offset, BYTE val
 typedef VOID (*PVDD_INTERRUPT_ROUTINE) (PVOID context, PNTVDD_REGISTERS registers);
 typedef VOID (*PVDD_FRAME_ROUTINE)(PVOID context);
 
-/* --- the bus (opaque to VDDs except through these calls) ------------------- */
+/* the bus (opaque to VDDs except through these calls): */
 typedef struct _VDD_BUS VDD_BUS, *PVDD_BUS;
 
-/* --- a device descriptor -------------------------------------------------- */
+/* a device descriptor: */
 typedef struct _NTVDD_DEVICE
 {
     const CHAR *Name;

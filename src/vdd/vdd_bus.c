@@ -20,7 +20,7 @@
 #define VDD_BUS_FLOATING_BYTE   0xFF
 #define VDD_BUS_LAST_OFFSET     1               /* An inclusive window ends at base + size - 1 */
 
-/* --- lifecycle ------------------------------------------------------------ */
+/* lifecycle: */
 VOID VddBusInitialize(PVDD_BUS bus, PVOID memoryBase)
 {
     INT vector;
@@ -89,7 +89,7 @@ VOID VddBusShutdownAll(PVDD_BUS bus)
             bus->Devices[deviceIndex]->Shutdown(bus->Devices[deviceIndex]->Context);
 }
 
-/* --- claim registries (the ntvdd.h ABI surface VDDs call) ----------------- */
+/* claim registries (the ntvdd.h ABI surface VDDs call): */
 INT VddClaimPorts(
     PVDD_BUS bus,
     WORD firstPort,
@@ -170,7 +170,7 @@ INT VddOnFrame(PVDD_BUS bus, PVDD_FRAME_ROUTINE frameRoutine, PVOID context)
     return VDD_BUS_OK;
 }
 
-/* --- services VDDs call back into ----------------------------------------- */
+/* services VDDs call back into: */
 VOID VddRaiseIrq(PVDD_BUS bus, BYTE irq)
 {
     if (bus->IrqSink)
@@ -195,7 +195,7 @@ VOID VddPresent(PVDD_BUS bus, PCNTVDD_FRAME frame)
         bus->PresentSink(bus->PresentContext, frame);
 }
 
-/* --- dispatch (the host's V86 service loop calls these) ------------------- */
+/* dispatch (the host's V86 service loop calls these): */
 INT VddBusIo(PVDD_BUS bus, WORD port, BYTE width, INT isIn, UINT32 *value)
 {
     INT entryIndex;

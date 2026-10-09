@@ -234,7 +234,7 @@
 #define DOS_INT21_PARSE_KEEP_NAME               0x04
 #define DOS_INT21_PARSE_KEEP_EXTENSION          0x08
 
-/* ---- INT 21h 4Eh/4Fh find-first/find-next.  GH #29. --------------------------
+/* INT 21h 4Eh/4Fh find-first/find-next.  GH #29:
  *
  * DTA BLOCK LAYOUT, read off the oracle byte for byte (tests/probes/dos/p_find.asm).
  * The dump cross-checks itself: the size field came back 0xD575 = 54645, which is
@@ -256,7 +256,7 @@
  */
 #define DOS_FIND_MAGIC                          0x4E
 
-/* ---- The FCB interface (AH=0Fh-24h, 27h-29h).  GH #36. ----------------------
+/* The FCB interface (AH=0Fh-24h, 27h-29h).  GH #36:
  *
  * The pre-1983 file API.  Little 6.22-era software uses it, but TREE.COM does,
  * and it is 19 of the 103 services 6.22 defines.
@@ -331,7 +331,7 @@ typedef LONG (WINAPI *DOS_NT_QUERY_OBJECT)(HANDLE, INT, PVOID, ULONG, PULONG);
  */
 INT g_DosInt21IsProtectedMode = 0;
 
-/* -- THE VDM'S CLOCK (GH #250) -- see dos_clock.h. One per VDM, starts at the host's
+/* THE VDM'S CLOCK (GH #250) -- see dos_clock.h. One per VDM, starts at the host's
  * time, moved only by a guest's own set calls.
  */
 DOS_CLOCK_STATE g_DosClock;
@@ -1637,7 +1637,7 @@ INT DosInt21(PDOS_MACHINE machine)
      * log in thousands of identical lines -- it prints its completed line instead.
      * Gated by a flag file so no other run pays for this.
      */
-    /* -- [WARNING] A CAP, AND IT IS THE THIRD INSTRUMENT IN ONE SESSION TO NEED ONE.
+    /* [WARNING] A CAP, AND IT IS THE THIRD INSTRUMENT IN ONE SESSION TO NEED ONE.
      * The BOP logger ran away twice (268 MB each) before it got a hard ceiling; this
      * one has none at all, and the moment XP's COMMAND.COM reached a command LOOP it
      * wrote 2,166,824 trace lines and the same quarter-gigabyte. The flag file makes
@@ -1675,7 +1675,7 @@ INT DosInt21(PDOS_MACHINE machine)
         }
     }
 
-    /* -- #210: FIVE LONG-FILENAME CALLS ARE THEIR SHORT-NAME TWINS, REGISTER FOR REGISTER.
+    /* #210: FIVE LONG-FILENAME CALLS ARE THEIR SHORT-NAME TWINS, REGISTER FOR REGISTER.
      * 7139h mkdir, 713Ah rmdir, 713Bh chdir (DS:DX), 7156h rename (DS:DX -> ES:DI) and
      * 716Ch / 71A9h extended open (BX, CX, DX, DS:SI) take exactly what 39h/3Ah/3Bh/56h/
      * 6Ch take, and none of those arms reads AL. Our short-name arms were never
@@ -1733,7 +1733,7 @@ INT DosInt21(PDOS_MACHINE machine)
           trace = LogPut(trace, " ivt1C=0x"); trace = LogHex(trace, tickSegment);
           trace = LogPut(trace, ":0x");
           trace = LogHex(trace, tickOffset); }
-        /* -- AND THE BYTES THAT LED HERE -- AT THE GUEST'S ADDRESS, NOT OURS.
+        /* AND THE BYTES THAT LED HERE -- AT THE GUEST'S ADDRESS, NOT OURS.
          * "SILENT VDM DEATH -> GET THE BYTES" is a standing rule here, and the
          * first cut of this obeyed the letter of it while dumping from
          * VTIB_CS:EIP -- the HANDLER's address. That produced `C4 C4 54`, read
@@ -1754,7 +1754,7 @@ INT DosInt21(PDOS_MACHINE machine)
                 || (function == DOS_FN_DIRECT_CONSOLE_IO && (R_DX & BYTE_MASK) == DOS_INT21_DIRECT_INPUT))
                && DosHandleIsFile((PVOID const *)machine->FileHandles, 0))
     {
-        /* -- stdio (s91): CONSOLE INPUT FROM A FILE ON HANDLE 0. `prog < file` is the
+        /* stdio (s91): CONSOLE INPUT FROM A FILE ON HANDLE 0. `prog < file` is the
          * shell AH=46h-ing a file onto handle 0, and DOS's console-input functions
          * read HANDLE 0 -- these read the keyboard whatever handle 0 was, so a
          * redirected program never saw its file (and hung waiting for a key).
@@ -1867,7 +1867,7 @@ INT DosInt21(PDOS_MACHINE machine)
     }
     else if (function == DOS_FN_BUFFERED_INPUT)                /* buffered input DS:DX */
     {
-        /* -- THE LAST INPUT CALL THAT PARKED THE EXEC THREAD, AND IT DEADLOCKS A SHELL.
+        /* THE LAST INPUT CALL THAT PARKED THE EXEC THREAD, AND IT DEADLOCKS A SHELL.
          * This used to sit in a loop on the BLOCKING m->conin until it had a whole
          * line. AH=01/07/08 and INT 16h were both fixed years ago to poll via
          * `retry` (see the note on that field), and the reason is spelled out
@@ -2033,7 +2033,7 @@ INT DosInt21(PDOS_MACHINE machine)
          * So: a BOUND handle is a file, whatever its number; only an unbound low
          * handle is the console.
          */
-        /* -- #275: A WRITE THAT FAILS FOR A HARDWARE REASON IS A CRITICAL ERROR. The
+        /* #275: A WRITE THAT FAILS FOR A HARDWARE REASON IS A CRITICAL ERROR. The
          * result of WriteFile was never looked at: a write to a file whose floppy
          * was pulled, or that went write-protected, answered CF=0 with however many
          * bytes Win32 managed (usually 0) -- a success that never happened. A
@@ -2081,7 +2081,7 @@ INT DosInt21(PDOS_MACHINE machine)
                 DosStampVdmNow(machine->FileHandles[handle]); /* #263 */
             }
         }
-        /* -- #251: AN UNREDIRECTED 3 IS AUX AND 4 IS PRN, and they go to the BIOS
+        /* #251: AN UNREDIRECTED 3 IS AUX AND 4 IS PRN, and they go to the BIOS
          * (INT 14h / INT 17h) like DOS's own drivers -- they used to be refused
          * with error 6 here, after AH=04h/05h had thrown their bytes away.
          */
@@ -2186,7 +2186,7 @@ INT DosInt21(PDOS_MACHINE machine)
         }
         else
         {
-            /* -- ASK WHY IT FAILED. It used to answer 2 for every cause; see
+            /* ASK WHY IT FAILED. It used to answer 2 for every cause; see
              * DosErrFromWin32() for the two oracle rows that names wrong.
              */
             DWORD win32Error = GetLastError();
@@ -3175,7 +3175,7 @@ INT DosInt21(PDOS_MACHINE machine)
         }
         else if (subfunction == DOS_INT21_EXEC_OVERLAY)
         {
-            /* -- THE OVERLAY. Two words of parameter block and nothing else:
+            /* THE OVERLAY. Two words of parameter block and nothing else:
              * where to put it, and what to relocate by -- and those are NOT
              * the same number (oracle: relocation uses the FACTOR, measured
              * with a factor deliberately unequal to the load segment). No PSP,
@@ -3193,7 +3193,7 @@ INT DosInt21(PDOS_MACHINE machine)
         }
         else if (subfunction == DOS_INT21_EXEC_SET_STATE)
         {
-            /* -- SET EXECUTION STATE (#165). The second half of a loader's own EXEC:
+            /* SET EXECUTION STATE (#165). The second half of a loader's own EXEC:
              * AX=4B01h loaded the program, the loader did its own work, and this
              * tells DOS control is about to go to it. Measured (p_4b05, 6.22 and
              * PCem agree): AX=0000 CF=0, and the CURRENT PSP IS NOT CHANGED -- 4B01h
@@ -3282,7 +3282,7 @@ INT DosInt21(PDOS_MACHINE machine)
         }
         else
         {
-            /* -- #48: THE SAME BUILDER AS THE AH=52h CHAIN, so the two DPBs a program
+            /* #48: THE SAME BUILDER AS THE AH=52h CHAIN, so the two DPBs a program
              * can reach for one drive describe one volume. This copy had its own
              * inline fields: FAT sectors, root start and data start ZERO (a volume
              * whose files overlap its FAT), a highest-cluster word that wrapped past
@@ -3531,7 +3531,7 @@ INT DosInt21(PDOS_MACHINE machine)
     }
     else if (function == DOS_FN_AUX_INPUT || function == DOS_FN_AUX_OUTPUT || function == DOS_FN_PRINTER_OUTPUT)    /* AUX in / AUX out / PRN out */
     {
-        /* -- #251: THESE WENT NOWHERE -- "accepted and discarded", and AUX input
+        /* #251: THESE WENT NOWHERE -- "accepted and discarded", and AUX input
          * answered ^Z -- while COM1 and an LPT1 spool both exist. On DOS they are
          * the AUX and PRN drivers, which call INT 14h / INT 17h through the IVT
          * (p_auxprn logs the exact sequence 6.22 makes), so in V86 the guest is
@@ -4020,7 +4020,7 @@ INT DosInt21(PDOS_MACHINE machine)
          *         bits 4-7 if it does not (0 fail, 1 create).
          * CX on return says what happened: 1 opened, 2 created, 3 truncated.
          */
-        /* -- #210: AND 716Ch / 71A9h, THE LONG-FILENAME OPEN, ARRIVE HERE TOO -- same
+        /* #210: AND 716Ch / 71A9h, THE LONG-FILENAME OPEN, ARRIVE HERE TOO -- same
          * registers (BX mode, CX attributes, DX action, DS:SI name; 716Ch's DI alias
          * hint is not used), and Win32 takes a long name as readily as a short one.
          * The action word, the access and the "action taken" in CX are dos_lfn.h's,
@@ -4245,7 +4245,7 @@ INT DosInt21(PDOS_MACHINE machine)
         }
         else if (subfunction >= DOS_INT21_CAPITALIZE_CHAR && subfunction <= DOS_INT21_CAPITALIZE_ASCIIZ)
         {
-            /* -- CAPITALISE: a character (DL), CX bytes at DS:DX, or ASCIIZ at DS:DX.
+            /* CAPITALISE: a character (DL), CX bytes at DS:DX, or ASCIIZ at DS:DX.
              * (GH #165) Through the SAME uppercase table AL=02 hands out (dumped
              * from 6.22), so a program that capitalises through DOS and one that
              * reads the table agree. Measured: 'a'->'A', 81h->9Ah, digits kept.
@@ -4345,7 +4345,7 @@ INT DosInt21(PDOS_MACHINE machine)
         }
         else if (subfunction == DOS_INT21_SET)
         {
-            /* -- SET SERIAL (#165). Real DOS writes serial, label and file-system type
+            /* SET SERIAL (#165). Real DOS writes serial, label and file-system type
              * into the disk's boot record (p_4b05: 6.22 and PCem accept it and 6900h
              * reads the new serial back; DOSBox-X refuses). Our drives are the host's
              * own disks, so by the user's decision (2026-09-28) it is SESSION-ONLY:
@@ -4609,7 +4609,7 @@ INT DosInt21(PDOS_MACHINE machine)
 
         if ((R_DX & WORD_MASK) == DOS_INT21_COUNTRY_SET)          /* DX=FFFF selects SET, not GET */
         {
-            /* -- MEASURED, 6.22 AND PCem, NO COUNTRY.SYS (p_subfn): setting the
+            /* MEASURED, 6.22 AND PCem, NO COUNTRY.SYS (p_subfn): setting the
              * CURRENT country succeeds (AX=1 CF=0); any other fails AX=1 CF=1,
              * because the data for it would come from COUNTRY.SYS and none was
              * loaded. We are that machine: country 1 and nothing else. (GH #165)
@@ -5254,7 +5254,7 @@ INT DosInt21(PDOS_MACHINE machine)
     }
     else if (function == DOS_FN_LFN)                /* the long-filename API (#210) */
     {
-        /* -- AH=71h, THE WINDOWS 95 LONG-FILENAME API, AS STOCK NTVDM PROVIDES IT. (#210)
+        /* AH=71h, THE WINDOWS 95 LONG-FILENAME API, AS STOCK NTVDM PROVIDES IT. (#210)
          * Until now this arm answered every 71xxh with AX=7100h CF=1, the documented
          * "no LFN API here" (s81: 6.22's own answer, AX=7100h with CF CLEAR, had XP's
          * EDIT.COM take 7100h for a file handle -- p_subfn int21.716C). Stock NTVDM
@@ -6077,14 +6077,14 @@ INT DosInt21(PDOS_MACHINE machine)
     if (function != DOS_FN_EXTENDED_ERROR && (*guestFlags & 1))
         machine->LastError = (WORD)(R_AX & WORD_MASK);
 
-    /* -- #34: A HARDWARE ERROR IS A CRITICAL ERROR. Codes 19-31 (not ready, write-
+    /* #34: A HARDWARE ERROR IS A CRITICAL ERROR. Codes 19-31 (not ready, write-
      * protected, ...) go to the program's INT 24h before the call returns; the host
      * makes that call (crit_raise in main.c) and acts on the answer. Here we only
      * say so, and what the handler is to be told. Real mode only (a DPMI client's
      * reflection is separate work), and never while a handler is already running:
      * DOS does not nest INT 24h -- inside one, the call just fails.
      */
-    /* -- #275: ...AND ONLY WHERE IT CAN BE. crit_raise_ok is set by the main V86 exec
+    /* #275: ...AND ONLY WHERE IT CAN BE. crit_raise_ok is set by the main V86 exec
      * loop alone (it is the one that acts on crit_pending); #34 keyed this on "not
      * protected mode", so the nested real-mode loops -- a DPMI 0301h/0302h
      * procedure, a reflected IRQ's handler -- set crit_pending and nobody raised it.
@@ -6117,7 +6117,7 @@ INT DosInt21(PDOS_MACHINE machine)
         machine->CritAh = DosCritInt24Ah((BYTE)function);
         machine->CritCode = (BYTE)((R_AX & BYTE_MASK) - DOS_INT21_HARD_ERROR_FIRST);
     }
-    /* -- #275: A 3Fh/40h HARDWARE ERROR WHERE INT 24h CANNOT BE RAISED IS ANSWERED AS
+    /* #275: A 3Fh/40h HARDWARE ERROR WHERE INT 24h CANNOT BE RAISED IS ANSWERED AS
      * FAIL. Three such places: (1) inside the program's own INT 24h handler -- DOS
      * never nests one, and MS-DOS 4.0's HardErr (CTRLC.ASM, GOT_RIGHT_CODE) answers
      * `AL=3` itself when ERRORMODE is set, i.e. FAIL; (2) a DPMI client's INT 21h,
@@ -6154,7 +6154,7 @@ INT DosInt21(PDOS_MACHINE machine)
         trace = LogPut(trace, ", 59h=53h\r\n");
     }
 
-    /* -- s91: KEEP THE PSP's JFT TRUTHFUL (see jft_known). V86 only: in protected mode
+    /* s91: KEEP THE PSP's JFT TRUTHFUL (see jft_known). V86 only: in protected mode
      * the flags are not on a V86 stack and a DPMI client's JFT is not ours to show.
      */
     if (!g_DosInt21IsProtectedMode && !(*guestFlags & 1))

@@ -36,7 +36,7 @@
 
 #define OPL_NATIVE_HZ           49716
 
-/* -- THE OPL2 GOLDEN. A fixed register sequence touching every OPL2 feature the
+/* THE OPL2 GOLDEN. A fixed register sequence touching every OPL2 feature the
  * synth models -- 9 voices, feedback, both connections, the four waveforms
  * (with WSE), KSL, AM/VIB at full depth, key-offs, rhythm bass drum and
  * tom-tom -- rendered and hashed. The checksum was taken from the build BEFORE

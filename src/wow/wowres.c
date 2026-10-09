@@ -13,23 +13,7 @@
 
 #include "wowres.h"
 #include "host_state.h"
-#include "log.h"
-#include "ne.h"
 #include "wow32.h"
-#include "wowanchors.h"
-#include "wowsched.h"
-#include "wowcall.h"
-#include "wowmsg.h"
-#include "wowwin.h"
-#include "wowgdi.h"
-#include "wowuser.h"
-
-static PBYTE g_WowResImage  = NULL;      /* the application's file, verbatim */
-static DWORD  g_WowResLength  = 0;
-static CHAR   g_WowResPath[WOWRES_PATH_MAX];
-
-static WOWRES_CACHE_ENTRY g_WowResCache[WOWRES_CACHE];
-static INT g_WowResCacheCount = 0;
 
 /* Used before their definitions below. */
 static HICON WowResIconAt(DWORD groupOffset, DWORD groupLength, PINT picked, INT width, INT height);
@@ -51,6 +35,13 @@ static HICON WowResIconAt(DWORD groupOffset, DWORD groupLength, PINT picked, INT
  * one lookup each way, and the caller passes whichever the guest gave it.
  */
 static HICON WowResIconAt(DWORD groupOffset, DWORD groupLength, PINT picked, INT width, INT height);
+
+static PBYTE g_WowResImage  = NULL;      /* the application's file, verbatim */
+static DWORD  g_WowResLength  = 0;
+static CHAR   g_WowResPath[WOWRES_PATH_MAX];
+
+static WOWRES_CACHE_ENTRY g_WowResCache[WOWRES_CACHE];
+static INT g_WowResCacheCount = 0;
 
 static WORD WowResReadWord(DWORD offset)
 {
@@ -523,7 +514,7 @@ HMENU WowResMenuByName(PCSTR name, PINT items)
     return WowResMenuAt(offset, length, items);
 }
 
-/* -- AND THE SIZE IS AN ARGUMENT, BECAUSE THE TASKBAR ASKS FOR A SMALL
+/* AND THE SIZE IS AN ARGUMENT, BECAUSE THE TASKBAR ASKS FOR A SMALL
  * ONE. (session 47) --------------------------------------------------------
  * Measured against stock ntvdm running the same NOTEPAD.EXE on the same
  * desktop, pixel for pixel out of one screenshot:

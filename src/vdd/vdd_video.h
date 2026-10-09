@@ -97,7 +97,7 @@
 /* VESA VBE 2.0 (banked, packed-256). A0000 is the 64KB window onto VesaVram. */
 #define VIDEO_VESA_WINDOW               0x10000u                            /* 64KB banked window */
 
-/* -- VRAM HAS TO HOLD THE DEEPEST MODE WE ADVERTISE, NOT THE SHALLOWEST. (s74)
+/* VRAM HAS TO HOLD THE DEEPEST MODE WE ADVERTISE, NOT THE SHALLOWEST. (s74)
  * 512KB was exactly enough for 800x600x8 and nothing else. Advertising hi-colour
  * means 800x600x24 = 1,440,000 bytes, so a mode the guest is allowed to SET must
  * have somewhere to live -- a mode list that promises more than VRAM can back is
@@ -312,7 +312,7 @@ typedef struct _VIDEO_STATE
     WORD VesaStartX;
     WORD VesaStartY;
                                         /* 4F06 logical pitch lives in VesaStride */
-    /* -- THE VESA DISPLAY START ON THE HARDWARE'S SCHEDULE (#226), the same three stages
+    /* THE VESA DISPLAY START ON THE HARDWARE'S SCHEDULE (#226), the same three stages
      * as the CRTC start (CrtcStart -> StartVs -> CrtcStartLive, see VideoLatch):
      * the start as a BYTE offset into VesaVram as the "register" holds it, as loaded
      * at the last retrace start, and as the displayed frame uses it. A byte offset
@@ -322,7 +322,7 @@ typedef struct _VIDEO_STATE
     UINT32 VesaOrigin;
     UINT32 VesaOriginVs;
     UINT32 VesaOriginLive;
-    /* -- 4F07 BL=80h/82h "SET DISPLAY START DURING VERTICAL RETRACE" MUST NOT RETURN
+    /* 4F07 BL=80h/82h "SET DISPLAY START DURING VERTICAL RETRACE" MUST NOT RETURN
      * BEFORE THE RETRACE. The INT 10h handler runs under the host lock, so it cannot
      * spin there; it computes when the call completes, in the model's microseconds
      * (st->TimeUs), and the HOST honours it after releasing the lock -- see
@@ -341,7 +341,7 @@ typedef struct _VIDEO_STATE
     WORD CursorShape;                 /* INT 10h AH=01 CX: start/end scan lines */
     BYTE  IsCursorBlink;              /* host setting: blink it, as a real CRTC does */
     BYTE  Page;
-    /* -- #252: THE BIOS KEEPS ONE CURSOR PER PAGE (0040:0050, eight words). CursorRow/
+    /* #252: THE BIOS KEEPS ONE CURSOR PER PAGE (0040:0050, eight words). CursorRow/
      * CursorColumn stay THE ACTIVE PAGE's (everything that draws the cursor reads them);
      * PageRow/PageColumn hold the other seven, swapped in and out by AH=05h.
      */
@@ -419,7 +419,7 @@ typedef struct _VIDEO_STATE
     BYTE  EnableSetReset;    /* GR1 */
     BYTE  FunctionRotate;  /* GR3: bits0-2 rotate count, bits3-4 ALU */
     BYTE  ReadMap;     /* GR4: plane read in read-mode 0 */
-    /* -- READ MODE 1 IS COLOUR COMPARE, AND IT IS HOW A GAME ASKS THE HARDWARE
+    /* READ MODE 1 IS COLOUR COMPARE, AND IT IS HOW A GAME ASKS THE HARDWARE
      * "WHICH OF THESE EIGHT PIXELS ARE SOLID?". A read in mode 1 does not return a
      * plane; it returns one BIT PER PIXEL, set where the pixel's 4-bit colour
      * matches GR2 (Color Compare) in every plane GR7 (Color Don't Care) says to
@@ -710,7 +710,7 @@ typedef struct _VIDEO_STATE
      */
     BYTE  UnimplementedFunctions[32];             /* INT 10h AH values seen but unhandled */
     BYTE  UnimplementedModes[32];           /* mode numbers requested but unsupported */
-    /* -- WHICH VESA MODES THE GUEST ASKED ABOUT, AND WHETHER WE HAD THEM. (s74)
+    /* WHICH VESA MODES THE GUEST ASKED ABOUT, AND WHETHER WE HAD THEM. (s74)
      * `UnimplementedModes` is a 256-bit map indexed by mode number, so it cannot hold a
      * VBE mode at all (they start at 0x100). heaven7 asks 4F01 twice, gets 0x014F
      * twice and prints "VESA error" -- and nothing in the log said WHICH modes,
@@ -743,7 +743,7 @@ typedef struct _VIDEO_STATE
     WORD Vesa07MaxX;
     WORD Vesa07MaxY;
     UINT32 Vesa07Rejected;               /* 4F07 sets refused (would not fit) */
-    /* -- #53: THE PORTS THE 4F0Ah PROTECTED-MODE CODE DRIVES (01CEh index, 01CFh data;
+    /* #53: THE PORTS THE 4F0Ah PROTECTED-MODE CODE DRIVES (01CEh index, 01CFh data;
      * see vbe_pm.asm). VbeIndex = the selected index, VbeStartLow the low word of a
      * display start awaiting its high word. The counters are the STAGE2 evidence that
      * a client is calling the PM block instead of INT 10h: banks set, starts set, and
@@ -795,7 +795,7 @@ typedef struct _VIDEO_STATE
      * own it reads zero for every guest that ever ran.
      */
     UINT32 DacHighMax;
-    /* -- A VRAM WATCHPOINT: EVERY WRITE TO ONE BYTE, WITH THE REGISTERS THAT MADE IT.
+    /* A VRAM WATCHPOINT: EVERY WRITE TO ONE BYTE, WITH THE REGISTERS THAT MADE IT.
      * A histogram says which idioms a run used; it cannot say which idiom produced
      * the wrong pixel, because every idiom is in the histogram. This records the
      * whole write -- mode, map mask, Enable Set/Reset, Set/Reset, ALU, bit mask,

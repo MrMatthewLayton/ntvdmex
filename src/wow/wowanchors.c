@@ -13,16 +13,6 @@
 
 #include "wowanchors.h"
 #include "host_state.h"
-#include "log.h"
-#include "ne.h"
-#include "wow32.h"
-#include "wowsched.h"
-#include "wowcall.h"
-#include "wowmsg.h"
-#include "wowres.h"
-#include "wowwin.h"
-#include "wowgdi.h"
-#include "wowuser.h"
 
 /* SHELL: every stub in the module, generated:
  * Regenerate with `tools/ne/wowthunks.py --anchor <the module>`.
@@ -457,7 +447,7 @@ const WOW_ANCHOR g_WowCommdlgAnchors[] = {
     { 0x014,   4, 0x007e }, { 0x01a,   0, 0x0090 },
 };
 
-/* -- KEYBOARD: every stub in the module, generated (s89) -- same reason: it was
+/* KEYBOARD: every stub in the module, generated (s89) -- same reason: it was
  * two rows (AnsiToOem / OemToAnsi). Regenerate with
  * `tools/ne/wowthunks.py --anchor guest/ne/keyboard.drv`.
  */
@@ -468,7 +458,7 @@ const WOW_ANCHOR g_WowKeyboardAnchors[] = {
     { 0x086,  10, 0x00e1 }, { 0x087,  10, 0x00ee },
 };
 
-/* -- SOUND: every stub in the module, generated (s90, #299). Regenerate with
+/* SOUND: every stub in the module, generated (s90, #299). Regenerate with
  * `tools/ne/wowthunks.py --anchor guest/ne/sound.drv`.
  */
 const WOW_ANCHOR g_WowSoundAnchors[] = {
@@ -480,7 +470,7 @@ const WOW_ANCHOR g_WowSoundAnchors[] = {
     { 0x010,   4, 0x00e0 }, { 0x011,   0, 0x00ed },
 };
 
-/* -- MMSYSTEM (s90, #278): its whole WOW table is two stubs -- id 2 (28 argument
+/* MMSYSTEM (s90, #278): its whole WOW table is two stubs -- id 2 (28 argument
  * bytes) and id 1 (none). See src/wow/wowmmedia.h.
  */
 const WOW_ANCHOR g_WowMmediaAnchors[] = {

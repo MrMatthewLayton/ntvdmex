@@ -102,7 +102,7 @@ static PCSTR g_Headers[] = {
  * argument-byte count off the module's own thunk. None of them is a guess.
  */
 static const WOW_TEST_SERVICE g_Services[] = {
-  /* --- the two that collided, and the reason part 1 exists --------------- */
+  /* the two that collided, and the reason part 1 exists: */
   { "USER InvalidateRect(hWnd, lpRect, bErase)", 8,
     { {"WOWUSER_IR_ARG_ERASE",2}, {"WOWUSER_IR_ARG_RECT",4}, {"WOWUSER_IR_ARG_HWND",2}, {0,0} } },
   { "USER InvertRect(hDC, lpRect)", 6,
@@ -110,7 +110,7 @@ static const WOW_TEST_SERVICE g_Services[] = {
   { "USER SetMenu(hWnd, hMenu)", 4,
     { {"WOWUSER_SETMENU_ARG_MENU",2}, {"WOWUSER_SETMENU_ARG_HWND",2}, {0,0} } },
 
-  /* --- session 50's new services ---------------------------------------- */
+  /* session 50's new services: */
   { "USER SetTimer(hWnd, nIDEvent, wElapse, lpTimerFunc)", 10,
     { {"WOWUSER_ST_ARG_PROC",4}, {"WOWUSER_ST_ARG_ELAPSE",2}, {"WOWUSER_ST_ARG_ID",2},
       {"WOWUSER_ST_ARG_HWND",2}, {0,0} } },
@@ -146,11 +146,11 @@ static const WOW_TEST_SERVICE g_Services[] = {
   { "USER GetLastActivePopup(hwndOwner)", 2,
     { {"WOWUSER_GLAP_ARG_HWND",2}, {0,0} } },
 
-  /* --- long-standing ones, so the table is not only new code ------------- */
+  /* long-standing ones, so the table is not only new code: */
   { "USER GetClientRect(hWnd, lpRect)", 6,
     { {"WOWUSER_GCR_ARG_RECT",4}, {"WOWUSER_GCR_ARG_HWND",2}, {0,0} } },
 
-  /* --- GDI ---------------------------------------------------------------- */
+  /* GDI: */
   { "GDI CreateDIBitmap(hDC, lpbmih, dwInit, lpbInit, lpbmi, wUsage)", 20,
     { {"WOWGDI_CDIB_ARG_USAGE",2}, {"WOWGDI_CDIB_ARG_BMI",4}, {"WOWGDI_CDIB_ARG_BITS",4},
       {"WOWGDI_CDIB_ARG_INIT",4}, {"WOWGDI_CDIB_ARG_BMIH",4}, {"WOWGDI_CDIB_ARG_HDC",2}, {0,0} } },
@@ -170,7 +170,7 @@ static const WOW_TEST_SERVICE g_Services[] = {
       {"WOWGDI_SDI_ARG_DSTW",2}, {"WOWGDI_SDI_ARG_DSTY",2}, {"WOWGDI_SDI_ARG_DSTX",2},
       {"WOWGDI_SDI_ARG_HDC",2} } },
 
-  /* --- #295: the metafile enumerator and its record player (12 bytes each, the
+  /* #295: the metafile enumerator and its record player (12 bytes each, the
    * thunk width in docs/inventory/win16-surface.md) ----------------------
    */
   { "GDI EnumMetaFile(hdc, hmf, lpfn, lParam)", 12,
@@ -180,7 +180,7 @@ static const WOW_TEST_SERVICE g_Services[] = {
     { {"WOWGDI_PMFR_ARG_NHANDLES",2}, {"WOWGDI_PMFR_ARG_MR",4}, {"WOWGDI_PMFR_ARG_HT",4},
       {"WOWGDI_PMFR_ARG_HDC",2}, {0,0} } },
 
-  /* --- krnl386 ------------------------------------------------------------ */
+  /* krnl386: */
   { "krnl386 GetPrivateProfileInt(app, key, nDefault, file)", 14,
     { {"WOW32_GETPRIVATEPROFILEINT_ARG_FILE",4}, {"WOW32_GETPRIVATEPROFILEINT_ARG_DEFAULT",2}, {"WOW32_GETPRIVATEPROFILEINT_ARG_KEY",4},
       {"WOW32_GETPRIVATEPROFILEINT_ARG_APP",4}, {0,0} } },

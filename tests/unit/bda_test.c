@@ -79,7 +79,7 @@ INT main(VOID)
 
     printf("== BDA / EBDA battery (#253) ==\n");
 
-    /* -- THE NUMBERS, worked from the map rather than restated. 0x9FC0 paragraphs is
+    /* THE NUMBERS, worked from the map rather than restated. 0x9FC0 paragraphs is
      * 639 KB exactly; 0xA000 - 0x9FC0 = 0x40 paragraphs = 1 KB. Measured on 6.22
      * (int12.memk = 027Fh, mcb.chain.ends.at = 9FC0h).
      */
@@ -88,7 +88,7 @@ INT main(VOID)
     BdaTestCheck(BIOS_EBDA_KB == BDA_TEST_EBDA_KB, "EBDA size = 1 KB");
     BdaTestCheck(BIOS_BASE_MEM_KB + BIOS_EBDA_KB == BDA_TEST_CMOS_KB, "base memory + EBDA = the 640 KB the CMOS reports");
 
-    /* -- THE WRITE. Poison everything first so a field the init forgets is visible. */
+    /* THE WRITE. Poison everything first so a field the init forgets is visible. */
     memset(g_Memory, BDA_TEST_POISON, sizeof g_Memory);
     firstMcb = DosMcbInitialize(g_Memory);
     BiosBdaInitialize(g_Memory, BDA_TEST_EQUIPMENT);
@@ -108,14 +108,14 @@ INT main(VOID)
                  "neighbours untouched (LPT3 slot below, 0040:0015 above)");
     BdaTestCheck(g_Memory[BDA_TEST_640K_LINEAR] == BDA_TEST_POISON && g_Memory[BDA_TEST_EBDA_LINEAR_640 - 1] == BDA_TEST_POISON, "nothing written outside 9FC0:0000..03FF");
 
-    /* -- THE LIVE HALF: a settings change rewrites 0010 and nothing else. */
+    /* THE LIVE HALF: a settings change rewrites 0010 and nothing else. */
     BiosBdaSetEquipment(g_Memory, BDA_TEST_NEW_EQUIPMENT);
     BdaTestCheck(BdaTestReadWord(BIOS_BDA_BASE + BIOS_BDA_EQUIPMENT) == BDA_TEST_NEW_EQUIPMENT
                  && BdaTestReadWord(BIOS_BDA_BASE + BIOS_BDA_MEMORY_KB) == BDA_TEST_BASE_KB_640
                  && BdaTestReadWord(BIOS_BDA_BASE + BIOS_BDA_EBDA_SEGMENT) == BDA_TEST_EBDA_SEGMENT_640,
                  "set_equipment: 0010 follows, 000E/0013 unchanged");
 
-    /* -- NOTHING DOS OWNS OVERLAPS THE EBDA. The chain's last block must end exactly
+    /* NOTHING DOS OWNS OVERLAPS THE EBDA. The chain's last block must end exactly
      * where the EBDA begins, and a top reservation (the CDS) must come from BELOW it --
      * the reason the EBDA could be given its kilobyte at all.
      */
@@ -126,7 +126,7 @@ INT main(VOID)
         BdaTestCheck(g_Memory[BDA_TEST_EBDA_LINEAR_640] == BDA_TEST_EBDA_KB, "reserve_top: EBDA size byte survives");
     }
 
-    /* -- #136: CONVENTIONAL MEMORY AS A SETTING. 640 must be EXACTLY today's machine;
+    /* #136: CONVENTIONAL MEMORY AS A SETTING. 640 must be EXACTLY today's machine;
      * anything less moves INT 12h, the EBDA and the MCB top together.
      */
     BdaTestCheck(BiosConventionalTopParagraph(BDA_TEST_KB_640) == DOS_MEM_TOP, "conv 640 KB -> top 9FC0h = DOS_MEM_TOP (default unchanged)");

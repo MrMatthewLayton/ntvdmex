@@ -472,7 +472,7 @@ INT InstallPerform(INT want, INT force, PSTR message, DWORD cap)
     if (installAction == INSTALL_ACT_NOTHING)
         return 1;
 
-    /* -- THE READ-BACK. */
+    /* THE READ-BACK. */
     InstallRead(current, sizeof current);
     state = InstallClassify(current[0] ? current : NULL, self);
 

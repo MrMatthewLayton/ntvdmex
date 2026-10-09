@@ -618,7 +618,7 @@ static LONG            g_FullscreenStyle;      /* the style we took off */
 static LONG            g_FullscreenExStyle;
 static INT             g_FullscreenSaved;
 
-/* -- START FULLSCREEN (s68). One decision per process, on the UI thread, and it only
+/* START FULLSCREEN (s68). One decision per process, on the UI thread, and it only
  * ever turns fullscreen ON: Alt+Enter owns everything after that. `graphics` says
  * whether the guest is in a graphics mode right now -- Always fires regardless,
  * Graphics only waits for it, Never does nothing.
@@ -989,7 +989,7 @@ static HMENU BuildMenu(VOID)
     MenuCombo(menu, MENU_TEXT_SCALER,      SET_SCALER,    IDM_SCALER_0);
     MenuCombo(menu, MENU_TEXT_FILTERING,   SET_FILTER,    IDM_FILTER_0);
     MenuCombo(menu, MENU_TEXT_FRAME_SKIP,  SET_FRAMESKIP, IDM_FSKIP_0);
-    /* -- ASPECT RATIO IS A LOCK ON THE WINDOW, not just a letterbox. Picking a
+    /* ASPECT RATIO IS A LOCK ON THE WINDOW, not just a letterbox. Picking a
      * ratio constrains the window's shape as you drag it, so the picture fills the
      * client and there are no bars at all -- letterboxing only reappears if the
      * window ends up off-aspect anyway (maximised). "None" is a free resize.
@@ -1038,7 +1038,7 @@ static HMENU BuildMenu(VOID)
      */
     tools = MenuPopup();                                               /* Tools */
 
-    /* -- s81 (#148), user decision: every UNIMPLEMENTED item is removed -- Restart,
+    /* s81 (#148), user decision: every UNIMPLEMENTED item is removed -- Restart,
      * Pause, Ctrl+Alt+Del, Key Mapper, the mount/boot/swap/drive items, the whole
      * Debug submenu, Help's Quick Start / Keyboard Shortcuts. They are recorded for
      * review in #149, #150 and #151. This reverses the old scaffold-stubs-enabled rule
@@ -1080,7 +1080,7 @@ static HMENU BuildMenu(VOID)
     MenuSubmenu(tools, MENU_TEXT_CAPTURE, menu);
 
     MenuSeparator(tools);
-    /* -- INSTALLING IS AN ACTION, SO IT IS ON A MENU AND NOT A SETTINGS PAGE.
+    /* INSTALLING IS AN ACTION, SO IT IS ON A MENU AND NOT A SETTINGS PAGE.
      * It changes a machine-wide registry value, needs Administrator, and is the
      * one thing here that outlives the process -- none of which belongs behind a
      * tab of checkboxes. The same three verbs exist on the command line
@@ -2918,7 +2918,7 @@ static INT WindowScaleFits(INT scale)
     return pictureWidth <= roomWidth && pictureHeight <= roomHeight;
 }
 
-/* -- EVERY MENU-BACKED SETTING'S TICK, FROM THE ONE PLACE THAT KNOWS THE VALUES. -
+/* EVERY MENU-BACKED SETTING'S TICK, FROM THE ONE PLACE THAT KNOWS THE VALUES:
  * CheckMenuRadioItem for the dropdowns rather than a tick, because they are
  * exclusive and a bullet is what Windows uses to say so -- and because it clears
  * the siblings in one call. A menu showing two scalers at once is worse than one
@@ -2955,7 +2955,7 @@ VOID MenuViewSync(HWND window)
         CheckMenuItem(menu, g_MenuChecks[index].Id, MF_BYCOMMAND
                       | (g_Settings.Values[g_MenuChecks[index].IsSet] ? MF_CHECKED : MF_UNCHECKED));
 
-    /* -- A SCALE THAT CANNOT FIT THE DISPLAY IS GREYED, NOT SILENTLY SUBSTITUTED.
+    /* A SCALE THAT CANNOT FIT THE DISPLAY IS GREYED, NOT SILENTLY SUBSTITUTED.
      * HostApplyScale() steps down until the window fits, which is the right
      * thing to DO and the wrong thing to say nothing about: picking 3x on a
      * 1680x1050 desktop quietly gave 2x, so the menu reported a size the window
@@ -2974,7 +2974,7 @@ VOID MenuViewSync(HWND window)
             EnableMenuItem(menu, IDM_WINSIZE_0 + (UINT)(scale - 1), MF_BYCOMMAND
                            | (WindowScaleFits(scale) ? MF_ENABLED : MF_GRAYED)); }
 
-    /* -- RULE 1, SAID IN THE MENU. Same argument as the scale items above and NOT the
+    /* RULE 1, SAID IN THE MENU. Same argument as the scale items above and NOT the
      * scaffold-stub case: Capture Mouse is implemented, and it is impossible for a
      * guest that has never called INT 33h -- there is nothing to capture the mouse
      * INTO. An enabled item that silently does nothing is the worse answer.
@@ -3087,7 +3087,7 @@ VOID HostApplyWindowSize(HWND window, DWORD index)
     HostApplyScale(window, (INT)index + 1 <= HOST_SCALE_MAX ? (INT)index + 1 : 1);
 }
 
-/* -- #325: THE WINDOW FOLLOWS THE MODE. When the frame's size changes -- text to a
+/* #325: THE WINDOW FOLLOWS THE MODE. When the frame's size changes -- text to a
  * 320x200 game, a VESA mode, Mode X -- a normal (not maximised, not fullscreen)
  * window is re-sized to the new picture at the scale it is at. Debounced: the new
  * size must hold for 150 ms, so a program that passes through a mode on its way to
@@ -3127,8 +3127,8 @@ static VOID HostFollowFrame(HWND window)
     HostApplyScale(window, g_ScaleWant ? g_ScaleWant : (INT)g_Settings.Values[SET_WINSIZE] + 1);
 }
 
-/* --- the UI thread: window + present + frame timer ------------------------- */
-/* -- #219: ONLY THE FOCUSED NTVDMEX WINDOW RUNS. (user, s83 sweep; decision 2026-09-28:
+/* the UI thread: window + present + frame timer: */
+/* #219: ONLY THE FOCUSED NTVDMEX WINDOW RUNS. (user, s83 sweep; decision 2026-09-28:
  * always, no setting) Skyroads and Doom side by side were "very jittery": two guests
  * each burning a core. So a window that loses focus is paused COMPLETELY -- CPU,
  * timers, sound, input -- and carries on exactly where it was when it gets focus back.
@@ -3270,7 +3270,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         CursorIdleTick(window);                    /* #218: 5 s still over the video -> hide */
         CaptureClipGuard(window);                  /* captured -> the clip is still ours */
         BackgroundPriorityTick(window);                        /* #211 */
-        /* -- THE 5 ms FRAME TIMER WAS NEVER ACTUALLY HONOURED, AND THE PACER REVEALED IT.
+        /* THE 5 ms FRAME TIMER WAS NEVER ACTUALLY HONOURED, AND THE PACER REVEALED IT.
          * SetTimer asks for VID_PRESENT_TICK_MS = 5, but XP's default timer granularity
          * is 15.6 ms, so this body has ALWAYS run at ~64 Hz -- which is exactly the
          * "HostPitSync ran 65 times a second" that e220033 measured and set out to
@@ -3633,7 +3633,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 VddVideoFrameTouch(&g_Video);               /* raster-split state + frame no. */
                 g_PresentDdraw.IsModeVesa = g_Video.IsVesa;             /* #228: Auto aspect needs it */
                 PresentDdrawSnapshot(&g_PresentDdraw, &g_Video.Frame); /* consistent copy UNDER lock */
-                /* -- THE GRAPHICS CURSOR GOES ON THE SNAPSHOT, NEVER ON THE FRAME. (#264)
+                /* THE GRAPHICS CURSOR GOES ON THE SNAPSHOT, NEVER ON THE FRAME. (#264)
                  * It used to be stamped into g_Video.frame.pixels before the snapshot --
                  * and in mode 13h that pointer IS st->vmem, the guest's own A0000
                  * aperture (vid_frame: "vmem is the FB"); in an 8-bpp VESA mode it is
@@ -3718,7 +3718,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             if (GetTickCount() - g_CaptureStart >= g_CaptureDelayMs        /* #58 */
                 && (capTick++ % (g_CaptureMs / VID_PRESENT_TICK_MS + 1)) == 0 && captureSequence < CAPTURE_SHOTS_MAX)
             {
-                /* -- [WARNING] THESE INDICES WERE HARDCODED, AND THE PATH MOVED UNDER THEM.
+                /* [WARNING] THESE INDICES WERE HARDCODED, AND THE PATH MOVED UNDER THEM.
                  * They were 15 and 16, which addressed the two digits back when this
                  * was `C:\ntvdmex\shot00.bmp`. The s61 one-folder move made it
                  * `C:\Documents and Settings\...\out\shot00.bmp`, where 15 and 16
@@ -3737,7 +3737,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 PCSTR path;
                 name[CAPTURE_NAME_DIGITS] = (CHAR)('0' + (captureSequence / DECIMAL_RADIX) % DECIMAL_RADIX);
                 name[CAPTURE_NAME_DIGITS + 1] = (CHAR)('0' + captureSequence % DECIMAL_RADIX);
-                /* -- ...AND THE SAME FRAME AS TEXT, when asked. A picture cannot say
+                /* ...AND THE SAME FRAME AS TEXT, when asked. A picture cannot say
                  * whether a missing line was never written or merely never drawn,
                  * and that distinction is where three wrong guesses went on
                  * QBasic's empty file list. Gated: no run pays for it unaltered.
@@ -3885,7 +3885,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
 
             if (PresentIsNative((INT)g_Settings.Values[SET_ASPECT]))
             {
-                /* -- #325: NATIVE SNAPS TO WHOLE MULTIPLES while the frame is dragged --
+                /* #325: NATIVE SNAPS TO WHOLE MULTIPLES while the frame is dragged:
                  * the nearest k to where the held edge is, never below 1x -- and that
                  * k becomes the window's scale, so the next mode change keeps it.
                  */
@@ -4309,7 +4309,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         break;
 
     case WM_ACTIVATE:
-        /* -- RULE 5 (s69, user spec): GAINING FOCUS RE-CAPTURES, for a guest that asked
+        /* RULE 5 (s69, user spec): GAINING FOCUS RE-CAPTURES, for a guest that asked
          * for the mouse. The click-in-the-video path (below) already covers "click the
          * window"; this adds "focus the window" -- alt-tab back, or the click that
          * activated an unfocused window (WA_CLICKACTIVE), grabs the mouse straight
@@ -4524,7 +4524,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
              */
             if (g_Captured && I33Width() && I33Height())
             {
-                /* -- #291 (user, s89): SENSITIVITY DRIVES THE CAPTURED POINTER. A game
+                /* #291 (user, s89): SENSITIVITY DRIVES THE CAPTURED POINTER. A game
                  * that reads the POSITION (Lemmings: INT 33h 03h only, never 0Bh)
                  * was never touched by the setting, and a mickey moved it one GAME
                  * pixel -- across a 320-wide picture scaled up on screen, much too
@@ -4660,7 +4660,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         if (!MouseGoesToGuest())
             break;
 
-        /* -- #325: g_MouseX/y are in the MODE's extent (gw x gh -- what the driver reports,
+        /* #325: g_MouseX/y are in the MODE's extent (gw x gh -- what the driver reports,
          * 640 wide in text whatever the cell width), mapped through the rectangle the
          * picture was actually drawn into. It used the whole client, which put the
          * guest pointer in the wrong place whenever the picture was letterboxed --

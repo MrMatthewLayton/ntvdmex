@@ -13,7 +13,7 @@
 
 #include "log.h"
 
-/* -- ONE HANDLE, KEPT OPEN -- AND THIS IS A PERFORMANCE FIX, NOT TIDYING.
+/* ONE HANDLE, KEPT OPEN -- AND THIS IS A PERFORMANCE FIX, NOT TIDYING.
  * LogAppend used to CreateFile + WriteFile + CloseHandle on EVERY line. An
  * open/close pair is two kernel transitions plus filesystem metadata work, and
  * it is the dominant cost of a log line by a wide margin -- the payload is
@@ -141,7 +141,7 @@ static VOID LogClose(VOID)
 }
 
 /* Overwrite `path` with [buf..end). Resets the runaway guard -- a new run starts here. */
-/* -- [CAUTION] A CALLER WITH end < buf IS A BUG IN THE CALLER, AND IT USED TO BE FATAL TO THE
+/* [CAUTION] A CALLER WITH end < buf IS A BUG IN THE CALLER, AND IT USED TO BE FATAL TO THE
  * INSTRUMENT (s73). (DWORD)(end - buf) wraps to ~4 GB, the runaway guard trips on
  * that ONE call, and every later line of the run is suppressed -- the file holds the
  * cap marker and nothing else, which reads as "runaway guest" when it is a stale

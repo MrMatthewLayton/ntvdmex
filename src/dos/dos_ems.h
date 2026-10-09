@@ -140,7 +140,7 @@ static inline VOID DosEmsClearHandleName(_Out_ PDOS_EMS_HANDLE handleEntry)
         handleEntry->Name[nameIndex] = 0;
 }
 
-/* --- bring-up -------------------------------------------------------------- */
+/* bring-up: */
 
 static inline VOID DosEmsInitialize(
     _Out_ PDOS_EMS_STATE state,
@@ -220,7 +220,7 @@ static inline VOID DosEmsWriteBackWindow(_Inout_ PDOS_EMS_STATE state, _In_ INT 
                        state->Frame + (DWORD)windowIndex * DOS_EMS_PAGE_SIZE);
 }
 
-/* --- fn 42h: page counts --------------------------------------------------- */
+/* fn 42h: page counts: */
 static inline VOID DosEmsGetPageCounts(
     _In_ PCDOS_EMS_STATE state,
     _Out_opt_ PWORD freePages,
@@ -233,7 +233,7 @@ static inline VOID DosEmsGetPageCounts(
         *freePages  = (WORD)(state->TotalPages - state->UsedPages);
 }
 
-/* --- fn 43h: allocate `pages` logical pages, returns a handle ------------- *
+/* fn 43h: allocate `pages` logical pages, returns a handle:
  * EMS forbids a zero-page allocation here (fn 43h); fn 5Ah allows it.
  */
 static inline BOOL DosEmsAllocatePages(
@@ -307,7 +307,7 @@ static inline BOOL DosEmsAllocatePages(
     return TRUE;
 }
 
-/* --- fn 44h: map logical page `logicalPage` of `handle` into window `physicalPage` *
+/* fn 44h: map logical page `logicalPage` of `handle` into window `physicalPage`
  * logicalPage == DOS_EMS_UNMAP_LOGICAL_PAGE (0xFFFF) unmaps the window (LIM 4.0).
  */
 static inline BOOL DosEmsMapPage(
@@ -370,7 +370,7 @@ static inline BOOL DosEmsMapPage(
     return TRUE;
 }
 
-/* --- fn 45h: deallocate a handle ------------------------------------------- */
+/* fn 45h: deallocate a handle: */
 static inline BOOL DosEmsDeallocatePages(
     _Inout_ PDOS_EMS_STATE state,
     _In_ WORD handle,
@@ -409,7 +409,7 @@ static inline BOOL DosEmsDeallocatePages(
     return TRUE;
 }
 
-/* --- fn 4Ch: pages owned by a handle --------------------------------------- */
+/* fn 4Ch: pages owned by a handle: */
 static inline BOOL DosEmsGetHandlePages(
     _In_ PDOS_EMS_STATE state,
     _In_ WORD handle,
@@ -435,7 +435,7 @@ static inline BOOL DosEmsGetHandlePages(
     return TRUE;
 }
 
-/* --- fn 4Bh: number of open handles ---------------------------------------- */
+/* fn 4Bh: number of open handles: */
 static inline INT DosEmsGetHandleCount(_In_ PCDOS_EMS_STATE state)
 {
     INT handleIndex;
@@ -448,7 +448,7 @@ static inline INT DosEmsGetHandleCount(_In_ PCDOS_EMS_STATE state)
     return handleCount;
 }
 
-/* --- fn 4Dh: get all handle pages ------------------------------------------- *
+/* fn 4Dh: get all handle pages:
  * LIM 4.0: ES:DI receives one {handle, pages} word pair per ACTIVE handle, BX the
  * count. Missing until s81 (#47): MEM /D calls it and, with AH=84h and BX left as
  * whatever it held, listed 256 handles of 4000h pages each. `entries` may be 0 to
@@ -484,7 +484,7 @@ static inline INT DosEmsGetAllHandlePages(
     return entryCount;
 }
 
-/* --- fn 53h: get (AL=0) / set (AL=1) a handle's 8-byte name ---------------- *
+/* fn 53h: get (AL=0) / set (AL=1) a handle's 8-byte name:
  * LIM 4.0. A bad handle is 83h -- and that is what matters most: MEM /D walks
  * handles 0-255 with 4Ch and 53h and lists every one not refused as BAD HANDLE, so
  * while 53h answered 84h (undefined function) it listed all 256 (s81, #47).
@@ -521,7 +521,7 @@ static inline BOOL DosEmsGetSetHandleName(
     return TRUE;
 }
 
-/* --- fn 51h: reallocate a handle's page count ------------------------------ *
+/* fn 51h: reallocate a handle's page count:
  * Preserves min(old,new) pages of content. Active mappings of pages that no
  * longer exist after a shrink are dropped.
  */
@@ -607,7 +607,7 @@ static inline BOOL DosEmsReallocatePages(
     return TRUE;
 }
 
-/* --- fn 47h/48h: save / restore the page-map context for a handle ---------- */
+/* fn 47h/48h: save / restore the page-map context for a handle: */
 static inline BOOL DosEmsSavePageMap(
     _In_ PDOS_EMS_STATE state,
     _In_ WORD handle,

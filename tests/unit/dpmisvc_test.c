@@ -43,14 +43,14 @@ INT main(VOID)
 
     printf("== DPMI INT 31h service rules (GH #248) ==\n");
 
-    /* ---- 0400h / 1687h ---- */
+    /* 0400h / 1687h: */
     CHECK(DPMI_CPU_CLASS == 4, "CPU class is 4 -- the value 1687h has reported since s79");
     CHECK(DPMI_VERSION_090 == 0x005A, "0400h AX = 005Ah (version 0.90)");
     CHECK((DPMI_VER_DX >> 8) == 0x08 && (DPMI_VER_DX & 0xFF) == 0x70,
           "0400h DH = master PIC base 08h, DL = slave PIC base 70h");
     CHECK(DPMI_VER_BX & 1, "0400h BX bit 0: a 32-bit host");
 
-    /* ---- the selector rule ---- */
+    /* the selector rule: */
     CHECK(!DpmiIsSelectorValid(0x0000, LDTMAX, 1, 0), "null selector: invalid");
     CHECK(!DpmiIsSelectorValid(0x0007, LDTMAX, 1, 0), "index 0 with TI/RPL bits: still the null descriptor");
     CHECK(!DpmiIsSelectorValid(0x0028, LDTMAX, 1, 0), "a GDT selector (TI=0): invalid even if 'allocated'");
@@ -65,7 +65,7 @@ INT main(VOID)
           && !DpmiIsSelectorValid(0x0028, LDTMAX, 0, 1),
           "WOW: the range is still checked (null, past the end, GDT)");
 
-    /* ---- callbacks ---- */
+    /* callbacks: */
     CHECK(DPMI_CB_SLOTS >= 16, "at least 16 callbacks (the spec's minimum; was 4)");
     isOk = 1;
 
@@ -98,7 +98,7 @@ INT main(VOID)
     CHECK(DpmiCallbackSlotAt(CBBASE, HDLR, HDLR, 0xE0) < 0,
           "trap: the INT 33h return stub at 0xE0 is not a callback");
 
-    /* ---- 0503h plan ---- */
+    /* 0503h plan: */
     { UINT32 copySize = 77;
       CHECK(DpmiResizePlan(0, 0x1000, &copySize) == DPMI_RESIZE_BAD && copySize == 0, "0503h: size 0 is 8021h");
       CHECK(DpmiResizePlan(0x800, 0x1000, &copySize) == DPMI_RESIZE_INPLACE, "0503h: shrink stays put");

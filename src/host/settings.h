@@ -71,7 +71,7 @@
 typedef enum
 {
     SET_DOSMAJ = 0, SET_DOSMIN, SET_PITPACE, SET_UITICK,
-    /* -- THE PROCESSOR PAGE IS ONE CONTROL NOW (session 60). CpuType/CpuCore/
+    /* THE PROCESSOR PAGE IS ONE CONTROL NOW (session 60). CpuType/CpuCore/
      * Cycles were read by nothing (DOSBox vocabulary on a real-CPU host); Fpu and
      * Turbo were live but pointless as knobs; the granularity slider and the
      * core-affinity box were removed to file knobs. SpeedMode -- the optional

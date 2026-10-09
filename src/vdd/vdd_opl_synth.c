@@ -164,7 +164,7 @@
  */
 #define OPL_WAVEFORM7_SLOPE_SHIFT           3
 
-/* --- the two low-frequency oscillators ------------------------------------ */
+/* the two low-frequency oscillators: */
 /* TREMOLO. MEASURED (`oplprobe lfo`): a 52-step triangle climbing to 26 envelope
  * units and back, one step every 256 samples -- 3.73 Hz, and 4.89 dB deep at DAM=1
  * against 4.87 measured. It is a STAIRCASE, not a sine: the reference's amplitude
@@ -187,7 +187,7 @@
  */
 #define OPL_VIBRATO_STEP_SHIFT              10      /* 1024 samples per vibrato step */
 
-/* --- rhythm mode ---------------------------------------------------------- *
+/* rhythm mode:
  * With 0xBD bit 5 set, channels 6-8 stop being melodic voices and become five
  * percussion ones. Everything below was mapped from the OUTSIDE (`oplprobe
  * rhythm`) rather than written down from memory: each operator was silenced in
@@ -411,7 +411,7 @@ static INT32 OplWaveform(BYTE waveform, UINT32 phaseIndex, INT *isNegative, INT 
     }
 }
 
-/* -- WHICH WAVEFORM ACTUALLY PLAYS. Three chips' worth of rules over one 3-bit
+/* WHICH WAVEFORM ACTUALLY PLAYS. Three chips' worth of rules over one 3-bit
  * field, decided HERE (at render time) because the gating registers can be
  * written after the waveform is:
  * OPL2         2 bits, and only while WSE (0x01 bit 5) is set -- with WSE
@@ -430,7 +430,7 @@ static BYTE OplEffectiveWaveform(PCOPL_STATE state, PCOPL_OPERATOR operatorState
     return (state->Registers[OPL_REGISTER_TEST] & OPL_TEST_WSE) ? (BYTE)(operatorState->Waveform & OPL_WAVEFORM_OPL2_MASK) : 0;
 }
 
-/* --- envelope ------------------------------------------------------------- */
+/* envelope: */
 /* Effective 6-bit rate: the 4-bit register value, scaled up by where the note
  * sits on the keyboard. High notes decay faster on a real OPL, and KSR selects
  * how strongly that applies.
@@ -572,7 +572,7 @@ static INT32 OplVibratoOffset(PCOPL_STATE state, INT channel)
     return (patternStep < 0) ? -offset : offset;
 }
 
-/* --- operator ------------------------------------------------------------- */
+/* operator: */
 /* Phase increment per native sample: (F-num << block) * multiplier / 2. With
  * multiplier 1 this gives f = fnum * 49716 / 2^(20-block), the chip's formula.
  * Vibrato rides on the F-number itself, so it scales with block and multiplier
@@ -784,7 +784,7 @@ static VOID OplRhythmSample(
     }
 }
 
-/* --- one voice ------------------------------------------------------------ */
+/* one voice: */
 /* An ordinary two-operator channel: its contribution to the output, or 0 when
  * both operators are off -- in which case neither phase nor envelope moves. An
  * idle voice costs nothing, and the OPL2 golden depends on that staying so.
@@ -829,7 +829,7 @@ static INT32 OplVoiceTwoOperator(POPL_STATE state, INT channel)
     return output;
 }
 
-/* -- A 4-OPERATOR VOICE (OPL3, NEW set, `channel` -- c below -- leads the pair c / c+3).
+/* A 4-OPERATOR VOICE (OPL3, NEW set, `channel` -- c below -- leads the pair c / c+3).
  * Operators 1-2 are channel c's, 3-4 channel c+3's. The two CNT bits -- c's
  * first, c+3's second -- choose the algorithm (YMF262 datasheet, 4-operator
  * connection figure); "->" is phase modulation, "+" is summed to the output:
@@ -980,7 +980,7 @@ static INT16 OplClip(INT32 value)
     return (INT16)(value > OPL_SAMPLE_MAX ? OPL_SAMPLE_MAX : (value < OPL_SAMPLE_MIN ? OPL_SAMPLE_MIN : value));
 }
 
-/* --- public: render ------------------------------------------------------- */
+/* public: render: */
 VOID VddOplRender(POPL_STATE state, INT16 *output, UINT32 frames)
 {
     UINT32 frame;

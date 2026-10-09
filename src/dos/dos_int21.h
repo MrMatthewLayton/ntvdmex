@@ -272,7 +272,7 @@ typedef struct _DOS_MACHINE
      * guest's register frame all live there.  See exec_begin() in main.c.
      */
     INT      IsExecPending;
-    /* -- GH #49: TSR RESIDENCY. AH=31h and INT 27h terminate the program but
+    /* GH #49: TSR RESIDENCY. AH=31h and INT 27h terminate the program but
      * must NOT free its memory or unwind its interrupt vectors -- that is the
      * whole of "stay resident". `TsrKeep` is the paragraph count the program
      * asked to keep; `IsTsrPending` tells the host to take the resident exit
@@ -396,7 +396,7 @@ typedef struct _DOS_MACHINE
      */
 #define DOS_HANDLE_STACK_DEPTH  8
     DOS_HANDLE_FRAME HandleStack[DOS_HANDLE_STACK_DEPTH];
-    /* -- s91: THE PSP's JOB FILE TABLE, KEPT TRUTHFUL. fh[] above is what we use; the
+    /* s91: THE PSP's JOB FILE TABLE, KEPT TRUTHFUL. fh[] above is what we use; the
      * JFT (PSP:34h -> 20 bytes) is what a DOS program can SEE -- and XP's COMMAND.COM
      * does `>` by editing it directly (JFT[1] = JFT[5], JFT[5] = FFh) rather than
      * with AH=46h. So every handle we hand out is written into the JFT as a pseudo
@@ -418,7 +418,7 @@ typedef struct _DOS_MACHINE
      */
     VOID   (*SetTicks)(PVOID context, UINT32 ticks);
     PVOID TicksContext;
-    /* -- GH #34: INT 24h, THE CRITICAL-ERROR HANDLER. DosInt21 only DETECTS one
+    /* GH #34: INT 24h, THE CRITICAL-ERROR HANDLER. DosInt21 only DETECTS one
      * (a disk call failing for a hardware reason: extended error 13h-1Fh) and
      * records what the handler is to be told; the host makes the call into the
      * guest and acts on the answer, because only the exec loop can redirect the

@@ -41,7 +41,7 @@
 #include "host_video.h"
 #include "host_wow.h"
 
-/* -- FOLDING RUNS OF THE SAME WOW32 CALL. (session 56) See the WOWFOLD note in
+/* FOLDING RUNS OF THE SAME WOW32 CALL. (session 56) See the WOWFOLD note in
  * the BOP handler. `mute` is set only while a run is being folded and is
  * cleared the instant a different call arrives, so it can never outlive the
  * pattern that justified it.
@@ -82,7 +82,7 @@ enum
 
 DWORD g_WowIdleWaits = 0;              /* #306: krnl386 idle waits that blocked */
 DWORD g_WowPmBase[WOW_PMBASE_MAX];
-/* -- THE CHANGE DETECTOR (pmchg.txt). One line: `<hex offset> [segment]`, the
+/* THE CHANGE DETECTOR (pmchg.txt). One line: `<hex offset> [segment]`, the
  * segment defaulting to 4 (krnl386's DGROUP), because the addresses worth watching
  * are data whose base moves every run. Resolved lazily, the first PM event after
  * that segment's selector is committed. See the sampler in DpmiServicePmInt.
@@ -241,7 +241,7 @@ static WORD g_WowCommonDialogSegment = 0;
  */
 static WORD g_WowKeyboardSegment = 0;
 
-/* -- SOUND.DRV's TABLE (s90, #299). See src/wow/wowsound.h. Checked LAST of the
+/* SOUND.DRV's TABLE (s90, #299). See src/wow/wowsound.h. Checked LAST of the
  * anchored tables, after GDI's, and excluding every segment already identified:
  * its ids are 1..0x11 with small argument counts, the shape most likely to
  * collide with another module's stub before that module is learned.
@@ -382,7 +382,7 @@ static PSTR DpmiInt31CallRealModeFar(
      * DOS entry it forwards to is an interrupt handler and returns by
      * IRET; giving it a RETF frame would leave FLAGS on the stack.
      */
-    /* -- #247: AND 0300h IS THIS CALL TOO, with CS:IP = IVT[BL] (simint_vec >= 0,
+    /* #247: AND 0300h IS THIS CALL TOO, with CS:IP = IVT[BL] (simint_vec >= 0,
      * set at the decision site above the switch). Everything below is
      * shared; the three places 0300h differs say so.
      */
@@ -394,7 +394,7 @@ static PSTR DpmiInt31CallRealModeFar(
     else
         DpmiRmcsProbe(tib, esBase, (ax == DPMI_FN_CALL_REAL_MODE_IRET) ? 2 : 1, 0);   /* observation only */
 
-    /* --- save the client's PM CONTEXT (full register file + MSW) --- */
+    /* save the client's PM CONTEXT (full register file + MSW): */
     DWORD savedEax=VDM_REG(tib,VTIB_EAX);
     DWORD savedEbx=VDM_REG(tib,VTIB_EBX);
     DWORD savedEcx=VDM_REG(tib,VTIB_ECX);
@@ -444,7 +444,7 @@ static PSTR DpmiInt31CallRealModeFar(
     cursor = LogPut(cursor, (ax == DPMI_FN_CALL_REAL_MODE_IRET) ? " -> callRM(iret) 0x" : " -> callRM 0x");
     cursor = LogHex(cursor, realCs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, realIp);
     cursor = LogPut(cursor, " SS:SP=0x"); cursor = LogHex(cursor, realSs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, realSp);
-    /* -- #247: CX WORDS OF THE PROTECTED-MODE STACK. All three services take
+    /* #247: CX WORDS OF THE PROTECTED-MODE STACK. All three services take
      * them, and all three ignored them -- a real-mode procedure that reads
      * its arguments off its stack read whatever was below our frame.
      * They go above the return frame, in order (RmcsStackPlan). The
@@ -528,7 +528,7 @@ static PSTR DpmiInt31CallRealModeFar(
     realSp -= X86_WORD_SIZE;
     PokeWord(((DWORD)realSs << PARAGRAPH_SHIFT) + realSp, DPMI_RMRET_OFF);  /* return IP */
     DpmiUnpatch();   /* restore real `CD nn` so RM ints in the proc vector natively */
-    /* --- rewrite the CONTEXT to V86 with the RMCS register file --- */
+    /* rewrite the CONTEXT to V86 with the RMCS register file: */
     *(volatile WORD *)(tib + VTIB_MSW) = (WORD)(machineStatusWord & ~MSW_PE_BIT);  /* leave PM */
     VDM_REG(tib,VTIB_EFLAGS) = EFLAGS_VM | EFLAGS_IF | EFLAGS_RESERVED_ONE;    /* VM + IF + reserved bit-1 */
     /* #247: THE WHOLE REGISTER FILE, 32 BITS WIDE, FS AND GS INCLUDED:
@@ -539,7 +539,7 @@ static PSTR DpmiInt31CallRealModeFar(
      */
     RmcsRead(registers, &rmcsRegisters);
     RmcsToTib(tib, &rmcsRegisters);
-    /* -- 0300h: AN INTERRUPT IS ENTERED WITH THE CALLER'S STATUS FLAGS. A real
+    /* 0300h: AN INTERRUPT IS ENTERED WITH THE CALLER'S STATUS FLAGS. A real
      * `INT nn` pushes FLAGS and leaves CF/ZF/SF/OF/PF/AF/DF as they were, so
      * a handler that reads one as an input (and the IRET frame below
      * carries the same word out) sees the caller's. 0301h/0302h keep their
@@ -558,12 +558,12 @@ static PSTR DpmiInt31CallRealModeFar(
     VDM_REG(tib,VTIB_EIP)=realIp;
     VDM_SET16(tib,VTIB_SS,realSs);
     VDM_REG(tib,VTIB_ESP)=realSp;
-    /* --- nested V86 run loop: run the proc until the return-BOP --- */
+    /* nested V86 run loop: run the proc until the return-BOP: */
     for (round = 0; round < NESTED_V86_ROUNDS_MAX && !done; ++round)
     {
         LONG runStatus;
         DWORD rev;
-        /* -- A DEVICE IRQ RAISED IN HERE HAD NOWHERE TO GO.
+        /* A DEVICE IRQ RAISED IN HERE HAD NOWHERE TO GO.
          * The cooperative delivery gate lived in the MAIN exec
          * loop, and a guest inside this nested real-mode call
          * never reaches it -- while the ASYNC injector refuses,
@@ -628,7 +628,7 @@ static PSTR DpmiInt31CallRealModeFar(
             break;
         }
 
-        /* -- #247: OUR STUBS' BOPS, through the exec loop's own code. This is
+        /* #247: OUR STUBS' BOPS, through the exec loop's own code. This is
          * what lets 0300h run IVT[BL] when it is ours (INT 16h, 1Ah, 2Fh,
          * 67h, the BIOS block), and a 0301h/0302h procedure call the BIOS,
          * instead of stopping here as an "unexpected RM event".
@@ -682,7 +682,7 @@ static PSTR DpmiInt31CallRealModeFar(
     }
 
     DpmiRepatch();   /* re-arm the BOP patch before the PM client resumes */
-    /* --- copy the real-mode register file back into the RMCS ---
+    /* copy the real-mode register file back into the RMCS:
      * #247: all of it -- 32-bit general registers, FLAGS, ES DS FS GS -- and
      * never CS:IP/SS:SP (RmcsWrite cannot). Was: the low words, ES, DS.
      */
@@ -706,7 +706,7 @@ static PSTR DpmiInt31CallRealModeFar(
      * real-mode register state in the RMCS, and FLAGS is part of it.
      * (Written by RmcsWrite above since #247.)
      */
-    /* --- restore the client's PM CONTEXT --- */
+    /* restore the client's PM CONTEXT: */
     *(volatile WORD *)(tib + VTIB_MSW) = machineStatusWord;       /* re-enter PM */
     VDM_REG(tib,VTIB_EAX)=savedEax;
     VDM_REG(tib,VTIB_EBX)=savedEbx;
@@ -761,7 +761,7 @@ static VOID DpmiInt31SimulateRealModeInterrupt(
     volatile BYTE *registers = (volatile BYTE *)(ULONG_PTR)DpmiRmcsPointer(tib, esBase);
 
     DpmiRmcsProbe(tib, esBase, 0, interruptNumber);   /* observation only */
-    /* -- #247: ONLY TWO WAYS IN HERE NOW. The decision site above sent every
+    /* #247: ONLY TWO WAYS IN HERE NOW. The decision site above sent every
      * vector RmcsSimIntRoute() calls SIMINT_RUN to the 0302 arm; what is
      * left is SIMINT_FAST (21h; 33h/10h while the IVT holds our stub)
      * and SIMINT_NONE (a null vector, or simintrefl_off.flag), which
@@ -802,7 +802,7 @@ static VOID DpmiInt31SimulateRealModeInterrupt(
     DWORD callerSp=VDM_REG(tib,VTIB_ESP);
     DWORD sFlags=VDM_REG(tib,VTIB_EFLAGS);
     RMCS_REGS rmcsRegisters;
-    /* -- #247: THE WHOLE REGISTER FILE IN, AND FLAGS WHERE THE ANSWER LANDS.
+    /* #247: THE WHOLE REGISTER FILE IN, AND FLAGS WHERE THE ANSWER LANDS.
      * This loaded the low WORD of seven registers plus ES and DS, and
      * parked SS:SP on a "host scratch stack" at 0100:FF00 -- which is
      * DOS_PSP_SEG, the FIRST PROGRAM'S OWN SEGMENT, not ours.
@@ -847,7 +847,7 @@ static VOID DpmiInt31SimulateRealModeInterrupt(
      * a service that does nothing and reports success is exactly
      * what cost this one a session to find.
      */
-    /* -- ...AND NOW THE EVIDENCE NAMES **INT 10h**. (session 59)
+    /* ...AND NOW THE EVIDENCE NAMES **INT 10h**. (session 59)
      * THIS IS WHY ZAR NEVER SHOWS A PICTURE (GH #23), and the
      * shape is identical to the mouse case above.
      *
@@ -941,7 +941,7 @@ static VOID DpmiInt31SimulateRealModeInterrupt(
         VideoTrapSync();   /* mode 12h: interpret; no-op in 13h */
     }
 
-    /* -- #247: write back EVERYTHING the spec returns. This wrote AX BX CX
+    /* #247: write back EVERYTHING the spec returns. This wrote AX BX CX
      * DX SI DI FLAGS and dropped BP, ES and DS -- so every INT 21h that
      * answers in ES:BX (35h get vector, 2Fh DTA, 34h InDOS, 52h List of
      * Lists) handed the caller back its OWN ES, and an INT 10h answer in
@@ -980,7 +980,7 @@ static VOID DpmiInt31ResizeMemory(PSTR *cursorIo, volatile BYTE * const tib, INT
 {
     PSTR cursor = *cursorIo;
     INT needScan = *needScanIo;
-    /* -- #248: DPMI 0.9 CORE, AND IT WAS UNSUP. A client that grows its
+    /* #248: DPMI 0.9 CORE, AND IT WAS UNSUP. A client that grows its
      * heap by resizing (rather than allocate-copy-free) was refused, and
      * most give up there. Plan in dpmi_svc.h: in place while the new size
      * fits the pages the block already has; otherwise a new block, the old
@@ -1110,7 +1110,7 @@ static VOID DpmiInt31FreeMemory(PSTR *cursorIo, volatile BYTE * const tib)
     PSTR cursor = *cursorIo;
     DWORD handle = (VDM_REG16(tib, VTIB_ESI) << WORD_SHIFT) | VDM_REG16(tib, VTIB_EDI);
 
-    /* -- #248: ONLY A HANDLE WE GAVE OUT. The handle is a host address,
+    /* #248: ONLY A HANDLE WE GAVE OUT. The handle is a host address,
      * and this arm VirtualFree'd whatever it was handed -- a stale or
      * corrupt handle would have released the HOST's memory. 8023h.
      */
@@ -1126,7 +1126,7 @@ static VOID DpmiInt31FreeMemory(PSTR *cursorIo, volatile BYTE * const tib)
         }
     }
 
-    /* -- THE PATCH MAP MUST FORGET THE BLOCK TOO. (s80) pmap holds
+    /* THE PATCH MAP MUST FORGET THE BLOCK TOO. (s80) pmap holds
      * every INT site we rewrote, by address, and DpmiUnpatch()
      * / DpmiRepatch() dereference all of them on every 0301.
      * A block released here left its sites behind, so the next
@@ -1419,7 +1419,7 @@ static PSTR DpmiInt31SetProtectedModeVector(PSTR cursor, volatile BYTE * const t
 static VOID DpmiInt31FreeDosMemory(PSTR *cursorIo, volatile BYTE * const tib)
 {
     PSTR cursor = *cursorIo;
-    /* -- #248: TWO DEFECTS. (1) A bad selector answered success -- and
+    /* #248: TWO DEFECTS. (1) A bad selector answered success -- and
      * "bad" included any selector that was not a 0100h block: the
      * PSP selector would have freed the program's own memory. Now
      * the selector must be valid AND name a block 0100h handed out
@@ -1960,7 +1960,7 @@ static VOID DpmiInt31FreeDescriptor(PSTR *cursorIo, volatile BYTE * const tib)
             || firstSelector == g_DpmiHandlerSelector || firstSelector == g_PmReturnSelector
             || firstSelector == g_DpmiFaultSelector || firstSelector == g_DpmiFaultCodeSelector);
 
-    /* -- #248: A SELECTOR THAT WAS NEVER THE CLIENT'S IS 8022h, NOT
+    /* #248: A SELECTOR THAT WAS NEVER THE CLIENT'S IS 8022h, NOT
      * SUCCESS. This arm used to fall through to "kept" with CF=0 for
      * a null, GDT, out-of-range, unallocated or already-freed
      * selector alike -- a double free read as a free. Our OWN
@@ -2478,7 +2478,7 @@ static INT Wow32ServiceUser(
          * to run.
          */
         WowWinPump(WOW_PUMP_BUDGET_BRIEF);
-        /* -- (E) s92 (#306): GetMessage WITH NOTHING TO GET, AND A TASK THAT HAS
+        /* (E) s92 (#306): GetMessage WITH NOTHING TO GET, AND A TASK THAT HAS
          * NEVER RUN. The idle yield (D) is krnl386's WowWaitForMsgAndEvent --
          * which only WOWEXEC's loop calls. An APPLICATION idles here, in our
          * GetMessage, which blocks in the host; so a task it launched (Calc's
@@ -2492,7 +2492,7 @@ static INT Wow32ServiceUser(
          * modal loop -- a context swapped there would be resumed under a frame
          * the other task cannot unwind.
          */
-        /* -- s92 (#306): "nothing to get" is now THIS TASK's queue (wowmsg.h,
+        /* s92 (#306): "nothing to get" is now THIS TASK's queue (wowmsg.h,
          * g_WowMsgTaker), and the task that yields here is parked WAITING FOR
          * MESSAGES: it is runnable again once one arrives for it -- which is
          * how WinHelp gets the message it posted itself while Calc ran, and
@@ -2588,7 +2588,7 @@ static INT Wow32ServiceUser(
                 LogAppend(LOG_PATH, siteLine, siteCursor); SerialOut(siteLine, siteCursor);
             }
 
-            /* -- A BLOCKED Win16 TASK IS A Win32 MESSAGE PUMP.
+            /* A BLOCKED Win16 TASK IS A Win32 MESSAGE PUMP.
              * (session 42, replacing session 41's keyboard-event
              * wait.) The input no longer comes from the DOS 8042
              * path -- it comes from the REAL WINDOW, and the real
@@ -2635,7 +2635,7 @@ static INT Wow32ServiceUser(
                         break;
                     }
 
-                    /* -- THE IDLE WAIT, AND ITS TIMEOUT IS A
+                    /* THE IDLE WAIT, AND ITS TIMEOUT IS A
                      * LATENCY FLOOR. A WM_PAINT arriving while the
                      * guest is parked here should wake the wait
                      * through QS_ALLINPUT, and usually does --
@@ -3315,7 +3315,7 @@ static INT Wow32ScheduleKernelCall(
                 return HOST_FLOW_RETURN;
             }
         }
-        /* -- (D) A TASK ASKS TO WAIT FOR A MESSAGE. THAT IS THE
+        /* (D) A TASK ASKS TO WAIT FOR A MESSAGE. THAT IS THE
          *   YIELD, AND IT IS THE MOMENT THAT WAS MISSING. --------
          * Moment (C) resumes the parked task when the creator
          * RETIRES. WOWEXEC never retires -- it registers its
@@ -3398,7 +3398,7 @@ static INT Wow32RunLaunchedTaskFirst(
 {
     PSTR cursor = *cursorIo;
 
-    /* -- (F) s92 (#306): LAUNCH-FIRST. Win16's WinExec/LoadModule does not return
+    /* (F) s92 (#306): LAUNCH-FIRST. Win16's WinExec/LoadModule does not return
      * before the new task has run to its first yield (on real WOW the task has
      * its own thread and the creator waits for it). USER's WinHelp() depends on
      * it: it starts WINHELP.EXE and at once looks for the "MS_WINHELP" window;
@@ -3589,7 +3589,7 @@ static PSTR Wow32LogFrame(
                 g_WowUserCurrentTask = (WORD)(dgroup[WOWUSER_KRNL_CURRENT_TASK] | (dgroup[WOWUSER_KRNL_CURRENT_TASK + 1] << BYTE_SHIFT));
             }
         }
-        /* -- AND WHICH EPILOGUE THIS CALL WILL RETURN THROUGH.
+        /* AND WHICH EPILOGUE THIS CALL WILL RETURN THROUGH.
          * The mode word at bp-24 picks how the call returns
          * (see WOW32_OFF_MODE in wow32.h). krnl386 always passes
          * 0 (observed), so this MUST read `mode=0` on
@@ -3680,7 +3680,7 @@ static PSTR Wow32LogFrame(
                     if (!HostReadable((const VOID *)sourceBytes, 8))
                         continue;
 
-                    /* -- [CAUTION] TAB AND CRLF ARE PART OF THE MESSAGE, NOT THE END
+                    /* [CAUTION] TAB AND CRLF ARE PART OF THE MESSAGE, NOT THE END
                      *   OF IT. (session 36) ----------------------------
                      * This scan accepted only 0x20..0x7E, and the ONE
                      * string in this frame that names the actual fault --
@@ -3903,7 +3903,7 @@ static INT Wow32ServiceBop(
                 return HOST_FLOW_RETURN;
             }
         }
-        /* -- #306 (s90): WowWaitForMsgAndEvent WITH NOBODY TO YIELD TO MUST
+        /* #306 (s90): WowWaitForMsgAndEvent WITH NOBODY TO YIELD TO MUST
          * WAIT. The arm above handles it when another task is parked; with
          * none it fell through to "unimplemented", answered 0 instantly, and
          * the guest's idle loop (wait -> PeekMessage -> wait) ran at 100% CPU
@@ -4016,7 +4016,7 @@ static INT Wow32ServiceBop(
             }
         }
 
-        /* -- krnl386's SEGMENT-2 TABLE. Learn its selector from a stub.
+        /* krnl386's SEGMENT-2 TABLE. Learn its selector from a stub.
          * Same shape as USER's anchor below, and for the same reason:
          * the id space is per TABLE, so nothing here may be answered
          * until the table has identified itself. See WowKernel2Stub.
@@ -4106,7 +4106,7 @@ static INT Wow32ServiceBop(
                 return HOST_FLOW_RETURN;
             }
         }
-        /* -- COMMDLG.DLL'S OWN ID SPACE. See src/wow/wowcommdlg.h. -
+        /* COMMDLG.DLL'S OWN ID SPACE. See src/wow/wowcommdlg.h:
          * The fifth table, behind the fifth check. Same shape as
          * SHELL's: the anchor and the service are the same call, so
          * nothing is answered before the table has named itself.
@@ -4213,7 +4213,7 @@ static INT Wow32ServiceBop(
                 return HOST_FLOW_RETURN;
             }
         }
-        /* -- SOUND.DRV'S OWN ID SPACE (s90, #299). See src/wow/wowsound.h. */
+        /* SOUND.DRV'S OWN ID SPACE (s90, #299). See src/wow/wowsound.h. */
         if (!frame.IsKernel && !g_WowSoundSegment
             && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
             && frame.StubSegment != g_WowShellSegment && frame.StubSegment != g_WowCommonDialogSegment
@@ -4257,7 +4257,7 @@ static INT Wow32ServiceBop(
             }
         }
 
-        /* -- MMSYSTEM'S TWO IDS (s90, #278). See src/wow/wowmmedia.h. */
+        /* MMSYSTEM'S TWO IDS (s90, #278). See src/wow/wowmmedia.h. */
         if (!frame.IsKernel && !g_WowMultimediaSegment
             && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
             && frame.StubSegment != g_WowShellSegment && frame.StubSegment != g_WowCommonDialogSegment
@@ -4970,7 +4970,7 @@ static INT DpmiInt21CreateOpen(
 {
     PSTR cursor = *cursorIo;
 
-    /* -- AND 5Bh, "CREATE NEW", WHICH IS HOW A GUEST MAKES A
+    /* AND 5Bh, "CREATE NEW", WHICH IS HOW A GUEST MAKES A
      * TEMPORARY FILE. (session 56) -----------------------------
      * It is 3Ch with one difference -- it FAILS if the name
      * already exists -- and that difference is the whole point:
@@ -5259,7 +5259,7 @@ static PSTR WowCallbackClipboard(
     const DWORD result,
     const WORD actionArgument)
 {
-    /* -- THE CLIPBOARD BRIDGE (#160). See WOWCALL_ACT_CLIP* in wowcall.h.
+    /* THE CLIPBOARD BRIDGE (#160). See WOWCALL_ACT_CLIP* in wowcall.h.
      * Each step runs with the parked caller restored, exactly like the EDIT
      * chain above, so a follow-up call re-parks it at the same SS:SP.
      */
@@ -5385,7 +5385,7 @@ static PSTR WowCallbackEditFill(
     const DWORD result,
     volatile BYTE * const tib)
 {
-    /* -- STEP 3: WRITE THE CONTROL'S TEXT INTO THE GUEST'S BLOCK.
+    /* STEP 3: WRITE THE CONTROL'S TEXT INTO THE GUEST'S BLOCK.
      * This is the exact mirror of ACT_EDITTEXT. There the block was
      * read and handed to the control; here the control is read and the
      * bytes are handed to the block, which is what the application is
@@ -6047,7 +6047,7 @@ static INT DpmiServiceInt21(
             }
         }
     pmInt21Unhandled:
-        /* -- INT 21h AX=FF80h -- "LOCK THIS MEMORY", AND THE ANSWER
+        /* INT 21h AX=FF80h -- "LOCK THIS MEMORY", AND THE ANSWER
          * HERE IS YES. -------------------------------------------------
          * Rational's DOS/16M asks its host to lock a region through this
          * call before it will run (AX=FF80h, DX=1301h, ES = the region,
@@ -6119,7 +6119,7 @@ static INT DpmiServiceInt21(
                 cursor = LogDump(cursor, codeBytes, 16); }
 
           cursor = LogPut(cursor, "\r\n"); }
-        /* -- AND ANSWER IT THE WAY OUR OWN DOS ANSWERS AN UNHANDLED
+        /* AND ANSWER IT THE WAY OUR OWN DOS ANSWERS AN UNHANDLED
          *  SERVICE: CF=1. ------------------------------------------
          * This arm used to return with the flags exactly as the client
          * left them, which in practice means CF=0 -- it told the client
@@ -6194,7 +6194,7 @@ static INT DpmiServiceInt31(
      * visible in `STAGE2: simInt (DPMI 0300) UNHANDLED`, which is
      * where the next one of these will be found.
      */
-    /* -- OK s81: NOW ON BY DEFAULT. The wedge below was three gaps, all
+    /* OK s81: NOW ON BY DEFAULT. The wedge below was three gaps, all
      * closed: the nested loop never set g_InExec (so IRQ 5 was refused
      * as not_in_exec, which s59 misread as HOST_CS); the BIOS tick did
      * not advance inside a nested call (Miles times its self-test by
@@ -6270,7 +6270,7 @@ static INT DpmiServiceInt31(
     switch (ax)
     {
     case DPMI_FN_GET_VERSION:                               /* get DPMI version */
-        /* -- #248: CL IS THE SAME BYTE 1687h REPORTS. It was a hardcoded 3
+        /* #248: CL IS THE SAME BYTE 1687h REPORTS. It was a hardcoded 3
          * here while 1687h said DPMI_CPU_CLASS (4) -- the s79 GetWinFlags
          * fix changed one site of two. CH stays 0, as it always was here.
          */
@@ -6358,7 +6358,7 @@ static INT DpmiServiceInt31(
 
         break; }
 
-    /* -- THE REAL-MODE VECTOR PAIR. DPMI 0.9 CORE, AND WE HAD
+    /* THE REAL-MODE VECTOR PAIR. DPMI 0.9 CORE, AND WE HAD
      * NEITHER HALF. -----------------------------------------------
      * 0200h/0201h are the real-mode twins of the 0204h/0205h pair
      * below: a protected-mode client reads and writes the V86 IVT
@@ -6417,7 +6417,7 @@ static INT DpmiServiceInt31(
     {
         DWORD bl = VDM_REG(tib, VTIB_EBX) & BYTE_MASK;
         VDM_SET16(tib, VTIB_ECX, g_PmInt[bl].Selector);
-        /* -- THE RETURNED OFFSET IS AS WIDE AS THE CLIENT, NOT AS WIDE AS
+        /* THE RETURNED OFFSET IS AS WIDE AS THE CLIENT, NOT AS WIDE AS
          * THE HANDLER'S SELECTOR. This tested only the handler selector,
          * so a 16-bit handler (the extender's own stubs are all 16-bit)
          * was reported with VDM_SET16 -- which preserves the top half of
@@ -6591,7 +6591,7 @@ static INT DpmiServiceInt31(
      * reconfigures its INITIAL selectors (e.g. a C runtime narrowing DS's limit)
      * must take effect -- else the change silently no-ops and the client faults.
      */
-    /* -- #248: AN INVALID SELECTOR IS 8022h, NOT A SILENT NO-OP. 0007h-0009h
+    /* #248: AN INVALID SELECTOR IS 8022h, NOT A SILENT NO-OP. 0007h-0009h
      * ignored a selector that was null, GDT, off the table or never
      * allocated and returned CF=0, so the client believed a descriptor
      * had been set that never was. DpmiClientSelectorOk() is the rule
@@ -6850,7 +6850,7 @@ static INT DpmiServiceInt31(
         break;
     }
 
-    /* -- 0800: MAP A PHYSICAL ADDRESS INTO THE LINEAR SPACE. (s74)
+    /* 0800: MAP A PHYSICAL ADDRESS INTO THE LINEAR SPACE. (s74)
      * The other half of the VESA linear framebuffer. 4F01 reports
      * PhysBasePtr = VIDEO_VESA_LFB_PHYSICAL; a DPMI client then asks this
      * function to map it and writes pixels straight at the answer.
@@ -6973,7 +6973,7 @@ static INT DpmiServiceInt31(
 
     case DPMI_FN_FREE_CALLBACK:                               /* free real-mode callback CX:DX */
     {
-        /* -- #248: DPMI 0.9 CORE, AND IT WAS UNSUP. A callback, once
+        /* #248: DPMI 0.9 CORE, AND IT WAS UNSUP. A callback, once
          * allocated, was held for the life of the client -- with four
          * slots, the fifth allocation of a client that hooks and unhooks
          * failed for good. The address must be EXACTLY one we handed out
@@ -8133,7 +8133,7 @@ static INT WowFinishCallback(
      * parked DialogBox caller, so re-entering the dialog procedure
      * simply parks it again at the same SS:SP. Nothing accumulates.
      */
-    /* -- THE NEXT ITEM. (session 57) The callback has answered; 0
+    /* THE NEXT ITEM. (session 57) The callback has answered; 0
      * means stop, anything else means carry on. Same restored-context
      * property as the modal loop: what WowCallLeave put back IS the
      * parked caller, so the next call re-parks it at the same SS:SP
@@ -8493,7 +8493,7 @@ INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                         return 1;
                     }
 
-                    /* -- THE DEFAULT HANDLER FOR A HARDWARE IRQ REFLECTS IT TO REAL
+                    /* THE DEFAULT HANDLER FOR A HARDWARE IRQ REFLECTS IT TO REAL
                      * MODE -- AND OURS HAD NO ARM FOR THE KEYBOARD. (s80) ------------
                      * DOS/4GW hooks PM INT 09h at startup (`setPMvec 09 = 1cf:0024`) with
                      * a pass-up handler that CHAINS to the previous PM vector, i.e. to our
@@ -8690,7 +8690,7 @@ INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                         else
                             cursor = LogDump(cursor, codeBytes, 16); }
 
-                      /* -- WAS THAT `C4 C4` OURS? SAY SO, RATHER THAN LEAVING
+                      /* WAS THAT `C4 C4` OURS? SAY SO, RATHER THAN LEAVING
                        * IT AMBIGUOUS. (session 55) When a run dies on a byte
                        * pair that looks like a BOP, the log has always left
                        * the reader to guess between three things: a real

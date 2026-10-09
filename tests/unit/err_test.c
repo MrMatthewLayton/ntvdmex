@@ -129,7 +129,7 @@ INT main(VOID)
 
     printf("== INT 21h AH=59h error classification (dos_err.h), measured on 6.22\n");
 
-    /* -- THE NOT-FOUND FAMILY. Three different codes, one classification.
+    /* THE NOT-FOUND FAMILY. Three different codes, one classification.
      * CASE=err.after.3D.missing AX=0002 BX=0803 CX=02C1
      * CASE=err.after.4E.nopath  AX=0003 BX=0803 CX=02C1
      * CASE=err.after.4E.nofile  AX=0012 BX=0803 CX=02C1
@@ -149,7 +149,7 @@ INT main(VOID)
     ErrTestRow("code 6  invalid handle  [3Fh on handle 20]", ERR_TEST_INVALID_HANDLE,
                ERR_TEST_BX_INVALID_HANDLE, ERR_TEST_CH_UNKNOWN);
 
-    /* -- MEASURED IN SESSION 52. Both of these returned zeroes and logged
+    /* MEASURED IN SESSION 52. Both of these returned zeroes and logged
      * UNMEASURED before p_err.asm learned to provoke them.
      * CASE=err.after.3D.readonly AX=0005 BX=0303 CX=02C1
      * CASE=err.after.5B.exists   AX=0050 BX=0C03 CX=02C1
@@ -172,7 +172,7 @@ INT main(VOID)
     ErrTestRow("code 15 invalid drive    [47h on a drive with nothing behind it]",
                ERR_TEST_INVALID_DRIVE, ERR_TEST_BX_NOT_FOUND, ERR_TEST_CH_BLOCK_DEVICE);
 
-    /* -- CODE 0 IS NOT AN ERROR. 59h after a successful call reports AX=0 with
+    /* CODE 0 IS NOT AN ERROR. 59h after a successful call reports AX=0 with
      * class and locus zero, so it must be classified (return TRUE), not reported
      * as an unmeasured gap.
      */
@@ -187,7 +187,7 @@ INT main(VOID)
     ErrTestExpect("code 0 -> BX is zero", classAndAction, 0);
     ErrTestExpect("code 0 -> CH is zero", locus, 0);
 
-    /* -- AN UNMEASURED CODE MUST SAY SO AND ZERO THE FIELDS. This is the check
+    /* AN UNMEASURED CODE MUST SAY SO AND ZERO THE FIELDS. This is the check
      * that keeps the table honest: the moment it starts inventing a plausible
      * class for anything it has not seen, it stops being evidence. Code 0x21
      * (lock violation) is real DOS but has never been provoked here.

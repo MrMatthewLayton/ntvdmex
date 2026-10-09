@@ -14,6 +14,12 @@
 #include "host_state.h"
 #include "host_strings.h"   /* defines only: the initialisers' text */
 
+/* The DPMI host's fault trampolines and the stack they run on (#205), and its LDT shadow:
+ * until #335 these were tentative definitions in a header main.c included.
+ */
+BYTE  g_FaultTable[DOS_FLTSITE_N * DPMI_FAULT_TABLE_ENTRY] __attribute__((aligned(16)));
+BYTE  g_FaultStack[DPMI_FAULT_STK_SIZE] __attribute__((aligned(16)));
+
 PFN_ADD_VECTORED_EXCEPTION_HANDLER                  g_PfnAddVeh;
 PFN_REGISTER_RAW_INPUT_DEVICES g_PfnRegisterRawInput;
 PFN_GET_RAW_INPUT_DATA         g_PfnGetRawInput;
@@ -43,7 +49,7 @@ SB_STATE     g_Sb;        NTVDD_DEVICE g_SbDevice;
 /* The Gravis UltraSound (s80, north star 2): 240h, IRQ 11, DMA 3 -- off the SB's 220h/5/1/5. */
 GUS_STATE    g_Gus;       NTVDD_DEVICE g_GusDevice;
 COMM_STATE   g_Comm;      NTVDD_DEVICE g_CommDevice;   /* GH #9 */
-/* -- THE GAMEPORT (session 62). The VDD models the 558 one-shot behind port
+/* THE GAMEPORT (session 62). The VDD models the 558 one-shot behind port
  * 0x201; this side feeds it: a winmm poll thread (joyGetPosEx -- XP-safe,
  * loaded dynamically like waveOut, no new import) writes present/axes/
  * buttons, and SettingsApply writes the adapter type. Until now the port
@@ -131,7 +137,7 @@ INT g_PmNoIrq = 0;
  */
 volatile LONG g_PmEntryEip = -1;
 INT   g_BreakpointCount = 0;
-/* --- run 52 hang-diagnostic telemetry (GH #2) ---------------------------------------
+/* run 52 hang-diagnostic telemetry (GH #2):
  * The PM loop can stop advancing in three indistinguishable-in-the-log ways: (a) the
  * main thread wedges INSIDE one DpmiEnterProtectedMode() because the kernel silently swallowed a
  * plain-instruction PM #GP and skip-resumes it forever (the deep wall, runs 20-34);
@@ -264,7 +270,7 @@ DWORD g_AsyncPmEflags = 0;
 WORD g_AsyncPmCs  = 0;
 WORD g_AsyncPmSs  = 0;
 DWORD g_LeLoadBase   = 0;           /* first [LE CODE OBJECT] allocation */
-/* -- A DPMI REAL-MODE SIMULATION IS A WINDOW IN WHICH THE VDM HAS NO SETTLED
+/* A DPMI REAL-MODE SIMULATION IS A WINDOW IN WHICH THE VDM HAS NO SETTLED
  * MODE, AND THE ASYNC INJECTOR MUST NOT LOOK INTO IT. (s72, Doom's E1M1 crash)
  * INT 31h AX=0300h/0301h/0302h save the client's protected-mode register file,
  * overwrite the TIB with a REAL-MODE one, run the handler, and put the first back.
@@ -453,7 +459,7 @@ volatile LONG g_MouseWantCapture = 0;   /* guest used the mouse; UI: please grab
  * status strip, which is built long before InputCaptureSet, has to answer it too.
  * The full policy is written out above InputCaptureSet; do not add a second latch.
  */
-/* -- #136: SEAMLESS MOUSE. Settings > Input: "In seamless mode the program's pointer
+/* #136: SEAMLESS MOUSE. Settings > Input: "In seamless mode the program's pointer
  * follows Windows' own pointer, and no capture is needed." So it is the capture policy
  * with rules 2 and 5 switched off: a guest that uses the mouse is treated exactly like
  * one that never did -- the pointer stays the desktop's, WM_MOUSEMOVE positions and
@@ -538,7 +544,7 @@ INT   g_WowSchedOn = 0;
 WOWSCHED_SLOT g_WowSchedSlots[WOWSCHED_MAX];
 INT g_WowWindowNested = 0;
 BYTE *g_WowShadow = NULL;
-/* -- THE DEFAULT PM HANDLER FOR A HARDWARE IRQ, WHEN THE GUEST OWNS THE REAL-MODE
+/* THE DEFAULT PM HANDLER FOR A HARDWARE IRQ, WHEN THE GUEST OWNS THE REAL-MODE
  * VECTOR: A TRUE NESTED-V86 REFLECTION. (s81, ZAR's streaming audio) ---------------
  * DPMI 0.9: a protected-mode interrupt nobody hooked in PM is reflected to the real-mode
  * vector. DOS/4GW hooks every IRQ in PM with a pass-up handler that chains to OUR default
@@ -592,15 +598,9 @@ PM_EXCEPTION_VECTOR g_PmException[X86_EXCEPTIONS];
 DPMI_CALLBACK g_Callbacks[DPMI_CB_SLOTS];
 IFV_TRACE_ENTRY g_IfvTrace[IFV_TRACE_MAX];
 PM_INJECT_SITE g_PmInjectSite[PMINJ_SITES];
-/* --- menu + status bar (scaffold; most items are stubs for now) ------------ */
+/* menu + status bar (scaffold; most items are stubs for now): */
 I33_FUNCTION_COUNT g_MouseI33Ax[I33_AXN];
 I33_CALL_SITE g_MouseI33Site[I33_SITEN];
 RETRACE_SITE g_RetraceSite[RT_SITES];
 ISV_IO_HOOK g_IsvHooks[ISV_MAX_HOOKS];
 DPMI_DESCRIPTOR g_Ldt[DPMI_LDT_MAX];
-
-/* The DPMI host's fault trampolines and the stack they run on (#205), and its LDT shadow:
- * until #335 these were tentative definitions in a header main.c included.
- */
-BYTE  g_FaultTable[DOS_FLTSITE_N * DPMI_FAULT_TABLE_ENTRY] __attribute__((aligned(16)));
-BYTE  g_FaultStack[DPMI_FAULT_STK_SIZE] __attribute__((aligned(16)));

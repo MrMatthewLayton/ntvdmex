@@ -62,7 +62,7 @@ INT main(VOID)
 {
     printf("x86len battery\n");
 
-    /* ---- lengths, 32-bit code ------------------------------------------------ */
+    /* lengths, 32-bit code: */
     {
         static const BYTE bytes[] = { 0x31, 0xC9 };
         X86LenTestLengthIs("xor ecx,ecx", bytes, sizeof bytes, 1, 2);
@@ -144,7 +144,7 @@ INT main(VOID)
         X86LenTestLengthIs("rep movsd", bytes, sizeof bytes, 1, 2);
     }
 
-    /* ---- lengths, 16-bit code (DOS-extender style) ---------------------------- */
+    /* lengths, 16-bit code (DOS-extender style): */
     {
         static const BYTE bytes[] = { 0xB8, 0x34, 0x12 };
         X86LenTestLengthIs("mov ax,imm16 (16-bit)", bytes, sizeof bytes, 0, 3);
@@ -176,7 +176,7 @@ INT main(VOID)
     { static const BYTE bytes[] = { 0x8B };
       CHECK(X86InstructionLength(bytes, 0, sizeof bytes, 1) == 0, "missing modrm -> 0"); }
 
-    /* ---- the boundary test: the class that killed Doom ---------------------- */
+    /* the boundary test: the class that killed Doom: */
     /* A loop whose back edge is `jle -51` (7e cd), followed by `xor ecx,ecx` (31 c9).
      * The `cd 31` at +0x1e is the jle displacement plus the xor opcode, NOT an
      * `int 0x31`.  This exact pattern, in a real game image, was patched into
@@ -259,7 +259,7 @@ INT main(VOID)
       CHECK(X86IsIntSiteReal(bytes, 11, sizeof bytes, 1),
             "...and the patcher keeps it"); }
 
-    /* -- THE FALSE NEGATIVE THAT COST A RUN.  A DOS-extender's DOS-version check sat
+    /* THE FALSE NEGATIVE THAT COST A RUN.  A DOS-extender's DOS-version check sat
      * directly after its own `$`-terminated error message, so every backward
      * anchor decodes ASCII and the real site scores 1 vote in 48 -- by votes alone
      * indistinguishable from a branch displacement at 3 in 48.  Refusing it left a
@@ -311,7 +311,7 @@ INT main(VOID)
       CHECK(!X86IsIntSiteReal(bytes, 60, sizeof bytes, 0),
             "...and it is now REJECTED, to be serviced from the #GP instead"); }
 
-    /* -- THE FALSE POSITIVE THAT KILLED THE WIN16 LAUNCH (session 39, GH #128).
+    /* THE FALSE POSITIVE THAT KILLED THE WIN16 LAUNCH (session 39, GH #128).
      * The candidate at index 56 is the `cd` of a `cmp cl,ch` (3a cd) followed by
      * a `jne` (75 xx), so the `cd 75` spans two instructions.  The vote fails,
      * the owner IS named -- and it is a `cmp`, not a relative branch, so the old

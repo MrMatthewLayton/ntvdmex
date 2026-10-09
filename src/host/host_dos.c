@@ -22,7 +22,7 @@
 #include "host_video.h"
 #define HMA_ERROR_PROTECTED         0xE1                /* g_HmaError: committed but not accessible */
 
-/* ---- INT 21h AH=4Bh EXEC.  GH #30. ------------------------------------------
+/* INT 21h AH=4Bh EXEC.  GH #30:
  *
  * A parent calls EXEC, a child runs to completion, and the parent carries on at
  * the instruction after its INT 21h with the child's exit code retrievable via
@@ -114,6 +114,9 @@ enum
 
 typedef LONG (WINAPI *PFN_NT_QUERY_INFORMATION_PROCESS)(HANDLE, ULONG, PVOID,
                                                      ULONG, PULONG);
+
+/* Used before their definitions below. */
+static VOID ExecMachineSave(INT depth);
 
 /* #208: A PROGRAM STARTED FROM WINDOWS RUNS UNDER XP's COMMAND.COM, AS STOCK DOES:
  * Stock ntvdm never loads the program itself: it starts COMMAND.COM /P and answers the
@@ -355,9 +358,6 @@ static INT g_ConsoleInPending = -1;                /* scancode owed to the next 
 static CHAR g_TypeIn[TYPEIN_CAP];
 static INT g_TypeInHead;
 static INT g_TypeInTail;
-
-/* Used before their definitions below. */
-static VOID ExecMachineSave(INT depth);
 
 /* THE COMPILER VARIABLES REACH THE GUEST, WITHOUT MOVING THE MEMORY MAP. (s73) (Importance = 1):
  * A DOS build tool is configured through its environment -- LIB and INCLUDE for the
@@ -942,7 +942,7 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
 
     if (machine->ExecMode == DOS_INT21_EXEC_LOAD_ONLY)
     {
-        /* -- LOAD WITHOUT EXECUTING. DOS builds the PSP and loads the image, then
+        /* LOAD WITHOUT EXECUTING. DOS builds the PSP and loads the image, then
          * ANSWERS THROUGH THE PARAMETER BLOCK instead of transferring control:
          * +0x0E gets the initial SS:SP and +0x12 the entry CS:IP. The memory
          * STAYS ALLOCATED -- the caller is going to jump into it, and freeing
@@ -985,7 +985,7 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     }
 
     ExecMachineSave(depth);                              /* #152: what a forced close restores */
-    /* -- THE STRIP NAMES THE PROGRAM RUNNING NOW, NOT THE SHELL. (user, s84: "the exe/com
+    /* THE STRIP NAMES THE PROGRAM RUNNING NOW, NOT THE SHELL. (user, s84: "the exe/com
      * name is always COMMAND.COM") It was set once, from the program NTVDMEX loaded
      * first -- which is the shell whenever a game is started from a prompt or by
      * double-click through it. Save the parent's name with this level; DosTerminate
@@ -1140,7 +1140,7 @@ INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor)
     /* CF goes on the FLAGS its INT pushed, as every INT 21h answer does. */
     flagsPointer = (volatile WORD *)((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT)
                             + ((VDM_REG16(tib, VTIB_ESP) + X86_FRAME16_FLAGS) & WORD_MASK));
-    /* -- #275: IGNORE, which only a 3Fh/40h is allowed (AH bit 5, DosCritInt24Ah). DOS
+    /* #275: IGNORE, which only a 3Fh/40h is allowed (AH bit 5, DosCritInt24Ah). DOS
      * carries on as if the sectors had moved (MS-DOS 4.0 DREAD: IGNORE returns carry
      * clear): the call reports the bytes asked for -- a read still stops at end of
      * file -- and the position advances by them. Nothing is copied: what an ignored
@@ -1176,7 +1176,7 @@ INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor)
     return 0;
 }
 
-/* -- #275: THE DPMI TRANSLATOR's OWN 3Fh/40h (dpmi INT 21h, direct-translated through
+/* #275: THE DPMI TRANSLATOR's OWN 3Fh/40h (dpmi INT 21h, direct-translated through
  * the client's selectors) never looked at ReadFile/WriteFile either. A hardware
  * failure (19-31) there is answered the way DosInt21 answers it for a protected-
  * mode caller -- as if INT 24h had said FAIL: CF=1, AX=0005, 59h=53h -- because
@@ -1872,7 +1872,7 @@ static PCSTR StdioFromParent(DWORD parentProcessId)
         return "none (no console, no redirect)";
     }
 
-    /* -- THE INPUT HANDLE, TAKEN IN THE SAME BREATH. Only a FILE or a PIPE:
+    /* THE INPUT HANDLE, TAKEN IN THE SAME BREATH. Only a FILE or a PIPE:
      * see the note on g_StdinHandle. Failure here is silent on purpose -- it must
      * never cost the output handle, which is the one being measured.
      */
@@ -1993,7 +1993,7 @@ PCSTR StdioInitialize(VOID)
 
         g_StdioParentProcessId = parentProcessId;              /* reported at exit either way */
 
-        /* -- ROUTE SIX: TAKE IT OUT OF THE PARENT. (GH #131, session 57)
+        /* ROUTE SIX: TAKE IT OUT OF THE PARENT. (GH #131, session 57)
          * Five routes have failed and the oracle says the handle EXISTS: run
          * `hello.com > out.txt` at a cmd prompt and STOCK ntvdm writes 136
          * bytes to the file while we write 0. The difference is not the
@@ -2310,7 +2310,7 @@ VOID HostSetFlags(volatile BYTE *tib, BYTE carryFlag, BYTE zeroFlag)
         *flagsPointer &= (WORD)~EFLAGS_ZF;
 }
 
-/* --- XMS (M4) -------------------------------------------------------------- *
+/* XMS (M4):
  * Extended memory lives on the host heap (above the 1MB the V86 map covers), so
  * each EMB is a VirtualAlloc block; DosXmsMove() memcpys between it and the guest's
  * conventional window. The XMS entry point is a BOP stub reached by FAR CALL (so
@@ -2562,7 +2562,7 @@ VOID HostXms(volatile BYTE *tib)
     #undef X_FAIL
 }
 
-/* --- EMS (M4) -------------------------------------------------------------- *
+/* EMS (M4):
  * Expanded memory lives on the host heap (pages * 16KB per handle); the 64KB
  * page frame at E000:0 is real V86 RAM (v86 Map 5). DosEmsMapPage memcpys logical
  * pages in/out of the frame windows (page-frame shadowing). INT 67h carries the

@@ -188,7 +188,7 @@ static VOID PicInterruptAcknowledge(PPIC_CHIP chip, INT line)
         chip->LowestPriority = (BYTE)line;
 }
 
-/* --- port side ------------------------------------------------------------- */
+/* port side: */
 
 /* base port (0x20 / 0xA0): ICW1, OCW2 (EOI), OCW3 (read select) */
 static VOID PicCommandWrite(PPIC_CHIP chip, BYTE value)
@@ -199,7 +199,7 @@ static VOID PicCommandWrite(PPIC_CHIP chip, BYTE value)
         chip->IsIcw4Needed = (BYTE)(value & PIC_ICW1_IC4);
         chip->Isr = chip->Irr = 0;
         chip->Imr = 0;                         /* ICW1 clears the mask register */
-        /* -- THE REST OF ICW1's SIDE EFFECTS (#174), from the datasheet's list:
+        /* THE REST OF ICW1's SIDE EFFECTS (#174), from the datasheet's list:
          * IR7 is assigned the lowest priority, Special Mask Mode is cleared, and
          * the status read is set to the IRR. The rotate-in-AEOI flag is not on
          * Intel's list; it is cleared here too, as QEMU's init reset does, on the
@@ -239,7 +239,7 @@ static VOID PicCommandWrite(PPIC_CHIP chip, BYTE value)
         if (value & PIC_OCW3_ESMM)
             chip->IsSpecialMaskMode = (BYTE)((value & PIC_OCW3_SMM) ? TRUE : FALSE);
 
-        /* -- THE POLL COMMAND, AND WHY DROPPING IT WAS THE "RUNS BUT LIES"
+        /* THE POLL COMMAND, AND WHY DROPPING IT WAS THE "RUNS BUT LIES"
          * SHAPE. A poll read and a status read are THE SAME `IN` ON THE SAME
          * PORT; the only thing that tells them apart is which OCW3 was written
          * last. So a guest that polls never got an error -- it got whatever
@@ -450,7 +450,7 @@ static VOID PicPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     *value = chip->IsIsrSelected ? chip->Isr : chip->Irr;
 }
 
-/* --- host side ------------------------------------------------------------- */
+/* host side: */
 
 VOID VddPicRaise(PPIC_STATE state, BYTE irq)
 {
@@ -474,7 +474,7 @@ INT VddPicCanDeliver(PPIC_STATE state, BYTE irq)
     if (!PicIsLineOpen(chip, irq & PIC_LINE_MASK, irq < PIC_LINES_PER_CHIP))
         return FALSE;
 
-    /* -- A SLAVE LINE MUST ALSO GET THROUGH THE MASTER'S IR2, AND IN FULLY NESTED
+    /* A SLAVE LINE MUST ALSO GET THROUGH THE MASTER'S IR2, AND IN FULLY NESTED
      * MODE IR2 IN SERVICE IS A "NO". (#174) --------------------------------------
      * This used to test the master's mask and its bits 0:1 only, so a second slave
      * interrupt got in while IR2 was still in service -- Special Fully Nested Mode,

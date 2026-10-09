@@ -13,21 +13,6 @@
 
 #include "wowkbd.h"
 #include "host_state.h"
-#include "log.h"
-#include "ne.h"
-#include "wow32.h"
-#include "wowanchors.h"
-#include "wowsched.h"
-#include "wowcall.h"
-#include "wowmsg.h"
-#include "wowres.h"
-#include "wowwin.h"
-#include "wowgdi.h"
-#include "wowuser.h"
-#include "wowdlg.h"
-#include "wowenum.h"
-#include "wowshell.h"
-#include "wowcommdlg.h"
 
 INT WowKeyboardCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
 {

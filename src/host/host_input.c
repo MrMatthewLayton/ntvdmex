@@ -88,6 +88,9 @@ enum
     MODIFIER_LEFT_SHIFT = 0, MODIFIER_RIGHT_SHIFT = 1, MODIFIER_LEFT_CTRL = 2, MODIFIER_RIGHT_CTRL = 3, MODIFIER_LEFT_ALT = 4, MODIFIER_RIGHT_ALT = 5, MODIFIER_KEYS = 6
 };   /* g_ModifiersDown's bits */
 
+/* Used before their definitions below. */
+static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down);
+
 /* ours generated / OS ones suppressed */
 UINT32 g_TypematicSent;
 UINT32 g_TypematicOsRepeats;
@@ -122,9 +125,6 @@ static volatile LONG g_WindowsKeyDown;         /* Win held -- maintained by the 
  * updates), and released as synthetic breaks on WM_KILLFOCUS.
  */
 static BYTE g_ModifiersDown;                              /* bits: 0 LSh 1 RSh 2 LCtl 3 RCtl 4 LAlt 5 RAlt */
-
-/* Used before their definitions below. */
-static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down);
 
 static VOID KeyLatencyBucket(DWORD *histogram, DWORD milliseconds)
 {

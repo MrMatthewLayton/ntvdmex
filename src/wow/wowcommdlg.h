@@ -103,7 +103,7 @@
 #define WOWCDLG_DOS_NAME_MAX            8
 #define WOWCDLG_DOS_EXTENSION_MAX       3
 
-/* -- #294: the rest of COMMDLG's table. Ids = export ordinals (see the top). */
+/* #294: the rest of COMMDLG's table. Ids = export ordinals (see the top). */
 #define WOWCDLG_CHOOSECOLOR             0x0005
 #define WOWCDLG_FINDTEXT                0x000b
 #define WOWCDLG_REPLACETEXT             0x000c

@@ -57,7 +57,7 @@
 #include "../ntvdmex_types.h"
 #include "dos_layout.h"
 
-/* ---- SysVars field offsets, relative to what AH=52h returns in ES:BX. */
+/* SysVars field offsets, relative to what AH=52h returns in ES:BX. */
 #define DOS_SYSVARS_MCB_HEAD                (-2)
 #define DOS_SYSVARS_DPB                     0x00
 #define DOS_SYSVARS_SFT                     0x04
@@ -77,7 +77,7 @@
 #define DOS_SYSVARS_FIRST_MCB_COPY          0x68    /* The first MCB again, as 6.22 and PCem */
 #define DOS_SYSVARS_WOW_TABLE               0x6A    /* krnl386's table of DOS variables */
 
-/* ---- DPB (DOS 4.0+), 33 bytes. Offsets measured from sysvars.dpb0. */
+/* DPB (DOS 4.0+), 33 bytes. Offsets measured from sysvars.dpb0. */
 #define DOS_DPB_DRIVE                       0x00
 #define DOS_DPB_UNIT                        0x01
 #define DOS_DPB_SECTOR_SIZE                 0x02
@@ -98,7 +98,7 @@
 #define DOS_DPB_FREE_COUNT                  0x1F    /* FFFF = unknown, which is what 6.22 had */
 #define DOS_DPB_LEN                         0x21    /* 33 -- confirmed by 0x136A + 0x21 = 0x138B */
 
-/* ---- CDS (DOS 4.0+), 88 bytes. Offsets measured from sysvars.cds0. */
+/* CDS (DOS 4.0+), 88 bytes. Offsets measured from sysvars.cds0. */
 #define DOS_CDS_PATH                        0x00    /* 67 bytes ASCIZ, e.g. "A:\" */
 #define DOS_CDS_FLAGS                       0x43
 #define DOS_CDS_DPB                         0x45    /* Far pointer to this drive's DPB */

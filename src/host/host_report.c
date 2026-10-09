@@ -294,7 +294,7 @@ static PSTR ReportCpuSpeedGovernor(PSTR cursor)
     cursor = LogPut(cursor, " mhz="); cursor = LogHex(cursor, g_CpuSpeedIndex < CPUSPEED_COUNT
                                       ? g_CpuSpeedMhz[g_CpuSpeedIndex] : 0u);
     cursor = LogPut(cursor, " ref_mhz="); cursor = LogHex(cursor, g_CpuSpeedReferenceMhz);
-    /* -- REQUESTED vs DELIVERED, BOTH MEASURED, AND NOW THEY AGREE BY DESIGN.
+    /* REQUESTED vs DELIVERED, BOTH MEASURED, AND NOW THEY AGREE BY DESIGN.
      * The throttle's contract is that guest execution is `duty` of wall time.
      * `delivered_bp` is that ratio as it actually came out -- lifetime guest
      * EXECUTION over lifetime WALL -- and it equals `duty_bp` whenever the
@@ -326,7 +326,7 @@ static PSTR ReportCpuSpeedGovernor(PSTR cursor)
     cursor = LogPut(cursor, " ran_us="); cursor = LogHex(cursor, g_CpuSpeedRanMicroseconds);
     cursor = LogPut(cursor, " win_wall_us="); cursor = LogHex(cursor, g_CpuSpeedWallMicroseconds);
     cursor = LogPut(cursor, " missed="); cursor = LogHex(cursor, g_CpuSpeedMissed);
-    /* -- GRANULARITY = BURST SIZE = playable vs slideshow. `periods` over the run's
+    /* GRANULARITY = BURST SIZE = playable vs slideshow. `periods` over the run's
      * seconds is how many bursts a second the guest advanced in; seven was the
      * "still unplayable" number. gran=0 means auto chose period_ms from rt_us.
      */
@@ -502,7 +502,7 @@ static PSTR ReportExecEventsAndIrq0Timeline(PSTR cursor, PSTR const base)
     cursor = LogPut(cursor, "STAGE2: io_events=0x");  cursor = LogHex(cursor, g_EventIo);
     cursor = LogPut(cursor, " io_burst=0x");          cursor = LogHex(cursor, g_IoExtra);
     cursor = LogPut(cursor, " irq0_inj=0x");          cursor = LogHex(cursor, g_Irq0Injected);
-    /* -- THE GUEST'S CLOCK AS A SHAPE, NOT A TOTAL. See Irq0DeliveredNote.
+    /* THE GUEST'S CLOCK AS A SHAPE, NOT A TOTAL. See Irq0DeliveredNote.
      * IRQ0TL is deliveries in each whole second: read it as a sequence and a
      * slow-down/speed-up is the sequence moving. IRQ0GAP is the inter-delivery
      * interval histogram, which says whether that is stalls or jitter. Both are
@@ -535,7 +535,7 @@ static PSTR ReportExecEventsAndIrq0Timeline(PSTR cursor, PSTR const base)
 
         cursor = LogPut(cursor, " n="); cursor = LogHex(cursor, g_Irq0GapCount);
         cursor = LogPut(cursor, " max_ms="); cursor = LogHex(cursor, g_Irq0GapMaximumMs);
-        /* -- IS THE MUSIC ISR THE CULPRIT? io-per-MILLISECOND, anomalous vs normal.
+        /* IS THE MUSIC ISR THE CULPRIT? io-per-MILLISECOND, anomalous vs normal.
          * A RATE, because a longer gap collects more I/O whatever the guest is
          * doing -- comparing io-per-GAP across populations of different length is
          * the confound that produced a refutation this run reverses. If anom_io_pms
@@ -557,7 +557,7 @@ static PSTR ReportExecEventsAndIrq0Timeline(PSTR cursor, PSTR const base)
         cursor = LogPut(cursor, " worst_per_us="); cursor = LogHex(cursor, g_Irq0WorstPerMicroseconds);
         cursor = LogPut(cursor, " worst_cs="); cursor = LogHex(cursor, g_Irq0WorstCs);
         cursor = LogPut(cursor, " worst_ip="); cursor = LogHex(cursor, g_Irq0WorstIp);
-        /* -- THE A/B/C DISCRIMINATOR. See Irq0DeliveredNote for how to read it.
+        /* THE A/B/C DISCRIMINATOR. See Irq0DeliveredNote for how to read it.
          * Deltas summed over ANOMALOUS gaps only (>= 2 of the period the guest
          * itself programmed), so they are meaningful divided by anom_n above.
          * raise  IRQ0s the 8254 generated inside the gap
@@ -620,7 +620,7 @@ static PSTR ReportExecEventsAndIrq0Timeline(PSTR cursor, PSTR const base)
               cursor = LogPut(cursor, "x");
               cursor = LogHex(cursor, g_PmInjectSite[item].Count); } }
 
-        /* -- WHAT THE TICK COURIER DID. `inj` is the whole point: ticks placed that
+        /* WHAT THE TICK COURIER DID. `inj` is the whole point: ticks placed that
          * the raise site had already given away to a key. Read it against IRQ0WHY's
          * yld -- if inj is a large fraction of yld the courier is collecting exactly
          * what the yield spends. `tries` counts suspend round trips (the cost),
@@ -640,7 +640,7 @@ static PSTR ReportExecEventsAndIrq0Timeline(PSTR cursor, PSTR const base)
 /* End of run: how long V86 string instructions kept the guest, and the loop's remaining event counters. */
 static PSTR ReportV86StringTiming(PSTR cursor)
 {
-    /* -- V86 STRETCHES: the duration of single VdmRunGuest calls, ms buckets. A big
+    /* V86 STRETCHES: the duration of single VdmRunGuest calls, ms buckets. A big
      * timer gap IS a big stretch here; str_max names where it started (cs:ip) and
      * how it ended (ev). ev 2=I/O, others per the event taxonomy.
      */
@@ -1373,7 +1373,7 @@ static PSTR ReportAudioDevices(PSTR cursor)
         cursor = LogPut(cursor, "STAGE2: opl: trace=");   cursor = LogHex(cursor, g_OplTraceCount);
         cursor = LogPut(cursor, " tdrop=");               cursor = LogHex(cursor, g_OplTraceDrop);
         cursor = LogPut(cursor, "\r\n");
-        /* -- THE SPEAKER PATH, END TO END, IN ONE LINE. "I heard nothing" has four
+        /* THE SPEAKER PATH, END TO END, IN ONE LINE. "I heard nothing" has four
          * causes and until now no log told them apart: the guest's port writes not
          * reaching the VDD, the mixer not fitted to it, a frequency it refuses, or
          * a fault downstream of the mixer entirely. Each counter is taken where the
@@ -1460,7 +1460,7 @@ static PSTR ReportPlanarVideoState(PSTR cursor, PCSTR const reportEnd)
      * clearing Sequencer reg 4 bit 3, which was INFERRED from a pixel pattern
      * (80-px period, 50 rows) and never observed directly. Print the register.
      */
-    /* -- THE CRTC AS THE GUEST PROGRAMMED IT. Added s64 after two speculative
+    /* THE CRTC AS THE GUEST PROGRAMMED IT. Added s64 after two speculative
      * fixes in a row -- one right, one wrong. render_planar now depends on all
      * of these, so a wrong picture has to be able to name which register is
      * responsible instead of being guessed at.
@@ -1576,7 +1576,7 @@ static PSTR ReportPlanarVideoState(PSTR cursor, PCSTR const reportEnd)
         else
             cursor = LogPut(cursor, "ABSENT -> the level palette was never loaded into guest RAM\r\n");
     }
-    /* -- s69: THE FADED PALETTE BUFFER + THE FADE STATE, from the guest DS the
+    /* s69: THE FADED PALETTE BUFFER + THE FADE STATE, from the guest DS the
      * heartbeat last sampled. The per-frame palette routine feeds the DAC from
      * ds:0x2668; if that is black while the raw palette (above) is present, the
      * fade multiplied it to zero. [0x1f7c] is the palette-state selector

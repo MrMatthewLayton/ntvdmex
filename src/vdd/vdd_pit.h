@@ -172,7 +172,7 @@ typedef struct _PIT_STATE
      */
     VOID   (*RtcNow)(PVOID context, PPIT_RTC_READING reading);
     PVOID    RtcContext;
-    /* -- AND THE OTHER DIRECTION: INT 1Ah AH=03h (what=0, hour/min/sec) and AH=05h
+    /* AND THE OTHER DIRECTION: INT 1Ah AH=03h (what=0, hour/min/sec) and AH=05h
      * (what=1, cent/year/month/day), decoded from BCD. Returns 1 if the clock took
      * it. GH #250: the host moves the VDM's RTC offset, never the machine's clock.
      * NULL = refused, as before (CF=1). Shares rtc_ctx.
@@ -261,7 +261,7 @@ static inline UINT32 PitWrap(BYTE isBcd)
     return isBcd ? PIT_BCD_WRAP : PIT_BINARY_WRAP;
 }
 
-/* -- THE BIOS TICK (INT 08h's bookkeeping), the ONE body for every place that does it:
+/* THE BIOS TICK (INT 08h's bookkeeping), the ONE body for every place that does it:
  * PitInt08, and the host's two inline bumps for a guest that cannot take IRQ0 right
  * now (main.c: nested real-mode calls, a flat PM client with no INT 08h hook). Each of
  * those used to carry its own copy; a copy that did not keep the witness would make

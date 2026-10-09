@@ -13,17 +13,6 @@
 
 #include "wowgdi.h"
 #include "host_state.h"
-#include "log.h"
-#include "ne.h"
-#include "wow32.h"
-#include "wowanchors.h"
-#include "wowsched.h"
-#include "wowcall.h"
-#include "wowmsg.h"
-#include "wowres.h"
-#include "wowwin.h"
-#include "wowuser.h"
-#include "wowdlg.h"
 #include "wowenum.h"
 
 WOWGDI_OBJECT g_WowGdiObjects[WOWGDI_MAX];
@@ -63,7 +52,7 @@ WORD WowGdiH16(HGDIOBJ object, INT kind)
             if (g_WowGdiObjects[index].Kind == kind)
                 return g_WowGdiObjects[index].Handle16;
 
-            /* -- SAME ADDRESS, DIFFERENT KIND: THE ENTRY IS STALE, AND
+            /* SAME ADDRESS, DIFFERENT KIND: THE ENTRY IS STALE, AND
              * THIS WAS SOLITAIRE'S BLACK CARDS. Win32 RECYCLES HGDIOBJ VALUES.
              * A memory DC is deleted, a bitmap is created, and the OS hands
              * back the SAME pointer -- so this loop found the dead DC's entry
@@ -469,7 +458,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 
         value = GetDeviceCaps((HDC)object, (INT)itemIndex);
 
-        /* -- NUMCOLORS: -1 IS A Win32 SENTINEL AND NO Win16 PROGRAM HAS
+        /* NUMCOLORS: -1 IS A Win32 SENTINEL AND NO Win16 PROGRAM HAS
          * EVER SEEN ONE. (session 51 -- MINESWEEPER RENDERED IN BLACK AND
          * WHITE, and stock ntvdm runs the same binary in colour.)
          * Win32 answers NUMCOLORS with -1 for any device deeper than 8bpp.
@@ -1409,7 +1398,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x30 CreateBitmap(nWidth, nHeight, cPlanes, cBitsPixel, lpvBits) -
+    /* 0x30 CreateBitmap(nWidth, nHeight, cPlanes, cBitsPixel, lpvBits):
      * Unlike CreateCompatibleBitmap this one names its own format, so it needs
      * no DC at all.
      *
@@ -2816,7 +2805,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- Three one-DC questions: 0x4b GetBkColor, 0x55 GetROP2,
+    /* Three one-DC questions: 0x4b GetBkColor, 0x55 GetROP2,
      * 0x16e UpdateColors. [CAUTION] GetBkColor's answer is a DWORD COLORREF and the
      * other two are ints, which is the only difference between them here.
      */
@@ -3013,7 +3002,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x41 CreateRectRgnIndirect(lpRect) -- CreateRectRgn with the four
+    /* 0x41 CreateRectRgnIndirect(lpRect) -- CreateRectRgn with the four
      * numbers in a struct instead of on the stack.
      */
     case WOWGDI_CREATERECTRGNIND:
@@ -3054,7 +3043,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0xac SetRectRgn(hrgn, l, t, r, b) -- redefine an EXISTING region.
+    /* 0xac SetRectRgn(hrgn, l, t, r, b) -- redefine an EXISTING region.
      *
      * [INFO]: The point of it is that it does not allocate, so a guest animating a
      * clip does not churn the token map.
@@ -3147,7 +3136,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x4d GetClipBox(hDC, lpRect) -- the bounding box of the clip region. */
+    /* 0x4d GetClipBox(hDC, lpRect) -- the bounding box of the clip region. */
     case WOWGDI_GETCLIPBOX:
     {
         WORD dc16 = Wow32ArgWord(frame, WOWGDI_GCX_ARG_HDC);
@@ -3198,7 +3187,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x5c GetTextFace(hDC, nCount, lpFaceName) -- the name of the font
+    /* 0x5c GetTextFace(hDC, nCount, lpFaceName) -- the name of the font
      * currently selected. WRITE.EXE and CARDFILE both ask.
      *
      * [CAUTION]: nCount IS A BUFFER SIZE FROM THE GUEST and bounds the copy; Win32's own
@@ -3251,7 +3240,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x0a SetTextJustification(hDC, nBreakExtra, nBreakCount) -- how WRITE
+    /* 0x0a SetTextJustification(hDC, nBreakExtra, nBreakCount) -- how WRITE
      * justifies a line: spread nBreakExtra units over nBreakCount breaks.
      */
     case WOWGDI_SETTEXTJUST:
@@ -3284,7 +3273,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x0c SetWindowExt / 0x0d SetViewportOrg / 0x0e SetViewportExt /
+    /* 0x0c SetWindowExt / 0x0d SetViewportOrg / 0x0e SetViewportExt /
      * 0xa3 SetBitmapDimension -- one (handle, x, y) block, four calls. ------
      *
      * [CAUTION]: THREE TAKE A DC AND THE FOURTH TAKES A BITMAP, which is exactly the kind
@@ -3354,7 +3343,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x9a GetNearestColor(hDC, crColor) / 0x172 GetNearestPaletteIndex -
+    /* 0x9a GetNearestColor(hDC, crColor) / 0x172 GetNearestPaletteIndex:
      *
      * [CAUTION]: THE FIRST ARGUMENT IS A DC IN ONE AND A PALETTE IN THE OTHER, and this
      * host has never made a palette -- Paint's `CreatePalette` reaches a stub
@@ -3640,7 +3629,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x7b PlayMetaFile(hdc, hmf) -- s90, #295. Write and Paintbrush import it.
+    /* 0x7b PlayMetaFile(hdc, hmf) -- s90, #295. Write and Paintbrush import it.
      * The metafile is one of OUR tokens (CloseMetaFile/CopyMetaFile made it), so
      * this is Win32's own PlayMetaFile on the two real handles. Checked to be a
      * metafile by the OS's own GetObjectType, not by token kind alone -- a pen
@@ -3680,7 +3669,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0xaf EnumMetaFile(hdc, hmf, lpfn, lParam) -- #295. CARDFILE, PACKAGER
+    /* 0xaf EnumMetaFile(hdc, hmf, lpfn, lParam) -- #295. CARDFILE, PACKAGER
      * and WRITE import it (through OLECLI). The metafile is snapshot ONCE, as
      * bytes (GetMetaFileBitsEx), and walked by wowconv.h's pure parser; each
      * record is one callback on the wowenum.h chain -- see g_WowGdiMetafile above for the
@@ -3790,7 +3779,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0xb0 PlayMetaFileRecord(hdc, lpht, lpmr, nHandles) -- #295. Win32's own
+    /* 0xb0 PlayMetaFileRecord(hdc, lpht, lpmr, nHandles) -- #295. Win32's own
      * PlayMetaFileRecord on an HGDIOBJ table built from the guest's TOKENS; any
      * entry the record changed goes back as a token -- a new object gets one, a
      * META_DELETEOBJECT'd one (Win32 deletes it and zeroes the slot) has its token
@@ -4115,7 +4104,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x5d GetTextMetrics -- 31 bytes of `short`, layout checked on
+    /* 0x5d GetTextMetrics -- 31 bytes of `short`, layout checked on
      * Notepad (see the note by the defines). --------------------------------
      *
      * [CAUTION]: THE WHOLE STRUCTURE IS WRITTEN, INCLUDING THE FIELDS NOTEPAD DOES NOT
@@ -4267,7 +4256,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         return 1;
     }
 
-    /* -- 0x4a GetBitmapBits / 0x6a SetBitmapBits -- PBRUSH.DLL's own pair. -
+    /* 0x4a GetBitmapBits / 0x6a SetBitmapBits -- PBRUSH.DLL's own pair:
      *
      * [CAUTION]: THE COUNT IS A DWORD AND IT IS THE GUEST'S. It is passed through
      * unchanged and Windows bounds it against the bitmap; clamping it here

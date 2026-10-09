@@ -72,7 +72,7 @@
 #define DOS_MCB_CHAIN_OVERRUNS_TOP          3
 #define DOS_MCB_CHAIN_LAST_MISPLACED        4
 
-/* --- chain bring-up -------------------------------------------------------- */
+/* chain bring-up: */
 
 /* Lay down the initial MCB chain over conventional memory and return the chain
  * root (first MCB paragraph). Three physically-contiguous blocks up to 640KB:
@@ -109,7 +109,7 @@
 #define DOS_RESBLK_MCB                      0x008Fu     /* DOS's own block; data at 0x90 = DOS_CTAB_SEG */
 #define DOS_RESBLK_PARAS                    ((WORD)(DOS_PSP_SEG - 1 - DOS_RESBLK_MCB - 1)) /* 0x6F */
 
-/* --- raw MCB field access over base + paragraph addressing ----------------- */
+/* raw MCB field access over base + paragraph addressing: */
 
 static inline volatile BYTE *DosMcbSegmentAddress(_In_opt_ volatile BYTE *base, _In_ WORD segment)
 {
@@ -142,7 +142,7 @@ static inline VOID DosMcbWriteHeader(
     mcb[DOS_MCB_NAME] = 0;
 }
 
-/* --- the owner name DOS 4+ writes into a program's MCB ---------------------- *
+/* the owner name DOS 4+ writes into a program's MCB:
  * Bytes 8-15 of the MCB IN FRONT OF A PSP hold the program's base name: the last
  * path component up to the '.', at most 8 characters, NUL-padded when shorter. MEM
  * /C and /D read it to say which program owns a block (6.22: "MEM  Program",
@@ -199,7 +199,7 @@ static inline WORD DosMcbInitialize(_In_opt_ volatile BYTE *base)
     return DosMcbInitializeWithTop(base, DOS_MEM_TOP);
 }
 
-/* --- reserve `paragraphs` at the TOP of the chain for resident DOS data ---------- *
+/* reserve `paragraphs` at the TOP of the chain for resident DOS data:
  * Splits the last ('Z') block: it keeps its owner and loses paragraphs+1 paragraphs,
  * and a new 'Z' block owned by DOS (8) takes the top. Returns the data segment
  * of the reserved block, or 0 if the last block is too small. Used for the CDS
@@ -267,7 +267,7 @@ static inline WORD DosMcbReserveTop(
     }
 }
 
-/* --- AH=48: allocate `requested` paragraphs ------------------------------------- *
+/* AH=48: allocate `requested` paragraphs:
  * On success returns 0 and *allocatedSegment = segment of the allocated block (data, not
  * MCB). On failure returns 8 and *largestFree = largest free block found.
  */
@@ -354,7 +354,7 @@ static inline INT DosMcbAllocate(
     return DOS_MCB_SUCCESS;
 }
 
-/* --- AH=49: free the block whose data segment is `blockSegment` ------------------- *
+/* AH=49: free the block whose data segment is `blockSegment`:
  * Marks the block free and coalesces forward into any following free blocks.
  * Returns 0 on success, 9 if blockSegment-1 is not a valid MCB.
  */
@@ -386,7 +386,7 @@ static inline INT DosMcbFree(_In_opt_ volatile BYTE *base, _In_ WORD blockSegmen
     return DOS_MCB_SUCCESS;
 }
 
-/* --- AH=4A: resize the block whose data segment is `blockSegment` to `requested` ------- *
+/* AH=4A: resize the block whose data segment is `blockSegment` to `requested`:
  * Shrink frees the tail; grow absorbs a following free neighbour (if any).
  * Returns 0 on success; 9 if not a valid block; 8 if it cannot grow, with
  * *largestAvailable = the largest size achievable.
@@ -474,7 +474,7 @@ static inline INT DosMcbResize(
     return DOS_MCB_SUCCESS;
 }
 
-/* --- chain integrity validator (test oracle) ------------------------------- *
+/* chain integrity validator (test oracle):
  * Walk from firstMcb; returns 0 if the chain is well-formed and ends exactly
  * at topParagraph with a single 'Z', else a nonzero reason code:
  *   1 runaway chain  2 corrupt signature  3 overruns top  4 'Z' misplaced.

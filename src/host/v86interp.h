@@ -122,7 +122,7 @@ V86_INLINE VOID V86WriteMemory(UINT32 linear, int width, UINT32 value)
   }
   }
 
-/* -- #194: THE 0x66 FORMS THAT USED TO BAIL, AND THE TWO THINGS THE MANUAL LEAVES OPEN.
+/* #194: THE 0x66 FORMS THAT USED TO BAIL, AND THE TWO THINGS THE MANUAL LEAVES OPEN.
  * PUSHFD/POPFD, 32-bit PUSH/POP of a segment register, the 32-bit string ops, CALL/
  * JMP/RET/RETF/LEAVE/IRETD with 0x66, and IRET in protected mode all declined, each
  * one a hand-back to the real CPU -- and in a planar mode a hand-back is not one
@@ -795,7 +795,7 @@ static int V86Step(V86_CPU *cpu)
     opcode = V86_CODE_BYTE(offset++);
     operandSize = isOperand32 ? X86_DWORD_SIZE : X86_WORD_SIZE;                                  /* run 54: word operand width (0x66 -> 4) */
 
-    /* ---- 0F two-byte map (run 54): MOVZX/MOVSX r, r/m -------------------- *
+    /* 0F two-byte map (run 54): MOVZX/MOVSX r, r/m:
      * B6/B7 = zero-extend byte/word, BE/BF = sign-extend. Dest width = W, so *
      * `66 0F B7` gives MOVZX ESI,SI. Other 0F ops bail (the to-do signal).
      */
@@ -923,7 +923,7 @@ static int V86Step(V86_CPU *cpu)
         return 0;                                     /* other 0F ops: bail */
     }
 
-    /* ---- arithmetic/logic group: ADD..CMP, reg/mem forms ------------------ */
+    /* arithmetic/logic group: ADD..CMP, reg/mem forms: */
     if (opcode < X86_OP_INC_FIRST && (opcode & X86_MODRM_REGISTER_MASK) < V86_ALU_FORM_COUNT)
     {
         int aluOperation = (opcode >> X86_MODRM_REG_SHIFT) & X86_MODRM_REGISTER_MASK;
@@ -995,7 +995,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- group1: ADD..CMP r/m, imm (80/81/83) ----------------------------- */
+    /* group1: ADD..CMP r/m, imm (80/81/83): */
     if (opcode == X86_OP_GROUP1_IMM8 || opcode == X86_OP_GROUP1_IMM || opcode == X86_OP_GROUP1_SIMM8)
     {
         int width = (opcode == X86_OP_GROUP1_IMM8) ? 1 : operandSize;
@@ -1035,7 +1035,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- INC/DEC r16/r32 (40-4F) ------------------------------------------ */
+    /* INC/DEC r16/r32 (40-4F): */
     if (opcode >= X86_OP_INC_FIRST && opcode <= X86_OP_DEC_LAST)
     {
         int registerIndex = opcode & X86_MODRM_REGISTER_MASK;
@@ -1048,7 +1048,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- group FE/FF: INC/DEC r/m, and (FF only) near indirect CALL/JMP +
+    /* group FE/FF: INC/DEC r/m, and (FF only) near indirect CALL/JMP +
      * PUSH r/m. Far call/jmp (g=3/5) bail. ----------------------------
      */
     if (opcode == X86_OP_GROUP4 || opcode == X86_OP_GROUP5)
@@ -1184,7 +1184,7 @@ static int V86Step(V86_CPU *cpu)
         return 0;                                      /* g=7 / reg-form far: bail */
     }
 
-    /* ---- TEST r/m,r (84/85); TEST AL/AX,imm (A8/A9) ----------------------- */
+    /* TEST r/m,r (84/85); TEST AL/AX,imm (A8/A9): */
     if (opcode == X86_OP_TEST_BYTE || opcode == X86_OP_TEST)
     {
         int width = (opcode == X86_OP_TEST_BYTE) ? 1 : operandSize;
@@ -1212,10 +1212,10 @@ static int V86Step(V86_CPU *cpu)
                       cpu->Ip = (WORD)(cpu->Ip + offset);
                       return 1; }
 
-    /* ---- group3 (F6/F7): TEST r/m,imm (reg 0/1); NOT/NEG (2/3); MUL/IMUL     *
-     * (4/5) -> [E]DX:[E]AX; DIV/IDIV (6/7) <- [E]DX:[E]AX. run 59's I310102     *
-     * reached `66 F7 /6` = DIV EDI (printf's hex-digit divide loop). No #DE     *
-     * trap path here, so a zero divisor or quotient overflow BAILS to V86       *
+    /* group3 (F6/F7): TEST r/m,imm (reg 0/1); NOT/NEG (2/3); MUL/IMUL
+     * (4/5) -> [E]DX:[E]AX; DIV/IDIV (6/7) <- [E]DX:[E]AX. run 59's I310102
+     * reached `66 F7 /6` = DIV EDI (printf's hex-digit divide loop). No #DE
+     * trap path here, so a zero divisor or quotient overflow BAILS to V86
      * rather than emit UB (correct code never hits it). run 61.
      */
     if (opcode == X86_OP_GROUP3_BYTE || opcode == X86_OP_GROUP3)
@@ -1360,7 +1360,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- MOV r/m<->reg (88-8B); MOV r/m,imm (C6/C7) ----------------------- */
+    /* MOV r/m<->reg (88-8B); MOV r/m,imm (C6/C7): */
     if (opcode == X86_OP_MOV_TO_RM_BYTE || opcode == X86_OP_MOV_TO_RM || opcode == X86_OP_MOV_FROM_RM_BYTE || opcode == X86_OP_MOV_FROM_RM)
     {
         int width = (opcode & 1) ? operandSize : 1;
@@ -1408,7 +1408,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- XCHG r/m,r (86/87): swap; an A0000 read loads latches; no flags --- *
+    /* XCHG r/m,r (86/87): swap; an A0000 read loads latches; no flags:
      * QuickBASIC plots mode-12h pixels with `XCHG ES:[DI],AL` (read-modify the *
      * VGA latches + write in one op), so this is the hot pixel-store path.
      */
@@ -1434,7 +1434,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- PUSH/POP r16/r32 (50-5F): SS:SP-relative, via imem (W-wide slot) --- */
+    /* PUSH/POP r16/r32 (50-5F): SS:SP-relative, via imem (W-wide slot): */
     if (opcode >= X86_OP_PUSH_FIRST && opcode <= X86_OP_PUSH_LAST)
     {
         WORD stackPointer = (WORD)(cpu->Registers[X86_REG_SP] - operandSize);
@@ -1453,7 +1453,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- PUSH imm (68 = imm16/imm32, 6A = imm8 sign-extended to W): a C runtime *
+    /* PUSH imm (68 = imm16/imm32, 6A = imm8 sign-extended to W): a C runtime
      * pushes call args and far-jump targets this way (run 55's I310102 stopped on *
      * `68 3a 02` = PUSH 0x023A). Slot + immediate are W-wide (0x66 -> 32-bit).     *
      * run 56.
@@ -1480,13 +1480,13 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- PUSHF/POPF (9C/9D): the FLAGS stack pair. A C runtime saves/restores  *
-     * FLAGS around a code sequence (run 58's I310102 stopped on `9c ...` heading  *
-     * a PUSHF; PUSH EDX; ... register-save). We push only the flags we model      *
-     * (arithmetic + DF) plus the always-set reserved bit 1; POPF keeps the same   *
-     * mask so the round-trip is exact (IF/TF/IOPL/NT are not modeled -> dropped,  *
-     * so c->flags never accumulates junk). 16-bit only; the 0x66 PUSHFD/POPFD     *
-     * 32-bit-EFLAGS form bails as TODO, matching the neighbouring stack ops.      *
+    /* PUSHF/POPF (9C/9D): the FLAGS stack pair. A C runtime saves/restores
+     * FLAGS around a code sequence (run 58's I310102 stopped on `9c ...` heading
+     * a PUSHF; PUSH EDX; ... register-save). We push only the flags we model
+     * (arithmetic + DF) plus the always-set reserved bit 1; POPF keeps the same
+     * mask so the round-trip is exact (IF/TF/IOPL/NT are not modeled -> dropped,
+     * so c->flags never accumulates junk). 16-bit only; the 0x66 PUSHFD/POPFD
+     * 32-bit-EFLAGS form bails as TODO, matching the neighbouring stack ops.
      * run 59.
      */
     if (opcode == X86_OP_PUSHF)                                    /* PUSHF */
@@ -1528,11 +1528,11 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- PUSHA/POPA (60/61): push/pop the whole GP file. A callee saves the    *
-     * register file on entry this way (run 61's I310102 stopped on `66 60` =      *
-     * PUSHAD). Push order AX,CX,DX,BX,SP,BP,SI,DI (indices 0..7) with the pushed  *
-     * SP being its value BEFORE the push; POPA restores DI..AX and DISCARDS the   *
-     * saved-SP slot. Values are W-wide (0x66 -> PUSHAD/POPAD); the stack offset   *
+    /* PUSHA/POPA (60/61): push/pop the whole GP file. A callee saves the
+     * register file on entry this way (run 61's I310102 stopped on `66 60` =
+     * PUSHAD). Push order AX,CX,DX,BX,SP,BP,SI,DI (indices 0..7) with the pushed
+     * SP being its value BEFORE the push; POPA restores DI..AX and DISCARDS the
+     * saved-SP slot. Values are W-wide (0x66 -> PUSHAD/POPAD); the stack offset
      * stays 16-bit (address size). run 62.
      */
     if (opcode == X86_OP_PUSHA)                                    /* PUSHA / PUSHAD */
@@ -1575,7 +1575,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- PUSH/POP segment regs (06/0E/16/1E push ES/CS/SS/DS, 07/17/1F pop  *
+    /* PUSH/POP segment regs (06/0E/16/1E push ES/CS/SS/DS, 07/17/1F pop
      * ES/SS/DS). QB saves/restores ES (and DS) around each pixel -- this was  *
      * the per-pixel bail that capped batching at ~1 pixel. POP CS (0F) is not *
      * modeled (it would change the code segment mid-interpret). -------------
@@ -1618,7 +1618,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- MOV r/m16,Sreg (8C) / MOV Sreg,r/m16 (8E) ------------------------- */
+    /* MOV r/m16,Sreg (8C) / MOV Sreg,r/m16 (8E): */
     if (opcode == X86_OP_MOV_FROM_SREG || opcode == X86_OP_MOV_TO_SREG)
     {
         V86_MODRM modrm;
@@ -1655,7 +1655,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- LEA r16/r32, m (8D): load the effective-address offset (not memory) */
+    /* LEA r16/r32, m (8D): load the effective-address offset (not memory) */
     if (opcode == X86_OP_LEA)
     {
         V86_MODRM modrm;
@@ -1669,7 +1669,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- shift/rotate group-2: D0/D1 (by 1), D2/D3 (by CL), C0/C1 (imm8) --- */
+    /* shift/rotate group-2: D0/D1 (by 1), D2/D3 (by CL), C0/C1 (imm8): */
     if (opcode == X86_OP_SHIFT_ONE_BYTE || opcode == X86_OP_SHIFT_ONE || opcode == X86_OP_SHIFT_CL_BYTE || opcode == X86_OP_SHIFT_CL || opcode == X86_OP_SHIFT_IMM_BYTE || opcode == X86_OP_SHIFT_IMM)
     {
         int width = (opcode & 1) ? operandSize : 1;
@@ -1699,7 +1699,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- IN/OUT via the device bus (E4-E7, EC-EF) -------------------------- *
+    /* IN/OUT via the device bus (E4-E7, EC-EF):
      * Lets the interpreter run VGA-register-per-pixel plot loops in-host (QB    *
      * reprograms the Graphics Controller bit mask via OUT between pixels).
      */
@@ -1726,7 +1726,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- MOV r,imm (B0-BF); MOV AL/AX,moffs / moffs,AL/AX (A0-A3) --------- */
+    /* MOV r,imm (B0-BF); MOV AL/AX,moffs / moffs,AL/AX (A0-A3): */
     if (opcode >= X86_OP_MOV_IMM_BYTE_FIRST && opcode <= X86_OP_MOV_IMM_BYTE_LAST) { V86Set8(cpu, opcode & X86_MODRM_REGISTER_MASK, V86_CODE_BYTE(offset));
     offset++;
                                     cpu->Ip = (WORD)(cpu->Ip + offset);
@@ -1757,7 +1757,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- string ops: STOS (AA/AB), MOVS (A4/A5), LODS (AC/AD) -------------- */
+    /* string ops: STOS (AA/AB), MOVS (A4/A5), LODS (AC/AD): */
     /* #194: the dword forms (66 AB/A5/A7/AF/AD) are the same loops with w = 4. Each element
      * is still moved a byte at a time, in the order the word forms always used (low
      * byte first; destination before source for CMPS), each byte's offset wrapping at
@@ -1911,7 +1911,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- control flow: Jcc (70-7F), JMP short (EB) / near (E9),
+    /* control flow: Jcc (70-7F), JMP short (EB) / near (E9),
      *        CALL near (E8) + RET near (C3/C2), LOOP/LOOPE/LOOPNE/JCXZ (E0-E3) -- *
      * * CALL/RET let the interpreter follow QuickBasic's per-pixel runtime call,  *
      * * so a whole scanline batches in one fault instead of ~5 instr per pixel.
@@ -1999,7 +1999,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- RETF (CB) / RETF imm16 (CA): far return -- pop offset then a 2-byte  *
+    /* RETF (CB) / RETF imm16 (CA): far return -- pop offset then a 2-byte
      * SELECTOR into CS. In PM `V86SegmentBase` resolves that selector via the LDT (the *
      * same machinery LAR/LSL use), so the client's `PUSH seg; PUSH off; RETF`    *
      * far-transfer idiom (run 56's wall) just follows through. run 57.
@@ -2039,10 +2039,10 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- LEAVE (C9): frame teardown -- MOV SP,BP; POP BP. Paired with the C  *
-     * runtime's function-prologue ENTER/`PUSH BP; MOV BP,SP`, so it lands on    *
-     * every callee return (run 57's far RET reaches main(), whose epilogue is   *
-     * this). SP first snaps to BP (discarding locals), then the caller's BP is  *
+    /* LEAVE (C9): frame teardown -- MOV SP,BP; POP BP. Paired with the C
+     * runtime's function-prologue ENTER/`PUSH BP; MOV BP,SP`, so it lands on
+     * every callee return (run 57's far RET reaches main(), whose epilogue is
+     * this). SP first snaps to BP (discarding locals), then the caller's BP is
      * popped. run 58.
      */
     /* #269: ENTER imm16, 0 (C8) -- the prologue LEAVE below undoes: push BP, BP <- SP,
@@ -2174,7 +2174,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- IMUL reg, r/m, imm (69: imm16/32, 6B: sign-extended imm8). s80: Mario's
+    /* IMUL reg, r/m, imm (69: imm16/32, 6B: sign-extended imm8). s80: Mario's
      * `6b f8 0a` = imul di,ax,10 was 7,978 of its declines under a multi-plane mask.
      * Destination is the reg field; CF=OF=1 when the signed product does not fit the
      * destination width. SF/ZF/AF/PF are undefined by the spec and left alone.
@@ -2265,7 +2265,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- XCHG AX,r16 (91-97): the accumulator short-form -- swap AX with the  *
+    /* XCHG AX,r16 (91-97): the accumulator short-form -- swap AX with the
      * indexed reg (0x90 = XCHG AX,AX = NOP, handled just below). No flags. A C   *
      * runtime uses it as cheap register glue (run 59's I310102 stopped on `96` = *
      * XCHG AX,SI). W-wide (0x66 -> XCHG EAX,r32). run 60.
@@ -2281,7 +2281,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- flag ops + NOP --------------------------------------------------- */
+    /* flag ops + NOP: */
     if (opcode == X86_OP_NOP) /* NOP */
     {
         cpu->Ip = (WORD)(cpu->Ip + offset);
@@ -2323,7 +2323,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- control transfer through the IVT: int nn (CD) / INT3 (CC) / IRET (CF) *
+    /* control transfer through the IVT: int nn (CD) / INT3 (CC) / IRET (CF)
      * Needed by CONTINUOUS interpretation (mode 12h, GH #55). Without them the    *
      * interpreter stopped at the first DOS/BIOS call and handed the guest back to *
      * the real CPU -- where its A0000 writes bypass the planar engine and the      *
@@ -2430,7 +2430,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- far JMP (EA) / far CALL (9A) to a real-mode seg:off ---------------- */
+    /* far JMP (EA) / far CALL (9A) to a real-mode seg:off: */
     if ((opcode == X86_OP_JMP_FAR || opcode == X86_OP_CALL_FAR) && isOperand32 && !g_V86SegmentToLinear)
     {
         /* #194: ptr16:32 -- a dword offset, then the segment; CALL pushes CS and EIP as
@@ -2484,7 +2484,7 @@ static int V86Step(V86_CPU *cpu)
         return 1;
     }
 
-    /* ---- CLI/STI (FA/FB). IF is carried in the flag image so an interpreted   *
+    /* CLI/STI (FA/FB). IF is carried in the flag image so an interpreted
      * handler's IRET restores it and the loop-top delivery gate sees the truth.
      */
     if (opcode == X86_OP_CLI)

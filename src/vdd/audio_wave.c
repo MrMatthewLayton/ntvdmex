@@ -238,7 +238,7 @@ static DWORD WINAPI AudioWaveThread(LPVOID parameter)
     return 0;
 }
 
-/* -- #234: THE DIRECTSOUND OUTPUT. One looping secondary buffer holding the same
+/* #234: THE DIRECTSOUND OUTPUT. One looping secondary buffer holding the same
  * lead as the waveOut queue (BufferCount x FrameCount), filled ahead of the play cursor a
  * chunk at a time from the same mixer callback, and fed to the same recorder. The
  * cursor tells us how far ahead we are, so starvation is MEASURED rather than

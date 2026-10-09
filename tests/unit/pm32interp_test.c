@@ -78,7 +78,7 @@ INT main(VOID)
 {
     printf("== flat 32-bit interpreter battery ==\n");
 
-    /* ---- arithmetic and flags ---- */
+    /* arithmetic and flags: */
     { BYTE code[] = { 0x01, 0xD8 };                         /* add eax,ebx */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 2);
       cpu.Registers[0] = 0x7FFFFFFF;
@@ -158,7 +158,7 @@ INT main(VOID)
       before = cpu;
       CHECK(!Pm32Step(&cpu) && !memcmp(&cpu, &before, sizeof cpu), "idiv by 0: DECLINES with nothing changed"); }
 
-    /* ---- shifts ---- */
+    /* shifts: */
     { BYTE code[] = { 0xC1, 0xEB, 0x02 };                   /* shr ebx,2 */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 3);
       cpu.Registers[3] = 0x0B;
@@ -186,7 +186,7 @@ INT main(VOID)
       PM32_CPU before = cpu;
       CHECK(!Pm32Step(&cpu) && !memcmp(&cpu, &before, sizeof cpu), "rcl: declines, state untouched"); }
 
-    /* ---- addressing ---- */
+    /* addressing: */
     { BYTE code[] = { 0x8D, 0x7C, 0xED, 0x00 };             /* lea edi,[ebp+ebp*8+0] */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 4);
       cpu.Registers[5] = 10;
@@ -232,7 +232,7 @@ INT main(VOID)
       Pm32Step(&cpu);
       CHECK(cpu.Registers[0] == 0x12345678u && g_Memory[0x6004] == 0x78 && g_Memory[0x6007] == 0x12, "mov eax,moffs / mov moffs,eax"); }
 
-    /* ---- control flow ---- */
+    /* control flow: */
     { BYTE code[] = { 0x75, 0x10 };                         /* jne +10h, ZF=0 -> taken */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 2);
       Pm32Step(&cpu);
@@ -253,7 +253,7 @@ INT main(VOID)
       Pm32Step(&cpu);
       CHECK(cpu.Eip == CODE + 5 && cpu.Registers[4] == stackPointer, "ret: back to the instruction after the call"); }
 
-    /* ---- stack ---- */
+    /* stack: */
     { BYTE code[] = { 0x60, 0x61 };                         /* pushad ; popad */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 2);
       INT index;
@@ -273,7 +273,7 @@ INT main(VOID)
       Pm32Step(&cpu);
       CHECK(cpu.Registers[4] == stackPointer && cpu.Registers[0] == 0x1000 && cpu.Registers[7] == 0x1007 && cpu.Registers[5] == 0x1005, "popad: restores all, ESP back"); }
 
-    /* ---- port I/O ---- */
+    /* port I/O: */
     { BYTE code[] = { 0xEE };                               /* out dx,al */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 1);
       cpu.Registers[2] = 0x3C5;
@@ -282,7 +282,7 @@ INT main(VOID)
       Pm32Step(&cpu);
       CHECK(g_OutCount == 1 && g_OutPort == 0x3C5 && g_OutValue == 0x0C, "out dx,al: map mask 0Ch reaches the port"); }
 
-    /* ---- exact decline ---- */
+    /* exact decline: */
     { BYTE code[] = { 0xD9, 0xE8 };                         /* fld1: FPU */
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, 2);
       PM32_CPU before = cpu;
@@ -296,7 +296,7 @@ INT main(VOID)
       PM32_CPU before = cpu;
       CHECK(!Pm32Step(&cpu) && !memcmp(&cpu, &before, sizeof cpu), "0x67 prefix: declines"); }
 
-    /* ---- a drawer, end to end: the shape of Doom's R_DrawColumnLow ------------------
+    /* a drawer, end to end: the shape of Doom's R_DrawColumnLow:
      * pushad; mov edx,3C5h; mov eax,3; out dx,al; mov edi,5400h; mov ecx,4;
      * L: mov [edi],bl; add edi,50h; dec ecx; jne L; popad; ret
      */

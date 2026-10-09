@@ -450,7 +450,7 @@ static VOID InterpTestO32Battery(VOID)
       InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
       CHECK(InterpTestStepOnce(&cpu) && cpu.Registers[0] == 0xA5, "66 E5 in eax,60h: all 32 bits written"); }
 
-    /* ---- IRET and RETF dword in 16-bit PROTECTED mode ---- */
+    /* IRET and RETF dword in 16-bit PROTECTED mode: */
     g_V86SegmentToLinear = InterpTestSegmentToLinear;
     g_V86SelectorDescriptor = InterpTestSelectorDescriptor;
     { V86_CPU cpu = InterpTestMakeCpu();
@@ -630,7 +630,7 @@ INT main(VOID)
     printf("== mode-12h fill-loop interpreter battery ==\n");
     memset(g_Memory, 0, sizeof g_Memory);
 
-    /* ---- T1: ADD AL,imm8 -> 0x80+0x80 = 0 (CF,ZF,OF,PF; not SF,AF) -------- */
+    /* T1: ADD AL,imm8 -> 0x80+0x80 = 0 (CF,ZF,OF,PF; not SF,AF): */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x04, 0x80 };    /* ADD AL,80h */
       cpu.Registers[0] = 0x0080;
@@ -641,7 +641,7 @@ INT main(VOID)
             "add: 80+80 sets CF+ZF+OF+PF");
       CHECK(!(cpu.Flags & EFLAGS_SF_U) && !(cpu.Flags & EFLAGS_AF_U), "add: 80+80 clears SF+AF"); }
 
-    /* ---- T2: ADD AL,1 -> 0x7F+1 = 0x80 (OF,SF,AF; not CF,ZF,PF) ---------- */
+    /* T2: ADD AL,1 -> 0x7F+1 = 0x80 (OF,SF,AF; not CF,ZF,PF): */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x04, 0x01 };
       cpu.Registers[0] = 0x007F;
@@ -653,7 +653,7 @@ INT main(VOID)
       CHECK(!(cpu.Flags & EFLAGS_CF_U) && !(cpu.Flags & EFLAGS_ZF_U) && !(cpu.Flags & EFLAGS_PF_U),
             "add: 7F+1 clears CF+ZF+PF"); }
 
-    /* ---- T3: SUB AX,imm16 -> 1-2 = 0xFFFF (CF,SF,AF,PF; not OF,ZF) ------- */
+    /* T3: SUB AX,imm16 -> 1-2 = 0xFFFF (CF,SF,AF,PF; not OF,ZF): */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x2D, 0x02, 0x00 };
       cpu.Registers[0] = 0x0001;
@@ -664,7 +664,7 @@ INT main(VOID)
             "sub: 1-2 sets CF+SF+AF+PF");
       CHECK(!(cpu.Flags & EFLAGS_OF_U) && !(cpu.Flags & EFLAGS_ZF_U), "sub: 1-2 clears OF+ZF"); }
 
-    /* ---- T4: CMP computes flags but does not store ---------------------- */
+    /* T4: CMP computes flags but does not store: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x3D, 0x01, 0x00 };  /* CMP AX,1 */
       cpu.Registers[0] = 0x0001;
@@ -673,7 +673,7 @@ INT main(VOID)
       CHECK(cpu.Registers[0] == 0x0001, "cmp: AX unchanged");
       CHECK((cpu.Flags & EFLAGS_ZF_U) && !(cpu.Flags & EFLAGS_CF_U), "cmp: 1==1 -> ZF, no CF"); }
 
-    /* ---- T5: OR AL,AL on zero -> ZF+PF, CF/OF cleared ------------------- */
+    /* T5: OR AL,AL on zero -> ZF+PF, CF/OF cleared: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x08, 0xC0 };   /* OR AL,AL */
       cpu.Registers[0] = 0x0000;
@@ -683,7 +683,7 @@ INT main(VOID)
       CHECK((cpu.Flags & EFLAGS_ZF_U) && (cpu.Flags & EFLAGS_PF_U), "or: 0|0 sets ZF+PF");
       CHECK(!(cpu.Flags & EFLAGS_CF_U) && !(cpu.Flags & EFLAGS_OF_U), "or: clears CF+OF"); }
 
-    /* ---- T6: INC/DEC preserve CF; INC 0xFFFF -> 0 with ZF, CF kept ------ */
+    /* T6: INC/DEC preserve CF; INC 0xFFFF -> 0 with ZF, CF kept: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x40 };          /* INC AX */
       cpu.Registers[0] = 0xFFFF;
@@ -693,7 +693,7 @@ INT main(VOID)
       CHECK(cpu.Registers[0] == 0x0000 && (cpu.Flags & EFLAGS_ZF_U), "inc: FFFF+1 = 0, ZF");
       CHECK(cpu.Flags & EFLAGS_CF_U, "inc: preserves CF"); }
 
-    /* ---- T7: ADC adds the carry-in -------------------------------------- */
+    /* T7: ADC adds the carry-in: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x14, 0x00 };    /* ADC AL,0 */
       cpu.Registers[0] = 0x0005;
@@ -702,7 +702,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK((cpu.Registers[0] & 0xFF) == 0x06, "adc: 5+0+CF = 6"); }
 
-    /* ---- T8: MOV reg<->mem + ModRM disp + segment override -------------- */
+    /* T8: MOV reg<->mem + ModRM disp + segment override: */
     { V86_CPU cpu = InterpTestMakeCpu();
       /* MOV AL, ES:[BX+SI+2]  =  26 8A 40 02 */
       BYTE bytes[] = { 0x26, 0x8A, 0x40, 0x02 };
@@ -715,7 +715,7 @@ INT main(VOID)
       CHECK((cpu.Registers[0] & 0xFF) == 0x9C, "mov: AL <- ES:[BX+SI+2]");
       CHECK(cpu.Ip == 4, "mov: ip advanced by 4 (prefix+modrm+disp8)"); }
 
-    /* ---- T9: [BP] defaults to SS --------------------------------------- */
+    /* T9: [BP] defaults to SS: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x8A, 0x46, 0x00 };     /* MOV AL,[BP+0] */
       cpu.Segments[2] = 0x3000;
@@ -725,7 +725,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK((cpu.Registers[0] & 0xFF) == 0x77, "mov: [BP] uses SS by default"); }
 
-    /* ---- T10: MOV r/m,imm (C7) into RAM via [BX] ------------------------ */
+    /* T10: MOV r/m,imm (C7) into RAM via [BX]: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xC7, 0x07, 0x34, 0x12 };  /* MOV WORD [BX],1234h */
       cpu.Segments[3] = 0x4000;
@@ -735,7 +735,7 @@ INT main(VOID)
       CHECK(g_Memory[((UINT32)0x4000<<4)+8] == 0x34 && g_Memory[((UINT32)0x4000<<4)+9] == 0x12,
             "mov: WORD [BX] = 1234h (little-endian)"); }
 
-    /* ---- T11: REP STOSB fill (forward, DF=0) --------------------------- */
+    /* T11: REP STOSB fill (forward, DF=0): */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xF3, 0xAA };    /* REP STOSB */
       cpu.Segments[0] = 0x2000;
@@ -748,7 +748,7 @@ INT main(VOID)
             "stos: REP fills 4 bytes");
       CHECK(cpu.Registers[1] == 0 && cpu.Registers[7] == 4, "stos: CX=0, DI advanced to 4"); }
 
-    /* ---- T12: REP STOSW backward (DF=1) -------------------------------- */
+    /* T12: REP STOSW backward (DF=1): */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xFD, 0xF3, 0xAB };   /* STD; REP STOSW */
       cpu.Segments[0] = 0x3000;
@@ -762,7 +762,7 @@ INT main(VOID)
       CHECK(g_Memory[0x3000E]==0x34 && g_Memory[0x3000F]==0x12, "stosw/STD: word at DI-2");
       CHECK(cpu.Registers[7] == 0x000C && cpu.Registers[1] == 0, "stosw/STD: DI=-4, CX=0"); }
 
-    /* ---- T13: REP MOVSB copy ------------------------------------------- */
+    /* T13: REP MOVSB copy: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xFC, 0xF3, 0xA4 };   /* CLD; REP MOVSB */
       cpu.Segments[3] = 0x5000;
@@ -779,7 +779,7 @@ INT main(VOID)
       CHECK(g_Memory[0x60000]==0xDE && g_Memory[0x60001]==0xAD && g_Memory[0x60002]==0xBE,
             "movsb: DS:SI -> ES:DI x3"); }
 
-    /* ---- T14: Jcc taken/not on ZF -------------------------------------- */
+    /* T14: Jcc taken/not on ZF: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x74, 0x10 };    /* JZ +0x10 */
       cpu.Flags |= EFLAGS_ZF_U;
@@ -791,7 +791,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK(cpu.Ip == 0x02, "jz: not taken -> ip = 2"); }
 
-    /* ---- T15: JMP short backward / NOP --------------------------------- */
+    /* T15: JMP short backward / NOP: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x90, 0xEB, 0xFD };  /* NOP; JMP -3 */
       InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
@@ -800,7 +800,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK(cpu.Ip == 0, "jmp short: 3 + (-3) = 0"); }
 
-    /* ---- T16: LOOP countdown (CX=5 -> runs body 5x, CX=0) -------------- */
+    /* T16: LOOP countdown (CX=5 -> runs body 5x, CX=0): */
     { V86_CPU cpu = InterpTestMakeCpu();
       /* MOV CX,5 ; loop: NOP ; LOOP loop */
       BYTE bytes[] = { 0xB9, 0x05, 0x00, 0x90, 0xE2, 0xFD };
@@ -815,7 +815,7 @@ INT main(VOID)
       CHECK(cpu.Registers[1] == 0, "loop: CX decremented to 0");
       CHECK(cpu.Ip == 6, "loop: fell through after CX hit 0"); }
 
-    /* ---- T17: TEST sets flags, no store -------------------------------- */
+    /* T17: TEST sets flags, no store: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xA8, 0x01 };    /* TEST AL,1 */
       cpu.Registers[0] = 0x00F0;
@@ -823,7 +823,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK(cpu.Registers[0] == 0x00F0 && (cpu.Flags & EFLAGS_ZF_U), "test: AL&1==0 -> ZF, AL kept"); }
 
-    /* ---- T18: bail on an unmodeled opcode leaves state exactly at it ------ *
+    /* T18: bail on an unmodeled opcode leaves state exactly at it:
      * The load-bearing case is the VDM BOP, `C4 C4 nn`. C4 is LES, and LES is  *
      * deliberately NOT modeled: bailing on it is how a DOS/BIOS call reaches   *
      * the kernel as a BOP event instead of being swallowed here.
@@ -834,10 +834,10 @@ INT main(VOID)
       CHECK(InterpTestStepOnce(&cpu) == 1 && cpu.Ip == 1, "bail: NOP runs");
       CHECK(InterpTestStepOnce(&cpu) == 0 && cpu.Ip == 1, "bail: BOP (C4 C4 nn) returns 0, ip unchanged"); }
 
-    /* ---- T18b: INT nn / IRET / CLI / STI (GH #55) ------------------------- *
-     * Continuous interpretation in mode 12h means the interpreter has to run    *
-     * the guest THROUGH its own interrupt handlers; before this it stopped at   *
-     * the first INT and handed the guest back to V86, where its A0000 writes    *
+    /* T18b: INT nn / IRET / CLI / STI (GH #55):
+     * Continuous interpretation in mode 12h means the interpreter has to run
+     * the guest THROUGH its own interrupt handlers; before this it stopped at
+     * the first INT and handed the guest back to V86, where its A0000 writes
      * are invisible to us. Vectoring goes through the real IVT at linear 0.
      */
     { V86_CPU cpu = InterpTestMakeCpu();
@@ -865,7 +865,7 @@ INT main(VOID)
       CHECK(cpu.Registers[4] == 0x0100, "iret: stack unwound");
       CHECK(cpu.Flags & 0x200u, "iret: IF restored from the pushed FLAGS"); }
 
-    /* ---- T18c: far JMP / far CALL ----------------------------------------- */
+    /* T18c: far JMP / far CALL: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x9A, 0x11, 0x22, 0x00, 0x30 };  /* CALL 3000:2211 */
       InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
@@ -878,7 +878,7 @@ INT main(VOID)
         InterpTestLoad(&cpu, 0x3000, 0x2211, moreBytes, sizeof moreBytes);
         CHECK(InterpTestStepOnce(&cpu) == 1 && cpu.Segments[1] == 0x4000 && cpu.Ip == 0x0100, "EA: far JMP transfers"); } }
 
-    /* ---- T19: 32-bit operand-size (0x66) -- run 54 --------------------- *
+    /* T19: 32-bit operand-size (0x66) -- run 54:
      * A C runtime under DPMI does 32-bit register math in a 16-bit segment  *
      * via the 0x66 prefix (run 53's I310102 stopped on MOVZX ESI,SI). These *
      * exercise the widened register file + width-aware helpers.
@@ -942,7 +942,7 @@ INT main(VOID)
       cpu.Registers[0] = 0x05;
       CHECK(InterpTestStepOnce(&cpu) == 1 && (cpu.Registers[0] & 0xFF) == 0x06, "66 before byte-op: width stays 1"); }
 
-    /* ---- #269: Jcc rel16/rel32 (0F 8x), SETcc (0F 9x), ENTER n,0 (C8) ------ */
+    /* #269: Jcc rel16/rel32 (0F 8x), SETcc (0F 9x), ENTER n,0 (C8): */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x0F, 0x84, 0x00, 0x01 };            /* jz +0x100 */
       cpu.Flags |= EFLAGS_ZF_U;
@@ -992,7 +992,7 @@ INT main(VOID)
       InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
       CHECK(InterpTestStepOnce(&cpu) == 0, "C8 enter with a nesting level: bail"); }
 
-    /* ---- T20: LAR/LSL descriptor introspection -- run 55 --------------- *
+    /* T20: LAR/LSL descriptor introspection -- run 55:
      * A DPMI C runtime reads a descriptor's access byte with LAR;CX / SHR.  *
      * In V86 (g_V86SelectorDescriptor==NULL) these bail; with the hook they consult it.
      */
@@ -1028,7 +1028,7 @@ INT main(VOID)
             "66 0F 03: LSL ECX,CX = byte limit, ZF set"); }
     g_V86SelectorDescriptor = 0;
 
-    /* ---- T20: full read-scan fill loop, exit by counter ---------------- *
+    /* T20: full read-scan fill loop, exit by counter:
      * MOV AL,ES:[SI] / OR AL,AL / JNZ found / INC SI / DEC DI / JNZ loop    *
      * with all-zero pixels and DI=4: runs 4 iterations, then falls to a     *
      * bail opcode -- exactly the BUBBLES PAINT pattern, all in the host.
@@ -1053,7 +1053,7 @@ INT main(VOID)
       CHECK(cpu.Registers[7] == 0 && cpu.Registers[6] == 4, "scan: counter loop exits at DI=0, SI=4");
       CHECK(cpu.Ip == 0x0D, "scan: bailed exactly on the HLT"); }
 
-    /* ---- T21: same scan, early exit on a nonzero pixel ----------------- */
+    /* T21: same scan, early exit on a nonzero pixel: */
     { V86_CPU cpu = InterpTestMakeCpu();
       BYTE bytes[] = {
         0x26, 0x8A, 0x04, 0x0A, 0xC0, 0x75, 0x06,
@@ -1069,7 +1069,7 @@ INT main(VOID)
             "scan: stops on nonzero pixel (AL=77, SI=2, DI=6)");
       CHECK(cpu.Ip == 0x0D, "scan: nonzero exit bails on the HLT"); }
 
-    /* ---- T22: XCHG r/m8,r8 with memory (QB pixel plot) ----------------- */
+    /* T22: XCHG r/m8,r8 with memory (QB pixel plot): */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x26, 0x86, 0x05 };   /* XCHG ES:[DI],AL */
       cpu.Segments[0] = 0x7000;
@@ -1081,7 +1081,7 @@ INT main(VOID)
       CHECK(g_Memory[((UINT32)0x7000<<4)+4] == 0xC3, "xchg: memory got AL");
       CHECK((cpu.Registers[0] & 0xFF) == 0x2A, "xchg: AL got old memory value"); }
 
-    /* ---- T23: XCHG r16,r16 (reg-reg) ----------------------------------- */
+    /* T23: XCHG r16,r16 (reg-reg): */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x87, 0xD8 };    /* XCHG AX,BX */
       cpu.Registers[0] = 0x1111;
@@ -1090,7 +1090,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK(cpu.Registers[0] == 0x2222 && cpu.Registers[3] == 0x1111, "xchg: AX<->BX"); }
 
-    /* ---- T24: PUSH then POP round-trips through SS:SP ------------------- */
+    /* T24: PUSH then POP round-trips through SS:SP: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x51, 0x5A };    /* PUSH CX ; POP DX */
       cpu.Segments[2] = 0x8000;
@@ -1104,7 +1104,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK(cpu.Registers[2] == 0xBEEF && cpu.Registers[4] == 0x0100, "pop: DX=CX, SP restored"); }
 
-    /* ---- T25: OUT imm8 + IN DX dispatched to the port hooks ------------- */
+    /* T25: OUT imm8 + IN DX dispatched to the port hooks: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xE6, 0x3C };    /* OUT 3Ch... no: imm port 0x3C */
       /* use OUT DX,AL to port 0x3C5, then IN AL,0x60 */
@@ -1118,7 +1118,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK((cpu.Registers[0] & 0xFF) == 0xA5, "in: AL <- port 0x60 via bus"); }
 
-    /* ---- T26: CALL near relative + RET round-trip ---------------------- *
+    /* T26: CALL near relative + RET round-trip:
      * 00 MOV AX,1234 / 03 CALL +4 / 06 INC AX / 07 HLT / 0A INC BX / 0B RET
      */
     { V86_CPU cpu = InterpTestMakeCpu();
@@ -1132,7 +1132,7 @@ INT main(VOID)
       CHECK(cpu.Registers[4] == 0x0200, "call/ret: SP restored");
       CHECK(cpu.Ip == 0x07, "call/ret: bailed on HLT after return"); }
 
-    /* ---- T27: CALL near indirect via register (FF /2) ------------------ *
+    /* T27: CALL near indirect via register (FF /2):
      * 00 CALL SI(=06) / 02 INC AX / 03 HLT / 06 RET
      */
     { V86_CPU cpu = InterpTestMakeCpu();
@@ -1145,7 +1145,7 @@ INT main(VOID)
       CHECK(cpu.Registers[0] == 0x0001 && cpu.Registers[4] == 0x0200 && cpu.Ip == 0x03,
             "call indirect: ran subroutine via SI, SP restored"); }
 
-    /* ---- T28: SHR builds a bit-mask (QB's 0x80 >> x) -------------------- */
+    /* T28: SHR builds a bit-mask (QB's 0x80 >> x): */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xD2, 0xE8 };   /* SHR AL, CL */
       cpu.Registers[0] = 0x0080;
@@ -1154,7 +1154,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK((cpu.Registers[0] & 0xFF) == 0x10, "shr: 0x80 >> 3 = 0x10"); }
 
-    /* ---- T29: SHL by 1 sets CF from the bit shifted out ----------------- */
+    /* T29: SHL by 1 sets CF from the bit shifted out: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xD0, 0xE0 };   /* SHL AL, 1 */
       cpu.Registers[0] = 0x00C0;
@@ -1163,7 +1163,7 @@ INT main(VOID)
       CHECK((cpu.Registers[0] & 0xFF) == 0x80, "shl: 0xC0 << 1 = 0x80");
       CHECK((cpu.Flags & EFLAGS_CF_U) != 0, "shl: CF = bit shifted out"); }
 
-    /* ---- T30: ROR by 1, CF = rotated bit; result wraps ------------------ */
+    /* T30: ROR by 1, CF = rotated bit; result wraps: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xD0, 0xC8 };   /* ROR AL, 1 */
       cpu.Registers[0] = 0x0001;
@@ -1171,7 +1171,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK((cpu.Registers[0] & 0xFF) == 0x80 && (cpu.Flags & EFLAGS_CF_U), "ror: 0x01 ror 1 = 0x80, CF=1"); }
 
-    /* ---- T31: SHR imm8 (C0 /5) with flags ------------------------------- */
+    /* T31: SHR imm8 (C0 /5) with flags: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xC0, 0xE8, 0x04 };   /* SHR AL, 4 */
       cpu.Registers[0] = 0x00A5;
@@ -1179,7 +1179,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK((cpu.Registers[0] & 0xFF) == 0x0A, "shr: 0xA5 >> 4 = 0x0A"); }
 
-    /* ---- T32: PUSH/POP ES round-trips (the per-pixel bail) -------------- */
+    /* T32: PUSH/POP ES round-trips (the per-pixel bail): */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x06, 0x1F };   /* PUSH ES ; POP DS */
       cpu.Segments[2] = 0x9000;
@@ -1191,7 +1191,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK(cpu.Segments[3] == 0xA000 && cpu.Registers[4] == 0x0100, "pop DS = pushed ES"); }
 
-    /* ---- T33: MOV Sreg,r/m and MOV r/m,Sreg --------------------------- */
+    /* T33: MOV Sreg,r/m and MOV r/m,Sreg: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x8E, 0xC0, 0x8C, 0xC3 };  /* MOV ES,AX ; MOV BX,ES */
       cpu.Registers[0] = 0xB800;
@@ -1201,7 +1201,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK(cpu.Registers[3] == 0xB800, "mov BX,ES"); }
 
-    /* ---- T34: LEA loads the offset, not the memory contents ------------ */
+    /* T34: LEA loads the offset, not the memory contents: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x8D, 0x41, 0x06 };   /* LEA AX,[BX+DI+6] */
       cpu.Registers[3] = 0x0010;
@@ -1211,7 +1211,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK(cpu.Registers[0] == 0x001A, "lea: AX = BX+DI+6 = 0x1A (offset, not [0x1A])"); }
 
-    /* ---- T35: PUSH imm16 (68) writes a W-wide slot; SP -= 2 -- run 56 ---- *
+    /* T35: PUSH imm16 (68) writes a W-wide slot; SP -= 2 -- run 56:
      * The exact opcode run 55 stopped on: 68 3a 02 = PUSH 0x023A.
      */
     { V86_CPU cpu = InterpTestMakeCpu();
@@ -1223,7 +1223,7 @@ INT main(VOID)
       CHECK(g_Memory[((UINT32)0x8000<<4)+0xFE]==0x3A && g_Memory[((UINT32)0x8000<<4)+0xFF]==0x02,
             "push imm16: word 0x023A written at SS:SP"); }
 
-    /* ---- T36: PUSH imm8 (6A) sign-extends to the 16-bit slot ------------ */
+    /* T36: PUSH imm8 (6A) sign-extends to the 16-bit slot: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x6A, 0xFF };         /* PUSH -1 (byte) */
       cpu.Segments[2] = 0x8000;
@@ -1233,7 +1233,7 @@ INT main(VOID)
       CHECK(g_Memory[((UINT32)0x8000<<4)+0xFE]==0xFF && g_Memory[((UINT32)0x8000<<4)+0xFF]==0xFF,
             "push imm8: -1 sign-extended to 0xFFFF"); }
 
-    /* ---- T37: PUSH imm round-trips through POP (value + flags intact) --- */
+    /* T37: PUSH imm round-trips through POP (value + flags intact): */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x6A, 0x7F, 0x58 };   /* PUSH 0x7F ; POP AX */
       cpu.Segments[2] = 0x8000;
@@ -1243,7 +1243,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK(cpu.Registers[0] == 0x007F && cpu.Registers[4] == 0x0100, "push imm8/pop: AX=0x7F, SP restored"); }
 
-    /* ---- T38: 32-bit PUSH imm32 (66 68) -- a 32-bit C runtime arg ------- */
+    /* T38: 32-bit PUSH imm32 (66 68) -- a 32-bit C runtime arg: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x66, 0x68, 0x78, 0x56, 0x34, 0x12 }; /* PUSH 0x12345678 */
       cpu.Segments[2] = 0x8000;
@@ -1253,7 +1253,7 @@ INT main(VOID)
       CHECK(g_Memory[((UINT32)0x8000<<4)+0xFC]==0x78 && g_Memory[((UINT32)0x8000<<4)+0xFF]==0x12,
             "push imm32: dword 0x12345678 written at SS:SP"); }
 
-    /* ---- T39: RETF (CB) pops offset then a 2-byte selector into CS -- run 57 - *
+    /* T39: RETF (CB) pops offset then a 2-byte selector into CS -- run 57:
      * The far-return that follows run 56's `PUSH seg; PUSH off; RETF` idiom.
      */
     { V86_CPU cpu = InterpTestMakeCpu();
@@ -1269,7 +1269,7 @@ INT main(VOID)
       CHECK(cpu.Ip == 0x1234 && cpu.Segments[1] == 0x5678, "CB: RETF sets IP=off, CS=selector");
       CHECK(cpu.Registers[4] == 0x0104, "retf: SP += 4 (offset + selector)"); }
 
-    /* ---- T40: RETF imm16 (CA) also releases imm16 stack bytes ---------------- */
+    /* T40: RETF imm16 (CA) also releases imm16 stack bytes: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xCA, 0x08, 0x00 };   /* RETF 8 */
       cpu.Segments[2] = 0x8000;
@@ -1283,7 +1283,7 @@ INT main(VOID)
       CHECK(cpu.Ip == 0x0200 && cpu.Segments[1] == 0x000F, "CA: RETF imm16 sets CS:IP");
       CHECK(cpu.Registers[4] == 0x010C, "retf imm16: SP += 4 + 8"); }
 
-    /* ---- T41: the full idiom -- PUSH seg; PUSH off; RETF far-transfers -------- *
+    /* T41: the full idiom -- PUSH seg; PUSH off; RETF far-transfers:
      * V86SegmentBase = seg<<4 here (g_V86SegmentToLinear NULL), so CS=0x0800 lands code at 0x8000.
      */
     { V86_CPU cpu = InterpTestMakeCpu();
@@ -1298,7 +1298,7 @@ INT main(VOID)
       CHECK(cpu.Segments[1] == 0x0800 && cpu.Ip == 0x0100, "push seg/off + RETF: transferred to 0800:0100");
       CHECK(cpu.Registers[4] == 0x0200, "far-transfer: SP back to start (2 pushes + retf pop 4)"); }
 
-    /* ---- T42: LEAVE (C9) -- MOV SP,BP; POP BP, the callee epilogue -- run 58 - *
+    /* T42: LEAVE (C9) -- MOV SP,BP; POP BP, the callee epilogue -- run 58:
      * SP starts below BP (locals allocated); LEAVE discards them (SP<-BP) then   *
      * pops the caller's BP. Paired with ENTER / `PUSH BP; MOV BP,SP`.
      */
@@ -1315,7 +1315,7 @@ INT main(VOID)
       CHECK(cpu.Registers[5] == 0x0ABC, "leave: BP <- caller's BP popped from [old BP]");
       CHECK(cpu.Registers[4] == 0x0102, "leave: SP <- BP then +2 (locals discarded, BP popped)"); }
 
-    /* ---- T43: LEAVE preserves the high 16 bits of ESP/EBP (partial-reg) ------ */
+    /* T43: LEAVE preserves the high 16 bits of ESP/EBP (partial-reg): */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xC9 };               /* LEAVE */
       cpu.Segments[2] = 0x8000;
@@ -1328,7 +1328,7 @@ INT main(VOID)
       CHECK(cpu.Registers[5] == 0xBEEF0ABC && cpu.Registers[4] == 0xDEAD0102,
             "leave: E-reg high halves of SP/BP preserved (16-bit LEAVE)"); }
 
-    /* ---- T44: PUSHF (9C) -- push the modeled FLAGS + reserved bit 1 -- run 59 - *
+    /* T44: PUSHF (9C) -- push the modeled FLAGS + reserved bit 1 -- run 59:
      * SP -= 2; [SP] = (flags & modeled-mask) | 0x0002. IF/TF/IOPL/NT not modeled.
      */
     { V86_CPU cpu = InterpTestMakeCpu();
@@ -1343,7 +1343,7 @@ INT main(VOID)
       { WORD word = g_Memory[((UINT32)0x8000<<4)+0xFE] | (g_Memory[((UINT32)0x8000<<4)+0xFF]<<8);
         CHECK(word == ((EFLAGS_CF_U|EFLAGS_ZF_U|EFLAGS_SF_U|EFLAGS_DF_U) | 0x0002u), "pushf: pushed FLAGS = modeled bits + reserved bit 1"); } }
 
-    /* ---- T45: POPF (9D) -- load FLAGS from stack (modeled bits only) ---------- */
+    /* T45: POPF (9D) -- load FLAGS from stack (modeled bits only): */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x9D };               /* POPF */
       cpu.Segments[2] = 0x8000;
@@ -1356,7 +1356,7 @@ INT main(VOID)
       CHECK((cpu.Flags & (EFLAGS_CF_U|EFLAGS_PF_U|EFLAGS_OF_U)) == (EFLAGS_CF_U|EFLAGS_PF_U|EFLAGS_OF_U), "popf: CF/PF/OF restored from stack");
       CHECK((cpu.Flags & 0x0002u) && !(cpu.Flags & EFLAGS_ZF_U), "popf: reserved bit set, ZF cleared (not on stack)"); }
 
-    /* ---- T46: PUSHF/POPF round-trip is exact for modeled flags; SP high half kept */
+    /* T46: PUSHF/POPF round-trip is exact for modeled flags; SP high half kept */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x9C, 0x31, 0xC0, 0x9D };  /* PUSHF; XOR AX,AX; POPF */
       cpu.Segments[2] = 0x8000;
@@ -1369,7 +1369,7 @@ INT main(VOID)
       CHECK((cpu.Flags & (EFLAGS_AF_U|EFLAGS_SF_U|EFLAGS_DF_U)) == (EFLAGS_AF_U|EFLAGS_SF_U|EFLAGS_DF_U), "pushf/popf: modeled flags round-trip exactly");
       CHECK(cpu.Registers[4] == 0xCAFE0100, "pushf/popf: SP back to start, E-reg high half preserved"); }
 
-    /* ---- T47: XCHG AX,SI (96) -- accumulator short-form swap, no flags -- run 60 */
+    /* T47: XCHG AX,SI (96) -- accumulator short-form swap, no flags -- run 60 */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x96 };               /* XCHG AX,SI */
       cpu.Registers[0] = 0x1234;
@@ -1381,7 +1381,7 @@ INT main(VOID)
       CHECK(cpu.Registers[0] == 0xABCD && cpu.Registers[6] == 0x1234, "xchg ax,si: AX<->SI swapped");
       CHECK((cpu.Flags & (EFLAGS_CF_U|EFLAGS_ZF_U)) == (EFLAGS_CF_U|EFLAGS_ZF_U), "xchg: flags untouched"); }
 
-    /* ---- T48: XCHG AX,AX (90) is a NOP; XCHG preserves E-reg high halves (16-bit) */
+    /* T48: XCHG AX,AX (90) is a NOP; XCHG preserves E-reg high halves (16-bit) */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x90, 0x91 };         /* NOP; XCHG AX,CX */
       cpu.Registers[0] = 0xDEAD1234;
@@ -1393,7 +1393,7 @@ INT main(VOID)
       CHECK(cpu.Registers[0] == 0xDEADABCD && cpu.Registers[1] == 0xBEEF1234,
             "xchg ax,cx: 16-bit views swap, E-reg high halves preserved"); }
 
-    /* ---- T49: 0x66 XCHG EAX,r32 -- full 32-bit swap ------------------------- */
+    /* T49: 0x66 XCHG EAX,r32 -- full 32-bit swap: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x66, 0x93 };         /* XCHG EAX,EBX */
       cpu.Registers[0] = 0x11223344;
@@ -1402,7 +1402,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK(cpu.Registers[0] == 0x55667788 && cpu.Registers[3] == 0x11223344, "66 93: XCHG EAX,EBX full 32-bit swap"); }
 
-    /* ---- T50: F7 group -- NOT (reg 2), no flags -- run 61 -------------------- */
+    /* T50: F7 group -- NOT (reg 2), no flags -- run 61: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xF7, 0xD6 };        /* NOT SI */
       cpu.Registers[6] = 0x1234;
@@ -1412,7 +1412,7 @@ INT main(VOID)
       CHECK((cpu.Registers[6] & 0xFFFF) == 0xEDCB, "F7 /2: NOT SI = ~0x1234");
       CHECK(cpu.Flags & EFLAGS_CF_U, "not: flags untouched"); }
 
-    /* ---- T51: NEG (reg 3) -- 0 - e, flags like SUB -------------------------- */
+    /* T51: NEG (reg 3) -- 0 - e, flags like SUB: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xF7, 0xD8 };        /* NEG AX */
       cpu.Registers[0] = 0x0005;
@@ -1427,7 +1427,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK((cpu.Registers[0] & 0xFFFF) == 0 && (cpu.Flags & EFLAGS_ZF_U) && !(cpu.Flags & EFLAGS_CF_U), "neg 0 = 0, ZF, no CF"); }
 
-    /* ---- T52: MUL (reg 4) -- unsigned, DX:AX <- AX*r/m ---------------------- */
+    /* T52: MUL (reg 4) -- unsigned, DX:AX <- AX*r/m: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xF7, 0xE1 };        /* MUL CX */
       cpu.Registers[0] = 0x1000;
@@ -1445,7 +1445,7 @@ INT main(VOID)
       CHECK((cpu.Registers[0] & 0xFFFF) == 12 && (cpu.Registers[2] & 0xFFFF) == 0, "mul 3*4=12, DX=0");
       CHECK(!(cpu.Flags & EFLAGS_CF_U) && !(cpu.Flags & EFLAGS_OF_U), "mul: CF/OF clear (fits)"); }
 
-    /* ---- T53: IMUL (reg 5) -- signed -------------------------------------- */
+    /* T53: IMUL (reg 5) -- signed: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xF7, 0xE9 };        /* IMUL CX */
       cpu.Registers[0] = 0xFFFE;
@@ -1455,7 +1455,7 @@ INT main(VOID)
       CHECK((cpu.Registers[0] & 0xFFFF) == 0xFFFA && (cpu.Registers[2] & 0xFFFF) == 0xFFFF, "F7 /5: IMUL -2*3 = -6 (FFFF:FFFA)");
       CHECK(!(cpu.Flags & EFLAGS_CF_U) && !(cpu.Flags & EFLAGS_OF_U), "imul: CF/OF clear (fits 16-bit signed)"); }
 
-    /* ---- T54: DIV (reg 6) -- unsigned, quotient AX, remainder DX ----------- */
+    /* T54: DIV (reg 6) -- unsigned, quotient AX, remainder DX: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xF7, 0xF1 };        /* DIV CX */
       cpu.Registers[0] = 0x0000;
@@ -1465,7 +1465,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK((cpu.Registers[0] & 0xFFFF) == 0x1000 && (cpu.Registers[2] & 0xFFFF) == 0x0000, "F7 /6: DIV CX 0x10000/0x10 -> AX=0x1000 DX=0"); }
 
-    /* ---- T55: 66 F7 /6 = DIV EDI -- the exact i310102 hex-format opcode ----- */
+    /* T55: 66 F7 /6 = DIV EDI -- the exact i310102 hex-format opcode: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x66, 0xF7, 0xF7 };  /* DIV EDI */
       cpu.Registers[0] = 100;
@@ -1475,7 +1475,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK(cpu.Registers[0] == 14 && cpu.Registers[2] == 2, "66 F7 /6: DIV EDI 100/7 -> EAX=14 EDX=2 (the run-60 wall op)"); }
 
-    /* ---- T56: IDIV (reg 7) -- signed -------------------------------------- */
+    /* T56: IDIV (reg 7) -- signed: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xF7, 0xF9 };        /* IDIV CX */
       cpu.Registers[0] = 0xFF9C;
@@ -1485,7 +1485,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK((cpu.Registers[0] & 0xFFFF) == 0xFFF2 && (cpu.Registers[2] & 0xFFFF) == 0xFFFE, "F7 /7: IDIV -100/7 -> AX=-14 DX=-2"); }
 
-    /* ---- T57: F6 (byte) DIV -- AX / r8 -> AL quotient, AH remainder --------- */
+    /* T57: F6 (byte) DIV -- AX / r8 -> AL quotient, AH remainder: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xF6, 0xF3 };        /* DIV BL */
       cpu.Registers[0] = 100;
@@ -1494,7 +1494,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK((cpu.Registers[0] & 0xFF) == 14 && ((cpu.Registers[0] >> 8) & 0xFF) == 2, "F6 /6: DIV BL 100/7 -> AL=14 AH=2"); }
 
-    /* ---- T58: DIV by zero bails (return 0 -> InterpTestStepOnce no-op, IP unchanged) ----- */
+    /* T58: DIV by zero bails (return 0 -> InterpTestStepOnce no-op, IP unchanged): */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xF7, 0xF1 };        /* DIV CX, CX=0 */
       cpu.Registers[0] = 5;
@@ -1507,7 +1507,7 @@ INT main(VOID)
       }
       }
 
-    /* ---- T59: PUSHA (60) -- push AX,CX,DX,BX,SP,BP,SI,DI; saved SP = pre-push - */
+    /* T59: PUSHA (60) -- push AX,CX,DX,BX,SP,BP,SI,DI; saved SP = pre-push: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x60 };              /* PUSHA */
       cpu.Segments[2] = 0x8000;
@@ -1527,7 +1527,7 @@ INT main(VOID)
         CHECK((g_Memory[base+0xF6] | (g_Memory[base+0xF7]<<8)) == 0x0100, "pusha: saved-SP slot = pre-push SP");
         CHECK((g_Memory[base+0xF0] | (g_Memory[base+0xF1]<<8)) == 0x8888, "pusha: DI at bottom slot [SP]"); } }
 
-    /* ---- T60: PUSHA/POPA round-trip -- POPA restores AX..DI, discards saved SP */
+    /* T60: PUSHA/POPA round-trip -- POPA restores AX..DI, discards saved SP */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x60, 0x61 };        /* PUSHA; POPA */
       cpu.Segments[2] = 0x8000;
@@ -1547,7 +1547,7 @@ INT main(VOID)
             "61: POPA restores AX/BX/DI/SI from stack");
       CHECK((cpu.Registers[4] & 0xFFFF) == 0x0100, "popa: SP back to start (saved-SP slot discarded)"); }
 
-    /* ---- T61: PUSHAD/POPAD (66 60 / 66 61) -- full 32-bit register file ------- */
+    /* T61: PUSHAD/POPAD (66 60 / 66 61) -- full 32-bit register file: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x66, 0x60, 0x66, 0x61 };  /* PUSHAD; POPAD */
       cpu.Segments[2] = 0x8000;
@@ -1564,7 +1564,7 @@ INT main(VOID)
             "66 61: POPAD restores full 32-bit EAX/EBX/EDI");
       CHECK((cpu.Registers[4] & 0xFFFF) == 0x0200, "popad: SP back to 0x0200"); }
 
-    /* ---- T62: LEMMINGS' DIRTY-MAP SCAN -- `repne scasb` (F2 AE) MUST BE MODELLED.
+    /* T62: LEMMINGS' DIRTY-MAP SCAN -- `repne scasb` (F2 AE) MUST BE MODELLED.
      * (s68) The erase engine is: mov al,1 / mov cx,0x28 / repne scasb / jz found.
      * Unmodelled, the scasb bailed to V86 and the latch copies that followed it
      * landed in the unprotected A0000 window, so no sprite was ever erased.
@@ -1588,7 +1588,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK((cpu.Registers[0] & 0xFF) == 0xAA, "repne scasb + jz: the `found` branch is taken"); }
 
-    /* ---- T63: repne scasb with NO match runs CX to 0 and leaves ZF=0 ---------- */
+    /* T63: repne scasb with NO match runs CX to 0 and leaves ZF=0: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xF2, 0xAE };
       UINT32 base = (UINT32)0x2000 << 4;
@@ -1602,7 +1602,7 @@ INT main(VOID)
       CHECK(!(cpu.Flags & EFLAGS_ZF_U) && (cpu.Registers[7] & 0xFFFF) == 0x28 && (cpu.Registers[1] & 0xFFFF) == 0,
             "repne scasb: no match -> DI+=CX, CX=0, ZF=0"); }
 
-    /* ---- T64: repe scasb (F3 AE) finds the END of a run of matches ------------ */
+    /* T64: repe scasb (F3 AE) finds the END of a run of matches: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xF3, 0xAE };
       UINT32 base = (UINT32)0x2000 << 4;
@@ -1617,7 +1617,7 @@ INT main(VOID)
       CHECK(!(cpu.Flags & EFLAGS_ZF_U) && (cpu.Registers[7] & 0xFFFF) == 4 && (cpu.Registers[1] & 0xFFFF) == 0x28 - 4,
             "repe scasb: stops one past the first mismatch, ZF=0"); }
 
-    /* ---- T65: rep with CX=0 is a no-op that leaves the flags alone ----------- */
+    /* T65: rep with CX=0 is a no-op that leaves the flags alone: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xF2, 0xAE };
       cpu.Segments[0] = 0x2000;
@@ -1630,7 +1630,7 @@ INT main(VOID)
       CHECK((cpu.Flags & (EFLAGS_ZF_U | EFLAGS_CF_U)) == (EFLAGS_ZF_U | EFLAGS_CF_U) && (cpu.Registers[7] & 0xFFFF) == 7,
             "repne scasb CX=0: nothing happens, flags untouched"); }
 
-    /* ---- T66: cmpsb (A6) compares DS:SI with ES:DI, CMP flags, both advance --- */
+    /* T66: cmpsb (A6) compares DS:SI with ES:DI, CMP flags, both advance: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xA6 };
       UINT32 sourceBase = (UINT32)0x3000 << 4;
@@ -1646,7 +1646,7 @@ INT main(VOID)
       CHECK((cpu.Flags & EFLAGS_CF_U) && !(cpu.Flags & EFLAGS_ZF_U) && (cpu.Registers[6] & 0xFFFF) == 1 && (cpu.Registers[7] & 0xFFFF) == 1,
             "cmpsb: 10h-20h -> CF=1 ZF=0, SI and DI advance"); }
 
-    /* ---- T67: repe cmpsw (F3 A7) with DF=1 walks DOWN by words ---------------- */
+    /* T67: repe cmpsw (F3 A7) with DF=1 walks DOWN by words: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xF3, 0xA7 };
       UINT32 sourceBase = (UINT32)0x3000 << 4;
@@ -1670,7 +1670,7 @@ INT main(VOID)
       CHECK(!(cpu.Flags & EFLAGS_ZF_U) && (cpu.Registers[6] & 0xFFFF) == 4 && (cpu.Registers[7] & 0xFFFF) == 4 && (cpu.Registers[1] & 0xFFFF) == 2,
             "repe cmpsw DF=1: two words compared, stops after the mismatch, SI/DI -= 4"); }
 
-    /* ---- T68-T71: the rest of Lemmings' bail table -- CBW, CWD, XLAT, LES mem ---- */
+    /* T68-T71: the rest of Lemmings' bail table -- CBW, CWD, XLAT, LES mem: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x98, 0x99 };        /* CBW; CWD */
       cpu.Registers[0] = 0x1280;
@@ -1707,7 +1707,7 @@ INT main(VOID)
       InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
       CHECK(InterpTestStepOnce(&cpu) == 0 && cpu.Ip == 0, "C4 C4 nn: the BOP still bails, IP untouched"); }
 
-    /* ---- T72: POP r/m16 (8F /0) -- Bubbles' `pop [bx+7]`, 1.16M bails a run ------- */
+    /* T72: POP r/m16 (8F /0) -- Bubbles' `pop [bx+7]`, 1.16M bails a run: */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x8F, 0x47, 0x07, 0x9B };   /* POP [BX+7]; WAIT */
       UINT32 stackBase = (UINT32)0x8000 << 4;
@@ -1724,7 +1724,7 @@ INT main(VOID)
             "8F /0: POP [BX+7] stores the word and SP += 2");
       CHECK(InterpTestStepOnce(&cpu) == 1 && cpu.Ip == 4, "9B: WAIT is a no-op"); }
 
-    /* ---- T73: LAHF/SAHF round-trip (9F/9E) ------------------------------------- */
+    /* T73: LAHF/SAHF round-trip (9F/9E): */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x9F, 0x9E };
       cpu.Flags = 0x0002 | EFLAGS_CF_U | EFLAGS_ZF_U | EFLAGS_SF_U;
@@ -1736,7 +1736,7 @@ INT main(VOID)
       InterpTestStepOnce(&cpu);
       CHECK((cpu.Flags & 0xD5) == (EFLAGS_PF_U | EFLAGS_AF_U), "9E: SAHF loads PF/AF from AH, clears the rest"); }
 
-    /* ---- s80, north star 1: what Wolf3D and Mario declined under a multi-plane mask.
+    /* s80, north star 1: what Wolf3D and Mario declined under a multi-plane mask.
      * A declined instruction runs natively UNTIL THE NEXT TRAP, and any A0000 store in
      * that stretch reaches one plane only -- so these are correctness, not speed. ----
      */
@@ -1804,7 +1804,7 @@ INT main(VOID)
       CHECK(InterpTestStepOnce(&cpu) && cpu.Registers[0] == 0xA0000000u && (cpu.Flags & EFLAGS_CF_U) && (cpu.Flags & EFLAGS_OF_U),
             "imul 66 6B: eax*10 wraps to A0000000h, CF=OF=1"); }
 
-    /* ---- #183: 16-bit address size counts in CX and walks SI/DI, and the HIGH halves
+    /* #183: 16-bit address size counts in CX and walks SI/DI, and the HIGH halves
      * of ECX/ESI/EDI are the guest's (s80 carries all 32 bits). The interpreter took
      * the REP count from ECX -- up to 4G stores -- and zeroed the high halves after.
      */

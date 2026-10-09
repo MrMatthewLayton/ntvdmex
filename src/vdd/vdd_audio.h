@@ -99,7 +99,7 @@ typedef struct _AUDIO_STATE
     INT        IsMuted;
     INT16    Scratch[AUDIO_STEREO_CHANNELS * AUDIO_SOURCE_MAX];  /* #189: room for interleaved L/R */
     UINT32   FramesMixed;     /* diagnostics: total output frames produced */
-    /* -- AND WHAT THE SPEAKER PATH ACTUALLY DID, BECAUSE "I HEARD NOTHING" HAS
+    /* AND WHAT THE SPEAKER PATH ACTUALLY DID, BECAUSE "I HEARD NOTHING" HAS
      * FOUR CAUSES AND NO LOG DISTINGUISHED THEM. Counted where the decision is
      * made, so each one separates a different failure:
      * SpeakerGated  -- frames where port 0x61 said SOUNDING

@@ -89,7 +89,7 @@ INT InstallIsSamePath(PCSTR first, PCSTR second);
  */
 INSTALL_STATE InstallClassify(PCSTR current, PCSTR self);
 
-/* -- IS THE VALUE ANOTHER COPY OF US? (s81, #195) A Debugger value naming some OTHER
+/* IS THE VALUE ANOTHER COPY OF US? (s81, #195) A Debugger value naming some OTHER
  * ntvdmhost.exe -- installed from an extracted zip, then uninstalling from bin\ -- was
  * classified as a stranger's and refused, which locked the user out of uninstalling
  * with the copy they had. The file name is the test: `ntvdmhost.exe`, any folder.

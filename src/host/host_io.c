@@ -28,7 +28,38 @@
 /* GH #11: one DLL path per line, '#' comments. See docs/sdk/vdd-sdk.md. */
 #define VDDLIST_PATH    CFG_("vdd.txt")
 
-/* -- GH #8 (s91): THE HOST'S NetBIOS, for vdd_net.c. Win32's Netbios() takes an NCB
+/* Burst fast path for the `<I/O insn>; LOOP <back to it>` idiom -- the same
+ * trick as the mode-12h fill-loop interpreter below, applied to port I/O.
+ *
+ * Every guest IN/OUT is an IOPL-0 #GP reflected out to this user-mode monitor,
+ * which measures ~40x the cost of the ISA access it stands in for (iobench.com).
+ * DOS sound code leans on that idiom hard: an AdLib register write is `OUT` the
+ * address, 6 dummy reads, `OUT` the data, then `mov cx,35 / in al,dx / loop $-1`
+ * to satisfy the OPL's write-settling time -- 43 trapped accesses per register,
+ * which is what left Skyroads grinding in its OPL init instead of reaching video.
+ * Since the loop body is EXACTLY the one I/O instruction, we can run the rest of
+ * the iterations here, one bus call each, and pay a single trap for all of them.
+ *
+ * `io_start` is the offset of the I/O instruction and `ip_next` the offset of the
+ * insn after it; we only fire when a LOOP sits at `ip_next` and jumps back to
+ * precisely `io_start`, so the body cannot contain anything we would skip.
+ *
+ * Accounting is exact and needs NO EIP fixup: the guest is left about to execute
+ * the LOOP, so if it enters with CX=c the body still runs c-1 more times. We run
+ * n of those here and subtract n from CX, leaving c-n; the guest then runs
+ * (c-n)-1 itself, for n + (c-n-1) = c-1 total. Capping n (rather than draining
+ * the loop) also keeps IRQ latency bounded: a `mov cx,0xFFFF` delay loop still
+ * re-enters this monitor every IO_BURST_MAX accesses instead of once at the end.
+ * Returns the number of extra accesses performed (0 = idiom not present).
+ */
+#define IO_BURST_MAX    4096
+
+/* The third-party BOP's three calls (see "THIRD-PARTY VDDs" above). CF goes in the
+ * LIVE flags -- a BOP is not an INT, nothing was pushed. Handles are 1-based.
+ */
+#define ISV_MAX_MODS    8
+
+/* GH #8 (s91): THE HOST'S NetBIOS, for vdd_net.c. Win32's Netbios() takes an NCB
  * that is the DOS one with a flat buffer pointer -- the same commands, the same
  * return codes -- so this is a field copy. netapi32.dll is loaded on first use (a
  * host that never sees INT 5Ch never loads it).
@@ -42,9 +73,69 @@
  * the defaults; the program's own RESET resets it again, its way.
  */
 typedef UCHAR (APIENTRY *PNETBIOS_ROUTINE)(PNCB);
+
+/* An I/O hook: the VDD's VDD_IO_HANDLERS, claimed on our bus range by range. STDCALL:
+ * nt_vdd.h names no convention, and NT and the DDK compile with __stdcall as the
+ * default -- measured: stock NTVDM died at the first IN when the test VDD's handlers
+ * were cdecl (tests/probes/dos/isvtest). A hook taken down by VDDDeInstallIOHook stays claimed
+ * (the bus has no release) and answers as an empty slot: FFh in, writes dropped.
+ */
+typedef VOID (WINAPI *PISV_IN_BYTE_ROUTINE)(WORD, BYTE *);   typedef VOID (WINAPI *PISV_IN_WORD_ROUTINE)(WORD, WORD *);
+
+typedef VOID (WINAPI *PISV_OUT_BYTE_ROUTINE)(WORD, BYTE);    typedef VOID (WINAPI *PISV_OUT_WORD_ROUTINE)(WORD, WORD);
+
+enum
+{
+    ISV_STRING_DLL = 0, ISV_STRING_INIT = 1, ISV_STRING_DISPATCH = 2, ISV_STRINGS = 3
+};   /* RegisterModule's three names: DS:SI, ES:DI, DS:BX */
+
+static VOID VddLogLine(PCSTR message);
+
+WORD g_IoLastPort = 0;      /* port the last serviced access touched */
+
+/* Count-register reads split by whether an ASYNC injection was in flight. Note the
+ * pair does NOT have to sum to the device's own rd_count[1]: this sees only reads
+ * dispatched through HostIoDo, and a gap between the two is itself informative.
+ */
+UINT32 g_DmaPollInAsync;
+UINT32 g_DmaPollMainline;
+
+DWORD g_DmaPollEip[DMAPOLL_MAX];
+DWORD g_DmaPollHits[DMAPOLL_MAX];
+UINT g_DmaPollCount = 0;
+UINT g_DmaPollOverflow = 0;
+DWORD g_PollStack[POLLSTK_MAX];
+DWORD g_PollStackHits[POLLSTK_MAX];
+DWORD g_PollGap[10];
+DWORD g_PollGapMaximumMicroseconds = 0;
+UINT g_PollStackCount = 0;
+UINT g_PollStackOverflow = 0;
 static PNETBIOS_ROUTINE g_Netbios;
 static LANA_ENUM  g_NetLanas;
 static BYTE       g_NetReady[MAX_LANA + 1];
+
+static DWORD          g_PitReloadLog = 0;
+static DWORD g_IoSiteLogged = 0;
+
+static const ntvdmex_vdd_api g_VddApi = {
+    (UINT32)sizeof(ntvdmex_vdd_api), NTVDMEX_VDD_ABI_VERSION,
+    (INT  (*)(ntvdmex_vdd_bus *, WORD, WORD, ntvdmex_in_fn, ntvdmex_out_fn, VOID *))VddClaimPorts,
+    (INT  (*)(ntvdmex_vdd_bus *, UINT32, UINT32, ntvdmex_rd_fn, ntvdmex_wr_fn, VOID *))VddClaimMemory,
+    (INT  (*)(ntvdmex_vdd_bus *, BYTE, ntvdmex_int_fn, VOID *))VddClaimInterrupt,
+    (INT  (*)(ntvdmex_vdd_bus *, ntvdmex_frame_fn, VOID *))VddOnFrame,
+    (VOID (*)(ntvdmex_vdd_bus *, BYTE))VddRaiseIrq,
+    (PVOID (*)(ntvdmex_vdd_bus *, WORD, WORD))VddMapFlat,
+    (PVOID (*)(ntvdmex_vdd_bus *, UINT32))VddMapLinear,
+    VddLogLine
+};
+
+static DWORD g_SoundIoLogged = 0;    /* bounded SNDIO trace; see the note below */
+static struct
+{
+    HMODULE Module;
+    FARPROC Dispatch;
+} g_IsvModules[ISV_MAX_MODS];
+
 BYTE NetSubmit(PVOID context, NETBIOS_REQUEST *request)
 {
     NCB enumBlock;
@@ -130,9 +221,6 @@ BYTE NetSubmit(PVOID context, NETBIOS_REQUEST *request)
     return request->ReturnCode;
 }
 
-static DWORD          g_PitReloadLog = 0;
-WORD g_IoLastPort = 0;      /* port the last serviced access touched */
-static DWORD g_IoSiteLogged = 0;
 /* THIRD-PARTY VDDs: LOAD THEM. (GH #11, ADR-0008) (Importance = 4):
  * ADR-0008 chose a "clean internal plugin ABI that all our own devices use"
  * and a third-party hook point on top of it. Every device in src/vdd has been
@@ -172,18 +260,6 @@ static VOID VddLogLine(PCSTR message)
     cursor = LogPut(cursor, "\r\n");
     LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
 }
-
-static const ntvdmex_vdd_api g_VddApi = {
-    (UINT32)sizeof(ntvdmex_vdd_api), NTVDMEX_VDD_ABI_VERSION,
-    (INT  (*)(ntvdmex_vdd_bus *, WORD, WORD, ntvdmex_in_fn, ntvdmex_out_fn, VOID *))VddClaimPorts,
-    (INT  (*)(ntvdmex_vdd_bus *, UINT32, UINT32, ntvdmex_rd_fn, ntvdmex_wr_fn, VOID *))VddClaimMemory,
-    (INT  (*)(ntvdmex_vdd_bus *, BYTE, ntvdmex_int_fn, VOID *))VddClaimInterrupt,
-    (INT  (*)(ntvdmex_vdd_bus *, ntvdmex_frame_fn, VOID *))VddOnFrame,
-    (VOID (*)(ntvdmex_vdd_bus *, BYTE))VddRaiseIrq,
-    (PVOID (*)(ntvdmex_vdd_bus *, WORD, WORD))VddMapFlat,
-    (PVOID (*)(ntvdmex_vdd_bus *, UINT32))VddMapLinear,
-    VddLogLine
-};
 
 VOID VddLoadThirdParty(VOID)
 {
@@ -284,12 +360,6 @@ VOID VddLoadThirdParty(VOID)
         SerialOut(lineBuffer, cursor); }
 }
 
-/* Count-register reads split by whether an ASYNC injection was in flight. Note the
- * pair does NOT have to sum to the device's own rd_count[1]: this sees only reads
- * dispatched through HostIoDo, and a gap between the two is itself informative.
- */
-UINT32 g_DmaPollInAsync;
-UINT32 g_DmaPollMainline;
 /* Record the first few DISTINCT ports the guest touches that no VDD claims. A game
  * hunting for hardware probes a fixed set of addresses, so this names the device it
  * wants -- e.g. 0x220-0x22F is a Sound Blaster looking for its DSP. Distinct-only
@@ -367,7 +437,6 @@ static VOID IoUnclaimedNote(WORD port, INT isIn)
     g_Unclaimed[g_UnclaimedCount++] = port;
 }
 
-static DWORD g_SoundIoLogged = 0;    /* bounded SNDIO trace; see the note below */
 static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port, INT isIn, INT width)
 {
     UINT32 value;
@@ -485,31 +554,6 @@ static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port, INT isIn, INT 
     }
 }
 
-/* Burst fast path for the `<I/O insn>; LOOP <back to it>` idiom -- the same
- * trick as the mode-12h fill-loop interpreter below, applied to port I/O.
- *
- * Every guest IN/OUT is an IOPL-0 #GP reflected out to this user-mode monitor,
- * which measures ~40x the cost of the ISA access it stands in for (iobench.com).
- * DOS sound code leans on that idiom hard: an AdLib register write is `OUT` the
- * address, 6 dummy reads, `OUT` the data, then `mov cx,35 / in al,dx / loop $-1`
- * to satisfy the OPL's write-settling time -- 43 trapped accesses per register,
- * which is what left Skyroads grinding in its OPL init instead of reaching video.
- * Since the loop body is EXACTLY the one I/O instruction, we can run the rest of
- * the iterations here, one bus call each, and pay a single trap for all of them.
- *
- * `io_start` is the offset of the I/O instruction and `ip_next` the offset of the
- * insn after it; we only fire when a LOOP sits at `ip_next` and jumps back to
- * precisely `io_start`, so the body cannot contain anything we would skip.
- *
- * Accounting is exact and needs NO EIP fixup: the guest is left about to execute
- * the LOOP, so if it enters with CX=c the body still runs c-1 more times. We run
- * n of those here and subtract n from CX, leaving c-n; the guest then runs
- * (c-n)-1 itself, for n + (c-n-1) = c-1 total. Capping n (rather than draining
- * the loop) also keeps IRQ latency bounded: a `mov cx,0xFFFF` delay loop still
- * re-enters this monitor every IO_BURST_MAX accesses instead of once at the end.
- * Returns the number of extra accesses performed (0 = idiom not present).
- */
-#define IO_BURST_MAX    4096
 static DWORD HostIoLoopBurst(
     volatile BYTE *tib,
     VDD_BUS *bus,
@@ -848,16 +892,6 @@ INT HostTryIoString(volatile BYTE *tib, VDD_BUS *bus)
     return 1;
 }
 
-DWORD g_DmaPollEip[DMAPOLL_MAX];
-DWORD g_DmaPollHits[DMAPOLL_MAX];
-UINT g_DmaPollCount = 0;
-UINT g_DmaPollOverflow = 0;
-DWORD g_PollStack[POLLSTK_MAX];
-DWORD g_PollStackHits[POLLSTK_MAX];
-DWORD g_PollGap[10];
-DWORD g_PollGapMaximumMicroseconds = 0;
-UINT g_PollStackCount = 0;
-UINT g_PollStackOverflow = 0;
 INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
 {
     DWORD csValue = VDM_REG16(tib, VTIB_CS);
@@ -983,7 +1017,7 @@ INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
         else
             ++g_DmaPollOverflow;
 
-        /* -- WHY IS THE MIXER RUN ONLY 56 TIMES A SECOND? TWO CAUSES, ONE SHAPE EACH.
+        /* WHY IS THE MIXER RUN ONLY 56 TIMES A SECOND? TWO CAUSES, ONE SHAPE EACH.
          * DMX's scheduler (DOOM.EXE file 0x57224) runs a task when the tick clock
          * reaches its deadline, ABANDONS THE WHOLE PASS if the task is still busy,
          * and recomputes the deadline from NOW so a missed run is never made up.
@@ -1066,14 +1100,6 @@ INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
     return 1;
 }
 
-/* An I/O hook: the VDD's VDD_IO_HANDLERS, claimed on our bus range by range. STDCALL:
- * nt_vdd.h names no convention, and NT and the DDK compile with __stdcall as the
- * default -- measured: stock NTVDM died at the first IN when the test VDD's handlers
- * were cdecl (tests/probes/dos/isvtest). A hook taken down by VDDDeInstallIOHook stays claimed
- * (the bus has no release) and answers as an empty slot: FFh in, writes dropped.
- */
-typedef VOID (WINAPI *PISV_IN_BYTE_ROUTINE)(WORD, BYTE *);   typedef VOID (WINAPI *PISV_IN_WORD_ROUTINE)(WORD, WORD *);
-typedef VOID (WINAPI *PISV_OUT_BYTE_ROUTINE)(WORD, BYTE);    typedef VOID (WINAPI *PISV_OUT_WORD_ROUTINE)(WORD, WORD);
 VOID IsvIoIn(PVOID self, WORD port, BYTE width, UINT32 *value)
 {
     INT index = (INT)(ULONG_PTR)self;
@@ -1129,19 +1155,6 @@ VOID IsvIoOut(PVOID self, WORD port, BYTE width, UINT32 value)
     }
 }
 
-enum
-{
-    ISV_STRING_DLL = 0, ISV_STRING_INIT = 1, ISV_STRING_DISPATCH = 2, ISV_STRINGS = 3
-};   /* RegisterModule's three names: DS:SI, ES:DI, DS:BX */
-/* The third-party BOP's three calls (see "THIRD-PARTY VDDs" above). CF goes in the
- * LIVE flags -- a BOP is not an INT, nothing was pushed. Handles are 1-based.
- */
-#define ISV_MAX_MODS    8
-static struct
-{
-    HMODULE Module;
-    FARPROC Dispatch;
-} g_IsvModules[ISV_MAX_MODS];
 VOID IsvBop(volatile BYTE *tib, DWORD subfunction, PSTR *logCursor)
 {
     PSTR cursor = *logCursor;

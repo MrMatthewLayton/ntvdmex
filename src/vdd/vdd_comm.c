@@ -69,7 +69,7 @@
  * byte, take the interrupt, read IIR, write the next byte", and an IIR that
  * keeps reporting THRE forever gives an interrupt storm instead.
  */
-/* -- #245: THE 16550's RECEIVE FIFO AND ITS TRIGGER LEVEL (PC16550D, FCR/IIR). -
+/* #245: THE 16550's RECEIVE FIFO AND ITS TRIGGER LEVEL (PC16550D, FCR/IIR):
  * With the FIFO enabled (FCR bit 0) the part holds up to 16 received bytes and
  * "received data available" fires only when the count reaches the TRIGGER LEVEL
  * that FCR bits 6-7 select -- 1, 4, 8 or 14. Fewer than that waiting is reported
@@ -553,7 +553,7 @@ static VOID CommInt14(PVOID context, PNTVDD_REGISTERS registers)
     }
 }
 
-/* -- THE PARALLEL PORT. Three registers; the byte leaves on the STROBE EDGE. - */
+/* THE PARALLEL PORT. Three registers; the byte leaves on the STROBE EDGE: */
 static PLPT_PORT LptFind(PCOMM_STATE state, WORD port, BYTE *registerIndex)
 {
     INT portIndex;

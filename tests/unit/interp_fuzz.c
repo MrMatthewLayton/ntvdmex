@@ -122,7 +122,7 @@ INT main(INT argc, PSTR *argv)
     clock_t endClock;
     UINT32 index;
 
-    /* ---- differential part: random bytes as code, random everything else ---- */
+    /* differential part: random bytes as code, random everything else: */
     g_Random = seed ? seed : 1;
 
     for (index = 0; index < sizeof g_Memory; ++index)
@@ -169,7 +169,7 @@ INT main(INT argc, PSTR *argv)
            programCount, stepLimit, (unsigned long long)seed, executed, bails);
     printf("digest %016llx\n", (unsigned long long)g_Hash);
 
-    /* ---- throughput: a Wolf3D-shaped inner loop (compiled scaler + game logic) ---- */
+    /* throughput: a Wolf3D-shaped inner loop (compiled scaler + game logic): */
     if (benchCount > 0)
     {
         static const BYTE loopCode[] = {

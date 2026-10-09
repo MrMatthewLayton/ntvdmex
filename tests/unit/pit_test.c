@@ -814,7 +814,7 @@ INT main(VOID)
         INT index;
         INT isAllBcd;
 
-        /* -- a read is BCD, digit by digit, including the decade borrow. ----- */
+        /* a read is BCD, digit by digit, including the decade borrow: */
         VddPitCounter2Gate(&pit, 1);
         portValue = 0xB1;
         VddBusIo(&bus, 0x43, 1, 0, &portValue);   /* ch2 lo/hi mode 0 BCD */
@@ -854,7 +854,7 @@ INT main(VOID)
 
         CHECK(isAllBcd, "bcd: 400 spread samples, every nibble a decimal digit");
 
-        /* -- and the NEGATIVE control, without which the above proves nothing.
+        /* and the NEGATIVE control, without which the above proves nothing.
          * The same counter in BINARY must fail that test, or "all nibbles are
          * digits" is being satisfied by something other than BCD.
          */
@@ -878,7 +878,7 @@ INT main(VOID)
 
         CHECK(!isAllBcd, "bcd: the SAME counter in binary walks through non-decimal nibbles");
 
-        /* -- a count of zero is 10000 in BCD, and it is the IRQ0 divisor. ---- */
+        /* a count of zero is 10000 in BCD, and it is the IRQ0 divisor: */
         portValue = 0x35;
         VddBusIo(&bus, 0x43, 1, 0, &portValue);   /* ch0 lo/hi mode 2 BCD */
         portValue = 0x00;
@@ -893,14 +893,14 @@ INT main(VOID)
         VddPitAddClocks(&pit, 1);
         CHECK(g_Irq0Count == 1, "bcd: the 10000th clock raises IRQ0");
 
-        /* -- the status byte reports the base it was programmed with. -------- */
+        /* the status byte reports the base it was programmed with: */
         portValue = 0xE2;
         VddBusIo(&bus, 0x43, 1, 0, &portValue);   /* read-back, status, ch0 */
         value = 0;
         VddBusIo(&bus, 0x40, 1, 1, &value);
         CHECK((value & 0x3F) == 0x35, "bcd: read-back status reports lo/hi + mode 2 + BCD");
 
-        /* -- and the speaker's divisor is decoded too, or the tone is wrong. -- */
+        /* and the speaker's divisor is decoded too, or the tone is wrong: */
         portValue = 0xB6;
         VddBusIo(&bus, 0x43, 1, 0, &portValue);   /* ch2 lo/hi mode 3 BIN */
         portValue = 0x00;
@@ -917,7 +917,7 @@ INT main(VOID)
         CHECK(VddPitCounter2Hz(&pit) == PIT_INPUT_HZ / 1000u,
               "bcd: the SAME bytes in BCD are a divisor of 1000, so the tone differs");
 
-        /* -- #256: the speaker divisor is not read-modify-written. ----------- */
+        /* #256: the speaker divisor is not read-modify-written: */
         portValue = 0xB6;
         VddBusIo(&bus, 0x43, 1, 0, &portValue);   /* ch2 lo/hi, binary */
         portValue = 0x34;
@@ -947,7 +947,7 @@ INT main(VOID)
         VddBusIo(&bus, 0x40, 1, 0, &portValue);
     }
 
-    /* ---- #175: THE GATE AS A TRIGGER (docs/ref/pit.md section 5; p_pit section H). ---- */
+    /* #175: THE GATE AS A TRIGGER (docs/ref/pit.md section 5; p_pit section H): */
     {   UINT32 portValue;
         UINT firstOut;
         UINT secondOut;

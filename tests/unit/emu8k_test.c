@@ -27,7 +27,7 @@
 #include "vdd_emu8k.h"
 #include "vdd_audio.h"
 
-/* ---- the chip's ports and register map (section 2, p.6-7) ---------------------------------- */
+/* the chip's ports and register map (section 2, p.6-7): */
 
 #define EMU8K_TEST_BASE                     0x620           /* E: SB 220h + 400h */
 #define EMU8K_TEST_DATA0                    (EMU8K_TEST_BASE + 0x000)
@@ -188,7 +188,7 @@ static VOID Emu8kTestCheck(BOOL passed, PCSTR description)
     ++g_Failures;
 }
 
-/* ---- port access, exactly as a DOS program makes it ----------------------------------- */
+/* port access, exactly as a DOS program makes it: */
 
 static VOID Emu8kTestOutWord(WORD port, WORD value)
 {
@@ -309,7 +309,7 @@ static WORD Emu8kTestCurrentVolume(INT channel)
     return (WORD)(Emu8kTestData0Read(EMU8K_TEST_CVCF, channel) >> WORD_SHIFT);
 }
 
-/* ---- rendering --------------------------------------------------------------------- */
+/* rendering: */
 
 static VOID Emu8kTestRender(DWORD frameCount)
 {
@@ -380,7 +380,7 @@ static UINT64 Emu8kTestFakeClock(PVOID context)
     return g_FakeMicroseconds;
 }
 
-/* ---- the guide's recipes ----------------------------------------------------------- */
+/* the guide's recipes: */
 
 /* section 5: allocate `channel` to a DMA stream -- the guide's seven steps in its order. */
 static VOID Emu8kTestAllocateStream(INT channel, DWORD mode)
@@ -473,7 +473,7 @@ INT main(VOID)
     { NTVDD_DEVICE device = VddEmu8kDevice(&g_Emu8k);
       Emu8kTestCheck(VddBusAdd(&g_Bus, &device) == 0, "add: emu8k at 620h/A20h/E20h (three port groups)"); }
 
-    /* ---- T1: detection -- as the period drivers do it: write HWCF1/2/3, read 1 and 2 back ---- */
+    /* T1: detection -- as the period drivers do it: write HWCF1/2/3, read 1 and 2 back: */
     Emu8kTestData1Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF1, EMU8K_TEST_HWCF1_INIT);
     Emu8kTestData1Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF2, EMU8K_TEST_HWCF2_INIT);
     Emu8kTestData1Write(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF3, EMU8K_TEST_HWCF3_AUDIO_OFF);
@@ -555,7 +555,7 @@ INT main(VOID)
                    && Emu8kTestData1ReadDword(EMU8K_TEST_GLOBALS, EMU8K_TEST_HWCF6) == EMU8K_TEST_HWCF6_INIT,
                    "HWCF5/HWCF6: doublewords read back");
 
-    /* ---- T2: the wall clock ---- */
+    /* T2: the wall clock: */
     { WORD startClock = Emu8kTestWallClock(), endClock;
       Emu8kTestRender(1000);
       endClock = Emu8kTestWallClock();
@@ -572,7 +572,7 @@ INT main(VOID)
                      "WC: wraps every 1.486 s (p.13)");
       g_Emu8k.Clock = NULL; }
 
-    /* ---- T3: register read-back ---- */
+    /* T3: register read-back: */
     Emu8kTestData3Write(EMU8K_TEST_IP, 0, 0xE123);
     Emu8kTestData3Write(EMU8K_TEST_IP, EMU8K_TEST_LAST_CHANNEL, 0xD456);
     Emu8kTestData3Write(EMU8K_TEST_IFATN, 0, 0xAB12);
@@ -620,7 +620,7 @@ INT main(VOID)
                    "E+402h with r0 selected is CCCA's MS word, not ATKHLDV");
     Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, 8, 0);
 
-    /* ---- T4: sound memory (section 5) ---- */
+    /* T4: sound memory (section 5): */
     VddEmu8kReset(&g_Emu8k);
     Emu8kTestAllocateStream(EMU8K_TEST_LEFT_WRITE_CHANNEL, EMU8K_TEST_STREAM_LEFT_WRITE);
     Emu8kTestCheck(!(Emu8kTestData1ReadDword(EMU8K_TEST_GLOBALS, EMU8K_TEST_SMALW) & EMU8K_TEST_SMA_FLAG),
@@ -699,7 +699,7 @@ INT main(VOID)
                    "allocating a channel completes it, FULL clears");
     Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, EMU8K_TEST_LEFT_WRITE_CHANNEL, 0);
 
-    /* ---- T5: a looping channel: pitch and pan ---- */
+    /* T5: a looping channel: pitch and pan: */
     /* Three periods of a 64-word triangle, +/-16384, so the loop seam is continuous. */
     Emu8kTestSetStreamAddress(EMU8K_TEST_SMALW, EMU8K_TEST_TONE_ADDRESS);
     Emu8kTestAllocateStream(EMU8K_TEST_LEFT_WRITE_CHANNEL, EMU8K_TEST_STREAM_LEFT_WRITE);
@@ -764,7 +764,7 @@ INT main(VOID)
                      && rightOfCentre > leftOfLeft * 45 / 100 && rightOfCentre < leftOfLeft * 55 / 100,
                      "pan 80h: the middle of a linear crossfade -- half on each side"); }
 
-    /* ---- T6: the volume envelope ---- */
+    /* T6: the volume envelope: */
     { DWORD attackSlowest = VddEmu8kAttackMicroseconds(1), attackFastest = VddEmu8kAttackMicroseconds(0x7F);
       DWORD decaySlowest = VddEmu8kDecayMicrosecondsPerDb(1);
       DWORD decayFastest = VddEmu8kDecayMicrosecondsPerDb(0x7F);
@@ -822,7 +822,7 @@ INT main(VOID)
                    && (Emu8kTestData0Read(EMU8K_TEST_VTFT, EMU8K_TEST_TONE_CHANNEL) >> WORD_SHIFT) == 0,
                    "§7 abrupt end: engine off, VT and CV zero at once");
 
-    /* ---- T7: the filter ---- */
+    /* T7: the filter: */
     { INT peakOpen, peakLowCutoff, peakOnTone, peakResonant, unusedRight;
       Emu8kTestPlayTone(EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PAN_CENTRE, EMU8K_TEST_OPEN_FILTER, EMU8K_TEST_FLAT_ENVELOPE);
       Emu8kTestRender(EMU8K_TEST_TENTH_SECOND);
@@ -854,7 +854,7 @@ INT main(VOID)
                      "CVCF: the current cutoff follows IFATN's byte (6800h)"); }
     Emu8kTestNoteKill(EMU8K_TEST_TONE_CHANNEL);
 
-    /* ---- T8: output gating ---- */
+    /* T8: output gating: */
     { INT peakLeft, peakRight;
       Emu8kTestPlayTone(EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PAN_CENTRE, EMU8K_TEST_OPEN_FILTER, EMU8K_TEST_FLAT_ENVELOPE);
       Emu8kTestRender(EMU8K_TEST_TENTH_SECOND);
@@ -874,7 +874,7 @@ INT main(VOID)
       Emu8kTestData1WriteDword(EMU8K_TEST_CCCA, EMU8K_TEST_SECOND_CHANNEL, 0);
       Emu8kTestNoteKill(EMU8K_TEST_SECOND_CHANNEL); }
 
-    /* ---- T9: the mixer hook ---- */
+    /* T9: the mixer hook: */
     { static AUDIO_STATE audio;
     static INT16 mixed[EMU8K_STEREO_SIDES * 1024];
       BOOL hasLeft = FALSE;

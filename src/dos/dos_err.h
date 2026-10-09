@@ -126,7 +126,7 @@
 #define DOS_ERR_WIN32_FILE_EXISTS           80u
 #define DOS_ERR_WIN32_ALREADY_EXISTS        183u
 
-/* -- #34: THE HARDWARE ERRORS, 19-31: the same numbers in DOS and Win32 (see below). Named
+/* #34: THE HARDWARE ERRORS, 19-31: the same numbers in DOS and Win32 (see below). Named
  * as winerror.h names them.
  */
 #define DOS_ERR_WRITE_PROTECT               19
