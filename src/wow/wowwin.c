@@ -122,7 +122,7 @@ static UINT g_WowWinMultimediaLogged;   /* s90: first MM notifications logged */
 /* s92 (#305 M12): krnl386's OWN global heap, through the nested run (main.c:
    shim_global16 -- 0 GlobalAlloc(flags, cb) 1 GlobalFree 2 GlobalLock -> 16:16
    3 GlobalUnlock). NULL until main.c wires it. */
-static DWORD (*g_WowWinGlobal16)(INT operation, DWORD first, DWORD second);
+DWORD (*g_WowWinGlobal16)(INT operation, DWORD first, DWORD second);
 
 /* ── s92 (#305 M12): WM_DROPFILES -- A WIN16 HDROP IS A REAL GLOBAL BLOCK. ─────────
      DragQueryPoint (SHELL ord 13) and DragFinish (ord 12) never reach us -- they

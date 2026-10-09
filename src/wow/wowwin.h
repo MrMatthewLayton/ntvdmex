@@ -170,4 +170,6 @@ typedef struct _WOWWIN_HELD_CHAR { WORD Window16, Character; DWORD LParam; DWORD
 #define WOWWIN_MAX_THREAD_TIMERS 16
 typedef struct _WOWWIN_THREAD_TIMER { UINT_PTR Id32; DWORD Procedure; } WOWWIN_THREAD_TIMER;
 
+/* Defined in wowwin.c (#335). */
+extern DWORD (*g_WowWinGlobal16)(INT operation, DWORD first, DWORD second);
 #endif /* NTVDMEX_WOWWIN_H */

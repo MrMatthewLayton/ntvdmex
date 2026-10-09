@@ -1,7 +1,24 @@
 /* wowshell.c -- ★★★ SHELL.DLL's OWN ID SPACE. GH #128, session 44.
  *
- * The code of wowshell.h (#335): its functions and state, in their original order. Part of
- * the host's single translation unit: #included by main.c straight after wowshell.h. */
+ * The code of wowshell.h (#335): its functions and state, in their original order;
+ * its own translation unit, declared in wowshell.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "wowdlg.h"
+#include "wowenum.h"
+#include "wowshell.h"
+#include "host_dpmi.h"
+
 
 static HKEY  g_WowShellKeys[WOWSHELL_KEYTOK_MAX];
 static INT   g_WowShellKeyCount = 0;
@@ -85,7 +102,7 @@ static VOID WowShellNoteKey(PSTR note, INT noteCapacity, PINT noteLength,
  *   for USER; this file must never be reachable from another module's numbering.
  * `note` receives a short description for the caller's log line.
  */
-static INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
+INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 {
     if (noteCapacity) note[0] = 0;
     switch (frame->Id) {

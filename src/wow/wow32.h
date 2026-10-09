@@ -604,4 +604,5 @@ volatile BYTE *Wow32ArgPointer(PCWOW32_FRAME frame, INT offset);
 WORD Wow32PeekWord(volatile BYTE *bytes);
 VOID Wow32PokeWord(volatile BYTE *bytes, WORD value);
 volatile BYTE *Wow32FarAt(PCWOW32_FRAME frame, volatile BYTE *base, INT offset);
+INT Wow32ArgString(PCWOW32_FRAME frame, INT offset, PSTR output, INT capacity);
 #endif /* NTVDMEX_WOW32_H */

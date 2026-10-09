@@ -301,7 +301,7 @@ static HICON WowUserSystemResourceRealIcon(WORD handle16)
 /* Mint a token for an icon we already hold. ⚠ THE SAME HICON GETS THE SAME
    TOKEN: a guest that extracts the same icon twice and compares the handles must
    find them equal, which is the rule every other handle map here follows. */
-static WORD WowUserSystemResourceMintIcon(HICON icon)
+WORD WowUserSystemResourceMintIcon(HICON icon)
 {
     INT index;
     if (!icon) return 0;
@@ -323,7 +323,7 @@ static WORD WowUserSystemResourceMintIcon(HICON icon)
     return g_WowUserSystemResources[index].Handle16;
 }
 
-static HICON WowUserSystemResourceIcon(WORD token, PINT picked, INT width, INT height)
+HICON WowUserSystemResourceIcon(WORD token, PINT picked, INT width, INT height)
 {
     WORD ordinal  = WowUserSystemResourceOrdinal(token);
     WORD kind = WowUserSystemResourceKind(token);

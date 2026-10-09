@@ -275,4 +275,6 @@
 #define WOWSHELL_KEYTOK_BASE 0x57160000ul
 #define WOWSHELL_KEYTOK_MAX  64
 
+/* Defined in wowshell.c (#335). */
+INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity);
 #endif /* NTVDMEX_WOWSHELL_H */

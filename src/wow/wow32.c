@@ -80,7 +80,7 @@ volatile BYTE *Wow32ArgPointer(PCWOW32_FRAME frame, INT offset)
    Returns 1 if there was a string to copy, 0 for a null/unreadable pointer -- and the
    difference matters: the profile API gives `lpAppName == NULL` its own meaning
    ("enumerate"), so "no pointer" must not arrive at Win32 as an empty string. */
-static INT Wow32ArgString(PCWOW32_FRAME frame, INT offset, PSTR output, INT capacity)
+INT Wow32ArgString(PCWOW32_FRAME frame, INT offset, PSTR output, INT capacity)
 {
     volatile BYTE *source = Wow32ArgPointer(frame, offset);
     INT length = 0;

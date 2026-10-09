@@ -2237,4 +2237,6 @@ extern WOWUSER_CLASS g_WowUserClasses[WOWUSER_MAX_CLASS];
 PWOWUSER_WINDOW WowUserNewWindow(VOID);
 PWOWUSER_WINDOW WowUserFindWindow(WORD window16);
 PWOWUSER_CLASS WowUserFindClass(PCSTR name);
+WORD WowUserSystemResourceMintIcon(HICON icon);
+HICON WowUserSystemResourceIcon(WORD token, PINT picked, INT width, INT height);
 #endif /* WOWUSER_H */
