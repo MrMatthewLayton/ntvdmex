@@ -112,7 +112,6 @@ static CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "host_io.c"
 #include "host_bios.c"
 #include "host_dos.c"
-#include "host_input.c"
 #include "host_mouse.c"
 #include "host_video.c"
 #include "host_dpmi.c"
@@ -724,8 +723,8 @@ static HANDLE g_CpuSpeedThread;
      box would follow. So take it from the system, which is the thing stock ntvdm is
      effectively passing through, and keep the measured pair above as the
      VERIFICATION target rather than the source. */
-static UINT32 g_TypematicDelayMicroseconds  = TYPEMATIC_DEFAULT_DELAY_US;   /* replaced at startup from XP's setting */
-static DWORD    g_TypematicSpiDelay, g_TypematicSpiSpeed;     /* raw, so STAGE2 can show them */
+UINT32 g_TypematicDelayMicroseconds  = TYPEMATIC_DEFAULT_DELAY_US;   /* replaced at startup from XP's setting */
+DWORD    g_TypematicSpiDelay, g_TypematicSpiSpeed;     /* raw, so STAGE2 can show them */
 /* ── ★ REFLECT DPMI 0300 TO THE GUEST'S OWN REAL-MODE HANDLER -- ON BY DEFAULT (s81).
      It was off (simintrefl.flag to enable) because it wedged ZAR waiting on an SB
      completion the nested V86 call never delivered. s81 fixed that, and the spec says

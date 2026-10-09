@@ -1,7 +1,17 @@
 /* host_input.c -- keyboard and joystick input: scancodes, typematic repeat, the synthetic-key
  *   driver, modifier tracking and the low-level keyboard hook.
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): declared in host_input.h. */
+#include "host_state.h"
+#include "log.h"
+#include "host_input.h"
+#include "main.h"
+#include "host_mouse.h"
+#include "host_window.h"
+#include "host_settings.h"
+/* Used before their definitions below. */
+static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down);
+
 
 /* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
    runs without a rebuild. Whitespace-separated tokens, played once in order:
@@ -45,7 +55,7 @@ static VOID KeyLatencyPush(VOID)                      /* UI thread: a scancode w
     g_KeyLatencyTimes[head & (KEYLAT_RING - 1)] = now.QuadPart;
     g_KeyLatencyHead = head + 1;
 }
-static VOID KeyLatencyPop(VOID)                       /* exec thread: INT 09h went in     */
+VOID KeyLatencyPop(VOID)                       /* exec thread: INT 09h went in     */
 {
     LARGE_INTEGER now;
     LONG tail = g_KeyLatencyTail;
@@ -72,7 +82,7 @@ static VOID KeyLatencyPop(VOID)                       /* exec thread: INT 09h we
    Win32 messages addressed to it, with the OS's own focus deciding which window
    gets them -- see WowWinProc. Feeding the Win16 queue from the 8042 as well
    would deliver every key twice and to a window the OS had not focused. */
-static VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak)
+VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak)
 {
     HOST_LOCK();
     if (extended) VddInputPushScanCode(&g_Input, INPUT_SCAN_PREFIX_E0);
@@ -89,7 +99,7 @@ enum { KEYBOARD_DELAY_MAX = 3, KEYBOARD_SPEED_MAX = 31, TYPEMATIC_DELAY_STEP_US 
      SPI_GETKEYBOARDDELAY  0..3  -> 250, 500, 750, 1000 ms
      SPI_GETKEYBOARDSPEED  0..31 -> about 2.5/s at 0 up to about 30/s at 31,
                                     linear in PERIOD rather than in rate. */
-static VOID HostKeyTypematicInitialize(VOID)
+VOID HostKeyTypematicInitialize(VOID)
 {
     DWORD delay = 1, speed = KEYBOARD_SPEED_MAX;
     if (!SystemParametersInfoA(SPI_GETKEYBOARDDELAY, 0, &delay, 0)) delay = 1;
@@ -104,7 +114,7 @@ static VOID HostKeyTypematicInitialize(VOID)
 #define KEY_TYPEMATIC_PERIOD_US g_TypematicPeriodMicroseconds
 static BYTE  g_TypematicScanCode, g_TypematicExtended, g_TypematicOn;
 static LONGLONG g_TypematicDue;
-static UINT32 g_TypematicSent, g_TypematicOsRepeats;  /* ours generated / OS ones suppressed */
+UINT32 g_TypematicSent, g_TypematicOsRepeats;  /* ours generated / OS ones suppressed */
 
 static VOID HostKeyTypematicPress(BYTE scanCode, INT extended)
 {
@@ -123,14 +133,14 @@ static VOID HostKeyTypematicRelease(BYTE scanCode, INT extended)
 /* The 8042 presents the next queued scancode only after the keyboard's transfer time
    (see INPUT_KEYBOARD_TRANSFER_US in vdd_input.h). Nothing raises IRQ1 for it unless someone looks, so
    both pumps look. Lock-free when nothing is queued or an interrupt is already up. */
-static VOID HostKeyPresent(VOID)
+VOID HostKeyPresent(VOID)
 {
     if (g_Input.ScanCodeHead == g_Input.ScanCodeTail || g_Input.IsScanCodeIrqUp) return;   /* racy, benign */
     HOST_LOCK();
     VddInputPoll(&g_Input);
     HOST_UNLOCK();
 }
-static VOID HostKeyTypematic(VOID)
+VOID HostKeyTypematic(VOID)
 {
     LARGE_INTEGER now;
     if (!g_TypematicOn || !g_QpcFrequency.QuadPart) return;
@@ -150,7 +160,7 @@ static VOID HostKeyTypematic(VOID)
    Lemmings' level briefing says "Press mouse button to continue" to us and "Press
    Space" to a DOS with no driver, so without this the harness cannot get past it. */
 enum { SYNTHKEY_HOLD_MS = 60, SYNTHKEY_GAP_MS = 250, SYNTHKEY_TAP_MS = 40, SYNTHKEY_SLEEP_SLICE_MS = 100, SYNTHKEY_MENU_DELAY_MS = 9000, SYNTHKEY_MENU_ROUNDS = 400, SYNTHKEY_HEX_DIGITS_MAX = 2 };   /* synthkey.txt's driver: hold, gap, tap, wait slice, menu walk; a scancode is up to two hex digits */
-static DWORD WINAPI SynthKeyThread(LPVOID parameter)
+DWORD WINAPI SynthKeyThread(LPVOID parameter)
 {
     INT round;
     (VOID)parameter;
@@ -254,7 +264,7 @@ static DWORD WINAPI SynthKeyThread(LPVOID parameter)
     return 0;
 }
 static volatile LONG g_WindowsKeyDown;         /* Win held -- maintained by the hook, see below */
-static LRESULT CALLBACK LowLevelKeyboardProcedure(INT code, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK LowLevelKeyboardProcedure(INT code, WPARAM wParam, LPARAM lParam)
 {
     if (code == HC_ACTION && g_Captured && GetForegroundWindow() == g_Window) {
         KBDLLHOOKSTRUCT *hook = (KBDLLHOOKSTRUCT *)lParam;
@@ -336,7 +346,7 @@ static LRESULT CALLBACK LowLevelKeyboardProcedure(INT code, WPARAM wParam, LPARA
      The VDD times its one-shots off this injected clock -- QPC, the same timebase
      as everything else here. Absolute microseconds, not a delta: only differences
      are ever taken. */
-static UINT64 JoystickNowMicroseconds(PVOID context)
+UINT64 JoystickNowMicroseconds(PVOID context)
 {
     LARGE_INTEGER now; (VOID)context;
     QueryPerformanceCounter(&now);
@@ -407,8 +417,8 @@ static DWORD WINAPI JoystickPollThread(LPVOID param)
    lives on and idles at 4 Hz if the type is later set back to None; recreating
    and joining a thread on a setting change is not worth the complexity when the
    idle cost is a Sleep. */
-static LONG g_JoystickThreadStarted = 0;
-static VOID JoystickPollEnsure(VOID)
+LONG g_JoystickThreadStarted = 0;
+VOID JoystickPollEnsure(VOID)
 {
     if (g_Joystick.Type == JOYSTICK_TYPE_NONE || g_Safe.Joystick) return;   /* s90 #132 */
     if (InterlockedExchange(&g_JoystickThreadStarted, 1)) return;   /* once */
@@ -422,7 +432,7 @@ enum { MODIFIER_LEFT_SHIFT = 0, MODIFIER_RIGHT_SHIFT = 1, MODIFIER_LEFT_CTRL = 2
 #define LPARAM_KEY_EXTENDED 0x01000000   /* WM_KEYDOWN lParam bit 24 */
 /* One keystroke, ONE path -- shared by WM_KEYDOWN and WM_SYSKEYDOWN, because F10 and
    Alt arrive as SYSTEM keys and are just as much the guest's as any other. */
-static VOID KeyMessageNote(VOID)
+VOID KeyMessageNote(VOID)
 {
     /* How long did this key sit in the queue before we got to it? GetMessageTime says
        when it was posted; this is UI-thread starvation measured on the key itself. */
@@ -455,7 +465,7 @@ static INT HostKeySpecial(BYTE rawScancode, INT extended, INT isBreak)
     }
     return 1;
 }
-static VOID KeyPushMake(LPARAM lParam)
+VOID KeyPushMake(LPARAM lParam)
 {
     BYTE rawScancode = (BYTE)((lParam >> WORD_SHIFT) & BYTE_MASK);
     INT extended = (lParam & LPARAM_KEY_EXTENDED) != 0;
@@ -468,7 +478,7 @@ static VOID KeyPushMake(LPARAM lParam)
     if (rawScancode) { HostKeyScancode(rawScancode, extended, INPUT_KEY_MAKE); HostKeyTypematicPress(rawScancode, extended);
                  ModifierTrack(rawScancode, extended, INPUT_PRESSED); }
 }
-static VOID KeyPushBreak(LPARAM lParam)
+VOID KeyPushBreak(LPARAM lParam)
 {
     BYTE rawScancode = (BYTE)((lParam >> WORD_SHIFT) & BYTE_MASK);
     INT extended = (lParam & LPARAM_KEY_EXTENDED) != 0;
@@ -494,7 +504,7 @@ static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down)
     if (bit < 0) return;
     if (down) g_ModifiersDown |= (BYTE)(1u << bit); else g_ModifiersDown &= (BYTE)~(1u << bit);
 }
-static VOID HostReleaseModifiers(VOID)
+VOID HostReleaseModifiers(VOID)
 {
     static const struct { BYTE ScanCode; INT IsExtended; } mods[MODIFIER_KEYS] =
         { {INPUT_SCAN_LEFT_SHIFT,0}, {INPUT_SCAN_RIGHT_SHIFT,0}, {INPUT_SCAN_CTRL,0}, {INPUT_SCAN_CTRL,1}, {INPUT_SCAN_ALT,0}, {INPUT_SCAN_ALT,1} };

@@ -13,4 +13,7 @@ extern DWORD g_DmxOverdue;
 extern DWORD g_DmxOverdueMaximum;
 extern DWORD g_DmxAnyBusy;
 
+extern UINT32 g_TypematicDelayMicroseconds;
+extern DWORD g_TypematicSpiDelay;
+extern DWORD g_TypematicSpiSpeed;
 #endif

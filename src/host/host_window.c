@@ -1116,7 +1116,7 @@ static VOID MenuSyncModal(HWND window, HMENU popup)
      design in Windows and not a defect here.
    ⚠ Capture is dropped on WM_KILLFOCUS -- otherwise a clipped cursor and a swallowed
      Alt+Tab would strand the user in a window they cannot leave. */
-static HHOOK         g_LowLevelKeyboard;
+HHOOK         g_LowLevelKeyboard;
 static INT           g_LowLevelKeyboardOn = 0;     /* OFF by default; llkbd.txt = 1. See InputCaptureSet. */
 static volatile LONG g_UiBeat;          /* ++ per WM_TIMER: the UI thread is pumping   */
 static DWORD         g_CaptureWatchdogReleased;   /* times the watchdog had to hand the box back */

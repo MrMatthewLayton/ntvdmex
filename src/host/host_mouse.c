@@ -191,7 +191,7 @@ static VOID MouseButtonEdges(LONG prev, LONG now)
    the level goes into g_MouseButtons and the EDGE goes into the press/release counters that
    INT 33h 05h/06h report. A compare-exchange loop, not an exchange, because the UI
    thread is writing the same word from a real mouse. */
-static VOID HostMouseButton(INT button, INT down)
+VOID HostMouseButton(INT button, INT down)
 {
     LONG bit;
     if (button < 0 || button >= MS_BTNS) return;

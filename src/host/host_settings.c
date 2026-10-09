@@ -6,7 +6,7 @@
 /* The reported DOS version, when something overrides the dialog's (s80): the XP shell's
    5.00, or cfg\dosver.txt. The dialog SHOWS it and does not push over it. */
 static INT          g_DosVersionForced = 0;
-static INT          g_JoystickPovMap;   /* JoystickGamepad: map the pad's D-pad
+INT          g_JoystickPovMap;   /* JoystickGamepad: map the pad's D-pad
                                        (POV hat) onto axis A -- what a DOS
                                        platformer actually wants from a pad */
 #define UITICK_CHOICES 5   /* the Settings combo's entries */

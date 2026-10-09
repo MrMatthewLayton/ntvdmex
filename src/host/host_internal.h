@@ -6,6 +6,10 @@
 
 #include "host_types.h"
 #include "host_state.h"
+#include "host_input.h"
+#include "host_mouse.h"
+#include "host_window.h"
+#include "host_settings.h"
 #include "host_audio.h"
 #include "main.h"
 #include "host_timing.h"
@@ -60,7 +64,6 @@ static struct { WORD Cs; DWORD Eip, Count; } g_PmInjectSite[PMINJ_SITES];
 static VOID MouseChildExited(VOID);          /* fwd: see g_MouseWantRelease */
 static HANDLE StdioPebHandle(HANDLE proc, UINT offset);
 static VOID HostRecordFinish(VOID);        /* below: patches the header, logs */
-static VOID HostMouseButton(INT button, INT down);
 /* --- menu + status bar (scaffold; most items are stubs for now) ------------ */
 static struct { WORD Ax; DWORD Count; }  g_MouseI33Ax[I33_AXN];
 static struct { DWORD Linear, Eip, Count; WORD Cs, Ax; BYTE Source; BYTE Context[12]; } g_MouseI33Site[I33_SITEN];
@@ -68,7 +71,6 @@ static INT DpmiSelectorIs32(WORD selector);
 static VOID VideoTrapSync(VOID);             /* fwd */
 static WORD DpmiSegmentToDescriptor(WORD segment);
 static VOID HostFullscreenToggle(HWND window);
-static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down);
 static struct { DWORD Cs, Ip, Count; BYTE Bytes[10]; } g_RetraceSite[RT_SITES];
 static VOID ModeYGr4CloseRun(VOID);       /* defined with the GR4 counters below */
 static VOID ModeYRemapSelectBody(PVOID context, INT mask);
@@ -127,7 +129,6 @@ static PCSTR g_DosVersionWhy;
 static MPU_STATE g_Mpu; static NTVDD_DEVICE g_MpuDevice;
 static NETBIOS_STATE g_Net; static NTVDD_DEVICE g_NetDevice;
 static BYTE g_GenericStubVector[DOS_GENSTUB_N];
-static INT g_JoystickPovMap;
 static INT g_WowFoldMute;
 static DWORD g_WowFoldDropped;
 static PVOID g_Hma;
@@ -284,9 +285,6 @@ static DWORD g_CpuSpeedPeriodMs;
 static HANDLE g_CpuSpeedRelease;
 static INT g_CpuAffinityOn;
 static DWORD g_CpuAffinityGuest, g_CpuAffinityRest, g_CpuAffinityCpuCount;
-static UINT32 g_TypematicDelayMicroseconds;
-static DWORD g_TypematicSpiDelay, g_TypematicSpiSpeed;
-static UINT32 g_TypematicSent, g_TypematicOsRepeats;
 static volatile LONG g_MouseX, g_MouseY, g_MouseButtons;
 static volatile LONG g_MouseDx, g_MouseDy;
 static INT g_MouseRawOk;
@@ -321,11 +319,9 @@ static DWORD g_WowCallbackLinear;
 static DWORD g_WowPspLinear[WOW_PSP_TRACK];
 static WORD g_WowPspEnvironment[WOW_PSP_TRACK];
 static WORD g_PmTransferParagraphs;
-static HHOOK g_LowLevelKeyboard;
 static INT g_LowLevelKeyboardOn;
 static HANDLE g_ExecThread;
 static INT g_ExecPriorityForeground;
-static LONG g_JoystickThreadStarted;
 static NTVDMEX_SETTINGS g_SettingsDisk;
 static PCSTR g_ShellOverride;
 static INT g_FrameSkip;
@@ -388,7 +384,6 @@ static VOID HmaTry(VOID);
 static VOID Irq0Latch(VOID);
 static INT PmTickTake(VOID);
 static VOID TickDeliveredNote(VOID);
-static VOID KeyLatencyPop(VOID);
 static VOID Irq0DeliveredNote(VOID);
 static VOID SkipIfSiteNote(DWORD codeSegment, DWORD instructionPointer, DWORD stub);
 static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor);
@@ -448,11 +443,6 @@ static VOID CpuSpeedTimelineDump(PCSTR tag);
 static VOID CpuSpeedRecompute(VOID);
 static DWORD WINAPI CpuSpeedThread(LPVOID param);
 static VOID PlanesDumpBeside(PCSTR bitmapPath);
-static VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak);
-static VOID HostKeyTypematicInitialize(VOID);
-static VOID HostKeyPresent(VOID);
-static VOID HostKeyTypematic(VOID);
-static DWORD WINAPI SynthKeyThread(LPVOID parameter);
 static DWORD WINAPI QueueIrqProbeThread(LPVOID parameter);
 static DWORD WINAPI HeartbeatThread(LPVOID parameter);
 static VOID HostRecordFinish(VOID);
@@ -479,7 +469,6 @@ static LONG I33VirtualY(LONG pixelY);
 static LONG I33VirtualMaximumY(VOID);
 static VOID MouseEventRaise(LONG bits);
 static VOID MouseButtonEdges(LONG prev, LONG now);
-static VOID HostMouseButton(INT button, INT down);
 static VOID MouseChildExited(VOID);
 static INT CaptureAllowed(VOID);
 static INT MouseGoesToGuest(VOID);
@@ -511,15 +500,12 @@ static VOID WowProbeLoad(PCSTR command);
 static INT WowRefuse(PCSTR command);
 static VOID HostPresentHook(PVOID context);
 static VOID TrayRemove(HWND window);
-static LRESULT CALLBACK LowLevelKeyboardProcedure(INT code, WPARAM wParam, LPARAM lParam);
 static VOID InputCaptureSet(HWND window, INT isOn);
 static INT OtherHostsRunning(VOID);
 static VOID BackgroundPriorityTick(HWND window);
 static VOID HostPanicRelease(VOID);
 static DWORD WINAPI CaptureWatchdogThread(LPVOID parameter);
 static VOID HostFullscreenToggle(HWND window);
-static UINT64 JoystickNowMicroseconds(PVOID context);
-static VOID JoystickPollEnsure(VOID);
 static VOID SettingsNoteOverride(INT settingId, PCSTR source, DWORD value);
 static VOID SettingsLogSources(VOID);
 static VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live);
@@ -531,11 +517,6 @@ static VOID HostApplyWindowSize(HWND window, DWORD index);
 static VOID SettingsApplyLive(HWND window);
 static INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam);
 static INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam);
-static VOID KeyMessageNote(VOID);
-static VOID KeyPushMake(LPARAM lParam);
-static VOID KeyPushBreak(LPARAM lParam);
-static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down);
-static VOID HostReleaseModifiers(VOID);
 static DWORD WINAPI UiThread(LPVOID argument);
 static VOID RegistersLoad(NTVDD_REGISTERS *registers, volatile BYTE *tib);
 static VOID RegistersStore(NTVDD_REGISTERS *registers, volatile BYTE *tib);
