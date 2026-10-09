@@ -38,4 +38,6 @@
 #define WOWSND_SETVOICETHRESHOLD  0x0010
 #define WOWSND_DOBEEP             0x0011
 
+/* Defined in wowsound.c (#335). */
+INT WowSoundCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity);
 #endif /* NTVDMEX_WOWSOUND_H */

@@ -1,9 +1,28 @@
 /* wowsound.c -- ★ SOUND.DRV's OWN ID SPACE.  GH #299, session 90.
  *
- * The code of wowsound.h (#335): its functions and state, in their original order. Part of
- * the host's single translation unit: #included by main.c straight after wowsound.h. */
+ * The code of wowsound.h (#335): its functions and state, in their original order;
+ * its own translation unit, declared in wowsound.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "wowdlg.h"
+#include "wowenum.h"
+#include "wowshell.h"
+#include "wowcommdlg.h"
+#include "wowkbd.h"
+#include "wowsound.h"
 
-static INT WowSoundCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
+
+INT WowSoundCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
 {
     static const PCSTR functionNames[] = {
         "?", "OpenSound", "CloseSound", "SetVoiceQueueSize", "SetVoiceNote",

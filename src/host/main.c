@@ -64,7 +64,6 @@
 #include "../wow/wowkbd.h" /* GH #128: ...and KEYBOARD.DRV's -- ANSI/OEM conversion */
 #include "../wow/wowkbd.c"
 #include "../wow/wowsound.h" /* GH #299: ...and SOUND.DRV's -- stock answers 0 */
-#include "../wow/wowsound.c"
 #include "../wow/wowmmedia.h" /* GH #278: ...and MMSYSTEM's two -- mmCallProc32 */
 #include "dos_mcb.h"
 #include "bios_bda.h"       /* GH #253: 0040:000E/0010/0013 and the EBDA, from one source */
