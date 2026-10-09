@@ -260,4 +260,13 @@ typedef struct _WOWCALL_FRAME {
     WORD  PreviousTask;      /* s92: non-zero = an INTER-TASK call; put back on leave */
 } WOWCALL_FRAME, *PWOWCALL_FRAME;
 
+/* Defined in wowcall.c (#335). */
+extern INT g_WowCallBlob2Argument;
+extern INT g_WowCallBlob2Offset;
+extern DWORD g_WowCallBlobLinear;
+extern WOWENUM_FONT g_WowEnumFonts[WOWENUM_MAXFONT];
+extern INT g_WowEnumFontCount;
+extern WOWCALL_FRAME g_WowCallFrames[WOWCALL_MAX_DEPTH];
+extern INT g_WowCallDepth;
+INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector, DWORD procedure, WORD dataSelector, PCWORD argumentWords, INT argumentWordCount, DWORD returnLinear, INT returnMode, PWORD sink, WORD window, WORD message, PCBYTE blob, INT blobLength, INT blobArgument, INT isAbsent);
 #endif /* NTVDMEX_WOWCALL_H */

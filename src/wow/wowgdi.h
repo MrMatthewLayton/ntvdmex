@@ -1011,4 +1011,10 @@ typedef struct _WOWGDI_METAFILE {
 
 /* Defined in wowgdi.c (#335). */
 WORD WowGdiH16(HGDIOBJ object, INT kind);
+WORD WowGdiPeek(const volatile BYTE *bytes, INT offset);
+extern WOWGDI_METAFILE g_WowGdiMetafile;
+extern BYTE g_WowGdiMetafileBlob[WOWCALL_MAX_BLOB];
+INT WowGdiMetafileReadBack(VOID);
+VOID WowGdiMetafileEnd(VOID);
+INT WowGdiMetafileNext(INT room, PINT blobLength, PINT tableOffset, UINT *function);
 #endif /* NTVDMEX_WOWGDI_H */

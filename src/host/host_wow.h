@@ -8,4 +8,6 @@
 PVOID ShimMapFlat(WORD segment, DWORD offset, INT isProtectedMode);
 VOID WowShimsLoad(VOID);
 
+/* Defined in host_wow.c (#335). */
+INT WowDlgIsSelectorAbsent(WORD selector);
 #endif

@@ -5,7 +5,7 @@
 
 /* A little-endian WORD out of guest memory. wowuser.h has the same helper for
    the USER side; this file is included independently, so it has its own. */
-static WORD WowGdiPeek(const volatile BYTE *bytes, INT offset)
+WORD WowGdiPeek(const volatile BYTE *bytes, INT offset)
 {
     return (WORD)(bytes[offset] | (bytes[offset + 1] << BYTE_SHIFT));
 }
@@ -173,8 +173,8 @@ static INT CALLBACK WowGdiObjectCollect(LPVOID logObject, LPARAM type)
     return 1;
 }
 
-static WOWGDI_METAFILE g_WowGdiMetafile;
-static BYTE        g_WowGdiMetafileBlob[WOWCALL_MAX_BLOB];
+WOWGDI_METAFILE g_WowGdiMetafile;
+BYTE        g_WowGdiMetafileBlob[WOWCALL_MAX_BLOB];
 
 static BYTE        g_WowGdiMetafileRecord[WOWGDI_MF_RECORD_MAX];
 static HGDIOBJ     g_WowGdiMetafileHandles[WOWMF_MAXOBJ];
@@ -182,7 +182,7 @@ static HGDIOBJ     g_WowGdiMetafileHandles[WOWMF_MAXOBJ];
 /* After a callback: what the guest's table says now. Only 0 and tokens that name
    an object (not a DC) are believed; anything else keeps the previous entry and is
    counted, so the caller can say so. */
-static INT WowGdiMetafileReadBack(VOID)
+INT WowGdiMetafileReadBack(VOID)
 {
     UINT index;
     INT badCount = 0;
@@ -200,7 +200,7 @@ static INT WowGdiMetafileReadBack(VOID)
 }
 
 /* The end of an enumeration, however it ended (complete, stopped, refused). */
-static VOID WowGdiMetafileEnd(VOID)
+VOID WowGdiMetafileEnd(VOID)
 {
     UINT index;
     if (!g_WowGdiMetafile.IsActive) return;
@@ -224,7 +224,7 @@ static VOID WowGdiMetafileEnd(VOID)
 /* The next record's blob, at most `room` bytes. Returns 0 at the end of the walk
    (or at a malformed record, which ends it the same way -- logged by the caller
    from *func == 0xFFFF). *tbloff = where the table starts in the blob. */
-static INT WowGdiMetafileNext(INT room, PINT blobLength, PINT tableOffset, UINT *function)
+INT WowGdiMetafileNext(INT room, PINT blobLength, PINT tableOffset, UINT *function)
 {
     unsigned long recordBytes = 0;
     UINT recordFunction = 0;

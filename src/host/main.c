@@ -56,7 +56,6 @@
 #include "../wow/wowdlg.h" /* GH #128: ...and the MODAL loop -- why DialogBox does not return */
 #include "../wow/wowdlg.c"
 #include "../wow/wowenum.h" /* GH #128: ...and one callback per item -- EnumWindows, LineDDA */
-#include "../wow/wowenum.c"
 #include "../wow/wowshell.h" /* GH #128: ...and SHELL.DLL's, which is a THIRD one again */
 #include "../wow/wowcommdlg.h" /* GH #128: ...and COMMDLG.DLL's -- File > Open */
 #include "../wow/wowkbd.h" /* GH #128: ...and KEYBOARD.DRV's -- ANSI/OEM conversion */

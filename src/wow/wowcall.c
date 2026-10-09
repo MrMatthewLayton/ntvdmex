@@ -4,24 +4,24 @@
  * the host's single translation unit: #included by main.c straight after wowcall.h. */
 
 /* Forward declarations for the single translation unit (they were in wowcall.h). */
-static INT  WowEnumBusy(VOID);
-static INT  WowEnumBegin(INT kind, DWORD procedure, WORD dataSelector, DWORD lParam,
+INT  WowEnumBusy(VOID);
+INT  WowEnumBegin(INT kind, DWORD procedure, WORD dataSelector, DWORD lParam,
                           DWORD returnLinear, WORD parent);
-static VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY);
+VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY);
 
 /* s89: a SECOND far pointer into the same stack block. EnumFontFamilies' callback
    takes two structures (ENUMLOGFONT, NEWTEXTMETRIC); they travel as one blob and
    this names the argument (HIGH word index) that points `off` bytes into it. Set
    just before WowCallEnter, which consumes and clears it. -1 = none. */
-static INT  g_WowCallBlob2Argument = -1;
-static INT  g_WowCallBlob2Offset = 0;
+INT  g_WowCallBlob2Argument = -1;
+INT  g_WowCallBlob2Offset = 0;
 /* #295: where the LAST blob went, as a host linear address (ssbase + SP), 0 if the
    last call placed none. EnumMetaFile reads the guest's handle table back out of
    it after the callback returns -- see wowgdi.h's g_WowGdiMetafile note. */
-static DWORD g_WowCallBlobLinear = 0;
+DWORD g_WowCallBlobLinear = 0;
 
-static WOWENUM_FONT g_WowEnumFonts[WOWENUM_MAXFONT];
-static INT g_WowEnumFontCount;
+WOWENUM_FONT g_WowEnumFonts[WOWENUM_MAXFONT];
+INT g_WowEnumFontCount;
 
 /* ── s92 (#306): A MESSAGE FOR ANOTHER TASK'S WINDOW RUNS AS THAT TASK. Win16's
      SendMessage across tasks is a directed yield: the receiver's procedure runs on
@@ -36,8 +36,8 @@ static WORD (*g_WowCallCurrentTask)(VOID) = 0;
 static INT  (*g_WowCallRetarget)(WORD window, PWORD stackSelector, PWORD stackPointer, PDWORD stackBase, PWORD previousTask) = 0;
 static VOID (*g_WowCallUntarget)(WORD previousTask) = 0;
 
-static WOWCALL_FRAME g_WowCallFrames[WOWCALL_MAX_DEPTH];
-static INT             g_WowCallDepth  = 0;
+WOWCALL_FRAME g_WowCallFrames[WOWCALL_MAX_DEPTH];
+INT             g_WowCallDepth  = 0;
 static DWORD           g_WowCallCount  = 0;   /* how many 16-bit calls this run made */
 
 /* Push one word onto the guest stack at ssbase:*sp, growing down. */
@@ -64,7 +64,7 @@ static VOID WowCallPush(DWORD stackBase, PWORD stackPointer, WORD value)
  */
 /* `isAbsent` = the target's code selector is NOT PRESENT, so we must reach it
    through the RETF trampoline rather than by writing CS. See WOWCALL_RETF_OFF. */
-static INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
+INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                          DWORD procedure, WORD dataSelector, PCWORD argumentWords, INT argumentWordCount,
                          DWORD returnLinear, INT returnMode, PWORD sink,
                          WORD window, WORD message,

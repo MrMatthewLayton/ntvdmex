@@ -512,7 +512,7 @@ static INT WowRefuse(PCSTR command)
      writing CS -- see WOWCALL_RETF_OFF in wowcall.h and the CARDFILE run that named
      it. The same three lines the BOP handler's own callback path computes inline;
      one day both should read this. */
-static INT WowDlgIsSelectorAbsent(WORD selector)
+INT WowDlgIsSelectorAbsent(WORD selector)
 {
     WORD index = (WORD)(DPMI_SELECTOR_INDEX(selector));
     return index && index < DPMI_LDT_MAX && !(g_Ldt[index].Access & X86_DESCRIPTOR_PRESENT);

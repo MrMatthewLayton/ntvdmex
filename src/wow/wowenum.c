@@ -1,14 +1,30 @@
 /* wowenum.c -- ★★★ CALLING A GUEST'S CALLBACK ONCE PER ITEM. GH #128, session 57.
  *
- * The code of wowenum.h (#335): its functions and state, in their original order. Part of
- * the host's single translation unit: #included by main.c straight after wowenum.h. */
+ * The code of wowenum.h (#335): its functions and state, in their original order;
+ * its own translation unit, declared in wowenum.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "wowdlg.h"
+#include "wowenum.h"
+#include "host_wow.h"
+
 
 static WOWENUM g_WowEnum;
 
-static INT WowEnumBusy(VOID) { return g_WowEnum.Kind != WOWENUM_NONE; }
+INT WowEnumBusy(VOID) { return g_WowEnum.Kind != WOWENUM_NONE; }
 
 /* Start one. Returns 0 if another is already running (see the nesting note). */
-static INT WowEnumBegin(INT kind, DWORD procedure, WORD dataSelector, DWORD lParam,
+INT WowEnumBegin(INT kind, DWORD procedure, WORD dataSelector, DWORD lParam,
                          DWORD returnLinear, WORD parent)
 {
     if (g_WowEnum.Kind != WOWENUM_NONE) return 0;
@@ -26,7 +42,7 @@ static INT WowEnumBegin(INT kind, DWORD procedure, WORD dataSelector, DWORD lPar
 
 /* Bresenham's own step count: LineDDA visits max(|dx|,|dy|) + 1 points, which is
    what makes it a DDA rather than a plot -- the caller draws each one itself. */
-static VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY)
+VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY)
 {
     INT deltaX = endX - startX, deltaY = endY - startY;
     if (deltaX < 0) deltaX = -deltaX;
@@ -73,7 +89,7 @@ static VOID WowEnumStopped(VOID)
  * `stop` is the callback's answer to the PREVIOUS item -- 0 means "stop" -- and
  * is ignored on the first step, where there is no previous item.
  */
-static INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
+INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                         INT isFirst, DWORD result, PSTR note, INT noteCapacity)
 {
     INT noteLength = 0;

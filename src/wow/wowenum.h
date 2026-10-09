@@ -84,4 +84,9 @@ typedef struct _WOWENUM {
 #define WOWENUM_STACK_RESERVE       512
 #define WOWENUM_HEX_RECORD_DIGITS   6
 
+/* Defined in wowenum.c (#335). */
+INT WowEnumBusy(VOID);
+INT WowEnumBegin(INT kind, DWORD procedure, WORD dataSelector, DWORD lParam, DWORD returnLinear, WORD parent);
+VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY);
+INT WowEnumStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector, INT isFirst, DWORD result, PSTR note, INT noteCapacity);
 #endif /* NTVDMEX_WOWENUM_H */

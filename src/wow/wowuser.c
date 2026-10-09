@@ -532,10 +532,10 @@ static VOID WowUserEnsureSystemClasses(VOID)
     }
 }
 
-static WOWUSER_WINDOW g_WowUserWindows[WOWUSER_MAX_WIN];
+WOWUSER_WINDOW g_WowUserWindows[WOWUSER_MAX_WIN];
 static INT           g_WowUserWindowCount = 0;
 /* s92 (#306): the hTask an EnumTaskWindows walk is for (wowenum.h); 0 = any. */
-static WORD          g_WowUserEnumTask = 0;
+WORD          g_WowUserEnumTask = 0;
 
 /* s93: is this one of our windows driven by a DIALOG procedure? (wowwin.h) */
 static INT WowUserIsDialog16(WORD window16)

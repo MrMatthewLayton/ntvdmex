@@ -6,7 +6,7 @@
 /* Forward declarations for the single translation unit (they were in wowdlg.h). */
 /* Defined in main.c, which owns the LDT: is this code selector NOT PRESENT?
    See the call site, and WOWCALL_RETF_OFF in wowcall.h for what it decides. */
-static INT WowDlgIsSelectorAbsent(WORD selector);
+INT WowDlgIsSelectorAbsent(WORD selector);
 
 /* s88: per callback depth -- did the modal loop's call go to the dialog's own
    DLGPROC, and with which message. Read when the call returns (main.c). */
