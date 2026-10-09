@@ -105,7 +105,27 @@ CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "midi_route.h"       /* #136: Settings > Audio > MIDI -> a host device, by name */
 #include "present_ddraw.h"
 
-#include "host_internal.h"
+/* The host's other modules: what each one offers main.c (#335). */
+#include "host_types.h"
+#include "host_state.h"
+#include "host_report.h"
+#include "host_dpmi_int.h"
+#include "host_dos.h"
+#include "host_irq.h"
+#include "host_video.h"
+#include "host_diag.h"
+#include "host_io.h"
+#include "host_bios.h"
+#include "host_dpmi.h"
+#include "host_wow.h"
+#include "host_input.h"
+#include "host_mouse.h"
+#include "host_window.h"
+#include "host_settings.h"
+#include "host_audio.h"
+#include "main.h"
+#include "host_timing.h"
+#include "host_install.h"
 
 
 /* LOG_PATH now lives in log.h -- see the note there. */
