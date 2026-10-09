@@ -2491,10 +2491,789 @@ static PSTR DpmiLogHeartbeat(PSTR cursor, PSTR const base, const UINT steps, vol
     return cursor;
 }
 
+
+/* The PM run is over. A client that exited with a parent waiting in real mode (AH=4Ch from an EXEC'd child) is torn down and terminated there, and the exec loop carries on in V86; otherwise the PM run is marked done and the real-mode loop ends. */
+static INT DpmiEndClientSession(PSTR *cursorIo, PSTR const base, volatile BYTE * const tib, DOS_MACHINE *machine)
+{
+    PSTR cursor = *cursorIo;
+    /* ── ★★★ A CHILD WITH A PARENT GOES BACK TO ITS PARENT. (s80) ─────────
+         The client said AH=4Ch in protected mode. If something EXEC'd it
+         (COMMAND.COM, a SETUP program) that parent is parked in real mode
+         at its own INT 21h, and ending the VDM here is what made "run Doom
+         from the shell" and "save and launch" come back to nothing. Release
+         the client, leave PM, and let the real-mode terminate do what it
+         does for any child: free its PSP block, unwind its vectors, restore
+         the parent's frame. The exec loop then simply carries on in V86.
+       ⚠ ONLY with a parent. A top-level client's exit still ends the run,
+         unchanged -- nothing is waiting for it. */
+    if (g_PmClientExited && g_ExecDepth > 0 && g_Running) {
+        InterlockedIncrement(&g_DpmiWatchdogGeneration);   /* its watchdog stands down */
+        DpmiClientTeardown();
+        *(volatile WORD *)(tib + VTIB_MSW) &= (WORD)~MSW_PE_BIT;   /* leave PM */
+        VDM_SET16(tib, VTIB_FS, 0); VDM_SET16(tib, VTIB_GS, 0);
+        machine->ExitCode = g_PmExitCode;
+        cursor = LogPut(cursor, "DPMI: client exited with a parent waiting (depth=");
+        cursor = LogHexByte(cursor, (UINT)g_ExecDepth);
+        cursor = LogPut(cursor, ") -- back to real mode, terminating the child there\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        if (g_CloseForced) {           /* #152: it did not unhook itself */
+            g_CloseForced = 0;
+            if (g_Routed && g_ExecDepth == 1) g_BackToPrompt = 1;   /* #208 */
+            ExecMachineRestore(g_ExecDepth - 1, &cursor);
+            machine->IsTsrPending = 0;
+        }
+        if (DosTerminate(machine, tib, &cursor, base)) { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }   /* parent resumed */
+    }
+    g_CloseForced = 0;
+    g_DpmiDone = 1;            /* PM run finished -> watchdog stands down, window persists */
+    { *cursorIo = cursor; return HOST_FLOW_BREAK; }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
 #include "host_report.c"   /* the end-of-run report: ReportEndOfRun and its sections */
 enum { INSTALL_EXIT_OK = 0, INSTALL_EXIT_FAILED = 1, INSTALL_STATUS_EXIT_OURS = 0, INSTALL_STATUS_EXIT_NONE = 1, INSTALL_STATUS_EXIT_OTHER = 2 };   /* the install verbs' exit codes */
 enum { PENDING_INT_RETRIES_MAX = 0x10000 };   /* event 3 ("interrupt pending, not entered"): retries before giving up */
 enum { EXEC_HANDLED_RUN_OVER = 2, EXEC_HANDLED_CHILD_EXITED = 3 };   /* WinMain's DosTerminate outcomes: the run ends, or a child returned to its parent */
+
+/* Run the DPMI client in protected mode until it stops for good: each step delivers pending interrupts, runs the client to its next event, and services what stopped it -- a patched INT nn BOP, a fault the kernel reflected, an async interrupt's return. */
+static VOID DpmiRunClient(PSTR *cursorIo, PSTR const base, volatile BYTE * const tib, DOS_MACHINE *machine)
+{
+    PSTR cursor = *cursorIo;
+    UINT steps;
+    /* --- DPMI protected-mode execution loop -----------------------------------
+       DpmiEnterProtectedMode runs the client in PM until it stops. Two stop kinds:
+       (1) a patched INT nn BOP -- the kernel reflects C4 C4 as VTIB_EVENT=4
+           (run 32); we look up the original vector by fault EIP and dispatch.
+       (2) GH #18: a raw PM #GP the kernel reflects to our handler code selector
+           -- also VTIB_EVENT=4, but CS==g_DpmiFaultCodeSelector and EIP==DPMI_FAULT_COFF.
+           We recover the saved faulting CS:EIP/SS:ESP from the VTIB_FLT_SAV* slots. */
+    DWORD event3Retries = 0;   /* GH#18: bounded event-3 (pending-int guard) re-entries */
+    DWORD pmFaultDumps = 0;              /* rate-limit the PM-fault byte dump (anti-flood) */
+    DWORD pmStartTick = GetTickCount();   /* headless wall-clock cap origin */
+    for (steps = 0; g_Running && steps < PM_STEPS_MAX; ++steps) {  /* run until window close (animation) */
+        DWORD event, eip, currentCs, vector; INT status;
+        /* #152: Close Program ends a PM client exactly as its own AH=4Ch
+           would; the child-with-a-parent path below does the rest. */
+        if (g_CloseRequest && !g_WowLaunch) {
+            InterlockedExchange(&g_CloseRequest, 0);
+            g_CloseForced = 1;
+            g_PmClientExited = 1; g_PmExitCode = 0;
+            cursor = LogPut(cursor, "CLOSEPROG: ending the DPMI client (File > Close Program)\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        }
+        if (g_PmClientExited) break;   /* exited inside a nested run -- see the flag */
+        /* Headless safety (session-9): an infinite visual demo (pm32irq/animate)
+           never calls INT 21h 4Ch, so under the SMB auto-exit harness the PM loop
+           would run forever and wedge rt.bat's `start /wait`. Bound it by wall clock
+           so the host self-exits and the watcher survives. Sampled sparsely (every
+           4096 steps) to keep GetTickCount off the hot path. Interactive runs (no
+           marker) are unbounded, as before -- the user closes the window. */
+        if (g_Headless && (steps & PM_HEADLESS_CHECK_MASK) == 0 && steps
+            && GetTickCount() - pmStartTick > PM_HEADLESS_MS) {
+            cursor = LogPut(cursor, "STAGE3-DPMI: headless time cap (");
+            cursor = LogHex(cursor, PM_HEADLESS_MS); cursor = LogPut(cursor, " ms) reached after 0x");
+            cursor = LogHex(cursor, (UINT)steps);
+            cursor = LogPut(cursor, " steps -> exiting (infinite/visual demo; watch it on the monitor)\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+            break;
+        }
+        cursor = DpmiLogHeartbeat(cursor, base, steps, tib);
+        /* run 52 heartbeat: publish where we're about to hand off + bump the
+           iteration counter BEFORE entering, so a watchdog sample taken while
+           we're blocked inside DpmiEnterProtectedMode sees a FROZEN iter at this CS:EIP. */
+        g_DpmiEnterCs  = VDM_REG16(tib, VTIB_CS);
+        g_DpmiEnterEip = DpmiPmEip(tib);
+        g_DpmiIteration      = (LONG)(steps + 1);
+        /* run 66 diagnostic (kept): log FIXED_NTVDMSTATE [0x714] once. Run 66 proved
+           bit3=0 already (classifier is NOT the blocker), so no forcing needed -- for
+           a #GP the kernel uses class 6, which reaches the generic reflect body. */
+        if (steps == 0) {
+            DWORD vdmStateAt714 = *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR;
+            cursor = LogPut(cursor, "GH#18: [0x714]=0x"); cursor = LogHex(cursor, vdmStateAt714);
+            cursor = LogPut(cursor, " bit3="); cursor = LogHex(cursor, (vdmStateAt714 >> 3) & 1);
+            cursor = LogPut(cursor, " bit4="); cursor = LogHex(cursor, (vdmStateAt714 >> 4) & 1);
+            cursor = LogPut(cursor, " bit14="); cursor = LogHex(cursor, (vdmStateAt714 >> 14) & 1);
+            cursor = LogPut(cursor, " tib8=0x"); cursor = LogHex(cursor, *(volatile DWORD *)(tib + DPMI_TIB_FLTTBL));
+            cursor = LogPut(cursor, "\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        }
+        /* Timing in PM (polled): the host PIT (UI thread) raises IRQ0 at the 8254
+           rate; here we consume it and run the BIOS tick handler so 0040:006C and
+           INT 1Ah advance with wall-clock even though nothing injects INT 08h into
+           the PM client yet. (Async IRQ0 delivery to a client's PM INT 08h hook is
+           the remaining timing piece.) */
+        OplPumpTime();
+        if (InterlockedExchange(&g_Irq0Pending, 0)) {
+            NTVDD_REGISTERS trapRegisters; RegistersLoad(&trapRegisters, tib);
+            HOST_LOCK();
+            VddBusDeliverInterrupt(&g_Bus, VECTOR_TIMER, &trapRegisters);   /* PitInt08 -> ++0040:006C */
+            HOST_UNLOCK();
+            g_PmIrq0Latch = 1;    /* #2b: latch a virtual IRQ0 for the PM hook */
+        }
+        /* #2b async IRQ0 injection: when the client has hooked INT 08h in PM
+           (g_PmInt[8], via INT 31h 0205) and its virtual-IF is enabled, deliver
+           the latched IRQ0 to that handler -- how timer-hooking games get ticks.
+           The latch persists across CLI windows so a masked interrupt isn't lost. */
+        /* ► AND NOT WHILE AN ASYNC ONE IS STILL IN FLIGHT. The two injectors
+             guarded themselves but not each other: the async path can vector the
+             guest into its ISR and return, and if that ISR then leaves PM for a
+             DOS call, control arrives back HERE with the handler still live --
+             and a second tick would re-enter it on top of itself. Measured: the
+             run died on such an injection taken at obj1+0x153dc, i.e. inside the
+             very delay loop the tick exists to release. */
+        /* #172: which gate turned an OWED tick away. See g_PmCooperativeGate. */
+        INT twoTicksOwed = (g_PmTickOwed >= 2);
+        if (twoTicksOwed) {
+            UINT gateIndex = !(g_PmIrq0Latch || g_PmTickOwed > 0) ? PM_GATE_NO_LATCH : !g_DpmiVi ? PM_GATE_VIF_OFF
+                        : !g_PmInt[VECTOR_TIMER].Client ? PM_GATE_NO_HOOK : g_InPmIrq ? PM_GATE_IN_PM_IRQ
+                        : g_PmNoIrq ? PM_GATE_NO_IRQ : g_AsyncPmActive ? PM_GATE_ASYNC_IN_FLIGHT
+                        : (GetTickCount() - g_PmVector8ArmedMs) < DPMI_IRQ0_ARM_QUIET_MS ? PM_GATE_ARMED
+                        : PM_GATE_TRIED;
+            g_PmCooperativeGate[gateIndex]++;
+        }
+        /* ── #172: THE LATCH OPENS THIS, NOT THE OWED COUNT. (s85) ────────────
+             s84 opened the arm on `g_PmTickOwed > 0` as well, on the theory
+             that the quit wait's backlog was stuck here. The real cause was
+             ModeYPmRun holding g_Lock (stop reason `irq`), and isolated on the
+             menu-quit route (runs/s85/owed/, interleaved x3) the owed-count arm
+             bought nothing: quit window 139/s either way, REPLAYED_LOUD 48-50
+             with it against 44-45 without, plus ~5,800 injections declined per
+             run in DOS/4GW's 16-bit start-up. Latch only. */
+        if (g_PmIrq0Latch
+            && g_DpmiVi && g_PmInt[VECTOR_TIMER].Client && !g_InPmIrq
+            && !g_PmNoIrq && !g_AsyncPmActive
+            && (GetTickCount() - g_PmVector8ArmedMs) >= DPMI_IRQ0_ARM_QUIET_MS) {
+            UINT32 dmaReadsBefore = g_Dma.ChannelCountReads[SB_DEFAULT_DMA8];
+            g_PmIrq0Latch = 0;
+            g_InPmIrq = 1;
+            if (g_PmTickOwed > 0 && Irq0PmClaim()) {
+                if (DpmiInjectPmIrq(machine, tib, VECTOR_TIMER, steps))
+                    InterlockedDecrement(&g_PmTickOwed);
+                else { Irq0PmUnclaim(); if (twoTicksOwed) g_PmCooperativeGate[PM_GATE_DECLINED]++; }
+            } else if (twoTicksOwed) g_PmCooperativeGate[PM_GATE_CLAIM_REFUSED]++;
+            g_InPmIrq = 0;
+            g_CooperativeDmaPolls += g_Dma.ChannelCountReads[SB_DEFAULT_DMA8] - dmaReadsBefore;
+        }
+        /* ── s90 (#278): IRQs RAISED BY A 32-BIT COMPONENT (call_ica_hw_interrupt,
+             through bin\wowshim\NTVDM.EXE) -- winmm raises IRQ 10 to tell
+             MMSYSTEM a callback is queued in their shared buffer, and
+             MMSYSTEM's handler (PM vector 72h) drains it and EOIs both PICs.
+             Delivered here, by the guest thread, on the same gates as IRQ0;
+             a line nobody hooked is counted and dropped (real hardware would
+             reach the default handler, which only EOIs). WOW only. */
+        if (g_WowLaunch && g_IcaPending && g_DpmiVi)
+            WowIcaDeliver(machine, tib, steps);
+        DpmiDeliverKeyboardIrq(tib, machine, steps);
+        /* ── AND THE DEVICE LINES, WHICH HAD NO COOPERATIVE PATH EITHER. ─────
+             This is the KEYBOARD BUG ABOVE, one line number over, and it is
+             the PCM click. A device IRQ gets exactly ONE delivery attempt --
+             the synchronous AsyncInjectIrq() inside HostIrqSink(), made
+             from the AUDIO thread at the instant of the raise. If the CPU
+             thread happens to be inside the host rather than in guest code
+             that attempt bails at why=20 and NOTHING RETRIES: the V86 exec
+             loop's drain (the `for (q = 2; q < 8; ...)` above) needs a `tib`
+             from a trapping guest, and a 32-bit DPMI client never goes there.
+             MEASURED on a 45 s Doom run, and it is not marginal:
+                 sb_blocks   0x0de6 = 3558 block completions raised
+                 irq05 (PM)  0x0a37 = 2615 delivered
+                 ASYNC-EARLY 1009 bails, EVERY ONE why=0x14 (g_InExec == 0)
+             A dropped SB completion is not a dropped tick. Each one owns a
+             distinct 256-byte refill: no IRQ means DMX never rewrites that
+             block, so the 8237 laps the ring and we play the PREVIOUS lap's
+             audio verbatim. Proven in the capture -- seams 4096 bytes apart
+             share their preceding bytes exactly, and 96 of 182 seams are
+             preceded by a full 256-byte repeat. At 86 blocks/s that is the
+             buzz. A timer tick can be coalesced; this cannot.
+             So hold the request and offer it every pass, exactly as the
+             timer latch and the keyboard now do. The guest reaches this point
+             constantly (every INT 31h, every trapped port access), so the
+             added latency is microseconds and no new thread is involved. */
+        /* ── AND THE MOUSE DRIVER'S OWN CALLBACK (INT 33h 0Ch), same gate.
+             (s74c) ZAR's buttons travel only through this. */
+        if (g_MouseEventPend && MouseAnyHandler()        /* 0Ch's or 18h's (#265) */
+            && g_DpmiVi && !g_PmNoIrq && !g_InPmIrq && !g_AsyncPmActive) {
+            g_InPmIrq = 1;
+            DpmiInjectPmMouseCallback(machine, tib, steps);
+            g_InPmIrq = 0;
+        }
+        DpmiDeliverPendingIrqs(machine, tib, steps);
+        cursor = DpmiCheckpointFirstEntries(cursor, base, steps, tib);
+        DpmiArmFaultTrampoline(tib, 0);   /* re-arm nest/flag/[0x638]/[TIB+8] */
+        if (steps < g_DpmiCpMaximum) {
+            cursor = LogPut(cursor, "DPMI-CP["); cursor = LogHex(cursor, (UINT)steps);
+            cursor = LogPut(cursor, "] armed -> entering PM\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        }
+        /* Give the watchdog a guaranteed turn before the FIRST entry only. If it
+           has logged a sample by the time we hand off, then its silence afterwards
+           means the whole process was killed at once (a kernel VDM terminate),
+           not that the thread never ran. 300 ms, once, on a diagnostic path. */
+        if (steps == 0) Sleep(300);
+        /* ── TELL THE ASYNC INJECTOR THE GUEST IS RUNNING. ───────────────────
+             g_InExec means "the CPU thread is executing GUEST code, so its
+             context is the guest's and may be rewritten"; AsyncInjectIrq()
+             refuses to touch the thread without it, precisely so it cannot race
+             the host manipulating the TIB. It was set only around VdmRunGuest(), so
+             for the whole of a protected-mode session the answer was "no" and
+             every asynchronous delivery bailed at the first line -- which is why
+             a PM guest could never be interrupted at all. Protected-mode
+             execution is execution too. */
+        /* ► NARROW ESP ON A 16-BIT STACK FOR **BOTH** PATHS. This was added
+             for the kernel path (it took the spike from 1 PM entry to 8) on the
+             reasoning that the far-jmp path reloads the junk harmlessly with
+             `lss`. Mostly true -- but measured, it is not always: give Doom a
+             command-line argument and the run dies right after the AH=30h
+             version check with
+                 SS=0x00c7 (SS D/B=0)  ESP=0xb33b6f14
+                 GH#18: PM-FAULT REFLECTED -- saved CS:EIP=0x00c7:0xb33b6f1e
+             and 0xb33b is a HOST THREAD-STACK address sitting in the top half
+             of ESP, because with a 16-bit SS the CPU maintains SP only and
+             whatever the host last had there stays.
+             ⚠ CLEARING IT DOES **NOT** FIX THAT BUG -- measured, the run is
+               identical (467 INT 31h calls either way). Kept anyway because
+               the junk is objectively wrong state that shows up in every dump
+               and there is no case where the high half of ESP is meaningful
+               while SS is 16-bit. Do not read this as the argument fix. */
+        if (!DpmiSelectorIs32((WORD)VDM_REG16(tib, VTIB_SS)))
+            VDM_REG(tib, VTIB_ESP) &= WORD_MASK_U;
+        while (g_PauseWant && g_Running) { ++g_PauseCooperative; Sleep(PAUSE_POLL_MS); }   /* #219 */
+        CpuSpeedCooperativePark();                                                  /* #225 */
+        InterlockedExchange(&g_InExec, 1);
+        ExecEnterMark();   /* guest-execution clock starts (throttle) */
+        {
+            INT flow = DpmiRunClientSlice(&cursor, base, tib, steps);
+            if (flow == HOST_FLOW_BREAK) break;
+        }
+        ExecLeaveMark();   /* ...and stops. Our servicing is not its   */
+        InterlockedExchange(&g_InExec, 0);
+        if (steps < g_DpmiCpMaximum) {
+            cursor = LogPut(cursor, "DPMI-CP["); cursor = LogHex(cursor, (UINT)steps);
+            cursor = LogPut(cursor, "] returned ev=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EVENT));
+            cursor = LogPut(cursor, " cs:eip=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_CS));
+            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EIP));
+            cursor = LogPut(cursor, "\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        }
+        event  = VDM_REG(tib, VTIB_EVENT);
+        eip = DpmiPmEip(tib);
+        currentCs = VDM_REG16(tib, VTIB_CS);
+        g_DpmiLastEvent  = event;  g_DpmiLastEip = eip;  g_DpmiLastCs = currentCs;
+        {
+            INT flow = DpmiFinishAsyncPmInterrupt(event, currentCs, eip, tib, machine, steps);
+            if (flow == HOST_FLOW_CONTINUE) continue;
+        }
+        /* GH#18 (bare-metal crack, 2026-08-18): dpmi_enter.S reports event 3 when it
+           DECLINES to enter PM -- guest IF=1 AND [0x714]&3 signals a pending hardware
+           interrupt (the FIXED_NTVDMSTATE pending bits; see dpmi_enter.S label 2). We
+           run PM IN-PROCESS (far-jmp), NOT via VdmStartExecution, so while PM executes
+           the kernel does not manage this VDM's interrupt assist -- those pending bits
+           are STALE real-mode state: a timer IRQ0 latched during the DOS INT 21h calls
+           before the mode switch. On real 3.3GHz silicon a tick is essentially always
+           pending at switch time (QEMU+HVF's dilated clock rarely had one), so the
+           monitor bailed with event 3 forever and the PM client never ran a single
+           instruction (EIP stuck at entry) -- THE session-8 "kernel won't run PM" wall.
+           Clear the stale pending bits and re-enter. Bounded so a genuinely re-arming
+           pending can't spin; the BIOS tick still advances via the IRQ0 path above. */
+        if (event == 3) {
+            if (++event3Retries <= PENDING_INT_RETRIES_MAX) {
+                if (event3Retries <= 3) {
+                    cursor = LogPut(cursor, "GH#18: event3 pending-int guard at CS:EIP=0x");
+                    cursor = LogHex(cursor, currentCs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, eip);
+                    cursor = LogPut(cursor, " [0x714]=0x");
+                    cursor = LogHex(cursor, *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR);
+                    cursor = LogPut(cursor, " -> clear stale pending + re-enter\r\n");
+                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+                }
+                *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR &= ~VDM_INT_PENDING;
+                continue;
+            }
+            /* retry budget exhausted -> fall through and report an unexpected stop */
+        }
+        {
+            INT flow = DpmiHandleReflectedFault(&cursor, base, event, currentCs, eip, tib, machine, steps);
+            if (flow == HOST_FLOW_BREAK) break;
+            if (flow == HOST_FLOW_CONTINUE) continue;
+        }
+        {
+            INT flow = DpmiResumeAfterClientHandler(&cursor, base, event, currentCs, eip, tib);
+            if (flow == HOST_FLOW_BREAK) break;
+            if (flow == HOST_FLOW_CONTINUE) continue;
+        }
+        /* GH#18 run 72: a real-CPU PROTECTED-MODE I/O insn (IN/OUT) reflects as
+           event 0 -- the SAME VDD-trap event as V86 (VM-confirmed by outprobe.com,
+           a PM `OUT DX,AL` to 0x3C8). Service it through the device bus and resume,
+           so PM port I/O (VGA/sound) reaches our VDDs instead of the loop treating
+           event 0 as an "unexpected PM stop" and spinning. */
+        if (event == VDM_EVENT_IO || event == VDM_EVENT_IO_HW || event == VDM_EVENT_GPFAULT) {
+            INT isIoHandled;
+            HOST_LOCK();
+            isIoHandled = HostTryIoPm(tib, &g_Bus);
+            HOST_UNLOCK();
+            if (isIoHandled) {
+                /* North star 1: the OUT that just trapped may have opened a
+                   multi-plane window -- Doom's drawers start exactly so. */
+                if (ModeYPmNeedsInterp()) ModeYPmRun(tib);
+                continue;         /* serviced the port op -> keep running */
+            }
+            /* not a decodable I/O op -> fall through to the normal dispatch/stop */
+        }
+        /* BARE-METAL diagnostic (GH #18): dump the faulting PM instruction bytes for
+           any non-BOP stop, so we can identify what real hardware reflects as event 3
+           (raw PM #GP) vs the HVF silent-terminate. Rate-limited to the first 32 stops
+           so a client that repeatedly faults can't flood the log (session-9). */
+        if (event != VDM_EVENT_BOP && pmFaultDumps < 32) {
+            DWORD faultBase = DpmiSelectorBase((WORD)currentCs);
+            ++pmFaultDumps;
+            const volatile BYTE *faultInstruction = (const volatile BYTE *)(ULONG_PTR)(faultBase + eip);
+            UINT32 selectorAr = 0, selectorLim = 0; DpmiSelectorDescriptor((WORD)currentCs, &selectorAr, &selectorLim);
+            cursor = LogPut(cursor, "GH#18 PM-FAULT ev=0x"); cursor = LogHex(cursor, event);
+            cursor = LogPut(cursor, " CS:EIP=0x"); cursor = LogHex(cursor, currentCs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, eip);
+            cursor = LogPut(cursor, " base=0x"); cursor = LogHex(cursor, faultBase); cursor = LogPut(cursor, " AR=0x"); cursor = LogHex(cursor, selectorAr);
+            cursor = LogPut(cursor, " lim=0x"); cursor = LogHex(cursor, selectorLim); cursor = LogPut(cursor, " bytes=");
+            cursor = LogDump(cursor, (const VOID *)faultInstruction, 12); cursor = LogPut(cursor, "\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        }
+        vector = (event == VDM_EVENT_BOP) ? DpmiBopVector(currentCs, eip) : 0;
+        g_DpmiLastVector = vector;
+        g_PmTopDispatch = 1;          /* #256: consumed by this dispatch */
+        status = DpmiServicePmInt(machine, tib, vector, steps);
+        if (status > 0) continue;   /* serviced -> keep running the PM client */
+        break;                  /* 0 = client exited, <0 = unexpected stop */
+    }
+    *cursorIo = cursor;
+}
+
+
+static PSTR DpmiInstallFaultReflect(PSTR cursor, PSTR const base)
+{
+    /* GH #18 (run 67): install the PM-fault reflect machinery, so a RAW (non-BOP)
+       PM #GP -- an SS-retype, HLT, or privileged op the INT->BOP scan cannot
+       pre-patch -- is reflected by the kernel to our handler (code sel : BOP) on a
+       scratch stack, instead of silently terminating the VDM (runs 20-34). */
+    DpmiInstallFaultTrampoline();
+    cursor = LogPut(cursor, "DPMI: PM-fault reflect stkSel=0x"); cursor = LogHex(cursor, g_DpmiFaultSelector);
+    cursor = LogPut(cursor, " codeSel=0x"); cursor = LogHex(cursor, g_DpmiFaultCodeSelector);
+    cursor = LogPut(cursor, " bop@code:0x"); cursor = LogHex(cursor, DPMI_FAULT_COFF);
+    cursor = LogPut(cursor, " tbl@0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)g_FaultTable);
+    cursor = LogPut(cursor, " class="); cursor = LogHex(cursor, DPMI_FLT_CLASS_GP);
+    cursor = LogPut(cursor, "\r\n");
+    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    return cursor;
+}
+
+
+/* Read what this PM session is configured to do, on the run that will use it: guest breakpoints, the WOW32 and scheduler switches, the PM watch addresses, and the cfg\\ flags (pmkernel, nomouse, nosb, pmvehpass, pmnoirq). */
+static PSTR DpmiLoadSessionKnobs(PSTR cursor, PSTR const base)
+{
+    /* Guest breakpoints (PMBP_PATH). Loaded here rather than at WinMain entry
+       so the list is read on the run that will use it, and armed both now and
+       after every code-region patch -- an address inside a module the client
+       has not loaded yet simply arms later. */
+    DpmiBreakpointLoad();
+    DpmiBreakpointArm();
+    Wow32ReturnLoad();
+    Wow32ModeLoad();
+    WowSchedLoad();
+    WowCallLoad();
+    /* LAST of the switches, so everything above still gets to say
+       what it armed before the trace goes quiet. */
+    WowQuietLoad();
+    /* pmchg.txt: `<hex offset> [segment]`, segment defaulting to 4
+       (krnl386's DGROUP). Absent file = no watch and no cost. */
+    { HANDLE configHandle = CreateFileA(PMCHG_PATH, GENERIC_READ,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                              OPEN_EXISTING, 0, NULL);
+      if (configHandle != INVALID_HANDLE_VALUE) {
+          CHAR pmChangeText[128]; DWORD commandLength = 0, pmTextIndex = 0, values[PMWATCH_COLUMNS] = { 0, 0 }; INT column = 0;
+          ReadFile(configHandle, pmChangeText, sizeof pmChangeText - 1, &commandLength, NULL); CloseHandle(configHandle);
+          while (pmTextIndex < commandLength && column < PMWATCH_COLUMNS) {
+              INT digits = 0;
+              while (pmTextIndex < commandLength && (pmChangeText[pmTextIndex] == ' ' || pmChangeText[pmTextIndex] == '\t')) ++pmTextIndex;
+              while (pmTextIndex < commandLength) {
+                  CHAR character = pmChangeText[pmTextIndex];
+                  INT pmDigit = (character >= '0' && character <= '9') ? character - '0'
+                        : (character >= 'a' && character <= 'f') ? character - 'a' + HEX_DIGIT_A_VALUE
+                        : (character >= 'A' && character <= 'F') ? character - 'A' + HEX_DIGIT_A_VALUE : -1;
+                  if (pmDigit < 0) break;
+                  values[column] = (values[column] << NIBBLE_SHIFT) | (DWORD)pmDigit; ++digits; ++pmTextIndex;
+              }
+              if (digits) ++column; else break;
+          }
+          if (column >= 1) {
+              g_PmWatchOffset = values[0];
+              if (column >= PMWATCH_COLUMNS && values[1] <= WOW_PMBASE_MAX)
+                  g_PmWatchSegment = (UINT)values[1];   /* 0 = already linear */
+              cursor = LogPut(cursor, "PMWATCH: watching seg "); cursor = LogHex(cursor, g_PmWatchSegment);
+              cursor = LogPut(cursor, " + 0x"); cursor = LogHex(cursor, g_PmWatchOffset);
+              cursor = LogPut(cursor, " for changes\r\n");
+              LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+          }
+      }
+    }
+    if (GetFileAttributesA(PMVERBOSE_PATH) != INVALID_FILE_ATTRIBUTES)
+        g_DpmiCpMaximum = 0x100000;   /* verbose: trace a whole startup */
+    { HANDLE watchHandle = CreateFileA(PMWATCH_PATH, GENERIC_READ,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                              OPEN_EXISTING, 0, NULL);
+      if (watchHandle != INVALID_HANDLE_VALUE) {
+          CHAR watchBuffer[128]; DWORD watchLength = 0, index2b = 0;
+          ReadFile(watchHandle, watchBuffer, sizeof watchBuffer - 1, &watchLength, NULL); CloseHandle(watchHandle);
+          while (index2b < watchLength && g_PmWatchCount < DPMI_WATCH_MAX) {
+              DWORD number = 0; INT dig = 0, rel = 0;
+              if (index2b < watchLength && watchBuffer[index2b] == '+') { rel = 1; ++index2b; }
+              while (index2b < watchLength) {
+                  CHAR character = watchBuffer[index2b];
+                  INT digit = (character >= '0' && character <= '9') ? character - '0'
+                        : (character >= 'a' && character <= 'f') ? character - 'a' + HEX_DIGIT_A_VALUE
+                        : (character >= 'A' && character <= 'F') ? character - 'A' + HEX_DIGIT_A_VALUE : -1;
+                  if (digit < 0) break;
+                  number = (number << NIBBLE_SHIFT) | (DWORD)digit; ++dig; ++index2b;
+              }
+              if (dig) { g_PmWatchRel[g_PmWatchCount] = (BYTE)rel;
+                         g_PmWatch[g_PmWatchCount++] = number; }
+              else ++index2b;
+          }
+          cursor = LogPut(cursor, "DPMI: pmwatch.txt -> ");
+          { INT watchIndex2; for (watchIndex2 = 0; watchIndex2 < g_PmWatchCount; ++watchIndex2) {
+                cursor = LogPut(cursor, g_PmWatchRel[watchIndex2] ? "codebase+0x" : "0x");
+                cursor = LogHex(cursor, g_PmWatch[watchIndex2]); cursor = LogPut(cursor, " "); } }
+          cursor = LogPut(cursor, "\r\n");
+          LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+      } }
+    g_DpmiUseKernel = (GetFileAttributesA(PMKERNEL_PATH) != INVALID_FILE_ATTRIBUTES);
+    if (g_DpmiUseKernel) {
+        cursor = LogPut(cursor, "DPMI: pmkernel.flag -- PM will run under VdmStartExecution\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    }
+    if (g_MouseAbsent) {
+        cursor = LogPut(cursor, "MOUSE: nomouse.flag -- INT 33h reports NO driver installed\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    }
+    g_SbAbsent = (GetFileAttributesA(NOSB_PATH) != INVALID_FILE_ATTRIBUTES);
+    g_OplAbsent = g_SbAbsent;      /* one knob, both devices unfitted */
+    if (g_SbAbsent) {
+        cursor = LogPut(cursor, "SB: nosb.flag -- DSP reset will NOT answer; no Sound Blaster fitted\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    }
+    g_PmVehPass = (GetFileAttributesA(PMVEHPASS_PATH) != INVALID_FILE_ATTRIBUTES);
+    if (g_PmVehPass) {
+        cursor = LogPut(cursor, "DPMI: pmvehpass.flag -- non-INT PM faults will NOT be swallowed by the VEH\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    }
+    g_PmNoIrq = (GetFileAttributesA(PMNOIRQ_PATH) != INVALID_FILE_ATTRIBUTES);
+    if (g_PmNoIrq) {
+        cursor = LogPut(cursor, "DPMI: pmnoirq.flag present -- IRQ0->PM injection SUPPRESSED\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    }
+    return cursor;
+}
+
+
+static PSTR DpmiPatchClientIntSitesUpFront(PSTR cursor, PSTR const base)
+{
+    /* Patch the client's PM `INT nn` (CD nn) -> BOP (C4 C4), recording the original
+       vector per CS offset. Same 2 bytes, so a real unmodified client's INT 31h/21h
+       now reflect to us as BOPs.
+
+       Why UP-FRONT (not lazy on first fault): a raw `INT 31h` in PM raises a #GP the
+       native kernel cannot reflect to us (runs 20-34) -- that unsolved reflect is the
+       whole reason we patch, so we cannot wait for the fault to catch it. So the scan
+       must find every INT site before the client runs.
+
+       Hardening (run 42): scan the FULL 64K code selector, not just the first 0x2000.
+       A real program's INT sites live well past 8 KB; the old bound silently missed
+       them (client would #GP-hang on the first unpatched INT 31h). The zeroed stack/BSS
+       tail can't match CD 31/CD 21, so scanning it is harmless. g_int_vec[] doubles as
+       an original-bytes map: g_int_vec[o]!=0 => offset o was `CD g_int_vec[o]` and is
+       now `C4 C4`, so a mis-patch (a CD 31/CD 21 byte-pair that was DATA, not code) is
+       detectable and revertible. Data mis-patch stays possible (x86 isn't
+       self-synchronising; without a disassembler we can't prove a byte is code) -- the
+       map is the mitigation, and an unexpected-BOP path below logs any surprise. */
+    { volatile BYTE *cs = (volatile BYTE *)(ULONG_PTR)g_DpmiCodeBase;
+      DWORD position, count = 0, last = 0, votedCount = 0;
+      for (position = 0; position < X86_SEGMENT_LIMIT_64K; ++position) {
+          /* ⚠ 0x2F IS HERE BECAUSE krnl386 DIED WITHOUT IT (GH #128).
+               A PM guest cannot reach the IVT, so an INT this list does not
+               name stays a raw `CD nn`, and executing it in protected mode
+               goes to the kernel's #GP reflect -- which does not reflect,
+               it SILENTLY TERMINATES THE VDM. That is the #18 signature:
+               no exception, no log line, the process simply gone.
+               krnl386 issues INT 2Fh from PM (168A, the "MS-DOS" vendor
+               query -- its very next interrupt after the 000A alias, per
+               the log) and it died there. No DOS/4GW-class client
+               ever did that, which is why the list never needed 0x2F.
+             ⚠ Every number added here widens the false-positive surface of
+               what is a NAIVE byte-pair scan -- the same shape that once
+               rewrote a `jle` displacement in Doom and cost five sessions.
+               The narrow list is the mitigation. Add a vector only with a
+               guest that provably needs it, and only with a service arm to
+               receive it (see DpmiServicePmInt). */
+          /* ── ★★★ AND EVERY OTHER VECTOR, IF THE DECODER VOUCHES FOR IT. ──
+               The list above is the vectors we EXPECTED, and the note beside
+               it is right that widening a naive byte-pair scan is dangerous.
+               But "naive" is the part that changed: x86len.h's vote arrived in
+               session 21 and is already trusted to gate every site in
+               DpmiPatchCodeRegion(). It was simply never wired in here.
+
+             ⚠ MEASURED, session 32. krnl386 executes an `INT 2` (`cd 02`) in
+               protected mode. A breakpoint armed on that site reported `displaced
+               cd 02`, which
+               is proof it was RAW -- DpmiBreakpointArm() refuses a site that is already
+               an INT site, so it could not have armed otherwise. 0x02 is not on
+               the list, so it was never even a candidate.
+
+             ⚠⚠ AND THE FIRST DIAGNOSIS WAS WRONG: this was written up as "the
+               boundary vote produces false negatives on real instructions". The
+               vote never ran. The filter in front of it was the defect, and it
+               is a different one in each of the two scanners.
+
+             ⚠⚠⚠ AND "EVERY VECTOR, GATED BY THE VOTE" WAS TRIED AND IS WRONG.
+               Measured: it patched 0x7d sites instead of 0x6c -- 17 unlisted ones
+               the vote vouched for -- and the WOW run went BACKWARDS, dying at PM
+               step 0x27 instead of 0x46. Residuals fell from 31 to 14 and the
+               INT 2 was correctly claimed, so the widening did what it said; it
+               also broke the guest earlier, which means at least one of those 17
+               is data or mid-instruction that the vote waved through. The vote is
+               good (real sites 19-48 votes, false pairs 0-3) but it is NOT good
+               enough to underwrite all 256 vectors on this binary.
+
+             ⇒ SO: EVIDENCE ONLY, which is what the note above already prescribed
+               -- "add a vector only with a guest that provably needs it". The one
+               vector with proof is 0x02, and it is still gated by the vote. A
+               listed vector is patched exactly as before, unvoted, so no existing
+               guest can change behaviour. `votedCount` is counted separately so the
+               next widening is measurable rather than asserted. */
+          if (cs[position] == X86_OP_INT) {
+              BYTE siteVector = cs[position+1];
+              INT listed = (siteVector == VECTOR_DPMI || siteVector == VECTOR_DOS || siteVector == VECTOR_VIDEO
+                            || siteVector == VECTOR_KEYBOARD_SERVICES || siteVector == VECTOR_MOUSE
+                            || siteVector == VECTOR_MULTIPLEX
+                            || siteVector == VECTOR_EQUIPMENT || siteVector == VECTOR_KERNEL_DEBUGGER
+                            || siteVector == VECTOR_TIME || siteVector == VECTOR_TIMER);
+              DWORD linear = g_DpmiCodeBase + position;      /* map is linear-keyed now */
+              if (!listed && siteVector != VECTOR_NMI) continue;    /* evidence only -- see above */
+              if (!listed) {
+                  /* Initial mode-switch selectors are 16-bit even for a 32-bit
+                     client (the RETF-on-failure proof, session 16), so d32=0. */
+                  if (!X86IsIntSiteReal((const BYTE *)(ULONG_PTR)cs,
+                                            position, X86_SEGMENT_LIMIT_64K, X86_OPERAND_16)) continue;
+                  ++votedCount;
+              }
+              PatchMapSet(linear, siteVector); cs[position] = VDM_BOP0; cs[position+1] = VDM_BOP1; ++count; last = position;
+          }
+      }
+      cursor = LogPut(cursor, "DPMI: patched "); cursor = LogHex(cursor, count);
+      cursor = LogPut(cursor, " INT sites -> BOP (full 64K scan, last off 0x"); cursor = LogHex(cursor, last);
+      cursor = LogPut(cursor, "), of which "); cursor = LogHex(cursor, votedCount);
+      cursor = LogPut(cursor, " were UNLISTED vectors vouched for by the x86len vote\r\n");
+      LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+      /* ── WHAT DID THE PATCH LEAVE BEHIND? ────────────────────────────
+           Every `CD nn` still in this region is a vector we did not claim,
+           and a PM guest cannot reach the IVT -- so if the guest executes
+           one, the kernel #GP reflect silently terminates the VDM. No
+           exception, no log line, the process simply gone. That is how
+           krnl386 died on INT 2Fh, and finding it meant reading this
+           function's constant list by hand afterwards.
+         So say it up front, as a histogram by vector. It is an UPPER
+         BOUND -- a linear byte-pair count over a region that contains data
+         as well as code, so some of these are not instructions at all --
+         but a vector that is ABSENT here cannot kill the guest, which
+         makes the list a genuine shortlist of suspects rather than a
+         guess. Cheap, and it turns the next silent death into a lookup. */
+      {   DWORD hist[BYTE_VALUES], offset2, total = 0; INT number;
+          for (number = 0; number < BYTE_VALUES; ++number) hist[number] = 0;
+          for (offset2 = 0; offset2 < X86_SEGMENT_LIMIT_64K; ++offset2)
+              if (cs[offset2] == X86_OP_INT) { ++hist[cs[offset2 + 1]]; ++total; }
+          /* ── ★★ AND THE OFFSETS, NOT JUST THE HISTOGRAM. ──────────────────
+               A histogram says a vector is a suspect; it does not say WHERE,
+               so acting on it still means reading the binary by hand. Session
+               32 needed exactly that: a `cd 02` in krnl386 turned out to be
+               REAL CODE the guest executes, left RAW by the boundary vote --
+               proved by arming a breakpoint on it and reading back
+               `displaced cd 02` (a patched site is an INT site, and
+               DpmiBreakpointArm refuses those, so it could not have armed at all).
+             A raw `CD nn` in protected mode is not a warning, it is a silent
+               VDM teardown waiting for the guest to take that branch. Print the
+               addresses so the next one is a breakpoint away instead of a
+               disassembly session. Bounded so a data-heavy region cannot flood. */
+          {   DWORD shown = 0;
+              cursor = LogPut(cursor, "DPMI: residual CD nn SITES (linear, first 24):");
+              for (offset2 = 0; offset2 < X86_SEGMENT_LIMIT_64K && shown < 24; ++offset2)
+                  if (cs[offset2] == X86_OP_INT) {
+                      cursor = LogPut(cursor, " 0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)(cs + offset2));
+                      cursor = LogPut(cursor, "="); cursor = LogHexByte(cursor, cs[offset2 + 1]);
+                      ++shown;
+                  }
+              cursor = LogPut(cursor, "\r\n");
+              LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+          }
+          cursor = LogPut(cursor, "DPMI: residual CD nn in the region: "); cursor = LogHex(cursor, total);
+          cursor = LogPut(cursor, " (unclaimed vectors, upper bound)");
+          for (number = 0; number < BYTE_VALUES; ++number) if (hist[number]) {
+              cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, (BYTE)number);
+              cursor = LogPut(cursor, "h x"); cursor = LogHex(cursor, hist[number]);
+          }
+          cursor = LogPut(cursor, "\r\n");
+          LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+      }
+    }
+    return cursor;
+}
+
+
+/* The client asked to switch to protected mode (the DPMI entry BOP): build its initial selectors and PSP selector, start the watchdog, patch its INT sites, load the session's switches, run it in PM until it stops for good, and end the session -- or report that the switch failed. */
+static INT DpmiStartClientSession(PSTR *cursorIo, PSTR const base, volatile BYTE * const tib, DOS_MACHINE *machine)
+{
+    PSTR cursor = *cursorIo;
+    DWORD currentCs = VDM_REG16(tib, VTIB_CS), currentIp = VDM_REG16(tib, VTIB_EIP);
+    LONG registerStatus = 0, setStatus = 0; INT switched;
+    /* AX bit0 = the client's declared width (0=16-bit, 1=32-bit e.g. DOS/4GW).
+       Logged and recorded, but it does NOT set the initial selectors' D/B --
+       see DpmiSwitchToProtectedMode(); doing so ran DOS/4GW's 16-bit stub as 32-bit. */
+    INT is32 = (INT)(VDM_REG(tib, VTIB_EAX) & 1);
+    cursor = LogPut(cursor, "STAGE3: DPMI_BOP far-call LANDED @ 0x"); cursor = LogHex(cursor, currentCs);
+    cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, currentIp);
+    cursor = LogPut(cursor, is32 ? " -- switching to PM (32-bit client)\r\n"
+                     : " -- switching to PM (16-bit client)\r\n");
+    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    switched = DpmiSwitchToProtectedMode(tib, is32, &registerStatus, &setStatus);
+    cursor = LogPut(cursor, " [svc11=0x"); cursor = LogHex(cursor, (UINT)registerStatus);
+    cursor = LogPut(cursor, " svc10=0x"); cursor = LogHex(cursor, (UINT)setStatus); cursor = LogPut(cursor, "]");
+    cursor = LogPut(cursor, " retcs=0x"); cursor = LogHex(cursor, g_DpmiDebug[0]);
+    cursor = LogPut(cursor, " clo=0x"); cursor = LogHex(cursor, g_DpmiDebug[2]);
+    cursor = LogPut(cursor, " chi=0x"); cursor = LogHex(cursor, g_DpmiDebug[3]);
+    if (switched == 0) {
+        g_DpmiPm = 1;
+        g_DpmiCodeBase = g_DpmiSegmentBase[0];   /* CS base = the patch-scan target */
+        /* Record the switch's code/data/stack selector bases (indices 1/2/3) so
+           DpmiSelectorBase() translates DS:/ES:/SS: through the right base -- essential
+           once CS!=DS!=SS (a real .EXE); for a .COM all three are equal. */
+        { INT si; for (si = 0; si < DPMI_INITIAL_SELECTOR_COUNT; ++si) {
+            g_Ldt[DPMI_INITIAL_FIRST_INDEX + si].Base   = g_DpmiSegmentBase[si];
+            g_Ldt[DPMI_INITIAL_FIRST_INDEX + si].Limit  = X86_SEGMENT_LIMIT_64K;
+            g_Ldt[DPMI_INITIAL_FIRST_INDEX + si].Access = (si == 0) ? DPMI_ACCESS_CODE : DPMI_ACCESS_DATA;
+            /* Mirror the D/B width DpmiSwitchToProtectedMode ACTUALLY installed, so
+               DpmiSelectorIs32() (I/O decode + EIP-mask gating) agrees with the live
+               descriptor. That is now always 16-bit for these three: the client's
+               post-switch code must also be valid real-mode code on the failure
+               path, so it cannot be 32-bit. A 32-bit client far-jmps to its OWN
+               INT 31h-allocated 32-bit selectors, which are reported correctly. */
+            g_Ldt[DPMI_INITIAL_FIRST_INDEX + si].Flags  = 0;
+        } }
+        if (g_LdtNext < DPMI_FIRST_CLIENT_INDEX) g_LdtNext = DPMI_FIRST_CLIENT_INDEX;      /* client allocs start at index 4 now */
+        g_LdtClientMark = g_LdtNext;          /* teardown gives back everything above */
+        /* ── DPMI INITIAL CLIENT STATE: ES = PSP SELECTOR, AND THE PSP'S
+              ENVIRONMENT POINTER CONVERTED TO A SELECTOR. ────────────────────
+           DpmiSwitchToProtectedMode() sets ES = DS (a second copy of the data selector),
+           and that is simply wrong. DPMI 0.9, "entering protected mode", on the
+           register state at a successful return:
+               CS = 16-bit selector with base of real mode CS and a 64K limit
+               SS = Selector with base of real mode SS and a 64K limit
+               DS = Selector with base of real mode DS and a 64K limit
+               ES = Selector to program's PSP with a 100h byte limit
+           and, separately: "The environment pointer in the current program's PSP
+           will automatically be converted to a descriptor."
+
+           THIS IS NOT A SPEC DETAIL WE ARE HONOURING FOR TIDINESS -- it is what
+           killed Doom for four sessions. DOS/4GW's PM module reads the
+           environment field at +0x2c of whatever the initial ES selects and
+           loads it as a SELECTOR (observed). With ES pointing at the data segment
+           instead of the PSP, +0x2c is an arbitrary code byte pair -- measured as
+           0x8b17, LDT index 4450 -- and that segment load #GPs, which XP answers by
+           terminating the whole VDM with no
+           exception we can catch. The client is thus its own second witness for
+           BOTH halves of the rule, independently of the spec text.
+
+           The environment field is left holding the SELECTOR from here on. The
+           spec makes restoring it the client's job before it terminates ("it must
+           restore it to the selector created by the DPMI host"), and nothing in
+           our DOS layer reads PSP+0x2C -- dos_psp.h writes it once at load and no
+           reader exists (checked). If one is ever added, it must not assume a
+           segment after a DPMI switch. */
+        { WORD psp = machine->PspSegment;
+          DWORD pspBase = (DWORD)psp << PARAGRAPH_SHIFT;
+          WORD pspSelector = 0, environmentSelector = 0;
+          if (g_LdtNext < DPMI_LDT_MAX) {
+              INT pspIndex = g_LdtNext++;
+              g_Ldt[pspIndex].Base   = pspBase;
+              g_Ldt[pspIndex].Limit  = DOS_PSP_SIZE - 1;        /* "a 100h byte limit", exactly */
+              g_Ldt[pspIndex].Access = DPMI_ACCESS_DATA;        /* present, DPL3, data R/W       */
+              g_Ldt[pspIndex].Flags  = 0;
+              DpmiInstall(pspIndex);
+              pspSelector = (WORD)DPMI_LDT_SELECTOR(pspIndex);
+              VDM_SET16(tib, VTIB_ES, pspSelector);
+          }
+          { volatile WORD *environmentField = (volatile WORD *)(ULONG_PTR)(pspBase + DOS_PSP_ENVIRONMENT);
+            WORD environmentSegment = *environmentField;
+            /* environmentSegment == 0 is legal and documented: a client may free its
+               environment and zero this word BEFORE switching, in which case
+               there is nothing to convert and we must not invent a descriptor. */
+            if (environmentSegment && g_LdtNext < DPMI_LDT_MAX) {
+                INT entryIndex = g_LdtNext++;
+                g_Ldt[entryIndex].Base   = (DWORD)environmentSegment << PARAGRAPH_SHIFT;
+                g_Ldt[entryIndex].Limit  = DOS_PSP_SIZE - 1;      /* DosEnvBuild fills a 0x10-para block */
+                g_Ldt[entryIndex].Access = DPMI_ACCESS_DATA;
+                g_Ldt[entryIndex].Flags  = 0;
+                DpmiInstall(entryIndex);
+                environmentSelector = (WORD)DPMI_LDT_SELECTOR(entryIndex);
+                *environmentField = environmentSelector;
+            }
+          }
+          DpmiInstallDefaultPmHandlers(machine);
+          cursor = LogPut(cursor, " PSP 0x"); cursor = LogHex(cursor, psp);
+          cursor = LogPut(cursor, " -> ES=0x"); cursor = LogHex(cursor, pspSelector);
+          cursor = LogPut(cursor, " env -> sel 0x"); cursor = LogHex(cursor, environmentSelector);
+        }
+        cursor = LogPut(cursor, " segbase C=0x"); cursor = LogHex(cursor, g_DpmiSegmentBase[0]);
+        cursor = LogPut(cursor, " D=0x"); cursor = LogHex(cursor, g_DpmiSegmentBase[1]);
+        cursor = LogPut(cursor, " S=0x"); cursor = LogHex(cursor, g_DpmiSegmentBase[2]);
+        cursor = LogPut(cursor, " -> PM ok (CS=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_CS));
+        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EIP));
+        cursor = LogPut(cursor, ") -> DPMI PM loop\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        /* run 53: the emulation path -- execute PM in the host interpreter instead of
+           the kernel (which deadlocks on a PM #GP, run 52). No BOP patch: the interpreter
+           reads the raw CD nn and stops on it, and we service through the same dispatch.
+           No kernel watchdog here either -- the interpreter has its own guard cap, and the
+           watchdog's 3s TerminateProcess would guillotine a long (millions-of-insn) run. */
+        if (g_DpmiUseInterp) {
+            cursor = LogPut(cursor, "DPMI: run 53 -- PM in host interpreter (no kernel, no BOP patch)\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+            DpmiRunPmInterp(machine, tib);
+            { *cursorIo = cursor; return HOST_FLOW_BREAK; }
+        }
+        /* Safety watchdog (kernel PM path only): an un-terminable spin still self-kills
+           after ~3s so the batch dumps the log. */
+        { HANDLE watchdogThread = CreateThread(NULL, 0, DpmiWatchdog,
+                                   (LPVOID)(ULONG_PTR)g_DpmiWatchdogGeneration, 0, NULL);
+          if (watchdogThread) CloseHandle(watchdogThread);
+          /* Prove creation FROM THIS THREAD. The watchdog's own first line is
+             written by the new thread, so its absence is ambiguous -- it cannot
+             distinguish "thread never created" from "created but the process was
+             killed before it was ever scheduled". Doom's log shows neither that
+             line nor any sample, so we need the difference. */
+          cursor = LogPut(cursor, "STAGE3-DPMI: watchdog thread created h="); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)watchdogThread);
+          cursor = LogPut(cursor, "\r\n");
+          LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
+        cursor = DpmiPatchClientIntSitesUpFront(cursor, base);
+        cursor = DpmiLoadSessionKnobs(cursor, base);
+        cursor = DpmiInstallFaultReflect(cursor, base);
+
+        DpmiRunClient(&cursor, base, tib, machine);
+        {
+            INT flow = DpmiEndClientSession(&cursor, base, tib, machine);
+            if (flow == HOST_FLOW_BREAK) { *cursorIo = cursor; return HOST_FLOW_BREAK; }
+            if (flow == HOST_FLOW_CONTINUE) { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+        }
+    }
+    cursor = LogPut(cursor, " -> SWITCH FAILED (staying real mode, CF=1)\r\n");
+    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF;         /* CF=1 signals failure to the client */
+    VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;            /* -> the RETF, returns real mode     */
+    { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
 INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR commandLineText, INT showCommand)
 {
     CHAR report[8192]; PSTR cursor = report; PSTR base;
@@ -6224,733 +7003,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
              would be serviced as a DPMI real-to-protected mode switch. */
         if (!g_BopFromGuest
             && (VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == DPMI_BOP) {  /* DPMI real->PM switch */
-            DWORD currentCs = VDM_REG16(tib, VTIB_CS), currentIp = VDM_REG16(tib, VTIB_EIP);
-            LONG registerStatus = 0, setStatus = 0; INT switched;
-            /* AX bit0 = the client's declared width (0=16-bit, 1=32-bit e.g. DOS/4GW).
-               Logged and recorded, but it does NOT set the initial selectors' D/B --
-               see DpmiSwitchToProtectedMode(); doing so ran DOS/4GW's 16-bit stub as 32-bit. */
-            INT is32 = (INT)(VDM_REG(tib, VTIB_EAX) & 1);
-            cursor = LogPut(cursor, "STAGE3: DPMI_BOP far-call LANDED @ 0x"); cursor = LogHex(cursor, currentCs);
-            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, currentIp);
-            cursor = LogPut(cursor, is32 ? " -- switching to PM (32-bit client)\r\n"
-                             : " -- switching to PM (16-bit client)\r\n");
-            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-            switched = DpmiSwitchToProtectedMode(tib, is32, &registerStatus, &setStatus);
-            cursor = LogPut(cursor, " [svc11=0x"); cursor = LogHex(cursor, (UINT)registerStatus);
-            cursor = LogPut(cursor, " svc10=0x"); cursor = LogHex(cursor, (UINT)setStatus); cursor = LogPut(cursor, "]");
-            cursor = LogPut(cursor, " retcs=0x"); cursor = LogHex(cursor, g_DpmiDebug[0]);
-            cursor = LogPut(cursor, " clo=0x"); cursor = LogHex(cursor, g_DpmiDebug[2]);
-            cursor = LogPut(cursor, " chi=0x"); cursor = LogHex(cursor, g_DpmiDebug[3]);
-            if (switched == 0) {
-                UINT steps;
-                g_DpmiPm = 1;
-                g_DpmiCodeBase = g_DpmiSegmentBase[0];   /* CS base = the patch-scan target */
-                /* Record the switch's code/data/stack selector bases (indices 1/2/3) so
-                   DpmiSelectorBase() translates DS:/ES:/SS: through the right base -- essential
-                   once CS!=DS!=SS (a real .EXE); for a .COM all three are equal. */
-                { INT si; for (si = 0; si < DPMI_INITIAL_SELECTOR_COUNT; ++si) {
-                    g_Ldt[DPMI_INITIAL_FIRST_INDEX + si].Base   = g_DpmiSegmentBase[si];
-                    g_Ldt[DPMI_INITIAL_FIRST_INDEX + si].Limit  = X86_SEGMENT_LIMIT_64K;
-                    g_Ldt[DPMI_INITIAL_FIRST_INDEX + si].Access = (si == 0) ? DPMI_ACCESS_CODE : DPMI_ACCESS_DATA;
-                    /* Mirror the D/B width DpmiSwitchToProtectedMode ACTUALLY installed, so
-                       DpmiSelectorIs32() (I/O decode + EIP-mask gating) agrees with the live
-                       descriptor. That is now always 16-bit for these three: the client's
-                       post-switch code must also be valid real-mode code on the failure
-                       path, so it cannot be 32-bit. A 32-bit client far-jmps to its OWN
-                       INT 31h-allocated 32-bit selectors, which are reported correctly. */
-                    g_Ldt[DPMI_INITIAL_FIRST_INDEX + si].Flags  = 0;
-                } }
-                if (g_LdtNext < DPMI_FIRST_CLIENT_INDEX) g_LdtNext = DPMI_FIRST_CLIENT_INDEX;      /* client allocs start at index 4 now */
-                g_LdtClientMark = g_LdtNext;          /* teardown gives back everything above */
-                /* ── DPMI INITIAL CLIENT STATE: ES = PSP SELECTOR, AND THE PSP'S
-                      ENVIRONMENT POINTER CONVERTED TO A SELECTOR. ────────────────────
-                   DpmiSwitchToProtectedMode() sets ES = DS (a second copy of the data selector),
-                   and that is simply wrong. DPMI 0.9, "entering protected mode", on the
-                   register state at a successful return:
-                       CS = 16-bit selector with base of real mode CS and a 64K limit
-                       SS = Selector with base of real mode SS and a 64K limit
-                       DS = Selector with base of real mode DS and a 64K limit
-                       ES = Selector to program's PSP with a 100h byte limit
-                   and, separately: "The environment pointer in the current program's PSP
-                   will automatically be converted to a descriptor."
-
-                   THIS IS NOT A SPEC DETAIL WE ARE HONOURING FOR TIDINESS -- it is what
-                   killed Doom for four sessions. DOS/4GW's PM module reads the
-                   environment field at +0x2c of whatever the initial ES selects and
-                   loads it as a SELECTOR (observed). With ES pointing at the data segment
-                   instead of the PSP, +0x2c is an arbitrary code byte pair -- measured as
-                   0x8b17, LDT index 4450 -- and that segment load #GPs, which XP answers by
-                   terminating the whole VDM with no
-                   exception we can catch. The client is thus its own second witness for
-                   BOTH halves of the rule, independently of the spec text.
-
-                   The environment field is left holding the SELECTOR from here on. The
-                   spec makes restoring it the client's job before it terminates ("it must
-                   restore it to the selector created by the DPMI host"), and nothing in
-                   our DOS layer reads PSP+0x2C -- dos_psp.h writes it once at load and no
-                   reader exists (checked). If one is ever added, it must not assume a
-                   segment after a DPMI switch. */
-                { WORD psp = machine.PspSegment;
-                  DWORD pspBase = (DWORD)psp << PARAGRAPH_SHIFT;
-                  WORD pspSelector = 0, environmentSelector = 0;
-                  if (g_LdtNext < DPMI_LDT_MAX) {
-                      INT pspIndex = g_LdtNext++;
-                      g_Ldt[pspIndex].Base   = pspBase;
-                      g_Ldt[pspIndex].Limit  = DOS_PSP_SIZE - 1;        /* "a 100h byte limit", exactly */
-                      g_Ldt[pspIndex].Access = DPMI_ACCESS_DATA;        /* present, DPL3, data R/W       */
-                      g_Ldt[pspIndex].Flags  = 0;
-                      DpmiInstall(pspIndex);
-                      pspSelector = (WORD)DPMI_LDT_SELECTOR(pspIndex);
-                      VDM_SET16(tib, VTIB_ES, pspSelector);
-                  }
-                  { volatile WORD *environmentField = (volatile WORD *)(ULONG_PTR)(pspBase + DOS_PSP_ENVIRONMENT);
-                    WORD environmentSegment = *environmentField;
-                    /* environmentSegment == 0 is legal and documented: a client may free its
-                       environment and zero this word BEFORE switching, in which case
-                       there is nothing to convert and we must not invent a descriptor. */
-                    if (environmentSegment && g_LdtNext < DPMI_LDT_MAX) {
-                        INT entryIndex = g_LdtNext++;
-                        g_Ldt[entryIndex].Base   = (DWORD)environmentSegment << PARAGRAPH_SHIFT;
-                        g_Ldt[entryIndex].Limit  = DOS_PSP_SIZE - 1;      /* DosEnvBuild fills a 0x10-para block */
-                        g_Ldt[entryIndex].Access = DPMI_ACCESS_DATA;
-                        g_Ldt[entryIndex].Flags  = 0;
-                        DpmiInstall(entryIndex);
-                        environmentSelector = (WORD)DPMI_LDT_SELECTOR(entryIndex);
-                        *environmentField = environmentSelector;
-                    }
-                  }
-                  DpmiInstallDefaultPmHandlers(&machine);
-                  cursor = LogPut(cursor, " PSP 0x"); cursor = LogHex(cursor, psp);
-                  cursor = LogPut(cursor, " -> ES=0x"); cursor = LogHex(cursor, pspSelector);
-                  cursor = LogPut(cursor, " env -> sel 0x"); cursor = LogHex(cursor, environmentSelector);
-                }
-                cursor = LogPut(cursor, " segbase C=0x"); cursor = LogHex(cursor, g_DpmiSegmentBase[0]);
-                cursor = LogPut(cursor, " D=0x"); cursor = LogHex(cursor, g_DpmiSegmentBase[1]);
-                cursor = LogPut(cursor, " S=0x"); cursor = LogHex(cursor, g_DpmiSegmentBase[2]);
-                cursor = LogPut(cursor, " -> PM ok (CS=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_CS));
-                cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EIP));
-                cursor = LogPut(cursor, ") -> DPMI PM loop\r\n");
-                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                /* run 53: the emulation path -- execute PM in the host interpreter instead of
-                   the kernel (which deadlocks on a PM #GP, run 52). No BOP patch: the interpreter
-                   reads the raw CD nn and stops on it, and we service through the same dispatch.
-                   No kernel watchdog here either -- the interpreter has its own guard cap, and the
-                   watchdog's 3s TerminateProcess would guillotine a long (millions-of-insn) run. */
-                if (g_DpmiUseInterp) {
-                    cursor = LogPut(cursor, "DPMI: run 53 -- PM in host interpreter (no kernel, no BOP patch)\r\n");
-                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                    DpmiRunPmInterp(&machine, tib);
-                    break;
-                }
-                /* Safety watchdog (kernel PM path only): an un-terminable spin still self-kills
-                   after ~3s so the batch dumps the log. */
-                { HANDLE watchdogThread = CreateThread(NULL, 0, DpmiWatchdog,
-                                           (LPVOID)(ULONG_PTR)g_DpmiWatchdogGeneration, 0, NULL);
-                  if (watchdogThread) CloseHandle(watchdogThread);
-                  /* Prove creation FROM THIS THREAD. The watchdog's own first line is
-                     written by the new thread, so its absence is ambiguous -- it cannot
-                     distinguish "thread never created" from "created but the process was
-                     killed before it was ever scheduled". Doom's log shows neither that
-                     line nor any sample, so we need the difference. */
-                  cursor = LogPut(cursor, "STAGE3-DPMI: watchdog thread created h="); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)watchdogThread);
-                  cursor = LogPut(cursor, "\r\n");
-                  LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
-                /* Patch the client's PM `INT nn` (CD nn) -> BOP (C4 C4), recording the original
-                   vector per CS offset. Same 2 bytes, so a real unmodified client's INT 31h/21h
-                   now reflect to us as BOPs.
-
-                   Why UP-FRONT (not lazy on first fault): a raw `INT 31h` in PM raises a #GP the
-                   native kernel cannot reflect to us (runs 20-34) -- that unsolved reflect is the
-                   whole reason we patch, so we cannot wait for the fault to catch it. So the scan
-                   must find every INT site before the client runs.
-
-                   Hardening (run 42): scan the FULL 64K code selector, not just the first 0x2000.
-                   A real program's INT sites live well past 8 KB; the old bound silently missed
-                   them (client would #GP-hang on the first unpatched INT 31h). The zeroed stack/BSS
-                   tail can't match CD 31/CD 21, so scanning it is harmless. g_int_vec[] doubles as
-                   an original-bytes map: g_int_vec[o]!=0 => offset o was `CD g_int_vec[o]` and is
-                   now `C4 C4`, so a mis-patch (a CD 31/CD 21 byte-pair that was DATA, not code) is
-                   detectable and revertible. Data mis-patch stays possible (x86 isn't
-                   self-synchronising; without a disassembler we can't prove a byte is code) -- the
-                   map is the mitigation, and an unexpected-BOP path below logs any surprise. */
-                { volatile BYTE *cs = (volatile BYTE *)(ULONG_PTR)g_DpmiCodeBase;
-                  DWORD position, count = 0, last = 0, votedCount = 0;
-                  for (position = 0; position < X86_SEGMENT_LIMIT_64K; ++position) {
-                      /* ⚠ 0x2F IS HERE BECAUSE krnl386 DIED WITHOUT IT (GH #128).
-                           A PM guest cannot reach the IVT, so an INT this list does not
-                           name stays a raw `CD nn`, and executing it in protected mode
-                           goes to the kernel's #GP reflect -- which does not reflect,
-                           it SILENTLY TERMINATES THE VDM. That is the #18 signature:
-                           no exception, no log line, the process simply gone.
-                           krnl386 issues INT 2Fh from PM (168A, the "MS-DOS" vendor
-                           query -- its very next interrupt after the 000A alias, per
-                           the log) and it died there. No DOS/4GW-class client
-                           ever did that, which is why the list never needed 0x2F.
-                         ⚠ Every number added here widens the false-positive surface of
-                           what is a NAIVE byte-pair scan -- the same shape that once
-                           rewrote a `jle` displacement in Doom and cost five sessions.
-                           The narrow list is the mitigation. Add a vector only with a
-                           guest that provably needs it, and only with a service arm to
-                           receive it (see DpmiServicePmInt). */
-                      /* ── ★★★ AND EVERY OTHER VECTOR, IF THE DECODER VOUCHES FOR IT. ──
-                           The list above is the vectors we EXPECTED, and the note beside
-                           it is right that widening a naive byte-pair scan is dangerous.
-                           But "naive" is the part that changed: x86len.h's vote arrived in
-                           session 21 and is already trusted to gate every site in
-                           DpmiPatchCodeRegion(). It was simply never wired in here.
-
-                         ⚠ MEASURED, session 32. krnl386 executes an `INT 2` (`cd 02`) in
-                           protected mode. A breakpoint armed on that site reported `displaced
-                           cd 02`, which
-                           is proof it was RAW -- DpmiBreakpointArm() refuses a site that is already
-                           an INT site, so it could not have armed otherwise. 0x02 is not on
-                           the list, so it was never even a candidate.
-
-                         ⚠⚠ AND THE FIRST DIAGNOSIS WAS WRONG: this was written up as "the
-                           boundary vote produces false negatives on real instructions". The
-                           vote never ran. The filter in front of it was the defect, and it
-                           is a different one in each of the two scanners.
-
-                         ⚠⚠⚠ AND "EVERY VECTOR, GATED BY THE VOTE" WAS TRIED AND IS WRONG.
-                           Measured: it patched 0x7d sites instead of 0x6c -- 17 unlisted ones
-                           the vote vouched for -- and the WOW run went BACKWARDS, dying at PM
-                           step 0x27 instead of 0x46. Residuals fell from 31 to 14 and the
-                           INT 2 was correctly claimed, so the widening did what it said; it
-                           also broke the guest earlier, which means at least one of those 17
-                           is data or mid-instruction that the vote waved through. The vote is
-                           good (real sites 19-48 votes, false pairs 0-3) but it is NOT good
-                           enough to underwrite all 256 vectors on this binary.
-
-                         ⇒ SO: EVIDENCE ONLY, which is what the note above already prescribed
-                           -- "add a vector only with a guest that provably needs it". The one
-                           vector with proof is 0x02, and it is still gated by the vote. A
-                           listed vector is patched exactly as before, unvoted, so no existing
-                           guest can change behaviour. `votedCount` is counted separately so the
-                           next widening is measurable rather than asserted. */
-                      if (cs[position] == X86_OP_INT) {
-                          BYTE siteVector = cs[position+1];
-                          INT listed = (siteVector == VECTOR_DPMI || siteVector == VECTOR_DOS || siteVector == VECTOR_VIDEO
-                                        || siteVector == VECTOR_KEYBOARD_SERVICES || siteVector == VECTOR_MOUSE
-                                        || siteVector == VECTOR_MULTIPLEX
-                                        || siteVector == VECTOR_EQUIPMENT || siteVector == VECTOR_KERNEL_DEBUGGER
-                                        || siteVector == VECTOR_TIME || siteVector == VECTOR_TIMER);
-                          DWORD linear = g_DpmiCodeBase + position;      /* map is linear-keyed now */
-                          if (!listed && siteVector != VECTOR_NMI) continue;    /* evidence only -- see above */
-                          if (!listed) {
-                              /* Initial mode-switch selectors are 16-bit even for a 32-bit
-                                 client (the RETF-on-failure proof, session 16), so d32=0. */
-                              if (!X86IsIntSiteReal((const BYTE *)(ULONG_PTR)cs,
-                                                        position, X86_SEGMENT_LIMIT_64K, X86_OPERAND_16)) continue;
-                              ++votedCount;
-                          }
-                          PatchMapSet(linear, siteVector); cs[position] = VDM_BOP0; cs[position+1] = VDM_BOP1; ++count; last = position;
-                      }
-                  }
-                  cursor = LogPut(cursor, "DPMI: patched "); cursor = LogHex(cursor, count);
-                  cursor = LogPut(cursor, " INT sites -> BOP (full 64K scan, last off 0x"); cursor = LogHex(cursor, last);
-                  cursor = LogPut(cursor, "), of which "); cursor = LogHex(cursor, votedCount);
-                  cursor = LogPut(cursor, " were UNLISTED vectors vouched for by the x86len vote\r\n");
-                  LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                  /* ── WHAT DID THE PATCH LEAVE BEHIND? ────────────────────────────
-                       Every `CD nn` still in this region is a vector we did not claim,
-                       and a PM guest cannot reach the IVT -- so if the guest executes
-                       one, the kernel #GP reflect silently terminates the VDM. No
-                       exception, no log line, the process simply gone. That is how
-                       krnl386 died on INT 2Fh, and finding it meant reading this
-                       function's constant list by hand afterwards.
-                     So say it up front, as a histogram by vector. It is an UPPER
-                     BOUND -- a linear byte-pair count over a region that contains data
-                     as well as code, so some of these are not instructions at all --
-                     but a vector that is ABSENT here cannot kill the guest, which
-                     makes the list a genuine shortlist of suspects rather than a
-                     guess. Cheap, and it turns the next silent death into a lookup. */
-                  {   DWORD hist[BYTE_VALUES], offset2, total = 0; INT number;
-                      for (number = 0; number < BYTE_VALUES; ++number) hist[number] = 0;
-                      for (offset2 = 0; offset2 < X86_SEGMENT_LIMIT_64K; ++offset2)
-                          if (cs[offset2] == X86_OP_INT) { ++hist[cs[offset2 + 1]]; ++total; }
-                      /* ── ★★ AND THE OFFSETS, NOT JUST THE HISTOGRAM. ──────────────────
-                           A histogram says a vector is a suspect; it does not say WHERE,
-                           so acting on it still means reading the binary by hand. Session
-                           32 needed exactly that: a `cd 02` in krnl386 turned out to be
-                           REAL CODE the guest executes, left RAW by the boundary vote --
-                           proved by arming a breakpoint on it and reading back
-                           `displaced cd 02` (a patched site is an INT site, and
-                           DpmiBreakpointArm refuses those, so it could not have armed at all).
-                         A raw `CD nn` in protected mode is not a warning, it is a silent
-                           VDM teardown waiting for the guest to take that branch. Print the
-                           addresses so the next one is a breakpoint away instead of a
-                           disassembly session. Bounded so a data-heavy region cannot flood. */
-                      {   DWORD shown = 0;
-                          cursor = LogPut(cursor, "DPMI: residual CD nn SITES (linear, first 24):");
-                          for (offset2 = 0; offset2 < X86_SEGMENT_LIMIT_64K && shown < 24; ++offset2)
-                              if (cs[offset2] == X86_OP_INT) {
-                                  cursor = LogPut(cursor, " 0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)(cs + offset2));
-                                  cursor = LogPut(cursor, "="); cursor = LogHexByte(cursor, cs[offset2 + 1]);
-                                  ++shown;
-                              }
-                          cursor = LogPut(cursor, "\r\n");
-                          LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                      }
-                      cursor = LogPut(cursor, "DPMI: residual CD nn in the region: "); cursor = LogHex(cursor, total);
-                      cursor = LogPut(cursor, " (unclaimed vectors, upper bound)");
-                      for (number = 0; number < BYTE_VALUES; ++number) if (hist[number]) {
-                          cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, (BYTE)number);
-                          cursor = LogPut(cursor, "h x"); cursor = LogHex(cursor, hist[number]);
-                      }
-                      cursor = LogPut(cursor, "\r\n");
-                      LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                  }
-                }
-                /* Guest breakpoints (PMBP_PATH). Loaded here rather than at WinMain entry
-                   so the list is read on the run that will use it, and armed both now and
-                   after every code-region patch -- an address inside a module the client
-                   has not loaded yet simply arms later. */
-                DpmiBreakpointLoad();
-                DpmiBreakpointArm();
-                Wow32ReturnLoad();
-                Wow32ModeLoad();
-                WowSchedLoad();
-                WowCallLoad();
-                /* LAST of the switches, so everything above still gets to say
-                   what it armed before the trace goes quiet. */
-                WowQuietLoad();
-                /* pmchg.txt: `<hex offset> [segment]`, segment defaulting to 4
-                   (krnl386's DGROUP). Absent file = no watch and no cost. */
-                { HANDLE configHandle = CreateFileA(PMCHG_PATH, GENERIC_READ,
-                                          FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                                          OPEN_EXISTING, 0, NULL);
-                  if (configHandle != INVALID_HANDLE_VALUE) {
-                      CHAR pmChangeText[128]; DWORD commandLength = 0, pmTextIndex = 0, values[PMWATCH_COLUMNS] = { 0, 0 }; INT column = 0;
-                      ReadFile(configHandle, pmChangeText, sizeof pmChangeText - 1, &commandLength, NULL); CloseHandle(configHandle);
-                      while (pmTextIndex < commandLength && column < PMWATCH_COLUMNS) {
-                          INT digits = 0;
-                          while (pmTextIndex < commandLength && (pmChangeText[pmTextIndex] == ' ' || pmChangeText[pmTextIndex] == '\t')) ++pmTextIndex;
-                          while (pmTextIndex < commandLength) {
-                              CHAR character = pmChangeText[pmTextIndex];
-                              INT pmDigit = (character >= '0' && character <= '9') ? character - '0'
-                                    : (character >= 'a' && character <= 'f') ? character - 'a' + HEX_DIGIT_A_VALUE
-                                    : (character >= 'A' && character <= 'F') ? character - 'A' + HEX_DIGIT_A_VALUE : -1;
-                              if (pmDigit < 0) break;
-                              values[column] = (values[column] << NIBBLE_SHIFT) | (DWORD)pmDigit; ++digits; ++pmTextIndex;
-                          }
-                          if (digits) ++column; else break;
-                      }
-                      if (column >= 1) {
-                          g_PmWatchOffset = values[0];
-                          if (column >= PMWATCH_COLUMNS && values[1] <= WOW_PMBASE_MAX)
-                              g_PmWatchSegment = (UINT)values[1];   /* 0 = already linear */
-                          cursor = LogPut(cursor, "PMWATCH: watching seg "); cursor = LogHex(cursor, g_PmWatchSegment);
-                          cursor = LogPut(cursor, " + 0x"); cursor = LogHex(cursor, g_PmWatchOffset);
-                          cursor = LogPut(cursor, " for changes\r\n");
-                          LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                      }
-                  }
-                }
-                if (GetFileAttributesA(PMVERBOSE_PATH) != INVALID_FILE_ATTRIBUTES)
-                    g_DpmiCpMaximum = 0x100000;   /* verbose: trace a whole startup */
-                { HANDLE watchHandle = CreateFileA(PMWATCH_PATH, GENERIC_READ,
-                                          FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                                          OPEN_EXISTING, 0, NULL);
-                  if (watchHandle != INVALID_HANDLE_VALUE) {
-                      CHAR watchBuffer[128]; DWORD watchLength = 0, index2b = 0;
-                      ReadFile(watchHandle, watchBuffer, sizeof watchBuffer - 1, &watchLength, NULL); CloseHandle(watchHandle);
-                      while (index2b < watchLength && g_PmWatchCount < DPMI_WATCH_MAX) {
-                          DWORD number = 0; INT dig = 0, rel = 0;
-                          if (index2b < watchLength && watchBuffer[index2b] == '+') { rel = 1; ++index2b; }
-                          while (index2b < watchLength) {
-                              CHAR character = watchBuffer[index2b];
-                              INT digit = (character >= '0' && character <= '9') ? character - '0'
-                                    : (character >= 'a' && character <= 'f') ? character - 'a' + HEX_DIGIT_A_VALUE
-                                    : (character >= 'A' && character <= 'F') ? character - 'A' + HEX_DIGIT_A_VALUE : -1;
-                              if (digit < 0) break;
-                              number = (number << NIBBLE_SHIFT) | (DWORD)digit; ++dig; ++index2b;
-                          }
-                          if (dig) { g_PmWatchRel[g_PmWatchCount] = (BYTE)rel;
-                                     g_PmWatch[g_PmWatchCount++] = number; }
-                          else ++index2b;
-                      }
-                      cursor = LogPut(cursor, "DPMI: pmwatch.txt -> ");
-                      { INT watchIndex2; for (watchIndex2 = 0; watchIndex2 < g_PmWatchCount; ++watchIndex2) {
-                            cursor = LogPut(cursor, g_PmWatchRel[watchIndex2] ? "codebase+0x" : "0x");
-                            cursor = LogHex(cursor, g_PmWatch[watchIndex2]); cursor = LogPut(cursor, " "); } }
-                      cursor = LogPut(cursor, "\r\n");
-                      LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                  } }
-                g_DpmiUseKernel = (GetFileAttributesA(PMKERNEL_PATH) != INVALID_FILE_ATTRIBUTES);
-                if (g_DpmiUseKernel) {
-                    cursor = LogPut(cursor, "DPMI: pmkernel.flag -- PM will run under VdmStartExecution\r\n");
-                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                }
-                if (g_MouseAbsent) {
-                    cursor = LogPut(cursor, "MOUSE: nomouse.flag -- INT 33h reports NO driver installed\r\n");
-                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                }
-                g_SbAbsent = (GetFileAttributesA(NOSB_PATH) != INVALID_FILE_ATTRIBUTES);
-                g_OplAbsent = g_SbAbsent;      /* one knob, both devices unfitted */
-                if (g_SbAbsent) {
-                    cursor = LogPut(cursor, "SB: nosb.flag -- DSP reset will NOT answer; no Sound Blaster fitted\r\n");
-                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                }
-                g_PmVehPass = (GetFileAttributesA(PMVEHPASS_PATH) != INVALID_FILE_ATTRIBUTES);
-                if (g_PmVehPass) {
-                    cursor = LogPut(cursor, "DPMI: pmvehpass.flag -- non-INT PM faults will NOT be swallowed by the VEH\r\n");
-                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                }
-                g_PmNoIrq = (GetFileAttributesA(PMNOIRQ_PATH) != INVALID_FILE_ATTRIBUTES);
-                if (g_PmNoIrq) {
-                    cursor = LogPut(cursor, "DPMI: pmnoirq.flag present -- IRQ0->PM injection SUPPRESSED\r\n");
-                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                }
-                /* GH #18 (run 67): install the PM-fault reflect machinery, so a RAW (non-BOP)
-                   PM #GP -- an SS-retype, HLT, or privileged op the INT->BOP scan cannot
-                   pre-patch -- is reflected by the kernel to our handler (code sel : BOP) on a
-                   scratch stack, instead of silently terminating the VDM (runs 20-34). */
-                DpmiInstallFaultTrampoline();
-                cursor = LogPut(cursor, "DPMI: PM-fault reflect stkSel=0x"); cursor = LogHex(cursor, g_DpmiFaultSelector);
-                cursor = LogPut(cursor, " codeSel=0x"); cursor = LogHex(cursor, g_DpmiFaultCodeSelector);
-                cursor = LogPut(cursor, " bop@code:0x"); cursor = LogHex(cursor, DPMI_FAULT_COFF);
-                cursor = LogPut(cursor, " tbl@0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)g_FaultTable);
-                cursor = LogPut(cursor, " class="); cursor = LogHex(cursor, DPMI_FLT_CLASS_GP);
-                cursor = LogPut(cursor, "\r\n");
-                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-
-                /* --- DPMI protected-mode execution loop -----------------------------------
-                   DpmiEnterProtectedMode runs the client in PM until it stops. Two stop kinds:
-                   (1) a patched INT nn BOP -- the kernel reflects C4 C4 as VTIB_EVENT=4
-                       (run 32); we look up the original vector by fault EIP and dispatch.
-                   (2) GH #18: a raw PM #GP the kernel reflects to our handler code selector
-                       -- also VTIB_EVENT=4, but CS==g_DpmiFaultCodeSelector and EIP==DPMI_FAULT_COFF.
-                       We recover the saved faulting CS:EIP/SS:ESP from the VTIB_FLT_SAV* slots. */
-                DWORD event3Retries = 0;   /* GH#18: bounded event-3 (pending-int guard) re-entries */
-                DWORD pmFaultDumps = 0;              /* rate-limit the PM-fault byte dump (anti-flood) */
-                DWORD pmStartTick = GetTickCount();   /* headless wall-clock cap origin */
-                for (steps = 0; g_Running && steps < PM_STEPS_MAX; ++steps) {  /* run until window close (animation) */
-                    DWORD event, eip, currentCs, vector; INT status;
-                    /* #152: Close Program ends a PM client exactly as its own AH=4Ch
-                       would; the child-with-a-parent path below does the rest. */
-                    if (g_CloseRequest && !g_WowLaunch) {
-                        InterlockedExchange(&g_CloseRequest, 0);
-                        g_CloseForced = 1;
-                        g_PmClientExited = 1; g_PmExitCode = 0;
-                        cursor = LogPut(cursor, "CLOSEPROG: ending the DPMI client (File > Close Program)\r\n");
-                        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                    }
-                    if (g_PmClientExited) break;   /* exited inside a nested run -- see the flag */
-                    /* Headless safety (session-9): an infinite visual demo (pm32irq/animate)
-                       never calls INT 21h 4Ch, so under the SMB auto-exit harness the PM loop
-                       would run forever and wedge rt.bat's `start /wait`. Bound it by wall clock
-                       so the host self-exits and the watcher survives. Sampled sparsely (every
-                       4096 steps) to keep GetTickCount off the hot path. Interactive runs (no
-                       marker) are unbounded, as before -- the user closes the window. */
-                    if (g_Headless && (steps & PM_HEADLESS_CHECK_MASK) == 0 && steps
-                        && GetTickCount() - pmStartTick > PM_HEADLESS_MS) {
-                        cursor = LogPut(cursor, "STAGE3-DPMI: headless time cap (");
-                        cursor = LogHex(cursor, PM_HEADLESS_MS); cursor = LogPut(cursor, " ms) reached after 0x");
-                        cursor = LogHex(cursor, (UINT)steps);
-                        cursor = LogPut(cursor, " steps -> exiting (infinite/visual demo; watch it on the monitor)\r\n");
-                        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                        break;
-                    }
-                    cursor = DpmiLogHeartbeat(cursor, base, steps, tib);
-                    /* run 52 heartbeat: publish where we're about to hand off + bump the
-                       iteration counter BEFORE entering, so a watchdog sample taken while
-                       we're blocked inside DpmiEnterProtectedMode sees a FROZEN iter at this CS:EIP. */
-                    g_DpmiEnterCs  = VDM_REG16(tib, VTIB_CS);
-                    g_DpmiEnterEip = DpmiPmEip(tib);
-                    g_DpmiIteration      = (LONG)(steps + 1);
-                    /* run 66 diagnostic (kept): log FIXED_NTVDMSTATE [0x714] once. Run 66 proved
-                       bit3=0 already (classifier is NOT the blocker), so no forcing needed -- for
-                       a #GP the kernel uses class 6, which reaches the generic reflect body. */
-                    if (steps == 0) {
-                        DWORD vdmStateAt714 = *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR;
-                        cursor = LogPut(cursor, "GH#18: [0x714]=0x"); cursor = LogHex(cursor, vdmStateAt714);
-                        cursor = LogPut(cursor, " bit3="); cursor = LogHex(cursor, (vdmStateAt714 >> 3) & 1);
-                        cursor = LogPut(cursor, " bit4="); cursor = LogHex(cursor, (vdmStateAt714 >> 4) & 1);
-                        cursor = LogPut(cursor, " bit14="); cursor = LogHex(cursor, (vdmStateAt714 >> 14) & 1);
-                        cursor = LogPut(cursor, " tib8=0x"); cursor = LogHex(cursor, *(volatile DWORD *)(tib + DPMI_TIB_FLTTBL));
-                        cursor = LogPut(cursor, "\r\n");
-                        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                    }
-                    /* Timing in PM (polled): the host PIT (UI thread) raises IRQ0 at the 8254
-                       rate; here we consume it and run the BIOS tick handler so 0040:006C and
-                       INT 1Ah advance with wall-clock even though nothing injects INT 08h into
-                       the PM client yet. (Async IRQ0 delivery to a client's PM INT 08h hook is
-                       the remaining timing piece.) */
-                    OplPumpTime();
-                    if (InterlockedExchange(&g_Irq0Pending, 0)) {
-                        NTVDD_REGISTERS trapRegisters; RegistersLoad(&trapRegisters, tib);
-                        HOST_LOCK();
-                        VddBusDeliverInterrupt(&g_Bus, VECTOR_TIMER, &trapRegisters);   /* PitInt08 -> ++0040:006C */
-                        HOST_UNLOCK();
-                        g_PmIrq0Latch = 1;    /* #2b: latch a virtual IRQ0 for the PM hook */
-                    }
-                    /* #2b async IRQ0 injection: when the client has hooked INT 08h in PM
-                       (g_PmInt[8], via INT 31h 0205) and its virtual-IF is enabled, deliver
-                       the latched IRQ0 to that handler -- how timer-hooking games get ticks.
-                       The latch persists across CLI windows so a masked interrupt isn't lost. */
-                    /* ► AND NOT WHILE AN ASYNC ONE IS STILL IN FLIGHT. The two injectors
-                         guarded themselves but not each other: the async path can vector the
-                         guest into its ISR and return, and if that ISR then leaves PM for a
-                         DOS call, control arrives back HERE with the handler still live --
-                         and a second tick would re-enter it on top of itself. Measured: the
-                         run died on such an injection taken at obj1+0x153dc, i.e. inside the
-                         very delay loop the tick exists to release. */
-                    /* #172: which gate turned an OWED tick away. See g_PmCooperativeGate. */
-                    INT twoTicksOwed = (g_PmTickOwed >= 2);
-                    if (twoTicksOwed) {
-                        UINT gateIndex = !(g_PmIrq0Latch || g_PmTickOwed > 0) ? PM_GATE_NO_LATCH : !g_DpmiVi ? PM_GATE_VIF_OFF
-                                    : !g_PmInt[VECTOR_TIMER].Client ? PM_GATE_NO_HOOK : g_InPmIrq ? PM_GATE_IN_PM_IRQ
-                                    : g_PmNoIrq ? PM_GATE_NO_IRQ : g_AsyncPmActive ? PM_GATE_ASYNC_IN_FLIGHT
-                                    : (GetTickCount() - g_PmVector8ArmedMs) < DPMI_IRQ0_ARM_QUIET_MS ? PM_GATE_ARMED
-                                    : PM_GATE_TRIED;
-                        g_PmCooperativeGate[gateIndex]++;
-                    }
-                    /* ── #172: THE LATCH OPENS THIS, NOT THE OWED COUNT. (s85) ────────────
-                         s84 opened the arm on `g_PmTickOwed > 0` as well, on the theory
-                         that the quit wait's backlog was stuck here. The real cause was
-                         ModeYPmRun holding g_Lock (stop reason `irq`), and isolated on the
-                         menu-quit route (runs/s85/owed/, interleaved x3) the owed-count arm
-                         bought nothing: quit window 139/s either way, REPLAYED_LOUD 48-50
-                         with it against 44-45 without, plus ~5,800 injections declined per
-                         run in DOS/4GW's 16-bit start-up. Latch only. */
-                    if (g_PmIrq0Latch
-                        && g_DpmiVi && g_PmInt[VECTOR_TIMER].Client && !g_InPmIrq
-                        && !g_PmNoIrq && !g_AsyncPmActive
-                        && (GetTickCount() - g_PmVector8ArmedMs) >= DPMI_IRQ0_ARM_QUIET_MS) {
-                        UINT32 dmaReadsBefore = g_Dma.ChannelCountReads[SB_DEFAULT_DMA8];
-                        g_PmIrq0Latch = 0;
-                        g_InPmIrq = 1;
-                        if (g_PmTickOwed > 0 && Irq0PmClaim()) {
-                            if (DpmiInjectPmIrq(&machine, tib, VECTOR_TIMER, steps))
-                                InterlockedDecrement(&g_PmTickOwed);
-                            else { Irq0PmUnclaim(); if (twoTicksOwed) g_PmCooperativeGate[PM_GATE_DECLINED]++; }
-                        } else if (twoTicksOwed) g_PmCooperativeGate[PM_GATE_CLAIM_REFUSED]++;
-                        g_InPmIrq = 0;
-                        g_CooperativeDmaPolls += g_Dma.ChannelCountReads[SB_DEFAULT_DMA8] - dmaReadsBefore;
-                    }
-                    /* ── s90 (#278): IRQs RAISED BY A 32-BIT COMPONENT (call_ica_hw_interrupt,
-                         through bin\wowshim\NTVDM.EXE) -- winmm raises IRQ 10 to tell
-                         MMSYSTEM a callback is queued in their shared buffer, and
-                         MMSYSTEM's handler (PM vector 72h) drains it and EOIs both PICs.
-                         Delivered here, by the guest thread, on the same gates as IRQ0;
-                         a line nobody hooked is counted and dropped (real hardware would
-                         reach the default handler, which only EOIs). WOW only. */
-                    if (g_WowLaunch && g_IcaPending && g_DpmiVi)
-                        WowIcaDeliver(&machine, tib, steps);
-                    DpmiDeliverKeyboardIrq(tib, &machine, steps);
-                    /* ── AND THE DEVICE LINES, WHICH HAD NO COOPERATIVE PATH EITHER. ─────
-                         This is the KEYBOARD BUG ABOVE, one line number over, and it is
-                         the PCM click. A device IRQ gets exactly ONE delivery attempt --
-                         the synchronous AsyncInjectIrq() inside HostIrqSink(), made
-                         from the AUDIO thread at the instant of the raise. If the CPU
-                         thread happens to be inside the host rather than in guest code
-                         that attempt bails at why=20 and NOTHING RETRIES: the V86 exec
-                         loop's drain (the `for (q = 2; q < 8; ...)` above) needs a `tib`
-                         from a trapping guest, and a 32-bit DPMI client never goes there.
-                         MEASURED on a 45 s Doom run, and it is not marginal:
-                             sb_blocks   0x0de6 = 3558 block completions raised
-                             irq05 (PM)  0x0a37 = 2615 delivered
-                             ASYNC-EARLY 1009 bails, EVERY ONE why=0x14 (g_InExec == 0)
-                         A dropped SB completion is not a dropped tick. Each one owns a
-                         distinct 256-byte refill: no IRQ means DMX never rewrites that
-                         block, so the 8237 laps the ring and we play the PREVIOUS lap's
-                         audio verbatim. Proven in the capture -- seams 4096 bytes apart
-                         share their preceding bytes exactly, and 96 of 182 seams are
-                         preceded by a full 256-byte repeat. At 86 blocks/s that is the
-                         buzz. A timer tick can be coalesced; this cannot.
-                         So hold the request and offer it every pass, exactly as the
-                         timer latch and the keyboard now do. The guest reaches this point
-                         constantly (every INT 31h, every trapped port access), so the
-                         added latency is microseconds and no new thread is involved. */
-                    /* ── AND THE MOUSE DRIVER'S OWN CALLBACK (INT 33h 0Ch), same gate.
-                         (s74c) ZAR's buttons travel only through this. */
-                    if (g_MouseEventPend && MouseAnyHandler()        /* 0Ch's or 18h's (#265) */
-                        && g_DpmiVi && !g_PmNoIrq && !g_InPmIrq && !g_AsyncPmActive) {
-                        g_InPmIrq = 1;
-                        DpmiInjectPmMouseCallback(&machine, tib, steps);
-                        g_InPmIrq = 0;
-                    }
-                    DpmiDeliverPendingIrqs(&machine, tib, steps);
-                    cursor = DpmiCheckpointFirstEntries(cursor, base, steps, tib);
-                    DpmiArmFaultTrampoline(tib, 0);   /* re-arm nest/flag/[0x638]/[TIB+8] */
-                    if (steps < g_DpmiCpMaximum) {
-                        cursor = LogPut(cursor, "DPMI-CP["); cursor = LogHex(cursor, (UINT)steps);
-                        cursor = LogPut(cursor, "] armed -> entering PM\r\n");
-                        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                    }
-                    /* Give the watchdog a guaranteed turn before the FIRST entry only. If it
-                       has logged a sample by the time we hand off, then its silence afterwards
-                       means the whole process was killed at once (a kernel VDM terminate),
-                       not that the thread never ran. 300 ms, once, on a diagnostic path. */
-                    if (steps == 0) Sleep(300);
-                    /* ── TELL THE ASYNC INJECTOR THE GUEST IS RUNNING. ───────────────────
-                         g_InExec means "the CPU thread is executing GUEST code, so its
-                         context is the guest's and may be rewritten"; AsyncInjectIrq()
-                         refuses to touch the thread without it, precisely so it cannot race
-                         the host manipulating the TIB. It was set only around VdmRunGuest(), so
-                         for the whole of a protected-mode session the answer was "no" and
-                         every asynchronous delivery bailed at the first line -- which is why
-                         a PM guest could never be interrupted at all. Protected-mode
-                         execution is execution too. */
-                    /* ► NARROW ESP ON A 16-BIT STACK FOR **BOTH** PATHS. This was added
-                         for the kernel path (it took the spike from 1 PM entry to 8) on the
-                         reasoning that the far-jmp path reloads the junk harmlessly with
-                         `lss`. Mostly true -- but measured, it is not always: give Doom a
-                         command-line argument and the run dies right after the AH=30h
-                         version check with
-                             SS=0x00c7 (SS D/B=0)  ESP=0xb33b6f14
-                             GH#18: PM-FAULT REFLECTED -- saved CS:EIP=0x00c7:0xb33b6f1e
-                         and 0xb33b is a HOST THREAD-STACK address sitting in the top half
-                         of ESP, because with a 16-bit SS the CPU maintains SP only and
-                         whatever the host last had there stays.
-                         ⚠ CLEARING IT DOES **NOT** FIX THAT BUG -- measured, the run is
-                           identical (467 INT 31h calls either way). Kept anyway because
-                           the junk is objectively wrong state that shows up in every dump
-                           and there is no case where the high half of ESP is meaningful
-                           while SS is 16-bit. Do not read this as the argument fix. */
-                    if (!DpmiSelectorIs32((WORD)VDM_REG16(tib, VTIB_SS)))
-                        VDM_REG(tib, VTIB_ESP) &= WORD_MASK_U;
-                    while (g_PauseWant && g_Running) { ++g_PauseCooperative; Sleep(PAUSE_POLL_MS); }   /* #219 */
-                    CpuSpeedCooperativePark();                                                  /* #225 */
-                    InterlockedExchange(&g_InExec, 1);
-                    ExecEnterMark();   /* guest-execution clock starts (throttle) */
-                    {
-                        INT flow = DpmiRunClientSlice(&cursor, base, tib, steps);
-                        if (flow == HOST_FLOW_BREAK) break;
-                    }
-                    ExecLeaveMark();   /* ...and stops. Our servicing is not its   */
-                    InterlockedExchange(&g_InExec, 0);
-                    if (steps < g_DpmiCpMaximum) {
-                        cursor = LogPut(cursor, "DPMI-CP["); cursor = LogHex(cursor, (UINT)steps);
-                        cursor = LogPut(cursor, "] returned ev=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EVENT));
-                        cursor = LogPut(cursor, " cs:eip=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_CS));
-                        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EIP));
-                        cursor = LogPut(cursor, "\r\n");
-                        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                    }
-                    event  = VDM_REG(tib, VTIB_EVENT);
-                    eip = DpmiPmEip(tib);
-                    currentCs = VDM_REG16(tib, VTIB_CS);
-                    g_DpmiLastEvent  = event;  g_DpmiLastEip = eip;  g_DpmiLastCs = currentCs;
-                    {
-                        INT flow = DpmiFinishAsyncPmInterrupt(event, currentCs, eip, tib, &machine, steps);
-                        if (flow == HOST_FLOW_CONTINUE) continue;
-                    }
-                    /* GH#18 (bare-metal crack, 2026-08-18): dpmi_enter.S reports event 3 when it
-                       DECLINES to enter PM -- guest IF=1 AND [0x714]&3 signals a pending hardware
-                       interrupt (the FIXED_NTVDMSTATE pending bits; see dpmi_enter.S label 2). We
-                       run PM IN-PROCESS (far-jmp), NOT via VdmStartExecution, so while PM executes
-                       the kernel does not manage this VDM's interrupt assist -- those pending bits
-                       are STALE real-mode state: a timer IRQ0 latched during the DOS INT 21h calls
-                       before the mode switch. On real 3.3GHz silicon a tick is essentially always
-                       pending at switch time (QEMU+HVF's dilated clock rarely had one), so the
-                       monitor bailed with event 3 forever and the PM client never ran a single
-                       instruction (EIP stuck at entry) -- THE session-8 "kernel won't run PM" wall.
-                       Clear the stale pending bits and re-enter. Bounded so a genuinely re-arming
-                       pending can't spin; the BIOS tick still advances via the IRQ0 path above. */
-                    if (event == 3) {
-                        if (++event3Retries <= PENDING_INT_RETRIES_MAX) {
-                            if (event3Retries <= 3) {
-                                cursor = LogPut(cursor, "GH#18: event3 pending-int guard at CS:EIP=0x");
-                                cursor = LogHex(cursor, currentCs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, eip);
-                                cursor = LogPut(cursor, " [0x714]=0x");
-                                cursor = LogHex(cursor, *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR);
-                                cursor = LogPut(cursor, " -> clear stale pending + re-enter\r\n");
-                                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            }
-                            *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR &= ~VDM_INT_PENDING;
-                            continue;
-                        }
-                        /* retry budget exhausted -> fall through and report an unexpected stop */
-                    }
-                    {
-                        INT flow = DpmiHandleReflectedFault(&cursor, base, event, currentCs, eip, tib, &machine, steps);
-                        if (flow == HOST_FLOW_BREAK) break;
-                        if (flow == HOST_FLOW_CONTINUE) continue;
-                    }
-                    {
-                        INT flow = DpmiResumeAfterClientHandler(&cursor, base, event, currentCs, eip, tib);
-                        if (flow == HOST_FLOW_BREAK) break;
-                        if (flow == HOST_FLOW_CONTINUE) continue;
-                    }
-                    /* GH#18 run 72: a real-CPU PROTECTED-MODE I/O insn (IN/OUT) reflects as
-                       event 0 -- the SAME VDD-trap event as V86 (VM-confirmed by outprobe.com,
-                       a PM `OUT DX,AL` to 0x3C8). Service it through the device bus and resume,
-                       so PM port I/O (VGA/sound) reaches our VDDs instead of the loop treating
-                       event 0 as an "unexpected PM stop" and spinning. */
-                    if (event == VDM_EVENT_IO || event == VDM_EVENT_IO_HW || event == VDM_EVENT_GPFAULT) {
-                        INT isIoHandled;
-                        HOST_LOCK();
-                        isIoHandled = HostTryIoPm(tib, &g_Bus);
-                        HOST_UNLOCK();
-                        if (isIoHandled) {
-                            /* North star 1: the OUT that just trapped may have opened a
-                               multi-plane window -- Doom's drawers start exactly so. */
-                            if (ModeYPmNeedsInterp()) ModeYPmRun(tib);
-                            continue;         /* serviced the port op -> keep running */
-                        }
-                        /* not a decodable I/O op -> fall through to the normal dispatch/stop */
-                    }
-                    /* BARE-METAL diagnostic (GH #18): dump the faulting PM instruction bytes for
-                       any non-BOP stop, so we can identify what real hardware reflects as event 3
-                       (raw PM #GP) vs the HVF silent-terminate. Rate-limited to the first 32 stops
-                       so a client that repeatedly faults can't flood the log (session-9). */
-                    if (event != VDM_EVENT_BOP && pmFaultDumps < 32) {
-                        DWORD faultBase = DpmiSelectorBase((WORD)currentCs);
-                        ++pmFaultDumps;
-                        const volatile BYTE *faultInstruction = (const volatile BYTE *)(ULONG_PTR)(faultBase + eip);
-                        UINT32 selectorAr = 0, selectorLim = 0; DpmiSelectorDescriptor((WORD)currentCs, &selectorAr, &selectorLim);
-                        cursor = LogPut(cursor, "GH#18 PM-FAULT ev=0x"); cursor = LogHex(cursor, event);
-                        cursor = LogPut(cursor, " CS:EIP=0x"); cursor = LogHex(cursor, currentCs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, eip);
-                        cursor = LogPut(cursor, " base=0x"); cursor = LogHex(cursor, faultBase); cursor = LogPut(cursor, " AR=0x"); cursor = LogHex(cursor, selectorAr);
-                        cursor = LogPut(cursor, " lim=0x"); cursor = LogHex(cursor, selectorLim); cursor = LogPut(cursor, " bytes=");
-                        cursor = LogDump(cursor, (const VOID *)faultInstruction, 12); cursor = LogPut(cursor, "\r\n");
-                        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                    }
-                    vector = (event == VDM_EVENT_BOP) ? DpmiBopVector(currentCs, eip) : 0;
-                    g_DpmiLastVector = vector;
-                    g_PmTopDispatch = 1;          /* #256: consumed by this dispatch */
-                    status = DpmiServicePmInt(&machine, tib, vector, steps);
-                    if (status > 0) continue;   /* serviced -> keep running the PM client */
-                    break;                  /* 0 = client exited, <0 = unexpected stop */
-                }
-                /* ── ★★★ A CHILD WITH A PARENT GOES BACK TO ITS PARENT. (s80) ─────────
-                     The client said AH=4Ch in protected mode. If something EXEC'd it
-                     (COMMAND.COM, a SETUP program) that parent is parked in real mode
-                     at its own INT 21h, and ending the VDM here is what made "run Doom
-                     from the shell" and "save and launch" come back to nothing. Release
-                     the client, leave PM, and let the real-mode terminate do what it
-                     does for any child: free its PSP block, unwind its vectors, restore
-                     the parent's frame. The exec loop then simply carries on in V86.
-                   ⚠ ONLY with a parent. A top-level client's exit still ends the run,
-                     unchanged -- nothing is waiting for it. */
-                if (g_PmClientExited && g_ExecDepth > 0 && g_Running) {
-                    InterlockedIncrement(&g_DpmiWatchdogGeneration);   /* its watchdog stands down */
-                    DpmiClientTeardown();
-                    *(volatile WORD *)(tib + VTIB_MSW) &= (WORD)~MSW_PE_BIT;   /* leave PM */
-                    VDM_SET16(tib, VTIB_FS, 0); VDM_SET16(tib, VTIB_GS, 0);
-                    machine.ExitCode = g_PmExitCode;
-                    cursor = LogPut(cursor, "DPMI: client exited with a parent waiting (depth=");
-                    cursor = LogHexByte(cursor, (UINT)g_ExecDepth);
-                    cursor = LogPut(cursor, ") -- back to real mode, terminating the child there\r\n");
-                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                    if (g_CloseForced) {           /* #152: it did not unhook itself */
-                        g_CloseForced = 0;
-                        if (g_Routed && g_ExecDepth == 1) g_BackToPrompt = 1;   /* #208 */
-                        ExecMachineRestore(g_ExecDepth - 1, &cursor);
-                        machine.IsTsrPending = 0;
-                    }
-                    if (DosTerminate(&machine, tib, &cursor, base)) continue;   /* parent resumed */
-                }
-                g_CloseForced = 0;
-                g_DpmiDone = 1;            /* PM run finished -> watchdog stands down, window persists */
-                break;
+            {
+                INT flow = DpmiStartClientSession(&cursor, base, tib, &machine);
+                if (flow == HOST_FLOW_BREAK) break;
+                if (flow == HOST_FLOW_CONTINUE) continue;
             }
-            cursor = LogPut(cursor, " -> SWITCH FAILED (staying real mode, CF=1)\r\n");
-            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-            VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF;         /* CF=1 signals failure to the client */
-            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;            /* -> the RETF, returns real mode     */
-            continue;
         }
         /* ── ★★ THIS IS THE FALL-THROUGH, AND IT ANSWERS FOR EVERY BOP IT WAS NEVER
                GIVEN. (s78) ──────────────────────────────────────────────────────
