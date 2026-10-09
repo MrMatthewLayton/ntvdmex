@@ -45,7 +45,8 @@ static BYTE  Pm32HostRead8(UINT32 linear)
 
 static VOID     Pm32HostWrite8(UINT32 linear, BYTE value)
 {
-    if (linear < sizeof g_GuestMemory) g_GuestMemory[linear] = value;
+    if (linear < sizeof g_GuestMemory)
+        g_GuestMemory[linear] = value;
 }
 
 static INT      Pm32HostCanAccess(UINT32 linear, INT width, INT isWrite)
@@ -57,6 +58,7 @@ static INT      Pm32HostCanAccess(UINT32 linear, INT width, INT isWrite)
 static UINT32 Pm32HostIn(WORD port, INT width)
 {
     UINT32 value = 0;
+
     g_FakeMicroseconds += 50;
     ++g_InCount;
     VddBusIo(&g_Bus, port, (BYTE)width, 1, &value);
@@ -66,6 +68,7 @@ static UINT32 Pm32HostIn(WORD port, INT width)
 static VOID     Pm32HostOut(WORD port, INT width, UINT32 value)
 {
     UINT32 busValue = value;
+
     ++g_OutCount;
     VddBusIo(&g_Bus, port, (BYTE)width, 0, &busValue);
 }
@@ -84,34 +87,61 @@ static INT g_Total = 0, g_Failures = 0;
  * 1 = returned to RETADR with ESP balanced; 0 = the interpreter declined something
  * (the code used an instruction outside its set) or it never returned.
  */
-static INT VbePmTestCallPm(UINT32 offset, UINT32 ebx, UINT32 ecx, UINT32 edx, UINT32 edi,
-                   UINT32 esBase, PPM32_CPU output)
+static INT VbePmTestCallPm(
+    UINT32 offset,
+    UINT32 ebx,
+    UINT32 ecx,
+    UINT32 edx,
+    UINT32 edi,
+    UINT32 esBase,
+    PPM32_CPU output)
 {
-    PM32_CPU cpu; long step;
+    PM32_CPU cpu;
+    long step;
+
     memset(&cpu, 0, sizeof cpu);
-    cpu.Registers[0] = 0xA5A5A5A5u; cpu.Registers[1] = ecx; cpu.Registers[2] = edx; cpu.Registers[3] = ebx;
-    cpu.Registers[5] = 0xB5B5B5B5u; cpu.Registers[6] = 0xC6C6C6C6u; cpu.Registers[7] = edi;
-    cpu.Registers[4] = STACK - 4; g_GuestMemory[STACK - 4] = (BYTE)RETADR; g_GuestMemory[STACK - 3] = (BYTE)(RETADR >> 8);
-    g_GuestMemory[STACK - 2] = (BYTE)(RETADR >> 16); g_GuestMemory[STACK - 1] = (BYTE)(RETADR >> 24);
-    cpu.Eip = COPY + offset; cpu.Flags = 0x202;
+    cpu.Registers[0] = 0xA5A5A5A5u;
+    cpu.Registers[1] = ecx;
+    cpu.Registers[2] = edx;
+    cpu.Registers[3] = ebx;
+    cpu.Registers[5] = 0xB5B5B5B5u;
+    cpu.Registers[6] = 0xC6C6C6C6u;
+    cpu.Registers[7] = edi;
+    cpu.Registers[4] = STACK - 4;
+    g_GuestMemory[STACK - 4] = (BYTE)RETADR;
+    g_GuestMemory[STACK - 3] = (BYTE)(RETADR >> 8);
+    g_GuestMemory[STACK - 2] = (BYTE)(RETADR >> 16);
+    g_GuestMemory[STACK - 1] = (BYTE)(RETADR >> 24);
+    cpu.Eip = COPY + offset;
+    cpu.Flags = 0x202;
     cpu.SegmentBases[0] = esBase;                    /* ES; CS/SS/DS flat 0 */
     for (step = 0; step < 2000000; ++step)
     {
-        if (cpu.Eip == RETADR) break;
+        if (cpu.Eip == RETADR)
+            break;
         if (!Pm32Step(&cpu))
         {
             printf("    declined at +%#x (op %02X)\n", cpu.Eip - COPY, g_GuestMemory[cpu.Eip]);
             return 0;
         }
     }
-    if (output) *output = cpu;
+    if (output)
+        *output = cpu;
     return cpu.Eip == RETADR && cpu.Registers[4] == STACK;
 }
 
-static VOID VbePmTestInt10(UINT32 eax, UINT32 ebx, UINT32 ecx, UINT32 edx, PNTVDD_REGISTERS registers)
+static VOID VbePmTestInt10(
+    UINT32 eax,
+    UINT32 ebx,
+    UINT32 ecx,
+    UINT32 edx,
+    PNTVDD_REGISTERS registers)
 {
     memset(registers, 0, sizeof *registers);
-    registers->Eax = eax; registers->Ebx = ebx; registers->Ecx = ecx; registers->Edx = edx;
+    registers->Eax = eax;
+    registers->Ebx = ebx;
+    registers->Ecx = ecx;
+    registers->Edx = edx;
     VddBusDeliverInterrupt(&g_Bus, 0x10, registers);
 }
 
@@ -122,6 +152,7 @@ INT main(VOID)
     PM32_CPU cpu;
     UINT32 block, length, index;
     WORD windowEntry, startEntry, paletteEntry, portsOffset;
+
     printf("== VBE 4F0Ah protected-mode interface battery (#53) ==\n");
     memset(&g_Video, 0, sizeof g_Video);
     g_Video.VideoMemory = g_VideoMemory;
@@ -147,9 +178,14 @@ INT main(VOID)
     {   /* the port list: words, FFFFh-terminated, then an empty memory list */
         INT has1ce = 0, has1cf = 0, has3c9 = 0, has3da = 0, count = 0;
         UINT32 listAddress = block + portsOffset;
-        for (;;) { WORD port = (WORD)(g_GuestMemory[listAddress] | (g_GuestMemory[listAddress + 1] << 8)); listAddress += 2;
-                   if (port == 0xFFFF || ++count > 16) break;
-                   has1ce |= port == 0x1CE; has1cf |= port == 0x1CF; has3c9 |= port == 0x3C9; has3da |= port == 0x3DA; }
+        for (;;) { WORD port = (WORD)(g_GuestMemory[listAddress] | (g_GuestMemory[listAddress + 1] << 8));
+        listAddress += 2;
+                   if (port == 0xFFFF || ++count > 16)
+                       break;
+                   has1ce |= port == 0x1CE;
+                   has1cf |= port == 0x1CF;
+                   has3c9 |= port == 0x3C9;
+                   has3da |= port == 0x3DA; }
         CHECK(has1ce && has1cf && has3c9 && has3da && g_GuestMemory[listAddress] == 0xFF && g_GuestMemory[listAddress + 1] == 0xFF,
               "table +6: every port the code touches, FFFFh, then an empty memory list (FFFFh)");
     }
@@ -209,7 +245,12 @@ INT main(VOID)
         CHECK(VbePmTestCallPm(paletteEntry, 0x0000, 3, 0x40, 0x60000, 0x100000, &cpu), "SetPalette (ES:EDI, 3 entries at 40h) returns");
         CHECK(cpu.Registers[1] == 3 && cpu.Registers[2] == 0x40 && cpu.Registers[7] == 0x60000, "SetPalette: ECX/EDX/EDI preserved");
         memset(&registers, 0, sizeof registers);
-        registers.Eax = 0x4F09; registers.Ebx = 0x0001; registers.Ecx = 3; registers.Edx = 0x40; registers.Es = (WORD)(readBackAddress >> 4); registers.Edi = 0;
+        registers.Eax = 0x4F09;
+        registers.Ebx = 0x0001;
+        registers.Ecx = 3;
+        registers.Edx = 0x40;
+        registers.Es = (WORD)(readBackAddress >> 4);
+        registers.Edi = 0;
         VddBusDeliverInterrupt(&g_Bus, 0x10, &registers);
         CHECK((registers.Eax & 0xFFFF) == 0x004F && memcmp(g_GuestMemory + readBackAddress, entries, sizeof entries) == 0,
               "4F09h BL=01h reads back exactly what SetPalette wrote (B,G,R, 6-bit)");
@@ -224,7 +265,9 @@ INT main(VOID)
 
     /* ---- the block in guest memory is restored by every 4F0Ah call ---- */
     VbePmTestInt10(0x4F0A, 0x0000, 0, 0, &registers);
-    for (index = 0; index < length; ++index) if (g_GuestMemory[block + index] != g_GuestMemory[COPY + index]) break;
+    for (index = 0; index < length; ++index)
+        if (g_GuestMemory[block + index] != g_GuestMemory[COPY + index])
+            break;
     CHECK(index == length, "4F0Ah again: the block at B260:0000 is rewritten, byte for byte");
 
     printf("\n%d checks, %d failed\n", g_Total, g_Failures);

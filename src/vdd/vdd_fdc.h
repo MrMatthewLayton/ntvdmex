@@ -148,8 +148,13 @@ INT  VddFdcInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddFdcReset(PVOID context);
 
 static inline NTVDD_DEVICE VddFdcDevice(_In_ PFDC_STATE state)
-{ NTVDD_DEVICE device; device.Name = FDC_DEVICE_NAME; device.Initialize = VddFdcInitialize; device.Reset = VddFdcReset;
-  device.Shutdown = 0; device.Context = state; return device; }
+{ NTVDD_DEVICE device;
+device.Name = FDC_DEVICE_NAME;
+device.Initialize = VddFdcInitialize;
+device.Reset = VddFdcReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 /* Exposed for the off-VM battery, which drives the chip through the same two
  * doors the guest does rather than reaching into the struct.

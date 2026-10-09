@@ -45,22 +45,28 @@
 static INT32 AudioMixGain(PCSB_STATE soundBlaster, BYTE mixerRegister)
 {
     UINT32 masterLevel, sourceLevel;
-    if (!soundBlaster) return AUDIO_GAIN_UNITY;
+
+    if (!soundBlaster)
+        return AUDIO_GAIN_UNITY;
     masterLevel = (soundBlaster->Mixer[AUDIO_SB_MIXER_MASTER] >> AUDIO_SB_LEVEL_SHIFT) & AUDIO_SB_LEVEL_MASK;
     sourceLevel    = (soundBlaster->Mixer[mixerRegister]   >> AUDIO_SB_LEVEL_SHIFT) & AUDIO_SB_LEVEL_MASK;
-    if (!soundBlaster->Mixer[AUDIO_SB_MIXER_MASTER]) masterLevel = AUDIO_SB_LEVEL_POWER_UP;            /* never programmed: power-up 0xCC */
-    if (!soundBlaster->Mixer[mixerRegister])  sourceLevel    = AUDIO_SB_LEVEL_POWER_UP;
+    if (!soundBlaster->Mixer[AUDIO_SB_MIXER_MASTER])
+        masterLevel = AUDIO_SB_LEVEL_POWER_UP;                                                         /* never programmed: power-up 0xCC */
+    if (!soundBlaster->Mixer[mixerRegister])
+        sourceLevel    = AUDIO_SB_LEVEL_POWER_UP;
     return (INT32)((masterLevel * sourceLevel * AUDIO_GAIN_SCALE) / AUDIO_SB_LEVEL_SQUARED);   /* (m/15)*(s/15) in 0..256 */
 }
 
 static VOID AudioResamplerSetup(PAUDIO_RESAMPLER resampler, UINT32 sourceHz, UINT32 outputHz)
 {
-    if (!sourceHz) sourceHz = outputHz;
+    if (!sourceHz)
+        sourceHz = outputHz;
     if (resampler->SourceHz != sourceHz)        /* rate changed mid-stream */
     {
         resampler->SourceHz = sourceHz;
         resampler->Step   = (UINT32)(((UINT64)sourceHz << AUDIO_FRACTION_BITS) / (outputHz ? outputHz : 1));
-        if (!resampler->Step) resampler->Step = 1;
+        if (!resampler->Step)
+            resampler->Step = 1;
     }
 }
 
@@ -80,6 +86,7 @@ static UINT32 AudioResamplerNeed(PCAUDIO_RESAMPLER resampler, UINT32 frames)
 {
     UINT64 span = (UINT64)resampler->Fraction + (UINT64)resampler->Step * frames;
     UINT32 count = (UINT32)(span >> AUDIO_FRACTION_BITS) + (resampler->IsPrimed ? 0u : AUDIO_PRIME_FRAMES);
+
     return count > AUDIO_SOURCE_MAX ? AUDIO_SOURCE_MAX : count;
 }
 
@@ -89,8 +96,11 @@ static UINT32 AudioResamplerNeed(PCAUDIO_RESAMPLER resampler, UINT32 frames)
 
 VOID VddAudioInitialize(PAUDIO_STATE state, POPL_STATE opl, PSB_STATE soundBlaster, UINT32 outputHz)
 {
-    UINT byteIndex; BYTE *bytes = (BYTE *)state;
-    for (byteIndex = 0; byteIndex < sizeof(*state); ++byteIndex) bytes[byteIndex] = 0;
+    UINT byteIndex;
+    BYTE *bytes = (BYTE *)state;
+
+    for (byteIndex = 0; byteIndex < sizeof(*state); ++byteIndex)
+        bytes[byteIndex] = 0;
     state->Opl = opl;
     state->Sb  = soundBlaster;
     state->OutputHz = outputHz ? outputHz : AUDIO_OUTPUT_HZ;
@@ -136,8 +146,13 @@ static INT16 AudioClip(INT32 value)
  * PreviousRight/CurrentRight). `*index` walks the source buffer in frames and never runs past `count`,
  * because AudioResamplerNeed() sized the buffer for exactly this walk.
  */
-static VOID AudioResamplerStepStereo(PAUDIO_RESAMPLER resampler, const INT16 *source, UINT32 count, UINT32 *index,
-                       INT32 *outputLeft, INT32 *outputRight)
+static VOID AudioResamplerStepStereo(
+    PAUDIO_RESAMPLER resampler,
+    const INT16 *source,
+    UINT32 count,
+    UINT32 *index,
+    INT32 *outputLeft,
+    INT32 *outputRight)
 {
     if (!resampler->IsPrimed)
     {
@@ -171,7 +186,8 @@ static VOID AudioResamplerStepStereo(PAUDIO_RESAMPLER resampler, const INT16 *so
     while (resampler->Fraction >= AUDIO_FRACTION_ONE)
     {
         resampler->Fraction -= AUDIO_FRACTION_ONE;
-        resampler->Previous = resampler->Current; resampler->PreviousRight = resampler->CurrentRight;
+        resampler->Previous = resampler->Current;
+        resampler->PreviousRight = resampler->CurrentRight;
         if (*index < count)
         {
             resampler->Current = source[AUDIO_STEREO_CHANNELS * *index];
@@ -190,10 +206,12 @@ VOID VddAudioMixStereo(PAUDIO_STATE state, INT16 *output, UINT32 frames)
         UINT32 count = frames - done;
         UINT32 frameIndex, needed, index;
         INT16 *chunk;
-        if (count > AUDIO_CHUNK) count = AUDIO_CHUNK;
+        if (count > AUDIO_CHUNK)
+            count = AUDIO_CHUNK;
         chunk = output + AUDIO_STEREO_CHANNELS * done;
 
-        for (frameIndex = 0; frameIndex < AUDIO_STEREO_CHANNELS * count; ++frameIndex) chunk[frameIndex] = 0;
+        for (frameIndex = 0; frameIndex < AUDIO_STEREO_CHANNELS * count; ++frameIndex)
+            chunk[frameIndex] = 0;
 
         /* --- FM: the OPL's own L/R (#232) ---------------------------------- */
         /* An OPL2, or an OPL3 before NEW, renders the same signal to both sides,
@@ -297,12 +315,14 @@ VOID VddAudioMixStereo(PAUDIO_STATE state, INT16 *output, UINT32 frames)
         /* --- master attenuator -------------------------------------------- */
         if (state->IsMuted)
         {
-            for (frameIndex = 0; frameIndex < AUDIO_STEREO_CHANNELS * count; ++frameIndex) chunk[frameIndex] = 0;
+            for (frameIndex = 0; frameIndex < AUDIO_STEREO_CHANNELS * count; ++frameIndex)
+                chunk[frameIndex] = 0;
         }
         else if (state->Master < AUDIO_MASTER_MAX)
         {
             INT32 gain = (INT32)((state->Master * AUDIO_GAIN_SCALE) / PERCENT_U); /* 0..256 */
-            for (frameIndex = 0; frameIndex < AUDIO_STEREO_CHANNELS * count; ++frameIndex) chunk[frameIndex] = (INT16)((chunk[frameIndex] * gain) >> AUDIO_GAIN_SHIFT);
+            for (frameIndex = 0; frameIndex < AUDIO_STEREO_CHANNELS * count; ++frameIndex)
+                chunk[frameIndex] = (INT16)((chunk[frameIndex] * gain) >> AUDIO_GAIN_SHIFT);
         }
 
         state->FramesMixed += count;
@@ -319,12 +339,15 @@ VOID VddAudioMix(PAUDIO_STATE state, INT16 *output, UINT32 frames)
 {
     INT16 stereo[AUDIO_STEREO_CHANNELS * AUDIO_CHUNK];
     UINT32 done = 0, frameIndex;
+
     while (done < frames)
     {
         UINT32 count = frames - done;
-        if (count > AUDIO_CHUNK) count = AUDIO_CHUNK;
+        if (count > AUDIO_CHUNK)
+            count = AUDIO_CHUNK;
         VddAudioMixStereo(state, stereo, count);
-        for (frameIndex = 0; frameIndex < count; ++frameIndex) output[done + frameIndex] = (INT16)(((INT32)stereo[AUDIO_STEREO_CHANNELS*frameIndex] + stereo[AUDIO_STEREO_CHANNELS*frameIndex+1]) / AUDIO_MONO_FOLD_DIVISOR);
+        for (frameIndex = 0; frameIndex < count; ++frameIndex)
+            output[done + frameIndex] = (INT16)(((INT32)stereo[AUDIO_STEREO_CHANNELS*frameIndex] + stereo[AUDIO_STEREO_CHANNELS*frameIndex+1]) / AUDIO_MONO_FOLD_DIVISOR);
         done += count;
     }
 }

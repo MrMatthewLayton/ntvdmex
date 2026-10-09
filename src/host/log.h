@@ -31,7 +31,8 @@
 
 static inline PSTR LogPut(PSTR cursor, PCSTR text)
 {
-    while (*text) *cursor++ = *text++;
+    while (*text)
+        *cursor++ = *text++;
     *cursor = 0;
     return cursor;
 }
@@ -39,7 +40,10 @@ static inline PSTR LogPut(PSTR cursor, PCSTR text)
 /* Append v as 8 lowercase hex digits. */
 static inline PSTR LogHex(PSTR cursor, UINT value)
 {
-    INT index; CHAR digits[LOG_HEX_DIGITS + 1]; digits[LOG_HEX_DIGITS] = 0;
+    INT index;
+    CHAR digits[LOG_HEX_DIGITS + 1];
+
+    digits[LOG_HEX_DIGITS] = 0;
     for (index = LOG_HEX_DIGITS - 1; index >= 0; --index)
     {
         digits[index] = HEX_DIGITS_LOWER[value & NIBBLE_MASK];
@@ -53,8 +57,11 @@ static inline PSTR LogHex(PSTR cursor, UINT value)
  */
 static inline PSTR LogHexByte(PSTR cursor, UINT value)
 {
-    CHAR digits[LOG_HEX_BYTE_DIGITS + 1]; digits[0] = HEX_DIGITS_LOWER[(value >> NIBBLE_SHIFT) & NIBBLE_MASK];
-    digits[1] = HEX_DIGITS_LOWER[value & NIBBLE_MASK]; digits[LOG_HEX_BYTE_DIGITS] = 0;
+    CHAR digits[LOG_HEX_BYTE_DIGITS + 1];
+
+    digits[0] = HEX_DIGITS_LOWER[(value >> NIBBLE_SHIFT) & NIBBLE_MASK];
+    digits[1] = HEX_DIGITS_LOWER[value & NIBBLE_MASK];
+    digits[LOG_HEX_BYTE_DIGITS] = 0;
     return LogPut(cursor, digits);
 }
 
@@ -65,7 +72,9 @@ static inline PSTR LogHexByte(PSTR cursor, UINT value)
  */
 static inline PSTR LogDecimal(PSTR cursor, UINT value)
 {
-    CHAR digits[LOG_DECIMAL_DIGITS + 1]; INT count = 0;
+    CHAR digits[LOG_DECIMAL_DIGITS + 1];
+    INT count = 0;
+
     if (!value)
     {
         *cursor++ = '0';
@@ -84,7 +93,9 @@ static inline PSTR LogDecimal(PSTR cursor, UINT value)
 
 static inline PSTR LogDump(PSTR cursor, LPCVOID bytes, UINT length)
 {
-    const BYTE *source = (const BYTE *)bytes; UINT index;
+    const BYTE *source = (const BYTE *)bytes;
+    UINT index;
+
     for (index = 0; index < length; ++index)
     {
         *cursor++ = HEX_DIGITS_LOWER[source[index] >> NIBBLE_SHIFT];

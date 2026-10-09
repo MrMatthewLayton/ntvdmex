@@ -185,8 +185,21 @@ typedef struct _WOWDLG_MODAL
 extern INT g_WowDlgIsDialogCall[WOWCALL_MAX_DEPTH];
 extern WORD g_WowDlgMessage[WOWCALL_MAX_DEPTH];
 INT WowDlgActive(VOID);
-INT WowDlgPush(WORD window, DWORD returnLinear, DWORD dialogProcedure, DWORD windowProcedure, WORD dataSelector, INT isShowDeferred, HWND owner32);
+INT WowDlgPush(
+    WORD window,
+    DWORD returnLinear,
+    DWORD dialogProcedure,
+    DWORD windowProcedure,
+    WORD dataSelector,
+    INT isShowDeferred,
+    HWND owner32);
 VOID WowDlgSetInit(DWORD initParameter, WORD firstFocus);
 INT WowDlgEnd(WORD window, WORD result);
-INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector, const volatile LONG *running, PSTR note, INT noteCapacity);
+INT WowDlgStep(
+    volatile BYTE *tib,
+    DWORD stackBase,
+    WORD returnSelector,
+    const volatile LONG *running,
+    PSTR note,
+    INT noteCapacity);
 #endif /* NTVDMEX_WOWDLG_H */

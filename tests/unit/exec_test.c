@@ -66,7 +66,8 @@ static INT g_Checks, g_Failures;
 static VOID ExecTestExpect(PCSTR description, LONG actual, LONG expected)
 {
     ++g_Checks;
-    if (actual == expected) return;
+    if (actual == expected)
+        return;
     ++g_Failures;
     printf("  FAIL %-58s got 0x%lX, want 0x%lX\n", description, (long)actual, (long)expected);
 }
@@ -75,31 +76,38 @@ static BYTE g_File[EXEC_TEST_FILE_SIZE];
 
 static VOID ExecTestPutWord(UINT offset, UINT value)
 {
-    g_File[offset] = (BYTE)value; g_File[offset + 1] = (BYTE)(value >> BYTE_SHIFT);
+    g_File[offset] = (BYTE)value;
+    g_File[offset + 1] = (BYTE)(value >> BYTE_SHIFT);
 }
 
 /* an MZ file with e_lfanew = newHeader and `signature` there */
 static VOID ExecTestMakeStub(UINT newHeader, PCSTR signature, UINT extraOffset, UINT extraValue)
 {
     memset(g_File, 0, sizeof g_File);
-    g_File[0] = 'M'; g_File[1] = 'Z';
+    g_File[0] = 'M';
+    g_File[1] = 'Z';
     ExecTestPutWord(DOS_MZ_HEADER_PARAGRAPHS, EXEC_TEST_STUB_HEADER_PARAS);    /* 64-byte header */
     ExecTestPutWord(DOS_MZ_RELOCATION_TABLE, EXEC_TEST_STUB_RELOCATIONS);      /* e_lfarlc */
     ExecTestPutWord(DOS_MZ_NEW_HEADER, newHeader);
-    if (signature) memcpy(g_File + newHeader, signature, strlen(signature));
-    if (extraOffset) ExecTestPutWord(newHeader + extraOffset, extraValue);
+    if (signature)
+        memcpy(g_File + newHeader, signature, strlen(signature));
+    if (extraOffset)
+        ExecTestPutWord(newHeader + extraOffset, extraValue);
 }
 
 /* p_exmemc.asm's child: 32-byte header, 130h-byte image, min/max as given */
 static DWORD ExecTestMakeChild(UINT minimumAlloc, UINT maximumAlloc)
 {
     DWORD length = EXEC_TEST_CHILD_HEADER_BYTES + EXEC_TEST_CHILD_IMAGE_BYTES;
+
     memset(g_File, 0, sizeof g_File);
-    g_File[0] = 'M'; g_File[1] = 'Z';
+    g_File[0] = 'M';
+    g_File[1] = 'Z';
     ExecTestPutWord(DOS_MZ_LAST_PAGE_BYTES, length % DOS_MZ_PAGE_BYTES);
     ExecTestPutWord(DOS_MZ_PAGE_COUNT, (length + DOS_MZ_PAGE_BYTES - 1) / DOS_MZ_PAGE_BYTES);
     ExecTestPutWord(DOS_MZ_HEADER_PARAGRAPHS, EXEC_TEST_CHILD_HEADER_PARAS);
-    ExecTestPutWord(DOS_MZ_MIN_ALLOC, minimumAlloc); ExecTestPutWord(DOS_MZ_MAX_ALLOC, maximumAlloc);
+    ExecTestPutWord(DOS_MZ_MIN_ALLOC, minimumAlloc);
+    ExecTestPutWord(DOS_MZ_MAX_ALLOC, maximumAlloc);
     ExecTestPutWord(DOS_MZ_INITIAL_SP, EXEC_TEST_CHILD_INITIAL_SP);
     ExecTestPutWord(DOS_MZ_RELOCATION_TABLE, EXEC_TEST_CHILD_RELOCATIONS);
     return length;
@@ -108,7 +116,9 @@ static DWORD ExecTestMakeChild(UINT minimumAlloc, UINT maximumAlloc)
 INT main(VOID)
 {
     UINT subsystem;
-    WORD allocation; BOOL loadHigh; INT status;
+    WORD allocation;
+    BOOL loadHigh;
+    INT status;
     DWORD length;
 
     /* 1. what kind of program: */
@@ -134,9 +144,12 @@ INT main(VOID)
                    DosExeKind(g_File, sizeof g_File, &subsystem), DOS_EXE_DOS);
     ExecTestMakeStub(EXEC_TEST_NEW_HEADER, "PE\0\0", EXEC_TEST_NO_EXTRA, 0);
     ExecTestExpect("e_lfanew past what was read -> DOS", DosExeKind(g_File, EXEC_TEST_SHORT_READ, &subsystem), DOS_EXE_DOS);
-    ExecTestMakeStub(EXEC_TEST_NEW_HEADER, "PE\0\0", EXEC_TEST_NO_EXTRA, 0); g_File[EXEC_TEST_BROKEN_PE_NUL] = 'X';
+    ExecTestMakeStub(EXEC_TEST_NEW_HEADER, "PE\0\0", EXEC_TEST_NO_EXTRA, 0);
+    g_File[EXEC_TEST_BROKEN_PE_NUL] = 'X';
     ExecTestExpect("\"PE\" without its two NULs -> DOS", DosExeKind(g_File, sizeof g_File, &subsystem), DOS_EXE_DOS);
-    ExecTestMakeStub(EXEC_TEST_NEW_HEADER, "PE\0\0", EXEC_TEST_NO_EXTRA, 0); g_File[0] = 'Z'; g_File[1] = 'M';
+    ExecTestMakeStub(EXEC_TEST_NEW_HEADER, "PE\0\0", EXEC_TEST_NO_EXTRA, 0);
+    g_File[0] = 'Z';
+    g_File[1] = 'M';
     ExecTestExpect("not MZ -> DOS (a .COM)", DosExeKind(g_File, sizeof g_File, &subsystem), DOS_EXE_DOS);
 
     /* 2. how much memory (largest free block 8000h paragraphs): */

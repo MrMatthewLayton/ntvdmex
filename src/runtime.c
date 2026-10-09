@@ -32,6 +32,7 @@
 void *memset(void *buffer, int fillValue, size_t byteCount)
 {
     PBYTE destination = (PBYTE)buffer;
+
     while (byteCount--)
         *destination++ = (BYTE)fillValue;
     return buffer;
@@ -41,6 +42,7 @@ void *memmove(void *destinationBuffer, const void *sourceBuffer, size_t byteCoun
 {
     PBYTE  destination = (PBYTE)destinationBuffer;
     PCBYTE source = (PCBYTE)sourceBuffer;
+
     if (destination < source)
     {
         while (byteCount--)
@@ -69,5 +71,6 @@ extern int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int);
 VOID WinMainCRTStartup(VOID)
 {
     INT exitCode = WinMain(GetModuleHandleA(NULL), NULL, GetCommandLineA(), SW_SHOWDEFAULT);
+
     ExitProcess((UINT)exitCode);
 }

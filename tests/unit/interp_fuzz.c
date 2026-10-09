@@ -38,6 +38,7 @@ static UINT64 g_Hash = 1469598103934665603ULL;           /* FNV-1a over everythi
 static VOID InterpFuzzMix(UINT64 value)
 {
     INT index;
+
     for (index = 0; index < 8; ++index)
     {
         g_Hash ^= (BYTE)(value >> (index * 8));
@@ -53,8 +54,10 @@ static BYTE V86HostRead8(UINT32 linear)
 
 static VOID    V86HostWrite8(UINT32 linear, BYTE value)
 {
-    if (g_IsHashingWrites) InterpFuzzMix(((UINT64)linear << 8) | value);
-    if (linear < sizeof g_Memory) g_Memory[linear] = value;
+    if (g_IsHashingWrites)
+        InterpFuzzMix(((UINT64)linear << 8) | value);
+    if (linear < sizeof g_Memory)
+        g_Memory[linear] = value;
 }
 
 static UINT32 V86HostIn(WORD port, INT width)
@@ -94,9 +97,14 @@ static UINT32 InterpFuzzRandom(VOID)
 static VOID InterpFuzzHashState(PCV86_CPU cpu, INT isOk)
 {
     INT index;
-    for (index = 0; index < 8; ++index) InterpFuzzMix(cpu->Registers[index]);
-    for (index = 0; index < 6; ++index) InterpFuzzMix(cpu->Segments[index]);
-    InterpFuzzMix(cpu->Ip); InterpFuzzMix(cpu->Flags & 0x0FD5u); InterpFuzzMix((UINT64)isOk);
+
+    for (index = 0; index < 8; ++index)
+        InterpFuzzMix(cpu->Registers[index]);
+    for (index = 0; index < 6; ++index)
+        InterpFuzzMix(cpu->Segments[index]);
+    InterpFuzzMix(cpu->Ip);
+    InterpFuzzMix(cpu->Flags & 0x0FD5u);
+    InterpFuzzMix((UINT64)isOk);
 }
 
 INT main(INT argc, PSTR *argv)
@@ -111,20 +119,25 @@ INT main(INT argc, PSTR *argv)
 
     /* ---- differential part: random bytes as code, random everything else ---- */
     g_Random = seed ? seed : 1;
-    for (index = 0; index < sizeof g_Memory; ++index) g_Memory[index] = (BYTE)InterpFuzzRandom();
+    for (index = 0; index < sizeof g_Memory; ++index)
+        g_Memory[index] = (BYTE)InterpFuzzRandom();
     for (program = 0; program < programCount; ++program)
     {
-        V86_CPU cpu; INT position;
+        V86_CPU cpu;
+        INT position;
         memset(&cpu, 0, sizeof cpu);
-        for (position = 0; position < 8; ++position) cpu.Registers[position] = (InterpFuzzRandom() & 3) ? (InterpFuzzRandom() & 0xFFFF) : InterpFuzzRandom();
-        for (position = 0; position < 6; ++position) cpu.Segments[position] = (WORD)(InterpFuzzRandom() & 0xFFFF);
+        for (position = 0; position < 8; ++position)
+            cpu.Registers[position] = (InterpFuzzRandom() & 3) ? (InterpFuzzRandom() & 0xFFFF) : InterpFuzzRandom();
+        for (position = 0; position < 6; ++position)
+            cpu.Segments[position] = (WORD)(InterpFuzzRandom() & 0xFFFF);
         cpu.Registers[1] &= 0xFFFF;                                /* REP counts CX; see the REP fix */
         cpu.Segments[1] = (WORD)(InterpFuzzRandom() % 0xF000);          /* keep CS:IP in plain RAM */
         cpu.Ip = (WORD)InterpFuzzRandom();
         cpu.Flags = 0x0002 | (InterpFuzzRandom() & 0x0ED5u);
         /* Re-seed a window of code so every program starts on fresh random bytes. */
         { UINT32 linear = ((UINT32)cpu.Segments[1] << 4) + cpu.Ip, offset;
-          for (offset = 0; offset < 64 && linear + offset < sizeof g_Memory; ++offset) g_Memory[linear + offset] = (BYTE)InterpFuzzRandom(); }
+          for (offset = 0; offset < 64 && linear + offset < sizeof g_Memory; ++offset)
+              g_Memory[linear + offset] = (BYTE)InterpFuzzRandom(); }
         for (position = 0; position < stepLimit; ++position)
         {
             INT isOk = V86Step(&cpu);
@@ -157,20 +170,29 @@ INT main(INT argc, PSTR *argv)
             0x49,                   /* dec cx */
             0x75, 0xE9              /* jnz loop */
         };
-        V86_CPU cpu; long count = 0;
+        V86_CPU cpu;
+        long count = 0;
         memset(&cpu, 0, sizeof cpu);
         memcpy(g_Memory + 0x10000, loopCode, sizeof loopCode);
-        cpu.Segments[1] = 0x1000; cpu.Segments[0] = 0x3000; cpu.Segments[2] = 0x4000; cpu.Segments[3] = 0x5000;
-        cpu.Flags = 0x0202; cpu.Registers[5] = 0x100; cpu.Registers[3] = 3;
+        cpu.Segments[1] = 0x1000;
+        cpu.Segments[0] = 0x3000;
+        cpu.Segments[2] = 0x4000;
+        cpu.Segments[3] = 0x5000;
+        cpu.Flags = 0x0202;
+        cpu.Registers[5] = 0x100;
+        cpu.Registers[3] = 3;
         g_IsHashingWrites = 0;
         startClock = clock();
         while (count < benchCount)
         {
-            cpu.Ip = 0; cpu.Registers[1] = 1000;
+            cpu.Ip = 0;
+            cpu.Registers[1] = 1000;
             while (V86Step(&cpu))
             {
-                if (++count >= benchCount) break;
-                if (cpu.Ip == 0) break;
+                if (++count >= benchCount)
+                    break;
+                if (cpu.Ip == 0)
+                    break;
             }
             if (cpu.Ip != 0 && cpu.Registers[1] != 0 && count < benchCount)
             {

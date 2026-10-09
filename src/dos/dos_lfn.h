@@ -105,6 +105,7 @@
 static inline INT64 DosLfnDaysFromCivil(_In_ INT64 year, _In_ UINT month, _In_ UINT day)
 {
     INT64 era, yearOfEra, dayOfYear, dayOfEra;
+
     year -= month <= DOS_LFN_FEBRUARY;
     era = (year >= 0 ? year : year - DOS_LFN_ERA_FLOOR_ADJUST) / DOS_LFN_YEARS_PER_ERA;
     yearOfEra = year - era * DOS_LFN_YEARS_PER_ERA;
@@ -116,10 +117,14 @@ static inline INT64 DosLfnDaysFromCivil(_In_ INT64 year, _In_ UINT month, _In_ U
     return era * DOS_LFN_DAYS_PER_ERA + dayOfEra - DOS_LFN_CIVIL_EPOCH_DAYS;
 }
 
-static inline VOID DosLfnCivilFromDays(_In_ INT64 days, _Out_ PINT64 year, _Out_ PUINT month,
-                                       _Out_ PUINT day)
+static inline VOID DosLfnCivilFromDays(
+    _In_ INT64 days,
+    _Out_ PINT64 year,
+    _Out_ PUINT month,
+    _Out_ PUINT day)
 {
     INT64 era, dayOfEra, yearOfEra, dayOfYear, shiftedMonth;
+
     days += DOS_LFN_CIVIL_EPOCH_DAYS;
     era = (days >= 0 ? days : days - DOS_LFN_DAYS_PER_ERA_LESS_ONE) / DOS_LFN_DAYS_PER_ERA;
     dayOfEra = days - era * DOS_LFN_DAYS_PER_ERA;
@@ -145,23 +150,29 @@ static inline UINT DosLfnDaysInMonth(_In_ INT64 year, _In_ UINT month)
         { 31,28,31,30,31,30,31,31,30,31,30,31 };
     if (month == DOS_LFN_FEBRUARY
         && ((year % DOS_LFN_LEAP_YEAR_INTERVAL == 0 && year % DOS_LFN_YEARS_PER_CENTURY != 0)
-            || year % DOS_LFN_YEARS_PER_ERA == 0)) return DOS_LFN_LEAP_FEBRUARY_DAYS;
+            || year % DOS_LFN_YEARS_PER_ERA == 0))
+        return DOS_LFN_LEAP_FEBRUARY_DAYS;
     return (month >= DOS_LFN_JANUARY && month <= DOS_LFN_DECEMBER) ? daysInMonth[month - 1] : 0;
 }
 
 /* FILETIME -> DOS date, time and BH (10 ms units, 0..199). TRUE = ok, FALSE = out of
  * range.
  */
-static inline BOOL DosLfnFileTimeToDos(_In_ UINT64 fileTime, _Out_ PWORD dosDate,
-                                       _Out_ PWORD dosTime, _Out_ PBYTE tenMs)
+static inline BOOL DosLfnFileTimeToDos(
+    _In_ UINT64 fileTime,
+    _Out_ PWORD dosDate,
+    _Out_ PWORD dosTime,
+    _Out_ PBYTE tenMs)
 {
     UINT64 seconds = fileTime / DOS_LFN_FILETIME_TICKS_PER_SECOND,
            remainder = fileTime % DOS_LFN_FILETIME_TICKS_PER_SECOND;
     INT64  days = (INT64)(seconds / DOS_LFN_SECONDS_PER_DAY) - DOS_LFN_FILETIME_UNIX_DAYS, year;
     UINT   secondOfDay = (UINT)(seconds % DOS_LFN_SECONDS_PER_DAY), month, day, hour, minute,
            second;
+
     DosLfnCivilFromDays(days, &year, &month, &day);
-    if (year < DOS_LFN_DOS_EPOCH_YEAR || year > DOS_LFN_DOS_LAST_YEAR) return FALSE;
+    if (year < DOS_LFN_DOS_EPOCH_YEAR || year > DOS_LFN_DOS_LAST_YEAR)
+        return FALSE;
     hour = secondOfDay / DOS_LFN_SECONDS_PER_HOUR;
     minute = (secondOfDay / DOS_LFN_SECONDS_PER_MINUTE) % DOS_LFN_MINUTES_PER_HOUR;
     second = secondOfDay % DOS_LFN_SECONDS_PER_MINUTE;
@@ -180,8 +191,11 @@ static inline BOOL DosLfnFileTimeToDos(_In_ UINT64 fileTime, _Out_ PWORD dosDate
  * [CAUTION]: UNMEASURED: whether stock refuses these or normalises them as Win32's
  * DosDateTimeToFileTime partly does.
  */
-static inline BOOL DosLfnDosToFileTime(_In_ WORD dosDate, _In_ WORD dosTime, _In_ BYTE tenMs,
-                                       _Out_ PUINT64 fileTime)
+static inline BOOL DosLfnDosToFileTime(
+    _In_ WORD dosDate,
+    _In_ WORD dosTime,
+    _In_ BYTE tenMs,
+    _Out_ PUINT64 fileTime)
 {
     INT64 year   = DOS_LFN_DOS_EPOCH_YEAR + (dosDate >> DOS_LFN_DATE_YEAR_SHIFT);
     UINT  month  = (dosDate >> DOS_LFN_DATE_MONTH_SHIFT) & DOS_LFN_DATE_MONTH_MASK,
@@ -190,10 +204,13 @@ static inline BOOL DosLfnDosToFileTime(_In_ WORD dosDate, _In_ WORD dosTime, _In
           minute = (dosTime >> DOS_LFN_TIME_MINUTE_SHIFT) & DOS_LFN_TIME_MINUTE_MASK,
           second = (dosTime & DOS_LFN_TIME_SECONDS_MASK) * DOS_LFN_TIME_SECONDS_UNIT;
     INT64 days;
+
     if (month < DOS_LFN_JANUARY || month > DOS_LFN_DECEMBER || day < DOS_LFN_FIRST_DAY
-        || day > DosLfnDaysInMonth(year, month)) return FALSE;
+        || day > DosLfnDaysInMonth(year, month))
+        return FALSE;
     if (hour > DOS_LFN_LAST_HOUR || minute > DOS_LFN_LAST_MINUTE
-        || second > DOS_LFN_LAST_EVEN_SECOND || tenMs > DOS_LFN_LAST_TEN_MS) return FALSE;
+        || second > DOS_LFN_LAST_EVEN_SECOND || tenMs > DOS_LFN_LAST_TEN_MS)
+        return FALSE;
     days = DosLfnDaysFromCivil(year, month, day) + DOS_LFN_FILETIME_UNIX_DAYS;
     *fileTime = ((UINT64)days * DOS_LFN_SECONDS_PER_DAY + hour * DOS_LFN_SECONDS_PER_HOUR
                  + minute * DOS_LFN_SECONDS_PER_MINUTE + second)
@@ -250,23 +267,29 @@ typedef struct _DOS_LFN_FIND_ENTRY
 
 typedef const DOS_LFN_FIND_ENTRY *PCDOS_LFN_FIND_ENTRY;
 
-static inline VOID DosLfnPutDword(_Out_writes_bytes_(sizeof(DWORD)) PBYTE destination,
-                                  _In_ DWORD value)
+static inline VOID DosLfnPutDword(
+    _Out_writes_bytes_(sizeof(DWORD)) PBYTE destination,
+    _In_ DWORD value)
 {
-    destination[0] = (BYTE)value; destination[DOS_LFN_BYTE1] = (BYTE)(value >> BYTE_SHIFT);
+    destination[0] = (BYTE)value;
+    destination[DOS_LFN_BYTE1] = (BYTE)(value >> BYTE_SHIFT);
     destination[DOS_LFN_BYTE2] = (BYTE)(value >> WORD_SHIFT);
     destination[DOS_LFN_BYTE3] = (BYTE)(value >> TOP_BYTE_SHIFT);
 }
 
-static inline VOID DosLfnPutTime(_Out_writes_bytes_(sizeof(UINT64)) PBYTE destination,
-                                 _In_ UINT64 fileTime, _In_ BOOL isDosFormat)
+static inline VOID DosLfnPutTime(
+    _Out_writes_bytes_(sizeof(UINT64)) PBYTE destination,
+    _In_ UINT64 fileTime,
+    _In_ BOOL isDosFormat)
 {
     if (isDosFormat)
     {
-        WORD dosDate = 0, dosTime = 0; BYTE tenMs = 0;
+        WORD dosDate = 0, dosTime = 0;
+        BYTE tenMs = 0;
         if (!fileTime || !DosLfnFileTimeToDos(fileTime, &dosDate, &dosTime, &tenMs))
         {
-            dosDate = 0; dosTime = 0;
+            dosDate = 0;
+            dosTime = 0;
         }
         DosLfnPutDword(destination, ((DWORD)dosDate << DOS_LFN_DOS_DATE_SHIFT) | dosTime);
         DosLfnPutDword(destination + DOS_LFN_FIND_TIME_HIGH, 0);
@@ -279,12 +302,15 @@ static inline VOID DosLfnPutTime(_Out_writes_bytes_(sizeof(UINT64)) PBYTE destin
     }
 }
 
-static inline VOID DosLfnFindPack(_Out_writes_bytes_(DOS_LFN_FIND_RECORD_SIZE)
-                                  BYTE record[DOS_LFN_FIND_RECORD_SIZE],
-                                  _In_ PCDOS_LFN_FIND_ENTRY entry, _In_ BOOL isDosFormat)
+static inline VOID DosLfnFindPack(
+    _Out_writes_bytes_(DOS_LFN_FIND_RECORD_SIZE) BYTE record[DOS_LFN_FIND_RECORD_SIZE],
+    _In_ PCDOS_LFN_FIND_ENTRY entry,
+    _In_ BOOL isDosFormat)
 {
     INT byteIndex;
-    for (byteIndex = 0; byteIndex < DOS_LFN_FIND_RECORD_SIZE; ++byteIndex) record[byteIndex] = 0;
+
+    for (byteIndex = 0; byteIndex < DOS_LFN_FIND_RECORD_SIZE; ++byteIndex)
+        record[byteIndex] = 0;
     DosLfnPutDword(record + DOS_LFN_FIND_ATTRIBUTES, entry->Attributes);
     DosLfnPutTime(record + DOS_LFN_FIND_CREATION_TIME, entry->CreationTime, isDosFormat);
     DosLfnPutTime(record + DOS_LFN_FIND_ACCESS_TIME, entry->LastAccessTime, isDosFormat);
@@ -371,21 +397,28 @@ static inline CHAR DosLfnUpperCase(_In_ CHAR character)
 static inline BOOL DosLfnIsShortName(_In_ PCSTR name)
 {
     INT baseLength = 0, extensionLength = DOS_LFN_NO_EXTENSION, charIndex;
-    if (!name[0] || name[0] == DOS_LFN_EXTENSION_DOT) return FALSE;
+
+    if (!name[0] || name[0] == DOS_LFN_EXTENSION_DOT)
+        return FALSE;
     for (charIndex = 0; name[charIndex]; ++charIndex)
     {
         BYTE character = (BYTE)name[charIndex];
         if (character == DOS_LFN_EXTENSION_DOT)
         {
-            if (extensionLength >= 0) return FALSE;
-            extensionLength = 0; continue;
+            if (extensionLength >= 0)
+                return FALSE;
+            extensionLength = 0;
+            continue;
         }
-        if (character == ' ' || DosLfnIsBadShortNameChar(character)) return FALSE;
+        if (character == ' ' || DosLfnIsBadShortNameChar(character))
+            return FALSE;
         if (extensionLength >= 0)
         {
-            if (++extensionLength > DOS_LFN_EXTENSION_CHARS) return FALSE;
+            if (++extensionLength > DOS_LFN_EXTENSION_CHARS)
+                return FALSE;
         }
-        else if (++baseLength > DOS_LFN_BASE_CHARS) return FALSE;
+        else if (++baseLength > DOS_LFN_BASE_CHARS)
+            return FALSE;
     }
     return baseLength > 0 && extensionLength != 0;   /* "NAME." (a dot and no extension) is not */
 }
@@ -393,25 +426,28 @@ static inline BOOL DosLfnIsShortName(_In_ PCSTR name)
 static inline CHAR DosLfnCleanShortNameChar(_In_ BYTE character)
 {
     if (character == '+' || character == ',' || character == ';' || character == '='
-        || character == '[' || character == ']') return DOS_LFN_REPLACEMENT_CHAR;
+        || character == '[' || character == ']')
+        return DOS_LFN_REPLACEMENT_CHAR;
     return DosLfnUpperCase((CHAR)character);
 }
 
-static inline VOID DosLfnShortName(_In_ PCSTR longName,
-                                   _Out_writes_(DOS_SHORT_NAME_SIZE)
-                                   CHAR shortName[DOS_SHORT_NAME_SIZE],
-                                   _Out_writes_(DOS_FCB_NAME_SIZE)
-                                   CHAR fcbName[DOS_FCB_NAME_SIZE])
+static inline VOID DosLfnShortName(
+    _In_ PCSTR longName,
+    _Out_writes_(DOS_SHORT_NAME_SIZE) CHAR shortName[DOS_SHORT_NAME_SIZE],
+    _Out_writes_(DOS_FCB_NAME_SIZE) CHAR fcbName[DOS_FCB_NAME_SIZE])
 {
     PCSTR component = longName, cursor, lastDot = 0;
     CHAR base[DOS_LFN_BASE_BUFFER_SIZE], extension[DOS_LFN_EXTENSION_BUFFER_SIZE];
     INT baseLength = 0, extensionLength = 0, charIndex;
+
     for (cursor = longName; *cursor; ++cursor)                         /* last component */
-        if (*cursor == '\\' || *cursor == '/' || *cursor == ':') component = cursor + 1;
+        if (*cursor == '\\' || *cursor == '/' || *cursor == ':')
+            component = cursor + 1;
     if (DosLfnIsShortName(component))
     {
         for (cursor = component; *cursor && *cursor != DOS_LFN_EXTENSION_DOT; ++cursor)
-            if (baseLength < DOS_LFN_BASE_CHARS) base[baseLength++] = DosLfnUpperCase(*cursor);
+            if (baseLength < DOS_LFN_BASE_CHARS)
+                base[baseLength++] = DosLfnUpperCase(*cursor);
         if (*cursor == DOS_LFN_EXTENSION_DOT)
             for (++cursor; *cursor && extensionLength < DOS_LFN_EXTENSION_CHARS; ++cursor)
                 extension[extensionLength++] = DosLfnUpperCase(*cursor);
@@ -419,7 +455,8 @@ static inline VOID DosLfnShortName(_In_ PCSTR longName,
     else
     {
         for (cursor = component; *cursor; ++cursor)
-            if (*cursor == DOS_LFN_EXTENSION_DOT && cursor != component) lastDot = cursor;
+            if (*cursor == DOS_LFN_EXTENSION_DOT && cursor != component)
+                lastDot = cursor;
         for (cursor = component;
              *cursor && cursor != lastDot && baseLength < DOS_LFN_ALIAS_BASE_CHARS; ++cursor)
         {
@@ -427,11 +464,14 @@ static inline VOID DosLfnShortName(_In_ PCSTR longName,
             if (character == ' ' || character == DOS_LFN_EXTENSION_DOT
                 || character < ASCII_SPACE || character == '"' || character == '*'
                 || character == '/' || character == ':' || character == '<' || character == '>'
-                || character == '?' || character == '\\' || character == '|') continue;
+                || character == '?' || character == '\\' || character == '|')
+                continue;
             base[baseLength++] = DosLfnCleanShortNameChar(character);
         }
-        if (!baseLength) base[baseLength++] = DOS_LFN_REPLACEMENT_CHAR;
-        base[baseLength++] = DOS_LFN_ALIAS_TILDE; base[baseLength++] = DOS_LFN_ALIAS_TAIL;
+        if (!baseLength)
+            base[baseLength++] = DOS_LFN_REPLACEMENT_CHAR;
+        base[baseLength++] = DOS_LFN_ALIAS_TILDE;
+        base[baseLength++] = DOS_LFN_ALIAS_TAIL;
         if (lastDot)
             for (cursor = lastDot + 1;
                  *cursor && extensionLength < DOS_LFN_EXTENSION_CHARS; ++cursor)
@@ -441,16 +481,19 @@ static inline VOID DosLfnShortName(_In_ PCSTR longName,
                     || character < ASCII_SPACE || character == '"' || character == '*'
                     || character == '/' || character == ':' || character == '<'
                     || character == '>' || character == '?' || character == '\\'
-                    || character == '|') continue;
+                    || character == '|')
+                    continue;
                 extension[extensionLength++] = DosLfnCleanShortNameChar(character);
             }
     }
     for (charIndex = 0; charIndex < DOS_FCB_NAME_SIZE; ++charIndex)
         fcbName[charIndex] = DOS_LFN_FCB_PAD;
-    for (charIndex = 0; charIndex < baseLength; ++charIndex) fcbName[charIndex] = base[charIndex];
+    for (charIndex = 0; charIndex < baseLength; ++charIndex)
+        fcbName[charIndex] = base[charIndex];
     for (charIndex = 0; charIndex < extensionLength; ++charIndex)
         fcbName[DOS_LFN_BASE_CHARS + charIndex] = extension[charIndex];
-    for (charIndex = 0; charIndex < baseLength; ++charIndex) shortName[charIndex] = base[charIndex];
+    for (charIndex = 0; charIndex < baseLength; ++charIndex)
+        shortName[charIndex] = base[charIndex];
     if (extensionLength)
     {
         shortName[baseLength] = DOS_LFN_EXTENSION_DOT;
@@ -458,7 +501,8 @@ static inline VOID DosLfnShortName(_In_ PCSTR longName,
             shortName[baseLength + 1 + charIndex] = extension[charIndex];
         shortName[baseLength + 1 + extensionLength] = 0;
     }
-    else shortName[baseLength] = 0;
+    else
+        shortName[baseLength] = 0;
 }
 
 /* 6Ch / 716Ch / 71A9h: THE ACTION WORD:
@@ -491,6 +535,7 @@ static inline UINT DosExtOpenDisposition(_In_ UINT action)
 {
     UINT ifExists = action & DOS_EXT_OPEN_ACTION_MASK,
          ifMissing = (action >> DOS_EXT_OPEN_IF_MISSING_SHIFT) & DOS_EXT_OPEN_ACTION_MASK;
+
     if (ifExists == DOS_EXT_OPEN_IF_EXISTS_TRUNCATE && ifMissing == DOS_EXT_OPEN_IF_MISSING_CREATE)
         return DOS_EXT_OPEN_CREATE_ALWAYS;
     if (ifExists == DOS_EXT_OPEN_IF_EXISTS_OPEN && ifMissing == DOS_EXT_OPEN_IF_MISSING_CREATE)
@@ -513,13 +558,19 @@ static inline UINT DosExtOpenDisposition(_In_ UINT action)
 #define DOS_EXT_OPEN_TAKEN_CREATED      2
 #define DOS_EXT_OPEN_TAKEN_REPLACED     3
 
-static inline UINT DosExtOpenActionTaken(_In_ UINT disposition, _In_ BOOL didExist,
-                                         _In_ BOOL isLongNameCall)
+static inline UINT DosExtOpenActionTaken(
+    _In_ UINT disposition,
+    _In_ BOOL didExist,
+    _In_ BOOL isLongNameCall)
 {
     switch (disposition)
     {
-    case DOS_EXT_OPEN_CREATE_NEW:        return DOS_EXT_OPEN_TAKEN_CREATED;
-    case DOS_EXT_OPEN_TRUNCATE_EXISTING: return DOS_EXT_OPEN_TAKEN_REPLACED;
+    case DOS_EXT_OPEN_CREATE_NEW:
+        return DOS_EXT_OPEN_TAKEN_CREATED;
+
+    case DOS_EXT_OPEN_TRUNCATE_EXISTING:
+        return DOS_EXT_OPEN_TAKEN_REPLACED;
+
     /* s92, MEASURED (dospair p_lfn): stock's AH=6Ch says 3 ("replaced") for action 12h
      * whether the file existed or not (lfn.6C.12.new/.exists) -- but its 716Ch says 2
      * ("created") for a name that was not there (lfn.716C.create). Two arms, two
@@ -528,9 +579,12 @@ static inline UINT DosExtOpenActionTaken(_In_ UINT disposition, _In_ BOOL didExi
     case DOS_EXT_OPEN_CREATE_ALWAYS:
         return (isLongNameCall && !didExist) ? DOS_EXT_OPEN_TAKEN_CREATED
                                              : DOS_EXT_OPEN_TAKEN_REPLACED;
+
     case DOS_EXT_OPEN_OPEN_ALWAYS:
         return didExist ? DOS_EXT_OPEN_TAKEN_OPENED : DOS_EXT_OPEN_TAKEN_CREATED;
-    default:                             return DOS_EXT_OPEN_TAKEN_OPENED;
+
+    default:
+        return DOS_EXT_OPEN_TAKEN_OPENED;
     }
 }
 
@@ -575,11 +629,22 @@ static inline BOOL DosLfnErrFromWin32(_In_ DWORD win32Error, _Out_ PWORD dosErro
 {
     switch (win32Error)
     {
-    case DOS_LFN_WIN32_INVALID_HANDLE: case DOS_LFN_WIN32_NOT_SAME_DEVICE:
-    case DOS_LFN_WIN32_NO_MORE_FILES:  *dosError = (WORD)win32Error; return TRUE;
-    case DOS_LFN_WIN32_INVALID_NAME:   *dosError = DOS_ERR_PATH_NOT_FOUND; return TRUE;
-    case DOS_LFN_WIN32_DIR_NOT_EMPTY:  *dosError = DOS_ERR_ACCESS_DENIED; return TRUE;
-    default:  return DosErrFromWin32(win32Error, dosError);
+    case DOS_LFN_WIN32_INVALID_HANDLE:
+    case DOS_LFN_WIN32_NOT_SAME_DEVICE:
+    case DOS_LFN_WIN32_NO_MORE_FILES:
+        *dosError = (WORD)win32Error;
+    return TRUE;
+
+    case DOS_LFN_WIN32_INVALID_NAME:
+        *dosError = DOS_ERR_PATH_NOT_FOUND;
+    return TRUE;
+
+    case DOS_LFN_WIN32_DIR_NOT_EMPTY:
+        *dosError = DOS_ERR_ACCESS_DENIED;
+    return TRUE;
+
+    default:
+        return DosErrFromWin32(win32Error, dosError);
     }
 }
 

@@ -62,57 +62,85 @@
 #define CSPROBE_PATH    CFG_("csprobe.txt")
 static VOID ProbeLoadInto(PCSTR path, WORD *out, INT *outCount)
 {
-    CHAR buffer[256]; DWORD bytesRead = 0; INT index = 0;
+    CHAR buffer[256];
+    DWORD bytesRead = 0;
+    INT index = 0;
     HANDLE handle = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                            NULL, OPEN_EXISTING, 0, NULL);
+
     *outCount = 0;
-    if (handle == INVALID_HANDLE_VALUE) return;
+    if (handle == INVALID_HANDLE_VALUE)
+        return;
     ReadFile(handle, buffer, sizeof buffer - 1, &bytesRead, NULL);
     CloseHandle(handle);
     buffer[bytesRead < sizeof buffer ? bytesRead : sizeof buffer - 1] = 0;
     while (buffer[index] && *outCount < DSPROBE_MAX)
     {
-        UINT value = 0; INT got = 0;
-        while (buffer[index] == ' ' || buffer[index] == '\t' || buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == ',') ++index;
+        UINT value = 0;
+        INT got = 0;
+        while (buffer[index] == ' ' || buffer[index] == '\t' || buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == ',')
+            ++index;
         while (buffer[index])
         {
             CHAR character = buffer[index];
-            if      (character >= '0' && character <= '9') value = (value << NIBBLE_SHIFT) | (UINT)(character - '0');
-            else if (character >= 'a' && character <= 'f') value = (value << NIBBLE_SHIFT) | (UINT)(character - 'a' + HEX_DIGIT_A_VALUE);
-            else if (character >= 'A' && character <= 'F') value = (value << NIBBLE_SHIFT) | (UINT)(character - 'A' + HEX_DIGIT_A_VALUE);
-            else break;
-            ++got; ++index;
+            if      (character >= '0' && character <= '9')
+                value = (value << NIBBLE_SHIFT) | (UINT)(character - '0');
+            else if (character >= 'a' && character <= 'f')
+                value = (value << NIBBLE_SHIFT) | (UINT)(character - 'a' + HEX_DIGIT_A_VALUE);
+            else if (character >= 'A' && character <= 'F')
+                value = (value << NIBBLE_SHIFT) | (UINT)(character - 'A' + HEX_DIGIT_A_VALUE);
+            else
+                break;
+            ++got;
+            ++index;
         }
-        if (got) out[(*outCount)++] = (WORD)value; else if (buffer[index]) ++index;
+        if (got)
+            out[(*outCount)++] = (WORD)value;
+        else if (buffer[index])
+            ++index;
     }
 }
 
 VOID DsProbeLoad(VOID)
 {
-    CHAR buffer[256]; DWORD bytesRead = 0; INT index = 0;
+    CHAR buffer[256];
+    DWORD bytesRead = 0;
+    INT index = 0;
     HANDLE handle;
+
     ProbeLoadInto(CSPROBE_PATH, g_CsProbe, &g_CsProbeCount);
     handle = CreateFileA(DSPROBE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, OPEN_EXISTING, 0, NULL);
     g_DsProbeCount = 0;
-    if (handle == INVALID_HANDLE_VALUE) return;
+    if (handle == INVALID_HANDLE_VALUE)
+        return;
     ReadFile(handle, buffer, sizeof buffer - 1, &bytesRead, NULL);
     CloseHandle(handle);
     buffer[bytesRead < sizeof buffer ? bytesRead : sizeof buffer - 1] = 0;
     while (buffer[index] && g_DsProbeCount < DSPROBE_MAX)
     {
-        UINT value = 0; INT got = 0;
-        while (buffer[index] == ' ' || buffer[index] == '\t' || buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == ',') ++index;
+        UINT value = 0;
+        INT got = 0;
+        while (buffer[index] == ' ' || buffer[index] == '\t' || buffer[index] == '\r' || buffer[index] == '\n' || buffer[index] == ',')
+            ++index;
         while (buffer[index])
         {
             CHAR character = buffer[index];
-            if      (character >= '0' && character <= '9') value = (value << NIBBLE_SHIFT) | (UINT)(character - '0');
-            else if (character >= 'a' && character <= 'f') value = (value << NIBBLE_SHIFT) | (UINT)(character - 'a' + HEX_DIGIT_A_VALUE);
-            else if (character >= 'A' && character <= 'F') value = (value << NIBBLE_SHIFT) | (UINT)(character - 'A' + HEX_DIGIT_A_VALUE);
-            else break;
-            ++got; ++index;
+            if      (character >= '0' && character <= '9')
+                value = (value << NIBBLE_SHIFT) | (UINT)(character - '0');
+            else if (character >= 'a' && character <= 'f')
+                value = (value << NIBBLE_SHIFT) | (UINT)(character - 'a' + HEX_DIGIT_A_VALUE);
+            else if (character >= 'A' && character <= 'F')
+                value = (value << NIBBLE_SHIFT) | (UINT)(character - 'A' + HEX_DIGIT_A_VALUE);
+            else
+                break;
+            ++got;
+            ++index;
         }
-        if (got) g_DsProbe[g_DsProbeCount++] = (WORD)value; else if (buffer[index]) ++index;
+        if (got)
+            g_DsProbe[g_DsProbeCount++] = (WORD)value;
+        else if (buffer[index])
+            ++index;
     }
 }
 
@@ -165,13 +193,16 @@ VOID AsyncWhyReport(VOID)
     for (line = 0; line < 8; ++line)       /* one line per IRQ, flushed each: <= 32 x 24 chars */
     {
         UINT total = 0;
-        for (reason = 0; reason < ASYNC_WHY_MAX; ++reason) total += g_AsyncWhyHistogram[line][reason];
-        if (!total) continue;
+        for (reason = 0; reason < ASYNC_WHY_MAX; ++reason)
+            total += g_AsyncWhyHistogram[line][reason];
+        if (!total)
+            continue;
         cursor = LogPut(cursor, "STAGE2: async why irq"); cursor = LogHexByte(cursor, (BYTE)line);
         cursor = LogPut(cursor, " total=");               cursor = LogHex(cursor, total);
         for (reason = 0; reason < ASYNC_WHY_MAX; ++reason)
         {
-            if (!g_AsyncWhyHistogram[line][reason]) continue;
+            if (!g_AsyncWhyHistogram[line][reason])
+                continue;
             cursor = LogPut(cursor, " "); cursor = LogPut(cursor, whyNames[reason]);
             cursor = LogPut(cursor, "="); cursor = LogHex(cursor, g_AsyncWhyHistogram[line][reason]);
         }
@@ -186,7 +217,9 @@ VOID AsyncWhyReport(VOID)
 VOID IfvReport(VOID)
 {
     CHAR base[4096], *cursor = base;
-  { INT path, state, line; DWORD starveMaximumMs = g_IfvStarveMaximumMs;
+
+  { INT path, state, line;
+  DWORD starveMaximumMs = g_IfvStarveMaximumMs;
     static PCSTR const stateNames[8] = { "000","001","010","011","100","101","110","111" };
     if (g_IfvStarveOpen && GetTickCount() - g_IfvStarveT0 > starveMaximumMs)
         starveMaximumMs = GetTickCount() - g_IfvStarveT0;
@@ -196,7 +229,8 @@ VOID IfvReport(VOID)
         cursor = LogPut(cursor, path == 0 ? " live{" : path == 1 ? " vtib01{" : " vtibdev{");
         for (state = 0; state < 8; ++state)
         {
-            if (!g_IfvCensus[path][state]) continue;
+            if (!g_IfvCensus[path][state])
+                continue;
             cursor = LogPut(cursor, " "); cursor = LogPut(cursor, stateNames[state]); cursor = LogPut(cursor, "=");
             cursor = LogHex(cursor, g_IfvCensus[path][state]);
         }
@@ -207,14 +241,16 @@ VOID IfvReport(VOID)
     cursor = LogPut(cursor, " shadow{");
     for (line = 0; line < 16; ++line)
     {
-        if (!g_IfvShadow[line]) continue;
+        if (!g_IfvShadow[line])
+            continue;
         cursor = LogPut(cursor, " irq"); cursor = LogHexByte(cursor, (BYTE)line);
         cursor = LogPut(cursor, "=");    cursor = LogHex(cursor, g_IfvShadow[line]);
     }
     cursor = LogPut(cursor, " } reenter{");
     for (line = 0; line < 16; ++line)
     {
-        if (!g_IfvReenter[line]) continue;
+        if (!g_IfvReenter[line])
+            continue;
         cursor = LogPut(cursor, " irq"); cursor = LogHexByte(cursor, (BYTE)line);
         cursor = LogPut(cursor, "=");    cursor = LogHex(cursor, g_IfvReenter[line]);
     }
@@ -231,7 +267,9 @@ VOID IfvReport(VOID)
           cursor = LogPut(cursor, ":");      cursor = LogHex(cursor, g_IfvTrace[index].Ip);
           cursor = LogPut(cursor, "\r\n");
       }
-      LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; } }
+      LogAppend(LOG_PATH, base, cursor);
+      SerialOut(base, cursor);
+      cursor = base; } }
 }
 
 #define FATAL_DUMP_EXIT_CODE    0xDE0   /* HostFatalDump: a clean exit after the dump */
@@ -257,7 +295,9 @@ static INT g_VehCount = 0;
  */
 static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
 {
-    static CHAR lineBuffer[2048]; PSTR cursor = lineBuffer;
+    static CHAR lineBuffer[2048];
+    PSTR cursor = lineBuffer;
+
     InterlockedIncrement(&g_VehFatal);                 /* run 52: a real fault WAS delivered */
     cursor = LogPut(cursor, g_DpmiPm ? "\r\nDPMI FATAL: exception code=0x"
                           : "\r\nHOST FATAL (real-mode guest): exception code=0x");
@@ -279,7 +319,10 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
     cursor = LogPut(cursor, "\r\n");
     { const BYTE *faultBytes = (const BYTE *)(ULONG_PTR)(record->ExceptionAddress);
       cursor = LogPut(cursor, "  bytes@fault: ");
-      if (HostReadable(faultBytes, 16)) cursor = LogDump(cursor, faultBytes, 16); else cursor = LogPut(cursor, "<unreadable>");
+      if (HostReadable(faultBytes, 16))
+          cursor = LogDump(cursor, faultBytes, 16);
+          else
+              cursor = LogPut(cursor, "<unreadable>");
     }
     /* [INFO]: THE INTERPRETER'S LIVE REGISTERS. When the fault is inside istep (a stray
      * guest pointer, s69), the VDM context is a whole slice stale; THIS is the es/di
@@ -338,7 +381,8 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
     cursor = LogPut(cursor, " ourbase=0x");
     cursor = LogHex(cursor, (DWORD)(ULONG_PTR)GetModuleHandleA(NULL));
     cursor = LogPut(cursor, "\r\n  frames:");
-    {   DWORD framePointer = context->Ebp; INT index;
+    {   DWORD framePointer = context->Ebp;
+    INT index;
         for (index = 0; index < 12 && framePointer; ++index)
         {
             const DWORD *frame = (const DWORD *)(ULONG_PTR)framePointer;
@@ -363,7 +407,8 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
      * ESP will contain the return address whether EBP is trustworthy or not -- the
      * reader looks for one near `ourbase`.
      */
-    {   const DWORD *stack = (const DWORD *)(ULONG_PTR)context->Esp; INT index;
+    {   const DWORD *stack = (const DWORD *)(ULONG_PTR)context->Esp;
+    INT index;
         cursor = LogPut(cursor, "  @esp:");
         for (index = 0; index < 24; ++index)
         {
@@ -390,9 +435,11 @@ static LONG g_RmFaultSeen = 0;
 #define DPMI_SPIKE_BASE_SELECTOR    0x001F  /* The spike's 0000h answer */
 LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
 {
-    static CHAR lineBuffer[1024]; PSTR cursor = lineBuffer;
+    static CHAR lineBuffer[1024];
+    PSTR cursor = lineBuffer;
     EXCEPTION_RECORD *record = pointers->ExceptionRecord;
     CONTEXT *context = pointers->ContextRecord;
+
     if (!g_DpmiPm)
     {
         /* A REAL-MODE GUEST'S HOST CRASH USED TO BE INVISIBLE. (session 62):
@@ -490,7 +537,8 @@ LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
         cursor = LogPut(cursor, " EIP=0x"); cursor = LogHex(cursor, context->Eip);
         cursor = LogPut(cursor, " b@site="); cursor = LogDump(cursor, siteBytes, 4); cursor = LogPut(cursor, "]");
         { const BYTE *sent = (const BYTE *)(ULONG_PTR)0x1600;   /* guest sentinel DS:0x600 */
-          cursor = LogPut(cursor, " sentinel@0x1600="); cursor = LogDump(cursor, sent, 4); }
+          cursor = LogPut(cursor, " sentinel@0x1600=");
+          cursor = LogDump(cursor, sent, 4); }
         /* WHAT ACTUALLY FAULTED. THIS ARM NEVER SAID, AND THAT IS THE WHOLE GAP:
          * Everything above is an INTERPRETATION: it ASSUMES the fault is a kernel-
          * reflected `INT nn`, reads the vector from [code_base+EDX] and answers it as
@@ -515,7 +563,8 @@ LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
             cursor = LogPut(cursor, "}");
         }
         { const BYTE *faultBytes = (const BYTE *)(ULONG_PTR)(g_DpmiCodeBase + (context->Eip & WORD_MASK));
-          cursor = LogPut(cursor, " b@eip="); cursor = LogDump(cursor, faultBytes, 6); }
+          cursor = LogPut(cursor, " b@eip=");
+          cursor = LogDump(cursor, faultBytes, 6); }
         cursor = LogPut(cursor, " ctx{ss:esp=0x"); cursor = LogHex(cursor, context->SegSs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, context->Esp);
         cursor = LogPut(cursor, " ds=0x"); cursor = LogHex(cursor, context->SegDs); cursor = LogPut(cursor, " es=0x"); cursor = LogHex(cursor, context->SegEs);
         cursor = LogPut(cursor, " edi=0x"); cursor = LogHex(cursor, context->Edi); cursor = LogPut(cursor, "}");
@@ -623,7 +672,8 @@ LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
               }
               cursor = LogPut(cursor, "\r\n");
               LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
-              context->SegCs = DPMI_INITIAL_CODE_SELECTOR; context->SegSs = DPMI_INITIAL_DATA_SELECTOR;       /* guest selectors back; regs intact */
+              context->SegCs = DPMI_INITIAL_CODE_SELECTOR;
+              context->SegSs = DPMI_INITIAL_DATA_SELECTOR;       /* guest selectors back; regs intact */
               return EXCEPTION_CONTINUE_EXECUTION;
           } }
         context->EFlags &= ~EFLAGS_CF_U;                              /* default: CF=0 (success) */
@@ -639,10 +689,12 @@ LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
             context->Edx = (context->Edx & HIGH_WORD_MASK_U) | DPMI_VER_DX;
             cursor = LogPut(cursor, " -> DPMI 0.90");
             break;
+
         case DPMI_FN_ALLOCATE_DESCRIPTORS:                                    /* allocate LDT descriptors (CX=count) */
             context->Eax = (context->Eax & HIGH_WORD_MASK_U) | DPMI_SPIKE_BASE_SELECTOR;  /* base selector 0x1F (spike stub) */
             cursor = LogPut(cursor, " -> alloc base sel 0x1F");
             break;
+
         default:
             context->EFlags |= EFLAGS_CF_U;                           /* CF=1: unsupported function */
             cursor = LogPut(cursor, " -> UNSUPPORTED (CF=1)");
@@ -650,7 +702,8 @@ LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
         }
         cursor = LogPut(cursor, "\r\n");
         LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
-        context->SegCs = DPMI_INITIAL_CODE_SELECTOR; context->SegSs = DPMI_INITIAL_DATA_SELECTOR;             /* restore the guest's LDT selectors */
+        context->SegCs = DPMI_INITIAL_CODE_SELECTOR;
+        context->SegSs = DPMI_INITIAL_DATA_SELECTOR;             /* restore the guest's LDT selectors */
         return EXCEPTION_CONTINUE_EXECUTION;            /* resume the guest past the INT */
     }
 
@@ -670,7 +723,9 @@ fatalDump:
  */
 LONG WINAPI HostUnhandledFilter(EXCEPTION_POINTERS *pointers)
 {
-    static CHAR lineBuffer[128]; PSTR cursor = lineBuffer;
+    static CHAR lineBuffer[128];
+    PSTR cursor = lineBuffer;
+
     /* NO VEH ON THIS OS (Windows 2000): the filter IS the VEH:
      * With no vectored handler installed, a fault reaches here after the (empty)
      * SEH chain, one dispatch step later than the VEH saw it on XP but with the same
@@ -700,8 +755,11 @@ enum
  */
 DWORD WINAPI DpmiWatchdog(LPVOID param)
 {
-    static CHAR lineBuffer[512]; PSTR cursor = lineBuffer; LONG prev = -1;
+    static CHAR lineBuffer[512];
+    PSTR cursor = lineBuffer;
+    LONG prev = -1;
     LONG modeYGeneration = (LONG)(ULONG_PTR)param;          /* see g_DpmiWatchdogGeneration */
+
     /* AN INSTRUMENT MUST BE ABLE TO PREEMPT WHAT IT INSTRUMENTS (Importance = 2):
      * The thread that RUNS THE GUEST is raised to THREAD_PRIORITY_ABOVE_NORMAL (or
      * HIGHEST with execprio>=2) so the audio pump cannot preempt guest code. This
@@ -746,10 +804,13 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
      * first 12 samples (the run-51/52 wedge diagnostic) + any frozen streak, and stay
      * quiet while healthy so a long run doesn't flood COM1.
      */
-    { UINT tick = 0, frozen = 0; INT watchdogSaidWait = 0;
+    { UINT tick = 0, frozen = 0;
+    INT watchdogSaidWait = 0;
       for (;;)
       {
-        LONG iter; DWORD enCs, enEip, base; const BYTE *entryBytes;
+        LONG iter;
+        DWORD enCs, enEip, base;
+        const BYTE *entryBytes;
         Sleep(DPMI_WATCHDOG_TICK_MS);
         if (g_DpmiDone)                                /* client exited cleanly -> keep the window */
         {
@@ -791,7 +852,8 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
          * sample skipped, so a guest that wakes, wedges and is not in the wait
          * still gets the full 150 s from the moment it stopped advancing.
          */
-        if (g_PauseWant && frozen) frozen = 0;   /* #219: paused, not wedged */
+        if (g_PauseWant && frozen)
+            frozen = 0;                          /* #219: paused, not wedged */
         if (g_WowMsgInWait && frozen)
         {
             if (!watchdogSaidWait)
@@ -806,7 +868,8 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
         }
         if (tick < 12 || frozen)                           /* diagnostic window + any freeze */
         {
-            enCs  = g_DpmiEnterCs;  enEip = g_DpmiEnterEip;
+            enCs  = g_DpmiEnterCs;
+            enEip = g_DpmiEnterEip;
             cursor = LogPut(cursor, "  wd["); cursor = LogHex(cursor, tick);
             cursor = LogPut(cursor, "] iter="); cursor = LogHex(cursor, (UINT)iter);
             cursor = LogPut(cursor, frozen ? " FROZEN" : " advancing");
@@ -897,8 +960,12 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
                 {
                     if (GetThreadContext(g_HostCpu, &context))
                     {
-                        guestCs = context.SegCs; guestEip = context.Eip; guestSs = context.SegSs;
-                        guestEsp = context.Esp;  guestFlags  = context.EFlags; got = 1;
+                        guestCs = context.SegCs;
+                        guestEip = context.Eip;
+                        guestSs = context.SegSs;
+                        guestEsp = context.Esp;
+                        guestFlags  = context.EFlags;
+                        got = 1;
                     }
                     ResumeThread(g_HostCpu);
                 }
@@ -945,7 +1012,8 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
               LogAppend(WDLOG_PATH, lineBuffer, cursor); cursor = lineBuffer;    /* the enrichment, as its own line */
             }
         }
-        prev = iter; ++tick;
+        prev = iter;
+        ++tick;
         /* [CAUTION]: ON A WOW RUN A FREEZE IS THE MEASUREMENT, NOT A FAULT TO BE CLEANED UP.
          * 12 frozen samples is 3 seconds, after which this thread TerminateProcess()es
          * the host -- fine for a DOS client that should never stall, and exactly wrong
@@ -955,7 +1023,8 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
          * deadline bounds the rest, so nothing here is unbounded.
          */
         if (frozen >= (g_WowModuleCount ? DPMI_WATCHDOG_FROZEN_TICKS_WOW : DPMI_WATCHDOG_FROZEN_TICKS)          /* 3s normally; 150s on a WOW run */
-            && g_DpmiWatchdogGeneration == modeYGeneration) break;           /* ...and only while its client lives */
+            && g_DpmiWatchdogGeneration == modeYGeneration)
+            break;                                                           /* ...and only while its client lives */
       }
     }
     cursor = LogPut(cursor, "STAGE3-DPMI: watchdog terminating (wedged)\r\n");
@@ -978,11 +1047,14 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
         LogAppend(WDLOG_PATH, lineBuffer, cursor);
         while (offset < total)
         {
-            DWORD length = total - offset; CHAR slice[257];
-            if (length > 256) length = 256;
+            DWORD length = total - offset;
+            CHAR slice[257];
+            if (length > 256)
+                length = 256;
             {
                 DWORD index;
-                for (index = 0; index < length; ++index) slice[index] = g_Machine->Output[offset + index];
+                for (index = 0; index < length; ++index)
+                    slice[index] = g_Machine->Output[offset + index];
             }
             LogAppend(WDLOG_PATH, slice, slice + length);
             offset += length;

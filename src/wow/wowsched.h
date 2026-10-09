@@ -102,8 +102,12 @@ extern INT g_WowSchedCurrentBase;
  * a context saved AT a BOP resumes AFTER it -- the guest must not re-execute the
  * three BOP bytes, and a context that does is an infinite loop, not a task.
  */
-VOID WowSchedSave(PWOWSCHED_SLOT slot, volatile BYTE *tib,
-                          DWORD modeLinear, WORD task, INT eipAdjust);
+VOID WowSchedSave(
+    PWOWSCHED_SLOT slot,
+    volatile BYTE *tib,
+    DWORD modeLinear,
+    WORD task,
+    INT eipAdjust);
 
 VOID WowSchedRestore(PWOWSCHED_SLOT slot, volatile BYTE *tib);
 
@@ -120,8 +124,12 @@ VOID WowSchedRestore(PWOWSCHED_SLOT slot, volatile BYTE *tib);
  * relies on, and it is why the mode and return-value words can be written into
  * a frame now and read by the guest's epilogue much later.
  */
-VOID WowSchedSwap(PWOWSCHED_SLOT slot, volatile BYTE *tib,
-                          DWORD modeLinear, WORD currentTask, INT eipAdjust);
+VOID WowSchedSwap(
+    PWOWSCHED_SLOT slot,
+    volatile BYTE *tib,
+    DWORD modeLinear,
+    WORD currentTask,
+    INT eipAdjust);
 
 /* The two words the host writes into a saved frame before resuming it: the
  * epilogue mode (bp-24) and the return-value hole (bp-16), which sit 8 bytes

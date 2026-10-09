@@ -41,30 +41,44 @@ static VDD_BUS g_Bus;
  */
 static VOID OplTestWrite(BYTE registerIndex, BYTE byteValue)
 {
-    UINT32 value = registerIndex; VddBusIo(&g_Bus, 0x388, 1, 0, &value);
-    value = byteValue;          VddBusIo(&g_Bus, 0x389, 1, 0, &value);
+    UINT32 value = registerIndex;
+
+    VddBusIo(&g_Bus, 0x388, 1, 0, &value);
+    value = byteValue;
+    VddBusIo(&g_Bus, 0x389, 1, 0, &value);
 }
 
 static BYTE OplTestStatus(VOID)
 {
-    UINT32 value = 0; VddBusIo(&g_Bus, 0x388, 1, 1, &value); return (BYTE)value;
+    UINT32 value = 0;
+
+    VddBusIo(&g_Bus, 0x388, 1, 1, &value);
+    return (BYTE)value;
 }
 
 /* The OPL3's array-1 pair: address to 0x38A, data to 0x38B. */
 static VOID OplTestWrite3(BYTE registerIndex, BYTE byteValue)
 {
-    UINT32 value = registerIndex; VddBusIo(&g_Bus, 0x38A, 1, 0, &value);
-    value = byteValue;          VddBusIo(&g_Bus, 0x38B, 1, 0, &value);
+    UINT32 value = registerIndex;
+
+    VddBusIo(&g_Bus, 0x38A, 1, 0, &value);
+    value = byteValue;
+    VddBusIo(&g_Bus, 0x38B, 1, 0, &value);
 }
 
 static BYTE OplTestReadPort(WORD port)
 {
-    UINT32 value = 0; VddBusIo(&g_Bus, port, 1, 1, &value); return (BYTE)value;
+    UINT32 value = 0;
+
+    VddBusIo(&g_Bus, port, 1, 1, &value);
+    return (BYTE)value;
 }
 
 INT main(VOID)
 {
-    OPL_STATE opl; memset(&opl, 0, sizeof opl);
+    OPL_STATE opl;
+
+    memset(&opl, 0, sizeof opl);
     NTVDD_DEVICE device = VddOplDevice(&opl);
     INT modulator, carrier;
 
@@ -172,7 +186,8 @@ INT main(VOID)
     CHECK((OplTestStatus() & 0xE0) == 0x00, "stopped timer: no flag no matter how much time passes");
 
     /* T9: the data port is write-only on an OPL2 ---------------------------- */
-    { UINT32 value = 0; VddBusIo(&g_Bus, 0x389, 1, 1, &value);
+    { UINT32 value = 0;
+    VddBusIo(&g_Bus, 0x389, 1, 1, &value);
       CHECK(value == 0xFF, "0x389 reads 0xFF (write-only data port)"); }
 
     /* T10: the bus frame tick advances the timers --------------------------- */
@@ -201,11 +216,14 @@ INT main(VOID)
     CHECK(opl.Registers[0x1B0] == 0 && opl.Channels[9].IsKeyOn == 0, "OPL2: a direct array-1 write is dropped too");
 
     /* T12: OPL3 fitted -- the ID bits and the detect ------------------------- */
-    opl.IsOpl3 = 1; VddOplReset(&opl);
+    opl.IsOpl3 = 1;
+    VddOplReset(&opl);
     CHECK(opl.IsOpl3 == 1, "OPL3: chip type survives vdd_opl_reset");
     CHECK(OplTestStatus() == 0x00, "OPL3: status idles at 0x00 (ID bits 1-2 clear)");
-    OplTestWrite(0x04, 0x60); OplTestWrite(0x04, 0x80);
-    OplTestWrite(0x02, 0xFF); OplTestWrite(0x04, 0x21);
+    OplTestWrite(0x04, 0x60);
+    OplTestWrite(0x04, 0x80);
+    OplTestWrite(0x02, 0xFF);
+    OplTestWrite(0x04, 0x21);
     VddOplAddMicroseconds(&opl, 80);
     CHECK(OplTestStatus() == 0xC0, "OPL3: the AdLib detect still reads 0xC0 -- an OPL3 IS an AdLib");
     CHECK(OplTestReadPort(0x38A) == 0xC0, "OPL3: status readable at 0x38A too");
@@ -219,12 +237,15 @@ INT main(VOID)
     OplTestWrite3(0x2B, 0x05);                                 /* offset 0x0B = ch3 carrier */
     CHECK(opl.Operators[VddOplOperatorIndex(12, 1)].Multiplier == 5 && VddOplOperatorIndex(12, 1) == 27,
           "array 1: 0x12B -> operator 27 (channel 12's carrier)");
-    OplTestWrite3(0xA2, 0x44); OplTestWrite3(0xB2, 0x0D);
+    OplTestWrite3(0xA2, 0x44);
+    OplTestWrite3(0xB2, 0x0D);
     CHECK(opl.Channels[11].FNumber == 0x144 && opl.Channels[11].Block == 3, "array 1: 0x1A2/0x1B2 -> channel 11");
     CHECK(VddOplOperatorIndex(9, 0) == 18 && VddOplOperatorIndex(17, 1) == 35, "ch9 -> op 18 ... ch17 -> op 35");
     /* ONE latch: address written at 0x38A, data through EITHER data port */
-    { UINT32 value = 0x40; VddBusIo(&g_Bus, 0x38A, 1, 0, &value);
-      value = 0x3F;          VddBusIo(&g_Bus, 0x389, 1, 0, &value); }
+    { UINT32 value = 0x40;
+    VddBusIo(&g_Bus, 0x38A, 1, 0, &value);
+      value = 0x3F;
+      VddBusIo(&g_Bus, 0x389, 1, 0, &value); }
     CHECK(opl.Registers[0x140] == 0x3F && opl.Operators[18].TotalLevel == 0x3F, "one 9-bit latch: 0x38A then 0x389 writes array 1");
     /* array 1's 0x104 is the 4-op register, NOT timer control */
     OplTestWrite(0x04, 0x00);                                  /* T1 stopped (T12 ran it) */
@@ -270,7 +291,8 @@ INT main(VOID)
     /* T17: reset clears NEW but keeps the chip ------------------------------- */
     VddOplReset(&opl);
     CHECK(opl.IsOpl3 == 1 && !VddOplIsNewMode(&opl) && opl.Registers[0x104] == 0, "reset: NEW and 0x104 clear, chip still OPL3");
-    opl.IsOpl3 = 0; VddOplReset(&opl);
+    opl.IsOpl3 = 0;
+    VddOplReset(&opl);
 
     printf("-- %d checks, %d failures --\n", g_Total, g_Failures);
     return g_Failures ? 1 : 0;

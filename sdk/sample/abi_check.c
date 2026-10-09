@@ -84,10 +84,16 @@ static void AbiProbeFrame(void *self)
 int NtvdmexAbiCheck(void);
 int NtvdmexAbiCheck(void)
 {
-    PVDD_PORT_IN_ROUTINE      treeIn    = AbiProbeIn;    ntvdmex_in_fn    sdkIn    = AbiProbeIn;
-    PVDD_PORT_OUT_ROUTINE     treeOut   = AbiProbeOut;   ntvdmex_out_fn   sdkOut   = AbiProbeOut;
-    PVDD_MEMORY_READ_ROUTINE  treeRead  = AbiProbeRead;  ntvdmex_rd_fn    sdkRead  = AbiProbeRead;
-    PVDD_MEMORY_WRITE_ROUTINE treeWrite = AbiProbeWrite; ntvdmex_wr_fn    sdkWrite = AbiProbeWrite;
-    PVDD_FRAME_ROUTINE        treeFrame = AbiProbeFrame; ntvdmex_frame_fn sdkFrame = AbiProbeFrame;
+    PVDD_PORT_IN_ROUTINE      treeIn    = AbiProbeIn;
+
+    ntvdmex_in_fn    sdkIn    = AbiProbeIn;
+    PVDD_PORT_OUT_ROUTINE     treeOut   = AbiProbeOut;
+    ntvdmex_out_fn   sdkOut   = AbiProbeOut;
+    PVDD_MEMORY_READ_ROUTINE  treeRead  = AbiProbeRead;
+    ntvdmex_rd_fn    sdkRead  = AbiProbeRead;
+    PVDD_MEMORY_WRITE_ROUTINE treeWrite = AbiProbeWrite;
+    ntvdmex_wr_fn    sdkWrite = AbiProbeWrite;
+    PVDD_FRAME_ROUTINE        treeFrame = AbiProbeFrame;
+    ntvdmex_frame_fn sdkFrame = AbiProbeFrame;
     return (treeIn && sdkIn && treeOut && sdkOut && treeRead && sdkRead && treeWrite && sdkWrite && treeFrame && sdkFrame) ? 0 : 1;
 }

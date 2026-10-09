@@ -170,9 +170,12 @@ static const BYTE g_OplKeyScaleShift[OPL_KSL_SHIFTS] = { 8, 1, 2, 0 };
 static INT32 OplExp2Negative(INT32 logValue)
 {
     INT shift;
-    if (logValue < 0) logValue = 0;
+
+    if (logValue < 0)
+        logValue = 0;
     shift = logValue >> OPL_LOG_OCTAVE_SHIFT;
-    if (shift > OPL_EXP_SILENT_SHIFT) return 0;                   /* below one LSB: silent */
+    if (shift > OPL_EXP_SILENT_SHIFT)
+        return 0;                                                 /* below one LSB: silent */
     return (INT32)g_OplExp[logValue & OPL_LOG_FRACTION_MASK] >> shift;
 }
 
@@ -182,6 +185,7 @@ static INT32 OplExp2Negative(INT32 logValue)
 static INT32 OplLogSinFull(UINT32 phaseIndex, INT *isNegative)
 {
     UINT32 quadrant = (phaseIndex >> OPL_QUARTER_SHIFT) & OPL_QUADRANT_MASK, index = phaseIndex & OPL_QUARTER_MASK;
+
     *isNegative = (quadrant & OPL_QUADRANT_NEGATIVE) ? 1 : 0;
     return (INT32)g_OplLogSin[(quadrant & OPL_QUADRANT_MIRRORED) ? (OPL_QUARTER_LAST - index) : index];
 }
@@ -216,6 +220,7 @@ static INT32 OplWaveform(BYTE waveform, UINT32 phaseIndex, INT *isNegative, INT 
             return 0;
         }
         return OplLogSinFull((phaseIndex << 1) & OPL_PHASE_MASK, isNegative);
+
     case OPL_WAVEFORM_DOUBLE_ABSOLUTE_SINE:                                     /* double-rate |sine|, 1st half */
         if (phaseIndex & OPL_PHASE_SECOND_HALF)
         {
@@ -228,13 +233,16 @@ static INT32 OplWaveform(BYTE waveform, UINT32 phaseIndex, INT *isNegative, INT 
             *isNegative = 0;
             return value;
         }
+
     case OPL_WAVEFORM_SQUARE:                                     /* square */
         *isNegative = (phaseIndex & OPL_PHASE_SECOND_HALF) ? 1 : 0;
         return 0;
+
     case OPL_WAVEFORM_DERIVED_SQUARE:                                     /* derived square (log sawtooth) */
         *isNegative = (phaseIndex & OPL_PHASE_SECOND_HALF) ? 1 : 0;
         return (INT32)(*isNegative ? ((phaseIndex & OPL_PHASE_HALF_MASK) ^ OPL_PHASE_HALF_MASK) : (phaseIndex & OPL_PHASE_HALF_MASK))
                << OPL_WAVEFORM7_SLOPE_SHIFT;
+
     case OPL_WAVEFORM_HALF_SINE:                                     /* half-wave rectified */
         if (phaseIndex & OPL_PHASE_SECOND_HALF)
         {
@@ -243,12 +251,14 @@ static INT32 OplWaveform(BYTE waveform, UINT32 phaseIndex, INT *isNegative, INT 
             return 0;
         }
         return OplLogSinFull(phaseIndex, isNegative);
+
     case OPL_WAVEFORM_ABSOLUTE_SINE:                                     /* absolute value */
         {
             INT32 value = OplLogSinFull(phaseIndex, isNegative);
             *isNegative = 0;
             return value;
         }
+
     case OPL_WAVEFORM_PULSE_SINE:                                     /* pulse-sine (rising quarters) */
         if (phaseIndex & OPL_PHASE_ODD_QUARTER)
         {
@@ -261,6 +271,7 @@ static INT32 OplWaveform(BYTE waveform, UINT32 phaseIndex, INT *isNegative, INT 
             *isNegative = 0;
             return value;
         }
+
     default:
         return OplLogSinFull(phaseIndex, isNegative);
     }
@@ -279,7 +290,8 @@ static INT32 OplWaveform(BYTE waveform, UINT32 phaseIndex, INT *isNegative, INT 
  */
 static BYTE OplEffectiveWaveform(PCOPL_STATE state, PCOPL_OPERATOR operatorState)
 {
-    if (state->IsOpl3) return (BYTE)(operatorState->Waveform & ((state->Registers[OPL3_REGISTER_NEW] & OPL3_NEW_BIT) ? OPL_WAVEFORM_MASK : OPL_WAVEFORM_OPL2_MASK));
+    if (state->IsOpl3)
+        return (BYTE)(operatorState->Waveform & ((state->Registers[OPL3_REGISTER_NEW] & OPL3_NEW_BIT) ? OPL_WAVEFORM_MASK : OPL_WAVEFORM_OPL2_MASK));
     return (state->Registers[OPL_REGISTER_TEST] & OPL_TEST_WSE) ? (BYTE)(operatorState->Waveform & OPL_WAVEFORM_OPL2_MASK) : 0;
 }
 
@@ -293,7 +305,9 @@ static INT OplEffectiveRate(PCOPL_STATE state, INT channel, BYTE rate4, BYTE key
     INT keyScaleValue = (state->Channels[channel].Block << 1) | ((state->Channels[channel].FNumber >> OPL_FNUMBER_TOP_BIT_SHIFT) & 1);
     INT rateOffset = keyScaleRate ? keyScaleValue : (keyScaleValue >> OPL_KEY_SCALE_RATE_OFF_SHIFT);
     INT rate;
-    if (!rate4) return 0;                       /* rate 0 never moves */
+
+    if (!rate4)
+        return 0;                               /* rate 0 never moves */
     rate = rate4 * OPL_RATE_STEPS + rateOffset;
     return rate > OPL_RATE_MAX ? OPL_RATE_MAX : rate;
 }
@@ -301,7 +315,8 @@ static INT OplEffectiveRate(PCOPL_STATE state, INT channel, BYTE rate4, BYTE key
 /* Envelope step per sample, in env fixed point. See OPL_ENVELOPE_DIVIDER_SHIFT. */
 static INT32 OplEnvelopeStep(INT rate)
 {
-    if (!rate) return 0;                        /* rate 0 never moves */
+    if (!rate)
+        return 0;                               /* rate 0 never moves */
     return (INT32)(OPL_ENVELOPE_MANTISSA_BASE + (rate & OPL_RATE_LOW_MASK)) << (OPL_ENVELOPE_SHIFT - OPL_ENVELOPE_DIVIDER_SHIFT + (rate >> OPL_RATE_OCTAVE_SHIFT));
 }
 
@@ -309,6 +324,7 @@ static VOID OplEnvelopeTick(POPL_STATE state, INT channel, INT operatorIndex)
 {
     POPL_OPERATOR operatorState = &state->Operators[operatorIndex];
     INT32 step;
+
     switch (operatorState->EnvelopeState)
     {
     case OPL_ENVELOPE_ATTACK:
@@ -318,7 +334,8 @@ static VOID OplEnvelopeTick(POPL_STATE state, INT channel, INT operatorIndex)
          * a peak of 1 against our 4096 before this was fixed -- reading it the
          * other way turns silent voices into loud ones.
          */
-        if (!step) break;
+        if (!step)
+            break;
         if (operatorState->AttackRate == OPL_ATTACK_RATE_INSTANT)
         {
             operatorState->Envelope = 0;
@@ -332,7 +349,8 @@ static VOID OplEnvelopeTick(POPL_STATE state, INT channel, INT operatorIndex)
          */
         { INT64 decrement = (((INT64)step * (operatorState->Envelope + (1 << OPL_ENVELOPE_SHIFT))) >> OPL_ENVELOPE_SHIFT);
           decrement = (decrement * OPL_ENVELOPE_ATTACK_NUMERATOR) >> OPL_ENVELOPE_ATTACK_SHIFT;
-          if (decrement < 1) decrement = 1;
+          if (decrement < 1)
+              decrement = 1;
           operatorState->Envelope -= (INT32)decrement; }
         if (operatorState->Envelope <= 0)
         {
@@ -340,6 +358,7 @@ static VOID OplEnvelopeTick(POPL_STATE state, INT channel, INT operatorIndex)
             operatorState->EnvelopeState = OPL_ENVELOPE_DECAY;
         }
         break;
+
     case OPL_ENVELOPE_DECAY:
         step = OplEnvelopeStep(OplEffectiveRate(state, channel, operatorState->DecayRate, operatorState->KeyScaleRate));
         operatorState->Envelope += step;
@@ -353,6 +372,7 @@ static VOID OplEnvelopeTick(POPL_STATE state, INT channel, INT operatorIndex)
           }
           }
         break;
+
     case OPL_ENVELOPE_SUSTAIN:
         /* EGT selects sustaining (hold) versus percussive (keep decaying). */
         if (!operatorState->EnvelopeType)
@@ -360,23 +380,29 @@ static VOID OplEnvelopeTick(POPL_STATE state, INT channel, INT operatorIndex)
             operatorState->Envelope += OplEnvelopeStep(OplEffectiveRate(state, channel, operatorState->ReleaseRate, operatorState->KeyScaleRate));
             if (operatorState->Envelope >= (OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT))
             {
-                operatorState->Envelope = OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT; operatorState->EnvelopeState = OPL_ENVELOPE_OFF;
+                operatorState->Envelope = OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT;
+                operatorState->EnvelopeState = OPL_ENVELOPE_OFF;
             }
         }
         break;
+
     case OPL_ENVELOPE_RELEASE:
         operatorState->Envelope += OplEnvelopeStep(OplEffectiveRate(state, channel, operatorState->ReleaseRate, operatorState->KeyScaleRate));
         if (operatorState->Envelope >= (OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT))
         {
-            operatorState->Envelope = OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT; operatorState->EnvelopeState = OPL_ENVELOPE_OFF;
+            operatorState->Envelope = OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT;
+            operatorState->EnvelopeState = OPL_ENVELOPE_OFF;
         }
         break;
+
     default:
         operatorState->Envelope = OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT;
         break;
     }
-    if (operatorState->Envelope < 0) operatorState->Envelope = 0;
-    if (operatorState->Envelope > (OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT)) operatorState->Envelope = OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT;
+    if (operatorState->Envelope < 0)
+        operatorState->Envelope = 0;
+    if (operatorState->Envelope > (OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT))
+        operatorState->Envelope = OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT;
 }
 
 /* --- the two low-frequency oscillators ------------------------------------ */
@@ -395,6 +421,7 @@ static INT32 OplTremoloUnits(PCOPL_STATE state)
 {
     UINT32 step = (state->LfoCount >> OPL_TREMOLO_STEP_SHIFT) % OPL_TREMOLO_STEPS;
     INT32  units = (step < OPL_TREMOLO_PEAK) ? (INT32)step : (INT32)(OPL_TREMOLO_STEPS - step);
+
     return (state->Registers[OPL_REGISTER_RHYTHM] & OPL_BD_TREMOLO_DEPTH) ? units : (units >> OPL_TREMOLO_SHALLOW_SHIFT);
 }
 
@@ -415,6 +442,7 @@ static INT32 OplVibratoOffset(PCOPL_STATE state, INT channel)
     INT32 fullDepth = (INT32)state->Channels[channel].FNumber >> ((state->Registers[OPL_REGISTER_RHYTHM] & OPL_BD_VIBRATO_DEPTH) ? OPL_VIBRATO_DEEP_SHIFT : OPL_VIBRATO_SHALLOW_SHIFT);
     INT     patternStep    = g_OplVibratoPattern[(state->LfoCount >> OPL_VIBRATO_STEP_SHIFT) & OPL_VIBRATO_STEP_MASK];
     INT32 offset    = (patternStep == OPL_VIBRATO_FULL || patternStep == -OPL_VIBRATO_FULL) ? fullDepth : (patternStep ? (fullDepth >> 1) : 0);
+
     return (patternStep < 0) ? -offset : offset;
 }
 
@@ -429,8 +457,11 @@ static UINT32 OplPhaseIncrement(PCOPL_STATE state, INT channel, PCOPL_OPERATOR o
 {
     INT32 fNumber = (INT32)state->Channels[channel].FNumber;
     UINT32 baseIncrement;
-    if (operatorState->Vibrato) fNumber += OplVibratoOffset(state, channel);
-    if (fNumber < 0) fNumber = 0;
+
+    if (operatorState->Vibrato)
+        fNumber += OplVibratoOffset(state, channel);
+    if (fNumber < 0)
+        fNumber = 0;
     baseIncrement = (UINT32)fNumber << state->Channels[channel].Block;
     return (baseIncrement * g_OplMultiplier2[operatorState->Multiplier]) >> 1;
 }
@@ -448,7 +479,9 @@ static INT32 OplStaticAttenuation(PCOPL_STATE state, INT channel, PCOPL_OPERATOR
      */
     INT32 keyScale = (INT32)g_OplKeyScaleRom[(state->Channels[channel].FNumber >> OPL_KSL_FNUMBER_SHIFT) & OPL_KSL_FNUMBER_MASK]
               - OPL_KSL_UNITS_PER_OCTAVE * (OPL_KSL_OCTAVE_ORIGIN - (INT32)state->Channels[channel].Block);
-    if (keyScale < 0) keyScale = 0;
+
+    if (keyScale < 0)
+        keyScale = 0;
     attenuation += (keyScale >> g_OplKeyScaleShift[operatorState->KeyScaleLevel]) * OPL_KEY_SCALE_TO_LOG;
     return attenuation;
 }
@@ -471,16 +504,22 @@ static INT32 OplStaticAttenuation(PCOPL_STATE state, INT channel, PCOPL_OPERATOR
  * tremolo. Split out of OplOperatorSample for the rhythm voices, whose phase is not
  * their own accumulator's.
  */
-static INT32 OplOperatorOutput(PCOPL_STATE state, INT channel, PCOPL_OPERATOR operatorState, UINT32 phaseIndex)
+static INT32 OplOperatorOutput(
+    PCOPL_STATE state,
+    INT channel,
+    PCOPL_OPERATOR operatorState,
+    UINT32 phaseIndex)
 {
     INT32 logValue, attenuation, amplitude;
     INT isNegative = 0, isMuted = 0;
 
     logValue = OplWaveform(OplEffectiveWaveform(state, operatorState), phaseIndex & OPL_PHASE_MASK, &isNegative, &isMuted);
-    if (isMuted) return 0;
+    if (isMuted)
+        return 0;
 
     attenuation = logValue + (operatorState->Envelope >> OPL_ENVELOPE_SHIFT) * OPL_ENVELOPE_TO_LOG + OplStaticAttenuation(state, channel, operatorState);
-    if (operatorState->AmplitudeModulation) attenuation += OplTremoloUnits(state) * OPL_ENVELOPE_TO_LOG;
+    if (operatorState->AmplitudeModulation)
+        attenuation += OplTremoloUnits(state) * OPL_ENVELOPE_TO_LOG;
     amplitude = OplExp2Negative(attenuation);
     return isNegative ? -amplitude : amplitude;
 }
@@ -489,8 +528,10 @@ static INT32 OplOperatorOutput(PCOPL_STATE state, INT channel, PCOPL_OPERATOR op
 static INT32 OplOperatorSample(POPL_STATE state, INT channel, INT operatorIndex, INT32 modulation)
 {
     POPL_OPERATOR operatorState = &state->Operators[operatorIndex];
+
     operatorState->Phase += OplPhaseIncrement(state, channel, operatorState);
-    if (operatorState->EnvelopeState == OPL_ENVELOPE_OFF) return 0;
+    if (operatorState->EnvelopeState == OPL_ENVELOPE_OFF)
+        return 0;
     return OplOperatorOutput(state, channel, operatorState, (operatorState->Phase >> OPL_PHASE_FRACTION_BITS) + (UINT32)modulation);
 }
 
@@ -594,7 +635,9 @@ static INT32 OplOperatorSample(POPL_STATE state, INT channel, INT operatorIndex,
 static UINT32 OplNoiseStep(UINT32 window)
 {
     INT group;
-    if (!window) window = OPL_NOISE_SEED;         /* a never-reset struct: zero is a dead state */
+
+    if (!window)
+        window = OPL_NOISE_SEED;                  /* a never-reset struct: zero is a dead state */
     for (group = 0; group < OPL_NOISE_STEPS_PER_SAMPLE / OPL_NOISE_NEAREST_TAP; ++group)
         window = (window >> OPL_NOISE_NEAREST_TAP) | ((((window >> OPL_NOISE_TAP_SHIFT) ^ window) & OPL_NOISE_NEW_BITS_MASK) << OPL_NOISE_TAP_SHIFT);
     return window;
@@ -613,20 +656,27 @@ static UINT32 OplRhythmPhaseBit(UINT32 phase13, UINT32 phase17)
  * tom-tom and cymbal on 8 -- because on an OPL3 with NEW set each channel's C0
  * bits route it left or right, and a drum goes where its channel register sends it.
  */
-static VOID OplRhythmSample(POPL_STATE state, INT32 *channel6Output, INT32 *channel7Output, INT32 *channel8Output)
+static VOID OplRhythmSample(
+    POPL_STATE state,
+    INT32 *channel6Output,
+    INT32 *channel7Output,
+    INT32 *channel8Output)
 {
     INT32 modulatorOutput, carrierOutput, feedbackModulation = 0;
     POPL_OPERATOR modulator = &state->Operators[OPL_OPERATOR_BASS_DRUM_MODULATOR], carrier = &state->Operators[OPL_OPERATOR_BASS_DRUM_CARRIER];
     POPL_OPERATOR hihat = &state->Operators[OPL_OPERATOR_HIHAT], snare = &state->Operators[OPL_OPERATOR_SNARE], cymbal = &state->Operators[OPL_OPERATOR_CYMBAL];
     UINT32 phase13, phase17, phase17Previous, phaseBit;
+
     *channel6Output = *channel7Output = *channel8Output = 0;
 
     /* BASS DRUM -- channel 6, an ordinary two-operator voice. */
     if (modulator->EnvelopeState != OPL_ENVELOPE_OFF || carrier->EnvelopeState != OPL_ENVELOPE_OFF)
     {
-        if (state->Channels[OPL_RHYTHM_CHANNEL_BASS_DRUM].Feedback) feedbackModulation = (modulator->Output1 + modulator->Output2) >> (OPL_FEEDBACK_BASE_SHIFT - state->Channels[OPL_RHYTHM_CHANNEL_BASS_DRUM].Feedback);
+        if (state->Channels[OPL_RHYTHM_CHANNEL_BASS_DRUM].Feedback)
+            feedbackModulation = (modulator->Output1 + modulator->Output2) >> (OPL_FEEDBACK_BASE_SHIFT - state->Channels[OPL_RHYTHM_CHANNEL_BASS_DRUM].Feedback);
         modulatorOutput = OplOperatorSample(state, OPL_RHYTHM_CHANNEL_BASS_DRUM, OPL_OPERATOR_BASS_DRUM_MODULATOR, feedbackModulation);
-        modulator->Output2 = modulator->Output1; modulator->Output1 = modulatorOutput;
+        modulator->Output2 = modulator->Output1;
+        modulator->Output1 = modulatorOutput;
         OplEnvelopeTick(state, OPL_RHYTHM_CHANNEL_BASS_DRUM, OPL_OPERATOR_BASS_DRUM_MODULATOR);
         if (state->Channels[OPL_RHYTHM_CHANNEL_BASS_DRUM].Connection)
         {
@@ -693,7 +743,8 @@ static INT32 OplVoiceTwoOperator(POPL_STATE state, INT channel)
     POPL_OPERATOR modulator = &state->Operators[modulatorIndex], carrier = &state->Operators[carrierIndex];
     INT32 modulatorOutput, carrierOutput, feedbackModulation = 0, output;
 
-    if (modulator->EnvelopeState == OPL_ENVELOPE_OFF && carrier->EnvelopeState == OPL_ENVELOPE_OFF) return 0;
+    if (modulator->EnvelopeState == OPL_ENVELOPE_OFF && carrier->EnvelopeState == OPL_ENVELOPE_OFF)
+        return 0;
 
     /* Feedback uses the mean of the operator's last two outputs, which is
      * what keeps a self-modulating operator stable instead of screaming.
@@ -702,7 +753,8 @@ static INT32 OplVoiceTwoOperator(POPL_STATE state, INT channel)
         feedbackModulation = (modulator->Output1 + modulator->Output2) >> (OPL_FEEDBACK_BASE_SHIFT - state->Channels[channel].Feedback);
 
     modulatorOutput = OplOperatorSample(state, channel, modulatorIndex, feedbackModulation);
-    modulator->Output2 = modulator->Output1; modulator->Output1 = modulatorOutput;
+    modulator->Output2 = modulator->Output1;
+    modulator->Output1 = modulatorOutput;
     OplEnvelopeTick(state, channel, modulatorIndex);
 
     if (state->Channels[channel].Connection)                 /* additive: both operators heard */
@@ -745,9 +797,11 @@ static INT32 OplVoiceFourOperator(POPL_STATE state, INT channel)
         state->Operators[operator3].EnvelopeState == OPL_ENVELOPE_OFF && state->Operators[operator4].EnvelopeState == OPL_ENVELOPE_OFF)
         return 0;
 
-    if (state->Channels[channel].Feedback) feedbackModulation = (firstOperator->Output1 + firstOperator->Output2) >> (OPL_FEEDBACK_BASE_SHIFT - state->Channels[channel].Feedback);
+    if (state->Channels[channel].Feedback)
+        feedbackModulation = (firstOperator->Output1 + firstOperator->Output2) >> (OPL_FEEDBACK_BASE_SHIFT - state->Channels[channel].Feedback);
     sample1 = OplOperatorSample(state, channel, operator1, feedbackModulation);
-    firstOperator->Output2 = firstOperator->Output1; firstOperator->Output1 = sample1;
+    firstOperator->Output2 = firstOperator->Output1;
+    firstOperator->Output1 = sample1;
     OplEnvelopeTick(state, channel, operator1);
 
     sample2 = OplOperatorSample(state, channel, operator2, connection1 ? 0 : sample1);           /* 1 -> 2 unless CNT1 */
@@ -757,9 +811,12 @@ static INT32 OplVoiceFourOperator(POPL_STATE state, INT channel)
     sample4 = OplOperatorSample(state, channel, operator4, (connection1 && connection2) ? 0 : sample3);  /* 3 -> 4 except 1,1 */
     OplEnvelopeTick(state, channel, operator4);
 
-    if (!connection1 && !connection2) return sample4;              /* FM-FM */
-    if ( connection1 && !connection2) return sample1 + sample4;         /* AM-FM */
-    if (!connection1 &&  connection2) return sample2 + sample4;         /* FM-AM */
+    if (!connection1 && !connection2)
+        return sample4;                                            /* FM-FM */
+    if ( connection1 && !connection2)
+        return sample1 + sample4;                                       /* AM-FM */
+    if (!connection1 &&  connection2)
+        return sample2 + sample4;                                       /* FM-AM */
     return sample1 + sample3 + sample4;         /* AM-AM */
 }
 
@@ -769,9 +826,16 @@ static INT32 OplVoiceFourOperator(POPL_STATE state, INT channel)
  * -- a voice routed only there is silent, as on the real card, and so is a voice
  * with no routing bits at all (a driver that sets NEW must set them).
  */
-static VOID OplRoute(PCOPL_STATE state, INT isNewMode, INT channel, INT32 value, INT32 *left, INT32 *right)
+static VOID OplRoute(
+    PCOPL_STATE state,
+    INT isNewMode,
+    INT channel,
+    INT32 value,
+    INT32 *left,
+    INT32 *right)
 {
     BYTE routing;
+
     if (!isNewMode)
     {
         *left += value;
@@ -779,8 +843,10 @@ static VOID OplRoute(PCOPL_STATE state, INT isNewMode, INT channel, INT32 value,
         return;
     }
     routing = state->Registers[(channel / OPL_CHANNELS) * OPL_ARRAY1_BASE + OPL_REGISTER_FEEDBACK + channel % OPL_CHANNELS];
-    if (routing & OPL_C0_OUTPUT_A) *left += value;
-    if (routing & OPL_C0_OUTPUT_B) *right += value;
+    if (routing & OPL_C0_OUTPUT_A)
+        *left += value;
+    if (routing & OPL_C0_OUTPUT_B)
+        *right += value;
 }
 
 /* One native sample, both sides, unclipped. The ORDER is the OPL2's exactly --
@@ -814,12 +880,15 @@ static VOID OplSampleStereo(POPL_STATE state, INT32 *leftOutput, INT32 *rightOut
     for (channel = 0; channel < channelCount; ++channel)
     {
         INT role;
-        if (isRhythm && channel >= OPL_RHYTHM_CHANNEL_BASS_DRUM && channel <= OPL_RHYTHM_CHANNEL_TOM_CYMBAL) continue;   /* 6-8 are percussion in rhythm */
+        if (isRhythm && channel >= OPL_RHYTHM_CHANNEL_BASS_DRUM && channel <= OPL_RHYTHM_CHANNEL_TOM_CYMBAL)
+            continue;                                                                                                    /* 6-8 are percussion in rhythm */
         role = isNewMode ? OplFourOperatorRole(state, channel) : 0;
-        if (role == OPL_FOUR_OPERATOR_SECOND) continue;                    /* rendered with its leader */
+        if (role == OPL_FOUR_OPERATOR_SECOND)
+            continue;                                                      /* rendered with its leader */
         OplRoute(state, isNewMode, channel, role ? OplVoiceFourOperator(state, channel) : OplVoiceTwoOperator(state, channel), &left, &right);
     }
-    *leftOutput = left; *rightOutput = right;
+    *leftOutput = left;
+    *rightOutput = right;
 }
 
 static INT16 OplClip(INT32 value)
@@ -831,6 +900,7 @@ static INT16 OplClip(INT32 value)
 VOID VddOplRender(POPL_STATE state, INT16 *output, UINT32 frames)
 {
     UINT32 frame;
+
     for (frame = 0; frame < frames; ++frame)
     {
         INT32 left, right;
@@ -846,6 +916,7 @@ VOID VddOplRender(POPL_STATE state, INT16 *output, UINT32 frames)
 VOID VddOplRenderStereo(POPL_STATE state, INT16 *output, UINT32 frames)
 {
     UINT32 frame;
+
     for (frame = 0; frame < frames; ++frame)
     {
         INT32 left, right;

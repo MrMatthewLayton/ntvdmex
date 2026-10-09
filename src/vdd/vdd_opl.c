@@ -30,8 +30,11 @@
 INT VddOplOperatorIndex(INT channel, INT isCarrier)
 {
     INT arrayIndex, localChannel;
-    if (channel < 0 || channel >= OPL3_CHANNELS) return -1;
-    arrayIndex = channel / OPL_CHANNELS; localChannel = channel % OPL_CHANNELS;
+
+    if (channel < 0 || channel >= OPL3_CHANNELS)
+        return -1;
+    arrayIndex = channel / OPL_CHANNELS;
+    localChannel = channel % OPL_CHANNELS;
     return arrayIndex * OPL_OPERATORS + (localChannel / OPL_CHANNELS_PER_BANK) * OPL_OPERATOR_BANK_SLOTS + (localChannel % OPL_CHANNELS_PER_BANK) + (isCarrier ? OPL_CARRIER_OFFSET : 0);
 }
 
@@ -54,7 +57,9 @@ INT VddOplIsNewMode(PCOPL_STATE state)
 INT OplFourOperatorRole(PCOPL_STATE state, INT channel)
 {
     INT localChannel, bit, role;
-    if (!VddOplIsNewMode(state) || channel < 0 || channel >= OPL3_CHANNELS) return 0;
+
+    if (!VddOplIsNewMode(state) || channel < 0 || channel >= OPL3_CHANNELS)
+        return 0;
     localChannel = channel % OPL_CHANNELS;
     if (localChannel < OPL_FOUR_OPERATOR_PARTNER)
     {
@@ -66,8 +71,10 @@ INT OplFourOperatorRole(PCOPL_STATE state, INT channel)
         bit = localChannel - OPL_FOUR_OPERATOR_PARTNER;
         role = OPL_FOUR_OPERATOR_SECOND;
     }
-    else return 0;
-    if (channel >= OPL_CHANNELS) bit += OPL_FOUR_OPERATOR_ARRAY1_BITS;
+    else
+        return 0;
+    if (channel >= OPL_CHANNELS)
+        bit += OPL_FOUR_OPERATOR_ARRAY1_BITS;
     return ((state->Registers[OPL3_REGISTER_FOUR_OPERATOR] >> bit) & 1) ? role : 0;
 }
 
@@ -77,7 +84,9 @@ INT OplFourOperatorRole(PCOPL_STATE state, INT channel)
 static INT OplOffsetToOperator(BYTE registerNumber)
 {
     INT offset = registerNumber & OPL_OPERATOR_OFFSET_MASK, bank = offset >> OPL_OPERATOR_BANK_SHIFT, slot = offset & OPL_OPERATOR_SLOT_MASK;
-    if (slot >= OPL_OPERATOR_BANK_SLOTS || bank >= OPL_OPERATOR_BANKS) return OPL_NO_OPERATOR;
+
+    if (slot >= OPL_OPERATOR_BANK_SLOTS || bank >= OPL_OPERATOR_BANKS)
+        return OPL_NO_OPERATOR;
     return bank * OPL_OPERATOR_BANK_SLOTS + slot;
 }
 
@@ -95,13 +104,13 @@ static INT OplOffsetToOperator(BYTE registerNumber)
  */
 INT g_OplAbsent = 0;
 
-static VOID OplTimerStep(WORD *count, BYTE preset, BYTE mask,
-                           BYTE flag, BYTE *status)
+static VOID OplTimerStep(WORD *count, BYTE preset, BYTE mask, BYTE flag, BYTE *status)
 {
     if (++(*count) > OPL_TIMER_MAX)
     {
         *count = preset;
-        if (!mask) *status |= (BYTE)(flag | OPL_STATUS_IRQ);
+        if (!mask)
+            *status |= (BYTE)(flag | OPL_STATUS_IRQ);
     }
 }
 
@@ -169,6 +178,7 @@ static const BYTE g_OplRhythmBit[OPL_RHYTHM_OPERATORS] = { 0x10, 0x01, 0x04, 0x1
 static INT OplRhythmHeld(INT operatorIndex, BYTE bd, BYTE channelKeys)
 {
     INT channel = (operatorIndex - OPL_RHYTHM_FIRST_OPERATOR) % OPL_RHYTHM_CHANNELS;         /* op12,15->ch6 13,16->7 14,17->8 */
+
     return ((channelKeys >> channel) & 1) || ((bd & OPL_BD_RHYTHM) && (bd & g_OplRhythmBit[operatorIndex - OPL_RHYTHM_FIRST_OPERATOR]));
 }
 
@@ -180,13 +190,20 @@ static BYTE OplRhythmChannelKeys(PCOPL_STATE state)
 /* Re-key operators 12-17 for a change of 0xBD and/or of channels 6-8's key bits
  * (`ck` bit n = channel 6+n). Only an edge of the OR moves an envelope.
  */
-static VOID OplRhythmRekey(POPL_STATE state, BYTE bdBefore, BYTE channelKeysBefore, BYTE bdAfter, BYTE channelKeysAfter)
+static VOID OplRhythmRekey(
+    POPL_STATE state,
+    BYTE bdBefore,
+    BYTE channelKeysBefore,
+    BYTE bdAfter,
+    BYTE channelKeysAfter)
 {
     INT operatorIndex;
+
     for (operatorIndex = OPL_RHYTHM_FIRST_OPERATOR; operatorIndex < OPL_OPERATORS; ++operatorIndex)
     {
         INT wasHeld = OplRhythmHeld(operatorIndex, bdBefore, channelKeysBefore), isHeldNow = OplRhythmHeld(operatorIndex, bdAfter, channelKeysAfter);
-        if (wasHeld == isHeldNow) continue;
+        if (wasHeld == isHeldNow)
+            continue;
         OplKeyOperator(state, operatorIndex, isHeldNow);
         /* Hi-hat / cymbal accumulator restarted in a running chip: each feeds the
          * other's phase bit, so the restart POINT matters -- measured, see
@@ -201,6 +218,7 @@ static VOID OplRhythmWrite(POPL_STATE state, BYTE oldValue, BYTE value)
 {
     BYTE channelKeys = OplRhythmChannelKeys(state);
     INT bit;
+
     /* The hit counters count DRUM-BIT rising edges, as they always have: bits 0-4
      * are hi-hat, cymbal, tom-tom, snare, bass drum, ProfileRhythmHits' order.
      */
@@ -208,7 +226,8 @@ static VOID OplRhythmWrite(POPL_STATE state, BYTE oldValue, BYTE value)
     {
         BYTE wasSet = (oldValue & OPL_BD_RHYTHM) ? oldValue : 0;     /* entering: every set bit is new */
         for (bit = 0; bit < OPL_RHYTHM_VOICES; ++bit)
-            if (((value & ~wasSet) >> bit) & 1) state->ProfileRhythmHits[bit]++;
+            if (((value & ~wasSet) >> bit) & 1)
+                state->ProfileRhythmHits[bit]++;
     }
     OplRhythmRekey(state, oldValue, channelKeys, value, channelKeys);
 }
@@ -219,20 +238,25 @@ static VOID OplRhythmWrite(POPL_STATE state, BYTE oldValue, BYTE value)
 static VOID OplKeyChannel(POPL_STATE state, INT channel, INT isKeyOn)
 {
     INT channelCount = (OplFourOperatorRole(state, channel) == OPL_FOUR_OPERATOR_FIRST) ? OPL_FOUR_OPERATOR_PAIR_CHANNELS : 1, pairIndex;
+
     if (isKeyOn && !state->Channels[channel].IsKeyOn)   /* key-on edge: restart */
     {
         INT isAm = 0, isVibrato = 0;
         for (pairIndex = 0; pairIndex < channelCount; ++pairIndex)
         {
             INT modulator = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER * pairIndex, OPL_MODULATOR), carrier = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER * pairIndex, OPL_CARRIER);
-            state->Operators[modulator].EnvelopeState = OPL_ENVELOPE_ATTACK; state->Operators[modulator].Phase = 0;
-            state->Operators[carrier].EnvelopeState = OPL_ENVELOPE_ATTACK; state->Operators[carrier].Phase = 0;
+            state->Operators[modulator].EnvelopeState = OPL_ENVELOPE_ATTACK;
+            state->Operators[modulator].Phase = 0;
+            state->Operators[carrier].EnvelopeState = OPL_ENVELOPE_ATTACK;
+            state->Operators[carrier].Phase = 0;
             isAm  |= state->Operators[modulator].AmplitudeModulation  | state->Operators[carrier].AmplitudeModulation;
             isVibrato |= state->Operators[modulator].Vibrato | state->Operators[carrier].Vibrato;
         }
         state->ProfileKeyOns++;                              /* profile: see OPL_STATE */
-        if (isAm)  state->ProfileKeyOnAm++;
-        if (isVibrato) state->ProfileKeyOnVibrato++;
+        if (isAm)
+            state->ProfileKeyOnAm++;
+        if (isVibrato)
+            state->ProfileKeyOnVibrato++;
     }
     else if (!isKeyOn && state->Channels[channel].IsKeyOn)                 /* key-off edge: release */
     {
@@ -261,28 +285,35 @@ VOID VddOplWriteRegister(POPL_STATE state, WORD registerNumber, BYTE value)
 {
     INT operatorIndex, arrayIndex;
     BYTE arrayRegister, oldValue;
-    if (registerNumber >= OPL3_REGISTERS) return;
+
+    if (registerNumber >= OPL3_REGISTERS)
+        return;
     arrayIndex = registerNumber >> OPL_ARRAY_SHIFT;
-    if (arrayIndex && !state->IsOpl3) return;           /* an OPL2 has no array 1 */
+    if (arrayIndex && !state->IsOpl3)
+        return;                                         /* an OPL2 has no array 1 */
     arrayRegister = (BYTE)registerNumber;
     oldValue = state->Registers[registerNumber];                        /* before the store: edge detection */
     state->Registers[registerNumber] = value;
     state->ProfileWrites++;                                  /* profile: see OPL_STATE */
-    if (state->Trace && !arrayIndex) state->Trace(arrayRegister, value);         /* dev-only capture hook */
+    if (state->Trace && !arrayIndex)
+        state->Trace(arrayRegister, value);                                      /* dev-only capture hook */
 
-    if (arrayIndex && arrayRegister < OPL_REGISTER_AM_VIB) return;      /* 0x104/0x105: stored, consulted where used;
+    if (arrayIndex && arrayRegister < OPL_REGISTER_AM_VIB)
+        return;      /* 0x104/0x105: stored, consulted where used;
                                            0x101-0x103, 0x108: nothing in array 1 */
 
     if (arrayRegister == OPL_REGISTER_TIMER1)                          /* timer 1 preset */
     {
         state->Timer1Preset = value;
-        if (!state->IsTimer1Running) state->Timer1Count = value;
+        if (!state->IsTimer1Running)
+            state->Timer1Count = value;
         return;
     }
     if (arrayRegister == OPL_REGISTER_TIMER2)                          /* timer 2 preset */
     {
         state->Timer2Preset = value;
-        if (!state->IsTimer2Running) state->Timer2Count = value;
+        if (!state->IsTimer2Running)
+            state->Timer2Count = value;
         return;
     }
     if (arrayRegister == OPL_REGISTER_TIMER_CONTROL)                          /* timer control */
@@ -313,9 +344,13 @@ VOID VddOplWriteRegister(POPL_STATE state, WORD registerNumber, BYTE value)
 
     if (arrayRegister >= OPL_REGISTER_AM_VIB && arrayRegister <= OPL_REGISTER_AM_VIB_LAST)                     /* AM/VIB/EGT/KSR/MULT */
     {
-        operatorIndex = OplOffsetToOperator(arrayRegister); if (operatorIndex < 0) return;
-        if (value & OPL_AM_VIB_AM) state->ProfileAmOperators  |= 1u << operatorIndex;      /* profile: see OPL_STATE */
-        if (value & OPL_AM_VIB_VIB) state->ProfileVibratoOperators |= 1u << operatorIndex;      /* (slot, either array) */
+        operatorIndex = OplOffsetToOperator(arrayRegister);
+        if (operatorIndex < 0)
+            return;
+        if (value & OPL_AM_VIB_AM)
+            state->ProfileAmOperators  |= 1u << operatorIndex;                             /* profile: see OPL_STATE */
+        if (value & OPL_AM_VIB_VIB)
+            state->ProfileVibratoOperators |= 1u << operatorIndex;                              /* (slot, either array) */
         operatorIndex += arrayIndex * OPL_OPERATORS;
         state->Operators[operatorIndex].AmplitudeModulation   = (value >> OPL_AM_VIB_AM_SHIFT) & 1;
         state->Operators[operatorIndex].Vibrato  = (value >> OPL_AM_VIB_VIB_SHIFT) & 1;
@@ -326,7 +361,9 @@ VOID VddOplWriteRegister(POPL_STATE state, WORD registerNumber, BYTE value)
     }
     if (arrayRegister >= OPL_REGISTER_KSL_TL && arrayRegister <= OPL_REGISTER_KSL_TL_LAST)                     /* KSL / total level */
     {
-        operatorIndex = OplOffsetToOperator(arrayRegister); if (operatorIndex < 0) return;
+        operatorIndex = OplOffsetToOperator(arrayRegister);
+        if (operatorIndex < 0)
+            return;
         operatorIndex += arrayIndex * OPL_OPERATORS;
         state->Operators[operatorIndex].KeyScaleLevel = (value >> OPL_KSL_SHIFT) & OPL_KSL_MASK;
         state->Operators[operatorIndex].TotalLevel  = value & OPL_TL_MASK;
@@ -334,7 +371,9 @@ VOID VddOplWriteRegister(POPL_STATE state, WORD registerNumber, BYTE value)
     }
     if (arrayRegister >= OPL_REGISTER_AR_DR && arrayRegister <= OPL_REGISTER_AR_DR_LAST)                     /* attack / decay */
     {
-        operatorIndex = OplOffsetToOperator(arrayRegister); if (operatorIndex < 0) return;
+        operatorIndex = OplOffsetToOperator(arrayRegister);
+        if (operatorIndex < 0)
+            return;
         operatorIndex += arrayIndex * OPL_OPERATORS;
         state->Operators[operatorIndex].AttackRate = (value >> OPL_RATE_HIGH_SHIFT) & OPL_RATE_MASK;
         state->Operators[operatorIndex].DecayRate = value & OPL_RATE_MASK;
@@ -342,7 +381,9 @@ VOID VddOplWriteRegister(POPL_STATE state, WORD registerNumber, BYTE value)
     }
     if (arrayRegister >= OPL_REGISTER_SL_RR && arrayRegister <= OPL_REGISTER_SL_RR_LAST)                     /* sustain / release */
     {
-        operatorIndex = OplOffsetToOperator(arrayRegister); if (operatorIndex < 0) return;
+        operatorIndex = OplOffsetToOperator(arrayRegister);
+        if (operatorIndex < 0)
+            return;
         operatorIndex += arrayIndex * OPL_OPERATORS;
         state->Operators[operatorIndex].SustainLevel = (value >> OPL_RATE_HIGH_SHIFT) & OPL_RATE_MASK;
         state->Operators[operatorIndex].ReleaseRate = value & OPL_RATE_MASK;
@@ -350,7 +391,9 @@ VOID VddOplWriteRegister(POPL_STATE state, WORD registerNumber, BYTE value)
     }
     if (arrayRegister >= OPL_REGISTER_WAVEFORM && arrayRegister <= OPL_REGISTER_WAVEFORM_LAST)                     /* waveform select */
     {
-        operatorIndex = OplOffsetToOperator(arrayRegister); if (operatorIndex < 0) return;
+        operatorIndex = OplOffsetToOperator(arrayRegister);
+        if (operatorIndex < 0)
+            return;
         operatorIndex += arrayIndex * OPL_OPERATORS;
         /* All three bits kept; which of them COUNT is the synth's call, because
          * it depends on NEW / WSE as they stand when the note plays.
@@ -390,7 +433,8 @@ VOID VddOplWriteRegister(POPL_STATE state, WORD registerNumber, BYTE value)
         /* The second channel of a 4-op pair has no key of its own: its F-number
          * and block are latched above (and ignored), its key-on bit is ignored.
          */
-        if (OplFourOperatorRole(state, channel) == OPL_FOUR_OPERATOR_SECOND) return;
+        if (OplFourOperatorRole(state, channel) == OPL_FOUR_OPERATOR_SECOND)
+            return;
         OplKeyChannel(state, channel, isKeyOn);
         return;
     }
@@ -402,16 +446,19 @@ VOID VddOplWriteRegister(POPL_STATE state, WORD registerNumber, BYTE value)
         /* bits 4-7 (output routing, OPL3) are read from Registers[] by the synth */
         return;
     }
-    if (arrayIndex) return;             /* 0x1BD etc.: array 1 has no such globals */
+    if (arrayIndex)
+        return;                         /* 0x1BD etc.: array 1 has no such globals */
     /* 0x01 (test/WSE), 0x08 (CSM/NTS), 0xBD (rhythm/depth) are stored in Registers[]
      * and consulted by the synth; nothing to decode here.
      */
     if (arrayRegister == OPL_REGISTER_RHYTHM)
     {
         OplRhythmWrite(state, oldValue, value);
-        state->ProfileBdWrites++; state->ProfileBdOr |= value;
+        state->ProfileBdWrites++;
+        state->ProfileBdOr |= value;
     }
-    if (arrayRegister == OPL_REGISTER_TEST && (value & OPL_TEST_WSE)) state->ProfileWaveformSelect = 1;
+    if (arrayRegister == OPL_REGISTER_TEST && (value & OPL_TEST_WSE))
+        state->ProfileWaveformSelect = 1;
 }
 
 /* --- ports 0x388-0x38B ------------------------------------------------------ */
@@ -423,7 +470,8 @@ VOID VddOplWriteRegister(POPL_STATE state, WORD registerNumber, BYTE value)
  */
 VOID VddOplWriteAddress(POPL_STATE state, INT arrayIndex, BYTE value)
 {
-    if (arrayIndex && !state->IsOpl3) return;           /* no array 1 on an OPL2 */
+    if (arrayIndex && !state->IsOpl3)
+        return;                                         /* no array 1 on an OPL2 */
     state->AddressLatch = (WORD)((arrayIndex ? OPL_ARRAY1_BASE : 0) | value);
 }
 
@@ -450,7 +498,8 @@ VOID VddOplWriteData(POPL_STATE state, BYTE value)
  */
 BYTE VddOplReadStatus(PCOPL_STATE state)
 {
-    if (g_OplAbsent) return OPL_FLOATING_BUS;
+    if (g_OplAbsent)
+        return OPL_FLOATING_BUS;
     return (BYTE)(state->Status | (state->IsOpl3 ? 0 : OPL_STATUS_OPL2_ID));
 }
 
@@ -458,15 +507,20 @@ static VOID OplPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
     POPL_STATE state = (POPL_STATE)context;
     INT isArray1 = (port & OPL_PORT_A1) ? 1 : 0;
+
     (VOID)width;
-    if (isArray1 && !state->IsOpl3) return;             /* OPL2: not decoded */
-    if ((port & 1) == 0) VddOplWriteAddress(state, isArray1, (BYTE)value);  /* 0x388/0x38A */
-    else                 VddOplWriteData(state, (BYTE)value);     /* 0x389/0x38B */
+    if (isArray1 && !state->IsOpl3)
+        return;                                         /* OPL2: not decoded */
+    if ((port & 1) == 0)
+        VddOplWriteAddress(state, isArray1, (BYTE)value);                   /* 0x388/0x38A */
+    else
+        VddOplWriteData(state, (BYTE)value);                      /* 0x389/0x38B */
 }
 
 static VOID OplPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 {
     POPL_STATE state = (POPL_STATE)context;
+
     (VOID)width;
     /* The data ports are write-only on both chips. 0x38A on an OPL3 reads status
      * too: the datasheet's read cycle is specified with A0 low and says nothing
@@ -489,11 +543,14 @@ static VOID OplPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 VOID VddOplAllNotesOff(POPL_STATE state)
 {
     INT channel;
+
     for (channel = 0; channel < OPL3_CHANNELS; ++channel)
     {
         WORD registerNumber = (WORD)((channel / OPL_CHANNELS) * OPL_ARRAY1_BASE + OPL_REGISTER_KEY_BLOCK + channel % OPL_CHANNELS);
-        if (channel >= OPL_CHANNELS && !state->IsOpl3) break;
-        if (state->Registers[registerNumber] & OPL_KEY_ON) VddOplWriteRegister(state, registerNumber, (BYTE)(state->Registers[registerNumber] & ~OPL_KEY_ON));
+        if (channel >= OPL_CHANNELS && !state->IsOpl3)
+            break;
+        if (state->Registers[registerNumber] & OPL_KEY_ON)
+            VddOplWriteRegister(state, registerNumber, (BYTE)(state->Registers[registerNumber] & ~OPL_KEY_ON));
     }
     if (state->Registers[OPL_REGISTER_RHYTHM] & OPL_BD_DRUMS)          /* rhythm drums, keyed separately */
         VddOplWriteRegister(state, OPL_REGISTER_RHYTHM, (BYTE)(state->Registers[OPL_REGISTER_RHYTHM] & ~OPL_BD_DRUMS));
@@ -502,7 +559,9 @@ VOID VddOplAllNotesOff(POPL_STATE state)
 static VOID OplFrame(PVOID context)
 {
     POPL_STATE state = (POPL_STATE)context;
-    if (state->IsExternalClock) return; /* host pumps real elapsed time instead */
+
+    if (state->IsExternalClock)
+        return;                         /* host pumps real elapsed time instead */
     VddOplAddMicroseconds(state, state->FrameUs);
 }
 
@@ -513,8 +572,11 @@ VOID VddOplReset(PVOID context)
     PVDD_BUS bus = state->Bus;
     UINT32 frameUs = state->FrameUs, sampleHz = state->SampleHz;
     BYTE  isExternalClock = state->IsExternalClock, isOpl3 = state->IsOpl3;
-    UINT index; BYTE *bytes = (BYTE *)state;
-    for (index = 0; index < sizeof(*state); ++index) bytes[index] = 0;
+    UINT index;
+    BYTE *bytes = (BYTE *)state;
+
+    for (index = 0; index < sizeof(*state); ++index)
+        bytes[index] = 0;
     state->Bus = bus;
     state->FrameUs  = frameUs ? frameUs : OPL_DEFAULT_FRAME_US;
     state->SampleHz = sampleHz ? sampleHz : OPL_DEFAULT_HZ;
@@ -539,14 +601,19 @@ VOID VddOplReset(PVOID context)
 INT VddOplInitialize(PVDD_BUS bus, PVOID context)
 {
     POPL_STATE state = (POPL_STATE)context;
+
     state->Bus = bus;
-    if (!state->FrameUs)  state->FrameUs  = OPL_DEFAULT_FRAME_US;
-    if (!state->SampleHz) state->SampleHz = OPL_DEFAULT_HZ;
+    if (!state->FrameUs)
+        state->FrameUs  = OPL_DEFAULT_FRAME_US;
+    if (!state->SampleHz)
+        state->SampleHz = OPL_DEFAULT_HZ;
     /* All four ports, whichever chip: on an OPL2 the top two answer as nothing
      * (see OplPortOut/OplPortIn), and the host can then change the chip without
      * re-plumbing the bus.
      */
-    if (VddClaimPorts(bus, OPL_PORT_FIRST, OPL_PORT_LAST, OplPortIn, OplPortOut, state)) return OPL_FAILED;
-    if (VddOnFrame(bus, OplFrame, state)) return OPL_FAILED;
+    if (VddClaimPorts(bus, OPL_PORT_FIRST, OPL_PORT_LAST, OplPortIn, OplPortOut, state))
+        return OPL_FAILED;
+    if (VddOnFrame(bus, OplFrame, state))
+        return OPL_FAILED;
     return 0;
 }

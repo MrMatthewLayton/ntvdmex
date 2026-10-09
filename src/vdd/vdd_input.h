@@ -255,8 +255,12 @@ INT  VddInputBiosTranslate(PINPUT_STATE state, BYTE scanCode);   /* -> KB_ACT_* 
  * extended = Pause) is from the documentation and this file's own NumLock note,
  * not measured on the rig.
  */
-INT  VddInputHostKeyBytes(BYTE rawScanCode, INT isExtended, INT isBreak,
-                              BYTE bytes[INPUT_HOST_KEY_BYTES_MAX], INT *isNoRepeat);
+INT  VddInputHostKeyBytes(
+    BYTE rawScanCode,
+    INT isExtended,
+    INT isBreak,
+    BYTE bytes[INPUT_HOST_KEY_BYTES_MAX],
+    INT *isNoRepeat);
 
 INT  VddInputInitialize(PVDD_BUS bus, PVOID context);          /* claims INT 16h */
 VOID VddInputReset(PVOID context);
@@ -274,7 +278,12 @@ VOID VddInputReset(PVOID context);
 VOID VddInputSetA20(PINPUT_STATE state, INT isOn);
 INT  VddInputGetA20(PCINPUT_STATE state);
 static inline NTVDD_DEVICE VddInputDevice(PINPUT_STATE state)
-{ NTVDD_DEVICE device; device.Name = INPUT_DEVICE_NAME; device.Initialize = VddInputInitialize; device.Reset = VddInputReset;
-  device.Shutdown = 0; device.Context = state; return device; }
+{ NTVDD_DEVICE device;
+device.Name = INPUT_DEVICE_NAME;
+device.Initialize = VddInputInitialize;
+device.Reset = VddInputReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 #endif /* NTVDMEX_VDD_INPUT_H */

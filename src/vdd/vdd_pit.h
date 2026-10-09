@@ -235,20 +235,28 @@ typedef const PIT_STATE *PCPIT_STATE;
  * those used to carry its own copy; a copy that did not keep the witness would make
  * every tick it counted look like a guest's store. [CAUTION] IRQ0 path: keep it trivial.
  */
-static inline VOID VddPitBiosTick(PPIT_STATE state, volatile UINT32 *tickCount, volatile BYTE *midnightFlag)
+static inline VOID VddPitBiosTick(
+    PPIT_STATE state,
+    volatile UINT32 *tickCount,
+    volatile BYTE *midnightFlag)
 {
     UINT32 count = *tickCount;
+
     if (count != state->TickWitness && !state->IsTickForeign)
     {
-        state->IsTickForeign = 1; state->TickWraps = 0; state->TickSince = 0;
+        state->IsTickForeign = 1;
+        state->TickWraps = 0;
+        state->TickSince = 0;
     }
     if (++count >= PIT_TICKS_PER_DAY)
     {
         count = 0;
         *midnightFlag = 1;
-        if (state->IsTickForeign) state->TickWraps++;
+        if (state->IsTickForeign)
+            state->TickWraps++;
     }
-    if (state->IsTickForeign) state->TickSince++;
+    if (state->IsTickForeign)
+        state->TickSince++;
     *tickCount = count;
     state->TickWitness = count;
 }
@@ -267,16 +275,23 @@ static inline VOID VddPitTickOwned(PPIT_STATE state, UINT32 count)
  * count as the BIOS's own from here. 0 = nothing happened, outputs untouched. The
  * caller holds whatever serializes it against the tick (the host: g_pit_cs).
  */
-static inline INT VddPitTickTake(PPIT_STATE state, UINT32 count,
-                                  UINT32 *takenTicks, UINT32 *takenWraps, UINT32 *takenSince)
+static inline INT VddPitTickTake(
+    PPIT_STATE state,
+    UINT32 count,
+    UINT32 *takenTicks,
+    UINT32 *takenWraps,
+    UINT32 *takenSince)
 {
-    if (!state->IsTickForeign && count == state->TickWitness) return 0;
+    if (!state->IsTickForeign && count == state->TickWitness)
+        return 0;
     if (!state->IsTickForeign) /* stored just now */
     {
         state->TickWraps = 0;
         state->TickSince = 0;
     }
-    *takenTicks = count; *takenWraps = state->TickWraps; *takenSince = state->TickSince;
+    *takenTicks = count;
+    *takenWraps = state->TickWraps;
+    *takenSince = state->TickSince;
     VddPitTickOwned(state, count);
     return 1;
 }
@@ -303,15 +318,21 @@ static inline UINT32 VddPitCounterEffectiveReload(PCPIT_COUNTER counter)
  */
 static inline UINT32 VddPitCounter2Hz(PCPIT_STATE state)
 { UINT32 reload = state->Counter2.IsBcd ? PitFromBcd(state->Counter2Reload) : state->Counter2Reload;
-  if (!reload) reload = PitWrap(state->Counter2.IsBcd);
+  if (!reload)
+      reload = PitWrap(state->Counter2.IsBcd);
   return PIT_INPUT_HZ / reload; }
 
 /* Build the device descriptor to hand to VddBusAdd(). */
 INT  VddPitInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddPitReset(_In_ PVOID context);
 static inline NTVDD_DEVICE VddPitDevice(_In_ PPIT_STATE state)
-{ NTVDD_DEVICE device; device.Name = PIT_DEVICE_NAME; device.Initialize = VddPitInitialize; device.Reset = VddPitReset;
-  device.Shutdown = 0; device.Context = state; return device; }
+{ NTVDD_DEVICE device;
+device.Name = PIT_DEVICE_NAME;
+device.Initialize = VddPitInitialize;
+device.Reset = VddPitReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 /* THE TICK COUNT IS THE TIME OF DAY. (GH #253) (Importance = 2):
  * 0040:006C is not "ticks since the machine started": POST reads the RTC and sets it

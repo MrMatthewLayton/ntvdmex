@@ -36,9 +36,15 @@ static INT g_Total = 0, g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
-static VOID X86LenTestLengthIs(PCSTR description, PCBYTE bytes, UINT count, INT isDefault32, UINT expected)
+static VOID X86LenTestLengthIs(
+    PCSTR description,
+    PCBYTE bytes,
+    UINT count,
+    INT isDefault32,
+    UINT expected)
 {
     UINT actual = X86InstructionLength(bytes, 0, count, isDefault32);
+
     if (actual == expected)
     {
         g_Total++;

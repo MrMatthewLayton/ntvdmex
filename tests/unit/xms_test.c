@@ -80,7 +80,8 @@ static PVOID XmsTestAllocate(PVOID context, DWORD kilobytes)
 
 static VOID XmsTestFree(PVOID context, PVOID memory, DWORD kilobytes)
 {
-    (VOID)context; (VOID)kilobytes;
+    (VOID)context;
+    (VOID)kilobytes;
     free(memory);
 }
 
@@ -165,9 +166,11 @@ INT main(VOID)
         memcpy(sourceBytes, message, XMS_TEST_MESSAGE_SIZE);
 
         /* conv 1000:0010  ->  handle 1 offset 0 */
-        move.Length = XMS_TEST_MESSAGE_SIZE; move.SourceHandle = DOS_XMS_CONVENTIONAL_HANDLE;
+        move.Length = XMS_TEST_MESSAGE_SIZE;
+        move.SourceHandle = DOS_XMS_CONVENTIONAL_HANDLE;
         move.SourceOffset = XmsTestFarPointer(XMS_TEST_SOURCE_SEGMENT, XMS_TEST_SOURCE_OFFSET);
-        move.DestinationHandle = firstHandle; move.DestinationOffset = 0;
+        move.DestinationHandle = firstHandle;
+        move.DestinationOffset = 0;
         succeeded = DosXmsMove(&state, conventional, &move, &errorCode);
         XmsTestCheck(succeeded, "fn0B: move conv -> EMB");
         XmsTestCheck(memcmp(state.Handles[firstHandle - DOS_XMS_FIRST_HANDLE].Memory, message,
@@ -176,7 +179,9 @@ INT main(VOID)
 
         /* handle 1 offset 0  ->  conv 2000:0000 */
         memset(conventional, 0, sizeof conventional);
-        move.Length = XMS_TEST_MESSAGE_SIZE; move.SourceHandle = firstHandle; move.SourceOffset = 0;
+        move.Length = XMS_TEST_MESSAGE_SIZE;
+        move.SourceHandle = firstHandle;
+        move.SourceOffset = 0;
         move.DestinationHandle = DOS_XMS_CONVENTIONAL_HANDLE;
         move.DestinationOffset = XmsTestFarPointer(XMS_TEST_DESTINATION_SEGMENT,
                                                    XMS_TEST_DESTINATION_OFFSET);
@@ -191,7 +196,9 @@ INT main(VOID)
     /* T7: Move EMB -> EMB ------------------------------------------------- */
     {
         DOS_XMS_MOVE move;
-        move.Length = XMS_TEST_MESSAGE_SIZE; move.SourceHandle = firstHandle; move.SourceOffset = 0;
+        move.Length = XMS_TEST_MESSAGE_SIZE;
+        move.SourceHandle = firstHandle;
+        move.SourceOffset = 0;
         move.DestinationHandle = secondHandle;
         move.DestinationOffset = XMS_TEST_EMB_MIDDLE;   /* into the middle of secondHandle */
         succeeded = DosXmsMove(&state, NULL, &move, &errorCode);
@@ -209,28 +216,37 @@ INT main(VOID)
         /* s84: an offset near 4 GB used to WRAP past the bounds check and a conventional
          * endpoint had no ceiling -- both reached host memory outside the guest's.
          */
-        move.Length = XMS_TEST_WRAP_LENGTH; move.SourceHandle = firstHandle;
+        move.Length = XMS_TEST_WRAP_LENGTH;
+        move.SourceHandle = firstHandle;
         move.SourceOffset = XMS_TEST_WRAPPING_OFFSET;
-        move.DestinationHandle = secondHandle; move.DestinationOffset = 0;
+        move.DestinationHandle = secondHandle;
+        move.DestinationOffset = 0;
         XmsTestCheck(!DosXmsMove(&state, NULL, &move, &errorCode)
                      && errorCode == DOS_XMS_ERROR_INVALID_SOURCE_OFFSET,
                      "fn0B: 32-bit wrap of src offset refused (A4)");
-        move.SourceOffset = 0; move.DestinationOffset = XMS_TEST_WRAPPING_OFFSET;
+        move.SourceOffset = 0;
+        move.DestinationOffset = XMS_TEST_WRAPPING_OFFSET;
         XmsTestCheck(!DosXmsMove(&state, NULL, &move, &errorCode)
                      && errorCode == DOS_XMS_ERROR_INVALID_DESTINATION_OFFSET,
                      "fn0B: 32-bit wrap of dst offset refused (A6)");
-        move.Length = XMS_TEST_PAST_HMA_LENGTH; move.SourceHandle = DOS_XMS_CONVENTIONAL_HANDLE;
+        move.Length = XMS_TEST_PAST_HMA_LENGTH;
+        move.SourceHandle = DOS_XMS_CONVENTIONAL_HANDLE;
         move.SourceOffset = XMS_TEST_LAST_FAR_SEGMENT | XMS_TEST_LAST_FAR_OFFSET;  /* FFFF:FFF0 */
-        move.DestinationHandle = secondHandle; move.DestinationOffset = 0;
+        move.DestinationHandle = secondHandle;
+        move.DestinationOffset = 0;
         XmsTestCheck(!DosXmsMove(&state, NULL, &move, &errorCode)
                      && errorCode == DOS_XMS_ERROR_INVALID_SOURCE_OFFSET,
                      "fn0B: conventional source past FFFF:FFFF refused");
-        move.Length = XMS_TEST_ODD_LENGTH; move.SourceHandle = firstHandle; move.SourceOffset = 0;
-        move.DestinationHandle = secondHandle; move.DestinationOffset = 0;
+        move.Length = XMS_TEST_ODD_LENGTH;
+        move.SourceHandle = firstHandle;
+        move.SourceOffset = 0;
+        move.DestinationHandle = secondHandle;
+        move.DestinationOffset = 0;
         XmsTestCheck(!DosXmsMove(&state, NULL, &move, &errorCode)
                      && errorCode == DOS_XMS_ERROR_INVALID_LENGTH,
                      "fn0B: odd length rejected (A7)");
-        move.Length = XMS_TEST_MESSAGE_SIZE; move.SourceHandle = XMS_TEST_UNKNOWN_HANDLE;
+        move.Length = XMS_TEST_MESSAGE_SIZE;
+        move.SourceHandle = XMS_TEST_UNKNOWN_HANDLE;
         XmsTestCheck(!DosXmsMove(&state, NULL, &move, &errorCode)
                      && errorCode == DOS_XMS_ERROR_INVALID_SOURCE_HANDLE,
                      "fn0B: bad source handle (A3)");
@@ -240,7 +256,9 @@ INT main(VOID)
         XmsTestCheck(!DosXmsMove(&state, NULL, &move, &errorCode)
                      && errorCode == DOS_XMS_ERROR_INVALID_SOURCE_OFFSET,
                      "fn0B: source offset past end (A4)");
-        move.Length = 0; move.SourceHandle = firstHandle; move.SourceOffset = 0;
+        move.Length = 0;
+        move.SourceHandle = firstHandle;
+        move.SourceOffset = 0;
         XmsTestCheck(DosXmsMove(&state, NULL, &move, &errorCode),
                      "fn0B: zero-length move is a no-op (ok)");
     }
@@ -266,7 +284,8 @@ INT main(VOID)
         PBYTE memory = (PBYTE)state.Handles[firstHandle - DOS_XMS_FIRST_HANDLE].Memory;
         PDOS_XMS_HANDLE firstEntry = &state.Handles[firstHandle - DOS_XMS_FIRST_HANDLE];
         /* mark first+last byte, then grow 64 -> 128 KB */
-        memory[0] = XMS_TEST_FIRST_MARK; memory[lastByte] = XMS_TEST_LAST_MARK;
+        memory[0] = XMS_TEST_FIRST_MARK;
+        memory[lastByte] = XMS_TEST_LAST_MARK;
         succeeded = DosXmsReallocate(&state, firstHandle, XMS_TEST_GROWN_KB, &errorCode);
         XmsTestCheck(succeeded && firstEntry->SizeKb == XMS_TEST_GROWN_KB,
                      "fn0F: grow 64->128KB");
@@ -301,7 +320,8 @@ INT main(VOID)
         for (attempt = 0; attempt < DOS_XMS_MAX_HANDLES + XMS_TEST_EXTRA_ATTEMPTS; ++attempt)
         {
             WORD handle;
-            if (DosXmsAllocate(&state, 0, &handle, &errorCode)) ++allocatedCount;
+            if (DosXmsAllocate(&state, 0, &handle, &errorCode))
+                ++allocatedCount;
             else
             {
                 XmsTestCheck(errorCode == DOS_XMS_ERROR_NO_HANDLES,

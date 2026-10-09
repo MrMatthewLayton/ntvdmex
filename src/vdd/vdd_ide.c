@@ -17,7 +17,9 @@
 VOID VddIdePortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 {
     PIDE_STATE state = (PIDE_STATE)context;
-    (VOID)port; (VOID)width;
+
+    (VOID)port;
+    (VOID)width;
     state->PortReads++;
     /* Nothing drives the data lines: DD7 is pulled down (ATA-3 Table 2 note 3) and
      * DD6:0 are answered 0 by choice -- vdd_ide.h. BSY therefore reads CLEAR on
@@ -30,6 +32,7 @@ VOID VddIdePortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 VOID VddIdePortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
     PIDE_STATE state = (PIDE_STATE)context;
+
     (VOID)width;
     state->PortWrites++;
     /* No drive latches anything -- including SRST/nIEN at 3F6h/376h, which are
@@ -46,6 +49,7 @@ VOID VddIdePortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 VOID VddIdeReset(PVOID context)
 {
     PIDE_STATE state = (PIDE_STATE)context;
+
     state->PortReads = state->PortWrites = state->Commands = 0;
     state->LastCommand = 0;
 }
@@ -53,12 +57,17 @@ VOID VddIdeReset(PVOID context)
 INT VddIdeInitialize(PVDD_BUS bus, PVOID context)
 {
     PIDE_STATE state = (PIDE_STATE)context;
+
     state->Bus = bus;
     VddIdeReset(state);
     /* [WARNING]: 3F7h IS NOT CLAIMED HERE -- the FDC owns it (DIR bit 7). See vdd_ide.h. */
-    if (VddClaimPorts(bus, IDE_PRIMARY_COMMAND, IDE_PRIMARY_COMMAND + IDE_COMMAND_REGISTER, VddIdePortIn, VddIdePortOut, state)) return IDE_FAILED;
-    if (VddClaimPorts(bus, IDE_PRIMARY_CONTROL, IDE_PRIMARY_CONTROL,     VddIdePortIn, VddIdePortOut, state)) return IDE_FAILED;
-    if (VddClaimPorts(bus, IDE_SECONDARY_COMMAND, IDE_SECONDARY_COMMAND + IDE_COMMAND_REGISTER, VddIdePortIn, VddIdePortOut, state)) return IDE_FAILED;
-    if (VddClaimPorts(bus, IDE_SECONDARY_CONTROL, IDE_SECONDARY_CONTROL + IDE_DRIVE_ADDRESS, VddIdePortIn, VddIdePortOut, state)) return IDE_FAILED;
+    if (VddClaimPorts(bus, IDE_PRIMARY_COMMAND, IDE_PRIMARY_COMMAND + IDE_COMMAND_REGISTER, VddIdePortIn, VddIdePortOut, state))
+        return IDE_FAILED;
+    if (VddClaimPorts(bus, IDE_PRIMARY_CONTROL, IDE_PRIMARY_CONTROL,     VddIdePortIn, VddIdePortOut, state))
+        return IDE_FAILED;
+    if (VddClaimPorts(bus, IDE_SECONDARY_COMMAND, IDE_SECONDARY_COMMAND + IDE_COMMAND_REGISTER, VddIdePortIn, VddIdePortOut, state))
+        return IDE_FAILED;
+    if (VddClaimPorts(bus, IDE_SECONDARY_CONTROL, IDE_SECONDARY_CONTROL + IDE_DRIVE_ADDRESS, VddIdePortIn, VddIdePortOut, state))
+        return IDE_FAILED;
     return IDE_OK;
 }

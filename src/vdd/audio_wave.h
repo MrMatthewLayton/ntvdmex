@@ -81,7 +81,8 @@ typedef struct _AUDIO_WAVE
     PVOID WaveOut;                      /* HWAVEOUT, opaque here */
     PVOID MidiOut;                      /* HMIDIOUT, opaque here */
     UINT32  SampleHz;
-    PAUDIO_WAVE_FILL_ROUTINE Fill; PVOID Context;
+    PAUDIO_WAVE_FILL_ROUTINE Fill;
+    PVOID Context;
     INT       IsSilent;                 /* 1 = no device; pump but discard */
     INT      IsForcedSilent;  /* s90 #132: safe mode -- never open a device; the pump still runs */
     UINT32  Underruns;
@@ -147,7 +148,11 @@ typedef const AUDIO_WAVE *PCAUDIO_WAVE;
 /* Start the audio pump. Returns 0 on success, 1 if it fell back to silent pumping
  * (still a success as far as the guest is concerned).
  */
-INT  AudioWaveStart(_Inout_ PAUDIO_WAVE wave, _In_ UINT32 sampleHz, _In_ PAUDIO_WAVE_FILL_ROUTINE fill, _In_opt_ PVOID context);
+INT  AudioWaveStart(
+    _Inout_ PAUDIO_WAVE wave,
+    _In_ UINT32 sampleHz,
+    _In_ PAUDIO_WAVE_FILL_ROUTINE fill,
+    _In_opt_ PVOID context);
 VOID AudioWaveStop(_Inout_ PAUDIO_WAVE wave);
 
 /* Send one packed MIDI short message (status | d1<<8 | d2<<16) to the host synth.
@@ -160,7 +165,10 @@ VOID AudioWaveMidi(_In_ PAUDIO_WAVE wave, _In_ UINT32 message);
  * the driver is dropped and counted (SysExDropped) rather than waited for, because
  * this runs on the exec thread inside a port trap.
  */
-VOID AudioWaveMidiLong(_Inout_ PAUDIO_WAVE wave, _In_reads_(length) const BYTE *message, _In_ UINT32 length);
+VOID AudioWaveMidiLong(
+    _Inout_ PAUDIO_WAVE wave,
+    _In_reads_(length) const BYTE *message,
+    _In_ UINT32 length);
 /* #214: silence the host synth -- sustain up, all sound/notes off, controllers reset on
  * all 16 channels, then midiOutReset. Called whenever a program is torn down.
  */

@@ -41,7 +41,9 @@ static INT g_Total = 0, g_Failures = 0;
 static VOID RmcsTestFillPattern(PBYTE bytes, UINT count)
 {
     UINT index;
-    for (index = 0; index < count; ++index) bytes[index] = (BYTE)(0x11 + index * 7);
+
+    for (index = 0; index < count; ++index)
+        bytes[index] = (BYTE)(0x11 + index * 7);
 }
 
 INT main(VOID)
@@ -57,7 +59,9 @@ INT main(VOID)
           && RMCS_SS == 0x30, "FLAGS ES DS FS GS IP CS SP SS at 20..30");
 
     /* ---- read: every field, full width, little-endian, any alignment ---- */
-    { BYTE buffer[RMCS_SIZE + 1]; RMCS_REGS registers; PBYTE record = buffer + 1;   /* odd address */
+    { BYTE buffer[RMCS_SIZE + 1];
+    RMCS_REGS registers;
+    PBYTE record = buffer + 1;   /* odd address */
       RmcsTestFillPattern(buffer, sizeof buffer);
       RmcsRead(record, &registers);
       CHECK(registers.Edi == (UINT32)(record[0] | record[1] << 8 | record[2] << 16 | (UINT32)record[3] << 24), "EDI read as a full dword");
@@ -72,11 +76,22 @@ INT main(VOID)
       CHECK(registers.Flags == (WORD)(record[0x20] | record[0x21] << 8), "FLAGS from +20"); }
 
     /* ---- write: every output, and nothing that is not one ---- */
-    { BYTE record[RMCS_SIZE], before[RMCS_SIZE]; RMCS_REGS registers;
-      RmcsTestFillPattern(record, sizeof record); memcpy(before, record, sizeof record);
-      registers.Edi = 0xD1D2D3D4u; registers.Esi = 0x51525354u; registers.Ebp = 0xB1B2B3B4u; registers.Ebx = 0x0B0C0D0Eu;
-      registers.Edx = 0xDDCCBBAAu; registers.Ecx = 0xC0C1C2C3u; registers.Eax = 0xA0A1A2A3u;
-      registers.Flags = 0x0247; registers.Es = 0xE5E5; registers.Ds = 0xD5D5; registers.Fs = 0xF5F5; registers.Gs = 0x6565;
+    { BYTE record[RMCS_SIZE], before[RMCS_SIZE];
+    RMCS_REGS registers;
+      RmcsTestFillPattern(record, sizeof record);
+      memcpy(before, record, sizeof record);
+      registers.Edi = 0xD1D2D3D4u;
+      registers.Esi = 0x51525354u;
+      registers.Ebp = 0xB1B2B3B4u;
+      registers.Ebx = 0x0B0C0D0Eu;
+      registers.Edx = 0xDDCCBBAAu;
+      registers.Ecx = 0xC0C1C2C3u;
+      registers.Eax = 0xA0A1A2A3u;
+      registers.Flags = 0x0247;
+      registers.Es = 0xE5E5;
+      registers.Ds = 0xD5D5;
+      registers.Fs = 0xF5F5;
+      registers.Gs = 0x6565;
       RmcsWrite(record, &registers);
       CHECK(RmcsRead32(record, RMCS_EBP) == 0xB1B2B3B4u, "EBP written back (pre-#247 0300h dropped it)");
       CHECK(RmcsRead16(record, RMCS_ES) == 0xE5E5 && RmcsRead16(record, RMCS_DS) == 0xD5D5,
@@ -90,7 +105,8 @@ INT main(VOID)
       CHECK(memcmp(record + RMCS_IP, before + RMCS_IP, 8) == 0,
             "IP, CS, SP, SS NOT modified -- the spec's rule; the old 0300 retarget wrote CS:IP");
       CHECK(memcmp(record + 0x0C, before + 0x0C, 4) == 0, "the reserved dword at +0C is not touched");
-      { RMCS_REGS readBack; RmcsRead(record, &readBack);
+      { RMCS_REGS readBack;
+      RmcsRead(record, &readBack);
         CHECK(memcmp(&registers, &readBack, sizeof registers) == 0, "write then read is the identity"); } }
 
     /* ---- 0300h routing ---- */

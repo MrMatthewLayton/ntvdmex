@@ -31,7 +31,8 @@
 
 INT WowKeyboardCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
 {
-    if (noteCapacity) note[0] = 0;
+    if (noteCapacity)
+        note[0] = 0;
     switch (frame->Id)
     {
 
@@ -75,6 +76,7 @@ INT WowKeyboardCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         Wow32SetReturn(frame, (DWORD)(WORD)codePage);
         return 1;
     }
+
     case WOWKBD_GETKEYNAMETEXT:
     {
         DWORD keyParameter  = Wow32ArgDword(frame, WOWKBD_GETKEYNAMETEXT_ARG_LPARAM);
@@ -95,8 +97,10 @@ INT WowKeyboardCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         }
         nameLength = GetKeyNameTextA((LONG)keyParameter, keyName, (INT)(bufferSize < sizeof keyName ? bufferSize
                                                                     : sizeof keyName));
-        if (nameLength < 0) nameLength = 0;
-        for (index = 0; index < nameLength && index < (INT)bufferSize - 1; ++index) destination[index] = (BYTE)keyName[index];
+        if (nameLength < 0)
+            nameLength = 0;
+        for (index = 0; index < nameLength && index < (INT)bufferSize - 1; ++index)
+            destination[index] = (BYTE)keyName[index];
         destination[index] = 0;
         WowNotePut(note, noteCapacity, &noteLength, " -> ");
         WowNoteQuoted(note, noteCapacity, &noteLength, keyName);
@@ -111,6 +115,7 @@ INT WowKeyboardCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         Wow32SetReturn(frame, (DWORD)(WORD)scan);
         return 1;
     }
+
     case WOWKBD_MAPVIRTUALKEY:
     {
         WORD code = Wow32ArgWord(frame, WOWKBD_MAPVIRTUALKEY_ARG_CODE);

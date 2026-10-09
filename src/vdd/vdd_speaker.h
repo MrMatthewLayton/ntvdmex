@@ -55,7 +55,12 @@ static inline UINT32 VddSpeakerHz(_In_ PCSPEAKER_STATE state)
 INT  VddSpeakerInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddSpeakerReset(_In_ PVOID context);
 static inline NTVDD_DEVICE VddSpeakerDevice(_In_ PSPEAKER_STATE state)
-{ NTVDD_DEVICE device; device.Name = SPEAKER_DEVICE_NAME; device.Initialize = VddSpeakerInitialize; device.Reset = VddSpeakerReset;
-  device.Shutdown = 0; device.Context = state; return device; }
+{ NTVDD_DEVICE device;
+device.Name = SPEAKER_DEVICE_NAME;
+device.Initialize = VddSpeakerInitialize;
+device.Reset = VddSpeakerReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 #endif /* NTVDMEX_VDD_SPEAKER_H */

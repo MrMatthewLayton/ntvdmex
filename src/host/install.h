@@ -98,8 +98,12 @@ INT InstallNamesNtvdmex(PCSTR current);
 /* The full decision. `isOtherUs`: an INSTALL_OTHER value names an ntvdmhost.exe.
  * `isForce`: /uninstall /force -- remove whatever is there (the message names it).
  */
-INSTALL_ACTION InstallPlanEx(INSTALL_STATE state, INT isWantInstalled, INT hasPrevious,
-                                    INT isOtherUs, INT isForce);
+INSTALL_ACTION InstallPlanEx(
+    INSTALL_STATE state,
+    INT isWantInstalled,
+    INT hasPrevious,
+    INT isOtherUs,
+    INT isForce);
 
 INSTALL_ACTION InstallPlan(INSTALL_STATE state, INT isWantInstalled, INT hasPrevious);
 

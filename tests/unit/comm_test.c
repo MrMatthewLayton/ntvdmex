@@ -51,7 +51,8 @@ static VOID CommTestSink(PVOID context, INT port, BYTE byteValue)
 {
     (VOID)context;
     (VOID)port;
-    if (g_TransmittedCount < CAP) g_Transmitted[g_TransmittedCount++] = byteValue;
+    if (g_TransmittedCount < CAP)
+        g_Transmitted[g_TransmittedCount++] = byteValue;
 }
 
 /* Every IRQ the device raised, by line. The device has no "lower" -- the PIC
@@ -61,7 +62,8 @@ static INT g_IrqCounts[16];
 static VOID CommTestIrqSink(PVOID context, BYTE irq)
 {
     (VOID)context;
-    if (irq < 16) ++g_IrqCounts[irq];
+    if (irq < 16)
+        ++g_IrqCounts[irq];
 }
 
 static BYTE g_PrinterBytes[CAP];
@@ -70,19 +72,22 @@ static VOID CommTestPrinterSink(PVOID context, INT port, BYTE byteValue)
 {
     (VOID)context;
     (VOID)port;
-    if (g_PrinterCount < CAP) g_PrinterBytes[g_PrinterCount++] = byteValue;
+    if (g_PrinterCount < CAP)
+        g_PrinterBytes[g_PrinterCount++] = byteValue;
 }
 
 #define BASE    0x3F8
 static VOID CommTestWrite(WORD port, BYTE byteValue)
 {
     UINT32 value=byteValue;
+
     VddBusIo(&g_Bus,port,1,0,&value);
 }
 
 static BYTE CommTestRead(WORD port)
 {
     UINT32 value=0;
+
     VddBusIo(&g_Bus,port,1,1,&value);
     return (BYTE)value;
 }
@@ -100,16 +105,28 @@ static VOID CommTestInt14(BYTE ah, BYTE al, WORD dx, PNTVDD_REGISTERS registers)
 INT main(VOID)
 {
     NTVDD_REGISTERS registers;
+
     printf("== GH #9: 8250/16550A serial port battery ==\n");
 
     memset(&g_Comm, 0, sizeof g_Comm);
-    g_Comm.Ports[0].BasePort = BASE;   g_Comm.Ports[0].Irq = 4; g_Comm.Ports[0].IsFitted = 1;
-    g_Comm.Ports[1].BasePort = 0x2F8;  g_Comm.Ports[1].Irq = 3; g_Comm.Ports[1].IsFitted = 1;
-    g_Comm.Ports[2].BasePort = 0x3E8;  g_Comm.Ports[2].Irq = 4; g_Comm.Ports[2].IsFitted = 1;   /* COM3 */
-    g_Comm.Ports[3].BasePort = 0x2E8;  g_Comm.Ports[3].Irq = 3; g_Comm.Ports[3].IsFitted = 1;   /* COM4 */
-    g_Comm.Printers[0].BasePort = 0x378;  g_Comm.Printers[0].IsFitted = 1;
-    g_Comm.Sink = CommTestSink; g_Comm.SinkContext = 0;
-    g_Comm.PrinterSink = CommTestPrinterSink; g_Comm.PrinterSinkContext = 0;
+    g_Comm.Ports[0].BasePort = BASE;
+    g_Comm.Ports[0].Irq = 4;
+    g_Comm.Ports[0].IsFitted = 1;
+    g_Comm.Ports[1].BasePort = 0x2F8;
+    g_Comm.Ports[1].Irq = 3;
+    g_Comm.Ports[1].IsFitted = 1;
+    g_Comm.Ports[2].BasePort = 0x3E8;
+    g_Comm.Ports[2].Irq = 4;
+    g_Comm.Ports[2].IsFitted = 1;   /* COM3 */
+    g_Comm.Ports[3].BasePort = 0x2E8;
+    g_Comm.Ports[3].Irq = 3;
+    g_Comm.Ports[3].IsFitted = 1;   /* COM4 */
+    g_Comm.Printers[0].BasePort = 0x378;
+    g_Comm.Printers[0].IsFitted = 1;
+    g_Comm.Sink = CommTestSink;
+    g_Comm.SinkContext = 0;
+    g_Comm.PrinterSink = CommTestPrinterSink;
+    g_Comm.PrinterSinkContext = 0;
     VddBusInitialize(&g_Bus, 0);
     {
         NTVDD_DEVICE device = VddCommDevice(&g_Comm);
@@ -218,7 +235,8 @@ INT main(VOID)
     CommTestRead(BASE + COMM_RBR);
 
     /* ---- the FIFO control register resets the receiver --------------------- */
-    CommTestWrite(BASE + COMM_RBR, '1'); CommTestWrite(BASE + COMM_RBR, '2');
+    CommTestWrite(BASE + COMM_RBR, '1');
+    CommTestWrite(BASE + COMM_RBR, '2');
     CHECK((CommTestRead(BASE + COMM_LSR) & COMM_LSR_DATA_READY) == COMM_LSR_DATA_READY, "two loopback bytes are waiting");
     CommTestWrite(BASE + COMM_IIR, 0x02);                     /* FCR: clear receive FIFO */
     CHECK((CommTestRead(BASE + COMM_LSR) & COMM_LSR_DATA_READY) == 0, "FCR bit 1 clears the receive FIFO");
@@ -320,19 +338,24 @@ INT main(VOID)
     CommTestWrite(BASE + COMM_MCR, COMM_MCR_OUT2);
     CommTestWrite(BASE + COMM_IER, COMM_IER_RECEIVED_DATA);
     CommTestWrite(BASE + COMM_IIR, 0x41);                     /* FCR: FIFO on, trigger = 4 */
-    VddCommReceive(&g_Comm, 0, '1'); VddCommReceive(&g_Comm, 0, '2');
+    VddCommReceive(&g_Comm, 0, '1');
+    VddCommReceive(&g_Comm, 0, '2');
     CHECK(CommTestRead(BASE + COMM_IIR) == 0xCC, "#245: 2 bytes below a trigger of 4 -> CHARACTER "
                                        "TIMEOUT (IIR 0xCC with the FIFO bits)");
-    VddCommReceive(&g_Comm, 0, '3'); VddCommReceive(&g_Comm, 0, '4');
+    VddCommReceive(&g_Comm, 0, '3');
+    VddCommReceive(&g_Comm, 0, '4');
     CHECK(CommTestRead(BASE + COMM_IIR) == 0xC4, "...4 bytes reach the trigger -> RDA (0xC4)");
     CHECK(CommTestRead(BASE + COMM_RBR) == '1', "...read in order");
     CHECK(CommTestRead(BASE + COMM_IIR) == 0xCC, "...3 left, below the trigger again -> timeout");
-    CommTestRead(BASE + COMM_RBR); CommTestRead(BASE + COMM_RBR); CommTestRead(BASE + COMM_RBR);
+    CommTestRead(BASE + COMM_RBR);
+    CommTestRead(BASE + COMM_RBR);
+    CommTestRead(BASE + COMM_RBR);
     CHECK((CommTestRead(BASE + COMM_IIR) & 0x0F) == 0x01, "...drained: nothing owed");
     CommTestWrite(BASE + COMM_IIR, 0xC1);                     /* trigger = 14 */
     {
         INT index;
-        for (index = 0; index < 20; ++index) VddCommReceive(&g_Comm, 0, (BYTE)('a' + index));
+        for (index = 0; index < 20; ++index)
+            VddCommReceive(&g_Comm, 0, (BYTE)('a' + index));
     }
     CHECK(CommTestRead(BASE + COMM_IIR) == 0xC4, "20 queued, 16 in the FIFO >= 14 -> RDA");
     CHECK((CommTestRead(BASE + COMM_LSR) & COMM_LSR_OVERRUN) == 0,
@@ -400,16 +423,25 @@ INT main(VOID)
     CHECK((registers.Eax & 0xFFFF) != 0x8000, "a fitted COM3 answers INT 14h DX=2");
     CommTestInt14(0x03, 0, 3, &registers);
     CHECK((registers.Eax & 0xFFFF) != 0x8000, "a fitted COM4 answers INT 14h DX=3");
-    CommTestWrite(0x3E8 + COMM_IER, 0); CommTestWrite(0x3E8 + COMM_MCR, 0);
-    CommTestWrite(0x2E8 + COMM_IER, 0); CommTestWrite(0x2E8 + COMM_MCR, 0);
+    CommTestWrite(0x3E8 + COMM_IER, 0);
+    CommTestWrite(0x3E8 + COMM_MCR, 0);
+    CommTestWrite(0x2E8 + COMM_IER, 0);
+    CommTestWrite(0x2E8 + COMM_MCR, 0);
 
     /* A slot that is NOT fitted -- the host's default for COM3/COM4 -- must be
      * absent on every route at once: no registers, no INT 14h, not counted.
      */
-    { static VDD_BUS otherBus; static COMM_STATE otherComm; NTVDD_REGISTERS otherRegisters; UINT32 value = 0;
+    { static VDD_BUS otherBus;
+    static COMM_STATE otherComm;
+    NTVDD_REGISTERS otherRegisters;
+    UINT32 value = 0;
       memset(&otherComm, 0, sizeof otherComm);
-      otherComm.Ports[0].BasePort = BASE;  otherComm.Ports[0].Irq = 4; otherComm.Ports[0].IsFitted = 1;
-      otherComm.Ports[1].BasePort = 0x2F8; otherComm.Ports[1].Irq = 3; otherComm.Ports[1].IsFitted = 1;
+      otherComm.Ports[0].BasePort = BASE;
+      otherComm.Ports[0].Irq = 4;
+      otherComm.Ports[0].IsFitted = 1;
+      otherComm.Ports[1].BasePort = 0x2F8;
+      otherComm.Ports[1].Irq = 3;
+      otherComm.Ports[1].IsFitted = 1;
       VddBusInitialize(&otherBus, 0);
       {
           NTVDD_DEVICE device = VddCommDevice(&otherComm);
@@ -419,7 +451,9 @@ INT main(VOID)
             "an unfitted COM3 leaves 3E8h unclaimed (the guest reads the bus float)");
       CHECK(VddCommIsFitted(&otherComm, 2) == 0 && VddCommIsFitted(&otherComm, 3) == 0,
             "...and vdd_comm_fitted says so, which is what INT 11h and the BDA read");
-      memset(&otherRegisters, 0, sizeof otherRegisters); otherRegisters.Eax = 0x0300; otherRegisters.Edx = 3;
+      memset(&otherRegisters, 0, sizeof otherRegisters);
+      otherRegisters.Eax = 0x0300;
+      otherRegisters.Edx = 3;
       VddBusDeliverInterrupt(&otherBus, 0x14, &otherRegisters);
       CHECK((otherRegisters.Eax & 0xFFFF) == 0x8000, "a port that is NOT fitted reports TIMEOUT"); }
 
@@ -439,7 +473,8 @@ INT main(VOID)
     CHECK(g_PrinterCount == 1, "holding STROBE high does not print it again");
     wr8(0x37A, 0);
     CHECK(g_PrinterCount == 1, "the falling edge does not print either");
-    wr8(0x378, 'Q'); wr8(0x37A, LPT_CONTROL_STROBE);
+    wr8(0x378, 'Q');
+    wr8(0x37A, LPT_CONTROL_STROBE);
     CHECK(g_PrinterCount == 2 && g_PrinterBytes[1] == 'Q', "the next latch+strobe prints the next byte");
 
     /* [CAUTION]: In a dialect scripts/offvm.sh parses. This line used to read "N/M checks

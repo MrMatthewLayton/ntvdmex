@@ -86,11 +86,16 @@ static VOID AudioRecorderPut16(BYTE *bytes, UINT32 value)
 }
 
 /* The canonical 44-byte PCM header; sizes are patched when the recording stops. */
-static VOID AudioRecorderHeader(BYTE header[AUDIO_RECORDER_HEADER_BYTES], UINT32 sampleHz, UINT32 dataBytes)
+static VOID AudioRecorderHeader(
+    BYTE header[AUDIO_RECORDER_HEADER_BYTES],
+    UINT32 sampleHz,
+    UINT32 dataBytes)
 {
     static const CHAR tag[] = "RIFF....WAVEfmt ";
     INT byteIndex;
-    for (byteIndex = 0; byteIndex < AUDIO_RECORDER_TAG_BYTES; ++byteIndex) header[byteIndex] = (BYTE)tag[byteIndex];
+
+    for (byteIndex = 0; byteIndex < AUDIO_RECORDER_TAG_BYTES; ++byteIndex)
+        header[byteIndex] = (BYTE)tag[byteIndex];
     AudioRecorderPut32(header + AUDIO_RECORDER_RIFF_SIZE_OFFSET, AUDIO_RECORDER_RIFF_SIZE_BASE + dataBytes);
     AudioRecorderPut32(header + AUDIO_RECORDER_FMT_SIZE_OFFSET, AUDIO_RECORDER_FMT_CHUNK_BYTES);     /* fmt chunk size */
     AudioRecorderPut16(header + AUDIO_RECORDER_FORMAT_OFFSET, AUDIO_RECORDER_FORMAT_PCM);      /* PCM */
@@ -99,7 +104,10 @@ static VOID AudioRecorderHeader(BYTE header[AUDIO_RECORDER_HEADER_BYTES], UINT32
     AudioRecorderPut32(header + AUDIO_RECORDER_BYTE_RATE_OFFSET, sampleHz * AUDIO_RECORDER_FRAME_BYTES);              /* bytes per second */
     AudioRecorderPut16(header + AUDIO_RECORDER_BLOCK_ALIGN_OFFSET, AUDIO_RECORDER_FRAME_BYTES);      /* block align: L+R */
     AudioRecorderPut16(header + AUDIO_RECORDER_BITS_OFFSET, AUDIO_RECORDER_BITS_PER_SAMPLE);     /* bits per sample */
-    header[36] = 'd'; header[37] = 'a'; header[38] = 't'; header[39] = 'a';
+    header[36] = 'd';
+    header[37] = 'a';
+    header[38] = 't';
+    header[39] = 'a';
     AudioRecorderPut32(header + AUDIO_RECORDER_DATA_SIZE_OFFSET, dataBytes);
 }
 
@@ -110,7 +118,8 @@ static VOID AudioRecorderDrain(PAUDIO_RECORDER recorder)
     {
         LONG tail = recorder->Tail, head = recorder->Head;
         DWORD count, written = 0;
-        if (tail == head) return;
+        if (tail == head)
+            return;
         count = (DWORD)((head > tail) ? (head - tail) : ((LONG)AUDIO_RECORDER_RING - tail));   /* contiguous run */
         WriteFile(recorder->File, &recorder->Ring[tail], count * sizeof(INT16), &written, NULL);
         recorder->DataBytes += written;
@@ -121,6 +130,7 @@ static VOID AudioRecorderDrain(PAUDIO_RECORDER recorder)
 static DWORD WINAPI AudioRecorderWriter(LPVOID parameter)
 {
     PAUDIO_RECORDER recorder = (PAUDIO_RECORDER)parameter;
+
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     while (!recorder->IsStopping)
     {
@@ -140,8 +150,11 @@ static INT AudioRecorderIsActive(VOID)
 static INT AudioRecorderStart(PCSTR path, UINT32 sampleHz)
 {
     PAUDIO_RECORDER recorder = &g_AudioRecorder;
-    BYTE header[AUDIO_RECORDER_HEADER_BYTES]; DWORD written = 0;
-    if (recorder->IsActive || recorder->File) return -1;
+    BYTE header[AUDIO_RECORDER_HEADER_BYTES];
+    DWORD written = 0;
+
+    if (recorder->IsActive || recorder->File)
+        return -1;
     recorder->File = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
                           FILE_ATTRIBUTE_NORMAL, NULL);
     if (recorder->File == INVALID_HANDLE_VALUE)
@@ -150,7 +163,10 @@ static INT AudioRecorderStart(PCSTR path, UINT32 sampleHz)
         return -1;
     }
     recorder->SampleHz = sampleHz ? sampleHz : AUDIO_RECORDER_DEFAULT_HZ;
-    recorder->Head = recorder->Tail = 0; recorder->DataBytes = 0; recorder->Dropped = 0; recorder->IsStopping = 0;
+    recorder->Head = recorder->Tail = 0;
+    recorder->DataBytes = 0;
+    recorder->Dropped = 0;
+    recorder->IsStopping = 0;
     AudioRecorderHeader(header, recorder->SampleHz, 0);
     WriteFile(recorder->File, header, sizeof header, &written, NULL);
     recorder->Thread = CreateThread(NULL, 0, AudioRecorderWriter, recorder, 0, NULL);
@@ -170,17 +186,22 @@ static INT AudioRecorderStart(PCSTR path, UINT32 sampleHz)
 static UINT32 AudioRecorderStop(VOID)
 {
     PAUDIO_RECORDER recorder = &g_AudioRecorder;
-    BYTE header[AUDIO_RECORDER_HEADER_BYTES]; DWORD written = 0;
-    if (!recorder->File) return 0;
+    BYTE header[AUDIO_RECORDER_HEADER_BYTES];
+    DWORD written = 0;
+
+    if (!recorder->File)
+        return 0;
     InterlockedExchange(&recorder->IsActive, 0);        /* the audio thread stops feeding */
     InterlockedExchange(&recorder->IsStopping, 1);
     WaitForSingleObject(recorder->Thread, AUDIO_RECORDER_STOP_TIMEOUT_MS);
-    CloseHandle(recorder->Thread); recorder->Thread = 0;
+    CloseHandle(recorder->Thread);
+    recorder->Thread = 0;
     AudioRecorderDrain(recorder);              /* anything fed after the last pass */
     AudioRecorderHeader(header, recorder->SampleHz, recorder->DataBytes);
     SetFilePointer(recorder->File, 0, NULL, FILE_BEGIN);
     WriteFile(recorder->File, header, sizeof header, &written, NULL);
-    CloseHandle(recorder->File); recorder->File = 0;
+    CloseHandle(recorder->File);
+    recorder->File = 0;
     return recorder->DataBytes / AUDIO_RECORDER_FRAME_BYTES;            /* frames (L/R pairs) */
 }
 
@@ -190,15 +211,19 @@ static VOID AudioRecorderFeed(const INT16 *samples, UINT32 count)
     PAUDIO_RECORDER recorder = &g_AudioRecorder;
     UINT32 sampleIndex;
     LONG head, tail, room;
-    if (!recorder->IsActive) return;
-    head = recorder->Head; tail = recorder->Tail;
+
+    if (!recorder->IsActive)
+        return;
+    head = recorder->Head;
+    tail = recorder->Tail;
     room = (LONG)(AUDIO_RECORDER_RING - 1) - ((head - tail) & (LONG)(AUDIO_RECORDER_RING - 1));
     if ((LONG)count > room)
     {
         recorder->Dropped += count;
         return;
     }
-    for (sampleIndex = 0; sampleIndex < count; ++sampleIndex) recorder->Ring[(head + (LONG)sampleIndex) & (AUDIO_RECORDER_RING - 1)] = samples[sampleIndex];
+    for (sampleIndex = 0; sampleIndex < count; ++sampleIndex)
+        recorder->Ring[(head + (LONG)sampleIndex) & (AUDIO_RECORDER_RING - 1)] = samples[sampleIndex];
     InterlockedExchange(&recorder->Head, (LONG)((head + (LONG)count) & (AUDIO_RECORDER_RING - 1)));
 }
 

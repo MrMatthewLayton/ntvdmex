@@ -81,21 +81,32 @@ UINT32 g_PmOwedHistogram[9];
 static VOID PmOwedSample(LONG owed)
 {
     UINT bucket = 0;
-    if      (owed <= 0)  bucket = 0;
-    else if (owed <  4)  bucket = (UINT)owed;          /* 1, 2, 3 exactly */
-    else if (owed <  8)  bucket = 4;
-    else if (owed < 16)  bucket = 5;
-    else if (owed < 32)  bucket = 6;
-    else if (owed < 64)  bucket = 7;
-    else              bucket = 8;
+
+    if      (owed <= 0)
+        bucket = 0;
+    else if (owed <  4)
+        bucket = (UINT)owed;                           /* 1, 2, 3 exactly */
+    else if (owed <  8)
+        bucket = 4;
+    else if (owed < 16)
+        bucket = 5;
+    else if (owed < 32)
+        bucket = 6;
+    else if (owed < 64)
+        bucket = 7;
+    else
+        bucket = 8;
     g_PmOwedHistogram[bucket]++;
 }
 
 VOID Irq0Latch(VOID)
 {
-    if (g_Irq0Pending < IRQ0_PENDING_MAX) InterlockedIncrement(&g_Irq0Pending);
-    if (g_PmTickOwed < PM_TICK_OWED_MAX)  InterlockedIncrement(&g_PmTickOwed);
-    if (g_PmTickOwed > g_PmTickOwedMaximum) g_PmTickOwedMaximum = g_PmTickOwed;
+    if (g_Irq0Pending < IRQ0_PENDING_MAX)
+        InterlockedIncrement(&g_Irq0Pending);
+    if (g_PmTickOwed < PM_TICK_OWED_MAX)
+        InterlockedIncrement(&g_PmTickOwed);
+    if (g_PmTickOwed > g_PmTickOwedMaximum)
+        g_PmTickOwedMaximum = g_PmTickOwed;
 }
 
 /* Consume one owed tick. Returns 0 if none is owed, i.e. "the client is up to date --
@@ -103,7 +114,8 @@ VOID Irq0Latch(VOID)
  */
 INT PmTickTake(VOID)
 {
-    if (g_PmTickOwed <= 0) return 0;
+    if (g_PmTickOwed <= 0)
+        return 0;
     InterlockedDecrement(&g_PmTickOwed);
     return 1;
 }
@@ -125,16 +137,22 @@ VOID TickDeliveredNote(VOID)
 {
     static LARGE_INTEGER frequency, prev;
     LARGE_INTEGER now;
-    if (!frequency.QuadPart && !QueryPerformanceFrequency(&frequency)) return;
-    if (!QueryPerformanceCounter(&now)) return;
+
+    if (!frequency.QuadPart && !QueryPerformanceFrequency(&frequency))
+        return;
+    if (!QueryPerformanceCounter(&now))
+        return;
     if (prev.QuadPart)
     {
         LONGLONG microseconds = ((now.QuadPart - prev.QuadPart) * MICROSECONDS_PER_SECOND) / frequency.QuadPart;
         UINT bucket = 0;
-        while (bucket < 11 && microseconds >= (LONGLONG)500 << bucket) ++bucket;      /* 0.5,1,2,4..512 ms */
+        while (bucket < 11 && microseconds >= (LONGLONG)500 << bucket)
+            ++bucket;                                                                 /* 0.5,1,2,4..512 ms */
         g_TickGap[bucket]++;
-        if (microseconds > (LONGLONG)g_TickGapMaximumMicroseconds) g_TickGapMaximumMicroseconds = (DWORD)microseconds;
-        if (microseconds > 11600) g_TickGapOver++;   /* longer than one 128-byte block at 11111 Hz */
+        if (microseconds > (LONGLONG)g_TickGapMaximumMicroseconds)
+            g_TickGapMaximumMicroseconds = (DWORD)microseconds;
+        if (microseconds > 11600)
+            g_TickGapOver++;                         /* longer than one 128-byte block at 11111 Hz */
     }
     prev = now;
 }
@@ -212,11 +230,15 @@ static DWORD          g_Irq0PrRaise, g_Irq0PrAttempts, g_Irq0PrNie, g_Irq0PrYiel
 VOID Irq0DeliveredNote(VOID)
 {
     LARGE_INTEGER now;
+
     QueryPerformanceCounter(&now);
-    if (!g_Irq0Start) { g_Irq0Start = now.QuadPart; g_Irq0TimePrevious = now.QuadPart;
+    if (!g_Irq0Start) { g_Irq0Start = now.QuadPart;
+    g_Irq0TimePrevious = now.QuadPart;
                       g_Irq0IoPrevious = g_EventIo;
-                      g_Irq0PrRaise = g_Irq0RaiseCount; g_Irq0PrAttempts   = g_Irq0AttemptsCount;
-                      g_Irq0PrNie   = g_Irq0NieCount;   g_Irq0PrYield = g_Irq0YieldCount;
+                      g_Irq0PrRaise = g_Irq0RaiseCount;
+                      g_Irq0PrAttempts   = g_Irq0AttemptsCount;
+                      g_Irq0PrNie   = g_Irq0NieCount;
+                      g_Irq0PrYield = g_Irq0YieldCount;
                       return; }
     {   DWORD seconds = QpcMicroseconds(now.QuadPart - g_Irq0Start) / MICROSECONDS_PER_SECOND_U;
         DWORD gus = QpcMicroseconds(now.QuadPart - g_Irq0TimePrevious);
@@ -235,35 +257,53 @@ VOID Irq0DeliveredNote(VOID)
         DWORD perMicroseconds = (DWORD)(((UINT64)VddPitEffectiveReload(&g_Pit) * MICROSECONDS_PER_SECOND_ULL)
                                / PIT_INPUT_HZ);
         UINT bucket = 0;
-        if (seconds < IRQ0TL_SECS) g_Irq0TimeLast[seconds]++;
-        while (bucket < 7 && gapMilliseconds >= (1u << bucket)) ++bucket;     /* 0:<1ms 1:1 2:2 3:4 ... 7:64+ */
+        if (seconds < IRQ0TL_SECS)
+            g_Irq0TimeLast[seconds]++;
+        while (bucket < 7 && gapMilliseconds >= (1u << bucket))
+            ++bucket;                                                         /* 0:<1ms 1:1 2:2 3:4 ... 7:64+ */
         g_Irq0GapHistogram[bucket]++;
         ++g_Irq0GapCount;
         if (perMicroseconds && gus >= 2u * perMicroseconds)          /* the guest missed a whole tick */
         {
-            ++g_Irq0AnomalyCount; g_Irq0AnomalyMicroseconds += gus; g_Irq0AnomalyIo += ioDelta;
-            g_Irq0AnomalyRaise += raiseDelta; g_Irq0AnomalyAttempts += attemptsDelta;
-            g_Irq0AnomalyNie   += nieCountDelta;   g_Irq0AnomalyYield += yieldDelta;
+            ++g_Irq0AnomalyCount;
+            g_Irq0AnomalyMicroseconds += gus;
+            g_Irq0AnomalyIo += ioDelta;
+            g_Irq0AnomalyRaise += raiseDelta;
+            g_Irq0AnomalyAttempts += attemptsDelta;
+            g_Irq0AnomalyNie   += nieCountDelta;
+            g_Irq0AnomalyYield += yieldDelta;
             /* A or B, by whether the ticks were ever generated. See the essay. */
-            if (raiseDelta >= 2u) ++g_Irq0AnomalyDelete; else ++g_Irq0AnomalyGeneration;
+            if (raiseDelta >= 2u)
+                ++g_Irq0AnomalyDelete;
+            else
+                ++g_Irq0AnomalyGeneration;
         }
         else
         {
-            ++g_Irq0NormalCount; g_Irq0NormalMicroseconds += gus; g_Irq0NormalIo += ioDelta;
+            ++g_Irq0NormalCount;
+            g_Irq0NormalMicroseconds += gus;
+            g_Irq0NormalIo += ioDelta;
         }
         if (gapMilliseconds > g_Irq0WorstGapMs)
         {
-            g_Irq0WorstGapMs = gapMilliseconds; g_Irq0WorstGapIo = ioDelta;
-            g_Irq0WorstCs = g_Irq0NoteCs; g_Irq0WorstIp = g_Irq0NoteIp;
-            g_Irq0WorstRaise = raiseDelta; g_Irq0WorstAttempts   = attemptsDelta;
-            g_Irq0WorstNie   = nieCountDelta;   g_Irq0WorstYield = yieldDelta;
+            g_Irq0WorstGapMs = gapMilliseconds;
+            g_Irq0WorstGapIo = ioDelta;
+            g_Irq0WorstCs = g_Irq0NoteCs;
+            g_Irq0WorstIp = g_Irq0NoteIp;
+            g_Irq0WorstRaise = raiseDelta;
+            g_Irq0WorstAttempts   = attemptsDelta;
+            g_Irq0WorstNie   = nieCountDelta;
+            g_Irq0WorstYield = yieldDelta;
             g_Irq0WorstPerMicroseconds = perMicroseconds;
         }
-        if (gapMilliseconds > g_Irq0GapMaximumMs) g_Irq0GapMaximumMs = gapMilliseconds;
+        if (gapMilliseconds > g_Irq0GapMaximumMs)
+            g_Irq0GapMaximumMs = gapMilliseconds;
         g_Irq0TimePrevious = now.QuadPart;
         g_Irq0IoPrevious = g_EventIo;
-        g_Irq0PrRaise = g_Irq0RaiseCount; g_Irq0PrAttempts   = g_Irq0AttemptsCount;
-        g_Irq0PrNie   = g_Irq0NieCount;   g_Irq0PrYield = g_Irq0YieldCount;
+        g_Irq0PrRaise = g_Irq0RaiseCount;
+        g_Irq0PrAttempts   = g_Irq0AttemptsCount;
+        g_Irq0PrNie   = g_Irq0NieCount;
+        g_Irq0PrYield = g_Irq0YieldCount;
     }
 }
 
@@ -340,7 +380,9 @@ static UINT32 g_PitRestartsSeen = 0;
 VOID HostPitResyncCheck(VOID)
 {
     UINT32 restarts = g_Pit.Restarts;             /* monotonic; a stale read only defers us */
-    if (restarts == g_PitRestartsSeen) return;
+
+    if (restarts == g_PitRestartsSeen)
+        return;
     g_PitRestartsSeen = restarts;
     if ((g_Pic.Master.Isr & 1) && !g_Irq0AutoEoi)
     {
@@ -364,8 +406,10 @@ static DWORD g_Irq0LastAttempt = 0;   /* GetTickCount()|1 at the last delivery a
 INT Irq0CanDeliver(VOID)
 {
     DWORD now = GetTickCount() | 1, gap = now - g_Irq0LastAttempt;
+
     g_Irq0LastAttempt = now;
-    if (VddPicCanDeliver(&g_Pic, PIC_IRQ_TIMER)) return 1;
+    if (VddPicCanDeliver(&g_Pic, PIC_IRQ_TIMER))
+        return 1;
     if (g_Pic.Master.Isr & 1)
     {
         DWORD since = g_Irq0IsrSince;
@@ -414,7 +458,8 @@ INT Irq0CanDeliver(VOID)
             if (milliseconds >= (step + 1) * 50u && lines < 8)
             {
                 CHAR buffer[160], *cursor = buffer;
-                step = milliseconds / 50u; ++lines;
+                step = milliseconds / 50u;
+                ++lines;
                 cursor = LogPut(cursor, "IRQ0-ISR-LONG in service ms=");  cursor = LogDecimal(cursor, milliseconds);
                 cursor = LogPut(cursor, " guest cs:ip=0x"); cursor = LogHex(cursor, VDM_REG16(g_TibDebug, VTIB_CS));
                 cursor = LogPut(cursor, ":0x");              cursor = LogHex(cursor, VDM_REG16(g_TibDebug, VTIB_EIP));
@@ -461,7 +506,8 @@ VOID Irq0Ack(VOID)
  */
 INT Irq0PmClaim(VOID)
 {
-    if (!Irq0CanDeliver()) return 0;
+    if (!Irq0CanDeliver())
+        return 0;
     Irq0Ack();
     return 1;
 }
@@ -499,9 +545,11 @@ static UINT64 HostTimeMicrosecondsQpc(VOID)
 {
     static LARGE_INTEGER frequency, base;
     LARGE_INTEGER now;
+
     if (!frequency.QuadPart)
     {
-        if (!QueryPerformanceFrequency(&frequency) || !frequency.QuadPart) return 0;
+        if (!QueryPerformanceFrequency(&frequency) || !frequency.QuadPart)
+            return 0;
         QueryPerformanceCounter(&base);
     }
     QueryPerformanceCounter(&now);
@@ -533,13 +581,15 @@ UINT64 HostTimeMicroseconds(VOID)
     UINT32 low, high;
     UINT64 tsc, microseconds;
     HOST_CLOCK *clock;
+
     /* Per thread through Win32 TLS (this build has no CRT, so no __thread): the slot
      * is allocated once, and each thread's clock on its first call.
      */
     if (g_ClockTls == TLS_OUT_OF_INDEXES)
     {
         DWORD tlsIndex = TlsAlloc();
-        if (tlsIndex == TLS_OUT_OF_INDEXES) return HostTimeMicrosecondsQpc();
+        if (tlsIndex == TLS_OUT_OF_INDEXES)
+            return HostTimeMicrosecondsQpc();
         if (InterlockedCompareExchange((volatile LONG *)&g_ClockTls, (LONG)tlsIndex,
                                        (LONG)TLS_OUT_OF_INDEXES) != (LONG)TLS_OUT_OF_INDEXES)
             TlsFree(tlsIndex);                            /* another thread won the race */
@@ -548,7 +598,8 @@ UINT64 HostTimeMicroseconds(VOID)
     if (!clock)
     {
         clock = (HOST_CLOCK *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *clock);
-        if (!clock) return HostTimeMicrosecondsQpc();
+        if (!clock)
+            return HostTimeMicrosecondsQpc();
         TlsSetValue(g_ClockTls, clock);
     }
     __asm__ __volatile__("rdtsc" : "=a"(low), "=d"(high));
@@ -563,7 +614,8 @@ UINT64 HostTimeMicroseconds(VOID)
             {
                 UINT64 multiplier = (microsecondsDelta << DWORD_SHIFT) / tscDelta;
                 clock->Multiplier = (UINT32)(multiplier > MAXDWORD ? MAXDWORD : multiplier);
-                if (clock->Multiplier) clock->Resync = (TSC_RESYNC_INTERVAL_ULL << DWORD_SHIFT) / clock->Multiplier;   /* ~2 ms of ticks */
+                if (clock->Multiplier)
+                    clock->Resync = (TSC_RESYNC_INTERVAL_ULL << DWORD_SHIFT) / clock->Multiplier;                      /* ~2 ms of ticks */
             }
         }
         if (!clock->Multiplier || !clock->TscBase || qpcMicroseconds - clock->MicrosecondsBase >= TSC_RESYNC_MIN_US)
@@ -573,12 +625,14 @@ UINT64 HostTimeMicroseconds(VOID)
         }
         if (!clock->Multiplier)
         {
-            if (qpcMicroseconds > clock->Last) clock->Last = qpcMicroseconds;
+            if (qpcMicroseconds > clock->Last)
+                clock->Last = qpcMicroseconds;
             return clock->Last;
         }
     }
     microseconds = clock->MicrosecondsBase + (((tsc - clock->TscBase) * (UINT64)clock->Multiplier) >> DWORD_SHIFT);
-    if (microseconds < clock->Last) microseconds = clock->Last;            /* never backwards within a thread */
+    if (microseconds < clock->Last)
+        microseconds = clock->Last;                                        /* never backwards within a thread */
     clock->Last = microseconds;
     return microseconds;
 }
@@ -632,7 +686,9 @@ INT  g_PitPaceInject = 1;
 LONGLONG Int15QpcAfterMicroseconds(DWORD microseconds)
 {
     LARGE_INTEGER now, frequency;
-    QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
+
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&frequency);
     return now.QuadPart + (LONGLONG)(((UINT64)microseconds * (UINT64)frequency.QuadPart) / MICROSECONDS_PER_SECOND_ULL);
 }
 
@@ -640,9 +696,12 @@ static VOID Int15EventPoll(VOID)            /* pacer thread */
 {
     LONGLONG end = g_Int15EventEnd;
     LARGE_INTEGER now;
-    if (!end) return;
+
+    if (!end)
+        return;
     QueryPerformanceCounter(&now);
-    if (now.QuadPart < end) return;
+    if (now.QuadPart < end)
+        return;
     g_Int15EventEnd = 0;
     *(volatile BYTE *)(ULONG_PTR)g_Int15EventLinear |= BIOS_EVENT_WAIT_POSTED;      /* the caller's flag: time is up */
     *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_ACTIVE) = BIOS_BDA_WAIT_NONE;               /* 40:A0 wait no longer active */
@@ -655,9 +714,12 @@ static MMRESULT g_PitPaceTimer;
 VOID PitPacerTimerStart(HMODULE winmmModule)
 {
     PFN_TIME_SET_EVENT timeSetEvent = winmmModule ? (PFN_TIME_SET_EVENT)GetProcAddress(winmmModule, HOST_EXPORT_TIME_SET_EVENT) : NULL;
-    if (!timeSetEvent || g_PitPaceMs <= 0) return;
+
+    if (!timeSetEvent || g_PitPaceMs <= 0)
+        return;
     g_PitPaceEvent = CreateEventA(NULL, FALSE, FALSE, NULL);      /* auto-reset */
-    if (!g_PitPaceEvent) return;
+    if (!g_PitPaceEvent)
+        return;
     g_PitPaceTimer = timeSetEvent((UINT)g_PitPaceMs, 0, (LPTIMECALLBACK)g_PitPaceEvent, 0,
                           TIME_PERIODIC | TIME_CALLBACK_EVENT_SET);
     if (!g_PitPaceTimer)
@@ -680,12 +742,15 @@ DWORD WINAPI PitPacerThread(LPVOID param)
          * shared sink. It can no longer be made to wait by the renderer.
          */
         HostPitGenerate();
-        if (g_PitPaceInject) HostPitDeliver();
+        if (g_PitPaceInject)
+            HostPitDeliver();
         Int15EventPoll();                                    /* #206 */
         ++g_PitPaceCalls;
         /* The timeout only matters if the timer stops: then this is the Sleep loop. */
-        if (g_PitPaceTimer) WaitForSingleObject(g_PitPaceEvent, (DWORD)g_PitPaceMs * PIT_PACE_WAIT_PERIODS);
-        else                 Sleep((DWORD)g_PitPaceMs);
+        if (g_PitPaceTimer)
+            WaitForSingleObject(g_PitPaceEvent, (DWORD)g_PitPaceMs * PIT_PACE_WAIT_PERIODS);
+        else
+            Sleep((DWORD)g_PitPaceMs);
     }
     return 0;
 }
@@ -790,14 +855,17 @@ DWORD WINAPI TickCourierThread(LPVOID parameter)
          */
         WaitForSingleObject(g_CourierEvent, COURIER_WAIT_MS);
         ++g_CourierWakes;
-        if (!g_CourierOn || !g_QiSuspended || g_DpmiPm || !g_HostCpu) continue;
-        if (g_Irq0Pending <= 0) continue;
+        if (!g_CourierOn || !g_QiSuspended || g_DpmiPm || !g_HostCpu)
+            continue;
+        if (g_Irq0Pending <= 0)
+            continue;
         QueryPerformanceCounter(&start);
         {   UINT budgetMicroseconds = (g_CourierOn == COURIER_NORMAL_PRIORITY) ? COURIER_NORMAL_BUDGET_US : COURIER_BUDGET_US;
             INT triesLeft     = (g_CourierOn == COURIER_NORMAL_PRIORITY) ? COURIER_NORMAL_TRIES : COURIER_TRIES_MAX;
         for (;;)
         {
-            if (!g_Running || g_Irq0Pending <= 0) break;
+            if (!g_Running || g_Irq0Pending <= 0)
+                break;
             if (triesLeft-- <= 0)
             {
                 ++g_CourierGiveUp;
@@ -818,7 +886,8 @@ DWORD WINAPI TickCourierThread(LPVOID parameter)
                 {
                     InterlockedDecrement(&g_Irq0Pending);
                     PmTickTake();
-                    g_Irq0NoteCs = IRQ0_NOTE_ASYNC_CS; g_Irq0NoteIp = 0;   /* delivered async */
+                    g_Irq0NoteCs = IRQ0_NOTE_ASYNC_CS;
+                    g_Irq0NoteIp = 0;   /* delivered async */
                     Irq0DeliveredNote();
                     ++g_CourierInjected;
                     break;                      /* one tick per wake -- see above */
@@ -844,15 +913,18 @@ DWORD WINAPI TickCourierThread(LPVOID parameter)
 UINT HostCpuMhz(VOID)
 {
     static UINT mhz = CPU_MHZ_UNKNOWN_U;
+
     if (mhz == CPU_MHZ_UNKNOWN_U)
     {
-        HKEY key; DWORD value = 0, size = sizeof value, valueType = 0;
+        HKEY key;
+        DWORD value = 0, size = sizeof value, valueType = 0;
         mhz = 0;
         if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, HOST_REG_CPU_KEY,
                           0, KEY_READ, &key) == ERROR_SUCCESS)
         {
             if (RegQueryValueExA(key, HOST_REG_CPU_MHZ, NULL, &valueType, (BYTE *)&value, &size) == ERROR_SUCCESS
-                && valueType == REG_DWORD) mhz = (UINT)value;
+                && valueType == REG_DWORD)
+                mhz = (UINT)value;
             RegCloseKey(key);
         }
     }
@@ -905,7 +977,8 @@ DWORD    g_CpuSpeedPeriodMs;    /* what auto actually chose, or the setting */
  */
 static VOID CpuSpeedNoteRoundTrip(DWORD microseconds)
 {
-    if (!microseconds) return;
+    if (!microseconds)
+        return;
     if (!g_CpuSpeedRoundTripMicroseconds || microseconds < g_CpuSpeedRoundTripMicroseconds)
     {
         g_CpuSpeedRoundTripMicroseconds = (DWORD)microseconds;
@@ -979,24 +1052,30 @@ static volatile LONG g_ExecTimingOn;   /* only while a throttle is actually set 
 static LONG ExecClockMicroseconds(VOID)
 {
     LARGE_INTEGER now;
+
     QueryPerformanceCounter(&now);
-    if (!g_ExecQpcBase.QuadPart) g_ExecQpcBase = now;
+    if (!g_ExecQpcBase.QuadPart)
+        g_ExecQpcBase = now;
     /* +1 so a genuine reading can never collide with the 0 sentinel. */
     return (LONG)QpcMicroseconds(now.QuadPart - g_ExecQpcBase.QuadPart) + 1;
 }
 
 VOID ExecEnterMark(VOID)
 {
-    if (!g_ExecTimingOn) return;
+    if (!g_ExecTimingOn)
+        return;
     InterlockedExchange(&g_ExecEnterMicroseconds, ExecClockMicroseconds());
 }
 
 VOID ExecLeaveMark(VOID)
 {
     LONG enterMicroseconds, now;
-    if (!g_ExecTimingOn) return;
+
+    if (!g_ExecTimingOn)
+        return;
     enterMicroseconds = g_ExecEnterMicroseconds;
-    if (!enterMicroseconds) return;
+    if (!enterMicroseconds)
+        return;
     now = ExecClockMicroseconds();
     InterlockedExchangeAdd(&g_ExecMicrosecondsAccumulated, (LONG)(ULONG)(now - enterMicroseconds));
     InterlockedExchange(&g_ExecEnterMicroseconds, 0);
@@ -1009,7 +1088,9 @@ static LONG ExecMicrosecondsNow(VOID)
 {
     LONG accumulated = g_ExecMicrosecondsAccumulated;
     LONG enterMicroseconds = g_ExecEnterMicroseconds;                  /* one atomic 32-bit read */
-    if (enterMicroseconds) accumulated += (LONG)(ULONG)(ExecClockMicroseconds() - enterMicroseconds);
+
+    if (enterMicroseconds)
+        accumulated += (LONG)(ULONG)(ExecClockMicroseconds() - enterMicroseconds);
     return accumulated;
 }
 
@@ -1040,7 +1121,9 @@ HANDLE        g_CpuSpeedRelease;     /* auto-reset: wakes the park early */
 VOID CpuSpeedCooperativePark(VOID)
 {
     DWORD start;
-    if (!g_CpuSpeedCatchRequest) return;
+
+    if (!g_CpuSpeedCatchRequest)
+        return;
     start = GetTickCount();
     InterlockedExchange(&g_CpuSpeedParked, 1);
     while (g_CpuSpeedCatchRequest && g_Running && !g_PauseWant)
@@ -1050,8 +1133,10 @@ VOID CpuSpeedCooperativePark(VOID)
             ++g_CpuSpeedCooperativeTimeouts;
             break;
         }
-        if (g_CpuSpeedRelease) WaitForSingleObject(g_CpuSpeedRelease, CPUSPEED_RELEASE_WAIT_MS);
-        else Sleep(1);
+        if (g_CpuSpeedRelease)
+            WaitForSingleObject(g_CpuSpeedRelease, CPUSPEED_RELEASE_WAIT_MS);
+        else
+            Sleep(1);
     }
     InterlockedExchange(&g_CpuSpeedParked, 0);
 }
@@ -1066,20 +1151,28 @@ static DWORD g_ControlCooperative[IRQ0TL_SECS], g_ControlIo[IRQ0TL_SECS], g_Cont
 static DWORD g_ControlRunMicroseconds[IRQ0TL_SECS];
 static INT CpuSpeedTimelineSeconds(VOID)
 {
-    LARGE_INTEGER now; DWORD seconds;
-    if (!g_Irq0Start) return -1;
+    LARGE_INTEGER now;
+    DWORD seconds;
+
+    if (!g_Irq0Start)
+        return -1;
     QueryPerformanceCounter(&now);
     seconds = QpcMicroseconds(now.QuadPart - g_Irq0Start) / MICROSECONDS_PER_SECOND_U;
-    if (seconds >= IRQ0TL_SECS) return -1;
-    g_ControlIo[seconds] = g_EventIo; g_ControlRaise[seconds] = g_Irq0RaiseCount;
+    if (seconds >= IRQ0TL_SECS)
+        return -1;
+    g_ControlIo[seconds] = g_EventIo;
+    g_ControlRaise[seconds] = g_Irq0RaiseCount;
     return (INT)seconds;
 }
 
 VOID CpuSpeedTimelineDump(PCSTR tag)
 {
     static PCSTR const names[7] = { "exec_ms", "hold_ms", "missed", "coop", "io", "raise", "run_us" };
-    CHAR buffer[1400], *cursor; UINT column, second, last = 0;
-    for (second = 0; second < IRQ0TL_SECS; ++second) if (g_ControlExecMicroseconds[second] || g_ControlHoldMicroseconds[second]) last = second;
+    CHAR buffer[1400], *cursor;
+    UINT column, second, last = 0;
+    for (second = 0; second < IRQ0TL_SECS; ++second)
+        if (g_ControlExecMicroseconds[second] || g_ControlHoldMicroseconds[second])
+            last = second;
     for (column = 0; column < 7; ++column)
     {
         DWORD prev = 0;
@@ -1089,13 +1182,37 @@ VOID CpuSpeedTimelineDump(PCSTR tag)
             DWORD value = 0;
             switch (column)
             {
-            case 0: value = g_ControlExecMicroseconds[second] / MICROSECONDS_PER_MILLISECOND_U; break;
-            case 1: value = g_ControlHoldMicroseconds[second] / MICROSECONDS_PER_MILLISECOND_U; break;
-            case 2: value = g_ControlMissed[second]; break;
-            case 3: value = g_ControlCooperative[second]; break;
-            case 4: value = g_ControlIo[second]    ? g_ControlIo[second]    - prev : 0; if (g_ControlIo[second])    prev = g_ControlIo[second];    break;
-            case 5: value = g_ControlRaise[second] ? g_ControlRaise[second] - prev : 0; if (g_ControlRaise[second]) prev = g_ControlRaise[second]; break;
-            case 6: value = g_ControlRunMicroseconds[second]; break;
+            case 0:
+                value = g_ControlExecMicroseconds[second] / MICROSECONDS_PER_MILLISECOND_U;
+            break;
+
+            case 1:
+                value = g_ControlHoldMicroseconds[second] / MICROSECONDS_PER_MILLISECOND_U;
+            break;
+
+            case 2:
+                value = g_ControlMissed[second];
+            break;
+
+            case 3:
+                value = g_ControlCooperative[second];
+            break;
+
+            case 4:
+                value = g_ControlIo[second]    ? g_ControlIo[second]    - prev : 0;
+            if (g_ControlIo[second])
+                prev = g_ControlIo[second];
+            break;
+
+            case 5:
+                value = g_ControlRaise[second] ? g_ControlRaise[second] - prev : 0;
+            if (g_ControlRaise[second])
+                prev = g_ControlRaise[second];
+            break;
+
+            case 6:
+                value = g_ControlRunMicroseconds[second];
+            break;
             }
             cursor = LogPut(cursor, second ? "," : ""); cursor = LogDecimal(cursor, value);
         }
@@ -1110,6 +1227,7 @@ VOID CpuSpeedTimelineDump(PCSTR tag)
 VOID CpuSpeedRecompute(VOID)
 {
     LONG duty = (LONG)CpuSpeedDutyBp((UINT)g_CpuSpeedIndex, g_CpuSpeedReferenceMhz);
+
     InterlockedExchange(&g_CpuSpeedDuty, duty);
     InterlockedExchange(&g_CpuSpeedDutyRm, (LONG)CpuSpeedRealModeDutyBp((UINT)duty));   /* #225 */
     /* Pay for the per-trap timestamping only while it is actually being used. */
@@ -1155,16 +1273,20 @@ static VOID CpuAffinityApply(VOID)
 {
     SYSTEM_INFO systemInfo;
     DWORD_PTR processMask = 0, systemMask = 0;
-    if (!g_CpuAffinityOn || !g_HostCpu) return;
+
+    if (!g_CpuAffinityOn || !g_HostCpu)
+        return;
     GetSystemInfo(&systemInfo);
     g_CpuAffinityCpuCount = systemInfo.dwNumberOfProcessors;
-    if (g_CpuAffinityCpuCount < 2) return;     /* one core: nothing to separate */
+    if (g_CpuAffinityCpuCount < 2)
+        return;                                /* one core: nothing to separate */
     if (!GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask) || !processMask)
         return;
     /* Lowest core the process may use goes to the guest; everything else to us. */
     {   DWORD_PTR guest = processMask & (~processMask + 1);   /* lowest set bit */
         DWORD_PTR rest  = processMask & ~guest;
-        if (!rest) return;                              /* only one core available */
+        if (!rest)
+            return;                                     /* only one core available */
         g_CpuAffinityGuest = (DWORD)guest;
         g_CpuAffinityRest  = (DWORD)rest;
         SetThreadAffinityMask(g_HostCpu, guest);
@@ -1208,13 +1330,15 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
     INT clockSet = 0;                   /* g_StartMs anchored at first throttled catch */
     UINT lastDuty = CPUSPEED_BP_FULL_U;         /* the duty the current window was priced at */
     const UINT64 cAPMicroseconds = (UINT64)CPUSPEED_MAX_OFF_MS * MICROSECONDS_PER_MILLISECOND_ULL;
+
     (VOID)param;
     /* Above the guest, so a hold is actually a hold; below the audio pump and the PIT
      * pacer, so throttling can never starve the clock or the mixer.
      */
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
     CpuAffinityApply();
-    if (g_CpuAffinityRest) SetThreadAffinityMask(GetCurrentThread(), g_CpuAffinityRest);
+    if (g_CpuAffinityRest)
+        SetThreadAffinityMask(GetCurrentThread(), g_CpuAffinityRest);
     g_StartMs = GetTickCount();
     QueryPerformanceCounter(&wWin);
     wRun0 = wWin;
@@ -1230,9 +1354,15 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
         if (duty >= CPUSPEED_BP_FULL_U)              /* Unlimited: no hold, no window to keep */
         {
             if (g_CpuSpeedCatchRequest) { InterlockedExchange(&g_CpuSpeedCatchRequest, 0);
-                                      if (g_CpuSpeedRelease) SetEvent(g_CpuSpeedRelease); }
-            executedUs = 0ull; clockSet = 0; lastDuty = duty; Sleep(CPUSPEED_IDLE_SLEEP_MS);
-            QueryPerformanceCounter(&wWin); wRun0 = wWin; eRun0 = ExecMicrosecondsNow();
+                                      if (g_CpuSpeedRelease)
+                                          SetEvent(g_CpuSpeedRelease); }
+            executedUs = 0ull;
+            clockSet = 0;
+            lastDuty = duty;
+            Sleep(CPUSPEED_IDLE_SLEEP_MS);
+            QueryPerformanceCounter(&wWin);
+            wRun0 = wWin;
+            eRun0 = ExecMicrosecondsNow();
             continue;
         }
         /* -- [CAUTION] #225 (user, round 9): "the speeds degrade over time", and 100 -> 66 MHz
@@ -1250,13 +1380,18 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
          */
         if (g_PauseWant || duty != lastDuty)
         {
-            executedUs = 0ull; lastDuty = duty;
-            QueryPerformanceCounter(&wWin); wRun0 = wWin; eRun0 = ExecMicrosecondsNow();
+            executedUs = 0ull;
+            lastDuty = duty;
+            QueryPerformanceCounter(&wWin);
+            wRun0 = wWin;
+            eRun0 = ExecMicrosecondsNow();
             if (g_PauseWant)
             {
                 if (g_CpuSpeedCatchRequest) { InterlockedExchange(&g_CpuSpeedCatchRequest, 0);
-                                          if (g_CpuSpeedRelease) SetEvent(g_CpuSpeedRelease); }
-                Sleep(CPUSPEED_IDLE_SLEEP_MS); continue;
+                                          if (g_CpuSpeedRelease)
+                                              SetEvent(g_CpuSpeedRelease); }
+                Sleep(CPUSPEED_IDLE_SLEEP_MS);
+                continue;
             }
         }
         /* THE RUN SLICE, AND IT MUST BE AT LEAST A MILLISECOND:
@@ -1310,13 +1445,16 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
                 DWORD reload = g_Pit.Reload ? (DWORD)g_Pit.Reload : PIT_FULL_COUNT_U;
                 DWORD tickMicroseconds = (DWORD)((UINT64)reload * MICROSECONDS_PER_SECOND_ULL / PIT_INPUT_HZ_ULL);
                 DWORD want = (DWORD)((UINT64)(tickMicroseconds / 2ul) * duty / CPUSPEED_BP_FULL_U);   /* cycle = run/duty */
-                if (want < MICROSECONDS_PER_MILLISECOND_UL) runMicroseconds = want < CPUSPD_RUN_MIN_US ? CPUSPD_RUN_MIN_US : want;
+                if (want < MICROSECONDS_PER_MILLISECOND_UL)
+                    runMicroseconds = want < CPUSPD_RUN_MIN_US ? CPUSPD_RUN_MIN_US : want;
             }
             {
                 INT second = CpuSpeedTimelineSeconds();
-                if (second >= 0) g_ControlRunMicroseconds[second] = (DWORD)runMicroseconds;
+                if (second >= 0)
+                    g_ControlRunMicroseconds[second] = (DWORD)runMicroseconds;
             }
-            if (runMicroseconds >= MICROSECONDS_PER_MILLISECOND_UL) Sleep((DWORD)(runMicroseconds / MICROSECONDS_PER_MILLISECOND_UL));
+            if (runMicroseconds >= MICROSECONDS_PER_MILLISECOND_UL)
+                Sleep((DWORD)(runMicroseconds / MICROSECONDS_PER_MILLISECOND_UL));
             else if (runMicroseconds && duty >= CPUSPEED_RUN_FLOOR_BP)
             {
                 LARGE_INTEGER runStart, runNow;
@@ -1344,23 +1482,30 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
 #define CPUSPD_YIELD_BURST  200
             while (!done && g_Running && !g_PauseWant && GetTickCount() - started < CPUSPEED_CATCH_TIMEOUT_MS)
             {
-                CONTEXT context; LARGE_INTEGER roundTrip0, roundTrip1, now; INT gotContext, caught = CPUSPEED_CATCH_NONE;
+                CONTEXT context;
+                LARGE_INTEGER roundTrip0, roundTrip1, now;
+                INT gotContext, caught = CPUSPEED_CATCH_NONE;
                 if (!g_HostCpu || g_InExec == 0)
                 {
                     /* #225: outside VdmRunGuest -- ask it to park at its next re-entry. */
                     if (g_HostCpu)
                     {
                         InterlockedExchange(&g_CpuSpeedCatchRequest, 1);
-                        if (g_CpuSpeedParked && g_InExec == 0) caught = CPUSPEED_CATCH_COOPERATIVE;
+                        if (g_CpuSpeedParked && g_InExec == 0)
+                            caught = CPUSPEED_CATCH_COOPERATIVE;
                     }
                     if (!caught)
                     {
                         ++g_CpuSpeedMissed;
                         {
                             INT second = CpuSpeedTimelineSeconds();
-                            if (second >= 0) ++g_ControlMissed[second];
+                            if (second >= 0)
+                                ++g_ControlMissed[second];
                         }
-                        if (++spins < CPUSPD_YIELD_BURST) SwitchToThread(); else Sleep(1);
+                        if (++spins < CPUSPD_YIELD_BURST)
+                            SwitchToThread();
+                        else
+                            Sleep(1);
                         continue;
                     }
                 }
@@ -1377,12 +1522,16 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
                     gotContext = GetThreadContext(g_HostCpu, &context);
                     QueryPerformanceCounter(&roundTrip1);
                     CpuSpeedNoteRoundTrip((DWORD)QpcMicroseconds(roundTrip1.QuadPart - roundTrip0.QuadPart));
-                    if (gotContext && g_InExec != 0) caught = CPUSPEED_CATCH_CONTEXT;
+                    if (gotContext && g_InExec != 0)
+                        caught = CPUSPEED_CATCH_CONTEXT;
                     else
                     {
                         ResumeThread(g_HostCpu);
                         ++g_CpuSpeedMissed;
-                        if (++spins < CPUSPD_YIELD_BURST) SwitchToThread(); else Sleep(1);
+                        if (++spins < CPUSPD_YIELD_BURST)
+                            SwitchToThread();
+                        else
+                            Sleep(1);
                         continue;
                     }
                 }
@@ -1390,7 +1539,8 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
                  * Parked, the exec clock has no open interval, so the same
                  * accounting holds -- the servicing time was never guest execution.
                  */
-                {   UINT64 windowUs, holdMicroseconds; INT reset;
+                {   UINT64 windowUs, holdMicroseconds;
+                INT reset;
                     UINT executedDelta;
                     LONG eNow = ExecMicrosecondsNow();
                     QueryPerformanceCounter(&now);
@@ -1403,7 +1553,8 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
                      * 46 s run before this.
                      */
                     {   UINT runWall = QpcMicroseconds((LONGLONG)(now.QuadPart - wRun0.QuadPart));
-                        if (executedDelta > runWall) executedDelta = runWall; }
+                        if (executedDelta > runWall)
+                            executedDelta = runWall; }
                     if (!clockSet)
                     {
                         g_StartMs = GetTickCount();
@@ -1413,28 +1564,40 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
                     windowUs = QpcMicroseconds64(now.QuadPart - wWin.QuadPart);  /* window wall, holds in */
                     holdMicroseconds = CpuSpeedStep(executedUs, windowUs, duty, cAPMicroseconds, &reset);
                     {   UINT64 raw = CpuSpeedHoldFor(executedUs, windowUs, duty);
-                        if (raw > g_CpuSpeedDebtMaximumMicroseconds) g_CpuSpeedDebtMaximumMicroseconds = raw > MAXDWORD ? MAXDWORD : (DWORD)raw;
-                        if (holdMicroseconds > g_CpuSpeedHoldMaximumMicroseconds) g_CpuSpeedHoldMaximumMicroseconds = (DWORD)holdMicroseconds; }
+                        if (raw > g_CpuSpeedDebtMaximumMicroseconds)
+                            g_CpuSpeedDebtMaximumMicroseconds = raw > MAXDWORD ? MAXDWORD : (DWORD)raw;
+                        if (holdMicroseconds > g_CpuSpeedHoldMaximumMicroseconds)
+                            g_CpuSpeedHoldMaximumMicroseconds = (DWORD)holdMicroseconds; }
                     g_CpuSpeedRanMicroseconds   = executedDelta;
                     g_CpuSpeedWallMicroseconds  = (DWORD)windowUs;
                     /* Carry the sub-millisecond remainders: with #225's short runs
                      * (~340 us) rounding each one reported half the real exec.
                      */
                     {   static DWORD runRemainder, holdRemainder;
-                        runRemainder  += executedDelta;           g_CpuSpeedRunMs  += runRemainder / MICROSECONDS_PER_MILLISECOND_U;  runRemainder  %= MICROSECONDS_PER_MILLISECOND_U;
-                        holdRemainder += (DWORD)holdMicroseconds;  g_CpuSpeedHeldMs += holdRemainder / MICROSECONDS_PER_MILLISECOND_U; holdRemainder %= MICROSECONDS_PER_MILLISECOND_U; }
+                        runRemainder  += executedDelta;
+                        g_CpuSpeedRunMs  += runRemainder / MICROSECONDS_PER_MILLISECOND_U;
+                        runRemainder  %= MICROSECONDS_PER_MILLISECOND_U;
+                        holdRemainder += (DWORD)holdMicroseconds;
+                        g_CpuSpeedHeldMs += holdRemainder / MICROSECONDS_PER_MILLISECOND_U;
+                        holdRemainder %= MICROSECONDS_PER_MILLISECOND_U; }
                     ++g_CpuSpeedPeriods;
-                    if (caught == CPUSPEED_CATCH_COOPERATIVE) ++g_CpuSpeedCooperativeCatches;
+                    if (caught == CPUSPEED_CATCH_COOPERATIVE)
+                        ++g_CpuSpeedCooperativeCatches;
                     {   INT second = CpuSpeedTimelineSeconds();
-                        if (second >= 0) { g_ControlExecMicroseconds[second] += executedDelta; g_ControlHoldMicroseconds[second] += (DWORD)holdMicroseconds;
-                                       if (caught == CPUSPEED_CATCH_COOPERATIVE) ++g_ControlCooperative[second]; } }
-                    if (holdMicroseconds >= MICROSECONDS_PER_MILLISECOND_ULL) Sleep((DWORD)(holdMicroseconds / MICROSECONDS_PER_MILLISECOND_ULL));
+                        if (second >= 0) { g_ControlExecMicroseconds[second] += executedDelta;
+                        g_ControlHoldMicroseconds[second] += (DWORD)holdMicroseconds;
+                                       if (caught == CPUSPEED_CATCH_COOPERATIVE)
+                                           ++g_ControlCooperative[second]; } }
+                    if (holdMicroseconds >= MICROSECONDS_PER_MILLISECOND_ULL)
+                        Sleep((DWORD)(holdMicroseconds / MICROSECONDS_PER_MILLISECOND_ULL));
                     /* Release: lower the request FIRST, so a parked guest cannot see it
                      * still raised and park again, then let it go.
                      */
                     InterlockedExchange(&g_CpuSpeedCatchRequest, 0);
-                    if (caught == 1) ResumeThread(g_HostCpu);
-                    else if (g_CpuSpeedRelease) SetEvent(g_CpuSpeedRelease);
+                    if (caught == 1)
+                        ResumeThread(g_HostCpu);
+                    else if (g_CpuSpeedRelease)
+                        SetEvent(g_CpuSpeedRelease);
                     QueryPerformanceCounter(&wRun0);
                     eRun0 = ExecMicrosecondsNow();           /* new run baseline, POST-hold */
                     if (reset)
@@ -1464,6 +1627,7 @@ enum
 DWORD WINAPI HeartbeatThread(LPVOID parameter)
 {
     INT beat;
+
     (VOID)parameter;
     for (beat = 0; beat < 400 && g_Running; ++beat)     /* 200 s: a live run outlasts 40 s */
     {
@@ -1508,8 +1672,12 @@ DWORD WINAPI HeartbeatThread(LPVOID parameter)
          * in service, both chips), which lines we still hold pending, and where IRQ 5's
          * real-mode vector points -- the three things that decide it.
          */
-        { INT index; DWORD pendingMask = 0; WORD int0DOffset = PeekWord(IVT_OFFSET_ADDRESS(VECTOR_IRQ5)), int0DSegment = PeekWord(IVT_SEGMENT_ADDRESS(VECTOR_IRQ5));
-          for (index = 0; index < PIC_LINES; ++index) if (g_IrqNPending[index]) pendingMask |= 1u << index;
+        { INT index;
+        DWORD pendingMask = 0;
+        WORD int0DOffset = PeekWord(IVT_OFFSET_ADDRESS(VECTOR_IRQ5)), int0DSegment = PeekWord(IVT_SEGMENT_ADDRESS(VECTOR_IRQ5));
+          for (index = 0; index < PIC_LINES; ++index)
+              if (g_IrqNPending[index])
+                  pendingMask |= 1u << index;
           cursor = LogPut(cursor, " pic{imr=");  cursor = LogHexByte(cursor, g_Pic.Master.Imr); cursor = LogPut(cursor, "/"); cursor = LogHexByte(cursor, g_Pic.Slave.Imr);
           cursor = LogPut(cursor, " irr=");      cursor = LogHexByte(cursor, g_Pic.Master.Irr); cursor = LogPut(cursor, "/"); cursor = LogHexByte(cursor, g_Pic.Slave.Irr);
           cursor = LogPut(cursor, " isr=");      cursor = LogHexByte(cursor, g_Pic.Master.Isr); cursor = LogPut(cursor, "/"); cursor = LogHexByte(cursor, g_Pic.Slave.Isr);
@@ -1521,7 +1689,8 @@ DWORD WINAPI HeartbeatThread(LPVOID parameter)
             for (index = 0; index < ASYNC_WHY_MAX && shown < 6; ++index) if (g_AsyncWhyHistogram[5][index])
             {
                 cursor = LogPut(cursor, " "); cursor = LogHex(cursor, (DWORD)index); cursor = LogPut(cursor, "=");
-                cursor = LogHex(cursor, g_AsyncWhyHistogram[5][index]); ++shown; } }
+                cursor = LogHex(cursor, g_AsyncWhyHistogram[5][index]);
+                ++shown; } }
           cursor = LogPut(cursor, " }"); }
         /* SB transfer state on the beat. irqn_refused=0 across 4.6M gate evaluations
          * proves the completion IRQ was raised only AFTER the exec loop ended, so what
@@ -1573,11 +1742,14 @@ DWORD WINAPI HeartbeatThread(LPVOID parameter)
          */
         if (cs || ip)
         {
-            BYTE codeBytes[8]; SIZE_T got = 0;
+            BYTE codeBytes[8];
+            SIZE_T got = 0;
             cursor = LogPut(cursor, " code@csip=");
             if (ReadProcessMemory(GetCurrentProcess(), (LPCVOID)(ULONG_PTR)((cs << PARAGRAPH_SHIFT) + ip), codeBytes, 8, &got)
-                && got == 8) cursor = LogDump(cursor, codeBytes, 8);
-            else cursor = LogPut(cursor, "<unreadable>");
+                && got == 8)
+                cursor = LogDump(cursor, codeBytes, 8);
+            else
+                cursor = LogPut(cursor, "<unreadable>");
         }
         /* -- s69: THE PALETTE FADE, ON THE BEAT. The blank-screen bug is a black
          * per-frame palette buffer (ds:0x2668) while the colours are loaded; it is
@@ -1595,18 +1767,24 @@ DWORD WINAPI HeartbeatThread(LPVOID parameter)
             cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.DacRowHistogram[2]);
             cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.DacRowHistogram[3]);
             cursor = LogPut(cursor, " lastrow=0x"); cursor = LogHex(cursor, (DWORD)g_Video.DacLastRow);
-            BYTE probeBytes[6], probeByte; SIZE_T got = 0;
+            BYTE probeBytes[6], probeByte;
+            SIZE_T got = 0;
             cursor = LogPut(cursor, " pal2668=");
             if (ReadProcessMemory(GetCurrentProcess(), (LPCVOID)(ULONG_PTR)(dataSegmentBase + 0x2668), probeBytes, 6, &got)
                 && got == 6)
             {
-                INT byteIndex; for (byteIndex = 0; byteIndex < 6; ++byteIndex) cursor = LogHexByte(cursor, probeBytes[byteIndex]);
+                INT byteIndex;
+                for (byteIndex = 0; byteIndex < 6; ++byteIndex)
+                    cursor = LogHexByte(cursor, probeBytes[byteIndex]);
             }
-            else cursor = LogPut(cursor, "??");
+            else
+                cursor = LogPut(cursor, "??");
             cursor = LogPut(cursor, " 1f7c=");
             if (ReadProcessMemory(GetCurrentProcess(), (LPCVOID)(ULONG_PTR)(dataSegmentBase + 0x1f7c), &probeByte, 1, &got)
-                && got == 1) cursor = LogHexByte(cursor, probeByte);
-            else cursor = LogPut(cursor, "??");
+                && got == 1)
+                cursor = LogHexByte(cursor, probeByte);
+            else
+                cursor = LogPut(cursor, "??");
         }
         cursor = LogPut(cursor, "\r\n");
         LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor);
@@ -1620,23 +1798,30 @@ VOID ExecShareReport(VOID)
 {
     CHAR base[1024], *cursor = base;
     INT event;
+
     cursor = LogPut(cursor, "STAGE2: exec share (#238) v86_ms="); cursor = LogDecimal(cursor, g_V86MicrosecondsTotal / MICROSECONDS_PER_MILLISECOND_U);
     cursor = LogPut(cursor, " host_ms_after_event[ev:ms/count]=");
     for (event = 0; event < EV_HIST_MAX; ++event)
     {
-        if (!g_HostMicrosecondsEvent[event] && !g_EventHistogram[event]) continue;
+        if (!g_HostMicrosecondsEvent[event] && !g_EventHistogram[event])
+            continue;
         cursor = LogPut(cursor, " "); cursor = LogHex(cursor, (DWORD)event); cursor = LogPut(cursor, ":");
         cursor = LogDecimal(cursor, g_HostMicrosecondsEvent[event] / MICROSECONDS_PER_MILLISECOND_U); cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_EventHistogram[event]);
     }
     {   /* the six busiest BOP numbers */
-        DWORD seen[BYTE_VALUES]; INT index, rank;
-        for (index = 0; index < BYTE_VALUES; ++index) seen[index] = g_BopHistogram[index];
+        DWORD seen[BYTE_VALUES];
+        INT index, rank;
+        for (index = 0; index < BYTE_VALUES; ++index)
+            seen[index] = g_BopHistogram[index];
         cursor = LogPut(cursor, " bops:");
         for (rank = 0; rank < 6; ++rank)
         {
             INT best = -1;
-            for (index = 0; index < BYTE_VALUES; ++index) if (seen[index] && (best < 0 || seen[index] > seen[best])) best = index;
-            if (best < 0) break;
+            for (index = 0; index < BYTE_VALUES; ++index)
+                if (seen[index] && (best < 0 || seen[index] > seen[best]))
+                    best = index;
+            if (best < 0)
+                break;
             cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, (BYTE)best); cursor = LogPut(cursor, "="); cursor = LogDecimal(cursor, seen[best]);
             seen[best] = 0;
         }
@@ -1655,7 +1840,8 @@ VOID ExecShareReport(VOID)
     cursor = LogPut(cursor, "\r\n");
     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
     {   static PCSTR const names[XS_N] = { "raise","async","coop","nie","bop","io","hostms","pace" };
-        INT column; DWORD second;
+        INT column;
+        DWORD second;
         for (column = 0; column < XS_N; ++column)
         {
             cursor = LogPut(cursor, "STAGE2: persec "); cursor = LogPut(cursor, names[column]); cursor = LogPut(cursor, "=");
@@ -1695,6 +1881,7 @@ DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
     DWORD snapshotCs = 0, snapshotIp = 0, snapshotEflags = 0, snapshotTick = 0;
     BYTE  snapshotBytes[12];
     INT   snapshotOk = 0;
+
     (VOID)parameter;
     Sleep(PM_HEADLESS_MS);
     /* Snapshot the guest NOW, before anything winds down: by the time the grace
@@ -1707,12 +1894,15 @@ DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
         snapshotIp  = VDM_REG16(g_TibDebug, VTIB_EIP);
         snapshotEflags = VDM_REG(g_TibDebug, VTIB_EFLAGS);
         { const volatile BYTE *code = (const volatile BYTE *)((snapshotCs << PARAGRAPH_SHIFT) + snapshotIp);
-          UINT byteIndex; for (byteIndex = 0; byteIndex < 12; ++byteIndex) snapshotBytes[byteIndex] = code[byteIndex]; }
+          UINT byteIndex;
+          for (byteIndex = 0; byteIndex < 12; ++byteIndex)
+              snapshotBytes[byteIndex] = code[byteIndex]; }
         snapshotTick = ((DWORD)PeekWord(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT_HIGH) << WORD_SHIFT) | PeekWord(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT);
         snapshotOk = 1;
     }
     InterlockedExchange(&g_Running, 0);         /* stop exec loops + unblock key reads */
-    if (g_KeyEvent) SetEvent(g_KeyEvent);     /* wake a blocked HostConsoleIn/INT16 wait */
+    if (g_KeyEvent)
+        SetEvent(g_KeyEvent);                 /* wake a blocked HostConsoleIn/INT16 wait */
     cursor = LogPut(cursor, "HEADLESS: deadline reached -> g_running=0 (wind down)\r\n");
     LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor);
     if (g_MemoryDumpLength)                          /* MEMDUMP_FLAG: the guest is still mapped */
@@ -1723,8 +1913,10 @@ DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
         {
             while (offset < g_MemoryDumpLength)         /* page at a time, skipping what is not mapped */
             {
-                DWORD chunk = X86_PAGE_SIZE, bytesWritten = 0; PCVOID source = (const VOID *)(ULONG_PTR)(g_MemoryDumpLinear + offset);
-                if (chunk > g_MemoryDumpLength - offset) chunk = g_MemoryDumpLength - offset;
+                DWORD chunk = X86_PAGE_SIZE, bytesWritten = 0;
+                PCVOID source = (const VOID *)(ULONG_PTR)(g_MemoryDumpLinear + offset);
+                if (chunk > g_MemoryDumpLength - offset)
+                    chunk = g_MemoryDumpLength - offset;
                 if (HostReadable(source, chunk))
                 {
                     WriteFile(dumpHandle, source, chunk, &bytesWritten, NULL);
@@ -1789,7 +1981,8 @@ DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
         cursor = LogPut(cursor, " raised_any=0x"); cursor = LogHex(cursor, g_IrqRaisedAny);
         cursor = LogPut(cursor, " async_inj=0x");  cursor = LogHex(cursor, g_AsyncInjected);
         cursor = LogPut(cursor, " async_bail=0x"); cursor = LogHex(cursor, g_AsyncBail);
-        { INT irq; cursor = LogPut(cursor, " raised[0..15]=");
+        { INT irq;
+        cursor = LogPut(cursor, " raised[0..15]=");
           for (irq = 0; irq < 16; ++irq)
           {
               cursor = LogPut(cursor, "0x");
@@ -1815,7 +2008,8 @@ DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
         cursor = LogPut(cursor, " bda_tick=0x");    cursor = LogHex(cursor, ((DWORD)PeekWord(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT_HIGH) << WORD_SHIFT) | PeekWord(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT));
         cursor = LogPut(cursor, "\r\n");
         LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer;
-        { INT index; cursor = LogPut(cursor, "  hot ports:");
+        { INT index;
+        cursor = LogPut(cursor, "  hot ports:");
           for (index = 0; index < g_IoHotCount; ++index)
           {
               cursor = LogPut(cursor, " 0x"); cursor = LogHex(cursor, g_IoHot[index].Port);
@@ -1824,8 +2018,11 @@ DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
           cursor = LogPut(cursor, "\r\n  pit_reload=0x"); cursor = LogHex(cursor, (DWORD)g_Pit.Reload);
           cursor = LogPut(cursor, " pit_mode=0x");          cursor = LogHex(cursor, (DWORD)g_Pit.Mode);
           cursor = LogPut(cursor, "\r\n");
-          LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer; }
-        { INT index; cursor = LogPut(cursor, "  unclaimed ports touched:");
+          LogAppend(LOG_PATH, buffer, cursor);
+          SerialOut(buffer, cursor);
+          cursor = buffer; }
+        { INT index;
+        cursor = LogPut(cursor, "  unclaimed ports touched:");
           for (index = 0; index < g_UnclaimedCount; ++index)
           {
               cursor = LogPut(cursor, " 0x");
@@ -1836,16 +2033,23 @@ DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
          * ZAR) never reaches the STAGE2 summary, and the corpus sweep read "no line"
          * as "no data" for exactly the three guests it most wanted. (s74b)
          */
-        { INT index, any = 0; cursor = LogPut(cursor, "  VESA calls by sub-function:");
+        { INT index, any = 0;
+        cursor = LogPut(cursor, "  VESA calls by sub-function:");
           for (index = 0; index < 0x16; ++index) if (g_Video.VesaCalls[index])
           {
-              any = 1; cursor = LogPut(cursor, " 4F"); cursor = LogHexByte(cursor, (UINT)index); cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Video.VesaCalls[index]); }
-          if (!any) cursor = LogPut(cursor, " none");
+              any = 1;
+              cursor = LogPut(cursor, " 4F");
+              cursor = LogHexByte(cursor, (UINT)index);
+              cursor = LogPut(cursor, "x");
+              cursor = LogHex(cursor, g_Video.VesaCalls[index]); }
+          if (!any)
+              cursor = LogPut(cursor, " none");
           if (g_Video.VbePmBankCount | g_Video.VbePmStartCount | g_Video.VbePmRejected)     /* #53 */
           {
               cursor = LogPut(cursor, " | 4F0A-block banks=0x"); cursor = LogHex(cursor, g_Video.VbePmBankCount);
               cursor = LogPut(cursor, " starts=0x"); cursor = LogHex(cursor, g_Video.VbePmStartCount);
-              cursor = LogPut(cursor, " refused=0x"); cursor = LogHex(cursor, g_Video.VbePmRejected); }
+              cursor = LogPut(cursor, " refused=0x");
+              cursor = LogHex(cursor, g_Video.VbePmRejected); }
           cursor = LogPut(cursor, "\r\n"); }
         LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor);
         /* [WARNING]: AND THE REGISTER FILE HERE TOO, NOT ONLY ON THE CLEAN PATH (Importance = 1):
@@ -1890,16 +2094,22 @@ static INT    g_ExecPriorityNow = EXEC_PRIORITY_UNSET;       /* what BackgroundP
  */
 VOID BackgroundPriorityTick(HWND window)
 {
-    static DWORD last; static INT logged;
+    static DWORD last;
+    static INT logged;
     DWORD now = GetTickCount();
-    HWND foreground; INT want, isBackground;
-    if (!g_ExecThread || now - last < BACKGROUND_PRIORITY_TICK_MS) return;
+    HWND foreground;
+    INT want, isBackground;
+
+    if (!g_ExecThread || now - last < BACKGROUND_PRIORITY_TICK_MS)
+        return;
     last = now;
     foreground = GetForegroundWindow();
     isBackground = !(foreground && (foreground == window || GetAncestor(foreground, GA_ROOTOWNER) == window)) && OtherHostsRunning();
     want = isBackground ? THREAD_PRIORITY_BELOW_NORMAL : g_ExecPriorityForeground;
-    if (want == g_ExecPriorityNow) return;
-    if (!SetThreadPriority(g_ExecThread, want)) return;
+    if (want == g_ExecPriorityNow)
+        return;
+    if (!SetThreadPriority(g_ExecThread, want))
+        return;
     g_ExecPriorityNow = want;
     /* ...and the whole PROCESS, because its other threads (courier and watchdog at
      * HIGHEST, the throttle at ABOVE_NORMAL) otherwise share the foreground guest's
@@ -1982,6 +2192,7 @@ UINT32 g_PitGapMaximum;                     /* the worst one, in 8254 clocks */
 VOID HostRtcNow(PVOID context, PIT_RTC_READING *out)
 {
     DOS_CLOCK_TIME clock;
+
     (VOID)context;
     DosClockRead(g_DosClock.RtcOffset, &clock);
     out->Century  = clock.Year / YEARS_PER_CENTURY_U;
@@ -2002,17 +2213,20 @@ VOID HostRtcNow(PVOID context, PIT_RTC_READING *out)
 INT HostRtcSet(PVOID context, const PIT_RTC_READING *reading, INT what)
 {
     DOS_CLOCK_TIME host;
+
     (VOID)context;
     DosClockHostNow(&host);
     if (what == 0)
     {
-        if (!DosClockIsTimeValid(reading->Hour, reading->Minute, reading->Second, 0)) return 0;
+        if (!DosClockIsTimeValid(reading->Hour, reading->Minute, reading->Second, 0))
+            return 0;
         DosClockSetTime(&host, &g_DosClock.RtcOffset, reading->Hour, reading->Minute, reading->Second, 0);
     }
     else
     {
         UINT year = reading->Century * YEARS_PER_CENTURY_U + reading->Year;
-        if (!DosClockIsRealDate(year, reading->Month, reading->Day)) return 0;
+        if (!DosClockIsRealDate(year, reading->Month, reading->Day))
+            return 0;
         DosClockSetDate(&host, &g_DosClock.RtcOffset, year, reading->Month, reading->Day);
     }
     return 1;
@@ -2025,6 +2239,7 @@ INT HostRtcSet(PVOID context, const PIT_RTC_READING *reading, INT what)
 INT HostTickTake(UINT32 *ticks, UINT32 *wraps, UINT32 *since)
 {
     INT result;
+
     /* [CAUTION]: THE COMMON ANSWER IS "NOTHING", AND IT MUST NOT QUEUE BEHIND THE PACER. Some
      * programs time themselves with AH=2Ch in a tight loop; taking the crystal's lock
      * on every call would put each of them behind VddPitAddClocks. An unlocked look
@@ -2048,6 +2263,7 @@ INT HostTickTake(UINT32 *ticks, UINT32 *wraps, UINT32 *since)
 VOID HostTicksSet(PVOID context, UINT32 ticks)
 {
     UINT32 takenTicks = ticks, wraps = 0, since = 0;
+
     (VOID)context;
     if (!HostTickTake(&takenTicks, &wraps, &since))
     {
@@ -2075,8 +2291,10 @@ VOID HostSetTicks(PVOID context, UINT32 ticks)
 VOID HostPitGuard(PVOID context, INT enter)
 {
     (VOID)context;
-    if (enter) EnterCriticalSection(&g_PitCs);
-    else       LeaveCriticalSection(&g_PitCs);
+    if (enter)
+        EnterCriticalSection(&g_PitCs);
+    else
+        LeaveCriticalSection(&g_PitCs);
 }
 
 /* THE CRYSTAL. (s61) Advance the 8254 to NOW and latch what fell due (Importance = 3):
@@ -2092,6 +2310,7 @@ VOID HostPitGenerate(VOID)
     static LARGE_INTEGER frequency, last;
     LARGE_INTEGER now;
     ULONGLONG delta;
+
     /* Called from the exec thread (so a guest polling the counter reads real time),
      * the UI thread, and the PACER (so the clock keeps running while the guest spins
      * and never traps). One shared clock, hence one lock -- but the CRYSTAL's lock,
@@ -2139,9 +2358,11 @@ VOID HostPitGenerate(VOID)
           if (clocks > PIT_CATCHUP_MAX)
           {
               g_PitCatchupClamped++;
-              if (clocks > g_PitGapMaximum) g_PitGapMaximum = (UINT32)clocks;
+              if (clocks > g_PitGapMaximum)
+                  g_PitGapMaximum = (UINT32)clocks;
           }
-          if (clocks > PIT_INPUT_HZ) clocks = PIT_INPUT_HZ;   /* cap a long stall at 1 s */
+          if (clocks > PIT_INPUT_HZ)
+              clocks = PIT_INPUT_HZ;                          /* cap a long stall at 1 s */
           VddPitAddClocks(&g_Pit, (UINT32)clocks);
           /* THE RTC'S PERIODIC INTERRUPT RIDES THE SAME DELTA:
            * IRQ8 at the rate in CMOS Status A -- a steady tick INDEPENDENT of
@@ -2254,7 +2475,8 @@ static VOID HostPitDeliver(VOID)
                      * cooperative site; counting one would show a clock stopping
                      * exactly where the other took over.
                      */
-                    g_Irq0NoteCs = IRQ0_NOTE_ASYNC_CS; g_Irq0NoteIp = 0;  /* delivered async */
+                    g_Irq0NoteCs = IRQ0_NOTE_ASYNC_CS;
+                    g_Irq0NoteIp = 0;  /* delivered async */
                     Irq0DeliveredNote();
                 }
             } }
@@ -2288,8 +2510,10 @@ static VOID HostPitDeliver(VOID)
       for (index = 0; index < (INT)sizeof g_IrqOrder; ++index)
       {
           irq = g_IrqOrder[index];
-          if (!g_IrqNPending[irq]) continue;
-          if (!VddPicCanDeliver(&g_Pic, (BYTE)irq)) break;
+          if (!g_IrqNPending[irq])
+              continue;
+          if (!VddPicCanDeliver(&g_Pic, (BYTE)irq))
+              break;
           ++g_IrqNRetryTry;
           if (g_QiSuspended && AsyncInjectIrq((UINT)irq))
           {
@@ -2299,7 +2523,8 @@ static VOID HostPitDeliver(VOID)
           /* WHICH CLAUSE SAID NO. 1597 refusals with no reason is not a measurement;
            * AsyncInjectIrq already records one, so keep the last of them.
            */
-          else g_IrqNRetryWhy = g_AsyncWhy;
+          else
+              g_IrqNRetryWhy = g_AsyncWhy;
           break;                  /* one per sync, pending or not: see the note above */
       } }
     HOST_UNLOCK();
@@ -2325,15 +2550,20 @@ VOID PitLatchNote(BYTE command)
 {
     UINT32 total, count, first, base, index, column = 0;
     CHAR buffer[1200], *cursor = buffer;
+
     /* [CAUTION]: The ring is opt-in (cfg\pitlatch.flag) and so is this: the dump is ~43
      * LogAppend calls issued from V86HostOut, i.e. FILE I/O UNDER g_Lock from inside
      * the planar interpreter. Fine for a debugging run, not for a build a person
      * plays on -- shipping it enabled in s69 was a mistake, see vdd_video.h.
      */
-    if (!g_Video.IsPort3DaRingOn) return;
-    if ((command & PIT_CONTROL_SELECT_ACCESS_MASK) != PIT_CONTROL_LATCH_COUNTER0 || g_PitLatchDumps >= 2 || !g_Video.Port3DaRingCount) return;
-    total = g_Video.Port3DaRingCount; count = total < VIDEO_PORT_3DA_RING ? total : VIDEO_PORT_3DA_RING;
-    first = total - count; base = g_Video.Port3DaRingUs[first & (VIDEO_PORT_3DA_RING - 1)];
+    if (!g_Video.IsPort3DaRingOn)
+        return;
+    if ((command & PIT_CONTROL_SELECT_ACCESS_MASK) != PIT_CONTROL_LATCH_COUNTER0 || g_PitLatchDumps >= 2 || !g_Video.Port3DaRingCount)
+        return;
+    total = g_Video.Port3DaRingCount;
+    count = total < VIDEO_PORT_3DA_RING ? total : VIDEO_PORT_3DA_RING;
+    first = total - count;
+    base = g_Video.Port3DaRingUs[first & (VIDEO_PORT_3DA_RING - 1)];
     g_PitLatchDumps++;
     cursor = LogPut(cursor, "PIT-LATCH #"); cursor = LogDecimal(cursor, g_PitLatchDumps);
     cursor = LogPut(cursor, " reload=0x"); cursor = LogHex(cursor, (DWORD)g_Pit.Reload);
@@ -2390,13 +2620,19 @@ VOID Int10WaitAfter(VOID)
     DWORD start = GetTickCount();
     UINT32 microseconds;
     INT waited = 0;
+
     while ((microseconds = VddVideoInt10WaitUs(&g_Video)) != 0)
     {
         waited = 1;
-        if (GetTickCount() - start > INT10_WAIT_MAX_MS) break;
-        if (microseconds > RETRACE_IDLE_MIN_US) Sleep(1); else Sleep(0);
+        if (GetTickCount() - start > INT10_WAIT_MAX_MS)
+            break;
+        if (microseconds > RETRACE_IDLE_MIN_US)
+            Sleep(1);
+        else
+            Sleep(0);
     }
-    if (waited) ++g_VbeWaits;
+    if (waited)
+        ++g_VbeWaits;
 }
 
 enum
@@ -2407,7 +2643,8 @@ volatile DWORD g_RetracePending, g_RetraceCs, g_RetraceIp, g_RetraceAl, g_Retrac
 static INT g_RetraceOffset = -1;
 VOID RetraceNote(volatile BYTE *tib, WORD port, INT isIn, DWORD cs, DWORD ipAfter)
 {
-    if (!isIn || port != VIDEO_PORT_STATUS1_COLOUR) return;
+    if (!isIn || port != VIDEO_PORT_STATUS1_COLOUR)
+        return;
     {   INT slot;
         for (slot = 0; slot < RT_SITES; ++slot)
         {
@@ -2420,13 +2657,19 @@ VOID RetraceNote(volatile BYTE *tib, WORD port, INT isIn, DWORD cs, DWORD ipAfte
             {
                 const volatile BYTE *code = (const volatile BYTE *)(ULONG_PTR)((cs << PARAGRAPH_SHIFT) + ipAfter);
                 INT index;
-                g_RetraceSite[slot].Cs = cs; g_RetraceSite[slot].Ip = ipAfter; g_RetraceSite[slot].Count = 1;
-                for (index = 0; index < 10; ++index) g_RetraceSite[slot].Bytes[index] = code[index];
+                g_RetraceSite[slot].Cs = cs;
+                g_RetraceSite[slot].Ip = ipAfter;
+                g_RetraceSite[slot].Count = 1;
+                for (index = 0; index < 10; ++index)
+                    g_RetraceSite[slot].Bytes[index] = code[index];
                 break;
             }
         } }
-    g_RetraceCs = cs; g_RetraceIp = ipAfter; g_RetraceAl = VDM_REG(tib, VTIB_EAX) & BYTE_MASK;
-    g_RetraceCx = VDM_REG16(tib, VTIB_ECX); g_RetracePending = 1;
+    g_RetraceCs = cs;
+    g_RetraceIp = ipAfter;
+    g_RetraceAl = VDM_REG(tib, VTIB_EAX) & BYTE_MASK;
+    g_RetraceCx = VDM_REG16(tib, VTIB_ECX);
+    g_RetracePending = 1;
 }
 
 VOID RetraceIdle(VOID)
@@ -2435,10 +2678,14 @@ VOID RetraceIdle(VOID)
     INT want, bit3;
     DWORD ip;
     UINT32 microseconds;
-    if (!g_RetracePending) return;
+
+    if (!g_RetracePending)
+        return;
     g_RetracePending = 0;
-    if (g_RetraceOffset < 0) g_RetraceOffset = (GetFileAttributesA(RTIDLE_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
-    if (g_RetraceOffset) return;
+    if (g_RetraceOffset < 0)
+        g_RetraceOffset = (GetFileAttributesA(RTIDLE_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
+    if (g_RetraceOffset)
+        return;
     ip = g_RetraceIp;
     code = (const volatile BYTE *)(ULONG_PTR)((g_RetraceCs << PARAGRAPH_SHIFT) + ip);
     /* test al,08h (A8 08) or and al,08h (24 08), then back to the IN with jz/jnz (74/75)
@@ -2449,18 +2696,22 @@ VOID RetraceIdle(VOID)
           && (code[2] == X86_OP_JZ_SHORT || code[2] == X86_OP_JNZ_SHORT || code[2] == X86_OP_LOOPE || code[2] == X86_OP_LOOPNE)))
         return;
     {   INT target = (INT)((ip + RETRACE_IDLE_PATTERN_LENGTH + (INT8)code[3]) & WORD_MASK);
-        if (target > (INT)ip || (INT)ip - target > RETRACE_IDLE_BACK_MAX) return;    /* must jump back to the IN */ }
+        if (target > (INT)ip || (INT)ip - target > RETRACE_IDLE_BACK_MAX)
+            return;    /* must jump back to the IN */ }
     /* A LOOP whose CX runs out THIS time round exits on its own: leave it be. (It
      * decrements first, so CX == 1 is the last pass.) Sleeping otherwise only spends
      * fewer iterations of the timeout per millisecond, which a real slow bus did too.
      */
-    if ((code[2] == X86_OP_LOOPE || code[2] == X86_OP_LOOPNE) && g_RetraceCx <= 1u) return;
+    if ((code[2] == X86_OP_LOOPE || code[2] == X86_OP_LOOPNE) && g_RetraceCx <= 1u)
+        return;
     /* jz / loopz loop while the bit is CLEAR -> waiting for bit 3 SET */
     want = (code[2] == X86_OP_JZ_SHORT || code[2] == X86_OP_LOOPE);
     bit3 = (g_RetraceAl & VIDEO_STATUS1_VERTICAL_RETRACE) != 0;
-    if (bit3 == want) return;          /* the loop exits this time round */
+    if (bit3 == want)
+        return;                        /* the loop exits this time round */
     microseconds = VddVideoUsToRetrace(&g_Video, want);
-    if (microseconds == VIDEO_RETRACE_UNKNOWN_U || microseconds < RETRACE_IDLE_MIN_US) return;
+    if (microseconds == VIDEO_RETRACE_UNKNOWN_U || microseconds < RETRACE_IDLE_MIN_US)
+        return;
     ++g_RetraceIdles;
     Sleep(1);
 }

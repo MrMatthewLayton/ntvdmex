@@ -21,9 +21,12 @@
  * raise it, time the result -- measures nothing. Push it through.
  */
 static VOID VddSpeakerPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
-{ PSPEAKER_STATE state = (PSPEAKER_STATE)context; (VOID)port; (VOID)width;
+{ PSPEAKER_STATE state = (PSPEAKER_STATE)context;
+(VOID)port;
+(VOID)width;
   state->Port61 = (BYTE)value;
-  if (state->Pit) VddPitCounter2Gate(state->Pit, state->Port61 & SPEAKER_GATE_BIT); }
+  if (state->Pit)
+      VddPitCounter2Gate(state->Pit, state->Port61 & SPEAKER_GATE_BIT); }
 
 /* BIT 5 IS COUNTER 2'S OUT PIN, NOT A BIT THE GUEST WROTE:
  * This used to hand back whatever bit 5 had been written, so the classic
@@ -42,7 +45,9 @@ static VOID VddSpeakerPortOut(PVOID context, WORD port, BYTE width, UINT32 value
 #define SPEAKER_OUT_LOW         0
 
 static VOID VddSpeakerPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
-{ PSPEAKER_STATE state = (PSPEAKER_STATE)context; (VOID)port; (VOID)width;
+{ PSPEAKER_STATE state = (PSPEAKER_STATE)context;
+(VOID)port;
+(VOID)width;
   state->RefreshToggle ^= SPEAKER_REFRESH_BIT;
   *value = (BYTE)((state->Port61 & ~SPEAKER_READ_BACK_MASK) | state->RefreshToggle
                  | ((state->Pit && VddPitCounter2Out(state->Pit)) ? SPEAKER_OUT_BIT : SPEAKER_OUT_LOW)); }
@@ -55,5 +60,6 @@ VOID VddSpeakerReset(PVOID context)
 }
 
 INT VddSpeakerInitialize(PVDD_BUS bus, PVOID context)
-{ PSPEAKER_STATE state = (PSPEAKER_STATE)context; state->Bus = bus;
+{ PSPEAKER_STATE state = (PSPEAKER_STATE)context;
+state->Bus = bus;
   return VddClaimPorts(bus, SPEAKER_PORT, SPEAKER_PORT, VddSpeakerPortIn, VddSpeakerPortOut, state); }

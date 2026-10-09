@@ -39,6 +39,7 @@ static INT g_Total = 0, g_Failures = 0;
 INT main(VOID)
 {
     INT slot, isOk;
+
     printf("== DPMI INT 31h service rules (GH #248) ==\n");
 
     /* ---- 0400h / 1687h ---- */
@@ -69,9 +70,12 @@ INT main(VOID)
     for (slot = 0; slot < DPMI_CB_SLOTS; ++slot)
     {
         WORD entry = DpmiCallbackEntry(CBBASE, slot);
-        if (DpmiCallbackSlotAt(CBBASE, HDLR, HDLR, entry) != slot) isOk = 0;          /* trap at the BOP */
-        if (DpmiCallbackSlotAt(CBBASE, HDLR, HDLR, (WORD)(entry + 3)) != slot) isOk = 0; /* past the BOP */
-        if (DpmiCallbackSlotOf(CBBASE, HDLR, HDLR, entry) != slot) isOk = 0;          /* 0304h */
+        if (DpmiCallbackSlotAt(CBBASE, HDLR, HDLR, entry) != slot)
+            isOk = 0;                                                                 /* trap at the BOP */
+        if (DpmiCallbackSlotAt(CBBASE, HDLR, HDLR, (WORD)(entry + 3)) != slot)
+            isOk = 0;                                                                    /* past the BOP */
+        if (DpmiCallbackSlotOf(CBBASE, HDLR, HDLR, entry) != slot)
+            isOk = 0;                                                                 /* 0304h */
     }
     CHECK(isOk, "every slot's address decodes back to that slot (trap at BOP, past BOP, 0304h)");
     CHECK(DpmiCallbackEntry(CBBASE, DPMI_CB_SLOTS - 1) + 3 <= 0xD0,

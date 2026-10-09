@@ -89,7 +89,8 @@ static INT g_Checks, g_Failures;
 static VOID ErrTestExpect(PCSTR description, INT32 actual, INT32 expected)
 {
     ++g_Checks;
-    if (actual == expected) return;
+    if (actual == expected)
+        return;
     ++g_Failures;
     printf("  FAIL %-56s got 0x%04lX, want 0x%04lX\n", description, (long)actual, (long)expected);
 }
@@ -97,7 +98,8 @@ static VOID ErrTestExpect(PCSTR description, INT32 actual, INT32 expected)
 /* One measured row: code -> BX (class:action) and CH (locus). */
 static VOID ErrTestRow(PCSTR description, UINT code, UINT expectedBx, UINT expectedCh)
 {
-    WORD classAndAction; BYTE locus;
+    WORD classAndAction;
+    BYTE locus;
     CHAR label[ERR_TEST_LABEL_SIZE];
     BOOL isMeasured = DosErrClassify((WORD)code, &classAndAction, &locus);
 
@@ -117,7 +119,8 @@ static VOID ErrTestRow(PCSTR description, UINT code, UINT expectedBx, UINT expec
 
 INT main(VOID)
 {
-    WORD classAndAction; BYTE locus;
+    WORD classAndAction;
+    BYTE locus;
 
     printf("== INT 21h AH=59h error classification (dos_err.h), measured on 6.22\n");
 
@@ -171,7 +174,8 @@ INT main(VOID)
     ++g_Checks;
     if (!DosErrClassify(DOS_ERR_NONE, &classAndAction, &locus))
     {
-        ++g_Failures; printf("  FAIL %-56s reported UNMEASURED\n", "code 0 is not an error");
+        ++g_Failures;
+        printf("  FAIL %-56s reported UNMEASURED\n", "code 0 is not an error");
     }
     ErrTestExpect("code 0 -> BX is zero", classAndAction, 0);
     ErrTestExpect("code 0 -> CH is zero", locus, 0);
@@ -182,7 +186,8 @@ INT main(VOID)
      * (lock violation) is real DOS but has never been provoked here.
      */
     ++g_Checks;
-    classAndAction = ERR_TEST_POISON_WORD; locus = ERR_TEST_POISON_BYTE;
+    classAndAction = ERR_TEST_POISON_WORD;
+    locus = ERR_TEST_POISON_BYTE;
     if (DosErrClassify(ERR_TEST_UNMEASURED_CODE, &classAndAction, &locus))
     {
         ++g_Failures;
@@ -199,7 +204,8 @@ INT main(VOID)
         for (rowIndex = 0; rowIndex < DOS_ERR_ROWS; ++rowIndex)
         {
             ++g_Checks;
-            if (g_DosErrTable[rowIndex].Evidence && g_DosErrTable[rowIndex].Evidence[0]) continue;
+            if (g_DosErrTable[rowIndex].Evidence && g_DosErrTable[rowIndex].Evidence[0])
+                continue;
             ++g_Failures;
             printf("  FAIL row %u (code 0x%02X) has no oracle evidence string\n",
                    rowIndex, g_DosErrTable[rowIndex].Code);
@@ -273,7 +279,8 @@ INT main(VOID)
 
     /* #34: the INT 24h contract, from tests/probes/dos/p_crit.asm (6.22 + PCem) */
     {
-        WORD classAndAction; BYTE locus;
+        WORD classAndAction;
+        BYTE locus;
         BOOL isMeasured = DosErrClassify(ERR_TEST_FAIL_I24, &classAndAction, &locus);
         ErrTestExpect("crit.4e.fail.59 is a measured row", isMeasured, TRUE);
         ErrTestExpect("crit.4e.fail.59 BX=0D04", classAndAction, ERR_TEST_BX_FAIL_I24);

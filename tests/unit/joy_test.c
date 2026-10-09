@@ -34,6 +34,7 @@ static UINT64 JoyTestFakeClock(PVOID context)
 static UINT32 JoyTestReadGameport(PVDD_BUS bus)
 {
     UINT32 value = 0xEE;
+
     VddBusIo(bus, 0x201, 1, 1, &value);
     return value;
 }
@@ -46,7 +47,9 @@ static VOID JoyTestTriggerGameport(PVDD_BUS bus)
 INT main(VOID)
 {
     VDD_BUS bus;
-    JOYSTICK_STATE joystick; memset(&joystick, 0, sizeof joystick);
+    JOYSTICK_STATE joystick;
+
+    memset(&joystick, 0, sizeof joystick);
     NTVDD_DEVICE joystickDevice = VddJoystickDevice(&joystick);
 
     printf("== gameport VDD battery ==\n");
@@ -64,7 +67,8 @@ INT main(VOID)
     CHECK(JoyTestReadGameport(&bus) == 0xFF, "type None: still 0xFF after a trigger");
 
     /* T2: adapter fitted, nothing plugged in ------------------------------- */
-    joystick.Type = JOYSTICK_TYPE_2AXIS; joystick.IsPresent = 0;
+    joystick.Type = JOYSTICK_TYPE_2AXIS;
+    joystick.IsPresent = 0;
     CHECK(JoyTestReadGameport(&bus) == 0xF0, "unplugged: buttons up, one-shots idle");
     JoyTestTriggerGameport(&bus);
     g_NowMicroseconds += 2000;                       /* 2 ms: any real axis long done */
@@ -72,7 +76,10 @@ INT main(VOID)
 
     /* T3: plugged in, centred, 2-axis/2-button ----------------------------- */
     joystick.IsPresent = 1;
-    joystick.Axis[0] = 0x80; joystick.Axis[1] = 0x80; joystick.Axis[2] = 0x80; joystick.Axis[3] = 0x80;
+    joystick.Axis[0] = 0x80;
+    joystick.Axis[1] = 0x80;
+    joystick.Axis[2] = 0x80;
+    joystick.Axis[3] = 0x80;
     joystick.TriggerMicroseconds = 0;                  /* fresh */
     g_NowMicroseconds = 100000;
     JoyTestTriggerGameport(&bus);
@@ -85,8 +92,10 @@ INT main(VOID)
     CHECK((JoyTestReadGameport(&bus) & 0x0C) == 0x0C, "2-axis type: B axes stuck (absent)");
 
     /* T4: the duration tracks the position --------------------------------- */
-    joystick.Axis[0] = 0x00; joystick.Axis[1] = 0xFF;
-    g_NowMicroseconds = 200000; JoyTestTriggerGameport(&bus);
+    joystick.Axis[0] = 0x00;
+    joystick.Axis[1] = 0xFF;
+    g_NowMicroseconds = 200000;
+    JoyTestTriggerGameport(&bus);
     g_NowMicroseconds += 30;                         /* x: 25us, y: 1045us */
     CHECK((JoyTestReadGameport(&bus) & 0x01) == 0x00, "x=0: 25us pulse already over at 30us");
     CHECK((JoyTestReadGameport(&bus) & 0x02) == 0x02, "y=255: 1045us pulse still high");
@@ -100,8 +109,11 @@ INT main(VOID)
     CHECK((JoyTestReadGameport(&bus) & 0xF0) == 0xA0, "4-button type: buttons 1+3 low");
 
     /* T6: 4-axis type times the B pair too ---------------------------------- */
-    joystick.Buttons = 0; joystick.Axis[2] = 0x00; joystick.Axis[3] = 0x00;
-    g_NowMicroseconds = 300000; JoyTestTriggerGameport(&bus);
+    joystick.Buttons = 0;
+    joystick.Axis[2] = 0x00;
+    joystick.Axis[3] = 0x00;
+    g_NowMicroseconds = 300000;
+    JoyTestTriggerGameport(&bus);
     g_NowMicroseconds += 100;                        /* B axes: 25us, long over */
     CHECK((JoyTestReadGameport(&bus) & 0x0C) == 0x00, "4-axis: B axes measured, not stuck");
 

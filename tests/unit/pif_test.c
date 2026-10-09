@@ -74,6 +74,7 @@ INT main(VOID)
 {
     PIF_INFO info;
     BYTE buffer[sizeof g_QbasicPif];
+
     printf("pif battery\n");
 
     CHECK(PifParse(g_QbasicPif, sizeof g_QbasicPif, &info), "QB.PIF parses");
@@ -100,13 +101,18 @@ INT main(VOID)
 
     /* Not PIFs. */
     CHECK(!PifParse(g_QbasicPif, 0x100, &info), "shorter than the basic section -> not a PIF");
-    memcpy(buffer, g_QbasicPif, sizeof buffer); buffer[0] = 'M'; buffer[1] = 'Z';
+    memcpy(buffer, g_QbasicPif, sizeof buffer);
+    buffer[0] = 'M';
+    buffer[1] = 'Z';
     CHECK(!PifParse(buffer, sizeof buffer, &info), "an MZ image -> not a PIF");
-    memcpy(buffer, g_QbasicPif, sizeof buffer); memset(buffer + PIF_PROG_OFF, 0, PIF_PROG_LEN);
+    memcpy(buffer, g_QbasicPif, sizeof buffer);
+    memset(buffer + PIF_PROG_OFF, 0, PIF_PROG_LEN);
     CHECK(!PifParse(buffer, sizeof buffer, &info), "no program name -> not a PIF");
 
     /* A self-referencing extension chain must not loop. */
-    memcpy(buffer, g_QbasicPif, sizeof buffer); buffer[0x171 + 16] = 0x71; buffer[0x171 + 17] = 0x01;
+    memcpy(buffer, g_QbasicPif, sizeof buffer);
+    buffer[0x171 + 16] = 0x71;
+    buffer[0x171 + 17] = 0x01;
     CHECK(PifParse(buffer, sizeof buffer, &info), "a looping extension chain terminates");
 
     printf("\n%d checks, %d failed\n", g_Total, g_Failures);

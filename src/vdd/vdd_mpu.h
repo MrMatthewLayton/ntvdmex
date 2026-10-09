@@ -80,11 +80,13 @@ typedef struct _MPU_STATE
     BYTE     DataCount, DataWanted;
     BYTE     IsInSysEx;
 
-    PMPU_MIDI_SINK Sink; PVOID SinkContext;
+    PMPU_MIDI_SINK Sink;
+    PVOID SinkContext;
     UINT32   MessagesSent;          /* messages forwarded (tests + diagnostics) */
 
     /* #136: SysEx passthrough -- NULL sink = swallowed, as always. Preserved by reset. */
-    PMPU_SYSEX_SINK SysExSink; PVOID SysExContext;
+    PMPU_SYSEX_SINK SysExSink;
+    PVOID SysExContext;
     UINT32   SysExLength;
     BYTE     IsSysExOverflow;       /* this message outgrew the buffer: drop it */
     UINT32   SysExSent, SysExDropped;
@@ -104,7 +106,12 @@ VOID VddMpuReset(_In_ PVOID context);
  */
 VOID VddMpuFeed(_Inout_ PMPU_STATE state, _In_ BYTE value);
 static inline NTVDD_DEVICE VddMpuDevice(_In_ PMPU_STATE state)
-{ NTVDD_DEVICE device; device.Name = MPU_DEVICE_NAME; device.Initialize = VddMpuInitialize; device.Reset = VddMpuReset;
-  device.Shutdown = 0; device.Context = state; return device; }
+{ NTVDD_DEVICE device;
+device.Name = MPU_DEVICE_NAME;
+device.Initialize = VddMpuInitialize;
+device.Reset = VddMpuReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 #endif /* NTVDMEX_VDD_MPU_H */

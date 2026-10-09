@@ -52,16 +52,21 @@ enum
 static inline INT MidiRouteHas(_In_opt_ PCSTR haystack, _In_opt_ PCSTR needle)
 {
     INT start, offset;
-    if (!haystack || !needle || !needle[0]) return 0;
+
+    if (!haystack || !needle || !needle[0])
+        return 0;
     for (start = 0; haystack[start]; ++start)
     {
         for (offset = 0; needle[offset]; ++offset)
         {
             CHAR character = haystack[start + offset];
-            if (character >= 'a' && character <= 'z') character = (CHAR)(character - MIDI_ROUTE_UPPER_CASE_OFFSET);
-            if (character != needle[offset]) break;
+            if (character >= 'a' && character <= 'z')
+                character = (CHAR)(character - MIDI_ROUTE_UPPER_CASE_OFFSET);
+            if (character != needle[offset])
+                break;
         }
-        if (!needle[offset]) return 1;
+        if (!needle[offset])
+            return 1;
     }
     return 0;
 }
@@ -70,19 +75,26 @@ static inline INT MidiRouteHas(_In_opt_ PCSTR haystack, _In_opt_ PCSTR needle)
  * Host GM is device 0 whatever the names say (and even with deviceCount == 0, as before: opening
  * it is what tells us whether it exists).
  */
-static inline INT MidiRoutePick(_In_ INT choice, _In_reads_(deviceCount) const PCSTR *names, _In_ INT deviceCount)
+static inline INT MidiRoutePick(
+    _In_ INT choice,
+    _In_reads_(deviceCount) const PCSTR *names,
+    _In_ INT deviceCount)
 {
     static const PCSTR mt32Names[] = { "MT-32", "MT32", "MUNT", 0 };
     static const PCSTR soundFontNames[]  = { "SOUNDFONT", "BASSMIDI", "VIRTUALMIDISYNTH",
                                         "FLUID", "SF2", 0 };
     const PCSTR *wanted;
     INT deviceIndex, nameIndex;
-    if (choice == MIDI_ROUTE_MT32)     wanted = mt32Names;
-    else if (choice == MIDI_ROUTE_SF2) wanted = soundFontNames;
-    else return 0;
+    if (choice == MIDI_ROUTE_MT32)
+        wanted = mt32Names;
+    else if (choice == MIDI_ROUTE_SF2)
+        wanted = soundFontNames;
+    else
+        return 0;
     for (deviceIndex = 0; deviceIndex < deviceCount; ++deviceIndex)
         for (nameIndex = 0; wanted[nameIndex]; ++nameIndex)
-            if (MidiRouteHas(names[deviceIndex], wanted[nameIndex])) return deviceIndex;
+            if (MidiRouteHas(names[deviceIndex], wanted[nameIndex]))
+                return deviceIndex;
     return -1;
 }
 

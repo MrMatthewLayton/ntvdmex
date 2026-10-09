@@ -63,7 +63,8 @@ typedef BYTE (*PNETBIOS_SUBMIT_ROUTINE)(PVOID context, PNETBIOS_REQUEST request)
 typedef struct _NETBIOS_STATE
 {
     PVDD_BUS       Bus;
-    PNETBIOS_SUBMIT_ROUTINE Submit;   PVOID SubmitContext;
+    PNETBIOS_SUBMIT_ROUTINE Submit;
+    PVOID SubmitContext;
     UINT32 Calls, NoWaitCalls, PostsOwed, NoBackendCalls;
     /* s91: a no-wait command's POST routine, owed to the guest as soon as INT 5Ch
      * returns. The HOST delivers it (it alone can edit the guest's return frame --
@@ -77,16 +78,27 @@ typedef struct _NETBIOS_STATE
 
 INT  VddNetBiosInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddNetBiosReset(_In_ PVOID context);
-VOID VddNetBiosSetBackend(_Inout_ PNETBIOS_STATE state, _In_opt_ PNETBIOS_SUBMIT_ROUTINE submitRoutine, _In_opt_ PVOID context);
+VOID VddNetBiosSetBackend(
+    _Inout_ PNETBIOS_STATE state,
+    _In_opt_ PNETBIOS_SUBMIT_ROUTINE submitRoutine,
+    _In_opt_ PVOID context);
 
 /* The whole INT 5Ch service on an NCB already mapped to host memory: exposed for the
  * off-VM test. `buffer` = the NCB's buffer resolved by the caller (NULL if none).
  * Returns AL.
  */
-BYTE VddNetBiosService(_Inout_ PNETBIOS_STATE state, _Inout_updates_(NETB_NCB_SIZE) BYTE *ncb, _In_opt_ BYTE *buffer);
+BYTE VddNetBiosService(
+    _Inout_ PNETBIOS_STATE state,
+    _Inout_updates_(NETB_NCB_SIZE) BYTE *ncb,
+    _In_opt_ BYTE *buffer);
 
 static inline NTVDD_DEVICE VddNetBiosDevice(_In_ PNETBIOS_STATE state)
-{ NTVDD_DEVICE device; device.Name = NETB_DEVICE_NAME; device.Initialize = VddNetBiosInitialize; device.Reset = VddNetBiosReset;
-  device.Shutdown = 0; device.Context = state; return device; }
+{ NTVDD_DEVICE device;
+device.Name = NETB_DEVICE_NAME;
+device.Initialize = VddNetBiosInitialize;
+device.Reset = VddNetBiosReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 #endif /* NTVDMEX_VDD_NET_H */

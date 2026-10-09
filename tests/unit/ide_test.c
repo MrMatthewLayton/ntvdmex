@@ -44,13 +44,16 @@ static VOID IdeTestIrqSink(PVOID context, BYTE irq)
 static UINT32 IdeTestHostIn(PVDD_BUS bus, WORD port, BYTE width)
 {
     UINT32 value = 0;
-    if (!VddBusIo(bus, port, width, 1, &value)) value = 0xFFFFFFFFu;
+
+    if (!VddBusIo(bus, port, width, 1, &value))
+        value = 0xFFFFFFFFu;
     return width == 1 ? (value & 0xFF) : width == 2 ? (value & 0xFFFF) : value;
 }
 
 static VOID IdeTestHostOut(PVDD_BUS bus, WORD port, BYTE byteValue)
 {
     UINT32 value = byteValue;
+
     VddBusIo(bus, port, 1, 0, &value);
 }
 
@@ -58,17 +61,22 @@ static VOID IdeTestHostOut(PVDD_BUS bus, WORD port, BYTE byteValue)
 static INT IdeTestBusyWaitExits(PVDD_BUS bus, WORD port)
 {
     INT spin;
+
     for (spin = 0; spin < 65536; ++spin)
-        if (!(IdeTestHostIn(bus, port, 1) & IDE_STATUS_BUSY)) return 1;
+        if (!(IdeTestHostIn(bus, port, 1) & IDE_STATUS_BUSY))
+            return 1;
     return 0;
 }
 
 /* The presence test: write two patterns, read them back. 1 = "a device latched". */
 static INT IdeTestLatches(PVDD_BUS bus, WORD commandBase)
 {
-    IdeTestHostOut(bus, commandBase + 2, 0x55); IdeTestHostOut(bus, commandBase + 3, 0xAA);
-    if (IdeTestHostIn(bus, commandBase + 2, 1) == 0x55 && IdeTestHostIn(bus, commandBase + 3, 1) == 0xAA) return 1;
-    IdeTestHostOut(bus, commandBase + 2, 0xAA); IdeTestHostOut(bus, commandBase + 3, 0x55);
+    IdeTestHostOut(bus, commandBase + 2, 0x55);
+    IdeTestHostOut(bus, commandBase + 3, 0xAA);
+    if (IdeTestHostIn(bus, commandBase + 2, 1) == 0x55 && IdeTestHostIn(bus, commandBase + 3, 1) == 0xAA)
+        return 1;
+    IdeTestHostOut(bus, commandBase + 2, 0xAA);
+    IdeTestHostOut(bus, commandBase + 3, 0x55);
     return IdeTestHostIn(bus, commandBase + 2, 1) == 0xAA && IdeTestHostIn(bus, commandBase + 3, 1) == 0x55;
 }
 
@@ -76,7 +84,9 @@ INT main(VOID)
 {
     static const WORD channels[2][2] = { { IDE_PRIMARY_COMMAND, IDE_PRIMARY_CONTROL },
                                          { IDE_SECONDARY_COMMAND, IDE_SECONDARY_CONTROL } };
-    VDD_BUS bus; IDE_STATE state; NTVDD_DEVICE device;
+    VDD_BUS bus;
+    IDE_STATE state;
+    NTVDD_DEVICE device;
     INT channel, spin, sawDataRequest;
     WORD port;
 
@@ -107,7 +117,9 @@ INT main(VOID)
         CHECK(IdeTestBusyWaitExits(&bus, commandPort + 7), description);
         /* Every task-file register: 0, and BSY clear on all of them. */
         { INT all0 = 1;
-          for (port = commandPort + 1; port <= commandPort + 7; ++port) if (IdeTestHostIn(&bus, port, 1) != 0) all0 = 0;
+          for (port = commandPort + 1; port <= commandPort + 7; ++port)
+              if (IdeTestHostIn(&bus, port, 1) != 0)
+                  all0 = 0;
           sprintf(description, "%03Xh-%03Xh: every task-file register reads 0", commandPort + 1, commandPort + 7);
           CHECK(all0, description); }
         sprintf(description, "%03Xh: 16-bit data read is 0000h, 32-bit is 0", commandPort);
@@ -121,14 +133,17 @@ INT main(VOID)
         CHECK(IdeTestHostIn(&bus, controlPort, 1) == 0x00, description);
         IdeTestHostOut(&bus, commandPort + 6, 0xA0);
         /* SRST through device control: still nothing busy afterwards */
-        IdeTestHostOut(&bus, controlPort, 0x04); IdeTestHostOut(&bus, controlPort, 0x00);
+        IdeTestHostOut(&bus, controlPort, 0x04);
+        IdeTestHostOut(&bus, controlPort, 0x00);
         sprintf(description, "%03Xh: after SRST set+clear, BSY still clear", controlPort);
         CHECK(!(IdeTestHostIn(&bus, controlPort, 1) & IDE_STATUS_BUSY), description);
         /* IDENTIFY: nobody receives it -- no DRQ, no IRQ, no error to read. */
         g_IrqCount = 0;
         IdeTestHostOut(&bus, commandPort + 7, 0xEC);
         sawDataRequest = 0;
-        for (spin = 0; spin < 1000; ++spin) if (IdeTestHostIn(&bus, controlPort, 1) & IDE_STATUS_DATA_REQUEST) sawDataRequest = 1;
+        for (spin = 0; spin < 1000; ++spin)
+            if (IdeTestHostIn(&bus, controlPort, 1) & IDE_STATUS_DATA_REQUEST)
+                sawDataRequest = 1;
         sprintf(description, "%03Xh: IDENTIFY to an empty channel never raises DRQ", commandPort + 7);
         CHECK(!sawDataRequest, description);
         sprintf(description, "%03Xh: ...and raises no interrupt", commandPort + 7);

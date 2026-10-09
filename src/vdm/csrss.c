@@ -30,13 +30,15 @@ ULONG CsrssParseTaskId(PCSTR commandLine)
 {
     PCSTR cursor = commandLine;
     ULONG taskId = CSRSS_NO_TASK_ID;
+
     while (*cursor)
     {
         if (cursor[0] == CSRSS_SWITCH_CHAR && (cursor[1] == CSRSS_TASK_ID_LOWER || cursor[1] == CSRSS_TASK_ID_UPPER))
         {
             PCSTR digit = cursor + CSRSS_TASK_ID_FIRST_DIGIT;
             taskId = CSRSS_NO_TASK_ID;
-            while (*digit == CSRSS_SPACE) ++digit;
+            while (*digit == CSRSS_SPACE)
+                ++digit;
             for (;;)
             {
                 CHAR character = *digit;
@@ -44,7 +46,8 @@ ULONG CsrssParseTaskId(PCSTR commandLine)
                     taskId = taskId * CSRSS_HEX_RADIX + (ULONG)(character - '0');
                 else if ((character | CSRSS_LOWER_CASE_BIT) >= 'a' && (character | CSRSS_LOWER_CASE_BIT) <= 'f')
                     taskId = taskId * CSRSS_HEX_RADIX + (ULONG)((character | CSRSS_LOWER_CASE_BIT) - 'a' + CSRSS_HEX_LETTER_VALUE);
-                else break;
+                else
+                    break;
                 ++digit;
             }
         }
@@ -63,8 +66,10 @@ BOOL CsrssRegisterConsole(VOID)
         (PFN_RegisterConsoleVDM)GetProcAddress(
             GetModuleHandleA(CSRSS_KERNEL32_NAME), CSRSS_REGISTER_CONSOLE_VDM);
     HANDLE startEvent, endEvent, errorEvent;
-    DWORD sixthOut = 0, tenthOut = 0; PVOID seventhOut = NULL, eleventhOut = NULL;
-    if (!RegisterConsoleVDM) return FALSE;
+    DWORD sixthOut = 0, tenthOut = 0;
+    PVOID seventhOut = NULL, eleventhOut = NULL;
+    if (!RegisterConsoleVDM)
+        return FALSE;
     startEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
     endEvent   = CreateEventA(NULL, TRUE, FALSE, NULL);
     errorEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
@@ -81,11 +86,13 @@ BOOL CsrssGetCommand(VDM_COMMAND_INFO *commandInfo, DWORD *lastError)
     BOOL succeeded;
     if (!GetNextVDMCommand)
     {
-        if (lastError) *lastError = ERROR_PROC_NOT_FOUND;
+        if (lastError)
+            *lastError = ERROR_PROC_NOT_FOUND;
         return FALSE;
     }
     succeeded = GetNextVDMCommand(commandInfo);
-    if (lastError) *lastError = GetLastError();
+    if (lastError)
+        *lastError = GetLastError();
     return succeeded;
 }
 
@@ -117,21 +124,33 @@ BOOL CsrssTaskDone(ULONG taskId, ULONG exitCode, DWORD *lastError, BOOL *didExit
     VDM_COMMAND_INFO commandInfo;
     BOOL succeeded = FALSE;
     INT charIndex;
-    if (didExitVdm) *didExitVdm = FALSE;
+    if (didExitVdm)
+        *didExitVdm = FALSE;
     if (!GetNextVDMCommand)
     {
-        if (lastError) *lastError = ERROR_PROC_NOT_FOUND;
+        if (lastError)
+            *lastError = ERROR_PROC_NOT_FOUND;
         return FALSE;
     }
     ZeroMemory(&commandInfo, sizeof commandInfo);
     g_CsrssNextApp[0] = g_CsrssNextCommand[0] = g_CsrssNextDirectory[0] = CSRSS_END_OF_STRING;
     g_CsrssNextStandardHandles[CSRSS_STD_IN] = g_CsrssNextStandardHandles[CSRSS_STD_OUT] = g_CsrssNextStandardHandles[CSRSS_STD_ERR] = NULL;
-    commandInfo.CmdLine = g_CsrssNextCommand; commandInfo.CmdLen = sizeof g_CsrssNextCommand;
-    commandInfo.AppName = g_CsrssNextApp; commandInfo.AppLen = sizeof g_CsrssNextApp;
-    commandInfo.PifFile = pifFile; commandInfo.PifLen = sizeof pifFile;
-    commandInfo.CurDirectory = g_CsrssNextDirectory; commandInfo.CurDirectoryLen = sizeof g_CsrssNextDirectory;
-    commandInfo.Env = environment; commandInfo.EnvLen = sizeof environment;       commandInfo.Desktop = desktop; commandInfo.DesktopLen = sizeof desktop;
-    commandInfo.Title = title; commandInfo.TitleLen = sizeof title; commandInfo.Reserved = reserved; commandInfo.ReservedLen = sizeof reserved;
+    commandInfo.CmdLine = g_CsrssNextCommand;
+    commandInfo.CmdLen = sizeof g_CsrssNextCommand;
+    commandInfo.AppName = g_CsrssNextApp;
+    commandInfo.AppLen = sizeof g_CsrssNextApp;
+    commandInfo.PifFile = pifFile;
+    commandInfo.PifLen = sizeof pifFile;
+    commandInfo.CurDirectory = g_CsrssNextDirectory;
+    commandInfo.CurDirectoryLen = sizeof g_CsrssNextDirectory;
+    commandInfo.Env = environment;
+    commandInfo.EnvLen = sizeof environment;
+    commandInfo.Desktop = desktop;
+    commandInfo.DesktopLen = sizeof desktop;
+    commandInfo.Title = title;
+    commandInfo.TitleLen = sizeof title;
+    commandInfo.Reserved = reserved;
+    commandInfo.ReservedLen = sizeof reserved;
     commandInfo.StartupInfo.cb = sizeof(STARTUPINFOA);
     commandInfo.TaskId = taskId;
     commandInfo.ExitCode = exitCode;
@@ -142,8 +161,10 @@ BOOL CsrssTaskDone(ULONG taskId, ULONG exitCode, DWORD *lastError, BOOL *didExit
      */
     commandInfo.VDMState = VDM_FLAG_DOS;
     succeeded = GetNextVDMCommand(&commandInfo);
-    if (lastError) *lastError = GetLastError();
-    g_CsrssNextApp[sizeof g_CsrssNextApp - CSRSS_LAST_CHAR_OFFSET] = CSRSS_END_OF_STRING; g_CsrssNextCommand[sizeof g_CsrssNextCommand - CSRSS_LAST_CHAR_OFFSET] = CSRSS_END_OF_STRING;
+    if (lastError)
+        *lastError = GetLastError();
+    g_CsrssNextApp[sizeof g_CsrssNextApp - CSRSS_LAST_CHAR_OFFSET] = CSRSS_END_OF_STRING;
+    g_CsrssNextCommand[sizeof g_CsrssNextCommand - CSRSS_LAST_CHAR_OFFSET] = CSRSS_END_OF_STRING;
     if (succeeded)
     {
         g_CsrssNextStandardHandles[CSRSS_STD_IN] = commandInfo.StdIn;
@@ -155,7 +176,8 @@ BOOL CsrssTaskDone(ULONG taskId, ULONG exitCode, DWORD *lastError, BOOL *didExit
         g_CsrssNextCommand[charIndex] = CSRSS_END_OF_STRING;
         break;
     }
-    if (ExitVDM && didExitVdm) *didExitVdm = ExitVDM(FALSE, CSRSS_EXIT_VDM_FLAGS);
+    if (ExitVDM && didExitVdm)
+        *didExitVdm = ExitVDM(FALSE, CSRSS_EXIT_VDM_FLAGS);
     return succeeded;
 }
 

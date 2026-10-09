@@ -177,9 +177,12 @@ static inline UINT32 VddFramePaletteAt(PCNTVDD_FRAME frame, UINT row, UINT palet
 static inline INT VddFrameHasSplit(PCNTVDD_FRAME frame)
 {
     UINT paletteIndex;
-    if (!frame->SplitRow) return FALSE;
+
+    if (!frame->SplitRow)
+        return FALSE;
     for (paletteIndex = 0; paletteIndex < NTVDD_PALETTE_ENTRIES; ++paletteIndex)
-        if (frame->SplitRow[paletteIndex] && (UINT32)(frame->FrameNumber - frame->SplitFrame[paletteIndex]) <= NTVDD_SPLIT_MAX_AGE) return TRUE;
+        if (frame->SplitRow[paletteIndex] && (UINT32)(frame->FrameNumber - frame->SplitFrame[paletteIndex]) <= NTVDD_SPLIT_MAX_AGE)
+            return TRUE;
     return FALSE;
 }
 
@@ -198,11 +201,25 @@ typedef VOID (*PVDD_FRAME_ROUTINE)(PVOID context);
 typedef struct _VDD_BUS VDD_BUS, *PVDD_BUS;
 
 /* claim_*: a VDD registers interest during init().  All ranges inclusive. */
-INT  VddClaimPorts(PVDD_BUS bus, WORD firstPort, WORD lastPort,
-                   PVDD_PORT_IN_ROUTINE inRoutine, PVDD_PORT_OUT_ROUTINE outRoutine, PVOID context);
-INT  VddClaimMemory(PVDD_BUS bus, UINT32 base, UINT32 size,
-                    PVDD_MEMORY_READ_ROUTINE readRoutine, PVDD_MEMORY_WRITE_ROUTINE writeRoutine, PVOID context);
-INT  VddClaimInterrupt(PVDD_BUS bus, BYTE vector, PVDD_INTERRUPT_ROUTINE serviceRoutine, PVOID context);
+INT  VddClaimPorts(
+    PVDD_BUS bus,
+    WORD firstPort,
+    WORD lastPort,
+    PVDD_PORT_IN_ROUTINE inRoutine,
+    PVDD_PORT_OUT_ROUTINE outRoutine,
+    PVOID context);
+INT  VddClaimMemory(
+    PVDD_BUS bus,
+    UINT32 base,
+    UINT32 size,
+    PVDD_MEMORY_READ_ROUTINE readRoutine,
+    PVDD_MEMORY_WRITE_ROUTINE writeRoutine,
+    PVOID context);
+INT  VddClaimInterrupt(
+    PVDD_BUS bus,
+    BYTE vector,
+    PVDD_INTERRUPT_ROUTINE serviceRoutine,
+    PVOID context);
 INT  VddOnFrame(PVDD_BUS bus, PVDD_FRAME_ROUTINE frameRoutine, PVOID context);
 
 /* services a VDD may call back into */

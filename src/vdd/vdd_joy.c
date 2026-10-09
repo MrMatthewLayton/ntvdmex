@@ -29,7 +29,10 @@
 
 static VOID VddJoystickPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 {
-    PJOYSTICK_STATE state = (PJOYSTICK_STATE)context; (VOID)port; (VOID)width;
+    PJOYSTICK_STATE state = (PJOYSTICK_STATE)context;
+
+    (VOID)port;
+    (VOID)width;
     BYTE result = JOYSTICK_NO_BUTTONS_PRESSED;   /* no buttons pressed */
     INT axisIndex, wiredAxes = VddJoystickAxes(state);
     state->PortReads++;
@@ -51,7 +54,8 @@ static VOID VddJoystickPortIn(PVOID context, WORD port, BYTE width, UINT32 *valu
         for (axisIndex = 0; axisIndex < JOYSTICK_AXES; ++axisIndex)
         {
             INT isStuck = (axisIndex >= wiredAxes) || !state->IsPresent || !state->NowMicroseconds;
-            if (isStuck || elapsed < VddJoystickAxisMicroseconds(state->Axis[axisIndex])) result |= (BYTE)(1u << axisIndex);
+            if (isStuck || elapsed < VddJoystickAxisMicroseconds(state->Axis[axisIndex]))
+                result |= (BYTE)(1u << axisIndex);
         }
     }
     *value = result;
@@ -60,9 +64,14 @@ static VOID VddJoystickPortIn(PVOID context, WORD port, BYTE width, UINT32 *valu
 /* OUT (any value, any port in the range): fire the one-shots. */
 static VOID VddJoystickPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
-    PJOYSTICK_STATE state = (PJOYSTICK_STATE)context; (VOID)port; (VOID)width; (VOID)value;
+    PJOYSTICK_STATE state = (PJOYSTICK_STATE)context;
+
+    (VOID)port;
+    (VOID)width;
+    (VOID)value;
     state->PortWrites++;
-    if (state->Type == JOYSTICK_TYPE_NONE) return;   /* no card, nothing to fire */
+    if (state->Type == JOYSTICK_TYPE_NONE)
+        return;                                      /* no card, nothing to fire */
     state->HasFired = TRUE;
     state->TriggerMicroseconds = state->NowMicroseconds ? state->NowMicroseconds(state->ClockContext) : 0;
 }
@@ -70,12 +79,15 @@ static VOID VddJoystickPortOut(PVOID context, WORD port, BYTE width, UINT32 valu
 VOID VddJoystickReset(PVOID context)
 {
     PJOYSTICK_STATE state = (PJOYSTICK_STATE)context;
-    state->HasFired = FALSE; state->TriggerMicroseconds = 0; /* keep Type + the host-fed sample */
+
+    state->HasFired = FALSE;
+    state->TriggerMicroseconds = 0; /* keep Type + the host-fed sample */
 }
 
 INT VddJoystickInitialize(PVDD_BUS bus, PVOID context)
 {
     PJOYSTICK_STATE state = (PJOYSTICK_STATE)context;
+
     state->Bus = bus;
     /* A real gameport card decodes the whole 0x200-0x207 block. */
     return VddClaimPorts(bus, JOYSTICK_FIRST_PORT, JOYSTICK_LAST_PORT, VddJoystickPortIn, VddJoystickPortOut, state);

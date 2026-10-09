@@ -42,12 +42,14 @@ static INT g_Irq6Count;
 static VOID FdcTestIrqSink(PVOID context, BYTE irq)
 {
     (VOID)context;
-    if (irq == 6) g_Irq6Count++;
+    if (irq == 6)
+        g_Irq6Count++;
 }
 
 static BYTE FdcTestRead(PVDD_BUS bus, WORD port)
 {
     UINT32 value = 0;
+
     VddBusIo(bus, port, 1, 1, &value);
     return (BYTE)value;
 }
@@ -55,6 +57,7 @@ static BYTE FdcTestRead(PVDD_BUS bus, WORD port)
 static VOID FdcTestWrite(PVDD_BUS bus, WORD port, BYTE byteValue)
 {
     UINT32 value = byteValue;
+
     VddBusIo(bus, port, 1, 0, &value);
 }
 
@@ -74,6 +77,7 @@ static INT g_SendFailures;
 static INT FdcTestDriverSend(PVDD_BUS bus, BYTE byte)
 {
     INT spin;
+
     for (spin = 0; spin < 10000; ++spin)
         if ((FdcTestRead(bus, FDC_MSR) & 0xC0) == 0x80)
         {
@@ -91,18 +95,23 @@ static INT FdcTestDriverSend(PVDD_BUS bus, BYTE byte)
 static INT FdcTestDriverDrain(PVDD_BUS bus, PBYTE output, INT maximum)
 {
     INT count = 0, spin;
+
     for (spin = 0; spin < 10000 && count < maximum; ++spin)
     {
         BYTE status = FdcTestRead(bus, FDC_MSR);
-        if (!(status & FDC_MSR_CB)) break;
-        if ((status & 0xC0) == 0xC0) output[count++] = FdcTestRead(bus, FDC_FIFO);
+        if (!(status & FDC_MSR_CB))
+            break;
+        if ((status & 0xC0) == 0xC0)
+            output[count++] = FdcTestRead(bus, FDC_FIFO);
     }
     return count;
 }
 
 INT main(VOID)
 {
-    VDD_BUS bus; FDC_STATE fdc; NTVDD_DEVICE device;
+    VDD_BUS bus;
+    FDC_STATE fdc;
+    NTVDD_DEVICE device;
     BYTE result[16];
     INT count;
 
@@ -189,7 +198,9 @@ INT main(VOID)
      * END; the second byte is the present cylinder.
      */
     g_Irq6Count = 0;
-    FdcTestDriverSend(&bus, 0x0F); FdcTestDriverSend(&bus, 0x00); FdcTestDriverSend(&bus, 0x27);
+    FdcTestDriverSend(&bus, 0x0F);
+    FdcTestDriverSend(&bus, 0x00);
+    FdcTestDriverSend(&bus, 0x27);
     CHECK(g_Irq6Count == 1, "seek: raises IRQ6 exactly once");
     CHECK(FdcTestRead(&bus, FDC_MSR) == 0x80, "seek: no result phase");
     FdcTestDriverSend(&bus, 0x08);
@@ -208,11 +219,13 @@ INT main(VOID)
      */
     g_Irq6Count = 0;
     FdcTestWrite(&bus, FDC_DOR, (BYTE)(FDC_DOR_NRESET));      /* gate OFF, out of reset */
-    FdcTestDriverSend(&bus, 0x07); FdcTestDriverSend(&bus, 0x00);  /* RECALIBRATE */
+    FdcTestDriverSend(&bus, 0x07);
+    FdcTestDriverSend(&bus, 0x00);  /* RECALIBRATE */
     CHECK(g_Irq6Count == 0, "dmagate: clear -> IRQ6 is not delivered");
     FdcTestWrite(&bus, FDC_DOR, (BYTE)(FDC_DOR_NRESET | FDC_DOR_DMA_GATE));
     g_Irq6Count = 0;
-    FdcTestDriverSend(&bus, 0x07); FdcTestDriverSend(&bus, 0x00);
+    FdcTestDriverSend(&bus, 0x07);
+    FdcTestDriverSend(&bus, 0x00);
     CHECK(g_Irq6Count == 1, "dmagate: set -> IRQ6 is delivered");
 
     /* 9. DOR BIT 2 IS AN ACTIVE-LOW RESET, AND IT REALLY HOLDS:
@@ -240,7 +253,8 @@ INT main(VOID)
         {
             FdcTestDriverSend(&bus, 0x08);
             count = FdcTestDriverDrain(&bus, result, 16);
-            if (count != 2 || result[0] != (BYTE)(0xC0 | index)) isOk = 0;
+            if (count != 2 || result[0] != (BYTE)(0xC0 | index))
+                isOk = 0;
         }
         CHECK(isOk, "reset: four sense-interrupts, C0h|drive, one per drive");
         FdcTestDriverSend(&bus, 0x08);
@@ -270,8 +284,11 @@ INT main(VOID)
      * difference between a locked and an unlocked part.
      */
     FdcTestDriverSend(&bus, 0x13);                          /* CONFIGURE */
-    FdcTestDriverSend(&bus, 0x00); FdcTestDriverSend(&bus, 0x2F); FdcTestDriverSend(&bus, 0x05);
-    FdcTestDriverSend(&bus, 0x94); FdcTestDriverDrain(&bus, result, 16);   /* LOCK (bit 7 set) */
+    FdcTestDriverSend(&bus, 0x00);
+    FdcTestDriverSend(&bus, 0x2F);
+    FdcTestDriverSend(&bus, 0x05);
+    FdcTestDriverSend(&bus, 0x94);
+    FdcTestDriverDrain(&bus, result, 16);   /* LOCK (bit 7 set) */
     FdcTestWrite(&bus, FDC_MSR, 0x80);                          /* DSR software reset */
     FdcTestDriverSend(&bus, 0x0E);
     count = FdcTestDriverDrain(&bus, result, 16);
@@ -288,9 +305,14 @@ INT main(VOID)
      */
     g_SendFailures = 0;
     FdcTestDriverSend(&bus, 0xE6);                          /* READ DATA, MT+MFM+SK */
-    FdcTestDriverSend(&bus, 0x00); FdcTestDriverSend(&bus, 0x00); FdcTestDriverSend(&bus, 0x00);
-    FdcTestDriverSend(&bus, 0x01); FdcTestDriverSend(&bus, 0x02); FdcTestDriverSend(&bus, 0x12);
-    FdcTestDriverSend(&bus, 0x1B); FdcTestDriverSend(&bus, 0xFF);
+    FdcTestDriverSend(&bus, 0x00);
+    FdcTestDriverSend(&bus, 0x00);
+    FdcTestDriverSend(&bus, 0x00);
+    FdcTestDriverSend(&bus, 0x01);
+    FdcTestDriverSend(&bus, 0x02);
+    FdcTestDriverSend(&bus, 0x12);
+    FdcTestDriverSend(&bus, 0x1B);
+    FdcTestDriverSend(&bus, 0xFF);
     count = FdcTestDriverDrain(&bus, result, 16);
     CHECK(g_SendFailures == 0 && count == 7,
           "read data: all nine bytes accepted, seven result bytes back");
@@ -314,9 +336,14 @@ INT main(VOID)
      */
     g_SendFailures = 0;
     FdcTestDriverSend(&bus, 0x09);                          /* WRITE DELETED DATA */
-    FdcTestDriverSend(&bus, 0x00); FdcTestDriverSend(&bus, 0x00); FdcTestDriverSend(&bus, 0x00);
-    FdcTestDriverSend(&bus, 0x01); FdcTestDriverSend(&bus, 0x02); FdcTestDriverSend(&bus, 0x12);
-    FdcTestDriverSend(&bus, 0x1B); FdcTestDriverSend(&bus, 0xFF);
+    FdcTestDriverSend(&bus, 0x00);
+    FdcTestDriverSend(&bus, 0x00);
+    FdcTestDriverSend(&bus, 0x00);
+    FdcTestDriverSend(&bus, 0x01);
+    FdcTestDriverSend(&bus, 0x02);
+    FdcTestDriverSend(&bus, 0x12);
+    FdcTestDriverSend(&bus, 0x1B);
+    FdcTestDriverSend(&bus, 0xFF);
     count = FdcTestDriverDrain(&bus, result, 16);
     /* [INFO]: g_SendFailures IS THE WHOLE CHECK. If 09h is missing from the length table
      * the chip executes on byte one, flips to result phase, and the next eight

@@ -307,7 +307,23 @@ extern WOWENUM_FONT g_WowEnumFonts[WOWENUM_MAXFONT];
 extern INT g_WowEnumFontCount;
 extern WOWCALL_FRAME g_WowCallFrames[WOWCALL_MAX_DEPTH];
 extern INT g_WowCallDepth;
-INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector, DWORD procedure, WORD dataSelector, PCWORD argumentWords, INT argumentWordCount, DWORD returnLinear, INT returnMode, PWORD sink, WORD window, WORD message, PCBYTE blob, INT blobLength, INT blobArgument, INT isAbsent);
+INT WowCallEnter(
+    volatile BYTE *tib,
+    DWORD stackBase,
+    WORD returnSelector,
+    DWORD procedure,
+    WORD dataSelector,
+    PCWORD argumentWords,
+    INT argumentWordCount,
+    DWORD returnLinear,
+    INT returnMode,
+    PWORD sink,
+    WORD window,
+    WORD message,
+    PCBYTE blob,
+    INT blobLength,
+    INT blobArgument,
+    INT isAbsent);
 extern WORD (*g_WowCallCurrentTask)(VOID);
 extern INT (*g_WowCallRetarget)(WORD window, PWORD stackSelector, PWORD stackPointer, PDWORD stackBase, PWORD previousTask);
 extern VOID (*g_WowCallUntarget)(WORD previousTask);

@@ -100,7 +100,10 @@ static HICON  g_Icon;
 static INT MgrSessionCount(VOID)
 {
     INT slot, count = 0;
-    for (slot = 0; slot < MGR_MAX; ++slot) if (g_Sessions[slot].IsUsed) ++count;
+
+    for (slot = 0; slot < MGR_MAX; ++slot)
+        if (g_Sessions[slot].IsUsed)
+            ++count;
     return count;
 }
 
@@ -108,6 +111,7 @@ static VOID MgrTrayTip(NOTIFYICONDATAA *notifyData)
 {
     INT count = MgrSessionCount();
     CHAR tip[MGR_TIP_SIZE];
+
     if (count == MGR_ONE_PROGRAM)
     {
         INT slot;
@@ -124,8 +128,11 @@ static VOID MgrTrayTip(NOTIFYICONDATAA *notifyData)
 static VOID MgrTraySet(DWORD operation)
 {
     NOTIFYICONDATAA notifyData;
+
     ZeroMemory(&notifyData, sizeof notifyData);
-    notifyData.cbSize = sizeof notifyData; notifyData.hWnd = g_Window; notifyData.uID = TRAY_ID;
+    notifyData.cbSize = sizeof notifyData;
+    notifyData.hWnd = g_Window;
+    notifyData.uID = TRAY_ID;
     if (operation != NIM_DELETE)
     {
         notifyData.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
@@ -135,22 +142,28 @@ static VOID MgrTraySet(DWORD operation)
     }
     if (Shell_NotifyIconA(operation, &notifyData))
     {
-        if (operation == NIM_ADD) g_HasTrayIcon = TRUE;
-        if (operation == NIM_DELETE) g_HasTrayIcon = FALSE;
+        if (operation == NIM_ADD)
+            g_HasTrayIcon = TRUE;
+        if (operation == NIM_DELETE)
+            g_HasTrayIcon = FALSE;
     }
     else if (operation == NIM_MODIFY && g_HasTrayIcon)
     {
         /* Explorer lost it without telling us (it was restarted): put it back. */
-        g_HasTrayIcon = FALSE; MgrTraySet(NIM_ADD);
+        g_HasTrayIcon = FALSE;
+        MgrTraySet(NIM_ADD);
     }
 }
 
 static VOID MgrSessionDrop(INT slot)
 {
-    if (!g_Sessions[slot].IsUsed) return;
-    if (g_Sessions[slot].Process) CloseHandle(g_Sessions[slot].Process);
+    if (!g_Sessions[slot].IsUsed)
+        return;
+    if (g_Sessions[slot].Process)
+        CloseHandle(g_Sessions[slot].Process);
     ZeroMemory(&g_Sessions[slot], sizeof g_Sessions[slot]);
-    if (g_HasTrayIcon) MgrTraySet(NIM_MODIFY);
+    if (g_HasTrayIcon)
+        MgrTraySet(NIM_MODIFY);
 }
 
 /* Upsert by pid. Returns TRUE if accepted. */
@@ -158,19 +171,27 @@ static BOOL MgrSessionHello(PCMGR_MESSAGE message)
 {
     INT slot, freeSlot = MGR_NO_SLOT;
     BOOL hasChanged = FALSE;
+
     for (slot = 0; slot < MGR_MAX; ++slot)
     {
-        if (g_Sessions[slot].IsUsed && g_Sessions[slot].ProcessId == message->ProcessId) break;
-        if (!g_Sessions[slot].IsUsed && freeSlot < 0) freeSlot = slot;
+        if (g_Sessions[slot].IsUsed && g_Sessions[slot].ProcessId == message->ProcessId)
+            break;
+        if (!g_Sessions[slot].IsUsed && freeSlot < 0)
+            freeSlot = slot;
     }
     if (slot == MGR_MAX)
     {
         HANDLE process;
-        if (freeSlot < 0) return FALSE;                       /* full */
+        if (freeSlot < 0)
+            return FALSE;                                     /* full */
         process = OpenProcess(SYNCHRONIZE, FALSE, message->ProcessId);
-        if (!process) return FALSE;                          /* it is already gone */
+        if (!process)
+            return FALSE;                                    /* it is already gone */
         slot = freeSlot;
-        g_Sessions[slot].IsUsed = TRUE; g_Sessions[slot].ProcessId = message->ProcessId; g_Sessions[slot].Process = process; g_Sessions[slot].Sequence = ++g_Sequence;
+        g_Sessions[slot].IsUsed = TRUE;
+        g_Sessions[slot].ProcessId = message->ProcessId;
+        g_Sessions[slot].Process = process;
+        g_Sessions[slot].Sequence = ++g_Sequence;
         hasChanged = TRUE;
     }
     g_Sessions[slot].Kind = message->Kind;
@@ -181,17 +202,21 @@ static BOOL MgrSessionHello(PCMGR_MESSAGE message)
         lstrcpynA(g_Sessions[slot].Name, message->Name, MGR_NAME_SIZE);
         hasChanged = TRUE;
     }
-    if (!g_HasTrayIcon) MgrTraySet(NIM_ADD);
-    else if (hasChanged) MgrTraySet(NIM_MODIFY);
+    if (!g_HasTrayIcon)
+        MgrTraySet(NIM_ADD);
+    else if (hasChanged)
+        MgrTraySet(NIM_MODIFY);
     return TRUE;
 }
 
 static VOID MgrSessionCommand(INT slot, WPARAM command)
 {
-    if (slot < 0 || slot >= MGR_MAX || !g_Sessions[slot].IsUsed) return;
+    if (slot < 0 || slot >= MGR_MAX || !g_Sessions[slot].IsUsed)
+        return;
     if (command == MGR_COMMAND_SHOW && g_Sessions[slot].ShowTargetWindow && IsWindow(g_Sessions[slot].ShowTargetWindow))
     {
-        if (IsIconic(g_Sessions[slot].ShowTargetWindow)) ShowWindow(g_Sessions[slot].ShowTargetWindow, SW_RESTORE);
+        if (IsIconic(g_Sessions[slot].ShowTargetWindow))
+            ShowWindow(g_Sessions[slot].ShowTargetWindow, SW_RESTORE);
         SetForegroundWindow(g_Sessions[slot].ShowTargetWindow);
         return;
     }
@@ -205,18 +230,25 @@ static VOID MgrTrayMenu(VOID)
     HMENU menu = CreatePopupMenu();
     POINT cursor;
     INT order[MGR_MAX], count = 0, slot, position, menuId;
-    if (!menu) return;
-    for (slot = 0; slot < MGR_MAX; ++slot) if (g_Sessions[slot].IsUsed) order[count++] = slot;
+
+    if (!menu)
+        return;
+    for (slot = 0; slot < MGR_MAX; ++slot)
+        if (g_Sessions[slot].IsUsed)
+            order[count++] = slot;
     for (slot = 1; slot < count; ++slot)                         /* insertion sort by sequence */
         for (position = slot; position > 0 && g_Sessions[order[position - 1]].Sequence > g_Sessions[order[position]].Sequence; --position)
         {
-            INT swapped = order[position]; order[position] = order[position - 1]; order[position - 1] = swapped;
+            INT swapped = order[position];
+            order[position] = order[position - 1];
+            order[position - 1] = swapped;
         }
     for (position = 0; position < count; ++position)
     {
         HMENU submenu = CreatePopupMenu();
         slot = order[position];
-        if (!submenu) continue;
+        if (!submenu)
+            continue;
         menuId = IDM_P_BASE + slot * IDM_P_PER_SLOT;
         /* No per-program Settings (user, s88): settings are global, so they live
          * once, below, and not in every submenu.
@@ -226,7 +258,8 @@ static VOID MgrTrayMenu(VOID)
         AppendMenuA(menu, MF_POPUP | MF_STRING, (UINT_PTR)submenu,
                     g_Sessions[slot].Name[0] ? g_Sessions[slot].Name : MGR_MENU_STARTING);
     }
-    if (!count) AppendMenuA(menu, MF_STRING | MF_GRAYED, MGR_NO_MENU_ID, MGR_MENU_NO_PROGRAMS);
+    if (!count)
+        AppendMenuA(menu, MF_STRING | MF_GRAYED, MGR_NO_MENU_ID, MGR_MENU_NO_PROGRAMS);
     AppendMenuA(menu, MF_SEPARATOR, MGR_NO_MENU_ID, NULL);
     AppendMenuA(menu, MF_STRING | (count ? MGR_NO_MENU_FLAGS : MF_GRAYED), IDM_G_SETTINGS, MGR_MENU_SETTINGS);
     AppendMenuA(menu, MF_STRING, IDM_G_ABOUT, MGR_MENU_ABOUT);
@@ -244,13 +277,19 @@ static VOID MgrTrayMenu(VOID)
 static VOID MgrOnCommand(UINT commandId)
 {
     INT slot;
+
     if (commandId >= IDM_P_BASE)
     {
         slot = (INT)(commandId - IDM_P_BASE) / IDM_P_PER_SLOT;
         switch ((commandId - IDM_P_BASE) % IDM_P_PER_SLOT)
         {
-        case IDM_P_SHOW:     MgrSessionCommand(slot, MGR_COMMAND_SHOW);      break;
-        case IDM_P_CLOSE:    MgrSessionCommand(slot, MGR_COMMAND_CLOSE_PROGRAM); break;
+        case IDM_P_SHOW:
+            MgrSessionCommand(slot, MGR_COMMAND_SHOW);
+        break;
+
+        case IDM_P_CLOSE:
+            MgrSessionCommand(slot, MGR_COMMAND_CLOSE_PROGRAM);
+        break;
         }
         return;
     }
@@ -262,15 +301,20 @@ static VOID MgrOnCommand(UINT commandId)
          */
         {   INT oldest = MGR_NO_SLOT;
             for (slot = 0; slot < MGR_MAX; ++slot)
-                if (g_Sessions[slot].IsUsed && (oldest < 0 || g_Sessions[slot].Sequence < g_Sessions[oldest].Sequence)) oldest = slot;
+                if (g_Sessions[slot].IsUsed && (oldest < 0 || g_Sessions[slot].Sequence < g_Sessions[oldest].Sequence))
+                    oldest = slot;
             MgrSessionCommand(oldest, MGR_COMMAND_SETTINGS); }
         break;
+
     case IDM_G_ABOUT:
         ShellAboutA(g_Window, MGR_ABOUT_TITLE,
                     MGR_ABOUT_TEXT, g_Icon);
         break;
+
     case IDM_G_EXITALL:
-        for (slot = 0; slot < MGR_MAX; ++slot) if (g_Sessions[slot].IsUsed) MgrSessionCommand(slot, MGR_COMMAND_EXIT);
+        for (slot = 0; slot < MGR_MAX; ++slot)
+            if (g_Sessions[slot].IsUsed)
+                MgrSessionCommand(slot, MGR_COMMAND_EXIT);
         break;
     }
 }
@@ -280,7 +324,8 @@ static LRESULT CALLBACK MgrWindowProc(HWND window, UINT message, WPARAM wParam, 
     if (message == g_TaskbarCreatedMessage && g_TaskbarCreatedMessage)     /* Explorer restarted */
     {
         g_HasTrayIcon = FALSE;
-        if (MgrSessionCount()) MgrTraySet(NIM_ADD);
+        if (MgrSessionCount())
+            MgrTraySet(NIM_ADD);
         return 0;
     }
     switch (message)
@@ -292,17 +337,22 @@ static LRESULT CALLBACK MgrWindowProc(HWND window, UINT message, WPARAM wParam, 
         if (!copyData || copyData->dwData != MGR_MAGIC || copyData->cbData < sizeof received || !copyData->lpData)
             return FALSE;
         CopyMemory(&received, copyData->lpData, sizeof received);
-        if (received.Magic != MGR_MAGIC || received.Version != MGR_VERSION) return FALSE;
+        if (received.Magic != MGR_MAGIC || received.Version != MGR_VERSION)
+            return FALSE;
         received.Name[MGR_NAME_SIZE - 1] = MGR_END_OF_STRING;
-        if (received.Operation == MGR_OP_HELLO) return MgrSessionHello(&received);
+        if (received.Operation == MGR_OP_HELLO)
+            return MgrSessionHello(&received);
         if (received.Operation == MGR_OP_BYE)
         {
             INT slot;
-            for (slot = 0; slot < MGR_MAX; ++slot) if (g_Sessions[slot].IsUsed && g_Sessions[slot].ProcessId == received.ProcessId) MgrSessionDrop(slot);
+            for (slot = 0; slot < MGR_MAX; ++slot)
+                if (g_Sessions[slot].IsUsed && g_Sessions[slot].ProcessId == received.ProcessId)
+                    MgrSessionDrop(slot);
             return TRUE;
         }
         return FALSE;
     }
+
     case WM_MGRTRAY:
         if (lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU)
         {
@@ -326,48 +376,62 @@ static LRESULT CALLBACK MgrWindowProc(HWND window, UINT message, WPARAM wParam, 
             }
         }
         return 0;
+
     case WM_COMMAND:
         MgrOnCommand(LOWORD(wParam));
         return 0;
+
     case WM_DESTROY:
-        if (g_HasTrayIcon) MgrTraySet(NIM_DELETE);
+        if (g_HasTrayIcon)
+            MgrTraySet(NIM_DELETE);
         PostQuitMessage(MGR_EXIT_OK);
         return 0;
     }
     return DefWindowProcA(window, message, wParam, lParam);
 }
 
-int WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR commandLine, int showCommand)
+int WINAPI WinMain(
+    HINSTANCE instance,
+    HINSTANCE previousInstance,
+    LPSTR commandLine,
+    int showCommand)
 {
     WNDCLASSA windowClass;
     HANDLE singleInstance;
     DWORD startedAt = GetTickCount(), emptySince = 0;
     BOOL hasEverHadPrograms = FALSE;
-    (VOID)previousInstance; (VOID)commandLine; (VOID)showCommand;
+
+    (VOID)previousInstance;
+    (VOID)commandLine;
+    (VOID)showCommand;
 
     /* One manager per session. A second one started in a race simply leaves: the
      * first answers every host, and they find it by class name.
      */
     singleInstance = CreateMutexA(NULL, TRUE, MGR_MUTEX);
-    if (!singleInstance || GetLastError() == ERROR_ALREADY_EXISTS) return MGR_EXIT_OK;
+    if (!singleInstance || GetLastError() == ERROR_ALREADY_EXISTS)
+        return MGR_EXIT_OK;
 
     g_CommandMessage          = RegisterWindowMessageA(MGR_CMD_MSGNAME);
     g_TaskbarCreatedMessage = RegisterWindowMessageA(MGR_TASKBAR_CREATED);
     g_Icon = LoadIconA(instance, MAKEINTRESOURCEA(IDI_MAINICON));
-    if (!g_Icon) g_Icon = LoadIconA(NULL, IDI_APPLICATION);
+    if (!g_Icon)
+        g_Icon = LoadIconA(NULL, IDI_APPLICATION);
 
     ZeroMemory(&windowClass, sizeof windowClass);
     windowClass.lpfnWndProc   = MgrWindowProc;
     windowClass.hInstance     = instance;
     windowClass.lpszClassName = MGR_CLASS;
     windowClass.hIcon         = g_Icon;
-    if (!RegisterClassA(&windowClass)) return MGR_EXIT_FAILED;
+    if (!RegisterClassA(&windowClass))
+        return MGR_EXIT_FAILED;
     /* A real (hidden) top-level window, not HWND_MESSAGE: the tray needs a window
      * that can take the foreground for its menu, and hosts find it by class.
      */
     g_Window = CreateWindowExA(WS_EX_TOOLWINDOW, MGR_CLASS, MGR_WINDOW_TITLE, WS_POPUP,
                              0, 0, 0, 0, NULL, NULL, instance, NULL);
-    if (!g_Window) return MGR_EXIT_FAILED;
+    if (!g_Window)
+        return MGR_EXIT_FAILED;
 
     for (;;)
     {
@@ -389,7 +453,8 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         }
         while (PeekMessageA(&queued, NULL, MGR_DRAIN_ALL, MGR_DRAIN_ALL, PM_REMOVE))
         {
-            if (queued.message == WM_QUIT) goto out;
+            if (queued.message == WM_QUIT)
+                goto out;
             TranslateMessage(&queued);
             DispatchMessageA(&queued);
         }
@@ -405,18 +470,23 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         }
         else if (hasEverHadPrograms)
         {
-            if (!emptySince) emptySince = GetTickCount();
-            else if (GetTickCount() - emptySince >= EMPTY_GRACE_MS) break;
+            if (!emptySince)
+                emptySince = GetTickCount();
+            else if (GetTickCount() - emptySince >= EMPTY_GRACE_MS)
+                break;
         }
-        else if (GetTickCount() - startedAt >= FIRST_HELLO_MS) break;
+        else if (GetTickCount() - startedAt >= FIRST_HELLO_MS)
+            break;
     }
 out:
-    if (g_HasTrayIcon) MgrTraySet(NIM_DELETE);
+    if (g_HasTrayIcon)
+        MgrTraySet(NIM_DELETE);
     DestroyWindow(g_Window);
     for (;;)                                        /* drain WM_DESTROY etc. */
     {
         MSG queued;
-        if (!PeekMessageA(&queued, NULL, MGR_DRAIN_ALL, MGR_DRAIN_ALL, PM_REMOVE)) break;
+        if (!PeekMessageA(&queued, NULL, MGR_DRAIN_ALL, MGR_DRAIN_ALL, PM_REMOVE))
+            break;
         DispatchMessageA(&queued);
     }
     CloseHandle(singleInstance);

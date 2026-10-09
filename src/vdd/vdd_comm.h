@@ -193,8 +193,10 @@ typedef struct _COMM_STATE
     PVDD_BUS Bus;
     COMM_PORT Ports[COMM_MAX_PORTS];
     LPT_PORT  Printers[LPT_MAX_PORTS];
-    PCOMM_TX_SINK Sink;     PVOID SinkContext;      /* serial */
-    PCOMM_TX_SINK PrinterSink; PVOID PrinterSinkContext;  /* parallel */
+    PCOMM_TX_SINK Sink;
+    PVOID SinkContext;      /* serial */
+    PCOMM_TX_SINK PrinterSink;
+    PVOID PrinterSinkContext;  /* parallel */
 } COMM_STATE, *PCOMM_STATE;
 
 typedef const COMM_STATE *PCCOMM_STATE;
@@ -215,7 +217,12 @@ INT  VddCommIsFitted(_In_ PCCOMM_STATE state, _In_ INT port);
 INT  VddLptIsFitted(_In_ PCCOMM_STATE state, _In_ INT port);
 
 static inline NTVDD_DEVICE VddCommDevice(_In_ PCOMM_STATE state)
-{ NTVDD_DEVICE device; device.Name = COMM_DEVICE_NAME; device.Initialize = VddCommInitialize; device.Reset = VddCommReset;
-  device.Shutdown = 0; device.Context = state; return device; }
+{ NTVDD_DEVICE device;
+device.Name = COMM_DEVICE_NAME;
+device.Initialize = VddCommInitialize;
+device.Reset = VddCommReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 #endif /* NTVDMEX_VDD_COMM_H */

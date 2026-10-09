@@ -52,24 +52,40 @@ static PORTECHO_STATE g_PortEcho;
 static void PortEchoIn(void *self, uint16_t port, uint8_t width, uint32_t *value)
 {
     PPORTECHO_STATE state = (PPORTECHO_STATE)self;
+
     (void)width;
     switch (port - PORTECHO_BASE)
     {
-    case PORTECHO_ID_REGISTER:         *value = PORTECHO_ID;                                 break;
-    case PORTECHO_COMPLEMENT_REGISTER: *value = (uint8_t)~state->Latch;                      break;
-    case PORTECHO_COUNT_REGISTER:      *value = (uint8_t)(state->Writes & PORTECHO_LOW_BYTE); break;
-    case PORTECHO_VERSION_REGISTER:    *value = (uint8_t)state->Version;                     break;
+    case PORTECHO_ID_REGISTER:
+        *value = PORTECHO_ID;
+    break;
+
+    case PORTECHO_COMPLEMENT_REGISTER:
+        *value = (uint8_t)~state->Latch;
+    break;
+
+    case PORTECHO_COUNT_REGISTER:
+        *value = (uint8_t)(state->Writes & PORTECHO_LOW_BYTE);
+    break;
+
+    case PORTECHO_VERSION_REGISTER:
+        *value = (uint8_t)state->Version;
+    break;
+
     /* [CAUTION]: AN UNCLAIMED REGISTER READS 0xFF, WHICH IS WHAT AN EMPTY ISA SLOT DOES.
      * Answering 0 instead would make a detection routine that probes for
      * "anything at all" think the card is present and broken.
      */
-    default: *value = PORTECHO_EMPTY_SLOT;                                                   break;
+    default:
+        *value = PORTECHO_EMPTY_SLOT;
+    break;
     }
 }
 
 static void PortEchoOut(void *self, uint16_t port, uint8_t width, uint32_t value)
 {
     PPORTECHO_STATE state = (PPORTECHO_STATE)self;
+
     (void)width;
     if ((port - PORTECHO_BASE) == PORTECHO_ID_REGISTER)
     {
@@ -78,16 +94,18 @@ static void PortEchoOut(void *self, uint16_t port, uint8_t width, uint32_t value
     }
 }
 
-NTVDMEX_VDD_EXPORT int NtvdmexVddInit(const ntvdmex_vdd_api *api,
-                                      ntvdmex_vdd_bus *bus)
+NTVDMEX_VDD_EXPORT int NtvdmexVddInit(const ntvdmex_vdd_api *api, ntvdmex_vdd_bus *bus)
 {
     int status;
+
     /* [CAUTION]: VERSION FIRST, AND REFUSE RATHER THAN HOPE. A driver that runs against
      * an ABI it does not understand is how a plugin model earns its
      * reputation; the host reports the refusal and carries on without us.
      */
-    if (!api || api->version != NTVDMEX_VDD_ABI_VERSION) return -1;
-    if (api->size < sizeof *api) return -1;
+    if (!api || api->version != NTVDMEX_VDD_ABI_VERSION)
+        return -1;
+    if (api->size < sizeof *api)
+        return -1;
 
     g_PortEcho.Api     = api;
     g_PortEcho.Latch   = 0;

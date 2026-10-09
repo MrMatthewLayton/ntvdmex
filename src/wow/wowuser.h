@@ -2501,6 +2501,14 @@ HWND WowUserMdiClientOf(PCWOWUSER_WINDOW window);
 DWORD WowUserTimerProcedure(WORD window16, WORD timerId);
 extern INT (*g_WowUserSend16)(WORD window16, WORD message, WORD wParam, DWORD lParam, PWORD result);
 extern INT (*g_WowUserSend16Blob)(WORD window16, WORD message, WORD wParam, PBYTE blob, INT blobLength, const INT *fix, INT fixCount, PWORD result);
-LRESULT WowUserDlgDefault(PWOWUSER_WINDOW window, WORD dialog16, WORD message, WORD wParam16, DWORD lParam32, PSTR note, INT noteCapacity, PINT noteLengthInOut);
+LRESULT WowUserDlgDefault(
+    PWOWUSER_WINDOW window,
+    WORD dialog16,
+    WORD message,
+    WORD wParam16,
+    DWORD lParam32,
+    PSTR note,
+    INT noteCapacity,
+    PINT noteLengthInOut);
 INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity);
 #endif /* WOWUSER_H */

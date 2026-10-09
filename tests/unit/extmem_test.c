@@ -64,6 +64,7 @@ INT main(VOID)
     DOS_XMS_STATE xmsState;
     static BYTE conventional[DOS_EXTMEM_DIRECT_END];
     PBYTE rawBuffer = (PBYTE)malloc(DOS_EXTMEM_RAW_LENGTH);
+
     memset(&xmsState, 0, sizeof xmsState);
 
     /* A fake EMB at a 32-bit address: classification only, never dereferenced. */

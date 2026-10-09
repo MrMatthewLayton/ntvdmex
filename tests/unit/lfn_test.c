@@ -143,7 +143,8 @@ static INT g_Checks, g_Failures;
 static VOID LfnTestExpect(PCSTR description, UINT64 actual, UINT64 expected)
 {
     ++g_Checks;
-    if (actual == expected) return;
+    if (actual == expected)
+        return;
     ++g_Failures;
     printf("  FAIL %-58s got 0x%llX, want 0x%llX\n", description, actual, expected);
 }
@@ -151,21 +152,29 @@ static VOID LfnTestExpect(PCSTR description, UINT64 actual, UINT64 expected)
 static VOID LfnTestExpectString(PCSTR description, PCSTR actual, PCSTR expected)
 {
     ++g_Checks;
-    if (!strcmp(actual, expected)) return;
+    if (!strcmp(actual, expected))
+        return;
     ++g_Failures;
     printf("  FAIL %-58s got \"%s\", want \"%s\"\n", description, actual, expected);
 }
 
-static VOID LfnTestFileTimeToDos(PCSTR description, UINT64 fileTime, BOOL shouldConvert,
-                                 UINT expectedDate, UINT expectedTime, UINT expectedTenMs)
+static VOID LfnTestFileTimeToDos(
+    PCSTR description,
+    UINT64 fileTime,
+    BOOL shouldConvert,
+    UINT expectedDate,
+    UINT expectedTime,
+    UINT expectedTenMs)
 {
     WORD dosDate = LFN_TEST_POISON_WORD, dosTime = LFN_TEST_POISON_WORD;
     BYTE tenMs = LFN_TEST_POISON_BYTE;
     CHAR label[LFN_TEST_LABEL_SIZE];
     BOOL didConvert = DosLfnFileTimeToDos(fileTime, &dosDate, &dosTime, &tenMs);
+
     snprintf(label, sizeof label, "%s: converts", description);
     LfnTestExpect(label, didConvert, shouldConvert);
-    if (!shouldConvert || !didConvert) return;
+    if (!shouldConvert || !didConvert)
+        return;
     snprintf(label, sizeof label, "%s: DX date", description);
     LfnTestExpect(label, dosDate, expectedDate);
     snprintf(label, sizeof label, "%s: CX time", description);
@@ -174,12 +183,18 @@ static VOID LfnTestFileTimeToDos(PCSTR description, UINT64 fileTime, BOOL should
     LfnTestExpect(label, tenMs, expectedTenMs);
 }
 
-static VOID LfnTestDosToFileTime(PCSTR description, UINT dosDate, UINT dosTime, UINT tenMs,
-                                 BOOL shouldConvert, UINT64 expectedFileTime)
+static VOID LfnTestDosToFileTime(
+    PCSTR description,
+    UINT dosDate,
+    UINT dosTime,
+    UINT tenMs,
+    BOOL shouldConvert,
+    UINT64 expectedFileTime)
 {
     UINT64 fileTime = LFN_TEST_POISON_FILETIME;
     CHAR label[LFN_TEST_LABEL_SIZE];
     BOOL didConvert = DosLfnDosToFileTime((WORD)dosDate, (WORD)dosTime, (BYTE)tenMs, &fileTime);
+
     snprintf(label, sizeof label, "%s: converts", description);
     LfnTestExpect(label, didConvert, shouldConvert);
     if (shouldConvert && didConvert)
@@ -193,6 +208,7 @@ static VOID LfnTestShortName(PCSTR longName, PCSTR expectedShortName, PCSTR expe
 {
     CHAR shortName[DOS_SHORT_NAME_SIZE], fcbName[DOS_FCB_NAME_SIZE + 1];
     CHAR label[LFN_TEST_LABEL_SIZE];
+
     memset(shortName, LFN_TEST_POISON_CHAR, sizeof shortName);
     DosLfnShortName(longName, shortName, fcbName);
     fcbName[DOS_FCB_NAME_SIZE] = 0;
@@ -257,7 +273,9 @@ INT main(VOID)
                          0, FALSE, 0);
     LfnTestDosToFileTime("BH = 200", LFN_TEST_DATE_2001_09_17, LFN_TEST_TIME_12_34_56,
                          LFN_TEST_BH_TOO_BIG, FALSE, 0);
-    {   WORD dosDate, dosTime; BYTE tenMs; UINT64 roundTrip = 0;
+    {   WORD dosDate, dosTime;
+    BYTE tenMs;
+    UINT64 roundTrip = 0;
         DosLfnFileTimeToDos(LFN_TEST_FT_2001_09_17_123457_25, &dosDate, &dosTime, &tenMs);
         DosLfnDosToFileTime(dosDate, dosTime, tenMs, &roundTrip);
         LfnTestExpect("round trip FILETIME -> DOS -> FILETIME (10 ms exact)", roundTrip,
@@ -269,10 +287,13 @@ INT main(VOID)
         INT byteIndex, strayBits = 0;
         memset(record, LFN_TEST_GUARD, sizeof record);
         entry.Attributes = LFN_TEST_ARCHIVE;
-        entry.SizeHigh = LFN_TEST_FILE_SIZE_HIGH; entry.SizeLow = LFN_TEST_FILE_SIZE_LOW;
-        entry.CreationTime = LFN_TEST_FT_1980_01_01; entry.LastAccessTime = 0;
+        entry.SizeHigh = LFN_TEST_FILE_SIZE_HIGH;
+        entry.SizeLow = LFN_TEST_FILE_SIZE_LOW;
+        entry.CreationTime = LFN_TEST_FT_1980_01_01;
+        entry.LastAccessTime = 0;
         entry.LastWriteTime = LFN_TEST_FT_2001_09_17_123457_25;
-        entry.LongName = "A long file name.txt"; entry.ShortName = "ALONGF~1.TXT";
+        entry.LongName = "A long file name.txt";
+        entry.ShortName = "ALONGF~1.TXT";
         DosLfnFindPack(record, &entry, LFN_TEST_FILETIME_FORMAT);
         LfnTestExpect("record length is 318 (13Eh)", DOS_LFN_FIND_RECORD_SIZE,
                       LFN_TEST_RECORD_SIZE);

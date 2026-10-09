@@ -105,8 +105,10 @@ static inline VOID BiosPrintScreenBegin(
     job->Columns = columns;
     job->Rows = (BYTE)(bdaRowsMinusOne ? bdaRowsMinusOne + 1 : BIOS_PRINT_SCREEN_DEFAULT_ROWS);
     job->Page = page;
-    job->Row = job->Column = 0; job->Phase = BIOS_PRINT_SCREEN_PHASE_INITIAL_LF;
-    job->ShouldTestStatus = FALSE; job->Cursor = cursor;
+    job->Row = job->Column = 0;
+    job->Phase = BIOS_PRINT_SCREEN_PHASE_INITIAL_LF;
+    job->ShouldTestStatus = FALSE;
+    job->Cursor = cursor;
 }
 
 /* The next byte for INT 17h. `printerStatus` is the AH INT 17h answered for the PREVIOUS
@@ -153,7 +155,8 @@ static inline INT BiosPrintScreenStep(
         character = readCell(context, job->Row, job->Column);
         *nextByte = character ? character : (BYTE)BIOS_PRINT_SCREEN_BLANK_CELL;
         job->ShouldTestStatus = TRUE;
-        if (++job->Column >= job->Columns) job->Phase = BIOS_PRINT_SCREEN_PHASE_LF;
+        if (++job->Column >= job->Columns)
+            job->Phase = BIOS_PRINT_SCREEN_PHASE_LF;
         return BIOS_PRINT_SCREEN_STEP_EMIT;
 
     case BIOS_PRINT_SCREEN_PHASE_LF:

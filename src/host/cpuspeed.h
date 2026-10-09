@@ -339,9 +339,7 @@ UINT CpuSpeedRealModeDutyBp(UINT protectedModeBp);
  */
 #define CPUSPEED_RUN_FLOOR_BP   32u
 
-UINT64 CpuSpeedHoldFor(UINT64 executedUs,
-                                            UINT64 wallUs,
-                                            UINT dutyBp);
+UINT64 CpuSpeedHoldFor(UINT64 executedUs, UINT64 wallUs, UINT dutyBp);
 
 /* One period of the controller, as a PURE FUNCTION so the loop and the deterministic
  * test run the identical law (tests/unit/cpuspeed_test.c drives this against a
@@ -356,17 +354,14 @@ UINT64 CpuSpeedHoldFor(UINT64 executedUs,
  * be bankable as a later burst. A stall (wall jumps, exec flat) lands here too and is
  * correctly forgiven. The window bound is the only other reason to rebaseline.
  */
-UINT64 CpuSpeedStep(UINT64 executedUs, UINT64 wallUs,
-                                        UINT dutyBp, UINT64 capUs,
-                                        INT *isReset);
+UINT64 CpuSpeedStep(UINT64 executedUs, UINT64 wallUs, UINT dutyBp, UINT64 capUs, INT *isReset);
 
 /* The duty actually achieved over a window, in basis points: exec / wall. This is
  * what the guest FEELS, and it equals the target only when the target is reachable
  * -- below the port-trap ceiling and inside the hold cap. Logged beside the
  * requested duty so the two can disagree in the open rather than the label lying.
  */
-UINT CpuSpeedDeliveredBp(UINT64 executedUs,
-                                      UINT64 wallUs);
+UINT CpuSpeedDeliveredBp(UINT64 executedUs, UINT64 wallUs);
 
 /* THE INTERPRETER HALF: PACE BY INSTRUCTIONS, NOT BY DUTY:
  * Here we know exactly how much work was done, so the throttle can be precise
@@ -400,7 +395,10 @@ unsigned long CpuSpeedInstructionsPerSecond(UINT index);
  * guest running FASTER than the setting (elapsed > owed) must not accumulate
  * negative debt it can spend later as a burst. Both ends are held.
  */
-INT CpuSpeedCharge(CPUSPEED_PACE *pace, unsigned long ran, unsigned long instructionsPerSecond,
-                           INT64 elapsedUs);
+INT CpuSpeedCharge(
+    CPUSPEED_PACE *pace,
+    unsigned long ran,
+    unsigned long instructionsPerSecond,
+    INT64 elapsedUs);
 
 #endif /* CPUSPEED_H */

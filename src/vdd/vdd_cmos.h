@@ -148,7 +148,12 @@ UINT32 VddCmosPeriodicHz(_In_ PCCMOS_STATE state);
 INT  VddCmosInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddCmosReset(_In_ PVOID context);
 static inline NTVDD_DEVICE VddCmosDevice(_In_ PCMOS_STATE state)
-{ NTVDD_DEVICE device; device.Name = CMOS_DEVICE_NAME; device.Initialize = VddCmosInitialize; device.Reset = VddCmosReset;
-  device.Shutdown = 0; device.Context = state; return device; }
+{ NTVDD_DEVICE device;
+device.Name = CMOS_DEVICE_NAME;
+device.Initialize = VddCmosInitialize;
+device.Reset = VddCmosReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 #endif /* NTVDMEX_VDD_CMOS_H */

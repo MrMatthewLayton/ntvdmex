@@ -34,7 +34,19 @@ INT WowDlgIsSelectorAbsent(WORD selector);
  * [CAUTION]: Only on the guest thread, in protected mode, a Win16 session, below the callback
  * depth limit. A run that stops without returning unwinds its frame and says so.
  */
-INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCount, WORD hwnd, WORD message, WORD *result, BYTE *blob, INT blobLength, INT blobArgument, const INT *fix, INT fixupCount);
+INT WowCall16SyncEx(
+    DWORD proc,
+    WORD ds,
+    const WORD *args,
+    INT argumentCount,
+    WORD hwnd,
+    WORD message,
+    WORD *result,
+    BYTE *blob,
+    INT blobLength,
+    INT blobArgument,
+    const INT *fix,
+    INT fixupCount);
 VOID Wow32CurrentDirectorySet(PCSTR directory);
 extern INT g_WowFoldMute;
 extern DWORD g_WowFoldDropped;
@@ -65,7 +77,13 @@ VOID WowProbeLoad(PCSTR command);
 INT WowRefuse(PCSTR command);
 WORD WowCallbackSelector(VOID);
 VOID WowProbeLdtMatrix(PCSTR tag);
-INT WowPlaceV86(DOS_MACHINE *machine, WORD *entryCs, WORD *eip, WORD *entryDs, WORD *entrySs, WORD *esp);
+INT WowPlaceV86(
+    DOS_MACHINE *machine,
+    WORD *entryCs,
+    WORD *eip,
+    WORD *entryDs,
+    WORD *entrySs,
+    WORD *esp);
 VOID WowProbeSelectors(VOID);
 DWORD Wow32ReturnOverride(WORD thunkId);
 INT Wow32ModeOverride(WORD thunkId);
@@ -80,7 +98,12 @@ WORD WowSchedCurrentTask(VOID);
 VOID WowTaskDirectoryHere(WORD task);
 VOID WowTaskChdir(WORD task, PSTR *logCursor);
 VOID WowSchedSetCurrent(WORD task);
-INT WowSchedRetarget(WORD hwnd, WORD *stackSegment, WORD *stackPointer, DWORD *stackSegmentBase, WORD *prev);
+INT WowSchedRetarget(
+    WORD hwnd,
+    WORD *stackSegment,
+    WORD *stackPointer,
+    DWORD *stackSegmentBase,
+    WORD *prev);
 VOID WowSchedUntarget(WORD prev);
 INT WowSchedInterTaskLive(VOID);
 VOID WowQuietLoad(VOID);
@@ -91,11 +114,38 @@ DWORD Wow32HostSelectorToLinear(WORD selector, PVOID context);
 VOID WowShadowPut(INT index);
 INT WowShadowSync(PSTR *logCursor);
 INT WowVendorApiEntry(DOS_MACHINE *machine, WORD *selector, WORD *offset);
-INT WowCall16Sync(DWORD proc, WORD ds, const WORD *args, INT argumentCount, WORD hwnd, WORD message, WORD *result);
+INT WowCall16Sync(
+    DWORD proc,
+    WORD ds,
+    const WORD *args,
+    INT argumentCount,
+    WORD hwnd,
+    WORD message,
+    WORD *result);
 DWORD ShimGlobal16(INT operation, DWORD firstArgument, DWORD secondArgument);
-LRESULT WowControlColour(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam, INT *handled);
-LRESULT WowOwnerDraw(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam, INT *handled);
-INT WowSend16Blob(WORD window16, WORD message, WORD wParam, BYTE *blob, INT blobLength, const INT *fix, INT fixupCount, WORD *result);
+LRESULT WowControlColour(
+    HWND window,
+    WORD window16,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam,
+    INT *handled);
+LRESULT WowOwnerDraw(
+    HWND window,
+    WORD window16,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam,
+    INT *handled);
+INT WowSend16Blob(
+    WORD window16,
+    WORD message,
+    WORD wParam,
+    BYTE *blob,
+    INT blobLength,
+    const INT *fix,
+    INT fixupCount,
+    WORD *result);
 INT WowSend16Now(WORD window16, WORD message, WORD wParam, DWORD lParam, WORD *result);
 VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
 #endif

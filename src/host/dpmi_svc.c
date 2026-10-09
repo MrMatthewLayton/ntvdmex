@@ -15,9 +15,13 @@
 INT DpmiIsSelectorValid(WORD selector, INT indexLimit, INT isAllocated, INT isGuestOwnedTable)
 {
     INT index = DPMI_SELECTOR_INDEX(selector);
-    if (!(selector & DPMI_SELECTOR_TI)) return 0;    /* TI = 0: GDT */
-    if (index < 1 || index >= indexLimit) return 0;  /* null, or off the end */
-    if (!isAllocated && !isGuestOwnedTable) return 0;   /* never handed out */
+
+    if (!(selector & DPMI_SELECTOR_TI))
+        return 0;                                    /* TI = 0: GDT */
+    if (index < 1 || index >= indexLimit)
+        return 0;                                    /* null, or off the end */
+    if (!isAllocated && !isGuestOwnedTable)
+        return 0;                                       /* never handed out */
     return 1;
 }
 
@@ -29,7 +33,9 @@ WORD DpmiCallbackEntry(WORD base, INT slot)
 INT DpmiCallbackSlotAt(WORD base, WORD codeSegment, WORD wantedSegment, WORD instructionPointer)
 {
     INT slot;
-    if (codeSegment != wantedSegment || instructionPointer < base) return -1;
+
+    if (codeSegment != wantedSegment || instructionPointer < base)
+        return -1;
     slot = (instructionPointer - base) / DPMI_CB_STRIDE;
     return (slot < DPMI_CB_SLOTS) ? slot : -1;
 }
@@ -37,14 +43,19 @@ INT DpmiCallbackSlotAt(WORD base, WORD codeSegment, WORD wantedSegment, WORD ins
 INT DpmiCallbackSlotOf(WORD base, WORD codeSegment, WORD wantedSegment, WORD offset)
 {
     INT slot = DpmiCallbackSlotAt(base, codeSegment, wantedSegment, offset);
+
     return (slot >= 0 && DpmiCallbackEntry(base, slot) == offset) ? slot : -1;
 }
 
 INT DpmiResizePlan(UINT32 newSize, UINT32 committed, UINT32 *copy)
 {
-    if (copy) *copy = 0;
-    if (newSize == 0) return DPMI_RESIZE_BAD;
-    if (newSize <= committed) return DPMI_RESIZE_INPLACE;
-    if (copy) *copy = committed;                     /* new > committed: all of the old */
+    if (copy)
+        *copy = 0;
+    if (newSize == 0)
+        return DPMI_RESIZE_BAD;
+    if (newSize <= committed)
+        return DPMI_RESIZE_INPLACE;
+    if (copy)
+        *copy = committed;                           /* new > committed: all of the old */
     return DPMI_RESIZE_MOVE;
 }

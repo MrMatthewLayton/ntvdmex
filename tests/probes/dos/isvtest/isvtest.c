@@ -28,8 +28,12 @@
  */
 typedef VOID (WINAPI *PFNVDD_INB)(WORD, BYTE *);   typedef VOID (WINAPI *PFNVDD_INW)(WORD, WORD *);
 typedef VOID (WINAPI *PFNVDD_OUTB)(WORD, BYTE);    typedef VOID (WINAPI *PFNVDD_OUTW)(WORD, WORD);
-typedef struct { PFNVDD_INB inb; PFNVDD_INW inw; PVOID insb, insw;
-                 PFNVDD_OUTB outb; PFNVDD_OUTW outw; PVOID outsb, outsw; } VDD_IO_HANDLERS;
+typedef struct { PFNVDD_INB inb;
+PFNVDD_INW inw;
+PVOID insb, insw;
+                 PFNVDD_OUTB outb;
+                 PFNVDD_OUTW outw;
+                 PVOID outsb, outsw; } VDD_IO_HANDLERS;
 typedef struct
 {
     WORD First, Last;
@@ -65,7 +69,8 @@ static VOID WINAPI IsvPortInByte(WORD port, BYTE *data)
 
 static VOID WINAPI IsvPortOutByte(WORD port, BYTE value)
 {
-    if (port == ISV_PORT_FIRST) g_IsvLatch = value;
+    if (port == ISV_PORT_FIRST)
+        g_IsvLatch = value;
 }
 
 __declspec(dllexport) VOID IsvInit(VOID)
@@ -79,21 +84,36 @@ __declspec(dllexport) VOID IsvDispatch(VOID)
 {
     switch (getDX())
     {
-    case ISV_FUNCTION_COMPLEMENT: setCX((USHORT)(getBX() ^ ISV_WORD_MASK)); setCF(0); break;
-    case ISV_FUNCTION_LATCH: setCX(g_IsvLatch); setCF(0); break;
+    case ISV_FUNCTION_COMPLEMENT:
+        setCX((USHORT)(getBX() ^ ISV_WORD_MASK));
+    setCF(0);
+    break;
+
+    case ISV_FUNCTION_LATCH:
+        setCX(g_IsvLatch);
+    setCF(0);
+    break;
+
     case ISV_FUNCTION_SUM:
     {
         BYTE *bytes = (BYTE *)VdmMapFlat(getDS(), getSI(), VDM_V86);
         USHORT count = getCX(), sum = 0, index;
-        for (index = 0; bytes && index < count; ++index) sum = (USHORT)(sum + bytes[index]);
-        setCX(sum); setCF(bytes ? 0 : 1); break; }
-    default: setCF(1); break;
+        for (index = 0; bytes && index < count; ++index)
+            sum = (USHORT)(sum + bytes[index]);
+        setCX(sum);
+        setCF(bytes ? 0 : 1);
+        break; }
+
+    default:
+        setCF(1);
+    break;
     }
 }
 
 BOOL WINAPI DllMainCRTStartup(HINSTANCE module, DWORD reason, LPVOID reserved)
 {
     (void)reserved;
-    if (reason == DLL_PROCESS_ATTACH) g_IsvModule = module;
+    if (reason == DLL_PROCESS_ATTACH)
+        g_IsvModule = module;
     return TRUE;
 }

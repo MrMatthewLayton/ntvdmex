@@ -80,7 +80,8 @@ static PVOID EmsTestAllocate(PVOID context, DWORD pages)
 
 static VOID EmsTestFree(PVOID context, PVOID memory, DWORD pages)
 {
-    (VOID)context; (VOID)pages;
+    (VOID)context;
+    (VOID)pages;
     free(memory);
 }
 
@@ -280,7 +281,8 @@ INT main(VOID)
                          "fn53: unused handle -> 83h (what MEM /D relies on)"); }
         DosEmsDeallocatePages(&state, listedHandle, &errorCode);
         DosEmsDeallocatePages(&state, otherListedHandle, &errorCode);
-        {   WORD reusedHandle; BYTE nameRead[DOS_EMS_HANDLE_NAME_SIZE];
+        {   WORD reusedHandle;
+        BYTE nameRead[DOS_EMS_HANDLE_NAME_SIZE];
             DosEmsAllocatePages(&state, 1, &reusedHandle, &errorCode);
             EmsTestCheck(DosEmsGetSetHandleName(&state, reusedHandle, FALSE, nameRead, &errorCode)
                          && nameRead[0] == 0,

@@ -27,8 +27,12 @@ static BYTE g_GuestMemory[0x100000];
 INT main(VOID)
 {
     VDD_BUS bus;
-    PIT_STATE pit; memset(&pit, 0, sizeof pit);
-    SPEAKER_STATE spk; memset(&spk, 0, sizeof spk); spk.Pit = &pit;
+    PIT_STATE pit;
+
+    memset(&pit, 0, sizeof pit);
+    SPEAKER_STATE spk;
+    memset(&spk, 0, sizeof spk);
+    spk.Pit = &pit;
     NTVDD_DEVICE pdev = VddPitDevice(&pit);
     NTVDD_DEVICE sdev = VddSpeakerDevice(&spk);
     UINT32 value;
@@ -46,29 +50,37 @@ INT main(VOID)
     /* T2: program PIT channel 2 to 1000 Hz (reload = 1193182/1000 = 1193) -- *
      * 0x43 = 10 11 011 0 = 0xB6 (ch2, lo/hi, mode 3); then lo, hi of 1193.
      */
-    value = 0xB6; VddBusIo(&bus, 0x43, 1, 0, &value);
-    value = 1193 & 0xFF;  VddBusIo(&bus, 0x42, 1, 0, &value);     /* lo */
-    value = 1193 >> 8;    VddBusIo(&bus, 0x42, 1, 0, &value);     /* hi -> reload 1193 */
+    value = 0xB6;
+    VddBusIo(&bus, 0x43, 1, 0, &value);
+    value = 1193 & 0xFF;
+    VddBusIo(&bus, 0x42, 1, 0, &value);     /* lo */
+    value = 1193 >> 8;
+    VddBusIo(&bus, 0x42, 1, 0, &value);     /* hi -> reload 1193 */
     CHECK(pit.Counter2Reload == 1193, "ch2: reload latched (lo/hi) = 1193");
     CHECK(VddPitCounter2Hz(&pit) == PIT_INPUT_HZ / 1193, "ch2: ~1000 Hz tone");
 
     /* T3: enabling gate+data (port 0x61 bits 0+1) turns the speaker on ---- */
-    value = 0x03; VddBusIo(&bus, 0x61, 1, 0, &value);
+    value = 0x03;
+    VddBusIo(&bus, 0x61, 1, 0, &value);
     CHECK(VddSpeakerIsActive(&spk), "0x61=3: speaker active");
     CHECK(VddSpeakerHz(&spk) == PIT_INPUT_HZ / 1193, "active: reports the ch2 tone");
 
     /* T4: only one of the two bits => not active ------------------------- */
-    value = 0x01; VddBusIo(&bus, 0x61, 1, 0, &value);
+    value = 0x01;
+    VddBusIo(&bus, 0x61, 1, 0, &value);
     CHECK(!VddSpeakerIsActive(&spk), "0x61=1 (gate only): inactive");
-    value = 0x02; VddBusIo(&bus, 0x61, 1, 0, &value);
+    value = 0x02;
+    VddBusIo(&bus, 0x61, 1, 0, &value);
     CHECK(!VddSpeakerIsActive(&spk), "0x61=2 (data only): inactive");
 
     /* T5: turn off ------------------------------------------------------- */
-    value = 0x00; VddBusIo(&bus, 0x61, 1, 0, &value);
+    value = 0x00;
+    VddBusIo(&bus, 0x61, 1, 0, &value);
     CHECK(!VddSpeakerIsActive(&spk), "0x61=0: speaker off");
 
     /* T6: reads echo the control bits and toggle the refresh bit (bit 4) -- */
-    value = 0x03; VddBusIo(&bus, 0x61, 1, 0, &value);
+    value = 0x03;
+    VddBusIo(&bus, 0x61, 1, 0, &value);
     { UINT32 firstRead = 0, secondRead = 0;
       VddBusIo(&bus, 0x61, 1, 1, &firstRead);
       VddBusIo(&bus, 0x61, 1, 1, &secondRead);

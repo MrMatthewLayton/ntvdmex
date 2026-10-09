@@ -42,7 +42,8 @@
 
 static VOID MpuInputQueuePush(PMPU_STATE state, BYTE value)
 {
-    if (state->InputQueueLength >= MPU_INPUT_QUEUE_SIZE) return;
+    if (state->InputQueueLength >= MPU_INPUT_QUEUE_SIZE)
+        return;
     state->InputQueue[(state->InputQueueHead + state->InputQueueLength) % MPU_INPUT_QUEUE_SIZE] = value;
     state->InputQueueLength++;
 }
@@ -50,7 +51,9 @@ static VOID MpuInputQueuePush(PMPU_STATE state, BYTE value)
 static BYTE MpuInputQueuePop(PMPU_STATE state)
 {
     BYTE value;
-    if (!state->InputQueueLength) return MPU_EMPTY_QUEUE;
+
+    if (!state->InputQueueLength)
+        return MPU_EMPTY_QUEUE;
     value = state->InputQueue[state->InputQueueHead];
     state->InputQueueHead = (BYTE)((state->InputQueueHead + 1) % MPU_INPUT_QUEUE_SIZE);
     state->InputQueueLength--;
@@ -64,15 +67,31 @@ static BYTE MpuDataLength(BYTE status)
 {
     switch (status & MPU_HIGH_NIBBLE)
     {
-    case MPU_PROGRAM_CHANGE: case MPU_CHANNEL_PRESSURE: return MPU_ONE_DATA_BYTE;
-    case MPU_NOTE_OFF: case MPU_NOTE_ON: case MPU_KEY_PRESSURE: case MPU_CONTROL_CHANGE: case MPU_PITCH_BEND: return MPU_TWO_DATA_BYTES;
-    default: break;
+    case MPU_PROGRAM_CHANGE:
+    case MPU_CHANNEL_PRESSURE:
+        return MPU_ONE_DATA_BYTE;
+
+    case MPU_NOTE_OFF:
+    case MPU_NOTE_ON:
+    case MPU_KEY_PRESSURE:
+    case MPU_CONTROL_CHANGE:
+    case MPU_PITCH_BEND:
+        return MPU_TWO_DATA_BYTES;
+
+    default:
+        break;
     }
     switch (status)                             /* system common */
     {
-    case MPU_TIME_CODE: case MPU_SONG_SELECT: return MPU_ONE_DATA_BYTE;
-    case MPU_SONG_POSITION: return MPU_TWO_DATA_BYTES;
-    default: return MPU_NO_DATA_BYTES;          /* realtime / undefined */
+    case MPU_TIME_CODE:
+    case MPU_SONG_SELECT:
+        return MPU_ONE_DATA_BYTE;
+
+    case MPU_SONG_POSITION:
+        return MPU_TWO_DATA_BYTES;
+
+    default:
+        return MPU_NO_DATA_BYTES;          /* realtime / undefined */
     }
 }
 
@@ -81,14 +100,17 @@ static VOID MpuEmit(PMPU_STATE state)
     UINT32 message = (UINT32)state->Status
                  | ((UINT32)state->Data[0] << MPU_DATA1_SHIFT)
                  | ((UINT32)state->Data[1] << MPU_DATA2_SHIFT);
+
     state->MessagesSent++;
-    if (state->Sink) state->Sink(state->SinkContext, message);
+    if (state->Sink)
+        state->Sink(state->SinkContext, message);
 }
 
 /* #136: SysEx assembly for an attached SysExSink. No-ops without one. */
 static VOID MpuSysExPut(PMPU_STATE state, BYTE value)
 {
-    if (!state->SysExSink || state->IsSysExOverflow) return;
+    if (!state->SysExSink || state->IsSysExOverflow)
+        return;
     if (state->SysExLength >= MPU_SYSEX_MAX)
     {
         state->IsSysExOverflow = TRUE;
@@ -99,13 +121,15 @@ static VOID MpuSysExPut(PMPU_STATE state, BYTE value)
 
 static VOID MpuSysExBegin(PMPU_STATE state)
 {
-    state->SysExLength = 0; state->IsSysExOverflow = FALSE;
+    state->SysExLength = 0;
+    state->IsSysExOverflow = FALSE;
     MpuSysExPut(state, MPU_SYSEX_START);
 }
 
 static VOID MpuSysExEnd(PMPU_STATE state)
 {
-    if (!state->SysExSink) return;
+    if (!state->SysExSink)
+        return;
     MpuSysExPut(state, MPU_SYSEX_END);
     if (state->IsSysExOverflow)
     {
@@ -128,9 +152,13 @@ static VOID MpuMidiByte(PMPU_STATE state, BYTE value)
     {
         BYTE savedStatus = state->Status;
         BYTE savedData0 = state->Data[0], savedData1 = state->Data[1], savedCount = state->DataCount;
-        state->Status = value; state->Data[0] = state->Data[1] = 0;
+        state->Status = value;
+        state->Data[0] = state->Data[1] = 0;
         MpuEmit(state);
-        state->Status = savedStatus; state->Data[0] = savedData0; state->Data[1] = savedData1; state->DataCount = savedCount;
+        state->Status = savedStatus;
+        state->Data[0] = savedData0;
+        state->Data[1] = savedData1;
+        state->DataCount = savedCount;
         return;
     }
     /* SysEx: swallowed, unless a synth that wants it is attached (#136, see the header).
@@ -149,19 +177,22 @@ static VOID MpuMidiByte(PMPU_STATE state, BYTE value)
     }
     if (value == MPU_SYSEX_END)
     {
-        if (state->IsInSysEx) MpuSysExEnd(state);
+        if (state->IsInSysEx)
+            MpuSysExEnd(state);
         state->IsInSysEx = FALSE;
         return;
     }
     if (state->IsInSysEx)
     {
-        if (!state->SysExSink) return;
+        if (!state->SysExSink)
+            return;
         if (!(value & MPU_STATUS_BIT))
         {
             MpuSysExPut(state, value);
             return;
         }
-        state->IsInSysEx = FALSE; state->SysExDropped++;
+        state->IsInSysEx = FALSE;
+        state->SysExDropped++;
     }
 
     if (value & MPU_STATUS_BIT)                 /* new status byte */
@@ -176,12 +207,15 @@ static VOID MpuMidiByte(PMPU_STATE state, BYTE value)
         }
         return;
     }
-    if (!state->Status) return;                 /* data with no status: ignore */
-    if (state->DataCount < MPU_MIDI_DATA_BYTES) state->Data[state->DataCount] = value;
+    if (!state->Status)
+        return;                                 /* data with no status: ignore */
+    if (state->DataCount < MPU_MIDI_DATA_BYTES)
+        state->Data[state->DataCount] = value;
     state->DataCount++;
     if (state->DataCount >= state->DataWanted)
     {
-        if (state->DataWanted < MPU_MIDI_DATA_BYTES) state->Data[1] = 0;
+        if (state->DataWanted < MPU_MIDI_DATA_BYTES)
+            state->Data[1] = 0;
         MpuEmit(state);
         state->DataCount = 0;                   /* running status: keep state->Status */
     }
@@ -196,10 +230,12 @@ static VOID MpuPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
     PMPU_STATE state = (PMPU_STATE)context;
     BYTE byteValue = (BYTE)value;
+
     (VOID)width;
     if (port == state->BasePort)                /* data port */
     {
-        if (state->IsUartMode) MpuMidiByte(state, byteValue);
+        if (state->IsUartMode)
+            MpuMidiByte(state, byteValue);
         return;
     }
     /* command port: only the two commands every game issues are implemented, and
@@ -208,13 +244,18 @@ static VOID MpuPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
     switch (byteValue)
     {
     case MPU_COMMAND_RESET:                     /* reset */
-        state->IsUartMode = FALSE; state->Status = 0; state->DataCount = 0; state->IsInSysEx = FALSE;
+        state->IsUartMode = FALSE;
+        state->Status = 0;
+        state->DataCount = 0;
+        state->IsInSysEx = FALSE;
         MpuInputQueuePush(state, MPU_ACK);
         break;
+
     case MPU_COMMAND_UART_MODE:                 /* enter UART mode */
         state->IsUartMode = TRUE;
         MpuInputQueuePush(state, MPU_ACK);
         break;
+
     default:
         MpuInputQueuePush(state, MPU_ACK);      /* acknowledge and ignore */
         break;
@@ -224,6 +265,7 @@ static VOID MpuPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 static VOID MpuPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 {
     PMPU_STATE state = (PMPU_STATE)context;
+
     (VOID)width;
     if (port == state->BasePort)
     {
@@ -239,20 +281,32 @@ static VOID MpuPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 VOID VddMpuReset(PVOID context)
 {
     PMPU_STATE state = (PMPU_STATE)context;
-    PVDD_BUS bus = state->Bus; WORD basePort = state->BasePort;
-    PMPU_MIDI_SINK sink = state->Sink; PVOID sinkContext = state->SinkContext;
-    PMPU_SYSEX_SINK sysExSink = state->SysExSink; PVOID sysExContext = state->SysExContext;   /* #136 */
-    UINT byteIndex; BYTE *stateBytes = (BYTE *)state;
-    for (byteIndex = 0; byteIndex < sizeof(*state); ++byteIndex) stateBytes[byteIndex] = 0;
-    state->Bus = bus; state->BasePort = basePort; state->Sink = sink; state->SinkContext = sinkContext;
-    state->SysExSink = sysExSink; state->SysExContext = sysExContext;
+    PVDD_BUS bus = state->Bus;
+    WORD basePort = state->BasePort;
+    PMPU_MIDI_SINK sink = state->Sink;
+    PVOID sinkContext = state->SinkContext;
+    PMPU_SYSEX_SINK sysExSink = state->SysExSink;
+    PVOID sysExContext = state->SysExContext;   /* #136 */
+    UINT byteIndex;
+    BYTE *stateBytes = (BYTE *)state;
+
+    for (byteIndex = 0; byteIndex < sizeof(*state); ++byteIndex)
+        stateBytes[byteIndex] = 0;
+    state->Bus = bus;
+    state->BasePort = basePort;
+    state->Sink = sink;
+    state->SinkContext = sinkContext;
+    state->SysExSink = sysExSink;
+    state->SysExContext = sysExContext;
 }
 
 INT VddMpuInitialize(PVDD_BUS bus, PVOID context)
 {
     PMPU_STATE state = (PMPU_STATE)context;
+
     state->Bus = bus;
-    if (!state->BasePort) state->BasePort = MPU_DEFAULT_BASE;
+    if (!state->BasePort)
+        state->BasePort = MPU_DEFAULT_BASE;
     if (VddClaimPorts(bus, state->BasePort, (WORD)(state->BasePort + MPU_COMMAND_PORT_OFFSET), MpuPortIn, MpuPortOut, state))
         return MPU_FAILED;
     return MPU_OK;

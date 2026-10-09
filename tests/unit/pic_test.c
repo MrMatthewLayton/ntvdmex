@@ -29,7 +29,8 @@ static VOID PicTestCheck(INT condition, PCSTR description)
         ++g_Failures;
         printf("  FAIL  %s\n", description);
     }
-    else       printf("  PASS  %s\n", description);
+    else
+        printf("  PASS  %s\n", description);
 }
 
 /* The VDD talks to the bus only to claim ports, so a stub bus is enough.
@@ -44,11 +45,20 @@ static BYTE g_LastFirstPort, g_LastLastPort;
 static PVDD_PORT_IN_ROUTINE  g_InRoutine;
 static PVDD_PORT_OUT_ROUTINE g_OutRoutine;
 static PVOID g_Context;
-INT VddClaimPorts(PVDD_BUS bus, WORD firstPort, WORD lastPort,
-                    PVDD_PORT_IN_ROUTINE inRoutine, PVDD_PORT_OUT_ROUTINE outRoutine, PVOID context)
+INT VddClaimPorts(
+    PVDD_BUS bus,
+    WORD firstPort,
+    WORD lastPort,
+    PVDD_PORT_IN_ROUTINE inRoutine,
+    PVDD_PORT_OUT_ROUTINE outRoutine,
+    PVOID context)
 { (VOID)bus;
-  g_InRoutine = inRoutine; g_OutRoutine = outRoutine; g_Context = context;
-  g_LastFirstPort = (BYTE)firstPort; g_LastLastPort = (BYTE)lastPort; return 0; }
+  g_InRoutine = inRoutine;
+  g_OutRoutine = outRoutine;
+  g_Context = context;
+  g_LastFirstPort = (BYTE)firstPort;
+  g_LastLastPort = (BYTE)lastPort;
+  return 0; }
 
 static VOID PicTestOut(WORD port, BYTE value)
 {
@@ -58,6 +68,7 @@ static VOID PicTestOut(WORD port, BYTE value)
 static BYTE PicTestIn(WORD port)
 {
     UINT32 value = 0;
+
     g_InRoutine(g_Context, port, 1, &value);
     return (BYTE)value;
 }
@@ -70,6 +81,7 @@ extern INT VddPicInitialize(PVDD_BUS bus, PVOID context);
 INT main(VOID)
 {
     PIC_STATE pic;
+
     memset(&pic, 0, sizeof pic);
     VddPicInitialize((PVDD_BUS)0, &pic);
 
@@ -137,7 +149,8 @@ INT main(VOID)
 
     /* Slave lines are gated by the master's cascade (IRQ2). */
     VddPicReset(&pic);
-    pic.Slave.Imr = 0x00; pic.Master.Imr = 0x00;
+    pic.Slave.Imr = 0x00;
+    pic.Master.Imr = 0x00;
     PicTestCheck(VddPicCanDeliver(&pic, 9), "IRQ9 deliverable when cascade is open");
     pic.Master.Imr |= 0x04;
     PicTestCheck(!VddPicCanDeliver(&pic, 9), "IRQ9 blocked when the cascade line is masked");
@@ -238,9 +251,11 @@ INT main(VOID)
                     BYTE bit = (BYTE)(1u << line);
                     INT old;
                     VddPicReset(&pic);
-                    pic.Master.Imr = imrs[imr]; pic.Master.Isr = (BYTE)isr;
+                    pic.Master.Imr = imrs[imr];
+                    pic.Master.Isr = (BYTE)isr;
                     old = !(pic.Master.Imr & bit) && !(pic.Master.Isr & ((bit << 1) - 1));
-                    if (old != VddPicCanDeliver(&pic, (BYTE)line)) same = 0;
+                    if (old != VddPicCanDeliver(&pic, (BYTE)line))
+                        same = 0;
                 }
         PicTestCheck(same, "default: master resolver == the old lowest-bit-first rule, all ISR x 4 IMRs");
         VddPicReset(&pic);
@@ -290,7 +305,10 @@ INT main(VOID)
 
     /* OCW2 80h / 00h -- ROTATE IN AUTO-EOI. Needs AEOI from ICW4 to do anything. */
     VddPicReset(&pic);
-    PicTestOut(0x20, 0x11); PicTestOut(0x21, 0x08); PicTestOut(0x21, 0x04); PicTestOut(0x21, 0x03);  /* AEOI */
+    PicTestOut(0x20, 0x11);
+    PicTestOut(0x21, 0x08);
+    PicTestOut(0x21, 0x04);
+    PicTestOut(0x21, 0x03);  /* AEOI */
     PicTestOut(0x21, 0x00);
     PicTestCheck(pic.Master.IsAutoEoi && pic.Master.LowestPriority == 7, "rotate-aeoi: ICW4=03h gives AEOI, fixed order");
     PicTestOut(0x20, 0x80);
@@ -313,7 +331,8 @@ INT main(VOID)
     VddPicReset(&pic);
     pic.Master.Imr = 0x00;
     PicTestOut(0x20, 0xC3);                       /* IR4 highest: order 4 5 6 7 0 1 2 3 */
-    VddPicRaise(&pic, 0); VddPicRaise(&pic, 5);
+    VddPicRaise(&pic, 0);
+    VddPicRaise(&pic, 5);
     PicTestOut(0x20, 0x0C);
     PicTestCheck(PicTestIn(0x20) == 0x85, "rotate: poll picks IRQ5 over IRQ0 when IR4 is the highest");
 
@@ -350,16 +369,24 @@ INT main(VOID)
     PicTestOut(0x20, 0x0B);                       /* select ISR */
     PicTestOut(0x20, 0x68);                       /* SMM on */
     PicTestOut(0x20, 0xC3);                       /* rotate */
-    PicTestOut(0x20, 0x11); PicTestOut(0x21, 0x08); PicTestOut(0x21, 0x04); PicTestOut(0x21, 0x01);
+    PicTestOut(0x20, 0x11);
+    PicTestOut(0x21, 0x08);
+    PicTestOut(0x21, 0x04);
+    PicTestOut(0x21, 0x01);
     PicTestCheck(!pic.Master.IsIsrSelected, "icw1: resets the status read to IRR");
     PicTestCheck(!pic.Master.IsSpecialMaskMode, "icw1: clears Special Mask Mode");
     PicTestCheck(pic.Master.LowestPriority == 7, "icw1: IR7 is the lowest priority again");
     pic.Master.Imr = 0x01;                         /* the probe's shape: IRQ0 masked */
     VddPicRaise(&pic, 0);
     PicTestCheck(PicTestIn(0x20) == 0x01, "icw1: ...so a read with no OCW3 returns the IRR, not the ISR");
-    PicTestOut(0x20, 0x11); PicTestOut(0x21, 0x08); PicTestOut(0x21, 0x04); PicTestOut(0x21, 0x13);  /* AEOI+SFNM */
+    PicTestOut(0x20, 0x11);
+    PicTestOut(0x21, 0x08);
+    PicTestOut(0x21, 0x04);
+    PicTestOut(0x21, 0x13);  /* AEOI+SFNM */
     PicTestCheck(pic.Master.IsAutoEoi && pic.Master.IsSpecialFullyNested, "icw4: 13h sets AEOI and SFNM");
-    PicTestOut(0x20, 0x10); PicTestOut(0x21, 0x08); PicTestOut(0x21, 0x04);                    /* no ICW4 */
+    PicTestOut(0x20, 0x10);
+    PicTestOut(0x21, 0x08);
+    PicTestOut(0x21, 0x04);                    /* no ICW4 */
     PicTestCheck(!pic.Master.IsAutoEoi && !pic.Master.IsSpecialFullyNested && pic.Master.IcwStep == 0,
        "icw1: IC4=0 zeroes the ICW4 functions (AEOI, SFNM) and ends after ICW3");
 
@@ -369,7 +396,8 @@ INT main(VOID)
      * line -- until the master is EOI'd. We used to let it through.
      */
     VddPicReset(&pic);
-    pic.Master.Imr = 0x00; pic.Slave.Imr = 0x00;
+    pic.Master.Imr = 0x00;
+    pic.Slave.Imr = 0x00;
     VddPicAcknowledge(&pic, 12);            /* the PS/2 mouse, slave IR4 */
     PicTestCheck((pic.Master.Isr & 0x04) && (pic.Slave.Isr & 0x10), "cascade: IRQ12 puts slave IR4 and master IR2 in service");
     PicTestCheck(!VddPicCanDeliver(&pic, 8), "fnm: a HIGHER slave line (IRQ8) is held while IR2 is in service");
@@ -391,9 +419,16 @@ INT main(VOID)
 
     /* SPECIAL FULLY NESTED MODE, asked for by ICW4 bit 4 on the master. */
     VddPicReset(&pic);
-    PicTestOut(0x20, 0x11); PicTestOut(0x21, 0x08); PicTestOut(0x21, 0x04); PicTestOut(0x21, 0x11);  /* SFNM */
-    PicTestOut(0xA0, 0x11); PicTestOut(0xA1, 0x70); PicTestOut(0xA1, 0x02); PicTestOut(0xA1, 0x01);
-    PicTestOut(0x21, 0x00); PicTestOut(0xA1, 0x00);
+    PicTestOut(0x20, 0x11);
+    PicTestOut(0x21, 0x08);
+    PicTestOut(0x21, 0x04);
+    PicTestOut(0x21, 0x11);  /* SFNM */
+    PicTestOut(0xA0, 0x11);
+    PicTestOut(0xA1, 0x70);
+    PicTestOut(0xA1, 0x02);
+    PicTestOut(0xA1, 0x01);
+    PicTestOut(0x21, 0x00);
+    PicTestOut(0xA1, 0x00);
     PicTestCheck(pic.Master.IsSpecialFullyNested && !pic.Slave.IsSpecialFullyNested, "sfnm: ICW4=11h sets SFNM on the master");
     VddPicAcknowledge(&pic, 12);
     PicTestCheck(VddPicCanDeliver(&pic, 8), "sfnm: a HIGHER slave line gets in while IR2 is in service");

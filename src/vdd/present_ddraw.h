@@ -118,7 +118,8 @@ typedef struct _PRESENT_DDRAW
     INT           IsFlipDriverTimed, FlipBuffers, IsFlipOurWait, FlipStreak;
     UINT32 SnapshotFrameNumber;
     INT      IsSnapshotSplit;
-    UINT32 RowPalette[NTVDD_PALETTE_ENTRIES]; INT RowPaletteY;   /* the palette resolved for one row */
+    UINT32 RowPalette[NTVDD_PALETTE_ENTRIES];
+    INT RowPaletteY;   /* the palette resolved for one row */
     /* s81 (#138): a transient line of text drawn over the picture until `HintUntil`
      * (GetTickCount ms) -- "press the Windows key to release the mouse" in fullscreen,
      * where there is no status strip to say it. GDI path only.

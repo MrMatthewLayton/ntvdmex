@@ -56,6 +56,7 @@ extern VOID DpmiTrapContinue(VOID);
 PVOID VdmGetTeb(VOID)
 {
     PVOID teb;
+
     __asm__ volatile ("movl %%fs:0x18,%0" : "=r"(teb));
     return teb;
 }
@@ -79,6 +80,7 @@ PVOID VdmGetTeb(VOID)
 LONG VdmSetupMemory(VOID)
 {
     HANDLE ntdll = GetModuleHandleA(VDM_NTDLL_NAME);
+
     PFN_NtCreateSection     NtCreateSection =
         (PFN_NtCreateSection)GetProcAddress(ntdll, VDM_NT_CREATE_SECTION);
     PFN_NtFreeVirtualMemory NtFreeVirtualMemory =
@@ -87,10 +89,14 @@ LONG VdmSetupMemory(VOID)
         (PFN_NtMapViewOfSection)GetProcAddress(ntdll, VDM_NT_MAP_VIEW_OF_SECTION);
     OBJ_ATTR objectAttributes;
     LARGE_INTEGER maximumSize, sectionOffset;
-    PVOID baseAddress; SIZE_T viewSize; LONG status;
-    UINT byteIndex; CHAR *attributeBytes = (CHAR *)&objectAttributes;
+    PVOID baseAddress;
+    SIZE_T viewSize;
+    LONG status;
+    UINT byteIndex;
+    CHAR *attributeBytes = (CHAR *)&objectAttributes;
 
-    for (byteIndex = 0; byteIndex < sizeof(objectAttributes); ++byteIndex) attributeBytes[byteIndex] = 0;
+    for (byteIndex = 0; byteIndex < sizeof(objectAttributes); ++byteIndex)
+        attributeBytes[byteIndex] = 0;
     objectAttributes.Length = VDM_OBJECT_ATTRIBUTES_SIZE;
     maximumSize.QuadPart = VDM_SECTION_SIZE;
     NtCreateSection(&g_V86Section, VDM_SECTION_ACCESS, &objectAttributes, &maximumSize, PAGE_EXECUTE_READWRITE,
@@ -99,27 +105,41 @@ LONG VdmSetupMemory(VOID)
     /* Release the default low reservations the loader made, then map the section
      * X-RW across the full 640KB in the FOUR pieces ntvdm uses (0xf00ea75).
      */
-    baseAddress = (PVOID)VDM_LOW_BASE;   viewSize = VDM_LOW_RELEASE_SIZE; NtFreeVirtualMemory(VDM_CURRENT_PROCESS, &baseAddress, &viewSize, MEM_RELEASE_NT);
-    baseAddress = (PVOID)VDM_HMA_BASE;   viewSize = VDM_SEGMENT_SIZE; NtFreeVirtualMemory(VDM_CURRENT_PROCESS, &baseAddress, &viewSize, MEM_RELEASE_NT);
-    baseAddress = (PVOID)VDM_VIDEO_BASE; viewSize = VDM_VIDEO_SIZE; NtFreeVirtualMemory(VDM_CURRENT_PROCESS, &baseAddress, &viewSize, MEM_RELEASE_NT);
+    baseAddress = (PVOID)VDM_LOW_BASE;
+    viewSize = VDM_LOW_RELEASE_SIZE;
+    NtFreeVirtualMemory(VDM_CURRENT_PROCESS, &baseAddress, &viewSize, MEM_RELEASE_NT);
+    baseAddress = (PVOID)VDM_HMA_BASE;
+    viewSize = VDM_SEGMENT_SIZE;
+    NtFreeVirtualMemory(VDM_CURRENT_PROCESS, &baseAddress, &viewSize, MEM_RELEASE_NT);
+    baseAddress = (PVOID)VDM_VIDEO_BASE;
+    viewSize = VDM_VIDEO_SIZE;
+    NtFreeVirtualMemory(VDM_CURRENT_PROCESS, &baseAddress, &viewSize, MEM_RELEASE_NT);
 
-    baseAddress = (PVOID)VDM_LOW_BASE;   viewSize = VDM_FIRST_VIEW_SIZE;  sectionOffset.QuadPart = VDM_SECTION_START;
+    baseAddress = (PVOID)VDM_LOW_BASE;
+    viewSize = VDM_FIRST_VIEW_SIZE;
+    sectionOffset.QuadPart = VDM_SECTION_START;
     NtMapViewOfSection(g_V86Section, VDM_CURRENT_PROCESS, &baseAddress, 0, VDM_FIRST_VIEW_SIZE, &sectionOffset, &viewSize, VDM_VIEW_UNMAP,
                        VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
-    baseAddress = (PVOID)VDM_HMA_BASE;   viewSize = VDM_SEGMENT_SIZE; sectionOffset.QuadPart = VDM_SECTION_START;
+    baseAddress = (PVOID)VDM_HMA_BASE;
+    viewSize = VDM_SEGMENT_SIZE;
+    sectionOffset.QuadPart = VDM_SECTION_START;
     NtMapViewOfSection(g_V86Section, VDM_CURRENT_PROCESS, &baseAddress, 0, VDM_SEGMENT_SIZE, &sectionOffset, &viewSize, VDM_VIEW_UNMAP,
                        VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
     /* Map 3 (the rest of conventional memory): section[0x10000..] -> linear 0x10000,
      * size 0x90000. Without it the guest faults the moment it touches >64KB.
      */
-    baseAddress = (PVOID)VDM_CONVENTIONAL_REST_BASE; viewSize = VDM_CONVENTIONAL_REST_SIZE; sectionOffset.QuadPart = VDM_CONVENTIONAL_REST_BASE;
+    baseAddress = (PVOID)VDM_CONVENTIONAL_REST_BASE;
+    viewSize = VDM_CONVENTIONAL_REST_SIZE;
+    sectionOffset.QuadPart = VDM_CONVENTIONAL_REST_BASE;
     status = NtMapViewOfSection(g_V86Section, VDM_CURRENT_PROCESS, &baseAddress, 0, VDM_CONVENTIONAL_REST_SIZE, &sectionOffset, &viewSize, VDM_VIEW_UNMAP,
                                 VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
     /* Map 4 -- the VGA aperture A0000-BFFFF (128KB) as RAM, so direct-framebuffer
      * writes (mode 13h at A0000, text at B8000) just land in memory and the video
      * VDD renders it each frame.
      */
-    baseAddress = (PVOID)VDM_VIDEO_BASE; viewSize = VDM_VIDEO_SIZE; sectionOffset.QuadPart = VDM_VIDEO_BASE;
+    baseAddress = (PVOID)VDM_VIDEO_BASE;
+    viewSize = VDM_VIDEO_SIZE;
+    sectionOffset.QuadPart = VDM_VIDEO_BASE;
     NtMapViewOfSection(g_V86Section, VDM_CURRENT_PROCESS, &baseAddress, 0, VDM_VIDEO_SIZE, &sectionOffset, &viewSize, VDM_VIEW_UNMAP,
                        VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
     /* NOTE: the EMS page frame at 0xE0000 is deliberately NOT mapped here. The
@@ -150,22 +170,32 @@ LONG VdmSetupMemory(VOID)
 DWORD VdmMapEmsFrame(VOID)
 {
     HANDLE ntdll = GetModuleHandleA(VDM_NTDLL_NAME);
+
     PFN_NtMapViewOfSection NtMapViewOfSection =
         (PFN_NtMapViewOfSection)GetProcAddress(ntdll, VDM_NT_MAP_VIEW_OF_SECTION);
     static const DWORD candidateFrames[] = { VDM_EMS_FRAME_D000, VDM_EMS_FRAME_C000, VDM_EMS_FRAME_E000 };
     UINT candidateIndex;
 
-    if (!g_V86Section) return VDM_NO_EMS_FRAME;
+    if (!g_V86Section)
+        return VDM_NO_EMS_FRAME;
     for (candidateIndex = 0; candidateIndex < sizeof(candidateFrames) / sizeof(candidateFrames[0]); ++candidateIndex)
     {
         MEMORY_BASIC_INFORMATION memoryInfo;
-        LARGE_INTEGER sectionOffset; PVOID baseAddress; SIZE_T viewSize; LONG status;
-        if (!VirtualQuery((LPCVOID)candidateFrames[candidateIndex], &memoryInfo, sizeof(memoryInfo))) continue;
-        if (memoryInfo.State != MEM_FREE || memoryInfo.RegionSize < VDM_SEGMENT_SIZE) continue;  /* need 64KB free */
-        baseAddress = (PVOID)candidateFrames[candidateIndex]; viewSize = VDM_SEGMENT_SIZE; sectionOffset.QuadPart = candidateFrames[candidateIndex];
+        LARGE_INTEGER sectionOffset;
+        PVOID baseAddress;
+        SIZE_T viewSize;
+        LONG status;
+        if (!VirtualQuery((LPCVOID)candidateFrames[candidateIndex], &memoryInfo, sizeof(memoryInfo)))
+            continue;
+        if (memoryInfo.State != MEM_FREE || memoryInfo.RegionSize < VDM_SEGMENT_SIZE)
+            continue;                                                                            /* need 64KB free */
+        baseAddress = (PVOID)candidateFrames[candidateIndex];
+        viewSize = VDM_SEGMENT_SIZE;
+        sectionOffset.QuadPart = candidateFrames[candidateIndex];
         status = NtMapViewOfSection(g_V86Section, VDM_CURRENT_PROCESS, &baseAddress, 0, VDM_SEGMENT_SIZE, &sectionOffset, &viewSize, VDM_VIEW_UNMAP,
                                     VDM_MAP_FLAG, PAGE_EXECUTE_READWRITE);
-        if (status >= 0) return candidateFrames[candidateIndex];   /* mapped: linear base of the 64KB frame */
+        if (status >= 0)
+            return candidateFrames[candidateIndex];                /* mapped: linear base of the 64KB frame */
     }
     return VDM_NO_EMS_FRAME;
 }
@@ -211,26 +241,34 @@ VOID VdmIcaRaise(UINT irq)
 {
     BYTE *ica = (irq < VDM_ICA_LINES_PER_PIC) ? g_IcaMaster : g_IcaSlave;
     UINT line = irq & VDM_ICA_LINE_MASK;
+
     /* One pending dispatch for this line. The kernel decrements the count and clears
      * the request bit when it drains, so this is a single edge, not a level.
      */
     *(volatile DWORD *)(ica + ICA_COUNT(line)) = VDM_ICA_SINGLE_DISPATCH;
     ica[ICA_IRR] |= (BYTE)(1u << line);
-    if (irq >= VDM_ICA_LINES_PER_PIC) g_IcaMaster[ICA_IRR] |= VDM_ICA_CASCADE_BIT;   /* cascade through IRQ2 */
+    if (irq >= VDM_ICA_LINES_PER_PIC)
+        g_IcaMaster[ICA_IRR] |= VDM_ICA_CASCADE_BIT;                                 /* cascade through IRQ2 */
 }
 
 VOID VdmIcaEndOfInterrupt(UINT irq)
 {
     BYTE *ica = (irq < VDM_ICA_LINES_PER_PIC) ? g_IcaMaster : g_IcaSlave;
+
     ica[ICA_ISR] &= (BYTE)~(1u << (irq & VDM_ICA_LINE_MASK));
-    if (irq >= VDM_ICA_LINES_PER_PIC) g_IcaMaster[ICA_ISR] &= (BYTE)~VDM_ICA_CASCADE_BIT;
+    if (irq >= VDM_ICA_LINES_PER_PIC)
+        g_IcaMaster[ICA_ISR] &= (BYTE)~VDM_ICA_CASCADE_BIT;
 }
 
 VOID VdmIcaSetMask(UINT irq, INT isMasked)
 {
     BYTE *ica = (irq < VDM_ICA_LINES_PER_PIC) ? g_IcaMaster : g_IcaSlave;
     BYTE lineBit = (BYTE)(1u << (irq & VDM_ICA_LINE_MASK));
-    if (isMasked) ica[ICA_IMR] |= lineBit; else ica[ICA_IMR] &= (BYTE)~lineBit;
+
+    if (isMasked)
+        ica[ICA_IMR] |= lineBit;
+    else
+        ica[ICA_IMR] &= (BYTE)~lineBit;
 }
 
 #define VDM_ICA_STATE_ISR_SHIFT     8
@@ -239,6 +277,7 @@ VOID VdmIcaSetMask(UINT irq, INT isMasked)
 DWORD VdmIcaGetState(UINT irq)
 {
     const BYTE *ica = (irq < VDM_ICA_LINES_PER_PIC) ? g_IcaMaster : g_IcaSlave;
+
     return ((DWORD)ica[ICA_IRR]) | ((DWORD)ica[ICA_ISR] << VDM_ICA_STATE_ISR_SHIFT) |
            ((DWORD)ica[ICA_IMR] << VDM_ICA_STATE_IMR_SHIFT);
 }
@@ -248,17 +287,22 @@ DWORD VdmIcaGetState(UINT irq)
 LONG VdmRegisterWithKernel(VOID)
 {
     VdmIcaProgram();
-    g_IcaUserData.pIcaLock = g_IcaLock;   g_IcaUserData.pIcaMaster = g_IcaMaster;
-    g_IcaUserData.pIcaSlave = g_IcaSlave; g_IcaUserData.pDelayIrq = &g_IcaDelayIrq;
-    g_IcaUserData.pUndelayIrq = &g_IcaUndelayIrq; g_IcaUserData.pDelayIret = &g_IcaDelayIret;
-    g_IcaUserData.pIretHooked = &g_IcaIretHooked; g_IcaUserData.pAddrIretBopTable = g_IcaBopTable;
+    g_IcaUserData.pIcaLock = g_IcaLock;
+    g_IcaUserData.pIcaMaster = g_IcaMaster;
+    g_IcaUserData.pIcaSlave = g_IcaSlave;
+    g_IcaUserData.pDelayIrq = &g_IcaDelayIrq;
+    g_IcaUserData.pUndelayIrq = &g_IcaUndelayIrq;
+    g_IcaUserData.pDelayIret = &g_IcaDelayIret;
+    g_IcaUserData.pIretHooked = &g_IcaIretHooked;
+    g_IcaUserData.pAddrIretBopTable = g_IcaBopTable;
     g_IcaUserData.p9 = &g_IcaNinth;
     g_InitializeData.TrapcHandler = (PVOID)&DpmiTrapContinue;
     g_InitializeData.IcaUserData  = &g_IcaUserData;
 
     g_NtVdmControl = (PFN_NtVdmControl)GetProcAddress(
                      GetModuleHandleA(VDM_NTDLL_NAME), VDM_NT_VDM_CONTROL);
-    if (!g_NtVdmControl) return VDM_NO_NT_VDM_CONTROL;
+    if (!g_NtVdmControl)
+        return VDM_NO_NT_VDM_CONTROL;
     return g_NtVdmControl(VDM_SVC_VdmInitialize, &g_InitializeData);
 }
 
@@ -287,7 +331,9 @@ volatile BYTE *VdmGetTib(VOID)
 {
     BYTE *teb = (BYTE *)VdmGetTeb();
     BYTE *tib;
-    if (!teb) return NULL;
+
+    if (!teb)
+        return NULL;
     tib = *(BYTE **)(teb + TEB_VDM_TIB);
     if (!tib)
     {
@@ -301,8 +347,10 @@ volatile BYTE *VdmGetTib(VOID)
         *(DWORD *)(tib + VTIB_FIELD_0A0) = VTIB_FIELD_0A0_VALUE;
         *(DWORD *)(tib + VTIB_FIELD_0A4) = VTIB_FIELD_0A0_VALUE;
         *(DWORD *)(tib + VTIB_FIELD_66C) = VTIB_FIELD_66C_VALUE;
-        tib[VTIB_FLAG_5E4] = VTIB_FLAG_5E_VALUE; tib[VTIB_FLAG_5E5] = VTIB_FLAG_5E_VALUE;
-        tib[VTIB_FLAG_5E6] = VTIB_FLAG_5E_VALUE; tib[VTIB_FLAG_670] = VTIB_FLAG_670_VALUE;
+        tib[VTIB_FLAG_5E4] = VTIB_FLAG_5E_VALUE;
+        tib[VTIB_FLAG_5E5] = VTIB_FLAG_5E_VALUE;
+        tib[VTIB_FLAG_5E6] = VTIB_FLAG_5E_VALUE;
+        tib[VTIB_FLAG_670] = VTIB_FLAG_670_VALUE;
         *(BYTE **)(teb + TEB_VDM_TIB) = tib;         /* register with our TEB */
     }
     return tib;
@@ -310,15 +358,25 @@ volatile BYTE *VdmGetTib(VOID)
 
 #define VDM_ENTRY_REGISTER_ZERO     0
 
-VOID VdmSetEntry(volatile BYTE *tib, WORD codeSegment, WORD instructionPointer,
-                 WORD stackSegment, WORD stackPointer, WORD pspSegment)
+VOID VdmSetEntry(
+    volatile BYTE *tib,
+    WORD codeSegment,
+    WORD instructionPointer,
+    WORD stackSegment,
+    WORD stackPointer,
+    WORD pspSegment)
 {
     VDM_REG(tib, VTIB_CONTEXT) = VTIB_CTXFLAGS_VAL;
-    VDM_REG(tib, VTIB_GS) = pspSegment; VDM_REG(tib, VTIB_FS) = pspSegment;
-    VDM_REG(tib, VTIB_ES) = pspSegment; VDM_REG(tib, VTIB_DS) = pspSegment;
-    VDM_REG(tib, VTIB_EDI) = VDM_ENTRY_REGISTER_ZERO; VDM_REG(tib, VTIB_ESI) = VDM_ENTRY_REGISTER_ZERO;
-    VDM_REG(tib, VTIB_EBX) = VDM_ENTRY_REGISTER_ZERO; VDM_REG(tib, VTIB_EDX) = VDM_ENTRY_REGISTER_ZERO;
-    VDM_REG(tib, VTIB_ECX) = VDM_ENTRY_REGISTER_ZERO; VDM_REG(tib, VTIB_EAX) = VDM_ENTRY_REGISTER_ZERO;
+    VDM_REG(tib, VTIB_GS) = pspSegment;
+    VDM_REG(tib, VTIB_FS) = pspSegment;
+    VDM_REG(tib, VTIB_ES) = pspSegment;
+    VDM_REG(tib, VTIB_DS) = pspSegment;
+    VDM_REG(tib, VTIB_EDI) = VDM_ENTRY_REGISTER_ZERO;
+    VDM_REG(tib, VTIB_ESI) = VDM_ENTRY_REGISTER_ZERO;
+    VDM_REG(tib, VTIB_EBX) = VDM_ENTRY_REGISTER_ZERO;
+    VDM_REG(tib, VTIB_EDX) = VDM_ENTRY_REGISTER_ZERO;
+    VDM_REG(tib, VTIB_ECX) = VDM_ENTRY_REGISTER_ZERO;
+    VDM_REG(tib, VTIB_EAX) = VDM_ENTRY_REGISTER_ZERO;
     VDM_REG(tib, VTIB_EBP) = VDM_ENTRY_REGISTER_ZERO;
     VDM_REG(tib, VTIB_EIP) = instructionPointer;
     VDM_REG(tib, VTIB_CS)  = codeSegment;
@@ -330,13 +388,16 @@ VOID VdmSetEntry(volatile BYTE *tib, WORD codeSegment, WORD instructionPointer,
 DWORD VdmRunGuest(volatile BYTE *tib, LONG *status)
 {
     LONG controlStatus = g_NtVdmControl(VDM_SVC_VdmStartExecution, NULL);
-    if (status) *status = controlStatus;
+
+    if (status)
+        *status = controlStatus;
     return (DWORD)VDM_REG(tib, VTIB_EVENT);
 }
 
 LONG VdmControl(ULONG service, PVOID serviceData)
 {
-    if (!g_NtVdmControl) return VDM_NO_NT_VDM_CONTROL;
+    if (!g_NtVdmControl)
+        return VDM_NO_NT_VDM_CONTROL;
     return g_NtVdmControl(service, serviceData);
 }
 
@@ -349,13 +410,23 @@ LONG VdmControl(ULONG service, PVOID serviceData)
 #define VDM_LDT_SECOND_LOW          4
 #define VDM_LDT_SECOND_HIGH         5
 
-LONG VdmInstallLdtEntries(WORD firstSelector, DWORD firstLow, DWORD firstHigh,
-                          WORD secondSelector, DWORD secondLow, DWORD secondHigh)
+LONG VdmInstallLdtEntries(
+    WORD firstSelector,
+    DWORD firstLow,
+    DWORD firstHigh,
+    WORD secondSelector,
+    DWORD secondLow,
+    DWORD secondHigh)
 {
     /* NtSetLdtEntries 6-dword block; see v86.h + fcn.0f050100 in the research. */
     DWORD serviceData[VDM_LDT_ENTRIES_DWORDS];
-    serviceData[VDM_LDT_FIRST_SELECTOR] = firstSelector; serviceData[VDM_LDT_FIRST_LOW] = firstLow; serviceData[VDM_LDT_FIRST_HIGH] = firstHigh;
-    serviceData[VDM_LDT_SECOND_SELECTOR] = secondSelector; serviceData[VDM_LDT_SECOND_LOW] = secondLow; serviceData[VDM_LDT_SECOND_HIGH] = secondHigh;
+
+    serviceData[VDM_LDT_FIRST_SELECTOR] = firstSelector;
+    serviceData[VDM_LDT_FIRST_LOW] = firstLow;
+    serviceData[VDM_LDT_FIRST_HIGH] = firstHigh;
+    serviceData[VDM_LDT_SECOND_SELECTOR] = secondSelector;
+    serviceData[VDM_LDT_SECOND_LOW] = secondLow;
+    serviceData[VDM_LDT_SECOND_HIGH] = secondHigh;
     return VdmControl(VDM_SVC_VdmSetLdtEntries, serviceData);
 }
 
@@ -380,13 +451,16 @@ LONG VdmRegisterLdtTable(WORD startSelector, const DWORD *entries, INT count)
     static DWORD ldtInformation[VDM_LDT_INFO_HEADER_DWORDS + VDM_LDT_DWORDS_PER_ENTRY * VDM_LDT_MAX_DESCRIPTORS];
     DWORD serviceData[VDM_LDT_SERVICE_DWORDS];
     INT dwordIndex, entryDwords = count * VDM_LDT_DWORDS_PER_ENTRY;
-    if (entryDwords > (INT)(sizeof(ldtInformation)/sizeof(ldtInformation[0])) - VDM_LDT_INFO_HEADER_DWORDS) return VDM_LDT_TABLE_TOO_LARGE;
+
+    if (entryDwords > (INT)(sizeof(ldtInformation)/sizeof(ldtInformation[0])) - VDM_LDT_INFO_HEADER_DWORDS)
+        return VDM_LDT_TABLE_TOO_LARGE;
     /* PROCESS_LDT_INFORMATION { ULONG Start; ULONG Length; LDT_ENTRY Entries[] }.
      * Start = byte offset into the LDT; Length = byte count of the entries.
      */
     ldtInformation[VDM_LDT_INFO_START] = startSelector;
     ldtInformation[VDM_LDT_INFO_LENGTH] = (DWORD)(count * VDM_LDT_BYTES_PER_ENTRY);        /* Length: bytes of descriptor entries */
-    for (dwordIndex = 0; dwordIndex < entryDwords; ++dwordIndex) ldtInformation[VDM_LDT_INFO_HEADER_DWORDS + dwordIndex] = entries[dwordIndex];
+    for (dwordIndex = 0; dwordIndex < entryDwords; ++dwordIndex)
+        ldtInformation[VDM_LDT_INFO_HEADER_DWORDS + dwordIndex] = entries[dwordIndex];
     serviceData[VDM_LDT_SERVICE_BUFFER] = (DWORD)(ULONG_PTR)ldtInformation;
     /* NtSetInformationProcess(ProcessLdtInformation) wants the TOTAL byte size:
      * FIELD_OFFSET(Entries)=8 + Length. Passing the count gave INFO_LENGTH_MISMATCH

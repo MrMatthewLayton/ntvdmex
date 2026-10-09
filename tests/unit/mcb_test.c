@@ -128,14 +128,18 @@ static WORD McbTestSize(WORD mcbSegment)
 
 static VOID McbTestDumpChain(WORD firstMcb)
 {
-    WORD mcbSegment = firstMcb; INT walkCount = 0;
+    WORD mcbSegment = firstMcb;
+    INT walkCount = 0;
+
     printf("  chain:");
     for (;;)
     {
-        BYTE signature = McbTestSignature(mcbSegment); WORD owner = McbTestOwner(mcbSegment), blockSize = McbTestSize(mcbSegment);
+        BYTE signature = McbTestSignature(mcbSegment);
+        WORD owner = McbTestOwner(mcbSegment), blockSize = McbTestSize(mcbSegment);
         printf(" [%04X %c o=%04X sz=%04X]", mcbSegment,
                (signature >= MCB_TEST_PRINTABLE_FIRST && signature < MCB_TEST_PRINTABLE_END) ? signature : '?', owner, blockSize);
-        if (signature == DOS_MCB_LAST || ++walkCount > MCB_TEST_WALK_LIMIT) break;
+        if (signature == DOS_MCB_LAST || ++walkCount > MCB_TEST_WALK_LIMIT)
+            break;
         mcbSegment = (WORD)(mcbSegment + 1 + blockSize);
     }
     printf("\n");
@@ -145,8 +149,10 @@ static VOID McbTestDumpChain(WORD firstMcb)
 static INT McbTestFind(PCBYTE block, INT blockSize, PCSTR name, INT nameLength)
 {
     INT index;
+
     for (index = 0; index < blockSize - nameLength; ++index)
-        if (memcmp(block + index, name, nameLength) == 0) return index;
+        if (memcmp(block + index, name, nameLength) == 0)
+            return index;
     return 0;
 }
 
@@ -217,7 +223,8 @@ INT main(VOID)
          */
         {   volatile BYTE *firstData = DosMcbSegmentAddress(g_Memory, cdsSegment);
             WORD secondSegment;
-            firstData[0] = MCB_TEST_MARK_FIRST; firstData[MCB_TEST_CDS_PARAS * PARAGRAPH_SIZE - 1] = MCB_TEST_MARK_LAST;
+            firstData[0] = MCB_TEST_MARK_FIRST;
+            firstData[MCB_TEST_CDS_PARAS * PARAGRAPH_SIZE - 1] = MCB_TEST_MARK_LAST;
             secondSegment = DosMcbReserveTop(g_Memory, firstMcb, MCB_TEST_SECOND_RESERVE);
             McbTestCheck(secondSegment == cdsSegment - 1 - MCB_TEST_SECOND_RESERVE, "reserve_top x2: second block sits just below the first");
             McbTestCheck(DosMcbCheckChain(g_Memory, firstMcb, DOS_MEM_TOP) == DOS_MCB_CHAIN_OK, "reserve_top x2: chain consistent");
@@ -377,7 +384,9 @@ INT main(VOID)
         DWORD blockLength = DosEnvBuild(envMemory, MCB_TEST_ENV_SEGMENT_ZERO, path);
         McbTestCheck(blockLength > 0 && envMemory[0] == 'C' && envMemory[1] == 'O' && envMemory[2] == 'M' && envMemory[3] == 'S',
                      "env: starts with COMSPEC=");
-        for (characterIndex = 0; characterIndex < pathLength; ++characterIndex) if (envMemory[blockLength - 1 - pathLength + characterIndex] != (BYTE)path[characterIndex]) isPathIntact = FALSE;
+        for (characterIndex = 0; characterIndex < pathLength; ++characterIndex)
+            if (envMemory[blockLength - 1 - pathLength + characterIndex] != (BYTE)path[characterIndex])
+                isPathIntact = FALSE;
         McbTestCheck(isPathIntact && envMemory[blockLength - 1] == 0, "env: program path is the final ASCIIZ string");
         McbTestCheck(envMemory[blockLength - 1 - pathLength - 2] == DOS_ENV_STRING_COUNT_LOW && envMemory[blockLength - 1 - pathLength - 1] == DOS_ENV_STRING_COUNT_HIGH,
                      "env: WORD count 0x0001 precedes the program path");
@@ -404,7 +413,11 @@ INT main(VOID)
         McbTestCheck(found > 0 && strcmp((PCSTR)envMemory + found, "BLASTER=A220 I5 D1 T3") == 0,
                      "BLASTER: no card supplied -> the literal this host always claimed");
 
-        card.IoBase = 0x240; card.Irq = 7; card.Dma8Channel = 3; card.Dma16Channel = 0; card.Type = 3;
+        card.IoBase = 0x240;
+        card.Irq = 7;
+        card.Dma8Channel = 3;
+        card.Dma16Channel = 0;
+        card.Type = 3;
         memset(envMemory, 0, sizeof envMemory);
         DosEnvBuildWithCard(envMemory, MCB_TEST_ENV_SEGMENT_ZERO, MCB_TEST_PROGRAM_PATH, DOS_ENV_DEFAULT_PATH, &card, NULL);
         found = McbTestFind(envMemory, (INT)sizeof envMemory, MCB_TEST_BLASTER, MCB_TEST_NAME_LENGTH);
@@ -415,7 +428,11 @@ INT main(VOID)
          * default card has one and has never mentioned it, and Doom's audio is
          * user-confirmed against the string without it.
          */
-        card.IoBase = 0x220; card.Irq = 5; card.Dma8Channel = 1; card.Dma16Channel = 5; card.Type = 3;
+        card.IoBase = 0x220;
+        card.Irq = 5;
+        card.Dma8Channel = 1;
+        card.Dma16Channel = 5;
+        card.Type = 3;
         memset(envMemory, 0, sizeof envMemory);
         DosEnvBuildWithCard(envMemory, MCB_TEST_ENV_SEGMENT_ZERO, MCB_TEST_PROGRAM_PATH, DOS_ENV_DEFAULT_PATH, &card, NULL);
         found = McbTestFind(envMemory, (INT)sizeof envMemory, MCB_TEST_BLASTER, MCB_TEST_NAME_LENGTH);
@@ -425,7 +442,11 @@ INT main(VOID)
         /* Two digits must not be truncated to one, and a base is three hex
          * digits with no 0x -- both are how a driver parses it.
          */
-        card.IoBase = 0x280; card.Irq = 10; card.Dma8Channel = 1; card.Dma16Channel = 0; card.Type = 6;
+        card.IoBase = 0x280;
+        card.Irq = 10;
+        card.Dma8Channel = 1;
+        card.Dma16Channel = 0;
+        card.Type = 6;
         memset(envMemory, 0, sizeof envMemory);
         DosEnvBuildWithCard(envMemory, MCB_TEST_ENV_SEGMENT_ZERO, MCB_TEST_PROGRAM_PATH, DOS_ENV_DEFAULT_PATH, &card, NULL);
         found = McbTestFind(envMemory, (INT)sizeof envMemory, MCB_TEST_BLASTER, MCB_TEST_NAME_LENGTH);
@@ -441,8 +462,11 @@ INT main(VOID)
             static BYTE emptyExtraMemory[MCB_TEST_SMALL_ENV_SIZE];
             INT baseLength, withLength, byteIndex;
 
-            card.IoBase = DOS_SB_DEFAULT_IO_BASE; card.Irq = DOS_SB_DEFAULT_IRQ; card.Dma8Channel = DOS_SB_DEFAULT_DMA8;
-            card.Dma16Channel = DOS_SB_NOT_ADVERTISED; card.Type = DOS_SB_DEFAULT_TYPE;
+            card.IoBase = DOS_SB_DEFAULT_IO_BASE;
+            card.Irq = DOS_SB_DEFAULT_IRQ;
+            card.Dma8Channel = DOS_SB_DEFAULT_DMA8;
+            card.Dma16Channel = DOS_SB_NOT_ADVERTISED;
+            card.Type = DOS_SB_DEFAULT_TYPE;
 
             /* [CAUTION]: THE DEFAULT MUST BE BYTE-IDENTICAL. A knob nobody sets must not
              * change the environment every existing guest already runs against.

@@ -119,13 +119,17 @@
 BYTE VddFdcMainStatus(PCFDC_STATE state)
 {
     BYTE status;
+
     /* Held in reset: the chip is not ready for anything, and says so. A guest
      * that writes 00h to DOR and then polls has hung a real machine too.
      */
-    if (state->IsInReset) return FDC_MSR_IN_RESET;
+    if (state->IsInReset)
+        return FDC_MSR_IN_RESET;
     status = FDC_MSR_RQM;
-    if (state->Phase == FDC_PHASE_RESULT) status |= FDC_MSR_DIO | FDC_MSR_CB;
-    else if (state->CommandLength)           status |= FDC_MSR_CB;
+    if (state->Phase == FDC_PHASE_RESULT)
+        status |= FDC_MSR_DIO | FDC_MSR_CB;
+    else if (state->CommandLength)
+        status |= FDC_MSR_CB;
     /* Bits 3:0 are "drive n is seeking". Our seeks complete inside the OUT that
      * starts them, so no drive is ever mid-seek when software can look.
      */
@@ -141,8 +145,10 @@ static VOID FdcRaiseIrq(PFDC_STATE state)
      * model that ignores the bit serves a driver that set it and silently
      * disobeys one that cleared it.
      */
-    if (!(state->Dor & FDC_DOR_DMA_GATE)) return;
-    if (state->Bus) VddRaiseIrq(state->Bus, FDC_IRQ);
+    if (!(state->Dor & FDC_DOR_DMA_GATE))
+        return;
+    if (state->Bus)
+        VddRaiseIrq(state->Bus, FDC_IRQ);
 }
 
 /* HOW MANY BYTES DOES THIS COMMAND TAKE? (docs/ref/fdc.md 5):
@@ -156,17 +162,39 @@ static BYTE FdcCommandLength(BYTE opcode)
 {
     switch (opcode & FDC_OPCODE_MASK)
     {
-    case FDC_CMD_SPECIFY: return FDC_SPECIFY_BYTES;        /* SPECIFY */
-    case FDC_CMD_SENSE_DRIVE_STATUS: return FDC_DRIVE_COMMAND_BYTES;        /* SENSE DRIVE STATUS */
-    case FDC_CMD_RECALIBRATE: return FDC_DRIVE_COMMAND_BYTES;        /* RECALIBRATE */
-    case FDC_CMD_SENSE_INTERRUPT: return 1;        /* SENSE INTERRUPT STATUS */
-    case FDC_CMD_READ_ID: return FDC_DRIVE_COMMAND_BYTES;        /* READ ID */
-    case FDC_CMD_DUMPREG: return 1;        /* DUMPREG */
-    case FDC_CMD_SEEK: return FDC_SEEK_BYTES;        /* SEEK */
-    case FDC_CMD_VERSION: return 1;        /* VERSION */
-    case FDC_CMD_PERPENDICULAR: return FDC_DRIVE_COMMAND_BYTES;        /* PERPENDICULAR MODE */
-    case FDC_CMD_CONFIGURE: return FDC_CONFIGURE_BYTES;        /* CONFIGURE */
-    case FDC_CMD_LOCK: return 1;        /* LOCK */
+    case FDC_CMD_SPECIFY:
+        return FDC_SPECIFY_BYTES;        /* SPECIFY */
+
+    case FDC_CMD_SENSE_DRIVE_STATUS:
+        return FDC_DRIVE_COMMAND_BYTES;        /* SENSE DRIVE STATUS */
+
+    case FDC_CMD_RECALIBRATE:
+        return FDC_DRIVE_COMMAND_BYTES;        /* RECALIBRATE */
+
+    case FDC_CMD_SENSE_INTERRUPT:
+        return 1;        /* SENSE INTERRUPT STATUS */
+
+    case FDC_CMD_READ_ID:
+        return FDC_DRIVE_COMMAND_BYTES;        /* READ ID */
+
+    case FDC_CMD_DUMPREG:
+        return 1;        /* DUMPREG */
+
+    case FDC_CMD_SEEK:
+        return FDC_SEEK_BYTES;        /* SEEK */
+
+    case FDC_CMD_VERSION:
+        return 1;        /* VERSION */
+
+    case FDC_CMD_PERPENDICULAR:
+        return FDC_DRIVE_COMMAND_BYTES;        /* PERPENDICULAR MODE */
+
+    case FDC_CMD_CONFIGURE:
+        return FDC_CONFIGURE_BYTES;        /* CONFIGURE */
+
+    case FDC_CMD_LOCK:
+        return 1;        /* LOCK */
+
     /* [CAUTION]: 09h IS WRITE DELETED DATA and it is easy to miss -- it sits in a gap
      * between 08h and 0Ah and no detection routine ever issues it. Omitting it
      * would have made it an "invalid command" that consumed ONE byte, and its
@@ -175,18 +203,29 @@ static BYTE FdcCommandLength(BYTE opcode)
      * [CAUTION]: 11h (SCAN EQUAL) is a uPD765 command that the 82077AA DOES NOT HAVE. We
      * identify as a 90h part, so it must fall through to invalid.
      */
-    case FDC_CMD_READ_TRACK: case FDC_CMD_WRITE_DATA: case FDC_CMD_READ_DATA: case FDC_CMD_WRITE_DELETED_DATA: case FDC_CMD_READ_DELETED_DATA:
+    case FDC_CMD_READ_TRACK:
+    case FDC_CMD_WRITE_DATA:
+    case FDC_CMD_READ_DATA:
+    case FDC_CMD_WRITE_DELETED_DATA:
+    case FDC_CMD_READ_DELETED_DATA:
         return FDC_DATA_COMMAND_BYTES;               /* READ TRACK / WRITE / READ / WR+RD DELETED */
-    case FDC_CMD_FORMAT_TRACK: return FDC_FORMAT_BYTES;        /* FORMAT TRACK */
-    default:   return 1;        /* invalid */
+
+    case FDC_CMD_FORMAT_TRACK:
+        return FDC_FORMAT_BYTES;        /* FORMAT TRACK */
+
+    default:
+        return 1;        /* invalid */
     }
 }
 
 static VOID FdcResult(PFDC_STATE state, const BYTE *bytes, BYTE count)
 {
     BYTE byteIndex;
-    for (byteIndex = 0; byteIndex < count && byteIndex < sizeof(state->Result); ++byteIndex) state->Result[byteIndex] = bytes[byteIndex];
-    state->ResultLength = byteIndex; state->ResultPosition = 0;
+
+    for (byteIndex = 0; byteIndex < count && byteIndex < sizeof(state->Result); ++byteIndex)
+        state->Result[byteIndex] = bytes[byteIndex];
+    state->ResultLength = byteIndex;
+    state->ResultPosition = 0;
     /* A command with no result bytes is over the moment its last parameter
      * lands: the host sees CMD BSY clear and DIO stay low. One with results is
      * not over until they are read, which is what lets a driver drain a result
@@ -199,16 +238,31 @@ static VOID FdcResult(PFDC_STATE state, const BYTE *bytes, BYTE count)
 static VOID FdcInvalid(PFDC_STATE state)
 {
     BYTE resultByte = FDC_ST0_INVALID_COMMAND;           /* ST0 with the invalid-command interrupt code */
+
     state->InvalidCommands++;
     FdcResult(state, &resultByte, 1);
 }
 
 /* The seven result bytes every data command ends with: ST0 ST1 ST2 C H R N. */
-static VOID FdcDataResult(PFDC_STATE state, BYTE status0, BYTE status1, BYTE status2,
-                            BYTE cylinder, BYTE headAddress, BYTE sector, BYTE sizeCode)
+static VOID FdcDataResult(
+    PFDC_STATE state,
+    BYTE status0,
+    BYTE status1,
+    BYTE status2,
+    BYTE cylinder,
+    BYTE headAddress,
+    BYTE sector,
+    BYTE sizeCode)
 {
     BYTE bytes[FDC_DATA_RESULT_BYTES];
-    bytes[FDC_RESULT_ST0] = status0; bytes[FDC_RESULT_ST1] = status1; bytes[FDC_RESULT_ST2] = status2; bytes[FDC_RESULT_CYLINDER] = cylinder; bytes[FDC_RESULT_HEAD] = headAddress; bytes[FDC_RESULT_SECTOR] = sector; bytes[FDC_RESULT_SIZE_CODE] = sizeCode;
+
+    bytes[FDC_RESULT_ST0] = status0;
+    bytes[FDC_RESULT_ST1] = status1;
+    bytes[FDC_RESULT_ST2] = status2;
+    bytes[FDC_RESULT_CYLINDER] = cylinder;
+    bytes[FDC_RESULT_HEAD] = headAddress;
+    bytes[FDC_RESULT_SECTOR] = sector;
+    bytes[FDC_RESULT_SIZE_CODE] = sizeCode;
     FdcResult(state, bytes, FDC_DATA_RESULT_BYTES);
 }
 
@@ -221,8 +275,11 @@ static VOID FdcDataResult(PFDC_STATE state, BYTE status0, BYTE status1, BYTE sta
 static VOID FdcSoftReset(PFDC_STATE state)
 {
     state->Resets++;
-    state->Phase = FDC_PHASE_COMMAND; state->CommandLength = 0; state->CommandWanted = 0;
-    state->ResultLength = 0; state->ResultPosition = 0;
+    state->Phase = FDC_PHASE_COMMAND;
+    state->CommandLength = 0;
+    state->CommandWanted = 0;
+    state->ResultLength = 0;
+    state->ResultPosition = 0;
     if (!state->IsLocked)
     {
         state->ConfigureByte2 = 0;
@@ -231,7 +288,8 @@ static VOID FdcSoftReset(PFDC_STATE state)
     }
     /* Drive polling: four sense-interrupts are now owed, one per drive. */
     state->PollDrive = state->IsPollDisabled ? FDC_DRIVES : 0;
-    state->IsIrqPending = 0; state->PendingSt0 = 0;
+    state->IsIrqPending = 0;
+    state->PendingSt0 = 0;
     FdcRaiseIrq(state);
 }
 
@@ -245,6 +303,7 @@ static VOID FdcSoftReset(PFDC_STATE state)
 static VOID FdcSenseInterrupt(PFDC_STATE state)
 {
     BYTE bytes[FDC_SENSE_INTERRUPT_BYTES];
+
     if (state->IsIrqPending)
     {
         bytes[0] = state->PendingSt0;
@@ -334,7 +393,8 @@ static VOID FdcExecute(PFDC_STATE state)
          * writing (INT 13h writes through it).
          */
         resultByte = (BYTE)(FDC_ST3_READY_TWO_SIDE | (head << FDC_HEAD_SHIFT) | drive);
-        if (!state->PresentCylinder[drive]) resultByte |= FDC_ST3_TRACK_0;
+        if (!state->PresentCylinder[drive])
+            resultByte |= FDC_ST3_TRACK_0;
         FdcResult(state, &resultByte, 1);
         break;
     }
@@ -342,9 +402,12 @@ static VOID FdcExecute(PFDC_STATE state)
     case FDC_CMD_DUMPREG:                  /* DUMPREG -- ten bytes, no side effects */
     {
         BYTE bytes[FDC_DUMPREG_BYTES];
-        bytes[FDC_DUMPREG_PCN0] = state->PresentCylinder[FDC_DRIVE_0]; bytes[FDC_DUMPREG_PCN1] = state->PresentCylinder[FDC_DRIVE_1];
-        bytes[FDC_DUMPREG_PCN2] = state->PresentCylinder[FDC_DRIVE_2]; bytes[FDC_DUMPREG_PCN3] = state->PresentCylinder[FDC_DRIVE_3];
-        bytes[FDC_DUMPREG_SRT_HUT] = state->StepRateHeadUnload; bytes[FDC_DUMPREG_HLT_ND] = state->HeadLoadNonDma;
+        bytes[FDC_DUMPREG_PCN0] = state->PresentCylinder[FDC_DRIVE_0];
+        bytes[FDC_DUMPREG_PCN1] = state->PresentCylinder[FDC_DRIVE_1];
+        bytes[FDC_DUMPREG_PCN2] = state->PresentCylinder[FDC_DRIVE_2];
+        bytes[FDC_DUMPREG_PCN3] = state->PresentCylinder[FDC_DRIVE_3];
+        bytes[FDC_DUMPREG_SRT_HUT] = state->StepRateHeadUnload;
+        bytes[FDC_DUMPREG_HLT_ND] = state->HeadLoadNonDma;
         bytes[FDC_DUMPREG_EOT] = state->LastEot;
         bytes[FDC_DUMPREG_LOCK_PERPENDICULAR] = (BYTE)((state->IsLocked ? FDC_DUMPREG_LOCK_BIT : 0) | (state->Perpendicular & FDC_DUMPREG_PERPENDICULAR_MASK));
         bytes[FDC_DUMPREG_CONFIGURE] = state->ConfigureByte2;
@@ -393,12 +456,19 @@ static VOID FdcExecute(PFDC_STATE state)
      * by definition does. A driver can act on a media error. It cannot act on
      * a controller that contradicts itself.
      */
-    case FDC_CMD_READ_TRACK: case FDC_CMD_WRITE_DATA: case FDC_CMD_READ_DATA: case FDC_CMD_WRITE_DELETED_DATA: case FDC_CMD_READ_DELETED_DATA:
+    case FDC_CMD_READ_TRACK:
+    case FDC_CMD_WRITE_DATA:
+    case FDC_CMD_READ_DATA:
+    case FDC_CMD_WRITE_DELETED_DATA:
+    case FDC_CMD_READ_DELETED_DATA:
     {
         BYTE cylinder, headAddress, sector, sizeCode;
         drive = (BYTE)(state->Command[1] & FDC_DRIVE_MASK);
         head  = (BYTE)((state->Command[1] >> FDC_HEAD_SHIFT) & 1);
-        cylinder = state->Command[FDC_PARAMETER_2]; headAddress = state->Command[FDC_PARAMETER_3]; sector = state->Command[FDC_PARAMETER_4]; sizeCode = state->Command[FDC_PARAMETER_5];
+        cylinder = state->Command[FDC_PARAMETER_2];
+        headAddress = state->Command[FDC_PARAMETER_3];
+        sector = state->Command[FDC_PARAMETER_4];
+        sizeCode = state->Command[FDC_PARAMETER_5];
         state->LastEot = state->Command[FDC_PARAMETER_6];
         FdcDataResult(state, (BYTE)(FDC_ST0_ABNORMAL | (head << FDC_HEAD_SHIFT) | drive), FDC_ST1_NO_DATA, FDC_ST2_CLEAR,
                         cylinder, headAddress, sector, sizeCode);
@@ -432,21 +502,27 @@ static VOID FdcFifoWrite(PFDC_STATE state, BYTE value)
      * part ignores it; so do we, rather than letting it become the first byte of
      * a command the driver never issued.
      */
-    if (state->Phase == FDC_PHASE_RESULT) return;
-    if (!state->CommandLength) state->CommandWanted = FdcCommandLength(value);
-    if (state->CommandLength < sizeof(state->Command)) state->Command[state->CommandLength] = value;
+    if (state->Phase == FDC_PHASE_RESULT)
+        return;
+    if (!state->CommandLength)
+        state->CommandWanted = FdcCommandLength(value);
+    if (state->CommandLength < sizeof(state->Command))
+        state->Command[state->CommandLength] = value;
     state->CommandLength++;
-    if (state->CommandLength >= state->CommandWanted) FdcExecute(state);
+    if (state->CommandLength >= state->CommandWanted)
+        FdcExecute(state);
 }
 
 static BYTE FdcFifoRead(PFDC_STATE state)
 {
     BYTE value;
+
     /* Reading when there is nothing to read hands back the last byte on a real
      * part. Returning 0xFF here would re-create the very ambiguity this device
      * exists to remove.
      */
-    if (state->Phase != FDC_PHASE_RESULT) return state->ResultLength ? state->Result[state->ResultLength - 1] : FDC_ST0_INVALID_COMMAND;
+    if (state->Phase != FDC_PHASE_RESULT)
+        return state->ResultLength ? state->Result[state->ResultLength - 1] : FDC_ST0_INVALID_COMMAND;
     value = state->Result[state->ResultPosition++];
     if (state->ResultPosition >= state->ResultLength)
     {
@@ -458,7 +534,8 @@ static BYTE FdcFifoRead(PFDC_STATE state)
          * look like an invalid-command reply to something that had simply read
          * one byte too many.
          */
-        state->Phase = FDC_PHASE_COMMAND; state->ResultPosition = 0;
+        state->Phase = FDC_PHASE_COMMAND;
+        state->ResultPosition = 0;
     }
     return value;
 }
@@ -467,6 +544,7 @@ VOID VddFdcPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
     PFDC_STATE state = (PFDC_STATE)context;
     BYTE byteValue = (BYTE)value;
+
     (VOID)width;
     switch (port)
     {
@@ -489,7 +567,11 @@ VOID VddFdcPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
         }
         break;
     }
-    case FDC_TDR:  state->Tdr = byteValue; break;
+
+    case FDC_TDR:
+        state->Tdr = byteValue;
+    break;
+
     case FDC_MSR:                               /* the WRITE side is DSR */
         state->Dsr = byteValue;
         if (byteValue & FDC_DSR_SOFTWARE_RESET)                           /* bit 7: software reset */
@@ -503,22 +585,43 @@ VOID VddFdcPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
             FdcSoftReset(state);
         }
         break;
-    case FDC_FIFO: FdcFifoWrite(state, byteValue); break;
-    case FDC_DIR:  state->Ccr = (BYTE)(byteValue & FDC_CCR_DATA_RATE); break;  /* the write side is CCR */
-    default: break;
+
+    case FDC_FIFO:
+        FdcFifoWrite(state, byteValue);
+    break;
+
+    case FDC_DIR:
+        state->Ccr = (BYTE)(byteValue & FDC_CCR_DATA_RATE);
+    break;  /* the write side is CCR */
+
+    default:
+        break;
     }
 }
 
 VOID VddFdcPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 {
     PFDC_STATE state = (PFDC_STATE)context;
+
     (VOID)width;
     switch (port)
     {
-    case FDC_DOR:  *value = state->Dor; break;       /* readable on an 82077AA */
-    case FDC_TDR:  *value = state->Tdr; break;
-    case FDC_MSR:  *value = VddFdcMainStatus(state); break;
-    case FDC_FIFO: *value = FdcFifoRead(state); break;
+    case FDC_DOR:
+        *value = state->Dor;
+    break;       /* readable on an 82077AA */
+
+    case FDC_TDR:
+        *value = state->Tdr;
+    break;
+
+    case FDC_MSR:
+        *value = VddFdcMainStatus(state);
+    break;
+
+    case FDC_FIFO:
+        *value = FdcFifoRead(state);
+    break;
+
     case FDC_DIR:
         /* DIR BIT 7 IS DSKCHG, AND WE ANSWER 0:
          * The medium behind us is a file that cannot be swapped while the VDM
@@ -534,7 +637,10 @@ VOID VddFdcPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
          */
         *value = FDC_DIR_NO_CHANGE;
         break;
-    default: *value = FDC_UNDRIVEN_BUS; break;
+
+    default:
+        *value = FDC_UNDRIVEN_BUS;
+    break;
     }
 }
 
@@ -543,7 +649,9 @@ VOID VddFdcReset(PVOID context)
     PFDC_STATE state = (PFDC_STATE)context;
     PVDD_BUS bus = state->Bus;
     UINT byteIndex;
-    for (byteIndex = 0; byteIndex < sizeof(*state); ++byteIndex) ((BYTE *)state)[byteIndex] = 0;
+
+    for (byteIndex = 0; byteIndex < sizeof(*state); ++byteIndex)
+        ((BYTE *)state)[byteIndex] = 0;
     state->Bus = bus;
     /* WHAT POST LEAVES:
      * Out of reset, DMA and interrupts gated through, drive 0 selected, motors
@@ -569,8 +677,10 @@ VOID VddFdcReset(PVOID context)
 INT VddFdcInitialize(PVDD_BUS bus, PVOID context)
 {
     PFDC_STATE state = (PFDC_STATE)context;
+
     state->Bus = bus;
-    if (!state->Dor) VddFdcReset(state);            /* the host builds us zeroed */
+    if (!state->Dor)
+        VddFdcReset(state);                         /* the host builds us zeroed */
     state->Bus = bus;
     /* TWO CLAIMS, AND THE GAPS ARE DELIBERATE:
      * 3F0h/3F1h (SRA/SRB) are driven ONLY by a part strapped for PS/2 mode. We
@@ -586,7 +696,9 @@ INT VddFdcInitialize(PVDD_BUS bus, PVOID context)
      * Claiming the whole eight-port block would have "fixed" the row by taking
      * a register that is somebody else's.
      */
-    if (VddClaimPorts(bus, FDC_DOR, FDC_FIFO, VddFdcPortIn, VddFdcPortOut, state)) return FDC_FAILED;
-    if (VddClaimPorts(bus, FDC_DIR, FDC_DIR,  VddFdcPortIn, VddFdcPortOut, state)) return FDC_FAILED;
+    if (VddClaimPorts(bus, FDC_DOR, FDC_FIFO, VddFdcPortIn, VddFdcPortOut, state))
+        return FDC_FAILED;
+    if (VddClaimPorts(bus, FDC_DIR, FDC_DIR,  VddFdcPortIn, VddFdcPortOut, state))
+        return FDC_FAILED;
     return FDC_OK;
 }

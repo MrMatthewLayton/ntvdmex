@@ -30,10 +30,14 @@
 #include <stdint.h>
 #include "interp_xcpu.h"
 
-VOID ref_Initialize(PCBYTE image, INT isProtectedMode);  VOID new_Initialize(PCBYTE image, INT isProtectedMode);
+VOID ref_Initialize(PCBYTE image, INT isProtectedMode);  VOID new_Initialize(
+    PCBYTE image,
+    INT isProtectedMode);
 VOID ref_Poke(UINT32 linear, BYTE value);     VOID new_Poke(UINT32 linear, BYTE value);
 PCBYTE ref_Memory(VOID);               VOID new_Sync(PCBYTE image);
-INT  ref_Step(PINTERP_XCPU state, PUINT64 effects);       INT  new_Step(PINTERP_XCPU state, PUINT64 effects);
+INT  ref_Step(PINTERP_XCPU state, PUINT64 effects);       INT  new_Step(
+    PINTERP_XCPU state,
+    PUINT64 effects);
 VOID new_UndoBegin(VOID);  INT new_UndoRollback(VOID);  VOID new_UndoEnd(VOID);
 
 static BYTE g_Image[XMEM_SIZE];
@@ -50,6 +54,7 @@ static UINT32 InterpSupersetRandom(VOID)
 static UINT InterpSupersetKeyOf(PCBYTE memory, UINT32 linear)
 {
     UINT hasOperandSize = 0, index;
+
     for (index = 0; index < 5; ++index)
     {
         BYTE byteValue = memory[(linear + index) % XMEM_SIZE];
@@ -59,8 +64,10 @@ static UINT InterpSupersetKeyOf(PCBYTE memory, UINT32 linear)
             continue;
         }
         if (byteValue == 0x26 || byteValue == 0x2E || byteValue == 0x36 || byteValue == 0x3E || byteValue == 0x64 || byteValue == 0x65 ||
-            byteValue == 0xF2 || byteValue == 0xF3 || byteValue == 0x67 || byteValue == 0xF0) continue;
-        if (byteValue == 0x0F) return (hasOperandSize << 16) | 0x0F00 | memory[(linear + index + 1) % XMEM_SIZE];
+            byteValue == 0xF2 || byteValue == 0xF3 || byteValue == 0x67 || byteValue == 0xF0)
+            continue;
+        if (byteValue == 0x0F)
+            return (hasOperandSize << 16) | 0x0F00 | memory[(linear + index + 1) % XMEM_SIZE];
         return (hasOperandSize << 16) | byteValue;
     }
     return 0xFFFFF;
@@ -68,8 +75,10 @@ static UINT InterpSupersetKeyOf(PCBYTE memory, UINT32 linear)
 
 static VOID InterpSupersetKeyString(UINT key, PSTR output)
 {
-    if ((key & 0xFF00) == 0x0F00) sprintf(output, "%s0F%02X", (key >> 16) ? "66:" : "", key & 0xFF);
-    else sprintf(output, "%s%02X", (key >> 16) ? "66:" : "", key & 0xFF);
+    if ((key & 0xFF00) == 0x0F00)
+        sprintf(output, "%s0F%02X", (key >> 16) ? "66:" : "", key & 0xFF);
+    else
+        sprintf(output, "%s%02X", (key >> 16) ? "66:" : "", key & 0xFF);
 }
 
 static UINT g_ExtraByKey[0x20000], g_MismatchByKey[0x20000];
@@ -79,10 +88,13 @@ static INT InterpSupersetIsAllowedKey(PCSTR allowList, PCSTR keyText)
 {
     size_t length = strlen(keyText);
     PCSTR cursor = allowList;
-    if (!allowList) return 0;
+
+    if (!allowList)
+        return 0;
     while ((cursor = strstr(cursor, keyText)) != NULL)
     {
-        if ((cursor == allowList || cursor[-1] == ' ') && (cursor[length] == 0 || cursor[length] == ' ')) return 1;
+        if ((cursor == allowList || cursor[-1] == ' ') && (cursor[length] == 0 || cursor[length] == ' '))
+            return 1;
         cursor += length;
     }
     return 0;
@@ -92,14 +104,17 @@ static UINT32 InterpSupersetLinearOf(PCINTERP_XCPU state, INT isProtectedMode)
 {
     /* Only for printing the bytes: real-mode CS:IP, or the fake PM base. */
     UINT32 base = isProtectedMode ? (((UINT32)(state->Segments[1] >> 3) * 0x1230u) & 0xFFFF0u) : ((UINT32)state->Segments[1] << 4);
+
     return (base + state->Ip) % XMEM_SIZE;
 }
 
 static VOID InterpSupersetDump(PCSTR tag, PCINTERP_XCPU state)
 {
     INT index;
+
     printf("    %s ip=%04X cs=%04X fl=%08X", tag, state->Ip, state->Segments[1], state->Flags);
-    for (index = 0; index < 8; ++index) printf(" r%d=%08X", index, state->Registers[index]);
+    for (index = 0; index < 8; ++index)
+        printf(" r%d=%08X", index, state->Registers[index]);
     printf(" seg=%04X/%04X/%04X/%04X/%04X/%04X\n", state->Segments[0], state->Segments[1], state->Segments[2], state->Segments[3], state->Segments[4], state->Segments[5]);
 }
 
@@ -115,17 +130,23 @@ INT main(INT argc, PSTR *argv)
     UINT32 index;
 
     g_Random = seed ? seed : 1;
-    for (index = 0; index < XMEM_SIZE; ++index) g_Image[index] = (BYTE)InterpSupersetRandom();
-    ref_Initialize(g_Image, isProtectedMode); new_Initialize(g_Image, isProtectedMode);
+    for (index = 0; index < XMEM_SIZE; ++index)
+        g_Image[index] = (BYTE)InterpSupersetRandom();
+    ref_Initialize(g_Image, isProtectedMode);
+    new_Initialize(g_Image, isProtectedMode);
     for (program = 0; program < programCount; ++program)
     {
-        INTERP_XCPU state; INT position;
+        INTERP_XCPU state;
+        INT position;
         memset(&state, 0, sizeof state);
-        for (position = 0; position < 8; ++position) state.Registers[position] = (InterpSupersetRandom() & 3) ? (InterpSupersetRandom() & 0xFFFF) : InterpSupersetRandom();
-        for (position = 0; position < 6; ++position) state.Segments[position] = (WORD)(InterpSupersetRandom() & 0xFFFF);
+        for (position = 0; position < 8; ++position)
+            state.Registers[position] = (InterpSupersetRandom() & 3) ? (InterpSupersetRandom() & 0xFFFF) : InterpSupersetRandom();
+        for (position = 0; position < 6; ++position)
+            state.Segments[position] = (WORD)(InterpSupersetRandom() & 0xFFFF);
         state.Registers[1] &= 0xFFFF;
         state.Segments[1] = (WORD)(InterpSupersetRandom() % 0xF000);
-        if (isProtectedMode) state.Segments[1] = (WORD)((state.Segments[1] & ~7u) | 7u);      /* an LDT selector, RPL 3 */
+        if (isProtectedMode)
+            state.Segments[1] = (WORD)((state.Segments[1] & ~7u) | 7u);                       /* an LDT selector, RPL 3 */
         state.Ip = (WORD)InterpSupersetRandom();
         state.Flags = 0x0002 | (InterpSupersetRandom() & 0x0ED5u);
         { UINT32 linear = InterpSupersetLinearOf(&state, isProtectedMode), offset;
@@ -138,7 +159,9 @@ INT main(INT argc, PSTR *argv)
           }
         for (position = 0; position < stepLimit; ++position)
         {
-            INTERP_XCPU referenceState = state, newState = state; UINT64 referenceEffects = 0, newEffects = 0; INT isReferenceOk, isNewOk;
+            INTERP_XCPU referenceState = state, newState = state;
+            UINT64 referenceEffects = 0, newEffects = 0;
+            INT isReferenceOk, isNewOk;
             UINT key = InterpSupersetKeyOf(ref_Memory(), InterpSupersetLinearOf(&state, isProtectedMode));
             new_UndoBegin();
             isReferenceOk = ref_Step(&referenceState, &referenceEffects);
@@ -148,33 +171,44 @@ INT main(INT argc, PSTR *argv)
                 new_UndoEnd();
                 if (!isNewOk || memcmp(&referenceState, &newState, sizeof referenceState) || referenceEffects != newEffects)
                 {
-                    CHAR keyText[16]; InterpSupersetKeyString(key, keyText);
+                    CHAR keyText[16];
+                    InterpSupersetKeyString(key, keyText);
                     g_MismatchByKey[key & 0x1FFFF]++;
-                    if (InterpSupersetIsAllowedKey(allowList, keyText)) ++allowedCount;
+                    if (InterpSupersetIsAllowedKey(allowList, keyText))
+                        ++allowedCount;
                     else
                     {
                         ++badCount;
                         if (printedCount++ < 12)
                         {
-                            PCBYTE memory = ref_Memory(); UINT32 linear = InterpSupersetLinearOf(&state, isProtectedMode), offset;
+                            PCBYTE memory = ref_Memory();
+                            UINT32 linear = InterpSupersetLinearOf(&state, isProtectedMode), offset;
                             printf("MISMATCH %s new_ok=%d fx %s  bytes:", keyText, isNewOk, referenceEffects == newEffects ? "same" : "DIFFER");
-                            for (offset = 0; offset < 8; ++offset) printf(" %02X", memory[(linear + offset) % XMEM_SIZE]);
-                            printf("\n"); InterpSupersetDump("in ", &state); InterpSupersetDump("old", &referenceState); InterpSupersetDump("new", &newState);
+                            for (offset = 0; offset < 8; ++offset)
+                                printf(" %02X", memory[(linear + offset) % XMEM_SIZE]);
+                            printf("\n");
+                            InterpSupersetDump("in ", &state);
+                            InterpSupersetDump("old", &referenceState);
+                            InterpSupersetDump("new", &newState);
                         }
                     }
                     new_Sync(ref_Memory());          /* realign memory, end this program */
                     break;
                 }
-                ++sameCount; state = referenceState;
+                ++sameCount;
+                state = referenceState;
                 continue;
             }
             /* The old interpreter declined. */
             if (isNewOk)
             {
-                ++extraCount; g_ExtraByKey[key & 0x1FFFF]++;
-                if (!new_UndoRollback()) new_Sync(ref_Memory());
+                ++extraCount;
+                g_ExtraByKey[key & 0x1FFFF]++;
+                if (!new_UndoRollback())
+                    new_Sync(ref_Memory());
             }
-            else new_UndoEnd();
+            else
+                new_UndoEnd();
             break;
         }
     }
@@ -184,14 +218,18 @@ INT main(INT argc, PSTR *argv)
     { INT shownCount;
       for (shownCount = 0; shownCount < 40; ++shownCount)
       {
-          UINT best = 0, bestKey = 0; CHAR keyText[16];
+          UINT best = 0, bestKey = 0;
+          CHAR keyText[16];
           for (keyIndex = 0; keyIndex < 0x20000; ++keyIndex) if (g_ExtraByKey[keyIndex] > best)
           {
               best = g_ExtraByKey[keyIndex];
               bestKey = keyIndex;
           }
-          if (!best) break;
-          InterpSupersetKeyString(bestKey, keyText); printf("  %-8s %u\n", keyText, best); g_ExtraByKey[bestKey] = 0;
+          if (!best)
+              break;
+          InterpSupersetKeyString(bestKey, keyText);
+          printf("  %-8s %u\n", keyText, best);
+          g_ExtraByKey[bestKey] = 0;
       } }
     if (allowedCount)
     {
@@ -200,7 +238,8 @@ INT main(INT argc, PSTR *argv)
         {
             CHAR keyText[16];
             InterpSupersetKeyString(keyIndex, keyText);
-            if (InterpSupersetIsAllowedKey(allowList, keyText)) printf("  %-8s %u\n", keyText, g_MismatchByKey[keyIndex]);
+            if (InterpSupersetIsAllowedKey(allowList, keyText))
+                printf("  %-8s %u\n", keyText, g_MismatchByKey[keyIndex]);
         }
     }
     if (badCount)

@@ -40,7 +40,8 @@ static INT g_Checks, g_Failures;
 static VOID DiskTestExpect(PCSTR description, LONG actual, LONG expected)
 {
     ++g_Checks;
-    if (actual == expected) return;
+    if (actual == expected)
+        return;
     ++g_Failures;
     printf("  FAIL %-56s got 0x%lX, want 0x%lX\n", description, (long)actual, (long)expected);
 }
@@ -63,10 +64,14 @@ static VOID DiskTestBuild1440kBpb(PBYTE bootSector)
 }
 
 /* CHS -> LBA as one number for a check: the LBA, or DISK_TEST_REFUSED. */
-static LONG DiskTestLbaOrRefused(PCDOS_DISK_GEOMETRY geometry, WORD cylinder, WORD head,
-                                 WORD sector)
+static LONG DiskTestLbaOrRefused(
+    PCDOS_DISK_GEOMETRY geometry,
+    WORD cylinder,
+    WORD head,
+    WORD sector)
 {
     DWORD logicalBlock;
+
     return DosDiskChsToLba(geometry, cylinder, head, sector, &logicalBlock)
            ? (LONG)logicalBlock : DISK_TEST_REFUSED;
 }

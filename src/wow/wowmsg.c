@@ -82,7 +82,9 @@ static INT      g_WowMsgQuitCount = 0;
 static INT WowMsgIsFor(WORD window, WORD task)
 {
     WORD owner;
-    if (!task || !window || !g_WowMsgOwner) return 1;
+
+    if (!task || !window || !g_WowMsgOwner)
+        return 1;
     owner = g_WowMsgOwner(window);
     return !owner || owner == task;
 }
@@ -90,26 +92,34 @@ static INT WowMsgIsFor(WORD window, WORD task)
 VOID WowMsgPostQuit(WORD task, WORD code)
 {
     INT index;
-    for (index = 0; index < g_WowMsgQuitCount; ++index) if (g_WowMsgQuits[index].Task == task) break;
+
+    for (index = 0; index < g_WowMsgQuitCount; ++index)
+        if (g_WowMsgQuits[index].Task == task)
+            break;
     if (index == g_WowMsgQuitCount)
     {
         if (g_WowMsgQuitCount == WOWMSG_MAXQUIT)            /* full: the oldest goes */
         {
-            for (index = 1; index < g_WowMsgQuitCount; ++index) g_WowMsgQuits[index - 1] = g_WowMsgQuits[index];
+            for (index = 1; index < g_WowMsgQuitCount; ++index)
+                g_WowMsgQuits[index - 1] = g_WowMsgQuits[index];
             --g_WowMsgQuitCount;
         }
         index = g_WowMsgQuitCount++;
     }
-    g_WowMsgQuits[index].Task = task; g_WowMsgQuits[index].Code = code;
-    g_WowMsgIsQuit = 1; g_WowMsgQuitCode = code;
+    g_WowMsgQuits[index].Task = task;
+    g_WowMsgQuits[index].Code = code;
+    g_WowMsgIsQuit = 1;
+    g_WowMsgQuitCode = code;
 }
 
 /* 1 + the index of `task`'s pending quit (a task-0 quit is anyone's), or 0. */
 INT WowMsgQuitFor(WORD task)
 {
     INT index;
+
     for (index = 0; index < g_WowMsgQuitCount; ++index)
-        if (!task || !g_WowMsgQuits[index].Task || g_WowMsgQuits[index].Task == task) return index + 1;
+        if (!task || !g_WowMsgQuits[index].Task || g_WowMsgQuits[index].Task == task)
+            return index + 1;
     return 0;
 }
 
@@ -118,9 +128,12 @@ WORD WowMsgTakeQuit(INT quitNumber)
 {
     WORD code;
     INT index;
-    if (quitNumber < 1 || quitNumber > g_WowMsgQuitCount) return 0;
+
+    if (quitNumber < 1 || quitNumber > g_WowMsgQuitCount)
+        return 0;
     code = g_WowMsgQuits[quitNumber - 1].Code;
-    for (index = quitNumber; index < g_WowMsgQuitCount; ++index) g_WowMsgQuits[index - 1] = g_WowMsgQuits[index];
+    for (index = quitNumber; index < g_WowMsgQuitCount; ++index)
+        g_WowMsgQuits[index - 1] = g_WowMsgQuits[index];
     --g_WowMsgQuitCount;
     g_WowMsgIsQuit = g_WowMsgQuitCount > 0;
     return code;
@@ -139,20 +152,33 @@ WORD     g_WowMsgFocus = 0;
  * every caller must hold the host lock -- there is no lock in here, on purpose,
  * because this file must not know how the host serialises itself.
  */
-INT WowMsgPost(WORD window, WORD message, WORD wParam, DWORD lParam,
-                       DWORD time, WORD pointX, WORD pointY)
+INT WowMsgPost(
+    WORD window,
+    WORD message,
+    WORD wParam,
+    DWORD lParam,
+    DWORD time,
+    WORD pointX,
+    WORD pointY)
 {
     PWOWMSG entry;
+
     if (g_WowMsgCount >= WOWMSG_MAX)
     {
         ++g_WowMsgDropped;
         return 0;
     }
     entry = &g_WowMsgRing[g_WowMsgTail];
-    entry->Window = window; entry->Message = message; entry->WParam = wParam; entry->LParam = lParam;
-    entry->Time = time; entry->PointX = pointX; entry->PointY = pointY;
+    entry->Window = window;
+    entry->Message = message;
+    entry->WParam = wParam;
+    entry->LParam = lParam;
+    entry->Time = time;
+    entry->PointX = pointX;
+    entry->PointY = pointY;
     g_WowMsgTail = (g_WowMsgTail + 1) % WOWMSG_MAX;
-    ++g_WowMsgCount; ++g_WowMsgPosted;
+    ++g_WowMsgCount;
+    ++g_WowMsgPosted;
     return 1;
 }
 
@@ -172,10 +198,17 @@ INT WowMsgPost(WORD window, WORD message, WORD wParam, DWORD lParam,
  * newest entry for that window.
  * Returns 1 if it folded into an existing entry.
  */
-INT WowMsgPostMove(WORD window, WORD message, WORD wParam, DWORD lParam,
-                            DWORD time, WORD pointX, WORD pointY)
+INT WowMsgPostMove(
+    WORD window,
+    WORD message,
+    WORD wParam,
+    DWORD lParam,
+    DWORD time,
+    WORD pointX,
+    WORD pointY)
 {
     INT newest;
+
     if (g_WowMsgCount)
     {
         newest = (g_WowMsgTail + WOWMSG_MAX - 1) % WOWMSG_MAX;    /* the newest entry */
@@ -198,13 +231,16 @@ WOWMSG g_WowMsgReplay;
 INT WowMsgTake(WORD window, WORD filterMin, WORD filterMax, INT isRemove, PWOWMSG output)
 {
     INT position, index;
-    if (!g_WowMsgCount) return 0;
+
+    if (!g_WowMsgCount)
+        return 0;
     for (position = 0; position < g_WowMsgCount; ++position)
     {
         PWOWMSG entry = &g_WowMsgRing[(g_WowMsgHead + position) % WOWMSG_MAX];
         if (entry->Message == WOWMSG_MENUREPLAY)
         {
-            g_WowMsgReplay = *entry; g_WowMsgIsReplayDue = 1;
+            g_WowMsgReplay = *entry;
+            g_WowMsgIsReplayDue = 1;
             for (index = position; index > 0; --index)
                 g_WowMsgRing[(g_WowMsgHead + index) % WOWMSG_MAX] =
                     g_WowMsgRing[(g_WowMsgHead + index - 1) % WOWMSG_MAX];
@@ -213,9 +249,12 @@ INT WowMsgTake(WORD window, WORD filterMin, WORD filterMax, INT isRemove, PWOWMS
             --position;                          /* the next entry now sits at n */
             continue;
         }
-        if (window && entry->Window != window) continue;
-        if ((filterMin || filterMax) && (entry->Message < filterMin || entry->Message > filterMax)) continue;
-        if (!WowMsgIsFor(entry->Window, g_WowMsgTaker)) continue;          /* s92 #306 */
+        if (window && entry->Window != window)
+            continue;
+        if ((filterMin || filterMax) && (entry->Message < filterMin || entry->Message > filterMax))
+            continue;
+        if (!WowMsgIsFor(entry->Window, g_WowMsgTaker))
+            continue;                                                      /* s92 #306 */
         *output = *entry;
         if (isRemove)
         {
@@ -223,7 +262,8 @@ INT WowMsgTake(WORD window, WORD filterMin, WORD filterMax, INT isRemove, PWOWMS
                 g_WowMsgRing[(g_WowMsgHead + index) % WOWMSG_MAX] =
                     g_WowMsgRing[(g_WowMsgHead + index - 1) % WOWMSG_MAX];
             g_WowMsgHead = (g_WowMsgHead + 1) % WOWMSG_MAX;
-            --g_WowMsgCount; ++g_WowMsgTaken;
+            --g_WowMsgCount;
+            ++g_WowMsgTaken;
         }
         return 1;
     }
@@ -234,8 +274,10 @@ INT WowMsgTake(WORD window, WORD filterMin, WORD filterMax, INT isRemove, PWOWMS
 INT WowMsgCountFor(WORD task)
 {
     INT position, count = 0;
+
     for (position = 0; position < g_WowMsgCount; ++position)
-        if (WowMsgIsFor(g_WowMsgRing[(g_WowMsgHead + position) % WOWMSG_MAX].Window, task)) ++count;
+        if (WowMsgIsFor(g_WowMsgRing[(g_WowMsgHead + position) % WOWMSG_MAX].Window, task))
+            ++count;
     return count;
 }
 
@@ -250,7 +292,9 @@ VOID WowMsgRead(const volatile BYTE *bytes, PWOWMSG message)
     message->WParam = (WORD)(bytes[WOWMSG_FIELD_WPARAM]  | (bytes[WOWMSG_FIELD_WPARAM + 1]  << BYTE_SHIFT));
     message->LParam = (DWORD)(bytes[WOWMSG_FIELD_LPARAM] | (bytes[WOWMSG_FIELD_LPARAM + 1] << BYTE_SHIFT))
               | ((DWORD)(bytes[WOWMSG_FIELD_LPARAM + WOW_WORD_BYTES] | (bytes[WOWMSG_FIELD_LPARAM + WOW_WORD_BYTES + 1] << BYTE_SHIFT)) << WORD_SHIFT);
-    message->Time   = 0; message->PointX = 0; message->PointY = 0;
+    message->Time   = 0;
+    message->PointX = 0;
+    message->PointY = 0;
 }
 
 /* Write an 18-byte MSG through the far pointer the guest handed us. */

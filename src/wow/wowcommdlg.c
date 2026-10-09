@@ -49,30 +49,44 @@ static DWORD g_WowCdlgError = 0;
 static VOID WowCdlgLogFont16To32(const volatile BYTE *logFont16, PLOGFONTA logFont)
 {
     INT index;
+
     logFont->lfHeight      = (LONG)(SHORT)Wow32PeekWord((volatile BYTE *)logFont16 + WOWCDLG_LF16_HEIGHT);
     logFont->lfWidth       = (LONG)(SHORT)Wow32PeekWord((volatile BYTE *)logFont16 + WOWCDLG_LF16_WIDTH);
     logFont->lfEscapement  = (LONG)(SHORT)Wow32PeekWord((volatile BYTE *)logFont16 + WOWCDLG_LF16_ESCAPEMENT);
     logFont->lfOrientation = (LONG)(SHORT)Wow32PeekWord((volatile BYTE *)logFont16 + WOWCDLG_LF16_ORIENTATION);
     logFont->lfWeight      = (LONG)(SHORT)Wow32PeekWord((volatile BYTE *)logFont16 + WOWCDLG_LF16_WEIGHT);
-    logFont->lfItalic = logFont16[WOWCDLG_LF16_ITALIC]; logFont->lfUnderline = logFont16[WOWCDLG_LF16_UNDERLINE]; logFont->lfStrikeOut = logFont16[WOWCDLG_LF16_STRIKEOUT];
-    logFont->lfCharSet = logFont16[WOWCDLG_LF16_CHARSET]; logFont->lfOutPrecision = logFont16[WOWCDLG_LF16_OUTPRECISION]; logFont->lfClipPrecision = logFont16[WOWCDLG_LF16_CLIPPRECISION];
-    logFont->lfQuality = logFont16[WOWCDLG_LF16_QUALITY]; logFont->lfPitchAndFamily = logFont16[WOWCDLG_LF16_PITCHANDFAMILY];
-    for (index = 0; index < LF_FACESIZE - 1 && logFont16[WOWCDLG_LF16_FACENAME + index]; ++index) logFont->lfFaceName[index] = (CHAR)logFont16[WOWCDLG_LF16_FACENAME + index];
+    logFont->lfItalic = logFont16[WOWCDLG_LF16_ITALIC];
+    logFont->lfUnderline = logFont16[WOWCDLG_LF16_UNDERLINE];
+    logFont->lfStrikeOut = logFont16[WOWCDLG_LF16_STRIKEOUT];
+    logFont->lfCharSet = logFont16[WOWCDLG_LF16_CHARSET];
+    logFont->lfOutPrecision = logFont16[WOWCDLG_LF16_OUTPRECISION];
+    logFont->lfClipPrecision = logFont16[WOWCDLG_LF16_CLIPPRECISION];
+    logFont->lfQuality = logFont16[WOWCDLG_LF16_QUALITY];
+    logFont->lfPitchAndFamily = logFont16[WOWCDLG_LF16_PITCHANDFAMILY];
+    for (index = 0; index < LF_FACESIZE - 1 && logFont16[WOWCDLG_LF16_FACENAME + index]; ++index)
+        logFont->lfFaceName[index] = (CHAR)logFont16[WOWCDLG_LF16_FACENAME + index];
     logFont->lfFaceName[index] = 0;
 }
 
 static VOID WowCdlgLogFont32To16(const LOGFONTA *logFont, volatile BYTE *logFont16)
 {
     INT index;
+
     Wow32PokeWord(logFont16 + WOWCDLG_LF16_HEIGHT, (WORD)(SHORT)logFont->lfHeight);
     Wow32PokeWord(logFont16 + WOWCDLG_LF16_WIDTH, (WORD)(SHORT)logFont->lfWidth);
     Wow32PokeWord(logFont16 + WOWCDLG_LF16_ESCAPEMENT, (WORD)(SHORT)logFont->lfEscapement);
     Wow32PokeWord(logFont16 + WOWCDLG_LF16_ORIENTATION, (WORD)(SHORT)logFont->lfOrientation);
     Wow32PokeWord(logFont16 + WOWCDLG_LF16_WEIGHT, (WORD)(SHORT)logFont->lfWeight);
-    logFont16[WOWCDLG_LF16_ITALIC] = logFont->lfItalic; logFont16[WOWCDLG_LF16_UNDERLINE] = logFont->lfUnderline; logFont16[WOWCDLG_LF16_STRIKEOUT] = logFont->lfStrikeOut;
-    logFont16[WOWCDLG_LF16_CHARSET] = logFont->lfCharSet; logFont16[WOWCDLG_LF16_OUTPRECISION] = logFont->lfOutPrecision; logFont16[WOWCDLG_LF16_CLIPPRECISION] = logFont->lfClipPrecision;
-    logFont16[WOWCDLG_LF16_QUALITY] = logFont->lfQuality; logFont16[WOWCDLG_LF16_PITCHANDFAMILY] = logFont->lfPitchAndFamily;
-    for (index = 0; index < WOWCDLG_LF16_FACESIZE; ++index) logFont16[WOWCDLG_LF16_FACENAME + index] = (index < LF_FACESIZE && logFont->lfFaceName[index]) ? (BYTE)logFont->lfFaceName[index] : 0;
+    logFont16[WOWCDLG_LF16_ITALIC] = logFont->lfItalic;
+    logFont16[WOWCDLG_LF16_UNDERLINE] = logFont->lfUnderline;
+    logFont16[WOWCDLG_LF16_STRIKEOUT] = logFont->lfStrikeOut;
+    logFont16[WOWCDLG_LF16_CHARSET] = logFont->lfCharSet;
+    logFont16[WOWCDLG_LF16_OUTPRECISION] = logFont->lfOutPrecision;
+    logFont16[WOWCDLG_LF16_CLIPPRECISION] = logFont->lfClipPrecision;
+    logFont16[WOWCDLG_LF16_QUALITY] = logFont->lfQuality;
+    logFont16[WOWCDLG_LF16_PITCHANDFAMILY] = logFont->lfPitchAndFamily;
+    for (index = 0; index < WOWCDLG_LF16_FACESIZE; ++index)
+        logFont16[WOWCDLG_LF16_FACENAME + index] = (index < LF_FACESIZE && logFont->lfFaceName[index]) ? (BYTE)logFont->lfFaceName[index] : 0;
     logFont16[WOWCDLG_LF16_FACENAME + WOWCDLG_LF16_FACESIZE - 1] = 0;
 }
 
@@ -88,12 +102,15 @@ static UINT         g_WowCdlgFindMessage = 0;     /* "commdlg_FindReplace" */
 INT WowCdlgRelay(UINT message, LPARAM lParam)
 {
     INT index;
-    if (!g_WowCdlgFindMessage || message != g_WowCdlgFindMessage) return 0;
+
+    if (!g_WowCdlgFindMessage || message != g_WowCdlgFindMessage)
+        return 0;
     for (index = 0; index < WOWCDLG_MAX_FIND; ++index)
     {
         PWOWCDLG_FIND slot = &g_WowCdlgFinds[index];
         DWORD flags;
-        if (!slot->Dialog || (LPARAM)&slot->FindReplace != lParam) continue;
+        if (!slot->Dialog || (LPARAM)&slot->FindReplace != lParam)
+            continue;
         flags = slot->FindReplace.Flags;
         WowCdlgPokeDword(slot->Guest, WOWCDLG_FR16_FLAGS, flags & ~WOWCDLG_FR16_HOOKBITS);
         WowMsgPost(slot->Owner16, (WORD)message, 0, slot->Guest16, GetTickCount(), 0, 0);
@@ -118,9 +135,11 @@ INT WowCdlgRelay(UINT message, LPARAM lParam)
 INT WowCdlgIsDialogMessage(PMSG message)
 {
     INT index;
+
     for (index = 0; index < WOWCDLG_MAX_FIND; ++index)
         if (g_WowCdlgFinds[index].Dialog && IsWindow(g_WowCdlgFinds[index].Dialog)
-            && IsDialogMessageA(g_WowCdlgFinds[index].Dialog, message)) return 1;
+            && IsDialogMessageA(g_WowCdlgFinds[index].Dialog, message))
+            return 1;
     return 0;
 }
 
@@ -129,8 +148,10 @@ INT WowCdlgIsDialogMessage(PMSG message)
  */
 INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 {
-    if (noteCapacity) note[0] = 0;
-    if (frame->Id != WOWCDLG_EXTENDEDERROR) g_WowCdlgError = 0;   /* a new call, a new answer */
+    if (noteCapacity)
+        note[0] = 0;
+    if (frame->Id != WOWCDLG_EXTENDEDERROR)
+        g_WowCdlgError = 0;                                       /* a new call, a new answer */
     switch (frame->Id)
     {
 
@@ -192,7 +213,8 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
 
-        for (byteIndex = 0; byteIndex < sizeof openFileName; ++byteIndex) ((PBYTE)&openFileName)[byteIndex] = 0;
+        for (byteIndex = 0; byteIndex < sizeof openFileName; ++byteIndex)
+            ((PBYTE)&openFileName)[byteIndex] = 0;
         openFileName.lStructSize = sizeof openFileName;
         owner16 = Wow32PeekWord(guest + WOWCDLG_OFN16_HWNDOWNER);
         window = owner16 ? WowUserFindWindow(owner16) : NULL;
@@ -220,7 +242,8 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         if (!openFileName.lpstrInitialDir || !openFileName.lpstrInitialDir[0])
         {
             static CHAR currentDirectory[MAX_PATH];
-            if (GetCurrentDirectoryA(sizeof currentDirectory, currentDirectory)) openFileName.lpstrInitialDir = currentDirectory;
+            if (GetCurrentDirectoryA(sizeof currentDirectory, currentDirectory))
+                openFileName.lpstrInitialDir = currentDirectory;
         }
         openFileName.lpstrTitle        = (LPCSTR)Wow32FarAt(frame, guest, WOWCDLG_OFN16_TITLE);
         openFileName.lpstrDefExt       = (LPCSTR)Wow32FarAt(frame, guest, WOWCDLG_OFN16_DEFEXT);
@@ -246,7 +269,8 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 
         WowNotePut(note, noteCapacity, &noteLength, " owner=0x");
         WowNoteHex(note, noteCapacity, &noteLength, owner16, WOW_HEX_WORD_DIGITS);
-        if (owner16 && !window) WowNotePut(note, noteCapacity, &noteLength, "(NO SUCH WINDOW -- unowned)");
+        if (owner16 && !window)
+            WowNotePut(note, noteCapacity, &noteLength, "(NO SUCH WINDOW -- unowned)");
         WowNotePut(note, noteCapacity, &noteLength, " flags=0x");
         WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_DWORD_DIGITS);
         if (flags & WOWCDLG_OFN16_HOOKBITS)
@@ -333,7 +357,8 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 while (length < (INT)sizeof directory - 1 && openFileName.lpstrFile[length])
                 {
                     directory[length] = openFileName.lpstrFile[length];
-                    if (directory[length] == '\\') lastSlash = length;
+                    if (directory[length] == '\\')
+                        lastSlash = length;
                     ++length;
                 }
                 directory[length] = 0;
@@ -349,17 +374,25 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                             extensionLength = 0;
                             baseLength = -1;
                         }
-                        else if (baseLength < 0) ++extensionLength; else ++baseLength;
+                        else if (baseLength < 0)
+                            ++extensionLength;
+                        else
+                            ++baseLength;
                     }
-                    if (baseLength < 0) baseLength = 0;
-                    { INT stemLength = 0; for (position = lastSlash + 1; openFileName.lpstrFile[position]
-                                       && openFileName.lpstrFile[position] != '.'; ++position) ++stemLength;
-                      if (stemLength > WOWCDLG_DOS_NAME_MAX || extensionLength > WOWCDLG_DOS_EXTENSION_MAX) isLeafShort = 0; }
+                    if (baseLength < 0)
+                        baseLength = 0;
+                    { INT stemLength = 0;
+                    for (position = lastSlash + 1; openFileName.lpstrFile[position]
+                                       && openFileName.lpstrFile[position] != '.'; ++position)
+                        ++stemLength;
+                      if (stemLength > WOWCDLG_DOS_NAME_MAX || extensionLength > WOWCDLG_DOS_EXTENSION_MAX)
+                          isLeafShort = 0; }
                     directoryLength = isLeafShort ? GetShortPathNameA(directory, shortPath, sizeof shortPath) : 0;
                     if (directoryLength && directoryLength + 1 + (DWORD)(length - lastSlash) < sizeof shortPath)
                     {
                         DWORD cursor = directoryLength;
-                        for (position = lastSlash; openFileName.lpstrFile[position]; ++position) shortPath[cursor++] = openFileName.lpstrFile[position];
+                        for (position = lastSlash; openFileName.lpstrFile[position]; ++position)
+                            shortPath[cursor++] = openFileName.lpstrFile[position];
                         shortPath[cursor] = 0;
                         shortLength = cursor;
                         WowNotePut(note, noteCapacity, &noteLength, " [directory shortened, leaf kept"
@@ -370,11 +403,14 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             if (shortLength && shortLength < sizeof shortPath && shortLength + 1 <= openFileName.nMaxFile)
             {
                 DWORD index, fileOffset = 0, extensionOffset = 0;
-                for (index = 0; index <= shortLength; ++index) openFileName.lpstrFile[index] = shortPath[index];
+                for (index = 0; index <= shortLength; ++index)
+                    openFileName.lpstrFile[index] = shortPath[index];
                 for (index = 0; shortPath[index]; ++index)
                 {
-                    if (shortPath[index] == '\\' || shortPath[index] == ':') fileOffset = index + 1;
-                    if (shortPath[index] == '.') extensionOffset = index + 1;
+                    if (shortPath[index] == '\\' || shortPath[index] == ':')
+                        fileOffset = index + 1;
+                    if (shortPath[index] == '.')
+                        extensionOffset = index + 1;
                 }
                 openFileName.nFileOffset    = (WORD)fileOffset;
                 openFileName.nFileExtension = (WORD)(extensionOffset > fileOffset ? extensionOffset : 0);
@@ -480,8 +516,10 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
-        if (!g_WowCdlgFindMessage) g_WowCdlgFindMessage = RegisterWindowMessageA(FINDMSGSTRINGA);
-        for (index = 0; index < (INT)sizeof slot->FindReplace; ++index) ((PBYTE)&slot->FindReplace)[index] = 0;
+        if (!g_WowCdlgFindMessage)
+            g_WowCdlgFindMessage = RegisterWindowMessageA(FINDMSGSTRINGA);
+        for (index = 0; index < (INT)sizeof slot->FindReplace; ++index)
+            ((PBYTE)&slot->FindReplace)[index] = 0;
         flags = WowCdlgPeekDword(guest, WOWCDLG_FR16_FLAGS);
         slot->FindReplace.lStructSize      = sizeof slot->FindReplace;
         slot->FindReplace.hwndOwner        = ownerWindow->Window32;
@@ -500,7 +538,8 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         }
         window = WowUserNewWindow();
         if (!window) { WowNotePut(note, noteCapacity, &noteLength, " -- OUT OF WINDOW SLOTS");
-                  Wow32SetReturn(frame, 0); return 1; }
+                  Wow32SetReturn(frame, 0);
+                  return 1; }
         dialog = isReplace ? ReplaceTextA(&slot->FindReplace) : FindTextA(&slot->FindReplace);
         if (!dialog)
         {
@@ -514,13 +553,23 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         window->Class = (WORD)(dialogClass - g_WowUserClasses);
         window->Style = (DWORD)GetWindowLongA(dialog, GWL_STYLE);
         window->WindowProcedure = 0;
-        window->Parent = owner16; window->Menu = 0; window->Instance = 0;
-        window->Text[0] = 0; window->Memory16 = 0; window->MenuItems = 0; window->IsDying = 0;
-        for (index = 0; index < WOWUSER_MAX_EXTRA; ++index) window->Extra[index] = 0;
+        window->Parent = owner16;
+        window->Menu = 0;
+        window->Instance = 0;
+        window->Text[0] = 0;
+        window->Memory16 = 0;
+        window->MenuItems = 0;
+        window->IsDying = 0;
+        for (index = 0; index < WOWUSER_MAX_EXTRA; ++index)
+            window->Extra[index] = 0;
         window->Window32 = dialog;
-        slot->Dialog = dialog; slot->Guest = guest; slot->Guest16 = guest16;
-        slot->Owner16 = owner16; slot->Window16 = window->Window16;
-        WowNotePut(note, noteCapacity, &noteLength, " flags=0x"); WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_DWORD_DIGITS);
+        slot->Dialog = dialog;
+        slot->Guest = guest;
+        slot->Guest16 = guest16;
+        slot->Owner16 = owner16;
+        slot->Window16 = window->Window16;
+        WowNotePut(note, noteCapacity, &noteLength, " flags=0x");
+        WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_DWORD_DIGITS);
         if (flags & WOWCDLG_FR16_HOOKBITS)
             WowNotePut(note, noteCapacity, &noteLength, " (hook/template bits STRIPPED)");
         WowNotePut(note, noteCapacity, &noteLength, " what=");
@@ -552,7 +601,8 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
-        for (index = 0; index < (INT)sizeof chooseColor; ++index) ((PBYTE)&chooseColor)[index] = 0;
+        for (index = 0; index < (INT)sizeof chooseColor; ++index)
+            ((PBYTE)&chooseColor)[index] = 0;
         ownerWindow = WowUserFindWindow(Wow32PeekWord(guest + WOWCDLG_CC16_HWNDOWNER));
         flags = WowCdlgPeekDword(guest, WOWCDLG_CC16_FLAGS);
         chooseColor.lStructSize  = sizeof chooseColor;
@@ -614,8 +664,10 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
-        for (index = 0; index < (INT)sizeof chooseFont; ++index) ((PBYTE)&chooseFont)[index] = 0;
-        for (index = 0; index < (INT)sizeof logFont; ++index) ((PBYTE)&logFont)[index] = 0;
+        for (index = 0; index < (INT)sizeof chooseFont; ++index)
+            ((PBYTE)&chooseFont)[index] = 0;
+        for (index = 0; index < (INT)sizeof logFont; ++index)
+            ((PBYTE)&logFont)[index] = 0;
         WowCdlgLogFont16To32(logFont16, &logFont);
         ownerWindow = WowUserFindWindow(Wow32PeekWord(guest + WOWCDLG_CF16_HWNDOWNER));
         flags = WowCdlgPeekDword(guest, WOWCDLG_CF16_FLAGS);
@@ -632,11 +684,14 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         chooseFont.rgbColors   = WowCdlgPeekDword(guest, WOWCDLG_CF16_RGBCOLORS);
         chooseFont.lCustData   = (LPARAM)WowCdlgPeekDword(guest, WOWCDLG_CF16_CUSTDATA);
         chooseFont.lpszStyle   = (LPSTR)Wow32FarAt(frame, guest, WOWCDLG_CF16_STYLE);
-        if (!chooseFont.lpszStyle) chooseFont.Flags &= ~CF_USESTYLE;
+        if (!chooseFont.lpszStyle)
+            chooseFont.Flags &= ~CF_USESTYLE;
         chooseFont.nSizeMin    = (INT)(SHORT)Wow32PeekWord(guest + WOWCDLG_CF16_SIZEMIN);
         chooseFont.nSizeMax    = (INT)(SHORT)Wow32PeekWord(guest + WOWCDLG_CF16_SIZEMAX);
-        WowNotePut(note, noteCapacity, &noteLength, " flags=0x"); WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_DWORD_DIGITS);
-        WowNotePut(note, noteCapacity, &noteLength, " face="); WowNoteQuoted(note, noteCapacity, &noteLength, logFont.lfFaceName);
+        WowNotePut(note, noteCapacity, &noteLength, " flags=0x");
+        WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_DWORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " face=");
+        WowNoteQuoted(note, noteCapacity, &noteLength, logFont.lfFaceName);
         isOk = ChooseFontA(&chooseFont);
         if (isOk)
         {
@@ -690,7 +745,8 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             Wow32SetReturn(frame, 0);
             return 1;
         }
-        for (index = 0; index < (INT)sizeof printDialog; ++index) ((PBYTE)&printDialog)[index] = 0;
+        for (index = 0; index < (INT)sizeof printDialog; ++index)
+            ((PBYTE)&printDialog)[index] = 0;
         ownerWindow = WowUserFindWindow(Wow32PeekWord(guest + WOWCDLG_PD16_HWNDOWNER));
         flags = WowCdlgPeekDword(guest, WOWCDLG_PD16_FLAGS);
         devMode16 = Wow32PeekWord(guest + WOWCDLG_PD16_HDEVMODE);
@@ -704,22 +760,26 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         printDialog.nMaxPage    = Wow32PeekWord(guest + WOWCDLG_PD16_MAXPAGE);
         printDialog.nCopies     = Wow32PeekWord(guest + WOWCDLG_PD16_COPIES);
         printDialog.lCustData   = (LPARAM)WowCdlgPeekDword(guest, WOWCDLG_PD16_CUSTDATA);
-        WowNotePut(note, noteCapacity, &noteLength, " flags=0x"); WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_DWORD_DIGITS);
+        WowNotePut(note, noteCapacity, &noteLength, " flags=0x");
+        WowNoteHex(note, noteCapacity, &noteLength, flags, WOW_HEX_DWORD_DIGITS);
         if (flags & WOWCDLG_PD16_HOOKBITS)
             WowNotePut(note, noteCapacity, &noteLength, " (hook/template bits STRIPPED)");
         if (devMode16 | devNames16)
             WowNotePut(note, noteCapacity, &noteLength, " -- ⚠ the guest's hDevMode/hDevNames are NOT"
                                        " read (Win16 global handles); default printer");
         isOk = PrintDlgA(&printDialog);
-        if (printDialog.hDevMode)  GlobalFree(printDialog.hDevMode);
-        if (printDialog.hDevNames) GlobalFree(printDialog.hDevNames);
+        if (printDialog.hDevMode)
+            GlobalFree(printDialog.hDevMode);
+        if (printDialog.hDevNames)
+            GlobalFree(printDialog.hDevNames);
         if (isOk)
         {
             WORD token = 0;
             if (printDialog.hDC)
             {
                 token = WowGdiH16((HGDIOBJ)printDialog.hDC, WOWGDI_KIND_DC);
-                if (!token) DeleteDC(printDialog.hDC);
+                if (!token)
+                    DeleteDC(printDialog.hDC);
             }
             Wow32PokeWord(guest + WOWCDLG_PD16_HDC,      token);
             Wow32PokeWord(guest + WOWCDLG_PD16_FROMPAGE, printDialog.nFromPage);

@@ -53,8 +53,11 @@ BOOL CsrssGetCommand(_Inout_ VDM_COMMAND_INFO *commandInfo, _Out_opt_ DWORD *las
  * host. DONT_WAIT: if CSRSS already has a follow-up queued we are not going to
  * run it, and a FALSE is fine. Returns what GetNextVDMCommand said, for the log.
  */
-BOOL CsrssTaskDone(_In_ ULONG taskId, _In_ ULONG exitCode, _Out_opt_ DWORD *lastError,
-                   _Out_opt_ BOOL *didExitVdm);
+BOOL CsrssTaskDone(
+    _In_ ULONG taskId,
+    _In_ ULONG exitCode,
+    _Out_opt_ DWORD *lastError,
+    _Out_opt_ BOOL *didExitVdm);
 /* If CsrssTaskDone returned TRUE, CSRSS handed us the console's NEXT command
  * (a program launched into this console before ExitVDM); these hold it.
  */

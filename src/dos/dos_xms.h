@@ -155,12 +155,15 @@ typedef const DOS_XMS_MOVE *PCDOS_XMS_MOVE;
 
 /* --- bring-up -------------------------------------------------------------- */
 
-static inline VOID DosXmsInitialize(_Out_ PDOS_XMS_STATE state, _In_ DWORD totalKb,
-                                    _In_opt_ PDOS_XMS_ALLOCATE_ROUTINE allocate,
-                                    _In_opt_ PDOS_XMS_FREE_ROUTINE free,
-                                    _In_opt_ PVOID context)
+static inline VOID DosXmsInitialize(
+    _Out_ PDOS_XMS_STATE state,
+    _In_ DWORD totalKb,
+    _In_opt_ PDOS_XMS_ALLOCATE_ROUTINE allocate,
+    _In_opt_ PDOS_XMS_FREE_ROUTINE free,
+    _In_opt_ PVOID context)
 {
     INT handleIndex;
+
     /* A20 IS ON, AND SAYING OTHERWISE WAS A LIE ABOUT OUR OWN MACHINE:
      * This started masked, so AH=07h (query A20) answered "disabled" until a
      * guest happened to call AH=03h. But an NT VDM does not wrap at 1 MB --
@@ -182,14 +185,18 @@ static inline VOID DosXmsInitialize(_Out_ PDOS_XMS_STATE state, _In_ DWORD total
         state->Handles[handleIndex].SizeKb = 0;
         state->Handles[handleIndex].Memory = 0;
     }
-    state->Allocate = allocate; state->Free = free; state->Context = context;
+    state->Allocate = allocate;
+    state->Free = free;
+    state->Context = context;
 }
 
 /* Resolve a handle number (1-based) to its slot, or NULL if invalid/free. */
 static inline PDOS_XMS_HANDLE DosXmsGetHandle(_In_ PDOS_XMS_STATE state, _In_ WORD handle)
 {
-    if (handle == DOS_XMS_CONVENTIONAL_HANDLE || handle > DOS_XMS_MAX_HANDLES) return 0;
-    if (!state->Handles[handle - DOS_XMS_FIRST_HANDLE].InUse) return 0;
+    if (handle == DOS_XMS_CONVENTIONAL_HANDLE || handle > DOS_XMS_MAX_HANDLES)
+        return 0;
+    if (!state->Handles[handle - DOS_XMS_FIRST_HANDLE].InUse)
+        return 0;
     return &state->Handles[handle - DOS_XMS_FIRST_HANDLE];
 }
 
@@ -197,12 +204,17 @@ static inline PDOS_XMS_HANDLE DosXmsGetHandle(_In_ PDOS_XMS_STATE state, _In_ WO
  * Returns the largest free block (KB) and the total free (KB). With a single
  * pool the largest free block is the whole remaining pool.
  */
-static inline VOID DosXmsQueryFreeMemory(_In_ PCDOS_XMS_STATE state,
-                                         _Out_opt_ PDWORD largestKb, _Out_opt_ PDWORD totalKb)
+static inline VOID DosXmsQueryFreeMemory(
+    _In_ PCDOS_XMS_STATE state,
+    _Out_opt_ PDWORD largestKb,
+    _Out_opt_ PDWORD totalKb)
 {
     DWORD freeKb = (state->TotalKb > state->UsedKb) ? (state->TotalKb - state->UsedKb) : 0;
-    if (largestKb) *largestKb = freeKb;
-    if (totalKb)   *totalKb   = freeKb;
+
+    if (largestKb)
+        *largestKb = freeKb;
+    if (totalKb)
+        *totalKb   = freeKb;
 }
 
 /* --- fn 09h: allocate an EMB of `kilobytes` KB ----------------------------- *
@@ -210,20 +222,28 @@ static inline VOID DosXmsQueryFreeMemory(_In_ PCDOS_XMS_STATE state,
  * returns FALSE and *errorCode = an XMS error code. A 0-KB request is legal (an
  * empty block to be grown later by Reallocate).
  */
-static inline BOOL DosXmsAllocate(_Inout_ PDOS_XMS_STATE state, _In_ DWORD kilobytes,
-                                  _Out_opt_ PWORD newHandle, _Out_opt_ PBYTE errorCode)
+static inline BOOL DosXmsAllocate(
+    _Inout_ PDOS_XMS_STATE state,
+    _In_ DWORD kilobytes,
+    _Out_opt_ PWORD newHandle,
+    _Out_opt_ PBYTE errorCode)
 {
-    INT handleIndex; PVOID buffer = 0;
+    INT handleIndex;
+    PVOID buffer = 0;
+
     if (kilobytes > 0 && state->UsedKb + kilobytes > state->TotalKb)
     {
-        if (errorCode) *errorCode = DOS_XMS_ERROR_OUT_OF_MEMORY;
+        if (errorCode)
+            *errorCode = DOS_XMS_ERROR_OUT_OF_MEMORY;
         return FALSE;
     }
     for (handleIndex = 0; handleIndex < DOS_XMS_MAX_HANDLES; ++handleIndex)
-        if (!state->Handles[handleIndex].InUse) break;
+        if (!state->Handles[handleIndex].InUse)
+            break;
     if (handleIndex == DOS_XMS_MAX_HANDLES)
     {
-        if (errorCode) *errorCode = DOS_XMS_ERROR_NO_HANDLES;
+        if (errorCode)
+            *errorCode = DOS_XMS_ERROR_NO_HANDLES;
         return FALSE;
     }
     if (kilobytes > 0)
@@ -231,7 +251,8 @@ static inline BOOL DosXmsAllocate(_Inout_ PDOS_XMS_STATE state, _In_ DWORD kilob
         buffer = state->Allocate ? state->Allocate(state->Context, kilobytes) : 0;
         if (!buffer)
         {
-            if (errorCode) *errorCode = DOS_XMS_ERROR_OUT_OF_MEMORY;
+            if (errorCode)
+                *errorCode = DOS_XMS_ERROR_OUT_OF_MEMORY;
             return FALSE;
         }
     }
@@ -240,58 +261,75 @@ static inline BOOL DosXmsAllocate(_Inout_ PDOS_XMS_STATE state, _In_ DWORD kilob
     state->Handles[handleIndex].SizeKb = kilobytes;
     state->Handles[handleIndex].Memory = buffer;
     state->UsedKb += kilobytes;
-    if (newHandle) *newHandle = (WORD)(handleIndex + DOS_XMS_FIRST_HANDLE);
+    if (newHandle)
+        *newHandle = (WORD)(handleIndex + DOS_XMS_FIRST_HANDLE);
     return TRUE;
 }
 
 /* --- fn 0Ah: free an EMB --------------------------------------------------- *
  * Fails if the block is still locked.
  */
-static inline BOOL DosXmsFree(_Inout_ PDOS_XMS_STATE state, _In_ WORD handle,
-                              _Out_opt_ PBYTE errorCode)
+static inline BOOL DosXmsFree(
+    _Inout_ PDOS_XMS_STATE state,
+    _In_ WORD handle,
+    _Out_opt_ PBYTE errorCode)
 {
     PDOS_XMS_HANDLE handleEntry = DosXmsGetHandle(state, handle);
+
     if (!handleEntry)
     {
-        if (errorCode) *errorCode = DOS_XMS_ERROR_INVALID_HANDLE;
+        if (errorCode)
+            *errorCode = DOS_XMS_ERROR_INVALID_HANDLE;
         return FALSE;
     }
     if (handleEntry->LockCount)
     {
-        if (errorCode) *errorCode = DOS_XMS_ERROR_LOCKED;
+        if (errorCode)
+            *errorCode = DOS_XMS_ERROR_LOCKED;
         return FALSE;
     }
     if (handleEntry->Memory && state->Free)
         state->Free(state->Context, handleEntry->Memory, handleEntry->SizeKb);
     state->UsedKb -= handleEntry->SizeKb;
-    handleEntry->InUse = 0; handleEntry->LockCount = 0;
-    handleEntry->SizeKb = 0; handleEntry->Memory = 0;
+    handleEntry->InUse = 0;
+    handleEntry->LockCount = 0;
+    handleEntry->SizeKb = 0;
+    handleEntry->Memory = 0;
     return TRUE;
 }
 
 /* --- fn 0Fh: reallocate an EMB to `newKb` KB ------------------------------- *
  * Preserves min(old,new) bytes of content. Fails if the block is locked.
  */
-static inline BOOL DosXmsReallocate(_Inout_ PDOS_XMS_STATE state, _In_ WORD handle,
-                                    _In_ DWORD newKb, _Out_opt_ PBYTE errorCode)
+static inline BOOL DosXmsReallocate(
+    _Inout_ PDOS_XMS_STATE state,
+    _In_ WORD handle,
+    _In_ DWORD newKb,
+    _Out_opt_ PBYTE errorCode)
 {
     PDOS_XMS_HANDLE handleEntry = DosXmsGetHandle(state, handle);
-    PVOID newBuffer = 0; DWORD byteIndex, bytesToKeep;
+    PVOID newBuffer = 0;
+    DWORD byteIndex, bytesToKeep;
+
     if (!handleEntry)
     {
-        if (errorCode) *errorCode = DOS_XMS_ERROR_INVALID_HANDLE;
+        if (errorCode)
+            *errorCode = DOS_XMS_ERROR_INVALID_HANDLE;
         return FALSE;
     }
     if (handleEntry->LockCount)
     {
-        if (errorCode) *errorCode = DOS_XMS_ERROR_LOCKED;
+        if (errorCode)
+            *errorCode = DOS_XMS_ERROR_LOCKED;
         return FALSE;
     }
-    if (newKb == handleEntry->SizeKb) return TRUE;
+    if (newKb == handleEntry->SizeKb)
+        return TRUE;
     if (newKb > handleEntry->SizeKb &&
         state->UsedKb - handleEntry->SizeKb + newKb > state->TotalKb)
     {
-        if (errorCode) *errorCode = DOS_XMS_ERROR_OUT_OF_MEMORY;
+        if (errorCode)
+            *errorCode = DOS_XMS_ERROR_OUT_OF_MEMORY;
         return FALSE;
     }
     if (newKb > 0)
@@ -299,7 +337,8 @@ static inline BOOL DosXmsReallocate(_Inout_ PDOS_XMS_STATE state, _In_ WORD hand
         newBuffer = state->Allocate ? state->Allocate(state->Context, newKb) : 0;
         if (!newBuffer)
         {
-            if (errorCode) *errorCode = DOS_XMS_ERROR_OUT_OF_MEMORY;
+            if (errorCode)
+                *errorCode = DOS_XMS_ERROR_OUT_OF_MEMORY;
             return FALSE;
         }
         bytesToKeep = (newKb < handleEntry->SizeKb ? newKb : handleEntry->SizeKb)
@@ -310,31 +349,40 @@ static inline BOOL DosXmsReallocate(_Inout_ PDOS_XMS_STATE state, _In_ WORD hand
     if (handleEntry->Memory && state->Free)
         state->Free(state->Context, handleEntry->Memory, handleEntry->SizeKb);
     state->UsedKb = state->UsedKb - handleEntry->SizeKb + newKb;
-    handleEntry->Memory = newBuffer; handleEntry->SizeKb = newKb;
+    handleEntry->Memory = newBuffer;
+    handleEntry->SizeKb = newKb;
     return TRUE;
 }
 
 /* --- fn 0Eh: get EMB handle information ------------------------------------ */
-static inline BOOL DosXmsGetHandleInformation(_In_ PCDOS_XMS_STATE state, _In_ WORD handle,
-                                              _Out_opt_ PBYTE lockCount,
-                                              _Out_opt_ PBYTE freeHandles,
-                                              _Out_opt_ PDWORD sizeKb, _Out_opt_ PBYTE errorCode)
+static inline BOOL DosXmsGetHandleInformation(
+    _In_ PCDOS_XMS_STATE state,
+    _In_ WORD handle,
+    _Out_opt_ PBYTE lockCount,
+    _Out_opt_ PBYTE freeHandles,
+    _Out_opt_ PDWORD sizeKb,
+    _Out_opt_ PBYTE errorCode)
 {
     INT handleIndex, freeHandleCount = 0;
     PCDOS_XMS_HANDLE handleEntry;
+
     if (handle == DOS_XMS_CONVENTIONAL_HANDLE || handle > DOS_XMS_MAX_HANDLES
         || !state->Handles[handle - DOS_XMS_FIRST_HANDLE].InUse)
     {
-        if (errorCode) *errorCode = DOS_XMS_ERROR_INVALID_HANDLE;
+        if (errorCode)
+            *errorCode = DOS_XMS_ERROR_INVALID_HANDLE;
         return FALSE;
     }
     handleEntry = &state->Handles[handle - DOS_XMS_FIRST_HANDLE];
     for (handleIndex = 0; handleIndex < DOS_XMS_MAX_HANDLES; ++handleIndex)
-        if (!state->Handles[handleIndex].InUse) ++freeHandleCount;
-    if (lockCount)   *lockCount   = handleEntry->LockCount;
+        if (!state->Handles[handleIndex].InUse)
+            ++freeHandleCount;
+    if (lockCount)
+        *lockCount   = handleEntry->LockCount;
     if (freeHandles) *freeHandles = (BYTE)(freeHandleCount > DOS_XMS_MAX_FREE_HANDLES
                                            ? DOS_XMS_MAX_FREE_HANDLES : freeHandleCount);
-    if (sizeKb)      *sizeKb      = handleEntry->SizeKb;
+    if (sizeKb)
+        *sizeKb      = handleEntry->SizeKb;
     return TRUE;
 }
 
@@ -345,37 +393,49 @@ static inline BOOL DosXmsGetHandleInformation(_In_ PCDOS_XMS_STATE state, _In_ W
  * shares our flat address space (M4 DPMI work); a pure real-mode client uses
  * Move instead and never dereferences this.
  */
-static inline BOOL DosXmsLock(_Inout_ PDOS_XMS_STATE state, _In_ WORD handle,
-                              _Out_opt_ PDWORD linearAddress, _Out_opt_ PBYTE errorCode)
+static inline BOOL DosXmsLock(
+    _Inout_ PDOS_XMS_STATE state,
+    _In_ WORD handle,
+    _Out_opt_ PDWORD linearAddress,
+    _Out_opt_ PBYTE errorCode)
 {
     PDOS_XMS_HANDLE handleEntry = DosXmsGetHandle(state, handle);
+
     if (!handleEntry)
     {
-        if (errorCode) *errorCode = DOS_XMS_ERROR_INVALID_HANDLE;
+        if (errorCode)
+            *errorCode = DOS_XMS_ERROR_INVALID_HANDLE;
         return FALSE;
     }
     if (handleEntry->LockCount == DOS_XMS_MAX_LOCK_COUNT)
     {
-        if (errorCode) *errorCode = DOS_XMS_ERROR_LOCK_OVERFLOW;
+        if (errorCode)
+            *errorCode = DOS_XMS_ERROR_LOCK_OVERFLOW;
         return FALSE;
     }
     ++handleEntry->LockCount;
-    if (linearAddress) *linearAddress = (DWORD)(UINT_PTR)handleEntry->Memory;
+    if (linearAddress)
+        *linearAddress = (DWORD)(UINT_PTR)handleEntry->Memory;
     return TRUE;
 }
 
-static inline BOOL DosXmsUnlock(_Inout_ PDOS_XMS_STATE state, _In_ WORD handle,
-                                _Out_opt_ PBYTE errorCode)
+static inline BOOL DosXmsUnlock(
+    _Inout_ PDOS_XMS_STATE state,
+    _In_ WORD handle,
+    _Out_opt_ PBYTE errorCode)
 {
     PDOS_XMS_HANDLE handleEntry = DosXmsGetHandle(state, handle);
+
     if (!handleEntry)
     {
-        if (errorCode) *errorCode = DOS_XMS_ERROR_INVALID_HANDLE;
+        if (errorCode)
+            *errorCode = DOS_XMS_ERROR_INVALID_HANDLE;
         return FALSE;
     }
     if (handleEntry->LockCount == 0)
     {
-        if (errorCode) *errorCode = DOS_XMS_ERROR_NOT_LOCKED;
+        if (errorCode)
+            *errorCode = DOS_XMS_ERROR_NOT_LOCKED;
         return FALSE;
     }
     --handleEntry->LockCount;
@@ -398,16 +458,21 @@ static inline BOOL DosXmsUnlock(_Inout_ PDOS_XMS_STATE state, _In_ WORD handle,
  * FFFF:FFFF = 10FFEFh, so that is the conventional ceiling.
  */
 #define DOS_XMS_CONVENTIONAL_LIMIT  0x10FFF0u
-static inline BOOL DosXmsMove(_Inout_ PDOS_XMS_STATE state,
-                              _In_opt_ volatile BYTE *conventionalBase,
-                              _In_ PCDOS_XMS_MOVE move, _Out_opt_ PBYTE errorCode)
+static inline BOOL DosXmsMove(
+    _Inout_ PDOS_XMS_STATE state,
+    _In_opt_ volatile BYTE *conventionalBase,
+    _In_ PCDOS_XMS_MOVE move,
+    _Out_opt_ PBYTE errorCode)
 {
     volatile BYTE *source, *destination;
     DWORD length = move->Length, byteIndex;
-    if (length == 0) return TRUE;           /* a 0-length move is a legal no-op */
+
+    if (length == 0)
+        return TRUE;                        /* a 0-length move is a legal no-op */
     if (length & DOS_XMS_ODD_LENGTH_MASK)
     {
-        if (errorCode) *errorCode = DOS_XMS_ERROR_INVALID_LENGTH;
+        if (errorCode)
+            *errorCode = DOS_XMS_ERROR_INVALID_LENGTH;
         return FALSE;
     }
 
@@ -417,7 +482,8 @@ static inline BOOL DosXmsMove(_Inout_ PDOS_XMS_STATE state,
               offset = move->SourceOffset & WORD_MASK;
         if ((segment << PARAGRAPH_SHIFT) + offset + length > DOS_XMS_CONVENTIONAL_LIMIT)
         {
-            if (errorCode) *errorCode = DOS_XMS_ERROR_INVALID_SOURCE_OFFSET;
+            if (errorCode)
+                *errorCode = DOS_XMS_ERROR_INVALID_SOURCE_OFFSET;
             return FALSE;
         }
         source = (volatile BYTE *)((UINT_PTR)conventionalBase
@@ -428,13 +494,15 @@ static inline BOOL DosXmsMove(_Inout_ PDOS_XMS_STATE state,
         PDOS_XMS_HANDLE handleEntry = DosXmsGetHandle(state, move->SourceHandle);
         if (!handleEntry)
         {
-            if (errorCode) *errorCode = DOS_XMS_ERROR_INVALID_SOURCE_HANDLE;
+            if (errorCode)
+                *errorCode = DOS_XMS_ERROR_INVALID_SOURCE_HANDLE;
             return FALSE;
         }
         if (move->SourceOffset > handleEntry->SizeKb * DOS_XMS_BYTES_PER_KB
             || length > handleEntry->SizeKb * DOS_XMS_BYTES_PER_KB - move->SourceOffset)
         {
-            if (errorCode) *errorCode = DOS_XMS_ERROR_INVALID_SOURCE_OFFSET;
+            if (errorCode)
+                *errorCode = DOS_XMS_ERROR_INVALID_SOURCE_OFFSET;
             return FALSE;
         }   /* no 32-bit wrap */
         source = (volatile BYTE *)((PBYTE)handleEntry->Memory + move->SourceOffset);
@@ -446,7 +514,8 @@ static inline BOOL DosXmsMove(_Inout_ PDOS_XMS_STATE state,
               offset = move->DestinationOffset & WORD_MASK;
         if ((segment << PARAGRAPH_SHIFT) + offset + length > DOS_XMS_CONVENTIONAL_LIMIT)
         {
-            if (errorCode) *errorCode = DOS_XMS_ERROR_INVALID_DESTINATION_OFFSET;
+            if (errorCode)
+                *errorCode = DOS_XMS_ERROR_INVALID_DESTINATION_OFFSET;
             return FALSE;
         }
         destination = (volatile BYTE *)((UINT_PTR)conventionalBase
@@ -457,13 +526,15 @@ static inline BOOL DosXmsMove(_Inout_ PDOS_XMS_STATE state,
         PDOS_XMS_HANDLE handleEntry = DosXmsGetHandle(state, move->DestinationHandle);
         if (!handleEntry)
         {
-            if (errorCode) *errorCode = DOS_XMS_ERROR_INVALID_DESTINATION_HANDLE;
+            if (errorCode)
+                *errorCode = DOS_XMS_ERROR_INVALID_DESTINATION_HANDLE;
             return FALSE;
         }
         if (move->DestinationOffset > handleEntry->SizeKb * DOS_XMS_BYTES_PER_KB
             || length > handleEntry->SizeKb * DOS_XMS_BYTES_PER_KB - move->DestinationOffset)
         {
-            if (errorCode) *errorCode = DOS_XMS_ERROR_INVALID_DESTINATION_OFFSET;
+            if (errorCode)
+                *errorCode = DOS_XMS_ERROR_INVALID_DESTINATION_OFFSET;
             return FALSE;
         }   /* no 32-bit wrap */
         destination = (volatile BYTE *)((PBYTE)handleEntry->Memory + move->DestinationOffset);

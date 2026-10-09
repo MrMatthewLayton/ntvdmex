@@ -129,11 +129,24 @@ VOID PresentAspectRatio(INT aspect, INT *ratioWidth, INT *ratioHeight);
 /* The ratio the picture is shaped to for a frame sw x sh: a forced one, or the
  * frame's own (Native, and Stretch in a window).
  */
-VOID PresentTargetRatio(INT aspect, INT sourceWidth, INT sourceHeight, INT *ratioWidth, INT *ratioHeight);
+VOID PresentTargetRatio(
+    INT aspect,
+    INT sourceWidth,
+    INT sourceHeight,
+    INT *ratioWidth,
+    INT *ratioHeight);
 INT PresentIsNative(INT aspect);
 
 /* The largest n:d rectangle in dst, centred. */
-VOID PresentFitRatio(INT destinationWidth, INT destinationHeight, INT ratioWidth, INT ratioHeight, INT *left, INT *top, INT *width, INT *height);
+VOID PresentFitRatio(
+    INT destinationWidth,
+    INT destinationHeight,
+    INT ratioWidth,
+    INT ratioHeight,
+    INT *left,
+    INT *top,
+    INT *width,
+    INT *height);
 
 /* -- #325: WHERE THE PICTURE GOES, for every path (window, maximised, fullscreen, both
  * renderers). `screen` = an area the user did not size (maximised / fullscreen).
@@ -148,14 +161,30 @@ VOID PresentFitRatio(INT destinationWidth, INT destinationHeight, INT ratioWidth
  * A window is sized to the picture (PresentWindowPicture), so in a window this
  * returns the whole client. Centred; the caller paints the borders.
  */
-VOID PresentLayout(INT aspect, INT fit, INT isScreen, INT destinationWidth, INT destinationHeight,
-                           INT sourceWidth, INT sourceHeight, INT *left, INT *top, INT *width, INT *height);
+VOID PresentLayout(
+    INT aspect,
+    INT fit,
+    INT isScreen,
+    INT destinationWidth,
+    INT destinationHeight,
+    INT sourceWidth,
+    INT sourceHeight,
+    INT *left,
+    INT *top,
+    INT *width,
+    INT *height);
 
 /* -- #325: THE PICTURE A WINDOW IS SIZED TO, at whole scale k (1x = one desktop pixel
  * per frame pixel). Native: the frame times k. Forced: k times the frame's WIDTH, and
  * the height that gives the ratio -- mode 13h at 2x and 4:3 is 640x480.
  */
-VOID PresentWindowPicture(INT aspect, INT sourceWidth, INT sourceHeight, INT scale, INT *width, INT *height);
+VOID PresentWindowPicture(
+    INT aspect,
+    INT sourceWidth,
+    INT sourceHeight,
+    INT scale,
+    INT *width,
+    INT *height);
 
 /* Where the frame goes inside the client area.
  *
@@ -165,8 +194,14 @@ VOID PresentWindowPicture(INT aspect, INT sourceWidth, INT sourceHeight, INT sca
  * two disagree (a maximised window, a drag Windows would not let us constrain),
  * because distorting the picture is the worse of the two answers.
  */
-VOID PresentFit(INT destinationWidth, INT destinationHeight, INT aspect,
-                        INT *left, INT *top, INT *width, INT *height);
+VOID PresentFit(
+    INT destinationWidth,
+    INT destinationHeight,
+    INT aspect,
+    INT *left,
+    INT *top,
+    INT *width,
+    INT *height);
 
 /* (#325: present_fit_int -- whole multiples behind the fsinteger.flag file knob -- is
  * gone. Whole pixels are the default for every path now; see PresentLayout.)
@@ -188,8 +223,12 @@ VOID PresentFit(INT destinationWidth, INT destinationHeight, INT aspect,
 /* `int sourceWidth`, not INT: spelt INT it moved the register allocation of
  * present_ddraw.c, which inlines this -- bisected to that one parameter (s93).
  */
-VOID PresentScale2x8(const BYTE *source, int sourceWidth, INT sourceHeight, INT sourceStride,
-                              BYTE *destination);
+VOID PresentScale2x8(
+    const BYTE *source,
+    int sourceWidth,
+    INT sourceHeight,
+    INT sourceStride,
+    BYTE *destination);
 
 /* -- #229: COLOUR FILTERS (docs/EMULATION.md). Default, Sepia, and the three
  * monochrome monitors of the period -- white (paper-white), green (P1 phosphor) and

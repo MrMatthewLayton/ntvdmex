@@ -110,13 +110,20 @@ typedef const AUDIO_STATE *PCAUDIO_STATE;
  * changes; the resamplers re-derive their step from the device on each mix.
  * Leaves the speaker unfitted, the master volume at 100 and unmuted.
  */
-VOID VddAudioInitialize(_Out_ PAUDIO_STATE state, _In_opt_ POPL_STATE opl, _In_opt_ PSB_STATE soundBlaster, _In_ UINT32 outputHz);
+VOID VddAudioInitialize(
+    _Out_ PAUDIO_STATE state,
+    _In_opt_ POPL_STATE opl,
+    _In_opt_ PSB_STATE soundBlaster,
+    _In_ UINT32 outputHz);
 
 /* Fit (or unfit) the PC speaker. `isEnabled` 0 leaves the VDD on the bus -- port
  * 0x61 must keep answering, guests time delay loops off its refresh bit -- and
  * only stops it being audible.
  */
-VOID VddAudioSetSpeaker(_Inout_ PAUDIO_STATE state, _In_opt_ PCSPEAKER_STATE speaker, _In_ INT isEnabled);
+VOID VddAudioSetSpeaker(
+    _Inout_ PAUDIO_STATE state,
+    _In_opt_ PCSPEAKER_STATE speaker,
+    _In_ INT isEnabled);
 /* Fit (or remove, NULL) the Gravis UltraSound as a mixer source. */
 VOID VddAudioSetGus(_Inout_ PAUDIO_STATE state, _In_opt_ PGUS_STATE gus);
 /* Fit (or remove, NULL) the AWE32's EMU8000 as a mixer source (#233). */
@@ -129,10 +136,16 @@ VOID VddAudioSetMaster(_Inout_ PAUDIO_STATE state, _In_ UINT32 percent, _In_ INT
  * Always produces exactly `frames` samples (silence when nothing is playing), so
  * a host audio thread can call it unconditionally.
  */
-VOID VddAudioMix(_Inout_ PAUDIO_STATE state, _Out_writes_(frames) INT16 *output, _In_ UINT32 frames);
+VOID VddAudioMix(
+    _Inout_ PAUDIO_STATE state,
+    _Out_writes_(frames) INT16 *output,
+    _In_ UINT32 frames);
 /* #189: the same mix in stereo -- `frames` interleaved L/R pairs (2*frames samples).
  * This is what the host plays; VddAudioMix is this folded to mono.
  */
-VOID VddAudioMixStereo(_Inout_ PAUDIO_STATE state, _Out_writes_(AUDIO_STEREO_CHANNELS * frames) INT16 *output, _In_ UINT32 frames);
+VOID VddAudioMixStereo(
+    _Inout_ PAUDIO_STATE state,
+    _Out_writes_(AUDIO_STEREO_CHANNELS * frames) INT16 *output,
+    _In_ UINT32 frames);
 
 #endif /* NTVDMEX_VDD_AUDIO_H */

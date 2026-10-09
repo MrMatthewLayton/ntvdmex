@@ -73,8 +73,12 @@ static UINT64 BenchClock(void)
 
 int main(void)
 {
-    VDD_BUS bus; NTVDD_REGISTERS registers; UINT32 value; long poll;
-    struct timespec start, end; double nanoseconds;
+    VDD_BUS bus;
+    NTVDD_REGISTERS registers;
+    UINT32 value;
+    long poll;
+    struct timespec start, end;
+    double nanoseconds;
 
     VddBusInitialize(&bus, g_GuestMemory);
     memset(&g_Video, 0, sizeof g_Video);
@@ -84,7 +88,8 @@ int main(void)
     /* Mode 0Dh: Lemmings' gameplay mode, so the CRTC path under test is the one a
      * real guest drives -- 449 total / 400 active / 406 blank start.
      */
-    memset(&registers, 0, sizeof registers); registers.Eax = BENCH_MODE_0DH;
+    memset(&registers, 0, sizeof registers);
+    registers.Eax = BENCH_MODE_0DH;
     VddBusDeliverInterrupt(&bus, BENCH_VIDEO_INTERRUPT, &registers);
     g_Video.TimeUs = BenchClock;
 

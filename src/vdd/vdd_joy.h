@@ -72,7 +72,8 @@ enum
 typedef struct _JOYSTICK_STATE
 {
     PVDD_BUS     Bus;
-    PJOYSTICK_CLOCK_ROUTINE NowMicroseconds;   PVOID ClockContext;
+    PJOYSTICK_CLOCK_ROUTINE NowMicroseconds;
+    PVOID ClockContext;
 
     BYTE         Type;         /* JOYSTICK_TYPE_*: how many axes/buttons are wired */
 
@@ -121,7 +122,12 @@ static inline INT VddJoystickIsLive(_In_ PCJOYSTICK_STATE state)
 INT  VddJoystickInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddJoystickReset(_In_ PVOID context);
 static inline NTVDD_DEVICE VddJoystickDevice(_In_ PJOYSTICK_STATE state)
-{ NTVDD_DEVICE device; device.Name = JOYSTICK_DEVICE_NAME; device.Initialize = VddJoystickInitialize; device.Reset = VddJoystickReset;
-  device.Shutdown = 0; device.Context = state; return device; }
+{ NTVDD_DEVICE device;
+device.Name = JOYSTICK_DEVICE_NAME;
+device.Initialize = VddJoystickInitialize;
+device.Reset = VddJoystickReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 #endif /* NTVDMEX_VDD_JOY_H */

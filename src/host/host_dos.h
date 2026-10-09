@@ -23,7 +23,11 @@ VOID HostEms(volatile BYTE *tib);
 
 extern INT g_Routed;
 extern INT g_BackToPrompt;
-UINT LauncherCompilerVariables(PCSTR environment, DWORD environmentCapacity, PSTR out, DWORD outCapacity);
+UINT LauncherCompilerVariables(
+    PCSTR environment,
+    DWORD environmentCapacity,
+    PSTR out,
+    DWORD outCapacity);
 extern EMU8K_STATE g_Emu8K;
 extern NTVDD_DEVICE g_Emu8KDevice;
 extern INT g_AweOn;
@@ -39,7 +43,12 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor);
 VOID CriticalSnapshot(volatile BYTE *tib);
 VOID CriticalRaise(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor);
 INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor);
-INT PmRwHardwareFail(DOS_MACHINE *machine, volatile BYTE *tib, BYTE function, DWORD win32Error, PSTR *logCursor);
+INT PmRwHardwareFail(
+    DOS_MACHINE *machine,
+    volatile BYTE *tib,
+    BYTE function,
+    DWORD win32Error,
+    PSTR *logCursor);
 INT DosPrnOut(PVOID context, BYTE character);
 VOID DosAuxOut(PVOID context, BYTE character);
 extern INT g_BehaveDos622;

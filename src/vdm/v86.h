@@ -57,8 +57,13 @@ volatile BYTE *VdmGetTib(VOID);
 /* Write the entry V86 CONTEXT into the TIB: CS:IP, SS:SP, DS=ES=FS=GS=pspSegment,
  * general registers 0, EFlags = VM, full-context ContextFlags.
  */
-VOID VdmSetEntry(_Inout_ volatile BYTE *tib, _In_ WORD codeSegment, _In_ WORD instructionPointer,
-                 _In_ WORD stackSegment, _In_ WORD stackPointer, _In_ WORD pspSegment);
+VOID VdmSetEntry(
+    _Inout_ volatile BYTE *tib,
+    _In_ WORD codeSegment,
+    _In_ WORD instructionPointer,
+    _In_ WORD stackSegment,
+    _In_ WORD stackPointer,
+    _In_ WORD pspSegment);
 
 /* Run the guest (VdmStartExecution) until the next stop; returns the event code
  * (VDM_EVENT_BOP for a serviceable BOP). *status gets the NtVdmControl status if
@@ -90,8 +95,13 @@ LONG VdmControl(_In_ ULONG service, _In_opt_ PVOID serviceData);
  * {Sel0,Entry0Low,Entry0Hi,Sel1,Entry1Low,Entry1Hi} (recovered from fcn.0f050100).
  * Pass secondSelector=0 to set only one. Returns NTSTATUS (>= 0 ok).
  */
-LONG VdmInstallLdtEntries(_In_ WORD firstSelector, _In_ DWORD firstLow, _In_ DWORD firstHigh,
-                          _In_ WORD secondSelector, _In_ DWORD secondLow, _In_ DWORD secondHigh);
+LONG VdmInstallLdtEntries(
+    _In_ WORD firstSelector,
+    _In_ DWORD firstLow,
+    _In_ DWORD firstHigh,
+    _In_ WORD secondSelector,
+    _In_ DWORD secondLow,
+    _In_ DWORD secondHigh);
 
 /* Register a whole LDT table via NtVdmControl service 11 (VdmSetProcessLdtInfo) --
  * the bulk path ntvdm's SetShadowDescriptorEntries uses (fcn.0f0500c9). ServiceData
@@ -100,7 +110,9 @@ LONG VdmInstallLdtEntries(_In_ WORD firstSelector, _In_ DWORD firstLow, _In_ DWO
  * makes the monitor load LDTR (svc 10 alone leaves PM selectors resolving base 0).
  * Returns NTSTATUS (>= 0 ok).
  */
-LONG VdmRegisterLdtTable(_In_ WORD startSelector, _In_reads_(2 * count) const DWORD *entries,
-                         _In_ INT count);
+LONG VdmRegisterLdtTable(
+    _In_ WORD startSelector,
+    _In_reads_(2 * count) const DWORD *entries,
+    _In_ INT count);
 
 #endif /* NTVDMEX_VDM_V86_H */

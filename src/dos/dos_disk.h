@@ -102,17 +102,22 @@ typedef const DOS_DISK_GEOMETRY *PCDOS_DISK_GEOMETRY;
  * geometry we cannot read is treated as ABSENT rather than guessed at, because
  * a guessed cylinder count silently returns the wrong sector.
  */
-BOOL DosDiskGeometryFromBpb(_In_reads_bytes_opt_(DOS_SECTOR_SIZE) PCBYTE bootSector,
-                                   _In_ DWORD imageSize,
-                                   _Out_ PDOS_DISK_GEOMETRY geometry);
+BOOL DosDiskGeometryFromBpb(
+    _In_reads_bytes_opt_(DOS_SECTOR_SIZE) PCBYTE bootSector,
+    _In_ DWORD imageSize,
+    _Out_ PDOS_DISK_GEOMETRY geometry);
 
 /* CHS -> LBA.  SECTOR NUMBERS ARE 1-BASED and that is the classic off-by-one
  * in this interface: cylinder and head count from 0, the sector does not.
  * Returns FALSE if the address is outside the geometry, which the caller reports as
  * AH=04 "sector not found" rather than reading somewhere else.
  */
-BOOL DosDiskChsToLba(_In_ PCDOS_DISK_GEOMETRY geometry, _In_ WORD cylinder,
-                            _In_ WORD head, _In_ WORD sector, _Out_ PDWORD logicalBlock);
+BOOL DosDiskChsToLba(
+    _In_ PCDOS_DISK_GEOMETRY geometry,
+    _In_ WORD cylinder,
+    _In_ WORD head,
+    _In_ WORD sector,
+    _Out_ PDWORD logicalBlock);
 
 /* AH=08h packs the cylinder count into CH plus the top two bits of CL, with the
  * sector count in CL's low six. Both are "max", i.e. one less than the count,

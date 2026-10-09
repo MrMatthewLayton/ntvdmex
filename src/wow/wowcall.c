@@ -28,8 +28,13 @@
 
 /* Forward declarations, from when this file was part of main.c's unit (they were in wowcall.h). */
 INT  WowEnumBusy(VOID);
-INT  WowEnumBegin(INT kind, DWORD procedure, WORD dataSelector, DWORD lParam,
-                          DWORD returnLinear, WORD parent);
+INT  WowEnumBegin(
+    INT kind,
+    DWORD procedure,
+    WORD dataSelector,
+    DWORD lParam,
+    DWORD returnLinear,
+    WORD parent);
 VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY);
 
 /* s89: a SECOND far pointer into the same stack block. EnumFontFamilies' callback
@@ -70,6 +75,7 @@ static DWORD           g_WowCallCount  = 0;   /* how many 16-bit calls this run 
 static VOID WowCallPush(DWORD stackBase, PWORD stackPointer, WORD value)
 {
     volatile BYTE *bytes;
+
     *stackPointer = (WORD)(*stackPointer - WOW_WORD_BYTES);
     bytes = (volatile BYTE *)(ULONG_PTR)(stackBase + *stackPointer);
     bytes[0] = (BYTE)(value & BYTE_MASK);
@@ -90,22 +96,39 @@ static VOID WowCallPush(DWORD stackBase, PWORD stackPointer, WORD value)
 /* `isAbsent` = the target's code selector is NOT PRESENT, so we must reach it
  * through the RETF trampoline rather than by writing CS. See WOWCALL_RETF_OFF.
  */
-INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
-                         DWORD procedure, WORD dataSelector, PCWORD argumentWords, INT argumentWordCount,
-                         DWORD returnLinear, INT returnMode, PWORD sink,
-                         WORD window, WORD message,
-                         PCBYTE blob, INT blobLength, INT blobArgument,
-                         INT isAbsent)
+INT WowCallEnter(
+    volatile BYTE *tib,
+    DWORD stackBase,
+    WORD returnSelector,
+    DWORD procedure,
+    WORD dataSelector,
+    PCWORD argumentWords,
+    INT argumentWordCount,
+    DWORD returnLinear,
+    INT returnMode,
+    PWORD sink,
+    WORD window,
+    WORD message,
+    PCBYTE blob,
+    INT blobLength,
+    INT blobArgument,
+    INT isAbsent)
 {
     PWOWCALL_FRAME frame;
     WORD arguments[WOWCALL_MAX_ARGW];
     WORD stackPointer;
     INT index;
-    if (g_WowCallDepth >= WOWCALL_MAX_DEPTH) return 0;
-    if (!stackBase || !returnSelector || !(procedure >> WORD_SHIFT)) return 0;
-    if (argumentWordCount < 0 || argumentWordCount > WOWCALL_MAX_ARGW) return 0;
-    if (blobLength < 0 || blobLength > WOWCALL_MAX_BLOB) return 0;
-    for (index = 0; index < argumentWordCount; ++index) arguments[index] = argumentWords[index];
+
+    if (g_WowCallDepth >= WOWCALL_MAX_DEPTH)
+        return 0;
+    if (!stackBase || !returnSelector || !(procedure >> WORD_SHIFT))
+        return 0;
+    if (argumentWordCount < 0 || argumentWordCount > WOWCALL_MAX_ARGW)
+        return 0;
+    if (blobLength < 0 || blobLength > WOWCALL_MAX_BLOB)
+        return 0;
+    for (index = 0; index < argumentWordCount; ++index)
+        arguments[index] = argumentWords[index];
 
     frame = &g_WowCallFrames[g_WowCallDepth++];
     WowSchedSave(&frame->Saved, tib, 0, 0, 0);
@@ -121,14 +144,16 @@ INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
     frame->PreviousTask = 0;
     if (window && g_WowCallRetarget)            /* s92 #306: see g_WowCallRetarget */
     {
-        WORD newStackSelector = 0, newStackPointer = 0; DWORD newStackBase = 0;
+        WORD newStackSelector = 0, newStackPointer = 0;
+        DWORD newStackBase = 0;
         if (g_WowCallRetarget(window, &newStackSelector, &newStackPointer, &newStackBase, &frame->PreviousTask) && newStackBase)
         {
             VDM_SET16(tib, VTIB_SS,  newStackSelector);
             VDM_SET16(tib, VTIB_ESP, newStackPointer);
             stackBase = newStackBase;
         }
-        else frame->PreviousTask = 0;
+        else
+            frame->PreviousTask = 0;
     }
 
     /* Pascal order: the FIRST declared argument is pushed FIRST, so it ends up
@@ -175,9 +200,11 @@ INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
             arguments[g_WowCallBlob2Argument + 1] = (WORD)(stackPointer + g_WowCallBlob2Offset);
         }
     }
-    g_WowCallBlob2Argument = -1; g_WowCallBlob2Offset = 0;
+    g_WowCallBlob2Argument = -1;
+    g_WowCallBlob2Offset = 0;
 
-    for (index = 0; index < argumentWordCount; ++index) WowCallPush(stackBase, &stackPointer, arguments[index]);
+    for (index = 0; index < argumentWordCount; ++index)
+        WowCallPush(stackBase, &stackPointer, arguments[index]);
     WowCallPush(stackBase, &stackPointer, returnSelector);       /* the far return address: CS ... */
     WowCallPush(stackBase, &stackPointer, 0);            /* ... then IP, at offset 0 */
     /* [INFO]: AND, IF THE SEGMENT IS NOT LOADED, THE TARGET ITSELF -- so the RETF we
@@ -226,11 +253,15 @@ DWORD g_WowCallLastResult;   /* the last nested call's DX:AX (sink keeps only AX
 PWOWCALL_FRAME WowCallLeave(volatile BYTE *tib, DWORD result)
 {
     PWOWCALL_FRAME frame;
-    if (g_WowCallDepth <= 0) return NULL;
+
+    if (g_WowCallDepth <= 0)
+        return NULL;
     frame = &g_WowCallFrames[--g_WowCallDepth];
     WowSchedRestore(&frame->Saved, tib);
-    if (frame->PreviousTask && g_WowCallUntarget) g_WowCallUntarget(frame->PreviousTask);
-    if (frame->Sink) *frame->Sink = (WORD)result;
+    if (frame->PreviousTask && g_WowCallUntarget)
+        g_WowCallUntarget(frame->PreviousTask);
+    if (frame->Sink)
+        *frame->Sink = (WORD)result;
     g_WowCallLastResult = result;            /* s91 #309: DX:AX, for WOWCallback16Ex */
     frame->Written = 0;
     if (frame->ReturnLinear)
@@ -246,7 +277,8 @@ PWOWCALL_FRAME WowCallLeave(volatile BYTE *tib, DWORD result)
          */
         if (frame->ReturnMode == WOWCALL_RET_KEEP)
         {
-            if (frame->Message == WM_CREATE16 && (WORD)result == WOWCALL_CREATE_REFUSED) isWrite = 1;
+            if (frame->Message == WM_CREATE16 && (WORD)result == WOWCALL_CREATE_REFUSED)
+                isWrite = 1;
         }
         else
         {
@@ -260,8 +292,10 @@ PWOWCALL_FRAME WowCallLeave(volatile BYTE *tib, DWORD result)
         if (isWrite)
         {
             frame->Written = value;
-            hole[0] = (BYTE)(value & BYTE_MASK);        hole[1] = (BYTE)((value >> BYTE_SHIFT)  & BYTE_MASK);
-            hole[2] = (BYTE)((value >> WORD_SHIFT) & BYTE_MASK); hole[3] = (BYTE)((value >> TOP_BYTE_SHIFT) & BYTE_MASK);
+            hole[0] = (BYTE)(value & BYTE_MASK);
+            hole[1] = (BYTE)((value >> BYTE_SHIFT)  & BYTE_MASK);
+            hole[2] = (BYTE)((value >> WORD_SHIFT) & BYTE_MASK);
+            hole[3] = (BYTE)((value >> TOP_BYTE_SHIFT) & BYTE_MASK);
         }
     }
     return frame;

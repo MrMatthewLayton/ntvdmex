@@ -40,7 +40,8 @@ INT WowSoundCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         "SetVoiceThreshold", "DoBeep",
     };
     INT noteLength = 0;
-    if (noteCapacity) note[0] = 0;
+    if (noteCapacity)
+        note[0] = 0;
     switch (frame->Id)
     {
     case WOWSND_OPENSOUND:
@@ -64,6 +65,7 @@ INT WowSoundCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
                                    " (w_sound, 23/23)");
         Wow32SetReturn(frame, 0);
         return 1;
+
     /* [CAUTION]: GetThresholdEvent returns an LPINT (DX:AX). Stock's answer for it is
      * UNMEASURED -- the probe's OUT shows AX only -- so it is a NULL far pointer
      * here, which is what a 0-everything WOW gives, and it is flagged.

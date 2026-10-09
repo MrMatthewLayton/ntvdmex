@@ -124,14 +124,16 @@ static INT g_Checks, g_Failures;
 static VOID SysVarsTestExpect(PCSTR description, LONG actual, LONG expected)
 {
     ++g_Checks;
-    if (actual == expected) return;
+    if (actual == expected)
+        return;
     ++g_Failures;
     printf("  FAIL %-54s got 0x%lX, want 0x%lX\n", description, (long)actual, (long)expected);
 }
 
 static VOID SysVarsTestFail(PCSTR description)
 {
-    ++g_Failures; printf("  FAIL %-54s\n", description);
+    ++g_Failures;
+    printf("  FAIL %-54s\n", description);
 }
 
 /* THE ORACLE'S OWN BYTES:
@@ -177,6 +179,7 @@ static UINT SysVarsTestWord(INT offset)
 INT main(VOID)
 {
     BYTE buffer[SYSVARS_TEST_BUFFER_SIZE];
+
     printf("== INT 21h AH=52h List of Lists (dos_sysvars.h) -- decoded from 6.22\n");
 
     /* -- THE FIELD OFFSETS. Each check reads the oracle's own bytes at the
@@ -361,7 +364,8 @@ INT main(VOID)
             {
                 if (memcmp(header + DOS_DEVICE_HEADER_NAME, expectedNames[headerCount], DOS_DEVICE_NAME_LEN) != 0 || !(attribute & SYSVARS_TEST_CHARACTER_DEVICE))
                 {
-                    ++g_Failures; printf("  FAIL device %u: name/char-attr wrong\n", headerCount);
+                    ++g_Failures;
+                    printf("  FAIL device %u: name/char-attr wrong\n", headerCount);
                 }
             }
             else if ((attribute & SYSVARS_TEST_CHARACTER_DEVICE) || header[DOS_DEVICE_HEADER_NAME] != SYSVARS_TEST_UNITS)
@@ -371,7 +375,8 @@ INT main(VOID)
             SysVarsTestExpect("strategy entry = the 'unknown command' stub", SysVarsTestWordAt(header + DOS_DEVICE_HEADER_STRATEGY), DOS_DEVICE_STUB_UNKNOWN);
             SysVarsTestExpect("interrupt entry = the RETF stub", SysVarsTestWordAt(header + DOS_DEVICE_HEADER_INTERRUPT), DOS_DEVICE_STUB_RETF);
             ++headerCount;
-            if (nextOffset == DOS_CHAIN_END) break;
+            if (nextOffset == DOS_CHAIN_END)
+                break;
             SysVarsTestExpect("next segment is the area's own", nextSegment, segment);
             headerOffset = nextOffset;
             if (headerOffset + DOS_DEVICE_HEADER_LEN > DOS_DEVICE_STUB_UNKNOWN)

@@ -54,7 +54,9 @@ static volatile LONG     g_KeyLatencyHead, g_KeyLatencyTail;
 static VOID KeyLatencyBucket(DWORD *histogram, DWORD milliseconds)
 {
     UINT bucket = 0;
-    while (bucket < 7 && milliseconds >= (DWORD)(1u << bucket)) ++bucket;   /* 0,1,2,4,8,16,32,64+ */
+
+    while (bucket < 7 && milliseconds >= (DWORD)(1u << bucket))
+        ++bucket;                                                           /* 0,1,2,4,8,16,32,64+ */
     histogram[bucket]++;
 }
 
@@ -62,7 +64,9 @@ static VOID KeyLatencyPush(VOID)                      /* UI thread: a scancode w
 {
     LARGE_INTEGER now;
     LONG head = g_KeyLatencyHead;
-    if (!QueryPerformanceCounter(&now)) return;
+
+    if (!QueryPerformanceCounter(&now))
+        return;
     g_KeyLatencyTimes[head & (KEYLAT_RING - 1)] = now.QuadPart;
     g_KeyLatencyHead = head + 1;
 }
@@ -71,12 +75,15 @@ VOID KeyLatencyPop(VOID)                       /* exec thread: INT 09h went in *
 {
     LARGE_INTEGER now;
     LONG tail = g_KeyLatencyTail;
-    if (tail == g_KeyLatencyHead) return;                /* nothing outstanding */
+
+    if (tail == g_KeyLatencyHead)
+        return;                                          /* nothing outstanding */
     if (QueryPerformanceCounter(&now))
     {
         DWORD milliseconds = QpcMicroseconds(now.QuadPart - g_KeyLatencyTimes[tail & (KEYLAT_RING - 1)]) / MICROSECONDS_PER_MILLISECOND_U;
         KeyLatencyBucket(g_KeyDeliveryHistogram, milliseconds);
-        if (milliseconds > g_KeyDeliveryMaximumMs) g_KeyDeliveryMaximumMs = milliseconds;
+        if (milliseconds > g_KeyDeliveryMaximumMs)
+            g_KeyDeliveryMaximumMs = milliseconds;
         ++g_KeyDeliveryCount;
     }
     g_KeyLatencyTail = tail + 1;
@@ -100,7 +107,8 @@ VOID KeyLatencyPop(VOID)                       /* exec thread: INT 09h went in *
 VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak)
 {
     HOST_LOCK();
-    if (extended) VddInputPushScanCode(&g_Input, INPUT_SCAN_PREFIX_E0);
+    if (extended)
+        VddInputPushScanCode(&g_Input, INPUT_SCAN_PREFIX_E0);
     VddInputPushScanCode(&g_Input, isBreak ? (BYTE)(rawScancode | INPUT_SCAN_BREAK_BIT) : rawScancode);
     HOST_UNLOCK();
     KeyLatencyPush();                  /* start the clock on this keystroke's delivery */
@@ -108,7 +116,8 @@ VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak)
      * guest drains the FIFO -- so the host must NOT latch one per byte here as well, or the
      * interrupts run ahead of the bytes again.
      */
-    if (g_KeyEvent) SetEvent(g_KeyEvent);
+    if (g_KeyEvent)
+        SetEvent(g_KeyEvent);
 }
 
 enum
@@ -123,11 +132,17 @@ enum
 VOID HostKeyTypematicInitialize(VOID)
 {
     DWORD delay = 1, speed = KEYBOARD_SPEED_MAX;
-    if (!SystemParametersInfoA(SPI_GETKEYBOARDDELAY, 0, &delay, 0)) delay = 1;
-    if (!SystemParametersInfoA(SPI_GETKEYBOARDSPEED, 0, &speed, 0)) speed = KEYBOARD_SPEED_MAX;
-    if (delay > KEYBOARD_DELAY_MAX)  delay = KEYBOARD_DELAY_MAX;
-    if (speed > KEYBOARD_SPEED_MAX) speed = KEYBOARD_SPEED_MAX;
-    g_TypematicSpiDelay = delay; g_TypematicSpiSpeed = speed;
+
+    if (!SystemParametersInfoA(SPI_GETKEYBOARDDELAY, 0, &delay, 0))
+        delay = 1;
+    if (!SystemParametersInfoA(SPI_GETKEYBOARDSPEED, 0, &speed, 0))
+        speed = KEYBOARD_SPEED_MAX;
+    if (delay > KEYBOARD_DELAY_MAX)
+        delay = KEYBOARD_DELAY_MAX;
+    if (speed > KEYBOARD_SPEED_MAX)
+        speed = KEYBOARD_SPEED_MAX;
+    g_TypematicSpiDelay = delay;
+    g_TypematicSpiSpeed = speed;
     g_TypematicDelayMicroseconds  = (delay + 1) * TYPEMATIC_DELAY_STEP_US;
     g_TypematicPeriodMicroseconds = TYPEMATIC_PERIOD_SLOWEST_US - (speed * TYPEMATIC_PERIOD_STEP_US);        /* 0 -> 400 ms, 31 -> 28 ms */
 }
@@ -141,14 +156,18 @@ UINT32 g_TypematicSent, g_TypematicOsRepeats;  /* ours generated / OS ones suppr
 static VOID HostKeyTypematicPress(BYTE scanCode, INT extended)
 {
     LARGE_INTEGER now;
+
     QueryPerformanceCounter(&now);
-    g_TypematicScanCode = scanCode; g_TypematicExtended = (BYTE)(extended ? 1 : 0); g_TypematicOn = 1;
+    g_TypematicScanCode = scanCode;
+    g_TypematicExtended = (BYTE)(extended ? 1 : 0);
+    g_TypematicOn = 1;
     g_TypematicDue = now.QuadPart + QpcTicks(KEY_TYPEMATIC_DELAY_US);
 }
 
 static VOID HostKeyTypematicRelease(BYTE scanCode, INT extended)
 {
-    if (g_TypematicOn && g_TypematicScanCode == scanCode && g_TypematicExtended == (BYTE)(extended ? 1 : 0)) g_TypematicOn = 0;
+    if (g_TypematicOn && g_TypematicScanCode == scanCode && g_TypematicExtended == (BYTE)(extended ? 1 : 0))
+        g_TypematicOn = 0;
 }
 
 /* Pumped from both threads; cheap and lock-free until it actually fires. */
@@ -158,7 +177,8 @@ static VOID HostKeyTypematicRelease(BYTE scanCode, INT extended)
  */
 VOID HostKeyPresent(VOID)
 {
-    if (g_Input.ScanCodeHead == g_Input.ScanCodeTail || g_Input.IsScanCodeIrqUp) return;   /* racy, benign */
+    if (g_Input.ScanCodeHead == g_Input.ScanCodeTail || g_Input.IsScanCodeIrqUp)
+        return;                                                                            /* racy, benign */
     HOST_LOCK();
     VddInputPoll(&g_Input);
     HOST_UNLOCK();
@@ -167,9 +187,12 @@ VOID HostKeyPresent(VOID)
 VOID HostKeyTypematic(VOID)
 {
     LARGE_INTEGER now;
-    if (!g_TypematicOn || !g_QpcFrequency.QuadPart) return;
+
+    if (!g_TypematicOn || !g_QpcFrequency.QuadPart)
+        return;
     QueryPerformanceCounter(&now);
-    if (now.QuadPart < g_TypematicDue) return;
+    if (now.QuadPart < g_TypematicDue)
+        return;
     /* A stall must not turn into a burst of makes: schedule from NOW, not from the
      * missed deadline, so we never try to "catch up" the repeats we owe. That is
      * the same mistake the PIT catch-up made, and it is worse here -- a burst of
@@ -192,6 +215,7 @@ enum
 DWORD WINAPI SynthKeyThread(LPVOID parameter)
 {
     INT round;
+
     (VOID)parameter;
     /* Reach the MENU before testing menu keys. The intro/attract loop reads no keyboard at
      * all (measured: int16=[0,0,0,0], p60=0 for a whole run), so arrows sent during it prove
@@ -202,15 +226,21 @@ DWORD WINAPI SynthKeyThread(LPVOID parameter)
                              NULL, OPEN_EXISTING, 0, NULL);
       if (handle != INVALID_HANDLE_VALUE)
       {
-          CHAR script[1024]; DWORD bytesRead = 0; DWORD index = 0;
+          CHAR script[1024];
+          DWORD bytesRead = 0;
+          DWORD index = 0;
           ReadFile(handle, script, sizeof script - 1, &bytesRead, NULL);
           CloseHandle(handle);
           script[bytesRead] = 0;
           while (index < bytesRead && g_Running)
           {
-              INT extended = 0; DWORD value = 0; INT digits = 0;
-              while (index < bytesRead && (script[index] == ' ' || script[index] == '\t' || script[index] == '\r' || script[index] == '\n')) ++index;
-              if (index >= bytesRead) break;
+              INT extended = 0;
+              DWORD value = 0;
+              INT digits = 0;
+              while (index < bytesRead && (script[index] == ' ' || script[index] == '\t' || script[index] == '\r' || script[index] == '\n'))
+                  ++index;
+              if (index >= bytesRead)
+                  break;
               /* m<0|1|2> -- a full click of that button (left/right/middle). Not a
                * keystroke, but it belongs in the same script: the point of the script
                * is to reach a screen, and mouse-driven guests cannot be reached with
@@ -265,14 +295,22 @@ DWORD WINAPI SynthKeyThread(LPVOID parameter)
                   }
                   while (index < bytesRead && digits < SYNTHKEY_HEX_DIGITS_MAX)
                   {
-                      CHAR character = script[index]; INT digit = -1;
-                      if (character >= '0' && character <= '9') digit = character - '0';
-                      else if (character >= 'a' && character <= 'f') digit = character - 'a' + HEX_DIGIT_A_VALUE;
-                      else if (character >= 'A' && character <= 'F') digit = character - 'A' + HEX_DIGIT_A_VALUE;
-                      if (digit < 0) break;
-                      value = (value << NIBBLE_SHIFT) | (DWORD)digit; ++index; ++digits;
+                      CHAR character = script[index];
+                      INT digit = -1;
+                      if (character >= '0' && character <= '9')
+                          digit = character - '0';
+                      else if (character >= 'a' && character <= 'f')
+                          digit = character - 'a' + HEX_DIGIT_A_VALUE;
+                      else if (character >= 'A' && character <= 'F')
+                          digit = character - 'A' + HEX_DIGIT_A_VALUE;
+                      if (digit < 0)
+                          break;
+                      value = (value << NIBBLE_SHIFT) | (DWORD)digit;
+                      ++index;
+                      ++digits;
                   }
-                  if (!digits) continue;
+                  if (!digits)
+                      continue;
                   HostKeyScancode((BYTE)value, extended, isUp);
                   Sleep(SYNTHKEY_TAP_MS);
                   continue;
@@ -284,12 +322,19 @@ DWORD WINAPI SynthKeyThread(LPVOID parameter)
               }
               while (index < bytesRead && digits < SYNTHKEY_HEX_DIGITS_MAX)                 /* up to two hex digits */
               {
-                  CHAR character = script[index]; INT digit = -1;
-                  if (character >= '0' && character <= '9') digit = character - '0';
-                  else if (character >= 'a' && character <= 'f') digit = character - 'a' + HEX_DIGIT_A_VALUE;
-                  else if (character >= 'A' && character <= 'F') digit = character - 'A' + HEX_DIGIT_A_VALUE;
-                  if (digit < 0) break;
-                  value = (value << NIBBLE_SHIFT) | (DWORD)digit; ++index; ++digits;
+                  CHAR character = script[index];
+                  INT digit = -1;
+                  if (character >= '0' && character <= '9')
+                      digit = character - '0';
+                  else if (character >= 'a' && character <= 'f')
+                      digit = character - 'a' + HEX_DIGIT_A_VALUE;
+                  else if (character >= 'A' && character <= 'F')
+                      digit = character - 'A' + HEX_DIGIT_A_VALUE;
+                  if (digit < 0)
+                      break;
+                  value = (value << NIBBLE_SHIFT) | (DWORD)digit;
+                  ++index;
+                  ++digits;
               }
               if (!digits) /* skip a token we do not grok */
               {
@@ -360,8 +405,10 @@ LRESULT CALLBACK LowLevelKeyboardProcedure(INT code, WPARAM wParam, LPARAM lPara
             InterlockedExchange(&g_WindowsKeyDown, 1);
             return 1;
         }
-        if (hook->vkCode == VK_TAB    && altDown)  return 1;
-        if (hook->vkCode == VK_ESCAPE && (ctrl || altDown)) return 1;
+        if (hook->vkCode == VK_TAB    && altDown)
+            return 1;
+        if (hook->vkCode == VK_ESCAPE && (ctrl || altDown))
+            return 1;
     }
     return CallNextHookEx(g_LowLevelKeyboard, code, wParam, lParam);
 }
@@ -418,7 +465,9 @@ LRESULT CALLBACK LowLevelKeyboardProcedure(INT code, WPARAM wParam, LPARAM lPara
  */
 UINT64 JoystickNowMicroseconds(PVOID context)
 {
-    LARGE_INTEGER now; (VOID)context;
+    LARGE_INTEGER now;
+
+    (VOID)context;
     QueryPerformanceCounter(&now);
     return QpcMicroseconds64(now.QuadPart);
 }
@@ -438,7 +487,9 @@ enum
 typedef DWORD (WINAPI *PFN_JOY_GET_POS_EX)(UINT, JOYINFOEX *);
 static DWORD WINAPI JoystickPollThread(LPVOID param)
 {
-    HMODULE module = NULL; PFN_JOY_GET_POS_EX getPositionEx = NULL;
+    HMODULE module = NULL;
+    PFN_JOY_GET_POS_EX getPositionEx = NULL;
+
     (VOID)param;
     /* [CAUTION]: BELOW the pacer, ALWAYS. joyGetPosEx is a legacy-driver round trip that can
      * block for milliseconds, and the s61 Skyroads timing is fragile to exactly
@@ -457,7 +508,8 @@ static DWORD WINAPI JoystickPollThread(LPVOID param)
         }
         if (!getPositionEx)
         {
-            if (!module) module = LoadLibraryA(HOST_MODULE_WINMM);
+            if (!module)
+                module = LoadLibraryA(HOST_MODULE_WINMM);
             getPositionEx = module ? (PFN_JOY_GET_POS_EX)GetProcAddress(module, HOST_EXPORT_JOY_GET_POS_EX) : NULL;
             if (!getPositionEx)
             {
@@ -466,7 +518,9 @@ static DWORD WINAPI JoystickPollThread(LPVOID param)
                 continue;
             }
         }
-        {   JOYINFOEX info; UINT axes[JOYSTICK_AXES]; INT index;
+        {   JOYINFOEX info;
+        UINT axes[JOYSTICK_AXES];
+        INT index;
             info.dwSize = sizeof info;
             info.dwFlags = JOY_RETURNALL;                    /* JOY_RETURNALL: X Y Z R U V POV buttons */
             if (getPositionEx(0, &info) == 0)              /* JOYSTICKID1, JOYERR_NOERROR */
@@ -474,8 +528,10 @@ static DWORD WINAPI JoystickPollThread(LPVOID param)
                 /* winmm's view of a 360 pad on XP: X/Y = left stick, U/R = right
                  * stick, Z = triggers (unused here), POV = the D-pad.
                  */
-                axes[0] = (info.dwXpos >> BYTE_SHIFT) & BYTE_MASK; axes[1] = (info.dwYpos >> BYTE_SHIFT) & BYTE_MASK;
-                axes[2] = (info.dwUpos >> BYTE_SHIFT) & BYTE_MASK; axes[3] = (info.dwRpos >> BYTE_SHIFT) & BYTE_MASK;
+                axes[0] = (info.dwXpos >> BYTE_SHIFT) & BYTE_MASK;
+                axes[1] = (info.dwYpos >> BYTE_SHIFT) & BYTE_MASK;
+                axes[2] = (info.dwUpos >> BYTE_SHIFT) & BYTE_MASK;
+                axes[3] = (info.dwRpos >> BYTE_SHIFT) & BYTE_MASK;
                 if (g_JoystickPovMap && info.dwPOV < JOYSTICK_POV_FULL_CIRCLE)
                 {
                     /* Hundredths of a degree, 0 = up. Snap the eight sectors
@@ -484,12 +540,17 @@ static DWORD WINAPI JoystickPollThread(LPVOID param)
                      * pin the axis, not average with a centred stick.
                      */
                     INT povOctant = (INT)(((info.dwPOV + JOYSTICK_POV_OCTANT_U / 2) / JOYSTICK_POV_OCTANT_U) & JOYSTICK_POV_OCTANT_MASK);
-                    if (povOctant == JOYSTICK_POV_NORTH_WEST || povOctant == JOYSTICK_POV_NORTH || povOctant == JOYSTICK_POV_NORTH_EAST) axes[1] = JOYSTICK_AXIS_MIN;
-                    if (povOctant >= JOYSTICK_POV_SOUTH_EAST && povOctant <= JOYSTICK_POV_SOUTH_WEST) axes[1] = JOYSTICK_AXIS_MAX;
-                    if (povOctant >= JOYSTICK_POV_NORTH_EAST && povOctant <= JOYSTICK_POV_SOUTH_EAST) axes[0] = JOYSTICK_AXIS_MAX;
-                    if (povOctant >= JOYSTICK_POV_SOUTH_WEST && povOctant <= JOYSTICK_POV_NORTH_WEST) axes[0] = JOYSTICK_AXIS_MIN;
+                    if (povOctant == JOYSTICK_POV_NORTH_WEST || povOctant == JOYSTICK_POV_NORTH || povOctant == JOYSTICK_POV_NORTH_EAST)
+                        axes[1] = JOYSTICK_AXIS_MIN;
+                    if (povOctant >= JOYSTICK_POV_SOUTH_EAST && povOctant <= JOYSTICK_POV_SOUTH_WEST)
+                        axes[1] = JOYSTICK_AXIS_MAX;
+                    if (povOctant >= JOYSTICK_POV_NORTH_EAST && povOctant <= JOYSTICK_POV_SOUTH_EAST)
+                        axes[0] = JOYSTICK_AXIS_MAX;
+                    if (povOctant >= JOYSTICK_POV_SOUTH_WEST && povOctant <= JOYSTICK_POV_NORTH_WEST)
+                        axes[0] = JOYSTICK_AXIS_MIN;
                 }
-                for (index = 0; index < JOYSTICK_AXES; ++index) g_Joystick.Axis[index] = (BYTE)axes[index];
+                for (index = 0; index < JOYSTICK_AXES; ++index)
+                    g_Joystick.Axis[index] = (BYTE)axes[index];
                 g_Joystick.Buttons = (BYTE)(info.dwButtons & JOYSTICK_BUTTON_MASK);
                 g_Joystick.IsPresent = 1;
             }
@@ -515,11 +576,15 @@ static DWORD WINAPI JoystickPollThread(LPVOID param)
 LONG g_JoystickThreadStarted = 0;
 VOID JoystickPollEnsure(VOID)
 {
-    if (g_Joystick.Type == JOYSTICK_TYPE_NONE || g_Safe.Joystick) return;   /* s90 #132 */
-    if (InterlockedExchange(&g_JoystickThreadStarted, 1)) return;   /* once */
+    if (g_Joystick.Type == JOYSTICK_TYPE_NONE || g_Safe.Joystick)
+        return;                                                             /* s90 #132 */
+    if (InterlockedExchange(&g_JoystickThreadStarted, 1))
+        return;                                                     /* once */
     { HANDLE thread = CreateThread(NULL, 0, JoystickPollThread, NULL, 0, NULL);
-      if (thread) CloseHandle(thread);
-      else InterlockedExchange(&g_JoystickThreadStarted, 0); }       /* retry next apply */
+      if (thread)
+          CloseHandle(thread);
+      else
+          InterlockedExchange(&g_JoystickThreadStarted, 0); }       /* retry next apply */
 }
 
 enum
@@ -538,9 +603,13 @@ VOID KeyMessageNote(VOID)
      * when it was posted; this is UI-thread starvation measured on the key itself.
      */
     DWORD queueDelay = GetTickCount() - (DWORD)GetMessageTime();
-    if ((LONG)queueDelay < 0) queueDelay = 0;
-    KeyLatencyBucket(g_KeyMessageHistogram, queueDelay); ++g_KeyMessageCount;
-    if (queueDelay > g_KeyMessageMaximumMs) g_KeyMessageMaximumMs = queueDelay;
+
+    if ((LONG)queueDelay < 0)
+        queueDelay = 0;
+    KeyLatencyBucket(g_KeyMessageHistogram, queueDelay);
+    ++g_KeyMessageCount;
+    if (queueDelay > g_KeyMessageMaximumMs)
+        g_KeyMessageMaximumMs = queueDelay;
 }
 
 /* #274: THE TWO KEYS WHOSE BYTES ARE NOT `[E0] code` / `[E0] code|80h`:
@@ -556,16 +625,20 @@ static INT HostKeySpecial(BYTE rawScancode, INT extended, INT isBreak)
 {
     BYTE bytes[6];
     INT count, noReport, index;
+
     count = VddInputHostKeyBytes(rawScancode, extended, isBreak, bytes, &noReport);
-    if (!noReport) return 0;
+    if (!noReport)
+        return 0;
     if (count)
     {
         g_TypematicOn = 0;
         HOST_LOCK();
-        for (index = 0; index < count; ++index) VddInputPushScanCode(&g_Input, bytes[index]);
+        for (index = 0; index < count; ++index)
+            VddInputPushScanCode(&g_Input, bytes[index]);
         HOST_UNLOCK();
         KeyLatencyPush();
-        if (g_KeyEvent) SetEvent(g_KeyEvent);
+        if (g_KeyEvent)
+            SetEvent(g_KeyEvent);
     }
     return 1;
 }
@@ -574,6 +647,7 @@ VOID KeyPushMake(LPARAM lParam)
 {
     BYTE rawScancode = (BYTE)((lParam >> WORD_SHIFT) & BYTE_MASK);
     INT extended = (lParam & LPARAM_KEY_EXTENDED) != 0;
+
     /* Bit 30 = the key was ALREADY down, i.e. OS auto-repeat. We generate typematic
      * ourselves, so swallow it -- two sources would double the repeat rate. Counted,
      * not silently dropped: the count is how we tell "the OS stopped sending them"
@@ -584,8 +658,10 @@ VOID KeyPushMake(LPARAM lParam)
         g_TypematicOsRepeats++;
         return;
     }
-    if (rawScancode && HostKeySpecial(rawScancode, extended, INPUT_KEY_MAKE)) return;   /* #274: Pause, Ctrl+Break */
-    if (rawScancode) { HostKeyScancode(rawScancode, extended, INPUT_KEY_MAKE); HostKeyTypematicPress(rawScancode, extended);
+    if (rawScancode && HostKeySpecial(rawScancode, extended, INPUT_KEY_MAKE))
+        return;                                                                         /* #274: Pause, Ctrl+Break */
+    if (rawScancode) { HostKeyScancode(rawScancode, extended, INPUT_KEY_MAKE);
+    HostKeyTypematicPress(rawScancode, extended);
                  ModifierTrack(rawScancode, extended, INPUT_PRESSED); }
 }
 
@@ -593,7 +669,9 @@ VOID KeyPushBreak(LPARAM lParam)
 {
     BYTE rawScancode = (BYTE)((lParam >> WORD_SHIFT) & BYTE_MASK);
     INT extended = (lParam & LPARAM_KEY_EXTENDED) != 0;
-    if (rawScancode && HostKeySpecial(rawScancode, extended, INPUT_KEY_BREAK)) return;   /* #274: they send no break */
+
+    if (rawScancode && HostKeySpecial(rawScancode, extended, INPUT_KEY_BREAK))
+        return;                                                                          /* #274: they send no break */
     if (rawScancode) { HostKeyTypematicRelease(rawScancode, extended);   /* stop repeating first */
                  HostKeyScancode(rawScancode, extended, INPUT_KEY_BREAK);
                  ModifierTrack(rawScancode, extended, INPUT_RELEASED); }
@@ -611,15 +689,28 @@ static BYTE g_ModifiersDown;                              /* bits: 0 LSh 1 RSh 2
 static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down)
 {
     INT bit = -1;
-    if (!extended) { if (rawScancode == INPUT_SCAN_LEFT_SHIFT) bit = MODIFIER_LEFT_SHIFT; else if (rawScancode == INPUT_SCAN_RIGHT_SHIFT) bit = MODIFIER_RIGHT_SHIFT;
-                else if (rawScancode == INPUT_SCAN_CTRL) bit = MODIFIER_LEFT_CTRL; else if (rawScancode == INPUT_SCAN_ALT) bit = MODIFIER_LEFT_ALT; }
+
+    if (!extended) { if (rawScancode == INPUT_SCAN_LEFT_SHIFT)
+        bit = MODIFIER_LEFT_SHIFT;
+    else if (rawScancode == INPUT_SCAN_RIGHT_SHIFT)
+        bit = MODIFIER_RIGHT_SHIFT;
+                else if (rawScancode == INPUT_SCAN_CTRL)
+                    bit = MODIFIER_LEFT_CTRL;
+                else if (rawScancode == INPUT_SCAN_ALT)
+                    bit = MODIFIER_LEFT_ALT; }
     else
     {
-        if (rawScancode == INPUT_SCAN_CTRL) bit = MODIFIER_RIGHT_CTRL;
-        else if (rawScancode == INPUT_SCAN_ALT) bit = MODIFIER_RIGHT_ALT;
+        if (rawScancode == INPUT_SCAN_CTRL)
+            bit = MODIFIER_RIGHT_CTRL;
+        else if (rawScancode == INPUT_SCAN_ALT)
+            bit = MODIFIER_RIGHT_ALT;
     }
-    if (bit < 0) return;
-    if (down) g_ModifiersDown |= (BYTE)(1u << bit); else g_ModifiersDown &= (BYTE)~(1u << bit);
+    if (bit < 0)
+        return;
+    if (down)
+        g_ModifiersDown |= (BYTE)(1u << bit);
+    else
+        g_ModifiersDown &= (BYTE)~(1u << bit);
 }
 
 VOID HostReleaseModifiers(VOID)
@@ -629,6 +720,7 @@ VOID HostReleaseModifiers(VOID)
         BYTE ScanCode;
         INT IsExtended;
     }
+
     mods[MODIFIER_KEYS] =
         { {INPUT_SCAN_LEFT_SHIFT,0}, {INPUT_SCAN_RIGHT_SHIFT,0}, {INPUT_SCAN_CTRL,0}, {INPUT_SCAN_CTRL,1}, {INPUT_SCAN_ALT,0}, {INPUT_SCAN_ALT,1} };
     INT index;

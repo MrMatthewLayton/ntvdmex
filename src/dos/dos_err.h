@@ -319,9 +319,12 @@ static inline WORD DosCritFailAx(_In_ BYTE function, _In_ BYTE errorCode)
  *
  * [CAUTION]: Unmeasured on 6.22: p_crit2 crit2.h3f.ignore.call / crit2.h40.ignore.call.
  */
-static inline WORD DosCritIgnoreCount(_In_ BYTE function, _In_ WORD requestedCount,
-                                      _In_ DWORD filePosition, _In_ DWORD fileSize,
-                                      _In_ BOOL isSizeKnown)
+static inline WORD DosCritIgnoreCount(
+    _In_ BYTE function,
+    _In_ WORD requestedCount,
+    _In_ DWORD filePosition,
+    _In_ DWORD fileSize,
+    _In_ BOOL isSizeKnown)
 {
     if (function == DOS_CRIT_FUNCTION_READ && isSizeKnown)
     {
@@ -349,11 +352,14 @@ static inline INT DosCritDriveFromNtName(
     _In_reads_(DOS_CRIT_DRIVE_COUNT) PCSTR const devices[DOS_CRIT_DRIVE_COUNT])
 {
     INT driveIndex;
-    if (!ntName) return DOS_CRIT_NO_DRIVE;
+
+    if (!ntName)
+        return DOS_CRIT_NO_DRIVE;
     for (driveIndex = 0; driveIndex < DOS_CRIT_DRIVE_COUNT; ++driveIndex)
     {
         PCSTR devicePosition = devices[driveIndex], namePosition = ntName;
-        if (!devicePosition || !*devicePosition) continue;
+        if (!devicePosition || !*devicePosition)
+            continue;
         while (*devicePosition && *namePosition)
         {
             CHAR deviceChar = *devicePosition, nameChar = *namePosition;
@@ -361,11 +367,14 @@ static inline INT DosCritDriveFromNtName(
                 deviceChar = (CHAR)(deviceChar + ASCII_CASE_BIT);
             if (nameChar >= 'A' && nameChar <= 'Z')
                 nameChar = (CHAR)(nameChar + ASCII_CASE_BIT);
-            if (deviceChar != nameChar) break;
-            ++devicePosition; ++namePosition;
+            if (deviceChar != nameChar)
+                break;
+            ++devicePosition;
+            ++namePosition;
         }
         if (!*devicePosition
-            && (*namePosition == DOS_CRIT_PATH_SEPARATOR || *namePosition == 0)) return driveIndex;
+            && (*namePosition == DOS_CRIT_PATH_SEPARATOR || *namePosition == 0))
+            return driveIndex;
     }
     return DOS_CRIT_NO_DRIVE;
 }

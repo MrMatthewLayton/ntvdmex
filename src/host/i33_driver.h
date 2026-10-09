@@ -189,13 +189,29 @@
  *   what the video memory holds, not to what the presenter shows. A frame value map4
  *   does not contain (nothing the CGA renderer writes) is taken as colour 0.
  */
-VOID I33GraphicsCursorRow(BYTE *row, INT width, INT left, WORD screenMask, WORD cursorMask,
-                       BYTE ones, const BYTE *colourMap);
+VOID I33GraphicsCursorRow(
+    BYTE *row,
+    INT width,
+    INT left,
+    WORD screenMask,
+    WORD cursorMask,
+    BYTE ones,
+    const BYTE *colourMap);
 
 /* The whole bitmap. (px,py) = the pointer in frame pixels, (hx,hy) = 09h's hot spot. */
-VOID I33GraphicsCursorDraw(BYTE *pixels, INT width, INT height, INT stride, INT pointerX, INT pointerY,
-                        INT hotX, INT hotY, const WORD *screenMask, const WORD *cursorMask,
-                        BYTE ones, const BYTE *colourMap);
+VOID I33GraphicsCursorDraw(
+    BYTE *pixels,
+    INT width,
+    INT height,
+    INT stride,
+    INT pointerX,
+    INT pointerY,
+    INT hotX,
+    INT hotY,
+    const WORD *screenMask,
+    const WORD *cursorMask,
+    BYTE ones,
+    const BYTE *colourMap);
 
 /* The MS driver's default arrow, as DOSBox carries it (mouse.cpp defaultScreenMask /
  * defaultCursorMask -- transcribed from memory, not from a file in the repo). NOT what we draw after a
@@ -275,8 +291,11 @@ typedef struct _I33_SETTINGS
  * CX on return). A short buffer gets the first `cap` bytes, not an error -- the call
  * hands the size in and the count back, so truncation is the contract's own answer.
  */
-UINT I33SettingsBlock(BYTE *out, UINT capacity, const I33_SETTINGS *settings,
-                                   const BYTE *acceleration);
+UINT I33SettingsBlock(
+    BYTE *out,
+    UINT capacity,
+    const I33_SETTINGS *settings,
+    const BYTE *acceleration);
 
 /* 18h/19h: THE ALTERNATE (SHIFT-QUALIFIED) HANDLERS:
  * RBIL #03176, the call mask: bits 0-4 the events (motion, L press/release, R
@@ -337,7 +356,11 @@ INT I33AlternateAny(const I33_ALTERNATE *alternates);
  * 0..2 = that alternate slot, -1 = the 0Ch handler, -2 = nobody asked for it. *conditions = the
  * condition word the chosen handler is called with.
  */
-INT I33PickHandler(const I33_ALTERNATE *alternates, UINT events, BYTE keyboardFlags, UINT mainMask,
-                    UINT *conditions);
+INT I33PickHandler(
+    const I33_ALTERNATE *alternates,
+    UINT events,
+    BYTE keyboardFlags,
+    UINT mainMask,
+    UINT *conditions);
 
 #endif /* NTVDMEX_I33_DRIVER_H */

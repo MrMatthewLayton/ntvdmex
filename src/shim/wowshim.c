@@ -68,7 +68,8 @@ static INT g_HasShimApi;
 
 __declspec(dllexport) BOOL WINAPI NtvdmexShimInit(PCNTVDMEX_SHIM_API api)
 {
-    if (!api || api->Version != SHIM_API_VERSION) return FALSE;
+    if (!api || api->Version != SHIM_API_VERSION)
+        return FALSE;
     g_ShimApi = *api;
     g_HasShimApi = TRUE;
     return TRUE;
@@ -76,7 +77,8 @@ __declspec(dllexport) BOOL WINAPI NtvdmexShimInit(PCNTVDMEX_SHIM_API api)
 
 static VOID ShimReportMissing(PCSTR message)
 {
-    if (g_HasShimApi && g_ShimApi.Log) g_ShimApi.Log(message);
+    if (g_HasShimApi && g_ShimApi.Log)
+        g_ShimApi.Log(message);
 }
 
 #define SHIM_MISSING_CALLBACK16EX   "WOWCallback16Ex: no host entry"
@@ -87,12 +89,18 @@ static VOID ShimReportMissing(PCSTR message)
 #define SHIM_NO_RESULT              0
 
 /* WOW32.DLL: */
-__declspec(dllexport) LPVOID WINAPI WOWGetVDMPointer(DWORD segmentedAddress, DWORD byteCount, BOOL isProtectedMode)
+__declspec(dllexport) LPVOID WINAPI WOWGetVDMPointer(
+    DWORD segmentedAddress,
+    DWORD byteCount,
+    BOOL isProtectedMode)
 {
     return (g_HasShimApi && g_ShimApi.GetVdmPointer) ? g_ShimApi.GetVdmPointer(segmentedAddress, byteCount, isProtectedMode) : NULL;
 }
 
-__declspec(dllexport) LPVOID WINAPI WOWGetVDMPointerFix(DWORD segmentedAddress, DWORD byteCount, BOOL isProtectedMode)
+__declspec(dllexport) LPVOID WINAPI WOWGetVDMPointerFix(
+    DWORD segmentedAddress,
+    DWORD byteCount,
+    BOOL isProtectedMode)
 { /* our selectors never move: Fix is Get */
     return WOWGetVDMPointer(segmentedAddress, byteCount, isProtectedMode);
 }
@@ -112,10 +120,17 @@ __declspec(dllexport) WORD WINAPI WOWHandle16(HANDLE handle32, DWORD handleType)
     return (g_HasShimApi && g_ShimApi.Handle16) ? g_ShimApi.Handle16(handle32, handleType) : SHIM_NO_HANDLE16;
 }
 
-__declspec(dllexport) BOOL WINAPI WOWCallback16Ex(DWORD segmentedFunction, DWORD flags, DWORD argumentBytes, PVOID arguments, PDWORD returnValue)
+__declspec(dllexport) BOOL WINAPI WOWCallback16Ex(
+    DWORD segmentedFunction,
+    DWORD flags,
+    DWORD argumentBytes,
+    PVOID arguments,
+    PDWORD returnValue)
 {
-    if (g_HasShimApi && g_ShimApi.Callback16Ex) return g_ShimApi.Callback16Ex(segmentedFunction, flags, argumentBytes, arguments, returnValue);
-    ShimReportMissing(SHIM_MISSING_CALLBACK16EX); return FALSE;
+    if (g_HasShimApi && g_ShimApi.Callback16Ex)
+        return g_ShimApi.Callback16Ex(segmentedFunction, flags, argumentBytes, arguments, returnValue);
+    ShimReportMissing(SHIM_MISSING_CALLBACK16EX);
+    return FALSE;
 }
 
 #define SHIM_WCB16_PASCAL           0   /* wownt32.h: WCB16_PASCAL */
@@ -124,14 +139,17 @@ __declspec(dllexport) BOOL WINAPI WOWCallback16Ex(DWORD segmentedFunction, DWORD
 __declspec(dllexport) DWORD WINAPI WOWCallback16(DWORD segmentedFunction, DWORD argument)
 {
     DWORD returnValue = SHIM_NO_RESULT;
+
     /* WCB16_PASCAL (0), one DWORD argument */
-    if (!WOWCallback16Ex(segmentedFunction, SHIM_WCB16_PASCAL, SHIM_ONE_DWORD_ARGUMENT, &argument, &returnValue)) return SHIM_NO_RESULT;
+    if (!WOWCallback16Ex(segmentedFunction, SHIM_WCB16_PASCAL, SHIM_ONE_DWORD_ARGUMENT, &argument, &returnValue))
+        return SHIM_NO_RESULT;
     return returnValue;
 }
 
 __declspec(dllexport) VOID WINAPI WOWYield16(VOID)
 {
-    if (g_HasShimApi && g_ShimApi.Yield16) g_ShimApi.Yield16();
+    if (g_HasShimApi && g_ShimApi.Yield16)
+        g_ShimApi.Yield16();
 }
 
 __declspec(dllexport) VOID WINAPI WOWDirectedYield16(WORD task16)
@@ -151,7 +169,8 @@ __declspec(dllexport) VOID WINAPI WOWDirectedYield16(WORD task16)
 
 static DWORD ShimGlobal16(INT operation, DWORD firstArgument, DWORD secondArgument)
 {
-    if (g_HasShimApi && g_ShimApi.Global16) return g_ShimApi.Global16(operation, firstArgument, secondArgument);
+    if (g_HasShimApi && g_ShimApi.Global16)
+        return g_ShimApi.Global16(operation, firstArgument, secondArgument);
     ShimReportMissing(SHIM_MISSING_GLOBAL16);
     return SHIM_NO_RESULT;
 }
@@ -180,24 +199,32 @@ __declspec(dllexport) BOOL WINAPI WOWGlobalUnlock16(WORD handle16)
     return (BOOL)(WORD)ShimGlobal16(SHIM_GLOBAL_UNLOCK, handle16, SHIM_NO_ARGUMENT);
 }
 
-__declspec(dllexport) DWORD WINAPI WOWGlobalAllocLock16(WORD flags, DWORD byteCount, WORD *handle16Out)
+__declspec(dllexport) DWORD WINAPI WOWGlobalAllocLock16(
+    WORD flags,
+    DWORD byteCount,
+    WORD *handle16Out)
 {
     WORD handle16 = (WORD)ShimGlobal16(SHIM_GLOBAL_ALLOC, flags, byteCount);
-    if (handle16Out) *handle16Out = handle16;
+
+    if (handle16Out)
+        *handle16Out = handle16;
     return handle16 ? ShimGlobal16(SHIM_GLOBAL_LOCK, handle16, SHIM_NO_ARGUMENT) : SHIM_NO_RESULT;
 }
 
 __declspec(dllexport) WORD WINAPI WOWGlobalUnlockFree16(DWORD segmentedAddress)
 {
     WORD handle16 = (WORD)ShimGlobal16(SHIM_GLOBAL_HANDLE, (WORD)(segmentedAddress >> SHIM_SELECTOR_SHIFT), SHIM_NO_ARGUMENT);   /* GlobalHandle(selector) -> AX */
-    if (!handle16) return SHIM_NO_HANDLE16;
+
+    if (!handle16)
+        return SHIM_NO_HANDLE16;
     ShimGlobal16(SHIM_GLOBAL_UNLOCK, handle16, SHIM_NO_ARGUMENT);
     return (WORD)(ShimGlobal16(SHIM_GLOBAL_FREE, handle16, SHIM_NO_ARGUMENT) == SHIM_GLOBAL_FREED);
 }
 
 __declspec(dllexport) DWORD WINAPI WOWGlobalLockSize16(WORD handle16, PDWORD byteCount)
 {
-    if (byteCount) *byteCount = ShimGlobal16(SHIM_GLOBAL_SIZE, handle16, SHIM_NO_ARGUMENT);
+    if (byteCount)
+        *byteCount = ShimGlobal16(SHIM_GLOBAL_SIZE, handle16, SHIM_NO_ARGUMENT);
     return ShimGlobal16(SHIM_GLOBAL_LOCK, handle16, SHIM_NO_ARGUMENT);
 }
 
@@ -210,7 +237,8 @@ __declspec(dllexport) DWORD WINAPI WOWGlobalLockSize16(WORD handle16, PDWORD byt
  */
 __declspec(dllexport) VOID WINAPI call_ica_hw_interrupt(INT picAdapter, BYTE line, INT count)
 {
-    if (g_HasShimApi && g_ShimApi.IcaInterrupt) g_ShimApi.IcaInterrupt(picAdapter, line, count);
+    if (g_HasShimApi && g_ShimApi.IcaInterrupt)
+        g_ShimApi.IcaInterrupt(picAdapter, line, count);
 }
 
 /* THE VDD SERVICE API (s91, the SDK's binary-compatibility veneer, #11):
@@ -244,7 +272,8 @@ static DWORD ShimGetRegister(INT registerIndex)
 
 static VOID  ShimSetRegister(INT registerIndex, DWORD value)
 {
-    if (g_HasShimApi && g_ShimApi.SetRegister) g_ShimApi.SetRegister(registerIndex, value);
+    if (g_HasShimApi && g_ShimApi.SetRegister)
+        g_ShimApi.SetRegister(registerIndex, value);
 }
 
 /* The accessor pairs the VDD API exports, generated per register: getAX/setAX, ... */
@@ -290,7 +319,11 @@ __declspec(dllexport) PVOID WINAPI VdmMapFlat(USHORT segment, ULONG offset, ULON
     return (g_HasShimApi && g_ShimApi.MapFlat) ? g_ShimApi.MapFlat(segment, offset, mode == SHIM_VDM_PM) : NULL;
 }
 
-__declspec(dllexport) BOOL WINAPI VdmUnmapFlat(USHORT segment, ULONG offset, PVOID buffer, ULONG mode)
+__declspec(dllexport) BOOL WINAPI VdmUnmapFlat(
+    USHORT segment,
+    ULONG offset,
+    PVOID buffer,
+    ULONG mode)
 { /* nothing was copied */
     (VOID)segment;
     (VOID)offset;
@@ -299,7 +332,11 @@ __declspec(dllexport) BOOL WINAPI VdmUnmapFlat(USHORT segment, ULONG offset, PVO
     return TRUE;
 }
 
-__declspec(dllexport) BOOL WINAPI VdmFlushCache(USHORT segment, ULONG offset, ULONG byteCount, ULONG mode)
+__declspec(dllexport) BOOL WINAPI VdmFlushCache(
+    USHORT segment,
+    ULONG offset,
+    ULONG byteCount,
+    ULONG mode)
 { /* real CPU: no cache */
     (VOID)segment;
     (VOID)offset;
@@ -311,21 +348,32 @@ __declspec(dllexport) BOOL WINAPI VdmFlushCache(USHORT segment, ULONG offset, UL
 /* BOOL VDDInstallIOHook(HANDLE hVdd, WORD cPortRange, PVDD_IO_PORTRANGE,
  * PVDD_IO_HANDLERS) and its undo
  */
-__declspec(dllexport) BOOL WINAPI VDDInstallIOHook(HANDLE vddHandle, WORD rangeCount, PVOID ranges, PVOID handlers)
+__declspec(dllexport) BOOL WINAPI VDDInstallIOHook(
+    HANDLE vddHandle,
+    WORD rangeCount,
+    PVOID ranges,
+    PVOID handlers)
 {
-    if (g_HasShimApi && g_ShimApi.InstallIoHook) return g_ShimApi.InstallIoHook(vddHandle, rangeCount, ranges, handlers);
-    ShimReportMissing(SHIM_MISSING_IO_HOOK); return FALSE;
+    if (g_HasShimApi && g_ShimApi.InstallIoHook)
+        return g_ShimApi.InstallIoHook(vddHandle, rangeCount, ranges, handlers);
+    ShimReportMissing(SHIM_MISSING_IO_HOOK);
+    return FALSE;
 }
 
-__declspec(dllexport) VOID WINAPI VDDDeInstallIOHook(HANDLE vddHandle, WORD rangeCount, PVOID ranges)
+__declspec(dllexport) VOID WINAPI VDDDeInstallIOHook(
+    HANDLE vddHandle,
+    WORD rangeCount,
+    PVOID ranges)
 {
-    if (g_HasShimApi && g_ShimApi.RemoveIoHook) g_ShimApi.RemoveIoHook(vddHandle, rangeCount, ranges);
+    if (g_HasShimApi && g_ShimApi.RemoveIoHook)
+        g_ShimApi.RemoveIoHook(vddHandle, rangeCount, ranges);
 }
 
 /* VDDSimulateInterrupt(ms, line, count) is call_ica_hw_interrupt by another name */
 __declspec(dllexport) VOID WINAPI VDDSimulateInterrupt(INT picAdapter, BYTE line, INT count)
 {
-    if (g_HasShimApi && g_ShimApi.IcaInterrupt) g_ShimApi.IcaInterrupt(picAdapter, line, count);
+    if (g_HasShimApi && g_ShimApi.IcaInterrupt)
+        g_ShimApi.IcaInterrupt(picAdapter, line, count);
 }
 
 #define SHIM_TERMINATE_EXIT_CODE    0

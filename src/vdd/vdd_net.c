@@ -48,6 +48,7 @@ BYTE VddNetBiosService(PNETBIOS_STATE state, BYTE *ncb, BYTE *buffer)
     NETBIOS_REQUEST request;
     BYTE command = ncb[NETB_NCB_COMMAND], returnCode;
     INT isNoWait = (command & NETB_NO_WAIT_BIT) != 0;
+
     ++state->Calls;
     memset(&request, 0, sizeof request);
     request.Command = (BYTE)(command & NETB_COMMAND_MASK);
@@ -75,11 +76,13 @@ BYTE VddNetBiosService(PNETBIOS_STATE state, BYTE *ncb, BYTE *buffer)
     ncb[NETB_NCB_RETCODE] = returnCode;
     ncb[NETB_NCB_LSN] = request.LocalSession;
     ncb[NETB_NCB_NUM] = request.NameNumber;
-    ncb[NETB_NCB_LENGTH] = (BYTE)request.Length; ncb[NETB_NCB_LENGTH + NETB_HIGH_BYTE] = (BYTE)(request.Length >> BYTE_SHIFT);
+    ncb[NETB_NCB_LENGTH] = (BYTE)request.Length;
+    ncb[NETB_NCB_LENGTH + NETB_HIGH_BYTE] = (BYTE)(request.Length >> BYTE_SHIFT);
     /* CALL/LISTEN/RECEIVE ANY report the far end's name in callname */
     memcpy(ncb + NETB_NCB_CALLNAME, request.CallName, NETB_NAME_SIZE);
     ncb[NETB_NCB_CMD_CPLT] = returnCode;                       /* cmd_cplt: complete */
-    state->LastCommand = command; state->LastReturnCode = returnCode;
+    state->LastCommand = command;
+    state->LastReturnCode = returnCode;
     if (isNoWait)
     {
         ++state->NoWaitCalls;
@@ -87,7 +90,8 @@ BYTE VddNetBiosService(PNETBIOS_STATE state, BYTE *ncb, BYTE *buffer)
         {
             state->PostOffset = (WORD)(ncb[NETB_NCB_POST_OFFSET] | (ncb[NETB_NCB_POST_OFFSET + NETB_HIGH_BYTE] << BYTE_SHIFT));
             state->PostSegment = (WORD)(ncb[NETB_NCB_POST_SEGMENT] | (ncb[NETB_NCB_POST_SEGMENT + NETB_HIGH_BYTE] << BYTE_SHIFT));
-            if (state->IsPostPending) ++state->PostsOwed;   /* the previous one was never run */
+            if (state->IsPostPending)
+                ++state->PostsOwed;                         /* the previous one was never run */
             state->IsPostPending = TRUE;
         }
         /* the immediate code: accepted. A command refused outright (invalid
@@ -104,6 +108,7 @@ static VOID VddNetBiosInt5C(PVOID context, PNTVDD_REGISTERS registers)
     BYTE *ncb = (BYTE *)VddMapFlat(state->Bus, registers->Es, VddGetBx(registers));
     BYTE *buffer = NULL;
     WORD bufferOffset, bufferSegment;
+
     if (!ncb)
     {
         VddSetAl(registers, NETB_RC_INVALID_BUFFER);
@@ -111,7 +116,8 @@ static VOID VddNetBiosInt5C(PVOID context, PNTVDD_REGISTERS registers)
     }
     bufferOffset = (WORD)(ncb[NETB_NCB_BUFFER_OFFSET] | (ncb[NETB_NCB_BUFFER_OFFSET + NETB_HIGH_BYTE] << BYTE_SHIFT));
     bufferSegment = (WORD)(ncb[NETB_NCB_BUFFER_SEGMENT] | (ncb[NETB_NCB_BUFFER_SEGMENT + NETB_HIGH_BYTE] << BYTE_SHIFT));
-    if (bufferOffset | bufferSegment) buffer = (BYTE *)VddMapFlat(state->Bus, bufferSegment, bufferOffset);
+    if (bufferOffset | bufferSegment)
+        buffer = (BYTE *)VddMapFlat(state->Bus, bufferSegment, bufferOffset);
     VddSetAl(registers, VddNetBiosService(state, ncb, buffer));
 }
 
@@ -126,18 +132,22 @@ static VOID VddNetBiosInt5C(PVOID context, PNTVDD_REGISTERS registers)
 static VOID VddNetBiosInt2A(PVOID context, PNTVDD_REGISTERS registers)
 {
     PNETBIOS_STATE state = (PNETBIOS_STATE)context;
+
     switch (VddGetAh(registers))
     {
     case NETB_2A_INSTALLATION_CHECK:
         VddSetAh(registers, state->Submit ? NETB_2A_INSTALLED : NETB_2A_NOT_INSTALLED);
         break;
-    case NETB_2A_EXECUTE_RETRY: case NETB_2A_EXECUTE:
+
+    case NETB_2A_EXECUTE_RETRY:
+    case NETB_2A_EXECUTE:
     {
         BYTE returnCode;
         VddNetBiosInt5C(context, registers);
         returnCode = VddGetAl(registers);
         VddSetAh(registers, returnCode ? NETB_2A_ERROR : NETB_2A_SUCCESS);
         break; }
+
     default:
         break;
     }
@@ -146,8 +156,10 @@ static VOID VddNetBiosInt2A(PVOID context, PNTVDD_REGISTERS registers)
 INT VddNetBiosInitialize(PVDD_BUS bus, PVOID context)
 {
     PNETBIOS_STATE state = (PNETBIOS_STATE)context;
+
     state->Bus = bus;
-    if (VddClaimInterrupt(bus, VECTOR_NETBIOS, VddNetBiosInt5C, state) != NETB_OK) return NETB_FAILED;
+    if (VddClaimInterrupt(bus, VECTOR_NETBIOS, VddNetBiosInt5C, state) != NETB_OK)
+        return NETB_FAILED;
     return VddClaimInterrupt(bus, VECTOR_NETWORK, VddNetBiosInt2A, state) != NETB_OK ? NETB_FAILED : NETB_OK;
 }
 
@@ -156,7 +168,10 @@ VOID VddNetBiosReset(PVOID context)
     (VOID)context;
 }
 
-VOID VddNetBiosSetBackend(PNETBIOS_STATE state, PNETBIOS_SUBMIT_ROUTINE submitRoutine, PVOID context)
+VOID VddNetBiosSetBackend(
+    PNETBIOS_STATE state,
+    PNETBIOS_SUBMIT_ROUTINE submitRoutine,
+    PVOID context)
 {
     state->Submit = submitRoutine;
     state->SubmitContext = context;

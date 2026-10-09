@@ -46,12 +46,14 @@ static VOID SbTestIrqSink(PVOID context, BYTE irq)
 static VOID SbTestWrite(WORD port, BYTE byteValue)
 {
     UINT32 value = byteValue;
+
     VddBusIo(&g_Bus, port, 1, 0, &value);
 }
 
 static BYTE SbTestRead(WORD port)
 {
     UINT32 value = 0;
+
     VddBusIo(&g_Bus, port, 1, 1, &value);
     return (BYTE)value;
 }
@@ -63,7 +65,8 @@ static INT SbTestDspReset(VOID)
 {
     SbTestWrite(BASE + 0x6, 1);
     SbTestWrite(BASE + 0x6, 0);
-    if (!(SbTestRead(BASE + 0xE) & 0x80)) return 0;     /* no byte waiting -> no card */
+    if (!(SbTestRead(BASE + 0xE) & 0x80))
+        return 0;                                       /* no byte waiting -> no card */
     return SbTestRead(BASE + 0xA) == 0xAA;
 }
 
@@ -74,14 +77,23 @@ static INT SbTestDspReset(VOID)
 static VOID SbTestDmaProgram(UINT32 physical, WORD length, INT isAutoInit)
 {
     UINT32 value;
-    value = 0;                 VddBusIo(&g_Bus, 0x0C, 1, 0, &value);   /* clear flip-flop */
-    value = physical & 0xFF;       VddBusIo(&g_Bus, 0x02, 1, 0, &value);
-    value = (physical >> 8) & 0xFF;VddBusIo(&g_Bus, 0x02, 1, 0, &value);
-    value = (length - 1) & 0xFF;  VddBusIo(&g_Bus, 0x03, 1, 0, &value);
-    value = ((length - 1) >> 8) & 0xFF; VddBusIo(&g_Bus, 0x03, 1, 0, &value);
-    value = (physical >> 16) & 0xFF; VddBusIo(&g_Bus, 0x83, 1, 0, &value);
-    value = (UINT32)(0x48 | 0x01 | (isAutoInit ? 0x10 : 0)); VddBusIo(&g_Bus, 0x0B, 1, 0, &value);
-    value = 0x01;              VddBusIo(&g_Bus, 0x0A, 1, 0, &value);   /* unmask channel 1 */
+
+    value = 0;
+    VddBusIo(&g_Bus, 0x0C, 1, 0, &value);   /* clear flip-flop */
+    value = physical & 0xFF;
+    VddBusIo(&g_Bus, 0x02, 1, 0, &value);
+    value = (physical >> 8) & 0xFF;
+    VddBusIo(&g_Bus, 0x02, 1, 0, &value);
+    value = (length - 1) & 0xFF;
+    VddBusIo(&g_Bus, 0x03, 1, 0, &value);
+    value = ((length - 1) >> 8) & 0xFF;
+    VddBusIo(&g_Bus, 0x03, 1, 0, &value);
+    value = (physical >> 16) & 0xFF;
+    VddBusIo(&g_Bus, 0x83, 1, 0, &value);
+    value = (UINT32)(0x48 | 0x01 | (isAutoInit ? 0x10 : 0));
+    VddBusIo(&g_Bus, 0x0B, 1, 0, &value);
+    value = 0x01;
+    VddBusIo(&g_Bus, 0x0A, 1, 0, &value);   /* unmask channel 1 */
 }
 
 INT main(VOID)
@@ -105,7 +117,9 @@ INT main(VOID)
         NTVDD_DEVICE device = VddOplDevice(&g_Opl);
         CHECK(VddBusAdd(&g_Bus, &device) == 0, "add: opl ok");
     }
-    g_Sb.Dma = &g_Dma; g_Sb.Opl = &g_Opl; g_Sb.BasePort = BASE;
+    g_Sb.Dma = &g_Dma;
+    g_Sb.Opl = &g_Opl;
+    g_Sb.BasePort = BASE;
     {
         NTVDD_DEVICE device = VddSbDevice(&g_Sb);
         CHECK(VddBusAdd(&g_Bus, &device) == 0, "add: sb16 ok");
@@ -124,20 +138,27 @@ INT main(VOID)
       CHECK(major == 4 && minor == 5, "version: reports 4.05 (Sound Blaster 16)"); }
 
     /* T3: identify command complements its argument ------------------------ */
-    SbTestWrite(BASE + 0xC, 0xE0); SbTestWrite(BASE + 0xC, 0x5A);
+    SbTestWrite(BASE + 0xC, 0xE0);
+    SbTestWrite(BASE + 0xC, 0x5A);
     CHECK(SbTestRead(BASE + 0xA) == (BYTE)~0x5A, "identify: returns the complement");
 
     /* T4: sample rate, both ways ------------------------------------------- */
-    SbTestWrite(BASE + 0xC, 0x40); SbTestWrite(BASE + 0xC, 165);          /* time constant */
+    SbTestWrite(BASE + 0xC, 0x40);
+    SbTestWrite(BASE + 0xC, 165);          /* time constant */
     CHECK(g_Sb.RateHz > 10000 && g_Sb.RateHz < 12000, "rate: time constant 165 -> ~11 kHz");
-    SbTestWrite(BASE + 0xC, 0x41); SbTestWrite(BASE + 0xC, 0x56); SbTestWrite(BASE + 0xC, 0x22);  /* 22050 = 0x5622 BE */
+    SbTestWrite(BASE + 0xC, 0x41);
+    SbTestWrite(BASE + 0xC, 0x56);
+    SbTestWrite(BASE + 0xC, 0x22);  /* 22050 = 0x5622 BE */
     CHECK(g_Sb.RateHz == 22050, "rate: command 0x41 is big-endian -> 22050 Hz");
 
     /* T5: single-cycle 8-bit DMA playback ---------------------------------- */
-    for (index = 0; index < 256; ++index) g_GuestMemory[0x30000 + index] = (BYTE)index;   /* ramp */
+    for (index = 0; index < 256; ++index)
+        g_GuestMemory[0x30000 + index] = (BYTE)index;                                     /* ramp */
     SbTestDmaProgram(0x30000, 256, 0);
     g_IrqCount = 0;
-    SbTestWrite(BASE + 0xC, 0x14); SbTestWrite(BASE + 0xC, 0xFF); SbTestWrite(BASE + 0xC, 0x00);  /* 256 bytes */
+    SbTestWrite(BASE + 0xC, 0x14);
+    SbTestWrite(BASE + 0xC, 0xFF);
+    SbTestWrite(BASE + 0xC, 0x00);  /* 256 bytes */
     CHECK(VddSbIsActive(&g_Sb), "single-cycle: transfer is running");
 
     VddSbRender(&g_Sb, pcm, 128);
@@ -163,10 +184,13 @@ INT main(VOID)
     CHECK(!g_Sb.IsIrqPending, "irq: reading 2xE acknowledges it");
 
     /* T7: auto-init keeps streaming and IRQs per block ---------------------- */
-    for (index = 0; index < 64; ++index) g_GuestMemory[0x31000 + index] = 0x80;
+    for (index = 0; index < 64; ++index)
+        g_GuestMemory[0x31000 + index] = 0x80;
     SbTestDmaProgram(0x31000, 64, 1);
     g_IrqCount = 0;
-    SbTestWrite(BASE + 0xC, 0x48); SbTestWrite(BASE + 0xC, 0x3F); SbTestWrite(BASE + 0xC, 0x00);  /* block=64 */
+    SbTestWrite(BASE + 0xC, 0x48);
+    SbTestWrite(BASE + 0xC, 0x3F);
+    SbTestWrite(BASE + 0xC, 0x00);  /* block=64 */
     SbTestWrite(BASE + 0xC, 0x1C);                                              /* auto-init */
     CHECK(VddSbIsActive(&g_Sb), "auto-init: transfer is running");
     VddSbRender(&g_Sb, pcm, 64);
@@ -192,8 +216,10 @@ INT main(VOID)
     SbTestDmaProgram(0x32000, 64, 0);
     g_Sb.Dma16 = 1;                                       /* point 16-bit at ch 1 */
     g_IrqCount = 0;
-    SbTestWrite(BASE + 0xC, 0xB0); SbTestWrite(BASE + 0xC, 0x10);         /* 16-bit, signed, mono */
-    SbTestWrite(BASE + 0xC, 0x1F); SbTestWrite(BASE + 0xC, 0x00);         /* 32 samples */
+    SbTestWrite(BASE + 0xC, 0xB0);
+    SbTestWrite(BASE + 0xC, 0x10);         /* 16-bit, signed, mono */
+    SbTestWrite(BASE + 0xC, 0x1F);
+    SbTestWrite(BASE + 0xC, 0x00);         /* 32 samples */
     VddSbRender(&g_Sb, pcm, 32);
     CHECK(pcm[0] == 16384, "16-bit: signed little-endian sample decoded");
     CHECK(g_IrqCount == 1, "16-bit: IRQ at end of block");
@@ -207,18 +233,22 @@ INT main(VOID)
     SbTestWrite(BASE + 0x8, 0x02);                               /* OPL timer-1 preset */
     SbTestWrite(BASE + 0x9, 0xFF);
     CHECK(g_Opl.Timer1Preset == 0xFF, "FM mirror: 2x8/2x9 writes reach the OPL");
-    SbTestWrite(BASE + 0x8, 0x04); SbTestWrite(BASE + 0x9, 0x01);         /* start timer 1 */
+    SbTestWrite(BASE + 0x8, 0x04);
+    SbTestWrite(BASE + 0x9, 0x01);         /* start timer 1 */
     VddOplAddMicroseconds(&g_Opl, 80);
     CHECK((SbTestRead(BASE + 0x8) & OPL_STATUS_TIMER1) != 0, "FM mirror: OPL status readable at 2x8");
 
     /* T11b: 2x2/2x3 -- array 1 on an OPL3, another array-0 mirror on an OPL2 (#232) */
-    SbTestWrite(BASE + 0x2, 0xA5); SbTestWrite(BASE + 0x3, 0x5A);         /* OPL2 fitted (opl3 = 0) */
+    SbTestWrite(BASE + 0x2, 0xA5);
+    SbTestWrite(BASE + 0x3, 0x5A);         /* OPL2 fitted (opl3 = 0) */
     CHECK(g_Opl.Registers[0xA5] == 0x5A && g_Opl.Registers[0x1A5] == 0, "FM mirror, OPL2: 2x2/2x3 write array 0");
     CHECK(SbTestRead(BASE + 0x2) == 0xFF, "FM mirror, OPL2: 2x2 reads 0xFF");
     g_Opl.IsOpl3 = 1;
-    SbTestWrite(BASE + 0x2, 0xA6); SbTestWrite(BASE + 0x3, 0x77);
+    SbTestWrite(BASE + 0x2, 0xA6);
+    SbTestWrite(BASE + 0x3, 0x77);
     CHECK(g_Opl.Registers[0x1A6] == 0x77 && g_Opl.Registers[0xA6] == 0, "FM mirror, OPL3: 2x2/2x3 write ARRAY 1 (0x1A6)");
-    SbTestWrite(BASE + 0x0, 0xA7); SbTestWrite(BASE + 0x1, 0x33);
+    SbTestWrite(BASE + 0x0, 0xA7);
+    SbTestWrite(BASE + 0x1, 0x33);
     CHECK(g_Opl.Registers[0xA7] == 0x33 && g_Opl.Registers[0x1A7] == 0, "FM mirror, OPL3: 2x0/2x1 stay array 0");
     CHECK((SbTestRead(BASE + 0x0) & 0x06) == 0 && (SbTestRead(BASE + 0x2) & 0xE0) == (SbTestRead(BASE + 0x0) & 0xE0),
           "FM mirror, OPL3: status at 2x0 and 2x2, ID bits clear");
@@ -236,15 +266,19 @@ INT main(VOID)
      */
     {   extern BYTE g_SbVersionMajor, g_SbVersionMinor;
         BYTE oldMajor = g_SbVersionMajor, oldMinor = g_SbVersionMinor, major, minor;
-        g_SbVersionMajor = 3; g_SbVersionMinor = 2;
+        g_SbVersionMajor = 3;
+        g_SbVersionMinor = 2;
         g_Sb.Model = SB_MODEL_SBPRO;
         SbTestDspReset();
         SbTestWrite(BASE + 0xC, 0xC6);                   /* SB16 8-bit auto-init: not on an SB Pro */
         SbTestWrite(BASE + 0xC, 0xE1);                   /* ...so this is read as a command */
-        major = SbTestRead(BASE + 0xA); minor = SbTestRead(BASE + 0xA);
+        major = SbTestRead(BASE + 0xA);
+        minor = SbTestRead(BASE + 0xA);
         CHECK(major == 3 && minor == 2, "SB Pro: C6h is ignored with no arguments; E1h answers 3.02");
         CHECK(g_Sb.TransferMode == SB_TRANSFER_IDLE, "SB Pro: ...and no transfer started");
-        g_Sb.Model = SB_MODEL_SB16; g_SbVersionMajor = oldMajor; g_SbVersionMinor = oldMinor;
+        g_Sb.Model = SB_MODEL_SB16;
+        g_SbVersionMajor = oldMajor;
+        g_SbVersionMinor = oldMinor;
         SbTestDspReset(); }
 
     /* T13: #176 -- NO DACK, NO SAMPLE, AND NO END OF BLOCK:
@@ -256,10 +290,13 @@ INT main(VOID)
      * dropped to IDLE so re-enabling resumed nothing.
      */
     {   UINT32 noDackBefore, status;
-        for (index = 0; index < 64; ++index) g_GuestMemory[0x33000 + index] = (BYTE)index;
+        for (index = 0; index < 64; ++index)
+            g_GuestMemory[0x33000 + index] = (BYTE)index;
         SbTestDmaProgram(0x33000, 64, 1);
         g_IrqCount = 0;
-        SbTestWrite(BASE + 0xC, 0x48); SbTestWrite(BASE + 0xC, 0x1F); SbTestWrite(BASE + 0xC, 0x00);  /* block=32 */
+        SbTestWrite(BASE + 0xC, 0x48);
+        SbTestWrite(BASE + 0xC, 0x1F);
+        SbTestWrite(BASE + 0xC, 0x00);  /* block=32 */
         SbTestWrite(BASE + 0xC, 0x1C);                                              /* auto-init */
         VddSbRender(&g_Sb, pcm, 8);
         CHECK(pcm[0] == (INT16)(-128 * 256) && pcm[7] == (INT16)((7 - 128) * 256),

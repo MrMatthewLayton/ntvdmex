@@ -40,7 +40,8 @@ static BYTE V86HostRead8(DWORD linear)
 
 static VOID V86HostWrite8(DWORD linear, BYTE value)
 {
-    if (linear < sizeof g_Memory) g_Memory[linear] = value;
+    if (linear < sizeof g_Memory)
+        g_Memory[linear] = value;
 }
 
 static DWORD V86HostIn(WORD port, INT width)
@@ -157,6 +158,7 @@ static INT AuxPrnTestRunEntry(PV86_CPU cpu, UINT entry, WORD callerFlags)
     DWORD stackTop = ((DWORD)AUXPRN_TEST_STACK_SEGMENT << PARAGRAPH_SHIFT)
                      + AUXPRN_TEST_STACK_TOP;
     INT steps = 0;
+
     g_CallCount = 0;
     /* the INT 21h frame the stub leaves on the stack: IP, CS, FLAGS */
     cpu->Segments[AUXPRN_TEST_SS] = AUXPRN_TEST_STACK_SEGMENT;
@@ -167,11 +169,14 @@ static INT AuxPrnTestRunEntry(PV86_CPU cpu, UINT entry, WORD callerFlags)
     g_Memory[stackTop - AUXPRN_TEST_FRAME_CS_HIGH] = HIBYTE(AUXPRN_TEST_RETURN_SEGMENT);
     g_Memory[stackTop - AUXPRN_TEST_FRAME_FLAGS] = LOBYTE(callerFlags);
     g_Memory[stackTop - AUXPRN_TEST_FRAME_FLAGS_HIGH] = HIBYTE(callerFlags);
-    cpu->Segments[AUXPRN_TEST_CS] = DOS_CTAB_SEG; cpu->Ip = (WORD)(DOS_AUXPRN_OFF + entry);
+    cpu->Segments[AUXPRN_TEST_CS] = DOS_CTAB_SEG;
+    cpu->Ip = (WORD)(DOS_AUXPRN_OFF + entry);
     for (;;)
     {
-        if (++steps > AUXPRN_TEST_STEP_LIMIT) return AUXPRN_TEST_RAN_AWAY;
-        if (V86Step(cpu)) continue;
+        if (++steps > AUXPRN_TEST_STEP_LIMIT)
+            return AUXPRN_TEST_RAN_AWAY;
+        if (V86Step(cpu))
+            continue;
         if (cpu->Segments[AUXPRN_TEST_CS] == AUXPRN_TEST_RETURN_SEGMENT && cpu->Ip == AUXPRN_TEST_HLT_IP)
             return AUXPRN_TEST_RETURNED;                                    /* back home */
         if ((cpu->Segments[AUXPRN_TEST_CS] == AUXPRN_TEST_INT17_SEGMENT
@@ -183,8 +188,10 @@ static INT AuxPrnTestRunEntry(PV86_CPU cpu, UINT entry, WORD callerFlags)
             WORD ax = (WORD)cpu->Registers[AUXPRN_TEST_AX], ah = ax >> AUXPRN_TEST_AH_SHIFT;
             if (g_CallCount < AUXPRN_TEST_MAX_CALLS)
             {
-                g_Calls[g_CallCount].Vector = vector; g_Calls[g_CallCount].Ax = ax;
-                g_Calls[g_CallCount].Dx = (WORD)cpu->Registers[AUXPRN_TEST_DX]; ++g_CallCount;
+                g_Calls[g_CallCount].Vector = vector;
+                g_Calls[g_CallCount].Ax = ax;
+                g_Calls[g_CallCount].Dx = (WORD)cpu->Registers[AUXPRN_TEST_DX];
+                ++g_CallCount;
             }
             if (vector == AUXPRN_TEST_INT17)
                 ax = (WORD)(AUXPRN_TEST_PRINTER_STATUS | (ax & AUXPRN_TEST_LOW_BYTE));
@@ -192,7 +199,8 @@ static INT AuxPrnTestRunEntry(PV86_CPU cpu, UINT entry, WORD callerFlags)
                 ax = (WORD)(AUXPRN_TEST_SEND_STATUS | (ax & AUXPRN_TEST_LOW_BYTE));
             else if (ah == AUXPRN_TEST_SERIAL_RECEIVE)
                 ax = (WORD)(g_ReceiveScript[g_ReceiveIndex++] & AUXPRN_TEST_LOW_BYTE);
-            else if (ah == AUXPRN_TEST_SERIAL_STATUS) ax = AUXPRN_TEST_LINE_STATUS;
+            else if (ah == AUXPRN_TEST_SERIAL_STATUS)
+                ax = AUXPRN_TEST_LINE_STATUS;
             cpu->Registers[AUXPRN_TEST_AX] = (cpu->Registers[AUXPRN_TEST_AX] & AUXPRN_TEST_HIGH_WORD) | ax;
             cpu->Ip = AUXPRN_TEST_IRET_IP;                                  /* the IRET */
             continue;
@@ -208,7 +216,9 @@ static DWORD AuxPrnTestLinear(WORD segment, WORD offset)
 
 static V86_CPU AuxPrnTestSetup(VOID)
 {
-    V86_CPU cpu; memset(&cpu, 0, sizeof cpu);
+    V86_CPU cpu;
+
+    memset(&cpu, 0, sizeof cpu);
     memset(g_Memory, 0, sizeof g_Memory);
     memcpy(g_Memory + AuxPrnTestLinear(DOS_CTAB_SEG, DOS_AUXPRN_OFF), g_DosAuxPrnCode,
            sizeof g_DosAuxPrnCode);
@@ -226,11 +236,14 @@ static V86_CPU AuxPrnTestSetup(VOID)
     g_Memory[AUXPRN_TEST_INT14 * AUXPRN_TEST_VECTOR_SIZE + AUXPRN_TEST_VECTOR_SEGMENT_HIGH] =
         HIBYTE(AUXPRN_TEST_INT14_SEGMENT);
     cpu.Flags = AUXPRN_TEST_INITIAL_FLAGS;
-    cpu.Registers[AUXPRN_TEST_BX] = AUXPRN_TEST_POISON_BX; cpu.Registers[AUXPRN_TEST_CX] = AUXPRN_TEST_POISON_CX;
-    cpu.Registers[AUXPRN_TEST_SI] = AUXPRN_TEST_POISON_SI; cpu.Registers[AUXPRN_TEST_BP] = AUXPRN_TEST_POISON_BP;
+    cpu.Registers[AUXPRN_TEST_BX] = AUXPRN_TEST_POISON_BX;
+    cpu.Registers[AUXPRN_TEST_CX] = AUXPRN_TEST_POISON_CX;
+    cpu.Registers[AUXPRN_TEST_SI] = AUXPRN_TEST_POISON_SI;
+    cpu.Registers[AUXPRN_TEST_BP] = AUXPRN_TEST_POISON_BP;
     cpu.Segments[AUXPRN_TEST_DS] = AUXPRN_TEST_DATA_SEGMENT;
     cpu.Segments[AUXPRN_TEST_ES] = AUXPRN_TEST_POISON_ES;
-    g_ReceiveScript = AUXPRN_TEST_RECEIVE_SCRIPT; g_ReceiveIndex = 0;
+    g_ReceiveScript = AUXPRN_TEST_RECEIVE_SCRIPT;
+    g_ReceiveIndex = 0;
     return cpu;
 }
 
@@ -262,13 +275,15 @@ INT main(VOID)
 {
     V86_CPU cpu;
     DWORD dataBase = (DWORD)AUXPRN_TEST_DATA_SEGMENT << PARAGRAPH_SHIFT;
+
     printf("== auxprn_test: DOS AUX/PRN driver code (#251)\n");
     AUXPRN_TEST_CHECK(sizeof g_DosAuxPrnCode <= DOS_AUXPRN_LEN, "fits its reservation");
     AUXPRN_TEST_CHECK(DOS_AUXPRN_OFF >= DOS_SYSCONF_OFF + AUXPRN_TEST_SYSCONF_SIZE
                       && DOS_AUXPRN_OFF + DOS_AUXPRN_LEN <= AUXPRN_TEST_BLOCK_END,
                       "between the C0h table and the block's end");
 
-    cpu = AuxPrnTestSetup(); cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_05H;
+    cpu = AuxPrnTestSetup();
+    cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_05H;
     cpu.Registers[AUXPRN_TEST_DX] = AUXPRN_TEST_DX_CHAR_P;
     AUXPRN_TEST_CHECK(AuxPrnTestRunEntry(&cpu, DOS_AUXPRN_PRN_OUTPUT, AUXPRN_TEST_FLAGS_CF_SET)
                       == AUXPRN_TEST_RETURNED, "05h: returns to the caller");
@@ -286,7 +301,8 @@ INT main(VOID)
     AUXPRN_TEST_CHECK(cpu.Flags & EFLAGS_CF_U,
                       "05h: the caller's flags come back as they were (CF set in)");
 
-    cpu = AuxPrnTestSetup(); cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_04H;
+    cpu = AuxPrnTestSetup();
+    cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_04H;
     cpu.Registers[AUXPRN_TEST_DX] = AUXPRN_TEST_DX_CHAR_A;
     AUXPRN_TEST_CHECK(AuxPrnTestRunEntry(&cpu, DOS_AUXPRN_AUX_OUTPUT, AUXPRN_TEST_FLAGS_CF_CLEAR)
                       == AUXPRN_TEST_RETURNED, "04h: returns");
@@ -297,7 +313,8 @@ INT main(VOID)
                       && (WORD)cpu.Registers[AUXPRN_TEST_DX] == AUXPRN_TEST_DX_CHAR_A,
                       "04h: AX = 04:char, DX kept");
 
-    cpu = AuxPrnTestSetup(); cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_03H;
+    cpu = AuxPrnTestSetup();
+    cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_03H;
     cpu.Registers[AUXPRN_TEST_DX] = AUXPRN_TEST_DX_POISON;
     AUXPRN_TEST_CHECK(AuxPrnTestRunEntry(&cpu, DOS_AUXPRN_AUX_INPUT, AUXPRN_TEST_FLAGS_CF_CLEAR)
                       == AUXPRN_TEST_RETURNED, "03h: returns");
@@ -308,8 +325,10 @@ INT main(VOID)
                       && (WORD)cpu.Registers[AUXPRN_TEST_DX] == AUXPRN_TEST_DX_POISON,
                       "03h: AX = 03:'Q', DX kept");
 
-    cpu = AuxPrnTestSetup(); cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_40H;
-    cpu.Registers[AUXPRN_TEST_BX] = AUXPRN_TEST_HANDLE_PRN; cpu.Registers[AUXPRN_TEST_CX] = 2;
+    cpu = AuxPrnTestSetup();
+    cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_40H;
+    cpu.Registers[AUXPRN_TEST_BX] = AUXPRN_TEST_HANDLE_PRN;
+    cpu.Registers[AUXPRN_TEST_CX] = 2;
     cpu.Registers[AUXPRN_TEST_DX] = AUXPRN_TEST_BUFFER;
     g_Memory[dataBase + AUXPRN_TEST_BUFFER] = 'P';
     g_Memory[dataBase + AUXPRN_TEST_BUFFER + 1] = 'Q';
@@ -327,16 +346,20 @@ INT main(VOID)
                       && (WORD)cpu.Registers[AUXPRN_TEST_SI] == AUXPRN_TEST_POISON_SI,
                       "40h h4: CX DX SI unchanged");
 
-    cpu = AuxPrnTestSetup(); cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_40H;
-    cpu.Registers[AUXPRN_TEST_BX] = AUXPRN_TEST_HANDLE_AUX; cpu.Registers[AUXPRN_TEST_CX] = 0;
+    cpu = AuxPrnTestSetup();
+    cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_40H;
+    cpu.Registers[AUXPRN_TEST_BX] = AUXPRN_TEST_HANDLE_AUX;
+    cpu.Registers[AUXPRN_TEST_CX] = 0;
     cpu.Registers[AUXPRN_TEST_DX] = AUXPRN_TEST_BUFFER;
     AUXPRN_TEST_CHECK(AuxPrnTestRunEntry(&cpu, DOS_AUXPRN_PRN_WRITE, AUXPRN_TEST_FLAGS_CF_SET)
                       == AUXPRN_TEST_RETURNED && g_CallCount == 0
                       && (WORD)cpu.Registers[AUXPRN_TEST_AX] == 0 && !(cpu.Flags & EFLAGS_CF_U),
                       "40h h4: CX=0 writes nothing, AX=0");
 
-    cpu = AuxPrnTestSetup(); cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_40H;
-    cpu.Registers[AUXPRN_TEST_BX] = AUXPRN_TEST_HANDLE_AUX; cpu.Registers[AUXPRN_TEST_CX] = 2;
+    cpu = AuxPrnTestSetup();
+    cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_40H;
+    cpu.Registers[AUXPRN_TEST_BX] = AUXPRN_TEST_HANDLE_AUX;
+    cpu.Registers[AUXPRN_TEST_CX] = 2;
     cpu.Registers[AUXPRN_TEST_DX] = AUXPRN_TEST_BUFFER;
     g_Memory[dataBase + AUXPRN_TEST_BUFFER] = 'A';
     g_Memory[dataBase + AUXPRN_TEST_BUFFER + 1] = 'B';
@@ -348,9 +371,12 @@ INT main(VOID)
     AUXPRN_TEST_CHECK((WORD)cpu.Registers[AUXPRN_TEST_AX] == 2 && !(cpu.Flags & EFLAGS_CF_U),
                       "40h h3: AX=2, CF cleared");
 
-    cpu = AuxPrnTestSetup(); cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_3FH;
-    cpu.Registers[AUXPRN_TEST_BX] = AUXPRN_TEST_HANDLE_AUX; cpu.Registers[AUXPRN_TEST_CX] = 6;
-    cpu.Registers[AUXPRN_TEST_DX] = AUXPRN_TEST_READ_BUFFER; g_ReceiveIndex = 1;
+    cpu = AuxPrnTestSetup();
+    cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_3FH;
+    cpu.Registers[AUXPRN_TEST_BX] = AUXPRN_TEST_HANDLE_AUX;
+    cpu.Registers[AUXPRN_TEST_CX] = 6;
+    cpu.Registers[AUXPRN_TEST_DX] = AUXPRN_TEST_READ_BUFFER;
+    g_ReceiveIndex = 1;
     memset(g_Memory + dataBase + AUXPRN_TEST_READ_BUFFER, AUXPRN_TEST_BUFFER_POISON,
            AUXPRN_TEST_READ_BUFFER_SIZE);
     AUXPRN_TEST_CHECK(AuxPrnTestRunEntry(&cpu, DOS_AUXPRN_AUX_READ, AUXPRN_TEST_FLAGS_CF_SET)
@@ -370,9 +396,12 @@ INT main(VOID)
                       && (WORD)cpu.Registers[AUXPRN_TEST_DX] == AUXPRN_TEST_READ_BUFFER,
                       "3Fh h3: BX CX DX unchanged");
 
-    cpu = AuxPrnTestSetup(); cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_3FH;
-    cpu.Registers[AUXPRN_TEST_BX] = AUXPRN_TEST_HANDLE_AUX; cpu.Registers[AUXPRN_TEST_CX] = 3;
-    cpu.Registers[AUXPRN_TEST_DX] = AUXPRN_TEST_READ_BUFFER; g_ReceiveIndex = 3;
+    cpu = AuxPrnTestSetup();
+    cpu.Registers[AUXPRN_TEST_AX] = AUXPRN_TEST_AX_3FH;
+    cpu.Registers[AUXPRN_TEST_BX] = AUXPRN_TEST_HANDLE_AUX;
+    cpu.Registers[AUXPRN_TEST_CX] = 3;
+    cpu.Registers[AUXPRN_TEST_DX] = AUXPRN_TEST_READ_BUFFER;
+    g_ReceiveIndex = 3;
     AUXPRN_TEST_CHECK(AuxPrnTestRunEntry(&cpu, DOS_AUXPRN_AUX_READ, AUXPRN_TEST_FLAGS_CF_CLEAR)
                       == AUXPRN_TEST_RETURNED && g_CallCount == 3
                       && (WORD)cpu.Registers[AUXPRN_TEST_AX] == 3,

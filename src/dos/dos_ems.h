@@ -135,19 +135,24 @@ typedef const DOS_EMS_STATE *PCDOS_EMS_STATE;
 static inline VOID DosEmsClearHandleName(_Out_ PDOS_EMS_HANDLE handleEntry)
 {
     INT nameIndex;
+
     for (nameIndex = 0; nameIndex < DOS_EMS_HANDLE_NAME_SIZE; ++nameIndex)
         handleEntry->Name[nameIndex] = 0;
 }
 
 /* --- bring-up -------------------------------------------------------------- */
 
-static inline VOID DosEmsInitialize(_Out_ PDOS_EMS_STATE state, _In_ WORD frameSegment,
-                                    _In_ WORD totalPages,
-                                    _In_ volatile BYTE *frame,
-                                    _In_opt_ PDOS_EMS_ALLOCATE_ROUTINE allocate,
-                                    _In_opt_ PDOS_EMS_FREE_ROUTINE free, _In_opt_ PVOID context)
+static inline VOID DosEmsInitialize(
+    _Out_ PDOS_EMS_STATE state,
+    _In_ WORD frameSegment,
+    _In_ WORD totalPages,
+    _In_ volatile BYTE *frame,
+    _In_opt_ PDOS_EMS_ALLOCATE_ROUTINE allocate,
+    _In_opt_ PDOS_EMS_FREE_ROUTINE free,
+    _In_opt_ PVOID context)
 {
     INT handleIndex, windowIndex;
+
     state->FrameSegment = frameSegment;
     state->TotalPages = totalPages;
     state->UsedPages = 0;
@@ -166,13 +171,17 @@ static inline VOID DosEmsInitialize(_Out_ PDOS_EMS_STATE state, _In_ WORD frameS
         state->Handles[handleIndex].IsMapSaved = 0;
         DosEmsClearHandleName(&state->Handles[handleIndex]);
     }
-    state->Allocate = allocate; state->Free = free; state->Context = context;
+    state->Allocate = allocate;
+    state->Free = free;
+    state->Context = context;
 }
 
 static inline PDOS_EMS_HANDLE DosEmsGetHandle(_In_ PDOS_EMS_STATE state, _In_ WORD handle)
 {
-    if (handle >= DOS_EMS_MAX_HANDLES) return 0;
-    if (!state->Handles[handle].InUse) return 0;
+    if (handle >= DOS_EMS_MAX_HANDLES)
+        return 0;
+    if (!state->Handles[handle].InUse)
+        return 0;
     return &state->Handles[handle];
 }
 
@@ -182,6 +191,7 @@ static inline VOID DosEmsCopyPage(
     _In_reads_bytes_(DOS_EMS_PAGE_SIZE) volatile BYTE *source)
 {
     DWORD byteIndex;
+
     for (byteIndex = 0; byteIndex < DOS_EMS_PAGE_SIZE; ++byteIndex)
         destination[byteIndex] = source[byteIndex];
 }
@@ -190,7 +200,9 @@ static inline VOID DosEmsCopyPage(
 static inline VOID DosEmsWriteBackWindow(_Inout_ PDOS_EMS_STATE state, _In_ INT windowIndex)
 {
     PDOS_EMS_HANDLE handleEntry;
-    if (!state->PhysicalPages[windowIndex].IsMapped) return;
+
+    if (!state->PhysicalPages[windowIndex].IsMapped)
+        return;
     handleEntry = DosEmsGetHandle(state, state->PhysicalPages[windowIndex].Handle);
     if (handleEntry && handleEntry->Memory
         && state->PhysicalPages[windowIndex].LogicalPage < handleEntry->Pages)
@@ -201,46 +213,61 @@ static inline VOID DosEmsWriteBackWindow(_Inout_ PDOS_EMS_STATE state, _In_ INT 
 }
 
 /* --- fn 42h: page counts --------------------------------------------------- */
-static inline VOID DosEmsGetPageCounts(_In_ PCDOS_EMS_STATE state, _Out_opt_ PWORD freePages,
-                                       _Out_opt_ PWORD totalPages)
+static inline VOID DosEmsGetPageCounts(
+    _In_ PCDOS_EMS_STATE state,
+    _Out_opt_ PWORD freePages,
+    _Out_opt_ PWORD totalPages)
 {
-    if (totalPages) *totalPages = state->TotalPages;
-    if (freePages)  *freePages  = (WORD)(state->TotalPages - state->UsedPages);
+    if (totalPages)
+        *totalPages = state->TotalPages;
+    if (freePages)
+        *freePages  = (WORD)(state->TotalPages - state->UsedPages);
 }
 
 /* --- fn 43h: allocate `pages` logical pages, returns a handle ------------- *
  * EMS forbids a zero-page allocation here (fn 43h); fn 5Ah allows it.
  */
-static inline BOOL DosEmsAllocatePages(_Inout_ PDOS_EMS_STATE state, _In_ WORD pages,
-                                       _Out_opt_ PWORD newHandle, _Out_opt_ PBYTE errorCode)
+static inline BOOL DosEmsAllocatePages(
+    _Inout_ PDOS_EMS_STATE state,
+    _In_ WORD pages,
+    _Out_opt_ PWORD newHandle,
+    _Out_opt_ PBYTE errorCode)
 {
-    INT handleIndex; PVOID buffer = 0;
+    INT handleIndex;
+    PVOID buffer = 0;
+
     if (pages == 0)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_ZERO_PAGES;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_ZERO_PAGES;
         return FALSE;
     }
     if (pages > state->TotalPages)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_TOO_MANY_PAGES;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_TOO_MANY_PAGES;
         return FALSE;
     }
     if (state->UsedPages + pages > state->TotalPages)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_NOT_ENOUGH_PAGES;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_NOT_ENOUGH_PAGES;
         return FALSE;
     }
     for (handleIndex = 0; handleIndex < DOS_EMS_MAX_HANDLES; ++handleIndex)
-        if (!state->Handles[handleIndex].InUse) break;
+        if (!state->Handles[handleIndex].InUse)
+            break;
     if (handleIndex == DOS_EMS_MAX_HANDLES)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_NO_HANDLES;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_NO_HANDLES;
         return FALSE;
     }
     buffer = state->Allocate ? state->Allocate(state->Context, pages) : 0;
     if (!buffer)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_NOT_ENOUGH_PAGES;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_NOT_ENOUGH_PAGES;
         return FALSE;
     }
     state->Handles[handleIndex].InUse = 1;
@@ -249,40 +276,50 @@ static inline BOOL DosEmsAllocatePages(_Inout_ PDOS_EMS_STATE state, _In_ WORD p
     state->Handles[handleIndex].IsMapSaved = 0;
     DosEmsClearHandleName(&state->Handles[handleIndex]);
     state->UsedPages += pages;
-    if (newHandle) *newHandle = (WORD)handleIndex;
-    if (errorCode) *errorCode = DOS_EMS_STATUS_OK;
+    if (newHandle)
+        *newHandle = (WORD)handleIndex;
+    if (errorCode)
+        *errorCode = DOS_EMS_STATUS_OK;
     return TRUE;
 }
 
 /* --- fn 44h: map logical page `logicalPage` of `handle` into window `physicalPage` *
  * logicalPage == DOS_EMS_UNMAP_LOGICAL_PAGE (0xFFFF) unmaps the window (LIM 4.0).
  */
-static inline BOOL DosEmsMapPage(_Inout_ PDOS_EMS_STATE state, _In_ BYTE physicalPage,
-                                 _In_ WORD logicalPage, _In_ WORD handle,
-                                 _Out_opt_ PBYTE errorCode)
+static inline BOOL DosEmsMapPage(
+    _Inout_ PDOS_EMS_STATE state,
+    _In_ BYTE physicalPage,
+    _In_ WORD logicalPage,
+    _In_ WORD handle,
+    _Out_opt_ PBYTE errorCode)
 {
     PDOS_EMS_HANDLE handleEntry;
+
     if (physicalPage >= DOS_EMS_PHYSICAL_PAGES)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_INVALID_PHYSICAL_PAGE;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_INVALID_PHYSICAL_PAGE;
         return FALSE;
     }
     handleEntry = DosEmsGetHandle(state, handle);
     if (!handleEntry)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_INVALID_HANDLE;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_INVALID_HANDLE;
         return FALSE;
     }
     if (logicalPage == DOS_EMS_UNMAP_LOGICAL_PAGE)        /* unmap this window */
     {
         DosEmsWriteBackWindow(state, physicalPage);
         state->PhysicalPages[physicalPage].IsMapped = 0;
-        if (errorCode) *errorCode = DOS_EMS_STATUS_OK;
+        if (errorCode)
+            *errorCode = DOS_EMS_STATUS_OK;
         return TRUE;
     }
     if (logicalPage >= handleEntry->Pages)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_INVALID_LOGICAL_PAGE;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_INVALID_LOGICAL_PAGE;
         return FALSE;
     }
     DosEmsWriteBackWindow(state, physicalPage);           /* save the outgoing page */
@@ -292,19 +329,24 @@ static inline BOOL DosEmsMapPage(_Inout_ PDOS_EMS_STATE state, _In_ BYTE physica
     state->PhysicalPages[physicalPage].Handle = handle;
     state->PhysicalPages[physicalPage].LogicalPage = logicalPage;
     state->PhysicalPages[physicalPage].IsMapped = 1;
-    if (errorCode) *errorCode = DOS_EMS_STATUS_OK;
+    if (errorCode)
+        *errorCode = DOS_EMS_STATUS_OK;
     return TRUE;
 }
 
 /* --- fn 45h: deallocate a handle ------------------------------------------- */
-static inline BOOL DosEmsDeallocatePages(_Inout_ PDOS_EMS_STATE state, _In_ WORD handle,
-                                         _Out_opt_ PBYTE errorCode)
+static inline BOOL DosEmsDeallocatePages(
+    _Inout_ PDOS_EMS_STATE state,
+    _In_ WORD handle,
+    _Out_opt_ PBYTE errorCode)
 {
     PDOS_EMS_HANDLE handleEntry = DosEmsGetHandle(state, handle);
     INT windowIndex;
+
     if (!handleEntry)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_INVALID_HANDLE;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_INVALID_HANDLE;
         return FALSE;
     }
     /* drop any live windows */
@@ -315,24 +357,35 @@ static inline BOOL DosEmsDeallocatePages(_Inout_ PDOS_EMS_STATE state, _In_ WORD
     if (handleEntry->Memory && state->Free)
         state->Free(state->Context, handleEntry->Memory, handleEntry->Pages);
     state->UsedPages -= handleEntry->Pages;
-    handleEntry->InUse = 0; handleEntry->Pages = 0; handleEntry->Memory = 0;
-    handleEntry->IsMapSaved = 0; DosEmsClearHandleName(handleEntry);
-    if (errorCode) *errorCode = DOS_EMS_STATUS_OK;
+    handleEntry->InUse = 0;
+    handleEntry->Pages = 0;
+    handleEntry->Memory = 0;
+    handleEntry->IsMapSaved = 0;
+    DosEmsClearHandleName(handleEntry);
+    if (errorCode)
+        *errorCode = DOS_EMS_STATUS_OK;
     return TRUE;
 }
 
 /* --- fn 4Ch: pages owned by a handle --------------------------------------- */
-static inline BOOL DosEmsGetHandlePages(_In_ PDOS_EMS_STATE state, _In_ WORD handle,
-                                        _Out_opt_ PWORD pages, _Out_opt_ PBYTE errorCode)
+static inline BOOL DosEmsGetHandlePages(
+    _In_ PDOS_EMS_STATE state,
+    _In_ WORD handle,
+    _Out_opt_ PWORD pages,
+    _Out_opt_ PBYTE errorCode)
 {
     PDOS_EMS_HANDLE handleEntry = DosEmsGetHandle(state, handle);
+
     if (!handleEntry)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_INVALID_HANDLE;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_INVALID_HANDLE;
         return FALSE;
     }
-    if (pages) *pages = handleEntry->Pages;
-    if (errorCode) *errorCode = DOS_EMS_STATUS_OK;
+    if (pages)
+        *pages = handleEntry->Pages;
+    if (errorCode)
+        *errorCode = DOS_EMS_STATUS_OK;
     return TRUE;
 }
 
@@ -340,8 +393,10 @@ static inline BOOL DosEmsGetHandlePages(_In_ PDOS_EMS_STATE state, _In_ WORD han
 static inline INT DosEmsGetHandleCount(_In_ PCDOS_EMS_STATE state)
 {
     INT handleIndex, handleCount = 0;
+
     for (handleIndex = 0; handleIndex < DOS_EMS_MAX_HANDLES; ++handleIndex)
-        if (state->Handles[handleIndex].InUse) ++handleCount;
+        if (state->Handles[handleIndex].InUse)
+            ++handleCount;
     return handleCount;
 }
 
@@ -356,9 +411,11 @@ static inline INT DosEmsGetAllHandlePages(
     _Out_writes_bytes_opt_(DOS_EMS_MAX_HANDLES * DOS_EMS_HANDLE_PAGES_ENTRY_SIZE) PBYTE entries)
 {
     INT handleIndex, entryCount = 0;
+
     for (handleIndex = 0; handleIndex < DOS_EMS_MAX_HANDLES; ++handleIndex)
     {
-        if (!state->Handles[handleIndex].InUse) continue;
+        if (!state->Handles[handleIndex].InUse)
+            continue;
         if (entries)
         {
             entries[entryCount * DOS_EMS_HANDLE_PAGES_ENTRY_SIZE + DOS_EMS_ENTRY_HANDLE_LOW]
@@ -381,23 +438,30 @@ static inline INT DosEmsGetAllHandlePages(
  * while 53h answered 84h (undefined function) it listed all 256 (s81, #47).
  */
 static inline BOOL DosEmsGetSetHandleName(
-    _In_ PDOS_EMS_STATE state, _In_ WORD handle, _In_ BOOL isSetRequest,
+    _In_ PDOS_EMS_STATE state,
+    _In_ WORD handle,
+    _In_ BOOL isSetRequest,
     _Inout_updates_bytes_(DOS_EMS_HANDLE_NAME_SIZE) volatile BYTE *name,
     _Out_opt_ PBYTE errorCode)
 {
     PDOS_EMS_HANDLE handleEntry = DosEmsGetHandle(state, handle);
     INT nameIndex;
+
     if (!handleEntry)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_INVALID_HANDLE;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_INVALID_HANDLE;
         return FALSE;
     }
     for (nameIndex = 0; nameIndex < DOS_EMS_HANDLE_NAME_SIZE; ++nameIndex)
     {
-        if (isSetRequest) handleEntry->Name[nameIndex] = name[nameIndex];
-        else name[nameIndex] = handleEntry->Name[nameIndex];
+        if (isSetRequest)
+            handleEntry->Name[nameIndex] = name[nameIndex];
+        else
+            name[nameIndex] = handleEntry->Name[nameIndex];
     }
-    if (errorCode) *errorCode = DOS_EMS_STATUS_OK;
+    if (errorCode)
+        *errorCode = DOS_EMS_STATUS_OK;
     return TRUE;
 }
 
@@ -405,25 +469,34 @@ static inline BOOL DosEmsGetSetHandleName(
  * Preserves min(old,new) pages of content. Active mappings of pages that no
  * longer exist after a shrink are dropped.
  */
-static inline BOOL DosEmsReallocatePages(_Inout_ PDOS_EMS_STATE state, _In_ WORD handle,
-                                         _In_ WORD newPages, _Out_opt_ PBYTE errorCode)
+static inline BOOL DosEmsReallocatePages(
+    _Inout_ PDOS_EMS_STATE state,
+    _In_ WORD handle,
+    _In_ WORD newPages,
+    _Out_opt_ PBYTE errorCode)
 {
     PDOS_EMS_HANDLE handleEntry = DosEmsGetHandle(state, handle);
-    PVOID newBuffer = 0; DWORD bytesToKeep, byteIndex; INT windowIndex;
+    PVOID newBuffer = 0;
+    DWORD bytesToKeep, byteIndex;
+    INT windowIndex;
+
     if (!handleEntry)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_INVALID_HANDLE;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_INVALID_HANDLE;
         return FALSE;
     }
     if (newPages == handleEntry->Pages)
     {
-        if (errorCode) *errorCode = DOS_EMS_STATUS_OK;
+        if (errorCode)
+            *errorCode = DOS_EMS_STATUS_OK;
         return TRUE;
     }
     if (newPages > handleEntry->Pages &&
         state->UsedPages - handleEntry->Pages + newPages > state->TotalPages)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_NOT_ENOUGH_PAGES;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_NOT_ENOUGH_PAGES;
         return FALSE;
     }
     /* flush any of this handle's live windows so the backing buffer is current */
@@ -436,7 +509,8 @@ static inline BOOL DosEmsReallocatePages(_Inout_ PDOS_EMS_STATE state, _In_ WORD
         newBuffer = state->Allocate ? state->Allocate(state->Context, newPages) : 0;
         if (!newBuffer)
         {
-            if (errorCode) *errorCode = DOS_EMS_ERROR_NOT_ENOUGH_PAGES;
+            if (errorCode)
+                *errorCode = DOS_EMS_ERROR_NOT_ENOUGH_PAGES;
             return FALSE;
         }
         bytesToKeep = (newPages < handleEntry->Pages ? newPages : handleEntry->Pages)
@@ -453,25 +527,32 @@ static inline BOOL DosEmsReallocatePages(_Inout_ PDOS_EMS_STATE state, _In_ WORD
     if (handleEntry->Memory && state->Free)
         state->Free(state->Context, handleEntry->Memory, handleEntry->Pages);
     state->UsedPages = (WORD)(state->UsedPages - handleEntry->Pages + newPages);
-    handleEntry->Memory = newBuffer; handleEntry->Pages = newPages;
-    if (errorCode) *errorCode = DOS_EMS_STATUS_OK;
+    handleEntry->Memory = newBuffer;
+    handleEntry->Pages = newPages;
+    if (errorCode)
+        *errorCode = DOS_EMS_STATUS_OK;
     return TRUE;
 }
 
 /* --- fn 47h/48h: save / restore the page-map context for a handle ---------- */
-static inline BOOL DosEmsSavePageMap(_In_ PDOS_EMS_STATE state, _In_ WORD handle,
-                                     _Out_opt_ PBYTE errorCode)
+static inline BOOL DosEmsSavePageMap(
+    _In_ PDOS_EMS_STATE state,
+    _In_ WORD handle,
+    _Out_opt_ PBYTE errorCode)
 {
     PDOS_EMS_HANDLE handleEntry = DosEmsGetHandle(state, handle);
     INT windowIndex;
+
     if (!handleEntry)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_INVALID_HANDLE;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_INVALID_HANDLE;
         return FALSE;
     }
     if (handleEntry->IsMapSaved)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_MAP_ALREADY_SAVED;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_MAP_ALREADY_SAVED;
         return FALSE;
     }
     for (windowIndex = 0; windowIndex < DOS_EMS_PHYSICAL_PAGES; ++windowIndex)
@@ -482,23 +563,29 @@ static inline BOOL DosEmsSavePageMap(_In_ PDOS_EMS_STATE state, _In_ WORD handle
         handleEntry->SavedMap[windowIndex].IsMapped    = state->PhysicalPages[windowIndex].IsMapped;
     }
     handleEntry->IsMapSaved = 1;
-    if (errorCode) *errorCode = DOS_EMS_STATUS_OK;
+    if (errorCode)
+        *errorCode = DOS_EMS_STATUS_OK;
     return TRUE;
 }
 
-static inline BOOL DosEmsRestorePageMap(_Inout_ PDOS_EMS_STATE state, _In_ WORD handle,
-                                        _Out_opt_ PBYTE errorCode)
+static inline BOOL DosEmsRestorePageMap(
+    _Inout_ PDOS_EMS_STATE state,
+    _In_ WORD handle,
+    _Out_opt_ PBYTE errorCode)
 {
     PDOS_EMS_HANDLE handleEntry = DosEmsGetHandle(state, handle);
     INT windowIndex;
+
     if (!handleEntry)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_INVALID_HANDLE;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_INVALID_HANDLE;
         return FALSE;
     }
     if (!handleEntry->IsMapSaved)
     {
-        if (errorCode) *errorCode = DOS_EMS_ERROR_MAP_NOT_SAVED;
+        if (errorCode)
+            *errorCode = DOS_EMS_ERROR_MAP_NOT_SAVED;
         return FALSE;
     }
     for (windowIndex = 0; windowIndex < DOS_EMS_PHYSICAL_PAGES; ++windowIndex)
@@ -513,7 +600,8 @@ static inline BOOL DosEmsRestorePageMap(_Inout_ PDOS_EMS_STATE state, _In_ WORD 
         }
     }
     handleEntry->IsMapSaved = 0;
-    if (errorCode) *errorCode = DOS_EMS_STATUS_OK;
+    if (errorCode)
+        *errorCode = DOS_EMS_STATUS_OK;
     return TRUE;
 }
 

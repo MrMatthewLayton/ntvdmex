@@ -240,7 +240,14 @@ typedef struct _WOWMSG_QUIT
 #define WOWMSG_MENUREPLAY   0xBF7Eu
 
 /* Defined in wowmsg.c (#335). */
-INT WowMsgPost(WORD window, WORD message, WORD wParam, DWORD lParam, DWORD time, WORD pointX, WORD pointY);
+INT WowMsgPost(
+    WORD window,
+    WORD message,
+    WORD wParam,
+    DWORD lParam,
+    DWORD time,
+    WORD pointX,
+    WORD pointY);
 extern DWORD g_WowMsgWaitMs;
 extern volatile LONG g_WowMsgInWait;
 extern INT g_WowMsgCount;
@@ -258,7 +265,14 @@ extern INT g_WowMsgIsReplayDue;
 extern WOWMSG g_WowMsgReplay;
 VOID WowMsgRead(const volatile BYTE *bytes, PWOWMSG message);
 VOID WowMsgWrite(volatile BYTE *bytes, PCWOWMSG message);
-INT WowMsgPostMove(WORD window, WORD message, WORD wParam, DWORD lParam, DWORD time, WORD pointX, WORD pointY);
+INT WowMsgPostMove(
+    WORD window,
+    WORD message,
+    WORD wParam,
+    DWORD lParam,
+    DWORD time,
+    WORD pointX,
+    WORD pointY);
 extern INT g_WowMsgIsWaitAnnounced;
 INT WowMsgCountFor(WORD task);
 #endif /* NTVDMEX_WOWMSG_H */

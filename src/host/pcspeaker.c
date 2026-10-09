@@ -36,9 +36,11 @@ VOID PcSpeakerSet(PPCSPEAKER speaker, DWORD hz)
 {
     if (hz)
     {
-        if (hz < PCSPEAKER_HZ_MIN || hz > PCSPEAKER_HZ_MAX) hz = 0;   /* refuse, don't alias */
+        if (hz < PCSPEAKER_HZ_MIN || hz > PCSPEAKER_HZ_MAX)
+            hz = 0;                                                   /* refuse, don't alias */
     }
-    if (hz == speaker->CurrentHz) return;
+    if (hz == speaker->CurrentHz)
+        return;
     if (!speaker->OpenState)
     {
         /* [CAUTION]: THERE IS NO `\\.\Beep`. MEASURED, session 53 (Importance = 1):
@@ -58,7 +60,8 @@ VOID PcSpeakerSet(PPCSPEAKER speaker, DWORD hz)
             PCSPEAKER_DEVICE_GLOBALROOT, PCSPEAKER_DEVICE_DOS
         };
         INT index;
-        if (!hz) return;                       /* nothing to say: stay unopened */
+        if (!hz)
+            return;                            /* nothing to say: stay unopened */
         for (index = 0; index < PCSPEAKER_PATHS; ++index)
         {
             speaker->Handle = CreateFileA(paths[index], GENERIC_WRITE, 0, NULL,
@@ -77,15 +80,18 @@ VOID PcSpeakerSet(PPCSPEAKER speaker, DWORD hz)
         }
         speaker->OpenState = PCSPEAKER_OPENED;
     }
-    if (speaker->OpenState != PCSPEAKER_OPENED) return;
-    if (PcSpeakerIoctl(speaker, hz) == 0) speaker->CurrentHz = hz;
+    if (speaker->OpenState != PCSPEAKER_OPENED)
+        return;
+    if (PcSpeakerIoctl(speaker, hz) == 0)
+        speaker->CurrentHz = hz;
 }
 
 VOID PcSpeakerClose(PPCSPEAKER speaker)
 {
     if (speaker->OpenState == PCSPEAKER_OPENED && speaker->Handle != INVALID_HANDLE_VALUE)
     {
-        if (speaker->CurrentHz) PcSpeakerIoctl(speaker, 0);      /* [CAUTION] or it sounds after we exit */
+        if (speaker->CurrentHz)
+            PcSpeakerIoctl(speaker, 0);                          /* [CAUTION] or it sounds after we exit */
         CloseHandle(speaker->Handle);
     }
     speaker->Handle = INVALID_HANDLE_VALUE;

@@ -83,14 +83,29 @@ static INT DmaPageChannel(WORD port)
 {
     switch (port)
     {
-    case DMA_PAGE_CHANNEL0: return DMA_CHANNEL0;
-    case DMA_PAGE_CHANNEL1: return DMA_CHANNEL1;
-    case DMA_PAGE_CHANNEL2: return DMA_CHANNEL2;
-    case DMA_PAGE_CHANNEL3: return DMA_CHANNEL3;
-    case DMA_PAGE_CHANNEL5: return DMA_CHANNEL5;
-    case DMA_PAGE_CHANNEL6: return DMA_CHANNEL6;
-    case DMA_PAGE_CHANNEL7: return DMA_CHANNEL7;
-    default:   return DMA_NO_CHANNEL;            /* 0x80 / 0x84-0x86 / 0x88 / 0x8C-0x8F: unused */
+    case DMA_PAGE_CHANNEL0:
+        return DMA_CHANNEL0;
+
+    case DMA_PAGE_CHANNEL1:
+        return DMA_CHANNEL1;
+
+    case DMA_PAGE_CHANNEL2:
+        return DMA_CHANNEL2;
+
+    case DMA_PAGE_CHANNEL3:
+        return DMA_CHANNEL3;
+
+    case DMA_PAGE_CHANNEL5:
+        return DMA_CHANNEL5;
+
+    case DMA_PAGE_CHANNEL6:
+        return DMA_CHANNEL6;
+
+    case DMA_PAGE_CHANNEL7:
+        return DMA_CHANNEL7;
+
+    default:
+        return DMA_NO_CHANNEL;            /* 0x80 / 0x84-0x86 / 0x88 / 0x8C-0x8F: unused */
     }
 }
 
@@ -101,7 +116,9 @@ static INT DmaPageChannel(WORD port)
 UINT32 VddDmaCurrentPhysical(PCDMA_STATE state, BYTE channelNumber)
 {
     PCDMA_CHANNEL channel = &state->Channels[channelNumber & DMA_CHANNEL_MASK];
-    if ((channelNumber & DMA_CHANNEL_MASK) < DMA_CHANNELS_PER_CONTROLLER) return ((UINT32)channel->Page << DMA_PAGE_SHIFT) | channel->CurrentAddress;
+
+    if ((channelNumber & DMA_CHANNEL_MASK) < DMA_CHANNELS_PER_CONTROLLER)
+        return ((UINT32)channel->Page << DMA_PAGE_SHIFT) | channel->CurrentAddress;
     return (((UINT32)channel->Page & DMA_WORD_PAGE_MASK) << DMA_PAGE_SHIFT) | ((UINT32)channel->CurrentAddress << 1);
 }
 
@@ -109,6 +126,7 @@ UINT32 VddDmaRemaining(PCDMA_STATE state, BYTE channelNumber)
 {
     PCDMA_CHANNEL channel = &state->Channels[channelNumber & DMA_CHANNEL_MASK];
     UINT32 units = (UINT32)channel->CurrentCount + 1;        /* 8237 counts n-1 */
+
     return ((channelNumber & DMA_CHANNEL_MASK) < DMA_CHANNELS_PER_CONTROLLER) ? units : units * DMA_WORD_UNIT;
 }
 
@@ -120,13 +138,17 @@ UINT32 VddDmaRemaining(PCDMA_STATE state, BYTE channelNumber)
 static INT DmaAdvance(PDMA_STATE state, BYTE channelNumber, INT *isTerminalCount)
 {
     PDMA_CHANNEL channel = &state->Channels[channelNumber & DMA_CHANNEL_MASK];
-    if (channel->Mode & DMA_MODE_DECREMENT) channel->CurrentAddress--;
-    else                              channel->CurrentAddress++;
+
+    if (channel->Mode & DMA_MODE_DECREMENT)
+        channel->CurrentAddress--;
+    else
+        channel->CurrentAddress++;
     if (channel->CurrentCount == 0)                      /* terminal count reached */
     {
         channel->IsTerminalCount = 1;
         state->Request[(channelNumber & DMA_CHANNEL_MASK) >> DMA_CONTROLLER_SHIFT] &= (BYTE)~(1u << (channelNumber & DMA_LINE_MASK));
-        if (isTerminalCount) *isTerminalCount = 1;
+        if (isTerminalCount)
+            *isTerminalCount = 1;
         if (channel->Mode & DMA_MODE_AUTOINIT)        /* ring buffer: reload */
         {
             channel->CurrentAddress  = channel->BaseAddress;
@@ -151,20 +173,30 @@ static INT DmaAdvance(PDMA_STATE state, BYTE channelNumber, INT *isTerminalCount
 /* One unit of transfer (1 byte on ch0-3, 1 word on ch4-7). Returns 0 when the
  * channel has hit terminal count and stopped, so the caller ends the block.
  */
-static INT DmaStep(PDMA_STATE state, BYTE channelNumber, BYTE *destination, const BYTE *source,
-                    UINT32 *transferred, INT *isTerminalCount)
+static INT DmaStep(
+    PDMA_STATE state,
+    BYTE channelNumber,
+    BYTE *destination,
+    const BYTE *source,
+    UINT32 *transferred,
+    INT *isTerminalCount)
 {
     PDMA_CHANNEL channel = &state->Channels[channelNumber & DMA_CHANNEL_MASK];
     UINT32 unitBytes = ((channelNumber & DMA_CHANNEL_MASK) < DMA_CHANNELS_PER_CONTROLLER) ? 1u : DMA_WORD_UNIT_BYTES;
     BYTE *memory = (BYTE *)VddMapLinear(state->Bus, VddDmaCurrentPhysical(state, channelNumber));
     UINT32 byteIndex;
 
-    if (destination) for (byteIndex = 0; byteIndex < unitBytes; ++byteIndex) destination[byteIndex] = memory[byteIndex];
-    else     for (byteIndex = 0; byteIndex < unitBytes; ++byteIndex) memory[byteIndex] = source[byteIndex];
+    if (destination)
+        for (byteIndex = 0; byteIndex < unitBytes; ++byteIndex)
+            destination[byteIndex] = memory[byteIndex];
+    else
+        for (byteIndex = 0; byteIndex < unitBytes; ++byteIndex)
+            memory[byteIndex] = source[byteIndex];
     *transferred += unitBytes;
 
     /* a ring keeps streaming through its TC; a single-cycle block stops there */
-    if (DmaAdvance(state, channelNumber, isTerminalCount) && !(channel->Mode & DMA_MODE_AUTOINIT)) return 0;
+    if (DmaAdvance(state, channelNumber, isTerminalCount) && !(channel->Mode & DMA_MODE_AUTOINIT))
+        return 0;
     return 1;
 }
 
@@ -179,8 +211,10 @@ static INT DmaStep(PDMA_STATE state, BYTE channelNumber, BYTE *destination, cons
 static INT DmaControllerGrants(PCDMA_STATE state, BYTE channelNumber)
 {
     channelNumber &= DMA_CHANNEL_MASK;
-    if (state->Channels[channelNumber].IsMasked) return 0;
-    if (state->Command[channelNumber >> DMA_CONTROLLER_SHIFT] & DMA_COMMAND_DISABLE) return 0;   /* ch0-3 -> cmd[0], 4-7 -> cmd[1] */
+    if (state->Channels[channelNumber].IsMasked)
+        return 0;
+    if (state->Command[channelNumber >> DMA_CONTROLLER_SHIFT] & DMA_COMMAND_DISABLE)
+        return 0;                                                                                /* ch0-3 -> cmd[0], 4-7 -> cmd[1] */
     return 1;
 }
 
@@ -199,18 +233,25 @@ static INT DmaIsCascadeUp(PCDMA_STATE state)
 INT VddDmaGrants(PCDMA_STATE state, BYTE channelNumber)
 {
     channelNumber &= DMA_CHANNEL_MASK;
-    if (!DmaControllerGrants(state, channelNumber)) return 0;
-    if (channelNumber < DMA_CHANNELS_PER_CONTROLLER && !DmaIsCascadeUp(state)) return 0;
+    if (!DmaControllerGrants(state, channelNumber))
+        return 0;
+    if (channelNumber < DMA_CHANNELS_PER_CONTROLLER && !DmaIsCascadeUp(state))
+        return 0;
     return 1;
 }
 
 INT VddDmaAddDreq(PDMA_STATE state, PDMA_DREQ_ROUTINE dreqRoutine, PCVOID dreqContext)
 {
     UINT entryIndex;
+
     for (entryIndex = 0; entryIndex < state->DreqCount; ++entryIndex)
-        if (state->DreqRoutines[entryIndex] == dreqRoutine && state->DreqContexts[entryIndex] == dreqContext) return 0;
-    if (state->DreqCount >= DMA_DREQ_MAX) return DMA_FAILED;
-    state->DreqRoutines[state->DreqCount] = dreqRoutine; state->DreqContexts[state->DreqCount] = dreqContext; ++state->DreqCount;
+        if (state->DreqRoutines[entryIndex] == dreqRoutine && state->DreqContexts[entryIndex] == dreqContext)
+            return 0;
+    if (state->DreqCount >= DMA_DREQ_MAX)
+        return DMA_FAILED;
+    state->DreqRoutines[state->DreqCount] = dreqRoutine;
+    state->DreqContexts[state->DreqCount] = dreqContext;
+    ++state->DreqCount;
     return DMA_OK;
 }
 
@@ -226,7 +267,9 @@ BYTE VddDmaDreq(PCDMA_STATE state)
 {
     BYTE requests = 0, line;
     UINT entryIndex;
-    for (entryIndex = 0; entryIndex < state->DreqCount; ++entryIndex) requests |= state->DreqRoutines[entryIndex](state->DreqContexts[entryIndex]);
+
+    for (entryIndex = 0; entryIndex < state->DreqCount; ++entryIndex)
+        requests |= state->DreqRoutines[entryIndex](state->DreqContexts[entryIndex]);
     requests &= (BYTE)~DMA_CASCADE_BIT;
     /* HRQ from controller 1: a hardware request it would serve (its own mask and
      * disable bits -- NOT the cascade's, which is the far end of this very wire), or a
@@ -246,12 +289,20 @@ BYTE VddDmaDreq(PCDMA_STATE state)
     return requests;
 }
 
-static UINT32 DmaTransfer(PDMA_STATE state, BYTE channelNumber, BYTE *destination, const BYTE *source,
-                         UINT32 byteCount, INT *isTerminalCount)
+static UINT32 DmaTransfer(
+    PDMA_STATE state,
+    BYTE channelNumber,
+    BYTE *destination,
+    const BYTE *source,
+    UINT32 byteCount,
+    INT *isTerminalCount)
 {
     UINT32 unitBytes = ((channelNumber & DMA_CHANNEL_MASK) < DMA_CHANNELS_PER_CONTROLLER) ? 1u : DMA_WORD_UNIT_BYTES, transferred = 0;
-    if (isTerminalCount) *isTerminalCount = 0;
-    if (!VddDmaGrants(state, channelNumber)) return 0;      /* no DACK: nothing moves, no TC */
+
+    if (isTerminalCount)
+        *isTerminalCount = 0;
+    if (!VddDmaGrants(state, channelNumber))
+        return 0;                                           /* no DACK: nothing moves, no TC */
     while (transferred + unitBytes <= byteCount)
     {
         if (!DmaStep(state, channelNumber, destination ? destination + transferred : 0, source ? source + transferred : 0, &transferred, isTerminalCount))
@@ -260,12 +311,22 @@ static UINT32 DmaTransfer(PDMA_STATE state, BYTE channelNumber, BYTE *destinatio
     return transferred;
 }
 
-UINT32 VddDmaRead(PDMA_STATE state, BYTE channelNumber, BYTE *destination, UINT32 byteCount, INT *isTerminalCount)
+UINT32 VddDmaRead(
+    PDMA_STATE state,
+    BYTE channelNumber,
+    BYTE *destination,
+    UINT32 byteCount,
+    INT *isTerminalCount)
 {
     return DmaTransfer(state, channelNumber, destination, 0, byteCount, isTerminalCount);
 }
 
-UINT32 VddDmaWrite(PDMA_STATE state, BYTE channelNumber, const BYTE *source, UINT32 byteCount, INT *isTerminalCount)
+UINT32 VddDmaWrite(
+    PDMA_STATE state,
+    BYTE channelNumber,
+    const BYTE *source,
+    UINT32 byteCount,
+    INT *isTerminalCount)
 {
     return DmaTransfer(state, channelNumber, 0, source, byteCount, isTerminalCount);
 }
@@ -294,7 +355,8 @@ UINT32 VddDmaWrite(PDMA_STATE state, BYTE channelNumber, const BYTE *source, UIN
 
 static BYTE *DmaMemory(PDMA_STATE state, UINT32 physical)
 {
-    if (physical >= DMA_PHYSICAL_LIMIT) return 0;
+    if (physical >= DMA_PHYSICAL_LIMIT)
+        return 0;
     return (BYTE *)VddMapLinear(state->Bus, physical);
 }
 
@@ -302,15 +364,19 @@ static VOID DmaSoftwareBlock(PDMA_STATE state, BYTE channelNumber)
 {
     PDMA_CHANNEL channel = &state->Channels[channelNumber];
     UINT32 unitBytes = (channelNumber < DMA_CHANNELS_PER_CONTROLLER) ? 1u : DMA_WORD_UNIT_BYTES, byteIndex, iterations;
+
     state->SoftwareRuns++;
     for (iterations = 0; iterations < DMA_MAX_TRANSFERS; ++iterations)
     {
         if ((channel->Mode & DMA_MODE_TRANSFER) == DMA_MODE_TRANSFER_WRITE)
         {
             BYTE *memory = DmaMemory(state, VddDmaCurrentPhysical(state, channelNumber));
-            if (memory) for (byteIndex = 0; byteIndex < unitBytes; ++byteIndex) memory[byteIndex] = DMA_FLOATING_BYTE;
+            if (memory)
+                for (byteIndex = 0; byteIndex < unitBytes; ++byteIndex)
+                    memory[byteIndex] = DMA_FLOATING_BYTE;
         }
-        if (DmaAdvance(state, channelNumber, FALSE)) break;
+        if (DmaAdvance(state, channelNumber, FALSE))
+            break;
     }
 }
 
@@ -329,19 +395,28 @@ static VOID DmaMemoryToMemory(PDMA_STATE state)
 {
     PDMA_CHANNEL channel0 = &state->Channels[0], channel1 = &state->Channels[1];
     UINT32 iterations;
+
     state->MemoryToMemoryRuns++;
     for (iterations = 0; iterations < DMA_MAX_TRANSFERS; ++iterations)
     {
         BYTE *source = DmaMemory(state, VddDmaCurrentPhysical(state, 0));
         BYTE *destination = DmaMemory(state, VddDmaCurrentPhysical(state, 1));
         state->Temporary[0] = source ? *source : DMA_FLOATING_BYTE;
-        if (destination) *destination = state->Temporary[0];
+        if (destination)
+            *destination = state->Temporary[0];
         if (!(state->Command[0] & DMA_COMMAND_ADDRESS_HOLD))
         {
-            if (channel0->Mode & DMA_MODE_DECREMENT) channel0->CurrentAddress--; else channel0->CurrentAddress++;
+            if (channel0->Mode & DMA_MODE_DECREMENT)
+                channel0->CurrentAddress--;
+            else
+                channel0->CurrentAddress++;
         }
-        if (channel1->Mode & DMA_MODE_DECREMENT) channel1->CurrentAddress--; else channel1->CurrentAddress++;
-        if (channel1->CurrentCount == 0) break;
+        if (channel1->Mode & DMA_MODE_DECREMENT)
+            channel1->CurrentAddress--;
+        else
+            channel1->CurrentAddress++;
+        if (channel1->CurrentCount == 0)
+            break;
         channel1->CurrentCount--;
     }
     channel1->IsTerminalCount = 1;
@@ -351,7 +426,8 @@ static VOID DmaMemoryToMemory(PDMA_STATE state)
         channel0->CurrentAddress = channel0->BaseAddress;
         channel0->CurrentCount = channel0->BaseCount;
     }
-    else channel0->IsMasked = 1;
+    else
+        channel0->IsMasked = 1;
     if (channel1->Mode & DMA_MODE_AUTOINIT)
     {
         channel1->CurrentAddress = channel1->BaseAddress;
@@ -371,24 +447,33 @@ static VOID DmaMemoryToMemory(PDMA_STATE state)
 static VOID DmaSoftwareService(PDMA_STATE state)
 {
     INT controller, line;
+
     for (controller = 0; controller < DMA_CONTROLLERS; ++controller)
     {
-        if (!state->Request[controller]) continue;
-        if (state->Command[controller] & DMA_COMMAND_DISABLE) continue;
-        if (controller == 0 && !DmaIsCascadeUp(state)) continue;
+        if (!state->Request[controller])
+            continue;
+        if (state->Command[controller] & DMA_COMMAND_DISABLE)
+            continue;
+        if (controller == 0 && !DmaIsCascadeUp(state))
+            continue;
         for (line = 0; line < DMA_CHANNELS_PER_CONTROLLER; ++line)                 /* fixed priority: 0 highest */
         {
             BYTE channelNumber = (BYTE)(controller * DMA_CHANNELS_PER_CONTROLLER + line);
-            if (!(state->Request[controller] & (1u << line))) continue;
-            if (channelNumber == DMA_CASCADE_CHANNEL) continue;               /* the cascade itself */
-            if ((state->Channels[channelNumber].Mode & DMA_MODE_SELECT) == DMA_MODE_SELECT) continue;
+            if (!(state->Request[controller] & (1u << line)))
+                continue;
+            if (channelNumber == DMA_CASCADE_CHANNEL)
+                continue;                                                     /* the cascade itself */
+            if ((state->Channels[channelNumber].Mode & DMA_MODE_SELECT) == DMA_MODE_SELECT)
+                continue;
             if (controller == 0 && (state->Command[0] & DMA_COMMAND_MEMORY_TO_MEMORY))
             {
                 /* in memory-to-memory mode channels 0 and 1 belong to the copy:
                  * channel 0's request starts it, channel 1's alone starts nothing
                  */
-                if (line == 0) DmaMemoryToMemory(state);
-                if (line <= 1) continue;
+                if (line == 0)
+                    DmaMemoryToMemory(state);
+                if (line <= 1)
+                    continue;
             }
             DmaSoftwareBlock(state, channelNumber);
         }
@@ -403,14 +488,17 @@ static VOID DmaSoftwareService(PDMA_STATE state)
  */
 static VOID DmaWriteHalf(WORD *registerValue, BYTE *flipFlop, BYTE value)
 {
-    if (*flipFlop) *registerValue = (WORD)((*registerValue & DMA_KEEP_LOW_BYTE) | ((WORD)value << BYTE_SHIFT));
-    else     *registerValue = (WORD)((*registerValue & DMA_KEEP_HIGH_BYTE) | value);
+    if (*flipFlop)
+        *registerValue = (WORD)((*registerValue & DMA_KEEP_LOW_BYTE) | ((WORD)value << BYTE_SHIFT));
+    else
+        *registerValue = (WORD)((*registerValue & DMA_KEEP_HIGH_BYTE) | value);
     *flipFlop ^= 1;
 }
 
 static BYTE DmaReadHalf(WORD registerValue, BYTE *flipFlop)
 {
     BYTE value = *flipFlop ? (BYTE)(registerValue >> BYTE_SHIFT) : (BYTE)registerValue;
+
     *flipFlop ^= 1;
     return value;
 }
@@ -418,6 +506,7 @@ static BYTE DmaReadHalf(WORD registerValue, BYTE *flipFlop)
 static VOID DmaMasterClear(PDMA_STATE state, INT controller)
 {
     INT firstChannel = controller ? DMA_CHANNELS_PER_CONTROLLER : 0, channelNumber;
+
     state->FlipFlop[controller]  = 0;
     state->Command[controller] = 0;
     state->Request[controller] = 0;                  /* "the entire register is cleared by a Reset" */
@@ -434,13 +523,16 @@ static VOID DmaPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
     PDMA_STATE state = (PDMA_STATE)context;
     BYTE byteValue = (BYTE)value;
     INT controller, registerIndex, channelNumber;
+
     (VOID)width;
 
     if (port >= DMA_PAGE_FIRST_PORT && port <= DMA_PAGE_LAST_PORT)                    /* page registers */
     {
         INT pageChannel = DmaPageChannel(port);
-        if (pageChannel >= 0) state->Channels[pageChannel].Page = byteValue;
-        else        state->SparePage[port & DMA_PAGE_INDEX_MASK] = byteValue;   /* a latch all the same */
+        if (pageChannel >= 0)
+            state->Channels[pageChannel].Page = byteValue;
+        else
+            state->SparePage[port & DMA_PAGE_INDEX_MASK] = byteValue;           /* a latch all the same */
         return;
     }
     controller = (port >= DMA_CONTROLLER2_FIRST_PORT) ? 1 : 0;
@@ -463,36 +555,55 @@ static VOID DmaPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
     }
     switch (registerIndex)
     {
-    case DMA_REGISTER_COMMAND: state->Command[controller] = byteValue; break;                /* command: bit 2 is read by
+    case DMA_REGISTER_COMMAND:
+        state->Command[controller] = byteValue;
+    break;                /* command: bit 2 is read by
                                                             VddDmaGrants; the rest
                                                             are stored (see the header) */
+
     case DMA_REGISTER_REQUEST:                                            /* request register (#246) */
-        if (byteValue & DMA_SET_BIT) state->Request[controller] |= (BYTE)(1u << (byteValue & DMA_LINE_MASK));
-        else         state->Request[controller] &= (BYTE)~(1u << (byteValue & DMA_LINE_MASK));
+        if (byteValue & DMA_SET_BIT)
+            state->Request[controller] |= (BYTE)(1u << (byteValue & DMA_LINE_MASK));
+        else
+            state->Request[controller] &= (BYTE)~(1u << (byteValue & DMA_LINE_MASK));
         break;
+
     case DMA_REGISTER_SINGLE_MASK:                                            /* single mask bit */
         channelNumber = (controller ? DMA_CHANNELS_PER_CONTROLLER : 0) + (byteValue & DMA_LINE_MASK);
         state->Channels[channelNumber].IsMasked = (byteValue & DMA_SET_BIT) ? 1 : 0;
         break;
+
     case DMA_REGISTER_MODE:                                            /* mode */
         channelNumber = (controller ? DMA_CHANNELS_PER_CONTROLLER : 0) + (byteValue & DMA_MODE_CHANNEL);
         state->Channels[channelNumber].Mode = byteValue;
         break;
-    case DMA_REGISTER_CLEAR_FLIP_FLOP: state->FlipFlop[controller] = 0; break;                   /* clear byte pointer */
-    case DMA_REGISTER_MASTER_CLEAR: DmaMasterClear(state, controller); break;         /* master clear */
+
+    case DMA_REGISTER_CLEAR_FLIP_FLOP:
+        state->FlipFlop[controller] = 0;
+    break;                   /* clear byte pointer */
+
+    case DMA_REGISTER_MASTER_CLEAR:
+        DmaMasterClear(state, controller);
+    break;         /* master clear */
+
     case DMA_REGISTER_CLEAR_MASK:                                            /* clear mask register */
-        for (channelNumber = controller ? DMA_CHANNELS_PER_CONTROLLER : 0; channelNumber < (controller ? DMA_CHANNELS : DMA_CHANNELS_PER_CONTROLLER); ++channelNumber) state->Channels[channelNumber].IsMasked = 0;
+        for (channelNumber = controller ? DMA_CHANNELS_PER_CONTROLLER : 0; channelNumber < (controller ? DMA_CHANNELS : DMA_CHANNELS_PER_CONTROLLER); ++channelNumber)
+            state->Channels[channelNumber].IsMasked = 0;
         break;
+
     case DMA_REGISTER_WRITE_ALL_MASK:                                            /* write all mask bits */
         for (channelNumber = 0; channelNumber < DMA_CHANNELS_PER_CONTROLLER; ++channelNumber)
             state->Channels[(controller ? DMA_CHANNELS_PER_CONTROLLER : 0) + channelNumber].IsMasked = (byteValue >> channelNumber) & 1;
         break;
-    default: break;
+
+    default:
+        break;
     }
     /* any write can make a pending software request servable (the request itself, a
      * re-enable, the cascade coming up) -- and there is nothing else to wake it
      */
-    if (state->Request[0] | state->Request[1]) DmaSoftwareService(state);
+    if (state->Request[0] | state->Request[1])
+        DmaSoftwareService(state);
 }
 
 static VOID DmaPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
@@ -525,11 +636,15 @@ static VOID DmaPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
         {
             ++state->ChannelCountReads[channelNumber];
             ++state->CountReads;
-            if      (width == 1) ++state->CountReadsByte;
-            else if (width == DMA_WORD_ACCESS) ++state->CountReadsWord;
-            else             ++state->CountReadsDword;
+            if      (width == 1)
+                ++state->CountReadsByte;
+            else if (width == DMA_WORD_ACCESS)
+                ++state->CountReadsWord;
+            else
+                ++state->CountReadsDword;
         }
-        else ++state->AddressReads[channelNumber];
+        else
+            ++state->AddressReads[channelNumber];
         *value = (registerIndex & 1) ? DmaReadHalf(state->Channels[channelNumber].CurrentCount, &state->FlipFlop[controller])
                          : DmaReadHalf(state->Channels[channelNumber].CurrentAddress,  &state->FlipFlop[controller]);
         return;
@@ -541,7 +656,8 @@ static VOID DmaPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
         for (line = 0; line < DMA_CHANNELS_PER_CONTROLLER; ++line)
         {
             channelNumber = (controller ? DMA_CHANNELS_PER_CONTROLLER : 0) + line;
-            if (state->Channels[channelNumber].IsTerminalCount) status |= (BYTE)(1 << line);
+            if (state->Channels[channelNumber].IsTerminalCount)
+                status |= (BYTE)(1 << line);
             state->Channels[channelNumber].IsTerminalCount = 0;                 /* reading status clears TC */
         }
         /* -- BITS 7:4 -- "set whenever their corresponding channel is requesting
@@ -578,15 +694,19 @@ VOID VddDmaReset(PVOID context)
 {
     PDMA_STATE state = (PDMA_STATE)context;
     PVDD_BUS bus = state->Bus;
-    PDMA_DREQ_ROUTINE dreqRoutines[DMA_DREQ_MAX]; PCVOID dreqContexts[DMA_DREQ_MAX];
+    PDMA_DREQ_ROUTINE dreqRoutines[DMA_DREQ_MAX];
+    PCVOID dreqContexts[DMA_DREQ_MAX];
     BYTE dreqCount = state->DreqCount;
-    UINT index; BYTE *stateBytes = (BYTE *)state;
+    UINT index;
+    BYTE *stateBytes = (BYTE *)state;
+
     for (index = 0; index < DMA_DREQ_MAX; ++index)
     {
         dreqRoutines[index] = state->DreqRoutines[index];
         dreqContexts[index] = state->DreqContexts[index];
     }
-    for (index = 0; index < sizeof(*state); ++index) stateBytes[index] = 0;
+    for (index = 0; index < sizeof(*state); ++index)
+        stateBytes[index] = 0;
     state->Bus = bus;
     /* the DREQ wiring is the machine's, not the chip's: a reset keeps it */
     for (index = 0; index < DMA_DREQ_MAX; ++index)
@@ -603,12 +723,16 @@ VOID VddDmaReset(PVOID context)
 INT VddDmaInitialize(PVDD_BUS bus, PVOID context)
 {
     PDMA_STATE state = (PDMA_STATE)context;
+
     state->Bus = bus;
     DmaMasterClear(state, DMA_CONTROLLER_8BIT);
     DmaMasterClear(state, DMA_CONTROLLER_16BIT);
     DmaPost(state);
-    if (VddClaimPorts(bus, DMA_CONTROLLER1_FIRST_PORT, DMA_CONTROLLER1_LAST_PORT, DmaPortIn, DmaPortOut, state)) return DMA_FAILED;  /* controller 1 */
-    if (VddClaimPorts(bus, DMA_PAGE_FIRST_PORT, DMA_PAGE_LAST_PORT, DmaPortIn, DmaPortOut, state)) return DMA_FAILED;  /* page regs */
-    if (VddClaimPorts(bus, DMA_CONTROLLER2_FIRST_PORT, DMA_CONTROLLER2_LAST_PORT, DmaPortIn, DmaPortOut, state)) return DMA_FAILED;  /* controller 2 */
+    if (VddClaimPorts(bus, DMA_CONTROLLER1_FIRST_PORT, DMA_CONTROLLER1_LAST_PORT, DmaPortIn, DmaPortOut, state))
+        return DMA_FAILED;                                                                                                           /* controller 1 */
+    if (VddClaimPorts(bus, DMA_PAGE_FIRST_PORT, DMA_PAGE_LAST_PORT, DmaPortIn, DmaPortOut, state))
+        return DMA_FAILED;                                                                                             /* page regs */
+    if (VddClaimPorts(bus, DMA_CONTROLLER2_FIRST_PORT, DMA_CONTROLLER2_LAST_PORT, DmaPortIn, DmaPortOut, state))
+        return DMA_FAILED;                                                                                                           /* controller 2 */
     return DMA_OK;
 }

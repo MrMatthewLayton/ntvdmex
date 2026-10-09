@@ -31,6 +31,7 @@ static UINT64 g_Effects;                                 /* this step's effects,
 static VOID InterpSideEffect(UINT64 value)
 {
     INT index;
+
     for (index = 0; index < 8; ++index)
     {
         g_Effects ^= (BYTE)(value >> (index * 8));
@@ -51,7 +52,8 @@ static BYTE V86HostRead8(UINT32 linear)
 static VOID V86HostWrite8(UINT32 linear, BYTE value)
 {
     InterpSideEffect(((UINT64)linear << 8) | value);
-    if (linear >= sizeof g_Memory) return;
+    if (linear >= sizeof g_Memory)
+        return;
     if (g_IsUndoOn)
     {
         if (g_UndoCount < UNDO_MAX)
@@ -60,7 +62,8 @@ static VOID V86HostWrite8(UINT32 linear, BYTE value)
             g_UndoOld[g_UndoCount] = g_Memory[linear];
             ++g_UndoCount;
         }
-        else g_IsUndoOverflow = 1;
+        else
+            g_IsUndoOverflow = 1;
     }
     g_Memory[linear] = value;
 }
@@ -93,9 +96,12 @@ static UINT32 InterpSideSegmentToLinear(WORD selector)
 static INT InterpSideSelectorDescriptor(WORD selector, UINT32 *accessRights, UINT32 *limit)
 {
     UINT index = selector >> 3, kind = index & 3;
-    if (!(selector & 4) || index == 0 || kind == 3) return 0;
+
+    if (!(selector & 4) || index == 0 || kind == 3)
+        return 0;
     *accessRights = (kind == 1 ? 0xF2u : 0xFAu) << 8;
-    if (kind == 2) *accessRights |= 0x4u << 20;                    /* D = 1 */
+    if (kind == 2)
+        *accessRights |= 0x4u << 20;                               /* D = 1 */
     *limit = (index & 4) ? 0x7FFFu : 0xFFFFu;
     return 1;
 }
@@ -109,7 +115,8 @@ VOID FN(Initialize)(PCBYTE image, INT isProtectedMode)
 
 VOID FN(Poke)(UINT32 linear, BYTE value)
 {
-    if (linear < sizeof g_Memory) g_Memory[linear] = value;
+    if (linear < sizeof g_Memory)
+        g_Memory[linear] = value;
 }
 
 PCBYTE FN(Memory)(VOID)
@@ -124,15 +131,23 @@ VOID FN(Sync)(PCBYTE image)
 
 INT FN(Step)(PINTERP_XCPU state, UINT64 *effects)
 {
-    V86_CPU cpu; INT isOk, index;
-    for (index = 0; index < 8; ++index) cpu.Registers[index] = state->Registers[index];
-    for (index = 0; index < 6; ++index) cpu.Segments[index] = state->Segments[index];
-    cpu.Ip = state->Ip; cpu.Flags = state->Flags;
+    V86_CPU cpu;
+    INT isOk, index;
+
+    for (index = 0; index < 8; ++index)
+        cpu.Registers[index] = state->Registers[index];
+    for (index = 0; index < 6; ++index)
+        cpu.Segments[index] = state->Segments[index];
+    cpu.Ip = state->Ip;
+    cpu.Flags = state->Flags;
     g_Effects = 1469598103934665603ULL;
     isOk = V86Step(&cpu);
-    for (index = 0; index < 8; ++index) state->Registers[index] = cpu.Registers[index];
-    for (index = 0; index < 6; ++index) state->Segments[index] = cpu.Segments[index];
-    state->Ip = cpu.Ip; state->Flags = cpu.Flags;
+    for (index = 0; index < 8; ++index)
+        state->Registers[index] = cpu.Registers[index];
+    for (index = 0; index < 6; ++index)
+        state->Segments[index] = cpu.Segments[index];
+    state->Ip = cpu.Ip;
+    state->Flags = cpu.Flags;
     *effects = g_Effects;
     return isOk;
 }
@@ -150,6 +165,7 @@ VOID FN(UndoBegin)(VOID)
 INT FN(UndoRollback)(VOID)
 {
     UINT32 index = g_UndoCount;
+
     g_IsUndoOn = 0;
     while (index)
     {

@@ -122,8 +122,12 @@ VOID VddPicAcknowledgeAutoEoi(_Inout_ PPIC_STATE state, _In_ BYTE irq);
 static inline NTVDD_DEVICE VddPicDevice(_In_ PPIC_STATE state)
 {
     NTVDD_DEVICE device;
-    device.Name = PIC_DEVICE_NAME; device.Initialize = VddPicInitialize; device.Reset = VddPicReset;
-    device.Shutdown = 0; device.Context = state;
+
+    device.Name = PIC_DEVICE_NAME;
+    device.Initialize = VddPicInitialize;
+    device.Reset = VddPicReset;
+    device.Shutdown = 0;
+    device.Context = state;
     return device;
 }
 

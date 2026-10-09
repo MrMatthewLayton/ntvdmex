@@ -879,14 +879,22 @@ VOID VddVideoReset(_In_ PVOID context);
  */
 VOID VddVideoFrameTouch(_Inout_ PVIDEO_STATE state);
 static inline NTVDD_DEVICE VddVideoDevice(_In_ PVIDEO_STATE state)
-{ NTVDD_DEVICE device; device.Name = "video"; device.Initialize = VddVideoInitialize; device.Reset = VddVideoReset;
-  device.Shutdown = 0; device.Context = state; return device; }
+{ NTVDD_DEVICE device;
+device.Name = "video";
+device.Initialize = VddVideoInitialize;
+device.Reset = VddVideoReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 VOID VddVideoRender(_Inout_ PVIDEO_STATE state);                /* text glyph render */
 /* The text screen as the GUEST wrote it (characters, then attributes in hex) --
  * the instrument that separates "never listed" from "never drawn".
  */
-INT  VddVideoTextSnapshot(_In_ PVIDEO_STATE state, _Out_writes_(capacity) PSTR output, _In_ INT capacity);
+INT  VddVideoTextSnapshot(
+    _In_ PVIDEO_STATE state,
+    _Out_writes_(capacity) PSTR output,
+    _In_ INT capacity);
 /* THE INT 33h TEXT CURSOR IS A CELL, NOT A SPRITE:
  * In a text mode the mouse driver has no pixels to draw an arrow with; it shows the
  * pointer by REWRITING THE ATTRIBUTE of the character cell under it -- AND-ed with
@@ -896,8 +904,12 @@ INT  VddVideoTextSnapshot(_In_ PVIDEO_STATE state, _Out_writes_(capacity) PSTR o
  * interface" looks like. Call after VddVideoRender, with the cell the pointer is
  * in; the masks are the driver's (low byte = character, high byte = attribute).
  */
-VOID VddVideoTextCursor(_Inout_ PVIDEO_STATE state, _In_ INT column, _In_ INT row,
-                        _In_ WORD andMask, _In_ WORD xorMask);
+VOID VddVideoTextCursor(
+    _Inout_ PVIDEO_STATE state,
+    _In_ INT column,
+    _In_ INT row,
+    _In_ WORD andMask,
+    _In_ WORD xorMask);
 /* CGA 4-colour (modes 04h/05h): the frame value VideoRenderCga gives each 2-bit pixel value
  * 0..3 under the current palette select. The INT 33h graphics cursor maps back through it
  * (GH #264) -- one table, so the cursor and the renderer cannot disagree.
@@ -923,8 +935,12 @@ UINT32 VddVideoUsToRetrace(_Inout_ PVIDEO_STATE state, _In_ INT wantSet);
  * Pure arithmetic on the shape word, so tests/unit/video_test.c can pin the exact
  * shapes DOS uses. `isHidden` is set for the two idioms that mean "no cursor".
  */
-VOID VddCursorLines(_In_ WORD shape, _In_ UINT cellHeight,
-                    _Out_ UINT *start, _Out_ UINT *end, _Out_ INT *isHidden);
+VOID VddCursorLines(
+    _In_ WORD shape,
+    _In_ UINT cellHeight,
+    _Out_ UINT *start,
+    _Out_ UINT *end,
+    _Out_ INT *isHidden);
 VOID VddVideoPutChar(_Inout_ PVIDEO_STATE state, _In_ BYTE character);      /* console teletype sink */
 
 /* Planar A0000 access (mode 12h): the host calls these from the memory-write trap
@@ -1031,6 +1047,9 @@ INT  VddVideoRefreshFonts(_Inout_ PVIDEO_STATE state);
  * actually wrote -- the second list is the evidence the inventory is built on and
  * the first is meaningless without it (see the write-count warning in the struct).
  */
-INT VddVideoRegistersDump(_In_ PCVIDEO_STATE state, _Out_writes_(capacity) PSTR output, _In_ INT capacity);
+INT VddVideoRegistersDump(
+    _In_ PCVIDEO_STATE state,
+    _Out_writes_(capacity) PSTR output,
+    _In_ INT capacity);
 
 #endif /* NTVDMEX_VDD_VIDEO_H */

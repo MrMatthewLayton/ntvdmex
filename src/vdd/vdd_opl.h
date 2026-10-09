@@ -346,8 +346,13 @@ typedef const OPL_STATE *PCOPL_STATE;
 INT  VddOplInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddOplReset(_In_ PVOID context);
 static inline NTVDD_DEVICE VddOplDevice(_In_ POPL_STATE state)
-{ NTVDD_DEVICE device; device.Name = "opl2"; device.Initialize = VddOplInitialize; device.Reset = VddOplReset;
-  device.Shutdown = 0; device.Context = state; return device; }
+{ NTVDD_DEVICE device;
+device.Name = "opl2";
+device.Initialize = VddOplInitialize;
+device.Reset = VddOplReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 /* Advance the timers by `microseconds`, raising status flags on overflow.
  * Exposed rather than driven by a clock inside the device so tests can step it
@@ -402,7 +407,10 @@ INT  OplFourOperatorRole(_In_ PCOPL_STATE state, _In_ INT channel);
  */
 #define OPL_NATIVE_HZ   49716u
 VOID VddOplRender(_Inout_ POPL_STATE state, _Out_writes_(frames) INT16 *output, _In_ UINT32 frames);
-VOID VddOplRenderStereo(_Inout_ POPL_STATE state, _Out_writes_(OPL_STEREO_CHANNELS * frames) INT16 *output, _In_ UINT32 frames);
+VOID VddOplRenderStereo(
+    _Inout_ POPL_STATE state,
+    _Out_writes_(OPL_STEREO_CHANNELS * frames) INT16 *output,
+    _In_ UINT32 frames);
 
 /* nosb.flag: when set, the status port floats (0xFF) so an AdLib detect fails. */
 extern INT g_OplAbsent;

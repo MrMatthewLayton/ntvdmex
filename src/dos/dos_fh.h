@@ -87,8 +87,10 @@ static BOOL DosHandleIsFile(_In_reads_(DOS_MAX_FILES) PVOID const *fileHandles, 
  * GCC 14 -O3 allocates registers differently across dos_int21(), and the style pass is
  * proven by an unchanged binary. Same type, different spelling -- do not "tidy" it.
  */
-static BOOL DosHandleIsDevice(_In_reads_(DOS_MAX_FILES) PVOID const *fileHandles,
-                              _In_ unsigned int deviceMask, _In_ UINT handle)
+static BOOL DosHandleIsDevice(
+    _In_reads_(DOS_MAX_FILES) PVOID const *fileHandles,
+    _In_ unsigned int deviceMask,
+    _In_ UINT handle)
 {
     return handle < DOS_DEV_SLOTS && fileHandles[handle] == 0 && (deviceMask & (1u << handle)) != 0;
 }
@@ -98,9 +100,12 @@ static BOOL DosHandleIsDevice(_In_reads_(DOS_MAX_FILES) PVOID const *fileHandles
  */
 static BOOL DosHandleSetDevice(_Inout_ PUINT deviceMask, _In_ UINT handle, _In_ BOOL isDevice)
 {
-    if (handle >= DOS_DEV_SLOTS) return FALSE;
-    if (isDevice) *deviceMask |= (1u << handle);
-    else          *deviceMask &= ~(1u << handle);
+    if (handle >= DOS_DEV_SLOTS)
+        return FALSE;
+    if (isDevice)
+        *deviceMask |= (1u << handle);
+    else
+        *deviceMask &= ~(1u << handle);
     return TRUE;
 }
 
@@ -113,13 +118,18 @@ static BOOL DosHandleSetDevice(_Inout_ PUINT deviceMask, _In_ UINT handle, _In_ 
  * still the console, and the text goes to the screen while the file stays 0
  * bytes -- measured, three times, in GH #133.
  */
-static UINT DosHandleAllocate(_In_reads_(DOS_MAX_FILES) PVOID const *fileHandles, _In_ UINT deviceMask)
+static UINT DosHandleAllocate(
+    _In_reads_(DOS_MAX_FILES) PVOID const *fileHandles,
+    _In_ UINT deviceMask)
 {
     UINT slot;
+
     for (slot = 0; slot < DOS_MAX_FILES; ++slot)
     {
-        if (fileHandles[slot]) continue;                                   /* bound */
-        if (DosHandleIsDevice(fileHandles, deviceMask, slot)) continue;    /* device */
+        if (fileHandles[slot])
+            continue;                                                      /* bound */
+        if (DosHandleIsDevice(fileHandles, deviceMask, slot))
+            continue;                                                      /* device */
         break;
     }
     return slot;

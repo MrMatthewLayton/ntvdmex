@@ -69,41 +69,59 @@
  * and rebuilt its env after this call; the EXEC path had not. Whoever wants an
  * empty environment writes the one NUL themselves.
  */
-static inline VOID DosPspBuild(_In_opt_ volatile BYTE *base, _In_ WORD pspSegment,
-                               _In_ WORD environmentSegment, _In_ WORD topSegment)
+static inline VOID DosPspBuild(
+    _In_opt_ volatile BYTE *base,
+    _In_ WORD pspSegment,
+    _In_ WORD environmentSegment,
+    _In_ WORD topSegment)
 {
     volatile BYTE *psp = DosMcbSegmentAddress(base, pspSegment);
     DWORD byteIndex;
 
-    for (byteIndex = 0; byteIndex < DOS_PSP_SIZE; ++byteIndex) psp[byteIndex] = 0;
-    psp[DOS_PSP_INT20] = X86_OP_INT; psp[DOS_PSP_INT20 + 1] = VECTOR_TERMINATE;                /* INT 20h (legacy exit) */
+    for (byteIndex = 0; byteIndex < DOS_PSP_SIZE; ++byteIndex)
+        psp[byteIndex] = 0;
+    psp[DOS_PSP_INT20] = X86_OP_INT;
+    psp[DOS_PSP_INT20 + 1] = VECTOR_TERMINATE;                /* INT 20h (legacy exit) */
     DosMcbWriteWord(psp + DOS_PSP_MEMORY_TOP, topSegment);                     /* segment of top-of-memory */
-    psp[DOS_PSP_JFT] = DOS_PSP_JFT_STDIN_ENTRY; psp[DOS_PSP_JFT + 1] = DOS_PSP_JFT_STDOUT_ENTRY; psp[DOS_PSP_JFT + 2] = DOS_PSP_JFT_STDERR_ENTRY;       /* JFT: std handles open */
-    psp[DOS_PSP_JFT + 3] = DOS_PSP_JFT_AUX_ENTRY; psp[DOS_PSP_JFT + 4] = DOS_PSP_JFT_PRN_ENTRY;
-    for (byteIndex = DOS_PSP_JFT_FIRST_CLOSED; byteIndex < DOS_PSP_JFT_END; ++byteIndex) psp[byteIndex] = DOS_PSP_JFT_CLOSED;       /* remaining JFT = closed */
+    psp[DOS_PSP_JFT] = DOS_PSP_JFT_STDIN_ENTRY;
+    psp[DOS_PSP_JFT + 1] = DOS_PSP_JFT_STDOUT_ENTRY;
+    psp[DOS_PSP_JFT + 2] = DOS_PSP_JFT_STDERR_ENTRY;       /* JFT: std handles open */
+    psp[DOS_PSP_JFT + 3] = DOS_PSP_JFT_AUX_ENTRY;
+    psp[DOS_PSP_JFT + 4] = DOS_PSP_JFT_PRN_ENTRY;
+    for (byteIndex = DOS_PSP_JFT_FIRST_CLOSED; byteIndex < DOS_PSP_JFT_END; ++byteIndex)
+        psp[byteIndex] = DOS_PSP_JFT_CLOSED;                                                                                        /* remaining JFT = closed */
     DosMcbWriteWord(psp + DOS_PSP_ENVIRONMENT, environmentSegment);                     /* environment segment */
     DosMcbWriteWord(psp + DOS_PSP_JFT_SIZE, DOS_PSP_JFT_HANDLES);                        /* JFT size (20 handles) */
     DosMcbWriteWord(psp + DOS_PSP_JFT_POINTER, DOS_PSP_JFT);                        /* JFT pointer: offset */
     DosMcbWriteWord(psp + DOS_PSP_JFT_POINTER + 2, pspSegment);                     /* JFT pointer: segment */
-    psp[DOS_PSP_PREVIOUS] = DOS_PSP_NO_PREVIOUS; psp[DOS_PSP_PREVIOUS + 1] = DOS_PSP_NO_PREVIOUS;                /* previous PSP = 0xFFFFFFFF */
-    psp[DOS_PSP_PREVIOUS + 2] = DOS_PSP_NO_PREVIOUS; psp[DOS_PSP_PREVIOUS + 3] = DOS_PSP_NO_PREVIOUS;
-    psp[DOS_PSP_DISPATCH] = X86_OP_INT; psp[DOS_PSP_DISPATCH + 1] = VECTOR_DOS; psp[DOS_PSP_DISPATCH + 2] = X86_OP_RETF; /* INT 21h ; RETF */
-    psp[DOS_PSP_COMMAND_TAIL_LENGTH] = 0; psp[DOS_PSP_COMMAND_TAIL] = DOS_PSP_COMMAND_TAIL_END;                   /* empty command tail + 0x0D */
+    psp[DOS_PSP_PREVIOUS] = DOS_PSP_NO_PREVIOUS;
+    psp[DOS_PSP_PREVIOUS + 1] = DOS_PSP_NO_PREVIOUS;                /* previous PSP = 0xFFFFFFFF */
+    psp[DOS_PSP_PREVIOUS + 2] = DOS_PSP_NO_PREVIOUS;
+    psp[DOS_PSP_PREVIOUS + 3] = DOS_PSP_NO_PREVIOUS;
+    psp[DOS_PSP_DISPATCH] = X86_OP_INT;
+    psp[DOS_PSP_DISPATCH + 1] = VECTOR_DOS;
+    psp[DOS_PSP_DISPATCH + 2] = X86_OP_RETF; /* INT 21h ; RETF */
+    psp[DOS_PSP_COMMAND_TAIL_LENGTH] = 0;
+    psp[DOS_PSP_COMMAND_TAIL] = DOS_PSP_COMMAND_TAIL_END;                   /* empty command tail + 0x0D */
 }
 
 /* Set the PSP command tail at pspSegment:0x80 from an arguments string (no leading space):
  * [0x80] = length, [0x81..] = " <arguments>", terminated by 0x0D (the parser scans for it).
  * A leading space is the DOS convention. Empty/NULL arguments -> length 0, 0x0D at 0x81.
  */
-static inline VOID DosPspBuildCommandTail(_In_opt_ volatile BYTE *base, _In_ WORD pspSegment,
-                                          _In_opt_ PCSTR arguments)
+static inline VOID DosPspBuildCommandTail(
+    _In_opt_ volatile BYTE *base,
+    _In_ WORD pspSegment,
+    _In_opt_ PCSTR arguments)
 {
     volatile BYTE *psp = DosMcbSegmentAddress(base, pspSegment);
     INT length = 0, argumentIndex;
+
     if (arguments && arguments[0])
     {
         psp[DOS_PSP_COMMAND_TAIL + length++] = ' ';                         /* conventional leading space */
-        for (argumentIndex = 0; arguments[argumentIndex] && length < DOS_PSP_COMMAND_TAIL_MAX; ++argumentIndex) psp[DOS_PSP_COMMAND_TAIL + length++] = (BYTE)arguments[argumentIndex];
+        for (argumentIndex = 0; arguments[argumentIndex] && length < DOS_PSP_COMMAND_TAIL_MAX; ++argumentIndex)
+            psp[DOS_PSP_COMMAND_TAIL + length++] = (BYTE)arguments[argumentIndex];
     }
     psp[DOS_PSP_COMMAND_TAIL_LENGTH] = (BYTE)length;
     psp[DOS_PSP_COMMAND_TAIL + length] = DOS_PSP_COMMAND_TAIL_END;
@@ -118,8 +136,10 @@ static inline VOID DosPspBuildCommandTail(_In_opt_ volatile BYTE *base, _In_ WOR
  * EQUALS the live vector at program entry, which is the host-independent
  * invariant the probe asserts.
  */
-static inline VOID DosPspSaveVectors(_In_opt_ volatile BYTE *base, _In_ WORD pspSegment,
-                                     _In_ WORD parentPsp)
+static inline VOID DosPspSaveVectors(
+    _In_opt_ volatile BYTE *base,
+    _In_ WORD pspSegment,
+    _In_ WORD parentPsp)
 {
     static const BYTE vectors[DOS_PSP_SAVED_VECTORS] = { VECTOR_TERMINATE_ADDRESS, VECTOR_CTRL_C, VECTOR_CRITICAL_ERROR };
     static const BYTE copyOffsets[DOS_PSP_SAVED_VECTORS]  = { DOS_PSP_INT22_COPY, DOS_PSP_INT23_COPY, DOS_PSP_INT24_COPY };

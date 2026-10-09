@@ -98,8 +98,8 @@ typedef struct _DOS_CLOCK_STATE
  * kernels and the spec against one emulator). DOS's date is a day count from
  * 1980-01-01, which is where the lower bound comes from.
  */
-#define DOS_CLOCK_DOS_FIRST_YEAR    1980
-#define DOS_CLOCK_DOS_LAST_YEAR     2099
+#define DOS_CLOCK_DOS_FIRST_YEAR                1980
+#define DOS_CLOCK_DOS_LAST_YEAR                 2099
 
 #define DOS_CLOCK_HUNDREDTHS_PER_DAY \
     ((INT64)DOS_CLOCK_HOURS_PER_DAY * DOS_CLOCK_MINUTES_PER_HOUR * DOS_CLOCK_SECONDS_PER_MINUTE \
@@ -275,8 +275,11 @@ static inline VOID DosClockSetDate(
     _In_ UINT day)
 {
     DOS_CLOCK_TIME guestNow;
+
     DosClockApplyOffset(hostNow, *offset, &guestNow);
-    guestNow.Year = year; guestNow.Month = month; guestNow.Day = day;
+    guestNow.Year = year;
+    guestNow.Month = month;
+    guestNow.Day = day;
     *offset = DosClockPack(&guestNow) - DosClockPack(hostNow);
 }
 
@@ -290,8 +293,11 @@ static inline VOID DosClockSetTime(
     _In_ UINT hundredths)
 {
     DOS_CLOCK_TIME guestNow;
+
     DosClockApplyOffset(hostNow, *offset, &guestNow);
-    guestNow.Hour = hour; guestNow.Minute = minute; guestNow.Second = second;
+    guestNow.Hour = hour;
+    guestNow.Minute = minute;
+    guestNow.Second = second;
     guestNow.Hundredths = hundredths;
     *offset = DosClockPack(&guestNow) - DosClockPack(hostNow);
 }

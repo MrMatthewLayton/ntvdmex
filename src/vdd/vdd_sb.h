@@ -295,8 +295,13 @@ typedef const SB_STATE *PCSB_STATE;
 INT  VddSbInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddSbReset(_In_ PVOID context);
 static inline NTVDD_DEVICE VddSbDevice(_In_ PSB_STATE state)
-{ NTVDD_DEVICE device; device.Name = SB_DEVICE_NAME; device.Initialize = VddSbInitialize; device.Reset = VddSbReset;
-  device.Shutdown = 0; device.Context = state; return device; }
+{ NTVDD_DEVICE device;
+device.Name = SB_DEVICE_NAME;
+device.Initialize = VddSbInitialize;
+device.Reset = VddSbReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 /* Pull up to `frames` samples of playback into `output` (mono 16-bit at the card's
  * current rate), fetching through the DMA controller and raising the completion
@@ -307,7 +312,10 @@ UINT32 VddSbRender(_Inout_ PSB_STATE state, _Out_writes_(frames) INT16 *output, 
 /* #189: the same transport, rendering interleaved L/R pairs (2*frames samples). An
  * 8-bit or 16-bit MONO transfer gives L = R.
  */
-UINT32 VddSbRenderStereo(_Inout_ PSB_STATE state, _Out_writes_(SB_STEREO_CHANNELS * frames) INT16 *output, _In_ UINT32 frames);
+UINT32 VddSbRenderStereo(
+    _Inout_ PSB_STATE state,
+    _Out_writes_(SB_STEREO_CHANNELS * frames) INT16 *output,
+    _In_ UINT32 frames);
 /* #189: frames per second of the transfer in progress -- the programmed rate, halved
  * for an SB Pro stereo transfer (its time constant counts both channels).
  */

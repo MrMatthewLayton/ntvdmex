@@ -67,20 +67,31 @@ static DWORD          g_ModeYPmStop[MYPM_STOP_REASONS];       /* returned, windo
  */
 VOID PlanesDumpBeside(PCSTR bitmapPath)
 {
-    CHAR path[200]; INT length = 0; HANDLE file;
-    DWORD header[4], bytesWritten; INT plane;
+    CHAR path[200];
+    INT length = 0;
+    HANDLE file;
+    DWORD header[4], bytesWritten;
+    INT plane;
+
     while (bitmapPath[length] && length < 190)
     {
         path[length] = bitmapPath[length];
         ++length;
     }
-    if (length < 4) return;
-    path[length - 3] = 'p'; path[length - 2] = 'l'; path[length - 1] = 'n'; path[length] = 0;
+    if (length < 4)
+        return;
+    path[length - 3] = 'p';
+    path[length - 2] = 'l';
+    path[length - 1] = 'n';
+    path[length] = 0;
     file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
-    if (file == INVALID_HANDLE_VALUE) return;
+    if (file == INVALID_HANDLE_VALUE)
+        return;
     HOST_LOCK();
-    header[0] = g_Video.CrtcStartLive; header[1] = g_Video.CrtcOffset;
-    header[2] = g_Video.GraphicsWidth;              header[3] = g_Video.GraphicsHeight;
+    header[0] = g_Video.CrtcStartLive;
+    header[1] = g_Video.CrtcOffset;
+    header[2] = g_Video.GraphicsWidth;
+    header[3] = g_Video.GraphicsHeight;
     WriteFile(file, header, sizeof header, &bytesWritten, NULL);
     for (plane = 0; plane < VIDEO_PLANES; ++plane)                        /* the live backing: host sections when remapped (s74b) */
         WriteFile(file, g_Video.YMapPlane ? g_Video.YMapPlane(g_Video.YMapContext, plane) : g_Video.Planes[plane], VIDEO_PLANE_SIZE, &bytesWritten, NULL);
@@ -120,6 +131,7 @@ static DWORD  g_ModeYTimelineFanoutCount[YTL_SECS];
 UINT64 ModeYTimelineRdtsc(VOID)
 {
     UINT low, high;
+
     __asm__ __volatile__("rdtsc" : "=a"(low), "=d"(high));
     return ((UINT64)high << DWORD_SHIFT) | low;
 }
@@ -155,10 +167,14 @@ static VOID ModeYSampleCheck(INT band, UINT offset, INT plane)
     BYTE prev[YSMP_LEN];
     INT had = g_ModeYSampleHave[band][plane];
     INT changed = !had;
+
     for (index = 0; index < YSMP_LEN && !changed; ++index)
-        if (g_ModeYSample[band][plane][index] != view[index]) changed = 1;
-    if (!changed) return;                       /* nobody wrote this window */
-    for (index = 0; index < YSMP_LEN; ++index) prev[index] = g_ModeYSample[band][plane][index];
+        if (g_ModeYSample[band][plane][index] != view[index])
+            changed = 1;
+    if (!changed)
+        return;                                 /* nobody wrote this window */
+    for (index = 0; index < YSMP_LEN; ++index)
+        prev[index] = g_ModeYSample[band][plane][index];
     /* Against plane 1 BEFORE this window is stored, so pl==1 compares with its own
      * previous content (a self-consistency baseline) rather than with itself.
      */
@@ -167,10 +183,12 @@ static VOID ModeYSampleCheck(INT band, UINT offset, INT plane)
         for (index = 0; index < YSMP_LEN; ++index)
         {
             g_ModeYSampleP1Total[band][plane]++;
-            if (g_ModeYSample[band][1][index] == view[index]) g_ModeYSampleP1Equal[band][plane]++;
+            if (g_ModeYSample[band][1][index] == view[index])
+                g_ModeYSampleP1Equal[band][plane]++;
         }
     }
-    for (index = 0; index < YSMP_LEN; ++index) g_ModeYSample[band][plane][index] = view[index];
+    for (index = 0; index < YSMP_LEN; ++index)
+        g_ModeYSample[band][plane][index] = view[index];
     g_ModeYSampleHave[band][plane] = 1;
     g_ModeYSampleWrites[band]++;
     if (g_ModeYSampleLastPlane[band] >= 0 && g_ModeYSampleLastPlane[band] != plane)
@@ -179,19 +197,27 @@ static VOID ModeYSampleCheck(INT band, UINT offset, INT plane)
         for (index = 0; index < YSMP_LEN; ++index)
         {
             g_ModeYSampleCrossTotalBytes[band]++;
-            if (g_ModeYSampleLast[band][index] == view[index]) g_ModeYSampleCrossEqualBytes[band]++; else same = 0;
+            if (g_ModeYSampleLast[band][index] == view[index])
+                g_ModeYSampleCrossEqualBytes[band]++;
+            else
+                same = 0;
             /* DELIVERY: only bytes this pass actually changed. `prev` was captured
              * before the store above overwrote it.
              */
             if (had && prev[index] != view[index])
             {
                 g_ModeYSampleDeliveredTotal[band]++;
-                if (g_ModeYSampleLast[band][index] == view[index]) g_ModeYSampleDeliveredEqual[band]++;
+                if (g_ModeYSampleLast[band][index] == view[index])
+                    g_ModeYSampleDeliveredEqual[band]++;
             }
         }
-        if (same) g_ModeYSampleCrossSame[band]++; else g_ModeYSampleCrossDiff[band]++;
+        if (same)
+            g_ModeYSampleCrossSame[band]++;
+        else
+            g_ModeYSampleCrossDiff[band]++;
     }
-    for (index = 0; index < YSMP_LEN; ++index) g_ModeYSampleLast[band][index] = view[index];
+    for (index = 0; index < YSMP_LEN; ++index)
+        g_ModeYSampleLast[band][index] = view[index];
     g_ModeYSampleLastPlane[band] = plane;
 }
 
@@ -201,14 +227,17 @@ static VOID ModeYSampleCheck(INT band, UINT offset, INT plane)
 static VOID ModeYFanoutBarNote(UINT linearOffset, INT mask)
 {
     UINT page;
+
     for (page = 0; page < 3; ++page)
     {
         UINT offset = linearOffset - page * 0x4000u;
         UINT index, band;
-        if (linearOffset < page * 0x4000u || offset < YBAR_OFF_LO || offset >= YBAR_OFF_HI) continue;
+        if (linearOffset < page * 0x4000u || offset < YBAR_OFF_LO || offset >= YBAR_OFF_HI)
+            continue;
         band = (offset < YBAR_OFF_MID) ? 0u : 1u;
         g_ModeYFanoutBarWrites[band]++;
-        if ((mask & VIDEO_ALL_PLANES) == VIDEO_ALL_PLANES) g_ModeYFanoutBar4Way[band]++;
+        if ((mask & VIDEO_ALL_PLANES) == VIDEO_ALL_PLANES)
+            g_ModeYFanoutBar4Way[band]++;
         index = page * YBAR_PER_PAGE + (offset - YBAR_OFF_LO);
         if (!(g_ModeYFanoutBarSeen[index >> BITMAP_BYTE_SHIFT] & (1u << (index & BITMAP_BIT_MASK))))
         {
@@ -229,6 +258,7 @@ static VOID ModeYRemapProbe(PCSTR when, DWORD address)
 {
     MEMORY_BASIC_INFORMATION memoryInfo;
     CHAR buffer[200], *cursor = buffer;
+
     cursor = LogPut(cursor, "MODEY-REMAP probe "); cursor = LogPut(cursor, when);
     cursor = LogPut(cursor, " @0x"); cursor = LogHex(cursor, address);
     if (VirtualQuery((LPCVOID)(ULONG_PTR)address, &memoryInfo, sizeof memoryInfo) == sizeof memoryInfo)
@@ -241,7 +271,8 @@ static VOID ModeYRemapProbe(PCSTR when, DWORD address)
         cursor = LogPut(cursor, memoryInfo.State == MEM_FREE     ? " (FREE)"
                   : memoryInfo.State == MEM_RESERVE  ? " (RESERVED)" : " (COMMIT)");
     }
-    else cursor = LogPut(cursor, " <VirtualQuery failed>");
+    else
+        cursor = LogPut(cursor, " <VirtualQuery failed>");
     cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor);
 }
 
@@ -255,13 +286,15 @@ static CHAR  g_RemapReport[2048];
 static PSTR g_RemapReportCursor = g_RemapReport;
 static VOID ModeYRemapEmit(PCSTR begin, PCSTR end)
 {
-    while (begin < end && g_RemapReportCursor < g_RemapReport + sizeof g_RemapReport - 1) *g_RemapReportCursor++ = *begin++;
+    while (begin < end && g_RemapReportCursor < g_RemapReport + sizeof g_RemapReport - 1)
+        *g_RemapReportCursor++ = *begin++;
     *g_RemapReportCursor = 0;
 }
 
 VOID ModeYRemapFlushReport(VOID)
 {
-    if (g_RemapReportCursor == g_RemapReport) return;
+    if (g_RemapReportCursor == g_RemapReport)
+        return;
     LogAppend(LOG_PATH, g_RemapReport, g_RemapReportCursor);
     SerialOut(g_RemapReport, g_RemapReportCursor);
     g_RemapReportCursor = g_RemapReport;
@@ -270,13 +303,15 @@ VOID ModeYRemapFlushReport(VOID)
 static VOID ModeYRemapLog(PCSTR what, DWORD error)
 {
     CHAR buffer[160], *cursor = buffer;
+
     cursor = LogPut(cursor, "MODEY-REMAP "); cursor = LogPut(cursor, what);
     if (error)
     {
         cursor = LogPut(cursor, " err=0x");
         cursor = LogHex(cursor, error);
     }
-    cursor = LogPut(cursor, "\r\n"); ModeYRemapEmit(buffer, cursor);
+    cursor = LogPut(cursor, "\r\n");
+    ModeYRemapEmit(buffer, cursor);
 }
 
 /* Take ownership of the A0000 window. Returns 0 and leaves everything as it was if any
@@ -286,8 +321,11 @@ INT ModeYRemapInitialize(VOID)
 {
     static BYTE savedWindowA[MODEY_WIN], savedWindowB[MODEY_WIN];
     UINT index;
-    for (index = 0; index < MODEY_WIN; ++index) savedWindowA[index] = ((volatile BYTE *)(ULONG_PTR)VIDEO_APERTURE_BASE)[index];
-    for (index = 0; index < MODEY_WIN; ++index) savedWindowB[index] = ((volatile BYTE *)(ULONG_PTR)VIDEO_MONO_BASE)[index];
+
+    for (index = 0; index < MODEY_WIN; ++index)
+        savedWindowA[index] = ((volatile BYTE *)(ULONG_PTR)VIDEO_APERTURE_BASE)[index];
+    for (index = 0; index < MODEY_WIN; ++index)
+        savedWindowB[index] = ((volatile BYTE *)(ULONG_PTR)VIDEO_MONO_BASE)[index];
 
     ModeYRemapProbe("before unmap", VIDEO_APERTURE_BASE);
     if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE))
@@ -305,7 +343,8 @@ INT ModeYRemapInitialize(VOID)
         ModeYRemapLog("could not re-establish B0000 -- text memory is GONE", GetLastError());
         return 0;
     }
-    for (index = 0; index < MODEY_WIN; ++index) ((volatile BYTE *)(ULONG_PTR)VIDEO_MONO_BASE)[index] = savedWindowB[index];
+    for (index = 0; index < MODEY_WIN; ++index)
+        ((volatile BYTE *)(ULONG_PTR)VIDEO_MONO_BASE)[index] = savedWindowB[index];
 
     /* - CLAIM A0000 BEFORE ASKING FOR ANY FLOATING VIEW. Unmapping the original view
      * makes A0000-AFFFF the LOWEST FREE 64K-aligned hole in the address space, and
@@ -349,10 +388,13 @@ INT ModeYRemapInitialize(VOID)
          * marker makes "never written" visible and attributable instead: the oracle
          * sees index 0/1/2/3 rather than a plausible picture.
          */
-        { UINT byteIndex; BYTE *destination = (BYTE *)g_ModeYView[index];
-          for (byteIndex = 0; byteIndex < MODEY_WIN; ++byteIndex) destination[byteIndex] = (BYTE)(index < VIDEO_PLANES ? index : savedWindowA[byteIndex]); }
+        { UINT byteIndex;
+        BYTE *destination = (BYTE *)g_ModeYView[index];
+          for (byteIndex = 0; byteIndex < MODEY_WIN; ++byteIndex)
+              destination[byteIndex] = (BYTE)(index < VIDEO_PLANES ? index : savedWindowA[byteIndex]); }
     }
-    g_ModeYCurrent = MODEY_VIEW_LINEAR; g_ModeYRemap = 1;
+    g_ModeYCurrent = MODEY_VIEW_LINEAR;
+    g_ModeYRemap = 1;
     ModeYRemapLog("A0000 is ours: 4 planes + linear + scratch", 0);
     return 1;
 }
@@ -382,13 +424,16 @@ static INT ModeYLatchVerify(INT32 delta)
 {
     const BYTE *scratch = (const BYTE *)g_ModeYView[MODEY_VIEW_SCRATCH];
     UINT index, moved = 0;
+
     for (index = 0; index < MODEY_WIN; ++index)
     {
         INT32 source;
-        if (scratch[index] == g_ModeYSeed[index]) continue;
+        if (scratch[index] == g_ModeYSeed[index])
+            continue;
         ++moved;
         source = (INT32)index - delta;
-        if (source < 0 || source >= (INT32)MODEY_WIN || g_ModeYSeed[source] != scratch[index]) return 0;
+        if (source < 0 || source >= (INT32)MODEY_WIN || g_ModeYSeed[source] != scratch[index])
+            return 0;
     }
     return moved != 0;
 }
@@ -405,11 +450,13 @@ static INT32 ModeYLatchDelta(VOID)
 {
     const BYTE *scratch = (const BYTE *)g_ModeYView[MODEY_VIEW_SCRATCH];
     unsigned index, runLow = 0, runLength = 0, bestLow = 0, bestLength = 0, cap; /* stays unsigned: UINT here moves the compiled code */
+
     for (index = 0; index < MODEY_WIN; ++index)
     {
         if (scratch[index] != g_ModeYSeed[index])
         {
-            if (!runLength) runLow = index;
+            if (!runLength)
+                runLow = index;
             ++runLength;
             if (runLength > bestLength)
             {
@@ -417,18 +464,25 @@ static INT32 ModeYLatchDelta(VOID)
                 bestLow = runLow;
             }
         }
-        else runLength = 0;
+        else
+            runLength = 0;
     }
-    if (bestLength < 8) return 0;                  /* too little to identify a source */
+    if (bestLength < 8)
+        return 0;                                  /* too little to identify a source */
     cap = bestLength > 24 ? 24 : bestLength;
     for (index = 0; index + cap <= MODEY_WIN; ++index)
     {
         UINT run;
-        if (g_ModeYSeed[index] != scratch[bestLow]) continue;              /* cheap first-byte reject */
-        for (run = 1; run < cap; ++run) if (g_ModeYSeed[index + run] != scratch[bestLow + run]) break;
-        if (run < cap) continue;
+        if (g_ModeYSeed[index] != scratch[bestLow])
+            continue;                                                      /* cheap first-byte reject */
+        for (run = 1; run < cap; ++run)
+            if (g_ModeYSeed[index + run] != scratch[bestLow + run])
+                break;
+        if (run < cap)
+            continue;
         { INT32 delta = (INT32)bestLow - (INT32)index;
-          if (delta && ModeYLatchVerify(delta)) return delta; }
+          if (delta && ModeYLatchVerify(delta))
+              return delta; }
     }
     return 0;
 }
@@ -450,10 +504,15 @@ static struct
 static UINT g_ModeYPmCount = 0, g_ModeYPmLost = 0;
 static VOID ModeYPmSiteNote(INT mask)
 {
-    DWORD linear; UINT index, byteIndex;
-    if (!g_DpmiPm || !g_DpmiLastCs) return;
+    DWORD linear;
+    UINT index, byteIndex;
+
+    if (!g_DpmiPm || !g_DpmiLastCs)
+        return;
     linear = DpmiSelectorBase((WORD)g_DpmiLastCs) + g_DpmiLastEip;
-    for (index = 0; index < g_ModeYPmCount; ++index) if (g_ModeYPmSite[index].Linear == linear) break;
+    for (index = 0; index < g_ModeYPmCount; ++index)
+        if (g_ModeYPmSite[index].Linear == linear)
+            break;
     if (index == g_ModeYPmCount)
     {
         const BYTE *code = (const BYTE *)(ULONG_PTR)(linear - 32);
@@ -463,14 +522,17 @@ static VOID ModeYPmSiteNote(INT mask)
             return;
         }
         g_ModeYPmSite[index].Linear = linear;
-        if (HostReadable(code, 48)) for (byteIndex = 0; byteIndex < 48; ++byteIndex) g_ModeYPmSite[index].Bytes[byteIndex] = code[byteIndex];
+        if (HostReadable(code, 48))
+            for (byteIndex = 0; byteIndex < 48; ++byteIndex)
+                g_ModeYPmSite[index].Bytes[byteIndex] = code[byteIndex];
         ++g_ModeYPmCount;
     }
     g_ModeYPmSite[index].Count++;
     if (mask >= 0)
     {
         g_ModeYPmSite[index].Masks |= (WORD)(1u << (mask & VIDEO_ALL_PLANES));
-        if ((mask & VIDEO_ALL_PLANES) & ((mask & VIDEO_ALL_PLANES) - 1)) g_ModeYPmSite[index].Multi++;
+        if ((mask & VIDEO_ALL_PLANES) & ((mask & VIDEO_ALL_PLANES) - 1))
+            g_ModeYPmSite[index].Multi++;
     }
 }
 
@@ -478,7 +540,9 @@ VOID ModeYRemapSelect(PVOID context, INT mask)
 {
     UINT64 cycleStart;
     DWORD seconds, swapsBase, fan0, fanoutBytesBase, function0;
-    if (!g_ModeYRemap) return;
+
+    if (!g_ModeYRemap)
+        return;
     /* The timeline measures MODE Y. A planar 16-colour guest (mode 12h) also moves this
      * window on every map-mask write, and the RDTSC/GetTickCount toll cost Lemmings'
      * interpreted run ~4% of its throughput -- so it goes straight to the work.
@@ -490,12 +554,18 @@ VOID ModeYRemapSelect(PVOID context, INT mask)
     }
     if (!g_ModeYTimelineT0)
     {
-        LARGE_INTEGER now; QueryPerformanceCounter(&now);
-        g_ModeYTimelineT0 = GetTickCount(); g_ModeYTimelineTscBase = ModeYTimelineRdtsc(); g_ModeYTimelineQpcBase = now.QuadPart;
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        g_ModeYTimelineT0 = GetTickCount();
+        g_ModeYTimelineTscBase = ModeYTimelineRdtsc();
+        g_ModeYTimelineQpcBase = now.QuadPart;
     }
     seconds = (GetTickCount() - g_ModeYTimelineT0) / MILLISECONDS_PER_SECOND_U;
     ModeYPmSiteNote(mask);
-    swapsBase = g_ModeYSwaps; fan0 = g_ModeYFanouts; fanoutBytesBase = g_ModeYFanoutBytes; function0 = g_ModeYFanoutNew;
+    swapsBase = g_ModeYSwaps;
+    fan0 = g_ModeYFanouts;
+    fanoutBytesBase = g_ModeYFanoutBytes;
+    function0 = g_ModeYFanoutNew;
     cycleStart = ModeYTimelineRdtsc();
     ModeYRemapSelectBody(context, mask);
     if (seconds < YTL_SECS)
@@ -529,15 +599,20 @@ static UINT g_ModeYSiteCount = 0;
 VOID ModeYBailNote(DWORD cs, DWORD ip, const volatile BYTE *bytes)
 {
     UINT index, byteIndex;
+
     for (index = 0; index < g_ModeYSiteCount; ++index)
         if (g_ModeYSite[index].Cs == cs && g_ModeYSite[index].Ip == ip)
         {
             g_ModeYSite[index].Count++;
             return;
         }
-    if (g_ModeYSiteCount >= MY_SITE_MAX) return;
-    g_ModeYSite[index].Cs = cs; g_ModeYSite[index].Ip = ip; g_ModeYSite[index].Count = 1;
-    for (byteIndex = 0; byteIndex < 8; ++byteIndex) g_ModeYSite[index].Bytes[byteIndex] = bytes[byteIndex];
+    if (g_ModeYSiteCount >= MY_SITE_MAX)
+        return;
+    g_ModeYSite[index].Cs = cs;
+    g_ModeYSite[index].Ip = ip;
+    g_ModeYSite[index].Count = 1;
+    for (byteIndex = 0; byteIndex < 8; ++byteIndex)
+        g_ModeYSite[index].Bytes[byteIndex] = bytes[byteIndex];
     ++g_ModeYSiteCount;
 }
 
@@ -545,21 +620,27 @@ VOID ModeYTimelineReport(VOID)
 {
     static INT done = 0;
     CHAR buffer[1400], *cursor = buffer;
-    LARGE_INTEGER now; UINT64 cpu; DWORD microsecondsRun, second, last = 0;
+    LARGE_INTEGER now;
+    UINT64 cpu;
+    DWORD microsecondsRun, second, last = 0;
     INT row;
     static PCSTR names[9] = { "sel", "swap", "fan", "fanB", "us", "flip", "fanN", "ins", "ius" };
     if (done || !g_ModeYTimelineT0)
     {
-        if (!done) HostProfileDump();
+        if (!done)
+            HostProfileDump();
         return;
     }
     done = 1;
     HostProfileDump();
-    if (g_ModeYSlices && g_ModeYRingOn) ModeYRingDump("at exit -- the last instructions interpreted for mode Y");
+    if (g_ModeYSlices && g_ModeYRingOn)
+        ModeYRingDump("at exit -- the last instructions interpreted for mode Y");
     QueryPerformanceCounter(&now);
     microsecondsRun = QpcMicroseconds(now.QuadPart - g_ModeYTimelineQpcBase);
     cpu = microsecondsRun ? (ModeYTimelineRdtsc() - g_ModeYTimelineTscBase) / microsecondsRun : 0;    /* cycles per us */
-    for (second = 0; second < YTL_SECS; ++second) if (g_ModeYTimelineSelector[second]) last = second;
+    for (second = 0; second < YTL_SECS; ++second)
+        if (g_ModeYTimelineSelector[second])
+            last = second;
     cursor = LogPut(cursor, "STAGE2: MODEYTL cyc_per_us="); cursor = LogDecimal(cursor, (DWORD)cpu);
     cursor = LogPut(cursor, " secs="); cursor = LogDecimal(cursor, last + 1);
     cursor = LogPut(cursor, " fanB_total="); cursor = LogDecimal(cursor, g_ModeYFanoutBytes);
@@ -601,7 +682,10 @@ VOID ModeYTimelineReport(VOID)
           cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer;
       }
       if (g_ModeYPmLost) { cursor = LogPut(cursor, "  MODEY-PM sites lost="); cursor = LogDecimal(cursor, g_ModeYPmLost);
-                        cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); cursor = buffer; }
+                        cursor = LogPut(cursor, "\r\n");
+                        LogAppend(LOG_PATH, buffer, cursor);
+                        SerialOut(buffer, cursor);
+                        cursor = buffer; }
       for (index = 0; index < g_ModeYSiteCount; ++index)
       {
           cursor = LogPut(cursor, "  MODEY-INTERP bail cs:ip="); cursor = LogHex(cursor, g_ModeYSite[index].Cs);
@@ -623,16 +707,43 @@ VOID ModeYTimelineReport(VOID)
             DWORD value = 0;
             switch (row)
             {
-            case 0: value = g_ModeYTimelineSelector[second];  break;
-            case 1: value = g_ModeYTimelineSwap[second]; break;
-            case 2: value = g_ModeYTimelineFanout[second];  break;
-            case 3: value = g_ModeYTimelineFanoutBytes[second]; break;
-            case 4: value = cpu ? (DWORD)(g_ModeYTimelineCycles[second] / cpu) : 0; break;
-            case 5: value = g_ModeYTimelineFlip[second] ? g_ModeYTimelineFlip[second] - previousFlip : 0;
-                    if (g_ModeYTimelineFlip[second]) previousFlip = g_ModeYTimelineFlip[second]; break;
-            case 6: value = g_ModeYTimelineFanoutCount[second]; break;
-            case 7: value = g_ModeYTimelineIns[second];  break;
-            case 8: value = cpu ? (DWORD)(g_ModeYTimelineInterpreterCycles[second] / cpu) : 0; break;
+            case 0:
+                value = g_ModeYTimelineSelector[second];
+            break;
+
+            case 1:
+                value = g_ModeYTimelineSwap[second];
+            break;
+
+            case 2:
+                value = g_ModeYTimelineFanout[second];
+            break;
+
+            case 3:
+                value = g_ModeYTimelineFanoutBytes[second];
+            break;
+
+            case 4:
+                value = cpu ? (DWORD)(g_ModeYTimelineCycles[second] / cpu) : 0;
+            break;
+
+            case 5:
+                value = g_ModeYTimelineFlip[second] ? g_ModeYTimelineFlip[second] - previousFlip : 0;
+                    if (g_ModeYTimelineFlip[second])
+                        previousFlip = g_ModeYTimelineFlip[second];
+                    break;
+
+            case 6:
+                value = g_ModeYTimelineFanoutCount[second];
+            break;
+
+            case 7:
+                value = g_ModeYTimelineIns[second];
+            break;
+
+            case 8:
+                value = cpu ? (DWORD)(g_ModeYTimelineInterpreterCycles[second] / cpu) : 0;
+            break;
             }
             cursor = LogPut(cursor, second ? "," : ""); cursor = LogDecimal(cursor, value);
         }
@@ -643,8 +754,10 @@ VOID ModeYTimelineReport(VOID)
 static VOID ModeYRemapSelectBody(PVOID context, INT mask)
 {
     INT want, plane, selectedCount = 0, selector[VIDEO_PLANES];
+
     (VOID)context;
-    if (!g_ModeYRemap) return;
+    if (!g_ModeYRemap)
+        return;
     ++g_ModeYSelectorCalls;
     ModeYGr4CloseRun();   /* the window is about to move: end the current read run */
 
@@ -681,12 +794,14 @@ static VOID ModeYRemapSelectBody(PVOID context, INT mask)
         for (index = 0; index < MODEY_WIN; ++index)
         {
             BYTE byteValue;
-            if (scratch[index] == g_ModeYSeed[index]) continue;   /* untouched: not this mask's business */
+            if (scratch[index] == g_ModeYSeed[index])
+                continue;                                         /* untouched: not this mask's business */
             ++g_ModeYFanoutBytes;
             byteValue = scratch[index];
             ModeYFanoutBarNote(index, g_ModeYPreviousMask);      /* is this how the bar collapses? */
             for (plane = 0; plane < VIDEO_PLANES; ++plane)
-                if (g_ModeYPreviousMask & (1 << plane)) ((BYTE *)g_ModeYView[plane])[index] = byteValue;
+                if (g_ModeYPreviousMask & (1 << plane))
+                    ((BYTE *)g_ModeYView[plane])[index] = byteValue;
         }
         ++g_ModeYFanouts;
     }
@@ -697,7 +812,9 @@ static VOID ModeYRemapSelectBody(PVOID context, INT mask)
     }
     else
     {
-        for (plane = 0; plane < VIDEO_PLANES; ++plane) if (mask & (1 << plane)) selector[selectedCount++] = plane;
+        for (plane = 0; plane < VIDEO_PLANES; ++plane)
+            if (mask & (1 << plane))
+                selector[selectedCount++] = plane;
         if (!selectedCount) /* mask 0: nothing to point at */
         {
             ++g_ModeYSelectorZero;
@@ -738,14 +855,17 @@ static VOID ModeYRemapSelectBody(PVOID context, INT mask)
                                                             and remember the seed so the
                                                             fan-out can tell writes from
                                                             bytes nobody touched */
-        UINT index; BYTE *destination = (BYTE *)g_ModeYView[MODEY_VIEW_SCRATCH]; const BYTE *source = (const BYTE *)g_ModeYView[selector[0]];
+        UINT index;
+        BYTE *destination = (BYTE *)g_ModeYView[MODEY_VIEW_SCRATCH];
+        const BYTE *source = (const BYTE *)g_ModeYView[selector[0]];
         for (index = 0; index < MODEY_WIN; ++index)
         {
             destination[index] = source[index];
             g_ModeYSeed[index] = source[index];
         }
         if (g_Video.ModeKind == VIDEO_KIND_LINEAR8)
-            for (index = 0; index < MODEY_WIN; ++index) g_ModeYShadow[index] = source[index];
+            for (index = 0; index < MODEY_WIN; ++index)
+                g_ModeYShadow[index] = source[index];
     }
     if (!MapViewOfFileEx(g_ModeYSeconds[want], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
                          0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE))
@@ -832,7 +952,8 @@ static VOID ModeYGr4CloseRun(VOID)
         /* A run of 4+ is a read pass: record which plane the window was stranded on,
          * because that plane's bytes are what the guest took away four times.
          */
-        if (g_ModeYGr4SinceSelector >= 4 && g_ModeYCurrent >= 0 && g_ModeYCurrent < 4) g_ModeYGr4RunPlanes[g_ModeYCurrent]++;
+        if (g_ModeYGr4SinceSelector >= 4 && g_ModeYCurrent >= 0 && g_ModeYCurrent < 4)
+            g_ModeYGr4RunPlanes[g_ModeYCurrent]++;
         g_ModeYGr4SinceSelector = 0;
     }
 }
@@ -841,14 +962,18 @@ DWORD g_ModeYGr4Moves = 0;
 VOID ModeYRemapReadMap(PVOID context, INT plane)
 {
     (VOID)context;
-    if (!g_ModeYRemap) return;
+    if (!g_ModeYRemap)
+        return;
     ++g_ModeYGr4Calls;
     ++g_ModeYGr4SinceSelector;
-    if (g_ModeYCurrent >= 0 && g_ModeYCurrent < MODEY_NSEC) g_ModeYGr4Pair[plane & VIDEO_PLANE_INDEX_MASK][g_ModeYCurrent]++;
-    if (plane != g_ModeYCurrent) ++g_ModeYGr4Mismatch;
+    if (g_ModeYCurrent >= 0 && g_ModeYCurrent < MODEY_NSEC)
+        g_ModeYGr4Pair[plane & VIDEO_PLANE_INDEX_MASK][g_ModeYCurrent]++;
+    if (plane != g_ModeYCurrent)
+        ++g_ModeYGr4Mismatch;
 
     plane &= VIDEO_PLANE_INDEX_MASK;
-    if (g_ModeYCurrent == MODEY_VIEW_SCRATCH || g_ModeYCurrent == plane) return;   /* scratch in flight, or already there */
+    if (g_ModeYCurrent == MODEY_VIEW_SCRATCH || g_ModeYCurrent == plane)
+        return;                                                                    /* scratch in flight, or already there */
     if (!UnmapViewOfFile((LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE))
     {
         ++g_ModeYFail;
@@ -885,8 +1010,10 @@ VOID ModeYRemapWriteMode(PVOID context, INT writeMode)
     {
         if (g_ModeYCurrent == MODEY_VIEW_SCRATCH) {                          /* multi-plane: the scratch is the
                                                        only place the copy is visible */
-            UINT index; const BYTE *scratch = (const BYTE *)g_ModeYView[MODEY_VIEW_SCRATCH];
-            for (index = 0; index < MODEY_WIN; ++index) g_ModeYSeed[index] = scratch[index];
+            UINT index;
+            const BYTE *scratch = (const BYTE *)g_ModeYView[MODEY_VIEW_SCRATCH];
+            for (index = 0; index < MODEY_WIN; ++index)
+                g_ModeYSeed[index] = scratch[index];
             g_ModeYLatch = 1;
         }
         /* A single-plane mask needs nothing: the guest is moving bytes inside the plane
@@ -904,10 +1031,12 @@ VOID ModeYRemapWriteMode(PVOID context, INT writeMode)
             for (index = 0; index < MODEY_WIN; ++index)
             {
                 INT32 source;
-                if (scratch[index] == g_ModeYSeed[index]) continue;
+                if (scratch[index] == g_ModeYSeed[index])
+                    continue;
                 source = (INT32)index - delta;
                 for (plane = 0; plane < VIDEO_PLANES; ++plane)
-                    if (g_ModeYPreviousMask & (1 << plane)) ((BYTE *)g_ModeYView[plane])[index] = ((BYTE *)g_ModeYView[plane])[source];
+                    if (g_ModeYPreviousMask & (1 << plane))
+                        ((BYTE *)g_ModeYView[plane])[index] = ((BYTE *)g_ModeYView[plane])[source];
             }
             ++g_ModeYLatchOk;
         }
@@ -991,17 +1120,21 @@ VOID ModeYRemapWriteMode(PVOID context, INT writeMode)
             for (index2 = 0; index2 < MODEY_WIN; ++index2)
             {
                 UINT row;
-                if (scratch[index2] == g_ModeYSeed[index2]) continue;
+                if (scratch[index2] == g_ModeYSeed[index2])
+                    continue;
                 if (!count)
                 {
                     low = index2;
                     first = scratch[index2];
                 }
-                if (scratch[index2] != first) constant = 0;
-                high = index2; ++count;
+                if (scratch[index2] != first)
+                    constant = 0;
+                high = index2;
+                ++count;
                 /* how much of this burst lands in the status bar at all */
                 row = (index2 % 0x4000u) / 80u;
-                if (row >= 168 && row < 200) ++barBytes;
+                if (row >= 168 && row < 200)
+                    ++barBytes;
             }
             (VOID)uniqueCount;
             { CHAR writeModeLine[224], *lineCursor = writeModeLine;
@@ -1020,9 +1153,12 @@ VOID ModeYRemapWriteMode(PVOID context, INT writeMode)
               lineCursor = LogPut(lineCursor, constant ? " DEST IS CONSTANT 0x" : " dest varies, first=0x");
               lineCursor = LogHexByte(lineCursor, first);
               lineCursor = LogPut(lineCursor, " mask=0x"); lineCursor = LogHexByte(lineCursor, (UINT)g_ModeYPreviousMask);
-              lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, writeModeLine, lineCursor); SerialOut(writeModeLine, lineCursor); }
+              lineCursor = LogPut(lineCursor, "\r\n");
+              LogAppend(LOG_PATH, writeModeLine, lineCursor);
+              SerialOut(writeModeLine, lineCursor); }
         }
-        for (index = 0; index < MODEY_WIN; ++index) g_ModeYSeed[index] = scratch[index];   /* re-seed for the byte diff */
+        for (index = 0; index < MODEY_WIN; ++index)
+            g_ModeYSeed[index] = scratch[index];                                           /* re-seed for the byte diff */
         g_ModeYLatch = 0;
     }
     g_ModeYWriteMode = writeMode;
@@ -1034,8 +1170,11 @@ VOID ModeYRemapWriteMode(PVOID context, INT writeMode)
 static VOID A000Protect(INT isOn)
 {
     DWORD old;
-    if (g_NoA000) isOn = 0;              /* diagnostic knob -- see NOA000_FLAG */
-    if (isOn == g_A000Protection) return;
+
+    if (g_NoA000)
+        isOn = 0;                        /* diagnostic knob -- see NOA000_FLAG */
+    if (isOn == g_A000Protection)
+        return;
     if (VirtualProtect((LPVOID)VIDEO_APERTURE_BASE, X86_SEGMENT_SIZE_U,
                        isOn ? PAGE_NOACCESS : PAGE_EXECUTE_READWRITE, &old))
         g_A000Protection = isOn;
@@ -1062,6 +1201,7 @@ INT g_P12Interp = 0;    /* planar mode is current -> interpret the guest */
 VOID VideoTrapSync(VOID)
 {
     INT planar = VddVideoIsPlanarActive(&g_Video);
+
     if (planar && !g_P12Offset)
     {
         A000Protect(FALSE);
@@ -1100,11 +1240,13 @@ VOID VideoTrapSync(VOID)
  */
 static INT ModeYInterpServes(VOID)
 {
-    if (g_ModeYInterpOffset || g_Video.ModeKind != VIDEO_KIND_LINEAR8) return 0;
+    if (g_ModeYInterpOffset || g_Video.ModeKind != VIDEO_KIND_LINEAR8)
+        return 0;
     /* A PM guest's drawers are interpreted (ModeYPmRun); its OTHER code runs natively,
      * so with the detector on keep the scratch window to catch what that code stores.
      */
-    if (g_DpmiPm) return !g_ModeYPmOffset && !g_ModeYPmDetect;
+    if (g_DpmiPm)
+        return !g_ModeYPmOffset && !g_ModeYPmDetect;
     return 1;
 }
 
@@ -1112,7 +1254,9 @@ static INT ModeYInterpServes(VOID)
 INT ModeYNeedsInterp(VOID)
 {
     BYTE mask;
-    if (!g_ModeYRemap || !ModeYInterpServes() || g_Video.IsChain4) return 0;
+
+    if (!g_ModeYRemap || !ModeYInterpServes() || g_Video.IsChain4)
+        return 0;
     mask = (BYTE)(g_Video.MapMask & VIDEO_ALL_PLANES);
     return (mask & (BYTE)(mask - 1)) != 0 || (g_Video.WriteMode & VIDEO_WRITE_MODE_MASK) != 0;
 }
@@ -1164,7 +1308,9 @@ DWORD   g_InterpreterMemoryBadReads, g_InterpreterMemoryBadWrites, g_Interpreter
 INT InterpreterMemoryPageOk(UINT32 linear)
 {
     UINT32 page = linear >> PAGE_SHIFT;
-    if (linear >= X86_REAL_MODE_SIZE_U) return 1;             /* HMA and above: leave to the raw path */
+
+    if (linear >= X86_REAL_MODE_SIZE_U)
+        return 1;                                             /* HMA and above: leave to the raw path */
     if (g_PageMap[page] == PAGE_MAP_UNKNOWN)
     {
         MEMORY_BASIC_INFORMATION memoryInfo;
@@ -1188,7 +1334,8 @@ INT InterpreterMemoryPageOk(UINT32 linear)
  * the slow path, which is the old function unchanged.
  */
 static __attribute__((noinline)) BYTE InterpreterMemoryRead8Slow(UINT32 linear)
-{ if (linear >= VIDEO_APERTURE_BASE && linear < VIDEO_MONO_BASE) return VddVideoPlanarRead(&g_Video, linear - VIDEO_APERTURE_BASE);
+{ if (linear >= VIDEO_APERTURE_BASE && linear < VIDEO_MONO_BASE)
+    return VddVideoPlanarRead(&g_Video, linear - VIDEO_APERTURE_BASE);
   if (!InterpreterMemoryPageOk(linear))
   {
       g_InterpreterMemoryBadReads++;
@@ -1242,14 +1389,19 @@ static inline __attribute__((always_inline)) const volatile BYTE *V86HostCodePoi
  */
 static UINT32 V86HostIn(WORD port, INT width)
 { UINT32 value = 0;
-  if (port >= PIT_PORT_COUNTER0 && port <= PIT_PORT_CONTROL) HostPitGenerate();
-  VddBusIo(&g_Bus, port, (BYTE)width, VDD_IO_IN, &value); return value; }
+  if (port >= PIT_PORT_COUNTER0 && port <= PIT_PORT_CONTROL)
+      HostPitGenerate();
+  VddBusIo(&g_Bus, port, (BYTE)width, VDD_IO_IN, &value);
+  return value; }
 static VOID V86HostOut(WORD port, INT width, UINT32 byteValue)
 { UINT32 value = byteValue;
-  if (port >= PIT_PORT_COUNTER0 && port <= PIT_PORT_CONTROL) HostPitGenerate();
+  if (port >= PIT_PORT_COUNTER0 && port <= PIT_PORT_CONTROL)
+      HostPitGenerate();
   VddBusIo(&g_Bus, port, (BYTE)width, VDD_IO_OUT, &value);
-  if (port == PIT_PORT_CONTROL) PitLatchNote((BYTE)byteValue);     /* same instrument as the reflected path */
-  if (port == PIT_PORT_COUNTER0) HostPitResyncCheck(); }         /* and the same resync rule */
+  if (port == PIT_PORT_CONTROL)
+      PitLatchNote((BYTE)byteValue);                               /* same instrument as the reflected path */
+  if (port == PIT_PORT_COUNTER0)
+      HostPitResyncCheck(); }         /* and the same resync rule */
 
 enum
 {
@@ -1271,17 +1423,21 @@ static struct
 static INT Pm32PageOk(DWORD page, INT isWrite)
 {
     UINT slot = (UINT)(page * KNUTH_HASH_MULTIPLIER_U) >> TOP_BYTE_SHIFT;
+
     if (g_Pm32PageCache[slot].Page != page + 1)
     {
-        MEMORY_BASIC_INFORMATION memoryInfo; BYTE access = 0;
+        MEMORY_BASIC_INFORMATION memoryInfo;
+        BYTE access = 0;
         if (VirtualQuery((LPCVOID)(ULONG_PTR)(page << PAGE_SHIFT), &memoryInfo, sizeof memoryInfo) == sizeof memoryInfo
             && memoryInfo.State == MEM_COMMIT && !(memoryInfo.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
         {
             access = PM32_PAGE_READ;
             if (memoryInfo.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY
-                               | PAGE_EXECUTE_WRITECOPY)) access = PM32_PAGE_READ | PM32_PAGE_WRITE;
+                               | PAGE_EXECUTE_WRITECOPY))
+                access = PM32_PAGE_READ | PM32_PAGE_WRITE;
         }
-        g_Pm32PageCache[slot].Page = page + 1; g_Pm32PageCache[slot].Access = access;
+        g_Pm32PageCache[slot].Page = page + 1;
+        g_Pm32PageCache[slot].Access = access;
     }
     return isWrite ? (g_Pm32PageCache[slot].Access & PM32_PAGE_WRITE) != 0 : (g_Pm32PageCache[slot].Access & PM32_PAGE_READ) != 0;
 }
@@ -1311,10 +1467,15 @@ static VOID Pm32HostWrite8(UINT32 linear, BYTE value)
 static INT Pm32HostCanAccess(UINT32 linear, INT width, INT isWrite)
 {
     UINT32 end = linear + (UINT32)width - 1;
-    if (end < linear) return 0;
-    if (linear >= VIDEO_APERTURE_BASE && end < VIDEO_MONO_BASE) return 1;
-    if (linear < VIDEO_MONO_BASE && end >= VIDEO_APERTURE_BASE) return 0;          /* straddles the aperture */
-    if (!Pm32PageOk(linear >> PAGE_SHIFT, isWrite)) return 0;
+
+    if (end < linear)
+        return 0;
+    if (linear >= VIDEO_APERTURE_BASE && end < VIDEO_MONO_BASE)
+        return 1;
+    if (linear < VIDEO_MONO_BASE && end >= VIDEO_APERTURE_BASE)
+        return 0;                                                                  /* straddles the aperture */
+    if (!Pm32PageOk(linear >> PAGE_SHIFT, isWrite))
+        return 0;
     return ((end >> PAGE_SHIFT) == (linear >> PAGE_SHIFT)) || Pm32PageOk(end >> PAGE_SHIFT, isWrite);
 }
 
@@ -1334,8 +1495,11 @@ static VOID     Pm32HostOut(WORD port, INT width, UINT32 value)
 INT ModeYPmNeedsInterp(VOID)
 {
     BYTE mask;
-    if (!g_DpmiPm || g_ModeYPmOffset || g_ModeYInterpOffset || !g_ModeYRemap) return 0;
-    if (g_Video.ModeKind != VIDEO_KIND_LINEAR8 || g_Video.IsChain4) return 0;
+
+    if (!g_DpmiPm || g_ModeYPmOffset || g_ModeYInterpOffset || !g_ModeYRemap)
+        return 0;
+    if (g_Video.ModeKind != VIDEO_KIND_LINEAR8 || g_Video.IsChain4)
+        return 0;
     mask = (BYTE)(g_Video.MapMask & VIDEO_ALL_PLANES);
     return (mask & (BYTE)(mask - 1)) != 0 || (g_Video.WriteMode & VIDEO_WRITE_MODE_MASK) != 0;
 }
@@ -1381,25 +1545,38 @@ static INT ModeYPmIrqWaiting(VOID)
 
 VOID ModeYPmRun(volatile BYTE *tib)
 {
-    PM32_CPU cpu; INT32 steps = 0, idleFrom = 0; UINT32 espStart; INT why;
+    PM32_CPU cpu;
+    INT32 steps = 0, idleFrom = 0;
+    UINT32 espStart;
+    INT why;
     DWORD vgaSeen;
     WORD selector[X86_SEGMENT_REGISTERS];
     INT index;
     WORD cs = (WORD)VDM_REG16(tib, VTIB_CS), ss = (WORD)VDM_REG16(tib, VTIB_SS);
+
     if (!DpmiSelectorIs32(cs) || !DpmiSelectorIs32(ss))
     {
         g_ModeYPmStop[MYPM_STOP_NOT_FLAT]++;
         return;
     }
-    selector[X86_SREG_ES] = (WORD)VDM_REG(tib, VTIB_ES); selector[X86_SREG_CS] = cs; selector[X86_SREG_SS] = ss;
-    selector[X86_SREG_DS] = (WORD)VDM_REG(tib, VTIB_DS); selector[X86_SREG_FS] = (WORD)VDM_REG(tib, VTIB_FS);
+    selector[X86_SREG_ES] = (WORD)VDM_REG(tib, VTIB_ES);
+    selector[X86_SREG_CS] = cs;
+    selector[X86_SREG_SS] = ss;
+    selector[X86_SREG_DS] = (WORD)VDM_REG(tib, VTIB_DS);
+    selector[X86_SREG_FS] = (WORD)VDM_REG(tib, VTIB_FS);
     selector[X86_SREG_GS] = (WORD)VDM_REG(tib, VTIB_GS);
-    for (index = 0; index < X86_SEGMENT_REGISTERS; ++index) cpu.SegmentBases[index] = (selector[index] & X86_SELECTOR_NULL_MASK) ? DpmiSelectorBase(selector[index]) : 0;
-    cpu.Registers[X86_REG_AX] = VDM_REG(tib, VTIB_EAX); cpu.Registers[X86_REG_CX] = VDM_REG(tib, VTIB_ECX);
-    cpu.Registers[X86_REG_DX] = VDM_REG(tib, VTIB_EDX); cpu.Registers[X86_REG_BX] = VDM_REG(tib, VTIB_EBX);
-    cpu.Registers[X86_REG_SP] = VDM_REG(tib, VTIB_ESP); cpu.Registers[X86_REG_BP] = VDM_REG(tib, VTIB_EBP);
-    cpu.Registers[X86_REG_SI] = VDM_REG(tib, VTIB_ESI); cpu.Registers[X86_REG_DI] = VDM_REG(tib, VTIB_EDI);
-    cpu.Eip = VDM_REG(tib, VTIB_EIP); cpu.Flags = VDM_REG(tib, VTIB_EFLAGS);
+    for (index = 0; index < X86_SEGMENT_REGISTERS; ++index)
+        cpu.SegmentBases[index] = (selector[index] & X86_SELECTOR_NULL_MASK) ? DpmiSelectorBase(selector[index]) : 0;
+    cpu.Registers[X86_REG_AX] = VDM_REG(tib, VTIB_EAX);
+    cpu.Registers[X86_REG_CX] = VDM_REG(tib, VTIB_ECX);
+    cpu.Registers[X86_REG_DX] = VDM_REG(tib, VTIB_EDX);
+    cpu.Registers[X86_REG_BX] = VDM_REG(tib, VTIB_EBX);
+    cpu.Registers[X86_REG_SP] = VDM_REG(tib, VTIB_ESP);
+    cpu.Registers[X86_REG_BP] = VDM_REG(tib, VTIB_EBP);
+    cpu.Registers[X86_REG_SI] = VDM_REG(tib, VTIB_ESI);
+    cpu.Registers[X86_REG_DI] = VDM_REG(tib, VTIB_EDI);
+    cpu.Eip = VDM_REG(tib, VTIB_EIP);
+    cpu.Flags = VDM_REG(tib, VTIB_EFLAGS);
     espStart = cpu.Registers[X86_REG_SP];
     { DWORD vgaCountStart = g_Pm32VgaCount;
     vgaSeen = vgaCountStart;
@@ -1445,19 +1622,27 @@ VOID ModeYPmRun(volatile BYTE *tib)
     }
     HOST_UNLOCK();
     }
-    g_ModeYPmRuns++; g_ModeYPmInstructions += (DWORD)steps; g_ModeYPmStop[why]++;
+    g_ModeYPmRuns++;
+    g_ModeYPmInstructions += (DWORD)steps;
+    g_ModeYPmStop[why]++;
     if (why == MYPM_STOP_DECLINED)
     {
         BYTE mapMask = (BYTE)(g_Video.MapMask & VIDEO_ALL_PLANES);
         g_ModeYPmBails++;
-        if (mapMask & (BYTE)(mapMask - 1)) g_ModeYPmBailMp++;
+        if (mapMask & (BYTE)(mapMask - 1))
+            g_ModeYPmBailMp++;
         ModeYBailNote(cs, cpu.Eip, (const volatile BYTE *)(ULONG_PTR)(cpu.SegmentBases[X86_SREG_CS] + cpu.Eip));
     }
-    if (!steps) return;
-    VDM_REG(tib, VTIB_EAX) = cpu.Registers[X86_REG_AX]; VDM_REG(tib, VTIB_ECX) = cpu.Registers[X86_REG_CX];
-    VDM_REG(tib, VTIB_EDX) = cpu.Registers[X86_REG_DX]; VDM_REG(tib, VTIB_EBX) = cpu.Registers[X86_REG_BX];
-    VDM_REG(tib, VTIB_ESP) = cpu.Registers[X86_REG_SP]; VDM_REG(tib, VTIB_EBP) = cpu.Registers[X86_REG_BP];
-    VDM_REG(tib, VTIB_ESI) = cpu.Registers[X86_REG_SI]; VDM_REG(tib, VTIB_EDI) = cpu.Registers[X86_REG_DI];
+    if (!steps)
+        return;
+    VDM_REG(tib, VTIB_EAX) = cpu.Registers[X86_REG_AX];
+    VDM_REG(tib, VTIB_ECX) = cpu.Registers[X86_REG_CX];
+    VDM_REG(tib, VTIB_EDX) = cpu.Registers[X86_REG_DX];
+    VDM_REG(tib, VTIB_EBX) = cpu.Registers[X86_REG_BX];
+    VDM_REG(tib, VTIB_ESP) = cpu.Registers[X86_REG_SP];
+    VDM_REG(tib, VTIB_EBP) = cpu.Registers[X86_REG_BP];
+    VDM_REG(tib, VTIB_ESI) = cpu.Registers[X86_REG_SI];
+    VDM_REG(tib, VTIB_EDI) = cpu.Registers[X86_REG_DI];
     VDM_REG(tib, VTIB_EIP) = cpu.Eip;
     /* the arithmetic flags and DF only: IF, IOPL, VM and the rest are the monitor's */
     VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & ~EFLAGS_STATUS_DF_U) | (cpu.Flags & EFLAGS_STATUS_DF_U);
@@ -1477,7 +1662,9 @@ const V86_CPU *g_InterpreterCpu;
 static VOID InterpreterMemoryBadNote(UINT32 linear, INT write)
 {
     CHAR buffer[224], *cursor = buffer;
-    if (g_InterpreterMemoryBadLogged >= 12) return;
+
+    if (g_InterpreterMemoryBadLogged >= 12)
+        return;
     g_InterpreterMemoryBadLogged++;
     cursor = LogPut(cursor, "IMEM-OOR "); cursor = LogPut(cursor, write ? "W" : "R"); cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, linear);
     cursor = LogPut(cursor, " guest cs:ip=0x"); cursor = LogHex(cursor, g_V86InstructionPointer);
@@ -1485,7 +1672,8 @@ static VOID InterpreterMemoryBadNote(UINT32 linear, INT write)
         cursor = LogPut(cursor, " es=0x"); cursor = LogHex(cursor, cpu->Segments[0]);
         cursor = LogPut(cursor, " ds=0x"); cursor = LogHex(cursor, cpu->Segments[3]);
         cursor = LogPut(cursor, " di=0x"); cursor = LogHex(cursor, cpu->Registers[7]);
-        cursor = LogPut(cursor, " si=0x"); cursor = LogHex(cursor, cpu->Registers[6]); }
+        cursor = LogPut(cursor, " si=0x");
+        cursor = LogHex(cursor, cpu->Registers[6]); }
     cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor);
 }
 
@@ -1517,14 +1705,17 @@ VOID ModeYRingDump(PCSTR why)
 {
     CHAR lineBuffer[160], *cursor;
     UINT age, byteIndex;
-    if (g_ModeYRingDumped) return;
+
+    if (g_ModeYRingDumped)
+        return;
     g_ModeYRingDumped = 1;
     cursor = lineBuffer; cursor = LogPut(cursor, "MODEY-INTERP RING ("); cursor = LogPut(cursor, why); cursor = LogPut(cursor, "), oldest first:\r\n");
     LogAppend(LOG_PATH, lineBuffer, cursor);
     for (age = 0; age < MY_RING; ++age)
     {
         UINT index = (g_ModeYRingPosition + age) % MY_RING;
-        if (!g_ModeYRing[index].Cs && !g_ModeYRing[index].Ip) continue;
+        if (!g_ModeYRing[index].Cs && !g_ModeYRing[index].Ip)
+            continue;
         cursor = lineBuffer;
         cursor = LogPut(cursor, "  "); cursor = LogHex(cursor, g_ModeYRing[index].Cs); cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, g_ModeYRing[index].Ip);
         cursor = LogPut(cursor, " ss:sp="); cursor = LogHex(cursor, g_ModeYRing[index].Ss); cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, g_ModeYRing[index].Sp);
@@ -1544,12 +1735,18 @@ VOID ModeYRingDump(PCSTR why)
 VOID ModeYRingNoteIrq(UINT vector, WORD cs, WORD ip, WORD ss, WORD sp)
 {
     UINT index, byteIndex;
-    (VOID)ss; (VOID)sp;
-    if (!g_ModeYRingOn || !g_ModeYSlices || g_ModeYRingDumped) return;
+
+    (VOID)ss;
+    (VOID)sp;
+    if (!g_ModeYRingOn || !g_ModeYSlices || g_ModeYRingDumped)
+        return;
     index = g_ModeYRingPosition++ % MY_RING;
-    g_ModeYRing[index].Cs = 0xFFFE; g_ModeYRing[index].Ip = (WORD)vector;
-    g_ModeYRing[index].Ss = cs;     g_ModeYRing[index].Sp = ip;
-    for (byteIndex = 0; byteIndex < 6; ++byteIndex) g_ModeYRing[index].Bytes[byteIndex] = 0;
+    g_ModeYRing[index].Cs = 0xFFFE;
+    g_ModeYRing[index].Ip = (WORD)vector;
+    g_ModeYRing[index].Ss = cs;
+    g_ModeYRing[index].Sp = ip;
+    for (byteIndex = 0; byteIndex < 6; ++byteIndex)
+        g_ModeYRing[index].Bytes[byteIndex] = 0;
 }
 
 enum
@@ -1581,18 +1778,21 @@ static DWORD WINAPI HostProfileThread(LPVOID parameter)
     {
         CONTEXT context;
         Sleep(1);
-        if (SuspendThread(g_HostProfileThread) == (DWORD)-1) break;
+        if (SuspendThread(g_HostProfileThread) == (DWORD)-1)
+            break;
         context.ContextFlags = CONTEXT_CONTROL;
         if (GetThreadContext(g_HostProfileThread, &context))
         {
             ++g_HostProfileSamples;
-            if (context.EFlags & EFLAGS_VM) ++g_HostProfileV86;
+            if (context.EFlags & EFLAGS_VM)
+                ++g_HostProfileV86;
             else if (context.Eip >= g_HostProfileBase && context.Eip < g_HostProfileBase + g_HostProfileSize)
             {
                 ++g_HostProfileIn;
                 ++g_HostProfile[(context.Eip - g_HostProfileBase) >> HPROF_SHIFT];
             }
-            else if (context.Eip >= 0x80000000u) ++g_HostProfileKernel;
+            else if (context.Eip >= 0x80000000u)
+                ++g_HostProfileKernel;
             else
             {
                 ++g_HostProfileOther;
@@ -1608,13 +1808,17 @@ VOID HostProfileStart(VOID)
 {
     const BYTE *image = (const BYTE *)GetModuleHandleA(NULL);
     DWORD newHeaderOffset, size;
-    if (GetFileAttributesA(HOSTPROF_FLAG) == INVALID_FILE_ATTRIBUTES) return;
+
+    if (GetFileAttributesA(HOSTPROF_FLAG) == INVALID_FILE_ATTRIBUTES)
+        return;
     newHeaderOffset = *(const DWORD *)(image + DOS_MZ_NEW_HEADER);
     size = *(const DWORD *)(image + newHeaderOffset + FIELD_OFFSET(IMAGE_NT_HEADERS32, OptionalHeader.SizeOfImage));                     /* SizeOfImage */
-    g_HostProfileBase = (DWORD)(ULONG_PTR)image; g_HostProfileSize = size;
+    g_HostProfileBase = (DWORD)(ULONG_PTR)image;
+    g_HostProfileSize = size;
     g_HostProfileCount = (size >> HPROF_SHIFT) + 1;
     g_HostProfile = (DWORD *)VirtualAlloc(NULL, g_HostProfileCount * sizeof(DWORD), MEM_COMMIT, PAGE_READWRITE);
-    if (!g_HostProfile) return;
+    if (!g_HostProfile)
+        return;
     DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
                     &g_HostProfileThread, 0, FALSE, DUPLICATE_SAME_ACCESS);
     g_HostProfileOn = 1;
@@ -1631,8 +1835,11 @@ static VOID HostProfileDump(VOID)
 {
     CHAR buffer[160], *cursor;
     INT rank;
-    if (!g_HostProfile) return;
-    g_HostProfileOn = 0; Sleep(HOST_PROFILE_STOP_WAIT_MS);
+
+    if (!g_HostProfile)
+        return;
+    g_HostProfileOn = 0;
+    Sleep(HOST_PROFILE_STOP_WAIT_MS);
     cursor = LogPut(buffer, "STAGE2: HOSTPROF samples="); cursor = LogDecimal(cursor, g_HostProfileSamples);
     cursor = LogPut(cursor, " in_host_image="); cursor = LogDecimal(cursor, g_HostProfileIn);
     cursor = LogPut(cursor, " image_base=0x"); cursor = LogHex(cursor, g_HostProfileBase);
@@ -1649,7 +1856,8 @@ static VOID HostProfileDump(VOID)
             best = g_HostProfileSegment[index];
             bestIndex = index;
         }
-        if (!best) break;
+        if (!best)
+            break;
         cursor = LogPut(buffer, "  HOSTPROF other_user 64K@0x"); cursor = LogHex(cursor, bestIndex << WORD_SHIFT);
         cursor = LogPut(cursor, " n="); cursor = LogDecimal(cursor, best); cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor);
         g_HostProfileSegment[bestIndex] = 0;
@@ -1662,7 +1870,8 @@ static VOID HostProfileDump(VOID)
             best = g_HostProfile[index];
             bestIndex = index;
         }
-        if (!best) break;
+        if (!best)
+            break;
         cursor = LogPut(buffer, "  HOSTPROF rva=0x"); cursor = LogHex(cursor, bestIndex << HPROF_SHIFT);
         cursor = LogPut(cursor, " n="); cursor = LogDecimal(cursor, best); cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor);
         g_HostProfile[bestIndex] = 0;
@@ -1671,7 +1880,9 @@ static VOID HostProfileDump(VOID)
 
 static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
 {
-    V86_CPU cpu; INT32 iters; INT modeY;
+    V86_CPU cpu;
+    INT32 iters;
+    INT modeY;
 
     /* THE FULL 32-BIT REGISTERS, IN AND OUT. (s80) (Importance = 2):
      * This loaded and stored 16 bits, so the high half of every register was ZEROED
@@ -1684,19 +1895,28 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
      * carrying all 32 bits is transparent to 16-bit code and correct for 386 code.
      * ESP keeps its own high word: V86 addresses the stack through SP only.
      */
-    cpu.Registers[X86_REG_AX] = VDM_REG(tib, VTIB_EAX); cpu.Registers[X86_REG_CX] = VDM_REG(tib, VTIB_ECX);
-    cpu.Registers[X86_REG_DX] = VDM_REG(tib, VTIB_EDX); cpu.Registers[X86_REG_BX] = VDM_REG(tib, VTIB_EBX);
-    cpu.Registers[X86_REG_SP] = (WORD)VDM_REG(tib, VTIB_ESP); cpu.Registers[X86_REG_BP] = VDM_REG(tib, VTIB_EBP);
-    cpu.Registers[X86_REG_SI] = VDM_REG(tib, VTIB_ESI); cpu.Registers[X86_REG_DI] = VDM_REG(tib, VTIB_EDI);
-    cpu.Segments[X86_SREG_ES] = (WORD)VDM_REG(tib, VTIB_ES); cpu.Segments[X86_SREG_CS] = (WORD)VDM_REG(tib, VTIB_CS);
-    cpu.Segments[X86_SREG_SS] = (WORD)VDM_REG(tib, VTIB_SS); cpu.Segments[X86_SREG_DS] = (WORD)VDM_REG(tib, VTIB_DS);
-    cpu.Segments[X86_SREG_FS] = (WORD)VDM_REG(tib, VTIB_FS); cpu.Segments[X86_SREG_GS] = (WORD)VDM_REG(tib, VTIB_GS);
-    cpu.Ip = (WORD)VDM_REG(tib, VTIB_EIP); cpu.Flags = VDM_REG(tib, VTIB_EFLAGS);
+    cpu.Registers[X86_REG_AX] = VDM_REG(tib, VTIB_EAX);
+    cpu.Registers[X86_REG_CX] = VDM_REG(tib, VTIB_ECX);
+    cpu.Registers[X86_REG_DX] = VDM_REG(tib, VTIB_EDX);
+    cpu.Registers[X86_REG_BX] = VDM_REG(tib, VTIB_EBX);
+    cpu.Registers[X86_REG_SP] = (WORD)VDM_REG(tib, VTIB_ESP);
+    cpu.Registers[X86_REG_BP] = VDM_REG(tib, VTIB_EBP);
+    cpu.Registers[X86_REG_SI] = VDM_REG(tib, VTIB_ESI);
+    cpu.Registers[X86_REG_DI] = VDM_REG(tib, VTIB_EDI);
+    cpu.Segments[X86_SREG_ES] = (WORD)VDM_REG(tib, VTIB_ES);
+    cpu.Segments[X86_SREG_CS] = (WORD)VDM_REG(tib, VTIB_CS);
+    cpu.Segments[X86_SREG_SS] = (WORD)VDM_REG(tib, VTIB_SS);
+    cpu.Segments[X86_SREG_DS] = (WORD)VDM_REG(tib, VTIB_DS);
+    cpu.Segments[X86_SREG_FS] = (WORD)VDM_REG(tib, VTIB_FS);
+    cpu.Segments[X86_SREG_GS] = (WORD)VDM_REG(tib, VTIB_GS);
+    cpu.Ip = (WORD)VDM_REG(tib, VTIB_EIP);
+    cpu.Flags = VDM_REG(tib, VTIB_EFLAGS);
     /* Mode Y (s80): the guest's interrupt flag is IF OR VIF -- a native STI under VME sets
      * only VIF -- so give the interpreter the same answer the gate uses. See the
      * write-back, which carries the interpreted flag back into both.
      */
-    if (g_ModeYInterp && (cpu.Flags & EFLAGS_VIF)) cpu.Flags |= EFLAGS_IF_U;
+    if (g_ModeYInterp && (cpu.Flags & EFLAGS_VIF))
+        cpu.Flags |= EFLAGS_IF_U;
 
     HOST_LOCK();
     g_InterpreterCpu = &cpu;
@@ -1714,7 +1934,8 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
          */
         for (iters = 0; iters < cap; ++iters)
         {
-            if (!V86Step(&cpu)) break;
+            if (!V86Step(&cpu))
+                break;
             /* YIELD WHEN AN INTERRUPT IS PENDING. A real CPU takes interrupts in the
              * middle of a loop; the interpreter is standing in for that CPU and must
              * do the same, or a guest whose loop can only END when an interrupt
@@ -1732,7 +1953,8 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
             if ((iters & BYTE_MASK) == 0xFF)
             {
                 INT irq, pend = (g_Irq0Pending != 0);
-                for (irq = 0; !pend && irq < ARRAYSIZE(g_IrqNPending); ++irq) pend = (g_IrqNPending[irq] != 0);
+                for (irq = 0; !pend && irq < ARRAYSIZE(g_IrqNPending); ++irq)
+                    pend = (g_IrqNPending[irq] != 0);
                 if (pend)
                 {
                     ++iters;
@@ -1755,11 +1977,15 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
             {
                 UINT index = g_ModeYRingPosition++ % MY_RING, byteIndex;
                 const volatile BYTE *codeBytes = (const volatile BYTE *)(((UINT32)cpu.Segments[X86_SREG_CS] << PARAGRAPH_SHIFT) + cpu.Ip);
-                g_ModeYRing[index].Cs = cpu.Segments[X86_SREG_CS]; g_ModeYRing[index].Ip = cpu.Ip;
-                g_ModeYRing[index].Ss = cpu.Segments[X86_SREG_SS]; g_ModeYRing[index].Sp = (WORD)cpu.Registers[X86_REG_SP];
-                for (byteIndex = 0; byteIndex < ARRAYSIZE(g_ModeYRing[index].Bytes); ++byteIndex) g_ModeYRing[index].Bytes[byteIndex] = codeBytes[byteIndex];
+                g_ModeYRing[index].Cs = cpu.Segments[X86_SREG_CS];
+                g_ModeYRing[index].Ip = cpu.Ip;
+                g_ModeYRing[index].Ss = cpu.Segments[X86_SREG_SS];
+                g_ModeYRing[index].Sp = (WORD)cpu.Registers[X86_REG_SP];
+                for (byteIndex = 0; byteIndex < ARRAYSIZE(g_ModeYRing[index].Bytes); ++byteIndex)
+                    g_ModeYRing[index].Bytes[byteIndex] = codeBytes[byteIndex];
             }
-            if (!V86Step(&cpu)) break;
+            if (!V86Step(&cpu))
+                break;
             if (cpu.Segments[X86_SREG_CS] == 0 && cpu.Ip < IVT_SIZE)
             {
                 ++iters;
@@ -1769,7 +1995,8 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
             if ((iters & BYTE_MASK) == 0xFF)
             {
                 INT irq, pend = (g_Irq0Pending != 0);
-                for (irq = 0; !pend && irq < ARRAYSIZE(g_IrqNPending); ++irq) pend = (g_IrqNPending[irq] != 0);
+                for (irq = 0; !pend && irq < ARRAYSIZE(g_IrqNPending); ++irq)
+                    pend = (g_IrqNPending[irq] != 0);
                 /* Only when the guest could TAKE it: yielding inside a CLI region hands
                  * the loop a chance to inject there (see the write-back below).
                  */
@@ -1792,12 +2019,17 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
     g_InterpreterCpu = NULL;
     HOST_UNLOCK();
 
-    if (iters == 0) return 0;                          /* first opcode unmodeled */
+    if (iters == 0)
+        return 0;                                      /* first opcode unmodeled */
 
-    VDM_REG(tib, VTIB_EAX) = cpu.Registers[X86_REG_AX]; VDM_REG(tib, VTIB_ECX) = cpu.Registers[X86_REG_CX];
-    VDM_REG(tib, VTIB_EDX) = cpu.Registers[X86_REG_DX]; VDM_REG(tib, VTIB_EBX) = cpu.Registers[X86_REG_BX];
-    VDM_SET16(tib, VTIB_ESP, cpu.Registers[X86_REG_SP]); VDM_REG(tib, VTIB_EBP) = cpu.Registers[X86_REG_BP];
-    VDM_REG(tib, VTIB_ESI) = cpu.Registers[X86_REG_SI]; VDM_REG(tib, VTIB_EDI) = cpu.Registers[X86_REG_DI];
+    VDM_REG(tib, VTIB_EAX) = cpu.Registers[X86_REG_AX];
+    VDM_REG(tib, VTIB_ECX) = cpu.Registers[X86_REG_CX];
+    VDM_REG(tib, VTIB_EDX) = cpu.Registers[X86_REG_DX];
+    VDM_REG(tib, VTIB_EBX) = cpu.Registers[X86_REG_BX];
+    VDM_SET16(tib, VTIB_ESP, cpu.Registers[X86_REG_SP]);
+    VDM_REG(tib, VTIB_EBP) = cpu.Registers[X86_REG_BP];
+    VDM_REG(tib, VTIB_ESI) = cpu.Registers[X86_REG_SI];
+    VDM_REG(tib, VTIB_EDI) = cpu.Registers[X86_REG_DI];
     VDM_SET16(tib, VTIB_EIP, cpu.Ip);
     /* SEGMENTS TOO. They were loaded but never stored, so every segment load the
      * interpreter modelled (POP ES / MOV DS,AX / far CALL / INT / IRET) was thrown
@@ -1806,9 +2038,12 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
      * batching was confined to a fill loop that never reloads a segment; fatal for
      * continuous interpretation, where CS changes on every interrupt.
      */
-    VDM_REG(tib, VTIB_ES) = cpu.Segments[X86_SREG_ES]; VDM_REG(tib, VTIB_CS) = cpu.Segments[X86_SREG_CS];
-    VDM_REG(tib, VTIB_SS) = cpu.Segments[X86_SREG_SS]; VDM_REG(tib, VTIB_DS) = cpu.Segments[X86_SREG_DS];
-    VDM_REG(tib, VTIB_FS) = cpu.Segments[X86_SREG_FS]; VDM_REG(tib, VTIB_GS) = cpu.Segments[X86_SREG_GS];
+    VDM_REG(tib, VTIB_ES) = cpu.Segments[X86_SREG_ES];
+    VDM_REG(tib, VTIB_CS) = cpu.Segments[X86_SREG_CS];
+    VDM_REG(tib, VTIB_SS) = cpu.Segments[X86_SREG_SS];
+    VDM_REG(tib, VTIB_DS) = cpu.Segments[X86_SREG_DS];
+    VDM_REG(tib, VTIB_FS) = cpu.Segments[X86_SREG_FS];
+    VDM_REG(tib, VTIB_GS) = cpu.Segments[X86_SREG_GS];
     /* update only the low 16 flag bits (arith + DF); keep VM/IOPL/IF etc. */
     VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & HIGH_WORD_MASK_U) | (cpu.Flags & WORD_MASK_U);
     /* -- AND VIF WITH IT, FOR MODE Y. (s80) The loop's gate delivers when IF *or*
@@ -1822,8 +2057,10 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
      */
     if (g_ModeYInterp)
     {
-        if (cpu.Flags & EFLAGS_IF) VDM_REG(tib, VTIB_EFLAGS) |=  EFLAGS_VIF;
-        else                 VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_VIF;
+        if (cpu.Flags & EFLAGS_IF)
+            VDM_REG(tib, VTIB_EFLAGS) |=  EFLAGS_VIF;
+        else
+            VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_VIF;
     }
     return iters;
 }
@@ -1851,11 +2088,14 @@ INT32 HostInterpPaced(volatile BYTE *tib, INT32 cap)
     LARGE_INTEGER before, after;
     INT32 ran;
     INT milliseconds;
-    if (!instructionsPerSecond) return HostInterp(tib, cap);           /* Unlimited: not one branch */
+
+    if (!instructionsPerSecond)
+        return HostInterp(tib, cap);                                   /* Unlimited: not one branch */
     QueryPerformanceCounter(&before);
     ran = HostInterp(tib, cap);
     QueryPerformanceCounter(&after);
-    if (ran <= 0) return ran;
+    if (ran <= 0)
+        return ran;
     milliseconds = CpuSpeedCharge(&pace, (DWORD)ran, instructionsPerSecond,
                          (INT64)QpcMicroseconds(after.QuadPart - before.QuadPart));
     if (milliseconds > 0)
@@ -1877,26 +2117,40 @@ static UINT32 DpmiSegmentToLinear(WORD selector)
 
 static VOID DpmiInterpreterCpuLoad(V86_CPU *cpu, volatile BYTE *tib)
 {
-    cpu->Registers[X86_REG_AX]=(WORD)VDM_REG(tib,VTIB_EAX); cpu->Registers[X86_REG_CX]=(WORD)VDM_REG(tib,VTIB_ECX);
-    cpu->Registers[X86_REG_DX]=(WORD)VDM_REG(tib,VTIB_EDX); cpu->Registers[X86_REG_BX]=(WORD)VDM_REG(tib,VTIB_EBX);
-    cpu->Registers[X86_REG_SP]=(WORD)VDM_REG(tib,VTIB_ESP); cpu->Registers[X86_REG_BP]=(WORD)VDM_REG(tib,VTIB_EBP);
-    cpu->Registers[X86_REG_SI]=(WORD)VDM_REG(tib,VTIB_ESI); cpu->Registers[X86_REG_DI]=(WORD)VDM_REG(tib,VTIB_EDI);
-    cpu->Segments[X86_SREG_ES]=(WORD)VDM_REG(tib,VTIB_ES); cpu->Segments[X86_SREG_CS]=(WORD)VDM_REG(tib,VTIB_CS);
-    cpu->Segments[X86_SREG_SS]=(WORD)VDM_REG(tib,VTIB_SS); cpu->Segments[X86_SREG_DS]=(WORD)VDM_REG(tib,VTIB_DS);
-    cpu->Segments[X86_SREG_FS]=(WORD)VDM_REG(tib,VTIB_FS); cpu->Segments[X86_SREG_GS]=(WORD)VDM_REG(tib,VTIB_GS);
+    cpu->Registers[X86_REG_AX]=(WORD)VDM_REG(tib,VTIB_EAX);
+    cpu->Registers[X86_REG_CX]=(WORD)VDM_REG(tib,VTIB_ECX);
+    cpu->Registers[X86_REG_DX]=(WORD)VDM_REG(tib,VTIB_EDX);
+    cpu->Registers[X86_REG_BX]=(WORD)VDM_REG(tib,VTIB_EBX);
+    cpu->Registers[X86_REG_SP]=(WORD)VDM_REG(tib,VTIB_ESP);
+    cpu->Registers[X86_REG_BP]=(WORD)VDM_REG(tib,VTIB_EBP);
+    cpu->Registers[X86_REG_SI]=(WORD)VDM_REG(tib,VTIB_ESI);
+    cpu->Registers[X86_REG_DI]=(WORD)VDM_REG(tib,VTIB_EDI);
+    cpu->Segments[X86_SREG_ES]=(WORD)VDM_REG(tib,VTIB_ES);
+    cpu->Segments[X86_SREG_CS]=(WORD)VDM_REG(tib,VTIB_CS);
+    cpu->Segments[X86_SREG_SS]=(WORD)VDM_REG(tib,VTIB_SS);
+    cpu->Segments[X86_SREG_DS]=(WORD)VDM_REG(tib,VTIB_DS);
+    cpu->Segments[X86_SREG_FS]=(WORD)VDM_REG(tib,VTIB_FS);
+    cpu->Segments[X86_SREG_GS]=(WORD)VDM_REG(tib,VTIB_GS);
     cpu->Ip=(WORD)VDM_REG(tib,VTIB_EIP);
     cpu->Flags=VDM_REG(tib,VTIB_EFLAGS);
 }
 
 static VOID DpmiInterpreterCpuStore(V86_CPU *cpu, volatile BYTE *tib)
 {
-    VDM_SET16(tib,VTIB_EAX,cpu->Registers[X86_REG_AX]); VDM_SET16(tib,VTIB_ECX,cpu->Registers[X86_REG_CX]);
-    VDM_SET16(tib,VTIB_EDX,cpu->Registers[X86_REG_DX]); VDM_SET16(tib,VTIB_EBX,cpu->Registers[X86_REG_BX]);
-    VDM_SET16(tib,VTIB_ESP,cpu->Registers[X86_REG_SP]); VDM_SET16(tib,VTIB_EBP,cpu->Registers[X86_REG_BP]);
-    VDM_SET16(tib,VTIB_ESI,cpu->Registers[X86_REG_SI]); VDM_SET16(tib,VTIB_EDI,cpu->Registers[X86_REG_DI]);
-    VDM_SET16(tib,VTIB_ES,cpu->Segments[X86_SREG_ES]); VDM_SET16(tib,VTIB_CS,cpu->Segments[X86_SREG_CS]);
-    VDM_SET16(tib,VTIB_SS,cpu->Segments[X86_SREG_SS]); VDM_SET16(tib,VTIB_DS,cpu->Segments[X86_SREG_DS]);
-    VDM_SET16(tib,VTIB_FS,cpu->Segments[X86_SREG_FS]); VDM_SET16(tib,VTIB_GS,cpu->Segments[X86_SREG_GS]);
+    VDM_SET16(tib,VTIB_EAX,cpu->Registers[X86_REG_AX]);
+    VDM_SET16(tib,VTIB_ECX,cpu->Registers[X86_REG_CX]);
+    VDM_SET16(tib,VTIB_EDX,cpu->Registers[X86_REG_DX]);
+    VDM_SET16(tib,VTIB_EBX,cpu->Registers[X86_REG_BX]);
+    VDM_SET16(tib,VTIB_ESP,cpu->Registers[X86_REG_SP]);
+    VDM_SET16(tib,VTIB_EBP,cpu->Registers[X86_REG_BP]);
+    VDM_SET16(tib,VTIB_ESI,cpu->Registers[X86_REG_SI]);
+    VDM_SET16(tib,VTIB_EDI,cpu->Registers[X86_REG_DI]);
+    VDM_SET16(tib,VTIB_ES,cpu->Segments[X86_SREG_ES]);
+    VDM_SET16(tib,VTIB_CS,cpu->Segments[X86_SREG_CS]);
+    VDM_SET16(tib,VTIB_SS,cpu->Segments[X86_SREG_SS]);
+    VDM_SET16(tib,VTIB_DS,cpu->Segments[X86_SREG_DS]);
+    VDM_SET16(tib,VTIB_FS,cpu->Segments[X86_SREG_FS]);
+    VDM_SET16(tib,VTIB_GS,cpu->Segments[X86_SREG_GS]);
     VDM_SET16(tib,VTIB_EIP,cpu->Ip);
     VDM_REG(tib,VTIB_EFLAGS) = (VDM_REG(tib,VTIB_EFLAGS) & HIGH_WORD_MASK_U) | (cpu->Flags & WORD_MASK_U);
 }
@@ -1906,7 +2160,11 @@ static VOID DpmiInterpreterCpuStore(V86_CPU *cpu, volatile BYTE *tib)
  */
 INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib)
 {
-    V86_CPU cpu; INT32 guard = 0; CHAR lineBuffer[256]; PSTR lineCursor;
+    V86_CPU cpu;
+    INT32 guard = 0;
+    CHAR lineBuffer[256];
+    PSTR lineCursor;
+
     g_V86SegmentToLinear = DpmiSegmentToLinear;                 /* interpreter now resolves LDT bases */
     g_V86SelectorDescriptor = DpmiSelectorDescriptor;               /* ...and answers LAR/LSL from g_Ldt[] (run 55) */
     DpmiInterpreterCpuLoad(&cpu, tib);
@@ -1919,7 +2177,8 @@ INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib)
     {
         if (V86Step(&cpu)) /* modeled step */
         {
-            if (++guard > DPMI_INTERP_STEPS_MAX) break;
+            if (++guard > DPMI_INTERP_STEPS_MAX)
+                break;
             continue;
         }
         { UINT32 site = V86SegmentBase(cpu.Segments[X86_SREG_CS]) + cpu.Ip;
@@ -1930,7 +2189,8 @@ INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib)
               DpmiInterpreterCpuStore(&cpu, tib);
               VDM_REG(tib, VTIB_EVENT) = VDM_EVENT_BOP;   /* mimic a serviceable BOP for the dispatcher */
               status = DpmiServicePmInt(machine, tib, (DWORD)nextByte, (UINT)guard);
-              if (status <= 0) return status;         /* 0 = 4Ch exit, -1 = unserviceable */
+              if (status <= 0)
+                  return status;                      /* 0 = 4Ch exit, -1 = unserviceable */
               DpmiInterpreterCpuLoad(&cpu, tib);        /* pick up results + any selector/mode change */
               continue;
           }

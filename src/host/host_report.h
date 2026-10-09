@@ -18,6 +18,11 @@
 
 PSTR ReportStartMode(PSTR cursor);
 PSTR ReportStdoutAndDosOutput(PSTR cursor, DOS_MACHINE *machine);
-PSTR ReportEndOfRun(PSTR cursor, PSTR const base, PCSTR const reportEnd, DOS_MACHINE *machine, volatile BYTE * const tib);
+PSTR ReportEndOfRun(
+    PSTR cursor,
+    PSTR const base,
+    PCSTR const reportEnd,
+    DOS_MACHINE *machine,
+    volatile BYTE * const tib);
 
 #endif

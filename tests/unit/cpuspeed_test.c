@@ -29,7 +29,10 @@
 static UINT CpuSpeedTestIndexOf(UINT mhz)
 {
     UINT index;
-    for (index = 0; index < CPUSPEED_COUNT; ++index) if (g_CpuSpeedMhz[index] == mhz) return index;
+
+    for (index = 0; index < CPUSPEED_COUNT; ++index)
+        if (g_CpuSpeedMhz[index] == mhz)
+            return index;
     return CPUSPEED_COUNT;   /* not found: an off-end index, never a silent 0 */
 }
 
@@ -51,14 +54,19 @@ static INT g_Total = 0, g_Failures = 0;
  * cycles, so a descheduled OUTLIER slice is exercised -- that outlier is exactly
  * what made the old open-loop debt carry come out non-monotonic on the rig.
  */
-static UINT CpuSpeedTestSimulateDelivered(UINT dutyBp, unsigned long long capUs,
-                                 const UINT *wallSlices, INT wallCount,
-                                 UINT executedNumerator, UINT executedDenominator,
-                                 unsigned long long totalUs)
+static UINT CpuSpeedTestSimulateDelivered(
+    UINT dutyBp,
+    unsigned long long capUs,
+    const UINT *wallSlices,
+    INT wallCount,
+    UINT executedNumerator,
+    UINT executedDenominator,
+    unsigned long long totalUs)
 {
     unsigned long long executedUs = 0, wallUs = 0;       /* monotonic simulated totals */
     unsigned long long executedBaseline = 0, wallBaseline = 0;     /* the window baseline CpuSpeedStep tracks */
     INT slice = 0;
+
     while (wallUs < totalUs)
     {
         unsigned long long sliceWallUs = wallSlices[slice % wallCount];
@@ -66,7 +74,8 @@ static UINT CpuSpeedTestSimulateDelivered(UINT dutyBp, unsigned long long capUs,
         INT reset;
         unsigned long long hold;
         ++slice;
-        executedUs += sliceExecutedUs; wallUs += sliceWallUs;               /* the run slice */
+        executedUs += sliceExecutedUs;
+        wallUs += sliceWallUs;               /* the run slice */
         hold = CpuSpeedStep(executedUs - executedBaseline, wallUs - wallBaseline, dutyBp, capUs, &reset);
         wallUs += hold;                         /* the guest is held */
         if (reset) /* rebaseline at the real post-hold clock */
@@ -105,7 +114,8 @@ INT main(VOID)
     /* Fastest first: the old "Maximum" (1) lands on the fastest throttled speed. */
     {   INT isDescending = 1;
         for (index = 2; index < CPUSPEED_COUNT; ++index)
-            if (g_CpuSpeedMhz[index] >= g_CpuSpeedMhz[index - 1]) isDescending = 0;
+            if (g_CpuSpeedMhz[index] >= g_CpuSpeedMhz[index - 1])
+                isDescending = 0;
         CHECK(isDescending, "speeds run fastest-first, which is what makes the migration sane"); }
 
     /* The '|' string and the name table are two spellings of one list. They are
@@ -113,7 +123,8 @@ INT main(VOID)
      * that says they have not: a mismatch would put the wrong label on every row of
      * the dropdown while every value behind it stayed correct.
      */
-    {   PCSTR item = CPUSPEED_ITEMS; INT count = 0, isOk = 1;
+    {   PCSTR item = CPUSPEED_ITEMS;
+    INT count = 0, isOk = 1;
         for (index = 0; index < CPUSPEED_COUNT; ++index)
         {
             size_t length = strlen(g_CpuSpeedNames[index]);
@@ -122,7 +133,8 @@ INT main(VOID)
                 isOk = 0;
                 break;
             }
-            item += length; ++count;
+            item += length;
+            ++count;
             if (index + 1 < CPUSPEED_COUNT)
             {
                 if (*item != '|')
@@ -166,11 +178,13 @@ INT main(VOID)
             UINT faster = CpuSpeedDutyBp(index - 1, 50), slower = CpuSpeedDutyBp(index, 50);
             if (g_CpuSpeedMhz[index - 1] >= 50u)
             {
-                if (faster != 10000u) isMonotonic = 0;
+                if (faster != 10000u)
+                    isMonotonic = 0;
                 flatOutCount++;
                 continue;
             }
-            if (slower >= faster) isMonotonic = 0;
+            if (slower >= faster)
+                isMonotonic = 0;
         }
         CHECK(isMonotonic, "below the reference a slower setting is always a smaller duty");
         CHECK(flatOutCount > 0, "...and the speeds above it are all flat out, which is why"); }
@@ -198,7 +212,8 @@ INT main(VOID)
         {   INT isMonotonic = 1;
             for (index = 2; index < CPUSPEED_COUNT; ++index)
                 if (CpuSpeedRealModeDutyBp(CpuSpeedDutyBp(index, CPUSPEED_REF_MHZ_DEFAULT)) >
-                    CpuSpeedRealModeDutyBp(CpuSpeedDutyBp(index - 1, CPUSPEED_REF_MHZ_DEFAULT))) isMonotonic = 0;
+                    CpuSpeedRealModeDutyBp(CpuSpeedDutyBp(index - 1, CPUSPEED_REF_MHZ_DEFAULT)))
+                    isMonotonic = 0;
             CHECK(isMonotonic, "#225: the real-mode ladder still gets slower rung by rung"); } }
 
     printf("== CPU speed: the throttle delivers the requested duty (deterministic) ==\n");
@@ -218,13 +233,15 @@ INT main(VOID)
          * each window pays to exactly E/duty, so the ratio is the duty to the bp.
          * Every duty on the trimmed ladder, against the shipped reference.
          */
-        {   INT isOk = 1; UINT badIndex = 0;
+        {   INT isOk = 1;
+        UINT badIndex = 0;
             for (index = 1; index < CPUSPEED_COUNT; ++index)
             {
                 UINT duty   = CpuSpeedDutyBp(index, CPUSPEED_REF_MHZ_DEFAULT);
                 UINT actual = CpuSpeedTestSimulateDelivered(duty, capUs, steadySlices, 1, 1, 1, runUs);
                 /* Reachable at 2 ms slices iff one slice's hold fits the cap. */
-                if ((unsigned long long)2000 * 10000ull / duty - 2000ull > capUs) continue;
+                if ((unsigned long long)2000 * 10000ull / duty - 2000ull > capUs)
+                    continue;
                 if (!CpuSpeedTestIsNear(actual, duty, 2))
                 {
                     isOk = 0;
@@ -271,7 +288,8 @@ INT main(VOID)
         /* -- 5. A HOLD IS BOUNDED, so an absurd setting cannot freeze the guest: even
          * at a 1 bp duty the single hold never exceeds the cap.
          */
-        {   INT reset; unsigned long long hold = CpuSpeedStep(2000, 0, 1, capUs, &reset);
+        {   INT reset;
+        unsigned long long hold = CpuSpeedStep(2000, 0, 1, capUs, &reset);
             CHECK(hold <= capUs, "one hold is capped, so an unreachable setting slows but never freezes");
             CHECK(!reset, "...and a capped hold is carried, not forgiven"); }
 
@@ -279,7 +297,8 @@ INT main(VOID)
         {   INT reset;
             CHECK(CpuSpeedStep(999999, 0, 10000, capUs, &reset) == 0 && reset,
                   "Unlimited holds for nothing and keeps no window"); }
-        (VOID)jitterSlices; (VOID)fineSlices;
+        (VOID)jitterSlices;
+        (VOID)fineSlices;
     }
 
     printf("== CPU speed: the interpreter's instruction budget ==\n");
@@ -291,7 +310,8 @@ INT main(VOID)
     /* A slice that ran FASTER than the budget owes time. 1,000,000 instructions at
      * 11M/s should take ~90.9 ms; if it really took 5 ms we owe ~86 ms of sleep.
      */
-    {   CPUSPEED_PACE pace; INT sleepMs;
+    {   CPUSPEED_PACE pace;
+    INT sleepMs;
         memset(&pace, 0, sizeof pace);
         sleepMs = CpuSpeedCharge(&pace, 1000000ul, CpuSpeedInstructionsPerSecond(CpuSpeedTestIndexOf(33)), 5000ll);
         CHECK(sleepMs >= 84 && sleepMs <= 88, "a slice that outran its budget sleeps the difference"); }
@@ -301,7 +321,8 @@ INT main(VOID)
      * where slices are smallest, which is the fast settings. Accumulated, ten
      * slices owing 300us each must produce 3 ms of sleep.
      */
-    {   CPUSPEED_PACE pace; INT slice, sleepMs, totalMs = 0;
+    {   CPUSPEED_PACE pace;
+    INT slice, sleepMs, totalMs = 0;
         memset(&pace, 0, sizeof pace);
         for (slice = 0; slice < 10; ++slice)
         {
@@ -314,7 +335,8 @@ INT main(VOID)
     /* Running SLOWER than the setting must not bank credit: a guest that stalled for
      * a second cannot then be handed a second of unthrottled burst.
      */
-    {   CPUSPEED_PACE pace; INT sleepMs;
+    {   CPUSPEED_PACE pace;
+    INT sleepMs;
         memset(&pace, 0, sizeof pace);
         sleepMs = CpuSpeedCharge(&pace, 100ul, CpuSpeedInstructionsPerSecond(CpuSpeedTestIndexOf(33)), 500000ll);
         CHECK(sleepMs == 0 && pace.OwedUs == 0, "a slice slower than its budget sleeps 0 and banks nothing");
@@ -322,7 +344,8 @@ INT main(VOID)
         CHECK(sleepMs >= 89 && sleepMs <= 91, "...and the NEXT slice is throttled in full, not offset"); }
 
     /* One slice can never sleep more than the ceiling, however wild the arithmetic. */
-    {   CPUSPEED_PACE pace; INT sleepMs;
+    {   CPUSPEED_PACE pace;
+    INT sleepMs;
         memset(&pace, 0, sizeof pace);
         sleepMs = CpuSpeedCharge(&pace, 100000000ul, CpuSpeedInstructionsPerSecond(CpuSpeedTestIndexOf(16)), 0ll);
         CHECK(sleepMs <= 100, "one slice's debt is capped, so a stall cannot become a freeze"); }

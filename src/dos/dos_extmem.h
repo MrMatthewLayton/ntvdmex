@@ -53,20 +53,26 @@ enum { DOS_EXTMEM_REGION_NONE = 0, DOS_EXTMEM_REGION_DIRECT, DOS_EXTMEM_REGION_E
 #define DOS_EXTMEM_DESCRIPTOR_BASE_BYTE3    7
 
 /* Which region [linearAddress, linearAddress+length) lies in. length > 0. */
-static inline INT DosExtMemClassify(_In_opt_ PCDOS_XMS_STATE xmsState, _In_ DWORD linearAddress,
-                                    _In_ DWORD length)
+static inline INT DosExtMemClassify(
+    _In_opt_ PCDOS_XMS_STATE xmsState,
+    _In_ DWORD linearAddress,
+    _In_ DWORD length)
 {
     DWORD end = linearAddress + length;
     INT handleIndex;
-    if (length == 0 || end < linearAddress) return DOS_EXTMEM_REGION_NONE;    /* wraps 4 GB */
-    if (end <= DOS_EXTMEM_DIRECT_END) return DOS_EXTMEM_REGION_DIRECT;
+
+    if (length == 0 || end < linearAddress)
+        return DOS_EXTMEM_REGION_NONE;                                        /* wraps 4 GB */
+    if (end <= DOS_EXTMEM_DIRECT_END)
+        return DOS_EXTMEM_REGION_DIRECT;
     if (xmsState)
     {
         for (handleIndex = 0; handleIndex < DOS_XMS_MAX_HANDLES; ++handleIndex)
         {
             PCDOS_XMS_HANDLE handleEntry = &xmsState->Handles[handleIndex];
             DWORD blockBase, blockEnd;
-            if (!handleEntry->InUse || !handleEntry->Memory || !handleEntry->SizeKb) continue;
+            if (!handleEntry->InUse || !handleEntry->Memory || !handleEntry->SizeKb)
+                continue;
             blockBase = (DWORD)(UINT_PTR)handleEntry->Memory;
             blockEnd = blockBase + handleEntry->SizeKb * DOS_XMS_BYTES_PER_KB;
             if (linearAddress >= blockBase && end <= blockEnd && blockEnd > blockBase)
@@ -83,18 +89,26 @@ static inline INT DosExtMemClassify(_In_opt_ PCDOS_XMS_STATE xmsState, _In_ DWOR
  * bytes; may be 0 until first needed -- then a RAW range resolves to 0 and the caller
  * allocates and asks again).
  */
-static inline PBYTE DosExtMemResolve(_In_opt_ PCDOS_XMS_STATE xmsState,
-                                     _In_ UINT_PTR conventionalBase,
-                                     _In_opt_ PBYTE rawBuffer, _In_ DWORD linearAddress,
-                                     _In_ DWORD length)
+static inline PBYTE DosExtMemResolve(
+    _In_opt_ PCDOS_XMS_STATE xmsState,
+    _In_ UINT_PTR conventionalBase,
+    _In_opt_ PBYTE rawBuffer,
+    _In_ DWORD linearAddress,
+    _In_ DWORD length)
 {
     switch (DosExtMemClassify(xmsState, linearAddress, length))
     {
-    case DOS_EXTMEM_REGION_DIRECT: return (PBYTE)(conventionalBase + linearAddress);
-    case DOS_EXTMEM_REGION_EMB:    return (PBYTE)(UINT_PTR)linearAddress;
+    case DOS_EXTMEM_REGION_DIRECT:
+        return (PBYTE)(conventionalBase + linearAddress);
+
+    case DOS_EXTMEM_REGION_EMB:
+        return (PBYTE)(UINT_PTR)linearAddress;
+
     case DOS_EXTMEM_REGION_RAW:
         return rawBuffer ? rawBuffer + (linearAddress - DOS_EXTMEM_RAW_BASE) : 0;
-    default:                       return 0;
+
+    default:
+        return 0;
     }
 }
 

@@ -127,7 +127,8 @@ typedef struct _GUS_STATE
     BYTE    MidiControl;             /* 3X0 write: 6850 control */
     BYTE    MidiStatus;              /* 6850 status bits RDRF/TDRE/OVRN (IRQ derived) */
     BYTE    MidiReceive;             /* 6850 receive data register */
-    PGUS_MIDI_SINK_ROUTINE MidiSink; PVOID MidiSinkContext;   /* host-owned; survives reset */
+    PGUS_MIDI_SINK_ROUTINE MidiSink;
+    PVOID MidiSinkContext;   /* host-owned; survives reset */
     BYTE    IsLineUp;                /* the GF1 IRQ line is asserted (edge detection) */
     BYTE    IsMidiLineUp;            /* the MIDI IRQ line, when it is a separate one */
 
@@ -149,8 +150,13 @@ typedef const GUS_STATE *PCGUS_STATE;
 INT  VddGusInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddGusReset(_In_ PVOID context);
 static inline NTVDD_DEVICE VddGusDevice(_In_ PGUS_STATE state)
-{ NTVDD_DEVICE device; device.Name = GUS_DEVICE_NAME; device.Initialize = VddGusInitialize; device.Reset = VddGusReset;
-  device.Shutdown = 0; device.Context = state; return device; }
+{ NTVDD_DEVICE device;
+device.Name = GUS_DEVICE_NAME;
+device.Initialize = VddGusInitialize;
+device.Reset = VddGusReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 /* The GF1's output rate for the current active-voice count (ref section 4), in Hz. */
 UINT32 VddGusRateHz(_In_ PCGUS_STATE state);
@@ -160,7 +166,10 @@ UINT32 VddGusRateHz(_In_ PCGUS_STATE state);
  */
 VOID VddGusRender(_Inout_ PGUS_STATE state, _Out_writes_(count) INT16 *output, _In_ UINT32 count);
 /* #189: the same, as panned interleaved L/R pairs (2*count samples). */
-VOID VddGusRenderStereo(_Inout_ PGUS_STATE state, _Out_writes_(AUDIO_STEREO_CHANNELS * count) INT16 *output, _In_ UINT32 count);
+VOID VddGusRenderStereo(
+    _Inout_ PGUS_STATE state,
+    _Out_writes_(AUDIO_STEREO_CHANNELS * count) INT16 *output,
+    _In_ UINT32 count);
 
 /* The linear gain (Q16) of a 12-bit GF1 volume (ref section 7). Exposed for the test. */
 UINT32 VddGusVolumeGain(_In_ WORD volume12);

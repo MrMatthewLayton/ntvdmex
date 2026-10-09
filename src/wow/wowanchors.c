@@ -24,10 +24,10 @@
 #include "wowgdi.h"
 #include "wowuser.h"
 
-INT WowAnchorHit(PCWOW_ANCHOR table, INT count,
-                          WORD id, WORD argumentBytes, WORD returnStub)
+INT WowAnchorHit(PCWOW_ANCHOR table, INT count, WORD id, WORD argumentBytes, WORD returnStub)
 {
     INT index;
+
     for (index = 0; index < count; ++index)
         if (table[index].Id == id && table[index].ArgumentBytes == argumentBytes && table[index].ReturnStub == returnStub)
             return 1;

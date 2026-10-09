@@ -101,8 +101,7 @@ VOID RmcsWrite(volatile BYTE *structure, PCRMCS_REGS in);
 #define SIMINT_RUN      2   /* Run IVT[vec] in V86 with an IRET frame (the 0302h machinery) */
 #define SIMINT_NONE     3   /* Not run; counted in `STAGE2: simInt (DPMI 0300) UNHANDLED` */
 
-INT RmcsSimIntRoute(UINT vector, WORD ivtSegment, WORD ivtOffset,
-                           INT isReflectOn, WORD ourSegment);
+INT RmcsSimIntRoute(UINT vector, WORD ivtSegment, WORD ivtOffset, INT isReflectOn, WORD ourSegment);
 
 /* CX WORDS OF THE PROTECTED-MODE STACK, COPIED TO THE REAL-MODE ONE:
  * DPMI 0.9: 0300h/0301h/0302h take CX = "number of words to copy from the protected-

@@ -56,11 +56,17 @@
 
 typedef struct _VDD_PORT_ENTRY
 {
-    WORD First, Last; PVDD_PORT_IN_ROUTINE In; PVDD_PORT_OUT_ROUTINE Out; PVOID Context;
+    WORD First, Last;
+    PVDD_PORT_IN_ROUTINE In;
+    PVDD_PORT_OUT_ROUTINE Out;
+    PVOID Context;
 } VDD_PORT_ENTRY, *PVDD_PORT_ENTRY;
 typedef struct _VDD_MEMORY_ENTRY
 {
-    UINT32 Base, End; PVDD_MEMORY_READ_ROUTINE Read; PVDD_MEMORY_WRITE_ROUTINE Write; PVOID Context;
+    UINT32 Base, End;
+    PVDD_MEMORY_READ_ROUTINE Read;
+    PVDD_MEMORY_WRITE_ROUTINE Write;
+    PVOID Context;
 } VDD_MEMORY_ENTRY, *PVDD_MEMORY_ENTRY;
 typedef struct _VDD_INTERRUPT_ENTRY
 {
@@ -80,22 +86,32 @@ typedef VOID (*PVDD_PRESENT_SINK)(PVOID context, PCNTVDD_FRAME frame);
 struct _VDD_BUS
 {
     PVOID          MemoryBase;          /* VddMapFlat base; NULL => V86 absolute */
-    PVDD_IRQ_SINK   IrqSink;     PVOID IrqContext;
-    PVDD_PRESENT_SINK PresentSink; PVOID PresentContext;
+    PVDD_IRQ_SINK   IrqSink;
+    PVOID IrqContext;
+    PVDD_PRESENT_SINK PresentSink;
+    PVOID PresentContext;
 
-    VDD_PORT_ENTRY      Ports[VDD_MAX_PORT_RANGES];          INT PortCount;
-    VDD_MEMORY_ENTRY    Memory[VDD_MAX_MEMORY_WINDOWS];      INT MemoryCount;
+    VDD_PORT_ENTRY      Ports[VDD_MAX_PORT_RANGES];
+    INT PortCount;
+    VDD_MEMORY_ENTRY    Memory[VDD_MAX_MEMORY_WINDOWS];
+    INT MemoryCount;
     VDD_INTERRUPT_ENTRY Interrupts[VDD_INTERRUPT_VECTORS];   /* indexed by vector; Service==NULL=unset */
-    VDD_FRAME_ENTRY     FrameSubscribers[VDD_MAX_FRAME_SUBSCRIBERS]; INT FrameCount;
+    VDD_FRAME_ENTRY     FrameSubscribers[VDD_MAX_FRAME_SUBSCRIBERS];
+    INT FrameCount;
 
-    PNTVDD_DEVICE  Devices[VDD_MAX_DEVICES];  INT DeviceCount;
+    PNTVDD_DEVICE  Devices[VDD_MAX_DEVICES];
+    INT DeviceCount;
     INT            ClaimFailures;          /* claims refused for want of a table slot */
 };
 
 /* --- host-side lifecycle + dispatch (the V86 loop calls these) ------------- */
 VOID VddBusInitialize(PVDD_BUS bus, PVOID memoryBase);
-VOID VddBusSetSinks(PVDD_BUS bus, PVDD_IRQ_SINK irqSink, PVOID irqContext,
-                    PVDD_PRESENT_SINK presentSink, PVOID presentContext);
+VOID VddBusSetSinks(
+    PVDD_BUS bus,
+    PVDD_IRQ_SINK irqSink,
+    PVOID irqContext,
+    PVDD_PRESENT_SINK presentSink,
+    PVOID presentContext);
 INT  VddBusAdd(PVDD_BUS bus, PNTVDD_DEVICE device);     /* runs device->Initialize; 0 = ok */
 VOID VddBusResetAll(PVDD_BUS bus);
 VOID VddBusShutdownAll(PVDD_BUS bus);

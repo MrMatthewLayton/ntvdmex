@@ -47,6 +47,7 @@ static INT WowDlgPump(INT budget, PINT traceBudget)
 {
     MSG message;
     INT count = 0;
+
     while (count < budget && PeekMessageA(&message, NULL, 0, 0, PM_REMOVE))
     {
         if (traceBudget && *traceBudget > 0)
@@ -102,13 +103,15 @@ static INT WowDlgPump(INT budget, PINT traceBudget)
             if (dialog && IsWindow(dialog) && (message.hwnd == dialog || IsChild(dialog, message.hwnd))
                 && IsDialogMessageA(dialog, &message))
             {
-                ++count; ++g_WowWinPumped;
+                ++count;
+                ++g_WowWinPumped;
                 continue;
             }
         }
         TranslateMessage(&message);
         DispatchMessageA(&message);
-        ++count; ++g_WowWinPumped;
+        ++count;
+        ++g_WowWinPumped;
     }
     return count;
 }
@@ -132,12 +135,21 @@ INT WowDlgActive(VOID)
  * Returns 0 if the stack is full, in which case the caller must complete the
  * call the old way rather than pretend.
  */
-INT WowDlgPush(WORD window, DWORD returnLinear, DWORD dialogProcedure, DWORD windowProcedure,
-                       WORD dataSelector, INT isShowDeferred, HWND owner32)
+INT WowDlgPush(
+    WORD window,
+    DWORD returnLinear,
+    DWORD dialogProcedure,
+    DWORD windowProcedure,
+    WORD dataSelector,
+    INT isShowDeferred,
+    HWND owner32)
 {
     PWOWDLG_MODAL dialog;
-    if (g_WowDlgDepth >= WOWDLG_MAX_MODAL) return 0;
-    if (!window || !returnLinear) return 0;
+
+    if (g_WowDlgDepth >= WOWDLG_MAX_MODAL)
+        return 0;
+    if (!window || !returnLinear)
+        return 0;
     dialog = &g_WowDlgModals[g_WowDlgDepth++];
     dialog->Window    = window;
     dialog->ReturnLinear  = returnLinear;
@@ -160,11 +172,13 @@ INT WowDlgPush(WORD window, DWORD returnLinear, DWORD dialogProcedure, DWORD win
      * disables the frame around it, as USER's does.
      */
     dialog->Owner32 = NULL;
-    dialog->InitParameter = 0; dialog->FirstFocus = 0;     /* the caller sets them after the push */
+    dialog->InitParameter = 0;
+    dialog->FirstFocus = 0;     /* the caller sets them after the push */
     if (owner32)
     {
         HWND top = GetAncestor(owner32, GA_ROOT);
-        if (!top) top = owner32;
+        if (!top)
+            top = owner32;
         if (IsWindowEnabled(top))
         {
             EnableWindow(top, FALSE);
@@ -177,7 +191,8 @@ INT WowDlgPush(WORD window, DWORD returnLinear, DWORD dialogProcedure, DWORD win
 /* s89: WM_INITDIALOG's wParam/lParam for the dialog just pushed. */
 VOID WowDlgSetInit(DWORD initParameter, WORD firstFocus)
 {
-    if (g_WowDlgDepth <= 0) return;
+    if (g_WowDlgDepth <= 0)
+        return;
     g_WowDlgModals[g_WowDlgDepth - 1].InitParameter  = initParameter;
     g_WowDlgModals[g_WowDlgDepth - 1].FirstFocus = firstFocus;
 }
@@ -195,6 +210,7 @@ VOID WowDlgSetInit(DWORD initParameter, WORD firstFocus)
 INT WowDlgEnd(WORD window, WORD result)
 {
     INT index;
+
     for (index = g_WowDlgDepth - 1; index >= 0; --index)
         if (g_WowDlgModals[index].Window == window)
         {
@@ -212,14 +228,19 @@ INT WowDlgEnd(WORD window, WORD result)
 static VOID WowDlgUnwind(PWOWDLG_MODAL dialog, DWORD value)
 {
     volatile BYTE *hole = (volatile BYTE *)(ULONG_PTR)dialog->ReturnLinear;
-    hole[0] = (BYTE)(value & BYTE_MASK);         hole[1] = (BYTE)((value >> BYTE_SHIFT)  & BYTE_MASK);
-    hole[2] = (BYTE)((value >> WORD_SHIFT) & BYTE_MASK); hole[3] = (BYTE)((value >> TOP_BYTE_SHIFT) & BYTE_MASK);
+
+    hole[0] = (BYTE)(value & BYTE_MASK);
+    hole[1] = (BYTE)((value >> BYTE_SHIFT)  & BYTE_MASK);
+    hole[2] = (BYTE)((value >> WORD_SHIFT) & BYTE_MASK);
+    hole[3] = (BYTE)((value >> TOP_BYTE_SHIFT) & BYTE_MASK);
     /* GH #279: give the owner back BEFORE the dialog goes, so activation returns
      * to it rather than to whatever window Windows picks next.
      */
-    if (dialog->Owner32 && IsWindow(dialog->Owner32)) EnableWindow(dialog->Owner32, TRUE);
+    if (dialog->Owner32 && IsWindow(dialog->Owner32))
+        EnableWindow(dialog->Owner32, TRUE);
     dialog->Owner32 = NULL;
-    if (g_WowDlgDepth > 0) --g_WowDlgDepth;
+    if (g_WowDlgDepth > 0)
+        --g_WowDlgDepth;
 }
 
 /* ONE TURN OF THE MODAL LOOP (Importance = 5):
@@ -236,10 +257,16 @@ static VOID WowDlgUnwind(PWOWDLG_MODAL dialog, DWORD value)
  * this file is included before main.c defines it, and a wait that ignores it
  * would hold a closing process open for the length of the idle timeout.
  */
-INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
-                       const volatile LONG *running, PSTR note, INT noteCapacity)
+INT WowDlgStep(
+    volatile BYTE *tib,
+    DWORD stackBase,
+    WORD returnSelector,
+    const volatile LONG *running,
+    PSTR note,
+    INT noteCapacity)
 {
     INT noteLength = 0;
+
     for (;;)
     {
         PWOWDLG_MODAL dialog = WowDlgTop();
@@ -253,7 +280,8 @@ INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         INT   isAbsent = 0;
         INT   verdict;
 
-        if (!dialog) return 0;
+        if (!dialog)
+            return 0;
         window = WowUserFindWindow(dialog->Window);
         target = dialog->Window;
 
@@ -351,7 +379,9 @@ INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
         if (!dialog->IsInitialised)
         {
             dialog->IsInitialised = 1;
-            messageNumber = WM_INITDIALOG16; wParam = dialog->FirstFocus; lParam = dialog->InitParameter;
+            messageNumber = WM_INITDIALOG16;
+            wParam = dialog->FirstFocus;
+            lParam = dialog->InitParameter;
             WowNotePut(note, noteCapacity, &noteLength, "MODAL 0x");
             WowNoteHex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " -> WM_INITDIALOG ");
@@ -469,10 +499,12 @@ INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                     if (GetTickCount() - lastBeat >= interval)
                     {
                         CHAR beatBuffer[WOWDLG_BEAT_LINE_MAX], *beatCursor = beatBuffer;
-                        lastBeat = GetTickCount(); ++beatCount;
+                        lastBeat = GetTickCount();
+                        ++beatCount;
                         beatCursor = LogPut(beatCursor, "     WOWDLG: modal 0x"); beatCursor = LogHex(beatCursor, dialog->Window);
                         beatCursor = LogPut(beatCursor, " waiting 0x");   beatCursor = LogHex(beatCursor, lastBeat - startTime);
-                        beatCursor = LogPut(beatCursor, " ms; pumped 0x"); beatCursor = LogHex(beatCursor, g_WowWinPumped);
+                        beatCursor = LogPut(beatCursor, " ms; pumped 0x");
+                        beatCursor = LogHex(beatCursor, g_WowWinPumped);
                         beatCursor = LogPut(beatCursor, " (+0x");         beatCursor = LogHex(beatCursor, g_WowWinPumped - pumpedAtStart);
                         beatCursor = LogPut(beatCursor, " since blocking), Win16 queued 0x");
                         beatCursor = LogHex(beatCursor, (DWORD)g_WowMsgCount);
@@ -498,10 +530,12 @@ INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
                  * left to wait for, and the checks at the top of the loop are
                  * the ones that say so -- this just stops waiting.
                  */
-                if (dialog->IsEnded || !IsWindow(window->Window32)) break;
+                if (dialog->IsEnded || !IsWindow(window->Window32))
+                    break;
             }
             g_WowMsgInWait = 0;
-            if (dialog->IsEnded || !IsWindow(window->Window32)) continue;
+            if (dialog->IsEnded || !IsWindow(window->Window32))
+                continue;
 
             /* -- EXIT 4: THE WAIT EXPIRED. Only reachable with a bounded
              * wowidle.txt, which is the unattended-harness setting; an
@@ -543,7 +577,9 @@ INT WowDlgStep(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
              * wrong procedure is the "answered by an unrelated function"
              * shape this project treats as worse than not answering.
              */
-            messageNumber = message.Message; wParam = message.WParam; lParam = message.LParam;
+            messageNumber = message.Message;
+            wParam = message.WParam;
+            lParam = message.LParam;
             if (message.Window == dialog->Window)
             {
                 procedure = (DWORD)WowConvWindowProcedure((UINT)dialog->WindowProcedure,

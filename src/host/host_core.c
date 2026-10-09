@@ -29,6 +29,7 @@ PFN_ATTACH_CONSOLE           g_PfnAttachConsole;
 VOID OsCompatBind(VOID)
 {
     HMODULE kernel32 = GetModuleHandleA(HOST_MODULE_KERNEL32), user32 = GetModuleHandleA(HOST_MODULE_USER32);
+
     g_OsVersion = GetVersion();
     g_PfnAddVeh        = (PFN_ADD_VECTORED_EXCEPTION_HANDLER)(ULONG_PTR)GetProcAddress(kernel32, HOST_EXPORT_ADD_VECTORED_EXCEPTION_HANDLER);
     g_PfnAttachConsole = (PFN_ATTACH_CONSOLE)(ULONG_PTR)GetProcAddress(kernel32, HOST_EXPORT_ATTACH_CONSOLE);
@@ -49,6 +50,7 @@ PCSTR NtvdmexRoot(VOID)
 {
     static CHAR root[MAX_PATH + 16];
     static volatile LONG ready;
+
     if (!ready)
     {
         CHAR self[MAX_PATH + 16];
@@ -56,7 +58,8 @@ PCSTR NtvdmexRoot(VOID)
         INT index, last = -1, prev = -1;
         if (length == 0 || length >= sizeof self - 2)
         {
-            for (index = 0; NTVDMEX_DIR_DEFAULT[index]; ++index) root[index] = NTVDMEX_DIR_DEFAULT[index];
+            for (index = 0; NTVDMEX_DIR_DEFAULT[index]; ++index)
+                root[index] = NTVDMEX_DIR_DEFAULT[index];
             root[index] = 0;
         }
         else
@@ -84,8 +87,10 @@ PCSTR NtvdmexRoot(VOID)
                         || (directoryLength == 4 && (self[prev + 2] | ASCII_CASE_BIT) == 'i'
                                     && (self[prev + 3] | ASCII_CASE_BIT) == 'n')))
                     cut = prev;
-                for (index = 0; index < cut; ++index) root[index] = self[index];
-                root[cut] = '\\'; root[cut + 1] = 0;
+                for (index = 0; index < cut; ++index)
+                    root[index] = self[index];
+                root[cut] = '\\';
+                root[cut + 1] = 0;
             }
         }
         ready = 1;
@@ -109,27 +114,35 @@ PCSTR NtvdmexRoot(VOID)
 static volatile LONG g_PathTls = -1;             /* TlsAlloc'd on first use (no __thread: no libgcc) */
 PCSTR NtvdmexPath(PCSTR subdirectory, PCSTR name)
 {
-    PSTR ring; UINT *next; PSTR slot;
+    PSTR ring;
+    UINT *next;
+    PSTR slot;
+
     if (g_PathTls < 0)
     {
         LONG tlsIndex = (LONG)TlsAlloc();
-        if (InterlockedCompareExchange(&g_PathTls, tlsIndex, -1) != -1) TlsFree((DWORD)tlsIndex);
+        if (InterlockedCompareExchange(&g_PathTls, tlsIndex, -1) != -1)
+            TlsFree((DWORD)tlsIndex);
     }
     ring = (PSTR)TlsGetValue((DWORD)g_PathTls);
     if (!ring)
     {
         ring = (PSTR)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
                                  NTVDMEX_PATH_SLOTS * NTVDMEX_PATH_SLOT + sizeof(UINT));
-        if (!ring) return "";                     /* out of memory: an empty path fails loudly downstream */
+        if (!ring)
+            return "";                            /* out of memory: an empty path fails loudly downstream */
         TlsSetValue((DWORD)g_PathTls, ring);
     }
     next = (UINT *)(ring + NTVDMEX_PATH_SLOTS * NTVDMEX_PATH_SLOT);
     slot = ring + ((*next)++ & (NTVDMEX_PATH_SLOTS - 1)) * NTVDMEX_PATH_SLOT;
     PCSTR root = NtvdmexRoot();
     INT length = 0, index;
-    for (index = 0; root[index] && length < MAX_PATH + 90; ++index) slot[length++] = root[index];
-    for (index = 0; subdirectory[index] && length < MAX_PATH + 90; ++index) slot[length++] = subdirectory[index];
-    for (index = 0; name[index] && length < MAX_PATH + 94; ++index) slot[length++] = name[index];
+    for (index = 0; root[index] && length < MAX_PATH + 90; ++index)
+        slot[length++] = root[index];
+    for (index = 0; subdirectory[index] && length < MAX_PATH + 90; ++index)
+        slot[length++] = subdirectory[index];
+    for (index = 0; name[index] && length < MAX_PATH + 94; ++index)
+        slot[length++] = name[index];
     slot[length] = 0;
     return slot;
 }
@@ -140,6 +153,7 @@ PCSTR NtvdmexPath(PCSTR subdirectory, PCSTR name)
 INT StrStrNoCase(PCSTR block, PCSTR name)
 {
     PCSTR line = block;
+
     while (*line)
     {
         PCSTR cursor = line, nameCursor = name;
@@ -148,9 +162,12 @@ INT StrStrNoCase(PCSTR block, PCSTR name)
             ++cursor;
             ++nameCursor;
         }
-        if (!*nameCursor) return 1;
-        while (*line && *line != '\n') ++line;
-        if (*line) ++line;
+        if (!*nameCursor)
+            return 1;
+        while (*line && *line != '\n')
+            ++line;
+        if (*line)
+            ++line;
     }
     return 0;
 }
@@ -160,7 +177,8 @@ static DWORD    g_LockOwner, g_LockDepth;
 static LONGLONG g_LockSince;
 UINT32 QpcMicroseconds(LONGLONG ticks)
 {
-    if (!g_QpcFrequency.QuadPart || ticks <= 0) return 0;
+    if (!g_QpcFrequency.QuadPart || ticks <= 0)
+        return 0;
     return (UINT32)((ticks * MICROSECONDS_PER_SECOND) / g_QpcFrequency.QuadPart);
 }
 
@@ -170,7 +188,8 @@ UINT32 QpcMicroseconds(LONGLONG ticks)
  */
 UINT64 QpcMicroseconds64(LONGLONG ticks)
 {
-    if (!g_QpcFrequency.QuadPart || ticks <= 0) return 0ull;
+    if (!g_QpcFrequency.QuadPart || ticks <= 0)
+        return 0ull;
     return (UINT64)((ticks * MICROSECONDS_PER_SECOND_LL) / g_QpcFrequency.QuadPart);
 }
 
@@ -179,6 +198,7 @@ VOID HostLockEnter(INT site)
     LARGE_INTEGER waitStart, acquired;
     DWORD threadId = GetCurrentThreadId();
     INT nested = (g_LockOwner == threadId && g_LockDepth != 0);
+
     QueryPerformanceCounter(&waitStart);
     EnterCriticalSection(&g_Lock);
     if (!nested)
@@ -191,7 +211,10 @@ VOID HostLockEnter(INT site)
             g_LockWaitMicroseconds = waitMicroseconds;
             g_LockWaitSite = site;
         }
-        g_LockOwner = threadId; g_LockSince = acquired.QuadPart; g_LockSite = site; g_LockDepth = 0;
+        g_LockOwner = threadId;
+        g_LockSince = acquired.QuadPart;
+        g_LockSite = site;
+        g_LockDepth = 0;
     }
     g_LockDepth++;
 }
@@ -231,11 +254,17 @@ INT HostLockTry(INT site)
 {
     DWORD threadId = GetCurrentThreadId();
     INT nested = (g_LockOwner == threadId && g_LockDepth != 0);
-    if (!TryEnterCriticalSection(&g_Lock)) return 0;
+
+    if (!TryEnterCriticalSection(&g_Lock))
+        return 0;
     if (!nested)
     {
-        LARGE_INTEGER acquired; QueryPerformanceCounter(&acquired);
-        g_LockOwner = threadId; g_LockSince = acquired.QuadPart; g_LockSite = site; g_LockDepth = 0;
+        LARGE_INTEGER acquired;
+        QueryPerformanceCounter(&acquired);
+        g_LockOwner = threadId;
+        g_LockSince = acquired.QuadPart;
+        g_LockSite = site;
+        g_LockDepth = 0;
     }
     g_LockDepth++;
     return 1;
@@ -252,12 +281,16 @@ static DWORD PatchMapHash(DWORD linear)
 BYTE PatchMapGet(DWORD linear)
 {
     DWORD start = PatchMapHash(linear), probe;
-    if (!linear) return 0;
+
+    if (!linear)
+        return 0;
     for (probe = 0; probe < DPMI_PMAP_SLOTS; ++probe)
     {
         DWORD slot = (start + probe) & DPMI_PMAP_MASK;
-        if (!g_PatchMapLinear[slot]) return 0;
-        if (g_PatchMapLinear[slot] == linear) return g_PatchMapVector[slot];
+        if (!g_PatchMapLinear[slot])
+            return 0;
+        if (g_PatchMapLinear[slot] == linear)
+            return g_PatchMapVector[slot];
     }
     return 0;
 }
@@ -265,7 +298,9 @@ BYTE PatchMapGet(DWORD linear)
 VOID PatchMapSet(DWORD linear, BYTE vector)
 {
     DWORD start = PatchMapHash(linear), probe;
-    if (!linear || g_PatchMapCount >= DPMI_PMAP_SLOTS - PATCH_MAP_HEADROOM) return;   /* leave headroom, never fill */
+
+    if (!linear || g_PatchMapCount >= DPMI_PMAP_SLOTS - PATCH_MAP_HEADROOM)
+        return;                                                                       /* leave headroom, never fill */
     for (probe = 0; probe < DPMI_PMAP_SLOTS; ++probe)
     {
         DWORD slot = (start + probe) & DPMI_PMAP_MASK;
@@ -291,10 +326,12 @@ VOID PatchMapSet(DWORD linear, BYTE vector)
 VOID PatchMapClear(DWORD linear)
 {
     DWORD start = PatchMapHash(linear), probe;
+
     for (probe = 0; probe < DPMI_PMAP_SLOTS; ++probe)
     {
         DWORD slot = (start + probe) & DPMI_PMAP_MASK;
-        if (!g_PatchMapLinear[slot]) return;
+        if (!g_PatchMapLinear[slot])
+            return;
         if (g_PatchMapLinear[slot] == linear)
         {
             g_PatchMapVector[slot] = 0;
@@ -312,12 +349,17 @@ VOID PatchMapClear(DWORD linear)
 INT MemoryReadable(ULONG_PTR address, SIZE_T length)
 {
     MEMORY_BASIC_INFORMATION memoryInfo;
-    if (VirtualQuery((LPCVOID)address, &memoryInfo, sizeof memoryInfo) != sizeof memoryInfo) return 0;
-    if (memoryInfo.State != MEM_COMMIT) return 0;
-    if (memoryInfo.Protect & PAGE_GUARD) return 0;
+
+    if (VirtualQuery((LPCVOID)address, &memoryInfo, sizeof memoryInfo) != sizeof memoryInfo)
+        return 0;
+    if (memoryInfo.State != MEM_COMMIT)
+        return 0;
+    if (memoryInfo.Protect & PAGE_GUARD)
+        return 0;
     if (!(memoryInfo.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY
                       | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE
-                      | PAGE_EXECUTE_WRITECOPY))) return 0;
+                      | PAGE_EXECUTE_WRITECOPY)))
+        return 0;
     /* the region must also COVER the whole span, not merely start inside it */
     return (address + length) <= ((ULONG_PTR)memoryInfo.BaseAddress + memoryInfo.RegionSize);
 }
@@ -332,24 +374,31 @@ INT MemoryReadable(ULONG_PTR address, SIZE_T length)
 VOID PokeWord(DWORD linear, WORD value)
 {
     volatile BYTE *memory = (volatile BYTE *)0;
+
     memory[linear] = (BYTE)value;
     memory[linear + 1] = (BYTE)(value >> BYTE_SHIFT);
 }
 
 VOID PokeDword(DWORD linear, DWORD value)   /* dword store: 32-bit IRET frame slots (GH #18 run 83) */
 { volatile BYTE *memory = (volatile BYTE *)0;
-  memory[linear] = (BYTE)value; memory[linear+1] = (BYTE)(value >> BYTE_SHIFT); memory[linear+2] = (BYTE)(value >> WORD_SHIFT); memory[linear+3] = (BYTE)(value >> TOP_BYTE_SHIFT); }
+  memory[linear] = (BYTE)value;
+  memory[linear+1] = (BYTE)(value >> BYTE_SHIFT);
+  memory[linear+2] = (BYTE)(value >> WORD_SHIFT);
+  memory[linear+3] = (BYTE)(value >> TOP_BYTE_SHIFT); }
 WORD PeekWord(DWORD linear)
 {
     const volatile BYTE *memory = (const volatile BYTE *)0;
+
     return (WORD)(memory[linear] | (memory[linear + 1] << BYTE_SHIFT));
 }
 
 /* Width-selected guest memory access (1/2/4 bytes) for the string-I/O servicer. */
 DWORD PeekWidth(DWORD linear, INT width)
 { const volatile BYTE *memory = (const volatile BYTE *)0;
-  if (width == 1) return memory[linear];
-  if (width == X86_WORD_SIZE) return PeekWord(linear);
+  if (width == 1)
+      return memory[linear];
+  if (width == X86_WORD_SIZE)
+      return PeekWord(linear);
   return (DWORD)PeekWord(linear) | ((DWORD)PeekWord(linear + X86_WORD_SIZE) << WORD_SHIFT); }
 VOID PokeWidth(DWORD linear, DWORD value, INT width)
 { volatile BYTE *memory = (volatile BYTE *)0;
@@ -384,10 +433,15 @@ INT HostReadable(PCVOID pointer, SIZE_T length)
 {
     MEMORY_BASIC_INFORMATION memoryInfo;
     ULONG_PTR address = (ULONG_PTR)pointer;
-    if (!address || length == 0) return 0;
-    if (VirtualQuery((LPCVOID)address, &memoryInfo, sizeof(memoryInfo)) != sizeof(memoryInfo)) return 0;
-    if (memoryInfo.State != MEM_COMMIT) return 0;
-    if (memoryInfo.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return 0;
+
+    if (!address || length == 0)
+        return 0;
+    if (VirtualQuery((LPCVOID)address, &memoryInfo, sizeof(memoryInfo)) != sizeof(memoryInfo))
+        return 0;
+    if (memoryInfo.State != MEM_COMMIT)
+        return 0;
+    if (memoryInfo.Protect & (PAGE_NOACCESS | PAGE_GUARD))
+        return 0;
     if (!(memoryInfo.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
                          PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
         return 0;
@@ -404,10 +458,15 @@ INT HostWritable(PVOID pointer, SIZE_T length)
 {
     MEMORY_BASIC_INFORMATION memoryInfo;
     ULONG_PTR address = (ULONG_PTR)pointer;
-    if (!address || length == 0) return 0;
-    if (VirtualQuery((LPCVOID)address, &memoryInfo, sizeof(memoryInfo)) != sizeof(memoryInfo)) return 0;
-    if (memoryInfo.State != MEM_COMMIT) return 0;
-    if (memoryInfo.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return 0;
+
+    if (!address || length == 0)
+        return 0;
+    if (VirtualQuery((LPCVOID)address, &memoryInfo, sizeof(memoryInfo)) != sizeof(memoryInfo))
+        return 0;
+    if (memoryInfo.State != MEM_COMMIT)
+        return 0;
+    if (memoryInfo.Protect & (PAGE_NOACCESS | PAGE_GUARD))
+        return 0;
     if (!(memoryInfo.Protect & (PAGE_READWRITE | PAGE_WRITECOPY |
                          PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
         return 0;

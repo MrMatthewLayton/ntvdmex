@@ -100,7 +100,8 @@ typedef struct _EMU8K_VOICE
     INT32    CurrentVolumeStep;
     INT32    GainLeft, GainRight;      /* pan gains, Q8 (0..256), latched at each tick */
     /* the low-pass filter: direct form I, Q28 coefficients, cached for (cutoff, Q) */
-    WORD     FilterCutoff; BYTE FilterQ, FilterIsValid, FilterIsBypassed;
+    WORD     FilterCutoff;
+    BYTE FilterQ, FilterIsValid, FilterIsBypassed;
     INT32    B0, B1, B2, A1, A2;
     INT32    X1, X2, Y1, Y2;
 } EMU8K_VOICE, *PEMU8K_VOICE;
@@ -116,7 +117,8 @@ typedef struct _EMU8K_STATE
     DWORD     DramWords;             /* 0 = none fitted */
     PCWORD    Rom;                   /* the GM ROM image, RomWords long; NULL = reads zero */
     DWORD     RomWords;
-    PEMU8K_CLOCK_ROUTINE Clock; PVOID ClockContext;
+    PEMU8K_CLOCK_ROUTINE Clock;
+    PVOID ClockContext;
 
     WORD      Pointer;               /* the Pointer register as written */
     BYTE      ByteLatch[EMU8K_PORT_GROUPS];  /* byte-access latches, one per port group */
@@ -150,8 +152,13 @@ typedef const EMU8K_STATE *PCEMU8K_STATE;
 INT  VddEmu8kInitialize(_In_ VDD_BUS *bus, _In_ PVOID context);
 VOID VddEmu8kReset(_In_ PVOID context);
 static inline NTVDD_DEVICE VddEmu8kDevice(_In_ PEMU8K_STATE state)
-{ NTVDD_DEVICE device; device.Name = EMU8K_DEVICE_NAME; device.Initialize = VddEmu8kInitialize; device.Reset = VddEmu8kReset;
-  device.Shutdown = 0; device.Context = state; return device; }
+{ NTVDD_DEVICE device;
+device.Name = EMU8K_DEVICE_NAME;
+device.Initialize = VddEmu8kInitialize;
+device.Reset = VddEmu8kReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 /* The chip's output rate: fixed, 44.1 kHz (the WC period, p.13). */
 static inline DWORD VddEmu8kRateHz(_In_ PCEMU8K_STATE state)
@@ -163,8 +170,10 @@ static inline DWORD VddEmu8kRateHz(_In_ PCEMU8K_STATE state)
 /* Render `frameCount` stereo frames (2*frameCount interleaved L/R samples) at VddEmu8kRateHz(),
  * advancing every channel, envelope, LFO and the sample counter by that much chip time.
  */
-VOID VddEmu8kRenderStereo(_Inout_ PEMU8K_STATE state, _Out_writes_(2 * frameCount) PINT16 output,
-                          _In_ DWORD frameCount);
+VOID VddEmu8kRenderStereo(
+    _Inout_ PEMU8K_STATE state,
+    _Out_writes_(2 * frameCount) PINT16 output,
+    _In_ DWORD frameCount);
 
 /* Exposed for the test: the attack time (us) of ATKHLDV/ATKHLD bits 6-0, and the decay /
  * release time per dB (us) of DCYSUSV/DCYSUS bits 6-0. 0 = never / no decay.

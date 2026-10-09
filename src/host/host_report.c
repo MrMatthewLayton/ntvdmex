@@ -83,10 +83,12 @@ PSTR ReportStdoutAndDosOutput(PSTR cursor, DOS_MACHINE *machine)
                 WriteFile(consoleHandle, machine->Output, machine->OutputLength, &consoleWritten, NULL);
             }
             cursor = LogPut(cursor, "  ==> DOS OUTPUT: ["); cursor = LogPut(cursor, machine->Output);
-            if (machine->IsOutputTruncated) cursor = LogPut(cursor, "\r\n<<<OUTPUT TRUNCATED>>>");
+            if (machine->IsOutputTruncated)
+                cursor = LogPut(cursor, "\r\n<<<OUTPUT TRUNCATED>>>");
             cursor = LogPut(cursor, "]\r\n");
         }
-        if (consoleHandle != INVALID_HANDLE_VALUE) CloseHandle(consoleHandle);
+        if (consoleHandle != INVALID_HANDLE_VALUE)
+            CloseHandle(consoleHandle);
     }
     return cursor;
 }
@@ -112,6 +114,7 @@ static PSTR ReportNtvdmBops(PSTR cursor)
 static PSTR ReportHotPortsAndTimerCounters(PSTR cursor)
 {
     INT index;
+
     cursor = LogPut(cursor, "STAGE2: hot ports:");
     for (index = 0; index < g_IoHotCount; ++index)
     {
@@ -230,7 +233,8 @@ static PSTR ReportPitPacingAndHostCpuTime(PSTR cursor)
      * actually spent, from Windows' own accounting -- the process, and the thread that
      * runs the guest -- so a cheaper wait shows up as a number, not an impression.
      */
-    {   FILETIME creationTime, exitTime, kernelTime, userTime; ULONGLONG previousKernel = 0, previousUser = 0, totalKernel = 0, totalUser = 0;
+    {   FILETIME creationTime, exitTime, kernelTime, userTime;
+    ULONGLONG previousKernel = 0, previousUser = 0, totalKernel = 0, totalUser = 0;
         if (GetProcessTimes(GetCurrentProcess(), &creationTime, &exitTime, &kernelTime, &userTime))
         {
             previousKernel = ((ULONGLONG)kernelTime.dwHighDateTime << DWORD_SHIFT | kernelTime.dwLowDateTime) / FILETIME_TICKS_PER_MILLISECOND_U;
@@ -243,7 +247,8 @@ static PSTR ReportPitPacingAndHostCpuTime(PSTR cursor)
         cursor = LogPut(cursor, " kernel="); cursor = LogDecimal(cursor, (DWORD)previousKernel);
         cursor = LogPut(cursor, " | guest thread user="); cursor = LogDecimal(cursor, (DWORD)totalUser);
         cursor = LogPut(cursor, " kernel="); cursor = LogDecimal(cursor, (DWORD)totalKernel);
-        cursor = LogPut(cursor, " | run_ms="); cursor = LogDecimal(cursor, GetTickCount() - g_RunStartTick); }
+        cursor = LogPut(cursor, " | run_ms=");
+        cursor = LogDecimal(cursor, GetTickCount() - g_RunStartTick); }
     return cursor;
 }
 
@@ -291,7 +296,8 @@ static PSTR ReportCpuSpeedGovernor(PSTR cursor)
       cursor = LogPut(cursor, " delivered_bp=");
       cursor = LogHex(cursor, CpuSpeedDeliveredBp(g_CpuSpeedRunMs, wallMs));
       cursor = LogPut(cursor, " exec_ms="); cursor = LogHex(cursor, g_CpuSpeedRunMs);
-      cursor = LogPut(cursor, " wall_ms="); cursor = LogHex(cursor, wallMs); }
+      cursor = LogPut(cursor, " wall_ms=");
+      cursor = LogHex(cursor, wallMs); }
     cursor = LogPut(cursor, " held_ms="); cursor = LogHex(cursor, g_CpuSpeedHeldMs);
     cursor = LogPut(cursor, " hold_max_us="); cursor = LogHex(cursor, g_CpuSpeedHoldMaximumMicroseconds);   /* #225 */
     cursor = LogPut(cursor, " debt_max_us="); cursor = LogHex(cursor, g_CpuSpeedDebtMaximumMicroseconds);
@@ -338,17 +344,20 @@ static PSTR ReportDeliveryLatencies(PSTR cursor)
     cursor = LogPut(cursor, ":0x");      cursor = LogHex(cursor, (DWORD)g_MouseEventOffset);
     /* THE KEYSTROKE ITSELF, both halves. ms buckets [0,1,2,4,8,16,32,64+]. */
     cursor = LogPut(cursor, "\r\nSTAGE2: KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
-    { UINT bucket5; for (bucket5 = 0; bucket5 < 8; ++bucket5) { cursor = LogPut(cursor, bucket5 ? "," : "");
+    { UINT bucket5;
+    for (bucket5 = 0; bucket5 < 8; ++bucket5) { cursor = LogPut(cursor, bucket5 ? "," : "");
                                                 cursor = LogHex(cursor, g_KeyMessageHistogram[bucket5]); } }
     cursor = LogPut(cursor, " n="); cursor = LogHex(cursor, g_KeyMessageCount);
     cursor = LogPut(cursor, " max_ms="); cursor = LogHex(cursor, g_KeyMessageMaximumMs);
     cursor = LogPut(cursor, " || deliver_ms[0,1,2,4,8,16,32,64+]=");
-    { UINT bucket5; for (bucket5 = 0; bucket5 < 8; ++bucket5) { cursor = LogPut(cursor, bucket5 ? "," : "");
+    { UINT bucket5;
+    for (bucket5 = 0; bucket5 < 8; ++bucket5) { cursor = LogPut(cursor, bucket5 ? "," : "");
                                                 cursor = LogHex(cursor, g_KeyDeliveryHistogram[bucket5]); } }
     cursor = LogPut(cursor, " n="); cursor = LogHex(cursor, g_KeyDeliveryCount);
     cursor = LogPut(cursor, " max_ms="); cursor = LogHex(cursor, g_KeyDeliveryMaximumMs);
     cursor = LogPut(cursor, "\r\nSTAGE2: TICKGAP us[<.5k,1k,2k,4k,8k,16k,32k,64k,128k,256k,512k,+]=");
-    { UINT bucket7; for (bucket7 = 0; bucket7 < 12; ++bucket7) { cursor = LogPut(cursor, bucket7 ? "," : "");
+    { UINT bucket7;
+    for (bucket7 = 0; bucket7 < 12; ++bucket7) { cursor = LogPut(cursor, bucket7 ? "," : "");
                                                  cursor = LogHex(cursor, g_TickGap[bucket7]); } }
     cursor = LogPut(cursor, " max_us="); cursor = LogHex(cursor, g_TickGapMaximumMicroseconds);
     cursor = LogPut(cursor, " OVER_11600us="); cursor = LogHex(cursor, g_TickGapOver);
@@ -364,7 +373,8 @@ static PSTR ReportDmxTaskAndShimIrqs(PSTR cursor)
     cursor = LogPut(cursor, " mixer_OVERDUE="); cursor = LogHex(cursor, g_DmxOverdue);
     cursor = LogPut(cursor, " max_late_ticks="); cursor = LogHex(cursor, g_DmxOverdueMaximum);
     cursor = LogPut(cursor, " busy_by_task=");
-    { UINT timelineIndex; for (timelineIndex = 0; timelineIndex < 12; ++timelineIndex) { cursor = LogPut(cursor, timelineIndex ? "," : "");
+    { UINT timelineIndex;
+    for (timelineIndex = 0; timelineIndex < 12; ++timelineIndex) { cursor = LogPut(cursor, timelineIndex ? "," : "");
                                                  cursor = LogHex(cursor, g_DmxBusy[timelineIndex]); } }
     cursor = LogPut(cursor, "\r\nSTAGE2: ica (shim-raised IRQs, #278) raised="); cursor = LogHex(cursor, g_IcaRaised);
     cursor = LogPut(cursor, " delivered="); cursor = LogHex(cursor, g_IcaDelivered);
@@ -416,17 +426,20 @@ static PSTR ReportKeyboardControllerAndFontQueries(PSTR cursor, PSTR const base)
     cursor = LogPut(cursor, " typematic_set=0x");               cursor = LogHexByte(cursor, g_Input.IsTypematicSet);
     cursor = LogPut(cursor, " rate_byte=0x");                   cursor = LogHexByte(cursor, g_Input.TypematicByte);
     cursor = LogPut(cursor, " seq=");
-    { UINT item; for (item = 0; item < g_Input.KeyboardPortLogCount; ++item)
+    { UINT item;
+    for (item = 0; item < g_Input.KeyboardPortLogCount; ++item)
     {
           cursor = LogPut(cursor, item ? "," : ""); cursor = LogHexByte(cursor, g_Input.KeyboardPortLog[item][0]);
-          cursor = LogPut(cursor, ":");          cursor = LogHexByte(cursor, g_Input.KeyboardPortLog[item][1]); } }
+          cursor = LogPut(cursor, ":");
+          cursor = LogHexByte(cursor, g_Input.KeyboardPortLog[item][1]); } }
     cursor = LogPut(cursor, " int10_11=0x");   cursor = LogHex(cursor, g_Video.Int10Ah11Calls);
     /* Each font request, its answer, and the BYTES actually sitting at the address we
      * handed back -- read from guest memory, so a wiped or misaligned table is visible
      * rather than inferred. A glyph is mostly zeros with a few set rows; all-zero or
      * all-FF here means the caller is drawing from the wrong place.
      */
-    { INT fontIndex; for (fontIndex = 0; fontIndex < g_Video.FontQueryCount; ++fontIndex)
+    { INT fontIndex;
+    for (fontIndex = 0; fontIndex < g_Video.FontQueryCount; ++fontIndex)
     {
         const volatile BYTE *fontPointer;
         cursor = LogPut(cursor, "\r\n  font_q: AL=0x"); cursor = LogHex(cursor, g_Video.FontQueries[fontIndex].Al);
@@ -436,8 +449,12 @@ static PSTR ReportKeyboardControllerAndFontQueries(PSTR cursor, PSTR const base)
         cursor = LogPut(cursor, " CX=0x");   cursor = LogHex(cursor, g_Video.FontQueries[fontIndex].Cx);
         fontPointer = (const volatile BYTE *)(((DWORD)g_Video.FontQueries[fontIndex].Segment << PARAGRAPH_SHIFT)
                                      + g_Video.FontQueries[fontIndex].Offset);
-        { BYTE fontBytes[16]; UINT item; for (item = 0; item < 16; ++item) fontBytes[item] = fontPointer[item];
-          cursor = LogPut(cursor, " bytes: "); cursor = LogDump(cursor, fontBytes, 16); }
+        { BYTE fontBytes[16];
+        UINT item;
+        for (item = 0; item < 16; ++item)
+            fontBytes[item] = fontPointer[item];
+          cursor = LogPut(cursor, " bytes: ");
+          cursor = LogDump(cursor, fontBytes, 16); }
     } }
     cursor = LogPut(cursor, "\r\n");
     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
@@ -456,8 +473,11 @@ static PSTR ReportExecEventsAndIrq0Timeline(PSTR cursor, PSTR const base)
      * interval histogram, which says whether that is stalls or jitter. Both are
      * DECIMAL-in-hex like every other counter here.
      */
-    {   UINT timelineSecond; DWORD last = 0;
-        for (timelineSecond = 0; timelineSecond < IRQ0TL_SECS; ++timelineSecond) if (g_Irq0TimeLast[timelineSecond]) last = timelineSecond;
+    {   UINT timelineSecond;
+    DWORD last = 0;
+        for (timelineSecond = 0; timelineSecond < IRQ0TL_SECS; ++timelineSecond)
+            if (g_Irq0TimeLast[timelineSecond])
+                last = timelineSecond;
         cursor = LogPut(cursor, "\r\nSTAGE2: IRQ0TL persec=");
         for (timelineSecond = 0; timelineSecond <= last && timelineSecond < IRQ0TL_SECS; ++timelineSecond)
         {
@@ -534,7 +554,9 @@ static PSTR ReportExecEventsAndIrq0Timeline(PSTR cursor, PSTR const base)
         cursor = LogPut(cursor, "\r\nSTAGE2: PMINJ decl[cs16,nohook]="); cursor = LogHex(cursor, g_PmInjectDecl[0]);
         cursor = LogPut(cursor, ","); cursor = LogHex(cursor, g_PmInjectDecl[1]);
         { INT timelineSecond, last = -1;
-          for (timelineSecond = 0; timelineSecond < IRQ0TL_SECS; ++timelineSecond) if (g_PmInjectDeclTl[timelineSecond]) last = timelineSecond;
+          for (timelineSecond = 0; timelineSecond < IRQ0TL_SECS; ++timelineSecond)
+              if (g_PmInjectDeclTl[timelineSecond])
+                  last = timelineSecond;
           cursor = LogPut(cursor, " persec=");
           for (timelineSecond = 0; timelineSecond <= last; ++timelineSecond)
           {
@@ -542,11 +564,14 @@ static PSTR ReportExecEventsAndIrq0Timeline(PSTR cursor, PSTR const base)
               cursor = LogHex(cursor, g_PmInjectDeclTl[timelineSecond]);
           }
           }
-        { INT item; cursor = LogPut(cursor, " cs16 sites:");
+        { INT item;
+        cursor = LogPut(cursor, " cs16 sites:");
           for (item = 0; item < PMINJ_SITES && g_PmInjectSite[item].Count; ++item)
           {
               cursor = LogPut(cursor, " "); cursor = LogHex(cursor, g_PmInjectSite[item].Cs); cursor = LogPut(cursor, ":");
-              cursor = LogHex(cursor, g_PmInjectSite[item].Eip); cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_PmInjectSite[item].Count); } }
+              cursor = LogHex(cursor, g_PmInjectSite[item].Eip);
+              cursor = LogPut(cursor, "x");
+              cursor = LogHex(cursor, g_PmInjectSite[item].Count); } }
         /* -- WHAT THE TICK COURIER DID. `inj` is the whole point: ticks placed that
          * the raise site had already given away to a key. Read it against IRQ0WHY's
          * yld -- if inj is a large fraction of yld the courier is collecting exactly
@@ -572,7 +597,8 @@ static PSTR ReportV86StringTiming(PSTR cursor)
      * how it ended (ev). ev 2=I/O, others per the event taxonomy.
      */
     cursor = LogPut(cursor, "\r\nSTAGE2: V86STR ms[<1,1,2,4,8,16,32,64+]=");
-    { UINT bucket6; for (bucket6 = 0; bucket6 < 8; ++bucket6) { cursor = LogPut(cursor, bucket6 ? "," : "");
+    { UINT bucket6;
+    for (bucket6 = 0; bucket6 < 8; ++bucket6) { cursor = LogPut(cursor, bucket6 ? "," : "");
                                             cursor = LogHex(cursor, g_V86StringHistogram[bucket6]); } }
     cursor = LogPut(cursor, " n8="); cursor = LogHex(cursor, g_V86StringCount8);
     cursor = LogPut(cursor, " max_ms="); cursor = LogHex(cursor, g_V86StringMaximumMs);
@@ -590,7 +616,8 @@ static PSTR ReportV86StringTiming(PSTR cursor)
 /* End of run: every I/O port the guest touched that no device claimed. */
 static PSTR ReportUnclaimedPorts(PSTR cursor)
 {
-    { INT index; cursor = LogPut(cursor, "STAGE2: unclaimed ports touched:");
+    { INT index;
+    cursor = LogPut(cursor, "STAGE2: unclaimed ports touched:");
       for (index = 0; index < g_UnclaimedCount; ++index)
       {
           cursor = LogPut(cursor, " 0x");
@@ -609,6 +636,7 @@ static PSTR ReportUnimplemented(PSTR cursor, DOS_MACHINE *machine)
 {
     INT index;
     INT count;
+
     cursor = LogPut(cursor, "STAGE2: INT21 unimplemented:");
     for (index = 0, count = 0; index < BYTE_VALUES; ++index)
         if ((machine->Unimplemented[index >> BITMAP_BYTE_SHIFT] >> (index & BITMAP_BIT_MASK)) & 1u)
@@ -617,7 +645,8 @@ static PSTR ReportUnimplemented(PSTR cursor, DOS_MACHINE *machine)
             cursor = LogHexByte(cursor, (UINT)index);
             ++count;
         }
-    if (!count) cursor = LogPut(cursor, " none");
+    if (!count)
+        cursor = LogPut(cursor, " none");
     cursor = LogPut(cursor, "\r\n");
     cursor = LogPut(cursor, "STAGE2: INT21 undefined-on-6.22 (no-op, matches DOS):");
     for (index = 0, count = 0; index < BYTE_VALUES; ++index)
@@ -627,7 +656,8 @@ static PSTR ReportUnimplemented(PSTR cursor, DOS_MACHINE *machine)
             cursor = LogHexByte(cursor, (UINT)index);
             ++count;
         }
-    if (!count) cursor = LogPut(cursor, " none");
+    if (!count)
+        cursor = LogPut(cursor, " none");
     cursor = LogPut(cursor, "\r\n");
     cursor = LogPut(cursor, "STAGE2: BIOS partial/unimplemented:");
     for (index = 0, count = 0; index < BYTE_VALUES; ++index)
@@ -637,7 +667,8 @@ static PSTR ReportUnimplemented(PSTR cursor, DOS_MACHINE *machine)
             cursor = LogHexByte(cursor, (UINT)index);
             ++count;
         }
-    if (!count) cursor = LogPut(cursor, " none");
+    if (!count)
+        cursor = LogPut(cursor, " none");
     cursor = LogPut(cursor, "\r\n");
     cursor = LogPut(cursor, "STAGE2: INT10 unimplemented:");
     for (index = 0, count = 0; index < BYTE_VALUES; ++index)
@@ -647,7 +678,8 @@ static PSTR ReportUnimplemented(PSTR cursor, DOS_MACHINE *machine)
             cursor = LogHexByte(cursor, (UINT)index);
             ++count;
         }
-    if (!count) cursor = LogPut(cursor, " none");
+    if (!count)
+        cursor = LogPut(cursor, " none");
     cursor = LogPut(cursor, "\r\n");
     return cursor;
 }
@@ -673,7 +705,9 @@ static PSTR ReportSoundStack(PSTR cursor)
                                 CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (configHandle != INVALID_HANDLE_VALUE)
         {
-            DWORD bytesWritten = 0; WriteFile(configHandle, g_Sb.CaptureBuffer, g_Sb.CaptureLength, &bytesWritten, NULL); CloseHandle(configHandle);
+            DWORD bytesWritten = 0;
+            WriteFile(configHandle, g_Sb.CaptureBuffer, g_Sb.CaptureLength, &bytesWritten, NULL);
+            CloseHandle(configHandle);
         }
         cursor = LogPut(cursor, "STAGE2: sound: raw PCM capture -> sb.raw, "); cursor = LogHex(cursor, g_Sb.CaptureLength);
         cursor = LogPut(cursor, " bytes\r\n");
@@ -686,7 +720,8 @@ static PSTR ReportSoundStack(PSTR cursor)
       cursor = LogPut(cursor, " midi_msgs=");               cursor = LogHex(cursor, g_Mpu.MessagesSent);
       cursor = LogPut(cursor, "\r\n");
       cursor = LogPut(cursor, "STAGE2: async per IRQ:");
-      { UINT lineIndex; for (lineIndex = 0; lineIndex < 8; ++lineIndex)
+      { UINT lineIndex;
+      for (lineIndex = 0; lineIndex < 8; ++lineIndex)
       {
           cursor = LogPut(cursor, " irq"); cursor = LogHexByte(cursor, lineIndex); cursor = LogPut(cursor, "=");
           cursor = LogHex(cursor, g_AsyncInjectedLine[lineIndex]); } }
@@ -740,7 +775,8 @@ static PSTR ReportSbReplay(PSTR cursor, PSTR const base)
         cursor = LogPut(cursor, "% of NON-FLAT blocks, decimal-in-hex)");
     }
     cursor = LogPut(cursor, " runs[1,2,3,4-7,8-15,16-31,32-63,64+]=");
-    { UINT rateBucket; for (rateBucket = 0; rateBucket < 8; ++rateBucket)
+    { UINT rateBucket;
+    for (rateBucket = 0; rateBucket < 8; ++rateBucket)
         {
             cursor = LogPut(cursor, rateBucket ? "," : "");
             cursor = LogHex(cursor, g_Sb.ReplayRuns[rateBucket]);
@@ -783,8 +819,11 @@ static PSTR ReportDpmiSimulatedInterrupts(PSTR cursor, PSTR const base)
       for (sbIndex = 0; sbIndex < IVT_VECTORS; ++sbIndex) if (g_SimIntVector[sbIndex])
       {
           cursor = LogPut(cursor, " int"); cursor = LogHexByte(cursor, (BYTE)sbIndex);
-          cursor = LogPut(cursor, "h x"); cursor = LogHex(cursor, g_SimIntVector[sbIndex]); any = 1; }
-      if (!any) cursor = LogPut(cursor, " (none -- every simulated interrupt was serviced)"); }
+          cursor = LogPut(cursor, "h x");
+          cursor = LogHex(cursor, g_SimIntVector[sbIndex]);
+          any = 1; }
+      if (!any)
+          cursor = LogPut(cursor, " (none -- every simulated interrupt was serviced)"); }
     cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
     return cursor;
 }
@@ -802,13 +841,15 @@ static PSTR ReportPmReflectedInterrupts(PSTR cursor, PSTR const base)
       for (dacValue = 0; dacValue < 256 && shown < 24; ++dacValue)
         for (dacIndex = 0; dacIndex < 256 && shown < 24; ++dacIndex)
         {
-            if (!g_PmDispatchCount[dacValue][dacIndex]) continue;
+            if (!g_PmDispatchCount[dacValue][dacIndex])
+                continue;
             cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, (BYTE)dacValue);
             cursor = LogPut(cursor, "/");  cursor = LogHexByte(cursor, (BYTE)dacIndex);
             cursor = LogPut(cursor, "=");  cursor = LogHex(cursor, g_PmDispatchCount[dacValue][dacIndex]);
             ++shown;
         }
-      if (!shown) cursor = LogPut(cursor, " none"); }
+      if (!shown)
+          cursor = LogPut(cursor, " none"); }
     return cursor;
 }
 
@@ -840,17 +881,21 @@ static PSTR ReportTimerAndInterruptDelivery(PSTR cursor, PSTR const base)
           cursor = LogPut(cursor, "% of raises, decimal-in-hex)"); }
     cursor = LogPut(cursor, " owed_now="); cursor = LogHex(cursor, (DWORD)g_PmTickOwed);
     cursor = LogPut(cursor, " owed_depth_at_sync[0,1,2,3,4-7,8-15,16-31,32-63,64]=");
-    { UINT outputBucket; for (outputBucket = 0; outputBucket < 9; ++outputBucket)
+    { UINT outputBucket;
+    for (outputBucket = 0; outputBucket < 9; ++outputBucket)
         {
             cursor = LogPut(cursor, outputBucket ? "," : "");
             cursor = LogHex(cursor, g_PmOwedHistogram[outputBucket]);
         }
         }
     cursor = LogPut(cursor, "\r\nSTAGE2: coop per IRQ:");
-    { UINT columnIndex; for (columnIndex = 0; columnIndex < 8; ++columnIndex)
-        { if (!g_PmCooperativeLine[columnIndex]) continue;
+    { UINT columnIndex;
+    for (columnIndex = 0; columnIndex < 8; ++columnIndex)
+        { if (!g_PmCooperativeLine[columnIndex])
+            continue;
           cursor = LogPut(cursor, " irq"); cursor = LogHexByte(cursor, columnIndex);
-          cursor = LogPut(cursor, "=");    cursor = LogHex(cursor, g_PmCooperativeLine[columnIndex]); } }
+          cursor = LogPut(cursor, "=");
+          cursor = LogHex(cursor, g_PmCooperativeLine[columnIndex]); } }
     cursor = LogPut(cursor, "\r\n");
     /* Flushed first, deliberately: `base` points past the preamble, so report[] has
      * well under 8 KB of headroom and the sbblk ledger below eats most of what is
@@ -892,11 +937,13 @@ static PSTR ReportDmaAndSoundBlaster(PSTR cursor)
                  cursor = LogHex(cursor, (g_Sb.OutputIdle + g_Sb.OutputPaused) * 100u / total);
                  cursor = LogPut(cursor, "% of output is inserted silence)"); } }
     cursor = LogPut(cursor, " gap_runs[1,2,4,8,16,32,64,128+]=");
-    { INT bucket3; for (bucket3 = 0; bucket3 < 8; ++bucket3) { cursor = LogPut(cursor, bucket3 ? "," : "");
+    { INT bucket3;
+    for (bucket3 = 0; bucket3 < 8; ++bucket3) { cursor = LogPut(cursor, bucket3 ? "," : "");
                                            cursor = LogHex(cursor, g_Sb.IdleRuns[bucket3]); } }
     /* - ISOLATED silent blocks are the dropouts; long runs are real silence. */
     cursor = LogPut(cursor, " flat_runs[1,2,3,4-7,8-15,16-31,32-63,64+]=");
-    { INT bucket2; for (bucket2 = 0; bucket2 < 8; ++bucket2) { cursor = LogPut(cursor, bucket2 ? "," : "");
+    { INT bucket2;
+    for (bucket2 = 0; bucket2 < 8; ++bucket2) { cursor = LogPut(cursor, bucket2 ? "," : "");
                                            cursor = LogHex(cursor, g_Sb.FlatRuns[bucket2]); } }
     /* - THE QUEUE, WHICH IS WHAT THE SPEAKER ACTUALLY SEES. STARVED>0 means the
      * driver ran out of data and played silence -- an audible gap that no
@@ -907,9 +954,11 @@ static PSTR ReportDmaAndSoundBlaster(PSTR cursor)
     cursor = LogPut(cursor, " drain_max=");      cursor = LogHex(cursor, g_Wave.DrainMax);
     cursor = LogPut(cursor, " wr_fail=");        cursor = LogHex(cursor, g_Wave.Underruns);
     cursor = LogPut(cursor, " drain_hist=");
-    { UINT32 bufferIndex; for (bufferIndex = 0; bufferIndex <= g_Wave.BufferCount && bufferIndex <= AUDIO_WAVE_BUFFERS; ++bufferIndex)
+    { UINT32 bufferIndex;
+    for (bufferIndex = 0; bufferIndex <= g_Wave.BufferCount && bufferIndex <= AUDIO_WAVE_BUFFERS; ++bufferIndex)
     {
-          cursor = LogPut(cursor, bufferIndex ? "," : ""); cursor = LogHex(cursor, g_Wave.DrainHistogram[bufferIndex]); } }
+          cursor = LogPut(cursor, bufferIndex ? "," : "");
+          cursor = LogHex(cursor, g_Wave.DrainHistogram[bufferIndex]); } }
     cursor = LogPut(cursor, " geom: nbufs="); cursor = LogHex(cursor, g_Wave.BufferCount);
     cursor = LogPut(cursor, " nframes=");     cursor = LogHex(cursor, g_Wave.FrameCount);
     cursor = LogPut(cursor, " GATE: on="); cursor = LogHex(cursor, (DWORD)g_Sb.GateMode);
@@ -926,29 +975,36 @@ static PSTR ReportDmaAndSoundBlaster(PSTR cursor)
     cursor = LogPut(cursor, " rate_hz="); cursor = LogHex(cursor, g_Sb.RateHz);
     cursor = LogPut(cursor, " blk_len="); cursor = LogHex(cursor, g_Sb.BlockLength);
     cursor = LogPut(cursor, " dsp_cmds:");
-    { UINT vectorIndex; for (vectorIndex = 0; vectorIndex < IVT_VECTORS; ++vectorIndex)
+    { UINT vectorIndex;
+    for (vectorIndex = 0; vectorIndex < IVT_VECTORS; ++vectorIndex)
         if (g_Sb.CommandHistogram[vectorIndex]) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, vectorIndex);
-                                 cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Sb.CommandHistogram[vectorIndex]); } }
+                                 cursor = LogPut(cursor, "x");
+                                 cursor = LogHex(cursor, g_Sb.CommandHistogram[vectorIndex]); } }
     cursor = LogPut(cursor, "\r\nSTAGE2: sb ");
     /* - THE GUEST ADDRESS OF EVERY DMA-COUNT POLL. Subtract 0x03AEDFEC for the
      * DOOM.EXE file offset and disassemble it.
      */
     cursor = LogPut(cursor, " dma_poll_sites=");
-    { UINT pollIndex; for (pollIndex = 0; pollIndex < g_DmaPollCount; ++pollIndex)
+    { UINT pollIndex;
+    for (pollIndex = 0; pollIndex < g_DmaPollCount; ++pollIndex)
     {
           cursor = LogPut(cursor, pollIndex ? " " : ""); cursor = LogPut(cursor, "0x"); cursor = LogHex(cursor, g_DmaPollEip[pollIndex]);
-          cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_DmaPollHits[pollIndex]); } }
+          cursor = LogPut(cursor, "x");
+          cursor = LogHex(cursor, g_DmaPollHits[pollIndex]); } }
     cursor = LogPut(cursor, " overflow="); cursor = LogHex(cursor, (DWORD)g_DmaPollOverflow);
     /* - THE CALL CHAIN. Subtract 0x03AEDFEC for the DOOM.EXE file offset. */
     cursor = LogPut(cursor, " poll_stack=");
-    { UINT pollIndex; for (pollIndex = 0; pollIndex < g_PollStackCount; ++pollIndex)
+    { UINT pollIndex;
+    for (pollIndex = 0; pollIndex < g_PollStackCount; ++pollIndex)
     {
           cursor = LogPut(cursor, pollIndex ? " " : ""); cursor = LogPut(cursor, "0x"); cursor = LogHex(cursor, g_PollStack[pollIndex]);
-          cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_PollStackHits[pollIndex]); } }
+          cursor = LogPut(cursor, "x");
+          cursor = LogHex(cursor, g_PollStackHits[pollIndex]); } }
     cursor = LogPut(cursor, " stkovf="); cursor = LogHex(cursor, (DWORD)g_PollStackOverflow);
     /* - WHY ONLY 56 MIXER RUNS/s: long overruns (a) or bunching (b)? */
     cursor = LogPut(cursor, " poll_gap_us[<1k,2k,4k,8k,16k,32k,64k,128k,256k,+]=");
-    { UINT bucket4; for (bucket4 = 0; bucket4 < 10; ++bucket4) { cursor = LogPut(cursor, bucket4 ? "," : "");
+    { UINT bucket4;
+    for (bucket4 = 0; bucket4 < 10; ++bucket4) { cursor = LogPut(cursor, bucket4 ? "," : "");
                                                  cursor = LogHex(cursor, g_PollGap[bucket4]); } }
     cursor = LogPut(cursor, " gap_max_us="); cursor = LogHex(cursor, g_PollGapMaximumMicroseconds);
     return cursor;
@@ -990,7 +1046,8 @@ static PSTR ReportDmxTaskAndDmaPolls(PSTR cursor)
        */
       cursor = LogPut(cursor, " DMXCHK=");
       if (MemoryReadable((ULONG_PTR)stub, 5))
-          for (tries = 0; tries < 5; ++tries) cursor = LogHexByte(cursor, stub[tries]);   /* expect 601e060fa0 */
+          for (tries = 0; tries < 5; ++tries)
+              cursor = LogHexByte(cursor, stub[tries]);                                   /* expect 601e060fa0 */
       else
           cursor = LogPut(cursor, "unmapped");   /* not Doom: the probe has nothing to say */
       cursor = LogPut(cursor, " mixer=0x"); cursor = LogHex(cursor, mixer);
@@ -998,8 +1055,10 @@ static PSTR ReportDmxTaskAndDmaPolls(PSTR cursor)
       {
           ULONG_PTR base, end, scan;
           INT readable;
-          if (VirtualQuery((LPCVOID)address, &memoryInfo, sizeof memoryInfo) != sizeof memoryInfo) break;
-          base = (ULONG_PTR)memoryInfo.BaseAddress; end = base + memoryInfo.RegionSize;
+          if (VirtualQuery((LPCVOID)address, &memoryInfo, sizeof memoryInfo) != sizeof memoryInfo)
+              break;
+          base = (ULONG_PTR)memoryInfo.BaseAddress;
+          end = base + memoryInfo.RegionSize;
           readable = (memoryInfo.State == MEM_COMMIT)
                    && (memoryInfo.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY
                                    | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE
@@ -1010,7 +1069,8 @@ static PSTR ReportDmxTaskAndDmaPolls(PSTR cursor)
               for (scan = base; scan + 16u*36u <= end && found < 3; scan += 4)
               {
                   const volatile DWORD *entryWords = (const volatile DWORD *)scan;
-                  if (entryWords[0] != mixer) continue;
+                  if (entryWords[0] != mixer)
+                      continue;
                   /* [CAUTION]: DUMP RAW, DO NOT INTERPRET. The first attempt read
                    * [+8] as the period and got 140 -- which at a ~135/s clock
                    * means one run a SECOND against 58 observed, so either the
@@ -1033,22 +1093,26 @@ static PSTR ReportDmxTaskAndDmaPolls(PSTR cursor)
                    * printed value for the file offset to disassemble.
                    */
                   UINT irqIndex;
-                  if (scan + 16u * 36u > end) continue;   /* table must fit */
+                  if (scan + 16u * 36u > end)
+                      continue;                           /* table must fit */
                   ++found;
                   cursor = LogPut(cursor, " IRQTAB@0x"); cursor = LogHex(cursor, (DWORD)scan);
                   for (irqIndex = 0; irqIndex < 16; ++irqIndex)
                   {
                       DWORD handle = *(const volatile DWORD *)(scan + irqIndex * 36u);
-                      if (!handle) continue;
+                      if (!handle)
+                          continue;
                       cursor = LogPut(cursor, " i"); cursor = LogHexByte(cursor, irqIndex);
                       cursor = LogPut(cursor, "=0x"); cursor = LogHex(cursor, handle);
                   }
               }
           }
-          if (end <= base) break;
+          if (end <= base)
+              break;
           address = end;
       }
-      if (!found) cursor = LogPut(cursor, " IRQTAB-NOT-FOUND");
+      if (!found)
+          cursor = LogPut(cursor, " IRQTAB-NOT-FOUND");
       /* THE CALLBACK BETWEEN THE SB ISR AND THE MIXER:
        * DMX's SB handler ends by calling through a pointer stored at data 0x584
        * (the value read back there is a code address), and that callback is
@@ -1074,7 +1138,8 @@ static PSTR ReportDmxTaskAndDmaPolls(PSTR cursor)
             {
                 cursor = LogPut(cursor, "=file0x"); cursor = LogHex(cursor, number - 0x03AEDFECu);
             }
-            else cursor = LogPut(cursor, "(not a linear code addr)");
+            else
+                cursor = LogPut(cursor, "(not a linear code addr)");
         }
         if (VirtualQuery((LPCVOID)stateWord, &stateMemoryInfo, sizeof stateMemoryInfo) == sizeof stateMemoryInfo && stateMemoryInfo.State == MEM_COMMIT)
         {
@@ -1085,17 +1150,23 @@ static PSTR ReportDmxTaskAndDmaPolls(PSTR cursor)
     cursor = LogPut(cursor, " w4=");                   cursor = LogHex(cursor, g_Dma.CountReadsDword);
     /* ...and how many of those reads DMX made from inside a COOPERATIVE tick. */
     cursor = LogPut(cursor, " from_coop_isr08=");      cursor = LogHex(cursor, g_CooperativeDmaPolls);
-    { UINT quadrant; for (quadrant = 2; quadrant < 8; ++quadrant)
-        { if (!g_CooperativeDmaPollsDevice[quadrant]) continue;
+    { UINT quadrant;
+    for (quadrant = 2; quadrant < 8; ++quadrant)
+        { if (!g_CooperativeDmaPollsDevice[quadrant])
+            continue;
           cursor = LogPut(cursor, " from_coop_irq"); cursor = LogHexByte(cursor, quadrant);
-          cursor = LogPut(cursor, "=");              cursor = LogHex(cursor, g_CooperativeDmaPollsDevice[quadrant]); } }
+          cursor = LogPut(cursor, "=");
+          cursor = LogHex(cursor, g_CooperativeDmaPollsDevice[quadrant]); } }
     cursor = LogPut(cursor, " in_async_isr=");  cursor = LogHex(cursor, g_DmaPollInAsync);
     cursor = LogPut(cursor, " mainline=");      cursor = LogHex(cursor, g_DmaPollMainline);
     return cursor;
 }
 
 /* End of run: device-IRQ retries, the second sound line and the per-block SB ledger. */
-static PSTR ReportDeviceIrqRetriesAndSoundBlocks(PSTR cursor, PSTR const base, PCSTR const reportEnd)
+static PSTR ReportDeviceIrqRetriesAndSoundBlocks(
+    PSTR cursor,
+    PSTR const base,
+    PCSTR const reportEnd)
 {
     cursor = LogPut(cursor, "\r\nSTAGE2: devirq async retry (one per sync): try=");
     cursor = LogHex(cursor, g_IrqNRetryTry);
@@ -1137,7 +1208,8 @@ static PSTR ReportDeviceIrqRetriesAndSoundBlocks(PSTR cursor, PSTR const base, P
             cursor = LogPut(cursor, " page=");       cursor = LogHexByte(cursor, blockRecord->Page);
             cursor = LogPut(cursor, " mode=");       cursor = LogHexByte(cursor, blockRecord->Mode);
             cursor = LogPut(cursor, blockRecord->Reloaded ? " WRAPPED" : " mid-ring");
-            if (blockRecord->Ended) cursor = LogPut(cursor, " ENDED");
+            if (blockRecord->Ended)
+                cursor = LogPut(cursor, " ENDED");
             cursor = LogPut(cursor, "\r\n");
             /* `base` points PAST the preamble, not at report[0], so bound against
              * the array itself -- p - base would let this overrun by the preamble's
@@ -1168,12 +1240,15 @@ static PSTR ReportAudioDevices(PSTR cursor)
          * a fault downstream of the mixer entirely. Each counter is taken where the
          * decision is made, so the first zero names the stage.
          */
-    { INT eventIndex; cursor = LogPut(cursor, "STAGE2: events: direct_io="); cursor = LogHex(cursor, g_IoViaDirect);
+    { INT eventIndex;
+    cursor = LogPut(cursor, "STAGE2: events: direct_io=");
+    cursor = LogHex(cursor, g_IoViaDirect);
       cursor = LogPut(cursor, " retro_io=");  cursor = LogHex(cursor, g_IoViaRetro);
       cursor = LogPut(cursor, " by_event=");
       for (eventIndex = 0; eventIndex < EV_HIST_MAX; ++eventIndex)
       {
-          if (!g_EventHistogram[eventIndex]) continue;
+          if (!g_EventHistogram[eventIndex])
+              continue;
           cursor = LogPut(cursor, " "); cursor = LogHex(cursor, (DWORD)eventIndex); cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, g_EventHistogram[eventIndex]);
       }
       cursor = LogPut(cursor, "\r\n"); }
@@ -1253,12 +1328,14 @@ static PSTR ReportPlanarVideoState(PSTR cursor, PCSTR const reportEnd)
         for (index = 0; index < 16; ++index) if (g_Video.WriteEnableSetResetHistogram[index])
         {
             cursor = LogPut(cursor, " 0x"); cursor = LogHexByte(cursor, index);
-            cursor = LogPut(cursor, "="); cursor = LogDecimal(cursor, g_Video.WriteEnableSetResetHistogram[index]); }
+            cursor = LogPut(cursor, "=");
+            cursor = LogDecimal(cursor, g_Video.WriteEnableSetResetHistogram[index]); }
         cursor = LogPut(cursor, " | alu");
         for (index = 0; index < 4; ++index) if (g_Video.WriteAluHistogram[index])
         {
             cursor = LogPut(cursor, " "); cursor = LogDecimal(cursor, index);
-            cursor = LogPut(cursor, "="); cursor = LogDecimal(cursor, g_Video.WriteAluHistogram[index]); }
+            cursor = LogPut(cursor, "=");
+            cursor = LogDecimal(cursor, g_Video.WriteAluHistogram[index]); }
         cursor = LogPut(cursor, " | p3_from_sr=");  cursor = LogDecimal(cursor, g_Video.WritePlane3SetReset);
         cursor = LogPut(cursor, " of_which_nonzero="); cursor = LogDecimal(cursor, g_Video.WritePlane3NonZero);
         cursor = LogPut(cursor, " p3_from_cpu=");   cursor = LogDecimal(cursor, g_Video.WritePlane3Data);
@@ -1294,7 +1371,8 @@ static PSTR ReportPlanarVideoState(PSTR cursor, PCSTR const reportEnd)
         {
             UINT32 colour = g_Video.Dac[g_Video.PaletteRegisters[index] & 0x3F];
             cursor = LogHexByte(cursor, (colour >> WORD_SHIFT) & BYTE_MASK); cursor = LogHexByte(cursor, (colour >> BYTE_SHIFT) & BYTE_MASK);
-            cursor = LogHexByte(cursor, colour & BYTE_MASK); cursor = LogPut(cursor, " "); }
+            cursor = LogHexByte(cursor, colour & BYTE_MASK);
+            cursor = LogPut(cursor, " "); }
         cursor = LogPut(cursor, "]\r\n"); }
     /* s69: IS THE LEVEL PALETTE EVEN LOADED?:
      * The gameplay screen renders black because dac@vpal is all-zero. That is
@@ -1316,7 +1394,8 @@ static PSTR ReportPlanarVideoState(PSTR cursor, PCSTR const reportEnd)
             }
             if (*(volatile BYTE *)candidate == 0x00 && *(volatile BYTE *)(candidate+1) == 0x2a)
             {
-                UINT32 item; INT isOk = 1;
+                UINT32 item;
+                INT isOk = 1;
                 for (item = 0; item < 12; ++item) if (*(volatile BYTE *)(candidate+item) != signature[item])
                 {
                     isOk = 0;
@@ -1324,7 +1403,8 @@ static PSTR ReportPlanarVideoState(PSTR cursor, PCSTR const reportEnd)
                 }
                 if (isOk)
                 {
-                    if (found == 0xFFFFFFFFu) found = candidate;
+                    if (found == 0xFFFFFFFFu)
+                        found = candidate;
                     hits++;
                 }
             }
@@ -1333,7 +1413,8 @@ static PSTR ReportPlanarVideoState(PSTR cursor, PCSTR const reportEnd)
         if (found != 0xFFFFFFFFu) { cursor = LogPut(cursor, "FOUND at lin=0x"); cursor = LogHex(cursor, found);
             cursor = LogPut(cursor, " (hits="); cursor = LogDecimal(cursor, hits);
             cursor = LogPut(cursor, ") -> colours ARE loaded; fade/DAC path is the fault\r\n"); }
-        else cursor = LogPut(cursor, "ABSENT -> the level palette was never loaded into guest RAM\r\n");
+        else
+            cursor = LogPut(cursor, "ABSENT -> the level palette was never loaded into guest RAM\r\n");
     }
     /* -- s69: THE FADED PALETTE BUFFER + THE FADE STATE, from the guest DS the
      * heartbeat last sampled. The per-frame palette routine feeds the DAC from
@@ -1358,7 +1439,8 @@ static PSTR ReportPlanarVideoState(PSTR cursor, PCSTR const reportEnd)
                 cursor = LogPut(cursor, " ");
             }
         }
-        else cursor = LogPut(cursor, "<ds:2668 unmapped>");
+        else
+            cursor = LogPut(cursor, "<ds:2668 unmapped>");
         cursor = LogPut(cursor, "]\r\n");
     }
     /* The VRAM watchpoint. Silent unless cfg/vwatch.txt armed it. */
@@ -1373,7 +1455,8 @@ static PSTR ReportPlanarVideoState(PSTR cursor, PCSTR const reportEnd)
             INT item;
             if (watchIndex2 == watchCount)
             {
-                if (!g_Video.WatchCount) break;
+                if (!g_Video.WatchCount)
+                    break;
                 cursor = LogPut(cursor, "  LAST ");
             }
             else
@@ -1391,11 +1474,14 @@ static PSTR ReportPlanarVideoState(PSTR cursor, PCSTR const reportEnd)
             cursor = LogPut(cursor, " bm="); cursor = LogHexByte(cursor, watch->BitMask);
             cursor = LogPut(cursor, " cpu="); cursor = LogHexByte(cursor, watch->Cpu);
             cursor = LogPut(cursor, " lat=");
-            for (item = 0; item < 4; ++item) cursor = LogHexByte(cursor, watch->Latch[item]);
+            for (item = 0; item < 4; ++item)
+                cursor = LogHexByte(cursor, watch->Latch[item]);
             cursor = LogPut(cursor, " after=");
-            for (item = 0; item < 4; ++item) cursor = LogHexByte(cursor, watch->After[item]);
+            for (item = 0; item < 4; ++item)
+                cursor = LogHexByte(cursor, watch->After[item]);
             cursor = LogPut(cursor, "\r\n");
-            if (cursor > reportEnd - 256) break;
+            if (cursor > reportEnd - 256)
+                break;
         }
     }
     /* - Does this guest use OFF-SCREEN VRAM? Above 38400 used to read back as
@@ -1437,7 +1523,8 @@ static PSTR ReportPlanarSites(PSTR cursor, PSTR const base, PCSTR const reportEn
                     for (which = 0; which < 2; ++which)
                     {
                         const VIDEO_SITE *videoSite = which ? &g_Video.ReadSites[item] : &g_Video.WriteSites[item];
-                        if (!videoSite->Count || videoSite->High < 0xC000u) continue;
+                        if (!videoSite->Count || videoSite->High < 0xC000u)
+                            continue;
                         cursor = LogPut(cursor, which ? "  READ  pc=" : "  WRITE pc=");
                         cursor = LogHex(cursor, videoSite->Pc);
                         cursor = LogPut(cursor, " n=");     cursor = LogDecimal(cursor, videoSite->Count);
@@ -1445,7 +1532,8 @@ static PSTR ReportPlanarSites(PSTR cursor, PSTR const base, PCSTR const reportEn
                         cursor = LogPut(cursor, "..0x");    cursor = LogHex(cursor, videoSite->High);
                         cursor = LogPut(cursor, "\r\n");
                     }
-                    if (cursor > reportEnd - 256) break;
+                    if (cursor > reportEnd - 256)
+                        break;
                 }         }
             /* - THE OFF-SCREEN SPRITE CACHE, WITHOUT THE COLLISION CAVEAT. The report
              * above is drawn from 256-slot hashes that lost 249,630 reads on the run
@@ -1479,7 +1567,8 @@ static PSTR ReportPlanarSites(PSTR cursor, PSTR const base, PCSTR const reportEn
                     for (item = 0; item < VIDEO_CACHE_SITES; ++item)
                     {
                         const VIDEO_CACHE_SITE *cacheSite = &g_Video.CacheSites[item];
-                        if (!cacheSite->Count) continue;
+                        if (!cacheSite->Count)
+                            continue;
                         accounted += cacheSite->Count;
                         cursor = LogPut(cursor, cacheSite->IsWrite ? "  cache WRITE pc=" : "  cache READ  pc=");
                         cursor = LogHex(cursor, cacheSite->Pc);
@@ -1489,7 +1578,8 @@ static PSTR ReportPlanarSites(PSTR cursor, PSTR const base, PCSTR const reportEn
                         cursor = LogPut(cursor, " first=");  cursor = LogDecimal(cursor, cacheSite->First);
                         cursor = LogPut(cursor, " last=");   cursor = LogDecimal(cursor, cacheSite->Last);
                         cursor = LogPut(cursor, "\r\n");
-                        if (cursor > reportEnd - 512) break;
+                        if (cursor > reportEnd - 512)
+                            break;
                     }
                     /* - THE LIST MUST ACCOUNT FOR EVERY ACCESS IT COUNTED. n's + lost has
                      * to equal seq; if it does not, lines are MISSING and the absence of
@@ -1505,21 +1595,24 @@ static PSTR ReportPlanarSites(PSTR cursor, PSTR const base, PCSTR const reportEn
             {   UINT item, shown;
                 for (shown = 0; shown < 14; ++shown)
                 {
-                    UINT best = VIDEO_SITES; UINT32 bestCount = 0;
+                    UINT best = VIDEO_SITES;
+                    UINT32 bestCount = 0;
                     for (item = 0; item < VIDEO_SITES; ++item)
                         if (g_Video.WriteSites[item].Count > bestCount)
                         {
                             bestCount = g_Video.WriteSites[item].Count;
                             best = item;
                         }
-                    if (best == VIDEO_SITES) break;
+                    if (best == VIDEO_SITES)
+                        break;
                     cursor = LogPut(cursor, "  wsite pc="); cursor = LogHex(cursor, g_Video.WriteSites[best].Pc);
                     cursor = LogPut(cursor, " n=");   cursor = LogDecimal(cursor, g_Video.WriteSites[best].Count);
                     cursor = LogPut(cursor, " off=0x"); cursor = LogHex(cursor, g_Video.WriteSites[best].Low);
                     cursor = LogPut(cursor, "..0x");    cursor = LogHex(cursor, g_Video.WriteSites[best].High);
                     cursor = LogPut(cursor, "\r\n");
                     g_Video.WriteSites[best].Count = 0;            /* report is the last use of it */
-                    if (cursor > reportEnd - 512) break;
+                    if (cursor > reportEnd - 512)
+                        break;
                 }
                 /* - THE COLOUR-COMPARE READ SITES: a guest asking "where is the ground". */
             {
@@ -1531,14 +1624,16 @@ static PSTR ReportPlanarSites(PSTR cursor, PSTR const base, PCSTR const reportEn
                 cursor = LogDecimal(cursor, g_Video.CompareSitesLost); cursor = LogPut(cursor, "\r\n");
                 for (shown = 0; shown < 10; ++shown)
                 {
-                    UINT best = VIDEO_SITES; UINT32 bestCount = 0;
+                    UINT best = VIDEO_SITES;
+                    UINT32 bestCount = 0;
                     for (item = 0; item < VIDEO_SITES; ++item)
                         if (g_Video.CompareSites[item].Count > bestCount)
                         {
                             bestCount = g_Video.CompareSites[item].Count;
                             best = item;
                         }
-                    if (best == VIDEO_SITES) break;
+                    if (best == VIDEO_SITES)
+                        break;
                     cursor = LogPut(cursor, "  cc-read pc="); cursor = LogHex(cursor, g_Video.CompareSites[best].Pc);
                     cursor = LogPut(cursor, " n=");   cursor = LogDecimal(cursor, g_Video.CompareSites[best].Count);
                     cursor = LogPut(cursor, " off=0x"); cursor = LogHex(cursor, g_Video.CompareSites[best].Low);
@@ -1548,14 +1643,17 @@ static PSTR ReportPlanarSites(PSTR cursor, PSTR const base, PCSTR const reportEn
                     cursor = LogPut(cursor, " ones="); cursor = LogDecimal(cursor, g_Video.CompareSitesOnes[best]);
                     cursor = LogPut(cursor, "\r\n");
                     g_Video.CompareSites[best].Count = 0;
-                    if (cursor > reportEnd - 512) break;
+                    if (cursor > reportEnd - 512)
+                        break;
                 }
                 /* - HOW MANY SITES THIS TOP-N LEFT OUT. Without it a truncated list
                  * reads as a complete enumeration of who touches VRAM, and "pc X is not
                  * here" becomes an argument it cannot support.
                  */
                 {   UINT more = 0;
-                    for (item = 0; item < VIDEO_SITES; ++item) if (g_Video.CompareSites[item].Count) ++more;
+                    for (item = 0; item < VIDEO_SITES; ++item)
+                        if (g_Video.CompareSites[item].Count)
+                            ++more;
                     cursor = LogPut(cursor, "  (cc-read: "); cursor = LogDecimal(cursor, more);
                     cursor = LogPut(cursor, " further sites not shown)\r\n");
                 }
@@ -1568,28 +1666,33 @@ static PSTR ReportPlanarSites(PSTR cursor, PSTR const base, PCSTR const reportEn
                 cursor = LogDecimal(cursor, g_Video.ReadSitesLost); cursor = LogPut(cursor, "\r\n");
                 for (shown = 0; shown < 14; ++shown)
                 {
-                    UINT best = VIDEO_SITES; UINT32 bestCount = 0;
+                    UINT best = VIDEO_SITES;
+                    UINT32 bestCount = 0;
                     for (item = 0; item < VIDEO_SITES; ++item)
                         if (g_Video.ReadSites[item].Count > bestCount)
                         {
                             bestCount = g_Video.ReadSites[item].Count;
                             best = item;
                         }
-                    if (best == VIDEO_SITES) break;
+                    if (best == VIDEO_SITES)
+                        break;
                     cursor = LogPut(cursor, "  rsite pc="); cursor = LogHex(cursor, g_Video.ReadSites[best].Pc);
                     cursor = LogPut(cursor, " n=");   cursor = LogDecimal(cursor, g_Video.ReadSites[best].Count);
                     cursor = LogPut(cursor, " off=0x"); cursor = LogHex(cursor, g_Video.ReadSites[best].Low);
                     cursor = LogPut(cursor, "..0x");    cursor = LogHex(cursor, g_Video.ReadSites[best].High);
                     cursor = LogPut(cursor, "\r\n");
                     g_Video.ReadSites[best].Count = 0;
-                    if (cursor > reportEnd - 512) break;
+                    if (cursor > reportEnd - 512)
+                        break;
                 }
                 /* - HOW MANY SITES THIS TOP-N LEFT OUT. Without it a truncated list
                  * reads as a complete enumeration of who touches VRAM, and "pc X is not
                  * here" becomes an argument it cannot support.
                  */
                 {   UINT more = 0;
-                    for (item = 0; item < VIDEO_SITES; ++item) if (g_Video.ReadSites[item].Count) ++more;
+                    for (item = 0; item < VIDEO_SITES; ++item)
+                        if (g_Video.ReadSites[item].Count)
+                            ++more;
                     cursor = LogPut(cursor, "  (rsite: "); cursor = LogDecimal(cursor, more);
                     cursor = LogPut(cursor, " further sites not shown)\r\n");
                 }
@@ -1601,6 +1704,7 @@ static PSTR ReportPlanarSites(PSTR cursor, PSTR const base, PCSTR const reportEn
 static PSTR ReportCrtcAndVideoNow(PSTR cursor, UINT *nonZero)
 {
     UINT plane;
+
     /* - Does this guest scroll or page-flip, and how often would a frame have
      * been built from a half-written start address?
      */
@@ -1627,7 +1731,8 @@ static PSTR ReportCrtcAndVideoNow(PSTR cursor, UINT *nonZero)
         UINT byteIndex;
         for (byteIndex = 0; byteIndex < 8; ++byteIndex)
         {
-            if (byteIndex) cursor = LogPut(cursor, "/");
+            if (byteIndex)
+                cursor = LogPut(cursor, "/");
             cursor = LogDecimal(cursor, g_Video.Dt3DaHistogram[byteIndex]);
         }
     }
@@ -1640,7 +1745,8 @@ static PSTR ReportCrtcAndVideoNow(PSTR cursor, UINT *nonZero)
         INT gateIndex;
         for (gateIndex = 0; gateIndex < 5; ++gateIndex)
         {
-            if (gateIndex) cursor = LogPut(cursor, "/");
+            if (gateIndex)
+                cursor = LogPut(cursor, "/");
             cursor = LogDecimal(cursor, g_Video.StartGapHistogram[gateIndex]);
         }
     }
@@ -1754,6 +1860,7 @@ static PSTR ReportInterpreterBailSites(PSTR cursor, PSTR const base, PCSTR const
 static PSTR ReportModeSets(PSTR cursor)
 {
     INT index;
+
     cursor = LogPut(cursor, "STAGE2: mode sets:");
     for (index = 0; index < g_Video.ModeQueryCount; ++index)
     {
@@ -1762,7 +1869,8 @@ static PSTR ReportModeSets(PSTR cursor)
         cursor = LogPut(cursor, "/"); cursor = LogHex(cursor, g_Video.ModeQueries[index].Width);
         cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Video.ModeQueries[index].Height);
     }
-    if (!g_Video.ModeQueryCount) cursor = LogPut(cursor, " none");
+    if (!g_Video.ModeQueryCount)
+        cursor = LogPut(cursor, " none");
     cursor = LogPut(cursor, "\r\n");
     return cursor;
 }
@@ -1771,6 +1879,7 @@ static PSTR ReportModeSets(PSTR cursor)
 static PSTR ReportModeY(PSTR cursor)
 {
     INT index;
+
     /* - THE MODE-Y ARRAYS, NOT THE PLANAR ONES. "plane-nonzero" above counts
      * g_Video.plane[] -- the 16-colour planar buffer, which an unchained 256-colour
      * mode never touches -- so it has reported four zeroes for every mode-Y run
@@ -1806,7 +1915,9 @@ static PSTR ReportModeY(PSTR cursor)
                 UINT32 windowOffset = position & (MODEY_WIN - 1u);
                 BYTE plane0Byte = ((BYTE *)g_ModeYView[0])[windowOffset], plane1Byte = ((BYTE *)g_ModeYView[1])[windowOffset];
                 BYTE plane2Byte = ((BYTE *)g_ModeYView[2])[windowOffset], plane3Byte = ((BYTE *)g_ModeYView[3])[windowOffset];
-                ++total; if (plane0Byte == plane1Byte && plane1Byte == plane2Byte && plane2Byte == plane3Byte) ++equalCount;
+                ++total;
+                if (plane0Byte == plane1Byte && plane1Byte == plane2Byte && plane2Byte == plane3Byte)
+                    ++equalCount;
             }
             cursor = LogPut(cursor, " p"); cursor = LogHexByte(cursor, page); cursor = LogPut(cursor, "=");
             cursor = LogHex(cursor, equalCount); cursor = LogPut(cursor, "/"); cursor = LogHex(cursor, total);
@@ -1840,7 +1951,8 @@ static PSTR ReportModeY(PSTR cursor)
      * static anyway. A p1eq[0/2/3] near p1eq[1] is the collapse; well below it is
      * not. All rates are percent, printed in hex.
      */
-    { INT band; for (band = 0; band < 2; ++band)
+    { INT band;
+    for (band = 0; band < 2; ++band)
     {
         INT probeIndex2;
         cursor = LogPut(cursor, band ? " ysmpB[184-199]:" : " ysmpA[168-183]:");
@@ -1874,7 +1986,8 @@ static PSTR ReportModeY(PSTR cursor)
             cursor = LogPut(cursor, probeIndex2 ? "/" : "");
             if (g_ModeYSampleP1Total[band][probeIndex2])
                 cursor = LogHex(cursor, g_ModeYSampleP1Equal[band][probeIndex2] * 100u / g_ModeYSampleP1Total[band][probeIndex2]);
-            else cursor = LogPut(cursor, "-");
+            else
+                cursor = LogPut(cursor, "-");
         }
         cursor = LogPut(cursor, "% n=");
         for (probeIndex2 = 0; probeIndex2 < 4; ++probeIndex2)
@@ -1886,7 +1999,8 @@ static PSTR ReportModeY(PSTR cursor)
      * a residual is a path nobody has accounted for.
      */
     { DWORD maskWrites = 0, residual;
-      for (index = 0; index < 16; ++index) maskWrites += g_Video.MaskHistogram[index];
+      for (index = 0; index < 16; ++index)
+          maskWrites += g_Video.MaskHistogram[index];
       /* [CAUTION]: `skip_same` LEFT THIS IDENTITY WHEN THE GR4 FIX LANDED. A map-mask write
        * whose value is unchanged now still calls select -- it has to, because a read
        * may have moved the window since -- so it is no longer a bucket that
@@ -1936,15 +2050,18 @@ static PSTR ReportModeY(PSTR cursor)
           {
               cursor = LogPut(cursor, " r"); cursor = LogHexByte(cursor, pairA);
               cursor = LogPut(cursor, "->m"); cursor = LogHexByte(cursor, pairB);
-              cursor = LogPut(cursor, "="); cursor = LogHex(cursor, g_ModeYGr4Pair[pairA][pairB]); } }
+              cursor = LogPut(cursor, "=");
+              cursor = LogHex(cursor, g_ModeYGr4Pair[pairA][pairB]); } }
     /* - THE ONE THAT DECIDES IT. GR4 writes between consecutive mask changes:
      * 1 = the ordinary blit (window moves before any read -- harmless)
      * 4 = a PURE READ PASS with the window stranded (the collapse)
      */
     cursor = LogPut(cursor, " gr4_runs[n GR4 per select]:");
-    { UINT row2; for (row2 = 1; row2 < 10; ++row2)
+    { UINT row2;
+    for (row2 = 1; row2 < 10; ++row2)
         if (g_ModeYGr4Runs[row2]) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, row2);
-                               cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_ModeYGr4Runs[row2]); } }
+                               cursor = LogPut(cursor, "x");
+                               cursor = LogHex(cursor, g_ModeYGr4Runs[row2]); } }
     cursor = LogPut(cursor, " stranded_on_plane=");
     for (index = 0; index < 4; ++index)
     {
@@ -1956,11 +2073,14 @@ static PSTR ReportModeY(PSTR cursor)
      * ever written to A0000 while the window pointed at the linear section, and the
      * candidate dies here without parsing anything.
      */
-    { UINT32 offset2, nonZero = 0; const BYTE *latchView = (const BYTE *)g_ModeYView[4];
+    { UINT32 offset2, nonZero = 0;
+    const BYTE *latchView = (const BYTE *)g_ModeYView[4];
       for (offset2 = 168u * 320u; offset2 < 200u * 320u; ++offset2)
-          if (latchView[offset2 & (MODEY_WIN - 1u)]) ++nonZero;
+          if (latchView[offset2 & (MODEY_WIN - 1u)])
+              ++nonZero;
       cursor = LogPut(cursor, " linear_bar_nonzero="); cursor = LogHex(cursor, nonZero);
-      cursor = LogPut(cursor, "/"); cursor = LogHex(cursor, 32u * 320u); }
+      cursor = LogPut(cursor, "/");
+      cursor = LogHex(cursor, 32u * 320u); }
     cursor = LogPut(cursor, " latch_solved="); cursor = LogHex(cursor, g_ModeYLatchOk);
     cursor = LogPut(cursor, " latch_UNSOLVED="); cursor = LogHex(cursor, g_ModeYLatchUnsolved);
     cursor = LogPut(cursor, " gap="); cursor = LogHex(cursor, g_Video.ModeYGap);
@@ -1976,8 +2096,10 @@ static PSTR ReportModeY(PSTR cursor)
         cursor = LogPut(cursor, "/nz="); cursor = LogHex(cursor, g_Video.YNonZero[index]);
     }
     cursor = LogPut(cursor, " wmode hist:");
-    for (index = 0; index < 4; ++index) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, (UINT)index);
-                              cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Video.WriteModeHistogram[index]); }
+    for (index = 0; index < 4; ++index) { cursor = LogPut(cursor, " ");
+    cursor = LogHexByte(cursor, (UINT)index);
+                              cursor = LogPut(cursor, "x");
+                              cursor = LogHex(cursor, g_Video.WriteModeHistogram[index]); }
     cursor = LogPut(cursor, "\r\nSTAGE2: modeY (wmode,mask) pairs:");
     { UINT writeMode, mask;
       for (writeMode = 0; writeMode < 4; ++writeMode)
@@ -1986,11 +2108,13 @@ static PSTR ReportModeY(PSTR cursor)
           {
               cursor = LogPut(cursor, " w"); cursor = LogHexByte(cursor, writeMode);
               cursor = LogPut(cursor, "/m"); cursor = LogHexByte(cursor, mask);
-              cursor = LogPut(cursor, "="); cursor = LogHex(cursor, g_Video.ModeMaskHistogram[writeMode * 16 + mask]); } }
+              cursor = LogPut(cursor, "=");
+              cursor = LogHex(cursor, g_Video.ModeMaskHistogram[writeMode * 16 + mask]); } }
     cursor = LogPut(cursor, "\r\nSTAGE2: modeY mapmask hist:");
     for (index = 0; index < 16; ++index)
         if (g_Video.MaskHistogram[index]) { cursor = LogPut(cursor, " 0x"); cursor = LogHexByte(cursor, (UINT)index);
-                                  cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Video.MaskHistogram[index]); }
+                                  cursor = LogPut(cursor, "x");
+                                  cursor = LogHex(cursor, g_Video.MaskHistogram[index]); }
     cursor = LogPut(cursor, "\r\n");
     return cursor;
 }
@@ -2000,6 +2124,7 @@ static PSTR ReportVesa(PSTR cursor, PSTR const base)
 {
     INT index;
     INT count;
+
     if (g_Video.VramNonZero)
     {
         UINT32 pitch = g_Video.VesaStride ? g_Video.VesaStride : 1;
@@ -2012,20 +2137,23 @@ static PSTR ReportVesa(PSTR cursor, PSTR const base)
         cursor = LogPut(cursor, "\r\n");
     }
     cursor = LogPut(cursor, "STAGE2: VESA mode SET (4F02): ");
-    if (!g_Video.IsVesaSetSeen) cursor = LogPut(cursor, "never called");
+    if (!g_Video.IsVesaSetSeen)
+        cursor = LogPut(cursor, "never called");
     else { cursor = LogPut(cursor, "BX=0x"); cursor = LogHex(cursor, (DWORD)g_Video.VesaSetBx);
            cursor = LogPut(cursor, g_Video.IsVesaSetOk ? " ACCEPTED" : " REFUSED");
            cursor = LogPut(cursor, (g_Video.VesaSetBx & 0x4000) ? " [LFB]" : " [banked]");
            cursor = LogPut(cursor, " -> "); cursor = LogHex(cursor, (DWORD)g_Video.VesaWidth);
            cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, (DWORD)g_Video.VesaHeight);
            cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, (DWORD)g_Video.VesaBpp);
-           cursor = LogPut(cursor, " stride=0x"); cursor = LogHex(cursor, g_Video.VesaStride); }
+           cursor = LogPut(cursor, " stride=0x");
+           cursor = LogHex(cursor, g_Video.VesaStride); }
     cursor = LogPut(cursor, "\r\n");
     cursor = LogPut(cursor, "STAGE2: VESA calls by sub-function:");
     { INT any = 0;
       for (index = 0; index < 0x16; ++index) if (g_Video.VesaCalls[index])
       {
-          UINT barIndex; any = 1;
+          UINT barIndex;
+          any = 1;
           cursor = LogPut(cursor, " 4F"); cursor = LogHexByte(cursor, (UINT)index); cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Video.VesaCalls[index]);
           if (g_Video.VesaBl[index])
           {
@@ -2038,7 +2166,8 @@ static PSTR ReportVesa(PSTR cursor, PSTR const base)
               cursor = LogPut(cursor, ")");
           }
       }
-      if (!any) cursor = LogPut(cursor, " none");
+      if (!any)
+          cursor = LogPut(cursor, " none");
       if (g_Video.VesaCalls[7])
       {
           cursor = LogPut(cursor, " | 4F07 max start=("); cursor = LogHex(cursor, (DWORD)g_Video.Vesa07MaxX);
@@ -2055,9 +2184,12 @@ static PSTR ReportVesa(PSTR cursor, PSTR const base)
           cursor = LogPut(cursor, " refused=0x"); cursor = LogHex(cursor, g_Video.VbePmRejected);
       }
       cursor = LogPut(cursor, "\r\n");
-      LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
+      LogAppend(LOG_PATH, base, cursor);
+      SerialOut(base, cursor);
+      cursor = base; }
     cursor = LogPut(cursor, "STAGE2: VESA mode queries (4F01/4F02):");
-    if (!g_Video.VesaQueryCount) cursor = LogPut(cursor, " none");
+    if (!g_Video.VesaQueryCount)
+        cursor = LogPut(cursor, " none");
     else for (index = 0; index < g_Video.VesaQueryCount; ++index)
     {
         cursor = LogPut(cursor, " 4F"); cursor = LogHexByte(cursor, (UINT)g_Video.VesaQueryFunction[index]);
@@ -2073,7 +2205,8 @@ static PSTR ReportVesa(PSTR cursor, PSTR const base)
             cursor = LogHexByte(cursor, (UINT)index);
             ++count;
         }
-    if (!count) cursor = LogPut(cursor, " none");
+    if (!count)
+        cursor = LogPut(cursor, " none");
     cursor = LogPut(cursor, "\r\n");
     return cursor;
 }
@@ -2119,7 +2252,8 @@ static PSTR ReportModeYBarDump(PSTR cursor, PSTR const base)
                     lineCursor = LogPut(lineCursor, " pl");         lineCursor = LogHexByte(lineCursor, plane);
                     lineCursor = LogPut(lineCursor, " y");          lineCursor = LogHexByte(lineCursor, row);
                     lineCursor = LogPut(lineCursor, " ");
-                    for (pixelX = 0; pixelX < 80; ++pixelX) lineCursor = LogHexByte(lineCursor, source[(position + pixelX) & (MODEY_WIN - 1u)]);
+                    for (pixelX = 0; pixelX < 80; ++pixelX)
+                        lineCursor = LogHexByte(lineCursor, source[(position + pixelX) & (MODEY_WIN - 1u)]);
                     lineCursor = LogPut(lineCursor, "\r\n");
                     /* File only: 67 KB down a 115200 COM1 is ~6 s of wind-down for a
                      * dump nobody reads off the serial line.
@@ -2155,7 +2289,8 @@ static PSTR ReportModeYBarDump(PSTR cursor, PSTR const base)
                 lineCursor = LogPut(lineCursor, "MODEYLIN y"); lineCursor = LogHexByte(lineCursor, row);
                 lineCursor = LogPut(lineCursor, " q");         lineCursor = LogHexByte(lineCursor, quarter);
                 lineCursor = LogPut(lineCursor, " ");
-                for (pixelX = 0; pixelX < 80; ++pixelX) lineCursor = LogHexByte(lineCursor, source[(position + pixelX) & (MODEY_WIN - 1u)]);
+                for (pixelX = 0; pixelX < 80; ++pixelX)
+                    lineCursor = LogHexByte(lineCursor, source[(position + pixelX) & (MODEY_WIN - 1u)]);
                 lineCursor = LogPut(lineCursor, "\r\n");
                 LogAppend(LOG_PATH, lineBuffer, lineCursor);
             }
@@ -2165,7 +2300,12 @@ static PSTR ReportModeYBarDump(PSTR cursor, PSTR const base)
 }
 
 /* The end-of-run report, section by section, in the order the log has always had them. */
-PSTR ReportEndOfRun(PSTR cursor, PSTR const base, PCSTR const reportEnd, DOS_MACHINE *machine, volatile BYTE * const tib)
+PSTR ReportEndOfRun(
+    PSTR cursor,
+    PSTR const base,
+    PCSTR const reportEnd,
+    DOS_MACHINE *machine,
+    volatile BYTE * const tib)
 {
     cursor = ReportNtvdmBops(cursor);
     cursor = ReportHotPortsAndTimerCounters(cursor);
@@ -2184,7 +2324,9 @@ PSTR ReportEndOfRun(PSTR cursor, PSTR const base, PCSTR const reportEnd, DOS_MAC
     { UINT plane, nonZero[VIDEO_PLANES];
       for (plane = 0; plane < VIDEO_PLANES; ++plane) { UINT byteIndex2, changed = 0;
           { const BYTE *planeBytes = g_Video.YMapPlane ? g_Video.YMapPlane(g_Video.YMapContext, plane) : g_Video.Planes[plane];
-            for (byteIndex2 = 0; byteIndex2 < VIDEO_PLANE_SIZE; ++byteIndex2) if (planeBytes[byteIndex2]) ++changed; }
+            for (byteIndex2 = 0; byteIndex2 < VIDEO_PLANE_SIZE; ++byteIndex2)
+                if (planeBytes[byteIndex2])
+                    ++changed; }
           nonZero[plane] = changed; }
       cursor = ReportSoundStack(cursor);
       cursor = ReportSbReplay(cursor, base);
@@ -2205,7 +2347,8 @@ PSTR ReportEndOfRun(PSTR cursor, PSTR const base, PCSTR const reportEnd, DOS_MAC
     cursor = ReportModeY(cursor);
     cursor = ReportVesa(cursor, base);
     cursor = ReportModeYBarDump(cursor, base);
-    if (g_CpuSpeedPeriods) CpuSpeedTimelineDump("STAGE2: CTL");                 /* #225 */
+    if (g_CpuSpeedPeriods)
+        CpuSpeedTimelineDump("STAGE2: CTL");                                    /* #225 */
     cursor = LogPut(cursor, "STAGE2: complete\r\n");
     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;   /* headless: mirror the DOS-output flush + completion to COM1 */
     return cursor;

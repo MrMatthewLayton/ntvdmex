@@ -61,8 +61,13 @@ extern INT g_DpmiIsClient32;
  * bit2=D/B: 0 => 16-bit byte-granular, 0x4 => 32-bit stack/data so ESP + exception
  * delivery work).
  */
-VOID DpmiBuildDescriptor(_In_ DWORD base, _In_ DWORD limit, _In_ BYTE access, _In_ BYTE flags,
-                         _Out_ DWORD *descriptorLow, _Out_ DWORD *descriptorHigh);
+VOID DpmiBuildDescriptor(
+    _In_ DWORD base,
+    _In_ DWORD limit,
+    _In_ BYTE access,
+    _In_ BYTE flags,
+    _Out_ DWORD *descriptorLow,
+    _Out_ DWORD *descriptorHigh);
 
 /* Perform the V86 -> protected-mode switch for a client that just FAR-CALLed the
  * DPMI mode-switch entry (served for INT 2Fh AX=1687h). Reads the real-mode return
@@ -74,8 +79,11 @@ VOID DpmiBuildDescriptor(_In_ DWORD base, _In_ DWORD limit, _In_ BYTE access, _I
  * *registerStatus / *setStatus receive the NtVdmControl status of the LDT register
  * (svc 11) and set-entries (svc 10) calls, for logging (pass NULL to ignore).
  */
-INT DpmiSwitchToProtectedMode(_Inout_ volatile BYTE *tib, _In_ INT isClient32,
-                              _Out_opt_ LONG *registerStatus, _Out_opt_ LONG *setStatus);
+INT DpmiSwitchToProtectedMode(
+    _Inout_ volatile BYTE *tib,
+    _In_ INT isClient32,
+    _Out_opt_ LONG *registerStatus,
+    _Out_opt_ LONG *setStatus);
 
 /* Run the guest in protected mode directly in this process (via NtContinue), the way
  * ntvdm iret's into the client -- PM is not run by the kernel monitor. Does not return

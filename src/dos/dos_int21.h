@@ -287,7 +287,9 @@ typedef struct _DOS_MACHINE
     WORD ExecTailSegment, ExecTailOffset;
     WORD ExecFcb1Segment, ExecFcb1Offset;
     WORD ExecFcb2Segment, ExecFcb2Offset;
-    char    *Output; INT OutputCapacity; INT OutputLength;  /* captured console output (02/09/40) */
+    char    *Output;
+    INT OutputCapacity;
+    INT OutputLength;  /* captured console output (02/09/40) */
     INT      IsOutputTruncated;        /* set when output was dropped -- see OUTC() */
     BYTE  Unimplemented[DOS_SERVICE_BITS];     /* GH #27: DOS-defined services we have not written */
     BYTE  Undefined[DOS_SERVICE_BITS];       /* GH #27: services 6.22 does not define either */

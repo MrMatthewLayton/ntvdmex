@@ -131,8 +131,7 @@ WORD NeRead16(PCBYTE bytes);
  */
 INT NeParse(PNE_MODULE module, PCBYTE image, UINT32 length);
 
-INT NeEntryLookup(PCNE_MODULE module, WORD ordinal,
-                           PWORD segmentNumber, PWORD offset);
+INT NeEntryLookup(PCNE_MODULE module, WORD ordinal, PWORD segmentNumber, PWORD offset);
 
 /* The module's own name, from resident-names entry 0. This is the name OTHER modules
  * import it by -- and it is NOT the file name: krnl386.exe calls itself KERNEL.
@@ -157,8 +156,7 @@ INT NeExportByName(PCNE_MODULE module, PCSTR name, PWORD ordinal);
  * do NOT -- so the bit is meaningful and checking it turns "imported a private
  * entry" from a far call into rubbish into a load-time error.
  */
-INT NeExportByOrdinal(PCNE_MODULE module, WORD ordinal,
-                                PWORD segmentNumber, PWORD offset);
+INT NeExportByOrdinal(PCNE_MODULE module, WORD ordinal, PWORD segmentNumber, PWORD offset);
 
 /* relocations:
  * Applied to segment `index` (0-based) after its bytes are in Segments[index].Memory and every
@@ -210,9 +208,14 @@ INT NeRegistryAdd(PNE_REGISTRY registry, PNE_MODULE module);
 
 PNE_MODULE NeRegistryFind(PCNE_REGISTRY registry, PCSTR name);
 
-INT NeRegistryResolve(PVOID context, PCNE_MODULE module, WORD moduleReference,
-                               WORD ordinalOrName, INT isByName,
-                               PWORD selector, PWORD offset);
+INT NeRegistryResolve(
+    PVOID context,
+    PCNE_MODULE module,
+    WORD moduleReference,
+    WORD ordinalOrName,
+    INT isByName,
+    PWORD selector,
+    PWORD offset);
 
 /* Convenience: how many bytes a segment needs in memory (minalloc can exceed the
  * file length -- BSS-style tail that must be present and zeroed).

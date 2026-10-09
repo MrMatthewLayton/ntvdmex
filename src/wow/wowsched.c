@@ -15,12 +15,18 @@
 
 INT g_WowSchedCurrentBase = 0;   /* see wowsched.h */
 
-VOID WowSchedSave(PWOWSCHED_SLOT slot, volatile BYTE *tib,
-                          DWORD modeLinear, WORD task, INT eipAdjust)
+VOID WowSchedSave(
+    PWOWSCHED_SLOT slot,
+    volatile BYTE *tib,
+    DWORD modeLinear,
+    WORD task,
+    INT eipAdjust)
 {
     UINT index;
     volatile BYTE *source = (volatile BYTE *)tib + WOWSCHED_CTX_LO;
-    for (index = 0; index < WOWSCHED_CTX_LEN; ++index) slot->Context[index] = source[index];
+
+    for (index = 0; index < WOWSCHED_CTX_LEN; ++index)
+        slot->Context[index] = source[index];
     *(DWORD *)(slot->Context + (WOWSCHED_VTIB_EIP - WOWSCHED_CTX_LO)) += (DWORD)eipAdjust;   /* VTIB_EIP */
     slot->ModeLinear = modeLinear;
     slot->Task    = task;
@@ -36,15 +42,22 @@ VOID WowSchedRestore(PWOWSCHED_SLOT slot, volatile BYTE *tib)
 {
     UINT index;
     volatile BYTE *destination = (volatile BYTE *)tib + WOWSCHED_CTX_LO;
-    for (index = 0; index < WOWSCHED_CTX_LEN; ++index) destination[index] = slot->Context[index];
+
+    for (index = 0; index < WOWSCHED_CTX_LEN; ++index)
+        destination[index] = slot->Context[index];
     slot->IsUsed = 0;
     g_WowSchedCurrentBase = slot->BaseDepth;          /* a top-level resume is re-based by the caller */
 }
 
-VOID WowSchedSwap(PWOWSCHED_SLOT slot, volatile BYTE *tib,
-                          DWORD modeLinear, WORD currentTask, INT eipAdjust)
+VOID WowSchedSwap(
+    PWOWSCHED_SLOT slot,
+    volatile BYTE *tib,
+    DWORD modeLinear,
+    WORD currentTask,
+    INT eipAdjust)
 {
     WOWSCHED_SLOT resumeSlot = *slot;                 /* the one we are going back to */
+
     WowSchedSave(slot, tib, modeLinear, currentTask, eipAdjust); /* the running one takes its place */
     WowSchedRestore(&resumeSlot, tib);
 }
@@ -52,6 +65,7 @@ VOID WowSchedSwap(PWOWSCHED_SLOT slot, volatile BYTE *tib,
 VOID WowSchedPoke(DWORD linear, WORD value)
 {
     volatile BYTE *bytes = (volatile BYTE *)(ULONG_PTR)linear;
+
     bytes[0] = (BYTE)(value & BYTE_MASK);
     bytes[1] = (BYTE)(value >> BYTE_SHIFT);
 }

@@ -202,8 +202,13 @@ typedef const DMA_STATE *PCDMA_STATE;
 INT  VddDmaInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddDmaReset(_In_ PVOID context);
 static inline NTVDD_DEVICE VddDmaDevice(_In_ PDMA_STATE state)
-{ NTVDD_DEVICE device; device.Name = DMA_DEVICE_NAME; device.Initialize = VddDmaInitialize; device.Reset = VddDmaReset;
-  device.Shutdown = 0; device.Context = state; return device; }
+{ NTVDD_DEVICE device;
+device.Name = DMA_DEVICE_NAME;
+device.Initialize = VddDmaInitialize;
+device.Reset = VddDmaReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 /* The physical address the next transfer on `ch` will touch. */
 UINT32 VddDmaCurrentPhysical(_In_ PCDMA_STATE state, _In_ BYTE channelNumber);
@@ -236,7 +241,10 @@ BYTE VddDmaDreq(_In_ PCDMA_STATE state);
 /* A device that can request DMA calls this once, from its init. Returns -1 if the
  * table is full; registering the same (fn, ctx) twice is harmless.
  */
-INT VddDmaAddDreq(_Inout_ PDMA_STATE state, _In_ PDMA_DREQ_ROUTINE dreqRoutine, _In_opt_ PCVOID dreqContext);
+INT VddDmaAddDreq(
+    _Inout_ PDMA_STATE state,
+    _In_ PDMA_DREQ_ROUTINE dreqRoutine,
+    _In_opt_ PCVOID dreqContext);
 
 /* Pull up to `n` bytes from guest memory into `dst` (memory -> device: playback).
  * Stops early at terminal count on a non-auto-init channel (and masks it, as the
@@ -246,9 +254,19 @@ INT VddDmaAddDreq(_Inout_ PDMA_STATE state, _In_ PDMA_DREQ_ROUTINE dreqRoutine, 
  * byte moves, the address and count stand still, and no TC is raised.
  * `tc_out` (optional) is set non-zero if terminal count was reached.
  */
-UINT32 VddDmaRead(_Inout_ PDMA_STATE state, _In_ BYTE channelNumber, _Out_writes_(byteCount) BYTE *destination, _In_ UINT32 byteCount, _Out_opt_ INT *isTerminalCount);
+UINT32 VddDmaRead(
+    _Inout_ PDMA_STATE state,
+    _In_ BYTE channelNumber,
+    _Out_writes_(byteCount) BYTE *destination,
+    _In_ UINT32 byteCount,
+    _Out_opt_ INT *isTerminalCount);
 
 /* Push `n` bytes into guest memory (device -> memory: recording). Same rules. */
-UINT32 VddDmaWrite(_Inout_ PDMA_STATE state, _In_ BYTE channelNumber, _In_reads_(byteCount) const BYTE *source, _In_ UINT32 byteCount, _Out_opt_ INT *isTerminalCount);
+UINT32 VddDmaWrite(
+    _Inout_ PDMA_STATE state,
+    _In_ BYTE channelNumber,
+    _In_reads_(byteCount) const BYTE *source,
+    _In_ UINT32 byteCount,
+    _Out_opt_ INT *isTerminalCount);
 
 #endif /* NTVDMEX_VDD_DMA_H */

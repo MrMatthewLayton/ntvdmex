@@ -49,21 +49,25 @@ BYTE NetSubmit(PVOID context, NETBIOS_REQUEST *request)
 {
     NCB enumBlock;
     UCHAR lana;
+
     (VOID)context;
     if (!g_Netbios)
     {
         static INT tried;
         HMODULE module;
-        if (tried) return NRC_BRIDGE;
+        if (tried)
+            return NRC_BRIDGE;
         tried = 1;
         module = LoadLibraryA(HOST_MODULE_NETAPI32);
         g_Netbios = module ? (PNETBIOS_ROUTINE)(VOID *)GetProcAddress(module, HOST_EXPORT_NETBIOS) : NULL;
-        if (!g_Netbios) return NRC_BRIDGE;
+        if (!g_Netbios)
+            return NRC_BRIDGE;
         ZeroMemory(&enumBlock, sizeof enumBlock);
         enumBlock.ncb_command = NCBENUM;
         enumBlock.ncb_buffer  = (PUCHAR)&g_NetLanas;
         enumBlock.ncb_length  = sizeof g_NetLanas;
-        if (g_Netbios(&enumBlock) != NRC_GOODRET) g_NetLanas.length = 0;
+        if (g_Netbios(&enumBlock) != NRC_GOODRET)
+            g_NetLanas.length = 0;
     }
     if (request->Adapter >= g_NetLanas.length)
     {
@@ -76,7 +80,8 @@ BYTE NetSubmit(PVOID context, NETBIOS_REQUEST *request)
         ZeroMemory(&enumBlock, sizeof enumBlock);
         enumBlock.ncb_command = NCBRESET;
         enumBlock.ncb_lana_num = lana;
-        if (g_Netbios(&enumBlock) == NRC_GOODRET) g_NetReady[lana] = 1;
+        if (g_Netbios(&enumBlock) == NRC_GOODRET)
+            g_NetReady[lana] = 1;
     }
     ZeroMemory(&enumBlock, sizeof enumBlock);
     enumBlock.ncb_command  = request->Command;
@@ -94,12 +99,18 @@ BYTE NetSubmit(PVOID context, NETBIOS_REQUEST *request)
         /* DOS: lsn = sessions, num = names (0 = default). Win32 reads them from
          * callname[0..1] -- and [2] nonzero asks for the first name number too.
          */
-        enumBlock.ncb_callname[0] = request->LocalSession; enumBlock.ncb_callname[1] = request->NameNumber; enumBlock.ncb_callname[2] = 0;
-        enumBlock.ncb_lsn = 0; enumBlock.ncb_num = 0;
+        enumBlock.ncb_callname[0] = request->LocalSession;
+        enumBlock.ncb_callname[1] = request->NameNumber;
+        enumBlock.ncb_callname[2] = 0;
+        enumBlock.ncb_lsn = 0;
+        enumBlock.ncb_num = 0;
     }
     request->ReturnCode = g_Netbios(&enumBlock);
-    if (request->Command == NCBRESET && request->ReturnCode == NRC_GOODRET) g_NetReady[lana] = 1;
-    request->LocalSession = enumBlock.ncb_lsn; request->NameNumber = enumBlock.ncb_num; request->Length = enumBlock.ncb_length;
+    if (request->Command == NCBRESET && request->ReturnCode == NRC_GOODRET)
+        g_NetReady[lana] = 1;
+    request->LocalSession = enumBlock.ncb_lsn;
+    request->NameNumber = enumBlock.ncb_num;
+    request->Length = enumBlock.ncb_length;
     memcpy(request->CallName, enumBlock.ncb_callname, NCBNAMSZ);
     return request->ReturnCode;
 }
@@ -136,8 +147,10 @@ static VOID VddLogLine(PCSTR message)
 {
     CHAR lineBuffer[512], *cursor = lineBuffer;
     UINT index;
+
     cursor = LogPut(cursor, "  VDD: ");
-    for (index = 0; message && message[index] && index < 400; ++index) *cursor++ = message[index];
+    for (index = 0; message && message[index] && index < 400; ++index)
+        *cursor++ = message[index];
     cursor = LogPut(cursor, "\r\n");
     LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
 }
@@ -159,22 +172,29 @@ VOID VddLoadThirdParty(VOID)
     HANDLE handle;
     CHAR buffer[4096];
     DWORD got = 0, index = 0, entryCount = 0, loaded = 0;
-    if (g_Safe.VddPlugins) return;                 /* s90 #132: SAFE MODE */
+
+    if (g_Safe.VddPlugins)
+        return;                                    /* s90 #132: SAFE MODE */
     handle = CreateFileA(VDDLIST_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, OPEN_EXISTING, 0, NULL);
-    if (handle == INVALID_HANDLE_VALUE) return;          /* no list is not an error */
+    if (handle == INVALID_HANDLE_VALUE)
+        return;                                          /* no list is not an error */
     ReadFile(handle, buffer, sizeof buffer - 1, &got, NULL);
     CloseHandle(handle);
     buffer[got] = 0;
     while (index < got)
     {
-        CHAR path[MAX_PATH]; DWORD length = 0;
-        while (index < got && (buffer[index] == '\r' || buffer[index] == '\n')) ++index;
+        CHAR path[MAX_PATH];
+        DWORD length = 0;
+        while (index < got && (buffer[index] == '\r' || buffer[index] == '\n'))
+            ++index;
         while (index < got && buffer[index] != '\r' && buffer[index] != '\n' && length < MAX_PATH - 1)
             path[length++] = buffer[index++];
-        while (length && (path[length-1] == ' ' || path[length-1] == '\t')) --length;
+        while (length && (path[length-1] == ' ' || path[length-1] == '\t'))
+            --length;
         path[length] = 0;
-        if (!length || path[0] == '#' || path[0] == ';') continue;
+        if (!length || path[0] == '#' || path[0] == ';')
+            continue;
         ++entryCount;
         {   HMODULE module = LoadLibraryA(path);
             CHAR lineBuffer[MAX_PATH + 200], *cursor = lineBuffer;
@@ -221,7 +241,8 @@ VOID VddLoadThirdParty(VOID)
         cursor = LogPut(cursor, "  VDD: third-party list ["); cursor = LogPut(cursor, VDDLIST_PATH);
         cursor = LogPut(cursor, "] -- 0x"); cursor = LogHex(cursor, entryCount); cursor = LogPut(cursor, " entr(ies), 0x");
         cursor = LogHex(cursor, loaded); cursor = LogPut(cursor, " initialised\r\n");
-        LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor); }
+        LogAppend(LOG_PATH, lineBuffer, cursor);
+        SerialOut(lineBuffer, cursor); }
 }
 
 /* Count-register reads split by whether an ASYNC injection was in flight. Note the
@@ -245,6 +266,7 @@ UINT32 g_DmaPollInAsync, g_DmaPollMainline;
 VOID IoHotNote(WORD port, DWORD cs, DWORD ip)
 {
     INT index;
+
     for (index = 0; index < g_IoHotCount; ++index)
         if (g_IoHot[index].Port == port)
         {
@@ -253,42 +275,53 @@ VOID IoHotNote(WORD port, DWORD cs, DWORD ip)
         }
     if (g_IoHotCount < IO_HOT_MAX)
     {
-        g_IoHot[g_IoHotCount].Port = port; g_IoHot[g_IoHotCount].Count = 1; g_IoHotCount++;
+        g_IoHot[g_IoHotCount].Port = port;
+        g_IoHot[g_IoHotCount].Count = 1;
+        g_IoHotCount++;
     }
 sited:
     if (g_IoSiteLogged < 6 && cs)
     {
         static DWORD seen[6];
         DWORD slot, key = (cs << WORD_SHIFT) ^ ip;
-        for (slot = 0; slot < g_IoSiteLogged; ++slot) if (seen[slot] == key) return;
+        for (slot = 0; slot < g_IoSiteLogged; ++slot)
+            if (seen[slot] == key)
+                return;
         seen[g_IoSiteLogged++] = key;
         { CHAR buffer[192], *cursor = buffer;
           const volatile BYTE *code = (const volatile BYTE *)((cs << PARAGRAPH_SHIFT) + ((ip - 6) & WORD_MASK));
-          BYTE temporary[16]; UINT byteIndex;
-          for (byteIndex = 0; byteIndex < 16; ++byteIndex) temporary[byteIndex] = code[byteIndex];
+          BYTE temporary[16];
+          UINT byteIndex;
+          for (byteIndex = 0; byteIndex < 16; ++byteIndex)
+              temporary[byteIndex] = code[byteIndex];
           cursor = LogPut(cursor, "IO-SITE port=0x"); cursor = LogHex(cursor, port);
           cursor = LogPut(cursor, " cs:ip=0x");       cursor = LogHex(cursor, cs);
           cursor = LogPut(cursor, ":0x");             cursor = LogHex(cursor, ip);
           cursor = LogPut(cursor, " bytes[ip-6..]: "); cursor = LogDump(cursor, temporary, 16);
           cursor = LogPut(cursor, "\r\n");
-          LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor); }
+          LogAppend(LOG_PATH, buffer, cursor);
+          SerialOut(buffer, cursor); }
     }
 }
 
 static VOID IoUnclaimedNote(WORD port, INT isIn)
 {
     INT index;
+
     (VOID)isIn;
-    for (index = 0; index < g_UnclaimedCount; ++index) if (g_Unclaimed[index] == port) return;
-    if (g_UnclaimedCount >= IO_UNCLAIMED_MAX) return;
+    for (index = 0; index < g_UnclaimedCount; ++index)
+        if (g_Unclaimed[index] == port)
+            return;
+    if (g_UnclaimedCount >= IO_UNCLAIMED_MAX)
+        return;
     g_Unclaimed[g_UnclaimedCount++] = port;
 }
 
 static DWORD g_SoundIoLogged = 0;    /* bounded SNDIO trace; see the note below */
-static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port,
-                       INT isIn, INT width)
+static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port, INT isIn, INT width)
 {
     UINT32 value, eax = VDM_REG(tib, VTIB_EAX);
+
     g_IoLastPort = port;              /* for the hot-port histogram */
     /* - THE LAST FORK IN THE ECHO. 91% of DMX's 8237 count reads happen outside any
      * COOPERATIVE injection -- but "outside cooperative" is two very different
@@ -300,10 +333,13 @@ static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port,
      * g_AsyncPmActive is set for exactly its duration, from the injection to the
      * catcher. Read it here, where the port access is dispatched.
      */
-    if (port == DMA_PORT_CHANNEL1_COUNT) { if (g_AsyncPmActive) ++g_DmaPollInAsync;
-                        else                   ++g_DmaPollMainline; }
+    if (port == DMA_PORT_CHANNEL1_COUNT) { if (g_AsyncPmActive)
+        ++g_DmaPollInAsync;
+                        else
+                            ++g_DmaPollMainline; }
     /* Sync the counter before the guest looks at it, so a poll always reads real time. */
-    if (port >= PIT_PORT_COUNTER0 && port <= PIT_PORT_CONTROL) HostPitSync();
+    if (port >= PIT_PORT_COUNTER0 && port <= PIT_PORT_CONTROL)
+        HostPitSync();
     /* Report the rate the guest programs. Skyroads divides its own fast timer down to the
      * BIOS 18.2 Hz (519 injected IRQ0 vs 32 BIOS ticks last run => ~16:1), so the reload it
      * writes is the tempo the music actually wants.
@@ -314,7 +350,8 @@ static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port,
         if (g_Pit.Reload != previous)
         {
             CHAR buffer[128], *cursor = buffer;
-            previous = g_Pit.Reload; g_PitReloadLog++;
+            previous = g_Pit.Reload;
+            g_PitReloadLog++;
             cursor = LogPut(cursor, "PIT-RELOAD 0x"); cursor = LogHex(cursor, (DWORD)g_Pit.Reload);
             cursor = LogPut(cursor, " (hz=0x");
             cursor = LogHex(cursor, g_Pit.Reload ? (PIT_INPUT_HZ / g_Pit.Reload) : 18u);
@@ -325,7 +362,8 @@ static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port,
     /* Reached from BOTH port paths (this reflected one and the interpreter's
      * V86HostOut); Lemmings' calibration latches from whichever the guest is in.
      */
-    if (port == PIT_PORT_CONTROL && !isIn) PitLatchNote((BYTE)eax);
+    if (port == PIT_PORT_CONTROL && !isIn)
+        PitLatchNote((BYTE)eax);
     if (isIn)
     {
         /* An unclaimed ISA port floats high: real hardware reads 0xFF, not 0x00.
@@ -339,15 +377,20 @@ static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port,
             value = VDD_UNCLAIMED_READ_U;
             IoUnclaimedNote(port, VDD_IO_IN);
         }
-        if (width == 1)      VDM_REG(tib, VTIB_EAX) = (eax & ~BYTE_MASK_U) | (value & BYTE_MASK);
-        else if (width == X86_WORD_SIZE) VDM_REG(tib, VTIB_EAX) = (eax & HIGH_WORD_MASK_U) | (value & WORD_MASK);
-        else                 VDM_REG(tib, VTIB_EAX) = value;
+        if (width == 1)
+            VDM_REG(tib, VTIB_EAX) = (eax & ~BYTE_MASK_U) | (value & BYTE_MASK);
+        else if (width == X86_WORD_SIZE)
+            VDM_REG(tib, VTIB_EAX) = (eax & HIGH_WORD_MASK_U) | (value & WORD_MASK);
+        else
+            VDM_REG(tib, VTIB_EAX) = value;
     }
     else
     {
         value = (width == 1) ? (eax & BYTE_MASK) : (width == X86_WORD_SIZE) ? (eax & WORD_MASK) : eax;
-        if (!VddBusIo(bus, port, (BYTE)width, VDD_IO_OUT, &value)) IoUnclaimedNote(port, VDD_IO_OUT);
-        if (port == PIT_PORT_COUNTER0) HostPitResyncCheck();   /* see HostPitResyncCheck */
+        if (!VddBusIo(bus, port, (BYTE)width, VDD_IO_OUT, &value))
+            IoUnclaimedNote(port, VDD_IO_OUT);
+        if (port == PIT_PORT_COUNTER0)
+            HostPitResyncCheck();                              /* see HostPitResyncCheck */
     }
     /* THE SOUND-CARD HANDSHAKE, IN FULL, FOR AS LONG AS IT LASTS:
      * "SB isn't responding at p=0x220, i=7, d=1" is Doom's verdict, not a
@@ -404,29 +447,41 @@ static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port,
  * Returns the number of extra accesses performed (0 = idiom not present).
  */
 #define IO_BURST_MAX    4096
-static DWORD HostIoLoopBurst(volatile BYTE *tib, VDD_BUS *bus,
-                                volatile const BYTE *segment, DWORD ipNext,
-                                DWORD ioStart, WORD port,
-                                INT isIn, INT width, INT is32)
+static DWORD HostIoLoopBurst(
+    volatile BYTE *tib,
+    VDD_BUS *bus,
+    volatile const BYTE *segment,
+    DWORD ipNext,
+    DWORD ioStart,
+    WORD port,
+    INT isIn,
+    INT width,
+    INT is32)
 {
     /* A 16-bit segment wraps offsets (and LOOP counts) at 64K; a 32-bit flat one
      * does not, and there LOOP counts in ECX. One mask drives both.
      */
     DWORD cx, iterations, mask = is32 ? DWORD_MASK_U : WORD_MASK_U;
     INT displacement;
-    if (segment[ipNext & mask] != X86_OP_LOOP) return 0;           /* LOOP rel8 only */
+
+    if (segment[ipNext & mask] != X86_OP_LOOP)
+        return 0;                                                  /* LOOP rel8 only */
     displacement = (INT8)segment[(ipNext + 1) & mask];
-    if (((ipNext + X86_JCC_SHORT_LENGTH + displacement) & mask) != (ioStart & mask)) return 0;
+    if (((ipNext + X86_JCC_SHORT_LENGTH + displacement) & mask) != (ioStart & mask))
+        return 0;
     cx = VDM_REG(tib, VTIB_ECX) & mask;
     iterations  = (cx - 1) & mask;                                /* body runs c-1 more */
-    if (iterations > IO_BURST_MAX) iterations = IO_BURST_MAX;
-    if (!iterations) return 0;
+    if (iterations > IO_BURST_MAX)
+        iterations = IO_BURST_MAX;
+    if (!iterations)
+        return 0;
     VDM_REG(tib, VTIB_ECX) = is32 ? (cx - iterations)
                                   : ((VDM_REG(tib, VTIB_ECX) & HIGH_WORD_MASK_U) |
                                      ((cx - iterations) & WORD_MASK));
     {
         DWORD index;
-        for (index = 0; index < iterations; ++index) HostIoDo(tib, bus, port, isIn, width);
+        for (index = 0; index < iterations; ++index)
+            HostIoDo(tib, bus, port, isIn, width);
     }
     g_IoExtra += iterations;
     return iterations;
@@ -438,26 +493,70 @@ INT HostTryIo(volatile BYTE *tib, VDD_BUS *bus)
     DWORD ip = VDM_REG16(tib, VTIB_EIP);
     volatile BYTE *code = (volatile BYTE *)((cs << PARAGRAPH_SHIFT) + ip);   /* absolute V86 */
     INT index = 0, operandSize = X86_WORD_SIZE, isIn, width, usedDx, length;
-    BYTE opcode; WORD port;
+    BYTE opcode;
+    WORD port;
 
     while (code[index] == X86_PREFIX_OPERAND_SIZE || code[index] == X86_PREFIX_ADDRESS_SIZE ||
            code[index] == X86_PREFIX_REPNE || code[index] == X86_PREFIX_REP)          /* prefixes */
     {
-        if (code[index] == X86_PREFIX_OPERAND_SIZE) operandSize = X86_DWORD_SIZE;
-        if (++index > X86_PREFIXES_MAX) return 0;
+        if (code[index] == X86_PREFIX_OPERAND_SIZE)
+            operandSize = X86_DWORD_SIZE;
+        if (++index > X86_PREFIXES_MAX)
+            return 0;
     }
     opcode = code[index];
     switch (opcode)
     {
-    case X86_OP_IN_IMM_BYTE: isIn = 1; width = 1;      usedDx = 0; break;  /* IN  AL,ib */
-    case X86_OP_IN_IMM: isIn = 1; width = operandSize; usedDx = 0; break;  /* IN  eAX,ib */
-    case X86_OP_OUT_IMM_BYTE: isIn = 0; width = 1;      usedDx = 0; break;  /* OUT ib,AL */
-    case X86_OP_OUT_IMM: isIn = 0; width = operandSize; usedDx = 0; break;  /* OUT ib,eAX */
-    case X86_OP_IN_DX_BYTE: isIn = 1; width = 1;      usedDx = 1; break;  /* IN  AL,DX */
-    case X86_OP_IN_DX: isIn = 1; width = operandSize; usedDx = 1; break;  /* IN  eAX,DX */
-    case X86_OP_OUT_DX_BYTE: isIn = 0; width = 1;      usedDx = 1; break;  /* OUT DX,AL */
-    case X86_OP_OUT_DX: isIn = 0; width = operandSize; usedDx = 1; break;  /* OUT DX,eAX */
-    default:   return 0;                       /* not an I/O op -> real fault */
+    case X86_OP_IN_IMM_BYTE:
+        isIn = 1;
+    width = 1;
+    usedDx = 0;
+    break;  /* IN  AL,ib */
+
+    case X86_OP_IN_IMM:
+        isIn = 1;
+    width = operandSize;
+    usedDx = 0;
+    break;  /* IN  eAX,ib */
+
+    case X86_OP_OUT_IMM_BYTE:
+        isIn = 0;
+    width = 1;
+    usedDx = 0;
+    break;  /* OUT ib,AL */
+
+    case X86_OP_OUT_IMM:
+        isIn = 0;
+    width = operandSize;
+    usedDx = 0;
+    break;  /* OUT ib,eAX */
+
+    case X86_OP_IN_DX_BYTE:
+        isIn = 1;
+    width = 1;
+    usedDx = 1;
+    break;  /* IN  AL,DX */
+
+    case X86_OP_IN_DX:
+        isIn = 1;
+    width = operandSize;
+    usedDx = 1;
+    break;  /* IN  eAX,DX */
+
+    case X86_OP_OUT_DX_BYTE:
+        isIn = 0;
+    width = 1;
+    usedDx = 1;
+    break;  /* OUT DX,AL */
+
+    case X86_OP_OUT_DX:
+        isIn = 0;
+    width = operandSize;
+    usedDx = 1;
+    break;  /* OUT DX,eAX */
+
+    default:
+        return 0;                       /* not an I/O op -> real fault */
     }
     if (usedDx)
     {
@@ -492,8 +591,13 @@ INT HostTryIoRetro(volatile BYTE *tib, VDD_BUS *bus)
     DWORD cs = VDM_REG16(tib, VTIB_CS);
     DWORD ip = VDM_REG16(tib, VTIB_EIP);
     volatile BYTE *segment = (volatile BYTE *)(cs << PARAGRAPH_SHIFT);
-    BYTE opcode; INT isIn, width, operandSize = X86_WORD_SIZE; WORD port; DWORD ioStart;
-    if (ip < 1) return 0;
+    BYTE opcode;
+    INT isIn, width, operandSize = X86_WORD_SIZE;
+    WORD port;
+    DWORD ioStart;
+
+    if (ip < 1)
+        return 0;
     opcode = segment[ip - 1];
     if (opcode == X86_OP_IN_DX_BYTE || opcode == X86_OP_IN_DX || opcode == X86_OP_OUT_DX_BYTE || opcode == X86_OP_OUT_DX)     /* DX-form (1 byte) */
     {
@@ -555,22 +659,47 @@ INT HostTryIoString(volatile BYTE *tib, VDD_BUS *bus)
     for (;;)                                     /* prefixes */
     {
         opcode = segment[(ip + index) & WORD_MASK];
-        if      (opcode == X86_PREFIX_OPERAND_SIZE) operandSize = X86_DWORD_SIZE;
-        else if (opcode == X86_PREFIX_REPNE || opcode == X86_PREFIX_REP) report = 1;
-        else if (opcode == X86_PREFIX_ES) sover = VTIB_ES;    /* segment overrides on the source */
-        else if (opcode == X86_PREFIX_CS) sover = VTIB_CS;
-        else if (opcode == X86_PREFIX_SS) sover = VTIB_SS;
-        else if (opcode == X86_PREFIX_DS) sover = VTIB_DS;
-        else if (opcode != X86_PREFIX_ADDRESS_SIZE) break;
-        if (++index > X86_PREFIXES_MAX) return 0;
+        if      (opcode == X86_PREFIX_OPERAND_SIZE)
+            operandSize = X86_DWORD_SIZE;
+        else if (opcode == X86_PREFIX_REPNE || opcode == X86_PREFIX_REP)
+            report = 1;
+        else if (opcode == X86_PREFIX_ES)
+            sover = VTIB_ES;                                  /* segment overrides on the source */
+        else if (opcode == X86_PREFIX_CS)
+            sover = VTIB_CS;
+        else if (opcode == X86_PREFIX_SS)
+            sover = VTIB_SS;
+        else if (opcode == X86_PREFIX_DS)
+            sover = VTIB_DS;
+        else if (opcode != X86_PREFIX_ADDRESS_SIZE)
+            break;
+        if (++index > X86_PREFIXES_MAX)
+            return 0;
     }
     switch (opcode)
     {
-    case X86_OP_INSB: isIn = 1; width = 1;      break;              /* INSB */
-    case X86_OP_INS: isIn = 1; width = operandSize; break;              /* INSW / INSD */
-    case X86_OP_OUTSB: isIn = 0; width = 1;      break;              /* OUTSB */
-    case X86_OP_OUTS: isIn = 0; width = operandSize; break;              /* OUTSW / OUTSD */
-    default:   return 0;                                      /* not a string I/O */
+    case X86_OP_INSB:
+        isIn = 1;
+    width = 1;
+    break;              /* INSB */
+
+    case X86_OP_INS:
+        isIn = 1;
+    width = operandSize;
+    break;              /* INSW / INSD */
+
+    case X86_OP_OUTSB:
+        isIn = 0;
+    width = 1;
+    break;              /* OUTSB */
+
+    case X86_OP_OUTS:
+        isIn = 0;
+    width = operandSize;
+    break;              /* OUTSW / OUTSD */
+
+    default:
+        return 0;                                      /* not a string I/O */
     }
     port  = (WORD)VDM_REG(tib, VTIB_EDX);
     count = report ? VDM_REG16(tib, VTIB_ECX) : 1;
@@ -606,7 +735,8 @@ INT HostTryIoString(volatile BYTE *tib, VDD_BUS *bus)
     if (report)
     {
         VDM_SET16(tib, VTIB_ECX, (WORD)(count - burst));
-        if (count - burst) return 1;                 /* more to go: resume ON the REP */
+        if (count - burst)
+            return 1;                                /* more to go: resume ON the REP */
     }
     VDM_REG(tib, VTIB_EIP) = (ip + index + 1) & WORD_MASK;
     return 1;
@@ -625,26 +755,70 @@ INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
     DWORD eipOffset = is32 ? eip : (eip & WORD_MASK);
     volatile BYTE *code = (volatile BYTE *)(ULONG_PTR)(DpmiSelectorBase((WORD)csValue) + eipOffset);
     INT index = 0, operandSize = is32 ? X86_DWORD_SIZE : X86_WORD_SIZE, isIn, width, usedDx, length;
-    BYTE opcode; WORD port;
+    BYTE opcode;
+    WORD port;
 
     while (code[index] == X86_PREFIX_OPERAND_SIZE || code[index] == X86_PREFIX_ADDRESS_SIZE ||
            code[index] == X86_PREFIX_REPNE || code[index] == X86_PREFIX_REP)          /* prefixes */
     {
-        if (code[index] == X86_PREFIX_OPERAND_SIZE) operandSize = is32 ? X86_WORD_SIZE : X86_DWORD_SIZE;     /* 0x66 flips the segment default */
-        if (++index > X86_PREFIXES_MAX) return 0;
+        if (code[index] == X86_PREFIX_OPERAND_SIZE)
+            operandSize = is32 ? X86_WORD_SIZE : X86_DWORD_SIZE;                                             /* 0x66 flips the segment default */
+        if (++index > X86_PREFIXES_MAX)
+            return 0;
     }
     opcode = code[index];
     switch (opcode)
     {
-    case X86_OP_IN_IMM_BYTE: isIn = 1; width = 1;      usedDx = 0; break;  /* IN  AL,ib */
-    case X86_OP_IN_IMM: isIn = 1; width = operandSize; usedDx = 0; break;  /* IN  eAX,ib */
-    case X86_OP_OUT_IMM_BYTE: isIn = 0; width = 1;      usedDx = 0; break;  /* OUT ib,AL */
-    case X86_OP_OUT_IMM: isIn = 0; width = operandSize; usedDx = 0; break;  /* OUT ib,eAX */
-    case X86_OP_IN_DX_BYTE: isIn = 1; width = 1;      usedDx = 1; break;  /* IN  AL,DX */
-    case X86_OP_IN_DX: isIn = 1; width = operandSize; usedDx = 1; break;  /* IN  eAX,DX */
-    case X86_OP_OUT_DX_BYTE: isIn = 0; width = 1;      usedDx = 1; break;  /* OUT DX,AL */
-    case X86_OP_OUT_DX: isIn = 0; width = operandSize; usedDx = 1; break;  /* OUT DX,eAX */
-    default:   return 0;                       /* not an I/O op -> real fault */
+    case X86_OP_IN_IMM_BYTE:
+        isIn = 1;
+    width = 1;
+    usedDx = 0;
+    break;  /* IN  AL,ib */
+
+    case X86_OP_IN_IMM:
+        isIn = 1;
+    width = operandSize;
+    usedDx = 0;
+    break;  /* IN  eAX,ib */
+
+    case X86_OP_OUT_IMM_BYTE:
+        isIn = 0;
+    width = 1;
+    usedDx = 0;
+    break;  /* OUT ib,AL */
+
+    case X86_OP_OUT_IMM:
+        isIn = 0;
+    width = operandSize;
+    usedDx = 0;
+    break;  /* OUT ib,eAX */
+
+    case X86_OP_IN_DX_BYTE:
+        isIn = 1;
+    width = 1;
+    usedDx = 1;
+    break;  /* IN  AL,DX */
+
+    case X86_OP_IN_DX:
+        isIn = 1;
+    width = operandSize;
+    usedDx = 1;
+    break;  /* IN  eAX,DX */
+
+    case X86_OP_OUT_DX_BYTE:
+        isIn = 0;
+    width = 1;
+    usedDx = 1;
+    break;  /* OUT DX,AL */
+
+    case X86_OP_OUT_DX:
+        isIn = 0;
+    width = operandSize;
+    usedDx = 1;
+    break;  /* OUT DX,eAX */
+
+    default:
+        return 0;                       /* not an I/O op -> real fault */
     }
     if (usedDx)
     {
@@ -673,14 +847,19 @@ INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
     {
         DWORD site = DpmiSelectorBase((WORD)csValue) + eipOffset;
         UINT pollIndex;
-        for (pollIndex = 0; pollIndex < g_DmaPollCount; ++pollIndex) if (g_DmaPollEip[pollIndex] == site) break;
-        if (pollIndex < g_DmaPollCount) g_DmaPollHits[pollIndex]++;
+        for (pollIndex = 0; pollIndex < g_DmaPollCount; ++pollIndex)
+            if (g_DmaPollEip[pollIndex] == site)
+                break;
+        if (pollIndex < g_DmaPollCount)
+            g_DmaPollHits[pollIndex]++;
         else if (g_DmaPollCount < DMAPOLL_MAX)
         {
-            g_DmaPollEip[g_DmaPollCount] = site; g_DmaPollHits[g_DmaPollCount] = 1;
+            g_DmaPollEip[g_DmaPollCount] = site;
+            g_DmaPollHits[g_DmaPollCount] = 1;
             ++g_DmaPollCount;
         }
-        else ++g_DmaPollOverflow;
+        else
+            ++g_DmaPollOverflow;
 
         /* -- WHY IS THE MIXER RUN ONLY 56 TIMES A SECOND? TWO CAUSES, ONE SHAPE EACH.
          * DMX's scheduler (DOOM.EXE file 0x57224) runs a task when the tick clock
@@ -697,16 +876,19 @@ INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
          */
         { static LARGE_INTEGER frequency, prev;
           LARGE_INTEGER now;
-          if (!frequency.QuadPart) QueryPerformanceFrequency(&frequency);
+          if (!frequency.QuadPart)
+              QueryPerformanceFrequency(&frequency);
           if (frequency.QuadPart && QueryPerformanceCounter(&now))
           {
               if (prev.QuadPart)
               {
                   LONGLONG deltaMicroseconds = ((now.QuadPart - prev.QuadPart) * MICROSECONDS_PER_SECOND) / frequency.QuadPart;
                   UINT bucket = 0;
-                  while (bucket < 9 && deltaMicroseconds >= (LONGLONG)MICROSECONDS_PER_MILLISECOND << bucket) ++bucket;   /* 1,2,4..256ms+ */
+                  while (bucket < 9 && deltaMicroseconds >= (LONGLONG)MICROSECONDS_PER_MILLISECOND << bucket)
+                      ++bucket;                                                                                           /* 1,2,4..256ms+ */
                   g_PollGap[bucket]++;
-                  if (deltaMicroseconds > (LONGLONG)g_PollGapMaximumMicroseconds) g_PollGapMaximumMicroseconds = (DWORD)deltaMicroseconds;
+                  if (deltaMicroseconds > (LONGLONG)g_PollGapMaximumMicroseconds)
+                      g_PollGapMaximumMicroseconds = (DWORD)deltaMicroseconds;
               }
               prev = now;
           } }
@@ -720,15 +902,21 @@ INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
           {
               DWORD word = stack[slot], distance = (word > site) ? (word - site) : (site - word);
               UINT entry;
-              if (distance > 0x60000u) continue;             /* not a code address */
-              for (entry = 0; entry < g_PollStackCount; ++entry) if (g_PollStack[entry] == word) break;
-              if (entry < g_PollStackCount) g_PollStackHits[entry]++;
+              if (distance > 0x60000u)
+                  continue;                                  /* not a code address */
+              for (entry = 0; entry < g_PollStackCount; ++entry)
+                  if (g_PollStack[entry] == word)
+                      break;
+              if (entry < g_PollStackCount)
+                  g_PollStackHits[entry]++;
               else if (g_PollStackCount < POLLSTK_MAX)
               {
-                  g_PollStack[g_PollStackCount] = word; g_PollStackHits[g_PollStackCount] = 1;
+                  g_PollStack[g_PollStackCount] = word;
+                  g_PollStackHits[g_PollStackCount] = 1;
                   ++g_PollStackCount;
               }
-              else ++g_PollStackOverflow;
+              else
+                  ++g_PollStackOverflow;
           } }
     }
 
@@ -756,7 +944,9 @@ typedef VOID (WINAPI *PISV_OUT_BYTE_ROUTINE)(WORD, BYTE);    typedef VOID (WINAP
 VOID IsvIoIn(PVOID self, WORD port, BYTE width, UINT32 *value)
 {
     INT index = (INT)(ULONG_PTR)self;
-    BYTE lowByte = VDD_UNCLAIMED_READ_BYTE, highByte = VDD_UNCLAIMED_READ_BYTE; WORD word = VDD_UNCLAIMED_READ_WORD;
+    BYTE lowByte = VDD_UNCLAIMED_READ_BYTE, highByte = VDD_UNCLAIMED_READ_BYTE;
+    WORD word = VDD_UNCLAIMED_READ_WORD;
+
     if (!g_IsvHooks[index].IsLive)
     {
         *value = width == 1 ? VDD_UNCLAIMED_READ_BYTE : width == X86_WORD_SIZE ? VDD_UNCLAIMED_READ_WORD : VDD_UNCLAIMED_READ_U;
@@ -764,12 +954,14 @@ VOID IsvIoIn(PVOID self, WORD port, BYTE width, UINT32 *value)
     }
     if (width == 1)
     {
-        if (g_IsvHooks[index].Handlers.InByte) ((PISV_IN_BYTE_ROUTINE)g_IsvHooks[index].Handlers.InByte)(port, &lowByte);
+        if (g_IsvHooks[index].Handlers.InByte)
+            ((PISV_IN_BYTE_ROUTINE)g_IsvHooks[index].Handlers.InByte)(port, &lowByte);
         *value = lowByte;
     }
     else if (width == X86_WORD_SIZE && g_IsvHooks[index].Handlers.InWord)
     {
-        ((PISV_IN_WORD_ROUTINE)g_IsvHooks[index].Handlers.InWord)(port, &word); *value = word;
+        ((PISV_IN_WORD_ROUTINE)g_IsvHooks[index].Handlers.InWord)(port, &word);
+        *value = word;
     }
     else                                          /* no word handler: two byte reads */
     {
@@ -782,12 +974,16 @@ VOID IsvIoIn(PVOID self, WORD port, BYTE width, UINT32 *value)
 VOID IsvIoOut(PVOID self, WORD port, BYTE width, UINT32 value)
 {
     INT index = (INT)(ULONG_PTR)self;
-    if (!g_IsvHooks[index].IsLive) return;
+
+    if (!g_IsvHooks[index].IsLive)
+        return;
     if (width == 1)
     {
-        if (g_IsvHooks[index].Handlers.OutByte) ((PISV_OUT_BYTE_ROUTINE)g_IsvHooks[index].Handlers.OutByte)(port, (BYTE)value);
+        if (g_IsvHooks[index].Handlers.OutByte)
+            ((PISV_OUT_BYTE_ROUTINE)g_IsvHooks[index].Handlers.OutByte)(port, (BYTE)value);
     }
-    else if (width == X86_WORD_SIZE && g_IsvHooks[index].Handlers.OutWord) ((PISV_OUT_WORD_ROUTINE)g_IsvHooks[index].Handlers.OutWord)(port, (WORD)value);
+    else if (width == X86_WORD_SIZE && g_IsvHooks[index].Handlers.OutWord)
+        ((PISV_OUT_WORD_ROUTINE)g_IsvHooks[index].Handlers.OutWord)(port, (WORD)value);
     else if (g_IsvHooks[index].Handlers.OutByte)
     {
         ((PISV_OUT_BYTE_ROUTINE)g_IsvHooks[index].Handlers.OutByte)(port, (BYTE)value);
@@ -815,6 +1011,7 @@ VOID IsvBop(volatile BYTE *tib, DWORD subfunction, PSTR *logCursor)
     INT isProtectedMode = g_DpmiPm;
     WORD error = 0, vddHandle = 0;
     INT index;
+
     #define ISV_STR(reg) ((PCSTR)ShimMapFlat((WORD)ds, VDM_REG16(tib, reg), isProtectedMode))
     if (subfunction == 0)                                       /* RegisterModule */
     {
@@ -824,39 +1021,56 @@ VOID IsvBop(volatile BYTE *tib, DWORD subfunction, PSTR *logCursor)
          */
         CHAR dllBuffer[MAX_PATH], iniBuffer[128], dispatchBuffer[128];
         PCSTR dllName = dllBuffer, iniName = iniBuffer, dispatchName = dispatchBuffer;
-        HMODULE module = NULL; FARPROC initProcedure = NULL, dispatchProcedure = NULL;
-        {   PCSTR source[ISV_STRINGS]; PSTR destination[ISV_STRINGS]; INT cap[ISV_STRINGS], index2, length;
-            source[ISV_STRING_DLL] = ISV_STR(VTIB_ESI); source[ISV_STRING_INIT] = ISV_STR(VTIB_EDI); source[ISV_STRING_DISPATCH] = ISV_STR(VTIB_EBX);
-            destination[ISV_STRING_DLL] = dllBuffer; destination[ISV_STRING_INIT] = iniBuffer; destination[ISV_STRING_DISPATCH] = dispatchBuffer;
-            cap[ISV_STRING_DLL] = (INT)sizeof dllBuffer; cap[ISV_STRING_INIT] = (INT)sizeof iniBuffer; cap[ISV_STRING_DISPATCH] = (INT)sizeof dispatchBuffer;
+        HMODULE module = NULL;
+        FARPROC initProcedure = NULL, dispatchProcedure = NULL;
+        {   PCSTR source[ISV_STRINGS];
+        PSTR destination[ISV_STRINGS];
+        INT cap[ISV_STRINGS], index2, length;
+            source[ISV_STRING_DLL] = ISV_STR(VTIB_ESI);
+            source[ISV_STRING_INIT] = ISV_STR(VTIB_EDI);
+            source[ISV_STRING_DISPATCH] = ISV_STR(VTIB_EBX);
+            destination[ISV_STRING_DLL] = dllBuffer;
+            destination[ISV_STRING_INIT] = iniBuffer;
+            destination[ISV_STRING_DISPATCH] = dispatchBuffer;
+            cap[ISV_STRING_DLL] = (INT)sizeof dllBuffer;
+            cap[ISV_STRING_INIT] = (INT)sizeof iniBuffer;
+            cap[ISV_STRING_DISPATCH] = (INT)sizeof dispatchBuffer;
             for (index2 = 0; index2 < ISV_STRINGS; ++index2)
             {
-                for (length = 0; source[index2] && length < cap[index2] - 1 && source[index2][length]; ++length) destination[index2][length] = source[index2][length];
+                for (length = 0; source[index2] && length < cap[index2] - 1 && source[index2][length]; ++length)
+                    destination[index2][length] = source[index2][length];
                 destination[index2][length] = 0;
             }
         }
         WowShimsLoad();          /* NTVDM.EXE must be in the process before the VDD */
         for (index = 0; index < ISV_MAX_MODS && g_IsvModules[index].Module; ++index) ;
-        if (index == ISV_MAX_MODS) error = NTVDM_ISV_ERROR_NO_MEMORY;
-        else if (!dllName || !dllName[0] || !(module = LoadLibraryA(dllName))) error = NTVDM_ISV_ERROR_DLL_NOT_FOUND;
-        else if (!dispatchName || !dispatchName[0] || !(dispatchProcedure = GetProcAddress(module, dispatchName))) error = NTVDM_ISV_ERROR_NO_DISPATCH;
-        else if (iniName && iniName[0] && !(initProcedure = GetProcAddress(module, iniName))) error = NTVDM_ISV_ERROR_NO_INIT;
+        if (index == ISV_MAX_MODS)
+            error = NTVDM_ISV_ERROR_NO_MEMORY;
+        else if (!dllName || !dllName[0] || !(module = LoadLibraryA(dllName)))
+            error = NTVDM_ISV_ERROR_DLL_NOT_FOUND;
+        else if (!dispatchName || !dispatchName[0] || !(dispatchProcedure = GetProcAddress(module, dispatchName)))
+            error = NTVDM_ISV_ERROR_NO_DISPATCH;
+        else if (iniName && iniName[0] && !(initProcedure = GetProcAddress(module, iniName)))
+            error = NTVDM_ISV_ERROR_NO_INIT;
         cursor = LogPut(cursor, "  ISVVDD: RegisterModule ["); cursor = LogPut(cursor, dllName ? dllName : "?");
         cursor = LogPut(cursor, "] init ["); cursor = LogPut(cursor, iniName ? iniName : ""); cursor = LogPut(cursor, "] dispatch [");
         cursor = LogPut(cursor, dispatchName ? dispatchName : ""); cursor = LogPut(cursor, "]");
         if (error)
         {
-            if (module) FreeLibrary(module);
+            if (module)
+                FreeLibrary(module);
             cursor = LogPut(cursor, " -> ERROR "); cursor = LogHex(cursor, error);
             cursor = LogPut(cursor, " gle=0x"); cursor = LogHex(cursor, GetLastError()); cursor = LogPut(cursor, "\r\n");
         }
         else
         {
-            g_IsvModules[index].Module = module; g_IsvModules[index].Dispatch = dispatchProcedure;
+            g_IsvModules[index].Module = module;
+            g_IsvModules[index].Dispatch = dispatchProcedure;
             vddHandle = (WORD)(index + 1);
             cursor = LogPut(cursor, " -> handle "); cursor = LogHex(cursor, vddHandle); cursor = LogPut(cursor, "\r\n");
             *logCursor = cursor;
-            if (initProcedure) ((VOID (*)(VOID))initProcedure)();          /* the init routine, in context */
+            if (initProcedure)
+                ((VOID (*)(VOID))initProcedure)();                         /* the init routine, in context */
             cursor = *logCursor;
         }
     }
@@ -877,7 +1091,8 @@ VOID IsvBop(volatile BYTE *tib, DWORD subfunction, PSTR *logCursor)
         else
         {
             for (index = 0; index < ISV_MAX_HOOKS; ++index)
-                if (g_IsvHooks[index].VddHandle == (HANDLE)g_IsvModules[ax - 1].Module) g_IsvHooks[index].IsLive = 0;
+                if (g_IsvHooks[index].VddHandle == (HANDLE)g_IsvModules[ax - 1].Module)
+                    g_IsvHooks[index].IsLive = 0;
             FreeLibrary(g_IsvModules[ax - 1].Module);
             g_IsvModules[ax - 1].Module = NULL;
         }
@@ -894,7 +1109,8 @@ VOID IsvBop(volatile BYTE *tib, DWORD subfunction, PSTR *logCursor)
     }
     else
     {
-        if (subfunction == 0) VDM_SET16(tib, VTIB_EAX, vddHandle);
+        if (subfunction == 0)
+            VDM_SET16(tib, VTIB_EAX, vddHandle);
         VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
     }
     *logCursor = cursor;

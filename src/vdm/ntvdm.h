@@ -39,9 +39,12 @@ typedef struct
     LPSTR  CmdLine, AppName, PifFile, CurDirectory, Env;
     ULONG  EnvLen;
     STARTUPINFOA StartupInfo;
-    LPSTR  Desktop;  ULONG DesktopLen;
-    LPSTR  Title;    ULONG TitleLen;
-    LPVOID Reserved; ULONG ReservedLen;
+    LPSTR  Desktop;
+    ULONG DesktopLen;
+    LPSTR  Title;
+    ULONG TitleLen;
+    LPVOID Reserved;
+    ULONG ReservedLen;
     USHORT CmdLen, AppLen, PifLen, CurDirectoryLen, VDMState, CurrentDrive;
     BOOLEAN ComingFromBat;
 } VDM_COMMAND_INFO;
@@ -146,7 +149,9 @@ typedef BOOL (WINAPI *PFN_RegisterConsoleVDM)(DWORD, HANDLE, HANDLE, HANDLE,
  */
 typedef struct                  /* OBJECT_ATTRIBUTES (24 bytes) */
 {
-    ULONG Length; PVOID RootDirectory, ObjectName; ULONG Attributes;
+    ULONG Length;
+    PVOID RootDirectory, ObjectName;
+    ULONG Attributes;
     PVOID SecurityDescriptor, SecurityQOS;
 } OBJ_ATTR;
 

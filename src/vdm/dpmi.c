@@ -43,8 +43,13 @@ INT g_DpmiIsClient32 = FALSE;
 #define DPMI_DESCRIPTOR_LIMIT_HIGH_SHIFT    16  /* limit 19-16, in and out */
 #define DPMI_DESCRIPTOR_BASE_HIGH_SHIFT     24  /* base 31-24, in and out */
 
-VOID DpmiBuildDescriptor(DWORD base, DWORD limit, BYTE access, BYTE flags,
-                         DWORD *descriptorLow, DWORD *descriptorHigh)
+VOID DpmiBuildDescriptor(
+    DWORD base,
+    DWORD limit,
+    BYTE access,
+    BYTE flags,
+    DWORD *descriptorLow,
+    DWORD *descriptorHigh)
 {
     /* Standard x86 descriptor: limit in 20 bits, base in 32. access = P|DPL|S|type;
      * flags nibble = G|D/B|0|AVL in bits 23..20 of the high dword.
@@ -73,8 +78,11 @@ VOID DpmiBuildDescriptor(DWORD base, DWORD limit, BYTE access, BYTE flags,
 #define DPMI_SWITCH_OK              0
 #define DPMI_SWITCH_FAILED          (-1)
 
-INT DpmiSwitchToProtectedMode(volatile BYTE *tib, INT isClient32,
-                              LONG *registerStatus, LONG *setStatus)
+INT DpmiSwitchToProtectedMode(
+    volatile BYTE *tib,
+    INT isClient32,
+    LONG *registerStatus,
+    LONG *setStatus)
 {
     WORD stackSegment = (WORD)(VDM_REG(tib, VTIB_SS)  & WORD_MASK);
     WORD stackPointer = (WORD)(VDM_REG(tib, VTIB_ESP) & WORD_MASK);
@@ -132,6 +140,7 @@ INT DpmiSwitchToProtectedMode(volatile BYTE *tib, INT isClient32,
      * decide the D/B of these based, 64K, real-mode-derived selectors.
      */
     BYTE descriptorFlags = DPMI_FLAGS_16BIT_BYTE;
+
     g_DpmiIsClient32 = isClient32 ? TRUE : FALSE;
 
     /* BASED, 64K selectors (G=0) -- the config that PROVED PM execution (run 28). XP's
@@ -143,13 +152,19 @@ INT DpmiSwitchToProtectedMode(volatile BYTE *tib, INT isClient32,
      * A based selector maps the guest's real-mode segment (linear seg<<4, <1MB); resume
      * EIP/ESP are the real-mode OFFSETS.
      */
-    (VOID)linearEip; (VOID)linearEsp;
+    (VOID)linearEip;
+    (VOID)linearEsp;
     DpmiBuildDescriptor(codeBase,  DPMI_SEGMENT_LIMIT, codeAccess, descriptorFlags, &codeLow, &codeHigh);
     DpmiBuildDescriptor(dataBase,  DPMI_SEGMENT_LIMIT, dataAccess, descriptorFlags, &dataLow, &dataHigh);
     DpmiBuildDescriptor(stackBase, DPMI_SEGMENT_LIMIT, dataAccess, descriptorFlags, &stackLow, &stackHigh);
-    g_DpmiDebug[DPMI_DEBUG_RETURN_CS] = returnSegment; g_DpmiDebug[DPMI_DEBUG_RETURN_LINEAR] = codeBase + returnOffset; g_DpmiDebug[DPMI_DEBUG_CODE_LOW] = codeLow; g_DpmiDebug[DPMI_DEBUG_CODE_HIGH] = codeHigh;
+    g_DpmiDebug[DPMI_DEBUG_RETURN_CS] = returnSegment;
+    g_DpmiDebug[DPMI_DEBUG_RETURN_LINEAR] = codeBase + returnOffset;
+    g_DpmiDebug[DPMI_DEBUG_CODE_LOW] = codeLow;
+    g_DpmiDebug[DPMI_DEBUG_CODE_HIGH] = codeHigh;
     /* Publish the per-selector bases so the host can drive dpmi_sel_base() uniformly. */
-    g_DpmiSegmentBase[DPMI_INITIAL_CODE] = codeBase; g_DpmiSegmentBase[DPMI_INITIAL_DATA] = dataBase; g_DpmiSegmentBase[DPMI_INITIAL_STACK] = stackBase;
+    g_DpmiSegmentBase[DPMI_INITIAL_CODE] = codeBase;
+    g_DpmiSegmentBase[DPMI_INITIAL_DATA] = dataBase;
+    g_DpmiSegmentBase[DPMI_INITIAL_STACK] = stackBase;
 
     /* First REGISTER the LDT table (service 11) so the monitor loads LDTR -- without
      * this, svc 10's descriptors resolve base 0 (VM run 2 diagnosis). Table covers
@@ -159,20 +174,28 @@ INT DpmiSwitchToProtectedMode(volatile BYTE *tib, INT isClient32,
      */
     {
         DWORD entries[DPMI_LDT_TABLE_DWORDS];
-        entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_NULL] = DPMI_NULL_DESCRIPTOR;   entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_NULL + DPMI_DESCRIPTOR_HIGH] = DPMI_NULL_DESCRIPTOR;       /* index 0: null descriptor */
-        entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_CODE] = codeLow; entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_CODE + DPMI_DESCRIPTOR_HIGH] = codeHigh;     /* index 1: code  (selector 0x0F) */
-        entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_DATA] = dataLow; entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_DATA + DPMI_DESCRIPTOR_HIGH] = dataHigh;     /* index 2: data  (selector 0x17) */
-        entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_STACK] = stackLow; entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_STACK + DPMI_DESCRIPTOR_HIGH] = stackHigh;     /* index 3: stack (selector 0x1F) */
+        entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_NULL] = DPMI_NULL_DESCRIPTOR;
+        entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_NULL + DPMI_DESCRIPTOR_HIGH] = DPMI_NULL_DESCRIPTOR;       /* index 0: null descriptor */
+        entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_CODE] = codeLow;
+        entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_CODE + DPMI_DESCRIPTOR_HIGH] = codeHigh;     /* index 1: code  (selector 0x0F) */
+        entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_DATA] = dataLow;
+        entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_DATA + DPMI_DESCRIPTOR_HIGH] = dataHigh;     /* index 2: data  (selector 0x17) */
+        entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_STACK] = stackLow;
+        entries[DPMI_DWORDS_PER_DESCRIPTOR * DPMI_IDX_STACK + DPMI_DESCRIPTOR_HIGH] = stackHigh;     /* index 3: stack (selector 0x1F) */
         status = VdmRegisterLdtTable(DPMI_LDT_FIRST_SELECTOR, entries, DPMI_LDT_TABLE_ENTRIES);
-        if (registerStatus) *registerStatus = status;
+        if (registerStatus)
+            *registerStatus = status;
     }
 
     /* Then set the individual entries too (service 10; two selectors per call). */
     status = VdmInstallLdtEntries(codeSelector, codeLow, codeHigh, dataSelector, dataLow, dataHigh);
-    if (setStatus) *setStatus = status;
-    if (status < 0) return DPMI_SWITCH_FAILED;
+    if (setStatus)
+        *setStatus = status;
+    if (status < 0)
+        return DPMI_SWITCH_FAILED;
     status = VdmInstallLdtEntries(stackSelector, stackLow, stackHigh, stackSelector, stackLow, stackHigh);
-    if (status < 0) return DPMI_SWITCH_FAILED;
+    if (status < 0)
+        return DPMI_SWITCH_FAILED;
 
     /* Mark the client as in protected mode: set the virtual-MSW PE bit the monitor
      * reads via getMSW (word[TIB+0x668]). Without this the monitor still treats the
@@ -224,17 +247,29 @@ VOID DpmiRunProtectedMode(volatile BYTE *tib)
 {
     static CONTEXT context;                    /* static: keep it off the (small) stack */
     HMODULE ntdll = GetModuleHandleA(DPMI_NTDLL_NAME);
+
     PFN_NtContinue NtContinue = (PFN_NtContinue)GetProcAddress(ntdll, DPMI_NT_CONTINUE);
-    BYTE *contextBytes = (BYTE *)&context; UINT byteIndex;
-    for (byteIndex = 0; byteIndex < sizeof context; ++byteIndex) contextBytes[byteIndex] = 0;
+    BYTE *contextBytes = (BYTE *)&context;
+    UINT byteIndex;
+    for (byteIndex = 0; byteIndex < sizeof context; ++byteIndex)
+        contextBytes[byteIndex] = 0;
     context.ContextFlags = VTIB_CTXFLAGS_VAL;  /* CONTEXT_CONTROL|INTEGER|SEGMENTS (0x10007) */
-    context.SegGs = VDM_REG(tib, VTIB_GS) & WORD_MASK;  context.SegFs = VDM_REG(tib, VTIB_FS) & WORD_MASK;
-    context.SegEs = VDM_REG(tib, VTIB_ES) & WORD_MASK;  context.SegDs = VDM_REG(tib, VTIB_DS) & WORD_MASK;
-    context.SegCs = VDM_REG(tib, VTIB_CS) & WORD_MASK;  context.SegSs = VDM_REG(tib, VTIB_SS) & WORD_MASK;
-    context.Edi = VDM_REG(tib, VTIB_EDI); context.Esi = VDM_REG(tib, VTIB_ESI);
-    context.Ebx = VDM_REG(tib, VTIB_EBX); context.Edx = VDM_REG(tib, VTIB_EDX);
-    context.Ecx = VDM_REG(tib, VTIB_ECX); context.Eax = VDM_REG(tib, VTIB_EAX);
-    context.Ebp = VDM_REG(tib, VTIB_EBP); context.Eip = VDM_REG(tib, VTIB_EIP);
-    context.Esp = VDM_REG(tib, VTIB_ESP); context.EFlags = VDM_REG(tib, VTIB_EFLAGS);
-    if (NtContinue) NtContinue(&context, FALSE);
+    context.SegGs = VDM_REG(tib, VTIB_GS) & WORD_MASK;
+    context.SegFs = VDM_REG(tib, VTIB_FS) & WORD_MASK;
+    context.SegEs = VDM_REG(tib, VTIB_ES) & WORD_MASK;
+    context.SegDs = VDM_REG(tib, VTIB_DS) & WORD_MASK;
+    context.SegCs = VDM_REG(tib, VTIB_CS) & WORD_MASK;
+    context.SegSs = VDM_REG(tib, VTIB_SS) & WORD_MASK;
+    context.Edi = VDM_REG(tib, VTIB_EDI);
+    context.Esi = VDM_REG(tib, VTIB_ESI);
+    context.Ebx = VDM_REG(tib, VTIB_EBX);
+    context.Edx = VDM_REG(tib, VTIB_EDX);
+    context.Ecx = VDM_REG(tib, VTIB_ECX);
+    context.Eax = VDM_REG(tib, VTIB_EAX);
+    context.Ebp = VDM_REG(tib, VTIB_EBP);
+    context.Eip = VDM_REG(tib, VTIB_EIP);
+    context.Esp = VDM_REG(tib, VTIB_ESP);
+    context.EFlags = VDM_REG(tib, VTIB_EFLAGS);
+    if (NtContinue)
+        NtContinue(&context, FALSE);
 }

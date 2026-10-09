@@ -259,6 +259,7 @@ const SET_STR_DEF g_SetStringDefinitions[SET_STR_COUNT] = {
 VOID SettingsCopyString(PSTR destination, PCSTR source, INT capacity)
 {
     INT index = 0;
+
     while (source[index] && index < capacity - 1)
     {
         destination[index] = source[index];
@@ -270,6 +271,7 @@ VOID SettingsCopyString(PSTR destination, PCSTR source, INT capacity)
 VOID SettingsDefaults(NTVDMEX_SETTINGS *settings)
 {
     INT index;
+
     for (index = 0; index < SET_COUNT; ++index)
     {
         settings->Values[index] = g_SetDefinitions[index].Default;
@@ -285,6 +287,7 @@ VOID SettingsDefaults(NTVDMEX_SETTINGS *settings)
 VOID SettingsClamp(NTVDMEX_SETTINGS *settings)
 {
     INT index;
+
     for (index = 0; index < SET_COUNT; ++index)
     {
         const SET_DEF *definition = &g_SetDefinitions[index];
@@ -293,7 +296,8 @@ VOID SettingsClamp(NTVDMEX_SETTINGS *settings)
         if (isBad)
         {
             settings->Values[index] = definition->Default;
-            if (settings->Sources[index] == SETSRC_REG) settings->Sources[index] = SETSRC_REG_BAD;   /* say so */
+            if (settings->Sources[index] == SETSRC_REG)
+                settings->Sources[index] = SETSRC_REG_BAD;                                           /* say so */
         }
     }
     /* A version is a PAIR: an out-of-range major that fell back to 6 with a minor of
@@ -303,7 +307,8 @@ VOID SettingsClamp(NTVDMEX_SETTINGS *settings)
         && settings->Values[SET_DOSMIN] > g_SetDefinitions[SET_DOSMIN].High)
     {
         settings->Values[SET_DOSMIN] = g_SetDefinitions[SET_DOSMIN].Default;
-        if (settings->Sources[SET_DOSMIN] == SETSRC_REG) settings->Sources[SET_DOSMIN] = SETSRC_REG_BAD;
+        if (settings->Sources[SET_DOSMIN] == SETSRC_REG)
+            settings->Sources[SET_DOSMIN] = SETSRC_REG_BAD;
     }
 }
 
@@ -316,6 +321,7 @@ static VOID SettingsRegistryPut(HKEY key, PCSTR name, DWORD value)
 static INT SettingsRegistryTry(HKEY key, PCSTR name, DWORD *out)
 {
     DWORD value = 0, size = sizeof value, type = 0;
+
     if (RegQueryValueExA(key, name, NULL, &type, (BYTE *)&value, &size) == ERROR_SUCCESS
         && type == REG_DWORD && size == sizeof value)
     {
@@ -328,22 +334,27 @@ static INT SettingsRegistryTry(HKEY key, PCSTR name, DWORD *out)
 static INT SettingsRegistryGetString(HKEY key, PCSTR name, PSTR out, INT capacity)
 {
     DWORD size = (DWORD)capacity, type = 0;
+
     if (RegQueryValueExA(key, name, NULL, &type, (BYTE *)out, &size) != ERROR_SUCCESS
         || type != REG_SZ || size == 0)
         return 0;                                /* leave the default in place */
-    if ((INT)size >= capacity) size = (DWORD)capacity - 1;
+    if ((INT)size >= capacity)
+        size = (DWORD)capacity - 1;
     out[size] = 0;                                 /* RegQueryValueEx may not NUL it */
     return 1;
 }
 
 VOID SettingsLoad(NTVDMEX_SETTINGS *settings)
 {
-    HKEY key; INT index;
+    HKEY key;
+    INT index;
+
     SettingsDefaults(settings);
     if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_READ, &key) != ERROR_SUCCESS)
         return;                                  /* never stored yet -> defaults */
     for (index = 0; index < SET_COUNT; ++index)
-        if (SettingsRegistryTry(key, g_SetDefinitions[index].RegistryName, &settings->Values[index])) settings->Sources[index] = SETSRC_REG;
+        if (SettingsRegistryTry(key, g_SetDefinitions[index].RegistryName, &settings->Values[index]))
+            settings->Sources[index] = SETSRC_REG;
     for (index = 0; index < SET_STR_COUNT; ++index)
         if (SettingsRegistryGetString(key, g_SetStringDefinitions[index].RegistryName, settings->Strings[index], NTVDMEX_PATH_MAX))
             settings->StringSources[index] = SETSRC_REG;
@@ -353,7 +364,10 @@ VOID SettingsLoad(NTVDMEX_SETTINGS *settings)
 
 VOID SettingsSave(const NTVDMEX_SETTINGS *settings)
 {
-    HKEY key; DWORD disposition = 0; INT index;
+    HKEY key;
+    DWORD disposition = 0;
+    INT index;
+
     if (RegCreateKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, NULL,
                         REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &key, &disposition) != ERROR_SUCCESS)
         return;
@@ -361,7 +375,9 @@ VOID SettingsSave(const NTVDMEX_SETTINGS *settings)
         SettingsRegistryPut(key, g_SetDefinitions[index].RegistryName, settings->Values[index]);
     for (index = 0; index < SET_STR_COUNT; ++index)
     {
-        INT length = 0; while (settings->Strings[index][length]) ++length;
+        INT length = 0;
+        while (settings->Strings[index][length])
+            ++length;
         RegSetValueExA(key, g_SetStringDefinitions[index].RegistryName, 0, REG_SZ,
                        (const BYTE *)settings->Strings[index], (DWORD)length + 1);
     }
@@ -370,8 +386,11 @@ VOID SettingsSave(const NTVDMEX_SETTINGS *settings)
 
 VOID SettingsParseVersion(PCSTR text, DWORD *major, DWORD *minor)
 {
-    DWORD majorValue = 0, minorValue = 0; INT index = 0, isSeen = 0;
-    while (text[index] == ' ' || text[index] == '\t') ++index;
+    DWORD majorValue = 0, minorValue = 0;
+    INT index = 0, isSeen = 0;
+
+    while (text[index] == ' ' || text[index] == '\t')
+        ++index;
     while (text[index] >= '0' && text[index] <= '9')
     {
         majorValue = majorValue * DECIMAL_RADIX + (DWORD)(text[index] - '0');
@@ -387,21 +406,29 @@ VOID SettingsParseVersion(PCSTR text, DWORD *major, DWORD *minor)
             ++index;
         }
     }
-    if (!isSeen || majorValue < 1 || majorValue > SETTINGS_DOS_MAJOR_MAX || minorValue > SETTINGS_DOS_MINOR_MAX) return;   /* keep the previous value */
-    *major = majorValue; *minor = minorValue;
+    if (!isSeen || majorValue < 1 || majorValue > SETTINGS_DOS_MAJOR_MAX || minorValue > SETTINGS_DOS_MINOR_MAX)
+        return;                                                                                                            /* keep the previous value */
+    *major = majorValue;
+    *minor = minorValue;
 }
 
 INT SettingsParseUnsigned(PCSTR text, DWORD *out)
 {
-    DWORD value = 0; INT index = 0, isSeen = 0;
-    while (text[index] == ' ' || text[index] == '\t') ++index;
+    DWORD value = 0;
+    INT index = 0, isSeen = 0;
+
+    while (text[index] == ' ' || text[index] == '\t')
+        ++index;
     while (text[index] >= '0' && text[index] <= '9')
     {
         value = value * DECIMAL_RADIX + (DWORD)(text[index] - '0');
-        if (value > SETTINGS_UNSIGNED_MAX) return 0;                /* absurd: reject, don't wrap */
-        ++index; isSeen = 1;
+        if (value > SETTINGS_UNSIGNED_MAX)
+            return 0;                                               /* absurd: reject, don't wrap */
+        ++index;
+        isSeen = 1;
     }
-    if (!isSeen) return 0;
+    if (!isSeen)
+        return 0;
     *out = value;
     return 1;
 }
@@ -409,14 +436,19 @@ INT SettingsParseUnsigned(PCSTR text, DWORD *out)
 INT SettingsItem(PCSTR items, INT number, PSTR out, INT capacity)
 {
     INT index = 0, length = 0;
-    if (!items) return 0;
+
+    if (!items)
+        return 0;
     while (number > 0 && items[index])
     {
-        if (items[index] == '|') --number;
+        if (items[index] == '|')
+            --number;
         ++index;
     }
-    if (!items[index]) return 0;
-    while (items[index] && items[index] != '|' && length < capacity - 1) out[length++] = items[index++];
+    if (!items[index])
+        return 0;
+    while (items[index] && items[index] != '|' && length < capacity - 1)
+        out[length++] = items[index++];
     out[length] = 0;
     return 1;
 }

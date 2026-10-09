@@ -139,14 +139,19 @@ static inline VOID BiosBdaSetEquipment(_In_opt_ volatile BYTE *base, _In_ WORD e
  * PS/2-mouse and vendor state for devices this machine does not model.
  */
 /* #136: `top` is the EBDA's segment = the end of DOS's arena (BiosConventionalTopParagraph). */
-static inline VOID BiosBdaInitializeWithTop(_In_opt_ volatile BYTE *base, _In_ WORD equipment, _In_ WORD top)
+static inline VOID BiosBdaInitializeWithTop(
+    _In_opt_ volatile BYTE *base,
+    _In_ WORD equipment,
+    _In_ WORD top)
 {
     volatile BYTE *ebda = BiosLinearAddress(base, (DWORD)top << PARAGRAPH_SHIFT);
     UINT byteIndex;
+
     BiosWriteWord(BiosLinearAddress(base, BIOS_BDA_BASE + BIOS_BDA_EBDA_SEGMENT), top);
     BiosBdaSetEquipment(base, equipment);
     BiosWriteWord(BiosLinearAddress(base, BIOS_BDA_BASE + BIOS_BDA_MEMORY_KB), BiosBaseKbOfTop(top));
-    for (byteIndex = 0; byteIndex < BIOS_EBDA_KB * BIOS_BYTES_PER_KB; ++byteIndex) ebda[byteIndex] = 0;
+    for (byteIndex = 0; byteIndex < BIOS_EBDA_KB * BIOS_BYTES_PER_KB; ++byteIndex)
+        ebda[byteIndex] = 0;
     ebda[0] = (BYTE)BIOS_EBDA_KB;
 }
 

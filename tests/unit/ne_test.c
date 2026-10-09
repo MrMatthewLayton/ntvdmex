@@ -95,8 +95,10 @@ static VOID NeTestLibraryWrite32(UINT32 offset, UINT32 value)
 static UINT32 NeTestLibraryString(UINT32 offset, PCSTR text, WORD ordinal)
 {
     UINT32 length = (UINT32)strlen(text), index;
+
     g_LibraryImage[offset] = (BYTE)length;
-    for (index = 0; index < length; ++index) g_LibraryImage[offset+1+index] = (BYTE)text[index];
+    for (index = 0; index < length; ++index)
+        g_LibraryImage[offset+1+index] = (BYTE)text[index];
     NeTestLibraryWrite16(offset + 1 + length, ordinal);
     return offset + 1 + length + 2;
 }
@@ -104,10 +106,13 @@ static UINT32 NeTestLibraryString(UINT32 offset, PCSTR text, WORD ordinal)
 static VOID NeTestBuildLibrary(VOID)
 {
     UINT32 segment1Offset = 0x200, entryOffset, offset;
+
     memset(g_LibraryImage, 0, sizeof g_LibraryImage);
-    g_LibraryImage[0] = 'M'; g_LibraryImage[1] = 'Z';
+    g_LibraryImage[0] = 'M';
+    g_LibraryImage[1] = 'Z';
     NeTestLibraryWrite32(0x3C, HDR);
-    g_LibraryImage[HDR] = 'N'; g_LibraryImage[HDR+1] = 'E';
+    g_LibraryImage[HDR] = 'N';
+    g_LibraryImage[HDR+1] = 'E';
     NeTestLibraryWrite16(HDR+0x04, ENTTAB);
     NeTestLibraryWrite16(HDR+0x0C, 0x8001);         /* LIBRARY | SINGLEDATA */
     NeTestLibraryWrite16(HDR+0x0E, 0);
@@ -119,19 +124,35 @@ static VOID NeTestBuildLibrary(VOID)
     NeTestLibraryWrite16(HDR+0x32, SECSHIFT);
     g_LibraryImage[HDR+0x36] = 2;
 
-    NeTestLibraryWrite16(HDR+SEGTAB+0, (WORD)(segment1Offset >> SECSHIFT)); NeTestLibraryWrite16(HDR+SEGTAB+2, 0x40);
-    NeTestLibraryWrite16(HDR+SEGTAB+4, 0);                          NeTestLibraryWrite16(HDR+SEGTAB+6, 0x40);
+    NeTestLibraryWrite16(HDR+SEGTAB+0, (WORD)(segment1Offset >> SECSHIFT));
+    NeTestLibraryWrite16(HDR+SEGTAB+2, 0x40);
+    NeTestLibraryWrite16(HDR+SEGTAB+4, 0);
+    NeTestLibraryWrite16(HDR+SEGTAB+6, 0x40);
 
     entryOffset = HDR + ENTTAB;
-    g_LibraryImage[entryOffset++] = 1; g_LibraryImage[entryOffset++] = 1;                      /* bundle: 1 FIXED in seg 1 */
-    g_LibraryImage[entryOffset++] = 0x01; NeTestLibraryWrite16(entryOffset, 0x0010); entryOffset += 2;         /* ord 1, EXPORTED */
-    g_LibraryImage[entryOffset++] = 1; g_LibraryImage[entryOffset++] = 0xFF;                   /* bundle: 1 MOVEABLE */
-    g_LibraryImage[entryOffset++] = 0x01; g_LibraryImage[entryOffset++] = 0xCD; g_LibraryImage[entryOffset++] = 0x3F;
-    g_LibraryImage[entryOffset++] = 1; NeTestLibraryWrite16(entryOffset, 0x0020); entryOffset += 2;            /* ord 2 -> seg 1 : 0x0020 */
-    g_LibraryImage[entryOffset++] = 1; g_LibraryImage[entryOffset++] = 1;
-    g_LibraryImage[entryOffset++] = 0x00; NeTestLibraryWrite16(entryOffset, 0x0030); entryOffset += 2;         /* ord 3, NOT exported */
-    g_LibraryImage[entryOffset++] = 1; g_LibraryImage[entryOffset++] = NE_ENT_ABSOLUTE;        /* bundle: 1 ABSOLUTE */
-    g_LibraryImage[entryOffset++] = 0x01; NeTestLibraryWrite16(entryOffset, 0xA000); entryOffset += 2;         /* ord 4 = the CONSTANT */
+    g_LibraryImage[entryOffset++] = 1;
+    g_LibraryImage[entryOffset++] = 1;                      /* bundle: 1 FIXED in seg 1 */
+    g_LibraryImage[entryOffset++] = 0x01;
+    NeTestLibraryWrite16(entryOffset, 0x0010);
+    entryOffset += 2;         /* ord 1, EXPORTED */
+    g_LibraryImage[entryOffset++] = 1;
+    g_LibraryImage[entryOffset++] = 0xFF;                   /* bundle: 1 MOVEABLE */
+    g_LibraryImage[entryOffset++] = 0x01;
+    g_LibraryImage[entryOffset++] = 0xCD;
+    g_LibraryImage[entryOffset++] = 0x3F;
+    g_LibraryImage[entryOffset++] = 1;
+    NeTestLibraryWrite16(entryOffset, 0x0020);
+    entryOffset += 2;            /* ord 2 -> seg 1 : 0x0020 */
+    g_LibraryImage[entryOffset++] = 1;
+    g_LibraryImage[entryOffset++] = 1;
+    g_LibraryImage[entryOffset++] = 0x00;
+    NeTestLibraryWrite16(entryOffset, 0x0030);
+    entryOffset += 2;         /* ord 3, NOT exported */
+    g_LibraryImage[entryOffset++] = 1;
+    g_LibraryImage[entryOffset++] = NE_ENT_ABSOLUTE;        /* bundle: 1 ABSOLUTE */
+    g_LibraryImage[entryOffset++] = 0x01;
+    NeTestLibraryWrite16(entryOffset, 0xA000);
+    entryOffset += 2;         /* ord 4 = the CONSTANT */
     g_LibraryImage[entryOffset++] = 0;                                     /* terminator */
     NeTestLibraryWrite16(HDR+0x06, (WORD)(entryOffset - (HDR + ENTTAB)));    /* entry table length */
 
@@ -157,10 +178,13 @@ static VOID NeTestBuildLibrary(VOID)
 static VOID NeTestBuild(INT imports)
 {
     UINT32 segment1Offset = 0x200, segment2Offset = 0x400, relocations;
+
     memset(g_Image, 0, sizeof g_Image);
-    g_Image[0] = 'M'; g_Image[1] = 'Z';
+    g_Image[0] = 'M';
+    g_Image[1] = 'Z';
     NeTestWrite32(0x3C, HDR);
-    g_Image[HDR] = 'N'; g_Image[HDR+1] = 'E';
+    g_Image[HDR] = 'N';
+    g_Image[HDR+1] = 'E';
     NeTestWrite16(HDR+0x04, ENTTAB);          /* entry table offset */
     NeTestWrite16(HDR+0x06, 16);              /* entry table length */
     NeTestWrite16(HDR+0x0C, 0x0001);          /* prog flags */
@@ -175,16 +199,21 @@ static VOID NeTestBuild(INT imports)
     NeTestWrite16(HDR+0x3E, 0x030A);
 
     /* segment table: sector, length, flags, minalloc */
-    NeTestWrite16(HDR+SEGTAB+0, (WORD)(segment1Offset >> SECSHIFT)); NeTestWrite16(HDR+SEGTAB+2, 0x40);
-    NeTestWrite16(HDR+SEGTAB+4, NE_SEG_RELOCS);              NeTestWrite16(HDR+SEGTAB+6, 0x80);
-    NeTestWrite16(HDR+SEGTAB+8, (WORD)(segment2Offset >> SECSHIFT)); NeTestWrite16(HDR+SEGTAB+10, 0x20);
-    NeTestWrite16(HDR+SEGTAB+12, NE_SEG_DATA);               NeTestWrite16(HDR+SEGTAB+14, 0x20);
+    NeTestWrite16(HDR+SEGTAB+0, (WORD)(segment1Offset >> SECSHIFT));
+    NeTestWrite16(HDR+SEGTAB+2, 0x40);
+    NeTestWrite16(HDR+SEGTAB+4, NE_SEG_RELOCS);
+    NeTestWrite16(HDR+SEGTAB+6, 0x80);
+    NeTestWrite16(HDR+SEGTAB+8, (WORD)(segment2Offset >> SECSHIFT));
+    NeTestWrite16(HDR+SEGTAB+10, 0x20);
+    NeTestWrite16(HDR+SEGTAB+12, NE_SEG_DATA);
+    NeTestWrite16(HDR+SEGTAB+14, 0x20);
 
     /* entry table: one bundle, 1 moveable entry -> ordinal 1 = seg 2, offset 0x1234 */
     g_Image[HDR+ENTTAB+0] = 1;      /* count */
     g_Image[HDR+ENTTAB+1] = 0xFF;   /* moveable */
     g_Image[HDR+ENTTAB+2] = 0;      /* flags */
-    g_Image[HDR+ENTTAB+3] = 0xCD; g_Image[HDR+ENTTAB+4] = 0x3F;   /* INT 3Fh thunk */
+    g_Image[HDR+ENTTAB+3] = 0xCD;
+    g_Image[HDR+ENTTAB+4] = 0x3F;   /* INT 3Fh thunk */
     g_Image[HDR+ENTTAB+5] = 2;      /* segment 2 */
     NeTestWrite16(HDR+ENTTAB+6, 0x1234);  /* offset */
 
@@ -193,44 +222,64 @@ static VOID NeTestBuild(INT imports)
     NeTestWrite16(HDR+0x28, MODTAB);
     NeTestWrite16(HDR+0x2A, IMPTAB);
     NeTestWrite16(HDR+MODTAB, 0);                            /* ref 1 -> imp name at +0 */
-    g_Image[HDR+IMPTAB+0] = 7; memcpy(g_Image+HDR+IMPTAB+1, "TESTLIB", 7);
-    g_Image[HDR+IMPTAB+8] = 3; memcpy(g_Image+HDR+IMPTAB+9, "BAR", 3);
+    g_Image[HDR+IMPTAB+0] = 7;
+    memcpy(g_Image+HDR+IMPTAB+1, "TESTLIB", 7);
+    g_Image[HDR+IMPTAB+8] = 3;
+    memcpy(g_Image+HDR+IMPTAB+9, "BAR", 3);
 
     /* seg1 relocation table sits right after its 0x40 bytes of data */
     relocations = segment1Offset + 0x40;
     NeTestWrite16(relocations, (WORD)(imports ? 6 : 4));
 
     /* (a) SEGMENT, chained: site 0x00 -> 0x02 -> end. target = seg 2 */
-    g_Image[relocations+2+0] = NE_ADDR_SEGMENT; g_Image[relocations+2+1] = NE_REL_INTERNAL;
-    NeTestWrite16(relocations+2+2, 0x0000); NeTestWrite16(relocations+2+4, 2); NeTestWrite16(relocations+2+6, 0);
+    g_Image[relocations+2+0] = NE_ADDR_SEGMENT;
+    g_Image[relocations+2+1] = NE_REL_INTERNAL;
+    NeTestWrite16(relocations+2+2, 0x0000);
+    NeTestWrite16(relocations+2+4, 2);
+    NeTestWrite16(relocations+2+6, 0);
     NeTestWrite16(segment1Offset + 0x00, 0x0002);      /* chain link -> next site 0x02 */
     NeTestWrite16(segment1Offset + 0x02, 0xFFFF);      /* end of chain */
 
     /* (b) FARADDR, single: site 0x10, target = seg 2 : 0x0040 */
-    g_Image[relocations+10+0] = NE_ADDR_FARADDR; g_Image[relocations+10+1] = NE_REL_INTERNAL;
-    NeTestWrite16(relocations+10+2, 0x0010); NeTestWrite16(relocations+10+4, 2); NeTestWrite16(relocations+10+6, 0x0040);
+    g_Image[relocations+10+0] = NE_ADDR_FARADDR;
+    g_Image[relocations+10+1] = NE_REL_INTERNAL;
+    NeTestWrite16(relocations+10+2, 0x0010);
+    NeTestWrite16(relocations+10+4, 2);
+    NeTestWrite16(relocations+10+6, 0x0040);
     NeTestWrite16(segment1Offset + 0x10, 0xFFFF);
 
     /* (c) OFFSET16, ADDITIVE (must NOT walk a chain): site 0x20 */
     g_Image[relocations+18+0] = NE_ADDR_OFFSET16;
     g_Image[relocations+18+1] = NE_REL_INTERNAL | NE_REL_ADDITIVE;
-    NeTestWrite16(relocations+18+2, 0x0020); NeTestWrite16(relocations+18+4, 2); NeTestWrite16(relocations+18+6, 0x00AA);
+    NeTestWrite16(relocations+18+2, 0x0020);
+    NeTestWrite16(relocations+18+4, 2);
+    NeTestWrite16(relocations+18+6, 0x00AA);
     NeTestWrite16(segment1Offset + 0x20, 0x0030);      /* looks like a chain link; must be ignored */
     NeTestWrite16(segment1Offset + 0x30, 0xBEEF);      /* sentinel: must survive untouched */
 
     /* (d) INTERNALREF to a MOVEABLE target: a=0xFF, b=ordinal 1 */
-    g_Image[relocations+26+0] = NE_ADDR_FARADDR; g_Image[relocations+26+1] = NE_REL_INTERNAL;
-    NeTestWrite16(relocations+26+2, 0x0028); NeTestWrite16(relocations+26+4, 0x00FF); NeTestWrite16(relocations+26+6, 1);
+    g_Image[relocations+26+0] = NE_ADDR_FARADDR;
+    g_Image[relocations+26+1] = NE_REL_INTERNAL;
+    NeTestWrite16(relocations+26+2, 0x0028);
+    NeTestWrite16(relocations+26+4, 0x00FF);
+    NeTestWrite16(relocations+26+6, 1);
     NeTestWrite16(segment1Offset + 0x28, 0xFFFF);
 
-    if (!imports) return;
+    if (!imports)
+        return;
     /* (e) IMPORTORDINAL: TESTLIB ordinal 1 -> site 0x34 (0x30 is (c)'s sentinel) */
-    g_Image[relocations+34+0] = NE_ADDR_FARADDR; g_Image[relocations+34+1] = NE_REL_IMPORTORD;
-    NeTestWrite16(relocations+34+2, 0x0034); NeTestWrite16(relocations+34+4, 1); NeTestWrite16(relocations+34+6, 1);
+    g_Image[relocations+34+0] = NE_ADDR_FARADDR;
+    g_Image[relocations+34+1] = NE_REL_IMPORTORD;
+    NeTestWrite16(relocations+34+2, 0x0034);
+    NeTestWrite16(relocations+34+4, 1);
+    NeTestWrite16(relocations+34+6, 1);
     NeTestWrite16(segment1Offset + 0x34, 0xFFFF);
     /* (f) IMPORTNAME: TESTLIB "BAR" (imported-names offset 8) -> site 0x3A */
-    g_Image[relocations+42+0] = NE_ADDR_FARADDR; g_Image[relocations+42+1] = NE_REL_IMPORTNAME;
-    NeTestWrite16(relocations+42+2, 0x003A); NeTestWrite16(relocations+42+4, 1); NeTestWrite16(relocations+42+6, 8);
+    g_Image[relocations+42+0] = NE_ADDR_FARADDR;
+    g_Image[relocations+42+1] = NE_REL_IMPORTNAME;
+    NeTestWrite16(relocations+42+2, 0x003A);
+    NeTestWrite16(relocations+42+4, 1);
+    NeTestWrite16(relocations+42+6, 8);
     NeTestWrite16(segment1Offset + 0x3A, 0xFFFF);
 }
 
@@ -239,6 +288,7 @@ static BYTE g_SegmentMemory[2][0x200];
 INT main(VOID)
 {
     NE_MODULE module;
+
     printf("== WOW: NE loader battery (GH #128/#4) ==\n");
 
     NeTestBuild(0);
@@ -262,8 +312,10 @@ INT main(VOID)
     /* load + relocate */
     memcpy(g_SegmentMemory[0], g_Image + module.Segments[0].FileOffset, module.Segments[0].Length);
     memcpy(g_SegmentMemory[1], g_Image + module.Segments[1].FileOffset, module.Segments[1].Length);
-    module.Segments[0].Memory = g_SegmentMemory[0]; module.Segments[0].Selector = 0x1000;
-    module.Segments[1].Memory = g_SegmentMemory[1]; module.Segments[1].Selector = 0x2000;
+    module.Segments[0].Memory = g_SegmentMemory[0];
+    module.Segments[0].Selector = 0x1000;
+    module.Segments[1].Memory = g_SegmentMemory[1];
+    module.Segments[1].Selector = 0x2000;
 
     NeTestCheck(NeApplyRelocations(&module, 0, NULL, NULL) == 0, "relocations apply");
     /* 4 records, one of which is a 2-site chain -> 5 sites. "Success" with 0 sites
@@ -301,20 +353,25 @@ INT main(VOID)
     }
 
     /* an unresolvable import must FAIL, not quietly leave a far call to nowhere */
-    {   NE_MODULE unresolved; BYTE segmentCopy[0x200];
+    {   NE_MODULE unresolved;
+    BYTE segmentCopy[0x200];
         NeTestBuild(0);
         g_Image[0x200 + 0x40 + 2 + 1] = NE_REL_IMPORTORD;   /* record (a) -> import */
         NeParse(&unresolved, g_Image, sizeof g_Image);
         memcpy(segmentCopy, g_Image + unresolved.Segments[0].FileOffset, unresolved.Segments[0].Length);
-        unresolved.Segments[0].Memory = segmentCopy; unresolved.Segments[0].Selector = 0x1000;
-        unresolved.Segments[1].Memory = g_SegmentMemory[1]; unresolved.Segments[1].Selector = 0x2000;
+        unresolved.Segments[0].Memory = segmentCopy;
+        unresolved.Segments[0].Selector = 0x1000;
+        unresolved.Segments[1].Memory = g_SegmentMemory[1];
+        unresolved.Segments[1].Selector = 0x2000;
         NeTestCheck(NeApplyRelocations(&unresolved, 0, NULL, NULL) != 0,
            "unresolved IMPORTORDINAL is refused loudly");
         NeTestCheck(unresolved.Error != 0, "...and records where it gave up");
     }
 
     /* names, exports, and cross-module imports (synthetic): */
-    {   NE_MODULE library, application; NE_REGISTRY registry; BYTE applicationSegments[2][0x200];
+    {   NE_MODULE library, application;
+    NE_REGISTRY registry;
+    BYTE applicationSegments[2][0x200];
         WORD ordinal = 0, segmentNumber = 0, segmentOffset = 0;
         CHAR name[NE_MAX_NAME];
 
@@ -343,7 +400,8 @@ INT main(VOID)
            "an ABSOLUTE entry (indicator 0xFE) yields seg_no 0 and its constant");
 
         /* load the library's one segment and give it a selector */
-        library.Segments[0].Memory = g_LibrarySegmentMemory; library.Segments[0].Selector = 0x3000;
+        library.Segments[0].Memory = g_LibrarySegmentMemory;
+        library.Segments[0].Selector = 0x3000;
         memcpy(g_LibrarySegmentMemory, g_LibraryImage + library.Segments[0].FileOffset, library.Segments[0].Length);
 
         NeTestBuild(1);
@@ -357,8 +415,10 @@ INT main(VOID)
 
         memcpy(applicationSegments[0], g_Image + application.Segments[0].FileOffset, application.Segments[0].Length);
         memcpy(applicationSegments[1], g_Image + application.Segments[1].FileOffset, application.Segments[1].Length);
-        application.Segments[0].Memory = applicationSegments[0]; application.Segments[0].Selector = 0x1000;
-        application.Segments[1].Memory = applicationSegments[1]; application.Segments[1].Selector = 0x2000;
+        application.Segments[0].Memory = applicationSegments[0];
+        application.Segments[0].Selector = 0x1000;
+        application.Segments[1].Memory = applicationSegments[1];
+        application.Segments[1].Selector = 0x2000;
 
         memset(&registry, 0, sizeof registry);
         NeTestCheck(NeRegistryAdd(&registry, &library) == 0, "library registers");
@@ -373,13 +433,18 @@ INT main(VOID)
            "IMPORTNAME resolved via the non-resident table and patched");
 
         /* the ordering rule, enforced rather than merely documented */
-        {   NE_MODULE unassignedLibrary = library; NE_MODULE application2; BYTE segmentCopy[2][0x200]; NE_REGISTRY registry2;
+        {   NE_MODULE unassignedLibrary = library;
+        NE_MODULE application2;
+        BYTE segmentCopy[2][0x200];
+        NE_REGISTRY registry2;
             unassignedLibrary.Segments[0].Selector = 0;                       /* selectors not assigned yet */
             NeParse(&application2, g_Image, sizeof g_Image);
             memcpy(segmentCopy[0], g_Image + application2.Segments[0].FileOffset, application2.Segments[0].Length);
             memcpy(segmentCopy[1], g_Image + application2.Segments[1].FileOffset, application2.Segments[1].Length);
-            application2.Segments[0].Memory = segmentCopy[0]; application2.Segments[0].Selector = 0x1000;
-            application2.Segments[1].Memory = segmentCopy[1]; application2.Segments[1].Selector = 0x2000;
+            application2.Segments[0].Memory = segmentCopy[0];
+            application2.Segments[0].Selector = 0x1000;
+            application2.Segments[1].Memory = segmentCopy[1];
+            application2.Segments[1].Selector = 0x2000;
             memset(&registry2, 0, sizeof registry2);
             NeRegistryAdd(&registry2, &unassignedLibrary);
             NeTestCheck(NeApplyRelocations(&application2, 0, NeRegistryResolve, &registry2) != 0,
@@ -389,12 +454,16 @@ INT main(VOID)
         /* a missing module must name itself -- "KEYBOARD" is exactly what wowexec
          * will hit, and a failure that does not say which module is a dead end
          */
-        {   NE_MODULE application3; BYTE segmentCopy[2][0x200]; NE_REGISTRY registry3;
+        {   NE_MODULE application3;
+        BYTE segmentCopy[2][0x200];
+        NE_REGISTRY registry3;
             NeParse(&application3, g_Image, sizeof g_Image);
             memcpy(segmentCopy[0], g_Image + application3.Segments[0].FileOffset, application3.Segments[0].Length);
             memcpy(segmentCopy[1], g_Image + application3.Segments[1].FileOffset, application3.Segments[1].Length);
-            application3.Segments[0].Memory = segmentCopy[0]; application3.Segments[0].Selector = 0x1000;
-            application3.Segments[1].Memory = segmentCopy[1]; application3.Segments[1].Selector = 0x2000;
+            application3.Segments[0].Memory = segmentCopy[0];
+            application3.Segments[0].Selector = 0x1000;
+            application3.Segments[1].Memory = segmentCopy[1];
+            application3.Segments[1].Selector = 0x2000;
             memset(&registry3, 0, sizeof registry3);
             NeTestCheck(NeApplyRelocations(&application3, 0, NeRegistryResolve, &registry3) != 0,
                "an import from an unloaded module fails");
@@ -403,10 +472,12 @@ INT main(VOID)
     }
 
     /* malformed input */
-    {   NE_MODULE bad; BYTE junk[64];
+    {   NE_MODULE bad;
+    BYTE junk[64];
         memset(junk, 0, sizeof junk);
         NeTestCheck(NeParse(&bad, junk, sizeof junk) != 0, "no MZ -> rejected");
-        junk[0] = 'M'; junk[1] = 'Z';
+        junk[0] = 'M';
+        junk[1] = 'Z';
         NeTestCheck(NeParse(&bad, junk, sizeof junk) != 0, "MZ but no NE -> rejected");
     }
 
@@ -429,7 +500,9 @@ INT main(VOID)
     {
         static const struct
         {
-            PCSTR Path, OwnName; INT SegmentCount, MovableCount, ModuleCount; PCSTR MissingModule;
+            PCSTR Path, OwnName;
+            INT SegmentCount, MovableCount, ModuleCount;
+            PCSTR MissingModule;
         } realModules[] = {
             { "guest/ne/krnl386.exe",   "KERNEL",    4, 164, 0, NULL },
             { "guest/ne/system.drv",    "SYSTEM",    2,   0, 1, NULL },
@@ -467,7 +540,9 @@ INT main(VOID)
              * try both rather than silently SKIPping the most valuable cases.
              */
             FILE *file = fopen(realModules[moduleIndex].Path, "rb");
-            PBYTE buffer; long size; CHAR name[NE_MAX_NAME];
+            PBYTE buffer;
+            long size;
+            CHAR name[NE_MAX_NAME];
             if (!file)
             {
                 CHAR alternatePath[256];
@@ -479,11 +554,16 @@ INT main(VOID)
                 NeTestSkip(realModules[moduleIndex].OwnName);
                 continue;
             }
-            fseek(file, 0, SEEK_END); size = ftell(file); fseek(file, 0, SEEK_SET);
+            fseek(file, 0, SEEK_END);
+            size = ftell(file);
+            fseek(file, 0, SEEK_SET);
             buffer = malloc((size_t)size);
             if (!buffer || fread(buffer, 1, (size_t)size, file) != (size_t)size)
             {
-                fclose(file); free(buffer); NeTestSkip(realModules[moduleIndex].OwnName); continue;
+                fclose(file);
+                free(buffer);
+                NeTestSkip(realModules[moduleIndex].OwnName);
+                continue;
             }
             fclose(file);
             printf("  -- %s\n", realModules[moduleIndex].Path);
@@ -508,7 +588,8 @@ INT main(VOID)
                 PNE_SEGMENT segment = &modules[moduleIndex].Segments[index];
                 UINT32 needed = NeSegmentAllocSize(segment);
                 segment->Memory = (PBYTE)calloc(1, needed);
-                if (segment->Sector) memcpy(segment->Memory, buffer + segment->FileOffset, segment->Length);
+                if (segment->Sector)
+                    memcpy(segment->Memory, buffer + segment->FileOffset, segment->Length);
                 /* step 2: a selector, distinct per module and segment. Real values
                  * come from the LDT on the host; only their distinctness matters.
                  */
@@ -552,7 +633,8 @@ INT main(VOID)
         {
             CHAR description[128];
             INT status = 0;
-            if (!present[moduleIndex]) continue;
+            if (!present[moduleIndex])
+                continue;
             modules[moduleIndex].Sites = 0;
             for (index = 0; index < (INT)modules[moduleIndex].SegmentCount && status == 0; ++index)
                 status = NeApplyRelocations(&modules[moduleIndex], index, NeRegistryResolve, &registry);

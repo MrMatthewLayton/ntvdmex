@@ -41,6 +41,7 @@ static VOID AudioTestIrqSink(PVOID context, BYTE irq)
 static VOID AudioTestWrite(WORD port, BYTE byteValue)
 {
     UINT32 value=byteValue;
+
     VddBusIo(&g_Bus,port,1,0,&value);
 }
 
@@ -50,10 +51,12 @@ static INT16 g_Samples[44100];
 static double AudioTestMeasureHz(const INT16 *samples, INT count, INT rate)
 {
     INT index, crossings = 0, wasPositive = 0;
+
     for (index = 0; index < count; ++index)
     {
         INT isPositive = samples[index] > 0;
-        if (isPositive && !wasPositive) crossings++;
+        if (isPositive && !wasPositive)
+            crossings++;
         wasPositive = isPositive;
     }
     return (double)crossings * rate / (double)count;
@@ -63,7 +66,9 @@ static long AudioTestRms(const INT16 *samples, INT count)
 {
     long long sumOfSquares = 0;
     INT index;
-    for (index = 0; index < count; ++index) sumOfSquares += (long long)samples[index]*samples[index];
+
+    for (index = 0; index < count; ++index)
+        sumOfSquares += (long long)samples[index]*samples[index];
     return (long)(sumOfSquares/(count?count:1));
 }
 
@@ -71,14 +76,23 @@ static long AudioTestRms(const INT16 *samples, INT count)
 static VOID AudioTestDmaProgram(UINT32 physical, WORD length, INT isAutoInit)
 {
     UINT32 value;
-    value = 0;                       VddBusIo(&g_Bus, 0x0C, 1, 0, &value);
-    value = physical & 0xFF;             VddBusIo(&g_Bus, 0x02, 1, 0, &value);
-    value = (physical >> 8) & 0xFF;      VddBusIo(&g_Bus, 0x02, 1, 0, &value);
-    value = (length - 1) & 0xFF;        VddBusIo(&g_Bus, 0x03, 1, 0, &value);
-    value = ((length - 1) >> 8) & 0xFF; VddBusIo(&g_Bus, 0x03, 1, 0, &value);
-    value = (physical >> 16) & 0xFF;     VddBusIo(&g_Bus, 0x83, 1, 0, &value);
-    value = 0x48 | 0x01 | (isAutoInit ? 0x10u : 0u); VddBusIo(&g_Bus, 0x0B, 1, 0, &value);
-    value = 0x01;                    VddBusIo(&g_Bus, 0x0A, 1, 0, &value);
+
+    value = 0;
+    VddBusIo(&g_Bus, 0x0C, 1, 0, &value);
+    value = physical & 0xFF;
+    VddBusIo(&g_Bus, 0x02, 1, 0, &value);
+    value = (physical >> 8) & 0xFF;
+    VddBusIo(&g_Bus, 0x02, 1, 0, &value);
+    value = (length - 1) & 0xFF;
+    VddBusIo(&g_Bus, 0x03, 1, 0, &value);
+    value = ((length - 1) >> 8) & 0xFF;
+    VddBusIo(&g_Bus, 0x03, 1, 0, &value);
+    value = (physical >> 16) & 0xFF;
+    VddBusIo(&g_Bus, 0x83, 1, 0, &value);
+    value = 0x48 | 0x01 | (isAutoInit ? 0x10u : 0u);
+    VddBusIo(&g_Bus, 0x0B, 1, 0, &value);
+    value = 0x01;
+    VddBusIo(&g_Bus, 0x0A, 1, 0, &value);
 }
 
 INT main(VOID)
@@ -87,7 +101,9 @@ INT main(VOID)
 
     printf("== sound epic: audio mixer battery ==\n");
 
-    memset(&g_Dma,0,sizeof g_Dma); memset(&g_Opl,0,sizeof g_Opl); memset(&g_Sb,0,sizeof g_Sb);
+    memset(&g_Dma,0,sizeof g_Dma);
+    memset(&g_Opl,0,sizeof g_Opl);
+    memset(&g_Sb,0,sizeof g_Sb);
     memset(g_GuestMemory,0,sizeof g_GuestMemory);
     VddBusInitialize(&g_Bus, g_GuestMemory);
     VddBusSetSinks(&g_Bus, AudioTestIrqSink, 0, 0, 0);
@@ -99,7 +115,9 @@ INT main(VOID)
         NTVDD_DEVICE device = VddOplDevice(&g_Opl);
         VddBusAdd(&g_Bus, &device);
     }
-    g_Sb.Dma = &g_Dma; g_Sb.Opl = &g_Opl; g_Sb.BasePort = BASE;
+    g_Sb.Dma = &g_Dma;
+    g_Sb.Opl = &g_Opl;
+    g_Sb.BasePort = BASE;
     {
         NTVDD_DEVICE device = VddSbDevice(&g_Sb);
         CHECK(VddBusAdd(&g_Bus, &device) == 0, "add: devices on the bus");
@@ -137,11 +155,15 @@ INT main(VOID)
 
     /* T3: mixing DRIVES an SB transfer to its IRQ ---------------------------- */
     /* This is the bit that unblocks a game: nothing else pulls DMA data. */
-    for (index = 0; index < 512; ++index) g_GuestMemory[0x40000 + index] = 0x80;    /* silence, 8-bit */
+    for (index = 0; index < 512; ++index)
+        g_GuestMemory[0x40000 + index] = 0x80;                                      /* silence, 8-bit */
     AudioTestDmaProgram(0x40000, 512, 0);
-    AudioTestWrite(BASE + 0xC, 0x40); AudioTestWrite(BASE + 0xC, 165);               /* ~11 kHz */
+    AudioTestWrite(BASE + 0xC, 0x40);
+    AudioTestWrite(BASE + 0xC, 165);               /* ~11 kHz */
     g_IrqCount = 0;
-    AudioTestWrite(BASE + 0xC, 0x14); AudioTestWrite(BASE + 0xC, 0xFF); AudioTestWrite(BASE + 0xC, 0x01);  /* 512 B */
+    AudioTestWrite(BASE + 0xC, 0x14);
+    AudioTestWrite(BASE + 0xC, 0xFF);
+    AudioTestWrite(BASE + 0xC, 0x01);  /* 512 B */
     CHECK(VddSbIsActive(&g_Sb), "SB: transfer armed");
     CHECK(g_IrqCount == 0, "SB: no IRQ before the mixer runs");
     /* 512 source samples at ~11 kHz is ~46ms; mix a comfortable margin of it. */
@@ -152,9 +174,12 @@ INT main(VOID)
     /* T4: SB audio actually reaches the output ------------------------------ */
     {
         long level;
-        for (index = 0; index < 512; ++index) g_GuestMemory[0x41000 + index] = (BYTE)((index & 32) ? 0xE0 : 0x20);
+        for (index = 0; index < 512; ++index)
+            g_GuestMemory[0x41000 + index] = (BYTE)((index & 32) ? 0xE0 : 0x20);
         AudioTestDmaProgram(0x41000, 512, 1);
-        AudioTestWrite(BASE + 0xC, 0x48); AudioTestWrite(BASE + 0xC, 0xFF); AudioTestWrite(BASE + 0xC, 0x01);
+        AudioTestWrite(BASE + 0xC, 0x48);
+        AudioTestWrite(BASE + 0xC, 0xFF);
+        AudioTestWrite(BASE + 0xC, 0x01);
         AudioTestWrite(BASE + 0xC, 0x1C);                                /* auto-init */
         VddOplWriteRegister(&g_Opl, 0xB0, 0x00);                 /* silence the FM */
         VddAudioMix(&g_Mixer, g_Samples, 8192);
@@ -170,7 +195,9 @@ INT main(VOID)
     CHECK(VddSbIsActive(&g_Sb), "SB: auto-init still streaming");
 
     /* T6: rate changes are picked up mid-stream ----------------------------- */
-    AudioTestWrite(BASE + 0xC, 0x41); AudioTestWrite(BASE + 0xC, 0x56); AudioTestWrite(BASE + 0xC, 0x22);   /* 22050 */
+    AudioTestWrite(BASE + 0xC, 0x41);
+    AudioTestWrite(BASE + 0xC, 0x56);
+    AudioTestWrite(BASE + 0xC, 0x22);   /* 22050 */
     VddAudioMix(&g_Mixer, g_Samples, 2048);
     CHECK(g_Mixer.SbResampler.SourceHz == 22050, "resampler: follows a mid-stream rate change");
 
@@ -183,11 +210,14 @@ INT main(VOID)
     {
         INT clipped = 0, voice;
         VddOplWriteRegister(&g_Opl, 0xB0, 0x00);                 /* all notes off */
-        for (voice = 0; voice < 9; ++voice) VddOplWriteRegister(&g_Opl, (BYTE)(0xB0+voice), 0x00);
+        for (voice = 0; voice < 9; ++voice)
+            VddOplWriteRegister(&g_Opl, (BYTE)(0xB0+voice), 0x00);
         for (voice = 0; voice < 3; ++voice)                              /* three voices, */
         {
-            INT voiceCarrier = VddOplOperatorIndex(voice,1); BYTE voiceCarrierRegister = (BYTE)(voiceCarrier + 2*(voiceCarrier/6));
-            INT voiceModulator = VddOplOperatorIndex(voice,0); BYTE voiceModulatorRegister = (BYTE)(voiceModulator + 2*(voiceModulator/6));
+            INT voiceCarrier = VddOplOperatorIndex(voice,1);
+            BYTE voiceCarrierRegister = (BYTE)(voiceCarrier + 2*(voiceCarrier/6));
+            INT voiceModulator = VddOplOperatorIndex(voice,0);
+            BYTE voiceModulatorRegister = (BYTE)(voiceModulator + 2*(voiceModulator/6));
             VddOplWriteRegister(&g_Opl, (BYTE)(0x40+voiceModulatorRegister), 0x3F);
             VddOplWriteRegister(&g_Opl, (BYTE)(0x20+voiceCarrierRegister), 0x21);
             VddOplWriteRegister(&g_Opl, (BYTE)(0x40+voiceCarrierRegister), 0x10);   /* moderate TL */
@@ -197,7 +227,9 @@ INT main(VOID)
             VddOplWriteRegister(&g_Opl, (BYTE)(0xB0+voice), (BYTE)(0x20 | (4 << 2) | 1));
         }
         VddAudioMix(&g_Mixer, g_Samples, 8192);
-        for (index = 0; index < 8192; ++index) if (g_Samples[index] == 32767 || g_Samples[index] == -32768) clipped++;
+        for (index = 0; index < 8192; ++index)
+            if (g_Samples[index] == 32767 || g_Samples[index] == -32768)
+                clipped++;
         printf("        realistic mix: %d of 8192 at the rail\n", clipped);
         CHECK(clipped == 0, "mix: a realistic score plus sampled audio has headroom");
         CHECK(AudioTestRms(g_Samples, 8192) > 1000, "mix: ...and is still clearly audible");
@@ -205,7 +237,8 @@ INT main(VOID)
         /* now overload it deliberately and check it clamps, never wraps */
         for (voice = 0; voice < 9; ++voice)
         {
-            INT voiceCarrier = VddOplOperatorIndex(voice,1); BYTE voiceCarrierRegister = (BYTE)(voiceCarrier + 2*(voiceCarrier/6));
+            INT voiceCarrier = VddOplOperatorIndex(voice,1);
+            BYTE voiceCarrierRegister = (BYTE)(voiceCarrier + 2*(voiceCarrier/6));
             VddOplWriteRegister(&g_Opl, (BYTE)(0x20+voiceCarrierRegister), 0x21);
             VddOplWriteRegister(&g_Opl, (BYTE)(0x40+voiceCarrierRegister), 0x00);   /* full volume */
             VddOplWriteRegister(&g_Opl, (BYTE)(0x60+voiceCarrierRegister), 0xF0);
@@ -234,14 +267,20 @@ INT main(VOID)
      */
     {
         UINT32 before, after, expected, chunks = 8;
-        for (index = 0; index < 4096; ++index) g_GuestMemory[0x50000 + index] = 0x80;
+        for (index = 0; index < 4096; ++index)
+            g_GuestMemory[0x50000 + index] = 0x80;
         AudioTestDmaProgram(0x50000, 4096, 1);                       /* auto-init ring */
-        AudioTestWrite(BASE + 0xC, 0x41); AudioTestWrite(BASE + 0xC, 0x2B); AudioTestWrite(BASE + 0xC, 0x11);  /* 11025 Hz */
-        AudioTestWrite(BASE + 0xC, 0xC6); AudioTestWrite(BASE + 0xC, 0x00);          /* 8-bit auto, mono */
-        AudioTestWrite(BASE + 0xC, 0xFF); AudioTestWrite(BASE + 0xC, 0x0F);          /* 4096-byte block */
+        AudioTestWrite(BASE + 0xC, 0x41);
+        AudioTestWrite(BASE + 0xC, 0x2B);
+        AudioTestWrite(BASE + 0xC, 0x11);  /* 11025 Hz */
+        AudioTestWrite(BASE + 0xC, 0xC6);
+        AudioTestWrite(BASE + 0xC, 0x00);          /* 8-bit auto, mono */
+        AudioTestWrite(BASE + 0xC, 0xFF);
+        AudioTestWrite(BASE + 0xC, 0x0F);          /* 4096-byte block */
         VddAudioMix(&g_Mixer, g_Samples, 512);                       /* prime the pair */
         before = g_Sb.BlockRemaining;
-        for (index = 0; index < chunks; ++index) VddAudioMix(&g_Mixer, g_Samples, 512);
+        for (index = 0; index < chunks; ++index)
+            VddAudioMix(&g_Mixer, g_Samples, 512);
         after = g_Sb.BlockRemaining;
         expected = chunks * 512u * 11025u / AUDIO_OUTPUT_HZ;        /* exactly 1:4 */
         printf("        ring consumed %u over %u chunks, arithmetic says %u\n",
@@ -259,31 +298,40 @@ INT main(VOID)
      * rather than assumed.
      */
     {
-        PIT_STATE pit;      NTVDD_DEVICE pitDevice;
-        SPEAKER_STATE speaker;  NTVDD_DEVICE speakerDevice;
+        PIT_STATE pit;
+        NTVDD_DEVICE pitDevice;
+        SPEAKER_STATE speaker;
+        NTVDD_DEVICE speakerDevice;
         INT16 speakerSamples[4410];
         double frequency;
         long full, half;
         UINT32 value;
 
-        memset(&pit, 0, sizeof pit); memset(&speaker, 0, sizeof speaker);
+        memset(&pit, 0, sizeof pit);
+        memset(&speaker, 0, sizeof speaker);
         speaker.Pit = &pit;
-        pitDevice = VddPitDevice(&pit);  speakerDevice = VddSpeakerDevice(&speaker);
+        pitDevice = VddPitDevice(&pit);
+        speakerDevice = VddSpeakerDevice(&speaker);
         CHECK(VddBusAdd(&g_Bus, &pitDevice) == 0, "speaker: PIT joined the mixer's bus");
         CHECK(VddBusAdd(&g_Bus, &speakerDevice) == 0, "speaker: and the speaker VDD did too");
 
         /* Programmed THROUGH the chip, not by poking the struct, so what this
          * measures is what a guest that writes 0x43/0x42 actually hears.
          */
-        value = 0xB6;         VddBusIo(&g_Bus, 0x43, 1, 0, &value);
-        value = 1193 & 0xFF;  VddBusIo(&g_Bus, 0x42, 1, 0, &value);
-        value = 1193 >> 8;    VddBusIo(&g_Bus, 0x42, 1, 0, &value);
+        value = 0xB6;
+        VddBusIo(&g_Bus, 0x43, 1, 0, &value);
+        value = 1193 & 0xFF;
+        VddBusIo(&g_Bus, 0x42, 1, 0, &value);
+        value = 1193 >> 8;
+        VddBusIo(&g_Bus, 0x42, 1, 0, &value);
         CHECK(VddPitCounter2Hz(&pit) == PIT_INPUT_HZ / 1193,
               "speaker: PIT channel 2 divisor 1193 gives ~1000 Hz");
 
-        g_Mixer.Opl = NULL; g_Mixer.Sb = NULL;              /* the speaker alone in the mix */
+        g_Mixer.Opl = NULL;
+        g_Mixer.Sb = NULL;              /* the speaker alone in the mix */
         VddAudioSetSpeaker(&g_Mixer, &speaker, 1);
-        value = 0x03; VddBusIo(&g_Bus, 0x61, 1, 0, &value); /* gate + data = sounding */
+        value = 0x03;
+        VddBusIo(&g_Bus, 0x61, 1, 0, &value); /* gate + data = sounding */
         memset(speakerSamples, 0, sizeof speakerSamples);
         VddAudioMix(&g_Mixer, speakerSamples, 4410);
         frequency = AudioTestMeasureHz(speakerSamples, 4410, AUDIO_OUTPUT_HZ);
@@ -292,12 +340,14 @@ INT main(VOID)
         CHECK(frequency > 960 && frequency < 1040, "speaker: an active gate produces the PIT's tone");
         CHECK(AudioTestRms(speakerSamples, 4410) > 1000, "speaker: and it is actually audible");
 
-        value = 0x01; VddBusIo(&g_Bus, 0x61, 1, 0, &value); /* gate only, no data enable */
+        value = 0x01;
+        VddBusIo(&g_Bus, 0x61, 1, 0, &value); /* gate only, no data enable */
         memset(speakerSamples, 0, sizeof speakerSamples);
         VddAudioMix(&g_Mixer, speakerSamples, 512);
         CHECK(AudioTestRms(speakerSamples, 512) == 0, "speaker: the gate bit ALONE is silent (both bits gate)");
 
-        value = 0x03; VddBusIo(&g_Bus, 0x61, 1, 0, &value);
+        value = 0x03;
+        VddBusIo(&g_Bus, 0x61, 1, 0, &value);
         VddAudioSetSpeaker(&g_Mixer, &speaker, 0);       /* fitted, switched off */
         memset(speakerSamples, 0, sizeof speakerSamples);
         VddAudioMix(&g_Mixer, speakerSamples, 512);
@@ -307,9 +357,12 @@ INT main(VOID)
          * alias noise, so it is refused rather than synthesised.
          */
         VddAudioSetSpeaker(&g_Mixer, &speaker, 1);
-        value = 0xB6; VddBusIo(&g_Bus, 0x43, 1, 0, &value);
-        value = 0x01; VddBusIo(&g_Bus, 0x42, 1, 0, &value);
-        value = 0x00; VddBusIo(&g_Bus, 0x42, 1, 0, &value); /* divisor 1 -> 1.19 MHz */
+        value = 0xB6;
+        VddBusIo(&g_Bus, 0x43, 1, 0, &value);
+        value = 0x01;
+        VddBusIo(&g_Bus, 0x42, 1, 0, &value);
+        value = 0x00;
+        VddBusIo(&g_Bus, 0x42, 1, 0, &value); /* divisor 1 -> 1.19 MHz */
         memset(speakerSamples, 0, sizeof speakerSamples);
         VddAudioMix(&g_Mixer, speakerSamples, 512);
         CHECK(AudioTestRms(speakerSamples, 512) == 0, "speaker: a tone past 20 kHz is refused, not aliased");
@@ -320,15 +373,20 @@ INT main(VOID)
          * SPEAKER because its level is exactly known -- a square wave at a fixed
          * amplitude -- so "half" is arithmetic, not a judgement about loudness.
          */
-        value = 0xB6;         VddBusIo(&g_Bus, 0x43, 1, 0, &value);
-        value = 1193 & 0xFF;  VddBusIo(&g_Bus, 0x42, 1, 0, &value);
-        value = 1193 >> 8;    VddBusIo(&g_Bus, 0x42, 1, 0, &value);
+        value = 0xB6;
+        VddBusIo(&g_Bus, 0x43, 1, 0, &value);
+        value = 1193 & 0xFF;
+        VddBusIo(&g_Bus, 0x42, 1, 0, &value);
+        value = 1193 >> 8;
+        VddBusIo(&g_Bus, 0x42, 1, 0, &value);
 
         VddAudioSetMaster(&g_Mixer, 100, 0);
-        memset(speakerSamples, 0, sizeof speakerSamples); VddAudioMix(&g_Mixer, speakerSamples, 512);
+        memset(speakerSamples, 0, sizeof speakerSamples);
+        VddAudioMix(&g_Mixer, speakerSamples, 512);
         full = AudioTestRms(speakerSamples, 512);
         VddAudioSetMaster(&g_Mixer, 50, 0);
-        memset(speakerSamples, 0, sizeof speakerSamples); VddAudioMix(&g_Mixer, speakerSamples, 512);
+        memset(speakerSamples, 0, sizeof speakerSamples);
+        VddAudioMix(&g_Mixer, speakerSamples, 512);
         half = AudioTestRms(speakerSamples, 512);
         printf("        mean square at 100%% = %ld, at 50%% = %ld (power, so ~4x)\n",
                full, half);
@@ -336,10 +394,12 @@ INT main(VOID)
               "master volume 50 halves the amplitude (a quarter of the power)");
 
         VddAudioSetMaster(&g_Mixer, 100, 1);
-        memset(speakerSamples, 0, sizeof speakerSamples); VddAudioMix(&g_Mixer, speakerSamples, 512);
+        memset(speakerSamples, 0, sizeof speakerSamples);
+        VddAudioMix(&g_Mixer, speakerSamples, 512);
         CHECK(AudioTestRms(speakerSamples, 512) == 0, "mute outputs silence");
         VddAudioSetMaster(&g_Mixer, 100, 0);
-        memset(speakerSamples, 0, sizeof speakerSamples); VddAudioMix(&g_Mixer, speakerSamples, 512);
+        memset(speakerSamples, 0, sizeof speakerSamples);
+        VddAudioMix(&g_Mixer, speakerSamples, 512);
         CHECK(AudioTestRms(speakerSamples, 512) > 0, "...and unmuting restores the volume it kept");
 
         VddAudioSetMaster(&g_Mixer, 4000, 0);
@@ -368,7 +428,9 @@ INT main(VOID)
      * right, and the mono mix -- which always averaged them -- must still average.
      */
     {   static INT16 stereo[2 * 1024], mono[1024];
-        g_Mixer.Opl = NULL; g_Mixer.Sb = &g_Sb; VddAudioSetSpeaker(&g_Mixer, NULL, 0);
+        g_Mixer.Opl = NULL;
+        g_Mixer.Sb = &g_Sb;
+        VddAudioSetSpeaker(&g_Mixer, NULL, 0);
         VddAudioSetMaster(&g_Mixer, 100, 0);
         for (index = 0; index < 4096; index += 2)
         {
@@ -376,9 +438,13 @@ INT main(VOID)
             g_GuestMemory[0x60000 + index + 1] = 0x00;
         }
         AudioTestDmaProgram(0x60000, 4096, 1);
-        AudioTestWrite(BASE + 0xC, 0x41); AudioTestWrite(BASE + 0xC, 22050 >> 8); AudioTestWrite(BASE + 0xC, 22050 & 0xFF);
-        AudioTestWrite(BASE + 0xC, 0xC6); AudioTestWrite(BASE + 0xC, 0x20);           /* 8-bit auto, STEREO */
-        AudioTestWrite(BASE + 0xC, 0xFF); AudioTestWrite(BASE + 0xC, 0x07);           /* 2048 units */
+        AudioTestWrite(BASE + 0xC, 0x41);
+        AudioTestWrite(BASE + 0xC, 22050 >> 8);
+        AudioTestWrite(BASE + 0xC, 22050 & 0xFF);
+        AudioTestWrite(BASE + 0xC, 0xC6);
+        AudioTestWrite(BASE + 0xC, 0x20);           /* 8-bit auto, STEREO */
+        AudioTestWrite(BASE + 0xC, 0xFF);
+        AudioTestWrite(BASE + 0xC, 0x07);           /* 2048 units */
         VddAudioMixStereo(&g_Mixer, stereo, 1024);
         printf("        SB16 stereo frame 500: L=%d R=%d\n", stereo[1000], stereo[1001]);
         CHECK(stereo[1000] > 10000 && stereo[1001] < -10000,
@@ -397,29 +463,36 @@ INT main(VOID)
      */
     {   static INT16 stereo[2 * 1024];
         INT blocks;
-        g_Mixer.Opl = NULL; g_Mixer.Sb = &g_Sb;
+        g_Mixer.Opl = NULL;
+        g_Mixer.Sb = &g_Sb;
         for (index = 0; index < 8192; index += 2)
         {
             g_GuestMemory[0x70000 + index] = 0xFF;
             g_GuestMemory[0x70000 + index + 1] = 0x00;
         }
-        AudioTestWrite(BASE + 4, 0x0E); AudioTestWrite(BASE + 5, 0x02);              /* mixer: stereo on */
+        AudioTestWrite(BASE + 4, 0x0E);
+        AudioTestWrite(BASE + 5, 0x02);              /* mixer: stereo on */
         AudioTestDmaProgram(0x70000, 8192, 1);
-        AudioTestWrite(BASE + 0xC, 0x40); AudioTestWrite(BASE + 0xC, 233);           /* TC: 2 x 21.7 kHz */
-        AudioTestWrite(BASE + 0xC, 0x48); AudioTestWrite(BASE + 0xC, 0xFF); AudioTestWrite(BASE + 0xC, 0x0F);   /* 4096 B */
+        AudioTestWrite(BASE + 0xC, 0x40);
+        AudioTestWrite(BASE + 0xC, 233);           /* TC: 2 x 21.7 kHz */
+        AudioTestWrite(BASE + 0xC, 0x48);
+        AudioTestWrite(BASE + 0xC, 0xFF);
+        AudioTestWrite(BASE + 0xC, 0x0F);   /* 4096 B */
         g_IrqCount = 0;
         AudioTestWrite(BASE + 0xC, 0x90);                                /* high-speed auto-init */
         VddAudioMixStereo(&g_Mixer, stereo, 1024);
         printf("        SB Pro stereo frame 500: L=%d R=%d\n", stereo[1000], stereo[1001]);
         CHECK(stereo[1000] > 10000 && stereo[1001] < -10000,
               "SB Pro stereo (mixer 0Eh bit 1): left and right on their own channels");
-        for (index = 0; index < 43; ++index) VddAudioMixStereo(&g_Mixer, stereo, 1024);   /* ~1 s in all */
+        for (index = 0; index < 43; ++index)
+            VddAudioMixStereo(&g_Mixer, stereo, 1024);                                    /* ~1 s in all */
         blocks = g_IrqCount;
         printf("        SB Pro stereo: %d block IRQs in ~1 s (frame rate, ~10.6 expected)\n", blocks);
         CHECK(blocks >= 9 && blocks <= 12,
               "SB Pro stereo: the time constant counts both channels (frames at half the byte rate)");
         AudioTestWrite(BASE + 0xC, 0xDA);                                /* leave auto-init */
-        AudioTestWrite(BASE + 4, 0x0E); AudioTestWrite(BASE + 5, 0x00);              /* mixer: stereo off */
+        AudioTestWrite(BASE + 4, 0x0E);
+        AudioTestWrite(BASE + 5, 0x00);              /* mixer: stereo off */
         VddAudioMix(&g_Mixer, g_Samples, 8192);
     }
 
@@ -429,7 +502,8 @@ INT main(VOID)
      * build before the OPL3 -- the same register sequence as opl_synth_test's), and
      * an OPL3 voice routed left arrives on the left and nowhere else.
      */
-    {   static OPL_STATE opl3; static AUDIO_STATE opl3Mixer;
+    {   static OPL_STATE opl3;
+    static AUDIO_STATE opl3Mixer;
         static INT16 opl3Samples[2 * 8192];
         UINT32 hash = 2166136261u;
         INT channel, round;
@@ -439,9 +513,11 @@ INT main(VOID)
                 hash ^= (BYTE)opl3Samples[sampleIndex]; hash *= 16777619u;                                \
                 hash ^= (BYTE)((WORD)opl3Samples[sampleIndex] >> 8); hash *= 16777619u; } } while (0)
         #define M3_W(registerIndex, value) VddOplWriteRegister(&opl3, (BYTE)(registerIndex), (BYTE)(value))
-        memset(&opl3, 0, sizeof opl3); VddOplReset(&opl3);
+        memset(&opl3, 0, sizeof opl3);
+        VddOplReset(&opl3);
         VddAudioInitialize(&opl3Mixer, &opl3, NULL, 44100);
-        M3_W(0x01, 0x20); M3_W(0xBD, 0xC0);
+        M3_W(0x01, 0x20);
+        M3_W(0xBD, 0xC0);
         for (channel = 0; channel < 9; ++channel)
         {
             INT modulatorIndex = VddOplOperatorIndex(channel, 0), carrierIndex = VddOplOperatorIndex(channel, 1);
@@ -475,27 +551,36 @@ INT main(VOID)
             printf("        OPL2 through the mixer, before rhythm mode: fnv=0x%08X (golden 0x%08X)\n",
                    melodicHash, 0x44CCD995u);
             CHECK(melodicHash == 0x44CCD995u, "mix: an OPL2 mixes bit-identically to the pre-OPL3 build up to rhythm mode"); }
-        M3_W(0xBD, 0xE0 | 0x10 | 0x04); M3_EAT(4000);
-        M3_W(0xBD, 0xE0 | 0x0B);        M3_EAT(3000);
+        M3_W(0xBD, 0xE0 | 0x10 | 0x04);
+        M3_EAT(4000);
+        M3_W(0xBD, 0xE0 | 0x0B);
+        M3_EAT(3000);
         M3_W(0xBD, 0x00);
-        for (round = 0; round < 8; ++round) M3_EAT(4000);
+        for (round = 0; round < 8; ++round)
+            M3_EAT(4000);
         printf("        OPL2 through the mixer: fnv=0x%08X (golden 0x%08X; 0x6CA12225 before #139)\n", hash, 0x3B2BE715u);
         CHECK(hash == 0x3B2BE715u, "mix: an OPL2 mixes bit-identically to the #139 build");
         #undef M3_EAT
         #undef M3_W
 
         /* OPL3, NEW set, one voice on channel 0 routed LEFT only (C0 = 0x11) */
-        memset(&opl3, 0, sizeof opl3); opl3.IsOpl3 = 1; VddOplReset(&opl3);
+        memset(&opl3, 0, sizeof opl3);
+        opl3.IsOpl3 = 1;
+        VddOplReset(&opl3);
         VddAudioInitialize(&opl3Mixer, &opl3, NULL, 44100);
         VddOplWriteRegister(&opl3, 0x105, 0x01);
-        VddOplWriteRegister(&opl3, 0x20, 0x21); VddOplWriteRegister(&opl3, 0x40, 0x3F);
-        VddOplWriteRegister(&opl3, 0x23, 0x21); VddOplWriteRegister(&opl3, 0x43, 0x00);
-        VddOplWriteRegister(&opl3, 0x63, 0xF0); VddOplWriteRegister(&opl3, 0x83, 0x0F);
+        VddOplWriteRegister(&opl3, 0x20, 0x21);
+        VddOplWriteRegister(&opl3, 0x40, 0x3F);
+        VddOplWriteRegister(&opl3, 0x23, 0x21);
+        VddOplWriteRegister(&opl3, 0x43, 0x00);
+        VddOplWriteRegister(&opl3, 0x63, 0xF0);
+        VddOplWriteRegister(&opl3, 0x83, 0x0F);
         VddOplWriteRegister(&opl3, 0xC0, 0x11);
         VddOplWriteRegister(&opl3, 0xA0, 0x00);
         VddOplWriteRegister(&opl3, 0xB0, (BYTE)(0x20 | (4 << 2) | 0x02));
         VddAudioMixStereo(&opl3Mixer, opl3Samples, 4096);
-        { long long leftEnergy = 0, rightEnergy = 0; INT frame;
+        { long long leftEnergy = 0, rightEnergy = 0;
+        INT frame;
           for (frame = 0; frame < 4096; ++frame)
           {
               leftEnergy += (long long)opl3Samples[2*frame] * opl3Samples[2*frame];

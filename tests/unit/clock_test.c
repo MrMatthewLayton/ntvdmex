@@ -62,24 +62,43 @@ static INT g_Checks, g_Failures;
 static VOID ClockTestExpect(PCSTR description, INT64 actual, INT64 expected)
 {
     ++g_Checks;
-    if (actual == expected) return;
+    if (actual == expected)
+        return;
     ++g_Failures;
     printf("  FAIL %-58s got %lld, want %lld\n", description, actual, expected);
 }
 
-static DOS_CLOCK_TIME ClockTestMake(UINT year, UINT month, UINT day,
-                                    UINT hour, UINT minute, UINT second, UINT hundredths)
+static DOS_CLOCK_TIME ClockTestMake(
+    UINT year,
+    UINT month,
+    UINT day,
+    UINT hour,
+    UINT minute,
+    UINT second,
+    UINT hundredths)
 {
-    DOS_CLOCK_TIME time; time.Year = year; time.Month = month; time.Day = day;
-    time.Hour = hour; time.Minute = minute; time.Second = second; time.Hundredths = hundredths;
+    DOS_CLOCK_TIME time;
+
+    time.Year = year;
+    time.Month = month;
+    time.Day = day;
+    time.Hour = hour;
+    time.Minute = minute;
+    time.Second = second;
+    time.Hundredths = hundredths;
     time.DayOfWeek = CLOCK_TEST_SUNDAY;
     return time;
 }
 
-static VOID ClockTestDayOfWeek(PCSTR description, UINT year, UINT month, UINT day,
-                               UINT expectedDayOfWeek)
+static VOID ClockTestDayOfWeek(
+    PCSTR description,
+    UINT year,
+    UINT month,
+    UINT day,
+    UINT expectedDayOfWeek)
 {
     DOS_CLOCK_TIME time = ClockTestMake(year, month, day, 0, 0, 0, 0), unpacked;
+
     DosClockUnpack(DosClockPack(&time), &unpacked);
     ClockTestExpect(description, unpacked.DayOfWeek, expectedDayOfWeek);
 }
@@ -138,10 +157,12 @@ INT main(VOID)
                     DosClockUnpack(packed, &unpacked);
                     if (unpacked.Year != year || unpacked.Month != month || unpacked.Day != day
                         || unpacked.Hour != 13 || unpacked.Minute != 7 || unpacked.Second != 41
-                        || unpacked.Hundredths != 59) ++mismatches;
+                        || unpacked.Hundredths != 59)
+                        ++mismatches;
                     if (dayCount && packed - previous != DOS_CLOCK_HUNDREDTHS_PER_DAY)
                         ++mismatches;                                  /* contiguous days */
-                    previous = packed; ++dayCount;
+                    previous = packed;
+                    ++dayCount;
                 }
         ClockTestExpect("round trip, every day 1980..2099", mismatches, 0);
         ClockTestExpect("days in 1980..2099", dayCount, CLOCK_TEST_DAYS_1980_TO_2099);
@@ -171,7 +192,8 @@ INT main(VOID)
         ClockTestExpect("set time: cs", guestNow.Hundredths, 50);
 
         /* the host advances 60 cs: the guest crosses midnight into 2000 */
-        hostNow.Hundredths = 85; hostNow.Second = 30;   /* +60 cs */
+        hostNow.Hundredths = 85;
+        hostNow.Second = 30;   /* +60 cs */
         DosClockApplyOffset(&hostNow, offset, &guestNow);
         ClockTestExpect("midnight: year rolls to 2000", guestNow.Year, 2000);
         ClockTestExpect("midnight: 01-01", guestNow.Month * CLOCK_TEST_MONTH_SCALE + guestNow.Day,
@@ -243,7 +265,8 @@ INT main(VOID)
          * 5 s of ticks after the store: 2000-01-01 00:00:04 -- and the date is the
          * STORE's day + 1, though host-now + offset had not crossed midnight.
          */
-        hostNow = ClockTestMake(2026, 10, 2, 9, 0, 0, 0); offset = 0;
+        hostNow = ClockTestMake(2026, 10, 2, 9, 0, 0, 0);
+        offset = 0;
         DosClockSetDate(&hostNow, &offset, 1999, 12, 31);
         DosClockSetTime(&hostNow, &offset, 12, 0, 0, 0);
         hostNow.Second = 5;                                     /* +5 s of host time */
@@ -264,7 +287,8 @@ INT main(VOID)
          * wrap to a day that already contains it -- 2000-01-02. DOS's day number is the
          * store's day plus the wraps: 2000-01-01.
          */
-        hostNow = ClockTestMake(2026, 10, 2, 9, 0, 0, 0); offset = 0;
+        hostNow = ClockTestMake(2026, 10, 2, 9, 0, 0, 0);
+        offset = 0;
         DosClockSetDate(&hostNow, &offset, 1999, 12, 31);
         DosClockSetTime(&hostNow, &offset, 23, 59, 58, 0);
         hostNow.Second = 10;                                    /* guest now 2000-01-01 00:00:08 */
@@ -278,7 +302,8 @@ INT main(VOID)
                         0);
 
         /* no wrap, a store read the same instant: only the time of day moves */
-        hostNow = ClockTestMake(2026, 10, 2, 23, 59, 59, 0); offset = 0;
+        hostNow = ClockTestMake(2026, 10, 2, 23, 59, 59, 0);
+        offset = 0;
         DosClockFollowTicks(&hostNow, &offset, DosClockTicksFromTime(1, 2, 3, 0), 0, 0);
         DosClockApplyOffset(&hostNow, offset, &guestNow);
         ClockTestExpect("store 01:02:03 at the host's 23:59:59 keeps the host's day",
@@ -290,7 +315,8 @@ INT main(VOID)
         /* the day's length itself (a count the BIOS never holds) reads 23:59:59.85;
          * a nonsense count past it is clamped to the last hundredth, never a next day
          */
-        hostNow = ClockTestMake(2026, 10, 2, 9, 0, 0, 0); offset = 0;
+        hostNow = ClockTestMake(2026, 10, 2, 9, 0, 0, 0);
+        offset = 0;
         DosClockFollowTicks(&hostNow, &offset, CLOCK_TEST_TICKS_PER_DAY, 0, 0);
         DosClockApplyOffset(&hostNow, offset, &guestNow);
         ClockTestExpect("count 0x1800B0 -> 23:59:59.85",

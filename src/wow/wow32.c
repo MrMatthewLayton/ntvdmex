@@ -38,7 +38,8 @@ VOID Wow32CurrentDirectorySet(PCSTR dir);  /* #164: main.c's per-task directory 
  */
 VOID WowNotePut(PSTR buffer, INT capacity, PINT length, PCSTR text)
 {
-    while (*text && *length < capacity - 1) buffer[(*length)++] = *text++;
+    while (*text && *length < capacity - 1)
+        buffer[(*length)++] = *text++;
     buffer[*length] = 0;
 }
 
@@ -46,9 +47,11 @@ VOID WowNoteHex(PSTR buffer, INT capacity, PINT length, DWORD value, INT digits)
 {
     static const CHAR hexDigits[] = HEX_DIGITS_LOWER;
     INT index;
+
     for (index = digits - 1; index >= 0; --index)
     {
-        if (*length >= capacity - 1) break;
+        if (*length >= capacity - 1)
+            break;
         buffer[(*length)++] = hexDigits[(value >> (index * NIBBLE_SHIFT)) & NIBBLE_MASK];
     }
     buffer[*length] = 0;
@@ -76,7 +79,8 @@ VOID Wow32PokeWord(volatile BYTE *bytes, WORD value)
 /* Argument WORD at byte offset `off` into the argument block. */
 WORD Wow32ArgWord(PCWOW32_FRAME frame, INT offset)
 {
-    if (offset < 0 || offset + WOW_WORD_BYTES > (INT)frame->ArgumentBytes) return 0;
+    if (offset < 0 || offset + WOW_WORD_BYTES > (INT)frame->ArgumentBytes)
+        return 0;
     return Wow32PeekWord(frame->FrameBase + WOW32_OFF_ARGS + offset);
 }
 
@@ -96,9 +100,12 @@ volatile BYTE *Wow32ArgPointer(PCWOW32_FRAME frame, INT offset)
     DWORD farPointer = Wow32ArgDword(frame, offset);
     WORD  selector = (WORD)(farPointer >> WORD_SHIFT);
     DWORD base;
-    if (!selector || !frame->SelectorToLinear) return NULL;
+
+    if (!selector || !frame->SelectorToLinear)
+        return NULL;
     base = frame->SelectorToLinear(selector, frame->Context);
-    if (!base) return NULL;
+    if (!base)
+        return NULL;
     return (volatile BYTE *)(ULONG_PTR)(base + (farPointer & WORD_MASK));
 }
 
@@ -111,9 +118,11 @@ INT Wow32ArgString(PCWOW32_FRAME frame, INT offset, PSTR output, INT capacity)
 {
     volatile BYTE *source = Wow32ArgPointer(frame, offset);
     INT length = 0;
+
     if (!source)
     {
-        if (capacity) output[0] = 0;
+        if (capacity)
+            output[0] = 0;
         return 0;
     }
     while (length < capacity - 1 && source[length])
@@ -136,9 +145,12 @@ volatile BYTE *Wow32FarAt(PCWOW32_FRAME frame, volatile BYTE *base, INT offset)
               | ((DWORD)Wow32PeekWord(base + offset + WOW_WORD_BYTES) << WORD_SHIFT);
     WORD  selector = (WORD)(farPointer >> WORD_SHIFT);
     DWORD linear;
-    if (!selector || !frame->SelectorToLinear) return NULL;
+
+    if (!selector || !frame->SelectorToLinear)
+        return NULL;
     linear = frame->SelectorToLinear(selector, frame->Context);
-    if (!linear) return NULL;
+    if (!linear)
+        return NULL;
     return (volatile BYTE *)(ULONG_PTR)(linear + (farPointer & WORD_MASK));
 }
 
@@ -151,13 +163,19 @@ volatile BYTE *Wow32FarAt(PCWOW32_FRAME frame, volatile BYTE *base, INT offset)
  * corrupts control flow. Never write more than the guest declared.
  * Returns the length written, or -1 if there was nowhere to write.
  */
-static INT Wow32FarPut(PCWOW32_FRAME frame, volatile BYTE *base,
-                        INT pointerOffset, INT countOffset, PCSTR text)
+static INT Wow32FarPut(
+    PCWOW32_FRAME frame,
+    volatile BYTE *base,
+    INT pointerOffset,
+    INT countOffset,
+    PCSTR text)
 {
     volatile BYTE *destination = Wow32FarAt(frame, base, pointerOffset);
     WORD capacity = Wow32PeekWord(base + countOffset);
     INT length = 0;
-    if (!destination || !capacity) return -1;
+
+    if (!destination || !capacity)
+        return -1;
     while (text[length] && length < (INT)capacity - 1)
     {
         destination[length] = (BYTE)text[length];
@@ -196,54 +214,149 @@ PCSTR Wow32Name(WORD id)
 {
     switch (id)
     {
-    case WOW32_FATALEXIT:              return "FatalExit";
-    case WOW32_EXITKERNELTHUNK:        return "ExitKernelThunk";
-    case WOW32_WRITEOUTPROFILES:       return "WriteOutProfiles";
-    case WOW32_GETVDMPOINTER32W:       return "GetVDMPointer32W";
-    case WOW32_CALLPROCEX32W:          return "CallProcEx32W";
-    case WOW32_YIELD:                  return "Yield";
-    case WOW32_WAITEVENT:              return "WaitEvent";
-    case WOW32_POSTEVENT:              return "PostEvent";
-    case WOW32_SETPRIORITY:            return "SetPriority";
-    case WOW32_LOCKCURRENTTASK:        return "LockCurrentTask";
-    case WOW32_WOWLOADMODULE:          return "WowLoadModule";
-    case WOW32_WOWGETNEXTVDMCOMMAND:   return "WowGetNextVDMCommand";
-    case WOW32_OLDYIELD:               return "OldYield";
-    case WOW32_REGISTERDOSDATA:        return "RegisterDosData?";
-    case WOW32_GETSHORTPATHNAME:       return "GetShortPathName";
-    case WOW32_ACCEPTTASKSELECTOR:     return "AcceptTaskSelector?";
-    case WOW32_WOWWAITFORMSGANDEVENT:  return "WowWaitForMsgAndEvent";
-    case WOW32_WOWMSGBOX:              return "WowMsgBox";
-    case WOW32_GETDATETIME:            return "GetDateTime?";
-    case WOW32_GETDRIVETYPE:           return "GetDriveType";
-    case WOW32_WOWREGISTERSHELLWINDOW: return "WowRegisterShellWindowHandle";
-    case WOW32_FREELIBRARY32W:         return "FreeLibrary32W";
-    case WOW32_GETPROCADDRESS32W:      return "GetProcAddress32W";
-    case WOW32_DIRECTEDYIELD:          return "DirectedYield";
-    case WOW32_LOADLIBRARYEX32W:       return "LoadLibraryEx32W";
-    case WOW32_WOWQUERYPERFCOUNTER:    return "WowQueryPerformanceCounter";
-    case WOW32_WOWCURSORICONOP:        return "WowCursorIconOp";
-    case WOW32_WOWFAILEDEXEC:          return "WowFailedExec";
-    case WOW32_WOWCLOSECOMPORT:        return "WowCloseComPort";
-    case WOW32_VIRTUALALLOC:           return "VirtualAlloc";
-    case WOW32_VIRTUALFREE:            return "VirtualFree";
-    case WOW32_GLOBALMEMORYSTATUS:     return "GlobalMemoryStatus";
-    case WOW32_WOWKILLREMOTETASK:      return "WowKillRemoteTask";
-    case WOW32_MESSAGEBOX:             return "MessageBox?";
-    case WOW32_RESOLVEMODULEPATH:      return "ResolveModulePath";
-    case WOW32_WOWSHUTDOWNTIMER:       return "WowShutdownTimer";
-    case WOW32_GETCURDIR:              return "GetCurrentDirectory";
-    case WOW32_GETSYSTEMDEFAULTLANGID: return "GetSystemDefaultLangID";
-    case WOW32_GETWINDOWSDIRECTORY:    return "GetWindowsDirectory";
-    case WOW32_SETCURRENTDRIVE:        return "SetCurrentDrive";
-    case WOW32_GETPROFILEINT:          return "GetProfileInt";
-    case WOW32_GETPROFILESTRING:       return "GetProfileString";
-    case WOW32_SETCURRENTDIR:          return "SetCurrentDirectory";
-    case WOW32_GETPRIVATEPROFILESTRING: return "GetPrivateProfileString";
-    case WOW32_GETPRIVATEPROFILEINT:    return "GetPrivateProfileInt";
-    case WOW32_WRITEPROFILESTRING:      return "WriteProfileString";
-    case WOW32_WRITEPRIVATEPROFILESTRING: return "WritePrivateProfileString";
-    default:                           return NULL;
+    case WOW32_FATALEXIT:
+        return "FatalExit";
+
+    case WOW32_EXITKERNELTHUNK:
+        return "ExitKernelThunk";
+
+    case WOW32_WRITEOUTPROFILES:
+        return "WriteOutProfiles";
+
+    case WOW32_GETVDMPOINTER32W:
+        return "GetVDMPointer32W";
+
+    case WOW32_CALLPROCEX32W:
+        return "CallProcEx32W";
+
+    case WOW32_YIELD:
+        return "Yield";
+
+    case WOW32_WAITEVENT:
+        return "WaitEvent";
+
+    case WOW32_POSTEVENT:
+        return "PostEvent";
+
+    case WOW32_SETPRIORITY:
+        return "SetPriority";
+
+    case WOW32_LOCKCURRENTTASK:
+        return "LockCurrentTask";
+
+    case WOW32_WOWLOADMODULE:
+        return "WowLoadModule";
+
+    case WOW32_WOWGETNEXTVDMCOMMAND:
+        return "WowGetNextVDMCommand";
+
+    case WOW32_OLDYIELD:
+        return "OldYield";
+
+    case WOW32_REGISTERDOSDATA:
+        return "RegisterDosData?";
+
+    case WOW32_GETSHORTPATHNAME:
+        return "GetShortPathName";
+
+    case WOW32_ACCEPTTASKSELECTOR:
+        return "AcceptTaskSelector?";
+
+    case WOW32_WOWWAITFORMSGANDEVENT:
+        return "WowWaitForMsgAndEvent";
+
+    case WOW32_WOWMSGBOX:
+        return "WowMsgBox";
+
+    case WOW32_GETDATETIME:
+        return "GetDateTime?";
+
+    case WOW32_GETDRIVETYPE:
+        return "GetDriveType";
+
+    case WOW32_WOWREGISTERSHELLWINDOW:
+        return "WowRegisterShellWindowHandle";
+
+    case WOW32_FREELIBRARY32W:
+        return "FreeLibrary32W";
+
+    case WOW32_GETPROCADDRESS32W:
+        return "GetProcAddress32W";
+
+    case WOW32_DIRECTEDYIELD:
+        return "DirectedYield";
+
+    case WOW32_LOADLIBRARYEX32W:
+        return "LoadLibraryEx32W";
+
+    case WOW32_WOWQUERYPERFCOUNTER:
+        return "WowQueryPerformanceCounter";
+
+    case WOW32_WOWCURSORICONOP:
+        return "WowCursorIconOp";
+
+    case WOW32_WOWFAILEDEXEC:
+        return "WowFailedExec";
+
+    case WOW32_WOWCLOSECOMPORT:
+        return "WowCloseComPort";
+
+    case WOW32_VIRTUALALLOC:
+        return "VirtualAlloc";
+
+    case WOW32_VIRTUALFREE:
+        return "VirtualFree";
+
+    case WOW32_GLOBALMEMORYSTATUS:
+        return "GlobalMemoryStatus";
+
+    case WOW32_WOWKILLREMOTETASK:
+        return "WowKillRemoteTask";
+
+    case WOW32_MESSAGEBOX:
+        return "MessageBox?";
+
+    case WOW32_RESOLVEMODULEPATH:
+        return "ResolveModulePath";
+
+    case WOW32_WOWSHUTDOWNTIMER:
+        return "WowShutdownTimer";
+
+    case WOW32_GETCURDIR:
+        return "GetCurrentDirectory";
+
+    case WOW32_GETSYSTEMDEFAULTLANGID:
+        return "GetSystemDefaultLangID";
+
+    case WOW32_GETWINDOWSDIRECTORY:
+        return "GetWindowsDirectory";
+
+    case WOW32_SETCURRENTDRIVE:
+        return "SetCurrentDrive";
+
+    case WOW32_GETPROFILEINT:
+        return "GetProfileInt";
+
+    case WOW32_GETPROFILESTRING:
+        return "GetProfileString";
+
+    case WOW32_SETCURRENTDIR:
+        return "SetCurrentDirectory";
+
+    case WOW32_GETPRIVATEPROFILESTRING:
+        return "GetPrivateProfileString";
+
+    case WOW32_GETPRIVATEPROFILEINT:
+        return "GetPrivateProfileInt";
+
+    case WOW32_WRITEPROFILESTRING:
+        return "WriteProfileString";
+
+    case WOW32_WRITEPRIVATEPROFILESTRING:
+        return "WritePrivateProfileString";
+
+    default:
+        return NULL;
     }
 }
 
@@ -263,12 +376,16 @@ INT  g_WowCommandIsTaken     = 0;       /* delivered already -- deliver once */
  */
 VOID WowShorten(PSTR path, UINT capacity)
 {
-    CHAR shortPath[WOW32_SHORT_PATH_BUFFER]; DWORD length = 0;
-    if (path[0]) length = GetShortPathNameA(path, shortPath, sizeof shortPath);
+    CHAR shortPath[WOW32_SHORT_PATH_BUFFER];
+    DWORD length = 0;
+
+    if (path[0])
+        length = GetShortPathNameA(path, shortPath, sizeof shortPath);
     if (length && length < sizeof shortPath && length < capacity)
     {
         UINT index;
-        for (index = 0; index <= length; ++index) path[index] = shortPath[index];
+        for (index = 0; index <= length; ++index)
+            path[index] = shortPath[index];
     }
 }
 
@@ -290,6 +407,7 @@ static const WOW32_DECLINE_SITE g_Wow32DeclineSites[] = {
 INT Wow32MayDecline(WORD id, WORD callSite)
 {
     UINT index;
+
     for (index = 0; index < sizeof g_Wow32DeclineSites / sizeof g_Wow32DeclineSites[0]; ++index)
         if (g_Wow32DeclineSites[index].Id == id && g_Wow32DeclineSites[index].CallSite == callSite)
             return 1;
@@ -298,7 +416,8 @@ INT Wow32MayDecline(WORD id, WORD callSite)
 
 static WORD Wow32RawArgWord(PCWOW32_FRAME frame, INT offset)
 {
-    if (offset < 0 || offset > WOW32_RAW_ARGUMENTS_MAX) return 0;
+    if (offset < 0 || offset > WOW32_RAW_ARGUMENTS_MAX)
+        return 0;
     return Wow32PeekWord(frame->FrameBase + WOW32_OFF_ARGS + offset);
 }
 
@@ -312,7 +431,9 @@ DWORD Wow32Flat(PCWOW32_FRAME frame, DWORD farPointer)
 {
     WORD selector = (WORD)(farPointer >> WORD_SHIFT);
     DWORD base;
-    if (!selector || !frame->SelectorToLinear) return 0;
+
+    if (!selector || !frame->SelectorToLinear)
+        return 0;
     base = frame->SelectorToLinear(selector, frame->Context);
     return base ? base + (farPointer & WORD_MASK) : 0;
 }
@@ -324,6 +445,7 @@ DWORD Wow32Flat(PCWOW32_FRAME frame, DWORD farPointer)
 DWORD WowGenericThunkInvoke(DWORD procedure, PCDWORD arguments, INT count)
 {
     DWORD result;
+
     __asm__ __volatile__ (
         "movl %%esp, %%edi\n\t"
         "movl %3, %%ecx\n\t"
@@ -345,7 +467,8 @@ DWORD WowGenericThunkInvoke(DWORD procedure, PCDWORD arguments, INT count)
 INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
 {
     /* [INFO]: NOT OUR ID SPACE, NOT OUR ANSWER. See `IsKernel` in WOW32_FRAME. */
-    if (!frame->IsKernel) return 0;
+    if (!frame->IsKernel)
+        return 0;
     switch (frame->Id)
     {
 
@@ -372,6 +495,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         Wow32SetReturn(frame, (DWORD)(ULONG_PTR)module);
         return 1;
     }
+
     /* -- 0x8c FreeLibrary32W(hInst32) = 4. */
     case WOW32_FREELIBRARY32W:
     {
@@ -379,6 +503,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         Wow32SetReturn(frame, module ? (FreeLibrary((HMODULE)(ULONG_PTR)module) ? 1 : 0) : 0);
         return 1;
     }
+
     /* -- 0x8d GetProcAddress32W(hInst32, lpszProc) = 8: +0 the name (a null
      * selector = an ordinal in the offset), +4 the module.
      */
@@ -398,6 +523,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         Wow32SetReturn(frame, (DWORD)(ULONG_PTR)pointer);
         return 1;
     }
+
     /* -- 0x1a GetVDMPointer32W(lpAddress, fMode) = 6: +0 fMode (1 = protected
      * mode, 0 = real mode), +2 the 16:16 address. Real-mode memory sits at
      * linear 0 of this process, as in NTVDM.
@@ -407,11 +533,14 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         WORD  mode = Wow32ArgWord(frame, WOW32_GETVDMPOINTER32W_ARG_MODE);
         DWORD farPointer   = Wow32ArgDword(frame, WOW32_GETVDMPOINTER32W_ARG_POINTER);
         DWORD result;
-        if (mode) result = Wow32Flat(frame, farPointer);
-        else      result = ((farPointer >> WORD_SHIFT) << PARAGRAPH_SHIFT) + (farPointer & WORD_MASK);
+        if (mode)
+            result = Wow32Flat(frame, farPointer);
+        else
+            result = ((farPointer >> WORD_SHIFT) << PARAGRAPH_SHIFT) + (farPointer & WORD_MASK);
         Wow32SetReturn(frame, result);
         return 1;
     }
+
     /* -- 0x1c CallProc32W / _CallProcEx32W. See the frame note above Wow32Call. */
     case WOW32_CALLPROCEX32W:
     {
@@ -437,7 +566,8 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
              * the parameter nearest the top of the 16-bit stack.
              */
             INT   bit  = isExtended ? index : number - 1 - index;
-            if (mask & (1u << bit)) value = Wow32Flat(frame, value);
+            if (mask & (1u << bit))
+                value = Wow32Flat(frame, value);
             arguments[index] = value;
         }
         Wow32SetReturn(frame, WowGenericThunkInvoke(procedureAddress, arguments, number));
@@ -482,7 +612,8 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
             PCBYTE source = (PCBYTE)&memoryStatus;
             memoryStatus.dwLength = sizeof(memoryStatus);
             GlobalMemoryStatus(&memoryStatus);
-            for (byteIndex = 0; byteIndex < sizeof(memoryStatus); ++byteIndex) destination[byteIndex] = source[byteIndex];
+            for (byteIndex = 0; byteIndex < sizeof(memoryStatus); ++byteIndex)
+                destination[byteIndex] = source[byteIndex];
         }
         Wow32SetReturn(frame, 0);            /* void -- but the slot is popped anyway */
         return 1;
@@ -516,7 +647,8 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         DWORD number;
         if (!destination || !capacity || !Wow32ArgString(frame, WOW32_GETSHORTPATHNAME_ARG_PATH, source, sizeof source) || !source[0])
         {
-            Wow32SetReturn(frame, 0); return 1;
+            Wow32SetReturn(frame, 0);
+            return 1;
         }
         number = GetShortPathNameA(source, output, sizeof output);
         if (!number || number >= sizeof output || number + 1 > (DWORD)capacity)
@@ -526,7 +658,8 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         }
         {
             DWORD byteIndex;
-            for (byteIndex = 0; byteIndex <= number; ++byteIndex) destination[byteIndex] = (BYTE)output[byteIndex];
+            for (byteIndex = 0; byteIndex <= number; ++byteIndex)
+                destination[byteIndex] = (BYTE)output[byteIndex];
         }
         Wow32SetReturn(frame, number);
         return 1;
@@ -560,7 +693,8 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         }
         {
             UINT byteIndex;
-            for (byteIndex = 0; byteIndex <= number; ++byteIndex) destination[byteIndex] = (BYTE)directory[byteIndex];
+            for (byteIndex = 0; byteIndex <= number; ++byteIndex)
+                destination[byteIndex] = (BYTE)directory[byteIndex];
         }
         Wow32SetReturn(frame, number);
         return 1;
@@ -610,12 +744,16 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
          * literal to a call that writes to its arguments. NULL is documented and
          * safe for the two names; the default has to be a writable buffer.
          */
-        if (!Wow32ArgString(frame, WOW32_GETPRIVATEPROFILESTRING_ARG_DEFAULT, defaultValue, sizeof defaultValue)) defaultValue[0] = 0;
+        if (!Wow32ArgString(frame, WOW32_GETPRIVATEPROFILESTRING_ARG_DEFAULT, defaultValue, sizeof defaultValue))
+            defaultValue[0] = 0;
         Wow32ArgString(frame, WOW32_GETPRIVATEPROFILESTRING_ARG_FILE, fileName, sizeof fileName);
-        if (number > sizeof buffer) number = sizeof buffer;
+        if (number > sizeof buffer)
+            number = sizeof buffer;
         returned = GetPrivateProfileStringA(hasApplication ? application : NULL, hasKey ? key : NULL,
                                        defaultValue, buffer, number, fileName);
-        if (destination) for (byteIndex = 0; byteIndex <= returned && byteIndex < number; ++byteIndex) destination[byteIndex] = (BYTE)buffer[byteIndex];
+        if (destination)
+            for (byteIndex = 0; byteIndex <= returned && byteIndex < number; ++byteIndex)
+                destination[byteIndex] = (BYTE)buffer[byteIndex];
         Wow32SetReturn(frame, returned);
         return 1;
     }
@@ -743,8 +881,10 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         PCSTR body, caption;
         WORD type = Wow32ArgWord(frame, WOW32_WOWMSGBOX_ARG_TYPE);
         INT  number = 0;
-        if (!Wow32ArgString(frame, WOW32_WOWMSGBOX_ARG_CAPTION, captionText, sizeof captionText)) captionText[0] = 0;
-        if (!Wow32ArgString(frame, WOW32_WOWMSGBOX_ARG_TEXT, bodyText, sizeof bodyText)) bodyText[0] = 0;
+        if (!Wow32ArgString(frame, WOW32_WOWMSGBOX_ARG_CAPTION, captionText, sizeof captionText))
+            captionText[0] = 0;
+        if (!Wow32ArgString(frame, WOW32_WOWMSGBOX_ARG_TEXT, bodyText, sizeof bodyText))
+            bodyText[0] = 0;
         /* [INFO]: THE SLOTS ARE PINNED, and by data rather than by a signature --
          * the log line below was added first precisely so they could be. One
          * WINFILE run prints BOTH, and they are unambiguous:
@@ -772,17 +912,24 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         {   PCSTR prefix = "  WOWMSGBOX: krnl386 is reporting an error to the "
                               "user. type=0x";
             PCSTR hexDigits = HEX_DIGITS_LOWER;
-            PCSTR cursor; INT position;
-            for (cursor = prefix; *cursor && number < (INT)sizeof logLine - WOW32_MSGBOX_LOG_LINE_END; ++cursor) logLine[number++] = *cursor;
-            logLine[number++] = hexDigits[(type >> (3 * NIBBLE_SHIFT)) & NIBBLE_MASK]; logLine[number++] = hexDigits[(type >> (2 * NIBBLE_SHIFT)) & NIBBLE_MASK];
-            logLine[number++] = hexDigits[(type >> NIBBLE_SHIFT) & NIBBLE_MASK];  logLine[number++] = hexDigits[type & NIBBLE_MASK];
-            for (cursor = " arg4=\""; *cursor; ++cursor) logLine[number++] = *cursor;
+            PCSTR cursor;
+            INT position;
+            for (cursor = prefix; *cursor && number < (INT)sizeof logLine - WOW32_MSGBOX_LOG_LINE_END; ++cursor)
+                logLine[number++] = *cursor;
+            logLine[number++] = hexDigits[(type >> (3 * NIBBLE_SHIFT)) & NIBBLE_MASK];
+            logLine[number++] = hexDigits[(type >> (2 * NIBBLE_SHIFT)) & NIBBLE_MASK];
+            logLine[number++] = hexDigits[(type >> NIBBLE_SHIFT) & NIBBLE_MASK];
+            logLine[number++] = hexDigits[type & NIBBLE_MASK];
+            for (cursor = " arg4=\""; *cursor; ++cursor)
+                logLine[number++] = *cursor;
             for (position = 0; captionText[position] && number < (INT)sizeof logLine - WOW32_MSGBOX_LOG_HEAD_ROOM; ++position)
                 logLine[number++] = (captionText[position] == '\r' || captionText[position] == '\n') ? ' ' : captionText[position];
-            for (cursor = "\" arg8=\""; *cursor; ++cursor) logLine[number++] = *cursor;
+            for (cursor = "\" arg8=\""; *cursor; ++cursor)
+                logLine[number++] = *cursor;
             for (position = 0; bodyText[position] && number < (INT)sizeof logLine - WOW32_MSGBOX_LOG_TAIL_ROOM; ++position)
                 logLine[number++] = (bodyText[position] == '\r' || bodyText[position] == '\n') ? ' ' : bodyText[position];
-            for (cursor = "\"\r\n"; *cursor; ++cursor) logLine[number++] = *cursor;
+            for (cursor = "\"\r\n"; *cursor; ++cursor)
+                logLine[number++] = *cursor;
             LogAppend(LOG_PATH, logLine, logLine + number);
         }
         MessageBoxA(NULL, body, caption,
@@ -799,8 +946,10 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
     {
         CHAR application[WOW32_PROFILE_NAME_MAX], key[WOW32_PROFILE_NAME_MAX];
         WORD defaultValue;
-        if (!Wow32ArgString(frame, WOW32_GETPROFILEINT_ARG_APP, application, sizeof application)) application[0] = 0;
-        if (!Wow32ArgString(frame, WOW32_GETPROFILEINT_ARG_KEY, key, sizeof key)) key[0] = 0;
+        if (!Wow32ArgString(frame, WOW32_GETPROFILEINT_ARG_APP, application, sizeof application))
+            application[0] = 0;
+        if (!Wow32ArgString(frame, WOW32_GETPROFILEINT_ARG_KEY, key, sizeof key))
+            key[0] = 0;
         defaultValue = Wow32ArgWord(frame, WOW32_GETPROFILEINT_ARG_DEFAULT);
         Wow32SetReturn(frame, (DWORD)GetProfileIntA(application, key, (INT)defaultValue));
         return 1;
@@ -847,17 +996,23 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         WORD  number = Wow32ArgWord(frame, WOW32_GETPROFILESTRING_ARG_SIZE);
         DWORD returned;
         UINT index;
-        if (!Wow32ArgString(frame, WOW32_GETPROFILESTRING_ARG_APP, application, sizeof application)) application[0] = 0;
-        if (!Wow32ArgString(frame, WOW32_GETPROFILESTRING_ARG_KEY, key, sizeof key)) key[0] = 0;
-        if (!Wow32ArgString(frame, WOW32_GETPROFILESTRING_ARG_DEFAULT, defaultValue, sizeof defaultValue)) defaultValue[0] = 0;
-        if (number > sizeof buffer) number = (WORD)sizeof buffer;
+        if (!Wow32ArgString(frame, WOW32_GETPROFILESTRING_ARG_APP, application, sizeof application))
+            application[0] = 0;
+        if (!Wow32ArgString(frame, WOW32_GETPROFILESTRING_ARG_KEY, key, sizeof key))
+            key[0] = 0;
+        if (!Wow32ArgString(frame, WOW32_GETPROFILESTRING_ARG_DEFAULT, defaultValue, sizeof defaultValue))
+            defaultValue[0] = 0;
+        if (number > sizeof buffer)
+            number = (WORD)sizeof buffer;
         if (!number)
         {
             Wow32SetReturn(frame, 0);
             return 1;
         }
         returned = GetProfileStringA(application, key, defaultValue, buffer, number);
-        if (destination) for (index = 0; index <= returned && index < number; ++index) destination[index] = (BYTE)buffer[index];
+        if (destination)
+            for (index = 0; index <= returned && index < number; ++index)
+                destination[index] = (BYTE)buffer[index];
         Wow32SetReturn(frame, returned);
         return 1;
     }
@@ -894,6 +1049,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         Wow32SetReturn(frame, isOk ? 1 : 0);
         return 1;
     }
+
     case WOW32_WRITEPRIVATEPROFILESTRING:
     {
         CHAR application[WOW32_PROFILE_WRITE_NAME_MAX], key[WOW32_PROFILE_WRITE_NAME_MAX], value[WOW32_PROFILE_WRITE_VALUE_MAX], fileName[MAX_PATH];
@@ -911,6 +1067,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         Wow32SetReturn(frame, isOk ? 1 : 0);
         return 1;
     }
+
     /* 0x03 WriteOutProfiles(): Win16's "flush the profile cache". Win32 flushes
      * WIN.INI with an all-NULL write; there is no return value.
      */
@@ -968,7 +1125,8 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
             Wow32CurrentDirectorySet(directory);              /* #164: per task, see main.c */
             Wow32SetReturn(frame, 0);
         }
-        else Wow32SetReturn(frame, WOW32_RETURN_FAILED);
+        else
+            Wow32SetReturn(frame, WOW32_RETURN_FAILED);
         return 1;
     }
 
@@ -1045,7 +1203,10 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
             Wow32SetReturn(frame, 1 /* DRIVE_NO_ROOT_DIR */);
             return 1;
         }
-        root[0] = (CHAR)('A' + number); root[1] = ':'; root[2] = '\\'; root[3] = 0;
+        root[0] = (CHAR)('A' + number);
+        root[1] = ':';
+        root[2] = '\\';
+        root[3] = 0;
         Wow32SetReturn(frame, (DWORD)GetDriveTypeA(root));
         return 1;
     }
@@ -1076,13 +1237,19 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         }
         if (drive >= 1 && drive <= WOW32_DRIVE_COUNT && (GetLogicalDrives() & (1u << (drive - 1))))
         {
-            root[0] = (CHAR)('A' + drive - 1); root[1] = ':'; root[2] = '\\'; root[3] = 0;
+            root[0] = (CHAR)('A' + drive - 1);
+            root[1] = ':';
+            root[2] = '\\';
+            root[3] = 0;
             driveType = GetDriveTypeA(root);
         }
-        if (!driveType || driveType == DRIVE_NO_ROOT_DIR) Wow32SetReturn(frame, WOW32_ISDRIVEREMOVABLE_INVALID);
-        else Wow32SetReturn(frame, (driveType == DRIVE_REMOVABLE || driveType == DRIVE_CDROM) ? 0u : 1u);
+        if (!driveType || driveType == DRIVE_NO_ROOT_DIR)
+            Wow32SetReturn(frame, WOW32_ISDRIVEREMOVABLE_INVALID);
+        else
+            Wow32SetReturn(frame, (driveType == DRIVE_REMOVABLE || driveType == DRIVE_CDROM) ? 0u : 1u);
         return 1;
     }
+
     /* 0xc6: arrives during GlobalFree of certain blocks (ones the 32-bit side is
      * taken to own). Non-zero makes krnl386 go on and free the block; zero makes
      * GlobalFree report success -- and the block is kept.
@@ -1096,6 +1263,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
     case WOW32_GLOBALFREE_OWNED:
         Wow32SetReturn(frame, 0);
         return 1;
+
     /* 0x8a: a new task's compatibility flags (argument: the new TDB; the answer is
      * what GetAppCompatFlags then returns). No application is on a list here: 0.
      */
@@ -1267,7 +1435,9 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
             for (argumentIndex = 0; g_WowCommandArguments[argumentIndex] && number < (INT)sizeof tail - WOW32_COMMAND_TAIL_ROOM; ++argumentIndex)
                 tail[number++] = g_WowCommandArguments[argumentIndex];
         }
-        tail[number++] = '\r'; tail[number++] = '\n'; tail[number] = 0;
+        tail[number++] = '\r';
+        tail[number++] = '\n';
+        tail[number] = 0;
 
         number = Wow32FarPut(frame, commandInfo, WOWCMD_LPAPPNAME, WOWCMD_CBAPPNAME, program);
         if (number <= 0) /* no name, no launch */
@@ -1277,7 +1447,8 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         }
         if (Wow32FarPut(frame, commandInfo, WOWCMD_LPCMDLINE, WOWCMD_CBCMDLINE, tail) <= 0)
         {
-            Wow32SetReturn(frame, 0); return 1;
+            Wow32SetReturn(frame, 0);
+            return 1;
         }
         /* A valid empty environment, so the caller never walks uninitialised
          * stack looking for its double NUL.
@@ -1306,7 +1477,8 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
         else
         {
             volatile BYTE *directoryBuffer = Wow32FarAt(frame, commandInfo, WOWCMD_LPBUFC);
-            if (directoryBuffer) directoryBuffer[0] = 0;
+            if (directoryBuffer)
+                directoryBuffer[0] = 0;
             Wow32PokeWord(commandInfo + WOWCMD_CBBUFC, 0);
         }
 
@@ -1314,7 +1486,8 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
          * not drive-qualified, because there is no "unknown" in a byte.
          */
         { CHAR driveLetter = (program[0] && program[1] == ':') ? program[0] : 'C';
-          if (driveLetter >= 'a' && driveLetter <= 'z') driveLetter = (CHAR)(driveLetter - WOW32_LOWER_TO_UPPER);
+          if (driveLetter >= 'a' && driveLetter <= 'z')
+              driveLetter = (CHAR)(driveLetter - WOW32_LOWER_TO_UPPER);
           Wow32PokeWord(commandInfo + WOWCMD_CURDRIVE, (WORD)(driveLetter - 'A')); }
         Wow32PokeWord(commandInfo + WOWCMD_NCMDSHOW, 1);          /* SW_SHOWNORMAL */
 

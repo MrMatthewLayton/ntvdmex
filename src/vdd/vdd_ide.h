@@ -102,7 +102,12 @@ VOID VddIdePortIn(_In_ PVOID context, _In_ WORD port, _In_ BYTE width, _Out_ UIN
 VOID VddIdePortOut(_In_ PVOID context, _In_ WORD port, _In_ BYTE width, _In_ UINT32 value);
 
 static inline NTVDD_DEVICE VddIdeDevice(_In_ PIDE_STATE state)
-{ NTVDD_DEVICE device; device.Name = IDE_DEVICE_NAME; device.Initialize = VddIdeInitialize; device.Reset = VddIdeReset;
-  device.Shutdown = 0; device.Context = state; return device; }
+{ NTVDD_DEVICE device;
+device.Name = IDE_DEVICE_NAME;
+device.Initialize = VddIdeInitialize;
+device.Reset = VddIdeReset;
+  device.Shutdown = 0;
+  device.Context = state;
+  return device; }
 
 #endif /* NTVDMEX_VDD_IDE_H */

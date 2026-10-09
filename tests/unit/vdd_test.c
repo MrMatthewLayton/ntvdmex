@@ -38,13 +38,16 @@ typedef struct
 static VOID VddTestPitOut(PVOID self, WORD port, BYTE width, UINT32 value)
 {
     FAKE_PIT *pit = (FAKE_PIT *)self;
+
     (VOID)width;
-    if (port == 0x40) pit->Reload = (BYTE)value;
+    if (port == 0x40)
+        pit->Reload = (BYTE)value;
 }
 
 static VOID VddTestPitIn(PVOID self, WORD port, BYTE width, PUINT32 value)
 {
     FAKE_PIT *pit = (FAKE_PIT *)self;
+
     (VOID)width;
     pit->LastInPort = (BYTE)port;
     *value = pit->Reload;
@@ -53,6 +56,7 @@ static VOID VddTestPitIn(PVOID self, WORD port, BYTE width, PUINT32 value)
 static VOID VddTestPitInt1a(PVOID self, PNTVDD_REGISTERS registers)
 {
     FAKE_PIT *pit = (FAKE_PIT *)self;
+
     if (VddGetAh(registers) == 0)
     {
         VddSetCx(registers, (WORD)(pit->Ticks >> 16));
@@ -64,6 +68,7 @@ static VOID VddTestPitInt1a(PVOID self, PNTVDD_REGISTERS registers)
 static VOID VddTestPitFrame(PVOID self)
 {
     FAKE_PIT *pit = (FAKE_PIT *)self;
+
     pit->Ticks++;
     VddRaiseIrq(pit->Bus, 0);
 }
@@ -71,6 +76,7 @@ static VOID VddTestPitFrame(PVOID self)
 static VOID VddTestPitReset(PVOID self)
 {
     FAKE_PIT *pit = (FAKE_PIT *)self;
+
     pit->ResetCalls++;
     pit->Reload = 0;
     pit->Ticks = 0;
@@ -79,10 +85,14 @@ static VOID VddTestPitReset(PVOID self)
 static INT VddTestPitInit(PVDD_BUS bus, PVOID self)
 {
     FAKE_PIT *pit = (FAKE_PIT *)self;
+
     pit->Bus = bus;
-    if (VddClaimPorts(bus, 0x40, 0x43, VddTestPitIn, VddTestPitOut, pit)) return -1;
-    if (VddClaimInterrupt(bus, 0x1A, VddTestPitInt1a, pit)) return -1;
-    if (VddOnFrame(bus, VddTestPitFrame, pit)) return -1;
+    if (VddClaimPorts(bus, 0x40, 0x43, VddTestPitIn, VddTestPitOut, pit))
+        return -1;
+    if (VddClaimInterrupt(bus, 0x1A, VddTestPitInt1a, pit))
+        return -1;
+    if (VddOnFrame(bus, VddTestPitFrame, pit))
+        return -1;
     return 0;
 }
 
@@ -121,10 +131,14 @@ INT main(VOID)
 {
     static BYTE guestMemory[0x100000];      /* stand-in "guest memory" for map_flat */
     VDD_BUS bus;
-    FAKE_PIT pit; memset(&pit, 0, sizeof pit);
+    FAKE_PIT pit;
+
+    memset(&pit, 0, sizeof pit);
     NTVDD_DEVICE pitDevice = { "fake-pit", VddTestPitInit, VddTestPitReset, 0, &pit };
     NTVDD_DEVICE videoDevice = { "fake-vid", 0, 0, 0, 0 };
-    UINT32 value; BYTE byteValue; NTVDD_REGISTERS registers;
+    UINT32 value;
+    BYTE byteValue;
+    NTVDD_REGISTERS registers;
 
     printf("== M3 slice-1 VDD bus battery ==\n");
 
@@ -158,13 +172,16 @@ INT main(VOID)
     CHECK(VddBusMemoryWrite(&bus, 0xA0000, 0x55) == 0, "mem: outside window -> 0");
 
     /* T4: a claimed software interrupt is delivered with reg view ---------- */
-    memset(&registers, 0, sizeof registers); pit.Ticks = 0x00ABCDEF; VddSetAh(&registers, 0x00);
+    memset(&registers, 0, sizeof registers);
+    pit.Ticks = 0x00ABCDEF;
+    VddSetAh(&registers, 0x00);
     CHECK(VddBusDeliverInterrupt(&bus, 0x1A, &registers) == 1, "int: INT 1Ah delivered");
     CHECK(VddGetCx(&registers) == 0x00AB && VddGetDx(&registers) == 0xCDEF && registers.CarryFlag == 0, "int: AH=0 returned tick CX:DX");
     CHECK(VddBusDeliverInterrupt(&bus, 0x21, &registers) == 0, "int: unclaimed INT 21h -> 0");
 
     /* T5: frame tick fans out -> device advances + raises IRQ0 via sink ----- */
-    pit.Ticks = 0; g_IrqCount = 0;
+    pit.Ticks = 0;
+    g_IrqCount = 0;
     VddBusFrame(&bus);
     CHECK(pit.Ticks == 1, "frame: tick advanced device");
     CHECK(g_IrqCount == 1 && g_LastIrq == 0, "frame: raised IRQ0 through sink");
@@ -178,8 +195,13 @@ INT main(VOID)
     /* T7: present routes a frame to the sink ------------------------------- */
     {
         static const BYTE pixels[4] = {1,2,3,4};
-        NTVDD_FRAME frame; memset(&frame, 0, sizeof frame);
-        frame.Width = 320; frame.Height = 200; frame.BitsPerPixel = 8; frame.Stride = 320; frame.Pixels = pixels;
+        NTVDD_FRAME frame;
+        memset(&frame, 0, sizeof frame);
+        frame.Width = 320;
+        frame.Height = 200;
+        frame.BitsPerPixel = 8;
+        frame.Stride = 320;
+        frame.Pixels = pixels;
         g_PresentCount = 0;
         VddPresent(&bus, &frame);
         CHECK(g_PresentCount == 1 && g_LastFrame.Width == 320 && g_LastFrame.BitsPerPixel == 8,
@@ -187,7 +209,8 @@ INT main(VOID)
     }
 
     /* T8: reset fans out to devices --------------------------------------- */
-    pit.ResetCalls = 0; pit.Reload = 0x99;
+    pit.ResetCalls = 0;
+    pit.Reload = 0x99;
     VddBusResetAll(&bus);
     CHECK(pit.ResetCalls == 1 && pit.Reload == 0, "reset: device reset called");
 

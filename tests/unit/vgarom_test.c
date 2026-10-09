@@ -60,11 +60,17 @@ static PBYTE VgaRomTestReadFile(PCSTR relativePath, long *length)
     UINT index;
     for (index = 0; index < 2; ++index)
     {
-        CHAR path[512]; FILE *file; PBYTE bytes; long size;
+        CHAR path[512];
+        FILE *file;
+        PBYTE bytes;
+        long size;
         snprintf(path, sizeof path, "%s%s", prefixes[index], relativePath);
         file = fopen(path, "rb");
-        if (!file) continue;
-        fseek(file, 0, SEEK_END); size = ftell(file); fseek(file, 0, SEEK_SET);
+        if (!file)
+            continue;
+        fseek(file, 0, SEEK_END);
+        size = ftell(file);
+        fseek(file, 0, SEEK_SET);
         bytes = (PBYTE)malloc((size_t)size);
         if (!bytes || fread(bytes, 1, (size_t)size, file) != (size_t)size)
         {
@@ -72,7 +78,9 @@ static PBYTE VgaRomTestReadFile(PCSTR relativePath, long *length)
             free(bytes);
             return NULL;
         }
-        fclose(file); *length = size; return bytes;
+        fclose(file);
+        *length = size;
+        return bytes;
     }
     return NULL;
 }
@@ -85,8 +93,12 @@ static PBYTE VgaRomTestReadFile(PCSTR relativePath, long *length)
 static long VgaRomTestFind(PCBYTE haystack, long haystackLength, PCBYTE needle, long needleLength)
 {
     long index;
-    if (needleLength > haystackLength) return -1;
-    for (index = 0; index + needleLength <= haystackLength; ++index) if (!memcmp(haystack + index, needle, (size_t)needleLength)) return index;
+
+    if (needleLength > haystackLength)
+        return -1;
+    for (index = 0; index + needleLength <= haystackLength; ++index)
+        if (!memcmp(haystack + index, needle, (size_t)needleLength))
+            return index;
     return -1;
 }
 
@@ -118,11 +130,14 @@ INT main(VOID)
      * row, so a whole row is findable. If a row ever stops being findable the
      * likely cause is that someone "tidied" a value.
      */
-    {   UINT row; INT found = 0, tried = 0;
+    {   UINT row;
+    INT found = 0, tried = 0;
         for (row = 0; row < 9; ++row)
         {
             long offset = VgaRomTestFind(rom, romLength, g_VgaCrtcDefaults[row], 25);
-            ++tried; if (offset >= 0) ++found;
+            ++tried;
+            if (offset >= 0)
+                ++found;
         }
         VgaRomTestCheck(found >= 7, "per-mode CRTC rows are present in the ROM's parameter table");
         printf("        (%d of %d CRTC rows located in the real BIOS)\n", found, tried);

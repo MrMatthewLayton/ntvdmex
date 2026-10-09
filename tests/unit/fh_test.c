@@ -40,7 +40,8 @@ static INT g_Checks, g_Failures;
 static VOID FhTestExpect(PCSTR description, LONG actual, LONG expected)
 {
     ++g_Checks;
-    if (actual == expected) return;
+    if (actual == expected)
+        return;
     ++g_Failures;
     printf("  FAIL %-52s got %ld, want %ld\n", description, (long)actual, (long)expected);
 }
@@ -102,7 +103,9 @@ INT main(VOID)
      * count on handle numbers rely on.
      */
     FhTestStandardTable(fileHandles, &deviceMask);
-    fileHandles[FH_TEST_FIRST_FREE] = g_Bound; fileHandles[FH_TEST_SIXTH] = g_Bound; fileHandles[FH_TEST_SEVENTH] = g_Bound;
+    fileHandles[FH_TEST_FIRST_FREE] = g_Bound;
+    fileHandles[FH_TEST_SIXTH] = g_Bound;
+    fileHandles[FH_TEST_SEVENTH] = g_Bound;
     FhTestExpect("5,6,7 bound -> 8", DosHandleAllocate(fileHandles, deviceMask), FH_TEST_EIGHTH);
     fileHandles[FH_TEST_SIXTH] = NULL;                              /* close the middle one */
     FhTestExpect("...then close 6 -> 6 (fills the hole)", DosHandleAllocate(fileHandles, deviceMask), FH_TEST_SIXTH);
@@ -112,7 +115,8 @@ INT main(VOID)
      */
     FhTestStandardTable(fileHandles, &deviceMask);
     deviceMask = FH_TEST_NONE;
-    for (slot = 0; slot < DOS_MAX_FILES; ++slot) fileHandles[slot] = g_Bound;
+    for (slot = 0; slot < DOS_MAX_FILES; ++slot)
+        fileHandles[slot] = g_Bound;
     FhTestExpect("full table -> DOS_MAX_FILES", DosHandleAllocate(fileHandles, deviceMask), DOS_MAX_FILES);
 
     /* RULE 2: A BOUND HANDLE IS A FILE, WHATEVER ITS NUMBER:
