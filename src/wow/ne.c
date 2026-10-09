@@ -42,6 +42,7 @@ INT NeParse(PNE_MODULE module, PCBYTE image, UINT32 length)
 
     for (byteIndex = 0; byteIndex < (INT)sizeof *module; ++byteIndex)
         ((PBYTE)module)[byteIndex] = 0;
+
     module->Image = image;
     module->ImageLength = length;
 
@@ -50,17 +51,21 @@ INT NeParse(PNE_MODULE module, PCBYTE image, UINT32 length)
         module->Error = __LINE__;
         return -1;
     }
+
     header = NeRead32(image + NE_MZ_LFANEW);
+
     if (!NeInBounds(module, header, NE_HEADER_SIZE))
     {
         module->Error = __LINE__;
         return -1;
     }
+
     if (image[header] != 'N' || image[header + 1] != 'E')
     {
         module->Error = __LINE__;
         return -1;
     }
+    
     module->Header = header;
 
     module->EntryTable    = NeRead16(image + header + NE_HDR_ENTRY_TABLE);
