@@ -155,40 +155,10 @@ static CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "midi_route.h"       /* #136: Settings > Audio > MIDI -> a host device, by name */
 #include "present_ddraw.h"
 
-/* ── ★ THE FOUR IMPORTS WINDOWS 2000 DOES NOT HAVE. (2026-09-22, user on the 2000 box) ──
-     The host would not START on Windows 2000: "The procedure entry point
-     AddVectoredExceptionHandler could not be located in KERNEL32.dll". The loader
-     resolves every static import before WinMain runs, so ONE missing export is a
-     refusal to load, not a degraded feature. The import table of the built exe was
-     dumped and compared: of 417 imports exactly four are XP-only --
-       kernel32  AddVectoredExceptionHandler   (the PM-fault VEH)
-       kernel32  AttachConsole                 (stdout to the parent's console)
-       user32    RegisterRawInputDevices       (raw mouse deltas while captured)
-       user32    GetRawInputData
-     Everything else is NT 5.0. So these four are bound at run time, and each has a
-     fallback that already existed or is the same mechanism one layer down:
-       no VEH        -> the unhandled-exception filter runs the SAME handler. With no
-                        CRT there is no SEH frame in this host to claim a fault first,
-                        so the filter is the next thing after the VEH would have been,
-                        and a filter may return EXCEPTION_CONTINUE_EXECUTION with a
-                        modified context exactly as the VEH does.
-       no Attach     -> the other stdout routes (inherited handle, the parent's handle)
-       no raw input  -> g_MouseRawOk stays 0 and the absolute-derived delta path runs,
-                        which is what the code already did when registration failed.
-   ⚠ THIS IS "LOADS ON 2000", NOT "RUNS ON 2000". The NtVdmControl contract (the
-     VdmInitialize block, VDM_TIB offsets, TEB+0xF18, [0x714]) was taken from XP's
-     ntvdm and kernel; what 2000's do differently is unmeasured, and the first run's
-     log is the instrument. The Win16 half is pinned to XP's krnl386 and is a
-     separate effort. On XP nothing changes: the same four functions are found and
-     used as before. `STAGE0: os=` names the version and which of the four resolved. */
-typedef PVOID (WINAPI *PFN_ADD_VECTORED_EXCEPTION_HANDLER)(ULONG, PVECTORED_EXCEPTION_HANDLER);
-typedef BOOL  (WINAPI *PFN_ATTACH_CONSOLE)(DWORD);
-typedef BOOL  (WINAPI *PFN_REGISTER_RAW_INPUT_DEVICES)(PCRAWINPUTDEVICE, UINT, UINT);
-typedef UINT  (WINAPI *PFN_GET_RAW_INPUT_DATA)(HRAWINPUT, UINT, LPVOID, PUINT, UINT);
-static PFN_ADD_VECTORED_EXCEPTION_HANDLER                  g_PfnAddVeh;
+#include "host_internal.h"
+#include "host_state.c"
+
 static PFN_ATTACH_CONSOLE           g_PfnAttachConsole;
-static PFN_REGISTER_RAW_INPUT_DEVICES g_PfnRegisterRawInput;
-static PFN_GET_RAW_INPUT_DATA         g_PfnGetRawInput;
 static DWORD                       g_OsVersion;       /* GetVersion(): 0x0500 = 2000, 0x0501 = XP */
 
 static VOID OsCompatBind(VOID)
@@ -215,36 +185,6 @@ static BOOL OsCompatAttachConsole(DWORD processId)
 /* #208: present = load a program started from Windows directly (the pre-#208 way)
    instead of handing it to XP's COMMAND.COM. An A/B switch, not a setting. */
 #define DIRECTLAUNCH_FLAG CFG_("directlaunch.flag")
-/* ── ★ HOW "JUST OPEN NTVDMEX" WORKS, AND WHY IT NEEDS A FOUR-BYTE DOS PROGRAM. ──────
-     Run with no arguments -- double-clicked, or from a shortcut -- this process CANNOT
-     become a VDM. Measured on the rig, 2026-09-25:
-
-         STAGE0: cmdline=["...\bin\ntvdmhost.exe" ]
-         STAGE1: VdmRegisterWithKernel NTSTATUS=0xc0000022        <- STATUS_ACCESS_DENIED
-         STAGE1: GetNextVDMCommand FALSE err=0x57
-
-     ...and then it exits, silently, with no window. VDM privilege is not something a
-     process can ask for: NT grants it to a process CSRSS created for a 16-bit image.
-   ⇒ So the launcher does not try. It writes a four-byte DOS program -- `mov ah,4Ch;
-     int 21h`, the same stub the harness has used for years -- and CreateProcess's it.
-     Windows sees a DOS image, CSRSS builds a real VDM, the IFEO Debugger key routes
-     `ntvdm.exe` to US, and THAT instance has the privilege. The stub itself never
-     runs: we recognise its name and load a shell instead.
-   ⚠ The name is the whole signal, so it must be one nothing else uses, and it must
-     differ from `dosstub.com` -- the harness stub means "target.txt names the
-     program", this one means "the user asked for a shell, ignore target.txt". A
-     stale target.txt on someone's machine must not hijack a double-click.
-   ⛔⛔ AND IT MUST BE 8.3, WHICH THE FIRST CUT WAS NOT. `ntvdmex-shell.com` came back
-     from CSRSS as **`NTVDME~1.COM`**:
-
-         STAGE1: program C:\DOCUME~1\Matthew\LOCALS~1\Temp\NTVDME~1.COM
-
-     so the basename never matched, the branch never fired, and the launch fell through
-     to running the four-byte stub for real -- a VDM that came up correctly and exited
-     immediately, with nothing on screen. **The DOS side of this system sees 8.3 names
-     and only 8.3 names**; the same rule already caught `p_dpmiins.com` in the probe
-     harness and krnl386 in the Win16 one. Seven characters, no hyphen, no mangling. */
-#define LAUNCH_STUB_NAME "ntvdmex.com"
 #define AUTOEXIT_PATH CFG_("autoexit")   /* marker: headless test mode -> exit when the guest exits */
 /* Opt-in screenshot flag. Lives on the SMB SHARE folder so the remote driver can
    toggle it (create it before a GRAPHICAL test, remove it otherwise). Non-graphical
@@ -326,7 +266,6 @@ static INT  g_TrampolineSaved;
 /* #183: present = sample the exec thread's host EIP ~1 kHz and log the hottest 16-byte
    buckets at exit (STAGE2: HOSTPROF). Map them with `i686-w64-mingw32-nm -n`. */
 #define HOSTPROF_FLAG CFG_("hostprof.flag")
-static VOID HostProfileDump(VOID);
 /* North star 1 for PROTECTED-mode guests (Doom): present = do not interpret its drawers. */
 #define MYPM_OFF_FLAG    CFG_("modeypm_off.flag")
 /* Present = keep the scratch window while a PM guest runs NATIVELY under a multi-plane
@@ -335,29 +274,10 @@ static VOID HostProfileDump(VOID);
 /* Create every Settings page off-screen at startup and log whether the templates
    still build. See the call site: a bad DIALOGEX fails to CREATE, silently. */
 #define DLGCHECK_FLAG CFG_("dlgcheck.flag")
-/* s84: open Settings at startup on the tab numbered in this file (0 = MS-DOS), so the
-   rig can photograph each page without clicking at coordinates. Test-only. */
-#define SETSHOT_PATH CFG_("setshot.txt")
 /* GH #128: opt into the EXPERIMENTAL WOW load probe on a Win16 launch. Absent (the
    default) the host still refuses Win16 loudly -- an experiment must never become the
    shipped behaviour by accident. */
 #define WOWTRY_FLAG   CFG_("wowtry.flag")
-/* ── ⚠ `/B` BOOT LOGGING WAS TRIED AND DOES NOT WORK HERE. (GH #128, session 36) ──
-     krnl386 accepts the stock `WIN /B` switch in its PSP command tail; documented
-     behaviour is a BOOTLOG.TXT in the Windows directory listing every `LoadStart = ` /
-     `LoadSuccess = ` / `LoadFail = ` line, failure CODE included.
-   ▶ MEASURED AND REMOVED. `/B` was placed in the tail (confirmed in the LDT log) and
-     NO BOOTLOG.TXT appeared at any of four candidate paths. The likely reason is that
-     the Windows directory is not yet known this early, so the one open fails -- and
-     after a failed open krnl386 logs nothing more for the rest of the run, SILENTLY.
-   ★ Forcing the logging on by hand was not pursued for the same reason: without a
-     filename it has nothing to open.
-   ⇒ A breakpoint on the loader's per-module return answers the same question and DOES
-     work -- it reads the loader's return code per module directly. See the session-36
-     log. */
-/* A log NOTHING truncates. WinMain has three LogWrite calls and each wipes the file;
-   diagnostics that need to survive the whole run belong here instead. */
-#define LDTLOG_PATH   OUT_("ldtprobe.log")
 /* ── ★ THE WATCHDOG WRITES HERE, AND NOWHERE ELSE. ────────────────────────────────
      It is the one instrument whose whole job is to speak when the main thread cannot,
      so sharing a file with the main thread's firehose leaves a shared-resource
@@ -380,7 +300,6 @@ static VOID HostProfileDump(VOID);
    pre-session-11 behaviour (latch the pending bit only, never queue). */
 /* GH #11: one DLL path per line, '#' comments. See docs/sdk/vdd-sdk.md. */
 #define VDDLIST_PATH CFG_("vdd.txt")
-static DOS_SAFE_SKIPS g_Safe;           /* s90 #132: all zero unless SAFE MODE (dos_recovery.h) */
 #define QIMODE_PATH CFG_("qimode.txt")
 /* FIXED_NTVDMSTATE ([0x714]) initial value override, hex, up to 8 digits. Absent = 0.
    Exists so the rig can try a different starting word without a rebuild -- see the
@@ -455,7 +374,6 @@ static DOS_SAFE_SKIPS g_Safe;           /* s90 #132: all zero unless SAFE MODE (
    file on disk has no call to, so what matters is the bytes in memory, not the bytes
    in the image. Comparing the two is the whole point. */
 #define CSPROBE_PATH     CFG_("csprobe.txt")
-#define DSPROBE_MAX 12
 static WORD g_DsProbe[DSPROBE_MAX];
 static INT  g_DsProbeCount = 0;
 static WORD g_CsProbe[DSPROBE_MAX];
@@ -523,10 +441,6 @@ static VOID DsProbeLoad(VOID)
    failure. A script can say "wait for the intro, Enter, DOWN, DOWN, Enter". */
 #define KEYS_PATH CFG_("keys.txt")
 
-/* Offset, within DOS_HDLR_SEG, of the XMS API far-call entry stub (BOP 0x43; RETF).
-   Lives just past the INT 1Ah stub (which ends at 0x40) and the INT 2Fh stub (4 bytes
-   at 0x40). INT 2Fh AX=4310 hands the guest DOS_HDLR_SEG:XMS_ENTRY_OFF to far-call. */
-#define XMS_ENTRY_OFF 0x0044
 /* The XMS pool, in KB. Named because SysVars+0x45 must report the SAME
    number to MEM.EXE (GH #47) -- two literals would drift. */
 /* ── #48: THE POOL IS THE MACHINE'S EXTENDED MEMORY LESS THE HMA, AS HIMEM'S IS. ──────
@@ -543,48 +457,7 @@ static VOID DsProbeLoad(VOID)
 #define XMS_HMA_KB    64
 #define XMS_POOL_KB   (CMOS_EXTENDED_KB - XMS_HMA_KB)       /* 15296 */
 
-/* ── ★ THE CPU CLASS `INT 2Fh AX=1687h` REPORTS IN CL, AND IT IS NOT COSMETIC. ────────
-     `krnl386.exe` asks `INT 2Fh AX=1687h` at start-up, and the CPU bits of the Win16
-     `GetWinFlags` word (KERNEL.132) follow the CL it gets back (observed): CL == 3
-     gives WF_CPU386 (0x0004), a larger CL gives WF_CPU486 (0x0008), and no DPMI host
-     at all stops Windows from starting.
-
-   ⇒ CL is an ORDINAL CPU class whose lowest accepted value is 3. That reading is
-     behavioural, not off a spec sheet -- there is no DPMI document in this repo, and
-     `tests/probes/dos/p_dpmins.com` confirms neither software oracle can be asked:
-     **MS-DOS 6.22 and DOSBox-X both leave every register untouched** (no DPMI host),
-     so only stock ntvdm can answer and that needs the IFEO bracket.
-
-   ⛔ WE HARDCODED 3 AND IT PRODUCED A MEASURED MISMATCH. `tests/probes/win16` measured
-     `GetWinFlags` = **4C25 from us**, **4C29 from stock**, reproduced twice. The single
-     differing bit is 0x0004 vs 0x0008 -- WF_CPU386 vs WF_CPU486 -- so stock's DPMI
-     host returns CL>3 and ours returned 3. **4 is the smallest value consistent with
-     the measurement**, so it is what we report: matching the oracle without claiming
-     anything the measurement does not support.
-   ⚠ "4 means 80486" is the obvious reading and is NOT established by anything here.
-     What IS established: stock returns >3, krnl386 treats >3 as WF_CPU486, and any
-     machine that can run NTVDMEX is past a 386 several times over.
-   ⚠ OBSERVABLE FOR EVERY DPMI GUEST, not just Win16 -- an extender may branch on it.
-     Changed once, with an interleaved before/after on the rig (`runs/s79_cl_ab/`).
-   ⛔ #248: AND ONLY ONE OF ITS TWO SITES WAS CHANGED. INT 31h 0400h reports the same CL,
-     and kept the hardcoded 3 this note replaced -- one machine, described two ways to the
-     same client. The define now lives in dpmi_svc.h with the rest of 0400h's answer, and
-     every site (1687h, 0400h on both PM paths) reads it from there. */
-
-/* DPMI (M4 slice 3, spike): the mode-switch entry far-called by a client after it
-   detects DPMI via INT 2Fh AX=1687h. Lives past the INT 67h stub (0x48..0x4B).
-   The stub is `BOP 0x50 ; RETF`: the host services the BOP by switching the VDM to
-   protected mode (rewriting CS:IP), so the RETF only runs if the switch FAILS (it
-   returns to the client in real mode with CF=1). See src/vdm/dpmi.c. */
-#define DPMI_ENTRY_OFF 0x0050
 #define DPMI_BOP       0x50
-/* DPMI 0301 (call real-mode procedure): the far-return catcher. To run a client's
-   real-mode proc we switch the VDM back to V86 and push a far-return frame pointing
-   here; when the proc RETFs it lands on this BOP, which the 0301 handler recognises
-   as "the real-mode call finished" and switches back to protected mode. Lives just
-   past the mode-switch entry (0x50..0x53). */
-#define DPMI_RMRET_OFF 0x0054
-#define DPMI_RMRET_BOP 0x54
 /* Set per BOP in the exec loop: did this `C4 C4 nn` execute in GUEST code rather than at
    one of the addresses we plant ours at? See the note where it is assigned. */
 static INT g_BopFromGuest = 0;
@@ -607,9 +480,6 @@ static CHAR  g_FirstProgram[300];         /* its 8.3 path -- the sub 01 NAME fie
 static CHAR  g_FirstTail[128];         /* its arguments -- the sub 01 command TAIL     */
 static INT   g_BackToPrompt;          /* Close Program ended it: next sub 01 = prompt */
 
-/* NTVDM's own BOPs, as issued by Microsoft's 16-bit components. These are the GUEST's
-   numbers -- ours above happen to overlap and are told apart by origin, not by value. */
-#define NTVDM_BOP_CMD  0x54   /* XP's COMMAND.COM: 15 sites, each + a sub-function byte */
 #define NTVDM_BOP_DOS  0x50   /* XP's COMMAND.COM: 1 site, in its version-refusal path  */
 /* How to answer an NTVDM BOP we have not implemented yet: contents of cfg\bop54.txt.
    A knob because the right answer is UNKNOWN and is being measured -- see the handler. */
@@ -620,17 +490,7 @@ static INT   g_BackToPrompt;          /* Close Program ended it: next sub 01 = p
 /* The startup batch file BOP 0x54 sub 0x0D hands the shell. Stock NTVDM names
    AUTOEXEC.NT here; ours defaults to the DOS-native AUTOEXEC.BAT. See the handler. */
 #define BOPAUTO_PATH   CFG_("autoexec.txt")
-/* DPMI 0303 (allocate real-mode callback): planted real-mode BOP entries (one per
-   callback slot) that a client's real-mode code far-calls; the host switches V86->PM
-   and runs the client's PM handler. DPMI_PMRET is the PM-side return catcher the
-   handler IRETs to (reached via g_PmReturnSelector, a code selector based at DOS_HDLR_SEG).
-   All within the 0x500..0x5FF handler segment (0x600 up is the device headers, #207).
-   #248: DPMI_CB_SLOTS (16, the spec's minimum -- was 4) lives in dpmi_svc.h, and the
-   slots moved to 0x90..0xCF to make room; see the segment map below. */
-#define DPMI_CB_BOP      0x55
-#define DPMI_CB_BASE_OFF 0x0090      /* slot i entry at DOS_HDLR_SEG:(base + i*4), 0x90..0xCF */
 #define DPMI_PMRET_BOP   0x56
-#define DPMI_PMRET_OFF   0x0070
 /* INT 31h 0306 RAW MODE SWITCH (Doom/DOS/4GW needs it -- it tests CF from 0306 and
    `jmp`s to its abort path when the call fails, which is exactly where it died).
    Spec (DPMI 1.0 0306): returns BX:CX = real-to-protected entry, SI:(E)DI =
@@ -643,89 +503,15 @@ static INT   g_BackToPrompt;          /* Close Program ended it: next sub 01 = p
    safe. NB offset 0x58 is DOS_IRET_STUB_OFF and BOP 0x57 is DPMI_FAULT_BOP; these
    take the next free slots in both namespaces. */
 #define DPMI_RAW2PM_BOP  0x58        /* real -> protected (entered in V86)          */
-#define DPMI_RAW2PM_OFF  0x005C
 #define DPMI_RAW2RM_BOP  0x59        /* protected -> real (entered in PM)           */
-#define DPMI_RAW2RM_OFF  0x0074
-/* INT 31h 0305 state save/restore. Both procedures are FAR CALLed with AL=0 save /
-   AL=1 restore, ES:(E)DI = buffer, and MUST PRESERVE ALL REGISTERS. We keep the whole
-   guest register file in the VDM_TIB across every mode switch we perform, so there is
-   no host-side state the client has to hand back to us -- a bare RETF is a correct,
-   register-preserving implementation. Planted as data (0xCB), not a BOP: it never
-   needs to reach the host at all. */
-#define DPMI_SSR_OFF     0x0078
 /* Highest linear address XP's LDT descriptor validator will accept for base+limit
    (MmHighestUserAddress on a 2GB-user build). Kernel RE session 7 recovered the rule
    from PspIsDescriptorValid; run 30 confirmed base 0 / limit 0x7FFEF / G=1 installs
    while a true 4GB selector does not. Used to clamp a client's flat selector. */
 #define XP_LDT_MAX_LINEAR 0x7FFEFFFFu
 
-/* Shared IRET stub for every vector that has no real handler.
- *
- * IT USED TO LIVE AT 0x66 AND WAS BEING CLOBBERED. The DPMI real-mode callback
- * slots are based at 0x60 with a 4-byte stride, so slot 1 occupies 0x64-0x66 and
- * its third byte (DPMI_CB_BOP, 0x55) is written AFTER the stub -- leaving 0x55
- * there, which decodes as PUSH BP and then runs into uninitialised memory. Every
- * vector pointed at the "safe" stub was therefore pointed at a crash. Latent for
- * IRQ 2-7/8-15, and much worse once #27 started filling every null vector with it.
- *
- * HANDLER SEGMENT MAP -- check this before adding anything:
- *   0x00-0x1F  INT 21h BOP + DBCS(0x18) + EMM name(0x0A)
- *   0x20,0x28,0x30,0x34,0x3A,0x3C,0x40,0x48,0x4C  INT 10/16/33/08/1C/1A/2F/67/09 stubs
- *   0x44       XMS entry          0x50-0x53  DPMI entry     0x54-0x56  DPMI RMRET
- *   0x58       >>> this stub <<<  0x59 AH=38h case map      0x5C-0x5E  DPMI raw RM->PM
- *   0x60-0x65  opt-in entry trampoline (qimode VIF; empty since the CB slots moved)
- *   0x70-0x72  DPMI PMRET         0x74-0x76  DPMI raw PM->RM     0x78  DPMI 0305 RETF
- *   0x80-0x82  DPMI fault BOP (code selector)
- *   0x90-0xCF  DPMI CB slots (16 x 4; #248 -- were 4 slots at 0x60-0x6F)
- *   0xE0-0xE3  INT 33h event-handler return (MS_CB_RET_OFF)
- *   free:      0x83-0x8F, 0xD0-0xDF, 0xE4-0xFF
- */
-#define DOS_IRET_STUB_OFF 0x0058
-/* DOS_SYSVARS_OFF lives in dos_layout.h with the rest of this segment map -- the
-   MCB head at -2 and MEM.EXE's UMB word at 0x8C are both measured against it. */
-
-/* GH #18 real-CPU PM-fault trampoline. When a raw (non-BOP) protected-mode #GP faults,
-   the kernel reflect path jumps the guest to [VDM_TIB+0x638]:0x1000 (see ntvdm.h
-   VTIB_FLT_*). We install a code selector H (g_DpmiFaultSelector) based at DOS_HDLR_SEG<<4
-   and plant a BOP (C4 C4 57) at offset 0x1000 within it -- linear (DOS_HDLR_SEG<<4)+0x1000
-   = 0x1500, in the mapped V86 window, in the unused gap below the env block (0x6000) and
-   the program (PSP 0x10000). The reflect therefore surfaces to the host as VTIB_EVENT=4
-   with CS==H and EIP==0x1000, and the saved faulting CS:EIP/SS:ESP sit in VTIB_FLT_SAV*.
-   This routes a raw PM #GP (SS-retype, HLT, privileged op) into the same host loop that
-   services the INT->BOP path -- ntvdm's mechanism (session 6), no ntvdm globals. */
-/* Run 67's corrected mechanism -- the layout the kernel accepts, after runs 65/66 failed:
-   - [TIB+0x638] is the fault handler's STACK selector (writable-DATA); the reflect sets
-     new SS:ESP = [TIB+0x638]:0x1000 and builds an IRET frame there. A CODE selector there
-     is REJECTED -- which is why runs 65/66 failed.
-   - The handler CS:EIP comes from a table pointed to by [VDM_TIB+8], indexed by fault
-     CLASS (6 for a #GP, observed), stride 0x10: entry = {CS@+0 word, EIP@+4 dword}. The
-     CS must be a code selector and the EIP within its limit, or the reflect is refused.
-   So we need TWO selectors + a table: a data stack selector and a code selector with a BOP,
-   and the table[6] = {code_sel, bop_off}, with [VDM_TIB+8] pointing at the table. */
-/* ── #205: THE FAULT STACK WAS IN THE PROGRAM. (s85) ──────────────────────────────────
-     It was based at linear 0x2000 (segment 0x200), "below the program" when programs
-     loaded at segment 0x1000. They load at ~0x243 now, so every reflected PM fault
-     wrote its frame at 0x2FC0..0x2FDF -- inside the running program's own image. Typed
-     at 6.22's COMMAND.COM, DOS/4GW's data segment starts at 0x2530 and its selector-table
-     pointer ([0AA2h]) is 0x2FD2: the reflect of its first raw INT 21h zeroed it, and its
-     next allocation stored through ES=0 (#GP, exit FFh). Under XP's larger shell the
-     program sits 448 bytes higher and the frame missed. Watched on the rig: the byte
-     went 0xAF -> 0x00 across exactly that reflect.
-   ► The stack now lives in the HOST image (g_FaultStack), where no guest can own it --
-     like the class table g_FaultTable beside it. 64 KB because the selector's limit is
-     0xFFFF and it is a 16-bit stack: even a wrapped SP stays inside the buffer. The top
-     is still :0x1000, the 4 KB a DPMI 0.9 exception handler is promised. */
-#define DPMI_FAULT_STK_SIZE 0x10000
-#define DPMI_FAULT_COFF    0x0080    /* BOP offset within the handler code selector (linear 0x580) */
 #define DPMI_FAULT_BOP     0x57      /* BOP number planted at the handler code:COFF        */
 #define DPMI_FLT_CLASS_GP  6         /* the kernel's fault class for a #GP (observed: 6)    */
-#define DPMI_TIB_FLTTBL    0x08      /* VDM_TIB offset holding the handler-table pointer    */
-/* Offset, WITHIN g_DpmiFaultCodeSelector (base DOS_HDLR_SEG<<4), of fault class i's own BOP
-   site. The sites themselves live at DOS_CTAB_SEG:DOS_FLTSITE_OFF -- see dos_layout.h for
-   why the class has to be distinguishable at all. The handler segment cannot host them:
-   it is 256 bytes with 16 free, and eight 3-byte BOPs do not fit. */
-#define DPMI_FAULT_SITE(i) (((DOS_CTAB_SEG << PARAGRAPH_SHIFT) - (DOS_HDLR_SEG << PARAGRAPH_SHIFT)) \
-                            + DOS_FLTSITE_OFF + (i) * DOS_FLTSITE_SIZE)
 /* Where the client's exception handler's FAR RETURN lands. DPMI 0.9 puts a return CS:IP
    at the bottom of the exception frame and the handler exits through it with a `retf`
    -- krnl386's handler exits exactly that way (observed), having first rewritten the
@@ -733,8 +519,6 @@ static INT   g_BackToPrompt;          /* Close Program ended it: next sub 01 = p
    two words ZERO for the host to fill (measured, session 34), so this is the address we
    fill them with, and the arm that catches it completes the resume. */
 #define DPMI_FLTRET_BOP    0x5A
-#define DPMI_FLTRET_COFF   (((DOS_CTAB_SEG << PARAGRAPH_SHIFT) - (DOS_HDLR_SEG << PARAGRAPH_SHIFT)) + DOS_FLTRET_OFF)
-
 /* EMS (M4): the LIM page frame is a 64KB RAM window in the UMA. VdmMapEmsFrame
    scans the conventional page-frame segments AFTER VdmInitialize for a free 64KB
    hole and maps it there; g_EmsFrameLinear holds the linear base actually chosen
@@ -895,33 +679,11 @@ static DWORD WINAPI CsrssReportThread(LPVOID parameter)
 }
 static BYTE g_FileBuffer[0x80000];   /* 512KB: hold a real game's MZ image (DOS/4GW stub etc.), run 85 */
 
-/* The live machine, for the WATCHDOG THREAD. A wedged run is terminated forcefully and
-   therefore skips the normal wind-down -- which is where captured DOS output is flushed,
-   so everything the program printed was thrown away in exactly the case where it matters
-   most. Doom prints its whole startup and then hangs; without this the log proved it had
-   run but could not show what it said. */
-static DOS_MACHINE *g_Machine = NULL;
-
-/* The device bus + its VDDs + the presentation layer live for the host's life. */
-static VDD_BUS      g_Bus;
-static PIT_STATE    g_Pit;       static NTVDD_DEVICE g_PitDevice;
 static CMOS_STATE   g_Cmos;      static NTVDD_DEVICE g_CmosDevice;
 static FDC_STATE    g_Fdc;       static NTVDD_DEVICE g_FdcDevice;
 static IDE_STATE    g_Ide;       static NTVDD_DEVICE g_IdeDevice;
-static PIC_STATE    g_Pic;       static NTVDD_DEVICE g_PicDevice;
-static VIDEO_STATE  g_Video;       static NTVDD_DEVICE g_VideoDevice;
-static INPUT_STATE  g_Input;        static NTVDD_DEVICE g_InputDevice;
-static SPEAKER_STATE g_Speaker;      static NTVDD_DEVICE g_SpeakerDevice;
-/* The REAL speaker, and whether the setting wants it. g_Speaker drives the mixer;
-   this drives Beep.sys. They are independent -- "Both" means both. */
-static PCSPEAKER  g_PcSpeaker = { INVALID_HANDLE_VALUE, 0, 0, 0, 0, 0 };
-static INT    g_SpeakerReal;
 static DWORD  g_SpeakerRealHz;   /* sampled under the lock, applied outside it */
 static DMA_STATE    g_Dma;       static NTVDD_DEVICE g_DmaDevice;
-static OPL_STATE    g_Opl;       static NTVDD_DEVICE g_OplDevice;
-static SB_STATE     g_Sb;        static NTVDD_DEVICE g_SbDevice;
-/* The Gravis UltraSound (s80, north star 2): 240h, IRQ 11, DMA 3 -- off the SB's 220h/5/1/5. */
-static GUS_STATE    g_Gus;       static NTVDD_DEVICE g_GusDevice;
 static BYTE      g_GusDram[GUS_DRAM_SIZE];
 static INT          g_GusOn = 0;
 /* #233: the AWE32's EMU8000 at SB base + 400h/800h/C00h, fitted when the model is AWE32. */
@@ -964,7 +726,6 @@ static VOID GusReport(VOID)
     cursor = LogPut(cursor, " peak=");            cursor = LogHex(cursor, g_Gus.OutputPeak);
     cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor);
 }
-enum { WOW_SHIMS = 2, SHIM_NOT_TRIED = 0, SHIM_LOADED = 1, SHIM_NO_LOAD = 2, SHIM_INIT_REFUSED = 3 };   /* WOW32.DLL and NTVDM.EXE's shims, and how each went */
 /* Does a newline-separated NAME=VALUE block already set `name` (case-insensitive, at
    the start of a line)? No C runtime here, so no strstr. */
 static INT StrStrNoCase(PCSTR block, PCSTR name)
@@ -980,10 +741,8 @@ static INT StrStrNoCase(PCSTR block, PCSTR name)
     return 0;
 }
 static MPU_STATE    g_Mpu;       static NTVDD_DEVICE g_MpuDevice;
-static COMM_STATE   g_Comm;      static NTVDD_DEVICE g_CommDevice;   /* GH #9 */
 static NETBIOS_STATE    g_Net;       static NTVDD_DEVICE g_NetDevice;    /* GH #8 (s91) */
 static BYTE      g_GenericStubVector[DOS_GENSTUB_N];  /* #315: which vector each generic stub is */
-enum { WOWFOLD_MUTE_NONE = 0, WOWFOLD_MUTE_FOLD = 1, WOWFOLD_MUTE_DROP = 2 };   /* g_WowFoldMute: log in full, fold to the verdict, drop */
 /* ── GH #8 (s91): THE HOST'S NetBIOS, for vdd_net.c. Win32's Netbios() takes an NCB
      that is the DOS one with a flat buffer pointer -- the same commands, the same
      return codes -- so this is a field copy. netapi32.dll is loaded on first use (a
@@ -1048,12 +807,6 @@ static BYTE NetSubmit(PVOID context, NETBIOS_REQUEST *request)
     memcpy(request->CallName, enumBlock.ncb_callname, NCBNAMSZ);
     return request->ReturnCode;
 }
-/* ── THE GAMEPORT (session 62). The VDD models the 558 one-shot behind port
-     0x201; this side feeds it: a winmm poll thread (joyGetPosEx -- XP-safe,
-     loaded dynamically like waveOut, no new import) writes present/axes/
-     buttons, and SettingsApply writes the adapter type. Until now the port
-     was UNCLAIMED and Mario Bros died right after a CLI poll of it. */
-static JOYSTICK_STATE    g_Joystick;       static NTVDD_DEVICE g_JoystickDevice;
 static INT          g_JoystickPovMap;   /* JoystickGamepad: map the pad's D-pad
                                        (POV hat) onto axis A -- what a DOS
                                        platformer actually wants from a pad */
@@ -1075,9 +828,6 @@ static INT          g_JoystickPovMap;   /* JoystickGamepad: map the pad's D-pad
 static DWORD g_WowFoldSeen[WOWFOLD_SLOTS];
 static INT   g_WowFoldMute;
 static DWORD g_WowFoldDropped;      /* dumps folded away, reported in WOWPERF */
-static AUDIO_STATE  g_Audio;     static AUDIO_WAVE g_Wave;
-static PRESENT_DDRAW g_PresentDdraw;
-static DOS_XMS_STATE    g_Xms;       /* M4: XMS extended-memory manager           */
 static PVOID g_Hma;       /* the HMA at linear 0x100000, 0 = unavailable */
 static DWORD        g_HmaError;   /* why not, when g_Hma == 0                     */
 #define HMA_ERROR_PROTECTED 0xE1   /* g_HmaError: committed but not accessible */
@@ -1126,15 +876,9 @@ static DOS_EMS_STATE    g_Ems;       /* M4: EMS expanded-memory manager         
    that fidelity without letting a long CLI region accumulate a burst that would then flood
    the guest with back-to-back timer interrupts. */
 #define IRQ0_PENDING_MAX 4
-static volatile LONG g_Irq0Pending = 0;    /* PIT raised IRQ0 (UI thread sets, V86 thread delivers) */
-/* s90 (#278): hardware interrupts raised by a 32-bit component (call_ica_hw_interrupt,
-   bin\wowshim\NTVDM.EXE), one bit per PIC line: bits 0-7 master (vectors 08h-0Fh),
-   8-15 slave (70h-77h). Set from ANY thread; delivered on the guest thread. */
-static volatile LONG g_IcaPending = 0;
 static DWORD g_IcaRaised = 0, g_IcaDelivered = 0, g_IcaNoHandler = 0;
 static DWORD g_WowIdleWaits = 0;              /* #306: krnl386 idle waits that blocked */
 static DWORD g_ShimState[WOW_SHIMS], g_ShimError[WOW_SHIMS];  /* 0 not tried, 1 loaded+init, 2 no load, 3 init refused */
-static VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
 /* ── HOW MANY TIMER TICKS DOES THE PROTECTED-MODE CLIENT ACTUALLY OWE? ───────────────
      Separate from g_Irq0Pending, which SATURATES AT FOUR on purpose (see above) and so
      cannot answer the question. The PM catch-up batch needs a true count, and without
@@ -1186,7 +930,6 @@ static VOID PmOwedSample(LONG owed)
     else              bucket = 8;
     g_PmOwedHistogram[bucket]++;
 }
-static volatile LONG g_PmTickOwed = 0;
 static VOID Irq0Latch(VOID)
 {
     if (g_Irq0Pending < IRQ0_PENDING_MAX) InterlockedIncrement(&g_Irq0Pending);
@@ -1231,58 +974,17 @@ static VOID TickDeliveredNote(VOID)
 }
 static DWORD g_KeyPmLogged  = 0;           /* bounded KEYPM account; see the PM exec loop */
 static DWORD g_KeyIrqLogged = 0;           /* bounded KEYIRQ account; see HostIrqSink */
-static volatile LONG g_Irq1Pending = 0;    /* count of un-delivered keyboard IRQ1s (one per scancode byte) */
 static INT g_PmIrq0Latch = 0;             /* #2b: a virtual IRQ0 awaiting injection into the PM hook */
-static INT g_InPmIrq     = 0;             /* #2b: re-entrancy guard while inside an injected PM ISR   */
 static CRITICAL_SECTION g_Lock;             /* serialises all bus dispatch       */
 #define UITICK_CHOICES 5   /* the Settings combo's entries */
-/* ── LOCK CONTENTION INSTRUMENT ──────────────────────────────────────────────
-   MEASURED (gameplay run, 2026-08-21): the guest's clock went 448 ms without
-   advancing and then received all 448 ms at once. At Skyroads' ~291 Hz tick that
-   is ~130 sequencer steps in a single burst -- the "speeds up for a few
-   milliseconds and then returns to normal" the user reports. It is very likely
-   also the held-key bug, because a UI thread that is not pumping messages
-   delivers no auto-repeat, and IRQ1 is only delivered when the exec loop gets a
-   turn: 2274 scancodes over several minutes is ~4.7 events/s, far too few for
-   held-key play.
-
-   ► THE FORK THIS EXISTS TO SETTLE. Is the UI thread BLOCKED ON THIS LOCK, or is
-     it simply not being scheduled? The two need opposite fixes -- split the lock
-     versus change thread priority/pumping -- and choosing between them by
-     reasoning is exactly what went wrong earlier today, when a threshold picked
-     from an unmeasured assumption made the timing worse rather than better.
-       lk_wait  longest time a thread sat waiting in EnterCriticalSection
-       lk_hold  longest OUTERMOST hold, with the source line that took it
-       ui_gap   longest gap between WM_TIMER entries, taken BEFORE any lock
-     Read them together: a large ui_gap with a small lk_wait means the thread is
-     not running at all; a large lk_wait means contention, and lk_hold names the
-     culprit by line number.
-
-   ► Only the OUTERMOST acquisition is timed. g_Lock is recursive for the exec
-     thread (HostIoDo already holds it when HostPitSync re-enters), so timing
-     every acquisition would report near-zero holds for the nested ones and bury
-     the one that actually matters. */
-static LARGE_INTEGER g_QpcFrequency;
 static DWORD    g_LockOwner, g_LockDepth;
 static LONGLONG g_LockSince;
-static INT      g_LockSite, g_LockHoldSite, g_LockWaitSite;
-static UINT32 g_LockHoldMicroseconds, g_LockWaitMicroseconds, g_UiGapMicroseconds;
-/* Floor on how often the WM_TIMER body may do its frame work, in ms. 15 is the ~64 Hz
-   this always actually ran at under XP's default granularity. Knob: uitick.txt.
-   ★ 0 = AUTO (s73, the default): the present is RAISED BY THE GUEST'S FRAME -- the
-     video VDD fires present_hook from the guest's own 0x3DA poll when the beam enters
-     the present window, WM_APP_PRESENT runs the frame body at once, and the timer is
-     only a fallback (floor = 90% of the mode's frame period) for a guest that never
-     looks at the retrace. Two clocks became one; see present_hook in vdd_video.h. */
-#define UITICK_AUTO 0
 static const INT UITICK_MS[UITICK_CHOICES] = { UITICK_AUTO, 5, 10, 15, 20 };   /* Settings combo index -> ms */
-static INT      g_UiTickMinimumMs = UITICK_AUTO;
 static DWORD    g_UiTickSkips;
 static DWORD    g_UiHookPresents, g_UiTimerPresents;  /* who raised each present   */
 static volatile LONG g_UiPresentPending;                /* one WM_APP_PRESENT in flight */
 static int      g_UiForced;                              /* this body run was raised by the hook; stays int: INT here moves the compiled code */
 static DWORD    g_UiInputFirst;                         /* input served ahead of a queued present */
-enum { KEYIRQ_RETRY_OFF = 0, KEYIRQ_RETRY_ON = 1, KEYIRQ_RETRY_CLOCK_ON_SCHEDULE = 2, KEYIRQ_RETRY_ONE_YIELD = 3 };   /* keyirq.txt; 2 is refuted (see HostPitDeliver) */
 /* ── MEASURE THE KEYSTROKE ITSELF, BECAUSE FOUR HYPOTHESES HAVE NOW MISSED. ──────────
      Session 26: the user reports Skyroads key lag whenever the pacer runs, and it has
      survived every fix aimed at a mechanism I INFERRED -- pacer period, pacer injection,
@@ -1299,23 +1001,11 @@ enum { KEYIRQ_RETRY_OFF = 0, KEYIRQ_RETRY_ON = 1, KEYIRQ_RETRY_CLOCK_ON_SCHEDULE
      One producer (UI thread) and one consumer (exec thread), so the ring needs no lock --
      a torn sample costs one bucket, not a wrong conclusion. */
 #define KEYLAT_RING 32
-static UINT32 QpcMicroseconds(LONGLONG ticks);          /* fwd: defined with the lock instruments */
-static VOID ModeYTimelineReport(VOID);          /* fwd: north star 1, with the mode-Y remap */
-static VOID GusReport(VOID);               /* fwd: north star 2, with the GUS globals */
-static INT  ModeYInterpServes(VOID);      /* fwd: north star 1, design C */
-static VOID ModeYRingDump(PCSTR why);  /* fwd: north star 1, design C */
-static VOID ModeYRingNoteIrq(UINT vector, WORD cs, WORD ip, WORD ss, WORD sp);
-static INT HostReadable(PCVOID pointer, SIZE_T length);  /* fwd: defined with the VEH */
 static volatile LONGLONG g_KeyLatencyTimes[KEYLAT_RING];
 static volatile LONG     g_KeyLatencyHead, g_KeyLatencyTail;
-static DWORD    g_KeyMessageHistogram[8];     /* queue delay ms: 0,1,2,4,8,16,32,64+       */
-static DWORD    g_KeyMessageMaximumMs, g_KeyMessageCount;
-static DWORD    g_KeyDeliveryHistogram[8];     /* queue->INT 09h ms: same buckets           */
-static DWORD    g_KeyDeliveryMaximumMs, g_KeyDeliveryCount;
 /* Which of the three exits from the cooperative IRQ1 gate fires. See its call site. */
 static DWORD    g_Irq1Checks, g_Irq1NoIf, g_Irq1In08, g_Irq1In09;
 static DWORD    g_Irq1AsyncInjected;        /* IRQ1s placed on the ASYNC path (see above) */
-static INT      g_KeyIrqRetry = KEYIRQ_RETRY_ON;      /* keyirq.txt = 0 restores single-attempt */
 static DWORD    g_Irq1AsyncRetry;
 static INT      g_Irq0Yielded;
 #define KEYIRQ_MAX_YIELD 3
@@ -1411,9 +1101,6 @@ static INT HostLockTry(INT site)
     g_LockDepth++;
     return 1;
 }
-/* __LINE__ gives every site its own identity without touching 28 call sites by hand. */
-#define HOST_LOCK()   HostLockEnter(__LINE__)
-#define HOST_UNLOCK() HostLockLeave()
 #define HOST_LOCK_TRY() HostLockTry(__LINE__)
 /* ── ★★★ THE CRYSTAL'S OWN LOCK. (s61) ───────────────────────────────────────────
      A real 8254 counts on a crystal that cannot be made to wait. Ours counted only
@@ -1430,49 +1117,7 @@ static INT HostLockTry(INT site)
          port handlers with g_Lock held). Nothing may take g_Lock while holding this;
          delivery attempts run AFTER release, and only via HOST_LOCK_TRY. */
 static CRITICAL_SECTION g_PitCs;
-static HWND         g_Window;
-static HANDLE       g_KeyEvent;            /* signalled when a key is pushed     */
-static volatile LONG g_Running = 1;         /* 0 once the window is closed         */
-static INT g_DpmiPm = 0;                   /* set once the guest is switched to PM (spike) */
-/* ── A CLIENT THAT EXITS INSIDE A NESTED RUN HAS STILL EXITED. (s80) ───────────────────
-     The PM `AH=4Ch` arm answers 0, and the main loop reads 0 as "the client is gone". But
-     the IRQ, mouse-callback and 0303 injectors run the client's code in loops of their
-     own, and to them 0 was just "the handler did not IRET". So an exit taken inside an
-     interrupt handler -- DOS/4GW's own abort path is exactly that -- was logged as
-     "PM ISR ABANDONED", the dead client's context was restored, and the main loop entered
-     it again: every selector freed, and the host access-violated in the fault trampoline
-     (`DPMI FATAL c0000005`, bytes `1f 0f a9 0f a1 61` = pop ds/gs/fs, popa). One flag,
-     set by the one arm that means "exited", checked where the main loop enters PM. */
-static INT g_PmClientExited = 0;
-static DWORD g_DpmiCodeBase = 0;          /* linear base of the guest PM code seg (retcs<<4) */
-/* ── THE INT->BOP PATCH MAP, KEYED BY LINEAR ADDRESS. ─────────────────────────────
-   It used to be keyed by OFFSET INTO A SINGLE 64K WINDOW at g_DpmiCodeBase, and that
-   is exactly as much of the guest as the one up-front scan could reach. Session 17
-   measured what that misses: DOS/4GW allocates conventional memory with INT 21h AH=48h,
-   READS A PROTECTED-MODE MODULE INTO IT from DOOM.EXE, retypes the descriptor to code
-   (INT 31h 0009, access 0xFB) and far-jumps in. That module's first instruction is
-   `mov ah,0x30 / CD 21` -- a RAW int, outside the window, never patched. A raw INT in
-   PM raises a #GP the kernel will not reflect, so the VDM died silently, at the same
-   address, every run since session 15.
-   Keying by linear address lets the map cover every region the client later declares to
-   be code, and makes DpmiBopVector's alias handling fall out for free. Sized to the V86
-   window plus the HMA; the DOS blocks Doom loads into land around 0x15000-0x2F000. */
-/* Keyed by LINEAR ADDRESS and stored as a HASH, not a flat array.
-   It was a flat byte array over the low 1.1 MB, which is exactly as much of the guest
-   as it could describe -- and Doom walked straight out of it. Once the extender is
-   working properly it loads its protected-mode modules into EXTENDED memory (INT 31h
-   0501 -> VirtualAlloc, addresses around 0x0398xxxx), retypes those descriptors to code
-   and jumps in. Those modules' `CD 21` instructions were therefore never patched, and a
-   raw INT in protected mode is the #GP XP will not reflect: instant silent VDM death at
-   the handoff.
-   A flat array cannot cover arbitrary VirtualAlloc addresses, so this is an open-
-   addressed hash of linear -> original vector. It is also FASTER than what it replaces:
-   unpatch/repatch used to sweep up to 1.1 MB of array per INT 31h 0301/0302, and now
-   sweep 64K slots. */
-#define DPMI_PMAP_SLOTS 65536u                 /* power of two, open addressing */
 #define DPMI_PMAP_MASK  (DPMI_PMAP_SLOTS - 1u)
-static DWORD g_PatchMapLinear[DPMI_PMAP_SLOTS];      /* 0 = empty (linear 0 is never a site) */
-static BYTE  g_PatchMapVector[DPMI_PMAP_SLOTS];
 static DWORD g_PatchMapCount;
 
 static DWORD PatchMapHash(DWORD linear) { return ((linear * KNUTH_HASH_MULTIPLIER_U) >> PATCH_MAP_HASH_SHIFT) & DPMI_PMAP_MASK; }
@@ -1512,7 +1157,6 @@ static VOID PatchMapClear(DWORD linear)
         if (g_PatchMapLinear[slot] == linear) { g_PatchMapVector[slot] = 0; return; }
     }
 }
-enum { BREAKPOINT_MODE_INT3 = 1, BREAKPOINT_MODE_WOW_SEGMENT = 2, BREAKPOINT_MODE_DUMP_DS = 4, BREAKPOINT_MODE_LE_CODE = 8 };   /* pmbreak.txt column 4: 2 takes the segment number in bits 4-7 */
 /* ── GUEST BREAKPOINTS IN PROTECTED MODE. ─────────────────────────────────────────
    THE PROBLEM THIS EXISTS FOR, because it has now cost three sessions. When a PM
    client dies, the kernel terminates the whole VDM: no exception reaches our VEH, the
@@ -1593,14 +1237,7 @@ enum { BREAKPOINT_MODE_INT3 = 1, BREAKPOINT_MODE_WOW_SEGMENT = 2, BREAKPOINT_MOD
    working descriptors, services and thunks rather than almost nothing. Opt-in,
    because the far-jmp path is what currently works. */
 #define PMKERNEL_PATH CFG_("pmkernel.flag")
-static INT g_PmNoIrq = 0;
 static INT g_PmVehPass = 0;   /* pmvehpass.flag: let a non-INT PM fault fall THROUGH the VEH */
-/* THE EIP WE HANDED TO VdmStartExecution. The kernel's exception record reports a
-   fault EIP that is NOT reliable -- E+0, E+1 and E+3 all measured, and pmal.com and
-   pmstep.com fault at DIFFERENT offsets on byte-identical code. Since the guest has
-   provably executed nothing when the fault arrives (pmal makes AL a program counter:
-   AL=0 at the first fault, and unchanged at the second), this is where it really is. */
-static volatile LONG g_PmEntryEip = -1;
 /* Per-event checkpoint verbosity. The full dump -- registers, stack, frame, entry code
    -- was built for the era when the client died inside the FIRST DpmiEnterProtectedMode and the
    only question was "did we get there at all". Now that a client runs for thousands of
@@ -1609,8 +1246,6 @@ static volatile LONG g_PmEntryEip = -1;
    death at the switch), and the full firehose only when asked for. */
 #define PMVERBOSE_PATH CFG_("pmverbose.flag")
 static UINT g_DpmiCpMaximum = 8;
-#define DPMI_BP_VEC  0xEE               /* sentinel in g_int_vec[]: not a real vector */
-#define DPMI_BP_MAX  32
 static DWORD g_BreakpointLinear[DPMI_BP_MAX];     /* requested linear addresses (from PMBP_PATH) */
 /* ── ★ WHERE krnl386's SEGMENT 1 ENDED UP IN PROTECTED MODE. ────────────────────────
      krnl386 copies its own segment 1 out of conventional memory, relocates it, and
@@ -1621,9 +1256,6 @@ static DWORD g_BreakpointLinear[DPMI_BP_MAX];     /* requested linear addresses 
      to exactly that. This is filled in when the selector is committed, and mode bit 1
      in pmbp.txt means "the address column is an OFFSET IN THIS SEGMENT". */
 static DWORD g_WowPmSegment1Base = 0;
-/* And the same for every segment: krnl386 copies each one to a block of its own and
-   commits a code selector over it. Indexed by segment number - 1; 0 = not seen yet. */
-#define WOW_PMBASE_MAX 8
 static DWORD g_WowPmBase[WOW_PMBASE_MAX];
 /* ── ★ THE CHANGE DETECTOR (pmchg.txt). One line: `<hex offset> [segment]`, the
      segment defaulting to 4 (krnl386's DGROUP), because the addresses worth watching
@@ -1693,20 +1325,6 @@ static DWORD g_BreakpointArms[DPMI_BP_MAX];
      footprint" for EVERY kind of hit, and `done` means "this one-shot has fired".
      The two were conflated, and the conflation is what let a one-shot loop. */
 static BYTE  g_BreakpointDone[DPMI_BP_MAX];
-static INT   g_BreakpointCount = 0;
-enum { CAPTURE_MS_DEFAULT = 300 };   /* capture.flag empty: a shot this often */
-/* --- run 52 hang-diagnostic telemetry (GH #2) ---------------------------------------
-   The PM loop can stop advancing in three indistinguishable-in-the-log ways: (a) the
-   main thread wedges INSIDE one DpmiEnterProtectedMode() because the kernel silently swallowed a
-   plain-instruction PM #GP and skip-resumes it forever (the deep wall, runs 20-34);
-   (b) the client busy-polls something we don't provide, so the host `for steps` loop
-   spins servicing the SAME patched INT over and over; (c) genuine slow progress. The
-   watchdog thread samples these to tell them apart: a live host-loop heartbeat (advances
-   only when the loop iterates -> distinguishes (b)/(c) from (a)), the guest CS:EIP handed
-   to the LAST DpmiEnterProtectedMode (where a frozen guest is wedged), and VEH fire-counters
-   (whether a real exception was ever delivered to us at all). */
-static volatile LONG  g_DpmiIteration     = 0;  /* host PM-loop iteration heartbeat (pre-enter) */
-static volatile LONG  g_DpmiDone     = 0;  /* PM loop finished (client exited cleanly) -> watchdog must NOT kill */
 /* ⛔ A CLIENT THAT RETURNS TO ITS PARENT NEVER SET g_DpmiDone -- the run is not over --
      so its watchdog stayed armed over the shell. An idle prompt does not bump
      g_DpmiIteration and V86 code never counts as "moving", so quitting Doom to the prompt
@@ -1721,31 +1339,6 @@ static INT            g_Headless      = 0;  /* AUTOEXIT marker present: SMB test
    guest -- the last one being how we caught the BIOS tick starving during an I/O
    storm (iobench case 1 could not accumulate 5 ticks in 30 s). */
 static DWORD          g_EventIo         = 0;  /* port-I/O events serviced            */
-static DWORD          g_IoExtra      = 0;  /* accesses absorbed by the LOOP burst */
-static DWORD          g_Irq0Injected      = 0;  /* INT 08h injections into the guest   */
-/* ── ★ IS THE GUEST'S CLOCK EVEN? A TOTAL CANNOT ANSWER THAT. ────────────────────
- *  The user reports Skyroads "slow down / speed up" -- a RATE THAT VARIES -- and
- *  every instrument this host has for IRQ0 is a COUNT. `irq0_inj 4485` is the same
- *  number whether the ticks arrived evenly or in a clump followed by a stall, and
- *  session 22 already had to reconstruct the distribution by hand to find the audio
- *  defect at the DMA block boundary. Counting harder cannot see unevenness; only
- *  the distribution can.
- *  ⇒ Two shapes, because they answer different questions:
- *      TIMELINE   deliveries in each whole second of the run. A slow-down/speed-up
- *                 is visible directly as the sequence moving -- 180,180,61,204,90 --
- *                 and no other instrument here would show it at all.
- *      GAPS       the inter-delivery interval histogram. Says whether unevenness is
- *                 a few long stalls or continuous jitter, which need different fixes.
- *  ⚠ RATE, NOT COST: ~180 deliveries a second, so one QueryPerformanceCounter each
- *    is free -- and unlike the reflected-INT trace this cannot be driven faster by
- *    the guest, because it is bounded by the PIT rate the guest itself programmed.
- *    (See [[guest-trace-can-outrun-the-guest]] for why that distinction matters.)
- *  ⚠ FIXED WINDOW, so a long run cannot grow it. Past IRQ0TL_SECS the timeline
- *    simply stops recording; the gap histogram keeps going. */
-#define IRQ0TL_SECS 90
-static DWORD          g_Irq0TimeLast[IRQ0TL_SECS];   /* deliveries per second of run     */
-static DWORD          g_Irq0GapHistogram[8];       /* ms: <1,1,2,4,8,16,32,64+         */
-static DWORD          g_Irq0GapMaximumMs, g_Irq0GapCount;
 static LONGLONG       g_Irq0Start, g_Irq0TimePrevious;
 /* ── ★ WHAT IS THE GUEST DOING DURING A LONG TIMER GAP? (Skyroads wobble, s61) ────
      The gaps that wobble the game are the long ones, and the question is whether
@@ -1814,10 +1407,6 @@ static DWORD          g_Irq0NoteCs, g_Irq0NoteIp;      /* set by the caller     
      "the guest missed a tick" test, expressed in the guest's own units. */
 static DWORD          g_Irq0RaiseCount, g_Irq0AttemptsCount, g_Irq0NieCount, g_Irq0YieldCount;
 static DWORD          g_Irq0PrRaise, g_Irq0PrAttempts, g_Irq0PrNie, g_Irq0PrYield;
-/* Anomalous gaps (>= 2 programmed periods) and normal ones, with I/O as a RATE. */
-static DWORD          g_Irq0AnomalyCount, g_Irq0AnomalyMicroseconds, g_Irq0AnomalyIo;
-static DWORD          g_Irq0AnomalyRaise, g_Irq0AnomalyAttempts, g_Irq0AnomalyNie, g_Irq0AnomalyYield;
-static DWORD          g_Irq0AnomalyGeneration, g_Irq0AnomalyDelete;   /* B and A, by raise count */
 static DWORD          g_Irq0NormalCount, g_Irq0NormalMicroseconds, g_Irq0NormalIo;
 static DWORD          g_Irq0WorstRaise, g_Irq0WorstAttempts, g_Irq0WorstNie, g_Irq0WorstYield;
 static DWORD          g_Irq0WorstPerMicroseconds;   /* the period in force at the worst gap  */
@@ -1882,7 +1471,6 @@ static DWORD          g_Irq0SkipStub= 0;  /* ...because we were inside our INT 0
 static DWORD          g_PitReloadLog = 0;
 static DWORD          g_PitLatchDumps = 0;   /* PIT-LATCH poll-ring dumps printed (max 2) */
 static DWORD          g_HeartbeatDs = 0;            /* guest DS sampled by the heartbeat (s69 fade dump) */
-static INT InterpreterMemoryPageOk(UINT32 linear);        /* fwd: page-validity guard, defined with V86HostRead8 */
 static DWORD          g_EventIntPending    = 0;  /* event-3 interrupt-pending notifications */
 static DWORD          g_EventIoString      = 0;  /* REP INS/OUTS (event 1) reflects serviced */
 static DWORD          g_Irq1Injected      = 0;  /* INT 09h injections (should track scancodes) */
@@ -1891,10 +1479,8 @@ static DWORD          g_PmIrqReflectLogged = 0; /* bounded log budget for the ab
 static DWORD          g_IrqNInjected      = 0;  /* device IRQs (2-7) injected into the guest */
 static DWORD          g_IrqNRefuseLog = 0; /* bounded refusal-log budget (see the gate)  */
 static DWORD          g_IrqNRefuseTotal = 0;
-static volatile LONG  g_WoundDown    = 0;  /* exec loop exited: clean shutdown in progress */
 static HANDLE         g_OnceMutex    = NULL; /* the single-instance mutex (WinMain); handed
                                                  over before a relaunch, see task-done */
-#define IO_HOT_MAX 48   /* 12 filled up before the hottest port was even seen */
 static WORD g_IoLastPort = 0;      /* port the last serviced access touched */
 /* ── ⚠ AN INTERMITTENT I/O STORM, NOT YET EXPLAINED (session 53). ────────────
      Some runs of tests/probes/dos/spktest.com report 1.87 MILLION serviced I/O
@@ -1912,7 +1498,6 @@ static WORD g_IoLastPort = 0;      /* port the last serviced access touched */
      re-reporting an event we already retired. The event histogram says which
      kernel event is arriving. One dirty run now answers the question. */
 static DWORD g_IoViaDirect = 0, g_IoViaRetro = 0;
-#define EV_HIST_MAX 16
 static DWORD g_EventHistogram[EV_HIST_MAX];
 /* ── #238: WHERE THE CPU THREAD IS WHEN IT IS NOT IN THE GUEST. (s85) ─────────────────
      3DBench's 1 kHz timer: 84% of async attempts bailed `not_in_exec`, with only ~410
@@ -1924,16 +1509,8 @@ static DWORD g_V86MicrosecondsTotal, g_HostMicrosecondsEvent[EV_HIST_MAX];
 static LONGLONG g_HostTimeLast;           /* QPC of the last VdmRunGuest return; 0 = none */
 static INT  g_HostEventLast;
 static DWORD g_BopHistogram[BYTE_VALUES];            /* V86 BOP events by number (the busiest are printed) */
-/* ...and the same, second by second, so a run with two phases (3DBench: a title wait
-   spinning on INT 16h, then the benchmark) is not read as one average. Cumulative
-   snapshots at the first VdmRunGuest return of each second; the report prints deltas. */
-#define XS_SECS 40
-enum { XS_RAISE, XS_ASYNC, XS_COOP, XS_NIE, XS_BOP, XS_IO, XS_HOSTMS, XS_PACE, XS_N };
 static DWORD g_PitPaceCalls;              /* PitPacerThread wakes (declared here for g_XsSnapshot) */
 static DWORD g_XsStart, g_XsSeconds, g_XsSnapshot[XS_SECS][XS_N];
-/* The cooperative IRQ0 gate's IF refusals inside one of our stubs, by the caller's
-   return CS:IP (the INT's frame) and the stub offset. */
-#define SKIPIF_SITES 6
 static struct { WORD Cs, Ip, Stub; DWORD Count; } g_SkipIfSite[SKIPIF_SITES];
 static VOID SkipIfSiteNote(DWORD codeSegment, DWORD instructionPointer, DWORD stub)
 {
@@ -1946,12 +1523,7 @@ static VOID SkipIfSiteNote(DWORD codeSegment, DWORD instructionPointer, DWORD st
         }
     }
 }
-static struct { WORD Port; DWORD Count; } g_IoHot[IO_HOT_MAX];
-static INT   g_IoHotCount = 0;
 static DWORD g_IoSiteLogged = 0;
-#define IO_UNCLAIMED_MAX 24
-static WORD g_Unclaimed[IO_UNCLAIMED_MAX];
-static INT      g_UnclaimedCount = 0;
 enum { MYPM_STOP_RETURNED, MYPM_STOP_WINDOW_CLOSED, MYPM_STOP_DECLINED, MYPM_STOP_CAP, MYPM_STOP_NOT_FLAT, MYPM_STOP_IRQ_WAITING, MYPM_STOP_REASONS, MYPM_CHECK_MASK = 0x3F };
 static UINT       g_CaptureMs    = CAPTURE_MS_DEFAULT; /* CAPTURE_FLAG contents: ms between shots */
 /* #58: an optional SECOND number in capture.flag -- ms to wait before the first shot --
@@ -2004,99 +1576,26 @@ static DWORD          g_ModeYPmStop[MYPM_STOP_REASONS];       /* returned, windo
 #define P12_SITE_MAX 24
 static struct { DWORD Cs, Ip, Count; BYTE Bytes[8]; } g_P12Site[P12_SITE_MAX];
 static UINT g_P12SiteCount = 0, g_P12SiteLost = 0;
-#define PM_HEADLESS_MS_DEFAULT 30000             /* headless exec-loop wall-clock cap (an infinite visual demo self-exits) */
 static DWORD g_HeadlessMs = PM_HEADLESS_MS_DEFAULT;   /* overridable via HEADLESS_MS_PATH */
-#define PM_HEADLESS_MS g_HeadlessMs
 #define PM_HEADLESS_GRACE_MS 3000                /* grace for a clean wind-down before the hard backstop forces exit */
 static volatile DWORD g_DpmiEnterCs = 0;  /* guest CS handed to the last DpmiEnterProtectedMode    */
 static volatile DWORD g_DpmiEnterEip= 0;  /* guest EIP handed to the last DpmiEnterProtectedMode   */
 static volatile DWORD g_DpmiLastEvent  = 0;  /* VTIB_EVENT reported by the last return        */
-static volatile DWORD g_DpmiLastCs  = 0;  /* guest CS after the last return                */
-static volatile DWORD g_DpmiLastEip = 0;  /* guest EIP after the last return               */
 static volatile DWORD g_DpmiLastVector = 0;  /* vector serviced on the last iteration         */
 static volatile LONG  g_VehAny       = 0;  /* # PM-context exceptions delivered to the VEH  */
 static volatile LONG  g_VehFatal     = 0;  /* # of those that took the non-reflect fatal path */
-static DWORD DpmiSelectorBase(WORD selector);       /* fwd: watchdog resolves the frozen selector base */
-/* DPMI PM interrupt-vector table (INT 31h 0204/0205). A client installs its own PM
-   handlers here; we store them so a get/set/restore round-trips faithfully. (We still
-   service patched INT 21h/31h ourselves -- routing to a client-installed PM handler is
-   a deeper item; storing the vectors is what real extenders' save/restore needs.) */
-/* `client` distinguishes a vector the CLIENT installed (0205 / INT 21h AH=25h) from
-   the host default we pre-load into every entry at mode-switch time. The difference is
-   load-bearing in two places: we only ROUTE an interrupt to a handler the client chose,
-   and we only INJECT IRQ0 into an INT 08h the client actually hooked -- injecting into
-   our own default would be a very confusing way to talk to ourselves. */
-static struct { WORD Selector; DWORD Offset; BYTE Client; } g_PmInt[IVT_VECTORS];
-/* ── THE HOST'S DEFAULT PROTECTED-MODE INTERRUPT HANDLERS. ────────────────────────
-   0204 (get PM interrupt vector) used to return 0000:0000 for anything the client had
-   not yet installed, and that is not an answer -- it is a null pointer wearing the
-   shape of one. A DOS extender reads the CURRENT vector before installing its own,
-   precisely so it can CHAIN to it for anything it does not handle itself; Doom's
-   DOS/4GW does exactly that for INT 21h, and then failed every call it wanted to pass
-   down (its private AX=FF00 among them) because the chain led nowhere.
-   So every vector starts out pointing at a three-byte stub of our own:
-       C4 C4 CF     BOP ; IRET
-   The third byte does double duty -- it is the BOP's immediate AND the IRET that
-   returns to the client -- which is exactly the +2 EIP convention the patched-INT path
-   already uses, so it needs no special case in the dispatcher. Each stub's LINEAR
-   address is registered in the patch map against its vector, so DpmiBopVector() resolves
-   a chained call straight back to the service the client was asking for. */
-/* Every block we have handed the client through INT 31h 0501. We know exactly which
-   memory is the client's because we allocated it -- and that is the only usable answer
-   when the client declares a FLAT code selector. See DpmiPatchCodeRegion().
-   `code` marks a block that holds one of the program's EXECUTABLE objects, matched by
-   size against the LE object table -- see DpmiLeLearn(). */
-#define DPMI_MEMBLK_MAX 64
 static struct { DWORD Base, Size; BYTE Code; } g_DpmiBlock[DPMI_MEMBLK_MAX];
 static INT g_DpmiBlockCount = 0;
-/* ── WHAT THE CLIENT OWNS, SO IT CAN BE GIVEN BACK WHEN IT EXITS. (s80) ─────────────
-     g_DpmiBlock[] is the patcher's list: capped at 64 and never told about 0502, so it
-     cannot say what is still live. These two can. DpmiClientTeardown() releases
-     whatever is left in them, which is what a DPMI host does when its client ends --
-     and what lets the NEXT client (the user runs Doom twice) find memory at all.
-   #248: g_DpmiOwned[] is now also THE HANDLE RECORD -- 0502h and 0503h accept only a
-     handle that is in it (8023h otherwise), because a handle here is a host address and
-     VirtualFree() on an arbitrary one would release OUR memory. So it may not silently
-     overflow any more: 0501h refuses (8016h) when it is full. 4096 live blocks is ~36x
-     the most any shelf guest has held (ZAR, 114 allocations in a whole run). */
-#define DPMI_OWNED_MAX 4096
 static DWORD g_DpmiOwned[DPMI_OWNED_MAX];  /* live 0501 blocks (VirtualAlloc bases)  */
 static INT   g_DpmiOwnedCount = 0;
-#define DPMI_DOSBLK_MAX 64
 static WORD  g_DpmiDosBlock[DPMI_DOSBLK_MAX]; /* live 0100 DOS blocks (segments)        */
 static INT   g_DpmiDosBlockCount = 0;
 static INT   g_LdtClientMark = 0;          /* g_LdtNext when the client switched in */
 static INT   g_PmExitCode = 0;             /* AL of the client's PM AH=4Ch           */
 #define DPMI_LE_MIN_CODE_SIZE 0x10000u   /* only code objects this big are matched (see g_LeCodeSize) */
-/* ── THE CLIENT'S EXECUTABLE DECLARES WHICH OF ITS MEMORY IS CODE. ────────────────
-   A flat code selector (base 0, limit 4 GB) cannot be scanned for INT sites, so an
-   application whose own code lives behind one -- every DOS/4GW game -- runs with its
-   `CD 21`/`CD 31` unpatched, and a raw INT in protected mode is the one fault XP will
-   not reflect. Scanning "every block we handed out" was tried and is WORSE (session 17:
-   it patched bytes inside DATA and the run ended earlier), because the client's memory
-   is code and data mixed.
-   But the client is an LE ("linear executable") image, and an LE names its own objects:
-   each carries a flags word with bit 2 = EXECUTABLE. DOS/4GW allocates ONE 0501 block
-   per object, sized to the object's virtual size rounded up to a page -- so the object
-   table tells us which blocks are code, exactly, with no guessing at content.
-   Measured on DOOM.EXE, and the correspondence is exact in all three cases:
-       obj1  vsize 0x44f71  READ|EXEC|BIG32   -> 0501 of 0x45000  = the game's code
-       obj2  vsize 0x00019  READ|EXEC|ALIAS16 -> 0501 of 0x01000  (also gets a based
-                                                  descriptor, so it was already patched)
-       obj3  vsize 0x85e10  READ|WRITE|BIG32  -> 0501 of 0x86000  = data, NOT scanned
-   ► ONLY OBJECTS OF 64 KB AND UP ARE MATCHED. A page-rounded size is a weak key when it
-     is small: 0x1000 is the commonest allocation there is, and Doom makes an unrelated
-     one. Small code objects need a based descriptor to be reachable at all (obj2 does),
-     which the 0009/000C path already patches -- so the size key is only ever asked to
-     identify the big flat-addressed image, where it is distinctive. */
-#define DPMI_LE_MAX 16
 static DWORD g_LeCodeSize[DPMI_LE_MAX];   /* page-rounded sizes of the EXEC objects */
 static INT   g_LeCodeCount = 0;
 
-/* When the client last installed a PM INT 08h handler, and how long IRQ0 injection must
-   then hold off. One 18.2 Hz tick period is 54.9 ms -- the shortest gap real hardware can
-   put between "the vector exists" and "the timer fires". See INT 31h 0205. */
-#define DPMI_IRQ0_ARM_QUIET_MS 55
 /* Ticks run per asynchronous entry -- see the drain in the main loop. */
 /* ► A BATCH IS CATCH-UP, NOT A LICENCE TO COMPRESS TIME. At Doom's 140 Hz, draining
      64 ticks back to back hands the guest 0.45 SECONDS of game time in microseconds --
@@ -2111,12 +1610,10 @@ static INT   g_LeCodeCount = 0;
    against a handler that traps forever without making progress. */
 #define DPMI_IRQ0_PHASE_MAX 65536u
 #define DPMI_IRQ0_MS_MAX    500u
-static DWORD g_PmVector8ArmedMs = 0;
 /* Set when the APPLICATION (not the extender's arming pass) installs a timer ISR. Until
    then vector 8 holds a placeholder stub and delivering to it is both pointless and, on
    DOS/4GW, fatal. Learned by snooping INT 21h AH=25h -- see the routing path. */
 static INT   g_DpmiUseKernel = 0;         /* pmkernel.flag: run PM via VdmStartExecution */
-static INT   g_PmAppHookedTimer = 0;
 /* ...and WHERE it is. Kept apart from g_PmInt[8] on purpose: that table is what INT 31h
    0204 reports back, and it must keep saying exactly what the client installed through
    0205. Answering 0204 with a handler DOS/4GW never set is how the first attempt at this
@@ -2125,42 +1622,15 @@ static INT   g_PmAppHookedTimer = 0;
    Where we DELIVER and what the vector table REPORTS are two different questions. */
 static WORD  g_PmAppTimerSelector = 0;
 static DWORD g_PmAppTimerOffset = 0;
-/* Where an injected IRQ should actually land. For the timer on a 32-bit client that is the
-   application's own ISR once we have seen it installed; otherwise the vector table. */
-/* ► DELIVER THROUGH THE EXTENDER'S OWN STUB, NOT STRAIGHT AT THE APPLICATION'S ISR.
-     DOS/4GW owns the IDT and keeps per-vector nesting state; entering the game's handler
-     behind its back leaves that state unbalanced the moment the handler chains onward,
-     and the extender says so:
-         DOS/4GW Professional fatal error (1001): error in interrupt chain
-     So the vector table is the delivery target, as it always was. What the AH=25h snoop
-     is for is only KNOWING that the application has an ISR at all -- before that, vector
-     8 holds an arming-pass placeholder and delivering to it is fatal. The app handler is
-     still recorded, because it is what makes that judgement possible and it is the thing
-     to print when this goes wrong again. */
-#define DPMI_IRQ_TARGET_SEL(iv) (g_PmInt[iv].Selector)
-#define DPMI_IRQ_TARGET_OFF(iv) (g_PmInt[iv].Offset)
-
-#define DPMI_PMDEF_STRIDE 3
 static WORD  g_PmDefaultSelector  = 0;      /* code selector over the stub block */
 static DWORD g_PmDefaultBase = 0;      /* its linear base                   */
 static INT   g_PmDefaultIndex  = -1;     /* its LDT slot, so its D/B can follow the client */
 static INT   g_PmDefaultFromDos = 0; /* the block came from the DOS arena, not the host pool */
-/* DPMI PM EXCEPTION-handler table (INT 31h 0202/0203). Separate from g_PmInt on
-   purpose: 0202/0203 address CPU exceptions 00h-1Fh, which are a different namespace
-   from the interrupt vectors 0204/0205 addresses -- a client may legitimately install
-   a #GP (0Dh) exception handler and an INT 0Dh (IRQ5) interrupt handler at once, and
-   collapsing them into one table would make each silently overwrite the other.
-   Doom's DOS/4GW makes 45 of these calls -- the biggest single block of UNSUP in the
-   session-16 trace -- installing its own fault handlers before it runs the game. */
-static struct { WORD Selector; DWORD Offset; INT IsSet; } g_PmException[X86_EXCEPTIONS];
-static INT   g_DpmiVi = 1;                 /* DPMI virtual interrupt flag (INT 31h 0900/0901/0902) */
 /* DPMI 0303 real-mode callbacks: each slot records the client's PM handler (sel:off)
    and the RMCS buffer (sel:off) to marshal register state through. g_PmReturnSelector is a
    code selector based at DOS_HDLR_SEG (0x500) so the PM handler's IRET lands on the
    planted DPMI_PMRET catcher; allocated lazily on the first 0303. */
 static struct { WORD PmSelector; DWORD PmOffset; WORD RmEs; DWORD RmDi; INT IsUsed; } g_Callbacks[DPMI_CB_SLOTS];
-static BYTE g_BiosUnimplemented[BYTE_VALUES];   /* GH #27: BIOS services a run actually wanted */
-
 /* ---- INT 21h AH=4Bh EXEC.  GH #30. ------------------------------------------
  *
  * A parent calls EXEC, a child runs to completion, and the parent carries on at
@@ -2187,8 +1657,6 @@ static struct {
     WORD  ChildSegment;                  /* freed when the child terminates */
     WORD  EnvironmentSegment;                    /* the env COPY we made for it, if any; freed with it */
 } g_Exec[EXEC_MAX_DEPTH];
-static INT g_ExecDepth;
-#define PROGRAM_NAME_SIZE 64
 /* ── FILE > CLOSE PROGRAM ENDS A CHILD THAT NEVER ASKED TO END. (GH #152) ────────
      A program that exits unhooks what it hooked; one we END does not. Its INT 08h/09h
      would go on pointing into the block DosTerminate frees, and the shell would die
@@ -2205,9 +1673,6 @@ static struct {
 static volatile LONG g_CloseRequest;     /* UI -> exec thread: end the innermost program */
 static INT  g_CloseForced;           /* the exit in progress is ours, not the guest's */
 static INT  g_TopIsShell;           /* depth 0 is a shell: nothing to close there */
-static VOID ExecMachineSave(INT depth);    /* fwd: defined with CloseProgramNow */
-static CHAR g_ProgramName[PROGRAM_NAME_SIZE];           /* fwd: the status strip's name (defined below) */
-
 static BYTE g_ExecFileBuffer[0x80000];    /* child image; separate from the parent's */
 enum { EXEC_WINDOWS_POLL_MS = 100 };   /* ExecWindows: waiting for a console child */
 /* ── ★ GH #255: EXEC OF A WINDOWS PROGRAM GOES TO WINDOWS, AS ON STOCK NTVDM. ──────
@@ -2706,47 +2171,13 @@ static INT PmRwHardwareFail(DOS_MACHINE *machine, volatile BYTE *tib, BYTE funct
     *logCursor = LogPut(*logCursor, ", 59h=53h\r\n");
     return 1;
 }
-enum { DPMI_FAULT_TABLE_ENTRY = 0x10, DPMI_FAULT_TABLE_OFFSET = 4 };   /* g_FaultTable: per class, the code selector then the offset DWORD */
-static WORD  g_PmReturnSelector = 0;
-/* GH #18: the PM-fault reflect selectors (0 = not installed). Run 67 corrected model:
-   g_DpmiFaultSelector = the handler STACK selector (writable-data) written to [TIB+0x638];
-   g_DpmiFaultCodeSelector = the handler CODE selector (with a BOP at DPMI_FAULT_COFF) whose
-   {sel,off} we plant in the class table; g_FaultTable = the handler table (stride 0x10) the
-   kernel reads via [VDM_TIB+8], indexed by fault class -- DOS_FLTSITE_N entries, each
-   pointing at its OWN BOP so the index survives the reflect (see dos_layout.h). */
-static WORD  g_DpmiFaultSelector = 0;
-static WORD  g_DpmiFaultCodeSelector = 0;
-static BYTE  g_FaultTable[DOS_FLTSITE_N * DPMI_FAULT_TABLE_ENTRY] __attribute__((aligned(16)));
-static BYTE  g_FaultStack[DPMI_FAULT_STK_SIZE] __attribute__((aligned(16)));   /* #205 */
-/* DPMI LDT descriptor allocator. Indices 0=null,1=code(0x0F),2=data(0x17) are the
-   switch's; DPMI clients allocate from 3+. We keep base/limit/access so INT 31h
-   06/07/08/09 can get/modify them and reinstall via svc 10 (NtSetLdtEntries). */
-/* ── THE LDT, WITH A REAL FREE LIST. ─────────────────────────────────────────────
-   INT 31h 0001 (free descriptor) used to be a no-op that logged " -> free", which is
-   fine right up until a client actually recycles descriptors -- and Doom does, heavily:
-   360 allocations against 315 frees in a single startup. Leaking every one exhausted
-   the table, 0000 started returning ENOMEM, and the client carried on using the garbage
-   selector it got back (0x8011, index 4098). A no-op is not a safe stub when the thing
-   being stubbed is a RESOURCE.
-   The table is also bigger: 512 was an arbitrary bound from the spike era. */
-#define DPMI_LDT_MAX 2048
-/* Indices below this belong to the host: 0 null, 1/2 the initial CS/DS, and 3 which
-   DpmiInstall() force-types to writable data. INT 31h 0001 refuses to free them and
-   the WOW selector stage refuses to allocate them -- one constant so the two agree. */
-#define DPMI_LDT_RESERVED 6
 /* ★★★ The host's private LDT pool sits between the reserved entries and the
      client's arena; see the long note at DpmiHostIndex(). The range is MEASURED
      (the guest never touches 0x09..0x2b across three full runs), and the
      client-facing counter starts ABOVE it so the two can never meet. */
 #define DPMI_HOSTPOOL_LO  0x09
-#define DPMI_HOSTPOOL_HI  0x2b
-#define DPMI_LDT_FIRSTFREE (DPMI_HOSTPOOL_HI + 1)
-static struct _DPMI_DESCRIPTOR { DWORD Base, Limit; BYTE Access, Flags; } g_Ldt[DPMI_LDT_MAX];
-static INT   g_LdtNext = DPMI_LDT_FIRSTFREE;
 static WORD  g_LdtFree[DPMI_LDT_MAX];   /* recycled indices, LIFO */
 static INT   g_LdtFreeCount = 0;
-static volatile BYTE *g_TibDebug = 0;        /* VDM_TIB, for the crash VEH to dump guest state */
-
 /* Serial debug sink (DPMI harness): COM1 is captured by QEMU (-serial file:vm/serial.log)
    so the host reads the log directly -- no GUI screendump, no stale-host ambiguity. */
 static HANDLE g_Serial = INVALID_HANDLE_VALUE;
@@ -2799,7 +2230,6 @@ static VOID ComTransmitSink(PVOID context, INT port, BYTE byteValue)
     { DWORD bytesWritten = 0; WriteFile(g_ComSpool[port], &byteValue, 1, &bytesWritten, NULL);
       FlushFileBuffers(g_ComSpool[port]); }
 }
-enum { SETTINGS_APPLY_STARTUP = 0, SETTINGS_APPLY_LIVE = 1 };   /* SettingsApply: before anything is built, or on a running VM */
 /* ── THE EQUIPMENT WORD IS A CLAIM ABOUT HARDWARE, SO COMPUTE IT FROM THE
      HARDWARE. (GH #9, session 56) ──────────────────────────────────────────
      Two arms answer INT 11h -- one in PM, one in V86 -- and both used the bare
@@ -3306,22 +2736,6 @@ static INT MemoryReadable(ULONG_PTR address, SIZE_T length)
    menu_* helpers above that point have to compensate for a detached bar. */
 static HMENU        g_FsMenu;
 
-/* Device IRQs 2-7 (the Sound Blaster's block-completion IRQ 5 above all). IRQ 0
-   and 1 keep their existing dedicated paths; everything else latches here and is
-   injected as INT (8 + irq), the PC's standard master-PIC vector mapping. Without
-   this an SB transfer completes, raises IRQ 5, and the game waits forever for an
-   interrupt the host quietly dropped. */
-/* ── SIXTEEN LINES, NOT EIGHT. (s80, north star 2) ─────────────────────────────────────
-     Device IRQs were latched and delivered for the MASTER 8259 only (lines 2-7), though
-     vdd_pic models the slave and the cascade completely. A GUS's period-typical IRQ 11
-     or 12 -- or the RTC's 8 -- could be raised and never reach a guest. The latch now
-     covers all sixteen lines and every cooperative delivery path walks them in the AT's
-     real priority order: the slave's eight hang off IRQ2, so they outrank IRQ 3-7.
-     The ASYNCHRONOUS injector covers the slave too: a latch that only waits for the
-     next trap delivers once per timer tick to a guest that spins -- measured with
-     p_irq8.com, 5 RTC interrupts in 5 BIOS ticks against ~280 on three real machines. */
-static volatile LONG  g_IrqNPending[PIC_LINES];
-static const BYTE  g_IrqOrder[14] = { 2, 8, 9, 10, 11, 12, 13, 14, 15, 3, 4, 5, 6, 7 };
 /* The PROTECTED-mode vector a DPMI client hooks for a line: DPMI 0.9 reflects hardware
    interrupts at the PIC's own vector numbers, 08h-0Fh and 70h-77h. */
 static UINT IrqPmVector(UINT irq) { return irq < PIC_LINES_PER_CHIP ? PIC_MASTER_VECTOR_BASE + irq : PIC_SLAVE_VECTOR_BASE + (irq - PIC_LINES_PER_CHIP); }
@@ -3330,29 +2744,13 @@ static UINT IrqPmVector(UINT irq) { return irq < PIC_LINES_PER_CHIP ? PIC_MASTER
    `ok` counts the ones that landed. try==ok==0 is the healthy steady state -- it
    means every device IRQ was placed at its raise instant and this cost nothing. */
 static DWORD g_IrqNRetryTry = 0, g_IrqNRetryOk = 0, g_IrqNRetryWhy = 0;
-static DWORD          g_IrqRaised[PIC_LINES];     /* VddRaiseIrq calls, per line */
 static DWORD          g_IrqRaisedAny = 0;
-/* Async preemption (session 11). g_HostCpu is a handle to the thread that runs the guest
-   -- VdmQueueInterrupt's ServiceData -- duplicated once from the exec thread itself.
-   g_QiBits are the [0x714] pending bits to set alongside the queue call, and
-   g_QiRaise enables the periodic IRQ 5 the qirq probe listens for; both come from
-   QIMODE_PATH so a mode can be retried without a rebuild. */
-static HANDLE         g_HostCpu          = NULL;
 static DWORD          g_ExecPriority     = 0;   /* guest thread priority class; see EXECPRIO_PATH */
 static DWORD          g_QiBits       = 0;
 static INT            g_QiRaise      = 0;
 static INT            g_QiVif        = 0;   /* start the guest with EFLAGS.VIF set */
-/* ON BY DEFAULT since v132: async injection is what makes a real game playable (a guest
-   parked in its own handler never traps, so nothing else can deliver its timer or its
-   keystrokes), and it is now gated by a real PIC. qimode can still turn it OFF (bit 6) for
-   A/B testing, but nothing should depend on a flag file being present to work. */
-static INT            g_QiSuspended       = 1;   /* async-inject via SuspendThread+SetThreadContext */
 static INT            g_QiKeys       = 0;   /* synthesise keypresses (repro the hang) */
 static INT            g_QiKeysAsync = 0;   /* opt-in: async-deliver IRQ1 (see HostIrqSink) */
-/* Set only while the exec thread is inside VdmStartExecution, i.e. while the thread's
-   CONTEXT genuinely is the guest's frame and our loop is not touching the VDM_TIB. The
-   async injector refuses to act unless this is set, so it can never race the exec loop. */
-static volatile LONG  g_InExec       = 0;
 /* ── ⚠⚠ ONE THREAD MAY OWN THE GUEST'S CONTEXT AT A TIME, AND UNTIL THE COURIER
      THERE WAS ONLY EVER ONE. AsyncInjectIrq() reads the context, computes an IRET
      frame from it and writes it back; two threads doing that concurrently would each
@@ -3369,20 +2767,12 @@ static volatile LONG  g_InExec       = 0;
    ⚠ The CPU throttle also suspends this thread, and that stays safe without taking
      this: it only READS the context, and suspend counts nest. */
 static volatile LONG  g_AsyncContextWrite   = 0;   /* 1 while a thread owns the guest CONTEXT */
-/* #219: the window is inactive, so the machine is paused -- see HostPauseSet(). */
-static volatile LONG  g_PauseWant    = 0;
 /* #167: Settings > General "behave like" = MS-DOS 6.22 (0 = Windows XP NTVDM, the default).
    Mirrored from g_Settings by SettingsApply, for the device code that runs before it. */
 static INT            g_BehaveDos622 = 0;
 static INT            g_PauseSuspended    = 0;   /* the CPU thread is suspended BY THE PAUSE */
 static DWORD          g_PauseCount, g_PauseCooperative, g_PauseMs;
-/* Signalled by the IRQ0 raise site when a tick is still pending after its one attempt.
-   Declared here because HostIrqSink is above the courier itself; see
-   TickCourierThread for what waits on it. */
-static HANDLE         g_CourierEvent;
-static DWORD          g_AsyncInjected     = 0;   /* successful async injections */
 static DWORD          g_InterpRefused = 0;  /* interpreter declined the faulting opcode */
-static DWORD          g_AsyncBail    = 0;   /* attempts declined (guest not in a safe spot) */
 static DWORD          g_QiCalls      = 0;
 static volatile LONG  g_QiStatus     = 0;  /* NTSTATUS of the last queue call */
 /* ASYNC INJECTION, DONE OURSELVES. VdmQueueInterrupt turned out to be transition-only, so
@@ -3416,8 +2806,6 @@ static DWORD          g_AsyncNestBlocked = 0;   /* refused: line masked or in se
 /* True when a line's vector still points at one of our own do-nothing stubs (the shared
    device IRET at DOS_HDLR_SEG:0x66, or the default INT 09h at 0x4C). Those never send an
    EOI, so anything delivered through them must be auto-EOI'd or the line latches. */
-static INT AsyncVectorIsOurStub(UINT irq);
-
 /* ── ★★★★★ IRQ0 IS HELD IN SERVICE UNTIL THE GUEST EOIs -- LIKE EVERY OTHER LINE. ──────
      Since ba927ac the timer was the ONE line the host auto-EOI'd on delivery, "gated by
      the guest's own IF discipline". That discipline is not enough, and Lemmings is the
@@ -3557,7 +2945,6 @@ static VOID Irq0Ack(VOID)
         g_Irq0IsrStrict++;
     }
 }
-enum { IFV_PATH_LIVE = 0, IFV_PATH_VTIB_IRQ01 = 1, IFV_PATH_VTIB_DEVICE = 2, IFV_PATHS = 3 };   /* the IF/VIF census's paths: live (async), IRQ 0/1 via the VTIB, a device IRQ via the VTIB */
 /* ── #173: THE PROTECTED-MODE ARMS HOLD IRQ0 IN SERVICE TOO. ─────────────────────────
      Until s81 the async PM arm acknowledged IRQ0 and EOI'd it on the spot, and the two
      synchronous PM injectors (the #2b latch and the catch-up batch) never told the PIC
@@ -3584,58 +2971,6 @@ static VOID Irq0PmUnclaim(VOID)
     g_Irq0IsrStrict--;
 }
 enum { PM_GATE_NO_LATCH = 0, PM_GATE_VIF_OFF = 1, PM_GATE_NO_HOOK = 2, PM_GATE_IN_PM_IRQ = 3, PM_GATE_NO_IRQ = 4, PM_GATE_ASYNC_IN_FLIGHT = 5, PM_GATE_ARMED = 6, PM_GATE_TRIED = 7, PM_GATE_CLAIM_REFUSED = 8, PM_GATE_DECLINED = 9, PM_GATES = 10 };   /* g_PmCooperativeGate's columns */
-enum { ASYNC_WHY_NOT_IN_EXEC = 20, ASYNC_WHY_PIC_REFUSE = 21, ASYNC_WHY_UNHOOKED = 22, ASYNC_WHY_SUSPEND_FAIL = 23, ASYNC_WHY_GETCTX_FAIL = 24, ASYNC_WHY_V86_IF_OFF = 25, ASYNC_WHY_IN_OUR_HANDLER = 26, ASYNC_WHY_OBSERVED = 27, ASYNC_WHY_CTX_BUSY = 28, ASYNC_WHY_LEFT_EXEC = 29, ASYNC_WHY_SIMINT_RM = 30, ASYNC_WHY_NESTED_TICK = 31, ASYNC_WHY_PM_ONLY_LINE = 32, ASYNC_WHY_BAD_IRQ = 40 };   /* 20+: AsyncInjectIrq's early exits; 32 and 40 are past the histogram */
-static VOID PokeWord(DWORD linear, WORD value);        /* fwd: guest-memory helpers, defined below */
-static WORD PeekWord(DWORD linear);
-static VOID HostPitSync(VOID);             /* fwd: the guest's clock, driven by both threads */
-static VOID HostPitGenerate(VOID);         /* fwd: the crystal half (g_PitCs only)  */
-static VOID HostPitDeliver(VOID);          /* fwd: the attempt half (g_Lock, by TRY) */
-static INT  V86DeliverDeviceIrq(volatile BYTE *tib);  /* fwd: shared by the main and nested V86 loops */
-enum { ASYNC_DELIVERED = 0, ASYNC_WHY_BAD_VECTOR = 1, ASYNC_WHY_IN_PM_IRQ = 2, ASYNC_WHY_PM_NO_IRQ = 3, ASYNC_WHY_NO_CATCHER = 4, ASYNC_WHY_UNHOOKED_PM = 5, ASYNC_WHY_NO_APP_TIMER = 6, ASYNC_WHY_VIF_OFF = 7, ASYNC_WHY_IF_OFF = 8, ASYNC_WHY_ARM_QUIET = 9, ASYNC_WHY_IN_FLIGHT = 10, ASYNC_WHY_HOST_STACK = 11, ASYNC_WHY_NOT_32 = 12, ASYNC_WHY_SETCTX_FAIL = 13, ASYNC_WHY_HOST_CS = 14 };   /* g_AsyncWhy: AsyncWhyReport's whyNames, 0-14 */
-/* ── ASYNCHRONOUS DELIVERY INTO **PROTECTED MODE**. ───────────────────────────────
-   The V86 arm below has always bailed when the guest is not in V86, and that hole is
-   exactly where a DOS/4GW game lives. It is not a detail: a protected-mode guest that
-   is spinning on a memory location NEVER LEAVES PROTECTED MODE, so the cooperative
-   injector in the main loop -- which only runs BETWEEN entries -- can never reach it.
-   Doom proves it. Its millisecond delay is two instructions:
-       153dc:  cmp  [0x28820],eax
-       153e2:  je   153dc
-   waiting for a counter its own INT 08h handler increments. No I/O, no INT, no HLT, so
-   DpmiEnterProtectedMode() never returns and the watchdog eventually calls it a wedge. The only
-   way in is the same one this file already uses for real mode: suspend the CPU thread,
-   rewrite its context, resume. Defined next to DpmiInjectPmIrq() because it shares
-   that function's frame rules; declared here because AsyncInjectIrq() needs it. */
-static INT  DpmiAsyncInjectPm(UINT irq, CONTEXT *context);
-/* WHICH gate refused the last async PM injection. Doom's log showed ok=0 on all six
-   attempts with `from=0x187:...`, i.e. the thread WAS in 32-bit client PM code, so
-   DpmiAsyncInjectPm() was reached and returned 0 -- and nothing said which of its
-   ten early-outs fired. Session 18 concluded "the async mechanism is what tears the
-   VDM down" from a control where async was ON; if it never injects, that attribution
-   was to a mechanism that was not running. */
-static LONG g_AsyncWhy = 0;
-/* ── ...AND `g_AsyncWhy` ALONE STILL CANNOT ANSWER THE QUESTION THAT MATTERS. ───────
-     It holds the LAST refusal, so a run can say "62 attempts, 56 delivered" and not say
-     which clause consumed the other six -- nor, far more importantly, what the refusal
-     PROFILE looks like when the sync rate itself is the binding constraint. Session 23
-     measured that tripling the attempt budget moved delivery by one tick per second:
-     the ceiling is not how often we ask, it is how often the guest is in an injectable
-     state, and "injectable" is a dozen different conditions wearing one number.
-     So keep the whole distribution, per LINE -- the timer and the Sound Blaster fail for
-     different reasons and averaging them together hides both. Three buckets need
-     OPPOSITE fixes and only a histogram tells them apart:
-       10  g_AsyncPmActive   an injection is still in flight -> the guest's ISR is slow
-                               to IRET, and MORE attempts can never help
-       21  VddPicCanDeliver IRQ0's in-service bit is still set -> we are not seeing the
-                               guest's EOI, which would be OUR bug, not a rate one
-       7/8 virtual-IF clear    the client has interrupts off -> only the cooperative path
-                               can ever deliver
-       14  host CS             the CPU thread was inside the HOST, not the client, when
-                               the clock asked -- the g_Lock starvation showing up here
-     Bucket 0 is delivery. Two DWORDs per line per code is 1 KB of BSS, no lock (the
-     timer/UI thread is the only writer; a torn count would cost a unit, not a wrong
-     conclusion) and no I/O, so it costs nothing at the PIT's rate. */
-#define ASYNC_WHY_MAX 32
-static DWORD g_AsyncWhyHistogram[PIC_LINES_PER_CHIP][ASYNC_WHY_MAX];
 static VOID AsyncWhyNote(UINT irq, UINT why)
 {
     g_AsyncWhy = (LONG)why;
@@ -3683,12 +3018,6 @@ static VOID IfvNote(INT path, DWORD flags)
         g_IfvStarveOpen = 0;
     }
 }
-/* Deliveries, with the gate's view of them: enough to see a handler re-entered and what
-   the flags said when it was. A delivery that lands within 0x60 bytes past its OWN
-   vector's entry point is, to a first approximation, the handler being re-entered:
-   counted per line and always traced (the first eight of any kind are traced too, for
-   context). This is the instrument that found irq8.nested's path; it stays as a detector. */
-#define IFV_TRACE_MAX 40
 static struct { BYTE Irq, Path, State; WORD Cs, Ip; DWORD Flags; } g_IfvTrace[IFV_TRACE_MAX];
 static LONG g_IfvTraceCount;
 static DWORD g_IfvReenter[PIC_LINES];
@@ -3705,13 +3034,9 @@ static VOID IfvTrace(UINT irq, INT path, DWORD flags, DWORD codeSegment, DWORD i
     g_IfvTrace[index].State = (BYTE)IfvState(flags); g_IfvTrace[index].Flags = flags;
     g_IfvTrace[index].Cs = (WORD)codeSegment; g_IfvTrace[index].Ip = (WORD)instructionPointer;
 }
-static volatile LONG g_AsyncPmActive = 0;  /* an async PM interrupt is in flight     */
-static DWORD g_AsyncPmEip = 0, g_AsyncPmEsp = 0, g_AsyncPmEflags = 0;
-static WORD  g_AsyncPmCs  = 0, g_AsyncPmSs  = 0;
 static DWORD g_AsyncPmInjected = 0;             /* delivered                              */
 static DWORD g_AsyncInjectedLine[PIC_LINES];            /* ...and which IRQ line each one was      */
 static DWORD g_AsyncPmBail2 = 0;           /* PM async attempts that did not commit  */
-#define DPMI_WATCH_MAX 4
 static DWORD g_PmWatch[DPMI_WATCH_MAX];     /* linear addresses to watch (whitespace-separated) */
 static INT   g_PmWatchCount      = 0;
 /* ── ★★★ A GUEST'S OWN OFFSETS ARE THE ONLY ONES WORTH WRITING DOWN. ────────────────
@@ -3731,7 +3056,6 @@ static INT   g_PmWatchCount      = 0;
      `????????` rather than as address 0x3c878, which would be a wrong answer wearing a
      right one's clothes. */
 static BYTE  g_PmWatchRel[DPMI_WATCH_MAX]; /* 1 = offset from g_LeLoadBase */
-static DWORD g_LeLoadBase   = 0;           /* first [LE CODE OBJECT] allocation */
 static DWORD PmWatchAddress(INT index)
 {
     if (!g_PmWatchRel[index]) return g_PmWatch[index];
@@ -3763,11 +3087,6 @@ static DWORD g_PmCooperativeLine[PIC_LINES_PER_CHIP];
        9 the injector declined (guest in the extender's 16-bit code)
      7 counts the pass; 8/9 are that pass's failures, so 7 - 8 - 9 = delivered. */
 static DWORD g_PmCooperativeGate[PM_GATES];
-/* ...and when `decl` dominates (it did once the latch was fixed: tried=0x171c decl=0x169d),
-   WHICH refusal inside DpmiInjectPmIrq: [0] the interrupted CS is 16-bit (the
-   extender's code), [1] the application has no timer hook. Per second on IRQ0TL's clock,
-   and the 16-bit sites by CS:EIP, so the refusals can be laid against the quit wait. */
-#define PMINJ_SITES 6
 static DWORD g_PmInjectDecl[2], g_PmInjectDeclTl[IRQ0TL_SECS];
 static struct { WORD Cs; DWORD Eip, Count; } g_PmInjectSite[PMINJ_SITES];
 static VOID PmInjectDeclineNote(INT why, WORD cs, DWORD eip)
@@ -3812,13 +3131,6 @@ static UINT32 g_DmaPollInAsync, g_DmaPollMainline;
 static DWORD g_PmDeviceIrqInjected  = 0;
 static DWORD g_PmDeviceIrqFail = 0;
 static DWORD g_PmDeviceIrqDrop = 0;           /* pending on a line the client never hooked */
-/* Record and (boundedly) report an async attempt that gave up BEFORE the guest context
-   was ever inspected. Bounded for the same reason the PM bail log is: these fire at the
-   PIT's rate, so an uncapped line per tick would bury the run it exists to explain. The
-   cap is generous enough to span a whole 45s headless run. */
-/* Enough to show WHEN the bails start and what the first ones are; the totals live in
-   g_AsyncWhyHistogram, which costs nothing. See AsyncEarlyBail() for what 4000 cost. */
-#define ASYNC_EARLY_BAIL_LOG_MAX 32
 static DWORD g_AsyncEarlyBailLogged = 0;
 /* ── WHERE WAS THE GUEST WHEN THE CLOCK ASKED FOR A TURN? ────────────────────────────
      The asynchronous injector is the ONLY thing that can touch a protected-mode guest
@@ -3904,42 +3216,6 @@ static VOID AsyncEarlyBail(UINT irq, UINT why)
     lineCursor = LogPut(lineCursor, " ms="); lineCursor = LogHex(lineCursor, GetTickCount());
     lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
 }
-/* Paired with the InterlockedCompareExchange below; every path that resumed the guest
-   must drop ownership. See g_AsyncContextWrite. */
-#define ASYNC_CTX_RELEASE() InterlockedExchange(&g_AsyncContextWrite, 0)
-/* ── ★★★★★ A DPMI REAL-MODE SIMULATION IS A WINDOW IN WHICH THE VDM HAS NO SETTLED
-     MODE, AND THE ASYNC INJECTOR MUST NOT LOOK INTO IT. (s72, Doom's E1M1 crash)
-     INT 31h AX=0300h/0301h/0302h save the client's protected-mode register file,
-     overwrite the TIB with a REAL-MODE one, run the handler, and put the first back.
-     AsyncInjectIrq() decides "protected mode or V86?" from the VM bit of the context
-     it has just read -- which is precisely the field being rewritten. Injecting into
-     that window builds an interrupt frame for the mode the guest is no longer in, NT
-     sees a VDM whose state makes no sense, and it TERMINATES THE PROCESS: no user-mode
-     exception (our VEH reported any=0 fatal=0), no Application Error in the event log,
-     no shutdown path -- the log simply stops. That is the signature of this crash, of
-     the Mario one, and of s69's Lemmings death.
-   ► MEASURED: two of the user's Doom crashes, one with sound and one with the Sound
-     Blaster unfitted, END ON THE SAME TWO LINES -- a pair of `simInt 0x33` (Doom polls
-     the mouse twice a frame through DPMI). Killing a distant enemy is a heavy frame, so
-     more IRQ0s land inside the window; that is why it looks like "shooting the imp
-     crashes it" rather than a random fault.
-   ⚠ NOTHING IS LOST by refusing here. The injector's contract is already "observed
-     only -- the next tick injects", so the interrupt is simply delivered a moment
-     later, once the guest is back in a mode that exists. */
-static volatile LONG g_SimIntBusy = 0;
-/* ── …BUT INSIDE THAT WINDOW THE MODE *IS* SETTLED WHILE VdmRunGuest IS RUNNING. (s81, ZAR) ──
-     The nested 0301/0302 loop rewrites the TIB to V86, then calls VdmRunGuest() exactly as the
-     main loop does -- and for the length of that call the frame is an ordinary V86 one.
-     The guard above covered the whole window, and the loop never set g_InExec either, so
-     no interrupt could EVER reach a real-mode procedure while it ran. ZAR's Miles driver is
-     one: it starts a single-cycle SB transfer and spins on a memory flag its IRQ 5 ISR sets.
-     IRQ 5 was raised once and refused 1631 times with why=0x14 -- which s59 read as HOST_CS
-     (14) but is 20 decimal, `not_in_exec`: the bracket was missing, not the thread elsewhere.
-   ► So the nested loop sets g_NestedRm (and g_InExec) around VdmRunGuest ONLY, clearing
-     g_InExec first on return -- the re-check after the suspend then catches a thread that
-     has left. Only DEVICE lines whose real-mode vector is the guest's own code are let
-     through: our stubs in DOS_HDLR_SEG BOP, and the nested loop services no such BOP. */
-static volatile LONG g_NestedRm = 0;
 enum { ASYNC_FIRST_DEVICE_IRQ = 2 };   /* IRQ 0 and 1 (timer, keyboard) have their own paths */
 static INT AsyncInjectIrq(UINT irq)
 {
@@ -4627,7 +3903,6 @@ enum { DOS_TERMINATE_MCB_GUARD = 1024 };   /* DosTerminate: blocks freed before 
      EXEC simply never reported.
    Returns 1 if a child exited and the parent has been restored (the exec loop
    carries on), 0 if this was the top-level program and the run is over. */
-static VOID MouseChildExited(VOID);          /* fwd: see g_MouseWantRelease */
 static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
 {
     PSTR cursor = *logCursor;
@@ -4868,11 +4143,6 @@ static VOID InstallPreviousWrite(PCSTR value)
     RegCloseKey(key);
 }
 
-/* ── #153: FILE > OPEN RECENT. Every program this host was started with, and every one
-     opened from the menu, newest first, `Recent1`..`Recent8` beside the settings.
-     (A Win16 program started from Windows is not recorded: its path arrives inside
-     WOW, not here.) */
-#define MRU_MAX 8
 static INT MruLoad(CHAR out[MRU_MAX][MAX_PATH])
 {
     HKEY key; INT count = 0, index;
@@ -5124,7 +4394,6 @@ static INSTALL_STATE InstallStatusText(PSTR message, DWORD cap)
     }
     return state;
 }
-enum { INSTALL_VERB_NONE = -1, INSTALL_VERB_INSTALL = 0, INSTALL_VERB_UNINSTALL = 1, INSTALL_VERB_STATUS = 2, INSTALL_VERBS = 3 };   /* InstallVerb: the verbs[] index */
 /* Which verb, if any, this command line asks for: 0 install, 1 uninstall,
    2 status, -1 none. The verb must be the FIRST argument -- see the call site. */
 static INT InstallVerb(PCSTR command)
@@ -5176,8 +4445,6 @@ static INT CommandLineBare(PCSTR command)
 }
 
 /* stdout if we have one, a message box if we do not. */
-static VOID InstallReport(PCSTR message, INT isOk);
-
 /* ── ★★★ "I WANT TO OPEN NTVDMEX AND SEE IT." ────────────────────────────────────────
      Write the four-byte DOS stub and run it, so CSRSS builds a VDM that the IFEO key
      hands back to us WITH the privilege this process cannot have. See LAUNCH_STUB_NAME
@@ -5505,8 +4772,6 @@ static INT StdinReadByte(VOID)
 
 /* A handle VALUE out of `proc`'s process parameters at `off`, or 0. The value is
    meaningful only in that process's handle table. */
-static HANDLE StdioPebHandle(HANDLE proc, UINT offset);
-
 static HANDLE StdioPebStdout(HANDLE proc)
 {
     static PFN_NT_QUERY_INFORMATION_PROCESS queryInformationProcess;
@@ -5846,7 +5111,6 @@ static VOID HostConsoleOut(PVOID context, BYTE ch)
    (measured: the guest parks at DOS_HDLR_SEG:0000, the INT 21h BOP, for the whole run).
    g_ConsoleInPending holds that second byte between the two calls. */
 static INT g_ConsoleInPending = -1;                /* scancode owed to the next read, or -1 */
-enum { INPUT_KEY_WAIT_MS = 50 };   /* a blocking key read's wait for the next key */
 static INT HostConsoleIn(PVOID context)
 {
     WORD key; INT got;
@@ -6089,7 +5353,6 @@ static VOID DmxSample(VOID)
      disable) and the lock figures must be read on the first run with it on. */
 typedef MMRESULT (WINAPI *PFN_TIME_BEGIN_PERIOD)(UINT);
 static HANDLE g_PitPaceThread;
-static INT    g_PitPaceOn = 1, g_PitPaceMs = 1;
 /* ── TWO LEVERS, BECAUSE THE PERIOD IS NOT ONE. ──────────────────────────────────────
      Session 26, user-confirmed on bare metal: the pacer costs SKYROADS its input --
      "pressing left/right arrows throws you off the road", gone the moment pitpace=0.
@@ -6149,9 +5412,7 @@ static INT  g_PitPaceInject = 1;
    ► AH=83h is posted from the pacer thread (1 kHz), because the caller polls MEMORY and
      need not trap at all while it does. */
 static volatile LONGLONG g_Int15WaitEnd;    /* QPC of the AH=86h deadline; 0 = none     */
-static volatile LONGLONG g_Int15EventEnd;     /* QPC of the AH=83h deadline; 0 = none     */
 static volatile DWORD    g_Int15EventLinear;     /* linear address of its flag byte          */
-static DWORD g_Int15Waits, g_Int15Events, g_Int15Posted, g_Int15Busy;
 /* #256: 1 while the TOP-LEVEL PM loop is dispatching -- the one place a PM BIOS wait may
    re-execute its BOP (every nested loop counts its passes). See the PM INT 15h 86h arm. */
 static INT g_PmTopDispatch;   /* set by the top-level loop before it dispatches  */
@@ -6269,24 +5530,6 @@ enum { COURIER_OFF = 0, COURIER_ON = 1, COURIER_NORMAL_PRIORITY = 2, COURIER_WAI
      no worse than today. */
 #define COURIER_BUDGET_US 3000u
 static HANDLE g_CourierThread;
-/* ── ⚠⚠ DEFAULT OFF, AND THE REASON IS THE MEASUREMENT, NOT THE MECHANISM. ────────
-     The mechanism above is established: raises - attempts == yields, exactly, in
-     every run taken. What is NOT established is that this thread is a net win, and
-     one 45 s run cannot establish it. Five runs of nominally the same configuration
-     produced anomalous-gap counts of 50, 75, 81, 85 and 240 -- a 5x spread that is
-     larger than any effect either knob produced. (Two run SHAPES are mixed in there:
-     Skyroads sometimes plays a ~10 s intro at the BIOS 18.2 Hz and sometimes goes
-     straight to 180 Hz. That explains some of the spread and not all of it.)
-     The one courier run also showed key latency worse, not better -- which is the
-     shape you would expect if it takes interrupts-enabled windows from IRQ1, i.e.
-     exactly the competition it was built to relieve, running the other way.
-   ⇒ So it ships OFF and is turned on by courier.txt = 1, and the next session's job
-     is N repeated runs per arm with the run shape checked (IRQ0TL's first second says
-     which), not another single-run A/B. Shipping it on would be calling a result that
-     the data does not support -- and this file's history is mostly the cost of doing
-     exactly that. */
-static INT    g_CourierOn = 0;              /* courier.txt = 1 enables */
-static DWORD  g_CourierWakes, g_CourierInjected, g_CourierTries, g_CourierGiveUp;
 static DWORD WINAPI TickCourierThread(LPVOID parameter)
 {
     (VOID)parameter;
@@ -6353,43 +5596,6 @@ static DWORD WINAPI TickCourierThread(LPVOID parameter)
     return 0;
 }
 #define CPU_MHZ_UNKNOWN_U 0xFFFFFFFFu   /* HostCpuMhz: not read yet */
-/* ── ★ APPROXIMATE CPU SPEED: THE V86 HALF. (GH #56) ─────────────────────────────
-     The arithmetic and the whole argument for it are in src/host/cpuspeed.h. This
-     is the mechanism: a thread that, for the milliseconds the Bresenham says the
-     guest does not get, HOLDS THE EXEC THREAD WHERE IT STANDS.
-
-   ► WHY SUSPENSION RATHER THAN A WAIT AT A CONTROL POINT. The obvious cheaper
-     design is to sleep at the top of the exec loop, and it covers most guests --
-     but not the ones this feature exists for. A program doing pure computation
-     with no I/O never faults, never BOPs and never returns from VdmStartExecution
-     at all (the headless watchdog has a whole essay about that shape), so the exec
-     loop never gets a turn to throttle at. Suspension is the only lever that
-     reaches it, and the machinery is proven: AsyncInjectIrq() has suspended this
-     same thread on every timer tick for twenty sessions.
-
-   ⚠ THE ONE RULE: NEVER SUSPEND A LOCK HOLDER. Hold the exec thread while it owns
-     g_Lock and the audio pump blocks behind it, which is a dropout you can hear.
-     g_InExec is exactly the flag that says otherwise -- it is set only around
-     VdmStartExecution, where the thread holds nothing -- but reading it and then
-     suspending is a race: the guest can trap in between and the thread be inside
-     host code by the time the suspend lands.
-     So READ IT AGAIN AFTER THE SUSPEND HAS TAKEN EFFECT. That is sound because of
-     the ORDER in the exec loop: VdmRunGuest() returns, and the very next statement
-     clears g_InExec, before any HOST_LOCK. A 1 observed on a thread that is
-     already stopped therefore means the thread is still inside the kernel call.
-   ⚠ GetThreadContext is what makes "has taken effect" true. SuspendThread only
-     REQUESTS the suspend; on a multiprocessor box the thread may still be running
-     when it returns, and reading its context is the documented way to wait for it.
-
-   ⚠ NESTING WITH THE IRQ INJECTOR IS FINE AND IS NOT AN ACCIDENT. Suspend counts
-     nest, both sides balance their own Suspend/Resume, and a context written into
-     a thread we are holding simply takes effect when we let go -- so an interrupt
-     raised during a held millisecond is delivered late rather than lost. That is
-     also the CORRECT semantics for this feature: the PIT still advances by real
-     elapsed wall time, so a throttled guest gets the same 18.2 ticks a second it
-     would on a slow real machine, rather than a compressed clock. Session 22
-     proved that compressing game time is catastrophic; this deliberately does not. */
-static INT    g_CpuSpeedIndex      = 0;      /* CPUSPEED_* index; 0 = unlimited      */
 /* #224: THIS PC's own clock in MHz (0 = unknown), from the CPU's ~MHz registry value
    -- what Windows itself shows in System Properties. Rungs at or above it are greyed. */
 static UINT HostCpuMhz(VOID)
@@ -6408,12 +5614,7 @@ static UINT HostCpuMhz(VOID)
     return mhz;
 }
 static UINT g_CpuSpeedReferenceMhz = CPUSPEED_REF_MHZ_DEFAULT;  /* cpuref.txt       */
-static volatile LONG g_CpuSpeedDuty = CPUSPEED_BP_FULL;   /* basis points, read by the thread */
-static volatile LONG g_CpuSpeedDutyRm = CPUSPEED_BP_FULL;   /* #225: the same, for a real-mode program */
 static HANDLE g_CpuSpeedThread;
-static DWORD  g_CpuSpeedRunMs, g_CpuSpeedHeldMs;   /* what the throttle really did */
-static DWORD  g_CpuSpeedMissed;   /* held millisecond the guest was not in exec for */
-static DWORD  g_CpuSpeedHoldMaximumMicroseconds;   /* #225: the longest single hold, and */
 static DWORD  g_CpuSpeedDebtMaximumMicroseconds;   /*   the largest debt it was cut from */
 /* ★ THE MEASURED RUN PHASE, in microseconds, and it is the number that made this
      feature work. We ASK for a 1 ms run; what the guest actually gets is that plus
@@ -6431,9 +5632,6 @@ static DWORD  g_CpuSpeedWallMicroseconds;
 static UINT g_CpuSpeedGranularityMs  = CPUSPEED_GRAN_AUTO;   /* 0=auto; cpugran.txt knob */
 static DWORD    g_CpuSpeedRoundTripMicroseconds;        /* measured suspend round trip, microseconds */
 static DWORD    g_CpuSpeedPeriodMs;    /* what auto actually chose, or the setting  */
-static DWORD    g_CpuSpeedPeriods;      /* how many run/hold cycles were completed   */
-static DWORD    g_StartMs;            /* GetTickCount at throttle start, for exec_bp */
-
 /* ── ★★ THE ROUND TRIP IS MEASURED WHERE IT HAPPENS, NOT IN A SYNTHETIC BURST. ───
  * ⚠⚠ THE FIRST CUT DID IT AT STARTUP and the number was meaningless: it reported
  *    **3 us**, because at that moment the exec thread is not necessarily inside
@@ -6571,7 +5769,6 @@ enum { CPUSPEED_RELEASE_WAIT_MS = 5, CPUSPEED_CATCH_GRACE_MS = 250 };   /* the c
 static volatile LONG g_CpuSpeedCatchRequest;   /* throttle -> exec: park at the re-entry   */
 static volatile LONG g_CpuSpeedParked;      /* exec -> throttle: parked, not in exec     */
 static HANDLE        g_CpuSpeedRelease;     /* auto-reset: wakes the park early          */
-static DWORD         g_CpuSpeedCooperativeCatches, g_CpuSpeedCooperativeTimeouts;
 static VOID CpuSpeedCooperativePark(VOID)
 {
     DWORD start;
@@ -7057,7 +6254,6 @@ static VOID HostScreenshot(VOID)
     } else GlobalFree(memoryHandle);
 }
 
-static VOID HostRecordFinish(VOID);        /* below: patches the header, logs */
 /* #155: Tools > Capture > Record Audio -- a toggle over the recorder cfg\wavrec.flag
    already drives. Each recording is its own numbered file in the capture folder, so a
    second one never overwrites the first; stopping patches the header (HostRecordFinish). */
@@ -7115,7 +6311,6 @@ static VOID PlanesDumpBeside(PCSTR bitmapPath)
     HOST_UNLOCK();
     CloseHandle(file);
 }
-#define TYPEMATIC_DEFAULT_PERIOD_US 92000u
 /* ONE path for a keystroke, whoever produced it. The window proc used to latch
    g_Irq1Pending itself and never call HostIrqSink, which meant real keys bypassed BOTH
    the async delivery added for input lag AND the PIC that gates re-entry -- so every fix
@@ -7141,7 +6336,6 @@ static VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak)
        interrupts run ahead of the bytes again. */
     if (g_KeyEvent) SetEvent(g_KeyEvent);
 }
-#define TYPEMATIC_DEFAULT_DELAY_US  500000u   /* until XP's own setting is read at startup */
 /* ── TYPEMATIC REPEAT: WE ARE THE KEYBOARD, SO WE MUST DO ITS REPEATING ───────
    THE BUG (user, reported twice): crash the ship in Skyroads while holding the up
    arrow and, on real DOS or stock ntvdm, the restarted level accelerates
@@ -7180,7 +6374,6 @@ static VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak)
      effectively passing through, and keep the measured pair above as the
      VERIFICATION target rather than the source. */
 static UINT32 g_TypematicDelayMicroseconds  = TYPEMATIC_DEFAULT_DELAY_US;   /* replaced at startup from XP's setting */
-static UINT32 g_TypematicPeriodMicroseconds =  TYPEMATIC_DEFAULT_PERIOD_US;
 static DWORD    g_TypematicSpiDelay, g_TypematicSpiSpeed;     /* raw, so STAGE2 can show them */
 enum { KEYBOARD_DELAY_MAX = 3, KEYBOARD_SPEED_MAX = 31, TYPEMATIC_DELAY_STEP_US = 250000, TYPEMATIC_PERIOD_SLOWEST_US = 400000, TYPEMATIC_PERIOD_STEP_US = 12000 };   /* SPI_GETKEYBOARDDELAY 0-3 = 250-1000 ms; SPEED 0-31 = 400-28 ms */
 /* XP exposes the two values it programs into the keyboard controller:
@@ -7250,7 +6443,6 @@ static VOID HostKeyTypematic(VOID)
    a guest that finds an INT 33h driver asks for a CLICK and ignores the keyboard --
    Lemmings' level briefing says "Press mouse button to continue" to us and "Press
    Space" to a DOS with no driver, so without this the harness cannot get past it. */
-static VOID HostMouseButton(INT button, INT down);
 enum { SYNTHKEY_HOLD_MS = 60, SYNTHKEY_GAP_MS = 250, SYNTHKEY_TAP_MS = 40, SYNTHKEY_SLEEP_SLICE_MS = 100, SYNTHKEY_MENU_DELAY_MS = 9000, SYNTHKEY_MENU_ROUNDS = 400, SYNTHKEY_HEX_DIGITS_MAX = 2 };   /* synthkey.txt's driver: hold, gap, tap, wait slice, menu walk; a scancode is up to two hex digits */
 static DWORD WINAPI SynthKeyThread(LPVOID parameter)
 {
@@ -8159,9 +7351,6 @@ static VOID HostEms(volatile BYTE *tib)
     #undef E_SETBX
     #undef E_SETDX
 }
-enum { I33_FALLBACK_X = 320, I33_FALLBACK_Y = 240, I33_ABSOLUTE_DELTA_SCALE = 8 };   /* I33TakeMotion's absolute-derived fallback */
-/* --- menu + status bar (scaffold; most items are stubs for now) ------------ */
-static CHAR g_ProgramName[64] = HOST_PROGRAM_NONE;      /* first part of the status strip    */
 #define I33_SITE_CONTEXT_BEFORE 4   /* g_MouseI33Site: bytes kept from before the INT */
 /* Mouse state shared UI thread -> V86 thread (INT 33h). Position is in guest
    pixels (mapped from the window client); buttons: bit0 L, bit1 R, bit2 M. */
@@ -8180,68 +7369,24 @@ static volatile LONG g_MouseX = I33_FALLBACK_X, g_MouseY = I33_FALLBACK_Y, g_Mou
      absolute-derived delta rather than reporting no motion at all. */
 static volatile LONG g_MouseDx, g_MouseDy;      /* raw mickeys since the last 0Bh drain */
 static INT           g_MouseRawOk;           /* raw mouse registered with the window */
-static INT           g_MouseSensitivity = PERCENT;       /* percent; msens.txt tunes feel per-guest */
 /* Doom reports "no mouse look" while capture is demonstrably on. Three things can be
    false and they need opposite fixes: raw input never REGISTERED, WM_INPUT never
    ARRIVING, or the guest never ASKING (INT 33h 0Bh). Count all three -- and note that
    the raw path DISABLES the absolute-derived fallback, so a silent raw failure reports
    no motion at all where the old code at least reported clamped motion. */
 static DWORD g_MouseWmInput, g_MouseRawAbsolute, g_MouseI33[16], g_MouseI33Other;
-/* ── `i33oth=1079` IS NOT A MEASUREMENT, IT IS A BUCKET. ──────────────────────────
-     A thousand INT 33h calls arrive with AX >= 0x10 and the histogram above lumps
-     every one of them together, so it cannot tell the two live explanations apart --
-     and they need OPPOSITE fixes:
-       (a) Doom calls driver functions we do not implement. `MouseInt33`'s
-           `default: break;` accepts them silently and returns nothing: the same
-           "does nothing, reports success" shape as the 0300 bug below.
-       (b) A MIS-PATCHED `CD 33` SITE. The DPMI host rewrites `CD nn` into BOPs, so a
-           false positive inside data or mid-instruction calls us with ARBITRARY EAX --
-           which is exactly what "a thousand calls with AX >= 0x10" looks like. That
-           is the class of bug that killed Doom for five sessions (see x86len.h).
-     The two have different SHAPES and the shape is the discriminator: a real function
-     set is a handful of plausible values from a handful of sites; a mis-patch is
-     scattered values, and its site is not a `CD 33` in DOOM.EXE.
-   ★★ ANSWERED 2026-09-09, AND IT IS NEITHER OF THE TWO. The histogram this note asked
-     for was read off a real Doom run and it is small and entirely sensible:
-         0000 x1   0015 x1   53c1 x1   0003 x1338   000b x1338
-     Doom probes ONCE (00 reset, 15 get-storage-size, 53c1) and then polls position
-     and relative motion every frame. `AX=53c1` -- the value that made "AX >= 0x10"
-     look like a thousand scattered calls -- is LOGITECH CYBERMAN SWIFT DETECTION, a
-     real and documented probe, and Doom announces the result itself in the same log:
-         CyberMan: Wrong mouse driver - no SWIFT support (AX=53c1).
-     So the bucket was hiding one legitimate call made once, not a mis-patch and not
-     a set of unimplemented functions. ⇒ NO FIX IS NEEDED HERE. The lesson is the one
-     this note already carries -- the bucket, not the thing bucketed, was the defect.
-   ► AND THE HISTOGRAM IS NOW LOAD-BEARING: the auto-capture trigger keys on exactly
-     the USE functions (01/03/05/06/0B) and deliberately not on 00/15/53c1, which is
-     only defensible because this measurement says which is which. See
-     g_MouseWantCapture.
-   ⚠ SO RECORD BOTH, AND DO NOT GUESS BETWEEN THEM. The AX values as they actually
-     are (sparse, not bucketed), and WHERE the caller was -- linear address, which
-     entry path, and the bytes around the site so it can be diffed against the file
-     on disk without another run. That diff is the session-21 method and it found the
-     last mis-patch inside an hour. */
-#define I33_AXN   24                        /* distinct AX values kept                */
-#define I33_SITEN 12                        /* distinct caller sites kept             */
 static struct { WORD Ax; DWORD Count; }  g_MouseI33Ax[I33_AXN];
 static struct { DWORD Linear, Eip, Count; WORD Cs, Ax; BYTE Source; BYTE Context[12]; } g_MouseI33Site[I33_SITEN];
 static DWORD g_MouseI33AxOverflow, g_MouseI33SiteCount, g_MouseI33SiteOverflow;
-/* Which arm called us -- a mis-patch can only arrive through the PM BOP, and 0300's
-   site is the INT 31h thunk rather than a `CD 33` at all, so the path is evidence. */
-#define I33_SRC_V86  1                      /* V86 BOP (patched `CD 33` in real mode) */
-#define I33_SRC_PM   2                      /* PM BOP  (patched `CD 33` in PM code)   */
 #define I33_SRC_SIM  3                      /* DPMI 0300 simulate-real-mode-interrupt */
 /* An offset register from the caller: full-width from a 32-bit PM caller, a word from
    V86, 16-bit PM, or a 0300 excursion (s74c, the 0Ch handler ZAR installs at
    0x347:0x0044xxxx). */
-static INT DpmiSelectorIs32(WORD selector);
 static DWORD MouseI33Offset(volatile BYTE *tib, INT source, DWORD offset)
 {
     if (source == I33_SRC_PM && DpmiSelectorIs32((WORD)VDM_REG16(tib, VTIB_CS))) return offset;
     return offset & WORD_MASK;
 }
-/* DPMI 0300 (simulate real-mode interrupt) vectors we do NOT service. See the 0300 arm. */
-static DWORD g_SimIntUnhandled, g_SimIntVector[IVT_VECTORS];
 /* ── ★ REFLECT DPMI 0300 TO THE GUEST'S OWN REAL-MODE HANDLER -- ON BY DEFAULT (s81).
      It was off (simintrefl.flag to enable) because it wedged ZAR waiting on an SB
      completion the nested V86 call never delivered. s81 fixed that, and the spec says
@@ -8259,24 +7404,6 @@ static INT g_TextDump = 0;              /* textdump.flag: dump the text screen t
 static LONG  g_MouseRawTotalX, g_MouseRawTotalY;
 static volatile LONG g_MouseHidden = 1;       /* INT 33h cursor hide-count; 0 => visible */
 
-/* ── ★★ A CLICK IS AN EVENT, AND WE WERE ONLY EVER REPORTING A LEVEL. ────────────────
-     `g_MouseButtons` is a sample of the MK_* bits taken whenever a mouse message happens to
-     arrive, and INT 33h 05h/06h -- "how many times has this button been pressed /
-     released SINCE YOU LAST ASKED, and WHERE" -- was hardcoded to answer zero: the
-     old arm set EBX to a literal 0 with the comment "0 presses since last call"
-     beside it. That is the whole reason a guest which detects clicks the ordinary way
-     sees NONE. It is not a partial implementation, it is a confident wrong answer.
-     A level sample cannot substitute either: press and release between two of the
-     guest's polls and the click never existed. ZAR is exactly this shape.
-   ► So COUNT THE EDGES on the UI thread, where the transitions actually arrive, and
-     record the POSITION AT THE TRANSITION -- 05h/06h report where the button went
-     down, not where the pointer has drifted to since. Drained by the read, because
-     "since the last call" is the contract.
-   ⚠ ONE SOURCE OF EDGES ONLY. Raw input (WM_INPUT) also carries button transitions in
-     usButtonFlags, and we deliberately do NOT read them: RegisterRawInputDevices is
-     called with dwFlags = 0, so the legacy WM_?BUTTON* messages still arrive as well,
-     and counting both would double every click. Legacy is the single writer. */
-#define MS_BTNS 3                           /* left, right, middle                     */
 static volatile LONG g_MousePressCount[MS_BTNS], g_MouseReleaseCount[MS_BTNS];
 static volatile LONG g_MousePressX[MS_BTNS], g_MousePressY[MS_BTNS];
 static volatile LONG g_MouseReleaseX[MS_BTNS],   g_MouseReleaseY[MS_BTNS];
@@ -8361,67 +7488,7 @@ static volatile LONG g_MouseHotX = 0, g_MouseHotY = 0;
 static volatile LONG g_MouseTcHardware = 0, g_MouseTcHardwareLow = 0, g_MouseTcHardwareHigh = 0;
 static volatile LONG g_MousePage = 0;
 static volatile LONG g_MouseRate = I33_DEFAULT_RATE;     /* 1Ch code: 3 = 100 reports/s, the PS/2 aux default */
-enum { MOUSE_CB_WHY_IN_FLIGHT = 0, MOUSE_CB_WHY_NO_EVENTS = 1, MOUSE_CB_WHY_NO_HANDLER = 2, MOUSE_CB_WHY_IN_STUB = 3, MOUSE_CB_WHY_IF_OFF = 4, MOUSE_CB_WHY_STUB_CLOBBERED = 5, MOUSE_CB_WHY_COUNT = 6 };   /* g_MouseCallbackWhy */
-/* ── 0Ch / 14h: THE EVENT HANDLER. STORED AND REPORTED; NOT YET CALLED. ──────────────
-     A guest installs a far pointer and a call mask and expects the driver to CALL IT
-     on the masked events. We do not do that yet -- invoking guest code out of band
-     needs the same care AsyncInjectIrq takes and is its own piece of work.
-   ► BUT STORING IT IS NOT COSMETIC, IT IS THE DIFFERENCE BETWEEN A KNOWN GAP AND A
-     SILENT ONE. Before this, 0Ch fell into `default:` and returned with the guest's
-     registers untouched -- "did nothing, reported success", the shape this codebase
-     has now been bitten by six times. 14h in particular MUST hand back the PREVIOUS
-     handler, and a guest that chains handlers on a zero it was never told about will
-     jump to 0000:0000. Now the pointer round-trips, and the install is COUNTED so a
-     log says plainly "this guest wants callbacks and is not getting them" instead of
-     leaving it to be re-diagnosed from behaviour. */
-static volatile LONG g_MouseEventMask, g_MouseEventSegment, g_MouseEventOffset;
 static DWORD         g_MouseEventInstalls;
-/* ── ★ ...AND NOW IT IS CALLED (s71). ──────────────────────────────────────────────
-     QB.EXE, edit.com and every other Microsoft text-mode UI take their mouse THROUGH
-     THIS HANDLER: they install it with 0Ch and then poll their own flags, calling 03h
-     only a handful of times per run (measured: 20 calls in a whole QBasic session).
-     With the handler stored and never invoked, the pointer moved and no click ever
-     reached the program -- "none of the menus worked".
-     The driver calls the handler from its own interrupt context with AX = the event
-     bits that fired (bit 0 motion, 1/2 left down/up, 3/4 right, 5/6 middle), BX = the
-     button state, CX/DX = the virtual position, SI/DI = the mickey counts, DS = the
-     driver's data segment; the handler returns with RETF. We do it at the same place
-     and under the same gate as an injected IRQ: at an exec-loop boundary, interrupts
-     enabled, not inside our own timer/keyboard stubs. The interrupted context is saved
-     HOST-SIDE in full, a far return to DOS_HDLR_SEG:MS_CB_RET_OFF is pushed, and the
-     BOP there restores the context -- so the guest's stack carries only the return
-     address and nothing we save can be corrupted by the handler. One in flight at a
-     time; a handler that never returns is timed out and counted, not waited for.
-   ⚠ V86 only. A protected-mode client's handler lives at a selector:offset and needs
-     the DPMI callback path; those are counted (cb_pm) so the gap stays visible. */
-/* ⚠ 0x5C WAS THE FIRST CHOICE AND IT IS DPMI_RAW2PM_OFF -- planted LATER in start-up,
-     so the mouse handler's RETF landed on a raw mode-switch BOP, which for a program
-     that is not a DPMI client falls through to INT 21h with AH = the event bits = 0:
-     "DOS terminate". QBasic died the instant the mouse moved (s71, twice). The
-     handler segment has no single map of its slots; the check before "running .EXE"
-     now verifies this stub survived every later planting.
-   ⚠⚠ 0x12 WAS THE SECOND CHOICE, AND THE GUEST OVERWROTE IT. Segment 0050 is not
-     ours: linear 0500..05FF is the DOS/BIOS communication area, and 0050:0010..0021
-     are BASIC's documented slots -- 0010 its DS, 0012 the saved INT 1Ch vector, 0016
-     INT 23h, 001A INT 24h. QBasic IS BASIC: measured on the rig (s71, headless
-     qbclick.bat) the bytes at 0050:0012 read `3a 00 50 00` = 0050:003A, our INT 1Ch
-     stub, stored there by QB at start-up. The handler's RETF then executed data, the
-     return BOP was never reached, the callback stayed "in flight" for the whole run
-     and every click after it was refused -- "the mouse opens nothing".
-   ⚠⚠⚠ 0x100 WAS THE THIRD CHOICE AND IT IS THE ENVIRONMENT BLOCK. DOS_ENV_SEG is
-     0x0060, i.e. linear 0x600 = 0050:0100 -- the segment overlaps its own env one
-     paragraph on. (#207: the env has since moved to 0x7F and 0x600 holds DOS_DEV_SEG's
-     device headers -- the same rule, a different tenant.) The re-check (added the same session) caught it at once: the bytes
-     read `43 4f 4d 53` = "COMS" (COMSPEC). So segment 0x50 is usable ONLY for offsets
-     0x00..0xFF, and inside that BASIC scribbles the low slots and DOS owns the stubs.
-     0xE0 is the gap: past the sysvars block (0x8E..~0xD0) and below the env at 0x100,
-     touched by no planting of ours (the next is DOS_FLTSITE_OFF at 0x260, in DPMI
-     mode) and by nothing a DOS program documents. AND the bytes are re-verified at
-     every injection (MouseCallbackTry), because segment 0x50 is guest-writable and a
-     fixed offset is a hope, not a guarantee -- the check turns a crash into a
-     counted, named refusal. */
-#define MS_CB_RET_OFF   0x00E0          /* DOS_HDLR_SEG:00E0 = BOP MS_CB_BOP ; iret   */
-#define MS_CB_BOP       0x35
 /* ⚠ 2 s WAS WRONG. "In flight" lasts until the handler's RETF reaches our stub, and the
    exec loop only notices that at its next pass -- for a guest that runs natively for
    seconds between traps that is seconds, not milliseconds. Timing out early marks the
@@ -8437,13 +7504,10 @@ static volatile LONG g_MouseEventPend;     /* event bits raised since the last c
      per mouse packet, and that is what a program's own event queue expects. Ring of
      32; motion is coalesced into a pending motion-only entry, buttons never are. */
 #define MS_EVQ 32
-typedef struct { LONG Bits, Buttons, X, Y; } MOUSE_EVENT_ENTRY;
 static MOUSE_EVENT_ENTRY g_MouseEventQueue[MS_EVQ];
 static volatile LONG g_MouseEventQueueHead, g_MouseEventQueueTail;   /* UI pushes at head, exec pops at tail */
 static DWORD g_MouseEventQueueDropped;
-static INT    g_MouseCallbackActive;           /* a callback is in flight                    */
 static DWORD  g_MouseCallbackSince;            /* GetTickCount()|1 when it went in flight     */
-static DWORD  g_MouseCallbackInjected, g_MouseCallbackDone, g_MouseCallbackLost, g_MouseCallbackPm, g_MouseCallbackStray;
 /* ── WHAT DID THE GUEST DO AFTER THE CALLBACK WAS INJECTED? (s71) ──────────────────
      QB's first callback was injected (inj=1) and never came back (done=0, no STRAY),
      while the guest carried on ticking -- so every later event was refused as
@@ -8454,10 +7518,6 @@ static DWORD  g_MouseCallbackInjected, g_MouseCallbackDone, g_MouseCallbackLost,
      first event after a good injection is the handler's own CLI/STI reflection or its
      RETF landing on the return BOP; anything else names the wrong turn. Bounded. */
 static INT    g_MouseCallbackTrace;            /* VM events still to log after an injection  */
-/* Why a delivery attempt did NOT happen, by reason -- a zero cb_inj must be readable:
-   [0] in flight  [1] no mask/no events  [2] no handler  [3] inside our stub  [4] IF off */
-static DWORD  g_MouseCallbackWhy[MOUSE_CB_WHY_COUNT];           /* [5] = return stub clobbered (see MS_CB_RET_OFF) */
-static DWORD  g_MouseEventRaised;          /* event bits ever raised by the UI side      */
 static struct { DWORD Eax, Ebx, Ecx, Edx, Esi, Edi, Ebp, Esp, Eip, Eflags, Cs, Ds, Es, Ss; } g_MouseCallbackSaved;
 static VOID MouseEventRaise(LONG bits)
 {
@@ -8559,36 +7619,6 @@ static INT   g_HostCursorMode = HOSTCUR_SMART;
 static DWORD g_CursorMovedMs;         /* GetTickCount of the last real movement   */
 static POINT g_CursorLastPoint = { -1, -1 };
 static INT   g_CursorIdle;             /* hidden for stillness, until it next moves */
-/* Input capture ("exclusivity") -- see InputCaptureSet. Declared up here because
-   StatusUpdate, which is defined above it, reports the capture state and the chord
-   that changes it on the right-hand half of the status strip. */
-static volatile LONG g_Captured = 0;
-
-/* ── ★ THE GUEST ASKING FOR THE MOUSE IS WHAT TAKES IT. ──────────────────────────
-     A DOS program that wants the mouse says so, through INT 33h, and a program that
-     does not never calls it at all. That is a better signal than any menu item: it
-     is the guest's own declaration, and it separates the two cases exactly the way
-     the user described them -- Skyroads never calls INT 33h, so its mouse stays on
-     the Windows desktop; Doom does, so the mouse goes into the game and the desktop
-     arrow disappears.
-   ► WHICH CALLS COUNT: the ones that USE the mouse (01 show cursor, 03 get position,
-     05/06 button state, 0B read motion), NOT 00 (reset / is-a-driver-present). Very
-     many DOS programs probe for a driver at startup and then never touch it again,
-     and grabbing the pointer away from the desktop for one of those would be a
-     nuisance with no benefit. Detection is not use.
-   ⚠ AND `00` IS DELIBERATELY EXCLUDED FOR A SECOND REASON. A mis-patched `CD 33`
-     site calls this servicer with ARBITRARY AX -- that is the `i33oth=1079` shape
-     documented on g_MouseI33Ax, and it is the class of bug that killed Doom for five
-     sessions. Keying the grab on a small set of plausible function numbers rather
-     than on "any INT 33h at all" means one stray call cannot take the user's mouse.
-   ⚠ THE FLAG IS SET ON THE V86/EXEC THREAD AND ACTED ON BY THE UI THREAD. ClipCursor,
-     SetWindowsHookEx and SetCursor all belong to the thread that owns the window, so
-     MouseInt33 may only ever raise a request; WM_TIMER performs it.
-   ★ ONCE PER PROGRAM, AND THAT IS WHAT MAKES Win+F10 MEAN SOMETHING. The latch is
-     set when we auto-capture and never cleared, so a user who escapes with Win+F10
-     stays escaped -- the guest goes on polling INT 33h every frame, and without the
-     latch every one of those polls would drag the pointer straight back in. */
-static volatile LONG g_MouseWantCapture = 0;   /* guest used the mouse; UI: please grab */
 static volatile LONG g_MouseAutoCaptureDone = 0;   /* we have grabbed once; never again     */
 /* ── ★ A PROGRAM THAT TOOK THE MOUSE GIVES IT BACK WHEN IT EXITS. (s81, user) ──────
      The grab above is latched per PROCESS, so after a game quit to the prompt the
@@ -8610,26 +7640,6 @@ static VOID MouseChildExited(VOID)
    can say which of the two happened. */
 static DWORD         g_MouseAutoCaptureFired = 0;
 
-/* RULE 1 of the capture policy, and the ONE predicate for it -- "has this guest ever
-   used the mouse". Defined here rather than beside the rules it serves because the
-   status strip, which is built long before InputCaptureSet, has to answer it too.
-   The full policy is written out above InputCaptureSet; do not add a second latch. */
-/* ── #136: SEAMLESS MOUSE. Settings > Input: "In seamless mode the program's pointer
-     follows Windows' own pointer, and no capture is needed." So it is the capture policy
-     with rules 2 and 5 switched off: a guest that uses the mouse is treated exactly like
-     one that never did -- the pointer stays the desktop's, WM_MOUSEMOVE positions and
-     buttons reach the guest (rule 6's "ordinary window" arm), and nothing ever
-     ClipCursors it. CaptureAllowed() is the one place the policy reads it.
-   ⚠ THE RAW DELTAS ARE GATED ON THE POINTER BEING OVER OUR VIDEO (WM_INPUT). Raw input
-     follows focus, so without that a seamless guest that reads mickeys (0Bh) would keep
-     moving while the pointer was dragged across someone else's window.
-   ⚠ NEITHER POINTER IS HIDDEN FOR IT: Show Host Mouse Cursor governs the arrow exactly
-     as for a guest that never used the mouse (Smart hides it after 5 s still), and the
-     guest draws its own as it always did -- so with Always, two pointers show. Hiding
-     the arrow over the video would leave NO pointer in a graphics mode where our INT 33h
-     draws none (09h shapes are accepted and discarded); unmeasured which guests that is. Default OFF = capture, the behaviour every build so far has had.
-     Live: OK in the dialog releases a held capture at once (SettingsApply). */
-static volatile LONG g_MouseSeamless = 0;
 static INT CaptureAllowed(VOID) { return g_MouseWantCapture != 0 && !g_MouseSeamless; }
 /* RULE 6 (see the capture rules above InputCaptureSet): does host mouse input reach
    the guest right now? Captured: yes. Never used the mouse: yes (ordinary window).
@@ -8889,7 +7899,6 @@ static UINT Int15MoveBlock(volatile BYTE *tib)
     return Int15MoveBlockAt(tib, (es << PARAGRAPH_SHIFT) + si);
 }
 
-static VOID VideoTrapSync(VOID);             /* fwd */
 static VOID ExecMachineSave(INT depth)
 {
     UINT index;
@@ -9007,7 +8016,6 @@ static VOID I33TakeMotion(LONG positionX, LONG positionY, LONG *outDeltaX, LONG 
      the top half. ⚠ A real driver under DOS/4GW never sees this question -- the
      extender translates the calls it knows and passes the rest down; ours is the shape
      a client that issues the INT in PM would most usefully get. UNMEASURED. */
-static WORD DpmiSegmentToDescriptor(WORD segment);
 static volatile BYTE *I33DriverData(VOID)
 { return (volatile BYTE *)VddMapFlat(&g_Bus, VDD_MOUSE_SEG, 0); }
 static VOID I33ResultPointer(volatile BYTE *tib, INT source, INT offsetRegister, WORD offset)
@@ -9902,57 +8910,7 @@ static INT LaunchIsWow(PCSTR command)
     return 0;
 }
 
-/* ── WE CANNOT HAND A WIN16 LAUNCH BACK. MEASURED, THREE WAYS. ───────────────────
-     This function used to try. It does not any more, because relaunching stock
-     ntvdm is not merely unimplemented -- it is impossible through this mechanism,
-     and leaving hopeful code here would be the "does nothing, reports success"
-     shape the rest of this project bans. What was eliminated, on the rig
-     (2026-08-26, GH #129):
-
-     1. SPAWN `System32\ntvdm.exe` DIRECTLY -- cannot: the IFEO Debugger value is
-        keyed on the image NAME and is evaluated inside CreateProcess, so this
-        re-enters US immediately. A fork bomb on every Win16 launch.
-
-     2. SPAWN A RENAMED COPY -- tried; child exits rc=0xFF at once and the program
-        never appears. Not a STARTUPINFO problem: passing our real one through
-        (console handles, window station, desktop) gave the identical result.
-
-     3. ⇒ THE ROOT CAUSE. A renamed ntvdm CANNOT BE A VDM AT ALL. Pointing
-        `Control\WOW\wowcmdline` straight at a byte-identical copy under a different
-        name -- no IFEO involved, Windows launching it itself -- makes Windows
-        refuse the Win16 program outright:
-            "C:\WINDOWS\system32\sysedit.exe is not a valid Win32 application."
-        So Windows validates the VDM image's identity, and rc=0xFF in (2) was that
-        same rejection seen from the other side.
-
-     Both exits are therefore closed: the real name re-hooks us, and any other name
-     is not accepted as a VDM.
-
-   ► ONE CANDIDATE REMAINS, UNTESTED: delete the IFEO value, spawn the real
-     ntvdm.exe, restore the value. It is a race -- a DOS launch landing in that
-     window would silently get stock -- which is why it has not been done casually.
-   ► THE REAL ANSWER IS #128: implement WOW, and this becomes the dispatch point
-     rather than a dead end. The detection above is what that will hang off. */
-/* The loaded modules, at file scope: selector allocation happens in a LATER stage of
-   WinMain -- DpmiInstall and the LDT pool are defined further down, and entering
-   protected mode needs the VDM registered first -- so the result of the load has to
-   outlive this call.
-
-   ⚠ TWO PHASES, AND THE ORDER IS FORCED. An import is patched as
-     target-selector:offset, so every module's selectors must be final before ANY
-     module is relocated. The earlier version of this code relocated at load time with
-     placeholder segment values and relocated AGAIN once selectors existed. That is
-     broken and tests/unit/ne_test.c now proves it: a chained record finds its next
-     site by reading the word AT the current site, and the first pass has overwritten
-     exactly those words with addresses. The second pass follows garbage. So:
-        wow_load_modules()   -- parse, allocate, copy bytes.  NO relocation.
-        wow_bind_modules()   -- selectors for everything, then relocate ONCE. */
-#define WOW_MAX_MOD 16       /* krnl386 + the ten siblings, with headroom */
-static NE_MODULE g_WowModule[WOW_MAX_MOD];
-static BYTE  *g_WowImage[WOW_MAX_MOD];
 static CHAR      g_WowName[WOW_MAX_MOD][16];
-static INT       g_WowModuleCount = 0;
-
 /* ── ★ WHICH MODULE OWNS THIS SELECTOR? (GH #128, session 38) ─────────────────
      Needed because the WOW32 id space is per module: a call's stub segment names
      the table it belongs to, and the table decides whose numbering applies. The
@@ -10141,7 +9099,6 @@ static INT WowKernel2Stub(WORD thunkId, WORD returnStub)
         && (WORD)(image[offset + 1] | (image[offset + 2] << BYTE_SHIFT)) == thunkId
         && image[offset + 3] == X86_OP_CALL_FAR;
 }
-#define WOW_PATH_PARAS      0x20               /* the path buffer: one paragraph-run, one purpose */
 /* seg2 ids. Numbered in THEIR OWN space -- 0xd1 here is not 0xd1 in wow32.h. */
 #define WOW32K2_TASKENV   0x00d1     /* the new task's environment; args: block offset 2, selector 4 */
 static WORD      g_WowEntryDs = 0;   /* krnl386's autodata paragraph      */
@@ -10194,7 +9151,6 @@ static CHAR      g_WowKernelPath[512];
    the note at the entry setup and WowPlaceV86. */
 static WORD      g_WowEntryCx = 0;
 static WORD      g_WowPspSegment  = 0;
-static WORD      g_PmTransferSegment  = 0;
 /* Where WOW32 0xc5 puts a resolved module path so the guest can point at it. Its own
    paragraph, and separate from the transfer buffer above on purpose -- see the
    allocation site and the 0xc5 service. */
@@ -10209,7 +9165,6 @@ static WORD      g_WowPathSegment = 0;
      Its own paragraph for the same reason as the path scratch: the child keeps this
      pointer for its whole life, so it cannot share a buffer anything else reuses. */
 static WORD      g_WowEnvironmentSegment  = 0;
-#define WOW_ENV_PARAS  0x100                 /* 4 KB -- a DOS environment and then some */
 /* ── ★ THE WAY BACK OUT OF 16-BIT CODE. (GH #128, session 40) ─────────────────────
      One paragraph holding `C4 C4 57`, and a 16-bit CODE selector over it. It is the
      far return address every host-made call to a Win16 procedure is given, and it is
@@ -10219,21 +9174,8 @@ static WORD      g_WowEnvironmentSegment  = 0;
 static WORD      g_WowCallbackSegment = 0;
 static DWORD     g_WowCallbackLinear = 0;
 static WORD      g_WowCallbackSelector = 0;          /* built at the first callback */
-/* ── ★ EVERY PSP THIS HOST BUILDS, SO ITS ENVIRONMENT FIELD CAN BE RE-READ LATER.
-     `PSP+0x2c` is the field two separate faults turned on, and the question that
-     could not be answered from a fault dump is not "what is it now" but "who
-     changed it after we wrote it". One selector and one linear address per task is
-     enough to print the answer at every fault, which is the difference between
-     watching the field and inferring it from the code that might write it. */
-#define WOW_PSP_TRACK 4
-static WORD      g_WowPspSelector[WOW_PSP_TRACK];
 static DWORD     g_WowPspLinear[WOW_PSP_TRACK];
 static WORD      g_WowPspEnvironment[WOW_PSP_TRACK];   /* last seen +0x2c, for the change log */
-static INT       g_WowPspCount = 0;
-
-static INT HostReadable(PCVOID pointer, SIZE_T length);   /* fwd: defined with the
-                                                             other memory probes */
-
 /* Report any change to a tracked PSP's environment field. Called at every WOW32 BOP
    AND every protected-mode INT 21h, because the resolution of the answer is exactly
    the spacing of the sampler: sampling only at WOW32 calls put the whole of WOWEXEC's
@@ -10644,7 +9586,6 @@ static VOID HostPresentHook(PVOID context)
         PostMessageA(g_Window, WM_APP_PRESENT, 0, 0);
 }
 #define TRAY_ID 1
-static INT  g_WowLaunch = 0;                /* `-w`: this VDM hosts Win16        */
 static INT  g_TrayOn    = 0;                /* the icon is currently installed   */
 
 static VOID TrayAdd(HINSTANCE instance, HWND window)
@@ -11229,7 +10170,6 @@ static INT           g_LowLevelKeyboardOn = 0;     /* OFF by default; llkbd.txt 
 static volatile LONG g_UiBeat;          /* ++ per WM_TIMER: the UI thread is pumping   */
 static DWORD         g_CaptureWatchdogReleased;   /* times the watchdog had to hand the box back */
 static volatile LONG g_WindowsKeyDown;         /* Win held -- maintained by the hook, see below */
-#define HOST_KEY_DOWN_BIT       0x8000 /* GetKeyState / GetAsyncKeyState: held now   */
 static LRESULT CALLBACK LowLevelKeyboardProcedure(INT code, WPARAM wParam, LPARAM lParam)
 {
     if (code == HC_ACTION && g_Captured && GetForegroundWindow() == g_Window) {
@@ -11453,7 +10393,6 @@ static VOID InputCaptureSet(HWND window, INT isOn)
        which is where SendMessage to the control is safe -- InputCaptureSet is also
        reached from the WM_KEYDOWN path, but the tick is the single writer. */
 }
-enum { HOST_INSTANCES_MAX = 16, HOST_INSTANCE_WAIT_MS = 200, CAPTURE_MS_MIN = 50, CAPTURE_MS_MAX = 60000, CAPTURE_DELAY_MS_MAX = 600000, HEADLESS_MS_MAX = 3600000 };   /* startup limits: instance numbers, knob ranges */
 /* ── #153: FILE > OPEN EXECUTABLE / OPEN RECENT. ─────────────────────────────────────
      User decision (s81): if this window is sitting at the top-level shell's prompt,
      TYPE the program into it -- drive, `CD`, name -- so it runs here and the prompt
@@ -11807,7 +10746,6 @@ static VOID HostFullscreenToggleRestore(HWND window)
     InvalidateRect(window, NULL, TRUE);
 }
 
-static VOID HostFullscreenToggle(HWND window);
 static VOID HostFullscreenToggle(HWND window)
 {
     if (g_Safe.Fullscreen && !g_PresentDdraw.IsFullscreen) return;   /* s90 #132: SAFE MODE stays windowed */
@@ -12024,19 +10962,6 @@ static VOID JoystickPollEnsure(VOID)
       else InterlockedExchange(&g_JoystickThreadStarted, 0); }       /* retry next apply */
 }
 
-/* ── ★ TWO COPIES, BECAUSE THE MENU AND THE DIALOG MEAN DIFFERENT THINGS. ────────
-     g_Settings is WHAT IS IN FORCE. g_SettingsDisk is WHAT THE REGISTRY HOLDS. They start
-     identical and diverge only when something is tried from a menu.
-   ► The View menu (and Machine > CPU Speed) write g_Settings and never save, so a scaler
-     or a speed tried while watching something run is gone at the next launch.
-   ► The Settings dialog is populated from g_SettingsDisk and OK writes BOTH -- it is
-     the editor for the saved configuration, and pressing OK is what keeping
-     something means.
-   ⚠ SO OK ALSO DISCARDS ANY SESSION OVERRIDE, and that is the point rather than an
-     oversight: if the dialog showed the live values instead, then changing an audio
-     setting and pressing OK would silently make every display experiment permanent.
-     Two meanings, two copies, and the one you edit is the one you save. */
-static NTVDMEX_SETTINGS g_Settings;
 static NTVDMEX_SETTINGS g_SettingsDisk;
 
 /* ── EVERY SETTING SAYS ITS VALUE AND WHERE IT CAME FROM. (GH #144) ──────────────
@@ -12161,28 +11086,11 @@ static VOID HostAutoFullscreenConsider(HWND window, INT graphics)
     g_AutoFullscreenDone = 1;
     if (!g_PresentDdraw.IsFullscreen) HostFullscreenToggle(window);
 }
-static DOS_MACHINE   *g_DosMachine;          /* so the DOS version can be changed live */
-
 /* Frames the presenter drops between the ones it shows. 0 = every frame, which is
    what this host has always done. Read on the UI thread's timer tick. */
 static INT g_FrameSkip;
 
-/* ── THE CARD, IN ONE PLACE, BECAUSE THREE THINGS HAVE TO AGREE ABOUT IT. ────────
-     vdd_sb answers at this port and raises this IRQ; the DMA controller moves the
-     bytes on this channel; and the guest is TOLD all three in BLASTER. Telling it
-     one thing while doing another is worse than saying nothing at all -- a driver
-     that believes the string waits on an interrupt that arrives elsewhere -- so the
-     numbers exist once and every consumer reads them from here. */
-static DOS_SB_CONFIG g_SbConfig = { SB_DEFAULT_BASE, SB_DEFAULT_IRQ, SB_DEFAULT_DMA8,
-                             0 /* H is not advertised by default -- see dos_env.h */,
-                             DOS_SB_DEFAULT_TYPE, 0, 0 };
 static INT g_DspVersionForced;                /* cfg\dspver.txt beat the model's version */
-
-/* Whether the extended/expanded memory managers announce themselves at all. Off
-   means INT 2Fh AX=4300 does not answer and there is no INT 67h vector, which is
-   the state a real machine is in with no HIMEM/EMM386 line in CONFIG.SYS -- and
-   which some games specifically want. */
-static INT g_XmsOn = 1, g_EmsOn = 1;
 
 /* ── #136: CONVENTIONAL MEMORY, AND WHERE IT ENDS. ────────────────────────────────
      g_ConventionalKbWant is the setting (memory FITTED, 64..640 KB); g_DosMemoryTop is the
@@ -12304,17 +11212,6 @@ static VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT liv
     /* The cursor is the one setting with a VISIBLE side effect, so it goes through
        the same helper the menu item and Ctrl+F8 use rather than poking the flag. */
 }
-
-/* The display half. Separate because the UI thread builds its presenter long after
-   WinMain reads the registry, and PresentDdrawInitialize() zeroes its own struct. */
-/* ── ★ ddrawfs.flag -- GO BACK TO EXCLUSIVE DIRECTDRAW FULLSCREEN. ───────────────────
-     OFF by default, and the default is the whole point: the exclusive path's stretch
-     blt is filtered by the driver and cannot be told not to be, which is what made
-     fullscreen blurry when the identically-scaled WINDOW was sharp. Borderless-window
-     fullscreen through the GDI path has none of that.
-     Kept as a knob rather than deleted because "no tearing" was the exclusive path's
-     original argument and a file is enough to get it back for a comparison. */
-#define DDRAWFS_FLAG CFG_(KNOB_FILE_DDRAWFS)
 
 /* ── ★ fsinteger.flag -- SNAP FULLSCREEN TO WHOLE PIXEL MULTIPLES. OFF BY DEFAULT. ──
      I added whole-multiple scaling to cure blurry fullscreen. It was never the cause
@@ -12548,7 +11445,6 @@ static VOID HostApplyWindowSize(HWND window, DWORD index)
 {
     HostApplyScale(window, (INT)index + 1 <= HOST_SCALE_MAX ? (INT)index + 1 : 1);
 }
-#define WINDOW_SETTING_UNSET_U 0xFFFFFFFFu   /* g_WindowSizeLive / g_AspectLive: nothing applied yet */
 /* ── PUT g_Settings INTO EFFECT, WITHOUT TOUCHING THE REGISTRY. ───────────────────────
      One function so the View menu, the CPU Speed submenu and the dialog's OK all
      reach the machine by the same path -- three call sites that each remembered a
@@ -13251,7 +12147,6 @@ static VOID KeyMessageNote(VOID)
     KeyLatencyBucket(g_KeyMessageHistogram, queueDelay); ++g_KeyMessageCount;
     if (queueDelay > g_KeyMessageMaximumMs) g_KeyMessageMaximumMs = queueDelay;
 }
-static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down);
 /* ── #274: THE TWO KEYS WHOSE BYTES ARE NOT `[E0] code` / `[E0] code|80h`. ────────────
      Pause and Ctrl+Break (VddInputHostKeyBytes has the sequences and the sources).
      Both send everything on the PRESS, nothing on the release, and never auto-repeat --
@@ -15264,9 +14159,6 @@ static VOID Int10WaitAfter(VOID)
 enum { RETRACE_IDLE_PATTERN_LENGTH = 4, RETRACE_IDLE_BACK_MAX = 3 };   /* RetraceIdle: test/and al ; jcc back to the IN */
 static volatile DWORD g_RetracePending, g_RetraceCs, g_RetraceIp, g_RetraceAl, g_RetraceCx, g_RetraceIdles;
 static INT g_RetraceOffset = -1;
-/* What follows the guests' 3DAh reads, site by site: the loops RetraceIdle() must recognise
-   are the ones real programs use, so they are MEASURED here, not assumed (STAGE2). */
-#define RT_SITES 8
 static struct { DWORD Cs, Ip, Count; BYTE Bytes[10]; } g_RetraceSite[RT_SITES];
 static VOID RetraceNote(volatile BYTE *tib, WORD port, INT isIn, DWORD cs, DWORD ipAfter)
 {
@@ -15479,37 +14371,8 @@ static INT DpmiSelectorIs32(WORD selector)
     return (g_Ldt[index].Flags & DPMI_DESCRIPTOR_FLAG_BIG) != 0;
 }
 
-/* PM variant of HostTryIo (GH #18 run 72). A real-CPU PROTECTED-MODE IN/OUT is
-   trapped by the kernel and reflected to us as VTIB_EVENT=0 -- the SAME I/O event as
-   V86 (VM-confirmed by outprobe.com: a PM `OUT DX,AL` to 0x3C8 stops with event=0 on
-   the instruction). Only the addressing differs: the faulting insn is at the code
-   selector's LINEAR BASE + EIP, not V86 `CS<<4:IP`. Decode + dispatch through the same
-   VDD bus, then step the guest past it, so PM port I/O (VGA/sound) reaches our VDDs.
-   #3 (32-bit DPMI): the code selector's D/B bit sets the DEFAULT operand size -- 16-bit
-   for a 16-bit segment (0x66 => 4), 32-bit for a DOS/4GW flat segment (0x66 => 2). We
-   read it per-selector and offset EIP by its full 32-bit value when D=1, so this decoder
-   serves both classes; for every existing D=0 client the behaviour is unchanged. */
-#define DMAPOLL_MAX 8
 static DWORD g_DmaPollEip[DMAPOLL_MAX], g_DmaPollHits[DMAPOLL_MAX];
 static UINT g_DmaPollCount = 0, g_DmaPollOverflow = 0;
-/* ── WHO CALLS THE POLL? THE STACK KNOWS, AND THE IMAGE DOES NOT. ────────────────────
-     DMX dispatches through a card-driver vtable -- four position routines of identical
-     shape, one per sound card -- and in an LE image those entries are FIXUP RECORDS, so
-     the pointer is simply not in the file. Searching for it statically returned nothing
-     under every plausible encoding, which is why the caller chain is unknown.
-     At the instant of the poll, though, the guest's own stack holds the return chain.
-     Take the top of it and keep every word that looks like a code address, i.e. lands
-     near the poll site itself (the whole code object is ~0x45000 bytes, so a +/-0x60000
-     window cannot miss it and cannot admit heap or ring data). The union over a whole
-     run is the set of call sites, and each converts to a file offset by subtracting
-     0x03AEDFEC -- at which point DMX's refill path can be READ instead of inferred.
-   ► WHAT THIS IS FOR. `getpos`'s caller computes `total - remaining` and is gated on an
-     "is this transfer active" flag: that is the shape of a position REPORT, not
-     necessarily the refill trigger. If DMX refills on the SB block IRQ instead -- which
-     arrives at 99.5% -- then the 56/s poll rate has nothing to do with the 30% stale
-     blocks and the 31%-vs-30% agreement is a coincidence. This decides that, and it is
-     the difference between a cause and a pattern match. */
-#define POLLSTK_MAX 48
 static DWORD g_PollStack[POLLSTK_MAX], g_PollStackHits[POLLSTK_MAX];
 static DWORD g_PollGap[10], g_PollGapMaximumMicroseconds = 0;
 static UINT g_PollStackCount = 0, g_PollStackOverflow = 0;
@@ -15619,42 +14482,6 @@ static INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
                        eipOffset + length, eipOffset, port, isIn, width, is32);
     return 1;
 }
-#define MODEY_ROW_BYTES 80u   /* a mode-Y row: 320 pixels across four planes */
-/* ══ MODE-Y PLANE BACKING: POINT A0000 AT THE PLANE THE MASK SELECTS ═════════════════
- *
- *  Mode Y cannot be de-interleaved after the fact. The A0000 aperture is one flat
- *  buffer, so a guest write lands there with no record of which plane the map mask had
- *  selected, and six reconstruction rules were measured against captured frames without
- *  finding a good one -- every one trades horizontal resolution against stale content
- *  (see modey_flush() in vdd_video.c for the numbers). The information is simply not in
- *  the aperture.
- *
- *  So stop reconstructing it: give each plane its own memory and make A0000 BE the
- *  selected plane. A guest write then lands in the right plane by construction, and the
- *  renderer reads four planes that were never mixed.
- *
- *  ► THIS IS ONLY POSSIBLE BECAUSE A0000 IS ITS OWN ALLOCATION. Measured:
- *        A0000 region: alloc_base=0xa0000 size=0x20000 type=MEM_MAPPED
- *    AllocationBase IS 0xA0000 and it is already a section view, so it can be unmapped
- *    and replaced. A section cannot be mapped into the middle of a larger reservation,
- *    and that is what would have killed this idea.
- *
- *  ► THE WINDOW IS 128K AND ONLY THE FIRST HALF IS PLANAR. B0000-BFFFF is the text and
- *    mono window -- B8000 is the colour text page the VDD reads through `vmem+0x18000`
- *    -- so it gets its own section, mapped once and left alone. Unmapping the original
- *    view frees all 128K, so B0000 has to be re-established and its CONTENTS RESTORED
- *    before anything looks at them.
- *
- *  ► A MULTI-PLANE MASK CANNOT BE ONE MAPPING. Doom writes 0x0F 107 times a run, for
- *    its screen clear. Those windows get a scratch section, and its contents are fanned
- *    out to every plane the mask selected when the mask next moves.
- *
- *  ► REMAPPING HAPPENS ONLY ON THE CPU THREAD, inside the I/O trap that serviced the
- *    map-mask write, i.e. with the guest stopped. The renderer runs on the UI thread and
- *    only ever READS the host-side views, which stay mapped whatever is at A0000.
- */
-#define MODEY_WIN   0x10000u                 /* 64K: A0000..AFFFF and B0000..BFFFF   */
-#define MODEY_NSEC  6                        /* 0-3 planes, 4 chained/linear, 5 scratch */
 static HANDLE g_ModeYSeconds[MODEY_NSEC];
 static PVOID g_ModeYView[MODEY_NSEC];           /* host-side views, always mapped       */
 static HANDLE g_BarSecond;
@@ -15679,26 +14506,6 @@ static DWORD  g_ModeYSwaps = 0, g_ModeYFanouts = 0, g_ModeYFail = 0;
 static DWORD  g_ModeYSelectorCalls = 0;   /* ModeYRemapSelect() entered with the remap live  */
 static DWORD  g_ModeYSelectorSame  = 0;   /* ...and the window was already where it wanted     */
 static DWORD  g_ModeYSelectorZero  = 0;   /* ...and the mask selected no plane at all          */
-/* ── ★ NORTH STAR 1: WHAT DOES MODE Y COST, PER SECOND? (s80) ─────────────────────────
-     The mode-Y fix was parked on a performance judgement -- "arming the A0000 trap makes
-     the interpreter the CPU" -- that nobody had measured, and the user's bar is "measure
-     first, then decide". Every map-mask write ALREADY traps (it is an OUT to 3C5h) and
-     already remaps the window here, so the question is not "trap per mask change or per
-     write" in the abstract; it is these numbers, per second of play:
-         sel    map-mask writes that reached us        (= SR2 write rate)
-         swap   the ones that actually moved the window (Unmap + MapViewOfFileEx)
-         fan    multi-plane windows closed               (the case one mapping cannot do)
-         fanB   bytes those windows CHANGED -- a LOWER bound on the guest's stores under a
-                multi-plane mask, since a same-value store is invisible (which is the
-                whole defect); a trap-per-write design would pay per store
-         us     host time spent inside this function     (the current design's own cost)
-         flip   CRTC 0Ch (start address high) writes      (guest frames, for page-flippers)
-         ins    instructions interpreted for mode Y        (design C, ModeYNeedsInterp)
-         ius    host time spent interpreting them          (compare with `us`)
-     Timed with RDTSC, not QPC: on XP QPC can be the ACPI PM timer at ~1 us a read, and
-     this runs ~10^5 times a second in Doom's low detail; two QPCs a call would perturb
-     the thing measured. Cycles are converted to us once, at report time, against QPC. */
-#define YTL_SECS 90
 static DWORD  g_ModeYTimelineSelector[YTL_SECS], g_ModeYTimelineSwap[YTL_SECS], g_ModeYTimelineFanout[YTL_SECS];
 static DWORD  g_ModeYTimelineFanoutBytes[YTL_SECS], g_ModeYTimelineFlip[YTL_SECS];
 static UINT64 g_ModeYTimelineCycles[YTL_SECS];
@@ -15723,82 +14530,11 @@ static UINT64 ModeYTimelineRdtsc(VOID)
     __asm__ __volatile__("rdtsc" : "=a"(low), "=d"(high));
     return ((UINT64)high << DWORD_SHIFT) | low;
 }
-/* ── DOES THE FAN-OUT ITSELF CREATE THE STATUS BAR'S FOUR-WAY COLLAPSE? ──────────────
-     `bar_planes_equal` says ~1709 of 2560 bar offsets hold the SAME byte in all four
-     planes, and the fan-out is the only path in this host that writes ONE byte to
-     SEVERAL planes -- so it is the obvious suspect. Session 22 believed it had ruled
-     that out: it disabled the fan-out entirely and the bar was "still 58% wrong".
-   ⚠ THAT ELIMINATION DOES NOT HOLD, AND THE REASON IS THE METRIC. With the fan-out
-     off, a multi-plane write reaches NO plane at all -- so the bar is wrong because it
-     is UNWRITTEN rather than wrong because it is COLLAPSED, and a percentage of
-     differing PIXELS scores those two identically. The experiment changed one wrong
-     picture for a different wrong picture and the number could not tell them apart.
-     (Same shape as `underruns=0` and `blocks_replayed`: a metric that cannot separate
-     two failure modes is not evidence about which one is happening.)
-   ► SO COUNT THE THING ITSELF, not a proxy: how many DISTINCT bar offsets does the
-     fan-out write under a multi-bit mask, split by the two row bands session 23 showed
-     behave differently (168-183, which no latch burst ever reaches, and 184-199, which
-     they all do). If this lands near 1709 the fan-out IS the collapse; if it lands near
-     zero the path is exonerated properly this time, by a number that could have said
-     otherwise. One bit per (page, bar offset) = 960 bytes, set in a loop that already
-     runs only over CHANGED bytes. */
-#define YBAR_OFF_LO   (168u * MODEY_ROW_BYTES)      /* first bar byte within a page */
-#define YBAR_OFF_MID  (184u * MODEY_ROW_BYTES)      /* band split: rows 184..199    */
-#define YBAR_OFF_HI   (200u * MODEY_ROW_BYTES)
 #define YBAR_PER_PAGE (YBAR_OFF_HI - YBAR_OFF_LO)          /* 2560 */
 static BYTE  g_ModeYFanoutBarSeen[(3u * YBAR_PER_PAGE + 7u) / 8u];
 static DWORD g_ModeYFanoutBarWrites[2];      /* fan-out writes to bar bytes, by band  */
 static DWORD g_ModeYFanoutBarDistinct[2];    /* ...distinct offsets, by band          */
 static DWORD g_ModeYFanoutBar4Way[2];        /* ...of which the mask was all four     */
-/* ── IS THE GUEST WRITING THE SAME BYTES TO EVERY PLANE? ─────────────────────────────
-     Everything else is now excluded by measurement: the fan-out writes 0 bar bytes, the
-     latch bursts change the oracle by under a point when delivered, and the render is
-     innocent (plane-vs-WAD matches screen-vs-WAD to the digit). What remains is the
-     guest's own stores under single-plane masks -- and `bandprof.py` says all four
-     planes hold PHASE-1 data at 54% (band A) to 80% (band B) of bar offsets against a
-     reference uniformity of 12%.
-     There are only two ways that happens. Either Doom writes four different byte
-     streams and we misdirect them onto one plane's worth of content, or Doom writes the
-     SAME stream four times because its per-plane source offset never advances. Those
-     need completely different fixes and no measurement so far separates them.
-   ► SO SAMPLE THE OUTGOING PLANE. A0000 maps exactly one plane at a time, so a store
-     can only reach the plane that is mapped; take a fixed 32-byte window of the bar
-     from a plane just before we swap away from it, and compare it with the last window
-     taken from a DIFFERENT plane -- but only count comparisons where the plane's own
-     content actually CHANGED since we last looked, or "identical" would mostly mean
-     "nobody wrote anything".
-       cross_same  two different planes were each written and received IDENTICAL bytes
-       cross_diff  ...and received different bytes
-     High cross_same means the fault is upstream of the planes entirely: the guest is
-     writing one stream four times, and the question becomes whether a store lands under
-     the mask Doom believes it set. Near-zero means the planes receive distinct data and
-     the collapse is created somewhere we have not looked yet.
-     Two windows, one per band, because the bands differ in intensity (54% vs 80%) and
-     a single sample point cannot show that. Two 32-byte compares per swap.
-
-   ⚠⚠ AND THAT INSTRUMENT COULD NOT HAVE SAID OTHERWISE -- IT IS THE SAME MISTAKE AS
-     SESSION 23'S p0-vs-p2 CONTROL. `same` demanded that ALL 32 bytes match. The
-     collapse this is testing for means roughly 67% per-byte agreement (that is what
-     `bar_planes_equal` measures), and 0.668^32 = 2.5e-6 -- so under the hypothesis the
-     window-level counter should read ~0 same out of 246, which is what it read
-     (30/246). "cross_diff dominates" was therefore NOT evidence that the planes receive
-     distinct data; it is what BOTH hypotheses predict, and the exclusion built on it is
-     withdrawn.
-   ► COUNT BYTES, NOT WINDOWS, and make the number DIRECTLY COMPARABLE to the two
-     figures that already exist: bar_planes_equal (66.8% of bar offsets agree across all
-     four planes) and bandprof.py's reference uniformity (~12% for an intact bar). An
-     all-or-nothing predicate over a 256-byte window can only ever report "different";
-     a per-byte rate lands between those two numbers and picks a side.
-       cross_eqb/cross_totb  bytes agreeing between the outgoing plane and the last
-                             window written by a DIFFERENT plane
-       p1_eq/p1_tot[pl]      bytes of plane `pl`'s window agreeing with plane 1's last
-                             window -- the hypothesis names plane 1 specifically, so ask
-                             about plane 1 specifically rather than about "some other
-                             plane"
-     256 bytes rather than 32: the windows are sampled only when the plane's bar content
-     actually CHANGED (247 times a run, measured), so the compare is free and a wider
-     window is a tighter rate. */
-#define YSMP_LEN 256u
 #define YSMP_A   (176u * MODEY_ROW_BYTES)      /* band A, rows 168-183 (256B spans rows 176-179) */
 #define YSMP_B   (192u * MODEY_ROW_BYTES)      /* band B, rows 184-199 (256B spans rows 192-195) */
 static BYTE  g_ModeYSample[2][4][YSMP_LEN];      /* [band][plane] last seen                */
@@ -16058,8 +14794,6 @@ static INT32 ModeYLatchDelta(VOID)
     return 0;
 }
 
-static VOID ModeYGr4CloseRun(VOID);       /* defined with the GR4 counters below */
-
 /* ── WHERE DOES A PROTECTED-MODE GUEST WRITE THE MAP MASK? (s80, north star 1) ────────
      Design C for Doom needs a 32-bit interpreter, and how much of one depends on what
      code runs between Doom's map-mask writes. The OUT that writes SR2 traps, and the main
@@ -16089,7 +14823,6 @@ static VOID ModeYPmSiteNote(INT mask)
     }
 }
 
-static VOID ModeYRemapSelectBody(PVOID context, INT mask);
 static VOID ModeYRemapSelect(PVOID context, INT mask)
 {
     UINT64 cycleStart;
@@ -16643,7 +15376,6 @@ enum { PAGE_MAP_UNKNOWN = 0, PAGE_MAP_OK = 1, PAGE_MAP_BAD = 2 };   /* g_PageMap
      cost falls only on the upper-memory accesses that are the anomaly. */
 static BYTE g_PageMap[X86_REAL_MODE_SIZE_U >> PAGE_SHIFT];     /* one entry per 4KB page of the low 1MB */
 static DWORD   g_InterpreterMemoryBadReads, g_InterpreterMemoryBadWrites, g_InterpreterMemoryBadLogged;
-static VOID InterpreterMemoryBadNote(UINT32 linear, INT write);   /* defined after v86interp.h (needs icpu) */
 static INT InterpreterMemoryPageOk(UINT32 linear)
 {
     UINT32 page = linear >> PAGE_SHIFT;
@@ -16682,10 +15414,6 @@ static inline __attribute__((always_inline)) VOID V86HostWrite8(UINT32 linear, B
 { if (linear < X86_REAL_MODE_SIZE_U && g_PageMap[linear >> PAGE_SHIFT] == PAGE_MAP_OK && (linear < VIDEO_APERTURE_BASE || linear >= VIDEO_MONO_BASE))
       { *(volatile BYTE *)linear = value; return; }
   InterpreterMemoryWrite8Slow(linear, value); }
-/* The interpreter's per-instruction code pointer (v86interp.h, V86I_CODE_PTR): the 16
-   bytes at `lin` sit in one already-probed page of plain RAM below 1 MB, outside the
-   aperture -- exactly the bytes V86HostRead8's fast path would have read one at a time. */
-#define V86I_CODE_PTR 1
 static inline __attribute__((always_inline)) const volatile BYTE *V86HostCodePointer(UINT32 linear)
 { if (linear < X86_REAL_MODE_SIZE_U && (linear & PAGE_LAST_BYTE_U) <= PAGE_LAST_PARAGRAPH_U && g_PageMap[linear >> PAGE_SHIFT] == PAGE_MAP_OK
       && (linear < VIDEO_APERTURE_BASE || linear >= VIDEO_MONO_BASE))
@@ -16703,7 +15431,6 @@ static inline __attribute__((always_inline)) const volatile BYTE *V86HostCodePoi
      BOTH directions, which no missed-pulse story explains, and its timer tick -- the
      row where it switches palettes -- landed anywhere from row 153 to 165. Generate
      only: delivery takes g_Lock by TRY and the interpreter already holds it. */
-static VOID HostPitGenerate(VOID);
 static UINT32 V86HostIn(WORD port, INT width)
 { UINT32 value = 0;
   if (port >= PIT_PORT_COUNTER0 && port <= PIT_PORT_CONTROL) HostPitGenerate();
@@ -16715,7 +15442,6 @@ static VOID V86HostOut(WORD port, INT width, UINT32 byteValue)
   if (port == PIT_PORT_CONTROL) PitLatchNote((BYTE)byteValue);     /* same instrument as the reflected path */
   if (port == PIT_PORT_COUNTER0) HostPitResyncCheck(); }         /* and the same resync rule           */
 
-#include "v86interp.h"
 enum { PM32_PAGE_READ = 1, PM32_PAGE_WRITE = 2 };   /* g_Pm32PageCache access bits */
 /* ── THE FLAT 32-BIT INTERPRETER'S HOST HOOKS (north star 1, Doom). ───────────────────
      Same division as imem_*: A0000-AFFFF goes through the VGA engine (a read loads the
@@ -16762,8 +15488,6 @@ static INT Pm32HostCanAccess(UINT32 linear, INT width, INT isWrite)
 }
 static UINT32 Pm32HostIn(WORD port, INT width)             { return V86HostIn(port, width); }
 static VOID     Pm32HostOut(WORD port, INT width, UINT32 value) { V86HostOut(port, width, value); }
-
-#include "pm32interp.h"
 
 /* Is a PROTECTED-mode guest in a window no mapping can serve? (The real-mode twin is
    ModeYNeedsInterp.) */
@@ -17194,22 +15918,6 @@ static INT32 HostInterpPaced(volatile BYTE *tib, INT32 cap)
     return ran;
 }
 
-/* ── PROBE A GUEST POINTER WITHOUT FAULTING. Session 17, and it cost a run. ────────
-   IsBadReadPtr does its job by TOUCHING the memory inside an SEH frame -- so on a bad
-   pointer it raises an access violation, and a VECTORED handler sees that before the
-   SEH frame swallows it. DpmiCrashVeh below is exactly such a handler, and while a
-   PM client is running it treats any fault with a flat CS as a reflected guest INT
-   31h: it rewrote our OWN thread's CONTEXT and resumed it. A diagnostic that guards
-   itself with IsBadReadPtr therefore KILLS the run it is diagnosing, and the log ends
-   one line before the thing you added it to see. That is what happened here.
-   VirtualQuery answers the same question by asking the memory manager instead of the
-   CPU, so it cannot raise. Committed + readable (any of the four read-capable
-   protections) + the whole span inside one region is the test. */
-/* The thread that RUNS THE GUEST (the main one). Recorded so the fatal dump can say
-   whether a host-side crash happened on it or on one of the worker threads -- audio,
-   present, watchdog. Those are different bugs and the dump used to name neither. */
-static DWORD g_GuestThreadId = 0;
-#define WOW_ID_NONE 0xFFFF   /* g_WowLastId: no WOW32 call entered yet */
 /* ── ★ WHICH WOW32 CALL WAS THE HOST INSIDE? (session 38) ─────────────────────────
      The WOWBOP log line is accumulated into `p` and only flushed WITH its result, so
      a host-side crash inside a service loses the whole line -- header included. The
@@ -17912,9 +16620,6 @@ static DWORD WINAPI DpmiWatchdog(LPVOID param)
     TerminateProcess(GetCurrentProcess(), DPMI_WATCHDOG_EXIT_CODE);
     return 0;
 }
-
-static VOID DpmiInstall(INT index);           /* defined just below; used by the helper */
-static VOID WowShadowPut(INT index);         /* GH #128: keep the descriptor shadow in step */
 
 /* ── ★★★★★ A HOST-PRIVATE LDT POOL, BECAUSE krnl386 IS A SECOND ALLOCATOR. ────
      (session 48) MS Paint and Notepad both died on `File > Save As` with a #GP in
@@ -19520,8 +18225,6 @@ static DWORD DpmiPmEip(volatile BYTE *tib)
    Scanning a data region would be the dangerous thing (a `CD 21` byte pair that is
    really data gets corrupted); scanning only what the client itself calls code is the
    narrowest rule that covers the case, and g_int_vec[] remains the revert map. */
-static VOID DpmiBreakpointArm(VOID);               /* fwd: a new region may hold a requested BP */
-static VOID DpmiBreakpointRearmPending(DWORD currentLinear);   /* fwd: re-plant stepped-over breakpoints */
 /* `d32` is the region's DEFAULT OPERAND SIZE -- the D/B bit of the descriptor that named
    it code -- and it is not optional: instruction lengths differ between the two, so
    decoding DOS/4GW's 16-bit modules as 32-bit rejects obvious real sites (`mov ax,4c00h
@@ -20586,12 +19289,8 @@ static VOID Wow32ReturnLoad(VOID)
      reproduce the committed result exactly, so the switch is a file on the share
      and its absence costs nothing. */
 #define WOWSCHED_PATH CFG_("wowsched.txt")
-static INT   g_WowSchedOn = 0;
 static WORD  g_WowDgroupSelector   = 0;      /* krnl386's DGROUP selector, learned at a BOP */
-/* s92 (#306): every task that is not running, parked (wowsched.h WOWSCHED_MAX). */
-static WOWSCHED_SLOT g_WowSchedSlots[WOWSCHED_MAX];
 static INT   g_WowSchedRoundRobin = 0;            /* round-robin cursor for the yields            */
-static INT   g_WowWindowNested;            /* defined with the nested run (WowCall16SyncEx) */
 static DWORD g_WowSchedSwitches = 0;
 static INT WowSchedFree(VOID)
 {
@@ -20871,8 +19570,6 @@ static VOID WowCallLoad(VOID)
     LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
 }
 
-static INT DpmiServicePmInt(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
-static VOID DpmiEnsurePmReturnSelector(VOID);   /* fwd: shared PM-return catcher installer (#2b + 0303) */
 enum { DPMI_CALLBACK_STACK_TOP = 0xF400, DPMI_CALLBACK_PHASE_MAX = 64 };   /* DpmiInvokeCallback: the PM stack it lends, the run's bound */
 /* Invoke a DPMI 0303 real-mode callback: the guest (running in V86 during a 0301
    excursion) far-called a planted callback BOP -- switch V86->PM, run the client's
@@ -21464,8 +20161,6 @@ static DWORD Wow32HostSelectorToLinear(WORD selector, PVOID context)
     return DpmiSelectorBase(selector);
 }
 
-#define WOW_SHADOW_ENTRIES DPMI_LDT_MAX
-static BYTE *g_WowShadow = NULL;
 static WORD  g_WowShadowSelector = 0;
 static DWORD g_WowSyncWrites = 0;      /* how many entries krnl386 has changed */
 
@@ -21829,7 +20524,6 @@ static INT PmLfnCopy(WORD selector, DWORD offset, DWORD transferOffset, DWORD le
     else    for (index = 0; index < length; ++index) guest[index] = transfer[index];
     return 0;
 }
-enum { NESTED_V86_ROUNDS_MAX = 128, PM_INT21_HANDLE_LIMIT = 24, PM_INT21_LOCK_REGION = 0xFF80 };   /* DpmiServicePmIntBody: 0301h's nested run, PM INT 21h */
 /* How many bytes of an output window go back: all `len` of a block (kind 2), or a
    string's length + its NUL, never more than `len` (kind 4). */
 static DWORD PmLfnOutLength(DWORD transferOffset, INT kind, DWORD length)
@@ -21920,30 +20614,9 @@ static PSTR PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
 #undef m
 }
 #define DPMI_REPORTED_POOL_BYTES_U 0x04000000u   /* 0500h's answer: 64 MB */
-/* Our BIOS/driver stub BOPs, serviced in one place for the exec loop AND the nested DPMI
-   real-mode loop -- defined just above WinMain, where its arms used to live. (GH #247) */
-#define V86BOP_NONE  0      /* not one of V86BiosBop's numbers                         */
 #define V86BOP_DONE  1      /* serviced; EIP is past the BOP, onto the stub's IRET/RETF  */
 #define V86BOP_RERUN 4      /* serviced, still waiting; EIP left ON the BOP to re-execute */
-static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base);
 enum { WOW_SEGMENT_LIMIT_SLACK = 0x100 };   /* DpmiServicePmIntBody */
-/* ── ★★★ THE DEFAULT PM HANDLER FOR A HARDWARE IRQ, WHEN THE GUEST OWNS THE REAL-MODE
-     VECTOR: A TRUE NESTED-V86 REFLECTION. (s81, ZAR's streaming audio) ───────────────
-     DPMI 0.9: a protected-mode interrupt nobody hooked in PM is reflected to the real-mode
-     vector. DOS/4GW hooks every IRQ in PM with a pass-up handler that chains to OUR default
-     stub, so every real-mode ISR a DOS/4GW program relies on is reached through here. The
-     IVT-is-ours case was handled (s80, keyboard); this is the other one. ZAR's Miles
-     driver is a REAL-MODE ISR at IVT[0Dh] (SBLASTER.DIG +0x777), and every one of its SB
-     block interrupts arrived at 177:0027 and was abandoned -- 3,323 "PM ISR ABANDONED" in
-     one run -- so the double buffer was never swapped and the card fell silent after init.
-   ► This is 0302 with no RMCS: save the PM register file, enter V86 at IVT[vec] with an
-     IRET frame onto the DPMI_RMRET catcher and interrupts OFF (a hardware ISR is entered
-     with IF clear; the frame carries IF set, which its IRET restores), run it to the
-     catcher, restore PM. General registers are not an input or an output of a hardware
-     ISR, so nothing is marshalled. Returns 1 when the ISR ran to its IRET.
-   ⚠ Its own stack, below 0301's default one (the code segment at FF00), so a reflection
-     can never land on a frame that call is using. */
-static DWORD g_PmIrqRmReflects = 0, g_PmIrqRmFail = 0;
 static INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vector)
 {
     CHAR lineBuffer[256], *lineCursor = lineBuffer;
@@ -22015,7 +20688,6 @@ static INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vec
     if (done) ++g_PmIrqRmReflects; else ++g_PmIrqRmFail;
     return done;
 }
-#define INT15_WAIT_SLEEP_MS     3       /* INT 15h AH=86h: sleep only while more than this is left */
 static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                                     UINT steps)
 {
@@ -27506,19 +26178,6 @@ static INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context)
     return 1;
 }
 #define LIVEHB_FLAG CFG_("livehb.flag")
-/* ── ★★★ THE NESTED RUN: CALL 16-BIT CODE AND WAIT FOR THE ANSWER. (s89, #162) ─────
-     Every call into Win16 code so far was ARRANGED from a BOP and taken on the way out
-     (wowcall.h): fine for anything the guest asked us to do, impossible for a question
-     WINDOWS asks mid-way through its own work -- WM_CTLCOLOR comes from inside a
-     control's paint and needs a brush before the paint can go on. This runs the call
-     to completion right here: WowCallEnter parks the current context and enters the
-     procedure exactly as a deferred callback would (unloaded segments included), and
-     this loop drives the guest -- servicing every BOP, USER and GDI calls included,
-     the way the PM IRQ injector does -- until the procedure's return stub pops that
-     frame (WowCallLeave restores the parked context), then hands the result back.
-   ⚠ Only on the guest thread, in protected mode, a Win16 session, below the callback
-     depth limit. A run that stops without returning unwinds its frame and says so. */
-static INT g_WowWindowNested = 0;
 /* ── s89 (#302): …and WITH A STRUCTURE. `blob` (blobn bytes) is placed on the guest's
      stack below the arguments and its far pointer written into args[blobarg..+1]
      (high word first, as WowCallEnter does for WM_CREATE). After the procedure
@@ -27530,10 +26189,6 @@ static INT g_WowWindowNested = 0;
      `fix[i]` is an offset in `blob` holding a WORD offset WITHIN the blob; it is
      rewritten as the far pointer ss:(where the blob landed + that offset) -- known
      only here, because only here is SS:SP known. */
-static INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCount,
-                              WORD hwnd, WORD message, WORD *result,
-                              BYTE *blob, INT blobLength, INT blobArgument,
-                              const INT *fix, INT fixupCount);
 static INT WowCall16Sync(DWORD proc, WORD ds, const WORD *args, INT argumentCount,
                            WORD hwnd, WORD message, WORD *result)
 {
@@ -27562,7 +26217,6 @@ typedef struct {
     VOID   (*RemoveIoHook)(HANDLE vddHandle, WORD rangeCount, PCVOID ranges);
 } NTVDMEX_SHIM_API;
 #define PITLATCH_FLAG CFG_("pitlatch.flag")
-#include <wownt32.h>   /* declarations only: WOW_TYPE_*, the handle types WOWHandle32/16 are given */
 static VOID ShimLog(PCSTR what)
 {
     CHAR buffer[200], *cursor = buffer;
@@ -27654,7 +26308,6 @@ static BOOL ShimCallback16Ex(DWORD targetProcedure, DWORD flags, DWORD byteCount
     if (result) *result = g_WowCallLastResult;
     return TRUE;
 }
-#include "../shim/shim_api.h"   /* defines only: the host/shim contract (SHIM_API_VERSION, SHIM_GLOBAL_*) */
 /* ── s91 (#309): WOWGlobal*16 -- krnl386's OWN global heap, through its exports
      (offsets in its segment 1, read off guest/win16/krnl386.exe's entry table:
      15 GlobalAlloc 3ac3, 17 GlobalFree 3adf, 18 GlobalLock 3b10, 19 GlobalUnlock
@@ -27719,8 +26372,6 @@ static PVOID ShimMapFlat(WORD segment, DWORD offset, INT isProtectedMode)
    (the bus has no release) and answers as an empty slot: FFh in, writes dropped. */
 typedef VOID (WINAPI *PISV_IN_BYTE_ROUTINE)(WORD, BYTE *);   typedef VOID (WINAPI *PISV_IN_WORD_ROUTINE)(WORD, WORD *);
 typedef VOID (WINAPI *PISV_OUT_BYTE_ROUTINE)(WORD, BYTE);    typedef VOID (WINAPI *PISV_OUT_WORD_ROUTINE)(WORD, WORD);
-typedef struct { PVOID InByte, InWord, InStringByte, InStringWord, OutByte, OutWord, OutStringByte, OutStringWord; } ISV_IO_HANDLERS;
-#define ISV_MAX_HOOKS 16
 static struct { HANDLE VddHandle; WORD FirstPort, LastPort; ISV_IO_HANDLERS Handlers; INT IsLive; } g_IsvHooks[ISV_MAX_HOOKS];
 static VOID IsvIoIn(PVOID self, WORD port, BYTE width, UINT32 *value)
 {
