@@ -94,9 +94,12 @@ typedef const BIOS_PRINT_SCREEN_JOB *PCBIOS_PRINT_SCREEN_JOB;
 typedef BYTE (*PBIOS_PRINT_SCREEN_READ_CELL)(PVOID context, BYTE row, BYTE column);
 
 /* `bdaRowsMinusOne` is 0040:0084 (rows - 1; 0 on a BIOS that never set it). */
-static inline VOID BiosPrintScreenBegin(_Out_ PBIOS_PRINT_SCREEN_JOB job, _In_ BYTE columns,
-                                        _In_ BYTE bdaRowsMinusOne, _In_ BYTE page,
-                                        _In_ WORD cursor)
+static inline VOID BiosPrintScreenBegin(
+    _Out_ PBIOS_PRINT_SCREEN_JOB job,
+    _In_ BYTE columns,
+    _In_ BYTE bdaRowsMinusOne,
+    _In_ BYTE page,
+    _In_ WORD cursor)
 {
     job->IsActive = TRUE;
     job->Columns = columns;
@@ -112,43 +115,60 @@ static inline VOID BiosPrintScreenBegin(_Out_ PBIOS_PRINT_SCREEN_JOB job, _In_ B
  * the job is over and `IsActive` is clear. `readCell` returns the character at
  * (row, column) of the active page.
  */
-static inline INT BiosPrintScreenStep(_Inout_ PBIOS_PRINT_SCREEN_JOB job,
-                                      _In_ BYTE printerStatus,
-                                      _In_ PBIOS_PRINT_SCREEN_READ_CELL readCell,
-                                      _In_opt_ PVOID context, _Out_ PBYTE nextByte)
+static inline INT BiosPrintScreenStep(
+    _Inout_ PBIOS_PRINT_SCREEN_JOB job,
+    _In_ BYTE printerStatus,
+    _In_ PBIOS_PRINT_SCREEN_READ_CELL readCell,
+    _In_opt_ PVOID context,
+    _Out_ PBYTE nextByte)
 {
     BYTE character;
-    if (!job->IsActive) return BIOS_PRINT_SCREEN_STEP_DONE;
+
+    if (!job->IsActive)
+        return BIOS_PRINT_SCREEN_STEP_DONE;
+
     if (job->ShouldTestStatus && (printerStatus & BIOS_PRINT_SCREEN_PRINTER_ERROR_MASK))
     {
-        job->IsActive = FALSE; return BIOS_PRINT_SCREEN_STEP_ERROR;
+        job->IsActive = FALSE;
+        return BIOS_PRINT_SCREEN_STEP_ERROR;
     }
+
     job->ShouldTestStatus = FALSE;
+
     switch (job->Phase)
     {
     case BIOS_PRINT_SCREEN_PHASE_INITIAL_LF:
-        *nextByte = ASCII_LF; job->Phase = BIOS_PRINT_SCREEN_PHASE_INITIAL_CR;
+        *nextByte = ASCII_LF;
+        job->Phase = BIOS_PRINT_SCREEN_PHASE_INITIAL_CR;
         return BIOS_PRINT_SCREEN_STEP_EMIT;
+
     case BIOS_PRINT_SCREEN_PHASE_INITIAL_CR:
         *nextByte = ASCII_CR;
-        job->Phase = (job->Rows && job->Columns) ? BIOS_PRINT_SCREEN_PHASE_CELL
-                                                 : BIOS_PRINT_SCREEN_PHASE_END;
+        job->Phase = (job->Rows && job->Columns)
+            ? BIOS_PRINT_SCREEN_PHASE_CELL
+            : BIOS_PRINT_SCREEN_PHASE_END;
         return BIOS_PRINT_SCREEN_STEP_EMIT;
+
     case BIOS_PRINT_SCREEN_PHASE_CELL:
         character = readCell(context, job->Row, job->Column);
         *nextByte = character ? character : (BYTE)BIOS_PRINT_SCREEN_BLANK_CELL;
         job->ShouldTestStatus = TRUE;
         if (++job->Column >= job->Columns) job->Phase = BIOS_PRINT_SCREEN_PHASE_LF;
         return BIOS_PRINT_SCREEN_STEP_EMIT;
+
     case BIOS_PRINT_SCREEN_PHASE_LF:
-        *nextByte = ASCII_LF; job->Phase = BIOS_PRINT_SCREEN_PHASE_CR;
+        *nextByte = ASCII_LF;
+        job->Phase = BIOS_PRINT_SCREEN_PHASE_CR;
         return BIOS_PRINT_SCREEN_STEP_EMIT;
+
     case BIOS_PRINT_SCREEN_PHASE_CR:
         *nextByte = ASCII_CR;
         job->Column = 0;
-        job->Phase = (++job->Row >= job->Rows) ? BIOS_PRINT_SCREEN_PHASE_END
-                                               : BIOS_PRINT_SCREEN_PHASE_CELL;
+        job->Phase = (++job->Row >= job->Rows)
+            ? BIOS_PRINT_SCREEN_PHASE_END
+            : BIOS_PRINT_SCREEN_PHASE_CELL;
         return BIOS_PRINT_SCREEN_STEP_EMIT;
+
     default:
         job->IsActive = FALSE;
         return BIOS_PRINT_SCREEN_STEP_DONE;
