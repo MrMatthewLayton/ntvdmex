@@ -3907,6 +3907,522 @@ static INT NtvdmServiceGuestBop(PSTR *cursorIo, PSTR const base, volatile BYTE *
     *cursorIo = cursor; return HOST_FLOW_NEXT;
 }
 
+
+/* INT 20h, 22h (BOP 30h) and INT 27h end the program: terminate it -- or, with a parent waiting, return to the parent. */
+static INT DosServiceTerminateBop(PSTR *cursorIo, PSTR const base, volatile BYTE * const tib, DOS_MACHINE *machine)
+{
+    PSTR cursor = *cursorIo;
+    {   /* ---- INT 20h / 22h (BOP 30h) and INT 27h: they END the program, so they stay
+           here -- only the exec loop can terminate a run or return to a parent.
+           The rest of the BIOS block moved to V86BiosBop() (GH #247). */
+        UINT bopNumber = VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK;
+        INT handled = 1;
+        if (bopNumber == DOS_BOP_INT20) {               /* INT 20h: terminate       */
+            /* INT 20h is AH=4Ch with an exit code of 0. Routing it here
+               rather than leaving an IRET means a program that exits this
+               way actually exits, instead of returning into itself. */
+            VDM_REG(tib, VTIB_EAX) &= HIGH_WORD_MASK_U;
+            machine->TraceCursor = cursor; DosInt21(machine); cursor = machine->TraceCursor;   /* AH=00 -> terminate       */
+            /* ★ AND IF THIS WAS A CHILD, GO BACK TO ITS PARENT. (GH #134)
+                 This used to set handled = 2, which `break`s the exec loop
+                 and ends the whole VDM -- so a .COM child exiting the normal
+                 .COM way took the host down with it. */
+            handled = DosTerminate(machine, tib, &cursor, base) ? EXEC_HANDLED_CHILD_EXITED : EXEC_HANDLED_RUN_OVER;
+        } else if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_TERMINATE_RESIDENT)) {               /* TSR, CP/M style          */
+            /* ── THE OLD FORM OF AH=31h, AND IT KEEPS MEMORY TOO. (GH #49) ─
+                 DX is a BYTE OFFSET past the PSP here, not a paragraph
+                 count -- that is the one thing this call does differently
+                 and the easy thing to get wrong. Round UP to paragraphs so
+                 the last partial one is kept rather than cut off.
+                 CS is the resident program's PSP for an INT 27h caller. */
+            DWORD int27Dx = VDM_REG16(tib, VTIB_EDX);
+            machine->TsrKeep = (WORD)((int27Dx + PARAGRAPH_LAST_BYTE) >> PARAGRAPH_SHIFT);
+            machine->IsTsrPending = 1;
+            cursor = LogPut(cursor, "  INT27 TSR: keep 0x"); cursor = LogHex(cursor, machine->TsrKeep);
+            cursor = LogPut(cursor, " paras (DX=0x"); cursor = LogHex(cursor, int27Dx);
+            cursor = LogPut(cursor, " bytes), vectors LEFT INSTALLED\r\n");
+            VDM_REG(tib, VTIB_EAX) &= HIGH_WORD_MASK_U;
+            machine->TraceCursor = cursor; DosInt21(machine); cursor = machine->TraceCursor;
+            handled = DosTerminate(machine, tib, &cursor, base) ? EXEC_HANDLED_CHILD_EXITED : EXEC_HANDLED_RUN_OVER;
+        } else handled = 0;
+        if (handled == EXEC_HANDLED_RUN_OVER) { *cursorIo = cursor; return HOST_FLOW_BREAK; }               /* terminate: the run is over  */
+        if (handled == EXEC_HANDLED_CHILD_EXITED) { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }            /* a child exited: parent is back */
+        if (handled) { VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH; { *cursorIo = cursor; return HOST_FLOW_CONTINUE; } }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* The BIOS INT 08h timer tick, serviced in the host. */
+static INT V86ServiceTimerBop(volatile BYTE * const tib)
+{
+    if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == VECTOR_TIMER) {   /* INT 08h timer tick */
+        NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
+        HOST_LOCK();
+        VddBusDeliverInterrupt(&g_Bus, VECTOR_TIMER, &registers);  /* bump BIOS tick at 0040:006C */
+        /* The real BIOS timer ISR ends with `mov al,20h; out 20h,al`. Ours is a BOP
+           with nowhere to put one, so issue the EOI here -- without it the PIC's
+           in-service bit for IRQ0 latches on the first tick and the timer stops dead
+           (measured: exactly one tick delivered in a 30 s run). */
+        VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_TIMER);
+        HOST_UNLOCK();
+        RegistersStore(&registers, tib);
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;            /* -> CD 1C (chain user timer) */
+        { return HOST_FLOW_CONTINUE; }
+    }
+    return HOST_FLOW_NEXT;
+}
+
+
+/* The BIOS INT 09h keyboard handler, serviced in the host. */
+static INT V86ServiceKeyboardBop(volatile BYTE * const tib)
+{
+    if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == VECTOR_KEYBOARD) {   /* INT 09h: BIOS keyboard */
+        INT keyAction;
+        /* ── #244: THE SECOND HALF, AFTER INT 15h AH=4Fh SAID "PROCESS IT" (CF=1).
+             We are at bios_kbdact.asm k4f's BOP: AL is the scancode as the hook left
+             it (possibly changed), the interrupted code's AX is on the stack above
+             the INT 09h frame. Translate AL, EOI, pop that AX ourselves, and resume
+             where the byte's action says -- a side-call, or brk's bare IRET. */
+        if (VDM_REG16(tib, VTIB_CS) == DOS_CTAB_SEG
+            && VDM_REG16(tib, VTIB_EIP) == DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_INTERCEPT_BOP) {
+            DWORD ss = VDM_REG16(tib, VTIB_SS), stackPointer = VDM_REG16(tib, VTIB_ESP);
+            INT keyboardAction;
+            HOST_LOCK();
+            keyAction = VddInputBiosTranslate(&g_Input, (BYTE)VDM_REG(tib, VTIB_EAX));
+            VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_KEYBOARD);
+            if (keyAction == INPUT_ACTION_PAUSE && KeyboardActionEntry(keyAction) < 0) VddInputPauseCancel(&g_Input);
+            HOST_UNLOCK();
+            ++g_Kb4FTranslate;
+            VDM_SET16(tib, VTIB_EAX, PeekWord((ss << PARAGRAPH_SHIFT) + stackPointer));          /* pop ax */
+            VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & HIGH_WORD_MASK_U) | ((stackPointer + X86_WORD_SIZE) & WORD_MASK);
+            keyboardAction = KeyboardActionEntry(keyAction);
+            VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + (keyboardAction >= 0 ? keyboardAction : BIOS_KEYBOARD_ACTION_IRET));
+            { return HOST_FLOW_CONTINUE; }
+        }
+        /* ── #244: THE FIRST HALF, WHEN SOMETHING HAS HOOKED INT 15h. Take the byte
+             out of the controller now (it is the BIOS's `in al,60h`), push the
+             interrupted code's AX, load AX = 4F00h | byte, and run k4f: `stc / int
+             15h` in the guest, then back to the arm above -- or, on CF=0, k4f's own
+             EOI and IRET (swallowed). The EOI waits until then, as the BIOS's does.
+             Not hooked (the normal case, every game included): straight on below,
+             exactly as before -- not one extra instruction on the default path. */
+        if (Int15Hooked()) {
+            INT scanCode;
+            HOST_LOCK();
+            scanCode = VddInputBiosFetch(&g_Input);
+            HOST_UNLOCK();
+            if (scanCode >= 0) {
+                DWORD ss = VDM_REG16(tib, VTIB_SS);
+                WORD  stackPointer = (WORD)((VDM_REG(tib, VTIB_ESP) - X86_WORD_SIZE) & WORD_MASK);
+                PokeWord((ss << PARAGRAPH_SHIFT) + stackPointer, (WORD)VDM_REG(tib, VTIB_EAX));     /* push ax */
+                VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & HIGH_WORD_MASK_U) | stackPointer;
+                VDM_SET16(tib, VTIB_EAX, (WORD)((BIOS_SYSTEM_KEYBOARD_INTERCEPT << BYTE_SHIFT) | (UINT)scanCode));
+                VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
+                VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_INTERCEPT);
+                ++g_Kb4FCalls;
+                { return HOST_FLOW_CONTINUE; }
+            }
+            /* nothing presented: a spurious IRQ1 -- EOI and IRET, as below */
+            HOST_LOCK();
+            VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_KEYBOARD);
+            HOST_UNLOCK();
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
+            { return HOST_FLOW_CONTINUE; }
+        }
+        HOST_LOCK();
+        keyAction = VddInputBiosConsume(&g_Input);   /* take the byte, re-arm if more queued */
+        /* ── ★ THE BIOS INT 09h ENDS WITH AN EOI, AND SO MUST THIS. ──────────────────
+             A guest that hooks INT 09h keeps IRQ1 in service until it EOIs (strict
+             acknowledge above). QB.EXE's hook EOIs only the keys it swallows; for
+             every ordinary key it CHAINS to the BIOS handler (`int 0EFh`) and leaves
+             the EOI to it -- as the real one does with `mov al,20h / out 20h,al`.
+             This arm never sent one, so IRQ1's in-service bit stayed set after the
+             first key and no keyboard interrupt was ever delivered again: measured
+             keyirq=1 for a whole QBasic run of ~19 key presses. Same shape as the
+             INT 08h arm's EOI below, for the same reason. Harmless when the guest
+             EOI'd before chaining: the bit is already clear. */
+        VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_KEYBOARD);
+        HOST_UNLOCK();
+        /* ── #254: AND WHAT THE BIOS CALLS FROM IT. Ctrl-Break -> INT 1Bh, Print
+             Screen -> INT 05h, SysReq -> INT 15h AH=85h, Pause -> the spin loop:
+             resume the guest in bios_kbdact.asm's routine (after the EOI, as the
+             BIOS does), which IRETs to the interrupted code. Only guest-side
+             calls -- nothing here reaches the host. */
+        {   INT keyboardAction = KeyboardActionEntry(keyAction);
+            if (keyboardAction >= 0) {
+                VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
+                VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + keyboardAction);
+                { return HOST_FLOW_CONTINUE; }
+            }
+            if (keyAction == INPUT_ACTION_PAUSE) { HOST_LOCK(); VddInputPauseCancel(&g_Input); HOST_UNLOCK(); }
+        }
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;        /* -> the IRET */
+        { return HOST_FLOW_CONTINUE; }
+    }
+    return HOST_FLOW_NEXT;
+}
+
+
+/* The guest stopped for something that is neither I/O nor a BOP: log where, with the bytes before and at CS:IP. */
+static INT V86ReportUnexpectedStop(PSTR *cursorIo, PSTR const base, const DWORD event, volatile BYTE * const tib, const LONG vdmStatus)
+{
+    PSTR cursor = *cursorIo;
+    if (event != VDM_EVENT_BOP) {
+        DWORD currentCs = VDM_REG16(tib, VTIB_CS);
+        DWORD currentIp = VDM_REG16(tib, VTIB_EIP);
+        volatile BYTE *codeBytes = (volatile BYTE *)((currentCs << PARAGRAPH_SHIFT) + currentIp);
+        BYTE instructionBytes[8], pageBytes[8]; UINT item;
+        for (item = 0; item < 8; ++item) instructionBytes[item] = codeBytes[item];
+        for (item = 0; item < 8; ++item) pageBytes[item] = (currentIp >= 8) ? codeBytes[(INT)item - 8] : 0;  /* 8 bytes BEFORE CS:IP */
+        cursor = LogPut(cursor, "STAGE2: stop event=0x"); cursor = LogHex(cursor, event);
+        cursor = LogPut(cursor, " status=0x"); cursor = LogHex(cursor, (UINT)vdmStatus);
+        cursor = LogPut(cursor, " info=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EVENT_INFO));
+        cursor = LogPut(cursor, " CS:IP=0x"); cursor = LogHex(cursor, currentCs);
+        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, currentIp); cursor = LogPut(cursor, "\r\n");
+        cursor = LogPut(cursor, "  bytes[CS:IP-8]: "); cursor = LogDump(cursor, pageBytes, 8);
+        cursor = LogPut(cursor, "  bytes@CS:IP: "); cursor = LogDump(cursor, instructionBytes, 8);
+        cursor = LogPut(cursor, "  VTIB[5A8..]: "); cursor = LogDump(cursor, (const VOID *)(tib + 0x5A8), 0x20);
+        LogAppend(LOG_PATH, base, cursor); cursor = base;
+        { *cursorIo = cursor; return HOST_FLOW_BREAK; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* A port access (or REP INS/OUTS, or a #GP on one) the kernel reflected: emulate it on the device bus and resume the guest after the instruction. */
+static INT V86ServiceIoEvent(PSTR *cursorIo, PSTR const base, const DWORD event, volatile BYTE * const tib)
+{
+    PSTR cursor = *cursorIo;
+    static UINT32 lastFault = 0; static INT stormCount = 0;   /* the I/O-fault storm detector's memory, across events */
+    /* I/O port trap (event 0; VM-confirmed) or a generic GP fault (event 2):
+       if the faulting instruction is an IN/OUT we can decode, service it via
+       the VDD bus and resume; otherwise fall through to the stop dump. */
+    if (event == VDM_EVENT_IO || event == VDM_EVENT_IO_HW ||
+        event == VDM_EVENT_GPFAULT || event == VDM_EVENT_IO_STRING) {
+        INT handled;
+        { static INT ioBudget = 6; VdmStateSample("io-reflect", tib, &ioBudget); }
+        /* REP INS/OUTS arrives as its own event with CS:IP ON the instruction. */
+        if (event == VDM_EVENT_IO_STRING) {
+            HOST_LOCK();
+            handled = HostTryIoString(tib, &g_Bus);
+            HOST_UNLOCK();
+            if (handled) { g_EventIoString++; { *cursorIo = cursor; return HOST_FLOW_CONTINUE; } }
+        }
+        /* Trap-storm detection over ALL faults (port + A0000 memory): the
+           per-pixel VGA loop faults repeatedly in a tight PC window. Once a
+           storm is established in mode 12h, escalate to the batching
+           interpreter so the whole inner loop (OUTs + pixel writes) runs in
+           one shot; otherwise emulate the single faulting access. */
+        DWORD currentCs2 = VDM_REG16(tib, VTIB_CS), currentIp2 = VDM_REG16(tib, VTIB_EIP);
+        UINT32 current = (currentCs2 << PARAGRAPH_SHIFT) + currentIp2;
+        UINT32 distance = (current > lastFault) ? (current - lastFault) : (lastFault - current);
+        stormCount = (distance <= STORM_WINDOW) ? (stormCount + 1) : 0;
+        lastFault = current;
+        if ((g_A000Protection || (g_Interp12 && VddVideoIsPlanarActive(&g_Video)))
+            && stormCount >= STORM_GATE) {
+            DWORD breakCs = VDM_REG16(tib, VTIB_CS), breakIp = VDM_REG16(tib, VTIB_EIP);
+            INT32 ran = HostInterpPaced(tib, TIER1_CAP);
+            if (ran > 0) {
+                static INT batchBudget = 10;
+                if (batchBudget > 0) {            /* is the batch ADVANCING the guest? */
+                    --batchBudget;
+                    cursor = LogPut(cursor, "BATCH ran="); cursor = LogHex(cursor, (DWORD)ran);
+                    cursor = LogPut(cursor, " from 0x"); cursor = LogHex(cursor, breakCs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, breakIp);
+                    cursor = LogPut(cursor, " to 0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_CS));
+                    cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EIP));
+                    cursor = LogPut(cursor, "\r\n");
+                    LogAppend(LOG_PATH, base, cursor); cursor = base;
+                }
+                { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }                       /* batched the hot loop            */
+            }
+        }
+        HOST_LOCK();
+        handled = HostTryIo(tib, &g_Bus);     /* single port op (no logging)     */
+        HOST_UNLOCK();
+        RetraceIdle();                              /* #183: outside the lock */
+        if (handled) { g_EventIo++; g_IoViaDirect++; IoHotNote(g_IoLastPort, VDM_REG16(tib, VTIB_CS), VDM_REG16(tib, VTIB_EIP)); { *cursorIo = cursor; return HOST_FLOW_CONTINUE; } }
+        /* real-HW event 3 reports CS:IP AFTER the faulting IN/OUT -> retro-decode the
+           I/O instruction ending at CS:IP and service it (Skyroads' vblank IN AL,DX). */
+        if (event == VDM_EVENT_IO_HW) {
+            HOST_LOCK();
+            handled = HostTryIoRetro(tib, &g_Bus);
+            HOST_UNLOCK();
+            RetraceIdle();                          /* #183: outside the lock */
+            if (handled) { g_EventIo++; g_IoViaRetro++; IoHotNote(g_IoLastPort, VDM_REG16(tib, VTIB_CS), VDM_REG16(tib, VTIB_EIP)); { *cursorIo = cursor; return HOST_FLOW_CONTINUE; } }
+        }
+        if ((g_A000Protection || (g_Interp12 && VddVideoIsPlanarActive(&g_Video)))
+            && HostInterpPaced(tib, 1) > 0) { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }   /* single A0000 access */
+        /* The interpreter refused the very first opcode. With A0000 trapped that
+           is a LIVELOCK, not a miss: we resume at the same EIP, the guest
+           re-faults on the same store, forever. Name the opcode -- this is the
+           "mode-12h MOV-store decoder gap" from the M3 notes, and it is why
+           mode 12h has never rendered. Budgeted so it cannot flood the log. */
+        if (g_A000Protection || g_Interp12) {
+            static INT declineBudget = 8;
+            if (declineBudget > 0) {
+                DWORD codeSegment2 = VDM_REG16(tib, VTIB_CS), eip2 = VDM_REG16(tib, VTIB_EIP);
+                const volatile BYTE *ip2 = (const volatile BYTE *)((codeSegment2 << PARAGRAPH_SHIFT) + eip2);
+                UINT index4;
+                --declineBudget;
+                cursor = LogPut(cursor, "INTERP-REFUSED at 0x"); cursor = LogHex(cursor, codeSegment2);
+                cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, eip2); cursor = LogPut(cursor, " bytes:");
+                for (index4 = 0; index4 < 8; ++index4) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, ip2[index4]); }
+                cursor = LogPut(cursor, "\r\n");
+                LogAppend(LOG_PATH, base, cursor); cursor = base;
+            }
+            g_InterpRefused++;
+        }
+        /* Not an I/O instruction and not an A0000 touch. On this hardware event 3
+           is OVERLOADED: besides the I/O reflect, it is how the kernel says "a
+           hardware interrupt is pending and the VDM has interrupts enabled" -- the
+           interrupt assist we thought we lacked. It only ever fires now that the
+           guest runs with IF=1; with IF=0 the kernel had nothing to notify us about
+           and simply left VDM_INT_TIMER pending forever. Distinguish it from a
+           genuine GP fault by the kernel's own pending bits in FIXED_NTVDMSTATE:
+           clear them (so it stops re-notifying), latch the timer IRQ, and resume at
+           the SAME EIP -- no instruction faulted, so nothing must be stepped over.
+           Delivery itself is left to the loop-top gate, which owns the IF and
+           re-entrancy checks. (Session 9 met this same event in protected mode and
+           cleared the bits there; see dpmi_enter.S label 2.) */
+        if (event == VDM_EVENT_IO_HW) {
+            volatile DWORD *vdmStateWord = (volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR;
+            DWORD pend = *vdmStateWord & VDM_INT_PENDING;
+            if (pend) {
+                if (pend & VDM_INT_TIMER) Irq0Latch();         /* VDM_INT_TIMER -> IRQ0 */
+                *vdmStateWord &= ~VDM_INT_PENDING;
+                g_EventIntPending++;
+                { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+            }
+        }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* Run the guest in V86 until its next event, and time the stretch (#238). */
+static VOID V86RunGuestTimed(volatile BYTE * const tib, DWORD *eventIo, LONG *vdmStatusIo)
+{
+    DWORD event = *eventIo;
+    LONG vdmStatus = *vdmStatusIo;
+    {   LARGE_INTEGER runStart, runEnd; DWORD runMilliseconds;
+        DWORD eventCs = VDM_REG16(tib, VTIB_CS), eip = VDM_REG16(tib, VTIB_EIP);
+        QueryPerformanceCounter(&runStart);
+        if (g_HostTimeLast)                                   /* #238: see g_HostMicrosecondsEvent */
+            g_HostMicrosecondsEvent[g_HostEventLast] += QpcMicroseconds(runStart.QuadPart - g_HostTimeLast);
+        event = VdmRunGuest(tib, &vdmStatus);
+        QueryPerformanceCounter(&runEnd);
+        g_V86MicrosecondsTotal += QpcMicroseconds(runEnd.QuadPart - runStart.QuadPart);
+        g_HostTimeLast = runEnd.QuadPart;
+        g_HostEventLast = event < EV_HIST_MAX ? event : EV_HIST_MAX - 1;
+        {   DWORD now = GetTickCount();                     /* #238: g_XsSnapshot */
+            if (!g_XsStart) g_XsStart = now;
+            while (g_XsSeconds < XS_SECS && now - g_XsStart >= g_XsSeconds * MILLISECONDS_PER_SECOND_U) {
+                DWORD *snapshot = g_XsSnapshot[g_XsSeconds++], hostUs = 0; INT eventIndex;
+                for (eventIndex = 0; eventIndex < EV_HIST_MAX; ++eventIndex) hostUs += g_HostMicrosecondsEvent[eventIndex] / MICROSECONDS_PER_MILLISECOND_U;
+                snapshot[XS_RAISE] = g_IrqRaised[0]; snapshot[XS_ASYNC] = g_AsyncInjected;
+                snapshot[XS_COOP] = g_Irq0Injected;       snapshot[XS_NIE] = g_AsyncWhyHistogram[0][ASYNC_WHY_NOT_IN_EXEC];
+                snapshot[XS_BOP] = g_EventHistogram[VDM_EVENT_BOP];      snapshot[XS_IO] = g_EventHistogram[VDM_EVENT_IO];
+                snapshot[XS_HOSTMS] = hostUs;     snapshot[XS_PACE] = g_PitPaceCalls;
+            } }
+        /* s82: the entry trampoline borrowed DPMI callback slot 0/1's bytes (#248: the
+           slots have since moved to 0x90; the bytes are spare now). The first
+           exit that is not inside it hands them back -- long before any client can
+           have allocated, let alone called, a callback. */
+        if (g_TrampolineSaved) {
+            DWORD trampolineCs = VDM_REG16(tib, VTIB_CS), trampolineIp = VDM_REG16(tib, VTIB_EIP);
+            if (!(trampolineCs == DOS_HDLR_SEG && trampolineIp >= DOS_HDLR_TRAMPOLINE_OFF && trampolineIp < DOS_HDLR_TRAMPOLINE_OFF + DOS_HDLR_TRAMPOLINE_SIZE)) {
+                volatile BYTE *trampoline = (volatile BYTE *)(ULONG_PTR)(((DWORD)DOS_HDLR_SEG << PARAGRAPH_SHIFT) + DOS_HDLR_TRAMPOLINE_OFF);
+                INT item;
+                for (item = 0; item < DOS_HDLR_TRAMPOLINE_SIZE; ++item) trampoline[item] = g_TrampolineSave[item];
+                g_TrampolineSaved = 0;
+                {   CHAR trampolineLine[200], *trampolineCursor = LogPut(trampolineLine, "STAGE2: entry trampoline done -- first exit ev=0x");
+                    trampolineCursor = LogHex(trampolineCursor, (DWORD)event); trampolineCursor = LogPut(trampolineCursor, " at 0x"); trampolineCursor = LogHex(trampolineCursor, trampolineCs);
+                    trampolineCursor = LogPut(trampolineCursor, ":0x"); trampolineCursor = LogHex(trampolineCursor, trampolineIp); trampolineCursor = LogPut(trampolineCursor, " VTIB EFLAGS=0x");
+                    trampolineCursor = LogHex(trampolineCursor, VDM_REG(tib, VTIB_EFLAGS)); trampolineCursor = LogPut(trampolineCursor, " (IF=bit 9, VIF=bit 19, VIP=bit 20)\r\n");
+                    LogAppend(LOG_PATH, trampolineLine, trampolineCursor); }
+            }
+        }
+        /* ── ★ HOW LONG DID ONE V86 RUN LAST WITHOUT GIVING US A TURN? (Skyroads
+             wobble, s61.) The big timer gaps are low-I/O, so the guest is not
+             hammering ports -- it is inside ONE long VdmRunGuest stretch (a spin, a
+             cli section, or slow interpreted VGA). This is the PM stretch
+             instrument for the V86 path: bucket the durations and keep the worst,
+             with the ENTRY cs:ip (where the stretch began) and the exit event. A
+             stretch >8 ms at native speed is 30M+ instructions -- so it is a WAIT
+             or a slow op, and its entry names the routine. */
+        {   UINT bucket = 0;
+            runMilliseconds = QpcMicroseconds(runEnd.QuadPart - runStart.QuadPart) / MICROSECONDS_PER_MILLISECOND_U;   /* ms */
+            while (bucket < 7 && runMilliseconds >= (1u << bucket)) ++bucket;
+            g_V86StringHistogram[bucket]++;
+            if (runMilliseconds >= 8u) ++g_V86StringCount8;
+            if (runMilliseconds > g_V86StringMaximumMs) {
+                g_V86StringMaximumMs = runMilliseconds; g_V86StringMaximumCs = eventCs;
+                g_V86StringMaximumIp = eip; g_V86StringMaximumEvent = event;
+            } } }
+    *eventIo = event; *vdmStatusIo = vdmStatus;
+}
+
+
+/* While Mode Y needs it, run a slice of the guest in the interpreter rather than in V86. */
+static INT V86RunModeYSlice(volatile BYTE * const tib)
+{
+    if (!g_P12Interp && ModeYNeedsInterp()) {
+        INT32 ran;
+        UINT64 cyclesStart = ModeYTimelineRdtsc();
+        g_ModeYInterp = 1;
+        ran = HostInterpPaced(tib, P12_SLICE);
+        g_ModeYInterp = 0;
+        if (g_ModeYTimelineT0) { DWORD second = (GetTickCount() - g_ModeYTimelineT0) / MILLISECONDS_PER_SECOND_U;
+                        if (second < YTL_SECS) { if (ran > 0) g_ModeYTimelineIns[second] += (DWORD)ran;
+                                              g_ModeYTimelineInterpreterCycles[second] += ModeYTimelineRdtsc() - cyclesStart; } }
+        if (ran > 0) { g_ModeYSlices++; g_ModeYInstructions += (DWORD)ran; { return HOST_FLOW_CONTINUE; } }
+        if (VDM_REG16(tib, VTIB_CS) == 0) ModeYRingDump("guest at CS=0 after a slice");
+        /* Declined (a BOP, or an opcode it does not model): that ONE instruction
+           runs natively. Under a multi-plane mask a native A0000 store reaches only
+           the first selected plane -- so count these separately; they are the
+           remaining way this window can be wrong. */
+        { DWORD codeSegment3 = VDM_REG16(tib, VTIB_CS), eip3 = VDM_REG16(tib, VTIB_EIP);
+          const volatile BYTE *ip3 = (const volatile BYTE *)((codeSegment3 << PARAGRAPH_SHIFT) + eip3);
+          if (!(ip3[0] == VDM_BOP0 && ip3[1] == VDM_BOP1)) {
+              BYTE mapMask = (BYTE)(g_Video.MapMask & VIDEO_ALL_PLANES);
+              ++g_ModeYBails;
+              if (mapMask & (BYTE)(mapMask - 1)) ++g_ModeYBailMp;
+              ModeYBailNote(codeSegment3, eip3, ip3);
+          } }
+    }
+    return HOST_FLOW_NEXT;
+}
+
+
+/* Mode 12h (GH #55): while a planar mode is current, the host is the CPU -- run a slice in the interpreter, whose A0000 accesses go through the planar write engine. */
+static INT V86RunPlanarSlice(volatile BYTE * const tib)
+{
+    /* ---- MODE 12h: THE HOST IS THE CPU (GH #55) ------------------------- *
+     * While a planar mode is current we do not hand the guest to V86 at all,
+     * because on real hardware there is no way to see its A0000 writes there:
+     * the page trap that would show them freezes the VDM (see VideoTrapSync).
+     * Run a slice in the interpreter instead -- its A0000 accesses go through
+     * the planar write engine -- then loop, which re-runs the IRQ delivery gate
+     * above so timer and keyboard interrupts reach the guest between slices.
+     * A slice ends early the moment an IRQ is pending, so the slice size is a
+     * ceiling on lock-hold time, not on responsiveness.
+     * If the interpreter declines the instruction we are ON (a BOP, or an
+     * opcode it does not model), ran == 0 and we fall through to V86 exactly as
+     * before -- so a DOS call still reaches the kernel as a BOP event, and an
+     * unmodeled opcode still executes on the real CPU. */
+    if (g_P12Interp && !g_DpmiPm) {
+        INT32 ran = HostInterpPaced(tib, P12_SLICE);
+        if (ran > 0) { g_P12Batches++; g_P12Instructions += (DWORD)ran; { return HOST_FLOW_CONTINUE; } }
+        /* NAME THE OPCODE. Every bail is guest execution we cannot see, so the
+           list of declined opcodes IS the to-do list for this path (#27).
+           ⚠ NOT ON A BOP: our own `C4 C4 nn` stubs are the overwhelming majority
+           of bails and are not unmodelled opcodes. Per-site table, reported at
+           exit -- see g_P12Site. */
+        { DWORD codeSegment3 = VDM_REG16(tib, VTIB_CS), eip3 = VDM_REG16(tib, VTIB_EIP);
+          const volatile BYTE *ip3 = (const volatile BYTE *)((codeSegment3 << PARAGRAPH_SHIFT) + eip3);
+          if (!(ip3[0] == VDM_BOP0 && ip3[1] == VDM_BOP1)) {
+            UINT index5;
+            for (index5 = 0; index5 < g_P12SiteCount; ++index5)
+                if (g_P12Site[index5].Cs == codeSegment3 && g_P12Site[index5].Ip == eip3) break;
+            if (index5 < g_P12SiteCount) g_P12Site[index5].Count++;
+            else if (g_P12SiteCount < P12_SITE_MAX) {
+                UINT index6;
+                g_P12Site[index5].Cs = codeSegment3; g_P12Site[index5].Ip = eip3; g_P12Site[index5].Count = 1;
+                for (index6 = 0; index6 < 8; ++index6) g_P12Site[index5].Bytes[index6] = ip3[index6];
+                ++g_P12SiteCount;
+            } else ++g_P12SiteLost;
+          } }
+        g_P12Bails++;
+    }
+    return HOST_FLOW_NEXT;
+}
+
+
+/* Deliver a pending IRQ1 (the keyboard) to the guest when it can take an interrupt. */
+static VOID V86DeliverKeyboardIrq(volatile BYTE * const tib)
+{
+    /* Deliver a pending keyboard IRQ1 as INT 09h, same IF-gating as IRQ0. The
+       scancode is already queued for port 0x60; INT 09h vectors through IVT[9]
+       to the game's own handler (or our IRET stub if it hasn't hooked one).
+       Excludes re-entry into our INT 08h (0x34) and INT 09h (0x4C) stubs. */
+    if (g_Irq1Pending > 0) {
+        DWORD cs = VDM_REG16(tib, VTIB_CS), ip = VDM_REG16(tib, VTIB_EIP);
+        DWORD flags2;
+        if (IsOurStubCsIp(cs, ip)) {   /* #206: BIOS stubs too */
+            DWORD ss = VDM_REG16(tib, VTIB_SS), stackPointer = VDM_REG16(tib, VTIB_ESP);
+            flags2 = PeekWord((ss << PARAGRAPH_SHIFT) + ((stackPointer + X86_FRAME16_FLAGS) & WORD_MASK));
+        } else {
+            flags2 = VDM_REG(tib, VTIB_EFLAGS);
+            IfvNote(IFV_PATH_VTIB_IRQ01, flags2);
+        }
+        /* ── WHY IS THIS REFUSED? MEASURED, NOT ASSUMED. ─────────────────────────
+             KEYLAT says 90% of keystrokes take >64 ms to reach INT 09h (max 9.6 s)
+             while the UI thread hands them over in 0 ms, so the refusal is here and
+             it is not rare -- it is the normal case. There are exactly three ways
+             out of this gate, and guessing which one has already cost four rounds. */
+        ++g_Irq1Checks;
+        if (!IfOrVif(flags2))                                          ++g_Irq1NoIf;
+        else if (cs == DOS_HDLR_SEG && ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END)      ++g_Irq1In08;
+        else if (cs == DOS_HDLR_SEG && ip >= DOS_HDLR_INT09_STUB_OFF && ip < DOS_HDLR_INT09_STUB_END)      ++g_Irq1In09;
+        if (IfOrVif(flags2) && !(cs == DOS_HDLR_SEG &&
+                              ((ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END) || (ip >= DOS_HDLR_INT09_STUB_OFF && ip < DOS_HDLR_INT09_STUB_END)))) {
+            InterlockedDecrement(&g_Irq1Pending);   /* one INT 09h per queued scancode byte */
+            VddPicAcknowledge(&g_Pic, 1);
+            if (AsyncVectorIsOurStub(PIC_IRQ_KEYBOARD)) VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_KEYBOARD);
+            g_Irq1Injected++;
+            InjectInt(tib, VECTOR_KEYBOARD);
+            KeyLatencyPop();               /* the guest is now IN its INT 09h */
+        }
+    }
+}
+
+
+/* Deliver a pending IRQ0 (the timer) to the guest when it can take an interrupt. */
+static VOID V86DeliverTimerIrq(volatile BYTE * const tib)
+{
+    /* Deliver a pending PIT IRQ0 as INT 08h when the guest's main-line
+       interrupts are enabled. We regain control at event boundaries, almost
+       always inside a BOP stub (CS == DOS_HDLR_SEG) where the LIVE IF is the
+       handler's (cleared by the CD nn that vectored in) -- the guest's real
+       IF is the FLAGS the stub will IRET to, at SS:SP+4. Outside a stub
+       (e.g. an I/O fault from main-line) the live EFLAGS IF applies. Skip if
+       we're inside our own INT 08h stub, to avoid timer re-entrancy. */
+    if (g_Irq0Pending) {
+        DWORD cs = VDM_REG16(tib, VTIB_CS), ip = VDM_REG16(tib, VTIB_EIP);
+        DWORD flags2;
+        if (IsOurStubCsIp(cs, ip)) {   /* #206: BIOS stubs too */
+            DWORD ss = VDM_REG16(tib, VTIB_SS), stackPointer = VDM_REG16(tib, VTIB_ESP);
+            flags2 = PeekWord((ss << PARAGRAPH_SHIFT) + ((stackPointer + X86_FRAME16_FLAGS) & WORD_MASK));   /* main-line FLAGS the stub returns to */
+        } else {
+            flags2 = VDM_REG(tib, VTIB_EFLAGS);
+            IfvNote(IFV_PATH_VTIB_IRQ01, flags2);
+        }
+        if (IfOrVif(flags2) && Irq0CanDeliver()
+            && !(cs == DOS_HDLR_SEG && ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END)) {
+            InterlockedDecrement(&g_Irq0Pending);
+            Irq0Ack();                     /* in service until the guest EOIs (s70) */
+            g_Irq0Injected++;
+            g_Irq0NoteCs = cs; g_Irq0NoteIp = ip;   /* where IF re-opened */
+            Irq0DeliveredNote();          /* the guest's clock, as a timeline */
+            InjectInt(tib, VECTOR_TIMER);
+        } else {
+            static INT skipBudget = 6;
+            g_Irq0Skip++;                  /* IF=0 or inside our own INT 08h */
+            if (cs == DOS_HDLR_SEG && ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END) g_Irq0SkipStub++;
+            else if (!IfOrVif(flags2)) {
+                g_Irq0SkipIf++;
+                if (IsOurStubCsIp(cs, ip)) {   /* #238: who called our stub with IF off */
+                    DWORD ss = VDM_REG16(tib, VTIB_SS), stackPointer = VDM_REG16(tib, VTIB_ESP);
+                    SkipIfSiteNote(PeekWord((ss << PARAGRAPH_SHIFT) + ((stackPointer + X86_FRAME16_CS) & WORD_MASK)),
+                                     PeekWord((ss << PARAGRAPH_SHIFT) + (stackPointer & WORD_MASK)), ip);
+                }
+            }
+            VdmStateSample("irq0-skip", tib, &skipBudget);
+        }
+    }
+}
+
 INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR commandLineText, INT showCommand)
 {
     CHAR report[8192]; PSTR cursor = report; PSTR base;
@@ -7026,7 +7542,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     machine.Tib = tib; machine.Output = dosOutput; machine.OutputCapacity = sizeof(dosOutput); machine.OutputLength = 0; machine.IsOutputTruncated = 0;
     g_Machine = &machine;              /* the watchdog flushes this if the run wedges */
     (VOID)guard;
-    { static UINT32 lastFault = 0; static INT stormCount = 0;
+    {
     DWORD rmStartTick = GetTickCount();   /* headless wall-clock cap origin (real-mode) */
     g_RunStartTick = rmStartTick;       /* published for the STAGE2 vsync rate line */
     while (g_Running) {
@@ -7068,79 +7584,8 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         OplPumpTime();            /* keep the OPL timers current for the guest */
         HostKeyTypematic();       /* the keyboard repeats even when the UI stalls */
         HostKeyPresent();         /* ...and presents the next byte after its transfer time */
-        /* Deliver a pending PIT IRQ0 as INT 08h when the guest's main-line
-           interrupts are enabled. We regain control at event boundaries, almost
-           always inside a BOP stub (CS == DOS_HDLR_SEG) where the LIVE IF is the
-           handler's (cleared by the CD nn that vectored in) -- the guest's real
-           IF is the FLAGS the stub will IRET to, at SS:SP+4. Outside a stub
-           (e.g. an I/O fault from main-line) the live EFLAGS IF applies. Skip if
-           we're inside our own INT 08h stub, to avoid timer re-entrancy. */
-        if (g_Irq0Pending) {
-            DWORD cs = VDM_REG16(tib, VTIB_CS), ip = VDM_REG16(tib, VTIB_EIP);
-            DWORD flags2;
-            if (IsOurStubCsIp(cs, ip)) {   /* #206: BIOS stubs too */
-                DWORD ss = VDM_REG16(tib, VTIB_SS), stackPointer = VDM_REG16(tib, VTIB_ESP);
-                flags2 = PeekWord((ss << PARAGRAPH_SHIFT) + ((stackPointer + X86_FRAME16_FLAGS) & WORD_MASK));   /* main-line FLAGS the stub returns to */
-            } else {
-                flags2 = VDM_REG(tib, VTIB_EFLAGS);
-                IfvNote(IFV_PATH_VTIB_IRQ01, flags2);
-            }
-            if (IfOrVif(flags2) && Irq0CanDeliver()
-                && !(cs == DOS_HDLR_SEG && ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END)) {
-                InterlockedDecrement(&g_Irq0Pending);
-                Irq0Ack();                     /* in service until the guest EOIs (s70) */
-                g_Irq0Injected++;
-                g_Irq0NoteCs = cs; g_Irq0NoteIp = ip;   /* where IF re-opened */
-                Irq0DeliveredNote();          /* the guest's clock, as a timeline */
-                InjectInt(tib, VECTOR_TIMER);
-            } else {
-                static INT skipBudget = 6;
-                g_Irq0Skip++;                  /* IF=0 or inside our own INT 08h */
-                if (cs == DOS_HDLR_SEG && ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END) g_Irq0SkipStub++;
-                else if (!IfOrVif(flags2)) {
-                    g_Irq0SkipIf++;
-                    if (IsOurStubCsIp(cs, ip)) {   /* #238: who called our stub with IF off */
-                        DWORD ss = VDM_REG16(tib, VTIB_SS), stackPointer = VDM_REG16(tib, VTIB_ESP);
-                        SkipIfSiteNote(PeekWord((ss << PARAGRAPH_SHIFT) + ((stackPointer + X86_FRAME16_CS) & WORD_MASK)),
-                                         PeekWord((ss << PARAGRAPH_SHIFT) + (stackPointer & WORD_MASK)), ip);
-                    }
-                }
-                VdmStateSample("irq0-skip", tib, &skipBudget);
-            }
-        }
-        /* Deliver a pending keyboard IRQ1 as INT 09h, same IF-gating as IRQ0. The
-           scancode is already queued for port 0x60; INT 09h vectors through IVT[9]
-           to the game's own handler (or our IRET stub if it hasn't hooked one).
-           Excludes re-entry into our INT 08h (0x34) and INT 09h (0x4C) stubs. */
-        if (g_Irq1Pending > 0) {
-            DWORD cs = VDM_REG16(tib, VTIB_CS), ip = VDM_REG16(tib, VTIB_EIP);
-            DWORD flags2;
-            if (IsOurStubCsIp(cs, ip)) {   /* #206: BIOS stubs too */
-                DWORD ss = VDM_REG16(tib, VTIB_SS), stackPointer = VDM_REG16(tib, VTIB_ESP);
-                flags2 = PeekWord((ss << PARAGRAPH_SHIFT) + ((stackPointer + X86_FRAME16_FLAGS) & WORD_MASK));
-            } else {
-                flags2 = VDM_REG(tib, VTIB_EFLAGS);
-                IfvNote(IFV_PATH_VTIB_IRQ01, flags2);
-            }
-            /* ── WHY IS THIS REFUSED? MEASURED, NOT ASSUMED. ─────────────────────────
-                 KEYLAT says 90% of keystrokes take >64 ms to reach INT 09h (max 9.6 s)
-                 while the UI thread hands them over in 0 ms, so the refusal is here and
-                 it is not rare -- it is the normal case. There are exactly three ways
-                 out of this gate, and guessing which one has already cost four rounds. */
-            ++g_Irq1Checks;
-            if (!IfOrVif(flags2))                                          ++g_Irq1NoIf;
-            else if (cs == DOS_HDLR_SEG && ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END)      ++g_Irq1In08;
-            else if (cs == DOS_HDLR_SEG && ip >= DOS_HDLR_INT09_STUB_OFF && ip < DOS_HDLR_INT09_STUB_END)      ++g_Irq1In09;
-            if (IfOrVif(flags2) && !(cs == DOS_HDLR_SEG &&
-                                  ((ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END) || (ip >= DOS_HDLR_INT09_STUB_OFF && ip < DOS_HDLR_INT09_STUB_END)))) {
-                InterlockedDecrement(&g_Irq1Pending);   /* one INT 09h per queued scancode byte */
-                VddPicAcknowledge(&g_Pic, 1);
-                if (AsyncVectorIsOurStub(PIC_IRQ_KEYBOARD)) VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_KEYBOARD);
-                g_Irq1Injected++;
-                InjectInt(tib, VECTOR_KEYBOARD);
-                KeyLatencyPop();               /* the guest is now IN its INT 09h */
-            }
-        }
+        V86DeliverTimerIrq(tib);
+        V86DeliverKeyboardIrq(tib);
         V86DeliverDeviceIrq(tib);   /* see the helper: shared with the nested 0301/0302 loop */
         MouseCallbackTry(tib);          /* INT 33h 0Ch events, under the same gate as an IRQ */
         /* Mirror the guest's IF into EFLAGS.VIF before handing the context back. On VME
@@ -7159,126 +7604,19 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             if (VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_IF) VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_VIF;
             else                                   VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_VIF;
         }
-        /* ---- MODE 12h: THE HOST IS THE CPU (GH #55) ------------------------- *
-         * While a planar mode is current we do not hand the guest to V86 at all,
-         * because on real hardware there is no way to see its A0000 writes there:
-         * the page trap that would show them freezes the VDM (see VideoTrapSync).
-         * Run a slice in the interpreter instead -- its A0000 accesses go through
-         * the planar write engine -- then loop, which re-runs the IRQ delivery gate
-         * above so timer and keyboard interrupts reach the guest between slices.
-         * A slice ends early the moment an IRQ is pending, so the slice size is a
-         * ceiling on lock-hold time, not on responsiveness.
-         * If the interpreter declines the instruction we are ON (a BOP, or an
-         * opcode it does not model), ran == 0 and we fall through to V86 exactly as
-         * before -- so a DOS call still reaches the kernel as a BOP event, and an
-         * unmodeled opcode still executes on the real CPU. */
-        if (g_P12Interp && !g_DpmiPm) {
-            INT32 ran = HostInterpPaced(tib, P12_SLICE);
-            if (ran > 0) { g_P12Batches++; g_P12Instructions += (DWORD)ran; continue; }
-            /* NAME THE OPCODE. Every bail is guest execution we cannot see, so the
-               list of declined opcodes IS the to-do list for this path (#27).
-               ⚠ NOT ON A BOP: our own `C4 C4 nn` stubs are the overwhelming majority
-               of bails and are not unmodelled opcodes. Per-site table, reported at
-               exit -- see g_P12Site. */
-            { DWORD codeSegment3 = VDM_REG16(tib, VTIB_CS), eip3 = VDM_REG16(tib, VTIB_EIP);
-              const volatile BYTE *ip3 = (const volatile BYTE *)((codeSegment3 << PARAGRAPH_SHIFT) + eip3);
-              if (!(ip3[0] == VDM_BOP0 && ip3[1] == VDM_BOP1)) {
-                UINT index5;
-                for (index5 = 0; index5 < g_P12SiteCount; ++index5)
-                    if (g_P12Site[index5].Cs == codeSegment3 && g_P12Site[index5].Ip == eip3) break;
-                if (index5 < g_P12SiteCount) g_P12Site[index5].Count++;
-                else if (g_P12SiteCount < P12_SITE_MAX) {
-                    UINT index6;
-                    g_P12Site[index5].Cs = codeSegment3; g_P12Site[index5].Ip = eip3; g_P12Site[index5].Count = 1;
-                    for (index6 = 0; index6 < 8; ++index6) g_P12Site[index5].Bytes[index6] = ip3[index6];
-                    ++g_P12SiteCount;
-                } else ++g_P12SiteLost;
-              } }
-            g_P12Bails++;
+        {
+            INT flow = V86RunPlanarSlice(tib);
+            if (flow == HOST_FLOW_CONTINUE) continue;
         }
-        if (!g_P12Interp && ModeYNeedsInterp()) {
-            INT32 ran;
-            UINT64 cyclesStart = ModeYTimelineRdtsc();
-            g_ModeYInterp = 1;
-            ran = HostInterpPaced(tib, P12_SLICE);
-            g_ModeYInterp = 0;
-            if (g_ModeYTimelineT0) { DWORD second = (GetTickCount() - g_ModeYTimelineT0) / MILLISECONDS_PER_SECOND_U;
-                            if (second < YTL_SECS) { if (ran > 0) g_ModeYTimelineIns[second] += (DWORD)ran;
-                                                  g_ModeYTimelineInterpreterCycles[second] += ModeYTimelineRdtsc() - cyclesStart; } }
-            if (ran > 0) { g_ModeYSlices++; g_ModeYInstructions += (DWORD)ran; continue; }
-            if (VDM_REG16(tib, VTIB_CS) == 0) ModeYRingDump("guest at CS=0 after a slice");
-            /* Declined (a BOP, or an opcode it does not model): that ONE instruction
-               runs natively. Under a multi-plane mask a native A0000 store reaches only
-               the first selected plane -- so count these separately; they are the
-               remaining way this window can be wrong. */
-            { DWORD codeSegment3 = VDM_REG16(tib, VTIB_CS), eip3 = VDM_REG16(tib, VTIB_EIP);
-              const volatile BYTE *ip3 = (const volatile BYTE *)((codeSegment3 << PARAGRAPH_SHIFT) + eip3);
-              if (!(ip3[0] == VDM_BOP0 && ip3[1] == VDM_BOP1)) {
-                  BYTE mapMask = (BYTE)(g_Video.MapMask & VIDEO_ALL_PLANES);
-                  ++g_ModeYBails;
-                  if (mapMask & (BYTE)(mapMask - 1)) ++g_ModeYBailMp;
-                  ModeYBailNote(codeSegment3, eip3, ip3);
-              } }
+        {
+            INT flow = V86RunModeYSlice(tib);
+            if (flow == HOST_FLOW_CONTINUE) continue;
         }
         while (g_PauseWant && g_Running) { ++g_PauseCooperative; Sleep(PAUSE_POLL_MS); }   /* #219 */
         CpuSpeedCooperativePark();                                                  /* #225 */
         InterlockedExchange(&g_InExec, 1);
         ExecEnterMark();               /* guest-execution clock starts (throttle) */
-        {   LARGE_INTEGER runStart, runEnd; DWORD runMilliseconds;
-            DWORD eventCs = VDM_REG16(tib, VTIB_CS), eip = VDM_REG16(tib, VTIB_EIP);
-            QueryPerformanceCounter(&runStart);
-            if (g_HostTimeLast)                                   /* #238: see g_HostMicrosecondsEvent */
-                g_HostMicrosecondsEvent[g_HostEventLast] += QpcMicroseconds(runStart.QuadPart - g_HostTimeLast);
-            event = VdmRunGuest(tib, &vdmStatus);
-            QueryPerformanceCounter(&runEnd);
-            g_V86MicrosecondsTotal += QpcMicroseconds(runEnd.QuadPart - runStart.QuadPart);
-            g_HostTimeLast = runEnd.QuadPart;
-            g_HostEventLast = event < EV_HIST_MAX ? event : EV_HIST_MAX - 1;
-            {   DWORD now = GetTickCount();                     /* #238: g_XsSnapshot */
-                if (!g_XsStart) g_XsStart = now;
-                while (g_XsSeconds < XS_SECS && now - g_XsStart >= g_XsSeconds * MILLISECONDS_PER_SECOND_U) {
-                    DWORD *snapshot = g_XsSnapshot[g_XsSeconds++], hostUs = 0; INT eventIndex;
-                    for (eventIndex = 0; eventIndex < EV_HIST_MAX; ++eventIndex) hostUs += g_HostMicrosecondsEvent[eventIndex] / MICROSECONDS_PER_MILLISECOND_U;
-                    snapshot[XS_RAISE] = g_IrqRaised[0]; snapshot[XS_ASYNC] = g_AsyncInjected;
-                    snapshot[XS_COOP] = g_Irq0Injected;       snapshot[XS_NIE] = g_AsyncWhyHistogram[0][ASYNC_WHY_NOT_IN_EXEC];
-                    snapshot[XS_BOP] = g_EventHistogram[VDM_EVENT_BOP];      snapshot[XS_IO] = g_EventHistogram[VDM_EVENT_IO];
-                    snapshot[XS_HOSTMS] = hostUs;     snapshot[XS_PACE] = g_PitPaceCalls;
-                } }
-            /* s82: the entry trampoline borrowed DPMI callback slot 0/1's bytes (#248: the
-               slots have since moved to 0x90; the bytes are spare now). The first
-               exit that is not inside it hands them back -- long before any client can
-               have allocated, let alone called, a callback. */
-            if (g_TrampolineSaved) {
-                DWORD trampolineCs = VDM_REG16(tib, VTIB_CS), trampolineIp = VDM_REG16(tib, VTIB_EIP);
-                if (!(trampolineCs == DOS_HDLR_SEG && trampolineIp >= DOS_HDLR_TRAMPOLINE_OFF && trampolineIp < DOS_HDLR_TRAMPOLINE_OFF + DOS_HDLR_TRAMPOLINE_SIZE)) {
-                    volatile BYTE *trampoline = (volatile BYTE *)(ULONG_PTR)(((DWORD)DOS_HDLR_SEG << PARAGRAPH_SHIFT) + DOS_HDLR_TRAMPOLINE_OFF);
-                    INT item;
-                    for (item = 0; item < DOS_HDLR_TRAMPOLINE_SIZE; ++item) trampoline[item] = g_TrampolineSave[item];
-                    g_TrampolineSaved = 0;
-                    {   CHAR trampolineLine[200], *trampolineCursor = LogPut(trampolineLine, "STAGE2: entry trampoline done -- first exit ev=0x");
-                        trampolineCursor = LogHex(trampolineCursor, (DWORD)event); trampolineCursor = LogPut(trampolineCursor, " at 0x"); trampolineCursor = LogHex(trampolineCursor, trampolineCs);
-                        trampolineCursor = LogPut(trampolineCursor, ":0x"); trampolineCursor = LogHex(trampolineCursor, trampolineIp); trampolineCursor = LogPut(trampolineCursor, " VTIB EFLAGS=0x");
-                        trampolineCursor = LogHex(trampolineCursor, VDM_REG(tib, VTIB_EFLAGS)); trampolineCursor = LogPut(trampolineCursor, " (IF=bit 9, VIF=bit 19, VIP=bit 20)\r\n");
-                        LogAppend(LOG_PATH, trampolineLine, trampolineCursor); }
-                }
-            }
-            /* ── ★ HOW LONG DID ONE V86 RUN LAST WITHOUT GIVING US A TURN? (Skyroads
-                 wobble, s61.) The big timer gaps are low-I/O, so the guest is not
-                 hammering ports -- it is inside ONE long VdmRunGuest stretch (a spin, a
-                 cli section, or slow interpreted VGA). This is the PM stretch
-                 instrument for the V86 path: bucket the durations and keep the worst,
-                 with the ENTRY cs:ip (where the stretch began) and the exit event. A
-                 stretch >8 ms at native speed is 30M+ instructions -- so it is a WAIT
-                 or a slow op, and its entry names the routine. */
-            {   UINT bucket = 0;
-                runMilliseconds = QpcMicroseconds(runEnd.QuadPart - runStart.QuadPart) / MICROSECONDS_PER_MILLISECOND_U;   /* ms */
-                while (bucket < 7 && runMilliseconds >= (1u << bucket)) ++bucket;
-                g_V86StringHistogram[bucket]++;
-                if (runMilliseconds >= 8u) ++g_V86StringCount8;
-                if (runMilliseconds > g_V86StringMaximumMs) {
-                    g_V86StringMaximumMs = runMilliseconds; g_V86StringMaximumCs = eventCs;
-                    g_V86StringMaximumIp = eip; g_V86StringMaximumEvent = event;
-                } } }
+        V86RunGuestTimed(tib, &event, &vdmStatus);
         g_EventHistogram[event < EV_HIST_MAX ? event : EV_HIST_MAX - 1]++;
         ExecLeaveMark();               /* ...and stops. Our servicing is not its  */
         InterlockedExchange(&g_InExec, 0);
@@ -7348,124 +7686,13 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
             break;
         }
-        /* I/O port trap (event 0; VM-confirmed) or a generic GP fault (event 2):
-           if the faulting instruction is an IN/OUT we can decode, service it via
-           the VDD bus and resume; otherwise fall through to the stop dump. */
-        if (event == VDM_EVENT_IO || event == VDM_EVENT_IO_HW ||
-            event == VDM_EVENT_GPFAULT || event == VDM_EVENT_IO_STRING) {
-            INT handled;
-            { static INT ioBudget = 6; VdmStateSample("io-reflect", tib, &ioBudget); }
-            /* REP INS/OUTS arrives as its own event with CS:IP ON the instruction. */
-            if (event == VDM_EVENT_IO_STRING) {
-                HOST_LOCK();
-                handled = HostTryIoString(tib, &g_Bus);
-                HOST_UNLOCK();
-                if (handled) { g_EventIoString++; continue; }
-            }
-            /* Trap-storm detection over ALL faults (port + A0000 memory): the
-               per-pixel VGA loop faults repeatedly in a tight PC window. Once a
-               storm is established in mode 12h, escalate to the batching
-               interpreter so the whole inner loop (OUTs + pixel writes) runs in
-               one shot; otherwise emulate the single faulting access. */
-            DWORD currentCs2 = VDM_REG16(tib, VTIB_CS), currentIp2 = VDM_REG16(tib, VTIB_EIP);
-            UINT32 current = (currentCs2 << PARAGRAPH_SHIFT) + currentIp2;
-            UINT32 distance = (current > lastFault) ? (current - lastFault) : (lastFault - current);
-            stormCount = (distance <= STORM_WINDOW) ? (stormCount + 1) : 0;
-            lastFault = current;
-            if ((g_A000Protection || (g_Interp12 && VddVideoIsPlanarActive(&g_Video)))
-                && stormCount >= STORM_GATE) {
-                DWORD breakCs = VDM_REG16(tib, VTIB_CS), breakIp = VDM_REG16(tib, VTIB_EIP);
-                INT32 ran = HostInterpPaced(tib, TIER1_CAP);
-                if (ran > 0) {
-                    static INT batchBudget = 10;
-                    if (batchBudget > 0) {            /* is the batch ADVANCING the guest? */
-                        --batchBudget;
-                        cursor = LogPut(cursor, "BATCH ran="); cursor = LogHex(cursor, (DWORD)ran);
-                        cursor = LogPut(cursor, " from 0x"); cursor = LogHex(cursor, breakCs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, breakIp);
-                        cursor = LogPut(cursor, " to 0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_CS));
-                        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EIP));
-                        cursor = LogPut(cursor, "\r\n");
-                        LogAppend(LOG_PATH, base, cursor); cursor = base;
-                    }
-                    continue;                       /* batched the hot loop            */
-                }
-            }
-            HOST_LOCK();
-            handled = HostTryIo(tib, &g_Bus);     /* single port op (no logging)     */
-            HOST_UNLOCK();
-            RetraceIdle();                              /* #183: outside the lock */
-            if (handled) { g_EventIo++; g_IoViaDirect++; IoHotNote(g_IoLastPort, VDM_REG16(tib, VTIB_CS), VDM_REG16(tib, VTIB_EIP)); continue; }
-            /* real-HW event 3 reports CS:IP AFTER the faulting IN/OUT -> retro-decode the
-               I/O instruction ending at CS:IP and service it (Skyroads' vblank IN AL,DX). */
-            if (event == VDM_EVENT_IO_HW) {
-                HOST_LOCK();
-                handled = HostTryIoRetro(tib, &g_Bus);
-                HOST_UNLOCK();
-                RetraceIdle();                          /* #183: outside the lock */
-                if (handled) { g_EventIo++; g_IoViaRetro++; IoHotNote(g_IoLastPort, VDM_REG16(tib, VTIB_CS), VDM_REG16(tib, VTIB_EIP)); continue; }
-            }
-            if ((g_A000Protection || (g_Interp12 && VddVideoIsPlanarActive(&g_Video)))
-                && HostInterpPaced(tib, 1) > 0) continue;   /* single A0000 access */
-            /* The interpreter refused the very first opcode. With A0000 trapped that
-               is a LIVELOCK, not a miss: we resume at the same EIP, the guest
-               re-faults on the same store, forever. Name the opcode -- this is the
-               "mode-12h MOV-store decoder gap" from the M3 notes, and it is why
-               mode 12h has never rendered. Budgeted so it cannot flood the log. */
-            if (g_A000Protection || g_Interp12) {
-                static INT declineBudget = 8;
-                if (declineBudget > 0) {
-                    DWORD codeSegment2 = VDM_REG16(tib, VTIB_CS), eip2 = VDM_REG16(tib, VTIB_EIP);
-                    const volatile BYTE *ip2 = (const volatile BYTE *)((codeSegment2 << PARAGRAPH_SHIFT) + eip2);
-                    UINT index4;
-                    --declineBudget;
-                    cursor = LogPut(cursor, "INTERP-REFUSED at 0x"); cursor = LogHex(cursor, codeSegment2);
-                    cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, eip2); cursor = LogPut(cursor, " bytes:");
-                    for (index4 = 0; index4 < 8; ++index4) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, ip2[index4]); }
-                    cursor = LogPut(cursor, "\r\n");
-                    LogAppend(LOG_PATH, base, cursor); cursor = base;
-                }
-                g_InterpRefused++;
-            }
-            /* Not an I/O instruction and not an A0000 touch. On this hardware event 3
-               is OVERLOADED: besides the I/O reflect, it is how the kernel says "a
-               hardware interrupt is pending and the VDM has interrupts enabled" -- the
-               interrupt assist we thought we lacked. It only ever fires now that the
-               guest runs with IF=1; with IF=0 the kernel had nothing to notify us about
-               and simply left VDM_INT_TIMER pending forever. Distinguish it from a
-               genuine GP fault by the kernel's own pending bits in FIXED_NTVDMSTATE:
-               clear them (so it stops re-notifying), latch the timer IRQ, and resume at
-               the SAME EIP -- no instruction faulted, so nothing must be stepped over.
-               Delivery itself is left to the loop-top gate, which owns the IF and
-               re-entrancy checks. (Session 9 met this same event in protected mode and
-               cleared the bits there; see dpmi_enter.S label 2.) */
-            if (event == VDM_EVENT_IO_HW) {
-                volatile DWORD *vdmStateWord = (volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR;
-                DWORD pend = *vdmStateWord & VDM_INT_PENDING;
-                if (pend) {
-                    if (pend & VDM_INT_TIMER) Irq0Latch();         /* VDM_INT_TIMER -> IRQ0 */
-                    *vdmStateWord &= ~VDM_INT_PENDING;
-                    g_EventIntPending++;
-                    continue;
-                }
-            }
+        {
+            INT flow = V86ServiceIoEvent(&cursor, base, event, tib);
+            if (flow == HOST_FLOW_CONTINUE) continue;
         }
-        if (event != VDM_EVENT_BOP) {
-            DWORD currentCs = VDM_REG16(tib, VTIB_CS);
-            DWORD currentIp = VDM_REG16(tib, VTIB_EIP);
-            volatile BYTE *codeBytes = (volatile BYTE *)((currentCs << PARAGRAPH_SHIFT) + currentIp);
-            BYTE instructionBytes[8], pageBytes[8]; UINT item;
-            for (item = 0; item < 8; ++item) instructionBytes[item] = codeBytes[item];
-            for (item = 0; item < 8; ++item) pageBytes[item] = (currentIp >= 8) ? codeBytes[(INT)item - 8] : 0;  /* 8 bytes BEFORE CS:IP */
-            cursor = LogPut(cursor, "STAGE2: stop event=0x"); cursor = LogHex(cursor, event);
-            cursor = LogPut(cursor, " status=0x"); cursor = LogHex(cursor, (UINT)vdmStatus);
-            cursor = LogPut(cursor, " info=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EVENT_INFO));
-            cursor = LogPut(cursor, " CS:IP=0x"); cursor = LogHex(cursor, currentCs);
-            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, currentIp); cursor = LogPut(cursor, "\r\n");
-            cursor = LogPut(cursor, "  bytes[CS:IP-8]: "); cursor = LogDump(cursor, pageBytes, 8);
-            cursor = LogPut(cursor, "  bytes@CS:IP: "); cursor = LogDump(cursor, instructionBytes, 8);
-            cursor = LogPut(cursor, "  VTIB[5A8..]: "); cursor = LogDump(cursor, (const VOID *)(tib + 0x5A8), 0x20);
-            LogAppend(LOG_PATH, base, cursor); cursor = base;
-            break;
+        {
+            INT flow = V86ReportUnexpectedStop(&cursor, base, event, tib, vdmStatus);
+            if (flow == HOST_FLOW_BREAK) break;
         }
         { static INT bopBudget = 6; VdmStateSample("bop", tib, &bopBudget); }
         /* ── ★★★ WHOSE BOP IS THIS? THE NUMBER DOES NOT SAY. (s78) ──────────────────
@@ -7497,139 +7724,18 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             MouseCallbackReturn(tib);
             continue;
         }
-        if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == VECTOR_KEYBOARD) {   /* INT 09h: BIOS keyboard */
-            INT keyAction;
-            /* ── #244: THE SECOND HALF, AFTER INT 15h AH=4Fh SAID "PROCESS IT" (CF=1).
-                 We are at bios_kbdact.asm k4f's BOP: AL is the scancode as the hook left
-                 it (possibly changed), the interrupted code's AX is on the stack above
-                 the INT 09h frame. Translate AL, EOI, pop that AX ourselves, and resume
-                 where the byte's action says -- a side-call, or brk's bare IRET. */
-            if (VDM_REG16(tib, VTIB_CS) == DOS_CTAB_SEG
-                && VDM_REG16(tib, VTIB_EIP) == DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_INTERCEPT_BOP) {
-                DWORD ss = VDM_REG16(tib, VTIB_SS), stackPointer = VDM_REG16(tib, VTIB_ESP);
-                INT keyboardAction;
-                HOST_LOCK();
-                keyAction = VddInputBiosTranslate(&g_Input, (BYTE)VDM_REG(tib, VTIB_EAX));
-                VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_KEYBOARD);
-                if (keyAction == INPUT_ACTION_PAUSE && KeyboardActionEntry(keyAction) < 0) VddInputPauseCancel(&g_Input);
-                HOST_UNLOCK();
-                ++g_Kb4FTranslate;
-                VDM_SET16(tib, VTIB_EAX, PeekWord((ss << PARAGRAPH_SHIFT) + stackPointer));          /* pop ax */
-                VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & HIGH_WORD_MASK_U) | ((stackPointer + X86_WORD_SIZE) & WORD_MASK);
-                keyboardAction = KeyboardActionEntry(keyAction);
-                VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + (keyboardAction >= 0 ? keyboardAction : BIOS_KEYBOARD_ACTION_IRET));
-                continue;
-            }
-            /* ── #244: THE FIRST HALF, WHEN SOMETHING HAS HOOKED INT 15h. Take the byte
-                 out of the controller now (it is the BIOS's `in al,60h`), push the
-                 interrupted code's AX, load AX = 4F00h | byte, and run k4f: `stc / int
-                 15h` in the guest, then back to the arm above -- or, on CF=0, k4f's own
-                 EOI and IRET (swallowed). The EOI waits until then, as the BIOS's does.
-                 Not hooked (the normal case, every game included): straight on below,
-                 exactly as before -- not one extra instruction on the default path. */
-            if (Int15Hooked()) {
-                INT scanCode;
-                HOST_LOCK();
-                scanCode = VddInputBiosFetch(&g_Input);
-                HOST_UNLOCK();
-                if (scanCode >= 0) {
-                    DWORD ss = VDM_REG16(tib, VTIB_SS);
-                    WORD  stackPointer = (WORD)((VDM_REG(tib, VTIB_ESP) - X86_WORD_SIZE) & WORD_MASK);
-                    PokeWord((ss << PARAGRAPH_SHIFT) + stackPointer, (WORD)VDM_REG(tib, VTIB_EAX));     /* push ax */
-                    VDM_REG(tib, VTIB_ESP) = (VDM_REG(tib, VTIB_ESP) & HIGH_WORD_MASK_U) | stackPointer;
-                    VDM_SET16(tib, VTIB_EAX, (WORD)((BIOS_SYSTEM_KEYBOARD_INTERCEPT << BYTE_SHIFT) | (UINT)scanCode));
-                    VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
-                    VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_INTERCEPT);
-                    ++g_Kb4FCalls;
-                    continue;
-                }
-                /* nothing presented: a spurious IRQ1 -- EOI and IRET, as below */
-                HOST_LOCK();
-                VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_KEYBOARD);
-                HOST_UNLOCK();
-                VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
-                continue;
-            }
-            HOST_LOCK();
-            keyAction = VddInputBiosConsume(&g_Input);   /* take the byte, re-arm if more queued */
-            /* ── ★ THE BIOS INT 09h ENDS WITH AN EOI, AND SO MUST THIS. ──────────────────
-                 A guest that hooks INT 09h keeps IRQ1 in service until it EOIs (strict
-                 acknowledge above). QB.EXE's hook EOIs only the keys it swallows; for
-                 every ordinary key it CHAINS to the BIOS handler (`int 0EFh`) and leaves
-                 the EOI to it -- as the real one does with `mov al,20h / out 20h,al`.
-                 This arm never sent one, so IRQ1's in-service bit stayed set after the
-                 first key and no keyboard interrupt was ever delivered again: measured
-                 keyirq=1 for a whole QBasic run of ~19 key presses. Same shape as the
-                 INT 08h arm's EOI below, for the same reason. Harmless when the guest
-                 EOI'd before chaining: the bit is already clear. */
-            VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_KEYBOARD);
-            HOST_UNLOCK();
-            /* ── #254: AND WHAT THE BIOS CALLS FROM IT. Ctrl-Break -> INT 1Bh, Print
-                 Screen -> INT 05h, SysReq -> INT 15h AH=85h, Pause -> the spin loop:
-                 resume the guest in bios_kbdact.asm's routine (after the EOI, as the
-                 BIOS does), which IRETs to the interrupted code. Only guest-side
-                 calls -- nothing here reaches the host. */
-            {   INT keyboardAction = KeyboardActionEntry(keyAction);
-                if (keyboardAction >= 0) {
-                    VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
-                    VDM_REG(tib, VTIB_EIP) = (DWORD)(DOS_KBDACT_OFF + keyboardAction);
-                    continue;
-                }
-                if (keyAction == INPUT_ACTION_PAUSE) { HOST_LOCK(); VddInputPauseCancel(&g_Input); HOST_UNLOCK(); }
-            }
-            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;        /* -> the IRET */
-            continue;
+        {
+            INT flow = V86ServiceKeyboardBop(tib);
+            if (flow == HOST_FLOW_CONTINUE) continue;
         }
-        if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == VECTOR_TIMER) {   /* INT 08h timer tick */
-            NTVDD_REGISTERS registers; RegistersLoad(&registers, tib);
-            HOST_LOCK();
-            VddBusDeliverInterrupt(&g_Bus, VECTOR_TIMER, &registers);  /* bump BIOS tick at 0040:006C */
-            /* The real BIOS timer ISR ends with `mov al,20h; out 20h,al`. Ours is a BOP
-               with nowhere to put one, so issue the EOI here -- without it the PIC's
-               in-service bit for IRQ0 latches on the first tick and the timer stops dead
-               (measured: exactly one tick delivered in a 30 s run). */
-            VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_TIMER);
-            HOST_UNLOCK();
-            RegistersStore(&registers, tib);
-            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;            /* -> CD 1C (chain user timer) */
-            continue;
+        {
+            INT flow = V86ServiceTimerBop(tib);
+            if (flow == HOST_FLOW_CONTINUE) continue;
         }
-        {   /* ---- INT 20h / 22h (BOP 30h) and INT 27h: they END the program, so they stay
-               here -- only the exec loop can terminate a run or return to a parent.
-               The rest of the BIOS block moved to V86BiosBop() (GH #247). */
-            UINT bopNumber = VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK;
-            INT handled = 1;
-            if (bopNumber == DOS_BOP_INT20) {               /* INT 20h: terminate       */
-                /* INT 20h is AH=4Ch with an exit code of 0. Routing it here
-                   rather than leaving an IRET means a program that exits this
-                   way actually exits, instead of returning into itself. */
-                VDM_REG(tib, VTIB_EAX) &= HIGH_WORD_MASK_U;
-                machine.TraceCursor = cursor; DosInt21(&machine); cursor = machine.TraceCursor;   /* AH=00 -> terminate       */
-                /* ★ AND IF THIS WAS A CHILD, GO BACK TO ITS PARENT. (GH #134)
-                     This used to set handled = 2, which `break`s the exec loop
-                     and ends the whole VDM -- so a .COM child exiting the normal
-                     .COM way took the host down with it. */
-                handled = DosTerminate(&machine, tib, &cursor, base) ? EXEC_HANDLED_CHILD_EXITED : EXEC_HANDLED_RUN_OVER;
-            } else if (bopNumber == DOS_BOP_FOR_VECTOR(VECTOR_TERMINATE_RESIDENT)) {               /* TSR, CP/M style          */
-                /* ── THE OLD FORM OF AH=31h, AND IT KEEPS MEMORY TOO. (GH #49) ─
-                     DX is a BYTE OFFSET past the PSP here, not a paragraph
-                     count -- that is the one thing this call does differently
-                     and the easy thing to get wrong. Round UP to paragraphs so
-                     the last partial one is kept rather than cut off.
-                     CS is the resident program's PSP for an INT 27h caller. */
-                DWORD int27Dx = VDM_REG16(tib, VTIB_EDX);
-                machine.TsrKeep = (WORD)((int27Dx + PARAGRAPH_LAST_BYTE) >> PARAGRAPH_SHIFT);
-                machine.IsTsrPending = 1;
-                cursor = LogPut(cursor, "  INT27 TSR: keep 0x"); cursor = LogHex(cursor, machine.TsrKeep);
-                cursor = LogPut(cursor, " paras (DX=0x"); cursor = LogHex(cursor, int27Dx);
-                cursor = LogPut(cursor, " bytes), vectors LEFT INSTALLED\r\n");
-                VDM_REG(tib, VTIB_EAX) &= HIGH_WORD_MASK_U;
-                machine.TraceCursor = cursor; DosInt21(&machine); cursor = machine.TraceCursor;
-                handled = DosTerminate(&machine, tib, &cursor, base) ? EXEC_HANDLED_CHILD_EXITED : EXEC_HANDLED_RUN_OVER;
-            } else handled = 0;
-            if (handled == EXEC_HANDLED_RUN_OVER) break;               /* terminate: the run is over  */
-            if (handled == EXEC_HANDLED_CHILD_EXITED) continue;            /* a child exited: parent is back */
-            if (handled) { VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH; continue; }
+        {
+            INT flow = DosServiceTerminateBop(&cursor, base, tib, &machine);
+            if (flow == HOST_FLOW_BREAK) break;
+            if (flow == HOST_FLOW_CONTINUE) continue;
         }
         /* ⚠ `!g_BopFromGuest`: XP's COMMAND.COM issues a `BOP 0x50` of its own (one
              site, in its "Incorrect DOS version" path). Without the origin test that
