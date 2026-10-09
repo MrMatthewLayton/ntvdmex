@@ -10,18 +10,18 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
-#define DPMI_FLT_CLASS_GP   6       /* The kernel's fault class for a #GP (observed: 6) */
+#define DPMI_FLT_CLASS_GP   6   /* The kernel's fault class for a #GP (observed: 6) */
 
 /* Suppress the asynchronous IRQ0 -> PM INT 08h injection. A knob, not a feature: when a
  * client dies the instant we deliver a timer tick, the first question is whether the
  * DELIVERY is wrong or merely BADLY TIMED, and the cheapest way to ask it is to stop
  * delivering and see how much further the client gets. Absent file = normal behaviour.
  */
-#define PMNOIRQ_PATH    CFG_("pmnoirq.flag")
+#define PMNOIRQ_PATH        CFG_("pmnoirq.flag")
 
-#define PMVEHPASS_PATH  CFG_("pmvehpass.flag")
+#define PMVEHPASS_PATH      CFG_("pmvehpass.flag")
 
-#define NOSB_PATH       CFG_("nosb.flag")
+#define NOSB_PATH           CFG_("nosb.flag")
 
 /* -- A WATCH ADDRESS: ONE HEX LINEAR ADDRESS, DUMPED EITHER SIDE OF EACH INJECTED
  * INTERRUPT. ---------------------------------------------------------------------
@@ -41,7 +41,7 @@
  *                                             that increments it: a different bug
  * Absent file = no watch and no cost, like every other knob here.
  */
-#define PMWATCH_PATH    CFG_("pmwatch.txt")
+#define PMWATCH_PATH        CFG_("pmwatch.txt")
 
 /* WHO WROTE THIS BYTE? (GH #128, session 37) (Importance = 1):
  * pmbp.txt answers "what is there when I stop here", which needs you to know
@@ -54,7 +54,7 @@
  * between two events that name themselves, which is a bisect's first step for
  * one run instead of five. Absent file = no watch and no cost.
  */
-#define PMCHG_PATH      CFG_("pmchg.txt")
+#define PMCHG_PATH          CFG_("pmchg.txt")
 
 /* RUN PROTECTED MODE UNDER THE KERNEL MONITOR INSTEAD OF IN-PROCESS:
  * This host far-jmps into PM (dpmi_enter.S) because an early spike found
@@ -71,7 +71,7 @@
  * working descriptors, services and thunks rather than almost nothing. Opt-in,
  * because the far-jmp path is what currently works.
  */
-#define PMKERNEL_PATH   CFG_("pmkernel.flag")
+#define PMKERNEL_PATH       CFG_("pmkernel.flag")
 
 /* Per-event checkpoint verbosity. The full dump -- registers, stack, frame, entry code
  * -- was built for the era when the client died inside the FIRST DpmiEnterProtectedMode and the
@@ -80,7 +80,7 @@
  * with the game still loading. So: a handful of checkpoints always (they still catch a
  * death at the switch), and the full firehose only when asked for.
  */
-#define PMVERBOSE_PATH  CFG_("pmverbose.flag")
+#define PMVERBOSE_PATH      CFG_("pmverbose.flag")
 
 /* Ticks run per asynchronous entry -- see the drain in the main loop. */
 /* - A BATCH IS CATCH-UP, NOT A LICENCE TO COMPRESS TIME. At Doom's 140 Hz, draining
@@ -1990,16 +1990,8 @@ static INT DpmiEndClientSession(
 
 enum
 {
-    INSTALL_EXIT_OK = 0, INSTALL_EXIT_FAILED = 1, INSTALL_STATUS_EXIT_OURS = 0, INSTALL_STATUS_EXIT_NONE = 1, INSTALL_STATUS_EXIT_OTHER = 2
-};   /* the install verbs' exit codes */
-enum
-{
     PENDING_INT_RETRIES_MAX = 0x10000
 };   /* event 3 ("interrupt pending, not entered"): retries before giving up */
-enum
-{
-    EXEC_HANDLED_RUN_OVER = 2, EXEC_HANDLED_CHILD_EXITED = 3
-};   /* WinMain's DosTerminate outcomes: the run ends, or a child returned to its parent */
 
 /* Run the DPMI client in protected mode until it stops for good: each step delivers pending interrupts, runs the client to its next event, and services what stopped it -- a patched INT nn BOP, a fault the kernel reflected, an async interrupt's return. */
 static VOID DpmiRunClient(

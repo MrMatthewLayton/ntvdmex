@@ -846,6 +846,11 @@
 /* A non-BOP planar-bail site (g_P12Site): where, how often, and the bytes there. */
 #define P12_SITE_MAX                    24
 
+/* Constants main.c's modules share (#335). */
+#define AUTOEXIT_PATH                   CFG_("autoexit") /* Marker: headless test mode -> exit when the guest exits */
+
+#define DPMI_BOP                        0x50
+
 enum
 {
     WOW_SHIMS = 2, SHIM_NOT_TRIED = 0, SHIM_LOADED = 1, SHIM_NO_LOAD = 2, SHIM_INIT_REFUSED = 3
@@ -1060,12 +1065,6 @@ typedef struct _P12_SITE
     BYTE Bytes[8];
 } P12_SITE, *PP12_SITE;
 
-
-/* Constants main.c's modules share (#335). */
-#define AUTOEXIT_PATH       CFG_("autoexit")    /* Marker: headless test mode -> exit when the guest exits */
-
-#define DPMI_BOP        0x50
-
 enum
 {
     GUEST_EIP_FROM_FRAME = 0, GUEST_EIP_FROM_TIB_SLOT = 1, GUEST_EIP_FROM_BLOCKS = 2, CSRSS_REPORT_GRACE_MS = 50
@@ -1075,5 +1074,15 @@ enum
 {
     PAUSE_POLL_MS = 20, PMWATCH_COLUMNS = 2, PM_HEADLESS_CHECK_MASK = 0xFFF, PM_STEPS_MAX = 100000000
 };   /* WinMain's exec loops */
+
+enum
+{
+    INSTALL_EXIT_OK = 0, INSTALL_EXIT_FAILED = 1, INSTALL_STATUS_EXIT_OURS = 0, INSTALL_STATUS_EXIT_NONE = 1, INSTALL_STATUS_EXIT_OTHER = 2
+};   /* the install verbs' exit codes */
+
+enum
+{
+    EXEC_HANDLED_RUN_OVER = 2, EXEC_HANDLED_CHILD_EXITED = 3
+};   /* WinMain's DosTerminate outcomes: the run ends, or a child returned to its parent */
 
 #endif
