@@ -6427,6 +6427,1145 @@ static PSTR StartupFetchCommandDetails(PSTR cursor)
     return cursor;
 }
 
+
+/* Get the guest ready to run: hide the inherited console, back Mode Y's planes before the UI thread exists, start the UI thread and the headless and probe threads, set the entry state (krnl386's for a Win16 launch), check the INT 21h stub, report the start, the VDD vector claims, the A0000 region and the bus, and enter the program's directory. */
+static VOID StartupStartGuest(PSTR *cursorIo, PSTR *baseIo, HANDLE *uiThreadIo, DOS_MACHINE *machine, DOS_IMAGE *image, volatile BYTE * const tib, CHAR *report)
+{
+    PSTR cursor = *cursorIo;
+    PSTR base = *baseIo;
+    HANDLE uiThread = *uiThreadIo;
+    /* Hide the inherited console (CSRSS already bound the VDM); the Luna window
+       is now the display. Then start the UI thread that owns it. */
+    g_KeyEvent = CreateEventA(NULL, FALSE, FALSE, NULL);   /* auto-reset        */
+    { HWND consoleWindow = GetConsoleWindow(); if (consoleWindow) ShowWindow(consoleWindow, SW_HIDE); }
+    /* ► PER-PLANE BACKING BEFORE THE UI THREAD EXISTS. The remap unmaps the A0000
+         window for an instant, and the renderer dereferences it every few milliseconds;
+         doing this with that thread already running hung the host so early that no log
+         reached disk at all. Its report is buffered and flushed after the preamble. */
+    if (GetFileAttributesA(NOREMAP_FLAG) == INVALID_FILE_ATTRIBUTES && ModeYRemapInitialize()) {
+        g_Video.YMapContext    = NULL;
+        g_Video.YMapSelect = ModeYRemapSelect;
+        g_Video.YMapPlane  = ModeYRemapPlane;
+        g_Video.YMapWriteMode  = ModeYRemapWriteMode;
+        g_Video.YMapReadMap = ModeYRemapReadMap;
+    }
+    uiThread = CreateThread(NULL, 0, UiThread, NULL, 0, NULL);
+    /* Headless: arm the deadline watchdog so a run that blocks on input (a "press any
+       key" prompt, a game menu) still self-terminates instead of wedging the harness. */
+    if (g_Headless) { HANDLE deadlineThread = CreateThread(NULL, 0, HeadlessDeadlineThread, NULL, 0, NULL);
+                      if (deadlineThread) CloseHandle(deadlineThread);
+                      /* appended to the preamble, which is flushed further down */
+                      cursor = LogPut(cursor, "HEADLESS: cap=0x"); cursor = LogHex(cursor, g_HeadlessMs);
+                      cursor = LogPut(cursor, " ms\r\n"); }
+    /* cfg\livehb.flag: the heartbeat on a LIVE (by-hand) run too. A host that dies
+       with no exit report leaves nothing else that says where the guest was. (s68) */
+    if (g_Headless || GetFileAttributesA(LIVEHB_FLAG) != INVALID_FILE_ATTRIBUTES) {
+                      HANDLE heartbeatThread = CreateThread(NULL, 0, HeartbeatThread, NULL, 0, NULL);
+                      if (heartbeatThread) CloseHandle(heartbeatThread); }
+    if (g_QiKeys) { HANDLE keyThread = CreateThread(NULL, 0, SynthKeyThread, NULL, 0, NULL);
+                     if (keyThread) CloseHandle(keyThread); }
+    if (g_QiRaise) { HANDLE irqThread = CreateThread(NULL, 0, QueueIrqProbeThread, NULL, 0, NULL);
+                      if (irqThread) CloseHandle(irqThread); }
+
+    /* ── GH #128: on a WOW launch, the guest is krnl386, not a DOS program. ─────────
+         Placed HERE because this is the one point where the DOS machine is fully
+         built (conventional memory, INT 21h, the IVT, INT 2Fh) and the guest entry
+         has not yet been committed. krnl386 needs all of it: AH=52h almost at
+         once, then 2F/1687 to find our DPMI host and switch itself.
+         The DOS program load above still ran and is simply discarded -- it is
+         tolerant of a missing target and costs one wasted image. Overriding here
+         rather than short-circuiting there keeps the DOS path's spine untouched. */
+    {   WORD wowCs = 0, wowIp = 0, wowDs = 0, wowSs = 0, wowSp = 0;
+        if (g_WowModuleCount && WowPlaceV86(machine, &wowCs, &wowIp, &wowDs, &wowSs, &wowSp) == 0) {
+            image->CodeSegment = wowCs; image->InstructionPointer = wowIp; image->StackSegment = wowSs; image->StackPointer = wowSp;
+            g_WowEntryDs = wowDs;
+            g_WowEntering = 1;
+        }
+    }
+    VdmSetEntry(tib, image->CodeSegment, image->InstructionPointer, image->StackSegment, image->StackPointer, DOS_PSP_SEG);
+    cursor = StartupPrepareWowEntry(cursor, tib, image);
+    /* ENTRY TRAMPOLINE: `STI` then a far jump to the program's real entry point.
+       Under VME the CPU sets EFLAGS.VIF only when the guest EXECUTES sti -- and the
+       kernel's whole notion of "this guest can take an interrupt" is VIF. Session 10
+       correctly observed that DOS programs never issue sti (they are entered with
+       interrupts already on) and fixed it by handing them IF=1 in the CONTEXT, but that
+       sets the REAL IF, which the kernel does not consult, while VIF stays 0 forever.
+       Setting VIF directly in the CONTEXT does not survive either -- the kernel sanitises
+       it. Making the guest execute one real sti costs 6 bytes and gets VIF set the only
+       way the CPU will accept, after which the hardware maintains it across the guest's
+       own cli/sti/iret. Faithful, too: DOS's EXEC really does return into the program
+       with interrupts enabled.
+       RESULT: this does NOT unblock delivery -- and note qirq.com already executed its own
+       sti before spinning, so the "guest never sets VIF" hypothesis was in truth already
+       refuted by the earlier runs. Kept as an opt-in knob (it is the faithful entry
+       sequence regardless) but it is not the missing piece.
+     ⚠ s82: THE ORACLES DISAGREE WITH US, AND THIS DOES NOT FIX IT. p_ifst.com asks FLAGS
+       at a program's first instruction: MS-DOS 6.22, DOSBox-X and PCem all answer IF=1; we
+       answer IF=0, and keep answering it after INT 10h and INT 21h. A program that never
+       executes STI (mybench.com) then has every timer tick refused by our own gate, which
+       reads that virtual IF, and 0040:006C stands still. Defaulting this trampoline was
+       tried: the guest's STI did not stick (first exit still VTIB EFLAGS=0x30002), with or
+       without VIP cleared first -- the wall s11 recorded. Still opt-in. See GH issue.
+     ✅ #212, s84: FIXED ELSEWHERE, AND THIS WAS NEVER THE PLACE. Every program is started
+       by a shell's EXEC, and the EXEC path handed the child the parent's flags from
+       INSIDE our INT 21h stub, where IF is already clear -- so the trampoline's STI ran
+       for the shell, not the program. ExecBegin() now enters the child with IF set;
+       p_ifst agrees with all three oracles. */
+    if (g_QiVif) {
+        volatile BYTE *trampoline = (volatile BYTE *)(ULONG_PTR)(((DWORD)DOS_HDLR_SEG << PARAGRAPH_SHIFT) + DOS_HDLR_TRAMPOLINE_OFF);
+        /* ⚠ s82: 0x60-0x65 is DPMI callback slot 0 and half of slot 1, planted ABOVE
+             (dos_layout.h). Keep what was there; the exec loop puts it back at the first
+             exit outside the trampoline. Opt-in, this never mattered; default, it would
+             send a client's first callback into `sti; jmp far <program entry>`.
+           (#248: the callback slots moved to 0x90, so these bytes are now unused; the
+             save/restore stays because it costs nothing and keeps the area as found.) */
+        { INT item; for (item = 0; item < DOS_HDLR_TRAMPOLINE_SIZE; ++item) g_TrampolineSave[item] = trampoline[item]; g_TrampolineSaved = 1; }
+        trampoline[0] = X86_OP_STI;                                   /* sti                       */
+        trampoline[1] = X86_OP_JMP_FAR;                                   /* jmp far cs:ip             */
+        trampoline[2] = (BYTE)image->InstructionPointer; trampoline[3] = (BYTE)(image->InstructionPointer >> BYTE_SHIFT);
+        trampoline[4] = (BYTE)image->CodeSegment; trampoline[5] = (BYTE)(image->CodeSegment >> BYTE_SHIFT);
+        VDM_REG(tib, VTIB_CS)  = DOS_HDLR_SEG;
+        VDM_REG(tib, VTIB_EIP) = DOS_HDLR_TRAMPOLINE_OFF;
+    }
+    /* Session 11: the kernel's deliverability test for a V86 frame on a VME CPU follows
+       EFLAGS.VIF, not IF (observed: VIP set and delivery deferred). Starting the guest with
+       VIF clear makes every hardware interrupt undeliverable from the kernel's point of
+       view -- it just sets VIP and defers. Opt-in until the rig confirms it. */
+    if (g_QiVif) VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_VIF;
+    if (!image->IsExe)                                        /* .COM near-ret guard */
+        *(volatile WORD *)(((DWORD)DOS_PSP_SEG << PARAGRAPH_SHIFT) + DOS_COM_STACK_TOP) = 0;
+
+    /* Every stub the host plants in DOS_HDLR_SEG is planted by a different piece of
+       start-up code with its own idea of a free offset. Verify the ones a guest can
+       RETURN INTO after all planting is done -- an overwritten stub is a guest jumping
+       into another service's BOP, and the symptom (QBasic: "DOS terminate" on the first
+       mouse move) names nothing. */
+    {   volatile BYTE *handlerSegment = (volatile BYTE *)(DOS_HDLR_SEG << PARAGRAPH_SHIFT);
+        if (handlerSegment[MS_CB_RET_OFF] != VDM_BOP0 || handlerSegment[MS_CB_RET_OFF + 1] != VDM_BOP1
+            || handlerSegment[MS_CB_RET_OFF + VDM_BOP_NUMBER_OFFSET] != MS_CB_BOP) {
+            cursor = LogPut(cursor, "STAGE2: *** STUB OVERWRITTEN at DOS_HDLR_SEG:0x");
+            cursor = LogHex(cursor, MS_CB_RET_OFF); cursor = LogPut(cursor, " (mouse callback return): bytes ");
+            cursor = LogDump(cursor, (const VOID *)(handlerSegment + MS_CB_RET_OFF), VDM_BOP_STUB_SIZE); cursor = LogPut(cursor, "\r\n");
+        }
+    }
+    cursor = LogPut(cursor, image->IsExe ? "STAGE2: running .EXE (entry 0x"
+                           : "STAGE2: running .COM (entry 0x");
+    cursor = LogHex(cursor, image->CodeSegment); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, image->InstructionPointer); cursor = LogPut(cursor, ")...\r\n");
+    LogWrite(LOG_PATH, report, cursor);
+    base = cursor;                       /* preamble is on disk; the loop appends from here */
+    {   /* #211. After the last truncating write, for the same reason as #144 below. */
+        CHAR instanceLine[200], *instanceCursor = LogPut(instanceLine, "STAGE2: instance "); instanceCursor = LogDecimal(instanceCursor, (UINT)g_Instance);
+        if (g_Instance > 1) { instanceCursor = LogPut(instanceCursor, " (another NTVDMEX was running) -> output in "); instanceCursor = LogPut(instanceCursor, g_OutSubdirectory); }
+        if (g_InstanceAbandoned) instanceCursor = LogPut(instanceCursor, " -- prior holder ABANDONED (zombie thread died)");
+        instanceCursor = LogPut(instanceCursor, " (#211)\r\n");
+        LogAppend(LOG_PATH, instanceLine, instanceCursor); }
+    /* #144. HERE, not with the other STAGE0 lines: this is the last truncating write
+       (an append before it is wiped -- the first cut of this was), and the ~7 KB table
+       would overflow the 8 KB preamble buffer. Every file override has been read. */
+    SettingsLogSources();
+    /* ── THIRD-PARTY VDDs LOAD HERE, AND THE PLACE IS THE POINT. ─────────────
+         Two constraints, and only this line satisfies both:
+         (1) AFTER every built-in device is on the bus, so a third-party claim
+             that collides with our own video or UART is REFUSED honestly rather
+             than silently shadowing it;
+         (2) AFTER THE LAST LogWrite, which TRUNCATES. The first cut put this
+             beside the built-in devices, ~350 lines up -- the driver may well
+             have loaded and every line it logged was erased before anyone could
+             read it, which reads exactly like "the code never ran". The warning
+             immediately above this one says so in as many words, and I still
+             walked into it. Third time this trap has been paid for.
+         The guest's image is loaded but not yet running, so claims made here are
+         in place before its first instruction. */
+    VddLoadThirdParty();
+    StartupReportVectorWiring();
+    /* ⚠⚠ AFTER THE **LAST** LogWrite. There are THREE of them in WinMain and every one
+         TRUNCATES. This probe was placed after the first, then after the second, and
+         both times its output was silently erased by the next one -- which reads
+         exactly like "the code never ran", and cost three rounds of looking in the
+         wrong place. If you add diagnostics to WinMain, append AFTER line ~9941 or put
+         them in `p` so a LogWrite carries them. */
+    {   DWORD attributes = GetFileAttributesA(WOWTRY_FLAG);
+        CHAR wowLine[200], *wowCursor = wowLine;
+        wowCursor = LogPut(wowCursor, "LDTARM: wow_mods="); wowCursor = LogHex(wowCursor, (DWORD)g_WowModuleCount);
+        wowCursor = LogPut(wowCursor, " flag_attr=0x");      wowCursor = LogHex(wowCursor, attributes);
+        wowCursor = LogPut(wowCursor, "\r\n"); LogAppend(LOG_PATH, wowLine, wowCursor);
+        if (!g_WowModuleCount && attributes != INVALID_FILE_ATTRIBUTES)
+            WowProbeLdtMatrix("dos-late");  /* the other corner of the 2x2 */
+    }
+    ModeYRemapFlushReport();     /* whatever the A0000 remap had to say, now it fits */
+    /* ── CAN THE A0000 WINDOW BE REMAPPED? THE ONE FACT THE REAL VIDEO FIX NEEDS. ────
+         Mode Y cannot be de-interleaved from a flat aperture: A0000 is one buffer, so
+         a guest write lands there with no record of which plane the map mask selected,
+         and six after-the-fact rules have now been measured against captured frames
+         without finding a good one (see modey_flush()). The fix is to stop guessing --
+         give each plane its own backing and point A0000 at the selected one on a mask
+         change, with four pagefile-backed sections and MapViewOfFileEx at a fixed
+         address: O(1) per change, exact, no copying.
+         Whether that is possible at all turns on ONE thing: is A0000 its own
+         allocation, or a slice of a larger reservation the VDM kernel made? A section
+         cannot be mapped into the middle of an existing reservation, and MEM_RELEASE
+         only takes a whole allocation. VirtualQuery answers it for the cost of one log
+         line, and it is worth far more than another guess at a heuristic. */
+    { MEMORY_BASIC_INFORMATION regionInfo;
+      if (VirtualQuery((LPCVOID)(ULONG_PTR)VIDEO_APERTURE_BASE, &regionInfo, sizeof regionInfo) == sizeof regionInfo) {
+          cursor = LogPut(cursor, "STAGE2: A0000 region: alloc_base=0x");
+          cursor = LogHex(cursor, (DWORD)(ULONG_PTR)regionInfo.AllocationBase);
+          cursor = LogPut(cursor, " base=0x");   cursor = LogHex(cursor, (DWORD)(ULONG_PTR)regionInfo.BaseAddress);
+          cursor = LogPut(cursor, " size=0x");   cursor = LogHex(cursor, (DWORD)regionInfo.RegionSize);
+          cursor = LogPut(cursor, " state=0x");  cursor = LogHex(cursor, regionInfo.State);
+          cursor = LogPut(cursor, " type=0x");   cursor = LogHex(cursor, regionInfo.Type);
+          cursor = LogPut(cursor, " prot=0x");   cursor = LogHex(cursor, regionInfo.Protect);
+          cursor = LogPut(cursor, " allocprot=0x"); cursor = LogHex(cursor, regionInfo.AllocationProtect);
+          cursor = LogPut(cursor, (regionInfo.AllocationBase == (LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE)
+                        ? "  -> OWN ALLOCATION: remappable\r\n"
+                        : "  -> inside a larger reservation: NOT remappable in place\r\n");
+          LogAppend(LOG_PATH, base, cursor); cursor = base;
+      } }
+    { CHAR busLine[160], *busCursor = busLine;
+      busCursor = LogPut(busCursor, g_Bus.ClaimFailures ? "STAGE2: *** BUS CLAIMS REFUSED: " : "STAGE2: bus ok: ");
+      busCursor = LogHex(busCursor, (DWORD)g_Bus.ClaimFailures);
+      busCursor = LogPut(busCursor, " refused, ports="); busCursor = LogHex(busCursor, (DWORD)g_Bus.PortCount);
+      busCursor = LogPut(busCursor, "/"); busCursor = LogHex(busCursor, (DWORD)VDD_MAX_PORT_RANGES);
+      busCursor = LogPut(busCursor, " mem="); busCursor = LogHex(busCursor, (DWORD)g_Bus.MemoryCount);
+      busCursor = LogPut(busCursor, "/"); busCursor = LogHex(busCursor, (DWORD)VDD_MAX_MEMORY_WINDOWS);
+      busCursor = LogPut(busCursor, " dev="); busCursor = LogHex(busCursor, (DWORD)g_Bus.DeviceCount);
+      busCursor = LogPut(busCursor, "/"); busCursor = LogHex(busCursor, (DWORD)VDD_MAX_DEVICES);
+      busCursor = LogPut(busCursor, "\r\n"); LogAppend(LOG_PATH, busLine, busCursor); SerialOut(busLine, busCursor); }
+
+    SetCurrentDirectoryA(g_CurrentDirectory);    /* DOS relative paths resolve against CurDir */
+    *cursorIo = cursor; *baseIo = base; *uiThreadIo = uiThread;
+}
+
+
+/* Connect DOS to the host: console output to the video VDD, console input from the keyboard, the tick and printer hooks, and the DOS-trace and simulated-interrupt switches. */
+static VOID StartupConnectDosToHost(DOS_MACHINE *machine)
+{
+    machine->ConsoleOut = HostConsoleOut; machine->ConsoleOutContext = NULL;    /* DOS console out -> video      */
+    machine->ConsoleIn  = HostConsoleIn;  machine->ConsoleInContext = NULL;    /* DOS console in  <- keyboard   */
+    /* Full INT 21h call trace, opt-in per run: it is a differential instrument, not a
+       default. See the trace at the top of DosInt21(). */
+    machine->IsTraceAll = (GetFileAttributesA(DOSTRACE_FLAG) != INVALID_FILE_ATTRIBUTES);
+    /* DPMI 0300 reflects to the guest's own real-mode handler -- ON by default since s81,
+       when the wedge that kept it off was found and fixed (see g_NestedRm and the BIOS
+       tick in AsyncInjectIrq). simintrefl_off.flag turns it off for diagnosis; say so,
+       because a guest-owned vector then silently does nothing again. */
+    g_SimIntReflect = (GetFileAttributesA(SIMINTREFL_OFF_FLAG) == INVALID_FILE_ATTRIBUTES);
+    if (!g_SimIntReflect) {
+        CHAR stageLine[224], *stageCursor = stageLine;
+        stageCursor = LogPut(stageCursor, "STAGE1: simintrefl_off.flag -- DPMI 0300 is the pre-#247 shape: INT 21h/"
+                      "33h/10h host-side, EVERY other vector NOT RUN (ZAR: silent). See "
+                      "simint_route().\r\n");
+        LogAppend(LOG_PATH, stageLine, stageCursor); SerialOut(stageLine, stageCursor);
+    }
+    machine->ConsoleInNoWait = HostConsoleInNoBlock;                   /* AH=06 DL=FF non-blocking read */
+    machine->ConsolePeek = HostConsolePeek;                   /* AH=0B/06 non-blocking status  */
+    machine->SetTicks = HostSetTicks;               /* AH=2Dh reloads 0040:006C (#250) */
+    machine->TicksContext = NULL;
+    machine->PrinterOut  = DosPrnOut;                     /* #251: PRN/AUX when not in V86 */
+    machine->AuxOut  = DosAuxOut;  machine->DeviceContext = NULL;
+}
+
+
+/* Start the host's services: the PIT pacer (or the tick it replaces), the capture watchdog, the CPU-speed governor, the audio output and its MIDI route, and wavrec.flag's recording. */
+static PSTR StartupStartServices(PSTR cursor)
+{
+    if (g_PitPaceOn) {
+        HMODULE winmmModule = LoadLibraryA(HOST_MODULE_WINMM);
+        if (winmmModule) { PFN_TIME_BEGIN_PERIOD beginPeriod =
+                      (PFN_TIME_BEGIN_PERIOD)GetProcAddress(winmmModule, HOST_EXPORT_TIME_BEGIN_PERIOD);
+                  if (beginPeriod) beginPeriod(1); }
+        PitPacerTimerStart(winmmModule);                /* #238: a true 1 ms wake */
+        g_PitPaceThread = CreateThread(NULL, 0, PitPacerThread, NULL, 0, NULL);
+    }
+    /* The capture watchdog runs for every guest, throttled or not, headless or not:
+       it is the only thing standing between a wedge and a hard reset. */
+    { HANDLE captureWatchdog = CreateThread(NULL, 0, CaptureWatchdogThread, NULL, 0, NULL);
+      if (captureWatchdog) CloseHandle(captureWatchdog); }
+    /* ── ★ THE TICK COURIER. Auto-reset: one signal wakes exactly one pass, and a
+         signal arriving while it is already awake is not lost -- the pass re-checks
+         g_Irq0Pending anyway. Created even when the courier is knobbed off, so the
+         raise site's SetEvent never has to test two things. */
+    if (g_QiSuspended) {
+        g_CourierEvent = CreateEventA(NULL, FALSE, FALSE, NULL);
+        if (g_CourierEvent)
+            g_CourierThread = CreateThread(NULL, 0, TickCourierThread, NULL, 0, NULL);
+    }
+    /* ── ★ THE CPU-SPEED THROTTLE. (GH #56) ──────────────────────────────────────
+         Started unconditionally, even at Unlimited: the setting is live, and a
+         thread that has to be created before it can bite would make the menu work
+         only on machines that started throttled. It idles in 4 ms sleeps when
+         there is nothing to do.
+       ⚠ IT NEEDS THE 1 ms TIMER RESOLUTION, and the block above only raises it when
+         the PIT pacer is on. Without timeBeginPeriod(1) a Sleep(1) is XP's default
+         ~15.6 ms, which would turn every held millisecond into fifteen and make the
+         guest fifteen times slower than the label on the menu. So raise it here too
+         -- the call nests, and pitpace=0 must not silently change what "33 MHz"
+         means. Bound by name, like every other winmm use, so the import allowlist
+         is unaffected. */
+    if (!g_PitPaceOn) {
+        HMODULE winmmModule2 = LoadLibraryA(HOST_MODULE_WINMM);
+        if (winmmModule2) { PFN_TIME_BEGIN_PERIOD beginPeriod2 =
+                       (PFN_TIME_BEGIN_PERIOD)GetProcAddress(winmmModule2, HOST_EXPORT_TIME_BEGIN_PERIOD);
+                   if (beginPeriod2) beginPeriod2(1); }
+    }
+    CpuSpeedRecompute();
+    g_CpuSpeedRelease = CreateEventA(NULL, FALSE, FALSE, NULL);   /* #225, auto-reset */
+    g_CpuSpeedThread = CreateThread(NULL, 0, CpuSpeedThread, NULL, 0, NULL);
+    /* ⚠ THE SAME RATE THE MIXER WAS BUILT AT. Opening the device at one rate and
+         mixing at another silently resamples everything to a clock nothing runs
+         on -- audible as a pitch error, not as an error message. */
+    g_Wave.WantsDirectSound = (g_Settings.Values[SET_AUDIOAPI] == 1);          /* #234 */
+    g_Wave.IsForcedSilent = g_Safe.AudioOut;                 /* s90 #132: SAFE MODE */
+    g_Wave.MidiChoice = (INT)(g_Settings.Values[SET_MIDI] < MIDI_ROUTE_COUNT ? g_Settings.Values[SET_MIDI] : 0);  /* #136 */
+    AudioWaveStart(&g_Wave, SettingsOutputHz(&g_Settings), HostAudioFill, NULL);
+    /* ── #136: SAY WHICH SYNTH THE MPU-401 PLAYS THROUGH, but only when it was chosen.
+         Host GM (the default) opens device 0 as it always did and logs nothing new. */
+    if (g_Wave.MidiChoice != MIDI_ROUTE_GM) {
+        CHAR midiLine[200], *midiCursor = LogPut(midiLine, "STAGE2: MIDI = ");
+        midiCursor = LogPut(midiCursor, g_Wave.MidiChoice == MIDI_ROUTE_MT32 ? "MT-32" : "SoundFont");
+        if (g_Wave.IsMidiExternal) {
+            midiCursor = LogPut(midiCursor, " -> device "); midiCursor = LogDecimal(midiCursor, (UINT)g_Wave.MidiDevice);
+            midiCursor = LogPut(midiCursor, " \""); midiCursor = LogPut(midiCursor, g_Wave.MidiName); midiCursor = LogPut(midiCursor, "\", SysEx passed through");
+            g_Mpu.SysExSink = HostMidiSysEx;     /* the MPU is on the bus already; no */
+            g_GusMidi.SysExSink = HostMidiSysEx; /* guest code has run yet            */
+        } else {
+            midiCursor = LogPut(midiCursor, " asked for, NO such device among "); midiCursor = LogDecimal(midiCursor, g_Wave.MidiDeviceCount);
+            midiCursor = LogPut(midiCursor, " -> Host GM (device 0");
+            if (g_Wave.MidiName[0]) { midiCursor = LogPut(midiCursor, " \""); midiCursor = LogPut(midiCursor, g_Wave.MidiName); midiCursor = LogPut(midiCursor, "\""); }
+            midiCursor = LogPut(midiCursor, g_Wave.MidiDevice < 0 ? ", would not open)" : ")");
+        }
+        if (g_Wave.MidiChoice == MIDI_ROUTE_SF2)
+            midiCursor = LogPut(midiCursor, "; SoundFontPath is not passed on -- the driver keeps its own list");
+        midiCursor = LogPut(midiCursor, " (#136)\r\n"); LogAppend(LOG_PATH, midiLine, midiCursor);
+    }
+    {   CHAR audioLine[128], *audioCursor = LogPut(audioLine, "STAGE2: audio output = ");
+        audioCursor = LogPut(audioCursor, g_Wave.IsUsingDirectSound ? "DirectSound" : g_Wave.IsSilent ? "none (silent pump)" : "WinMM");
+        if (g_Wave.WantsDirectSound && !g_Wave.IsUsingDirectSound) audioCursor = LogPut(audioCursor, " (DirectSound asked for, would not open)");
+        audioCursor = LogPut(audioCursor, "\r\n"); LogAppend(LOG_PATH, audioLine, audioCursor); }
+    /* cfg\wavrec.flag: record the whole run's audio -- see HostRecordFinish. */
+    if (GetFileAttributesA(WAVREC_FLAG) != INVALID_FILE_ATTRIBUTES) {
+        INT recordResult = AudioWaveRecordStart(WAVREC_PATH, g_Wave.SampleHz);
+        cursor = LogPut(cursor, recordResult == 0 ? "STAGE1: wavrec.flag -- recording the audio output to debug\\out\\capture_audio.wav at "
+                            : "STAGE1: wavrec.flag -- COULD NOT start the recording at ");
+        cursor = LogDecimal(cursor, g_Wave.SampleHz); cursor = LogPut(cursor, " Hz\r\n");
+    }
+    return cursor;
+}
+
+
+/* Read the cfg\ tuning files: the audio lead (awbufs, awframes), the PIT pacer, the keyboard hook and IRQ, the tick courier, the UI tick, WOW idling, mouse sensitivity, and the CPU reference, speed, granularity and affinity. */
+static VOID StartupLoadTuningKnobs(VOID)
+{
+    /* ── THE AUDIO LEAD, AS A CONTROLLED VARIABLE (awbufs.txt). ──────────────────────
+         Each queued waveOut buffer is ~11.6 ms that our DMA read pointer runs ahead of
+         what is audible, and the guest must refill a block before we reach it. Doom's
+         longest PM stretch with no host turn measured 62.8 ms against a 70 ms lead, so
+         the lead is a suspect for the residual ECHO -- the capture is 46% identical to
+         one ring lap (185.8 ms) earlier, against ~22% at every neighbouring lag.
+         Setting this and reading back `sb replay:` in STAGE2 is the experiment: if
+         replays move with the lead it is the race, if they do not, DMX is failing to
+         refill for another reason and the lead is the wrong suspect. Absent = 6. */
+    { HANDLE handle = CreateFileA(AWBUFS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, OPEN_EXISTING, 0, NULL);
+      if (handle != INVALID_HANDLE_VALUE) {
+          CHAR text[16]; DWORD bytesRead = 0, number = 0; INT index;
+          ReadFile(handle, text, sizeof text, &bytesRead, NULL);
+          CloseHandle(handle);
+          for (index = 0; index < (INT)bytesRead; ++index) {
+              if (text[index] < '0' || text[index] > '9') break;
+              number = number * DECIMAL_RADIX + (DWORD)(text[index] - '0');
+          }
+          g_Wave.BufferCount = number;                   /* AudioWaveStart clamps to [2,AUDIO_WAVE_BUFFERS] */
+      } }
+    /* ── AND THE GRANULARITY, AS A SEPARATE CONTROLLED VARIABLE (awframes.txt). ──────
+         nframes x nbufs is the LEAD; nframes alone is the STEP the guest's DMA read
+         pointer moves in. They are different suspects and must be varied independently
+         or a result cannot be attributed to either. `awbufs=2` already showed why this
+         matters: it cut the lead, starved the transport, and the replay rate "improved"
+         only because the non-flat block count collapsed 13x.
+         To hold the lead constant while quartering the step: awframes=128, awbufs=24. */
+    { HANDLE handle = CreateFileA(AWFRAMES_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, OPEN_EXISTING, 0, NULL);
+      if (handle != INVALID_HANDLE_VALUE) {
+          CHAR text[16]; DWORD bytesRead = 0, number = 0; INT index;
+          ReadFile(handle, text, sizeof text, &bytesRead, NULL);
+          CloseHandle(handle);
+          for (index = 0; index < (INT)bytesRead; ++index) {
+              if (text[index] < '0' || text[index] > '9') break;
+              number = number * DECIMAL_RADIX + (DWORD)(text[index] - '0');
+          }
+          g_Wave.FrameCount = number;                 /* clamped to [AUDIO_WAVE_MIN_FRAMES,AUDIO_WAVE_FRAMES] */
+      } }
+    { HANDLE pitPaceFile = CreateFileA(PITPACE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (pitPaceFile != INVALID_HANDLE_VALUE) {
+          CHAR text[8]; DWORD bytesRead = 0;
+          ReadFile(pitPaceFile, text, sizeof text, &bytesRead, NULL); CloseHandle(pitPaceFile);
+          if (bytesRead && text[0] >= '0' && text[0] <= '9') g_PitPaceMs = text[0] - '0';
+          g_PitPaceOn = (g_PitPaceMs != 0);
+          SettingsNoteOverride(SET_PITPACE, CFG_TEXT(KNOB_FILE_PITPACE) SETTINGS_SOURCE_MS, (DWORD)g_PitPaceMs);
+      } }
+    /* The pacer's two OTHER levers -- see PitPacerThread. Absent file = as shipped. */
+    { HANDLE pitPriorityFile = CreateFileA(PITPRIO_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (pitPriorityFile != INVALID_HANDLE_VALUE) {
+          CHAR text[8]; DWORD bytesRead = 0;
+          ReadFile(pitPriorityFile, text, sizeof text, &bytesRead, NULL); CloseHandle(pitPriorityFile);
+          if (bytesRead && text[0] >= '0' && text[0] <= '4') {
+              static const INT priorities[5] = { THREAD_PRIORITY_IDLE, THREAD_PRIORITY_BELOW_NORMAL,
+                                          THREAD_PRIORITY_NORMAL, THREAD_PRIORITY_ABOVE_NORMAL,
+                                          THREAD_PRIORITY_HIGHEST };
+              g_PitPacePriority = priorities[text[0] - '0'];
+          }
+      } }
+    { HANDLE pitInjectFile = CreateFileA(PITINJ_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (pitInjectFile != INVALID_HANDLE_VALUE) {
+          CHAR text[8]; DWORD bytesRead = 0;
+          ReadFile(pitInjectFile, text, sizeof text, &bytesRead, NULL); CloseHandle(pitInjectFile);
+          if (bytesRead && (text[0] == '0' || text[0] == '1')) g_PitPaceInject = text[0] - '0';
+      } }
+    /* llkbd.txt = 1 re-enables the system-wide keyboard hook. See InputCaptureSet. */
+    { HANDLE keyHandle = CreateFileA(LLKBD_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              NULL, OPEN_EXISTING, 0, NULL);
+      if (keyHandle != INVALID_HANDLE_VALUE) {
+          CHAR text[8]; DWORD bytesRead = 0;
+          ReadFile(keyHandle, text, sizeof text, &bytesRead, NULL); CloseHandle(keyHandle);
+          if (bytesRead && (text[0] == '0' || text[0] == '1')) g_LowLevelKeyboardOn = text[0] - '0';
+      } }
+    /* courier.txt -- the tick courier (see TickCourierThread). 0 = as shipped. */
+    { HANDLE configHandle = CreateFileA(COURIER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              NULL, OPEN_EXISTING, 0, NULL);
+      if (configHandle != INVALID_HANDLE_VALUE) {
+          CHAR text[8]; DWORD bytesRead = 0;
+          ReadFile(configHandle, text, sizeof text, &bytesRead, NULL); CloseHandle(configHandle);
+          /* 0 = off, 1 = REFUTED (progressive collapse), 2 = gentle. See the thread. */
+          if (bytesRead && text[0] >= '0' && text[0] <= '2') g_CourierOn = text[0] - '0';
+      } }
+    { HANDLE uiTickFile = CreateFileA(UITICK_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (uiTickFile != INVALID_HANDLE_VALUE) {
+          CHAR text[8]; DWORD bytesRead = 0; INT number = 0, index;
+          ReadFile(uiTickFile, text, sizeof text, &bytesRead, NULL); CloseHandle(uiTickFile);
+          for (index = 0; index < (INT)bytesRead; ++index) {
+              if (text[index] < '0' || text[index] > '9') break;
+              number = number * DECIMAL_RADIX + (text[index] - '0');
+          }
+          if (bytesRead && text[0] >= '0' && text[0] <= '9' && number <= UI_TICK_MS_MAX) {
+              g_UiTickMinimumMs = number;
+              SettingsNoteOverride(SET_UITICK, CFG_TEXT(KNOB_FILE_UITICK) SETTINGS_SOURCE_MS, (DWORD)number);
+          }
+      } }
+    /* wowidle.txt -- how long a Win16 task blocked in GetMessage waits. 0 = forever. */
+    { HANDLE wowIdleFile = CreateFileA(WOWIDLE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (wowIdleFile != INVALID_HANDLE_VALUE) {
+          CHAR text[12]; DWORD bytesRead = 0, number = 0; INT index;
+          ReadFile(wowIdleFile, text, sizeof text, &bytesRead, NULL); CloseHandle(wowIdleFile);
+          for (index = 0; index < (INT)bytesRead; ++index) {
+              if (text[index] < '0' || text[index] > '9') break;
+              number = number * DECIMAL_RADIX + (DWORD)(text[index] - '0');
+          }
+          if (bytesRead && text[0] >= '0' && text[0] <= '9') {
+              CHAR wowLine2[160], *wowCursor2 = wowLine2;
+              g_WowMsgWaitMs = number;
+              wowCursor2 = LogPut(wowCursor2, "WOWMSG: GetMessage idle wait = ");
+              if (number) { wowCursor2 = LogHex(wowCursor2, number); wowCursor2 = LogPut(wowCursor2, " ms"); }
+              else     wowCursor2 = LogPut(wowCursor2, "FOREVER (interactive: the guest is waiting "
+                                     "for the user, not stuck)");
+              wowCursor2 = LogPut(wowCursor2, "\r\n"); LogAppend(LOG_PATH, wowLine2, wowCursor2); SerialOut(wowLine2, wowCursor2);
+          }
+      } }
+    /* keyirq.txt -- the knob 5b6a4a6's message promises. It was lost in that session's
+       revert, so the escape hatch documented at the retry site did not actually exist. */
+    { HANDLE keyIrqFile = CreateFileA(KEYIRQ_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (keyIrqFile != INVALID_HANDLE_VALUE) {
+          CHAR text[8]; DWORD bytesRead = 0;
+          ReadFile(keyIrqFile, text, sizeof text, &bytesRead, NULL); CloseHandle(keyIrqFile);
+          /* 0 = never yield, 1 = always (old default), 2 = only while the clock is on
+             schedule. See the yield branch in HostIrqSink. */
+          if (bytesRead && text[0] >= '0' && text[0] <= '3') g_KeyIrqRetry = text[0] - '0';
+      } }
+    /* Mouse feel is per-guest and per-hand, and every test of it costs a play session,
+       so it is a knob from the start: percent, 100 = the device's own counts. */
+    { HANDLE mouseSensitivityFile = CreateFileA(MSENS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (mouseSensitivityFile != INVALID_HANDLE_VALUE) {
+          CHAR text[8]; DWORD bytesRead = 0; INT value2 = 0, index2;
+          ReadFile(mouseSensitivityFile, text, sizeof text, &bytesRead, NULL); CloseHandle(mouseSensitivityFile);
+          for (index2 = 0; index2 < (INT)bytesRead; ++index2) { if (text[index2] < '0' || text[index2] > '9') break;
+                                          value2 = value2 * DECIMAL_RADIX + (text[index2] - '0'); }
+          if (value2 >= MOUSE_SENSITIVITY_MIN && value2 <= MOUSE_SENSITIVITY_MAX) {
+              g_MouseSensitivity = value2;
+              SettingsNoteOverride(SET_MSENS, CFG_TEXT(KNOB_FILE_MSENS), (DWORD)value2);
+          }
+      } }
+    /* ── GH #56: the calibration and a one-run speed override, both from the share.
+         ⚠ THESE RUN BEFORE CpuSpeedRecompute() BELOW, which is the whole point: the
+           duty is computed once from whatever the registry and these two agree on,
+           and re-computed only when the setting changes. Reading them after would
+           leave the thread running on the registry's answer for the whole session,
+           which is exactly the shape of a knob that silently does nothing. */
+    { HANDLE cpuReferenceFile = CreateFileA(CPUREF_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (cpuReferenceFile != INVALID_HANDLE_VALUE) {
+          CHAR text[12]; DWORD bytesRead = 0; UINT sbValue = 0; INT index2;
+          ReadFile(cpuReferenceFile, text, sizeof text, &bytesRead, NULL); CloseHandle(cpuReferenceFile);
+          for (index2 = 0; index2 < (INT)bytesRead; ++index2) { if (text[index2] < '0' || text[index2] > '9') break;
+                                          sbValue = sbValue * DECIMAL_RADIX_U + (UINT)(text[index2] - '0'); }
+          if (sbValue >= CPU_REFERENCE_MHZ_MIN_U && sbValue <= CPU_REFERENCE_MHZ_MAX_U) g_CpuSpeedReferenceMhz = sbValue;
+      } }
+    StartupLoadCpuSpeedKnob();
+    /* ── THE GRANULARITY SLIDER AS A FILE KNOB. cpugran.txt = target period in ms,
+         0 or absent = AUTO (measure the suspend round trip and pick the finest
+         period this box can sustain). See the long note in cpuspeed.h -- this is
+         the lever that decides whether a slow setting is playable or a slideshow,
+         and it is a file knob first so the sweep can find the right default without
+         a rebuild per value. */
+    { HANDLE cpuGranularityFile = CreateFileA(CPUGRAN_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (cpuGranularityFile != INVALID_HANDLE_VALUE) {
+          CHAR text[12]; DWORD bytesRead = 0; UINT valueG = 0; INT indexG;
+          ReadFile(cpuGranularityFile, text, sizeof text, &bytesRead, NULL); CloseHandle(cpuGranularityFile);
+          for (indexG = 0; indexG < (INT)bytesRead; ++indexG) { if (text[indexG] < '0' || text[indexG] > '9') break;
+                                             valueG = valueG * DECIMAL_RADIX_U + (UINT)(text[indexG] - '0'); }
+          if (indexG > 0 && valueG <= CPUSPEED_GRAN_MAX_MS) g_CpuSpeedGranularityMs = valueG;
+      } }
+    /* cpuaff.txt = 1 -> give the guest a core of its own. See CpuAffinityApply. */
+    { HANDLE cpuAffinityFile = CreateFileA(CPUAFF_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+      if (cpuAffinityFile != INVALID_HANDLE_VALUE) {
+          CHAR text[8]; DWORD bytesRead = 0;
+          ReadFile(cpuAffinityFile, text, sizeof text, &bytesRead, NULL); CloseHandle(cpuAffinityFile);
+          if (bytesRead && (text[0] == '0' || text[0] == '1')) g_CpuAffinityOn = (text[0] == '1');
+      } }
+}
+
+
+/* Put the machine on the bus: the host lock; the PIC and the PIT with its clock hooks; CMOS, FDC, IDE and video; the system font; the keyboard; the serial ports, declared in the BIOS data area, which is then initialised; NetBIOS, the speaker, the gameport, DMA, OPL, Sound Blaster, MPU-401, GUS and AWE32; the WOW callbacks; then the mixer, which also drives the SB's DMA. */
+static PSTR StartupAttachDevices(PSTR cursor)
+{
+    /* Stand up the device bus (NULL base => absolute V86 addresses) with the PIT
+       (ports 0x40-0x43, INT 08h/1Ah) and the video VDD (B8000 + INT 10h text +
+       cell renderer). The present sink is DirectDraw via present_ddraw on the UI
+       thread. I/O on claimed ports reflects as event 0 -> the bus; INT 10h comes
+       in as a BOP routed below; DOS console output is routed via m.conout. */
+    InitializeCriticalSection(&g_Lock);
+    InitializeCriticalSection(&g_PitCs);       /* the crystal's own lock; see its decl */
+    g_Pit.Guard = HostPitGuard;               /* port handlers serialize with the pacer */
+    g_Pit.GuardContext = NULL;
+    g_Pit.RtcNow = HostRtcNow;               /* INT 1Ah AH=02h/04h -- see the hook */
+    g_Pit.RtcContext = NULL;
+    g_Pit.RtcSet = HostRtcSet;               /* INT 1Ah AH=03h/05h -- the VDM's RTC (#250) */
+    g_Pit.TicksSet = HostTicksSet;           /* INT 1Ah AH=01h -> DOS's clock (#262) */
+    g_DosTickTake = HostTickTake;           /* a raw 006C store -> DOS's clock (#262 B) */
+    QueryPerformanceFrequency(&g_QpcFrequency);      /* seeds QpcMicroseconds for the lock instrument */
+    HostKeyTypematicInitialize();              /* typematic from XP's setting, not a guess */
+    VddBusInitialize(&g_Bus, NULL);
+    VddBusSetSinks(&g_Bus, HostIrqSink, NULL, NULL, NULL);  /* host presents directly */
+    g_PicDevice = VddPicDevice(&g_Pic);      /* before the PIT: it gates every IRQ */
+
+    VddBusAdd(&g_Bus, &g_PicDevice);
+    g_PitDevice = VddPitDevice(&g_Pit);
+    VddBusAdd(&g_Bus, &g_PitDevice);
+    /* ── ★ 0040:006C IS TICKS SINCE MIDNIGHT, SO SET IT TO THAT. (GH #253) ──
+         POST does this from the RTC; nothing here did, so every launch began at
+         00:00:00 by the BIOS's clock while INT 1Ah AH=02h read the real time. Seeded
+         from the SAME hook AH=02h answers from (HostRtcNow), after the PIT is on
+         the bus and before anything can take IRQ0. See VddPitSeedTimeOfDay. */
+    VddPitSeedTimeOfDay(&g_Pit);
+    /* ── THE RTC/CMOS TAKES THE SAME CLOCK INT 1Ah DOES. ─────────────────────
+         Registers 00h-09h and INT 1Ah AH=02h/04h are two doors onto ONE clock,
+         and a guest may use either -- so they are given the same hook and their
+         agreement is structural rather than something to keep in step by hand.
+         The same principle as A20's three doors; p_rtc.asm's rtc.agree.hours is
+         the case that checks it, and it read 0000 against 0101 on all three
+         oracles before this device existed. */
+    g_Cmos.RtcNow = HostRtcNow;
+    g_Cmos.RtcContext = NULL;
+    g_Cmos.RtcSet = HostRtcSet;              /* GH #261: CMOS 00h-09h + 32h writes */
+    g_WowWinCtlColor  = WowControlColour;              /* s89: WM_CTLCOLOR via the nested run */
+    g_WowUserSend16    = WowSend16Now;            /* s89 #305: WM_DESTROY sent, not posted */
+    g_WowWinSend16    = WowSend16Now;            /* s89 #300: WM_H/VSCROLL sent from the tracking loop */
+    g_WowUserCall16    = WowCall16Sync;           /* s91 #308: a subclassed control's messages */
+    g_WowWinOwnerDraw = WowOwnerDraw;             /* s89 #302: owner-draw via the nested run */
+    g_WowWinGlobal16  = ShimGlobal16;             /* s92 #305 M12: a Win16 HDROP is a krnl386 block */
+    g_WowUserSend16Blob   = WowSend16Blob;           /* s89 #302: WM_CREATE to template controls */
+    g_WowWinSend16Blob   = WowSend16Blob;           /* s91 #305 M9: WM_GETMINMAXINFO */
+    g_Cmos.BaseKb = (WORD)(BiosBaseKbOfTop(g_DosMemoryTop) + BIOS_EBDA_KB);  /* #136 */
+    g_CmosDevice = VddCmosDevice(&g_Cmos);
+    VddBusAdd(&g_Bus, &g_CmosDevice);           /* MC146818: ports 0x70/0x71    */
+    /* ── THE FLOPPY CONTROLLER, WHOSE ABSENCE WAS A HANG. ────────────────────
+         3F0h-3F7h were claimed by nothing, so the Main Status Register read FFh
+         -- RQM=1 with DIO=1 -- and the datasheet's own command-write loop
+         (`and al,0C0h / cmp al,80h / jne`) never matched and never exited.
+         MEASURED on the rig before this existed: fdc.cmdwait = 01C0 here against
+         0080 on 6.22/QEMU and on PCem's real AMI BIOS alike. Same shape as the
+         MC146818's UIP bit two devices above. IRQ6 stays dormant unless a guest
+         both gates it through DOR bit 3 and unmasks it at the PIC, which starts
+         at 0xFC. See src/vdd/vdd_fdc.h. */
+    g_FdcDevice = VddFdcDevice(&g_Fdc);
+    VddBusAdd(&g_Bus, &g_FdcDevice);            /* 82077AA: 3F2h-3F5h, 3F7h     */
+    /* ── THE IDE ADAPTER, FITTED, BOTH CHANNELS EMPTY. (GH #179) ─────────────
+         Same shape as the FDC above, one surface later: nothing claimed 1F0h-1F7h
+         or 3F6h, FFh there is BSY=1, and the ATA's own "wait until BSY clears"
+         never exited. An adapter with no drives reads 00h everywhere (DD7 pulled
+         down by the ATA document; DD6:0 a recorded choice) and latches nothing,
+         so a detection routine finds the controller, finds no device, and moves
+         on. See src/vdd/vdd_ide.h for why 00h and not 7Fh. */
+    g_IdeDevice = VddIdeDevice(&g_Ide);
+    VddBusAdd(&g_Bus, &g_IdeDevice);            /* ATA: 1F0h-1F7h, 3F6h, 170h-177h, 376h-377h */
+    /* ...and the BIOS says the same thing: 0040:0075, the number of fixed disks a
+       program reads before it calls INT 13h DL=80h, is WRITTEN 0 rather than left
+       to whatever the page held (docs/inventory/bda.md 3). One fact, three doors:
+       the BDA, INT 13h, and the adapter's empty channels. */
+    *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_FIXED_DISK_COUNT) = 0;
+    g_Video.VideoMemory = (BYTE *)VIDEO_APERTURE_BASE;  /* the mapped A0000 aperture (RAM) */
+    /* (per-plane backing is taken later, once the preamble is on disk -- every
+       LogWrite() before that point TRUNCATES the file and would eat its report.) */
+    g_Video.TimeUs = HostTimeMicroseconds;               /* real CRT timebase for 0x3DA (#55) */
+    g_Video.PresentHook = HostPresentHook;     /* Auto: the guest's frame raises the present (s73) */
+    /* Opt-in only: the ring costs two stores on the hottest path in the program and
+       the dump does file I/O under g_Lock. See the note in vdd_video.h. */
+    g_Video.IsPort3DaRingOn =
+        (GetFileAttributesA(PITLATCH_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_Video.GuestPc = HostGuestPc;             /* so a VRAM watchpoint names a routine */
+    g_Video.BiosData = (BYTE *)BIOS_BDA_BASE;               /* the display's BDA fields (0449..0489) */
+    g_VideoDevice = VddVideoDevice(&g_Video);
+    VddBusAdd(&g_Bus, &g_VideoDevice);
+    StartupLoadVideoWatch();
+    /* AFTER the video VDD is on the bus (it needs st->bus to resolve a guest address). */
+    /* #322: no font data ships -- the tables come from the system's fonts. Into the
+       report buffer: a LogAppend here would be erased when the report is rewritten. */
+    /* #321: the TextFont setting is laid over the default; g_Settings is loaded by now. */
+    cursor = LogPut(cursor, "STAGE1: ");
+    cursor = LogPut(cursor, SysFontBuild(g_Settings.Strings[SET_STR_TEXTFONT], &g_SysFontReport));
+    cursor = LogPut(cursor, "\r\n");
+    if (SysFontIsDefaultDegraded(&g_SysFontReport))
+        cursor = LogPut(cursor, "STAGE1: sysfont: THE DEFAULT IS DEGRADED -- a code page 437 font file "
+                    "is missing, so box drawing may show accented letters (#321)\r\n");
+    lstrcpynA(g_TextFontLive, g_Settings.Strings[SET_STR_TEXTFONT], sizeof g_TextFontLive);
+    VddVideoInstallFonts(&g_Video);            /* real glyph data behind INT 10h 1130h */
+    /* The BIOS keyboard buffer belongs to the guest: point the VDD at 0040:0000 BEFORE the
+       bus resets it, so the ring pointers it initialises land in guest memory where a DOS
+       program reading 0040:001A can see them. V86 low memory is mapped in our address
+       space, so the BDA is addressable directly. */
+    g_Input.BiosData = (BYTE *)BIOS_BDA_BASE;
+    g_Input.TimeMicroseconds = HostTimeMicroseconds;                /* the keyboard's transfer time is real time */
+    g_InputDevice = VddInputDevice(&g_Input);
+    VddBusAdd(&g_Bus, &g_InputDevice);             /* keyboard: claims INT 16h      */
+    /* ── ★★ THE BDA's PORT BASE-ADDRESS TABLE, WHICH WE HAD LEFT AT ZERO. (GH #128) ──
+         0040:0000..0007 are the COM1..COM4 I/O bases and 0040:0008..000F the LPT1..LPT4
+         bases. Nothing ever wrote them, so every one read as 0 -- while our INT 11h
+         equipment word (0x4021) says bits 14-15 = 01 = ONE PARALLEL PORT. Our own BIOS
+         was contradicting itself: a port declared present in the equipment word whose
+         base address is 0.
+       ★ THAT INCONSISTENCY IS WHY COMM.DRV FAILS TO LOAD, measured end to end this
+         session. Its LibMain returns the word at 0040:0008 -- the LPT1 base address,
+         read through the BDA selector (`__0040H`) -- as its result. Zero means "DLL
+         initialisation failed"
+         (documented LibMain contract), LoadModule returns 0, and the boot dies with "NTVDM
+         KERNEL: Missing 16-bit system module
+         ... COMM.DRV". Five drivers whose LibMain returns 1 load; this one does not.
+       ⚠ SO WRITE ONLY WHAT THE EQUIPMENT WORD ALREADY CLAIMS -- one parallel port at
+         the standard LPT1 base, and NO serial ports. Filling in COM1..COM4 as well
+         would be inventing hardware nothing answers for, which is the "runs but lies"
+         class this project treats as its most expensive kind of bug. The equipment
+         word is the declaration; this table just stops disagreeing with it.
+       ⚠ AFTER the input VDD is on the bus: it initialises the keyboard ring through
+         the same 0040:0000 pointer, and doing this first would be overwritten. */
+    /* ── ★★★ AND NOW THERE ARE SERIAL PORTS, SO SAY SO. (GH #9, session 56) ──
+         The note above is right that filling in COM1..COM4 while nothing
+         answered for them would be inventing hardware -- that was the correct
+         call when there was no UART. There is one now: vdd_comm.c claims
+         0x3F8..0x3FF and 0x2F8..0x2FF and answers every register, including the
+         local-loopback self-test every serial driver runs before it believes a
+         port exists. So the declaration is no longer a lie -- and the equipment
+         word is updated in the same breath, because the whole point of the
+         original note is that the two must not disagree. */
+    { INT callbackIndex;
+      for (callbackIndex = 0; callbackIndex < COMM_MAX_PORTS; ++callbackIndex) {
+          g_ComSpool[callbackIndex] = INVALID_HANDLE_VALUE; g_ComFailed[callbackIndex] = 0; }
+      g_Comm.Ports[0].BasePort = COMM_COM1_BASE; g_Comm.Ports[0].Irq = COMM_COM1_IRQ; g_Comm.Ports[0].IsFitted = 1;
+      g_Comm.Ports[1].BasePort = COMM_COM2_BASE; g_Comm.Ports[1].Irq = COMM_COM2_IRQ; g_Comm.Ports[1].IsFitted = 1;
+      /* #245 (s90): COM3 AND COM4 ARE FITTED BECAUSE STOCK DECLARES THEM. Measured
+         with tests/probes/dos/p_com34 under XP's own NTVDM on the rig: INT 11h
+         AX=C823 (FOUR serial ports, bits 9-11) and BDA 0040:0000 = 03F8 02F8 03E8
+         02E8. The question #181 left open is answered by the oracle that defines
+         "ntvdm superset", and the device has had the slots since s85. */
+      g_Comm.Ports[2].BasePort = COMM_COM3_BASE; g_Comm.Ports[2].Irq = COMM_COM1_IRQ; g_Comm.Ports[2].IsFitted = 1;
+      g_Comm.Ports[3].BasePort = COMM_COM4_BASE; g_Comm.Ports[3].Irq = COMM_COM2_IRQ; g_Comm.Ports[3].IsFitted = 1;
+      g_Comm.Printers[0].BasePort = LPT_DEFAULT_BASE; g_Comm.Printers[0].IsFitted = 1;   /* LPT1 data/strobe */
+      g_Comm.Sink = ComTransmitSink; g_Comm.SinkContext = NULL;
+      g_Comm.PrinterSink = LptTransmitSink; g_Comm.PrinterSinkContext = NULL;
+      g_CommDevice = VddCommDevice(&g_Comm);
+      VddBusAdd(&g_Bus, &g_CommDevice); }        /* 8250/16550A + INT 14h        */
+    VddNetBiosSetBackend(&g_Net, NetSubmit, NULL);
+    g_NetDevice = VddNetBiosDevice(&g_Net);
+    VddBusAdd(&g_Bus, &g_NetDevice);             /* GH #8: NetBIOS, INT 5Ch       */
+    { volatile WORD *biosDataArea = (volatile WORD *)(ULONG_PTR)BIOS_BDA_BASE;
+      /* Declare exactly what the VDD actually CLAIMED. A port whose claim was
+         refused for want of a bus table slot is not fitted, and writing its base
+         here anyway would recreate the very inconsistency this block exists to
+         fix, one layer down. */
+      /* ── ★ ONE LOOP OVER THE VDD'S SLOTS, NOT FOUR LITERALS. (GH #181) ──
+           The table has room for COM1..COM4 and the VDD now has four slots,
+           so the row for each comes from the slot's own base and fitted flag
+           -- the same source BiosEquipmentWord() counts. COM3/COM4 are not
+           fitted above (that is an oracle question: whether a period machine
+           of the kind we model declares four ports, #181), so they still read
+           0 here; the point is that fitting one is now a single line above
+           and this table and INT 11h follow it without being edited. */
+      { INT callbackIndex;
+        for (callbackIndex = 0; callbackIndex < BIOS_BDA_COM_PORTS; ++callbackIndex)
+            biosDataArea[callbackIndex] = (WORD)(VddCommIsFitted(&g_Comm, callbackIndex) ? g_Comm.Ports[callbackIndex].BasePort : 0); }
+      biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE] = (WORD)(VddLptIsFitted(&g_Comm, 0) ? LPT_DEFAULT_BASE : 0);   /* LPT1          */
+      biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE + 1] = 0; biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE + 2] = 0; }                         /* LPT2..LPT3: none fitted   */
+    /* ── ★★ 000E, 0010, 0013 AND THE EBDA, FROM THE FUNCTIONS INT 11h/12h CALL. (#253)
+         0040:000E is LPT4 on a PC and the EBDA segment on an AT and later; this block
+         used to zero it as "LPT4: none", which on an AT reads as "no EBDA" -- while
+         INT 12h said 639 KB, i.e. that one exists. bios_bda.h settles it: there is a
+         1 KB EBDA at 9FC0h, and 000E, INT 15h C1h and the C0h table all say so.
+         0010 and 0013 were never written at all; they now hold BiosEquipmentWord()
+         and BIOS_BASE_MEM_KB, the same expressions INT 11h and INT 12h return, so a
+         guest that reads the BDA and one that calls the interrupt see one machine.
+       ⚠ AFTER the COM/LPT slots are fitted (the word counts them) and after
+         SettingsApply() has set the joystick type (bit 12). g_BdaReady lets a later
+         settings change re-write 0010 -- see BiosBdaRefreshEquipment. */
+    BiosBdaInitializeWithTop(NULL, BiosEquipmentWord(), g_DosMemoryTop);   /* #136 */
+    g_BdaReady = 1;
+    g_Speaker.Pit = &g_Pit;                         /* speaker tone <- PIT channel 2 */
+    g_SpeakerDevice = VddSpeakerDevice(&g_Speaker);
+    VddBusAdd(&g_Bus, &g_SpeakerDevice);            /* PC speaker: claims port 0x61  */
+    g_Joystick.NowMicroseconds = JoystickNowMicroseconds;
+    g_JoystickDevice = VddJoystickDevice(&g_Joystick);
+    VddBusAdd(&g_Bus, &g_JoystickDevice);            /* gameport: 0x200-0x207         */
+    /* ⛔ THE POLL THREAD IS NOT SPAWNED HERE. See JoystickPollEnsure: it is created
+         ONLY when a joystick is actually configured, so the default play config --
+         which is EVERY game that does not use a gamepad, Skyroads included -- runs
+         with the exact s61 thread landscape and cannot regress on its account. */
+    g_DmaDevice = VddDmaDevice(&g_Dma);
+    VddBusAdd(&g_Bus, &g_DmaDevice);            /* 8237 DMA: 0x00-0x0F/80-8F/C0-DF */
+    g_Opl.IsExternalClock = 1;                        /* exec loop pumps real elapsed us */
+    g_OplDevice = VddOplDevice(&g_Opl);
+    VddBusAdd(&g_Bus, &g_OplDevice);            /* AdLib/OPL2: ports 0x388/0x389 */
+    g_Sb.Dma = &g_Dma; g_Sb.Opl = &g_Opl;       /* SB pulls PCM via DMA, mirrors FM */
+    /* ⚠ THE SAME NUMBERS THAT GO INTO BLASTER (dos_env.h). If these two ever come
+         from different places, a driver is told one port and finds another. */
+    g_Sb.BasePort = g_SbConfig.IoBase; g_Sb.Irq = g_SbConfig.Irq;
+    g_Sb.Dma8 = g_SbConfig.Dma8Channel;
+    if (g_SbConfig.Dma16Channel) g_Sb.Dma16 = g_SbConfig.Dma16Channel;   /* 0 = keep vdd_sb's default */
+    /* Opt-in raw PCM capture -- see SB_STATE.CaptureBuffer. 4 MB is ~3 minutes of Doom's
+       11025 Hz stereo, and it is a static buffer so the audio thread never allocates. */
+    if (GetFileAttributesA(SBDUMP_FLAG) != INVALID_FILE_ATTRIBUTES) {
+        static BYTE sbCapture[4u * 1024u * 1024u];
+        g_Sb.CaptureBuffer = sbCapture; g_Sb.CaptureCapacity = sizeof sbCapture; g_Sb.CaptureLength = 0;
+    }
+    g_SbDevice = VddSbDevice(&g_Sb);
+    VddBusAdd(&g_Bus, &g_SbDevice);             /* Sound Blaster 16: 0x220-0x22F  */
+    g_Mpu.Sink = HostMidiSink;
+    {   static const WORD mpuBases[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };   /* #235 */
+        g_Mpu.BasePort = mpuBases[g_Settings.Values[SET_MPUADDR] <= ARRAYSIZE(mpuBases) - 1 ? g_Settings.Values[SET_MPUADDR] : MPU_DEFAULT_BASE_CHOICE]; }
+    g_MpuDevice = VddMpuDevice(&g_Mpu);
+    VddBusAdd(&g_Bus, &g_MpuDevice);            /* MPU-401 MIDI: 0x330/0x331      */
+    /* The Gravis UltraSound: 240h-24Fh and 340h-347h, IRQ 11, DMA 3 (docs/ref/gus.md).
+       ⚠ THE SAME NUMBERS GO INTO ULTRASND= -- see the environment build. */
+    if (g_GusOn) {                             /* decided at startup: see NOGUS_FLAG's read */
+        g_Gus.Dma = &g_Dma; g_Gus.Dram = g_GusDram;
+        g_GusMidi.Sink = HostMidiSink;            /* #190: the 6850 UART -> the synth */
+        g_Gus.MidiSink = GusMidiToSynth;
+        g_GusDevice = VddGusDevice(&g_Gus);
+        VddBusAdd(&g_Bus, &g_GusDevice);
+    }
+    /* #233: the AWE32's EMU8000 -- at the SB's base + 400h / 800h / C00h (620h, A20h,
+       E20h for a card at 220h), 512 KB of sample DRAM, and BLASTER's E says where. */
+    g_AweOn = (g_Settings.Values[SET_SBMODEL] == SB_MODEL_AWE32);
+    if (g_AweOn) {
+        g_Emu8K.BasePort = (WORD)(g_SbConfig.IoBase + SB_EMU8K_PORT_OFFSET);
+        g_Emu8K.Dram = g_Emu8KDram; g_Emu8K.DramWords = EMU8K_DRAM_WORDS;
+        g_Emu8KDevice = VddEmu8kDevice(&g_Emu8K);
+        VddBusAdd(&g_Bus, &g_Emu8KDevice);
+    }
+    /* ► SAY WHETHER EVERY DEVICE ACTUALLY GOT ON THE BUS. VDD_MAX_PORT_RANGES was 16 and
+         exactly full; adding one range pushed the LAST device added -- the MPU-401 --
+         off, its claim returned -1, nobody looked, and the guest's MIDI port read 0xFF
+         like an empty slot. Doom reset it four times, got nothing, and played no music.
+         A device that cannot get on the bus is not a detail to discover by diffing
+         port traces against a working run. */
+    /* (the bus health line is emitted after the preamble is written -- see below;
+       every LogWrite() before then TRUNCATES the file.) */
+    /* Start the mixer + audio thread. This is also the TRANSPORT: it is what
+       walks the SB's DMA buffer and raises the block-completion IRQ, so it must
+       run even if no sound device opens (AUDIO_WAVE falls back to silent
+       pumping) -- otherwise every SB game hangs on a machine without audio. */
+    VddAudioInitialize(&g_Audio, &g_Opl, &g_Sb, SettingsOutputHz(&g_Settings));
+    VddAudioSetGus(&g_Audio, g_GusOn ? &g_Gus : NULL);
+    VddAudioSetEmu8k(&g_Audio, g_AweOn ? &g_Emu8K : NULL);   /* #233 */
+    SettingsApplyDevices(&g_Settings);   /* master volume, mute, speaker -- the mixer
+                                         zeroes its own struct, so not one line earlier */
+    return cursor;
+}
+
+
+/* Build DOS in conventional memory: load the program, plant the INT 21h and BIOS stubs, fill the IVT, build the environment, the command tail, the MCB chain and the List of Lists, settle the version, plant the country and drive tables, and start XMS and EMS. */
+static VOID StartupBuildDos(PSTR *cursorIo, const DWORD readCount, DOS_IMAGE *image, CHAR *programPathBuffer, CHAR *args, DOS_MACHINE *machine, CHAR *report)
+{
+    PSTR cursor = *cursorIo;
+    volatile BYTE * handlerArea;
+    UINT index;
+    /* If this is a bound linear executable (every DOS/4GW game is one), learn which of
+       its objects are code before it starts asking us for memory to load them into. */
+    DpmiLeLearn(g_FileBuffer, readCount);
+
+    cursor = StartupApplyConventionalKb(cursor, readCount);
+    /* Build the DOS process in conventional memory (base=NULL => absolute V86). */
+    (*image) = DosLoadImage(NULL, g_FileBuffer, readCount, DOS_PSP_SEG);
+
+    static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_INT21, X86_OP_IRET };  /* BOP 0x20 ; iret */
+    static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_VIDEO), X86_OP_IRET }; /* BOP 0x10 ; iret */
+    static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD_SERVICES), X86_OP_IRET }; /* BOP 0x16 ; iret */
+    static const BYTE bop33[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_MOUSE), X86_OP_IRET }; /* BOP 0x33 ; iret */
+    /* INT 08h (timer): tick via BOP, then chain INT 1Ch, then iret. INT 1Ch is a
+       bare iret by default (the user-timer hook a program may repoint). INT 1Ah
+       (BIOS time-of-day) is a plain BOP. */
+    static const BYTE bop08[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_TIMER), X86_OP_INT, VECTOR_USER_TICK, X86_OP_IRET };
+    static const BYTE bop1c[] = { X86_OP_IRET };                           /* iret stub       */
+    /* Default INT 09h = BOP 09 ; IRET. It must CONSUME the scancode, exactly as the BIOS
+       handler does: a bare IRET left the byte in the controller forever, so with the 8042's
+       proper one-byte-at-a-time pacing no further key could ever raise an interrupt (the
+       whole keyboard died after one press). A game that installs its own INT 09h replaces
+       this vector, so its handler still reads port 0x60 itself. */
+    static const BYTE bop09[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD), X86_OP_IRET };
+    static const BYTE bop1a[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_TIME), X86_OP_IRET }; /* BOP 0x1A ; iret */
+    static const BYTE bop2f[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_MULTIPLEX), X86_OP_IRET }; /* INT 2Fh ; iret  */
+    /* XMS API entry: reached by FAR CALL (INT 2Fh AX=4310 hands back ES:BX), so it
+       ends in RETF (0xCB), not IRET. */
+    static const BYTE xmsBopStub[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_XMS_ENTRY, X86_OP_RETF };
+    static const BYTE bop67[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_EMS), X86_OP_IRET }; /* INT 67h ; iret  */
+    static const BYTE emmDeviceName[] = { 'E','M','M','X','X','X','X','0' };  /* EMS device header name */
+    handlerArea = (volatile BYTE *)(DOS_HDLR_SEG << PARAGRAPH_SHIFT);            /* INT 21h BOP handler */
+    for (index = 0; index < sizeof(bop); ++index) handlerArea[DOS_HDLR_INT21_STUB_OFF + index] = bop[index];
+    *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_DOS) = DOS_HDLR_INT21_STUB_OFF;                        /* IVT[0x21].offset    */
+    *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_DOS) = DOS_HDLR_SEG;                  /* IVT[0x21].segment   */
+    handlerArea[DOS_DBCS_OFF] = 0; handlerArea[DOS_DBCS_OFF + 1] = 0;     /* empty DBCS table    */
+    for (index = 0; index < sizeof(bop10); ++index) handlerArea[DOS_HDLR_INT10_STUB_OFF + index] = bop10[index];  /* INT 10h stub */
+    *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_VIDEO) = DOS_HDLR_INT10_STUB_OFF;                        /* IVT[0x10].offset    */
+    *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_VIDEO) = DOS_HDLR_SEG;                  /* IVT[0x10].segment   */
+    for (index = 0; index < sizeof(bop16); ++index) handlerArea[DOS_HDLR_INT16_STUB_OFF + index] = bop16[index];  /* INT 16h stub */
+    *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_KEYBOARD_SERVICES) = DOS_HDLR_INT16_STUB_OFF;                        /* IVT[0x16].offset    */
+    *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_KEYBOARD_SERVICES) = DOS_HDLR_SEG;                  /* IVT[0x16].segment   */
+    for (index = 0; index < sizeof(bop33); ++index) handlerArea[DOS_HDLR_INT33_STUB_OFF + index] = bop33[index];  /* INT 33h stub */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_MOUSE))     = DOS_HDLR_INT33_STUB_OFF;              /* IVT[0x33].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_MOUSE)) = DOS_HDLR_SEG;        /* IVT[0x33].segment   */
+    for (index = 0; index < sizeof(bop08); ++index) handlerArea[DOS_HDLR_INT08_STUB_OFF + index] = bop08[index];  /* INT 08h stub */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TIMER))     = DOS_HDLR_INT08_STUB_OFF;              /* IVT[0x08].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TIMER)) = DOS_HDLR_SEG;        /* IVT[0x08].segment   */
+    for (index = 0; index < sizeof(bop1c); ++index) handlerArea[DOS_HDLR_INT1C_STUB_OFF + index] = bop1c[index];  /* INT 1Ch iret */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_USER_TICK))     = DOS_HDLR_INT1C_STUB_OFF;              /* IVT[0x1C].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_USER_TICK)) = DOS_HDLR_SEG;        /* IVT[0x1C].segment   */
+    for (index = 0; index < sizeof(bop09); ++index) handlerArea[DOS_HDLR_INT09_STUB_OFF + index] = bop09[index];  /* INT 09h default iret (0x4C-0x4F) */
+    /* INT 33h event-handler return: the guest's handler RETFs here (see MouseCallbackTry). */
+    handlerArea[MS_CB_RET_OFF + 0] = VDM_BOP0; handlerArea[MS_CB_RET_OFF + 1] = VDM_BOP1;
+    handlerArea[MS_CB_RET_OFF + VDM_BOP_NUMBER_OFFSET] = MS_CB_BOP; handlerArea[MS_CB_RET_OFF + VDM_BOP_LENGTH] = X86_OP_IRET;
+    /* DEFAULT DEVICE-IRQ HANDLERS. A real BIOS points the unused hardware vectors at a
+       handler that just acknowledges and returns; we had them pointing at whatever junk was
+       in the IVT, which on this box read F000:A390 -- unowned ROM. That was harmless only so
+       long as we could not deliver a device IRQ asynchronously. Now that we can, injecting an
+       IRQ the guest has not hooked jumps it into that junk and hangs it: measured, Skyroads
+       (which never installs a Sound Blaster ISR at all) froze at F000:A390 the moment its DMA
+       block completed. So give IRQ2-7 and IRQ8-15 a plain IRET, exactly as INT 09h has. */
+    handlerArea[DOS_IRET_STUB_OFF] = X86_OP_IRET;                                /* shared IRET stub    */
+    handlerArea[DOS_CASEMAP_OFF]   = X86_OP_RETF;                                /* AH=38h case map: RETF */
+    { volatile BYTE *swappableDataArea = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_SDA_SEG << PARAGRAPH_SHIFT);   /* AH=34h/5D06h */
+      INT item; for (item = 0; item < DOS_SDA_LEN; ++item) swappableDataArea[DOS_SDA_OFF + item] = 0; }
+    for (index = VECTOR_IRQ2; index <= VECTOR_IRQ7; ++index) {
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(index))     = DOS_IRET_STUB_OFF;
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(index)) = DOS_HDLR_SEG;
+    }
+    for (index = VECTOR_IRQ8; index <= VECTOR_IRQ15; ++index) {
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(index))     = DOS_IRET_STUB_OFF;
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(index)) = DOS_HDLR_SEG;
+    }
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_KEYBOARD))     = DOS_HDLR_INT09_STUB_OFF;              /* IVT[0x09].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_KEYBOARD)) = DOS_HDLR_SEG;        /* IVT[0x09].segment   */
+    for (index = 0; index < sizeof(bop1a); ++index) handlerArea[DOS_HDLR_INT1A_STUB_OFF + index] = bop1a[index];  /* INT 1Ah stub */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TIME))     = DOS_HDLR_INT1A_STUB_OFF;              /* IVT[0x1A].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TIME)) = DOS_HDLR_SEG;        /* IVT[0x1A].segment   */
+    for (index = 0; index < sizeof(bop2f); ++index) handlerArea[DOS_HDLR_INT2F_STUB_OFF + index] = bop2f[index];  /* INT 2Fh stub */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_MULTIPLEX))     = DOS_HDLR_INT2F_STUB_OFF;              /* IVT[0x2F].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_MULTIPLEX)) = DOS_HDLR_SEG;        /* IVT[0x2F].segment   */
+    for (index = 0; index < sizeof(xmsBopStub); ++index) handlerArea[XMS_ENTRY_OFF + index] = xmsBopStub[index];  /* XMS far-call entry */
+    /* ⚠ GH #47: a non-zero word at XMS_ENTRY_OFF+0x45 WAS TRIED AND REFUTED.
+       MEM.EXE skips its whole extended-memory report on a zero word at +0x45 of
+       some structure, and that structure looked like the XMS entry. It is not:
+       planting HIMEM's own bytes (EB 50) at the entry changed nothing. Sixth
+       refutation. */
+    for (index = 0; index < sizeof(bop67); ++index) handlerArea[DOS_HDLR_INT67_STUB_OFF + index] = bop67[index];  /* INT 67h (EMM) stub */
+    /* ⚠ NO EMS MEANS NO INT 67h VECTOR AND NO DEVICE NAME. Both halves, because
+         a program detects EMM by either following the vector to the "EMMXXXX0"
+         header OR by opening the device; leaving one of them behind is a manager
+         that half-exists, which is worse for a guest than one that does not. */
+    if (g_EmsOn) {
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_EMS))     = DOS_HDLR_INT67_STUB_OFF;          /* IVT[0x67].offset    */
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_EMS)) = DOS_HDLR_SEG;    /* IVT[0x67].segment   */
+    } else {
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_EMS))     = 0;
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_EMS)) = 0;
+    }
+    /* DPMI mode-switch entry (far-called): BOP 0x50 ; RETF. The host services the
+       BOP by switching to PM; the RETF only executes if the switch fails. */
+    handlerArea[DPMI_ENTRY_OFF + 0] = VDM_BOP0; handlerArea[DPMI_ENTRY_OFF + 1] = VDM_BOP1;
+    handlerArea[DPMI_ENTRY_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_BOP; handlerArea[DPMI_ENTRY_OFF + VDM_BOP_LENGTH] = X86_OP_RETF; /* RETF */
+    /* DPMI 0301 real-mode-call return catcher: BOP 0x54 (no IRET/RETF -- the 0301
+       handler detects it and returns to PM, it never resumes past it). */
+    handlerArea[DPMI_RMRET_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RMRET_OFF + 1] = VDM_BOP1;
+    handlerArea[DPMI_RMRET_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_RMRET_BOP;
+    /* DPMI 0303 real-mode callback entries (one per slot) + the PM-return catcher. */
+    { INT callbackSlot; for (callbackSlot = 0; callbackSlot < DPMI_CB_SLOTS; ++callbackSlot) {
+        WORD entry = DpmiCallbackEntry(DPMI_CB_BASE_OFF, callbackSlot);
+        handlerArea[entry + 0] = VDM_BOP0;
+        handlerArea[entry + 1] = VDM_BOP1;
+        handlerArea[entry + VDM_BOP_NUMBER_OFFSET] = DPMI_CB_BOP;
+    } }
+    handlerArea[DPMI_PMRET_OFF + 0] = VDM_BOP0; handlerArea[DPMI_PMRET_OFF + 1] = VDM_BOP1;
+    handlerArea[DPMI_PMRET_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_PMRET_BOP;
+    /* 0306 raw mode-switch entries. Both are bare BOPs: the host completes the switch
+       by rewriting the CONTEXT, so control never resumes past the BOP and no RETF/IRET
+       tail is wanted (the same shape as DPMI_RMRET_OFF). The protected-to-real entry
+       lives in this segment too and is reached through a code selector based here --
+       see the 0306 handler. */
+    handlerArea[DPMI_RAW2PM_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RAW2PM_OFF + 1] = VDM_BOP1;
+    handlerArea[DPMI_RAW2PM_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_RAW2PM_BOP;
+    handlerArea[DPMI_RAW2RM_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RAW2RM_OFF + 1] = VDM_BOP1;
+    handlerArea[DPMI_RAW2RM_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_RAW2RM_BOP;
+    /* 0305 save/restore: a register-preserving no-op (see the define). */
+    handlerArea[DPMI_SSR_OFF] = X86_OP_RETF;                               /* RETF */
+    /* (GH #18 run 67: the PM-fault handler BOP is planted at the handler CODE selector's
+       DPMI_FAULT_COFF by DpmiInstallFaultTrampoline(), not here.) */
+    /* EMS detection method 2: programs read the INT 67h vector's segment:000Ah for
+       the device-driver name "EMMXXXX0". Park it in the handler segment. */
+    if (g_EmsOn)
+        for (index = 0; index < sizeof(emmDeviceName); ++index) handlerArea[DOS_EMM_NAME_OFF + index] = emmDeviceName[index];
+
+    StartupPlantBiosStubs();
+
+    /* ── INT 22h / 23h / 24h: REAL VECTORS, SO THE PSP CAN SAVE SOMETHING. (#34) ──
+         Every PSP stores the live copies of these three and restores them at exit.
+         They were whatever the IVT happened to hold, and the PSP fields were zero
+         -- which passes "the saved copy matches the live vector" trivially when
+         both are 0000:0000, so the gap could not be seen from that test alone.
+       ▸ INT 24h returns AL=3, FAIL THE CALL. Real DOS's default lives in
+         COMMAND.COM and prompts Abort/Retry/Ignore/Fail; there is no shell here to
+         prompt with, and of the four answers FAIL is the only one that hands the
+         error back to the program that can report it. IGNORE would corrupt data
+         and RETRY would spin forever. Documented rather than chosen silently.
+       ▸ INT 23h (Ctrl-Break) is a bare IRET: returning with CF clear means
+         "carry on", which is what a host with no shell to return to should do.
+       ▸ INT 22h (terminate address) routes to the same BOP as INT 20h, so a guest
+         that jumps there actually exits instead of falling through the IVT. */
+    {   volatile BYTE *controlBytes = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT);
+        UINT position = DOS_CRIT_STUBS;
+        controlBytes[position+0] = VDM_BOP0; controlBytes[position+1] = VDM_BOP1; controlBytes[position+VDM_BOP_NUMBER_OFFSET] = DOS_BOP_INT20; controlBytes[position+VDM_BOP_LENGTH] = X86_OP_IRET;
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TERMINATE_ADDRESS))     = (WORD)position;              /* INT 22h */
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TERMINATE_ADDRESS)) = DOS_CTAB_SEG;
+        controlBytes[position+DOS_CRIT_STUB_INT23] = X86_OP_IRET;                                          /* INT 23h: IRET */
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CTRL_C))     = (WORD)(position + DOS_CRIT_STUB_INT23);
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CTRL_C)) = DOS_CTAB_SEG;
+        controlBytes[position+DOS_CRIT_STUB_INT24] = X86_OP_MOV_IMM_BYTE_FIRST; controlBytes[position+DOS_CRIT_STUB_INT24+1] = DOS_CRIT_ACTION_FAIL; controlBytes[position+DOS_CRIT_STUB_INT24+2] = X86_OP_IRET;         /* mov al,3 ; iret */
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CRITICAL_ERROR))     = (WORD)(position + DOS_CRIT_STUB_INT24);        /* INT 24h */
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CRITICAL_ERROR)) = DOS_CTAB_SEG;
+        /* #34: the site DOS calls the guest's INT 24h from -- see CriticalRaise. */
+        controlBytes[DOS_CRIT_RAISE + 0] = X86_OP_INT; controlBytes[DOS_CRIT_RAISE + 1] = VECTOR_CRITICAL_ERROR;   /* int 24h  */
+        controlBytes[DOS_CRIT_RETURN + 0] = VDM_BOP0; controlBytes[DOS_CRIT_RETURN + 1] = VDM_BOP1;
+        controlBytes[DOS_CRIT_RETURN + VDM_BOP_NUMBER_OFFSET] = DOS_BOP_INT21;                                 /* bop 20h  */
+    }
+    /* #251: DOS's AUX/PRN driver code, which INT 21h resumes the guest in -- see
+       dos_auxprn.asm for why it is guest code and what it was measured against. */
+    {   volatile BYTE *controlBytes = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT);
+        UINT item;
+        for (item = 0; item < sizeof(g_DosAuxPrnCode); ++item) controlBytes[DOS_AUXPRN_OFF + item] = g_DosAuxPrnCode[item];
+        /* #254: the BIOS INT 09h's side-calls -- see bios_kbdact.asm. */
+        for (item = 0; item < sizeof(g_BiosKeyboardActionCode); ++item) controlBytes[DOS_KBDACT_OFF + item] = g_BiosKeyboardActionCode[item];
+        /* ── #274: INT 05h IS OURS NOW -- THE BIOS PRINT-SCREEN ROUTINE (p5). ─────────────
+             A fresh VDM left IVT[05h] at F000:FF54, a jump deeper into the VDM's own ROM
+             that KeyboardActionEntry refuses to enter (p_ivtkbd), so Print Screen called nothing
+             and a program's own `int 5` went somewhere we cannot vouch for. Every BIOS
+             since the PC has a routine here; ours prints the screen through INT 17h and
+             keeps its status HOST-side -- see PrintScreenBop for why not at 0050:0000. */
+        *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(VECTOR_PRINT_SCREEN))     = (WORD)(DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05);
+        *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(VECTOR_PRINT_SCREEN)) = DOS_CTAB_SEG;
+    }
+
+    /* GH #27 -- THE NULL-VECTOR LANDMINE. A vector left at 0000:0000 sends a guest
+       that INTs it to 0000:0000, where it executes the interrupt vector table
+       itself as code. Point any such vector at the shared IRET stub.
+       MEASURED BEFORE FIXING, and the measurement narrowed the fix: on the
+       bare-metal rig most unclaimed vectors are NOT null -- they carry the VDM's
+       own BIOS entries (INT 13h read F000:5595, INT 11h F000:F84D). Planting over
+       those would swap a working handler for a bare IRET, i.e. a silent
+       "success", which is the very failure mode this issue exists to remove. So
+       fill only the genuinely null ones, and name them in the log. */
+    { INT number, count = 0, start = -1;
+      cursor = LogPut(cursor, "STAGE0: null IVT vectors -> IRET stub:");
+      for (number = 0; number <= IVT_VECTORS; ++number) {                  /* 256 flushes a trailing run */
+          INT isNullVector = (number < IVT_VECTORS) && (*(volatile DWORD *)(IVT_OFFSET_ADDRESS(number)) == 0);
+          if (isNullVector) {
+              *(volatile WORD *)(IVT_OFFSET_ADDRESS(number))     = DOS_IRET_STUB_OFF;
+              *(volatile WORD *)(IVT_SEGMENT_ADDRESS(number)) = DOS_HDLR_SEG;
+              if (start < 0) start = number;
+              ++count;
+          } else if (start >= 0) {                  /* emit as ranges, not 133 items */
+              cursor = LogPut(cursor, " 0x"); cursor = LogHexByte(cursor, (UINT)start);
+              if (number - 1 > start) { cursor = LogPut(cursor, "-0x"); cursor = LogHexByte(cursor, (UINT)(number - 1)); }
+              start = -1;
+          }
+      }
+      if (!count) cursor = LogPut(cursor, " none");
+      cursor = LogPut(cursor, "\r\n"); }
+
+    DosPspBuild(NULL, DOS_PSP_SEG, DOS_ENV_SEG, g_DosMemoryTop);   /* #136 */
+    /* AFTER the vectors above are planted, never before: saving a vector that is
+       still 0000:0000 stores a null the program restores on the way out. Parent
+       PSP = our own, since nothing launched us from inside the VDM. (GH #34) */
+    DosPspSaveVectors(NULL, DOS_PSP_SEG, DOS_PSP_SEG);
+    /* ── ★ EXTRA ENVIRONMENT VARIABLES FROM dosenv.txt. Read here, next to the block
+         being built, so a knob that is absent costs exactly one failed open and the
+         environment is byte-identical to what it has always been. */
+    DsProbeLoad();          /* the #GP fault report's named guest data words */
+    cursor = StartupBuildEnvironment(cursor, programPathBuffer);
+    DosPspBuildCommandTail(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
+    /* ► DUMP THE TAIL AS THE GUEST WILL SEE IT. Passing ANY argument makes DOS/4GW
+         quit before printing a single character, with a DPMI/INT 21h trace identical
+         to a working run for all 617 of its lines -- so the branch it takes is on
+         MEMORY, and this is the memory. Length byte, the bytes, and the terminator. */
+    { volatile BYTE *pspView = (volatile BYTE *)((DWORD)DOS_PSP_SEG << PARAGRAPH_SHIFT);
+      UINT textIndex;
+      cursor = LogPut(cursor, "STAGE2: cmdtail len=0x"); cursor = LogHexByte(cursor, pspView[DOS_PSP_COMMAND_TAIL_LENGTH]);
+      cursor = LogPut(cursor, " [");
+      for (textIndex = 0; textIndex < COMMAND_TAIL_DUMP_BYTES; ++textIndex) { cursor = LogHexByte(cursor, pspView[DOS_PSP_COMMAND_TAIL + textIndex]); cursor = LogPut(cursor, " "); }
+      cursor = LogPut(cursor, "]\r\n"); }
+    StartupBuildMemoryChain(machine, programPathBuffer);
+    /* Published so the Settings dialog can change the reported DOS version while a
+       guest is running -- it is read per INT 21h AH=30h, so it takes effect at the
+       guest's next version check with no restart. */
+    g_DosMachine = machine;
+    DosInt21SetVersion(machine, (BYTE)g_Settings.Values[SET_DOSMAJ], (BYTE)g_Settings.Values[SET_DOSMIN]);
+    /* Two sources, and the second one silently wins -- see the note below the file read. */
+    PCSTR dosVersionSource = "HKCU\\Software\\NTVDMEX (Settings dialog)";
+    /* ── THE REPORTED DOS VERSION IS A KNOB, BECAUSE IT IS A LIE THE GUEST CHOOSES.
+         Real DOS ships SETVER for precisely this, and the number is not a fact about
+         us: it is what a particular guest will accept. We default to 6.22 to match the
+         M9 oracle, and XP's OWN COMMAND.COM refuses that outright -- "Incorrect DOS
+         version", INT 21h AH=00h, terminated before it printed a prompt. NT's DOS has
+         always reported 5.00 and its shell is built to match.
+         `dosver.txt` on the share: "5.0", "6.22", "3.31" -- major.minor decimal. */
+    /* ── ★ AN NTVDM-AWARE SHELL GETS 5.00 WITHOUT ANYONE HAVING TO ASK. (s79) ────────
+         XP's COMMAND.COM accepts only AX = 5 exactly (5.00 -- observed: 6.22 is
+         refused) and prints "Incorrect DOS version" otherwise, so on the default 6.22 a
+         double-click would die before it
+         printed anything. This is not a global policy change: it applies only to a
+         guest we loaded AS THE SHELL that carries NTVDM's own BOPs (see the scan), and
+         `cfg\dosver.txt` below still overrides it. 6.22's COMMAND.COM has no BOPs and
+         is untouched -- it keeps 6.22, which is the version it expects. */
+    /* ⇒ s81 (#208), the user's choice: SETVER, NOT A SESSION-WIDE 5.00. Every program
+         started from Windows now runs UNDER this shell, so forcing the whole session to
+         5.00 would have changed the version every program sees. Only the SHELL'S OWN
+         PROCESS is told 5.00 (DosInt21SetShellPsp); what it runs gets the setting. */
+    if (g_GuestNtAware) {
+        DosInt21SetShellPsp(machine, DOS_PSP_SEG, TRUE);
+        dosVersionSource = "the setting -- the NTVDM-aware shell ITSELF is told 5.00 (per process, SETVER-style)";
+        g_DosVersionShell = 1;
+    } else if (g_GuestNtvdmBops >= NT_AWARE_SHELL_BOPS_MIN && g_TopIsShell) {
+        /* s91: XP's COMMAND.COM launched AS THE PROGRAM -- `command.com /c prog > file`
+             from cmd.exe, or a user typing `command` there. It is not "the shell we
+             chose", so the rule above did not apply, and on the default 6.22 it said
+             "Incorrect DOS version" and quit where stock runs it (launch matrix row 5,
+             runs/s91/chain18b). Same image test and same per-process 5.00 as the
+             EXEC path gives a second XP shell; the name check is the second factor
+             that keeps an innocent guest from being told DOS 5. */
+        DosInt21SetShellPsp(machine, DOS_PSP_SEG, TRUE);
+        dosVersionSource = "the setting -- XP's COMMAND.COM run as the program is told 5.00 (per process, SETVER-style)";
+        g_DosVersionShell = 1;
+    }
+    dosVersionSource = StartupLoadDosVersionKnob(dosVersionSource, machine);
+    /* ── ★ SAY WHICH VERSION IS IN FORCE, AND WHERE IT CAME FROM. EVERY RUN. ──────
+         This printed a line ONLY when `dosver.txt` overrode, so the persistent source
+         -- HKCU\Software\NTVDMEX\DosVersionMajor/Minor, written by the Settings dialog
+         -- was completely silent. The rig was found reporting **5.00 to every DOS
+         guest** from that registry value, with no `dosver.txt` anywhere, on a project
+         whose entire parity method diffs against a 6.22 oracle (`p_ver.com`:
+         `int21.30 AX=0005`). Deleting the file, which is what every note about this
+         knob says to do afterwards, does NOT restore the default -- and nothing
+         anywhere reported the discrepancy.
+       ⚠ The standing rule this breaks is "a status line nobody reads is not a check";
+         this was worse, because there was no line at all. Unconditional now, and it
+         names the SOURCE, because the number alone would not have caught it either.
+       ⚠ DECIMAL, and it took a wrong reading to notice. The first cut used zhexb and
+         printed "6.22" as **06.16**, which a human reads as version 6.16 -- a number in
+         the wrong units is not a measurement, and this line exists precisely so nobody
+         has to decode it. Minor is zero-padded to two digits: "6.2" and "6.20" are
+         different DOS versions. */
+    cursor = LogPut(cursor, "STAGE2: DOS version reported = ");
+    cursor = LogDecimal(cursor, machine->VersionMajor); cursor = LogPut(cursor, ".");
+    if (machine->VersionMinor < 10) cursor = LogPut(cursor, "0");
+    cursor = LogDecimal(cursor, machine->VersionMinor);
+    cursor = LogPut(cursor, " (source: "); cursor = LogPut(cursor, dosVersionSource); cursor = LogPut(cursor, ")\r\n");
+    cursor = StartupConfigureAh53Answers(cursor);
+    StartupPlantCountryTables();
+    /* GH #35: plant SysVars for INT 21h AH=52h. Most fields are deliberately
+       left zero -- see the handler for why a null stub beats a plausible-looking
+       one. Only fields with a caller that demonstrably reads them are filled:
+         BX-2   the first MCB segment (GH #35)
+         +0x21  LASTDRIVE -- krnl386 takes a pointer to this byte through the
+                SysVars+0x6A table below, so zero here means it believes there
+                are no drives at all.
+       ★ s81: SysVars has its OWN segment now (DOS_SYSVARS_SEG, see dos_layout.h), so
+         the whole of it is ours to clear -- the old "+0x40 only, the SDA follows"
+         limit was a symptom of it sharing DOS_HDLR_SEG. */
+    volatile BYTE *sysVars = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_SYSVARS_SEG << PARAGRAPH_SHIFT);
+    { INT item; for (item = DOS_SYSVARS_MCB_HEAD; item < DOS_SYSVARS_LEN; ++item) sysVars[DOS_SYSVARS_OFF + item] = 0; }
+    *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_MCB_HEAD) = machine->FirstMcb;
+    /* ⚠⚠ SysVars+0x66 = "first MCB in upper memory" (= absolute SEG:0x008C, which MEM
+         also reads directly -- see DOS_UMBHEAD_OFF). 0xFFFF means "none", the truth
+         on a machine that refuses AH=5803. Zero here is what MEM /C walked as a UMB
+         chain starting at segment 0. SysVars+0x68 holds the first MCB again, as it
+         does on 6.22 and PCem (p_sysvar). */
+    *(volatile WORD *)(sysVars + DOS_UMBHEAD_OFF) = DOS_UMBHEAD_NONE;
+    *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_FIRST_MCB_COPY) = machine->FirstMcb;
+    sysVars[DOS_SYSVARS_OFF + DOS_SYSVARS_BLOCK_DEVICES] = 1;                      /* block devices       */
+    sysVars[DOS_SYSVARS_OFF + DOS_SYSVARS_LASTDRIVE] = DOS_LASTDRIVE;          /* LASTDRIVE           */
+    machine->SysvarsSegment = DOS_SYSVARS_SEG;
+    machine->SysvarsOffset = DOS_SYSVARS_OFF;
+    StartupBuildDriveTables(report, sysVars, machine);
+    /* GH #128: and the WOW extension krnl386 reads before it does anything else. */
+    DosWowPublish(handlerArea, (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT), DOS_DRIVE_C);
+    DosXmsInitialize(&g_Xms, XMS_POOL_KB, XmsHostAllocate, XmsHostFree, NULL);  /* M4: XMS pool */
+    /* ── ★ THE HMA: 64KB-16 AT LINEAR 0x100000, REACHED AS FFFF:0010. (s72) ───────
+         p_xms measured us refusing it TWICE over -- AH=00h answered DX=0 ("no HMA")
+         and AH=01h answered BL=0x90 ("HMA does not exist") -- against an oracle that
+         has one. That is an unimplemented FEATURE, not a wrong number.
+       ▸ In this design a guest linear address IS a host virtual address (every
+         `(seg<<4)+off` deref in this file depends on it), so the HMA is exactly one
+         committed 64KB page range at 0x100000. Whether NT lets us have that address
+         in a VDM process is an empirical question, so it is ASKED and LOGGED rather
+         than assumed: a guest is told DX=1 only if the memory is really there.
+       ▸ No A20 aliasing, and that is a decision already recorded in dos_xms.h: "an
+         NT VDM does not wrap at 1 MB -- the line is effectively always open". We
+         model the A20 FLAG (AH=03h..07h) but not the address wrap. A program that
+         disables A20 and then expects FFFF:0010 to alias 0000:0000 would see the
+         HMA instead; none of the panel does, and inventing a wrap would mean
+         remapping views on every A20 toggle. */
+    /* (the attempt itself is made early, in HmaTry(), and reported in the STAGE0
+       preamble -- ONE buffered flush, which survives the log-handle race that
+       swallowed this line entirely when it was appended separately here.) */
+
+    DosEmsInitialize(&g_Ems, (WORD)(g_EmsFrameLinear >> PARAGRAPH_SHIFT), EMS_POOL_PAGES,
+             (volatile BYTE *)g_EmsFrameLinear,
+             EmsHostAllocate, EmsHostFree, NULL);             /* M4: 8MB EMS pool   */
+    *cursorIo = cursor;
+}
+
 INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR commandLineText, INT showCommand)
 {
     CHAR report[8192]; PSTR cursor = report; PSTR base;
@@ -6434,7 +7573,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     INT wowCommandFromCsrss = 0;         /* s73: the Win16 program came from CSRSS, not target.txt */
     INT wantShell = 0;                 /* s79: our own launcher stub asked for a SHELL (see LAUNCH_STUB_NAME) */
     INT wasShell  = 0;                 /* s79: we actually loaded a shell, not a named program */
-    volatile BYTE *tib, *handlerArea;
+    volatile BYTE *tib;
     DWORD readCount = 0, error = 0; LONG vdmStatus;
     DOS_IMAGE image;
     DOS_MACHINE machine;
@@ -7034,1101 +8173,14 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     /* No flag to raise: the UI tick polls g_ProgramName and repaints the strip when it
        changes. See StatusUpdate. */
 
-    /* If this is a bound linear executable (every DOS/4GW game is one), learn which of
-       its objects are code before it starts asking us for memory to load them into. */
-    DpmiLeLearn(g_FileBuffer, readCount);
+    StartupBuildDos(&cursor, readCount, &image, programPathBuffer, args, &machine, report);
 
-    cursor = StartupApplyConventionalKb(cursor, readCount);
-    /* Build the DOS process in conventional memory (base=NULL => absolute V86). */
-    image = DosLoadImage(NULL, g_FileBuffer, readCount, DOS_PSP_SEG);
+    cursor = StartupAttachDevices(cursor);
+    StartupLoadTuningKnobs();
+    cursor = StartupStartServices(cursor);
+    StartupConnectDosToHost(&machine);
 
-    static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_INT21, X86_OP_IRET };  /* BOP 0x20 ; iret */
-    static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_VIDEO), X86_OP_IRET }; /* BOP 0x10 ; iret */
-    static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD_SERVICES), X86_OP_IRET }; /* BOP 0x16 ; iret */
-    static const BYTE bop33[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_MOUSE), X86_OP_IRET }; /* BOP 0x33 ; iret */
-    /* INT 08h (timer): tick via BOP, then chain INT 1Ch, then iret. INT 1Ch is a
-       bare iret by default (the user-timer hook a program may repoint). INT 1Ah
-       (BIOS time-of-day) is a plain BOP. */
-    static const BYTE bop08[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_TIMER), X86_OP_INT, VECTOR_USER_TICK, X86_OP_IRET };
-    static const BYTE bop1c[] = { X86_OP_IRET };                           /* iret stub       */
-    /* Default INT 09h = BOP 09 ; IRET. It must CONSUME the scancode, exactly as the BIOS
-       handler does: a bare IRET left the byte in the controller forever, so with the 8042's
-       proper one-byte-at-a-time pacing no further key could ever raise an interrupt (the
-       whole keyboard died after one press). A game that installs its own INT 09h replaces
-       this vector, so its handler still reads port 0x60 itself. */
-    static const BYTE bop09[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD), X86_OP_IRET };
-    static const BYTE bop1a[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_TIME), X86_OP_IRET }; /* BOP 0x1A ; iret */
-    static const BYTE bop2f[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_MULTIPLEX), X86_OP_IRET }; /* INT 2Fh ; iret  */
-    /* XMS API entry: reached by FAR CALL (INT 2Fh AX=4310 hands back ES:BX), so it
-       ends in RETF (0xCB), not IRET. */
-    static const BYTE xmsBopStub[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_XMS_ENTRY, X86_OP_RETF };
-    static const BYTE bop67[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_EMS), X86_OP_IRET }; /* INT 67h ; iret  */
-    static const BYTE emmDeviceName[] = { 'E','M','M','X','X','X','X','0' };  /* EMS device header name */
-    handlerArea = (volatile BYTE *)(DOS_HDLR_SEG << PARAGRAPH_SHIFT);            /* INT 21h BOP handler */
-    for (index = 0; index < sizeof(bop); ++index) handlerArea[DOS_HDLR_INT21_STUB_OFF + index] = bop[index];
-    *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_DOS) = DOS_HDLR_INT21_STUB_OFF;                        /* IVT[0x21].offset    */
-    *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_DOS) = DOS_HDLR_SEG;                  /* IVT[0x21].segment   */
-    handlerArea[DOS_DBCS_OFF] = 0; handlerArea[DOS_DBCS_OFF + 1] = 0;     /* empty DBCS table    */
-    for (index = 0; index < sizeof(bop10); ++index) handlerArea[DOS_HDLR_INT10_STUB_OFF + index] = bop10[index];  /* INT 10h stub */
-    *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_VIDEO) = DOS_HDLR_INT10_STUB_OFF;                        /* IVT[0x10].offset    */
-    *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_VIDEO) = DOS_HDLR_SEG;                  /* IVT[0x10].segment   */
-    for (index = 0; index < sizeof(bop16); ++index) handlerArea[DOS_HDLR_INT16_STUB_OFF + index] = bop16[index];  /* INT 16h stub */
-    *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_KEYBOARD_SERVICES) = DOS_HDLR_INT16_STUB_OFF;                        /* IVT[0x16].offset    */
-    *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_KEYBOARD_SERVICES) = DOS_HDLR_SEG;                  /* IVT[0x16].segment   */
-    for (index = 0; index < sizeof(bop33); ++index) handlerArea[DOS_HDLR_INT33_STUB_OFF + index] = bop33[index];  /* INT 33h stub */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_MOUSE))     = DOS_HDLR_INT33_STUB_OFF;              /* IVT[0x33].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_MOUSE)) = DOS_HDLR_SEG;        /* IVT[0x33].segment   */
-    for (index = 0; index < sizeof(bop08); ++index) handlerArea[DOS_HDLR_INT08_STUB_OFF + index] = bop08[index];  /* INT 08h stub */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TIMER))     = DOS_HDLR_INT08_STUB_OFF;              /* IVT[0x08].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TIMER)) = DOS_HDLR_SEG;        /* IVT[0x08].segment   */
-    for (index = 0; index < sizeof(bop1c); ++index) handlerArea[DOS_HDLR_INT1C_STUB_OFF + index] = bop1c[index];  /* INT 1Ch iret */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_USER_TICK))     = DOS_HDLR_INT1C_STUB_OFF;              /* IVT[0x1C].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_USER_TICK)) = DOS_HDLR_SEG;        /* IVT[0x1C].segment   */
-    for (index = 0; index < sizeof(bop09); ++index) handlerArea[DOS_HDLR_INT09_STUB_OFF + index] = bop09[index];  /* INT 09h default iret (0x4C-0x4F) */
-    /* INT 33h event-handler return: the guest's handler RETFs here (see MouseCallbackTry). */
-    handlerArea[MS_CB_RET_OFF + 0] = VDM_BOP0; handlerArea[MS_CB_RET_OFF + 1] = VDM_BOP1;
-    handlerArea[MS_CB_RET_OFF + VDM_BOP_NUMBER_OFFSET] = MS_CB_BOP; handlerArea[MS_CB_RET_OFF + VDM_BOP_LENGTH] = X86_OP_IRET;
-    /* DEFAULT DEVICE-IRQ HANDLERS. A real BIOS points the unused hardware vectors at a
-       handler that just acknowledges and returns; we had them pointing at whatever junk was
-       in the IVT, which on this box read F000:A390 -- unowned ROM. That was harmless only so
-       long as we could not deliver a device IRQ asynchronously. Now that we can, injecting an
-       IRQ the guest has not hooked jumps it into that junk and hangs it: measured, Skyroads
-       (which never installs a Sound Blaster ISR at all) froze at F000:A390 the moment its DMA
-       block completed. So give IRQ2-7 and IRQ8-15 a plain IRET, exactly as INT 09h has. */
-    handlerArea[DOS_IRET_STUB_OFF] = X86_OP_IRET;                                /* shared IRET stub    */
-    handlerArea[DOS_CASEMAP_OFF]   = X86_OP_RETF;                                /* AH=38h case map: RETF */
-    { volatile BYTE *swappableDataArea = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_SDA_SEG << PARAGRAPH_SHIFT);   /* AH=34h/5D06h */
-      INT item; for (item = 0; item < DOS_SDA_LEN; ++item) swappableDataArea[DOS_SDA_OFF + item] = 0; }
-    for (index = VECTOR_IRQ2; index <= VECTOR_IRQ7; ++index) {
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(index))     = DOS_IRET_STUB_OFF;
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(index)) = DOS_HDLR_SEG;
-    }
-    for (index = VECTOR_IRQ8; index <= VECTOR_IRQ15; ++index) {
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(index))     = DOS_IRET_STUB_OFF;
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(index)) = DOS_HDLR_SEG;
-    }
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_KEYBOARD))     = DOS_HDLR_INT09_STUB_OFF;              /* IVT[0x09].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_KEYBOARD)) = DOS_HDLR_SEG;        /* IVT[0x09].segment   */
-    for (index = 0; index < sizeof(bop1a); ++index) handlerArea[DOS_HDLR_INT1A_STUB_OFF + index] = bop1a[index];  /* INT 1Ah stub */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TIME))     = DOS_HDLR_INT1A_STUB_OFF;              /* IVT[0x1A].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TIME)) = DOS_HDLR_SEG;        /* IVT[0x1A].segment   */
-    for (index = 0; index < sizeof(bop2f); ++index) handlerArea[DOS_HDLR_INT2F_STUB_OFF + index] = bop2f[index];  /* INT 2Fh stub */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_MULTIPLEX))     = DOS_HDLR_INT2F_STUB_OFF;              /* IVT[0x2F].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_MULTIPLEX)) = DOS_HDLR_SEG;        /* IVT[0x2F].segment   */
-    for (index = 0; index < sizeof(xmsBopStub); ++index) handlerArea[XMS_ENTRY_OFF + index] = xmsBopStub[index];  /* XMS far-call entry */
-    /* ⚠ GH #47: a non-zero word at XMS_ENTRY_OFF+0x45 WAS TRIED AND REFUTED.
-       MEM.EXE skips its whole extended-memory report on a zero word at +0x45 of
-       some structure, and that structure looked like the XMS entry. It is not:
-       planting HIMEM's own bytes (EB 50) at the entry changed nothing. Sixth
-       refutation. */
-    for (index = 0; index < sizeof(bop67); ++index) handlerArea[DOS_HDLR_INT67_STUB_OFF + index] = bop67[index];  /* INT 67h (EMM) stub */
-    /* ⚠ NO EMS MEANS NO INT 67h VECTOR AND NO DEVICE NAME. Both halves, because
-         a program detects EMM by either following the vector to the "EMMXXXX0"
-         header OR by opening the device; leaving one of them behind is a manager
-         that half-exists, which is worse for a guest than one that does not. */
-    if (g_EmsOn) {
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_EMS))     = DOS_HDLR_INT67_STUB_OFF;          /* IVT[0x67].offset    */
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_EMS)) = DOS_HDLR_SEG;    /* IVT[0x67].segment   */
-    } else {
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_EMS))     = 0;
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_EMS)) = 0;
-    }
-    /* DPMI mode-switch entry (far-called): BOP 0x50 ; RETF. The host services the
-       BOP by switching to PM; the RETF only executes if the switch fails. */
-    handlerArea[DPMI_ENTRY_OFF + 0] = VDM_BOP0; handlerArea[DPMI_ENTRY_OFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_ENTRY_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_BOP; handlerArea[DPMI_ENTRY_OFF + VDM_BOP_LENGTH] = X86_OP_RETF; /* RETF */
-    /* DPMI 0301 real-mode-call return catcher: BOP 0x54 (no IRET/RETF -- the 0301
-       handler detects it and returns to PM, it never resumes past it). */
-    handlerArea[DPMI_RMRET_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RMRET_OFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_RMRET_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_RMRET_BOP;
-    /* DPMI 0303 real-mode callback entries (one per slot) + the PM-return catcher. */
-    { INT callbackSlot; for (callbackSlot = 0; callbackSlot < DPMI_CB_SLOTS; ++callbackSlot) {
-        WORD entry = DpmiCallbackEntry(DPMI_CB_BASE_OFF, callbackSlot);
-        handlerArea[entry + 0] = VDM_BOP0;
-        handlerArea[entry + 1] = VDM_BOP1;
-        handlerArea[entry + VDM_BOP_NUMBER_OFFSET] = DPMI_CB_BOP;
-    } }
-    handlerArea[DPMI_PMRET_OFF + 0] = VDM_BOP0; handlerArea[DPMI_PMRET_OFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_PMRET_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_PMRET_BOP;
-    /* 0306 raw mode-switch entries. Both are bare BOPs: the host completes the switch
-       by rewriting the CONTEXT, so control never resumes past the BOP and no RETF/IRET
-       tail is wanted (the same shape as DPMI_RMRET_OFF). The protected-to-real entry
-       lives in this segment too and is reached through a code selector based here --
-       see the 0306 handler. */
-    handlerArea[DPMI_RAW2PM_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RAW2PM_OFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_RAW2PM_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_RAW2PM_BOP;
-    handlerArea[DPMI_RAW2RM_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RAW2RM_OFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_RAW2RM_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_RAW2RM_BOP;
-    /* 0305 save/restore: a register-preserving no-op (see the define). */
-    handlerArea[DPMI_SSR_OFF] = X86_OP_RETF;                               /* RETF */
-    /* (GH #18 run 67: the PM-fault handler BOP is planted at the handler CODE selector's
-       DPMI_FAULT_COFF by DpmiInstallFaultTrampoline(), not here.) */
-    /* EMS detection method 2: programs read the INT 67h vector's segment:000Ah for
-       the device-driver name "EMMXXXX0". Park it in the handler segment. */
-    if (g_EmsOn)
-        for (index = 0; index < sizeof(emmDeviceName); ++index) handlerArea[DOS_EMM_NAME_OFF + index] = emmDeviceName[index];
-
-    StartupPlantBiosStubs();
-
-    /* ── INT 22h / 23h / 24h: REAL VECTORS, SO THE PSP CAN SAVE SOMETHING. (#34) ──
-         Every PSP stores the live copies of these three and restores them at exit.
-         They were whatever the IVT happened to hold, and the PSP fields were zero
-         -- which passes "the saved copy matches the live vector" trivially when
-         both are 0000:0000, so the gap could not be seen from that test alone.
-       ▸ INT 24h returns AL=3, FAIL THE CALL. Real DOS's default lives in
-         COMMAND.COM and prompts Abort/Retry/Ignore/Fail; there is no shell here to
-         prompt with, and of the four answers FAIL is the only one that hands the
-         error back to the program that can report it. IGNORE would corrupt data
-         and RETRY would spin forever. Documented rather than chosen silently.
-       ▸ INT 23h (Ctrl-Break) is a bare IRET: returning with CF clear means
-         "carry on", which is what a host with no shell to return to should do.
-       ▸ INT 22h (terminate address) routes to the same BOP as INT 20h, so a guest
-         that jumps there actually exits instead of falling through the IVT. */
-    {   volatile BYTE *controlBytes = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT);
-        UINT position = DOS_CRIT_STUBS;
-        controlBytes[position+0] = VDM_BOP0; controlBytes[position+1] = VDM_BOP1; controlBytes[position+VDM_BOP_NUMBER_OFFSET] = DOS_BOP_INT20; controlBytes[position+VDM_BOP_LENGTH] = X86_OP_IRET;
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TERMINATE_ADDRESS))     = (WORD)position;              /* INT 22h */
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TERMINATE_ADDRESS)) = DOS_CTAB_SEG;
-        controlBytes[position+DOS_CRIT_STUB_INT23] = X86_OP_IRET;                                          /* INT 23h: IRET */
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CTRL_C))     = (WORD)(position + DOS_CRIT_STUB_INT23);
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CTRL_C)) = DOS_CTAB_SEG;
-        controlBytes[position+DOS_CRIT_STUB_INT24] = X86_OP_MOV_IMM_BYTE_FIRST; controlBytes[position+DOS_CRIT_STUB_INT24+1] = DOS_CRIT_ACTION_FAIL; controlBytes[position+DOS_CRIT_STUB_INT24+2] = X86_OP_IRET;         /* mov al,3 ; iret */
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CRITICAL_ERROR))     = (WORD)(position + DOS_CRIT_STUB_INT24);        /* INT 24h */
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CRITICAL_ERROR)) = DOS_CTAB_SEG;
-        /* #34: the site DOS calls the guest's INT 24h from -- see CriticalRaise. */
-        controlBytes[DOS_CRIT_RAISE + 0] = X86_OP_INT; controlBytes[DOS_CRIT_RAISE + 1] = VECTOR_CRITICAL_ERROR;   /* int 24h  */
-        controlBytes[DOS_CRIT_RETURN + 0] = VDM_BOP0; controlBytes[DOS_CRIT_RETURN + 1] = VDM_BOP1;
-        controlBytes[DOS_CRIT_RETURN + VDM_BOP_NUMBER_OFFSET] = DOS_BOP_INT21;                                 /* bop 20h  */
-    }
-    /* #251: DOS's AUX/PRN driver code, which INT 21h resumes the guest in -- see
-       dos_auxprn.asm for why it is guest code and what it was measured against. */
-    {   volatile BYTE *controlBytes = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT);
-        UINT item;
-        for (item = 0; item < sizeof(g_DosAuxPrnCode); ++item) controlBytes[DOS_AUXPRN_OFF + item] = g_DosAuxPrnCode[item];
-        /* #254: the BIOS INT 09h's side-calls -- see bios_kbdact.asm. */
-        for (item = 0; item < sizeof(g_BiosKeyboardActionCode); ++item) controlBytes[DOS_KBDACT_OFF + item] = g_BiosKeyboardActionCode[item];
-        /* ── #274: INT 05h IS OURS NOW -- THE BIOS PRINT-SCREEN ROUTINE (p5). ─────────────
-             A fresh VDM left IVT[05h] at F000:FF54, a jump deeper into the VDM's own ROM
-             that KeyboardActionEntry refuses to enter (p_ivtkbd), so Print Screen called nothing
-             and a program's own `int 5` went somewhere we cannot vouch for. Every BIOS
-             since the PC has a routine here; ours prints the screen through INT 17h and
-             keeps its status HOST-side -- see PrintScreenBop for why not at 0050:0000. */
-        *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(VECTOR_PRINT_SCREEN))     = (WORD)(DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05);
-        *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(VECTOR_PRINT_SCREEN)) = DOS_CTAB_SEG;
-    }
-
-    /* GH #27 -- THE NULL-VECTOR LANDMINE. A vector left at 0000:0000 sends a guest
-       that INTs it to 0000:0000, where it executes the interrupt vector table
-       itself as code. Point any such vector at the shared IRET stub.
-       MEASURED BEFORE FIXING, and the measurement narrowed the fix: on the
-       bare-metal rig most unclaimed vectors are NOT null -- they carry the VDM's
-       own BIOS entries (INT 13h read F000:5595, INT 11h F000:F84D). Planting over
-       those would swap a working handler for a bare IRET, i.e. a silent
-       "success", which is the very failure mode this issue exists to remove. So
-       fill only the genuinely null ones, and name them in the log. */
-    { INT number, count = 0, start = -1;
-      cursor = LogPut(cursor, "STAGE0: null IVT vectors -> IRET stub:");
-      for (number = 0; number <= IVT_VECTORS; ++number) {                  /* 256 flushes a trailing run */
-          INT isNullVector = (number < IVT_VECTORS) && (*(volatile DWORD *)(IVT_OFFSET_ADDRESS(number)) == 0);
-          if (isNullVector) {
-              *(volatile WORD *)(IVT_OFFSET_ADDRESS(number))     = DOS_IRET_STUB_OFF;
-              *(volatile WORD *)(IVT_SEGMENT_ADDRESS(number)) = DOS_HDLR_SEG;
-              if (start < 0) start = number;
-              ++count;
-          } else if (start >= 0) {                  /* emit as ranges, not 133 items */
-              cursor = LogPut(cursor, " 0x"); cursor = LogHexByte(cursor, (UINT)start);
-              if (number - 1 > start) { cursor = LogPut(cursor, "-0x"); cursor = LogHexByte(cursor, (UINT)(number - 1)); }
-              start = -1;
-          }
-      }
-      if (!count) cursor = LogPut(cursor, " none");
-      cursor = LogPut(cursor, "\r\n"); }
-
-    DosPspBuild(NULL, DOS_PSP_SEG, DOS_ENV_SEG, g_DosMemoryTop);   /* #136 */
-    /* AFTER the vectors above are planted, never before: saving a vector that is
-       still 0000:0000 stores a null the program restores on the way out. Parent
-       PSP = our own, since nothing launched us from inside the VDM. (GH #34) */
-    DosPspSaveVectors(NULL, DOS_PSP_SEG, DOS_PSP_SEG);
-    /* ── ★ EXTRA ENVIRONMENT VARIABLES FROM dosenv.txt. Read here, next to the block
-         being built, so a knob that is absent costs exactly one failed open and the
-         environment is byte-identical to what it has always been. */
-    DsProbeLoad();          /* the #GP fault report's named guest data words */
-    cursor = StartupBuildEnvironment(cursor, programPathBuffer);
-    DosPspBuildCommandTail(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
-    /* ► DUMP THE TAIL AS THE GUEST WILL SEE IT. Passing ANY argument makes DOS/4GW
-         quit before printing a single character, with a DPMI/INT 21h trace identical
-         to a working run for all 617 of its lines -- so the branch it takes is on
-         MEMORY, and this is the memory. Length byte, the bytes, and the terminator. */
-    { volatile BYTE *pspView = (volatile BYTE *)((DWORD)DOS_PSP_SEG << PARAGRAPH_SHIFT);
-      UINT textIndex;
-      cursor = LogPut(cursor, "STAGE2: cmdtail len=0x"); cursor = LogHexByte(cursor, pspView[DOS_PSP_COMMAND_TAIL_LENGTH]);
-      cursor = LogPut(cursor, " [");
-      for (textIndex = 0; textIndex < COMMAND_TAIL_DUMP_BYTES; ++textIndex) { cursor = LogHexByte(cursor, pspView[DOS_PSP_COMMAND_TAIL + textIndex]); cursor = LogPut(cursor, " "); }
-      cursor = LogPut(cursor, "]\r\n"); }
-    StartupBuildMemoryChain(&machine, programPathBuffer);
-    /* Published so the Settings dialog can change the reported DOS version while a
-       guest is running -- it is read per INT 21h AH=30h, so it takes effect at the
-       guest's next version check with no restart. */
-    g_DosMachine = &machine;
-    DosInt21SetVersion(&machine, (BYTE)g_Settings.Values[SET_DOSMAJ], (BYTE)g_Settings.Values[SET_DOSMIN]);
-    /* Two sources, and the second one silently wins -- see the note below the file read. */
-    PCSTR dosVersionSource = "HKCU\\Software\\NTVDMEX (Settings dialog)";
-    /* ── THE REPORTED DOS VERSION IS A KNOB, BECAUSE IT IS A LIE THE GUEST CHOOSES.
-         Real DOS ships SETVER for precisely this, and the number is not a fact about
-         us: it is what a particular guest will accept. We default to 6.22 to match the
-         M9 oracle, and XP's OWN COMMAND.COM refuses that outright -- "Incorrect DOS
-         version", INT 21h AH=00h, terminated before it printed a prompt. NT's DOS has
-         always reported 5.00 and its shell is built to match.
-         `dosver.txt` on the share: "5.0", "6.22", "3.31" -- major.minor decimal. */
-    /* ── ★ AN NTVDM-AWARE SHELL GETS 5.00 WITHOUT ANYONE HAVING TO ASK. (s79) ────────
-         XP's COMMAND.COM accepts only AX = 5 exactly (5.00 -- observed: 6.22 is
-         refused) and prints "Incorrect DOS version" otherwise, so on the default 6.22 a
-         double-click would die before it
-         printed anything. This is not a global policy change: it applies only to a
-         guest we loaded AS THE SHELL that carries NTVDM's own BOPs (see the scan), and
-         `cfg\dosver.txt` below still overrides it. 6.22's COMMAND.COM has no BOPs and
-         is untouched -- it keeps 6.22, which is the version it expects. */
-    /* ⇒ s81 (#208), the user's choice: SETVER, NOT A SESSION-WIDE 5.00. Every program
-         started from Windows now runs UNDER this shell, so forcing the whole session to
-         5.00 would have changed the version every program sees. Only the SHELL'S OWN
-         PROCESS is told 5.00 (DosInt21SetShellPsp); what it runs gets the setting. */
-    if (g_GuestNtAware) {
-        DosInt21SetShellPsp(&machine, DOS_PSP_SEG, TRUE);
-        dosVersionSource = "the setting -- the NTVDM-aware shell ITSELF is told 5.00 (per process, SETVER-style)";
-        g_DosVersionShell = 1;
-    } else if (g_GuestNtvdmBops >= NT_AWARE_SHELL_BOPS_MIN && g_TopIsShell) {
-        /* s91: XP's COMMAND.COM launched AS THE PROGRAM -- `command.com /c prog > file`
-             from cmd.exe, or a user typing `command` there. It is not "the shell we
-             chose", so the rule above did not apply, and on the default 6.22 it said
-             "Incorrect DOS version" and quit where stock runs it (launch matrix row 5,
-             runs/s91/chain18b). Same image test and same per-process 5.00 as the
-             EXEC path gives a second XP shell; the name check is the second factor
-             that keeps an innocent guest from being told DOS 5. */
-        DosInt21SetShellPsp(&machine, DOS_PSP_SEG, TRUE);
-        dosVersionSource = "the setting -- XP's COMMAND.COM run as the program is told 5.00 (per process, SETVER-style)";
-        g_DosVersionShell = 1;
-    }
-    dosVersionSource = StartupLoadDosVersionKnob(dosVersionSource, &machine);
-    /* ── ★ SAY WHICH VERSION IS IN FORCE, AND WHERE IT CAME FROM. EVERY RUN. ──────
-         This printed a line ONLY when `dosver.txt` overrode, so the persistent source
-         -- HKCU\Software\NTVDMEX\DosVersionMajor/Minor, written by the Settings dialog
-         -- was completely silent. The rig was found reporting **5.00 to every DOS
-         guest** from that registry value, with no `dosver.txt` anywhere, on a project
-         whose entire parity method diffs against a 6.22 oracle (`p_ver.com`:
-         `int21.30 AX=0005`). Deleting the file, which is what every note about this
-         knob says to do afterwards, does NOT restore the default -- and nothing
-         anywhere reported the discrepancy.
-       ⚠ The standing rule this breaks is "a status line nobody reads is not a check";
-         this was worse, because there was no line at all. Unconditional now, and it
-         names the SOURCE, because the number alone would not have caught it either.
-       ⚠ DECIMAL, and it took a wrong reading to notice. The first cut used zhexb and
-         printed "6.22" as **06.16**, which a human reads as version 6.16 -- a number in
-         the wrong units is not a measurement, and this line exists precisely so nobody
-         has to decode it. Minor is zero-padded to two digits: "6.2" and "6.20" are
-         different DOS versions. */
-    cursor = LogPut(cursor, "STAGE2: DOS version reported = ");
-    cursor = LogDecimal(cursor, machine.VersionMajor); cursor = LogPut(cursor, ".");
-    if (machine.VersionMinor < 10) cursor = LogPut(cursor, "0");
-    cursor = LogDecimal(cursor, machine.VersionMinor);
-    cursor = LogPut(cursor, " (source: "); cursor = LogPut(cursor, dosVersionSource); cursor = LogPut(cursor, ")\r\n");
-    cursor = StartupConfigureAh53Answers(cursor);
-    StartupPlantCountryTables();
-    /* GH #35: plant SysVars for INT 21h AH=52h. Most fields are deliberately
-       left zero -- see the handler for why a null stub beats a plausible-looking
-       one. Only fields with a caller that demonstrably reads them are filled:
-         BX-2   the first MCB segment (GH #35)
-         +0x21  LASTDRIVE -- krnl386 takes a pointer to this byte through the
-                SysVars+0x6A table below, so zero here means it believes there
-                are no drives at all.
-       ★ s81: SysVars has its OWN segment now (DOS_SYSVARS_SEG, see dos_layout.h), so
-         the whole of it is ours to clear -- the old "+0x40 only, the SDA follows"
-         limit was a symptom of it sharing DOS_HDLR_SEG. */
-    volatile BYTE *sysVars = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_SYSVARS_SEG << PARAGRAPH_SHIFT);
-    { INT item; for (item = DOS_SYSVARS_MCB_HEAD; item < DOS_SYSVARS_LEN; ++item) sysVars[DOS_SYSVARS_OFF + item] = 0; }
-    *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_MCB_HEAD) = machine.FirstMcb;
-    /* ⚠⚠ SysVars+0x66 = "first MCB in upper memory" (= absolute SEG:0x008C, which MEM
-         also reads directly -- see DOS_UMBHEAD_OFF). 0xFFFF means "none", the truth
-         on a machine that refuses AH=5803. Zero here is what MEM /C walked as a UMB
-         chain starting at segment 0. SysVars+0x68 holds the first MCB again, as it
-         does on 6.22 and PCem (p_sysvar). */
-    *(volatile WORD *)(sysVars + DOS_UMBHEAD_OFF) = DOS_UMBHEAD_NONE;
-    *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_FIRST_MCB_COPY) = machine.FirstMcb;
-    sysVars[DOS_SYSVARS_OFF + DOS_SYSVARS_BLOCK_DEVICES] = 1;                      /* block devices       */
-    sysVars[DOS_SYSVARS_OFF + DOS_SYSVARS_LASTDRIVE] = DOS_LASTDRIVE;          /* LASTDRIVE           */
-    machine.SysvarsSegment = DOS_SYSVARS_SEG;
-    machine.SysvarsOffset = DOS_SYSVARS_OFF;
-    StartupBuildDriveTables(report, sysVars, &machine);
-    /* GH #128: and the WOW extension krnl386 reads before it does anything else. */
-    DosWowPublish(handlerArea, (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT), DOS_DRIVE_C);
-    DosXmsInitialize(&g_Xms, XMS_POOL_KB, XmsHostAllocate, XmsHostFree, NULL);  /* M4: XMS pool */
-    /* ── ★ THE HMA: 64KB-16 AT LINEAR 0x100000, REACHED AS FFFF:0010. (s72) ───────
-         p_xms measured us refusing it TWICE over -- AH=00h answered DX=0 ("no HMA")
-         and AH=01h answered BL=0x90 ("HMA does not exist") -- against an oracle that
-         has one. That is an unimplemented FEATURE, not a wrong number.
-       ▸ In this design a guest linear address IS a host virtual address (every
-         `(seg<<4)+off` deref in this file depends on it), so the HMA is exactly one
-         committed 64KB page range at 0x100000. Whether NT lets us have that address
-         in a VDM process is an empirical question, so it is ASKED and LOGGED rather
-         than assumed: a guest is told DX=1 only if the memory is really there.
-       ▸ No A20 aliasing, and that is a decision already recorded in dos_xms.h: "an
-         NT VDM does not wrap at 1 MB -- the line is effectively always open". We
-         model the A20 FLAG (AH=03h..07h) but not the address wrap. A program that
-         disables A20 and then expects FFFF:0010 to alias 0000:0000 would see the
-         HMA instead; none of the panel does, and inventing a wrap would mean
-         remapping views on every A20 toggle. */
-    /* (the attempt itself is made early, in HmaTry(), and reported in the STAGE0
-       preamble -- ONE buffered flush, which survives the log-handle race that
-       swallowed this line entirely when it was appended separately here.) */
-
-    DosEmsInitialize(&g_Ems, (WORD)(g_EmsFrameLinear >> PARAGRAPH_SHIFT), EMS_POOL_PAGES,
-             (volatile BYTE *)g_EmsFrameLinear,
-             EmsHostAllocate, EmsHostFree, NULL);             /* M4: 8MB EMS pool   */
-
-    /* Stand up the device bus (NULL base => absolute V86 addresses) with the PIT
-       (ports 0x40-0x43, INT 08h/1Ah) and the video VDD (B8000 + INT 10h text +
-       cell renderer). The present sink is DirectDraw via present_ddraw on the UI
-       thread. I/O on claimed ports reflects as event 0 -> the bus; INT 10h comes
-       in as a BOP routed below; DOS console output is routed via m.conout. */
-    InitializeCriticalSection(&g_Lock);
-    InitializeCriticalSection(&g_PitCs);       /* the crystal's own lock; see its decl */
-    g_Pit.Guard = HostPitGuard;               /* port handlers serialize with the pacer */
-    g_Pit.GuardContext = NULL;
-    g_Pit.RtcNow = HostRtcNow;               /* INT 1Ah AH=02h/04h -- see the hook */
-    g_Pit.RtcContext = NULL;
-    g_Pit.RtcSet = HostRtcSet;               /* INT 1Ah AH=03h/05h -- the VDM's RTC (#250) */
-    g_Pit.TicksSet = HostTicksSet;           /* INT 1Ah AH=01h -> DOS's clock (#262) */
-    g_DosTickTake = HostTickTake;           /* a raw 006C store -> DOS's clock (#262 B) */
-    QueryPerformanceFrequency(&g_QpcFrequency);      /* seeds QpcMicroseconds for the lock instrument */
-    HostKeyTypematicInitialize();              /* typematic from XP's setting, not a guess */
-    VddBusInitialize(&g_Bus, NULL);
-    VddBusSetSinks(&g_Bus, HostIrqSink, NULL, NULL, NULL);  /* host presents directly */
-    g_PicDevice = VddPicDevice(&g_Pic);      /* before the PIT: it gates every IRQ */
-
-    VddBusAdd(&g_Bus, &g_PicDevice);
-    g_PitDevice = VddPitDevice(&g_Pit);
-    VddBusAdd(&g_Bus, &g_PitDevice);
-    /* ── ★ 0040:006C IS TICKS SINCE MIDNIGHT, SO SET IT TO THAT. (GH #253) ──
-         POST does this from the RTC; nothing here did, so every launch began at
-         00:00:00 by the BIOS's clock while INT 1Ah AH=02h read the real time. Seeded
-         from the SAME hook AH=02h answers from (HostRtcNow), after the PIT is on
-         the bus and before anything can take IRQ0. See VddPitSeedTimeOfDay. */
-    VddPitSeedTimeOfDay(&g_Pit);
-    /* ── THE RTC/CMOS TAKES THE SAME CLOCK INT 1Ah DOES. ─────────────────────
-         Registers 00h-09h and INT 1Ah AH=02h/04h are two doors onto ONE clock,
-         and a guest may use either -- so they are given the same hook and their
-         agreement is structural rather than something to keep in step by hand.
-         The same principle as A20's three doors; p_rtc.asm's rtc.agree.hours is
-         the case that checks it, and it read 0000 against 0101 on all three
-         oracles before this device existed. */
-    g_Cmos.RtcNow = HostRtcNow;
-    g_Cmos.RtcContext = NULL;
-    g_Cmos.RtcSet = HostRtcSet;              /* GH #261: CMOS 00h-09h + 32h writes */
-    g_WowWinCtlColor  = WowControlColour;              /* s89: WM_CTLCOLOR via the nested run */
-    g_WowUserSend16    = WowSend16Now;            /* s89 #305: WM_DESTROY sent, not posted */
-    g_WowWinSend16    = WowSend16Now;            /* s89 #300: WM_H/VSCROLL sent from the tracking loop */
-    g_WowUserCall16    = WowCall16Sync;           /* s91 #308: a subclassed control's messages */
-    g_WowWinOwnerDraw = WowOwnerDraw;             /* s89 #302: owner-draw via the nested run */
-    g_WowWinGlobal16  = ShimGlobal16;             /* s92 #305 M12: a Win16 HDROP is a krnl386 block */
-    g_WowUserSend16Blob   = WowSend16Blob;           /* s89 #302: WM_CREATE to template controls */
-    g_WowWinSend16Blob   = WowSend16Blob;           /* s91 #305 M9: WM_GETMINMAXINFO */
-    g_Cmos.BaseKb = (WORD)(BiosBaseKbOfTop(g_DosMemoryTop) + BIOS_EBDA_KB);  /* #136 */
-    g_CmosDevice = VddCmosDevice(&g_Cmos);
-    VddBusAdd(&g_Bus, &g_CmosDevice);           /* MC146818: ports 0x70/0x71    */
-    /* ── THE FLOPPY CONTROLLER, WHOSE ABSENCE WAS A HANG. ────────────────────
-         3F0h-3F7h were claimed by nothing, so the Main Status Register read FFh
-         -- RQM=1 with DIO=1 -- and the datasheet's own command-write loop
-         (`and al,0C0h / cmp al,80h / jne`) never matched and never exited.
-         MEASURED on the rig before this existed: fdc.cmdwait = 01C0 here against
-         0080 on 6.22/QEMU and on PCem's real AMI BIOS alike. Same shape as the
-         MC146818's UIP bit two devices above. IRQ6 stays dormant unless a guest
-         both gates it through DOR bit 3 and unmasks it at the PIC, which starts
-         at 0xFC. See src/vdd/vdd_fdc.h. */
-    g_FdcDevice = VddFdcDevice(&g_Fdc);
-    VddBusAdd(&g_Bus, &g_FdcDevice);            /* 82077AA: 3F2h-3F5h, 3F7h     */
-    /* ── THE IDE ADAPTER, FITTED, BOTH CHANNELS EMPTY. (GH #179) ─────────────
-         Same shape as the FDC above, one surface later: nothing claimed 1F0h-1F7h
-         or 3F6h, FFh there is BSY=1, and the ATA's own "wait until BSY clears"
-         never exited. An adapter with no drives reads 00h everywhere (DD7 pulled
-         down by the ATA document; DD6:0 a recorded choice) and latches nothing,
-         so a detection routine finds the controller, finds no device, and moves
-         on. See src/vdd/vdd_ide.h for why 00h and not 7Fh. */
-    g_IdeDevice = VddIdeDevice(&g_Ide);
-    VddBusAdd(&g_Bus, &g_IdeDevice);            /* ATA: 1F0h-1F7h, 3F6h, 170h-177h, 376h-377h */
-    /* ...and the BIOS says the same thing: 0040:0075, the number of fixed disks a
-       program reads before it calls INT 13h DL=80h, is WRITTEN 0 rather than left
-       to whatever the page held (docs/inventory/bda.md 3). One fact, three doors:
-       the BDA, INT 13h, and the adapter's empty channels. */
-    *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_FIXED_DISK_COUNT) = 0;
-    g_Video.VideoMemory = (BYTE *)VIDEO_APERTURE_BASE;  /* the mapped A0000 aperture (RAM) */
-    /* (per-plane backing is taken later, once the preamble is on disk -- every
-       LogWrite() before that point TRUNCATES the file and would eat its report.) */
-    g_Video.TimeUs = HostTimeMicroseconds;               /* real CRT timebase for 0x3DA (#55) */
-    g_Video.PresentHook = HostPresentHook;     /* Auto: the guest's frame raises the present (s73) */
-    /* Opt-in only: the ring costs two stores on the hottest path in the program and
-       the dump does file I/O under g_Lock. See the note in vdd_video.h. */
-    g_Video.IsPort3DaRingOn =
-        (GetFileAttributesA(PITLATCH_FLAG) != INVALID_FILE_ATTRIBUTES);
-    g_Video.GuestPc = HostGuestPc;             /* so a VRAM watchpoint names a routine */
-    g_Video.BiosData = (BYTE *)BIOS_BDA_BASE;               /* the display's BDA fields (0449..0489) */
-    g_VideoDevice = VddVideoDevice(&g_Video);
-    VddBusAdd(&g_Bus, &g_VideoDevice);
-    StartupLoadVideoWatch();
-    /* AFTER the video VDD is on the bus (it needs st->bus to resolve a guest address). */
-    /* #322: no font data ships -- the tables come from the system's fonts. Into the
-       report buffer: a LogAppend here would be erased when the report is rewritten. */
-    /* #321: the TextFont setting is laid over the default; g_Settings is loaded by now. */
-    cursor = LogPut(cursor, "STAGE1: ");
-    cursor = LogPut(cursor, SysFontBuild(g_Settings.Strings[SET_STR_TEXTFONT], &g_SysFontReport));
-    cursor = LogPut(cursor, "\r\n");
-    if (SysFontIsDefaultDegraded(&g_SysFontReport))
-        cursor = LogPut(cursor, "STAGE1: sysfont: THE DEFAULT IS DEGRADED -- a code page 437 font file "
-                    "is missing, so box drawing may show accented letters (#321)\r\n");
-    lstrcpynA(g_TextFontLive, g_Settings.Strings[SET_STR_TEXTFONT], sizeof g_TextFontLive);
-    VddVideoInstallFonts(&g_Video);            /* real glyph data behind INT 10h 1130h */
-    /* The BIOS keyboard buffer belongs to the guest: point the VDD at 0040:0000 BEFORE the
-       bus resets it, so the ring pointers it initialises land in guest memory where a DOS
-       program reading 0040:001A can see them. V86 low memory is mapped in our address
-       space, so the BDA is addressable directly. */
-    g_Input.BiosData = (BYTE *)BIOS_BDA_BASE;
-    g_Input.TimeMicroseconds = HostTimeMicroseconds;                /* the keyboard's transfer time is real time */
-    g_InputDevice = VddInputDevice(&g_Input);
-    VddBusAdd(&g_Bus, &g_InputDevice);             /* keyboard: claims INT 16h      */
-    /* ── ★★ THE BDA's PORT BASE-ADDRESS TABLE, WHICH WE HAD LEFT AT ZERO. (GH #128) ──
-         0040:0000..0007 are the COM1..COM4 I/O bases and 0040:0008..000F the LPT1..LPT4
-         bases. Nothing ever wrote them, so every one read as 0 -- while our INT 11h
-         equipment word (0x4021) says bits 14-15 = 01 = ONE PARALLEL PORT. Our own BIOS
-         was contradicting itself: a port declared present in the equipment word whose
-         base address is 0.
-       ★ THAT INCONSISTENCY IS WHY COMM.DRV FAILS TO LOAD, measured end to end this
-         session. Its LibMain returns the word at 0040:0008 -- the LPT1 base address,
-         read through the BDA selector (`__0040H`) -- as its result. Zero means "DLL
-         initialisation failed"
-         (documented LibMain contract), LoadModule returns 0, and the boot dies with "NTVDM
-         KERNEL: Missing 16-bit system module
-         ... COMM.DRV". Five drivers whose LibMain returns 1 load; this one does not.
-       ⚠ SO WRITE ONLY WHAT THE EQUIPMENT WORD ALREADY CLAIMS -- one parallel port at
-         the standard LPT1 base, and NO serial ports. Filling in COM1..COM4 as well
-         would be inventing hardware nothing answers for, which is the "runs but lies"
-         class this project treats as its most expensive kind of bug. The equipment
-         word is the declaration; this table just stops disagreeing with it.
-       ⚠ AFTER the input VDD is on the bus: it initialises the keyboard ring through
-         the same 0040:0000 pointer, and doing this first would be overwritten. */
-    /* ── ★★★ AND NOW THERE ARE SERIAL PORTS, SO SAY SO. (GH #9, session 56) ──
-         The note above is right that filling in COM1..COM4 while nothing
-         answered for them would be inventing hardware -- that was the correct
-         call when there was no UART. There is one now: vdd_comm.c claims
-         0x3F8..0x3FF and 0x2F8..0x2FF and answers every register, including the
-         local-loopback self-test every serial driver runs before it believes a
-         port exists. So the declaration is no longer a lie -- and the equipment
-         word is updated in the same breath, because the whole point of the
-         original note is that the two must not disagree. */
-    { INT callbackIndex;
-      for (callbackIndex = 0; callbackIndex < COMM_MAX_PORTS; ++callbackIndex) {
-          g_ComSpool[callbackIndex] = INVALID_HANDLE_VALUE; g_ComFailed[callbackIndex] = 0; }
-      g_Comm.Ports[0].BasePort = COMM_COM1_BASE; g_Comm.Ports[0].Irq = COMM_COM1_IRQ; g_Comm.Ports[0].IsFitted = 1;
-      g_Comm.Ports[1].BasePort = COMM_COM2_BASE; g_Comm.Ports[1].Irq = COMM_COM2_IRQ; g_Comm.Ports[1].IsFitted = 1;
-      /* #245 (s90): COM3 AND COM4 ARE FITTED BECAUSE STOCK DECLARES THEM. Measured
-         with tests/probes/dos/p_com34 under XP's own NTVDM on the rig: INT 11h
-         AX=C823 (FOUR serial ports, bits 9-11) and BDA 0040:0000 = 03F8 02F8 03E8
-         02E8. The question #181 left open is answered by the oracle that defines
-         "ntvdm superset", and the device has had the slots since s85. */
-      g_Comm.Ports[2].BasePort = COMM_COM3_BASE; g_Comm.Ports[2].Irq = COMM_COM1_IRQ; g_Comm.Ports[2].IsFitted = 1;
-      g_Comm.Ports[3].BasePort = COMM_COM4_BASE; g_Comm.Ports[3].Irq = COMM_COM2_IRQ; g_Comm.Ports[3].IsFitted = 1;
-      g_Comm.Printers[0].BasePort = LPT_DEFAULT_BASE; g_Comm.Printers[0].IsFitted = 1;   /* LPT1 data/strobe */
-      g_Comm.Sink = ComTransmitSink; g_Comm.SinkContext = NULL;
-      g_Comm.PrinterSink = LptTransmitSink; g_Comm.PrinterSinkContext = NULL;
-      g_CommDevice = VddCommDevice(&g_Comm);
-      VddBusAdd(&g_Bus, &g_CommDevice); }        /* 8250/16550A + INT 14h        */
-    VddNetBiosSetBackend(&g_Net, NetSubmit, NULL);
-    g_NetDevice = VddNetBiosDevice(&g_Net);
-    VddBusAdd(&g_Bus, &g_NetDevice);             /* GH #8: NetBIOS, INT 5Ch       */
-    { volatile WORD *biosDataArea = (volatile WORD *)(ULONG_PTR)BIOS_BDA_BASE;
-      /* Declare exactly what the VDD actually CLAIMED. A port whose claim was
-         refused for want of a bus table slot is not fitted, and writing its base
-         here anyway would recreate the very inconsistency this block exists to
-         fix, one layer down. */
-      /* ── ★ ONE LOOP OVER THE VDD'S SLOTS, NOT FOUR LITERALS. (GH #181) ──
-           The table has room for COM1..COM4 and the VDD now has four slots,
-           so the row for each comes from the slot's own base and fitted flag
-           -- the same source BiosEquipmentWord() counts. COM3/COM4 are not
-           fitted above (that is an oracle question: whether a period machine
-           of the kind we model declares four ports, #181), so they still read
-           0 here; the point is that fitting one is now a single line above
-           and this table and INT 11h follow it without being edited. */
-      { INT callbackIndex;
-        for (callbackIndex = 0; callbackIndex < BIOS_BDA_COM_PORTS; ++callbackIndex)
-            biosDataArea[callbackIndex] = (WORD)(VddCommIsFitted(&g_Comm, callbackIndex) ? g_Comm.Ports[callbackIndex].BasePort : 0); }
-      biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE] = (WORD)(VddLptIsFitted(&g_Comm, 0) ? LPT_DEFAULT_BASE : 0);   /* LPT1          */
-      biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE + 1] = 0; biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE + 2] = 0; }                         /* LPT2..LPT3: none fitted   */
-    /* ── ★★ 000E, 0010, 0013 AND THE EBDA, FROM THE FUNCTIONS INT 11h/12h CALL. (#253)
-         0040:000E is LPT4 on a PC and the EBDA segment on an AT and later; this block
-         used to zero it as "LPT4: none", which on an AT reads as "no EBDA" -- while
-         INT 12h said 639 KB, i.e. that one exists. bios_bda.h settles it: there is a
-         1 KB EBDA at 9FC0h, and 000E, INT 15h C1h and the C0h table all say so.
-         0010 and 0013 were never written at all; they now hold BiosEquipmentWord()
-         and BIOS_BASE_MEM_KB, the same expressions INT 11h and INT 12h return, so a
-         guest that reads the BDA and one that calls the interrupt see one machine.
-       ⚠ AFTER the COM/LPT slots are fitted (the word counts them) and after
-         SettingsApply() has set the joystick type (bit 12). g_BdaReady lets a later
-         settings change re-write 0010 -- see BiosBdaRefreshEquipment. */
-    BiosBdaInitializeWithTop(NULL, BiosEquipmentWord(), g_DosMemoryTop);   /* #136 */
-    g_BdaReady = 1;
-    g_Speaker.Pit = &g_Pit;                         /* speaker tone <- PIT channel 2 */
-    g_SpeakerDevice = VddSpeakerDevice(&g_Speaker);
-    VddBusAdd(&g_Bus, &g_SpeakerDevice);            /* PC speaker: claims port 0x61  */
-    g_Joystick.NowMicroseconds = JoystickNowMicroseconds;
-    g_JoystickDevice = VddJoystickDevice(&g_Joystick);
-    VddBusAdd(&g_Bus, &g_JoystickDevice);            /* gameport: 0x200-0x207         */
-    /* ⛔ THE POLL THREAD IS NOT SPAWNED HERE. See JoystickPollEnsure: it is created
-         ONLY when a joystick is actually configured, so the default play config --
-         which is EVERY game that does not use a gamepad, Skyroads included -- runs
-         with the exact s61 thread landscape and cannot regress on its account. */
-    g_DmaDevice = VddDmaDevice(&g_Dma);
-    VddBusAdd(&g_Bus, &g_DmaDevice);            /* 8237 DMA: 0x00-0x0F/80-8F/C0-DF */
-    g_Opl.IsExternalClock = 1;                        /* exec loop pumps real elapsed us */
-    g_OplDevice = VddOplDevice(&g_Opl);
-    VddBusAdd(&g_Bus, &g_OplDevice);            /* AdLib/OPL2: ports 0x388/0x389 */
-    g_Sb.Dma = &g_Dma; g_Sb.Opl = &g_Opl;       /* SB pulls PCM via DMA, mirrors FM */
-    /* ⚠ THE SAME NUMBERS THAT GO INTO BLASTER (dos_env.h). If these two ever come
-         from different places, a driver is told one port and finds another. */
-    g_Sb.BasePort = g_SbConfig.IoBase; g_Sb.Irq = g_SbConfig.Irq;
-    g_Sb.Dma8 = g_SbConfig.Dma8Channel;
-    if (g_SbConfig.Dma16Channel) g_Sb.Dma16 = g_SbConfig.Dma16Channel;   /* 0 = keep vdd_sb's default */
-    /* Opt-in raw PCM capture -- see SB_STATE.CaptureBuffer. 4 MB is ~3 minutes of Doom's
-       11025 Hz stereo, and it is a static buffer so the audio thread never allocates. */
-    if (GetFileAttributesA(SBDUMP_FLAG) != INVALID_FILE_ATTRIBUTES) {
-        static BYTE sbCapture[4u * 1024u * 1024u];
-        g_Sb.CaptureBuffer = sbCapture; g_Sb.CaptureCapacity = sizeof sbCapture; g_Sb.CaptureLength = 0;
-    }
-    g_SbDevice = VddSbDevice(&g_Sb);
-    VddBusAdd(&g_Bus, &g_SbDevice);             /* Sound Blaster 16: 0x220-0x22F  */
-    g_Mpu.Sink = HostMidiSink;
-    {   static const WORD mpuBases[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };   /* #235 */
-        g_Mpu.BasePort = mpuBases[g_Settings.Values[SET_MPUADDR] <= ARRAYSIZE(mpuBases) - 1 ? g_Settings.Values[SET_MPUADDR] : MPU_DEFAULT_BASE_CHOICE]; }
-    g_MpuDevice = VddMpuDevice(&g_Mpu);
-    VddBusAdd(&g_Bus, &g_MpuDevice);            /* MPU-401 MIDI: 0x330/0x331      */
-    /* The Gravis UltraSound: 240h-24Fh and 340h-347h, IRQ 11, DMA 3 (docs/ref/gus.md).
-       ⚠ THE SAME NUMBERS GO INTO ULTRASND= -- see the environment build. */
-    if (g_GusOn) {                             /* decided at startup: see NOGUS_FLAG's read */
-        g_Gus.Dma = &g_Dma; g_Gus.Dram = g_GusDram;
-        g_GusMidi.Sink = HostMidiSink;            /* #190: the 6850 UART -> the synth */
-        g_Gus.MidiSink = GusMidiToSynth;
-        g_GusDevice = VddGusDevice(&g_Gus);
-        VddBusAdd(&g_Bus, &g_GusDevice);
-    }
-    /* #233: the AWE32's EMU8000 -- at the SB's base + 400h / 800h / C00h (620h, A20h,
-       E20h for a card at 220h), 512 KB of sample DRAM, and BLASTER's E says where. */
-    g_AweOn = (g_Settings.Values[SET_SBMODEL] == SB_MODEL_AWE32);
-    if (g_AweOn) {
-        g_Emu8K.BasePort = (WORD)(g_SbConfig.IoBase + SB_EMU8K_PORT_OFFSET);
-        g_Emu8K.Dram = g_Emu8KDram; g_Emu8K.DramWords = EMU8K_DRAM_WORDS;
-        g_Emu8KDevice = VddEmu8kDevice(&g_Emu8K);
-        VddBusAdd(&g_Bus, &g_Emu8KDevice);
-    }
-    /* ► SAY WHETHER EVERY DEVICE ACTUALLY GOT ON THE BUS. VDD_MAX_PORT_RANGES was 16 and
-         exactly full; adding one range pushed the LAST device added -- the MPU-401 --
-         off, its claim returned -1, nobody looked, and the guest's MIDI port read 0xFF
-         like an empty slot. Doom reset it four times, got nothing, and played no music.
-         A device that cannot get on the bus is not a detail to discover by diffing
-         port traces against a working run. */
-    /* (the bus health line is emitted after the preamble is written -- see below;
-       every LogWrite() before then TRUNCATES the file.) */
-    /* Start the mixer + audio thread. This is also the TRANSPORT: it is what
-       walks the SB's DMA buffer and raises the block-completion IRQ, so it must
-       run even if no sound device opens (AUDIO_WAVE falls back to silent
-       pumping) -- otherwise every SB game hangs on a machine without audio. */
-    VddAudioInitialize(&g_Audio, &g_Opl, &g_Sb, SettingsOutputHz(&g_Settings));
-    VddAudioSetGus(&g_Audio, g_GusOn ? &g_Gus : NULL);
-    VddAudioSetEmu8k(&g_Audio, g_AweOn ? &g_Emu8K : NULL);   /* #233 */
-    SettingsApplyDevices(&g_Settings);   /* master volume, mute, speaker -- the mixer
-                                         zeroes its own struct, so not one line earlier */
-    /* ── THE AUDIO LEAD, AS A CONTROLLED VARIABLE (awbufs.txt). ──────────────────────
-         Each queued waveOut buffer is ~11.6 ms that our DMA read pointer runs ahead of
-         what is audible, and the guest must refill a block before we reach it. Doom's
-         longest PM stretch with no host turn measured 62.8 ms against a 70 ms lead, so
-         the lead is a suspect for the residual ECHO -- the capture is 46% identical to
-         one ring lap (185.8 ms) earlier, against ~22% at every neighbouring lag.
-         Setting this and reading back `sb replay:` in STAGE2 is the experiment: if
-         replays move with the lead it is the race, if they do not, DMX is failing to
-         refill for another reason and the lead is the wrong suspect. Absent = 6. */
-    { HANDLE handle = CreateFileA(AWBUFS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                             NULL, OPEN_EXISTING, 0, NULL);
-      if (handle != INVALID_HANDLE_VALUE) {
-          CHAR text[16]; DWORD bytesRead = 0, number = 0; INT index;
-          ReadFile(handle, text, sizeof text, &bytesRead, NULL);
-          CloseHandle(handle);
-          for (index = 0; index < (INT)bytesRead; ++index) {
-              if (text[index] < '0' || text[index] > '9') break;
-              number = number * DECIMAL_RADIX + (DWORD)(text[index] - '0');
-          }
-          g_Wave.BufferCount = number;                   /* AudioWaveStart clamps to [2,AUDIO_WAVE_BUFFERS] */
-      } }
-    /* ── AND THE GRANULARITY, AS A SEPARATE CONTROLLED VARIABLE (awframes.txt). ──────
-         nframes x nbufs is the LEAD; nframes alone is the STEP the guest's DMA read
-         pointer moves in. They are different suspects and must be varied independently
-         or a result cannot be attributed to either. `awbufs=2` already showed why this
-         matters: it cut the lead, starved the transport, and the replay rate "improved"
-         only because the non-flat block count collapsed 13x.
-         To hold the lead constant while quartering the step: awframes=128, awbufs=24. */
-    { HANDLE handle = CreateFileA(AWFRAMES_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                             NULL, OPEN_EXISTING, 0, NULL);
-      if (handle != INVALID_HANDLE_VALUE) {
-          CHAR text[16]; DWORD bytesRead = 0, number = 0; INT index;
-          ReadFile(handle, text, sizeof text, &bytesRead, NULL);
-          CloseHandle(handle);
-          for (index = 0; index < (INT)bytesRead; ++index) {
-              if (text[index] < '0' || text[index] > '9') break;
-              number = number * DECIMAL_RADIX + (DWORD)(text[index] - '0');
-          }
-          g_Wave.FrameCount = number;                 /* clamped to [AUDIO_WAVE_MIN_FRAMES,AUDIO_WAVE_FRAMES] */
-      } }
-    { HANDLE pitPaceFile = CreateFileA(PITPACE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL, OPEN_EXISTING, 0, NULL);
-      if (pitPaceFile != INVALID_HANDLE_VALUE) {
-          CHAR text[8]; DWORD bytesRead = 0;
-          ReadFile(pitPaceFile, text, sizeof text, &bytesRead, NULL); CloseHandle(pitPaceFile);
-          if (bytesRead && text[0] >= '0' && text[0] <= '9') g_PitPaceMs = text[0] - '0';
-          g_PitPaceOn = (g_PitPaceMs != 0);
-          SettingsNoteOverride(SET_PITPACE, CFG_TEXT(KNOB_FILE_PITPACE) SETTINGS_SOURCE_MS, (DWORD)g_PitPaceMs);
-      } }
-    /* The pacer's two OTHER levers -- see PitPacerThread. Absent file = as shipped. */
-    { HANDLE pitPriorityFile = CreateFileA(PITPRIO_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL, OPEN_EXISTING, 0, NULL);
-      if (pitPriorityFile != INVALID_HANDLE_VALUE) {
-          CHAR text[8]; DWORD bytesRead = 0;
-          ReadFile(pitPriorityFile, text, sizeof text, &bytesRead, NULL); CloseHandle(pitPriorityFile);
-          if (bytesRead && text[0] >= '0' && text[0] <= '4') {
-              static const INT priorities[5] = { THREAD_PRIORITY_IDLE, THREAD_PRIORITY_BELOW_NORMAL,
-                                          THREAD_PRIORITY_NORMAL, THREAD_PRIORITY_ABOVE_NORMAL,
-                                          THREAD_PRIORITY_HIGHEST };
-              g_PitPacePriority = priorities[text[0] - '0'];
-          }
-      } }
-    { HANDLE pitInjectFile = CreateFileA(PITINJ_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL, OPEN_EXISTING, 0, NULL);
-      if (pitInjectFile != INVALID_HANDLE_VALUE) {
-          CHAR text[8]; DWORD bytesRead = 0;
-          ReadFile(pitInjectFile, text, sizeof text, &bytesRead, NULL); CloseHandle(pitInjectFile);
-          if (bytesRead && (text[0] == '0' || text[0] == '1')) g_PitPaceInject = text[0] - '0';
-      } }
-    /* llkbd.txt = 1 re-enables the system-wide keyboard hook. See InputCaptureSet. */
-    { HANDLE keyHandle = CreateFileA(LLKBD_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                              NULL, OPEN_EXISTING, 0, NULL);
-      if (keyHandle != INVALID_HANDLE_VALUE) {
-          CHAR text[8]; DWORD bytesRead = 0;
-          ReadFile(keyHandle, text, sizeof text, &bytesRead, NULL); CloseHandle(keyHandle);
-          if (bytesRead && (text[0] == '0' || text[0] == '1')) g_LowLevelKeyboardOn = text[0] - '0';
-      } }
-    /* courier.txt -- the tick courier (see TickCourierThread). 0 = as shipped. */
-    { HANDLE configHandle = CreateFileA(COURIER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                              NULL, OPEN_EXISTING, 0, NULL);
-      if (configHandle != INVALID_HANDLE_VALUE) {
-          CHAR text[8]; DWORD bytesRead = 0;
-          ReadFile(configHandle, text, sizeof text, &bytesRead, NULL); CloseHandle(configHandle);
-          /* 0 = off, 1 = REFUTED (progressive collapse), 2 = gentle. See the thread. */
-          if (bytesRead && text[0] >= '0' && text[0] <= '2') g_CourierOn = text[0] - '0';
-      } }
-    { HANDLE uiTickFile = CreateFileA(UITICK_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL, OPEN_EXISTING, 0, NULL);
-      if (uiTickFile != INVALID_HANDLE_VALUE) {
-          CHAR text[8]; DWORD bytesRead = 0; INT number = 0, index;
-          ReadFile(uiTickFile, text, sizeof text, &bytesRead, NULL); CloseHandle(uiTickFile);
-          for (index = 0; index < (INT)bytesRead; ++index) {
-              if (text[index] < '0' || text[index] > '9') break;
-              number = number * DECIMAL_RADIX + (text[index] - '0');
-          }
-          if (bytesRead && text[0] >= '0' && text[0] <= '9' && number <= UI_TICK_MS_MAX) {
-              g_UiTickMinimumMs = number;
-              SettingsNoteOverride(SET_UITICK, CFG_TEXT(KNOB_FILE_UITICK) SETTINGS_SOURCE_MS, (DWORD)number);
-          }
-      } }
-    /* wowidle.txt -- how long a Win16 task blocked in GetMessage waits. 0 = forever. */
-    { HANDLE wowIdleFile = CreateFileA(WOWIDLE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL, OPEN_EXISTING, 0, NULL);
-      if (wowIdleFile != INVALID_HANDLE_VALUE) {
-          CHAR text[12]; DWORD bytesRead = 0, number = 0; INT index;
-          ReadFile(wowIdleFile, text, sizeof text, &bytesRead, NULL); CloseHandle(wowIdleFile);
-          for (index = 0; index < (INT)bytesRead; ++index) {
-              if (text[index] < '0' || text[index] > '9') break;
-              number = number * DECIMAL_RADIX + (DWORD)(text[index] - '0');
-          }
-          if (bytesRead && text[0] >= '0' && text[0] <= '9') {
-              CHAR wowLine2[160], *wowCursor2 = wowLine2;
-              g_WowMsgWaitMs = number;
-              wowCursor2 = LogPut(wowCursor2, "WOWMSG: GetMessage idle wait = ");
-              if (number) { wowCursor2 = LogHex(wowCursor2, number); wowCursor2 = LogPut(wowCursor2, " ms"); }
-              else     wowCursor2 = LogPut(wowCursor2, "FOREVER (interactive: the guest is waiting "
-                                     "for the user, not stuck)");
-              wowCursor2 = LogPut(wowCursor2, "\r\n"); LogAppend(LOG_PATH, wowLine2, wowCursor2); SerialOut(wowLine2, wowCursor2);
-          }
-      } }
-    /* keyirq.txt -- the knob 5b6a4a6's message promises. It was lost in that session's
-       revert, so the escape hatch documented at the retry site did not actually exist. */
-    { HANDLE keyIrqFile = CreateFileA(KEYIRQ_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL, OPEN_EXISTING, 0, NULL);
-      if (keyIrqFile != INVALID_HANDLE_VALUE) {
-          CHAR text[8]; DWORD bytesRead = 0;
-          ReadFile(keyIrqFile, text, sizeof text, &bytesRead, NULL); CloseHandle(keyIrqFile);
-          /* 0 = never yield, 1 = always (old default), 2 = only while the clock is on
-             schedule. See the yield branch in HostIrqSink. */
-          if (bytesRead && text[0] >= '0' && text[0] <= '3') g_KeyIrqRetry = text[0] - '0';
-      } }
-    /* Mouse feel is per-guest and per-hand, and every test of it costs a play session,
-       so it is a knob from the start: percent, 100 = the device's own counts. */
-    { HANDLE mouseSensitivityFile = CreateFileA(MSENS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL, OPEN_EXISTING, 0, NULL);
-      if (mouseSensitivityFile != INVALID_HANDLE_VALUE) {
-          CHAR text[8]; DWORD bytesRead = 0; INT value2 = 0, index2;
-          ReadFile(mouseSensitivityFile, text, sizeof text, &bytesRead, NULL); CloseHandle(mouseSensitivityFile);
-          for (index2 = 0; index2 < (INT)bytesRead; ++index2) { if (text[index2] < '0' || text[index2] > '9') break;
-                                          value2 = value2 * DECIMAL_RADIX + (text[index2] - '0'); }
-          if (value2 >= MOUSE_SENSITIVITY_MIN && value2 <= MOUSE_SENSITIVITY_MAX) {
-              g_MouseSensitivity = value2;
-              SettingsNoteOverride(SET_MSENS, CFG_TEXT(KNOB_FILE_MSENS), (DWORD)value2);
-          }
-      } }
-    /* ── GH #56: the calibration and a one-run speed override, both from the share.
-         ⚠ THESE RUN BEFORE CpuSpeedRecompute() BELOW, which is the whole point: the
-           duty is computed once from whatever the registry and these two agree on,
-           and re-computed only when the setting changes. Reading them after would
-           leave the thread running on the registry's answer for the whole session,
-           which is exactly the shape of a knob that silently does nothing. */
-    { HANDLE cpuReferenceFile = CreateFileA(CPUREF_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL, OPEN_EXISTING, 0, NULL);
-      if (cpuReferenceFile != INVALID_HANDLE_VALUE) {
-          CHAR text[12]; DWORD bytesRead = 0; UINT sbValue = 0; INT index2;
-          ReadFile(cpuReferenceFile, text, sizeof text, &bytesRead, NULL); CloseHandle(cpuReferenceFile);
-          for (index2 = 0; index2 < (INT)bytesRead; ++index2) { if (text[index2] < '0' || text[index2] > '9') break;
-                                          sbValue = sbValue * DECIMAL_RADIX_U + (UINT)(text[index2] - '0'); }
-          if (sbValue >= CPU_REFERENCE_MHZ_MIN_U && sbValue <= CPU_REFERENCE_MHZ_MAX_U) g_CpuSpeedReferenceMhz = sbValue;
-      } }
-    StartupLoadCpuSpeedKnob();
-    /* ── THE GRANULARITY SLIDER AS A FILE KNOB. cpugran.txt = target period in ms,
-         0 or absent = AUTO (measure the suspend round trip and pick the finest
-         period this box can sustain). See the long note in cpuspeed.h -- this is
-         the lever that decides whether a slow setting is playable or a slideshow,
-         and it is a file knob first so the sweep can find the right default without
-         a rebuild per value. */
-    { HANDLE cpuGranularityFile = CreateFileA(CPUGRAN_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL, OPEN_EXISTING, 0, NULL);
-      if (cpuGranularityFile != INVALID_HANDLE_VALUE) {
-          CHAR text[12]; DWORD bytesRead = 0; UINT valueG = 0; INT indexG;
-          ReadFile(cpuGranularityFile, text, sizeof text, &bytesRead, NULL); CloseHandle(cpuGranularityFile);
-          for (indexG = 0; indexG < (INT)bytesRead; ++indexG) { if (text[indexG] < '0' || text[indexG] > '9') break;
-                                             valueG = valueG * DECIMAL_RADIX_U + (UINT)(text[indexG] - '0'); }
-          if (indexG > 0 && valueG <= CPUSPEED_GRAN_MAX_MS) g_CpuSpeedGranularityMs = valueG;
-      } }
-    /* cpuaff.txt = 1 -> give the guest a core of its own. See CpuAffinityApply. */
-    { HANDLE cpuAffinityFile = CreateFileA(CPUAFF_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL, OPEN_EXISTING, 0, NULL);
-      if (cpuAffinityFile != INVALID_HANDLE_VALUE) {
-          CHAR text[8]; DWORD bytesRead = 0;
-          ReadFile(cpuAffinityFile, text, sizeof text, &bytesRead, NULL); CloseHandle(cpuAffinityFile);
-          if (bytesRead && (text[0] == '0' || text[0] == '1')) g_CpuAffinityOn = (text[0] == '1');
-      } }
-    if (g_PitPaceOn) {
-        HMODULE winmmModule = LoadLibraryA(HOST_MODULE_WINMM);
-        if (winmmModule) { PFN_TIME_BEGIN_PERIOD beginPeriod =
-                      (PFN_TIME_BEGIN_PERIOD)GetProcAddress(winmmModule, HOST_EXPORT_TIME_BEGIN_PERIOD);
-                  if (beginPeriod) beginPeriod(1); }
-        PitPacerTimerStart(winmmModule);                /* #238: a true 1 ms wake */
-        g_PitPaceThread = CreateThread(NULL, 0, PitPacerThread, NULL, 0, NULL);
-    }
-    /* The capture watchdog runs for every guest, throttled or not, headless or not:
-       it is the only thing standing between a wedge and a hard reset. */
-    { HANDLE captureWatchdog = CreateThread(NULL, 0, CaptureWatchdogThread, NULL, 0, NULL);
-      if (captureWatchdog) CloseHandle(captureWatchdog); }
-    /* ── ★ THE TICK COURIER. Auto-reset: one signal wakes exactly one pass, and a
-         signal arriving while it is already awake is not lost -- the pass re-checks
-         g_Irq0Pending anyway. Created even when the courier is knobbed off, so the
-         raise site's SetEvent never has to test two things. */
-    if (g_QiSuspended) {
-        g_CourierEvent = CreateEventA(NULL, FALSE, FALSE, NULL);
-        if (g_CourierEvent)
-            g_CourierThread = CreateThread(NULL, 0, TickCourierThread, NULL, 0, NULL);
-    }
-    /* ── ★ THE CPU-SPEED THROTTLE. (GH #56) ──────────────────────────────────────
-         Started unconditionally, even at Unlimited: the setting is live, and a
-         thread that has to be created before it can bite would make the menu work
-         only on machines that started throttled. It idles in 4 ms sleeps when
-         there is nothing to do.
-       ⚠ IT NEEDS THE 1 ms TIMER RESOLUTION, and the block above only raises it when
-         the PIT pacer is on. Without timeBeginPeriod(1) a Sleep(1) is XP's default
-         ~15.6 ms, which would turn every held millisecond into fifteen and make the
-         guest fifteen times slower than the label on the menu. So raise it here too
-         -- the call nests, and pitpace=0 must not silently change what "33 MHz"
-         means. Bound by name, like every other winmm use, so the import allowlist
-         is unaffected. */
-    if (!g_PitPaceOn) {
-        HMODULE winmmModule2 = LoadLibraryA(HOST_MODULE_WINMM);
-        if (winmmModule2) { PFN_TIME_BEGIN_PERIOD beginPeriod2 =
-                       (PFN_TIME_BEGIN_PERIOD)GetProcAddress(winmmModule2, HOST_EXPORT_TIME_BEGIN_PERIOD);
-                   if (beginPeriod2) beginPeriod2(1); }
-    }
-    CpuSpeedRecompute();
-    g_CpuSpeedRelease = CreateEventA(NULL, FALSE, FALSE, NULL);   /* #225, auto-reset */
-    g_CpuSpeedThread = CreateThread(NULL, 0, CpuSpeedThread, NULL, 0, NULL);
-    /* ⚠ THE SAME RATE THE MIXER WAS BUILT AT. Opening the device at one rate and
-         mixing at another silently resamples everything to a clock nothing runs
-         on -- audible as a pitch error, not as an error message. */
-    g_Wave.WantsDirectSound = (g_Settings.Values[SET_AUDIOAPI] == 1);          /* #234 */
-    g_Wave.IsForcedSilent = g_Safe.AudioOut;                 /* s90 #132: SAFE MODE */
-    g_Wave.MidiChoice = (INT)(g_Settings.Values[SET_MIDI] < MIDI_ROUTE_COUNT ? g_Settings.Values[SET_MIDI] : 0);  /* #136 */
-    AudioWaveStart(&g_Wave, SettingsOutputHz(&g_Settings), HostAudioFill, NULL);
-    /* ── #136: SAY WHICH SYNTH THE MPU-401 PLAYS THROUGH, but only when it was chosen.
-         Host GM (the default) opens device 0 as it always did and logs nothing new. */
-    if (g_Wave.MidiChoice != MIDI_ROUTE_GM) {
-        CHAR midiLine[200], *midiCursor = LogPut(midiLine, "STAGE2: MIDI = ");
-        midiCursor = LogPut(midiCursor, g_Wave.MidiChoice == MIDI_ROUTE_MT32 ? "MT-32" : "SoundFont");
-        if (g_Wave.IsMidiExternal) {
-            midiCursor = LogPut(midiCursor, " -> device "); midiCursor = LogDecimal(midiCursor, (UINT)g_Wave.MidiDevice);
-            midiCursor = LogPut(midiCursor, " \""); midiCursor = LogPut(midiCursor, g_Wave.MidiName); midiCursor = LogPut(midiCursor, "\", SysEx passed through");
-            g_Mpu.SysExSink = HostMidiSysEx;     /* the MPU is on the bus already; no */
-            g_GusMidi.SysExSink = HostMidiSysEx; /* guest code has run yet            */
-        } else {
-            midiCursor = LogPut(midiCursor, " asked for, NO such device among "); midiCursor = LogDecimal(midiCursor, g_Wave.MidiDeviceCount);
-            midiCursor = LogPut(midiCursor, " -> Host GM (device 0");
-            if (g_Wave.MidiName[0]) { midiCursor = LogPut(midiCursor, " \""); midiCursor = LogPut(midiCursor, g_Wave.MidiName); midiCursor = LogPut(midiCursor, "\""); }
-            midiCursor = LogPut(midiCursor, g_Wave.MidiDevice < 0 ? ", would not open)" : ")");
-        }
-        if (g_Wave.MidiChoice == MIDI_ROUTE_SF2)
-            midiCursor = LogPut(midiCursor, "; SoundFontPath is not passed on -- the driver keeps its own list");
-        midiCursor = LogPut(midiCursor, " (#136)\r\n"); LogAppend(LOG_PATH, midiLine, midiCursor);
-    }
-    {   CHAR audioLine[128], *audioCursor = LogPut(audioLine, "STAGE2: audio output = ");
-        audioCursor = LogPut(audioCursor, g_Wave.IsUsingDirectSound ? "DirectSound" : g_Wave.IsSilent ? "none (silent pump)" : "WinMM");
-        if (g_Wave.WantsDirectSound && !g_Wave.IsUsingDirectSound) audioCursor = LogPut(audioCursor, " (DirectSound asked for, would not open)");
-        audioCursor = LogPut(audioCursor, "\r\n"); LogAppend(LOG_PATH, audioLine, audioCursor); }
-    /* cfg\wavrec.flag: record the whole run's audio -- see HostRecordFinish. */
-    if (GetFileAttributesA(WAVREC_FLAG) != INVALID_FILE_ATTRIBUTES) {
-        INT recordResult = AudioWaveRecordStart(WAVREC_PATH, g_Wave.SampleHz);
-        cursor = LogPut(cursor, recordResult == 0 ? "STAGE1: wavrec.flag -- recording the audio output to debug\\out\\capture_audio.wav at "
-                            : "STAGE1: wavrec.flag -- COULD NOT start the recording at ");
-        cursor = LogDecimal(cursor, g_Wave.SampleHz); cursor = LogPut(cursor, " Hz\r\n");
-    }
-    machine.ConsoleOut = HostConsoleOut; machine.ConsoleOutContext = NULL;    /* DOS console out -> video      */
-    machine.ConsoleIn  = HostConsoleIn;  machine.ConsoleInContext = NULL;    /* DOS console in  <- keyboard   */
-    /* Full INT 21h call trace, opt-in per run: it is a differential instrument, not a
-       default. See the trace at the top of DosInt21(). */
-    machine.IsTraceAll = (GetFileAttributesA(DOSTRACE_FLAG) != INVALID_FILE_ATTRIBUTES);
-    /* DPMI 0300 reflects to the guest's own real-mode handler -- ON by default since s81,
-       when the wedge that kept it off was found and fixed (see g_NestedRm and the BIOS
-       tick in AsyncInjectIrq). simintrefl_off.flag turns it off for diagnosis; say so,
-       because a guest-owned vector then silently does nothing again. */
-    g_SimIntReflect = (GetFileAttributesA(SIMINTREFL_OFF_FLAG) == INVALID_FILE_ATTRIBUTES);
-    if (!g_SimIntReflect) {
-        CHAR stageLine[224], *stageCursor = stageLine;
-        stageCursor = LogPut(stageCursor, "STAGE1: simintrefl_off.flag -- DPMI 0300 is the pre-#247 shape: INT 21h/"
-                      "33h/10h host-side, EVERY other vector NOT RUN (ZAR: silent). See "
-                      "simint_route().\r\n");
-        LogAppend(LOG_PATH, stageLine, stageCursor); SerialOut(stageLine, stageCursor);
-    }
-    machine.ConsoleInNoWait = HostConsoleInNoBlock;                   /* AH=06 DL=FF non-blocking read */
-    machine.ConsolePeek = HostConsolePeek;                   /* AH=0B/06 non-blocking status  */
-    machine.SetTicks = HostSetTicks;               /* AH=2Dh reloads 0040:006C (#250) */
-    machine.TicksContext = NULL;
-    machine.PrinterOut  = DosPrnOut;                     /* #251: PRN/AUX when not in V86 */
-    machine.AuxOut  = DosAuxOut;  machine.DeviceContext = NULL;
-
-    /* Hide the inherited console (CSRSS already bound the VDM); the Luna window
-       is now the display. Then start the UI thread that owns it. */
-    g_KeyEvent = CreateEventA(NULL, FALSE, FALSE, NULL);   /* auto-reset        */
-    { HWND consoleWindow = GetConsoleWindow(); if (consoleWindow) ShowWindow(consoleWindow, SW_HIDE); }
-    /* ► PER-PLANE BACKING BEFORE THE UI THREAD EXISTS. The remap unmaps the A0000
-         window for an instant, and the renderer dereferences it every few milliseconds;
-         doing this with that thread already running hung the host so early that no log
-         reached disk at all. Its report is buffered and flushed after the preamble. */
-    if (GetFileAttributesA(NOREMAP_FLAG) == INVALID_FILE_ATTRIBUTES && ModeYRemapInitialize()) {
-        g_Video.YMapContext    = NULL;
-        g_Video.YMapSelect = ModeYRemapSelect;
-        g_Video.YMapPlane  = ModeYRemapPlane;
-        g_Video.YMapWriteMode  = ModeYRemapWriteMode;
-        g_Video.YMapReadMap = ModeYRemapReadMap;
-    }
-    uiThread = CreateThread(NULL, 0, UiThread, NULL, 0, NULL);
-    /* Headless: arm the deadline watchdog so a run that blocks on input (a "press any
-       key" prompt, a game menu) still self-terminates instead of wedging the harness. */
-    if (g_Headless) { HANDLE deadlineThread = CreateThread(NULL, 0, HeadlessDeadlineThread, NULL, 0, NULL);
-                      if (deadlineThread) CloseHandle(deadlineThread);
-                      /* appended to the preamble, which is flushed further down */
-                      cursor = LogPut(cursor, "HEADLESS: cap=0x"); cursor = LogHex(cursor, g_HeadlessMs);
-                      cursor = LogPut(cursor, " ms\r\n"); }
-    /* cfg\livehb.flag: the heartbeat on a LIVE (by-hand) run too. A host that dies
-       with no exit report leaves nothing else that says where the guest was. (s68) */
-    if (g_Headless || GetFileAttributesA(LIVEHB_FLAG) != INVALID_FILE_ATTRIBUTES) {
-                      HANDLE heartbeatThread = CreateThread(NULL, 0, HeartbeatThread, NULL, 0, NULL);
-                      if (heartbeatThread) CloseHandle(heartbeatThread); }
-    if (g_QiKeys) { HANDLE keyThread = CreateThread(NULL, 0, SynthKeyThread, NULL, 0, NULL);
-                     if (keyThread) CloseHandle(keyThread); }
-    if (g_QiRaise) { HANDLE irqThread = CreateThread(NULL, 0, QueueIrqProbeThread, NULL, 0, NULL);
-                      if (irqThread) CloseHandle(irqThread); }
-
-    /* ── GH #128: on a WOW launch, the guest is krnl386, not a DOS program. ─────────
-         Placed HERE because this is the one point where the DOS machine is fully
-         built (conventional memory, INT 21h, the IVT, INT 2Fh) and the guest entry
-         has not yet been committed. krnl386 needs all of it: AH=52h almost at
-         once, then 2F/1687 to find our DPMI host and switch itself.
-         The DOS program load above still ran and is simply discarded -- it is
-         tolerant of a missing target and costs one wasted image. Overriding here
-         rather than short-circuiting there keeps the DOS path's spine untouched. */
-    {   WORD wowCs = 0, wowIp = 0, wowDs = 0, wowSs = 0, wowSp = 0;
-        if (g_WowModuleCount && WowPlaceV86(&machine, &wowCs, &wowIp, &wowDs, &wowSs, &wowSp) == 0) {
-            image.CodeSegment = wowCs; image.InstructionPointer = wowIp; image.StackSegment = wowSs; image.StackPointer = wowSp;
-            g_WowEntryDs = wowDs;
-            g_WowEntering = 1;
-        }
-    }
-    VdmSetEntry(tib, image.CodeSegment, image.InstructionPointer, image.StackSegment, image.StackPointer, DOS_PSP_SEG);
-    cursor = StartupPrepareWowEntry(cursor, tib, &image);
-    /* ENTRY TRAMPOLINE: `STI` then a far jump to the program's real entry point.
-       Under VME the CPU sets EFLAGS.VIF only when the guest EXECUTES sti -- and the
-       kernel's whole notion of "this guest can take an interrupt" is VIF. Session 10
-       correctly observed that DOS programs never issue sti (they are entered with
-       interrupts already on) and fixed it by handing them IF=1 in the CONTEXT, but that
-       sets the REAL IF, which the kernel does not consult, while VIF stays 0 forever.
-       Setting VIF directly in the CONTEXT does not survive either -- the kernel sanitises
-       it. Making the guest execute one real sti costs 6 bytes and gets VIF set the only
-       way the CPU will accept, after which the hardware maintains it across the guest's
-       own cli/sti/iret. Faithful, too: DOS's EXEC really does return into the program
-       with interrupts enabled.
-       RESULT: this does NOT unblock delivery -- and note qirq.com already executed its own
-       sti before spinning, so the "guest never sets VIF" hypothesis was in truth already
-       refuted by the earlier runs. Kept as an opt-in knob (it is the faithful entry
-       sequence regardless) but it is not the missing piece.
-     ⚠ s82: THE ORACLES DISAGREE WITH US, AND THIS DOES NOT FIX IT. p_ifst.com asks FLAGS
-       at a program's first instruction: MS-DOS 6.22, DOSBox-X and PCem all answer IF=1; we
-       answer IF=0, and keep answering it after INT 10h and INT 21h. A program that never
-       executes STI (mybench.com) then has every timer tick refused by our own gate, which
-       reads that virtual IF, and 0040:006C stands still. Defaulting this trampoline was
-       tried: the guest's STI did not stick (first exit still VTIB EFLAGS=0x30002), with or
-       without VIP cleared first -- the wall s11 recorded. Still opt-in. See GH issue.
-     ✅ #212, s84: FIXED ELSEWHERE, AND THIS WAS NEVER THE PLACE. Every program is started
-       by a shell's EXEC, and the EXEC path handed the child the parent's flags from
-       INSIDE our INT 21h stub, where IF is already clear -- so the trampoline's STI ran
-       for the shell, not the program. ExecBegin() now enters the child with IF set;
-       p_ifst agrees with all three oracles. */
-    if (g_QiVif) {
-        volatile BYTE *trampoline = (volatile BYTE *)(ULONG_PTR)(((DWORD)DOS_HDLR_SEG << PARAGRAPH_SHIFT) + DOS_HDLR_TRAMPOLINE_OFF);
-        /* ⚠ s82: 0x60-0x65 is DPMI callback slot 0 and half of slot 1, planted ABOVE
-             (dos_layout.h). Keep what was there; the exec loop puts it back at the first
-             exit outside the trampoline. Opt-in, this never mattered; default, it would
-             send a client's first callback into `sti; jmp far <program entry>`.
-           (#248: the callback slots moved to 0x90, so these bytes are now unused; the
-             save/restore stays because it costs nothing and keeps the area as found.) */
-        { INT item; for (item = 0; item < DOS_HDLR_TRAMPOLINE_SIZE; ++item) g_TrampolineSave[item] = trampoline[item]; g_TrampolineSaved = 1; }
-        trampoline[0] = X86_OP_STI;                                   /* sti                       */
-        trampoline[1] = X86_OP_JMP_FAR;                                   /* jmp far cs:ip             */
-        trampoline[2] = (BYTE)image.InstructionPointer; trampoline[3] = (BYTE)(image.InstructionPointer >> BYTE_SHIFT);
-        trampoline[4] = (BYTE)image.CodeSegment; trampoline[5] = (BYTE)(image.CodeSegment >> BYTE_SHIFT);
-        VDM_REG(tib, VTIB_CS)  = DOS_HDLR_SEG;
-        VDM_REG(tib, VTIB_EIP) = DOS_HDLR_TRAMPOLINE_OFF;
-    }
-    /* Session 11: the kernel's deliverability test for a V86 frame on a VME CPU follows
-       EFLAGS.VIF, not IF (observed: VIP set and delivery deferred). Starting the guest with
-       VIF clear makes every hardware interrupt undeliverable from the kernel's point of
-       view -- it just sets VIP and defers. Opt-in until the rig confirms it. */
-    if (g_QiVif) VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_VIF;
-    if (!image.IsExe)                                        /* .COM near-ret guard */
-        *(volatile WORD *)(((DWORD)DOS_PSP_SEG << PARAGRAPH_SHIFT) + DOS_COM_STACK_TOP) = 0;
-
-    /* Every stub the host plants in DOS_HDLR_SEG is planted by a different piece of
-       start-up code with its own idea of a free offset. Verify the ones a guest can
-       RETURN INTO after all planting is done -- an overwritten stub is a guest jumping
-       into another service's BOP, and the symptom (QBasic: "DOS terminate" on the first
-       mouse move) names nothing. */
-    {   volatile BYTE *handlerSegment = (volatile BYTE *)(DOS_HDLR_SEG << PARAGRAPH_SHIFT);
-        if (handlerSegment[MS_CB_RET_OFF] != VDM_BOP0 || handlerSegment[MS_CB_RET_OFF + 1] != VDM_BOP1
-            || handlerSegment[MS_CB_RET_OFF + VDM_BOP_NUMBER_OFFSET] != MS_CB_BOP) {
-            cursor = LogPut(cursor, "STAGE2: *** STUB OVERWRITTEN at DOS_HDLR_SEG:0x");
-            cursor = LogHex(cursor, MS_CB_RET_OFF); cursor = LogPut(cursor, " (mouse callback return): bytes ");
-            cursor = LogDump(cursor, (const VOID *)(handlerSegment + MS_CB_RET_OFF), VDM_BOP_STUB_SIZE); cursor = LogPut(cursor, "\r\n");
-        }
-    }
-    cursor = LogPut(cursor, image.IsExe ? "STAGE2: running .EXE (entry 0x"
-                           : "STAGE2: running .COM (entry 0x");
-    cursor = LogHex(cursor, image.CodeSegment); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, image.InstructionPointer); cursor = LogPut(cursor, ")...\r\n");
-    LogWrite(LOG_PATH, report, cursor);
-    base = cursor;                       /* preamble is on disk; the loop appends from here */
-    {   /* #211. After the last truncating write, for the same reason as #144 below. */
-        CHAR instanceLine[200], *instanceCursor = LogPut(instanceLine, "STAGE2: instance "); instanceCursor = LogDecimal(instanceCursor, (UINT)g_Instance);
-        if (g_Instance > 1) { instanceCursor = LogPut(instanceCursor, " (another NTVDMEX was running) -> output in "); instanceCursor = LogPut(instanceCursor, g_OutSubdirectory); }
-        if (g_InstanceAbandoned) instanceCursor = LogPut(instanceCursor, " -- prior holder ABANDONED (zombie thread died)");
-        instanceCursor = LogPut(instanceCursor, " (#211)\r\n");
-        LogAppend(LOG_PATH, instanceLine, instanceCursor); }
-    /* #144. HERE, not with the other STAGE0 lines: this is the last truncating write
-       (an append before it is wiped -- the first cut of this was), and the ~7 KB table
-       would overflow the 8 KB preamble buffer. Every file override has been read. */
-    SettingsLogSources();
-    /* ── THIRD-PARTY VDDs LOAD HERE, AND THE PLACE IS THE POINT. ─────────────
-         Two constraints, and only this line satisfies both:
-         (1) AFTER every built-in device is on the bus, so a third-party claim
-             that collides with our own video or UART is REFUSED honestly rather
-             than silently shadowing it;
-         (2) AFTER THE LAST LogWrite, which TRUNCATES. The first cut put this
-             beside the built-in devices, ~350 lines up -- the driver may well
-             have loaded and every line it logged was erased before anyone could
-             read it, which reads exactly like "the code never ran". The warning
-             immediately above this one says so in as many words, and I still
-             walked into it. Third time this trap has been paid for.
-         The guest's image is loaded but not yet running, so claims made here are
-         in place before its first instruction. */
-    VddLoadThirdParty();
-    StartupReportVectorWiring();
-    /* ⚠⚠ AFTER THE **LAST** LogWrite. There are THREE of them in WinMain and every one
-         TRUNCATES. This probe was placed after the first, then after the second, and
-         both times its output was silently erased by the next one -- which reads
-         exactly like "the code never ran", and cost three rounds of looking in the
-         wrong place. If you add diagnostics to WinMain, append AFTER line ~9941 or put
-         them in `p` so a LogWrite carries them. */
-    {   DWORD attributes = GetFileAttributesA(WOWTRY_FLAG);
-        CHAR wowLine[200], *wowCursor = wowLine;
-        wowCursor = LogPut(wowCursor, "LDTARM: wow_mods="); wowCursor = LogHex(wowCursor, (DWORD)g_WowModuleCount);
-        wowCursor = LogPut(wowCursor, " flag_attr=0x");      wowCursor = LogHex(wowCursor, attributes);
-        wowCursor = LogPut(wowCursor, "\r\n"); LogAppend(LOG_PATH, wowLine, wowCursor);
-        if (!g_WowModuleCount && attributes != INVALID_FILE_ATTRIBUTES)
-            WowProbeLdtMatrix("dos-late");  /* the other corner of the 2x2 */
-    }
-    ModeYRemapFlushReport();     /* whatever the A0000 remap had to say, now it fits */
-    /* ── CAN THE A0000 WINDOW BE REMAPPED? THE ONE FACT THE REAL VIDEO FIX NEEDS. ────
-         Mode Y cannot be de-interleaved from a flat aperture: A0000 is one buffer, so
-         a guest write lands there with no record of which plane the map mask selected,
-         and six after-the-fact rules have now been measured against captured frames
-         without finding a good one (see modey_flush()). The fix is to stop guessing --
-         give each plane its own backing and point A0000 at the selected one on a mask
-         change, with four pagefile-backed sections and MapViewOfFileEx at a fixed
-         address: O(1) per change, exact, no copying.
-         Whether that is possible at all turns on ONE thing: is A0000 its own
-         allocation, or a slice of a larger reservation the VDM kernel made? A section
-         cannot be mapped into the middle of an existing reservation, and MEM_RELEASE
-         only takes a whole allocation. VirtualQuery answers it for the cost of one log
-         line, and it is worth far more than another guess at a heuristic. */
-    { MEMORY_BASIC_INFORMATION regionInfo;
-      if (VirtualQuery((LPCVOID)(ULONG_PTR)VIDEO_APERTURE_BASE, &regionInfo, sizeof regionInfo) == sizeof regionInfo) {
-          cursor = LogPut(cursor, "STAGE2: A0000 region: alloc_base=0x");
-          cursor = LogHex(cursor, (DWORD)(ULONG_PTR)regionInfo.AllocationBase);
-          cursor = LogPut(cursor, " base=0x");   cursor = LogHex(cursor, (DWORD)(ULONG_PTR)regionInfo.BaseAddress);
-          cursor = LogPut(cursor, " size=0x");   cursor = LogHex(cursor, (DWORD)regionInfo.RegionSize);
-          cursor = LogPut(cursor, " state=0x");  cursor = LogHex(cursor, regionInfo.State);
-          cursor = LogPut(cursor, " type=0x");   cursor = LogHex(cursor, regionInfo.Type);
-          cursor = LogPut(cursor, " prot=0x");   cursor = LogHex(cursor, regionInfo.Protect);
-          cursor = LogPut(cursor, " allocprot=0x"); cursor = LogHex(cursor, regionInfo.AllocationProtect);
-          cursor = LogPut(cursor, (regionInfo.AllocationBase == (LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE)
-                        ? "  -> OWN ALLOCATION: remappable\r\n"
-                        : "  -> inside a larger reservation: NOT remappable in place\r\n");
-          LogAppend(LOG_PATH, base, cursor); cursor = base;
-      } }
-    { CHAR busLine[160], *busCursor = busLine;
-      busCursor = LogPut(busCursor, g_Bus.ClaimFailures ? "STAGE2: *** BUS CLAIMS REFUSED: " : "STAGE2: bus ok: ");
-      busCursor = LogHex(busCursor, (DWORD)g_Bus.ClaimFailures);
-      busCursor = LogPut(busCursor, " refused, ports="); busCursor = LogHex(busCursor, (DWORD)g_Bus.PortCount);
-      busCursor = LogPut(busCursor, "/"); busCursor = LogHex(busCursor, (DWORD)VDD_MAX_PORT_RANGES);
-      busCursor = LogPut(busCursor, " mem="); busCursor = LogHex(busCursor, (DWORD)g_Bus.MemoryCount);
-      busCursor = LogPut(busCursor, "/"); busCursor = LogHex(busCursor, (DWORD)VDD_MAX_MEMORY_WINDOWS);
-      busCursor = LogPut(busCursor, " dev="); busCursor = LogHex(busCursor, (DWORD)g_Bus.DeviceCount);
-      busCursor = LogPut(busCursor, "/"); busCursor = LogHex(busCursor, (DWORD)VDD_MAX_DEVICES);
-      busCursor = LogPut(busCursor, "\r\n"); LogAppend(LOG_PATH, busLine, busCursor); SerialOut(busLine, busCursor); }
-
-    SetCurrentDirectoryA(g_CurrentDirectory);    /* DOS relative paths resolve against CurDir */
+    StartupStartGuest(&cursor, &base, &uiThread, &machine, &image, tib, report);
 
     /* Service loop: run V86 until a BOP, dispatch INT 21h, step past the BOP, re-enter.
        Runs until the guest terminates, a hard stop, or the window closes (g_Running);
