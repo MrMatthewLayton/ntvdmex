@@ -1334,6 +1334,875 @@ static PSTR ReportGuestStateAtExit(PSTR cursor, PSTR const base, volatile BYTE *
     return cursor;
 }
 
+
+/* End of run: the 3DAh clock, the CRTC start and registers, and the video state as the run ended, with each plane's non-zero count. */
+static PSTR ReportCrtcAndVideoNow(PSTR cursor, UINT *nonZero)
+{
+    UINT plane;
+    /* ► Does this guest scroll or page-flip, and how often would a frame have
+         been built from a half-written start address? */
+    /* ► THE RETRACE CLOCK, IN ITS OWN UNITS. span_ms is how much MODEL time passed
+         between the guest's first and last 0x3DA poll. Against the run's real
+         length it says whether the timebase is wall-clock: if span_ms is a
+         twentieth of the run, the guest's frame rate is low because the clock is
+         slow, and the vblank geometry is not on trial. dtmax is the longest the
+         guest went between polls -- it can only miss a vblank if that exceeds the
+         blanking interval. */
+    cursor = LogPut(cursor, "STAGE2: 3da clock: span_ms="); cursor = LogDecimal(cursor, (UINT32)((g_Video.Time3DaLast - g_Video.Time3DaFirst) / MICROSECONDS_PER_MILLISECOND_U));
+    cursor = LogPut(cursor, " reads=");  cursor = LogDecimal(cursor, g_Video.Port3DaReads);
+    cursor = LogPut(cursor, " edges=");  cursor = LogDecimal(cursor, g_Video.VblEdges);
+    cursor = LogPut(cursor, " pal_splits="); cursor = LogDecimal(cursor, g_Video.PaletteSplitNotes);
+    cursor = LogPut(cursor, " dacrow[0-1,2-159,160+,vbl]="); cursor = LogDecimal(cursor, g_Video.DacRowHistogram[0]);
+    cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.DacRowHistogram[1]);
+    cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.DacRowHistogram[2]);
+    cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.DacRowHistogram[3]);
+    cursor = LogPut(cursor, " dtmax_us="); cursor = LogDecimal(cursor, g_Video.Dt3DaMax);
+    cursor = LogPut(cursor, " dtzero=");   cursor = LogDecimal(cursor, g_Video.Dt3DaZero);
+    cursor = LogPut(cursor, " dthist[1,4,16,64,256,1k,4k,16k+us]=");
+    { UINT byteIndex; for (byteIndex = 0; byteIndex < 8; ++byteIndex) { if (byteIndex) cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.Dt3DaHistogram[byteIndex]); } }
+    cursor = LogPut(cursor, "\r\n");
+    cursor = LogPut(cursor, "STAGE2: crtc start: pairs="); cursor = LogDecimal(cursor, g_Video.CrtcStartWrites);
+    cursor = LogPut(cursor, " torn_avoided="); cursor = LogDecimal(cursor, g_Video.CrtcStartHalf);
+    cursor = LogPut(cursor, " live="); cursor = LogDecimal(cursor, g_Video.CrtcStartLive);
+    cursor = LogPut(cursor, " gap_frames[0,1,2,3,4+]=");         /* #221: guest pacing */
+    { INT gateIndex; for (gateIndex = 0; gateIndex < 5; ++gateIndex) { if (gateIndex) cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.StartGapHistogram[gateIndex]); } }
+    cursor = LogPut(cursor, "\r\n");
+    cursor = LogPut(cursor, "STAGE2: crtc: start=");   cursor = LogDecimal(cursor, g_Video.CrtcStart);
+    cursor = LogPut(cursor, " offset=");               cursor = LogDecimal(cursor, g_Video.CrtcOffset);
+    cursor = LogPut(cursor, " off_seen=");             cursor = LogDecimal(cursor, g_Video.IsCrtcOffsetSeen);
+    cursor = LogPut(cursor, " linecmp=");              cursor = LogDecimal(cursor, g_Video.CrtcLineCompare);
+    cursor = LogPut(cursor, " (0x18=");                cursor = LogDecimal(cursor, g_Video.CrtcLineCompareLow);
+    cursor = LogPut(cursor, " ovf=");                  cursor = LogDecimal(cursor, g_Video.CrtcOverflow);
+    cursor = LogPut(cursor, " maxscan=");              cursor = LogDecimal(cursor, g_Video.CrtcMaxScan);
+    cursor = LogPut(cursor, ")\r\n");
+    /* ── THE VGA REGISTER FILE. (docs/inventory/vga.md, step 1) ─────────────────
+         Its own buffer and its own flush: the block is ~1.2 KB and `report` is
+         shared with everything else in this summary. */
+    {   static CHAR videoRegisters[2048];
+        INT dumpLength = VddVideoRegistersDump(&g_Video, videoRegisters, (INT)sizeof videoRegisters);
+        if (dumpLength > 0) { LogAppend(LOG_PATH, videoRegisters, videoRegisters + dumpLength); SerialOut(videoRegisters, videoRegisters + dumpLength); } }
+    cursor = LogPut(cursor, "STAGE2: video now: chain4="); cursor = LogHexByte(cursor, g_Video.IsChain4);
+    cursor = LogPut(cursor, " ymask="); cursor = LogHexByte(cursor, g_Video.YMask);
+    cursor = LogPut(cursor, " mkind="); cursor = LogHexByte(cursor, g_Video.ModeKind);
+    cursor = LogPut(cursor, " gw="); cursor = LogHex(cursor, g_Video.GraphicsWidth); cursor = LogPut(cursor, " gh="); cursor = LogHex(cursor, g_Video.GraphicsHeight);
+    cursor = LogPut(cursor, " mapmask="); cursor = LogHexByte(cursor, g_Video.MapMask);
+    cursor = LogPut(cursor, " setreset="); cursor = LogHexByte(cursor, g_Video.SetReset);
+    cursor = LogPut(cursor, " ensr="); cursor = LogHexByte(cursor, g_Video.EnableSetReset);
+    cursor = LogPut(cursor, " wmode="); cursor = LogHexByte(cursor, g_Video.WriteMode);
+    cursor = LogPut(cursor, " plane-nonzero=");
+    for (plane = 0; plane < VIDEO_PLANES; ++plane) { cursor = LogHex(cursor, nonZero[plane]); cursor = LogPut(cursor, plane<VIDEO_PLANES - 1?"/":""); }
+    cursor = LogPut(cursor, "\r\n");
+    return cursor;
+}
+
+
+/* End of run: the planar access sites -- off-screen writers, the off-screen cache, colour-compare reads and read sites. */
+static PSTR ReportPlanarSites(PSTR cursor, PSTR const base, PCSTR const reportEnd)
+{
+            {   UINT item;
+                /* ► And, whatever their rank, every site that touched DEEP off-screen
+                     VRAM. That region was unreachable until a plane became 64KB, so
+                     "who is up there" is the question worth answering unprompted -- and
+                     a one-shot blit of a status panel will never be in a top-N list. */
+            { LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
+                cursor = LogPut(cursor, "STAGE2: planar sites touching off-screen (>=0xC000):\r\n");
+                for (item = 0; item < VIDEO_SITES; ++item) {
+                    INT which;
+                    for (which = 0; which < 2; ++which) {
+                        const VIDEO_SITE *videoSite = which ? &g_Video.ReadSites[item] : &g_Video.WriteSites[item];
+                        if (!videoSite->Count || videoSite->High < 0xC000u) continue;
+                        cursor = LogPut(cursor, which ? "  READ  pc=" : "  WRITE pc=");
+                        cursor = LogHex(cursor, videoSite->Pc);
+                        cursor = LogPut(cursor, " n=");     cursor = LogDecimal(cursor, videoSite->Count);
+                        cursor = LogPut(cursor, " off=0x"); cursor = LogHex(cursor, videoSite->Low);
+                        cursor = LogPut(cursor, "..0x");    cursor = LogHex(cursor, videoSite->High);
+                        cursor = LogPut(cursor, "\r\n");
+                    }
+                    if (cursor > reportEnd - 256) break;
+                }         }
+            /* ► THE OFF-SCREEN SPRITE CACHE, WITHOUT THE COLLISION CAVEAT. The report
+                 above is drawn from 256-slot hashes that lost 249,630 reads on the run
+                 this was written for, so a site missing from it may simply have collided
+                 -- and the open toolbar question is precisely whether a routine RAN.
+                 This table is linear and cannot lose an entry to another pc; only to
+                 being full, which `lost` states. `seq` is a tick per cache access, so
+                 first/last order the compositor against the blitter and answer "was the
+                 cache filled BEFORE it was copied to the screen" directly. */
+            /* ⚠ FLUSH FIRST. This block is near the END of a report that shares one
+                 char[8192], and the off-screen list above it can run to dozens of lines.
+                 On its first rig run the buffer guard below fired after the FIRST entry
+                 and silently dropped the other nine -- the table had the answer and the
+                 log did not. It was caught only because `seq` is printed beside the per
+                 entry counts and 12800 did not add up to 19984; without that cross-check
+                 the truncated list reads as a complete one, which is the worst shape a
+                 report can fail in. A fixed buffer is a silent budget: spend it here. */
+            { LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
+            {   UINT item;
+                cursor = LogPut(cursor, "STAGE2: off-screen cache sites (>=0x"); cursor = LogHex(cursor, VIDEO_CACHE_LOW);
+                cursor = LogPut(cursor, "), lost="); cursor = LogDecimal(cursor, g_Video.CacheSitesLost);
+                cursor = LogPut(cursor, " seq=");    cursor = LogDecimal(cursor, g_Video.CacheSequence);
+                cursor = LogPut(cursor, "\r\n");
+                {   UINT32 accounted = 0;
+                    for (item = 0; item < VIDEO_CACHE_SITES; ++item) {
+                        const VIDEO_CACHE_SITE *cacheSite = &g_Video.CacheSites[item];
+                        if (!cacheSite->Count) continue;
+                        accounted += cacheSite->Count;
+                        cursor = LogPut(cursor, cacheSite->IsWrite ? "  cache WRITE pc=" : "  cache READ  pc=");
+                        cursor = LogHex(cursor, cacheSite->Pc);
+                        cursor = LogPut(cursor, " n=");      cursor = LogDecimal(cursor, cacheSite->Count);
+                        cursor = LogPut(cursor, " off=0x");  cursor = LogHex(cursor, cacheSite->Low);
+                        cursor = LogPut(cursor, "..0x");     cursor = LogHex(cursor, cacheSite->High);
+                        cursor = LogPut(cursor, " first=");  cursor = LogDecimal(cursor, cacheSite->First);
+                        cursor = LogPut(cursor, " last=");   cursor = LogDecimal(cursor, cacheSite->Last);
+                        cursor = LogPut(cursor, "\r\n");
+                        if (cursor > reportEnd - 512) break;
+                    }
+                    /* ► THE LIST MUST ACCOUNT FOR EVERY ACCESS IT COUNTED. n's + lost has
+                         to equal seq; if it does not, lines are MISSING and the absence of
+                         a pc above means nothing. Said out loud so it cannot be read past. */
+                    cursor = LogPut(cursor, "  cache accounted="); cursor = LogDecimal(cursor, accounted + g_Video.CacheSitesLost);
+                    cursor = LogPut(cursor, " of seq=");           cursor = LogDecimal(cursor, g_Video.CacheSequence);
+                    cursor = LogPut(cursor, (accounted + g_Video.CacheSitesLost == g_Video.CacheSequence)
+                                  ? " COMPLETE\r\n" : " !! TRUNCATED -- absence proves NOTHING\r\n");
+                }
+            }
+            /* The write sites, busiest first -- who drew the screen, and where. */
+            {   UINT item, shown;
+                for (shown = 0; shown < 14; ++shown) {
+                    UINT best = VIDEO_SITES; UINT32 bestCount = 0;
+                    for (item = 0; item < VIDEO_SITES; ++item)
+                        if (g_Video.WriteSites[item].Count > bestCount) { bestCount = g_Video.WriteSites[item].Count; best = item; }
+                    if (best == VIDEO_SITES) break;
+                    cursor = LogPut(cursor, "  wsite pc="); cursor = LogHex(cursor, g_Video.WriteSites[best].Pc);
+                    cursor = LogPut(cursor, " n=");   cursor = LogDecimal(cursor, g_Video.WriteSites[best].Count);
+                    cursor = LogPut(cursor, " off=0x"); cursor = LogHex(cursor, g_Video.WriteSites[best].Low);
+                    cursor = LogPut(cursor, "..0x");    cursor = LogHex(cursor, g_Video.WriteSites[best].High);
+                    cursor = LogPut(cursor, "\r\n");
+                    g_Video.WriteSites[best].Count = 0;            /* report is the last use of it */
+                    if (cursor > reportEnd - 512) break;
+                }
+                /* ► THE COLOUR-COMPARE READ SITES: a guest asking "where is the ground". */
+            { LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
+                cursor = LogPut(cursor, "STAGE2: planar COLOUR-COMPARE read sites, lost=");
+                cursor = LogDecimal(cursor, g_Video.CompareSitesLost); cursor = LogPut(cursor, "\r\n");
+                for (shown = 0; shown < 10; ++shown) {
+                    UINT best = VIDEO_SITES; UINT32 bestCount = 0;
+                    for (item = 0; item < VIDEO_SITES; ++item)
+                        if (g_Video.CompareSites[item].Count > bestCount) { bestCount = g_Video.CompareSites[item].Count; best = item; }
+                    if (best == VIDEO_SITES) break;
+                    cursor = LogPut(cursor, "  cc-read pc="); cursor = LogHex(cursor, g_Video.CompareSites[best].Pc);
+                    cursor = LogPut(cursor, " n=");   cursor = LogDecimal(cursor, g_Video.CompareSites[best].Count);
+                    cursor = LogPut(cursor, " off=0x"); cursor = LogHex(cursor, g_Video.CompareSites[best].Low);
+                    cursor = LogPut(cursor, "..0x");    cursor = LogHex(cursor, g_Video.CompareSites[best].High);
+                    /* ► AND WHAT IT ANSWERED. all-zero means the guest saw no terrain. */
+                    cursor = LogPut(cursor, " zero="); cursor = LogDecimal(cursor, g_Video.CompareSitesZero[best]);
+                    cursor = LogPut(cursor, " ones="); cursor = LogDecimal(cursor, g_Video.CompareSitesOnes[best]);
+                    cursor = LogPut(cursor, "\r\n");
+                    g_Video.CompareSites[best].Count = 0;
+                    if (cursor > reportEnd - 512) break;
+                }
+                /* ► HOW MANY SITES THIS TOP-N LEFT OUT. Without it a truncated list
+                     reads as a complete enumeration of who touches VRAM, and "pc X is not
+                     here" becomes an argument it cannot support. */
+                {   UINT more = 0;
+                    for (item = 0; item < VIDEO_SITES; ++item) if (g_Video.CompareSites[item].Count) ++more;
+                    cursor = LogPut(cursor, "  (cc-read: "); cursor = LogDecimal(cursor, more);
+                    cursor = LogPut(cursor, " further sites not shown)\r\n");
+                }
+            { LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
+                cursor = LogPut(cursor, "STAGE2: planar read sites, rsite_lost=");
+                cursor = LogDecimal(cursor, g_Video.ReadSitesLost); cursor = LogPut(cursor, "\r\n");
+                for (shown = 0; shown < 14; ++shown) {
+                    UINT best = VIDEO_SITES; UINT32 bestCount = 0;
+                    for (item = 0; item < VIDEO_SITES; ++item)
+                        if (g_Video.ReadSites[item].Count > bestCount) { bestCount = g_Video.ReadSites[item].Count; best = item; }
+                    if (best == VIDEO_SITES) break;
+                    cursor = LogPut(cursor, "  rsite pc="); cursor = LogHex(cursor, g_Video.ReadSites[best].Pc);
+                    cursor = LogPut(cursor, " n=");   cursor = LogDecimal(cursor, g_Video.ReadSites[best].Count);
+                    cursor = LogPut(cursor, " off=0x"); cursor = LogHex(cursor, g_Video.ReadSites[best].Low);
+                    cursor = LogPut(cursor, "..0x");    cursor = LogHex(cursor, g_Video.ReadSites[best].High);
+                    cursor = LogPut(cursor, "\r\n");
+                    g_Video.ReadSites[best].Count = 0;
+                    if (cursor > reportEnd - 512) break;
+                }
+                /* ► HOW MANY SITES THIS TOP-N LEFT OUT. Without it a truncated list
+                     reads as a complete enumeration of who touches VRAM, and "pc X is not
+                     here" becomes an argument it cannot support. */
+                {   UINT more = 0;
+                    for (item = 0; item < VIDEO_SITES; ++item) if (g_Video.ReadSites[item].Count) ++more;
+                    cursor = LogPut(cursor, "  (rsite: "); cursor = LogDecimal(cursor, more);
+                    cursor = LogPut(cursor, " further sites not shown)\r\n");
+                }
+    }
+    return cursor;
+}
+
+
+/* End of run: vertical sync, out-of-range guest memory, the planar write and attribute state, the palette signature, the fade and watch dumps, the planar high-water mark. */
+static PSTR ReportPlanarVideoState(PSTR cursor, PCSTR const reportEnd)
+{
+    cursor = LogPut(cursor, "STAGE2: vsync: vbl_edges="); cursor = LogHex(cursor, g_Video.VblEdges);
+    cursor = LogPut(cursor, " p3da_reads=");             cursor = LogHex(cursor, g_Video.Port3DaReads);
+    cursor = LogPut(cursor, " hbl_owed=");               cursor = LogHex(cursor, g_Video.Port3DaHblOwed);
+    cursor = LogPut(cursor, " vbl_owed=");               cursor = LogHex(cursor, g_Video.Port3DaVblOwed);   /* #225 */
+    cursor = LogPut(cursor, " run_ms=");                 cursor = LogHex(cursor, GetTickCount() - g_RunStartTick);
+    cursor = LogPut(cursor, "\r\n");
+    cursor = LogPut(cursor, "STAGE2: imem out-of-range (guarded, would have CRASHED the host): bad_reads=");
+    cursor = LogHex(cursor, g_InterpreterMemoryBadReads); cursor = LogPut(cursor, " bad_writes="); cursor = LogHex(cursor, g_InterpreterMemoryBadWrites);
+    cursor = LogPut(cursor, " logged="); cursor = LogHex(cursor, g_InterpreterMemoryBadLogged); cursor = LogPut(cursor, "\r\n");
+    /* ► Is mode Y actually in use? The whole unchained theory rests on Doom
+         clearing Sequencer reg 4 bit 3, which was INFERRED from a pixel pattern
+         (80-px period, 50 rows) and never observed directly. Print the register. */
+    /* ── THE CRTC AS THE GUEST PROGRAMMED IT. Added s64 after two speculative
+         fixes in a row -- one right, one wrong. render_planar now depends on all
+         of these, so a wrong picture has to be able to name which register is
+         responsible instead of being guessed at. */
+    {   UINT index;
+        cursor = LogPut(cursor, "STAGE2: planar w0: ensr@write");
+        for (index = 0; index < 16; ++index) if (g_Video.WriteEnableSetResetHistogram[index]) {
+            cursor = LogPut(cursor, " 0x"); cursor = LogHexByte(cursor, index);
+            cursor = LogPut(cursor, "="); cursor = LogDecimal(cursor, g_Video.WriteEnableSetResetHistogram[index]); }
+        cursor = LogPut(cursor, " | alu");
+        for (index = 0; index < 4; ++index) if (g_Video.WriteAluHistogram[index]) {
+            cursor = LogPut(cursor, " "); cursor = LogDecimal(cursor, index);
+            cursor = LogPut(cursor, "="); cursor = LogDecimal(cursor, g_Video.WriteAluHistogram[index]); }
+        cursor = LogPut(cursor, " | p3_from_sr=");  cursor = LogDecimal(cursor, g_Video.WritePlane3SetReset);
+        cursor = LogPut(cursor, " of_which_nonzero="); cursor = LogDecimal(cursor, g_Video.WritePlane3NonZero);
+        cursor = LogPut(cursor, " p3_from_cpu=");   cursor = LogDecimal(cursor, g_Video.WritePlane3Data);
+        cursor = LogPut(cursor, "\r\n"); }
+    {   UINT index;
+        cursor = LogPut(cursor, "STAGE2: attr: acport="); cursor = LogDecimal(cursor, g_Video.AcPortWrites);
+        cursor = LogPut(cursor, " acbios=");              cursor = LogDecimal(cursor, g_Video.AcBiosWrites);
+        cursor = LogPut(cursor, " dacw=");                cursor = LogDecimal(cursor, g_Video.DacWrites);
+        cursor = LogPut(cursor, " palresets="); cursor = LogDecimal(cursor, g_Video.PaletteResets);
+        cursor = LogPut(cursor, " hi_since_reset="); cursor = LogDecimal(cursor, g_Video.DacHighSinceReset);
+        /* The one that can actually be non-zero: this report is written after
+           the guest has exited through a mode set back to text. */
+        cursor = LogPut(cursor, " hi_max="); cursor = LogDecimal(cursor, g_Video.DacHighMax);
+        cursor = LogPut(cursor, " dacblk[16s]=");
+        for (index = 0; index < 16; ++index) { cursor = LogDecimal(cursor, g_Video.DacBlock[index]); cursor = LogPut(cursor, ","); }
+        cursor = LogPut(cursor, " vpal=[");
+        for (index = 0; index < 16; ++index) { cursor = LogHexByte(cursor, g_Video.PaletteRegisters[index]); cursor = LogPut(cursor, " "); }
+        cursor = LogPut(cursor, "] dac@vpal=[");
+        /* The DAC entries the DEFAULT AC palette actually points at. If these are
+           the seeded EGA64 values the guest never wrote them; if they hold its
+           colours, the write landed and the fault is downstream. */
+        for (index = 0; index < 16; ++index) {
+            UINT32 colour = g_Video.Dac[g_Video.PaletteRegisters[index] & 0x3F];
+            cursor = LogHexByte(cursor, (colour >> WORD_SHIFT) & BYTE_MASK); cursor = LogHexByte(cursor, (colour >> BYTE_SHIFT) & BYTE_MASK);
+            cursor = LogHexByte(cursor, colour & BYTE_MASK); cursor = LogPut(cursor, " "); }
+        cursor = LogPut(cursor, "]\r\n"); }
+    /* ── s69: IS THE LEVEL PALETTE EVEN LOADED? ────────────────────────────────
+         The gameplay screen renders black because dac@vpal is all-zero. That is
+         either "the game never loaded its colours" or "the fade multiplied them
+         to zero and is stuck". The oracle's per-frame palette buffer holds a
+         known green run (00 2a 00 15 3f 15 15 15 15 2a 00 00); scan our guest's
+         conventional memory for it. Found => the colours ARE in memory and the
+         fault is the fade/DAC path (ours); absent => the palette was never loaded
+         (a file-read/decode fault, earlier). Bounded, one pass, exit only. */
+    {   static const BYTE signature[12] = {0x00,0x2a,0x00,0x15,0x3f,0x15,0x15,0x15,0x15,0x2a,0x00,0x00};
+        UINT32 candidate, found = 0xFFFFFFFFu, hits = 0;
+        for (candidate = 0x400; candidate + 12 <= 0xA0000u; ++candidate) {
+            if ((candidate & 0xFFF) == 0 && !InterpreterMemoryPageOk(candidate)) { candidate += 0xFFF; continue; }
+            if (*(volatile BYTE *)candidate == 0x00 && *(volatile BYTE *)(candidate+1) == 0x2a) {
+                UINT32 item; INT isOk = 1;
+                for (item = 0; item < 12; ++item) if (*(volatile BYTE *)(candidate+item) != signature[item]) { isOk = 0; break; }
+                if (isOk) { if (found == 0xFFFFFFFFu) found = candidate; hits++; }
+            }
+        }
+        cursor = LogPut(cursor, "STAGE2: level-palette signature: ");
+        if (found != 0xFFFFFFFFu) { cursor = LogPut(cursor, "FOUND at lin=0x"); cursor = LogHex(cursor, found);
+            cursor = LogPut(cursor, " (hits="); cursor = LogDecimal(cursor, hits);
+            cursor = LogPut(cursor, ") -> colours ARE loaded; fade/DAC path is the fault\r\n"); }
+        else cursor = LogPut(cursor, "ABSENT -> the level palette was never loaded into guest RAM\r\n");
+    }
+    /* ── s69: THE FADED PALETTE BUFFER + THE FADE STATE, from the guest DS the
+         heartbeat last sampled. The per-frame palette routine feeds the DAC from
+         ds:0x2668; if that is black while the raw palette (above) is present, the
+         fade multiplied it to zero. [0x1f7c] is the palette-state selector
+         (oracle=4). Reads go through InterpreterMemoryPageOk so an unmapped DS cannot fault. */
+    if (g_HeartbeatDs) {
+        UINT32 dataSegmentBase = (UINT32)g_HeartbeatDs << PARAGRAPH_SHIFT, index;
+        cursor = LogPut(cursor, "STAGE2: fade dump ds=0x"); cursor = LogHex(cursor, g_HeartbeatDs);
+        if (InterpreterMemoryPageOk(dataSegmentBase + 0x1f7c)) {
+            cursor = LogPut(cursor, " [1f7c]=0x"); cursor = LogHexByte(cursor, *(volatile BYTE *)(dataSegmentBase + 0x1f7c));
+        }
+        cursor = LogPut(cursor, " buf@2668=[");
+        if (InterpreterMemoryPageOk(dataSegmentBase + 0x2668)) {
+            for (index = 0; index < 24; ++index) { cursor = LogHexByte(cursor, *(volatile BYTE *)(dataSegmentBase + 0x2668 + index)); cursor = LogPut(cursor, " "); }
+        } else cursor = LogPut(cursor, "<ds:2668 unmapped>");
+        cursor = LogPut(cursor, "]\r\n");
+    }
+    /* The VRAM watchpoint. Silent unless cfg/vwatch.txt armed it. */
+    if (g_Video.WatchOffset != VIDEO_OFFSET_NONE) {
+        UINT watchIndex2, watchCount = g_Video.WatchCount < VIDEO_WATCH_MAX ? g_Video.WatchCount : VIDEO_WATCH_MAX;
+        cursor = LogPut(cursor, "STAGE2: vwatch off=0x"); cursor = LogHex(cursor, g_Video.WatchOffset);
+        cursor = LogPut(cursor, " writes="); cursor = LogDecimal(cursor, g_Video.WatchCount); cursor = LogPut(cursor, "\r\n");
+        for (watchIndex2 = 0; watchIndex2 <= watchCount; ++watchIndex2) {
+            const VIDEO_WATCH_RECORD *watch = (watchIndex2 < watchCount) ? &g_Video.Watch[watchIndex2] : &g_Video.WatchLast;
+            INT item;
+            if (watchIndex2 == watchCount) { if (!g_Video.WatchCount) break; cursor = LogPut(cursor, "  LAST "); }
+            else          { cursor = LogPut(cursor, "  #"); cursor = LogDecimal(cursor, watchIndex2); cursor = LogPut(cursor, " "); }
+            cursor = LogPut(cursor, "pc="); cursor = LogHex(cursor, watch->Pc);
+            cursor = LogPut(cursor, " wm="); cursor = LogDecimal(cursor, watch->WriteMode);
+            cursor = LogPut(cursor, " mm="); cursor = LogHexByte(cursor, watch->MapMask);
+            cursor = LogPut(cursor, " ensr="); cursor = LogHexByte(cursor, watch->EnableSetReset);
+            cursor = LogPut(cursor, " sr="); cursor = LogHexByte(cursor, watch->SetReset);
+            cursor = LogPut(cursor, " frot="); cursor = LogHexByte(cursor, watch->FunctionRotate);
+            cursor = LogPut(cursor, " bm="); cursor = LogHexByte(cursor, watch->BitMask);
+            cursor = LogPut(cursor, " cpu="); cursor = LogHexByte(cursor, watch->Cpu);
+            cursor = LogPut(cursor, " lat=");
+            for (item = 0; item < 4; ++item) cursor = LogHexByte(cursor, watch->Latch[item]);
+            cursor = LogPut(cursor, " after=");
+            for (item = 0; item < 4; ++item) cursor = LogHexByte(cursor, watch->After[item]);
+            cursor = LogPut(cursor, "\r\n");
+            if (cursor > reportEnd - 256) break;
+        }
+    }
+    /* ► Does this guest use OFF-SCREEN VRAM? Above 38400 used to read back as
+         0xFF, so the answer used to be invisible. */
+    cursor = LogPut(cursor, "STAGE2: planar hi_water=0x"); cursor = LogHex(cursor, g_Video.PlanarHighWater);
+    cursor = LogPut(cursor, " plane_size=0x"); cursor = LogHex(cursor, (DWORD)VIDEO_PLANE_SIZE);
+    cursor = LogPut(cursor, " wsite_lost="); cursor = LogDecimal(cursor, g_Video.WriteSitesLost);
+    /* ► DOES THIS GUEST USE COLOUR COMPARE? Read mode 1 is pixel-perfect terrain
+         collision in one instruction; until it was implemented, every such read
+         returned a raw plane byte and the guest acted on it. */
+    cursor = LogPut(cursor, " reads[mode0/mode1]="); cursor = LogDecimal(cursor, g_Video.ReadModeHistogram[0]);
+    cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.ReadModeHistogram[1]);
+    cursor = LogPut(cursor, " cc="); cursor = LogHexByte(cursor, g_Video.ColorCompare);
+    cursor = LogPut(cursor, " cdc="); cursor = LogHexByte(cursor, g_Video.ColorDontCare);
+    cursor = LogPut(cursor, "\r\n");
+    return cursor;
+}
+
+
+/* End of run: the OPL trace and profile, device events, the PC speaker, the wave output and the OPL rhythm section. */
+static PSTR ReportAudioDevices(PSTR cursor)
+{
+        cursor = LogPut(cursor, "STAGE2: opl: trace=");   cursor = LogHex(cursor, g_OplTraceCount);
+        cursor = LogPut(cursor, " tdrop=");               cursor = LogHex(cursor, g_OplTraceDrop);
+        cursor = LogPut(cursor, "\r\n");
+        /* ── THE SPEAKER PATH, END TO END, IN ONE LINE. "I heard nothing" has four
+         causes and until now no log told them apart: the guest's port writes not
+         reaching the VDD, the mixer not fitted to it, a frequency it refuses, or
+         a fault downstream of the mixer entirely. Each counter is taken where the
+         decision is made, so the first zero names the stage. */
+    { INT eventIndex; cursor = LogPut(cursor, "STAGE2: events: direct_io="); cursor = LogHex(cursor, g_IoViaDirect);
+      cursor = LogPut(cursor, " retro_io=");  cursor = LogHex(cursor, g_IoViaRetro);
+      cursor = LogPut(cursor, " by_event=");
+      for (eventIndex = 0; eventIndex < EV_HIST_MAX; ++eventIndex) {
+          if (!g_EventHistogram[eventIndex]) continue;
+          cursor = LogPut(cursor, " "); cursor = LogHex(cursor, (DWORD)eventIndex); cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, g_EventHistogram[eventIndex]);
+      }
+      cursor = LogPut(cursor, "\r\n"); }
+    cursor = LogPut(cursor, "STAGE2: pcspk: want=");   cursor = LogHex(cursor, (DWORD)g_SpeakerReal);
+    cursor = LogPut(cursor, " opened=");               cursor = LogHex(cursor, (DWORD)g_PcSpeaker.OpenState);
+    cursor = LogPut(cursor, " open_err=");             cursor = LogHex(cursor, g_PcSpeaker.OpenError);
+    cursor = LogPut(cursor, " via=");                  cursor = LogHex(cursor, (DWORD)g_PcSpeaker.OpenPath);
+    cursor = LogPut(cursor, " ioctls=");               cursor = LogHex(cursor, g_PcSpeaker.IoctlCount);
+    cursor = LogPut(cursor, " refused=");              cursor = LogHex(cursor, g_PcSpeaker.FailedCount);
+    cursor = LogPut(cursor, " last_hz=");              cursor = LogHex(cursor, g_PcSpeaker.CurrentHz);
+    cursor = LogPut(cursor, "\r\n");
+    cursor = LogPut(cursor, "STAGE2: wave: dev_volume_ok="); cursor = LogHex(cursor, (DWORD)g_Wave.IsDeviceVolumeKnown);
+    cursor = LogPut(cursor, " dev_volume=0x");               cursor = LogHex(cursor, g_Wave.DeviceVolume);
+    cursor = LogPut(cursor, " silent=");                     cursor = LogHex(cursor, (DWORD)g_Wave.IsSilent);
+    cursor = LogPut(cursor, "\r\n");
+    cursor = LogPut(cursor, "STAGE2: spk: fitted=");    cursor = LogHex(cursor, (DWORD)(g_Audio.Speaker ? 1 : 0));
+    cursor = LogPut(cursor, " level=");                 cursor = LogHex(cursor, (DWORD)g_Audio.SpeakerLevel);
+    cursor = LogPut(cursor, " port61=0x");              cursor = LogHex(cursor, (DWORD)g_Speaker.Port61);
+    cursor = LogPut(cursor, " ch2_reload=");            cursor = LogHex(cursor, (DWORD)g_Pit.Counter2Reload);
+    cursor = LogPut(cursor, " gated_frames=");          cursor = LogHex(cursor, g_Audio.SpeakerGated);
+    cursor = LogPut(cursor, " emitted_frames=");        cursor = LogHex(cursor, g_Audio.SpeakerFrames);
+    cursor = LogPut(cursor, " last_hz=");               cursor = LogHex(cursor, g_Audio.SpeakerHz);
+    cursor = LogPut(cursor, " mixed_frames=");          cursor = LogHex(cursor, g_Audio.FramesMixed);
+    cursor = LogPut(cursor, " master=");                cursor = LogHex(cursor, g_Audio.Master);
+    cursor = LogPut(cursor, " muted=");                 cursor = LogHex(cursor, (DWORD)g_Audio.IsMuted);
+    cursor = LogPut(cursor, "\r\n");
+    cursor = LogPut(cursor, "STAGE2: opl: writes=");  cursor = LogHex(cursor, g_Opl.ProfileWrites);
+        cursor = LogPut(cursor, " keyons=");              cursor = LogHex(cursor, g_Opl.ProfileKeyOns);
+        cursor = LogPut(cursor, " bd_writes=");           cursor = LogHex(cursor, g_Opl.ProfileBdWrites);
+        cursor = LogPut(cursor, " bd_or=");               cursor = LogHexByte(cursor, g_Opl.ProfileBdOr);
+        cursor = LogPut(cursor, " keyon_am=");            cursor = LogHex(cursor, g_Opl.ProfileKeyOnAm);
+        cursor = LogPut(cursor, " keyon_vib=");           cursor = LogHex(cursor, g_Opl.ProfileKeyOnVibrato);
+        cursor = LogPut(cursor, " am_ops=");              cursor = LogHex(cursor, g_Opl.ProfileAmOperators);
+        cursor = LogPut(cursor, " vib_ops=");             cursor = LogHex(cursor, g_Opl.ProfileVibratoOperators);
+        cursor = LogPut(cursor, " waves=");               cursor = LogHexByte(cursor, g_Opl.ProfileWaveMask);
+        cursor = LogPut(cursor, " wse=");                 cursor = LogHexByte(cursor, g_Opl.ProfileWaveformSelect);
+        cursor = LogPut(cursor, "\r\n");
+        /* PERCUSSION, BY EDGE COUNT. bd_or above is an OR over the whole run and
+           cannot tell "set once at init" from "drums play throughout" -- it once
+           produced a confident wrong answer about exactly this register. These are
+           key-on edges per voice. All five are synthesised since #139 (hi-hat,
+           snare and cymbal were silent before it and this line said so); the counts
+           stay because they say how much percussion a game actually uses. */
+        cursor = LogPut(cursor, "STAGE2: opl rhythm: bassdrum="); cursor = LogHex(cursor, g_Opl.ProfileRhythmHits[4]);
+        cursor = LogPut(cursor, " tomtom=");                      cursor = LogHex(cursor, g_Opl.ProfileRhythmHits[2]);
+        cursor = LogPut(cursor, " hihat=");                       cursor = LogHex(cursor, g_Opl.ProfileRhythmHits[0]);
+        cursor = LogPut(cursor, " snare=");                       cursor = LogHex(cursor, g_Opl.ProfileRhythmHits[3]);
+        cursor = LogPut(cursor, " cymbal=");                      cursor = LogHex(cursor, g_Opl.ProfileRhythmHits[1]);
+        cursor = LogPut(cursor, "\r\n");
+    return cursor;
+}
+
+
+/* End of run: device-IRQ retries, the second sound line and the per-block SB ledger. */
+static PSTR ReportDeviceIrqRetriesAndSoundBlocks(PSTR cursor, PSTR const base, PCSTR const reportEnd)
+{
+    cursor = LogPut(cursor, "\r\nSTAGE2: devirq async retry (one per sync): try=");
+    cursor = LogHex(cursor, g_IrqNRetryTry);
+    cursor = LogPut(cursor, " ok="); cursor = LogHex(cursor, g_IrqNRetryOk);
+    cursor = LogPut(cursor, " (0/0 = every device IRQ landed at its raise instant)");
+    cursor = LogPut(cursor, "\r\nSTAGE2: devirq (cooperative PM retry): inj=");
+    cursor = LogHex(cursor, g_PmDeviceIrqInjected);
+    cursor = LogPut(cursor, " fail=");  cursor = LogHex(cursor, g_PmDeviceIrqFail);
+    cursor = LogPut(cursor, " dropped_unhooked="); cursor = LogHex(cursor, g_PmDeviceIrqDrop);
+    cursor = LogPut(cursor, "\r\nSTAGE2: sound2: ");
+    cursor = LogPut(cursor, " mpu_uart=");                cursor = LogHex(cursor, (DWORD)g_Mpu.IsUartMode);
+    cursor = LogPut(cursor, " host_wave=");               cursor = LogPut(cursor, g_Wave.IsSilent ? "SILENT" : "open");
+    cursor = LogPut(cursor, " host_midi=");               cursor = LogPut(cursor, g_Wave.MidiOut ? "open" : "NONE");
+    cursor = LogPut(cursor, " underruns=");               cursor = LogHex(cursor, g_Wave.Underruns);
+    cursor = LogPut(cursor, "\r\n");
+    /* ► THE BLOCK-BOUNDARY LEDGER (see the SB_BLOCK_RECORD comment in vdd_sb.h). One line
+         per completed block for the first few: where the capture stood, what the
+         8237 held, and whether it had wrapped. cap_off is the load-bearing column --
+         it turns sbref.py's INFERRED 128-frame grid into measured boundaries, so
+         "the jump is two frames in" can be checked against fact instead of against
+         our own guess at where a block starts. */
+    if (g_Sb.BlockLogCount) {
+        UINT32 blockIndex;
+        cursor = LogPut(cursor, "STAGE2: sound blocks: n="); cursor = LogHex(cursor, g_Sb.Blocks);
+        cursor = LogPut(cursor, " logged="); cursor = LogHex(cursor, g_Sb.BlockLogCount);
+        cursor = LogPut(cursor, " (cap_off block_len phys count base_addr base_count page mode)\r\n");
+        for (blockIndex = 0; blockIndex < g_Sb.BlockLogCount && blockIndex < SB_BLOCK_LOG_MAX; ++blockIndex) {
+            const SB_BLOCK_RECORD *blockRecord = &g_Sb.BlockLog[blockIndex];
+            cursor = LogPut(cursor, "STAGE2: sbblk "); cursor = LogHexByte(cursor, blockIndex);
+            cursor = LogPut(cursor, " cap_off=");    cursor = LogHex(cursor, blockRecord->CaptureOffset);
+            cursor = LogPut(cursor, " blk_len=");    cursor = LogHex(cursor, blockRecord->BlockLength);
+            cursor = LogPut(cursor, " phys=");       cursor = LogHex(cursor, blockRecord->Physical);
+            cursor = LogPut(cursor, " count=");      cursor = LogHex(cursor, blockRecord->CurrentCount);
+            cursor = LogPut(cursor, " base=");       cursor = LogHex(cursor, blockRecord->BaseAddress);
+            cursor = LogPut(cursor, "/");            cursor = LogHex(cursor, blockRecord->BaseCount);
+            cursor = LogPut(cursor, " page=");       cursor = LogHexByte(cursor, blockRecord->Page);
+            cursor = LogPut(cursor, " mode=");       cursor = LogHexByte(cursor, blockRecord->Mode);
+            cursor = LogPut(cursor, blockRecord->Reloaded ? " WRAPPED" : " mid-ring");
+            if (blockRecord->Ended) cursor = LogPut(cursor, " ENDED");
+            cursor = LogPut(cursor, "\r\n");
+            /* `base` points PAST the preamble, not at report[0], so bound against
+               the array itself -- p - base would let this overrun by the preamble's
+               length. */
+            if (cursor > reportEnd - 512) {
+                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+            }
+        }
+        /* Hand the rest of STAGE2 an empty buffer: the ledger is the biggest single
+           block in this report and everything after it was running on fumes. */
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    }
+    return cursor;
+}
+
+
+/* End of run: DMX's mixer task as found in guest memory, and who polled the DMA count and from where. */
+static PSTR ReportDmxTaskAndDmaPolls(PSTR cursor)
+{
+    /* ── READ DMX'S TASK PERIOD OUT OF THE LIVE GUEST. ──────────────────────────
+         Everything about the refill rate is inferred from how often the mixer polls:
+         "period 1 tick, overrunning" and "period 2 ticks, working as designed" both
+         fit 58 runs/s and need opposite fixes. The scheduler (DOOM.EXE 0x57224)
+         walks 32-byte task entries -- +0x00 handler, +0x08 PERIOD, +0x14 next_due,
+         +0x1c busy, +0x1e enabled -- so the period is simply there to be read.
+       ⚠ DO NOT COMPUTE THE ADDRESS. Composing virtual->guest through the LE object
+         table produced a table of noise, and the structural scan written to find it
+         instead read unmapped memory and killed the run before STAGE2 finished.
+       ► SEARCH FOR THE HANDLER. The mixer's entry is DOOM.EXE file 0x56884, and the
+         file->guest delta 0x03AEDFEC is verified twice over (DMX's IRQ0 stub and
+         Doom's keyboard ISR, and DMXCHK re-checks it in-run), so the task entry is
+         whatever 32 bytes begin with that pointer. No data-address arithmetic at
+         all, and a hit is self-verifying.
+         Walk only COMMITTED, READABLE regions and stop 32 bytes short of each one's
+         end -- that is what the previous attempt got wrong. */
+    { const DWORD mixer = 0x57224u + 0x03AEDFECu;   /* DMX IRQ0 handler = table[0] */
+      const volatile BYTE *stub = (const volatile BYTE *)(ULONG_PTR)0x03b431f0;
+      MEMORY_BASIC_INFORMATION memoryInfo;
+      ULONG_PTR address = 0x00010000u, lim = 0x7ff00000u;   /* whole user space */
+      UINT found = 0, tries;
+      /* ⚠ 0x03b431f0 IS DOOM'S ADDRESS, AND ONLY DOOM'S. Reading it unguarded is
+           the very mistake the note above says the scan got wrong -- made again,
+           one line below the warning. Under Doom the page is mapped and the probe
+           is free; under ANY OTHER GUEST it is not, and the access violation
+           killed the host mid-summary: Skyroads crashed on exit four times over
+           and truncated its own STAGE2 log at `async why irq00`. A Doom-shaped
+           instrument must be inert everywhere else, so ASK FIRST. */
+      cursor = LogPut(cursor, " DMXCHK=");
+      if (MemoryReadable((ULONG_PTR)stub, 5))
+          for (tries = 0; tries < 5; ++tries) cursor = LogHexByte(cursor, stub[tries]);   /* expect 601e060fa0 */
+      else
+          cursor = LogPut(cursor, "unmapped");   /* not Doom: the probe has nothing to say */
+      cursor = LogPut(cursor, " mixer=0x"); cursor = LogHex(cursor, mixer);
+      while (address < lim && found < 3) {
+          ULONG_PTR base, end, scan;
+          INT readable;
+          if (VirtualQuery((LPCVOID)address, &memoryInfo, sizeof memoryInfo) != sizeof memoryInfo) break;
+          base = (ULONG_PTR)memoryInfo.BaseAddress; end = base + memoryInfo.RegionSize;
+          readable = (memoryInfo.State == MEM_COMMIT)
+                   && (memoryInfo.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY
+                                   | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE
+                                   | PAGE_EXECUTE_WRITECOPY))
+                   && !(memoryInfo.Protect & PAGE_GUARD);
+          if (readable) {
+              for (scan = base; scan + 16u*36u <= end && found < 3; scan += 4) {
+                  const volatile DWORD *entryWords = (const volatile DWORD *)scan;
+                  if (entryWords[0] != mixer) continue;
+                  /* ⚠ DUMP RAW, DO NOT INTERPRET. The first attempt read
+                       [+8] as the period and got 140 -- which at a ~135/s clock
+                       means one run a SECOND against 58 observed, so either the
+                       match is spurious or the field offsets are wrong. Print the
+                       bytes and decide offline; a guessed layout is how this
+                       session has already produced two counters that could not
+                       have contradicted themselves. 64 bytes = two table entries,
+                       so a real table shows a second handler pointer at +32. */
+                  /* ── THE DISPATCHER'S HANDLER TABLE. ───────────────────────
+                       DOOM.EXE 0x554f4 calls [eax*4 + 0x281ac] with eax = irq*9,
+                       i.e. a 36-byte stride from a base whose ADDRESS is an LE
+                       fixup and therefore absent from the image. But entry 0 is
+                       DMX's IRQ0 handler and that address IS known -- so the base
+                       is wherever that pointer lies, and every other IRQ's handler
+                       follows at +36. No address arithmetic, self-verifying.
+                       IRQ5 is the Sound Blaster: 81 block IRQs a second are
+                       delivered and only 58 reach the mixer, so its handler is
+                       what decides the missing 28%. Subtract 0x03AEDFEC from the
+                       printed value for the file offset to disassemble. */
+                  UINT irqIndex;
+                  if (scan + 16u * 36u > end) continue;   /* table must fit */
+                  ++found;
+                  cursor = LogPut(cursor, " IRQTAB@0x"); cursor = LogHex(cursor, (DWORD)scan);
+                  for (irqIndex = 0; irqIndex < 16; ++irqIndex) {
+                      DWORD handle = *(const volatile DWORD *)(scan + irqIndex * 36u);
+                      if (!handle) continue;
+                      cursor = LogPut(cursor, " i"); cursor = LogHexByte(cursor, irqIndex);
+                      cursor = LogPut(cursor, "=0x"); cursor = LogHex(cursor, handle);
+                  }
+              }
+          }
+          if (end <= base) break;
+          address = end;
+      }
+      if (!found) cursor = LogPut(cursor, " IRQTAB-NOT-FOUND");
+      /* ── THE CALLBACK BETWEEN THE SB ISR AND THE MIXER. ─────────────────────
+           DMX's SB handler ends by calling through a pointer stored at data 0x584
+           (the value read back there is a code address), and that callback is
+           where the 28% goes: the ISR runs 86/s (mix82 reads ==
+           blocks) but the mixer is entered 58/s. Its address is runtime data, and
+           the code virtual->file map is the one map still unknown.
+           But the IRQ table settles the addressing: the pointers IN it are LINEAR
+           (entry 0 read back as 0x03b45210, exactly file 0x57224 + 0x03AEDFEC),
+           while data operands like 0x281ac needed +0x03BA0000 to be found. So CS
+           is flat at base 0 and DS is not -- and a code pointer STORED in data is
+           therefore directly a linear address. Read it and subtract 0x03AEDFEC.
+           Also read DMX's own state word at data 0x26370, which its ISR compares
+           against 1 before doing anything at all. */
+      { const volatile DWORD *counterBytes  = (const volatile DWORD *)(ULONG_PTR)(0x584u   + 0x03BA0000u);
+        const volatile DWORD *stateWord = (const volatile DWORD *)(ULONG_PTR)(0x26370u + 0x03BA0000u);
+        MEMORY_BASIC_INFORMATION stateMemoryInfo;
+        if (VirtualQuery((LPCVOID)counterBytes, &stateMemoryInfo, sizeof stateMemoryInfo) == sizeof stateMemoryInfo && stateMemoryInfo.State == MEM_COMMIT) {
+            DWORD number = *counterBytes;
+            cursor = LogPut(cursor, " CB[0x584]=0x"); cursor = LogHex(cursor, number);
+            if (number > 0x03AEDFECu && number < 0x03AEDFECu + 0x45000u) {
+                cursor = LogPut(cursor, "=file0x"); cursor = LogHex(cursor, number - 0x03AEDFECu);
+            } else cursor = LogPut(cursor, "(not a linear code addr)");
+        }
+        if (VirtualQuery((LPCVOID)stateWord, &stateMemoryInfo, sizeof stateMemoryInfo) == sizeof stateMemoryInfo && stateMemoryInfo.State == MEM_COMMIT) {
+            cursor = LogPut(cursor, " STATE[0x26370]="); cursor = LogHex(cursor, *stateWord);
+        } } }
+    cursor = LogPut(cursor, " count_rd_by_width w1="); cursor = LogHex(cursor, g_Dma.CountReadsByte);
+    cursor = LogPut(cursor, " w2=");                   cursor = LogHex(cursor, g_Dma.CountReadsWord);
+    cursor = LogPut(cursor, " w4=");                   cursor = LogHex(cursor, g_Dma.CountReadsDword);
+    /* ...and how many of those reads DMX made from inside a COOPERATIVE tick. */
+    cursor = LogPut(cursor, " from_coop_isr08=");      cursor = LogHex(cursor, g_CooperativeDmaPolls);
+    { UINT quadrant; for (quadrant = 2; quadrant < 8; ++quadrant)
+        { if (!g_CooperativeDmaPollsDevice[quadrant]) continue;
+          cursor = LogPut(cursor, " from_coop_irq"); cursor = LogHexByte(cursor, quadrant);
+          cursor = LogPut(cursor, "=");              cursor = LogHex(cursor, g_CooperativeDmaPollsDevice[quadrant]); } }
+    cursor = LogPut(cursor, " in_async_isr=");  cursor = LogHex(cursor, g_DmaPollInAsync);
+    cursor = LogPut(cursor, " mainline=");      cursor = LogHex(cursor, g_DmaPollMainline);
+    return cursor;
+}
+
+
+/* End of run: what the guest read back from the 8237 and what the Sound Blaster output did. */
+static PSTR ReportDmaAndSoundBlaster(PSTR cursor)
+{
+    /* ► DOES DMX ASK US WHERE THE PLAY HEAD IS? See the note in vdd_dma.h. A
+         nonzero rd_addr on the SB's channel means every refill decision the guest
+         makes is downstream of our cur_addr, which advances on the audio thread in
+         whatever chunk size waveOut asked for. Zero means that whole family of
+         causes is dead and the refill is driven by the IRQ count alone. */
+    cursor = LogPut(cursor, "STAGE2: 8237 guest reads: ch1_addr="); cursor = LogHex(cursor, g_Dma.AddressReads[1]);
+    cursor = LogPut(cursor, " ch1_count=");  cursor = LogHex(cursor, g_Dma.ChannelCountReads[1]);
+    cursor = LogPut(cursor, " ch5_addr=");   cursor = LogHex(cursor, g_Dma.AddressReads[5]);
+    cursor = LogPut(cursor, " ch5_count=");  cursor = LogHex(cursor, g_Dma.ChannelCountReads[5]);
+    cursor = LogPut(cursor, " status0=");    cursor = LogHex(cursor, g_Dma.StatusReads[0]);
+    cursor = LogPut(cursor, " status1=");    cursor = LogHex(cursor, g_Dma.StatusReads[1]);
+    /* ► THE OUTPUT SIDE. See vdd_sb.h: everything else here measures the RING.
+         `idle` is silence WE inserted because the DSP was un-armed; the run-length
+         buckets say whether that is a scatter of single samples or a gap once per
+         block. `cmd` names which transfer command the guest used -- 0x14 single
+         (stops every block) vs 0x1C/0xBx auto-init (streams). */
+    cursor = LogPut(cursor, "\r\nSTAGE2: sb OUTPUT: active="); cursor = LogHex(cursor, g_Sb.OutputActive);
+    cursor = LogPut(cursor, " idle=");   cursor = LogHex(cursor, g_Sb.OutputIdle);
+    cursor = LogPut(cursor, " paused="); cursor = LogHex(cursor, g_Sb.OutputPaused);
+    { UINT32 total = g_Sb.OutputActive + g_Sb.OutputIdle + g_Sb.OutputPaused;
+      if (total) { cursor = LogPut(cursor, " (");
+                 cursor = LogHex(cursor, (g_Sb.OutputIdle + g_Sb.OutputPaused) * 100u / total);
+                 cursor = LogPut(cursor, "% of output is inserted silence)"); } }
+    cursor = LogPut(cursor, " gap_runs[1,2,4,8,16,32,64,128+]=");
+    { INT bucket3; for (bucket3 = 0; bucket3 < 8; ++bucket3) { cursor = LogPut(cursor, bucket3 ? "," : "");
+                                           cursor = LogHex(cursor, g_Sb.IdleRuns[bucket3]); } }
+    /* ► ISOLATED silent blocks are the dropouts; long runs are real silence. */
+    cursor = LogPut(cursor, " flat_runs[1,2,3,4-7,8-15,16-31,32-63,64+]=");
+    { INT bucket2; for (bucket2 = 0; bucket2 < 8; ++bucket2) { cursor = LogPut(cursor, bucket2 ? "," : "");
+                                           cursor = LogHex(cursor, g_Sb.FlatRuns[bucket2]); } }
+    /* ► THE QUEUE, WHICH IS WHAT THE SPEAKER ACTUALLY SEES. STARVED>0 means the
+         driver ran out of data and played silence -- an audible gap that no
+         ring-side counter can show. `drain` is the margin: its mass sitting at
+         nbufs-1 is one buffer from silence even when starved reads 0. */
+    cursor = LogPut(cursor, " QUEUE: starved="); cursor = LogHex(cursor, g_Wave.Starved);
+    cursor = LogPut(cursor, " drain_max=");      cursor = LogHex(cursor, g_Wave.DrainMax);
+    cursor = LogPut(cursor, " wr_fail=");        cursor = LogHex(cursor, g_Wave.Underruns);
+    cursor = LogPut(cursor, " drain_hist=");
+    { UINT32 bufferIndex; for (bufferIndex = 0; bufferIndex <= g_Wave.BufferCount && bufferIndex <= AUDIO_WAVE_BUFFERS; ++bufferIndex) {
+          cursor = LogPut(cursor, bufferIndex ? "," : ""); cursor = LogHex(cursor, g_Wave.DrainHistogram[bufferIndex]); } }
+    cursor = LogPut(cursor, " geom: nbufs="); cursor = LogHex(cursor, g_Wave.BufferCount);
+    cursor = LogPut(cursor, " nframes=");     cursor = LogHex(cursor, g_Wave.FrameCount);
+    cursor = LogPut(cursor, " GATE: on="); cursor = LogHex(cursor, (DWORD)g_Sb.GateMode);
+    cursor = LogPut(cursor, " stalled_samples="); cursor = LogHex(cursor, g_Sb.GateStalled);
+    cursor = LogPut(cursor, " FORCED="); cursor = LogHex(cursor, g_Sb.GateForced);
+    if (g_Sb.OutputActive) { cursor = LogPut(cursor, "(stall=");
+        cursor = LogHex(cursor, g_Sb.GateStalled * PER_MILLE_U / g_Sb.OutputActive);
+        cursor = LogPut(cursor, " per mille of output)"); }
+    cursor = LogPut(cursor, " mix82=");   cursor = LogHex(cursor, g_Sb.Mixer82Reads);
+    cursor = LogPut(cursor, " ANSWERED_NO="); cursor = LogHex(cursor, g_Sb.Mixer82Zero);
+    if (g_Sb.Mixer82Reads) { cursor = LogPut(cursor, "(");
+        cursor = LogHex(cursor, g_Sb.Mixer82Zero * 100u / g_Sb.Mixer82Reads);
+        cursor = LogPut(cursor, "% turned away)"); }
+    cursor = LogPut(cursor, " rate_hz="); cursor = LogHex(cursor, g_Sb.RateHz);
+    cursor = LogPut(cursor, " blk_len="); cursor = LogHex(cursor, g_Sb.BlockLength);
+    cursor = LogPut(cursor, " dsp_cmds:");
+    { UINT vectorIndex; for (vectorIndex = 0; vectorIndex < IVT_VECTORS; ++vectorIndex)
+        if (g_Sb.CommandHistogram[vectorIndex]) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, vectorIndex);
+                                 cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Sb.CommandHistogram[vectorIndex]); } }
+    cursor = LogPut(cursor, "\r\nSTAGE2: sb ");
+    /* ► THE GUEST ADDRESS OF EVERY DMA-COUNT POLL. Subtract 0x03AEDFEC for the
+         DOOM.EXE file offset and disassemble it. */
+    cursor = LogPut(cursor, " dma_poll_sites=");
+    { UINT pollIndex; for (pollIndex = 0; pollIndex < g_DmaPollCount; ++pollIndex) {
+          cursor = LogPut(cursor, pollIndex ? " " : ""); cursor = LogPut(cursor, "0x"); cursor = LogHex(cursor, g_DmaPollEip[pollIndex]);
+          cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_DmaPollHits[pollIndex]); } }
+    cursor = LogPut(cursor, " overflow="); cursor = LogHex(cursor, (DWORD)g_DmaPollOverflow);
+    /* ► THE CALL CHAIN. Subtract 0x03AEDFEC for the DOOM.EXE file offset. */
+    cursor = LogPut(cursor, " poll_stack=");
+    { UINT pollIndex; for (pollIndex = 0; pollIndex < g_PollStackCount; ++pollIndex) {
+          cursor = LogPut(cursor, pollIndex ? " " : ""); cursor = LogPut(cursor, "0x"); cursor = LogHex(cursor, g_PollStack[pollIndex]);
+          cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_PollStackHits[pollIndex]); } }
+    cursor = LogPut(cursor, " stkovf="); cursor = LogHex(cursor, (DWORD)g_PollStackOverflow);
+    /* ► WHY ONLY 56 MIXER RUNS/s: long overruns (a) or bunching (b)? */
+    cursor = LogPut(cursor, " poll_gap_us[<1k,2k,4k,8k,16k,32k,64k,128k,256k,+]=");
+    { UINT bucket4; for (bucket4 = 0; bucket4 < 10; ++bucket4) { cursor = LogPut(cursor, bucket4 ? "," : "");
+                                                 cursor = LogHex(cursor, g_PollGap[bucket4]); } }
+    cursor = LogPut(cursor, " gap_max_us="); cursor = LogHex(cursor, g_PollGapMaximumMicroseconds);
+    return cursor;
+}
+
+
+/* End of run: the PIT budget, IRQ0 delivery and cooperative ticks per IRQ, then the async-injection, CPU-share and IF/VIF reports. */
+static PSTR ReportTimerAndInterruptDelivery(PSTR cursor, PSTR const base)
+{
+    cursor = LogPut(cursor, "\r\nSTAGE2: pit budget: syncs="); cursor = LogHex(cursor, g_PitSyncs);
+    cursor = LogPut(cursor, " raises=");    cursor = LogHex(cursor, g_IrqRaised[0]);
+    cursor = LogPut(cursor, " attempts=");  cursor = LogHex(cursor, g_PitAsyncAttempts);
+    cursor = LogPut(cursor, " delivered="); cursor = LogHex(cursor, g_AsyncInjectedLine[0]);
+    cursor = LogPut(cursor, " owed_max=");  cursor = LogHex(cursor, (DWORD)g_PmTickOwedMaximum);
+    cursor = LogPut(cursor, " ui_gap_us="); cursor = LogHex(cursor, g_UiGapMicroseconds);
+    cursor = LogPut(cursor, "\r\n");
+    /* ► THE WHOLE DELIVERY ACCOUNT, IN ONE LINE, IN THE UNITS OF THE CLAIM. `raises`
+         is what the 8254 generated; `async` is the SuspendThread arm; `coop` is the
+         PM loop's own injections (the #2b latch plus the catch-up batch). Only the
+         SUM can be compared with `raises`, and the pit budget line above shows only
+         the first of the two -- which is how "we deliver 39% of the ticks Doom asked
+         for" was read off an async-only counter. owed_now is the live depth, and the
+         histogram behind it says how often the backlog was actually deep. */
+    cursor = LogPut(cursor, "STAGE2: isr08 delivery: raises=");  cursor = LogHex(cursor, g_IrqRaised[0]);
+    cursor = LogPut(cursor, " async=");   cursor = LogHex(cursor, g_AsyncInjectedLine[0]);
+    cursor = LogPut(cursor, " coop=");    cursor = LogHex(cursor, g_PmCooperativeLine[0]);
+    cursor = LogPut(cursor, " TOTAL=");   cursor = LogHex(cursor, g_AsyncInjectedLine[0] + g_PmCooperativeLine[0]);
+    if (g_IrqRaised[0])
+        { cursor = LogPut(cursor, " (");
+          cursor = LogHex(cursor, (g_AsyncInjectedLine[0] + g_PmCooperativeLine[0]) * 100u / g_IrqRaised[0]);
+          cursor = LogPut(cursor, "% of raises, decimal-in-hex)"); }
+    cursor = LogPut(cursor, " owed_now="); cursor = LogHex(cursor, (DWORD)g_PmTickOwed);
+    cursor = LogPut(cursor, " owed_depth_at_sync[0,1,2,3,4-7,8-15,16-31,32-63,64]=");
+    { UINT outputBucket; for (outputBucket = 0; outputBucket < 9; ++outputBucket)
+        { cursor = LogPut(cursor, outputBucket ? "," : ""); cursor = LogHex(cursor, g_PmOwedHistogram[outputBucket]); } }
+    cursor = LogPut(cursor, "\r\nSTAGE2: coop per IRQ:");
+    { UINT columnIndex; for (columnIndex = 0; columnIndex < 8; ++columnIndex)
+        { if (!g_PmCooperativeLine[columnIndex]) continue;
+          cursor = LogPut(cursor, " irq"); cursor = LogHexByte(cursor, columnIndex);
+          cursor = LogPut(cursor, "=");    cursor = LogHex(cursor, g_PmCooperativeLine[columnIndex]); } }
+    cursor = LogPut(cursor, "\r\n");
+    /* Flushed first, deliberately: `base` points past the preamble, so report[] has
+       well under 8 KB of headroom and the sbblk ledger below eats most of what is
+       left. Then which clause said no, per line (AsyncWhyReport). */
+    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    AsyncWhyReport();
+    ExecShareReport();
+    IfvReport();   /* IF/VIF census -- see IfvNote */
+    return cursor;
+}
+
+
+/* End of run: PM interrupts reflected to real mode -- the default IRQ handler's reflections and the dispatches by vector and AH. */
+static PSTR ReportPmReflectedInterrupts(PSTR cursor, PSTR const base)
+{
+    cursor = LogPut(cursor, "STAGE2: PM default IRQ handler reflected to the BIOS: ");
+    cursor = LogHex(cursor, g_PmIrqReflects);
+    cursor = LogPut(cursor, "  -> the guest's real-mode ISR: "); cursor = LogHex(cursor, g_PmIrqRmReflects);
+    cursor = LogPut(cursor, " (failed "); cursor = LogHex(cursor, g_PmIrqRmFail); cursor = LogPut(cursor, ")");
+    cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    cursor = LogPut(cursor, "STAGE2: PM reflected dispatches (vec/AH=count):");
+    { UINT dacValue, dacIndex, shown = 0;
+      for (dacValue = 0; dacValue < 256 && shown < 24; ++dacValue)
+        for (dacIndex = 0; dacIndex < 256 && shown < 24; ++dacIndex) {
+            if (!g_PmDispatchCount[dacValue][dacIndex]) continue;
+            cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, (BYTE)dacValue);
+            cursor = LogPut(cursor, "/");  cursor = LogHexByte(cursor, (BYTE)dacIndex);
+            cursor = LogPut(cursor, "=");  cursor = LogHex(cursor, g_PmDispatchCount[dacValue][dacIndex]);
+            ++shown;
+        }
+      if (!shown) cursor = LogPut(cursor, " none"); }
+    return cursor;
+}
+
+
+/* End of run: simulated interrupts (DPMI 0300h) nobody serviced, by vector. */
+static PSTR ReportDpmiSimulatedInterrupts(PSTR cursor, PSTR const base)
+{
+    /* ► WHAT THE BOUNDED REFLECTED-DISPATCH TRACE STOPPED WRITING DOWN. Every INT
+         reflected to a client's own PM handler is counted per (vector, AH) even once
+         the per-pair line budget is spent, and this is where the counts come back.
+         It is also the cheapest answer to "what is this guest actually DOING?" --
+         ZAR's answer is 21/2c x ~170000, i.e. it polls its own clock hook, which no
+         amount of steady-state single-stepping had made obvious. Sorted by nothing:
+         a vector/AH pair is its own name and the numbers are what matter. */
+    /* Flush first: up to 24 pairs is ~500 bytes and `report` is shared with everything
+       above, which has no bound of its own. */
+    /* ► ★★★ WHAT THE GUEST ASKED 0300 FOR AND WE DID NOT DO. These counters existed
+         already, but only in the periodic KEYLOG block -- which a headless run never
+         reaches, so they had never once been printed in the logs this project
+         actually reads. `simInt 0x10 x7` was sitting in ZAR's every run for four
+         sessions with nothing to show it. A service that silently does nothing and
+         reports success is this project's most expensive bug shape; the counter for
+         it belongs where the evidence is read. */
+    cursor = LogPut(cursor, "\r\nSTAGE2: simInt (DPMI 0300) UNHANDLED: total=");
+    cursor = LogHex(cursor, g_SimIntUnhandled);
+    { UINT sbIndex, any = 0;
+      for (sbIndex = 0; sbIndex < IVT_VECTORS; ++sbIndex) if (g_SimIntVector[sbIndex]) {
+          cursor = LogPut(cursor, " int"); cursor = LogHexByte(cursor, (BYTE)sbIndex);
+          cursor = LogPut(cursor, "h x"); cursor = LogHex(cursor, g_SimIntVector[sbIndex]); any = 1; }
+      if (!any) cursor = LogPut(cursor, " (none -- every simulated interrupt was serviced)"); }
+    cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    return cursor;
+}
+
+
+/* End of run: the Sound Blaster replay check -- blocks DMX never refilled, played twice -- with the buffer lead beside it. */
+static PSTR ReportSbReplay(PSTR cursor, PSTR const base)
+{
+    /* The retry that did not exist before: every one of these is a block-completion
+       IRQ that would previously have been dropped, and so a 256-byte refill DMX would
+       never have made. Compare `devirq_inj` against the shortfall between sb_blocks
+       and irq05 above -- that is the whole of the fix, in one subtraction. */
+    /* ► THE ECHO, AS A NUMBER, WITH ITS CONTROLLED VARIABLE NEXT TO IT. `replayed`
+         counts blocks >=90% identical to the same ring offsets one lap earlier --
+         blocks DMX never refilled, played twice 186 ms apart. `lead` is the buffers
+         actually queued, i.e. how far ahead of audible we read. Vary one, read the
+         other; if they do not move together the lead is not the cause. */
+    /* ⚠ FLUSH FIRST. `base` points PAST the preamble, so report[] has well under
+         8 KB of headroom, and the 24-line sbblk ledger added above eats most of what
+         was left. The first cut of this line was written into the overflow and simply
+         never appeared -- while the line immediately AFTER it did, which reads exactly
+         like "the code did not run" and cost a wasted pair of rig runs to tell apart
+         from a stale binary. Two counters in the same basic block cannot disagree
+         about whether they executed; when they appear to, suspect the transport. */
+    cursor = LogPut(cursor, "\r\n");
+    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    cursor = LogPut(cursor, "STAGE2: sb replay: blocks_checked="); cursor = LogHex(cursor, g_Sb.BlocksChecked);
+    cursor = LogPut(cursor, " REPLAYED=");   cursor = LogHex(cursor, g_Sb.BlocksReplayed);
+    if (g_Sb.BlocksChecked) {
+        cursor = LogPut(cursor, " (");
+        cursor = LogHex(cursor, g_Sb.BlocksReplayed * 100u / g_Sb.BlocksChecked);
+        cursor = LogPut(cursor, "% of blocks, decimal-in-hex)");
+    }
+    /* ► ...AND HOW MANY OF THOSE BLOCKS CARRIED ANY AUDIO. A silent block is
+         identical to the previous lap when the guest refills it CORRECTLY, so
+         `REPLAYED` on its own cannot support "DMX never refilled it". Only
+         REPLAYED_LOUD can, and its denominator is the non-flat blocks. */
+    cursor = LogPut(cursor, " flat=");          cursor = LogHex(cursor, g_Sb.BlocksFlat);
+    cursor = LogPut(cursor, " REPLAYED_LOUD="); cursor = LogHex(cursor, g_Sb.BlocksReplayedLoud);
+    if (g_Sb.BlocksChecked > g_Sb.BlocksFlat) {
+        cursor = LogPut(cursor, " (");
+        cursor = LogHex(cursor, g_Sb.BlocksReplayedLoud * 100u
+                    / (g_Sb.BlocksChecked - g_Sb.BlocksFlat));
+        cursor = LogPut(cursor, "% of NON-FLAT blocks, decimal-in-hex)");
+    }
+    cursor = LogPut(cursor, " runs[1,2,3,4-7,8-15,16-31,32-63,64+]=");
+    { UINT rateBucket; for (rateBucket = 0; rateBucket < 8; ++rateBucket)
+        { cursor = LogPut(cursor, rateBucket ? "," : ""); cursor = LogHex(cursor, g_Sb.ReplayRuns[rateBucket]); } }
+    cursor = LogPut(cursor, " run_max="); cursor = LogHex(cursor, g_Sb.ReplayRunMax);
+    cursor = LogPut(cursor, " byte_lap_same="); cursor = LogHex(cursor, g_Sb.LapSame);
+    cursor = LogPut(cursor, "/");              cursor = LogHex(cursor, g_Sb.LapTotal);
+    cursor = LogPut(cursor, " ring=");         cursor = LogHex(cursor, g_Sb.LapLength);
+    cursor = LogPut(cursor, " toobig=");       cursor = LogHex(cursor, g_Sb.LapTooBig);
+    cursor = LogPut(cursor, " lead_buffers=");  cursor = LogHex(cursor, g_Wave.BufferCount);
+    return cursor;
+}
+
+
+/* End of run: the sound stack end to end -- the OPL profile, the SB capture, the GUS, one summary line, and async injections per IRQ. */
+static PSTR ReportSoundStack(PSTR cursor)
+{
+      /* OPL PROFILE (GH #21): what the guest's music driver actually asks for.
+         A gap the game never uses cannot be why the music sounds flat. */
+      OplTraceDump();
+      /* ── THE SOUND STACK, END TO END, IN ONE LINE. ───────────────────────────────
+           Every part of this was previously either unreported or spread across three
+           places, and "sound works" was being inferred from the guest not complaining.
+           It answers, in order: did the guest's PCM reach the DMA engine, did the
+           mixer run, did MIDI messages leave the MPU-401, and did the HOST devices
+           actually open -- because a silent run with a happy guest and a silent run
+           with no wave device look identical from the guest's side. */
+      if (g_Sb.CaptureBuffer && g_Sb.CaptureLength) {
+        HANDLE configHandle = CreateFileA(SBDUMP_PATH, GENERIC_WRITE, 0, NULL,
+                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (configHandle != INVALID_HANDLE_VALUE) {
+            DWORD bytesWritten = 0; WriteFile(configHandle, g_Sb.CaptureBuffer, g_Sb.CaptureLength, &bytesWritten, NULL); CloseHandle(configHandle);
+        }
+        cursor = LogPut(cursor, "STAGE2: sound: raw PCM capture -> sb.raw, "); cursor = LogHex(cursor, g_Sb.CaptureLength);
+        cursor = LogPut(cursor, " bytes\r\n");
+    }
+    GusReport();
+    cursor = LogPut(cursor, "STAGE2: sound: sb_blocks="); cursor = LogHex(cursor, g_Sb.Blocks);
+      cursor = LogPut(cursor, " sb_rate=");                 cursor = LogHex(cursor, g_Sb.RateHz);
+      cursor = LogPut(cursor, " sb_mode=");                 cursor = LogHex(cursor, (DWORD)g_Sb.TransferMode);
+      cursor = LogPut(cursor, " sb_dspwr=");                cursor = LogHex(cursor, g_Sb.DspWrites);
+      cursor = LogPut(cursor, " midi_msgs=");               cursor = LogHex(cursor, g_Mpu.MessagesSent);
+      cursor = LogPut(cursor, "\r\n");
+      cursor = LogPut(cursor, "STAGE2: async per IRQ:");
+      { UINT lineIndex; for (lineIndex = 0; lineIndex < 8; ++lineIndex) {
+          cursor = LogPut(cursor, " irq"); cursor = LogHexByte(cursor, lineIndex); cursor = LogPut(cursor, "=");
+          cursor = LogHex(cursor, g_AsyncInjectedLine[lineIndex]); } }
+    return cursor;
+}
+
 enum { INSTALL_EXIT_OK = 0, INSTALL_EXIT_FAILED = 1, INSTALL_STATUS_EXIT_OURS = 0, INSTALL_STATUS_EXIT_NONE = 1, INSTALL_STATUS_EXIT_OTHER = 2 };   /* the install verbs' exit codes */
 enum { PENDING_INT_RETRIES_MAX = 0x10000 };   /* event 3 ("interrupt pending, not entered"): retries before giving up */
 enum { EXEC_HANDLED_RUN_OVER = 2, EXEC_HANDLED_CHILD_EXITED = 3 };   /* WinMain's DosTerminate outcomes: the run ends, or a child returned to its parent */
@@ -8318,790 +9187,19 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             { const BYTE *planeBytes = g_Video.YMapPlane ? g_Video.YMapPlane(g_Video.YMapContext, plane) : g_Video.Planes[plane];
               for (byteIndex2 = 0; byteIndex2 < VIDEO_PLANE_SIZE; ++byteIndex2) if (planeBytes[byteIndex2]) ++changed; }
             nonZero[plane] = changed; }
-        /* OPL PROFILE (GH #21): what the guest's music driver actually asks for.
-           A gap the game never uses cannot be why the music sounds flat. */
-        OplTraceDump();
-        /* ── THE SOUND STACK, END TO END, IN ONE LINE. ───────────────────────────────
-             Every part of this was previously either unreported or spread across three
-             places, and "sound works" was being inferred from the guest not complaining.
-             It answers, in order: did the guest's PCM reach the DMA engine, did the
-             mixer run, did MIDI messages leave the MPU-401, and did the HOST devices
-             actually open -- because a silent run with a happy guest and a silent run
-             with no wave device look identical from the guest's side. */
-        if (g_Sb.CaptureBuffer && g_Sb.CaptureLength) {
-          HANDLE configHandle = CreateFileA(SBDUMP_PATH, GENERIC_WRITE, 0, NULL,
-                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-          if (configHandle != INVALID_HANDLE_VALUE) {
-              DWORD bytesWritten = 0; WriteFile(configHandle, g_Sb.CaptureBuffer, g_Sb.CaptureLength, &bytesWritten, NULL); CloseHandle(configHandle);
-          }
-          cursor = LogPut(cursor, "STAGE2: sound: raw PCM capture -> sb.raw, "); cursor = LogHex(cursor, g_Sb.CaptureLength);
-          cursor = LogPut(cursor, " bytes\r\n");
+        cursor = ReportSoundStack(cursor);
+        cursor = ReportSbReplay(cursor, base);
+        cursor = ReportDpmiSimulatedInterrupts(cursor, base);
+        cursor = ReportPmReflectedInterrupts(cursor, base);
+        cursor = ReportTimerAndInterruptDelivery(cursor, base);
+        cursor = ReportDmaAndSoundBlaster(cursor);
+        cursor = ReportDmxTaskAndDmaPolls(cursor);
+        cursor = ReportDeviceIrqRetriesAndSoundBlocks(cursor, base, reportEnd);
+        cursor = ReportAudioDevices(cursor);
+        cursor = ReportPlanarVideoState(cursor, reportEnd);
+        cursor = ReportPlanarSites(cursor, base, reportEnd);
+        cursor = ReportCrtcAndVideoNow(cursor, nonZero);
       }
-      GusReport();
-      cursor = LogPut(cursor, "STAGE2: sound: sb_blocks="); cursor = LogHex(cursor, g_Sb.Blocks);
-        cursor = LogPut(cursor, " sb_rate=");                 cursor = LogHex(cursor, g_Sb.RateHz);
-        cursor = LogPut(cursor, " sb_mode=");                 cursor = LogHex(cursor, (DWORD)g_Sb.TransferMode);
-        cursor = LogPut(cursor, " sb_dspwr=");                cursor = LogHex(cursor, g_Sb.DspWrites);
-        cursor = LogPut(cursor, " midi_msgs=");               cursor = LogHex(cursor, g_Mpu.MessagesSent);
-        cursor = LogPut(cursor, "\r\n");
-        cursor = LogPut(cursor, "STAGE2: async per IRQ:");
-        { UINT lineIndex; for (lineIndex = 0; lineIndex < 8; ++lineIndex) {
-            cursor = LogPut(cursor, " irq"); cursor = LogHexByte(cursor, lineIndex); cursor = LogPut(cursor, "=");
-            cursor = LogHex(cursor, g_AsyncInjectedLine[lineIndex]); } }
-        /* The retry that did not exist before: every one of these is a block-completion
-           IRQ that would previously have been dropped, and so a 256-byte refill DMX would
-           never have made. Compare `devirq_inj` against the shortfall between sb_blocks
-           and irq05 above -- that is the whole of the fix, in one subtraction. */
-        /* ► THE ECHO, AS A NUMBER, WITH ITS CONTROLLED VARIABLE NEXT TO IT. `replayed`
-             counts blocks >=90% identical to the same ring offsets one lap earlier --
-             blocks DMX never refilled, played twice 186 ms apart. `lead` is the buffers
-             actually queued, i.e. how far ahead of audible we read. Vary one, read the
-             other; if they do not move together the lead is not the cause. */
-        /* ⚠ FLUSH FIRST. `base` points PAST the preamble, so report[] has well under
-             8 KB of headroom, and the 24-line sbblk ledger added above eats most of what
-             was left. The first cut of this line was written into the overflow and simply
-             never appeared -- while the line immediately AFTER it did, which reads exactly
-             like "the code did not run" and cost a wasted pair of rig runs to tell apart
-             from a stale binary. Two counters in the same basic block cannot disagree
-             about whether they executed; when they appear to, suspect the transport. */
-        cursor = LogPut(cursor, "\r\n");
-        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-        cursor = LogPut(cursor, "STAGE2: sb replay: blocks_checked="); cursor = LogHex(cursor, g_Sb.BlocksChecked);
-        cursor = LogPut(cursor, " REPLAYED=");   cursor = LogHex(cursor, g_Sb.BlocksReplayed);
-        if (g_Sb.BlocksChecked) {
-            cursor = LogPut(cursor, " (");
-            cursor = LogHex(cursor, g_Sb.BlocksReplayed * 100u / g_Sb.BlocksChecked);
-            cursor = LogPut(cursor, "% of blocks, decimal-in-hex)");
-        }
-        /* ► ...AND HOW MANY OF THOSE BLOCKS CARRIED ANY AUDIO. A silent block is
-             identical to the previous lap when the guest refills it CORRECTLY, so
-             `REPLAYED` on its own cannot support "DMX never refilled it". Only
-             REPLAYED_LOUD can, and its denominator is the non-flat blocks. */
-        cursor = LogPut(cursor, " flat=");          cursor = LogHex(cursor, g_Sb.BlocksFlat);
-        cursor = LogPut(cursor, " REPLAYED_LOUD="); cursor = LogHex(cursor, g_Sb.BlocksReplayedLoud);
-        if (g_Sb.BlocksChecked > g_Sb.BlocksFlat) {
-            cursor = LogPut(cursor, " (");
-            cursor = LogHex(cursor, g_Sb.BlocksReplayedLoud * 100u
-                        / (g_Sb.BlocksChecked - g_Sb.BlocksFlat));
-            cursor = LogPut(cursor, "% of NON-FLAT blocks, decimal-in-hex)");
-        }
-        cursor = LogPut(cursor, " runs[1,2,3,4-7,8-15,16-31,32-63,64+]=");
-        { UINT rateBucket; for (rateBucket = 0; rateBucket < 8; ++rateBucket)
-            { cursor = LogPut(cursor, rateBucket ? "," : ""); cursor = LogHex(cursor, g_Sb.ReplayRuns[rateBucket]); } }
-        cursor = LogPut(cursor, " run_max="); cursor = LogHex(cursor, g_Sb.ReplayRunMax);
-        cursor = LogPut(cursor, " byte_lap_same="); cursor = LogHex(cursor, g_Sb.LapSame);
-        cursor = LogPut(cursor, "/");              cursor = LogHex(cursor, g_Sb.LapTotal);
-        cursor = LogPut(cursor, " ring=");         cursor = LogHex(cursor, g_Sb.LapLength);
-        cursor = LogPut(cursor, " toobig=");       cursor = LogHex(cursor, g_Sb.LapTooBig);
-        cursor = LogPut(cursor, " lead_buffers=");  cursor = LogHex(cursor, g_Wave.BufferCount);
-        /* ► WHAT THE BOUNDED REFLECTED-DISPATCH TRACE STOPPED WRITING DOWN. Every INT
-             reflected to a client's own PM handler is counted per (vector, AH) even once
-             the per-pair line budget is spent, and this is where the counts come back.
-             It is also the cheapest answer to "what is this guest actually DOING?" --
-             ZAR's answer is 21/2c x ~170000, i.e. it polls its own clock hook, which no
-             amount of steady-state single-stepping had made obvious. Sorted by nothing:
-             a vector/AH pair is its own name and the numbers are what matter. */
-        /* Flush first: up to 24 pairs is ~500 bytes and `report` is shared with everything
-           above, which has no bound of its own. */
-        /* ► ★★★ WHAT THE GUEST ASKED 0300 FOR AND WE DID NOT DO. These counters existed
-             already, but only in the periodic KEYLOG block -- which a headless run never
-             reaches, so they had never once been printed in the logs this project
-             actually reads. `simInt 0x10 x7` was sitting in ZAR's every run for four
-             sessions with nothing to show it. A service that silently does nothing and
-             reports success is this project's most expensive bug shape; the counter for
-             it belongs where the evidence is read. */
-        cursor = LogPut(cursor, "\r\nSTAGE2: simInt (DPMI 0300) UNHANDLED: total=");
-        cursor = LogHex(cursor, g_SimIntUnhandled);
-        { UINT sbIndex, any = 0;
-          for (sbIndex = 0; sbIndex < IVT_VECTORS; ++sbIndex) if (g_SimIntVector[sbIndex]) {
-              cursor = LogPut(cursor, " int"); cursor = LogHexByte(cursor, (BYTE)sbIndex);
-              cursor = LogPut(cursor, "h x"); cursor = LogHex(cursor, g_SimIntVector[sbIndex]); any = 1; }
-          if (!any) cursor = LogPut(cursor, " (none -- every simulated interrupt was serviced)"); }
-        cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-        cursor = LogPut(cursor, "STAGE2: PM default IRQ handler reflected to the BIOS: ");
-        cursor = LogHex(cursor, g_PmIrqReflects);
-        cursor = LogPut(cursor, "  -> the guest's real-mode ISR: "); cursor = LogHex(cursor, g_PmIrqRmReflects);
-        cursor = LogPut(cursor, " (failed "); cursor = LogHex(cursor, g_PmIrqRmFail); cursor = LogPut(cursor, ")");
-        cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-        cursor = LogPut(cursor, "STAGE2: PM reflected dispatches (vec/AH=count):");
-        { UINT dacValue, dacIndex, shown = 0;
-          for (dacValue = 0; dacValue < 256 && shown < 24; ++dacValue)
-            for (dacIndex = 0; dacIndex < 256 && shown < 24; ++dacIndex) {
-                if (!g_PmDispatchCount[dacValue][dacIndex]) continue;
-                cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, (BYTE)dacValue);
-                cursor = LogPut(cursor, "/");  cursor = LogHexByte(cursor, (BYTE)dacIndex);
-                cursor = LogPut(cursor, "=");  cursor = LogHex(cursor, g_PmDispatchCount[dacValue][dacIndex]);
-                ++shown;
-            }
-          if (!shown) cursor = LogPut(cursor, " none"); }
-        cursor = LogPut(cursor, "\r\nSTAGE2: pit budget: syncs="); cursor = LogHex(cursor, g_PitSyncs);
-        cursor = LogPut(cursor, " raises=");    cursor = LogHex(cursor, g_IrqRaised[0]);
-        cursor = LogPut(cursor, " attempts=");  cursor = LogHex(cursor, g_PitAsyncAttempts);
-        cursor = LogPut(cursor, " delivered="); cursor = LogHex(cursor, g_AsyncInjectedLine[0]);
-        cursor = LogPut(cursor, " owed_max=");  cursor = LogHex(cursor, (DWORD)g_PmTickOwedMaximum);
-        cursor = LogPut(cursor, " ui_gap_us="); cursor = LogHex(cursor, g_UiGapMicroseconds);
-        cursor = LogPut(cursor, "\r\n");
-        /* ► THE WHOLE DELIVERY ACCOUNT, IN ONE LINE, IN THE UNITS OF THE CLAIM. `raises`
-             is what the 8254 generated; `async` is the SuspendThread arm; `coop` is the
-             PM loop's own injections (the #2b latch plus the catch-up batch). Only the
-             SUM can be compared with `raises`, and the pit budget line above shows only
-             the first of the two -- which is how "we deliver 39% of the ticks Doom asked
-             for" was read off an async-only counter. owed_now is the live depth, and the
-             histogram behind it says how often the backlog was actually deep. */
-        cursor = LogPut(cursor, "STAGE2: isr08 delivery: raises=");  cursor = LogHex(cursor, g_IrqRaised[0]);
-        cursor = LogPut(cursor, " async=");   cursor = LogHex(cursor, g_AsyncInjectedLine[0]);
-        cursor = LogPut(cursor, " coop=");    cursor = LogHex(cursor, g_PmCooperativeLine[0]);
-        cursor = LogPut(cursor, " TOTAL=");   cursor = LogHex(cursor, g_AsyncInjectedLine[0] + g_PmCooperativeLine[0]);
-        if (g_IrqRaised[0])
-            { cursor = LogPut(cursor, " (");
-              cursor = LogHex(cursor, (g_AsyncInjectedLine[0] + g_PmCooperativeLine[0]) * 100u / g_IrqRaised[0]);
-              cursor = LogPut(cursor, "% of raises, decimal-in-hex)"); }
-        cursor = LogPut(cursor, " owed_now="); cursor = LogHex(cursor, (DWORD)g_PmTickOwed);
-        cursor = LogPut(cursor, " owed_depth_at_sync[0,1,2,3,4-7,8-15,16-31,32-63,64]=");
-        { UINT outputBucket; for (outputBucket = 0; outputBucket < 9; ++outputBucket)
-            { cursor = LogPut(cursor, outputBucket ? "," : ""); cursor = LogHex(cursor, g_PmOwedHistogram[outputBucket]); } }
-        cursor = LogPut(cursor, "\r\nSTAGE2: coop per IRQ:");
-        { UINT columnIndex; for (columnIndex = 0; columnIndex < 8; ++columnIndex)
-            { if (!g_PmCooperativeLine[columnIndex]) continue;
-              cursor = LogPut(cursor, " irq"); cursor = LogHexByte(cursor, columnIndex);
-              cursor = LogPut(cursor, "=");    cursor = LogHex(cursor, g_PmCooperativeLine[columnIndex]); } }
-        cursor = LogPut(cursor, "\r\n");
-        /* Flushed first, deliberately: `base` points past the preamble, so report[] has
-           well under 8 KB of headroom and the sbblk ledger below eats most of what is
-           left. Then which clause said no, per line (AsyncWhyReport). */
-        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-        AsyncWhyReport();
-        ExecShareReport();
-        IfvReport();   /* IF/VIF census -- see IfvNote */
-        /* ► DOES DMX ASK US WHERE THE PLAY HEAD IS? See the note in vdd_dma.h. A
-             nonzero rd_addr on the SB's channel means every refill decision the guest
-             makes is downstream of our cur_addr, which advances on the audio thread in
-             whatever chunk size waveOut asked for. Zero means that whole family of
-             causes is dead and the refill is driven by the IRQ count alone. */
-        cursor = LogPut(cursor, "STAGE2: 8237 guest reads: ch1_addr="); cursor = LogHex(cursor, g_Dma.AddressReads[1]);
-        cursor = LogPut(cursor, " ch1_count=");  cursor = LogHex(cursor, g_Dma.ChannelCountReads[1]);
-        cursor = LogPut(cursor, " ch5_addr=");   cursor = LogHex(cursor, g_Dma.AddressReads[5]);
-        cursor = LogPut(cursor, " ch5_count=");  cursor = LogHex(cursor, g_Dma.ChannelCountReads[5]);
-        cursor = LogPut(cursor, " status0=");    cursor = LogHex(cursor, g_Dma.StatusReads[0]);
-        cursor = LogPut(cursor, " status1=");    cursor = LogHex(cursor, g_Dma.StatusReads[1]);
-        /* ► THE OUTPUT SIDE. See vdd_sb.h: everything else here measures the RING.
-             `idle` is silence WE inserted because the DSP was un-armed; the run-length
-             buckets say whether that is a scatter of single samples or a gap once per
-             block. `cmd` names which transfer command the guest used -- 0x14 single
-             (stops every block) vs 0x1C/0xBx auto-init (streams). */
-        cursor = LogPut(cursor, "\r\nSTAGE2: sb OUTPUT: active="); cursor = LogHex(cursor, g_Sb.OutputActive);
-        cursor = LogPut(cursor, " idle=");   cursor = LogHex(cursor, g_Sb.OutputIdle);
-        cursor = LogPut(cursor, " paused="); cursor = LogHex(cursor, g_Sb.OutputPaused);
-        { UINT32 total = g_Sb.OutputActive + g_Sb.OutputIdle + g_Sb.OutputPaused;
-          if (total) { cursor = LogPut(cursor, " (");
-                     cursor = LogHex(cursor, (g_Sb.OutputIdle + g_Sb.OutputPaused) * 100u / total);
-                     cursor = LogPut(cursor, "% of output is inserted silence)"); } }
-        cursor = LogPut(cursor, " gap_runs[1,2,4,8,16,32,64,128+]=");
-        { INT bucket3; for (bucket3 = 0; bucket3 < 8; ++bucket3) { cursor = LogPut(cursor, bucket3 ? "," : "");
-                                               cursor = LogHex(cursor, g_Sb.IdleRuns[bucket3]); } }
-        /* ► ISOLATED silent blocks are the dropouts; long runs are real silence. */
-        cursor = LogPut(cursor, " flat_runs[1,2,3,4-7,8-15,16-31,32-63,64+]=");
-        { INT bucket2; for (bucket2 = 0; bucket2 < 8; ++bucket2) { cursor = LogPut(cursor, bucket2 ? "," : "");
-                                               cursor = LogHex(cursor, g_Sb.FlatRuns[bucket2]); } }
-        /* ► THE QUEUE, WHICH IS WHAT THE SPEAKER ACTUALLY SEES. STARVED>0 means the
-             driver ran out of data and played silence -- an audible gap that no
-             ring-side counter can show. `drain` is the margin: its mass sitting at
-             nbufs-1 is one buffer from silence even when starved reads 0. */
-        cursor = LogPut(cursor, " QUEUE: starved="); cursor = LogHex(cursor, g_Wave.Starved);
-        cursor = LogPut(cursor, " drain_max=");      cursor = LogHex(cursor, g_Wave.DrainMax);
-        cursor = LogPut(cursor, " wr_fail=");        cursor = LogHex(cursor, g_Wave.Underruns);
-        cursor = LogPut(cursor, " drain_hist=");
-        { UINT32 bufferIndex; for (bufferIndex = 0; bufferIndex <= g_Wave.BufferCount && bufferIndex <= AUDIO_WAVE_BUFFERS; ++bufferIndex) {
-              cursor = LogPut(cursor, bufferIndex ? "," : ""); cursor = LogHex(cursor, g_Wave.DrainHistogram[bufferIndex]); } }
-        cursor = LogPut(cursor, " geom: nbufs="); cursor = LogHex(cursor, g_Wave.BufferCount);
-        cursor = LogPut(cursor, " nframes=");     cursor = LogHex(cursor, g_Wave.FrameCount);
-        cursor = LogPut(cursor, " GATE: on="); cursor = LogHex(cursor, (DWORD)g_Sb.GateMode);
-        cursor = LogPut(cursor, " stalled_samples="); cursor = LogHex(cursor, g_Sb.GateStalled);
-        cursor = LogPut(cursor, " FORCED="); cursor = LogHex(cursor, g_Sb.GateForced);
-        if (g_Sb.OutputActive) { cursor = LogPut(cursor, "(stall=");
-            cursor = LogHex(cursor, g_Sb.GateStalled * PER_MILLE_U / g_Sb.OutputActive);
-            cursor = LogPut(cursor, " per mille of output)"); }
-        cursor = LogPut(cursor, " mix82=");   cursor = LogHex(cursor, g_Sb.Mixer82Reads);
-        cursor = LogPut(cursor, " ANSWERED_NO="); cursor = LogHex(cursor, g_Sb.Mixer82Zero);
-        if (g_Sb.Mixer82Reads) { cursor = LogPut(cursor, "(");
-            cursor = LogHex(cursor, g_Sb.Mixer82Zero * 100u / g_Sb.Mixer82Reads);
-            cursor = LogPut(cursor, "% turned away)"); }
-        cursor = LogPut(cursor, " rate_hz="); cursor = LogHex(cursor, g_Sb.RateHz);
-        cursor = LogPut(cursor, " blk_len="); cursor = LogHex(cursor, g_Sb.BlockLength);
-        cursor = LogPut(cursor, " dsp_cmds:");
-        { UINT vectorIndex; for (vectorIndex = 0; vectorIndex < IVT_VECTORS; ++vectorIndex)
-            if (g_Sb.CommandHistogram[vectorIndex]) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, vectorIndex);
-                                     cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_Sb.CommandHistogram[vectorIndex]); } }
-        cursor = LogPut(cursor, "\r\nSTAGE2: sb ");
-        /* ► THE GUEST ADDRESS OF EVERY DMA-COUNT POLL. Subtract 0x03AEDFEC for the
-             DOOM.EXE file offset and disassemble it. */
-        cursor = LogPut(cursor, " dma_poll_sites=");
-        { UINT pollIndex; for (pollIndex = 0; pollIndex < g_DmaPollCount; ++pollIndex) {
-              cursor = LogPut(cursor, pollIndex ? " " : ""); cursor = LogPut(cursor, "0x"); cursor = LogHex(cursor, g_DmaPollEip[pollIndex]);
-              cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_DmaPollHits[pollIndex]); } }
-        cursor = LogPut(cursor, " overflow="); cursor = LogHex(cursor, (DWORD)g_DmaPollOverflow);
-        /* ► THE CALL CHAIN. Subtract 0x03AEDFEC for the DOOM.EXE file offset. */
-        cursor = LogPut(cursor, " poll_stack=");
-        { UINT pollIndex; for (pollIndex = 0; pollIndex < g_PollStackCount; ++pollIndex) {
-              cursor = LogPut(cursor, pollIndex ? " " : ""); cursor = LogPut(cursor, "0x"); cursor = LogHex(cursor, g_PollStack[pollIndex]);
-              cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_PollStackHits[pollIndex]); } }
-        cursor = LogPut(cursor, " stkovf="); cursor = LogHex(cursor, (DWORD)g_PollStackOverflow);
-        /* ► WHY ONLY 56 MIXER RUNS/s: long overruns (a) or bunching (b)? */
-        cursor = LogPut(cursor, " poll_gap_us[<1k,2k,4k,8k,16k,32k,64k,128k,256k,+]=");
-        { UINT bucket4; for (bucket4 = 0; bucket4 < 10; ++bucket4) { cursor = LogPut(cursor, bucket4 ? "," : "");
-                                                     cursor = LogHex(cursor, g_PollGap[bucket4]); } }
-        cursor = LogPut(cursor, " gap_max_us="); cursor = LogHex(cursor, g_PollGapMaximumMicroseconds);
-        /* ── READ DMX'S TASK PERIOD OUT OF THE LIVE GUEST. ──────────────────────────
-             Everything about the refill rate is inferred from how often the mixer polls:
-             "period 1 tick, overrunning" and "period 2 ticks, working as designed" both
-             fit 58 runs/s and need opposite fixes. The scheduler (DOOM.EXE 0x57224)
-             walks 32-byte task entries -- +0x00 handler, +0x08 PERIOD, +0x14 next_due,
-             +0x1c busy, +0x1e enabled -- so the period is simply there to be read.
-           ⚠ DO NOT COMPUTE THE ADDRESS. Composing virtual->guest through the LE object
-             table produced a table of noise, and the structural scan written to find it
-             instead read unmapped memory and killed the run before STAGE2 finished.
-           ► SEARCH FOR THE HANDLER. The mixer's entry is DOOM.EXE file 0x56884, and the
-             file->guest delta 0x03AEDFEC is verified twice over (DMX's IRQ0 stub and
-             Doom's keyboard ISR, and DMXCHK re-checks it in-run), so the task entry is
-             whatever 32 bytes begin with that pointer. No data-address arithmetic at
-             all, and a hit is self-verifying.
-             Walk only COMMITTED, READABLE regions and stop 32 bytes short of each one's
-             end -- that is what the previous attempt got wrong. */
-        { const DWORD mixer = 0x57224u + 0x03AEDFECu;   /* DMX IRQ0 handler = table[0] */
-          const volatile BYTE *stub = (const volatile BYTE *)(ULONG_PTR)0x03b431f0;
-          MEMORY_BASIC_INFORMATION memoryInfo;
-          ULONG_PTR address = 0x00010000u, lim = 0x7ff00000u;   /* whole user space */
-          UINT found = 0, tries;
-          /* ⚠ 0x03b431f0 IS DOOM'S ADDRESS, AND ONLY DOOM'S. Reading it unguarded is
-               the very mistake the note above says the scan got wrong -- made again,
-               one line below the warning. Under Doom the page is mapped and the probe
-               is free; under ANY OTHER GUEST it is not, and the access violation
-               killed the host mid-summary: Skyroads crashed on exit four times over
-               and truncated its own STAGE2 log at `async why irq00`. A Doom-shaped
-               instrument must be inert everywhere else, so ASK FIRST. */
-          cursor = LogPut(cursor, " DMXCHK=");
-          if (MemoryReadable((ULONG_PTR)stub, 5))
-              for (tries = 0; tries < 5; ++tries) cursor = LogHexByte(cursor, stub[tries]);   /* expect 601e060fa0 */
-          else
-              cursor = LogPut(cursor, "unmapped");   /* not Doom: the probe has nothing to say */
-          cursor = LogPut(cursor, " mixer=0x"); cursor = LogHex(cursor, mixer);
-          while (address < lim && found < 3) {
-              ULONG_PTR base, end, scan;
-              INT readable;
-              if (VirtualQuery((LPCVOID)address, &memoryInfo, sizeof memoryInfo) != sizeof memoryInfo) break;
-              base = (ULONG_PTR)memoryInfo.BaseAddress; end = base + memoryInfo.RegionSize;
-              readable = (memoryInfo.State == MEM_COMMIT)
-                       && (memoryInfo.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY
-                                       | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE
-                                       | PAGE_EXECUTE_WRITECOPY))
-                       && !(memoryInfo.Protect & PAGE_GUARD);
-              if (readable) {
-                  for (scan = base; scan + 16u*36u <= end && found < 3; scan += 4) {
-                      const volatile DWORD *entryWords = (const volatile DWORD *)scan;
-                      if (entryWords[0] != mixer) continue;
-                      /* ⚠ DUMP RAW, DO NOT INTERPRET. The first attempt read
-                           [+8] as the period and got 140 -- which at a ~135/s clock
-                           means one run a SECOND against 58 observed, so either the
-                           match is spurious or the field offsets are wrong. Print the
-                           bytes and decide offline; a guessed layout is how this
-                           session has already produced two counters that could not
-                           have contradicted themselves. 64 bytes = two table entries,
-                           so a real table shows a second handler pointer at +32. */
-                      /* ── THE DISPATCHER'S HANDLER TABLE. ───────────────────────
-                           DOOM.EXE 0x554f4 calls [eax*4 + 0x281ac] with eax = irq*9,
-                           i.e. a 36-byte stride from a base whose ADDRESS is an LE
-                           fixup and therefore absent from the image. But entry 0 is
-                           DMX's IRQ0 handler and that address IS known -- so the base
-                           is wherever that pointer lies, and every other IRQ's handler
-                           follows at +36. No address arithmetic, self-verifying.
-                           IRQ5 is the Sound Blaster: 81 block IRQs a second are
-                           delivered and only 58 reach the mixer, so its handler is
-                           what decides the missing 28%. Subtract 0x03AEDFEC from the
-                           printed value for the file offset to disassemble. */
-                      UINT irqIndex;
-                      if (scan + 16u * 36u > end) continue;   /* table must fit */
-                      ++found;
-                      cursor = LogPut(cursor, " IRQTAB@0x"); cursor = LogHex(cursor, (DWORD)scan);
-                      for (irqIndex = 0; irqIndex < 16; ++irqIndex) {
-                          DWORD handle = *(const volatile DWORD *)(scan + irqIndex * 36u);
-                          if (!handle) continue;
-                          cursor = LogPut(cursor, " i"); cursor = LogHexByte(cursor, irqIndex);
-                          cursor = LogPut(cursor, "=0x"); cursor = LogHex(cursor, handle);
-                      }
-                  }
-              }
-              if (end <= base) break;
-              address = end;
-          }
-          if (!found) cursor = LogPut(cursor, " IRQTAB-NOT-FOUND");
-          /* ── THE CALLBACK BETWEEN THE SB ISR AND THE MIXER. ─────────────────────
-               DMX's SB handler ends by calling through a pointer stored at data 0x584
-               (the value read back there is a code address), and that callback is
-               where the 28% goes: the ISR runs 86/s (mix82 reads ==
-               blocks) but the mixer is entered 58/s. Its address is runtime data, and
-               the code virtual->file map is the one map still unknown.
-               But the IRQ table settles the addressing: the pointers IN it are LINEAR
-               (entry 0 read back as 0x03b45210, exactly file 0x57224 + 0x03AEDFEC),
-               while data operands like 0x281ac needed +0x03BA0000 to be found. So CS
-               is flat at base 0 and DS is not -- and a code pointer STORED in data is
-               therefore directly a linear address. Read it and subtract 0x03AEDFEC.
-               Also read DMX's own state word at data 0x26370, which its ISR compares
-               against 1 before doing anything at all. */
-          { const volatile DWORD *counterBytes  = (const volatile DWORD *)(ULONG_PTR)(0x584u   + 0x03BA0000u);
-            const volatile DWORD *stateWord = (const volatile DWORD *)(ULONG_PTR)(0x26370u + 0x03BA0000u);
-            MEMORY_BASIC_INFORMATION stateMemoryInfo;
-            if (VirtualQuery((LPCVOID)counterBytes, &stateMemoryInfo, sizeof stateMemoryInfo) == sizeof stateMemoryInfo && stateMemoryInfo.State == MEM_COMMIT) {
-                DWORD number = *counterBytes;
-                cursor = LogPut(cursor, " CB[0x584]=0x"); cursor = LogHex(cursor, number);
-                if (number > 0x03AEDFECu && number < 0x03AEDFECu + 0x45000u) {
-                    cursor = LogPut(cursor, "=file0x"); cursor = LogHex(cursor, number - 0x03AEDFECu);
-                } else cursor = LogPut(cursor, "(not a linear code addr)");
-            }
-            if (VirtualQuery((LPCVOID)stateWord, &stateMemoryInfo, sizeof stateMemoryInfo) == sizeof stateMemoryInfo && stateMemoryInfo.State == MEM_COMMIT) {
-                cursor = LogPut(cursor, " STATE[0x26370]="); cursor = LogHex(cursor, *stateWord);
-            } } }
-        cursor = LogPut(cursor, " count_rd_by_width w1="); cursor = LogHex(cursor, g_Dma.CountReadsByte);
-        cursor = LogPut(cursor, " w2=");                   cursor = LogHex(cursor, g_Dma.CountReadsWord);
-        cursor = LogPut(cursor, " w4=");                   cursor = LogHex(cursor, g_Dma.CountReadsDword);
-        /* ...and how many of those reads DMX made from inside a COOPERATIVE tick. */
-        cursor = LogPut(cursor, " from_coop_isr08=");      cursor = LogHex(cursor, g_CooperativeDmaPolls);
-        { UINT quadrant; for (quadrant = 2; quadrant < 8; ++quadrant)
-            { if (!g_CooperativeDmaPollsDevice[quadrant]) continue;
-              cursor = LogPut(cursor, " from_coop_irq"); cursor = LogHexByte(cursor, quadrant);
-              cursor = LogPut(cursor, "=");              cursor = LogHex(cursor, g_CooperativeDmaPollsDevice[quadrant]); } }
-        cursor = LogPut(cursor, " in_async_isr=");  cursor = LogHex(cursor, g_DmaPollInAsync);
-        cursor = LogPut(cursor, " mainline=");      cursor = LogHex(cursor, g_DmaPollMainline);
-        cursor = LogPut(cursor, "\r\nSTAGE2: devirq async retry (one per sync): try=");
-        cursor = LogHex(cursor, g_IrqNRetryTry);
-        cursor = LogPut(cursor, " ok="); cursor = LogHex(cursor, g_IrqNRetryOk);
-        cursor = LogPut(cursor, " (0/0 = every device IRQ landed at its raise instant)");
-        cursor = LogPut(cursor, "\r\nSTAGE2: devirq (cooperative PM retry): inj=");
-        cursor = LogHex(cursor, g_PmDeviceIrqInjected);
-        cursor = LogPut(cursor, " fail=");  cursor = LogHex(cursor, g_PmDeviceIrqFail);
-        cursor = LogPut(cursor, " dropped_unhooked="); cursor = LogHex(cursor, g_PmDeviceIrqDrop);
-        cursor = LogPut(cursor, "\r\nSTAGE2: sound2: ");
-        cursor = LogPut(cursor, " mpu_uart=");                cursor = LogHex(cursor, (DWORD)g_Mpu.IsUartMode);
-        cursor = LogPut(cursor, " host_wave=");               cursor = LogPut(cursor, g_Wave.IsSilent ? "SILENT" : "open");
-        cursor = LogPut(cursor, " host_midi=");               cursor = LogPut(cursor, g_Wave.MidiOut ? "open" : "NONE");
-        cursor = LogPut(cursor, " underruns=");               cursor = LogHex(cursor, g_Wave.Underruns);
-        cursor = LogPut(cursor, "\r\n");
-        /* ► THE BLOCK-BOUNDARY LEDGER (see the SB_BLOCK_RECORD comment in vdd_sb.h). One line
-             per completed block for the first few: where the capture stood, what the
-             8237 held, and whether it had wrapped. cap_off is the load-bearing column --
-             it turns sbref.py's INFERRED 128-frame grid into measured boundaries, so
-             "the jump is two frames in" can be checked against fact instead of against
-             our own guess at where a block starts. */
-        if (g_Sb.BlockLogCount) {
-            UINT32 blockIndex;
-            cursor = LogPut(cursor, "STAGE2: sound blocks: n="); cursor = LogHex(cursor, g_Sb.Blocks);
-            cursor = LogPut(cursor, " logged="); cursor = LogHex(cursor, g_Sb.BlockLogCount);
-            cursor = LogPut(cursor, " (cap_off block_len phys count base_addr base_count page mode)\r\n");
-            for (blockIndex = 0; blockIndex < g_Sb.BlockLogCount && blockIndex < SB_BLOCK_LOG_MAX; ++blockIndex) {
-                const SB_BLOCK_RECORD *blockRecord = &g_Sb.BlockLog[blockIndex];
-                cursor = LogPut(cursor, "STAGE2: sbblk "); cursor = LogHexByte(cursor, blockIndex);
-                cursor = LogPut(cursor, " cap_off=");    cursor = LogHex(cursor, blockRecord->CaptureOffset);
-                cursor = LogPut(cursor, " blk_len=");    cursor = LogHex(cursor, blockRecord->BlockLength);
-                cursor = LogPut(cursor, " phys=");       cursor = LogHex(cursor, blockRecord->Physical);
-                cursor = LogPut(cursor, " count=");      cursor = LogHex(cursor, blockRecord->CurrentCount);
-                cursor = LogPut(cursor, " base=");       cursor = LogHex(cursor, blockRecord->BaseAddress);
-                cursor = LogPut(cursor, "/");            cursor = LogHex(cursor, blockRecord->BaseCount);
-                cursor = LogPut(cursor, " page=");       cursor = LogHexByte(cursor, blockRecord->Page);
-                cursor = LogPut(cursor, " mode=");       cursor = LogHexByte(cursor, blockRecord->Mode);
-                cursor = LogPut(cursor, blockRecord->Reloaded ? " WRAPPED" : " mid-ring");
-                if (blockRecord->Ended) cursor = LogPut(cursor, " ENDED");
-                cursor = LogPut(cursor, "\r\n");
-                /* `base` points PAST the preamble, not at report[0], so bound against
-                   the array itself -- p - base would let this overrun by the preamble's
-                   length. */
-                if (cursor > reportEnd - 512) {
-                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                }
-            }
-            /* Hand the rest of STAGE2 an empty buffer: the ledger is the biggest single
-               block in this report and everything after it was running on fumes. */
-            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-        }
-        cursor = LogPut(cursor, "STAGE2: opl: trace=");   cursor = LogHex(cursor, g_OplTraceCount);
-        cursor = LogPut(cursor, " tdrop=");               cursor = LogHex(cursor, g_OplTraceDrop);
-        cursor = LogPut(cursor, "\r\n");
-        /* ── THE SPEAKER PATH, END TO END, IN ONE LINE. "I heard nothing" has four
-         causes and until now no log told them apart: the guest's port writes not
-         reaching the VDD, the mixer not fitted to it, a frequency it refuses, or
-         a fault downstream of the mixer entirely. Each counter is taken where the
-         decision is made, so the first zero names the stage. */
-    { INT eventIndex; cursor = LogPut(cursor, "STAGE2: events: direct_io="); cursor = LogHex(cursor, g_IoViaDirect);
-      cursor = LogPut(cursor, " retro_io=");  cursor = LogHex(cursor, g_IoViaRetro);
-      cursor = LogPut(cursor, " by_event=");
-      for (eventIndex = 0; eventIndex < EV_HIST_MAX; ++eventIndex) {
-          if (!g_EventHistogram[eventIndex]) continue;
-          cursor = LogPut(cursor, " "); cursor = LogHex(cursor, (DWORD)eventIndex); cursor = LogPut(cursor, ":"); cursor = LogHex(cursor, g_EventHistogram[eventIndex]);
-      }
-      cursor = LogPut(cursor, "\r\n"); }
-    cursor = LogPut(cursor, "STAGE2: pcspk: want=");   cursor = LogHex(cursor, (DWORD)g_SpeakerReal);
-    cursor = LogPut(cursor, " opened=");               cursor = LogHex(cursor, (DWORD)g_PcSpeaker.OpenState);
-    cursor = LogPut(cursor, " open_err=");             cursor = LogHex(cursor, g_PcSpeaker.OpenError);
-    cursor = LogPut(cursor, " via=");                  cursor = LogHex(cursor, (DWORD)g_PcSpeaker.OpenPath);
-    cursor = LogPut(cursor, " ioctls=");               cursor = LogHex(cursor, g_PcSpeaker.IoctlCount);
-    cursor = LogPut(cursor, " refused=");              cursor = LogHex(cursor, g_PcSpeaker.FailedCount);
-    cursor = LogPut(cursor, " last_hz=");              cursor = LogHex(cursor, g_PcSpeaker.CurrentHz);
-    cursor = LogPut(cursor, "\r\n");
-    cursor = LogPut(cursor, "STAGE2: wave: dev_volume_ok="); cursor = LogHex(cursor, (DWORD)g_Wave.IsDeviceVolumeKnown);
-    cursor = LogPut(cursor, " dev_volume=0x");               cursor = LogHex(cursor, g_Wave.DeviceVolume);
-    cursor = LogPut(cursor, " silent=");                     cursor = LogHex(cursor, (DWORD)g_Wave.IsSilent);
-    cursor = LogPut(cursor, "\r\n");
-    cursor = LogPut(cursor, "STAGE2: spk: fitted=");    cursor = LogHex(cursor, (DWORD)(g_Audio.Speaker ? 1 : 0));
-    cursor = LogPut(cursor, " level=");                 cursor = LogHex(cursor, (DWORD)g_Audio.SpeakerLevel);
-    cursor = LogPut(cursor, " port61=0x");              cursor = LogHex(cursor, (DWORD)g_Speaker.Port61);
-    cursor = LogPut(cursor, " ch2_reload=");            cursor = LogHex(cursor, (DWORD)g_Pit.Counter2Reload);
-    cursor = LogPut(cursor, " gated_frames=");          cursor = LogHex(cursor, g_Audio.SpeakerGated);
-    cursor = LogPut(cursor, " emitted_frames=");        cursor = LogHex(cursor, g_Audio.SpeakerFrames);
-    cursor = LogPut(cursor, " last_hz=");               cursor = LogHex(cursor, g_Audio.SpeakerHz);
-    cursor = LogPut(cursor, " mixed_frames=");          cursor = LogHex(cursor, g_Audio.FramesMixed);
-    cursor = LogPut(cursor, " master=");                cursor = LogHex(cursor, g_Audio.Master);
-    cursor = LogPut(cursor, " muted=");                 cursor = LogHex(cursor, (DWORD)g_Audio.IsMuted);
-    cursor = LogPut(cursor, "\r\n");
-    cursor = LogPut(cursor, "STAGE2: opl: writes=");  cursor = LogHex(cursor, g_Opl.ProfileWrites);
-        cursor = LogPut(cursor, " keyons=");              cursor = LogHex(cursor, g_Opl.ProfileKeyOns);
-        cursor = LogPut(cursor, " bd_writes=");           cursor = LogHex(cursor, g_Opl.ProfileBdWrites);
-        cursor = LogPut(cursor, " bd_or=");               cursor = LogHexByte(cursor, g_Opl.ProfileBdOr);
-        cursor = LogPut(cursor, " keyon_am=");            cursor = LogHex(cursor, g_Opl.ProfileKeyOnAm);
-        cursor = LogPut(cursor, " keyon_vib=");           cursor = LogHex(cursor, g_Opl.ProfileKeyOnVibrato);
-        cursor = LogPut(cursor, " am_ops=");              cursor = LogHex(cursor, g_Opl.ProfileAmOperators);
-        cursor = LogPut(cursor, " vib_ops=");             cursor = LogHex(cursor, g_Opl.ProfileVibratoOperators);
-        cursor = LogPut(cursor, " waves=");               cursor = LogHexByte(cursor, g_Opl.ProfileWaveMask);
-        cursor = LogPut(cursor, " wse=");                 cursor = LogHexByte(cursor, g_Opl.ProfileWaveformSelect);
-        cursor = LogPut(cursor, "\r\n");
-        /* PERCUSSION, BY EDGE COUNT. bd_or above is an OR over the whole run and
-           cannot tell "set once at init" from "drums play throughout" -- it once
-           produced a confident wrong answer about exactly this register. These are
-           key-on edges per voice. All five are synthesised since #139 (hi-hat,
-           snare and cymbal were silent before it and this line said so); the counts
-           stay because they say how much percussion a game actually uses. */
-        cursor = LogPut(cursor, "STAGE2: opl rhythm: bassdrum="); cursor = LogHex(cursor, g_Opl.ProfileRhythmHits[4]);
-        cursor = LogPut(cursor, " tomtom=");                      cursor = LogHex(cursor, g_Opl.ProfileRhythmHits[2]);
-        cursor = LogPut(cursor, " hihat=");                       cursor = LogHex(cursor, g_Opl.ProfileRhythmHits[0]);
-        cursor = LogPut(cursor, " snare=");                       cursor = LogHex(cursor, g_Opl.ProfileRhythmHits[3]);
-        cursor = LogPut(cursor, " cymbal=");                      cursor = LogHex(cursor, g_Opl.ProfileRhythmHits[1]);
-        cursor = LogPut(cursor, "\r\n");
-        cursor = LogPut(cursor, "STAGE2: vsync: vbl_edges="); cursor = LogHex(cursor, g_Video.VblEdges);
-        cursor = LogPut(cursor, " p3da_reads=");             cursor = LogHex(cursor, g_Video.Port3DaReads);
-        cursor = LogPut(cursor, " hbl_owed=");               cursor = LogHex(cursor, g_Video.Port3DaHblOwed);
-        cursor = LogPut(cursor, " vbl_owed=");               cursor = LogHex(cursor, g_Video.Port3DaVblOwed);   /* #225 */
-        cursor = LogPut(cursor, " run_ms=");                 cursor = LogHex(cursor, GetTickCount() - g_RunStartTick);
-        cursor = LogPut(cursor, "\r\n");
-        cursor = LogPut(cursor, "STAGE2: imem out-of-range (guarded, would have CRASHED the host): bad_reads=");
-        cursor = LogHex(cursor, g_InterpreterMemoryBadReads); cursor = LogPut(cursor, " bad_writes="); cursor = LogHex(cursor, g_InterpreterMemoryBadWrites);
-        cursor = LogPut(cursor, " logged="); cursor = LogHex(cursor, g_InterpreterMemoryBadLogged); cursor = LogPut(cursor, "\r\n");
-        /* ► Is mode Y actually in use? The whole unchained theory rests on Doom
-             clearing Sequencer reg 4 bit 3, which was INFERRED from a pixel pattern
-             (80-px period, 50 rows) and never observed directly. Print the register. */
-        /* ── THE CRTC AS THE GUEST PROGRAMMED IT. Added s64 after two speculative
-             fixes in a row -- one right, one wrong. render_planar now depends on all
-             of these, so a wrong picture has to be able to name which register is
-             responsible instead of being guessed at. */
-        {   UINT index;
-            cursor = LogPut(cursor, "STAGE2: planar w0: ensr@write");
-            for (index = 0; index < 16; ++index) if (g_Video.WriteEnableSetResetHistogram[index]) {
-                cursor = LogPut(cursor, " 0x"); cursor = LogHexByte(cursor, index);
-                cursor = LogPut(cursor, "="); cursor = LogDecimal(cursor, g_Video.WriteEnableSetResetHistogram[index]); }
-            cursor = LogPut(cursor, " | alu");
-            for (index = 0; index < 4; ++index) if (g_Video.WriteAluHistogram[index]) {
-                cursor = LogPut(cursor, " "); cursor = LogDecimal(cursor, index);
-                cursor = LogPut(cursor, "="); cursor = LogDecimal(cursor, g_Video.WriteAluHistogram[index]); }
-            cursor = LogPut(cursor, " | p3_from_sr=");  cursor = LogDecimal(cursor, g_Video.WritePlane3SetReset);
-            cursor = LogPut(cursor, " of_which_nonzero="); cursor = LogDecimal(cursor, g_Video.WritePlane3NonZero);
-            cursor = LogPut(cursor, " p3_from_cpu=");   cursor = LogDecimal(cursor, g_Video.WritePlane3Data);
-            cursor = LogPut(cursor, "\r\n"); }
-        {   UINT index;
-            cursor = LogPut(cursor, "STAGE2: attr: acport="); cursor = LogDecimal(cursor, g_Video.AcPortWrites);
-            cursor = LogPut(cursor, " acbios=");              cursor = LogDecimal(cursor, g_Video.AcBiosWrites);
-            cursor = LogPut(cursor, " dacw=");                cursor = LogDecimal(cursor, g_Video.DacWrites);
-            cursor = LogPut(cursor, " palresets="); cursor = LogDecimal(cursor, g_Video.PaletteResets);
-            cursor = LogPut(cursor, " hi_since_reset="); cursor = LogDecimal(cursor, g_Video.DacHighSinceReset);
-            /* The one that can actually be non-zero: this report is written after
-               the guest has exited through a mode set back to text. */
-            cursor = LogPut(cursor, " hi_max="); cursor = LogDecimal(cursor, g_Video.DacHighMax);
-            cursor = LogPut(cursor, " dacblk[16s]=");
-            for (index = 0; index < 16; ++index) { cursor = LogDecimal(cursor, g_Video.DacBlock[index]); cursor = LogPut(cursor, ","); }
-            cursor = LogPut(cursor, " vpal=[");
-            for (index = 0; index < 16; ++index) { cursor = LogHexByte(cursor, g_Video.PaletteRegisters[index]); cursor = LogPut(cursor, " "); }
-            cursor = LogPut(cursor, "] dac@vpal=[");
-            /* The DAC entries the DEFAULT AC palette actually points at. If these are
-               the seeded EGA64 values the guest never wrote them; if they hold its
-               colours, the write landed and the fault is downstream. */
-            for (index = 0; index < 16; ++index) {
-                UINT32 colour = g_Video.Dac[g_Video.PaletteRegisters[index] & 0x3F];
-                cursor = LogHexByte(cursor, (colour >> WORD_SHIFT) & BYTE_MASK); cursor = LogHexByte(cursor, (colour >> BYTE_SHIFT) & BYTE_MASK);
-                cursor = LogHexByte(cursor, colour & BYTE_MASK); cursor = LogPut(cursor, " "); }
-            cursor = LogPut(cursor, "]\r\n"); }
-        /* ── s69: IS THE LEVEL PALETTE EVEN LOADED? ────────────────────────────────
-             The gameplay screen renders black because dac@vpal is all-zero. That is
-             either "the game never loaded its colours" or "the fade multiplied them
-             to zero and is stuck". The oracle's per-frame palette buffer holds a
-             known green run (00 2a 00 15 3f 15 15 15 15 2a 00 00); scan our guest's
-             conventional memory for it. Found => the colours ARE in memory and the
-             fault is the fade/DAC path (ours); absent => the palette was never loaded
-             (a file-read/decode fault, earlier). Bounded, one pass, exit only. */
-        {   static const BYTE signature[12] = {0x00,0x2a,0x00,0x15,0x3f,0x15,0x15,0x15,0x15,0x2a,0x00,0x00};
-            UINT32 candidate, found = 0xFFFFFFFFu, hits = 0;
-            for (candidate = 0x400; candidate + 12 <= 0xA0000u; ++candidate) {
-                if ((candidate & 0xFFF) == 0 && !InterpreterMemoryPageOk(candidate)) { candidate += 0xFFF; continue; }
-                if (*(volatile BYTE *)candidate == 0x00 && *(volatile BYTE *)(candidate+1) == 0x2a) {
-                    UINT32 item; INT isOk = 1;
-                    for (item = 0; item < 12; ++item) if (*(volatile BYTE *)(candidate+item) != signature[item]) { isOk = 0; break; }
-                    if (isOk) { if (found == 0xFFFFFFFFu) found = candidate; hits++; }
-                }
-            }
-            cursor = LogPut(cursor, "STAGE2: level-palette signature: ");
-            if (found != 0xFFFFFFFFu) { cursor = LogPut(cursor, "FOUND at lin=0x"); cursor = LogHex(cursor, found);
-                cursor = LogPut(cursor, " (hits="); cursor = LogDecimal(cursor, hits);
-                cursor = LogPut(cursor, ") -> colours ARE loaded; fade/DAC path is the fault\r\n"); }
-            else cursor = LogPut(cursor, "ABSENT -> the level palette was never loaded into guest RAM\r\n");
-        }
-        /* ── s69: THE FADED PALETTE BUFFER + THE FADE STATE, from the guest DS the
-             heartbeat last sampled. The per-frame palette routine feeds the DAC from
-             ds:0x2668; if that is black while the raw palette (above) is present, the
-             fade multiplied it to zero. [0x1f7c] is the palette-state selector
-             (oracle=4). Reads go through InterpreterMemoryPageOk so an unmapped DS cannot fault. */
-        if (g_HeartbeatDs) {
-            UINT32 dataSegmentBase = (UINT32)g_HeartbeatDs << PARAGRAPH_SHIFT, index;
-            cursor = LogPut(cursor, "STAGE2: fade dump ds=0x"); cursor = LogHex(cursor, g_HeartbeatDs);
-            if (InterpreterMemoryPageOk(dataSegmentBase + 0x1f7c)) {
-                cursor = LogPut(cursor, " [1f7c]=0x"); cursor = LogHexByte(cursor, *(volatile BYTE *)(dataSegmentBase + 0x1f7c));
-            }
-            cursor = LogPut(cursor, " buf@2668=[");
-            if (InterpreterMemoryPageOk(dataSegmentBase + 0x2668)) {
-                for (index = 0; index < 24; ++index) { cursor = LogHexByte(cursor, *(volatile BYTE *)(dataSegmentBase + 0x2668 + index)); cursor = LogPut(cursor, " "); }
-            } else cursor = LogPut(cursor, "<ds:2668 unmapped>");
-            cursor = LogPut(cursor, "]\r\n");
-        }
-        /* The VRAM watchpoint. Silent unless cfg/vwatch.txt armed it. */
-        if (g_Video.WatchOffset != VIDEO_OFFSET_NONE) {
-            UINT watchIndex2, watchCount = g_Video.WatchCount < VIDEO_WATCH_MAX ? g_Video.WatchCount : VIDEO_WATCH_MAX;
-            cursor = LogPut(cursor, "STAGE2: vwatch off=0x"); cursor = LogHex(cursor, g_Video.WatchOffset);
-            cursor = LogPut(cursor, " writes="); cursor = LogDecimal(cursor, g_Video.WatchCount); cursor = LogPut(cursor, "\r\n");
-            for (watchIndex2 = 0; watchIndex2 <= watchCount; ++watchIndex2) {
-                const VIDEO_WATCH_RECORD *watch = (watchIndex2 < watchCount) ? &g_Video.Watch[watchIndex2] : &g_Video.WatchLast;
-                INT item;
-                if (watchIndex2 == watchCount) { if (!g_Video.WatchCount) break; cursor = LogPut(cursor, "  LAST "); }
-                else          { cursor = LogPut(cursor, "  #"); cursor = LogDecimal(cursor, watchIndex2); cursor = LogPut(cursor, " "); }
-                cursor = LogPut(cursor, "pc="); cursor = LogHex(cursor, watch->Pc);
-                cursor = LogPut(cursor, " wm="); cursor = LogDecimal(cursor, watch->WriteMode);
-                cursor = LogPut(cursor, " mm="); cursor = LogHexByte(cursor, watch->MapMask);
-                cursor = LogPut(cursor, " ensr="); cursor = LogHexByte(cursor, watch->EnableSetReset);
-                cursor = LogPut(cursor, " sr="); cursor = LogHexByte(cursor, watch->SetReset);
-                cursor = LogPut(cursor, " frot="); cursor = LogHexByte(cursor, watch->FunctionRotate);
-                cursor = LogPut(cursor, " bm="); cursor = LogHexByte(cursor, watch->BitMask);
-                cursor = LogPut(cursor, " cpu="); cursor = LogHexByte(cursor, watch->Cpu);
-                cursor = LogPut(cursor, " lat=");
-                for (item = 0; item < 4; ++item) cursor = LogHexByte(cursor, watch->Latch[item]);
-                cursor = LogPut(cursor, " after=");
-                for (item = 0; item < 4; ++item) cursor = LogHexByte(cursor, watch->After[item]);
-                cursor = LogPut(cursor, "\r\n");
-                if (cursor > reportEnd - 256) break;
-            }
-        }
-        /* ► Does this guest use OFF-SCREEN VRAM? Above 38400 used to read back as
-             0xFF, so the answer used to be invisible. */
-        cursor = LogPut(cursor, "STAGE2: planar hi_water=0x"); cursor = LogHex(cursor, g_Video.PlanarHighWater);
-        cursor = LogPut(cursor, " plane_size=0x"); cursor = LogHex(cursor, (DWORD)VIDEO_PLANE_SIZE);
-        cursor = LogPut(cursor, " wsite_lost="); cursor = LogDecimal(cursor, g_Video.WriteSitesLost);
-        /* ► DOES THIS GUEST USE COLOUR COMPARE? Read mode 1 is pixel-perfect terrain
-             collision in one instruction; until it was implemented, every such read
-             returned a raw plane byte and the guest acted on it. */
-        cursor = LogPut(cursor, " reads[mode0/mode1]="); cursor = LogDecimal(cursor, g_Video.ReadModeHistogram[0]);
-        cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.ReadModeHistogram[1]);
-        cursor = LogPut(cursor, " cc="); cursor = LogHexByte(cursor, g_Video.ColorCompare);
-        cursor = LogPut(cursor, " cdc="); cursor = LogHexByte(cursor, g_Video.ColorDontCare);
-        cursor = LogPut(cursor, "\r\n");
-        {   UINT item;
-            /* ► And, whatever their rank, every site that touched DEEP off-screen
-                 VRAM. That region was unreachable until a plane became 64KB, so
-                 "who is up there" is the question worth answering unprompted -- and
-                 a one-shot blit of a status panel will never be in a top-N list. */
-        { LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
-            cursor = LogPut(cursor, "STAGE2: planar sites touching off-screen (>=0xC000):\r\n");
-            for (item = 0; item < VIDEO_SITES; ++item) {
-                INT which;
-                for (which = 0; which < 2; ++which) {
-                    const VIDEO_SITE *videoSite = which ? &g_Video.ReadSites[item] : &g_Video.WriteSites[item];
-                    if (!videoSite->Count || videoSite->High < 0xC000u) continue;
-                    cursor = LogPut(cursor, which ? "  READ  pc=" : "  WRITE pc=");
-                    cursor = LogHex(cursor, videoSite->Pc);
-                    cursor = LogPut(cursor, " n=");     cursor = LogDecimal(cursor, videoSite->Count);
-                    cursor = LogPut(cursor, " off=0x"); cursor = LogHex(cursor, videoSite->Low);
-                    cursor = LogPut(cursor, "..0x");    cursor = LogHex(cursor, videoSite->High);
-                    cursor = LogPut(cursor, "\r\n");
-                }
-                if (cursor > reportEnd - 256) break;
-            }         }
-        /* ► THE OFF-SCREEN SPRITE CACHE, WITHOUT THE COLLISION CAVEAT. The report
-             above is drawn from 256-slot hashes that lost 249,630 reads on the run
-             this was written for, so a site missing from it may simply have collided
-             -- and the open toolbar question is precisely whether a routine RAN.
-             This table is linear and cannot lose an entry to another pc; only to
-             being full, which `lost` states. `seq` is a tick per cache access, so
-             first/last order the compositor against the blitter and answer "was the
-             cache filled BEFORE it was copied to the screen" directly. */
-        /* ⚠ FLUSH FIRST. This block is near the END of a report that shares one
-             char[8192], and the off-screen list above it can run to dozens of lines.
-             On its first rig run the buffer guard below fired after the FIRST entry
-             and silently dropped the other nine -- the table had the answer and the
-             log did not. It was caught only because `seq` is printed beside the per
-             entry counts and 12800 did not add up to 19984; without that cross-check
-             the truncated list reads as a complete one, which is the worst shape a
-             report can fail in. A fixed buffer is a silent budget: spend it here. */
-        { LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
-        {   UINT item;
-            cursor = LogPut(cursor, "STAGE2: off-screen cache sites (>=0x"); cursor = LogHex(cursor, VIDEO_CACHE_LOW);
-            cursor = LogPut(cursor, "), lost="); cursor = LogDecimal(cursor, g_Video.CacheSitesLost);
-            cursor = LogPut(cursor, " seq=");    cursor = LogDecimal(cursor, g_Video.CacheSequence);
-            cursor = LogPut(cursor, "\r\n");
-            {   UINT32 accounted = 0;
-                for (item = 0; item < VIDEO_CACHE_SITES; ++item) {
-                    const VIDEO_CACHE_SITE *cacheSite = &g_Video.CacheSites[item];
-                    if (!cacheSite->Count) continue;
-                    accounted += cacheSite->Count;
-                    cursor = LogPut(cursor, cacheSite->IsWrite ? "  cache WRITE pc=" : "  cache READ  pc=");
-                    cursor = LogHex(cursor, cacheSite->Pc);
-                    cursor = LogPut(cursor, " n=");      cursor = LogDecimal(cursor, cacheSite->Count);
-                    cursor = LogPut(cursor, " off=0x");  cursor = LogHex(cursor, cacheSite->Low);
-                    cursor = LogPut(cursor, "..0x");     cursor = LogHex(cursor, cacheSite->High);
-                    cursor = LogPut(cursor, " first=");  cursor = LogDecimal(cursor, cacheSite->First);
-                    cursor = LogPut(cursor, " last=");   cursor = LogDecimal(cursor, cacheSite->Last);
-                    cursor = LogPut(cursor, "\r\n");
-                    if (cursor > reportEnd - 512) break;
-                }
-                /* ► THE LIST MUST ACCOUNT FOR EVERY ACCESS IT COUNTED. n's + lost has
-                     to equal seq; if it does not, lines are MISSING and the absence of
-                     a pc above means nothing. Said out loud so it cannot be read past. */
-                cursor = LogPut(cursor, "  cache accounted="); cursor = LogDecimal(cursor, accounted + g_Video.CacheSitesLost);
-                cursor = LogPut(cursor, " of seq=");           cursor = LogDecimal(cursor, g_Video.CacheSequence);
-                cursor = LogPut(cursor, (accounted + g_Video.CacheSitesLost == g_Video.CacheSequence)
-                              ? " COMPLETE\r\n" : " !! TRUNCATED -- absence proves NOTHING\r\n");
-            }
-        }
-        /* The write sites, busiest first -- who drew the screen, and where. */
-        {   UINT item, shown;
-            for (shown = 0; shown < 14; ++shown) {
-                UINT best = VIDEO_SITES; UINT32 bestCount = 0;
-                for (item = 0; item < VIDEO_SITES; ++item)
-                    if (g_Video.WriteSites[item].Count > bestCount) { bestCount = g_Video.WriteSites[item].Count; best = item; }
-                if (best == VIDEO_SITES) break;
-                cursor = LogPut(cursor, "  wsite pc="); cursor = LogHex(cursor, g_Video.WriteSites[best].Pc);
-                cursor = LogPut(cursor, " n=");   cursor = LogDecimal(cursor, g_Video.WriteSites[best].Count);
-                cursor = LogPut(cursor, " off=0x"); cursor = LogHex(cursor, g_Video.WriteSites[best].Low);
-                cursor = LogPut(cursor, "..0x");    cursor = LogHex(cursor, g_Video.WriteSites[best].High);
-                cursor = LogPut(cursor, "\r\n");
-                g_Video.WriteSites[best].Count = 0;            /* report is the last use of it */
-                if (cursor > reportEnd - 512) break;
-            }
-            /* ► THE COLOUR-COMPARE READ SITES: a guest asking "where is the ground". */
-        { LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
-            cursor = LogPut(cursor, "STAGE2: planar COLOUR-COMPARE read sites, lost=");
-            cursor = LogDecimal(cursor, g_Video.CompareSitesLost); cursor = LogPut(cursor, "\r\n");
-            for (shown = 0; shown < 10; ++shown) {
-                UINT best = VIDEO_SITES; UINT32 bestCount = 0;
-                for (item = 0; item < VIDEO_SITES; ++item)
-                    if (g_Video.CompareSites[item].Count > bestCount) { bestCount = g_Video.CompareSites[item].Count; best = item; }
-                if (best == VIDEO_SITES) break;
-                cursor = LogPut(cursor, "  cc-read pc="); cursor = LogHex(cursor, g_Video.CompareSites[best].Pc);
-                cursor = LogPut(cursor, " n=");   cursor = LogDecimal(cursor, g_Video.CompareSites[best].Count);
-                cursor = LogPut(cursor, " off=0x"); cursor = LogHex(cursor, g_Video.CompareSites[best].Low);
-                cursor = LogPut(cursor, "..0x");    cursor = LogHex(cursor, g_Video.CompareSites[best].High);
-                /* ► AND WHAT IT ANSWERED. all-zero means the guest saw no terrain. */
-                cursor = LogPut(cursor, " zero="); cursor = LogDecimal(cursor, g_Video.CompareSitesZero[best]);
-                cursor = LogPut(cursor, " ones="); cursor = LogDecimal(cursor, g_Video.CompareSitesOnes[best]);
-                cursor = LogPut(cursor, "\r\n");
-                g_Video.CompareSites[best].Count = 0;
-                if (cursor > reportEnd - 512) break;
-            }
-            /* ► HOW MANY SITES THIS TOP-N LEFT OUT. Without it a truncated list
-                 reads as a complete enumeration of who touches VRAM, and "pc X is not
-                 here" becomes an argument it cannot support. */
-            {   UINT more = 0;
-                for (item = 0; item < VIDEO_SITES; ++item) if (g_Video.CompareSites[item].Count) ++more;
-                cursor = LogPut(cursor, "  (cc-read: "); cursor = LogDecimal(cursor, more);
-                cursor = LogPut(cursor, " further sites not shown)\r\n");
-            }
-        { LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
-            cursor = LogPut(cursor, "STAGE2: planar read sites, rsite_lost=");
-            cursor = LogDecimal(cursor, g_Video.ReadSitesLost); cursor = LogPut(cursor, "\r\n");
-            for (shown = 0; shown < 14; ++shown) {
-                UINT best = VIDEO_SITES; UINT32 bestCount = 0;
-                for (item = 0; item < VIDEO_SITES; ++item)
-                    if (g_Video.ReadSites[item].Count > bestCount) { bestCount = g_Video.ReadSites[item].Count; best = item; }
-                if (best == VIDEO_SITES) break;
-                cursor = LogPut(cursor, "  rsite pc="); cursor = LogHex(cursor, g_Video.ReadSites[best].Pc);
-                cursor = LogPut(cursor, " n=");   cursor = LogDecimal(cursor, g_Video.ReadSites[best].Count);
-                cursor = LogPut(cursor, " off=0x"); cursor = LogHex(cursor, g_Video.ReadSites[best].Low);
-                cursor = LogPut(cursor, "..0x");    cursor = LogHex(cursor, g_Video.ReadSites[best].High);
-                cursor = LogPut(cursor, "\r\n");
-                g_Video.ReadSites[best].Count = 0;
-                if (cursor > reportEnd - 512) break;
-            }
-            /* ► HOW MANY SITES THIS TOP-N LEFT OUT. Without it a truncated list
-                 reads as a complete enumeration of who touches VRAM, and "pc X is not
-                 here" becomes an argument it cannot support. */
-            {   UINT more = 0;
-                for (item = 0; item < VIDEO_SITES; ++item) if (g_Video.ReadSites[item].Count) ++more;
-                cursor = LogPut(cursor, "  (rsite: "); cursor = LogDecimal(cursor, more);
-                cursor = LogPut(cursor, " further sites not shown)\r\n");
-            }
-}
-        /* ► Does this guest scroll or page-flip, and how often would a frame have
-             been built from a half-written start address? */
-        /* ► THE RETRACE CLOCK, IN ITS OWN UNITS. span_ms is how much MODEL time passed
-             between the guest's first and last 0x3DA poll. Against the run's real
-             length it says whether the timebase is wall-clock: if span_ms is a
-             twentieth of the run, the guest's frame rate is low because the clock is
-             slow, and the vblank geometry is not on trial. dtmax is the longest the
-             guest went between polls -- it can only miss a vblank if that exceeds the
-             blanking interval. */
-        cursor = LogPut(cursor, "STAGE2: 3da clock: span_ms="); cursor = LogDecimal(cursor, (UINT32)((g_Video.Time3DaLast - g_Video.Time3DaFirst) / MICROSECONDS_PER_MILLISECOND_U));
-        cursor = LogPut(cursor, " reads=");  cursor = LogDecimal(cursor, g_Video.Port3DaReads);
-        cursor = LogPut(cursor, " edges=");  cursor = LogDecimal(cursor, g_Video.VblEdges);
-        cursor = LogPut(cursor, " pal_splits="); cursor = LogDecimal(cursor, g_Video.PaletteSplitNotes);
-        cursor = LogPut(cursor, " dacrow[0-1,2-159,160+,vbl]="); cursor = LogDecimal(cursor, g_Video.DacRowHistogram[0]);
-        cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.DacRowHistogram[1]);
-        cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.DacRowHistogram[2]);
-        cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.DacRowHistogram[3]);
-        cursor = LogPut(cursor, " dtmax_us="); cursor = LogDecimal(cursor, g_Video.Dt3DaMax);
-        cursor = LogPut(cursor, " dtzero=");   cursor = LogDecimal(cursor, g_Video.Dt3DaZero);
-        cursor = LogPut(cursor, " dthist[1,4,16,64,256,1k,4k,16k+us]=");
-        { UINT byteIndex; for (byteIndex = 0; byteIndex < 8; ++byteIndex) { if (byteIndex) cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.Dt3DaHistogram[byteIndex]); } }
-        cursor = LogPut(cursor, "\r\n");
-        cursor = LogPut(cursor, "STAGE2: crtc start: pairs="); cursor = LogDecimal(cursor, g_Video.CrtcStartWrites);
-        cursor = LogPut(cursor, " torn_avoided="); cursor = LogDecimal(cursor, g_Video.CrtcStartHalf);
-        cursor = LogPut(cursor, " live="); cursor = LogDecimal(cursor, g_Video.CrtcStartLive);
-        cursor = LogPut(cursor, " gap_frames[0,1,2,3,4+]=");         /* #221: guest pacing */
-        { INT gateIndex; for (gateIndex = 0; gateIndex < 5; ++gateIndex) { if (gateIndex) cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.StartGapHistogram[gateIndex]); } }
-        cursor = LogPut(cursor, "\r\n");
-        cursor = LogPut(cursor, "STAGE2: crtc: start=");   cursor = LogDecimal(cursor, g_Video.CrtcStart);
-        cursor = LogPut(cursor, " offset=");               cursor = LogDecimal(cursor, g_Video.CrtcOffset);
-        cursor = LogPut(cursor, " off_seen=");             cursor = LogDecimal(cursor, g_Video.IsCrtcOffsetSeen);
-        cursor = LogPut(cursor, " linecmp=");              cursor = LogDecimal(cursor, g_Video.CrtcLineCompare);
-        cursor = LogPut(cursor, " (0x18=");                cursor = LogDecimal(cursor, g_Video.CrtcLineCompareLow);
-        cursor = LogPut(cursor, " ovf=");                  cursor = LogDecimal(cursor, g_Video.CrtcOverflow);
-        cursor = LogPut(cursor, " maxscan=");              cursor = LogDecimal(cursor, g_Video.CrtcMaxScan);
-        cursor = LogPut(cursor, ")\r\n");
-        /* ── THE VGA REGISTER FILE. (docs/inventory/vga.md, step 1) ─────────────────
-             Its own buffer and its own flush: the block is ~1.2 KB and `report` is
-             shared with everything else in this summary. */
-        {   static CHAR videoRegisters[2048];
-            INT dumpLength = VddVideoRegistersDump(&g_Video, videoRegisters, (INT)sizeof videoRegisters);
-            if (dumpLength > 0) { LogAppend(LOG_PATH, videoRegisters, videoRegisters + dumpLength); SerialOut(videoRegisters, videoRegisters + dumpLength); } }
-        cursor = LogPut(cursor, "STAGE2: video now: chain4="); cursor = LogHexByte(cursor, g_Video.IsChain4);
-        cursor = LogPut(cursor, " ymask="); cursor = LogHexByte(cursor, g_Video.YMask);
-        cursor = LogPut(cursor, " mkind="); cursor = LogHexByte(cursor, g_Video.ModeKind);
-        cursor = LogPut(cursor, " gw="); cursor = LogHex(cursor, g_Video.GraphicsWidth); cursor = LogPut(cursor, " gh="); cursor = LogHex(cursor, g_Video.GraphicsHeight);
-        cursor = LogPut(cursor, " mapmask="); cursor = LogHexByte(cursor, g_Video.MapMask);
-        cursor = LogPut(cursor, " setreset="); cursor = LogHexByte(cursor, g_Video.SetReset);
-        cursor = LogPut(cursor, " ensr="); cursor = LogHexByte(cursor, g_Video.EnableSetReset);
-        cursor = LogPut(cursor, " wmode="); cursor = LogHexByte(cursor, g_Video.WriteMode);
-        cursor = LogPut(cursor, " plane-nonzero=");
-        for (plane = 0; plane < VIDEO_PLANES; ++plane) { cursor = LogHex(cursor, nonZero[plane]); cursor = LogPut(cursor, plane<VIDEO_PLANES - 1?"/":""); }
-        cursor = LogPut(cursor, "\r\n"); }
       cursor = ReportGuestStateAtExit(cursor, base, tib);
       cursor = ReportInterpreterBailSites(cursor, base, reportEnd);
       cursor = ReportModeSets(cursor);
