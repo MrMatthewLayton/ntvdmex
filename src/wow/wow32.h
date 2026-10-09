@@ -601,4 +601,7 @@ DWORD WowGenericThunkInvoke(DWORD procedure, PCDWORD arguments, INT count);
 VOID WowNoteQuoted(PSTR buffer, INT capacity, PINT length, PCSTR text);
 WORD Wow32ArgWord(PCWOW32_FRAME frame, INT offset);
 volatile BYTE *Wow32ArgPointer(PCWOW32_FRAME frame, INT offset);
+WORD Wow32PeekWord(volatile BYTE *bytes);
+VOID Wow32PokeWord(volatile BYTE *bytes, WORD value);
+volatile BYTE *Wow32FarAt(PCWOW32_FRAME frame, volatile BYTE *base, INT offset);
 #endif /* NTVDMEX_WOW32_H */

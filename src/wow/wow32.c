@@ -38,12 +38,12 @@ VOID WowNoteQuoted(PSTR buffer, INT capacity, PINT length, PCSTR text)
     WowNotePut(buffer, capacity, length, "\"");
 }
 
-static WORD Wow32PeekWord(volatile BYTE *bytes)
+WORD Wow32PeekWord(volatile BYTE *bytes)
 {
     return (WORD)(bytes[0] | (bytes[1] << BYTE_SHIFT));
 }
 
-static VOID Wow32PokeWord(volatile BYTE *bytes, WORD value)
+VOID Wow32PokeWord(volatile BYTE *bytes, WORD value)
 {
     bytes[0] = (BYTE)(value & BYTE_MASK);
     bytes[1] = (BYTE)(value >> BYTE_SHIFT);
@@ -94,7 +94,7 @@ static INT Wow32ArgString(PCWOW32_FRAME frame, INT offset, PSTR output, INT capa
    the argument block) to a host address. Same null-selector rule as
    Wow32ArgPointer: 0 rather than the LDT base, so a missing check cannot scribble
    at the bottom of the address space. */
-static volatile BYTE *Wow32FarAt(PCWOW32_FRAME frame, volatile BYTE *base, INT offset)
+volatile BYTE *Wow32FarAt(PCWOW32_FRAME frame, volatile BYTE *base, INT offset)
 {
     DWORD farPointer  = (DWORD)Wow32PeekWord(base + offset)
               | ((DWORD)Wow32PeekWord(base + offset + WOW_WORD_BYTES) << WORD_SHIFT);

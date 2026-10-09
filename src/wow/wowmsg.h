@@ -206,4 +206,6 @@ typedef struct _WOWMSG_QUIT { WORD Task, Code; } WOWMSG_QUIT;
      this very ring). 0xBF7E sits in a range Win16 never allocates. */
 #define WOWMSG_MENUREPLAY 0xBF7Eu
 
+/* Defined in wowmsg.c (#335). */
+INT WowMsgPost(WORD window, WORD message, WORD wParam, DWORD lParam, DWORD time, WORD pointX, WORD pointY);
 #endif /* NTVDMEX_WOWMSG_H */

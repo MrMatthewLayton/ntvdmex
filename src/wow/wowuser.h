@@ -2232,4 +2232,9 @@ typedef struct _WOWUSER_GONE { WORD Window; DWORD DialogProcedure; } WOWUSER_GON
 #define WOWUSER_SEB_BUTTONS            3
 #define WOWUSER_SEB_BUTTON_MASK        0x7FFF  /* the button, without SEB_DEFBUTTON  */
 
+/* Defined in wowuser.c (#335). */
+extern WOWUSER_CLASS g_WowUserClasses[WOWUSER_MAX_CLASS];
+PWOWUSER_WINDOW WowUserNewWindow(VOID);
+PWOWUSER_WINDOW WowUserFindWindow(WORD window16);
+PWOWUSER_CLASS WowUserFindClass(PCSTR name);
 #endif /* WOWUSER_H */

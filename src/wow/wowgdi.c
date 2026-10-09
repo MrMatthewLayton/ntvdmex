@@ -17,7 +17,7 @@ static INT          g_WowGdiObjectCount = 0;
    ReleaseDC are three different calls with three different rules, and handing an
    object to the wrong one is a defect this map can catch instead of passing on
    to Win32. */
-static WORD WowGdiH16(HGDIOBJ object, INT kind)
+WORD WowGdiH16(HGDIOBJ object, INT kind)
 {
     INT index;
     if (!object) return 0;

@@ -99,6 +99,7 @@ add_executable(ntvdmhost
     src/host/log.c
     src/host/host_state.c
     src/host/host_core.c
+    src/wow/wowcommdlg.c
     src/wow/wowkbd.c
     src/wow/wowsound.c
     src/wow/wowmmedia.c

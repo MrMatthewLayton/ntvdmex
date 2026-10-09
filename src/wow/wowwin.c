@@ -5,14 +5,14 @@
 
 /* Forward declarations for the single translation unit (they were in wowwin.h). */
 static WORD  WowWinHwnd16(HWND window);
-static PWOWUSER_WINDOW WowUserFindWindow(WORD window16);
+PWOWUSER_WINDOW WowUserFindWindow(WORD window16);
 static INT   WowUserIsMdiChild(PCWOWUSER_WINDOW window);
 static HWND  WowUserMdiClientOf(PCWOWUSER_WINDOW window);
 static HWND  WowUserHwnd32(WORD window16);
 static WORD  WowUserMenu16(HMENU menu);  /* the 16-bit name for a real menu */
 /* #294: COMMDLG's modeless Find/Replace dialogs -- wowcommdlg.h, included later. */
-static INT   WowCdlgRelay(UINT message, LPARAM lParam);
-static INT   WowCdlgIsDialogMessage(PMSG message);
+INT   WowCdlgRelay(UINT message, LPARAM lParam);
+INT   WowCdlgIsDialogMessage(PMSG message);
 static DWORD WowUserTimerProcedure(WORD window16, WORD timerId);  /* 0 if none installed */
 
 static INT WowUserIsDialog16(WORD h16);          /* wowuser.h: a dialog procedure? */

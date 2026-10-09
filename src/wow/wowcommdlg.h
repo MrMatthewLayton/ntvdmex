@@ -188,4 +188,8 @@ typedef struct _WOWCDLG_FIND {
     WORD           Owner16, Window16;
 } WOWCDLG_FIND, *PWOWCDLG_FIND;
 
+/* Defined in wowcommdlg.c (#335). */
+INT WowCdlgRelay(UINT message, LPARAM lParam);
+INT WowCdlgIsDialogMessage(PMSG message);
+INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity);
 #endif /* NTVDMEX_WOWCOMMDLG_H */

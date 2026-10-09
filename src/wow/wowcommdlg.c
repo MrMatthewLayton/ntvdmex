@@ -1,7 +1,24 @@
 /* wowcommdlg.c -- ★★★ COMMDLG.DLL's OWN ID SPACE -- File > Open.  GH #128, s44.
  *
- * The code of wowcommdlg.h (#335): its functions and state, in their original order. Part of
- * the host's single translation unit: #included by main.c straight after wowcommdlg.h. */
+ * The code of wowcommdlg.h (#335): its functions and state, in their original order;
+ * its own translation unit, declared in wowcommdlg.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "wowdlg.h"
+#include "wowenum.h"
+#include "wowshell.h"
+#include "wowcommdlg.h"
+
 
 static DWORD WowCdlgPeekDword(const volatile BYTE *bytes, INT offset)
 {
@@ -58,7 +75,7 @@ static UINT         g_WowCdlgFindMessage = 0;     /* "commdlg_FindReplace" */
    the guest. The dialog SENDS it (on this thread, from the pump); posting is
    enough because the program reads everything from its own FINDREPLACE, which
    is complete before this returns. */
-static INT WowCdlgRelay(UINT message, LPARAM lParam)
+INT WowCdlgRelay(UINT message, LPARAM lParam)
 {
     INT index;
     if (!g_WowCdlgFindMessage || message != g_WowCdlgFindMessage) return 0;
@@ -81,7 +98,7 @@ static INT WowCdlgRelay(UINT message, LPARAM lParam)
 
 /* Called by WowWinPump for every Win32 message it drains: an open Find/Replace
    dialog gets its keyboard (Tab, Enter, Esc) the way any modeless dialog does. */
-static INT WowCdlgIsDialogMessage(PMSG message)
+INT WowCdlgIsDialogMessage(PMSG message)
 {
     INT index;
     for (index = 0; index < WOWCDLG_MAX_FIND; ++index)
@@ -94,7 +111,7 @@ static INT WowCdlgIsDialogMessage(PMSG message)
  * ⚠ CALLED ONLY WHEN THE STUB IS COMMDLG'S. The caller checks, as it does for
  *   USER and SHELL. `0x01` is MessageBox in USER's table and GetOpenFileName here.
  */
-static INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
+INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 {
     if (noteCapacity) note[0] = 0;
     if (frame->Id != WOWCDLG_EXTENDEDERROR) g_WowCdlgError = 0;   /* a new call, a new answer */

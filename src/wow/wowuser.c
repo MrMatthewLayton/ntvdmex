@@ -399,7 +399,7 @@ static const WORD g_WowUserDefWindowProcForwarded[] = {
     WM_PAINT,           /* WM_PAINT: the default erases + validates (s89)    */
 };
 
-static WOWUSER_CLASS g_WowUserClasses[WOWUSER_MAX_CLASS];
+WOWUSER_CLASS g_WowUserClasses[WOWUSER_MAX_CLASS];
 static INT             g_WowUserClassCount = 0;
 
 /*
@@ -580,7 +580,7 @@ static UINT g_WowUserSubclassSent, g_WowUserSubclassDirect, g_WowUserSubclassCha
    of CreateWindow the moment a SECOND thing started making windows -- the MDI
    client's WM_MDICREATE -- because two copies of a handle formula is how two
    windows come to share a handle. */
-static PWOWUSER_WINDOW WowUserNewWindow(VOID)
+PWOWUSER_WINDOW WowUserNewWindow(VOID)
 {
     PWOWUSER_WINDOW window = NULL;
     INT index;
@@ -624,7 +624,7 @@ static DWORD WowUserWindowProcedureOf(PCWOWUSER_WINDOW window)
 
 static WOWUSER_WINDOW g_WowUserDesktop;
 
-static PWOWUSER_WINDOW WowUserFindWindow(WORD window16)
+PWOWUSER_WINDOW WowUserFindWindow(WORD window16)
 {
     INT index;
     if (!window16) return NULL;
@@ -910,7 +910,7 @@ static HFONT WowDlgFont(PCSTR faceName, INT pointSize, PINT baseX, PINT baseY)
 
 /* The class a name is registered under, or NULL. Win16 class names are
    case-insensitive, and a lookup that is not would silently register duplicates. */
-static PWOWUSER_CLASS WowUserFindClass(PCSTR name)
+PWOWUSER_CLASS WowUserFindClass(PCSTR name)
 {
     INT index, charIndex;
     for (index = 0; index < g_WowUserClassCount; ++index) {

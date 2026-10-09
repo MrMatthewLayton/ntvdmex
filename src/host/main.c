@@ -60,7 +60,6 @@
 #include "../wow/wowshell.h" /* GH #128: ...and SHELL.DLL's, which is a THIRD one again */
 #include "../wow/wowshell.c"
 #include "../wow/wowcommdlg.h" /* GH #128: ...and COMMDLG.DLL's -- File > Open */
-#include "../wow/wowcommdlg.c"
 #include "../wow/wowkbd.h" /* GH #128: ...and KEYBOARD.DRV's -- ANSI/OEM conversion */
 #include "../wow/wowsound.h" /* GH #299: ...and SOUND.DRV's -- stock answers 0 */
 #include "../wow/wowmmedia.h" /* GH #278: ...and MMSYSTEM's two -- mmCallProc32 */

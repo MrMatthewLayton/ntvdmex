@@ -105,7 +105,7 @@ static WORD     g_WowMsgFocus = 0;
    thread (a keystroke arrives on whichever thread owns the host window), so
    every caller must hold the host lock -- there is no lock in here, on purpose,
    because this file must not know how the host serialises itself. */
-static INT WowMsgPost(WORD window, WORD message, WORD wParam, DWORD lParam,
+INT WowMsgPost(WORD window, WORD message, WORD wParam, DWORD lParam,
                        DWORD time, WORD pointX, WORD pointY)
 {
     PWOWMSG entry;

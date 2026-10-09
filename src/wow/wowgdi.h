@@ -1009,4 +1009,6 @@ typedef struct _WOWGDI_METAFILE {
 #define WOWGDI_MF_MALFORMED  0xFFFF
 #define WOWGDI_MF_NO_ROOM    0xFFFE
 
+/* Defined in wowgdi.c (#335). */
+WORD WowGdiH16(HGDIOBJ object, INT kind);
 #endif /* NTVDMEX_WOWGDI_H */
