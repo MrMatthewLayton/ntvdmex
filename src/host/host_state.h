@@ -226,4 +226,7 @@ extern I33_FUNCTION_COUNT g_MouseI33Ax[I33_AXN];
 extern I33_CALL_SITE g_MouseI33Site[I33_SITEN];
 extern RETRACE_SITE g_RetraceSite[RT_SITES];
 extern ISV_IO_HOOK g_IsvHooks[ISV_MAX_HOOKS];
+extern BYTE  g_FaultTable[DOS_FLTSITE_N * DPMI_FAULT_TABLE_ENTRY];
+extern BYTE  g_FaultStack[DPMI_FAULT_STK_SIZE];
+extern DPMI_DESCRIPTOR g_Ldt[DPMI_LDT_MAX];
 #endif

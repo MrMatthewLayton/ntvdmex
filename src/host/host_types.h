@@ -763,4 +763,6 @@ typedef struct _RETRACE_SITE { DWORD Cs, Ip, Count; BYTE Bytes[10]; } RETRACE_SI
 typedef const RETRACE_SITE *PCRETRACE_SITE;
 typedef struct _ISV_IO_HOOK { HANDLE VddHandle; WORD FirstPort, LastPort; ISV_IO_HANDLERS Handlers; INT IsLive; } ISV_IO_HOOK, *PISV_IO_HOOK;
 typedef const ISV_IO_HOOK *PCISV_IO_HOOK;
+/* A descriptor in the DPMI host's LDT shadow (g_Ldt). */
+typedef struct _DPMI_DESCRIPTOR { DWORD Base, Limit; BYTE Access, Flags; } DPMI_DESCRIPTOR, *PDPMI_DESCRIPTOR;
 #endif

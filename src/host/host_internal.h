@@ -25,9 +25,6 @@
 #include "host_install.h"
 
 static VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
-static BYTE  g_FaultTable[DOS_FLTSITE_N * DPMI_FAULT_TABLE_ENTRY] __attribute__((aligned(16)));
-static BYTE  g_FaultStack[DPMI_FAULT_STK_SIZE] __attribute__((aligned(16)));   /* #205 */
-static struct _DPMI_DESCRIPTOR { DWORD Base, Limit; BYTE Access, Flags; } g_Ldt[DPMI_LDT_MAX];
 static VOID DpmiInstall(INT index);           /* defined just below; used by the helper */
 static VOID WowShadowPut(INT index);         /* GH #128: keep the descriptor shadow in step */
 static VOID DpmiBreakpointArm(VOID);               /* fwd: a new region may hold a requested BP */

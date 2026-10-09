@@ -505,3 +505,9 @@ I33_FUNCTION_COUNT g_MouseI33Ax[I33_AXN];
 I33_CALL_SITE g_MouseI33Site[I33_SITEN];
 RETRACE_SITE g_RetraceSite[RT_SITES];
 ISV_IO_HOOK g_IsvHooks[ISV_MAX_HOOKS];
+
+/* The DPMI host's fault trampolines and the stack they run on (#205), and its LDT shadow:
+   until #335 these were tentative definitions in host_internal.h. */
+BYTE  g_FaultTable[DOS_FLTSITE_N * DPMI_FAULT_TABLE_ENTRY] __attribute__((aligned(16)));
+BYTE  g_FaultStack[DPMI_FAULT_STK_SIZE] __attribute__((aligned(16)));
+DPMI_DESCRIPTOR g_Ldt[DPMI_LDT_MAX];
