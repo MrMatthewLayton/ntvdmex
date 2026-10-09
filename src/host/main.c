@@ -114,7 +114,6 @@ static CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "host_dos.c"
 #include "host_input.c"
 #include "host_mouse.c"
-#include "host_audio.c"
 #include "host_video.c"
 #include "host_dpmi.c"
 #include "host_dpmi_int.c"
@@ -373,7 +372,7 @@ static FDC_STATE    g_Fdc;       static NTVDD_DEVICE g_FdcDevice;
 static IDE_STATE    g_Ide;       static NTVDD_DEVICE g_IdeDevice;
 static DMA_STATE    g_Dma;       static NTVDD_DEVICE g_DmaDevice;
 static BYTE      g_GusDram[GUS_DRAM_SIZE];
-static INT          g_GusOn = 0;
+INT          g_GusOn = 0;
 static WORD     g_Emu8KDram[EMU8K_DRAM_WORDS];
 static PCSTR g_DosVersionWhy = 0;
 static INT          g_DosVersionShell = 0;      /* #208: an XP shell is present, told 5.00 itself */
@@ -653,8 +652,8 @@ static DOS_START_MODE g_StartMode = DOS_START_NORMAL;
 static PCSTR g_StdioHow = "(not initialised)";
 static PCSTR g_StdioSource = "";   /* which channel it came down, if any */
 static DWORD g_StdioParentProcessId;   /* GH #131: whose child we turned out to be */
-static DWORD g_DmxSamples, g_DmxBusy[12], g_DmxMixerOk;
-static DWORD g_DmxOverdue, g_DmxOverdueMaximum, g_DmxAnyBusy;
+DWORD g_DmxSamples, g_DmxBusy[12], g_DmxMixerOk;
+DWORD g_DmxOverdue, g_DmxOverdueMaximum, g_DmxAnyBusy;
 /* ── PACE THE PIT. ──────────────────────────────────────────────────────────────────
      HostPitSync() advances the emulated 8254 by however much wall-clock has elapsed
      since the last call, raising one IRQ0 per reload period -- so its CALL RATE sets

@@ -6,12 +6,14 @@
 
 #include "host_types.h"
 #include "host_state.h"
+#include "host_audio.h"
+#include "main.h"
+#include "host_timing.h"
 #include "host_install.h"
 
 static VOID HostProfileDump(VOID);
 static VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
 static VOID ModeYTimelineReport(VOID);          /* fwd: north star 1, with the mode-Y remap */
-static VOID GusReport(VOID);               /* fwd: north star 2, with the GUS globals */
 static INT  ModeYInterpServes(VOID);      /* fwd: north star 1, design C */
 static VOID ModeYRingDump(PCSTR why);  /* fwd: north star 1, design C */
 static VOID ModeYRingNoteIrq(UINT vector, WORD cs, WORD ip, WORD ss, WORD sp);
@@ -118,7 +120,6 @@ static INT g_Routed;
 static INT g_BackToPrompt;
 static VDM_COMMAND_INFO g_CommandInfo;
 static CMOS_STATE g_Cmos; static NTVDD_DEVICE g_CmosDevice;
-static INT g_GusOn;
 static EMU8K_STATE g_Emu8K; static NTVDD_DEVICE g_Emu8KDevice;
 static INT g_AweOn;
 static INT g_DosVersionForced;
@@ -195,9 +196,6 @@ static INT g_NoPmPatch;
 static DWORD g_NoPmPatchMinimum;
 static DWORD g_MemoryDumpLinear, g_MemoryDumpLength;
 static INT g_P12Offset;
-static DWORD g_OplTraceCount;
-static DWORD g_OplTraceDrop;
-static INT g_OplTraceOn;
 static INT g_ModeYInterpOffset;
 static INT g_ModeYInterp;
 static DWORD g_ModeYSlices, g_ModeYInstructions, g_ModeYBails, g_ModeYBailMp;
@@ -270,8 +268,6 @@ static HANDLE g_Stdio;
 static PCSTR g_StdioHow;
 static PCSTR g_StdioSource;
 static DWORD g_StdioParentProcessId;
-static DWORD g_DmxSamples, g_DmxBusy[12], g_DmxMixerOk;
-static DWORD g_DmxOverdue, g_DmxOverdueMaximum, g_DmxAnyBusy;
 static INT g_PitPacePriority;
 static INT g_PitPaceInject;
 static volatile LONGLONG g_Int15WaitEnd;
@@ -288,7 +284,6 @@ static DWORD g_CpuSpeedPeriodMs;
 static HANDLE g_CpuSpeedRelease;
 static INT g_CpuAffinityOn;
 static DWORD g_CpuAffinityGuest, g_CpuAffinityRest, g_CpuAffinityCpuCount;
-static MPU_STATE g_GusMidi;
 static UINT32 g_TypematicDelayMicroseconds;
 static DWORD g_TypematicSpiDelay, g_TypematicSpiSpeed;
 static UINT32 g_TypematicSent, g_TypematicOsRepeats;
@@ -388,7 +383,6 @@ static DWORD g_WowSyncWrites;
 /* Functions called from a file other than their own. */
 static VOID DsProbeLoad(VOID);
 static UINT LauncherCompilerVariables(PCSTR environment, DWORD environmentCapacity, PSTR out, DWORD outCapacity);
-static VOID GusReport(VOID);
 static BYTE NetSubmit(PVOID context, NETBIOS_REQUEST *request);
 static VOID HmaTry(VOID);
 static VOID Irq0Latch(VOID);
@@ -442,10 +436,6 @@ static PCSTR StdioInitialize(VOID);
 static PCSTR StdioInitializeVdm(VOID);
 static VOID HostConsoleOut(PVOID context, BYTE ch);
 static INT HostConsoleIn(PVOID context);
-static UINT64 HostTimeMicroseconds(VOID);
-static VOID OplTraceWrite(BYTE registerIndex, BYTE value);
-static VOID OplTraceDump(VOID);
-static VOID OplPumpTime(VOID);
 static LONGLONG Int15QpcAfterMicroseconds(DWORD microseconds);
 static VOID PitPacerTimerStart(HMODULE winmmModule);
 static DWORD WINAPI PitPacerThread(LPVOID param);
@@ -457,10 +447,6 @@ static VOID CpuSpeedCooperativePark(VOID);
 static VOID CpuSpeedTimelineDump(PCSTR tag);
 static VOID CpuSpeedRecompute(VOID);
 static DWORD WINAPI CpuSpeedThread(LPVOID param);
-static VOID HostAudioFill(PVOID context, INT16 *out, UINT32 frames);
-static VOID HostMidiSink(PVOID context, UINT32 message);
-static VOID HostMidiSysEx(PVOID context, const BYTE *message, UINT32 length);
-static VOID GusMidiToSynth(PVOID context, BYTE byteValue);
 static VOID PlanesDumpBeside(PCSTR bitmapPath);
 static VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak);
 static VOID HostKeyTypematicInitialize(VOID);

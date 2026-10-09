@@ -1,12 +1,18 @@
 /* host_audio.c -- the host side of the sound devices: OPL tracing and pumping, the audio fill,
  *   MIDI sinks and the GUS report.
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): declared in host_audio.h. */
+#include "host_state.h"
+#include "log.h"
+#include "host_audio.h"
+#include "main.h"
+#include "host_timing.h"
+
 
 #define OPLTRACE_PATH CFG_("opltrace.txt")
 /* One line: did the guest find the card, fill it, play it, and take its interrupts?
    Printed from both exits, once. */
-static VOID GusReport(VOID)
+VOID GusReport(VOID)
 {
     static INT done = 0;
     CHAR buffer[400], *cursor = buffer;
@@ -40,13 +46,13 @@ static VOID GusReport(VOID)
    runaway cannot eat memory. Dropped writes are reported, never silently lost. */
 #define OPLTRACE_MAX 262144
 static struct { DWORD Microseconds; BYTE Register, Value; } g_OplTrace[OPLTRACE_MAX];
-static DWORD          g_OplTraceCount    = 0;
-static DWORD          g_OplTraceDrop = 0;
-static INT            g_OplTraceOn   = 0;
+DWORD          g_OplTraceCount    = 0;
+DWORD          g_OplTraceDrop = 0;
+INT            g_OplTraceOn   = 0;
 /* The trace hook handed to the OPL VDD. Timestamped from the same clock the CRT
    and PIT use, so a replay reproduces the guest's real WRITE TIMING -- which is
    most of what makes music sound like itself. */
-static VOID OplTraceWrite(BYTE registerIndex, BYTE value)
+VOID OplTraceWrite(BYTE registerIndex, BYTE value)
 {
     if (g_OplTraceCount >= OPLTRACE_MAX) { g_OplTraceDrop++; return; }
     g_OplTrace[g_OplTraceCount].Microseconds  = (DWORD)HostTimeMicroseconds();
@@ -56,7 +62,7 @@ static VOID OplTraceWrite(BYTE registerIndex, BYTE value)
 }
 /* Write the trace out as text: one `us reg val` triple per line, hex. Text so it
    is diffable and survives the SMB round trip; a long run is well under a MB. */
-static VOID OplTraceDump(VOID)
+VOID OplTraceDump(VOID)
 {
     HANDLE handle; DWORD index, bytesWritten;
     static CHAR buffer[64];
@@ -79,7 +85,7 @@ static VOID OplTraceDump(VOID)
     CloseHandle(handle);
 }
 enum { OPL_PUMP_QUANTUM_US = 20 };   /* OplPumpTime: shorter is carried to the next pump */
-static VOID OplPumpTime(VOID)
+VOID OplPumpTime(VOID)
 {
     static LARGE_INTEGER frequency, last;
     LARGE_INTEGER now;
@@ -153,7 +159,7 @@ static VOID DmxSample(VOID)
           if (late > g_DmxOverdueMaximum) g_DmxOverdueMaximum = late;
       } }
 }
-static VOID HostAudioFill(PVOID context, INT16 *out, UINT32 frames)
+VOID HostAudioFill(PVOID context, INT16 *out, UINT32 frames)
 {
     (VOID)context;
     /* #219: paused -> silence, and the devices are NOT rendered, so a Sound Blaster
@@ -171,7 +177,7 @@ static VOID HostAudioFill(PVOID context, INT16 *out, UINT32 frames)
 }
 
 /* MPU-401 output -> the host's MIDI synth (XP ships a GS Wavetable device). */
-static VOID HostMidiSink(PVOID context, UINT32 message)
+VOID HostMidiSink(PVOID context, UINT32 message)
 {
     (VOID)context;
     AudioWaveMidi(&g_Wave, message);
@@ -179,7 +185,7 @@ static VOID HostMidiSink(PVOID context, UINT32 message)
 /* #136: whole SysEx messages, wired ONLY when Settings > Audio > MIDI found an external
    synth by name (g_Wave.IsMidiExternal) -- see midi_route.h. Otherwise SysEx is swallowed in
    vdd_mpu exactly as it always was. */
-static VOID HostMidiSysEx(PVOID context, const BYTE *message, UINT32 length)
+VOID HostMidiSysEx(PVOID context, const BYTE *message, UINT32 length)
 {
     (VOID)context;
     AudioWaveMidiLong(&g_Wave, message, length);
@@ -188,5 +194,5 @@ static VOID HostMidiSysEx(PVOID context, const BYTE *message, UINT32 length)
 /* #190: the GUS's 6850 MIDI UART sends raw bytes; a PRIVATE message assembler (never on
    the bus) turns them into MIDI messages for the same synth. Its own, not g_Mpu's: two
    byte streams through one assembler would corrupt each other's running status. */
-static MPU_STATE g_GusMidi;
-static VOID GusMidiToSynth(PVOID context, BYTE byteValue) { (VOID)context; VddMpuFeed(&g_GusMidi, byteValue); }
+MPU_STATE g_GusMidi;
+VOID GusMidiToSynth(PVOID context, BYTE byteValue) { (VOID)context; VddMpuFeed(&g_GusMidi, byteValue); }

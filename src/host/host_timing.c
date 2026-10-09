@@ -430,7 +430,7 @@ enum { TSC_RESYNC_MIN_US = 500 };   /* HostTimeMicroseconds: an interval long en
      Falls back to plain QPC until the first two anchors have given it a rate. */
 typedef struct { UINT64 TscBase, MicrosecondsBase, Last, Resync; UINT32 Multiplier; } HOST_CLOCK;
 static DWORD g_ClockTls = TLS_OUT_OF_INDEXES;
-static UINT64 HostTimeMicroseconds(VOID)
+UINT64 HostTimeMicroseconds(VOID)
 {
     UINT32 low, high;
     UINT64 tsc, microseconds;
