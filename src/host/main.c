@@ -2203,6 +2203,494 @@ static PSTR ReportSoundStack(PSTR cursor)
     return cursor;
 }
 
+
+/* GH #27: one line per class of unimplemented thing the run actually reached,
+   so a run yields a to-do list instead of "the screen looked wrong". Empty
+   lines are printed too -- "INT21 unimplemented:" with nothing after it is a
+   positive statement that nothing was missing, which a suppressed line is not. */
+static PSTR ReportUnimplemented(PSTR cursor, DOS_MACHINE *machine)
+{
+    INT index;
+    INT count;
+    cursor = LogPut(cursor, "STAGE2: INT21 unimplemented:");
+    for (index = 0, count = 0; index < BYTE_VALUES; ++index)
+        if ((machine->Unimplemented[index >> BITMAP_BYTE_SHIFT] >> (index & BITMAP_BIT_MASK)) & 1u) { cursor = LogPut(cursor, " AH=0x"); cursor = LogHexByte(cursor, (UINT)index); ++count; }
+    if (!count) cursor = LogPut(cursor, " none");
+    cursor = LogPut(cursor, "\r\n");
+    cursor = LogPut(cursor, "STAGE2: INT21 undefined-on-6.22 (no-op, matches DOS):");
+    for (index = 0, count = 0; index < BYTE_VALUES; ++index)
+        if ((machine->Undefined[index >> BITMAP_BYTE_SHIFT] >> (index & BITMAP_BIT_MASK)) & 1u) { cursor = LogPut(cursor, " AH=0x"); cursor = LogHexByte(cursor, (UINT)index); ++count; }
+    if (!count) cursor = LogPut(cursor, " none");
+    cursor = LogPut(cursor, "\r\n");
+    cursor = LogPut(cursor, "STAGE2: BIOS partial/unimplemented:");
+    for (index = 0, count = 0; index < BYTE_VALUES; ++index)
+        if (g_BiosUnimplemented[index]) { cursor = LogPut(cursor, " INT"); cursor = LogHexByte(cursor, (UINT)index); ++count; }
+    if (!count) cursor = LogPut(cursor, " none");
+    cursor = LogPut(cursor, "\r\n");
+    cursor = LogPut(cursor, "STAGE2: INT10 unimplemented:");
+    for (index = 0, count = 0; index < BYTE_VALUES; ++index)
+        if (VIDEO_UNIMPLEMENTED_GET(g_Video.UnimplementedFunctions, index)) { cursor = LogPut(cursor, " AH=0x"); cursor = LogHexByte(cursor, (UINT)index); ++count; }
+    if (!count) cursor = LogPut(cursor, " none");
+    cursor = LogPut(cursor, "\r\n");
+    return cursor;
+}
+
+
+/* End of run: the 8042's port traffic, and every font the guest asked INT 10h for, with its first bytes. */
+static PSTR ReportKeyboardControllerAndFontQueries(PSTR cursor, PSTR const base)
+{
+    /* Does the guest set its OWN typematic rate? If it does, ours is a guess and
+       should be taken from its 0xF3 byte instead (bits 0-4 rate, 5-6 delay). */
+    cursor = LogPut(cursor, "\r\nSTAGE2: kbd 8042: writes=0x"); cursor = LogHex(cursor, g_Input.KeyboardPortWrites);
+    cursor = LogPut(cursor, " typematic_set=0x");               cursor = LogHexByte(cursor, g_Input.IsTypematicSet);
+    cursor = LogPut(cursor, " rate_byte=0x");                   cursor = LogHexByte(cursor, g_Input.TypematicByte);
+    cursor = LogPut(cursor, " seq=");
+    { UINT item; for (item = 0; item < g_Input.KeyboardPortLogCount; ++item) {
+          cursor = LogPut(cursor, item ? "," : ""); cursor = LogHexByte(cursor, g_Input.KeyboardPortLog[item][0]);
+          cursor = LogPut(cursor, ":");          cursor = LogHexByte(cursor, g_Input.KeyboardPortLog[item][1]); } }
+    cursor = LogPut(cursor, " int10_11=0x");   cursor = LogHex(cursor, g_Video.Int10Ah11Calls);
+    /* Each font request, its answer, and the BYTES actually sitting at the address we
+       handed back -- read from guest memory, so a wiped or misaligned table is visible
+       rather than inferred. A glyph is mostly zeros with a few set rows; all-zero or
+       all-FF here means the caller is drawing from the wrong place. */
+    { INT fontIndex; for (fontIndex = 0; fontIndex < g_Video.FontQueryCount; ++fontIndex) {
+        const volatile BYTE *fontPointer;
+        cursor = LogPut(cursor, "\r\n  font_q: AL=0x"); cursor = LogHex(cursor, g_Video.FontQueries[fontIndex].Al);
+        cursor = LogPut(cursor, " BH=0x");   cursor = LogHex(cursor, g_Video.FontQueries[fontIndex].Bh);
+        cursor = LogPut(cursor, " -> ES:BP=0x"); cursor = LogHex(cursor, g_Video.FontQueries[fontIndex].Segment);
+        cursor = LogPut(cursor, ":0x");      cursor = LogHex(cursor, g_Video.FontQueries[fontIndex].Offset);
+        cursor = LogPut(cursor, " CX=0x");   cursor = LogHex(cursor, g_Video.FontQueries[fontIndex].Cx);
+        fontPointer = (const volatile BYTE *)(((DWORD)g_Video.FontQueries[fontIndex].Segment << PARAGRAPH_SHIFT)
+                                     + g_Video.FontQueries[fontIndex].Offset);
+        { BYTE fontBytes[16]; UINT item; for (item = 0; item < 16; ++item) fontBytes[item] = fontPointer[item];
+          cursor = LogPut(cursor, " bytes: "); cursor = LogDump(cursor, fontBytes, 16); }
+    } }
+    cursor = LogPut(cursor, "\r\n");
+    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    return cursor;
+}
+
+
+/* End of run: the host lock -- waits, holds and the sites that held it longest. */
+static PSTR ReportHostLock(PSTR cursor)
+{
+    cursor = LogPut(cursor, "\r\nSTAGE2: lock: wait_us=0x");  cursor = LogHex(cursor, g_LockWaitMicroseconds);
+    cursor = LogPut(cursor, "@line ");                        cursor = LogHex(cursor, (DWORD)g_LockWaitSite);
+    cursor = LogPut(cursor, " hold_us=0x");                   cursor = LogHex(cursor, g_LockHoldMicroseconds);
+    cursor = LogPut(cursor, "@line ");                        cursor = LogHex(cursor, (DWORD)g_LockHoldSite);
+    cursor = LogPut(cursor, " ui_gap_us=0x");                 cursor = LogHex(cursor, g_UiGapMicroseconds);
+    /* ty_sent = typematic repeats WE generated; ty_os = OS auto-repeats we
+       suppressed because we generate our own. If ty_os is large and ty_sent is
+       small, the pump is not running; if both are small while a key was held,
+       the OS was not delivering repeats either -- which is what started this. */
+    cursor = LogPut(cursor, " ty_sent=0x");                   cursor = LogHex(cursor, g_TypematicSent);
+    cursor = LogPut(cursor, " ty_os=0x");                     cursor = LogHex(cursor, g_TypematicOsRepeats);
+    /* The XP setting we derived the rate from, raw and in microseconds, so a run
+       says WHY it repeats at the speed it does. Verify against stock ntvdm with
+       tests/probes/dos/tymat.asm: the target is delay 7 ticks / 102 repeats. */
+    cursor = LogPut(cursor, " spi_delay=0x");                 cursor = LogHex(cursor, g_TypematicSpiDelay);
+    cursor = LogPut(cursor, " spi_speed=0x");                 cursor = LogHex(cursor, g_TypematicSpiSpeed);
+    cursor = LogPut(cursor, " ty_delay_us=0x");               cursor = LogHex(cursor, g_TypematicDelayMicroseconds);
+    cursor = LogPut(cursor, " ty_period_us=0x");              cursor = LogHex(cursor, g_TypematicPeriodMicroseconds);
+    return cursor;
+}
+
+
+/* End of run: the DMX mixer task, IRQs raised by the WOW shims, and the SB DSP version the guest asked for. */
+static PSTR ReportDmxTaskAndShimIrqs(PSTR cursor)
+{
+    cursor = LogPut(cursor, "\r\nSTAGE2: DMXTASK: ok="); cursor = LogHex(cursor, g_DmxMixerOk);
+    cursor = LogPut(cursor, " samples="); cursor = LogHex(cursor, g_DmxSamples);
+    cursor = LogPut(cursor, " any_busy="); cursor = LogHex(cursor, g_DmxAnyBusy);
+    cursor = LogPut(cursor, " mixer_OVERDUE="); cursor = LogHex(cursor, g_DmxOverdue);
+    cursor = LogPut(cursor, " max_late_ticks="); cursor = LogHex(cursor, g_DmxOverdueMaximum);
+    cursor = LogPut(cursor, " busy_by_task=");
+    { UINT timelineIndex; for (timelineIndex = 0; timelineIndex < 12; ++timelineIndex) { cursor = LogPut(cursor, timelineIndex ? "," : "");
+                                                 cursor = LogHex(cursor, g_DmxBusy[timelineIndex]); } }
+    cursor = LogPut(cursor, "\r\nSTAGE2: ica (shim-raised IRQs, #278) raised="); cursor = LogHex(cursor, g_IcaRaised);
+    cursor = LogPut(cursor, " delivered="); cursor = LogHex(cursor, g_IcaDelivered);
+    cursor = LogPut(cursor, " nohandler="); cursor = LogHex(cursor, g_IcaNoHandler);
+    cursor = LogPut(cursor, " idlewaits(#306)="); cursor = LogHex(cursor, g_WowIdleWaits);
+    cursor = LogPut(cursor, " shims[WOW32.DLL,NTVDM.EXE]=["); cursor = LogHex(cursor, g_ShimState[0]);
+    cursor = LogPut(cursor, ","); cursor = LogHex(cursor, g_ShimState[1]); cursor = LogPut(cursor, "] err=[");
+    cursor = LogHex(cursor, g_ShimError[0]); cursor = LogPut(cursor, ","); cursor = LogHex(cursor, g_ShimError[1]); cursor = LogPut(cursor, "]");
+    cursor = LogPut(cursor, " (1 loaded, 2 not found, 3 init refused)");
+    cursor = LogPut(cursor, "\r\nSTAGE2: dspver="); cursor = LogHex(cursor, (DWORD)g_SbVersionMajor);
+    cursor = LogPut(cursor, "."); cursor = LogHex(cursor, (DWORD)g_SbVersionMinor);
+    cursor = LogPut(cursor, " execprio="); cursor = LogHex(cursor, g_ExecPriority);
+    return cursor;
+}
+
+
+/* End of run: delivery latencies -- INT 33h callbacks, keyboard messages to the guest, and the gaps between timer ticks. */
+static PSTR ReportDeliveryLatencies(PSTR cursor)
+{
+    /* The INT 33h callback path, at EXIT (the heartbeat's copy is a snapshot). */
+    cursor = LogPut(cursor, "\r\nSTAGE2: MOUSECB inj="); cursor = LogHex(cursor, g_MouseCallbackInjected);
+    cursor = LogPut(cursor, " done=");  cursor = LogHex(cursor, g_MouseCallbackDone);
+    cursor = LogPut(cursor, " lost=");  cursor = LogHex(cursor, g_MouseCallbackLost);
+    cursor = LogPut(cursor, " stray="); cursor = LogHex(cursor, g_MouseCallbackStray);
+    cursor = LogPut(cursor, " pm=");    cursor = LogHex(cursor, g_MouseCallbackPm);
+    cursor = LogPut(cursor, " active="); cursor = LogHex(cursor, (DWORD)g_MouseCallbackActive);
+    cursor = LogPut(cursor, " raised="); cursor = LogHex(cursor, g_MouseEventRaised);
+    cursor = LogPut(cursor, " why[fly,none,nohdl,stub,if]=");
+    { INT reason; for (reason = 0; reason < MOUSE_CB_WHY_COUNT; ++reason) { cursor = LogHex(cursor, g_MouseCallbackWhy[reason]); cursor = LogPut(cursor, reason < MOUSE_CB_WHY_COUNT - 1 ? "," : ""); } }
+    cursor = LogPut(cursor, " mask=0x"); cursor = LogHex(cursor, (DWORD)g_MouseEventMask);
+    cursor = LogPut(cursor, " hdl=0x");  cursor = LogHex(cursor, (DWORD)g_MouseEventSegment);
+    cursor = LogPut(cursor, ":0x");      cursor = LogHex(cursor, (DWORD)g_MouseEventOffset);
+    /* THE KEYSTROKE ITSELF, both halves. ms buckets [0,1,2,4,8,16,32,64+]. */
+    cursor = LogPut(cursor, "\r\nSTAGE2: KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
+    { UINT bucket5; for (bucket5 = 0; bucket5 < 8; ++bucket5) { cursor = LogPut(cursor, bucket5 ? "," : "");
+                                                cursor = LogHex(cursor, g_KeyMessageHistogram[bucket5]); } }
+    cursor = LogPut(cursor, " n="); cursor = LogHex(cursor, g_KeyMessageCount);
+    cursor = LogPut(cursor, " max_ms="); cursor = LogHex(cursor, g_KeyMessageMaximumMs);
+    cursor = LogPut(cursor, " || deliver_ms[0,1,2,4,8,16,32,64+]=");
+    { UINT bucket5; for (bucket5 = 0; bucket5 < 8; ++bucket5) { cursor = LogPut(cursor, bucket5 ? "," : "");
+                                                cursor = LogHex(cursor, g_KeyDeliveryHistogram[bucket5]); } }
+    cursor = LogPut(cursor, " n="); cursor = LogHex(cursor, g_KeyDeliveryCount);
+    cursor = LogPut(cursor, " max_ms="); cursor = LogHex(cursor, g_KeyDeliveryMaximumMs);
+    cursor = LogPut(cursor, "\r\nSTAGE2: TICKGAP us[<.5k,1k,2k,4k,8k,16k,32k,64k,128k,256k,512k,+]=");
+    { UINT bucket7; for (bucket7 = 0; bucket7 < 12; ++bucket7) { cursor = LogPut(cursor, bucket7 ? "," : "");
+                                                 cursor = LogHex(cursor, g_TickGap[bucket7]); } }
+    cursor = LogPut(cursor, " max_us="); cursor = LogHex(cursor, g_TickGapMaximumMicroseconds);
+    cursor = LogPut(cursor, " OVER_11600us="); cursor = LogHex(cursor, g_TickGapOver);
+    return cursor;
+}
+
+
+/* End of run: the host CPU's clock and the CPU-speed governor -- duty, delivered share, holds, debt, burst granularity and affinity. */
+static PSTR ReportCpuSpeedGovernor(PSTR cursor)
+{
+    cursor = LogPut(cursor, "\r\nSTAGE2: host cpu ~MHz="); cursor = LogDecimal(cursor, HostCpuMhz());   /* #224 */
+    cursor = LogPut(cursor, "\r\nSTAGE2: cpuspeed idx="); cursor = LogHex(cursor, (DWORD)g_CpuSpeedIndex);
+    cursor = LogPut(cursor, " mhz="); cursor = LogHex(cursor, g_CpuSpeedIndex < CPUSPEED_COUNT
+                                      ? g_CpuSpeedMhz[g_CpuSpeedIndex] : 0u);
+    cursor = LogPut(cursor, " ref_mhz="); cursor = LogHex(cursor, g_CpuSpeedReferenceMhz);
+    /* ── ★ REQUESTED vs DELIVERED, BOTH MEASURED, AND NOW THEY AGREE BY DESIGN.
+         The throttle's contract is that guest execution is `duty` of wall time.
+         `delivered_bp` is that ratio as it actually came out -- lifetime guest
+         EXECUTION over lifetime WALL -- and it equals `duty_bp` whenever the
+         setting is reachable (below the port-trap ceiling and inside the hold cap),
+         disagreeing in the open when it is not. The control law that ties them
+         together is CpuSpeedStep, proven by a DETERMINISTIC test off-hardware
+         (tests/unit/cpuspeed_test.c) rather than argued from a rig number read
+         through the guest's own throttled clock.
+       ★ run_ms IS TRUE GUEST EXECUTION now: dexec is sampled resume-to-suspend, so
+         holds (before the resume) and host-servicing (outside VdmRunGuest) are already
+         out of it. That is why the old execnet/held-subtraction dance is gone --
+         the number is clean at the source instead of patched at the report. */
+    cursor = LogPut(cursor, " duty_bp="); cursor = LogHex(cursor, (DWORD)g_CpuSpeedDuty);
+    cursor = LogPut(cursor, " duty_rm_bp="); cursor = LogHex(cursor, (DWORD)g_CpuSpeedDutyRm);   /* #225 */
+    { DWORD wallMs = GetTickCount() - g_StartMs;
+      /* Units cancel in the ratio, so ms goes straight in. */
+      cursor = LogPut(cursor, " delivered_bp=");
+      cursor = LogHex(cursor, CpuSpeedDeliveredBp(g_CpuSpeedRunMs, wallMs));
+      cursor = LogPut(cursor, " exec_ms="); cursor = LogHex(cursor, g_CpuSpeedRunMs);
+      cursor = LogPut(cursor, " wall_ms="); cursor = LogHex(cursor, wallMs); }
+    cursor = LogPut(cursor, " held_ms="); cursor = LogHex(cursor, g_CpuSpeedHeldMs);
+    cursor = LogPut(cursor, " hold_max_us="); cursor = LogHex(cursor, g_CpuSpeedHoldMaximumMicroseconds);   /* #225 */
+    cursor = LogPut(cursor, " debt_max_us="); cursor = LogHex(cursor, g_CpuSpeedDebtMaximumMicroseconds);
+    cursor = LogPut(cursor, " coop="); cursor = LogHex(cursor, g_CpuSpeedCooperativeCatches);        /* #225 */
+    cursor = LogPut(cursor, " coop_to="); cursor = LogHex(cursor, g_CpuSpeedCooperativeTimeouts);
+    cursor = LogPut(cursor, " ran_us="); cursor = LogHex(cursor, g_CpuSpeedRanMicroseconds);
+    cursor = LogPut(cursor, " win_wall_us="); cursor = LogHex(cursor, g_CpuSpeedWallMicroseconds);
+    cursor = LogPut(cursor, " missed="); cursor = LogHex(cursor, g_CpuSpeedMissed);
+    /* ── GRANULARITY = BURST SIZE = playable vs slideshow. `periods` over the run's
+         seconds is how many bursts a second the guest advanced in; seven was the
+         "still unplayable" number. gran=0 means auto chose period_ms from rt_us. */
+    cursor = LogPut(cursor, " gran_ms="); cursor = LogHex(cursor, g_CpuSpeedGranularityMs);
+    cursor = LogPut(cursor, " period_ms="); cursor = LogHex(cursor, g_CpuSpeedPeriodMs);
+    cursor = LogPut(cursor, " rt_us="); cursor = LogHex(cursor, g_CpuSpeedRoundTripMicroseconds);
+    cursor = LogPut(cursor, " periods="); cursor = LogHex(cursor, g_CpuSpeedPeriods);
+    cursor = LogPut(cursor, " aff="); cursor = LogHex(cursor, (DWORD)g_CpuAffinityOn);
+    cursor = LogPut(cursor, " ncpu="); cursor = LogHex(cursor, g_CpuAffinityCpuCount);
+    return cursor;
+}
+
+
+/* End of run: VBE 4F07h retrace waits and the guest's busiest 3DAh polling sites. */
+static PSTR ReportRetracePolling(PSTR cursor)
+{
+    cursor = LogPut(cursor, "\r\nSTAGE2: VBE 4F07h retrace waits="); cursor = LogDecimal(cursor, g_VbeWaits);           /* #226 */
+    {   INT item;
+        for (item = 0; item < RT_SITES && g_RetraceSite[item].Count; ++item) {
+            cursor = LogPut(cursor, "\r\nSTAGE2: 3DAh site "); cursor = LogHex(cursor, g_RetraceSite[item].Cs); cursor = LogPut(cursor, ":");
+            cursor = LogHex(cursor, g_RetraceSite[item].Ip); cursor = LogPut(cursor, " n="); cursor = LogDecimal(cursor, g_RetraceSite[item].Count);
+            cursor = LogPut(cursor, " next="); cursor = LogDump(cursor, (const VOID *)g_RetraceSite[item].Bytes, 10);
+        } }
+    return cursor;
+}
+
+
+/* End of run: the PIT pacer, the retrace-wait idles, and the host CPU time the process used. */
+static PSTR ReportPitPacingAndHostCpuTime(PSTR cursor)
+{
+    cursor = LogPut(cursor, "\r\nSTAGE2: pitpace=");  cursor = LogHex(cursor, (DWORD)g_PitPaceMs);
+    cursor = LogPut(cursor, " calls="); cursor = LogHex(cursor, g_PitPaceCalls);
+    cursor = LogPut(cursor, " prio="); cursor = LogHex(cursor, (DWORD)g_PitPacePriority);
+    cursor = LogPut(cursor, " inject="); cursor = LogHex(cursor, (DWORD)g_PitPaceInject);
+    cursor = LogPut(cursor, " uitick_min_ms="); cursor = LogHex(cursor, (DWORD)g_UiTickMinimumMs);
+    cursor = LogPut(cursor, g_UiTickMinimumMs == UITICK_AUTO ? " (AUTO)" : " (fixed)");
+    cursor = LogPut(cursor, " presents{hook="); cursor = LogHex(cursor, g_UiHookPresents);
+    cursor = LogPut(cursor, " timer="); cursor = LogHex(cursor, g_UiTimerPresents);
+    cursor = LogPut(cursor, " hook_fires="); cursor = LogHex(cursor, g_Video.PresentHookFires);
+    cursor = LogPut(cursor, " of_which_after_draw="); cursor = LogHex(cursor, g_Video.PresentHookGap); cursor = LogPut(cursor, "}");
+    cursor = LogPut(cursor, " uitick_skipped="); cursor = LogHex(cursor, g_UiTickSkips);
+    /* ── GH #56: DID THE THROTTLE ACTUALLY BITE? ──────────────────────────────
+         run/held are the milliseconds the Bresenham handed out, and held/(run+
+         held) must come out at 1 - duty or the mechanism is not doing what the
+         setting says. `missed` is the one to watch: a held millisecond where the
+         guest was NOT inside VdmStartExecution, which we cannot hold. A large
+         missed against a small held means the guest spends its time in host code
+         -- our own service calls -- and the throttle is reaching a fraction of
+         its execution. That is a real limit of the mechanism and it should be
+         legible in the log rather than inferred from a stopwatch. */
+    cursor = LogPut(cursor, "\r\nSTAGE2: retrace-wait idles (1 ms sleeps)="); cursor = LogDecimal(cursor, g_RetraceIdles);  /* #183 */
+    /* #183 (user, 2026-09-28: the concern is host CPU AND frame rate): what the host
+       actually spent, from Windows' own accounting -- the process, and the thread that
+       runs the guest -- so a cheaper wait shows up as a number, not an impression. */
+    {   FILETIME creationTime, exitTime, kernelTime, userTime; ULONGLONG previousKernel = 0, previousUser = 0, totalKernel = 0, totalUser = 0;
+        if (GetProcessTimes(GetCurrentProcess(), &creationTime, &exitTime, &kernelTime, &userTime)) {
+            previousKernel = ((ULONGLONG)kernelTime.dwHighDateTime << DWORD_SHIFT | kernelTime.dwLowDateTime) / FILETIME_TICKS_PER_MILLISECOND_U;
+            previousUser = ((ULONGLONG)userTime.dwHighDateTime << DWORD_SHIFT | userTime.dwLowDateTime) / FILETIME_TICKS_PER_MILLISECOND_U; }
+        if (g_HostCpu && GetThreadTimes(g_HostCpu, &creationTime, &exitTime, &kernelTime, &userTime)) {
+            totalKernel = ((ULONGLONG)kernelTime.dwHighDateTime << DWORD_SHIFT | kernelTime.dwLowDateTime) / FILETIME_TICKS_PER_MILLISECOND_U;
+            totalUser = ((ULONGLONG)userTime.dwHighDateTime << DWORD_SHIFT | userTime.dwLowDateTime) / FILETIME_TICKS_PER_MILLISECOND_U; }
+        cursor = LogPut(cursor, "\r\nSTAGE2: host cpu ms: process user="); cursor = LogDecimal(cursor, (DWORD)previousUser);
+        cursor = LogPut(cursor, " kernel="); cursor = LogDecimal(cursor, (DWORD)previousKernel);
+        cursor = LogPut(cursor, " | guest thread user="); cursor = LogDecimal(cursor, (DWORD)totalUser);
+        cursor = LogPut(cursor, " kernel="); cursor = LogDecimal(cursor, (DWORD)totalKernel);
+        cursor = LogPut(cursor, " | run_ms="); cursor = LogDecimal(cursor, GetTickCount() - g_RunStartTick); }
+    return cursor;
+}
+
+
+/* End of run: how long presenting a frame took, in the window and fullscreen. */
+static PSTR ReportPresentTiming(PSTR cursor)
+{
+    /* s84 (user): the cost of drawing the picture, per present, by path -- the number
+       that decides whether a windowed DirectDraw renderer is worth building. Decimal
+       microseconds: mean and worst. `win` = GDI (window or borderless fullscreen). */
+    cursor = LogPut(cursor, "\r\nSTAGE2: present us win n="); cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.PresentWindowCount);
+    cursor = LogPut(cursor, " mean="); cursor = LogDecimal(cursor, g_PresentDdraw.PresentWindowCount ? (DWORD)(g_PresentDdraw.PresentWindowUs / g_PresentDdraw.PresentWindowCount) : 0);
+    cursor = LogPut(cursor, " max=");  cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.PresentWindowMax);
+    cursor = LogPut(cursor, " | fs(ddraw) n="); cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.PresentFullscreenCount);
+    cursor = LogPut(cursor, " mean="); cursor = LogDecimal(cursor, g_PresentDdraw.PresentFullscreenCount ? (DWORD)(g_PresentDdraw.PresentFullscreenUs / g_PresentDdraw.PresentFullscreenCount) : 0);
+    cursor = LogPut(cursor, " max=");  cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.PresentFullscreenMax);
+    cursor = LogPut(cursor, " flips{done="); cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.FlipDone);   /* s86 */
+    cursor = LogPut(cursor, " pend=");       cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.FlipPending);
+    cursor = LogPut(cursor, " mid=");        cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.FlipMidScreen);
+    cursor = LogPut(cursor, " drop=");       cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.FlipDropped);
+    cursor = LogPut(cursor, " bufs=");       cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.FlipBuffers);
+    cursor = LogPut(cursor, " ourwait=");    cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.IsFlipOurWait);
+    cursor = LogPut(cursor, g_PresentDdraw.IsFlipDriverTimed ? " path=driverflag}" : " path=triple}");
+    cursor = LogPut(cursor, " winsize="); cursor = LogDecimal(cursor, g_Settings.Values[SET_WINSIZE] + 1);
+    cursor = LogPut(cursor, "x scaler="); cursor = LogDecimal(cursor, g_Settings.Values[SET_SCALER]);
+    return cursor;
+}
+
+
+/* End of run: the hottest I/O ports, then the PIT reload, IRQ0 in-service accounting and the async-injection counters. */
+static PSTR ReportHotPortsAndTimerCounters(PSTR cursor)
+{
+    INT index;
+    cursor = LogPut(cursor, "STAGE2: hot ports:");
+    for (index = 0; index < g_IoHotCount; ++index) {
+        cursor = LogPut(cursor, " 0x"); cursor = LogHex(cursor, g_IoHot[index].Port);
+        cursor = LogPut(cursor, "=0x"); cursor = LogHex(cursor, g_IoHot[index].Count);
+    }
+    cursor = LogPut(cursor, "\r\nSTAGE2: pit_reload=0x"); cursor = LogHex(cursor, (DWORD)g_Pit.Reload);
+    cursor = LogPut(cursor, " oneshot_loads=0x"); cursor = LogHex(cursor, g_Pit.OneShotLoads);   /* #175 */
+    cursor = LogPut(cursor, " skip_if=0x");   cursor = LogHex(cursor, g_Irq0SkipIf);
+    cursor = LogPut(cursor, " skip_stub=0x"); cursor = LogHex(cursor, g_Irq0SkipStub);
+    cursor = LogPut(cursor, " async_inj=0x"); cursor = LogHex(cursor, g_AsyncInjected);
+    cursor = LogPut(cursor, " async_pm=0x"); cursor = LogHex(cursor, g_AsyncPmInjected);
+    cursor = LogPut(cursor, " async_bail=0x"); cursor = LogHex(cursor, g_AsyncBail);
+    cursor = LogPut(cursor, " async_nest=0x"); cursor = LogHex(cursor, g_AsyncNestBlocked);
+    /* s70: IRQ0 in-service accounting (see Irq0Ack). strict = acknowledges that held
+       the line, auto = stub/fallback, blocks = deliveries refused while in service,
+       timeouts = releases by the safety net, fallback = the auto-EOI regime engaged. */
+    cursor = LogPut(cursor, " irq0_isr[strict,auto,blocks,timeouts,fallback,resync_drop]=0x"); cursor = LogHex(cursor, g_Irq0IsrStrict);
+    cursor = LogPut(cursor, ",0x"); cursor = LogHex(cursor, g_Irq0IsrAuto);
+    cursor = LogPut(cursor, ",0x"); cursor = LogHex(cursor, g_Irq0IsrBlocks);
+    cursor = LogPut(cursor, ",0x"); cursor = LogHex(cursor, g_Irq0IsrTimeouts);
+    cursor = LogPut(cursor, ",0x"); cursor = LogHex(cursor, (DWORD)g_Irq0AutoEoi);
+    cursor = LogPut(cursor, ",0x"); cursor = LogHex(cursor, g_Irq0ResyncDrop);
+    cursor = LogPut(cursor, " irq1_inj=0x");   cursor = LogHex(cursor, g_Irq1Injected);
+    cursor = LogPut(cursor, " int16=[");
+    { INT item; for (item = 0; item < 4; ++item) { cursor = LogPut(cursor, "0x"); cursor = LogHex(cursor, g_Input.Int16Calls[item]); cursor = LogPut(cursor, " "); } }
+    cursor = LogPut(cursor, "] p60=0x");       cursor = LogHex(cursor, g_Input.Port60Reads);
+    cursor = LogPut(cursor, " owed=0x");       cursor = LogHex(cursor, g_Input.OwedScanCodesServed);   /* keys the BIOS arm served after a hook's port read */
+    cursor = LogPut(cursor, " sc_left=0x");    cursor = LogHex(cursor, (DWORD)VddInputScanCodesQueued(&g_Input));
+    cursor = LogPut(cursor, " sc_held=0x");    cursor = LogHex(cursor, g_Input.ScanCodeHeldReads);   /* re-reads inside the transfer hold */
+    cursor = LogPut(cursor, " sc_push=0x");    cursor = LogHex(cursor, g_Input.ScanCodesPushed);
+    cursor = LogPut(cursor, " sc_drop=0x");    cursor = LogHex(cursor, g_Input.ScanCodesDropped);
+    /* #244/#274: INT 15h AH=4Fh calls made / bytes handed back (the difference is what
+       a hook swallowed); default INT 05h jobs / printer errors / last status. */
+    cursor = LogPut(cursor, " kb4f=0x");       cursor = LogHex(cursor, g_Kb4FCalls);
+    cursor = LogPut(cursor, "/0x");            cursor = LogHex(cursor, g_Kb4FTranslate);
+    cursor = LogPut(cursor, " prtsc=0x");      cursor = LogHex(cursor, g_PrintScreenJobs);
+    cursor = LogPut(cursor, "/0x");            cursor = LogHex(cursor, g_PrintScreenErrors);
+    cursor = LogPut(cursor, "/0x");            cursor = LogHex(cursor, g_PrintScreenStatus);
+    /* sc_hi is the deepest the 32-byte FIFO ever got; pit_clamp counts catch-up
+       bursts the PIT refused to replay. Together these say whether a held key was
+       starved of exec-loop turns and whether the guest's clock ever lurched. */
+    cursor = LogPut(cursor, " sc_hi=0x");      cursor = LogHex(cursor, g_Input.ScanCodeHighWater);
+    /* pit_gaps = syncs more than 10 ms apart; pit_gapmax = the worst, in 8254
+       clocks (1193182 = 1 s). NOTHING is clamped to these -- they exist so the
+       catch-up burst can be fixed from a measured gap distribution instead of an
+       assumed one, which is precisely the mistake that made it worse. */
+    cursor = LogPut(cursor, " pit_gaps=0x");   cursor = LogHex(cursor, g_PitCatchupClamped);
+    cursor = LogPut(cursor, " pit_gapmax=0x"); cursor = LogHex(cursor, g_PitGapMaximum);
+    return cursor;
+}
+
+
+/* End of run: every I/O port the guest touched that no device claimed. */
+static PSTR ReportUnclaimedPorts(PSTR cursor)
+{
+    { INT index; cursor = LogPut(cursor, "STAGE2: unclaimed ports touched:");
+      for (index = 0; index < g_UnclaimedCount; ++index) { cursor = LogPut(cursor, " 0x"); cursor = LogHex(cursor, g_Unclaimed[index]); }
+      cursor = LogPut(cursor, "\r\n"); }
+    return cursor;
+}
+
+
+/* End of run: how long V86 string instructions kept the guest, and the loop's remaining event counters. */
+static PSTR ReportV86StringTiming(PSTR cursor)
+{
+    /* ── ★ V86 STRETCHES: the duration of single VdmRunGuest calls, ms buckets. A big
+         timer gap IS a big stretch here; str_max names where it started (cs:ip) and
+         how it ended (ev). ev 2=I/O, others per the event taxonomy. */
+    cursor = LogPut(cursor, "\r\nSTAGE2: V86STR ms[<1,1,2,4,8,16,32,64+]=");
+    { UINT bucket6; for (bucket6 = 0; bucket6 < 8; ++bucket6) { cursor = LogPut(cursor, bucket6 ? "," : "");
+                                            cursor = LogHex(cursor, g_V86StringHistogram[bucket6]); } }
+    cursor = LogPut(cursor, " n8="); cursor = LogHex(cursor, g_V86StringCount8);
+    cursor = LogPut(cursor, " max_ms="); cursor = LogHex(cursor, g_V86StringMaximumMs);
+    cursor = LogPut(cursor, " max_cs="); cursor = LogHex(cursor, g_V86StringMaximumCs);
+    cursor = LogPut(cursor, " max_ip="); cursor = LogHex(cursor, g_V86StringMaximumIp);
+    cursor = LogPut(cursor, " max_ev="); cursor = LogHex(cursor, g_V86StringMaximumEvent);
+    cursor = LogPut(cursor, " irq0_skip=0x");         cursor = LogHex(cursor, g_Irq0Skip);
+    cursor = LogPut(cursor, " intpend=0x");           cursor = LogHex(cursor, g_EventIntPending);
+    cursor = LogPut(cursor, " iostr=0x");             cursor = LogHex(cursor, g_EventIoString);
+    cursor = LogPut(cursor, " bda_tick=0x");          cursor = LogHex(cursor, ((DWORD)PeekWord(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT_HIGH) << WORD_SHIFT) | PeekWord(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT));
+    cursor = LogPut(cursor, "\r\n");
+    return cursor;
+}
+
+
+/* End of run: the exec loop's event counts, then the guest's clock as a shape -- IRQ0 per second, the gaps between ticks and why ticks were held, PM cooperation and the tick courier. */
+static PSTR ReportExecEventsAndIrq0Timeline(PSTR cursor, PSTR const base)
+{
+    cursor = LogPut(cursor, "STAGE2: io_events=0x");  cursor = LogHex(cursor, g_EventIo);
+    cursor = LogPut(cursor, " io_burst=0x");          cursor = LogHex(cursor, g_IoExtra);
+    cursor = LogPut(cursor, " irq0_inj=0x");          cursor = LogHex(cursor, g_Irq0Injected);
+    /* ── THE GUEST'S CLOCK AS A SHAPE, NOT A TOTAL. See Irq0DeliveredNote.
+         IRQ0TL is deliveries in each whole second: read it as a sequence and a
+         slow-down/speed-up is the sequence moving. IRQ0GAP is the inter-delivery
+         interval histogram, which says whether that is stalls or jitter. Both are
+         DECIMAL-in-hex like every other counter here. */
+    {   UINT timelineSecond; DWORD last = 0;
+        for (timelineSecond = 0; timelineSecond < IRQ0TL_SECS; ++timelineSecond) if (g_Irq0TimeLast[timelineSecond]) last = timelineSecond;
+        cursor = LogPut(cursor, "\r\nSTAGE2: IRQ0TL persec=");
+        for (timelineSecond = 0; timelineSecond <= last && timelineSecond < IRQ0TL_SECS; ++timelineSecond) {
+            cursor = LogPut(cursor, timelineSecond ? "," : ""); cursor = LogHex(cursor, g_Irq0TimeLast[timelineSecond]);
+            if (cursor - base > 3600) { LogAppend(LOG_PATH, base, cursor); cursor = base; }
+        }
+        cursor = LogPut(cursor, "\r\nSTAGE2: IRQ0GAP ms[<1,1,2,4,8,16,32,64+]=");
+        for (timelineSecond = 0; timelineSecond < 8; ++timelineSecond) { cursor = LogPut(cursor, timelineSecond ? "," : "");
+                                  cursor = LogHex(cursor, g_Irq0GapHistogram[timelineSecond]); }
+        cursor = LogPut(cursor, " n="); cursor = LogHex(cursor, g_Irq0GapCount);
+        cursor = LogPut(cursor, " max_ms="); cursor = LogHex(cursor, g_Irq0GapMaximumMs);
+        /* ── ★ IS THE MUSIC ISR THE CULPRIT? io-per-MILLISECOND, anomalous vs normal.
+             A RATE, because a longer gap collects more I/O whatever the guest is
+             doing -- comparing io-per-GAP across populations of different length is
+             the confound that produced a refutation this run reverses. If anom_io_pms
+             is many times norm_io_pms the long gaps really are the guest hammering
+             ports (a trapped-I/O overrun) and the fix is the port cost; if they are
+             similar the search moves on. worst = the single biggest gap, its I/O, and
+             the CS:IP where the guest re-opened interrupts (cs=0xffff means async). */
+        cursor = LogPut(cursor, " anom_n="); cursor = LogHex(cursor, g_Irq0AnomalyCount);
+        cursor = LogPut(cursor, " anom_ms="); cursor = LogHex(cursor, g_Irq0AnomalyMicroseconds / MICROSECONDS_PER_MILLISECOND_U);
+        cursor = LogPut(cursor, " anom_io_pms=");
+        cursor = LogHex(cursor, g_Irq0AnomalyMicroseconds ? g_Irq0AnomalyIo / (g_Irq0AnomalyMicroseconds / MICROSECONDS_PER_MILLISECOND_U ? g_Irq0AnomalyMicroseconds / MICROSECONDS_PER_MILLISECOND_U : 1u) : 0u);
+        cursor = LogPut(cursor, " norm_n="); cursor = LogHex(cursor, g_Irq0NormalCount);
+        cursor = LogPut(cursor, " norm_ms="); cursor = LogHex(cursor, g_Irq0NormalMicroseconds / MICROSECONDS_PER_MILLISECOND_U);
+        cursor = LogPut(cursor, " norm_io_pms=");
+        cursor = LogHex(cursor, g_Irq0NormalMicroseconds ? g_Irq0NormalIo / (g_Irq0NormalMicroseconds / MICROSECONDS_PER_MILLISECOND_U ? g_Irq0NormalMicroseconds / MICROSECONDS_PER_MILLISECOND_U : 1u) : 0u);
+        cursor = LogPut(cursor, " worst_ms="); cursor = LogHex(cursor, g_Irq0WorstGapMs);
+        cursor = LogPut(cursor, " worst_io="); cursor = LogHex(cursor, g_Irq0WorstGapIo);
+        cursor = LogPut(cursor, " worst_per_us="); cursor = LogHex(cursor, g_Irq0WorstPerMicroseconds);
+        cursor = LogPut(cursor, " worst_cs="); cursor = LogHex(cursor, g_Irq0WorstCs);
+        cursor = LogPut(cursor, " worst_ip="); cursor = LogHex(cursor, g_Irq0WorstIp);
+        /* ── ★★ THE A/B/C DISCRIMINATOR. See Irq0DeliveredNote for how to read it.
+             Deltas summed over ANOMALOUS gaps only (>= 2 of the period the guest
+             itself programmed), so they are meaningful divided by anom_n above.
+               raise  IRQ0s the 8254 generated inside the gap
+               att    async attempts actually made        (raise-att = attempts stolen)
+               nie    attempts that bailed not_in_exec    (high => A, delivery)
+               yld    attempts handed to a pending KEY    (high => C, the yield)
+             ★ gen/del is the answer with no threshold in it: `del` counts anomalous
+             gaps that contained >= 2 raises (the ticks existed and we lost them --
+             A), `gen` counts those that did not (the clock itself stalled -- B).
+             Whichever dominates names the fix. wst_* are the same four for the single
+             worst gap, beside the period that was in force for it. */
+        cursor = LogPut(cursor, "\r\nSTAGE2: IRQ0WHY gen="); cursor = LogHex(cursor, g_Irq0AnomalyGeneration);
+        cursor = LogPut(cursor, " del="); cursor = LogHex(cursor, g_Irq0AnomalyDelete);
+        cursor = LogPut(cursor, " anom[raise,att,nie,yld]=");
+        cursor = LogHex(cursor, g_Irq0AnomalyRaise); cursor = LogPut(cursor, ",");
+        cursor = LogHex(cursor, g_Irq0AnomalyAttempts);   cursor = LogPut(cursor, ",");
+        cursor = LogHex(cursor, g_Irq0AnomalyNie);   cursor = LogPut(cursor, ",");
+        cursor = LogHex(cursor, g_Irq0AnomalyYield);
+        cursor = LogPut(cursor, " wst[raise,att,nie,yld]=");
+        cursor = LogHex(cursor, g_Irq0WorstRaise); cursor = LogPut(cursor, ",");
+        cursor = LogHex(cursor, g_Irq0WorstAttempts);   cursor = LogPut(cursor, ",");
+        cursor = LogHex(cursor, g_Irq0WorstNie);   cursor = LogPut(cursor, ",");
+        cursor = LogHex(cursor, g_Irq0WorstYield);
+        /* #172: see g_PmCooperativeGate for the ten columns. */
+        cursor = LogPut(cursor, "\r\nSTAGE2: PMCOOP owed>=2 gate[latch,vif,hook,inirq,noirq,async,armed,tried,claim,decl]=");
+        { INT gateIndex; for (gateIndex = 0; gateIndex < PM_GATES; ++gateIndex) { cursor = LogPut(cursor, gateIndex ? "," : ""); cursor = LogHex(cursor, g_PmCooperativeGate[gateIndex]); } }
+        cursor = LogPut(cursor, "\r\nSTAGE2: PMINJ decl[cs16,nohook]="); cursor = LogHex(cursor, g_PmInjectDecl[0]);
+        cursor = LogPut(cursor, ","); cursor = LogHex(cursor, g_PmInjectDecl[1]);
+        { INT timelineSecond, last = -1;
+          for (timelineSecond = 0; timelineSecond < IRQ0TL_SECS; ++timelineSecond) if (g_PmInjectDeclTl[timelineSecond]) last = timelineSecond;
+          cursor = LogPut(cursor, " persec=");
+          for (timelineSecond = 0; timelineSecond <= last; ++timelineSecond) { cursor = LogPut(cursor, timelineSecond ? "," : ""); cursor = LogHex(cursor, g_PmInjectDeclTl[timelineSecond]); } }
+        { INT item; cursor = LogPut(cursor, " cs16 sites:");
+          for (item = 0; item < PMINJ_SITES && g_PmInjectSite[item].Count; ++item) {
+              cursor = LogPut(cursor, " "); cursor = LogHex(cursor, g_PmInjectSite[item].Cs); cursor = LogPut(cursor, ":");
+              cursor = LogHex(cursor, g_PmInjectSite[item].Eip); cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_PmInjectSite[item].Count); } }
+        /* ── ★ WHAT THE TICK COURIER DID. `inj` is the whole point: ticks placed that
+             the raise site had already given away to a key. Read it against IRQ0WHY's
+             yld -- if inj is a large fraction of yld the courier is collecting exactly
+             what the yield spends. `tries` counts suspend round trips (the cost),
+             `giveup` the passes that spent their whole budget without placing, which
+             is the guest legitimately holding interrupts off. courier=0 means the
+             knob turned it off, and every other field here must then read zero. */
+        cursor = LogPut(cursor, "\r\nSTAGE2: COURIER on="); cursor = LogHex(cursor, (DWORD)g_CourierOn);
+        cursor = LogPut(cursor, " wakes="); cursor = LogHex(cursor, g_CourierWakes);
+        cursor = LogPut(cursor, " inj=");   cursor = LogHex(cursor, g_CourierInjected);
+        cursor = LogPut(cursor, " tries="); cursor = LogHex(cursor, g_CourierTries);
+        cursor = LogPut(cursor, " giveup="); cursor = LogHex(cursor, g_CourierGiveUp);
+    }
+    return cursor;
+}
+
+
+/* End of run: how many NTVDM BOPs the guest issued -- the count the log's rate limit hides. */
+static PSTR ReportNtvdmBops(PSTR cursor)
+{
+    /* Exec-loop accounting: how much of the run went on port-I/O round trips, how
+       much the burst fast path absorbed, and whether timer IRQs actually landed. */
+    /* The count the rate-limit above hides. An absence here means no guest issued one;
+       a large number means a guest is POLLING a call we have not implemented. */
+    if (g_NtvdmBopCount) {
+        cursor = LogPut(cursor, "STAGE2: NTVDM BOPs from guest = "); cursor = LogDecimal(cursor, g_NtvdmBopCount);
+        cursor = LogPut(cursor, " (see docs/inventory/bop.md)\r\n");
+    }
+    return cursor;
+}
+
 enum { INSTALL_EXIT_OK = 0, INSTALL_EXIT_FAILED = 1, INSTALL_STATUS_EXIT_OURS = 0, INSTALL_STATUS_EXIT_NONE = 1, INSTALL_STATUS_EXIT_OTHER = 2 };   /* the install verbs' exit codes */
 enum { PENDING_INT_RETRIES_MAX = 0x10000 };   /* event 3 ("interrupt pending, not entered"): retries before giving up */
 enum { EXEC_HANDLED_RUN_OVER = 2, EXEC_HANDLED_CHILD_EXITED = 3 };   /* WinMain's DosTerminate outcomes: the run ends, or a child returned to its parent */
@@ -8793,395 +9281,21 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                             and Beep.sys outlives the process */
     RecoveryOk();                       /* GH #132: this run ended cleanly */
     cursor = ReportStdoutAndDosOutput(cursor, &machine);
-    /* Exec-loop accounting: how much of the run went on port-I/O round trips, how
-       much the burst fast path absorbed, and whether timer IRQs actually landed. */
-    /* The count the rate-limit above hides. An absence here means no guest issued one;
-       a large number means a guest is POLLING a call we have not implemented. */
-    if (g_NtvdmBopCount) {
-        cursor = LogPut(cursor, "STAGE2: NTVDM BOPs from guest = "); cursor = LogDecimal(cursor, g_NtvdmBopCount);
-        cursor = LogPut(cursor, " (see docs/inventory/bop.md)\r\n");
-    }
-    { INT index; cursor = LogPut(cursor, "STAGE2: hot ports:");
-      for (index = 0; index < g_IoHotCount; ++index) {
-          cursor = LogPut(cursor, " 0x"); cursor = LogHex(cursor, g_IoHot[index].Port);
-          cursor = LogPut(cursor, "=0x"); cursor = LogHex(cursor, g_IoHot[index].Count);
-      }
-      cursor = LogPut(cursor, "\r\nSTAGE2: pit_reload=0x"); cursor = LogHex(cursor, (DWORD)g_Pit.Reload);
-      cursor = LogPut(cursor, " oneshot_loads=0x"); cursor = LogHex(cursor, g_Pit.OneShotLoads);   /* #175 */
-      cursor = LogPut(cursor, " skip_if=0x");   cursor = LogHex(cursor, g_Irq0SkipIf);
-      cursor = LogPut(cursor, " skip_stub=0x"); cursor = LogHex(cursor, g_Irq0SkipStub);
-      cursor = LogPut(cursor, " async_inj=0x"); cursor = LogHex(cursor, g_AsyncInjected);
-      cursor = LogPut(cursor, " async_pm=0x"); cursor = LogHex(cursor, g_AsyncPmInjected);
-      cursor = LogPut(cursor, " async_bail=0x"); cursor = LogHex(cursor, g_AsyncBail);
-      cursor = LogPut(cursor, " async_nest=0x"); cursor = LogHex(cursor, g_AsyncNestBlocked);
-      /* s70: IRQ0 in-service accounting (see Irq0Ack). strict = acknowledges that held
-         the line, auto = stub/fallback, blocks = deliveries refused while in service,
-         timeouts = releases by the safety net, fallback = the auto-EOI regime engaged. */
-      cursor = LogPut(cursor, " irq0_isr[strict,auto,blocks,timeouts,fallback,resync_drop]=0x"); cursor = LogHex(cursor, g_Irq0IsrStrict);
-      cursor = LogPut(cursor, ",0x"); cursor = LogHex(cursor, g_Irq0IsrAuto);
-      cursor = LogPut(cursor, ",0x"); cursor = LogHex(cursor, g_Irq0IsrBlocks);
-      cursor = LogPut(cursor, ",0x"); cursor = LogHex(cursor, g_Irq0IsrTimeouts);
-      cursor = LogPut(cursor, ",0x"); cursor = LogHex(cursor, (DWORD)g_Irq0AutoEoi);
-      cursor = LogPut(cursor, ",0x"); cursor = LogHex(cursor, g_Irq0ResyncDrop);
-      cursor = LogPut(cursor, " irq1_inj=0x");   cursor = LogHex(cursor, g_Irq1Injected);
-      cursor = LogPut(cursor, " int16=[");
-      { INT item; for (item = 0; item < 4; ++item) { cursor = LogPut(cursor, "0x"); cursor = LogHex(cursor, g_Input.Int16Calls[item]); cursor = LogPut(cursor, " "); } }
-      cursor = LogPut(cursor, "] p60=0x");       cursor = LogHex(cursor, g_Input.Port60Reads);
-      cursor = LogPut(cursor, " owed=0x");       cursor = LogHex(cursor, g_Input.OwedScanCodesServed);   /* keys the BIOS arm served after a hook's port read */
-      cursor = LogPut(cursor, " sc_left=0x");    cursor = LogHex(cursor, (DWORD)VddInputScanCodesQueued(&g_Input));
-      cursor = LogPut(cursor, " sc_held=0x");    cursor = LogHex(cursor, g_Input.ScanCodeHeldReads);   /* re-reads inside the transfer hold */
-      cursor = LogPut(cursor, " sc_push=0x");    cursor = LogHex(cursor, g_Input.ScanCodesPushed);
-      cursor = LogPut(cursor, " sc_drop=0x");    cursor = LogHex(cursor, g_Input.ScanCodesDropped);
-      /* #244/#274: INT 15h AH=4Fh calls made / bytes handed back (the difference is what
-         a hook swallowed); default INT 05h jobs / printer errors / last status. */
-      cursor = LogPut(cursor, " kb4f=0x");       cursor = LogHex(cursor, g_Kb4FCalls);
-      cursor = LogPut(cursor, "/0x");            cursor = LogHex(cursor, g_Kb4FTranslate);
-      cursor = LogPut(cursor, " prtsc=0x");      cursor = LogHex(cursor, g_PrintScreenJobs);
-      cursor = LogPut(cursor, "/0x");            cursor = LogHex(cursor, g_PrintScreenErrors);
-      cursor = LogPut(cursor, "/0x");            cursor = LogHex(cursor, g_PrintScreenStatus);
-      /* sc_hi is the deepest the 32-byte FIFO ever got; pit_clamp counts catch-up
-         bursts the PIT refused to replay. Together these say whether a held key was
-         starved of exec-loop turns and whether the guest's clock ever lurched. */
-      cursor = LogPut(cursor, " sc_hi=0x");      cursor = LogHex(cursor, g_Input.ScanCodeHighWater);
-      /* pit_gaps = syncs more than 10 ms apart; pit_gapmax = the worst, in 8254
-         clocks (1193182 = 1 s). NOTHING is clamped to these -- they exist so the
-         catch-up burst can be fixed from a measured gap distribution instead of an
-         assumed one, which is precisely the mistake that made it worse. */
-      cursor = LogPut(cursor, " pit_gaps=0x");   cursor = LogHex(cursor, g_PitCatchupClamped);
-      cursor = LogPut(cursor, " pit_gapmax=0x"); cursor = LogHex(cursor, g_PitGapMaximum);
-      /* s84 (user): the cost of drawing the picture, per present, by path -- the number
-         that decides whether a windowed DirectDraw renderer is worth building. Decimal
-         microseconds: mean and worst. `win` = GDI (window or borderless fullscreen). */
-      cursor = LogPut(cursor, "\r\nSTAGE2: present us win n="); cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.PresentWindowCount);
-      cursor = LogPut(cursor, " mean="); cursor = LogDecimal(cursor, g_PresentDdraw.PresentWindowCount ? (DWORD)(g_PresentDdraw.PresentWindowUs / g_PresentDdraw.PresentWindowCount) : 0);
-      cursor = LogPut(cursor, " max=");  cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.PresentWindowMax);
-      cursor = LogPut(cursor, " | fs(ddraw) n="); cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.PresentFullscreenCount);
-      cursor = LogPut(cursor, " mean="); cursor = LogDecimal(cursor, g_PresentDdraw.PresentFullscreenCount ? (DWORD)(g_PresentDdraw.PresentFullscreenUs / g_PresentDdraw.PresentFullscreenCount) : 0);
-      cursor = LogPut(cursor, " max=");  cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.PresentFullscreenMax);
-      cursor = LogPut(cursor, " flips{done="); cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.FlipDone);   /* s86 */
-      cursor = LogPut(cursor, " pend=");       cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.FlipPending);
-      cursor = LogPut(cursor, " mid=");        cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.FlipMidScreen);
-      cursor = LogPut(cursor, " drop=");       cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.FlipDropped);
-      cursor = LogPut(cursor, " bufs=");       cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.FlipBuffers);
-      cursor = LogPut(cursor, " ourwait=");    cursor = LogDecimal(cursor, (DWORD)g_PresentDdraw.IsFlipOurWait);
-      cursor = LogPut(cursor, g_PresentDdraw.IsFlipDriverTimed ? " path=driverflag}" : " path=triple}");
-      cursor = LogPut(cursor, " winsize="); cursor = LogDecimal(cursor, g_Settings.Values[SET_WINSIZE] + 1);
-      cursor = LogPut(cursor, "x scaler="); cursor = LogDecimal(cursor, g_Settings.Values[SET_SCALER]);
-      cursor = LogPut(cursor, "\r\nSTAGE2: pitpace=");  cursor = LogHex(cursor, (DWORD)g_PitPaceMs);
-      cursor = LogPut(cursor, " calls="); cursor = LogHex(cursor, g_PitPaceCalls);
-      cursor = LogPut(cursor, " prio="); cursor = LogHex(cursor, (DWORD)g_PitPacePriority);
-      cursor = LogPut(cursor, " inject="); cursor = LogHex(cursor, (DWORD)g_PitPaceInject);
-      cursor = LogPut(cursor, " uitick_min_ms="); cursor = LogHex(cursor, (DWORD)g_UiTickMinimumMs);
-      cursor = LogPut(cursor, g_UiTickMinimumMs == UITICK_AUTO ? " (AUTO)" : " (fixed)");
-      cursor = LogPut(cursor, " presents{hook="); cursor = LogHex(cursor, g_UiHookPresents);
-      cursor = LogPut(cursor, " timer="); cursor = LogHex(cursor, g_UiTimerPresents);
-      cursor = LogPut(cursor, " hook_fires="); cursor = LogHex(cursor, g_Video.PresentHookFires);
-      cursor = LogPut(cursor, " of_which_after_draw="); cursor = LogHex(cursor, g_Video.PresentHookGap); cursor = LogPut(cursor, "}");
-      cursor = LogPut(cursor, " uitick_skipped="); cursor = LogHex(cursor, g_UiTickSkips);
-      /* ── GH #56: DID THE THROTTLE ACTUALLY BITE? ──────────────────────────────
-           run/held are the milliseconds the Bresenham handed out, and held/(run+
-           held) must come out at 1 - duty or the mechanism is not doing what the
-           setting says. `missed` is the one to watch: a held millisecond where the
-           guest was NOT inside VdmStartExecution, which we cannot hold. A large
-           missed against a small held means the guest spends its time in host code
-           -- our own service calls -- and the throttle is reaching a fraction of
-           its execution. That is a real limit of the mechanism and it should be
-           legible in the log rather than inferred from a stopwatch. */
-      cursor = LogPut(cursor, "\r\nSTAGE2: retrace-wait idles (1 ms sleeps)="); cursor = LogDecimal(cursor, g_RetraceIdles);  /* #183 */
-      /* #183 (user, 2026-09-28: the concern is host CPU AND frame rate): what the host
-         actually spent, from Windows' own accounting -- the process, and the thread that
-         runs the guest -- so a cheaper wait shows up as a number, not an impression. */
-      {   FILETIME creationTime, exitTime, kernelTime, userTime; ULONGLONG previousKernel = 0, previousUser = 0, totalKernel = 0, totalUser = 0;
-          if (GetProcessTimes(GetCurrentProcess(), &creationTime, &exitTime, &kernelTime, &userTime)) {
-              previousKernel = ((ULONGLONG)kernelTime.dwHighDateTime << DWORD_SHIFT | kernelTime.dwLowDateTime) / FILETIME_TICKS_PER_MILLISECOND_U;
-              previousUser = ((ULONGLONG)userTime.dwHighDateTime << DWORD_SHIFT | userTime.dwLowDateTime) / FILETIME_TICKS_PER_MILLISECOND_U; }
-          if (g_HostCpu && GetThreadTimes(g_HostCpu, &creationTime, &exitTime, &kernelTime, &userTime)) {
-              totalKernel = ((ULONGLONG)kernelTime.dwHighDateTime << DWORD_SHIFT | kernelTime.dwLowDateTime) / FILETIME_TICKS_PER_MILLISECOND_U;
-              totalUser = ((ULONGLONG)userTime.dwHighDateTime << DWORD_SHIFT | userTime.dwLowDateTime) / FILETIME_TICKS_PER_MILLISECOND_U; }
-          cursor = LogPut(cursor, "\r\nSTAGE2: host cpu ms: process user="); cursor = LogDecimal(cursor, (DWORD)previousUser);
-          cursor = LogPut(cursor, " kernel="); cursor = LogDecimal(cursor, (DWORD)previousKernel);
-          cursor = LogPut(cursor, " | guest thread user="); cursor = LogDecimal(cursor, (DWORD)totalUser);
-          cursor = LogPut(cursor, " kernel="); cursor = LogDecimal(cursor, (DWORD)totalKernel);
-          cursor = LogPut(cursor, " | run_ms="); cursor = LogDecimal(cursor, GetTickCount() - g_RunStartTick); }
-      cursor = LogPut(cursor, "\r\nSTAGE2: VBE 4F07h retrace waits="); cursor = LogDecimal(cursor, g_VbeWaits);           /* #226 */
-      {   INT item;
-          for (item = 0; item < RT_SITES && g_RetraceSite[item].Count; ++item) {
-              cursor = LogPut(cursor, "\r\nSTAGE2: 3DAh site "); cursor = LogHex(cursor, g_RetraceSite[item].Cs); cursor = LogPut(cursor, ":");
-              cursor = LogHex(cursor, g_RetraceSite[item].Ip); cursor = LogPut(cursor, " n="); cursor = LogDecimal(cursor, g_RetraceSite[item].Count);
-              cursor = LogPut(cursor, " next="); cursor = LogDump(cursor, (const VOID *)g_RetraceSite[item].Bytes, 10);
-          } }
-      cursor = LogPut(cursor, "\r\nSTAGE2: host cpu ~MHz="); cursor = LogDecimal(cursor, HostCpuMhz());   /* #224 */
-      cursor = LogPut(cursor, "\r\nSTAGE2: cpuspeed idx="); cursor = LogHex(cursor, (DWORD)g_CpuSpeedIndex);
-      cursor = LogPut(cursor, " mhz="); cursor = LogHex(cursor, g_CpuSpeedIndex < CPUSPEED_COUNT
-                                        ? g_CpuSpeedMhz[g_CpuSpeedIndex] : 0u);
-      cursor = LogPut(cursor, " ref_mhz="); cursor = LogHex(cursor, g_CpuSpeedReferenceMhz);
-      /* ── ★ REQUESTED vs DELIVERED, BOTH MEASURED, AND NOW THEY AGREE BY DESIGN.
-           The throttle's contract is that guest execution is `duty` of wall time.
-           `delivered_bp` is that ratio as it actually came out -- lifetime guest
-           EXECUTION over lifetime WALL -- and it equals `duty_bp` whenever the
-           setting is reachable (below the port-trap ceiling and inside the hold cap),
-           disagreeing in the open when it is not. The control law that ties them
-           together is CpuSpeedStep, proven by a DETERMINISTIC test off-hardware
-           (tests/unit/cpuspeed_test.c) rather than argued from a rig number read
-           through the guest's own throttled clock.
-         ★ run_ms IS TRUE GUEST EXECUTION now: dexec is sampled resume-to-suspend, so
-           holds (before the resume) and host-servicing (outside VdmRunGuest) are already
-           out of it. That is why the old execnet/held-subtraction dance is gone --
-           the number is clean at the source instead of patched at the report. */
-      cursor = LogPut(cursor, " duty_bp="); cursor = LogHex(cursor, (DWORD)g_CpuSpeedDuty);
-      cursor = LogPut(cursor, " duty_rm_bp="); cursor = LogHex(cursor, (DWORD)g_CpuSpeedDutyRm);   /* #225 */
-      { DWORD wallMs = GetTickCount() - g_StartMs;
-        /* Units cancel in the ratio, so ms goes straight in. */
-        cursor = LogPut(cursor, " delivered_bp=");
-        cursor = LogHex(cursor, CpuSpeedDeliveredBp(g_CpuSpeedRunMs, wallMs));
-        cursor = LogPut(cursor, " exec_ms="); cursor = LogHex(cursor, g_CpuSpeedRunMs);
-        cursor = LogPut(cursor, " wall_ms="); cursor = LogHex(cursor, wallMs); }
-      cursor = LogPut(cursor, " held_ms="); cursor = LogHex(cursor, g_CpuSpeedHeldMs);
-      cursor = LogPut(cursor, " hold_max_us="); cursor = LogHex(cursor, g_CpuSpeedHoldMaximumMicroseconds);   /* #225 */
-      cursor = LogPut(cursor, " debt_max_us="); cursor = LogHex(cursor, g_CpuSpeedDebtMaximumMicroseconds);
-      cursor = LogPut(cursor, " coop="); cursor = LogHex(cursor, g_CpuSpeedCooperativeCatches);        /* #225 */
-      cursor = LogPut(cursor, " coop_to="); cursor = LogHex(cursor, g_CpuSpeedCooperativeTimeouts);
-      cursor = LogPut(cursor, " ran_us="); cursor = LogHex(cursor, g_CpuSpeedRanMicroseconds);
-      cursor = LogPut(cursor, " win_wall_us="); cursor = LogHex(cursor, g_CpuSpeedWallMicroseconds);
-      cursor = LogPut(cursor, " missed="); cursor = LogHex(cursor, g_CpuSpeedMissed);
-      /* ── GRANULARITY = BURST SIZE = playable vs slideshow. `periods` over the run's
-           seconds is how many bursts a second the guest advanced in; seven was the
-           "still unplayable" number. gran=0 means auto chose period_ms from rt_us. */
-      cursor = LogPut(cursor, " gran_ms="); cursor = LogHex(cursor, g_CpuSpeedGranularityMs);
-      cursor = LogPut(cursor, " period_ms="); cursor = LogHex(cursor, g_CpuSpeedPeriodMs);
-      cursor = LogPut(cursor, " rt_us="); cursor = LogHex(cursor, g_CpuSpeedRoundTripMicroseconds);
-      cursor = LogPut(cursor, " periods="); cursor = LogHex(cursor, g_CpuSpeedPeriods);
-      cursor = LogPut(cursor, " aff="); cursor = LogHex(cursor, (DWORD)g_CpuAffinityOn);
-      cursor = LogPut(cursor, " ncpu="); cursor = LogHex(cursor, g_CpuAffinityCpuCount);
-      /* The INT 33h callback path, at EXIT (the heartbeat's copy is a snapshot). */
-      cursor = LogPut(cursor, "\r\nSTAGE2: MOUSECB inj="); cursor = LogHex(cursor, g_MouseCallbackInjected);
-      cursor = LogPut(cursor, " done=");  cursor = LogHex(cursor, g_MouseCallbackDone);
-      cursor = LogPut(cursor, " lost=");  cursor = LogHex(cursor, g_MouseCallbackLost);
-      cursor = LogPut(cursor, " stray="); cursor = LogHex(cursor, g_MouseCallbackStray);
-      cursor = LogPut(cursor, " pm=");    cursor = LogHex(cursor, g_MouseCallbackPm);
-      cursor = LogPut(cursor, " active="); cursor = LogHex(cursor, (DWORD)g_MouseCallbackActive);
-      cursor = LogPut(cursor, " raised="); cursor = LogHex(cursor, g_MouseEventRaised);
-      cursor = LogPut(cursor, " why[fly,none,nohdl,stub,if]=");
-      { INT reason; for (reason = 0; reason < MOUSE_CB_WHY_COUNT; ++reason) { cursor = LogHex(cursor, g_MouseCallbackWhy[reason]); cursor = LogPut(cursor, reason < MOUSE_CB_WHY_COUNT - 1 ? "," : ""); } }
-      cursor = LogPut(cursor, " mask=0x"); cursor = LogHex(cursor, (DWORD)g_MouseEventMask);
-      cursor = LogPut(cursor, " hdl=0x");  cursor = LogHex(cursor, (DWORD)g_MouseEventSegment);
-      cursor = LogPut(cursor, ":0x");      cursor = LogHex(cursor, (DWORD)g_MouseEventOffset);
-      /* THE KEYSTROKE ITSELF, both halves. ms buckets [0,1,2,4,8,16,32,64+]. */
-      cursor = LogPut(cursor, "\r\nSTAGE2: KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
-      { UINT bucket5; for (bucket5 = 0; bucket5 < 8; ++bucket5) { cursor = LogPut(cursor, bucket5 ? "," : "");
-                                                  cursor = LogHex(cursor, g_KeyMessageHistogram[bucket5]); } }
-      cursor = LogPut(cursor, " n="); cursor = LogHex(cursor, g_KeyMessageCount);
-      cursor = LogPut(cursor, " max_ms="); cursor = LogHex(cursor, g_KeyMessageMaximumMs);
-      cursor = LogPut(cursor, " || deliver_ms[0,1,2,4,8,16,32,64+]=");
-      { UINT bucket5; for (bucket5 = 0; bucket5 < 8; ++bucket5) { cursor = LogPut(cursor, bucket5 ? "," : "");
-                                                  cursor = LogHex(cursor, g_KeyDeliveryHistogram[bucket5]); } }
-      cursor = LogPut(cursor, " n="); cursor = LogHex(cursor, g_KeyDeliveryCount);
-      cursor = LogPut(cursor, " max_ms="); cursor = LogHex(cursor, g_KeyDeliveryMaximumMs);
-      cursor = LogPut(cursor, "\r\nSTAGE2: TICKGAP us[<.5k,1k,2k,4k,8k,16k,32k,64k,128k,256k,512k,+]=");
-      { UINT bucket7; for (bucket7 = 0; bucket7 < 12; ++bucket7) { cursor = LogPut(cursor, bucket7 ? "," : "");
-                                                   cursor = LogHex(cursor, g_TickGap[bucket7]); } }
-      cursor = LogPut(cursor, " max_us="); cursor = LogHex(cursor, g_TickGapMaximumMicroseconds);
-      cursor = LogPut(cursor, " OVER_11600us="); cursor = LogHex(cursor, g_TickGapOver);
-      cursor = LogPut(cursor, "\r\nSTAGE2: DMXTASK: ok="); cursor = LogHex(cursor, g_DmxMixerOk);
-      cursor = LogPut(cursor, " samples="); cursor = LogHex(cursor, g_DmxSamples);
-      cursor = LogPut(cursor, " any_busy="); cursor = LogHex(cursor, g_DmxAnyBusy);
-      cursor = LogPut(cursor, " mixer_OVERDUE="); cursor = LogHex(cursor, g_DmxOverdue);
-      cursor = LogPut(cursor, " max_late_ticks="); cursor = LogHex(cursor, g_DmxOverdueMaximum);
-      cursor = LogPut(cursor, " busy_by_task=");
-      { UINT timelineIndex; for (timelineIndex = 0; timelineIndex < 12; ++timelineIndex) { cursor = LogPut(cursor, timelineIndex ? "," : "");
-                                                   cursor = LogHex(cursor, g_DmxBusy[timelineIndex]); } }
-      cursor = LogPut(cursor, "\r\nSTAGE2: ica (shim-raised IRQs, #278) raised="); cursor = LogHex(cursor, g_IcaRaised);
-      cursor = LogPut(cursor, " delivered="); cursor = LogHex(cursor, g_IcaDelivered);
-      cursor = LogPut(cursor, " nohandler="); cursor = LogHex(cursor, g_IcaNoHandler);
-      cursor = LogPut(cursor, " idlewaits(#306)="); cursor = LogHex(cursor, g_WowIdleWaits);
-      cursor = LogPut(cursor, " shims[WOW32.DLL,NTVDM.EXE]=["); cursor = LogHex(cursor, g_ShimState[0]);
-      cursor = LogPut(cursor, ","); cursor = LogHex(cursor, g_ShimState[1]); cursor = LogPut(cursor, "] err=[");
-      cursor = LogHex(cursor, g_ShimError[0]); cursor = LogPut(cursor, ","); cursor = LogHex(cursor, g_ShimError[1]); cursor = LogPut(cursor, "]");
-      cursor = LogPut(cursor, " (1 loaded, 2 not found, 3 init refused)");
-      cursor = LogPut(cursor, "\r\nSTAGE2: dspver="); cursor = LogHex(cursor, (DWORD)g_SbVersionMajor);
-      cursor = LogPut(cursor, "."); cursor = LogHex(cursor, (DWORD)g_SbVersionMinor);
-      cursor = LogPut(cursor, " execprio="); cursor = LogHex(cursor, g_ExecPriority);
-      cursor = LogPut(cursor, "\r\nSTAGE2: lock: wait_us=0x");  cursor = LogHex(cursor, g_LockWaitMicroseconds);
-      cursor = LogPut(cursor, "@line ");                        cursor = LogHex(cursor, (DWORD)g_LockWaitSite);
-      cursor = LogPut(cursor, " hold_us=0x");                   cursor = LogHex(cursor, g_LockHoldMicroseconds);
-      cursor = LogPut(cursor, "@line ");                        cursor = LogHex(cursor, (DWORD)g_LockHoldSite);
-      cursor = LogPut(cursor, " ui_gap_us=0x");                 cursor = LogHex(cursor, g_UiGapMicroseconds);
-      /* ty_sent = typematic repeats WE generated; ty_os = OS auto-repeats we
-         suppressed because we generate our own. If ty_os is large and ty_sent is
-         small, the pump is not running; if both are small while a key was held,
-         the OS was not delivering repeats either -- which is what started this. */
-      cursor = LogPut(cursor, " ty_sent=0x");                   cursor = LogHex(cursor, g_TypematicSent);
-      cursor = LogPut(cursor, " ty_os=0x");                     cursor = LogHex(cursor, g_TypematicOsRepeats);
-      /* The XP setting we derived the rate from, raw and in microseconds, so a run
-         says WHY it repeats at the speed it does. Verify against stock ntvdm with
-         tests/probes/dos/tymat.asm: the target is delay 7 ticks / 102 repeats. */
-      cursor = LogPut(cursor, " spi_delay=0x");                 cursor = LogHex(cursor, g_TypematicSpiDelay);
-      cursor = LogPut(cursor, " spi_speed=0x");                 cursor = LogHex(cursor, g_TypematicSpiSpeed);
-      cursor = LogPut(cursor, " ty_delay_us=0x");               cursor = LogHex(cursor, g_TypematicDelayMicroseconds);
-      cursor = LogPut(cursor, " ty_period_us=0x");              cursor = LogHex(cursor, g_TypematicPeriodMicroseconds);
-      /* Does the guest set its OWN typematic rate? If it does, ours is a guess and
-         should be taken from its 0xF3 byte instead (bits 0-4 rate, 5-6 delay). */
-      cursor = LogPut(cursor, "\r\nSTAGE2: kbd 8042: writes=0x"); cursor = LogHex(cursor, g_Input.KeyboardPortWrites);
-      cursor = LogPut(cursor, " typematic_set=0x");               cursor = LogHexByte(cursor, g_Input.IsTypematicSet);
-      cursor = LogPut(cursor, " rate_byte=0x");                   cursor = LogHexByte(cursor, g_Input.TypematicByte);
-      cursor = LogPut(cursor, " seq=");
-      { UINT item; for (item = 0; item < g_Input.KeyboardPortLogCount; ++item) {
-            cursor = LogPut(cursor, item ? "," : ""); cursor = LogHexByte(cursor, g_Input.KeyboardPortLog[item][0]);
-            cursor = LogPut(cursor, ":");          cursor = LogHexByte(cursor, g_Input.KeyboardPortLog[item][1]); } }
-      cursor = LogPut(cursor, " int10_11=0x");   cursor = LogHex(cursor, g_Video.Int10Ah11Calls);
-      /* Each font request, its answer, and the BYTES actually sitting at the address we
-         handed back -- read from guest memory, so a wiped or misaligned table is visible
-         rather than inferred. A glyph is mostly zeros with a few set rows; all-zero or
-         all-FF here means the caller is drawing from the wrong place. */
-      { INT fontIndex; for (fontIndex = 0; fontIndex < g_Video.FontQueryCount; ++fontIndex) {
-          const volatile BYTE *fontPointer;
-          cursor = LogPut(cursor, "\r\n  font_q: AL=0x"); cursor = LogHex(cursor, g_Video.FontQueries[fontIndex].Al);
-          cursor = LogPut(cursor, " BH=0x");   cursor = LogHex(cursor, g_Video.FontQueries[fontIndex].Bh);
-          cursor = LogPut(cursor, " -> ES:BP=0x"); cursor = LogHex(cursor, g_Video.FontQueries[fontIndex].Segment);
-          cursor = LogPut(cursor, ":0x");      cursor = LogHex(cursor, g_Video.FontQueries[fontIndex].Offset);
-          cursor = LogPut(cursor, " CX=0x");   cursor = LogHex(cursor, g_Video.FontQueries[fontIndex].Cx);
-          fontPointer = (const volatile BYTE *)(((DWORD)g_Video.FontQueries[fontIndex].Segment << PARAGRAPH_SHIFT)
-                                       + g_Video.FontQueries[fontIndex].Offset);
-          { BYTE fontBytes[16]; UINT item; for (item = 0; item < 16; ++item) fontBytes[item] = fontPointer[item];
-            cursor = LogPut(cursor, " bytes: "); cursor = LogDump(cursor, fontBytes, 16); }
-      } }
-      cursor = LogPut(cursor, "\r\n");
-      LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base; }
-    cursor = LogPut(cursor, "STAGE2: io_events=0x");  cursor = LogHex(cursor, g_EventIo);
-    cursor = LogPut(cursor, " io_burst=0x");          cursor = LogHex(cursor, g_IoExtra);
-    cursor = LogPut(cursor, " irq0_inj=0x");          cursor = LogHex(cursor, g_Irq0Injected);
-    /* ── THE GUEST'S CLOCK AS A SHAPE, NOT A TOTAL. See Irq0DeliveredNote.
-         IRQ0TL is deliveries in each whole second: read it as a sequence and a
-         slow-down/speed-up is the sequence moving. IRQ0GAP is the inter-delivery
-         interval histogram, which says whether that is stalls or jitter. Both are
-         DECIMAL-in-hex like every other counter here. */
-    {   UINT timelineSecond; DWORD last = 0;
-        for (timelineSecond = 0; timelineSecond < IRQ0TL_SECS; ++timelineSecond) if (g_Irq0TimeLast[timelineSecond]) last = timelineSecond;
-        cursor = LogPut(cursor, "\r\nSTAGE2: IRQ0TL persec=");
-        for (timelineSecond = 0; timelineSecond <= last && timelineSecond < IRQ0TL_SECS; ++timelineSecond) {
-            cursor = LogPut(cursor, timelineSecond ? "," : ""); cursor = LogHex(cursor, g_Irq0TimeLast[timelineSecond]);
-            if (cursor - base > 3600) { LogAppend(LOG_PATH, base, cursor); cursor = base; }
-        }
-        cursor = LogPut(cursor, "\r\nSTAGE2: IRQ0GAP ms[<1,1,2,4,8,16,32,64+]=");
-        for (timelineSecond = 0; timelineSecond < 8; ++timelineSecond) { cursor = LogPut(cursor, timelineSecond ? "," : "");
-                                  cursor = LogHex(cursor, g_Irq0GapHistogram[timelineSecond]); }
-        cursor = LogPut(cursor, " n="); cursor = LogHex(cursor, g_Irq0GapCount);
-        cursor = LogPut(cursor, " max_ms="); cursor = LogHex(cursor, g_Irq0GapMaximumMs);
-        /* ── ★ IS THE MUSIC ISR THE CULPRIT? io-per-MILLISECOND, anomalous vs normal.
-             A RATE, because a longer gap collects more I/O whatever the guest is
-             doing -- comparing io-per-GAP across populations of different length is
-             the confound that produced a refutation this run reverses. If anom_io_pms
-             is many times norm_io_pms the long gaps really are the guest hammering
-             ports (a trapped-I/O overrun) and the fix is the port cost; if they are
-             similar the search moves on. worst = the single biggest gap, its I/O, and
-             the CS:IP where the guest re-opened interrupts (cs=0xffff means async). */
-        cursor = LogPut(cursor, " anom_n="); cursor = LogHex(cursor, g_Irq0AnomalyCount);
-        cursor = LogPut(cursor, " anom_ms="); cursor = LogHex(cursor, g_Irq0AnomalyMicroseconds / MICROSECONDS_PER_MILLISECOND_U);
-        cursor = LogPut(cursor, " anom_io_pms=");
-        cursor = LogHex(cursor, g_Irq0AnomalyMicroseconds ? g_Irq0AnomalyIo / (g_Irq0AnomalyMicroseconds / MICROSECONDS_PER_MILLISECOND_U ? g_Irq0AnomalyMicroseconds / MICROSECONDS_PER_MILLISECOND_U : 1u) : 0u);
-        cursor = LogPut(cursor, " norm_n="); cursor = LogHex(cursor, g_Irq0NormalCount);
-        cursor = LogPut(cursor, " norm_ms="); cursor = LogHex(cursor, g_Irq0NormalMicroseconds / MICROSECONDS_PER_MILLISECOND_U);
-        cursor = LogPut(cursor, " norm_io_pms=");
-        cursor = LogHex(cursor, g_Irq0NormalMicroseconds ? g_Irq0NormalIo / (g_Irq0NormalMicroseconds / MICROSECONDS_PER_MILLISECOND_U ? g_Irq0NormalMicroseconds / MICROSECONDS_PER_MILLISECOND_U : 1u) : 0u);
-        cursor = LogPut(cursor, " worst_ms="); cursor = LogHex(cursor, g_Irq0WorstGapMs);
-        cursor = LogPut(cursor, " worst_io="); cursor = LogHex(cursor, g_Irq0WorstGapIo);
-        cursor = LogPut(cursor, " worst_per_us="); cursor = LogHex(cursor, g_Irq0WorstPerMicroseconds);
-        cursor = LogPut(cursor, " worst_cs="); cursor = LogHex(cursor, g_Irq0WorstCs);
-        cursor = LogPut(cursor, " worst_ip="); cursor = LogHex(cursor, g_Irq0WorstIp);
-        /* ── ★★ THE A/B/C DISCRIMINATOR. See Irq0DeliveredNote for how to read it.
-             Deltas summed over ANOMALOUS gaps only (>= 2 of the period the guest
-             itself programmed), so they are meaningful divided by anom_n above.
-               raise  IRQ0s the 8254 generated inside the gap
-               att    async attempts actually made        (raise-att = attempts stolen)
-               nie    attempts that bailed not_in_exec    (high => A, delivery)
-               yld    attempts handed to a pending KEY    (high => C, the yield)
-             ★ gen/del is the answer with no threshold in it: `del` counts anomalous
-             gaps that contained >= 2 raises (the ticks existed and we lost them --
-             A), `gen` counts those that did not (the clock itself stalled -- B).
-             Whichever dominates names the fix. wst_* are the same four for the single
-             worst gap, beside the period that was in force for it. */
-        cursor = LogPut(cursor, "\r\nSTAGE2: IRQ0WHY gen="); cursor = LogHex(cursor, g_Irq0AnomalyGeneration);
-        cursor = LogPut(cursor, " del="); cursor = LogHex(cursor, g_Irq0AnomalyDelete);
-        cursor = LogPut(cursor, " anom[raise,att,nie,yld]=");
-        cursor = LogHex(cursor, g_Irq0AnomalyRaise); cursor = LogPut(cursor, ",");
-        cursor = LogHex(cursor, g_Irq0AnomalyAttempts);   cursor = LogPut(cursor, ",");
-        cursor = LogHex(cursor, g_Irq0AnomalyNie);   cursor = LogPut(cursor, ",");
-        cursor = LogHex(cursor, g_Irq0AnomalyYield);
-        cursor = LogPut(cursor, " wst[raise,att,nie,yld]=");
-        cursor = LogHex(cursor, g_Irq0WorstRaise); cursor = LogPut(cursor, ",");
-        cursor = LogHex(cursor, g_Irq0WorstAttempts);   cursor = LogPut(cursor, ",");
-        cursor = LogHex(cursor, g_Irq0WorstNie);   cursor = LogPut(cursor, ",");
-        cursor = LogHex(cursor, g_Irq0WorstYield);
-        /* #172: see g_PmCooperativeGate for the ten columns. */
-        cursor = LogPut(cursor, "\r\nSTAGE2: PMCOOP owed>=2 gate[latch,vif,hook,inirq,noirq,async,armed,tried,claim,decl]=");
-        { INT gateIndex; for (gateIndex = 0; gateIndex < PM_GATES; ++gateIndex) { cursor = LogPut(cursor, gateIndex ? "," : ""); cursor = LogHex(cursor, g_PmCooperativeGate[gateIndex]); } }
-        cursor = LogPut(cursor, "\r\nSTAGE2: PMINJ decl[cs16,nohook]="); cursor = LogHex(cursor, g_PmInjectDecl[0]);
-        cursor = LogPut(cursor, ","); cursor = LogHex(cursor, g_PmInjectDecl[1]);
-        { INT timelineSecond, last = -1;
-          for (timelineSecond = 0; timelineSecond < IRQ0TL_SECS; ++timelineSecond) if (g_PmInjectDeclTl[timelineSecond]) last = timelineSecond;
-          cursor = LogPut(cursor, " persec=");
-          for (timelineSecond = 0; timelineSecond <= last; ++timelineSecond) { cursor = LogPut(cursor, timelineSecond ? "," : ""); cursor = LogHex(cursor, g_PmInjectDeclTl[timelineSecond]); } }
-        { INT item; cursor = LogPut(cursor, " cs16 sites:");
-          for (item = 0; item < PMINJ_SITES && g_PmInjectSite[item].Count; ++item) {
-              cursor = LogPut(cursor, " "); cursor = LogHex(cursor, g_PmInjectSite[item].Cs); cursor = LogPut(cursor, ":");
-              cursor = LogHex(cursor, g_PmInjectSite[item].Eip); cursor = LogPut(cursor, "x"); cursor = LogHex(cursor, g_PmInjectSite[item].Count); } }
-        /* ── ★ WHAT THE TICK COURIER DID. `inj` is the whole point: ticks placed that
-             the raise site had already given away to a key. Read it against IRQ0WHY's
-             yld -- if inj is a large fraction of yld the courier is collecting exactly
-             what the yield spends. `tries` counts suspend round trips (the cost),
-             `giveup` the passes that spent their whole budget without placing, which
-             is the guest legitimately holding interrupts off. courier=0 means the
-             knob turned it off, and every other field here must then read zero. */
-        cursor = LogPut(cursor, "\r\nSTAGE2: COURIER on="); cursor = LogHex(cursor, (DWORD)g_CourierOn);
-        cursor = LogPut(cursor, " wakes="); cursor = LogHex(cursor, g_CourierWakes);
-        cursor = LogPut(cursor, " inj=");   cursor = LogHex(cursor, g_CourierInjected);
-        cursor = LogPut(cursor, " tries="); cursor = LogHex(cursor, g_CourierTries);
-        cursor = LogPut(cursor, " giveup="); cursor = LogHex(cursor, g_CourierGiveUp);
-    }
-    /* ── ★ V86 STRETCHES: the duration of single VdmRunGuest calls, ms buckets. A big
-         timer gap IS a big stretch here; str_max names where it started (cs:ip) and
-         how it ended (ev). ev 2=I/O, others per the event taxonomy. */
-    cursor = LogPut(cursor, "\r\nSTAGE2: V86STR ms[<1,1,2,4,8,16,32,64+]=");
-    { UINT bucket6; for (bucket6 = 0; bucket6 < 8; ++bucket6) { cursor = LogPut(cursor, bucket6 ? "," : "");
-                                            cursor = LogHex(cursor, g_V86StringHistogram[bucket6]); } }
-    cursor = LogPut(cursor, " n8="); cursor = LogHex(cursor, g_V86StringCount8);
-    cursor = LogPut(cursor, " max_ms="); cursor = LogHex(cursor, g_V86StringMaximumMs);
-    cursor = LogPut(cursor, " max_cs="); cursor = LogHex(cursor, g_V86StringMaximumCs);
-    cursor = LogPut(cursor, " max_ip="); cursor = LogHex(cursor, g_V86StringMaximumIp);
-    cursor = LogPut(cursor, " max_ev="); cursor = LogHex(cursor, g_V86StringMaximumEvent);
-    cursor = LogPut(cursor, " irq0_skip=0x");         cursor = LogHex(cursor, g_Irq0Skip);
-    cursor = LogPut(cursor, " intpend=0x");           cursor = LogHex(cursor, g_EventIntPending);
-    cursor = LogPut(cursor, " iostr=0x");             cursor = LogHex(cursor, g_EventIoString);
-    cursor = LogPut(cursor, " bda_tick=0x");          cursor = LogHex(cursor, ((DWORD)PeekWord(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT_HIGH) << WORD_SHIFT) | PeekWord(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT));
-    cursor = LogPut(cursor, "\r\n");
-    { INT index; cursor = LogPut(cursor, "STAGE2: unclaimed ports touched:");
-      for (index = 0; index < g_UnclaimedCount; ++index) { cursor = LogPut(cursor, " 0x"); cursor = LogHex(cursor, g_Unclaimed[index]); }
-      cursor = LogPut(cursor, "\r\n"); }
-    /* GH #27: one line per class of unimplemented thing the run actually reached,
-       so a run yields a to-do list instead of "the screen looked wrong". Empty
-       lines are printed too -- "INT21 unimplemented:" with nothing after it is a
-       positive statement that nothing was missing, which a suppressed line is not. */
-    { INT index, count;
-      cursor = LogPut(cursor, "STAGE2: INT21 unimplemented:");
-      for (index = 0, count = 0; index < BYTE_VALUES; ++index)
-          if ((machine.Unimplemented[index >> BITMAP_BYTE_SHIFT] >> (index & BITMAP_BIT_MASK)) & 1u) { cursor = LogPut(cursor, " AH=0x"); cursor = LogHexByte(cursor, (UINT)index); ++count; }
-      if (!count) cursor = LogPut(cursor, " none");
-      cursor = LogPut(cursor, "\r\n");
-      cursor = LogPut(cursor, "STAGE2: INT21 undefined-on-6.22 (no-op, matches DOS):");
-      for (index = 0, count = 0; index < BYTE_VALUES; ++index)
-          if ((machine.Undefined[index >> BITMAP_BYTE_SHIFT] >> (index & BITMAP_BIT_MASK)) & 1u) { cursor = LogPut(cursor, " AH=0x"); cursor = LogHexByte(cursor, (UINT)index); ++count; }
-      if (!count) cursor = LogPut(cursor, " none");
-      cursor = LogPut(cursor, "\r\n");
-      cursor = LogPut(cursor, "STAGE2: BIOS partial/unimplemented:");
-      for (index = 0, count = 0; index < BYTE_VALUES; ++index)
-          if (g_BiosUnimplemented[index]) { cursor = LogPut(cursor, " INT"); cursor = LogHexByte(cursor, (UINT)index); ++count; }
-      if (!count) cursor = LogPut(cursor, " none");
-      cursor = LogPut(cursor, "\r\n");
-      cursor = LogPut(cursor, "STAGE2: INT10 unimplemented:");
-      for (index = 0, count = 0; index < BYTE_VALUES; ++index)
-          if (VIDEO_UNIMPLEMENTED_GET(g_Video.UnimplementedFunctions, index)) { cursor = LogPut(cursor, " AH=0x"); cursor = LogHexByte(cursor, (UINT)index); ++count; }
-      if (!count) cursor = LogPut(cursor, " none");
-      cursor = LogPut(cursor, "\r\n");
+    cursor = ReportNtvdmBops(cursor);
+    cursor = ReportHotPortsAndTimerCounters(cursor);
+    cursor = ReportPresentTiming(cursor);
+    cursor = ReportPitPacingAndHostCpuTime(cursor);
+    cursor = ReportRetracePolling(cursor);
+    cursor = ReportCpuSpeedGovernor(cursor);
+    cursor = ReportDeliveryLatencies(cursor);
+    cursor = ReportDmxTaskAndShimIrqs(cursor);
+    cursor = ReportHostLock(cursor);
+    cursor = ReportKeyboardControllerAndFontQueries(cursor, base);
+    cursor = ReportExecEventsAndIrq0Timeline(cursor, base);
+    cursor = ReportV86StringTiming(cursor);
+    cursor = ReportUnclaimedPorts(cursor);
+    {
+      cursor = ReportUnimplemented(cursor, &machine);
       { UINT plane, nonZero[VIDEO_PLANES]; 
         for (plane = 0; plane < VIDEO_PLANES; ++plane) { UINT byteIndex2, changed = 0;
             { const BYTE *planeBytes = g_Video.YMapPlane ? g_Video.YMapPlane(g_Video.YMapContext, plane) : g_Video.Planes[plane];
