@@ -2862,7 +2862,7 @@ static PSTR DpmiInstallFaultReflect(PSTR cursor, PSTR const base)
 }
 
 
-/* Read what this PM session is configured to do, on the run that will use it: guest breakpoints, the WOW32 and scheduler switches, the PM watch addresses, and the cfg\\ flags (pmkernel, nomouse, nosb, pmvehpass, pmnoirq). */
+/* Read what this PM session is configured to do, on the run that will use it: guest breakpoints, the WOW32 and scheduler switches, the PM watch addresses, and the cfg\ flags (pmkernel, nomouse, nosb, pmvehpass, pmnoirq). */
 static PSTR DpmiLoadSessionKnobs(PSTR cursor, PSTR const base)
 {
     /* Guest breakpoints (PMBP_PATH). Loaded here rather than at WinMain entry
@@ -4771,2018 +4771,162 @@ static VOID HostRunExecLoop(PSTR *cursorIo, PSTR const base, DOS_MACHINE *machin
     *cursorIo = cursor; *vdmStatusIo = vdmStatus;
 }
 
-INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR commandLineText, INT showCommand)
+
+/* Interrupt vectors a third-party VDD claimed (claim_int): a user vector gets one of the generic stubs;
+   a system vector, or one past the last stub, is not delivered -- and the log says which. */
+static VOID StartupReportVectorWiring(VOID)
 {
-    CHAR report[8192]; PSTR cursor = report; PSTR base;
-    PCSTR const reportEnd = report + sizeof report;   /* the guards below keep a line's worth short of it */
-    INT wowCommandFromCsrss = 0;         /* s73: the Win16 program came from CSRSS, not target.txt */
-    INT wantShell = 0;                 /* s79: our own launcher stub asked for a SHELL (see LAUNCH_STUB_NAME) */
-    INT wasShell  = 0;                 /* s79: we actually loaded a shell, not a named program */
-    volatile BYTE *tib, *handlerArea;
-    DWORD readCount = 0, error = 0; LONG vdmStatus;
-    DOS_IMAGE image;
-    DOS_MACHINE machine;
-    CHAR dosOutput[16384];   /* M9 probe dumps run to several KB; 1024 truncated them */
-    CHAR programPathBuffer[768]; CHAR args[256];
-    UINT index; INT guard;
-    g_GuestThreadId = GetCurrentThreadId();
-    OsCompatBind();                    /* the four XP-only imports, or their absence */
-    /* cfg\ and debug\out\ before ANYTHING logs. A missing out\ makes every LogAppend
-       fail silently, and the log is what explains every other failure. Idempotent;
-       debug\ first because CreateDirectoryA does not create intermediate levels. */
-    CreateDirectoryA(NTVDMEX_CFG, NULL);
-    CreateDirectoryA(NTVDMEX_DEBUG, NULL);
-    CreateDirectoryA(NTVDMEX_OUT, NULL);
-    /* s90 (#278): THE WOW32.DLL / NTVDM.EXE STAND-INS GO IN FIRST, before anything in
-         this process can touch winmm. winmm asks "am I under WOW?" ONCE and caches the
-         answer (0x76b616ec), and the host's own audio and timer code loads winmm early:
-         loaded at the WOW branch below, the shims arrived after the question had been
-         answered "no", and NotifyCallbackData kept returning 0 (runs/s90/sr4). */
-    if (LaunchIsWow(GetCommandLineA())) WowShimsLoad();
-
-    /* ── ★ THE INSTALL VERBS, BEFORE ANYTHING ELSE EXISTS. (GH #13) ─────────────
-         `ntvdmhost.exe /install`, `/uninstall`, `/status`. They run and exit without
-         touching the VDM, the log, COM1 or the recovery counter -- none of which
-         should move because somebody asked whether we are installed.
-       ⛔⛔ AND THIS BLOCK USED TO SIT BELOW THE SINGLE-INSTANCE GUARD, WHICH MADE
-         `install.bat` LIE. (2026-09-22) The guard returns 0 -- success, silently, no
-         output -- when another host owns the mutex. A verb arriving while ANY guest
-         was on screen therefore printed NOTHING and exited 0, and install.bat, which
-         branches on the exit code alone, announced "Installed. Every MS-DOS and
-         16-bit Windows program now runs under NTVDMEX" having written nothing to the
-         registry at all. smoke.bat's `/status` gate passed for the same reason and
-         then failed with "no log was written" -- the exact report from the user's
-         Windows 2000 box ("installed, apparently; smoke does not run; no logs").
-         A verb is a command-line utility invocation, not a VDM launch: it must never
-         be subject to a guard about how many VDMs are running.
-       ⚠ THE VERB MUST BE THE FIRST ARGUMENT, and that is what makes this safe to put
-         ahead of every other launch shape. Windows hands an IFEO-substituted VDM the
-         ORIGINAL command line, whose first argument is always the path to ntvdm.exe,
-         so a real VDM launch can never look like a verb -- while a token matched
-         anywhere on the line could be, one day, a DOS program's argument.
-       ⚠ Output goes to stdout when there is one and a message box when there is not,
-         because this is the one part of the host that is run BOTH from a prompt and
-         by double-clicking. Reporting into a console nobody can see is how an
-         installer becomes "it did nothing". */
-    {   CHAR installStatus[2048];
-        INT verb = InstallVerb(GetCommandLineA());
-        if (verb > INSTALL_VERB_NONE) {
-            /* ⚠ `verb == 0`, NOT `verb != 2`. The first cut wrote the latter, which
-                 makes INSTALL and UNINSTALL both ask to be installed -- and it
-                 reported "INSTALLED" cheerfully while doing it, because the message
-                 is composed from the same wrong flag. Caught on the rig by the
-                 BEHAVIOURAL half of the gate, not by the registry read. */
-            INT isOk, want = (verb == INSTALL_VERB_INSTALL);
-            installStatus[0] = 0;
-            if (verb == INSTALL_VERB_STATUS) {
-                /* ── /status ANSWERS IN ITS EXIT CODE, not only in English. ──────
-                     0 = NTVDMEX is the machine's VDM, 1 = nobody is, 2 = another
-                     program is. A script can branch on that without matching a
-                     sentence -- which is exactly what package/smoke.bat was doing
-                     wrongly, grepping for text only /install ever prints. */
-                INSTALL_STATE installState = InstallStatusText(installStatus, sizeof installStatus);
-                InstallReport(installStatus, TRUE);
-                return installState == INSTALL_OURS ? INSTALL_STATUS_EXIT_OURS : (installState == INSTALL_OTHER ? INSTALL_STATUS_EXIT_OTHER : INSTALL_STATUS_EXIT_NONE);
+    /* ── s91 (#315): EVERY CLAIMED VECTOR GETS A WAY IN. A claim only reached its device
+         where the host had wired a stub by number (10h 14h 16h 1Ah 08h 2Ah 5Ch), so a
+         third-party driver's claim_int on any other vector -- the SDK promises it --
+         was never delivered. Each such claim now gets a generic stub, and the IVT
+         points at it. ⚠ Only the vectors nobody else owns: the user vectors 60h-66h,
+         68h-6Fh and 78h-FEh. A claim on a DOS, BIOS or IRQ vector is logged and
+         refused rather than silently stealing it from the system. */
+    {   UINT number, count = 0;
+        volatile BYTE *controlBytes = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_CTAB_SEG << PARAGRAPH_SHIFT);
+        for (number = 0; number < IVT_VECTORS; ++number) {
+            INT wired = (number == VECTOR_TIMER || number == VECTOR_VIDEO || number == VECTOR_SERIAL || number == VECTOR_KEYBOARD_SERVICES || number == VECTOR_TIME
+                         || number == VECTOR_NETWORK || number == VECTOR_NETBIOS);
+            INT user  = (number >= VECTOR_USER_RANGE1_FIRST && number <= VECTOR_USER_RANGE1_LAST) || (number >= VECTOR_USER_RANGE2_FIRST && number <= VECTOR_USER_RANGE2_LAST)
+                        || (number >= VECTOR_USER_RANGE3_FIRST && number <= VECTOR_USER_RANGE3_LAST);
+            CHAR gateLine[120], *gateCursor = gateLine;
+            if (!g_Bus.Interrupts[number].Service || wired) continue;
+            gateCursor = LogPut(gateCursor, "  VDD: claim_int 0x"); gateCursor = LogHex(gateCursor, number);
+            if (!user || count >= DOS_GENSTUB_N) {
+                gateCursor = LogPut(gateCursor, user ? " -- no generic stub left; NOT delivered\r\n"
+                                   : " -- a system vector; NOT delivered (user vectors only)\r\n");
+            } else {
+                UINT offset = DOS_GENSTUB_OFF + count * DOS_GENSTUB_SIZE;
+                controlBytes[offset + 0] = VDM_BOP0; controlBytes[offset + 1] = VDM_BOP1;
+                controlBytes[offset + VDM_BOP_NUMBER_OFFSET] = DOS_GENSTUB_BOP; controlBytes[offset + VDM_BOP_LENGTH] = X86_OP_IRET;            /* IRET */
+                g_GenericStubVector[count] = (BYTE)number;
+                *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(number))     = (WORD)offset;
+                *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(number)) = DOS_CTAB_SEG;
+                ++count;
+                gateCursor = LogPut(gateCursor, " -> generic stub 0090:0x"); gateCursor = LogHex(gateCursor, offset); gateCursor = LogPut(gateCursor, "\r\n");
             }
-            isOk = InstallPerform(want, CommandLineHasForce(GetCommandLineA()), installStatus, sizeof installStatus);
-            InstallReport(installStatus, isOk);
-            return isOk ? INSTALL_EXIT_OK : INSTALL_EXIT_FAILED;
-        } }
-
-    /* ── ★★★★★ NOTHING ON THE COMMAND LINE = THE USER OPENED NTVDMEX. (s79) ──────────
-         Sits here for the same reason the verbs do: above every launch guard, and safe
-         because a real VDM launch always has arguments. Before this, a double-click
-         reached STAGE1, was refused VDM privilege (`NtVdmControl` -> 0xC0000022) and
-         vanished without a window or a message -- the worst possible answer to "open it
-         and see". */
-    if (CommandLineBare(GetCommandLineA())) return LaunchShellVdm();
-
-    /* ── ⛔⛔ ONE HOST AT A TIME. ─────────────────────────────────────────────────
-         Nothing stopped a second instance, and two of them fight over things that
-         are SYSTEM-WIDE, not per-process: the low-level keyboard hook, the cursor
-         clip, exclusive-fullscreen DirectDraw, and the guest's suspend count. The
-         user hit it directly -- "I closed your Skyroads run, and reran it. That
-         basically crashed Windows" -- because closing does not necessarily finish
-         (a suspended guest thread keeps the process alive; see HostPanicRelease),
-         so the rerun landed ON TOP of a zombie that still owned the keyboard.
-       ⚠ Bail SILENTLY and with success. This is launched by the IFEO Debugger key
-         on every 16-bit start, so a message box here would be a modal dialog on a
-         machine that is already confused -- and a failure exit code would make the
-         launch look broken rather than declined. */
-    /* ⚠⚠ GetLastError() IS ONLY MEANINGFUL IMMEDIATELY AFTER THE CALL, AND THE FIRST
-         CUT OF THIS GUARD REFUSED EVERY LAUNCH. CreateDirectoryA above fails with
-         ERROR_ALREADY_EXISTS whenever cfg\ exists -- i.e. always, after the first run
-         -- and CreateMutexA does NOT clear the last-error value when it succeeds. So
-         the guard read the DIRECTORY's error, concluded another host was running, and
-         exited: the rig went silent, no log at all, and the run timed out.
-         Clear it first and latch it immediately. Same do-nothing-and-look-fine shape
-         as everything else this file warns about. */
-    /* ⚠ AND A HELD MUTEX IS NOT PROOF A HOST IS ALIVE. (s63) The value of the guard
-         is entirely in NOT refusing a launch when the "other" instance is a corpse.
-         The named object exists as long as ANY handle to it is open -- including one
-         held by a wedged zombie -- so ERROR_ALREADY_EXISTS on its own said "refuse"
-         even when the previous host had left the machine (that is the flash-and-vanish
-         the user hit). So do not decide on the flag: TRY TO ACQUIRE it. A host that is
-         really running owns it (created with bInitialOwner) and the wait TIMES OUT ->
-         refuse, correctly, one-host-at-a-time. If the owner released it or its thread
-         died the wait returns signalled or ABANDONED -> we take it and run. The
-         window-close path now TerminateProcess()es (see UiThread), so the common
-         zombie is gone at the source; this makes the guard safe against any that slip
-         through rather than turning them into a permanent lockout. */
-    /* ── #211: MORE THAN ONE HOST AT A TIME. (s81) ───────────────────────────────
-         Stock XP runs one ntvdm.exe per DOS window, and so do we now. The mutex below
-         was a one-host-only guard (s63); it is now a CLAIM ON AN INSTANCE NUMBER. The
-         first host takes instance 1 under the original name and changes nothing --
-         same log, same debug\out\, so the rig harness is untouched. A host started
-         while it runs takes the lowest free number N and writes to debug\out\N\.
-       ► What the old guard protected is covered elsewhere now: the keyboard hook and
-         the cursor clip are held only while a window has captured the mouse (and only
-         one can), and a closed window's process is terminated, so the half-dead host
-         that "basically crashed Windows" no longer outlives its window.
-       ⚠ The acquire rule is unchanged, per name: TRY to take it. A live host never
-         yields its mutex (the wait times out -> next number); a dead one's is released
-         or ABANDONED (-> we take that number). */
-    {   INT attempt; CHAR name[48];
-        for (attempt = 1; attempt <= HOST_INSTANCES_MAX && !g_OnceMutex; ++attempt) {
-            HANDLE once; DWORD lastError, waitResult = WAIT_OBJECT_0;
-            PSTR scan = LogPut(name, HOST_INSTANCE_MUTEX);
-            if (attempt > 1) { *scan++ = '_'; scan = LogDecimal(scan, (UINT)attempt); }
-            /* ⚠⚠ GetLastError() IS ONLY MEANINGFUL IMMEDIATELY AFTER THE CALL -- clear
-                 it first; CreateMutexA does not clear it on success. (The first cut of
-                 the guard read CreateDirectoryA's ERROR_ALREADY_EXISTS and refused.) */
-            SetLastError(0);
-            once = CreateMutexA(NULL, TRUE, name);
-            lastError  = GetLastError();
-            if (!once) continue;
-            if (lastError == ERROR_ALREADY_EXISTS) {
-                waitResult = WaitForSingleObject(once, HOST_INSTANCE_WAIT_MS);   /* brief: a live host never yields it */
-                if (waitResult == WAIT_TIMEOUT) { CloseHandle(once); continue; }
-            }
-            g_OnceMutex = once;
-            if (attempt > 1) {
-                PSTR position = LogPut(g_OutSubdirectory, HOST_OUT_SUBDIRECTORY);
-                position = LogDecimal(position, (UINT)attempt); LogPut(position, HOST_PATH_SEPARATOR);
-                CreateDirectoryA(NTVDMEX_OUT, NULL);
-            }
-            g_Instance = attempt; g_InstanceAbandoned = (waitResult == WAIT_ABANDONED);   /* reported at STAGE0 */
-        }
-        if (!g_OnceMutex) {
-            static const CHAR message[] = "REFUSED: 16 NTVDMEX hosts are already running -- this instance is exiting\r\n";
-            LogAppend(LOG_PATH, message, message + sizeof(message) - 1);
-            return 0;
-        } }
-    HANDLE uiThread = NULL;
-
-    (VOID)instance; (VOID)previousInstance; (VOID)commandLineText; (VOID)showCommand;
-    programPathBuffer[0] = 0; args[0] = 0;
-
-    /* The install verbs ran far above, ahead of the single-instance guard -- see the
-       block after the CreateDirectory calls, and the defect note there. */
-
-    /* ── NO MODAL HARDWARE-ERROR BOXES, EVER, FOR THE WHOLE PROCESS. ───────────────
-         Every Win32 call that touches a drive with no media -- A: with the door
-         open, an ejected CD -- raises XP's "There is no disk in drive" box unless
-         told not to, and that box has wedged the rig from inside host start-up
-         once already. Now that the guest can select and search those drives
-         (INT 21h AH=0Eh, 47h, 4Eh...), the mode must cover every call, not just
-         the two sites that wrapped it. The errors still come back as errors. */
-    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
-    cursor = LogPut(cursor, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v180]\r\n");
-    LogWrite(LOG_PATH, report, cursor);
-    SerialInitialize();                                      /* DPMI harness: COM1 log sink */
-    g_StdioHow = StdioInitialize();                         /* GH #131; reported at exit */
-    {   UINT fails = RecoveryRead();               /* GH #132 */
-        g_StartMode = DosRecoveryDecideStartMode(fails);
-        RecoveryWrite(fails + 1);                      /* cleared only on a clean exit */
-        cursor = LogPut(cursor, "STAGE0: consecutive failed starts = "); cursor = LogHexByte(cursor, fails);
-        cursor = LogPut(cursor, g_StartMode == DOS_START_UNINSTALL ? " -> UNINSTALL\r\n"
-                  : g_StartMode == DOS_START_SAFE      ? " -> SAFE MODE\r\n"
-                                                        : " -> normal\r\n");
-        if (g_StartMode == DOS_START_UNINSTALL) RecoveryUninstall(&cursor);
-        g_Safe = DosRecoveryGetSafeSkips(g_StartMode);
-        if (g_StartMode == DOS_START_SAFE)
-            cursor = LogPut(cursor, "STAGE0: SAFE MODE skips: third-party VDDs, audio output (silent"
-                        " pump), the real PC speaker, the joystick thread, the WOW"
-                        " shims, fullscreen -- the next clean exit clears it\r\n");
-        /* s90: NOT `p = report` -- the next LogWrite TRUNCATES the file and re-writes
-           the report buffer, so a line dropped from the buffer here was lost from
-           EVERY log: "consecutive failed starts" never survived since #132 landed. */
-        LogAppend(LOG_PATH, report, cursor); SerialOut(report, cursor); }
-    SerialOut(report, cursor);
-
-    /* ── IS THIS A WIN16 (WOW) LAUNCH? IF SO, HAND IT STRAIGHT BACK. (GH #129) ──
-         Windows runs 16-bit WINDOWS programs inside the SAME ntvdm.exe it uses for
-         DOS, so our IFEO Debugger hook catches both -- and we implement only the DOS
-         half. Left unhandled, installing NTVDMEX breaks every Win16 program on the
-         machine. This is the guard that makes "leave it installed" safe.
-       ► MEASURED, not assumed (both captured on the rig, 2026-08-26):
-           DOS : ntvdmhost.exe "…\ntvdm.exe" -f -i20
-           WOW : ntvdmhost.exe "…\ntvdm.exe" -f -i1 -w -a …\krnl386.exe
-         `-w` is the discriminator and `-a <krnl386>` is the WOW bootstrap. A second,
-         independent tell: GetNextVDMCommand returns FALSE err=0x57 on a WOW launch,
-         because a WOW VDM does not receive its program that way.
-       ► WE CANNOT HAND IT BACK. Three routes measured and eliminated -- see
-         WowRefuse() below. So this refuses loudly instead, which is at least an
-         accurate, actionable failure rather than a DOS host chewing on an NE file.
-       ► NOT a throwaway. When the WOW epic (#128) lands, this same detection becomes
-         the dispatch point -- the `-w` arm routes to our WOW layer. */
-    if (LaunchIsWow(GetCommandLineA())) {
-        /* ★ Latched HERE because this is where the answer is known, and the UI
-             thread -- which decides whether to show a window -- is started later.
-             See the note by TrayAdd for why a Win16 guest gets no window. */
-        g_WowLaunch = 1;
-        cursor = LogPut(cursor, "STAGE0: WIN16/WOW launch detected -> refusing (see GH #129)\r\n");
-        cursor = LogPut(cursor, "STAGE0: root=["); cursor = LogPut(cursor, NTVDMEX_DIR); cursor = LogPut(cursor, "] (derived from the host's own path)\r\n");
-        HmaTry();
-        cursor = LogPut(cursor, "STAGE0: HMA ");
-        if (g_Hma) cursor = LogPut(cursor, "committed at 0x100000 -- FFFF:0010 is real");
-        else { cursor = LogPut(cursor, "UNAVAILABLE err=0x"); cursor = LogHex(cursor, g_HmaError);
-       cursor = LogPut(cursor, " state=0x"); cursor = LogHex(cursor, g_HmaState);
-       cursor = LogPut(cursor, " prot=0x");  cursor = LogHex(cursor, g_HmaProtection); }
-        cursor = LogPut(cursor, "\r\n");
-        cursor = LogPut(cursor, "STAGE0: cmdline=["); cursor = LogPut(cursor, GetCommandLineA()); cursor = LogPut(cursor, "]\r\n");
-        LogAppend(LOG_PATH, report, cursor); SerialOut(report, cursor);
-        if (GetFileAttributesA(WOWTRY_FLAG) == INVALID_FILE_ATTRIBUTES)
-            return WowRefuse(GetCommandLineA());
-        /* Experiment opted in: load now, then fall through so the selector stage can
-           run once the VDM is registered. Still refuses at the end -- nothing here
-           executes guest code yet. */
-        WowProbeLoad(GetCommandLineA());
-    }
-    /* Headless test mode = the SMB watcher dropped the AUTOEXIT marker. In that mode the
-       host must self-exit on guest exit AND bound any infinite run (a visual demo like
-       pm32irq/animate never calls INT 21h 4Ch), else rt.bat's `start /wait` blocks forever
-       and wedges the watcher (session-9). Latch it once here (the exit path deletes the marker). */
-    /* ── SETTINGS FIRST, TEST FILES SECOND. ─────────────────────────────────────
-         Load the stored configuration here, at the TOP of the knob block, so every
-         file knob below it still overrides. That ordering is the whole contract (see
-         settings.h): the rig configures this host by writing files and re-launching,
-         and a setting clicked in a dialog on that machine must never silently change
-         what a headless measurement is measuring. */
-    SettingsLoad(&g_Settings);
-    g_SettingsDisk = g_Settings;          /* nothing has overridden anything yet */
-    SettingsApply(NULL, &g_Settings, SETTINGS_APPLY_STARTUP);
-    /* Log only the LIVE settings -- the ones the SettingsApply* functions actually
-       push into the machine. The stored-but-not-yet-honoured ones would make this
-       line four times longer and every value in it would be a claim the run cannot
-       support. Two lines because there are now enough of them to wrap. */
-    cursor = LogPut(cursor, "STAGE0: settings hidecur=retired(#218)");
-    cursor = LogPut(cursor, " blink=");   cursor = LogHex(cursor, g_Settings.Values[SET_BLINKCURSOR]);
-    cursor = LogPut(cursor, " msens=");   cursor = LogHex(cursor, g_Settings.Values[SET_MSENS]);
-    cursor = LogPut(cursor, " dosver=");  cursor = LogHex(cursor, g_Settings.Values[SET_DOSMAJ]);
-    cursor = LogPut(cursor, ".");         cursor = LogHex(cursor, g_Settings.Values[SET_DOSMIN]);
-    cursor = LogPut(cursor, " pitpace="); cursor = LogHex(cursor, g_Settings.Values[SET_PITPACE]);
-    cursor = LogPut(cursor, " uitick=");  cursor = LogHex(cursor, g_Settings.Values[SET_UITICK]);
-    cursor = LogPut(cursor, "\r\n");
-    cursor = LogPut(cursor, "STAGE0: settings vol=");  cursor = LogHex(cursor, g_Settings.Values[SET_VOLUME]);
-    cursor = LogPut(cursor, " mute=");      cursor = LogHex(cursor, g_Settings.Values[SET_MUTE]);
-    cursor = LogPut(cursor, " spk=");       cursor = LogHex(cursor, g_Settings.Values[SET_SPEAKER]);
-    cursor = LogPut(cursor, " outhz=");     cursor = LogHex(cursor, SettingsOutputHz(&g_Settings));
-    cursor = LogPut(cursor, " sb=A");       cursor = LogHex(cursor, g_SbConfig.IoBase);
-    cursor = LogPut(cursor, " I");          cursor = LogHex(cursor, g_SbConfig.Irq);
-    cursor = LogPut(cursor, " D");          cursor = LogHex(cursor, g_SbConfig.Dma8Channel);
-    cursor = LogPut(cursor, " H");          cursor = LogHex(cursor, g_SbConfig.Dma16Channel);
-    cursor = LogPut(cursor, " xms=");       cursor = LogHex(cursor, (DWORD)g_XmsOn);
-    cursor = LogPut(cursor, " ems=");       cursor = LogHex(cursor, (DWORD)g_EmsOn);
-    cursor = LogPut(cursor, " winsize=");   cursor = LogHex(cursor, g_Settings.Values[SET_WINSIZE]);
-    cursor = LogPut(cursor, " scaler=");    cursor = LogHex(cursor, g_Settings.Values[SET_SCALER]);
-    cursor = LogPut(cursor, " aspect=");    cursor = LogHex(cursor, g_Settings.Values[SET_ASPECT]);
-    cursor = LogPut(cursor, " filter=");    cursor = LogHex(cursor, g_Settings.Values[SET_FILTER]);
-    cursor = LogPut(cursor, " vsync=");     cursor = LogHex(cursor, g_Settings.Values[SET_VSYNC]);
-    cursor = LogPut(cursor, " frameskip="); cursor = LogHex(cursor, g_Settings.Values[SET_FRAMESKIP]);
-    cursor = LogPut(cursor, "\r\n");
-    /* ── ★★★ THE TIMING LANDSCAPE, IN EVERY LOG. (s63) ──────────────────────────────
-         Skyroads' frame pacing is fragile on a 2-core box and has regressed THREE
-         times, each time because a change quietly added background work or moved a
-         priority and nobody re-checked. So make the invariants AUDITABLE: the pacer
-         priority MUST read 0x0 (THREAD_PRIORITY_NORMAL); the s61 regression was it
-         sitting at HIGHEST (0x2), which let the pacer preempt the guest. joy_thread
-         MUST read 0x0 whenever JoystickType is None, because a non-joystick game
-         must run with no poll thread at all. A regression in either now shows up in
-         the first twenty lines of every run, not two months later on a user's
-         screen. (Priority constants: NORMAL=0, ABOVE_NORMAL=1, HIGHEST=2,
-         BELOW_NORMAL=-1=0xffffffff, LOWEST=-2.) */
-    cursor = LogPut(cursor, "STAGE0: timing: pacer_prio="); cursor = LogHex(cursor, (DWORD)g_PitPacePriority);
-    cursor = LogPut(cursor, " (want 0x0=NORMAL) joytype=");  cursor = LogHex(cursor, (DWORD)g_Joystick.Type);
-    cursor = LogPut(cursor, " joy_thread=");  cursor = LogHex(cursor, (DWORD)g_JoystickThreadStarted);
-    cursor = LogPut(cursor, " (want 0x0 when joytype=0x0) pit_split=1\r\n");
-
-    g_Headless = (GetFileAttributesA(AUTOEXIT_PATH) != INVALID_FILE_ATTRIBUTES);
-    /* Self-screenshot only when explicitly requested (graphical tests) AND headless, so
-       the common non-graphical tests never enter the capture path. Latched once here. */
-    { HANDLE modeHandle = CreateFileA(MODEY_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                              NULL, OPEN_EXISTING, 0, NULL);
-      if (modeHandle != INVALID_HANDLE_VALUE) {
-          CHAR modeYText[32]; DWORD modeYRead = 0, modeYValue = 0, modeYIndex; INT got = 0;
-          ReadFile(modeHandle, modeYText, sizeof modeYText - 1, &modeYRead, NULL); CloseHandle(modeHandle);
-          for (modeYIndex = 0; modeYIndex < modeYRead && modeYText[modeYIndex] >= '0' && modeYText[modeYIndex] <= '9'; ++modeYIndex) { modeYValue = modeYValue * DECIMAL_RADIX + (DWORD)(modeYText[modeYIndex] - '0'); got = 1; }
-          if (got && modeYValue <= MODEY_GAP_MAX_U) {
-              CHAR dwordsLine[96], *lineCursor = dwordsLine;
-              g_Video.ModeYGap = modeYValue;
-              lineCursor = LogPut(lineCursor, "STAGE0: modey.txt -> gap="); lineCursor = LogHex(lineCursor, modeYValue);
-              lineCursor = LogPut(lineCursor, " dwords\r\n"); LogAppend(LOG_PATH, dwordsLine, lineCursor); SerialOut(dwordsLine, lineCursor);
-          }
-      } }
-    g_Capture  = g_Headless && (GetFileAttributesA(CAPTURE_FLAG) != INVALID_FILE_ATTRIBUTES);
-    if (g_Capture) {                       /* its contents, if any, are the period in ms */
-        HANDLE configHandle = CreateFileA(CAPTURE_FLAG, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                NULL, OPEN_EXISTING, 0, NULL);
-        if (configHandle != INVALID_HANDLE_VALUE) {
-            CHAR captureText[32]; DWORD captureRead = 0, captureValue = 0, captureIndex;
-            ReadFile(configHandle, captureText, sizeof captureText - 1, &captureRead, NULL); CloseHandle(configHandle);
-            for (captureIndex = 0; captureIndex < captureRead && captureText[captureIndex] >= '0' && captureText[captureIndex] <= '9'; ++captureIndex)
-                captureValue = captureValue * DECIMAL_RADIX + (DWORD)(captureText[captureIndex] - '0');
-            if (captureValue >= CAPTURE_MS_MIN && captureValue <= CAPTURE_MS_MAX) g_CaptureMs = captureValue;
-            {   DWORD periodDelay = 0;                                 /* #58: "period delay" */
-                while (captureIndex < captureRead && captureText[captureIndex] == ' ') ++captureIndex;
-                for (; captureIndex < captureRead && captureText[captureIndex] >= '0' && captureText[captureIndex] <= '9'; ++captureIndex)
-                    periodDelay = periodDelay * DECIMAL_RADIX + (DWORD)(captureText[captureIndex] - '0');
-                if (periodDelay <= CAPTURE_DELAY_MS_MAX) g_CaptureDelayMs = periodDelay; }
-            g_CaptureStart = GetTickCount();
+            LogAppend(LOG_PATH, gateLine, gateCursor);
         }
     }
-    /* ⚠ THESE BELONG WITH THE OTHER STARTUP FLAGS, NOT IN THE DPMI BLOCK. Read from
-         inside the protected-mode setup they applied to Doom and not to QBasic --
-         nomouse worked for one guest and silently did nothing for the other, and
-         textdump wrote no files at all for a real-mode run. A knob that only some
-         launches honour is worse than no knob. */
-    g_TextDump = (GetFileAttributesA(TEXTDUMP_PATH) != INVALID_FILE_ATTRIBUTES);
-    g_MouseAbsent = (GetFileAttributesA(NOMOUSE_PATH) != INVALID_FILE_ATTRIBUTES);
-    g_NoA000  = (GetFileAttributesA(NOA000_FLAG) != INVALID_FILE_ATTRIBUTES);
-    g_NoPmPatch = (GetFileAttributesA(NOPMPATCH_FLAG) != INVALID_FILE_ATTRIBUTES);
-    if (g_NoPmPatch) {                    /* contents, if any, = minimum region size */
-        HANDLE noPatchHandle = CreateFileA(NOPMPATCH_FLAG, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                NULL, OPEN_EXISTING, 0, NULL);
-        if (noPatchHandle != INVALID_HANDLE_VALUE) {
-            CHAR noPatchText[32]; DWORD noPatchBytesRead = 0, noPatchValue = 0, noPatchIndex;
-            ReadFile(noPatchHandle, noPatchText, sizeof noPatchText - 1, &noPatchBytesRead, NULL); CloseHandle(noPatchHandle);
-            for (noPatchIndex = 0; noPatchIndex < noPatchBytesRead; ++noPatchIndex) {
-                INT hexDigit = (noPatchText[noPatchIndex] >= '0' && noPatchText[noPatchIndex] <= '9') ? noPatchText[noPatchIndex] - '0'
-                       : (noPatchText[noPatchIndex] >= 'a' && noPatchText[noPatchIndex] <= 'f') ? noPatchText[noPatchIndex] - 'a' + HEX_DIGIT_A_VALUE
-                       : (noPatchText[noPatchIndex] >= 'A' && noPatchText[noPatchIndex] <= 'F') ? noPatchText[noPatchIndex] - 'A' + HEX_DIGIT_A_VALUE : -1;
-                if (hexDigit < 0) break;
-                noPatchValue = (noPatchValue << NIBBLE_SHIFT) | (DWORD)hexDigit;
-            }
-            g_NoPmPatchMinimum = noPatchValue;
-        }
-    }
-    {   HANDLE modeHandle = CreateFileA(MEMDUMP_FLAG, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                NULL, OPEN_EXISTING, 0, NULL);
-        if (modeHandle != INVALID_HANDLE_VALUE) {         /* "<linear> <size>" in hex */
-            CHAR memoryDumpText[48]; DWORD memoryDumpBytesRead = 0, memoryDumpIndex, values[MEMDUMP_FIELDS] = {0, 0}, width = 0; INT isIn = 0;
-            ReadFile(modeHandle, memoryDumpText, sizeof memoryDumpText - 1, &memoryDumpBytesRead, NULL); CloseHandle(modeHandle);
-            for (memoryDumpIndex = 0; memoryDumpIndex < memoryDumpBytesRead && width < MEMDUMP_FIELDS; ++memoryDumpIndex) {
-                INT hexDigit = (memoryDumpText[memoryDumpIndex] >= '0' && memoryDumpText[memoryDumpIndex] <= '9') ? memoryDumpText[memoryDumpIndex] - '0'
-                       : (memoryDumpText[memoryDumpIndex] >= 'a' && memoryDumpText[memoryDumpIndex] <= 'f') ? memoryDumpText[memoryDumpIndex] - 'a' + HEX_DIGIT_A_VALUE
-                       : (memoryDumpText[memoryDumpIndex] >= 'A' && memoryDumpText[memoryDumpIndex] <= 'F') ? memoryDumpText[memoryDumpIndex] - 'A' + HEX_DIGIT_A_VALUE : -1;
-                if (hexDigit < 0) { if (isIn) { ++width; isIn = 0; } continue; }
-                values[width] = (values[width] << NIBBLE_SHIFT) | (DWORD)hexDigit; isIn = 1;
-            }
-            g_MemoryDumpLinear = values[0]; g_MemoryDumpLength = values[1];
-        }
-    }
-    g_Interp12 = (GetFileAttributesA(INTERP12_FLAG) != INVALID_FILE_ATTRIBUTES);
-    g_ModeYInterpOffset = (GetFileAttributesA(MYINTERP_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
-    g_ModeYRingOn    = (GetFileAttributesA(MYRING_FLAG) != INVALID_FILE_ATTRIBUTES);
-    /* The GUS is decided HERE, with its resources, because the environment block is
-       built before the devices are added -- and ULTRASND= has to say what the card
-       will be. Deciding it at device setup left the first heaven7 run with no ULTRASND
-       and a card nothing looked for. */
-    g_GusOn = g_Settings.Values[SET_GUS] && (GetFileAttributesA(NOGUS_FLAG) == INVALID_FILE_ATTRIBUTES);
-    if (g_Settings.Values[SET_GUS] && !g_GusOn) SettingsNoteOverride(SET_GUS, CFG_TEXT(KNOB_FILE_NOGUS), 0);
-    if (GetFileAttributesA(DDRAWFS_FLAG) != INVALID_FILE_ATTRIBUTES)   /* read again at fullscreen */
-        SettingsNoteOverride(SET_RENDERER, CFG_TEXT(KNOB_FILE_DDRAWFS), 1);
-    /* #235: the card as the Audio page's jumpers set it (defaults = the card as built). */
-    {   static const BYTE gusIrqs[7] = { 2, 3, 5, 7, 11, 12, 15 };
-        static const BYTE gusDmaChannels[5] = { 1, 3, 5, 6, 7 };
-        g_Gus.BasePort   = (WORD)(GUS_BASE_FIRST + GUS_BASE_STEP * (g_Settings.Values[SET_GUSADDR] <= GUS_BASE_LAST_CHOICE ? g_Settings.Values[SET_GUSADDR] : GUS_DEFAULT_BASE_CHOICE));
-        g_Gus.Irq    = gusIrqs[g_Settings.Values[SET_GUSIRQ] <= ARRAYSIZE(gusIrqs) - 1 ? g_Settings.Values[SET_GUSIRQ] : GUS_DEFAULT_IRQ_CHOICE];
-        g_Gus.DmaChannel = gusDmaChannels[g_Settings.Values[SET_GUSDMA] <= ARRAYSIZE(gusDmaChannels) - 1 ? g_Settings.Values[SET_GUSDMA] : GUS_DEFAULT_DMA_CHOICE]; }
-    /* ...and OFF THE SOUND BLASTER'S RESOURCES. The SB's own choices in the dialog
-       include 240h, IRQ 11 and DMA 3 -- each of them the GUS default -- and two cards on
-       one line is a machine nobody could have built. Step aside to the next period
-       choice (ref/gus.md §5 lists what the latches can select). */
-    if (g_SbConfig.IoBase == g_Gus.BasePort) g_Gus.BasePort = GUS_FALLBACK_BASE;
-    if (g_SbConfig.Irq == g_Gus.Irq)   g_Gus.Irq = GUS_FALLBACK_IRQ;
-    if (g_SbConfig.Dma8Channel == g_Gus.DmaChannel || g_SbConfig.Dma16Channel == g_Gus.DmaChannel) g_Gus.DmaChannel = GUS_FALLBACK_DMA;
-    if (g_SbConfig.Dma8Channel == g_Gus.DmaChannel || g_SbConfig.Dma16Channel == g_Gus.DmaChannel) g_Gus.DmaChannel = GUS_SECOND_FALLBACK_DMA;
-    g_ModeYPmOffset     = (GetFileAttributesA(MYPM_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
-    g_ModeYPmDetect  = (GetFileAttributesA(MYPM_DETECT_FLAG) != INVALID_FILE_ATTRIBUTES);
-    g_P12Offset  = (GetFileAttributesA(P12OFF_FLAG)   != INVALID_FILE_ATTRIBUTES);
-    g_OplTraceOn = (GetFileAttributesA(OPLTRACE_FLAG) != INVALID_FILE_ATTRIBUTES);
-    if (g_OplTraceOn) g_Opl.Trace = OplTraceWrite;
-    if (g_Interp12) g_NoA000 = 1;              /* interpreting instead of trapping */
-    /* Headless cap override (decimal ms on the share). Read before the deadline thread
-       starts, since that thread sleeps on it. Clamped: below the default a typo would
-       kill runs early, above 10 min a typo would wedge the watcher for the whole time. */
-    { HANDLE handle = CreateFileA(HEADLESS_MS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                             NULL, OPEN_EXISTING, 0, NULL);
-      if (handle != INVALID_HANDLE_VALUE) {
-          CHAR text[16]; DWORD bytesRead = 0, number = 0; INT index;
-          ReadFile(handle, text, sizeof text, &bytesRead, NULL);
-          CloseHandle(handle);
-          for (index = 0; index < (INT)bytesRead; ++index) {
-              if (text[index] < '0' || text[index] > '9') break;      /* stop at CR/LF/junk */
-              number = number * DECIMAL_RADIX + (DWORD)(text[index] - '0');
-          }
-          if (number > PM_HEADLESS_MS_DEFAULT && number <= HEADLESS_MS_MAX) g_HeadlessMs = number;   /* s84: an hour, for slow-rung timedemos */
-      } }
-    /* Async-preemption mode (session 11). Read once; a handle to THIS thread is what
-       VdmQueueInterrupt takes, and this thread is the one that will be running the
-       guest inside VdmStartExecution -- so duplicate it here, before the exec loop. */
-    { HANDLE handle = CreateFileA(QIMODE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                             NULL, OPEN_EXISTING, 0, NULL);
-      if (handle != INVALID_HANDLE_VALUE) {
-          CHAR text[2] = { 0, 0 }; DWORD bytesRead = 0; INT number = 0, index;
-          ReadFile(handle, text, QIMODE_DIGITS, &bytesRead, NULL);
-          CloseHandle(handle);
-          for (index = 0; index < (INT)bytesRead; ++index) {          /* up to two hex digits */
-              INT digit = -1;
-              if (text[index] >= '0' && text[index] <= '9') digit = text[index] - '0';
-              else if (text[index] >= 'a' && text[index] <= 'f') digit = text[index] - 'a' + HEX_DIGIT_A_VALUE;
-              else if (text[index] >= 'A' && text[index] <= 'F') digit = text[index] - 'A' + HEX_DIGIT_A_VALUE;
-              if (digit < 0) break;
-              number = (number << NIBBLE_SHIFT) | digit;
-          }
-          if (number > 0) { g_QiBits  = (DWORD)number & VDM_INT_PENDING;
-                       g_QiRaise = (number & QIMODE_RAISE) != 0;
-                       g_QiVif   = (number & QIMODE_VIF) != 0;
-                       if (number & QIMODE_NO_SUSPEND) g_QiSuspended = 0;      /* bit 6 disables async delivery */
-                       g_QiKeys  = (number & QIMODE_KEYS) != 0;
-                       g_QiKeysAsync = (number & QIMODE_KEYS_ASYNC) != 0; }
-      } }
-    if (g_QiBits || g_QiSuspended) {    /* async delivery needs a handle to the exec thread */
-        DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
-                        &g_HostCpu, 0, FALSE, DUPLICATE_SAME_ACCESS);
-    }
-    /* ── THE GUEST RAN AT NORMAL PRIORITY AGAINST A TIME_CRITICAL AUDIO THREAD. ──────
-         audio_wave.c raises its pump to THREAD_PRIORITY_TIME_CRITICAL because refilling
-         waveOut is a hard deadline. Nothing ever raised the thread that RUNS THE GUEST,
-         so on this single-core box the mixer thread preempts guest code whenever it has
-         work -- and Doom's DMX mixer is guest code that must finish inside one 7.4 ms
-         timer tick or its scheduler abandons the pass, recomputes the deadline from NOW,
-         and the block it would have filled replays the previous ring lap instead.
-         Measured: the mixer NEVER runs on consecutive ticks (2.6% of gaps are one tick,
-         49% two, 45% three or four) although we deliver 135 ticks/s against a 140 Hz
-         reload -- so it is overrunning, not starved of ticks. And it is not lock
-         contention: slicing HostAudioFill's hold into 64-frame pieces moved
-         REPLAYED_LOUD by 2 blocks in 894. Preemption is what slicing cannot touch.
-       ► ABOVE_NORMAL, not higher. The audio pump stays at 15 so it still wins every
-         race it needs to -- starving it is what "a periodic tick or pulse in otherwise
-         correct music" was, and that is a worse fault than the one being fixed. This
-         only lifts the guest above the UI thread and the system's background work.
-       ⚠ Knob, because it is a scheduling change on a box whose behaviour we have been
-         wrong about before: execprio.txt absent or 1 = ABOVE_NORMAL (default),
-         0 = leave at NORMAL (the old behaviour, for an A/B without a rebuild),
-         2 = HIGHEST. */
-    /* ── WHICH DSP VERSION WE CLAIM PICKS THE GUEST'S DRIVER PATH. See vdd_sb.h.
-         dspver.txt holds "major minor" as two decimal numbers, e.g. "2 1" for a
-         Sound Blaster 2.01, which makes DMX skip the mixer-0x82 interrupt gate and
-         use the older 0x48/0x1C auto-init pair instead of the SB16 0xC6 command.
-         Absent = 4.05, i.e. no change. */
-    { HANDLE versionHandle = CreateFileA(DSPVER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                              NULL, OPEN_EXISTING, 0, NULL);
-      if (versionHandle != INVALID_HANDLE_VALUE) {
-          CHAR text[16]; DWORD bytesRead = 0; INT index = 0, major = 0, minor = 0;
-          ReadFile(versionHandle, text, sizeof text, &bytesRead, NULL);
-          CloseHandle(versionHandle);
-          while (index < (INT)bytesRead && text[index] >= '0' && text[index] <= '9') major = major * DECIMAL_RADIX + (text[index++] - '0');
-          while (index < (INT)bytesRead && (text[index] == ' ' || text[index] == '.')) ++index;
-          while (index < (INT)bytesRead && text[index] >= '0' && text[index] <= '9') minor = minor * DECIMAL_RADIX + (text[index++] - '0');
-          if (major > 0 && major < BYTE_VALUES) { g_SbVersionMajor = (BYTE)major; g_SbVersionMinor = (BYTE)minor;
-                                    g_DspVersionForced = 1; }
-      } }
-    { HANDLE gateHandle = CreateFileA(SBGATE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                              NULL, OPEN_EXISTING, 0, NULL);
-      if (gateHandle != INVALID_HANDLE_VALUE) {
-          CHAR text[8]; DWORD bytesRead = 0;
-          ReadFile(gateHandle, text, sizeof text, &bytesRead, NULL); CloseHandle(gateHandle);
-          g_SbGate = (bytesRead && text[0] >= '0' && text[0] <= '9') ? (text[0] - '0') : 1;
-      } }
-    { DWORD priority = EXECPRIO_ABOVE_NORMAL;
-      HANDLE priorityHandle = CreateFileA(EXECPRIO_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                              NULL, OPEN_EXISTING, 0, NULL);
-      if (priorityHandle != INVALID_HANDLE_VALUE) {
-          CHAR text[8]; DWORD bytesRead = 0;
-          ReadFile(priorityHandle, text, sizeof text, &bytesRead, NULL);
-          CloseHandle(priorityHandle);
-          if (bytesRead && text[0] >= '0' && text[0] <= '9') priority = (DWORD)(text[0] - '0');
-      }
-      g_ExecPriority = priority;
-      if (priority == EXECPRIO_ABOVE_NORMAL) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
-      else if (priority >= EXECPRIO_HIGHEST) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
-      g_ExecPriorityForeground = GetThreadPriority(GetCurrentThread());
-      DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
-                      &g_ExecThread, 0, FALSE, DUPLICATE_SAME_ACCESS);   /* #211: BackgroundPriorityTick */
-    }
-    HostProfileStart();                                 /* #183: cfg\hostprof.flag */
-    if (g_QiBits) {
-        /* Experiment mode: retarget the kernel's PIC so a KERNEL-dispatched IRQ 5 arrives
-           as INT 65h while our own injection still arrives as INT 0Dh. Without this the
-           two are the same vector and the qirq2 probe cannot attribute a delivery. */
-        VdmIcaSetBase(QIMODE_PIC_BASE);
-    }
-    cursor = LogPut(cursor, "STAGE0: qi_bits=0x"); cursor = LogHex(cursor, g_QiBits);
-    cursor = LogPut(cursor, " qi_raise=0x");       cursor = LogHex(cursor, (DWORD)g_QiRaise);
-    cursor = LogPut(cursor, " qi_vif=0x");         cursor = LogHex(cursor, (DWORD)g_QiVif);
-    cursor = LogPut(cursor, " qi_susp=0x");        cursor = LogHex(cursor, (DWORD)g_QiSuspended);
-    cursor = LogPut(cursor, " hcpu=0x");           cursor = LogHex(cursor, (DWORD)(ULONG_PTR)g_HostCpu);
-    cursor = LogPut(cursor, "\r\n");
-    cursor = LogPut(cursor, "STAGE0: os=0x"); cursor = LogHex(cursor, ((g_OsVersion & BYTE_MASK) << BYTE_SHIFT) | ((g_OsVersion >> BYTE_SHIFT) & BYTE_MASK));
-    cursor = LogPut(cursor, " build="); cursor = LogDecimal(cursor, (g_OsVersion < OS_VERSION_NOT_NT_U) ? (g_OsVersion >> WORD_SHIFT) : 0);
-    cursor = LogPut(cursor, " veh="); cursor = LogDecimal(cursor, g_PfnAddVeh != 0);
-    cursor = LogPut(cursor, " attachconsole="); cursor = LogDecimal(cursor, g_PfnAttachConsole != 0);
-    cursor = LogPut(cursor, " rawinput="); cursor = LogDecimal(cursor, g_PfnRegisterRawInput && g_PfnGetRawInput);
-    cursor = LogPut(cursor, g_PfnAddVeh ? "\r\n" : "  (no VEH: the unhandled filter runs the PM-fault arms)\r\n");
-    if (g_PfnAddVeh) g_PfnAddVeh(1, DpmiCrashVeh);  /* DPMI spike crash diagnostic; XP+ */
-    SetUnhandledExceptionFilter(HostUnhandledFilter); /* real-mode runs: full dump, not WER */
+}
 
-    /* CSRSS command-info: receive buffers + first-command state + IFEO task id. */
-    g_CommandInfo.CmdLine = g_CommandLine; g_CommandInfo.CmdLen = sizeof(g_CommandLine);
-    g_CommandInfo.AppName = g_Application; g_CommandInfo.AppLen = sizeof(g_Application);
-    g_CommandInfo.PifFile = g_PifPath; g_CommandInfo.PifLen = sizeof(g_PifPath);
-    g_CommandInfo.CurDirectory = g_CurrentDirectory; g_CommandInfo.CurDirectoryLen = sizeof(g_CurrentDirectory);
-    g_CommandInfo.Env = g_Environment; g_CommandInfo.EnvLen = sizeof(g_Environment);
-    g_CommandInfo.Desktop = g_Desktop; g_CommandInfo.DesktopLen = sizeof(g_Desktop);
-    g_CommandInfo.Title = g_Title; g_CommandInfo.TitleLen = sizeof(g_Title);
-    g_CommandInfo.Reserved = g_Reserved; g_CommandInfo.ReservedLen = sizeof(g_Reserved);
-    g_CommandInfo.StartupInfo.cb = sizeof(STARTUPINFOA);
-    g_CommandInfo.VDMState = VDM_GET_FIRST_COMMAND;
-    g_CommandInfo.TaskId   = CsrssParseTaskId(GetCommandLineA());
 
-    /* ── WHAT SHAPE OF LAUNCH IS THIS? (GH #129) ────────────────────────────────
-         Windows launches ntvdm.exe for BOTH a DOS program and a 16-bit WINDOWS
-         program -- WOW runs inside the same VDM binary. Our IFEO Debugger hook
-         therefore intercepts both, and we implement only the DOS half, so a Win16
-         launch currently lands in a host that cannot load an NE file at all.
-       ► Before deciding anything from the command line, RECORD IT. The flags that
-         distinguish the two are described in various places and this project has
-         been bitten repeatedly by building on a documented claim instead of a
-         measured one. Log the raw string; diff a DOS launch against a Win16 launch
-         on the rig; write the detector against what the diff actually shows. */
-    cursor = LogPut(cursor, "STAGE0: root=["); cursor = LogPut(cursor, NTVDMEX_DIR); cursor = LogPut(cursor, "] (derived from the host's own path)\r\n");
-    HmaTry();
-    cursor = LogPut(cursor, "STAGE0: HMA ");
-    if (g_Hma) cursor = LogPut(cursor, "committed at 0x100000 -- FFFF:0010 is real");
-    else { cursor = LogPut(cursor, "UNAVAILABLE err=0x"); cursor = LogHex(cursor, g_HmaError);
-       cursor = LogPut(cursor, " state=0x"); cursor = LogHex(cursor, g_HmaState);
-       cursor = LogPut(cursor, " prot=0x");  cursor = LogHex(cursor, g_HmaProtection); }
-    cursor = LogPut(cursor, "\r\n");
-        cursor = LogPut(cursor, "STAGE0: cmdline=["); cursor = LogPut(cursor, GetCommandLineA()); cursor = LogPut(cursor, "]\r\n");
+/* krnl386's entry: VdmSetEntry set a DOS program's registers; krnl386 wants DS = its data segment and AX = 4B4Fh ('OK'). */
+static PSTR StartupPrepareWowEntry(PSTR cursor, volatile BYTE * const tib, DOS_IMAGE *image)
+{
+    if (g_WowEntering) {
+        /* VdmSetEntry points DS/ES/FS/GS at the PSP and zeroes AX, which is right
+           for a DOS program and wrong for this one. krnl386 wants DS = its automatic
+           data segment, and it expects AX = 0x4b4f -- 'OK' -- at entry; with anything
+           else it returns at once with AX=0. Get AX wrong and it returns instantly,
+           which would read as "the entry did nothing" rather than "we failed a
+           handshake". Measured at the entry breakpoint; see session 30 part 5. */
+        VDM_SET16(tib, VTIB_DS, g_WowEntryDs);
+        /* ★ AND ES, WHICH IS NOT COSMETIC: krnl386 takes ES+0x10 as the base of the
+             DPMI host's private data and carves every later allocation upward from
+             there without asking DOS. VdmSetEntry points ES at DOS_PSP_SEG, whose
+             +0x10 is where the (discarded) DOS image sat and where DosMcbAllocate had
+             already placed krnl386's own code. Point it at the arena block instead. */
+        if (g_WowPspSegment) VDM_SET16(tib, VTIB_ES, g_WowPspSegment);
+        /* ★ CX = HOW MUCH MEMORY IS AVAILABLE ABOVE THE STACK, IN BYTES.
+             krnl386 takes CX at entry, as a byte count, for the size of the block its
+             selector over base(SS)+SP describes (observed: the arena it then uses is
+             CX >> 4 paragraphs). Measured at three breakpoints, CX was 0 all the way
+             from entry, so krnl386 believed it had ZERO paragraphs and every
+             allocation out of that arena failed -- including one inside LoadSegment,
+             which is why it could not load its own segment 1 and exited.
+           The selector has a 64 KB limit, so this is the whole of it minus the header
+           image we place at its base. Nothing else names this quantity to the guest. */
+        VDM_SET16(tib, VTIB_ECX, (WORD)g_WowEntryCx);
+        VDM_REG(tib, VTIB_EAX) = WOW_KRNL386_ENTRY_AX;
+        cursor = LogPut(cursor, "STAGE2: WOW entry -- krnl386 in V86 at 0x");
+        cursor = LogHex(cursor, image->CodeSegment); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, image->InstructionPointer);
+        cursor = LogPut(cursor, " DS=0x"); cursor = LogHex(cursor, g_WowEntryDs);
+        cursor = LogPut(cursor, " ES=0x"); cursor = LogHex(cursor, g_WowPspSegment);
+        cursor = LogPut(cursor, " CX=0x"); cursor = LogHex(cursor, g_WowEntryCx);
+        cursor = LogPut(cursor, " (it will carve from 0x"); cursor = LogHex(cursor, (DWORD)(g_WowPspSegment + DOS_PSP_PARAGRAPHS));
+        cursor = LogPut(cursor, ") AX=0x4b4f\r\n");
+    }
+    return cursor;
+}
 
-    /* V86 address space, then register as a VDM with the kernel (order matters). */
-    VdmSetupMemory();
-    vdmStatus = VdmRegisterWithKernel();
-    cursor = LogPut(cursor, "STAGE1: v86_init NTSTATUS=0x"); cursor = LogHex(cursor, (UINT)vdmStatus); cursor = LogPut(cursor, "\r\n");
-    /* ── ⛔⛔⛔ FIXED_NTVDMSTATE ([0x714]) IS INHERITED GARBAGE UNTIL SOMEONE WRITES IT.
-         (2026-09-12: "no DOS app runs on the rig" after a REBOOT, host gone in <1 s.)
-         VdmInitialize does not define this word; it holds whatever the machine's
-         real-mode boot left in physical low memory, so it changes PER BOOT. Since the
-         Sep 9 boot it read 0xc0003232 and everything worked; after this morning's
-         reboot it read 0xc0002979 -- bit 0 (VDM_INT_HARDWARE pending) SET -- and the
-         kernel dutifully raised VIP in the guest's very first EFLAGS (0x00130002).
-         The first STI with VIP set is a raw #GP, and XP tears the VDM down silently
-         (run 71 watched it under a kernel debugger; see DpmiAsyncInjectPm). So the
-         host died after its first IRQ0 check on EVERY launch, the three-strikes
-         counter then removed the IFEO key, and every later launch was stock ntvdm.
-       ► Stock ntvdm's live dump (build/stockdumps/130913, +0x714) reads 0x00300200:
-         no 0xc000 high bits, nothing pending -- it starts from a DEFINED word. So do
-         we, now: zero, or cfg\vdmstate.txt. The kernel sets bits 0-1 when it queues
-         and dpmi_enter.S sets bit 9 on PM entry; nothing else needs to be pre-set. */
-    {   volatile DWORD *vdmState = (volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR;
-        DWORD inherited = *vdmState, want = 0;
-        HANDLE handle = CreateFileA(VDMSTATE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+
+/* cfg\cpuspeed.txt: the CPU-speed setting (a decimal index into the speed list), overriding Settings. */
+static VOID StartupLoadCpuSpeedKnob(VOID)
+{
+    { HANDLE cpuSpeedFile = CreateFileA(CPUSPD_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                NULL, OPEN_EXISTING, 0, NULL);
-        if (handle != INVALID_HANDLE_VALUE) {
-            CHAR text[9]; DWORD bytesRead = 0; INT index;
-            ReadFile(handle, text, DWORD_HEX_DIGITS, &bytesRead, NULL);
-            CloseHandle(handle);
-            for (index = 0; index < (INT)bytesRead; ++index) {
-                INT digit = -1;
-                if (text[index] >= '0' && text[index] <= '9') digit = text[index] - '0';
-                else if (text[index] >= 'a' && text[index] <= 'f') digit = text[index] - 'a' + HEX_DIGIT_A_VALUE;
-                else if (text[index] >= 'A' && text[index] <= 'F') digit = text[index] - 'A' + HEX_DIGIT_A_VALUE;
-                if (digit < 0) break;
-                want = (want << NIBBLE_SHIFT) | (DWORD)digit;
-            }
-        }
-        *vdmState = want;
-        cursor = LogPut(cursor, "STAGE1: FIXED_NTVDMSTATE [0x714] inherited=0x"); cursor = LogHex(cursor, inherited);
-        cursor = LogPut(cursor, " -> set 0x"); cursor = LogHex(cursor, want);
-        cursor = LogPut(cursor, handle != INVALID_HANDLE_VALUE ? " (cfg\\vdmstate.txt)\r\n" : "\r\n");
-    }
-    /* ── THE CLEAN 2x2. ─────────────────────────────────────────────────────────────
-         The first differential compared a WOW probe HERE against a DOS probe placed
-         ~500 lines later, after CSRSS and the whole DOS machine were built. That is two
-         variables, not one, so "WOW is refused, DOS succeeds" did not actually follow.
-         Probe BOTH launch types at BOTH points and let the 2x2 say whether it is the
-         launch type or the amount of VDM setup that matters. */
-    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
-        WowProbeLdtMatrix(g_WowModuleCount ? "wow-early" : "dos-early");
-    if (g_WowModuleCount) {                        /* GH #128: WOW selector stage */
-        /* ⛔ NO FLUSH HERE, AND NEVER THROUGH `base`. (s73) This read
-             `LogAppend(LOG_PATH, base, p); p = base;` from e595c91 (s68), which turned
-             every `report` flush into a `base` flush mechanically -- right for the exit
-             report, where base marks the end of the preamble, and WRONG here, 1,500
-             lines before `base = p` is ever executed. So: LogAppend(NULL, p) -- a bad
-             range -- then p = NULL, then every STAGE1 line was zput FROM ADDRESS 0, which
-             in a VDM process is the guest's IVT and BDA. krnl386 then ran on a trashed
-             interrupt table and the VDM died silently at PMHB 0x85. Win16 was dead from
-             s68 to s73 and nothing noticed: no Win16 program was launched after the wipe.
-           There is nothing to flush anyway -- the probes below log through LDTLOG_PATH,
-             and report[] has ~5 KB of headroom at this point; the preamble goes to disk
-             as one piece at the LogWrite after the command fetch. */
-        /* The DOS bisection puts the flip between CsrssGetCommand() and
-           VdmGetTib(). The latter is one call and costs nothing to try here, so
-           try it BEFORE concluding the blocker is the command fetch. */
-        {   PVOID tib2 = VdmGetTib();
-            CHAR tibLine[120], *tibCursor = tibLine;
-            tibCursor = LogPut(tibCursor, "WOWTRY: v86_get_tib -> 0x"); tibCursor = LogHex(tibCursor, (DWORD)(ULONG_PTR)tib2);
-            tibCursor = LogPut(tibCursor, "\r\n"); LogAppend(LDTLOG_PATH, tibLine, tibCursor); }
-        WowProbeLdtMatrix("wow-after-get-tib");
-        WowProbeSelectors();
-        /* ⚠ NO EARLY RETURN ANY MORE. This used to `return WowRefuse(...)` here,
-             which was correct while the plan was "enter in protected mode" -- there was
-             nothing further to do. It is not, krnl386 is entered in V86, and a V86
-             entry needs the whole DOS machine underneath it: conventional memory, an
-             INT 21h that answers AH=52h, the IVT, INT 2Fh. All of that is built a few
-             hundred lines below. So fall through and let it be built.
-           Everything WOW-specific past this point is gated on g_WowModuleCount, which is 0
-           on a DOS launch -- so the DOS path, which is the half that WORKS, sees no
-           change at all. That gating is deliberate and worth preserving. */
-    }
-    /* EMS page frame must be mapped AFTER VdmInitialize (see VdmMapEmsFrame). */
-    g_EmsFrameLinear = VdmMapEmsFrame();
-    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) WowProbeLdtMatrix("B-after-emsframe");
-    cursor = LogPut(cursor, "STAGE1: ems_frame lin=0x"); cursor = LogHex(cursor, g_EmsFrameLinear);
-    cursor = LogPut(cursor, " seg=0x"); cursor = LogHex(cursor, g_EmsFrameLinear >> PARAGRAPH_SHIFT); cursor = LogPut(cursor, "\r\n");
-
-    /* CSRSS: register as the console VDM, then fetch the program to run. */
-    CsrssRegisterConsole();
-    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) WowProbeLdtMatrix("C-after-csrss-register");
-    if (CsrssGetCommand(&g_CommandInfo, &error)) {
-        /* ⚠ PRINT THE PATH WE WILL ACTUALLY USE. This joined the directory and
-             the title unconditionally and so reported `C:\test\C:\test\hello.com`
-             for a title that was already absolute -- a path that cannot exist,
-             in the one line a reader checks first. An instrument that composes a
-             string the loader does not use is an instrument that lies. */
-        cursor = LogPut(cursor, "STAGE1: program ");
-        if (g_Title[0] == '\\' || (g_Title[1] == ':' && g_Title[2] == '\\'))
-            cursor = LogPut(cursor, g_Title);
-        else { cursor = LogPut(cursor, g_CurrentDirectory); cursor = LogPut(cursor, HOST_PATH_SEPARATOR); cursor = LogPut(cursor, g_Title); } cursor = LogPut(cursor, "\r\n");
-        /* #129: the OTHER half of the launch shape. CSRSS hands back the app name,
-           the command tail, the PIF and a set of flags -- any of which may be what
-           actually distinguishes a WOW launch from a DOS one. Print them all rather
-           than guessing which one matters; a trace that prints the request but not
-           the answer is half an instrument. */
-        cursor = LogPut(cursor, "STAGE1: vdm app=[");   cursor = LogPut(cursor, g_Application);
-        cursor = LogPut(cursor, "] cmd=[");             cursor = LogPut(cursor, g_CommandLine);
-        cursor = LogPut(cursor, "] pif=[");             cursor = LogPut(cursor, g_PifPath);
-        cursor = LogPut(cursor, "] title=[");           cursor = LogPut(cursor, g_Title);
-        cursor = LogPut(cursor, "]\r\n");
-        cursor = LogPut(cursor, "STAGE1: vdm flags=0x");   cursor = LogHex(cursor, g_CommandInfo.CreationFlags);
-        cursor = LogPut(cursor, " state=0x");              cursor = LogHex(cursor, g_CommandInfo.VDMState);
-        cursor = LogPut(cursor, " taskid=0x");             cursor = LogHex(cursor, g_CommandInfo.TaskId);
-        cursor = LogPut(cursor, " codepage=0x");           cursor = LogHex(cursor, g_CommandInfo.CodePage);
-        cursor = LogPut(cursor, "\r\n");
-        /* ── ★ THE VDM'S STANDARD HANDLES COME FROM CSRSS, NOT FROM INHERITANCE.
-             (GH #131) Measured on the rig: an IFEO-substituted process gets NO
-             inherited handles at all -- GetStdHandle reports FILE_TYPE_UNKNOWN
-             and AttachConsole(ATTACH_PARENT_PROCESS) fails -- so the obvious
-             route ("we are cmd's child, use its stdout") simply does not work
-             and reported `none (no console, no redirect)`.
-             CSRSS hands them over here instead, in the STARTUPINFO it fills in
-             for GetNextVDMCommand, already duplicated into this process. That is
-             how stock ntvdm gets them, and it is the only channel that carries
-             a redirect the user typed at cmd. */
-        /* ► PRINT THE RAW HANDLES AND THEIR TYPES **BEFORE** DECIDING ANYTHING.
-             Four routes have been eliminated here already, and each cost a run
-             because the log said which route was CHOSEN and never what the
-             candidates actually WERE. A handle value with a file type beside it
-             settles "is there a redirect on this VDM at all" in one line, for
-             every one of the three streams, whether or not we end up using it. */
-        {   PCSTR handleNames[STD_HANDLE_REPORTS]; HANDLE handles[STD_HANDLE_REPORTS]; INT item;
-            handleNames[0] = "vdm.StdIn";   handles[0] = g_CommandInfo.StdIn;
-            handleNames[1] = "vdm.StdOut";  handles[1] = g_CommandInfo.StdOut;
-            handleNames[2] = "vdm.StdErr";  handles[2] = g_CommandInfo.StdErr;
-            handleNames[3] = "si.hStdOut";  handles[3] = g_CommandInfo.StartupInfo.hStdOutput;
-            handleNames[4] = "si.hStdIn";   handles[4] = g_CommandInfo.StartupInfo.hStdInput;
-            cursor = LogPut(cursor, "STAGE1: vdm handles");
-            for (item = 0; item < STD_HANDLE_REPORTS; ++item) {
-                DWORD fileType = (handles[item] && handles[item] != INVALID_HANDLE_VALUE)
-                            ? GetFileType(handles[item]) : FILE_TYPE_NOT_ASKED_U;
-                cursor = LogPut(cursor, " "); cursor = LogPut(cursor, handleNames[item]);
-                cursor = LogPut(cursor, "=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)handles[item]);
-                cursor = LogPut(cursor, "/t"); cursor = LogHex(cursor, fileType);
-            }
-            cursor = LogPut(cursor, " sf=0x"); cursor = LogHex(cursor, g_CommandInfo.StartupInfo.dwFlags);
-            cursor = LogPut(cursor, "\r\n"); }
-        g_StdioHow = StdioInitializeVdm();
-        cursor = LogPut(cursor, "STAGE1: stdout -> ");
-        if (g_StdioSource[0]) { cursor = LogPut(cursor, g_StdioSource); cursor = LogPut(cursor, " -> "); }
-        cursor = LogPut(cursor, g_StdioHow);
-        cursor = LogPut(cursor, "\r\n");
-    } else {
-        cursor = LogPut(cursor, "STAGE1: GetNextVDMCommand FALSE err=0x"); cursor = LogHex(cursor, error); cursor = LogPut(cursor, "\r\n");
-    }
-    /* ── ★★★★★ THE SECOND FETCH: THE COMMAND ITSELF. (s72, the package smoke test) ──
-         The call above is stock ntvdm's `cmdGetStartInfo` shape (VDM_GET_FIRST_COMMAND):
-         it fills Title, CurDirectory and the PIF, and nothing else -- AppName/CmdLine
-         come back as capture-buffer scaffolding (`app=[5??] cmd=[\]`). Explorer puts the
-         program's path in the console TITLE, which is the only reason a double-click has
-         ever run the right program. A launch from cmd.exe or a batch file -- smoke.bat,
-         a prompt, the friend's machine on the 18th -- has a title of "" (start) or the
-         typed command WITH ITS ARGUMENTS (direct), and we ran the embedded four-byte stub
-         and reported a clean exit: the package smoke test passed without running the
-         self-test. Stock ntvdm consumes the real command in its exec-BOP path with a
-         second GetNextVDMCommand, VDM_FLAG_DOS | VDM_FLAG_FIRST_TASK.
-       ► MEASURED on the rig, both launch shapes (STAGE1: fetch2 lines, s72):
-           AppName = C:\DOCUME~1\...\bm\selftest.com   (full short path, AppLen incl. NUL)
-           CmdLine = "hello world\r\n"                     (the tail ONLY; "\r\n" when none)
-           CurDirectory = the launcher's cwd; Env = its Win32 environment block (0x46c);
-           ComingFromBat = 1 from a batch file; TaskId 0 without -i is fine.
-         DONT_WAIT so a protocol misunderstanding is a FALSE with an error, never a hang.
-         Only after a successful first fetch: on a WOW launch the first returns FALSE
-         (err 0x57) and that tell is left exactly as it was. */
-    if (g_CurrentDirectory[0] || g_Title[0]) {
-        VDM_COMMAND_INFO commandInfo2;
-        DWORD error2 = 0; BOOL ok2; INT item;
-        static CHAR pifFile2[512], desktop2[512], title2[512], reservedBuffer2[512];
-        ZeroMemory(&commandInfo2, sizeof commandInfo2);
-        commandInfo2.CmdLine = g_CommandLine2; commandInfo2.CmdLen = sizeof g_CommandLine2;  commandInfo2.AppName = g_Application2; commandInfo2.AppLen = sizeof g_Application2;
-        commandInfo2.PifFile = pifFile2; commandInfo2.PifLen = sizeof pifFile2; commandInfo2.CurDirectory = g_CurrentDirectory2; commandInfo2.CurDirectoryLen = sizeof g_CurrentDirectory2;
-        commandInfo2.Env = g_Environment2; commandInfo2.EnvLen = sizeof g_Environment2; commandInfo2.Desktop = desktop2; commandInfo2.DesktopLen = sizeof desktop2;
-        commandInfo2.Title = title2; commandInfo2.TitleLen = sizeof title2; commandInfo2.Reserved = reservedBuffer2; commandInfo2.ReservedLen = sizeof reservedBuffer2;
-        commandInfo2.StartupInfo.cb = sizeof(STARTUPINFOA);
-        commandInfo2.VDMState = VDM_FLAG_DOS | VDM_FLAG_FIRST_TASK | VDM_FLAG_DONT_WAIT;              /* VDM_FLAG_DOS | FIRST_TASK | DONT_WAIT */
-        commandInfo2.TaskId = g_CommandInfo.TaskId;
-        ok2 = CsrssGetCommand(&commandInfo2, &error2);
-        g_Application2[sizeof g_Application2 - 1] = 0; g_CommandLine2[sizeof g_CommandLine2 - 1] = 0; g_CurrentDirectory2[sizeof g_CurrentDirectory2 - 1] = 0;
-        /* the tail ends in CR LF; the PSP wants neither */
-        for (item = 0; g_CommandLine2[item]; ++item) if (g_CommandLine2[item] == '\r' || g_CommandLine2[item] == '\n') { g_CommandLine2[item] = 0; break; }
-        g_Fetch2Ok = ok2 && commandInfo2.AppLen > 1 && g_Application2[0];
-        cursor = LogPut(cursor, "STAGE1: command fetch (DOS|FIRST|DONT_WAIT) -> "); cursor = LogPut(cursor, ok2 ? "TRUE" : "FALSE");
-        cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, error2);
-        cursor = LogPut(cursor, " app=["); cursor = LogPut(cursor, g_Application2); cursor = LogPut(cursor, "] args=["); cursor = LogPut(cursor, g_CommandLine2);
-        cursor = LogPut(cursor, "] cur=["); cursor = LogPut(cursor, g_CurrentDirectory2); cursor = LogPut(cursor, "] bat=0x"); cursor = LogHex(cursor, commandInfo2.ComingFromBat);
-        cursor = LogPut(cursor, " drive=0x"); cursor = LogHex(cursor, commandInfo2.CurrentDrive); cursor = LogPut(cursor, " envlen=0x"); cursor = LogHex(cursor, commandInfo2.EnvLen);
-        cursor = LogPut(cursor, " flags=0x"); cursor = LogHex(cursor, commandInfo2.CreationFlags);
-        cursor = LogPut(cursor, " std=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)commandInfo2.StdIn); cursor = LogPut(cursor, "/0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)commandInfo2.StdOut);
-        cursor = LogPut(cursor, "/0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)commandInfo2.StdErr);
-        cursor = LogPut(cursor, "\r\n");
-    } else if (g_WowLaunch) {
-        /* ── ★★★★ THE WIN16 PROGRAM, FROM CSRSS. (s73) ──────────────────────────
-             A WOW launch never carried its program: the VDM starts as
-             `ntvdm -f -i<n> -w -a krnl386.exe`, the first fetch above returns FALSE
-             err=0x57 (measured, s3x), and until today the name came ONLY from
-             cfg\target.txt -- the harness's channel -- so on any machine without
-             that file a double-clicked Win16 program ran nothing, and on the rig it
-             ran whatever the file happened to name last. Stock WOW gets it exactly
-             the way stock DOS does: WOWEXEC's WowGetNextVDMCommand (WOW32 0x70) is
-             wow32.dll calling GetNextVDMCommand with VDM_FLAG_WOW, and CSRSS answers
-             with the AppName + CmdLine the launcher queued. We ask here, before
-             krnl386 runs, so that 0x70 can answer from g_WowCommandProgram as it already
-             does. DONT_WAIT: a misunderstanding is a FALSE, never a hang. */
-        VDM_COMMAND_INFO commandInfo2;
-        DWORD error2 = 0; BOOL ok2; INT item;
-        static CHAR pifFile2[512], desktop2[512], title2[512], reservedBuffer2[512];
-        ZeroMemory(&commandInfo2, sizeof commandInfo2);
-        commandInfo2.CmdLine = g_CommandLine2; commandInfo2.CmdLen = sizeof g_CommandLine2;  commandInfo2.AppName = g_Application2; commandInfo2.AppLen = sizeof g_Application2;
-        commandInfo2.PifFile = pifFile2; commandInfo2.PifLen = sizeof pifFile2; commandInfo2.CurDirectory = g_CurrentDirectory2; commandInfo2.CurDirectoryLen = sizeof g_CurrentDirectory2;
-        commandInfo2.Env = g_Environment2; commandInfo2.EnvLen = sizeof g_Environment2; commandInfo2.Desktop = desktop2; commandInfo2.DesktopLen = sizeof desktop2;
-        commandInfo2.Title = title2; commandInfo2.TitleLen = sizeof title2; commandInfo2.Reserved = reservedBuffer2; commandInfo2.ReservedLen = sizeof reservedBuffer2;
-        commandInfo2.StartupInfo.cb = sizeof(STARTUPINFOA);
-        /* ► THE SHAPE IS MEASURED, NOT ASSUMED (rig, s73). WOW|FIRST|DONT_WAIT alone
-             answers FALSE err=0x490 (ERROR_NOT_FOUND), with either task id. What
-             answers TRUE is GET_FIRST_COMMAND|WOW -- the same handshake stock ntvdm's
-             cmdGetStartInfo makes for DOS, and like the DOS one it fills Title/CurDir
-             and leaves AppName as capture-buffer junk ("[5??]"). So, as on the DOS
-             path: the GET_FIRST call first, then the FIRST_TASK fetch for the command
-             itself. Every call is DONT_WAIT and every answer is logged; a "name" is
-             only believed when it is drive-qualified or UNC -- TRUE with junk is not
-             a program. */
-        {   static const struct { DWORD VdmState; INT IsOwnTask; INT IsHandshake; PCSTR Description; } vdmStates[] = {
-                { VDM_GET_FIRST_COMMAND | VDM_FLAG_WOW | VDM_FLAG_DONT_WAIT, 1, 1, "GET_FIRST|WOW|DONT_WAIT taskid=-i (handshake)" },
-                { VDM_FLAG_WOW | VDM_FLAG_FIRST_TASK | VDM_FLAG_DONT_WAIT, 1, 0, "WOW|FIRST|DONT_WAIT taskid=-i" },
-                { VDM_FLAG_WOW | VDM_FLAG_FIRST_TASK | VDM_FLAG_DONT_WAIT, 0, 0, "WOW|FIRST|DONT_WAIT taskid=0"  },
-                { VDM_FLAG_WOW | VDM_FLAG_DONT_WAIT, 1, 0, "WOW|DONT_WAIT taskid=-i"       },
-                { VDM_FLAG_WOW | VDM_FLAG_FIRST_TASK | VDM_FLAG_RETRY | VDM_FLAG_DONT_WAIT, 1, 0, "WOW|FIRST|RETRY|DONT_WAIT taskid=-i" },
-            };
-            UINT si; INT named = 0;
-            for (si = 0; si < sizeof vdmStates / sizeof vdmStates[0] && !named; ++si) {
-                g_Application2[0] = 0; g_CommandLine2[0] = 0; g_CurrentDirectory2[0] = 0; error2 = 0;
-                commandInfo2.AppLen = sizeof g_Application2; commandInfo2.CmdLen = sizeof g_CommandLine2; commandInfo2.CurDirectoryLen = sizeof g_CurrentDirectory2;
-                commandInfo2.EnvLen = sizeof g_Environment2; commandInfo2.PifLen = sizeof pifFile2; commandInfo2.DesktopLen = sizeof desktop2;
-                commandInfo2.TitleLen = sizeof title2; commandInfo2.ReservedLen = sizeof reservedBuffer2;
-                commandInfo2.VDMState = vdmStates[si].VdmState;
-                commandInfo2.TaskId = vdmStates[si].IsOwnTask ? g_CommandInfo.TaskId : 0;
-                ok2 = CsrssGetCommand(&commandInfo2, &error2);
-                g_Application2[sizeof g_Application2 - 1] = 0; g_CommandLine2[sizeof g_CommandLine2 - 1] = 0; g_CurrentDirectory2[sizeof g_CurrentDirectory2 - 1] = 0;
-                named = ok2 && !vdmStates[si].IsHandshake
-                        && ((g_Application2[0] >= 'A' && (g_Application2[0] | ASCII_CASE_BIT) <= 'z' && g_Application2[1] == ':' && g_Application2[2] == '\\')
-                            || (g_Application2[0] == '\\' && g_Application2[1] == '\\'));
-                cursor = LogPut(cursor, "STAGE1: WOW command fetch ["); cursor = LogPut(cursor, vdmStates[si].Description); cursor = LogPut(cursor, "] -> ");
-                cursor = LogPut(cursor, ok2 ? "TRUE" : "FALSE");
-                cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, error2);
-                cursor = LogPut(cursor, " app=["); if (named) cursor = LogPut(cursor, g_Application2); else if (g_Application2[0]) cursor = LogPut(cursor, "<not a path>");
-                cursor = LogPut(cursor, "] args=["); if (named) cursor = LogPut(cursor, g_CommandLine2);
-                cursor = LogPut(cursor, "] cur=["); cursor = LogPut(cursor, g_CurrentDirectory2); cursor = LogPut(cursor, "] show=0x"); cursor = LogHex(cursor, commandInfo2.StartupInfo.wShowWindow);
-                cursor = LogPut(cursor, " taskid=0x"); cursor = LogHex(cursor, commandInfo2.TaskId);
-                cursor = LogPut(cursor, "\r\n");
-            }
-            ok2 = named;
-        }
-        for (item = 0; g_CommandLine2[item]; ++item) if (g_CommandLine2[item] == '\r' || g_CommandLine2[item] == '\n') { g_CommandLine2[item] = 0; break; }
-        wowCommandFromCsrss = ok2 && g_Application2[0];
-        if (wowCommandFromCsrss) {
-            /* Exactly what the target.txt path does with a name, or the stage below
-               builds the V86 world for the embedded four-byte stub instead ("STAGE2:
-               embedded fallback"), krnl386 gets no program path in its environment,
-               and it dies in its own init: "NTVDM KERNEL: Unable to initialize heap".
-               Measured, first cut. The image read here is discarded by WowPlaceV86;
-               the NAME and the byte count are what the stage keys on. */
-            HANDLE wowHandle;
-            LogPut(g_WowCommandProgram, g_Application2); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
-            /* the tail arrives with its leading space, as a DOS tail does; 0x70 adds its own */
-            { PCSTR cursorA = g_CommandLine2; while (*cursorA == ' ') ++cursorA; LogPut(g_WowCommandArguments, cursorA); LogPut(args, cursorA); }
-            LogPut(programPathBuffer, g_WowCommandProgram);
-            wowHandle = CreateFileA(g_WowCommandProgram, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-            if (wowHandle != INVALID_HANDLE_VALUE) { ReadFile(wowHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(wowHandle); }
-            if (g_CurrentDirectory2[0]) {
-                SetCurrentDirectoryA(g_CurrentDirectory2);
-                /* #164: WOWEXEC changes to this before LoadModule, so the task starts
-                   in the folder it was launched from -- 8.3, as krnl386 sees paths. */
-                if (!GetShortPathNameA(g_CurrentDirectory2, g_WowCommandDirectory, sizeof g_WowCommandDirectory)
-                    || lstrlenA(g_WowCommandDirectory) >= WOW_COMMAND_DIRECTORY_MAX)
-                    g_WowCommandDirectory[0] = 0;
-            }
-            cursor = LogPut(cursor, "STAGE2: Win16 program from CSRSS -- LAUNCH ["); cursor = LogPut(cursor, g_WowCommandProgram);
-            cursor = LogPut(cursor, "] loaded 0x"); cursor = LogHex(cursor, readCount); cursor = LogPut(cursor, " (target.txt NOT consulted)\r\n");
-            if (!readCount) wowCommandFromCsrss = 0;          /* unreadable: fall back as before */
-        }
-    }
-    LogWrite(LOG_PATH, report, cursor);
-    /* ⚠ AFTER the LogWrite, not before: LogWrite TRUNCATES. The first cut of this
-         ran the probe earlier and its output was silently erased by this very line,
-         which looked exactly like "the probe never ran". Same stale/truncated-artefact
-         trap this project keeps paying for, in a new costume. */
-    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
-        WowProbeLdtMatrix("D-after-getcommand");   /* before VdmGetTib */
-    tib = VdmGetTib();
-    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) WowProbeLdtMatrix("E-after-get-tib");
-    g_TibDebug = tib;                                    /* let the crash VEH dump guest state */
-    if (!tib) {
-        cursor = LogPut(cursor, "STAGE1: no VDM_TIB -- abort\r\n"); LogAppend(LOG_PATH, report, cursor);
-        return 1;
-    }
-
-    /* Load the program: what CSRSS asked for, else C:\ntvdmex\target.txt, else a
-       tiny exit stub.
-     ⚠⚠ THAT ORDER USED TO BE THE OTHER WAY ROUND, AND IT IS A BLOCKER ON #130.
-       target.txt won UNCONDITIONALLY, so with NTVDMEX installed as the machine's
-       VDM *every* DOS and Win16 launch ran whatever that file happened to name,
-       whatever the user double-clicked. It also silently corrupted our own
-       measurements: the launch matrix's stock column reported DPMI output under
-       `p_ver.com` because a run had reused a stale target.
-     ► THE TEST HARNESS IS UNAFFECTED, and that is measured rather than hoped:
-       on the rig CSRSS hands back `title=[]` with no program name at all
-       (STAGE1: program C:\test\ -- an empty tail), so the override still
-       applies there. It stops applying exactly when someone actually asked for
-       a program, which is the only case that was ever wrong. */
-    /* ── ★★★★★ THE COMMAND CSRSS QUEUED WINS OVER EVERYTHING BELOW. (s72) ───────
-         AppName is the program's full path and CmdLine its tail, straight from the
-         launcher's CreateProcess -- no title heuristics, no quote-splitting, no join
-         with the current directory, and target.txt is not consulted. The title and
-         target.txt paths below remain for the shapes where this fetch does not answer
-         (the rig harness's dosstub.com + target.txt, where the queued command IS the
-         stub and the file names the real target -- kept by a stub-named check). */
-    if (g_Fetch2Ok) {
-        HANDLE fileHandle = CreateFileA(g_Application2, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-        INT isStub = 0;
-        {   PCSTR baseName = g_Application2, scan;
-            for (scan = g_Application2; *scan; ++scan) if (*scan == '\\' || *scan == '/') baseName = scan + 1;
-            isStub   = (lstrcmpiA(baseName, HOST_HARNESS_STUB_NAME) == 0);
-            /* ★ OUR OWN LAUNCHER'S STUB -- see LAUNCH_STUB_NAME. Same mechanism, a
-                 DIFFERENT meaning: the harness stub says "target.txt names the
-                 program", this one says "the user opened NTVDMEX, give them a shell".
-                 Keeping them apart is what stops a stale target.txt from hijacking a
-                 double-click on someone's machine. */
-            if (lstrcmpiA(baseName, LAUNCH_STUB_NAME) == 0) { isStub = 1; wantShell = 1; } }
-        if (isStub) {
-            if (fileHandle != INVALID_HANDLE_VALUE) CloseHandle(fileHandle);
-            cursor = LogPut(cursor, wantShell
-                     ? "STAGE2: launched with no program -- the user opened NTVDMEX; going straight to a SHELL\r\n"
-                     : "STAGE2: CSRSS queued dosstub.com -- the harness stub; target.txt names the program\r\n");
-            g_Title[0] = 0;                              /* and the title must not either */
-        } else if (fileHandle != INVALID_HANDLE_VALUE) {
-            ReadFile(fileHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(fileHandle);
-            LogPut(programPathBuffer, g_Application2);
-            LogPut(args, g_CommandLine2);
-            LogPut(g_WowCommandProgram, g_Application2); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
-            LogPut(g_WowCommandArguments, g_CommandLine2);
-            cursor = LogPut(cursor, "STAGE2: loaded 0x"); cursor = LogHex(cursor, readCount);
-            cursor = LogPut(cursor, " from "); cursor = LogPut(cursor, g_Application2);
-            cursor = LogPut(cursor, " args=["); cursor = LogPut(cursor, args); cursor = LogPut(cursor, "] (CSRSS AppName + CmdLine; target.txt and the title NOT consulted)\r\n");
-            g_Title[0] = 0;                              /* the title chain below must not re-load */
-        } else {
-            cursor = LogPut(cursor, "STAGE2: CSRSS AppName ["); cursor = LogPut(cursor, g_Application2);
-            cursor = LogPut(cursor, "] cannot be opened (0x"); cursor = LogHex(cursor, GetLastError());
-            cursor = LogPut(cursor, ") -- falling back to the title / target.txt\r\n");
-        }
-    }
-    {
-        INT csrssNamed = (g_CurrentDirectory[0] && g_Title[0]) || (readCount != 0) || wowCommandFromCsrss;
-        /* ⚠ `want_shell` skips target.txt ENTIRELY. A user who opened NTVDMEX asked for
-             a shell, not for whatever the last test run happened to leave in cfg\. */
-        HANDLE thread = (csrssNamed || wantShell)
-                  ? INVALID_HANDLE_VALUE
-                  : CreateFileA(TARGET_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
-                                OPEN_EXISTING, 0, NULL);
-        if (csrssNamed && !readCount) {
-            cursor = LogPut(cursor, "STAGE2: CSRSS named a program -- target.txt NOT consulted "
-                        "(GH #130)\r\n");
-        }
-        if (thread != INVALID_HANDLE_VALUE) {
-            CHAR tempPath[512]; DWORD tempLength = 0; PSTR scan; PSTR cursorA = 0;
-            ReadFile(thread, tempPath, sizeof(tempPath) - 1, &tempLength, NULL); CloseHandle(thread);
-            tempPath[tempLength < sizeof(tempPath) ? tempLength : sizeof(tempPath) - 1] = 0;
-            /* ── ⚠⚠ A PROGRAM PATH MAY CONTAIN SPACES, AND THIS SPLIT ON THE FIRST ONE.
-                 Every path the rig used to hand us was C:\game\X.EXE or C:\test\X.COM,
-                 so "first space starts the arguments" was never wrong -- until the rig
-                 moved into the share folder, whose path contains "Documents and
-                 Settings". Measured, first run after the move:
-
-                   target.txt loaded 0x0 from C:\Documents
-                     args=[and Settings\All Users\...\games\Skyroads\Skyroads.EXE]
-
-                 A zero-byte load, then the embedded four-byte `mov ah,4Ch / int 21h`
-                 stub runs INSTEAD of the game and the run completes cleanly -- the
-                 same silent-success shape as GH #131 below, and it reports `mode
-                 sets: none` rather than any kind of error.
-               ⇒ So honour QUOTES, and treat an unquoted line as a bare path with no
-                 arguments when what it names actually exists. A quoted first token is
-                 unambiguous and is what every Windows caller already writes. */
-            scan = tempPath;
-            if (*scan == '"') {                            /* "path with spaces" [args] */
-                PSTR word2 = scan; ++scan;
-                while (*scan && *scan != '"') *word2++ = *scan++;
-                if (*scan == '"') ++scan;
-                *word2 = 0;
-                while (*scan == ' ') ++scan;
-                { PSTR limit; for (limit = scan; *limit; ++limit) if (*limit == '\r' || *limit == '\n') { *limit = 0; break; } }
-                if (*scan) cursorA = scan;
-            } else {
-                for (scan = tempPath; *scan; ++scan)                 /* trim EOL first */
-                    if (*scan == '\r' || *scan == '\n') { *scan = 0; break; }
-                /* Unquoted: only split on a space if the WHOLE line is not itself a
-                   file. That keeps `C:\test\x.com >out.txt` working and stops a path
-                   with spaces being torn in half. */
-                { HANDLE probe = CreateFileA(tempPath, GENERIC_READ, FILE_SHARE_READ, NULL,
-                                             OPEN_EXISTING, 0, NULL);
-                  if (probe != INVALID_HANDLE_VALUE) CloseHandle(probe);
-                  else for (scan = tempPath; *scan; ++scan)
-                           if (*scan == ' ') { *scan = 0; cursorA = scan + 1; break; } }
-            }
-            if (tempPath[0]) {
-                HANDLE fileHandle = CreateFileA(tempPath, GENERIC_READ, FILE_SHARE_READ, NULL,
-                                        OPEN_EXISTING, 0, NULL);
-                if (fileHandle != INVALID_HANDLE_VALUE) { ReadFile(fileHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(fileHandle); }
-                LogPut(programPathBuffer, tempPath);                  /* env argv[0] */
-                if (cursorA) LogPut(args, cursorA);                   /* PSP command tail */
-                /* ★ GH #128: on a WOW launch this same path is the WIN16 program,
-                     and WOW32 0x70 is how WOWEXEC asks for it. The DOS image
-                     loaded just below is discarded there (see WowPlaceV86), but
-                     the NAME is the one thing the WOW path still needs -- Windows
-                     does not put it on the VDM's command line. */
-                LogPut(g_WowCommandProgram, tempPath); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
-                if (cursorA) LogPut(g_WowCommandArguments, cursorA);
-                cursor = LogPut(cursor, "STAGE2: target.txt loaded 0x"); cursor = LogHex(cursor, readCount);
-                cursor = LogPut(cursor, " from "); cursor = LogPut(cursor, tempPath);
-                if (cursorA && cursorA[0]) { cursor = LogPut(cursor, " args=["); cursor = LogPut(cursor, cursorA); cursor = LogPut(cursor, "]"); }
-                cursor = LogPut(cursor, "\r\n");
-            }
-        }
-    }
-    /* ── ★★★★★ AN ABSOLUTE TITLE IS NOT JOINED TO THE DIRECTORY. (GH #131,
-         session 57) This composed `g_CurrentDirectory + "\" + g_Title` unconditionally, and
-         CSRSS's title for a program named with a full path at a cmd prompt IS
-         that full path -- so `hello.com > out.txt` run in C:\test produced
-
-             STAGE1: program C:\test\C:\test\hello.com
-             STAGE2: loaded 0x00000000 from C:\test\C:\test\hello.com
-             STAGE2: embedded fallback
-
-         -- a path that cannot exist, a load of zero bytes, and then the four-byte
-         `mov ah,4Ch / int 21h` stub running INSTEAD OF THE PROGRAM. The run then
-         completes cleanly and writes NOTHING, which is indistinguishable from
-         the redirect defect this issue is about: the output file is empty either
-         way. It is not the same bug, and it was hiding behind it -- the log
-         reported ZERO INT 21h calls in the whole run, which is the tell.
-       ⚠ TWO FORMS OF ABSOLUTE, both real: `C:\...` (a drive) and `\...` (rooted
-         on the current drive). A relative title still gets the directory, which
-         is what the join was for and is still right. */
-    if (!readCount && g_Title[0]
-        && (g_Title[0] == '\\' || (g_Title[1] == ':' && g_Title[2] == '\\'))) {
-        CHAR path[768]; HANDLE fileHandle; int targetLength; PSTR targetArguments = NULL; /* stays int: INT here moves the compiled code */
-        LogPut(path, g_Title);
-        /* ⚠ AND THE TITLE ARRIVES WITH A TRAILING SPACE -- measured:
-             `title=[C:\test\hello.com ]`. CreateFileA's treatment of one is not
-             something to rely on, and a path is not a place to leave whitespace
-             the guest never typed. */
-        for (targetLength = 0; path[targetLength]; ++targetLength) ;
-        while (targetLength > 0 && (path[targetLength - 1] == ' ' || path[targetLength - 1] == '\t')) path[--targetLength] = 0;
-        fileHandle = CsrssOpenSplit(path, &targetArguments);        /* "program [args]" -- see the helper */
-        if (fileHandle != INVALID_HANDLE_VALUE) { ReadFile(fileHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(fileHandle); }
-        LogPut(programPathBuffer, path);
-        /* The title's own arguments beat CSRSS's CmdLine field, which arrives as
-           junk on this path (measured: `cmd=[\]` for a `ZAR.EXE -Help` launch) and
-           was only ever a best-effort guess. */
-        if (targetArguments)         LogPut(args, targetArguments);
-        else if (g_CommandLine[0]) LogPut(args, g_CommandLine);
-        cursor = LogPut(cursor, "STAGE2: loaded 0x"); cursor = LogHex(cursor, readCount);
-        cursor = LogPut(cursor, " from "); cursor = LogPut(cursor, path);
-        if (targetArguments) { cursor = LogPut(cursor, " args=["); cursor = LogPut(cursor, targetArguments); cursor = LogPut(cursor, "]"); }
-        cursor = LogPut(cursor, " [the title is ALREADY ABSOLUTE -- not joined to the"
-                    " current directory]\r\n");
-    }
-    if (!readCount && g_CurrentDirectory[0] && g_Title[0]) {
-        CHAR path[768]; PSTR pathCursor = path; HANDLE fileHandle; int targetLength; PSTR targetArguments = NULL; /* stays int: INT here moves the compiled code */
-        pathCursor = LogPut(pathCursor, g_CurrentDirectory); pathCursor = LogPut(pathCursor, HOST_PATH_SEPARATOR); pathCursor = LogPut(pathCursor, g_Title);
-        for (targetLength = 0; path[targetLength]; ++targetLength) ;              /* same trailing-space trim as above */
-        while (targetLength > 0 && (path[targetLength - 1] == ' ' || path[targetLength - 1] == '\t')) path[--targetLength] = 0;
-        fileHandle = CsrssOpenSplit(path, &targetArguments);        /* a RELATIVE title carries args too */
-        if (fileHandle != INVALID_HANDLE_VALUE) { ReadFile(fileHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(fileHandle); }
-        LogPut(programPathBuffer, path);                       /* env argv[0] */
-        if (targetArguments)         LogPut(args, targetArguments);
-        else if (g_CommandLine[0]) LogPut(args, g_CommandLine);       /* best-effort: CmdLine if CSRSS populated it */
-        cursor = LogPut(cursor, "STAGE2: loaded 0x"); cursor = LogHex(cursor, readCount);
-        cursor = LogPut(cursor, " from "); cursor = LogPut(cursor, path);
-        if (targetArguments) { cursor = LogPut(cursor, " args=["); cursor = LogPut(cursor, targetArguments); cursor = LogPut(cursor, "]"); }
-        cursor = LogPut(cursor, "\r\n");
-    }
-    /* ── ★★★★★ NOTHING NAMED A PROGRAM ⇒ RUN A SHELL. (s78) ──────────────────────
-         The user's question was *"do you actually need to build a shell, or simply load
-         Windows NT's COMMAND.COM when ntvdmex is loaded with no guest EXE?"* -- and the
-         answer is the second one. `COMMAND.COM` IS the shell; it becomes the guest like
-         any other DOS program, and MS-DOS 6.22's copy already works here: banner,
-         prompt, `ver`, and a real `dir` listing with volume serial and free space
-         (measured on the rig, s78).
-       ⚠ STRICTLY BELOW EVERYTHING ELSE, and that placement is the whole design. CSRSS's
-         AppName, `target.txt`, an absolute title and a relative title have all been
-         tried above and all failed. Put this any higher and the headless harness -- which
-         names its program in `target.txt` -- silently runs a shell instead of the test.
-       ▸ WHICH shell is a configuration question, not a guess:
-           1. `cfg\shell.txt`  -- a path the user chooses. A 6.22 COMMAND.COM goes here.
-           2. `C:\WINDOWS\SYSTEM32\COMMAND.COM` -- present on every XP box.
-         ⚠ (2) is XP's own, which is NTVDM-aware and stops at `BOP 0x54` -- see
-           docs/inventory/bop.md. That is not a reason to leave it out: it fails with a
-           log line naming exactly what is missing, where the old fallback was a 4-byte
-           `mov ah,4Ch / int 21h` that exited cleanly and said nothing at all.
-         ⛔ COMSPEC is deliberately NOT consulted: under a Windows session it names
-           `cmd.exe`, a 32-bit PE that must never be loaded as a DOS guest. */
-    /* ── #208: HAND A DOS PROGRAM TO XP's SHELL INSTEAD OF LOADING IT. See g_Routed. ──
-         Only when all of these hold, and otherwise exactly as before:
-           - a DOS program was found (an MZ/COM image, not NE/PE -- a Win16 or Win32
-             image under COMMAND.COM just says "requires Microsoft Windows")
-           - this is not a WOW launch, and the program is not itself a COMMAND.COM
-           - the shell would be XP's own (no cfg\shell.txt, no Settings choice -- #203): only that shell asks
-             BOP 54 sub 01, so only it can be handed a program
-           - its 8.3 path and arguments fit a DOS command line
-           - cfg\directlaunch.flag is absent (the A/B switch back to direct loading) */
-    /* ── #203: WHICH SHELL, DECIDED ONCE. default (XP's own) < Settings' "DOS prompt"
-         (HKCU DosPrompt) < cfg\shell.txt -- the file wins, as every file knob does, so
-         the harness is never overridden by whatever was last picked in the dialog. The
-         #208 routing below and the shell load after it both read this one answer; they
-         used to test the file separately, which a registry setting would have split. */
-    CHAR shellConfig[512]; PCSTR shellSource = 0;
-    shellConfig[0] = 0;
-    {   HANDLE configHandle = CreateFileA(SHELL_PATH, GENERIC_READ, FILE_SHARE_READ,
-                                NULL, OPEN_EXISTING, 0, NULL);
-        if (configHandle != INVALID_HANDLE_VALUE) {
-            DWORD commandLength = 0; INT shellLength;
-            ReadFile(configHandle, shellConfig, sizeof(shellConfig) - 1, &commandLength, NULL); CloseHandle(configHandle);
-            shellConfig[commandLength < sizeof(shellConfig) ? commandLength : sizeof(shellConfig) - 1] = 0;
-            /* Trim the newline the file almost certainly ends with, and any spaces --
-               the same trap target.txt's reader already documents. */
-            for (shellLength = 0; shellConfig[shellLength]; ++shellLength) ;
-            while (shellLength > 0 && (shellConfig[shellLength-1] == '\r' || shellConfig[shellLength-1] == '\n'
-                              || shellConfig[shellLength-1] == ' ' || shellConfig[shellLength-1] == '\t'))
-                shellConfig[--shellLength] = 0;
-            if (shellLength) {
-                shellSource = "cfg\\shell.txt";
-                if (g_Settings.Strings[SET_STR_SHELL][0]) g_ShellOverride = "cfg\\shell.txt";
-            }
-        }
-        if (!shellConfig[0] && g_Settings.Strings[SET_STR_SHELL][0]) {
-            lstrcpynA(shellConfig, g_Settings.Strings[SET_STR_SHELL], sizeof shellConfig);
-            shellSource = "Settings > General > DOS prompt";
-        }
-    }
-    /* ── A .PIF NAMES A PROGRAM; IT IS NOT ONE. (s85) See pif.h. ─────────────────────
-         Explorer queues the PIF itself as the program, and we handed its bytes to
-         COMMAND.COM to execute. Stock NTVDM reads it: the program, its parameters (the
-         WINDOWS 386 section's copy when there is one) and its start directory. A
-         relative program is looked for in the start directory, then beside the PIF,
-         then on the PATH. Arguments typed after the PIF follow the PIF's own. */
-    if (readCount && !g_WowLaunch && programPathBuffer[0]) {
-        INT pathLength = lstrlenA(programPathBuffer);
-        PIF_INFO pif;
-        if (pathLength > DOS_DOT_EXTENSION_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - DOS_DOT_EXTENSION_LENGTH, HOST_EXTENSION_PIF)
-            && PifParse(g_FileBuffer, readCount, &pif)) {
-            CHAR program[MAX_PATH], directory[MAX_PATH], pifDirectory[MAX_PATH], pifCandidate[MAX_PATH], extra[256];
-            HANDLE pifHandle = INVALID_HANDLE_VALUE;
-            INT item;
-            ExpandEnvironmentStringsA(pif.Program, program, sizeof program);
-            ExpandEnvironmentStringsA(pif.Directory, directory, sizeof directory);
-            lstrcpynA(pifDirectory, programPathBuffer, sizeof pifDirectory);
-            for (item = lstrlenA(pifDirectory); item > 0 && pifDirectory[item - 1] != '\\'; --item) ;
-            pifDirectory[item > 0 ? item - 1 : 0] = 0;
-            if (directory[0] && GetFileAttributesA(directory) == INVALID_FILE_ATTRIBUTES) {
-                cursor = LogPut(cursor, "STAGE2: PIF start directory ["); cursor = LogPut(cursor, directory);
-                cursor = LogPut(cursor, "] does not exist -- ignored\r\n");
-                directory[0] = 0;
-            }
-            if (program[0] == '\\' || (program[0] && program[1] == ':')) {
-                lstrcpynA(pifCandidate, program, sizeof pifCandidate);
-                pifHandle = CreateFileA(pifCandidate, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-            } else {
-                PCSTR roots[2]; INT rootIndex;
-                roots[0] = directory; roots[1] = pifDirectory;
-                for (rootIndex = 0; rootIndex < 2 && pifHandle == INVALID_HANDLE_VALUE; ++rootIndex) {
-                    PSTR wordStart;
-                    if (!roots[rootIndex][0]) continue;
-                    wordStart = LogPut(pifCandidate, roots[rootIndex]); wordStart = LogPut(wordStart, HOST_PATH_SEPARATOR); LogPut(wordStart, program);
-                    pifHandle = CreateFileA(pifCandidate, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-                }
-                if (pifHandle == INVALID_HANDLE_VALUE && SearchPathA(NULL, program, NULL, sizeof pifCandidate, pifCandidate, NULL))
-                    pifHandle = CreateFileA(pifCandidate, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-            }
-            lstrcpynA(extra, args, sizeof extra);
-            cursor = LogPut(cursor, "STAGE2: PIF ["); cursor = LogPut(cursor, programPathBuffer);
-            cursor = LogPut(cursor, "] -> program ["); cursor = LogPut(cursor, program);
-            cursor = LogPut(cursor, "] dir=["); cursor = LogPut(cursor, directory);
-            cursor = LogPut(cursor, "] params=["); cursor = LogPut(cursor, pif.Parameters);
-            cursor = LogPut(cursor, pif.IsParametersFrom386 ? "] (WINDOWS 386 section)" : "] (basic section)");
-            if (pifHandle == INVALID_HANDLE_VALUE) {
-                /* Not found: do NOT run the PIF's bytes. A shell is the honest answer. */
-                readCount = 0; programPathBuffer[0] = 0; args[0] = 0;
-                cursor = LogPut(cursor, " -- PROGRAM NOT FOUND, starting a shell instead\r\n");
-            } else {
-                PSTR wordStart;
-                readCount = 0;
-                ReadFile(pifHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(pifHandle);
-                lstrcpynA(programPathBuffer, pifCandidate, sizeof programPathBuffer);
-                /* "?" asks Windows to prompt for parameters; there is no one to ask here. */
-                wordStart = LogPut(args, (pif.Parameters[0] == '?' && !pif.Parameters[1]) ? "" : pif.Parameters);
-                if (extra[0]) { if (args[0]) wordStart = LogPut(wordStart, " "); LogPut(wordStart, extra); }
-                LogPut(g_WowCommandProgram, programPathBuffer); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
-                LogPut(g_WowCommandArguments, args);
-                if (directory[0]) { lstrcpynA(g_CurrentDirectory, directory, sizeof g_CurrentDirectory); SetCurrentDirectoryA(g_CurrentDirectory); }
-                cursor = LogPut(cursor, " -- loaded 0x"); cursor = LogHex(cursor, readCount);
-                cursor = LogPut(cursor, " from ["); cursor = LogPut(cursor, programPathBuffer);
-                cursor = LogPut(cursor, "] args=["); cursor = LogPut(cursor, args); cursor = LogPut(cursor, "]\r\n");
-            }
-        }
-    }
-    /* #153: File > Open Recent lists every program this host was started with. */
-    if (readCount && !g_WowLaunch && programPathBuffer[0]) MruAdd(programPathBuffer);
-    if (readCount && !g_WowLaunch && !shellConfig[0]
-        && GetFileAttributesA(DIRECTLAUNCH_FLAG) == INVALID_FILE_ATTRIBUTES) {
-        INT pathLength = lstrlenA(programPathBuffer), isCommand = 0, isNewExe = 0;
-        CHAR shortPath[300]; DWORD shortLength;
-        isCommand = (pathLength >= COMMAND_COM_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - COMMAND_COM_LENGTH, HOST_COMMAND_COM));
-        if (readCount > DOS_MZ_NEW_HEADER_MIN && g_FileBuffer[0] == 'M' && g_FileBuffer[1] == 'Z') {
-            DWORD newHeaderOffset = *(const DWORD *)(g_FileBuffer + DOS_MZ_NEW_HEADER);
-            if (newHeaderOffset > DOS_MZ_NEW_HEADER_MIN && newHeaderOffset + DOS_EXE_SIGNATURE_SIZE < readCount
-                && ((g_FileBuffer[newHeaderOffset] == 'N' && g_FileBuffer[newHeaderOffset + 1] == 'E')
-                    || (g_FileBuffer[newHeaderOffset] == 'P' && g_FileBuffer[newHeaderOffset + 1] == 'E'))) isNewExe = 1;
-        }
-        shortLength = GetShortPathNameA(programPathBuffer, shortPath, sizeof shortPath);
-        if (!isCommand && !isNewExe && shortLength && shortLength < ROUTED_PATH_MAX && shortLength + 1 + (DWORD)lstrlenA(args) < DOS_PSP_COMMAND_TAIL_MAX) {
-            lstrcpynA(g_FirstProgram, shortPath, sizeof g_FirstProgram);
-            lstrcpynA(g_FirstTail, args, sizeof g_FirstTail);
-            g_Routed = 1;
-            readCount = 0;                               /* -> the shell block below */
-            args[0] = 0;                             /* they are the program's, not the shell's */
-            cursor = LogPut(cursor, "STAGE2: #208 routing [");  cursor = LogPut(cursor, g_FirstProgram);
-            cursor = LogPut(cursor, "] args=[");                cursor = LogPut(cursor, g_FirstTail);
-            cursor = LogPut(cursor, "] through XP's COMMAND.COM (BOP 54 sub 01), as stock does\r\n");
-        } else {
-            cursor = LogPut(cursor, "STAGE2: #208 NOT routed (");
-            cursor = LogPut(cursor, isCommand ? "it is a COMMAND.COM" : isNewExe ? "not a DOS image"
-                              : "8.3 path + arguments too long for a DOS command line");
-            cursor = LogPut(cursor, ") -- loading it directly\r\n");
-        }
-    }
-    if (!readCount) {
-        CHAR shell[512]; HANDLE shellHandle = INVALID_HANDLE_VALUE;
-        PCSTR why = 0;
-        static CHAR whyBuffer[96];
-        if (shellConfig[0]) {
-            lstrcpynA(shell, shellConfig, sizeof shell);
-            shellHandle = CreateFileA(shell, GENERIC_READ, FILE_SHARE_READ, NULL,
-                             OPEN_EXISTING, 0, NULL);
-            why = shellSource;
-            if (shellHandle == INVALID_HANDLE_VALUE) {
-                LogPut(LogPut(whyBuffer, shellSource), " NAMES A FILE THAT WILL NOT OPEN");
-                why = whyBuffer;
-            } else {
-                /* ⛔ A Windows program is not a DOS shell. The Browse filter allows *.exe
-                     (a DOS shell can be one), so a user can pick cmd.exe; loaded as a DOS
-                     guest a PE image just runs its stub or worse. Refuse it and fall back. */
-                BYTE header[SHELL_HEADER_READ]; DWORD headerRead = 0;
-                ReadFile(shellHandle, header, sizeof header, &headerRead, NULL);
-                if (headerRead == sizeof header && header[0] == 'M' && header[1] == 'Z') {
-                    DWORD newHeaderOffset = *(const DWORD *)(header + DOS_MZ_NEW_HEADER); BYTE signatureBytes[DOS_EXE_SIGNATURE_SIZE]; DWORD signatureRead = 0;
-                    if (newHeaderOffset >= DOS_MZ_NEW_HEADER_MIN && SetFilePointer(shellHandle, (LONG)newHeaderOffset, NULL, FILE_BEGIN) == newHeaderOffset
-                        && ReadFile(shellHandle, signatureBytes, DOS_EXE_SIGNATURE_SIZE, &signatureRead, NULL) && signatureRead == DOS_EXE_SIGNATURE_SIZE
-                        && ((signatureBytes[0] == 'N' && signatureBytes[1] == 'E') || (signatureBytes[0] == 'P' && signatureBytes[1] == 'E'))) {
-                        CloseHandle(shellHandle); shellHandle = INVALID_HANDLE_VALUE;
-                        LogPut(LogPut(whyBuffer, shellSource), " NAMES A WINDOWS PROGRAM, NOT A DOS SHELL");
-                        why = whyBuffer;
-                    }
-                }
-                if (shellHandle != INVALID_HANDLE_VALUE) SetFilePointer(shellHandle, 0, NULL, FILE_BEGIN);
-            }
-        }
-        if (shellHandle == INVALID_HANDLE_VALUE) {
-            LogPut(shell, HOST_DEFAULT_SHELL_PATH);
-            shellHandle = CreateFileA(shell, GENERIC_READ, FILE_SHARE_READ, NULL,
-                             OPEN_EXISTING, 0, NULL);
-            if (shellHandle != INVALID_HANDLE_VALUE && !why) why = "the system's own COMMAND.COM";
-        }
-        if (shellHandle != INVALID_HANDLE_VALUE) {
-            ReadFile(shellHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(shellHandle);
-            LogPut(programPathBuffer, shell);
-            wasShell = 1;
-            cursor = LogPut(cursor, "STAGE2: no program was named -> loading a SHELL, 0x");
-            cursor = LogHex(cursor, readCount); cursor = LogPut(cursor, " from "); cursor = LogPut(cursor, shell);
-            cursor = LogPut(cursor, " ("); cursor = LogPut(cursor, why ? why : "default"); cursor = LogPut(cursor, ")\r\n");
-        }
-    }
-    if (!readCount) {
-        static const BYTE stub[] = { X86_OP_MOV_AH_IMM, DOS_FN_EXIT, X86_OP_INT, VECTOR_DOS };   /* mov ah,4Ch; int 21h */
-        for (index = 0; index < sizeof(stub); ++index) g_FileBuffer[index] = stub[index];
-        readCount = sizeof(stub);
-        /* ⚠ SAY WHY, not just that. This printed "embedded fallback" and nothing else,
-             and it is reached when a path was wrong as well as when nothing was named --
-             GH #131 spent a session on a run that looked clean and wrote nothing. */
-        cursor = LogPut(cursor, "STAGE2: embedded fallback -- nothing named a program AND no shell "
-                    "could be opened (cfg\\shell.txt, C:\\WINDOWS\\SYSTEM32\\COMMAND.COM)"
-                    "\r\n");
-    }
-
-    /* ── ★★★ IS THIS GUEST NTVDM-AWARE? ASK THE IMAGE, NOT THE PATH. (s79) ───────────
-         XP's own COMMAND.COM needs two things no ordinary DOS guest does: it refuses
-         any DOS version but 5.00, and it reads `INT 21h AH=53h`'s private AL
-         sub-functions to decide whether it is an interactive shell at all. Both were
-         `cfg\` knobs, which is the right shape for an experiment and the wrong one for
-         a product -- "double-click NTVDMEX and get a prompt" cannot require two files.
-
-       ⇒ The discriminator is a MEASURED PROPERTY OF THE IMAGE, not a filename: an
-         NTVDM-aware guest talks to the 32-bit side through `C4 C4 54 <sub>` BOPs. XP's
-         COMMAND.COM has FIFTEEN of them. A path check would be a guess (a user may put
-         XP's shell in `cfg\shell.txt`, or ours somewhere else); the BOPs are what
-         actually make it NT-aware.
-       ⚠ THE THRESHOLD IS THE GUARD. `C4 C4` is a legal, if odd, instruction pair, so
-         one or two sites prove nothing -- a false positive would silently change the
-         DOS version reported to an innocent guest. Requiring EIGHT distinct sites is
-         far beyond coincidence and still well under XP's fifteen, so a future build of
-         the shell with a few fewer would still be recognised. The count is logged, so
-         a guest that lands near the line says so instead of being decided silently.
-       ⚠ It is only consulted for a program we loaded as THE SHELL. A DOS game that
-         somehow tripped the count must not be told it is running on DOS 5. */
-    g_GuestNtvdmBops = 0;
-    if (readCount > VDM_BOP_SUBFUNCTION_LENGTH) {
-        DWORD item;
-        for (item = 0; item + VDM_BOP_LENGTH < readCount; ++item)
-            if (g_FileBuffer[item] == VDM_BOP0 && g_FileBuffer[item+1] == VDM_BOP1 && g_FileBuffer[item+2] == NTVDM_BOP_CMD)
-                ++g_GuestNtvdmBops;
-    }
-    g_GuestNtAware = (wasShell && g_GuestNtvdmBops >= NT_AWARE_SHELL_BOPS_MIN);
-    /* #152: Close Program has nothing to close at a shell's own prompt -- whether we
-       chose the shell or something named COMMAND.COM explicitly. */
-    {   INT pathLength = lstrlenA(programPathBuffer);
-        g_TopIsShell = wasShell
-            || (pathLength >= COMMAND_COM_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - COMMAND_COM_LENGTH, HOST_COMMAND_COM)); }
-    /* ── ★ THE NTVDM-AWARE SHELL IS LAUNCHED `/P <its own directory>`, AS STOCK DOES. ──
-         ntvdm.exe carries `%s=%s%s /p %s\system32`; s79 found /P mattered and the bare
-         launch later dropped every argument. Without /P, PERMCOM ([0x2B0]) stays 0, so
-         XP's EXIT takes DOS's ordinary return-to-parent path -- which for a top-level
-         shell is ITSELF, and the prompt just comes back (the sweep's "exit does not
-         work"). The directory argument is COMMAND.COM's own COMSPEC location, which
-         also replaces the C:\COMMAND.COM the environment otherwise names. */
-    if (g_GuestNtAware && !args[0]) {
-        CHAR directory[300], shortDirectory[300]; INT directoryLength = 0, cut = 0;
-        for (directoryLength = 0; programPathBuffer[directoryLength] && directoryLength < (INT)sizeof directory - 1; ++directoryLength) {
-            directory[directoryLength] = programPathBuffer[directoryLength]; if (programPathBuffer[directoryLength] == '\\') cut = directoryLength; }
-        directory[cut ? cut : directoryLength] = 0;
-        if (!GetShortPathNameA(directory, shortDirectory, sizeof shortDirectory)) LogPut(shortDirectory, directory);
-        wsprintfA(args, HOST_SHELL_ARGUMENTS_FORMAT, shortDirectory);
-        if (!GetShortPathNameA(programPathBuffer, g_ShellPath, sizeof g_ShellPath)) LogPut(g_ShellPath, programPathBuffer);
-        cursor = LogPut(cursor, "STAGE2: NTVDM-aware shell -> command tail [");
-        cursor = LogPut(cursor, args); cursor = LogPut(cursor, "] (permanent, as stock launches it)\r\n");
-    }
-    cursor = LogPut(cursor, "STAGE2: guest NTVDM BOP sites (C4 C4 54) = ");
-    cursor = LogDecimal(cursor, g_GuestNtvdmBops);
-    cursor = LogPut(cursor, g_GuestNtAware
-             ? " -> NTVDM-AWARE SHELL: DOS 5.00 and the private AH=53h answers apply\r\n"
-             : (wasShell ? " -> an ordinary DOS shell\r\n" : " (not loaded as a shell)\r\n"));
-
-    /* status-bar program name = basename of programPathBuffer (if any) */
-    { PCSTR baseName = programPathBuffer, scan; INT item = 0;
-      for (scan = programPathBuffer; *scan; ++scan) if (*scan == '\\' || *scan == '/') baseName = scan + 1;
-      if (*baseName) { while (baseName[item] && item < PROGRAM_NAME_SIZE - 1) { g_ProgramName[item] = baseName[item]; ++item; } g_ProgramName[item] = 0; } }
-    /* No flag to raise: the UI tick polls g_ProgramName and repaints the strip when it
-       changes. See StatusUpdate. */
-
-    /* If this is a bound linear executable (every DOS/4GW game is one), learn which of
-       its objects are code before it starts asking us for memory to load them into. */
-    DpmiLeLearn(g_FileBuffer, readCount);
-
-    /* ── #136: HOW MUCH CONVENTIONAL MEMORY THIS MACHINE HAS. Decided here, once, before
-         the image is laid down: the loader writes the program above the PSP with no
-         bound of its own, and the EBDA (BiosBdaInitializeWithTop, later) is zeroed at the new
-         top -- so a program that does not fit under a small setting would be loaded and
-         then have its own code wiped. A real DOS says "Program too big to fit in memory"
-         at that point; the host cannot say that to a program it was launched to RUN, so
-         it refuses the SETTING instead, loudly, and the machine stays at 640 KB.
-         640 (the default) never enters this block and logs nothing new. */
-    if (g_ConventionalKbWant != BIOS_CONV_KB_MAX) {
-        WORD top = BiosConventionalTopParagraph(g_ConventionalKbWant), alloc = 0;
-        WORD avail = (WORD)(top - DOS_PSP_SEG);
-        INT high = 0, fits;
-        if (readCount >= DOS_EXE_SIGNATURE_SIZE && g_FileBuffer[0] == 'M' && g_FileBuffer[1] == 'Z')
-            fits = DosExecSize(g_FileBuffer, readCount, avail, &alloc, &high) == 0;
-        else                                /* .COM: PSP + the image + a 256-byte stack */
-            fits = (UINT32)DOS_PSP_PARAGRAPHS + ((readCount + DOS_PSP_SIZE + PARAGRAPH_LAST_BYTE_U) >> PARAGRAPH_SHIFT) <= (UINT32)avail;
-        cursor = LogPut(cursor, "STAGE2: ConventionalKB=");  cursor = LogDecimal(cursor, g_ConventionalKbWant);
-        if (fits) {
-            g_DosMemoryTop = top;
-            cursor = LogPut(cursor, " -> INT 12h ");       cursor = LogDecimal(cursor, BiosBaseKbOfTop(top));
-            cursor = LogPut(cursor, " KB, EBDA + MCB top 0x"); cursor = LogHex(cursor, top);
-            cursor = LogPut(cursor, " (#136)\r\n");
-        } else {
-            cursor = LogPut(cursor, " REFUSED: this program does not fit under it -- the machine stays at "
-                        "640 KB (#136)\r\n");
-            SettingsNoteOverride(SET_CONVKB, SETTINGS_SOURCE_CONV_KB, BIOS_CONV_KB_MAX);
-        }
-    }
-    /* Build the DOS process in conventional memory (base=NULL => absolute V86). */
-    image = DosLoadImage(NULL, g_FileBuffer, readCount, DOS_PSP_SEG);
-
-    static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_INT21, X86_OP_IRET };  /* BOP 0x20 ; iret */
-    static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_VIDEO), X86_OP_IRET }; /* BOP 0x10 ; iret */
-    static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD_SERVICES), X86_OP_IRET }; /* BOP 0x16 ; iret */
-    static const BYTE bop33[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_MOUSE), X86_OP_IRET }; /* BOP 0x33 ; iret */
-    /* INT 08h (timer): tick via BOP, then chain INT 1Ch, then iret. INT 1Ch is a
-       bare iret by default (the user-timer hook a program may repoint). INT 1Ah
-       (BIOS time-of-day) is a plain BOP. */
-    static const BYTE bop08[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_TIMER), X86_OP_INT, VECTOR_USER_TICK, X86_OP_IRET };
-    static const BYTE bop1c[] = { X86_OP_IRET };                           /* iret stub       */
-    /* Default INT 09h = BOP 09 ; IRET. It must CONSUME the scancode, exactly as the BIOS
-       handler does: a bare IRET left the byte in the controller forever, so with the 8042's
-       proper one-byte-at-a-time pacing no further key could ever raise an interrupt (the
-       whole keyboard died after one press). A game that installs its own INT 09h replaces
-       this vector, so its handler still reads port 0x60 itself. */
-    static const BYTE bop09[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD), X86_OP_IRET };
-    static const BYTE bop1a[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_TIME), X86_OP_IRET }; /* BOP 0x1A ; iret */
-    static const BYTE bop2f[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_MULTIPLEX), X86_OP_IRET }; /* INT 2Fh ; iret  */
-    /* XMS API entry: reached by FAR CALL (INT 2Fh AX=4310 hands back ES:BX), so it
-       ends in RETF (0xCB), not IRET. */
-    static const BYTE xmsBopStub[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_XMS_ENTRY, X86_OP_RETF };
-    static const BYTE bop67[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_EMS), X86_OP_IRET }; /* INT 67h ; iret  */
-    /* GH #43/#44/#45: the BIOS interrupts we had never planted at all. Until now
-       these vectors were filled by the null-vector sweep with a bare IRET, so a
-       guest asking for the equipment list or the memory size got silence and
-       whatever was already in its registers. */
-    /* {vector, BOP number}.  They match for all but INT 20h: BOP 0x20 is ALREADY
-       the INT 21h handler's, and planting INT 20h with it made the BIOS dispatch
-       intercept every INT 21h call as "terminate program" -- selftest exited at
-       its first DOS call with no output. BOP numbers are a shared namespace with
-       DPMI (0x50-0x57), XMS (0x43) and the rest; 0x30 is free. */
-    static const BYTE biosInts[][2] = {
-        { VECTOR_EQUIPMENT, DOS_BOP_FOR_VECTOR(VECTOR_EQUIPMENT) }, { VECTOR_MEMORY_SIZE, DOS_BOP_FOR_VECTOR(VECTOR_MEMORY_SIZE) }, { VECTOR_DISK, DOS_BOP_FOR_VECTOR(VECTOR_DISK) }, { VECTOR_SERIAL, DOS_BOP_FOR_VECTOR(VECTOR_SERIAL) },
-        { VECTOR_SYSTEM, DOS_BOP_FOR_VECTOR(VECTOR_SYSTEM) }, { VECTOR_PRINTER, DOS_BOP_FOR_VECTOR(VECTOR_PRINTER) }, { VECTOR_ABSOLUTE_DISK_READ, DOS_BOP_FOR_VECTOR(VECTOR_ABSOLUTE_DISK_READ) }, { VECTOR_ABSOLUTE_DISK_WRITE, DOS_BOP_FOR_VECTOR(VECTOR_ABSOLUTE_DISK_WRITE) },
-        { VECTOR_TERMINATE, DOS_BOP_INT20 },                                  /* GH #46: see above */
-        { VECTOR_TERMINATE_RESIDENT, DOS_BOP_FOR_VECTOR(VECTOR_TERMINATE_RESIDENT) }, { VECTOR_DOS_IDLE, DOS_BOP_FOR_VECTOR(VECTOR_DOS_IDLE) }, { VECTOR_FAST_CONSOLE_OUTPUT, DOS_BOP_FOR_VECTOR(VECTOR_FAST_CONSOLE_OUTPUT) },
-        { VECTOR_NETWORK, DOS_BOP_FOR_VECTOR(VECTOR_NETWORK) }, { VECTOR_NETBIOS, DOS_BOP_FOR_VECTOR(VECTOR_NETBIOS) },                  /* GH #8 (s91): NetBIOS, see V86BiosBop */
-    };
-    static const BYTE emmDeviceName[] = { 'E','M','M','X','X','X','X','0' };  /* EMS device header name */
-    handlerArea = (volatile BYTE *)(DOS_HDLR_SEG << PARAGRAPH_SHIFT);            /* INT 21h BOP handler */
-    for (index = 0; index < sizeof(bop); ++index) handlerArea[DOS_HDLR_INT21_STUB_OFF + index] = bop[index];
-    *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_DOS) = DOS_HDLR_INT21_STUB_OFF;                        /* IVT[0x21].offset    */
-    *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_DOS) = DOS_HDLR_SEG;                  /* IVT[0x21].segment   */
-    handlerArea[DOS_DBCS_OFF] = 0; handlerArea[DOS_DBCS_OFF + 1] = 0;     /* empty DBCS table    */
-    for (index = 0; index < sizeof(bop10); ++index) handlerArea[DOS_HDLR_INT10_STUB_OFF + index] = bop10[index];  /* INT 10h stub */
-    *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_VIDEO) = DOS_HDLR_INT10_STUB_OFF;                        /* IVT[0x10].offset    */
-    *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_VIDEO) = DOS_HDLR_SEG;                  /* IVT[0x10].segment   */
-    for (index = 0; index < sizeof(bop16); ++index) handlerArea[DOS_HDLR_INT16_STUB_OFF + index] = bop16[index];  /* INT 16h stub */
-    *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_KEYBOARD_SERVICES) = DOS_HDLR_INT16_STUB_OFF;                        /* IVT[0x16].offset    */
-    *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_KEYBOARD_SERVICES) = DOS_HDLR_SEG;                  /* IVT[0x16].segment   */
-    for (index = 0; index < sizeof(bop33); ++index) handlerArea[DOS_HDLR_INT33_STUB_OFF + index] = bop33[index];  /* INT 33h stub */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_MOUSE))     = DOS_HDLR_INT33_STUB_OFF;              /* IVT[0x33].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_MOUSE)) = DOS_HDLR_SEG;        /* IVT[0x33].segment   */
-    for (index = 0; index < sizeof(bop08); ++index) handlerArea[DOS_HDLR_INT08_STUB_OFF + index] = bop08[index];  /* INT 08h stub */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TIMER))     = DOS_HDLR_INT08_STUB_OFF;              /* IVT[0x08].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TIMER)) = DOS_HDLR_SEG;        /* IVT[0x08].segment   */
-    for (index = 0; index < sizeof(bop1c); ++index) handlerArea[DOS_HDLR_INT1C_STUB_OFF + index] = bop1c[index];  /* INT 1Ch iret */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_USER_TICK))     = DOS_HDLR_INT1C_STUB_OFF;              /* IVT[0x1C].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_USER_TICK)) = DOS_HDLR_SEG;        /* IVT[0x1C].segment   */
-    for (index = 0; index < sizeof(bop09); ++index) handlerArea[DOS_HDLR_INT09_STUB_OFF + index] = bop09[index];  /* INT 09h default iret (0x4C-0x4F) */
-    /* INT 33h event-handler return: the guest's handler RETFs here (see MouseCallbackTry). */
-    handlerArea[MS_CB_RET_OFF + 0] = VDM_BOP0; handlerArea[MS_CB_RET_OFF + 1] = VDM_BOP1;
-    handlerArea[MS_CB_RET_OFF + VDM_BOP_NUMBER_OFFSET] = MS_CB_BOP; handlerArea[MS_CB_RET_OFF + VDM_BOP_LENGTH] = X86_OP_IRET;
-    /* DEFAULT DEVICE-IRQ HANDLERS. A real BIOS points the unused hardware vectors at a
-       handler that just acknowledges and returns; we had them pointing at whatever junk was
-       in the IVT, which on this box read F000:A390 -- unowned ROM. That was harmless only so
-       long as we could not deliver a device IRQ asynchronously. Now that we can, injecting an
-       IRQ the guest has not hooked jumps it into that junk and hangs it: measured, Skyroads
-       (which never installs a Sound Blaster ISR at all) froze at F000:A390 the moment its DMA
-       block completed. So give IRQ2-7 and IRQ8-15 a plain IRET, exactly as INT 09h has. */
-    handlerArea[DOS_IRET_STUB_OFF] = X86_OP_IRET;                                /* shared IRET stub    */
-    handlerArea[DOS_CASEMAP_OFF]   = X86_OP_RETF;                                /* AH=38h case map: RETF */
-    { volatile BYTE *swappableDataArea = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_SDA_SEG << PARAGRAPH_SHIFT);   /* AH=34h/5D06h */
-      INT item; for (item = 0; item < DOS_SDA_LEN; ++item) swappableDataArea[DOS_SDA_OFF + item] = 0; }
-    for (index = VECTOR_IRQ2; index <= VECTOR_IRQ7; ++index) {
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(index))     = DOS_IRET_STUB_OFF;
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(index)) = DOS_HDLR_SEG;
-    }
-    for (index = VECTOR_IRQ8; index <= VECTOR_IRQ15; ++index) {
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(index))     = DOS_IRET_STUB_OFF;
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(index)) = DOS_HDLR_SEG;
-    }
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_KEYBOARD))     = DOS_HDLR_INT09_STUB_OFF;              /* IVT[0x09].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_KEYBOARD)) = DOS_HDLR_SEG;        /* IVT[0x09].segment   */
-    for (index = 0; index < sizeof(bop1a); ++index) handlerArea[DOS_HDLR_INT1A_STUB_OFF + index] = bop1a[index];  /* INT 1Ah stub */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TIME))     = DOS_HDLR_INT1A_STUB_OFF;              /* IVT[0x1A].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TIME)) = DOS_HDLR_SEG;        /* IVT[0x1A].segment   */
-    for (index = 0; index < sizeof(bop2f); ++index) handlerArea[DOS_HDLR_INT2F_STUB_OFF + index] = bop2f[index];  /* INT 2Fh stub */
-    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_MULTIPLEX))     = DOS_HDLR_INT2F_STUB_OFF;              /* IVT[0x2F].offset    */
-    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_MULTIPLEX)) = DOS_HDLR_SEG;        /* IVT[0x2F].segment   */
-    for (index = 0; index < sizeof(xmsBopStub); ++index) handlerArea[XMS_ENTRY_OFF + index] = xmsBopStub[index];  /* XMS far-call entry */
-    /* ⚠ GH #47: a non-zero word at XMS_ENTRY_OFF+0x45 WAS TRIED AND REFUTED.
-       MEM.EXE skips its whole extended-memory report on a zero word at +0x45 of
-       some structure, and that structure looked like the XMS entry. It is not:
-       planting HIMEM's own bytes (EB 50) at the entry changed nothing. Sixth
-       refutation. */
-    for (index = 0; index < sizeof(bop67); ++index) handlerArea[DOS_HDLR_INT67_STUB_OFF + index] = bop67[index];  /* INT 67h (EMM) stub */
-    /* ⚠ NO EMS MEANS NO INT 67h VECTOR AND NO DEVICE NAME. Both halves, because
-         a program detects EMM by either following the vector to the "EMMXXXX0"
-         header OR by opening the device; leaving one of them behind is a manager
-         that half-exists, which is worse for a guest than one that does not. */
-    if (g_EmsOn) {
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_EMS))     = DOS_HDLR_INT67_STUB_OFF;          /* IVT[0x67].offset    */
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_EMS)) = DOS_HDLR_SEG;    /* IVT[0x67].segment   */
-    } else {
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_EMS))     = 0;
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_EMS)) = 0;
-    }
-    /* DPMI mode-switch entry (far-called): BOP 0x50 ; RETF. The host services the
-       BOP by switching to PM; the RETF only executes if the switch fails. */
-    handlerArea[DPMI_ENTRY_OFF + 0] = VDM_BOP0; handlerArea[DPMI_ENTRY_OFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_ENTRY_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_BOP; handlerArea[DPMI_ENTRY_OFF + VDM_BOP_LENGTH] = X86_OP_RETF; /* RETF */
-    /* DPMI 0301 real-mode-call return catcher: BOP 0x54 (no IRET/RETF -- the 0301
-       handler detects it and returns to PM, it never resumes past it). */
-    handlerArea[DPMI_RMRET_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RMRET_OFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_RMRET_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_RMRET_BOP;
-    /* DPMI 0303 real-mode callback entries (one per slot) + the PM-return catcher. */
-    { INT callbackSlot; for (callbackSlot = 0; callbackSlot < DPMI_CB_SLOTS; ++callbackSlot) {
-        WORD entry = DpmiCallbackEntry(DPMI_CB_BASE_OFF, callbackSlot);
-        handlerArea[entry + 0] = VDM_BOP0;
-        handlerArea[entry + 1] = VDM_BOP1;
-        handlerArea[entry + VDM_BOP_NUMBER_OFFSET] = DPMI_CB_BOP;
-    } }
-    handlerArea[DPMI_PMRET_OFF + 0] = VDM_BOP0; handlerArea[DPMI_PMRET_OFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_PMRET_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_PMRET_BOP;
-    /* 0306 raw mode-switch entries. Both are bare BOPs: the host completes the switch
-       by rewriting the CONTEXT, so control never resumes past the BOP and no RETF/IRET
-       tail is wanted (the same shape as DPMI_RMRET_OFF). The protected-to-real entry
-       lives in this segment too and is reached through a code selector based here --
-       see the 0306 handler. */
-    handlerArea[DPMI_RAW2PM_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RAW2PM_OFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_RAW2PM_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_RAW2PM_BOP;
-    handlerArea[DPMI_RAW2RM_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RAW2RM_OFF + 1] = VDM_BOP1;
-    handlerArea[DPMI_RAW2RM_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_RAW2RM_BOP;
-    /* 0305 save/restore: a register-preserving no-op (see the define). */
-    handlerArea[DPMI_SSR_OFF] = X86_OP_RETF;                               /* RETF */
-    /* (GH #18 run 67: the PM-fault handler BOP is planted at the handler CODE selector's
-       DPMI_FAULT_COFF by DpmiInstallFaultTrampoline(), not here.) */
-    /* EMS detection method 2: programs read the INT 67h vector's segment:000Ah for
-       the device-driver name "EMMXXXX0". Park it in the handler segment. */
-    if (g_EmsOn)
-        for (index = 0; index < sizeof(emmDeviceName); ++index) handlerArea[DOS_EMM_NAME_OFF + index] = emmDeviceName[index];
-
-    { UINT byteIndex;
-      volatile BYTE *controlBytes = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT);
-      for (byteIndex = 0; byteIndex < sizeof(biosInts)/sizeof(biosInts[0]); ++byteIndex) {
-          UINT offset = DOS_BIOS_STUBS + byteIndex * DOS_BIOS_STUB_SIZE;
-          controlBytes[offset + 0] = VDM_BOP0; controlBytes[offset + 1] = VDM_BOP1;
-          controlBytes[offset + VDM_BOP_NUMBER_OFFSET] = biosInts[byteIndex][1];
-          /* ── INT 25h/26h RETURN WITH THE CALLER'S FLAGS STILL PUSHED. ───────
-               Every other vector here ends in IRET. DOS's absolute disk read and
-               write do NOT: they return by RETF, deliberately leaving the FLAGS
-               word the INT pushed on the caller's stack, which the caller then
-               discards itself (`add sp,2`). Ending them with IRET pops that word
-               and the caller's `add sp,2` then eats its own return address --
-               corruption that surfaces later, somewhere else. (GH #44) */
-          controlBytes[offset + VDM_BOP_LENGTH] = (biosInts[byteIndex][0] == VECTOR_ABSOLUTE_DISK_READ || biosInts[byteIndex][0] == VECTOR_ABSOLUTE_DISK_WRITE)
-                        ? X86_OP_RETF   /* RETF */
-                        : X86_OP_IRET;  /* IRET */
-          *(volatile WORD *)(IVT_OFFSET_ADDRESS(biosInts[byteIndex][0]))     = (WORD)offset;
-          *(volatile WORD *)(IVT_SEGMENT_ADDRESS(biosInts[byteIndex][0])) = DOS_CTAB_SEG;
-          if (biosInts[byteIndex][0] == VECTOR_SYSTEM) g_Int15StubOffset = (WORD)offset;   /* #244 */
-      } }
-
-    /* ── INT 22h / 23h / 24h: REAL VECTORS, SO THE PSP CAN SAVE SOMETHING. (#34) ──
-         Every PSP stores the live copies of these three and restores them at exit.
-         They were whatever the IVT happened to hold, and the PSP fields were zero
-         -- which passes "the saved copy matches the live vector" trivially when
-         both are 0000:0000, so the gap could not be seen from that test alone.
-       ▸ INT 24h returns AL=3, FAIL THE CALL. Real DOS's default lives in
-         COMMAND.COM and prompts Abort/Retry/Ignore/Fail; there is no shell here to
-         prompt with, and of the four answers FAIL is the only one that hands the
-         error back to the program that can report it. IGNORE would corrupt data
-         and RETRY would spin forever. Documented rather than chosen silently.
-       ▸ INT 23h (Ctrl-Break) is a bare IRET: returning with CF clear means
-         "carry on", which is what a host with no shell to return to should do.
-       ▸ INT 22h (terminate address) routes to the same BOP as INT 20h, so a guest
-         that jumps there actually exits instead of falling through the IVT. */
-    {   volatile BYTE *controlBytes = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT);
-        UINT position = DOS_CRIT_STUBS;
-        controlBytes[position+0] = VDM_BOP0; controlBytes[position+1] = VDM_BOP1; controlBytes[position+VDM_BOP_NUMBER_OFFSET] = DOS_BOP_INT20; controlBytes[position+VDM_BOP_LENGTH] = X86_OP_IRET;
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TERMINATE_ADDRESS))     = (WORD)position;              /* INT 22h */
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TERMINATE_ADDRESS)) = DOS_CTAB_SEG;
-        controlBytes[position+DOS_CRIT_STUB_INT23] = X86_OP_IRET;                                          /* INT 23h: IRET */
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CTRL_C))     = (WORD)(position + DOS_CRIT_STUB_INT23);
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CTRL_C)) = DOS_CTAB_SEG;
-        controlBytes[position+DOS_CRIT_STUB_INT24] = X86_OP_MOV_IMM_BYTE_FIRST; controlBytes[position+DOS_CRIT_STUB_INT24+1] = DOS_CRIT_ACTION_FAIL; controlBytes[position+DOS_CRIT_STUB_INT24+2] = X86_OP_IRET;         /* mov al,3 ; iret */
-        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CRITICAL_ERROR))     = (WORD)(position + DOS_CRIT_STUB_INT24);        /* INT 24h */
-        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CRITICAL_ERROR)) = DOS_CTAB_SEG;
-        /* #34: the site DOS calls the guest's INT 24h from -- see CriticalRaise. */
-        controlBytes[DOS_CRIT_RAISE + 0] = X86_OP_INT; controlBytes[DOS_CRIT_RAISE + 1] = VECTOR_CRITICAL_ERROR;   /* int 24h  */
-        controlBytes[DOS_CRIT_RETURN + 0] = VDM_BOP0; controlBytes[DOS_CRIT_RETURN + 1] = VDM_BOP1;
-        controlBytes[DOS_CRIT_RETURN + VDM_BOP_NUMBER_OFFSET] = DOS_BOP_INT21;                                 /* bop 20h  */
-    }
-    /* #251: DOS's AUX/PRN driver code, which INT 21h resumes the guest in -- see
-       dos_auxprn.asm for why it is guest code and what it was measured against. */
-    {   volatile BYTE *controlBytes = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT);
-        UINT item;
-        for (item = 0; item < sizeof(g_DosAuxPrnCode); ++item) controlBytes[DOS_AUXPRN_OFF + item] = g_DosAuxPrnCode[item];
-        /* #254: the BIOS INT 09h's side-calls -- see bios_kbdact.asm. */
-        for (item = 0; item < sizeof(g_BiosKeyboardActionCode); ++item) controlBytes[DOS_KBDACT_OFF + item] = g_BiosKeyboardActionCode[item];
-        /* ── #274: INT 05h IS OURS NOW -- THE BIOS PRINT-SCREEN ROUTINE (p5). ─────────────
-             A fresh VDM left IVT[05h] at F000:FF54, a jump deeper into the VDM's own ROM
-             that KeyboardActionEntry refuses to enter (p_ivtkbd), so Print Screen called nothing
-             and a program's own `int 5` went somewhere we cannot vouch for. Every BIOS
-             since the PC has a routine here; ours prints the screen through INT 17h and
-             keeps its status HOST-side -- see PrintScreenBop for why not at 0050:0000. */
-        *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(VECTOR_PRINT_SCREEN))     = (WORD)(DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05);
-        *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(VECTOR_PRINT_SCREEN)) = DOS_CTAB_SEG;
-    }
-
-    /* GH #27 -- THE NULL-VECTOR LANDMINE. A vector left at 0000:0000 sends a guest
-       that INTs it to 0000:0000, where it executes the interrupt vector table
-       itself as code. Point any such vector at the shared IRET stub.
-       MEASURED BEFORE FIXING, and the measurement narrowed the fix: on the
-       bare-metal rig most unclaimed vectors are NOT null -- they carry the VDM's
-       own BIOS entries (INT 13h read F000:5595, INT 11h F000:F84D). Planting over
-       those would swap a working handler for a bare IRET, i.e. a silent
-       "success", which is the very failure mode this issue exists to remove. So
-       fill only the genuinely null ones, and name them in the log. */
-    { INT number, count = 0, start = -1;
-      cursor = LogPut(cursor, "STAGE0: null IVT vectors -> IRET stub:");
-      for (number = 0; number <= IVT_VECTORS; ++number) {                  /* 256 flushes a trailing run */
-          INT isNullVector = (number < IVT_VECTORS) && (*(volatile DWORD *)(IVT_OFFSET_ADDRESS(number)) == 0);
-          if (isNullVector) {
-              *(volatile WORD *)(IVT_OFFSET_ADDRESS(number))     = DOS_IRET_STUB_OFF;
-              *(volatile WORD *)(IVT_SEGMENT_ADDRESS(number)) = DOS_HDLR_SEG;
-              if (start < 0) start = number;
-              ++count;
-          } else if (start >= 0) {                  /* emit as ranges, not 133 items */
-              cursor = LogPut(cursor, " 0x"); cursor = LogHexByte(cursor, (UINT)start);
-              if (number - 1 > start) { cursor = LogPut(cursor, "-0x"); cursor = LogHexByte(cursor, (UINT)(number - 1)); }
-              start = -1;
-          }
-      }
-      if (!count) cursor = LogPut(cursor, " none");
-      cursor = LogPut(cursor, "\r\n"); }
-
-    DosPspBuild(NULL, DOS_PSP_SEG, DOS_ENV_SEG, g_DosMemoryTop);   /* #136 */
-    /* AFTER the vectors above are planted, never before: saving a vector that is
-       still 0000:0000 stores a null the program restores on the way out. Parent
-       PSP = our own, since nothing launched us from inside the VDM. (GH #34) */
-    DosPspSaveVectors(NULL, DOS_PSP_SEG, DOS_PSP_SEG);
-    /* ── ★ EXTRA ENVIRONMENT VARIABLES FROM dosenv.txt. Read here, next to the block
-         being built, so a knob that is absent costs exactly one failed open and the
-         environment is byte-identical to what it has always been. */
-    DsProbeLoad();          /* the #GP fault report's named guest data words */
-    { static CHAR dosEnvironment[192];
-      HANDLE handle = CreateFileA(DOSENV_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                             NULL, OPEN_EXISTING, 0, NULL);
-      dosEnvironment[0] = 0;
-      if (handle != INVALID_HANDLE_VALUE) {
-          DWORD bytesRead = 0;
-          ReadFile(handle, dosEnvironment, sizeof dosEnvironment - 1, &bytesRead, NULL);
-          CloseHandle(handle);
-          dosEnvironment[bytesRead < sizeof dosEnvironment ? bytesRead : sizeof dosEnvironment - 1] = 0;
-          if (dosEnvironment[0]) {
-              cursor = LogPut(cursor, "STAGE2: dosenv.txt -> extra guest environment [");
-              cursor = LogPut(cursor, dosEnvironment); cursor = LogPut(cursor, "]\r\n");
-          }
-      }
-      /* ── ★★★★ argv[0] MUST BE 8.3, BECAUSE A DOS EXTENDER RE-OPENS IT. (s73) ─────
-           DOS/4GW loads its own protected-mode half by re-opening the program named in
-           the environment's program-path field, and it tokenises that name -- so a path
-           with spaces is torn at the first one and the open fails. It then prints its
-           banner and stops, with no error and no video mode set.
-         ▸ THAT IS THE "HEADLESS-ONLY DOS/4GW BLOCKER", and it was never headless-only:
-           it is PATH-specific, exactly as the note said. A by-hand launch works because
-           CSRSS hands us the SHORT name already (C:\DOCUME~1\...\DOOM.EXE); the
-           target.txt path handed over the long one (C:\Documents and Settings\...),
-           and only the harness used that. Any user whose games live under a path with
-           a space had the same broken launch.
-         ▸ Shortened here, once, where argv[0] is built -- so every launch shape agrees
-           with the one that was already working. WowShorten leaves the path alone if
-           GetShortPathNameA cannot answer, so a path that has no 8.3 form is unchanged. */
-      if (programPathBuffer[0]) {
-          CHAR before[768]; lstrcpynA(before, programPathBuffer, sizeof before);
-          WowShorten(programPathBuffer, sizeof programPathBuffer);
-          if (lstrcmpA(before, programPathBuffer) != 0) {
-              cursor = LogPut(cursor, "STAGE2: argv[0] shortened for the guest: ["); cursor = LogPut(cursor, before);
-              cursor = LogPut(cursor, "] -> ["); cursor = LogPut(cursor, programPathBuffer); cursor = LogPut(cursor, "]\r\n");
-          }
-          /* ── ★★★★★ AND IF IT IS STILL TOO LONG, HAND OVER THE BARE NAME. ──────────
-               DOS/4GW 1.97 copies argv[0] into a **64-BYTE BUFFER** and does not bound
-               it. MEASURED, three ways, from this one share:
-                 doom\DOOM.EXE        62 chars -> loads and plays
-                 hexen\HEXEN.EXE      64 chars -> "fatal error (1007): can't find file
-                                      ...\HEXEN\HEXEN.EXE< to load"  (no room for the
-                                      NUL, so it reads one byte of garbage)
-                 heretic\HERETIC.EXE  68 chars -> truncated at 64: "...\HERETICD"
-               Copying HEXEN.EXE alone to a 61-char path fixed it outright -- DOS/4GW
-               loaded and Hexen got as far as looking for its WAD.
-             ⚠ THIS IS WHY "HEXEN WORKED BEFORE AND DOES NOT NOW", and it is not a code
-               regression: s73 moved the games from `games\Hexen\` (59) to
-               `demo\msdos\hexen\` (64) and crossed the limit. A user installing a game
-               under a deep path of their own hits exactly the same wall.
-             ▸ The bare filename is safe because the guest's current directory IS the
-               program's own directory (it is how every one of these games finds its
-               WAD), so the extender's open resolves to the same file -- and 8.3 name
-               plus NUL can never approach 64. Only done when it must be. */
-          if (lstrlenA(programPathBuffer) > EXTENDER_ARGV0_SAFE_LENGTH) {
-              PCSTR baseName = programPathBuffer, scan;
-              for (scan = programPathBuffer; *scan; ++scan) if (*scan == '\\' || *scan == '/') baseName = scan + 1;
-              if (baseName != programPathBuffer && *baseName) {
-                  cursor = LogPut(cursor, "STAGE2: argv[0] is "); cursor = LogHex(cursor, (DWORD)lstrlenA(programPathBuffer));
-                  cursor = LogPut(cursor, " chars -- past DOS/4GW's 64-byte buffer; handing over the bare name [");
-                  cursor = LogPut(cursor, baseName); cursor = LogPut(cursor, "] (cwd is the program's own directory)\r\n");
-                  { CHAR baseNameCopy[64]; lstrcpynA(baseNameCopy, baseName, sizeof baseNameCopy); LogPut(programPathBuffer, baseNameCopy); }
-              }
-          }
-      }
-      /* ── THE ENVIRONMENT: the four defaults + dosenv.txt + the launcher's LIB/INCLUDE,
-           all in the ONE fixed 256-byte block at 0x60. The memory map does not move --
-           see LauncherCompilerVariables for why that matters (a relocated block #GP'd every
-           DOS extender). `extra` is dosenv.txt followed by the compiler vars. */
-      { static CHAR environmentExtra[512]; DWORD extraOffset = 0;
-        if (dosEnvironment[0]) { extraOffset = (DWORD)wsprintfA(environmentExtra, "%s", dosEnvironment);
-                         if (extraOffset && environmentExtra[extraOffset-1] != '\n') environmentExtra[extraOffset++] = '\n'; }
-        /* ── ULTRASND= IS HOW A GUS PROGRAM FINDS THE CARD, AND IT LOOKS BEFORE IT PROBES.
-             heaven7 never touched a port without it. <base hex>,<DRAM DMA>,<record DMA>,
-             <GF1 IRQ>,<MIDI IRQ> (docs/ref/gus.md §1) -- the numbers the device was built
-             with, so the string and the card cannot disagree. A dosenv.txt ULTRASND wins. */
-        if (g_GusOn && !StrStrNoCase(environmentExtra, HOST_ENV_ULTRASND_ASSIGN)) {
-            extraOffset += (DWORD)wsprintfA(environmentExtra + extraOffset, HOST_ENV_ULTRASND_FORMAT,
-                                   (UINT)g_Gus.BasePort, (UINT)g_Gus.DmaChannel, (UINT)g_Gus.DmaChannel,
-                                   (UINT)g_Gus.Irq, (UINT)g_Gus.Irq);
-        }
-        if (g_Fetch2Ok) {
-            UINT variableCount = LauncherCompilerVariables(g_Environment2, sizeof g_Environment2, environmentExtra + extraOffset,
-                                                 (DWORD)sizeof environmentExtra - extraOffset);
-            if (variableCount) { cursor = LogPut(cursor, "STAGE2: launcher compiler vars -> "); cursor = LogHex(cursor, variableCount);
-                      cursor = LogPut(cursor, " (LIB/INCLUDE into the 0x60 block; memory map unmoved)\r\n"); }
-        }
-        DosEnvBuildWithCard(NULL, DOS_ENV_SEG, programPathBuffer[0] ? programPathBuffer : HOST_DEFAULT_PROGRAM_PATH,
-                           HOST_DEFAULT_DRIVE_ROOT, &g_SbConfig, environmentExtra[0] ? environmentExtra : NULL);        /* M2.5: env */
-      }
-      /* ── ★ READ THE BLOCK BACK OUT OF GUEST MEMORY AND PRINT IT. Not the string we
-           passed in -- the bytes the guest will actually walk, which is a different
-           claim and the only one worth logging. A DOS environment is a run of
-           NUL-terminated strings ended by a double NUL, then a count WORD, then the
-           program path; every one of those can be got wrong, and "the variable is
-           set" cannot be told from "the variable is set but the block is malformed"
-           from the host side. NULs print as '.' so the string boundaries are visible.
-         ⚠ This is what makes dosenv.txt a MEASURED feature rather than an asserted
-           one -- see `an unimplemented call still answers`. */
-      /* ⚠ ITS OWN BUFFER, NOT THE RUNNING REPORT. The first cut appended into `p` and
-           bounded the printable characters with `p < base + 3800` -- by this point in
-           the STAGE2 report that bound was already passed, so every readable byte was
-           silently dropped and the dump came back as `[......]`, which reads exactly
-           like an EMPTY ENVIRONMENT. An instrument that fails by printing a plausible
-           wrong answer is worse than one that fails loudly. */
-      { const volatile BYTE *environmentBytes = (const volatile BYTE *)((DWORD)DOS_ENV_SEG << PARAGRAPH_SHIFT);
-        CHAR environmentLine[288], *environmentCursor = environmentLine;
-        UINT environmentIndex, zeros = 0;
-        environmentCursor = LogPut(environmentCursor, "STAGE2: guest environment block @0x");
-        environmentCursor = LogHex(environmentCursor, (DWORD)DOS_ENV_SEG << PARAGRAPH_SHIFT); environmentCursor = LogPut(environmentCursor, " = [");
-        for (environmentIndex = 0; environmentIndex < ENVIRONMENT_DUMP_BYTES && environmentCursor < environmentLine + ENVIRONMENT_DUMP_LINE; ++environmentIndex) {
-            BYTE character = environmentBytes[environmentIndex];
-            if (character == 0) { *environmentCursor++ = '.'; *environmentCursor = 0;
-                          if (++zeros >= ENVIRONMENT_DUMP_NULS && environmentIndex > ENVIRONMENT_DUMP_SKIP) break;
-                          continue; }
-            zeros = 0;
-            *environmentCursor++ = (CHAR)((character >= ASCII_SPACE && character < ASCII_DELETE) ? character : '?'); *environmentCursor = 0;
-        }
-        environmentCursor = LogPut(environmentCursor, "]\r\n");
-        (VOID)environmentCursor;
-        /* Into the running report, the same way every neighbouring line goes: a
-           direct LogAppend here produced NOTHING in the file while the zput three
-           statements above appeared, and an instrument that silently writes nowhere
-           is not worth debugging twice. */
-        cursor = LogPut(cursor, environmentLine); }
-    }
-    DosPspBuildCommandTail(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
-    /* ► DUMP THE TAIL AS THE GUEST WILL SEE IT. Passing ANY argument makes DOS/4GW
-         quit before printing a single character, with a DPMI/INT 21h trace identical
-         to a working run for all 617 of its lines -- so the branch it takes is on
-         MEMORY, and this is the memory. Length byte, the bytes, and the terminator. */
-    { volatile BYTE *pspView = (volatile BYTE *)((DWORD)DOS_PSP_SEG << PARAGRAPH_SHIFT);
-      UINT textIndex;
-      cursor = LogPut(cursor, "STAGE2: cmdtail len=0x"); cursor = LogHexByte(cursor, pspView[DOS_PSP_COMMAND_TAIL_LENGTH]);
-      cursor = LogPut(cursor, " [");
-      for (textIndex = 0; textIndex < COMMAND_TAIL_DUMP_BYTES; ++textIndex) { cursor = LogHexByte(cursor, pspView[DOS_PSP_COMMAND_TAIL + textIndex]); cursor = LogPut(cursor, " "); }
-      cursor = LogPut(cursor, "]\r\n"); }
-    {   WORD firstMcb = DosMcbInitializeWithTop(NULL, g_DosMemoryTop);   /* #136 */
-        DosInt21Initialize(&machine, firstMcb);
-        /* The program's name in its MCB, as DOS 4+ writes it (#47: MEM /D). After
-           DosMcbInitialize, which lays the chain and clears the name byte. */
-        DosMcbSetOwnerName(NULL, DOS_PSP_SEG, programPathBuffer);
-        /* The CDS array's block, at the top of the chain (see DOS_LASTDRIVE). The
-           PSP was built with DOS_MEM_TOP as its memory top; the program's block now
-           ends one paragraph below the reserved block's data, and PSP+2 must say so
-           or a program that resizes itself to "PSP+2 - PSP" fails with error 8. */
-        /* ⚠⚠ ONE RESERVATION, CARVED -- NOT TWO CALLS. DosMcbReserveTop() splits
-             the LAST 'Z' block, and its first act is to make the block it split an
-             'M' and put the new 'Z' on top. So a SECOND call finds the block the
-             FIRST one just reserved and tries to split THAT: 143 paragraphs, which
-             cannot hold the SFT's 473, so it returned 0 and the SFT silently came
-             out ABSENT. Measured, first run -- the log said "SFT ABSENT" while the
-             memory it needed was sitting free below. Reserve the pair in one go and
-             carve it: CDS at the bottom, SFT immediately above. One MCB owned by
-             DOS (8) covering both is what it is -- resident DOS data. */
-        {   WORD reservedSegment = DosMcbReserveTop(NULL, firstMcb,
-                                            (WORD)(DOS_CDS_PARAS + DOS_SFT_PARAS));
-            if (reservedSegment) { g_CdsSegment = reservedSegment; g_SftSegment = (WORD)(reservedSegment + DOS_CDS_PARAS); }
-            else        g_CdsSegment = DosMcbReserveTop(NULL, firstMcb, DOS_CDS_PARAS);
-        }
-        /* ── ★ AND THE SFT, FOR A **DOS** GUEST. (s72) ────────────────────────────
-             The SFT chain was planted only on the WOW path, and the note there said
-             so in as many words -- "a DOS guest still gets SysVars+4 = 0 ... when a
-             DOS program needs the SFT, this moves". A DOS program now has: p_sysvar
-             walks the List of Lists and reads the chain head as absent.
-           ⚠⚠ AND ABSENT IS THE DANGEROUS PART, NOT THE MISSING PART. SysVars+4 = 0
-             does not mean "no SFT", it means "an SFT at segment 0" -- so a program
-             that walks the chain reads the IVT as SFT headers. That is exactly what
-             krnl386 did: 0x00000000 -> 0x000fa357 -> 0x000bc370 -> back, forever,
-             117 MB of DPMI calls in one run (see DOS_SFT_* in dos_layout.h). The
-             only reason no DOS guest had hit it is that none had looked.
-           ▸ THE MEMORY IS AFFORDABLE, AND THAT WAS MEASURED, NOT ASSUMED. The block
-             is 473 paragraphs (7.4 KB). p_tsr puts the largest free block at 0x962F
-             here against 0x9302 on genuine MS-DOS 6.22 -- we hand out 12.7 KB MORE
-             than real DOS -- so after this we are still 5.3 KB ahead of it, and a
-             guest that fits on 6.22 still fits here.
-           ▸ Reserved at the top like the CDS, owned by DOS (8), so it is resident
-             data a memory walker can see and account for rather than a hole. It is
-             taken AFTER the CDS, so it lands just below it and the program's block
-             now ends below THIS one -- hence PSP+2 comes from the lower of the two. */
-        if (g_CdsSegment)
-            *(volatile WORD *)(((DWORD)DOS_PSP_SEG << PARAGRAPH_SHIFT) + DOS_PSP_MEMORY_TOP) = (WORD)(g_CdsSegment - 1);
-    }
-    /* Published so the Settings dialog can change the reported DOS version while a
-       guest is running -- it is read per INT 21h AH=30h, so it takes effect at the
-       guest's next version check with no restart. */
-    g_DosMachine = &machine;
-    DosInt21SetVersion(&machine, (BYTE)g_Settings.Values[SET_DOSMAJ], (BYTE)g_Settings.Values[SET_DOSMIN]);
-    /* Two sources, and the second one silently wins -- see the note below the file read. */
-    PCSTR dosVersionSource = "HKCU\\Software\\NTVDMEX (Settings dialog)";
-    /* ── THE REPORTED DOS VERSION IS A KNOB, BECAUSE IT IS A LIE THE GUEST CHOOSES.
-         Real DOS ships SETVER for precisely this, and the number is not a fact about
-         us: it is what a particular guest will accept. We default to 6.22 to match the
-         M9 oracle, and XP's OWN COMMAND.COM refuses that outright -- "Incorrect DOS
-         version", INT 21h AH=00h, terminated before it printed a prompt. NT's DOS has
-         always reported 5.00 and its shell is built to match.
-         `dosver.txt` on the share: "5.0", "6.22", "3.31" -- major.minor decimal. */
-    /* ── ★ AN NTVDM-AWARE SHELL GETS 5.00 WITHOUT ANYONE HAVING TO ASK. (s79) ────────
-         XP's COMMAND.COM accepts only AX = 5 exactly (5.00 -- observed: 6.22 is
-         refused) and prints "Incorrect DOS version" otherwise, so on the default 6.22 a
-         double-click would die before it
-         printed anything. This is not a global policy change: it applies only to a
-         guest we loaded AS THE SHELL that carries NTVDM's own BOPs (see the scan), and
-         `cfg\dosver.txt` below still overrides it. 6.22's COMMAND.COM has no BOPs and
-         is untouched -- it keeps 6.22, which is the version it expects. */
-    /* ⇒ s81 (#208), the user's choice: SETVER, NOT A SESSION-WIDE 5.00. Every program
-         started from Windows now runs UNDER this shell, so forcing the whole session to
-         5.00 would have changed the version every program sees. Only the SHELL'S OWN
-         PROCESS is told 5.00 (DosInt21SetShellPsp); what it runs gets the setting. */
-    if (g_GuestNtAware) {
-        DosInt21SetShellPsp(&machine, DOS_PSP_SEG, TRUE);
-        dosVersionSource = "the setting -- the NTVDM-aware shell ITSELF is told 5.00 (per process, SETVER-style)";
-        g_DosVersionShell = 1;
-    } else if (g_GuestNtvdmBops >= NT_AWARE_SHELL_BOPS_MIN && g_TopIsShell) {
-        /* s91: XP's COMMAND.COM launched AS THE PROGRAM -- `command.com /c prog > file`
-             from cmd.exe, or a user typing `command` there. It is not "the shell we
-             chose", so the rule above did not apply, and on the default 6.22 it said
-             "Incorrect DOS version" and quit where stock runs it (launch matrix row 5,
-             runs/s91/chain18b). Same image test and same per-process 5.00 as the
-             EXEC path gives a second XP shell; the name check is the second factor
-             that keeps an innocent guest from being told DOS 5. */
-        DosInt21SetShellPsp(&machine, DOS_PSP_SEG, TRUE);
-        dosVersionSource = "the setting -- XP's COMMAND.COM run as the program is told 5.00 (per process, SETVER-style)";
-        g_DosVersionShell = 1;
-    }
-    { HANDLE handle = CreateFileA(DOSVER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                             NULL, OPEN_EXISTING, 0, NULL);
-      if (handle != INVALID_HANDLE_VALUE) {
-          CHAR text[16]; DWORD bytesRead = 0; UINT index = 0, major = 0, minor = 0;
-          ReadFile(handle, text, sizeof text - 1, &bytesRead, NULL);
-          CloseHandle(handle);
-          while (index < bytesRead && text[index] >= '0' && text[index] <= '9') { major = major*DECIMAL_RADIX + (UINT)(text[index]-'0'); ++index; }
-          if (index < bytesRead && text[index] == '.') {
-              ++index;
-              while (index < bytesRead && text[index] >= '0' && text[index] <= '9') { minor = minor*DECIMAL_RADIX + (UINT)(text[index]-'0'); ++index; }
-          }
-          if (major && major < BYTE_VALUES && minor < BYTE_VALUES) {
-              DosInt21SetVersion(&machine, (BYTE)major, (BYTE)minor);
-              SettingsNoteOverride(SET_DOSMAJ, CFG_TEXT(KNOB_FILE_DOSVER), major);
-              SettingsNoteOverride(SET_DOSMIN, CFG_TEXT(KNOB_FILE_DOSVER), minor);
-              dosVersionSource = CFG_TEXT(KNOB_FILE_DOSVER);
-              g_DosVersionForced = 1;
-              g_DosVersionWhy = SETTINGS_DOS_VERSION_WHY;
+      if (cpuSpeedFile != INVALID_HANDLE_VALUE) {
+          /* ── ⚠⚠ THIS READ ONE CHARACTER, SO HALF THE LADDER WAS UNREACHABLE. ────
+               `c[0] - '0'` cannot express an index above 9, and the ladder went to
+               17 in session 54 when it grew from 7 entries to 18. So every speed
+               from 75 MHz down -- 75, 66, 50, 33, 25, 16, 12, 8, which is ALL of
+               the period-hardware settings and every one a person would actually
+               reach for -- silently selected the FIRST DIGIT instead: `13` (33 MHz)
+               ran as index 1, i.e. 3300 MHz, and reported itself as doing so.
+             ⚠ THE RANGE CHECK HID IT rather than catching it. `c[0] < '0' +
+               CPUSPEED_COUNT` with COUNT=18 accepts characters up to 'A', so a
+               two-digit value passed the guard on its first digit and was accepted
+               as a valid index -- a bounds test that admits exactly the input it
+               should have rejected.
+             ★ MEASURED 2026-09-09: `echo 13 > cpuspd.txt` came back
+               `STAGE2: cpuspeed idx=00000001 mhz=00000ce4` -- 3300 MHz. The rig
+               sweep this knob exists to drive therefore never tested the slow half
+               of the ladder even once, and cpuswp.bat only ever swept 0-6.
+             ► The CPUREF reader four lines above already does it correctly. Same
+               loop here; there is no reason for two adjacent knobs to disagree.
+             ⚠ This is the FILE knob only. The menu and the Settings dialog set the
+               index directly and were never affected, so it is a testability defect
+               and not the cause of any speed a user has seen. */
+          CHAR text[8]; DWORD bytesRead = 0; UINT value9 = 0; INT index9;
+          ReadFile(cpuSpeedFile, text, sizeof text, &bytesRead, NULL); CloseHandle(cpuSpeedFile);
+          for (index9 = 0; index9 < (INT)bytesRead; ++index9) { if (text[index9] < '0' || text[index9] > '9') break;
+                                             value9 = value9 * DECIMAL_RADIX_U + (UINT)(text[index9] - '0'); }
+          if (index9 > 0 && value9 < (UINT)CPUSPEED_COUNT) {
+              g_CpuSpeedIndex = (INT)value9;
+              SettingsNoteOverride(SET_SPEEDMODE, CFG_TEXT(KNOB_FILE_CPUSPD), value9);
           }
       } }
-    /* ── ★ SAY WHICH VERSION IS IN FORCE, AND WHERE IT CAME FROM. EVERY RUN. ──────
-         This printed a line ONLY when `dosver.txt` overrode, so the persistent source
-         -- HKCU\Software\NTVDMEX\DosVersionMajor/Minor, written by the Settings dialog
-         -- was completely silent. The rig was found reporting **5.00 to every DOS
-         guest** from that registry value, with no `dosver.txt` anywhere, on a project
-         whose entire parity method diffs against a 6.22 oracle (`p_ver.com`:
-         `int21.30 AX=0005`). Deleting the file, which is what every note about this
-         knob says to do afterwards, does NOT restore the default -- and nothing
-         anywhere reported the discrepancy.
-       ⚠ The standing rule this breaks is "a status line nobody reads is not a check";
-         this was worse, because there was no line at all. Unconditional now, and it
-         names the SOURCE, because the number alone would not have caught it either.
-       ⚠ DECIMAL, and it took a wrong reading to notice. The first cut used zhexb and
-         printed "6.22" as **06.16**, which a human reads as version 6.16 -- a number in
-         the wrong units is not a measurement, and this line exists precisely so nobody
-         has to decode it. Minor is zero-padded to two digits: "6.2" and "6.20" are
-         different DOS versions. */
-    cursor = LogPut(cursor, "STAGE2: DOS version reported = ");
-    cursor = LogDecimal(cursor, machine.VersionMajor); cursor = LogPut(cursor, ".");
-    if (machine.VersionMinor < 10) cursor = LogPut(cursor, "0");
-    cursor = LogDecimal(cursor, machine.VersionMinor);
-    cursor = LogPut(cursor, " (source: "); cursor = LogPut(cursor, dosVersionSource); cursor = LogPut(cursor, ")\r\n");
-    /* ── INT 21h AH=53h's PRIVATE SUB-FUNCTIONS, AS A KNOB. (s79) ────────────────────
-         XP's COMMAND.COM asks AH=53h with AL as a selector, and AL=5's answer decides
-         whether it ever reads the keyboard: answered 1, it never does (observed: no
-         AH=0Ah, the shell goes past its prompt). Stock IS interactive,
-         so stock must answer AL=0 there -- while our probe measured AL=1 with its
-         output redirected to a file. Until that is re-measured un-redirected, the
-         answers are a table a run can change, not a constant a rebuild can.
-       ⚠ THE DEFAULT IS THE MEASURED VALUE, so a run with no file behaves exactly as
-         before. This is deliberately NOT a fix.
-       ⚠ And it prints unconditionally, with its source -- the dosver knob had two
-         sources and logged a line only when one of them won, which is how the rig
-         reported DOS 5.00 to every guest for an unknown number of sessions. */
-    { PCSTR int53Source = "built-in (measured vs stock ntvdm, 2026-09-25)";
-      HANDLE handle;
-      /* ── ★★ THE CONTEXT-DEPENDENCE, MODELLED RATHER THAN OVERRIDDEN. (s79) ─────────
-           The measured stock answers (AL=2 -> CF=0, AL=5 -> AL=1) do not let XP's
-           COMMAND.COM read a key: with AL=5 answered 1 it never reaches its keyboard
-           read (see above). Stock IS interactive, so stock answers
-           differently WHEN THE SHELL ASKS -- the call is context-dependent, and the
-           context we measured in was a standalone probe with its stdout redirected.
-         ⇒ So model the context instead of claiming a new universal value: an
-           NTVDM-AWARE SHELL gets the answers that make it a shell; every other guest,
-           and every probe, still gets the measured ones. That is narrower than the
-           `cfg\int53.txt` knob it replaces, and it cannot affect anything else.
-         ⚠ STILL PROVISIONAL, BUT NARROWER (s84, #142). `p_int53f.com` under stock, with
-           and without redirection, answers IDENTICALLY (5305 -> AL=1 both ways), so
-           redirection is NOT the context that flips it. What is left is the caller:
-           a probe is always a CHILD of stock's shell, and only the shell itself can be
-           asked for the AL=0 answer this branch gives it. Kept as the model until
-           that can be measured. It is marked here so it cannot quietly become folklore. */
-      if (g_GuestNtAware) {
-          g_DosInt53Answers[DOS_INT53_SHELL_LOOP].Ax = DOS_FN_BPB_TO_DPB << BYTE_SHIFT; g_DosInt53Answers[DOS_INT53_SHELL_LOOP].IsCarry = 1;   /* top of its main loop */
-          /* #208: a ROUTED program is the shell's work, not the keyboard's. CF=0 here sends
-             its loop to BOP 54 sub 01 ("what next?") instead of the prompt -- so when the
-             program ends the shell ASKS, and we decide: done (close the window) or, after
-             Close Program, the prompt. See the sub 01 arm. */
-          if (g_Routed) g_DosInt53Answers[DOS_INT53_SHELL_LOOP].IsCarry = 0;
-          g_DosInt53Answers[DOS_INT53_STARTUP].Ax = DOS_FN_BPB_TO_DPB << BYTE_SHIFT; g_DosInt53Answers[DOS_INT53_STARTUP].IsCarry = 0;   /* -> [0x327] = 0       */
-          int53Source = "NTVDM-aware shell (PROVISIONAL -- see p_int53f)";
-      }
-      handle = CreateFileA(INT53_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                      NULL, OPEN_EXISTING, 0, NULL);
-      if (handle != INVALID_HANDLE_VALUE) {
-          CHAR text[512]; DWORD bytesRead = 0, index = 0;
-          ReadFile(handle, text, sizeof text - 1, &bytesRead, NULL); CloseHandle(handle);
-          while (index < bytesRead) {
-              UINT versions[INT53_FIELDS]; INT fieldCount = 0;
-              /* one line */
-              while (index < bytesRead && (text[index] == ' ' || text[index] == '\t')) ++index;
-              if (index < bytesRead && (text[index] == ';' || text[index] == '#')) { while (index < bytesRead && text[index] != '\n') ++index; }
-              while (index < bytesRead && text[index] != '\n' && fieldCount < INT53_FIELDS) {
-                  UINT value = 0; INT got = 0;
-                  while (index < bytesRead && (text[index] == ' ' || text[index] == '\t')) ++index;
-                  while (index < bytesRead) {
-                      CHAR digitCharacter = text[index];
-                      INT digit = (digitCharacter >= '0' && digitCharacter <= '9') ? digitCharacter - '0'
-                            : (digitCharacter >= 'a' && digitCharacter <= 'f') ? digitCharacter - 'a' + HEX_DIGIT_A_VALUE
-                            : (digitCharacter >= 'A' && digitCharacter <= 'F') ? digitCharacter - 'A' + HEX_DIGIT_A_VALUE : -1;
-                      if (digit < 0) break;
-                      value = value * HEX_RADIX_U + (UINT)digit; got = 1; ++index;
-                  }
-                  if (!got) break;
-                  versions[fieldCount++] = value;
-              }
-              if (fieldCount == INT53_FIELDS && versions[INT53_FIELD_AL] < DOS_INT53_COUNT) {
-                  g_DosInt53Answers[versions[INT53_FIELD_AL]].Ax = (WORD)versions[INT53_FIELD_AX];
-                  g_DosInt53Answers[versions[INT53_FIELD_AL]].IsCarry = (BYTE)(versions[INT53_FIELD_CARRY] ? 1 : 0);
-                  int53Source = "cfg\\int53.txt";
-              }
-              while (index < bytesRead && text[index] != '\n') ++index;
-              if (index < bytesRead) ++index;
+}
+
+
+/* cfg\vwatch.txt: a planar watchpoint at a video RAM offset, when the file is present. */
+static VOID StartupLoadVideoWatch(VOID)
+{
+    /* ⚠ AFTER VddBusAdd, NOT BEFORE. VddBusAdd calls VddVideoInitialize, which
+       disarms the watchpoint -- setting it first looked right and was silently
+       undone, and the run came back with no trace and no error. */
+    /* cfg/vwatch.txt: a hex VRAM byte offset to record every planar write to. Off
+       unless the file is there -- see the watchpoint in vdd_video.c. */
+    { HANDLE watchHandle = CreateFileA(VWATCH_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              NULL, OPEN_EXISTING, 0, NULL);
+      if (watchHandle != INVALID_HANDLE_VALUE) {
+          CHAR watchText[32]; DWORD watchBytesRead = 0, watchValue = 0, watchIndex; INT gotWatch = 0;
+          ReadFile(watchHandle, watchText, sizeof watchText - 1, &watchBytesRead, NULL); CloseHandle(watchHandle);
+          for (watchIndex = 0; watchIndex < watchBytesRead; ++watchIndex) {
+              INT digit = -1; CHAR digitCharacter = watchText[watchIndex];
+              if (digitCharacter >= '0' && digitCharacter <= '9') digit = digitCharacter - '0';
+              else if (digitCharacter >= 'a' && digitCharacter <= 'f') digit = digitCharacter - 'a' + HEX_DIGIT_A_VALUE;
+              else if (digitCharacter >= 'A' && digitCharacter <= 'F') digit = digitCharacter - 'A' + HEX_DIGIT_A_VALUE;
+              if (digit < 0) break;
+              watchValue = (watchValue << NIBBLE_SHIFT) | (DWORD)digit; gotWatch = 1;
           }
-      }
-      cursor = LogPut(cursor, "STAGE2: INT 21h AH=53h answers (source: ");
-      cursor = LogPut(cursor, int53Source); cursor = LogPut(cursor, ")");
-      { UINT item;
-        for (item = 0; item < DOS_INT53_COUNT; ++item) {
-            cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, (BYTE)item); cursor = LogPut(cursor, "=");
-            cursor = LogHex(cursor, g_DosInt53Answers[item].Ax);
-            cursor = LogPut(cursor, g_DosInt53Answers[item].IsCarry ? "/C" : "/c");
-        } }
-      cursor = LogPut(cursor, "\r\n"); }
-    /* GH #38: plant the AH=65h character tables in the DOS-resident block. */
-    { volatile BYTE *controlTable = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT); UINT item;
-      for (item = 0; item < sizeof(g_DosCtabUpper);   ++item) controlTable[DOS_CTAB_UPPER   + item] = g_DosCtabUpper[item];
-      for (item = 0; item < sizeof(g_DosCtabFileNameUpper); ++item) controlTable[DOS_CTAB_FNUPPER + item] = g_DosCtabFileNameUpper[item];
-      for (item = 0; item < sizeof(g_DosCtabFileNameTerminators);  ++item) controlTable[DOS_CTAB_FNTERM  + item] = g_DosCtabFileNameTerminators[item];
-      for (item = 0; item < sizeof(g_DosCtabCollate); ++item) controlTable[DOS_CTAB_COLLATE + item] = g_DosCtabCollate[item];
-      for (item = 0; item < sizeof(g_DosCtabDbcs);    ++item) controlTable[DOS_CTAB_DBCS    + item] = g_DosCtabDbcs[item];
-      /* ── THE INT 2Fh AX=122Eh TABLES, ZEROED EXPLICITLY. ──────────────────
-           The block is MCB-reserved and in practice arrives zeroed, but a guest
-           that reads a table we never wrote is reading whatever the last run
-           left there -- and this is exactly the region where a stale pointer had
-           krnl386 writing into our own handler code. Cheap to be certain.
-         ⚠ 192 bytes covers all three tables (A, B, C at 0x4E0/0x520/0x560). */
-      for (item = 0; item < DOS_INT2F_TBLS_LEN; ++item) controlTable[DOS_INT2F_TBL_A + item] = 0;
-      /* ── INT 15h AH=C0h: THE SYSTEM CONFIGURATION TABLE. (GH #54) ──────────────
-           Measured (tests/probes/dos/p_int15.asm): PCem's real AMI 486 says FC 01 00
-           70 00; SeaBIOS FC 00 01 74 40; dosbox-x FC 00 01 70 40. The model triple
-           is the AMI's -- the period machine. The FEATURE BITS ARE NOT COPIED from
-           anyone: each one is a claim about THIS machine, and a claim a guest can
-           act on, so only the true ones are set.
-             f1 bit 6  second 8259 present ............ yes (vdd_pic)
-             f1 bit 5  real-time clock present ........ yes (vdd_cmos)
-             f1 bit 4  INT 09h calls INT 15h AH=4Fh ... YES (#244) -- bios_kbdact.asm
-                       k4f, made whenever IVT[15h] is not our own stub (our default
-                       would answer "process it" unchanged, so skipping it then is
-                       indistinguishable). Was NO (64h); AMI, SeaBIOS and dosbox-x set it
-             f1 bit 2  EBDA allocated ................. YES (#253) -- 1 KB at 9FC0h,
-                       which is what INT 12h's 639 KB always implied; AH=C1h and
-                       0040:000E now say so too. Was NO (60h) while C1h refused --
-                       see bios_bda.h for why the EBDA, not 640 KB, is the answer
-             f2 bit 6  INT 16h AH=09h supported ....... yes (vdd_input) */
-      {   static const BYTE systemConfiguration[10] = { 0x08, 0x00, 0xFC, 0x01, 0x00,
-                                            0x74, 0x40, 0x00, 0x00, 0x00 };
-          for (item = 0; item < sizeof systemConfiguration; ++item) controlTable[DOS_SYSCONF_OFF + item] = systemConfiguration[item]; } }
-    /* GH #35: plant SysVars for INT 21h AH=52h. Most fields are deliberately
-       left zero -- see the handler for why a null stub beats a plausible-looking
-       one. Only fields with a caller that demonstrably reads them are filled:
-         BX-2   the first MCB segment (GH #35)
-         +0x21  LASTDRIVE -- krnl386 takes a pointer to this byte through the
-                SysVars+0x6A table below, so zero here means it believes there
-                are no drives at all.
-       ★ s81: SysVars has its OWN segment now (DOS_SYSVARS_SEG, see dos_layout.h), so
-         the whole of it is ours to clear -- the old "+0x40 only, the SDA follows"
-         limit was a symptom of it sharing DOS_HDLR_SEG. */
-    volatile BYTE *sysVars = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_SYSVARS_SEG << PARAGRAPH_SHIFT);
-    { INT item; for (item = DOS_SYSVARS_MCB_HEAD; item < DOS_SYSVARS_LEN; ++item) sysVars[DOS_SYSVARS_OFF + item] = 0; }
-    *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_MCB_HEAD) = machine.FirstMcb;
-    /* ⚠⚠ SysVars+0x66 = "first MCB in upper memory" (= absolute SEG:0x008C, which MEM
-         also reads directly -- see DOS_UMBHEAD_OFF). 0xFFFF means "none", the truth
-         on a machine that refuses AH=5803. Zero here is what MEM /C walked as a UMB
-         chain starting at segment 0. SysVars+0x68 holds the first MCB again, as it
-         does on 6.22 and PCem (p_sysvar). */
-    *(volatile WORD *)(sysVars + DOS_UMBHEAD_OFF) = DOS_UMBHEAD_NONE;
-    *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_FIRST_MCB_COPY) = machine.FirstMcb;
-    sysVars[DOS_SYSVARS_OFF + DOS_SYSVARS_BLOCK_DEVICES] = 1;                      /* block devices       */
-    sysVars[DOS_SYSVARS_OFF + DOS_SYSVARS_LASTDRIVE] = DOS_LASTDRIVE;          /* LASTDRIVE           */
-    machine.SysvarsSegment = DOS_SYSVARS_SEG;
-    machine.SysvarsOffset = DOS_SYSVARS_OFF;
+          if (gotWatch) {
+              CHAR watchLine[96], *watchCursor = watchLine;
+              g_Video.WatchOffset = watchValue;
+              watchCursor = LogPut(watchCursor, "STAGE0: vwatch.txt -> planar watchpoint at VRAM offset 0x");
+              watchCursor = LogHex(watchCursor, watchValue); watchCursor = LogPut(watchCursor, "\r\n");
+              LogAppend(LOG_PATH, watchLine, watchCursor); SerialOut(watchLine, watchCursor);
+          }
+      } }
+}
+
+
+/* Build DOS's drive tables -- the DPBs and the CDS -- for the drive letters that exist (GetLogicalDrives),
+   capped at what the reserved space holds, and the device chain from the NUL device. */
+static VOID StartupBuildDriveTables(CHAR *report, volatile BYTE * const sysVars, DOS_MACHINE *machine)
+{
     /* ── ★ THE REAL CHAINS: DPB, CDS AND THE DEVICE HEADER. (GH #48) ────────────
          Until now everything above +0x20 was deliberately zero, and that choice was
          right while there was nothing truthful to put there: a walker that follows
@@ -6970,7 +5114,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         scan = LogPut(scan, " DPBs at 0x");       scan = LogHex(scan, DOS_CTAB_SEG);
         scan = LogPut(scan, ":");                 scan = LogHex(scan, DOS_DPBCHAIN_OFF);
         scan = LogPut(scan, " (terminated), NUL inline -> CON..COM4 at 0x"); scan = LogHex(scan, DOS_DEV_SEG);
-        scan = LogPut(scan, ":0 (terminated), first MCB 0x"); scan = LogHex(scan, machine.FirstMcb);
+        scan = LogPut(scan, ":0 (terminated), first MCB 0x"); scan = LogHex(scan, machine->FirstMcb);
         scan = LogPut(scan, " above SysVars 0x"); scan = LogHex(scan, DOS_SYSVARS_SEG);
         scan = LogPut(scan, " (#207), "); scan = LogHex(scan, DOS_LASTDRIVE);
         scan = LogPut(scan, " CDS entries at 0x"); scan = LogHex(scan, g_CdsSegment);
@@ -6991,6 +5135,2199 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         SetErrorMode(previousErrorMode);
         LogAppend(LOG_PATH, report, scan); SerialOut(report, scan);
     }
+}
+
+
+/* Plant the country tables in DOS memory: upper-case, file-name upper-case, file-name terminators and collation. */
+static VOID StartupPlantCountryTables(VOID)
+{
+    /* GH #38: plant the AH=65h character tables in the DOS-resident block. */
+    { volatile BYTE *controlTable = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT); UINT item;
+      for (item = 0; item < sizeof(g_DosCtabUpper);   ++item) controlTable[DOS_CTAB_UPPER   + item] = g_DosCtabUpper[item];
+      for (item = 0; item < sizeof(g_DosCtabFileNameUpper); ++item) controlTable[DOS_CTAB_FNUPPER + item] = g_DosCtabFileNameUpper[item];
+      for (item = 0; item < sizeof(g_DosCtabFileNameTerminators);  ++item) controlTable[DOS_CTAB_FNTERM  + item] = g_DosCtabFileNameTerminators[item];
+      for (item = 0; item < sizeof(g_DosCtabCollate); ++item) controlTable[DOS_CTAB_COLLATE + item] = g_DosCtabCollate[item];
+      for (item = 0; item < sizeof(g_DosCtabDbcs);    ++item) controlTable[DOS_CTAB_DBCS    + item] = g_DosCtabDbcs[item];
+      /* ── THE INT 2Fh AX=122Eh TABLES, ZEROED EXPLICITLY. ──────────────────
+           The block is MCB-reserved and in practice arrives zeroed, but a guest
+           that reads a table we never wrote is reading whatever the last run
+           left there -- and this is exactly the region where a stale pointer had
+           krnl386 writing into our own handler code. Cheap to be certain.
+         ⚠ 192 bytes covers all three tables (A, B, C at 0x4E0/0x520/0x560). */
+      for (item = 0; item < DOS_INT2F_TBLS_LEN; ++item) controlTable[DOS_INT2F_TBL_A + item] = 0;
+      /* ── INT 15h AH=C0h: THE SYSTEM CONFIGURATION TABLE. (GH #54) ──────────────
+           Measured (tests/probes/dos/p_int15.asm): PCem's real AMI 486 says FC 01 00
+           70 00; SeaBIOS FC 00 01 74 40; dosbox-x FC 00 01 70 40. The model triple
+           is the AMI's -- the period machine. The FEATURE BITS ARE NOT COPIED from
+           anyone: each one is a claim about THIS machine, and a claim a guest can
+           act on, so only the true ones are set.
+             f1 bit 6  second 8259 present ............ yes (vdd_pic)
+             f1 bit 5  real-time clock present ........ yes (vdd_cmos)
+             f1 bit 4  INT 09h calls INT 15h AH=4Fh ... YES (#244) -- bios_kbdact.asm
+                       k4f, made whenever IVT[15h] is not our own stub (our default
+                       would answer "process it" unchanged, so skipping it then is
+                       indistinguishable). Was NO (64h); AMI, SeaBIOS and dosbox-x set it
+             f1 bit 2  EBDA allocated ................. YES (#253) -- 1 KB at 9FC0h,
+                       which is what INT 12h's 639 KB always implied; AH=C1h and
+                       0040:000E now say so too. Was NO (60h) while C1h refused --
+                       see bios_bda.h for why the EBDA, not 640 KB, is the answer
+             f2 bit 6  INT 16h AH=09h supported ....... yes (vdd_input) */
+      {   static const BYTE systemConfiguration[10] = { 0x08, 0x00, 0xFC, 0x01, 0x00,
+                                            0x74, 0x40, 0x00, 0x00, 0x00 };
+          for (item = 0; item < sizeof systemConfiguration; ++item) controlTable[DOS_SYSCONF_OFF + item] = systemConfiguration[item]; } }
+}
+
+
+/* How INT 21h AH=53h answers, and where that came from: the built-in model, or a cfg\ override. */
+static PSTR StartupConfigureAh53Answers(PSTR cursor)
+{
+    /* ── INT 21h AH=53h's PRIVATE SUB-FUNCTIONS, AS A KNOB. (s79) ────────────────────
+         XP's COMMAND.COM asks AH=53h with AL as a selector, and AL=5's answer decides
+         whether it ever reads the keyboard: answered 1, it never does (observed: no
+         AH=0Ah, the shell goes past its prompt). Stock IS interactive,
+         so stock must answer AL=0 there -- while our probe measured AL=1 with its
+         output redirected to a file. Until that is re-measured un-redirected, the
+         answers are a table a run can change, not a constant a rebuild can.
+       ⚠ THE DEFAULT IS THE MEASURED VALUE, so a run with no file behaves exactly as
+         before. This is deliberately NOT a fix.
+       ⚠ And it prints unconditionally, with its source -- the dosver knob had two
+         sources and logged a line only when one of them won, which is how the rig
+         reported DOS 5.00 to every guest for an unknown number of sessions. */
+    { PCSTR int53Source = "built-in (measured vs stock ntvdm, 2026-09-25)";
+      HANDLE handle;
+      /* ── ★★ THE CONTEXT-DEPENDENCE, MODELLED RATHER THAN OVERRIDDEN. (s79) ─────────
+           The measured stock answers (AL=2 -> CF=0, AL=5 -> AL=1) do not let XP's
+           COMMAND.COM read a key: with AL=5 answered 1 it never reaches its keyboard
+           read (see above). Stock IS interactive, so stock answers
+           differently WHEN THE SHELL ASKS -- the call is context-dependent, and the
+           context we measured in was a standalone probe with its stdout redirected.
+         ⇒ So model the context instead of claiming a new universal value: an
+           NTVDM-AWARE SHELL gets the answers that make it a shell; every other guest,
+           and every probe, still gets the measured ones. That is narrower than the
+           `cfg\int53.txt` knob it replaces, and it cannot affect anything else.
+         ⚠ STILL PROVISIONAL, BUT NARROWER (s84, #142). `p_int53f.com` under stock, with
+           and without redirection, answers IDENTICALLY (5305 -> AL=1 both ways), so
+           redirection is NOT the context that flips it. What is left is the caller:
+           a probe is always a CHILD of stock's shell, and only the shell itself can be
+           asked for the AL=0 answer this branch gives it. Kept as the model until
+           that can be measured. It is marked here so it cannot quietly become folklore. */
+      if (g_GuestNtAware) {
+          g_DosInt53Answers[DOS_INT53_SHELL_LOOP].Ax = DOS_FN_BPB_TO_DPB << BYTE_SHIFT; g_DosInt53Answers[DOS_INT53_SHELL_LOOP].IsCarry = 1;   /* top of its main loop */
+          /* #208: a ROUTED program is the shell's work, not the keyboard's. CF=0 here sends
+             its loop to BOP 54 sub 01 ("what next?") instead of the prompt -- so when the
+             program ends the shell ASKS, and we decide: done (close the window) or, after
+             Close Program, the prompt. See the sub 01 arm. */
+          if (g_Routed) g_DosInt53Answers[DOS_INT53_SHELL_LOOP].IsCarry = 0;
+          g_DosInt53Answers[DOS_INT53_STARTUP].Ax = DOS_FN_BPB_TO_DPB << BYTE_SHIFT; g_DosInt53Answers[DOS_INT53_STARTUP].IsCarry = 0;   /* -> [0x327] = 0       */
+          int53Source = "NTVDM-aware shell (PROVISIONAL -- see p_int53f)";
+      }
+      handle = CreateFileA(INT53_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                      NULL, OPEN_EXISTING, 0, NULL);
+      if (handle != INVALID_HANDLE_VALUE) {
+          CHAR text[512]; DWORD bytesRead = 0, index = 0;
+          ReadFile(handle, text, sizeof text - 1, &bytesRead, NULL); CloseHandle(handle);
+          while (index < bytesRead) {
+              UINT versions[INT53_FIELDS]; INT fieldCount = 0;
+              /* one line */
+              while (index < bytesRead && (text[index] == ' ' || text[index] == '\t')) ++index;
+              if (index < bytesRead && (text[index] == ';' || text[index] == '#')) { while (index < bytesRead && text[index] != '\n') ++index; }
+              while (index < bytesRead && text[index] != '\n' && fieldCount < INT53_FIELDS) {
+                  UINT value = 0; INT got = 0;
+                  while (index < bytesRead && (text[index] == ' ' || text[index] == '\t')) ++index;
+                  while (index < bytesRead) {
+                      CHAR digitCharacter = text[index];
+                      INT digit = (digitCharacter >= '0' && digitCharacter <= '9') ? digitCharacter - '0'
+                            : (digitCharacter >= 'a' && digitCharacter <= 'f') ? digitCharacter - 'a' + HEX_DIGIT_A_VALUE
+                            : (digitCharacter >= 'A' && digitCharacter <= 'F') ? digitCharacter - 'A' + HEX_DIGIT_A_VALUE : -1;
+                      if (digit < 0) break;
+                      value = value * HEX_RADIX_U + (UINT)digit; got = 1; ++index;
+                  }
+                  if (!got) break;
+                  versions[fieldCount++] = value;
+              }
+              if (fieldCount == INT53_FIELDS && versions[INT53_FIELD_AL] < DOS_INT53_COUNT) {
+                  g_DosInt53Answers[versions[INT53_FIELD_AL]].Ax = (WORD)versions[INT53_FIELD_AX];
+                  g_DosInt53Answers[versions[INT53_FIELD_AL]].IsCarry = (BYTE)(versions[INT53_FIELD_CARRY] ? 1 : 0);
+                  int53Source = "cfg\\int53.txt";
+              }
+              while (index < bytesRead && text[index] != '\n') ++index;
+              if (index < bytesRead) ++index;
+          }
+      }
+      cursor = LogPut(cursor, "STAGE2: INT 21h AH=53h answers (source: ");
+      cursor = LogPut(cursor, int53Source); cursor = LogPut(cursor, ")");
+      { UINT item;
+        for (item = 0; item < DOS_INT53_COUNT; ++item) {
+            cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, (BYTE)item); cursor = LogPut(cursor, "=");
+            cursor = LogHex(cursor, g_DosInt53Answers[item].Ax);
+            cursor = LogPut(cursor, g_DosInt53Answers[item].IsCarry ? "/C" : "/c");
+        } }
+      cursor = LogPut(cursor, "\r\n"); }
+    return cursor;
+}
+
+
+/* cfg\dosver.txt: the DOS version to report, when the file is present. */
+static PCSTR StartupLoadDosVersionKnob(PCSTR dosVersionSource, DOS_MACHINE *machine)
+{
+    { HANDLE handle = CreateFileA(DOSVER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, OPEN_EXISTING, 0, NULL);
+      if (handle != INVALID_HANDLE_VALUE) {
+          CHAR text[16]; DWORD bytesRead = 0; UINT index = 0, major = 0, minor = 0;
+          ReadFile(handle, text, sizeof text - 1, &bytesRead, NULL);
+          CloseHandle(handle);
+          while (index < bytesRead && text[index] >= '0' && text[index] <= '9') { major = major*DECIMAL_RADIX + (UINT)(text[index]-'0'); ++index; }
+          if (index < bytesRead && text[index] == '.') {
+              ++index;
+              while (index < bytesRead && text[index] >= '0' && text[index] <= '9') { minor = minor*DECIMAL_RADIX + (UINT)(text[index]-'0'); ++index; }
+          }
+          if (major && major < BYTE_VALUES && minor < BYTE_VALUES) {
+              DosInt21SetVersion(machine, (BYTE)major, (BYTE)minor);
+              SettingsNoteOverride(SET_DOSMAJ, CFG_TEXT(KNOB_FILE_DOSVER), major);
+              SettingsNoteOverride(SET_DOSMIN, CFG_TEXT(KNOB_FILE_DOSVER), minor);
+              dosVersionSource = CFG_TEXT(KNOB_FILE_DOSVER);
+              g_DosVersionForced = 1;
+              g_DosVersionWhy = SETTINGS_DOS_VERSION_WHY;
+          }
+      } }
+    return dosVersionSource;
+}
+
+
+/* Lay DOS's memory-control-block chain, initialise INT 21h on it, and name the program's block as DOS 4+ does. */
+static VOID StartupBuildMemoryChain(DOS_MACHINE *machine, CHAR *programPathBuffer)
+{
+    {   WORD firstMcb = DosMcbInitializeWithTop(NULL, g_DosMemoryTop);   /* #136 */
+        DosInt21Initialize(machine, firstMcb);
+        /* The program's name in its MCB, as DOS 4+ writes it (#47: MEM /D). After
+           DosMcbInitialize, which lays the chain and clears the name byte. */
+        DosMcbSetOwnerName(NULL, DOS_PSP_SEG, programPathBuffer);
+        /* The CDS array's block, at the top of the chain (see DOS_LASTDRIVE). The
+           PSP was built with DOS_MEM_TOP as its memory top; the program's block now
+           ends one paragraph below the reserved block's data, and PSP+2 must say so
+           or a program that resizes itself to "PSP+2 - PSP" fails with error 8. */
+        /* ⚠⚠ ONE RESERVATION, CARVED -- NOT TWO CALLS. DosMcbReserveTop() splits
+             the LAST 'Z' block, and its first act is to make the block it split an
+             'M' and put the new 'Z' on top. So a SECOND call finds the block the
+             FIRST one just reserved and tries to split THAT: 143 paragraphs, which
+             cannot hold the SFT's 473, so it returned 0 and the SFT silently came
+             out ABSENT. Measured, first run -- the log said "SFT ABSENT" while the
+             memory it needed was sitting free below. Reserve the pair in one go and
+             carve it: CDS at the bottom, SFT immediately above. One MCB owned by
+             DOS (8) covering both is what it is -- resident DOS data. */
+        {   WORD reservedSegment = DosMcbReserveTop(NULL, firstMcb,
+                                            (WORD)(DOS_CDS_PARAS + DOS_SFT_PARAS));
+            if (reservedSegment) { g_CdsSegment = reservedSegment; g_SftSegment = (WORD)(reservedSegment + DOS_CDS_PARAS); }
+            else        g_CdsSegment = DosMcbReserveTop(NULL, firstMcb, DOS_CDS_PARAS);
+        }
+        /* ── ★ AND THE SFT, FOR A **DOS** GUEST. (s72) ────────────────────────────
+             The SFT chain was planted only on the WOW path, and the note there said
+             so in as many words -- "a DOS guest still gets SysVars+4 = 0 ... when a
+             DOS program needs the SFT, this moves". A DOS program now has: p_sysvar
+             walks the List of Lists and reads the chain head as absent.
+           ⚠⚠ AND ABSENT IS THE DANGEROUS PART, NOT THE MISSING PART. SysVars+4 = 0
+             does not mean "no SFT", it means "an SFT at segment 0" -- so a program
+             that walks the chain reads the IVT as SFT headers. That is exactly what
+             krnl386 did: 0x00000000 -> 0x000fa357 -> 0x000bc370 -> back, forever,
+             117 MB of DPMI calls in one run (see DOS_SFT_* in dos_layout.h). The
+             only reason no DOS guest had hit it is that none had looked.
+           ▸ THE MEMORY IS AFFORDABLE, AND THAT WAS MEASURED, NOT ASSUMED. The block
+             is 473 paragraphs (7.4 KB). p_tsr puts the largest free block at 0x962F
+             here against 0x9302 on genuine MS-DOS 6.22 -- we hand out 12.7 KB MORE
+             than real DOS -- so after this we are still 5.3 KB ahead of it, and a
+             guest that fits on 6.22 still fits here.
+           ▸ Reserved at the top like the CDS, owned by DOS (8), so it is resident
+             data a memory walker can see and account for rather than a hole. It is
+             taken AFTER the CDS, so it lands just below it and the program's block
+             now ends below THIS one -- hence PSP+2 comes from the lower of the two. */
+        if (g_CdsSegment)
+            *(volatile WORD *)(((DWORD)DOS_PSP_SEG << PARAGRAPH_SHIFT) + DOS_PSP_MEMORY_TOP) = (WORD)(g_CdsSegment - 1);
+    }
+}
+
+
+/* Build the guest's DOS environment block, with cfg\dosenv.txt's extra variables, the launcher compiler
+   variables, and argv[0] -- shortened for the guest when it has to be. */
+static PSTR StartupBuildEnvironment(PSTR cursor, CHAR *programPathBuffer)
+{
+    { static CHAR dosEnvironment[192];
+      HANDLE handle = CreateFileA(DOSENV_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, OPEN_EXISTING, 0, NULL);
+      dosEnvironment[0] = 0;
+      if (handle != INVALID_HANDLE_VALUE) {
+          DWORD bytesRead = 0;
+          ReadFile(handle, dosEnvironment, sizeof dosEnvironment - 1, &bytesRead, NULL);
+          CloseHandle(handle);
+          dosEnvironment[bytesRead < sizeof dosEnvironment ? bytesRead : sizeof dosEnvironment - 1] = 0;
+          if (dosEnvironment[0]) {
+              cursor = LogPut(cursor, "STAGE2: dosenv.txt -> extra guest environment [");
+              cursor = LogPut(cursor, dosEnvironment); cursor = LogPut(cursor, "]\r\n");
+          }
+      }
+      /* ── ★★★★ argv[0] MUST BE 8.3, BECAUSE A DOS EXTENDER RE-OPENS IT. (s73) ─────
+           DOS/4GW loads its own protected-mode half by re-opening the program named in
+           the environment's program-path field, and it tokenises that name -- so a path
+           with spaces is torn at the first one and the open fails. It then prints its
+           banner and stops, with no error and no video mode set.
+         ▸ THAT IS THE "HEADLESS-ONLY DOS/4GW BLOCKER", and it was never headless-only:
+           it is PATH-specific, exactly as the note said. A by-hand launch works because
+           CSRSS hands us the SHORT name already (C:\DOCUME~1\...\DOOM.EXE); the
+           target.txt path handed over the long one (C:\Documents and Settings\...),
+           and only the harness used that. Any user whose games live under a path with
+           a space had the same broken launch.
+         ▸ Shortened here, once, where argv[0] is built -- so every launch shape agrees
+           with the one that was already working. WowShorten leaves the path alone if
+           GetShortPathNameA cannot answer, so a path that has no 8.3 form is unchanged. */
+      if (programPathBuffer[0]) {
+          CHAR before[768]; lstrcpynA(before, programPathBuffer, sizeof before);
+          WowShorten(programPathBuffer, sizeof programPathBuffer);
+          if (lstrcmpA(before, programPathBuffer) != 0) {
+              cursor = LogPut(cursor, "STAGE2: argv[0] shortened for the guest: ["); cursor = LogPut(cursor, before);
+              cursor = LogPut(cursor, "] -> ["); cursor = LogPut(cursor, programPathBuffer); cursor = LogPut(cursor, "]\r\n");
+          }
+          /* ── ★★★★★ AND IF IT IS STILL TOO LONG, HAND OVER THE BARE NAME. ──────────
+               DOS/4GW 1.97 copies argv[0] into a **64-BYTE BUFFER** and does not bound
+               it. MEASURED, three ways, from this one share:
+                 doom\DOOM.EXE        62 chars -> loads and plays
+                 hexen\HEXEN.EXE      64 chars -> "fatal error (1007): can't find file
+                                      ...\HEXEN\HEXEN.EXE< to load"  (no room for the
+                                      NUL, so it reads one byte of garbage)
+                 heretic\HERETIC.EXE  68 chars -> truncated at 64: "...\HERETICD"
+               Copying HEXEN.EXE alone to a 61-char path fixed it outright -- DOS/4GW
+               loaded and Hexen got as far as looking for its WAD.
+             ⚠ THIS IS WHY "HEXEN WORKED BEFORE AND DOES NOT NOW", and it is not a code
+               regression: s73 moved the games from `games\Hexen\` (59) to
+               `demo\msdos\hexen\` (64) and crossed the limit. A user installing a game
+               under a deep path of their own hits exactly the same wall.
+             ▸ The bare filename is safe because the guest's current directory IS the
+               program's own directory (it is how every one of these games finds its
+               WAD), so the extender's open resolves to the same file -- and 8.3 name
+               plus NUL can never approach 64. Only done when it must be. */
+          if (lstrlenA(programPathBuffer) > EXTENDER_ARGV0_SAFE_LENGTH) {
+              PCSTR baseName = programPathBuffer, scan;
+              for (scan = programPathBuffer; *scan; ++scan) if (*scan == '\\' || *scan == '/') baseName = scan + 1;
+              if (baseName != programPathBuffer && *baseName) {
+                  cursor = LogPut(cursor, "STAGE2: argv[0] is "); cursor = LogHex(cursor, (DWORD)lstrlenA(programPathBuffer));
+                  cursor = LogPut(cursor, " chars -- past DOS/4GW's 64-byte buffer; handing over the bare name [");
+                  cursor = LogPut(cursor, baseName); cursor = LogPut(cursor, "] (cwd is the program's own directory)\r\n");
+                  { CHAR baseNameCopy[64]; lstrcpynA(baseNameCopy, baseName, sizeof baseNameCopy); LogPut(programPathBuffer, baseNameCopy); }
+              }
+          }
+      }
+      /* ── THE ENVIRONMENT: the four defaults + dosenv.txt + the launcher's LIB/INCLUDE,
+           all in the ONE fixed 256-byte block at 0x60. The memory map does not move --
+           see LauncherCompilerVariables for why that matters (a relocated block #GP'd every
+           DOS extender). `extra` is dosenv.txt followed by the compiler vars. */
+      { static CHAR environmentExtra[512]; DWORD extraOffset = 0;
+        if (dosEnvironment[0]) { extraOffset = (DWORD)wsprintfA(environmentExtra, "%s", dosEnvironment);
+                         if (extraOffset && environmentExtra[extraOffset-1] != '\n') environmentExtra[extraOffset++] = '\n'; }
+        /* ── ULTRASND= IS HOW A GUS PROGRAM FINDS THE CARD, AND IT LOOKS BEFORE IT PROBES.
+             heaven7 never touched a port without it. <base hex>,<DRAM DMA>,<record DMA>,
+             <GF1 IRQ>,<MIDI IRQ> (docs/ref/gus.md §1) -- the numbers the device was built
+             with, so the string and the card cannot disagree. A dosenv.txt ULTRASND wins. */
+        if (g_GusOn && !StrStrNoCase(environmentExtra, HOST_ENV_ULTRASND_ASSIGN)) {
+            extraOffset += (DWORD)wsprintfA(environmentExtra + extraOffset, HOST_ENV_ULTRASND_FORMAT,
+                                   (UINT)g_Gus.BasePort, (UINT)g_Gus.DmaChannel, (UINT)g_Gus.DmaChannel,
+                                   (UINT)g_Gus.Irq, (UINT)g_Gus.Irq);
+        }
+        if (g_Fetch2Ok) {
+            UINT variableCount = LauncherCompilerVariables(g_Environment2, sizeof g_Environment2, environmentExtra + extraOffset,
+                                                 (DWORD)sizeof environmentExtra - extraOffset);
+            if (variableCount) { cursor = LogPut(cursor, "STAGE2: launcher compiler vars -> "); cursor = LogHex(cursor, variableCount);
+                      cursor = LogPut(cursor, " (LIB/INCLUDE into the 0x60 block; memory map unmoved)\r\n"); }
+        }
+        DosEnvBuildWithCard(NULL, DOS_ENV_SEG, programPathBuffer[0] ? programPathBuffer : HOST_DEFAULT_PROGRAM_PATH,
+                           HOST_DEFAULT_DRIVE_ROOT, &g_SbConfig, environmentExtra[0] ? environmentExtra : NULL);        /* M2.5: env */
+      }
+      /* ── ★ READ THE BLOCK BACK OUT OF GUEST MEMORY AND PRINT IT. Not the string we
+           passed in -- the bytes the guest will actually walk, which is a different
+           claim and the only one worth logging. A DOS environment is a run of
+           NUL-terminated strings ended by a double NUL, then a count WORD, then the
+           program path; every one of those can be got wrong, and "the variable is
+           set" cannot be told from "the variable is set but the block is malformed"
+           from the host side. NULs print as '.' so the string boundaries are visible.
+         ⚠ This is what makes dosenv.txt a MEASURED feature rather than an asserted
+           one -- see `an unimplemented call still answers`. */
+      /* ⚠ ITS OWN BUFFER, NOT THE RUNNING REPORT. The first cut appended into `p` and
+           bounded the printable characters with `p < base + 3800` -- by this point in
+           the STAGE2 report that bound was already passed, so every readable byte was
+           silently dropped and the dump came back as `[......]`, which reads exactly
+           like an EMPTY ENVIRONMENT. An instrument that fails by printing a plausible
+           wrong answer is worse than one that fails loudly. */
+      { const volatile BYTE *environmentBytes = (const volatile BYTE *)((DWORD)DOS_ENV_SEG << PARAGRAPH_SHIFT);
+        CHAR environmentLine[288], *environmentCursor = environmentLine;
+        UINT environmentIndex, zeros = 0;
+        environmentCursor = LogPut(environmentCursor, "STAGE2: guest environment block @0x");
+        environmentCursor = LogHex(environmentCursor, (DWORD)DOS_ENV_SEG << PARAGRAPH_SHIFT); environmentCursor = LogPut(environmentCursor, " = [");
+        for (environmentIndex = 0; environmentIndex < ENVIRONMENT_DUMP_BYTES && environmentCursor < environmentLine + ENVIRONMENT_DUMP_LINE; ++environmentIndex) {
+            BYTE character = environmentBytes[environmentIndex];
+            if (character == 0) { *environmentCursor++ = '.'; *environmentCursor = 0;
+                          if (++zeros >= ENVIRONMENT_DUMP_NULS && environmentIndex > ENVIRONMENT_DUMP_SKIP) break;
+                          continue; }
+            zeros = 0;
+            *environmentCursor++ = (CHAR)((character >= ASCII_SPACE && character < ASCII_DELETE) ? character : '?'); *environmentCursor = 0;
+        }
+        environmentCursor = LogPut(environmentCursor, "]\r\n");
+        (VOID)environmentCursor;
+        /* Into the running report, the same way every neighbouring line goes: a
+           direct LogAppend here produced NOTHING in the file while the zput three
+           statements above appeared, and an instrument that silently writes nowhere
+           is not worth debugging twice. */
+        cursor = LogPut(cursor, environmentLine); }
+    }
+    return cursor;
+}
+
+
+/* Plant a BOP stub for each BIOS interrupt we service (biosInts) in DOS memory. */
+static VOID StartupPlantBiosStubs(VOID)
+{
+    {
+      /* GH #43/#44/#45: the BIOS interrupts we had never planted at all. Until now
+         these vectors were filled by the null-vector sweep with a bare IRET, so a
+         guest asking for the equipment list or the memory size got silence and
+         whatever was already in its registers. */
+      /* {vector, BOP number}.  They match for all but INT 20h: BOP 0x20 is ALREADY
+         the INT 21h handler's, and planting INT 20h with it made the BIOS dispatch
+         intercept every INT 21h call as "terminate program" -- selftest exited at
+         its first DOS call with no output. BOP numbers are a shared namespace with
+         DPMI (0x50-0x57), XMS (0x43) and the rest; 0x30 is free. */
+      static const BYTE biosInts[][2] = {
+          { VECTOR_EQUIPMENT, DOS_BOP_FOR_VECTOR(VECTOR_EQUIPMENT) }, { VECTOR_MEMORY_SIZE, DOS_BOP_FOR_VECTOR(VECTOR_MEMORY_SIZE) }, { VECTOR_DISK, DOS_BOP_FOR_VECTOR(VECTOR_DISK) }, { VECTOR_SERIAL, DOS_BOP_FOR_VECTOR(VECTOR_SERIAL) },
+          { VECTOR_SYSTEM, DOS_BOP_FOR_VECTOR(VECTOR_SYSTEM) }, { VECTOR_PRINTER, DOS_BOP_FOR_VECTOR(VECTOR_PRINTER) }, { VECTOR_ABSOLUTE_DISK_READ, DOS_BOP_FOR_VECTOR(VECTOR_ABSOLUTE_DISK_READ) }, { VECTOR_ABSOLUTE_DISK_WRITE, DOS_BOP_FOR_VECTOR(VECTOR_ABSOLUTE_DISK_WRITE) },
+          { VECTOR_TERMINATE, DOS_BOP_INT20 },                                  /* GH #46: see above */
+          { VECTOR_TERMINATE_RESIDENT, DOS_BOP_FOR_VECTOR(VECTOR_TERMINATE_RESIDENT) }, { VECTOR_DOS_IDLE, DOS_BOP_FOR_VECTOR(VECTOR_DOS_IDLE) }, { VECTOR_FAST_CONSOLE_OUTPUT, DOS_BOP_FOR_VECTOR(VECTOR_FAST_CONSOLE_OUTPUT) },
+          { VECTOR_NETWORK, DOS_BOP_FOR_VECTOR(VECTOR_NETWORK) }, { VECTOR_NETBIOS, DOS_BOP_FOR_VECTOR(VECTOR_NETBIOS) },                  /* GH #8 (s91): NetBIOS, see V86BiosBop */
+      };
+      UINT byteIndex;
+      volatile BYTE *controlBytes = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT);
+      for (byteIndex = 0; byteIndex < sizeof(biosInts)/sizeof(biosInts[0]); ++byteIndex) {
+          UINT offset = DOS_BIOS_STUBS + byteIndex * DOS_BIOS_STUB_SIZE;
+          controlBytes[offset + 0] = VDM_BOP0; controlBytes[offset + 1] = VDM_BOP1;
+          controlBytes[offset + VDM_BOP_NUMBER_OFFSET] = biosInts[byteIndex][1];
+          /* ── INT 25h/26h RETURN WITH THE CALLER'S FLAGS STILL PUSHED. ───────
+               Every other vector here ends in IRET. DOS's absolute disk read and
+               write do NOT: they return by RETF, deliberately leaving the FLAGS
+               word the INT pushed on the caller's stack, which the caller then
+               discards itself (`add sp,2`). Ending them with IRET pops that word
+               and the caller's `add sp,2` then eats its own return address --
+               corruption that surfaces later, somewhere else. (GH #44) */
+          controlBytes[offset + VDM_BOP_LENGTH] = (biosInts[byteIndex][0] == VECTOR_ABSOLUTE_DISK_READ || biosInts[byteIndex][0] == VECTOR_ABSOLUTE_DISK_WRITE)
+                        ? X86_OP_RETF   /* RETF */
+                        : X86_OP_IRET;  /* IRET */
+          *(volatile WORD *)(IVT_OFFSET_ADDRESS(biosInts[byteIndex][0]))     = (WORD)offset;
+          *(volatile WORD *)(IVT_SEGMENT_ADDRESS(biosInts[byteIndex][0])) = DOS_CTAB_SEG;
+          if (biosInts[byteIndex][0] == VECTOR_SYSTEM) g_Int15StubOffset = (WORD)offset;   /* #244 */
+      } }
+}
+
+
+/* Apply the Settings conventional-memory size (#136), unless the program does not fit under it. */
+static PSTR StartupApplyConventionalKb(PSTR cursor, const DWORD readCount)
+{
+    /* ── #136: HOW MUCH CONVENTIONAL MEMORY THIS MACHINE HAS. Decided here, once, before
+         the image is laid down: the loader writes the program above the PSP with no
+         bound of its own, and the EBDA (BiosBdaInitializeWithTop, later) is zeroed at the new
+         top -- so a program that does not fit under a small setting would be loaded and
+         then have its own code wiped. A real DOS says "Program too big to fit in memory"
+         at that point; the host cannot say that to a program it was launched to RUN, so
+         it refuses the SETTING instead, loudly, and the machine stays at 640 KB.
+         640 (the default) never enters this block and logs nothing new. */
+    if (g_ConventionalKbWant != BIOS_CONV_KB_MAX) {
+        WORD top = BiosConventionalTopParagraph(g_ConventionalKbWant), alloc = 0;
+        WORD avail = (WORD)(top - DOS_PSP_SEG);
+        INT high = 0, fits;
+        if (readCount >= DOS_EXE_SIGNATURE_SIZE && g_FileBuffer[0] == 'M' && g_FileBuffer[1] == 'Z')
+            fits = DosExecSize(g_FileBuffer, readCount, avail, &alloc, &high) == 0;
+        else                                /* .COM: PSP + the image + a 256-byte stack */
+            fits = (UINT32)DOS_PSP_PARAGRAPHS + ((readCount + DOS_PSP_SIZE + PARAGRAPH_LAST_BYTE_U) >> PARAGRAPH_SHIFT) <= (UINT32)avail;
+        cursor = LogPut(cursor, "STAGE2: ConventionalKB=");  cursor = LogDecimal(cursor, g_ConventionalKbWant);
+        if (fits) {
+            g_DosMemoryTop = top;
+            cursor = LogPut(cursor, " -> INT 12h ");       cursor = LogDecimal(cursor, BiosBaseKbOfTop(top));
+            cursor = LogPut(cursor, " KB, EBDA + MCB top 0x"); cursor = LogHex(cursor, top);
+            cursor = LogPut(cursor, " (#136)\r\n");
+        } else {
+            cursor = LogPut(cursor, " REFUSED: this program does not fit under it -- the machine stays at "
+                        "640 KB (#136)\r\n");
+            SettingsNoteOverride(SET_CONVKB, SETTINGS_SOURCE_CONV_KB, BIOS_CONV_KB_MAX);
+        }
+    }
+    return cursor;
+}
+
+
+/* Nothing named a program: load a shell -- the one cfg\shell.txt names, or the fallback. */
+static VOID StartupLoadShell(PSTR *cursorIo, DWORD *readCountIo, CHAR *shellConfig, PCSTR const shellSource, CHAR *programPathBuffer, INT *wasShellIo)
+{
+    PSTR cursor = *cursorIo;
+    DWORD readCount = *readCountIo;
+    INT wasShell = *wasShellIo;
+    if (!readCount) {
+        CHAR shell[512]; HANDLE shellHandle = INVALID_HANDLE_VALUE;
+        PCSTR why = 0;
+        static CHAR whyBuffer[96];
+        if (shellConfig[0]) {
+            lstrcpynA(shell, shellConfig, sizeof shell);
+            shellHandle = CreateFileA(shell, GENERIC_READ, FILE_SHARE_READ, NULL,
+                             OPEN_EXISTING, 0, NULL);
+            why = shellSource;
+            if (shellHandle == INVALID_HANDLE_VALUE) {
+                LogPut(LogPut(whyBuffer, shellSource), " NAMES A FILE THAT WILL NOT OPEN");
+                why = whyBuffer;
+            } else {
+                /* ⛔ A Windows program is not a DOS shell. The Browse filter allows *.exe
+                     (a DOS shell can be one), so a user can pick cmd.exe; loaded as a DOS
+                     guest a PE image just runs its stub or worse. Refuse it and fall back. */
+                BYTE header[SHELL_HEADER_READ]; DWORD headerRead = 0;
+                ReadFile(shellHandle, header, sizeof header, &headerRead, NULL);
+                if (headerRead == sizeof header && header[0] == 'M' && header[1] == 'Z') {
+                    DWORD newHeaderOffset = *(const DWORD *)(header + DOS_MZ_NEW_HEADER); BYTE signatureBytes[DOS_EXE_SIGNATURE_SIZE]; DWORD signatureRead = 0;
+                    if (newHeaderOffset >= DOS_MZ_NEW_HEADER_MIN && SetFilePointer(shellHandle, (LONG)newHeaderOffset, NULL, FILE_BEGIN) == newHeaderOffset
+                        && ReadFile(shellHandle, signatureBytes, DOS_EXE_SIGNATURE_SIZE, &signatureRead, NULL) && signatureRead == DOS_EXE_SIGNATURE_SIZE
+                        && ((signatureBytes[0] == 'N' && signatureBytes[1] == 'E') || (signatureBytes[0] == 'P' && signatureBytes[1] == 'E'))) {
+                        CloseHandle(shellHandle); shellHandle = INVALID_HANDLE_VALUE;
+                        LogPut(LogPut(whyBuffer, shellSource), " NAMES A WINDOWS PROGRAM, NOT A DOS SHELL");
+                        why = whyBuffer;
+                    }
+                }
+                if (shellHandle != INVALID_HANDLE_VALUE) SetFilePointer(shellHandle, 0, NULL, FILE_BEGIN);
+            }
+        }
+        if (shellHandle == INVALID_HANDLE_VALUE) {
+            LogPut(shell, HOST_DEFAULT_SHELL_PATH);
+            shellHandle = CreateFileA(shell, GENERIC_READ, FILE_SHARE_READ, NULL,
+                             OPEN_EXISTING, 0, NULL);
+            if (shellHandle != INVALID_HANDLE_VALUE && !why) why = "the system's own COMMAND.COM";
+        }
+        if (shellHandle != INVALID_HANDLE_VALUE) {
+            ReadFile(shellHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(shellHandle);
+            LogPut(programPathBuffer, shell);
+            wasShell = 1;
+            cursor = LogPut(cursor, "STAGE2: no program was named -> loading a SHELL, 0x");
+            cursor = LogHex(cursor, readCount); cursor = LogPut(cursor, " from "); cursor = LogPut(cursor, shell);
+            cursor = LogPut(cursor, " ("); cursor = LogPut(cursor, why ? why : "default"); cursor = LogPut(cursor, ")\r\n");
+        }
+    }
+    *cursorIo = cursor; *readCountIo = readCount; *wasShellIo = wasShell;
+}
+
+
+/* #208: hand a program started from Windows to XP's COMMAND.COM, unless directlaunch.flag asks for the old way. */
+static VOID StartupRouteToCommandCom(PSTR *cursorIo, DWORD *readCountIo, CHAR *shellConfig, CHAR *programPathBuffer, CHAR *args)
+{
+    PSTR cursor = *cursorIo;
+    DWORD readCount = *readCountIo;
+    if (readCount && !g_WowLaunch && !shellConfig[0]
+        && GetFileAttributesA(DIRECTLAUNCH_FLAG) == INVALID_FILE_ATTRIBUTES) {
+        INT pathLength = lstrlenA(programPathBuffer), isCommand = 0, isNewExe = 0;
+        CHAR shortPath[300]; DWORD shortLength;
+        isCommand = (pathLength >= COMMAND_COM_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - COMMAND_COM_LENGTH, HOST_COMMAND_COM));
+        if (readCount > DOS_MZ_NEW_HEADER_MIN && g_FileBuffer[0] == 'M' && g_FileBuffer[1] == 'Z') {
+            DWORD newHeaderOffset = *(const DWORD *)(g_FileBuffer + DOS_MZ_NEW_HEADER);
+            if (newHeaderOffset > DOS_MZ_NEW_HEADER_MIN && newHeaderOffset + DOS_EXE_SIGNATURE_SIZE < readCount
+                && ((g_FileBuffer[newHeaderOffset] == 'N' && g_FileBuffer[newHeaderOffset + 1] == 'E')
+                    || (g_FileBuffer[newHeaderOffset] == 'P' && g_FileBuffer[newHeaderOffset + 1] == 'E'))) isNewExe = 1;
+        }
+        shortLength = GetShortPathNameA(programPathBuffer, shortPath, sizeof shortPath);
+        if (!isCommand && !isNewExe && shortLength && shortLength < ROUTED_PATH_MAX && shortLength + 1 + (DWORD)lstrlenA(args) < DOS_PSP_COMMAND_TAIL_MAX) {
+            lstrcpynA(g_FirstProgram, shortPath, sizeof g_FirstProgram);
+            lstrcpynA(g_FirstTail, args, sizeof g_FirstTail);
+            g_Routed = 1;
+            readCount = 0;                               /* -> the shell block below */
+            args[0] = 0;                             /* they are the program's, not the shell's */
+            cursor = LogPut(cursor, "STAGE2: #208 routing [");  cursor = LogPut(cursor, g_FirstProgram);
+            cursor = LogPut(cursor, "] args=[");                cursor = LogPut(cursor, g_FirstTail);
+            cursor = LogPut(cursor, "] through XP's COMMAND.COM (BOP 54 sub 01), as stock does\r\n");
+        } else {
+            cursor = LogPut(cursor, "STAGE2: #208 NOT routed (");
+            cursor = LogPut(cursor, isCommand ? "it is a COMMAND.COM" : isNewExe ? "not a DOS image"
+                              : "8.3 path + arguments too long for a DOS command line");
+            cursor = LogPut(cursor, ") -- loading it directly\r\n");
+        }
+    }
+    *cursorIo = cursor; *readCountIo = readCount;
+}
+
+
+/* A .PIF: parse it and take its program, start directory and parameters. */
+static VOID StartupApplyPif(PSTR *cursorIo, DWORD *readCountIo, CHAR *programPathBuffer, CHAR *args)
+{
+    PSTR cursor = *cursorIo;
+    DWORD readCount = *readCountIo;
+    /* ── A .PIF NAMES A PROGRAM; IT IS NOT ONE. (s85) See pif.h. ─────────────────────
+         Explorer queues the PIF itself as the program, and we handed its bytes to
+         COMMAND.COM to execute. Stock NTVDM reads it: the program, its parameters (the
+         WINDOWS 386 section's copy when there is one) and its start directory. A
+         relative program is looked for in the start directory, then beside the PIF,
+         then on the PATH. Arguments typed after the PIF follow the PIF's own. */
+    if (readCount && !g_WowLaunch && programPathBuffer[0]) {
+        INT pathLength = lstrlenA(programPathBuffer);
+        PIF_INFO pif;
+        if (pathLength > DOS_DOT_EXTENSION_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - DOS_DOT_EXTENSION_LENGTH, HOST_EXTENSION_PIF)
+            && PifParse(g_FileBuffer, readCount, &pif)) {
+            CHAR program[MAX_PATH], directory[MAX_PATH], pifDirectory[MAX_PATH], pifCandidate[MAX_PATH], extra[256];
+            HANDLE pifHandle = INVALID_HANDLE_VALUE;
+            INT item;
+            ExpandEnvironmentStringsA(pif.Program, program, sizeof program);
+            ExpandEnvironmentStringsA(pif.Directory, directory, sizeof directory);
+            lstrcpynA(pifDirectory, programPathBuffer, sizeof pifDirectory);
+            for (item = lstrlenA(pifDirectory); item > 0 && pifDirectory[item - 1] != '\\'; --item) ;
+            pifDirectory[item > 0 ? item - 1 : 0] = 0;
+            if (directory[0] && GetFileAttributesA(directory) == INVALID_FILE_ATTRIBUTES) {
+                cursor = LogPut(cursor, "STAGE2: PIF start directory ["); cursor = LogPut(cursor, directory);
+                cursor = LogPut(cursor, "] does not exist -- ignored\r\n");
+                directory[0] = 0;
+            }
+            if (program[0] == '\\' || (program[0] && program[1] == ':')) {
+                lstrcpynA(pifCandidate, program, sizeof pifCandidate);
+                pifHandle = CreateFileA(pifCandidate, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+            } else {
+                PCSTR roots[2]; INT rootIndex;
+                roots[0] = directory; roots[1] = pifDirectory;
+                for (rootIndex = 0; rootIndex < 2 && pifHandle == INVALID_HANDLE_VALUE; ++rootIndex) {
+                    PSTR wordStart;
+                    if (!roots[rootIndex][0]) continue;
+                    wordStart = LogPut(pifCandidate, roots[rootIndex]); wordStart = LogPut(wordStart, HOST_PATH_SEPARATOR); LogPut(wordStart, program);
+                    pifHandle = CreateFileA(pifCandidate, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+                }
+                if (pifHandle == INVALID_HANDLE_VALUE && SearchPathA(NULL, program, NULL, sizeof pifCandidate, pifCandidate, NULL))
+                    pifHandle = CreateFileA(pifCandidate, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+            }
+            lstrcpynA(extra, args, sizeof extra);
+            cursor = LogPut(cursor, "STAGE2: PIF ["); cursor = LogPut(cursor, programPathBuffer);
+            cursor = LogPut(cursor, "] -> program ["); cursor = LogPut(cursor, program);
+            cursor = LogPut(cursor, "] dir=["); cursor = LogPut(cursor, directory);
+            cursor = LogPut(cursor, "] params=["); cursor = LogPut(cursor, pif.Parameters);
+            cursor = LogPut(cursor, pif.IsParametersFrom386 ? "] (WINDOWS 386 section)" : "] (basic section)");
+            if (pifHandle == INVALID_HANDLE_VALUE) {
+                /* Not found: do NOT run the PIF's bytes. A shell is the honest answer. */
+                readCount = 0; programPathBuffer[0] = 0; args[0] = 0;
+                cursor = LogPut(cursor, " -- PROGRAM NOT FOUND, starting a shell instead\r\n");
+            } else {
+                PSTR wordStart;
+                readCount = 0;
+                ReadFile(pifHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(pifHandle);
+                lstrcpynA(programPathBuffer, pifCandidate, sizeof programPathBuffer);
+                /* "?" asks Windows to prompt for parameters; there is no one to ask here. */
+                wordStart = LogPut(args, (pif.Parameters[0] == '?' && !pif.Parameters[1]) ? "" : pif.Parameters);
+                if (extra[0]) { if (args[0]) wordStart = LogPut(wordStart, " "); LogPut(wordStart, extra); }
+                LogPut(g_WowCommandProgram, programPathBuffer); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
+                LogPut(g_WowCommandArguments, args);
+                if (directory[0]) { lstrcpynA(g_CurrentDirectory, directory, sizeof g_CurrentDirectory); SetCurrentDirectoryA(g_CurrentDirectory); }
+                cursor = LogPut(cursor, " -- loaded 0x"); cursor = LogHex(cursor, readCount);
+                cursor = LogPut(cursor, " from ["); cursor = LogPut(cursor, programPathBuffer);
+                cursor = LogPut(cursor, "] args=["); cursor = LogPut(cursor, args); cursor = LogPut(cursor, "]\r\n");
+            }
+        }
+    }
+    *cursorIo = cursor; *readCountIo = readCount;
+}
+
+
+/* Load the program from the command title when it is an absolute path (the title arrives with a trailing space). */
+static VOID StartupLoadTitlePath(PSTR *cursorIo, DWORD *readCountIo, CHAR *programPathBuffer, CHAR *args)
+{
+    PSTR cursor = *cursorIo;
+    DWORD readCount = *readCountIo;
+    /* ── ★★★★★ AN ABSOLUTE TITLE IS NOT JOINED TO THE DIRECTORY. (GH #131,
+         session 57) This composed `g_CurrentDirectory + "\" + g_Title` unconditionally, and
+         CSRSS's title for a program named with a full path at a cmd prompt IS
+         that full path -- so `hello.com > out.txt` run in C:\test produced
+
+             STAGE1: program C:\test\C:\test\hello.com
+             STAGE2: loaded 0x00000000 from C:\test\C:\test\hello.com
+             STAGE2: embedded fallback
+
+         -- a path that cannot exist, a load of zero bytes, and then the four-byte
+         `mov ah,4Ch / int 21h` stub running INSTEAD OF THE PROGRAM. The run then
+         completes cleanly and writes NOTHING, which is indistinguishable from
+         the redirect defect this issue is about: the output file is empty either
+         way. It is not the same bug, and it was hiding behind it -- the log
+         reported ZERO INT 21h calls in the whole run, which is the tell.
+       ⚠ TWO FORMS OF ABSOLUTE, both real: `C:\...` (a drive) and `\...` (rooted
+         on the current drive). A relative title still gets the directory, which
+         is what the join was for and is still right. */
+    if (!readCount && g_Title[0]
+        && (g_Title[0] == '\\' || (g_Title[1] == ':' && g_Title[2] == '\\'))) {
+        CHAR path[768]; HANDLE fileHandle; int targetLength; PSTR targetArguments = NULL; /* stays int: INT here moves the compiled code */
+        LogPut(path, g_Title);
+        /* ⚠ AND THE TITLE ARRIVES WITH A TRAILING SPACE -- measured:
+             `title=[C:\test\hello.com ]`. CreateFileA's treatment of one is not
+             something to rely on, and a path is not a place to leave whitespace
+             the guest never typed. */
+        for (targetLength = 0; path[targetLength]; ++targetLength) ;
+        while (targetLength > 0 && (path[targetLength - 1] == ' ' || path[targetLength - 1] == '\t')) path[--targetLength] = 0;
+        fileHandle = CsrssOpenSplit(path, &targetArguments);        /* "program [args]" -- see the helper */
+        if (fileHandle != INVALID_HANDLE_VALUE) { ReadFile(fileHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(fileHandle); }
+        LogPut(programPathBuffer, path);
+        /* The title's own arguments beat CSRSS's CmdLine field, which arrives as
+           junk on this path (measured: `cmd=[\]` for a `ZAR.EXE -Help` launch) and
+           was only ever a best-effort guess. */
+        if (targetArguments)         LogPut(args, targetArguments);
+        else if (g_CommandLine[0]) LogPut(args, g_CommandLine);
+        cursor = LogPut(cursor, "STAGE2: loaded 0x"); cursor = LogHex(cursor, readCount);
+        cursor = LogPut(cursor, " from "); cursor = LogPut(cursor, path);
+        if (targetArguments) { cursor = LogPut(cursor, " args=["); cursor = LogPut(cursor, targetArguments); cursor = LogPut(cursor, "]"); }
+        cursor = LogPut(cursor, " [the title is ALREADY ABSOLUTE -- not joined to the"
+                    " current directory]\r\n");
+    }
+    *cursorIo = cursor; *readCountIo = readCount;
+}
+
+
+/* Load the application CSRSS named in the second fetch, recognising the harness's stub. */
+static VOID StartupLoadCsrssApplication(PSTR *cursorIo, INT *wantShellIo, DWORD *readCountIo, CHAR *programPathBuffer, CHAR *args)
+{
+    PSTR cursor = *cursorIo;
+    INT wantShell = *wantShellIo;
+    DWORD readCount = *readCountIo;
+    /* Load the program: what CSRSS asked for, else C:\ntvdmex\target.txt, else a
+       tiny exit stub.
+     ⚠⚠ THAT ORDER USED TO BE THE OTHER WAY ROUND, AND IT IS A BLOCKER ON #130.
+       target.txt won UNCONDITIONALLY, so with NTVDMEX installed as the machine's
+       VDM *every* DOS and Win16 launch ran whatever that file happened to name,
+       whatever the user double-clicked. It also silently corrupted our own
+       measurements: the launch matrix's stock column reported DPMI output under
+       `p_ver.com` because a run had reused a stale target.
+     ► THE TEST HARNESS IS UNAFFECTED, and that is measured rather than hoped:
+       on the rig CSRSS hands back `title=[]` with no program name at all
+       (STAGE1: program C:\test\ -- an empty tail), so the override still
+       applies there. It stops applying exactly when someone actually asked for
+       a program, which is the only case that was ever wrong. */
+    /* ── ★★★★★ THE COMMAND CSRSS QUEUED WINS OVER EVERYTHING BELOW. (s72) ───────
+         AppName is the program's full path and CmdLine its tail, straight from the
+         launcher's CreateProcess -- no title heuristics, no quote-splitting, no join
+         with the current directory, and target.txt is not consulted. The title and
+         target.txt paths below remain for the shapes where this fetch does not answer
+         (the rig harness's dosstub.com + target.txt, where the queued command IS the
+         stub and the file names the real target -- kept by a stub-named check). */
+    if (g_Fetch2Ok) {
+        HANDLE fileHandle = CreateFileA(g_Application2, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        INT isStub = 0;
+        {   PCSTR baseName = g_Application2, scan;
+            for (scan = g_Application2; *scan; ++scan) if (*scan == '\\' || *scan == '/') baseName = scan + 1;
+            isStub   = (lstrcmpiA(baseName, HOST_HARNESS_STUB_NAME) == 0);
+            /* ★ OUR OWN LAUNCHER'S STUB -- see LAUNCH_STUB_NAME. Same mechanism, a
+                 DIFFERENT meaning: the harness stub says "target.txt names the
+                 program", this one says "the user opened NTVDMEX, give them a shell".
+                 Keeping them apart is what stops a stale target.txt from hijacking a
+                 double-click on someone's machine. */
+            if (lstrcmpiA(baseName, LAUNCH_STUB_NAME) == 0) { isStub = 1; wantShell = 1; } }
+        if (isStub) {
+            if (fileHandle != INVALID_HANDLE_VALUE) CloseHandle(fileHandle);
+            cursor = LogPut(cursor, wantShell
+                     ? "STAGE2: launched with no program -- the user opened NTVDMEX; going straight to a SHELL\r\n"
+                     : "STAGE2: CSRSS queued dosstub.com -- the harness stub; target.txt names the program\r\n");
+            g_Title[0] = 0;                              /* and the title must not either */
+        } else if (fileHandle != INVALID_HANDLE_VALUE) {
+            ReadFile(fileHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(fileHandle);
+            LogPut(programPathBuffer, g_Application2);
+            LogPut(args, g_CommandLine2);
+            LogPut(g_WowCommandProgram, g_Application2); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
+            LogPut(g_WowCommandArguments, g_CommandLine2);
+            cursor = LogPut(cursor, "STAGE2: loaded 0x"); cursor = LogHex(cursor, readCount);
+            cursor = LogPut(cursor, " from "); cursor = LogPut(cursor, g_Application2);
+            cursor = LogPut(cursor, " args=["); cursor = LogPut(cursor, args); cursor = LogPut(cursor, "] (CSRSS AppName + CmdLine; target.txt and the title NOT consulted)\r\n");
+            g_Title[0] = 0;                              /* the title chain below must not re-load */
+        } else {
+            cursor = LogPut(cursor, "STAGE2: CSRSS AppName ["); cursor = LogPut(cursor, g_Application2);
+            cursor = LogPut(cursor, "] cannot be opened (0x"); cursor = LogHex(cursor, GetLastError());
+            cursor = LogPut(cursor, ") -- falling back to the title / target.txt\r\n");
+        }
+    }
+    *cursorIo = cursor; *wantShellIo = wantShell; *readCountIo = readCount;
+}
+
+
+/* CSRSS handed us a command: record it, report the path we will actually use, and set up stdio from
+   the handles it came with. */
+static VOID StartupTakeCsrssCommand(PSTR *cursorIo, DWORD *errorIo)
+{
+    PSTR cursor = *cursorIo;
+    DWORD error = *errorIo;
+    if (CsrssGetCommand(&g_CommandInfo, &error)) {
+        /* ⚠ PRINT THE PATH WE WILL ACTUALLY USE. This joined the directory and
+             the title unconditionally and so reported `C:\test\C:\test\hello.com`
+             for a title that was already absolute -- a path that cannot exist,
+             in the one line a reader checks first. An instrument that composes a
+             string the loader does not use is an instrument that lies. */
+        cursor = LogPut(cursor, "STAGE1: program ");
+        if (g_Title[0] == '\\' || (g_Title[1] == ':' && g_Title[2] == '\\'))
+            cursor = LogPut(cursor, g_Title);
+        else { cursor = LogPut(cursor, g_CurrentDirectory); cursor = LogPut(cursor, HOST_PATH_SEPARATOR); cursor = LogPut(cursor, g_Title); } cursor = LogPut(cursor, "\r\n");
+        /* #129: the OTHER half of the launch shape. CSRSS hands back the app name,
+           the command tail, the PIF and a set of flags -- any of which may be what
+           actually distinguishes a WOW launch from a DOS one. Print them all rather
+           than guessing which one matters; a trace that prints the request but not
+           the answer is half an instrument. */
+        cursor = LogPut(cursor, "STAGE1: vdm app=[");   cursor = LogPut(cursor, g_Application);
+        cursor = LogPut(cursor, "] cmd=[");             cursor = LogPut(cursor, g_CommandLine);
+        cursor = LogPut(cursor, "] pif=[");             cursor = LogPut(cursor, g_PifPath);
+        cursor = LogPut(cursor, "] title=[");           cursor = LogPut(cursor, g_Title);
+        cursor = LogPut(cursor, "]\r\n");
+        cursor = LogPut(cursor, "STAGE1: vdm flags=0x");   cursor = LogHex(cursor, g_CommandInfo.CreationFlags);
+        cursor = LogPut(cursor, " state=0x");              cursor = LogHex(cursor, g_CommandInfo.VDMState);
+        cursor = LogPut(cursor, " taskid=0x");             cursor = LogHex(cursor, g_CommandInfo.TaskId);
+        cursor = LogPut(cursor, " codepage=0x");           cursor = LogHex(cursor, g_CommandInfo.CodePage);
+        cursor = LogPut(cursor, "\r\n");
+        /* ── ★ THE VDM'S STANDARD HANDLES COME FROM CSRSS, NOT FROM INHERITANCE.
+             (GH #131) Measured on the rig: an IFEO-substituted process gets NO
+             inherited handles at all -- GetStdHandle reports FILE_TYPE_UNKNOWN
+             and AttachConsole(ATTACH_PARENT_PROCESS) fails -- so the obvious
+             route ("we are cmd's child, use its stdout") simply does not work
+             and reported `none (no console, no redirect)`.
+             CSRSS hands them over here instead, in the STARTUPINFO it fills in
+             for GetNextVDMCommand, already duplicated into this process. That is
+             how stock ntvdm gets them, and it is the only channel that carries
+             a redirect the user typed at cmd. */
+        /* ► PRINT THE RAW HANDLES AND THEIR TYPES **BEFORE** DECIDING ANYTHING.
+             Four routes have been eliminated here already, and each cost a run
+             because the log said which route was CHOSEN and never what the
+             candidates actually WERE. A handle value with a file type beside it
+             settles "is there a redirect on this VDM at all" in one line, for
+             every one of the three streams, whether or not we end up using it. */
+        {   PCSTR handleNames[STD_HANDLE_REPORTS]; HANDLE handles[STD_HANDLE_REPORTS]; INT item;
+            handleNames[0] = "vdm.StdIn";   handles[0] = g_CommandInfo.StdIn;
+            handleNames[1] = "vdm.StdOut";  handles[1] = g_CommandInfo.StdOut;
+            handleNames[2] = "vdm.StdErr";  handles[2] = g_CommandInfo.StdErr;
+            handleNames[3] = "si.hStdOut";  handles[3] = g_CommandInfo.StartupInfo.hStdOutput;
+            handleNames[4] = "si.hStdIn";   handles[4] = g_CommandInfo.StartupInfo.hStdInput;
+            cursor = LogPut(cursor, "STAGE1: vdm handles");
+            for (item = 0; item < STD_HANDLE_REPORTS; ++item) {
+                DWORD fileType = (handles[item] && handles[item] != INVALID_HANDLE_VALUE)
+                            ? GetFileType(handles[item]) : FILE_TYPE_NOT_ASKED_U;
+                cursor = LogPut(cursor, " "); cursor = LogPut(cursor, handleNames[item]);
+                cursor = LogPut(cursor, "=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)handles[item]);
+                cursor = LogPut(cursor, "/t"); cursor = LogHex(cursor, fileType);
+            }
+            cursor = LogPut(cursor, " sf=0x"); cursor = LogHex(cursor, g_CommandInfo.StartupInfo.dwFlags);
+            cursor = LogPut(cursor, "\r\n"); }
+        g_StdioHow = StdioInitializeVdm();
+        cursor = LogPut(cursor, "STAGE1: stdout -> ");
+        if (g_StdioSource[0]) { cursor = LogPut(cursor, g_StdioSource); cursor = LogPut(cursor, " -> "); }
+        cursor = LogPut(cursor, g_StdioHow);
+        cursor = LogPut(cursor, "\r\n");
+    } else {
+        cursor = LogPut(cursor, "STAGE1: GetNextVDMCommand FALSE err=0x"); cursor = LogHex(cursor, error); cursor = LogPut(cursor, "\r\n");
+    }
+    *cursorIo = cursor; *errorIo = error;
+}
+
+
+/* GH #128, on a Win16 launch: log the TIB the kernel handed us, then probe the LDT and the selectors. */
+static VOID StartupWowSelectorStage(VOID)
+{
+    if (g_WowModuleCount) {                        /* GH #128: WOW selector stage */
+        /* ⛔ NO FLUSH HERE, AND NEVER THROUGH `base`. (s73) This read
+             `LogAppend(LOG_PATH, base, p); p = base;` from e595c91 (s68), which turned
+             every `report` flush into a `base` flush mechanically -- right for the exit
+             report, where base marks the end of the preamble, and WRONG here, 1,500
+             lines before `base = p` is ever executed. So: LogAppend(NULL, p) -- a bad
+             range -- then p = NULL, then every STAGE1 line was zput FROM ADDRESS 0, which
+             in a VDM process is the guest's IVT and BDA. krnl386 then ran on a trashed
+             interrupt table and the VDM died silently at PMHB 0x85. Win16 was dead from
+             s68 to s73 and nothing noticed: no Win16 program was launched after the wipe.
+           There is nothing to flush anyway -- the probes below log through LDTLOG_PATH,
+             and report[] has ~5 KB of headroom at this point; the preamble goes to disk
+             as one piece at the LogWrite after the command fetch. */
+        /* The DOS bisection puts the flip between CsrssGetCommand() and
+           VdmGetTib(). The latter is one call and costs nothing to try here, so
+           try it BEFORE concluding the blocker is the command fetch. */
+        {   PVOID tib2 = VdmGetTib();
+            CHAR tibLine[120], *tibCursor = tibLine;
+            tibCursor = LogPut(tibCursor, "WOWTRY: v86_get_tib -> 0x"); tibCursor = LogHex(tibCursor, (DWORD)(ULONG_PTR)tib2);
+            tibCursor = LogPut(tibCursor, "\r\n"); LogAppend(LDTLOG_PATH, tibLine, tibCursor); }
+        WowProbeLdtMatrix("wow-after-get-tib");
+        WowProbeSelectors();
+        /* ⚠ NO EARLY RETURN ANY MORE. This used to `return WowRefuse(...)` here,
+             which was correct while the plan was "enter in protected mode" -- there was
+             nothing further to do. It is not, krnl386 is entered in V86, and a V86
+             entry needs the whole DOS machine underneath it: conventional memory, an
+             INT 21h that answers AH=52h, the IVT, INT 2Fh. All of that is built a few
+             hundred lines below. So fall through and let it be built.
+           Everything WOW-specific past this point is gated on g_WowModuleCount, which is 0
+           on a DOS launch -- so the DOS path, which is the half that WORKS, sees no
+           change at all. That gating is deliberate and worth preserving. */
+    }
+}
+
+
+/* Give the VDM state word at [0x714] a defined starting value -- zero, or cfg\vdmstate.txt -- instead of
+   whatever the machine's boot left there, and report what was inherited. */
+static PSTR StartupCheckInheritedVdmState(PSTR cursor)
+{
+    /* ── ⛔⛔⛔ FIXED_NTVDMSTATE ([0x714]) IS INHERITED GARBAGE UNTIL SOMEONE WRITES IT.
+         (2026-09-12: "no DOS app runs on the rig" after a REBOOT, host gone in <1 s.)
+         VdmInitialize does not define this word; it holds whatever the machine's
+         real-mode boot left in physical low memory, so it changes PER BOOT. Since the
+         Sep 9 boot it read 0xc0003232 and everything worked; after this morning's
+         reboot it read 0xc0002979 -- bit 0 (VDM_INT_HARDWARE pending) SET -- and the
+         kernel dutifully raised VIP in the guest's very first EFLAGS (0x00130002).
+         The first STI with VIP set is a raw #GP, and XP tears the VDM down silently
+         (run 71 watched it under a kernel debugger; see DpmiAsyncInjectPm). So the
+         host died after its first IRQ0 check on EVERY launch, the three-strikes
+         counter then removed the IFEO key, and every later launch was stock ntvdm.
+       ► Stock ntvdm's live dump (build/stockdumps/130913, +0x714) reads 0x00300200:
+         no 0xc000 high bits, nothing pending -- it starts from a DEFINED word. So do
+         we, now: zero, or cfg\vdmstate.txt. The kernel sets bits 0-1 when it queues
+         and dpmi_enter.S sets bit 9 on PM entry; nothing else needs to be pre-set. */
+    {   volatile DWORD *vdmState = (volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR;
+        DWORD inherited = *vdmState, want = 0;
+        HANDLE handle = CreateFileA(VDMSTATE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+        if (handle != INVALID_HANDLE_VALUE) {
+            CHAR text[9]; DWORD bytesRead = 0; INT index;
+            ReadFile(handle, text, DWORD_HEX_DIGITS, &bytesRead, NULL);
+            CloseHandle(handle);
+            for (index = 0; index < (INT)bytesRead; ++index) {
+                INT digit = -1;
+                if (text[index] >= '0' && text[index] <= '9') digit = text[index] - '0';
+                else if (text[index] >= 'a' && text[index] <= 'f') digit = text[index] - 'a' + HEX_DIGIT_A_VALUE;
+                else if (text[index] >= 'A' && text[index] <= 'F') digit = text[index] - 'A' + HEX_DIGIT_A_VALUE;
+                if (digit < 0) break;
+                want = (want << NIBBLE_SHIFT) | (DWORD)digit;
+            }
+        }
+        *vdmState = want;
+        cursor = LogPut(cursor, "STAGE1: FIXED_NTVDMSTATE [0x714] inherited=0x"); cursor = LogHex(cursor, inherited);
+        cursor = LogPut(cursor, " -> set 0x"); cursor = LogHex(cursor, want);
+        cursor = LogPut(cursor, handle != INVALID_HANDLE_VALUE ? " (cfg\\vdmstate.txt)\r\n" : "\r\n");
+    }
+    return cursor;
+}
+
+
+/* cfg\qimode.txt: up to two hex digits of interrupt-delivery switches -- the pending bit, raise, VIF,
+   keyboard, no-suspend and async keyboard (QIMODE_*). */
+static VOID StartupLoadQiMode(VOID)
+{
+    /* Async-preemption mode (session 11). Read once; a handle to THIS thread is what
+       VdmQueueInterrupt takes, and this thread is the one that will be running the
+       guest inside VdmStartExecution -- so duplicate it here, before the exec loop. */
+    { HANDLE handle = CreateFileA(QIMODE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, OPEN_EXISTING, 0, NULL);
+      if (handle != INVALID_HANDLE_VALUE) {
+          CHAR text[2] = { 0, 0 }; DWORD bytesRead = 0; INT number = 0, index;
+          ReadFile(handle, text, QIMODE_DIGITS, &bytesRead, NULL);
+          CloseHandle(handle);
+          for (index = 0; index < (INT)bytesRead; ++index) {          /* up to two hex digits */
+              INT digit = -1;
+              if (text[index] >= '0' && text[index] <= '9') digit = text[index] - '0';
+              else if (text[index] >= 'a' && text[index] <= 'f') digit = text[index] - 'a' + HEX_DIGIT_A_VALUE;
+              else if (text[index] >= 'A' && text[index] <= 'F') digit = text[index] - 'A' + HEX_DIGIT_A_VALUE;
+              if (digit < 0) break;
+              number = (number << NIBBLE_SHIFT) | digit;
+          }
+          if (number > 0) { g_QiBits  = (DWORD)number & VDM_INT_PENDING;
+                       g_QiRaise = (number & QIMODE_RAISE) != 0;
+                       g_QiVif   = (number & QIMODE_VIF) != 0;
+                       if (number & QIMODE_NO_SUSPEND) g_QiSuspended = 0;      /* bit 6 disables async delivery */
+                       g_QiKeys  = (number & QIMODE_KEYS) != 0;
+                       g_QiKeysAsync = (number & QIMODE_KEYS_ASYNC) != 0; }
+      } }
+}
+
+
+/* A Win16 launch is latched here, where the answer is known, before the UI thread that decides on a window
+   starts. It logs the STAGE0 lines and is refused through WowRefuse -- unless wowtry.flag asks for the
+   WOW probe instead. */
+static INT StartupLatchWowLaunch(PSTR *cursorIo, CHAR *report, INT *exitCode)
+{
+    PSTR cursor = *cursorIo;
+    /* ── IS THIS A WIN16 (WOW) LAUNCH? IF SO, HAND IT STRAIGHT BACK. (GH #129) ──
+         Windows runs 16-bit WINDOWS programs inside the SAME ntvdm.exe it uses for
+         DOS, so our IFEO Debugger hook catches both -- and we implement only the DOS
+         half. Left unhandled, installing NTVDMEX breaks every Win16 program on the
+         machine. This is the guard that makes "leave it installed" safe.
+       ► MEASURED, not assumed (both captured on the rig, 2026-08-26):
+           DOS : ntvdmhost.exe "…\ntvdm.exe" -f -i20
+           WOW : ntvdmhost.exe "…\ntvdm.exe" -f -i1 -w -a …\krnl386.exe
+         `-w` is the discriminator and `-a <krnl386>` is the WOW bootstrap. A second,
+         independent tell: GetNextVDMCommand returns FALSE err=0x57 on a WOW launch,
+         because a WOW VDM does not receive its program that way.
+       ► WE CANNOT HAND IT BACK. Three routes measured and eliminated -- see
+         WowRefuse() below. So this refuses loudly instead, which is at least an
+         accurate, actionable failure rather than a DOS host chewing on an NE file.
+       ► NOT a throwaway. When the WOW epic (#128) lands, this same detection becomes
+         the dispatch point -- the `-w` arm routes to our WOW layer. */
+    if (LaunchIsWow(GetCommandLineA())) {
+        /* ★ Latched HERE because this is where the answer is known, and the UI
+             thread -- which decides whether to show a window -- is started later.
+             See the note by TrayAdd for why a Win16 guest gets no window. */
+        g_WowLaunch = 1;
+        cursor = LogPut(cursor, "STAGE0: WIN16/WOW launch detected -> refusing (see GH #129)\r\n");
+        cursor = LogPut(cursor, "STAGE0: root=["); cursor = LogPut(cursor, NTVDMEX_DIR); cursor = LogPut(cursor, "] (derived from the host's own path)\r\n");
+        HmaTry();
+        cursor = LogPut(cursor, "STAGE0: HMA ");
+        if (g_Hma) cursor = LogPut(cursor, "committed at 0x100000 -- FFFF:0010 is real");
+        else { cursor = LogPut(cursor, "UNAVAILABLE err=0x"); cursor = LogHex(cursor, g_HmaError);
+       cursor = LogPut(cursor, " state=0x"); cursor = LogHex(cursor, g_HmaState);
+       cursor = LogPut(cursor, " prot=0x");  cursor = LogHex(cursor, g_HmaProtection); }
+        cursor = LogPut(cursor, "\r\n");
+        cursor = LogPut(cursor, "STAGE0: cmdline=["); cursor = LogPut(cursor, GetCommandLineA()); cursor = LogPut(cursor, "]\r\n");
+        LogAppend(LOG_PATH, report, cursor); SerialOut(report, cursor);
+        if (GetFileAttributesA(WOWTRY_FLAG) == INVALID_FILE_ATTRIBUTES)
+            { *cursorIo = cursor; *exitCode = WowRefuse(GetCommandLineA()); return HOST_FLOW_RETURN; }
+        /* Experiment opted in: load now, then fall through so the selector stage can
+           run once the VDM is registered. Still refuses at the end -- nothing here
+           executes guest code yet. */
+        WowProbeLoad(GetCommandLineA());
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* Claim an instance slot (#211): the first host writes to debug\out\, the Nth to debug\out\N\; refuse once all are taken. */
+static INT StartupClaimInstance(INT *exitCode)
+{
+    /* ── ⛔⛔ ONE HOST AT A TIME. ─────────────────────────────────────────────────
+         Nothing stopped a second instance, and two of them fight over things that
+         are SYSTEM-WIDE, not per-process: the low-level keyboard hook, the cursor
+         clip, exclusive-fullscreen DirectDraw, and the guest's suspend count. The
+         user hit it directly -- "I closed your Skyroads run, and reran it. That
+         basically crashed Windows" -- because closing does not necessarily finish
+         (a suspended guest thread keeps the process alive; see HostPanicRelease),
+         so the rerun landed ON TOP of a zombie that still owned the keyboard.
+       ⚠ Bail SILENTLY and with success. This is launched by the IFEO Debugger key
+         on every 16-bit start, so a message box here would be a modal dialog on a
+         machine that is already confused -- and a failure exit code would make the
+         launch look broken rather than declined. */
+    /* ⚠⚠ GetLastError() IS ONLY MEANINGFUL IMMEDIATELY AFTER THE CALL, AND THE FIRST
+         CUT OF THIS GUARD REFUSED EVERY LAUNCH. CreateDirectoryA above fails with
+         ERROR_ALREADY_EXISTS whenever cfg\ exists -- i.e. always, after the first run
+         -- and CreateMutexA does NOT clear the last-error value when it succeeds. So
+         the guard read the DIRECTORY's error, concluded another host was running, and
+         exited: the rig went silent, no log at all, and the run timed out.
+         Clear it first and latch it immediately. Same do-nothing-and-look-fine shape
+         as everything else this file warns about. */
+    /* ⚠ AND A HELD MUTEX IS NOT PROOF A HOST IS ALIVE. (s63) The value of the guard
+         is entirely in NOT refusing a launch when the "other" instance is a corpse.
+         The named object exists as long as ANY handle to it is open -- including one
+         held by a wedged zombie -- so ERROR_ALREADY_EXISTS on its own said "refuse"
+         even when the previous host had left the machine (that is the flash-and-vanish
+         the user hit). So do not decide on the flag: TRY TO ACQUIRE it. A host that is
+         really running owns it (created with bInitialOwner) and the wait TIMES OUT ->
+         refuse, correctly, one-host-at-a-time. If the owner released it or its thread
+         died the wait returns signalled or ABANDONED -> we take it and run. The
+         window-close path now TerminateProcess()es (see UiThread), so the common
+         zombie is gone at the source; this makes the guard safe against any that slip
+         through rather than turning them into a permanent lockout. */
+    /* ── #211: MORE THAN ONE HOST AT A TIME. (s81) ───────────────────────────────
+         Stock XP runs one ntvdm.exe per DOS window, and so do we now. The mutex below
+         was a one-host-only guard (s63); it is now a CLAIM ON AN INSTANCE NUMBER. The
+         first host takes instance 1 under the original name and changes nothing --
+         same log, same debug\out\, so the rig harness is untouched. A host started
+         while it runs takes the lowest free number N and writes to debug\out\N\.
+       ► What the old guard protected is covered elsewhere now: the keyboard hook and
+         the cursor clip are held only while a window has captured the mouse (and only
+         one can), and a closed window's process is terminated, so the half-dead host
+         that "basically crashed Windows" no longer outlives its window.
+       ⚠ The acquire rule is unchanged, per name: TRY to take it. A live host never
+         yields its mutex (the wait times out -> next number); a dead one's is released
+         or ABANDONED (-> we take that number). */
+    {   INT attempt; CHAR name[48];
+        for (attempt = 1; attempt <= HOST_INSTANCES_MAX && !g_OnceMutex; ++attempt) {
+            HANDLE once; DWORD lastError, waitResult = WAIT_OBJECT_0;
+            PSTR scan = LogPut(name, HOST_INSTANCE_MUTEX);
+            if (attempt > 1) { *scan++ = '_'; scan = LogDecimal(scan, (UINT)attempt); }
+            /* ⚠⚠ GetLastError() IS ONLY MEANINGFUL IMMEDIATELY AFTER THE CALL -- clear
+                 it first; CreateMutexA does not clear it on success. (The first cut of
+                 the guard read CreateDirectoryA's ERROR_ALREADY_EXISTS and refused.) */
+            SetLastError(0);
+            once = CreateMutexA(NULL, TRUE, name);
+            lastError  = GetLastError();
+            if (!once) continue;
+            if (lastError == ERROR_ALREADY_EXISTS) {
+                waitResult = WaitForSingleObject(once, HOST_INSTANCE_WAIT_MS);   /* brief: a live host never yields it */
+                if (waitResult == WAIT_TIMEOUT) { CloseHandle(once); continue; }
+            }
+            g_OnceMutex = once;
+            if (attempt > 1) {
+                PSTR position = LogPut(g_OutSubdirectory, HOST_OUT_SUBDIRECTORY);
+                position = LogDecimal(position, (UINT)attempt); LogPut(position, HOST_PATH_SEPARATOR);
+                CreateDirectoryA(NTVDMEX_OUT, NULL);
+            }
+            g_Instance = attempt; g_InstanceAbandoned = (waitResult == WAIT_ABANDONED);   /* reported at STAGE0 */
+        }
+        if (!g_OnceMutex) {
+            static const CHAR message[] = "REFUSED: 16 NTVDMEX hosts are already running -- this instance is exiting\r\n";
+            LogAppend(LOG_PATH, message, message + sizeof(message) - 1);
+            { *exitCode = 0; return HOST_FLOW_RETURN; }
+        } }
+    return HOST_FLOW_NEXT;
+}
+
+
+/* The install verbs (/install, /uninstall, /status), run before anything else exists, and exit. */
+static INT StartupRunInstallVerb(INT *exitCode)
+{
+    /* ── ★ THE INSTALL VERBS, BEFORE ANYTHING ELSE EXISTS. (GH #13) ─────────────
+         `ntvdmhost.exe /install`, `/uninstall`, `/status`. They run and exit without
+         touching the VDM, the log, COM1 or the recovery counter -- none of which
+         should move because somebody asked whether we are installed.
+       ⛔⛔ AND THIS BLOCK USED TO SIT BELOW THE SINGLE-INSTANCE GUARD, WHICH MADE
+         `install.bat` LIE. (2026-09-22) The guard returns 0 -- success, silently, no
+         output -- when another host owns the mutex. A verb arriving while ANY guest
+         was on screen therefore printed NOTHING and exited 0, and install.bat, which
+         branches on the exit code alone, announced "Installed. Every MS-DOS and
+         16-bit Windows program now runs under NTVDMEX" having written nothing to the
+         registry at all. smoke.bat's `/status` gate passed for the same reason and
+         then failed with "no log was written" -- the exact report from the user's
+         Windows 2000 box ("installed, apparently; smoke does not run; no logs").
+         A verb is a command-line utility invocation, not a VDM launch: it must never
+         be subject to a guard about how many VDMs are running.
+       ⚠ THE VERB MUST BE THE FIRST ARGUMENT, and that is what makes this safe to put
+         ahead of every other launch shape. Windows hands an IFEO-substituted VDM the
+         ORIGINAL command line, whose first argument is always the path to ntvdm.exe,
+         so a real VDM launch can never look like a verb -- while a token matched
+         anywhere on the line could be, one day, a DOS program's argument.
+       ⚠ Output goes to stdout when there is one and a message box when there is not,
+         because this is the one part of the host that is run BOTH from a prompt and
+         by double-clicking. Reporting into a console nobody can see is how an
+         installer becomes "it did nothing". */
+    {   CHAR installStatus[2048];
+        INT verb = InstallVerb(GetCommandLineA());
+        if (verb > INSTALL_VERB_NONE) {
+            /* ⚠ `verb == 0`, NOT `verb != 2`. The first cut wrote the latter, which
+                 makes INSTALL and UNINSTALL both ask to be installed -- and it
+                 reported "INSTALLED" cheerfully while doing it, because the message
+                 is composed from the same wrong flag. Caught on the rig by the
+                 BEHAVIOURAL half of the gate, not by the registry read. */
+            INT isOk, want = (verb == INSTALL_VERB_INSTALL);
+            installStatus[0] = 0;
+            if (verb == INSTALL_VERB_STATUS) {
+                /* ── /status ANSWERS IN ITS EXIT CODE, not only in English. ──────
+                     0 = NTVDMEX is the machine's VDM, 1 = nobody is, 2 = another
+                     program is. A script can branch on that without matching a
+                     sentence -- which is exactly what package/smoke.bat was doing
+                     wrongly, grepping for text only /install ever prints. */
+                INSTALL_STATE installState = InstallStatusText(installStatus, sizeof installStatus);
+                InstallReport(installStatus, TRUE);
+                { *exitCode = installState == INSTALL_OURS ? INSTALL_STATUS_EXIT_OURS : (installState == INSTALL_OTHER ? INSTALL_STATUS_EXIT_OTHER : INSTALL_STATUS_EXIT_NONE); return HOST_FLOW_RETURN; }
+            }
+            isOk = InstallPerform(want, CommandLineHasForce(GetCommandLineA()), installStatus, sizeof installStatus);
+            InstallReport(installStatus, isOk);
+            { *exitCode = isOk ? INSTALL_EXIT_OK : INSTALL_EXIT_FAILED; return HOST_FLOW_RETURN; }
+        } }
+    return HOST_FLOW_NEXT;
+}
+
+INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR commandLineText, INT showCommand)
+{
+    CHAR report[8192]; PSTR cursor = report; PSTR base;
+    PCSTR const reportEnd = report + sizeof report;   /* the guards below keep a line's worth short of it */
+    INT wowCommandFromCsrss = 0;         /* s73: the Win16 program came from CSRSS, not target.txt */
+    INT wantShell = 0;                 /* s79: our own launcher stub asked for a SHELL (see LAUNCH_STUB_NAME) */
+    INT wasShell  = 0;                 /* s79: we actually loaded a shell, not a named program */
+    volatile BYTE *tib, *handlerArea;
+    DWORD readCount = 0, error = 0; LONG vdmStatus;
+    DOS_IMAGE image;
+    DOS_MACHINE machine;
+    CHAR dosOutput[16384];   /* M9 probe dumps run to several KB; 1024 truncated them */
+    CHAR programPathBuffer[768]; CHAR args[256];
+    UINT index; INT guard;
+    g_GuestThreadId = GetCurrentThreadId();
+    OsCompatBind();                    /* the four XP-only imports, or their absence */
+    /* cfg\ and debug\out\ before ANYTHING logs. A missing out\ makes every LogAppend
+       fail silently, and the log is what explains every other failure. Idempotent;
+       debug\ first because CreateDirectoryA does not create intermediate levels. */
+    CreateDirectoryA(NTVDMEX_CFG, NULL);
+    CreateDirectoryA(NTVDMEX_DEBUG, NULL);
+    CreateDirectoryA(NTVDMEX_OUT, NULL);
+    /* s90 (#278): THE WOW32.DLL / NTVDM.EXE STAND-INS GO IN FIRST, before anything in
+         this process can touch winmm. winmm asks "am I under WOW?" ONCE and caches the
+         answer (0x76b616ec), and the host's own audio and timer code loads winmm early:
+         loaded at the WOW branch below, the shims arrived after the question had been
+         answered "no", and NotifyCallbackData kept returning 0 (runs/s90/sr4). */
+    if (LaunchIsWow(GetCommandLineA())) WowShimsLoad();
+
+    {
+        INT exitCode, flow = StartupRunInstallVerb(&exitCode);
+        if (flow == HOST_FLOW_RETURN) return exitCode;
+    }
+
+    /* ── ★★★★★ NOTHING ON THE COMMAND LINE = THE USER OPENED NTVDMEX. (s79) ──────────
+         Sits here for the same reason the verbs do: above every launch guard, and safe
+         because a real VDM launch always has arguments. Before this, a double-click
+         reached STAGE1, was refused VDM privilege (`NtVdmControl` -> 0xC0000022) and
+         vanished without a window or a message -- the worst possible answer to "open it
+         and see". */
+    if (CommandLineBare(GetCommandLineA())) return LaunchShellVdm();
+
+    {
+        INT exitCode, flow = StartupClaimInstance(&exitCode);
+        if (flow == HOST_FLOW_RETURN) return exitCode;
+    }
+    HANDLE uiThread = NULL;
+
+    (VOID)instance; (VOID)previousInstance; (VOID)commandLineText; (VOID)showCommand;
+    programPathBuffer[0] = 0; args[0] = 0;
+
+    /* The install verbs ran far above, ahead of the single-instance guard -- see the
+       block after the CreateDirectory calls, and the defect note there. */
+
+    /* ── NO MODAL HARDWARE-ERROR BOXES, EVER, FOR THE WHOLE PROCESS. ───────────────
+         Every Win32 call that touches a drive with no media -- A: with the door
+         open, an ejected CD -- raises XP's "There is no disk in drive" box unless
+         told not to, and that box has wedged the rig from inside host start-up
+         once already. Now that the guest can select and search those drives
+         (INT 21h AH=0Eh, 47h, 4Eh...), the mode must cover every call, not just
+         the two sites that wrapped it. The errors still come back as errors. */
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+    cursor = LogPut(cursor, "NTVDMEX clean host\r\nSTAGE0: WinMain entered [build dpmi-harness-v180]\r\n");
+    LogWrite(LOG_PATH, report, cursor);
+    SerialInitialize();                                      /* DPMI harness: COM1 log sink */
+    g_StdioHow = StdioInitialize();                         /* GH #131; reported at exit */
+    {   UINT fails = RecoveryRead();               /* GH #132 */
+        g_StartMode = DosRecoveryDecideStartMode(fails);
+        RecoveryWrite(fails + 1);                      /* cleared only on a clean exit */
+        cursor = LogPut(cursor, "STAGE0: consecutive failed starts = "); cursor = LogHexByte(cursor, fails);
+        cursor = LogPut(cursor, g_StartMode == DOS_START_UNINSTALL ? " -> UNINSTALL\r\n"
+                  : g_StartMode == DOS_START_SAFE      ? " -> SAFE MODE\r\n"
+                                                        : " -> normal\r\n");
+        if (g_StartMode == DOS_START_UNINSTALL) RecoveryUninstall(&cursor);
+        g_Safe = DosRecoveryGetSafeSkips(g_StartMode);
+        if (g_StartMode == DOS_START_SAFE)
+            cursor = LogPut(cursor, "STAGE0: SAFE MODE skips: third-party VDDs, audio output (silent"
+                        " pump), the real PC speaker, the joystick thread, the WOW"
+                        " shims, fullscreen -- the next clean exit clears it\r\n");
+        /* s90: NOT `p = report` -- the next LogWrite TRUNCATES the file and re-writes
+           the report buffer, so a line dropped from the buffer here was lost from
+           EVERY log: "consecutive failed starts" never survived since #132 landed. */
+        LogAppend(LOG_PATH, report, cursor); SerialOut(report, cursor); }
+    SerialOut(report, cursor);
+
+    {
+        INT exitCode, flow = StartupLatchWowLaunch(&cursor, report, &exitCode);
+        if (flow == HOST_FLOW_RETURN) return exitCode;
+    }
+    /* Headless test mode = the SMB watcher dropped the AUTOEXIT marker. In that mode the
+       host must self-exit on guest exit AND bound any infinite run (a visual demo like
+       pm32irq/animate never calls INT 21h 4Ch), else rt.bat's `start /wait` blocks forever
+       and wedges the watcher (session-9). Latch it once here (the exit path deletes the marker). */
+    /* ── SETTINGS FIRST, TEST FILES SECOND. ─────────────────────────────────────
+         Load the stored configuration here, at the TOP of the knob block, so every
+         file knob below it still overrides. That ordering is the whole contract (see
+         settings.h): the rig configures this host by writing files and re-launching,
+         and a setting clicked in a dialog on that machine must never silently change
+         what a headless measurement is measuring. */
+    SettingsLoad(&g_Settings);
+    g_SettingsDisk = g_Settings;          /* nothing has overridden anything yet */
+    SettingsApply(NULL, &g_Settings, SETTINGS_APPLY_STARTUP);
+    /* Log only the LIVE settings -- the ones the SettingsApply* functions actually
+       push into the machine. The stored-but-not-yet-honoured ones would make this
+       line four times longer and every value in it would be a claim the run cannot
+       support. Two lines because there are now enough of them to wrap. */
+    cursor = LogPut(cursor, "STAGE0: settings hidecur=retired(#218)");
+    cursor = LogPut(cursor, " blink=");   cursor = LogHex(cursor, g_Settings.Values[SET_BLINKCURSOR]);
+    cursor = LogPut(cursor, " msens=");   cursor = LogHex(cursor, g_Settings.Values[SET_MSENS]);
+    cursor = LogPut(cursor, " dosver=");  cursor = LogHex(cursor, g_Settings.Values[SET_DOSMAJ]);
+    cursor = LogPut(cursor, ".");         cursor = LogHex(cursor, g_Settings.Values[SET_DOSMIN]);
+    cursor = LogPut(cursor, " pitpace="); cursor = LogHex(cursor, g_Settings.Values[SET_PITPACE]);
+    cursor = LogPut(cursor, " uitick=");  cursor = LogHex(cursor, g_Settings.Values[SET_UITICK]);
+    cursor = LogPut(cursor, "\r\n");
+    cursor = LogPut(cursor, "STAGE0: settings vol=");  cursor = LogHex(cursor, g_Settings.Values[SET_VOLUME]);
+    cursor = LogPut(cursor, " mute=");      cursor = LogHex(cursor, g_Settings.Values[SET_MUTE]);
+    cursor = LogPut(cursor, " spk=");       cursor = LogHex(cursor, g_Settings.Values[SET_SPEAKER]);
+    cursor = LogPut(cursor, " outhz=");     cursor = LogHex(cursor, SettingsOutputHz(&g_Settings));
+    cursor = LogPut(cursor, " sb=A");       cursor = LogHex(cursor, g_SbConfig.IoBase);
+    cursor = LogPut(cursor, " I");          cursor = LogHex(cursor, g_SbConfig.Irq);
+    cursor = LogPut(cursor, " D");          cursor = LogHex(cursor, g_SbConfig.Dma8Channel);
+    cursor = LogPut(cursor, " H");          cursor = LogHex(cursor, g_SbConfig.Dma16Channel);
+    cursor = LogPut(cursor, " xms=");       cursor = LogHex(cursor, (DWORD)g_XmsOn);
+    cursor = LogPut(cursor, " ems=");       cursor = LogHex(cursor, (DWORD)g_EmsOn);
+    cursor = LogPut(cursor, " winsize=");   cursor = LogHex(cursor, g_Settings.Values[SET_WINSIZE]);
+    cursor = LogPut(cursor, " scaler=");    cursor = LogHex(cursor, g_Settings.Values[SET_SCALER]);
+    cursor = LogPut(cursor, " aspect=");    cursor = LogHex(cursor, g_Settings.Values[SET_ASPECT]);
+    cursor = LogPut(cursor, " filter=");    cursor = LogHex(cursor, g_Settings.Values[SET_FILTER]);
+    cursor = LogPut(cursor, " vsync=");     cursor = LogHex(cursor, g_Settings.Values[SET_VSYNC]);
+    cursor = LogPut(cursor, " frameskip="); cursor = LogHex(cursor, g_Settings.Values[SET_FRAMESKIP]);
+    cursor = LogPut(cursor, "\r\n");
+    /* ── ★★★ THE TIMING LANDSCAPE, IN EVERY LOG. (s63) ──────────────────────────────
+         Skyroads' frame pacing is fragile on a 2-core box and has regressed THREE
+         times, each time because a change quietly added background work or moved a
+         priority and nobody re-checked. So make the invariants AUDITABLE: the pacer
+         priority MUST read 0x0 (THREAD_PRIORITY_NORMAL); the s61 regression was it
+         sitting at HIGHEST (0x2), which let the pacer preempt the guest. joy_thread
+         MUST read 0x0 whenever JoystickType is None, because a non-joystick game
+         must run with no poll thread at all. A regression in either now shows up in
+         the first twenty lines of every run, not two months later on a user's
+         screen. (Priority constants: NORMAL=0, ABOVE_NORMAL=1, HIGHEST=2,
+         BELOW_NORMAL=-1=0xffffffff, LOWEST=-2.) */
+    cursor = LogPut(cursor, "STAGE0: timing: pacer_prio="); cursor = LogHex(cursor, (DWORD)g_PitPacePriority);
+    cursor = LogPut(cursor, " (want 0x0=NORMAL) joytype=");  cursor = LogHex(cursor, (DWORD)g_Joystick.Type);
+    cursor = LogPut(cursor, " joy_thread=");  cursor = LogHex(cursor, (DWORD)g_JoystickThreadStarted);
+    cursor = LogPut(cursor, " (want 0x0 when joytype=0x0) pit_split=1\r\n");
+
+    g_Headless = (GetFileAttributesA(AUTOEXIT_PATH) != INVALID_FILE_ATTRIBUTES);
+    /* Self-screenshot only when explicitly requested (graphical tests) AND headless, so
+       the common non-graphical tests never enter the capture path. Latched once here. */
+    { HANDLE modeHandle = CreateFileA(MODEY_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              NULL, OPEN_EXISTING, 0, NULL);
+      if (modeHandle != INVALID_HANDLE_VALUE) {
+          CHAR modeYText[32]; DWORD modeYRead = 0, modeYValue = 0, modeYIndex; INT got = 0;
+          ReadFile(modeHandle, modeYText, sizeof modeYText - 1, &modeYRead, NULL); CloseHandle(modeHandle);
+          for (modeYIndex = 0; modeYIndex < modeYRead && modeYText[modeYIndex] >= '0' && modeYText[modeYIndex] <= '9'; ++modeYIndex) { modeYValue = modeYValue * DECIMAL_RADIX + (DWORD)(modeYText[modeYIndex] - '0'); got = 1; }
+          if (got && modeYValue <= MODEY_GAP_MAX_U) {
+              CHAR dwordsLine[96], *lineCursor = dwordsLine;
+              g_Video.ModeYGap = modeYValue;
+              lineCursor = LogPut(lineCursor, "STAGE0: modey.txt -> gap="); lineCursor = LogHex(lineCursor, modeYValue);
+              lineCursor = LogPut(lineCursor, " dwords\r\n"); LogAppend(LOG_PATH, dwordsLine, lineCursor); SerialOut(dwordsLine, lineCursor);
+          }
+      } }
+    g_Capture  = g_Headless && (GetFileAttributesA(CAPTURE_FLAG) != INVALID_FILE_ATTRIBUTES);
+    if (g_Capture) {                       /* its contents, if any, are the period in ms */
+        HANDLE configHandle = CreateFileA(CAPTURE_FLAG, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                NULL, OPEN_EXISTING, 0, NULL);
+        if (configHandle != INVALID_HANDLE_VALUE) {
+            CHAR captureText[32]; DWORD captureRead = 0, captureValue = 0, captureIndex;
+            ReadFile(configHandle, captureText, sizeof captureText - 1, &captureRead, NULL); CloseHandle(configHandle);
+            for (captureIndex = 0; captureIndex < captureRead && captureText[captureIndex] >= '0' && captureText[captureIndex] <= '9'; ++captureIndex)
+                captureValue = captureValue * DECIMAL_RADIX + (DWORD)(captureText[captureIndex] - '0');
+            if (captureValue >= CAPTURE_MS_MIN && captureValue <= CAPTURE_MS_MAX) g_CaptureMs = captureValue;
+            {   DWORD periodDelay = 0;                                 /* #58: "period delay" */
+                while (captureIndex < captureRead && captureText[captureIndex] == ' ') ++captureIndex;
+                for (; captureIndex < captureRead && captureText[captureIndex] >= '0' && captureText[captureIndex] <= '9'; ++captureIndex)
+                    periodDelay = periodDelay * DECIMAL_RADIX + (DWORD)(captureText[captureIndex] - '0');
+                if (periodDelay <= CAPTURE_DELAY_MS_MAX) g_CaptureDelayMs = periodDelay; }
+            g_CaptureStart = GetTickCount();
+        }
+    }
+    /* ⚠ THESE BELONG WITH THE OTHER STARTUP FLAGS, NOT IN THE DPMI BLOCK. Read from
+         inside the protected-mode setup they applied to Doom and not to QBasic --
+         nomouse worked for one guest and silently did nothing for the other, and
+         textdump wrote no files at all for a real-mode run. A knob that only some
+         launches honour is worse than no knob. */
+    g_TextDump = (GetFileAttributesA(TEXTDUMP_PATH) != INVALID_FILE_ATTRIBUTES);
+    g_MouseAbsent = (GetFileAttributesA(NOMOUSE_PATH) != INVALID_FILE_ATTRIBUTES);
+    g_NoA000  = (GetFileAttributesA(NOA000_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_NoPmPatch = (GetFileAttributesA(NOPMPATCH_FLAG) != INVALID_FILE_ATTRIBUTES);
+    if (g_NoPmPatch) {                    /* contents, if any, = minimum region size */
+        HANDLE noPatchHandle = CreateFileA(NOPMPATCH_FLAG, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                NULL, OPEN_EXISTING, 0, NULL);
+        if (noPatchHandle != INVALID_HANDLE_VALUE) {
+            CHAR noPatchText[32]; DWORD noPatchBytesRead = 0, noPatchValue = 0, noPatchIndex;
+            ReadFile(noPatchHandle, noPatchText, sizeof noPatchText - 1, &noPatchBytesRead, NULL); CloseHandle(noPatchHandle);
+            for (noPatchIndex = 0; noPatchIndex < noPatchBytesRead; ++noPatchIndex) {
+                INT hexDigit = (noPatchText[noPatchIndex] >= '0' && noPatchText[noPatchIndex] <= '9') ? noPatchText[noPatchIndex] - '0'
+                       : (noPatchText[noPatchIndex] >= 'a' && noPatchText[noPatchIndex] <= 'f') ? noPatchText[noPatchIndex] - 'a' + HEX_DIGIT_A_VALUE
+                       : (noPatchText[noPatchIndex] >= 'A' && noPatchText[noPatchIndex] <= 'F') ? noPatchText[noPatchIndex] - 'A' + HEX_DIGIT_A_VALUE : -1;
+                if (hexDigit < 0) break;
+                noPatchValue = (noPatchValue << NIBBLE_SHIFT) | (DWORD)hexDigit;
+            }
+            g_NoPmPatchMinimum = noPatchValue;
+        }
+    }
+    {   HANDLE modeHandle = CreateFileA(MEMDUMP_FLAG, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                NULL, OPEN_EXISTING, 0, NULL);
+        if (modeHandle != INVALID_HANDLE_VALUE) {         /* "<linear> <size>" in hex */
+            CHAR memoryDumpText[48]; DWORD memoryDumpBytesRead = 0, memoryDumpIndex, values[MEMDUMP_FIELDS] = {0, 0}, width = 0; INT isIn = 0;
+            ReadFile(modeHandle, memoryDumpText, sizeof memoryDumpText - 1, &memoryDumpBytesRead, NULL); CloseHandle(modeHandle);
+            for (memoryDumpIndex = 0; memoryDumpIndex < memoryDumpBytesRead && width < MEMDUMP_FIELDS; ++memoryDumpIndex) {
+                INT hexDigit = (memoryDumpText[memoryDumpIndex] >= '0' && memoryDumpText[memoryDumpIndex] <= '9') ? memoryDumpText[memoryDumpIndex] - '0'
+                       : (memoryDumpText[memoryDumpIndex] >= 'a' && memoryDumpText[memoryDumpIndex] <= 'f') ? memoryDumpText[memoryDumpIndex] - 'a' + HEX_DIGIT_A_VALUE
+                       : (memoryDumpText[memoryDumpIndex] >= 'A' && memoryDumpText[memoryDumpIndex] <= 'F') ? memoryDumpText[memoryDumpIndex] - 'A' + HEX_DIGIT_A_VALUE : -1;
+                if (hexDigit < 0) { if (isIn) { ++width; isIn = 0; } continue; }
+                values[width] = (values[width] << NIBBLE_SHIFT) | (DWORD)hexDigit; isIn = 1;
+            }
+            g_MemoryDumpLinear = values[0]; g_MemoryDumpLength = values[1];
+        }
+    }
+    g_Interp12 = (GetFileAttributesA(INTERP12_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_ModeYInterpOffset = (GetFileAttributesA(MYINTERP_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_ModeYRingOn    = (GetFileAttributesA(MYRING_FLAG) != INVALID_FILE_ATTRIBUTES);
+    /* The GUS is decided HERE, with its resources, because the environment block is
+       built before the devices are added -- and ULTRASND= has to say what the card
+       will be. Deciding it at device setup left the first heaven7 run with no ULTRASND
+       and a card nothing looked for. */
+    g_GusOn = g_Settings.Values[SET_GUS] && (GetFileAttributesA(NOGUS_FLAG) == INVALID_FILE_ATTRIBUTES);
+    if (g_Settings.Values[SET_GUS] && !g_GusOn) SettingsNoteOverride(SET_GUS, CFG_TEXT(KNOB_FILE_NOGUS), 0);
+    if (GetFileAttributesA(DDRAWFS_FLAG) != INVALID_FILE_ATTRIBUTES)   /* read again at fullscreen */
+        SettingsNoteOverride(SET_RENDERER, CFG_TEXT(KNOB_FILE_DDRAWFS), 1);
+    /* #235: the card as the Audio page's jumpers set it (defaults = the card as built). */
+    {   static const BYTE gusIrqs[7] = { 2, 3, 5, 7, 11, 12, 15 };
+        static const BYTE gusDmaChannels[5] = { 1, 3, 5, 6, 7 };
+        g_Gus.BasePort   = (WORD)(GUS_BASE_FIRST + GUS_BASE_STEP * (g_Settings.Values[SET_GUSADDR] <= GUS_BASE_LAST_CHOICE ? g_Settings.Values[SET_GUSADDR] : GUS_DEFAULT_BASE_CHOICE));
+        g_Gus.Irq    = gusIrqs[g_Settings.Values[SET_GUSIRQ] <= ARRAYSIZE(gusIrqs) - 1 ? g_Settings.Values[SET_GUSIRQ] : GUS_DEFAULT_IRQ_CHOICE];
+        g_Gus.DmaChannel = gusDmaChannels[g_Settings.Values[SET_GUSDMA] <= ARRAYSIZE(gusDmaChannels) - 1 ? g_Settings.Values[SET_GUSDMA] : GUS_DEFAULT_DMA_CHOICE]; }
+    /* ...and OFF THE SOUND BLASTER'S RESOURCES. The SB's own choices in the dialog
+       include 240h, IRQ 11 and DMA 3 -- each of them the GUS default -- and two cards on
+       one line is a machine nobody could have built. Step aside to the next period
+       choice (ref/gus.md §5 lists what the latches can select). */
+    if (g_SbConfig.IoBase == g_Gus.BasePort) g_Gus.BasePort = GUS_FALLBACK_BASE;
+    if (g_SbConfig.Irq == g_Gus.Irq)   g_Gus.Irq = GUS_FALLBACK_IRQ;
+    if (g_SbConfig.Dma8Channel == g_Gus.DmaChannel || g_SbConfig.Dma16Channel == g_Gus.DmaChannel) g_Gus.DmaChannel = GUS_FALLBACK_DMA;
+    if (g_SbConfig.Dma8Channel == g_Gus.DmaChannel || g_SbConfig.Dma16Channel == g_Gus.DmaChannel) g_Gus.DmaChannel = GUS_SECOND_FALLBACK_DMA;
+    g_ModeYPmOffset     = (GetFileAttributesA(MYPM_OFF_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_ModeYPmDetect  = (GetFileAttributesA(MYPM_DETECT_FLAG) != INVALID_FILE_ATTRIBUTES);
+    g_P12Offset  = (GetFileAttributesA(P12OFF_FLAG)   != INVALID_FILE_ATTRIBUTES);
+    g_OplTraceOn = (GetFileAttributesA(OPLTRACE_FLAG) != INVALID_FILE_ATTRIBUTES);
+    if (g_OplTraceOn) g_Opl.Trace = OplTraceWrite;
+    if (g_Interp12) g_NoA000 = 1;              /* interpreting instead of trapping */
+    /* Headless cap override (decimal ms on the share). Read before the deadline thread
+       starts, since that thread sleeps on it. Clamped: below the default a typo would
+       kill runs early, above 10 min a typo would wedge the watcher for the whole time. */
+    { HANDLE handle = CreateFileA(HEADLESS_MS_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, OPEN_EXISTING, 0, NULL);
+      if (handle != INVALID_HANDLE_VALUE) {
+          CHAR text[16]; DWORD bytesRead = 0, number = 0; INT index;
+          ReadFile(handle, text, sizeof text, &bytesRead, NULL);
+          CloseHandle(handle);
+          for (index = 0; index < (INT)bytesRead; ++index) {
+              if (text[index] < '0' || text[index] > '9') break;      /* stop at CR/LF/junk */
+              number = number * DECIMAL_RADIX + (DWORD)(text[index] - '0');
+          }
+          if (number > PM_HEADLESS_MS_DEFAULT && number <= HEADLESS_MS_MAX) g_HeadlessMs = number;   /* s84: an hour, for slow-rung timedemos */
+      } }
+    StartupLoadQiMode();
+    if (g_QiBits || g_QiSuspended) {    /* async delivery needs a handle to the exec thread */
+        DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+                        &g_HostCpu, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    }
+    /* ── THE GUEST RAN AT NORMAL PRIORITY AGAINST A TIME_CRITICAL AUDIO THREAD. ──────
+         audio_wave.c raises its pump to THREAD_PRIORITY_TIME_CRITICAL because refilling
+         waveOut is a hard deadline. Nothing ever raised the thread that RUNS THE GUEST,
+         so on this single-core box the mixer thread preempts guest code whenever it has
+         work -- and Doom's DMX mixer is guest code that must finish inside one 7.4 ms
+         timer tick or its scheduler abandons the pass, recomputes the deadline from NOW,
+         and the block it would have filled replays the previous ring lap instead.
+         Measured: the mixer NEVER runs on consecutive ticks (2.6% of gaps are one tick,
+         49% two, 45% three or four) although we deliver 135 ticks/s against a 140 Hz
+         reload -- so it is overrunning, not starved of ticks. And it is not lock
+         contention: slicing HostAudioFill's hold into 64-frame pieces moved
+         REPLAYED_LOUD by 2 blocks in 894. Preemption is what slicing cannot touch.
+       ► ABOVE_NORMAL, not higher. The audio pump stays at 15 so it still wins every
+         race it needs to -- starving it is what "a periodic tick or pulse in otherwise
+         correct music" was, and that is a worse fault than the one being fixed. This
+         only lifts the guest above the UI thread and the system's background work.
+       ⚠ Knob, because it is a scheduling change on a box whose behaviour we have been
+         wrong about before: execprio.txt absent or 1 = ABOVE_NORMAL (default),
+         0 = leave at NORMAL (the old behaviour, for an A/B without a rebuild),
+         2 = HIGHEST. */
+    /* ── WHICH DSP VERSION WE CLAIM PICKS THE GUEST'S DRIVER PATH. See vdd_sb.h.
+         dspver.txt holds "major minor" as two decimal numbers, e.g. "2 1" for a
+         Sound Blaster 2.01, which makes DMX skip the mixer-0x82 interrupt gate and
+         use the older 0x48/0x1C auto-init pair instead of the SB16 0xC6 command.
+         Absent = 4.05, i.e. no change. */
+    { HANDLE versionHandle = CreateFileA(DSPVER_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              NULL, OPEN_EXISTING, 0, NULL);
+      if (versionHandle != INVALID_HANDLE_VALUE) {
+          CHAR text[16]; DWORD bytesRead = 0; INT index = 0, major = 0, minor = 0;
+          ReadFile(versionHandle, text, sizeof text, &bytesRead, NULL);
+          CloseHandle(versionHandle);
+          while (index < (INT)bytesRead && text[index] >= '0' && text[index] <= '9') major = major * DECIMAL_RADIX + (text[index++] - '0');
+          while (index < (INT)bytesRead && (text[index] == ' ' || text[index] == '.')) ++index;
+          while (index < (INT)bytesRead && text[index] >= '0' && text[index] <= '9') minor = minor * DECIMAL_RADIX + (text[index++] - '0');
+          if (major > 0 && major < BYTE_VALUES) { g_SbVersionMajor = (BYTE)major; g_SbVersionMinor = (BYTE)minor;
+                                    g_DspVersionForced = 1; }
+      } }
+    { HANDLE gateHandle = CreateFileA(SBGATE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              NULL, OPEN_EXISTING, 0, NULL);
+      if (gateHandle != INVALID_HANDLE_VALUE) {
+          CHAR text[8]; DWORD bytesRead = 0;
+          ReadFile(gateHandle, text, sizeof text, &bytesRead, NULL); CloseHandle(gateHandle);
+          g_SbGate = (bytesRead && text[0] >= '0' && text[0] <= '9') ? (text[0] - '0') : 1;
+      } }
+    { DWORD priority = EXECPRIO_ABOVE_NORMAL;
+      HANDLE priorityHandle = CreateFileA(EXECPRIO_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              NULL, OPEN_EXISTING, 0, NULL);
+      if (priorityHandle != INVALID_HANDLE_VALUE) {
+          CHAR text[8]; DWORD bytesRead = 0;
+          ReadFile(priorityHandle, text, sizeof text, &bytesRead, NULL);
+          CloseHandle(priorityHandle);
+          if (bytesRead && text[0] >= '0' && text[0] <= '9') priority = (DWORD)(text[0] - '0');
+      }
+      g_ExecPriority = priority;
+      if (priority == EXECPRIO_ABOVE_NORMAL) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+      else if (priority >= EXECPRIO_HIGHEST) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+      g_ExecPriorityForeground = GetThreadPriority(GetCurrentThread());
+      DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+                      &g_ExecThread, 0, FALSE, DUPLICATE_SAME_ACCESS);   /* #211: BackgroundPriorityTick */
+    }
+    HostProfileStart();                                 /* #183: cfg\hostprof.flag */
+    if (g_QiBits) {
+        /* Experiment mode: retarget the kernel's PIC so a KERNEL-dispatched IRQ 5 arrives
+           as INT 65h while our own injection still arrives as INT 0Dh. Without this the
+           two are the same vector and the qirq2 probe cannot attribute a delivery. */
+        VdmIcaSetBase(QIMODE_PIC_BASE);
+    }
+    cursor = LogPut(cursor, "STAGE0: qi_bits=0x"); cursor = LogHex(cursor, g_QiBits);
+    cursor = LogPut(cursor, " qi_raise=0x");       cursor = LogHex(cursor, (DWORD)g_QiRaise);
+    cursor = LogPut(cursor, " qi_vif=0x");         cursor = LogHex(cursor, (DWORD)g_QiVif);
+    cursor = LogPut(cursor, " qi_susp=0x");        cursor = LogHex(cursor, (DWORD)g_QiSuspended);
+    cursor = LogPut(cursor, " hcpu=0x");           cursor = LogHex(cursor, (DWORD)(ULONG_PTR)g_HostCpu);
+    cursor = LogPut(cursor, "\r\n");
+    cursor = LogPut(cursor, "STAGE0: os=0x"); cursor = LogHex(cursor, ((g_OsVersion & BYTE_MASK) << BYTE_SHIFT) | ((g_OsVersion >> BYTE_SHIFT) & BYTE_MASK));
+    cursor = LogPut(cursor, " build="); cursor = LogDecimal(cursor, (g_OsVersion < OS_VERSION_NOT_NT_U) ? (g_OsVersion >> WORD_SHIFT) : 0);
+    cursor = LogPut(cursor, " veh="); cursor = LogDecimal(cursor, g_PfnAddVeh != 0);
+    cursor = LogPut(cursor, " attachconsole="); cursor = LogDecimal(cursor, g_PfnAttachConsole != 0);
+    cursor = LogPut(cursor, " rawinput="); cursor = LogDecimal(cursor, g_PfnRegisterRawInput && g_PfnGetRawInput);
+    cursor = LogPut(cursor, g_PfnAddVeh ? "\r\n" : "  (no VEH: the unhandled filter runs the PM-fault arms)\r\n");
+    if (g_PfnAddVeh) g_PfnAddVeh(1, DpmiCrashVeh);  /* DPMI spike crash diagnostic; XP+ */
+    SetUnhandledExceptionFilter(HostUnhandledFilter); /* real-mode runs: full dump, not WER */
+
+    /* CSRSS command-info: receive buffers + first-command state + IFEO task id. */
+    g_CommandInfo.CmdLine = g_CommandLine; g_CommandInfo.CmdLen = sizeof(g_CommandLine);
+    g_CommandInfo.AppName = g_Application; g_CommandInfo.AppLen = sizeof(g_Application);
+    g_CommandInfo.PifFile = g_PifPath; g_CommandInfo.PifLen = sizeof(g_PifPath);
+    g_CommandInfo.CurDirectory = g_CurrentDirectory; g_CommandInfo.CurDirectoryLen = sizeof(g_CurrentDirectory);
+    g_CommandInfo.Env = g_Environment; g_CommandInfo.EnvLen = sizeof(g_Environment);
+    g_CommandInfo.Desktop = g_Desktop; g_CommandInfo.DesktopLen = sizeof(g_Desktop);
+    g_CommandInfo.Title = g_Title; g_CommandInfo.TitleLen = sizeof(g_Title);
+    g_CommandInfo.Reserved = g_Reserved; g_CommandInfo.ReservedLen = sizeof(g_Reserved);
+    g_CommandInfo.StartupInfo.cb = sizeof(STARTUPINFOA);
+    g_CommandInfo.VDMState = VDM_GET_FIRST_COMMAND;
+    g_CommandInfo.TaskId   = CsrssParseTaskId(GetCommandLineA());
+
+    /* ── WHAT SHAPE OF LAUNCH IS THIS? (GH #129) ────────────────────────────────
+         Windows launches ntvdm.exe for BOTH a DOS program and a 16-bit WINDOWS
+         program -- WOW runs inside the same VDM binary. Our IFEO Debugger hook
+         therefore intercepts both, and we implement only the DOS half, so a Win16
+         launch currently lands in a host that cannot load an NE file at all.
+       ► Before deciding anything from the command line, RECORD IT. The flags that
+         distinguish the two are described in various places and this project has
+         been bitten repeatedly by building on a documented claim instead of a
+         measured one. Log the raw string; diff a DOS launch against a Win16 launch
+         on the rig; write the detector against what the diff actually shows. */
+    cursor = LogPut(cursor, "STAGE0: root=["); cursor = LogPut(cursor, NTVDMEX_DIR); cursor = LogPut(cursor, "] (derived from the host's own path)\r\n");
+    HmaTry();
+    cursor = LogPut(cursor, "STAGE0: HMA ");
+    if (g_Hma) cursor = LogPut(cursor, "committed at 0x100000 -- FFFF:0010 is real");
+    else { cursor = LogPut(cursor, "UNAVAILABLE err=0x"); cursor = LogHex(cursor, g_HmaError);
+       cursor = LogPut(cursor, " state=0x"); cursor = LogHex(cursor, g_HmaState);
+       cursor = LogPut(cursor, " prot=0x");  cursor = LogHex(cursor, g_HmaProtection); }
+    cursor = LogPut(cursor, "\r\n");
+        cursor = LogPut(cursor, "STAGE0: cmdline=["); cursor = LogPut(cursor, GetCommandLineA()); cursor = LogPut(cursor, "]\r\n");
+
+    /* V86 address space, then register as a VDM with the kernel (order matters). */
+    VdmSetupMemory();
+    vdmStatus = VdmRegisterWithKernel();
+    cursor = LogPut(cursor, "STAGE1: v86_init NTSTATUS=0x"); cursor = LogHex(cursor, (UINT)vdmStatus); cursor = LogPut(cursor, "\r\n");
+    cursor = StartupCheckInheritedVdmState(cursor);
+    /* ── THE CLEAN 2x2. ─────────────────────────────────────────────────────────────
+         The first differential compared a WOW probe HERE against a DOS probe placed
+         ~500 lines later, after CSRSS and the whole DOS machine were built. That is two
+         variables, not one, so "WOW is refused, DOS succeeds" did not actually follow.
+         Probe BOTH launch types at BOTH points and let the 2x2 say whether it is the
+         launch type or the amount of VDM setup that matters. */
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
+        WowProbeLdtMatrix(g_WowModuleCount ? "wow-early" : "dos-early");
+    StartupWowSelectorStage();
+    /* EMS page frame must be mapped AFTER VdmInitialize (see VdmMapEmsFrame). */
+    g_EmsFrameLinear = VdmMapEmsFrame();
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) WowProbeLdtMatrix("B-after-emsframe");
+    cursor = LogPut(cursor, "STAGE1: ems_frame lin=0x"); cursor = LogHex(cursor, g_EmsFrameLinear);
+    cursor = LogPut(cursor, " seg=0x"); cursor = LogHex(cursor, g_EmsFrameLinear >> PARAGRAPH_SHIFT); cursor = LogPut(cursor, "\r\n");
+
+    /* CSRSS: register as the console VDM, then fetch the program to run. */
+    CsrssRegisterConsole();
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) WowProbeLdtMatrix("C-after-csrss-register");
+    StartupTakeCsrssCommand(&cursor, &error);
+    /* ── ★★★★★ THE SECOND FETCH: THE COMMAND ITSELF. (s72, the package smoke test) ──
+         The call above is stock ntvdm's `cmdGetStartInfo` shape (VDM_GET_FIRST_COMMAND):
+         it fills Title, CurDirectory and the PIF, and nothing else -- AppName/CmdLine
+         come back as capture-buffer scaffolding (`app=[5??] cmd=[\]`). Explorer puts the
+         program's path in the console TITLE, which is the only reason a double-click has
+         ever run the right program. A launch from cmd.exe or a batch file -- smoke.bat,
+         a prompt, the friend's machine on the 18th -- has a title of "" (start) or the
+         typed command WITH ITS ARGUMENTS (direct), and we ran the embedded four-byte stub
+         and reported a clean exit: the package smoke test passed without running the
+         self-test. Stock ntvdm consumes the real command in its exec-BOP path with a
+         second GetNextVDMCommand, VDM_FLAG_DOS | VDM_FLAG_FIRST_TASK.
+       ► MEASURED on the rig, both launch shapes (STAGE1: fetch2 lines, s72):
+           AppName = C:\DOCUME~1\...\bm\selftest.com   (full short path, AppLen incl. NUL)
+           CmdLine = "hello world\r\n"                     (the tail ONLY; "\r\n" when none)
+           CurDirectory = the launcher's cwd; Env = its Win32 environment block (0x46c);
+           ComingFromBat = 1 from a batch file; TaskId 0 without -i is fine.
+         DONT_WAIT so a protocol misunderstanding is a FALSE with an error, never a hang.
+         Only after a successful first fetch: on a WOW launch the first returns FALSE
+         (err 0x57) and that tell is left exactly as it was. */
+    if (g_CurrentDirectory[0] || g_Title[0]) {
+        VDM_COMMAND_INFO commandInfo2;
+        DWORD error2 = 0; BOOL ok2; INT item;
+        static CHAR pifFile2[512], desktop2[512], title2[512], reservedBuffer2[512];
+        ZeroMemory(&commandInfo2, sizeof commandInfo2);
+        commandInfo2.CmdLine = g_CommandLine2; commandInfo2.CmdLen = sizeof g_CommandLine2;  commandInfo2.AppName = g_Application2; commandInfo2.AppLen = sizeof g_Application2;
+        commandInfo2.PifFile = pifFile2; commandInfo2.PifLen = sizeof pifFile2; commandInfo2.CurDirectory = g_CurrentDirectory2; commandInfo2.CurDirectoryLen = sizeof g_CurrentDirectory2;
+        commandInfo2.Env = g_Environment2; commandInfo2.EnvLen = sizeof g_Environment2; commandInfo2.Desktop = desktop2; commandInfo2.DesktopLen = sizeof desktop2;
+        commandInfo2.Title = title2; commandInfo2.TitleLen = sizeof title2; commandInfo2.Reserved = reservedBuffer2; commandInfo2.ReservedLen = sizeof reservedBuffer2;
+        commandInfo2.StartupInfo.cb = sizeof(STARTUPINFOA);
+        commandInfo2.VDMState = VDM_FLAG_DOS | VDM_FLAG_FIRST_TASK | VDM_FLAG_DONT_WAIT;              /* VDM_FLAG_DOS | FIRST_TASK | DONT_WAIT */
+        commandInfo2.TaskId = g_CommandInfo.TaskId;
+        ok2 = CsrssGetCommand(&commandInfo2, &error2);
+        g_Application2[sizeof g_Application2 - 1] = 0; g_CommandLine2[sizeof g_CommandLine2 - 1] = 0; g_CurrentDirectory2[sizeof g_CurrentDirectory2 - 1] = 0;
+        /* the tail ends in CR LF; the PSP wants neither */
+        for (item = 0; g_CommandLine2[item]; ++item) if (g_CommandLine2[item] == '\r' || g_CommandLine2[item] == '\n') { g_CommandLine2[item] = 0; break; }
+        g_Fetch2Ok = ok2 && commandInfo2.AppLen > 1 && g_Application2[0];
+        cursor = LogPut(cursor, "STAGE1: command fetch (DOS|FIRST|DONT_WAIT) -> "); cursor = LogPut(cursor, ok2 ? "TRUE" : "FALSE");
+        cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, error2);
+        cursor = LogPut(cursor, " app=["); cursor = LogPut(cursor, g_Application2); cursor = LogPut(cursor, "] args=["); cursor = LogPut(cursor, g_CommandLine2);
+        cursor = LogPut(cursor, "] cur=["); cursor = LogPut(cursor, g_CurrentDirectory2); cursor = LogPut(cursor, "] bat=0x"); cursor = LogHex(cursor, commandInfo2.ComingFromBat);
+        cursor = LogPut(cursor, " drive=0x"); cursor = LogHex(cursor, commandInfo2.CurrentDrive); cursor = LogPut(cursor, " envlen=0x"); cursor = LogHex(cursor, commandInfo2.EnvLen);
+        cursor = LogPut(cursor, " flags=0x"); cursor = LogHex(cursor, commandInfo2.CreationFlags);
+        cursor = LogPut(cursor, " std=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)commandInfo2.StdIn); cursor = LogPut(cursor, "/0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)commandInfo2.StdOut);
+        cursor = LogPut(cursor, "/0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)commandInfo2.StdErr);
+        cursor = LogPut(cursor, "\r\n");
+    } else if (g_WowLaunch) {
+        /* ── ★★★★ THE WIN16 PROGRAM, FROM CSRSS. (s73) ──────────────────────────
+             A WOW launch never carried its program: the VDM starts as
+             `ntvdm -f -i<n> -w -a krnl386.exe`, the first fetch above returns FALSE
+             err=0x57 (measured, s3x), and until today the name came ONLY from
+             cfg\target.txt -- the harness's channel -- so on any machine without
+             that file a double-clicked Win16 program ran nothing, and on the rig it
+             ran whatever the file happened to name last. Stock WOW gets it exactly
+             the way stock DOS does: WOWEXEC's WowGetNextVDMCommand (WOW32 0x70) is
+             wow32.dll calling GetNextVDMCommand with VDM_FLAG_WOW, and CSRSS answers
+             with the AppName + CmdLine the launcher queued. We ask here, before
+             krnl386 runs, so that 0x70 can answer from g_WowCommandProgram as it already
+             does. DONT_WAIT: a misunderstanding is a FALSE, never a hang. */
+        VDM_COMMAND_INFO commandInfo2;
+        DWORD error2 = 0; BOOL ok2; INT item;
+        static CHAR pifFile2[512], desktop2[512], title2[512], reservedBuffer2[512];
+        ZeroMemory(&commandInfo2, sizeof commandInfo2);
+        commandInfo2.CmdLine = g_CommandLine2; commandInfo2.CmdLen = sizeof g_CommandLine2;  commandInfo2.AppName = g_Application2; commandInfo2.AppLen = sizeof g_Application2;
+        commandInfo2.PifFile = pifFile2; commandInfo2.PifLen = sizeof pifFile2; commandInfo2.CurDirectory = g_CurrentDirectory2; commandInfo2.CurDirectoryLen = sizeof g_CurrentDirectory2;
+        commandInfo2.Env = g_Environment2; commandInfo2.EnvLen = sizeof g_Environment2; commandInfo2.Desktop = desktop2; commandInfo2.DesktopLen = sizeof desktop2;
+        commandInfo2.Title = title2; commandInfo2.TitleLen = sizeof title2; commandInfo2.Reserved = reservedBuffer2; commandInfo2.ReservedLen = sizeof reservedBuffer2;
+        commandInfo2.StartupInfo.cb = sizeof(STARTUPINFOA);
+        /* ► THE SHAPE IS MEASURED, NOT ASSUMED (rig, s73). WOW|FIRST|DONT_WAIT alone
+             answers FALSE err=0x490 (ERROR_NOT_FOUND), with either task id. What
+             answers TRUE is GET_FIRST_COMMAND|WOW -- the same handshake stock ntvdm's
+             cmdGetStartInfo makes for DOS, and like the DOS one it fills Title/CurDir
+             and leaves AppName as capture-buffer junk ("[5??]"). So, as on the DOS
+             path: the GET_FIRST call first, then the FIRST_TASK fetch for the command
+             itself. Every call is DONT_WAIT and every answer is logged; a "name" is
+             only believed when it is drive-qualified or UNC -- TRUE with junk is not
+             a program. */
+        {   static const struct { DWORD VdmState; INT IsOwnTask; INT IsHandshake; PCSTR Description; } vdmStates[] = {
+                { VDM_GET_FIRST_COMMAND | VDM_FLAG_WOW | VDM_FLAG_DONT_WAIT, 1, 1, "GET_FIRST|WOW|DONT_WAIT taskid=-i (handshake)" },
+                { VDM_FLAG_WOW | VDM_FLAG_FIRST_TASK | VDM_FLAG_DONT_WAIT, 1, 0, "WOW|FIRST|DONT_WAIT taskid=-i" },
+                { VDM_FLAG_WOW | VDM_FLAG_FIRST_TASK | VDM_FLAG_DONT_WAIT, 0, 0, "WOW|FIRST|DONT_WAIT taskid=0"  },
+                { VDM_FLAG_WOW | VDM_FLAG_DONT_WAIT, 1, 0, "WOW|DONT_WAIT taskid=-i"       },
+                { VDM_FLAG_WOW | VDM_FLAG_FIRST_TASK | VDM_FLAG_RETRY | VDM_FLAG_DONT_WAIT, 1, 0, "WOW|FIRST|RETRY|DONT_WAIT taskid=-i" },
+            };
+            UINT si; INT named = 0;
+            for (si = 0; si < sizeof vdmStates / sizeof vdmStates[0] && !named; ++si) {
+                g_Application2[0] = 0; g_CommandLine2[0] = 0; g_CurrentDirectory2[0] = 0; error2 = 0;
+                commandInfo2.AppLen = sizeof g_Application2; commandInfo2.CmdLen = sizeof g_CommandLine2; commandInfo2.CurDirectoryLen = sizeof g_CurrentDirectory2;
+                commandInfo2.EnvLen = sizeof g_Environment2; commandInfo2.PifLen = sizeof pifFile2; commandInfo2.DesktopLen = sizeof desktop2;
+                commandInfo2.TitleLen = sizeof title2; commandInfo2.ReservedLen = sizeof reservedBuffer2;
+                commandInfo2.VDMState = vdmStates[si].VdmState;
+                commandInfo2.TaskId = vdmStates[si].IsOwnTask ? g_CommandInfo.TaskId : 0;
+                ok2 = CsrssGetCommand(&commandInfo2, &error2);
+                g_Application2[sizeof g_Application2 - 1] = 0; g_CommandLine2[sizeof g_CommandLine2 - 1] = 0; g_CurrentDirectory2[sizeof g_CurrentDirectory2 - 1] = 0;
+                named = ok2 && !vdmStates[si].IsHandshake
+                        && ((g_Application2[0] >= 'A' && (g_Application2[0] | ASCII_CASE_BIT) <= 'z' && g_Application2[1] == ':' && g_Application2[2] == '\\')
+                            || (g_Application2[0] == '\\' && g_Application2[1] == '\\'));
+                cursor = LogPut(cursor, "STAGE1: WOW command fetch ["); cursor = LogPut(cursor, vdmStates[si].Description); cursor = LogPut(cursor, "] -> ");
+                cursor = LogPut(cursor, ok2 ? "TRUE" : "FALSE");
+                cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, error2);
+                cursor = LogPut(cursor, " app=["); if (named) cursor = LogPut(cursor, g_Application2); else if (g_Application2[0]) cursor = LogPut(cursor, "<not a path>");
+                cursor = LogPut(cursor, "] args=["); if (named) cursor = LogPut(cursor, g_CommandLine2);
+                cursor = LogPut(cursor, "] cur=["); cursor = LogPut(cursor, g_CurrentDirectory2); cursor = LogPut(cursor, "] show=0x"); cursor = LogHex(cursor, commandInfo2.StartupInfo.wShowWindow);
+                cursor = LogPut(cursor, " taskid=0x"); cursor = LogHex(cursor, commandInfo2.TaskId);
+                cursor = LogPut(cursor, "\r\n");
+            }
+            ok2 = named;
+        }
+        for (item = 0; g_CommandLine2[item]; ++item) if (g_CommandLine2[item] == '\r' || g_CommandLine2[item] == '\n') { g_CommandLine2[item] = 0; break; }
+        wowCommandFromCsrss = ok2 && g_Application2[0];
+        if (wowCommandFromCsrss) {
+            /* Exactly what the target.txt path does with a name, or the stage below
+               builds the V86 world for the embedded four-byte stub instead ("STAGE2:
+               embedded fallback"), krnl386 gets no program path in its environment,
+               and it dies in its own init: "NTVDM KERNEL: Unable to initialize heap".
+               Measured, first cut. The image read here is discarded by WowPlaceV86;
+               the NAME and the byte count are what the stage keys on. */
+            HANDLE wowHandle;
+            LogPut(g_WowCommandProgram, g_Application2); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
+            /* the tail arrives with its leading space, as a DOS tail does; 0x70 adds its own */
+            { PCSTR cursorA = g_CommandLine2; while (*cursorA == ' ') ++cursorA; LogPut(g_WowCommandArguments, cursorA); LogPut(args, cursorA); }
+            LogPut(programPathBuffer, g_WowCommandProgram);
+            wowHandle = CreateFileA(g_WowCommandProgram, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+            if (wowHandle != INVALID_HANDLE_VALUE) { ReadFile(wowHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(wowHandle); }
+            if (g_CurrentDirectory2[0]) {
+                SetCurrentDirectoryA(g_CurrentDirectory2);
+                /* #164: WOWEXEC changes to this before LoadModule, so the task starts
+                   in the folder it was launched from -- 8.3, as krnl386 sees paths. */
+                if (!GetShortPathNameA(g_CurrentDirectory2, g_WowCommandDirectory, sizeof g_WowCommandDirectory)
+                    || lstrlenA(g_WowCommandDirectory) >= WOW_COMMAND_DIRECTORY_MAX)
+                    g_WowCommandDirectory[0] = 0;
+            }
+            cursor = LogPut(cursor, "STAGE2: Win16 program from CSRSS -- LAUNCH ["); cursor = LogPut(cursor, g_WowCommandProgram);
+            cursor = LogPut(cursor, "] loaded 0x"); cursor = LogHex(cursor, readCount); cursor = LogPut(cursor, " (target.txt NOT consulted)\r\n");
+            if (!readCount) wowCommandFromCsrss = 0;          /* unreadable: fall back as before */
+        }
+    }
+    LogWrite(LOG_PATH, report, cursor);
+    /* ⚠ AFTER the LogWrite, not before: LogWrite TRUNCATES. The first cut of this
+         ran the probe earlier and its output was silently erased by this very line,
+         which looked exactly like "the probe never ran". Same stale/truncated-artefact
+         trap this project keeps paying for, in a new costume. */
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
+        WowProbeLdtMatrix("D-after-getcommand");   /* before VdmGetTib */
+    tib = VdmGetTib();
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) WowProbeLdtMatrix("E-after-get-tib");
+    g_TibDebug = tib;                                    /* let the crash VEH dump guest state */
+    if (!tib) {
+        cursor = LogPut(cursor, "STAGE1: no VDM_TIB -- abort\r\n"); LogAppend(LOG_PATH, report, cursor);
+        return 1;
+    }
+
+    StartupLoadCsrssApplication(&cursor, &wantShell, &readCount, programPathBuffer, args);
+    {
+        INT csrssNamed = (g_CurrentDirectory[0] && g_Title[0]) || (readCount != 0) || wowCommandFromCsrss;
+        /* ⚠ `want_shell` skips target.txt ENTIRELY. A user who opened NTVDMEX asked for
+             a shell, not for whatever the last test run happened to leave in cfg\. */
+        HANDLE thread = (csrssNamed || wantShell)
+                  ? INVALID_HANDLE_VALUE
+                  : CreateFileA(TARGET_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                OPEN_EXISTING, 0, NULL);
+        if (csrssNamed && !readCount) {
+            cursor = LogPut(cursor, "STAGE2: CSRSS named a program -- target.txt NOT consulted "
+                        "(GH #130)\r\n");
+        }
+        if (thread != INVALID_HANDLE_VALUE) {
+            CHAR tempPath[512]; DWORD tempLength = 0; PSTR scan; PSTR cursorA = 0;
+            ReadFile(thread, tempPath, sizeof(tempPath) - 1, &tempLength, NULL); CloseHandle(thread);
+            tempPath[tempLength < sizeof(tempPath) ? tempLength : sizeof(tempPath) - 1] = 0;
+            /* ── ⚠⚠ A PROGRAM PATH MAY CONTAIN SPACES, AND THIS SPLIT ON THE FIRST ONE.
+                 Every path the rig used to hand us was C:\game\X.EXE or C:\test\X.COM,
+                 so "first space starts the arguments" was never wrong -- until the rig
+                 moved into the share folder, whose path contains "Documents and
+                 Settings". Measured, first run after the move:
+
+                   target.txt loaded 0x0 from C:\Documents
+                     args=[and Settings\All Users\...\games\Skyroads\Skyroads.EXE]
+
+                 A zero-byte load, then the embedded four-byte `mov ah,4Ch / int 21h`
+                 stub runs INSTEAD of the game and the run completes cleanly -- the
+                 same silent-success shape as GH #131 below, and it reports `mode
+                 sets: none` rather than any kind of error.
+               ⇒ So honour QUOTES, and treat an unquoted line as a bare path with no
+                 arguments when what it names actually exists. A quoted first token is
+                 unambiguous and is what every Windows caller already writes. */
+            scan = tempPath;
+            if (*scan == '"') {                            /* "path with spaces" [args] */
+                PSTR word2 = scan; ++scan;
+                while (*scan && *scan != '"') *word2++ = *scan++;
+                if (*scan == '"') ++scan;
+                *word2 = 0;
+                while (*scan == ' ') ++scan;
+                { PSTR limit; for (limit = scan; *limit; ++limit) if (*limit == '\r' || *limit == '\n') { *limit = 0; break; } }
+                if (*scan) cursorA = scan;
+            } else {
+                for (scan = tempPath; *scan; ++scan)                 /* trim EOL first */
+                    if (*scan == '\r' || *scan == '\n') { *scan = 0; break; }
+                /* Unquoted: only split on a space if the WHOLE line is not itself a
+                   file. That keeps `C:\test\x.com >out.txt` working and stops a path
+                   with spaces being torn in half. */
+                { HANDLE probe = CreateFileA(tempPath, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                             OPEN_EXISTING, 0, NULL);
+                  if (probe != INVALID_HANDLE_VALUE) CloseHandle(probe);
+                  else for (scan = tempPath; *scan; ++scan)
+                           if (*scan == ' ') { *scan = 0; cursorA = scan + 1; break; } }
+            }
+            if (tempPath[0]) {
+                HANDLE fileHandle = CreateFileA(tempPath, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                        OPEN_EXISTING, 0, NULL);
+                if (fileHandle != INVALID_HANDLE_VALUE) { ReadFile(fileHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(fileHandle); }
+                LogPut(programPathBuffer, tempPath);                  /* env argv[0] */
+                if (cursorA) LogPut(args, cursorA);                   /* PSP command tail */
+                /* ★ GH #128: on a WOW launch this same path is the WIN16 program,
+                     and WOW32 0x70 is how WOWEXEC asks for it. The DOS image
+                     loaded just below is discarded there (see WowPlaceV86), but
+                     the NAME is the one thing the WOW path still needs -- Windows
+                     does not put it on the VDM's command line. */
+                LogPut(g_WowCommandProgram, tempPath); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
+                if (cursorA) LogPut(g_WowCommandArguments, cursorA);
+                cursor = LogPut(cursor, "STAGE2: target.txt loaded 0x"); cursor = LogHex(cursor, readCount);
+                cursor = LogPut(cursor, " from "); cursor = LogPut(cursor, tempPath);
+                if (cursorA && cursorA[0]) { cursor = LogPut(cursor, " args=["); cursor = LogPut(cursor, cursorA); cursor = LogPut(cursor, "]"); }
+                cursor = LogPut(cursor, "\r\n");
+            }
+        }
+    }
+    StartupLoadTitlePath(&cursor, &readCount, programPathBuffer, args);
+    if (!readCount && g_CurrentDirectory[0] && g_Title[0]) {
+        CHAR path[768]; PSTR pathCursor = path; HANDLE fileHandle; int targetLength; PSTR targetArguments = NULL; /* stays int: INT here moves the compiled code */
+        pathCursor = LogPut(pathCursor, g_CurrentDirectory); pathCursor = LogPut(pathCursor, HOST_PATH_SEPARATOR); pathCursor = LogPut(pathCursor, g_Title);
+        for (targetLength = 0; path[targetLength]; ++targetLength) ;              /* same trailing-space trim as above */
+        while (targetLength > 0 && (path[targetLength - 1] == ' ' || path[targetLength - 1] == '\t')) path[--targetLength] = 0;
+        fileHandle = CsrssOpenSplit(path, &targetArguments);        /* a RELATIVE title carries args too */
+        if (fileHandle != INVALID_HANDLE_VALUE) { ReadFile(fileHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(fileHandle); }
+        LogPut(programPathBuffer, path);                       /* env argv[0] */
+        if (targetArguments)         LogPut(args, targetArguments);
+        else if (g_CommandLine[0]) LogPut(args, g_CommandLine);       /* best-effort: CmdLine if CSRSS populated it */
+        cursor = LogPut(cursor, "STAGE2: loaded 0x"); cursor = LogHex(cursor, readCount);
+        cursor = LogPut(cursor, " from "); cursor = LogPut(cursor, path);
+        if (targetArguments) { cursor = LogPut(cursor, " args=["); cursor = LogPut(cursor, targetArguments); cursor = LogPut(cursor, "]"); }
+        cursor = LogPut(cursor, "\r\n");
+    }
+    /* ── ★★★★★ NOTHING NAMED A PROGRAM ⇒ RUN A SHELL. (s78) ──────────────────────
+         The user's question was *"do you actually need to build a shell, or simply load
+         Windows NT's COMMAND.COM when ntvdmex is loaded with no guest EXE?"* -- and the
+         answer is the second one. `COMMAND.COM` IS the shell; it becomes the guest like
+         any other DOS program, and MS-DOS 6.22's copy already works here: banner,
+         prompt, `ver`, and a real `dir` listing with volume serial and free space
+         (measured on the rig, s78).
+       ⚠ STRICTLY BELOW EVERYTHING ELSE, and that placement is the whole design. CSRSS's
+         AppName, `target.txt`, an absolute title and a relative title have all been
+         tried above and all failed. Put this any higher and the headless harness -- which
+         names its program in `target.txt` -- silently runs a shell instead of the test.
+       ▸ WHICH shell is a configuration question, not a guess:
+           1. `cfg\shell.txt`  -- a path the user chooses. A 6.22 COMMAND.COM goes here.
+           2. `C:\WINDOWS\SYSTEM32\COMMAND.COM` -- present on every XP box.
+         ⚠ (2) is XP's own, which is NTVDM-aware and stops at `BOP 0x54` -- see
+           docs/inventory/bop.md. That is not a reason to leave it out: it fails with a
+           log line naming exactly what is missing, where the old fallback was a 4-byte
+           `mov ah,4Ch / int 21h` that exited cleanly and said nothing at all.
+         ⛔ COMSPEC is deliberately NOT consulted: under a Windows session it names
+           `cmd.exe`, a 32-bit PE that must never be loaded as a DOS guest. */
+    /* ── #208: HAND A DOS PROGRAM TO XP's SHELL INSTEAD OF LOADING IT. See g_Routed. ──
+         Only when all of these hold, and otherwise exactly as before:
+           - a DOS program was found (an MZ/COM image, not NE/PE -- a Win16 or Win32
+             image under COMMAND.COM just says "requires Microsoft Windows")
+           - this is not a WOW launch, and the program is not itself a COMMAND.COM
+           - the shell would be XP's own (no cfg\shell.txt, no Settings choice -- #203): only that shell asks
+             BOP 54 sub 01, so only it can be handed a program
+           - its 8.3 path and arguments fit a DOS command line
+           - cfg\directlaunch.flag is absent (the A/B switch back to direct loading) */
+    /* ── #203: WHICH SHELL, DECIDED ONCE. default (XP's own) < Settings' "DOS prompt"
+         (HKCU DosPrompt) < cfg\shell.txt -- the file wins, as every file knob does, so
+         the harness is never overridden by whatever was last picked in the dialog. The
+         #208 routing below and the shell load after it both read this one answer; they
+         used to test the file separately, which a registry setting would have split. */
+    CHAR shellConfig[512]; PCSTR shellSource = 0;
+    shellConfig[0] = 0;
+    {   HANDLE configHandle = CreateFileA(SHELL_PATH, GENERIC_READ, FILE_SHARE_READ,
+                                NULL, OPEN_EXISTING, 0, NULL);
+        if (configHandle != INVALID_HANDLE_VALUE) {
+            DWORD commandLength = 0; INT shellLength;
+            ReadFile(configHandle, shellConfig, sizeof(shellConfig) - 1, &commandLength, NULL); CloseHandle(configHandle);
+            shellConfig[commandLength < sizeof(shellConfig) ? commandLength : sizeof(shellConfig) - 1] = 0;
+            /* Trim the newline the file almost certainly ends with, and any spaces --
+               the same trap target.txt's reader already documents. */
+            for (shellLength = 0; shellConfig[shellLength]; ++shellLength) ;
+            while (shellLength > 0 && (shellConfig[shellLength-1] == '\r' || shellConfig[shellLength-1] == '\n'
+                              || shellConfig[shellLength-1] == ' ' || shellConfig[shellLength-1] == '\t'))
+                shellConfig[--shellLength] = 0;
+            if (shellLength) {
+                shellSource = "cfg\\shell.txt";
+                if (g_Settings.Strings[SET_STR_SHELL][0]) g_ShellOverride = "cfg\\shell.txt";
+            }
+        }
+        if (!shellConfig[0] && g_Settings.Strings[SET_STR_SHELL][0]) {
+            lstrcpynA(shellConfig, g_Settings.Strings[SET_STR_SHELL], sizeof shellConfig);
+            shellSource = "Settings > General > DOS prompt";
+        }
+    }
+    StartupApplyPif(&cursor, &readCount, programPathBuffer, args);
+    /* #153: File > Open Recent lists every program this host was started with. */
+    if (readCount && !g_WowLaunch && programPathBuffer[0]) MruAdd(programPathBuffer);
+    StartupRouteToCommandCom(&cursor, &readCount, shellConfig, programPathBuffer, args);
+    StartupLoadShell(&cursor, &readCount, shellConfig, shellSource, programPathBuffer, &wasShell);
+    if (!readCount) {
+        static const BYTE stub[] = { X86_OP_MOV_AH_IMM, DOS_FN_EXIT, X86_OP_INT, VECTOR_DOS };   /* mov ah,4Ch; int 21h */
+        for (index = 0; index < sizeof(stub); ++index) g_FileBuffer[index] = stub[index];
+        readCount = sizeof(stub);
+        /* ⚠ SAY WHY, not just that. This printed "embedded fallback" and nothing else,
+             and it is reached when a path was wrong as well as when nothing was named --
+             GH #131 spent a session on a run that looked clean and wrote nothing. */
+        cursor = LogPut(cursor, "STAGE2: embedded fallback -- nothing named a program AND no shell "
+                    "could be opened (cfg\\shell.txt, C:\\WINDOWS\\SYSTEM32\\COMMAND.COM)"
+                    "\r\n");
+    }
+
+    /* ── ★★★ IS THIS GUEST NTVDM-AWARE? ASK THE IMAGE, NOT THE PATH. (s79) ───────────
+         XP's own COMMAND.COM needs two things no ordinary DOS guest does: it refuses
+         any DOS version but 5.00, and it reads `INT 21h AH=53h`'s private AL
+         sub-functions to decide whether it is an interactive shell at all. Both were
+         `cfg\` knobs, which is the right shape for an experiment and the wrong one for
+         a product -- "double-click NTVDMEX and get a prompt" cannot require two files.
+
+       ⇒ The discriminator is a MEASURED PROPERTY OF THE IMAGE, not a filename: an
+         NTVDM-aware guest talks to the 32-bit side through `C4 C4 54 <sub>` BOPs. XP's
+         COMMAND.COM has FIFTEEN of them. A path check would be a guess (a user may put
+         XP's shell in `cfg\shell.txt`, or ours somewhere else); the BOPs are what
+         actually make it NT-aware.
+       ⚠ THE THRESHOLD IS THE GUARD. `C4 C4` is a legal, if odd, instruction pair, so
+         one or two sites prove nothing -- a false positive would silently change the
+         DOS version reported to an innocent guest. Requiring EIGHT distinct sites is
+         far beyond coincidence and still well under XP's fifteen, so a future build of
+         the shell with a few fewer would still be recognised. The count is logged, so
+         a guest that lands near the line says so instead of being decided silently.
+       ⚠ It is only consulted for a program we loaded as THE SHELL. A DOS game that
+         somehow tripped the count must not be told it is running on DOS 5. */
+    g_GuestNtvdmBops = 0;
+    if (readCount > VDM_BOP_SUBFUNCTION_LENGTH) {
+        DWORD item;
+        for (item = 0; item + VDM_BOP_LENGTH < readCount; ++item)
+            if (g_FileBuffer[item] == VDM_BOP0 && g_FileBuffer[item+1] == VDM_BOP1 && g_FileBuffer[item+2] == NTVDM_BOP_CMD)
+                ++g_GuestNtvdmBops;
+    }
+    g_GuestNtAware = (wasShell && g_GuestNtvdmBops >= NT_AWARE_SHELL_BOPS_MIN);
+    /* #152: Close Program has nothing to close at a shell's own prompt -- whether we
+       chose the shell or something named COMMAND.COM explicitly. */
+    {   INT pathLength = lstrlenA(programPathBuffer);
+        g_TopIsShell = wasShell
+            || (pathLength >= COMMAND_COM_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - COMMAND_COM_LENGTH, HOST_COMMAND_COM)); }
+    /* ── ★ THE NTVDM-AWARE SHELL IS LAUNCHED `/P <its own directory>`, AS STOCK DOES. ──
+         ntvdm.exe carries `%s=%s%s /p %s\system32`; s79 found /P mattered and the bare
+         launch later dropped every argument. Without /P, PERMCOM ([0x2B0]) stays 0, so
+         XP's EXIT takes DOS's ordinary return-to-parent path -- which for a top-level
+         shell is ITSELF, and the prompt just comes back (the sweep's "exit does not
+         work"). The directory argument is COMMAND.COM's own COMSPEC location, which
+         also replaces the C:\COMMAND.COM the environment otherwise names. */
+    if (g_GuestNtAware && !args[0]) {
+        CHAR directory[300], shortDirectory[300]; INT directoryLength = 0, cut = 0;
+        for (directoryLength = 0; programPathBuffer[directoryLength] && directoryLength < (INT)sizeof directory - 1; ++directoryLength) {
+            directory[directoryLength] = programPathBuffer[directoryLength]; if (programPathBuffer[directoryLength] == '\\') cut = directoryLength; }
+        directory[cut ? cut : directoryLength] = 0;
+        if (!GetShortPathNameA(directory, shortDirectory, sizeof shortDirectory)) LogPut(shortDirectory, directory);
+        wsprintfA(args, HOST_SHELL_ARGUMENTS_FORMAT, shortDirectory);
+        if (!GetShortPathNameA(programPathBuffer, g_ShellPath, sizeof g_ShellPath)) LogPut(g_ShellPath, programPathBuffer);
+        cursor = LogPut(cursor, "STAGE2: NTVDM-aware shell -> command tail [");
+        cursor = LogPut(cursor, args); cursor = LogPut(cursor, "] (permanent, as stock launches it)\r\n");
+    }
+    cursor = LogPut(cursor, "STAGE2: guest NTVDM BOP sites (C4 C4 54) = ");
+    cursor = LogDecimal(cursor, g_GuestNtvdmBops);
+    cursor = LogPut(cursor, g_GuestNtAware
+             ? " -> NTVDM-AWARE SHELL: DOS 5.00 and the private AH=53h answers apply\r\n"
+             : (wasShell ? " -> an ordinary DOS shell\r\n" : " (not loaded as a shell)\r\n"));
+
+    /* status-bar program name = basename of programPathBuffer (if any) */
+    { PCSTR baseName = programPathBuffer, scan; INT item = 0;
+      for (scan = programPathBuffer; *scan; ++scan) if (*scan == '\\' || *scan == '/') baseName = scan + 1;
+      if (*baseName) { while (baseName[item] && item < PROGRAM_NAME_SIZE - 1) { g_ProgramName[item] = baseName[item]; ++item; } g_ProgramName[item] = 0; } }
+    /* No flag to raise: the UI tick polls g_ProgramName and repaints the strip when it
+       changes. See StatusUpdate. */
+
+    /* If this is a bound linear executable (every DOS/4GW game is one), learn which of
+       its objects are code before it starts asking us for memory to load them into. */
+    DpmiLeLearn(g_FileBuffer, readCount);
+
+    cursor = StartupApplyConventionalKb(cursor, readCount);
+    /* Build the DOS process in conventional memory (base=NULL => absolute V86). */
+    image = DosLoadImage(NULL, g_FileBuffer, readCount, DOS_PSP_SEG);
+
+    static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_INT21, X86_OP_IRET };  /* BOP 0x20 ; iret */
+    static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_VIDEO), X86_OP_IRET }; /* BOP 0x10 ; iret */
+    static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD_SERVICES), X86_OP_IRET }; /* BOP 0x16 ; iret */
+    static const BYTE bop33[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_MOUSE), X86_OP_IRET }; /* BOP 0x33 ; iret */
+    /* INT 08h (timer): tick via BOP, then chain INT 1Ch, then iret. INT 1Ch is a
+       bare iret by default (the user-timer hook a program may repoint). INT 1Ah
+       (BIOS time-of-day) is a plain BOP. */
+    static const BYTE bop08[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_TIMER), X86_OP_INT, VECTOR_USER_TICK, X86_OP_IRET };
+    static const BYTE bop1c[] = { X86_OP_IRET };                           /* iret stub       */
+    /* Default INT 09h = BOP 09 ; IRET. It must CONSUME the scancode, exactly as the BIOS
+       handler does: a bare IRET left the byte in the controller forever, so with the 8042's
+       proper one-byte-at-a-time pacing no further key could ever raise an interrupt (the
+       whole keyboard died after one press). A game that installs its own INT 09h replaces
+       this vector, so its handler still reads port 0x60 itself. */
+    static const BYTE bop09[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD), X86_OP_IRET };
+    static const BYTE bop1a[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_TIME), X86_OP_IRET }; /* BOP 0x1A ; iret */
+    static const BYTE bop2f[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_MULTIPLEX), X86_OP_IRET }; /* INT 2Fh ; iret  */
+    /* XMS API entry: reached by FAR CALL (INT 2Fh AX=4310 hands back ES:BX), so it
+       ends in RETF (0xCB), not IRET. */
+    static const BYTE xmsBopStub[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_XMS_ENTRY, X86_OP_RETF };
+    static const BYTE bop67[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_EMS), X86_OP_IRET }; /* INT 67h ; iret  */
+    static const BYTE emmDeviceName[] = { 'E','M','M','X','X','X','X','0' };  /* EMS device header name */
+    handlerArea = (volatile BYTE *)(DOS_HDLR_SEG << PARAGRAPH_SHIFT);            /* INT 21h BOP handler */
+    for (index = 0; index < sizeof(bop); ++index) handlerArea[DOS_HDLR_INT21_STUB_OFF + index] = bop[index];
+    *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_DOS) = DOS_HDLR_INT21_STUB_OFF;                        /* IVT[0x21].offset    */
+    *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_DOS) = DOS_HDLR_SEG;                  /* IVT[0x21].segment   */
+    handlerArea[DOS_DBCS_OFF] = 0; handlerArea[DOS_DBCS_OFF + 1] = 0;     /* empty DBCS table    */
+    for (index = 0; index < sizeof(bop10); ++index) handlerArea[DOS_HDLR_INT10_STUB_OFF + index] = bop10[index];  /* INT 10h stub */
+    *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_VIDEO) = DOS_HDLR_INT10_STUB_OFF;                        /* IVT[0x10].offset    */
+    *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_VIDEO) = DOS_HDLR_SEG;                  /* IVT[0x10].segment   */
+    for (index = 0; index < sizeof(bop16); ++index) handlerArea[DOS_HDLR_INT16_STUB_OFF + index] = bop16[index];  /* INT 16h stub */
+    *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_KEYBOARD_SERVICES) = DOS_HDLR_INT16_STUB_OFF;                        /* IVT[0x16].offset    */
+    *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_KEYBOARD_SERVICES) = DOS_HDLR_SEG;                  /* IVT[0x16].segment   */
+    for (index = 0; index < sizeof(bop33); ++index) handlerArea[DOS_HDLR_INT33_STUB_OFF + index] = bop33[index];  /* INT 33h stub */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_MOUSE))     = DOS_HDLR_INT33_STUB_OFF;              /* IVT[0x33].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_MOUSE)) = DOS_HDLR_SEG;        /* IVT[0x33].segment   */
+    for (index = 0; index < sizeof(bop08); ++index) handlerArea[DOS_HDLR_INT08_STUB_OFF + index] = bop08[index];  /* INT 08h stub */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TIMER))     = DOS_HDLR_INT08_STUB_OFF;              /* IVT[0x08].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TIMER)) = DOS_HDLR_SEG;        /* IVT[0x08].segment   */
+    for (index = 0; index < sizeof(bop1c); ++index) handlerArea[DOS_HDLR_INT1C_STUB_OFF + index] = bop1c[index];  /* INT 1Ch iret */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_USER_TICK))     = DOS_HDLR_INT1C_STUB_OFF;              /* IVT[0x1C].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_USER_TICK)) = DOS_HDLR_SEG;        /* IVT[0x1C].segment   */
+    for (index = 0; index < sizeof(bop09); ++index) handlerArea[DOS_HDLR_INT09_STUB_OFF + index] = bop09[index];  /* INT 09h default iret (0x4C-0x4F) */
+    /* INT 33h event-handler return: the guest's handler RETFs here (see MouseCallbackTry). */
+    handlerArea[MS_CB_RET_OFF + 0] = VDM_BOP0; handlerArea[MS_CB_RET_OFF + 1] = VDM_BOP1;
+    handlerArea[MS_CB_RET_OFF + VDM_BOP_NUMBER_OFFSET] = MS_CB_BOP; handlerArea[MS_CB_RET_OFF + VDM_BOP_LENGTH] = X86_OP_IRET;
+    /* DEFAULT DEVICE-IRQ HANDLERS. A real BIOS points the unused hardware vectors at a
+       handler that just acknowledges and returns; we had them pointing at whatever junk was
+       in the IVT, which on this box read F000:A390 -- unowned ROM. That was harmless only so
+       long as we could not deliver a device IRQ asynchronously. Now that we can, injecting an
+       IRQ the guest has not hooked jumps it into that junk and hangs it: measured, Skyroads
+       (which never installs a Sound Blaster ISR at all) froze at F000:A390 the moment its DMA
+       block completed. So give IRQ2-7 and IRQ8-15 a plain IRET, exactly as INT 09h has. */
+    handlerArea[DOS_IRET_STUB_OFF] = X86_OP_IRET;                                /* shared IRET stub    */
+    handlerArea[DOS_CASEMAP_OFF]   = X86_OP_RETF;                                /* AH=38h case map: RETF */
+    { volatile BYTE *swappableDataArea = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_SDA_SEG << PARAGRAPH_SHIFT);   /* AH=34h/5D06h */
+      INT item; for (item = 0; item < DOS_SDA_LEN; ++item) swappableDataArea[DOS_SDA_OFF + item] = 0; }
+    for (index = VECTOR_IRQ2; index <= VECTOR_IRQ7; ++index) {
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(index))     = DOS_IRET_STUB_OFF;
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(index)) = DOS_HDLR_SEG;
+    }
+    for (index = VECTOR_IRQ8; index <= VECTOR_IRQ15; ++index) {
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(index))     = DOS_IRET_STUB_OFF;
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(index)) = DOS_HDLR_SEG;
+    }
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_KEYBOARD))     = DOS_HDLR_INT09_STUB_OFF;              /* IVT[0x09].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_KEYBOARD)) = DOS_HDLR_SEG;        /* IVT[0x09].segment   */
+    for (index = 0; index < sizeof(bop1a); ++index) handlerArea[DOS_HDLR_INT1A_STUB_OFF + index] = bop1a[index];  /* INT 1Ah stub */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TIME))     = DOS_HDLR_INT1A_STUB_OFF;              /* IVT[0x1A].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TIME)) = DOS_HDLR_SEG;        /* IVT[0x1A].segment   */
+    for (index = 0; index < sizeof(bop2f); ++index) handlerArea[DOS_HDLR_INT2F_STUB_OFF + index] = bop2f[index];  /* INT 2Fh stub */
+    *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_MULTIPLEX))     = DOS_HDLR_INT2F_STUB_OFF;              /* IVT[0x2F].offset    */
+    *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_MULTIPLEX)) = DOS_HDLR_SEG;        /* IVT[0x2F].segment   */
+    for (index = 0; index < sizeof(xmsBopStub); ++index) handlerArea[XMS_ENTRY_OFF + index] = xmsBopStub[index];  /* XMS far-call entry */
+    /* ⚠ GH #47: a non-zero word at XMS_ENTRY_OFF+0x45 WAS TRIED AND REFUTED.
+       MEM.EXE skips its whole extended-memory report on a zero word at +0x45 of
+       some structure, and that structure looked like the XMS entry. It is not:
+       planting HIMEM's own bytes (EB 50) at the entry changed nothing. Sixth
+       refutation. */
+    for (index = 0; index < sizeof(bop67); ++index) handlerArea[DOS_HDLR_INT67_STUB_OFF + index] = bop67[index];  /* INT 67h (EMM) stub */
+    /* ⚠ NO EMS MEANS NO INT 67h VECTOR AND NO DEVICE NAME. Both halves, because
+         a program detects EMM by either following the vector to the "EMMXXXX0"
+         header OR by opening the device; leaving one of them behind is a manager
+         that half-exists, which is worse for a guest than one that does not. */
+    if (g_EmsOn) {
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_EMS))     = DOS_HDLR_INT67_STUB_OFF;          /* IVT[0x67].offset    */
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_EMS)) = DOS_HDLR_SEG;    /* IVT[0x67].segment   */
+    } else {
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_EMS))     = 0;
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_EMS)) = 0;
+    }
+    /* DPMI mode-switch entry (far-called): BOP 0x50 ; RETF. The host services the
+       BOP by switching to PM; the RETF only executes if the switch fails. */
+    handlerArea[DPMI_ENTRY_OFF + 0] = VDM_BOP0; handlerArea[DPMI_ENTRY_OFF + 1] = VDM_BOP1;
+    handlerArea[DPMI_ENTRY_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_BOP; handlerArea[DPMI_ENTRY_OFF + VDM_BOP_LENGTH] = X86_OP_RETF; /* RETF */
+    /* DPMI 0301 real-mode-call return catcher: BOP 0x54 (no IRET/RETF -- the 0301
+       handler detects it and returns to PM, it never resumes past it). */
+    handlerArea[DPMI_RMRET_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RMRET_OFF + 1] = VDM_BOP1;
+    handlerArea[DPMI_RMRET_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_RMRET_BOP;
+    /* DPMI 0303 real-mode callback entries (one per slot) + the PM-return catcher. */
+    { INT callbackSlot; for (callbackSlot = 0; callbackSlot < DPMI_CB_SLOTS; ++callbackSlot) {
+        WORD entry = DpmiCallbackEntry(DPMI_CB_BASE_OFF, callbackSlot);
+        handlerArea[entry + 0] = VDM_BOP0;
+        handlerArea[entry + 1] = VDM_BOP1;
+        handlerArea[entry + VDM_BOP_NUMBER_OFFSET] = DPMI_CB_BOP;
+    } }
+    handlerArea[DPMI_PMRET_OFF + 0] = VDM_BOP0; handlerArea[DPMI_PMRET_OFF + 1] = VDM_BOP1;
+    handlerArea[DPMI_PMRET_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_PMRET_BOP;
+    /* 0306 raw mode-switch entries. Both are bare BOPs: the host completes the switch
+       by rewriting the CONTEXT, so control never resumes past the BOP and no RETF/IRET
+       tail is wanted (the same shape as DPMI_RMRET_OFF). The protected-to-real entry
+       lives in this segment too and is reached through a code selector based here --
+       see the 0306 handler. */
+    handlerArea[DPMI_RAW2PM_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RAW2PM_OFF + 1] = VDM_BOP1;
+    handlerArea[DPMI_RAW2PM_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_RAW2PM_BOP;
+    handlerArea[DPMI_RAW2RM_OFF + 0] = VDM_BOP0; handlerArea[DPMI_RAW2RM_OFF + 1] = VDM_BOP1;
+    handlerArea[DPMI_RAW2RM_OFF + VDM_BOP_NUMBER_OFFSET] = DPMI_RAW2RM_BOP;
+    /* 0305 save/restore: a register-preserving no-op (see the define). */
+    handlerArea[DPMI_SSR_OFF] = X86_OP_RETF;                               /* RETF */
+    /* (GH #18 run 67: the PM-fault handler BOP is planted at the handler CODE selector's
+       DPMI_FAULT_COFF by DpmiInstallFaultTrampoline(), not here.) */
+    /* EMS detection method 2: programs read the INT 67h vector's segment:000Ah for
+       the device-driver name "EMMXXXX0". Park it in the handler segment. */
+    if (g_EmsOn)
+        for (index = 0; index < sizeof(emmDeviceName); ++index) handlerArea[DOS_EMM_NAME_OFF + index] = emmDeviceName[index];
+
+    StartupPlantBiosStubs();
+
+    /* ── INT 22h / 23h / 24h: REAL VECTORS, SO THE PSP CAN SAVE SOMETHING. (#34) ──
+         Every PSP stores the live copies of these three and restores them at exit.
+         They were whatever the IVT happened to hold, and the PSP fields were zero
+         -- which passes "the saved copy matches the live vector" trivially when
+         both are 0000:0000, so the gap could not be seen from that test alone.
+       ▸ INT 24h returns AL=3, FAIL THE CALL. Real DOS's default lives in
+         COMMAND.COM and prompts Abort/Retry/Ignore/Fail; there is no shell here to
+         prompt with, and of the four answers FAIL is the only one that hands the
+         error back to the program that can report it. IGNORE would corrupt data
+         and RETRY would spin forever. Documented rather than chosen silently.
+       ▸ INT 23h (Ctrl-Break) is a bare IRET: returning with CF clear means
+         "carry on", which is what a host with no shell to return to should do.
+       ▸ INT 22h (terminate address) routes to the same BOP as INT 20h, so a guest
+         that jumps there actually exits instead of falling through the IVT. */
+    {   volatile BYTE *controlBytes = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT);
+        UINT position = DOS_CRIT_STUBS;
+        controlBytes[position+0] = VDM_BOP0; controlBytes[position+1] = VDM_BOP1; controlBytes[position+VDM_BOP_NUMBER_OFFSET] = DOS_BOP_INT20; controlBytes[position+VDM_BOP_LENGTH] = X86_OP_IRET;
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_TERMINATE_ADDRESS))     = (WORD)position;              /* INT 22h */
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_TERMINATE_ADDRESS)) = DOS_CTAB_SEG;
+        controlBytes[position+DOS_CRIT_STUB_INT23] = X86_OP_IRET;                                          /* INT 23h: IRET */
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CTRL_C))     = (WORD)(position + DOS_CRIT_STUB_INT23);
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CTRL_C)) = DOS_CTAB_SEG;
+        controlBytes[position+DOS_CRIT_STUB_INT24] = X86_OP_MOV_IMM_BYTE_FIRST; controlBytes[position+DOS_CRIT_STUB_INT24+1] = DOS_CRIT_ACTION_FAIL; controlBytes[position+DOS_CRIT_STUB_INT24+2] = X86_OP_IRET;         /* mov al,3 ; iret */
+        *(volatile WORD *)(IVT_OFFSET_ADDRESS(VECTOR_CRITICAL_ERROR))     = (WORD)(position + DOS_CRIT_STUB_INT24);        /* INT 24h */
+        *(volatile WORD *)(IVT_SEGMENT_ADDRESS(VECTOR_CRITICAL_ERROR)) = DOS_CTAB_SEG;
+        /* #34: the site DOS calls the guest's INT 24h from -- see CriticalRaise. */
+        controlBytes[DOS_CRIT_RAISE + 0] = X86_OP_INT; controlBytes[DOS_CRIT_RAISE + 1] = VECTOR_CRITICAL_ERROR;   /* int 24h  */
+        controlBytes[DOS_CRIT_RETURN + 0] = VDM_BOP0; controlBytes[DOS_CRIT_RETURN + 1] = VDM_BOP1;
+        controlBytes[DOS_CRIT_RETURN + VDM_BOP_NUMBER_OFFSET] = DOS_BOP_INT21;                                 /* bop 20h  */
+    }
+    /* #251: DOS's AUX/PRN driver code, which INT 21h resumes the guest in -- see
+       dos_auxprn.asm for why it is guest code and what it was measured against. */
+    {   volatile BYTE *controlBytes = (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT);
+        UINT item;
+        for (item = 0; item < sizeof(g_DosAuxPrnCode); ++item) controlBytes[DOS_AUXPRN_OFF + item] = g_DosAuxPrnCode[item];
+        /* #254: the BIOS INT 09h's side-calls -- see bios_kbdact.asm. */
+        for (item = 0; item < sizeof(g_BiosKeyboardActionCode); ++item) controlBytes[DOS_KBDACT_OFF + item] = g_BiosKeyboardActionCode[item];
+        /* ── #274: INT 05h IS OURS NOW -- THE BIOS PRINT-SCREEN ROUTINE (p5). ─────────────
+             A fresh VDM left IVT[05h] at F000:FF54, a jump deeper into the VDM's own ROM
+             that KeyboardActionEntry refuses to enter (p_ivtkbd), so Print Screen called nothing
+             and a program's own `int 5` went somewhere we cannot vouch for. Every BIOS
+             since the PC has a routine here; ours prints the screen through INT 17h and
+             keeps its status HOST-side -- see PrintScreenBop for why not at 0050:0000. */
+        *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(VECTOR_PRINT_SCREEN))     = (WORD)(DOS_KBDACT_OFF + BIOS_KEYBOARD_ACTION_DEFAULT_INT05);
+        *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(VECTOR_PRINT_SCREEN)) = DOS_CTAB_SEG;
+    }
+
+    /* GH #27 -- THE NULL-VECTOR LANDMINE. A vector left at 0000:0000 sends a guest
+       that INTs it to 0000:0000, where it executes the interrupt vector table
+       itself as code. Point any such vector at the shared IRET stub.
+       MEASURED BEFORE FIXING, and the measurement narrowed the fix: on the
+       bare-metal rig most unclaimed vectors are NOT null -- they carry the VDM's
+       own BIOS entries (INT 13h read F000:5595, INT 11h F000:F84D). Planting over
+       those would swap a working handler for a bare IRET, i.e. a silent
+       "success", which is the very failure mode this issue exists to remove. So
+       fill only the genuinely null ones, and name them in the log. */
+    { INT number, count = 0, start = -1;
+      cursor = LogPut(cursor, "STAGE0: null IVT vectors -> IRET stub:");
+      for (number = 0; number <= IVT_VECTORS; ++number) {                  /* 256 flushes a trailing run */
+          INT isNullVector = (number < IVT_VECTORS) && (*(volatile DWORD *)(IVT_OFFSET_ADDRESS(number)) == 0);
+          if (isNullVector) {
+              *(volatile WORD *)(IVT_OFFSET_ADDRESS(number))     = DOS_IRET_STUB_OFF;
+              *(volatile WORD *)(IVT_SEGMENT_ADDRESS(number)) = DOS_HDLR_SEG;
+              if (start < 0) start = number;
+              ++count;
+          } else if (start >= 0) {                  /* emit as ranges, not 133 items */
+              cursor = LogPut(cursor, " 0x"); cursor = LogHexByte(cursor, (UINT)start);
+              if (number - 1 > start) { cursor = LogPut(cursor, "-0x"); cursor = LogHexByte(cursor, (UINT)(number - 1)); }
+              start = -1;
+          }
+      }
+      if (!count) cursor = LogPut(cursor, " none");
+      cursor = LogPut(cursor, "\r\n"); }
+
+    DosPspBuild(NULL, DOS_PSP_SEG, DOS_ENV_SEG, g_DosMemoryTop);   /* #136 */
+    /* AFTER the vectors above are planted, never before: saving a vector that is
+       still 0000:0000 stores a null the program restores on the way out. Parent
+       PSP = our own, since nothing launched us from inside the VDM. (GH #34) */
+    DosPspSaveVectors(NULL, DOS_PSP_SEG, DOS_PSP_SEG);
+    /* ── ★ EXTRA ENVIRONMENT VARIABLES FROM dosenv.txt. Read here, next to the block
+         being built, so a knob that is absent costs exactly one failed open and the
+         environment is byte-identical to what it has always been. */
+    DsProbeLoad();          /* the #GP fault report's named guest data words */
+    cursor = StartupBuildEnvironment(cursor, programPathBuffer);
+    DosPspBuildCommandTail(NULL, DOS_PSP_SEG, args);                                    /* M2.5: args */
+    /* ► DUMP THE TAIL AS THE GUEST WILL SEE IT. Passing ANY argument makes DOS/4GW
+         quit before printing a single character, with a DPMI/INT 21h trace identical
+         to a working run for all 617 of its lines -- so the branch it takes is on
+         MEMORY, and this is the memory. Length byte, the bytes, and the terminator. */
+    { volatile BYTE *pspView = (volatile BYTE *)((DWORD)DOS_PSP_SEG << PARAGRAPH_SHIFT);
+      UINT textIndex;
+      cursor = LogPut(cursor, "STAGE2: cmdtail len=0x"); cursor = LogHexByte(cursor, pspView[DOS_PSP_COMMAND_TAIL_LENGTH]);
+      cursor = LogPut(cursor, " [");
+      for (textIndex = 0; textIndex < COMMAND_TAIL_DUMP_BYTES; ++textIndex) { cursor = LogHexByte(cursor, pspView[DOS_PSP_COMMAND_TAIL + textIndex]); cursor = LogPut(cursor, " "); }
+      cursor = LogPut(cursor, "]\r\n"); }
+    StartupBuildMemoryChain(&machine, programPathBuffer);
+    /* Published so the Settings dialog can change the reported DOS version while a
+       guest is running -- it is read per INT 21h AH=30h, so it takes effect at the
+       guest's next version check with no restart. */
+    g_DosMachine = &machine;
+    DosInt21SetVersion(&machine, (BYTE)g_Settings.Values[SET_DOSMAJ], (BYTE)g_Settings.Values[SET_DOSMIN]);
+    /* Two sources, and the second one silently wins -- see the note below the file read. */
+    PCSTR dosVersionSource = "HKCU\\Software\\NTVDMEX (Settings dialog)";
+    /* ── THE REPORTED DOS VERSION IS A KNOB, BECAUSE IT IS A LIE THE GUEST CHOOSES.
+         Real DOS ships SETVER for precisely this, and the number is not a fact about
+         us: it is what a particular guest will accept. We default to 6.22 to match the
+         M9 oracle, and XP's OWN COMMAND.COM refuses that outright -- "Incorrect DOS
+         version", INT 21h AH=00h, terminated before it printed a prompt. NT's DOS has
+         always reported 5.00 and its shell is built to match.
+         `dosver.txt` on the share: "5.0", "6.22", "3.31" -- major.minor decimal. */
+    /* ── ★ AN NTVDM-AWARE SHELL GETS 5.00 WITHOUT ANYONE HAVING TO ASK. (s79) ────────
+         XP's COMMAND.COM accepts only AX = 5 exactly (5.00 -- observed: 6.22 is
+         refused) and prints "Incorrect DOS version" otherwise, so on the default 6.22 a
+         double-click would die before it
+         printed anything. This is not a global policy change: it applies only to a
+         guest we loaded AS THE SHELL that carries NTVDM's own BOPs (see the scan), and
+         `cfg\dosver.txt` below still overrides it. 6.22's COMMAND.COM has no BOPs and
+         is untouched -- it keeps 6.22, which is the version it expects. */
+    /* ⇒ s81 (#208), the user's choice: SETVER, NOT A SESSION-WIDE 5.00. Every program
+         started from Windows now runs UNDER this shell, so forcing the whole session to
+         5.00 would have changed the version every program sees. Only the SHELL'S OWN
+         PROCESS is told 5.00 (DosInt21SetShellPsp); what it runs gets the setting. */
+    if (g_GuestNtAware) {
+        DosInt21SetShellPsp(&machine, DOS_PSP_SEG, TRUE);
+        dosVersionSource = "the setting -- the NTVDM-aware shell ITSELF is told 5.00 (per process, SETVER-style)";
+        g_DosVersionShell = 1;
+    } else if (g_GuestNtvdmBops >= NT_AWARE_SHELL_BOPS_MIN && g_TopIsShell) {
+        /* s91: XP's COMMAND.COM launched AS THE PROGRAM -- `command.com /c prog > file`
+             from cmd.exe, or a user typing `command` there. It is not "the shell we
+             chose", so the rule above did not apply, and on the default 6.22 it said
+             "Incorrect DOS version" and quit where stock runs it (launch matrix row 5,
+             runs/s91/chain18b). Same image test and same per-process 5.00 as the
+             EXEC path gives a second XP shell; the name check is the second factor
+             that keeps an innocent guest from being told DOS 5. */
+        DosInt21SetShellPsp(&machine, DOS_PSP_SEG, TRUE);
+        dosVersionSource = "the setting -- XP's COMMAND.COM run as the program is told 5.00 (per process, SETVER-style)";
+        g_DosVersionShell = 1;
+    }
+    dosVersionSource = StartupLoadDosVersionKnob(dosVersionSource, &machine);
+    /* ── ★ SAY WHICH VERSION IS IN FORCE, AND WHERE IT CAME FROM. EVERY RUN. ──────
+         This printed a line ONLY when `dosver.txt` overrode, so the persistent source
+         -- HKCU\Software\NTVDMEX\DosVersionMajor/Minor, written by the Settings dialog
+         -- was completely silent. The rig was found reporting **5.00 to every DOS
+         guest** from that registry value, with no `dosver.txt` anywhere, on a project
+         whose entire parity method diffs against a 6.22 oracle (`p_ver.com`:
+         `int21.30 AX=0005`). Deleting the file, which is what every note about this
+         knob says to do afterwards, does NOT restore the default -- and nothing
+         anywhere reported the discrepancy.
+       ⚠ The standing rule this breaks is "a status line nobody reads is not a check";
+         this was worse, because there was no line at all. Unconditional now, and it
+         names the SOURCE, because the number alone would not have caught it either.
+       ⚠ DECIMAL, and it took a wrong reading to notice. The first cut used zhexb and
+         printed "6.22" as **06.16**, which a human reads as version 6.16 -- a number in
+         the wrong units is not a measurement, and this line exists precisely so nobody
+         has to decode it. Minor is zero-padded to two digits: "6.2" and "6.20" are
+         different DOS versions. */
+    cursor = LogPut(cursor, "STAGE2: DOS version reported = ");
+    cursor = LogDecimal(cursor, machine.VersionMajor); cursor = LogPut(cursor, ".");
+    if (machine.VersionMinor < 10) cursor = LogPut(cursor, "0");
+    cursor = LogDecimal(cursor, machine.VersionMinor);
+    cursor = LogPut(cursor, " (source: "); cursor = LogPut(cursor, dosVersionSource); cursor = LogPut(cursor, ")\r\n");
+    cursor = StartupConfigureAh53Answers(cursor);
+    StartupPlantCountryTables();
+    /* GH #35: plant SysVars for INT 21h AH=52h. Most fields are deliberately
+       left zero -- see the handler for why a null stub beats a plausible-looking
+       one. Only fields with a caller that demonstrably reads them are filled:
+         BX-2   the first MCB segment (GH #35)
+         +0x21  LASTDRIVE -- krnl386 takes a pointer to this byte through the
+                SysVars+0x6A table below, so zero here means it believes there
+                are no drives at all.
+       ★ s81: SysVars has its OWN segment now (DOS_SYSVARS_SEG, see dos_layout.h), so
+         the whole of it is ours to clear -- the old "+0x40 only, the SDA follows"
+         limit was a symptom of it sharing DOS_HDLR_SEG. */
+    volatile BYTE *sysVars = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_SYSVARS_SEG << PARAGRAPH_SHIFT);
+    { INT item; for (item = DOS_SYSVARS_MCB_HEAD; item < DOS_SYSVARS_LEN; ++item) sysVars[DOS_SYSVARS_OFF + item] = 0; }
+    *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_MCB_HEAD) = machine.FirstMcb;
+    /* ⚠⚠ SysVars+0x66 = "first MCB in upper memory" (= absolute SEG:0x008C, which MEM
+         also reads directly -- see DOS_UMBHEAD_OFF). 0xFFFF means "none", the truth
+         on a machine that refuses AH=5803. Zero here is what MEM /C walked as a UMB
+         chain starting at segment 0. SysVars+0x68 holds the first MCB again, as it
+         does on 6.22 and PCem (p_sysvar). */
+    *(volatile WORD *)(sysVars + DOS_UMBHEAD_OFF) = DOS_UMBHEAD_NONE;
+    *(volatile WORD *)(sysVars + DOS_SYSVARS_OFF + DOS_SYSVARS_FIRST_MCB_COPY) = machine.FirstMcb;
+    sysVars[DOS_SYSVARS_OFF + DOS_SYSVARS_BLOCK_DEVICES] = 1;                      /* block devices       */
+    sysVars[DOS_SYSVARS_OFF + DOS_SYSVARS_LASTDRIVE] = DOS_LASTDRIVE;          /* LASTDRIVE           */
+    machine.SysvarsSegment = DOS_SYSVARS_SEG;
+    machine.SysvarsOffset = DOS_SYSVARS_OFF;
+    StartupBuildDriveTables(report, sysVars, &machine);
     /* GH #128: and the WOW extension krnl386 reads before it does anything else. */
     DosWowPublish(handlerArea, (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT), DOS_DRIVE_C);
     DosXmsInitialize(&g_Xms, XMS_POOL_KB, XmsHostAllocate, XmsHostFree, NULL);  /* M4: XMS pool */
@@ -7105,32 +7442,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     g_Video.BiosData = (BYTE *)BIOS_BDA_BASE;               /* the display's BDA fields (0449..0489) */
     g_VideoDevice = VddVideoDevice(&g_Video);
     VddBusAdd(&g_Bus, &g_VideoDevice);
-    /* ⚠ AFTER VddBusAdd, NOT BEFORE. VddBusAdd calls VddVideoInitialize, which
-       disarms the watchpoint -- setting it first looked right and was silently
-       undone, and the run came back with no trace and no error. */
-    /* cfg/vwatch.txt: a hex VRAM byte offset to record every planar write to. Off
-       unless the file is there -- see the watchpoint in vdd_video.c. */
-    { HANDLE watchHandle = CreateFileA(VWATCH_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                              NULL, OPEN_EXISTING, 0, NULL);
-      if (watchHandle != INVALID_HANDLE_VALUE) {
-          CHAR watchText[32]; DWORD watchBytesRead = 0, watchValue = 0, watchIndex; INT gotWatch = 0;
-          ReadFile(watchHandle, watchText, sizeof watchText - 1, &watchBytesRead, NULL); CloseHandle(watchHandle);
-          for (watchIndex = 0; watchIndex < watchBytesRead; ++watchIndex) {
-              INT digit = -1; CHAR digitCharacter = watchText[watchIndex];
-              if (digitCharacter >= '0' && digitCharacter <= '9') digit = digitCharacter - '0';
-              else if (digitCharacter >= 'a' && digitCharacter <= 'f') digit = digitCharacter - 'a' + HEX_DIGIT_A_VALUE;
-              else if (digitCharacter >= 'A' && digitCharacter <= 'F') digit = digitCharacter - 'A' + HEX_DIGIT_A_VALUE;
-              if (digit < 0) break;
-              watchValue = (watchValue << NIBBLE_SHIFT) | (DWORD)digit; gotWatch = 1;
-          }
-          if (gotWatch) {
-              CHAR watchLine[96], *watchCursor = watchLine;
-              g_Video.WatchOffset = watchValue;
-              watchCursor = LogPut(watchCursor, "STAGE0: vwatch.txt -> planar watchpoint at VRAM offset 0x");
-              watchCursor = LogHex(watchCursor, watchValue); watchCursor = LogPut(watchCursor, "\r\n");
-              LogAppend(LOG_PATH, watchLine, watchCursor); SerialOut(watchLine, watchCursor);
-          }
-      } }
+    StartupLoadVideoWatch();
     /* AFTER the video VDD is on the bus (it needs st->bus to resolve a guest address). */
     /* #322: no font data ships -- the tables come from the system's fonts. Into the
        report buffer: a LogAppend here would be erased when the report is rewritten. */
@@ -7460,39 +7772,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
                                           sbValue = sbValue * DECIMAL_RADIX_U + (UINT)(text[index2] - '0'); }
           if (sbValue >= CPU_REFERENCE_MHZ_MIN_U && sbValue <= CPU_REFERENCE_MHZ_MAX_U) g_CpuSpeedReferenceMhz = sbValue;
       } }
-    { HANDLE cpuSpeedFile = CreateFileA(CPUSPD_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL, OPEN_EXISTING, 0, NULL);
-      if (cpuSpeedFile != INVALID_HANDLE_VALUE) {
-          /* ── ⚠⚠ THIS READ ONE CHARACTER, SO HALF THE LADDER WAS UNREACHABLE. ────
-               `c[0] - '0'` cannot express an index above 9, and the ladder went to
-               17 in session 54 when it grew from 7 entries to 18. So every speed
-               from 75 MHz down -- 75, 66, 50, 33, 25, 16, 12, 8, which is ALL of
-               the period-hardware settings and every one a person would actually
-               reach for -- silently selected the FIRST DIGIT instead: `13` (33 MHz)
-               ran as index 1, i.e. 3300 MHz, and reported itself as doing so.
-             ⚠ THE RANGE CHECK HID IT rather than catching it. `c[0] < '0' +
-               CPUSPEED_COUNT` with COUNT=18 accepts characters up to 'A', so a
-               two-digit value passed the guard on its first digit and was accepted
-               as a valid index -- a bounds test that admits exactly the input it
-               should have rejected.
-             ★ MEASURED 2026-09-09: `echo 13 > cpuspd.txt` came back
-               `STAGE2: cpuspeed idx=00000001 mhz=00000ce4` -- 3300 MHz. The rig
-               sweep this knob exists to drive therefore never tested the slow half
-               of the ladder even once, and cpuswp.bat only ever swept 0-6.
-             ► The CPUREF reader four lines above already does it correctly. Same
-               loop here; there is no reason for two adjacent knobs to disagree.
-             ⚠ This is the FILE knob only. The menu and the Settings dialog set the
-               index directly and were never affected, so it is a testability defect
-               and not the cause of any speed a user has seen. */
-          CHAR text[8]; DWORD bytesRead = 0; UINT value9 = 0; INT index9;
-          ReadFile(cpuSpeedFile, text, sizeof text, &bytesRead, NULL); CloseHandle(cpuSpeedFile);
-          for (index9 = 0; index9 < (INT)bytesRead; ++index9) { if (text[index9] < '0' || text[index9] > '9') break;
-                                             value9 = value9 * DECIMAL_RADIX_U + (UINT)(text[index9] - '0'); }
-          if (index9 > 0 && value9 < (UINT)CPUSPEED_COUNT) {
-              g_CpuSpeedIndex = (INT)value9;
-              SettingsNoteOverride(SET_SPEEDMODE, CFG_TEXT(KNOB_FILE_CPUSPD), value9);
-          }
-      } }
+    StartupLoadCpuSpeedKnob();
     /* ── THE GRANULARITY SLIDER AS A FILE KNOB. cpugran.txt = target period in ms,
          0 or absent = AUTO (measure the suspend round trip and pick the finest
          period this box can sustain). See the long note in cpuspeed.h -- this is
@@ -7669,39 +7949,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         }
     }
     VdmSetEntry(tib, image.CodeSegment, image.InstructionPointer, image.StackSegment, image.StackPointer, DOS_PSP_SEG);
-    if (g_WowEntering) {
-        /* VdmSetEntry points DS/ES/FS/GS at the PSP and zeroes AX, which is right
-           for a DOS program and wrong for this one. krnl386 wants DS = its automatic
-           data segment, and it expects AX = 0x4b4f -- 'OK' -- at entry; with anything
-           else it returns at once with AX=0. Get AX wrong and it returns instantly,
-           which would read as "the entry did nothing" rather than "we failed a
-           handshake". Measured at the entry breakpoint; see session 30 part 5. */
-        VDM_SET16(tib, VTIB_DS, g_WowEntryDs);
-        /* ★ AND ES, WHICH IS NOT COSMETIC: krnl386 takes ES+0x10 as the base of the
-             DPMI host's private data and carves every later allocation upward from
-             there without asking DOS. VdmSetEntry points ES at DOS_PSP_SEG, whose
-             +0x10 is where the (discarded) DOS image sat and where DosMcbAllocate had
-             already placed krnl386's own code. Point it at the arena block instead. */
-        if (g_WowPspSegment) VDM_SET16(tib, VTIB_ES, g_WowPspSegment);
-        /* ★ CX = HOW MUCH MEMORY IS AVAILABLE ABOVE THE STACK, IN BYTES.
-             krnl386 takes CX at entry, as a byte count, for the size of the block its
-             selector over base(SS)+SP describes (observed: the arena it then uses is
-             CX >> 4 paragraphs). Measured at three breakpoints, CX was 0 all the way
-             from entry, so krnl386 believed it had ZERO paragraphs and every
-             allocation out of that arena failed -- including one inside LoadSegment,
-             which is why it could not load its own segment 1 and exited.
-           The selector has a 64 KB limit, so this is the whole of it minus the header
-           image we place at its base. Nothing else names this quantity to the guest. */
-        VDM_SET16(tib, VTIB_ECX, (WORD)g_WowEntryCx);
-        VDM_REG(tib, VTIB_EAX) = WOW_KRNL386_ENTRY_AX;
-        cursor = LogPut(cursor, "STAGE2: WOW entry -- krnl386 in V86 at 0x");
-        cursor = LogHex(cursor, image.CodeSegment); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, image.InstructionPointer);
-        cursor = LogPut(cursor, " DS=0x"); cursor = LogHex(cursor, g_WowEntryDs);
-        cursor = LogPut(cursor, " ES=0x"); cursor = LogHex(cursor, g_WowPspSegment);
-        cursor = LogPut(cursor, " CX=0x"); cursor = LogHex(cursor, g_WowEntryCx);
-        cursor = LogPut(cursor, " (it will carve from 0x"); cursor = LogHex(cursor, (DWORD)(g_WowPspSegment + DOS_PSP_PARAGRAPHS));
-        cursor = LogPut(cursor, ") AX=0x4b4f\r\n");
-    }
+    cursor = StartupPrepareWowEntry(cursor, tib, &image);
     /* ENTRY TRAMPOLINE: `STI` then a far jump to the program's real entry point.
        Under VME the CPU sets EFLAGS.VIF only when the guest EXECUTES sti -- and the
        kernel's whole notion of "this guest can take an interrupt" is VIF. Session 10
@@ -7795,39 +8043,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          The guest's image is loaded but not yet running, so claims made here are
          in place before its first instruction. */
     VddLoadThirdParty();
-    /* ── s91 (#315): EVERY CLAIMED VECTOR GETS A WAY IN. A claim only reached its device
-         where the host had wired a stub by number (10h 14h 16h 1Ah 08h 2Ah 5Ch), so a
-         third-party driver's claim_int on any other vector -- the SDK promises it --
-         was never delivered. Each such claim now gets a generic stub, and the IVT
-         points at it. ⚠ Only the vectors nobody else owns: the user vectors 60h-66h,
-         68h-6Fh and 78h-FEh. A claim on a DOS, BIOS or IRQ vector is logged and
-         refused rather than silently stealing it from the system. */
-    {   UINT number, count = 0;
-        volatile BYTE *controlBytes = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_CTAB_SEG << PARAGRAPH_SHIFT);
-        for (number = 0; number < IVT_VECTORS; ++number) {
-            INT wired = (number == VECTOR_TIMER || number == VECTOR_VIDEO || number == VECTOR_SERIAL || number == VECTOR_KEYBOARD_SERVICES || number == VECTOR_TIME
-                         || number == VECTOR_NETWORK || number == VECTOR_NETBIOS);
-            INT user  = (number >= VECTOR_USER_RANGE1_FIRST && number <= VECTOR_USER_RANGE1_LAST) || (number >= VECTOR_USER_RANGE2_FIRST && number <= VECTOR_USER_RANGE2_LAST)
-                        || (number >= VECTOR_USER_RANGE3_FIRST && number <= VECTOR_USER_RANGE3_LAST);
-            CHAR gateLine[120], *gateCursor = gateLine;
-            if (!g_Bus.Interrupts[number].Service || wired) continue;
-            gateCursor = LogPut(gateCursor, "  VDD: claim_int 0x"); gateCursor = LogHex(gateCursor, number);
-            if (!user || count >= DOS_GENSTUB_N) {
-                gateCursor = LogPut(gateCursor, user ? " -- no generic stub left; NOT delivered\r\n"
-                                   : " -- a system vector; NOT delivered (user vectors only)\r\n");
-            } else {
-                UINT offset = DOS_GENSTUB_OFF + count * DOS_GENSTUB_SIZE;
-                controlBytes[offset + 0] = VDM_BOP0; controlBytes[offset + 1] = VDM_BOP1;
-                controlBytes[offset + VDM_BOP_NUMBER_OFFSET] = DOS_GENSTUB_BOP; controlBytes[offset + VDM_BOP_LENGTH] = X86_OP_IRET;            /* IRET */
-                g_GenericStubVector[count] = (BYTE)number;
-                *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(number))     = (WORD)offset;
-                *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(number)) = DOS_CTAB_SEG;
-                ++count;
-                gateCursor = LogPut(gateCursor, " -> generic stub 0090:0x"); gateCursor = LogHex(gateCursor, offset); gateCursor = LogPut(gateCursor, "\r\n");
-            }
-            LogAppend(LOG_PATH, gateLine, gateCursor);
-        }
-    }
+    StartupReportVectorWiring();
     /* ⚠⚠ AFTER THE **LAST** LogWrite. There are THREE of them in WinMain and every one
          TRUNCATES. This probe was placed after the first, then after the second, and
          both times its output was silently erased by the next one -- which reads
