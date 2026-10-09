@@ -361,12 +361,7 @@ static UINT32 g_V86InstructionPointer;
 
 /* Execute one instruction. Returns 1 if modeled (state + IP advanced/jumped),
    0 to bail (state untouched at the current instruction). */
-/* V86_STEP_LINKAGE: `static` unless the includer says otherwise -- the host's one copy of the
-   interpreter (host_video.c) makes V86Step external so host_dpmi.c's loop can call it (#335). */
-#ifndef V86_STEP_LINKAGE
-#define V86_STEP_LINKAGE static
-#endif
-V86_STEP_LINKAGE int V86Step(V86_CPU *cpu)
+static int V86Step(V86_CPU *cpu)
 {
     UINT32 codeLinear = (V86SegmentBase(cpu->Segments[X86_SREG_CS])) + cpu->Ip;   /* linear CS:IP */
     const volatile BYTE *codePointer = V86_CODE(codeLinear);              /* NULL = fetch through V86HostRead8 */

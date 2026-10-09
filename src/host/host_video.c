@@ -1430,3 +1430,73 @@ static INT32 HostInterpPaced(volatile BYTE *tib, INT32 cap)
     if (milliseconds > 0) { g_CpuSpeedHeldMs += (DWORD)milliseconds; Sleep((DWORD)milliseconds); }
     return ran;
 }
+
+/* ── THE 16-BIT INTERPRETER RUNNING PROTECTED-MODE CODE (run 53). It drives v86interp.h with
+   LDT bases and LAR/LSL answers from the DPMI host, so it lives with the interpreter (#335). */
+#define DPMI_INTERP_STEPS_MAX 20000000L   /* DpmiRunPmInterp: modelled steps before giving up */
+static UINT32 DpmiSegmentToLinear(WORD selector) { return DpmiSelectorBase(selector); }
+static VOID DpmiInterpreterCpuLoad(V86_CPU *cpu, volatile BYTE *tib)
+{
+    cpu->Registers[X86_REG_AX]=(WORD)VDM_REG(tib,VTIB_EAX); cpu->Registers[X86_REG_CX]=(WORD)VDM_REG(tib,VTIB_ECX);
+    cpu->Registers[X86_REG_DX]=(WORD)VDM_REG(tib,VTIB_EDX); cpu->Registers[X86_REG_BX]=(WORD)VDM_REG(tib,VTIB_EBX);
+    cpu->Registers[X86_REG_SP]=(WORD)VDM_REG(tib,VTIB_ESP); cpu->Registers[X86_REG_BP]=(WORD)VDM_REG(tib,VTIB_EBP);
+    cpu->Registers[X86_REG_SI]=(WORD)VDM_REG(tib,VTIB_ESI); cpu->Registers[X86_REG_DI]=(WORD)VDM_REG(tib,VTIB_EDI);
+    cpu->Segments[X86_SREG_ES]=(WORD)VDM_REG(tib,VTIB_ES); cpu->Segments[X86_SREG_CS]=(WORD)VDM_REG(tib,VTIB_CS);
+    cpu->Segments[X86_SREG_SS]=(WORD)VDM_REG(tib,VTIB_SS); cpu->Segments[X86_SREG_DS]=(WORD)VDM_REG(tib,VTIB_DS);
+    cpu->Segments[X86_SREG_FS]=(WORD)VDM_REG(tib,VTIB_FS); cpu->Segments[X86_SREG_GS]=(WORD)VDM_REG(tib,VTIB_GS);
+    cpu->Ip=(WORD)VDM_REG(tib,VTIB_EIP);
+    cpu->Flags=VDM_REG(tib,VTIB_EFLAGS);
+}
+static VOID DpmiInterpreterCpuStore(V86_CPU *cpu, volatile BYTE *tib)
+{
+    VDM_SET16(tib,VTIB_EAX,cpu->Registers[X86_REG_AX]); VDM_SET16(tib,VTIB_ECX,cpu->Registers[X86_REG_CX]);
+    VDM_SET16(tib,VTIB_EDX,cpu->Registers[X86_REG_DX]); VDM_SET16(tib,VTIB_EBX,cpu->Registers[X86_REG_BX]);
+    VDM_SET16(tib,VTIB_ESP,cpu->Registers[X86_REG_SP]); VDM_SET16(tib,VTIB_EBP,cpu->Registers[X86_REG_BP]);
+    VDM_SET16(tib,VTIB_ESI,cpu->Registers[X86_REG_SI]); VDM_SET16(tib,VTIB_EDI,cpu->Registers[X86_REG_DI]);
+    VDM_SET16(tib,VTIB_ES,cpu->Segments[X86_SREG_ES]); VDM_SET16(tib,VTIB_CS,cpu->Segments[X86_SREG_CS]);
+    VDM_SET16(tib,VTIB_SS,cpu->Segments[X86_SREG_SS]); VDM_SET16(tib,VTIB_DS,cpu->Segments[X86_SREG_DS]);
+    VDM_SET16(tib,VTIB_FS,cpu->Segments[X86_SREG_FS]); VDM_SET16(tib,VTIB_GS,cpu->Segments[X86_SREG_GS]);
+    VDM_SET16(tib,VTIB_EIP,cpu->Ip);
+    VDM_REG(tib,VTIB_EFLAGS) = (VDM_REG(tib,VTIB_EFLAGS) & HIGH_WORD_MASK_U) | (cpu->Flags & WORD_MASK_U);
+}
+/* Returns 0 = client exited (INT 21h AH=4Ch), -1 = stopped on an unmodeled/
+   unserviceable opcode (already logged). Never touches the kernel PM path. */
+static INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib)
+{
+    V86_CPU cpu; INT32 guard = 0; CHAR lineBuffer[256]; PSTR lineCursor;
+    g_V86SegmentToLinear = DpmiSegmentToLinear;                 /* interpreter now resolves LDT bases */
+    g_V86SelectorDescriptor = DpmiSelectorDescriptor;               /* ...and answers LAR/LSL from g_Ldt[] (run 55) */
+    DpmiInterpreterCpuLoad(&cpu, tib);
+    lineCursor = lineBuffer;
+    lineCursor = LogPut(lineCursor, "DPMI-INTERP: run 53 host PM begins CS:IP=0x"); lineCursor = LogHex(lineCursor, cpu.Segments[X86_SREG_CS]);
+    lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, cpu.Ip);
+    lineCursor = LogPut(lineCursor, " DS=0x"); lineCursor = LogHex(lineCursor, cpu.Segments[X86_SREG_DS]); lineCursor = LogPut(lineCursor, " SS=0x"); lineCursor = LogHex(lineCursor, cpu.Segments[X86_SREG_SS]);
+    lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
+    for (;;) {
+        if (V86Step(&cpu)) { if (++guard > DPMI_INTERP_STEPS_MAX) break; continue; }   /* modeled step */
+        { UINT32 site = V86SegmentBase(cpu.Segments[X86_SREG_CS]) + cpu.Ip;
+          BYTE opcode = V86HostRead8(site), nextByte = V86HostRead8(site+1);
+          if (opcode == X86_OP_INT) {                   /* INT nn -> shared DPMI/DOS dispatch */
+              INT status;
+              DpmiInterpreterCpuStore(&cpu, tib);
+              VDM_REG(tib, VTIB_EVENT) = VDM_EVENT_BOP;   /* mimic a serviceable BOP for the dispatcher */
+              status = DpmiServicePmInt(machine, tib, (DWORD)nextByte, (UINT)guard);
+              if (status <= 0) return status;         /* 0 = 4Ch exit, -1 = unserviceable */
+              DpmiInterpreterCpuLoad(&cpu, tib);        /* pick up results + any selector/mode change */
+              continue;
+          }
+          lineCursor = lineBuffer;                             /* the spike's to-do signal */
+          lineCursor = LogPut(lineCursor, "DPMI-INTERP: unmodeled opcode at CS:IP=0x"); lineCursor = LogHex(lineCursor, cpu.Segments[X86_SREG_CS]);
+          lineCursor = LogPut(lineCursor, ":0x"); lineCursor = LogHex(lineCursor, cpu.Ip);
+          lineCursor = LogPut(lineCursor, " bytes="); lineCursor = LogDump(lineCursor, (const BYTE*)(ULONG_PTR)site, 8);
+          lineCursor = LogPut(lineCursor, " (steps=0x"); lineCursor = LogHex(lineCursor, (UINT)guard); lineCursor = LogPut(lineCursor, ")\r\n");
+          LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
+          DpmiInterpreterCpuStore(&cpu, tib);
+          return -1;
+        }
+    }
+    DpmiInterpreterCpuStore(&cpu, tib);                 /* guard cap hit (possible infinite loop) */
+    lineCursor = lineBuffer; lineCursor = LogPut(lineCursor, "DPMI-INTERP: guard cap hit (spin?)\r\n");
+    LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
+    return -1;
+}
