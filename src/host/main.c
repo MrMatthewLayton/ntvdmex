@@ -3274,6 +3274,639 @@ static INT DpmiStartClientSession(PSTR *cursorIo, PSTR const base, volatile BYTE
     *cursorIo = cursor; return HOST_FLOW_NEXT;
 }
 
+
+static INT NtvdmCommandStartupBatch(PSTR *cursorIo, PSTR const base, const DWORD bopNumber, const DWORD sub, volatile BYTE * const tib, const INT quiet)
+{
+    PSTR cursor = *cursorIo;
+    /* ── ★ sub 0D = "GIVE ME A PATH TO OPEN" -- THE STARTUP BATCH FILE. ─────
+         The guest named this gap itself. With `/p` on its command line COMMAND.COM
+         allocates a 7-paragraph block (`AH=48h -> 0x0D6D`), issues this BOP with
+         `DS:DX` pointing into it, and its very next DOS call is `AH=3Dh` (open)
+         on that buffer (our INT 21h log). We wrote nothing, so it opened "" and
+         our DOS answered "path not found".
+       ▸ Stock answers with a path, as an OEM string at DS:DX, of at most
+         **0x40** bytes.
+       ▸ Which path: stock's permanent shell runs AUTOEXEC.NT at start-up, and
+         this is the `/p` (permanent shell) startup path. ⚠ That last step is an
+         INFERENCE from context -- but it is verifiable by behaviour, because
+         whatever we write here is the path the guest opens next.
+       ⛔ WE DO NOT DEFAULT TO XP's AUTOEXEC.NT, deliberately. The real one loads
+         `mscdexnt.exe`, `redir` and **`dosx`** -- NT's DPMI host, which we provide
+         ourselves and which has no business being loaded into our VDM. The
+         DOS-native `C:\AUTOEXEC.BAT` is the honest default for a DOS that is
+         ours; `cfg\autoexec.txt` points it anywhere, including at NT's.
+       ⚠ A path that does not exist is FINE and is the normal case -- a DOS with no
+         AUTOEXEC.BAT simply has none. What was broken was the empty string. */
+    if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_STARTUP_BATCH) {
+        DWORD nameBase = (VDM_REG16(tib, VTIB_DS) << PARAGRAPH_SHIFT)
+                 + VDM_REG16(tib, VTIB_EDX);
+        volatile BYTE *nameBytes = (volatile BYTE *)(ULONG_PTR)nameBase;
+        CHAR autoText[80]; DWORD autoLength = 0, item;
+        HANDLE autoHandle = CreateFileA(BOPAUTO_PATH, GENERIC_READ, FILE_SHARE_READ,
+                                NULL, OPEN_EXISTING, 0, NULL);
+        if (autoHandle != INVALID_HANDLE_VALUE) {
+            ReadFile(autoHandle, autoText, sizeof(autoText) - 1, &autoLength, NULL); CloseHandle(autoHandle);
+            while (autoLength && (autoText[autoLength-1] == '\r' || autoText[autoLength-1] == '\n'
+                          || autoText[autoLength-1] == ' ' || autoText[autoLength-1] == '\t')) --autoLength;
+        }
+        /* ── s92 (#316): AND IT RUNS WITH ECHO OFF, AS STOCK's DOES. XP leaves an
+             EMPTY C:\AUTOEXEC.BAT on every machine; the shell runs it with echo ON,
+             and the end of a batch with echo on is a blank line and the PROMPT --
+             which `prog > file` from cmd captured ahead of the program's own output
+             (dospair LM6: ours "\r\nC:\...\DOS>\n\r\n" first; stock nothing). Stock's
+             AUTOEXEC.NT begins `@echo off`. So the default is now a two-line batch
+             the host writes -- `@echo off` and a CALL of C:\AUTOEXEC.BAT if there
+             is one -- so the user's batch still runs, silently. Its short path must
+             fit XP's 0x3F cap; if it cannot be made, the old answer stands. */
+        if (!autoLength) {
+            static CHAR wrap[MAX_PATH];
+            if (!wrap[0]) {
+                CHAR tempDirectory[MAX_PATH], full[MAX_PATH], shortPath[MAX_PATH];
+                DWORD tempLength = GetTempPathA(sizeof tempDirectory, tempDirectory), shortTempLength;
+                HANDLE writeHandle;
+                if (tempLength && tempLength < sizeof tempDirectory - 16) {
+                    wsprintfA(full, HOST_STARTUP_BATCH_FORMAT, tempDirectory);
+                    writeHandle = CreateFileA(full, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+                    if (writeHandle != INVALID_HANDLE_VALUE) {
+                        static const CHAR body[] =
+                            HOST_STARTUP_BATCH_BODY;
+                        DWORD bytesWritten = 0;
+                        WriteFile(writeHandle, body, sizeof body - 1, &bytesWritten, NULL);
+                        CloseHandle(writeHandle);
+                        shortTempLength = GetShortPathNameA(full, shortPath, sizeof shortPath);
+                        if (shortTempLength && shortTempLength <= NTVDM_CMD_STARTUP_PATH_MAX && bytesWritten == sizeof body - 1)
+                            lstrcpynA(wrap, shortPath, sizeof wrap);
+                    }
+                }
+                if (!wrap[0]) lstrcpynA(wrap, HOST_AUTOEXEC_PATH, sizeof wrap);
+            }
+            for (autoLength = 0; wrap[autoLength] && autoLength < sizeof autoText - 1; ++autoLength) autoText[autoLength] = wrap[autoLength];
+        }
+        if (autoLength > NTVDM_CMD_STARTUP_PATH_MAX) autoLength = NTVDM_CMD_STARTUP_PATH_MAX;          /* XP's own cap */
+        for (item = 0; item < autoLength; ++item) nameBytes[item] = (BYTE)autoText[item];
+        nameBytes[autoLength] = 0;
+        if (!quiet) {
+            cursor = LogPut(cursor, "         sub 0D answered: startup batch [");
+            for (item = 0; item < autoLength; ++item) { CHAR piece[2]; piece[0]=autoText[item]; piece[1]=0; cursor = LogPut(cursor, piece); }
+            cursor = LogPut(cursor, "] at 0x"); cursor = LogHex(cursor, nameBase); cursor = LogPut(cursor, "\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        }
+        VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
+        { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+static INT NtvdmCommandPrompt(PSTR *cursorIo, PSTR const base, const DWORD bopNumber, const DWORD sub, volatile BYTE * const tib, const INT quiet)
+{
+    PSTR cursor = *cursorIo;
+    /* ── ★ sub 0F = THE HOST'S `PROMPT`, AND IT ANSWERS IN BX. ──────────────
+         Stock passes the HOST's `PROMPT` environment variable through to the DOS
+         shell here, and reports in BX; with nothing to pass it answers BX = 0.
+       ▸ BX = 0, which is exactly stock's answer when it has nothing to pass. We were
+       setting no register at all, so the guest read whatever
+         BX happened to hold -- an unimplemented call answering at random again. */
+    /* ── ★ sub 0F = "GIVE ME THE INITIAL ENVIRONMENT". (s81: the `C>` prompt) ──
+         Under /P, XP's COMMAND.COM builds a FRESH environment, as DOS's primary
+         shell does -- `PATH=` and a COMSPEC, nothing else -- and asks NTVDM for the
+         rest here (stock hands it the Win32 environment, PROMPT included). We said
+         "none", so the user's shell came up `C>`: DOS's default, with no PROMPT.
+         The protocol, as the shell drives it (observed, two calls):
+           call 1: BX=0 in  -> BX out = EXTRA paragraphs needed (0 = keep the old
+                   environment); the shell grows its block by that much
+           call 2: ES:0 = the new block, BX = its size in paragraphs
+                   -> the variables, double-NUL ended; BX out = paragraphs used,
+                   which must not exceed what came in (else it gives up)
+         We answer with the environment we built for it (seg DOS_ENV_SEG: PROMPT,
+         PATH, BLASTER, ULTRASND...), snapshotted on call 1 while it is intact, with
+         COMSPEC pointed at the real shell. */
+    if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_PROMPT) {
+        static CHAR environmentSnapshot[1024]; static DWORD environmentSnapshotLength;
+        DWORD initialBx = VDM_REG16(tib, VTIB_EBX);
+        if (initialBx == 0) {
+            const volatile BYTE *environment0 = (const volatile BYTE *)(ULONG_PTR)((DWORD)DOS_ENV_SEG << PARAGRAPH_SHIFT);
+            DWORD inputIndex = 0, outputIndex = 0;
+            while (inputIndex < ENVIRONMENT_SCAN_MAX && !(environment0[inputIndex] == 0 && environment0[inputIndex + 1] == 0)) {
+                DWORD environmentStart = inputIndex;
+                while (environment0[inputIndex] && inputIndex < ENVIRONMENT_SCAN_MAX) ++inputIndex;
+                /* ── PATH IS WINDOWS' PATH, IN 8.3. (s81, user: "mem" -> "Bad command
+                     or file name") We handed the shell `PATH=C:\`, so nothing in
+                     SYSTEM32 -- MEM, EDIT, DEBUG, every XP DOS tool -- could be run by
+                     name. Stock passes the Win32 environment; this passes its PATH,
+                     each entry shortened (a DOS program cannot open a long name) and
+                     the whole kept under 250 characters, dropping entries past that
+                     rather than cutting one in half. */
+                if ((environment0[environmentStart] | ASCII_CASE_BIT) == 'p' && (environment0[environmentStart + 1] | ASCII_CASE_BIT) == 'a' &&
+                    (environment0[environmentStart + 2] | ASCII_CASE_BIT) == 't' && (environment0[environmentStart + 3] | ASCII_CASE_BIT) == 'h' &&
+                    environment0[environmentStart + 4] == '=') {
+                    CHAR writeBuffer[2048], shellPath[MAX_PATH]; DWORD writeLength, start = outputIndex, length0 = 0;
+                    PSTR start0 = writeBuffer, limit;
+                    writeLength = GetEnvironmentVariableA(HOST_ENV_PATH, writeBuffer, sizeof writeBuffer);
+                    outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, HOST_ENV_PATH_ASSIGN) - environmentSnapshot);
+                    if (writeLength && writeLength < sizeof writeBuffer) {
+                        while (*start0) {
+                            DWORD shortLength;
+                            limit = start0; while (*limit && *limit != ';') ++limit;
+                            if (*limit) *limit++ = 0; else limit = start0 + lstrlenA(start0);
+                            shortLength = *start0 ? GetShortPathNameA(start0, shellPath, sizeof shellPath) : 0;
+                            if (shortLength && shortLength < sizeof shellPath && (outputIndex - start) + shortLength + 1 < PATH_VALUE_MAX) {
+                                if (length0++) environmentSnapshot[outputIndex++] = ';';
+                                outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, shellPath) - environmentSnapshot);
+                            }
+                            start0 = limit;
+                        }
+                    }
+                    if (!length0) outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, HOST_DEFAULT_DRIVE_ROOT) - environmentSnapshot);
+                } else
+                if ((environment0[environmentStart] | ASCII_CASE_BIT) == 'c' && environment0[environmentStart + 7] == '=' &&
+                    (environment0[environmentStart + 1] | ASCII_CASE_BIT) == 'o' && (environment0[environmentStart + 2] | ASCII_CASE_BIT) == 'm') {
+                    outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, HOST_ENV_COMSPEC_ASSIGN) - environmentSnapshot);
+                    outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, g_ShellPath[0] ? g_ShellPath
+                                                   : HOST_DEFAULT_SHELL_PATH) - environmentSnapshot);
+                } else {
+                    DWORD snapshotIndex; for (snapshotIndex = environmentStart; snapshotIndex < inputIndex; ++snapshotIndex) environmentSnapshot[outputIndex++] = (CHAR)environment0[snapshotIndex];
+                }
+                environmentSnapshot[outputIndex++] = 0;
+                ++inputIndex;
+            }
+            environmentSnapshot[outputIndex++] = 0;
+            environmentSnapshotLength = outputIndex;
+            VDM_SET16(tib, VTIB_EBX, (WORD)((environmentSnapshotLength + PARAGRAPH_LAST_BYTE) / PARAGRAPH_SIZE + 1));
+        } else {
+            volatile BYTE *environment1 = (volatile BYTE *)(ULONG_PTR)(VDM_REG16(tib, VTIB_ES) << PARAGRAPH_SHIFT);
+            DWORD paragraph, used = (environmentSnapshotLength + PARAGRAPH_LAST_BYTE) / PARAGRAPH_SIZE;
+            if (environmentSnapshotLength && used <= initialBx) {
+                for (paragraph = 0; paragraph < environmentSnapshotLength; ++paragraph) environment1[paragraph] = (BYTE)environmentSnapshot[paragraph];
+                VDM_SET16(tib, VTIB_EBX, (WORD)used);
+            } else VDM_SET16(tib, VTIB_EBX, 0);
+        }
+        if (!quiet) {
+            cursor = LogPut(cursor, initialBx ? "         sub 0F (2/2): environment written, paras=0x"
+                            : "         sub 0F (1/2): environment needs extra paras=0x");
+            cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EBX)); cursor = LogPut(cursor, "\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        }
+        VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
+        { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* An NTVDM BOP from the guest's own code (XP's COMMAND.COM is NTVDM-aware): service its command-shell
+   sub-functions -- the next command to run, termination, the startup batch file, the prompt, the
+   query bits and the keyboard configuration. */
+static INT NtvdmServiceGuestBop(PSTR *cursorIo, PSTR const base, volatile BYTE * const tib, DOS_MACHINE *machine, CHAR *programPathBuffer)
+{
+    PSTR cursor = *cursorIo;
+        DWORD bopNumber  = VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK;
+        DWORD codeSegment = VDM_REG16(tib, VTIB_CS), instructionPointer = VDM_REG16(tib, VTIB_EIP);
+        const volatile BYTE *isvBopBytes = (const volatile BYTE *)(ULONG_PTR)((codeSegment << PARAGRAPH_SHIFT) + instructionPointer);
+        DWORD sub = isvBopBytes[VDM_BOP_LENGTH];
+        static INT  carryPolicy = -1;                 /* -1 = not yet read */
+        INT quiet = 0;                           /* rate-limit the LOG, never the answer */
+        if (carryPolicy < 0) {
+            CHAR text[16]; DWORD bytesRead = 0;
+            HANDLE handle = CreateFileA(BOP54_PATH, GENERIC_READ, FILE_SHARE_READ,
+                                   NULL, OPEN_EXISTING, 0, NULL);
+            /* DEFAULT CF=0, and that is measured rather than chosen: with CF=1 the
+               sub-01 site's `jnc` falls into a retry and COMMAND.COM POLLS the call
+               forever (first run: 268,435,180 bytes of log, one line per spin). With
+               CF=0 it proceeds to a second, different call -- sub 0x0E at 0x5E6.
+               Neither is known to be RIGHT; one is known to be a dead end. */
+            carryPolicy = 0;
+            if (handle != INVALID_HANDLE_VALUE) {
+                ReadFile(handle, text, sizeof text - 1, &bytesRead, NULL); CloseHandle(handle);
+                if (bytesRead >= 3 && text[0] == 'c' && text[1] == 'f' && text[2] == '1') carryPolicy = 1;
+            }
+        }
+        /* ── ⛔ RATE-LIMITED, AND IT COST 256 MB TO LEARN. ───────────────────────
+             The first run of this instrument answered CF=1, COMMAND.COM POLLED the
+             call, and the unlimited log reached 268,435,180 bytes -- one line per
+             iteration of a loop that never ended. An instrument that scales with a
+             guest's spin rate is a denial-of-service on the thing you are trying to
+             read. 16 in full, then count only; the total goes in the summary.
+           ⚠ The 17th call is not less interesting than the 16th -- if the values
+             ever CHANGE after the cap this will not show it. It logs a resumed line
+             when the register signature differs from the last one printed, so a
+             state change still surfaces while a spin does not. */
+        {   DWORD signature = VDM_REG16(tib, VTIB_EAX)
+                      ^ (VDM_REG16(tib, VTIB_EBX) << PARAGRAPH_SHIFT)
+                      ^ (VDM_REG16(tib, VTIB_ECX) << BYTE_SHIFT)
+                      ^ (VDM_REG16(tib, VTIB_EDX) << 12) ^ (sub << 20);
+            static DWORD lastSignature = 0xFFFFFFFFu;
+            INT novel = (signature != lastSignature);
+            lastSignature = signature;
+            ++g_NtvdmBopCount;
+            /* ── ⛔⛔ A NOVELTY FILTER IS NOT A CAP, AND IT COST A SECOND 256 MB.
+                 The first rate-limit logged 16 in full and then only when the
+                 register signature CHANGED. That is the right shape for a spin on
+                 identical values -- and no defence at all against a LOOP, where
+                 every pass differs slightly: once COMMAND.COM reached its command
+                 loop the log hit 268,435,219 bytes again, 285,698 BOPs.
+               ⇒ A hard ceiling as well as a novelty test. Past it, count only. */
+            /* ⛔⛔ AND IT MUST GATE THE LOG ONLY, NEVER THE HANDLING. The first cut
+                 `continue`d out of the rate-limit arm, which SKIPPED the sub 01 and
+                 sub 0E handlers below and answered with the generic CF instead --
+                 so past the 17th call the guest was being told something different
+                 from what the first sixteen were told, silently. A quiet instrument
+                 that also changes behaviour is not an instrument. */
+            quiet = (g_NtvdmBopCount > 64) || (g_NtvdmBopCount > 16 && !novel);
+        }
+        if (quiet) goto ntvdmBopDispatch;
+        cursor = LogPut(cursor, "STAGE2: NTVDM BOP from guest: bop=0x"); cursor = LogHexByte(cursor, bopNumber);
+        cursor = LogPut(cursor, " sub=0x"); cursor = LogHexByte(cursor, sub);
+        cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, codeSegment); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, instructionPointer);
+        cursor = LogPut(cursor, " ax=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EAX));
+        cursor = LogPut(cursor, " bx=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EBX));
+        cursor = LogPut(cursor, " cx=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_ECX));
+        cursor = LogPut(cursor, " dx=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EDX));
+        cursor = LogPut(cursor, " si=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_ESI));
+        cursor = LogPut(cursor, " di=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EDI));
+        cursor = LogPut(cursor, " ds=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_DS));
+        cursor = LogPut(cursor, " es=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_ES));
+        cursor = LogPut(cursor, " ss:sp=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_SS));
+        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_ESP));
+        cursor = LogPut(cursor, " -> UNIMPLEMENTED, answering CF="); cursor = LogDecimal(cursor, (UINT)carryPolicy);
+        cursor = LogPut(cursor, "\r\n");
+        /* And the bytes it is about to run either way -- the branch is right there,
+           and which way it goes is the whole question. */
+        cursor = LogPut(cursor, "         next="); cursor = LogDump(cursor, (const VOID *)(isvBopBytes + VDM_BOP_SUBFUNCTION_LENGTH), 12);
+        /* ── ★ COMMAND.COM's STATE BLOCK, WHOLE, RATHER THAN ONE BYTE AT A TIME.
+             Its decisions about being a shell follow a handful of bytes in its
+             RESIDENT data -- around 0x2B0 and 0x320..0x333 of the
+             resident segment, 0x0100 for a .COM: the banner, "ask for a command"
+             vs "prompt", and the keyboard read are all gated in that block.
+           ⇒ Printing all of them at once turns "find the next gate, answer it,
+             re-run" into one reading. Five turns of that pattern produced one
+             caveat; this is the instrument that should have come first.
+           ⚠ The segment is ASSUMED to be 0x0100 (a .COM's PSP). If COMMAND.COM is
+             ever loaded elsewhere these rows are somebody else's memory -- the
+             `@0100:` in the trace's call sites is the check that it is not. */
+        { const volatile BYTE *lowPspBytes = (const volatile BYTE *)(ULONG_PTR)(0x0100u << PARAGRAPH_SHIFT);
+          cursor = LogPut(cursor, "\r\n         cc[0x2B0..0x2BF]="); cursor = LogDump(cursor, (const VOID *)(lowPspBytes + 0x2B0), 16);
+          cursor = LogPut(cursor, "\r\n         cc[0x320..0x333]="); cursor = LogDump(cursor, (const VOID *)(lowPspBytes + 0x320), 20);
+          /* s81: the environment the shell ACTUALLY has (PSP:2Ch), as text -- the
+             prompt came up `C>` under /P, i.e. without the PROMPT we passed. */
+          { WORD pspEnvironmentSegment = *(const volatile WORD *)(lowPspBytes + DOS_PSP_ENVIRONMENT); INT scan;
+            const volatile BYTE *environment2 = (const volatile BYTE *)(ULONG_PTR)((DWORD)pspEnvironmentSegment << PARAGRAPH_SHIFT);
+            cursor = LogPut(cursor, "\r\n         shell env seg=0x"); cursor = LogHex(cursor, pspEnvironmentSegment); cursor = LogPut(cursor, " [");
+            for (scan = 0; scan < 160 && !(environment2[scan] == 0 && environment2[scan + 1] == 0); ++scan) {
+                CHAR character1[2]; character1[0] = environment2[scan] ? (CHAR)environment2[scan] : '|'; character1[1] = 0;
+                if (character1[0] < 0x20 || character1[0] > 0x7e) character1[0] = '.';
+                cursor = LogPut(cursor, character1); }
+            cursor = LogPut(cursor, "]"); } }
+        cursor = LogPut(cursor, "\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+    ntvdmBopDispatch:
+        /* ── ★ sub 01 = "WHAT SHOULD I RUN NEXT?" -- ANSWER "NOTHING". ───────────
+             On XP this is answered from CSRSS's GetNextVDMCommand (VDM_COMMAND_INFO).
+             The guest's request block is at DS:DX -- (DS<<4)+DX, exactly as we
+             compute it here -- and the answer comes back in the same block.
+           ▸ The fields (see docs/inventory/bop.md):
+               +0x10 w   OUT  flags; zero is "nothing to do" (observed: the shell
+                              then goes to its prompt).
+               +0x12 dw  IN+OUT a cookie. COMMAND.COM fills it before the call and
+                              takes back whatever is there afterwards -- so it must
+                              ROUND-TRIP.
+               +0x1A w   OUT  COMMAND.COM keeps the low byte.
+               +0x02 +0x04 +0x06 +0x16 +0x20   OUT
+               +0x22 w   OUT  status; stock writes 4, 8 or 9 here.
+           ⚠ WHAT WE WRITE IS A DEFINED "NO COMMAND", NOT A DECODED ONE. That is a
+             real claim and it may be wrong -- but the alternative is not neutral:
+             leaving the block ALONE hands COMMAND.COM whatever was in its own
+             memory, which is how it got a garbage answer and spun. A defined answer
+             is falsifiable; an uninitialised one is not.
+           ⛔ The cookie is preserved rather than zeroed, because the guest reloads
+             it into its own state unconditionally -- zeroing it would destroy
+             something we were only asked to carry. */
+        if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_NEXT_COMMAND) {
+            DWORD block = (VDM_REG16(tib, VTIB_DS) << PARAGRAPH_SHIFT)
+                      + VDM_REG16(tib, VTIB_EDX);
+            volatile BYTE *blockBytes = (volatile BYTE *)(ULONG_PTR)block;
+            /* ── ★ THE SECOND "WHAT NEXT?" IS THE SHELL LEAVING. (s81 sweep: `exit`) ──
+                 The block is NT's CMDINFO -- +04 CurDrive, +0C CmdLineSize, +0E
+                 ReturnCode, +18 fTSRExit, +1C:1E/+20 ExecPath -- every measured value
+                 lines up. Sub 01 is GetNextVDMCommand: the DOS side has finished and
+                 asks the Win32 side for work. XP's permanent shell asks once at start-
+                 up and again when the user types EXIT (never after an internal or an
+                 EXEC'd command -- measured: `dir` does not call it). A bare-launched
+                 session has no Win32 side to hand anything back, so the second ask
+                 means "we are done": end the VDM with the shell's ReturnCode, as stock
+                 ends a command.com window. */
+            /* #208: the routed program was ENDED BY CLOSE PROGRAM -- the user asked for the
+                 prompt, not for the window to close. Go interactive from here (AH=53h
+                 AL=2 CF=1, the shell's own prompt path) and answer "nothing", once; the
+                 shell's NEXT sub 01 is then an ordinary EXIT. */
+            if (g_GuestNtAware && g_BackToPrompt && g_ShellGetNextCount >= 1) {
+                g_BackToPrompt = 0;
+                g_DosInt53Answers[DOS_INT53_SHELL_LOOP].IsCarry = 1;
+                cursor = LogPut(cursor, "         sub 01 after Close Program: back to the prompt (#208)\r\n");
+                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+            } else
+            if (g_GuestNtAware && ++g_ShellGetNextCount > 1) {
+                cursor = LogPut(cursor, "         sub 01 again: the shell is handing back control (EXIT)"
+                            " -- ending the VDM, rc=0x");
+                cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_EXIT_CODE)); cursor = LogPut(cursor, "\r\n");
+                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+                machine->ExitCode = *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_EXIT_CODE) & BYTE_MASK;
+                { *cursorIo = cursor; return HOST_FLOW_BREAK; }
+            }
+            #define BW(o, v) (*(volatile WORD *)(blockBytes + (o)) = (WORD)(v))
+            /* ⚠ DUMPED BEFORE WE WRITE ANYTHING. Logging it after the BW()s below
+                 would show our own zeros back and read as the guest's input --
+                 which is the whole class of mistake this file keeps catching. */
+            if (quiet) goto blockWritten;
+            cursor = LogPut(cursor, "         blk in="); cursor = LogDump(cursor, (const VOID *)blockBytes, 0x28);
+            cursor = LogPut(cursor, "\r\n         +1C:1E=0x");
+            cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_SEGMENT)); cursor = LogPut(cursor, ":0x");
+            cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_OFFSET));
+            cursor = LogPut(cursor, " +20=0x"); cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_CAPACITY));
+            cursor = LogPut(cursor, "\r\n");
+            blockWritten: ;
+            /* ── ★★ TOUCH AS LITTLE AS POSSIBLE. ────────────────────────────────
+                 The first cut zeroed every field that XP's handler writes. One of
+                 them, `+0x04`, is the DEFAULT DRIVE -- COMMAND.COM selects it with
+                 `AH=0Eh` immediately after the call (our INT 21h log shows the DL it
+                 passes) -- so a zero meant drive 0 = A:, and our own handler
+                 said so in the same log ("drive A: exists but is not ready ...
+                 selected as the DOS current drive anyway") while the shell went
+                 quiet.
+               ★ Dumping the block BEFORE writing it settled the design: the guest
+                 already supplies `+0x04 = 02` (C:). It was never ours to fill in.
+                 Measured, one run:
+                   blk in = 26 02 | 00 01 | 02 00 | 00 00 | 42 93 | 27 93 | 80 00 ...
+                 ⇒ `+0x08:+0x0A = 0x9342:0x9327` -- and `0x9327` is EXACTLY the
+                   buffer COMMAND.COM reads its command line from (it is also the
+                   DS:DX it later hands to INT 21h AH=0Ah, in our log). Two
+                   independent sources, same address.
+               ⇒ So we now write only what a "no command" answer really is: the
+                 empty command tail, and the flags word. Everything else is left as
+                 the guest set it, because a field we cannot name is not ours. */
+            {   DWORD codeBase = ((DWORD)(*(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_TAIL_SEGMENT)) << PARAGRAPH_SHIFT)
+                         + *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_TAIL_OFFSET);
+                volatile BYTE *codeBlock = (volatile BYTE *)(ULONG_PTR)codeBase;
+                /* ── AN EMPTY DOS COMMAND TAIL, AND THE CR IS THE POINT. ────────
+                     COMMAND.COM scans this buffer for the terminating CR (observed).
+                     With no CR in the buffer the scan walks the WHOLE 64K segment and
+                     never leaves -- which is precisely the "spinning in
+                     V86 with no traps" the headless deadline was killing.
+
+                   ⛔⛔⛔ AND `[0]` IS NOT OURS. IT IS DOS'S AH=0Ah MAXIMUM, AND
+                     WRITING IT COST THE INTERACTIVE PROMPT. (s79)
+                     This used to write `c[0] = length`, on the reading that the
+                     shell copies [0]+3 bytes of it. That was not wrong about the copy
+                     and was completely wrong about the buffer, because **the same
+                     buffer is handed to INT 21h AH=0Ah** (DX=0x9327 in our log), and
+                     the shell sets its [0] to 0x80 ONCE, at start-up (observed in the
+                     block before our first answer). 0x80 is the buffered-input
+                     MAXIMUM, set a single time and never re-set. Our "empty tail" answer
+                     zeroed it on the first BOP, so
+                     every later AH=0Ah saw a zero-capacity buffer, returned an empty
+                     line immediately, and COMMAND.COM printed its prompt again --
+                     991 prompts in one 30-second run, with `INT21 AH=0A line max=00`
+                     in the log the whole time. The shell was AT the keyboard read;
+                     we were answering it with EOF.
+                     ⚠ The `+0x0C` field of the request block is 0x0080 -- the guest
+                       tells us the capacity there. Two independent sources, and the
+                       one we overwrote was the same number.
+                   ⇒ WRITE THE LENGTH AT [1], WHERE DOS PUTS IT, AND NEVER TOUCH [0].
+                     Nothing downstream needs the length: the shell copies [0]+3 =
+                     0x83 bytes (a superset) and finds the end of the text by its CR
+                     (observed), so the CR is the only load-bearing byte.
+                     Layout: [0] = max (the GUEST's, leave alone), [1] = length,
+                             [2..] = text, then CR. */
+                /* ── ONE COMMAND, ONCE, FROM cfg\bopcmd.txt. ──────────────────
+                     An empty answer proves only that the guest accepted one. This
+                     hands it a REAL command line exactly once and empties every
+                     reply after -- so the log shows whether the whole path works
+                     (does it execute and PRINT?) without the command repeating for
+                     ever in a loop that already runs 1.25M times a run.
+                   ⚠ One-shot on purpose: a guest that asks again must not be given
+                     the same command again. That is the difference between testing
+                     the mechanism and building a fork bomb. */
+                static INT commandDone = 0;
+                CHAR commandBuffer[128]; DWORD commandLength = 0;
+                if (!commandDone && g_Routed) {
+                    /* #208: the program's arguments, as the shell's tail -- it passes
+                       them on as the program's own PSP command tail. */
+                    /* ⚠ THE TAIL IS THE WHOLE COMMAND LINE, VERB FIRST; the NAME field
+                         is only the already-resolved path to run it with. Measured two
+                         ways: tail "hello" + name COMMAND.COM EXEC'd COMMAND.COM, and
+                         tail " " + name HELLO.COM ran NOTHING (a blank line is "no
+                         command" and the shell went to its prompt). */
+                    commandDone = 1;
+                    {   PSTR writeCursor = commandBuffer, limit = commandBuffer + sizeof(commandBuffer) - 2;
+                        PCSTR firstProgram = g_FirstProgram;
+                        while (*firstProgram && writeCursor < limit) *writeCursor++ = *firstProgram++;
+                        if (g_FirstTail[0] && writeCursor < limit) {
+                            PCSTR firstTail = g_FirstTail;
+                            if (*firstTail != ' ') *writeCursor++ = ' ';
+                            while (*firstTail && writeCursor < limit) *writeCursor++ = *firstTail++;
+                        }
+                        commandLength = (DWORD)(writeCursor - commandBuffer); }
+                }
+                if (!commandDone) {
+                    HANDLE bopCommandFile = CreateFileA(BOPCMD_PATH, GENERIC_READ, FILE_SHARE_READ,
+                                             NULL, OPEN_EXISTING, 0, NULL);
+                    commandDone = 1;
+                    if (bopCommandFile != INVALID_HANDLE_VALUE) {
+                        ReadFile(bopCommandFile, commandBuffer, sizeof(commandBuffer) - 1, &commandLength, NULL);
+                        CloseHandle(bopCommandFile);
+                        while (commandLength && (commandBuffer[commandLength-1] == '\r' || commandBuffer[commandLength-1] == '\n')) --commandLength;
+                    }
+                }
+                if (commandLength) {
+                    DWORD item;
+                    codeBlock[DOS_LINE_INPUT_LENGTH] = (BYTE)commandLength;                /* [0] is the guest's AH=0Ah max */
+                    for (item = 0; item < commandLength; ++item) codeBlock[DOS_LINE_INPUT_TEXT + item] = (BYTE)commandBuffer[item];
+                    codeBlock[DOS_LINE_INPUT_TEXT + commandLength] = ASCII_CR;
+                } else {
+                    codeBlock[DOS_LINE_INPUT_LENGTH] = 0; codeBlock[DOS_LINE_INPUT_TEXT] = ASCII_CR;          /* ditto: [0] is NOT ours */
+                }
+                if (!quiet) { cursor = LogPut(cursor, "         cmdline buf 0x"); cursor = LogHex(cursor, codeBase);
+                              if (commandLength) { cursor = LogPut(cursor, " <- ["); 
+                                        { DWORD item; for (item = 0; item < commandLength; ++item)
+                                              { CHAR piece[2]; piece[0]=commandBuffer[item]; piece[1]=0; cursor = LogPut(cursor, piece); } }
+                                        cursor = LogPut(cursor, "] ONE SHOT"); }
+                              else      cursor = LogPut(cursor, " <- empty tail (len=0, CR)");
+                              cursor = LogPut(cursor, "\r\n"); }
+            }
+            BW(NTVDM_CMD_BLOCK_REDIRECTION, 0);                       /* flags: nothing was redirected */
+            /* ── ★ AND THE OTHER TWO HALVES OF THE ANSWER. ──────────────────────
+                 sub 01 returns THREE things, not one: a command TAIL (+0x08:+0x0A,
+                 written above), a program NAME (+0x1C:+0x1E, capacity +0x20), and
+                 that program's TYPE at +0x22. Stock picks the type from the name's
+                 extension (observed per program type):
+                   `.EXE` -> 4   `.COM` -> 8   `.BAT` -> 2   shorter than 7 -> 9
+                 -- a file-extension dispatch and not a status word. ⛔ I had guessed
+                 "status enumeration"; it is not.
+               ▸ A zero-length name therefore means type 9, and the guest agrees:
+                 on the no-program path it writes a 0 to the FIRST BYTE of the name
+                 buffer at 0x9473 (observed) -- which is exactly the +0x1C:+0x1E we
+                 are handed (`+1C:1E=0x9342:0x9473`).
+               ⚠ We had been leaving both alone, i.e. handing the shell whatever was
+                 in its own memory. `ver` and `dir` worked anyway -- a builtin needs
+                 only the tail -- but that was luck, not an answer. */
+            {   DWORD nameBase = ((DWORD)(*(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_SEGMENT)) << PARAGRAPH_SHIFT)
+                         + *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_OFFSET);
+                DWORD capacity = *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_CAPACITY);
+                volatile BYTE *nameBytes = (volatile BYTE *)(ULONG_PTR)nameBase;
+                /* ── ★ HAND BACK WHAT CSRSS NAMED -- THE SAME SOURCE XP USES. ────
+                     On XP this buffer is filled from the VDM_COMMAND_INFO that
+                     GetNextVDMCommand returned, and our STAGE1 already made that
+                     exact call: `STAGE1: command fetch ... app=[...]` lands in
+                     g_Application2. Returning it is not a guess about what the shell wants;
+                     it is the same answer from the same place.
+                   ▸ ONCE. The first call is the VDM's reason for existing; after
+                     that there is nothing more to run and the name is empty. A
+                     shell that is handed the same program every time it asks would
+                     exec it for ever.
+                   ⚠ The type is stock's own rule (see above): the last four
+                     characters, `.EXE`->4 `.COM`->8 `.BAT`->2, and anything
+                     shorter than 7 characters -> 9. Mirrored, not invented. */
+                static INT namedOnce = 0;
+                /* ⚠ programPathBuffer FIRST, not g_Application2. On the rig CSRSS names
+                   `dosstub.com` -- the harness stub -- and `target.txt` names the
+                   real program, so g_Application2 would hand the shell the stub. programPathBuffer
+                   is what we actually LOADED, which is the program either way. */
+                PCSTR programPath = g_Routed ? g_FirstProgram      /* #208: the program */
+                               : programPathBuffer[0] ? programPathBuffer : (g_Application2[0] ? g_Application2 : "");
+                DWORD al = 0, valueType = NTVDM_CMD_TYPE_OTHER;
+                if (!namedOnce && programPath[0]) {
+                    while (programPath[al] && al + 1 < capacity && al < MAX_PATH) ++al;
+                    namedOnce = 1;
+                }
+                if (al > NTVDM_CMD_SHORT_NAME_MAX) {
+                    CHAR extension[DOS_DOT_EXTENSION_LENGTH + 1]; INT item;
+                    for (item = 0; item < DOS_DOT_EXTENSION_LENGTH; ++item) {
+                        CHAR character = programPath[al - DOS_DOT_EXTENSION_LENGTH + item];
+                        extension[item] = (character >= 'a' && character <= 'z') ? (CHAR)(character - ASCII_CASE_BIT) : character;
+                    }
+                    extension[DOS_DOT_EXTENSION_LENGTH] = 0;
+                    if      (extension[1]=='E' && extension[2]=='X' && extension[3]=='E' && extension[0]=='.') valueType = NTVDM_CMD_TYPE_EXE;
+                    else if (extension[1]=='C' && extension[2]=='O' && extension[3]=='M' && extension[0]=='.') valueType = NTVDM_CMD_TYPE_COM;
+                    else if (extension[1]=='B' && extension[2]=='A' && extension[3]=='T' && extension[0]=='.') valueType = NTVDM_CMD_TYPE_BAT;
+                }
+                { DWORD item; for (item = 0; item < al; ++item) nameBytes[item] = (BYTE)programPath[item]; nameBytes[al] = 0; }
+                BW(NTVDM_CMD_BLOCK_PROGRAM_TYPE, valueType);
+            /* ── +0x1A GATES THE INTERACTIVE PATH, so it is not a field we may
+                 leave alone. COMMAND.COM keeps its low byte, and a non-zero value
+                 takes it AWAY from the prompt. Zero. */
+            BW(NTVDM_CMD_BLOCK_KEYBOARD_GATE, 0);
+                if (!quiet) {
+                    cursor = LogPut(cursor, "         prog name <- ["); 
+                    { DWORD item; for (item = 0; item < al; ++item) { CHAR piece[2]; piece[0]=programPath[item]; piece[1]=0; cursor = LogPut(cursor, piece); } }
+                    cursor = LogPut(cursor, "] type="); cursor = LogDecimal(cursor, valueType); cursor = LogPut(cursor, "\r\n");
+                }
+            }
+            #undef BW
+            /* ── ★★★ +0x12 IS NOT A COOKIE. IT IS THE INTERACTIVE SWITCH. ───────
+                 I called it a cookie because COMMAND.COM fills it from its own
+                 state before the call and takes it straight back after -- which
+                 looks exactly like carrying an opaque handle. It is not: with it
+                 zero the shell goes to its keyboard prompt (AH=0Ah), and with it
+                 non-zero it does not (observed).
+                 ⇒ a ZERO dword means "nothing is driving me: read from the keyboard".
+               ★ And stock answers zero there in exactly this case -- when nothing is
+                 redirected (flags at +0x10 zero).
+               ⛔ PRESERVING IT WAS THE BUG. "Round-trip the value you were only
+                 asked to carry" is a good instinct and it was wrong here: the guest
+                 re-loads its own non-zero state, we hand it straight back, and it
+                 concludes it is being driven -- for ever. 1.25M calls a run.
+               ⇒ Zero, and only because the flags are zero: the two move together
+                 in stock's answers and must stay tied together here. */
+            *(volatile DWORD *)(blockBytes + NTVDM_CMD_BLOCK_INTERACTIVE) = 0;
+            /* +0x14 is the high half of that dword and is covered by the store above.
+               +0x02 +0x04 +0x06 +0x16 +0x1A +0x20 +0x22 likewise: XP writes them,
+               but we cannot yet say WHAT, and a named wrong value is worse than an
+               unchanged right one. Revisit each as its meaning is earned. */
+            VDM_REG(tib, VTIB_EAX) &= HIGH_WORD_MASK_U;   /* AX = 0 */
+            if (!quiet) {
+                cursor = LogPut(cursor, "         sub 01 answered: no command (flags=0, cookie and "
+                            "the guest's own fields left alone), blk=0x"); cursor = LogHex(cursor, block);
+                cursor = LogPut(cursor, "\r\n");
+                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+            }
+            VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;  /* success */
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
+            { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+        }
+        {
+            INT flow = NtvdmCommandPrompt(&cursor, base, bopNumber, sub, tib, quiet);
+            if (flow == HOST_FLOW_CONTINUE) { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+        }
+        {
+            INT flow = NtvdmCommandStartupBatch(&cursor, base, bopNumber, sub, tib, quiet);
+            if (flow == HOST_FLOW_CONTINUE) { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+        }
+        /* ── ★ sub 10 = A ONE-BIT QUERY, AND IT GATES THE PROMPT. ───────────────
+             The answer is AL, a yes/no flag and nothing more.
+           ★ It sits ON the interactive path. COMMAND.COM issues it just before its
+             prompt, and a non-zero AL takes it AWAY from the prompt: it
+             means "do not read the keyboard". We were not setting AL at all, leaving
+             whatever the guest happened to have there -- which is how an
+             unimplemented call still ANSWERS, at random.
+           ▸ AL = 0. Whatever the flag tracks, it is not set in a plain VDM that
+             has been asked to run a shell, and 0 is the value that lets the shell
+             be a shell. ⚠ Recorded as a reading of ONE flag we have not named,
+             not as a decode of what it means. */
+        if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_QUERY_BIT) {
+            VDM_REG(tib, VTIB_EAX) &= ~BYTE_MASK_U;   /* AL = 0 */
+            if (!quiet) {
+                cursor = LogPut(cursor, "         sub 10 answered: AL=0\r\n");
+                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+            }
+            VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
+            { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+        }
+        /* ── ★ sub 0E = THE KEYBOARD / CODE-PAGE CONFIGURATION. ─────────────────
+             On stock this describes the keyboard / code-page setup for a KEYB
+             command line, written into the guest's buffer.
+           ⇒ DS:SI is a buffer of CX bytes; DX is the ANSWER -- non-zero = "there is
+             a keyboard driver to set up" (the shell goes on to set one up), zero =
+             skip it (observed).
+           ⛔ I HAD THIS WRONG ONCE. Reading only the guest side, DX looked like a
+             leftover from the `INT 2Fh AX=AD80h` KEYB check just before it, and I
+             wrote that the BOP "probably does not touch DX". Stock sets DX on every
+             answer. **A register set by the callee is not distinguishable from a
+             leftover by looking at the caller alone.**
+           ▸ We answer 0 = no keyboard driver, which is TRUE of us: we do not load
+             KB16.COM or KEYBOARD.SYS. Explicitly, rather than by leaving DX alone
+             and getting 0 because that is what happened to be in it. */
+        /* ── sub 00 = VDDTerminateVDM: THE PERMANENT SHELL'S EXIT. (s81 sweep) ──────
+             XP's COMMAND.COM ends the VDM through here on EXIT when it is the
+             permanent shell (started with /P) -- observed.
+             It had no arm, so it fell to the generic "skip the BOP" below and EXIT
+             did nothing. End the run exactly as a top-level AH=4Ch does. */
+        if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_TERMINATE) {
+            cursor = LogPut(cursor, "         sub 00: the shell asked to END THE VDM (EXIT) -- ending the run\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+            machine->ExitCode = 0;
+            { *cursorIo = cursor; return HOST_FLOW_BREAK; }
+        }
+        if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_KEYBOARD_CONFIG) {
+            VDM_REG(tib, VTIB_EDX) &= HIGH_WORD_MASK_U;   /* DX = 0: no KEYB to run */
+            if (!quiet) {
+                cursor = LogPut(cursor, "         sub 0E answered: no keyboard driver (DX=0)\r\n");
+                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+            }
+            VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
+            { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+        }
+        if (carryPolicy) VDM_REG(tib, VTIB_EFLAGS) |=  EFLAGS_CF_U;
+        else        VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;             /* C4 C4 <bop> <sub> -- see above */
+        { *cursorIo = cursor; return HOST_FLOW_CONTINUE; }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
 INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR commandLineText, INT showCommand)
 {
     CHAR report[8192]; PSTR cursor = report; PSTR base;
@@ -7066,607 +7699,11 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
         if (g_BopFromGuest
             && ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == NTVDM_BOP_CMD
                 || (VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == NTVDM_BOP_DOS)) {
-            DWORD bopNumber  = VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK;
-            DWORD codeSegment = VDM_REG16(tib, VTIB_CS), instructionPointer = VDM_REG16(tib, VTIB_EIP);
-            const volatile BYTE *isvBopBytes = (const volatile BYTE *)(ULONG_PTR)((codeSegment << PARAGRAPH_SHIFT) + instructionPointer);
-            DWORD sub = isvBopBytes[VDM_BOP_LENGTH];
-            static INT  carryPolicy = -1;                 /* -1 = not yet read */
-            INT quiet = 0;                           /* rate-limit the LOG, never the answer */
-            if (carryPolicy < 0) {
-                CHAR text[16]; DWORD bytesRead = 0;
-                HANDLE handle = CreateFileA(BOP54_PATH, GENERIC_READ, FILE_SHARE_READ,
-                                       NULL, OPEN_EXISTING, 0, NULL);
-                /* DEFAULT CF=0, and that is measured rather than chosen: with CF=1 the
-                   sub-01 site's `jnc` falls into a retry and COMMAND.COM POLLS the call
-                   forever (first run: 268,435,180 bytes of log, one line per spin). With
-                   CF=0 it proceeds to a second, different call -- sub 0x0E at 0x5E6.
-                   Neither is known to be RIGHT; one is known to be a dead end. */
-                carryPolicy = 0;
-                if (handle != INVALID_HANDLE_VALUE) {
-                    ReadFile(handle, text, sizeof text - 1, &bytesRead, NULL); CloseHandle(handle);
-                    if (bytesRead >= 3 && text[0] == 'c' && text[1] == 'f' && text[2] == '1') carryPolicy = 1;
-                }
+            {
+                INT flow = NtvdmServiceGuestBop(&cursor, base, tib, &machine, programPathBuffer);
+                if (flow == HOST_FLOW_BREAK) break;
+                if (flow == HOST_FLOW_CONTINUE) continue;
             }
-            /* ── ⛔ RATE-LIMITED, AND IT COST 256 MB TO LEARN. ───────────────────────
-                 The first run of this instrument answered CF=1, COMMAND.COM POLLED the
-                 call, and the unlimited log reached 268,435,180 bytes -- one line per
-                 iteration of a loop that never ended. An instrument that scales with a
-                 guest's spin rate is a denial-of-service on the thing you are trying to
-                 read. 16 in full, then count only; the total goes in the summary.
-               ⚠ The 17th call is not less interesting than the 16th -- if the values
-                 ever CHANGE after the cap this will not show it. It logs a resumed line
-                 when the register signature differs from the last one printed, so a
-                 state change still surfaces while a spin does not. */
-            {   DWORD signature = VDM_REG16(tib, VTIB_EAX)
-                          ^ (VDM_REG16(tib, VTIB_EBX) << PARAGRAPH_SHIFT)
-                          ^ (VDM_REG16(tib, VTIB_ECX) << BYTE_SHIFT)
-                          ^ (VDM_REG16(tib, VTIB_EDX) << 12) ^ (sub << 20);
-                static DWORD lastSignature = 0xFFFFFFFFu;
-                INT novel = (signature != lastSignature);
-                lastSignature = signature;
-                ++g_NtvdmBopCount;
-                /* ── ⛔⛔ A NOVELTY FILTER IS NOT A CAP, AND IT COST A SECOND 256 MB.
-                     The first rate-limit logged 16 in full and then only when the
-                     register signature CHANGED. That is the right shape for a spin on
-                     identical values -- and no defence at all against a LOOP, where
-                     every pass differs slightly: once COMMAND.COM reached its command
-                     loop the log hit 268,435,219 bytes again, 285,698 BOPs.
-                   ⇒ A hard ceiling as well as a novelty test. Past it, count only. */
-                /* ⛔⛔ AND IT MUST GATE THE LOG ONLY, NEVER THE HANDLING. The first cut
-                     `continue`d out of the rate-limit arm, which SKIPPED the sub 01 and
-                     sub 0E handlers below and answered with the generic CF instead --
-                     so past the 17th call the guest was being told something different
-                     from what the first sixteen were told, silently. A quiet instrument
-                     that also changes behaviour is not an instrument. */
-                quiet = (g_NtvdmBopCount > 64) || (g_NtvdmBopCount > 16 && !novel);
-            }
-            if (quiet) goto ntvdmBopDispatch;
-            cursor = LogPut(cursor, "STAGE2: NTVDM BOP from guest: bop=0x"); cursor = LogHexByte(cursor, bopNumber);
-            cursor = LogPut(cursor, " sub=0x"); cursor = LogHexByte(cursor, sub);
-            cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, codeSegment); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, instructionPointer);
-            cursor = LogPut(cursor, " ax=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EAX));
-            cursor = LogPut(cursor, " bx=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EBX));
-            cursor = LogPut(cursor, " cx=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_ECX));
-            cursor = LogPut(cursor, " dx=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EDX));
-            cursor = LogPut(cursor, " si=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_ESI));
-            cursor = LogPut(cursor, " di=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EDI));
-            cursor = LogPut(cursor, " ds=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_DS));
-            cursor = LogPut(cursor, " es=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_ES));
-            cursor = LogPut(cursor, " ss:sp=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_SS));
-            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_ESP));
-            cursor = LogPut(cursor, " -> UNIMPLEMENTED, answering CF="); cursor = LogDecimal(cursor, (UINT)carryPolicy);
-            cursor = LogPut(cursor, "\r\n");
-            /* And the bytes it is about to run either way -- the branch is right there,
-               and which way it goes is the whole question. */
-            cursor = LogPut(cursor, "         next="); cursor = LogDump(cursor, (const VOID *)(isvBopBytes + VDM_BOP_SUBFUNCTION_LENGTH), 12);
-            /* ── ★ COMMAND.COM's STATE BLOCK, WHOLE, RATHER THAN ONE BYTE AT A TIME.
-                 Its decisions about being a shell follow a handful of bytes in its
-                 RESIDENT data -- around 0x2B0 and 0x320..0x333 of the
-                 resident segment, 0x0100 for a .COM: the banner, "ask for a command"
-                 vs "prompt", and the keyboard read are all gated in that block.
-               ⇒ Printing all of them at once turns "find the next gate, answer it,
-                 re-run" into one reading. Five turns of that pattern produced one
-                 caveat; this is the instrument that should have come first.
-               ⚠ The segment is ASSUMED to be 0x0100 (a .COM's PSP). If COMMAND.COM is
-                 ever loaded elsewhere these rows are somebody else's memory -- the
-                 `@0100:` in the trace's call sites is the check that it is not. */
-            { const volatile BYTE *lowPspBytes = (const volatile BYTE *)(ULONG_PTR)(0x0100u << PARAGRAPH_SHIFT);
-              cursor = LogPut(cursor, "\r\n         cc[0x2B0..0x2BF]="); cursor = LogDump(cursor, (const VOID *)(lowPspBytes + 0x2B0), 16);
-              cursor = LogPut(cursor, "\r\n         cc[0x320..0x333]="); cursor = LogDump(cursor, (const VOID *)(lowPspBytes + 0x320), 20);
-              /* s81: the environment the shell ACTUALLY has (PSP:2Ch), as text -- the
-                 prompt came up `C>` under /P, i.e. without the PROMPT we passed. */
-              { WORD pspEnvironmentSegment = *(const volatile WORD *)(lowPspBytes + DOS_PSP_ENVIRONMENT); INT scan;
-                const volatile BYTE *environment2 = (const volatile BYTE *)(ULONG_PTR)((DWORD)pspEnvironmentSegment << PARAGRAPH_SHIFT);
-                cursor = LogPut(cursor, "\r\n         shell env seg=0x"); cursor = LogHex(cursor, pspEnvironmentSegment); cursor = LogPut(cursor, " [");
-                for (scan = 0; scan < 160 && !(environment2[scan] == 0 && environment2[scan + 1] == 0); ++scan) {
-                    CHAR character1[2]; character1[0] = environment2[scan] ? (CHAR)environment2[scan] : '|'; character1[1] = 0;
-                    if (character1[0] < 0x20 || character1[0] > 0x7e) character1[0] = '.';
-                    cursor = LogPut(cursor, character1); }
-                cursor = LogPut(cursor, "]"); } }
-            cursor = LogPut(cursor, "\r\n");
-            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-        ntvdmBopDispatch:
-            /* ── ★ sub 01 = "WHAT SHOULD I RUN NEXT?" -- ANSWER "NOTHING". ───────────
-                 On XP this is answered from CSRSS's GetNextVDMCommand (VDM_COMMAND_INFO).
-                 The guest's request block is at DS:DX -- (DS<<4)+DX, exactly as we
-                 compute it here -- and the answer comes back in the same block.
-               ▸ The fields (see docs/inventory/bop.md):
-                   +0x10 w   OUT  flags; zero is "nothing to do" (observed: the shell
-                                  then goes to its prompt).
-                   +0x12 dw  IN+OUT a cookie. COMMAND.COM fills it before the call and
-                                  takes back whatever is there afterwards -- so it must
-                                  ROUND-TRIP.
-                   +0x1A w   OUT  COMMAND.COM keeps the low byte.
-                   +0x02 +0x04 +0x06 +0x16 +0x20   OUT
-                   +0x22 w   OUT  status; stock writes 4, 8 or 9 here.
-               ⚠ WHAT WE WRITE IS A DEFINED "NO COMMAND", NOT A DECODED ONE. That is a
-                 real claim and it may be wrong -- but the alternative is not neutral:
-                 leaving the block ALONE hands COMMAND.COM whatever was in its own
-                 memory, which is how it got a garbage answer and spun. A defined answer
-                 is falsifiable; an uninitialised one is not.
-               ⛔ The cookie is preserved rather than zeroed, because the guest reloads
-                 it into its own state unconditionally -- zeroing it would destroy
-                 something we were only asked to carry. */
-            if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_NEXT_COMMAND) {
-                DWORD block = (VDM_REG16(tib, VTIB_DS) << PARAGRAPH_SHIFT)
-                          + VDM_REG16(tib, VTIB_EDX);
-                volatile BYTE *blockBytes = (volatile BYTE *)(ULONG_PTR)block;
-                /* ── ★ THE SECOND "WHAT NEXT?" IS THE SHELL LEAVING. (s81 sweep: `exit`) ──
-                     The block is NT's CMDINFO -- +04 CurDrive, +0C CmdLineSize, +0E
-                     ReturnCode, +18 fTSRExit, +1C:1E/+20 ExecPath -- every measured value
-                     lines up. Sub 01 is GetNextVDMCommand: the DOS side has finished and
-                     asks the Win32 side for work. XP's permanent shell asks once at start-
-                     up and again when the user types EXIT (never after an internal or an
-                     EXEC'd command -- measured: `dir` does not call it). A bare-launched
-                     session has no Win32 side to hand anything back, so the second ask
-                     means "we are done": end the VDM with the shell's ReturnCode, as stock
-                     ends a command.com window. */
-                /* #208: the routed program was ENDED BY CLOSE PROGRAM -- the user asked for the
-                     prompt, not for the window to close. Go interactive from here (AH=53h
-                     AL=2 CF=1, the shell's own prompt path) and answer "nothing", once; the
-                     shell's NEXT sub 01 is then an ordinary EXIT. */
-                if (g_GuestNtAware && g_BackToPrompt && g_ShellGetNextCount >= 1) {
-                    g_BackToPrompt = 0;
-                    g_DosInt53Answers[DOS_INT53_SHELL_LOOP].IsCarry = 1;
-                    cursor = LogPut(cursor, "         sub 01 after Close Program: back to the prompt (#208)\r\n");
-                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                } else
-                if (g_GuestNtAware && ++g_ShellGetNextCount > 1) {
-                    cursor = LogPut(cursor, "         sub 01 again: the shell is handing back control (EXIT)"
-                                " -- ending the VDM, rc=0x");
-                    cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_EXIT_CODE)); cursor = LogPut(cursor, "\r\n");
-                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                    machine.ExitCode = *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_EXIT_CODE) & BYTE_MASK;
-                    break;
-                }
-                #define BW(o, v) (*(volatile WORD *)(blockBytes + (o)) = (WORD)(v))
-                /* ⚠ DUMPED BEFORE WE WRITE ANYTHING. Logging it after the BW()s below
-                     would show our own zeros back and read as the guest's input --
-                     which is the whole class of mistake this file keeps catching. */
-                if (quiet) goto blockWritten;
-                cursor = LogPut(cursor, "         blk in="); cursor = LogDump(cursor, (const VOID *)blockBytes, 0x28);
-                cursor = LogPut(cursor, "\r\n         +1C:1E=0x");
-                cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_SEGMENT)); cursor = LogPut(cursor, ":0x");
-                cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_OFFSET));
-                cursor = LogPut(cursor, " +20=0x"); cursor = LogHex(cursor, *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_CAPACITY));
-                cursor = LogPut(cursor, "\r\n");
-                blockWritten: ;
-                /* ── ★★ TOUCH AS LITTLE AS POSSIBLE. ────────────────────────────────
-                     The first cut zeroed every field that XP's handler writes. One of
-                     them, `+0x04`, is the DEFAULT DRIVE -- COMMAND.COM selects it with
-                     `AH=0Eh` immediately after the call (our INT 21h log shows the DL it
-                     passes) -- so a zero meant drive 0 = A:, and our own handler
-                     said so in the same log ("drive A: exists but is not ready ...
-                     selected as the DOS current drive anyway") while the shell went
-                     quiet.
-                   ★ Dumping the block BEFORE writing it settled the design: the guest
-                     already supplies `+0x04 = 02` (C:). It was never ours to fill in.
-                     Measured, one run:
-                       blk in = 26 02 | 00 01 | 02 00 | 00 00 | 42 93 | 27 93 | 80 00 ...
-                     ⇒ `+0x08:+0x0A = 0x9342:0x9327` -- and `0x9327` is EXACTLY the
-                       buffer COMMAND.COM reads its command line from (it is also the
-                       DS:DX it later hands to INT 21h AH=0Ah, in our log). Two
-                       independent sources, same address.
-                   ⇒ So we now write only what a "no command" answer really is: the
-                     empty command tail, and the flags word. Everything else is left as
-                     the guest set it, because a field we cannot name is not ours. */
-                {   DWORD codeBase = ((DWORD)(*(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_TAIL_SEGMENT)) << PARAGRAPH_SHIFT)
-                             + *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_TAIL_OFFSET);
-                    volatile BYTE *codeBlock = (volatile BYTE *)(ULONG_PTR)codeBase;
-                    /* ── AN EMPTY DOS COMMAND TAIL, AND THE CR IS THE POINT. ────────
-                         COMMAND.COM scans this buffer for the terminating CR (observed).
-                         With no CR in the buffer the scan walks the WHOLE 64K segment and
-                         never leaves -- which is precisely the "spinning in
-                         V86 with no traps" the headless deadline was killing.
-
-                       ⛔⛔⛔ AND `[0]` IS NOT OURS. IT IS DOS'S AH=0Ah MAXIMUM, AND
-                         WRITING IT COST THE INTERACTIVE PROMPT. (s79)
-                         This used to write `c[0] = length`, on the reading that the
-                         shell copies [0]+3 bytes of it. That was not wrong about the copy
-                         and was completely wrong about the buffer, because **the same
-                         buffer is handed to INT 21h AH=0Ah** (DX=0x9327 in our log), and
-                         the shell sets its [0] to 0x80 ONCE, at start-up (observed in the
-                         block before our first answer). 0x80 is the buffered-input
-                         MAXIMUM, set a single time and never re-set. Our "empty tail" answer
-                         zeroed it on the first BOP, so
-                         every later AH=0Ah saw a zero-capacity buffer, returned an empty
-                         line immediately, and COMMAND.COM printed its prompt again --
-                         991 prompts in one 30-second run, with `INT21 AH=0A line max=00`
-                         in the log the whole time. The shell was AT the keyboard read;
-                         we were answering it with EOF.
-                         ⚠ The `+0x0C` field of the request block is 0x0080 -- the guest
-                           tells us the capacity there. Two independent sources, and the
-                           one we overwrote was the same number.
-                       ⇒ WRITE THE LENGTH AT [1], WHERE DOS PUTS IT, AND NEVER TOUCH [0].
-                         Nothing downstream needs the length: the shell copies [0]+3 =
-                         0x83 bytes (a superset) and finds the end of the text by its CR
-                         (observed), so the CR is the only load-bearing byte.
-                         Layout: [0] = max (the GUEST's, leave alone), [1] = length,
-                                 [2..] = text, then CR. */
-                    /* ── ONE COMMAND, ONCE, FROM cfg\bopcmd.txt. ──────────────────
-                         An empty answer proves only that the guest accepted one. This
-                         hands it a REAL command line exactly once and empties every
-                         reply after -- so the log shows whether the whole path works
-                         (does it execute and PRINT?) without the command repeating for
-                         ever in a loop that already runs 1.25M times a run.
-                       ⚠ One-shot on purpose: a guest that asks again must not be given
-                         the same command again. That is the difference between testing
-                         the mechanism and building a fork bomb. */
-                    static INT commandDone = 0;
-                    CHAR commandBuffer[128]; DWORD commandLength = 0;
-                    if (!commandDone && g_Routed) {
-                        /* #208: the program's arguments, as the shell's tail -- it passes
-                           them on as the program's own PSP command tail. */
-                        /* ⚠ THE TAIL IS THE WHOLE COMMAND LINE, VERB FIRST; the NAME field
-                             is only the already-resolved path to run it with. Measured two
-                             ways: tail "hello" + name COMMAND.COM EXEC'd COMMAND.COM, and
-                             tail " " + name HELLO.COM ran NOTHING (a blank line is "no
-                             command" and the shell went to its prompt). */
-                        commandDone = 1;
-                        {   PSTR writeCursor = commandBuffer, limit = commandBuffer + sizeof(commandBuffer) - 2;
-                            PCSTR firstProgram = g_FirstProgram;
-                            while (*firstProgram && writeCursor < limit) *writeCursor++ = *firstProgram++;
-                            if (g_FirstTail[0] && writeCursor < limit) {
-                                PCSTR firstTail = g_FirstTail;
-                                if (*firstTail != ' ') *writeCursor++ = ' ';
-                                while (*firstTail && writeCursor < limit) *writeCursor++ = *firstTail++;
-                            }
-                            commandLength = (DWORD)(writeCursor - commandBuffer); }
-                    }
-                    if (!commandDone) {
-                        HANDLE bopCommandFile = CreateFileA(BOPCMD_PATH, GENERIC_READ, FILE_SHARE_READ,
-                                                 NULL, OPEN_EXISTING, 0, NULL);
-                        commandDone = 1;
-                        if (bopCommandFile != INVALID_HANDLE_VALUE) {
-                            ReadFile(bopCommandFile, commandBuffer, sizeof(commandBuffer) - 1, &commandLength, NULL);
-                            CloseHandle(bopCommandFile);
-                            while (commandLength && (commandBuffer[commandLength-1] == '\r' || commandBuffer[commandLength-1] == '\n')) --commandLength;
-                        }
-                    }
-                    if (commandLength) {
-                        DWORD item;
-                        codeBlock[DOS_LINE_INPUT_LENGTH] = (BYTE)commandLength;                /* [0] is the guest's AH=0Ah max */
-                        for (item = 0; item < commandLength; ++item) codeBlock[DOS_LINE_INPUT_TEXT + item] = (BYTE)commandBuffer[item];
-                        codeBlock[DOS_LINE_INPUT_TEXT + commandLength] = ASCII_CR;
-                    } else {
-                        codeBlock[DOS_LINE_INPUT_LENGTH] = 0; codeBlock[DOS_LINE_INPUT_TEXT] = ASCII_CR;          /* ditto: [0] is NOT ours */
-                    }
-                    if (!quiet) { cursor = LogPut(cursor, "         cmdline buf 0x"); cursor = LogHex(cursor, codeBase);
-                                  if (commandLength) { cursor = LogPut(cursor, " <- ["); 
-                                            { DWORD item; for (item = 0; item < commandLength; ++item)
-                                                  { CHAR piece[2]; piece[0]=commandBuffer[item]; piece[1]=0; cursor = LogPut(cursor, piece); } }
-                                            cursor = LogPut(cursor, "] ONE SHOT"); }
-                                  else      cursor = LogPut(cursor, " <- empty tail (len=0, CR)");
-                                  cursor = LogPut(cursor, "\r\n"); }
-                }
-                BW(NTVDM_CMD_BLOCK_REDIRECTION, 0);                       /* flags: nothing was redirected */
-                /* ── ★ AND THE OTHER TWO HALVES OF THE ANSWER. ──────────────────────
-                     sub 01 returns THREE things, not one: a command TAIL (+0x08:+0x0A,
-                     written above), a program NAME (+0x1C:+0x1E, capacity +0x20), and
-                     that program's TYPE at +0x22. Stock picks the type from the name's
-                     extension (observed per program type):
-                       `.EXE` -> 4   `.COM` -> 8   `.BAT` -> 2   shorter than 7 -> 9
-                     -- a file-extension dispatch and not a status word. ⛔ I had guessed
-                     "status enumeration"; it is not.
-                   ▸ A zero-length name therefore means type 9, and the guest agrees:
-                     on the no-program path it writes a 0 to the FIRST BYTE of the name
-                     buffer at 0x9473 (observed) -- which is exactly the +0x1C:+0x1E we
-                     are handed (`+1C:1E=0x9342:0x9473`).
-                   ⚠ We had been leaving both alone, i.e. handing the shell whatever was
-                     in its own memory. `ver` and `dir` worked anyway -- a builtin needs
-                     only the tail -- but that was luck, not an answer. */
-                {   DWORD nameBase = ((DWORD)(*(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_SEGMENT)) << PARAGRAPH_SHIFT)
-                             + *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_OFFSET);
-                    DWORD capacity = *(volatile WORD *)(blockBytes + NTVDM_CMD_BLOCK_NAME_CAPACITY);
-                    volatile BYTE *nameBytes = (volatile BYTE *)(ULONG_PTR)nameBase;
-                    /* ── ★ HAND BACK WHAT CSRSS NAMED -- THE SAME SOURCE XP USES. ────
-                         On XP this buffer is filled from the VDM_COMMAND_INFO that
-                         GetNextVDMCommand returned, and our STAGE1 already made that
-                         exact call: `STAGE1: command fetch ... app=[...]` lands in
-                         g_Application2. Returning it is not a guess about what the shell wants;
-                         it is the same answer from the same place.
-                       ▸ ONCE. The first call is the VDM's reason for existing; after
-                         that there is nothing more to run and the name is empty. A
-                         shell that is handed the same program every time it asks would
-                         exec it for ever.
-                       ⚠ The type is stock's own rule (see above): the last four
-                         characters, `.EXE`->4 `.COM`->8 `.BAT`->2, and anything
-                         shorter than 7 characters -> 9. Mirrored, not invented. */
-                    static INT namedOnce = 0;
-                    /* ⚠ programPathBuffer FIRST, not g_Application2. On the rig CSRSS names
-                       `dosstub.com` -- the harness stub -- and `target.txt` names the
-                       real program, so g_Application2 would hand the shell the stub. programPathBuffer
-                       is what we actually LOADED, which is the program either way. */
-                    PCSTR programPath = g_Routed ? g_FirstProgram      /* #208: the program */
-                                   : programPathBuffer[0] ? programPathBuffer : (g_Application2[0] ? g_Application2 : "");
-                    DWORD al = 0, valueType = NTVDM_CMD_TYPE_OTHER;
-                    if (!namedOnce && programPath[0]) {
-                        while (programPath[al] && al + 1 < capacity && al < MAX_PATH) ++al;
-                        namedOnce = 1;
-                    }
-                    if (al > NTVDM_CMD_SHORT_NAME_MAX) {
-                        CHAR extension[DOS_DOT_EXTENSION_LENGTH + 1]; INT item;
-                        for (item = 0; item < DOS_DOT_EXTENSION_LENGTH; ++item) {
-                            CHAR character = programPath[al - DOS_DOT_EXTENSION_LENGTH + item];
-                            extension[item] = (character >= 'a' && character <= 'z') ? (CHAR)(character - ASCII_CASE_BIT) : character;
-                        }
-                        extension[DOS_DOT_EXTENSION_LENGTH] = 0;
-                        if      (extension[1]=='E' && extension[2]=='X' && extension[3]=='E' && extension[0]=='.') valueType = NTVDM_CMD_TYPE_EXE;
-                        else if (extension[1]=='C' && extension[2]=='O' && extension[3]=='M' && extension[0]=='.') valueType = NTVDM_CMD_TYPE_COM;
-                        else if (extension[1]=='B' && extension[2]=='A' && extension[3]=='T' && extension[0]=='.') valueType = NTVDM_CMD_TYPE_BAT;
-                    }
-                    { DWORD item; for (item = 0; item < al; ++item) nameBytes[item] = (BYTE)programPath[item]; nameBytes[al] = 0; }
-                    BW(NTVDM_CMD_BLOCK_PROGRAM_TYPE, valueType);
-                /* ── +0x1A GATES THE INTERACTIVE PATH, so it is not a field we may
-                     leave alone. COMMAND.COM keeps its low byte, and a non-zero value
-                     takes it AWAY from the prompt. Zero. */
-                BW(NTVDM_CMD_BLOCK_KEYBOARD_GATE, 0);
-                    if (!quiet) {
-                        cursor = LogPut(cursor, "         prog name <- ["); 
-                        { DWORD item; for (item = 0; item < al; ++item) { CHAR piece[2]; piece[0]=programPath[item]; piece[1]=0; cursor = LogPut(cursor, piece); } }
-                        cursor = LogPut(cursor, "] type="); cursor = LogDecimal(cursor, valueType); cursor = LogPut(cursor, "\r\n");
-                    }
-                }
-                #undef BW
-                /* ── ★★★ +0x12 IS NOT A COOKIE. IT IS THE INTERACTIVE SWITCH. ───────
-                     I called it a cookie because COMMAND.COM fills it from its own
-                     state before the call and takes it straight back after -- which
-                     looks exactly like carrying an opaque handle. It is not: with it
-                     zero the shell goes to its keyboard prompt (AH=0Ah), and with it
-                     non-zero it does not (observed).
-                     ⇒ a ZERO dword means "nothing is driving me: read from the keyboard".
-                   ★ And stock answers zero there in exactly this case -- when nothing is
-                     redirected (flags at +0x10 zero).
-                   ⛔ PRESERVING IT WAS THE BUG. "Round-trip the value you were only
-                     asked to carry" is a good instinct and it was wrong here: the guest
-                     re-loads its own non-zero state, we hand it straight back, and it
-                     concludes it is being driven -- for ever. 1.25M calls a run.
-                   ⇒ Zero, and only because the flags are zero: the two move together
-                     in stock's answers and must stay tied together here. */
-                *(volatile DWORD *)(blockBytes + NTVDM_CMD_BLOCK_INTERACTIVE) = 0;
-                /* +0x14 is the high half of that dword and is covered by the store above.
-                   +0x02 +0x04 +0x06 +0x16 +0x1A +0x20 +0x22 likewise: XP writes them,
-                   but we cannot yet say WHAT, and a named wrong value is worse than an
-                   unchanged right one. Revisit each as its meaning is earned. */
-                VDM_REG(tib, VTIB_EAX) &= HIGH_WORD_MASK_U;   /* AX = 0 */
-                if (!quiet) {
-                    cursor = LogPut(cursor, "         sub 01 answered: no command (flags=0, cookie and "
-                                "the guest's own fields left alone), blk=0x"); cursor = LogHex(cursor, block);
-                    cursor = LogPut(cursor, "\r\n");
-                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                }
-                VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;  /* success */
-                VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
-                continue;
-            }
-            /* ── ★ sub 0F = THE HOST'S `PROMPT`, AND IT ANSWERS IN BX. ──────────────
-                 Stock passes the HOST's `PROMPT` environment variable through to the DOS
-                 shell here, and reports in BX; with nothing to pass it answers BX = 0.
-               ▸ BX = 0, which is exactly stock's answer when it has nothing to pass. We were
-               setting no register at all, so the guest read whatever
-                 BX happened to hold -- an unimplemented call answering at random again. */
-            /* ── ★ sub 0F = "GIVE ME THE INITIAL ENVIRONMENT". (s81: the `C>` prompt) ──
-                 Under /P, XP's COMMAND.COM builds a FRESH environment, as DOS's primary
-                 shell does -- `PATH=` and a COMSPEC, nothing else -- and asks NTVDM for the
-                 rest here (stock hands it the Win32 environment, PROMPT included). We said
-                 "none", so the user's shell came up `C>`: DOS's default, with no PROMPT.
-                 The protocol, as the shell drives it (observed, two calls):
-                   call 1: BX=0 in  -> BX out = EXTRA paragraphs needed (0 = keep the old
-                           environment); the shell grows its block by that much
-                   call 2: ES:0 = the new block, BX = its size in paragraphs
-                           -> the variables, double-NUL ended; BX out = paragraphs used,
-                           which must not exceed what came in (else it gives up)
-                 We answer with the environment we built for it (seg DOS_ENV_SEG: PROMPT,
-                 PATH, BLASTER, ULTRASND...), snapshotted on call 1 while it is intact, with
-                 COMSPEC pointed at the real shell. */
-            if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_PROMPT) {
-                static CHAR environmentSnapshot[1024]; static DWORD environmentSnapshotLength;
-                DWORD initialBx = VDM_REG16(tib, VTIB_EBX);
-                if (initialBx == 0) {
-                    const volatile BYTE *environment0 = (const volatile BYTE *)(ULONG_PTR)((DWORD)DOS_ENV_SEG << PARAGRAPH_SHIFT);
-                    DWORD inputIndex = 0, outputIndex = 0;
-                    while (inputIndex < ENVIRONMENT_SCAN_MAX && !(environment0[inputIndex] == 0 && environment0[inputIndex + 1] == 0)) {
-                        DWORD environmentStart = inputIndex;
-                        while (environment0[inputIndex] && inputIndex < ENVIRONMENT_SCAN_MAX) ++inputIndex;
-                        /* ── PATH IS WINDOWS' PATH, IN 8.3. (s81, user: "mem" -> "Bad command
-                             or file name") We handed the shell `PATH=C:\`, so nothing in
-                             SYSTEM32 -- MEM, EDIT, DEBUG, every XP DOS tool -- could be run by
-                             name. Stock passes the Win32 environment; this passes its PATH,
-                             each entry shortened (a DOS program cannot open a long name) and
-                             the whole kept under 250 characters, dropping entries past that
-                             rather than cutting one in half. */
-                        if ((environment0[environmentStart] | ASCII_CASE_BIT) == 'p' && (environment0[environmentStart + 1] | ASCII_CASE_BIT) == 'a' &&
-                            (environment0[environmentStart + 2] | ASCII_CASE_BIT) == 't' && (environment0[environmentStart + 3] | ASCII_CASE_BIT) == 'h' &&
-                            environment0[environmentStart + 4] == '=') {
-                            CHAR writeBuffer[2048], shellPath[MAX_PATH]; DWORD writeLength, start = outputIndex, length0 = 0;
-                            PSTR start0 = writeBuffer, limit;
-                            writeLength = GetEnvironmentVariableA(HOST_ENV_PATH, writeBuffer, sizeof writeBuffer);
-                            outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, HOST_ENV_PATH_ASSIGN) - environmentSnapshot);
-                            if (writeLength && writeLength < sizeof writeBuffer) {
-                                while (*start0) {
-                                    DWORD shortLength;
-                                    limit = start0; while (*limit && *limit != ';') ++limit;
-                                    if (*limit) *limit++ = 0; else limit = start0 + lstrlenA(start0);
-                                    shortLength = *start0 ? GetShortPathNameA(start0, shellPath, sizeof shellPath) : 0;
-                                    if (shortLength && shortLength < sizeof shellPath && (outputIndex - start) + shortLength + 1 < PATH_VALUE_MAX) {
-                                        if (length0++) environmentSnapshot[outputIndex++] = ';';
-                                        outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, shellPath) - environmentSnapshot);
-                                    }
-                                    start0 = limit;
-                                }
-                            }
-                            if (!length0) outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, HOST_DEFAULT_DRIVE_ROOT) - environmentSnapshot);
-                        } else
-                        if ((environment0[environmentStart] | ASCII_CASE_BIT) == 'c' && environment0[environmentStart + 7] == '=' &&
-                            (environment0[environmentStart + 1] | ASCII_CASE_BIT) == 'o' && (environment0[environmentStart + 2] | ASCII_CASE_BIT) == 'm') {
-                            outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, HOST_ENV_COMSPEC_ASSIGN) - environmentSnapshot);
-                            outputIndex = (DWORD)(LogPut(environmentSnapshot + outputIndex, g_ShellPath[0] ? g_ShellPath
-                                                           : HOST_DEFAULT_SHELL_PATH) - environmentSnapshot);
-                        } else {
-                            DWORD snapshotIndex; for (snapshotIndex = environmentStart; snapshotIndex < inputIndex; ++snapshotIndex) environmentSnapshot[outputIndex++] = (CHAR)environment0[snapshotIndex];
-                        }
-                        environmentSnapshot[outputIndex++] = 0;
-                        ++inputIndex;
-                    }
-                    environmentSnapshot[outputIndex++] = 0;
-                    environmentSnapshotLength = outputIndex;
-                    VDM_SET16(tib, VTIB_EBX, (WORD)((environmentSnapshotLength + PARAGRAPH_LAST_BYTE) / PARAGRAPH_SIZE + 1));
-                } else {
-                    volatile BYTE *environment1 = (volatile BYTE *)(ULONG_PTR)(VDM_REG16(tib, VTIB_ES) << PARAGRAPH_SHIFT);
-                    DWORD paragraph, used = (environmentSnapshotLength + PARAGRAPH_LAST_BYTE) / PARAGRAPH_SIZE;
-                    if (environmentSnapshotLength && used <= initialBx) {
-                        for (paragraph = 0; paragraph < environmentSnapshotLength; ++paragraph) environment1[paragraph] = (BYTE)environmentSnapshot[paragraph];
-                        VDM_SET16(tib, VTIB_EBX, (WORD)used);
-                    } else VDM_SET16(tib, VTIB_EBX, 0);
-                }
-                if (!quiet) {
-                    cursor = LogPut(cursor, initialBx ? "         sub 0F (2/2): environment written, paras=0x"
-                                    : "         sub 0F (1/2): environment needs extra paras=0x");
-                    cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EBX)); cursor = LogPut(cursor, "\r\n");
-                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                }
-                VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
-                continue;
-            }
-            /* ── ★ sub 0D = "GIVE ME A PATH TO OPEN" -- THE STARTUP BATCH FILE. ─────
-                 The guest named this gap itself. With `/p` on its command line COMMAND.COM
-                 allocates a 7-paragraph block (`AH=48h -> 0x0D6D`), issues this BOP with
-                 `DS:DX` pointing into it, and its very next DOS call is `AH=3Dh` (open)
-                 on that buffer (our INT 21h log). We wrote nothing, so it opened "" and
-                 our DOS answered "path not found".
-               ▸ Stock answers with a path, as an OEM string at DS:DX, of at most
-                 **0x40** bytes.
-               ▸ Which path: stock's permanent shell runs AUTOEXEC.NT at start-up, and
-                 this is the `/p` (permanent shell) startup path. ⚠ That last step is an
-                 INFERENCE from context -- but it is verifiable by behaviour, because
-                 whatever we write here is the path the guest opens next.
-               ⛔ WE DO NOT DEFAULT TO XP's AUTOEXEC.NT, deliberately. The real one loads
-                 `mscdexnt.exe`, `redir` and **`dosx`** -- NT's DPMI host, which we provide
-                 ourselves and which has no business being loaded into our VDM. The
-                 DOS-native `C:\AUTOEXEC.BAT` is the honest default for a DOS that is
-                 ours; `cfg\autoexec.txt` points it anywhere, including at NT's.
-               ⚠ A path that does not exist is FINE and is the normal case -- a DOS with no
-                 AUTOEXEC.BAT simply has none. What was broken was the empty string. */
-            if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_STARTUP_BATCH) {
-                DWORD nameBase = (VDM_REG16(tib, VTIB_DS) << PARAGRAPH_SHIFT)
-                         + VDM_REG16(tib, VTIB_EDX);
-                volatile BYTE *nameBytes = (volatile BYTE *)(ULONG_PTR)nameBase;
-                CHAR autoText[80]; DWORD autoLength = 0, item;
-                HANDLE autoHandle = CreateFileA(BOPAUTO_PATH, GENERIC_READ, FILE_SHARE_READ,
-                                        NULL, OPEN_EXISTING, 0, NULL);
-                if (autoHandle != INVALID_HANDLE_VALUE) {
-                    ReadFile(autoHandle, autoText, sizeof(autoText) - 1, &autoLength, NULL); CloseHandle(autoHandle);
-                    while (autoLength && (autoText[autoLength-1] == '\r' || autoText[autoLength-1] == '\n'
-                                  || autoText[autoLength-1] == ' ' || autoText[autoLength-1] == '\t')) --autoLength;
-                }
-                /* ── s92 (#316): AND IT RUNS WITH ECHO OFF, AS STOCK's DOES. XP leaves an
-                     EMPTY C:\AUTOEXEC.BAT on every machine; the shell runs it with echo ON,
-                     and the end of a batch with echo on is a blank line and the PROMPT --
-                     which `prog > file` from cmd captured ahead of the program's own output
-                     (dospair LM6: ours "\r\nC:\...\DOS>\n\r\n" first; stock nothing). Stock's
-                     AUTOEXEC.NT begins `@echo off`. So the default is now a two-line batch
-                     the host writes -- `@echo off` and a CALL of C:\AUTOEXEC.BAT if there
-                     is one -- so the user's batch still runs, silently. Its short path must
-                     fit XP's 0x3F cap; if it cannot be made, the old answer stands. */
-                if (!autoLength) {
-                    static CHAR wrap[MAX_PATH];
-                    if (!wrap[0]) {
-                        CHAR tempDirectory[MAX_PATH], full[MAX_PATH], shortPath[MAX_PATH];
-                        DWORD tempLength = GetTempPathA(sizeof tempDirectory, tempDirectory), shortTempLength;
-                        HANDLE writeHandle;
-                        if (tempLength && tempLength < sizeof tempDirectory - 16) {
-                            wsprintfA(full, HOST_STARTUP_BATCH_FORMAT, tempDirectory);
-                            writeHandle = CreateFileA(full, GENERIC_WRITE, FILE_SHARE_READ, NULL,
-                                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-                            if (writeHandle != INVALID_HANDLE_VALUE) {
-                                static const CHAR body[] =
-                                    HOST_STARTUP_BATCH_BODY;
-                                DWORD bytesWritten = 0;
-                                WriteFile(writeHandle, body, sizeof body - 1, &bytesWritten, NULL);
-                                CloseHandle(writeHandle);
-                                shortTempLength = GetShortPathNameA(full, shortPath, sizeof shortPath);
-                                if (shortTempLength && shortTempLength <= NTVDM_CMD_STARTUP_PATH_MAX && bytesWritten == sizeof body - 1)
-                                    lstrcpynA(wrap, shortPath, sizeof wrap);
-                            }
-                        }
-                        if (!wrap[0]) lstrcpynA(wrap, HOST_AUTOEXEC_PATH, sizeof wrap);
-                    }
-                    for (autoLength = 0; wrap[autoLength] && autoLength < sizeof autoText - 1; ++autoLength) autoText[autoLength] = wrap[autoLength];
-                }
-                if (autoLength > NTVDM_CMD_STARTUP_PATH_MAX) autoLength = NTVDM_CMD_STARTUP_PATH_MAX;          /* XP's own cap */
-                for (item = 0; item < autoLength; ++item) nameBytes[item] = (BYTE)autoText[item];
-                nameBytes[autoLength] = 0;
-                if (!quiet) {
-                    cursor = LogPut(cursor, "         sub 0D answered: startup batch [");
-                    for (item = 0; item < autoLength; ++item) { CHAR piece[2]; piece[0]=autoText[item]; piece[1]=0; cursor = LogPut(cursor, piece); }
-                    cursor = LogPut(cursor, "] at 0x"); cursor = LogHex(cursor, nameBase); cursor = LogPut(cursor, "\r\n");
-                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                }
-                VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
-                continue;
-            }
-            /* ── ★ sub 10 = A ONE-BIT QUERY, AND IT GATES THE PROMPT. ───────────────
-                 The answer is AL, a yes/no flag and nothing more.
-               ★ It sits ON the interactive path. COMMAND.COM issues it just before its
-                 prompt, and a non-zero AL takes it AWAY from the prompt: it
-                 means "do not read the keyboard". We were not setting AL at all, leaving
-                 whatever the guest happened to have there -- which is how an
-                 unimplemented call still ANSWERS, at random.
-               ▸ AL = 0. Whatever the flag tracks, it is not set in a plain VDM that
-                 has been asked to run a shell, and 0 is the value that lets the shell
-                 be a shell. ⚠ Recorded as a reading of ONE flag we have not named,
-                 not as a decode of what it means. */
-            if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_QUERY_BIT) {
-                VDM_REG(tib, VTIB_EAX) &= ~BYTE_MASK_U;   /* AL = 0 */
-                if (!quiet) {
-                    cursor = LogPut(cursor, "         sub 10 answered: AL=0\r\n");
-                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                }
-                VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
-                continue;
-            }
-            /* ── ★ sub 0E = THE KEYBOARD / CODE-PAGE CONFIGURATION. ─────────────────
-                 On stock this describes the keyboard / code-page setup for a KEYB
-                 command line, written into the guest's buffer.
-               ⇒ DS:SI is a buffer of CX bytes; DX is the ANSWER -- non-zero = "there is
-                 a keyboard driver to set up" (the shell goes on to set one up), zero =
-                 skip it (observed).
-               ⛔ I HAD THIS WRONG ONCE. Reading only the guest side, DX looked like a
-                 leftover from the `INT 2Fh AX=AD80h` KEYB check just before it, and I
-                 wrote that the BOP "probably does not touch DX". Stock sets DX on every
-                 answer. **A register set by the callee is not distinguishable from a
-                 leftover by looking at the caller alone.**
-               ▸ We answer 0 = no keyboard driver, which is TRUE of us: we do not load
-                 KB16.COM or KEYBOARD.SYS. Explicitly, rather than by leaving DX alone
-                 and getting 0 because that is what happened to be in it. */
-            /* ── sub 00 = VDDTerminateVDM: THE PERMANENT SHELL'S EXIT. (s81 sweep) ──────
-                 XP's COMMAND.COM ends the VDM through here on EXIT when it is the
-                 permanent shell (started with /P) -- observed.
-                 It had no arm, so it fell to the generic "skip the BOP" below and EXIT
-                 did nothing. End the run exactly as a top-level AH=4Ch does. */
-            if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_TERMINATE) {
-                cursor = LogPut(cursor, "         sub 00: the shell asked to END THE VDM (EXIT) -- ending the run\r\n");
-                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                machine.ExitCode = 0;
-                break;
-            }
-            if (bopNumber == NTVDM_BOP_CMD && sub == NTVDM_CMD_KEYBOARD_CONFIG) {
-                VDM_REG(tib, VTIB_EDX) &= HIGH_WORD_MASK_U;   /* DX = 0: no KEYB to run */
-                if (!quiet) {
-                    cursor = LogPut(cursor, "         sub 0E answered: no keyboard driver (DX=0)\r\n");
-                    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                }
-                VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
-                continue;
-            }
-            if (carryPolicy) VDM_REG(tib, VTIB_EFLAGS) |=  EFLAGS_CF_U;
-            else        VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-            VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;             /* C4 C4 <bop> <sub> -- see above */
-            continue;
         }
         if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) != DOS_BOP_INT21) {
             DWORD codeSegment = VDM_REG16(tib, VTIB_CS), instructionPointer = VDM_REG16(tib, VTIB_EIP);
