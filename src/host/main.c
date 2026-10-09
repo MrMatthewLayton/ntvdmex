@@ -4423,6 +4423,354 @@ static VOID V86DeliverTimerIrq(volatile BYTE * const tib)
     }
 }
 
+
+/* The exec loop: run the guest until it terminates, a hard stop, or the window closes -- deliver pending IRQs, run it (in V86 or, for planar and Mode Y video, in the interpreter), and service what stopped it: port I/O, the DPMI switch, BIOS and DOS BOPs, the guest's own NTVDM BOPs, INT 21h. */
+static VOID HostRunExecLoop(PSTR *cursorIo, PSTR const base, DOS_MACHINE *machine, volatile BYTE * const tib, LONG *vdmStatusIo, CHAR *programPathBuffer)
+{
+    PSTR cursor = *cursorIo;
+    DWORD event;
+    LONG vdmStatus = *vdmStatusIo;
+    DWORD rmStartTick = GetTickCount();   /* headless wall-clock cap origin (real-mode) */
+    g_RunStartTick = rmStartTick;       /* published for the STAGE2 vsync rate line */
+    while (g_Running) {
+        /* Headless safety (session-9): the real-mode loop has no iteration cap so
+           interactive/animated programs run free -- but under the SMB auto-exit harness
+           a hung or infinite real-mode program (or a host bug) would run forever and
+           wedge rt.bat's `start /wait`, and the box is not easily accessible to unwedge.
+           So in headless mode bound it by wall clock: the host self-exits, rt.bat returns,
+           the watcher survives. (The PM loop got this in v69; the real-mode loop needs it
+           too -- a real-mode hang was the one path that could still permanently wedge the
+           rig.) GetTickCount per iteration is cheap; the loop runs once per event/BOP. */
+        if (g_Headless && GetTickCount() - rmStartTick > PM_HEADLESS_MS) {
+            cursor = LogPut(cursor, "STAGE2: headless time cap (");
+            cursor = LogHex(cursor, PM_HEADLESS_MS); cursor = LogPut(cursor, " ms) reached -> exiting"
+                     " (long/hung real-mode run; screenshots captured if graphical)\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+            break;
+        }
+        /* File > Close Program (#152). Here, not mid-dispatch: the guest is stopped at
+           an event boundary, which is also where every injected IRQ is delivered. */
+        if (g_CloseRequest && !g_WowLaunch) {
+            InterlockedExchange(&g_CloseRequest, 0);
+            if (g_ExecDepth > 0 || !g_TopIsShell) {
+                if (CloseProgramNow(machine, (VOID *)tib, &cursor, base)) continue;
+                break;
+            }
+        }
+        /* Pump the PIT tick from THIS thread's wall clock. Normally the UI thread
+           raises IRQ0, but a heavy I/O-trap loop (e.g. Skyroads' OPL/timer delay poll
+           that faults on every IN 388h) starves the UI thread, so the guest's timer
+           would crawl (~100x too slow) and any tick-paced delay appears to hang. Set
+           the pending flag at the ~18.2 Hz BIOS rate from here; it coalesces with the
+           UI thread's flag (both just set it to 1) so there's no double-count. */
+        /* Advance the PIT from the real clock every iteration. This is also what generates
+           IRQ0 now, at whatever rate the GUEST programmed into channel 0 -- the old fixed
+           55 ms pump hard-wired 18.2 Hz, so a game that reprograms the timer for its music
+           (as this one does) had its sequencer clocked far too slowly no matter what. */
+        HostPitSync();
+        OplPumpTime();            /* keep the OPL timers current for the guest */
+        HostKeyTypematic();       /* the keyboard repeats even when the UI stalls */
+        HostKeyPresent();         /* ...and presents the next byte after its transfer time */
+        V86DeliverTimerIrq(tib);
+        V86DeliverKeyboardIrq(tib);
+        V86DeliverDeviceIrq(tib);   /* see the helper: shared with the nested 0301/0302 loop */
+        MouseCallbackTry(tib);          /* INT 33h 0Ch events, under the same gate as an IRQ */
+        /* Mirror the guest's IF into EFLAGS.VIF before handing the context back. On VME
+           hardware the kernel's deliverability test reads VIF, and VIF is lost every time
+           we synthesise an interrupt frame ourselves -- so a guest that has interrupts
+           enabled still looks disabled to the kernel, which then just sets VIP and defers.
+           With VIP set and VIF clear the guest's next IRET faults into a dispatch that
+           refuses to deliver and re-arms VIP: a livelock, measured on the rig as the guest
+           frozen on the IRET at DOS_HDLR_SEG:0x0003. Keeping the two flags in step is what
+           lets the kernel dispatch instead of deferring. */
+        /* NOTE, measured: do NOT touch bit 9 (0x200) of FIXED_NTVDMSTATE. It is the VDM's
+           virtual interrupt flag and the KERNEL already maintains it -- it read 0x...3230
+           (bit set) from the first instruction. Mirroring our own IF into it only clobbered
+           correct state (the word went 0x3230 -> 0x3030) and changed nothing else. */
+        if (g_QiVif) {
+            if (VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_IF) VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_VIF;
+            else                                   VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_VIF;
+        }
+        {
+            INT flow = V86RunPlanarSlice(tib);
+            if (flow == HOST_FLOW_CONTINUE) continue;
+        }
+        {
+            INT flow = V86RunModeYSlice(tib);
+            if (flow == HOST_FLOW_CONTINUE) continue;
+        }
+        while (g_PauseWant && g_Running) { ++g_PauseCooperative; Sleep(PAUSE_POLL_MS); }   /* #219 */
+        CpuSpeedCooperativePark();                                                  /* #225 */
+        InterlockedExchange(&g_InExec, 1);
+        ExecEnterMark();               /* guest-execution clock starts (throttle) */
+        V86RunGuestTimed(tib, &event, &vdmStatus);
+        g_EventHistogram[event < EV_HIST_MAX ? event : EV_HIST_MAX - 1]++;
+        ExecLeaveMark();               /* ...and stops. Our servicing is not its  */
+        InterlockedExchange(&g_InExec, 0);
+        /* ── The VM events that follow a mouse-callback injection, verbatim. See
+             g_MouseCallbackTrace. Logged before any arm below acts on the event, so what is
+             recorded is what the kernel handed back, not what we made of it. */
+        if (g_MouseCallbackTrace > 0) {
+            CHAR tibLine2[384], *tibCursor2 = tibLine2;
+            DWORD trampolineCs = VDM_REG16(tib, VTIB_CS), trampolineIp = VDM_REG16(tib, VTIB_EIP);
+            DWORD tibSs = VDM_REG16(tib, VTIB_SS), tibSp = VDM_REG16(tib, VTIB_ESP);
+            --g_MouseCallbackTrace;
+            tibCursor2 = LogPut(tibCursor2, "MOUSECB-TRACE ev=0x"); tibCursor2 = LogHex(tibCursor2, event);
+            tibCursor2 = LogPut(tibCursor2, " info=0x"); tibCursor2 = LogHex(tibCursor2, VDM_REG(tib, VTIB_EVENT_INFO));
+            tibCursor2 = LogPut(tibCursor2, " st=0x");   tibCursor2 = LogHex(tibCursor2, (DWORD)vdmStatus);
+            tibCursor2 = LogPut(tibCursor2, " cs:ip=0x"); tibCursor2 = LogHex(tibCursor2, trampolineCs); tibCursor2 = LogPut(tibCursor2, ":0x"); tibCursor2 = LogHex(tibCursor2, trampolineIp);
+            tibCursor2 = LogPut(tibCursor2, " efl=0x");  tibCursor2 = LogHex(tibCursor2, VDM_REG(tib, VTIB_EFLAGS));
+            tibCursor2 = LogPut(tibCursor2, " ss:sp=0x"); tibCursor2 = LogHex(tibCursor2, tibSs); tibCursor2 = LogPut(tibCursor2, ":0x"); tibCursor2 = LogHex(tibCursor2, tibSp);
+            tibCursor2 = LogPut(tibCursor2, " ax=0x");   tibCursor2 = LogHex(tibCursor2, VDM_REG16(tib, VTIB_EAX));
+            tibCursor2 = LogPut(tibCursor2, " [714]=0x"); tibCursor2 = LogHex(tibCursor2, *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR);
+            tibCursor2 = LogPut(tibCursor2, " active="); tibCursor2 = LogHex(tibCursor2, (DWORD)g_MouseCallbackActive);
+            tibCursor2 = LogPut(tibCursor2, " code=");   tibCursor2 = LogDump(tibCursor2, (const VOID *)(ULONG_PTR)((trampolineCs << PARAGRAPH_SHIFT) + trampolineIp), 8);
+            tibCursor2 = LogPut(tibCursor2, " stack=");  tibCursor2 = LogDump(tibCursor2, (const VOID *)(ULONG_PTR)((tibSs << PARAGRAPH_SHIFT) + tibSp), 12);
+            tibCursor2 = LogPut(tibCursor2, "\r\n");
+            LogAppend(LOG_PATH, tibLine2, tibCursor2);
+        }
+        /* ── WHEN VdmStartExecution RETURNS A FAILURE STATUS, SAY SO. (session 62) ──
+             The V86 path ignored `st` entirely -- only the DPMI branch below ever
+             read it -- so a guest that executes an INT3 (or any fault the kernel
+             turns into a returned NTSTATUS rather than a serviceable event) died
+             with the host process exit code equal to that status and NOTHING in the
+             log. That is exactly Mario's flaky ~2s death: exit 0x80000003
+             (STATUS_BREAKPOINT), reached in the MAIN LOOP well past the joystick
+             poll, with the last heartbeat the only witness. Name the guest cs:ip
+             and the bytes there so the INT3's origin is visible. Bounded; the top
+             bit of an NTSTATUS is set for both warning (0x8...) and error (0xC...). */
+        if ((UINT)vdmStatus & NT_STATUS_NOT_SUCCESS_BIT_U) {
+            static INT stateBudget = 16;
+            if (stateBudget > 0) {
+                DWORD stateCs = VDM_REG16(tib, VTIB_CS), si = VDM_REG16(tib, VTIB_EIP);
+                const volatile BYTE *sp3 = (const volatile BYTE *)((stateCs << PARAGRAPH_SHIFT) + si);
+                UINT index7;
+                --stateBudget;
+                cursor = LogPut(cursor, "V86-STATUS 0x"); cursor = LogHex(cursor, (UINT)vdmStatus);
+                cursor = LogPut(cursor, " ev=0x"); cursor = LogHex(cursor, event);
+                cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, stateCs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, si);
+                cursor = LogPut(cursor, " bytes:");
+                for (index7 = 0; index7 < 8; ++index7) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, sp3[index7]); }
+                cursor = LogPut(cursor, "\r\n");
+                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+            }
+        }
+        /* SPIKE: once in protected mode, stop at the FIRST PM event and dump the raw
+           taxonomy (event/info/selectors) -- this is how the spike learns how the
+           monitor reflects a PM INT 31h / fault. Later increments replace this with
+           a real INT 31h dispatch. */
+        if (g_DpmiPm) {
+            DWORD currentCs = VDM_REG16(tib, VTIB_CS), currentIp = VDM_REG16(tib, VTIB_EIP);
+            cursor = LogPut(cursor, "STAGE3-DPMI: PM stop event=0x"); cursor = LogHex(cursor, event);
+            cursor = LogPut(cursor, " status=0x"); cursor = LogHex(cursor, (UINT)vdmStatus);
+            cursor = LogPut(cursor, " info=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EVENT_INFO));
+            cursor = LogPut(cursor, " CS:IP=0x"); cursor = LogHex(cursor, currentCs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, currentIp);
+            cursor = LogPut(cursor, " EFL=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EFLAGS));
+            cursor = LogPut(cursor, " SS:SP=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_SS));
+            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_ESP));
+            cursor = LogPut(cursor, "\r\n  VTIB[5A8..]: "); cursor = LogDump(cursor, (const VOID *)(tib + 0x5A8), 0x20);
+            cursor = LogPut(cursor, "\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+            break;
+        }
+        {
+            INT flow = V86ServiceIoEvent(&cursor, base, event, tib);
+            if (flow == HOST_FLOW_CONTINUE) continue;
+        }
+        {
+            INT flow = V86ReportUnexpectedStop(&cursor, base, event, tib, vdmStatus);
+            if (flow == HOST_FLOW_BREAK) break;
+        }
+        { static INT bopBudget = 6; VdmStateSample("bop", tib, &bopBudget); }
+        /* ── ★★★ WHOSE BOP IS THIS? THE NUMBER DOES NOT SAY. (s78) ──────────────────
+             `C4 C4 nn` is NTVDM's call-out instruction and the number space is NTVDM's,
+             not ours. Ours were assigned freely and two of them are already taken by a
+             guest that ships with the OS: XP's COMMAND.COM issues `BOP 0x54` fifteen
+             times and `BOP 0x50` once, while ours are DPMI_RMRET and the DPMI entry.
+           ★ THE DISCRIMINATOR IS THE ADDRESS, NOT THE NUMBER. Every BOP we plant, we
+             plant at an address we own -- DOS_HDLR_SEG for the INT stubs, the DPMI
+             entry/return catchers and the callback slots, DOS_CTAB_SEG for the BIOS
+             stubs. A BOP executing anywhere else is the GUEST's own code calling
+             NTVDM, and must not be answered as if it were one of ours.
+           ⚠ This is cheaper AND safer than renumbering ours out of the way: the numbers
+             we would move to are equally NTVDM's, so renumbering only relocates the
+             collision, while the origin check is exact. See docs/inventory/bop.md. */
+        {
+            DWORD bopCs = VDM_REG16(tib, VTIB_CS);
+            g_BopFromGuest = (bopCs != DOS_HDLR_SEG && bopCs != DOS_CTAB_SEG);
+            ++g_BopHistogram[VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK];     /* #238 */
+        }
+        /* Route the BOP by its number.
+           ── The BOP numbers our stubs share with the nested DPMI loop: INT 10h/16h/33h,
+             the BIOS block (11h-17h, 25h/26h, 28h/29h), 1Ah, 2Fh, the XMS entry and
+             INT 67h. One copy, in V86BiosBop() (GH #247). */
+        {   INT biosResult = V86BiosBop(tib, VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK, &cursor, base);
+            if (biosResult != V86BOP_NONE) continue;          /* DONE or RERUN: both resume the guest */
+        }
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == MS_CB_BOP) {   /* INT 33h handler returned */
+            MouseCallbackReturn(tib);
+            continue;
+        }
+        {
+            INT flow = V86ServiceKeyboardBop(tib);
+            if (flow == HOST_FLOW_CONTINUE) continue;
+        }
+        {
+            INT flow = V86ServiceTimerBop(tib);
+            if (flow == HOST_FLOW_CONTINUE) continue;
+        }
+        {
+            INT flow = DosServiceTerminateBop(&cursor, base, tib, machine);
+            if (flow == HOST_FLOW_BREAK) break;
+            if (flow == HOST_FLOW_CONTINUE) continue;
+        }
+        /* ⚠ `!g_BopFromGuest`: XP's COMMAND.COM issues a `BOP 0x50` of its own (one
+             site, in its "Incorrect DOS version" path). Without the origin test that
+             would be serviced as a DPMI real-to-protected mode switch. */
+        if (!g_BopFromGuest
+            && (VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == DPMI_BOP) {  /* DPMI real->PM switch */
+            {
+                INT flow = DpmiStartClientSession(&cursor, base, tib, machine);
+                if (flow == HOST_FLOW_BREAK) break;
+                if (flow == HOST_FLOW_CONTINUE) continue;
+            }
+        }
+        /* ── ★★ THIS IS THE FALL-THROUGH, AND IT ANSWERS FOR EVERY BOP IT WAS NEVER
+               GIVEN. (s78) ──────────────────────────────────────────────────────
+             ev is already known to be VDM_EVENT_BOP here, and every arm above matches
+             an EXACT code -- INT 21h's own stub is `C4 C4 20` (see the bop[] table at
+             the install). So anything that reaches this line is a BOP we do not
+             implement, and we hand it to the DOS INT 21h handler anyway, where the
+             guest's AH decides what it "asked" for.
+           ★ XP's COMMAND.COM is the guest that made this visible. It is NTVDM-AWARE:
+             its image contains sixteen `C4 C4` sites -- fifteen of them BOP 0x54 with
+             a sub-function byte after it, one BOP 0x50. Our 0x54 is DPMI_RMRET_BOP and
+             our 0x50 is the DPMI entry, so the NUMBERS COLLIDE with the ones a real
+             NTVDM guest uses. The one at 0x9342:0x03ce arrives with AX=0x0002, falls
+             through here, is read as INT 21h AH=00, and terminates the guest -- which
+             we then report as a CLEAN EXIT, CODE 0. Four sessions read that as
+             "COMMAND.COM gives up"; it never called DOS at all.
+           ⚠ THE GATE IS MEASURED, NOT ASSUMED. The arms above are long and one of them
+             -- the BIOS block -- deliberately sets `handled = 0` and falls through, so
+             "require 0x20" needed evidence rather than a reading of the control flow.
+             The diagnostic below shipped first (92e2136) and the battery was run with
+             it: 17 DOS guests (Doom, Hexen, Duke3D, Heretic, heaven7, Skyroads, Wolf3D,
+             Mario, Lemmings, Chasm, Gothica, Radiance, Fusion, Skyxmas, vesacube, MEM,
+             6.22's COMMAND.COM) and 3 Win16 apps (Notepad, Paint, WinMine) -- ALL of
+             them confirmed loaded, **zero** fall-throughs. Only XP's COMMAND.COM
+             reaches here. (⚠ Lemmings' first row was a NO SUCH TARGET and its zero was
+             not evidence; re-run under its real entry, `lemvga.com`.)
+           ⚠ WE STOP, we do not skip. Skipping needs the BOP's encoded LENGTH, and that
+             is per-call: `0x54` carries a sub-function byte, so `EIP += 3` would leave
+             that byte to execute as an instruction. A refusal we cannot encode is
+             better reported than faked -- see the standing note that an unimplemented
+             call which still ANSWERS is worse than one that does not. */
+        /* ── ★★★ AN NTVDM BOP FROM THE GUEST'S OWN CODE. (s78) ──────────────────────
+             XP's COMMAND.COM is NTVDM-aware and this is how it talks to the 32-bit side.
+             Both of its numbers carry a SUB-FUNCTION BYTE after the BOP, so the
+             instruction is FOUR bytes, not three -- read off the guest's bytes at the
+             BOP site (logged), not assumed: what follows decodes as a sensible
+             instruction at +4 and as junk at +3, for both 0x54 and 0x50.
+             ⚠ That is a claim about THESE TWO numbers, from this one guest. It is not a
+               general rule about BOP encoding, and must be re-derived for any other
+               number that turns up here.
+           ▶ WHAT TO ANSWER IS NOT KNOWN YET, so it is a knob rather than a guess:
+             cfg\bop54.txt = "cf1" (default) or "cf0". What sub 01 does next depends on
+             carry, so the two settings take COMMAND.COM down different paths and the
+             difference is the measurement. Every call is logged with full
+             registers so the two runs can be diffed.
+           ⛔ A BOP IS NOT AN INT: nothing was pushed, so CF goes in the live EFLAGS. */
+        /* s91 (#11): a guest's own `C4 C4 58 nn` is the third-party BOP -- see IsvBop.
+             Four bytes (the sub-function follows), like 50h/54h below. */
+        if (g_BopFromGuest && (VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == NTVDM_BOP_ISV) {
+            DWORD codeSegment = VDM_REG16(tib, VTIB_CS), instructionPointer = VDM_REG16(tib, VTIB_EIP);
+            const volatile BYTE *isvBopBytes = (const volatile BYTE *)(ULONG_PTR)((codeSegment << PARAGRAPH_SHIFT) + instructionPointer);
+            IsvBop(tib, isvBopBytes[VDM_BOP_LENGTH], &cursor);
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
+            continue;
+        }
+        if (g_BopFromGuest
+            && ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == NTVDM_BOP_CMD
+                || (VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == NTVDM_BOP_DOS)) {
+            {
+                INT flow = NtvdmServiceGuestBop(&cursor, base, tib, machine, programPathBuffer);
+                if (flow == HOST_FLOW_BREAK) break;
+                if (flow == HOST_FLOW_CONTINUE) continue;
+            }
+        }
+        if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) != DOS_BOP_INT21) {
+            DWORD codeSegment = VDM_REG16(tib, VTIB_CS), instructionPointer = VDM_REG16(tib, VTIB_EIP);
+            const volatile BYTE *isvBopBytes = (const volatile BYTE *)(ULONG_PTR)((codeSegment << PARAGRAPH_SHIFT) + instructionPointer);
+            cursor = LogPut(cursor, "STAGE2: UNIMPLEMENTED BOP -- refusing (NOT an INT 21h call): bop=0x");
+            cursor = LogHexByte(cursor, VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK);
+            cursor = LogPut(cursor, " next=0x"); cursor = LogHexByte(cursor, isvBopBytes[VDM_BOP_LENGTH]);   /* the sub-function byte */
+            cursor = LogPut(cursor, " at 0x");  cursor = LogHex(cursor, codeSegment); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, instructionPointer);
+            cursor = LogPut(cursor, " ax=0x");  cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EAX));
+            cursor = LogPut(cursor, " bx=0x");  cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EBX));
+            cursor = LogPut(cursor, " dx=0x");  cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EDX));
+            cursor = LogPut(cursor, "\r\n         see docs/inventory/bop.md -- the C4 C4 number space is NTVDM's\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+            /* A DISTINCT, NON-ZERO exit code. The whole defect this closes was a guest
+               killed by an unimplemented call and reported as a clean exit 0; reusing 0
+               here would leave the lie in place with better logging on top of it. */
+            machine->ExitCode = UNIMPLEMENTED_BOP_EXIT_CODE;
+            break;
+        }
+        /* ── #34: THE GUEST'S INT 24h HAS ANSWERED. Recognised by ADDRESS: BOP 20h is
+             also the INT 21h BOP, and this one sits at DOS_CRIT_RETURN, where only
+             CriticalRaise ever sends the guest. */
+        if (!g_BopFromGuest && VDM_REG16(tib, VTIB_CS) == DOS_CTAB_SEG
+            && VDM_REG16(tib, VTIB_EIP) == DOS_CRIT_RETURN) {
+            INT criticalAction = CriticalReturn(machine, tib, &cursor);
+            LogAppend(LOG_PATH, base, cursor); cursor = base;
+            if (criticalAction) {                                /* ABORT: end the program, as 4Ch */
+                if (DosTerminate(machine, tib, &cursor, base)) continue;
+                break;
+            }
+            continue;                                /* RETRY re-runs it; FAIL/IGNORE resume */
+        }
+        if (!machine->IsCritActive) CriticalSnapshot(tib);      /* #34: the call's INPUT registers (not the handler's own calls) */
+        machine->TraceCursor = cursor;
+        machine->IsRetry = 0;
+        machine->CanTrampoline = 1;                         /* #251: we can resume elsewhere */
+        machine->CanRaiseCrit = 1;                        /* #275: ...and raise INT 24h (below) */
+        if (!DosInt21(machine)) {                       /* AH=4Ch -> terminate */
+            machine->CanTrampoline = 0;
+            machine->CanRaiseCrit = 0;
+            cursor = machine->TraceCursor;
+            if (DosTerminate(machine, tib, &cursor, base)) continue;
+            break;
+        }
+        machine->CanTrampoline = 0;
+        machine->CanRaiseCrit = 0;
+        cursor = machine->TraceCursor;
+        if (machine->Trampoline) {                          /* #251: into DOS's AUX/PRN driver code */
+            VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
+            VDM_REG(tib, VTIB_EIP) = machine->Trampoline;
+            machine->Trampoline = 0;
+            LogAppend(LOG_PATH, base, cursor); cursor = base;
+            continue;
+        }
+        if (machine->IsCritPending) {                       /* #34: call the guest's INT 24h */
+            CriticalRaise(machine, tib, &cursor);
+            LogAppend(LOG_PATH, base, cursor); cursor = base;
+            continue;                               /* CS:IP is now the INT 24h site */
+        }
+        if (machine->IsExecPending) {                       /* GH #30: AH=4Bh */
+            machine->IsExecPending = 0;
+            cursor = ExecBegin(machine, tib, cursor);
+            LogAppend(LOG_PATH, base, cursor); cursor = base;
+            continue;                               /* CS:IP now points at the child */
+        }
+        /* A blocking read with nothing to return leaves EIP ON the BOP, so the guest
+           re-executes the INT and keeps running -- and keeps taking timer interrupts, so
+           its music and animation carry on while it waits for a key, as on real hardware. */
+        if (!machine->IsRetry) VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;  /* past the 3-byte BOP -> the IRET */
+        LogAppend(LOG_PATH, base, cursor); cursor = base;
+    }
+    *cursorIo = cursor; *vdmStatusIo = vdmStatus;
+}
+
 INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR commandLineText, INT showCommand)
 {
     CHAR report[8192]; PSTR cursor = report; PSTR base;
@@ -4431,7 +4779,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     INT wantShell = 0;                 /* s79: our own launcher stub asked for a SHELL (see LAUNCH_STUB_NAME) */
     INT wasShell  = 0;                 /* s79: we actually loaded a shell, not a named program */
     volatile BYTE *tib, *handlerArea;
-    DWORD readCount = 0, error = 0, event; LONG vdmStatus;
+    DWORD readCount = 0, error = 0; LONG vdmStatus;
     DOS_IMAGE image;
     DOS_MACHINE machine;
     CHAR dosOutput[16384];   /* M9 probe dumps run to several KB; 1024 truncated them */
@@ -7542,346 +7890,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     machine.Tib = tib; machine.Output = dosOutput; machine.OutputCapacity = sizeof(dosOutput); machine.OutputLength = 0; machine.IsOutputTruncated = 0;
     g_Machine = &machine;              /* the watchdog flushes this if the run wedges */
     (VOID)guard;
-    {
-    DWORD rmStartTick = GetTickCount();   /* headless wall-clock cap origin (real-mode) */
-    g_RunStartTick = rmStartTick;       /* published for the STAGE2 vsync rate line */
-    while (g_Running) {
-        /* Headless safety (session-9): the real-mode loop has no iteration cap so
-           interactive/animated programs run free -- but under the SMB auto-exit harness
-           a hung or infinite real-mode program (or a host bug) would run forever and
-           wedge rt.bat's `start /wait`, and the box is not easily accessible to unwedge.
-           So in headless mode bound it by wall clock: the host self-exits, rt.bat returns,
-           the watcher survives. (The PM loop got this in v69; the real-mode loop needs it
-           too -- a real-mode hang was the one path that could still permanently wedge the
-           rig.) GetTickCount per iteration is cheap; the loop runs once per event/BOP. */
-        if (g_Headless && GetTickCount() - rmStartTick > PM_HEADLESS_MS) {
-            cursor = LogPut(cursor, "STAGE2: headless time cap (");
-            cursor = LogHex(cursor, PM_HEADLESS_MS); cursor = LogPut(cursor, " ms) reached -> exiting"
-                     " (long/hung real-mode run; screenshots captured if graphical)\r\n");
-            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-            break;
-        }
-        /* File > Close Program (#152). Here, not mid-dispatch: the guest is stopped at
-           an event boundary, which is also where every injected IRQ is delivered. */
-        if (g_CloseRequest && !g_WowLaunch) {
-            InterlockedExchange(&g_CloseRequest, 0);
-            if (g_ExecDepth > 0 || !g_TopIsShell) {
-                if (CloseProgramNow(&machine, (VOID *)tib, &cursor, base)) continue;
-                break;
-            }
-        }
-        /* Pump the PIT tick from THIS thread's wall clock. Normally the UI thread
-           raises IRQ0, but a heavy I/O-trap loop (e.g. Skyroads' OPL/timer delay poll
-           that faults on every IN 388h) starves the UI thread, so the guest's timer
-           would crawl (~100x too slow) and any tick-paced delay appears to hang. Set
-           the pending flag at the ~18.2 Hz BIOS rate from here; it coalesces with the
-           UI thread's flag (both just set it to 1) so there's no double-count. */
-        /* Advance the PIT from the real clock every iteration. This is also what generates
-           IRQ0 now, at whatever rate the GUEST programmed into channel 0 -- the old fixed
-           55 ms pump hard-wired 18.2 Hz, so a game that reprograms the timer for its music
-           (as this one does) had its sequencer clocked far too slowly no matter what. */
-        HostPitSync();
-        OplPumpTime();            /* keep the OPL timers current for the guest */
-        HostKeyTypematic();       /* the keyboard repeats even when the UI stalls */
-        HostKeyPresent();         /* ...and presents the next byte after its transfer time */
-        V86DeliverTimerIrq(tib);
-        V86DeliverKeyboardIrq(tib);
-        V86DeliverDeviceIrq(tib);   /* see the helper: shared with the nested 0301/0302 loop */
-        MouseCallbackTry(tib);          /* INT 33h 0Ch events, under the same gate as an IRQ */
-        /* Mirror the guest's IF into EFLAGS.VIF before handing the context back. On VME
-           hardware the kernel's deliverability test reads VIF, and VIF is lost every time
-           we synthesise an interrupt frame ourselves -- so a guest that has interrupts
-           enabled still looks disabled to the kernel, which then just sets VIP and defers.
-           With VIP set and VIF clear the guest's next IRET faults into a dispatch that
-           refuses to deliver and re-arms VIP: a livelock, measured on the rig as the guest
-           frozen on the IRET at DOS_HDLR_SEG:0x0003. Keeping the two flags in step is what
-           lets the kernel dispatch instead of deferring. */
-        /* NOTE, measured: do NOT touch bit 9 (0x200) of FIXED_NTVDMSTATE. It is the VDM's
-           virtual interrupt flag and the KERNEL already maintains it -- it read 0x...3230
-           (bit set) from the first instruction. Mirroring our own IF into it only clobbered
-           correct state (the word went 0x3230 -> 0x3030) and changed nothing else. */
-        if (g_QiVif) {
-            if (VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_IF) VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_VIF;
-            else                                   VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_VIF;
-        }
-        {
-            INT flow = V86RunPlanarSlice(tib);
-            if (flow == HOST_FLOW_CONTINUE) continue;
-        }
-        {
-            INT flow = V86RunModeYSlice(tib);
-            if (flow == HOST_FLOW_CONTINUE) continue;
-        }
-        while (g_PauseWant && g_Running) { ++g_PauseCooperative; Sleep(PAUSE_POLL_MS); }   /* #219 */
-        CpuSpeedCooperativePark();                                                  /* #225 */
-        InterlockedExchange(&g_InExec, 1);
-        ExecEnterMark();               /* guest-execution clock starts (throttle) */
-        V86RunGuestTimed(tib, &event, &vdmStatus);
-        g_EventHistogram[event < EV_HIST_MAX ? event : EV_HIST_MAX - 1]++;
-        ExecLeaveMark();               /* ...and stops. Our servicing is not its  */
-        InterlockedExchange(&g_InExec, 0);
-        /* ── The VM events that follow a mouse-callback injection, verbatim. See
-             g_MouseCallbackTrace. Logged before any arm below acts on the event, so what is
-             recorded is what the kernel handed back, not what we made of it. */
-        if (g_MouseCallbackTrace > 0) {
-            CHAR tibLine2[384], *tibCursor2 = tibLine2;
-            DWORD trampolineCs = VDM_REG16(tib, VTIB_CS), trampolineIp = VDM_REG16(tib, VTIB_EIP);
-            DWORD tibSs = VDM_REG16(tib, VTIB_SS), tibSp = VDM_REG16(tib, VTIB_ESP);
-            --g_MouseCallbackTrace;
-            tibCursor2 = LogPut(tibCursor2, "MOUSECB-TRACE ev=0x"); tibCursor2 = LogHex(tibCursor2, event);
-            tibCursor2 = LogPut(tibCursor2, " info=0x"); tibCursor2 = LogHex(tibCursor2, VDM_REG(tib, VTIB_EVENT_INFO));
-            tibCursor2 = LogPut(tibCursor2, " st=0x");   tibCursor2 = LogHex(tibCursor2, (DWORD)vdmStatus);
-            tibCursor2 = LogPut(tibCursor2, " cs:ip=0x"); tibCursor2 = LogHex(tibCursor2, trampolineCs); tibCursor2 = LogPut(tibCursor2, ":0x"); tibCursor2 = LogHex(tibCursor2, trampolineIp);
-            tibCursor2 = LogPut(tibCursor2, " efl=0x");  tibCursor2 = LogHex(tibCursor2, VDM_REG(tib, VTIB_EFLAGS));
-            tibCursor2 = LogPut(tibCursor2, " ss:sp=0x"); tibCursor2 = LogHex(tibCursor2, tibSs); tibCursor2 = LogPut(tibCursor2, ":0x"); tibCursor2 = LogHex(tibCursor2, tibSp);
-            tibCursor2 = LogPut(tibCursor2, " ax=0x");   tibCursor2 = LogHex(tibCursor2, VDM_REG16(tib, VTIB_EAX));
-            tibCursor2 = LogPut(tibCursor2, " [714]=0x"); tibCursor2 = LogHex(tibCursor2, *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR);
-            tibCursor2 = LogPut(tibCursor2, " active="); tibCursor2 = LogHex(tibCursor2, (DWORD)g_MouseCallbackActive);
-            tibCursor2 = LogPut(tibCursor2, " code=");   tibCursor2 = LogDump(tibCursor2, (const VOID *)(ULONG_PTR)((trampolineCs << PARAGRAPH_SHIFT) + trampolineIp), 8);
-            tibCursor2 = LogPut(tibCursor2, " stack=");  tibCursor2 = LogDump(tibCursor2, (const VOID *)(ULONG_PTR)((tibSs << PARAGRAPH_SHIFT) + tibSp), 12);
-            tibCursor2 = LogPut(tibCursor2, "\r\n");
-            LogAppend(LOG_PATH, tibLine2, tibCursor2);
-        }
-        /* ── WHEN VdmStartExecution RETURNS A FAILURE STATUS, SAY SO. (session 62) ──
-             The V86 path ignored `st` entirely -- only the DPMI branch below ever
-             read it -- so a guest that executes an INT3 (or any fault the kernel
-             turns into a returned NTSTATUS rather than a serviceable event) died
-             with the host process exit code equal to that status and NOTHING in the
-             log. That is exactly Mario's flaky ~2s death: exit 0x80000003
-             (STATUS_BREAKPOINT), reached in the MAIN LOOP well past the joystick
-             poll, with the last heartbeat the only witness. Name the guest cs:ip
-             and the bytes there so the INT3's origin is visible. Bounded; the top
-             bit of an NTSTATUS is set for both warning (0x8...) and error (0xC...). */
-        if ((UINT)vdmStatus & NT_STATUS_NOT_SUCCESS_BIT_U) {
-            static INT stateBudget = 16;
-            if (stateBudget > 0) {
-                DWORD stateCs = VDM_REG16(tib, VTIB_CS), si = VDM_REG16(tib, VTIB_EIP);
-                const volatile BYTE *sp3 = (const volatile BYTE *)((stateCs << PARAGRAPH_SHIFT) + si);
-                UINT index7;
-                --stateBudget;
-                cursor = LogPut(cursor, "V86-STATUS 0x"); cursor = LogHex(cursor, (UINT)vdmStatus);
-                cursor = LogPut(cursor, " ev=0x"); cursor = LogHex(cursor, event);
-                cursor = LogPut(cursor, " at 0x"); cursor = LogHex(cursor, stateCs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, si);
-                cursor = LogPut(cursor, " bytes:");
-                for (index7 = 0; index7 < 8; ++index7) { cursor = LogPut(cursor, " "); cursor = LogHexByte(cursor, sp3[index7]); }
-                cursor = LogPut(cursor, "\r\n");
-                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-            }
-        }
-        /* SPIKE: once in protected mode, stop at the FIRST PM event and dump the raw
-           taxonomy (event/info/selectors) -- this is how the spike learns how the
-           monitor reflects a PM INT 31h / fault. Later increments replace this with
-           a real INT 31h dispatch. */
-        if (g_DpmiPm) {
-            DWORD currentCs = VDM_REG16(tib, VTIB_CS), currentIp = VDM_REG16(tib, VTIB_EIP);
-            cursor = LogPut(cursor, "STAGE3-DPMI: PM stop event=0x"); cursor = LogHex(cursor, event);
-            cursor = LogPut(cursor, " status=0x"); cursor = LogHex(cursor, (UINT)vdmStatus);
-            cursor = LogPut(cursor, " info=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EVENT_INFO));
-            cursor = LogPut(cursor, " CS:IP=0x"); cursor = LogHex(cursor, currentCs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, currentIp);
-            cursor = LogPut(cursor, " EFL=0x"); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EFLAGS));
-            cursor = LogPut(cursor, " SS:SP=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_SS));
-            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_ESP));
-            cursor = LogPut(cursor, "\r\n  VTIB[5A8..]: "); cursor = LogDump(cursor, (const VOID *)(tib + 0x5A8), 0x20);
-            cursor = LogPut(cursor, "\r\n");
-            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-            break;
-        }
-        {
-            INT flow = V86ServiceIoEvent(&cursor, base, event, tib);
-            if (flow == HOST_FLOW_CONTINUE) continue;
-        }
-        {
-            INT flow = V86ReportUnexpectedStop(&cursor, base, event, tib, vdmStatus);
-            if (flow == HOST_FLOW_BREAK) break;
-        }
-        { static INT bopBudget = 6; VdmStateSample("bop", tib, &bopBudget); }
-        /* ── ★★★ WHOSE BOP IS THIS? THE NUMBER DOES NOT SAY. (s78) ──────────────────
-             `C4 C4 nn` is NTVDM's call-out instruction and the number space is NTVDM's,
-             not ours. Ours were assigned freely and two of them are already taken by a
-             guest that ships with the OS: XP's COMMAND.COM issues `BOP 0x54` fifteen
-             times and `BOP 0x50` once, while ours are DPMI_RMRET and the DPMI entry.
-           ★ THE DISCRIMINATOR IS THE ADDRESS, NOT THE NUMBER. Every BOP we plant, we
-             plant at an address we own -- DOS_HDLR_SEG for the INT stubs, the DPMI
-             entry/return catchers and the callback slots, DOS_CTAB_SEG for the BIOS
-             stubs. A BOP executing anywhere else is the GUEST's own code calling
-             NTVDM, and must not be answered as if it were one of ours.
-           ⚠ This is cheaper AND safer than renumbering ours out of the way: the numbers
-             we would move to are equally NTVDM's, so renumbering only relocates the
-             collision, while the origin check is exact. See docs/inventory/bop.md. */
-        {
-            DWORD bopCs = VDM_REG16(tib, VTIB_CS);
-            g_BopFromGuest = (bopCs != DOS_HDLR_SEG && bopCs != DOS_CTAB_SEG);
-            ++g_BopHistogram[VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK];     /* #238 */
-        }
-        /* Route the BOP by its number.
-           ── The BOP numbers our stubs share with the nested DPMI loop: INT 10h/16h/33h,
-             the BIOS block (11h-17h, 25h/26h, 28h/29h), 1Ah, 2Fh, the XMS entry and
-             INT 67h. One copy, in V86BiosBop() (GH #247). */
-        {   INT biosResult = V86BiosBop(tib, VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK, &cursor, base);
-            if (biosResult != V86BOP_NONE) continue;          /* DONE or RERUN: both resume the guest */
-        }
-        if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == MS_CB_BOP) {   /* INT 33h handler returned */
-            MouseCallbackReturn(tib);
-            continue;
-        }
-        {
-            INT flow = V86ServiceKeyboardBop(tib);
-            if (flow == HOST_FLOW_CONTINUE) continue;
-        }
-        {
-            INT flow = V86ServiceTimerBop(tib);
-            if (flow == HOST_FLOW_CONTINUE) continue;
-        }
-        {
-            INT flow = DosServiceTerminateBop(&cursor, base, tib, &machine);
-            if (flow == HOST_FLOW_BREAK) break;
-            if (flow == HOST_FLOW_CONTINUE) continue;
-        }
-        /* ⚠ `!g_BopFromGuest`: XP's COMMAND.COM issues a `BOP 0x50` of its own (one
-             site, in its "Incorrect DOS version" path). Without the origin test that
-             would be serviced as a DPMI real-to-protected mode switch. */
-        if (!g_BopFromGuest
-            && (VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == DPMI_BOP) {  /* DPMI real->PM switch */
-            {
-                INT flow = DpmiStartClientSession(&cursor, base, tib, &machine);
-                if (flow == HOST_FLOW_BREAK) break;
-                if (flow == HOST_FLOW_CONTINUE) continue;
-            }
-        }
-        /* ── ★★ THIS IS THE FALL-THROUGH, AND IT ANSWERS FOR EVERY BOP IT WAS NEVER
-               GIVEN. (s78) ──────────────────────────────────────────────────────
-             ev is already known to be VDM_EVENT_BOP here, and every arm above matches
-             an EXACT code -- INT 21h's own stub is `C4 C4 20` (see the bop[] table at
-             the install). So anything that reaches this line is a BOP we do not
-             implement, and we hand it to the DOS INT 21h handler anyway, where the
-             guest's AH decides what it "asked" for.
-           ★ XP's COMMAND.COM is the guest that made this visible. It is NTVDM-AWARE:
-             its image contains sixteen `C4 C4` sites -- fifteen of them BOP 0x54 with
-             a sub-function byte after it, one BOP 0x50. Our 0x54 is DPMI_RMRET_BOP and
-             our 0x50 is the DPMI entry, so the NUMBERS COLLIDE with the ones a real
-             NTVDM guest uses. The one at 0x9342:0x03ce arrives with AX=0x0002, falls
-             through here, is read as INT 21h AH=00, and terminates the guest -- which
-             we then report as a CLEAN EXIT, CODE 0. Four sessions read that as
-             "COMMAND.COM gives up"; it never called DOS at all.
-           ⚠ THE GATE IS MEASURED, NOT ASSUMED. The arms above are long and one of them
-             -- the BIOS block -- deliberately sets `handled = 0` and falls through, so
-             "require 0x20" needed evidence rather than a reading of the control flow.
-             The diagnostic below shipped first (92e2136) and the battery was run with
-             it: 17 DOS guests (Doom, Hexen, Duke3D, Heretic, heaven7, Skyroads, Wolf3D,
-             Mario, Lemmings, Chasm, Gothica, Radiance, Fusion, Skyxmas, vesacube, MEM,
-             6.22's COMMAND.COM) and 3 Win16 apps (Notepad, Paint, WinMine) -- ALL of
-             them confirmed loaded, **zero** fall-throughs. Only XP's COMMAND.COM
-             reaches here. (⚠ Lemmings' first row was a NO SUCH TARGET and its zero was
-             not evidence; re-run under its real entry, `lemvga.com`.)
-           ⚠ WE STOP, we do not skip. Skipping needs the BOP's encoded LENGTH, and that
-             is per-call: `0x54` carries a sub-function byte, so `EIP += 3` would leave
-             that byte to execute as an instruction. A refusal we cannot encode is
-             better reported than faked -- see the standing note that an unimplemented
-             call which still ANSWERS is worse than one that does not. */
-        /* ── ★★★ AN NTVDM BOP FROM THE GUEST'S OWN CODE. (s78) ──────────────────────
-             XP's COMMAND.COM is NTVDM-aware and this is how it talks to the 32-bit side.
-             Both of its numbers carry a SUB-FUNCTION BYTE after the BOP, so the
-             instruction is FOUR bytes, not three -- read off the guest's bytes at the
-             BOP site (logged), not assumed: what follows decodes as a sensible
-             instruction at +4 and as junk at +3, for both 0x54 and 0x50.
-             ⚠ That is a claim about THESE TWO numbers, from this one guest. It is not a
-               general rule about BOP encoding, and must be re-derived for any other
-               number that turns up here.
-           ▶ WHAT TO ANSWER IS NOT KNOWN YET, so it is a knob rather than a guess:
-             cfg\bop54.txt = "cf1" (default) or "cf0". What sub 01 does next depends on
-             carry, so the two settings take COMMAND.COM down different paths and the
-             difference is the measurement. Every call is logged with full
-             registers so the two runs can be diffed.
-           ⛔ A BOP IS NOT AN INT: nothing was pushed, so CF goes in the live EFLAGS. */
-        /* s91 (#11): a guest's own `C4 C4 58 nn` is the third-party BOP -- see IsvBop.
-             Four bytes (the sub-function follows), like 50h/54h below. */
-        if (g_BopFromGuest && (VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == NTVDM_BOP_ISV) {
-            DWORD codeSegment = VDM_REG16(tib, VTIB_CS), instructionPointer = VDM_REG16(tib, VTIB_EIP);
-            const volatile BYTE *isvBopBytes = (const volatile BYTE *)(ULONG_PTR)((codeSegment << PARAGRAPH_SHIFT) + instructionPointer);
-            IsvBop(tib, isvBopBytes[VDM_BOP_LENGTH], &cursor);
-            VDM_REG(tib, VTIB_EIP) += VDM_BOP_SUBFUNCTION_LENGTH;
-            continue;
-        }
-        if (g_BopFromGuest
-            && ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == NTVDM_BOP_CMD
-                || (VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) == NTVDM_BOP_DOS)) {
-            {
-                INT flow = NtvdmServiceGuestBop(&cursor, base, tib, &machine, programPathBuffer);
-                if (flow == HOST_FLOW_BREAK) break;
-                if (flow == HOST_FLOW_CONTINUE) continue;
-            }
-        }
-        if ((VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK) != DOS_BOP_INT21) {
-            DWORD codeSegment = VDM_REG16(tib, VTIB_CS), instructionPointer = VDM_REG16(tib, VTIB_EIP);
-            const volatile BYTE *isvBopBytes = (const volatile BYTE *)(ULONG_PTR)((codeSegment << PARAGRAPH_SHIFT) + instructionPointer);
-            cursor = LogPut(cursor, "STAGE2: UNIMPLEMENTED BOP -- refusing (NOT an INT 21h call): bop=0x");
-            cursor = LogHexByte(cursor, VDM_REG(tib, VTIB_EVENT_INFO) & BYTE_MASK);
-            cursor = LogPut(cursor, " next=0x"); cursor = LogHexByte(cursor, isvBopBytes[VDM_BOP_LENGTH]);   /* the sub-function byte */
-            cursor = LogPut(cursor, " at 0x");  cursor = LogHex(cursor, codeSegment); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, instructionPointer);
-            cursor = LogPut(cursor, " ax=0x");  cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EAX));
-            cursor = LogPut(cursor, " bx=0x");  cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EBX));
-            cursor = LogPut(cursor, " dx=0x");  cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EDX));
-            cursor = LogPut(cursor, "\r\n         see docs/inventory/bop.md -- the C4 C4 number space is NTVDM's\r\n");
-            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-            /* A DISTINCT, NON-ZERO exit code. The whole defect this closes was a guest
-               killed by an unimplemented call and reported as a clean exit 0; reusing 0
-               here would leave the lie in place with better logging on top of it. */
-            machine.ExitCode = UNIMPLEMENTED_BOP_EXIT_CODE;
-            break;
-        }
-        /* ── #34: THE GUEST'S INT 24h HAS ANSWERED. Recognised by ADDRESS: BOP 20h is
-             also the INT 21h BOP, and this one sits at DOS_CRIT_RETURN, where only
-             CriticalRaise ever sends the guest. */
-        if (!g_BopFromGuest && VDM_REG16(tib, VTIB_CS) == DOS_CTAB_SEG
-            && VDM_REG16(tib, VTIB_EIP) == DOS_CRIT_RETURN) {
-            INT criticalAction = CriticalReturn(&machine, tib, &cursor);
-            LogAppend(LOG_PATH, base, cursor); cursor = base;
-            if (criticalAction) {                                /* ABORT: end the program, as 4Ch */
-                if (DosTerminate(&machine, tib, &cursor, base)) continue;
-                break;
-            }
-            continue;                                /* RETRY re-runs it; FAIL/IGNORE resume */
-        }
-        if (!machine.IsCritActive) CriticalSnapshot(tib);      /* #34: the call's INPUT registers (not the handler's own calls) */
-        machine.TraceCursor = cursor;
-        machine.IsRetry = 0;
-        machine.CanTrampoline = 1;                         /* #251: we can resume elsewhere */
-        machine.CanRaiseCrit = 1;                        /* #275: ...and raise INT 24h (below) */
-        if (!DosInt21(&machine)) {                       /* AH=4Ch -> terminate */
-            machine.CanTrampoline = 0;
-            machine.CanRaiseCrit = 0;
-            cursor = machine.TraceCursor;
-            if (DosTerminate(&machine, tib, &cursor, base)) continue;
-            break;
-        }
-        machine.CanTrampoline = 0;
-        machine.CanRaiseCrit = 0;
-        cursor = machine.TraceCursor;
-        if (machine.Trampoline) {                          /* #251: into DOS's AUX/PRN driver code */
-            VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);
-            VDM_REG(tib, VTIB_EIP) = machine.Trampoline;
-            machine.Trampoline = 0;
-            LogAppend(LOG_PATH, base, cursor); cursor = base;
-            continue;
-        }
-        if (machine.IsCritPending) {                       /* #34: call the guest's INT 24h */
-            CriticalRaise(&machine, tib, &cursor);
-            LogAppend(LOG_PATH, base, cursor); cursor = base;
-            continue;                               /* CS:IP is now the INT 24h site */
-        }
-        if (machine.IsExecPending) {                       /* GH #30: AH=4Bh */
-            machine.IsExecPending = 0;
-            cursor = ExecBegin(&machine, tib, cursor);
-            LogAppend(LOG_PATH, base, cursor); cursor = base;
-            continue;                               /* CS:IP now points at the child */
-        }
-        /* A blocking read with nothing to return leaves EIP ON the BOP, so the guest
-           re-executes the INT and keeps running -- and keeps taking timer interrupts, so
-           its music and animation carry on while it waits for a key, as on real hardware. */
-        if (!machine.IsRetry) VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;  /* past the 3-byte BOP -> the IRET */
-        LogAppend(LOG_PATH, base, cursor); cursor = base;
-    }
-    }   /* storm-state block */
+    HostRunExecLoop(&cursor, base, &machine, tib, &vdmStatus, programPathBuffer);
 
     /* Log the exec-loop exit before any flushing, so a hang or fault during
        shutdown is distinguishable from the loop never exiting at all. */
