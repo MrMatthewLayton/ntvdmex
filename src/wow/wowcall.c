@@ -1,7 +1,22 @@
 /* wowcall.c -- ★ CALLING 16-BIT CODE FROM THE HOST. GH #128, session 40.
  *
- * The code of wowcall.h (#335): its functions and state, in their original order. Part of
- * the host's single translation unit: #included by main.c straight after wowcall.h. */
+ * The code of wowcall.h (#335): its functions and state, in their original order;
+ * its own translation unit, declared in wowcall.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "wowdlg.h"
+#include "wowenum.h"
+
 
 /* Forward declarations for the single translation unit (they were in wowcall.h). */
 INT  WowEnumBusy(VOID);
@@ -32,9 +47,9 @@ INT g_WowEnumFontCount;
      host knows where the receiver's stack is free -- below where it is parked --
      so main.c (ws_retarget) answers "which SS:SP, and switch the task word";
      `g_WowCallUntarget` switches it back when the procedure returns. */
-static WORD (*g_WowCallCurrentTask)(VOID) = 0;
-static INT  (*g_WowCallRetarget)(WORD window, PWORD stackSelector, PWORD stackPointer, PDWORD stackBase, PWORD previousTask) = 0;
-static VOID (*g_WowCallUntarget)(WORD previousTask) = 0;
+WORD (*g_WowCallCurrentTask)(VOID) = 0;
+INT  (*g_WowCallRetarget)(WORD window, PWORD stackSelector, PWORD stackPointer, PDWORD stackBase, PWORD previousTask) = 0;
+VOID (*g_WowCallUntarget)(WORD previousTask) = 0;
 
 WOWCALL_FRAME g_WowCallFrames[WOWCALL_MAX_DEPTH];
 INT             g_WowCallDepth  = 0;
@@ -180,8 +195,8 @@ INT WowCallEnter(volatile BYTE *tib, DWORD stackBase, WORD returnSelector,
  * is not a curiosity, it means something executed our return stub that we did
  * not send there, which is a fact worth printing rather than swallowing.
  */
-static DWORD g_WowCallLastResult;   /* the last nested call's DX:AX (sink keeps only AX) */
-static PWOWCALL_FRAME WowCallLeave(volatile BYTE *tib, DWORD result)
+DWORD g_WowCallLastResult;   /* the last nested call's DX:AX (sink keeps only AX) */
+PWOWCALL_FRAME WowCallLeave(volatile BYTE *tib, DWORD result)
 {
     PWOWCALL_FRAME frame;
     if (g_WowCallDepth <= 0) return NULL;
