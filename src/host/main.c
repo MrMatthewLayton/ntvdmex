@@ -118,6 +118,7 @@ CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 /* The host's other modules: what each one offers main.c (#335). */
 #include "host_types.h"
 #include "host_state.h"
+#include "host_dpmi_client.h"
 #include "host_report.h"
 #include "host_dpmi_int.h"
 #include "host_dos.h"
@@ -209,7 +210,7 @@ static WORD     g_Emu8KDram[EMU8K_DRAM_WORDS];
 PCSTR g_DosVersionWhy = 0;
 static INT          g_DosVersionShell = 0;      /* #208: an XP shell is present, told 5.00 itself */
 UINT32 g_PitAsyncAttempts;
-static DWORD g_KeyPmLogged  = 0;           /* bounded KEYPM account; see the PM exec loop */
+DWORD g_KeyPmLogged  = 0;           /* bounded KEYPM account; see the PM exec loop */
 INT g_PmIrq0Latch = 0;             /* #2b: a virtual IRQ0 awaiting injection into the PM hook */
 
 /* WHAT IS THE GUEST DOING DURING A LONG TIMER GAP? (Skyroads wobble, s61) (Importance = 1):
@@ -287,7 +288,7 @@ static LONGLONG g_HostTimeLast;           /* QPC of the last VdmRunGuest return;
 static INT  g_HostEventLast;
 INT            g_NoA000       = 0;  /* NOA000_FLAG present: leave A0000 mapped (diagnostic) */
 INT            g_NoPmPatch    = 0;  /* NOPMPATCH_FLAG present: scan no code regions (diagnostic) */
-static INT            g_Fault32Warned  = 0;  /* said once: NT's 16-bit frame cannot locate a flat client's INT */
+INT            g_Fault32Warned  = 0;  /* said once: NT's 16-bit frame cannot locate a flat client's INT */
 DWORD          g_NoPmPatchMinimum = 0; /* ...or only regions >= this many bytes */
 /* MEMDUMP_FLAG */
 DWORD g_MemoryDumpLinear = 0;
@@ -320,8 +321,8 @@ INT   g_LdtClientMark = 0;          /* g_LdtNext when the client switched in */
  * then vector 8 holds a placeholder stub and delivering to it is both pointless and, on
  * DOS/4GW, fatal. Learned by snooping INT 21h AH=25h -- see the routing path.
  */
-static INT   g_DpmiUseKernel = 0;         /* pmkernel.flag: run PM via VdmStartExecution */
-static INT  g_CloseForced;           /* the exit in progress is ours, not the guest's */
+INT   g_DpmiUseKernel = 0;         /* pmkernel.flag: run PM via VdmStartExecution */
+INT  g_CloseForced;           /* the exit in progress is ours, not the guest's */
 /* #244: IS INT 15h STILL OURS?:
  * The BIOS INT 09h calls INT 15h AH=4Fh for every byte (bios_kbdact.asm k4f). Our own
  * INT 15h answers 4Fh with CF=1 and AL untouched -- "process it as it is" -- so while
@@ -404,7 +405,7 @@ DWORD g_PmDeviceIrqInjected  = 0;
 DWORD g_PmDeviceIrqFail = 0;
 DWORD g_PmDeviceIrqDrop = 0;           /* pending on a line the client never hooked */
 DWORD g_PmStretchMaximumMicroseconds = 0;
-static DWORD g_PmStretchLogged = 0;
+DWORD g_PmStretchLogged = 0;
 DOS_START_MODE g_StartMode = DOS_START_NORMAL;
 
 /* [CAUTION]: Reported at EXIT, not at init. The early-startup log line was written
@@ -606,7 +607,7 @@ INT g_A000Protection = 0;
  *  add). No BOP patch is needed in this mode (the interpreter reads the raw CD nn).   *
  * ================================================================================
  */
-static INT g_DpmiUseInterp = 0;             /* run 53 toggle (1 = interp fallback, 0 = kernel PM path).
+INT g_DpmiUseInterp = 0;             /* run 53 toggle (1 = interp fallback, 0 = kernel PM path).
                                                  run 59 (GH #18): 0 to exercise the real-CPU kernel path
                                                  WITH the +0x638 PM-fault trampoline. Flip to 1 to restore
                                                  the VM-confirmed interpreter runs (i310102/DPMIBACK). */
@@ -849,7 +850,6 @@ static PSTR TaskReportExitToCsrss(PSTR cursor, PSTR const base, DOS_MACHINE *mac
     return cursor;
 }
 
-#include "host_dpmi_client.c"
 
 #include "host_exec.c"
 

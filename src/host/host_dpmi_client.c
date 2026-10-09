@@ -9,6 +9,34 @@
  * SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Matthew Layton
  */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "host_dpmi_client.h"
+#include "main.h"
+#include "host_audio.h"
+#include "host_bios.h"
+#include "host_diag.h"
+#include "host_dos.h"
+#include "host_dpmi.h"
+#include "host_dpmi_int.h"
+#include "host_io.h"
+#include "host_irq.h"
+#include "host_mouse.h"
+#include "host_timing.h"
+#include "host_video.h"
+#include "host_window.h"
+#include "host_wow.h"
+
 
 #define DPMI_FLT_CLASS_GP   6   /* The kernel's fault class for a #GP (observed: 6) */
 
@@ -2801,7 +2829,7 @@ static PSTR DpmiPatchClientIntSitesUpFront(PSTR cursor, PSTR const base)
 }
 
 /* The client asked to switch to protected mode (the DPMI entry BOP): build its initial selectors and PSP selector, start the watchdog, patch its INT sites, load the session's switches, run it in PM until it stops for good, and end the session -- or report that the switch failed. */
-static INT DpmiStartClientSession(
+INT DpmiStartClientSession(
     PSTR *cursorIo,
     PSTR const base,
     volatile BYTE * const tib,

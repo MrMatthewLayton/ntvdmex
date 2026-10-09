@@ -117,4 +117,10 @@ extern DWORD g_PmDeviceIrqDrop;
 extern DWORD g_PmStretchMaximumMicroseconds;
 extern DOS_START_MODE g_StartMode;
 
+extern DWORD g_KeyPmLogged;
+extern INT g_Fault32Warned;
+extern INT g_DpmiUseKernel;
+extern INT g_CloseForced;
+extern DWORD g_PmStretchLogged;
+extern INT g_DpmiUseInterp;
 #endif
