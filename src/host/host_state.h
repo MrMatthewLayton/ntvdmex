@@ -64,6 +64,8 @@
 #include "sysfont.h"
 #include "dos_disk.h"
 #include "dos_err.h"
+#include "v86cpu.h"
+#include "pm32cpu.h"
 #include "host_types.h"
 
 
