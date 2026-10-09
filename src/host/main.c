@@ -4931,44 +4931,6 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
             LogAppend(LOG_PATH, message, message + sizeof(message) - 1);
             return 0;
         } }
-    static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_INT21, X86_OP_IRET };  /* BOP 0x20 ; iret */
-    static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_VIDEO), X86_OP_IRET }; /* BOP 0x10 ; iret */
-    static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD_SERVICES), X86_OP_IRET }; /* BOP 0x16 ; iret */
-    static const BYTE bop33[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_MOUSE), X86_OP_IRET }; /* BOP 0x33 ; iret */
-    /* INT 08h (timer): tick via BOP, then chain INT 1Ch, then iret. INT 1Ch is a
-       bare iret by default (the user-timer hook a program may repoint). INT 1Ah
-       (BIOS time-of-day) is a plain BOP. */
-    static const BYTE bop08[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_TIMER), X86_OP_INT, VECTOR_USER_TICK, X86_OP_IRET };
-    static const BYTE bop1c[] = { X86_OP_IRET };                           /* iret stub       */
-    /* Default INT 09h = BOP 09 ; IRET. It must CONSUME the scancode, exactly as the BIOS
-       handler does: a bare IRET left the byte in the controller forever, so with the 8042's
-       proper one-byte-at-a-time pacing no further key could ever raise an interrupt (the
-       whole keyboard died after one press). A game that installs its own INT 09h replaces
-       this vector, so its handler still reads port 0x60 itself. */
-    static const BYTE bop09[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD), X86_OP_IRET };
-    static const BYTE bop1a[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_TIME), X86_OP_IRET }; /* BOP 0x1A ; iret */
-    static const BYTE bop2f[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_MULTIPLEX), X86_OP_IRET }; /* INT 2Fh ; iret  */
-    /* XMS API entry: reached by FAR CALL (INT 2Fh AX=4310 hands back ES:BX), so it
-       ends in RETF (0xCB), not IRET. */
-    static const BYTE xmsBopStub[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_XMS_ENTRY, X86_OP_RETF };
-    static const BYTE bop67[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_EMS), X86_OP_IRET }; /* INT 67h ; iret  */
-    /* GH #43/#44/#45: the BIOS interrupts we had never planted at all. Until now
-       these vectors were filled by the null-vector sweep with a bare IRET, so a
-       guest asking for the equipment list or the memory size got silence and
-       whatever was already in its registers. */
-    /* {vector, BOP number}.  They match for all but INT 20h: BOP 0x20 is ALREADY
-       the INT 21h handler's, and planting INT 20h with it made the BIOS dispatch
-       intercept every INT 21h call as "terminate program" -- selftest exited at
-       its first DOS call with no output. BOP numbers are a shared namespace with
-       DPMI (0x50-0x57), XMS (0x43) and the rest; 0x30 is free. */
-    static const BYTE biosInts[][2] = {
-        { VECTOR_EQUIPMENT, DOS_BOP_FOR_VECTOR(VECTOR_EQUIPMENT) }, { VECTOR_MEMORY_SIZE, DOS_BOP_FOR_VECTOR(VECTOR_MEMORY_SIZE) }, { VECTOR_DISK, DOS_BOP_FOR_VECTOR(VECTOR_DISK) }, { VECTOR_SERIAL, DOS_BOP_FOR_VECTOR(VECTOR_SERIAL) },
-        { VECTOR_SYSTEM, DOS_BOP_FOR_VECTOR(VECTOR_SYSTEM) }, { VECTOR_PRINTER, DOS_BOP_FOR_VECTOR(VECTOR_PRINTER) }, { VECTOR_ABSOLUTE_DISK_READ, DOS_BOP_FOR_VECTOR(VECTOR_ABSOLUTE_DISK_READ) }, { VECTOR_ABSOLUTE_DISK_WRITE, DOS_BOP_FOR_VECTOR(VECTOR_ABSOLUTE_DISK_WRITE) },
-        { VECTOR_TERMINATE, DOS_BOP_INT20 },                                  /* GH #46: see above */
-        { VECTOR_TERMINATE_RESIDENT, DOS_BOP_FOR_VECTOR(VECTOR_TERMINATE_RESIDENT) }, { VECTOR_DOS_IDLE, DOS_BOP_FOR_VECTOR(VECTOR_DOS_IDLE) }, { VECTOR_FAST_CONSOLE_OUTPUT, DOS_BOP_FOR_VECTOR(VECTOR_FAST_CONSOLE_OUTPUT) },
-        { VECTOR_NETWORK, DOS_BOP_FOR_VECTOR(VECTOR_NETWORK) }, { VECTOR_NETBIOS, DOS_BOP_FOR_VECTOR(VECTOR_NETBIOS) },                  /* GH #8 (s91): NetBIOS, see V86BiosBop */
-    };
-    static const BYTE emmDeviceName[] = { 'E','M','M','X','X','X','X','0' };  /* EMS device header name */
     HANDLE uiThread = NULL;
 
     (VOID)instance; (VOID)previousInstance; (VOID)commandLineText; (VOID)showCommand;
@@ -6169,6 +6131,44 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     /* Build the DOS process in conventional memory (base=NULL => absolute V86). */
     image = DosLoadImage(NULL, g_FileBuffer, readCount, DOS_PSP_SEG);
 
+    static const BYTE bop[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_INT21, X86_OP_IRET };  /* BOP 0x20 ; iret */
+    static const BYTE bop10[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_VIDEO), X86_OP_IRET }; /* BOP 0x10 ; iret */
+    static const BYTE bop16[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD_SERVICES), X86_OP_IRET }; /* BOP 0x16 ; iret */
+    static const BYTE bop33[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_MOUSE), X86_OP_IRET }; /* BOP 0x33 ; iret */
+    /* INT 08h (timer): tick via BOP, then chain INT 1Ch, then iret. INT 1Ch is a
+       bare iret by default (the user-timer hook a program may repoint). INT 1Ah
+       (BIOS time-of-day) is a plain BOP. */
+    static const BYTE bop08[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_TIMER), X86_OP_INT, VECTOR_USER_TICK, X86_OP_IRET };
+    static const BYTE bop1c[] = { X86_OP_IRET };                           /* iret stub       */
+    /* Default INT 09h = BOP 09 ; IRET. It must CONSUME the scancode, exactly as the BIOS
+       handler does: a bare IRET left the byte in the controller forever, so with the 8042's
+       proper one-byte-at-a-time pacing no further key could ever raise an interrupt (the
+       whole keyboard died after one press). A game that installs its own INT 09h replaces
+       this vector, so its handler still reads port 0x60 itself. */
+    static const BYTE bop09[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_KEYBOARD), X86_OP_IRET };
+    static const BYTE bop1a[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_TIME), X86_OP_IRET }; /* BOP 0x1A ; iret */
+    static const BYTE bop2f[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_MULTIPLEX), X86_OP_IRET }; /* INT 2Fh ; iret  */
+    /* XMS API entry: reached by FAR CALL (INT 2Fh AX=4310 hands back ES:BX), so it
+       ends in RETF (0xCB), not IRET. */
+    static const BYTE xmsBopStub[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_XMS_ENTRY, X86_OP_RETF };
+    static const BYTE bop67[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_FOR_VECTOR(VECTOR_EMS), X86_OP_IRET }; /* INT 67h ; iret  */
+    /* GH #43/#44/#45: the BIOS interrupts we had never planted at all. Until now
+       these vectors were filled by the null-vector sweep with a bare IRET, so a
+       guest asking for the equipment list or the memory size got silence and
+       whatever was already in its registers. */
+    /* {vector, BOP number}.  They match for all but INT 20h: BOP 0x20 is ALREADY
+       the INT 21h handler's, and planting INT 20h with it made the BIOS dispatch
+       intercept every INT 21h call as "terminate program" -- selftest exited at
+       its first DOS call with no output. BOP numbers are a shared namespace with
+       DPMI (0x50-0x57), XMS (0x43) and the rest; 0x30 is free. */
+    static const BYTE biosInts[][2] = {
+        { VECTOR_EQUIPMENT, DOS_BOP_FOR_VECTOR(VECTOR_EQUIPMENT) }, { VECTOR_MEMORY_SIZE, DOS_BOP_FOR_VECTOR(VECTOR_MEMORY_SIZE) }, { VECTOR_DISK, DOS_BOP_FOR_VECTOR(VECTOR_DISK) }, { VECTOR_SERIAL, DOS_BOP_FOR_VECTOR(VECTOR_SERIAL) },
+        { VECTOR_SYSTEM, DOS_BOP_FOR_VECTOR(VECTOR_SYSTEM) }, { VECTOR_PRINTER, DOS_BOP_FOR_VECTOR(VECTOR_PRINTER) }, { VECTOR_ABSOLUTE_DISK_READ, DOS_BOP_FOR_VECTOR(VECTOR_ABSOLUTE_DISK_READ) }, { VECTOR_ABSOLUTE_DISK_WRITE, DOS_BOP_FOR_VECTOR(VECTOR_ABSOLUTE_DISK_WRITE) },
+        { VECTOR_TERMINATE, DOS_BOP_INT20 },                                  /* GH #46: see above */
+        { VECTOR_TERMINATE_RESIDENT, DOS_BOP_FOR_VECTOR(VECTOR_TERMINATE_RESIDENT) }, { VECTOR_DOS_IDLE, DOS_BOP_FOR_VECTOR(VECTOR_DOS_IDLE) }, { VECTOR_FAST_CONSOLE_OUTPUT, DOS_BOP_FOR_VECTOR(VECTOR_FAST_CONSOLE_OUTPUT) },
+        { VECTOR_NETWORK, DOS_BOP_FOR_VECTOR(VECTOR_NETWORK) }, { VECTOR_NETBIOS, DOS_BOP_FOR_VECTOR(VECTOR_NETBIOS) },                  /* GH #8 (s91): NetBIOS, see V86BiosBop */
+    };
+    static const BYTE emmDeviceName[] = { 'E','M','M','X','X','X','X','0' };  /* EMS device header name */
     handlerArea = (volatile BYTE *)(DOS_HDLR_SEG << PARAGRAPH_SHIFT);            /* INT 21h BOP handler */
     for (index = 0; index < sizeof(bop); ++index) handlerArea[DOS_HDLR_INT21_STUB_OFF + index] = bop[index];
     *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_DOS) = DOS_HDLR_INT21_STUB_OFF;                        /* IVT[0x21].offset    */
